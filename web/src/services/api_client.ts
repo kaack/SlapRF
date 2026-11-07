@@ -39,9 +39,19 @@ export class ApiClient {
   }
 
   public async initialize(): Promise<void> {
+    window.addEventListener("pagehide", () => this.source?.close());
+    window.addEventListener("beforeunload", () => this.source?.close());
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden && (!this.source || this.source.readyState === EventSource.CLOSED)) {
+        this.connectStream();
+        void this.refresh().catch(() => undefined);
+      }
+    });
     await this.refresh();
     this.connectStream();
-    window.setInterval(() => void this.pollStatus(), STATUS_POLL_MS);
+    window.setInterval(() => {
+      if (!document.hidden) void this.pollStatus();
+    }, STATUS_POLL_MS);
   }
 
   public async refresh(): Promise<void> {
@@ -221,7 +231,9 @@ export class ApiClient {
       // Server restart, or the server dropped this client for falling behind:
       // reconnect and re-sync from a full snapshot so no laps are missing.
       es.close();
+      if (document.hidden) return;
       window.setTimeout(() => {
+        if (document.hidden) return;
         this.connectStream();
         void this.refresh().catch(() => undefined);
       }, RECONNECT_MS);

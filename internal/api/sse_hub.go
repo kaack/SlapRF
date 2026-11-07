@@ -16,6 +16,9 @@ const (
 	// for minutes of race traffic; a client that still overflows it is disconnected and
 	// re-syncs from /api/state when its EventSource reconnects.
 	eventQueueLen = 4096
+	// Browsers cap HTTP/1.1 connections per origin at 6. Capping concurrent SSE streams at 3
+	// guarantees that fetch("/api/state") and asset requests never stall behind stale tabs.
+	maxSSEClients = 3
 )
 
 // StreamEnvelope wraps a typed real-time message sent to the TypeScript SPA.
@@ -49,6 +52,7 @@ type sseClient struct {
 type SSEHub struct {
 	mu      sync.RWMutex
 	clients map[*sseClient]struct{}
+	order   []*sseClient
 }
 
 // NewSSEHub creates a new real-time event broadcaster.
@@ -76,10 +80,23 @@ func (h *SSEHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	h.mu.Lock()
 	h.clients[c] = struct{}{}
+	h.order = append(h.order, c)
+	for len(h.order) > maxSSEClients {
+		oldest := h.order[0]
+		h.order = h.order[1:]
+		delete(h.clients, oldest)
+		oldest.once.Do(func() { close(oldest.overflow) })
+	}
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()
 		delete(h.clients, c)
+		for i, item := range h.order {
+			if item == c {
+				h.order = append(h.order[:i], h.order[i+1:]...)
+				break
+			}
+		}
 		h.mu.Unlock()
 	}()
 
