@@ -1,0 +1,38 @@
+:root {
+  /* Surfaces */
+  --bg: #0b0c0f;
+  --surface: #111317;
+  --surface-2: #15181d;
+  --surface-3: #1b1f25;
+  --border: #22252c;
+  --border-strong: #2d3139;
+
+  /* Text */
+  --text: #ecedef;
+  --text-2: #a3a8b3;
+  --text-3: #6c7280;
+
+  /* Accent: a single "volt" highlight, used sparingly */
+  --accent: #d4ff3a;
+  --accent-ink: #0b0c0f;
+  --accent-soft: rgba(212, 255, 58, 0.1);
+  --accent-line: rgba(212, 255, 58, 0.35);
+
+  /* Semantic */
+  --good: #34d399;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --purple: #c084fc;
+
+  /* Shape & type */
+  --radius-lg: 14px;
+  --radius: 10px;
+  --radius-sm: 7px;
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+
+  /* Layout */
+  --sidebar-w: 232px;
+  --topbar-h: 68px;
+  --content-max: 1440px;
+}

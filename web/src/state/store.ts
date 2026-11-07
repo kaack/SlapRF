@@ -1,0 +1,314 @@
+import {
+  DetectedPuck,
+  FilteredDetection,
+  FullStateResponse,
+  GateCrossingEvent,
+  GatePuck,
+  LapRecord,
+  LiveTimeStatus,
+  PilotSlot,
+  PilotTrackSummary,
+  PuckTelemetryFrame,
+  StatusResponse,
+  TimingRules,
+} from "../types/models";
+
+/**
+ * Change topics. Components subscribe only to what they render so that, for
+ * example, a 50 Hz telemetry stream never re-renders a form the user is editing.
+ * Raw telemetry is intentionally *not* a topic: canvases pull it every frame.
+ */
+export type Topic = "config" | "laps" | "crossings" | "status" | "selection" | "rules";
+
+type Listener = () => void;
+type LapListener = (lap: LapRecord) => void;
+
+/** Which lap the pilot is looking at, and what it's compared against. */
+export type ReferenceChoice = "best" | "previous" | number;
+export interface ComparisonSelection {
+  /** Lap under review (null = always the latest lap). */
+  lapId: number | null;
+  /** Reference: personal best, the lap before, or a specific lap id. */
+  reference: ReferenceChoice;
+}
+
+/** Signal history kept per gate, so the RSSI chart can be paused and scrolled back. */
+export const HISTORY_SECONDS = 120;
+/** Gates stream telemetry at 50 Hz. */
+const HISTORY_SAMPLES = HISTORY_SECONDS * 50;
+/** Trim in batches rather than shifting one frame at a time. */
+const HISTORY_TRIM_SLACK = 250;
+
+/** Enough timed passes (and rejected ones) to cover the signal history. */
+const MAX_CROSSINGS = 1500;
+const MAX_FILTERED = 500;
+const MAX_LAPS = 5000;
+
+const DEFAULT_RULES: TimingRules = {
+  minLapSec: 5,
+  maxLapSec: 120,
+  gateCooldownSec: 2,
+  minSectionSec: 0.5,
+  echoWindowSec: 3,
+};
+
+export class AppStore {
+  private _pilots: PilotSlot[] = [];
+  private _pucks: GatePuck[] = [];
+  private _detectedPucks: DetectedPuck[] = [];
+  private _laps: LapRecord[] = [];
+  private _crossings: GateCrossingEvent[] = [];
+  private _filtered: FilteredDetection[] = [];
+  private _summaries: PilotTrackSummary[] = [];
+  private _rules: TimingRules = DEFAULT_RULES;
+  private _simulatorRunning = false;
+  private _raceArmed = true;
+  private _liveTime: LiveTimeStatus = {
+    listenAddr: ":5403",
+    connectedClients: 0,
+    detectionsSent: 0,
+    statusFramesSent: 0,
+    lastRfSetupSync: "",
+    raceArmedByHost: true,
+  };
+  private _latestTimestampUs = 0;
+  private _selectedPilot = 1;
+  /** Live view focus: null shows every pilot, a slot index follows that pilot. */
+  private _liveFocus: number | null = null;
+  private _comparison: ComparisonSelection = { lapId: null, reference: "best" };
+
+  private readonly history = new Map<number, PuckTelemetryFrame[]>();
+  private readonly lastCrossingBySlot = new Map<number, GateCrossingEvent>();
+  private readonly listeners = new Map<Topic, Set<Listener>>();
+  private readonly lapListeners = new Set<LapListener>();
+
+  // ---- subscriptions -------------------------------------------------------
+
+  /** Fires once per newly recorded lap (never on hydrate/reset) — used by the announcer. */
+  public onLapRecorded(fn: LapListener): () => void {
+    this.lapListeners.add(fn);
+    return () => this.lapListeners.delete(fn);
+  }
+
+  public subscribe(topics: Topic[], fn: Listener): () => void {
+    for (const topic of topics) {
+      let set = this.listeners.get(topic);
+      if (!set) {
+        set = new Set();
+        this.listeners.set(topic, set);
+      }
+      set.add(fn);
+    }
+    return () => topics.forEach((t) => this.listeners.get(t)?.delete(fn));
+  }
+
+  private emit(...topics: Topic[]): void {
+    const fired = new Set<Listener>();
+    for (const topic of topics) {
+      this.listeners.get(topic)?.forEach((fn) => {
+        if (!fired.has(fn)) {
+          fired.add(fn);
+          fn();
+        }
+      });
+    }
+  }
+
+  // ---- read model ----------------------------------------------------------
+
+  public get pilots(): PilotSlot[] {
+    return this._pilots;
+  }
+  public get enabledPilots(): PilotSlot[] {
+    return this._pilots.filter((p) => p.enabled);
+  }
+  /** Gate pucks sorted by their position around the track. */
+  public get pucks(): GatePuck[] {
+    return this._pucks;
+  }
+  /** Physical XIAO pucks discovered over Wi-Fi/ESP-NOW or flashed over USB. */
+  public get detectedPucks(): DetectedPuck[] {
+    return this._detectedPucks;
+  }
+  public get laps(): LapRecord[] {
+    return this._laps;
+  }
+  public get crossings(): GateCrossingEvent[] {
+    return this._crossings;
+  }
+  /** Detections set aside by the timing rules, oldest first. */
+  public get filtered(): FilteredDetection[] {
+    return this._filtered;
+  }
+  public get summaries(): PilotTrackSummary[] {
+    return this._summaries;
+  }
+  public get rules(): TimingRules {
+    return this._rules;
+  }
+  public get simulatorRunning(): boolean {
+    return this._simulatorRunning;
+  }
+  public get raceArmed(): boolean {
+    return this._raceArmed;
+  }
+  public get liveTime(): LiveTimeStatus {
+    return this._liveTime;
+  }
+  /** Most recent engine timestamp seen on the telemetry stream. */
+  public get latestTimestampUs(): number {
+    return this._latestTimestampUs;
+  }
+  public get selectedPilot(): number {
+    return this._selectedPilot;
+  }
+  public get liveFocus(): number | null {
+    return this._liveFocus;
+  }
+  public get comparison(): ComparisonSelection {
+    return this._comparison;
+  }
+
+  public pilot(slotIndex: number): PilotSlot | undefined {
+    return this._pilots.find((p) => p.slotIndex === slotIndex);
+  }
+  public puck(puckId: number): GatePuck | undefined {
+    return this._pucks.find((p) => p.puckId === puckId);
+  }
+  public summaryFor(slotIndex: number): PilotTrackSummary | undefined {
+    return this._summaries.find((s) => s.slotIndex === slotIndex);
+  }
+  public lastCrossingFor(slotIndex: number): GateCrossingEvent | undefined {
+    return this.lastCrossingBySlot.get(slotIndex);
+  }
+  public historyFor(puckId: number): PuckTelemetryFrame[] {
+    return this.history.get(puckId) ?? [];
+  }
+
+  // ---- mutations -----------------------------------------------------------
+
+  public hydrate(state: FullStateResponse): void {
+    this._pilots = state.pilots ?? [];
+    this.setPucks(state.pucks ?? []);
+    if (state.detectedPucks) {
+      this._detectedPucks = state.detectedPucks;
+    }
+    this._laps = state.laps ?? [];
+    this._crossings = state.crossings ?? [];
+    this._filtered = state.filtered ?? [];
+    this._summaries = state.summaries ?? [];
+    this._rules = state.rules ?? DEFAULT_RULES;
+    this._simulatorRunning = state.simulatorRunning;
+    this._raceArmed = state.raceArmed;
+    this._liveTime = state.liveTimeStatus;
+
+    this.lastCrossingBySlot.clear();
+    for (const ev of this._crossings) {
+      this.lastCrossingBySlot.set(ev.slotIndex, ev);
+    }
+    this.ensureValidSelection();
+    this.emit("config", "laps", "crossings", "status", "selection", "rules");
+  }
+
+  public applyStatus(status: StatusResponse): void {
+    const before = this._pucks.map((p) => p.puckId).join(",");
+    this.setPucks(status.pucks ?? []);
+    if (status.detectedPucks) {
+      this._detectedPucks = status.detectedPucks;
+    }
+    this._simulatorRunning = status.simulatorRunning;
+    this._raceArmed = status.raceArmed;
+    this._liveTime = status.liveTimeStatus;
+
+    const gatesChanged = before !== this._pucks.map((p) => p.puckId).join(",");
+    if (gatesChanged) {
+      this.ensureValidSelection();
+      this.emit("status", "config");
+    } else {
+      this.emit("status");
+    }
+  }
+
+  public applyConfig(pilots: PilotSlot[], pucks: GatePuck[]): void {
+    this._pilots = pilots;
+    this.setPucks(pucks);
+    this.ensureValidSelection();
+    this.emit("config");
+  }
+
+  public applyRules(rules: TimingRules): void {
+    this._rules = rules;
+    this.emit("rules");
+  }
+
+  public ingestTelemetry(frame: PuckTelemetryFrame): void {
+    let buf = this.history.get(frame.puckId);
+    if (!buf) {
+      buf = [];
+      this.history.set(frame.puckId, buf);
+    }
+    buf.push(frame);
+    if (buf.length > HISTORY_SAMPLES + HISTORY_TRIM_SLACK) buf.splice(0, buf.length - HISTORY_SAMPLES);
+
+    if (frame.timestampUs > this._latestTimestampUs) {
+      this._latestTimestampUs = frame.timestampUs;
+    }
+    const puck = this.puck(frame.puckId);
+    if (puck) puck.lastRssi = frame.rssi;
+  }
+
+  public ingestCrossing(ev: GateCrossingEvent): void {
+    this._crossings.push(ev);
+    if (this._crossings.length > MAX_CROSSINGS) this._crossings.shift();
+    this.lastCrossingBySlot.set(ev.slotIndex, ev);
+    this.emit("crossings");
+  }
+
+  public ingestFiltered(f: FilteredDetection): void {
+    this._filtered.push(f);
+    if (this._filtered.length > MAX_FILTERED) this._filtered.shift();
+    this.emit("crossings");
+  }
+
+  public ingestLap(lap: LapRecord, summaries: PilotTrackSummary[]): void {
+    this._laps.push(lap);
+    if (this._laps.length > MAX_LAPS) this._laps.shift();
+    this._summaries = summaries;
+    this.emit("laps");
+    this.lapListeners.forEach((fn) => fn(lap));
+  }
+
+  public selectPilot(slotIndex: number): void {
+    if (slotIndex === this._selectedPilot) return;
+    this._selectedPilot = slotIndex;
+    this._comparison = { lapId: null, reference: "best" };
+    this.emit("selection");
+  }
+
+  public setComparison(next: Partial<ComparisonSelection>): void {
+    this._comparison = { ...this._comparison, ...next };
+    this.emit("selection");
+  }
+
+  /** Switch the live view between all pilots (null) and following one pilot. */
+  public setLiveFocus(slotIndex: number | null): void {
+    if (slotIndex !== null) this.selectPilot(slotIndex);
+    if (slotIndex === this._liveFocus) return;
+    this._liveFocus = slotIndex;
+    this.emit("selection");
+  }
+
+  private setPucks(pucks: GatePuck[]): void {
+    this._pucks = [...pucks].sort((a, b) => a.trackOrder - b.trackOrder);
+  }
+
+  private ensureValidSelection(): void {
+    const enabled = this.enabledPilots;
+    if (enabled.length > 0 && !enabled.some((p) => p.slotIndex === this._selectedPilot)) {
+      this._selectedPilot = enabled[0].slotIndex;
+    }
+    if (this._liveFocus !== null && !enabled.some((p) => p.slotIndex === this._liveFocus)) {
+      this._liveFocus = null;
+    }
+  }
+}

@@ -1,0 +1,108 @@
+import { Component } from "../core/component";
+import { esc, fmtAgo, fmtDelta, fmtTime } from "../core/format";
+import { practiceStats, PracticeStats } from "../state/analysis";
+import { currentSectorIndex, gateColor } from "../state/selectors";
+import { AppStore } from "../state/store";
+import { renderEmpty, renderSparkline } from "./markup";
+
+const SPARK_LAPS = 12;
+const IDLE_REFRESH_MS = 5000;
+
+/**
+ * Live table of every pilot: whether they're flying, which section they're in, and their
+ * lap times. Ranked by best lap (fastest first); pilots without a lap go last.
+ */
+export class LiveStandings extends Component {
+  private readonly store: AppStore;
+  private readonly onSelect: (slotIndex: number) => void;
+
+  constructor(el: HTMLElement, store: AppStore, onSelect: (slotIndex: number) => void) {
+    super(el);
+    this.store = store;
+    this.onSelect = onSelect;
+    el.addEventListener("click", this.handleClick);
+    this.onDispose(() => el.removeEventListener("click", this.handleClick));
+    this.onDispose(store.subscribe(["laps", "crossings", "config"], () => this.render()));
+    // Keep "on track / idle 3m ago" fresh even when nobody is crossing gates.
+    const timer = window.setInterval(() => this.render(), IDLE_REFRESH_MS);
+    this.onDispose(() => window.clearInterval(timer));
+    this.render();
+  }
+
+  private handleClick = (e: Event): void => {
+    const row = (e.target as HTMLElement).closest<HTMLElement>("[data-pilot]");
+    if (row) this.onSelect(Number(row.dataset.pilot));
+  };
+
+  private render(): void {
+    const rows = this.store.enabledPilots.map((p) => practiceStats(this.store, p));
+    if (rows.length === 0) {
+      this.el.innerHTML = renderEmpty("No pilots enabled", "Enable pilot slots in System.");
+      return;
+    }
+    rows.sort((a, b) => {
+      if (a.bestLap > 0 && b.bestLap > 0) return a.bestLap - b.bestLap;
+      if ((a.bestLap > 0) !== (b.bestLap > 0)) return a.bestLap > 0 ? -1 : 1;
+      return a.pilot.slotIndex - b.pilot.slotIndex;
+    });
+    const sessionBest = rows[0].bestLap;
+
+    this.el.innerHTML = `
+      <table class="table table-standings">
+        <thead>
+          <tr>
+            <th class="col-pos">#</th>
+            <th>Pilot</th>
+            <th>Status</th>
+            <th class="num">Laps</th>
+            <th class="num">Last</th>
+            <th class="num">Best</th>
+            <th class="num">Avg 5</th>
+            <th class="num">Gap</th>
+            <th>Recent laps</th>
+            <th class="col-progress">On track</th>
+          </tr>
+        </thead>
+        <tbody>${rows.map((r, i) => this.renderRow(r, i + 1, sessionBest)).join("")}</tbody>
+      </table>`;
+  }
+
+  private renderRow(s: PracticeStats, rank: number, sessionBest: number): string {
+    const { pilot } = s;
+    const sector = s.onTrack ? currentSectorIndex(this.store, pilot.slotIndex) : -1;
+    const segments = this.store.pucks
+      .map((p, i) => `<span class="seg ${i < sector ? "is-done" : i === sector ? "is-live" : ""}" style="--c:${gateColor(this.store, p.puckId)}"></span>`)
+      .join("");
+    const status = s.onTrack
+      ? `<span class="status-tag is-live">On track</span>`
+      : `<span class="status-tag">${s.laps.length ? `Idle · ${fmtAgo(s.secondsSinceSeen)}` : "Not flown"}</span>`;
+    const gap = s.bestLap > 0 && sessionBest > 0 ? (s.bestLap === sessionBest ? `<span class="tone-accent">fastest</span>` : fmtDelta(s.bestLap - sessionBest)) : "";
+
+    return `
+      <tr class="row-link ${s.onTrack ? "" : "is-idle"}" data-pilot="${pilot.slotIndex}">
+        <td class="col-pos"><span class="pos ${rank === 1 && s.bestLap > 0 ? "is-leader" : ""}">${rank}</span></td>
+        <td>
+          <div class="pilot-cell">
+            <span class="pilot-swatch" style="--c:${pilot.color}"></span>
+            <div>
+              <div class="pilot-name">${esc(pilot.callsign)}</div>
+              <div class="pilot-meta">R${pilot.channel} · ${pilot.frequencyMhz} MHz</div>
+            </div>
+          </div>
+        </td>
+        <td>${status}</td>
+        <td class="num mono">${s.laps.length}</td>
+        <td class="num mono">${fmtTime(s.lastLap)}</td>
+        <td class="num mono strong">${fmtTime(s.bestLap)}</td>
+        <td class="num mono">${fmtTime(s.rollingAvg)}</td>
+        <td class="num mono muted">${gap}</td>
+        <td class="spark-cell" style="color:${pilot.color}">${renderSparkline(s.laps.slice(-SPARK_LAPS).map((l) => l.lapTimeSec), 96, 26)}</td>
+        <td class="col-progress">
+          <div class="sector-progress">
+            <div class="segments">${segments}</div>
+            <span class="sector-tag">${sector >= 0 ? `S${sector + 1}` : "—"}</span>
+          </div>
+        </td>
+      </tr>`;
+  }
+}

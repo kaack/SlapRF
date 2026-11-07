@@ -1,0 +1,280 @@
+import { Component } from "../core/component";
+import { esc } from "../core/format";
+import { ApiClient } from "../services/api_client";
+import { gateColor, gateLabel } from "../state/selectors";
+import { AppStore } from "../state/store";
+import { FilterReason, GatePuck, GateRuleKey, GateRuleOverrides, TimingRules } from "../types/models";
+import { FILTER_LABELS } from "./markup";
+
+interface RuleSpec {
+  key: keyof TimingRules;
+  label: string;
+  help: string;
+  step: number;
+  min: number;
+  max: number;
+  /** Filter reason this rule produces, to show how often it fired. */
+  reason: FilterReason;
+  /** Whether a single gate can override it. */
+  perGate: boolean;
+}
+
+const RULES: RuleSpec[] = [
+  {
+    key: "minLapSec",
+    label: "Minimum lap time",
+    help: "Nobody laps faster than this, so a gate never times the same pilot twice within it — every gate is treated as if it were the start gate. A crash beside a gate or a quad looping back through it is ignored.",
+    step: 0.5,
+    min: 1,
+    max: 120,
+    reason: "MIN_LAP",
+    perGate: true,
+  },
+  {
+    key: "maxLapSec",
+    label: "Maximum lap time",
+    help: "Longer laps don't count (crash, landing, pack swap). Timing restarts cleanly at the next start gate pass. Applies to the whole lap, so it's set for all gates.",
+    step: 5,
+    min: 10,
+    max: 900,
+    reason: "LAP_TOO_LONG",
+    perGate: false,
+  },
+  {
+    key: "gateCooldownSec",
+    label: "Gate cool-down",
+    help: "After a gate times a pilot it ignores them for this long, so a quad hovering or wobbling in the gate isn't counted twice.",
+    step: 0.1,
+    min: 0.2,
+    max: 15,
+    reason: "COOLDOWN",
+    perGate: true,
+  },
+  {
+    key: "minSectionSec",
+    label: "Minimum section time",
+    help: "The quickest anyone can reach this gate from the one before. Faster detections are strays from a gate the quad isn't actually passing.",
+    step: 0.1,
+    min: 0.1,
+    max: 15,
+    reason: "TOO_SOON",
+    perGate: true,
+  },
+  {
+    key: "echoWindowSec",
+    label: "Previous-gate echo window",
+    help: "If the gate a pilot just left fires again within this window it's ignored: a nearby gate caught the signal on the way out, or the pilot turned back through it. 0 turns this off.",
+    step: 0.5,
+    min: 0,
+    max: 15,
+    reason: "ECHO",
+    perGate: true,
+  },
+];
+
+const DEFAULT_RULES: TimingRules = { minLapSec: 5, maxLapSec: 120, gateCooldownSec: 2, minSectionSec: 0.5, echoWindowSec: 3 };
+
+/**
+ * System section for the detection guardrails. "All gates" edits the global rules; picking a
+ * gate lets you override individual rules for just that gate (its position on the track may
+ * need, say, a longer echo window). Shows how often each rule fired.
+ */
+export class TimingRulesEditor extends Component {
+  private readonly store: AppStore;
+  private readonly api: ApiClient;
+  /** null = global rules; otherwise the gate being edited. */
+  private scope: number | null = null;
+  private dirty = false;
+
+  constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
+    super(el);
+    this.store = store;
+    this.api = api;
+    this.listen(el, "input", (e) => {
+      const t = e.target as HTMLInputElement;
+      if (t.dataset.override) {
+        // Ticking "override" enables that rule's input; unticking shows the global value again.
+        const input = this.el.querySelector<HTMLInputElement>(`input[name="${t.dataset.override}"]`);
+        if (input) {
+          input.disabled = !t.checked;
+          if (!t.checked) input.value = String(this.store.rules[t.dataset.override as keyof TimingRules]);
+          else input.focus();
+        }
+        t.closest(".rule-row")?.classList.toggle("is-overridden", t.checked);
+      }
+      this.markDirty();
+    });
+    this.listen(el, "submit", (e) => {
+      e.preventDefault();
+      void this.save(e.target as HTMLFormElement);
+    });
+    this.listen(el, "click", (e) => {
+      const target = e.target as HTMLElement;
+      const scope = target.closest<HTMLElement>("[data-scope]");
+      if (scope) {
+        this.scope = scope.dataset.scope === "all" ? null : Number(scope.dataset.scope);
+        this.dirty = false;
+        this.render();
+        return;
+      }
+      const action = target.closest<HTMLElement>("[data-action]")?.dataset.action;
+      if (action === "defaults") void this.api.updateRules(DEFAULT_RULES);
+      if (action === "clear" && this.scope !== null) void this.api.setGateRules(this.scope, {});
+    });
+    // Re-render on rule / gate changes, but never under someone's unsaved edits.
+    this.onDispose(
+      store.subscribe(["rules", "config"], () => {
+        if (this.scope !== null && !store.puck(this.scope)) this.scope = null;
+        if (!this.dirty) this.render();
+      })
+    );
+    this.onDispose(store.subscribe(["crossings"], () => this.renderCounts()));
+    this.render();
+  }
+
+  private overridesOf(p: GatePuck | undefined): GateRuleOverrides {
+    return p?.ruleOverrides ?? {};
+  }
+
+  private render(): void {
+    const r = this.store.rules;
+    const gate = this.scope === null ? undefined : this.store.puck(this.scope);
+    const overrides = this.overridesOf(gate);
+
+    const scopes = [
+      `<button type="button" data-scope="all" class="${this.scope === null ? "is-active" : ""}">All gates</button>`,
+      ...this.store.pucks.map((p) => {
+        const n = Object.keys(this.overridesOf(p)).length;
+        return `<button type="button" data-scope="${p.puckId}" class="${this.scope === p.puckId ? "is-active" : ""}"
+                  title="${n ? `${n} rule${n > 1 ? "s" : ""} overridden at this gate` : "Uses the global rules"}">
+                  <span class="dot" style="--c:${gateColor(this.store, p.puckId)}"></span>${esc(gateLabel(this.store, p.puckId))}${n ? `<span class="seg-count">${n}</span>` : ""}
+                </button>`;
+      }),
+    ].join("");
+
+    const rows = RULES.map((spec) => {
+      if (gate) return this.renderGateRow(spec, r, overrides);
+      return `
+        <div class="rule-row">
+          <div class="rule-text">
+            <div class="rule-label">${spec.label}</div>
+            <div class="rule-help">${spec.help}</div>
+            ${this.renderOverrideNote(spec)}
+          </div>
+          <span class="rule-count" data-count="${spec.reason}"></span>
+          <div class="input-suffix rule-input">
+            <input class="input mono" type="number" name="${spec.key}" value="${r[spec.key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" />
+            <span>s</span>
+          </div>
+        </div>`;
+    }).join("");
+
+    const foot = gate
+      ? `<p class="note">Ticked rules apply only at ${esc(gateLabel(this.store, gate.puckId))}; the rest follow All gates.</p>
+         ${Object.keys(overrides).length ? `<button class="btn btn-ghost btn-sm" type="button" data-action="clear">Use all-gate rules</button>` : ""}
+         <button class="btn btn-sm" type="submit" disabled>Save ${esc(gateLabel(this.store, gate.puckId))}</button>`
+      : `<p class="note">Rules apply to new detections. LiveTime only receives start gate passes that get through them.</p>
+         <button class="btn btn-ghost btn-sm" type="button" data-action="defaults">Restore defaults</button>
+         <button class="btn btn-sm" type="submit" disabled>Save rules</button>`;
+
+    this.el.innerHTML = `
+      <div class="rules-scope">
+        <span>Applies to</span>
+        <div class="segmented" role="tablist" aria-label="Rules for">${scopes}</div>
+      </div>
+      <form class="rules">
+        ${rows}
+        <div class="rules-foot">${foot}</div>
+      </form>`;
+    this.renderCounts();
+  }
+
+  /** A rule for one gate: tick to override, otherwise it shows the global value greyed out. */
+  private renderGateRow(spec: RuleSpec, r: TimingRules, overrides: GateRuleOverrides): string {
+    if (!spec.perGate) {
+      return `
+        <div class="rule-row is-global-only">
+          <div class="rule-text">
+            <div class="rule-label">${spec.label}</div>
+            <div class="rule-help">Applies to the whole lap, so it's set under All gates.</div>
+          </div>
+          <span></span>
+          <div class="input-suffix rule-input">
+            <input class="input mono" type="number" value="${r[spec.key]}" disabled />
+            <span>s</span>
+          </div>
+        </div>`;
+    }
+    const key = spec.key as GateRuleKey;
+    const own = overrides[key];
+    const on = own !== undefined;
+    return `
+      <div class="rule-row ${on ? "is-overridden" : ""}">
+        <div class="rule-text">
+          <div class="rule-label">${spec.label}</div>
+          <div class="rule-help">${spec.help}</div>
+          <label class="check rule-override">
+            <input type="checkbox" data-override="${key}" ${on ? "checked" : ""} />
+            Override at this gate <span class="muted">(all gates: ${r[key]} s)</span>
+          </label>
+        </div>
+        <span class="rule-count" data-count="${spec.reason}"></span>
+        <div class="input-suffix rule-input">
+          <input class="input mono" type="number" name="${key}" value="${on ? own : r[key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" ${on ? "" : "disabled"} />
+          <span>s</span>
+        </div>
+      </div>`;
+  }
+
+  /** On the All gates view, list which gates override this rule. */
+  private renderOverrideNote(spec: RuleSpec): string {
+    if (!spec.perGate) return "";
+    const key = spec.key as GateRuleKey;
+    const list = this.store.pucks
+      .filter((p) => this.overridesOf(p)[key] !== undefined)
+      .map((p) => `${esc(gateLabel(this.store, p.puckId))} ${this.overridesOf(p)[key]} s`);
+    return list.length ? `<div class="rule-override-note">Overridden at ${list.join(", ")}</div>` : "";
+  }
+
+  private renderCounts(): void {
+    const counts = new Map<FilterReason, number>();
+    for (const f of this.store.filtered) {
+      if (this.scope !== null && f.puckId !== this.scope) continue;
+      counts.set(f.reason, (counts.get(f.reason) ?? 0) + 1);
+    }
+    const where = this.scope === null ? "" : " here";
+    this.el.querySelectorAll<HTMLElement>("[data-count]").forEach((node) => {
+      const reason = node.dataset.count as FilterReason;
+      const n = counts.get(reason) ?? 0;
+      node.textContent = n ? `${n} ${FILTER_LABELS[reason].toLowerCase()}${where} this session` : "";
+    });
+  }
+
+  private markDirty(): void {
+    this.dirty = true;
+    const button = this.el.querySelector<HTMLButtonElement>("button[type=submit]");
+    if (button) {
+      button.disabled = false;
+      button.classList.add("btn-primary");
+    }
+  }
+
+  private async save(form: HTMLFormElement): Promise<void> {
+    const data = new FormData(form);
+    this.dirty = false;
+    if (this.scope === null) {
+      const next = { ...this.store.rules };
+      for (const spec of RULES) next[spec.key] = Number(data.get(spec.key));
+      await this.api.updateRules(next);
+      return;
+    }
+    // Only ticked rules become overrides (disabled inputs aren't in the form data).
+    const overrides: GateRuleOverrides = {};
+    for (const spec of RULES) {
+      if (!spec.perGate) continue;
+      const v = data.get(spec.key);
+      if (v !== null && v !== "") overrides[spec.key as GateRuleKey] = Number(v);
+    }
+    await this.api.setGateRules(this.scope, overrides);
+  }
+}

@@ -1,0 +1,16 @@
+# Compiled Go binaries
+*.exe
+*.out
+*.test
+fpvtimer
+
+# OS / Editor artifacts
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Local runtime state / build outputs
+*.log
+*.prof
+dist/

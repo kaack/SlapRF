@@ -1,0 +1,102 @@
+import { Component } from "../core/component";
+import { esc } from "../core/format";
+import { ApiClient } from "../services/api_client";
+import { AppStore } from "../state/store";
+import { PilotSlot } from "../types/models";
+
+const RACEBAND_MHZ = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
+
+/** Editable 8-slot pilot / VTX channel table. One <form> per slot. */
+export class PilotSlotsEditor extends Component {
+  private readonly store: AppStore;
+  private readonly api: ApiClient;
+
+  constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
+    super(el);
+    this.store = store;
+    this.api = api;
+    el.addEventListener("submit", this.handleSubmit);
+    el.addEventListener("input", this.handleInput);
+    el.addEventListener("change", this.handleToggle);
+    this.onDispose(() => {
+      el.removeEventListener("submit", this.handleSubmit);
+      el.removeEventListener("input", this.handleInput);
+      el.removeEventListener("change", this.handleToggle);
+    });
+    this.onDispose(store.subscribe(["config"], () => this.render()));
+    this.render();
+  }
+
+  private render(): void {
+    this.el.innerHTML = `
+      <div class="slot-table">
+        <div class="slot-row slot-head">
+          <span>On</span><span>Pilot</span><span>Channel</span><span>Enter threshold</span><span></span>
+        </div>
+        ${this.store.pilots.map((p) => this.renderRow(p)).join("")}
+      </div>`;
+  }
+
+  private renderRow(p: PilotSlot): string {
+    const options = RACEBAND_MHZ.map(
+      (mhz, i) => `<option value="${i + 1}" ${p.channel === i + 1 ? "selected" : ""}>R${i + 1} · ${mhz} MHz</option>`
+    ).join("");
+    return `
+      <form class="slot-row ${p.enabled ? "" : "is-disabled"}" data-pilot="${p.slotIndex}">
+        <label class="switch" title="Enable slot ${p.slotIndex}">
+          <input type="checkbox" name="enabled" ${p.enabled ? "checked" : ""} />
+          <span></span>
+        </label>
+        <div class="input-with-dot">
+          <span class="dot" style="--c:${p.color}"></span>
+          <input class="input" name="callsign" value="${esc(p.callsign)}" maxlength="16" autocomplete="off" />
+        </div>
+        <select class="input" name="channel">${options}</select>
+        <div class="input-suffix">
+          <input class="input mono" type="number" name="threshold" value="${p.enterThreshold.toFixed(0)}" min="-90" max="-30" step="1" />
+          <span>dBm</span>
+        </div>
+        <button class="btn btn-sm" type="submit" disabled>Save</button>
+      </form>`;
+  }
+
+  private handleInput = (e: Event): void => {
+    const form = (e.target as HTMLElement).closest("form");
+    const button = form?.querySelector<HTMLButtonElement>("button[type=submit]");
+    if (button) {
+      button.disabled = false;
+      button.classList.add("btn-primary");
+    }
+  };
+
+  private handleToggle = (e: Event): void => {
+    const target = e.target as HTMLInputElement;
+    if (target.name !== "enabled") return;
+    const form = target.closest("form");
+    if (form) void this.save(form);
+  };
+
+  private handleSubmit = (e: Event): void => {
+    e.preventDefault();
+    void this.save(e.target as HTMLFormElement);
+  };
+
+  private async save(form: HTMLFormElement): Promise<void> {
+    const slotIndex = Number(form.dataset.pilot);
+    const current = this.store.pilot(slotIndex);
+    if (!current) return;
+
+    const data = new FormData(form);
+    const channel = Number(data.get("channel"));
+    const threshold = Number(data.get("threshold"));
+    await this.api.updatePilotSlot({
+      ...current,
+      enabled: data.get("enabled") === "on",
+      callsign: String(data.get("callsign") ?? "").trim().toUpperCase() || `PILOT ${slotIndex}`,
+      channel,
+      frequencyMhz: RACEBAND_MHZ[channel - 1] ?? current.frequencyMhz,
+      enterThreshold: threshold,
+      exitThreshold: threshold - 10,
+    });
+  }
+}
