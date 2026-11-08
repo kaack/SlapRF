@@ -141,25 +141,6 @@ function isPilotInPits(status: SimPilotStatus): boolean {
   );
 }
 
-function formatPitSubText(p: SimPilotState): string {
-  const sec = Math.ceil(p.stateRemainingSec);
-  switch (p.status) {
-    case "PIT_SWAP":
-      if (p.batteryPct === 0) {
-        return `Unplugged · bench pack swap (${sec}s)`;
-      }
-      return `Fresh 6S plugged in · arming (${sec}s)`;
-    case "LAUNCH_HOLD":
-      return `Launch pad · 100% plugged in · VTX Off (holding for lull)`;
-    case "CHARGING_WAIT":
-      return `All 3 packs charging · ready in ${sec}s`;
-    case "PILOT_BREAK":
-      return `Taking a break at bench (${sec}s)`;
-    default:
-      return `Paused on bench`;
-  }
-}
-
 function formatPilotVtxText(p: SimPilotState): string {
   if (p.vtxActive) {
     return "TX ON (25mW)";
@@ -654,17 +635,9 @@ export class SimView extends Component {
           ? pitPilots
               .map(
                 (p) => `
-              <div class="unassigned-puck-token sim-pit-pilot-token" style="--c:${esc(p.color)}">
-                <span class="unassigned-puck-dot mono">R${p.channel}</span>
-                <span class="unassigned-puck-info">
-                  <span class="unassigned-puck-name">${esc(p.callsign)}</span>
-                  <span class="unassigned-puck-sub" data-pit-sub="${p.slotIndex}">
-                    ${esc(formatPitSubText(p))}
-                  </span>
-                </span>
-                <button class="btn btn-sm btn-ghost sim-pit-launch-btn" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" title="Launch onto course now">
-                  ${icons.play(12)}<span>Launch</span>
-                </button>
+              <div class="sim-pit-pill" style="--c:${esc(p.color)}">
+                <span class="sim-drone-dot"></span>
+                <span class="sim-drone-callsign">${esc(p.callsign)}</span>
               </div>`
               )
               .join("")
@@ -713,18 +686,17 @@ export class SimView extends Component {
             </div>
           </div>
 
+          <div class="sim-altitude-lane-label sim-pit-lane-label">
+            <span>PIT BENCH &amp; BATTERY SWAP LANE (${pitPilots.length})</span>
+          </div>
           <div class="gate-unassigned-tray sim-pit-tray">
-            <div class="gate-unassigned-label">
-              <span class="gate-unassigned-title">Pit bench &amp; battery swap lane (${pitPilots.length})</span>
-              <span class="gate-unassigned-hint">Pilots land here with VTX off to swap 6S packs or wait while paused</span>
-            </div>
-            <div class="gate-unassigned-list">
+            <div class="gate-unassigned-list sim-pit-list">
               ${pitTokensHtml}
             </div>
           </div>
         </div>`;
     } else {
-      // Fast in-place update of countdowns and pit bench percentages without touching DOM structure
+      // Fast in-place update of countdowns without touching DOM structure
       const walkerLabel = this.el.querySelector<HTMLElement>("[data-walker-btn-label]");
       if (walkerLabel && walkerActive) {
         walkerLabel.textContent = `Clear track (${Math.ceil(walkerSec)}s)`;
@@ -737,12 +709,6 @@ export class SimView extends Component {
         const tag = this.el.querySelector<HTMLElement>(`[data-drone-tag="${p.slotIndex}"]`);
         if (tag) {
           tag.textContent = formatDroneTagText(p);
-        }
-      }
-      for (const p of pitPilots) {
-        const sub = this.el.querySelector<HTMLElement>(`[data-pit-sub="${p.slotIndex}"]`);
-        if (sub) {
-          sub.textContent = formatPitSubText(p);
         }
       }
     }

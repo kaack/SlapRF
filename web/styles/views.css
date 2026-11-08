@@ -2508,20 +2508,38 @@ body.is-gate-dragging * {
   cursor: default;
 }
 
+.sim-pit-lane-label {
+  margin: 14px 0 5px;
+}
+
 .sim-pit-tray {
+  margin-top: 0;
+  height: 44px;
+  padding: 0 14px;
+  display: flex;
+  align-items: center;
   cursor: default;
 }
 
-.sim-pit-pilot-token {
-  cursor: default;
-  padding-right: 7px;
+.sim-pit-list {
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  gap: 8px;
+  overflow-x: auto;
 }
 
-.sim-pit-launch-btn {
+.sim-pit-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   height: 24px;
-  padding: 0 8px;
-  font-size: 11px;
-  margin-left: 4px;
+  padding: 0 10px 0 8px;
+  border-radius: 999px;
+  border: 1.5px solid var(--c, var(--accent));
+  background: color-mix(in srgb, var(--c, var(--accent)) 18%, var(--surface));
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* Pilot flight pack boxes in the right column of `.settings-section` */
