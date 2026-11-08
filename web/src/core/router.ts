@@ -17,7 +17,7 @@ export const ROUTES: RouteMeta[] = [
     id: "live",
     label: "Practice",
     title: "Practice",
-    subtitle: "Who's flying and how times are trending — pick a pilot for their laps and signal",
+    subtitle: "Live standings, lap times, and section splits",
     icon: () => icons.flag(20),
   },
   {
