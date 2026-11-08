@@ -1,12 +1,11 @@
 import { Component } from "../core/component";
-import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import { AppStore } from "../state/store";
 import { PilotPicker } from "../widgets/PilotPicker";
 import { AllPilotsPanel } from "./live/AllPilotsPanel";
 import { PilotPanel } from "./live/PilotPanel";
 
-/** Live track: one page, with an All | pilot selector that swaps the panel below it. */
+/** Practice track: one page, with an All | pilot selector that swaps the panel below it. */
 export class LiveView extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
@@ -21,7 +20,6 @@ export class LiveView extends Component {
     el.innerHTML = `
       <div class="picker-row">
         <div data-slot="picker"></div>
-        <a class="btn btn-ghost" href="#/pilot" data-slot="analyse">${icons.chart()}<span>Analytics</span></a>
       </div>
       <div class="view-stack" data-slot="panel"></div>`;
 
@@ -45,7 +43,6 @@ export class LiveView extends Component {
     const mode = focus === null ? null : 0;
     const shownMode = this.shownFocus === undefined ? undefined : this.shownFocus === null ? null : 0;
     this.shownFocus = focus;
-    this.slot("analyse").style.display = focus === null ? "none" : "";
     if (mode === shownMode) return;
 
     this.panel?.destroy();

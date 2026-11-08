@@ -1,6 +1,5 @@
 import { Component } from "../core/component";
 import { fmtDelta, fmtTime } from "../core/format";
-import { icons } from "../core/icons";
 import { bestPossibleLap, practiceStats } from "../state/analysis";
 import { AppStore } from "../state/store";
 import { LapComparison } from "../widgets/LapComparison";
@@ -24,7 +23,6 @@ export class PilotView extends Component {
     el.innerHTML = `
       <div class="picker-row">
         <div data-slot="picker"></div>
-        <a class="btn btn-ghost" href="#/live" data-slot="follow">${icons.pilot()}<span>Follow live</span></a>
       </div>
       <div class="stat-row" data-slot="stats"></div>
       <section class="card" data-slot="laps"></section>
@@ -40,8 +38,6 @@ export class PilotView extends Component {
       </section>`;
 
     this.adopt(new PilotPicker(this.slot("picker"), store));
-    // Open the live view already following this pilot.
-    this.listen(this.slot("follow"), "click", () => store.setLiveFocus(store.selectedPilot));
     this.adopt(new LapPicker(this.slot("laps"), store));
     this.adopt(new LapComparison(this.slot("compare"), store));
     this.adopt(new SectionConsistency(this.slot("consistency"), store));
