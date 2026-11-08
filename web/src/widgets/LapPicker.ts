@@ -32,6 +32,8 @@ export class LapPicker extends Component {
   private chartPan: { startX: number; startScrollLeft: number; moved: boolean } | null = null;
   private suppressClick = false;
   private wasMobileWindow = false;
+  /** Geometry of the last rendered chart, used to place the hover tooltip and average dot. */
+  private chartGeom: { laps: LapRecord[]; best: number; avgs: number[]; xPct: number[]; avgTopPct: number[] } | null = null;
 
   private windowLaps(): number {
     return window.innerWidth <= 680 ? WINDOW_LAPS_MOBILE : WINDOW_LAPS_DESKTOP;
@@ -235,6 +237,7 @@ export class LapPicker extends Component {
     this.followLatest = scroller.scrollLeft >= maxScroll - 8;
     this.syncLatestButton();
     this.syncScrollbar();
+    this.syncHoveredPin();
   }
 
   private scrollToLatest(): void {
@@ -269,6 +272,38 @@ export class LapPicker extends Component {
     this.el.querySelectorAll<SVGElement>(".bar-hit[data-lap]").forEach((g) => {
       g.classList.toggle("is-hovered", Number(g.dataset.lap) === this.hoveredLapId);
     });
+
+    const tip = this.el.querySelector<HTMLElement>("[data-lap-tip]");
+    const dot = this.el.querySelector<HTMLElement>("[data-avg-dot]");
+    const picker = this.el.querySelector<HTMLElement>(".lap-picker");
+    const geom = this.chartGeom;
+    const idx = geom && this.hoveredLapId !== null ? geom.laps.findIndex((l) => l.lapId === this.hoveredLapId) : -1;
+    const bar = idx >= 0 ? this.el.querySelector<SVGElement>(`.bar-hit[data-lap="${this.hoveredLapId}"] .bar`) : null;
+    if (!tip || !dot || !picker || !geom || idx < 0 || !bar) {
+      if (tip) tip.hidden = true;
+      if (dot) dot.hidden = true;
+      return;
+    }
+
+    const lap = geom.laps[idx];
+    const delta = lap.lapTimeSec - geom.best;
+    dot.hidden = false;
+    dot.style.left = `${geom.xPct[idx].toFixed(2)}%`;
+    dot.style.top = `${geom.avgTopPct[idx].toFixed(2)}%`;
+    tip.innerHTML = `
+      <div class="lap-tip-row"><span>Lap ${lap.lapNumber}</span><strong class="mono">${fmtTime(lap.lapTimeSec)}</strong></div>
+      <div class="lap-tip-row is-sub"><span>vs best</span><span class="mono">${delta < 0.0005 ? "best lap" : `+${delta.toFixed(3)}`}</span></div>
+      <div class="lap-tip-row is-sub"><span><i class="lg-line"></i>5-lap avg</span><span class="mono">${fmtTime(geom.avgs[idx])}</span></div>`;
+    tip.hidden = false;
+
+    // Float the tooltip above whichever is higher: the bar top or the average-line point.
+    const pr = picker.getBoundingClientRect();
+    const br = bar.getBoundingClientRect();
+    const dr = dot.getBoundingClientRect();
+    const half = tip.offsetWidth / 2;
+    const cx = br.left + br.width / 2 - pr.left;
+    tip.style.left = `${Math.max(half, Math.min(pr.width - half, cx)).toFixed(1)}px`;
+    tip.style.top = `${(Math.min(br.top, dr.top + dr.height / 2) - pr.top).toFixed(1)}px`;
   }
 
   private onBarClick(lapId: number): void {
@@ -314,6 +349,7 @@ export class LapPicker extends Component {
     const cmp = resolveComparison(this.store, this.store.selectedPilot);
     const head = this.renderHead(laps.length, cmp?.ref);
     if (laps.length === 0) {
+      this.chartGeom = null;
       this.el.innerHTML = head + renderEmpty("No laps yet", "Each completed lap shows up here as a bar.");
       return;
     }
@@ -332,6 +368,7 @@ export class LapPicker extends Component {
       }
       this.syncLatestButton();
     }
+    this.syncHoveredPin();
   }
 
   private renderHead(lapCount: number, refLap: LapRecord | undefined): string {
@@ -404,13 +441,18 @@ export class LapPicker extends Component {
           <g data-lap="${l.lapId}" class="bar-hit ${hovered}">
             <rect class="hit" x="${(i * slot).toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${CHART_H}"/>
             <rect class="${cls}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${(CHART_H - y).toFixed(1)}" rx="2"/>
-            <title>Lap ${l.lapNumber}: ${l.lapTimeSec.toFixed(3)}s</title>
           </g>`;
       })
       .join("");
-    const avg = rollingAverages(laps)
-      .map((a, i) => `${(i * slot + slot / 2).toFixed(1)},${yOf(a).toFixed(1)}`)
-      .join(" ");
+    const avgs = rollingAverages(laps);
+    const avgPts = avgs.map((a, i) => ({ x: i * slot + slot / 2, y: yOf(a) }));
+    this.chartGeom = {
+      laps,
+      best,
+      avgs,
+      xPct: laps.map((_, i) => xPct(i)),
+      avgTopPct: avgPts.map((p) => (p.y / CHART_H) * 100),
+    };
 
     const visibleCount = Math.min(laps.length, winLaps);
     const every = Math.max(1, Math.ceil(visibleCount / 16));
@@ -432,14 +474,16 @@ export class LapPicker extends Component {
               <div class="lap-picker-bars">
                 <svg viewBox="0 0 ${svgW} ${CHART_H}" preserveAspectRatio="none" role="img" aria-label="Lap times this session">
                   ${bars}
-                  <polyline class="avg-line" points="${avg}" vector-effect="non-scaling-stroke"/>
+                  <path class="avg-line" d="${smoothPath(avgPts)}" vector-effect="non-scaling-stroke"/>
                 </svg>
+                <span class="lap-avg-dot" data-avg-dot hidden></span>
               </div>
             </div>
             <div class="lap-picker-axis">${axis}</div>
           </div>
         </div>
         ${scrollbar}
+        <div class="lap-tip" data-lap-tip hidden></div>
       </div>
       <div class="lap-chart-legend">
         <span><i class="lg-review"></i>Inspected lap</span>
@@ -448,4 +492,26 @@ export class LapPicker extends Component {
         <span><i class="lg-line"></i>5-lap average</span>
       </div>`;
   }
+}
+
+/** Smooth monotone cubic path through the points (no overshoot between laps). */
+function smoothPath(pts: { x: number; y: number }[]): string {
+  const n = pts.length;
+  if (n === 0) return "";
+  let d = `M${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+  if (n === 1) return d;
+  if (n === 2) return `${d} L${pts[1].x.toFixed(1)},${pts[1].y.toFixed(1)}`;
+  const dx = pts.slice(0, -1).map((p, i) => pts[i + 1].x - p.x);
+  const m = dx.map((w, i) => (w !== 0 ? (pts[i + 1].y - pts[i].y) / w : 0));
+  const t: number[] = new Array(n);
+  t[0] = m[0];
+  t[n - 1] = m[n - 2];
+  for (let i = 1; i < n - 1; i++) {
+    t[i] = m[i - 1] * m[i] <= 0 ? 0 : (m[i - 1] + m[i]) / 2;
+  }
+  for (let i = 0; i < n - 1; i++) {
+    const seg = dx[i] / 3;
+    d += ` C${(pts[i].x + seg).toFixed(1)},${(pts[i].y + t[i] * seg).toFixed(1)} ${(pts[i + 1].x - seg).toFixed(1)},${(pts[i + 1].y - t[i + 1] * seg).toFixed(1)} ${pts[i + 1].x.toFixed(1)},${pts[i + 1].y.toFixed(1)}`;
+  }
+  return d;
 }

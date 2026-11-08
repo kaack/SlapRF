@@ -84,12 +84,12 @@ export class SectionStats extends Component {
                     <td>
                       <span class="stats-sec">
                         ${routeLabel(this.store, r.fromPuckId, r.toPuckId)}
-                        ${isTop ? `<span class="badge badge-accent">Biggest opportunity</span>` : ""}
+                        ${isTop ? `<span class="badge">Biggest opportunity</span>` : ""}
                       </span>
                     </td>
                     <td class="num mono">${fmtTime(r.best)}</td>
                     <td class="num mono">${enough ? fmtTime(r.typical) : "—"}</td>
-                    <td class="num mono ${enough && r.givenAway >= SIGNIFICANT_GAP_SEC ? "tone-warn strong" : "muted"}">
+                    <td class="num mono ${isTop ? "strong" : enough && r.givenAway >= SIGNIFICANT_GAP_SEC ? "" : "muted"}">
                       ${enough ? `+${r.givenAway.toFixed(3)}s` : "—"}
                     </td>
                     <td class="num mono">${r.typicalExitMph.toFixed(0)} <span class="muted">/ ${r.bestExitMph.toFixed(0)} mph</span></td>

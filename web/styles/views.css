@@ -1562,11 +1562,64 @@ body.is-gate-dragging * {
   border-top: 1px solid var(--border);
   padding-top: 16px;
 }
-.lap-picker.is-picking .bar-hit {
-  cursor: crosshair;
+.lap-picker.is-picking .bar-hit.is-hovered .bar:not(.is-review) {
+  fill: var(--purple) !important;
 }
-.lap-picker.is-picking .bar-hit:hover .bar:not(.is-review) {
-  fill: var(--purple);
+/* Hover tooltip (lap time + 5-lap average) and the matching point on the average line */
+.lap-picker {
+  position: relative;
+}
+.lap-tip {
+  position: absolute;
+  z-index: 5;
+  transform: translate(-50%, calc(-100% - 10px));
+  min-width: 140px;
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  pointer-events: none;
+}
+.lap-tip[hidden],
+.lap-avg-dot[hidden] {
+  display: none;
+}
+.lap-tip-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  color: var(--text);
+  white-space: nowrap;
+}
+.lap-tip-row.is-sub {
+  margin-top: 2px;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+.lap-tip-row.is-sub .mono {
+  color: var(--text-2);
+}
+.lap-tip-row span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.lap-tip-row .lg-line {
+  display: inline-block;
+  width: 10px;
+}
+.lap-avg-dot {
+  position: absolute;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text);
+  box-shadow: 0 0 0 2px var(--surface);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
 }
 .segmented button.is-ref-chip.is-active {
   background: rgba(192, 132, 252, 0.14);
@@ -1588,10 +1641,10 @@ body.is-gate-dragging * {
   gap: 10px;
 }
 .stats-table tr.is-top {
-  background: var(--accent-soft);
+  background: rgba(255, 255, 255, 0.025);
 }
 .stats-table tr.is-top td:first-child {
-  box-shadow: inset 2px 0 0 var(--accent);
+  box-shadow: inset 2px 0 0 var(--text-3);
 }
 
 /* Recommendation: plain-language coaching text */
@@ -1606,12 +1659,11 @@ body.is-gate-dragging * {
 .rec-lead {
   margin: 0;
   font-size: 15px;
-  font-weight: 500;
+  font-weight: 400;
   color: var(--text);
   line-height: 1.5;
 }
 .rec-lead strong {
-  color: var(--accent);
   font-weight: 600;
 }
 .rec-list {
@@ -1732,15 +1784,18 @@ body.is-gate-dragging * {
 .lap-picker .bar-hit .hit {
   fill: transparent;
 }
-.lap-picker .bar-hit:hover .hit {
-  fill: rgba(255, 255, 255, 0.03);
-}
 .lap-picker .bar {
   fill: var(--surface-3);
-  transition: fill 0.12s;
+  transition: fill 0.12s, filter 0.12s;
 }
-.lap-picker .bar-hit:hover .bar:not(.is-review):not(.is-ref):not(.is-best) {
-  fill: #4a505b;
+/* Subtle hover: only the bar itself lightens, no full-height column highlight */
+.lap-picker .bar-hit.is-hovered .bar:not(.is-review):not(.is-ref):not(.is-best) {
+  fill: #5a616d;
+}
+.lap-picker .bar-hit.is-hovered .bar.is-review,
+.lap-picker .bar-hit.is-hovered .bar.is-ref,
+.lap-picker .bar-hit.is-hovered .bar.is-best {
+  filter: brightness(1.18);
 }
 .lap-picker .bar.is-best {
   fill: rgba(52, 211, 153, 0.55);
@@ -1791,7 +1846,7 @@ body.is-gate-dragging * {
   color: #160b21;
 }
 .lap-picker .bar-hit.is-hovered .hit {
-  fill: rgba(255, 255, 255, 0.04);
+  fill: transparent;
 }
 .lap-picker-axis {
   position: relative;
