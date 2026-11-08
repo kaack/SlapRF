@@ -1,0 +1,235 @@
+/* App frame ---------------------------------------------------------------- */
+.app {
+  display: grid;
+  grid-template-columns: var(--sidebar-w) minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.outlet {
+  flex: 1;
+  padding: 24px 32px 48px;
+}
+
+.view {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* A panel swapped inside a routed view (e.g. Live → All / one pilot). */
+.view-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+/* Sidebar ------------------------------------------------------------------ */
+.sidebar {
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 20px 14px;
+  border-right: 1px solid var(--border);
+  background: var(--bg);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 0 8px;
+}
+.brand-mark {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.brand-mark svg {
+  shape-rendering: geometricPrecision;
+}
+.brand-name {
+  font-weight: 650;
+  font-size: 14px;
+  letter-spacing: -0.01em;
+}
+.brand-sub {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+.nav {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* Single level of navigation: no group headings, just a little air under the brand. */
+.nav-flat {
+  margin-top: 14px;
+}
+.nav-group {
+  padding: 14px 10px 6px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 9px 11px;
+  border-radius: var(--radius-sm);
+  color: var(--text-2);
+  font-size: 13.5px;
+  font-weight: 500;
+  transition: background 0.12s, color 0.12s;
+}
+.nav-item svg {
+  width: 20px;
+  height: 20px;
+  stroke-width: 2;
+  flex-shrink: 0;
+  shape-rendering: geometricPrecision;
+}
+.nav-item:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+.nav-item.is-active {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.nav-item.is-active svg {
+  color: var(--accent);
+}
+
+.sidebar-foot {
+  margin-top: auto;
+}
+.mini-gate {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  color: var(--text-2);
+  font-size: 12px;
+}
+.mini-gate-batt {
+  margin-left: auto;
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+
+/* Top bar ------------------------------------------------------------------ */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  min-height: var(--topbar-h);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: nowrap;
+  padding: 12px 32px;
+  border-bottom: 1px solid var(--border);
+  background: rgba(11, 12, 15, 0.82);
+  backdrop-filter: blur(12px);
+}
+.topbar-title {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+.topbar-title h1 {
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+.topbar-title p {
+  color: var(--text-3);
+  font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+.topbar-actions .btn {
+  height: 35px;
+  gap: 8px;
+  font-size: 13px;
+}
+.topbar-actions .btn svg {
+  width: 19px;
+  height: 19px;
+  stroke-width: 2;
+  shape-rendering: geometricPrecision;
+}
+/* Responsive --------------------------------------------------------------- */
+@media (max-width: 960px) {
+  .topbar > .topbar-actions .topbar-btn-label {
+    display: none;
+  }
+  .topbar > .topbar-actions .btn[data-action] {
+    width: 35px;
+    padding: 0;
+    justify-content: center;
+  }
+}
+@media (max-width: 900px) {
+  .app {
+    grid-template-columns: 1fr;
+  }
+  .sidebar {
+    position: static;
+    height: auto;
+    flex-direction: row;
+    align-items: center;
+    padding: 10px 14px;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    overflow-x: auto;
+  }
+  .nav {
+    flex-direction: row;
+  }
+  .nav-flat {
+    margin-top: 0;
+  }
+  .nav-item {
+    white-space: nowrap;
+  }
+  .nav-group,
+  .sidebar-foot,
+  .brand-sub {
+    display: none;
+  }
+  .topbar,
+  .outlet {
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+}
