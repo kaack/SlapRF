@@ -11,6 +11,8 @@ export class TopBar extends Component {
   private readonly router: Router;
   private readonly announcer: Announcer;
   private lastSig = "";
+  private resetFlashActive = false;
+  private resetFlashTimer: number | null = null;
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient, router: Router, announcer: Announcer) {
     super(el);
@@ -20,7 +22,12 @@ export class TopBar extends Component {
     this.announcer = announcer;
 
     el.addEventListener("click", this.handleClick);
-    this.onDispose(() => el.removeEventListener("click", this.handleClick));
+    this.onDispose(() => {
+      el.removeEventListener("click", this.handleClick);
+      if (this.resetFlashTimer !== null) {
+        window.clearTimeout(this.resetFlashTimer);
+      }
+    });
     this.onDispose(router.subscribe(() => this.render()));
     this.onDispose(store.subscribe(["status"], () => this.render()));
     this.onDispose(announcer.subscribe(() => this.render()));
@@ -43,23 +50,43 @@ export class TopBar extends Component {
         void this.api.simulatePack();
         break;
       case "reset":
-        if (confirm("Clear all laps for this session?")) void this.api.resetSession();
+        if (confirm("Clear all laps for this session?")) {
+          this.flashResetButton();
+          void this.api.resetSession();
+        }
         break;
     }
   };
+
+  private flashResetButton(): void {
+    this.resetFlashActive = true;
+    this.render();
+    if (this.resetFlashTimer !== null) {
+      window.clearTimeout(this.resetFlashTimer);
+    }
+    this.resetFlashTimer = window.setTimeout(() => {
+      this.resetFlashTimer = null;
+      this.resetFlashActive = false;
+      this.render();
+    }, 350);
+  }
 
   private render(): void {
     const meta = this.router.meta();
     const { liveTime, raceArmed, simulatorRunning: sim } = this.store;
     const ltConnected = liveTime.connectedClients > 0;
     const voiceOn = this.announcer.settings.enabled;
-    const sig = `${meta.id}:${sim ? 1 : 0}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}`;
+    const sig = `${meta.id}:${sim ? 1 : 0}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.resetFlashActive ? 1 : 0}`;
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
     const simBtn = `
       <button class="btn ${sim ? "btn-armed" : "btn-ghost"}" data-action="sim" title="${sim ? "Switch to real-world hardware dataset" : "Switch to simulated track dataset"}" aria-label="${sim ? "Switch to real-world hardware dataset" : "Switch to simulated track dataset"}">
         ${sim ? icons.zap(19) : icons.zapOff(19)}<span class="topbar-btn-label">${sim ? "Simulation on" : "Simulation off"}</span>
+      </button>`;
+    const resetBtn = `
+      <button class="btn ${this.resetFlashActive ? "btn-armed" : "btn-ghost"}" data-action="reset" title="Clear session laps" aria-label="Clear session laps">
+        ${icons.reset(19)}<span class="topbar-btn-label">Reset laps</span>
       </button>`;
 
     let actions = simBtn;
@@ -74,12 +101,9 @@ export class TopBar extends Component {
         <button class="btn ${raceArmed ? "btn-armed" : "btn-ghost"}" data-action="arm" ${ltConnected ? "disabled" : ""} title="${armTitle}" aria-label="${armTitle}">
           ${raceArmed ? icons.timer(19) : icons.timerOff(19)}<span class="topbar-btn-label">${raceArmed ? "Timing on" : "Timing off"}</span>
         </button>
-        <button class="btn btn-ghost btn-icon" data-action="reset" title="Clear session laps" aria-label="Clear session laps">${icons.reset(19)}</button>`;
+        ${resetBtn}`;
     } else if (meta.id === "pilot") {
-      actions += `
-        <button class="btn btn-ghost" data-action="reset" title="Clear session laps" aria-label="Clear session laps">
-          ${icons.reset(19)}<span class="topbar-btn-label">Clear laps</span>
-        </button>`;
+      actions += resetBtn;
     }
 
     this.el.innerHTML = `

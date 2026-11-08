@@ -162,6 +162,14 @@
 .btn-armed svg {
   color: var(--accent);
 }
+.btn-ghost:active:not(:disabled) {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.btn-ghost:active:not(:disabled) svg {
+  color: var(--accent);
+}
 .btn-armed:hover:not(:disabled) {
   background: #232830;
   border-color: #3a3f48;
