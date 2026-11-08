@@ -2513,11 +2513,16 @@ body.is-gate-dragging * {
 }
 
 .sim-pit-tray {
-  margin-top: 0;
+  margin: 0 12px;
   height: 44px;
+  min-height: 44px;
+  max-height: 44px;
   padding: 0 14px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
+  flex-wrap: nowrap;
+  overflow: hidden;
   cursor: default;
 }
 
@@ -2526,7 +2531,17 @@ body.is-gate-dragging * {
   align-items: center;
   flex-wrap: nowrap;
   gap: 8px;
-  overflow-x: auto;
+  height: 24px;
+  overflow: hidden;
+}
+
+.sim-pit-tray .gate-unassigned-empty-chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  line-height: 1;
 }
 
 .sim-pit-pill {
@@ -2535,6 +2550,7 @@ body.is-gate-dragging * {
   gap: 6px;
   height: 24px;
   padding: 0 10px 0 8px;
+  box-sizing: border-box;
   border-radius: 999px;
   border: 1.5px solid var(--c, var(--accent));
   background: color-mix(in srgb, var(--c, var(--accent)) 18%, var(--surface));
