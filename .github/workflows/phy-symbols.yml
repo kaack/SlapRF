@@ -29,4 +29,8 @@ jobs:
               grep -Ei 'xpd|pbus|chanfreq|rf_freq|force_rx|adctrig|rfpll|set_chan|tx_on|tx_off|rx_on|rxclk|freq_mem|ckgen|phy_param|restart_cal|i2c_sdm|set_freq|sigrssi|get_rssi|noise_floor|11p' | sort -u | xargs || true)
             if [ -n "$syms" ]; then echo "::notice title=$name::$syms"; fi
           done
+          for s in phy_enter_critical phy_exit_critical phy_pbus_xpd_tx_on phy_pbus_xpd_tx_off phy_pbus_workmode adctrig force_rx_gain cmd_parse phy_set_chanfreq phy_set_rf_freq_offset; do
+            hits=$("$NM" -A "$LIBDIR"/*.a 2>/dev/null | awk -v s="$s" '$NF==s' | sed 's#.*/##' | xargs || true)
+            echo "::notice title=def $s::$hits"
+          done
           exit 0
