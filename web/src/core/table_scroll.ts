@@ -91,14 +91,14 @@ function enhanceElement(el: HTMLElement, ro: ResizeObserver): void {
   leftBtn.className = "table-edge-nav is-left";
   leftBtn.setAttribute("aria-label", "Scroll table left");
   leftBtn.title = "Scroll left";
-  leftBtn.innerHTML = `<span class="table-edge-arrow">‹</span>`;
+  leftBtn.innerHTML = `<span class="table-edge-arrow"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M7.5 2.5L4 6L7.5 9.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
 
   const rightBtn = document.createElement("button");
   rightBtn.type = "button";
   rightBtn.className = "table-edge-nav is-right";
   rightBtn.setAttribute("aria-label", "Scroll table right");
   rightBtn.title = "Scroll right";
-  rightBtn.innerHTML = `<span class="table-edge-arrow">›</span>`;
+  rightBtn.innerHTML = `<span class="table-edge-arrow"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true"><path d="M4.5 2.5L8 6L4.5 9.5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
 
   shell.appendChild(leftBtn);
   shell.appendChild(rightBtn);

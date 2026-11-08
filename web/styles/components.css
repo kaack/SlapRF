@@ -826,16 +826,19 @@ select.input.is-custom-select-open {
   background-color: rgba(212, 255, 58, 0.08);
 }
 .table-edge-arrow {
-  display: inline-grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 20px;
   height: 36px;
   border-radius: 999px;
   background: rgba(24, 27, 34, 0.92);
   border: 1px solid var(--accent-line);
   color: var(--accent);
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1;
+  line-height: 0;
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45);
+}
+.table-edge-arrow svg {
+  display: block;
+  flex-shrink: 0;
 }
