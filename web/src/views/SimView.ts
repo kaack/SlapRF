@@ -148,14 +148,14 @@ function formatPilotVtxText(p: SimPilotState): string {
   return "Pit / Off";
 }
 
-function formatPackStateChip(pack: SimBatteryPack): { text: string; cls: string } {
+function formatPackStateChip(pack: SimBatteryPack): { html: string; cls: string } {
   switch (pack.state) {
     case "IN_QUAD":
-      return { text: "IN QUAD", cls: "is-in-quad" };
+      return { html: `<span>PLG</span>${icons.plug(10)}`, cls: "is-in-quad" };
     case "READY":
-      return { text: "READY", cls: "is-ready" };
+      return { html: `<span>READY</span>`, cls: "is-ready" };
     case "CHARGING":
-      return { text: "CHG ⚡", cls: "is-charging" };
+      return { html: `<span>CHG</span>${icons.zap(10)}`, cls: "is-charging" };
   }
 }
 
@@ -183,7 +183,7 @@ function renderPilotPacksHtml(p: SimPilotState): string {
         <div class="sim-pack-slot ${pk.state === "IN_QUAD" ? "is-active-pack" : ""}" data-pilot-pack-slot="${p.slotIndex}-${pk.packIndex}">
           <div class="sim-pack-head">
             <span class="sim-pack-title">Pack #${pk.packIndex}</span>
-            <span class="sim-pack-chip ${chip.cls}" data-pilot-pack-chip="${p.slotIndex}-${pk.packIndex}">${chip.text}</span>
+            <span class="sim-pack-chip ${chip.cls}" data-pilot-pack-chip="${p.slotIndex}-${pk.packIndex}">${chip.html}</span>
           </div>
           <div class="sim-pack-val mono" data-pilot-pack-val="${p.slotIndex}-${pk.packIndex}">
             <strong>${pk.pct}%</strong> · ${pk.volts.toFixed(1)}V
@@ -853,7 +853,7 @@ export class SimView extends Component {
           `[data-pilot-pack-chip="${p.slotIndex}-${pk.packIndex}"]`
         );
         if (chipEl) {
-          chipEl.textContent = chip.text;
+          chipEl.innerHTML = chip.html;
           chipEl.className = `sim-pack-chip ${chip.cls}`;
         }
         const valEl = this.el.querySelector<HTMLElement>(

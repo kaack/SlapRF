@@ -52,5 +52,10 @@ export const icons = {
     ),
   pencil: (s?: number) =>
     svg(`<path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>`, s),
+  plug: (s?: number) =>
+    svg(
+      `<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>`,
+      s
+    ),
   close: (s?: number) => svg(`<path d="M18 6 6 18M6 6l12 12"/>`, s),
 };

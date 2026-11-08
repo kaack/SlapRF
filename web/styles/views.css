@@ -2710,6 +2710,9 @@ body.is-gate-dragging * {
 }
 
 .sim-pack-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2.5px;
   font-size: 9px;
   font-weight: 700;
   line-height: 1;
