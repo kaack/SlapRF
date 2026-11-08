@@ -198,7 +198,10 @@
         <div data-slot="picker"></div>
       </div>
       <div class="view-stack" data-slot="panel"></div>`,this.adopt(new PilotPicker(this.slot("picker"),store,{includeAll:!0,value:()=>store.liveFocus,onSelect:slot=>store.setLiveFocus(slot)})),this.onDispose(()=>this.panel?.destroy()),this.onDispose(store.subscribe(["selection","config"],()=>this.showPanel())),this.showPanel()}showPanel(){let focus=this.store.liveFocus,mode=focus===null?null:0,shownMode=this.shownFocus===void 0?void 0:this.shownFocus===null?null:0;if(this.shownFocus=focus,mode===shownMode)return;this.panel?.destroy();let host=this.slot("panel");this.panel=focus===null?new AllPilotsPanel(host,this.store,slot=>this.store.setLiveFocus(slot)):new PilotPanel(host,this.store,this.api)}};var NEGLIGIBLE_SEC2=.01,NOTABLE_MPH=3,LapComparison=class extends Component{store;constructor(el,store){super(el),this.store=store,this.onDispose(store.subscribe(["laps","selection","config"],()=>this.render())),this.render()}render(){let cmp=resolveComparison(this.store,this.store.selectedPilot);if(!cmp){this.el.innerHTML=renderEmpty("Fly at least two laps","Then click a bar above to see where that lap gained or lost time.");return}let maxAbs=Math.max(NEGLIGIBLE_SEC2,...cmp.sections.map(s=>Math.abs(s.delta)));this.el.innerHTML=`
-      ${this.renderSummary(cmp)}
+      <div class="sub-head">
+        <h3>Section comparison</h3>
+        <p>Split time through each section, Lap ${cmp.lap.lapNumber} against ${esc(cmp.refLabel)}.</p>
+      </div>
       <div class="table-scroll">
         <table class="table cmp-table">
           <thead>
@@ -221,17 +224,12 @@
             </tr>
           </tfoot>
         </table>
-      </div>`}renderSummary(cmp){let{lap,ref,refLabel,totalDelta}=cmp,abs=Math.abs(totalDelta).toFixed(3),isEven=Math.abs(totalDelta)<NEGLIGIBLE_SEC2,isFaster=totalDelta<0,badgeCls=isEven?"is-neutral":isFaster?"is-good":"is-bad",badgeText=isEven?"Matched pace":`${fmtDelta(totalDelta)}s ${isFaster?"faster":"slower"}`,text;if(isEven)text=`<strong>Lap ${lap.lapNumber}</strong> (${fmtTime(lap.lapTimeSec)}) matched the overall time of <strong>${esc(refLabel)}</strong> (${fmtTime(ref.lapTimeSec)}).`;else{text=`<strong>Lap ${lap.lapNumber}</strong> (${fmtTime(lap.lapTimeSec)}) was <strong>${abs}s ${isFaster?"faster":"slower"}</strong> overall than <strong>${esc(refLabel)}</strong> (${fmtTime(ref.lapTimeSec)}).`;let key=decisiveSection(cmp);if(key&&Math.abs(key.delta)>=NEGLIGIBLE_SEC2){let secTitle=`${sectionShort(this.store,key.fromPuckId)} (${sectionLabel(this.store,key.fromPuckId,key.toPuckId)})`;text+=` ${isFaster?"The largest time gain came in":"Most of the time was lost in"} <strong>${esc(secTitle)}</strong> (<span class="mono">${fmtDelta(key.delta)}s</span>)`;let mph=key.lapExitMph-key.refExitMph;text+=Math.abs(mph)>=NOTABLE_MPH?`, exiting <strong>${Math.abs(mph).toFixed(0)} mph ${mph<0?"slower":"faster"}</strong> (${key.lapExitMph.toFixed(0)} mph vs ${key.refExitMph.toFixed(0)} mph).`:"."}}return cmp.incomplete&&(text+=' <span class="muted">Some sections could not be compared because a gate was missed on one of the laps.</span>'),`
-      <div class="insight-box">
-        <div class="insight-head">
-          <span class="insight-badge mono ${badgeCls}">${badgeText}</span>
-          <div class="insight-chips">
-            <span class="cmp-chip is-review">Lap ${lap.lapNumber} \xB7 ${fmtTime(lap.lapTimeSec)}</span>
-            <span class="insight-vs">vs</span>
-            <span class="cmp-chip is-ref">${esc(refLabel)} \xB7 ${fmtTime(ref.lapTimeSec)}</span>
-          </div>
-        </div>
-        <p class="insight-body">${text}</p>
+      </div>
+      ${this.renderAnalysis(cmp)}`}sectionName(s){return`${sectionShort(this.store,s.fromPuckId)} \xB7 ${sectionLabel(this.store,s.fromPuckId,s.toPuckId)}`}renderAnalysis(cmp){let{lap,ref,refLabel,totalDelta}=cmp,isEven=Math.abs(totalDelta)<NEGLIGIBLE_SEC2,isFaster=totalDelta<0,refTime=fmtTime(ref.lapTimeSec),refText=refLabel.endsWith(")")?refLabel.replace(/\)$/,`, ${refTime})`):`${refLabel} (${refTime})`,lead=isEven?`Lap ${lap.lapNumber} (${fmtTime(lap.lapTimeSec)}) matched ${esc(refText)}.`:`Lap ${lap.lapNumber} (${fmtTime(lap.lapTimeSec)}) was <strong>${Math.abs(totalDelta).toFixed(3)}s ${isFaster?"faster":"slower"}</strong> than ${esc(refText)}.`,points=[],key=isEven?void 0:decisiveSection(cmp);if(key&&Math.abs(key.delta)>=NEGLIGIBLE_SEC2){points.push(`${isFaster?"Most of the gain came in":"Most of the time was lost in"} <strong>${esc(this.sectionName(key))}</strong> (${fmtDelta(key.delta)}s).`);let mph=key.lapExitMph-key.refExitMph;Math.abs(mph)>=NOTABLE_MPH&&points.push(`You exited that section <strong>${Math.abs(mph).toFixed(0)} mph ${mph<0?"slower":"faster"}</strong> (${key.lapExitMph.toFixed(0)} vs ${key.refExitMph.toFixed(0)} mph)${mph<0&&!isFaster?" \u2014 carrying less speed out of it cost time into the next one too":""}.`)}let counter=cmp.sections.filter(s=>(isFaster?s.delta>0:s.delta<0)&&Math.abs(s.delta)>=NEGLIGIBLE_SEC2).sort((a,b)=>Math.abs(b.delta)-Math.abs(a.delta))[0];return!isEven&&counter&&points.push(isFaster?`It wasn't faster everywhere: <strong>${esc(this.sectionName(counter))}</strong> was ${Math.abs(counter.delta).toFixed(3)}s slower.`:`You did gain time in <strong>${esc(this.sectionName(counter))}</strong> (${fmtDelta(counter.delta)}s).`),cmp.incomplete&&points.push("Some sections couldn't be compared because a gate was missed on one of the laps."),`
+      <div class="lap-analysis">
+        <h3>Lap analysis</h3>
+        <p class="rec-lead">${lead}</p>
+        ${points.length?`<ul class="rec-list">${points.map(p=>`<li>${p}</li>`).join("")}</ul>`:""}
       </div>`}renderRow(s,maxAbs){let width=Math.min(50,Math.abs(s.delta)/maxAbs*50),side=s.delta>0?"loss":"gain",mph=s.lapExitMph-s.refExitMph;return`
       <tr>
         <td>
