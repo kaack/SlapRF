@@ -550,7 +550,7 @@ export class TrackEditor extends Component {
       }
     };
 
-    const startDrag = () => {
+    const startDrag = (clientX: number, clientY: number) => {
       started = true;
       this.isDragging = true;
       document.body.classList.add("is-gate-dragging");
@@ -561,9 +561,8 @@ export class TrackEditor extends Component {
       ghost.style.setProperty("--c", color);
       ghost.style.width = "58px";
       ghost.style.height = "58px";
-      ghost.style.left = `${startX - 29}px`;
-      ghost.style.top = `${startY - 29}px`;
-      ghost.innerHTML = `<span class="gate-node-puck-code mono">T${timerId}</span>`;
+      ghost.style.transform = `translate3d(${clientX - 29}px, ${clientY - 29}px, 0) scale(1.06)`;
+      ghost.innerHTML = `<span class="gate-node-puck-code mono">${esc(this.formatTimerShortCode(timerId))}</span>`;
       document.body.appendChild(ghost);
       floatingEl = ghost;
     };
@@ -573,11 +572,11 @@ export class TrackEditor extends Component {
       const dy = ev.clientY - startY;
       if (!started) {
         if (Math.hypot(dx, dy) < 4) return;
-        startDrag();
+        startDrag(ev.clientX, ev.clientY);
       }
       if (!floatingEl || !lineEl) return;
       if (ev.cancelable) ev.preventDefault();
-      floatingEl.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(1.06)`;
+      floatingEl.style.transform = `translate3d(${ev.clientX - 29}px, ${ev.clientY - 29}px, 0) scale(1.06)`;
 
       const overTimeline = this.isPointerDirectlyOnTrackLine(
         lineEl,
@@ -717,7 +716,10 @@ export class TrackEditor extends Component {
     };
     window.addEventListener("touchmove", blockTouchScroll, { passive: false });
 
-    const startDrag = () => {
+    const halfW = initialCircleRect.width / 2;
+    const halfH = initialCircleRect.height / 2;
+
+    const startDrag = (clientX: number, clientY: number) => {
       started = true;
       this.isDragging = true;
       this.selectedNodeId = nodeId;
@@ -726,10 +728,9 @@ export class TrackEditor extends Component {
       const clone = circle.cloneNode(true) as HTMLElement;
       clone.classList.add("gate-node-floating");
       clone.style.setProperty("--c", item.style.getPropertyValue("--c"));
-      clone.style.left = `${initialCircleRect.left}px`;
-      clone.style.top = `${initialCircleRect.top}px`;
       clone.style.width = `${initialCircleRect.width}px`;
       clone.style.height = `${initialCircleRect.height}px`;
+      clone.style.transform = `translate3d(${clientX - halfW}px, ${clientY - halfH}px, 0) scale(1.06)`;
       document.body.appendChild(clone);
       floatingEl = clone;
 
@@ -741,11 +742,11 @@ export class TrackEditor extends Component {
       const dy = ev.clientY - startY;
       if (!started) {
         if (Math.hypot(dx, dy) < 5) return;
-        startDrag();
+        startDrag(ev.clientX, ev.clientY);
       }
       if (!floatingEl) return;
       if (ev.cancelable) ev.preventDefault();
-      floatingEl.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(1.06)`;
+      floatingEl.style.transform = `translate3d(${ev.clientX - halfW}px, ${ev.clientY - halfH}px, 0) scale(1.06)`;
 
       // Check if dragging the timer over the Unassigned Timers tray.
       // Keep the dashed slot on the track line intact until the user releases the mouse!
@@ -767,10 +768,10 @@ export class TrackEditor extends Component {
       if (!parent) return;
 
       // Only reorder along the track when the pointer is near the track line vertically.
-      const lineCenterY = initialCircleRect.top + initialCircleRect.height / 2;
+      const lineCenterY = initialCircleRect.top + halfH;
       if (Math.abs(ev.clientY - lineCenterY) > 64) return;
 
-      const centerX = initialCircleRect.left + initialCircleRect.width / 2 + dx;
+      const centerX = ev.clientX;
       const items = [...parent.querySelectorAll<HTMLElement>(".gate-line-item[data-gate]")];
       const currentIdx = items.indexOf(item);
 
