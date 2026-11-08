@@ -42,9 +42,13 @@ const IDLE_EASTER_EGG_QUIPS = [
   "Save the geese!",
 ];
 
-/** Randomized quiet window (12–22 s with no gate activity while Timing and Announcer are on). */
-const IDLE_MIN_MS = 12_000;
-const IDLE_MAX_MS = 22_000;
+/**
+ * Rare quiet-track easter egg window: 3 to 7 minutes (180–420 s) of zero gate activity
+ * while Timing and Announcer are on. Fires at most once per lull (requires real gate
+ * activity before arming again) so it stays a genuine "wait, what did it just say?!" moment.
+ */
+const IDLE_MIN_MS = 3 * 60_000;
+const IDLE_MAX_MS = 7 * 60_000;
 
 /** "VANOVER" → "Vanover": stops some voices from spelling all-caps callsigns letter by letter. */
 export function spokenName(callsign: string): string {
@@ -75,6 +79,7 @@ export class Announcer {
   private holdUntil = 0;
   private holdTimer = 0;
   private idleTimer = 0;
+  private quipSpokenInCurrentLull = false;
   private lastQuipIdx = -1;
   private lastSimMode: boolean | null = null;
   private lastRaceArmed: boolean | null = null;
@@ -86,7 +91,10 @@ export class Announcer {
     this.prefs = loadPrefs();
     store.onLapRecorded((lap) => this.onLap(lap));
     store.onStartGateDetected((ev) => this.onStartPass(ev));
-    store.subscribe(["crossings"], () => this.resetIdleTimer());
+    store.subscribe(["crossings"], () => {
+      this.quipSpokenInCurrentLull = false;
+      this.resetIdleTimer();
+    });
     store.subscribe(["status"], () => {
       const simChanged = this.lastSimMode !== null && this.lastSimMode !== this.store.simulatorRunning;
       const armedChanged = this.lastRaceArmed !== null && this.lastRaceArmed !== this.store.raceArmed;
@@ -198,14 +206,29 @@ export class Announcer {
   private resetIdleTimer(): void {
     window.clearTimeout(this.idleTimer);
     this.idleTimer = 0;
-    if (!this.prefs.enabled || !this.store.raceArmed || !this.supported) return;
+    if (
+      !this.prefs.enabled ||
+      !this.store.raceArmed ||
+      !this.supported ||
+      this.quipSpokenInCurrentLull
+    ) {
+      return;
+    }
     const delayMs = IDLE_MIN_MS + Math.floor(Math.random() * (IDLE_MAX_MS - IDLE_MIN_MS));
     this.idleTimer = window.setTimeout(() => this.speakIdleQuip(), delayMs);
   }
 
   private speakIdleQuip(): void {
     this.idleTimer = 0;
-    if (!this.prefs.enabled || !this.store.raceArmed || !this.supported) return;
+    if (
+      !this.prefs.enabled ||
+      !this.store.raceArmed ||
+      !this.supported ||
+      this.quipSpokenInCurrentLull
+    ) {
+      return;
+    }
+    this.quipSpokenInCurrentLull = true;
     let idx = Math.floor(Math.random() * IDLE_EASTER_EGG_QUIPS.length);
     if (IDLE_EASTER_EGG_QUIPS.length > 1 && idx === this.lastQuipIdx) {
       idx = (idx + 1) % IDLE_EASTER_EGG_QUIPS.length;
