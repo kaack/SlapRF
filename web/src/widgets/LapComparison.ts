@@ -31,10 +31,6 @@ export class LapComparison extends Component {
     const maxAbs = Math.max(NEGLIGIBLE_SEC, ...cmp.sections.map((s) => Math.abs(s.delta)));
 
     this.el.innerHTML = `
-      <div class="sub-head">
-        <h3>Section comparison</h3>
-        <p>Split time through each section, Lap ${cmp.lap.lapNumber} against ${esc(cmp.refLabel)}.</p>
-      </div>
       <div class="table-scroll">
         <table class="table cmp-table">
           <thead>
@@ -107,7 +103,6 @@ export class LapComparison extends Component {
 
     return `
       <div class="lap-analysis">
-        <h3>Lap analysis</h3>
         <p class="rec-lead">${lead}</p>
         ${points.length ? `<ul class="rec-list">${points.map((p) => `<li>${p}</li>`).join("")}</ul>` : ""}
       </div>`;
