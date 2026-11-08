@@ -469,8 +469,8 @@ export class TrackEditor extends Component {
 
   /**
    * Returns true only when the pointer (x, y) is directly over the horizontal track line band.
-   * Uses the fixed 58px vertical center of the track line inside `.gate-track-line` plus
-   * hysteresis so crossing the threshold never oscillates.
+   * Uses the live circle center inside `.gate-track-line` plus hysteresis so crossing the
+   * threshold never oscillates even when circles scale down on narrower screens.
    */
   private isPointerDirectlyOnTrackLine(
     lineEl: HTMLElement,
@@ -480,7 +480,10 @@ export class TrackEditor extends Component {
   ): boolean {
     const lineRect = lineEl.getBoundingClientRect();
     if (x < lineRect.left || x > lineRect.right) return false;
-    const lineCenterY = lineRect.top + 58;
+    const firstCircle = lineEl.querySelector<HTMLElement>(".gate-node-circle");
+    const lineCenterY = firstCircle
+      ? firstCircle.getBoundingClientRect().top + firstCircle.getBoundingClientRect().height / 2
+      : lineRect.top + 54;
     const threshold = currentlyOver ? 44 : 32;
     return Math.abs(y - lineCenterY) <= threshold;
   }
