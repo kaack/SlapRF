@@ -19,8 +19,8 @@ You can use SlapRF in two ways:
 
 A SlapRF setup uses one **Hub timer** and up to 5 **Spoke timers** (up to 6 timers total):
 
-- **Hub timer**: Connects to your laptop over Wi-Fi or a mobile hotspot. It measures 5.8 GHz RSSI at its own gate and receives data from all Spoke timers.
-- **Spoke timers**: Measure 5.8 GHz RSSI at other gates on the track and send their readings to the Hub timer over ESP-NOW. Spoke timers do not need Wi-Fi credentials.
+- **Hub timer**: Connects to your laptop over Wi-Fi or a mobile hotspot. It measures 5.8 GHz RSSI at its own gate, broadcasts a 25 Hz timing sync beacon, and receives 4-sample sliding-window telemetry frames from all Spoke timers over **Espressif 2.4 GHz Long Range (`WIFI_PROTOCOL_LR`)**.
+- **Spoke timers**: Pure 5.8 GHz recording devices placed at other gates on the track. They perform zero on-board peak detection or lap math—every 20 ms (50 Hz) they record the 8 pilot channels into a 4-sample ring buffer and burst the sliding window (`2×` overlap FEC) to the Hub in staggered 3.5 ms TDMA slots over 2.4 GHz LR (`-102 dBm` sensitivity, `+20 dBm` TX power on Channel 1). Even if 50% of packets are lost to wet grass or 2.4 GHz ELRS interference, 100% of the 50 Hz RSSI stream arrives intact at the laptop.
 
 ```mermaid
 flowchart LR
@@ -32,20 +32,33 @@ flowchart LR
     end
 
     subgraph Laptop["Field Laptop"]
-        Server["SlapRF Server"]
+        Server["SlapRF Server (DSP & Timing Engine)"]
         UI["Web UI (:8090) - Section Splits S1-S4"]
         LiveTime["MultiGP LiveTime (:5403 LapRF TCP)"]
     end
 
-    T2 -- "ESP-NOW" --> T1
-    T3 -- "ESP-NOW" --> T1
-    T4 -- "ESP-NOW" --> T1
-    T1 -- "Wi-Fi (UDP)" --> Server
+    T2 -- "2.4 GHz LR + 4-Sample FEC" --> T1
+    T3 -- "2.4 GHz LR + 4-Sample FEC" --> T1
+    T4 -- "2.4 GHz LR + 4-Sample FEC" --> T1
+    T1 -- "Wi-Fi UDP (:5404)" --> Server
     Server --> UI
     Server -. "Optional Start Gate Passings" .-> LiveTime
 ```
 
-You flash and configure the timers from Chrome, Edge, or Brave over USB. No compiler, driver installation, or command-line tool is required.
+You flash and configure the timers directly from Chrome, Edge, or Brave over USB-C (even from the static [GitHub Pages app](https://kaack.github.io/SlapRF/) with no backend installed). No compiler, driver installation, or command-line tool is required.
+
+## Low-Level Architecture & Protocol Reference
+
+For a detailed technical breakdown with sequence diagrams, state machines, and byte-level packet layouts, see **[`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)**:
+
+- **[End-to-End Data Flow & Design Principles](docs/ARCHITECTURE.md#1-system-overview--design-principles)** — Why Spokes are pure recording sensors with all DSP centralized on the laptop.
+- **[XIAO ESP32-C5 5.8 GHz SDR & Time-Division Schedule](docs/ARCHITECTURE.md#3-xiao-esp32-c5-58-ghz-sdr--time-division-radio-schedule)** — Single-synthesizer 5.8 GHz / 2.4 GHz multiplexing and the 40 ms superframe schedule.
+- **[Ground-Interference Mitigation & 2.4 GHz LR Protocol](docs/ARCHITECTURE.md#4-ground-interference-mitigation--24-ghz-lr-protocol)** — Two-ray grass path-loss physics, `+11 dB` DSSS coding gain, 3.5 ms TDMA slots, and 4-sample sliding-window recovery under 50% packet loss.
+- **[Binary Wire Formats (`0xC5 0x59` & `SLAPRF01`)](docs/ARCHITECTURE.md#5-binary-wire-formats-0xc5-0x59-sliding-window--slaprf01)** — Byte-by-byte layouts of the 44-byte sliding-window frame and 128-byte flash config block.
+- **[DSP Pipeline & Parabolic Peak Interpolation](docs/ARCHITECTURE.md#6-dsp-pipeline--sub-frame-parabolic-peak-interpolation)** — Zero-phase EMA smoothing, hysteresis state machine, and `< 2 ms` sub-frame parabolic vertex fitting.
+- **[Multi-Gate Timing Rules & Section Analytics Engine](docs/ARCHITECTURE.md#7-multi-gate-timing-rules--section-analytics-engine)** — The 5-stage guardrail pipeline (cool-down, stale progress, min section, previous-gate echo, min/max lap) and bottleneck math.
+- **[Browser-Native WebSerial ROM Flasher & Version Tracking](docs/ARCHITECTURE.md#8-browser-native-webserial-rom-flasher--version-tracking)** — Client-side `.bin` patching, SLIP ROM bootloader protocol, and firmware version detection.
+- **[ImmersionRC LapRF 8-Way Emulation & WebAssembly Simulator](docs/ARCHITECTURE.md#9-immersionrc-laprf-8-way-emulation-tcp-5403)** — TCP `:5403` LiveTime bridge and `ApiTransport` dual-mode architecture.
 
 ## Parts List and Cost
 
