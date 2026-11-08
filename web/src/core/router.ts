@@ -17,21 +17,21 @@ export const ROUTES: RouteMeta[] = [
     label: "Live",
     title: "Live",
     subtitle: "Who's flying and how times are trending — pick a pilot for their laps and signal",
-    icon: () => icons.flag(),
+    icon: () => icons.flag(20),
   },
   {
     id: "pilot",
     label: "Analysis",
     title: "Analysis",
     subtitle: "Pick laps and see where time was won and lost",
-    icon: () => icons.compare(),
+    icon: () => icons.chart(20),
   },
   {
     id: "setup",
     label: "System",
     title: "System",
     subtitle: "Pilots, timing rules, announcer, gates and LiveTime",
-    icon: () => icons.sliders(),
+    icon: () => icons.sliders(20),
   },
 ];
 
