@@ -1,6 +1,7 @@
 /**
  * Wraps horizontally scrollable `.table-scroll` containers in a `.table-scroll-shell`
- * with full-height left/right edge scroll indicator buttons (`.table-edge-nav`).
+ * with full-height left/right edge scroll indicator buttons (`.table-edge-nav`),
+ * and preserves horizontal & vertical scroll offsets across component re-renders.
  *
  * When a table overflows horizontally, the left/right sidebars appear
  * spanning the full height of the table so mobile users can tap either side
@@ -8,6 +9,7 @@
  */
 
 const SCROLLABLE_SELECTOR = ".table-scroll";
+const EXTRA_SCROLL_PRESERVE_SELECTOR = ".gate-track-scroll";
 
 interface ShellState {
   shell: HTMLElement;
@@ -18,6 +20,40 @@ interface ShellState {
 }
 
 const managedTables = new WeakMap<HTMLElement, ShellState>();
+const trackedExtraScrollables = new WeakSet<HTMLElement>();
+const savedScrollByKey = new Map<string, { left: number; top: number }>();
+
+function scrollKeyFor(el: HTMLElement): string | null {
+  const host = el.closest<HTMLElement>("[data-slot], .card, .view, #app");
+  if (!host) return null;
+  const slotName = host.getAttribute("data-slot");
+  const base = slotName
+    ? `slot:${slotName}`
+    : `cls:${host.className}|id:${host.id}`;
+  return `${base}::${el.className.replace(/\btable-scroll-viewport\b/g, "").trim()}`;
+}
+
+function recordScrollOffset(el: HTMLElement): void {
+  const key = scrollKeyFor(el);
+  if (!key) return;
+  savedScrollByKey.set(key, {
+    left: el.scrollLeft,
+    top: el.scrollTop,
+  });
+}
+
+function restoreScrollOffset(el: HTMLElement): void {
+  const key = scrollKeyFor(el);
+  if (!key) return;
+  const saved = savedScrollByKey.get(key);
+  if (!saved) return;
+  if (saved.left > 0 && el.scrollLeft !== saved.left) {
+    el.scrollLeft = saved.left;
+  }
+  if (saved.top > 0 && el.scrollTop !== saved.top) {
+    el.scrollTop = saved.top;
+  }
+}
 
 function updateShell(state: ShellState): void {
   const { viewport, leftBtn, rightBtn, shell } = state;
@@ -92,7 +128,17 @@ function enhanceElement(el: HTMLElement, ro: ResizeObserver): void {
     scrollStep(1);
   });
 
-  viewport.addEventListener("scroll", state.update, { passive: true });
+  // Restore any prior horizontal/vertical scroll position before attaching listener
+  restoreScrollOffset(viewport);
+
+  viewport.addEventListener(
+    "scroll",
+    () => {
+      recordScrollOffset(viewport);
+      state.update();
+    },
+    { passive: true }
+  );
   ro.observe(viewport);
   const innerTable = viewport.firstElementChild;
   if (innerTable instanceof HTMLElement) {
@@ -100,7 +146,27 @@ function enhanceElement(el: HTMLElement, ro: ResizeObserver): void {
   }
 
   managedTables.set(el, state);
-  requestAnimationFrame(state.update);
+  state.update();
+  requestAnimationFrame(() => {
+    restoreScrollOffset(viewport);
+    state.update();
+  });
+}
+
+function preserveExtraScrollable(el: HTMLElement): void {
+  if (trackedExtraScrollables.has(el)) return;
+  trackedExtraScrollables.add(el);
+  restoreScrollOffset(el);
+  el.addEventListener(
+    "scroll",
+    () => {
+      recordScrollOffset(el);
+    },
+    { passive: true }
+  );
+  requestAnimationFrame(() => {
+    restoreScrollOffset(el);
+  });
 }
 
 let installed = false;
@@ -130,6 +196,8 @@ export function installTableScrollIndicators(): void {
     try {
       const matches = root.querySelectorAll<HTMLElement>(SCROLLABLE_SELECTOR);
       matches.forEach((m) => enhanceElement(m, ro));
+      const extras = root.querySelectorAll<HTMLElement>(EXTRA_SCROLL_PRESERVE_SELECTOR);
+      extras.forEach((ex) => preserveExtraScrollable(ex));
     } finally {
       scanning = false;
     }
