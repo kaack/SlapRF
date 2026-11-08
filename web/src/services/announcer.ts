@@ -13,6 +13,7 @@ export interface AnnouncerPrefs {
   voiceURI: string;
   rate: number;
   volume: number;
+  testPhrase?: string;
 }
 
 const STORAGE_KEY = "gate-timer.announcer";
@@ -22,6 +23,7 @@ const DEFAULT_PREFS: AnnouncerPrefs = {
   voiceURI: PREFERRED_DEFAULT_VOICE,
   rate: 1.1,
   volume: 1,
+  testPhrase: "",
 };
 
 /** Drop queued callouts older than this — a stale lap time is worse than none. */
@@ -228,10 +230,19 @@ export class Announcer {
     return () => this.listeners.delete(fn);
   }
 
-  public test(): void {
-    this.wakeAudio();
+  public defaultTestPhrase(): string {
     const pilot = this.store.enabledPilots[0];
-    this.say(lapCallout(pilot?.callsign ?? "Pilot", 14.08), true);
+    return lapCallout(pilot?.callsign ?? "Vanover", 14.08);
+  }
+
+  public test(customPhrase?: string): void {
+    this.wakeAudio();
+    if (customPhrase !== undefined) {
+      this.prefs = { ...this.prefs, testPhrase: customPhrase };
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(this.prefs));
+    }
+    const raw = (customPhrase ?? this.prefs.testPhrase ?? "").trim();
+    this.say(raw || this.defaultTestPhrase(), true, true);
   }
 
   private onLap(lap: LapRecord): void {

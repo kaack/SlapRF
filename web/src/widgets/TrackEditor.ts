@@ -479,25 +479,34 @@ export class TrackEditor extends Component {
     currentlyOver: boolean
   ): boolean {
     const lineRect = lineEl.getBoundingClientRect();
-    if (x < lineRect.left || x > lineRect.right) return false;
+    if (x < lineRect.left - 12 || x > lineRect.right + 12) return false;
     const firstCircle = lineEl.querySelector<HTMLElement>(".gate-node-circle");
     const lineCenterY = firstCircle
       ? firstCircle.getBoundingClientRect().top + firstCircle.getBoundingClientRect().height / 2
       : lineRect.top + 54;
-    const threshold = currentlyOver ? 44 : 32;
+    const threshold = currentlyOver ? 64 : 48;
     return Math.abs(y - lineCenterY) <= threshold;
   }
 
   /**
    * Dragging an unassigned timer from the tray onto the track line:
    *   - The landing placeholder slot ONLY appears when the dragged timer is directly over
-   *     the track line itself (within ±32px of the line's center).
+   *     the track line itself.
    *   - When the track is empty, the existing dashed circle highlights in-place without
    *     inserting/removing DOM nodes or shifting any elements vertically.
    *   - Dropping over the track line fills the dashed circle in place without removing it
    *     first, avoiding any layout flash while the backend commits.
    */
   private beginTrayTimerDrag(downEvent: PointerEvent, tokenEl: HTMLElement): void {
+    if (downEvent.pointerType === "touch") {
+      downEvent.preventDefault();
+    }
+    try {
+      tokenEl.setPointerCapture(downEvent.pointerId);
+    } catch {
+      // ignore if synthetic or unsupported
+    }
+
     const timerId = Number(tokenEl.dataset.puckId);
     const color = timerColor(this.store, timerId);
     const startX = downEvent.clientX;
@@ -509,6 +518,11 @@ export class TrackEditor extends Component {
     let previewSlot: HTMLElement | null = null;
     let insertIndex: number | null = null;
     let isOverLine = false;
+
+    const blockTouchScroll = (te: TouchEvent) => {
+      if (te.cancelable) te.preventDefault();
+    };
+    window.addEventListener("touchmove", blockTouchScroll, { passive: false });
 
     const setEmptyPlaceholderPreview = (active: boolean) => {
       if (!emptyPlaceholder) return;
@@ -562,7 +576,7 @@ export class TrackEditor extends Component {
         startDrag();
       }
       if (!floatingEl || !lineEl) return;
-      ev.preventDefault();
+      if (ev.cancelable) ev.preventDefault();
       floatingEl.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(1.06)`;
 
       const overTimeline = this.isPointerDirectlyOnTrackLine(
@@ -617,6 +631,14 @@ export class TrackEditor extends Component {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onEnd);
       window.removeEventListener("pointercancel", onEnd);
+      window.removeEventListener("touchmove", blockTouchScroll);
+      try {
+        if (tokenEl.hasPointerCapture(downEvent.pointerId)) {
+          tokenEl.releasePointerCapture(downEvent.pointerId);
+        }
+      } catch {
+        // ignore
+      }
       document.body.classList.remove("is-gate-dragging");
       if (floatingEl) {
         floatingEl.remove();
@@ -674,6 +696,12 @@ export class TrackEditor extends Component {
    *     track line until the mouse is actually released, then removes the node.
    */
   private beginTrackNodeInteraction(downEvent: PointerEvent, item: HTMLElement): void {
+    try {
+      item.setPointerCapture(downEvent.pointerId);
+    } catch {
+      // ignore if synthetic or unsupported
+    }
+
     const nodeId = Number(item.dataset.gate);
     const circle = item.querySelector<HTMLElement>(".gate-node-circle") ?? item;
     const trayEl = this.el.querySelector<HTMLElement>("[data-unassigned-tray]");
@@ -683,6 +711,11 @@ export class TrackEditor extends Component {
     let started = false;
     let floatingEl: HTMLElement | null = null;
     let overUnassignTray = false;
+
+    const blockTouchScroll = (te: TouchEvent) => {
+      if (te.cancelable) te.preventDefault();
+    };
+    window.addEventListener("touchmove", blockTouchScroll, { passive: false });
 
     const startDrag = () => {
       started = true;
@@ -711,7 +744,7 @@ export class TrackEditor extends Component {
         startDrag();
       }
       if (!floatingEl) return;
-      ev.preventDefault();
+      if (ev.cancelable) ev.preventDefault();
       floatingEl.style.transform = `translate3d(${dx}px, ${dy}px, 0) scale(1.06)`;
 
       // Check if dragging the timer over the Unassigned Timers tray.
@@ -721,8 +754,8 @@ export class TrackEditor extends Component {
         const insideTray =
           ev.clientX >= tr.left &&
           ev.clientX <= tr.right &&
-          ev.clientY >= tr.top &&
-          ev.clientY <= tr.bottom;
+          ev.clientY >= tr.top - 8 &&
+          ev.clientY <= tr.bottom + 8;
         if (overUnassignTray !== insideTray) {
           overUnassignTray = insideTray;
           trayEl.classList.toggle("is-drop-active", overUnassignTray);
@@ -735,7 +768,7 @@ export class TrackEditor extends Component {
 
       // Only reorder along the track when the pointer is near the track line vertically.
       const lineCenterY = initialCircleRect.top + initialCircleRect.height / 2;
-      if (Math.abs(ev.clientY - lineCenterY) > 48) return;
+      if (Math.abs(ev.clientY - lineCenterY) > 64) return;
 
       const centerX = initialCircleRect.left + initialCircleRect.width / 2 + dx;
       const items = [...parent.querySelectorAll<HTMLElement>(".gate-line-item[data-gate]")];
@@ -763,6 +796,14 @@ export class TrackEditor extends Component {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onEnd);
       window.removeEventListener("pointercancel", onEnd);
+      window.removeEventListener("touchmove", blockTouchScroll);
+      try {
+        if (item.hasPointerCapture(downEvent.pointerId)) {
+          item.releasePointerCapture(downEvent.pointerId);
+        }
+      } catch {
+        // ignore
+      }
       document.body.classList.remove("is-gate-dragging");
       trayEl?.classList.remove("is-drop-active");
       if (floatingEl) {

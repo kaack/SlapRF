@@ -949,65 +949,22 @@ export class TimerFlasher extends Component {
         </div>
 
         <div class="flasher-wifi-panel">
-          ${
-            isHostApMode
-              ? `
-            <div class="flasher-wifi-inputs flasher-two-col">
-              <div class="flasher-field">
-                <label class="flasher-field-label">Broadcast hotspot network (automatic)</label>
-                <div class="flasher-ap-summary mono">
-                  <span class="badge tone-good">SSID: SlapRF</span>
-                  <span>2.4 GHz Ch 1</span>
-                  <span class="muted">·</span>
-                  <span>192.168.4.1</span>
-                </div>
-              </div>
-
-              <div class="flasher-field">
-                <label class="flasher-field-label">SlapRF hotspot password (optional)</label>
-                <div class="flasher-pass-wrap">
-                  <input
-                    class="input flasher-pass-input"
-                    type="${this.showPassword ? "text" : "password"}"
-                    placeholder="Blank = open hotspot (or 8+ chars WPA2)"
-                    value="${esc(this.wifiPass)}"
-                    data-wifi-pass="1"
-                    maxlength="39"
-                    spellcheck="false"
-                    autocomplete="off"
-                    ${this.busy ? "disabled" : ""}
-                  />
-                  <button
-                    type="button"
-                    class="flasher-pass-toggle"
-                    data-toggle-pass="1"
-                    aria-label="${this.showPassword ? "Hide password" : "Show password"}"
-                    title="${this.showPassword ? "Hide password" : "Show password"}"
-                  >
-                    ${this.showPassword ? icons.eyeOff(15) : icons.eye(15)}
-                  </button>
-                </div>
-              </div>
-            </div>`
-              : `
-            <div class="flasher-wifi-panel-head">
-              <span class="flasher-field-label">Select the 2.4 GHz router or phone hotspot the Hub should join</span>
-              <button
-                type="button"
-                class="btn btn-sm btn-ghost"
-                data-refresh-wifi="1"
-                ${this.busy || this.scanningWifi ? "disabled" : ""}
-                title="Rescan nearby 2.4 GHz Wi-Fi networks"
-              >
-                ${icons.reset(13)}
-                <span>${this.scanningWifi ? "Scanning…" : "Rescan Wi-Fi"}</span>
-              </button>
-            </div>
-            <div class="flasher-wifi-inputs flasher-two-col">
-              <div class="flasher-field">
-                <label class="flasher-field-label">2.4 GHz Wi-Fi / hotspot SSID</label>
-                ${
-                  useCustom
+          <div class="flasher-wifi-inputs flasher-two-col">
+            <div class="flasher-field">
+              <label class="flasher-field-label">${
+                isHostApMode ? "2.4 GHz Hub hotspot SSID" : "2.4 GHz Wi-Fi / hotspot SSID"
+              }</label>
+              ${
+                isHostApMode
+                  ? `<input
+                      class="input mono"
+                      type="text"
+                      value="SlapRF · Ch 1 · 192.168.4.1"
+                      readonly
+                      disabled
+                      aria-label="Broadcast hotspot network"
+                    />`
+                  : useCustom
                     ? `<div class="flasher-pass-wrap">
                         <input
                           class="input flasher-pass-input"
@@ -1062,37 +1019,50 @@ export class TimerFlasher extends Component {
                         >
                           ${icons.pencil(14)}
                         </button>
+                        <button
+                          type="button"
+                          class="btn btn-icon flasher-ssid-edit"
+                          data-refresh-wifi="1"
+                          ${this.busy || this.scanningWifi ? "disabled" : ""}
+                          aria-label="Rescan nearby 2.4 GHz Wi-Fi networks"
+                          title="Rescan nearby 2.4 GHz Wi-Fi networks"
+                        >
+                          ${icons.reset(14)}
+                        </button>
                       </div>`
-                }
-              </div>
+              }
+            </div>
 
-              <div class="flasher-field">
-                <label class="flasher-field-label">Wi-Fi / hotspot password</label>
-                <div class="flasher-pass-wrap">
-                  <input
-                    class="input flasher-pass-input"
-                    type="${this.showPassword ? "text" : "password"}"
-                    placeholder="Wi-Fi / hotspot password"
-                    value="${esc(this.wifiPass)}"
-                    data-wifi-pass="1"
-                    maxlength="39"
-                    spellcheck="false"
-                    autocomplete="off"
-                    ${this.busy ? "disabled" : ""}
-                  />
-                  <button
-                    type="button"
-                    class="flasher-pass-toggle"
-                    data-toggle-pass="1"
-                    aria-label="${this.showPassword ? "Hide password" : "Show password"}"
-                    title="${this.showPassword ? "Hide password" : "Show password"}"
-                  >
-                    ${this.showPassword ? icons.eyeOff(15) : icons.eye(15)}
-                  </button>
-                </div>
+            <div class="flasher-field">
+              <label class="flasher-field-label">${
+                isHostApMode ? "Hotspot password (optional)" : "Wi-Fi / hotspot password"
+              }</label>
+              <div class="flasher-pass-wrap">
+                <input
+                  class="input flasher-pass-input"
+                  type="${this.showPassword ? "text" : "password"}"
+                  placeholder="${
+                    isHostApMode ? "Blank = open hotspot (or 8+ chars WPA2)" : "Wi-Fi / hotspot password"
+                  }"
+                  value="${esc(this.wifiPass)}"
+                  data-wifi-pass="1"
+                  maxlength="39"
+                  spellcheck="false"
+                  autocomplete="off"
+                  ${this.busy ? "disabled" : ""}
+                />
+                <button
+                  type="button"
+                  class="flasher-pass-toggle"
+                  data-toggle-pass="1"
+                  aria-label="${this.showPassword ? "Hide password" : "Show password"}"
+                  title="${this.showPassword ? "Hide password" : "Show password"}"
+                >
+                  ${this.showPassword ? icons.eyeOff(15) : icons.eye(15)}
+                </button>
               </div>
-            </div>`
-          }
+            </div>
+          </div>
         </div>
 
         <div class="flasher-wizard-nav">

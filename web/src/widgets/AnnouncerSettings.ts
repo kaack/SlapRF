@@ -13,12 +13,22 @@ export class AnnouncerSettings extends Component {
     el.addEventListener("change", this.handleChange);
     el.addEventListener("input", this.handleInput);
     el.addEventListener("click", this.handleClick);
+    el.addEventListener("keydown", this.handleKeyDown);
     this.onDispose(() => {
       el.removeEventListener("change", this.handleChange);
       el.removeEventListener("input", this.handleInput);
       el.removeEventListener("click", this.handleClick);
+      el.removeEventListener("keydown", this.handleKeyDown);
     });
-    this.onDispose(announcer.subscribe(() => this.render()));
+    this.onDispose(
+      announcer.subscribe(() => {
+        const active = document.activeElement;
+        if (active instanceof HTMLInputElement && active.name === "testPhrase" && this.el.contains(active)) {
+          return;
+        }
+        this.render();
+      })
+    );
     this.render();
   }
 
@@ -37,21 +47,34 @@ export class AnnouncerSettings extends Component {
       case "volume":
         this.announcer.update({ volume: Number(input.value) });
         break;
+      case "testPhrase":
+        this.announcer.update({ testPhrase: input.value });
+        break;
     }
   };
 
   /** Live readout while dragging a slider (the setting itself is saved on release). */
   private handleInput = (e: Event): void => {
     const input = e.target as HTMLInputElement;
+    if (input.name === "testPhrase") return;
     const out = this.el.querySelector<HTMLElement>(`[data-out="${input.name}"]`);
     if (!out) return;
     out.textContent = input.name === "rate" ? `${Number(input.value).toFixed(2)}×` : `${Math.round(Number(input.value) * 100)}%`;
   };
 
+  private handleKeyDown = (e: KeyboardEvent): void => {
+    const input = e.target as HTMLInputElement;
+    if (input.name === "testPhrase" && e.key === "Enter") {
+      e.preventDefault();
+      this.announcer.test(input.value);
+    }
+  };
+
   private handleClick = (e: Event): void => {
     const target = e.target as HTMLElement;
     if (target.closest("[data-action=test]")) {
-      this.announcer.test();
+      const phraseInput = this.el.querySelector<HTMLInputElement>('input[name="testPhrase"]');
+      this.announcer.test(phraseInput ? phraseInput.value : undefined);
     } else if (target.closest("[data-action=cache-neural]")) {
       void this.announcer.piper.preloadVoice(this.announcer.activeVoiceURI()).catch(() => undefined);
     }
@@ -98,6 +121,9 @@ export class AnnouncerSettings extends Component {
       }
     }
 
+    const defaultSample = this.announcer.defaultTestPhrase();
+    const samplePhrase = p.testPhrase !== undefined && p.testPhrase !== "" ? p.testPhrase : defaultSample;
+
     this.el.innerHTML = `
       <div class="option-row">
         <div>
@@ -106,7 +132,7 @@ export class AnnouncerSettings extends Component {
         </div>
         <label class="switch switch-lg"><input type="checkbox" name="enabled" ${p.enabled ? "checked" : ""} /><span></span></label>
       </div>
-      <div class="form-grid ${p.enabled ? "" : "is-muted"}">
+      <div class="form-grid">
         <label class="field">
           <span>Voice</span>
           <select class="input" name="voice">${piperGroup}${browserGroup}</select>
@@ -121,6 +147,15 @@ export class AnnouncerSettings extends Component {
         </label>
       </div>
       <div class="check-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <input
+          class="input"
+          type="text"
+          name="testPhrase"
+          value="${esc(samplePhrase)}"
+          placeholder="${esc(defaultSample)}"
+          aria-label="Sample voice test sentence"
+          style="flex:1 1 220px;max-width:340px;"
+        />
         <button class="btn btn-sm" data-action="test" type="button">Test voice</button>
         ${neuralStatusHtml}
       </div>`;
