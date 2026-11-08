@@ -146,12 +146,20 @@ export class TimingRulesEditor extends Component {
     const overrides = this.overridesOf(gate);
 
     const scopes = [
-      `<button type="button" data-scope="all" class="${this.scope === null ? "is-active" : ""}">All gates</button>`,
+      `<button type="button" class="channel channel-all ${this.scope === null ? "is-focus" : "is-dim"}" data-scope="all" title="Global rules for all gates">
+        <span class="dot channel-all-dot"></span>
+        <span class="channel-name">All gates</span>
+        <span class="channel-dbm mono">Global</span>
+      </button>`,
       ...this.store.pucks.map((p) => {
         const n = Object.keys(this.overridesOf(p)).length;
-        return `<button type="button" data-scope="${p.puckId}" class="${this.scope === p.puckId ? "is-active" : ""}"
+        const on = this.scope === p.puckId;
+        const dim = this.scope !== null && !on;
+        return `<button type="button" class="channel ${on ? "is-focus" : ""} ${dim ? "is-dim" : ""}" data-scope="${p.puckId}"
                   title="${n ? `${n} rule${n > 1 ? "s" : ""} overridden at this gate` : "Uses the global rules"}">
-                  <span class="dot" style="--c:${gateColor(this.store, p.puckId)}"></span>${esc(gateLabel(this.store, p.puckId))}${n ? `<span class="seg-count">${n}</span>` : ""}
+                  <span class="dot" style="--c:${gateColor(this.store, p.puckId)}"></span>
+                  <span class="channel-name">${esc(gateLabel(this.store, p.puckId))}</span>
+                  <span class="channel-dbm mono">${n ? `<span class="seg-count">${n} custom</span>` : "Default"}</span>
                 </button>`;
       }),
     ].join("");
@@ -185,8 +193,8 @@ export class TimingRulesEditor extends Component {
 
     this.el.innerHTML = `
       <div class="rules-scope">
-        <span>Applies to</span>
-        <div class="segmented" role="tablist" aria-label="Rules for">${scopes}</div>
+        <span class="rules-scope-label">Applies to</span>
+        <div class="channel-legend rules-scope-grid" role="tablist" aria-label="Rules for">${scopes}</div>
       </div>
       <form class="rules">
         ${rows}
