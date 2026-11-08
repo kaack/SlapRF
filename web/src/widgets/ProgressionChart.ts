@@ -135,8 +135,7 @@ export class ProgressionChart extends Component {
   private maxTimeSec = 0;
   /** Rightmost visible session time (sec); null follows the most recent lap automatically. */
   private endTimeSec: number | null = null;
-  private drag: { startX: number; startEndSec: number; mode: "pan" | "thumb" } | null = null;
-  private thumbHovered = false;
+  private drag: { startX: number; startEndSec: number; mode: "pan" | "axis" } | null = null;
   private hoverPos: { x: number; y: number } | null = null;
   private hoveredDot = false;
   private plotGeom = { padL: 52, plotW: 1, h: 1, w: 600 };
@@ -161,32 +160,13 @@ export class ProgressionChart extends Component {
       this.hoverPos = { x, y };
       if ((e.pointerType === "mouse" && e.button !== 0) || totalSpan <= winSec) return;
       const effectiveEnd = this.effectiveEndTimeSec();
-      const onScrollbar =
-        y >= this.plotGeom.h - 24 &&
+      const onAxis =
+        y >= this.plotGeom.h - 28 &&
         x >= this.plotGeom.padL &&
         x <= this.plotGeom.padL + this.plotGeom.plotW;
-      if (onScrollbar) {
-        const plotW = Math.max(1, this.plotGeom.plotW);
-        const thumbW = Math.max(28, (winSec / totalSpan) * plotW);
-        const maxStart = Math.max(1, totalSpan - winSec);
-        const startSec = Math.max(this.minTimeSec, effectiveEnd - winSec);
-        const thumbX =
-          this.plotGeom.padL + ((startSec - this.minTimeSec) / maxStart) * (plotW - thumbW);
-        // Clicking the track outside the thumb jumps the thumb to that position first.
-        if (x < thumbX || x > thumbX + thumbW) {
-          const ratio = Math.max(
-            0,
-            Math.min(1, (x - this.plotGeom.padL - thumbW / 2) / Math.max(1, plotW - thumbW))
-          );
-          const jumpedEnd = this.minTimeSec + winSec + ratio * (totalSpan - winSec);
-          this.setEndTimeSec(jumpedEnd);
-        }
-        this.drag = { startX: e.clientX, startEndSec: this.effectiveEndTimeSec(), mode: "thumb" };
-      } else {
-        this.drag = { startX: e.clientX, startEndSec: effectiveEnd, mode: "pan" };
-      }
+      this.drag = { startX: e.clientX, startEndSec: effectiveEnd, mode: onAxis ? "axis" : "pan" };
       el.setPointerCapture(e.pointerId);
-      el.style.cursor = "grabbing";
+      el.style.cursor = onAxis ? "ew-resize" : "grabbing";
     });
 
     this.listen(el, "pointermove", (e) => {
@@ -198,63 +178,46 @@ export class ProgressionChart extends Component {
       const totalSpan = this.maxTimeSec - this.minTimeSec;
       if (!this.drag) {
         if (totalSpan > winSec) {
-          const overTrack =
-            y >= this.plotGeom.h - 24 &&
+          const overAxis =
+            y >= this.plotGeom.h - 28 &&
             x >= this.plotGeom.padL &&
             x <= this.plotGeom.padL + this.plotGeom.plotW;
-          let overThumb = false;
-          if (overTrack) {
-            const plotW = Math.max(1, this.plotGeom.plotW);
-            const thumbW = Math.max(28, (winSec / totalSpan) * plotW);
-            const maxStart = Math.max(1, totalSpan - winSec);
-            const startSec = Math.max(this.minTimeSec, this.effectiveEndTimeSec() - winSec);
-            const thumbX =
-              this.plotGeom.padL + ((startSec - this.minTimeSec) / maxStart) * (plotW - thumbW);
-            overThumb = x >= thumbX && x <= thumbX + thumbW;
-          }
-          this.thumbHovered = overTrack;
-          el.style.cursor = overThumb
-            ? "grab"
-            : overTrack || this.hoveredDot
+          el.style.cursor = overAxis
+            ? "ew-resize"
+            : this.hoveredDot
               ? "pointer"
               : "grab";
         } else {
-          this.thumbHovered = false;
           el.style.cursor = this.hoveredDot ? "pointer" : "";
         }
         return;
       }
       const dx = e.clientX - this.drag.startX;
       const plotW = Math.max(1, this.plotGeom.plotW);
-      let nextEnd: number;
-      if (this.drag.mode === "thumb") {
-        const thumbW = Math.max(28, (winSec / totalSpan) * plotW);
-        const travel = Math.max(1, plotW - thumbW);
-        const deltaSec = (dx / travel) * (totalSpan - winSec);
-        nextEnd = this.drag.startEndSec + deltaSec;
-      } else {
-        const deltaSec = -(dx / plotW) * winSec;
-        nextEnd = this.drag.startEndSec + deltaSec;
-      }
-      this.setEndTimeSec(nextEnd);
+      const deltaSec = -(dx / plotW) * winSec;
+      this.setEndTimeSec(this.drag.startEndSec + deltaSec);
     });
 
     this.listen(el, "pointerleave", () => {
       this.hoverPos = null;
       this.hoveredDot = false;
       if (!this.drag) {
-        this.thumbHovered = false;
         el.style.cursor = "";
       }
     });
 
     const endDrag = (e: PointerEvent) => {
       if (!this.drag) return;
+      const wasAxis = this.drag.mode === "axis";
       this.drag = null;
       if (el.hasPointerCapture(e.pointerId)) {
         el.releasePointerCapture(e.pointerId);
       }
-      el.style.cursor = this.maxTimeSec - this.minTimeSec > this.windowSec() ? "grab" : "";
+      if (this.maxTimeSec - this.minTimeSec > this.windowSec()) {
+        el.style.cursor = wasAxis ? "ew-resize" : "grab";
+      } else {
+        el.style.cursor = "";
+      }
     };
     this.listen(el, "pointerup", endDrag);
     this.listen(el, "pointercancel", endDrag);
@@ -415,7 +378,7 @@ export class ProgressionChart extends Component {
     const padL = 52;
     const padR = 16;
     const padT = 12;
-    const padB = scrollable ? 40 : 28;
+    const padB = 28;
     const plotW = w - padL - padR;
     const plotH = h - padT - padB;
     this.plotGeom = { padL, plotW, h, w };
@@ -448,7 +411,7 @@ export class ProgressionChart extends Component {
     for (let tSec = firstTick; tSec <= endSec; tSec += tickStep) {
       const x = xOf(tSec);
       if (x >= padL + 14 && x <= w - padR - 14) {
-        ctx.fillText(fmtSessionClock(tSec), x, h - (scrollable ? 21 : 9));
+        ctx.fillText(fmtSessionClock(tSec), x, h - 9);
       }
     }
 
@@ -557,25 +520,6 @@ export class ProgressionChart extends Component {
 
     if (closestHover) {
       this.drawHoverTooltip(ctx, w, padL, padT, plotW, plotH, closestHover);
-    }
-
-    // Draw horizontal scrollbar when session exceeds winSec.
-    if (scrollable) {
-      const trackY = h - 10;
-      const trackH = 6;
-      ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
-      ctx.beginPath();
-      ctx.roundRect(padL, trackY, plotW, trackH, 3);
-      ctx.fill();
-
-      const thumbW = Math.max(28, (winSec / totalSpan) * plotW);
-      const maxStart = Math.max(1, totalSpan - winSec);
-      const thumbX = padL + ((startSec - this.minTimeSec) / maxStart) * (plotW - thumbW);
-      ctx.fillStyle =
-        this.drag?.mode === "thumb" || this.thumbHovered ? theme.accent : "rgba(255, 255, 255, 0.32)";
-      ctx.beginPath();
-      ctx.roundRect(thumbX, trackY, thumbW, trackH, 3);
-      ctx.fill();
     }
   }
 

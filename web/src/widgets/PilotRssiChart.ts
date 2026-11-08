@@ -149,13 +149,17 @@ export class PilotRssiChart extends Component {
         // Synthetic / already-released pointers can't be captured; dragging still works.
       }
       const r = host.getBoundingClientRect();
-      const grabbed = this.tagAt(e.clientX - r.left, e.clientY - r.top);
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      const grabbed = this.tagAt(x, y);
       if (grabbed !== null) {
         this.tagDrag = { puckId: grabbed, dbm: this.thresholdOf(grabbed).dbm };
         return;
       }
+      const onAxis = y >= r.height - PAD.b && x >= PAD.l && x <= PAD.l + this.plot.w;
       this.drag = { x: e.clientX, endUs: this.viewEnd() };
       host.classList.add("is-dragging");
+      if (onAxis) host.classList.add("is-over-axis");
     });
     this.listen(host, "pointermove", (e) => {
       const r = host.getBoundingClientRect();
@@ -166,7 +170,14 @@ export class PilotRssiChart extends Component {
         return;
       }
       if (!this.drag) {
-        host.classList.toggle("is-over-tag", this.tagAt(this.hoverX, this.hoverY) !== null);
+        const overTag = this.tagAt(this.hoverX, this.hoverY) !== null;
+        const overAxis =
+          !overTag &&
+          this.hoverY >= r.height - PAD.b &&
+          this.hoverX >= PAD.l &&
+          this.hoverX <= PAD.l + this.plot.w;
+        host.classList.toggle("is-over-tag", overTag);
+        host.classList.toggle("is-over-axis", overAxis);
         return;
       }
       const dx = e.clientX - this.drag.x;
@@ -188,6 +199,9 @@ export class PilotRssiChart extends Component {
     this.listen(host, "pointerleave", () => {
       this.hoverX = null;
       this.hoverY = null;
+      if (!this.drag) {
+        host.classList.remove("is-over-tag", "is-over-axis");
+      }
     });
     // Wheel zooms around the cursor; needs a non-passive listener to stop the page scrolling.
     const onWheel = (e: WheelEvent) => {
