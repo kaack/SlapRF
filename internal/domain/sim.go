@@ -6,6 +6,7 @@ type SimPilotStatus string
 const (
 	SimStatusFlying          SimPilotStatus = "FLYING"
 	SimStatusAvoiding        SimPilotStatus = "AVOIDING"
+	SimStatusLanding         SimPilotStatus = "LANDING"
 	SimStatusCrashedVtxOn    SimPilotStatus = "CRASHED_VTX_ON"
 	SimStatusTurtleRecovery  SimPilotStatus = "TURTLE_RECOVERY"
 	SimStatusTurtleFailed    SimPilotStatus = "TURTLE_FAILED"

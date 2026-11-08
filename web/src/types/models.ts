@@ -174,6 +174,7 @@ export interface LiveTimeStatus {
 export type SimPilotStatus =
   | "FLYING"
   | "AVOIDING"
+  | "LANDING"
   | "CRASHED_VTX_ON"
   | "TURTLE_RECOVERY"
   | "TURTLE_FAILED"

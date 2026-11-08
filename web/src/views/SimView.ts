@@ -38,6 +38,12 @@ function statusMeta(p: SimPilotState): { label: string; badgeClass: string; hint
         badgeClass: "sim-status-avoiding",
         hint: "Hovering or circling high above the course while a person is on the track — avoids flying through gates",
       };
+    case "LANDING":
+      return {
+        label: `Landing${sec}`,
+        badgeClass: "sim-status-pit",
+        hint: "Heading back to the pit area and descending to land (5s) before disarming",
+      };
     case "CRASHED_VTX_ON":
       return {
         label: `Crashed · VTX On${sec}`,
@@ -113,6 +119,8 @@ function formatDroneTagText(p: SimPilotState): string {
   switch (p.status) {
     case "AVOIDING":
       return "HIGH";
+    case "LANDING":
+      return `LAND${sec}`;
     case "CRASHED_VTX_ON":
       return `CRASH${sec}`;
     case "TURTLE_RECOVERY":
@@ -321,7 +329,7 @@ export class SimView extends Component {
       activeSlots.add(p.slotIndex);
 
       const baseRate =
-        p.status === "FLYING" || p.status === "AVOIDING"
+        p.status === "FLYING" || p.status === "AVOIDING" || p.status === "LANDING"
           ? (p.speedMph * 0.44704) / 360.0
           : 0;
 
@@ -368,7 +376,7 @@ export class SimView extends Component {
       const dtSec = Math.min(0.08, Math.max(0, (nowMs - m.lastTickMs) / 1000));
       m.lastTickMs = nowMs;
 
-      if (m.status === "FLYING" || m.status === "AVOIDING") {
+      if (m.status === "FLYING" || m.status === "AVOIDING" || m.status === "LANDING") {
         m.progress = (m.progress + m.speedProgPerSec * dtSec) % 1.0;
         if (m.progress < 0) m.progress += 1.0;
       }
@@ -739,7 +747,10 @@ export class SimView extends Component {
             p.status === "TURTLE_RECOVERY" || p.status === "WALKING_RECOVERY";
           const isWalkingOut = p.status === "WALKING_RECOVERY";
           const canSwap =
-            p.status !== "PIT_SWAP" && p.status !== "CHARGING_WAIT" && !isCrashed;
+            p.status !== "PIT_SWAP" &&
+            p.status !== "CHARGING_WAIT" &&
+            p.status !== "LANDING" &&
+            !isCrashed;
 
           return `
             <div class="card sim-pilot-card ${isCrashed ? "is-crashed" : ""}" data-pilot-card="${p.slotIndex}">
@@ -772,7 +783,7 @@ export class SimView extends Component {
                   </div>
                   <div>
                     <div class="sim-stat-k">Nearest Gate</div>
-                    <div class="sim-stat-v" data-pilot-loc="${p.slotIndex}">${p.status === "LAUNCH_HOLD" ? "Launch pad" : isParked ? "Pit bench" : esc(p.nearestGateLabel)}</div>
+                    <div class="sim-stat-v" data-pilot-loc="${p.slotIndex}">${p.status === "LANDING" ? "Landing pad" : p.status === "LAUNCH_HOLD" ? "Launch pad" : isParked ? "Pit bench" : esc(p.nearestGateLabel)}</div>
                   </div>
                   <div>
                     <div class="sim-stat-k">Packs / Crashes</div>
@@ -827,7 +838,10 @@ export class SimView extends Component {
         p.status === "TURTLE_RECOVERY" || p.status === "WALKING_RECOVERY";
       const isWalkingOut = p.status === "WALKING_RECOVERY";
       const canSwap =
-        p.status !== "PIT_SWAP" && p.status !== "CHARGING_WAIT" && !isCrashed;
+        p.status !== "PIT_SWAP" &&
+        p.status !== "CHARGING_WAIT" &&
+        p.status !== "LANDING" &&
+        !isCrashed;
 
       const cardEl = this.el.querySelector<HTMLElement>(`[data-pilot-card="${p.slotIndex}"]`);
       if (cardEl) {
@@ -886,7 +900,13 @@ export class SimView extends Component {
       const locEl = this.el.querySelector<HTMLElement>(`[data-pilot-loc="${p.slotIndex}"]`);
       if (locEl) {
         locEl.textContent =
-          p.status === "LAUNCH_HOLD" ? "Launch pad" : isParked ? "Pit bench" : p.nearestGateLabel;
+          p.status === "LANDING"
+            ? "Landing pad"
+            : p.status === "LAUNCH_HOLD"
+            ? "Launch pad"
+            : isParked
+            ? "Pit bench"
+            : p.nearestGateLabel;
       }
       const packsEl = this.el.querySelector<HTMLElement>(`[data-pilot-packs="${p.slotIndex}"]`);
       if (packsEl) {

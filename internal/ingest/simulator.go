@@ -20,15 +20,16 @@ type simPilotState struct {
 	weakSectorIdx   int     // 0-based sector where this pilot has higher variance/slower speed
 	weaknessPenalty float64 // speed multiplier in weak sector (e.g. 0.76)
 
-	status             domain.SimPilotStatus
-	batteryPct         float64    // 0..100% (active pack in quad, or 0 when unplugged)
-	packPct            [3]float64 // 0..100% for each of the pilot's 3 6S LiPo packs
-	activePackIdx      int        // 0..2 when plugged into quad, -1 when quad is unplugged
-	stateTimerSec      float64    // countdown for current state machine phase
-	turtleForceSuccess bool       // true when user explicitly clicked "Turtle recover"
-	wantPitAtFinish    bool       // true when battery is low and pilot will pit upon crossing Gate 1
-	crashesCount       int
-	packsFlown         int
+	status              domain.SimPilotStatus
+	landingTargetStatus domain.SimPilotStatus
+	batteryPct          float64    // 0..100% (active pack in quad, or 0 when unplugged)
+	packPct             [3]float64 // 0..100% for each of the pilot's 3 6S LiPo packs
+	activePackIdx       int        // 0..2 when plugged into quad, -1 when quad is unplugged
+	stateTimerSec       float64    // countdown for current state machine phase
+	turtleForceSuccess  bool       // true when user explicitly clicked "Turtle recover"
+	wantPitAtFinish     bool       // true when battery is low and pilot will pit upon crossing Gate 1
+	crashesCount        int
+	packsFlown          int
 }
 
 func (ps *simPilotState) unplugActivePack() {
@@ -188,6 +189,17 @@ func (s *TrackSimulator) resetPilotsLocked() {
 	}
 }
 
+func (s *TrackSimulator) startLandingLocked(ps *simPilotState, target domain.SimPilotStatus) {
+	ps.status = domain.SimStatusLanding
+	ps.landingTargetStatus = target
+	ps.stateTimerSec = 5.0
+	ps.wantPitAtFinish = false
+	ps.currentSpeedMps = ps.baseSpeedMps * 0.45
+	if ps.altitudeMeters > 2.5 {
+		ps.altitudeMeters = 2.5
+	}
+}
+
 func (s *TrackSimulator) enterPitAfterFlightLocked(ps *simPilotState) {
 	ps.unplugActivePack()
 	ps.altitudeMeters = 0.0
@@ -302,7 +314,7 @@ func (s *TrackSimulator) SetTrackWalker(active bool) {
 				// pilots with fuller packs stay airborne and fly high until the track is cleared.
 				returnToBench := ps.batteryPct < 72.0 || (avoidingCount > 0 && s.rng.Float64() < 0.35)
 				if returnToBench {
-					s.enterPitAfterFlightLocked(ps)
+					s.startLandingLocked(ps, domain.SimStatusPitSwap)
 				} else {
 					ps.status = domain.SimStatusAvoiding
 					ps.altitudeMeters = 14.0
@@ -388,36 +400,46 @@ func (s *TrackSimulator) TriggerPilotAction(slotIndex int, action string) {
 			ps.currentSpeedMps = 0
 			ps.altitudeMeters = 0.15
 		case "pit":
-			ps.unplugActivePack()
-			if ps.findReadyPack() < 0 {
-				ps.status = domain.SimStatusChargingWait
-				ps.stateTimerSec = 0
+			if ps.status == domain.SimStatusFlying || ps.status == domain.SimStatusAvoiding || ps.status == domain.SimStatusLanding {
+				s.startLandingLocked(ps, domain.SimStatusPitSwap)
 			} else {
-				ps.status = domain.SimStatusPitSwap
-				ps.stateTimerSec = 30.0 + s.rng.Float64()*30.0
+				ps.unplugActivePack()
+				if ps.findReadyPack() < 0 {
+					ps.status = domain.SimStatusChargingWait
+					ps.stateTimerSec = 0
+				} else {
+					ps.status = domain.SimStatusPitSwap
+					ps.stateTimerSec = 30.0 + s.rng.Float64()*30.0
+				}
+				ps.currentSpeedMps = 0
+				ps.altitudeMeters = 0
+				ps.wantPitAtFinish = false
+				ps.trackPosMeters = s.trackLengthMeters - 12.0
+				clearProgress = true
 			}
-			ps.currentSpeedMps = 0
-			ps.altitudeMeters = 0
-			ps.wantPitAtFinish = false
-			ps.trackPosMeters = s.trackLengthMeters - 12.0
-			clearProgress = true
 		case "pause", "break":
-			// Keep the current battery pack attached to the quad at its current charge level
-			if ps.activePackIdx >= 0 && ps.activePackIdx < 3 {
-				ps.batteryPct = ps.packPct[ps.activePackIdx]
-			}
+			target := domain.SimStatusPaused
 			if action == "break" {
-				ps.status = domain.SimStatusPilotBreak
-				ps.stateTimerSec = 60.0 + s.rng.Float64()*30.0
-			} else {
-				ps.status = domain.SimStatusPaused
-				ps.stateTimerSec = 0
+				target = domain.SimStatusPilotBreak
 			}
-			ps.currentSpeedMps = 0
-			ps.altitudeMeters = 0
-			ps.wantPitAtFinish = false
-			ps.trackPosMeters = s.trackLengthMeters - 12.0
-			clearProgress = true
+			if ps.status == domain.SimStatusFlying || ps.status == domain.SimStatusAvoiding || ps.status == domain.SimStatusLanding {
+				s.startLandingLocked(ps, target)
+			} else {
+				if ps.activePackIdx >= 0 && ps.activePackIdx < 3 {
+					ps.batteryPct = ps.packPct[ps.activePackIdx]
+				}
+				ps.status = target
+				if target == domain.SimStatusPilotBreak {
+					ps.stateTimerSec = 60.0 + s.rng.Float64()*30.0
+				} else {
+					ps.stateTimerSec = 0
+				}
+				ps.currentSpeedMps = 0
+				ps.altitudeMeters = 0
+				ps.wantPitAtFinish = false
+				ps.trackPosMeters = s.trackLengthMeters - 12.0
+				clearProgress = true
+			}
 		case "launch", "resume":
 			// Launch with the battery pack currently attached to the quad at its exact current charge;
 			// only pick a pack from the bench if the quad currently has no pack plugged in.
@@ -539,11 +561,12 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 		vtxActive := p.Enabled && p.Channel > 0 &&
 			(ps.status == domain.SimStatusFlying ||
 				ps.status == domain.SimStatusAvoiding ||
+				ps.status == domain.SimStatusLanding ||
 				ps.status == domain.SimStatusCrashedVtxOn ||
 				ps.status == domain.SimStatusTurtleRecovery)
 
 		speedMph := 0.0
-		if p.Enabled && p.Channel > 0 && (ps.status == domain.SimStatusFlying || ps.status == domain.SimStatusAvoiding) {
+		if p.Enabled && p.Channel > 0 && (ps.status == domain.SimStatusFlying || ps.status == domain.SimStatusAvoiding || ps.status == domain.SimStatusLanding) {
 			speedMph = math.Round(ps.currentSpeedMps*2.23694*10) / 10
 		}
 
@@ -822,6 +845,42 @@ func (s *TrackSimulator) step(dtSec float64) {
 			ps.currentSpeedMps = 0
 			continue
 
+		case domain.SimStatusLanding:
+			ps.stateTimerSec -= dtSec
+			rem := math.Max(0, ps.stateTimerSec/5.0)
+			ps.currentSpeedMps = ps.baseSpeedMps * 0.40 * rem
+			ps.altitudeMeters = math.Max(0.1, 1.25*rem)
+			if ps.activePackIdx >= 0 && ps.activePackIdx < 3 {
+				ps.packPct[ps.activePackIdx] = math.Max(5.0, ps.packPct[ps.activePackIdx]-dtSec*0.25)
+				ps.batteryPct = ps.packPct[ps.activePackIdx]
+			}
+			if ps.stateTimerSec <= 0 {
+				switch ps.landingTargetStatus {
+				case domain.SimStatusPilotBreak:
+					if ps.activePackIdx >= 0 && ps.activePackIdx < 3 {
+						ps.batteryPct = ps.packPct[ps.activePackIdx]
+					}
+					ps.status = domain.SimStatusPilotBreak
+					ps.stateTimerSec = 60.0 + s.rng.Float64()*30.0
+					ps.currentSpeedMps = 0
+					ps.altitudeMeters = 0
+					ps.trackPosMeters = s.trackLengthMeters - 12.0
+				case domain.SimStatusPaused:
+					if ps.activePackIdx >= 0 && ps.activePackIdx < 3 {
+						ps.batteryPct = ps.packPct[ps.activePackIdx]
+					}
+					ps.status = domain.SimStatusPaused
+					ps.stateTimerSec = 0
+					ps.currentSpeedMps = 0
+					ps.altitudeMeters = 0
+					ps.trackPosMeters = s.trackLengthMeters - 12.0
+				default:
+					s.enterPitAfterFlightLocked(ps)
+				}
+				clearSlots = append(clearSlots, ps.slotIndex)
+			}
+			continue
+
 		case domain.SimStatusPilotBreak:
 			ps.currentSpeedMps = 0
 			if ps.activePackIdx >= 0 && ps.activePackIdx < 3 {
@@ -987,11 +1046,10 @@ func (s *TrackSimulator) step(dtSec float64) {
 		}
 
 		// Once the pilot finishes their lap through Gate 1 (pos wraps past 0) and is ~10m past
-		// the start/finish gate, if their battery is low, pull into the pits and unplug the pack.
-		// Unplugging drops VTX RSSI to noise floor so Gate 1's detector immediately exits and
-		// scores the completed lap; ClearPilotProgress is then called when launching the next pack.
+		// the start/finish gate, if their battery is low, transition into the 5-second LANDING stage
+		// heading back to the pit area before disarming and swapping packs.
 		if !s.prewarming && ps.wantPitAtFinish && prevPos < 10.0 && ps.trackPosMeters >= 10.0 {
-			s.enterPitAfterFlightLocked(ps)
+			s.startLandingLocked(ps, domain.SimStatusPitSwap)
 		}
 	}
 

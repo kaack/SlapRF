@@ -68,8 +68,8 @@ func TestSimulatorControlsAndTimerLifecycle(t *testing.T) {
 	if snap.Pilots[0].Status != "WALKING_RECOVERY" || snap.Pilots[0].StateRemainingSec <= 0 {
 		t.Fatalf("expected crashed pilot to enter WALKING_RECOVERY on field during track walk, got %+v", snap.Pilots[0])
 	}
-	if snap.Pilots[1].Status != "AVOIDING" && snap.Pilots[1].Status != "PIT_SWAP" && snap.Pilots[1].Status != "PILOT_BREAK" && snap.Pilots[1].Status != "CHARGING_WAIT" {
-		t.Fatalf("expected flying pilot to react by climbing to AVOIDING or returning to pits, got %+v", snap.Pilots[1])
+	if snap.Pilots[1].Status != "AVOIDING" && snap.Pilots[1].Status != "LANDING" && snap.Pilots[1].Status != "PIT_SWAP" && snap.Pilots[1].Status != "PILOT_BREAK" && snap.Pilots[1].Status != "CHARGING_WAIT" {
+		t.Fatalf("expected flying pilot to react by climbing to AVOIDING or landing to pits, got %+v", snap.Pilots[1])
 	}
 	sim.SetTrackWalker(false)
 	snap = sim.Snapshot()
@@ -80,11 +80,17 @@ func TestSimulatorControlsAndTimerLifecycle(t *testing.T) {
 		t.Fatalf("expected 3 LiPo packs per pilot, got %d", len(snap.Pilots[0].Packs))
 	}
 
-	// Slot 3 (Din) starts with Pack #2 (64%) and Pack #3 (28%) charging; pitting unplugs Pack #1 and enters CHARGING_WAIT
+	// Slot 3 (Din) starts airborne with Pack #2 (78%) and Pack #3 (40%) charging;
+	// pitting first enters the 5s LANDING stage, and once landed enters CHARGING_WAIT.
 	sim.TriggerPilotAction(3, "pit")
 	snap = sim.Snapshot()
+	if snap.Pilots[2].Status != "LANDING" {
+		t.Fatalf("expected slot 3 to enter LANDING stage first, got %s", snap.Pilots[2].Status)
+	}
+	sim.step(5.1)
+	snap = sim.Snapshot()
 	if snap.Pilots[2].Status != "CHARGING_WAIT" {
-		t.Fatalf("expected slot 3 to enter CHARGING_WAIT when all 3 packs are < 100%%, got %s", snap.Pilots[2].Status)
+		t.Fatalf("expected slot 3 to enter CHARGING_WAIT after landing when all 3 packs are < 100%%, got %s", snap.Pilots[2].Status)
 	}
 
 	// 3. Toggle power off on T2, add T5, delete T5
