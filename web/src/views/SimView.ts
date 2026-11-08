@@ -36,7 +36,7 @@ function statusMeta(p: SimPilotState): { label: string; badgeClass: string; hint
       return {
         label: "Flying High",
         badgeClass: "sim-status-avoiding",
-        hint: "Cruising high above the course while someone is on the track — skips gate triggers",
+        hint: "Hovering or circling high above the course while a person is on the track — avoids flying through gates",
       };
     case "CRASHED_VTX_ON":
       return {
@@ -647,7 +647,7 @@ export class SimView extends Component {
             <span class="gate-track-caption" data-course-caption>
               ${
                 walkerActive
-                  ? `⚠ Person on track (${Math.ceil(walkerSec)}s left) — pilots have returned to the bench or are flying high`
+                  ? `⚠ Person on track (${Math.ceil(walkerSec)}s left) — airborne pilots land or circle high above the gates`
                   : `60 fps live course timeline · drones cross #1 → #${nodes.length} and wrap around ${nodes.length > 0 ? `S${nodes.length}` : "the loop"}`
               }
             </span>
@@ -667,7 +667,7 @@ export class SimView extends Component {
 
           <div class="gate-track-scroll sim-track-scroll">
             <div class="sim-altitude-lane-label ${walkerActive ? "is-walker-active" : ""}">
-              <span data-corridor-label>${walkerActive ? `PERSON ON TRACK · GATES PAUSED (${Math.ceil(walkerSec)}s)` : "ACTIVE FLIGHT CORRIDOR"}</span>
+              <span data-corridor-label>${walkerActive ? `ACTIVE FLIGHT CORRIDOR · PERSON ON TRACK (${Math.ceil(walkerSec)}s)` : "ACTIVE FLIGHT CORRIDOR"}</span>
             </div>
             <div class="sim-flight-corridor ${walkerActive ? "is-walker-active" : ""}">
               <div class="sim-drone-track-layer">
@@ -693,11 +693,11 @@ export class SimView extends Component {
       // Fast in-place update of countdowns without touching DOM structure
       const corridorLabel = this.el.querySelector<HTMLElement>("[data-corridor-label]");
       if (corridorLabel && walkerActive) {
-        corridorLabel.textContent = `PERSON ON TRACK · GATES PAUSED (${Math.ceil(walkerSec)}s)`;
+        corridorLabel.textContent = `ACTIVE FLIGHT CORRIDOR · PERSON ON TRACK (${Math.ceil(walkerSec)}s)`;
       }
       const caption = this.el.querySelector<HTMLElement>("[data-course-caption]");
       if (caption && walkerActive) {
-        caption.textContent = `⚠ Person on track (${Math.ceil(walkerSec)}s left) — pilots have returned to the bench or are flying high`;
+        caption.textContent = `⚠ Person on track (${Math.ceil(walkerSec)}s left) — airborne pilots land or circle high above the gates`;
       }
       const pitLabel = this.el.querySelector<HTMLElement>("[data-pit-lane-label]");
       if (pitLabel) {
