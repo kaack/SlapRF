@@ -22,6 +22,7 @@ export type Topic = "config" | "laps" | "crossings" | "status" | "selection" | "
 
 type Listener = () => void;
 type LapListener = (lap: LapRecord) => void;
+type CrossingListener = (ev: GateCrossingEvent) => void;
 
 /** Which lap the pilot is looking at, and what it's compared against. */
 export type ReferenceChoice = "best" | "previous" | number;
@@ -82,6 +83,7 @@ export class AppStore {
   private readonly lastCrossingBySlot = new Map<number, GateCrossingEvent>();
   private readonly listeners = new Map<Topic, Set<Listener>>();
   private readonly lapListeners = new Set<LapListener>();
+  private readonly startGateListeners = new Set<CrossingListener>();
 
   private get activeHistory(): Map<number, PuckTelemetryFrame[]> {
     return this._simulatorRunning ? this.simHistory : this.realHistory;
@@ -93,6 +95,15 @@ export class AppStore {
   public onLapRecorded(fn: LapListener): () => void {
     this.lapListeners.add(fn);
     return () => this.lapListeners.delete(fn);
+  }
+
+  /**
+   * Fires when a pilot passes through the Start/Finish gate to start a lap without a previous
+   * reference point (initial start pass or first pass after reset/timeout) — used by the announcer.
+   */
+  public onStartGateDetected(fn: CrossingListener): () => void {
+    this.startGateListeners.add(fn);
+    return () => this.startGateListeners.delete(fn);
   }
 
   public subscribe(topics: Topic[], fn: Listener): () => void {
@@ -290,6 +301,9 @@ export class AppStore {
     }
     this.lastCrossingBySlot.set(ev.slotIndex, ev);
     this.emit("crossings");
+    if (ev.startedLap) {
+      this.startGateListeners.forEach((fn) => fn(ev));
+    }
   }
 
   public ingestFiltered(f: FilteredDetection): void {

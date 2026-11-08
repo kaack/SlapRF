@@ -331,6 +331,7 @@ func (e *Engine) IngestTelemetryFrame(frame domain.PuckTelemetryFrame) {
 		e.passingNumbers[puck.PuckID]++
 		ev.EventID = e.nextEventID
 		ev.PassingNumber = e.passingNumbers[puck.PuckID]
+		ev.StartedLap = ev.IsStartFinish && out.lap == nil
 		e.crossings = append(e.crossings, ev)
 		if len(e.crossings) > maxStoredCrossings {
 			e.crossings = e.crossings[len(e.crossings)-maxStoredCrossings:]

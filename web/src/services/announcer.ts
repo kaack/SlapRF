@@ -1,5 +1,5 @@
 import { AppStore } from "../state/store";
-import { LapRecord } from "../types/models";
+import { GateCrossingEvent, LapRecord } from "../types/models";
 
 export interface AnnouncerPrefs {
   enabled: boolean;
@@ -70,6 +70,7 @@ export class Announcer {
     this.store = store;
     this.prefs = loadPrefs();
     store.onLapRecorded((lap) => this.onLap(lap));
+    store.onStartGateDetected((ev) => this.onStartPass(ev));
     store.subscribe(["status"], () => {
       if (this.lastSimMode !== null && this.lastSimMode !== this.store.simulatorRunning) {
         this.clear();
@@ -149,6 +150,16 @@ export class Announcer {
   private onLap(lap: LapRecord): void {
     const callsign = this.store.pilot(lap.slotIndex)?.callsign ?? lap.callsign;
     this.say(lapCallout(callsign, lap.lapTimeSec));
+  }
+
+  /**
+   * When a pilot crosses the Start/Finish gate with no previous start pass to compare against
+   * (initial holeshot or first pass after reset/timeout), call out just their name so they know
+   * the gate detected them and started their clock.
+   */
+  private onStartPass(ev: GateCrossingEvent): void {
+    const callsign = this.store.pilot(ev.slotIndex)?.callsign ?? ev.callsign;
+    this.say(spokenName(callsign));
   }
 
   // ---- speech queue --------------------------------------------------------

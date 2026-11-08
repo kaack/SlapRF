@@ -97,6 +97,7 @@ export interface GateCrossingEvent {
   puckId: number;
   puckName: string;
   isStartFinish: boolean;
+  startedLap?: boolean;
   slotIndex: number;
   callsign: string;
   frequencyMhz: number;

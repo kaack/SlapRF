@@ -13,11 +13,12 @@ type PuckTelemetryFrame struct {
 // GateCrossingEvent is emitted by the DSP PeakDetector when a pilot's 5.8 GHz RSSI curve
 // peaks through a Gate Puck and drops below the exit nadir threshold.
 type GateCrossingEvent struct {
-	EventID           uint64  `json:"eventId"`           // Unique monotonic crossing ID
-	PuckID            uint8   `json:"puckId"`            // Gate Puck where crossing occurred
-	PuckName          string  `json:"puckName"`          // Human-readable gate name
-	IsStartFinish     bool    `json:"isStartFinish"`     // True if this puck triggers LiveTime LapRF passing records
-	SlotIndex         int     `json:"slotIndex"`         // 1-based Pilot Slot (1..8)
+	EventID           uint64  `json:"eventId"`              // Unique monotonic crossing ID
+	PuckID            uint8   `json:"puckId"`               // Gate Puck where crossing occurred
+	PuckName          string  `json:"puckName"`             // Human-readable gate name
+	IsStartFinish     bool    `json:"isStartFinish"`        // True if this puck triggers LiveTime LapRF passing records
+	StartedLap        bool    `json:"startedLap,omitempty"` // True when this Start/Finish pass starts a lap without completing a prior lap
+	SlotIndex         int     `json:"slotIndex"`            // 1-based Pilot Slot (1..8)
 	Callsign          string  `json:"callsign"`          // Pilot Callsign
 	FrequencyMHz      uint16  `json:"frequencyMhz"`      // Pilot VTX frequency
 	TimestampUs       uint64  `json:"timestampUs"`       // Parabolic-interpolated peak timestamp in microseconds
