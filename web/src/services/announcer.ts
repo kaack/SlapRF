@@ -70,9 +70,10 @@ export function spokenName(callsign: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 }
 
-/** The whole callout: "Vanover, 14.08". Short enough to keep up with a busy start gate. */
+/** The whole callout: "Vanover, 14.08" (or "Vanover, 14" when exact `.00`). */
 export function lapCallout(callsign: string, lapTimeSec: number): string {
-  return `${spokenName(callsign)}, ${lapTimeSec.toFixed(2)}`;
+  const formatted = lapTimeSec.toFixed(2).replace(/\.00$/, "");
+  return `${spokenName(callsign)}, ${formatted}`;
 }
 
 /**
@@ -373,7 +374,7 @@ export class Announcer {
 
   private speakBrowserUtterance(text: string): void {
     if (!("speechSynthesis" in window)) return;
-    const utterance = new SpeechSynthesisUtterance(text);
+    const utterance = new SpeechSynthesisUtterance(text.replace(/\b(\d+)\.00\b/g, "$1"));
     const voice = this.resolveVoice();
     if (voice) {
       utterance.voice = voice;
