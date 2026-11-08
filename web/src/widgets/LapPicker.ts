@@ -285,25 +285,23 @@ export class LapPicker extends Component {
       return;
     }
 
-    const lap = geom.laps[idx];
-    const delta = lap.lapTimeSec - geom.best;
     dot.hidden = false;
     dot.style.left = `${geom.xPct[idx].toFixed(2)}%`;
     dot.style.top = `${geom.avgTopPct[idx].toFixed(2)}%`;
-    tip.innerHTML = `
-      <div class="lap-tip-row"><span>Lap ${lap.lapNumber}</span><strong class="mono">${fmtTime(lap.lapTimeSec)}</strong></div>
-      <div class="lap-tip-row is-sub"><span>vs best</span><span class="mono">${delta < 0.0005 ? "best lap" : `+${delta.toFixed(3)}`}</span></div>
-      <div class="lap-tip-row is-sub"><span><i class="lg-line"></i>5-lap avg</span><span class="mono">${fmtTime(geom.avgs[idx])}</span></div>`;
+    tip.innerHTML = `<span><i class="lg-line"></i>5-lap avg</span><strong class="mono">${fmtTime(geom.avgs[idx])}</strong>`;
     tip.hidden = false;
 
-    // Float the tooltip above whichever is higher: the bar top or the average-line point.
+    // Float the tooltip above whichever is higher: the bar top (plus its time label, if it
+    // has one) or the average-line point.
     const pr = picker.getBoundingClientRect();
     const br = bar.getBoundingClientRect();
     const dr = dot.getBoundingClientRect();
+    const labelled = bar.classList.contains("is-review") || bar.classList.contains("is-ref");
+    const barTop = br.top - (labelled ? 18 : 0);
     const half = tip.offsetWidth / 2;
     const cx = br.left + br.width / 2 - pr.left;
     tip.style.left = `${Math.max(half, Math.min(pr.width - half, cx)).toFixed(1)}px`;
-    tip.style.top = `${(Math.min(br.top, dr.top + dr.height / 2) - pr.top).toFixed(1)}px`;
+    tip.style.top = `${(Math.min(barTop, dr.top + dr.height / 2) - pr.top).toFixed(1)}px`;
   }
 
   private onBarClick(lapId: number): void {
@@ -454,6 +452,20 @@ export class LapPicker extends Component {
       avgTopPct: avgPts.map((p) => (p.y / CHART_H) * 100),
     };
 
+    // Lap-time labels above the inspected and baseline bars. Neighbouring bars would put both
+    // labels in the same spot, so line them up above the taller bar and lift the baseline one.
+    const review = laps.find((l) => l.lapId === reviewId);
+    const ref = laps.find((l) => l.lapId === refId);
+    const close = review && ref ? Math.abs(laps.indexOf(review) - laps.indexOf(ref)) * slot < 110 : false;
+    const taller = review && ref ? (review.lapTimeSec > ref.lapTimeSec ? review : ref) : undefined;
+    const timeLabel = (lap: LapRecord, cls: string, raised: boolean) => {
+      const i = laps.indexOf(lap);
+      const anchor = close && taller ? taller : lap;
+      const edge = i === laps.length - 1 ? "is-right" : i === 0 ? "is-left" : "";
+      return `<span class="bar-time ${cls} ${edge} ${raised ? "is-raised" : ""}" style="left:${xPct(i).toFixed(2)}%;top:${((yOf(anchor.lapTimeSec) / CHART_H) * 100).toFixed(2)}%">${fmtTime(lap.lapTimeSec)}</span>`;
+    };
+    const labels = (review ? timeLabel(review, "is-review", false) : "") + (ref ? timeLabel(ref, "is-ref", close) : "");
+
     const visibleCount = Math.min(laps.length, winLaps);
     const every = Math.max(1, Math.ceil(visibleCount / 16));
     const axis = laps
@@ -470,12 +482,13 @@ export class LapPicker extends Component {
       <div class="lap-picker ${this.activeSlot === "ref" ? "is-picking" : ""}">
         <div class="lap-picker-scroll ${scrollable ? "is-scrollable" : ""}">
           <div class="lap-picker-track" style="width:${trackWidthPct.toFixed(2)}%">
-            <div class="lap-picker-plot">
+            <div class="lap-picker-plot ${close ? "has-stacked-labels" : ""}">
               <div class="lap-picker-bars">
                 <svg viewBox="0 0 ${svgW} ${CHART_H}" preserveAspectRatio="none" role="img" aria-label="Lap times this session">
                   ${bars}
                   <path class="avg-line" d="${smoothPath(avgPts)}" vector-effect="non-scaling-stroke"/>
                 </svg>
+                ${labels}
                 <span class="lap-avg-dot" data-avg-dot hidden></span>
               </div>
             </div>
