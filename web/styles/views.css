@@ -2727,64 +2727,293 @@ body.is-gate-dragging * {
   color: var(--text-2);
 }
 
-/* Step 1: Role choice cards */
-.flasher-role-choice-grid {
+/* Step 1: Interactive Hub & 6 Spokes Network Topology Map */
+.flasher-net-canvas {
+  position: relative;
+  width: 100%;
+  max-width: 560px;
+  height: 296px;
+  margin: 2px auto 0;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(circle at 50% 50%, rgba(212, 255, 58, 0.06) 0%, rgba(56, 189, 248, 0.03) 42%, transparent 72%),
+    var(--surface);
+  overflow: hidden;
+  user-select: none;
+}
+.flasher-net-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.flasher-net-orbit {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.06);
+  stroke-width: 1.25;
+  stroke-dasharray: 4 5;
+}
+.flasher-net-pulse {
+  fill: none;
+  stroke: rgba(212, 255, 58, 0.14);
+  stroke-width: 1;
+}
+.flasher-net-line {
+  stroke: rgba(148, 163, 184, 0.28);
+  stroke-width: 1.75;
+  stroke-dasharray: 5 5;
+  transition: stroke 0.18s, stroke-width 0.18s;
+}
+.flasher-net-line.is-active {
+  stroke: #38bdf8;
+  stroke-width: 2.25;
+  stroke-dasharray: none;
+}
+.flasher-net-line.is-done {
+  stroke: var(--good);
+  stroke-dasharray: none;
+}
+
+.flasher-net-node {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1px;
+  padding: 0;
+  font: inherit;
+  color: var(--text);
+  cursor: pointer;
+  z-index: 2;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.flasher-net-node.is-hub {
+  width: 86px;
+  height: 86px;
+  border: 2.5px solid var(--accent);
+  background:
+    radial-gradient(circle at 50% 30%, rgba(212, 255, 58, 0.25), var(--surface-2) 76%);
+  box-shadow:
+    0 0 0 5px rgba(212, 255, 58, 0.1),
+    0 10px 26px rgba(0, 0, 0, 0.55);
+}
+.flasher-net-node.is-hub:hover:not(:disabled) {
+  transform: translate(-50%, -50%) scale(1.07);
+  box-shadow:
+    0 0 0 7px rgba(212, 255, 58, 0.2),
+    0 12px 30px rgba(0, 0, 0, 0.65);
+}
+.flasher-net-hub-icon {
+  color: var(--accent);
+  display: inline-flex;
+  margin-bottom: 1px;
+}
+.flasher-net-node.is-spoke {
+  width: 60px;
+  height: 60px;
+  border: 2px solid rgba(56, 189, 248, 0.65);
+  background:
+    radial-gradient(circle at 50% 30%, rgba(56, 189, 248, 0.2), var(--surface-2) 78%);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.45);
+}
+.flasher-net-node.is-spoke:hover:not(:disabled) {
+  transform: translate(-50%, -50%) scale(1.09);
+  border-color: #38bdf8;
+  box-shadow:
+    0 0 0 5px rgba(56, 189, 248, 0.2),
+    0 8px 22px rgba(0, 0, 0, 0.55);
+}
+.flasher-net-node.is-selected {
+  box-shadow:
+    0 0 0 3px var(--surface),
+    0 0 0 6px var(--accent),
+    0 10px 26px rgba(0, 0, 0, 0.6);
+}
+.flasher-net-node.is-flashed {
+  border-color: var(--good);
+}
+.flasher-net-node-code {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+}
+.flasher-net-node.is-hub .flasher-net-node-code {
+  font-size: 13.5px;
+  color: var(--accent);
+}
+.flasher-net-node-sub {
+  font-size: 9.5px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+}
+.flasher-net-node.is-flashed .flasher-net-node-sub {
+  color: var(--good);
+}
+
+.flasher-net-legend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.flasher-net-legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.flasher-net-legend strong {
+  color: var(--text-2);
+  font-weight: 600;
+}
+.flasher-net-legend i {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.flasher-net-legend i.dot-hub {
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(212, 255, 58, 0.5);
+}
+.flasher-net-legend i.dot-spoke {
+  background: #38bdf8;
+  box-shadow: 0 0 6px rgba(56, 189, 248, 0.5);
+}
+
+/* Step 3: Pictorial Wi-Fi Mode Selector Cards */
+.flasher-pictorial-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px;
 }
-.flasher-choice-card {
+.flasher-pictorial-card {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  justify-content: space-between;
+  align-items: stretch;
   gap: 10px;
-  padding: 16px 18px;
+  padding: 13px 15px;
   border-radius: var(--radius);
   border: 1.5px solid var(--border-strong);
   background: var(--surface);
-  color: var(--text);
+  color: var(--text-2);
   font: inherit;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s, background 0.15s, transform 0.12s, box-shadow 0.15s;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s, transform 0.12s;
 }
-.flasher-choice-card:hover:not(:disabled) {
+.flasher-pictorial-card:hover:not(:disabled) {
+  border-color: #454c59;
+  color: var(--text);
+}
+.flasher-pictorial-card.is-active {
   border-color: var(--accent);
-  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
-  transform: translateY(-1px);
-  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+  color: var(--text);
 }
-.flasher-choice-card.is-selected {
-  border-color: var(--accent-line);
-}
-.flasher-choice-top {
-  width: 100%;
+.flasher-pictorial-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
 }
-.flasher-choice-title {
-  font-size: 14.5px;
+.flasher-pictorial-title {
+  font-size: 13.5px;
   font-weight: 650;
   color: var(--text);
 }
-.flasher-choice-desc {
+.flasher-pictorial-card.is-active .flasher-pictorial-title {
+  color: var(--accent);
+}
+.flasher-pictorial-art {
+  width: 100%;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: rgba(11, 12, 15, 0.55);
+  padding: 6px 8px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.flasher-pic-svg {
+  width: 100%;
+  max-width: 280px;
+  height: auto;
+  display: block;
+  color: var(--text-2);
+}
+.flasher-pictorial-card.is-active .flasher-pic-svg {
+  color: var(--text);
+}
+.flasher-pic-link {
+  stroke: rgba(148, 163, 184, 0.45);
+  stroke-width: 2;
+  stroke-dasharray: 4 4;
+}
+.flasher-pictorial-card.is-active .flasher-pic-link {
+  stroke: var(--accent);
+}
+.flasher-pic-node {
+  fill: var(--surface-2);
+  stroke: var(--border-strong);
+  stroke-width: 1.75;
+}
+.flasher-pic-node.is-hub-node {
+  stroke: var(--accent);
+  fill: rgba(212, 255, 58, 0.1);
+}
+.flasher-pic-node.is-router-node {
+  stroke: #38bdf8;
+  fill: rgba(56, 189, 248, 0.08);
+}
+.flasher-pic-ap-wave {
+  fill: none;
+  stroke: rgba(212, 255, 58, 0.28);
+  stroke-width: 1.5;
+  stroke-dasharray: 3 3;
+}
+.flasher-pic-node-tag {
+  font-family: var(--font-mono);
+  font-size: 8.5px;
+  font-weight: 700;
+  fill: var(--accent);
+  letter-spacing: 0.04em;
+}
+.flasher-pic-pill {
+  fill: var(--surface-3);
+  stroke: var(--accent-line);
+  stroke-width: 1.2;
+}
+.flasher-pic-pill-text {
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  fill: var(--accent);
+}
+.flasher-pic-caption {
+  font-size: 9.5px;
+  font-weight: 600;
+  fill: var(--text-3);
+}
+.flasher-pictorial-desc {
   margin: 0;
-  font-size: 12.5px;
-  line-height: 1.5;
+  font-size: 12px;
+  line-height: 1.45;
   color: var(--text-3);
 }
-.flasher-choice-cta {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  margin-top: 2px;
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--accent);
+.flasher-pictorial-desc strong {
+  color: var(--text-2);
 }
 
 .flasher-inspect-bar {
@@ -2808,57 +3037,6 @@ body.is-gate-dragging * {
 .flasher-inspect-text strong {
   color: var(--text-2);
   font-weight: 600;
-}
-
-/* Step 3: Hub Wi-Fi mode switcher + focused credential panel */
-.flasher-mode-segmented {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-.flasher-mode-tab {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
-  padding: 11px 14px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--text-2);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-  transition: border-color 0.14s, background 0.14s, color 0.14s;
-}
-.flasher-mode-tab:hover:not(:disabled) {
-  border-color: #3c424d;
-  color: var(--text);
-}
-.flasher-mode-tab.is-active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
-  box-shadow: inset 0 0 0 1px var(--accent-line);
-  color: var(--text);
-}
-.flasher-mode-tab-top {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.flasher-mode-tab-title {
-  font-size: 13px;
-  font-weight: 650;
-}
-.flasher-mode-tab.is-active .flasher-mode-tab-title {
-  color: var(--accent);
-}
-.flasher-mode-tab-sub {
-  font-size: 11.5px;
-  color: var(--text-3);
 }
 
 .flasher-wifi-panel {
@@ -2962,8 +3140,24 @@ body.is-gate-dragging * {
   .flasher-wizard-stage {
     padding: 14px;
   }
-  .flasher-role-choice-grid,
-  .flasher-mode-segmented,
+  .flasher-net-canvas {
+    height: 256px;
+  }
+  .flasher-net-node.is-hub {
+    width: 72px;
+    height: 72px;
+  }
+  .flasher-net-node.is-spoke {
+    width: 50px;
+    height: 50px;
+  }
+  .flasher-net-node-code {
+    font-size: 11.5px;
+  }
+  .flasher-net-node-sub {
+    font-size: 8.5px;
+  }
+  .flasher-pictorial-grid,
   .flasher-receipt {
     grid-template-columns: 1fr;
   }

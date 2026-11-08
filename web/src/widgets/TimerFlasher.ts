@@ -18,7 +18,7 @@ const HUB_WIFI_MODE_STORAGE_KEY = "slaprf.wifi.hubMode";
 const CUSTOM_SSID_VALUE = "__custom__";
 
 type HubWifiMode = "join" | "host";
-type WizardStepId = "role" | "identity" | "wifi" | "flash";
+type WizardStepId = "network" | "identity" | "wifi" | "flash";
 
 interface ScannedWifi {
   ssid: string;
@@ -27,24 +27,49 @@ interface ScannedWifi {
   saved?: boolean;
 }
 
+interface SpokeRadialSlot {
+  slot: number; // 1..6
+  label: string;
+  defaultName: string;
+  /** Position in 0..100% coordinate space around the central Hub (50%, 50%) */
+  xPct: number;
+  yPct: number;
+  /** SVG coordinates in 520x310 viewBox */
+  svgX: number;
+  svgY: number;
+}
+
+const SPOKE_SLOTS: SpokeRadialSlot[] = [
+  { slot: 1, label: "S1", defaultName: "Spoke-1", xPct: 50, yPct: 14, svgX: 260, svgY: 43 },
+  { slot: 2, label: "S2", defaultName: "Spoke-2", xPct: 83, yPct: 31, svgX: 432, svgY: 96 },
+  { slot: 3, label: "S3", defaultName: "Spoke-3", xPct: 83, yPct: 69, svgX: 432, svgY: 214 },
+  { slot: 4, label: "S4", defaultName: "Spoke-4", xPct: 50, yPct: 86, svgX: 260, svgY: 267 },
+  { slot: 5, label: "S5", defaultName: "Spoke-5", xPct: 17, yPct: 69, svgX: 88, svgY: 214 },
+  { slot: 6, label: "S6", defaultName: "Spoke-6", xPct: 17, yPct: 31, svgX: 88, svgY: 96 },
+];
+
 /**
- * Step-by-step sliding wizard for flashing & reading Seeed Studio XIAO ESP32-C5 timers.
+ * Interactive Hub & Spoke network flasher wizard for Seeed Studio XIAO ESP32-C5 timers.
  *
- * Flow:
- *   - Step 1 (`role`): Choose **Hub** or **Spoke** (or read an existing timer from USB).
- *   - Step 2 (`identity`): Set **Timer ID / name** (auto-suggested if blank) and **Firmware version**.
- *   - Step 3 (`wifi`, Hub only): Choose **Join 2.4 GHz Hotspot/Router** or **Host "SlapRF" AP** and credentials.
- *   - Step 4 (`flash`): Review configuration summary receipt and **Flash to USB** (or Download `.bin`).
+ *   - Step 1 (`network`): Interactive Hub + 6 Spokes network topology map. Click the central
+ *     **Hub** or any of the **6 Spokes** (`S1`–`S6`) to configure and flash that node.
+ *   - Step 2 (`identity`): Set **Timer ID / name** (pre-filled from the node you clicked) and
+ *     **Firmware version**.
+ *   - Step 3 (`wifi`, Hub only): Two visual pictorial diagrams comparing **Station Mode**
+ *     (Hub → Router/Hotspot → Laptop) vs **Direct AP Mode** (Hub broadcasts "SlapRF" → Laptop).
+ *   - Step 4 (`flash`): Summary receipt + **Flash to USB** / **Download .bin**.
  */
 export class TimerFlasher extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
 
-  private step: WizardStepId = "role";
+  private step: WizardStepId = "network";
   private slideDir: "next" | "prev" | "none" = "none";
   private role: "hub" | "spoke" = "hub";
+  private selectedSpokeSlot = 1;
+  private flashedNodes = new Set<string>();
   private hubWifiMode: HubWifiMode = "join";
-  private timerLabel = "";
+  private timerLabel = "Hub-1";
   private firmwareVersion = LATEST_FIRMWARE_VERSION;
   private networks: ScannedWifi[] = [];
   private scanningWifi = false;
@@ -109,13 +134,17 @@ export class TimerFlasher extends Component {
         return;
       }
 
-      const pickRole = t.closest<HTMLElement>("[data-pick-role]");
-      if (pickRole) {
-        const nextRole = pickRole.dataset.pickRole === "spoke" ? "spoke" : "hub";
-        const roleChanged = nextRole !== this.role;
-        this.role = nextRole;
-        if (roleChanged || !this.timerLabel.trim() || this.isDefaultTimerLabel(this.timerLabel)) {
-          this.timerLabel = this.suggestTimerLabel(nextRole);
+      const pickNode = t.closest<HTMLElement>("[data-pick-node]");
+      if (pickNode) {
+        const nodeKey = pickNode.dataset.pickNode || "hub";
+        if (nodeKey === "hub") {
+          this.role = "hub";
+          this.timerLabel = "Hub-1";
+        } else {
+          const slotNum = Math.max(1, Math.min(6, Number(nodeKey.replace("spoke-", "")) || 1));
+          this.role = "spoke";
+          this.selectedSpokeSlot = slotNum;
+          this.timerLabel = `Spoke-${slotNum}`;
         }
         this.errorMsg = null;
         this.lastSuccessMsg = null;
@@ -146,13 +175,10 @@ export class TimerFlasher extends Component {
       }
 
       if (t.closest("[data-flash-another]")) {
-        const nextRole: "hub" | "spoke" = "spoke";
-        this.role = nextRole;
-        this.timerLabel = this.suggestTimerLabel(nextRole);
         this.errorMsg = null;
         this.lastSuccessMsg = null;
         this.readout = null;
-        this.goToStep("role", "prev");
+        this.goToStep("network", "prev");
         return;
       }
 
@@ -255,7 +281,6 @@ export class TimerFlasher extends Component {
       }
     });
 
-    this.timerLabel = this.suggestTimerLabel(this.role);
     this.render();
     void this.refreshWifiNetworks();
   }
@@ -263,37 +288,17 @@ export class TimerFlasher extends Component {
   private get orderedSteps(): Array<{ id: WizardStepId; title: string; short: string }> {
     if (this.role === "hub") {
       return [
-        { id: "role", title: "Timer role", short: "Role" },
+        { id: "network", title: "Select node", short: "Node" },
         { id: "identity", title: "Name & firmware", short: "Identity" },
-        { id: "wifi", title: "2.4 GHz Wi-Fi", short: "Wi-Fi" },
+        { id: "wifi", title: "Wi-Fi mode", short: "Wi-Fi" },
         { id: "flash", title: "Flash timer", short: "Flash" },
       ];
     }
     return [
-      { id: "role", title: "Timer role", short: "Role" },
+      { id: "network", title: "Select node", short: "Node" },
       { id: "identity", title: "Name & firmware", short: "Identity" },
       { id: "flash", title: "Flash timer", short: "Flash" },
     ];
-  }
-
-  private isDefaultTimerLabel(label: string): boolean {
-    return /^(Hub|Spoke)-\d+$/i.test(label.trim());
-  }
-
-  private suggestTimerLabel(role: "hub" | "spoke"): string {
-    const existing = new Set(
-      this.store.pucks
-        .map((p) => (p.timerLabel || p.name || "").trim().toLowerCase())
-        .filter(Boolean)
-    );
-    const prefix = role === "hub" ? "Hub" : "Spoke";
-    for (let i = 1; i <= 16; i++) {
-      const candidate = `${prefix}-${i}`;
-      if (!existing.has(candidate.toLowerCase())) {
-        return candidate;
-      }
-    }
-    return `${prefix}-1`;
   }
 
   private goToStep(next: WizardStepId, dir: "next" | "prev" | "none"): void {
@@ -309,7 +314,6 @@ export class TimerFlasher extends Component {
     const targetIdx = steps.indexOf(target);
     if (targetIdx === -1 || targetIdx === curIdx) return;
 
-    // Validate intermediate steps when jumping forward
     if (targetIdx > curIdx) {
       if (curIdx <= steps.indexOf("identity") && targetIdx > steps.indexOf("identity")) {
         if (!this.validateIdentityStep()) return;
@@ -341,7 +345,7 @@ export class TimerFlasher extends Component {
     if (this.role !== "hub") return true;
     if (this.hubWifiMode === "join" && !this.wifiSSID.trim()) {
       this.errorMsg =
-        'Select or enter a 2.4 GHz Wi-Fi / hotspot SSID to join, or switch to Host "SlapRF" 2.4 GHz AP mode.';
+        'Select or enter a 2.4 GHz Wi-Fi / hotspot SSID to join, or switch to Direct AP mode.';
       this.slideDir = "none";
       this.render();
       return false;
@@ -357,10 +361,7 @@ export class TimerFlasher extends Component {
   }
 
   private advanceStep(): void {
-    if (this.step === "role") {
-      if (!this.timerLabel.trim()) {
-        this.timerLabel = this.suggestTimerLabel(this.role);
-      }
+    if (this.step === "network") {
       this.goToStep("identity", "next");
       return;
     }
@@ -385,7 +386,7 @@ export class TimerFlasher extends Component {
       return;
     }
     if (this.step === "identity") {
-      this.goToStep("role", "prev");
+      this.goToStep("network", "prev");
     }
   }
 
@@ -434,7 +435,7 @@ export class TimerFlasher extends Component {
   }
 
   private get roleLabel(): string {
-    return this.role === "hub" ? "Hub" : "Spoke";
+    return this.role === "hub" ? "Hub" : `Spoke S${this.selectedSpokeSlot}`;
   }
 
   private async readUsb(): Promise<void> {
@@ -511,7 +512,7 @@ export class TimerFlasher extends Component {
       return;
     }
     const cleanLabel = this.timerLabel.trim();
-    const label = `${this.roleLabel} "${cleanLabel}" (${this.firmwareVersion})`;
+    const label = `${this.role === "hub" ? "Hub" : "Spoke"} "${cleanLabel}" (${this.firmwareVersion})`;
     this.busy = true;
     this.errorMsg = null;
     this.lastSuccessMsg = null;
@@ -549,7 +550,8 @@ export class TimerFlasher extends Component {
         this.readout = written;
       }
       await this.api.provisionTimer(this.role, cleanLabel, this.firmwareVersion);
-      this.lastSuccessMsg = `${label} flashed and added to Timers & Track! Unplug this XIAO or click "Flash another timer".`;
+      this.flashedNodes.add(this.role === "hub" ? "hub" : `spoke-${this.selectedSpokeSlot}`);
+      this.lastSuccessMsg = `${label} flashed and added to Timers & Track!`;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/No port selected|aborted|cancelled/i.test(msg)) {
@@ -632,47 +634,76 @@ export class TimerFlasher extends Component {
       </div>`;
   }
 
-  private renderStepRole(webSerialOk: boolean): string {
-    const isHub = this.role === "hub";
+  /**
+   * Step 1: Interactive Hub + 6 Spokes network topology diagram.
+   * Clicking the central Hub takes you through the Hub flow; clicking any of the 6 Spokes
+   * takes you through the Spoke flow.
+   */
+  private renderStepNetwork(webSerialOk: boolean): string {
+    const isHubSelected = this.role === "hub";
+    const hubFlashed = this.flashedNodes.has("hub");
+
+    const linesSvg = SPOKE_SLOTS.map((s) => {
+      const isActive = !isHubSelected && this.selectedSpokeSlot === s.slot;
+      const isDone = this.flashedNodes.has(`spoke-${s.slot}`);
+      return `
+        <line
+          x1="260" y1="155"
+          x2="${s.svgX}" y2="${s.svgY}"
+          class="flasher-net-line ${isActive ? "is-active" : ""} ${isDone ? "is-done" : ""}"
+        />`;
+    }).join("");
+
+    const spokesHtml = SPOKE_SLOTS.map((s) => {
+      const isActive = !isHubSelected && this.selectedSpokeSlot === s.slot;
+      const isDone = this.flashedNodes.has(`spoke-${s.slot}`);
+      return `
+        <button
+          type="button"
+          class="flasher-net-node is-spoke ${isActive ? "is-selected" : ""} ${isDone ? "is-flashed" : ""}"
+          style="left:${s.xPct}%;top:${s.yPct}%"
+          data-pick-node="spoke-${s.slot}"
+          ${this.busy ? "disabled" : ""}
+          title="Click to configure & flash ${s.defaultName} (ESP-NOW Spoke)"
+        >
+          <span class="flasher-net-node-code mono">${s.label}</span>
+          <span class="flasher-net-node-sub">${isDone ? "✓ Flashed" : "Spoke"}</span>
+        </button>`;
+    }).join("");
+
     return `
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
-          <h3>What kind of timer are you flashing?</h3>
-          <p>Select a role to configure and flash a XIAO ESP32-C5 board. Every track uses <strong>1 Hub</strong> and up to <strong>5 Spokes</strong>.</p>
+          <h3>Click a node on the network to flash it</h3>
+          <p>Click the central <strong>Hub</strong> (relays all timers to your computer over Wi-Fi) or any of the <strong>6 Spokes</strong> (ESP-NOW gate sensors).</p>
         </div>
 
-        <div class="flasher-role-choice-grid">
-          <button
-            type="button"
-            class="flasher-choice-card ${isHub ? "is-selected" : ""}"
-            data-pick-role="hub"
-            ${this.busy ? "disabled" : ""}
-          >
-            <div class="flasher-choice-top">
-              <span class="flasher-choice-title">Hub Timer</span>
-              <span class="badge tone-good">1 per track · Wi-Fi + ESP-NOW</span>
-            </div>
-            <p class="flasher-choice-desc">
-              Times its own gate <em>and</em> relays all Spoke timers to this computer over 2.4 GHz Wi-Fi.
-            </p>
-            <span class="flasher-choice-cta">Configure Hub ${icons.arrowRight(14)}</span>
-          </button>
+        <div class="flasher-net-canvas" role="group" aria-label="Hub and 6 Spokes network map">
+          <svg class="flasher-net-svg" viewBox="0 0 520 310" preserveAspectRatio="none" aria-hidden="true">
+            <circle cx="260" cy="155" r="112" class="flasher-net-orbit" />
+            <circle cx="260" cy="155" r="56" class="flasher-net-pulse" />
+            ${linesSvg}
+          </svg>
 
           <button
             type="button"
-            class="flasher-choice-card ${!isHub ? "is-selected" : ""}"
-            data-pick-role="spoke"
+            class="flasher-net-node is-hub ${isHubSelected ? "is-selected" : ""} ${hubFlashed ? "is-flashed" : ""}"
+            style="left:50%;top:50%"
+            data-pick-node="hub"
             ${this.busy ? "disabled" : ""}
+            title="Click to configure & flash the central Hub timer (Wi-Fi + ESP-NOW)"
           >
-            <div class="flasher-choice-top">
-              <span class="flasher-choice-title">Spoke Timer</span>
-              <span class="badge">Up to 5 · ESP-NOW</span>
-            </div>
-            <p class="flasher-choice-desc">
-              Zero Wi-Fi setup. Automatically pairs with the Hub over 2.4 GHz ESP-NOW Long Range.
-            </p>
-            <span class="flasher-choice-cta">Configure Spoke ${icons.arrowRight(14)}</span>
+            <span class="flasher-net-hub-icon">${icons.slaprf(20)}</span>
+            <span class="flasher-net-node-code mono">HUB</span>
+            <span class="flasher-net-node-sub">${hubFlashed ? "✓ Flashed" : "Wi-Fi + LR"}</span>
           </button>
+
+          ${spokesHtml}
+        </div>
+
+        <div class="flasher-net-legend">
+          <span><i class="dot-hub"></i><strong>Hub</strong> · 1 per track (Wi-Fi + ESP-NOW bridge)</span>
+          <span><i class="dot-spoke"></i><strong>Spokes S1–S6</strong> · Gate timers (2.4 GHz ESP-NOW LR)</span>
         </div>
 
         <div class="flasher-inspect-bar">
@@ -695,7 +726,7 @@ export class TimerFlasher extends Component {
 
   private renderStepIdentity(): string {
     const isHub = this.role === "hub";
-    const idPlaceholder = isHub ? "e.g. Hub-1 or Start-Hub" : "e.g. Spoke-1, Split-2, or Gate-B";
+    const idPlaceholder = isHub ? "e.g. Hub-1 or Start-Hub" : `e.g. Spoke-${this.selectedSpokeSlot} or Split-${this.selectedSpokeSlot}`;
     const selectedRel =
       FIRMWARE_RELEASES.find((r) => r.version === this.firmwareVersion) ?? FIRMWARE_RELEASES[0];
 
@@ -703,15 +734,17 @@ export class TimerFlasher extends Component {
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
           <div class="flasher-wizard-badge-row">
-            <span class="badge ${isHub ? "tone-good" : ""}">${isHub ? "Hub Timer" : "Spoke Timer"}</span>
+            <span class="badge ${isHub ? "tone-good" : ""}">${
+              isHub ? "Central Hub" : `Spoke S${this.selectedSpokeSlot}`
+            }</span>
             <span class="note">${
               isHub
-                ? "Step 2 of 4 · Stamped into flash memory"
-                : "Step 2 of 3 · Stamped into flash memory"
+                ? "Step 2 of 4 · Stamped into XIAO flash"
+                : "Step 2 of 3 · Stamped into XIAO flash (auto-pairs with Hub)"
             }</span>
           </div>
-          <h3>Name this ${isHub ? "Hub" : "Spoke"} &amp; pick firmware</h3>
-          <p>Give the board a short ID so you can recognize it in the Timers list and Track editor.</p>
+          <h3>Name this ${isHub ? "Hub" : "Spoke"} &amp; choose firmware</h3>
+          <p>This name is written to the board so it identifies itself automatically in Timers and on the Track.</p>
         </div>
 
         <div class="flasher-wifi-inputs flasher-two-col">
@@ -752,14 +785,91 @@ export class TimerFlasher extends Component {
         <div class="flasher-wizard-nav">
           <button type="button" class="btn btn-ghost" data-wizard-prev="1" ${this.busy ? "disabled" : ""}>
             ${icons.chevronLeft(15)}
-            <span>Back</span>
+            <span>Back to network</span>
           </button>
           <button type="button" class="btn btn-primary" data-wizard-next="1" ${this.busy ? "disabled" : ""}>
-            <span>${isHub ? "Next: 2.4 GHz Wi-Fi" : "Next: Review & Flash"}</span>
+            <span>${isHub ? "Next: Wi-Fi Mode" : "Next: Review & Flash"}</span>
             ${icons.chevronRight(15)}
           </button>
         </div>
       </div>`;
+  }
+
+  /**
+   * Renders the visual SVG pictorial for Station Mode (Hub -> Router/Hotspot -> Laptop)
+   */
+  private renderPictorialStation(): string {
+    return `
+      <svg class="flasher-pic-svg" viewBox="0 0 280 92" fill="none" aria-hidden="true">
+        <!-- Animated dashed radio links -->
+        <line x1="62" y1="44" x2="116" y2="44" class="flasher-pic-link" />
+        <line x1="164" y1="44" x2="218" y2="44" class="flasher-pic-link" />
+
+        <!-- Node 1: Hub -->
+        <g transform="translate(38, 44)">
+          <circle r="22" class="flasher-pic-node is-hub-node" />
+          <circle r="4" cy="-3" fill="currentColor" />
+          <path d="M-7 -9 A10 10 0 0 1 7 -9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+          <text y="12" text-anchor="middle" class="flasher-pic-node-tag">HUB</text>
+        </g>
+
+        <!-- Node 2: Router / Phone Hotspot -->
+        <g transform="translate(140, 44)">
+          <rect x="-24" y="-22" width="48" height="44" rx="10" class="flasher-pic-node is-router-node" />
+          <!-- Router box + antennas -->
+          <rect x="-12" y="-2" width="24" height="10" rx="2.5" stroke="currentColor" stroke-width="1.6" />
+          <line x1="-7" y1="-2" x2="-10" y2="-12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <line x1="7" y1="-2" x2="10" y2="-12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <circle cx="-6" cy="3" r="1.3" fill="currentColor" />
+          <circle cx="0" cy="3" r="1.3" fill="currentColor" />
+          <circle cx="6" cy="3" r="1.3" fill="currentColor" />
+        </g>
+        <text x="140" y="82" text-anchor="middle" class="flasher-pic-caption">Router / Hotspot</text>
+
+        <!-- Node 3: Laptop / Phone -->
+        <g transform="translate(242, 44)">
+          <rect x="-22" y="-22" width="44" height="44" rx="10" class="flasher-pic-node" />
+          <rect x="-11" y="-9" width="22" height="14" rx="2" stroke="currentColor" stroke-width="1.6" />
+          <path d="M-15 8 H15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </g>
+        <text x="242" y="82" text-anchor="middle" class="flasher-pic-caption">Laptop / Phone</text>
+        <text x="38" y="82" text-anchor="middle" class="flasher-pic-caption">Hub Timer</text>
+      </svg>`;
+  }
+
+  /**
+   * Renders the visual SVG pictorial for Direct AP Mode (Hub broadcasts "SlapRF" -> Laptop)
+   */
+  private renderPictorialAp(): string {
+    return `
+      <svg class="flasher-pic-svg" viewBox="0 0 280 92" fill="none" aria-hidden="true">
+        <!-- Direct link from Hub AP to Laptop -->
+        <line x1="88" y1="44" x2="196" y2="44" class="flasher-pic-link is-direct" />
+
+        <!-- Radiating AP rings around Hub -->
+        <circle cx="62" cy="44" r="31" class="flasher-pic-ap-wave" />
+        <circle cx="62" cy="44" r="22" class="flasher-pic-node is-hub-node" />
+        <g transform="translate(62, 44)">
+          <path d="M-8 -6 A11 11 0 0 1 8 -6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+          <path d="M-5 -2 A6.5 6.5 0 0 1 5 -2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+          <circle r="2" cy="2" fill="currentColor" />
+          <text y="13" text-anchor="middle" class="flasher-pic-node-tag">AP</text>
+        </g>
+
+        <!-- Badge on link -->
+        <rect x="108" y="33" width="68" height="20" rx="10" class="flasher-pic-pill" />
+        <text x="142" y="46" text-anchor="middle" class="flasher-pic-pill-text">"SlapRF"</text>
+
+        <!-- Laptop / Phone -->
+        <g transform="translate(220, 44)">
+          <rect x="-22" y="-22" width="44" height="44" rx="10" class="flasher-pic-node" />
+          <rect x="-11" y="-9" width="22" height="14" rx="2" stroke="currentColor" stroke-width="1.6" />
+          <path d="M-15 8 H15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        </g>
+
+        <text x="62" y="82" text-anchor="middle" class="flasher-pic-caption">Hub broadcasts Wi-Fi</text>
+        <text x="220" y="82" text-anchor="middle" class="flasher-pic-caption">Laptop / Phone</text>
+      </svg>`;
   }
 
   private renderStepWifi(): string {
@@ -771,41 +881,50 @@ export class TimerFlasher extends Component {
         <div class="flasher-wizard-intro">
           <div class="flasher-wizard-badge-row">
             <span class="badge tone-good">Hub · ${esc(this.timerLabel.trim() || "Hub-1")}</span>
-            <span class="note">Step 3 of 4 · 5.8 GHz Wi-Fi is hardware-disabled to protect FPV video</span>
+            <span class="note">Step 3 of 4 · 2.4 GHz Wi-Fi only (5.8 GHz is disabled to protect FPV video)</span>
           </div>
-          <h3>How should the Hub connect to this computer?</h3>
-          <p>Choose whether the Hub joins your existing Wi-Fi / phone hotspot or creates its own direct <strong>"SlapRF"</strong> Wi-Fi network.</p>
+          <h3>How should the Hub connect to your computer?</h3>
         </div>
 
-        <div class="flasher-mode-segmented" role="radiogroup" aria-label="Hub 2.4 GHz Wi-Fi mode">
+        <div class="flasher-pictorial-grid" role="radiogroup" aria-label="Hub 2.4 GHz Wi-Fi mode">
           <button
             type="button"
             role="radio"
             aria-checked="${!isHostApMode}"
-            class="flasher-mode-tab ${!isHostApMode ? "is-active" : ""}"
+            class="flasher-pictorial-card ${!isHostApMode ? "is-active" : ""}"
             data-pick-hub-mode="join"
             ${this.busy ? "disabled" : ""}
           >
-            <div class="flasher-mode-tab-top">
-              <span class="flasher-mode-tab-title">Join Hotspot / Router</span>
+            <div class="flasher-pictorial-head">
+              <span class="flasher-pictorial-title">Connect to Router / Hotspot</span>
               <span class="badge ${!isHostApMode ? "tone-good" : ""}">Station Mode</span>
             </div>
-            <span class="flasher-mode-tab-sub">Hub joins your phone hotspot or router</span>
+            <div class="flasher-pictorial-art">
+              ${this.renderPictorialStation()}
+            </div>
+            <p class="flasher-pictorial-desc">
+              Hub joins your phone hotspot or field router. Best when your laptop stays on internet Wi-Fi.
+            </p>
           </button>
 
           <button
             type="button"
             role="radio"
             aria-checked="${isHostApMode}"
-            class="flasher-mode-tab ${isHostApMode ? "is-active" : ""}"
+            class="flasher-pictorial-card ${isHostApMode ? "is-active" : ""}"
             data-pick-hub-mode="host"
             ${this.busy ? "disabled" : ""}
           >
-            <div class="flasher-mode-tab-top">
-              <span class="flasher-mode-tab-title">Host "SlapRF" Wi-Fi AP</span>
+            <div class="flasher-pictorial-head">
+              <span class="flasher-pictorial-title">Hub Acts as Hotspot</span>
               <span class="badge ${isHostApMode ? "tone-good" : ""}">Direct AP · Ch 1</span>
             </div>
-            <span class="flasher-mode-tab-sub">Hub broadcasts its own "SlapRF" network</span>
+            <div class="flasher-pictorial-art">
+              ${this.renderPictorialAp()}
+            </div>
+            <p class="flasher-pictorial-desc">
+              Hub broadcasts its own <strong>"SlapRF"</strong> Wi-Fi (<code>192.168.4.1</code>). Connect your laptop directly to it.
+            </p>
           </button>
         </div>
 
@@ -813,12 +932,9 @@ export class TimerFlasher extends Component {
           ${
             isHostApMode
               ? `
-            <p class="flasher-wifi-panel-desc">
-              The Hub will broadcast a 2.4 GHz Wi-Fi network named <strong>SlapRF</strong> at <code>192.168.4.1</code>. Connect your laptop or phone Wi-Fi directly to <strong>SlapRF</strong> at the field.
-            </p>
             <div class="flasher-wifi-inputs flasher-two-col">
               <div class="flasher-field">
-                <label class="flasher-field-label">Broadcast network (automatic)</label>
+                <label class="flasher-field-label">Broadcast hotspot network (automatic)</label>
                 <div class="flasher-ap-summary mono">
                   <span class="badge tone-good">SSID: SlapRF</span>
                   <span>2.4 GHz Ch 1</span>
@@ -828,12 +944,12 @@ export class TimerFlasher extends Component {
               </div>
 
               <div class="flasher-field">
-                <label class="flasher-field-label">SlapRF AP password (optional)</label>
+                <label class="flasher-field-label">SlapRF hotspot password (optional)</label>
                 <div class="flasher-pass-wrap">
                   <input
                     class="input flasher-pass-input"
                     type="${this.showPassword ? "text" : "password"}"
-                    placeholder="Blank = open AP (or 8+ chars WPA2)"
+                    placeholder="Blank = open hotspot (or 8+ chars WPA2)"
                     value="${esc(this.wifiPass)}"
                     data-wifi-pass="1"
                     maxlength="39"
@@ -855,9 +971,7 @@ export class TimerFlasher extends Component {
             </div>`
               : `
             <div class="flasher-wifi-panel-head">
-              <p class="flasher-wifi-panel-desc">
-                Select your 2.4 GHz phone hotspot or router below. Your laptop can stay connected to 5 GHz Wi-Fi or internet at the same time.
-              </p>
+              <span class="flasher-field-label">Select the 2.4 GHz router or phone hotspot the Hub should join</span>
               <button
                 type="button"
                 class="btn btn-sm btn-ghost"
@@ -976,26 +1090,28 @@ export class TimerFlasher extends Component {
 
   private renderStepFlash(webSerialOk: boolean): string {
     const isHub = this.role === "hub";
-    const cleanLabel = this.timerLabel.trim() || (isHub ? "Hub-1" : "Spoke-1");
+    const cleanLabel = this.timerLabel.trim() || (isHub ? "Hub-1" : `Spoke-${this.selectedSpokeSlot}`);
     const wifiSummary = isHub
       ? this.hubWifiMode === "host"
-        ? `Host "SlapRF" 2.4 GHz AP (${this.wifiPass ? "WPA2 protected" : "Open AP"})`
-        : `Join "${this.wifiSSID.trim() || "(unset)"}" (2.4 GHz Station)`
-      : "2.4 GHz ESP-NOW Long Range (auto-locks to Hub)";
+        ? `Hub Hotspot "SlapRF" (${this.wifiPass ? "WPA2" : "Open AP"})`
+        : `Join "${this.wifiSSID.trim() || "(unset)"}" (Station Mode)`
+      : "2.4 GHz ESP-NOW LR → Central Hub";
 
     return `
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
           <h3>Ready to flash ${esc(cleanLabel)}</h3>
-          <p>Plug your <strong>Seeed Studio XIAO ESP32-C5</strong> into this computer with a USB-C cable and click <strong>Flash to USB</strong>.</p>
+          <p>Plug your <strong>Seeed Studio XIAO ESP32-C5</strong> into USB-C and click <strong>Flash to USB</strong>.</p>
         </div>
 
         <div class="flasher-receipt">
           <div class="flasher-receipt-item">
-            <span class="note">Role</span>
+            <span class="note">Network Node</span>
             <div class="flasher-receipt-val">
-              <span class="badge ${isHub ? "tone-good" : ""}">${isHub ? "Hub" : "Spoke"}</span>
-              <button type="button" class="flasher-receipt-edit" data-goto-step="role" ${this.busy ? "disabled" : ""}>Change</button>
+              <span class="badge ${isHub ? "tone-good" : ""}">${
+                isHub ? "Central Hub" : `Spoke S${this.selectedSpokeSlot}`
+              }</span>
+              <button type="button" class="flasher-receipt-edit" data-goto-step="network" ${this.busy ? "disabled" : ""}>Change</button>
             </div>
           </div>
 
@@ -1008,7 +1124,7 @@ export class TimerFlasher extends Component {
           </div>
 
           <div class="flasher-receipt-item">
-            <span class="note">${isHub ? "2.4 GHz Wi-Fi Mode" : "Radio Link"}</span>
+            <span class="note">${isHub ? "Wi-Fi Connection" : "Radio Link"}</span>
             <div class="flasher-receipt-val mono">
               <span>${esc(wifiSummary)}</span>
               ${
@@ -1039,7 +1155,7 @@ export class TimerFlasher extends Component {
           this.lastSuccessMsg && !this.busy
             ? `<div class="flasher-banner is-ok">
                 <span>✓ ${esc(this.lastSuccessMsg)}</span>
-                <button type="button" class="btn btn-sm" data-flash-another="1">Flash another timer →</button>
+                <button type="button" class="btn btn-sm" data-flash-another="1">Back to Network Map →</button>
               </div>`
             : ""
         }
@@ -1062,7 +1178,7 @@ export class TimerFlasher extends Component {
             ${this.busy || !webSerialOk ? "disabled" : ""}
           >
             ${icons.zap(15)}
-            <span>Flash ${esc(this.roleLabel)} "${esc(cleanLabel)}" to USB</span>
+            <span>Flash "${esc(cleanLabel)}" to USB</span>
           </button>
 
           <button
@@ -1161,8 +1277,8 @@ export class TimerFlasher extends Component {
 
     let stepContent = "";
     switch (this.step) {
-      case "role":
-        stepContent = this.renderStepRole(webSerialOk);
+      case "network":
+        stepContent = this.renderStepNetwork(webSerialOk);
         break;
       case "identity":
         stepContent = this.renderStepIdentity();
