@@ -67,8 +67,11 @@ Each gate timer uses four off-the-shelf parts. One XIAO ESP32-C5 draws less than
 
 No soldering is required.
 
-```text
-[ 3S–6S LiPo Battery ] -> (XT60) -> [ LIPO to USB-C Adapter ] -> (USB-C) -> [ Seeed XIAO ESP32-C5 ]
+```mermaid
+flowchart LR
+    LiPo["3S-6S LiPo Battery"] -- "XT60 Plug" --> Adapter["LIPO to USB-C Adapter (5V Out)"]
+    Adapter -- "6-inch USB-C Cable" --> XIAO["Seeed Studio XIAO ESP32-C5"]
+    Antenna["Included 2.4 / 5 GHz Antenna"] -- "Snap-on U.FL" --> XIAO
 ```
 
 1. Attach the included U.FL antenna to the antenna connector on the XIAO ESP32-C5.
