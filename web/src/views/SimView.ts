@@ -783,13 +783,13 @@ export class SimView extends Component {
 
               <div class="sim-pilot-controls">
                 <button class="btn btn-sm sim-ctrl-btn ${isParked ? "btn-armed" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" data-pilot-btn="${p.slotIndex}-launch" ${isParked ? "" : "disabled"} title="Top up best pack to 100% and launch immediately from the starting line">
-                  ${icons.play(12)}<span>Launch now</span>
+                  ${icons.play(12)}<span>Launch</span>
                 </button>
                 <button class="btn btn-sm sim-ctrl-btn ${p.status === "PIT_SWAP" ? "is-active-cmd" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pit" data-pilot-btn="${p.slotIndex}-pit" ${canSwap ? "" : "disabled"} title="Bring pilot into the pit bench to swap to a fresh 6S battery pack (30–60s)">
                   ${icons.reset(12)}<span>Swap pack</span>
                 </button>
-                <button class="btn btn-sm sim-ctrl-btn ${p.status === "PILOT_BREAK" ? "is-active-cmd" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="break" data-pilot-btn="${p.slotIndex}-break" ${isFlying ? "" : "disabled"} title="Land in the pits and take a 60–90s break while batteries charge">
-                  ${icons.pause(12)}<span>Take break</span>
+                <button class="btn btn-sm sim-ctrl-btn ${p.status === "PILOT_BREAK" ? "is-active-cmd" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="break" data-pilot-btn="${p.slotIndex}-break" ${isFlying ? "" : "disabled"} title="Land in the pits and rest at the bench while batteries charge">
+                  ${icons.pause(12)}<span>Land</span>
                 </button>
                 <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="crash" data-pilot-btn="${p.slotIndex}-crash" ${isFlying ? "" : "disabled"} title="Force a mid-track crash near the closest gate (VTX stays on briefly)">
                   ${icons.zapOff(12)}<span>Force crash</span>
