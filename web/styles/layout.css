@@ -148,11 +148,15 @@
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   padding: 12px 32px;
   border-bottom: 1px solid var(--border);
   background: rgba(11, 12, 15, 0.82);
   backdrop-filter: blur(12px);
+}
+.topbar-title {
+  min-width: 0;
+  flex: 1 1 auto;
 }
 .topbar-title h1 {
   font-size: 17px;
@@ -162,15 +166,38 @@
 .topbar-title p {
   color: var(--text-3);
   font-size: 12.5px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .topbar-actions {
   display: flex;
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
+}
+.topbar-pill-short {
+  display: none;
 }
 
 /* Responsive --------------------------------------------------------------- */
+@media (max-width: 1180px) {
+  .topbar-actions .topbar-btn-label {
+    display: none;
+  }
+  .topbar-actions .btn[data-action] {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+  .topbar-pill-full {
+    display: none;
+  }
+  .topbar-pill-short {
+    display: inline;
+  }
+}
 @media (max-width: 900px) {
   .app {
     grid-template-columns: 1fr;
