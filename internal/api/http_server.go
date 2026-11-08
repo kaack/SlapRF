@@ -128,6 +128,11 @@ func (s *Server) activeEngine() *tracker.Engine {
 	return s.realEngine
 }
 
+// RealEngine returns the hardware timing engine fed by the physical XIAO ESP32-C5 Hub Timer.
+func (s *Server) RealEngine() *tracker.Engine {
+	return s.realEngine
+}
+
 // Handler builds the HTTP multiplexer for the application.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()

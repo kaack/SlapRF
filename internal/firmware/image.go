@@ -174,7 +174,7 @@ func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 	for i := 0; i < domain.MaxPilotSlots; i++ {
 		binary.LittleEndian.PutUint16(block[12+i*2:14+i*2], cfg.SlotFreqsMHz[i])
 	}
-	tdmaUs := uint16(cfg.PuckID-1) * 350
+	tdmaUs := uint16(cfg.PuckID-1) * 3500
 	binary.LittleEndian.PutUint16(block[28:30], tdmaUs)
 	copy(block[30:62], []byte(cfg.WifiSSID))
 	copy(block[63:102], []byte(cfg.WifiPass))

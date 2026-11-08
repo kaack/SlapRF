@@ -23,6 +23,7 @@ import (
 func main() {
 	httpAddr := flag.String("http", ":8090", "HTTP address for the TypeScript Sector & Telemetry SPA")
 	laprfAddr := flag.String("laprf", ":5403", "TCP address for MultiGP LiveTime (ImmersionRC LapRF 8-Way protocol)")
+	udpAddr := flag.String("udp", ":5404", "UDP address for Hub Timer 2.4 GHz LR sliding-window telemetry")
 	webDir := flag.String("web", "./web", "Path to the web SPA directory")
 	openBrowser := flag.Bool("open", true, "Automatically open the web UI in the default browser on startup")
 	flag.Parse()
@@ -69,6 +70,12 @@ func main() {
 	defer cleanupWeb()
 
 	httpSrv := api.NewServer(engine, sim, laprfSrv, resolvedWebDir)
+	udpRx := ingest.NewWiFiUDPReceiver(*udpAddr, httpSrv.RealEngine())
+	if err := udpRx.Start(); err != nil {
+		log.Printf("Warning: Hub Timer Wi-Fi UDP listener on %s could not start: %v", *udpAddr, err)
+	} else {
+		defer udpRx.Stop()
+	}
 	srv := &http.Server{
 		Handler: httpSrv.Handler(),
 	}
