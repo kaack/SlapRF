@@ -3,7 +3,7 @@ package tracker
 import (
 	"errors"
 
-	"fpv-gate-timer/internal/domain"
+	"slaprf/internal/domain"
 )
 
 var ErrUnknownPilot = errors.New("unknown pilot slot")

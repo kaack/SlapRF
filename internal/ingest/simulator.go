@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"fpv-gate-timer/internal/domain"
-	"fpv-gate-timer/internal/tracker"
+	"slaprf/internal/domain"
+	"slaprf/internal/tracker"
 )
 
 type simPilotState struct {

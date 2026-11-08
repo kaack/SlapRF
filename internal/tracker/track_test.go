@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"fpv-gate-timer/internal/domain"
+	"slaprf/internal/domain"
 )
 
 func gateByID(t *testing.T, e *Engine, id uint8) domain.GatePuck {

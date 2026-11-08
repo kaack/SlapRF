@@ -1,4 +1,4 @@
-module fpv-gate-timer
+module slaprf
 
 go 1.22
 

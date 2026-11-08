@@ -12,11 +12,11 @@ import (
 	"strings"
 	"syscall"
 
-	"fpv-gate-timer/internal/api"
-	"fpv-gate-timer/internal/ingest"
-	"fpv-gate-timer/internal/laprf"
-	"fpv-gate-timer/internal/tracker"
-	webassets "fpv-gate-timer/web"
+	"slaprf/internal/api"
+	"slaprf/internal/ingest"
+	"slaprf/internal/laprf"
+	"slaprf/internal/tracker"
+	webassets "slaprf/web"
 )
 
 func main() {

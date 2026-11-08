@@ -1,6 +1,6 @@
 package tracker
 
-import "fpv-gate-timer/internal/domain"
+import "slaprf/internal/domain"
 
 // SetGateRules replaces one gate's timing-rule overrides (values are clamped; unset fields
 // fall back to the global rules) and returns what was applied.

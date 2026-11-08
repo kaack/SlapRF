@@ -3,7 +3,7 @@ package tracker
 import (
 	"testing"
 
-	"fpv-gate-timer/internal/domain"
+	"slaprf/internal/domain"
 )
 
 // Default track: G1 start/finish → G2 → G3 → G4 → G1.

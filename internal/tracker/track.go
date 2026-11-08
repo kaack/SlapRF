@@ -8,7 +8,7 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"fpv-gate-timer/internal/domain"
+	"slaprf/internal/domain"
 )
 
 const maxTimers = 6

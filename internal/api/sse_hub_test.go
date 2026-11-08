@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"fpv-gate-timer/internal/domain"
+	"slaprf/internal/domain"
 )
 
 // A client that never reads must not slow down the timing engine.

@@ -4,7 +4,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"fpv-gate-timer/internal/tracker"
+	"slaprf/internal/tracker"
 )
 
 // TestSimulatedLapsVisitEveryGate runs 10 simulated minutes on a deterministic clock and

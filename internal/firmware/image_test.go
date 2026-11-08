@@ -3,7 +3,7 @@ package firmware
 import (
 	"testing"
 
-	"fpv-gate-timer/internal/domain"
+	"slaprf/internal/domain"
 )
 
 func TestBuildHubTimerWithWiFi(t *testing.T) {

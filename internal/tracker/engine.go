@@ -6,8 +6,8 @@ import (
 	"sync"
 	"time"
 
-	"fpv-gate-timer/internal/domain"
-	"fpv-gate-timer/internal/dsp"
+	"slaprf/internal/domain"
+	"slaprf/internal/dsp"
 )
 
 // puckOfflineAfter marks a gate puck offline when no telemetry frame has arrived for this long.

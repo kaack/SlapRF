@@ -10,11 +10,11 @@ import (
 
 	"github.com/evanw/esbuild/pkg/api"
 
-	"fpv-gate-timer/internal/domain"
-	"fpv-gate-timer/internal/firmware"
-	"fpv-gate-timer/internal/ingest"
-	"fpv-gate-timer/internal/laprf"
-	"fpv-gate-timer/internal/tracker"
+	"slaprf/internal/domain"
+	"slaprf/internal/firmware"
+	"slaprf/internal/ingest"
+	"slaprf/internal/laprf"
+	"slaprf/internal/tracker"
 )
 
 // FullStateResponse is returned by `GET /api/state` on initial SPA load.

@@ -7,8 +7,8 @@ import (
 	"io"
 	"log"
 
-	"fpv-gate-timer/internal/domain"
-	"fpv-gate-timer/internal/tracker"
+	"slaprf/internal/domain"
+	"slaprf/internal/tracker"
 )
 
 // BinaryDongleFrameMagic marks the start of a compact 16-byte binary ESP-NOW telemetry frame

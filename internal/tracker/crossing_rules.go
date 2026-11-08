@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"math"
 
-	"fpv-gate-timer/internal/domain"
+	"slaprf/internal/domain"
 )
 
 // crossingOutcome is the verdict of the timing rules on one detection.

@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"sync"
 
-	"fpv-gate-timer/internal/domain"
+	"slaprf/internal/domain"
 )
 
 const (

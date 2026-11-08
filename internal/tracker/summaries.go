@@ -4,7 +4,7 @@ import (
 	"math"
 	"sort"
 
-	"fpv-gate-timer/internal/domain"
+	"slaprf/internal/domain"
 )
 
 // orderedPucksLocked returns the gate pucks in track order.

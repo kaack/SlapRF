@@ -9,7 +9,7 @@ import (
 	"fmt"
 	"strings"
 
-	"fpv-gate-timer/internal/domain"
+	"slaprf/internal/domain"
 )
 
 const (

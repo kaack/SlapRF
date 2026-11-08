@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"fpv-gate-timer/internal/ingest"
-	"fpv-gate-timer/internal/laprf"
-	"fpv-gate-timer/internal/tracker"
+	"slaprf/internal/ingest"
+	"slaprf/internal/laprf"
+	"slaprf/internal/tracker"
 )
 
 func TestTypeScriptBundleAndStateAPI(t *testing.T) {

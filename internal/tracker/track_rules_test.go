@@ -3,7 +3,7 @@ package tracker
 import (
 	"testing"
 
-	"fpv-gate-timer/internal/domain"
+	"slaprf/internal/domain"
 )
 
 func f64(v float64) *float64 { return &v }

@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"fpv-gate-timer/internal/domain"
+	"slaprf/internal/domain"
 )
 
 func TestGateThresholdOverridesPilotDefault(t *testing.T) {

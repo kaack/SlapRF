@@ -9,8 +9,8 @@ import (
 	"sync"
 	"time"
 
-	"fpv-gate-timer/internal/domain"
-	"fpv-gate-timer/internal/tracker"
+	"slaprf/internal/domain"
+	"slaprf/internal/tracker"
 )
 
 // LiveTimeStatus represents the current connection state of the MultiGP LiveTime TCP bridge.
