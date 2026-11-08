@@ -6,7 +6,7 @@ import { PilotSlot } from "../types/models";
 
 const RACEBAND_MHZ = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
 
-/** Editable 8-slot pilot / VTX channel table. One <form> per slot. */
+/** Editable pilot / VTX channel table. Every field auto-saves on change. */
 export class PilotSlotsEditor extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
@@ -16,14 +16,23 @@ export class PilotSlotsEditor extends Component {
     this.store = store;
     this.api = api;
     el.addEventListener("submit", this.handleSubmit);
-    el.addEventListener("input", this.handleInput);
-    el.addEventListener("change", this.handleToggle);
+    el.addEventListener("change", this.handleChange);
+    el.addEventListener("keydown", this.handleKeyDown);
     this.onDispose(() => {
       el.removeEventListener("submit", this.handleSubmit);
-      el.removeEventListener("input", this.handleInput);
-      el.removeEventListener("change", this.handleToggle);
+      el.removeEventListener("change", this.handleChange);
+      el.removeEventListener("keydown", this.handleKeyDown);
     });
-    this.onDispose(store.subscribe(["config"], () => this.render()));
+    this.onDispose(
+      store.subscribe(["config"], () => {
+        const active = document.activeElement;
+        const editingText =
+          active instanceof HTMLInputElement &&
+          active.type !== "checkbox" &&
+          this.el.contains(active);
+        if (!editingText) this.render();
+      })
+    );
     this.render();
   }
 
@@ -38,7 +47,7 @@ export class PilotSlotsEditor extends Component {
     this.el.innerHTML = `
       <div class="slot-table">
         <div class="slot-row slot-head">
-          <span>On (${enabledCount}/8)</span><span>Pilot</span><span>Channel</span><span>Enter threshold</span><span></span>
+          <span>On (${enabledCount}/8)</span><span>Pilot</span><span>Channel</span><span>Enter threshold</span>
         </div>
         ${this.store.pilots.map((p) => this.renderRow(p, enabledCount, usedChannels)).join("")}
       </div>`;
@@ -72,25 +81,23 @@ export class PilotSlotsEditor extends Component {
           <input class="input mono" type="number" name="threshold" value="${p.enterThreshold.toFixed(0)}" min="-90" max="-30" step="1" />
           <span>dBm</span>
         </div>
-        <button class="btn btn-sm" type="submit" disabled>Save</button>
       </form>`;
   }
 
-  private handleInput = (e: Event): void => {
-    const target = e.target as HTMLInputElement | HTMLSelectElement;
-    if (target.name === "enabled" || target.name === "channel") return;
-    const form = target.closest("form");
-    const button = form?.querySelector<HTMLButtonElement>("button[type=submit]");
-    if (button) {
-      button.disabled = false;
-      button.classList.add("btn-primary");
+  private handleKeyDown = (e: KeyboardEvent): void => {
+    const target = e.target;
+    if (!(target instanceof HTMLInputElement)) return;
+    if (e.key === "Enter") {
+      e.preventDefault();
+      target.blur();
+    } else if (e.key === "Escape") {
+      target.value = target.defaultValue;
+      target.blur();
     }
   };
 
-  private handleToggle = (e: Event): void => {
-    const target = e.target as HTMLInputElement | HTMLSelectElement;
-    if (target.name !== "enabled" && target.name !== "channel") return;
-    const form = target.closest("form");
+  private handleChange = (e: Event): void => {
+    const form = (e.target as HTMLElement).closest("form");
     if (form) void this.save(form);
   };
 
