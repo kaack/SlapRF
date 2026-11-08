@@ -1,5 +1,12 @@
 import { AppStore } from "../state/store";
 import { GateCrossingEvent, LapRecord } from "../types/models";
+import {
+  DEFAULT_PIPER_VOICE_URI,
+  isPiperVoiceURI,
+  PIPER_VOICES,
+  PiperNeuralTts,
+  PiperVoiceDescriptor,
+} from "./piper_tts";
 
 export interface AnnouncerPrefs {
   enabled: boolean;
@@ -71,11 +78,14 @@ export function lapCallout(callsign: string, lapTimeSec: number): string {
  * independent of whichever view is on screen.
  */
 export class Announcer {
+  public readonly piper: PiperNeuralTts;
   private readonly store: AppStore;
   private prefs: AnnouncerPrefs;
   private readonly listeners = new Set<() => void>();
   private queue: Array<{ text: string; queuedAt: number }> = [];
   private current: SpeechSynthesisUtterance | null = null;
+  private neuralSpeaking = false;
+  private utteranceToken = 0;
   /** No speaking before this time (ms since epoch) — see AFTER_CANCEL_MS. */
   private holdUntil = 0;
   private holdTimer = 0;
@@ -90,6 +100,7 @@ export class Announcer {
   constructor(store: AppStore) {
     this.store = store;
     this.prefs = loadPrefs();
+    this.piper = new PiperNeuralTts(() => this.notify());
     store.onLapRecorded((lap) => this.onLap(lap));
     store.onStartGateDetected((ev) => this.onStartPass(ev));
     store.subscribe(["crossings"], () => {
@@ -108,7 +119,7 @@ export class Announcer {
         this.resetIdleTimer();
       }
     });
-    if (this.supported) {
+    if ("speechSynthesis" in window) {
       speechSynthesis.addEventListener("voiceschanged", () => this.notify());
       // Prime speechSynthesis at boot: Chrome only starts fetching its network "Google ..."
       // voices after the first getVoices() call, and may populate local OS voices first before
@@ -127,7 +138,7 @@ export class Announcer {
   }
 
   public get supported(): boolean {
-    return "speechSynthesis" in window;
+    return true;
   }
 
   public get settings(): AnnouncerPrefs {
@@ -135,13 +146,41 @@ export class Announcer {
   }
 
   public voices(): SpeechSynthesisVoice[] {
-    return this.supported ? speechSynthesis.getVoices() : [];
+    return "speechSynthesis" in window ? speechSynthesis.getVoices() : [];
+  }
+
+  public piperVoices(): PiperVoiceDescriptor[] {
+    return PIPER_VOICES;
   }
 
   /**
-   * Resolves the active voice: prefers the user's choice (defaulting to "Google US English"),
-   * and falls back to a local en-US system voice if the browser isn't Chrome or is offline
-   * at the field (since Chrome's "Google US English" requires an internet connection).
+   * Resolves the active voice URI:
+   * 1. If the user explicitly selected a built-in Piper neural voice (`piper:...`), use it.
+   * 2. If the user's preferred browser voice (defaulting to "Google US English") is present
+   *    and available (either local or online), use it.
+   * 3. Otherwise (e.g. inside Antigravity's browser, Edge/Firefox/Safari without "Google US English",
+   *    or when offline at the flying field), automatically fall back to the built-in offline
+   *    Piper neural voice (`piper:en_US-hfc_female-medium`).
+   */
+  public activeVoiceURI(): string {
+    if (isPiperVoiceURI(this.prefs.voiceURI)) {
+      return this.prefs.voiceURI;
+    }
+    const list = this.voices();
+    const targetURI = this.prefs.voiceURI || PREFERRED_DEFAULT_VOICE;
+    const match =
+      list.find((v) => v.voiceURI === targetURI) ??
+      list.find((v) => v.name.toLowerCase() === targetURI.toLowerCase());
+    const online = typeof navigator === "undefined" ? true : navigator.onLine !== false;
+    if (match && (match.localService || online)) {
+      return match.voiceURI;
+    }
+    return DEFAULT_PIPER_VOICE_URI;
+  }
+
+  /**
+   * Resolves a browser SpeechSynthesisVoice (used when a browser voice is active, or as an
+   * instant local fallback if the neural model is still downloading on the very first callout).
    */
   public resolveVoice(): SpeechSynthesisVoice | undefined {
     const list = this.voices();
@@ -157,7 +196,6 @@ export class Announcer {
       return match;
     }
 
-    // Fallback when offline or on Edge/Safari where "Google US English" isn't installed:
     return (
       list.find((v) => v.localService && /^en[-_]US/i.test(v.lang)) ??
       list.find((v) => /^en/i.test(v.lang)) ??
@@ -170,6 +208,10 @@ export class Announcer {
     const wasEnabled = this.prefs.enabled;
     this.prefs = { ...this.prefs, ...next };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(this.prefs));
+    const activeURI = this.activeVoiceURI();
+    if (isPiperVoiceURI(activeURI) && (this.prefs.enabled || next.voiceURI !== undefined)) {
+      void this.piper.preloadVoice(activeURI).catch(() => undefined);
+    }
     if (!wasEnabled && this.prefs.enabled) {
       this.wakeAudio();
       this.say("Announcer on");
@@ -254,7 +296,10 @@ export class Announcer {
   private clear(): void {
     this.queue = [];
     this.current = null;
-    if (this.supported && (speechSynthesis.speaking || speechSynthesis.pending)) {
+    this.neuralSpeaking = false;
+    this.utteranceToken++;
+    this.piper.stop();
+    if ("speechSynthesis" in window && (speechSynthesis.speaking || speechSynthesis.pending)) {
       speechSynthesis.cancel();
       this.holdUntil = Date.now() + AFTER_CANCEL_MS;
     }
@@ -262,7 +307,7 @@ export class Announcer {
 
   /** Speak queued callouts one at a time, skipping any that went stale while waiting. */
   private pump(): void {
-    if (this.current) return;
+    if (this.current || this.neuralSpeaking) return;
     const wait = this.holdUntil - Date.now();
     if (wait > 0) {
       window.clearTimeout(this.holdTimer);
@@ -273,10 +318,40 @@ export class Announcer {
     while (next && Date.now() - next.queuedAt > STALE_AFTER_MS) next = this.queue.shift();
     if (!next) return;
 
-    // Belt and braces: make sure the output is awake (a suspended context resumes here).
-    void this.keepAwake?.resume();
+    this.wakeAudio();
+    const activeURI = this.activeVoiceURI();
 
-    const utterance = new SpeechSynthesisUtterance(next.text);
+    if (isPiperVoiceURI(activeURI) && this.keepAwake) {
+      const token = ++this.utteranceToken;
+      this.neuralSpeaking = true;
+      const finishNeural = () => {
+        if (this.utteranceToken !== token) return;
+        this.neuralSpeaking = false;
+        if (!this.prefs.enabled && this.queue.length === 0) {
+          this.sleepAudio();
+          return;
+        }
+        this.holdUntil = Date.now() + BETWEEN_CALLOUTS_MS;
+        this.pump();
+      };
+
+      void this.piper
+        .speak(next.text, activeURI, this.prefs.rate, this.prefs.volume, this.keepAwake)
+        .then(finishNeural)
+        .catch(() => {
+          if (this.utteranceToken !== token) return;
+          this.neuralSpeaking = false;
+          this.speakBrowserUtterance(next!.text);
+        });
+      return;
+    }
+
+    this.speakBrowserUtterance(next.text);
+  }
+
+  private speakBrowserUtterance(text: string): void {
+    if (!("speechSynthesis" in window)) return;
+    const utterance = new SpeechSynthesisUtterance(text);
     const voice = this.resolveVoice();
     if (voice) utterance.voice = voice;
     utterance.rate = this.prefs.rate;

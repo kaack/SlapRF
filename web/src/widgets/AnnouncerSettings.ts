@@ -1,6 +1,7 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { Announcer } from "../services/announcer";
+import { isPiperVoiceURI } from "../services/piper_tts";
 
 /** Setup section for the voice announcer. Settings persist in this browser. */
 export class AnnouncerSettings extends Component {
@@ -48,7 +49,12 @@ export class AnnouncerSettings extends Component {
   };
 
   private handleClick = (e: Event): void => {
-    if ((e.target as HTMLElement).closest("[data-action=test]")) this.announcer.test();
+    const target = e.target as HTMLElement;
+    if (target.closest("[data-action=test]")) {
+      this.announcer.test();
+    } else if (target.closest("[data-action=cache-neural]")) {
+      void this.announcer.piper.preloadVoice(this.announcer.activeVoiceURI()).catch(() => undefined);
+    }
   };
 
   private render(): void {
@@ -58,27 +64,52 @@ export class AnnouncerSettings extends Component {
     }
     const p = this.announcer.settings;
     const voices = this.announcer.voices();
-    const activeURI = this.announcer.resolveVoice()?.voiceURI ?? p.voiceURI;
-    const voiceOpts = [`<option value="">System default</option>`]
+    const piperVoices = this.announcer.piperVoices();
+    const activeURI = this.announcer.activeVoiceURI();
+
+    const piperGroup = `<optgroup label="Built-in Neural Voices (Offline WASM)">${piperVoices
+      .map((v) => {
+        const cached = this.announcer.piper.isVoiceCached(v.uri);
+        const suffix = cached ? " · ✓ Cached" : "";
+        return `<option value="${esc(v.uri)}" ${v.uri === activeURI ? "selected" : ""}>${esc(v.name)}${suffix}</option>`;
+      })
+      .join("")}</optgroup>`;
+
+    const browserOpts = [`<option value="">System default</option>`]
       .concat(
         voices.map(
-          (v) => `<option value="${esc(v.voiceURI)}" ${v.voiceURI === activeURI ? "selected" : ""}>${esc(v.name)} · ${esc(v.lang)}</option>`
+          (v) =>
+            `<option value="${esc(v.voiceURI)}" ${v.voiceURI === activeURI ? "selected" : ""}>${esc(v.name)} · ${esc(v.lang)}</option>`
         )
       )
       .join("");
+    const browserGroup = `<optgroup label="Browser & OS Voices">${browserOpts}</optgroup>`;
+
+    let neuralStatusHtml = "";
+    if (isPiperVoiceURI(activeURI)) {
+      const dlPct = this.announcer.piper.getDownloadProgress(activeURI);
+      const cached = this.announcer.piper.isVoiceCached(activeURI);
+      if (dlPct !== null) {
+        neuralStatusHtml = `<span class="note">Downloading offline neural voice model… ${dlPct}%</span>`;
+      } else if (cached) {
+        neuralStatusHtml = `<span class="note">Offline neural voice cached in browser storage (OPFS) ✓</span>`;
+      } else {
+        neuralStatusHtml = `<button class="btn btn-sm btn-ghost" data-action="cache-neural" type="button">Download for offline use</button>`;
+      }
+    }
 
     this.el.innerHTML = `
       <div class="option-row">
         <div>
           <div class="option-title">Voice announcer</div>
-          <div class="option-sub">Each time a pilot completes a lap at the start gate it calls their name and lap time — e.g. “Vanover, 14.08”. Plays from this browser, so keep it open on the laptop wired to the PA.</div>
+          <div class="option-sub">Each time a pilot completes a lap at the start gate it calls their name and lap time — e.g. “Vanover, 14.08”. Built-in Piper neural voices run in WebAssembly and work offline in any browser.</div>
         </div>
         <label class="switch switch-lg"><input type="checkbox" name="enabled" ${p.enabled ? "checked" : ""} /><span></span></label>
       </div>
       <div class="form-grid ${p.enabled ? "" : "is-muted"}">
         <label class="field">
           <span>Voice</span>
-          <select class="input" name="voice">${voiceOpts}</select>
+          <select class="input" name="voice">${piperGroup}${browserGroup}</select>
         </label>
         <label class="field">
           <span>Speed <em data-out="rate">${p.rate.toFixed(2)}×</em></span>
@@ -89,8 +120,9 @@ export class AnnouncerSettings extends Component {
           <input type="range" name="volume" min="0" max="1" step="0.05" value="${p.volume}" />
         </label>
       </div>
-      <div class="check-row">
+      <div class="check-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <button class="btn btn-sm" data-action="test" type="button">Test voice</button>
+        ${neuralStatusHtml}
       </div>`;
   }
 }
