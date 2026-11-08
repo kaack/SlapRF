@@ -65,8 +65,11 @@ type PilotSlot struct {
 	Color           string  `json:"color"`           // Hex color for waveform and map rendering
 }
 
-// ChannelLabel returns a human-readable channel code such as "R1 (5658 MHz)".
+// ChannelLabel returns a human-readable channel code such as "R1 (5658 MHz)" or "Unassigned" when Channel == 0.
 func (p PilotSlot) ChannelLabel() string {
+	if p.Channel == 0 {
+		return "Unassigned"
+	}
 	prefix := "R"
 	switch p.Band {
 	case BandFatshark:
@@ -90,14 +93,18 @@ func DefaultPilotSlots() []PilotSlot {
 		"OneEye", "FreeLove",
 	}
 
-	// Standard MultiGP 4-pilot spacing uses R1, R3, R5, R8 first to minimize IMD,
-	// followed by R2, R4, R6, R7 for slots 5..8, and cycling for standby pilots.
-	defaultChannels := []uint8{1, 3, 5, 8, 2, 4, 6, 7, 1, 3}
+	// Standard MultiGP 4-pilot spacing uses R1, R3, R5, R8 for the 4 active pilots;
+	// standby pilots start with Channel = 0 (unassigned) so the race organizer assigns a channel manually.
+	defaultChannels := []uint8{1, 3, 5, 8}
 
 	slots := make([]PilotSlot, len(callsigns))
 	for i := 0; i < len(callsigns); i++ {
-		ch := defaultChannels[i%len(defaultChannels)]
-		freq := RacebandFrequenciesMHz[ch-1]
+		var ch uint8
+		var freq uint16
+		if i < len(defaultChannels) {
+			ch = defaultChannels[i]
+			freq = RacebandFrequenciesMHz[ch-1]
+		}
 		slots[i] = PilotSlot{
 			SlotIndex:       i + 1,
 			Callsign:        callsigns[i],
@@ -117,12 +124,16 @@ func DefaultPilotSlots() []PilotSlot {
 // DefaultRealPilotSlots returns clean real-world pilot slots ("Pilot 1".."Pilot 8")
 // completely separate from the simulated pro callsigns.
 func DefaultRealPilotSlots() []PilotSlot {
-	defaultChannels := [MaxPilotSlots]uint8{1, 3, 5, 8, 2, 4, 6, 7}
+	defaultChannels := [4]uint8{1, 3, 5, 8}
 
 	slots := make([]PilotSlot, MaxPilotSlots)
 	for i := 0; i < MaxPilotSlots; i++ {
-		ch := defaultChannels[i]
-		freq := RacebandFrequenciesMHz[ch-1]
+		var ch uint8
+		var freq uint16
+		if i < len(defaultChannels) {
+			ch = defaultChannels[i]
+			freq = RacebandFrequenciesMHz[ch-1]
+		}
 		slots[i] = PilotSlot{
 			SlotIndex:       i + 1,
 			Callsign:        fmt.Sprintf("Pilot %d", i+1),

@@ -31,7 +31,7 @@ export class PilotSlotsEditor extends Component {
     const enabledCount = this.store.enabledPilots.length;
     const usedChannels = new Map<number, string>();
     for (const p of this.store.pilots) {
-      if (p.enabled) {
+      if (p.enabled && p.channel > 0) {
         usedChannels.set(p.channel, p.callsign);
       }
     }
@@ -46,16 +46,19 @@ export class PilotSlotsEditor extends Component {
 
   private renderRow(p: PilotSlot, enabledCount: number, usedChannels: Map<number, string>): string {
     const atLimit = !p.enabled && enabledCount >= 8;
-    const options = RACEBAND_MHZ.map((mhz, i) => {
-      const ch = i + 1;
-      const holder = usedChannels.get(ch);
-      const takenByOther = holder !== undefined && holder !== p.callsign;
-      const disabledAttr = p.enabled && takenByOther ? "disabled" : "";
-      const suffix = takenByOther ? ` (${esc(holder)})` : "";
-      return `<option value="${ch}" ${p.channel === ch ? "selected" : ""} ${disabledAttr}>R${ch} · ${mhz} MHz${suffix}</option>`;
-    }).join("");
+    const needsChannel = p.enabled && p.channel === 0;
+    const unassignedOpt = `<option value="0" ${p.channel === 0 ? "selected" : ""}>— Select channel —</option>`;
+    const options =
+      unassignedOpt +
+      RACEBAND_MHZ.map((mhz, i) => {
+        const ch = i + 1;
+        const holder = usedChannels.get(ch);
+        const takenByOther = holder !== undefined && holder !== p.callsign;
+        const suffix = takenByOther ? ` (${esc(holder)})` : "";
+        return `<option value="${ch}" ${p.channel === ch ? "selected" : ""}>R${ch} · ${mhz} MHz${suffix}</option>`;
+      }).join("");
     return `
-      <form class="slot-row ${p.enabled ? "" : "is-disabled"}" data-pilot="${p.slotIndex}">
+      <form class="slot-row ${p.enabled ? "" : "is-disabled"} ${needsChannel ? "is-unassigned-channel" : ""}" data-pilot="${p.slotIndex}">
         <label class="switch" title="${atLimit ? "Maximum 8 pilots can be enabled at a time" : `Enable slot ${p.slotIndex}`}">
           <input type="checkbox" name="enabled" ${p.enabled ? "checked" : ""} ${atLimit ? "disabled" : ""} />
           <span></span>
@@ -64,7 +67,7 @@ export class PilotSlotsEditor extends Component {
           <span class="dot" style="--c:${p.color}"></span>
           <input class="input" name="callsign" value="${esc(p.callsign)}" maxlength="16" autocomplete="off" />
         </div>
-        <select class="input" name="channel">${options}</select>
+        <select class="input ${needsChannel ? "input-warn" : ""}" name="channel" title="${needsChannel ? "Assign a channel to this pilot" : ""}">${options}</select>
         <div class="input-suffix">
           <input class="input mono" type="number" name="threshold" value="${p.enterThreshold.toFixed(0)}" min="-90" max="-30" step="1" />
           <span>dBm</span>
@@ -74,7 +77,9 @@ export class PilotSlotsEditor extends Component {
   }
 
   private handleInput = (e: Event): void => {
-    const form = (e.target as HTMLElement).closest("form");
+    const target = e.target as HTMLInputElement | HTMLSelectElement;
+    if (target.name === "enabled" || target.name === "channel") return;
+    const form = target.closest("form");
     const button = form?.querySelector<HTMLButtonElement>("button[type=submit]");
     if (button) {
       button.disabled = false;
@@ -83,8 +88,8 @@ export class PilotSlotsEditor extends Component {
   };
 
   private handleToggle = (e: Event): void => {
-    const target = e.target as HTMLInputElement;
-    if (target.name !== "enabled") return;
+    const target = e.target as HTMLInputElement | HTMLSelectElement;
+    if (target.name !== "enabled" && target.name !== "channel") return;
     const form = target.closest("form");
     if (form) void this.save(form);
   };
@@ -107,7 +112,7 @@ export class PilotSlotsEditor extends Component {
       enabled: data.get("enabled") === "on",
       callsign: String(data.get("callsign") ?? "").trim() || `Pilot ${slotIndex}`,
       channel,
-      frequencyMhz: RACEBAND_MHZ[channel - 1] ?? current.frequencyMhz,
+      frequencyMhz: channel >= 1 && channel <= 8 ? RACEBAND_MHZ[channel - 1] : 0,
       enterThreshold: threshold,
       exitThreshold: threshold - 10,
     });

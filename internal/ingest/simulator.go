@@ -180,7 +180,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 	// 1. Advance each enabled pilot along the track
 	for i := range s.pilotStates {
 		ps := &s.pilotStates[i]
-		if i < len(pilots) && !pilots[i].Enabled {
+		if i < len(pilots) && (!pilots[i].Enabled || pilots[i].Channel == 0) {
 			continue
 		}
 
@@ -227,7 +227,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 
 		for slotIdx := 0; slotIdx < len(pilots) && slotIdx < domain.MaxPilotPoolSize && slotIdx < len(s.pilotStates); slotIdx++ {
 			noise := float32((s.rng.Float64() - 0.5) * 2.2)
-			if !pilots[slotIdx].Enabled {
+			if !pilots[slotIdx].Enabled || pilots[slotIdx].Channel == 0 {
 				rssi[slotIdx] = puck.NoiseFloorDbm + noise
 				continue
 			}

@@ -28,13 +28,13 @@ export class HttpRealTransport implements ApiTransport {
   private backendAvailable = true;
 
   // Offline real-world state fallback when running on static GitHub Pages with no backend
-  private fallbackPilots: PilotSlot[] = [1, 3, 5, 8, 2, 4, 6, 7].map((ch, i) => ({
+  private fallbackPilots: PilotSlot[] = [1, 3, 5, 8, 0, 0, 0, 0].map((ch, i) => ({
     slotIndex: i + 1,
     callsign: `Pilot ${i + 1}`,
     enabled: i < 4,
     band: 1,
     channel: ch,
-    frequencyMhz: RACEBAND_MHZ[ch - 1],
+    frequencyMhz: ch > 0 ? RACEBAND_MHZ[ch - 1] : 0,
     enterThreshold: -58,
     exitThreshold: -68,
     attenuationGain: 52,
@@ -163,19 +163,24 @@ export class HttpRealTransport implements ApiTransport {
       const upd = body as PilotSlot;
       const idx = this.fallbackPilots.findIndex((p) => p.slotIndex === upd.slotIndex);
       if (idx >= 0) {
+        const wasEnabled = this.fallbackPilots[idx].enabled;
         const next = { ...this.fallbackPilots[idx], ...upd };
+        next.frequencyMhz = next.channel >= 1 && next.channel <= 8 ? RACEBAND_MHZ[next.channel - 1] : 0;
         if (next.enabled) {
           const otherEnabled = this.fallbackPilots.filter((p, i) => i !== idx && p.enabled);
           if (otherEnabled.length >= 8) {
             next.enabled = false;
-          } else if (otherEnabled.some((p) => p.channel === next.channel)) {
-            const used = new Set(otherEnabled.map((p) => p.channel));
-            for (let ch = 1; ch <= 8; ch++) {
-              if (!used.has(ch)) {
-                next.channel = ch;
-                next.frequencyMhz = RACEBAND_MHZ[ch - 1];
-                break;
-              }
+          } else if (next.channel > 0 && otherEnabled.some((p) => p.channel === next.channel)) {
+            if (!wasEnabled) {
+              next.channel = 0;
+              next.frequencyMhz = 0;
+            } else {
+              this.fallbackPilots.forEach((p, i) => {
+                if (i !== idx && p.enabled && p.channel === next.channel) {
+                  p.channel = 0;
+                  p.frequencyMhz = 0;
+                }
+              });
             }
           }
         }

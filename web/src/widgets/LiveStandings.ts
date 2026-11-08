@@ -92,7 +92,7 @@ export class LiveStandings extends Component {
                 <span>${esc(pilot.callsign)}</span>
                 <span class="pilot-live-dot ${s.onTrack ? "is-live" : ""}" title="${statusTitle}"></span>
               </div>
-              <div class="pilot-meta">R${pilot.channel} · ${pilot.frequencyMhz} MHz</div>
+              <div class="pilot-meta">${pilot.channel > 0 ? `R${pilot.channel} · ${pilot.frequencyMhz} MHz` : `<span class="tone-warn">No channel assigned</span>`}</div>
             </div>
           </div>
         </td>

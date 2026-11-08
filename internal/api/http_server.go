@@ -254,7 +254,9 @@ func (s *Server) handleUpdatePilot(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if slot.Channel >= 1 && slot.Channel <= 8 && slot.Band == domain.BandRaceband {
+	if slot.Channel == 0 {
+		slot.FrequencyMHz = 0
+	} else if slot.Channel >= 1 && slot.Channel <= 8 && slot.Band == domain.BandRaceband {
 		slot.FrequencyMHz = domain.RacebandFrequenciesMHz[slot.Channel-1]
 	}
 	if slot.ExitThreshold == 0 || slot.ExitThreshold >= slot.EnterThreshold {
