@@ -2,9 +2,9 @@
 
 SlapRF is a multi-gate 5.8 GHz sector timing system for FPV drone racing.
 
-A standard lap timer measures only total lap time at the start gate. SlapRF places additional timers at gates around the track to measure split times for each track section (`S1`, `S2`, `S3`, `S4`). Pilots can compare section times across laps to see where they gained or lost time.
+The name **SlapRF** comes from how you build it: you slap four off-the-shelf parts together with no soldering, no custom PCBs, and no wiring harness.
 
-Each timer uses off-the-shelf parts that plug together without soldering.
+A standard lap timer measures only total lap time at the start gate. SlapRF places additional timers at gates around the track to measure split times for each track section (`S1`, `S2`, `S3`, `S4`). Pilots can compare section times across laps to see where they gained or lost time.
 
 ## Intended Use: LiveTime Companion or Standalone Practice
 
@@ -21,6 +21,29 @@ A SlapRF setup uses one **Hub timer** and up to 5 **Spoke timers** (up to 6 time
 
 - **Hub timer**: Connects to your laptop over Wi-Fi or a mobile hotspot. It measures 5.8 GHz RSSI at its own gate and receives data from all Spoke timers.
 - **Spoke timers**: Measure 5.8 GHz RSSI at other gates on the track and send their readings to the Hub timer over ESP-NOW. Spoke timers do not need Wi-Fi credentials.
+
+```mermaid
+flowchart LR
+    subgraph Track["FPV Track (5.8 GHz VTX Signal)"]
+        T2["Gate 2: Spoke Timer (T2)"]
+        T3["Gate 3: Spoke Timer (T3)"]
+        T4["Gate 4: Spoke Timer (T4)"]
+        T1["Start Gate: Hub Timer (T1)"]
+    end
+
+    subgraph Laptop["Field Laptop"]
+        Server["SlapRF Server"]
+        UI["Web UI (:8090) - Section Splits S1-S4"]
+        LiveTime["MultiGP LiveTime (:5403 LapRF TCP)"]
+    end
+
+    T2 -- "ESP-NOW" --> T1
+    T3 -- "ESP-NOW" --> T1
+    T4 -- "ESP-NOW" --> T1
+    T1 -- "Wi-Fi (UDP)" --> Server
+    Server --> UI
+    Server -. "Optional Start Gate Passings" .-> LiveTime
+```
 
 You flash and configure the timers from Chrome, Edge, or Brave over USB. No compiler, driver installation, or command-line tool is required.
 
