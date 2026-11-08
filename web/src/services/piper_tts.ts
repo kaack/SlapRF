@@ -277,6 +277,7 @@ export class PiperNeuralTts {
 
   private readonly voiceSessions = new Map<string, Promise<LoadedVoiceSession>>();
   private readonly cachedVoices = new Set<string>();
+  private readonly readySessions = new Set<string>();
   private readonly downloadProgress = new Map<string, number>();
   private readonly audioCache = new Map<string, AudioBuffer>();
   private readonly wavUrlCache = new Map<string, string>();
@@ -294,6 +295,12 @@ export class PiperNeuralTts {
   public isVoiceCached(uri: string): boolean {
     const desc = getPiperVoice(uri);
     return this.cachedVoices.has(desc.voiceId);
+  }
+
+  /** Returns true only when the ONNX InferenceSession is already compiled and hot in RAM. */
+  public isVoiceSessionReady(uri: string): boolean {
+    const desc = getPiperVoice(uri);
+    return this.readySessions.has(desc.voiceId);
   }
 
   public getDownloadProgress(uri: string): number | null {
@@ -396,7 +403,9 @@ export class PiperNeuralTts {
     uri: string,
     rate: number,
     volume: number,
-    ctx: AudioContext
+    ctx: AudioContext,
+    queuedAt?: number,
+    maxAgeMs = 8000
   ): Promise<void> {
     const desc = getPiperVoice(uri);
     const clampedRate = Math.max(0.7, Math.min(1.8, rate || 1.0));
@@ -414,14 +423,20 @@ export class PiperNeuralTts {
       this.setWavCache(cacheKey, wavUrl);
     }
 
-    // When the phone screen is locked (`document.hidden`), Android/iOS may suspend WebAudio's
-    // AudioContext while allowing HTML5 `<audio>` elements in an active MediaSession to play.
-    if (document.hidden || ctx.state !== "running") {
+    // Never speak a callout that went stale while waiting for model download/compilation.
+    if (queuedAt !== undefined && Date.now() - queuedAt > maxAgeMs) {
+      return;
+    }
+
+    if (ctx.state !== "running") {
       await ctx.resume().catch(() => undefined);
-      if (document.hidden || ctx.state !== "running") {
-        const playedHtml = await this.playViaHtmlAudio(wavUrl, volume);
-        if (playedHtml) return;
-      }
+    }
+    // Only fall back to HTML5 `<audio>` if WebAudio `AudioContext` refused to resume.
+    // When `ctx.state === "running"`, `ctx.createBufferSource()` plays directly from PCM memory
+    // with zero background resource-loader delay.
+    if (ctx.state !== "running") {
+      const playedHtml = await this.playViaHtmlAudio(wavUrl, volume);
+      if (playedHtml) return;
     }
 
     await ctx.resume().catch(() => undefined);
@@ -764,6 +779,7 @@ export class PiperNeuralTts {
 
       this.downloadProgress.delete(desc.voiceId);
       this.cachedVoices.add(desc.voiceId);
+      this.readySessions.add(desc.voiceId);
       this.onStatusChange();
 
       return {
@@ -779,6 +795,7 @@ export class PiperNeuralTts {
 
     this.downloadProgress.delete(desc.voiceId);
     this.cachedVoices.add(desc.voiceId);
+    this.readySessions.add(desc.voiceId);
     this.onStatusChange();
 
     return {

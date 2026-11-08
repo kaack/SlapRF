@@ -89,8 +89,9 @@ export class Announcer {
   private readonly store: AppStore;
   private prefs: AnnouncerPrefs;
   private readonly listeners = new Set<() => void>();
-  private queue: Array<{ text: string; queuedAt: number }> = [];
+  private queue: Array<{ text: string; queuedAt: number; slotIndex?: number }> = [];
   private current: SpeechSynthesisUtterance | null = null;
+  private currentWatchdog = 0;
   private neuralSpeaking = false;
   private utteranceToken = 0;
   /** No speaking before this time (ms since epoch) — see AFTER_CANCEL_MS. */
@@ -103,6 +104,7 @@ export class Announcer {
   private lastRaceArmed: boolean | null = null;
   /** Inaudible tone that keeps the audio output awake while the announcer is on. */
   private keepAwake: AudioContext | null = null;
+  private keepAwakeClockNode: ScriptProcessorNode | null = null;
   /** Looping silent HTMLAudioElement so iOS/Android keep audio & JS active if the screen is manually locked. */
   private bgMediaEl: HTMLAudioElement | null = null;
   private bgMediaUrl = "";
@@ -113,6 +115,11 @@ export class Announcer {
     setWakeLockEnabled(this.prefs.keepScreenAwake !== false);
     this.installMobileBackgroundKeepAlive();
     this.piper = new PiperNeuralTts(() => this.notify());
+    if (isMobileDevice()) {
+      window.setTimeout(() => {
+        void this.piper.preloadVoice(DEFAULT_PIPER_VOICE_URI).catch(() => undefined);
+      }, 1500);
+    }
     store.onLapRecorded((lap) => this.onLap(lap));
     store.onStartGateDetected((ev) => this.onStartPass(ev));
     store.subscribe(["crossings"], () => {
@@ -184,8 +191,8 @@ export class Announcer {
     }
     const list = this.voices();
     const piperReadyForLock =
-      isMobileDevice() && document.hidden && this.piper.isVoiceCached(DEFAULT_PIPER_VOICE_URI);
-    if (isMobileDevice() && document.hidden && !this.piper.isVoiceCached(DEFAULT_PIPER_VOICE_URI)) {
+      isMobileDevice() && document.hidden && this.piper.isVoiceSessionReady(DEFAULT_PIPER_VOICE_URI);
+    if (isMobileDevice() && document.hidden && !this.piper.isVoiceSessionReady(DEFAULT_PIPER_VOICE_URI)) {
       void this.piper.preloadVoice(DEFAULT_PIPER_VOICE_URI).catch(() => undefined);
     }
     if (this.prefs.voiceURI === "system" && list.length > 0 && !piperReadyForLock) {
@@ -197,7 +204,7 @@ export class Announcer {
       list.find((v) => v.name.toLowerCase() === targetURI.toLowerCase());
     const online = typeof navigator === "undefined" ? true : navigator.onLine !== false;
     // Android & iOS suspend window.speechSynthesis when the phone screen is locked (`document.hidden`),
-    // so route through the WebAudio / HTMLAudio Piper neural synth while backgrounded once cached.
+    // so route through the WebAudio Piper neural synth while backgrounded once its ONNX session is hot in RAM.
     if (match && (match.localService || online) && !piperReadyForLock) {
       return match.voiceURI;
     }
@@ -278,7 +285,7 @@ export class Announcer {
 
   private onLap(lap: LapRecord): void {
     const callsign = this.store.pilot(lap.slotIndex)?.callsign ?? lap.callsign;
-    this.say(lapCallout(callsign, lap.lapTimeSec));
+    this.say(lapCallout(callsign, lap.lapTimeSec), false, false, lap.slotIndex);
   }
 
   /**
@@ -288,15 +295,20 @@ export class Announcer {
    */
   private onStartPass(ev: GateCrossingEvent): void {
     const callsign = this.store.pilot(ev.slotIndex)?.callsign ?? ev.callsign;
-    this.say(spokenName(callsign));
+    this.say(spokenName(callsign), false, false, ev.slotIndex);
   }
 
   // ---- speech queue --------------------------------------------------------
 
-  private say(text: string, interrupt = false, force = false): void {
+  private say(text: string, interrupt = false, force = false, slotIndex?: number): void {
     if ((!this.prefs.enabled && !force) || !this.supported) return;
     if (interrupt) this.clear();
-    this.queue.push({ text, queuedAt: Date.now() });
+    // If a newer lap/crossing arrives for a pilot who still has an unspoken callout waiting in the
+    // queue, replace the older queued callout so we never announce two laps back-to-back for the same pilot.
+    if (slotIndex !== undefined) {
+      this.queue = this.queue.filter((item) => item.slotIndex !== slotIndex);
+    }
+    this.queue.push({ text, queuedAt: Date.now(), slotIndex });
     this.resetIdleTimer();
     this.pump();
   }
@@ -338,6 +350,8 @@ export class Announcer {
   private clear(): void {
     this.queue = [];
     this.current = null;
+    window.clearTimeout(this.currentWatchdog);
+    this.currentWatchdog = 0;
     this.neuralSpeaking = false;
     this.utteranceToken++;
     this.piper.stop();
@@ -351,7 +365,7 @@ export class Announcer {
   private pump(): void {
     if (this.current || this.neuralSpeaking) return;
     const wait = this.holdUntil - Date.now();
-    if (wait > 0) {
+    if (wait > 0 && !document.hidden) {
       window.clearTimeout(this.holdTimer);
       this.holdTimer = window.setTimeout(() => this.pump(), wait);
       return;
@@ -373,17 +387,29 @@ export class Announcer {
           this.sleepAudio();
           return;
         }
-        this.holdUntil = Date.now() + BETWEEN_CALLOUTS_MS;
+        this.holdUntil = document.hidden ? 0 : Date.now() + BETWEEN_CALLOUTS_MS;
         this.pump();
       };
 
       void this.piper
-        .speak(next.text, activeURI, this.prefs.rate, this.prefs.volume, this.keepAwake)
+        .speak(
+          next.text,
+          activeURI,
+          this.prefs.rate,
+          this.prefs.volume,
+          this.keepAwake,
+          next.queuedAt,
+          STALE_AFTER_MS
+        )
         .then(finishNeural)
         .catch(() => {
           if (this.utteranceToken !== token) return;
           this.neuralSpeaking = false;
-          this.speakBrowserUtterance(next!.text);
+          if (Date.now() - next!.queuedAt <= STALE_AFTER_MS) {
+            this.speakBrowserUtterance(next!.text);
+          } else {
+            this.pump();
+          }
         });
       return;
     }
@@ -410,18 +436,22 @@ export class Announcer {
     const done = () => {
       if (this.current !== utterance) return; // superseded by clear()
       this.current = null;
+      window.clearTimeout(this.currentWatchdog);
+      this.currentWatchdog = 0;
       if (!this.prefs.enabled && this.queue.length === 0) {
         this.sleepAudio();
         return;
       }
       // Back-to-back callouts (a pack crossing together) also clip on some Windows voices
       // when started the instant the previous one ends; a short breath avoids it.
-      this.holdUntil = Date.now() + BETWEEN_CALLOUTS_MS;
+      this.holdUntil = document.hidden ? 0 : Date.now() + BETWEEN_CALLOUTS_MS;
       this.pump();
     };
     utterance.onend = done;
     utterance.onerror = done;
     this.current = utterance;
+    window.clearTimeout(this.currentWatchdog);
+    this.currentWatchdog = window.setTimeout(done, 4000);
     if (speechSynthesis.paused) {
       speechSynthesis.resume();
     }
@@ -447,7 +477,27 @@ export class Announcer {
       const gain = ctx.createGain();
       tone.frequency.value = 440;
       gain.gain.value = KEEP_AWAKE_GAIN;
-      tone.connect(gain).connect(ctx.destination);
+      // Attach a hardware audio-clock processor node (~46 ms interval at 44.1 kHz) so that
+      // even when the mobile screen is locked and window.setTimeout is throttled by the OS,
+      // the audio thread continuously wakes the WASM timing engine and speech queue.
+      if (typeof ctx.createScriptProcessor === "function") {
+        const proc = ctx.createScriptProcessor(2048, 1, 1);
+        proc.onaudioprocess = (ev) => {
+          const inp = ev.inputBuffer.getChannelData(0);
+          const out = ev.outputBuffer.getChannelData(0);
+          out.set(inp);
+          if (document.hidden) {
+            window.slaprfWasm?.tick?.();
+            if (this.queue.length > 0 && !this.current && !this.neuralSpeaking) {
+              this.pump();
+            }
+          }
+        };
+        tone.connect(gain).connect(proc).connect(ctx.destination);
+        this.keepAwakeClockNode = proc;
+      } else {
+        tone.connect(gain).connect(ctx.destination);
+      }
       tone.start();
       this.keepAwake = ctx;
     }

@@ -675,13 +675,13 @@ func (s *TrackSimulator) loop() {
 }
 
 // AdvanceToNow steps the simulator forward in 20 ms increments to match wall-clock elapsed time
-// (capped at 2.5 seconds per wakeup) so that even if a mobile browser throttles background timers
-// while the phone screen is locked, simulated drones fly at 1.0x real-time speed and emit 50 Hz
-// (20 ms) RSSI frames without missing a single gate peak.
+// (capped at 500 ms per wakeup) so that even if a mobile browser batches background timers
+// while the phone screen is locked, simulated drones fly at 1.0x real-time speed without
+// fast-forwarding a multi-second burst after an OS pause.
 func (s *TrackSimulator) AdvanceToNow() {
 	const dtSec = 0.020
 	const stepUs = 20_000
-	const maxCatchupSteps = 125 // at most 2.5s per wakeup
+	const maxCatchupSteps = 25 // at most 500 ms per wakeup
 
 	nowUs := s.clock()
 	s.mu.Lock()
