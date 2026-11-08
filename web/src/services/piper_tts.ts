@@ -89,22 +89,184 @@ interface LoadedVoiceSession {
   voiceId: string;
   config: PiperModelConfig;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  session: any;
+  session?: any;
 }
 
 const MAX_AUDIO_CACHE_ENTRIES = 120;
 
 // Native browser dynamic import helper so esbuild's IIFE bundler leaves runtime ESM imports intact.
-// eslint-disable-next-line @typescript-eslint/no- implied-eval
+// eslint-disable-next-line @typescript-eslint/no-implied-eval
 const runtimeImport = new Function("u", "return import(u)") as <T = unknown>(url: string) => Promise<T>;
+
+/**
+ * Self-contained Web Worker script that executes `espeak-ng` phonemization and ONNX Runtime Web
+ * VITS neural synthesis completely off the main UI thread so 60 fps animations (such as the
+ * Flight Corridor in `#/sim`) never stutter or drop frames on mobile or desktop.
+ */
+const PIPER_WORKER_SOURCE = `
+let createPiperPhonemize = null;
+let ort = null;
+let piperWasmBlobUrl = "";
+let piperDataBlobUrl = "";
+const sessions = new Map();
+const runtimeImport = new Function("u", "return import(u)");
+
+let queue = Promise.resolve();
+
+self.onmessage = (e) => {
+  const msg = e.data;
+  queue = queue.then(() => handleMessage(msg)).catch((err) => {
+    if (msg && msg.reqId) {
+      self.postMessage({
+        type: "error",
+        reqId: msg.reqId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+};
+
+async function handleMessage(msg) {
+  if (msg.type === "init-runtime") {
+    if (!ort || !createPiperPhonemize) {
+      piperWasmBlobUrl = URL.createObjectURL(msg.piperWasmBlob);
+      piperDataBlobUrl = URL.createObjectURL(msg.piperDataBlob);
+      const ortWasmBlobUrl = URL.createObjectURL(msg.ortWasmBlob);
+
+      const piperJsUrl = URL.createObjectURL(
+        new Blob([await msg.piperJsBlob.arrayBuffer()], { type: "text/javascript" })
+      );
+      const ortJsUrl = URL.createObjectURL(
+        new Blob([await msg.ortJsBlob.arrayBuffer()], { type: "text/javascript" })
+      );
+
+      try {
+        const piperMod = await runtimeImport(piperJsUrl);
+        createPiperPhonemize = piperMod.createPiperPhonemize;
+
+        const ortMod = await runtimeImport(ortJsUrl);
+        const ortInstance = ortMod.default || ortMod;
+        if (ortInstance.env) {
+          ortInstance.env.allowLocalModels = false;
+          if (ortInstance.env.wasm) {
+            ortInstance.env.wasm.numThreads = 1;
+            ortInstance.env.wasm.simd = true;
+            ortInstance.env.wasm.wasmPaths = {
+              "ort-wasm-simd.wasm": ortWasmBlobUrl,
+              "ort-wasm.wasm": ortWasmBlobUrl,
+            };
+          }
+        }
+        ort = ortInstance;
+      } finally {
+        URL.revokeObjectURL(piperJsUrl);
+        URL.revokeObjectURL(ortJsUrl);
+      }
+    }
+    self.postMessage({ type: "ok", reqId: msg.reqId });
+    return;
+  }
+
+  if (msg.type === "load-voice") {
+    if (!sessions.has(msg.voiceId)) {
+      const modelBytes = await msg.modelBlob.arrayBuffer();
+      const session = await ort.InferenceSession.create(modelBytes, {
+        executionProviders: ["wasm"],
+      });
+      sessions.set(msg.voiceId, { config: msg.config, session });
+    }
+    self.postMessage({ type: "ok", reqId: msg.reqId });
+    return;
+  }
+
+  if (msg.type === "synthesize") {
+    const loaded = sessions.get(msg.voiceId);
+    if (!loaded) {
+      throw new Error("Voice session not loaded: " + msg.voiceId);
+    }
+    const inputJson = JSON.stringify([{ text: msg.normalizedText }]);
+    const phonemeIds = await new Promise((resolve, reject) => {
+      createPiperPhonemize({
+        print: (out) => {
+          try {
+            resolve(JSON.parse(out).phoneme_ids);
+          } catch (err) {
+            reject(err);
+          }
+        },
+        printErr: (errText) => {
+          reject(new Error(errText));
+        },
+        locateFile: (url) => {
+          if (url.endsWith(".wasm")) return piperWasmBlobUrl;
+          if (url.endsWith(".data")) return piperDataBlobUrl;
+          return url;
+        },
+      })
+        .then((mod) => {
+          mod.callMain([
+            "-l",
+            loaded.config.espeak.voice,
+            "--input",
+            inputJson,
+            "--espeak_data",
+            "/espeak-ng-data",
+          ]);
+        })
+        .catch(reject);
+    });
+
+    const noiseScale = loaded.config.inference.noise_scale;
+    const lengthScale = loaded.config.inference.length_scale / msg.rate;
+    const noiseW = Math.min(loaded.config.inference.noise_w, 0.35);
+
+    const feeds = {
+      input: new ort.Tensor("int64", phonemeIds, [1, phonemeIds.length]),
+      input_lengths: new ort.Tensor("int64", [phonemeIds.length]),
+      scales: new ort.Tensor("float32", [noiseScale, lengthScale, noiseW]),
+    };
+    if (loaded.config.speaker_id_map && Object.keys(loaded.config.speaker_id_map).length > 0) {
+      feeds.sid = new ort.Tensor("int64", [0]);
+    }
+
+    const results = await loaded.session.run(feeds);
+    const rawData = results.output.data;
+    const pcm = new Float32Array(rawData.length);
+    pcm.set(rawData);
+    const sampleRate = (loaded.config.audio && loaded.config.audio.sample_rate) || 22050;
+
+    self.postMessage(
+      {
+        type: "ok",
+        reqId: msg.reqId,
+        pcmBuffer: pcm.buffer,
+        sampleRate,
+      },
+      [pcm.buffer]
+    );
+  }
+}
+`;
+
+interface WorkerPendingRequest {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  resolve: (val: any) => void;
+  reject: (err: Error) => void;
+}
 
 /**
  * In-browser neural Text-to-Speech engine powered by Piper VITS + ONNX Runtime Web (WASM).
  * Caches both the WASM runtime and `.onnx` voice models in the browser's Origin Private
- * File System (OPFS) so the voice announcer works identically across all browsers and
- * 100% offline at the flying field.
+ * File System (OPFS) and runs WASM phonemization + ONNX inference in a dedicated background
+ * Web Worker so the main UI thread never blocks or drops animation frames.
  */
 export class PiperNeuralTts {
+  private worker: Worker | null = null;
+  private workerBroken = false;
+  private nextReqId = 1;
+  private readonly pendingWorkerReqs = new Map<number, WorkerPendingRequest>();
+
+  // Fallback main-thread state only used if Blob Worker creation is blocked by environment
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private createPiperPhonemize: ((opts: Record<string, unknown>) => Promise<any>) | null = null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -196,11 +358,12 @@ export class PiperNeuralTts {
   ): Promise<void> {
     const desc = getPiperVoice(uri);
     const clampedRate = Math.max(0.7, Math.min(1.8, rate || 1.0));
-    const cacheKey = `${desc.voiceId}:${clampedRate.toFixed(2)}:${text.trim()}`;
+    const normalizedText = prepareTextForPiper(text);
+    const cacheKey = `${desc.voiceId}:${clampedRate.toFixed(2)}:${normalizedText}`;
 
     let audioBuffer = this.audioCache.get(cacheKey);
     if (!audioBuffer) {
-      const { pcm, sampleRate } = await this.synthesizePcm(text, desc, clampedRate);
+      const { pcm, sampleRate } = await this.synthesizePcm(normalizedText, desc, clampedRate);
       audioBuffer = ctx.createBuffer(1, pcm.length, sampleRate);
       audioBuffer.getChannelData(0).set(pcm);
       this.setCache(cacheKey, audioBuffer);
@@ -237,16 +400,86 @@ export class PiperNeuralTts {
     this.audioCache.set(key, buf);
   }
 
+  private getOrCreateWorker(): Worker | null {
+    if (this.workerBroken || typeof Worker === "undefined") {
+      return null;
+    }
+    if (this.worker) {
+      return this.worker;
+    }
+    try {
+      const blob = new Blob([PIPER_WORKER_SOURCE], { type: "text/javascript" });
+      const url = URL.createObjectURL(blob);
+      const worker = new Worker(url);
+      URL.revokeObjectURL(url);
+
+      worker.onmessage = (e: MessageEvent) => {
+        const data = e.data;
+        if (!data || typeof data.reqId !== "number") return;
+        const pending = this.pendingWorkerReqs.get(data.reqId);
+        if (!pending) return;
+        this.pendingWorkerReqs.delete(data.reqId);
+        if (data.type === "error") {
+          pending.reject(new Error(data.error || "Piper worker error"));
+        } else {
+          pending.resolve(data);
+        }
+      };
+
+      worker.onerror = (err) => {
+        this.workerBroken = true;
+        this.worker = null;
+        for (const [, p] of this.pendingWorkerReqs) {
+          p.reject(new Error(err.message || "Piper worker crashed"));
+        }
+        this.pendingWorkerReqs.clear();
+      };
+
+      this.worker = worker;
+      return worker;
+    } catch {
+      this.workerBroken = true;
+      return null;
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  private callWorker(payload: Record<string, unknown>): Promise<any> {
+    const worker = this.getOrCreateWorker();
+    if (!worker) {
+      return Promise.reject(new Error("Worker unavailable"));
+    }
+    const reqId = this.nextReqId++;
+    return new Promise((resolve, reject) => {
+      this.pendingWorkerReqs.set(reqId, { resolve, reject });
+      worker.postMessage({ ...payload, reqId });
+    });
+  }
+
   private async synthesizePcm(
-    text: string,
+    normalizedText: string,
     desc: PiperVoiceDescriptor,
     rate: number
   ): Promise<{ pcm: Float32Array; sampleRate: number }> {
     const loaded = await this.ensureVoiceSession(desc);
+
+    if (this.worker && !this.workerBroken) {
+      const res = await this.callWorker({
+        type: "synthesize",
+        voiceId: desc.voiceId,
+        normalizedText,
+        rate,
+      });
+      return {
+        pcm: new Float32Array(res.pcmBuffer as ArrayBuffer),
+        sampleRate: Number(res.sampleRate) || 22050,
+      };
+    }
+
+    // Fallback main-thread path if Worker is unavailable
     const createPhonemize = this.createPiperPhonemize!;
     const ort = this.ort!;
 
-    const normalizedText = prepareTextForPiper(text);
     const inputJson = JSON.stringify([{ text: normalizedText }]);
     const phonemeIds: number[] = await new Promise((resolve, reject) => {
       createPhonemize({
@@ -280,10 +513,7 @@ export class PiperNeuralTts {
     });
 
     const noiseScale = loaded.config.inference.noise_scale;
-    // Scale speaking speed directly inside VITS so pitch stays natural
     const lengthScale = loaded.config.inference.length_scale / rate;
-    // Keep stochastic duration variance low (<= 0.35) so short diphthongs like "zero" / "oh"
-    // are never randomly compressed between adjacent digits.
     const noiseW = Math.min(loaded.config.inference.noise_w, 0.35);
 
     const feeds: Record<string, unknown> = {
@@ -322,6 +552,24 @@ export class PiperNeuralTts {
       this.getOrFetchBlob("ort-wasm-simd.wasm", ORT_WASM_SIMD_URL, "application/wasm"),
     ]);
 
+    const worker = this.getOrCreateWorker();
+    if (worker) {
+      try {
+        await this.callWorker({
+          type: "init-runtime",
+          piperJsBlob,
+          piperWasmBlob,
+          piperDataBlob,
+          ortJsBlob,
+          ortWasmBlob,
+        });
+        return;
+      } catch {
+        this.workerBroken = true;
+        this.worker = null;
+      }
+    }
+
     this.piperWasmBlobUrl = URL.createObjectURL(piperWasmBlob);
     this.piperDataBlobUrl = URL.createObjectURL(piperDataBlob);
     const ortWasmBlobUrl = URL.createObjectURL(ortWasmBlob);
@@ -345,7 +593,6 @@ export class PiperNeuralTts {
       if (ort.env) {
         ort.env.allowLocalModels = false;
         if (ort.env.wasm) {
-          // Single-threaded SIMD works on every origin without requiring COOP/COEP headers
           ort.env.wasm.numThreads = 1;
           ort.env.wasm.simd = true;
           ort.env.wasm.wasmPaths = {
@@ -407,6 +654,24 @@ export class PiperNeuralTts {
         }
       }
     );
+
+    if (this.worker && !this.workerBroken) {
+      await this.callWorker({
+        type: "load-voice",
+        voiceId: desc.voiceId,
+        config,
+        modelBlob,
+      });
+
+      this.downloadProgress.delete(desc.voiceId);
+      this.cachedVoices.add(desc.voiceId);
+      this.onStatusChange();
+
+      return {
+        voiceId: desc.voiceId,
+        config,
+      };
+    }
 
     const modelBytes = await modelBlob.arrayBuffer();
     const session = await this.ort.InferenceSession.create(modelBytes, {
