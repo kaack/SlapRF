@@ -916,7 +916,7 @@ export class TimerFlasher extends Component {
             ${this.busy ? "disabled" : ""}
           >
             <div class="flasher-pictorial-head">
-              <span class="flasher-pictorial-title">Connect to Router / Hotspot</span>
+              <span class="flasher-pictorial-title">Hub Connects to Router / Hotspot</span>
               <span class="badge ${!isHostApMode ? "tone-good" : ""}">Station Mode</span>
             </div>
             <div class="flasher-pictorial-art">
@@ -965,7 +965,7 @@ export class TimerFlasher extends Component {
                       aria-label="Broadcast hotspot network"
                     />`
                   : useCustom
-                    ? `<div class="flasher-pass-wrap">
+                    ? `<div class="flasher-pass-wrap has-two-actions">
                         <input
                           class="input flasher-pass-input"
                           type="text"
@@ -977,17 +977,30 @@ export class TimerFlasher extends Component {
                           autocomplete="off"
                           ${this.busy ? "disabled" : ""}
                         />
-                        <button
-                          type="button"
-                          class="flasher-pass-toggle"
-                          data-clear-ssid="1"
-                          aria-label="Return to scanned Wi-Fi network list"
-                          title="Return to scanned Wi-Fi network list"
-                        >
-                          ${icons.close(14)}
-                        </button>
+                        <div class="flasher-inline-actions">
+                          <button
+                            type="button"
+                            class="flasher-pass-toggle"
+                            data-clear-ssid="1"
+                            ${this.busy ? "disabled" : ""}
+                            aria-label="Return to scanned Wi-Fi network list"
+                            title="Return to scanned Wi-Fi network list"
+                          >
+                            ${icons.close(14)}
+                          </button>
+                          <button
+                            type="button"
+                            class="flasher-pass-toggle"
+                            data-refresh-wifi="1"
+                            ${this.busy || this.scanningWifi ? "disabled" : ""}
+                            aria-label="Rescan nearby 2.4 GHz Wi-Fi networks"
+                            title="Rescan nearby 2.4 GHz Wi-Fi networks"
+                          >
+                            ${icons.reset(14)}
+                          </button>
+                        </div>
                       </div>`
-                    : `<div class="flasher-ssid-row">
+                    : `<div class="flasher-pass-wrap has-two-actions">
                         <select
                           class="input flasher-ssid-select"
                           data-wifi-select="1"
@@ -996,7 +1009,7 @@ export class TimerFlasher extends Component {
                         >
                           ${
                             this.networks.length === 0
-                              ? `<option value="" disabled ${!this.wifiSSID ? "selected" : ""}>No nearby networks detected — click pencil to type SSID</option>`
+                              ? `<option value="" disabled ${!this.wifiSSID ? "selected" : ""}>No networks scanned</option>`
                               : ""
                           }
                           ${this.networks
@@ -1007,28 +1020,30 @@ export class TimerFlasher extends Component {
                                 }>${esc(this.formatNetworkOption(n))}</option>`
                             )
                             .join("")}
-                          <option value="${CUSTOM_SSID_VALUE}">Type another 2.4 GHz network / hotspot…</option>
+                          <option value="${CUSTOM_SSID_VALUE}">Type custom SSID…</option>
                         </select>
-                        <button
-                          type="button"
-                          class="btn btn-icon flasher-ssid-edit"
-                          data-edit-ssid="1"
-                          ${this.busy ? "disabled" : ""}
-                          aria-label="Type custom Wi-Fi / hotspot name"
-                          title="Type custom Wi-Fi / hotspot name"
-                        >
-                          ${icons.pencil(14)}
-                        </button>
-                        <button
-                          type="button"
-                          class="btn btn-icon flasher-ssid-edit"
-                          data-refresh-wifi="1"
-                          ${this.busy || this.scanningWifi ? "disabled" : ""}
-                          aria-label="Rescan nearby 2.4 GHz Wi-Fi networks"
-                          title="Rescan nearby 2.4 GHz Wi-Fi networks"
-                        >
-                          ${icons.reset(14)}
-                        </button>
+                        <div class="flasher-inline-actions">
+                          <button
+                            type="button"
+                            class="flasher-pass-toggle"
+                            data-edit-ssid="1"
+                            ${this.busy ? "disabled" : ""}
+                            aria-label="Type custom Wi-Fi / hotspot name"
+                            title="Type custom Wi-Fi / hotspot name"
+                          >
+                            ${icons.pencil(14)}
+                          </button>
+                          <button
+                            type="button"
+                            class="flasher-pass-toggle"
+                            data-refresh-wifi="1"
+                            ${this.busy || this.scanningWifi ? "disabled" : ""}
+                            aria-label="Rescan nearby 2.4 GHz Wi-Fi networks"
+                            title="Rescan nearby 2.4 GHz Wi-Fi networks"
+                          >
+                            ${icons.reset(14)}
+                          </button>
+                        </div>
                       </div>`
               }
             </div>

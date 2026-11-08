@@ -2024,13 +2024,13 @@ body.is-gate-dragging * {
    ========================================================================= */
 @media (max-width: 1260px) {
   .settings-section {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
     gap: 14px;
   }
 }
 @media (max-width: 1200px) {
   .layout-split {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 @media (max-width: 900px) {
@@ -2038,7 +2038,7 @@ body.is-gate-dragging * {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
   .form-grid {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
   .cmp-summary {
     flex-wrap: wrap;
@@ -2398,6 +2398,9 @@ body.is-gate-dragging * {
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
   align-items: end;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 .flasher-wifi-inputs.flasher-two-col {
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2405,7 +2408,7 @@ body.is-gate-dragging * {
 @media (max-width: 780px) {
   .flasher-wifi-inputs,
   .flasher-wifi-inputs.flasher-two-col {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 .flasher-role-card.is-compact {
@@ -2429,6 +2432,8 @@ body.is-gate-dragging * {
   display: flex;
   flex-direction: column;
   gap: 5px;
+  min-width: 0;
+  max-width: 100%;
 }
 .flasher-field-label {
   font-size: 11.5px;
@@ -2477,10 +2482,35 @@ body.is-gate-dragging * {
   position: relative;
   display: flex;
   align-items: center;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
 }
 .flasher-pass-input {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
   padding-right: 36px;
+}
+.flasher-pass-wrap.has-two-actions .flasher-pass-input,
+.flasher-pass-wrap.has-two-actions .custom-select-trigger,
+.flasher-pass-wrap.has-two-actions select.input {
+  padding-right: 60px;
+}
+.flasher-inline-actions {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  z-index: 3;
+}
+.flasher-inline-actions .flasher-pass-toggle {
+  position: static;
+  width: 24px;
+  height: 24px;
 }
 .flasher-pass-toggle {
   position: absolute;
@@ -2495,9 +2525,13 @@ body.is-gate-dragging * {
   color: var(--text-3);
   cursor: pointer;
 }
-.flasher-pass-toggle:hover {
+.flasher-pass-toggle:hover:not(:disabled) {
   background: var(--surface-3);
   color: var(--text);
+}
+.flasher-pass-toggle:disabled {
+  opacity: 0.45;
+  cursor: default;
 }
 .flasher-mobile-switch {
   display: none;
@@ -3069,6 +3103,9 @@ body.is-gate-dragging * {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface);
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .flasher-wifi-panel-head {
   display: flex;
@@ -3181,7 +3218,7 @@ body.is-gate-dragging * {
   }
   .flasher-pictorial-grid,
   .flasher-receipt {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 
