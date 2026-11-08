@@ -49,7 +49,7 @@ export class SectionStats extends Component {
       <header class="card-head">
         <div>
           <h2>Section stats</h2>
-          <p>Every lap this session, per section. <strong>Lost vs best</strong> is how much slower your typical pass is than your best one — the bigger it is, the more time there is to find.</p>
+          <p>Your best and typical time through each section, across every lap this session. <strong>Lost vs best</strong> is the gap between the two — the time you usually leave on the table there.</p>
         </div>
       </header>`;
 
