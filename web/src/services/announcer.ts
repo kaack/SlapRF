@@ -111,6 +111,7 @@ export class Announcer {
     this.store = store;
     this.prefs = loadPrefs();
     setWakeLockEnabled(this.prefs.keepScreenAwake !== false);
+    this.installMobileBackgroundKeepAlive();
     this.piper = new PiperNeuralTts(() => this.notify());
     store.onLapRecorded((lap) => this.onLap(lap));
     store.onStartGateDetected((ev) => this.onStartPass(ev));
@@ -440,23 +441,37 @@ export class Announcer {
       this.keepAwake = ctx;
     }
     void this.keepAwake.resume();
-
-    if (this.prefs.enabled) {
-      this.startBackgroundMediaSession();
-    }
+    this.startBackgroundMediaSession();
   }
 
   private sleepAudio(): void {
-    void this.keepAwake?.suspend();
-    if (this.bgMediaEl) {
-      this.bgMediaEl.pause();
+    if (!isMobileDevice()) {
+      void this.keepAwake?.suspend();
+      if (this.bgMediaEl) {
+        this.bgMediaEl.pause();
+      }
     }
   }
 
   /**
-   * Plays a looping 1-second near-silent WAV through an `<audio>` element while the announcer
-   * is enabled so iOS and Android keep Web Audio (`AudioContext`) and background timers active
-   * even if the user manually locks the phone screen.
+   * On mobile devices, always starts the background MediaSession + WebAudio keep-alive on the
+   * very first touch/click anywhere in the app so the timer, simulator, and telemetry keep
+   * running even if the phone is manually locked with the screen off.
+   */
+  private installMobileBackgroundKeepAlive(): void {
+    if (!isMobileDevice()) return;
+    const ensureRunning = () => {
+      this.wakeAudio();
+    };
+    window.addEventListener("pointerdown", ensureRunning, { passive: true });
+    window.addEventListener("touchstart", ensureRunning, { passive: true });
+    window.addEventListener("keydown", ensureRunning, { passive: true });
+  }
+
+  /**
+   * Plays a looping 1-second near-silent WAV through an `<audio>` element so iOS and Android
+   * keep Web Audio (`AudioContext`) and background timers active even if the user manually
+   * locks the phone screen.
    */
   private startBackgroundMediaSession(): void {
     try {
@@ -477,7 +492,7 @@ export class Announcer {
       if ("mediaSession" in navigator && navigator.mediaSession) {
         if (typeof MediaMetadata !== "undefined") {
           navigator.mediaSession.metadata = new MediaMetadata({
-            title: "SlapRF Voice Announcer",
+            title: "SlapRF Sector Timer",
             artist: "5.8 GHz Multi-Gate Sector Timer",
           });
         }
@@ -487,6 +502,14 @@ export class Announcer {
       // Ignore media session errors
     }
   }
+}
+
+function isMobileDevice(): boolean {
+  if (typeof window === "undefined") return false;
+  return (
+    window.matchMedia?.("(pointer: coarse)").matches ||
+    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent ?? "")
+  );
 }
 
 /** Builds a 1-second 8 kHz mono 16-bit PCM silent WAV Blob URL for mobile background keep-alive. */
