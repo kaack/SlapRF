@@ -78,7 +78,7 @@ func (p PilotSlot) ChannelLabel() string {
 // picking 4 random pilots from the Bay Area pool to be enabled by default each time a session starts.
 func DefaultPilotSlots() []PilotSlot {
 	pool := []string{
-		"Faerry", "MeWo", "Red5", "BigRamon",
+		"FAERRY", "MeWo", "Red5", "BigRamon",
 		"Morbid", "Kyosanym", "OneEye", "FreeLove",
 		"SwampDog", "Din",
 	}
