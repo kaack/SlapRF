@@ -1058,20 +1058,36 @@ body.is-gate-dragging * {
 }
 .segments {
   display: flex;
-  gap: 3px;
+  gap: 4px;
   flex: 1;
 }
 .seg {
-  height: 6px;
+  height: 7px;
   flex: 1;
-  border-radius: 2px;
+  border-radius: 999px;
   background: var(--surface-3);
 }
 .seg.is-done {
-  background: #3b4049;
+  background:
+    linear-gradient(
+      90deg,
+      var(--c1, var(--accent)) 0%,
+      var(--c1, var(--accent)) 50%,
+      var(--c2, var(--accent)) 50%,
+      var(--c2, var(--accent)) 100%
+    );
+  opacity: 0.32;
 }
 .seg.is-live {
-  background: var(--c, var(--accent));
+  background:
+    linear-gradient(
+      90deg,
+      var(--c1, var(--accent)) 0%,
+      var(--c1, var(--accent)) 50%,
+      var(--c2, var(--accent)) 50%,
+      var(--c2, var(--accent)) 100%
+    );
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.14);
 }
 .sector-tag {
   width: 22px;

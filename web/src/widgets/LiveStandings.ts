@@ -69,8 +69,14 @@ export class LiveStandings extends Component {
   private renderRow(s: PracticeStats, rank: number, sessionBest: number): string {
     const { pilot } = s;
     const sector = s.onTrack ? currentSectorIndex(this.store, pilot.slotIndex) : -1;
-    const segments = this.store.pucks
-      .map((p, i) => `<span class="seg ${i < sector ? "is-done" : i === sector ? "is-live" : ""}" style="--c:${gateColor(this.store, p.puckId)}"></span>`)
+    const pucks = this.store.pucks;
+    const segments = pucks
+      .map((p, i) => {
+        const nextPuck = pucks[(i + 1) % pucks.length];
+        const c1 = gateColor(this.store, p.puckId);
+        const c2 = nextPuck ? gateColor(this.store, nextPuck.puckId) : c1;
+        return `<span class="seg ${i < sector ? "is-done" : i === sector ? "is-live" : ""}" style="--c1:${c1};--c2:${c2}"></span>`;
+      })
       .join("");
     const statusTitle = s.onTrack ? "On track" : s.laps.length ? `Idle · ${fmtAgo(s.secondsSinceSeen)}` : "Not flown";
     const gap = s.bestLap > 0 && sessionBest > 0 ? (s.bestLap === sessionBest ? `<span class="tone-accent">fastest</span>` : fmtDelta(s.bestLap - sessionBest)) : "";
