@@ -311,7 +311,14 @@ export class SimView extends Component {
       }
       case "pilot-cmd": {
         const slotIndex = Number(btn.dataset.slot);
-        const cmd = btn.dataset.cmd as "crash" | "recover" | "pit" | "pause" | "launch" | "resume";
+        const cmd = btn.dataset.cmd as
+          | "crash"
+          | "recover"
+          | "walk-recover"
+          | "pit"
+          | "pause"
+          | "launch"
+          | "resume";
         if (Number.isFinite(slotIndex) && cmd) {
           void this.api.simPilotAction(slotIndex, cmd);
         }
@@ -540,14 +547,14 @@ export class SimView extends Component {
               }
             </span>
             <div class="sim-course-actions">
-              <button class="btn btn-sm ${walkerActive ? "btn-danger-active" : "btn-ghost"}" data-action="toggle-walker">
-                ${icons.pilot(14)}
-                <span data-walker-btn-label>${
-                  walkerActive
-                    ? `Clear track (${Math.ceil(walkerSec)}s)`
-                    : "Walk on track (recover quads)"
-                }</span>
-              </button>
+              ${
+                walkerActive
+                  ? `<button class="btn btn-sm btn-danger-active" data-action="toggle-walker" title="End track walk recovery early and resume racing">
+                      ${icons.pilot(14)}
+                      <span data-walker-btn-label>Clear track (${Math.ceil(walkerSec)}s)</span>
+                    </button>`
+                  : ""
+              }
               <button class="btn btn-sm btn-ghost" data-action="pack-burst" title="Bunch airborne pilots 150 ms apart approaching Gate #1">
                 ${icons.zap(14)}<span>Pack burst</span>
               </button>
@@ -585,10 +592,8 @@ export class SimView extends Component {
     } else {
       // Fast in-place update of countdowns and pit bench percentages without touching DOM structure
       const walkerLabel = this.el.querySelector<HTMLElement>("[data-walker-btn-label]");
-      if (walkerLabel) {
-        walkerLabel.textContent = walkerActive
-          ? `Clear track (${Math.ceil(walkerSec)}s)`
-          : "Walk on track (recover quads)";
+      if (walkerLabel && walkerActive) {
+        walkerLabel.textContent = `Clear track (${Math.ceil(walkerSec)}s)`;
       }
       const caption = this.el.querySelector<HTMLElement>("[data-course-caption]");
       if (caption && walkerActive) {
@@ -672,14 +677,17 @@ export class SimView extends Component {
               <div class="sim-pilot-controls">
                 ${
                   isCrashed
-                    ? `<button class="btn btn-sm btn-armed" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="recover" title="Flip quad over with turtle mode or recover and resume flying">
-                        ${icons.play(13)}<span>Recover / Turtle</span>
+                    ? `<button class="btn btn-sm btn-armed" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="recover" title="Flip quad over in place with turtle mode and resume flying">
+                        ${icons.play(13)}<span>Turtle recover</span>
+                      </button>
+                      <button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="walk-recover" title="Walk onto the track to retrieve the crashed quad — other drones will either land at the bench or fly high until clear">
+                        ${icons.pilot(13)}<span>Walk recover</span>
                       </button>`
                     : `<button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="crash" ${isParked ? "disabled" : ""} title="Force a mid-track crash near the closest gate (VTX stays on briefly)">
                         ${icons.zapOff(13)}<span>Force crash</span>
                       </button>`
                 }
-                <button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pit" ${p.status === "PIT_SWAP" ? "disabled" : ""} title="Bring pilot into the pit bench to swap to a fresh 6S battery pack (~20s)">
+                <button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pit" ${p.status === "PIT_SWAP" || isCrashed ? "disabled" : ""} title="Bring pilot into the pit bench to swap to a fresh 6S battery pack (30–60s)">
                   ${icons.reset(13)}<span>Swap battery</span>
                 </button>
                 ${
@@ -687,9 +695,11 @@ export class SimView extends Component {
                     ? `<button class="btn btn-sm btn-armed" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" title="Launch immediately from the starting line with a fresh 100% pack">
                         ${icons.play(13)}<span>Launch now</span>
                       </button>`
-                    : `<button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pause" title="Land and pause flight on the pit bench with VTX off">
+                    : !isCrashed
+                    ? `<button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pause" title="Land and pause flight on the pit bench with VTX off">
                         ${icons.pause(13)}<span>Pause flight</span>
                       </button>`
+                    : ""
                 }
               </div>
             </div>`;

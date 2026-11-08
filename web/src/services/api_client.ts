@@ -91,7 +91,7 @@ export class ApiClient {
 
   public async simPilotAction(
     slotIndex: number,
-    action: "crash" | "recover" | "pit" | "pause" | "launch" | "resume"
+    action: "crash" | "recover" | "walk-recover" | "pit" | "pause" | "launch" | "resume"
   ): Promise<void> {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("POST", "/api/sim/pilot-action", { slotIndex, action })

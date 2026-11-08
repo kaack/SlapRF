@@ -239,8 +239,12 @@ func (s *TrackSimulator) SetTrackWalker(active bool) {
 }
 
 // TriggerPilotAction executes an interactive pilot simulation command from the Sim tab:
-// "crash", "recover", "pit", "launch", "pause", or "resume".
+// "crash", "recover", "walk-recover", "pit", "launch", "pause", or "resume".
 func (s *TrackSimulator) TriggerPilotAction(slotIndex int, action string) {
+	if action == "walk-recover" {
+		s.SetTrackWalker(true)
+		return
+	}
 	var clearProgress bool
 	s.mu.Lock()
 	_, pucks, _, _, _ := s.engine.StateSnapshot()
