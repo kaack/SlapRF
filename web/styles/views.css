@@ -43,20 +43,28 @@
   min-width: min-content;
 }
 .gate-line-item {
+  --pad-x: 12px;
+  --edge-pad: 52px;
+  --center-shift: 0px;
   position: relative;
   flex: 1 1 0;
   min-width: 118px;
   display: flex;
   flex-direction: column;
   align-items: center;
-  padding: 0 12px;
+  padding: 0 var(--pad-x);
   user-select: none;
 }
 .gate-line-item:first-child {
-  padding-left: 52px;
+  padding-left: var(--edge-pad);
+  --center-shift: calc((var(--edge-pad) - var(--pad-x)) / 2);
 }
 .gate-line-item:last-child {
-  padding-right: 52px;
+  padding-right: var(--edge-pad);
+  --center-shift: calc((var(--pad-x) - var(--edge-pad)) / 2);
+}
+.gate-line-item:first-child:last-child {
+  --center-shift: 0px;
 }
 /* Horizontal track segments ("---O---") stopping at the circle's outer edge */
 .gate-line-track-seg {
@@ -69,14 +77,14 @@
 }
 .gate-line-track-seg.is-before {
   left: 0;
-  right: calc(50% + (var(--circle-size) / 2));
+  right: calc(50% - var(--center-shift) + (var(--circle-size) / 2));
 }
 .gate-line-item:first-child .gate-line-track-seg.is-before {
   left: 0;
   background: linear-gradient(90deg, transparent 0%, var(--border-strong) 35%);
 }
 .gate-line-track-seg.is-after {
-  left: calc(50% + (var(--circle-size) / 2));
+  left: calc(50% + var(--center-shift) + (var(--circle-size) / 2));
   right: 0;
 }
 .gate-line-item:last-child .gate-line-track-seg.is-after {
@@ -337,14 +345,9 @@ body.is-gate-dragging * {
   .gate-line-item {
     --circle-size: 46px;
     --track-y: 51px;
+    --pad-x: 8px;
+    --edge-pad: 42px;
     min-width: 84px;
-    padding: 0 8px;
-  }
-  .gate-line-item:first-child {
-    padding-left: 42px;
-  }
-  .gate-line-item:last-child {
-    padding-right: 42px;
   }
   .gate-node-puck-code {
     font-size: 13.5px;
@@ -367,14 +370,9 @@ body.is-gate-dragging * {
   .gate-line-item {
     --circle-size: 40px;
     --track-y: 48px;
+    --pad-x: 5px;
+    --edge-pad: 34px;
     min-width: 66px;
-    padding: 0 5px;
-  }
-  .gate-line-item:first-child {
-    padding-left: 34px;
-  }
-  .gate-line-item:last-child {
-    padding-right: 34px;
   }
   .gate-node-puck-code {
     font-size: 12.5px;
