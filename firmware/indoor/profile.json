@@ -1,0 +1,10 @@
+{
+  "id": "indoor",
+  "code": 3,
+  "name": "Indoor · Gym or warehouse",
+  "track": "Indoor",
+  "mount": "Any mount",
+  "link": "1 Mbps · +8 dBm",
+  "sweepHz": 100,
+  "summary": "Short range and reflective walls: low +8 dBm TX, 100 Hz sweeps, and a 3-sweep median filter to reject multipath fades."
+}

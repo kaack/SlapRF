@@ -42,25 +42,21 @@ const (
 	maxLabelLen = 24
 )
 
-// SLAPRF02 config block layout (160 bytes, little-endian):
+// SLAPRF02 config block layout (160 bytes, little-endian). The radio / sweep tuning is compiled
+// into each profile's own firmware (firmware/<profile>/main.c); the block only carries what is
+// per-board or per-event:
 //
 //	[0..7]     "SLAPRF02"
 //	[8..10]    firmware version major / minor / patch
 //	[11]       role (1 = Hub, 2 = Spoke)
-//	[12]       profile code (see Profiles)
+//	[12]       profile code (see firmware/<profile>/profile.json)
 //	[13]       wifi_mode (0 = host "SlapRF" AP, 1 = join wifi_ssid) — Hub only
 //	[14..17]   fingerprint (uint32) — stable per-board identity, never 0
 //	[18..33]   slot_freqs_mhz[8] (uint16)
-//	[34]       sweep_hz
-//	[35]       window_samples
-//	[36]       tx_every_sweeps
-//	[37]       link_rate (0 = 1 Mbps, 1 = LR 500 kbps)
-//	[38]       tx_power_qdbm
-//	[39]       rssi_filter (0 = none, 1 = median of 3)
-//	[40..72]   wifi_ssid (33, NUL-terminated)
-//	[73..112]  wifi_pass (40, NUL-terminated)
-//	[113..136] timer_label (24, NUL-padded)
-//	[137..158] reserved (0)
+//	[34..66]   wifi_ssid (33, NUL-terminated)
+//	[67..106]  wifi_pass (40, NUL-terminated)
+//	[107..130] timer_label (24, NUL-padded)
+//	[131..158] reserved (0)
 //	[159]      XOR crc8 over [0..158]
 const (
 	offVersion     = 8
@@ -69,15 +65,9 @@ const (
 	offWifiMode    = 13
 	offFingerprint = 14
 	offFreqs       = 18
-	offSweepHz     = 34
-	offWindow      = 35
-	offTxEvery     = 36
-	offLinkRate    = 37
-	offTxPower     = 38
-	offRSSIFilter  = 39
-	offSSID        = 40
-	offPass        = 73
-	offLabel       = 113
+	offSSID        = 34
+	offPass        = 67
+	offLabel       = 107
 	offCRC         = configLen - 1
 )
 
@@ -212,12 +202,6 @@ func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 	for i := 0; i < domain.MaxPilotSlots; i++ {
 		binary.LittleEndian.PutUint16(block[offFreqs+i*2:offFreqs+i*2+2], cfg.SlotFreqsMHz[i])
 	}
-	block[offSweepHz] = profile.SweepHz
-	block[offWindow] = profile.WindowSamples
-	block[offTxEvery] = profile.TxEverySweeps
-	block[offLinkRate] = profile.LinkRate
-	block[offTxPower] = profile.TxPowerQdBm
-	block[offRSSIFilter] = profile.RSSIFilter
 	copy(block[offSSID:offSSID+33], []byte(cfg.WifiSSID))
 	copy(block[offPass:offPass+40], []byte(cfg.WifiPass))
 	copy(block[offLabel:offLabel+maxLabelLen], []byte(cfg.PuckLabel))

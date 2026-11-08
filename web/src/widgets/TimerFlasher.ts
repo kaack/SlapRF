@@ -1164,7 +1164,7 @@ export class TimerFlasher extends Component {
       ? this.hubWifiMode === "host"
         ? `Hub Hotspot "SlapRF" (${this.wifiPass ? "WPA2" : "Open AP"})`
         : `Join "${this.wifiSSID.trim() || "(unset)"}" (Station Mode)`
-      : `2.4 GHz ESP-NOW ${profile.linkRate === 1 ? "Long Range 500 kbps" : "1 Mbps"} → Hub`;
+      : `ESP-NOW ${profile.link} → Hub`;
 
     const pct = this.progress ? this.progress.percent : this.lastSuccessMsg ? 100 : 0;
     const statusText = this.progress

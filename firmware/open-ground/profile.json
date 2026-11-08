@@ -1,0 +1,10 @@
+{
+  "id": "open-ground",
+  "code": 1,
+  "name": "Open field · Ground mount",
+  "track": "Open field",
+  "mount": "On the grass at the gate base",
+  "link": "Long Range 500 kbps · +20 dBm",
+  "sweepHz": 50,
+  "summary": "Long Range 500 kbps at +20 dBm with 2× overlapping 4-sweep windows to ride out wet-grass absorption and 2.4 GHz ELRS bursts."
+}

@@ -77,89 +77,28 @@ const SLIP_ESC_ESC = 0xdd;
 const FLASH_BLOCK_SIZE = 1024;
 const FLASH_OFFSET = 0x0000;
 
-/** One firmware design — mirrored from `internal/firmware/profiles.go`. */
+/**
+ * One firmware design. Each lives in its own directory (`firmware/<id>/main.c`) tuned for a track
+ * type and timer placement; `firmware/<id>/profile.json` is injected here at bundle time.
+ */
 export interface FirmwareProfileInfo {
   id: string;
   code: number;
   name: string;
   track: string;
   mount: string;
-  summary: string;
+  link: string;
   sweepHz: number;
-  windowSamples: number;
-  txEverySweeps: number;
-  linkRate: 0 | 1; // 0 = 1 Mbps, 1 = Long Range 500 kbps
-  txPowerQdbm: number;
-  rssiFilter: 0 | 1; // 1 = median of 3 sweeps
+  summary: string;
 }
 
 /** Current firmware build. Every profile is rebuilt at this version on each release. */
 export const LATEST_FIRMWARE_VERSION = "v0.1.4";
 
-export const FIRMWARE_PROFILES: FirmwareProfileInfo[] = [
-  {
-    id: "open-ground",
-    code: 1,
-    name: "Open field · Ground mount",
-    track: "Open field",
-    mount: "On the grass at the gate base",
-    summary:
-      "Long Range 500 kbps at +20 dBm with 2× overlapping 4-sweep windows to ride out wet-grass absorption and 2.4 GHz ELRS bursts.",
-    sweepHz: 50,
-    windowSamples: 4,
-    txEverySweeps: 2,
-    linkRate: 1,
-    txPowerQdbm: 80,
-    rssiFilter: 0,
-  },
-  {
-    id: "open-elevated",
-    code: 2,
-    name: "Open field · Gate-top mount",
-    track: "Open field",
-    mount: "On top of the gate or a pole",
-    summary:
-      "Clear line of sight, so it trades link margin for speed: 100 Hz sweeps for finer split timing over a 1 Mbps link.",
-    sweepHz: 100,
-    windowSamples: 2,
-    txEverySweeps: 1,
-    linkRate: 0,
-    txPowerQdbm: 56,
-    rssiFilter: 0,
-  },
-  {
-    id: "indoor",
-    code: 3,
-    name: "Indoor · Gym or warehouse",
-    track: "Indoor",
-    mount: "Any mount",
-    summary:
-      "Short range and reflective walls: low +8 dBm TX, 100 Hz sweeps, and a 3-sweep median filter to reject multipath fades.",
-    sweepHz: 100,
-    windowSamples: 2,
-    txEverySweeps: 1,
-    linkRate: 0,
-    txPowerQdbm: 32,
-    rssiFilter: 1,
-  },
-  {
-    id: "obstructed",
-    code: 4,
-    name: "Technical · Trees & obstacles",
-    track: "Woods, bando, or technical",
-    mount: "Behind or under obstacles",
-    summary:
-      "Hub link is often blocked: Long Range +20 dBm with 3× overlapping 6-sweep windows so a 100 ms dropout loses nothing.",
-    sweepHz: 50,
-    windowSamples: 6,
-    txEverySweeps: 2,
-    linkRate: 1,
-    txPowerQdbm: 80,
-    rssiFilter: 0,
-  },
-];
+declare const __SLAPRF_FIRMWARE_PROFILES__: FirmwareProfileInfo[];
 
-export const DEFAULT_FIRMWARE_PROFILE = FIRMWARE_PROFILES[0].id;
+export const FIRMWARE_PROFILES: FirmwareProfileInfo[] = __SLAPRF_FIRMWARE_PROFILES__;
+export const DEFAULT_FIRMWARE_PROFILE = "open-ground";
 
 export function firmwareProfile(id: string | undefined): FirmwareProfileInfo {
   return FIRMWARE_PROFILES.find((p) => p.id === id) ?? FIRMWARE_PROFILES[0];
@@ -188,15 +127,10 @@ const OFF_PROFILE = 12;
 const OFF_WIFI_MODE = 13;
 const OFF_FINGERPRINT = 14;
 const OFF_FREQS = 18;
-const OFF_SWEEP_HZ = 34;
-const OFF_WINDOW = 35;
-const OFF_TX_EVERY = 36;
-const OFF_LINK_RATE = 37;
-const OFF_TX_POWER = 38;
-const OFF_RSSI_FILTER = 39;
-const OFF_SSID = 40;
-const OFF_PASS = 73;
-const OFF_LABEL = 113;
+const OFF_SSID = 34;
+const OFF_PASS = 67;
+const OFF_LABEL = 107;
+
 const OFF_CRC = CONFIG_LEN - 1;
 const IMAGE_SIZE = 64 * 1024;
 
@@ -310,12 +244,6 @@ export async function buildOrPatchFirmwareBin(opts: {
   block[OFF_WIFI_MODE] = cleanSSID ? 1 : 0;
   bv.setUint32(OFF_FINGERPRINT, parseInt(fingerprint, 16) >>> 0, true);
   for (let i = 0; i < 8; i++) bv.setUint16(OFF_FREQS + i * 2, freqs[i], true);
-  block[OFF_SWEEP_HZ] = profile.sweepHz;
-  block[OFF_WINDOW] = profile.windowSamples;
-  block[OFF_TX_EVERY] = profile.txEverySweeps;
-  block[OFF_LINK_RATE] = profile.linkRate;
-  block[OFF_TX_POWER] = profile.txPowerQdbm;
-  block[OFF_RSSI_FILTER] = profile.rssiFilter;
   block.set(enc.encode(cleanSSID).subarray(0, 32), OFF_SSID);
   block.set(enc.encode(cleanPass).subarray(0, 39), OFF_PASS);
   block.set(enc.encode(cleanLabel).subarray(0, 24), OFF_LABEL);

@@ -1,6 +1,11 @@
 package firmware
 
 import (
+	"os"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
 	"testing"
 
 	"slaprf/internal/domain"
@@ -66,7 +71,15 @@ func TestBuildSpokeGeneratesFingerprintAndDropsWiFi(t *testing.T) {
 }
 
 func TestEveryProfileRoundTrips(t *testing.T) {
+	if len(Profiles) == 0 {
+		t.Fatal("no firmware profiles found under firmware/")
+	}
+	seen := map[uint8]string{}
 	for _, p := range Profiles {
+		if other, dup := seen[p.Code]; dup {
+			t.Fatalf("profiles %s and %s share code %d", p.ID, other, p.Code)
+		}
+		seen[p.Code] = p.ID
 		built, err := BuildXIAOC5Image(TimerConfig{Role: RoleSpokeTimer, Profile: p.ID})
 		if err != nil {
 			t.Fatalf("%s: %v", p.ID, err)
@@ -75,8 +88,40 @@ func TestEveryProfileRoundTrips(t *testing.T) {
 		if err != nil || parsed.Profile != p.ID {
 			t.Fatalf("%s: round trip failed (%v, %+v)", p.ID, err, parsed)
 		}
-		if p.WindowSamples == 0 || p.WindowSamples > MaxWindowSamples || p.TxEverySweeps == 0 {
-			t.Fatalf("%s: invalid window settings", p.ID)
+	}
+	if ProfileByID("").ID != DefaultProfileID {
+		t.Fatalf("default profile %s missing", DefaultProfileID)
+	}
+}
+
+// Each firmware/<profile>/main.c must declare the same code and sweep rate as its manifest,
+// and keep its window within what the laptop ingest accepts.
+func TestProfileSourcesMatchManifests(t *testing.T) {
+	define := func(src, name string) int {
+		m := regexp.MustCompile(`(?m)^#define\s+` + name + `\s+(\d+)`).FindStringSubmatch(src)
+		if m == nil {
+			return -1
+		}
+		n, _ := strconv.Atoi(m[1])
+		return n
+	}
+	for _, p := range Profiles {
+		raw, err := os.ReadFile(filepath.Join("..", "..", "firmware", p.ID, "main.c"))
+		if err != nil {
+			t.Fatalf("%s: %v", p.ID, err)
+		}
+		src := string(raw)
+		if got := define(src, "SLAPRF_PROFILE_CODE"); got != int(p.Code) {
+			t.Errorf("%s: main.c SLAPRF_PROFILE_CODE=%d, manifest code=%d", p.ID, got, p.Code)
+		}
+		if got := define(src, "SWEEP_HZ"); got != int(p.SweepHz) {
+			t.Errorf("%s: main.c SWEEP_HZ=%d, manifest sweepHz=%d", p.ID, got, p.SweepHz)
+		}
+		if w := define(src, "WINDOW_SAMPLES"); w < 1 || w > MaxWindowSamples {
+			t.Errorf("%s: WINDOW_SAMPLES=%d outside 1..%d", p.ID, w, MaxWindowSamples)
+		}
+		if !strings.Contains(src, `"SLAPRF02"`) && !strings.Contains(src, `'S', 'L', 'A', 'P', 'R', 'F', '0', '2'`) {
+			t.Errorf("%s: main.c does not use the SLAPRF02 config block", p.ID)
 		}
 	}
 }

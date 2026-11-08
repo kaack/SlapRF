@@ -3,6 +3,8 @@
 package api
 
 import (
+	"slaprf/internal/firmware"
+
 	"fmt"
 	"log"
 	"net/http"
@@ -32,15 +34,17 @@ func BundleTypeScript(webRootDir string) ([]byte, error) {
 	}
 	entryPoint := filepath.Join(absRoot, "src", "main.ts")
 	result := api.Build(api.BuildOptions{
-		AbsWorkingDir: absRoot,
-		EntryPoints:   []string{entryPoint},
-		Bundle:        true,
-		Write:         false,
+		AbsWorkingDir:     absRoot,
+		EntryPoints:       []string{entryPoint},
+		Bundle:            true,
+		Write:             false,
 		Target:            api.ES2022,
 		Format:            api.FormatIIFE,
 		MinifyWhitespace:  true,
 		MinifyIdentifiers: false,
 		MinifySyntax:      true,
+		// Firmware profiles come from firmware/<profile>/profile.json (single source of truth).
+		Define: map[string]string{"__SLAPRF_FIRMWARE_PROFILES__": firmware.ProfilesJSON()},
 	})
 	if len(result.Errors) > 0 {
 		return nil, fmt.Errorf("%s", result.Errors[0].Text)

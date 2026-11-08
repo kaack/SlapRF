@@ -1,0 +1,10 @@
+{
+  "id": "obstructed",
+  "code": 4,
+  "name": "Technical · Trees \u0026 obstacles",
+  "track": "Woods, bando, or technical",
+  "mount": "Behind or under obstacles",
+  "link": "Long Range 500 kbps · +20 dBm",
+  "sweepHz": 50,
+  "summary": "Hub link is often blocked: Long Range +20 dBm with 3× overlapping 6-sweep windows so a 100 ms dropout loses nothing."
+}
