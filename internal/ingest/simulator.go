@@ -48,7 +48,7 @@ func NewTrackSimulator(engine *tracker.Engine) *TrackSimulator {
 }
 
 func (s *TrackSimulator) resetPilotsLocked() {
-	// Give each of the 8 pilot slots a distinct pace and a specific sector bottleneck
+	// Give each pilot slot a distinct pace and a specific sector bottleneck
 	s.pilotStates = []simPilotState{
 		{slotIndex: 1, trackPosMeters: 350.0, baseSpeedMps: 29.5, weakSectorIdx: 2, weaknessPenalty: 0.77}, // Fast, loses time in Sector 3 (Split-S)
 		{slotIndex: 2, trackPosMeters: 325.0, baseSpeedMps: 28.4, weakSectorIdx: 3, weaknessPenalty: 0.75}, // Loses time in Sector 4 (Corkscrew)
@@ -58,6 +58,14 @@ func (s *TrackSimulator) resetPilotsLocked() {
 		{slotIndex: 6, trackPosMeters: 215.0, baseSpeedMps: 27.1, weakSectorIdx: 3, weaknessPenalty: 0.78},
 		{slotIndex: 7, trackPosMeters: 190.0, baseSpeedMps: 26.4, weakSectorIdx: 1, weaknessPenalty: 0.79},
 		{slotIndex: 8, trackPosMeters: 165.0, baseSpeedMps: 25.9, weakSectorIdx: 2, weaknessPenalty: 0.76},
+		{slotIndex: 9, trackPosMeters: 140.0, baseSpeedMps: 27.8, weakSectorIdx: 3, weaknessPenalty: 0.77},
+		{slotIndex: 10, trackPosMeters: 115.0, baseSpeedMps: 26.9, weakSectorIdx: 1, weaknessPenalty: 0.78},
+		{slotIndex: 11, trackPosMeters: 90.0, baseSpeedMps: 27.3, weakSectorIdx: 0, weaknessPenalty: 0.80},
+		{slotIndex: 12, trackPosMeters: 65.0, baseSpeedMps: 26.2, weakSectorIdx: 2, weaknessPenalty: 0.75},
+		{slotIndex: 13, trackPosMeters: 50.0, baseSpeedMps: 27.0, weakSectorIdx: 3, weaknessPenalty: 0.77},
+		{slotIndex: 14, trackPosMeters: 35.0, baseSpeedMps: 26.5, weakSectorIdx: 1, weaknessPenalty: 0.78},
+		{slotIndex: 15, trackPosMeters: 20.0, baseSpeedMps: 26.1, weakSectorIdx: 2, weaknessPenalty: 0.76},
+		{slotIndex: 16, trackPosMeters: 5.0, baseSpeedMps: 25.8, weakSectorIdx: 0, weaknessPenalty: 0.79},
 	}
 }
 
@@ -147,8 +155,8 @@ func (s *TrackSimulator) step(dtSec float64) {
 	if numPucks == 0 {
 		frames := make([]domain.PuckTelemetryFrame, 0, len(detected))
 		for _, d := range detected {
-			var rssi [domain.MaxPilotSlots]float32
-			for slotIdx := 0; slotIdx < domain.MaxPilotSlots; slotIdx++ {
+			var rssi [domain.MaxPilotPoolSize]float32
+			for slotIdx := 0; slotIdx < len(pilots) && slotIdx < domain.MaxPilotPoolSize; slotIdx++ {
 				rssi[slotIdx] = d.NoiseFloorDbm + float32((s.rng.Float64()-0.5)*2.0)
 			}
 			frames = append(frames, domain.PuckTelemetryFrame{
@@ -215,9 +223,9 @@ func (s *TrackSimulator) step(dtSec float64) {
 		}
 		assignedSet[puck.AssignedPuckID] = true
 		gatePosMeters := float64(pIdx) * sectorLen
-		var rssi [domain.MaxPilotSlots]float32
+		var rssi [domain.MaxPilotPoolSize]float32
 
-		for slotIdx := 0; slotIdx < domain.MaxPilotSlots; slotIdx++ {
+		for slotIdx := 0; slotIdx < len(pilots) && slotIdx < domain.MaxPilotPoolSize && slotIdx < len(s.pilotStates); slotIdx++ {
 			noise := float32((s.rng.Float64() - 0.5) * 2.2)
 			if !pilots[slotIdx].Enabled {
 				rssi[slotIdx] = puck.NoiseFloorDbm + noise
@@ -260,8 +268,8 @@ func (s *TrackSimulator) step(dtSec float64) {
 		if assignedSet[d.PuckID] {
 			continue
 		}
-		var rssi [domain.MaxPilotSlots]float32
-		for slotIdx := 0; slotIdx < domain.MaxPilotSlots; slotIdx++ {
+		var rssi [domain.MaxPilotPoolSize]float32
+		for slotIdx := 0; slotIdx < len(pilots) && slotIdx < domain.MaxPilotPoolSize; slotIdx++ {
 			rssi[slotIdx] = d.NoiseFloorDbm + float32((s.rng.Float64()-0.5)*2.0)
 		}
 		frames = append(frames, domain.PuckTelemetryFrame{

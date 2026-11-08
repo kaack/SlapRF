@@ -2,12 +2,12 @@ package domain
 
 // PuckTelemetryFrame is the continuous 50 Hz / 100 Hz telemetry frame emitted by each XIAO ESP32-C5 gate puck.
 type PuckTelemetryFrame struct {
-	PuckID        uint8                  `json:"puckId"`        // Hardware Puck ID (1..16)
-	SeqNum        uint32                 `json:"seqNum"`        // Monotonic frame counter
-	TimestampUs   uint64                 `json:"timestampUs"`   // Synchronized microsecond RTC timestamp
-	RSSI          [MaxPilotSlots]float32 `json:"rssi"`          // Smoothed/raw 5.8 GHz RSSI (dBm) for Slots 1..8
-	BatteryMv     uint16                 `json:"batteryMv"`     // 1S LiPo voltage in mV
-	NoiseFloorDbm float32                `json:"noiseFloorDbm"` // Ambient 5.8 GHz noise floor
+	PuckID        uint8                      `json:"puckId"`        // Hardware Puck ID (1..16)
+	SeqNum        uint32                     `json:"seqNum"`        // Monotonic frame counter
+	TimestampUs   uint64                     `json:"timestampUs"`   // Synchronized microsecond RTC timestamp
+	RSSI          [MaxPilotPoolSize]float32  `json:"rssi"`          // Smoothed/raw 5.8 GHz RSSI (dBm) for pilot slots
+	BatteryMv     uint16                     `json:"batteryMv"`     // 1S LiPo voltage in mV
+	NoiseFloorDbm float32                    `json:"noiseFloorDbm"` // Ambient 5.8 GHz noise floor
 }
 
 // GateCrossingEvent is emitted by the DSP PeakDetector when a pilot's 5.8 GHz RSSI curve

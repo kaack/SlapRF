@@ -162,7 +162,25 @@ export class HttpRealTransport implements ApiTransport {
     if (url === "/api/pilots/update" && body) {
       const upd = body as PilotSlot;
       const idx = this.fallbackPilots.findIndex((p) => p.slotIndex === upd.slotIndex);
-      if (idx >= 0) this.fallbackPilots[idx] = { ...this.fallbackPilots[idx], ...upd };
+      if (idx >= 0) {
+        const next = { ...this.fallbackPilots[idx], ...upd };
+        if (next.enabled) {
+          const otherEnabled = this.fallbackPilots.filter((p, i) => i !== idx && p.enabled);
+          if (otherEnabled.length >= 8) {
+            next.enabled = false;
+          } else if (otherEnabled.some((p) => p.channel === next.channel)) {
+            const used = new Set(otherEnabled.map((p) => p.channel));
+            for (let ch = 1; ch <= 8; ch++) {
+              if (!used.has(ch)) {
+                next.channel = ch;
+                next.frequencyMhz = RACEBAND_MHZ[ch - 1];
+                break;
+              }
+            }
+          }
+        }
+        this.fallbackPilots[idx] = next;
+      }
     } else if (url === "/api/thresholds" && Array.isArray(body)) {
       for (const u of body as GateThresholdUpdate[]) {
         const puck = this.fallbackPucks.find((p) => p.puckId === u.puckId);

@@ -58,7 +58,7 @@ func ParseBinaryFrame(raw []byte, nowUs uint64) (*domain.PuckTelemetryFrame, boo
 	battMv := binary.LittleEndian.Uint16(raw[4:6])
 	noiseFloor := float32(int8(raw[6]))
 
-	var rssi [domain.MaxPilotSlots]float32
+	var rssi [domain.MaxPilotPoolSize]float32
 	for i := 0; i < domain.MaxPilotSlots; i++ {
 		rssi[i] = float32(int8(raw[7+i]))
 	}

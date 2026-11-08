@@ -2,8 +2,11 @@ package domain
 
 import "fmt"
 
-// MaxPilotSlots matches the 8-pilot standard of MultiGP LiveTime and ImmersionRC LapRF 8-Way.
+// MaxPilotSlots matches the 8-pilot active heat limit of MultiGP LiveTime and ImmersionRC LapRF 8-Way.
 const MaxPilotSlots = 8
+
+// MaxPilotPoolSize is the maximum number of pilot rows supported in the roster (at most MaxPilotSlots enabled at once).
+const MaxPilotPoolSize = 16
 
 // Band represents a 5.8 GHz FPV video frequency band.
 type Band uint8
@@ -28,8 +31,8 @@ var RacebandFrequenciesMHz = [MaxPilotSlots]uint16{
 	5917, // R8
 }
 
-// DefaultPilotColors provides distinct UI colors for up to 8 pilots.
-var DefaultPilotColors = [MaxPilotSlots]string{
+// DefaultPilotColors provides distinct UI colors for pilots in the roster.
+var DefaultPilotColors = [MaxPilotPoolSize]string{
 	"#ef4444", // Slot 1: Red
 	"#3b82f6", // Slot 2: Blue
 	"#10b981", // Slot 3: Emerald
@@ -38,6 +41,14 @@ var DefaultPilotColors = [MaxPilotSlots]string{
 	"#06b6d4", // Slot 6: Cyan
 	"#ec4899", // Slot 7: Pink
 	"#84cc16", // Slot 8: Lime
+	"#f97316", // Slot 9: Orange
+	"#14b8a6", // Slot 10: Teal
+	"#6366f1", // Slot 11: Indigo
+	"#eab308", // Slot 12: Yellow
+	"#fb7185", // Slot 13: Rose
+	"#38bdf8", // Slot 14: Sky
+	"#c084fc", // Slot 15: Violet
+	"#4ade80", // Slot 16: Green
 }
 
 // PilotSlot represents one of the 8 active timing slots synchronized with LiveTime.
@@ -70,31 +81,34 @@ func (p PilotSlot) ChannelLabel() string {
 	return fmt.Sprintf("%s%d (%d MHz)", prefix, p.Channel, p.FrequencyMHz)
 }
 
-// DefaultPilotSlots returns a default 4-active-pilot (8-slot) Raceband configuration for simulation.
+// DefaultPilotSlots returns the simulated Bay Area pilot roster with 4 active pilots by default
+// (FAERRY, MeWo, Din, BigRamon) and additional Bay Area pilots ready to toggle on (up to 8 enabled at once).
 func DefaultPilotSlots() []PilotSlot {
-	callsigns := [MaxPilotSlots]string{
+	callsigns := []string{
 		"FAERRY", "MeWo", "Din", "BigRamon",
-		"Red5", "Morbid", "Kyosanym", "FreeLove",
+		"Red5", "SwampDog", "Morbid", "Kyosanym",
+		"OneEye", "FreeLove",
 	}
 
-	// Standard MultiGP 4-pilot spacing uses R1, R3, R5, R8 (or IMD6) to minimize IMD
-	defaultChannels := [MaxPilotSlots]uint8{1, 3, 5, 8, 2, 4, 6, 7}
+	// Standard MultiGP 4-pilot spacing uses R1, R3, R5, R8 first to minimize IMD,
+	// followed by R2, R4, R6, R7 for slots 5..8, and cycling for standby pilots.
+	defaultChannels := []uint8{1, 3, 5, 8, 2, 4, 6, 7, 1, 3}
 
-	slots := make([]PilotSlot, MaxPilotSlots)
-	for i := 0; i < MaxPilotSlots; i++ {
-		ch := defaultChannels[i]
+	slots := make([]PilotSlot, len(callsigns))
+	for i := 0; i < len(callsigns); i++ {
+		ch := defaultChannels[i%len(defaultChannels)]
 		freq := RacebandFrequenciesMHz[ch-1]
 		slots[i] = PilotSlot{
 			SlotIndex:       i + 1,
 			Callsign:        callsigns[i],
-			Enabled:         i < 4, // Enable first 4 pilots by default; all 8 available
+			Enabled:         i < 4, // Enable first 4 pilots by default (max 8 enabled at a time)
 			Band:            BandRaceband,
 			Channel:         ch,
 			FrequencyMHz:    freq,
 			EnterThreshold:  -58.0,
 			ExitThreshold:   -68.0,
 			AttenuationGain: 52,
-			Color:           DefaultPilotColors[i],
+			Color:           DefaultPilotColors[i%len(DefaultPilotColors)],
 		}
 	}
 	return slots

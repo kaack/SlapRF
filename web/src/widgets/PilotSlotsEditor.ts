@@ -28,23 +28,36 @@ export class PilotSlotsEditor extends Component {
   }
 
   private render(): void {
+    const enabledCount = this.store.enabledPilots.length;
+    const usedChannels = new Map<number, string>();
+    for (const p of this.store.pilots) {
+      if (p.enabled) {
+        usedChannels.set(p.channel, p.callsign);
+      }
+    }
     this.el.innerHTML = `
       <div class="slot-table">
         <div class="slot-row slot-head">
-          <span>On</span><span>Pilot</span><span>Channel</span><span>Enter threshold</span><span></span>
+          <span>On (${enabledCount}/8)</span><span>Pilot</span><span>Channel</span><span>Enter threshold</span><span></span>
         </div>
-        ${this.store.pilots.map((p) => this.renderRow(p)).join("")}
+        ${this.store.pilots.map((p) => this.renderRow(p, enabledCount, usedChannels)).join("")}
       </div>`;
   }
 
-  private renderRow(p: PilotSlot): string {
-    const options = RACEBAND_MHZ.map(
-      (mhz, i) => `<option value="${i + 1}" ${p.channel === i + 1 ? "selected" : ""}>R${i + 1} · ${mhz} MHz</option>`
-    ).join("");
+  private renderRow(p: PilotSlot, enabledCount: number, usedChannels: Map<number, string>): string {
+    const atLimit = !p.enabled && enabledCount >= 8;
+    const options = RACEBAND_MHZ.map((mhz, i) => {
+      const ch = i + 1;
+      const holder = usedChannels.get(ch);
+      const takenByOther = holder !== undefined && holder !== p.callsign;
+      const disabledAttr = p.enabled && takenByOther ? "disabled" : "";
+      const suffix = takenByOther ? ` (${esc(holder)})` : "";
+      return `<option value="${ch}" ${p.channel === ch ? "selected" : ""} ${disabledAttr}>R${ch} · ${mhz} MHz${suffix}</option>`;
+    }).join("");
     return `
       <form class="slot-row ${p.enabled ? "" : "is-disabled"}" data-pilot="${p.slotIndex}">
-        <label class="switch" title="Enable slot ${p.slotIndex}">
-          <input type="checkbox" name="enabled" ${p.enabled ? "checked" : ""} />
+        <label class="switch" title="${atLimit ? "Maximum 8 pilots can be enabled at a time" : `Enable slot ${p.slotIndex}`}">
+          <input type="checkbox" name="enabled" ${p.enabled ? "checked" : ""} ${atLimit ? "disabled" : ""} />
           <span></span>
         </label>
         <div class="input-with-dot">
@@ -92,7 +105,7 @@ export class PilotSlotsEditor extends Component {
     await this.api.updatePilotSlot({
       ...current,
       enabled: data.get("enabled") === "on",
-      callsign: String(data.get("callsign") ?? "").trim().toUpperCase() || `PILOT ${slotIndex}`,
+      callsign: String(data.get("callsign") ?? "").trim() || `Pilot ${slotIndex}`,
       channel,
       frequencyMhz: RACEBAND_MHZ[channel - 1] ?? current.frequencyMhz,
       enterThreshold: threshold,

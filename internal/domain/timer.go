@@ -58,12 +58,12 @@ type GatePuck struct {
 	MapY          float64                `json:"mapY"`          // Normalized 0..1 Y coordinate for the 2D track topology view
 	BatteryMv     uint16                 `json:"batteryMv"`     // 1S LiPo voltage in millivolts (3300..4200 mV)
 	BatteryPct    uint8                  `json:"batteryPct"`    // Calculated battery percentage (0..100%)
-	NoiseFloorDbm float32                `json:"noiseFloorDbm"` // Ambient 5.8 GHz noise floor in dBm
-	LastRSSI      [MaxPilotSlots]float32 `json:"lastRssi"`      // Latest 8-channel 5.8 GHz RSSI values (dBm)
+	NoiseFloorDbm float32                    `json:"noiseFloorDbm"` // Ambient 5.8 GHz noise floor in dBm
+	LastRSSI      [MaxPilotPoolSize]float32  `json:"lastRssi"`      // Latest 5.8 GHz RSSI values (dBm)
 	// EnterThresholds calibrates this gate per pilot slot (same order as LastRSSI). Each puck
 	// sees a different signal level (distance, antenna, obstacles), so a pilot's single
 	// threshold rarely suits every gate. 0 means "use the pilot's own threshold".
-	EnterThresholds [MaxPilotSlots]float32 `json:"enterThresholds"`
+	EnterThresholds [MaxPilotPoolSize]float32 `json:"enterThresholds"`
 	// RuleOverrides are this gate's own timing-rule values; unset fields use the global rules.
 	RuleOverrides GateRuleOverrides `json:"ruleOverrides"`
 	Online        bool              `json:"online"`        // True if frames arrived within the last 2 seconds
@@ -85,7 +85,10 @@ func ComputeBatteryPct(mv uint16) uint8 {
 // DefaultTrackPucks returns a 4-gate default track layout with Puck #1 as the MultiGP Start/Finish gate.
 func DefaultTrackPucks() []GatePuck {
 	now := time.Now()
-	defaultRssi := [MaxPilotSlots]float32{-92, -92, -92, -92, -92, -92, -92, -92}
+	var defaultRssi [MaxPilotPoolSize]float32
+	for i := range defaultRssi {
+		defaultRssi[i] = -92
+	}
 
 	return []GatePuck{
 		{

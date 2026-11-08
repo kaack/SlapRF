@@ -183,19 +183,81 @@ func (e *Engine) SetRules(r domain.TimingRules) domain.TimingRules {
 }
 
 // UpdatePilotSlot updates a pilot slot's frequency, threshold, gain, or enabled state (e.g., from LiveTime 0xda01).
+// It enforces that at most 8 pilots (`domain.MaxPilotSlots`) can be enabled at once and that no two enabled
+// pilots share the same frequency / channel.
 func (e *Engine) UpdatePilotSlot(updated domain.PilotSlot) {
 	e.mu.Lock()
+	targetIdx := -1
 	for i := range e.pilots {
 		if e.pilots[i].SlotIndex == updated.SlotIndex {
-			if updated.Callsign == "" {
-				updated.Callsign = e.pilots[i].Callsign
-			}
-			if updated.Color == "" {
-				updated.Color = e.pilots[i].Color
-			}
-			e.pilots[i] = updated
+			targetIdx = i
 			break
 		}
+	}
+	if targetIdx >= 0 {
+		if updated.Callsign == "" {
+			updated.Callsign = e.pilots[targetIdx].Callsign
+		}
+		if updated.Color == "" {
+			updated.Color = e.pilots[targetIdx].Color
+		}
+		if updated.Channel >= 1 && updated.Channel <= domain.MaxPilotSlots && updated.Band == domain.BandRaceband {
+			updated.FrequencyMHz = domain.RacebandFrequenciesMHz[updated.Channel-1]
+		}
+		if updated.Enabled {
+			// Count currently enabled pilots excluding this slot
+			enabledCount := 0
+			usedCh := make(map[uint8]bool)
+			for i, p := range e.pilots {
+				if i == targetIdx || !p.Enabled {
+					continue
+				}
+				enabledCount++
+				usedCh[p.Channel] = true
+			}
+			// Enforce max 8 enabled pilots at a time
+			if enabledCount >= domain.MaxPilotSlots {
+				updated.Enabled = false
+			} else if usedCh[updated.Channel] {
+				// Prevent two enabled pilots from sharing the same channel:
+				// if this pilot was just enabled on an occupied channel, move them to the first free channel;
+				// if they were already enabled and changed their channel onto another enabled pilot's channel,
+				// swap the other pilot onto a free channel.
+				wasEnabled := e.pilots[targetIdx].Enabled
+				freeCh := uint8(0)
+				for ch := uint8(1); ch <= domain.MaxPilotSlots; ch++ {
+					if !usedCh[ch] && ch != updated.Channel {
+						freeCh = ch
+						break
+					}
+				}
+				if !wasEnabled {
+					if freeCh > 0 {
+						updated.Channel = freeCh
+						updated.FrequencyMHz = domain.RacebandFrequenciesMHz[freeCh-1]
+					} else {
+						updated.Enabled = false
+					}
+				} else {
+					prevCh := e.pilots[targetIdx].Channel
+					reassignedCh := prevCh
+					if reassignedCh == updated.Channel || usedCh[reassignedCh] {
+						reassignedCh = freeCh
+					}
+					for i := range e.pilots {
+						if i != targetIdx && e.pilots[i].Enabled && e.pilots[i].Channel == updated.Channel {
+							if reassignedCh > 0 {
+								e.pilots[i].Channel = reassignedCh
+								e.pilots[i].FrequencyMHz = domain.RacebandFrequenciesMHz[reassignedCh-1]
+							} else {
+								e.pilots[i].Enabled = false
+							}
+						}
+					}
+				}
+			}
+		}
+		e.pilots[targetIdx] = updated
 	}
 	pilotsCopy := append([]domain.PilotSlot(nil), e.pilots...)
 	pucksCopy := append([]domain.GatePuck(nil), e.pucks...)
@@ -245,9 +307,13 @@ func (e *Engine) IngestTelemetryFrame(frame domain.PuckTelemetryFrame) {
 	}
 	frame.PuckID = puck.PuckID
 
-	for i := 0; i < domain.MaxPilotSlots; i++ {
+	for i := 0; i < len(e.pilots) && i < domain.MaxPilotPoolSize; i++ {
 		pilot := e.pilots[i]
 		det := e.detectors[detectorKey(puck.PuckID, pilot.SlotIndex)]
+		if det == nil {
+			det = dsp.NewChannelDetector(puck.PuckID, pilot.SlotIndex)
+			e.detectors[detectorKey(puck.PuckID, pilot.SlotIndex)] = det
+		}
 		enter, exit := thresholdsFor(puck, i, pilot)
 		candidate := det.ProcessSample(frame.RSSI[i], frame.TimestampUs, enter, exit, detectorDebounceUs)
 		puck.LastRSSI[i] = det.SmoothedRSSI()
