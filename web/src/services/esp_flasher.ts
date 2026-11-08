@@ -4,10 +4,11 @@
  * Speaks the SLIP-framed Espressif ROM bootloader protocol directly over Chrome/Edge's
  * `navigator.serial` API to a Seeed Studio XIAO ESP32-C5 (USB VID `0x303A` / PID `0x1001`):
  *   - Read (`readXiaoC5OverWebSerial`): Queries the connected XIAO over USB for its chip ID
- *     and decodes its `SLAPRF01` configuration block (Hub vs Field role, Wi-Fi SSID,
- *     and programmed 5.8 GHz channel table).
- *   - Write (`flashXiaoC5OverWebSerial`): Enters Download Mode via DTR/RTS, erases flash,
- *     streams 1 KB blocks (`ESP_FLASH_DATA`), and reboots into the new firmware.
+ *     and decodes its `SLAPRF02` configuration block (role, firmware profile, board fingerprint,
+ *     Wi-Fi SSID, and programmed 5.8 GHz channel table).
+ *   - Write (`flashXiaoC5OverWebSerial`): Optionally reads the board's existing fingerprint so it
+ *     can be kept, enters Download Mode via DTR/RTS, erases flash, streams 1 KB blocks
+ *     (`ESP_FLASH_DATA`), and reboots into the new firmware.
  */
 
 export interface FlashProgress {
@@ -24,6 +25,10 @@ export interface TimerReadout {
   wifiSSID: string;
   frequenciesMHz: number[];
   firmwareVersion: string;
+  firmwareProfile: string;
+  fingerprint: string;
+  /** Set by `flashXiaoC5OverWebSerial`: true if the board's previous fingerprint was kept. */
+  fingerprintKept?: boolean;
 }
 
 export type PuckReadout = TimerReadout;
@@ -72,86 +77,184 @@ const SLIP_ESC_ESC = 0xdd;
 const FLASH_BLOCK_SIZE = 1024;
 const FLASH_OFFSET = 0x0000;
 
-export interface FirmwareReleaseInfo {
-  version: string;
-  label: string;
+/** One firmware design — mirrored from `internal/firmware/profiles.go`. */
+export interface FirmwareProfileInfo {
+  id: string;
+  code: number;
+  name: string;
+  track: string;
+  mount: string;
   summary: string;
-  isLatest?: boolean;
+  sweepHz: number;
+  windowSamples: number;
+  txEverySweeps: number;
+  linkRate: 0 | 1; // 0 = 1 Mbps, 1 = Long Range 500 kbps
+  txPowerQdbm: number;
+  rssiFilter: 0 | 1; // 1 = median of 3 sweeps
 }
 
+/** Current firmware build. Every profile is rebuilt at this version on each release. */
 export const LATEST_FIRMWARE_VERSION = "v0.1.4";
 
-export const FIRMWARE_RELEASES: FirmwareReleaseInfo[] = [
+export const FIRMWARE_PROFILES: FirmwareProfileInfo[] = [
   {
-    version: "v0.1.4",
-    label: "v0.1.4 (Latest) — 2.4 GHz LR + 4-Sample Ground FEC",
+    id: "open-ground",
+    code: 1,
+    name: "Open field · Ground mount",
+    track: "Open field",
+    mount: "On the grass at the gate base",
     summary:
-      "Espressif LR 500 kbps (+20 dBm Ch 1) + 4-sample sliding-window raw recorder for wet grass & 2.4 GHz ELRS immunity.",
-    isLatest: true,
+      "Long Range 500 kbps at +20 dBm with 2× overlapping 4-sweep windows to ride out wet-grass absorption and 2.4 GHz ELRS bursts.",
+    sweepHz: 50,
+    windowSamples: 4,
+    txEverySweeps: 2,
+    linkRate: 1,
+    txPowerQdbm: 80,
+    rssiFilter: 0,
   },
   {
-    version: "v0.1.3",
-    label: "v0.1.3 — Single-Wi-Fi Hub/Spoke Star Topology",
-    summary: "Standard 1 Mbps ESP-NOW Spoke-to-Hub bridge with 350 µs TDMA slots.",
+    id: "open-elevated",
+    code: 2,
+    name: "Open field · Gate-top mount",
+    track: "Open field",
+    mount: "On top of the gate or a pole",
+    summary:
+      "Clear line of sight, so it trades link margin for speed: 100 Hz sweeps for finer split timing over a 1 Mbps link.",
+    sweepHz: 100,
+    windowSamples: 2,
+    txEverySweeps: 1,
+    linkRate: 0,
+    txPowerQdbm: 56,
+    rssiFilter: 0,
   },
   {
-    version: "v0.1.2",
-    label: "v0.1.2 — Initial 5.8 GHz Wideband IQ Sweep",
-    summary: "Baseline 50 Hz 8-channel Raceband RSSI scanner.",
+    id: "indoor",
+    code: 3,
+    name: "Indoor · Gym or warehouse",
+    track: "Indoor",
+    mount: "Any mount",
+    summary:
+      "Short range and reflective walls: low +8 dBm TX, 100 Hz sweeps, and a 3-sweep median filter to reject multipath fades.",
+    sweepHz: 100,
+    windowSamples: 2,
+    txEverySweeps: 1,
+    linkRate: 0,
+    txPowerQdbm: 32,
+    rssiFilter: 1,
+  },
+  {
+    id: "obstructed",
+    code: 4,
+    name: "Technical · Trees & obstacles",
+    track: "Woods, bando, or technical",
+    mount: "Behind or under obstacles",
+    summary:
+      "Hub link is often blocked: Long Range +20 dBm with 3× overlapping 6-sweep windows so a 100 ms dropout loses nothing.",
+    sweepHz: 50,
+    windowSamples: 6,
+    txEverySweeps: 2,
+    linkRate: 1,
+    txPowerQdbm: 80,
+    rssiFilter: 0,
   },
 ];
 
-export function decodeFirmwareVersionByte(code: number): string {
-  switch (code) {
-    case 4:
-      return "v0.1.4";
-    case 3:
-      return "v0.1.3";
-    case 2:
-      return "v0.1.2";
-    default:
-      return "v0.1.1";
-  }
+export const DEFAULT_FIRMWARE_PROFILE = FIRMWARE_PROFILES[0].id;
+
+export function firmwareProfile(id: string | undefined): FirmwareProfileInfo {
+  return FIRMWARE_PROFILES.find((p) => p.id === id) ?? FIRMWARE_PROFILES[0];
 }
 
-export function encodeFirmwareVersionByte(version: string): number {
-  switch (version.trim().toLowerCase()) {
-    case "v0.1.4":
-    case "0.1.4":
-      return 4;
-    case "v0.1.3":
-    case "0.1.3":
-      return 3;
-    case "v0.1.2":
-    case "0.1.2":
-      return 2;
-    case "v0.1.1":
-    case "0.1.1":
-      return 1;
-    default:
-      return 4;
+function profileByCode(code: number): FirmwareProfileInfo {
+  return FIRMWARE_PROFILES.find((p) => p.code === code) ?? FIRMWARE_PROFILES[0];
+}
+
+/** Random, non-zero 32-bit board fingerprint rendered as 8 upper-case hex digits. */
+export function generateFingerprint(): string {
+  const buf = new Uint32Array(1);
+  do {
+    crypto.getRandomValues(buf);
+  } while (buf[0] === 0);
+  return buf[0].toString(16).toUpperCase().padStart(8, "0");
+}
+
+// SLAPRF02 config block layout — mirrored from internal/firmware/image.go.
+const CONFIG_MAGIC = "SLAPRF02";
+const CONFIG_OFF = 0x0100;
+const CONFIG_LEN = 160;
+const OFF_VERSION = 8;
+const OFF_ROLE = 11;
+const OFF_PROFILE = 12;
+const OFF_WIFI_MODE = 13;
+const OFF_FINGERPRINT = 14;
+const OFF_FREQS = 18;
+const OFF_SWEEP_HZ = 34;
+const OFF_WINDOW = 35;
+const OFF_TX_EVERY = 36;
+const OFF_LINK_RATE = 37;
+const OFF_TX_POWER = 38;
+const OFF_RSSI_FILTER = 39;
+const OFF_SSID = 40;
+const OFF_PASS = 73;
+const OFF_LABEL = 113;
+const OFF_CRC = CONFIG_LEN - 1;
+const IMAGE_SIZE = 64 * 1024;
+
+function xor8(bytes: Uint8Array): number {
+  let c = 0;
+  for (let i = 0; i < bytes.length; i++) c ^= bytes[i];
+  return c;
+}
+
+function findConfigBlock(bytes: Uint8Array): number {
+  const magic = new TextEncoder().encode(CONFIG_MAGIC);
+  outer: for (let i = 0; i <= bytes.length - CONFIG_LEN; i++) {
+    for (let j = 0; j < magic.length; j++) {
+      if (bytes[i + j] !== magic[j]) continue outer;
+    }
+    return i;
   }
+  return -1;
+}
+
+/** Recompute the Espressif single-segment XOR checksum stored in the image trailer. */
+function fixImageChecksum(img: Uint8Array): void {
+  if (img.length !== IMAGE_SIZE) return;
+  const segLen = IMAGE_SIZE - 32 - 16;
+  let chk = 0xef;
+  for (let i = 32; i < 32 + segLen; i++) chk ^= img[i];
+  img[IMAGE_SIZE - 1] = chk;
+}
+
+/** Returns a copy of `img` with its board fingerprint replaced (config CRC + image checksum fixed). */
+export function withFingerprint(img: Uint8Array, fingerprintHex: string): Uint8Array {
+  const out = new Uint8Array(img);
+  const off = findConfigBlock(out);
+  const fp = parseInt(fingerprintHex, 16) >>> 0;
+  if (off < 0 || !fp) return out;
+  new DataView(out.buffer, out.byteOffset + off, CONFIG_LEN).setUint32(OFF_FINGERPRINT, fp, true);
+  out[off + OFF_CRC] = xor8(out.subarray(off, off + OFF_CRC));
+  fixImageChecksum(out);
+  return out;
 }
 
 /**
- * Fetches the static base `.bin` image (`./firmware/slaprf-xiao-c5-${version}.bin`) if available
- * — or constructs the 64 KB Espressif ESP32-C5 (`0x0017`) image directly in the browser —
- * and patches the 128-byte `SLAPRF01` configuration block at `0x0100` so USB flashing and
- * `.bin` downloads work 100% client-side with zero Go backend required.
+ * Fetches the static base `.bin` for the chosen profile (`./firmware/slaprf-xiao-c5-<profile>.bin`)
+ * if available — or synthesizes the 64 KB ESP32-C5 (`0x0017`) image in the browser — and stamps
+ * the `SLAPRF02` block so USB flashing and `.bin` downloads work with zero Go backend.
  */
 export async function buildOrPatchFirmwareBin(opts: {
   role: "hub" | "spoke";
   puckLabel: string;
   wifiSSID: string;
   wifiPass: string;
-  firmwareVersion?: string;
+  profile?: string;
+  fingerprint?: string;
   frequenciesMHz?: number[];
 }): Promise<{ bytes: Uint8Array; filename: string }> {
-  const version = opts.firmwareVersion || LATEST_FIRMWARE_VERSION;
-  const verByte = encodeFirmwareVersionByte(version);
-  const canonicalVer = decodeFirmwareVersionByte(verByte);
+  const profile = firmwareProfile(opts.profile);
   const roleCode = opts.role === "hub" ? 1 : 2;
-  const puckId = opts.role === "hub" ? 1 : 2;
+  const fingerprint = opts.fingerprint || generateFingerprint();
   const cleanLabel = opts.puckLabel.trim().slice(0, 24);
   const cleanSSID = opts.role === "hub" ? opts.wifiSSID.trim().slice(0, 32) : "";
   const cleanPass = opts.role === "hub" ? opts.wifiPass.slice(0, 39) : "";
@@ -161,17 +264,12 @@ export async function buildOrPatchFirmwareBin(opts: {
     return f >= 5600 && f <= 5950 ? f : def;
   });
 
-  const IMAGE_SIZE = 64 * 1024;
-  const CONFIG_OFF = 0x0100;
   let img: Uint8Array | null = null;
-
   try {
-    const staticRes = await fetch(`./firmware/slaprf-xiao-c5-${canonicalVer}.bin`, { cache: "no-cache" });
+    const staticRes = await fetch(`./firmware/slaprf-xiao-c5-${profile.id}.bin`, { cache: "no-cache" });
     if (staticRes.ok) {
       const buf = await staticRes.arrayBuffer();
-      if (buf.byteLength === IMAGE_SIZE) {
-        img = new Uint8Array(buf);
-      }
+      if (buf.byteLength === IMAGE_SIZE) img = new Uint8Array(buf);
     }
   } catch {
     // Offline or static file not found; fall back to client-side image synthesis below.
@@ -186,57 +284,49 @@ export async function buildOrPatchFirmwareBin(opts: {
     img[3] = 0x10; // 4MB / 80MHz
     dv.setUint32(4, 0x40800000, true);
     dv.setUint16(12, 0x0017, true); // ESP32-C5 chip ID
-    const segLen = IMAGE_SIZE - 32 - 16;
     dv.setUint32(24, 0x40800000, true);
-    dv.setUint32(28, segLen, true);
+    dv.setUint32(28, IMAGE_SIZE - 32 - 16, true);
     for (let off = 32; off < IMAGE_SIZE - 16; off += 4) {
       dv.setUint32(off, 0x00000013, true); // RISC-V NOP
     }
   }
 
-  // Stamp build banner at 0x0040
   const enc = new TextEncoder();
   const banner = enc.encode(
-    `SlapRF XIAO-ESP32-C5 SDR Firmware ${canonicalVer} (Role=${roleCode} Timer=${puckId} Label=${cleanLabel})`
+    `SlapRF XIAO-ESP32-C5 ${LATEST_FIRMWARE_VERSION} profile=${profile.id} role=${roleCode} fp=${fingerprint} label=${cleanLabel}`
   );
-  img.fill(0, 0x0040, 0x00c0);
-  img.set(banner.subarray(0, 0x0080), 0x0040);
+  img.fill(0, 0x0040, CONFIG_OFF);
+  img.set(banner.subarray(0, CONFIG_OFF - 0x0040), 0x0040);
 
-  // Stamp 128-byte SLAPRF01 config block at 0x0100
-  const block = new Uint8Array(128);
-  const blockView = new DataView(block.buffer);
-  block.set(enc.encode("SLAPRF01"), 0);
-  block[8] = verByte;
-  block[9] = roleCode;
-  block[10] = puckId;
-  block[11] = cleanSSID ? 1 : 0;
-  for (let i = 0; i < 8; i++) {
-    blockView.setUint16(12 + i * 2, freqs[i], true);
-  }
-  blockView.setUint16(28, (puckId - 1) * 3500, true);
-  block.set(enc.encode(cleanSSID), 30);
-  block.set(enc.encode(cleanPass), 63);
-  block.set(enc.encode(cleanLabel), 103);
-
-  let cfgCrc = 0;
-  for (let i = 0; i < 127; i++) {
-    cfgCrc ^= block[i];
-  }
-  block[127] = cfgCrc;
+  const block = new Uint8Array(CONFIG_LEN);
+  const bv = new DataView(block.buffer);
+  block.set(enc.encode(CONFIG_MAGIC), 0);
+  const [maj, min, pat] = LATEST_FIRMWARE_VERSION.replace(/^v/, "").split(".").map((n) => Number(n) || 0);
+  block[OFF_VERSION] = maj;
+  block[OFF_VERSION + 1] = min;
+  block[OFF_VERSION + 2] = pat;
+  block[OFF_ROLE] = roleCode;
+  block[OFF_PROFILE] = profile.code;
+  block[OFF_WIFI_MODE] = cleanSSID ? 1 : 0;
+  bv.setUint32(OFF_FINGERPRINT, parseInt(fingerprint, 16) >>> 0, true);
+  for (let i = 0; i < 8; i++) bv.setUint16(OFF_FREQS + i * 2, freqs[i], true);
+  block[OFF_SWEEP_HZ] = profile.sweepHz;
+  block[OFF_WINDOW] = profile.windowSamples;
+  block[OFF_TX_EVERY] = profile.txEverySweeps;
+  block[OFF_LINK_RATE] = profile.linkRate;
+  block[OFF_TX_POWER] = profile.txPowerQdbm;
+  block[OFF_RSSI_FILTER] = profile.rssiFilter;
+  block.set(enc.encode(cleanSSID).subarray(0, 32), OFF_SSID);
+  block.set(enc.encode(cleanPass).subarray(0, 39), OFF_PASS);
+  block.set(enc.encode(cleanLabel).subarray(0, 24), OFF_LABEL);
+  block[OFF_CRC] = xor8(block.subarray(0, OFF_CRC));
   img.set(block, CONFIG_OFF);
-
-  // Recompute Espressif segment XOR checksum at end of image
-  const segLen = IMAGE_SIZE - 32 - 16;
-  let chk = 0xef;
-  for (let i = 32; i < 32 + segLen; i++) {
-    chk ^= img[i];
-  }
-  img[IMAGE_SIZE - 1] = chk;
+  fixImageChecksum(img);
 
   const slug = cleanLabel ? cleanLabel.replace(/[^a-zA-Z0-9_-]+/g, "-") : opts.role;
   return {
     bytes: img,
-    filename: `slaprf-xiao-c5-${slug}-${canonicalVer}.bin`,
+    filename: `slaprf-xiao-c5-${slug}-${profile.id}-${LATEST_FIRMWARE_VERSION}.bin`,
   };
 }
 
@@ -244,54 +334,35 @@ export function isWebSerialSupported(): boolean {
   return typeof navigator !== "undefined" && Boolean((navigator as unknown as NavigatorWithSerial).serial);
 }
 
-/** Decode the 128-byte `SLAPRF01` configuration block from a firmware binary or flash dump. */
+/** Decode the 160-byte `SLAPRF02` configuration block from a firmware binary or flash dump. */
 export function parseSlaprfConfigBlock(bytes: Uint8Array): PuckReadout | null {
-  const magic = [0x53, 0x4c, 0x41, 0x50, 0x52, 0x46, 0x30, 0x31]; // "SLAPRF01"
-  let off = -1;
-  for (let i = 0; i <= bytes.length - 128; i++) {
-    let match = true;
-    for (let j = 0; j < 8; j++) {
-      if (bytes[i + j] !== magic[j]) {
-        match = false;
-        break;
-      }
-    }
-    if (match) {
-      off = i;
-      break;
-    }
-  }
+  const off = findConfigBlock(bytes);
   if (off < 0) return null;
-
-  const block = bytes.subarray(off, off + 128);
+  const block = bytes.subarray(off, off + CONFIG_LEN);
+  if (xor8(block.subarray(0, OFF_CRC)) !== block[OFF_CRC]) return null;
   const view = new DataView(block.buffer, block.byteOffset, block.byteLength);
-  const version = block[8];
-  const roleCode = block[9];
-  const role: "hub" | "spoke" = roleCode === 1 ? "hub" : "spoke";
 
   const frequenciesMHz: number[] = [];
-  for (let i = 0; i < 8; i++) {
-    frequenciesMHz.push(view.getUint16(12 + i * 2, true));
-  }
+  for (let i = 0; i < 8; i++) frequenciesMHz.push(view.getUint16(OFF_FREQS + i * 2, true));
 
-  const ssidBytes = block.subarray(30, 62);
-  let ssidEnd = ssidBytes.indexOf(0);
-  if (ssidEnd < 0) ssidEnd = ssidBytes.length;
-  const wifiSSID = new TextDecoder().decode(ssidBytes.subarray(0, ssidEnd));
-
-  const labelBytes = block.subarray(103, 127);
-  let labelEnd = labelBytes.indexOf(0);
-  if (labelEnd < 0) labelEnd = labelBytes.length;
-  const timerLabel = new TextDecoder().decode(labelBytes.subarray(0, labelEnd));
+  const dec = new TextDecoder();
+  const cstr = (start: number, len: number): string => {
+    const sub = block.subarray(start, start + len);
+    const end = sub.indexOf(0);
+    return dec.decode(end < 0 ? sub : sub.subarray(0, end));
+  };
+  const timerLabel = cstr(OFF_LABEL, 24);
 
   return {
     chip: "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
-    role,
+    role: block[OFF_ROLE] === 1 ? "hub" : "spoke",
     timerLabel,
     puckLabel: timerLabel,
-    wifiSSID,
+    wifiSSID: cstr(OFF_SSID, 33),
     frequenciesMHz,
-    firmwareVersion: decodeFirmwareVersionByte(version),
+    firmwareVersion: `v${block[OFF_VERSION]}.${block[OFF_VERSION + 1]}.${block[OFF_VERSION + 2]}`,
+    firmwareProfile: profileByCode(block[OFF_PROFILE]).id,
+    fingerprint: view.getUint32(OFF_FINGERPRINT, true).toString(16).toUpperCase().padStart(8, "0"),
   };
 }
 
@@ -447,7 +518,9 @@ export async function readXiaoC5OverWebSerial(
         puckLabel: "",
         wifiSSID: "",
         frequenciesMHz: [5658, 5732, 5806, 5917, 5695, 5769, 5843, 5880],
-        firmwareVersion: "SlapRF v1.1",
+        firmwareVersion: "unknown",
+        firmwareProfile: DEFAULT_FIRMWARE_PROFILE,
+        fingerprint: "",
       }
     );
   } finally {
@@ -471,12 +544,17 @@ export async function readXiaoC5OverWebSerial(
 
 /**
  * Opens the browser's native USB port picker and flashes the XIAO ESP32-C5 firmware binary.
+ *
+ * With `keepFingerprint`, the running firmware is asked for its config (`SLAPRF?`) before the
+ * board is erased; if it answers, its fingerprint is stamped into `imageBytes` so the app keeps
+ * treating it as the same timer. Otherwise the image's own (new) fingerprint is used.
  */
 export async function flashXiaoC5OverWebSerial(
   imageBytes: Uint8Array,
   label: string,
   onProgress: ProgressCallback,
-  showAllPorts = false
+  showAllPorts = false,
+  keepFingerprint = false
 ): Promise<PuckReadout | null> {
   const nav = navigator as unknown as NavigatorWithSerial;
   if (!nav.serial) {
@@ -502,6 +580,22 @@ export async function flashXiaoC5OverWebSerial(
   }
 
   try {
+    let fingerprintKept = false;
+    if (keepFingerprint) {
+      onProgress({
+        stage: "reading",
+        percent: 4,
+        detail: "Reading the board's existing fingerprint…",
+      });
+      await writer.write(new TextEncoder().encode("SLAPRF?\n"));
+      const rx = await readChunkWithTimeout(reader, 180);
+      const existing = rx ? parseSlaprfConfigBlock(rx) : null;
+      if (existing?.fingerprint && existing.fingerprint !== "00000000") {
+        imageBytes = withFingerprint(imageBytes, existing.fingerprint);
+        fingerprintKept = true;
+      }
+    }
+
     onProgress({
       stage: "bootloader",
       percent: 6,
@@ -584,7 +678,8 @@ export async function flashXiaoC5OverWebSerial(
       detail: `${label} flashed & ready!`,
     });
 
-    return parseSlaprfConfigBlock(imageBytes);
+    const written = parseSlaprfConfigBlock(imageBytes);
+    return written ? { ...written, fingerprintKept } : null;
   } finally {
     try {
       reader.releaseLock();

@@ -1,7 +1,7 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { ApiClient } from "../services/api_client";
-import { LATEST_FIRMWARE_VERSION } from "../services/esp_flasher";
+import { firmwareProfile, LATEST_FIRMWARE_VERSION } from "../services/esp_flasher";
 import { TIMER_COLORS, timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { DetectedTimer } from "../types/models";
@@ -244,6 +244,7 @@ export class TimersList extends Component {
     const isPickerOpen = this.colorPickerTimerId === d.puckId;
     const fwVer = d.firmwareVersion || LATEST_FIRMWARE_VERSION;
     const isLatestFw = fwVer === LATEST_FIRMWARE_VERSION;
+    const profile = firmwareProfile(d.firmwareProfile);
 
     return `
       <div class="puck-table-row ${isPickerOpen ? "is-picker-open" : ""} ${d.online ? "" : "is-offline"}">
@@ -259,7 +260,7 @@ export class TimersList extends Component {
               aria-expanded="${isPickerOpen}"
             ></button>
           </div>
-          <strong class="mono">${esc(title)}</strong>
+          <strong class="mono" title="${d.fingerprint ? `Board fingerprint ${esc(d.fingerprint)}` : ""}">${esc(title)}</strong>
         </div>
 
         <div>
@@ -273,12 +274,12 @@ export class TimersList extends Component {
           <span class="detected-role-pill ${d.isHub ? "is-hub" : ""}">${d.isHub ? "Hub" : "Spoke"}</span>
         </div>
 
-        <div class="puck-fw-cell">
-          <span class="mono">${esc(fwVer)}</span>
+        <div class="puck-fw-cell" title="${esc(`${profile.name} · ${fwVer}`)}">
+          <span>${esc(profile.name)}</span>
           ${
             isLatestFw
-              ? `<span class="badge tone-good">Latest</span>`
-              : `<span class="badge tone-warn" title="Flash ${LATEST_FIRMWARE_VERSION} over USB below">Update → ${LATEST_FIRMWARE_VERSION}</span>`
+              ? ""
+              : `<span class="badge tone-warn" title="Reflash over USB below to update to ${LATEST_FIRMWARE_VERSION}">Update → ${LATEST_FIRMWARE_VERSION}</span>`
           }
         </div>
 

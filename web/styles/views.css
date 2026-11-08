@@ -2898,151 +2898,90 @@ body.is-gate-dragging * {
   color: var(--text-2);
 }
 
-/* Step 1: Interactive Hub & 6 Spokes Network Topology Map */
-.flasher-net-canvas {
-  position: relative;
-  width: 100%;
-  max-width: 560px;
-  height: 296px;
-  margin: 2px auto 0;
-  border-radius: var(--radius-lg);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  overflow: hidden;
-  user-select: none;
-}
-.flasher-net-svg {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  pointer-events: none;
-}
-.flasher-net-line {
-  stroke: #3b4252;
-  stroke-width: 1.5;
-  stroke-dasharray: 4 4;
-  transition: stroke 0.16s, stroke-width 0.16s;
-}
-.flasher-net-line.is-active {
-  stroke: var(--accent);
-  stroke-width: 2;
-  stroke-dasharray: none;
-}
-.flasher-net-line.is-done {
-  stroke: var(--good);
-  stroke-dasharray: none;
-}
-
-.flasher-net-node {
-  position: absolute;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
+/* Step 1: Role picker (Hub / Spoke) */
+/* Step 2: Firmware profile hint */
+.flasher-profile-hint {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1px;
-  padding: 0;
-  font: inherit;
-  color: var(--text);
-  background: var(--surface-2);
-  border: 1.5px solid var(--border-strong);
-  cursor: pointer;
-  z-index: 2;
-  transition: transform 0.14s ease, border-color 0.14s ease, background 0.14s ease, box-shadow 0.14s ease;
+  gap: 8px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
 }
-.flasher-net-node.is-hub {
-  width: 82px;
-  height: 82px;
-  border-width: 2px;
-  border-color: var(--border-strong);
-  background: var(--surface-2);
-}
-.flasher-net-node.is-hub:hover:not(:disabled) {
-  transform: translate(-50%, -50%) scale(1.04);
-  border-color: var(--accent);
-  background: var(--surface-3);
-}
-.flasher-net-hub-icon {
-  color: var(--text-2);
-  display: inline-flex;
-  margin-bottom: 1px;
-}
-.flasher-net-node.is-hub.is-selected .flasher-net-hub-icon,
-.flasher-net-node.is-hub:hover:not(:disabled) .flasher-net-hub-icon {
-  color: var(--accent);
-}
-.flasher-net-node.is-spoke {
-  width: 58px;
-  height: 58px;
-  border: 1.5px solid var(--border-strong);
-  background: var(--surface-2);
-}
-.flasher-net-node.is-spoke:hover:not(:disabled) {
-  transform: translate(-50%, -50%) scale(1.06);
-  border-color: var(--accent);
-  background: var(--surface-3);
-}
-.flasher-net-node.is-selected {
-  border-color: var(--accent);
-  background: var(--surface-3);
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-.flasher-net-node.is-flashed {
-  border-color: var(--good);
-}
-.flasher-net-node-code {
-  font-size: 12.5px;
-  font-weight: 700;
-  line-height: 1.05;
-  letter-spacing: -0.01em;
-  color: var(--text);
-}
-.flasher-net-node.is-selected .flasher-net-node-code {
-  color: var(--accent);
-}
-.flasher-net-node-sub {
-  font-size: 9.5px;
-  font-weight: 600;
-  color: var(--text-3);
-  letter-spacing: 0.02em;
-}
-.flasher-net-node.is-flashed .flasher-net-node-sub {
-  color: var(--good);
-}
-
-.flasher-net-legend {
+.flasher-profile-tags {
   display: flex;
   align-items: center;
-  justify-content: center;
   flex-wrap: wrap;
-  gap: 18px;
+  gap: 6px;
+}
+.flasher-profile-tags .note {
+  margin-left: auto;
+}
+.flasher-profile-hint p {
+  margin: 0;
   font-size: 12px;
+  line-height: 1.5;
   color: var(--text-3);
 }
-.flasher-net-legend span {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-}
-.flasher-net-legend strong {
-  color: var(--text-2);
-  font-weight: 600;
-}
-.flasher-net-legend i {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  display: inline-block;
-}
-.flasher-net-legend i.dot-hub {
-  background: var(--accent);
-}
-.flasher-net-legend i.dot-spoke {
-  background: var(--text-3);
-}
 
+/* Step 4: Board fingerprint keep / new choice */
+.flasher-fp-option {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.flasher-fp-choices {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.flasher-fp-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: border-color 0.14s, background 0.14s, box-shadow 0.14s;
+}
+.flasher-fp-choice:hover {
+  border-color: #454c59;
+}
+.flasher-fp-choice strong {
+  color: var(--text);
+  font-weight: 650;
+}
+.flasher-fp-choice.is-active {
+  border-color: var(--accent-line);
+  background: var(--surface-2);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+.flasher-fp-choice.is-active strong {
+  color: var(--accent);
+}
+.flasher-fp-choice input {
+  margin: 2px 0 0;
+  accent-color: var(--accent);
+  flex-shrink: 0;
+}
+.flasher-pic-link.is-dim {
+  opacity: 0.55;
+}
+.flasher-pic-node.is-dim-node {
+  opacity: 0.6;
+}
+.flasher-pic-node-title.is-dim {
+  fill: var(--text-3);
+}
+.flasher-wizard-nav.is-end {
+  justify-content: flex-end;
+}
 /* Step 3: Pictorial Wi-Fi Mode Selector Cards */
 .flasher-pictorial-grid {
   display: grid;
@@ -3297,24 +3236,9 @@ body.is-gate-dragging * {
   .flasher-wizard-stage {
     padding: 14px;
   }
-  .flasher-net-canvas {
-    height: 256px;
-  }
-  .flasher-net-node.is-hub {
-    width: 72px;
-    height: 72px;
-  }
-  .flasher-net-node.is-spoke {
-    width: 50px;
-    height: 50px;
-  }
-  .flasher-net-node-code {
-    font-size: 11.5px;
-  }
-  .flasher-net-node-sub {
-    font-size: 8.5px;
-  }
+
   .flasher-pictorial-grid,
+  .flasher-fp-choices,
   .flasher-receipt {
     grid-template-columns: minmax(0, 1fr);
   }

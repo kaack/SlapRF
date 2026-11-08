@@ -21,23 +21,66 @@ var (
 	ErrMinOneGate      = errors.New("at least one gate must remain on the course")
 )
 
-// ProvisionGate registers a newly flashed gate puck (hub or spoke) with its flashed
-// hardware ID/name (`puckLabel`).
-//   - A "hub" puck updates the start/finish gate's PuckLabel.
-//   - A "spoke" puck updates a matching puck by PuckLabel, or claims the next unlabelled
-//     sector gate (creating a new gate up to 16 if all existing gates already have a PuckLabel).
-func (e *Engine) ProvisionGate(role string, puckLabel string, fwVersion ...string) (uint8, error) {
-	puckLabel = strings.TrimSpace(puckLabel)
+// ProvisionRequest describes a timer that was just flashed (or registered) by the flasher.
+type ProvisionRequest struct {
+	Role        string // "hub" or "spoke"
+	Label       string // Flashed timer name (e.g. "H1", "S3")
+	Profile     string // Firmware profile ID; empty = domain.DefaultFirmwareProfile
+	Fingerprint string // 8-hex-digit board fingerprint; empty = unknown
+}
+
+// ProvisionGate registers a newly flashed timer (hub or spoke).
+//   - A known fingerprint updates that same physical timer in place, keeping its color and gate.
+//   - Otherwise a puck with the same label is updated (a replacement board takes over its gate).
+//   - Otherwise a "hub" claims the start/finish gate and a "spoke" the next unlabelled sector
+//     gate, creating a new gate (up to the timer limit) if every gate is already labelled.
+func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
+	role := req.Role
+	puckLabel := strings.TrimSpace(req.Label)
 	if utf8.RuneCountInString(puckLabel) > domain.MaxGateNameLen {
 		return 0, ErrGateNameTooLong
 	}
-	ver := domain.LatestFirmwareVersion
-	if len(fwVersion) > 0 && strings.TrimSpace(fwVersion[0]) != "" {
-		ver = strings.TrimSpace(fwVersion[0])
+	profile := strings.TrimSpace(req.Profile)
+	if profile == "" {
+		profile = domain.DefaultFirmwareProfile
 	}
+	fingerprint := strings.ToUpper(strings.TrimSpace(req.Fingerprint))
+	ver := domain.LatestFirmwareVersion
 
 	e.mu.Lock()
 	var targetIdx = -1
+
+	// 0. Same physical board re-flashed (fingerprint kept): update it in place.
+	if fingerprint != "" {
+		for id, d := range e.detected {
+			if d.Fingerprint == fingerprint {
+				if puckLabel != "" {
+					d.PuckLabel = puckLabel
+				}
+				d.FirmwareVersion = ver
+				d.FirmwareProfile = profile
+				d.IsHub = role == "hub"
+				d.Online = true
+				d.LastSeenAt = time.Now()
+				for i := range e.pucks {
+					if e.pucks[i].AssignedPuckID == id {
+						if puckLabel != "" {
+							e.pucks[i].PuckLabel = puckLabel
+						}
+						e.pucks[i].FirmwareVersion = ver
+					}
+				}
+				pilots := append([]domain.PilotSlot(nil), e.pilots...)
+				pucks := append([]domain.GatePuck(nil), e.pucks...)
+				subs := append([]EventSubscriber(nil), e.subscribers...)
+				e.mu.Unlock()
+				for _, s := range subs {
+					s.OnConfigUpdated(pilots, pucks)
+				}
+				return id, nil
+			}
+		}
+	}
 
 	// 1. If a puck already has this exact PuckLabel, update that one.
 	if puckLabel != "" {
@@ -140,6 +183,12 @@ func (e *Engine) ProvisionGate(role string, puckLabel string, fwVersion ...strin
 	e.pucks[targetIdx].Color = d.Color
 	e.pucks[targetIdx].FirmwareVersion = ver
 	d.FirmwareVersion = ver
+	d.FirmwareProfile = profile
+	if fingerprint != "" {
+		d.Fingerprint = fingerprint
+	} else if d.Fingerprint == "" {
+		d.Fingerprint = newFingerprintHex()
+	}
 	if puckLabel != "" {
 		d.PuckLabel = puckLabel
 	}
@@ -614,16 +663,17 @@ func (e *Engine) DeleteDetectedPuck(puckID uint8) error {
 	return nil
 }
 
-// AddSimulatedPuck creates a new simulated XIAO timer (1..6) in `e.detected` and adds a gate
-// on the track for it if fewer than 6 gates exist.
-func (e *Engine) AddSimulatedPuck(role string, label string, fwVersion string) (uint8, error) {
+// AddSimulatedPuck creates a new simulated XIAO timer (1..6) in `e.detected` running the given
+// firmware profile, and adds a gate on the track for it if fewer than 6 gates exist.
+func (e *Engine) AddSimulatedPuck(role string, label string, profile string) (uint8, error) {
 	label = strings.TrimSpace(label)
 	if utf8.RuneCountInString(label) > domain.MaxGateNameLen {
 		return 0, ErrGateNameTooLong
 	}
-	if strings.TrimSpace(fwVersion) == "" {
-		fwVersion = domain.LatestFirmwareVersion
+	if strings.TrimSpace(profile) == "" {
+		profile = domain.DefaultFirmwareProfile
 	}
+	fwVersion := domain.LatestFirmwareVersion
 
 	e.mu.Lock()
 	var nextID uint8
@@ -645,6 +695,8 @@ func (e *Engine) AddSimulatedPuck(role string, label string, fwVersion string) (
 		Color:           domain.DefaultPuckColor(nextID),
 		IsHub:           role == "hub" || nextID == 1,
 		FirmwareVersion: fwVersion,
+		FirmwareProfile: profile,
+		Fingerprint:     newFingerprintHex(),
 		BatteryMv:       4120,
 		BatteryPct:      domain.ComputeBatteryPct(4120),
 		NoiseFloorDbm:   -92.0,

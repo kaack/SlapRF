@@ -149,7 +149,7 @@ func TestUnnamedGatesAreLabelledByPosition(t *testing.T) {
 func TestPuckLabelAndDisplayNameOverride(t *testing.T) {
 	e := NewEngine()
 	// Flash a Spoke puck with ID "Blue-Puck" -> claims the first unlabelled sector gate (Puck 2).
-	id, err := e.ProvisionGate("spoke", "Blue-Puck")
+	id, err := e.ProvisionGate(ProvisionRequest{Role: "spoke", Label: "Blue-Puck"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +183,7 @@ func TestPuckLabelAndDisplayNameOverride(t *testing.T) {
 
 func TestAddUnassignedGateAndBindDetectedPuck(t *testing.T) {
 	e := NewEngine()
-	if _, err := e.ProvisionGate("spoke", "Spoke-Alpha"); err != nil {
+	if _, err := e.ProvisionGate(ProvisionRequest{Role: "spoke", Label: "Spoke-Alpha"}); err != nil {
 		t.Fatal(err)
 	}
 

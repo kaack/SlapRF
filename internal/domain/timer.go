@@ -11,17 +11,23 @@ const (
 	PuckRoleSectorGate  PuckRole = "SECTOR_GATE"
 )
 
-// LatestFirmwareVersion is the current XIAO ESP32-C5 SDR timer firmware release.
+// LatestFirmwareVersion is the current XIAO ESP32-C5 SDR timer firmware build. Every firmware
+// profile is rebuilt at this version on each release.
 const LatestFirmwareVersion = "v0.1.4"
+
+// DefaultFirmwareProfile is the firmware design assumed when a timer doesn't report one.
+const DefaultFirmwareProfile = "open-ground"
 
 // DetectedPuck represents a physical Seeed Studio XIAO ESP32-C5 board discovered over
 // Wi-Fi / ESP-NOW or flashed over USB, whether or not it is currently assigned to a gate.
 type DetectedPuck struct {
 	PuckID          uint8     `json:"puckId"`
 	PuckLabel       string    `json:"puckLabel"`
+	Fingerprint     string    `json:"fingerprint,omitempty"` // Stable 8-hex-digit board identity stamped at flash time
 	Color           string    `json:"color"`
 	IsHub           bool      `json:"isHub"`
 	FirmwareVersion string    `json:"firmwareVersion,omitempty"`
+	FirmwareProfile string    `json:"firmwareProfile,omitempty"` // Firmware design ID (e.g. "open-ground")
 	BatteryMv       uint16    `json:"batteryMv"`
 	BatteryPct      uint8     `json:"batteryPct"`
 	NoiseFloorDbm   float32   `json:"noiseFloorDbm"`
@@ -147,7 +153,7 @@ func DefaultTrackPucks() []GatePuck {
 		{
 			PuckID:          4,
 			AssignedPuckID:  4,
-			FirmwareVersion: "v0.1.3",
+			FirmwareVersion: LatestFirmwareVersion,
 			Color:           DefaultGateColors[3],
 			Role:            PuckRoleSectorGate,
 			TrackOrder:      3,

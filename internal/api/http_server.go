@@ -418,20 +418,27 @@ func (s *Server) handleProvisionGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Role            string `json:"role"`
-		PuckLabel       string `json:"puckLabel"`
-		FirmwareVersion string `json:"firmwareVersion,omitempty"`
+		Role        string `json:"role"`
+		PuckLabel   string `json:"puckLabel"`
+		Profile     string `json:"firmwareProfile,omitempty"`
+		Fingerprint string `json:"fingerprint,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := s.activeEngine().ProvisionGate(body.Role, body.PuckLabel, body.FirmwareVersion); err != nil {
+	req := tracker.ProvisionRequest{
+		Role:        body.Role,
+		Label:       body.PuckLabel,
+		Profile:     body.Profile,
+		Fingerprint: body.Fingerprint,
+	}
+	if _, err := s.activeEngine().ProvisionGate(req); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if s.activeEngine() != s.realEngine {
-		_, _ = s.realEngine.ProvisionGate(body.Role, body.PuckLabel, body.FirmwareVersion)
+		_, _ = s.realEngine.ProvisionGate(req)
 	}
 	s.handleGetState(w, r)
 }
@@ -449,19 +456,12 @@ func (s *Server) handleFirmwareImage(w http.ResponseWriter, r *http.Request) {
 	var role uint8
 	switch r.URL.Query().Get("role") {
 	case "hub":
-		role = firmware.RoleStartBridge
+		role = firmware.RoleHubTimer
 	case "spoke":
-		role = firmware.RoleFieldPuck
-	}
-
-	var puckID uint8
-	if rawID := r.URL.Query().Get("puckId"); rawID != "" {
-		parsed, err := strconv.Atoi(rawID)
-		if err != nil || parsed < 1 || parsed > 6 {
-			http.Error(w, "invalid timerId", http.StatusBadRequest)
-			return
-		}
-		puckID = uint8(parsed)
+		role = firmware.RoleSpokeTimer
+	default:
+		http.Error(w, "role must be hub or spoke", http.StatusBadRequest)
+		return
 	}
 
 	pilots, _, _, _, _ := s.activeEngine().StateSnapshot()
@@ -470,14 +470,14 @@ func (s *Server) handleFirmwareImage(w http.ResponseWriter, r *http.Request) {
 		freqs[i] = pilots[i].FrequencyMHz
 	}
 
-	built, err := firmware.BuildXIAOC5Image(firmware.PuckConfig{
-		Role:            role,
-		PuckID:          puckID,
-		PuckLabel:       r.URL.Query().Get("label"),
-		FirmwareVersion: r.URL.Query().Get("version"),
-		SlotFreqsMHz:    freqs,
-		WifiSSID:        r.URL.Query().Get("ssid"),
-		WifiPass:        r.URL.Query().Get("pass"),
+	built, err := firmware.BuildXIAOC5Image(firmware.TimerConfig{
+		Role:         role,
+		Profile:      r.URL.Query().Get("profile"),
+		Fingerprint:  firmware.ParseFingerprint(r.URL.Query().Get("fingerprint")),
+		PuckLabel:    r.URL.Query().Get("label"),
+		SlotFreqsMHz: freqs,
+		WifiSSID:     r.URL.Query().Get("ssid"),
+		WifiPass:     r.URL.Query().Get("pass"),
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -487,7 +487,8 @@ func (s *Server) handleFirmwareImage(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", built.Filename))
 	w.Header().Set("X-SlapRF-SHA256", built.SHA256Hex)
-	w.Header().Set("X-SlapRF-Puck-ID", strconv.Itoa(int(built.Config.PuckID)))
+	w.Header().Set("X-SlapRF-Fingerprint", firmware.FormatFingerprint(built.Config.Fingerprint))
+	w.Header().Set("X-SlapRF-Profile", built.Config.Profile)
 	w.Header().Set("X-SlapRF-Role", strconv.Itoa(int(built.Config.Role)))
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusOK)
@@ -553,11 +554,11 @@ func (s *Server) handleSimTimerAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Action          string `json:"action"` // "toggle-power", "delete", "add"
-		PuckID          uint8  `json:"puckId,omitempty"`
-		Role            string `json:"role,omitempty"`
-		Label           string `json:"label,omitempty"`
-		FirmwareVersion string `json:"firmwareVersion,omitempty"`
+		Action  string `json:"action"` // "toggle-power", "delete", "add"
+		PuckID  uint8  `json:"puckId,omitempty"`
+		Role    string `json:"role,omitempty"`
+		Label   string `json:"label,omitempty"`
+		Profile string `json:"firmwareProfile,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -572,7 +573,7 @@ func (s *Server) handleSimTimerAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "add":
-		if _, err := s.simulator.AddTimer(body.Role, body.Label, body.FirmwareVersion); err != nil {
+		if _, err := s.simulator.AddTimer(body.Role, body.Label, body.Profile); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

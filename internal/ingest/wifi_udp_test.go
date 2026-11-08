@@ -95,3 +95,40 @@ func TestCorruptedPacketRejectedAndHealedByNextWindow(t *testing.T) {
 		t.Fatalf("unexpected reconstructed timestamps: %+v", got)
 	}
 }
+
+func TestHelloMapsHubSlotToStableTimerByFingerprint(t *testing.T) {
+	eng := tracker.NewRealEngine()
+	rx := NewWiFiUDPReceiver(":0", eng)
+
+	// Board announces itself in Hub slot 5 running the 100 Hz indoor profile.
+	rx.IngestPacket(EncodeHelloFrame(5, 2, 0xCAFEBABE, 3, 100, "S7"), 0)
+
+	var timerID uint8
+	for _, d := range eng.DetectedPucksSnapshot() {
+		if d.Fingerprint == "CAFEBABE" {
+			timerID = d.PuckID
+			if d.PuckLabel != "S7" || d.FirmwareProfile != "indoor" {
+				t.Fatalf("unexpected registered timer: %+v", d)
+			}
+		}
+	}
+	if timerID == 0 {
+		t.Fatal("expected Hello to register the fingerprinted timer")
+	}
+
+	samples := []domain.PuckTelemetryFrame{{SeqNum: 1}, {SeqNum: 2}}
+	got := rx.DecodePacket(EncodeWindowFrame(5, 4100, -92, samples), 1_000_000)
+	if len(got) != 2 || got[0].PuckID != timerID {
+		t.Fatalf("expected slot 5 frames to map to timer %d, got %+v", timerID, got)
+	}
+	if got[0].TimestampUs != 1_000_000-10_000 {
+		t.Fatalf("expected 10 ms spacing for 100 Hz profile, got %d", got[0].TimestampUs)
+	}
+
+	// Re-joining in a different slot keeps the same stable timer ID.
+	rx.IngestPacket(EncodeHelloFrame(2, 2, 0xCAFEBABE, 3, 100, "S7"), 0)
+	got = rx.DecodePacket(EncodeWindowFrame(2, 4100, -92, []domain.PuckTelemetryFrame{{SeqNum: 9}}), 2_000_000)
+	if len(got) != 1 || got[0].PuckID != timerID {
+		t.Fatalf("expected re-joined board to keep timer %d, got %+v", timerID, got)
+	}
+}

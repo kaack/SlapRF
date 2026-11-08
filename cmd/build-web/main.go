@@ -30,22 +30,23 @@ func main() {
 		}
 	}
 
-	// 0. Emit static base .bin firmware images (v0.1.4, v0.1.3, v0.1.2) so the browser WebSerial
-	// flasher can fetch & patch them directly without a Go backend.
-	for _, ver := range []string{"v0.1.4", "v0.1.3", "v0.1.2"} {
+	// 0. Build one static base .bin per firmware profile from the current source so the browser
+	// WebSerial flasher can fetch & patch them directly without a Go backend.
+	for _, p := range firmware.Profiles {
 		built, err := firmware.BuildXIAOC5Image(firmware.TimerConfig{
-			Role:            firmware.RoleHubTimer,
-			PuckID:          1,
-			FirmwareVersion: ver,
+			Role:        firmware.RoleHubTimer,
+			Profile:     p.ID,
+			Fingerprint: 1, // Placeholder; the browser stamps the real fingerprint at flash time
 		})
 		if err != nil {
-			log.Fatalf("failed to build static firmware %s: %v", ver, err)
+			log.Fatalf("failed to build static firmware %s: %v", p.ID, err)
 		}
-		binPath := filepath.Join(*outDir, "firmware", "slaprf-xiao-c5-"+ver+".bin")
+		binPath := filepath.Join(*outDir, "firmware", "slaprf-xiao-c5-"+p.ID+".bin")
 		if err := os.WriteFile(binPath, built.Bytes, 0o644); err != nil {
 			log.Fatalf("failed to write %s: %v", binPath, err)
 		}
 	}
+	log.Printf("[build-web] Built %d firmware profiles", len(firmware.Profiles))
 
 	// 1. Copy index.html (and 404.html for GitHub Pages SPA fallback) and styles/*.css
 	mustCopyFile(filepath.Join(*webDir, "index.html"), filepath.Join(*outDir, "index.html"))

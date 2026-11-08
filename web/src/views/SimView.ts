@@ -2,7 +2,12 @@ import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
-import { FIRMWARE_RELEASES, LATEST_FIRMWARE_VERSION } from "../services/esp_flasher";
+import {
+  DEFAULT_FIRMWARE_PROFILE,
+  FIRMWARE_PROFILES,
+  firmwareProfile,
+  LATEST_FIRMWARE_VERSION,
+} from "../services/esp_flasher";
 import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
 import {
@@ -217,7 +222,7 @@ export class SimView extends Component {
 
   private addRole: "spoke" | "hub" = "spoke";
   private addLabel = "";
-  private addFwVersion = LATEST_FIRMWARE_VERSION;
+  private addProfile = DEFAULT_FIRMWARE_PROFILE;
   private errorMsg = "";
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
@@ -225,9 +230,9 @@ export class SimView extends Component {
     this.store = store;
     this.api = api;
 
-    const fwOptions = FIRMWARE_RELEASES.map(
+    const fwOptions = FIRMWARE_PROFILES.map(
       (fw) =>
-        `<option value="${esc(fw.version)}" ${fw.version === this.addFwVersion ? "selected" : ""}>${esc(fw.label)}</option>`
+        `<option value="${esc(fw.id)}" ${fw.id === this.addProfile ? "selected" : ""}>${esc(fw.name)}</option>`
     ).join("");
 
     // Uses the exact two-column `.settings` / `.settings-section` / `.card` UX language as System (`SetupView.ts`)
@@ -270,8 +275,8 @@ export class SimView extends Component {
                   <input type="text" class="input mono" data-field="timer-label" placeholder="e.g. T5 Tunnel Exit" value="" />
                 </label>
                 <label class="sim-inline-field">
-                  <span>Firmware version</span>
-                  <select class="input mono" data-field="timer-fw">
+                  <span>Firmware profile</span>
+                  <select class="input" data-field="timer-fw">
                     ${fwOptions}
                   </select>
                 </label>
@@ -403,7 +408,7 @@ export class SimView extends Component {
     if (target.dataset.field === "timer-role") {
       this.addRole = target.value === "hub" ? "hub" : "spoke";
     } else if (target.dataset.field === "timer-fw") {
-      this.addFwVersion = target.value;
+      this.addProfile = target.value;
     }
   };
 
@@ -476,7 +481,7 @@ export class SimView extends Component {
             action: "add",
             role: this.addRole,
             label,
-            firmwareVersion: this.addFwVersion,
+            firmwareProfile: this.addProfile,
           })
           .then(() => {
             this.addLabel = "";
@@ -958,7 +963,7 @@ export class SimView extends Component {
       timers
         .map(
           (t) =>
-            `${t.puckId}:${t.puckLabel}:${t.color}:${t.isHub ? 1 : 0}:${t.firmwareVersion}:${t.poweredOn ? 1 : 0}:${t.assignedGateName}`
+            `${t.puckId}:${t.puckLabel}:${t.color}:${t.isHub ? 1 : 0}:${t.firmwareVersion}:${t.firmwareProfile}:${t.poweredOn ? 1 : 0}:${t.assignedGateName}`
         )
         .join("|") + `|err:${this.errorMsg}`;
     if (sig === this.lastTimersSig) return;
@@ -992,13 +997,9 @@ export class SimView extends Component {
               <span class="detected-role-pill ${t.isHub ? "is-hub" : ""}">${t.isHub ? "Hub" : "Spoke"}</span>
             </div>
 
-            <div class="puck-fw-cell">
-              <span class="mono">${esc(t.firmwareVersion)}</span>
-              ${
-                isLatestFw
-                  ? `<span class="badge tone-good">Latest</span>`
-                  : `<span class="badge tone-warn">Update → ${LATEST_FIRMWARE_VERSION}</span>`
-              }
+            <div class="puck-fw-cell" title="${esc(`${firmwareProfile(t.firmwareProfile).name} · ${t.firmwareVersion}`)}">
+              <span>${esc(firmwareProfile(t.firmwareProfile).name)}</span>
+              ${isLatestFw ? "" : `<span class="badge tone-warn">Update → ${LATEST_FIRMWARE_VERSION}</span>`}
             </div>
 
             <div>

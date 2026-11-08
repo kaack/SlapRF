@@ -3,10 +3,12 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import {
-  FIRMWARE_RELEASES,
+  DEFAULT_FIRMWARE_PROFILE,
+  FIRMWARE_PROFILES,
   FlashProgress,
   LATEST_FIRMWARE_VERSION,
   TimerReadout,
+  firmwareProfile,
   flashXiaoC5OverWebSerial,
   isWebSerialSupported,
   readXiaoC5OverWebSerial,
@@ -27,32 +29,12 @@ interface ScannedWifi {
   saved?: boolean;
 }
 
-interface SpokeRadialSlot {
-  slot: number; // 1..6
-  label: string;
-  defaultName: string;
-  /** Position in 0..100% coordinate space around the central Hub (50%, 50%) */
-  xPct: number;
-  yPct: number;
-  /** SVG coordinates in 520x310 viewBox */
-  svgX: number;
-  svgY: number;
-}
-
-const SPOKE_SLOTS: SpokeRadialSlot[] = [
-  { slot: 1, label: "S1", defaultName: "S1", xPct: 50, yPct: 14, svgX: 260, svgY: 43 },
-  { slot: 2, label: "S2", defaultName: "S2", xPct: 83, yPct: 31, svgX: 432, svgY: 96 },
-  { slot: 3, label: "S3", defaultName: "S3", xPct: 83, yPct: 69, svgX: 432, svgY: 214 },
-  { slot: 4, label: "S4", defaultName: "S4", xPct: 50, yPct: 86, svgX: 260, svgY: 267 },
-  { slot: 5, label: "S5", defaultName: "S5", xPct: 17, yPct: 69, svgX: 88, svgY: 214 },
-  { slot: 6, label: "S6", defaultName: "S6", xPct: 17, yPct: 31, svgX: 88, svgY: 96 },
-];
 
 /**
  * Interactive Hub & Spoke network flasher wizard for Seeed Studio XIAO ESP32-C5 timers.
  *
- *   - Step 1 (`network`): Interactive Hub + 6 Spokes network topology map. Click the central
- *     **Hub** or any of the **6 Spokes** (`S1`–`S6`) to configure and flash that node.
+ *   - Step 1 (`network`): Pick the **Hub** or **Spoke** role via pictorial cards (same style as
+ *     the Wi-Fi mode step); Spoke reveals the **S1–S6** slot chips.
  *   - Step 2 (`identity`): Set **Timer ID / name** (pre-filled from the node you clicked) and
  *     **Firmware version**.
  *   - Step 3 (`wifi`, Hub only): Two visual pictorial diagrams comparing **Station Mode**
@@ -66,11 +48,12 @@ export class TimerFlasher extends Component {
   private step: WizardStepId = "network";
   private slideDir: "next" | "prev" | "none" = "none";
   private role: "hub" | "spoke" = "hub";
-  private selectedSpokeSlot = 1;
   private flashedNodes = new Set<string>();
   private hubWifiMode: HubWifiMode = "join";
   private timerLabel = "H1";
-  private firmwareVersion = LATEST_FIRMWARE_VERSION;
+  private firmwareProfileId = DEFAULT_FIRMWARE_PROFILE;
+  /** Keep the board's existing fingerprint when reflashing (vs. mint a new one). */
+  private keepFingerprint = true;
   private networks: ScannedWifi[] = [];
   private scanningWifi = false;
   private customMode = false;
@@ -134,21 +117,17 @@ export class TimerFlasher extends Component {
         return;
       }
 
-      const pickNode = t.closest<HTMLElement>("[data-pick-node]");
-      if (pickNode) {
-        const nodeKey = pickNode.dataset.pickNode || "hub";
-        if (nodeKey === "hub") {
-          this.role = "hub";
-          this.timerLabel = "H1";
-        } else {
-          const slotNum = Math.max(1, Math.min(6, Number(nodeKey.replace("spoke-", "")) || 1));
-          this.role = "spoke";
-          this.selectedSpokeSlot = slotNum;
-          this.timerLabel = `S${slotNum}`;
+      const pickRole = t.closest<HTMLElement>("[data-pick-role]");
+      if (pickRole) {
+        const nextRole = pickRole.dataset.pickRole === "spoke" ? "spoke" : "hub";
+        if (nextRole !== this.role) {
+          this.role = nextRole;
+          this.timerLabel = nextRole === "hub" ? "H1" : this.suggestSpokeLabel();
+          this.errorMsg = null;
+          this.lastSuccessMsg = null;
+          this.slideDir = "none";
+          this.render();
         }
-        this.errorMsg = null;
-        this.lastSuccessMsg = null;
-        this.goToStep("identity", "next");
         return;
       }
 
@@ -272,12 +251,16 @@ export class TimerFlasher extends Component {
           this.slideDir = "none";
           this.render();
         }
-      } else if (target.matches("[data-fw-version]")) {
-        this.firmwareVersion = target.value || LATEST_FIRMWARE_VERSION;
+      } else if (target.matches("[data-fw-profile]")) {
+        this.firmwareProfileId = target.value || DEFAULT_FIRMWARE_PROFILE;
         this.slideDir = "none";
         this.render();
       } else if (target.matches("[data-all-ports]")) {
         this.showAllPorts = (target as HTMLInputElement).checked;
+      } else if (target.matches("[data-keep-fp]")) {
+        this.keepFingerprint = target.value === "keep";
+        this.slideDir = "none";
+        this.render();
       }
     });
 
@@ -447,7 +430,22 @@ export class TimerFlasher extends Component {
   }
 
   private get roleLabel(): string {
-    return this.role === "hub" ? "Hub" : `Spoke S${this.selectedSpokeSlot}`;
+    return this.role === "hub" ? "Hub" : "Spoke";
+  }
+
+  /** Next spoke name (S1, S2, …) not already used by a detected timer or one flashed this session. */
+  private suggestSpokeLabel(): string {
+    const taken = new Set<string>();
+    for (const d of this.store.detectedPucks) {
+      if (d.puckLabel) taken.add(d.puckLabel.trim().toUpperCase());
+    }
+    for (const key of this.flashedNodes) {
+      if (key.startsWith("spoke:")) taken.add(key.slice(6));
+    }
+    for (let n = 1; n <= 99; n++) {
+      if (!taken.has(`S${n}`)) return `S${n}`;
+    }
+    return "S1";
   }
 
   private async readUsb(): Promise<void> {
@@ -468,7 +466,7 @@ export class TimerFlasher extends Component {
         this.timerLabel.trim() || "H1",
         this.effectiveHubSSID,
         this.wifiPass,
-        this.firmwareVersion
+        this.firmwareProfileId
       );
       const info = await readXiaoC5OverWebSerial(
         bytes,
@@ -496,14 +494,15 @@ export class TimerFlasher extends Component {
           this.saveHubWifiMode("host");
         }
       }
+      this.firmwareProfileId = info.firmwareProfile;
       const idNote = info.timerLabel ? ` (${info.timerLabel})` : "";
       const verNote =
         info.firmwareVersion === LATEST_FIRMWARE_VERSION
-          ? `${info.firmwareVersion} — up to date`
-          : `${info.firmwareVersion} — update to ${LATEST_FIRMWARE_VERSION} available`;
-      this.lastSuccessMsg = `Read complete — timer is configured as ${
-        info.role === "hub" ? "Hub" : "Spoke"
-      }${idNote} running ${verNote}.`;
+          ? `up to date`
+          : `update to ${LATEST_FIRMWARE_VERSION} available`;
+      this.lastSuccessMsg = `Read complete — ${info.role === "hub" ? "Hub" : "Spoke"}${idNote} running ${
+        firmwareProfile(info.firmwareProfile).name
+      } (${info.firmwareVersion}, ${verNote}).`;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/No port selected|aborted|cancelled/i.test(msg)) {
@@ -524,7 +523,7 @@ export class TimerFlasher extends Component {
       return;
     }
     const cleanLabel = this.timerLabel.trim();
-    const label = `${this.role === "hub" ? "Hub" : "Spoke"} "${cleanLabel}" (${this.firmwareVersion})`;
+    const label = `${this.role === "hub" ? "Hub" : "Spoke"} "${cleanLabel}"`;
     this.busy = true;
     this.errorMsg = null;
     this.lastSuccessMsg = null;
@@ -544,7 +543,7 @@ export class TimerFlasher extends Component {
         cleanLabel,
         ssid,
         pass,
-        this.firmwareVersion
+        this.firmwareProfileId
       );
 
       const written = await flashXiaoC5OverWebSerial(
@@ -555,15 +554,19 @@ export class TimerFlasher extends Component {
           this.slideDir = "none";
           this.render();
         },
-        this.showAllPorts
+        this.showAllPorts,
+        this.keepFingerprint
       );
 
       if (written) {
         this.readout = written;
       }
-      await this.api.provisionTimer(this.role, cleanLabel, this.firmwareVersion);
-      this.flashedNodes.add(this.role === "hub" ? "hub" : `spoke-${this.selectedSpokeSlot}`);
-      this.lastSuccessMsg = `${label} flashed and added to Timers & Track!`;
+      await this.api.provisionTimer(this.role, cleanLabel, this.firmwareProfileId, written?.fingerprint ?? "");
+      this.flashedNodes.add(this.role === "hub" ? "hub" : `spoke:${cleanLabel.toUpperCase()}`);
+      const fpNote = written?.fingerprintKept
+        ? `kept its fingerprint ${written.fingerprint}`
+        : `got new fingerprint ${written?.fingerprint ?? ""}`;
+      this.lastSuccessMsg = `${label} flashed and ${fpNote} — added to Timers & Track.`;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/No port selected|aborted|cancelled/i.test(msg)) {
@@ -592,7 +595,7 @@ export class TimerFlasher extends Component {
         cleanLabel,
         ssid,
         pass,
-        this.firmwareVersion
+        this.firmwareProfileId
       );
       const blob = new Blob([bytes], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
@@ -647,99 +650,65 @@ export class TimerFlasher extends Component {
   }
 
   /**
-   * Step 1: Interactive Hub + 6 Spokes network topology diagram.
-   * Clicking the central Hub takes you through the Hub flow; clicking any of the 6 Spokes
-   * takes you through the Spoke flow. Arrows point from each Spoke (client) -> Hub (host).
+   * Step 1: Role picker in the same pictorial-card style as the Wi-Fi mode step.
+   * Pick **Hub** (one per network) or **Spoke**; picking Spoke reveals the S1–S6 slot chips.
    */
   private renderStepNetwork(webSerialOk: boolean): string {
-    const isHubSelected = this.role === "hub";
+    const isHub = this.role === "hub";
     const hubFlashed = this.flashedNodes.has("hub");
-    const cx = 260;
-    const cy = 155;
-    const hubStopR = 46;
-    const spokeStartR = 32;
-
-    const linesSvg = SPOKE_SLOTS.map((s) => {
-      const isActive = !isHubSelected && this.selectedSpokeSlot === s.slot;
-      const isDone = this.flashedNodes.has(`spoke-${s.slot}`);
-      const dx = cx - s.svgX;
-      const dy = cy - s.svgY;
-      const dist = Math.hypot(dx, dy) || 1;
-      const ux = dx / dist;
-      const uy = dy / dist;
-      const x1 = Math.round(s.svgX + ux * spokeStartR);
-      const y1 = Math.round(s.svgY + uy * spokeStartR);
-      const x2 = Math.round(cx - ux * hubStopR);
-      const y2 = Math.round(cy - uy * hubStopR);
-      const markerId = isActive ? "net-arrow-active" : isDone ? "net-arrow-done" : "net-arrow";
-      return `
-        <line
-          x1="${x1}" y1="${y1}"
-          x2="${x2}" y2="${y2}"
-          marker-end="url(#${markerId})"
-          class="flasher-net-line ${isActive ? "is-active" : ""} ${isDone ? "is-done" : ""}"
-        />`;
-    }).join("");
-
-    const spokesHtml = SPOKE_SLOTS.map((s) => {
-      const isActive = !isHubSelected && this.selectedSpokeSlot === s.slot;
-      const isDone = this.flashedNodes.has(`spoke-${s.slot}`);
-      return `
-        <button
-          type="button"
-          class="flasher-net-node is-spoke ${isActive ? "is-selected" : ""} ${isDone ? "is-flashed" : ""}"
-          style="left:${s.xPct}%;top:${s.yPct}%"
-          data-pick-node="spoke-${s.slot}"
-          ${this.busy ? "disabled" : ""}
-          title="Click to configure & flash ${s.defaultName} (Spoke)"
-        >
-          <span class="flasher-net-node-code mono">${s.label}</span>
-          <span class="flasher-net-node-sub">${isDone ? "✓ Flashed" : "Spoke"}</span>
-        </button>`;
-    }).join("");
+    const flashedSpokes = [...this.flashedNodes].filter((k) => k.startsWith("spoke:")).length;
 
     return `
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
-          <h3>Select role to flash</h3>
-          <p>Click the central <strong>Hub</strong> or any of the <strong>6 Spokes</strong> to configure and flash.</p>
+          <div class="flasher-wizard-badge-row">
+            <span class="note">Step 1 of ${isHub ? 4 : 3} · One Hub plus up to 6 Spokes per course</span>
+          </div>
+          <h3>What role will this timer play?</h3>
         </div>
 
-        <div class="flasher-net-canvas" role="group" aria-label="Hub and 6 Spokes role selector">
-          <svg class="flasher-net-svg" viewBox="0 0 520 310" preserveAspectRatio="none" aria-hidden="true">
-            <defs>
-              <marker id="net-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-                <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#64748b" />
-              </marker>
-              <marker id="net-arrow-active" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-                <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#d4ff3a" />
-              </marker>
-              <marker id="net-arrow-done" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-                <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#34d399" />
-              </marker>
-            </defs>
-            ${linesSvg}
-          </svg>
+        <div class="flasher-pictorial-grid" role="radiogroup" aria-label="Timer role">
+          <button
+            type="button"
+            role="radio"
+            aria-checked="${isHub}"
+            class="flasher-pictorial-card ${isHub ? "is-active" : ""}"
+            data-pick-role="hub"
+            ${this.busy ? "disabled" : ""}
+          >
+            <div class="flasher-pictorial-head">
+              <span class="flasher-pictorial-title">Hub</span>
+              <span class="badge ${isHub ? "tone-good" : ""}">${hubFlashed ? "✓ Flashed" : "H1 · 1 per course"}</span>
+            </div>
+            <div class="flasher-pictorial-art">
+              ${this.renderPictorialRoleHub()}
+            </div>
+            <p class="flasher-pictorial-desc">
+              Usually the start / finish gate. Collects every Spoke's passes and talks to this computer over Wi-Fi.
+            </p>
+          </button>
 
           <button
             type="button"
-            class="flasher-net-node is-hub ${isHubSelected ? "is-selected" : ""} ${hubFlashed ? "is-flashed" : ""}"
-            style="left:50%;top:50%"
-            data-pick-node="hub"
+            role="radio"
+            aria-checked="${!isHub}"
+            class="flasher-pictorial-card ${!isHub ? "is-active" : ""}"
+            data-pick-role="spoke"
             ${this.busy ? "disabled" : ""}
-            title="Click to configure & flash H1 (Hub)"
           >
-            <span class="flasher-net-hub-icon">${icons.slaprf(18)}</span>
-            <span class="flasher-net-node-code mono">H1</span>
-            <span class="flasher-net-node-sub">${hubFlashed ? "✓ Flashed" : "Hub"}</span>
+            <div class="flasher-pictorial-head">
+              <span class="flasher-pictorial-title">Spoke</span>
+              <span class="badge ${!isHub ? "tone-good" : ""}">${
+                flashedSpokes > 0 ? `✓ ${flashedSpokes} flashed` : "Up to 6 · Sector gates"
+              }</span>
+            </div>
+            <div class="flasher-pictorial-art">
+              ${this.renderPictorialRoleSpoke()}
+            </div>
+            <p class="flasher-pictorial-desc">
+              Placed at each sector gate around the course. Sends its passes to the Hub over long-range ESP-NOW — no Wi-Fi setup needed.
+            </p>
           </button>
-
-          ${spokesHtml}
-        </div>
-
-        <div class="flasher-net-legend">
-          <span><i class="dot-hub"></i><strong>Hub (H1)</strong> · Receives all spokes &amp; bridges over Wi-Fi</span>
-          <span><i class="dot-spoke"></i><strong>Spokes (S1–S6)</strong> · Transmit to Hub over ESP-NOW LR</span>
         </div>
 
         <div class="flasher-inspect-bar">
@@ -757,21 +726,84 @@ export class TimerFlasher extends Component {
             <span>Read timer from USB</span>
           </button>
         </div>
+
+        <div class="flasher-wizard-nav is-end">
+          <button type="button" class="btn" data-wizard-next="1" ${this.busy ? "disabled" : ""}>
+            <span>Next</span>
+            ${icons.chevronRight(15)}
+          </button>
+        </div>
       </div>`;
+  }
+
+  /** Pictorial for the Hub role: Spokes ──▶ Hub ◀── Laptop (Wi-Fi). */
+  private renderPictorialRoleHub(): string {
+    return `
+      <svg class="flasher-pic-svg" viewBox="0 0 280 68" fill="none" aria-hidden="true">
+        <defs>
+          <marker id="pic-arrow-role-hub" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="currentColor" />
+          </marker>
+        </defs>
+
+        <line x1="52" y1="14" x2="114" y2="30" class="flasher-pic-link is-dim" marker-end="url(#pic-arrow-role-hub)" />
+        <line x1="52" y1="34" x2="114" y2="34" class="flasher-pic-link is-dim" marker-end="url(#pic-arrow-role-hub)" />
+        <line x1="52" y1="54" x2="114" y2="38" class="flasher-pic-link is-dim" marker-end="url(#pic-arrow-role-hub)" />
+        <line x1="214" y1="34" x2="166" y2="34" class="flasher-pic-link" marker-end="url(#pic-arrow-role-hub)" />
+
+        <g transform="translate(40, 14)"><circle r="9" class="flasher-pic-node is-dim-node" /></g>
+        <g transform="translate(40, 34)"><circle r="9" class="flasher-pic-node is-dim-node" /></g>
+        <g transform="translate(40, 54)"><circle r="9" class="flasher-pic-node is-dim-node" /></g>
+
+        <g transform="translate(140, 34)">
+          <circle r="22" class="flasher-pic-node is-hub-node is-host-node" />
+          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title">Hub</text>
+        </g>
+
+        <g transform="translate(238, 34)">
+          <rect x="-22" y="-20" width="44" height="40" rx="8" class="flasher-pic-node" />
+          <rect x="-11" y="-8" width="22" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5" />
+          <path d="M-15 8 H15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+        </g>
+      </svg>`;
+  }
+
+  /** Pictorial for the Spoke role: Spoke ──ESP-NOW──▶ Hub. */
+  private renderPictorialRoleSpoke(): string {
+    return `
+      <svg class="flasher-pic-svg" viewBox="0 0 280 68" fill="none" aria-hidden="true">
+        <defs>
+          <marker id="pic-arrow-role-spoke" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="currentColor" />
+          </marker>
+        </defs>
+
+        <line x1="96" y1="34" x2="182" y2="34" class="flasher-pic-link" marker-end="url(#pic-arrow-role-spoke)" />
+        <text x="139" y="26" text-anchor="middle" class="flasher-pic-link-label">ESP-NOW LR</text>
+
+        <g transform="translate(72, 34)">
+          <circle r="20" class="flasher-pic-node is-host-node" />
+          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title">Spoke</text>
+        </g>
+
+        <g transform="translate(208, 34)">
+          <circle r="20" class="flasher-pic-node is-dim-node" />
+          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title is-dim">Hub</text>
+        </g>
+      </svg>`;
   }
 
   private renderStepIdentity(): string {
     const isHub = this.role === "hub";
-    const idPlaceholder = isHub ? "e.g. H1" : `e.g. S${this.selectedSpokeSlot}`;
-    const selectedRel =
-      FIRMWARE_RELEASES.find((r) => r.version === this.firmwareVersion) ?? FIRMWARE_RELEASES[0];
+    const idPlaceholder = isHub ? "e.g. H1" : "e.g. S1";
+    const profile = firmwareProfile(this.firmwareProfileId);
 
     return `
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
           <div class="flasher-wizard-badge-row">
             <span class="badge ${isHub ? "tone-good" : ""}">Role: ${
-              isHub ? "Hub (H1)" : `Spoke (S${this.selectedSpokeSlot})`
+              isHub ? "Hub" : "Spoke"
             }</span>
             <span class="note">${
               isHub
@@ -780,12 +812,12 @@ export class TimerFlasher extends Component {
             }</span>
           </div>
           <h3>Name this ${isHub ? "Hub" : "Spoke"} &amp; choose firmware</h3>
-          <p>This name is written to the board so it identifies itself automatically in Timers and on the Track.</p>
+          <p>The name is how this timer shows up in Timers and on the Track. Pick the firmware that matches your track and where the timer will sit on the gate.</p>
         </div>
 
         <div class="flasher-wifi-inputs flasher-two-col">
           <div class="flasher-field">
-            <label class="flasher-field-label">Timer</label>
+            <label class="flasher-field-label">Timer name</label>
             <input
               class="input mono"
               type="text"
@@ -802,20 +834,26 @@ export class TimerFlasher extends Component {
           <div class="flasher-field">
             <label class="flasher-field-label">Firmware</label>
             <select
-              class="input mono"
-              data-fw-version="1"
-              aria-label="Firmware"
-              title="${esc(selectedRel.summary)}"
+              class="input"
+              data-fw-profile="1"
+              aria-label="Firmware profile"
               ${this.busy ? "disabled" : ""}
             >
-              ${FIRMWARE_RELEASES.map(
-                (rel) =>
-                  `<option value="${esc(rel.version)}" ${
-                    rel.version === this.firmwareVersion ? "selected" : ""
-                  }>${esc(rel.label)}</option>`
+              ${FIRMWARE_PROFILES.map(
+                (p) =>
+                  `<option value="${esc(p.id)}" ${p.id === profile.id ? "selected" : ""}>${esc(p.name)}</option>`
               ).join("")}
             </select>
           </div>
+        </div>
+
+        <div class="flasher-profile-hint">
+          <div class="flasher-profile-tags">
+            <span class="badge">${esc(profile.track)}</span>
+            <span class="badge">${esc(profile.mount)}</span>
+            <span class="note mono">${LATEST_FIRMWARE_VERSION}</span>
+          </div>
+          <p>${esc(profile.summary)}</p>
         </div>
 
         <div class="flasher-wizard-nav">
@@ -1120,19 +1158,20 @@ export class TimerFlasher extends Component {
 
   private renderStepFlash(webSerialOk: boolean): string {
     const isHub = this.role === "hub";
-    const cleanLabel = this.timerLabel.trim() || (isHub ? "H1" : `S${this.selectedSpokeSlot}`);
+    const cleanLabel = this.timerLabel.trim() || (isHub ? "H1" : this.suggestSpokeLabel());
+    const profile = firmwareProfile(this.firmwareProfileId);
     const wifiSummary = isHub
       ? this.hubWifiMode === "host"
         ? `Hub Hotspot "SlapRF" (${this.wifiPass ? "WPA2" : "Open AP"})`
         : `Join "${this.wifiSSID.trim() || "(unset)"}" (Station Mode)`
-      : "2.4 GHz ESP-NOW LR → Hub H1";
+      : `2.4 GHz ESP-NOW ${profile.linkRate === 1 ? "Long Range 500 kbps" : "1 Mbps"} → Hub`;
 
     const pct = this.progress ? this.progress.percent : this.lastSuccessMsg ? 100 : 0;
     const statusText = this.progress
       ? this.progress.detail
       : this.lastSuccessMsg
       ? `✓ ${this.lastSuccessMsg}`
-      : `Ready to flash ${cleanLabel} (${this.firmwareVersion}) over USB-C`;
+      : `Ready to flash ${cleanLabel} over USB-C`;
 
     return `
       <div class="flasher-wizard-body">
@@ -1153,8 +1192,8 @@ export class TimerFlasher extends Component {
 
           <div class="flasher-receipt-item">
             <span class="note">Timer &amp; Firmware</span>
-            <div class="flasher-receipt-val mono">
-              <span>${esc(cleanLabel)} · ${esc(this.firmwareVersion)}</span>
+            <div class="flasher-receipt-val" title="${esc(profile.summary)}">
+              <span><span class="mono">${esc(cleanLabel)}</span> · ${esc(profile.name)}</span>
             </div>
           </div>
 
@@ -1163,6 +1202,20 @@ export class TimerFlasher extends Component {
             <div class="flasher-receipt-val mono">
               <span>${esc(wifiSummary)}</span>
             </div>
+          </div>
+        </div>
+
+        <div class="flasher-fp-option" role="radiogroup" aria-label="Board fingerprint">
+          <span class="flasher-field-label">Board fingerprint</span>
+          <div class="flasher-fp-choices">
+            <label class="flasher-fp-choice ${this.keepFingerprint ? "is-active" : ""}">
+              <input type="radio" name="flasher-fp" value="keep" data-keep-fp="keep" ${this.keepFingerprint ? "checked" : ""} ${this.busy ? "disabled" : ""} />
+              <span><strong>Keep existing</strong> · Reflash or update this board; it stays the same timer with its color, gate, and history.</span>
+            </label>
+            <label class="flasher-fp-choice ${!this.keepFingerprint ? "is-active" : ""}">
+              <input type="radio" name="flasher-fp" value="new" data-keep-fp="new" ${!this.keepFingerprint ? "checked" : ""} ${this.busy ? "disabled" : ""} />
+              <span><strong>Generate new</strong> · Repurposed or swapped board; it shows up as a brand-new timer.</span>
+            </label>
           </div>
         </div>
 
@@ -1267,7 +1320,17 @@ export class TimerFlasher extends Component {
           </div>
           <div>
             <span class="note">Firmware</span>
-            <div class="mono">${esc(this.readout.firmwareVersion)}</div>
+            <div>${esc(firmwareProfile(this.readout.firmwareProfile).name)}</div>
+          </div>
+          <div>
+            <span class="note">Board fingerprint</span>
+            <div class="mono">${esc(this.readout.fingerprint || "—")}${
+              this.readout.fingerprintKept === true
+                ? ` <span class="badge">Kept</span>`
+                : this.readout.fingerprintKept === false
+                  ? ` <span class="badge">New</span>`
+                  : ""
+            }</div>
           </div>
           <div>
             <span class="note">2.4 GHz link</span>

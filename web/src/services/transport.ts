@@ -21,7 +21,8 @@ export interface ApiTransport {
     puckLabel: string,
     wifiSSID: string,
     wifiPass: string,
-    firmwareVersion?: string
+    profile: string,
+    fingerprint: string
   ): Promise<FirmwareImageResult>;
   connectStream(onEnvelope: (msg: StreamEnvelope) => void): void;
   disconnectStream(): void;

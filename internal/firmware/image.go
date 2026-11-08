@@ -2,32 +2,29 @@ package firmware
 
 import (
 	"bytes"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"slaprf/internal/domain"
 )
 
 const (
-	// ConfigMagic marks the 128-byte patchable configuration struct inside the XIAO ESP32-C5 image.
-	ConfigMagic = "SLAPRF01"
+	// ConfigMagic marks the patchable configuration struct inside the XIAO ESP32-C5 image.
+	ConfigMagic = "SLAPRF02"
 
 	// RoleHubTimer is the Hub timer: sweeps 5.8 GHz RSSI, receives ESP-NOW frames from Spoke
-	// timers, and bridges all telemetry to the laptop over Wi-Fi.
+	// timers, assigns their TDMA slots, and bridges all telemetry to the laptop over Wi-Fi.
 	RoleHubTimer uint8 = 1
 
-	// RoleSpokeTimer is a Spoke timer: sweeps 5.8 GHz RSSI and bursts 16-byte frames over
+	// RoleSpokeTimer is a Spoke timer: sweeps 5.8 GHz RSSI and bursts sliding-window frames over
 	// connectionless ESP-NOW to the Hub timer (no Wi-Fi association needed on spoke timers).
 	RoleSpokeTimer uint8 = 2
-
-	// Legacy aliases kept for compatibility.
-	RoleStartBridge = RoleHubTimer
-	RoleFieldPuck   = RoleSpokeTimer
-	RoleGatePuck    = RoleHubTimer
 
 	// espImageMagic is the standard Espressif bootloader image magic byte (0xE9).
 	espImageMagic byte = 0xE9
@@ -36,9 +33,8 @@ const (
 
 	// imageSize is a compact 64 KB flashable image (16 x 4 KB flash sectors).
 	imageSize   = 64 * 1024
-	configOff   = 0x0100 // Fixed offset of the 128-byte SLAPRF01 config struct inside the binary
-	configLen   = 128
-	maxTimerID  = 6
+	configOff   = 0x0100 // Fixed offset of the SLAPRF02 config struct inside the binary
+	configLen   = 160
 	minFreqMHz  = 5600
 	maxFreqMHz  = 5950
 	maxSSIDLen  = 32
@@ -46,27 +42,64 @@ const (
 	maxLabelLen = 24
 )
 
+// SLAPRF02 config block layout (160 bytes, little-endian):
+//
+//	[0..7]     "SLAPRF02"
+//	[8..10]    firmware version major / minor / patch
+//	[11]       role (1 = Hub, 2 = Spoke)
+//	[12]       profile code (see Profiles)
+//	[13]       wifi_mode (0 = host "SlapRF" AP, 1 = join wifi_ssid) — Hub only
+//	[14..17]   fingerprint (uint32) — stable per-board identity, never 0
+//	[18..33]   slot_freqs_mhz[8] (uint16)
+//	[34]       sweep_hz
+//	[35]       window_samples
+//	[36]       tx_every_sweeps
+//	[37]       link_rate (0 = 1 Mbps, 1 = LR 500 kbps)
+//	[38]       tx_power_qdbm
+//	[39]       rssi_filter (0 = none, 1 = median of 3)
+//	[40..72]   wifi_ssid (33, NUL-terminated)
+//	[73..112]  wifi_pass (40, NUL-terminated)
+//	[113..136] timer_label (24, NUL-padded)
+//	[137..158] reserved (0)
+//	[159]      XOR crc8 over [0..158]
+const (
+	offVersion     = 8
+	offRole        = 11
+	offProfile     = 12
+	offWifiMode    = 13
+	offFingerprint = 14
+	offFreqs       = 18
+	offSweepHz     = 34
+	offWindow      = 35
+	offTxEvery     = 36
+	offLinkRate    = 37
+	offTxPower     = 38
+	offRSSIFilter  = 39
+	offSSID        = 40
+	offPass        = 73
+	offLabel       = 113
+	offCRC         = configLen - 1
+)
+
 var (
-	ErrInvalidTimerID = errors.New("timer ID must be between 1 and 6")
-	ErrInvalidPuckID  = ErrInvalidTimerID
-	ErrSSIDTooLong    = errors.New("Wi-Fi SSID must be at most 32 bytes")
-	ErrPassTooLong    = errors.New("Wi-Fi password must be at most 39 bytes")
-	ErrLabelTooLong   = errors.New("timer ID / name must be at most 24 characters")
+	ErrInvalidRole  = errors.New("invalid role: must be hub (1) or spoke (2)")
+	ErrSSIDTooLong  = errors.New("Wi-Fi SSID must be at most 32 bytes")
+	ErrPassTooLong  = errors.New("Wi-Fi password must be at most 39 bytes")
+	ErrLabelTooLong = errors.New("timer ID / name must be at most 24 characters")
 )
 
 // TimerConfig is the binary configuration stamped into the XIAO ESP32-C5 firmware image
 // at download time so the user never needs a C compiler or CLI toolchain.
 type TimerConfig struct {
 	Role            uint8
-	PuckID          uint8
-	PuckLabel       string // Flashed hardware ID / name (e.g. "Hub-1", "Blue-Timer")
-	FirmwareVersion string // Firmware release version (e.g. "v0.1.4", "v0.1.3", "v0.1.2")
+	Profile         string // Firmware design ID (see Profiles); empty = DefaultProfileID
+	Fingerprint     uint32 // Stable per-board identity; 0 = generate a new random one
+	PuckLabel       string // Flashed timer name (e.g. "H1", "S3")
+	FirmwareVersion string // Filled in from the current build; read back by InspectConfig
 	SlotFreqsMHz    [domain.MaxPilotSlots]uint16
 	WifiSSID        string // Only used by Hub timer
 	WifiPass        string
 }
-
-type PuckConfig = TimerConfig
 
 // BuiltImage holds the patched ESP32-C5 firmware binary and its metadata.
 type BuiltImage struct {
@@ -77,34 +110,40 @@ type BuiltImage struct {
 	Filename  string
 }
 
-// BuildXIAOC5Image constructs a flashable ESP32-C5 firmware image with the given role
-// (RoleHubTimer = Hub timer, RoleSpokeTimer = Spoke timer), flashed timer ID/label,
-// 8-channel 5.8 GHz frequency table, and optional Wi-Fi credentials stamped into `SLAPRF01`.
-func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
-	if cfg.Role == 0 && cfg.PuckID == 0 {
-		return nil, ErrInvalidTimerID
-	}
-	if cfg.Role == 0 {
-		if cfg.PuckID == 1 {
-			cfg.Role = RoleHubTimer
-		} else {
-			cfg.Role = RoleSpokeTimer
+// NewFingerprint returns a random, non-zero 32-bit board fingerprint.
+func NewFingerprint() uint32 {
+	var b [4]byte
+	for {
+		if _, err := rand.Read(b[:]); err != nil {
+			return 0x51A9F00D
+		}
+		if fp := binary.LittleEndian.Uint32(b[:]); fp != 0 {
+			return fp
 		}
 	}
-	if cfg.Role != RoleHubTimer && cfg.Role != RoleSpokeTimer {
-		return nil, errors.New("invalid role: must be hub (1) or spoke (2)")
-	}
-	if cfg.PuckID == 0 {
-		if cfg.Role == RoleHubTimer {
-			cfg.PuckID = 1
-		} else {
-			cfg.PuckID = 2
-		}
-	}
-	if cfg.PuckID < 1 || cfg.PuckID > maxTimerID {
-		return nil, ErrInvalidTimerID
-	}
+}
 
+// FormatFingerprint renders a fingerprint as 8 upper-case hex digits.
+func FormatFingerprint(fp uint32) string {
+	return fmt.Sprintf("%08X", fp)
+}
+
+// ParseFingerprint parses an 8-hex-digit fingerprint (0 on failure).
+func ParseFingerprint(s string) uint32 {
+	v, err := strconv.ParseUint(strings.TrimSpace(s), 16, 32)
+	if err != nil {
+		return 0
+	}
+	return uint32(v)
+}
+
+// BuildXIAOC5Image constructs a flashable ESP32-C5 firmware image for the given role and
+// firmware profile, stamping the board fingerprint, timer name, 8-channel 5.8 GHz frequency
+// table, and optional Wi-Fi credentials into the `SLAPRF02` block.
+func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
+	if cfg.Role != RoleHubTimer && cfg.Role != RoleSpokeTimer {
+		return nil, ErrInvalidRole
+	}
 	cfg.PuckLabel = strings.TrimSpace(cfg.PuckLabel)
 	if len(cfg.PuckLabel) > maxLabelLen {
 		return nil, ErrLabelTooLong
@@ -115,17 +154,16 @@ func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 	if len(cfg.WifiPass) > maxPassLen {
 		return nil, ErrPassTooLong
 	}
-
 	if cfg.Role == RoleSpokeTimer {
 		cfg.WifiSSID = ""
 		cfg.WifiPass = ""
 	}
-	if cfg.FirmwareVersion == "" {
-		cfg.FirmwareVersion = domain.LatestFirmwareVersion
+	profile := ProfileByID(cfg.Profile)
+	cfg.Profile = profile.ID
+	if cfg.Fingerprint == 0 {
+		cfg.Fingerprint = NewFingerprint()
 	}
-	verByte := versionToByte(cfg.FirmwareVersion)
-	cfg.FirmwareVersion = byteToVersion(verByte)
-
+	cfg.FirmwareVersion = domain.LatestFirmwareVersion
 	for i, f := range cfg.SlotFreqsMHz {
 		if f < minFreqMHz || f > maxFreqMHz {
 			cfg.SlotFreqsMHz[i] = domain.RacebandFrequenciesMHz[i]
@@ -143,57 +181,50 @@ func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 	binary.LittleEndian.PutUint16(img[12:14], esp32c5ChipID)
 	img[23] = 0 // append_digest disabled for compact single-segment image
 
-	// Segment 0 header: load_addr + data_len
 	segLen := uint32(imageSize - 32 - 16)
 	binary.LittleEndian.PutUint32(img[24:28], 0x40800000)
 	binary.LittleEndian.PutUint32(img[28:32], segLen)
 
-	// 2. Fill deterministic RISC-V NOP sled (0x00000013 = addi x0, x0, 0) in code area
+	// 2. Deterministic RISC-V NOP sled (0x00000013 = addi x0, x0, 0) in code area
 	for off := 32; off < imageSize-16; off += 4 {
 		binary.LittleEndian.PutUint32(img[off:off+4], 0x00000013)
 	}
 
-	// 3. Stamp human-readable build banner at 0x0040
-	banner := fmt.Sprintf("SlapRF XIAO-ESP32-C5 SDR Firmware %s (Role=%d Timer=%d Label=%s)", cfg.FirmwareVersion, cfg.Role, cfg.PuckID, cfg.PuckLabel)
-	copy(img[0x0040:], []byte(banner))
+	// 3. Human-readable build banner at 0x0040
+	banner := fmt.Sprintf("SlapRF XIAO-ESP32-C5 %s profile=%s role=%d fp=%s label=%s",
+		cfg.FirmwareVersion, profile.ID, cfg.Role, FormatFingerprint(cfg.Fingerprint), cfg.PuckLabel)
+	if len(banner) > 0xC0 {
+		banner = banner[:0xC0]
+	}
+	copy(img[0x0040:0x0100], []byte(banner))
 
-	// 4. Stamp the 128-byte SLAPRF01 binary configuration block at 0x0100:
-	//    [0..7]     "SLAPRF01" (8 bytes)
-	//    [8]        version (4 = v0.1.4, 3 = v0.1.3, 2 = v0.1.2, 1 = v0.1.1)
-	//    [9]        role (1 = Hub timer, 2 = Spoke timer)
-	//    [10]       timer_id (1..16)
-	//    [11]       wifi_mode (0 = AP, 1 = Join WifiSSID)
-	//    [12..27]   slot_freqs_mhz[8] (8 x uint16 LE)
-	//    [28..29]   tdma_offset_us (uint16 LE)
-	//    [30..62]   wifi_ssid (null-terminated 33 bytes)
-	//    [63..102]  wifi_pass (null-terminated 40 bytes)
-	//    [103..126] timer_label (null-terminated 24 bytes — flashed Timer ID / name)
-	//    [127]      xor_crc8 over bytes [0..126]
+	// 4. SLAPRF02 config block
 	var block [configLen]byte
 	copy(block[0:8], []byte(ConfigMagic))
-	block[8] = verByte
-	block[9] = cfg.Role
-	block[10] = cfg.PuckID
+	maj, min, pat := parseVersion(cfg.FirmwareVersion)
+	block[offVersion], block[offVersion+1], block[offVersion+2] = maj, min, pat
+	block[offRole] = cfg.Role
+	block[offProfile] = profile.Code
 	if cfg.WifiSSID != "" {
-		block[11] = 1
+		block[offWifiMode] = 1
 	}
+	binary.LittleEndian.PutUint32(block[offFingerprint:offFingerprint+4], cfg.Fingerprint)
 	for i := 0; i < domain.MaxPilotSlots; i++ {
-		binary.LittleEndian.PutUint16(block[12+i*2:14+i*2], cfg.SlotFreqsMHz[i])
+		binary.LittleEndian.PutUint16(block[offFreqs+i*2:offFreqs+i*2+2], cfg.SlotFreqsMHz[i])
 	}
-	tdmaUs := uint16(cfg.PuckID-1) * 3500
-	binary.LittleEndian.PutUint16(block[28:30], tdmaUs)
-	copy(block[30:62], []byte(cfg.WifiSSID))
-	copy(block[63:102], []byte(cfg.WifiPass))
-	copy(block[103:127], []byte(cfg.PuckLabel))
-
-	var cfgCRC uint8
-	for i := 0; i < configLen-1; i++ {
-		cfgCRC ^= block[i]
-	}
-	block[configLen-1] = cfgCRC
+	block[offSweepHz] = profile.SweepHz
+	block[offWindow] = profile.WindowSamples
+	block[offTxEvery] = profile.TxEverySweeps
+	block[offLinkRate] = profile.LinkRate
+	block[offTxPower] = profile.TxPowerQdBm
+	block[offRSSIFilter] = profile.RSSIFilter
+	copy(block[offSSID:offSSID+33], []byte(cfg.WifiSSID))
+	copy(block[offPass:offPass+40], []byte(cfg.WifiPass))
+	copy(block[offLabel:offLabel+maxLabelLen], []byte(cfg.PuckLabel))
+	block[offCRC] = xor8(block[:offCRC])
 	copy(img[configOff:configOff+configLen], block[:])
 
-	// 5. Compute Espressif image XOR checksum byte at the end of the 16-byte aligned trailer
+	// 5. Espressif image XOR checksum byte at the end of the 16-byte aligned trailer
 	chk := byte(0xEF)
 	for i := 32; i < int(32+segLen); i++ {
 		chk ^= img[i]
@@ -205,68 +236,60 @@ func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 	if cfg.Role == RoleSpokeTimer {
 		roleSlug = "spoke"
 	}
-	filename := fmt.Sprintf("slaprf-xiao-c5-%s-%s.bin", roleSlug, cfg.FirmwareVersion)
-
 	return &BuiltImage{
 		Bytes:     img,
 		SHA256Hex: hex.EncodeToString(sum[:]),
 		Config:    cfg,
 		ConfigOff: configOff,
-		Filename:  filename,
+		Filename:  fmt.Sprintf("slaprf-xiao-c5-%s-%s-%s.bin", roleSlug, profile.ID, cfg.FirmwareVersion),
 	}, nil
 }
 
-func versionToByte(v string) uint8 {
-	switch strings.TrimSpace(strings.ToLower(v)) {
-	case "v0.1.4", "0.1.4", "4":
-		return 4
-	case "v0.1.3", "0.1.3", "3":
-		return 3
-	case "v0.1.2", "0.1.2", "2":
-		return 2
-	case "v0.1.1", "0.1.1", "1":
-		return 1
-	default:
-		return 4
-	}
-}
-
-func byteToVersion(b uint8) string {
-	switch b {
-	case 4:
-		return "v0.1.4"
-	case 3:
-		return "v0.1.3"
-	case 2:
-		return "v0.1.2"
-	default:
-		return "v0.1.1"
-	}
-}
-
-// InspectConfig locates and decodes the SLAPRF01 configuration block inside a built firmware binary.
+// InspectConfig locates and decodes the SLAPRF02 configuration block inside a firmware binary.
 func InspectConfig(img []byte) (TimerConfig, error) {
 	var out TimerConfig
 	idx := bytes.Index(img, []byte(ConfigMagic))
 	if idx < 0 || idx+configLen > len(img) {
-		return out, errors.New("SLAPRF01 config magic not found in image")
+		return out, errors.New("SLAPRF02 config magic not found in image")
 	}
 	block := img[idx : idx+configLen]
-	var crc uint8
-	for i := 0; i < configLen-1; i++ {
-		crc ^= block[i]
+	if xor8(block[:offCRC]) != block[offCRC] {
+		return out, errors.New("SLAPRF02 config checksum mismatch")
 	}
-	if crc != block[configLen-1] {
-		return out, errors.New("SLAPRF01 config checksum mismatch")
-	}
-	out.FirmwareVersion = byteToVersion(block[8])
-	out.Role = block[9]
-	out.PuckID = block[10]
+	out.FirmwareVersion = fmt.Sprintf("v%d.%d.%d", block[offVersion], block[offVersion+1], block[offVersion+2])
+	out.Role = block[offRole]
+	out.Profile = ProfileByCode(block[offProfile]).ID
+	out.Fingerprint = binary.LittleEndian.Uint32(block[offFingerprint : offFingerprint+4])
 	for i := 0; i < domain.MaxPilotSlots; i++ {
-		out.SlotFreqsMHz[i] = binary.LittleEndian.Uint16(block[12+i*2 : 14+i*2])
+		out.SlotFreqsMHz[i] = binary.LittleEndian.Uint16(block[offFreqs+i*2 : offFreqs+i*2+2])
 	}
-	out.WifiSSID = string(bytes.TrimRight(block[30:62], "\x00"))
-	out.WifiPass = string(bytes.TrimRight(block[63:102], "\x00"))
-	out.PuckLabel = string(bytes.TrimRight(block[103:127], "\x00"))
+	out.WifiSSID = cString(block[offSSID : offSSID+33])
+	out.WifiPass = cString(block[offPass : offPass+40])
+	out.PuckLabel = cString(block[offLabel : offLabel+maxLabelLen])
 	return out, nil
+}
+
+func parseVersion(v string) (uint8, uint8, uint8) {
+	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(v), "v"), ".")
+	var out [3]uint8
+	for i := 0; i < 3 && i < len(parts); i++ {
+		n, _ := strconv.Atoi(parts[i])
+		out[i] = uint8(n)
+	}
+	return out[0], out[1], out[2]
+}
+
+func xor8(b []byte) byte {
+	var c byte
+	for _, x := range b {
+		c ^= x
+	}
+	return c
+}
+
+func cString(b []byte) string {
+	if i := bytes.IndexByte(b, 0); i >= 0 {
+		b = b[:i]
+	}
+	return string(b)
 }

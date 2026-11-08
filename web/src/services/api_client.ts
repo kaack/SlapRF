@@ -16,7 +16,7 @@ import {
   TimingRules,
 } from "../types/models";
 import { HttpRealTransport } from "./http_transport";
-import { buildOrPatchFirmwareBin, LATEST_FIRMWARE_VERSION } from "./esp_flasher";
+import { buildOrPatchFirmwareBin, DEFAULT_FIRMWARE_PROFILE, generateFingerprint } from "./esp_flasher";
 import { ApiTransport } from "./transport";
 import { WasmSimTransport } from "./wasm_transport";
 
@@ -116,7 +116,7 @@ export class ApiClient {
     puckId?: number;
     role?: "hub" | "spoke";
     label?: string;
-    firmwareVersion?: string;
+    firmwareProfile?: string;
   }): Promise<void> {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("POST", "/api/sim/timer-action", payload)
@@ -175,32 +175,26 @@ export class ApiClient {
     await this.updateTimerColor(puckId, color);
   }
 
-  /** Registers a newly flashed timer (hub or spoke) with its flashed hardware ID/name and firmware version. */
+  /** Registers a newly flashed timer (hub or spoke) with its name, firmware profile, and board fingerprint. */
   public async provisionTimer(
     role: "hub" | "spoke",
     puckLabel: string,
-    firmwareVersion = LATEST_FIRMWARE_VERSION
+    firmwareProfile = DEFAULT_FIRMWARE_PROFILE,
+    fingerprint = ""
   ): Promise<void> {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("POST", "/api/timers/provision", {
         role,
         puckLabel,
-        firmwareVersion,
+        firmwareProfile,
+        fingerprint,
       })
     );
   }
 
-  public async provisionGate(
-    role: "hub" | "spoke",
-    puckLabel: string,
-    firmwareVersion = LATEST_FIRMWARE_VERSION
-  ): Promise<void> {
-    await this.provisionTimer(role, puckLabel, firmwareVersion);
-  }
-
   /**
-   * Builds or patches a pre-configured XIAO ESP32-C5 firmware binary stamped with role,
-   * puckLabel, firmwareVersion & active channels. Works both against the Go backend and
+   * Builds or patches a pre-configured XIAO ESP32-C5 firmware binary stamped with role, name,
+   * firmware profile, board fingerprint & active channels. Works both against the Go backend and
    * 100% client-side in the browser from static `.bin` assets with zero Go server needed.
    */
   public async fetchFirmwareImage(
@@ -208,10 +202,11 @@ export class ApiClient {
     puckLabel = "",
     wifiSSID = "",
     wifiPass = "",
-    firmwareVersion = LATEST_FIRMWARE_VERSION
+    profile = DEFAULT_FIRMWARE_PROFILE,
+    fingerprint = generateFingerprint()
   ): Promise<{ bytes: Uint8Array; sha256: string; filename: string }> {
     try {
-      return await this.transport.fetchFirmwareImage(role, puckLabel, wifiSSID, wifiPass, firmwareVersion);
+      return await this.transport.fetchFirmwareImage(role, puckLabel, wifiSSID, wifiPass, profile, fingerprint);
     } catch {
       const freqs = this.store.pilots.slice(0, 8).map((p) => p.frequencyMhz);
       const built = await buildOrPatchFirmwareBin({
@@ -219,13 +214,13 @@ export class ApiClient {
         puckLabel,
         wifiSSID,
         wifiPass,
-        firmwareVersion,
+        profile,
+        fingerprint,
         frequenciesMHz: freqs,
       });
       return { bytes: built.bytes, sha256: "", filename: built.filename };
     }
   }
-
   /** Forwards a live 16-byte binary telemetry frame received over WebSerial into the timing engine. */
   public async ingestTelemetryFrame(frame: PuckTelemetryFrame): Promise<void> {
     await this.httpTransport.request("POST", "/api/ingest/frame", frame);

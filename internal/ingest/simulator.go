@@ -513,9 +513,9 @@ func (s *TrackSimulator) DeleteTimer(puckID uint8) error {
 	return s.engine.DeleteDetectedPuck(puckID)
 }
 
-// AddTimer creates a new simulated XIAO timer (up to 6 total).
-func (s *TrackSimulator) AddTimer(role string, label string, fwVersion string) (uint8, error) {
-	id, err := s.engine.AddSimulatedPuck(role, label, fwVersion)
+// AddTimer creates a new simulated XIAO timer (up to 6 total) running the given firmware profile.
+func (s *TrackSimulator) AddTimer(role string, label string, profile string) (uint8, error) {
+	id, err := s.engine.AddSimulatedPuck(role, label, profile)
 	if err != nil {
 		return 0, err
 	}
@@ -631,12 +631,18 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 		if fw == "" {
 			fw = domain.LatestFirmwareVersion
 		}
+		profile := d.FirmwareProfile
+		if profile == "" {
+			profile = domain.DefaultFirmwareProfile
+		}
 		simTimers = append(simTimers, domain.SimTimerState{
 			PuckID:           d.PuckID,
 			PuckLabel:        d.PuckLabel,
 			Color:            d.Color,
 			IsHub:            d.IsHub,
 			FirmwareVersion:  fw,
+			FirmwareProfile:  profile,
+			Fingerprint:      d.Fingerprint,
 			PoweredOn:        poweredOn,
 			Online:           d.Online && poweredOn,
 			AssignedGateName: gateByPuck[d.PuckID],
