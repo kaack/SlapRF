@@ -637,19 +637,34 @@ export class TimerFlasher extends Component {
   /**
    * Step 1: Interactive Hub + 6 Spokes network topology diagram.
    * Clicking the central Hub takes you through the Hub flow; clicking any of the 6 Spokes
-   * takes you through the Spoke flow.
+   * takes you through the Spoke flow. Arrows point from each Spoke (client) -> Hub (host).
    */
   private renderStepNetwork(webSerialOk: boolean): string {
     const isHubSelected = this.role === "hub";
     const hubFlashed = this.flashedNodes.has("hub");
+    const cx = 260;
+    const cy = 155;
+    const hubStopR = 46;
+    const spokeStartR = 32;
 
     const linesSvg = SPOKE_SLOTS.map((s) => {
       const isActive = !isHubSelected && this.selectedSpokeSlot === s.slot;
       const isDone = this.flashedNodes.has(`spoke-${s.slot}`);
+      const dx = cx - s.svgX;
+      const dy = cy - s.svgY;
+      const dist = Math.hypot(dx, dy) || 1;
+      const ux = dx / dist;
+      const uy = dy / dist;
+      const x1 = Math.round(s.svgX + ux * spokeStartR);
+      const y1 = Math.round(s.svgY + uy * spokeStartR);
+      const x2 = Math.round(cx - ux * hubStopR);
+      const y2 = Math.round(cy - uy * hubStopR);
+      const markerId = isActive ? "net-arrow-active" : isDone ? "net-arrow-done" : "net-arrow";
       return `
         <line
-          x1="260" y1="155"
-          x2="${s.svgX}" y2="${s.svgY}"
+          x1="${x1}" y1="${y1}"
+          x2="${x2}" y2="${y2}"
+          marker-end="url(#${markerId})"
           class="flasher-net-line ${isActive ? "is-active" : ""} ${isDone ? "is-done" : ""}"
         />`;
     }).join("");
@@ -664,10 +679,10 @@ export class TimerFlasher extends Component {
           style="left:${s.xPct}%;top:${s.yPct}%"
           data-pick-node="spoke-${s.slot}"
           ${this.busy ? "disabled" : ""}
-          title="Click to configure & flash ${s.defaultName} (ESP-NOW Spoke)"
+          title="Click to configure & flash ${s.defaultName} (ESP-NOW Client → Hub)"
         >
           <span class="flasher-net-node-code mono">${s.label}</span>
-          <span class="flasher-net-node-sub">${isDone ? "✓ Flashed" : "Spoke"}</span>
+          <span class="flasher-net-node-sub">${isDone ? "✓ Flashed" : "Client"}</span>
         </button>`;
     }).join("");
 
@@ -675,13 +690,22 @@ export class TimerFlasher extends Component {
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
           <h3>Click a node on the network to flash it</h3>
-          <p>Click the central <strong>Hub</strong> (relays all timers to your computer over Wi-Fi) or any of the <strong>6 Spokes</strong> (ESP-NOW gate sensors).</p>
+          <p>Click the central <strong>Hub</strong> (host receiver) or any of the <strong>6 Spokes</strong> (client gate timers that transmit to the Hub).</p>
         </div>
 
         <div class="flasher-net-canvas" role="group" aria-label="Hub and 6 Spokes network map">
           <svg class="flasher-net-svg" viewBox="0 0 520 310" preserveAspectRatio="none" aria-hidden="true">
-            <circle cx="260" cy="155" r="112" class="flasher-net-orbit" />
-            <circle cx="260" cy="155" r="56" class="flasher-net-pulse" />
+            <defs>
+              <marker id="net-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#64748b" />
+              </marker>
+              <marker id="net-arrow-active" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#d4ff3a" />
+              </marker>
+              <marker id="net-arrow-done" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+                <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="#34d399" />
+              </marker>
+            </defs>
             ${linesSvg}
           </svg>
 
@@ -691,19 +715,19 @@ export class TimerFlasher extends Component {
             style="left:50%;top:50%"
             data-pick-node="hub"
             ${this.busy ? "disabled" : ""}
-            title="Click to configure & flash the central Hub timer (Wi-Fi + ESP-NOW)"
+            title="Click to configure & flash the central Hub timer (Host)"
           >
-            <span class="flasher-net-hub-icon">${icons.slaprf(20)}</span>
+            <span class="flasher-net-hub-icon">${icons.slaprf(18)}</span>
             <span class="flasher-net-node-code mono">HUB</span>
-            <span class="flasher-net-node-sub">${hubFlashed ? "✓ Flashed" : "Wi-Fi + LR"}</span>
+            <span class="flasher-net-node-sub">${hubFlashed ? "✓ Flashed" : "Host"}</span>
           </button>
 
           ${spokesHtml}
         </div>
 
         <div class="flasher-net-legend">
-          <span><i class="dot-hub"></i><strong>Hub</strong> · 1 per track (Wi-Fi + ESP-NOW bridge)</span>
-          <span><i class="dot-spoke"></i><strong>Spokes S1–S6</strong> · Gate timers (2.4 GHz ESP-NOW LR)</span>
+          <span><i class="dot-hub"></i><strong>Hub (Host)</strong> · Receives all spokes &amp; bridges over Wi-Fi</span>
+          <span><i class="dot-spoke"></i><strong>Spokes S1–S6 (Clients)</strong> · Connect to Hub over ESP-NOW LR</span>
         </div>
 
         <div class="flasher-inspect-bar">
@@ -796,79 +820,86 @@ export class TimerFlasher extends Component {
   }
 
   /**
-   * Renders the visual SVG pictorial for Station Mode (Hub -> Router/Hotspot -> Laptop)
+   * Renders the visual SVG pictorial for Station Mode:
+   * Hub (Client) ---> Router / Hotspot (Host) <--- Laptop / Phone (Client)
    */
   private renderPictorialStation(): string {
     return `
-      <svg class="flasher-pic-svg" viewBox="0 0 280 92" fill="none" aria-hidden="true">
-        <!-- Animated dashed radio links -->
-        <line x1="62" y1="44" x2="116" y2="44" class="flasher-pic-link" />
-        <line x1="164" y1="44" x2="218" y2="44" class="flasher-pic-link" />
+      <svg class="flasher-pic-svg" viewBox="0 0 280 96" fill="none" aria-hidden="true">
+        <defs>
+          <marker id="pic-arrow-sta" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="currentColor" />
+          </marker>
+        </defs>
 
-        <!-- Node 1: Hub -->
-        <g transform="translate(38, 44)">
+        <!-- Client -> Host directional arrows -->
+        <line x1="64" y1="42" x2="112" y2="42" class="flasher-pic-link" marker-end="url(#pic-arrow-sta)" />
+        <line x1="216" y1="42" x2="168" y2="42" class="flasher-pic-link" marker-end="url(#pic-arrow-sta)" />
+
+        <!-- Node 1: Hub (Client) -->
+        <g transform="translate(38, 42)">
           <circle r="22" class="flasher-pic-node is-hub-node" />
-          <circle r="4" cy="-3" fill="currentColor" />
-          <path d="M-7 -9 A10 10 0 0 1 7 -9" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-          <text y="12" text-anchor="middle" class="flasher-pic-node-tag">HUB</text>
+          <text y="-2" text-anchor="middle" class="flasher-pic-node-title">HUB</text>
+          <text y="9" text-anchor="middle" class="flasher-pic-node-role">CLIENT</text>
         </g>
 
-        <!-- Node 2: Router / Phone Hotspot -->
-        <g transform="translate(140, 44)">
-          <rect x="-24" y="-22" width="48" height="44" rx="10" class="flasher-pic-node is-router-node" />
-          <!-- Router box + antennas -->
-          <rect x="-12" y="-2" width="24" height="10" rx="2.5" stroke="currentColor" stroke-width="1.6" />
-          <line x1="-7" y1="-2" x2="-10" y2="-12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-          <line x1="7" y1="-2" x2="10" y2="-12" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-          <circle cx="-6" cy="3" r="1.3" fill="currentColor" />
-          <circle cx="0" cy="3" r="1.3" fill="currentColor" />
-          <circle cx="6" cy="3" r="1.3" fill="currentColor" />
+        <!-- Node 2: Router / Hotspot (Host) -->
+        <g transform="translate(140, 42)">
+          <rect x="-24" y="-22" width="48" height="44" rx="8" class="flasher-pic-node is-host-node" />
+          <rect x="-11" y="-7" width="22" height="9" rx="2" stroke="currentColor" stroke-width="1.5" />
+          <line x1="-6" y1="-7" x2="-8" y2="-14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+          <line x1="6" y1="-7" x2="8" y2="-14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+          <text y="13" text-anchor="middle" class="flasher-pic-node-role is-host-tag">HOST</text>
         </g>
-        <text x="140" y="82" text-anchor="middle" class="flasher-pic-caption">Router / Hotspot</text>
 
-        <!-- Node 3: Laptop / Phone -->
-        <g transform="translate(242, 44)">
-          <rect x="-22" y="-22" width="44" height="44" rx="10" class="flasher-pic-node" />
-          <rect x="-11" y="-9" width="22" height="14" rx="2" stroke="currentColor" stroke-width="1.6" />
-          <path d="M-15 8 H15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        <!-- Node 3: Laptop / Phone (Client) -->
+        <g transform="translate(242, 42)">
+          <rect x="-22" y="-22" width="44" height="44" rx="8" class="flasher-pic-node" />
+          <rect x="-10" y="-12" width="20" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5" />
+          <path d="M-14 3 H14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <text y="14" text-anchor="middle" class="flasher-pic-node-role">CLIENT</text>
         </g>
-        <text x="242" y="82" text-anchor="middle" class="flasher-pic-caption">Laptop / Phone</text>
+
         <text x="38" y="82" text-anchor="middle" class="flasher-pic-caption">Hub Timer</text>
+        <text x="140" y="82" text-anchor="middle" class="flasher-pic-caption">Router / Hotspot</text>
+        <text x="242" y="82" text-anchor="middle" class="flasher-pic-caption">Laptop / Phone</text>
       </svg>`;
   }
 
   /**
-   * Renders the visual SVG pictorial for Direct AP Mode (Hub broadcasts "SlapRF" -> Laptop)
+   * Renders the visual SVG pictorial for Direct AP Mode:
+   * Laptop / Phone (Client) ---> Hub AP (Host)
    */
   private renderPictorialAp(): string {
     return `
-      <svg class="flasher-pic-svg" viewBox="0 0 280 92" fill="none" aria-hidden="true">
-        <!-- Direct link from Hub AP to Laptop -->
-        <line x1="88" y1="44" x2="196" y2="44" class="flasher-pic-link is-direct" />
+      <svg class="flasher-pic-svg" viewBox="0 0 280 96" fill="none" aria-hidden="true">
+        <defs>
+          <marker id="pic-arrow-ap" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+            <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="currentColor" />
+          </marker>
+        </defs>
 
-        <!-- Radiating AP rings around Hub -->
-        <circle cx="62" cy="44" r="31" class="flasher-pic-ap-wave" />
-        <circle cx="62" cy="44" r="22" class="flasher-pic-node is-hub-node" />
-        <g transform="translate(62, 44)">
-          <path d="M-8 -6 A11 11 0 0 1 8 -6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-          <path d="M-5 -2 A6.5 6.5 0 0 1 5 -2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
-          <circle r="2" cy="2" fill="currentColor" />
-          <text y="13" text-anchor="middle" class="flasher-pic-node-tag">AP</text>
+        <!-- Client (Laptop) -> Host (Hub AP) directional arrow -->
+        <line x1="192" y1="42" x2="90" y2="42" class="flasher-pic-link" marker-end="url(#pic-arrow-ap)" />
+        <text x="141" y="34" text-anchor="middle" class="flasher-pic-link-label">SSID: SlapRF</text>
+
+        <!-- Hub (Host / AP) -->
+        <g transform="translate(62, 42)">
+          <circle r="22" class="flasher-pic-node is-hub-node is-host-node" />
+          <text y="-2" text-anchor="middle" class="flasher-pic-node-title">HUB</text>
+          <text y="9" text-anchor="middle" class="flasher-pic-node-role is-host-tag">HOST (AP)</text>
         </g>
 
-        <!-- Badge on link -->
-        <rect x="108" y="33" width="68" height="20" rx="10" class="flasher-pic-pill" />
-        <text x="142" y="46" text-anchor="middle" class="flasher-pic-pill-text">"SlapRF"</text>
-
-        <!-- Laptop / Phone -->
-        <g transform="translate(220, 44)">
-          <rect x="-22" y="-22" width="44" height="44" rx="10" class="flasher-pic-node" />
-          <rect x="-11" y="-9" width="22" height="14" rx="2" stroke="currentColor" stroke-width="1.6" />
-          <path d="M-15 8 H15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" />
+        <!-- Laptop / Phone (Client) -->
+        <g transform="translate(218, 42)">
+          <rect x="-22" y="-22" width="44" height="44" rx="8" class="flasher-pic-node" />
+          <rect x="-10" y="-12" width="20" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5" />
+          <path d="M-14 3 H14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
+          <text y="14" text-anchor="middle" class="flasher-pic-node-role">CLIENT</text>
         </g>
 
-        <text x="62" y="82" text-anchor="middle" class="flasher-pic-caption">Hub broadcasts Wi-Fi</text>
-        <text x="220" y="82" text-anchor="middle" class="flasher-pic-caption">Laptop / Phone</text>
+        <text x="62" y="82" text-anchor="middle" class="flasher-pic-caption">Hub Timer (Host)</text>
+        <text x="218" y="82" text-anchor="middle" class="flasher-pic-caption">Laptop / Phone (Client)</text>
       </svg>`;
   }
 
