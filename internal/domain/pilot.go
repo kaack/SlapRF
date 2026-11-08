@@ -1,6 +1,10 @@
 package domain
 
-import "fmt"
+import (
+	"fmt"
+	"math/rand"
+	"time"
+)
 
 // MaxPilotSlots matches the 8-pilot standard of MultiGP LiveTime and ImmersionRC LapRF 8-Way.
 const MaxPilotSlots = 8
@@ -70,12 +74,19 @@ func (p PilotSlot) ChannelLabel() string {
 	return fmt.Sprintf("%s%d (%d MHz)", prefix, p.Channel, p.FrequencyMHz)
 }
 
-// DefaultPilotSlots returns a default 4-active-pilot (8-slot) Raceband configuration for simulation.
+// DefaultPilotSlots returns a default 4-active-pilot (8-slot) Raceband configuration for simulation,
+// picking 4 random pilots from the Bay Area pool to be enabled by default each time a session starts.
 func DefaultPilotSlots() []PilotSlot {
-	callsigns := [MaxPilotSlots]string{
+	pool := []string{
 		"Faerry", "MeWo", "Red5", "BigRamon",
-		"Morbid", "Kyosamin", "OneEye", "FreeLove",
+		"Morbid", "Kyosanym", "OneEye", "FreeLove",
+		"SwampDog", "Din",
 	}
+	rng := rand.New(rand.NewSource(time.Now().UnixNano()))
+	rng.Shuffle(len(pool), func(i, j int) {
+		pool[i], pool[j] = pool[j], pool[i]
+	})
+
 	// Standard MultiGP 4-pilot spacing uses R1, R3, R5, R8 (or IMD6) to minimize IMD
 	defaultChannels := [MaxPilotSlots]uint8{1, 3, 5, 8, 2, 4, 6, 7}
 
@@ -85,7 +96,7 @@ func DefaultPilotSlots() []PilotSlot {
 		freq := RacebandFrequenciesMHz[ch-1]
 		slots[i] = PilotSlot{
 			SlotIndex:       i + 1,
-			Callsign:        callsigns[i],
+			Callsign:        pool[i],
 			Enabled:         i < 4, // Enable first 4 pilots by default; all 8 available
 			Band:            BandRaceband,
 			Channel:         ch,
