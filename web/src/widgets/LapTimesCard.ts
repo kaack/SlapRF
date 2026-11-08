@@ -31,10 +31,10 @@ export class LapTimesCard extends Component {
     el.innerHTML = `
       <header class="card-head">
         <div><h2>Lap times</h2><p data-slot="subtitle"></p></div>
-        <div class="segmented segmented-wrap" data-slot="views" role="tablist" aria-label="Show"></div>
       </header>
       <div class="canvas-host canvas-host-lg" data-slot="chart"></div>
-      <div class="chart-legend" data-slot="legend"></div>`;
+      <div class="chart-legend" data-slot="legend"></div>
+      <div class="channel-legend" data-slot="views" role="tablist" aria-label="Show"></div>`;
 
     this.chart = this.adopt(new ProgressionChart(this.slot("chart"), store, { slotIndex: this.slotIndex }));
 
@@ -124,22 +124,36 @@ export class LapTimesCard extends Component {
     const viewsHost = this.slot("views");
     if (tabsSig !== this.renderedTabsSig) {
       this.renderedTabsSig = tabsSig;
+      const wholeActive = view.kind === "lap";
       viewsHost.innerHTML =
-        `<button type="button" role="tab" data-view="lap" class="${view.kind === "lap" ? "is-active" : ""}" aria-selected="${view.kind === "lap"}">Whole lap</button>` +
+        `<button type="button" role="tab" data-view="lap" class="channel channel-all ${wholeActive ? "is-focus" : "is-dim"}" aria-selected="${wholeActive}" title="Show whole lap times">
+          <span class="dot channel-all-dot"></span>
+          <span class="channel-name">Whole lap</span>
+          <span class="channel-dbm mono">${sections.length} ${sections.length === 1 ? "section" : "sections"}</span>
+        </button>` +
         sections
           .map(({ sectorIndex, from, to }) => {
             const active = isActive(from, to);
-            return `<button type="button" role="tab" data-view="section" data-sector="${sectorIndex}" data-from="${from}" data-to="${to}" class="${active ? "is-active" : ""}"
-                      aria-selected="${active}" title="${esc(sectionLabel(this.store, from, to))}">${renderSectionCapsuleIcon(gateColor(this.store, from), gateColor(this.store, to))}${sectionShort(this.store, from)}</button>`;
+            const dim = !wholeActive && !active;
+            const route = sectionLabel(this.store, from, to);
+            return `<button type="button" role="tab" data-view="section" data-sector="${sectorIndex}" data-from="${from}" data-to="${to}" class="channel ${active ? "is-focus" : ""} ${dim ? "is-dim" : ""}"
+                      aria-selected="${active}" title="${esc(route)}">
+                      ${renderSectionCapsuleIcon(gateColor(this.store, from), gateColor(this.store, to))}
+                      <span class="channel-name">${sectionShort(this.store, from)}</span>
+                      <span class="channel-dbm mono">${esc(route)}</span>
+                    </button>`;
           })
           .join("");
     } else {
+      const wholeActive = view.kind === "lap";
       viewsHost.querySelectorAll<HTMLButtonElement>("button[data-view]").forEach((btn) => {
         const active =
           btn.dataset.view === "lap"
-            ? view.kind === "lap"
+            ? wholeActive
             : isActive(Number(btn.dataset.from), Number(btn.dataset.to));
-        btn.classList.toggle("is-active", active);
+        const dim = btn.dataset.view === "lap" ? !wholeActive : !wholeActive && !active;
+        btn.classList.toggle("is-focus", active);
+        btn.classList.toggle("is-dim", dim);
         btn.setAttribute("aria-selected", String(active));
       });
     }
