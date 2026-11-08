@@ -2720,12 +2720,13 @@ body.is-gate-dragging * {
 /* Sliding Flasher Wizard --------------------------------------------------- */
 .flasher-wizard {
   gap: 14px;
+  container-type: inline-size;
 }
 .flasher-wizard-stepper {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 6px;
+  gap: 0;
   padding: 8px 14px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
@@ -2787,9 +2788,59 @@ body.is-gate-dragging * {
 }
 .flasher-step-divider {
   flex: 1 1 0;
-  min-width: 4px;
+  min-width: 0;
   height: 1px;
   background: var(--border-strong);
+  clip-path: inset(0 min(6px, 50%));
+}
+
+@container (max-width: 560px) {
+  .flasher-step-label-full {
+    display: none;
+  }
+  .flasher-step-label-short {
+    display: inline;
+  }
+}
+
+@container (max-width: 420px) {
+  .flasher-wizard-stepper {
+    padding: 6px 8px;
+  }
+  .flasher-step-pill {
+    gap: 5px;
+    height: 28px;
+    padding: 0 7px 0 5px;
+    font-size: 11.5px;
+  }
+  .flasher-step-circle {
+    width: 18px;
+    height: 18px;
+    font-size: 10.5px;
+  }
+  .flasher-step-divider {
+    clip-path: inset(0 min(3px, 50%));
+  }
+}
+
+@container (max-width: 340px) {
+  .flasher-wizard-stepper {
+    padding: 5px 5px;
+  }
+  .flasher-step-pill {
+    gap: 4px;
+    height: 26px;
+    padding: 0 5px 0 4px;
+    font-size: 11px;
+  }
+  .flasher-step-circle {
+    width: 16px;
+    height: 16px;
+    font-size: 10px;
+  }
+  .flasher-step-divider {
+    clip-path: inset(0 min(2px, 50%));
+  }
 }
 
 .flasher-wizard-viewport {
@@ -3250,22 +3301,7 @@ body.is-gate-dragging * {
 
 @media (max-width: 680px) {
   .flasher-wizard-stepper {
-    gap: 2px;
-    padding: 5px 6px;
-  }
-  .flasher-step-pill {
-    gap: 4px;
-    height: 26px;
-    padding: 0 6px 0 4px;
-    font-size: 11px;
-  }
-  .flasher-step-circle {
-    width: 17px;
-    height: 17px;
-    font-size: 10px;
-  }
-  .flasher-step-divider {
-    min-width: 6px;
+    padding: 6px 8px;
   }
   .flasher-step-label-full {
     display: none;
