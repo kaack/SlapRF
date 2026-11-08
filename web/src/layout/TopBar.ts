@@ -145,13 +145,7 @@ export class TopBar extends Component {
     const navItems = ROUTES.filter((r) => !r.simOnly || sim)
       .map((r) => {
         const active = r.id === meta.id;
-        return `<a class="topbar-nav-item ${active ? "is-active" : ""}" href="#/${r.id}" data-nav-item="${r.id}" ${active ? 'aria-current="page"' : ""}>
-          <span class="topbar-nav-icon">${r.icon(17)}</span>
-          <span class="topbar-nav-text">
-            <span class="topbar-nav-label">${r.label}</span>
-            <span class="topbar-nav-sub">${r.subtitle}</span>
-          </span>
-        </a>`;
+        return `<a class="nav-item ${active ? "is-active" : ""}" href="#/${r.id}" data-nav-item="${r.id}" ${active ? 'aria-current="page"' : ""}>${r.icon()}<span>${r.label}</span></a>`;
       })
       .join("");
 
@@ -164,14 +158,14 @@ export class TopBar extends Component {
           ${
             this.menuOpen
               ? `<div class="topbar-nav-popover" role="menu" aria-label="Main navigation">
-                  <div class="topbar-nav-brand">
-                    <span class="brand-mark">${icons.slaprf(20)}</span>
+                  <div class="brand">
+                    <div class="brand-mark">${icons.slaprf(25)}</div>
                     <div>
                       <div class="brand-name">SlapRF</div>
                       <div class="brand-sub">XIAO ESP32-C5 · 5.8 GHz</div>
                     </div>
                   </div>
-                  <div class="topbar-nav-list">${navItems}</div>
+                  <nav class="nav">${navItems}</nav>
                 </div>`
               : ""
           }
