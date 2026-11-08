@@ -1,0 +1,30 @@
+name: PHY Symbol Survey
+
+# Lists the ESP32-C5 PHY / RF-test library symbols the 5.8 GHz capture driver relies on, as
+# workflow annotations (readable without downloading logs). Runs when this file changes.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/phy-symbols.yml"
+  workflow_dispatch:
+
+jobs:
+  survey:
+    runs-on: ubuntu-latest
+    steps:
+      - name: List PHY symbols
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5
+          target: esp32c5
+          command: >-
+            cd $IDF_PATH/components/esp_phy/lib/esp32c5 &&
+            ls -1 &&
+            for lib in libphy.a librftest.a libbtbb.a; do
+              [ -f "$lib" ] || continue;
+              syms=$(riscv32-esp-elf-nm -g --defined-only "$lib" 2>/dev/null | awk '$2 ~ /[TtDdBbRr]/ {print $3}' |
+                grep -Ei 'xpd|pbus|chanfreq|chan_freq|rf_freq|force_rx|adctrig|rfpll|set_chan|tx_on|tx_off|rx_on|rxclk|freq_mem|ckgen|wifi_rf|bb_init|phy_param|restart_cal|i2c_sdm|set_freq' | sort -u);
+              echo "$syms" | xargs -n 40 | while read -r line; do echo "::notice title=$lib::$line"; done;
+            done
