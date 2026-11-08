@@ -40,12 +40,12 @@ interface SpokeRadialSlot {
 }
 
 const SPOKE_SLOTS: SpokeRadialSlot[] = [
-  { slot: 1, label: "S1", defaultName: "Spoke-1", xPct: 50, yPct: 14, svgX: 260, svgY: 43 },
-  { slot: 2, label: "S2", defaultName: "Spoke-2", xPct: 83, yPct: 31, svgX: 432, svgY: 96 },
-  { slot: 3, label: "S3", defaultName: "Spoke-3", xPct: 83, yPct: 69, svgX: 432, svgY: 214 },
-  { slot: 4, label: "S4", defaultName: "Spoke-4", xPct: 50, yPct: 86, svgX: 260, svgY: 267 },
-  { slot: 5, label: "S5", defaultName: "Spoke-5", xPct: 17, yPct: 69, svgX: 88, svgY: 214 },
-  { slot: 6, label: "S6", defaultName: "Spoke-6", xPct: 17, yPct: 31, svgX: 88, svgY: 96 },
+  { slot: 1, label: "S1", defaultName: "S1", xPct: 50, yPct: 14, svgX: 260, svgY: 43 },
+  { slot: 2, label: "S2", defaultName: "S2", xPct: 83, yPct: 31, svgX: 432, svgY: 96 },
+  { slot: 3, label: "S3", defaultName: "S3", xPct: 83, yPct: 69, svgX: 432, svgY: 214 },
+  { slot: 4, label: "S4", defaultName: "S4", xPct: 50, yPct: 86, svgX: 260, svgY: 267 },
+  { slot: 5, label: "S5", defaultName: "S5", xPct: 17, yPct: 69, svgX: 88, svgY: 214 },
+  { slot: 6, label: "S6", defaultName: "S6", xPct: 17, yPct: 31, svgX: 88, svgY: 96 },
 ];
 
 /**
@@ -69,7 +69,7 @@ export class TimerFlasher extends Component {
   private selectedSpokeSlot = 1;
   private flashedNodes = new Set<string>();
   private hubWifiMode: HubWifiMode = "join";
-  private timerLabel = "Hub-1";
+  private timerLabel = "H1";
   private firmwareVersion = LATEST_FIRMWARE_VERSION;
   private networks: ScannedWifi[] = [];
   private scanningWifi = false;
@@ -139,12 +139,12 @@ export class TimerFlasher extends Component {
         const nodeKey = pickNode.dataset.pickNode || "hub";
         if (nodeKey === "hub") {
           this.role = "hub";
-          this.timerLabel = "Hub-1";
+          this.timerLabel = "H1";
         } else {
           const slotNum = Math.max(1, Math.min(6, Number(nodeKey.replace("spoke-", "")) || 1));
           this.role = "spoke";
           this.selectedSpokeSlot = slotNum;
-          this.timerLabel = `Spoke-${slotNum}`;
+          this.timerLabel = `S${slotNum}`;
         }
         this.errorMsg = null;
         this.lastSuccessMsg = null;
@@ -288,15 +288,15 @@ export class TimerFlasher extends Component {
   private get orderedSteps(): Array<{ id: WizardStepId; title: string; short: string }> {
     if (this.role === "hub") {
       return [
-        { id: "network", title: "Select node", short: "Node" },
-        { id: "identity", title: "Name & firmware", short: "Identity" },
+        { id: "network", title: "Select role", short: "Role" },
+        { id: "identity", title: "Name & firmware", short: "Name" },
         { id: "wifi", title: "Wi-Fi mode", short: "Wi-Fi" },
         { id: "flash", title: "Flash timer", short: "Flash" },
       ];
     }
     return [
-      { id: "network", title: "Select node", short: "Node" },
-      { id: "identity", title: "Name & firmware", short: "Identity" },
+      { id: "network", title: "Select role", short: "Role" },
+      { id: "identity", title: "Name & firmware", short: "Name" },
       { id: "flash", title: "Flash timer", short: "Flash" },
     ];
   }
@@ -332,7 +332,7 @@ export class TimerFlasher extends Component {
 
   private validateIdentityStep(): boolean {
     if (!this.timerLabel.trim()) {
-      this.errorMsg = "Give this timer an ID / name (e.g. Hub-1, Spoke-2, Gate-A) before continuing.";
+      this.errorMsg = "Give this timer a name (e.g. H1, S1, S2) before continuing.";
       this.slideDir = "none";
       this.render();
       this.el.querySelector<HTMLInputElement>("[data-timer-label]")?.focus();
@@ -453,7 +453,7 @@ export class TimerFlasher extends Component {
     try {
       const { bytes } = await this.api.fetchFirmwareImage(
         this.role,
-        this.timerLabel.trim() || "Hub-1",
+        this.timerLabel.trim() || "H1",
         this.effectiveHubSSID,
         this.wifiPass,
         this.firmwareVersion
@@ -689,11 +689,11 @@ export class TimerFlasher extends Component {
     return `
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
-          <h3>Click a node on the network to flash it</h3>
+          <h3>Select role to flash</h3>
           <p>Click the central <strong>Hub</strong> (host receiver) or any of the <strong>6 Spokes</strong> (client gate timers that transmit to the Hub).</p>
         </div>
 
-        <div class="flasher-net-canvas" role="group" aria-label="Hub and 6 Spokes network map">
+        <div class="flasher-net-canvas" role="group" aria-label="Hub and 6 Spokes role selector">
           <svg class="flasher-net-svg" viewBox="0 0 520 310" preserveAspectRatio="none" aria-hidden="true">
             <defs>
               <marker id="net-arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
@@ -715,25 +715,25 @@ export class TimerFlasher extends Component {
             style="left:50%;top:50%"
             data-pick-node="hub"
             ${this.busy ? "disabled" : ""}
-            title="Click to configure & flash the central Hub timer (Host)"
+            title="Click to configure & flash Hub H1 (Host)"
           >
             <span class="flasher-net-hub-icon">${icons.slaprf(18)}</span>
-            <span class="flasher-net-node-code mono">HUB</span>
-            <span class="flasher-net-node-sub">${hubFlashed ? "✓ Flashed" : "Host"}</span>
+            <span class="flasher-net-node-code mono">H1</span>
+            <span class="flasher-net-node-sub">${hubFlashed ? "✓ Flashed" : "Hub · Host"}</span>
           </button>
 
           ${spokesHtml}
         </div>
 
         <div class="flasher-net-legend">
-          <span><i class="dot-hub"></i><strong>Hub (Host)</strong> · Receives all spokes &amp; bridges over Wi-Fi</span>
+          <span><i class="dot-hub"></i><strong>Hub H1 (Host)</strong> · Receives all spokes &amp; bridges over Wi-Fi</span>
           <span><i class="dot-spoke"></i><strong>Spokes S1–S6 (Clients)</strong> · Connect to Hub over ESP-NOW LR</span>
         </div>
 
         <div class="flasher-inspect-bar">
           <div class="flasher-inspect-text">
-            <strong>Already flashed a board?</strong>
-            <span>Plug it into USB to inspect its current Timer ID, role, and firmware version.</span>
+            <strong>Already flashed a timer?</strong>
+            <span>Plug it into USB to inspect its current Timer name, role, and firmware.</span>
           </div>
           <button
             type="button"
@@ -750,7 +750,7 @@ export class TimerFlasher extends Component {
 
   private renderStepIdentity(): string {
     const isHub = this.role === "hub";
-    const idPlaceholder = isHub ? "e.g. Hub-1 or Start-Hub" : `e.g. Spoke-${this.selectedSpokeSlot} or Split-${this.selectedSpokeSlot}`;
+    const idPlaceholder = isHub ? "e.g. H1" : `e.g. S${this.selectedSpokeSlot}`;
     const selectedRel =
       FIRMWARE_RELEASES.find((r) => r.version === this.firmwareVersion) ?? FIRMWARE_RELEASES[0];
 
@@ -758,8 +758,8 @@ export class TimerFlasher extends Component {
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
           <div class="flasher-wizard-badge-row">
-            <span class="badge ${isHub ? "tone-good" : ""}">${
-              isHub ? "Central Hub" : `Spoke S${this.selectedSpokeSlot}`
+            <span class="badge ${isHub ? "tone-good" : ""}">Role: ${
+              isHub ? "Hub (H1)" : `Spoke (S${this.selectedSpokeSlot})`
             }</span>
             <span class="note">${
               isHub
@@ -773,7 +773,7 @@ export class TimerFlasher extends Component {
 
         <div class="flasher-wifi-inputs flasher-two-col">
           <div class="flasher-field">
-            <label class="flasher-field-label">Timer ID / name</label>
+            <label class="flasher-field-label">Timer</label>
             <input
               class="input mono"
               type="text"
@@ -788,11 +788,11 @@ export class TimerFlasher extends Component {
           </div>
 
           <div class="flasher-field">
-            <label class="flasher-field-label">Firmware version</label>
+            <label class="flasher-field-label">Firmware</label>
             <select
               class="input mono"
               data-fw-version="1"
-              aria-label="Firmware version"
+              aria-label="Firmware"
               title="${esc(selectedRel.summary)}"
               ${this.busy ? "disabled" : ""}
             >
@@ -809,7 +809,7 @@ export class TimerFlasher extends Component {
         <div class="flasher-wizard-nav">
           <button type="button" class="btn btn-ghost" data-wizard-prev="1" ${this.busy ? "disabled" : ""}>
             ${icons.chevronLeft(15)}
-            <span>Back to network</span>
+            <span>Back to role</span>
           </button>
           <button type="button" class="btn btn-primary" data-wizard-next="1" ${this.busy ? "disabled" : ""}>
             <span>${isHub ? "Next: Wi-Fi Mode" : "Next: Review & Flash"}</span>
@@ -911,7 +911,7 @@ export class TimerFlasher extends Component {
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
           <div class="flasher-wizard-badge-row">
-            <span class="badge tone-good">Hub · ${esc(this.timerLabel.trim() || "Hub-1")}</span>
+            <span class="badge tone-good">Role: Hub · ${esc(this.timerLabel.trim() || "H1")}</span>
             <span class="note">Step 3 of 4 · 2.4 GHz Wi-Fi only (5.8 GHz is disabled to protect FPV video)</span>
           </div>
           <h3>How should the Hub connect to your computer?</h3>
@@ -1121,12 +1121,12 @@ export class TimerFlasher extends Component {
 
   private renderStepFlash(webSerialOk: boolean): string {
     const isHub = this.role === "hub";
-    const cleanLabel = this.timerLabel.trim() || (isHub ? "Hub-1" : `Spoke-${this.selectedSpokeSlot}`);
+    const cleanLabel = this.timerLabel.trim() || (isHub ? "H1" : `S${this.selectedSpokeSlot}`);
     const wifiSummary = isHub
       ? this.hubWifiMode === "host"
         ? `Hub Hotspot "SlapRF" (${this.wifiPass ? "WPA2" : "Open AP"})`
         : `Join "${this.wifiSSID.trim() || "(unset)"}" (Station Mode)`
-      : "2.4 GHz ESP-NOW LR → Central Hub";
+      : "2.4 GHz ESP-NOW LR (Client → Hub H1)";
 
     return `
       <div class="flasher-wizard-body">
@@ -1137,17 +1137,17 @@ export class TimerFlasher extends Component {
 
         <div class="flasher-receipt">
           <div class="flasher-receipt-item">
-            <span class="note">Network Node</span>
+            <span class="note">Role</span>
             <div class="flasher-receipt-val">
               <span class="badge ${isHub ? "tone-good" : ""}">${
-                isHub ? "Central Hub" : `Spoke S${this.selectedSpokeSlot}`
+                isHub ? "Hub" : "Spoke"
               }</span>
               <button type="button" class="flasher-receipt-edit" data-goto-step="network" ${this.busy ? "disabled" : ""}>Change</button>
             </div>
           </div>
 
           <div class="flasher-receipt-item">
-            <span class="note">Timer ID &amp; Firmware</span>
+            <span class="note">Timer &amp; Firmware</span>
             <div class="flasher-receipt-val mono">
               <span>${esc(cleanLabel)} · ${esc(this.firmwareVersion)}</span>
               <button type="button" class="flasher-receipt-edit" data-goto-step="identity" ${this.busy ? "disabled" : ""}>Edit</button>
@@ -1186,7 +1186,7 @@ export class TimerFlasher extends Component {
           this.lastSuccessMsg && !this.busy
             ? `<div class="flasher-banner is-ok">
                 <span>✓ ${esc(this.lastSuccessMsg)}</span>
-                <button type="button" class="btn btn-sm" data-flash-another="1">Back to Network Map →</button>
+                <button type="button" class="btn btn-sm" data-flash-another="1">Select another role →</button>
               </div>`
             : ""
         }
@@ -1264,21 +1264,21 @@ export class TimerFlasher extends Component {
         </div>
         <div class="flasher-readout-grid">
           <div>
-            <span class="note">Timer ID / name</span>
+            <span class="note">Timer</span>
             <div class="mono">${esc(this.readout.timerLabel || "(unnamed)")}</div>
           </div>
           <div>
-            <span class="note">Firmware on board</span>
-            <div class="mono">${esc(this.readout.firmwareVersion)}</div>
-          </div>
-          <div>
-            <span class="note">Role on board</span>
+            <span class="note">Role</span>
             <div class="mono">${
-              this.readout.role === "hub" ? "Hub (Wi-Fi + ESP-NOW LR)" : "Spoke (ESP-NOW LR)"
+              this.readout.role === "hub" ? "Hub" : "Spoke"
             }</div>
           </div>
           <div>
-            <span class="note">2.4 GHz Wi-Fi mode</span>
+            <span class="note">Firmware</span>
+            <div class="mono">${esc(this.readout.firmwareVersion)}</div>
+          </div>
+          <div>
+            <span class="note">2.4 GHz link</span>
             <div class="mono">${
               this.readout.role === "hub"
                 ? esc(
@@ -1286,7 +1286,7 @@ export class TimerFlasher extends Component {
                       ? `Join "${this.readout.wifiSSID}" (2.4 GHz)`
                       : 'Host "SlapRF" 2.4 GHz AP (Ch 1)'
                   )
-                : "— (uses 2.4 GHz ESP-NOW LR)"
+                : "2.4 GHz ESP-NOW LR (Client → Hub)"
             }</div>
           </div>
           <div>
