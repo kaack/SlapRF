@@ -37,7 +37,10 @@ const KEEP_AWAKE_GAIN = 0.0001;
 /** "VANOVER" → "Vanover": stops some voices from spelling all-caps callsigns letter by letter. */
 export function spokenName(callsign: string): string {
   const s = callsign.trim();
-  return s.length <= 3 ? s : s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+  if (!s) return s;
+  // Preserve mixed-case names (e.g. "MeWo", "FreeLove") so TTS pronounces word boundaries naturally.
+  if (s !== s.toUpperCase()) return s;
+  return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
 }
 
 /** The whole callout: "Vanover, 14.08". Short enough to keep up with a busy start gate. */
