@@ -2,20 +2,18 @@
 
 This document details the hardware, RF link layer, binary wire protocols, digital signal processing (DSP), timing engine state machines, browser-native USB firmware patching, and WebAssembly dual-transport architecture of **SlapRF**.
 
----
+## Low-Level Reference Overview
 
-## Table of Contents
-
-1. [System Overview & Design Principles](#1-system-overview--design-principles)
-2. [End-to-End Data Flow](#2-end-to-end-data-flow)
-3. [XIAO ESP32-C5 5.8 GHz SDR & Time-Division Radio Schedule](#3-xiao-esp32-c5-58-ghz-sdr--time-division-radio-schedule)
-4. [Ground-Interference Mitigation & 2.4 GHz LR Protocol](#4-ground-interference-mitigation--24-ghz-lr-protocol)
-5. [Binary Wire Formats (`0xC5 0x59` Sliding Window & `SLAPRF01`)](#5-binary-wire-formats-0xc5-0x59-sliding-window--slaprf01)
-6. [DSP Pipeline & Sub-Frame Parabolic Peak Interpolation](#6-dsp-pipeline--sub-frame-parabolic-peak-interpolation)
-7. [Multi-Gate Timing Rules & Section Analytics Engine](#7-multi-gate-timing-rules--section-analytics-engine)
-8. [Browser-Native WebSerial ROM Flasher & Version Tracking](#8-browser-native-webserial-rom-flasher--version-tracking)
-9. [ImmersionRC LapRF 8-Way Emulation (`TCP :5403`)](#9-immersionrc-laprf-8-way-emulation-tcp-5403)
-10. [Dual-Transport Web SPA & In-Browser WebAssembly Simulator](#10-dual-transport-web-spa--in-browser-webassembly-simulator)
+- **[1. System Overview & Design Principles](#1-system-overview--design-principles)** — Why Spokes are pure recording sensors with all DSP centralized on the laptop.
+- **[2. End-to-End Data Flow](#2-end-to-end-data-flow)** — Architecture diagram from 5.8 GHz VTX signals across the track to the Web SPA and MultiGP LiveTime.
+- **[3. XIAO ESP32-C5 5.8 GHz SDR & Time-Division Schedule](#3-xiao-esp32-c5-58-ghz-sdr--time-division-radio-schedule)** — Single-synthesizer 5.8 GHz / 2.4 GHz multiplexing and the 40 ms superframe schedule.
+- **[4. Ground-Interference Mitigation & 2.4 GHz LR Protocol](#4-ground-interference-mitigation--24-ghz-lr-protocol)** — Two-ray grass path-loss physics, `+11 dB` DSSS coding gain, 3.5 ms TDMA slots, and 4-sample sliding-window recovery under 50% packet loss.
+- **[5. Binary Wire Formats (`0xC5 0x59` & `SLAPRF01`)](#5-binary-wire-formats-0xc5-0x59-sliding-window--slaprf01)** — Byte-by-byte layouts of the 44-byte sliding-window frame and 128-byte flash config block.
+- **[6. DSP Pipeline & Parabolic Peak Interpolation](#6-dsp-pipeline--sub-frame-parabolic-peak-interpolation)** — Zero-phase EMA smoothing, hysteresis state machine, and `< 2 ms` sub-frame parabolic vertex fitting.
+- **[7. Multi-Gate Timing Rules & Section Analytics Engine](#7-multi-gate-timing-rules--section-analytics-engine)** — The 5-stage guardrail pipeline (cool-down, stale progress, min section, previous-gate echo, min/max lap) and bottleneck math.
+- **[8. Browser-Native WebSerial ROM Flasher & Version Tracking](#8-browser-native-webserial-rom-flasher--version-tracking)** — Client-side `.bin` patching, SLIP ROM bootloader protocol, and firmware version detection.
+- **[9. ImmersionRC LapRF 8-Way Emulation (`TCP :5403`)](#9-immersionrc-laprf-8-way-emulation-tcp-5403)** — TCP `:5403` LiveTime bridge for official race scoring alongside SlapRF section splits.
+- **[10. Dual-Transport Web SPA & In-Browser WebAssembly Simulator](#10-dual-transport-web-spa--in-browser-webassembly-simulator)** — `ApiTransport` dual-mode architecture and `slaprf.wasm` in-browser timing engine.
 
 ---
 
