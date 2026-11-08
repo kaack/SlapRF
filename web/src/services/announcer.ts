@@ -42,9 +42,9 @@ const IDLE_EASTER_EGG_QUIPS = [
   "Save the geese!",
 ];
 
-/** Randomized quiet window (35–65 s with no gate activity while Timing and Announcer are on). */
-const IDLE_MIN_MS = 35_000;
-const IDLE_MAX_MS = 65_000;
+/** Randomized quiet window (12–22 s with no gate activity while Timing and Announcer are on). */
+const IDLE_MIN_MS = 12_000;
+const IDLE_MAX_MS = 22_000;
 
 /** "VANOVER" → "Vanover": stops some voices from spelling all-caps callsigns letter by letter. */
 export function spokenName(callsign: string): string {
@@ -77,6 +77,7 @@ export class Announcer {
   private idleTimer = 0;
   private lastQuipIdx = -1;
   private lastSimMode: boolean | null = null;
+  private lastRaceArmed: boolean | null = null;
   /** Inaudible tone that keeps the audio output awake while the announcer is on. */
   private keepAwake: AudioContext | null = null;
 
@@ -87,11 +88,16 @@ export class Announcer {
     store.onStartGateDetected((ev) => this.onStartPass(ev));
     store.subscribe(["crossings"], () => this.resetIdleTimer());
     store.subscribe(["status"], () => {
-      if (this.lastSimMode !== null && this.lastSimMode !== this.store.simulatorRunning) {
+      const simChanged = this.lastSimMode !== null && this.lastSimMode !== this.store.simulatorRunning;
+      const armedChanged = this.lastRaceArmed !== null && this.lastRaceArmed !== this.store.raceArmed;
+      if (simChanged) {
         this.clear();
       }
       this.lastSimMode = this.store.simulatorRunning;
-      this.resetIdleTimer();
+      this.lastRaceArmed = this.store.raceArmed;
+      if (simChanged || armedChanged) {
+        this.resetIdleTimer();
+      }
     });
     if (this.supported) {
       speechSynthesis.addEventListener("voiceschanged", () => this.notify());

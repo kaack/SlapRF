@@ -90,7 +90,7 @@ export class TopBar extends Component {
       </button>`;
 
     let actions = simBtn;
-    if (meta.id === "live") {
+    if (meta.id === "live" || meta.id === "sim") {
       const armTitle = ltConnected
         ? `Timing is controlled by MultiGP LiveTime (${raceArmed ? "currently armed" : "currently disarmed"})`
         : `${raceArmed ? "Pause" : "Resume"} lap timing`;
