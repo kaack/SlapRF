@@ -34,6 +34,18 @@ const BETWEEN_CALLOUTS_MS = 80;
  */
 const KEEP_AWAKE_GAIN = 0.0001;
 
+/** Baylands Park / Bay Area inside-joke quips spoken when the track has been quiet for a while. */
+const IDLE_EASTER_EGG_QUIPS = [
+  "I am a member!",
+  "Who crashed now...?",
+  "Is the track clear?",
+  "Save the geese!",
+];
+
+/** Randomized quiet window (35–65 s with no gate activity while Timing and Announcer are on). */
+const IDLE_MIN_MS = 35_000;
+const IDLE_MAX_MS = 65_000;
+
 /** "VANOVER" → "Vanover": stops some voices from spelling all-caps callsigns letter by letter. */
 export function spokenName(callsign: string): string {
   const s = callsign.trim();
@@ -62,6 +74,8 @@ export class Announcer {
   /** No speaking before this time (ms since epoch) — see AFTER_CANCEL_MS. */
   private holdUntil = 0;
   private holdTimer = 0;
+  private idleTimer = 0;
+  private lastQuipIdx = -1;
   private lastSimMode: boolean | null = null;
   /** Inaudible tone that keeps the audio output awake while the announcer is on. */
   private keepAwake: AudioContext | null = null;
@@ -71,11 +85,13 @@ export class Announcer {
     this.prefs = loadPrefs();
     store.onLapRecorded((lap) => this.onLap(lap));
     store.onStartGateDetected((ev) => this.onStartPass(ev));
+    store.subscribe(["crossings"], () => this.resetIdleTimer());
     store.subscribe(["status"], () => {
       if (this.lastSimMode !== null && this.lastSimMode !== this.store.simulatorRunning) {
         this.clear();
       }
       this.lastSimMode = this.store.simulatorRunning;
+      this.resetIdleTimer();
     });
     if (this.supported) {
       speechSynthesis.addEventListener("voiceschanged", () => this.notify());
@@ -133,6 +149,7 @@ export class Announcer {
     if (wasEnabled && !this.prefs.enabled) {
       this.say("Announcer off", true, true);
     }
+    this.resetIdleTimer();
     this.notify();
   }
 
@@ -168,7 +185,27 @@ export class Announcer {
     if ((!this.prefs.enabled && !force) || !this.supported) return;
     if (interrupt) this.clear();
     this.queue.push({ text, queuedAt: Date.now() });
+    this.resetIdleTimer();
     this.pump();
+  }
+
+  private resetIdleTimer(): void {
+    window.clearTimeout(this.idleTimer);
+    this.idleTimer = 0;
+    if (!this.prefs.enabled || !this.store.raceArmed || !this.supported) return;
+    const delayMs = IDLE_MIN_MS + Math.floor(Math.random() * (IDLE_MAX_MS - IDLE_MIN_MS));
+    this.idleTimer = window.setTimeout(() => this.speakIdleQuip(), delayMs);
+  }
+
+  private speakIdleQuip(): void {
+    this.idleTimer = 0;
+    if (!this.prefs.enabled || !this.store.raceArmed || !this.supported) return;
+    let idx = Math.floor(Math.random() * IDLE_EASTER_EGG_QUIPS.length);
+    if (IDLE_EASTER_EGG_QUIPS.length > 1 && idx === this.lastQuipIdx) {
+      idx = (idx + 1) % IDLE_EASTER_EGG_QUIPS.length;
+    }
+    this.lastQuipIdx = idx;
+    this.say(IDLE_EASTER_EGG_QUIPS[idx]);
   }
 
   private clear(): void {
