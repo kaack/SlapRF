@@ -96,15 +96,19 @@ export class PilotRssiChart extends Component {
     this.api = api;
     el.innerHTML = `
       <div class="scope-toolbar">
-        <button class="btn" type="button" data-act="live"></button>
-        <div class="scope-nav">
-          <button class="btn btn-ghost" type="button" data-act="prev" title="Previous pass (←)">${icons.chevronLeft(18)}<span>Prev pass</span></button>
-          <button class="btn btn-ghost" type="button" data-act="next" title="Next pass (→)"><span>Next pass</span>${icons.chevronRight(18)}</button>
-        </div>
-        <div class="segmented" data-slot="windows" role="group" aria-label="Time window">
-          ${WINDOWS_SEC.map((s) => `<button type="button" data-window="${s}">${s}s</button>`).join("")}
+        <div class="scope-transport" role="group" aria-label="Signal playback and pass navigation">
+          <button class="btn btn-sm btn-ghost scope-step-btn" type="button" data-act="prev" title="Previous pass (←)">
+            ${icons.chevronLeft(16)}<span class="scope-step-text-full">Prev pass</span><span class="scope-step-text-short">Prev</span>
+          </button>
+          <button class="btn btn-sm scope-live-btn" type="button" data-act="live"></button>
+          <button class="btn btn-sm btn-ghost scope-step-btn" type="button" data-act="next" title="Next pass (→)">
+            <span class="scope-step-text-full">Next pass</span><span class="scope-step-text-short">Next</span>${icons.chevronRight(16)}
+          </button>
         </div>
         <span class="scope-hint" data-slot="hint"></span>
+        <div class="segmented scope-windows" data-slot="windows" role="group" aria-label="Time window">
+          ${WINDOWS_SEC.map((s) => `<button type="button" data-window="${s}">${s}s</button>`).join("")}
+        </div>
       </div>
       <div class="scope-calib" data-slot="calib"></div>
       <div class="canvas-host canvas-host-md scope-canvas" data-slot="chart" tabindex="0"
@@ -121,6 +125,7 @@ export class PilotRssiChart extends Component {
       if (btn.dataset.focus) {
         this.focus = btn.dataset.focus === "all" ? null : Number(btn.dataset.focus);
         this.calibMessage = "";
+        this.renderControls();
         this.renderCalib();
         this.renderLegend();
       } else if (btn.dataset.window) this.setWindow(Number(btn.dataset.window) * 1e6);
@@ -287,10 +292,10 @@ export class PilotRssiChart extends Component {
     return this.endUs === null ? this.latest : this.refUs;
   }
 
-  /** Centre the window on the previous / next pass (timed or not) by this pilot. */
+  /** Centre the window on the previous / next pass (timed or not) for the focused gate (or all gates). */
   private jump(dir: -1 | 1): void {
     const center = this.viewEnd() - this.windowUs / 2;
-    const passes = this.passes(this.earliest, this.latest);
+    const passes = this.focusedPasses(this.earliest, this.latest);
     const target =
       dir < 0 ? [...passes].reverse().find((p) => p.ts < center - 50_000) : passes.find((p) => p.ts > center + 50_000);
     if (!target) return;
@@ -440,6 +445,12 @@ export class PilotRssiChart extends Component {
     return [...timed, ...rejected].sort((a, b) => a.ts - b.ts);
   }
 
+  /** Passes filtered to the currently focused gate (or all gates when focus is null). */
+  private focusedPasses(from: number, to: number): PassMarker[] {
+    const all = this.passes(from, to);
+    return this.focus === null ? all : all.filter((p) => p.puckId === this.focus);
+  }
+
   /** Index of the first frame at or after ts (binary search; frames are in time order). */
   private static firstAtOrAfter(frames: PuckTelemetryFrame[], ts: number): number {
     let lo = 0;
@@ -513,7 +524,7 @@ export class PilotRssiChart extends Component {
     // Pass markers: dashed in the gate's colour when timed, red when set aside.
     ctx.font = font(600, 10.5);
     const rows = this.labelRows(ctx, xOf, end);
-    const passes = this.passes(start, end).filter((p) => this.focus === null || p.puckId === this.focus);
+    const passes = this.focusedPasses(start, end);
     let hovered: PassMarker | null = null;
     passes.forEach((p) => {
       const x = xOf(p.ts);
@@ -618,7 +629,7 @@ export class PilotRssiChart extends Component {
   private labelRows(ctx: CanvasRenderingContext2D, xOf: (ts: number) => number, end: number): Map<string, number> {
     const rows = new Map<string, number>();
     const rowEnd = [-Infinity, -Infinity];
-    for (const p of this.passes(this.earliest, end)) {
+    for (const p of this.focusedPasses(this.earliest, end)) {
       const x = xOf(p.ts) + 5;
       const width = ctx.measureText(this.labelOf(p)).width;
       const row = x > rowEnd[0] + 6 ? 0 : x > rowEnd[1] + 6 ? 1 : 0;
@@ -715,10 +726,18 @@ export class PilotRssiChart extends Component {
   private renderControls(): void {
     const live = this.endUs === null;
     const btn = this.el.querySelector<HTMLButtonElement>('[data-act="live"]')!;
-    btn.className = `btn ${live ? "btn-armed" : "btn-ghost"}`;
-    btn.title = live ? "Pause live signal stream (Space)" : "Resume live signal stream (Space)";
+    btn.className = `btn btn-sm scope-live-btn ${live ? "btn-armed" : "btn-ghost"}`;
+    btn.title = live ? "Following live signal stream — click to pause (Space)" : "Stream paused — click to resume live stream (Space)";
     btn.setAttribute("aria-label", btn.title);
-    btn.innerHTML = live ? `${icons.signal(18)}<span>Live stream</span>` : `${icons.signalOff(18)}<span>Stream paused</span>`;
+    btn.setAttribute("aria-pressed", String(live));
+    btn.innerHTML = `<span class="status-dot ${live ? "is-up" : ""}"></span><span>Live</span>`;
+
+    const gateScope = this.focus === null ? "all gates" : gateLabel(this.store, this.focus);
+    const prevBtn = this.el.querySelector<HTMLButtonElement>('[data-act="prev"]');
+    const nextBtn = this.el.querySelector<HTMLButtonElement>('[data-act="next"]');
+    if (prevBtn) prevBtn.title = `Previous pass at ${gateScope} (←)`;
+    if (nextBtn) nextBtn.title = `Next pass at ${gateScope} (→)`;
+
     this.slot("windows")
       .querySelectorAll<HTMLElement>("[data-window]")
       .forEach((b) => b.classList.toggle("is-active", Number(b.dataset.window) * 1e6 === Math.round(this.windowUs)));
@@ -748,26 +767,32 @@ export class PilotRssiChart extends Component {
     let actions: string;
     if (this.focus === null) {
       const anyCalibrated = this.store.pucks.some((p) => enterThresholdAt(this.store, p.puckId, pilot.slotIndex).calibrated);
-      text = this.calibMessage || "Pick a gate to see its threshold and adjust it, or auto-calibrate every gate from the recent signal.";
+      text = this.calibMessage || "Pick a gate to view or drag its threshold.";
       actions = `
-        ${this.undo ? `<button class="btn btn-ghost" type="button" data-calib="undo">${icons.reset(17)}<span>Undo</span></button>` : ""}
-        ${anyCalibrated ? `<button class="btn btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at every gate">${icons.reset(17)}<span>Reset all</span></button>` : ""}
-        <button class="btn btn-ghost" type="button" data-calib="auto" title="Set each gate's threshold from the last ${minutes} minutes of signal">${icons.target(18)}<span>Auto-calibrate all</span></button>`;
+        <div class="scope-calib-actions">
+          ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(15)}<span>Undo</span></button>` : ""}
+          ${anyCalibrated ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at every gate">${icons.reset(15)}<span>Reset all</span></button>` : ""}
+          <button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Set each gate's threshold from the last ${minutes} minutes of signal">${icons.target(16)}<span>Auto-calibrate all</span></button>
+        </div>`;
     } else {
       const name = gateLabel(this.store, this.focus);
       const t = enterThresholdAt(this.store, this.focus, pilot.slotIndex);
       text =
         this.calibMessage ||
-        `${name} threshold: ${t.dbm.toFixed(0)} dBm ${t.calibrated ? "(calibrated for this gate)" : `(${pilot.callsign}'s own)`}. Drag the line or its tag up or down to change it.`;
+        `${name}: ${t.dbm.toFixed(0)} dBm ${t.calibrated ? "(calibrated)" : `(${pilot.callsign}'s default)`} · drag line to adjust`;
       actions = `
-        ${this.undo ? `<button class="btn btn-ghost" type="button" data-calib="undo">${icons.reset(17)}<span>Undo</span></button>` : ""}
-        ${t.calibrated ? `<button class="btn btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at ${esc(name)}">${icons.reset(17)}<span>Reset</span></button>` : ""}
-        <button class="btn btn-ghost" type="button" data-calib="auto" title="Set ${esc(name)}'s threshold from the last ${minutes} minutes of signal">${icons.target(18)}<span>Auto-calibrate ${esc(name)}</span></button>`;
+        <div class="scope-calib-actions">
+          ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(15)}<span>Undo</span></button>` : ""}
+          ${t.calibrated ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at ${esc(name)}">${icons.reset(15)}<span>Reset</span></button>` : ""}
+          <button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Set ${esc(name)}'s threshold from the last ${minutes} minutes of signal">${icons.target(16)}<span>Auto-calibrate</span></button>
+        </div>`;
     }
     this.slot("calib").innerHTML = `
       ${picker}
-      <span class="scope-calib-text">${esc(text)}</span>
-      ${actions}`;
+      <div class="scope-calib-meta">
+        <span class="scope-calib-text">${esc(text)}</span>
+        ${actions}
+      </div>`;
   }
 
   /** Each gate's reading at the cursor (or at the right edge of the view). */
