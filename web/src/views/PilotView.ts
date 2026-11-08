@@ -6,12 +6,12 @@ import { LapComparison } from "../widgets/LapComparison";
 import { LapPicker } from "../widgets/LapPicker";
 import { renderStatTiles } from "../widgets/markup";
 import { PilotPicker } from "../widgets/PilotPicker";
-import { SectionConsistency } from "../widgets/SectionConsistency";
+import { PracticeRecommendation, SectionStats } from "../widgets/SectionConsistency";
 
 /**
- * Pilot analysis, read top to bottom: session numbers → (1) pick a lap on the bar chart →
- * (2) where that lap gained or lost time against its reference → where to practice across
- * the whole session. Laps are only ever chosen in step 1; everything below follows it.
+ * Pilot analysis, read top to bottom: session numbers → lap comparison (pick a lap on the
+ * bar chart, see where it gained or lost time against its baseline) → section stats across
+ * the whole session → a plain-language practice recommendation.
  */
 export class PilotView extends Component {
   private readonly store: AppStore;
@@ -25,14 +25,18 @@ export class PilotView extends Component {
         <div data-slot="picker"></div>
       </div>
       <div class="stat-row" data-slot="stats"></div>
-      <section class="card" data-slot="laps"></section>
-      <section class="card card-flush" data-slot="compare"></section>
-      <section class="card card-flush" data-slot="consistency"></section>`;
+      <section class="card card-flush lap-metrics">
+        <div class="lap-metrics-picker" data-slot="laps"></div>
+        <div class="lap-metrics-compare" data-slot="compare"></div>
+      </section>
+      <section class="card card-flush" data-slot="section-stats"></section>
+      <section class="card rec-card" data-slot="recommendation"></section>`;
 
     this.adopt(new PilotPicker(this.slot("picker"), store));
     this.adopt(new LapPicker(this.slot("laps"), store));
     this.adopt(new LapComparison(this.slot("compare"), store));
-    this.adopt(new SectionConsistency(this.slot("consistency"), store));
+    this.adopt(new SectionStats(this.slot("section-stats"), store));
+    this.adopt(new PracticeRecommendation(this.slot("recommendation"), store));
 
     this.onDispose(store.subscribe(["config", "selection", "laps"], () => this.renderStats()));
     this.renderStats();

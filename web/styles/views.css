@@ -1551,61 +1551,85 @@ body.is-gate-dragging * {
   margin-right: 4px;
 }
 
-.consistency {
-  display: flex;
-  flex-direction: column;
-  padding: 0 0 6px;
+/* Lap comparison card: chart on top, comparison below a divider */
+.lap-metrics-picker {
+  padding: 18px 20px 16px;
 }
-.cons-row {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 20px;
+.card-flush .lap-metrics-picker .card-head {
+  padding: 0;
+}
+.lap-metrics-compare {
   border-top: 1px solid var(--border);
+  padding-top: 16px;
 }
-.cons-row.is-top {
+.lap-picker.is-picking .bar-hit {
+  cursor: crosshair;
+}
+.lap-picker.is-picking .bar-hit:hover .bar:not(.is-review) {
+  fill: var(--purple);
+}
+.segmented button.is-ref-chip.is-active {
+  background: rgba(192, 132, 252, 0.14);
+  color: var(--purple);
+}
+
+/* Section stats table */
+.stats-table td {
+  font-size: 13px;
+}
+.stats-table th small {
+  color: var(--text-3);
+  font-weight: 400;
+  margin-left: 4px;
+}
+.stats-sec {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+.stats-table tr.is-top {
   background: var(--accent-soft);
+}
+.stats-table tr.is-top td:first-child {
   box-shadow: inset 2px 0 0 var(--accent);
 }
-.cons-head {
+
+/* Recommendation: plain-language coaching text */
+.rec-card .card-head {
+  margin-bottom: 10px;
+}
+.rec-body {
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
   gap: 10px;
 }
-.cons-figs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 16px;
-  color: var(--text-3);
-  font-size: 12px;
-}
-.cons-figs strong {
-  color: var(--text-2);
+.rec-lead {
+  margin: 0;
+  font-size: 15px;
   font-weight: 500;
+  color: var(--text);
+  line-height: 1.5;
 }
-.cons-gap {
+.rec-lead strong {
+  color: var(--accent);
+  font-weight: 600;
+}
+.rec-list {
+  margin: 0;
+  padding-left: 18px;
   display: flex;
-  align-items: center;
-  gap: 10px;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--text-2);
+  font-size: 13.5px;
+  line-height: 1.6;
 }
-.cons-track {
-  flex: 1;
-  height: 6px;
-  border-radius: 6px;
-  background: var(--surface-3);
-  overflow: hidden;
+.rec-list li::marker {
+  color: var(--text-3);
 }
-.cons-track span {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--warn);
-}
-.cons-gap .mono {
-  min-width: 64px;
-  text-align: right;
-  font-size: 12px;
+.rec-list strong {
+  color: var(--text);
+  font-weight: 600;
 }
 
 .lap-chart-legend {
@@ -1632,82 +1656,7 @@ body.is-gate-dragging * {
   border-top: 1.5px dashed var(--text-2);
   border-radius: 0 !important;
 }
-/* Pilot analysis: lap picker (Selection) ---------------------------------- */
-.selection-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 14px;
-  padding: 10px 14px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-}
-.selection-slots {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-.sel-slot-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: 32px;
-  padding: 0 11px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
-  background: var(--surface);
-  color: var(--text);
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  transition: border-color 0.14s, background 0.14s, box-shadow 0.14s;
-}
-.sel-slot-pill:hover:not(:disabled) {
-  border-color: #454c59;
-  background: var(--surface-3);
-}
-.sel-slot-pill:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-.sel-slot-pill.is-review.is-armed {
-  border-color: var(--accent-line);
-  box-shadow: inset 0 0 0 1px var(--accent-line);
-}
-.sel-slot-pill.is-ref.is-armed {
-  border-color: rgba(192, 132, 252, 0.55);
-  box-shadow: inset 0 0 0 1px rgba(192, 132, 252, 0.45);
-}
-.sel-slot-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 2px;
-  flex-shrink: 0;
-}
-.sel-slot-dot.is-review {
-  background: var(--accent);
-}
-.sel-slot-dot.is-ref {
-  background: var(--purple);
-}
-.sel-slot-k {
-  color: var(--text-3);
-  font-size: 11.5px;
-  font-weight: 500;
-}
-.sel-slot-time {
-  color: var(--text-2);
-  font-size: 11.5px;
-}
-.sel-vs {
-  color: var(--text-3);
-  font-size: 11.5px;
-  font-weight: 500;
-}
+/* Pilot analysis: lap picker chart ---------------------------------------- */
 .cmp-with {
   display: flex;
   align-items: center;
@@ -1857,7 +1806,6 @@ body.is-gate-dragging * {
   transform: translateX(-50%);
 }
 .segmented button.is-ref-chip {
-  color: var(--purple);
   cursor: pointer;
 }
 .lg-best {

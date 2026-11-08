@@ -312,19 +312,14 @@ export class LapPicker extends Component {
 
     const laps = lapsFor(this.store, this.store.selectedPilot);
     const cmp = resolveComparison(this.store, this.store.selectedPilot);
-    const head = this.renderHead(laps.length);
+    const head = this.renderHead(laps.length, cmp?.ref);
     if (laps.length === 0) {
       this.el.innerHTML = head + renderEmpty("No laps yet", "Each completed lap shows up here as a bar.");
       return;
     }
-    const review = cmp?.lap ?? laps[laps.length - 1];
-    const ref = cmp?.ref;
-    const reviewId = review.lapId;
-    const refId = ref?.lapId ?? -1;
-    this.el.innerHTML =
-      head +
-      this.renderSelectionBar(laps.length, review, ref, cmp?.refLabel ?? "") +
-      this.renderChart(laps, reviewId, refId);
+    const reviewId = cmp?.lap.lapId ?? laps[laps.length - 1].lapId;
+    const refId = cmp?.ref.lapId ?? -1;
+    this.el.innerHTML = head + this.renderChart(laps, reviewId, refId);
 
     const nextScroller = this.el.querySelector<HTMLElement>(".lap-picker-scroll");
     if (nextScroller) {
@@ -339,79 +334,39 @@ export class LapPicker extends Component {
     }
   }
 
-  private renderHead(lapCount: number): string {
+  private renderHead(lapCount: number, refLap: LapRecord | undefined): string {
     const winLaps = this.windowLaps();
     const scrollable = lapCount > winLaps;
+    const canCompare = lapCount >= 2;
+    const refMode = this.store.comparison.reference;
+    const picking = this.activeSlot === "ref";
+    const customActive = picking || typeof refMode === "number";
+    const customLabel = picking
+      ? "Click a bar…"
+      : typeof refMode === "number" && refLap
+      ? `Lap ${refLap.lapNumber}`
+      : "Pick a lap";
+    const btn = (key: string, label: string, active: boolean, extra = "") =>
+      `<button type="button" data-ref="${key}" class="${active ? "is-active" : ""} ${extra}" ${canCompare ? "" : "disabled"}>${label}</button>`;
     const jumpLatest = scrollable
       ? `<button type="button" class="btn btn-sm btn-ghost" data-scroll-latest style="${this.followLatest ? "display:none" : ""}">Latest ${winLaps} →</button>`
       : "";
     return `
       <header class="card-head">
         <div>
-          <h2>Selection</h2>
-          <p>Choose a lap from the session chart below and select which baseline lap to compare it against.</p>
-        </div>
-        ${jumpLatest}
-      </header>`;
-  }
-
-  private renderSelectionBar(
-    lapCount: number,
-    review: LapRecord,
-    ref: LapRecord | undefined,
-    refLabel: string
-  ): string {
-    const canCompare = lapCount >= 2;
-    const refMode = this.store.comparison.reference;
-    const isCustomMode = typeof refMode === "number" || this.activeSlot === "ref";
-    const btn = (key: string, label: string, active: boolean) =>
-      `<button type="button" data-ref="${key}" class="${active ? "is-active" : ""}" ${canCompare ? "" : "disabled"}>${label}</button>`;
-
-    const refSub = ref
-      ? refLabel.includes("previous")
-        ? "Previous"
-        : refLabel.includes("best")
-        ? "Best"
-        : "Custom"
-      : "";
-
-    return `
-      <div class="selection-bar">
-        <div class="selection-slots">
-          <button
-            type="button"
-            class="sel-slot-pill is-review ${this.activeSlot === "review" ? "is-armed" : ""}"
-            data-pick-slot="review"
-            title="Click a bar on the chart to change the inspected lap"
-          >
-            <span class="sel-slot-dot is-review"></span>
-            <span class="sel-slot-k">Inspecting</span>
-            <strong class="mono">Lap ${review.lapNumber}</strong>
-            <span class="sel-slot-time mono">${fmtTime(review.lapTimeSec)}</span>
-          </button>
-          <span class="sel-vs">vs</span>
-          <button
-            type="button"
-            class="sel-slot-pill is-ref ${this.activeSlot === "ref" ? "is-armed" : ""}"
-            data-pick-slot="ref"
-            ${canCompare ? "" : "disabled"}
-            title="Click here then click any bar on the chart to compare against a specific lap"
-          >
-            <span class="sel-slot-dot is-ref"></span>
-            <span class="sel-slot-k">Baseline${refSub ? ` · ${refSub}` : ""}</span>
-            <strong class="mono">${ref ? `Lap ${ref.lapNumber}` : "—"}</strong>
-            <span class="sel-slot-time mono">${ref ? fmtTime(ref.lapTimeSec) : ""}</span>
-          </button>
+          <h2>Lap comparison</h2>
+          <p>Click any bar to inspect that lap, then choose what to compare it against.</p>
         </div>
         <div class="cmp-with">
-          <span>Baseline</span>
+          ${jumpLatest}
+          <span>Compare against</span>
           <div class="segmented">
-            ${btn("best", "Personal best", refMode === "best" && !isCustomMode)}
-            ${btn("previous", "Previous lap", refMode === "previous" && !isCustomMode)}
-            ${btn("custom", this.activeSlot === "ref" ? "Click a bar…" : "Custom lap", isCustomMode)}
+            ${btn("best", "Personal best", refMode === "best" && !customActive)}
+            ${btn("previous", "Previous lap", refMode === "previous" && !customActive)}
+            ${btn("custom", customLabel, customActive, "is-ref-chip")}
           </div>
         </div>
-      </div>`;
+      </header>`;
   }
 
   private renderChart(laps: LapRecord[], reviewId: number, refId: number): string {
@@ -470,7 +425,7 @@ export class LapPicker extends Component {
       : "";
 
     return `
-      <div class="lap-picker">
+      <div class="lap-picker ${this.activeSlot === "ref" ? "is-picking" : ""}">
         <div class="lap-picker-scroll ${scrollable ? "is-scrollable" : ""}">
           <div class="lap-picker-track" style="width:${trackWidthPct.toFixed(2)}%">
             <div class="lap-picker-plot">

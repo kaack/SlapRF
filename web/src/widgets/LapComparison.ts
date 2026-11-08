@@ -23,23 +23,14 @@ export class LapComparison extends Component {
   }
 
   private render(): void {
-    const head = `
-      <header class="card-head">
-        <div>
-          <h2>Analysis</h2>
-          <p>Section-by-section split times and exit speeds comparing the two selected laps in detail.</p>
-        </div>
-      </header>`;
-
     const cmp = resolveComparison(this.store, this.store.selectedPilot);
     if (!cmp) {
-      this.el.innerHTML = head + renderEmpty("Fly at least two laps", "Then pick a lap above to see where it gained or lost time.");
+      this.el.innerHTML = renderEmpty("Fly at least two laps", "Then click a bar above to see where that lap gained or lost time.");
       return;
     }
     const maxAbs = Math.max(NEGLIGIBLE_SEC, ...cmp.sections.map((s) => Math.abs(s.delta)));
 
     this.el.innerHTML = `
-      ${head}
       ${this.renderSummary(cmp)}
       <div class="table-scroll">
         <table class="table cmp-table">
