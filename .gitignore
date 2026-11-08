@@ -2,7 +2,8 @@
 *.exe
 *.out
 *.test
-fpvtimer
+/fpvtimer
+/slaprf-*
 
 # OS / Editor artifacts
 .DS_Store
