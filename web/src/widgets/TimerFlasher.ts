@@ -4,7 +4,7 @@ import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import {
   FlashProgress,
-  PuckReadout,
+  TimerReadout,
   flashXiaoC5OverWebSerial,
   isWebSerialSupported,
   readXiaoC5OverWebSerial,
@@ -47,7 +47,7 @@ export class TimerFlasher extends Component {
   private showPassword = false;
   private busy = false;
   private progress: FlashProgress | null = null;
-  private readout: PuckReadout | null = null;
+  private readout: TimerReadout | null = null;
   private lastSuccessMsg: string | null = null;
   private errorMsg: string | null = null;
   private showAllPorts = false;
@@ -138,7 +138,7 @@ export class TimerFlasher extends Component {
 
     this.listen(el, "input", (e) => {
       const input = e.target as HTMLInputElement;
-      if (input.matches("[data-puck-label]")) {
+      if (input.matches("[data-timer-label]")) {
         this.timerLabel = input.value;
       } else if (input.matches("[data-wifi-ssid]")) {
         this.saveSSID(input.value);
@@ -228,8 +228,8 @@ export class TimerFlasher extends Component {
 
       this.readout = info;
       this.role = info.role;
-      if (info.puckLabel) {
-        this.timerLabel = info.puckLabel;
+      if (info.timerLabel) {
+        this.timerLabel = info.timerLabel;
       }
       if (info.wifiSSID) {
         this.saveSSID(info.wifiSSID);
@@ -237,7 +237,7 @@ export class TimerFlasher extends Component {
           this.networks = [{ ssid: info.wifiSSID, saved: true }, ...this.networks];
         }
       }
-      const idNote = info.puckLabel ? ` (${info.puckLabel})` : "";
+      const idNote = info.timerLabel ? ` (${info.timerLabel})` : "";
       this.lastSuccessMsg = `Read complete — timer is configured as ${
         info.role === "hub" ? "Hub" : "Spoke"
       }${idNote}.`;
@@ -260,7 +260,7 @@ export class TimerFlasher extends Component {
     if (!cleanLabel) {
       this.errorMsg = "Give this timer an ID / name (e.g. Hub-1, Blue-Timer, Gate-A) before flashing.";
       this.render();
-      this.el.querySelector<HTMLInputElement>("[data-puck-label]")?.focus();
+      this.el.querySelector<HTMLInputElement>("[data-timer-label]")?.focus();
       return;
     }
 
@@ -371,7 +371,7 @@ export class TimerFlasher extends Component {
             <label class="flasher-field-label">Timer ID / name</label>
             <input class="input mono" type="text" placeholder="${idPlaceholder}" value="${esc(
               this.timerLabel
-            )}" data-puck-label="1" maxlength="24" spellcheck="false" autocomplete="off" ${
+            )}" data-timer-label="1" maxlength="24" spellcheck="false" autocomplete="off" ${
               this.busy ? "disabled" : ""
             } />
           </div>
@@ -486,7 +486,7 @@ export class TimerFlasher extends Component {
             <div class="flasher-readout-grid">
               <div>
                 <span class="note">Timer ID / name</span>
-                <div class="mono">${esc(this.readout.puckLabel || "(unnamed)")}</div>
+                <div class="mono">${esc(this.readout.timerLabel || "(unnamed)")}</div>
               </div>
               <div>
                 <span class="note">Role on board</span>

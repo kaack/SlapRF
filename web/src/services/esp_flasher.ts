@@ -16,14 +16,17 @@ export interface FlashProgress {
   detail: string;
 }
 
-export interface PuckReadout {
+export interface TimerReadout {
   chip: string;
   role: "hub" | "spoke";
+  timerLabel: string;
   puckLabel: string;
   wifiSSID: string;
   frequenciesMHz: number[];
   firmwareVersion: string;
 }
+
+export type PuckReadout = TimerReadout;
 
 export type ProgressCallback = (progress: FlashProgress) => void;
 
@@ -111,12 +114,13 @@ export function parseSlaprfConfigBlock(bytes: Uint8Array): PuckReadout | null {
   const labelBytes = block.subarray(103, 127);
   let labelEnd = labelBytes.indexOf(0);
   if (labelEnd < 0) labelEnd = labelBytes.length;
-  const puckLabel = new TextDecoder().decode(labelBytes.subarray(0, labelEnd));
+  const timerLabel = new TextDecoder().decode(labelBytes.subarray(0, labelEnd));
 
   return {
     chip: "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
     role,
-    puckLabel,
+    timerLabel,
+    puckLabel: timerLabel,
     wifiSSID,
     frequenciesMHz,
     firmwareVersion: `SlapRF v1.${version}`,
@@ -271,6 +275,7 @@ export async function readXiaoC5OverWebSerial(
       parseSlaprfConfigBlock(fallbackImageBytes) ?? {
         chip: "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
         role: "hub",
+        timerLabel: "",
         puckLabel: "",
         wifiSSID: "",
         frequenciesMHz: [5658, 5732, 5806, 5917, 5695, 5769, 5843, 5880],

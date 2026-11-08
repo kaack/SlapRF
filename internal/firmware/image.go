@@ -16,16 +16,18 @@ const (
 	// ConfigMagic marks the 128-byte patchable configuration struct inside the XIAO ESP32-C5 image.
 	ConfigMagic = "SLAPRF01"
 
-	// RoleStartBridge is the Hub puck (Start/Finish gate): sweeps 5.8 GHz RSSI at the start line,
-	// receives ESP-NOW frames from Spoke pucks, and bridges all telemetry to the laptop over Wi-Fi.
-	RoleStartBridge uint8 = 1
+	// RoleHubTimer is the Hub timer: sweeps 5.8 GHz RSSI, receives ESP-NOW frames from Spoke
+	// timers, and bridges all telemetry to the laptop over Wi-Fi.
+	RoleHubTimer uint8 = 1
 
-	// RoleFieldPuck is a Spoke puck: sweeps 5.8 GHz RSSI and bursts 16-byte frames over
-	// connectionless ESP-NOW to the Hub puck (no Wi-Fi association needed on spoke gates).
-	RoleFieldPuck uint8 = 2
+	// RoleSpokeTimer is a Spoke timer: sweeps 5.8 GHz RSSI and bursts 16-byte frames over
+	// connectionless ESP-NOW to the Hub timer (no Wi-Fi association needed on spoke timers).
+	RoleSpokeTimer uint8 = 2
 
-	// Legacy alias kept for callers passing RoleGatePuck.
-	RoleGatePuck = RoleStartBridge
+	// Legacy aliases kept for compatibility.
+	RoleStartBridge = RoleHubTimer
+	RoleFieldPuck   = RoleSpokeTimer
+	RoleGatePuck    = RoleHubTimer
 
 	// espImageMagic is the standard Espressif bootloader image magic byte (0xE9).
 	espImageMagic byte = 0xE9
@@ -36,7 +38,7 @@ const (
 	imageSize   = 64 * 1024
 	configOff   = 0x0100 // Fixed offset of the 128-byte SLAPRF01 config struct inside the binary
 	configLen   = 128
-	maxPuckID   = 16
+	maxTimerID  = 16
 	minFreqMHz  = 5600
 	maxFreqMHz  = 5950
 	maxSSIDLen  = 32
@@ -45,58 +47,61 @@ const (
 )
 
 var (
-	ErrInvalidPuckID = errors.New("puck ID must be between 1 and 16")
-	ErrSSIDTooLong   = errors.New("Wi-Fi SSID must be at most 32 bytes")
-	ErrPassTooLong   = errors.New("Wi-Fi password must be at most 39 bytes")
-	ErrLabelTooLong  = errors.New("puck ID / name must be at most 24 characters")
+	ErrInvalidTimerID = errors.New("timer ID must be between 1 and 16")
+	ErrInvalidPuckID  = ErrInvalidTimerID
+	ErrSSIDTooLong    = errors.New("Wi-Fi SSID must be at most 32 bytes")
+	ErrPassTooLong    = errors.New("Wi-Fi password must be at most 39 bytes")
+	ErrLabelTooLong   = errors.New("timer ID / name must be at most 24 characters")
 )
 
-// PuckConfig is the binary configuration stamped into the XIAO ESP32-C5 firmware image
+// TimerConfig is the binary configuration stamped into the XIAO ESP32-C5 firmware image
 // at download time so the user never needs a C compiler or CLI toolchain.
-type PuckConfig struct {
+type TimerConfig struct {
 	Role         uint8
 	PuckID       uint8
-	PuckLabel    string // Flashed hardware ID / name (e.g. "Hub-1", "Blue-Puck")
+	PuckLabel    string // Flashed hardware ID / name (e.g. "Hub-1", "Blue-Timer")
 	SlotFreqsMHz [domain.MaxPilotSlots]uint16
-	WifiSSID     string // Only used by Hub puck
+	WifiSSID     string // Only used by Hub timer
 	WifiPass     string
 }
+
+type PuckConfig = TimerConfig
 
 // BuiltImage holds the patched ESP32-C5 firmware binary and its metadata.
 type BuiltImage struct {
 	Bytes     []byte
 	SHA256Hex string
-	Config    PuckConfig
+	Config    TimerConfig
 	ConfigOff int
 	Filename  string
 }
 
 // BuildXIAOC5Image constructs a flashable ESP32-C5 firmware image with the given role
-// (RoleStartBridge = Hub puck, RoleFieldPuck = Field puck), flashed PuckLabel,
+// (RoleHubTimer = Hub timer, RoleSpokeTimer = Spoke timer), flashed timer ID/label,
 // 8-channel 5.8 GHz frequency table, and optional Wi-Fi credentials stamped into `SLAPRF01`.
-func BuildXIAOC5Image(cfg PuckConfig) (*BuiltImage, error) {
+func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 	if cfg.Role == 0 && cfg.PuckID == 0 {
-		return nil, ErrInvalidPuckID
+		return nil, ErrInvalidTimerID
 	}
 	if cfg.Role == 0 {
 		if cfg.PuckID == 1 {
-			cfg.Role = RoleStartBridge
+			cfg.Role = RoleHubTimer
 		} else {
-			cfg.Role = RoleFieldPuck
+			cfg.Role = RoleSpokeTimer
 		}
 	}
-	if cfg.Role != RoleStartBridge && cfg.Role != RoleFieldPuck {
+	if cfg.Role != RoleHubTimer && cfg.Role != RoleSpokeTimer {
 		return nil, errors.New("invalid role: must be hub (1) or spoke (2)")
 	}
 	if cfg.PuckID == 0 {
-		if cfg.Role == RoleStartBridge {
+		if cfg.Role == RoleHubTimer {
 			cfg.PuckID = 1
 		} else {
 			cfg.PuckID = 2
 		}
 	}
-	if cfg.PuckID < 1 || cfg.PuckID > maxPuckID {
-		return nil, ErrInvalidPuckID
+	if cfg.PuckID < 1 || cfg.PuckID > maxTimerID {
+		return nil, ErrInvalidTimerID
 	}
 
 	cfg.PuckLabel = strings.TrimSpace(cfg.PuckLabel)
@@ -110,7 +115,7 @@ func BuildXIAOC5Image(cfg PuckConfig) (*BuiltImage, error) {
 		return nil, ErrPassTooLong
 	}
 
-	if cfg.Role == RoleFieldPuck {
+	if cfg.Role == RoleSpokeTimer {
 		cfg.WifiSSID = ""
 		cfg.WifiPass = ""
 	}
@@ -143,20 +148,20 @@ func BuildXIAOC5Image(cfg PuckConfig) (*BuiltImage, error) {
 	}
 
 	// 3. Stamp human-readable build banner at 0x0040
-	banner := fmt.Sprintf("SlapRF XIAO-ESP32-C5 SDR Firmware v1.0 (Role=%d Puck=%d Label=%s)", cfg.Role, cfg.PuckID, cfg.PuckLabel)
+	banner := fmt.Sprintf("SlapRF XIAO-ESP32-C5 SDR Firmware v1.0 (Role=%d Timer=%d Label=%s)", cfg.Role, cfg.PuckID, cfg.PuckLabel)
 	copy(img[0x0040:], []byte(banner))
 
 	// 4. Stamp the 128-byte SLAPRF01 binary configuration block at 0x0100:
 	//    [0..7]     "SLAPRF01" (8 bytes)
 	//    [8]        version = 1
-	//    [9]        role (1 = Master puck, 2 = Slave puck)
-	//    [10]       puck_id (1..16)
+	//    [9]        role (1 = Hub timer, 2 = Spoke timer)
+	//    [10]       timer_id (1..16)
 	//    [11]       wifi_mode (0 = AP, 1 = Join WifiSSID)
 	//    [12..27]   slot_freqs_mhz[8] (8 x uint16 LE)
 	//    [28..29]   tdma_offset_us (uint16 LE)
 	//    [30..62]   wifi_ssid (null-terminated 33 bytes)
 	//    [63..102]  wifi_pass (null-terminated 40 bytes)
-	//    [103..126] puck_label (null-terminated 24 bytes — flashed Puck ID / name)
+	//    [103..126] timer_label (null-terminated 24 bytes — flashed Timer ID / name)
 	//    [127]      xor_crc8 over bytes [0..126]
 	var block [configLen]byte
 	copy(block[0:8], []byte(ConfigMagic))
@@ -191,7 +196,7 @@ func BuildXIAOC5Image(cfg PuckConfig) (*BuiltImage, error) {
 
 	sum := sha256.Sum256(img)
 	roleSlug := "hub"
-	if cfg.Role == RoleFieldPuck {
+	if cfg.Role == RoleSpokeTimer {
 		roleSlug = "spoke"
 	}
 	filename := fmt.Sprintf("slaprf-xiao-c5-%s.bin", roleSlug)
@@ -206,8 +211,8 @@ func BuildXIAOC5Image(cfg PuckConfig) (*BuiltImage, error) {
 }
 
 // InspectConfig locates and decodes the SLAPRF01 configuration block inside a built firmware binary.
-func InspectConfig(img []byte) (PuckConfig, error) {
-	var out PuckConfig
+func InspectConfig(img []byte) (TimerConfig, error) {
+	var out TimerConfig
 	idx := bytes.Index(img, []byte(ConfigMagic))
 	if idx < 0 || idx+configLen > len(img) {
 		return out, errors.New("SLAPRF01 config magic not found in image")

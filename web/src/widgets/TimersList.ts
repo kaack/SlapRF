@@ -83,9 +83,9 @@ export class TimersList extends Component {
 
   private formatTitle(d: DetectedTimer): string {
     if (d.puckLabel && d.puckLabel.trim() !== "") {
-      return `P${d.puckId} · ${d.puckLabel.trim()}`;
+      return `T${d.puckId} · ${d.puckLabel.trim()}`;
     }
-    return `P${d.puckId}`;
+    return `T${d.puckId}`;
   }
 
   private render(): void {

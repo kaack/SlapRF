@@ -89,8 +89,8 @@ export function gateColor(store: AppStore, puckId: number): string {
 
 /**
  * What a gate is called everywhere in the UI:
- *   1. Its display-name override (`name`) from the Gates editor if set,
- *   2. Otherwise its flashed Puck ID / name (`puckLabel`),
+ *   1. Its display-name override (`name`) from the Track editor if set,
+ *   2. Otherwise its flashed Timer ID / name (`puckLabel`),
  *   3. Otherwise "Gate N" by its position on the course.
  */
 export function gateLabel(store: AppStore, puckId: number): string {
@@ -100,10 +100,11 @@ export function gateLabel(store: AppStore, puckId: number): string {
   return p.name.trim() || p.puckLabel?.trim() || `Gate ${position + 1}`;
 }
 
-/** The permanent hardware ID / name flashed onto a puck (shown on GateEditor cards). */
-export function puckHardwareId(p: { puckId: number; puckLabel?: string }): string {
-  return p.puckLabel?.trim() || `puck #${p.puckId}`;
+/** The permanent hardware ID / name flashed onto a timer. */
+export function timerHardwareId(p: { puckId: number; puckLabel?: string }): string {
+  return p.puckLabel?.trim() || `timer #${p.puckId}`;
 }
+export const puckHardwareId = timerHardwareId;
 
 /** "Gate 2 → Split-S" style label for the stretch of track between two gates. */
 export function sectionLabel(store: AppStore, fromPuckId: number, toPuckId: number): string {

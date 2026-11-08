@@ -4,7 +4,7 @@ Multi-gate FPV drone racing sector timer & practice analytics companion for **Mu
 
 ## Architecture
 
-- **Hardware Timers (`firmware/xiao_c5_puck`)**:
+- **Hardware Timers (`firmware/xiao_c5_timer`)**:
   - **Hub Timer**: Connects to your laptop's Wi-Fi / hotspot and relays RSSI frames from itself and all Spoke timers over UDP (`:9001`).
   - **Spoke Timers**: Stream RSSI samples to the Hub over low-latency ESP-NOW (no Wi-Fi configuration required).
 - **Go Backend (`cmd/fpvtimer`, `internal/`)**:

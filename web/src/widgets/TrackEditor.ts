@@ -118,7 +118,7 @@ export class TrackEditor extends Component {
   }
 
   private formatTimerShortCode(timerId: number): string {
-    return timerId > 0 ? `P${timerId}` : "—";
+    return timerId > 0 ? `T${timerId}` : "—";
   }
 
   private ensureSelectedNode(nodes: TrackNode[]): TrackNode | null {
@@ -354,7 +354,7 @@ export class TrackEditor extends Component {
       ? `
         <div class="gate-inspector-puck-box">
           <span class="gate-inspector-dot" style="--c:${color}"></span>
-          <strong class="mono">P${assignedId}${tiedTimer?.puckLabel?.trim() ? ` · ${esc(tiedTimer.puckLabel.trim())}` : ""}</strong>
+          <strong class="mono">T${assignedId}${tiedTimer?.puckLabel?.trim() ? ` · ${esc(tiedTimer.puckLabel.trim())}` : ""}</strong>
           <span class="detected-role-pill ${tiedTimer?.isHub || assignedId === 1 ? "is-hub" : ""}">
             ${tiedTimer?.isHub || assignedId === 1 ? "Hub" : "Spoke"}
           </span>
@@ -459,7 +459,7 @@ export class TrackEditor extends Component {
         <span class="gate-node-order mono">#1</span>
       </div>
       <div class="gate-node-circle is-unassigned is-landing-preview" style="--c:${color}">
-        <span class="gate-node-empty-label mono">P${timerId}</span>
+        <span class="gate-node-empty-label mono">T${timerId}</span>
       </div>
       <div class="gate-node-name">New gate</div>
       <span class="gate-node-start-btn is-placeholder-flag" aria-hidden="true">${icons.checkered(13)}</span>
@@ -519,7 +519,7 @@ export class TrackEditor extends Component {
           circle.classList.add("is-landing-preview");
           circle.style.setProperty("--c", color);
         }
-        if (label) label.textContent = `P${timerId}`;
+        if (label) label.textContent = `T${timerId}`;
         if (nameEl) nameEl.textContent = "New gate";
       } else {
         emptyPlaceholder.classList.remove("is-insert-preview");
@@ -546,7 +546,7 @@ export class TrackEditor extends Component {
       ghost.style.height = "58px";
       ghost.style.left = `${startX - 29}px`;
       ghost.style.top = `${startY - 29}px`;
-      ghost.innerHTML = `<span class="gate-node-puck-code mono">P${timerId}</span>`;
+      ghost.innerHTML = `<span class="gate-node-puck-code mono">T${timerId}</span>`;
       document.body.appendChild(ghost);
       floatingEl = ghost;
     };
@@ -628,7 +628,7 @@ export class TrackEditor extends Component {
         if (previewCircle) {
           previewCircle.className = "gate-node-circle is-filled";
           previewCircle.style.setProperty("--c", color);
-          previewCircle.innerHTML = `<span class="gate-node-puck-code mono">P${timerId}</span>`;
+          previewCircle.innerHTML = `<span class="gate-node-puck-code mono">T${timerId}</span>`;
         }
         targetSlot.classList.remove("is-drop-slot", "is-insert-preview", "is-empty-placeholder");
         tokenEl.style.display = "none";

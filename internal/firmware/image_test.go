@@ -6,12 +6,12 @@ import (
 	"fpv-gate-timer/internal/domain"
 )
 
-func TestBuildStartBridgePuck1WithWiFi(t *testing.T) {
+func TestBuildHubTimerWithWiFi(t *testing.T) {
 	freqs := [domain.MaxPilotSlots]uint16{5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917}
 
-	built, err := BuildXIAOC5Image(PuckConfig{
+	built, err := BuildXIAOC5Image(TimerConfig{
 		PuckID:       1,
-		PuckLabel:    "Master-Start",
+		PuckLabel:    "Hub-1",
 		SlotFreqsMHz: freqs,
 		WifiSSID:     "PilotHotspot",
 		WifiPass:     "raceband58",
@@ -27,8 +27,8 @@ func TestBuildStartBridgePuck1WithWiFi(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectConfig failed: %v", err)
 	}
-	if parsed.Role != RoleStartBridge || parsed.PuckID != 1 || parsed.PuckLabel != "Master-Start" {
-		t.Fatalf("expected RoleStartBridge/Master-Start for Puck 1, got %+v", parsed)
+	if parsed.Role != RoleHubTimer || parsed.PuckID != 1 || parsed.PuckLabel != "Hub-1" {
+		t.Fatalf("expected RoleHubTimer/Hub-1 for Timer 1, got %+v", parsed)
 	}
 	if parsed.WifiSSID != "PilotHotspot" || parsed.WifiPass != "raceband58" {
 		t.Fatalf("unexpected Wi-Fi credentials: %q / %q", parsed.WifiSSID, parsed.WifiPass)
@@ -38,10 +38,10 @@ func TestBuildStartBridgePuck1WithWiFi(t *testing.T) {
 	}
 }
 
-func TestBuildFieldPuckUsesESPNOWRole(t *testing.T) {
-	built, err := BuildXIAOC5Image(PuckConfig{
+func TestBuildSpokeTimerUsesESPNOWRole(t *testing.T) {
+	built, err := BuildXIAOC5Image(TimerConfig{
 		PuckID:   3,
-		WifiSSID: "IgnoredOnFieldPuck",
+		WifiSSID: "IgnoredOnSpokeTimer",
 	})
 	if err != nil {
 		t.Fatalf("BuildXIAOC5Image failed: %v", err)
@@ -50,19 +50,19 @@ func TestBuildFieldPuckUsesESPNOWRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectConfig failed: %v", err)
 	}
-	if parsed.Role != RoleFieldPuck || parsed.PuckID != 3 {
-		t.Fatalf("expected RoleFieldPuck with puckId=3, got %+v", parsed)
+	if parsed.Role != RoleSpokeTimer || parsed.PuckID != 3 {
+		t.Fatalf("expected RoleSpokeTimer with timerId=3, got %+v", parsed)
 	}
 	if parsed.WifiSSID != "" {
-		t.Fatalf("expected empty Wi-Fi SSID on ESP-NOW field puck, got %q", parsed.WifiSSID)
+		t.Fatalf("expected empty Wi-Fi SSID on ESP-NOW spoke timer, got %q", parsed.WifiSSID)
 	}
 }
 
-func TestBuildRejectsInvalidPuckID(t *testing.T) {
-	if _, err := BuildXIAOC5Image(PuckConfig{PuckID: 0}); err == nil {
-		t.Fatal("expected error for puckId=0")
+func TestBuildRejectsInvalidTimerID(t *testing.T) {
+	if _, err := BuildXIAOC5Image(TimerConfig{PuckID: 0}); err == nil {
+		t.Fatal("expected error for timerId=0")
 	}
-	if _, err := BuildXIAOC5Image(PuckConfig{PuckID: 17}); err == nil {
-		t.Fatal("expected error for puckId=17")
+	if _, err := BuildXIAOC5Image(TimerConfig{PuckID: 17}); err == nil {
+		t.Fatal("expected error for timerId=17")
 	}
 }
