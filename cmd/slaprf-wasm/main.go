@@ -161,5 +161,8 @@ func main() {
 	}))
 
 	js.Global().Set("slaprfWasm", apiObj)
+	if cb := js.Global().Get("__slaprfWasmOnReady"); cb.Type() == js.TypeFunction {
+		cb.Invoke(apiObj)
+	}
 	select {}
 }

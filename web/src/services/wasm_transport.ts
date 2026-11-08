@@ -15,6 +15,8 @@ declare global {
       run(instance: WebAssembly.Instance): Promise<void>;
     };
     slaprfWasm?: SlaprfWasmBridge;
+    __slaprfWasmOnReady?: (wasm: SlaprfWasmBridge) => void;
+    __slaprfBootStatus?: (detail: string, pct?: number) => void;
   }
 }
 
@@ -34,11 +36,15 @@ export class WasmSimTransport implements ApiTransport {
     if (this.readyPromise) {
       return this.readyPromise;
     }
-    this.readyPromise = this.bootWasm();
+    this.readyPromise = this.bootWasm().catch((err) => {
+      this.readyPromise = null;
+      throw err;
+    });
     return this.readyPromise;
   }
 
   private async bootWasm(): Promise<SlaprfWasmBridge> {
+    window.__slaprfBootStatus?.("Loading WebAssembly runtime…", 18);
     if (!window.Go) {
       await new Promise<void>((resolve, reject) => {
         const script = document.createElement("script");
@@ -48,33 +54,77 @@ export class WasmSimTransport implements ApiTransport {
         document.head.appendChild(script);
       });
     }
+
+    window.__slaprfBootStatus?.("Downloading SlapRF 5.8 GHz timing engine…", 28);
     const go = new window.Go!();
     const wasmUrl = "./wasm/slaprf.wasm";
-    let instance: WebAssembly.Instance;
-    if ("instantiateStreaming" in WebAssembly) {
-      try {
-        const res = await WebAssembly.instantiateStreaming(fetch(wasmUrl), go.importObject);
-        instance = res.instance;
-      } catch {
-        const buf = await (await fetch(wasmUrl)).arrayBuffer();
-        const res = await WebAssembly.instantiate(buf, go.importObject);
-        instance = res.instance;
-      }
-    } else {
-      const buf = await (await fetch(wasmUrl)).arrayBuffer();
-      const res = await WebAssembly.instantiate(buf, go.importObject);
-      instance = res.instance;
+
+    const response = await fetch(wasmUrl);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch ${wasmUrl} (${response.status})`);
     }
 
-    // Start the Go WASM runtime (non-blocking; registers window.slaprfWasm before select{}).
+    const contentLength = Number(response.headers.get("Content-Length") ?? 0);
+    const expectedTotal = contentLength > 0 ? contentLength : 8_224_489;
+    let wasmBuffer: ArrayBuffer;
+
+    if (response.body && typeof response.body.getReader === "function") {
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let loaded = 0;
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) {
+          chunks.push(value);
+          loaded += value.byteLength;
+          const dlRatio = Math.min(1, loaded / expectedTotal);
+          const pct = Math.round(28 + dlRatio * 48);
+          const mb = (loaded / (1024 * 1024)).toFixed(1);
+          window.__slaprfBootStatus?.(`Downloading 5.8 GHz timing engine (${mb} MB)…`, pct);
+        }
+      }
+      const combined = new Uint8Array(loaded);
+      let offset = 0;
+      for (const c of chunks) {
+        combined.set(c, offset);
+        offset += c.byteLength;
+      }
+      wasmBuffer = combined.buffer;
+    } else {
+      wasmBuffer = await response.arrayBuffer();
+    }
+
+    window.__slaprfBootStatus?.("Compiling WebAssembly & pre-warming track simulator…", 82);
+    // Yield one frame so the browser paints the updated status before WebAssembly.instantiate
+    await new Promise((r) => requestAnimationFrame(r));
+
+    const instantiated = await WebAssembly.instantiate(wasmBuffer, go.importObject);
+    const instance = instantiated.instance;
+
+    const readyWait = new Promise<SlaprfWasmBridge>((resolve) => {
+      window.__slaprfWasmOnReady = (bridge) => resolve(bridge);
+    });
+
+    // Start the Go WASM runtime (registers window.slaprfWasm and invokes __slaprfWasmOnReady).
     void go.run(instance);
 
-    for (let i = 0; i < 50 && !window.slaprfWasm; i++) {
-      await new Promise((r) => setTimeout(r, 10));
+    if (!window.slaprfWasm) {
+      await Promise.race([
+        readyWait,
+        (async () => {
+          for (let i = 0; i < 600 && !window.slaprfWasm; i++) {
+            await new Promise((r) => setTimeout(r, 25));
+          }
+        })(),
+      ]);
     }
+
     if (!window.slaprfWasm) {
       throw new Error("slaprfWasm failed to initialize");
     }
+
+    window.__slaprfBootStatus?.("Hydrating track state…", 95);
     if (this.streamCallback) {
       this.bindStream(window.slaprfWasm, this.streamCallback);
     }

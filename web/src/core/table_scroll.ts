@@ -1,5 +1,5 @@
 /**
- * Wraps horizontally scrollable tables/grids in a `.table-scroll-shell`
+ * Wraps horizontally scrollable `.table-scroll` containers in a `.table-scroll-shell`
  * with full-height left/right edge scroll indicator buttons (`.table-edge-nav`).
  *
  * When a table overflows horizontally, the left/right sidebars appear
@@ -7,13 +7,7 @@
  * to scroll the table sideways without scrolling the whole section card.
  */
 
-const SCROLLABLE_SELECTORS = [
-  ".table-scroll",
-  ".cmp-table",
-  ".slot-table",
-  ".puck-table",
-  ".table-standings",
-].join(", ");
+const SCROLLABLE_SELECTOR = ".table-scroll";
 
 interface ShellState {
   shell: HTMLElement;
@@ -45,26 +39,16 @@ function enhanceElement(el: HTMLElement, ro: ResizeObserver): void {
     return;
   }
 
-  const isScrollContainer = el.classList.contains("table-scroll");
   const parent = el.parentElement;
   if (!parent) return;
 
   const shell = document.createElement("div");
   shell.className = "table-scroll-shell";
 
-  let viewport: HTMLElement;
-  if (isScrollContainer) {
-    viewport = el;
-    parent.insertBefore(shell, el);
-    shell.appendChild(el);
-    viewport.classList.add("table-scroll-viewport");
-  } else {
-    viewport = document.createElement("div");
-    viewport.className = "table-scroll-viewport";
-    parent.insertBefore(shell, el);
-    viewport.appendChild(el);
-    shell.appendChild(viewport);
-  }
+  const viewport = el;
+  parent.insertBefore(shell, el);
+  shell.appendChild(el);
+  viewport.classList.add("table-scroll-viewport");
 
   const leftBtn = document.createElement("button");
   leftBtn.type = "button";
@@ -110,8 +94,9 @@ function enhanceElement(el: HTMLElement, ro: ResizeObserver): void {
 
   viewport.addEventListener("scroll", state.update, { passive: true });
   ro.observe(viewport);
-  if (viewport !== el) {
-    ro.observe(el);
+  const innerTable = viewport.firstElementChild;
+  if (innerTable instanceof HTMLElement) {
+    ro.observe(innerTable);
   }
 
   managedTables.set(el, state);
@@ -138,20 +123,35 @@ export function installTableScrollIndicators(): void {
     }
   });
 
+  let scanning = false;
   const scan = (root: ParentNode = document) => {
-    const matches = root.querySelectorAll<HTMLElement>(SCROLLABLE_SELECTORS);
-    matches.forEach((m) => enhanceElement(m, ro));
+    if (scanning) return;
+    scanning = true;
+    try {
+      const matches = root.querySelectorAll<HTMLElement>(SCROLLABLE_SELECTOR);
+      matches.forEach((m) => enhanceElement(m, ro));
+    } finally {
+      scanning = false;
+    }
   };
 
   scan(document);
 
   const mo = new MutationObserver((mutations) => {
+    if (scanning) return;
     let shouldScan = false;
     for (const m of mutations) {
-      if (m.addedNodes.length > 0) {
-        shouldScan = true;
-        break;
+      for (const node of Array.from(m.addedNodes)) {
+        if (
+          node instanceof HTMLElement &&
+          !node.classList.contains("table-scroll-shell") &&
+          !node.classList.contains("table-edge-nav")
+        ) {
+          shouldScan = true;
+          break;
+        }
       }
+      if (shouldScan) break;
     }
     if (shouldScan) {
       scan(document);

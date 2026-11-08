@@ -271,21 +271,37 @@ function upgradeSelectElement(selectEl: HTMLSelectElement): void {
  * Because the user taps a `<button>`, Android and iOS NEVER open their native system `<select>` modal.
  */
 export function installCustomSelects(): void {
+  let scanning = false;
   const scan = (root: ParentNode = document) => {
-    root.querySelectorAll<HTMLSelectElement>("select.input").forEach((sel) => {
-      upgradeSelectElement(sel);
-    });
+    if (scanning) return;
+    scanning = true;
+    try {
+      root.querySelectorAll<HTMLSelectElement>("select.input").forEach((sel) => {
+        upgradeSelectElement(sel);
+      });
+    } finally {
+      scanning = false;
+    }
   };
 
   scan(document);
 
   const mo = new MutationObserver((mutations) => {
+    if (scanning) return;
     let shouldScan = false;
     for (const m of mutations) {
-      if (m.addedNodes.length > 0) {
-        shouldScan = true;
-        break;
+      for (const node of Array.from(m.addedNodes)) {
+        if (
+          node instanceof HTMLElement &&
+          !node.classList.contains("custom-select-wrap") &&
+          !node.classList.contains("custom-select-trigger") &&
+          !node.classList.contains("custom-select-popover")
+        ) {
+          shouldScan = true;
+          break;
+        }
       }
+      if (shouldScan) break;
     }
     if (shouldScan) {
       scan(document);

@@ -36,9 +36,11 @@ func BundleTypeScript(webRootDir string) ([]byte, error) {
 		EntryPoints:   []string{entryPoint},
 		Bundle:        true,
 		Write:         false,
-		Target:        api.ES2022,
-		Format:        api.FormatIIFE,
-		Sourcemap:     api.SourceMapInline,
+		Target:            api.ES2022,
+		Format:            api.FormatIIFE,
+		MinifyWhitespace:  true,
+		MinifyIdentifiers: false,
+		MinifySyntax:      true,
 	})
 	if len(result.Errors) > 0 {
 		return nil, fmt.Errorf("%s", result.Errors[0].Text)
@@ -114,6 +116,7 @@ func (s *Server) handleSlaprfWasm(w http.ResponseWriter, _ *http.Request) {
 	diskPath := filepath.Join(s.webRootDir, "wasm", "slaprf.wasm")
 	if b, err := os.ReadFile(diskPath); err == nil && len(b) > 0 {
 		w.Header().Set("Content-Type", "application/wasm")
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", len(b)))
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = w.Write(b)
 		return
@@ -154,6 +157,7 @@ func (s *Server) handleSlaprfWasm(w http.ResponseWriter, _ *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/wasm")
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(cached)))
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(cached)
 }
