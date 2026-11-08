@@ -1523,7 +1523,7 @@ body.is-gate-dragging * {
   fill: var(--surface-3);
   transition: fill 0.12s;
 }
-.lap-picker .bar-hit:hover .bar {
+.lap-picker .bar-hit:hover .bar:not(.is-review):not(.is-ref):not(.is-best) {
   fill: #4a505b;
 }
 .lap-picker .bar.is-best {

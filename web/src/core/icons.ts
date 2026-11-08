@@ -32,6 +32,7 @@ export const icons = {
   arrowRight: (s?: number) => svg(`<path d="M5 12h14M13 6l6 6-6 6"/>`, s),
   chevronLeft: (s?: number) => svg(`<path d="M15 6l-6 6 6 6"/>`, s),
   chevronRight: (s?: number) => svg(`<path d="M9 6l6 6-6 6"/>`, s),
+  pin: (s?: number) => svg(`<path d="M8 3h8"/><path d="M9 3v5l-3 3v2h12v-2l-3-3V3"/><path d="M12 13v8"/>`, s),
   target: (s?: number) => svg(`<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>`, s),
   speaker: (s?: number) => svg(`<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>`, s),
   speakerOff: (s?: number) => svg(`<path d="M11 5 6 9H3v6h3l5 4z"/><path d="m16 9 6 6M22 9l-6 6"/>`, s),

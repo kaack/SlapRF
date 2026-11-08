@@ -338,7 +338,7 @@ export class LapPicker extends Component {
       <header class="card-head">
         <div>
           <h2><span class="step">1</span>Pick laps</h2>
-          <p>Click any bar to review that lap · click the target icon under a bar (or right-click the bar) to set it as the baseline${scrollHint}.</p>
+          <p>Click any bar to review that lap · click the pin icon under a bar to set it as the baseline${scrollHint}.</p>
         </div>
         <div class="cmp-with">
           ${jumpLatest}
@@ -390,7 +390,7 @@ export class LapPicker extends Component {
           <g data-lap="${l.lapId}" class="bar-hit ${hovered}">
             <rect class="hit" x="${(i * slot).toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${CHART_H}"/>
             <rect class="${cls}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${(CHART_H - y).toFixed(1)}" rx="2"/>
-            <title>Lap ${l.lapNumber}: ${l.lapTimeSec.toFixed(3)}s — click to review, right-click to use as baseline</title>
+            <title>Lap ${l.lapNumber}: ${l.lapTimeSec.toFixed(3)}s — click to review</title>
           </g>`;
       })
       .join("");
@@ -425,9 +425,9 @@ export class LapPicker extends Component {
           class="lap-pin-btn ${isRef ? "is-active" : ""} ${isHovered ? "is-hovered" : ""}"
           data-set-ref="${l.lapId}"
           style="left:${xPct(i).toFixed(2)}%"
-          title="${isRef ? `Lap ${l.lapNumber} is the current baseline` : `Use Lap ${l.lapNumber} (${fmtTime(l.lapTimeSec)}) as baseline`}"
-          aria-label="Use Lap ${l.lapNumber} as baseline"
-        >${icons.target(12)}</button>`;
+          title="${isRef ? `Lap ${l.lapNumber} is the current baseline` : `Pin Lap ${l.lapNumber} (${fmtTime(l.lapTimeSec)}) as baseline`}"
+          aria-label="Pin Lap ${l.lapNumber} as baseline"
+        >${icons.pin(13)}</button>`;
       })
       .join("");
 
@@ -465,7 +465,7 @@ export class LapPicker extends Component {
       </div>
       <div class="lap-chart-legend">
         <span><i class="lg-review"></i>Reviewing (click bar)</span>
-        <span><i class="lg-ref"></i>Baseline (click ${icons.target(11)} under bar or right-click)</span>
+        <span><i class="lg-ref"></i>Baseline (click ${icons.pin(12)} under bar)</span>
         <span><i class="lg-best"></i>Personal best</span>
         <span><i class="lg-line"></i>5-lap average</span>
       </div>`;
