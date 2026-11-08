@@ -13,7 +13,7 @@ on:
 jobs:
   survey:
     runs-on: ubuntu-latest
-    container: espressif/idf:v5.5
+    container: espressif/idf:v5.5.1
     steps:
       - name: List PHY symbols
         shell: bash
