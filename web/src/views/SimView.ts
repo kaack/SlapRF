@@ -448,19 +448,6 @@ export class SimView extends Component {
         }
         break;
       }
-      case "make-start": {
-        const puckId = Number(btn.dataset.puckId);
-        const node = this.store.puck(puckId);
-        if (node && node.role !== "START_FINISH") {
-          void this.api.updateTrackNode({
-            puckId: node.puckId,
-            name: node.name,
-            color: node.color,
-            role: "START_FINISH",
-          });
-        }
-        break;
-      }
       case "timer-power": {
         const puckId = Number(btn.dataset.puckId);
         if (Number.isFinite(puckId)) {
@@ -609,15 +596,10 @@ export class SimView extends Component {
               </div>
 
               <div class="gate-node-name">${esc(displayName)}</div>
-              <button
-                type="button"
-                class="gate-node-start-btn ${isStart ? "is-active" : ""}"
-                data-action="make-start"
-                data-puck-id="${node.puckId}"
-                aria-pressed="${isStart}"
-                title="${isStart ? "Start gate" : "Set as start gate"}"
-                aria-label="${isStart ? `Gate ${index + 1} is the start gate` : `Set Gate ${index + 1} as start gate`}"
-              >${icons.checkered(13)}</button>
+              <span
+                class="gate-node-start-btn ${isStart ? "is-active" : "is-placeholder-flag"}"
+                ${isStart ? 'title="Start / Finish gate" aria-label="Start / Finish gate"' : 'aria-hidden="true"'}
+              >${icons.checkered(13)}</span>
             </div>`;
         })
         .join("");
