@@ -46,65 +46,62 @@ function statusMeta(p: SimPilotState): { label: string; badgeClass: string; hint
       };
     case "TURTLE_RECOVERY":
       return {
-        label: `Turtle Recovering${sec}`,
+        label: `Turtling${sec}`,
         badgeClass: "sim-status-crashed-wait",
         hint: "Step 2: Spinning motors in Turtle Mode (Crash Flip) trying to flip the inverted quad upright",
       };
     case "TURTLE_FAILED":
       return {
-        label: `Turtle Failed · Stayed Crashed${sec}`,
+        label: `Turtle Failed${sec}`,
         badgeClass: "sim-status-crashed-vtx",
         hint: "Step 3: Turtle flip failed (prop stuck in grass/netting) — pilot disarms and switches VTX to Pit Mode",
       };
     case "CRASHED_WAITING_RECOVERY":
       return {
-        label: "Crashed · Waiting for Lull",
+        label: "Wait for Lull",
         badgeClass: "sim-status-crashed-wait",
         hint: "Step 4: Quad stays crashed on the field (Pit Mode) until no pilots are flying — or click Walk recover to force an immediate track walk",
       };
     case "WALKING_RECOVERY":
       return {
-        label: `Walking to Recover${sec}`,
+        label: `Walking Out${sec}`,
         badgeClass: "sim-status-crashed-wait",
         hint: "Step 5: Pilot is walking out on the track to pick up the crashed quad and carry it back to the pit bench",
       };
     case "PIT_SWAP":
       if (p.batteryPct === 100) {
         return {
-          label: `Launch Pad · Arming${sec}`,
+          label: `Arming${sec}`,
           badgeClass: "sim-status-pit",
           hint: "Fresh 100% 6S pack plugged in on launch pad — arming and taking off when track is clear",
         };
       }
       return {
-        label: `Pit · Pack Swap${sec}`,
+        label: `Pack Swap${sec}`,
         badgeClass: "sim-status-pit",
         hint: "Retrieving quad, unplugging spent LiPo, strapping fresh 6S pack at bench, and walking back to launch pad (30–60s)",
       };
     case "LAUNCH_HOLD":
       return {
-        label:
-          remainingSec > 0
-            ? `Launch Hold · VTX Off (${Math.ceil(remainingSec)}s)`
-            : "Launch Hold · Waiting for Lull",
+        label: `Launch Hold${sec}`,
         badgeClass: "sim-status-charging",
         hint: "Ready on launch pad with 100% LiPo plugged in — holding launch with VTX off (to prevent VTX overheating) so crashed pilot can recover",
       };
     case "CHARGING_WAIT":
       return {
-        label: `Waiting for Charge${sec}`,
+        label: `Charging${sec}`,
         badgeClass: "sim-status-charging",
         hint: "All 3 6S packs are depleted — waiting at the pit bench until a battery finishes charging to 100%",
       };
     case "PILOT_BREAK":
       return {
-        label: `Taking a Break${sec}`,
+        label: `On Break${sec}`,
         badgeClass: "sim-status-paused",
         hint: "Pilot decided to take a breather at the bench while batteries charge on the field charger",
       };
     case "PAUSED":
       return {
-        label: "Paused in Pits",
+        label: "Paused",
         badgeClass: "sim-status-paused",
         hint: "Parked on pit bench with VTX off until launched",
       };
@@ -434,6 +431,7 @@ export class SimView extends Component {
           | "recover"
           | "walk-recover"
           | "pit"
+          | "break"
           | "pause"
           | "launch"
           | "resume";
@@ -649,19 +647,15 @@ export class SimView extends Component {
             <span class="gate-track-caption" data-course-caption>
               ${
                 walkerActive
-                  ? `⚠ Person on track (${Math.ceil(walkerSec)}s left) — pilots have returned to the bench or are flying high until clear`
+                  ? `⚠ Person on track (${Math.ceil(walkerSec)}s left) — pilots have returned to the bench or are flying high`
                   : `60 fps live course timeline · drones cross #1 → #${nodes.length} and wrap around ${nodes.length > 0 ? `S${nodes.length}` : "the loop"}`
               }
             </span>
             <div class="sim-course-actions">
-              ${
-                walkerActive
-                  ? `<button class="btn btn-sm btn-danger-active" data-action="toggle-walker" title="End track walk recovery early and resume racing">
-                      ${icons.pilot(14)}
-                      <span data-walker-btn-label>Clear track (${Math.ceil(walkerSec)}s)</span>
-                    </button>`
-                  : ""
-              }
+              <button class="btn btn-sm ${walkerActive ? "btn-danger-active" : "btn-ghost"}" data-action="toggle-walker" ${walkerActive ? "" : "disabled"} title="End track walk recovery early and resume racing">
+                ${icons.pilot(14)}
+                <span>Clear track</span>
+              </button>
               <button class="btn btn-sm btn-ghost" data-action="pack-burst" title="Bunch airborne pilots 150 ms apart approaching Gate #1">
                 ${icons.zap(14)}<span>Pack burst</span>
               </button>
@@ -673,7 +667,7 @@ export class SimView extends Component {
 
           <div class="gate-track-scroll sim-track-scroll">
             <div class="sim-altitude-lane-label ${walkerActive ? "is-walker-active" : ""}">
-              <span>${walkerActive ? "PERSON ON TRACK · GATES PAUSED" : "ACTIVE FLIGHT CORRIDOR"}</span>
+              <span data-corridor-label>${walkerActive ? `PERSON ON TRACK · GATES PAUSED (${Math.ceil(walkerSec)}s)` : "ACTIVE FLIGHT CORRIDOR"}</span>
             </div>
             <div class="sim-flight-corridor ${walkerActive ? "is-walker-active" : ""}">
               <div class="sim-drone-track-layer">
@@ -687,7 +681,7 @@ export class SimView extends Component {
           </div>
 
           <div class="sim-altitude-lane-label sim-pit-lane-label">
-            <span>PIT BENCH &amp; BATTERY SWAP LANE (${pitPilots.length})</span>
+            <span data-pit-lane-label>PIT BENCH &amp; BATTERY SWAP LANE (${pitPilots.length})</span>
           </div>
           <div class="gate-unassigned-tray sim-pit-tray">
             <div class="gate-unassigned-list sim-pit-list">
@@ -697,13 +691,17 @@ export class SimView extends Component {
         </div>`;
     } else {
       // Fast in-place update of countdowns without touching DOM structure
-      const walkerLabel = this.el.querySelector<HTMLElement>("[data-walker-btn-label]");
-      if (walkerLabel && walkerActive) {
-        walkerLabel.textContent = `Clear track (${Math.ceil(walkerSec)}s)`;
+      const corridorLabel = this.el.querySelector<HTMLElement>("[data-corridor-label]");
+      if (corridorLabel && walkerActive) {
+        corridorLabel.textContent = `PERSON ON TRACK · GATES PAUSED (${Math.ceil(walkerSec)}s)`;
       }
       const caption = this.el.querySelector<HTMLElement>("[data-course-caption]");
       if (caption && walkerActive) {
-        caption.textContent = `⚠ Person on track (${Math.ceil(walkerSec)}s left) — pilots have returned to the bench or are flying high until clear`;
+        caption.textContent = `⚠ Person on track (${Math.ceil(walkerSec)}s left) — pilots have returned to the bench or are flying high`;
+      }
+      const pitLabel = this.el.querySelector<HTMLElement>("[data-pit-lane-label]");
+      if (pitLabel) {
+        pitLabel.textContent = `PIT BENCH & BATTERY SWAP LANE (${pitPilots.length})`;
       }
       for (const p of onTrackPilots) {
         const tag = this.el.querySelector<HTMLElement>(`[data-drone-tag="${p.slotIndex}"]`);
@@ -718,7 +716,7 @@ export class SimView extends Component {
     const activePilots = (simState?.pilots ?? []).filter((p) => p.enabled);
 
     const structSig = activePilots
-      .map((p) => `${p.slotIndex}:${p.callsign}:${p.color}:${p.channel}:${p.status}`)
+      .map((p) => `${p.slotIndex}:${p.callsign}:${p.color}:${p.channel}`)
       .join("|");
 
     if (structSig !== this.lastPilotsStructSig) {
@@ -727,7 +725,6 @@ export class SimView extends Component {
       const cards = activePilots
         .map((p: SimPilotState) => {
           const meta = statusMeta(p);
-          const tone = p.batteryPct <= 20 ? "bad" : p.batteryPct <= 45 ? "warn" : "good";
           const chBadge =
             p.channel > 0 ? `R${p.channel} · ${p.frequencyMhz} MHz` : "No channel";
           const isCrashed =
@@ -737,9 +734,12 @@ export class SimView extends Component {
             p.status === "CRASHED_WAITING_RECOVERY" ||
             p.status === "WALKING_RECOVERY";
           const isParked = isPilotInPits(p.status);
+          const isFlying = p.status === "FLYING" || p.status === "AVOIDING";
           const isTurtleBusy =
             p.status === "TURTLE_RECOVERY" || p.status === "WALKING_RECOVERY";
           const isWalkingOut = p.status === "WALKING_RECOVERY";
+          const canSwap =
+            p.status !== "PIT_SWAP" && p.status !== "CHARGING_WAIT" && !isCrashed;
 
           return `
             <div class="card sim-pilot-card ${isCrashed ? "is-crashed" : ""}" data-pilot-card="${p.slotIndex}">
@@ -782,32 +782,24 @@ export class SimView extends Component {
               </div>
 
               <div class="sim-pilot-controls">
-                ${
-                  isCrashed
-                    ? `<button class="btn btn-sm btn-armed" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="recover" ${isTurtleBusy ? "disabled" : ""} title="Attempt Turtle Mode recovery (spins motors for 3.5s to flip upright and resume flying)">
-                        ${icons.play(13)}<span data-turtle-recover-label="${p.slotIndex}">${p.status === "TURTLE_RECOVERY" ? `Turtling (${Math.ceil(p.stateRemainingSec)}s)…` : "Turtle recover"}</span>
-                      </button>
-                      <button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="walk-recover" ${isWalkingOut ? "disabled" : ""} title="Force immediate track walk to retrieve the crashed quad — other drones will either land at the bench or fly high until clear">
-                        ${icons.pilot(13)}<span data-walk-recover-label="${p.slotIndex}">${isWalkingOut ? `Walking out (${Math.ceil(p.stateRemainingSec)}s)…` : "Walk recover"}</span>
-                      </button>`
-                    : `<button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="crash" ${isParked ? "disabled" : ""} title="Force a mid-track crash near the closest gate (VTX stays on briefly)">
-                        ${icons.zapOff(13)}<span>Force crash</span>
-                      </button>`
-                }
-                <button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pit" ${p.status === "PIT_SWAP" || p.status === "CHARGING_WAIT" || isCrashed ? "disabled" : ""} title="Bring pilot into the pit bench to swap to a fresh 6S battery pack (30–60s)">
-                  ${icons.reset(13)}<span>Swap battery</span>
+                <button class="btn btn-sm sim-ctrl-btn ${isParked ? "btn-armed" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" data-pilot-btn="${p.slotIndex}-launch" ${isParked ? "" : "disabled"} title="Top up best pack to 100% and launch immediately from the starting line">
+                  ${icons.play(12)}<span>Launch now</span>
                 </button>
-                ${
-                  isParked
-                    ? `<button class="btn btn-sm btn-armed" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" title="Top up best pack to 100% and launch immediately from the starting line">
-                        ${icons.play(13)}<span>Launch now</span>
-                      </button>`
-                    : !isCrashed
-                    ? `<button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="break" title="Land in the pits and take a 60–90s break while batteries charge">
-                        ${icons.pause(13)}<span>Take break</span>
-                      </button>`
-                    : ""
-                }
+                <button class="btn btn-sm sim-ctrl-btn ${p.status === "PIT_SWAP" ? "is-active-cmd" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pit" data-pilot-btn="${p.slotIndex}-pit" ${canSwap ? "" : "disabled"} title="Bring pilot into the pit bench to swap to a fresh 6S battery pack (30–60s)">
+                  ${icons.reset(12)}<span>Swap pack</span>
+                </button>
+                <button class="btn btn-sm sim-ctrl-btn ${p.status === "PILOT_BREAK" ? "is-active-cmd" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="break" data-pilot-btn="${p.slotIndex}-break" ${isFlying ? "" : "disabled"} title="Land in the pits and take a 60–90s break while batteries charge">
+                  ${icons.pause(12)}<span>Take break</span>
+                </button>
+                <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="crash" data-pilot-btn="${p.slotIndex}-crash" ${isFlying ? "" : "disabled"} title="Force a mid-track crash near the closest gate (VTX stays on briefly)">
+                  ${icons.zapOff(12)}<span>Force crash</span>
+                </button>
+                <button class="btn btn-sm sim-ctrl-btn ${p.status === "TURTLE_RECOVERY" ? "is-active-cmd" : isCrashed && !isTurtleBusy ? "btn-armed" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="recover" data-pilot-btn="${p.slotIndex}-recover" ${isCrashed && !isTurtleBusy ? "" : "disabled"} title="Attempt Turtle Mode recovery (spins motors for 3.5s to flip upright and resume flying)">
+                  ${icons.play(12)}<span>Turtle flip</span>
+                </button>
+                <button class="btn btn-sm sim-ctrl-btn ${isWalkingOut ? "is-active-cmd" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="walk-recover" data-pilot-btn="${p.slotIndex}-walk-recover" ${isCrashed && !isWalkingOut ? "" : "disabled"} title="Force immediate track walk to retrieve the crashed quad — other drones will either land at the bench or fly high until clear">
+                  ${icons.pilot(12)}<span>Walk recover</span>
+                </button>
               </div>
             </div>`;
         })
@@ -820,10 +812,27 @@ export class SimView extends Component {
       return;
     }
 
-    // Update live telemetry numbers in-place without recreating pilot cards
+    // Update live telemetry numbers & button states in-place without recreating pilot cards
     for (const p of activePilots) {
       const meta = statusMeta(p);
+      const isCrashed =
+        p.status === "CRASHED_VTX_ON" ||
+        p.status === "TURTLE_RECOVERY" ||
+        p.status === "TURTLE_FAILED" ||
+        p.status === "CRASHED_WAITING_RECOVERY" ||
+        p.status === "WALKING_RECOVERY";
       const isParked = isPilotInPits(p.status);
+      const isFlying = p.status === "FLYING" || p.status === "AVOIDING";
+      const isTurtleBusy =
+        p.status === "TURTLE_RECOVERY" || p.status === "WALKING_RECOVERY";
+      const isWalkingOut = p.status === "WALKING_RECOVERY";
+      const canSwap =
+        p.status !== "PIT_SWAP" && p.status !== "CHARGING_WAIT" && !isCrashed;
+
+      const cardEl = this.el.querySelector<HTMLElement>(`[data-pilot-card="${p.slotIndex}"]`);
+      if (cardEl) {
+        cardEl.className = `card sim-pilot-card ${isCrashed ? "is-crashed" : ""}`;
+      }
 
       const badge = this.el.querySelector<HTMLElement>(`[data-pilot-badge="${p.slotIndex}"]`);
       if (badge) {
@@ -883,23 +892,47 @@ export class SimView extends Component {
       if (packsEl) {
         packsEl.textContent = `#${p.packsFlown} · ${p.crashesCount} cr`;
       }
-      const turtleLabelEl = this.el.querySelector<HTMLElement>(
-        `[data-turtle-recover-label="${p.slotIndex}"]`
+
+      const launchBtn = this.el.querySelector<HTMLButtonElement>(
+        `[data-pilot-btn="${p.slotIndex}-launch"]`
       );
-      if (turtleLabelEl) {
-        turtleLabelEl.textContent =
-          p.status === "TURTLE_RECOVERY"
-            ? `Turtling (${Math.ceil(p.stateRemainingSec)}s)…`
-            : "Turtle recover";
+      if (launchBtn) {
+        launchBtn.disabled = !isParked;
+        launchBtn.className = `btn btn-sm sim-ctrl-btn ${isParked ? "btn-armed" : "btn-ghost"}`;
       }
-      const walkLabelEl = this.el.querySelector<HTMLElement>(
-        `[data-walk-recover-label="${p.slotIndex}"]`
+      const pitBtn = this.el.querySelector<HTMLButtonElement>(
+        `[data-pilot-btn="${p.slotIndex}-pit"]`
       );
-      if (walkLabelEl) {
-        walkLabelEl.textContent =
-          p.status === "WALKING_RECOVERY"
-            ? `Walking out (${Math.ceil(p.stateRemainingSec)}s)…`
-            : "Walk recover";
+      if (pitBtn) {
+        pitBtn.disabled = !canSwap;
+        pitBtn.className = `btn btn-sm sim-ctrl-btn ${p.status === "PIT_SWAP" ? "is-active-cmd" : "btn-ghost"}`;
+      }
+      const breakBtn = this.el.querySelector<HTMLButtonElement>(
+        `[data-pilot-btn="${p.slotIndex}-break"]`
+      );
+      if (breakBtn) {
+        breakBtn.disabled = !isFlying;
+        breakBtn.className = `btn btn-sm sim-ctrl-btn ${p.status === "PILOT_BREAK" ? "is-active-cmd" : "btn-ghost"}`;
+      }
+      const crashBtn = this.el.querySelector<HTMLButtonElement>(
+        `[data-pilot-btn="${p.slotIndex}-crash"]`
+      );
+      if (crashBtn) {
+        crashBtn.disabled = !isFlying;
+      }
+      const recoverBtn = this.el.querySelector<HTMLButtonElement>(
+        `[data-pilot-btn="${p.slotIndex}-recover"]`
+      );
+      if (recoverBtn) {
+        recoverBtn.disabled = !isCrashed || isTurtleBusy;
+        recoverBtn.className = `btn btn-sm sim-ctrl-btn ${p.status === "TURTLE_RECOVERY" ? "is-active-cmd" : isCrashed && !isTurtleBusy ? "btn-armed" : "btn-ghost"}`;
+      }
+      const walkBtn = this.el.querySelector<HTMLButtonElement>(
+        `[data-pilot-btn="${p.slotIndex}-walk-recover"]`
+      );
+      if (walkBtn) {
+        walkBtn.disabled = !isCrashed || isWalkingOut;
+        walkBtn.className = `btn btn-sm sim-ctrl-btn ${isWalkingOut ? "is-active-cmd" : "btn-ghost"}`;
       }
     }
   }

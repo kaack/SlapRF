@@ -2611,28 +2611,40 @@ body.is-gate-dragging * {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
+  height: 24px;
+  min-height: 24px;
+  max-height: 24px;
 }
 
 .sim-pilot-id {
   display: inline-flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
 }
 
 .sim-pilot-name {
   font-size: 14.5px;
   font-weight: 650;
+  line-height: 1;
 }
 
 .sim-status-badge {
   display: inline-flex;
   align-items: center;
-  padding: 2px 9px;
+  height: 22px;
+  padding: 0 9px;
+  box-sizing: border-box;
   border-radius: 999px;
   font-size: 11px;
   font-weight: 600;
+  line-height: 1;
+  white-space: nowrap;
+  flex-shrink: 0;
   background: var(--surface-2);
   border: 1px solid var(--border);
   color: var(--text-3);
@@ -2660,7 +2672,7 @@ body.is-gate-dragging * {
 
 .sim-packs-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 7px;
 }
 
@@ -2685,20 +2697,26 @@ body.is-gate-dragging * {
   align-items: center;
   justify-content: space-between;
   gap: 4px;
+  height: 15px;
+  white-space: nowrap;
 }
 
 .sim-pack-title {
   font-size: 10.5px;
   font-weight: 600;
+  line-height: 1;
   color: var(--text-2);
+  white-space: nowrap;
 }
 
 .sim-pack-chip {
   font-size: 9px;
   font-weight: 700;
-  padding: 1px 4px;
+  line-height: 1;
+  padding: 2px 4px;
   border-radius: 4px;
   letter-spacing: 0.02em;
+  white-space: nowrap;
 }
 
 .sim-pack-chip.is-in-quad {
@@ -2718,6 +2736,9 @@ body.is-gate-dragging * {
 
 .sim-pack-val {
   font-size: 11px;
+  line-height: 15px;
+  height: 15px;
+  white-space: nowrap;
   color: var(--text);
 }
 
@@ -2727,29 +2748,64 @@ body.is-gate-dragging * {
 
 .sim-telemetry-grid {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px 10px;
   padding-top: 2px;
 }
 
+.sim-telemetry-grid > div {
+  min-width: 0;
+}
+
 .sim-stat-k {
   font-size: 11px;
+  line-height: 15px;
+  height: 15px;
+  white-space: nowrap;
   color: var(--text-3);
 }
 
 .sim-stat-v {
   font-size: 12.5px;
   font-weight: 600;
+  line-height: 19px;
+  height: 19px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
   color: var(--text);
 }
 
 .sim-pilot-controls {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  height: 75px;
+  min-height: 75px;
+  max-height: 75px;
+  box-sizing: border-box;
   padding-top: 12px;
   border-top: 1px solid var(--border);
+}
+
+.sim-ctrl-btn {
+  width: 100%;
+  min-width: 0;
+  height: 28px;
+  padding: 0 6px;
+  gap: 5px;
+  justify-content: center;
+  font-size: 11.5px;
+  border-color: var(--border);
+  background: var(--surface-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sim-ctrl-btn.is-active-cmd {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  color: var(--text);
 }
 
 /* Simulated Timers table matching `.puck-table-row` in System */
