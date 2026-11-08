@@ -37,8 +37,8 @@ export const ROUTES: RouteMeta[] = [
   },
   {
     id: "setup",
-    label: "System",
-    title: "System",
+    label: "Settings",
+    title: "Settings",
     subtitle: "Pilots, timing rules, announcer, gates and LiveTime",
     icon: () => icons.sliders(20),
   },
