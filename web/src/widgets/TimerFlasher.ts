@@ -486,6 +486,17 @@ export class TimerFlasher extends Component {
           }
         </div>
 
+        <div class="flasher-mobile-switch" role="tablist" aria-label="Hub 2.4 GHz Wi-Fi connection mode">
+          <button type="button" class="flasher-mobile-tab ${!isHostApMode ? "is-active" : ""}" data-pick-hub-mode="join" ${this.busy ? "disabled" : ""}>
+            <span>Join Hotspot / Router</span>
+            <span class="badge ${!isHostApMode ? "tone-good" : ""}">Station</span>
+          </button>
+          <button type="button" class="flasher-mobile-tab ${isHostApMode ? "is-active" : ""}" data-pick-hub-mode="host" ${this.busy ? "disabled" : ""}>
+            <span>Host "SlapRF" AP</span>
+            <span class="badge ${isHostApMode ? "tone-good" : ""}">Direct AP</span>
+          </button>
+        </div>
+
         <div class="flasher-roles flasher-hub-modes" role="radiogroup" aria-label="Hub 2.4 GHz Wi-Fi connection mode">
           <button type="button" role="radio" aria-checked="${!isHostApMode}" class="flasher-role-card is-compact ${
             !isHostApMode ? "is-active" : ""
@@ -614,6 +625,17 @@ export class TimerFlasher extends Component {
 
     this.el.innerHTML = `
       <div class="flasher">
+        <div class="flasher-mobile-switch" role="tablist" aria-label="Timer firmware type">
+          <button type="button" class="flasher-mobile-tab ${isHub ? "is-active" : ""}" data-pick-role="hub" ${this.busy ? "disabled" : ""}>
+            <span>Hub</span>
+            <span class="badge ${isHub ? "tone-good" : ""}">Wi-Fi + ESP-NOW</span>
+          </button>
+          <button type="button" class="flasher-mobile-tab ${!isHub ? "is-active" : ""}" data-pick-role="spoke" ${this.busy ? "disabled" : ""}>
+            <span>Spoke</span>
+            <span class="badge ${!isHub ? "tone-good" : ""}">ESP-NOW</span>
+          </button>
+        </div>
+
         <div class="flasher-roles" role="radiogroup" aria-label="Timer firmware type">
           <button type="button" role="radio" aria-checked="${isHub}" class="flasher-role-card ${isHub ? "is-active" : ""}" data-pick-role="hub" ${
             this.busy ? "disabled" : ""

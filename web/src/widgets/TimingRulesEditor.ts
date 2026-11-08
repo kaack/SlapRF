@@ -94,13 +94,17 @@ export class TimingRulesEditor extends Component {
       const t = e.target as HTMLInputElement;
       if (t.dataset.override) {
         // Ticking "override" enables that rule's input; unticking shows the global value again.
+        const row = t.closest(".rule-row");
+        row?.querySelectorAll<HTMLInputElement>(`input[data-override="${t.dataset.override}"]`).forEach((cb) => {
+          cb.checked = t.checked;
+        });
         const input = this.el.querySelector<HTMLInputElement>(`input[name="${t.dataset.override}"]`);
         if (input) {
           input.disabled = !t.checked;
           if (!t.checked) input.value = String(this.store.rules[t.dataset.override as keyof TimingRules]);
           else input.focus();
         }
-        t.closest(".rule-row")?.classList.toggle("is-overridden", t.checked);
+        row?.classList.toggle("is-overridden", t.checked);
       }
       this.markDirty();
     });
@@ -154,18 +158,20 @@ export class TimingRulesEditor extends Component {
 
     const rows = RULES.map((spec) => {
       if (gate) return this.renderGateRow(spec, r, overrides);
+      const overrideNote = this.renderOverrideNote(spec);
       return `
         <div class="rule-row">
           <div class="rule-text">
             <div class="rule-label">${spec.label}</div>
             <div class="rule-help">${spec.help}</div>
-            ${this.renderOverrideNote(spec)}
+            ${overrideNote}
           </div>
           <span class="rule-count" data-count="${spec.reason}"></span>
           <div class="input-suffix rule-input">
             <input class="input mono" type="number" name="${spec.key}" value="${r[spec.key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" />
             <span>s</span>
           </div>
+          ${overrideNote ? `<div class="rule-mobile-note">${overrideNote}</div>` : ""}
         </div>`;
     }).join("");
 
@@ -198,7 +204,7 @@ export class TimingRulesEditor extends Component {
             <div class="rule-label">${spec.label}</div>
             <div class="rule-help">Applies to the whole lap, so it's set under All gates.</div>
           </div>
-          <span></span>
+          <span class="rule-count"></span>
           <div class="input-suffix rule-input">
             <input class="input mono" type="number" value="${r[spec.key]}" disabled />
             <span>s</span>
@@ -223,6 +229,10 @@ export class TimingRulesEditor extends Component {
           <input class="input mono" type="number" name="${key}" value="${on ? own : r[key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" ${on ? "" : "disabled"} />
           <span>s</span>
         </div>
+        <label class="check rule-override rule-mobile-override">
+          <input type="checkbox" data-override="${key}" ${on ? "checked" : ""} />
+          Override at this gate <span class="muted">(all gates: ${r[key]} s)</span>
+        </label>
       </div>`;
   }
 

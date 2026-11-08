@@ -58,4 +58,5 @@ export const icons = {
       s
     ),
   close: (s?: number) => svg(`<path d="M18 6 6 18M6 6l12 12"/>`, s),
+  menu: (s?: number) => svg(`<path d="M4 6h16M4 12h16M4 18h16"/>`, s),
 };

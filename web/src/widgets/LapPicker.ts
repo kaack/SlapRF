@@ -10,7 +10,8 @@ import { renderEmpty } from "./markup";
 const CHART_W = 1000;
 const CHART_H = 150;
 /** Maximum number of laps visible in the viewport width before horizontal scrolling kicks in. */
-const WINDOW_LAPS = 50;
+const WINDOW_LAPS_DESKTOP = 50;
+const WINDOW_LAPS_MOBILE = 16;
 /** Slow laps beyond this × median (crashes, landings) are clipped so normal laps keep their resolution. */
 const OUTLIER_FACTOR = 1.35;
 
@@ -30,10 +31,16 @@ export class LapPicker extends Component {
   private sbDrag: { startX: number; startScrollLeft: number } | null = null;
   private chartPan: { startX: number; startScrollLeft: number; moved: boolean } | null = null;
   private suppressClick = false;
+  private wasMobileWindow = false;
+
+  private windowLaps(): number {
+    return window.innerWidth <= 680 ? WINDOW_LAPS_MOBILE : WINDOW_LAPS_DESKTOP;
+  }
 
   constructor(el: HTMLElement, store: AppStore) {
     super(el);
     this.store = store;
+    this.wasMobileWindow = window.innerWidth <= 680;
 
     const handleAction = (e: Event) => {
       if (this.suppressClick) {
@@ -66,7 +73,7 @@ export class LapPicker extends Component {
     };
 
     this.listen(el, "pointerdown", (e) => {
-      if (e.button !== 0) return;
+      if (e.pointerType === "mouse" && e.button !== 0) return;
       const target = e.target as HTMLElement;
       const sbTrack = target.closest<HTMLElement>("[data-sb-track]");
       if (sbTrack) {
@@ -95,13 +102,14 @@ export class LapPicker extends Component {
         return;
       }
 
-      const scrollArea = target.closest<HTMLElement>(".lap-picker-scroll.is-scrollable");
-      if (scrollArea && !target.closest("[data-set-ref]")) {
-        this.chartPan = { startX: e.clientX, startScrollLeft: scrollArea.scrollLeft, moved: false };
-        return;
+      if (e.pointerType === "mouse") {
+        const scrollArea = target.closest<HTMLElement>(".lap-picker-scroll.is-scrollable");
+        if (scrollArea && !target.closest("[data-set-ref]")) {
+          this.chartPan = { startX: e.clientX, startScrollLeft: scrollArea.scrollLeft, moved: false };
+          return;
+        }
+        handleAction(e);
       }
-
-      handleAction(e);
     });
     this.listen(el, "click", handleAction);
 
@@ -208,6 +216,15 @@ export class LapPicker extends Component {
     );
 
     this.onDispose(store.subscribe(["laps", "selection", "config"], () => this.render()));
+    const onResize = () => {
+      const isMobile = window.innerWidth <= 680;
+      if (isMobile !== this.wasMobileWindow) {
+        this.wasMobileWindow = isMobile;
+        this.render();
+      }
+    };
+    window.addEventListener("resize", onResize, { passive: true });
+    this.onDispose(() => window.removeEventListener("resize", onResize));
     this.render();
   }
 
@@ -318,8 +335,9 @@ export class LapPicker extends Component {
   }
 
   private renderHead(lapCount: number, refLap: LapRecord | undefined): string {
+    const winLaps = this.windowLaps();
     const canCompare = lapCount >= 2;
-    const scrollable = lapCount > WINDOW_LAPS;
+    const scrollable = lapCount > winLaps;
     const ref = this.store.comparison.reference;
     const btn = (key: string, label: string, active: boolean) =>
       `<button type="button" data-ref="${key}" class="${active ? "is-active" : ""}" ${canCompare ? "" : "disabled"}>${label}</button>`;
@@ -329,16 +347,16 @@ export class LapPicker extends Component {
         ? `<button type="button" class="is-active is-ref-chip" data-ref="best" title="Click to reset baseline to Personal best">Lap ${refLap.lapNumber} ×</button>`
         : "";
     const scrollHint = scrollable
-      ? ` · showing ${WINDOW_LAPS} laps at a time (${lapCount} total, scroll for earlier laps)`
+      ? ` · showing ${winLaps} laps at a time (${lapCount} total, scroll for earlier laps)`
       : "";
     const jumpLatest = scrollable
-      ? `<button type="button" class="btn btn-sm btn-ghost" data-scroll-latest style="${this.followLatest ? "display:none" : ""}">Latest ${WINDOW_LAPS} →</button>`
+      ? `<button type="button" class="btn btn-sm btn-ghost" data-scroll-latest style="${this.followLatest ? "display:none" : ""}">Latest ${winLaps} →</button>`
       : "";
     return `
       <header class="card-head">
         <div>
           <h2><span class="step">1</span>Pick laps</h2>
-          <p>Click any bar to review that lap · click the pin icon under a bar to set it as the baseline${scrollHint}.</p>
+          <p>Tap any bar to review that lap · tap the pin icon under a bar to set it as the baseline${scrollHint}.</p>
         </div>
         <div class="cmp-with">
           ${jumpLatest}
@@ -353,6 +371,7 @@ export class LapPicker extends Component {
   }
 
   private renderChart(laps: LapRecord[], reviewId: number, refId: number): string {
+    const winLaps = this.windowLaps();
     const times = laps.map((l) => l.lapTimeSec);
     const best = Math.min(...times);
     // Scale to the typical spread of laps so lap-to-lap differences are visible; unusually
@@ -364,9 +383,9 @@ export class LapPicker extends Component {
     const lo = floor - Math.max(0.02, (hi - floor) * 0.25);
     const span = Math.max(0.001, hi - lo);
 
-    const scrollable = laps.length > WINDOW_LAPS;
-    const trackWidthPct = scrollable ? (laps.length / WINDOW_LAPS) * 100 : 100;
-    const svgW = scrollable ? Math.round((laps.length / WINDOW_LAPS) * CHART_W) : CHART_W;
+    const scrollable = laps.length > winLaps;
+    const trackWidthPct = scrollable ? (laps.length / winLaps) * 100 : 100;
+    const svgW = scrollable ? Math.round((laps.length / winLaps) * CHART_W) : CHART_W;
     const slot = svgW / laps.length;
     const barW = Math.max(4, Math.min(26, slot * 0.72));
     const MIN_BAR = 6;
@@ -414,7 +433,7 @@ export class LapPicker extends Component {
     };
 
     // Under-bar baseline pin icons: click the icon under any bar to make that lap the comparison baseline.
-    const visibleCount = Math.min(laps.length, WINDOW_LAPS);
+    const visibleCount = Math.min(laps.length, winLaps);
     const dense = visibleCount > 28;
     const pins = laps
       .map((l, i) => {

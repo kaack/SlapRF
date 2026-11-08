@@ -57,7 +57,7 @@ export class LiveStandings extends Component {
             <th class="num">Last</th>
             <th class="num">Best</th>
             <th class="num col-avg">Avg 5</th>
-            <th class="num">Gap</th>
+            <th class="num col-gap">Gap</th>
             <th class="col-spark">Recent laps</th>
             <th class="col-progress">On track</th>
           </tr>
@@ -100,7 +100,7 @@ export class LiveStandings extends Component {
         <td class="num mono">${fmtTime(s.lastLap)}</td>
         <td class="num mono strong">${fmtTime(s.bestLap)}</td>
         <td class="num mono col-avg">${fmtTime(s.rollingAvg)}</td>
-        <td class="num mono muted">${gap}</td>
+        <td class="num mono muted col-gap">${gap}</td>
         <td class="spark-cell col-spark" style="color:${pilot.color}">${renderSparkline(s.laps.slice(-SPARK_LAPS).map((l) => l.lapTimeSec), 96, 26)}</td>
         <td class="col-progress">
           <div class="sector-progress">

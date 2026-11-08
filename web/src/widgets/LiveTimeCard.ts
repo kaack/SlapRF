@@ -30,9 +30,9 @@ export class LiveTimeCard extends Component {
           </div>
         </div>
         <ol class="steps">
-          <li><span>In LiveTime, add a timing device of type</span><code>ImmersionRC LapRF (8-way)</code></li>
-          <li><span>Point it at this computer</span><code>127.0.0.1 : ${port}</code></li>
-          <li><span>Load a heat — pilot channels are pushed to every gate automatically.</span></li>
+          <li><div class="step-body"><span>In LiveTime, add a timing device of type</span> <code>ImmersionRC LapRF (8-way)</code></div></li>
+          <li><div class="step-body"><span>Point it at this computer</span> <code>127.0.0.1 : ${port}</code></div></li>
+          <li><div class="step-body"><span>Load a heat — pilot channels are pushed to every gate automatically.</span></div></li>
         </ol>
         <p class="note">Only the start gate reports laps to LiveTime. Sector gates feed Pilot insights.</p>
       </div>`;
