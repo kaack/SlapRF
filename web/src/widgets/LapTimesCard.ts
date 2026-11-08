@@ -133,9 +133,9 @@ export class LapTimesCard extends Component {
     this.slot("subtitle").textContent =
       view.kind === "lap"
         ? single
-          ? "Every lap this session · dashed line is their best · crash and pause laps are clipped at the bottom"
-          : "Every pilot's laps in order · crash and pause laps are clipped at the bottom"
-        : `${sectionShort(this.store, view.fromPuckId)} (${sectionLabel(this.store, view.fromPuckId, view.toPuckId)}) · ${single ? "their" : "each pilot's"} time on this stretch, lap by lap`;
+          ? "Session timeline · dashed line is their best · gaps show pit swaps and recovery breaks"
+          : "Session timeline · pilots flying at the same time align · gaps show pit swaps and breaks"
+        : `${sectionShort(this.store, view.fromPuckId)} (${sectionLabel(this.store, view.fromPuckId, view.toPuckId)}) · ${single ? "their" : "each pilot's"} time on this stretch across the session timeline`;
 
     // One pilot needs no colour key.
     this.slot("legend").innerHTML = single
