@@ -110,14 +110,12 @@ export class ProgressionChart extends Component {
     this.listen(el, "dblclick", () => {
       if (this.endLap !== null) {
         this.endLap = null;
-        this.surface.invalidate();
       }
     });
 
     this.onDispose(
       store.subscribe(["laps", "config", "selection"], () => {
         this.refresh();
-        this.surface.invalidate();
       })
     );
     this.refresh();
@@ -126,7 +124,6 @@ export class ProgressionChart extends Component {
   public setMetric(metric: ProgressionMetric): void {
     this.metric = metric;
     this.refresh();
-    this.surface.invalidate();
   }
 
   private effectiveEndLap(): number {
@@ -139,7 +136,6 @@ export class ProgressionChart extends Component {
   private setEndLap(next: number): void {
     const clamped = Math.min(this.maxLap, Math.max(WINDOW_LAPS, next));
     this.endLap = clamped >= this.maxLap - 0.25 ? null : clamped;
-    this.surface.invalidate();
   }
 
   private valueOf(lap: LapRecord): number | undefined {

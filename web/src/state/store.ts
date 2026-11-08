@@ -108,7 +108,11 @@ export class AppStore {
       this.listeners.get(topic)?.forEach((fn) => {
         if (!fired.has(fn)) {
           fired.add(fn);
-          fn();
+          try {
+            fn();
+          } catch (err) {
+            console.error(`[AppStore] subscriber error on ${topic}:`, err);
+          }
         }
       });
     }
