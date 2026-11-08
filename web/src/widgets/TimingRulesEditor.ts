@@ -23,7 +23,7 @@ interface RuleSpec {
 const RULES: RuleSpec[] = [
   {
     key: "minLapSec",
-    label: "Minimum lap time",
+    label: "Minimum lap time (seconds)",
     help: "Shortest valid time before the same gate can count a pilot again.",
     step: 0.5,
     min: 1,
@@ -33,7 +33,7 @@ const RULES: RuleSpec[] = [
   },
   {
     key: "maxLapSec",
-    label: "Maximum lap time",
+    label: "Maximum lap time (seconds)",
     help: "Laps longer than this are discarded (crashes, landings, or pack swaps).",
     step: 5,
     min: 10,
@@ -43,7 +43,7 @@ const RULES: RuleSpec[] = [
   },
   {
     key: "gateCooldownSec",
-    label: "Gate cool-down",
+    label: "Gate cool-down (seconds)",
     help: "Time a gate ignores a pilot right after counting them.",
     step: 0.1,
     min: 0.2,
@@ -53,7 +53,7 @@ const RULES: RuleSpec[] = [
   },
   {
     key: "minSectionSec",
-    label: "Minimum section time",
+    label: "Minimum section time (seconds)",
     help: "Shortest valid transit time from the previous gate.",
     step: 0.1,
     min: 0.1,
@@ -63,7 +63,7 @@ const RULES: RuleSpec[] = [
   },
   {
     key: "echoWindowSec",
-    label: "Previous-gate echo window",
+    label: "Previous-gate echo window (seconds)",
     help: "Ignores repeat triggers at the gate a pilot just left (0 disables).",
     step: 0.5,
     min: 0,
@@ -194,9 +194,8 @@ export class TimingRulesEditor extends Component {
             ${overrideNote}
           </div>
           <span class="rule-count" data-count="${spec.reason}"></span>
-          <div class="input-suffix rule-input">
+          <div class="rule-input">
             <input class="input mono" type="number" name="${spec.key}" value="${r[spec.key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" />
-            <span>s</span>
           </div>
           ${overrideNote ? `<div class="rule-mobile-note">${overrideNote}</div>` : ""}
         </div>`;
@@ -230,9 +229,8 @@ export class TimingRulesEditor extends Component {
             <div class="rule-help">Applies to the whole lap, so it's set under All gates.</div>
           </div>
           <span class="rule-count"></span>
-          <div class="input-suffix rule-input">
+          <div class="rule-input">
             <input class="input mono" type="number" value="${r[spec.key]}" disabled />
-            <span>s</span>
           </div>
         </div>`;
     }
@@ -249,9 +247,8 @@ export class TimingRulesEditor extends Component {
           <div class="rule-help">${spec.help}</div>
         </div>
         <span class="rule-count" data-count="${spec.reason}"></span>
-        <div class="input-suffix rule-input has-inline-action">
-          <input class="input mono" type="number" name="${key}" value="${on ? own : r[key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" ${on ? "" : "disabled"} />
-          <span>s</span>
+        <div class="flasher-pass-wrap rule-input has-inline-action">
+          <input class="input mono flasher-pass-input" type="number" name="${key}" value="${on ? own : r[key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" ${on ? "" : "disabled"} />
           <button
             class="flasher-pass-toggle rule-inline-btn ${on ? "is-active" : ""}"
             type="button"
