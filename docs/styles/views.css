@@ -2084,36 +2084,20 @@ body.is-gate-dragging * {
   cursor: grabbing;
 }
 
-/* Threshold calibration row and draggable threshold tags */
+/* Threshold calibration footer bar and draggable threshold tags */
 .scope-calib {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px 12px;
-  margin-bottom: 10px;
-  padding: 8px 10px;
+  margin-top: 10px;
+  padding: 8px 12px;
   border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text-2);
   font-size: 12px;
-}
-.scope-gates {
-  max-width: 100%;
-  overflow-x: auto;
-  scrollbar-width: none;
-}
-.scope-gates::-webkit-scrollbar {
-  display: none;
-}
-.scope-calib-meta {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  flex: 1 1 260px;
-  min-width: 0;
 }
 .scope-calib-actions {
   display: inline-flex;
@@ -2128,6 +2112,9 @@ body.is-gate-dragging * {
 .scope-calib-text {
   color: var(--text-3);
   line-height: 1.4;
+}
+.channel-all-dot {
+  background: conic-gradient(#d4ff3a, #38bdf8, #f472b6, #fb923c, #d4ff3a);
 }
 .scope-canvas.is-over-tag {
   cursor: ns-resize;
@@ -2202,10 +2189,6 @@ body.is-gate-dragging * {
 }
 
 /* Signal chart: one gate at a time for calibration */
-.scope-gates button .dot {
-  width: 7px;
-  height: 7px;
-}
 .channel-legend button.channel {
   font: inherit;
   color: inherit;
