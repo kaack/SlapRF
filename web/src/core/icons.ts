@@ -18,6 +18,13 @@ export const icons = {
   reset: (s?: number) => svg(`<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>`, s),
   play: (s?: number) => svg(`<path d="M7 4l13 8-13 8z"/>`, s),
   pause: (s?: number) => svg(`<path d="M9 5v14M15 5v14"/>`, s),
+  timer: (s?: number) =>
+    svg(`<path d="M10 2h4"/><path d="M12 14l3-3"/><circle cx="12" cy="14" r="8"/>`, s),
+  timerOff: (s?: number) =>
+    svg(
+      `<path d="M10 2h4"/><path d="M4.6 11a8 8 0 0 0 1.7 8.7 8 8 0 0 0 8.7 1.7"/><path d="M7.4 7.4a8 8 0 0 1 10.3 1 8 8 0 0 1 .9 10.2"/><path d="m2 2 20 20"/>`,
+      s
+    ),
   arrowRight: (s?: number) => svg(`<path d="M5 12h14M13 6l6 6-6 6"/>`, s),
   chevronLeft: (s?: number) => svg(`<path d="M15 6l-6 6 6 6"/>`, s),
   chevronRight: (s?: number) => svg(`<path d="M9 6l6 6-6 6"/>`, s),

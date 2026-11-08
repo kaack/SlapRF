@@ -59,7 +59,7 @@ export class TopBar extends Component {
           ${voiceOn ? icons.speaker(19) : icons.speakerOff(19)}<span class="topbar-btn-label">Announcer</span>
         </button>
         <button class="btn ${raceArmed ? "btn-armed" : "btn-ghost"}" data-action="arm" title="${raceArmed ? "Pause" : "Resume"} lap timing" aria-label="${raceArmed ? "Pause" : "Resume"} lap timing">
-          ${raceArmed ? icons.pause(19) : icons.play(19)}<span class="topbar-btn-label">${raceArmed ? "Timing on" : "Timing paused"}</span>
+          ${raceArmed ? icons.timer(19) : icons.timerOff(19)}<span class="topbar-btn-label">${raceArmed ? "Timing on" : "Timing off"}</span>
         </button>
         <button class="btn btn-ghost btn-icon" data-action="reset" title="Clear session laps" aria-label="Clear session laps">${icons.reset(19)}</button>`;
     } else if (meta.id === "pilot") {
