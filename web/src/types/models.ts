@@ -180,6 +180,7 @@ export type SimPilotStatus =
   | "CRASHED_WAITING_RECOVERY"
   | "WALKING_RECOVERY"
   | "PIT_SWAP"
+  | "LAUNCH_HOLD"
   | "CHARGING_WAIT"
   | "PILOT_BREAK"
   | "PAUSED";

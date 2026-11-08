@@ -81,6 +81,15 @@ function statusMeta(p: SimPilotState): { label: string; badgeClass: string; hint
         badgeClass: "sim-status-pit",
         hint: "Retrieving quad, unplugging spent LiPo, strapping fresh 6S pack at bench, and walking back to launch pad (30–60s)",
       };
+    case "LAUNCH_HOLD":
+      return {
+        label:
+          remainingSec > 0
+            ? `Launch Hold · VTX Off (${Math.ceil(remainingSec)}s)`
+            : "Launch Hold · Waiting for Lull",
+        badgeClass: "sim-status-charging",
+        hint: "Ready on launch pad with 100% LiPo plugged in — holding launch with VTX off (to prevent VTX overheating) so crashed pilot can recover",
+      };
     case "CHARGING_WAIT":
       return {
         label: `Waiting for Charge${sec}`,
@@ -125,6 +134,7 @@ function formatDroneTagText(p: SimPilotState): string {
 function isPilotInPits(status: SimPilotStatus): boolean {
   return (
     status === "PIT_SWAP" ||
+    status === "LAUNCH_HOLD" ||
     status === "CHARGING_WAIT" ||
     status === "PILOT_BREAK" ||
     status === "PAUSED"
@@ -139,6 +149,8 @@ function formatPitSubText(p: SimPilotState): string {
         return `Unplugged · bench pack swap (${sec}s)`;
       }
       return `Fresh 6S plugged in · arming (${sec}s)`;
+    case "LAUNCH_HOLD":
+      return `Launch pad · 100% plugged in · VTX Off (holding for lull)`;
     case "CHARGING_WAIT":
       return `All 3 packs charging · ready in ${sec}s`;
     case "PILOT_BREAK":
@@ -146,6 +158,16 @@ function formatPitSubText(p: SimPilotState): string {
     default:
       return `Paused on bench`;
   }
+}
+
+function formatPilotVtxText(p: SimPilotState): string {
+  if (p.vtxActive) {
+    return "TX ON (25mW)";
+  }
+  if (p.status === "LAUNCH_HOLD") {
+    return "Off (VTX Cool)";
+  }
+  return "Pit / Off";
 }
 
 function formatPilotBattHtml(p: SimPilotState): string {
@@ -794,11 +816,11 @@ export class SimView extends Component {
                   </div>
                   <div>
                     <div class="sim-stat-k">5.8 GHz VTX</div>
-                    <div class="sim-stat-v ${p.vtxActive ? "tone-good" : "muted"}" data-pilot-vtx="${p.slotIndex}">${p.vtxActive ? "TX ON (25mW)" : "Pit / Off"}</div>
+                    <div class="sim-stat-v ${p.vtxActive ? "tone-good" : "muted"}" data-pilot-vtx="${p.slotIndex}">${formatPilotVtxText(p)}</div>
                   </div>
                   <div>
                     <div class="sim-stat-k">Nearest Gate</div>
-                    <div class="sim-stat-v" data-pilot-loc="${p.slotIndex}">${isParked ? "Pit bench" : esc(p.nearestGateLabel)}</div>
+                    <div class="sim-stat-v" data-pilot-loc="${p.slotIndex}">${p.status === "LAUNCH_HOLD" ? "Launch pad" : isParked ? "Pit bench" : esc(p.nearestGateLabel)}</div>
                   </div>
                   <div>
                     <div class="sim-stat-k">Packs / Crashes</div>
@@ -899,9 +921,15 @@ export class SimView extends Component {
       if (altEl) {
         altEl.innerHTML = `${p.altitudeMeters.toFixed(1)} <span class="unit">m</span>`;
       }
+      const vtxEl = this.el.querySelector<HTMLElement>(`[data-pilot-vtx="${p.slotIndex}"]`);
+      if (vtxEl) {
+        vtxEl.textContent = formatPilotVtxText(p);
+        vtxEl.className = `sim-stat-v ${p.vtxActive ? "tone-good" : "muted"}`;
+      }
       const locEl = this.el.querySelector<HTMLElement>(`[data-pilot-loc="${p.slotIndex}"]`);
       if (locEl) {
-        locEl.textContent = isParked ? "Pit bench" : p.nearestGateLabel;
+        locEl.textContent =
+          p.status === "LAUNCH_HOLD" ? "Launch pad" : isParked ? "Pit bench" : p.nearestGateLabel;
       }
       const packsEl = this.el.querySelector<HTMLElement>(`[data-pilot-packs="${p.slotIndex}"]`);
       if (packsEl) {

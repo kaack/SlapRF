@@ -12,6 +12,7 @@ const (
 	SimStatusCrashedRecovery SimPilotStatus = "CRASHED_WAITING_RECOVERY"
 	SimStatusWalkingRecovery SimPilotStatus = "WALKING_RECOVERY"
 	SimStatusPitSwap         SimPilotStatus = "PIT_SWAP"
+	SimStatusLaunchHold      SimPilotStatus = "LAUNCH_HOLD"
 	SimStatusChargingWait    SimPilotStatus = "CHARGING_WAIT"
 	SimStatusPilotBreak      SimPilotStatus = "PILOT_BREAK"
 	SimStatusPaused          SimPilotStatus = "PAUSED"

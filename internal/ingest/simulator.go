@@ -702,7 +702,11 @@ func (s *TrackSimulator) step(dtSec float64) {
 			continue
 		}
 		st := s.pilotStates[i].status
-		if st == domain.SimStatusCrashedRecovery || st == domain.SimStatusWalkingRecovery || st == domain.SimStatusTurtleFailed {
+		if st == domain.SimStatusCrashedVtxOn ||
+			st == domain.SimStatusTurtleRecovery ||
+			st == domain.SimStatusTurtleFailed ||
+			st == domain.SimStatusCrashedRecovery ||
+			st == domain.SimStatusWalkingRecovery {
 			hasWaitingRecovery = true
 			break
 		}
@@ -824,6 +828,27 @@ func (s *TrackSimulator) step(dtSec float64) {
 			}
 			continue
 
+		case domain.SimStatusLaunchHold:
+			ps.currentSpeedMps = 0
+			if ps.activePackIdx < 0 {
+				ps.plugInReadyOrBestPack(false)
+			}
+			// Pilot is ready on the launch pad with a fresh 100% LiPo plugged in, but holds launch
+			// with VTX in Pit Mode (off) so the VTX doesn't overheat while waiting for the crashed
+			// pilot to get a lull and recover their quad.
+			if hasWaitingRecovery || s.trackWalkerActive {
+				if s.trackWalkerActive {
+					ps.stateTimerSec = math.Max(0, s.trackWalkerTimerSec)
+				} else {
+					ps.stateTimerSec = 0
+				}
+			} else {
+				// Recovery is complete and track is clear -> step into 3s arming countdown and launch!
+				ps.status = domain.SimStatusPitSwap
+				ps.stateTimerSec = 3.0
+			}
+			continue
+
 		case domain.SimStatusPitSwap:
 			ps.currentSpeedMps = 0
 			// If all 3 packs are still charging (< 100%), transition to CHARGING_WAIT first
@@ -834,19 +859,25 @@ func (s *TrackSimulator) step(dtSec float64) {
 				continue
 			}
 			ps.stateTimerSec -= dtSec
-			// If a crashed pilot is waiting for a lull to walk on the track (or is actively walking on the track),
-			// pilots who have finished swapping packs hold on the launch pad until the recovery walk is done!
-			if (hasWaitingRecovery || s.trackWalkerActive) && ps.stateTimerSec < 3.0 {
-				ps.stateTimerSec = 3.0
-			}
 			// Pack is unplugged (0%) while retrieving quad, walking to bench, unstrapping old pack,
 			// strapping fresh pack, and walking back to the launch pad; in the final 4 seconds on the
-			// launch pad, the pilot plugs in the fresh 100% 6S pack, sits down, arms, and takes off.
-			if ps.stateTimerSec <= 4.0 && ps.stateTimerSec > 0 {
+			// launch pad, the pilot plugs in the fresh 100% 6S pack.
+			if ps.stateTimerSec <= 4.0 {
 				if ps.activePackIdx < 0 {
 					ps.plugInReadyOrBestPack(false)
 				}
-			} else if ps.stateTimerSec > 4.0 {
+				// If a crashed pilot is waiting for a lull to recover (or is walking on the track),
+				// hold on the launch pad with VTX switched OFF (Pit Mode) to avoid overheating the VTX!
+				if hasWaitingRecovery || s.trackWalkerActive {
+					ps.status = domain.SimStatusLaunchHold
+					if s.trackWalkerActive {
+						ps.stateTimerSec = math.Max(0, s.trackWalkerTimerSec)
+					} else {
+						ps.stateTimerSec = 0
+					}
+					continue
+				}
+			} else {
 				ps.activePackIdx = -1
 				ps.batteryPct = 0.0
 			}
