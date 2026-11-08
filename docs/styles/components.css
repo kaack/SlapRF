@@ -428,6 +428,9 @@
 /* Forms -------------------------------------------------------------------- */
 .input {
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
   height: 32px;
   padding: 0 10px;
   border-radius: var(--radius-sm);
@@ -639,6 +642,8 @@ input[type="range"] {
   position: relative;
   width: 100%;
   min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 select.input.is-custom-upgraded {
   position: absolute !important;
@@ -656,6 +661,10 @@ select.input.is-custom-upgraded {
   justify-content: space-between;
   gap: 8px;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
+  overflow: hidden;
   text-align: left;
   cursor: pointer;
   padding-right: 10px;
