@@ -24,7 +24,7 @@ const RULES: RuleSpec[] = [
   {
     key: "minLapSec",
     label: "Minimum lap time",
-    help: "Nobody laps faster than this, so a gate never times the same pilot twice within it — every gate is treated as if it were the start gate. A crash beside a gate or a quad looping back through it is ignored.",
+    help: "Shortest valid time before the same gate can count a pilot again.",
     step: 0.5,
     min: 1,
     max: 120,
@@ -34,7 +34,7 @@ const RULES: RuleSpec[] = [
   {
     key: "maxLapSec",
     label: "Maximum lap time",
-    help: "Longer laps don't count (crash, landing, pack swap). Timing restarts cleanly at the next start gate pass. Applies to the whole lap, so it's set for all gates.",
+    help: "Laps longer than this are discarded (crashes, landings, or pack swaps).",
     step: 5,
     min: 10,
     max: 900,
@@ -44,7 +44,7 @@ const RULES: RuleSpec[] = [
   {
     key: "gateCooldownSec",
     label: "Gate cool-down",
-    help: "After a gate times a pilot it ignores them for this long, so a quad hovering or wobbling in the gate isn't counted twice.",
+    help: "Time a gate ignores a pilot right after counting them.",
     step: 0.1,
     min: 0.2,
     max: 15,
@@ -54,7 +54,7 @@ const RULES: RuleSpec[] = [
   {
     key: "minSectionSec",
     label: "Minimum section time",
-    help: "The quickest anyone can reach this gate from the one before. Faster detections are strays from a gate the quad isn't actually passing.",
+    help: "Shortest valid transit time from the previous gate.",
     step: 0.1,
     min: 0.1,
     max: 15,
@@ -64,7 +64,7 @@ const RULES: RuleSpec[] = [
   {
     key: "echoWindowSec",
     label: "Previous-gate echo window",
-    help: "If the gate a pilot just left fires again within this window it's ignored: a nearby gate caught the signal on the way out, or the pilot turned back through it. 0 turns this off.",
+    help: "Ignores repeat triggers at the gate a pilot just left (0 disables).",
     step: 0.5,
     min: 0,
     max: 15,
@@ -203,9 +203,9 @@ export class TimingRulesEditor extends Component {
     }).join("");
 
     const foot = gate
-      ? `<p class="note">Edited rules apply only at ${esc(gateLabel(this.store, gate.puckId))}; unedited rules inherit from All gates.</p>
+      ? `<p class="note">Edited rules apply only to ${esc(gateLabel(this.store, gate.puckId))}.</p>
          ${Object.keys(overrides).length ? `<button class="btn btn-ghost btn-sm" type="button" data-action="clear">Use all-gate rules</button>` : ""}`
-      : `<p class="note">Rules apply to new detections. LiveTime only receives start gate passes that get through them.</p>
+      : `<p class="note">Applies to new detections.</p>
          <button class="btn btn-ghost btn-sm" type="button" data-action="defaults">Restore defaults</button>`;
 
     this.el.innerHTML = `
