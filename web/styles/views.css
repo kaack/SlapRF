@@ -1989,6 +1989,27 @@ body.is-gate-dragging * {
   margin-top: 2px;
   max-width: 640px;
 }
+.option-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+@media (max-width: 680px) {
+  .option-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .option-actions {
+    justify-content: space-between;
+    padding-top: 8px;
+    border-top: 1px solid var(--border);
+  }
+  .option-row > .switch {
+    align-self: flex-start;
+  }
+}
 
 /* =========================================================================
    Responsive
