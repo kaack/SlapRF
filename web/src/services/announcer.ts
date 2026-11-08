@@ -100,6 +100,9 @@ export class Announcer {
   private lastRaceArmed: boolean | null = null;
   /** Inaudible tone that keeps the audio output awake while the announcer is on. */
   private keepAwake: AudioContext | null = null;
+  /** Looping silent HTMLAudioElement so iOS/Android keep audio & JS active if the screen is manually locked. */
+  private bgMediaEl: HTMLAudioElement | null = null;
+  private bgMediaUrl = "";
 
   constructor(store: AppStore) {
     this.store = store;
@@ -430,11 +433,86 @@ export class Announcer {
       this.keepAwake = ctx;
     }
     void this.keepAwake.resume();
+
+    if (this.prefs.enabled) {
+      this.startBackgroundMediaSession();
+    }
   }
 
   private sleepAudio(): void {
     void this.keepAwake?.suspend();
+    if (this.bgMediaEl) {
+      this.bgMediaEl.pause();
+    }
   }
+
+  /**
+   * Plays a looping 1-second near-silent WAV through an `<audio>` element while the announcer
+   * is enabled so iOS and Android keep Web Audio (`AudioContext`) and background timers active
+   * even if the user manually locks the phone screen.
+   */
+  private startBackgroundMediaSession(): void {
+    try {
+      if (!this.bgMediaEl) {
+        if (!this.bgMediaUrl) {
+          this.bgMediaUrl = createSilentWavBlobUrl();
+        }
+        const audio = document.createElement("audio");
+        audio.src = this.bgMediaUrl;
+        audio.loop = true;
+        audio.volume = 0.01;
+        audio.setAttribute("playsinline", "true");
+        this.bgMediaEl = audio;
+      }
+      if (this.bgMediaEl.paused) {
+        void this.bgMediaEl.play().catch(() => undefined);
+      }
+      if ("mediaSession" in navigator && navigator.mediaSession) {
+        if (typeof MediaMetadata !== "undefined") {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: "SlapRF Voice Announcer",
+            artist: "5.8 GHz Multi-Gate Sector Timer",
+          });
+        }
+        navigator.mediaSession.playbackState = "playing";
+      }
+    } catch {
+      // Ignore media session errors
+    }
+  }
+}
+
+/** Builds a 1-second 8 kHz mono 16-bit PCM silent WAV Blob URL for mobile background keep-alive. */
+function createSilentWavBlobUrl(): string {
+  const sampleRate = 8000;
+  const numSamples = sampleRate;
+  const byteRate = sampleRate * 2;
+  const dataSize = numSamples * 2;
+  const buf = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buf);
+
+  const writeStr = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true); // PCM chunk size
+  view.setUint16(20, 1, true); // PCM format
+  view.setUint16(22, 1, true); // 1 channel
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  writeStr(36, "data");
+  view.setUint32(40, dataSize, true);
+  // Leave sample bytes at 0 (digital silence)
+
+  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
 }
 
 function loadPrefs(): AnnouncerPrefs {
