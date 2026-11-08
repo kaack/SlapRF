@@ -1,13 +1,14 @@
 import { Component } from "../core/component";
 import { esc, fmtDelta } from "../core/format";
 import { sectionRecords } from "../state/analysis";
+import { sectionLabel } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { renderEmpty, sectionIdBadge, subtleRoute } from "./markup";
+import { renderEmpty, sectionIdBadge } from "./markup";
 
 /**
- * Sections × pilots: each pilot's best on every stretch of track, with the record holder
- * highlighted and everyone else shown as a gap to the record. Shows who is quick where,
- * independent of section length.
+ * Pilots × sections: each pilot is a row and each section is a column, with the record holder
+ * highlighted in purple and everyone else shown as a gap to the record. Shows who is quick where,
+ * matching the pilot-per-row layout of the standings table above.
  */
 export class SectionRecords extends Component {
   private readonly store: AppStore;
@@ -27,30 +28,35 @@ export class SectionRecords extends Component {
       return;
     }
 
-    const head = pilots
-      .map((p) => `<th class="num"><span class="th-pilot"><span class="dot" style="--c:${p.color}"></span>${esc(p.callsign)}</span></th>`)
+    const head = records
+      .map(
+        (r) =>
+          `<th class="num" title="${esc(sectionLabel(this.store, r.fromPuckId, r.toPuckId))}">${sectionIdBadge(
+            this.store,
+            r.fromPuckId,
+            r.toPuckId
+          )}</th>`
+      )
       .join("");
 
-    const rows = records
-      .map((r) => {
-        const holder = r.recordSlot !== null ? this.store.pilot(r.recordSlot) : undefined;
-        const cells = pilots
-          .map((p) => {
+    const rows = pilots
+      .map((p) => {
+        const cells = records
+          .map((r) => {
             const b = r.bests.get(p.slotIndex);
             if (!b) return `<td class="num muted">—</td>`;
-            if (p.slotIndex === r.recordSlot) return `<td class="num"><span class="split split-purple">${b.sec.toFixed(3)}</span></td>`;
-            return `<td class="num mono muted">${fmtDelta(b.sec - r.recordSec)}</td>`;
+            if (p.slotIndex === r.recordSlot) {
+              return `<td class="num"><span class="split split-purple">${b.sec.toFixed(3)}</span></td>`;
+            }
+            return `<td class="num mono muted" title="${b.sec.toFixed(3)}s">${fmtDelta(b.sec - r.recordSec)}</td>`;
           })
           .join("");
         return `
           <tr>
             <td>
-              <div class="sec-cell">
-                ${sectionIdBadge(this.store, r.fromPuckId)}
-                <div class="sec-meta">
-                  ${subtleRoute(this.store, r.fromPuckId, r.toPuckId)}
-                  ${holder ? `<span class="sec-holder">· record ${esc(holder.callsign)}</span>` : ""}
-                </div>
+              <div class="pilot-cell">
+                <span class="pilot-swatch" style="--c:${p.color}"></span>
+                <div class="pilot-name">${esc(p.callsign)}</div>
               </div>
             </td>
             ${cells}
@@ -61,7 +67,7 @@ export class SectionRecords extends Component {
     this.el.innerHTML = `
       <div class="table-scroll">
         <table class="table table-compact">
-          <thead><tr><th>Section</th>${head}</tr></thead>
+          <thead><tr><th>Pilot</th>${head}</tr></thead>
           <tbody>${rows}</tbody>
         </table>
       </div>
