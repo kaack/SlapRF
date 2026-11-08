@@ -39,7 +39,8 @@ const IDLE_EASTER_EGG_QUIPS = [
   "I am a member!",
   "Who crashed now...?",
   "Is the track clear?",
-  "Save the geese!",
+  "The geese don't even flinch anymore.",
+  "Those geese have more track time than we do.",
 ];
 
 /**
