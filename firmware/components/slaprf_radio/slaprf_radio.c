@@ -117,6 +117,9 @@ void slaprf_init_2g4_radio(uint8_t channel, uint8_t long_range, uint8_t tx_power
     ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_wifi_start());
+    // Keep the PHY powered between frames: the 5.8 GHz capture engine needs it, and modem sleep
+    // would break the TDMA schedule.
+    ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 
 #if SOC_WIFI_SUPPORT_5G
     // Never transmit on 5 GHz: that band carries the pilots' FPV video.
@@ -255,6 +258,24 @@ void slaprf_wait_for_next_sweep_tick(uint32_t interval_us) {
 
 void delay_microseconds(uint32_t us) {
     esp_rom_delay_us(us);
+}
+
+int64_t slaprf_now_us(void) {
+    return esp_timer_get_time();
+}
+
+void slaprf_sleep_until_us(int64_t t_us) {
+    int64_t remaining = t_us - esp_timer_get_time();
+    if (remaining > 2500) {
+        vTaskDelay(pdMS_TO_TICKS((remaining - 1500) / 1000));
+    }
+    while (esp_timer_get_time() < t_us) {
+        // Spin out the last ~1.5 ms so TDMA slots and sweeps start on time
+    }
+}
+
+int64_t slaprf_last_hub_beacon_us(void) {
+    return s_last_beacon_us;
 }
 
 /* ---- USB config readback -------------------------------------------------------------------- */

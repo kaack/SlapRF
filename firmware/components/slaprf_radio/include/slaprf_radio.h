@@ -8,6 +8,7 @@
  */
 #pragma once
 
+#include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 
@@ -55,12 +56,33 @@ int espnow_poll(void *buf, uint32_t cap);
 /* ---- 5.8 GHz sensing ------------------------------------------------------------------------ */
 
 /**
- * Band power (dBm) around `center_freq_mhz` (5645..5945 MHz) from the C5's 5 GHz receive chain.
- * See slaprf_rf58.c for status.
+ * Prepare the 5 GHz raw-capture engine (forced gain, band calibration, boot capture check).
+ * Call once after slaprf_init_2g4_radio(). Returns false if the boot capture check failed.
+ */
+bool slaprf_rf58_init(void);
+
+/** Leave the 2.4 GHz link for a sweep: transmitter off, radio onto the 5 GHz band. */
+void slaprf_rf58_enter(void);
+
+/**
+ * Band power (dBm, ~10 MHz around the carrier) at `center_freq_mhz` (5180..5917 MHz).
+ * Only valid between slaprf_rf58_enter() and slaprf_rf58_leave().
  */
 int8_t esp_sdr_measure_5g_channel_dbm(uint16_t center_freq_mhz);
 
+/** Return to the 2.4 GHz link channel and re-enable the transmitter. */
+void slaprf_rf58_leave(void);
+
 /* ---- Timing --------------------------------------------------------------------------------- */
+
+/** Microseconds since boot. */
+int64_t slaprf_now_us(void);
+
+/** Sleep (then spin for the last ~1.5 ms) until `t_us`; returns immediately if it has passed. */
+void slaprf_sleep_until_us(int64_t t_us);
+
+/** Spoke only: boot time (us) of the last Hub sync beacon heard, or 0. */
+int64_t slaprf_last_hub_beacon_us(void);
 
 /** Block until the next sweep tick (drift-free, `interval_us` apart). */
 void slaprf_wait_for_next_sweep_tick(uint32_t interval_us);

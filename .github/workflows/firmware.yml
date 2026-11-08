@@ -50,6 +50,7 @@ jobs:
           path: firmware/${{ matrix.profile }}
           command: >-
             idf.py build &&
+            bash ../tools/check_image.sh &&
             cd build &&
             python -m esptool --chip esp32c5 merge_bin -o slaprf-xiao-c5-${{ matrix.profile }}.bin @flash_args
 
