@@ -76,23 +76,34 @@ const RULES: RuleSpec[] = [
 const DEFAULT_RULES: TimingRules = { minLapSec: 5, maxLapSec: 120, gateCooldownSec: 2, minSectionSec: 0.5, echoWindowSec: 3 };
 
 /**
- * System section for the detection guardrails. "All gates" edits the global rules; picking a
+ * Settings section for the detection guardrails. "All gates" edits the global rules; picking a
  * gate lets you override individual rules for just that gate (its position on the track may
- * need, say, a longer echo window). Shows how often each rule fired.
+ * need, say, a longer echo window). Every change auto-saves immediately.
  */
 export class TimingRulesEditor extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
   /** null = global rules; otherwise the gate being edited. */
   private scope: number | null = null;
-  private dirty = false;
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
     super(el);
     this.store = store;
     this.api = api;
-    this.listen(el, "input", () => {
-      this.markDirty();
+    this.listen(el, "change", () => {
+      const form = this.el.querySelector<HTMLFormElement>("form.rules");
+      if (form) void this.save(form);
+    });
+    this.listen(el, "keydown", (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        target.blur();
+      } else if (e.key === "Escape") {
+        target.value = target.defaultValue;
+        target.blur();
+      }
     });
     this.listen(el, "submit", (e) => {
       e.preventDefault();
@@ -105,7 +116,8 @@ export class TimingRulesEditor extends Component {
         const key = toggleBtn.dataset.overrideToggle as GateRuleKey;
         const row = toggleBtn.closest<HTMLElement>(".rule-row");
         const input = row?.querySelector<HTMLInputElement>(`input[name="${key}"]`);
-        if (row && input) {
+        const form = this.el.querySelector<HTMLFormElement>("form.rules");
+        if (row && input && form) {
           const nextOn = input.disabled;
           input.disabled = !nextOn;
           row.classList.toggle("is-overridden", nextOn);
@@ -116,14 +128,13 @@ export class TimingRulesEditor extends Component {
             input.select();
           }
           this.syncToggleBtn(toggleBtn, nextOn, this.store.rules[key]);
-          this.markDirty();
+          void this.save(form);
         }
         return;
       }
       const scope = target.closest<HTMLElement>("[data-scope]");
       if (scope) {
         this.scope = scope.dataset.scope === "all" ? null : Number(scope.dataset.scope);
-        this.dirty = false;
         this.render();
         return;
       }
@@ -131,11 +142,13 @@ export class TimingRulesEditor extends Component {
       if (action === "defaults") void this.api.updateRules(DEFAULT_RULES);
       if (action === "clear" && this.scope !== null) void this.api.setGateRules(this.scope, {});
     });
-    // Re-render on rule / gate changes, but never under someone's unsaved edits.
+    // Re-render on rule / gate changes, unless the user is actively typing in an input.
     this.onDispose(
       store.subscribe(["rules", "config"], () => {
         if (this.scope !== null && !store.puck(this.scope)) this.scope = null;
-        if (!this.dirty) this.render();
+        const active = document.activeElement;
+        const editing = active instanceof HTMLInputElement && this.el.contains(active);
+        if (!editing) this.render();
       })
     );
     this.onDispose(store.subscribe(["crossings"], () => this.renderCounts()));
@@ -191,11 +204,9 @@ export class TimingRulesEditor extends Component {
 
     const foot = gate
       ? `<p class="note">Edited rules apply only at ${esc(gateLabel(this.store, gate.puckId))}; unedited rules inherit from All gates.</p>
-         ${Object.keys(overrides).length ? `<button class="btn btn-ghost btn-sm" type="button" data-action="clear">Use all-gate rules</button>` : ""}
-         <button class="btn btn-sm" type="submit" disabled>Save ${esc(gateLabel(this.store, gate.puckId))}</button>`
+         ${Object.keys(overrides).length ? `<button class="btn btn-ghost btn-sm" type="button" data-action="clear">Use all-gate rules</button>` : ""}`
       : `<p class="note">Rules apply to new detections. LiveTime only receives start gate passes that get through them.</p>
-         <button class="btn btn-ghost btn-sm" type="button" data-action="defaults">Restore defaults</button>
-         <button class="btn btn-sm" type="submit" disabled>Save rules</button>`;
+         <button class="btn btn-ghost btn-sm" type="button" data-action="defaults">Restore defaults</button>`;
 
     this.el.innerHTML = `
       <div class="rules-scope">
@@ -209,7 +220,7 @@ export class TimingRulesEditor extends Component {
     this.renderCounts();
   }
 
-  /** A rule for one gate: click the pencil icon to edit/override, otherwise it inherits the global value. */
+  /** A rule for one gate: click the inline pencil icon inside the input to edit/override, or reset icon to revert. */
   private renderGateRow(spec: RuleSpec, r: TimingRules, overrides: GateRuleOverrides): string {
     if (!spec.perGate) {
       return `
@@ -219,11 +230,9 @@ export class TimingRulesEditor extends Component {
             <div class="rule-help">Applies to the whole lap, so it's set under All gates.</div>
           </div>
           <span class="rule-count"></span>
-          <div class="rule-control-wrap">
-            <div class="input-suffix rule-input">
-              <input class="input mono" type="number" value="${r[spec.key]}" disabled />
-              <span>s</span>
-            </div>
+          <div class="input-suffix rule-input">
+            <input class="input mono" type="number" value="${r[spec.key]}" disabled />
+            <span>s</span>
           </div>
         </div>`;
     }
@@ -240,20 +249,18 @@ export class TimingRulesEditor extends Component {
           <div class="rule-help">${spec.help}</div>
         </div>
         <span class="rule-count" data-count="${spec.reason}"></span>
-        <div class="rule-control-wrap">
-          <div class="input-suffix rule-input">
-            <input class="input mono" type="number" name="${key}" value="${on ? own : r[key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" ${on ? "" : "disabled"} />
-            <span>s</span>
-          </div>
+        <div class="input-suffix rule-input has-inline-action">
+          <input class="input mono" type="number" name="${key}" value="${on ? own : r[key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" ${on ? "" : "disabled"} />
+          <span>s</span>
           <button
-            class="btn btn-icon rule-edit-btn ${on ? "btn-armed" : "btn-ghost"}"
+            class="flasher-pass-toggle rule-inline-btn ${on ? "is-active" : ""}"
             type="button"
             data-override-toggle="${key}"
             title="${title}"
             aria-label="${title}"
             aria-pressed="${on}"
           >
-            ${on ? icons.reset(15) : icons.pencil(15)}
+            ${on ? icons.reset(14) : icons.pencil(14)}
           </button>
         </div>
       </div>`;
@@ -263,11 +270,11 @@ export class TimingRulesEditor extends Component {
     const title = on
       ? `Revert to All gates default (${globalVal} s)`
       : `Edit to override at this gate (inherits ${globalVal} s)`;
-    btn.className = `btn btn-icon rule-edit-btn ${on ? "btn-armed" : "btn-ghost"}`;
+    btn.className = `flasher-pass-toggle rule-inline-btn ${on ? "is-active" : ""}`;
     btn.title = title;
     btn.setAttribute("aria-label", title);
     btn.setAttribute("aria-pressed", String(on));
-    btn.innerHTML = on ? icons.reset(15) : icons.pencil(15);
+    btn.innerHTML = on ? icons.reset(14) : icons.pencil(14);
   }
 
   /** On the All gates view, list which gates override this rule. */
@@ -294,25 +301,15 @@ export class TimingRulesEditor extends Component {
     });
   }
 
-  private markDirty(): void {
-    this.dirty = true;
-    const button = this.el.querySelector<HTMLButtonElement>("button[type=submit]");
-    if (button) {
-      button.disabled = false;
-      button.classList.add("btn-primary");
-    }
-  }
-
   private async save(form: HTMLFormElement): Promise<void> {
     const data = new FormData(form);
-    this.dirty = false;
     if (this.scope === null) {
       const next = { ...this.store.rules };
       for (const spec of RULES) next[spec.key] = Number(data.get(spec.key));
       await this.api.updateRules(next);
       return;
     }
-    // Only ticked rules become overrides (disabled inputs aren't in the form data).
+    // Only unlocked/edited rules become overrides (disabled inputs aren't in the form data).
     const overrides: GateRuleOverrides = {};
     for (const spec of RULES) {
       if (!spec.perGate) continue;
