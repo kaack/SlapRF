@@ -1251,13 +1251,13 @@ body.is-gate-dragging * {
   bottom: 0;
 }
 .diverge-bar.is-loss {
-  left: 50%;
-  border-radius: 0 4px 4px 0;
+  right: 50%;
+  border-radius: 4px 0 0 4px;
   background: var(--bad);
 }
 .diverge-bar.is-gain {
-  right: 50%;
-  border-radius: 4px 0 0 4px;
+  left: 50%;
+  border-radius: 0 4px 4px 0;
   background: var(--good);
 }
 .cmp-table td small {
