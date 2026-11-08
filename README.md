@@ -80,13 +80,17 @@ flowchart LR
 4. At the field, connect each XIAO ESP32-C5 to a LIPO to USB-C Adapter and a LiPo battery. Place one timer at each gate.
 5. Open **System > Track** and drag each timer (`T1`, `T2`, `T3`, `T4`) onto the track line in the order pilots fly the course. Click the checkered flag icon below a gate to set the start gate.
 
-## Running the Server
+## Download and Run
 
-Build and start the server from the project directory:
+Download the latest standalone binary for your operating system from the [Releases page](https://github.com/kaack/SlapRF/releases/latest):
 
-```powershell
-go build -o fpvtimer.exe ./cmd/fpvtimer
-.\fpvtimer.exe
-```
+| Operating System | Download |
+| :--- | :--- |
+| **Windows (x64)** | [`slaprf-windows-amd64.exe`](https://github.com/kaack/SlapRF/releases/latest/download/slaprf-windows-amd64.exe) |
+| **macOS (Apple Silicon)** | [`slaprf-macos-arm64`](https://github.com/kaack/SlapRF/releases/latest/download/slaprf-macos-arm64) |
+| **macOS (Intel)** | [`slaprf-macos-amd64`](https://github.com/kaack/SlapRF/releases/latest/download/slaprf-macos-amd64) |
+| **Linux (x64)** | [`slaprf-linux-amd64`](https://github.com/kaack/SlapRF/releases/latest/download/slaprf-linux-amd64) |
+| **Linux (ARM64)** | [`slaprf-linux-arm64`](https://github.com/kaack/SlapRF/releases/latest/download/slaprf-linux-arm64) |
 
-Open `http://localhost:8090` in Chrome, Edge, or Brave.
+1. Run the downloaded executable (`slaprf-windows-amd64.exe` on Windows, or `chmod +x slaprf-* && ./slaprf-*` on macOS and Linux).
+2. Open `http://localhost:8090` in Chrome, Edge, or Brave.

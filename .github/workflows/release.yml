@@ -1,0 +1,44 @@
+name: Build and Release Binaries
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build Release Binaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
+      - name: Build Windows, macOS, and Linux binaries
+        run: |
+          mkdir -p dist
+          CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/slaprf-windows-amd64.exe ./cmd/fpvtimer
+          CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/slaprf-macos-arm64 ./cmd/fpvtimer
+          CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o dist/slaprf-macos-amd64 ./cmd/fpvtimer
+          CGO_ENABLED=0 GOOS=linux   GOARCH=amd64 go build -ldflags="-s -w" -o dist/slaprf-linux-amd64 ./cmd/fpvtimer
+          CGO_ENABLED=0 GOOS=linux   GOARCH=arm64 go build -ldflags="-s -w" -o dist/slaprf-linux-arm64 ./cmd/fpvtimer
+
+      - name: Publish GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/slaprf-windows-amd64.exe
+            dist/slaprf-macos-arm64
+            dist/slaprf-macos-amd64
+            dist/slaprf-linux-amd64
+            dist/slaprf-linux-arm64
+          generate_release_notes: true
