@@ -121,23 +121,6 @@
   color: var(--accent);
 }
 
-.sidebar-foot {
-  margin-top: auto;
-}
-.mini-gate {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-  color: var(--text-2);
-  font-size: 12px;
-}
-.mini-gate-batt {
-  margin-left: auto;
-  color: var(--text-3);
-  font-size: 11.5px;
-}
-
 /* Top bar ------------------------------------------------------------------ */
 .topbar {
   position: sticky;
@@ -235,7 +218,6 @@
 .topbar-nav-item.is-active {
   background: var(--surface-3);
   color: var(--text);
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 .topbar-nav-icon {
   width: 28px;
