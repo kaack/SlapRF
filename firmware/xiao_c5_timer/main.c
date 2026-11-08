@@ -7,10 +7,10 @@
  *       1. Connects to the laptop over Wi-Fi (either creating the "SlapRF" Wi-Fi AP
  *          or joining a configured SSID).
  *       2. Sweeps the 8 pilot 5.8 GHz VTX frequencies at 50 Hz.
- *       3. Listens for connectionless ESP-NOW bursts from Spoke Timers #2..#16 and
+ *       3. Listens for connectionless ESP-NOW bursts from Spoke Timers #2..#6 and
  *          forwards both its own frames and all Spoke Timer frames to the laptop
  *          over its single Wi-Fi UDP link.
- *   - Timers #2..#16 (ROLE_SPOKE_TIMER):
+ *   - Timers #2..#6 (ROLE_SPOKE_TIMER):
  *       Sit out on the track at any gate.
  *       Never join Wi-Fi, never need DHCP or passwords — they simply sweep 5.8 GHz
  *       and burst a 16-byte ESP-NOW packet to the Hub Timer in their staggered TDMA micro-slot.
@@ -20,18 +20,19 @@
 #include <string.h>
 
 #define MAX_PILOT_SLOTS         8
+#define MAX_TIMERS              6
 #define FRAME_MAGIC_0           0xC5
 #define FRAME_MAGIC_1           0x58
 
 #define ROLE_HUB_TIMER          1   // Hub Timer: Wi-Fi + ESP-NOW Bridge to Laptop
-#define ROLE_SPOKE_TIMER        2   // Spoke Timers #2..#16: ESP-NOW -> Hub Timer
+#define ROLE_SPOKE_TIMER        2   // Spoke Timers #2..#6: ESP-NOW -> Hub Timer
 
 #pragma pack(push, 1)
 typedef struct {
     char     magic[8];                        // "SLAPRF01"
     uint8_t  version;                         // 1
     uint8_t  role;                            // 1 = Hub Timer (Wi-Fi + ESP-NOW), 2 = Spoke Timer (ESP-NOW)
-    uint8_t  timer_id;                        // 1..16
+    uint8_t  timer_id;                        // 1..6
     uint8_t  wifi_mode;                       // 0 = Host "SlapRF" AP, 1 = Join wifi_ssid
     uint16_t slot_freqs_mhz[MAX_PILOT_SLOTS]; // 8 pilot frequencies in MHz
     uint16_t tdma_offset_us;                  // (timer_id - 1) * 350 us
@@ -44,7 +45,7 @@ typedef struct {
 typedef struct {
     uint8_t  magic0;                          // 0xC5
     uint8_t  magic1;                          // 0x58
-    uint8_t  timer_id;                        // 1..16
+    uint8_t  timer_id;                        // 1..6
     uint8_t  seq_num;                         // Rolling 0..255 frame counter
     uint16_t battery_mv;                      // Supply voltage in mV (e.g. 5000 on USB BEC)
     int8_t   noise_floor_dbm;                 // Ambient 5.8 GHz floor (e.g. -92)
@@ -101,7 +102,7 @@ void app_main(void) {
     }
 
     uint8_t timer_id = g_flash_cfg.timer_id;
-    if (timer_id < 1 || timer_id > 16) {
+    if (timer_id < 1 || timer_id > MAX_TIMERS) {
         timer_id = 1;
     }
 
@@ -126,7 +127,7 @@ void app_main(void) {
             // Hub Timer sends its own frame (plus any queued ESP-NOW Spoke frames) over Wi-Fi UDP
             slaprf_forward_udp_to_laptop(&frame);
         } else {
-            // Spoke Timers #2..#16 burst their 16-byte frame over connectionless ESP-NOW to the Hub Timer
+            // Spoke Timers #2..#6 burst their 16-byte frame over connectionless ESP-NOW to the Hub Timer
             delay_microseconds(g_flash_cfg.tdma_offset_us);
             espnow_send_to_hub_timer(&frame);
         }

@@ -11,9 +11,11 @@ import (
 	"fpv-gate-timer/internal/domain"
 )
 
+const maxTimers = 6
+
 var (
 	ErrUnknownGate     = errors.New("unknown gate")
-	ErrInvalidPuckID   = errors.New("puck ID must be between 1 and 16")
+	ErrInvalidPuckID   = errors.New("timer ID must be between 1 and 6")
 	ErrGateNameTooLong = errors.New("gate name is too long")
 	ErrInvalidGateRole = errors.New("unknown gate role")
 	ErrMinOneGate      = errors.New("at least one gate must remain on the course")
@@ -83,7 +85,7 @@ func (e *Engine) ProvisionGate(role string, puckLabel string) (uint8, error) {
 		if nextID < 1 {
 			nextID = 1
 		}
-		if nextID > 16 {
+		if nextID > maxTimers {
 			e.mu.Unlock()
 			return 0, ErrInvalidPuckID
 		}
@@ -158,7 +160,7 @@ func (e *Engine) AddGate(name string, assignedPuckID uint8, trackOrder ...int) (
 	if utf8.RuneCountInString(name) > domain.MaxGateNameLen {
 		return domain.GatePuck{}, ErrGateNameTooLong
 	}
-	if assignedPuckID > 16 {
+	if assignedPuckID > maxTimers {
 		return domain.GatePuck{}, ErrInvalidPuckID
 	}
 
@@ -173,14 +175,14 @@ func (e *Engine) AddGate(name string, assignedPuckID uint8, trackOrder ...int) (
 	if nextID < 1 {
 		nextID = 1
 	}
-	if nextID > 16 {
-		// Find first unused gate ID in 1..16
+	if nextID > maxTimers {
+		// Find first unused gate ID in 1..6
 		used := make(map[uint8]bool, len(e.pucks))
 		for _, p := range e.pucks {
 			used[p.PuckID] = true
 		}
 		nextID = 0
-		for id := uint8(1); id <= 16; id++ {
+		for id := uint8(1); id <= maxTimers; id++ {
 			if !used[id] {
 				nextID = id
 				break
@@ -281,7 +283,7 @@ func (e *Engine) RemoveGate(puckID uint8) error {
 // it to any gate currently tied to that puck.
 func (e *Engine) SetPuckColor(puckID uint8, color string) error {
 	color = strings.TrimSpace(color)
-	if puckID == 0 || puckID > 16 || color == "" {
+	if puckID == 0 || puckID > maxTimers || color == "" {
 		return ErrInvalidPuckID
 	}
 
@@ -335,7 +337,7 @@ func (e *Engine) UpdateGate(u domain.GateUpdate) error {
 	if u.Role != domain.PuckRoleStartFinish && u.Role != domain.PuckRoleSectorGate {
 		return ErrInvalidGateRole
 	}
-	if u.AssignedPuckID != nil && *u.AssignedPuckID > 16 {
+	if u.AssignedPuckID != nil && *u.AssignedPuckID > maxTimers {
 		return ErrInvalidPuckID
 	}
 

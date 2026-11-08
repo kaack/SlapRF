@@ -360,8 +360,8 @@ func (s *Server) handleFirmwareImage(w http.ResponseWriter, r *http.Request) {
 	var puckID uint8
 	if rawID := r.URL.Query().Get("puckId"); rawID != "" {
 		parsed, err := strconv.Atoi(rawID)
-		if err != nil || parsed < 1 || parsed > 16 {
-			http.Error(w, "invalid puckId", http.StatusBadRequest)
+		if err != nil || parsed < 1 || parsed > 6 {
+			http.Error(w, "invalid timerId", http.StatusBadRequest)
 			return
 		}
 		puckID = uint8(parsed)

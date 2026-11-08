@@ -13,11 +13,11 @@ SlapRF does not replace official race timing systems such as **MultiGP LiveTime*
 You can use SlapRF in two ways:
 
 1. **Companion to MultiGP LiveTime**: SlapRF emulates an ImmersionRC LapRF 8-way timer over TCP on port `5403`. When you connect LiveTime to `localhost:5403`, SlapRF receives the pilot callsigns and 5.8 GHz frequencies from LiveTime. When a pilot crosses the start gate, SlapRF sends that crossing to LiveTime for official lap scoring and records the intermediate section splits (`S1`, `S2`, `S3`, `S4`) in the SlapRF web interface.
-2. **Standalone practice timer**: You can run SlapRF on a laptop at the field with 1 to 16 timers. The web interface provides spoken lap times, live 5.8 GHz RSSI graphs, threshold calibration, and lap comparisons. You can also enable the built-in simulator to test the software without hardware.
+2. **Standalone practice timer**: You can run SlapRF on a laptop at the field with 1 to 6 timers. The web interface provides spoken lap times, live 5.8 GHz RSSI graphs, threshold calibration, and lap comparisons. You can also enable the built-in simulator to test the software without hardware.
 
 ## How It Works
 
-A SlapRF setup uses one **Hub timer** and up to 15 **Spoke timers**:
+A SlapRF setup uses one **Hub timer** and up to 5 **Spoke timers** (up to 6 timers total):
 
 - **Hub timer**: Connects to your laptop over Wi-Fi or a mobile hotspot. It measures 5.8 GHz RSSI at its own gate and receives data from all Spoke timers.
 - **Spoke timers**: Measure 5.8 GHz RSSI at other gates on the track and send their readings to the Hub timer over ESP-NOW. Spoke timers do not need Wi-Fi credentials.

@@ -38,7 +38,7 @@ const (
 	imageSize   = 64 * 1024
 	configOff   = 0x0100 // Fixed offset of the 128-byte SLAPRF01 config struct inside the binary
 	configLen   = 128
-	maxTimerID  = 16
+	maxTimerID  = 6
 	minFreqMHz  = 5600
 	maxFreqMHz  = 5950
 	maxSSIDLen  = 32
@@ -47,7 +47,7 @@ const (
 )
 
 var (
-	ErrInvalidTimerID = errors.New("timer ID must be between 1 and 16")
+	ErrInvalidTimerID = errors.New("timer ID must be between 1 and 6")
 	ErrInvalidPuckID  = ErrInvalidTimerID
 	ErrSSIDTooLong    = errors.New("Wi-Fi SSID must be at most 32 bytes")
 	ErrPassTooLong    = errors.New("Wi-Fi password must be at most 39 bytes")

@@ -62,7 +62,7 @@ func TestBuildRejectsInvalidTimerID(t *testing.T) {
 	if _, err := BuildXIAOC5Image(TimerConfig{PuckID: 0}); err == nil {
 		t.Fatal("expected error for timerId=0")
 	}
-	if _, err := BuildXIAOC5Image(TimerConfig{PuckID: 17}); err == nil {
-		t.Fatal("expected error for timerId=17")
+	if _, err := BuildXIAOC5Image(TimerConfig{PuckID: 7}); err == nil {
+		t.Fatal("expected error for timerId=7")
 	}
 }
