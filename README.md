@@ -28,12 +28,12 @@ You flash and configure the timers from Chrome, Edge, or Brave over USB. No comp
 
 Each gate timer uses four off-the-shelf parts. One XIAO ESP32-C5 draws less than `100 mA` at `5 V` (`0.5 W`), so a standard 4S or 6S FPV LiPo battery powers a timer for more than 24 hours.
 
-| Part | Purpose | Manufacturer Links | Est. Cost (USD) |
+| Part | Purpose | Product Links | Est. Cost (USD) |
 | :--- | :--- | :--- | :--- |
-| **Seeed Studio XIAO ESP32-C5** (includes external 2.4 / 5 GHz U.FL antenna) | Measures 5.8 GHz VTX signal strength and sends data over ESP-NOW and Wi-Fi. | [Seeed Studio Product Page](https://www.seeedstudio.com/Seeed-Studio-XIAO-ESP32C5-p-6609.html) · [Seeed Wiki](https://wiki.seeedstudio.com/xiao_esp32c5_getting_started/) | $5.90 |
-| **XT60-to-USB 5V BEC adapter** | Converts 2S to 6S (`7.4 V` to `25.2 V`) LiPo battery power to `5 V` USB output. | [SpeedyBee](https://www.speedybee.com) · [iFlight](https://shop.iflight.com) · [ToolkitRC](https://www.toolkitrc.com) · [Matek Systems](https://www.mateksys.com) | $4.00 – $8.00 |
-| **USB-C cable** | Connects the 5V BEC adapter to the XIAO ESP32-C5. Also used to flash firmware from a laptop. | [Seeed Studio](https://www.seeedstudio.com) | $2.00 |
-| **2S–6S FPV LiPo battery (XT60)** | Powers the timer in the field. | [Tattu / Gens ace](https://www.genstattu.com) · [CNHL](https://chinahobbyline.com) · [GNB](https://www.gaoneng.shop) | $0 (spare pack) or $12.00 new |
+| **Seeed Studio XIAO ESP32-C5** (includes external 2.4 / 5 GHz U.FL antenna) | Measures 5.8 GHz VTX signal strength and sends data over ESP-NOW and Wi-Fi. | [Seeed Studio XIAO ESP32-C5](https://www.seeedstudio.com/Seeed-Studio-XIAO-ESP32C5-p-6609.html) | $5.90 |
+| **XT60-to-USB 5V BEC adapter** | Converts 2S to 6S (`7.4 V` to `25.2 V`) LiPo battery power to `5 V` USB output. | [AOKoda XT60 to USB Converter](https://newbeedrone.com/products/aokoda-xt60-to-qc3-0-usb-charger) · [SpeedyBee Adapter 3](https://www.speedybee.com/speedybee-adapter-3/) | $4.00 – $12.00 |
+| **USB-C cable** | Connects the 5V BEC adapter to the XIAO ESP32-C5. Also used to flash firmware from a laptop. | [Seeed USB Type-C to A Cable (1m)](https://www.seeedstudio.com/USB-3-1-Type-C-to-A-Cable-1-Meter-3-1A-p-4085.html) | $2.00 |
+| **2S–6S FPV LiPo battery (XT60)** | Powers the timer in the field. | [Tattu R-Line 1300mAh 6S XT60](https://genstattu.com/tattu-le-r-line-6-0-1300-6s-160c-lipo-xt60/) | $0 (spare pack) or $25.00+ new |
 
 ### Estimated Total Cost
 
