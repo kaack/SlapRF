@@ -2588,6 +2588,12 @@ body.is-gate-dragging * {
   color: var(--accent);
 }
 
+.sim-status-charging {
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.42);
+  color: #fbbf24;
+}
+
 .sim-status-paused {
   background: var(--surface-2);
   border-color: var(--border);
@@ -2603,7 +2609,7 @@ body.is-gate-dragging * {
 .sim-batt-block {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 8px;
 }
 
 .sim-metric-label {
@@ -2614,8 +2620,71 @@ body.is-gate-dragging * {
   color: var(--text-2);
 }
 
-.sim-batt-meter {
-  height: 7px;
+.sim-packs-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 7px;
+}
+
+.sim-pack-slot {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.sim-pack-slot.is-active-pack {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+}
+
+.sim-pack-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+}
+
+.sim-pack-title {
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.sim-pack-chip {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 4px;
+  letter-spacing: 0.02em;
+}
+
+.sim-pack-chip.is-in-quad {
+  background: rgba(56, 189, 248, 0.18);
+  color: var(--accent);
+}
+
+.sim-pack-chip.is-ready {
+  background: rgba(52, 211, 153, 0.16);
+  color: var(--good);
+}
+
+.sim-pack-chip.is-charging {
+  background: rgba(245, 158, 11, 0.18);
+  color: #fbbf24;
+}
+
+.sim-pack-val {
+  font-size: 11px;
+  color: var(--text);
+}
+
+.sim-pack-meter {
+  height: 5px;
 }
 
 .sim-telemetry-grid {

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"slaprf/internal/tracker"
+	_ "slaprf/web"
 )
 
 // TestSimulatedLapsVisitEveryGate runs 10 simulated minutes on a deterministic clock and
@@ -67,13 +68,23 @@ func TestSimulatorControlsAndTimerLifecycle(t *testing.T) {
 	if snap.Pilots[0].Status != "WALKING_RECOVERY" || snap.Pilots[0].StateRemainingSec <= 0 {
 		t.Fatalf("expected crashed pilot to enter WALKING_RECOVERY on field during track walk, got %+v", snap.Pilots[0])
 	}
-	if snap.Pilots[1].Status != "AVOIDING" && snap.Pilots[1].Status != "PIT_SWAP" {
-		t.Fatalf("expected flying pilot to react by climbing to AVOIDING or returning to PIT_SWAP, got %+v", snap.Pilots[1])
+	if snap.Pilots[1].Status != "AVOIDING" && snap.Pilots[1].Status != "PIT_SWAP" && snap.Pilots[1].Status != "PILOT_BREAK" && snap.Pilots[1].Status != "CHARGING_WAIT" {
+		t.Fatalf("expected flying pilot to react by climbing to AVOIDING or returning to pits, got %+v", snap.Pilots[1])
 	}
 	sim.SetTrackWalker(false)
 	snap = sim.Snapshot()
-	if snap.Pilots[0].Status != "PIT_SWAP" {
-		t.Fatalf("expected crashed pilot to move to PIT_SWAP after recovery walk finishes, got %s", snap.Pilots[0].Status)
+	if snap.Pilots[0].Status != "PIT_SWAP" && snap.Pilots[0].Status != "PILOT_BREAK" && snap.Pilots[0].Status != "CHARGING_WAIT" {
+		t.Fatalf("expected crashed pilot to move to pit state after recovery walk finishes, got %s", snap.Pilots[0].Status)
+	}
+	if len(snap.Pilots[0].Packs) != 3 {
+		t.Fatalf("expected 3 LiPo packs per pilot, got %d", len(snap.Pilots[0].Packs))
+	}
+
+	// Slot 3 (Din) starts with Pack #2 (64%) and Pack #3 (28%) charging; pitting unplugs Pack #1 and enters CHARGING_WAIT
+	sim.TriggerPilotAction(3, "pit")
+	snap = sim.Snapshot()
+	if snap.Pilots[2].Status != "CHARGING_WAIT" {
+		t.Fatalf("expected slot 3 to enter CHARGING_WAIT when all 3 packs are < 100%%, got %s", snap.Pilots[2].Status)
 	}
 
 	// 3. Toggle power off on T2, add T5, delete T5

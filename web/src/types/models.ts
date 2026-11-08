@@ -180,7 +180,18 @@ export type SimPilotStatus =
   | "CRASHED_WAITING_RECOVERY"
   | "WALKING_RECOVERY"
   | "PIT_SWAP"
+  | "CHARGING_WAIT"
+  | "PILOT_BREAK"
   | "PAUSED";
+
+export type SimBatteryPackState = "IN_QUAD" | "READY" | "CHARGING";
+
+export interface SimBatteryPack {
+  packIndex: number;
+  pct: number;
+  volts: number;
+  state: SimBatteryPackState;
+}
 
 export interface SimPilotState {
   slotIndex: number;
@@ -192,6 +203,7 @@ export interface SimPilotState {
   status: SimPilotStatus;
   batteryPct: number;
   batteryVolts: number;
+  packs: SimBatteryPack[];
   trackProgress: number;
   speedMph: number;
   altitudeMeters: number;

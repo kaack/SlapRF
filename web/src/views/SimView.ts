@@ -5,7 +5,14 @@ import { ApiClient } from "../services/api_client";
 import { FIRMWARE_RELEASES, LATEST_FIRMWARE_VERSION } from "../services/esp_flasher";
 import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { SimPilotState, SimPilotStatus, SimState, SimTimerState, TrackNode } from "../types/models";
+import {
+  SimBatteryPack,
+  SimPilotState,
+  SimPilotStatus,
+  SimState,
+  SimTimerState,
+  TrackNode,
+} from "../types/models";
 import { renderSectionCapsuleIcon } from "../widgets/markup";
 
 interface PilotMotionState {
@@ -74,6 +81,18 @@ function statusMeta(p: SimPilotState): { label: string; badgeClass: string; hint
         badgeClass: "sim-status-pit",
         hint: "Retrieving quad, unplugging spent LiPo, strapping fresh 6S pack at bench, and walking back to launch pad (30–60s)",
       };
+    case "CHARGING_WAIT":
+      return {
+        label: `Waiting for Charge${sec}`,
+        badgeClass: "sim-status-charging",
+        hint: "All 3 6S packs are depleted — waiting at the pit bench until a battery finishes charging to 100%",
+      };
+    case "PILOT_BREAK":
+      return {
+        label: `Taking a Break${sec}`,
+        badgeClass: "sim-status-paused",
+        hint: "Pilot decided to take a breather at the bench while batteries charge on the field charger",
+      };
     case "PAUSED":
       return {
         label: "Paused in Pits",
@@ -103,25 +122,86 @@ function formatDroneTagText(p: SimPilotState): string {
   }
 }
 
+function isPilotInPits(status: SimPilotStatus): boolean {
+  return (
+    status === "PIT_SWAP" ||
+    status === "CHARGING_WAIT" ||
+    status === "PILOT_BREAK" ||
+    status === "PAUSED"
+  );
+}
+
 function formatPitSubText(p: SimPilotState): string {
-  if (p.status === "PIT_SWAP") {
-    const sec = Math.ceil(p.stateRemainingSec);
-    if (p.batteryPct === 0) {
-      return `Unplugged · bench pack swap (${sec}s)`;
-    }
-    return `Fresh 6S plugged in · arming (${sec}s)`;
+  const sec = Math.ceil(p.stateRemainingSec);
+  switch (p.status) {
+    case "PIT_SWAP":
+      if (p.batteryPct === 0) {
+        return `Unplugged · bench pack swap (${sec}s)`;
+      }
+      return `Fresh 6S plugged in · arming (${sec}s)`;
+    case "CHARGING_WAIT":
+      return `All 3 packs charging · ready in ${sec}s`;
+    case "PILOT_BREAK":
+      return `Taking a break at bench (${sec}s)`;
+    default:
+      return `Paused on bench`;
   }
-  return `Paused on bench · ${p.batteryPct}%`;
 }
 
 function formatPilotBattHtml(p: SimPilotState): string {
-  if (p.status === "PIT_SWAP" && p.batteryPct === 0) {
-    return `<span class="muted">Unplugged</span> · 0.0 V`;
+  const inQuad = (p.packs ?? []).find((pk) => pk.state === "IN_QUAD");
+  if (!inQuad || p.batteryPct === 0) {
+    return `<span class="muted">Quad unplugged</span> · 0.0 V`;
   }
-  if (p.status === "PIT_SWAP" && p.batteryPct === 100) {
-    return `<strong>100%</strong> · ${p.batteryVolts.toFixed(1)} V <span class="muted">(New pack)</span>`;
+  return `<strong>Pack #${inQuad.packIndex}</strong> · ${inQuad.pct}% (${inQuad.volts.toFixed(1)} V)`;
+}
+
+function formatPackStateChip(pack: SimBatteryPack): { text: string; cls: string } {
+  switch (pack.state) {
+    case "IN_QUAD":
+      return { text: "IN QUAD", cls: "is-in-quad" };
+    case "READY":
+      return { text: "READY", cls: "is-ready" };
+    case "CHARGING":
+      return { text: "CHG ⚡", cls: "is-charging" };
   }
-  return `<strong>${p.batteryPct}%</strong> · ${p.batteryVolts.toFixed(1)} V`;
+}
+
+function formatPackTone(pack: SimBatteryPack): string {
+  if (pack.state === "CHARGING") return "warn";
+  if (pack.pct <= 20) return "bad";
+  if (pack.pct <= 45) return "warn";
+  return "good";
+}
+
+function renderPilotPacksHtml(p: SimPilotState): string {
+  const packs: SimBatteryPack[] =
+    p.packs && p.packs.length === 3
+      ? p.packs
+      : [
+          { packIndex: 1, pct: p.batteryPct, volts: p.batteryVolts, state: "IN_QUAD" },
+          { packIndex: 2, pct: 100, volts: 25.2, state: "READY" },
+          { packIndex: 3, pct: 64, volts: 23.7, state: "CHARGING" },
+        ];
+  return packs
+    .map((pk) => {
+      const chip = formatPackStateChip(pk);
+      const tone = formatPackTone(pk);
+      return `
+        <div class="sim-pack-slot ${pk.state === "IN_QUAD" ? "is-active-pack" : ""}" data-pilot-pack-slot="${p.slotIndex}-${pk.packIndex}">
+          <div class="sim-pack-head">
+            <span class="sim-pack-title">Pack #${pk.packIndex}</span>
+            <span class="sim-pack-chip ${chip.cls}" data-pilot-pack-chip="${p.slotIndex}-${pk.packIndex}">${chip.text}</span>
+          </div>
+          <div class="sim-pack-val mono" data-pilot-pack-val="${p.slotIndex}-${pk.packIndex}">
+            <strong>${pk.pct}%</strong> · ${pk.volts.toFixed(1)}V
+          </div>
+          <div class="meter sim-pack-meter">
+            <span class="meter-fill tone-${tone}" data-pilot-pack-bar="${p.slotIndex}-${pk.packIndex}" style="width:${Math.max(4, pk.pct)}%"></span>
+          </div>
+        </div>`;
+    })
+    .join("");
 }
 
 export class SimView extends Component {
@@ -435,12 +515,8 @@ export class SimView extends Component {
       (simState?.timers ?? []).map((t) => [t.puckId, t])
     );
 
-    const onTrackPilots = pilots.filter(
-      (p) => p.status !== "PIT_SWAP" && p.status !== "PAUSED"
-    );
-    const pitPilots = pilots.filter(
-      (p) => p.status === "PIT_SWAP" || p.status === "PAUSED"
-    );
+    const onTrackPilots = pilots.filter((p) => !isPilotInPits(p.status));
+    const pitPilots = pilots.filter((p) => isPilotInPits(p.status));
 
     const structSig = [
       walkerActive ? "W1" : "W0",
@@ -680,7 +756,7 @@ export class SimView extends Component {
             p.status === "TURTLE_FAILED" ||
             p.status === "CRASHED_WAITING_RECOVERY" ||
             p.status === "WALKING_RECOVERY";
-          const isParked = p.status === "PIT_SWAP" || p.status === "PAUSED";
+          const isParked = isPilotInPits(p.status);
           const isTurtleBusy =
             p.status === "TURTLE_RECOVERY" || p.status === "WALKING_RECOVERY";
           const isWalkingOut = p.status === "WALKING_RECOVERY";
@@ -699,11 +775,11 @@ export class SimView extends Component {
               <div class="sim-pilot-metrics">
                 <div class="sim-batt-block">
                   <div class="sim-metric-label">
-                    <span>6S LiPo Flight Pack</span>
+                    <span>3-Pack 6S LiPo Rotation (Bench Charger)</span>
                     <span class="mono" data-pilot-batt-text="${p.slotIndex}">${formatPilotBattHtml(p)}</span>
                   </div>
-                  <div class="meter sim-batt-meter">
-                    <span class="meter-fill tone-${tone}" data-pilot-batt-bar="${p.slotIndex}" style="width:${p.batteryPct === 0 ? 0 : Math.max(4, p.batteryPct)}%"></span>
+                  <div class="sim-packs-grid">
+                    ${renderPilotPacksHtml(p)}
                   </div>
                 </div>
 
@@ -744,17 +820,17 @@ export class SimView extends Component {
                         ${icons.zapOff(13)}<span>Force crash</span>
                       </button>`
                 }
-                <button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pit" ${p.status === "PIT_SWAP" || isCrashed ? "disabled" : ""} title="Bring pilot into the pit bench to swap to a fresh 6S battery pack (30–60s)">
+                <button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pit" ${p.status === "PIT_SWAP" || p.status === "CHARGING_WAIT" || isCrashed ? "disabled" : ""} title="Bring pilot into the pit bench to swap to a fresh 6S battery pack (30–60s)">
                   ${icons.reset(13)}<span>Swap battery</span>
                 </button>
                 ${
                   isParked
-                    ? `<button class="btn btn-sm btn-armed" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" title="Launch immediately from the starting line with a fresh 100% pack">
+                    ? `<button class="btn btn-sm btn-armed" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" title="Top up best pack to 100% and launch immediately from the starting line">
                         ${icons.play(13)}<span>Launch now</span>
                       </button>`
                     : !isCrashed
-                    ? `<button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pause" title="Land and pause flight on the pit bench with VTX off">
-                        ${icons.pause(13)}<span>Pause flight</span>
+                    ? `<button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="break" title="Land in the pits and take a 60–90s break while batteries charge">
+                        ${icons.pause(13)}<span>Take break</span>
                       </button>`
                     : ""
                 }
@@ -773,8 +849,7 @@ export class SimView extends Component {
     // Update live telemetry numbers in-place without recreating pilot cards
     for (const p of activePilots) {
       const meta = statusMeta(p);
-      const tone = p.batteryPct <= 20 ? "bad" : p.batteryPct <= 45 ? "warn" : "good";
-      const isParked = p.status === "PIT_SWAP" || p.status === "PAUSED";
+      const isParked = isPilotInPits(p.status);
 
       const badge = this.el.querySelector<HTMLElement>(`[data-pilot-badge="${p.slotIndex}"]`);
       if (badge) {
@@ -786,10 +861,35 @@ export class SimView extends Component {
       if (battText) {
         battText.innerHTML = formatPilotBattHtml(p);
       }
-      const battBar = this.el.querySelector<HTMLElement>(`[data-pilot-batt-bar="${p.slotIndex}"]`);
-      if (battBar) {
-        battBar.className = `meter-fill tone-${tone}`;
-        battBar.style.width = `${p.batteryPct === 0 ? 0 : Math.max(4, p.batteryPct)}%`;
+      for (const pk of p.packs ?? []) {
+        const chip = formatPackStateChip(pk);
+        const tone = formatPackTone(pk);
+        const slotEl = this.el.querySelector<HTMLElement>(
+          `[data-pilot-pack-slot="${p.slotIndex}-${pk.packIndex}"]`
+        );
+        if (slotEl) {
+          slotEl.className = `sim-pack-slot ${pk.state === "IN_QUAD" ? "is-active-pack" : ""}`;
+        }
+        const chipEl = this.el.querySelector<HTMLElement>(
+          `[data-pilot-pack-chip="${p.slotIndex}-${pk.packIndex}"]`
+        );
+        if (chipEl) {
+          chipEl.textContent = chip.text;
+          chipEl.className = `sim-pack-chip ${chip.cls}`;
+        }
+        const valEl = this.el.querySelector<HTMLElement>(
+          `[data-pilot-pack-val="${p.slotIndex}-${pk.packIndex}"]`
+        );
+        if (valEl) {
+          valEl.innerHTML = `<strong>${pk.pct}%</strong> · ${pk.volts.toFixed(1)}V`;
+        }
+        const barEl = this.el.querySelector<HTMLElement>(
+          `[data-pilot-pack-bar="${p.slotIndex}-${pk.packIndex}"]`
+        );
+        if (barEl) {
+          barEl.className = `meter-fill tone-${tone}`;
+          barEl.style.width = `${Math.max(4, pk.pct)}%`;
+        }
       }
       const speedEl = this.el.querySelector<HTMLElement>(`[data-pilot-speed="${p.slotIndex}"]`);
       if (speedEl) {

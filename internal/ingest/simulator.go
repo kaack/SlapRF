@@ -21,12 +21,70 @@ type simPilotState struct {
 	weaknessPenalty float64 // speed multiplier in weak sector (e.g. 0.76)
 
 	status             domain.SimPilotStatus
-	batteryPct         float64 // 0..100%
-	stateTimerSec      float64 // countdown for current state machine phase
-	turtleForceSuccess bool    // true when user explicitly clicked "Turtle recover"
-	wantPitAtFinish    bool    // true when battery is low and pilot will pit upon crossing Gate 1
+	batteryPct         float64    // 0..100% (active pack in quad, or 0 when unplugged)
+	packPct            [3]float64 // 0..100% for each of the pilot's 3 6S LiPo packs
+	activePackIdx      int        // 0..2 when plugged into quad, -1 when quad is unplugged
+	stateTimerSec      float64    // countdown for current state machine phase
+	turtleForceSuccess bool       // true when user explicitly clicked "Turtle recover"
+	wantPitAtFinish    bool       // true when battery is low and pilot will pit upon crossing Gate 1
 	crashesCount       int
 	packsFlown         int
+}
+
+func (ps *simPilotState) unplugActivePack() {
+	if ps.activePackIdx >= 0 && ps.activePackIdx < 3 {
+		if ps.packPct[ps.activePackIdx] >= 99.5 {
+			ps.packPct[ps.activePackIdx] = 92.0
+		}
+	}
+	ps.activePackIdx = -1
+	ps.batteryPct = 0.0
+}
+
+func (ps *simPilotState) findReadyPack() int {
+	for k := 0; k < 3; k++ {
+		if k != ps.activePackIdx && ps.packPct[k] >= 99.5 {
+			return k
+		}
+	}
+	return -1
+}
+
+func (ps *simPilotState) maxPackPct() float64 {
+	best := 0.0
+	for k := 0; k < 3; k++ {
+		if ps.packPct[k] > best {
+			best = ps.packPct[k]
+		}
+	}
+	return best
+}
+
+func (ps *simPilotState) plugInReadyOrBestPack(forceTopUp bool) bool {
+	if ps.activePackIdx >= 0 && ps.activePackIdx < 3 && ps.packPct[ps.activePackIdx] >= 25.0 && !forceTopUp {
+		ps.batteryPct = ps.packPct[ps.activePackIdx]
+		return true
+	}
+	readyIdx := ps.findReadyPack()
+	if readyIdx >= 0 {
+		ps.activePackIdx = readyIdx
+		ps.packPct[readyIdx] = 100.0
+		ps.batteryPct = 100.0
+		return true
+	}
+	if forceTopUp {
+		bestIdx := 0
+		for k := 1; k < 3; k++ {
+			if ps.packPct[k] > ps.packPct[bestIdx] {
+				bestIdx = k
+			}
+		}
+		ps.activePackIdx = bestIdx
+		ps.packPct[bestIdx] = 100.0
+		ps.batteryPct = 100.0
+		return true
+	}
+	return false
 }
 
 // TrackSimulator generates realistic 50 Hz multi-gate 5.8 GHz SDR telemetry streams
@@ -95,6 +153,24 @@ func (s *TrackSimulator) resetPilotsLocked() {
 
 	s.pilotStates = make([]simPilotState, len(baseConfigs))
 	for i, cfg := range baseConfigs {
+		// Stagger the 2 bench batteries across pilots so some have 100% READY packs waiting
+		// while others already have packs on the field charger (so charge waits happen naturally).
+		pack2 := 100.0
+		pack3 := 100.0
+		switch i % 4 {
+		case 0:
+			pack2 = 100.0
+			pack3 = 52.0
+		case 1:
+			pack2 = 100.0
+			pack3 = 100.0
+		case 2:
+			pack2 = 64.0
+			pack3 = 28.0
+		case 3:
+			pack2 = 100.0
+			pack3 = 42.0
+		}
 		s.pilotStates[i] = simPilotState{
 			slotIndex:       i + 1,
 			trackPosMeters:  cfg.pos,
@@ -105,9 +181,34 @@ func (s *TrackSimulator) resetPilotsLocked() {
 			weaknessPenalty: cfg.penalty,
 			status:          domain.SimStatusFlying,
 			batteryPct:      cfg.battPct,
+			packPct:         [3]float64{cfg.battPct, pack2, pack3},
+			activePackIdx:   0,
 			packsFlown:      1,
 		}
 	}
+}
+
+func (s *TrackSimulator) enterPitAfterFlightLocked(ps *simPilotState) {
+	ps.unplugActivePack()
+	ps.altitudeMeters = 0.0
+	ps.currentSpeedMps = 0.0
+	ps.wantPitAtFinish = false
+	ps.trackPosMeters = s.trackLengthMeters - 12.0
+
+	// If all 3 batteries are currently charging (< 100%), pilot must wait for a pack to finish charging
+	if ps.findReadyPack() < 0 {
+		ps.status = domain.SimStatusChargingWait
+		ps.stateTimerSec = 0
+		return
+	}
+	// ~28% of the time after landing, pilot decides to take a break at the bench before strapping the next pack
+	if !s.prewarming && s.autoPracticeEvents && s.rng.Float64() < 0.28 {
+		ps.status = domain.SimStatusPilotBreak
+		ps.stateTimerSec = 45.0 + s.rng.Float64()*45.0
+		return
+	}
+	ps.status = domain.SimStatusPitSwap
+	ps.stateTimerSec = 30.0 + s.rng.Float64()*30.0
 }
 
 // Prewarm fast-forwards the simulation by `d` at startup so the UI immediately
@@ -169,6 +270,8 @@ func (s *TrackSimulator) TriggerPackBurst() {
 	for i := range s.pilotStates {
 		ps := &s.pilotStates[i]
 		ps.status = domain.SimStatusFlying
+		ps.packPct = [3]float64{100.0, 100.0, 100.0}
+		ps.activePackIdx = 0
 		ps.batteryPct = 100.0
 		ps.wantPitAtFinish = false
 		ps.stateTimerSec = 0
@@ -199,12 +302,7 @@ func (s *TrackSimulator) SetTrackWalker(active bool) {
 				// pilots with fuller packs stay airborne and fly high until the track is cleared.
 				returnToBench := ps.batteryPct < 72.0 || (avoidingCount > 0 && s.rng.Float64() < 0.35)
 				if returnToBench {
-					ps.status = domain.SimStatusPitSwap
-					ps.stateTimerSec = 30.0 + s.rng.Float64()*30.0
-					ps.batteryPct = 0.0
-					ps.altitudeMeters = 0.0
-					ps.currentSpeedMps = 0.0
-					ps.trackPosMeters = s.trackLengthMeters - 12.0
+					s.enterPitAfterFlightLocked(ps)
 				} else {
 					ps.status = domain.SimStatusAvoiding
 					ps.altitudeMeters = 14.0
@@ -235,13 +333,8 @@ func (s *TrackSimulator) SetTrackWalker(active bool) {
 				ps.trackPosMeters = s.trackLengthMeters - 14.0 - float64(i)*4.0
 				clearSlots = append(clearSlots, ps.slotIndex)
 			case domain.SimStatusCrashedRecovery, domain.SimStatusWalkingRecovery:
-				// Recovery walk completed: quad is now back at the pit bench for a fresh pack
-				ps.status = domain.SimStatusPitSwap
-				ps.stateTimerSec = 25.0 + s.rng.Float64()*20.0
-				ps.batteryPct = 0.0
-				ps.altitudeMeters = 0.0
-				ps.currentSpeedMps = 0.0
-				ps.trackPosMeters = s.trackLengthMeters - 12.0
+				// Recovery walk completed: quad is now back at the pit bench
+				s.enterPitAfterFlightLocked(ps)
 				clearSlots = append(clearSlots, ps.slotIndex)
 			}
 		}
@@ -295,25 +388,37 @@ func (s *TrackSimulator) TriggerPilotAction(slotIndex int, action string) {
 			ps.currentSpeedMps = 0
 			ps.altitudeMeters = 0.15
 		case "pit":
-			ps.status = domain.SimStatusPitSwap
-			ps.stateTimerSec = 30.0 + s.rng.Float64()*30.0
-			ps.batteryPct = 0
+			ps.unplugActivePack()
+			if ps.findReadyPack() < 0 {
+				ps.status = domain.SimStatusChargingWait
+				ps.stateTimerSec = 0
+			} else {
+				ps.status = domain.SimStatusPitSwap
+				ps.stateTimerSec = 30.0 + s.rng.Float64()*30.0
+			}
 			ps.currentSpeedMps = 0
 			ps.altitudeMeters = 0
 			ps.wantPitAtFinish = false
 			ps.trackPosMeters = s.trackLengthMeters - 12.0
 			clearProgress = true
-		case "pause":
-			ps.status = domain.SimStatusPaused
-			ps.stateTimerSec = 0
+		case "pause", "break":
+			ps.unplugActivePack()
+			if action == "break" {
+				ps.status = domain.SimStatusPilotBreak
+				ps.stateTimerSec = 60.0 + s.rng.Float64()*30.0
+			} else {
+				ps.status = domain.SimStatusPaused
+				ps.stateTimerSec = 0
+			}
 			ps.currentSpeedMps = 0
 			ps.altitudeMeters = 0
 			ps.wantPitAtFinish = false
 			ps.trackPosMeters = s.trackLengthMeters - 12.0
 			clearProgress = true
 		case "launch", "resume":
-			if ps.batteryPct < 25.0 || ps.status == domain.SimStatusPitSwap {
-				ps.batteryPct = 100.0
+			wasUnplugged := ps.activePackIdx < 0 || ps.batteryPct < 25.0
+			ps.plugInReadyOrBestPack(true)
+			if wasUnplugged {
 				ps.packsFlown++
 			}
 			ps.wantPitAtFinish = false
@@ -422,6 +527,23 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 		if ps.batteryPct > 0 {
 			volts = 21.0 + (ps.batteryPct/100.0)*4.2 // 6S LiPo: 21.0V (3.5V/cell) .. 25.2V (4.2V/cell)
 		}
+		var packs [3]domain.SimBatteryPack
+		for k := 0; k < 3; k++ {
+			pct := math.Max(0, math.Min(100, ps.packPct[k]))
+			pVolts := 21.0 + (pct/100.0)*4.2
+			pState := domain.SimPackCharging
+			if k == ps.activePackIdx {
+				pState = domain.SimPackInQuad
+			} else if pct >= 99.5 {
+				pState = domain.SimPackReady
+			}
+			packs[k] = domain.SimBatteryPack{
+				PackIndex: k + 1,
+				Pct:       uint8(math.Round(pct)),
+				Volts:     math.Round(pVolts*100) / 100,
+				State:     pState,
+			}
+		}
 		simPilots = append(simPilots, domain.SimPilotState{
 			SlotIndex:         p.SlotIndex,
 			Callsign:          p.Callsign,
@@ -432,6 +554,7 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 			Status:            ps.status,
 			BatteryPct:        uint8(math.Round(math.Max(0, math.Min(100, ps.batteryPct)))),
 			BatteryVolts:      math.Round(volts*100) / 100,
+			Packs:             packs,
 			TrackProgress:     math.Round((ps.trackPosMeters/s.trackLengthMeters)*1000) / 1000,
 			SpeedMph:          speedMph,
 			AltitudeMeters:    ps.altitudeMeters,
@@ -537,12 +660,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 					clearSlots = append(clearSlots, ps.slotIndex)
 				case domain.SimStatusCrashedRecovery, domain.SimStatusWalkingRecovery:
 					// Walk completed: quad has been carried off the field back to the pit bench
-					ps.status = domain.SimStatusPitSwap
-					ps.stateTimerSec = 25.0 + s.rng.Float64()*20.0
-					ps.batteryPct = 0.0
-					ps.altitudeMeters = 0.0
-					ps.currentSpeedMps = 0.0
-					ps.trackPosMeters = s.trackLengthMeters - 10.0
+					s.enterPitAfterFlightLocked(ps)
 					clearSlots = append(clearSlots, ps.slotIndex)
 				}
 			}
@@ -599,6 +717,15 @@ func (s *TrackSimulator) step(dtSec float64) {
 			continue
 		}
 
+		// Continuously charge any bench packs that are not currently plugged into the quad (~0.32%/s)
+		if !s.prewarming && s.autoPracticeEvents {
+			for k := 0; k < 3; k++ {
+				if k != ps.activePackIdx && ps.packPct[k] < 100.0 {
+					ps.packPct[k] = math.Min(100.0, ps.packPct[k]+dtSec*0.32)
+				}
+			}
+		}
+
 		switch ps.status {
 		case domain.SimStatusPaused:
 			ps.currentSpeedMps = 0
@@ -622,8 +749,8 @@ func (s *TrackSimulator) step(dtSec float64) {
 				// Step 2 -> Step 3: Turtle flip either succeeds (resumes FLYING) or fails (enters TURTLE_FAILED)
 				if ps.turtleForceSuccess || (s.rng.Float64() < 0.40 && !s.trackWalkerActive) {
 					ps.turtleForceSuccess = false
-					if ps.batteryPct < 15.0 {
-						ps.batteryPct = 100.0
+					if ps.activePackIdx < 0 || ps.batteryPct < 15.0 {
+						ps.plugInReadyOrBestPack(true)
 						ps.packsFlown++
 					}
 					if s.trackWalkerActive {
@@ -668,8 +795,44 @@ func (s *TrackSimulator) step(dtSec float64) {
 			ps.currentSpeedMps = 0
 			continue
 
+		case domain.SimStatusPilotBreak:
+			ps.currentSpeedMps = 0
+			ps.batteryPct = 0
+			ps.stateTimerSec -= dtSec
+			if ps.stateTimerSec <= 0 {
+				// Break finished: if a charged pack is ready, step into PIT_SWAP; otherwise wait for charger
+				if ps.findReadyPack() >= 0 {
+					ps.status = domain.SimStatusPitSwap
+					ps.stateTimerSec = 30.0 + s.rng.Float64()*20.0
+				} else {
+					ps.status = domain.SimStatusChargingWait
+					ps.stateTimerSec = 0
+				}
+			}
+			continue
+
+		case domain.SimStatusChargingWait:
+			ps.currentSpeedMps = 0
+			ps.batteryPct = 0
+			// Wait on pit bench until at least one of the 3 LiPo packs finishes charging to 100%
+			if ps.findReadyPack() >= 0 {
+				ps.status = domain.SimStatusPitSwap
+				ps.stateTimerSec = 30.0 + s.rng.Float64()*20.0
+			} else {
+				remPct := math.Max(0, 100.0-ps.maxPackPct())
+				ps.stateTimerSec = remPct / 0.32
+			}
+			continue
+
 		case domain.SimStatusPitSwap:
 			ps.currentSpeedMps = 0
+			// If all 3 packs are still charging (< 100%), transition to CHARGING_WAIT first
+			if ps.activePackIdx < 0 && ps.findReadyPack() < 0 {
+				ps.status = domain.SimStatusChargingWait
+				remPct := math.Max(0, 100.0-ps.maxPackPct())
+				ps.stateTimerSec = remPct / 0.32
+				continue
+			}
 			ps.stateTimerSec -= dtSec
 			// If a crashed pilot is waiting for a lull to walk on the track (or is actively walking on the track),
 			// pilots who have finished swapping packs hold on the launch pad until the recovery walk is done!
@@ -680,12 +843,17 @@ func (s *TrackSimulator) step(dtSec float64) {
 			// strapping fresh pack, and walking back to the launch pad; in the final 4 seconds on the
 			// launch pad, the pilot plugs in the fresh 100% 6S pack, sits down, arms, and takes off.
 			if ps.stateTimerSec <= 4.0 && ps.stateTimerSec > 0 {
-				ps.batteryPct = 100.0
+				if ps.activePackIdx < 0 {
+					ps.plugInReadyOrBestPack(false)
+				}
 			} else if ps.stateTimerSec > 4.0 {
+				ps.activePackIdx = -1
 				ps.batteryPct = 0.0
 			}
 			if ps.stateTimerSec <= 0 {
-				ps.batteryPct = 100.0
+				if ps.activePackIdx < 0 {
+					ps.plugInReadyOrBestPack(true)
+				}
 				ps.packsFlown++
 				ps.wantPitAtFinish = false
 				ps.stateTimerSec = 0
@@ -705,8 +873,12 @@ func (s *TrackSimulator) step(dtSec float64) {
 		// Pilot is airborne (FLYING or AVOIDING)
 		flyingCount++
 		if !s.prewarming && s.autoPracticeEvents {
-			// Drain 6S flight pack (~0.58% per second -> ~2.4 minutes per pack)
-			ps.batteryPct = math.Max(5.0, ps.batteryPct-dtSec*0.58)
+			// Drain active 6S flight pack (~0.58% per second -> ~2.4 minutes per pack)
+			if ps.activePackIdx < 0 || ps.activePackIdx >= 3 {
+				ps.activePackIdx = 0
+			}
+			ps.packPct[ps.activePackIdx] = math.Max(5.0, ps.packPct[ps.activePackIdx]-dtSec*0.58)
+			ps.batteryPct = ps.packPct[ps.activePackIdx]
 			if ps.batteryPct <= 16.0 {
 				ps.wantPitAtFinish = true
 			}
@@ -748,12 +920,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 		// Unplugging drops VTX RSSI to noise floor so Gate 1's detector immediately exits and
 		// scores the completed lap; ClearPilotProgress is then called when launching the next pack.
 		if !s.prewarming && ps.wantPitAtFinish && prevPos < 10.0 && ps.trackPosMeters >= 10.0 {
-			ps.status = domain.SimStatusPitSwap
-			ps.stateTimerSec = 30.0 + s.rng.Float64()*30.0
-			ps.batteryPct = 0
-			ps.currentSpeedMps = 0
-			ps.altitudeMeters = 0
-			ps.wantPitAtFinish = false
+			s.enterPitAfterFlightLocked(ps)
 		}
 	}
 
