@@ -48,11 +48,7 @@ jobs:
           esp_idf_version: v5.5
           target: esp32c5
           path: firmware/${{ matrix.profile }}
-          command: >-
-            idf.py build &&
-            bash ../tools/check_image.sh &&
-            cd build &&
-            python -m esptool --chip esp32c5 merge_bin -o slaprf-xiao-c5-${{ matrix.profile }}.bin @flash_args
+          command: bash ../tools/ci_build.sh
 
       - name: Check config block is present
         run: |
