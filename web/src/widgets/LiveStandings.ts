@@ -53,14 +53,13 @@ export class LiveStandings extends Component {
           <tr>
             <th class="col-pos">#</th>
             <th>Pilot</th>
-            <th>Status</th>
             <th class="num">Laps</th>
             <th class="num">Last</th>
             <th class="num">Best</th>
             <th class="num">Avg 5</th>
             <th class="num">Gap</th>
             <th>Recent laps</th>
-            <th class="col-progress">On track</th>
+            <th class="col-progress">Track</th>
           </tr>
         </thead>
         <tbody>${rows.map((r, i) => this.renderRow(r, i + 1, sessionBest)).join("")}</tbody>
@@ -73,24 +72,24 @@ export class LiveStandings extends Component {
     const segments = this.store.pucks
       .map((p, i) => `<span class="seg ${i < sector ? "is-done" : i === sector ? "is-live" : ""}" style="--c:${gateColor(this.store, p.puckId)}"></span>`)
       .join("");
-    const status = s.onTrack
-      ? `<span class="status-tag is-live">On track</span>`
-      : `<span class="status-tag">${s.laps.length ? `Idle · ${fmtAgo(s.secondsSinceSeen)}` : "Not flown"}</span>`;
+    const idleLabel = s.laps.length ? `Idle · ${fmtAgo(s.secondsSinceSeen)}` : "Not flown";
     const gap = s.bestLap > 0 && sessionBest > 0 ? (s.bestLap === sessionBest ? `<span class="tone-accent">fastest</span>` : fmtDelta(s.bestLap - sessionBest)) : "";
 
     return `
-      <tr class="row-link ${s.onTrack ? "" : "is-idle"}" data-pilot="${pilot.slotIndex}">
+      <tr class="row-link ${s.onTrack ? "is-on-track" : "is-idle"}" data-pilot="${pilot.slotIndex}">
         <td class="col-pos"><span class="pos ${rank === 1 && s.bestLap > 0 ? "is-leader" : ""}">${rank}</span></td>
         <td>
           <div class="pilot-cell">
             <span class="pilot-swatch" style="--c:${pilot.color}"></span>
             <div>
-              <div class="pilot-name">${esc(pilot.callsign)}</div>
+              <div class="pilot-name">
+                <span>${esc(pilot.callsign)}</span>
+                ${s.onTrack ? `<span class="pilot-live-dot" title="On track"></span>` : ""}
+              </div>
               <div class="pilot-meta">R${pilot.channel} · ${pilot.frequencyMhz} MHz</div>
             </div>
           </div>
         </td>
-        <td>${status}</td>
         <td class="num mono">${s.laps.length}</td>
         <td class="num mono">${fmtTime(s.lastLap)}</td>
         <td class="num mono strong">${fmtTime(s.bestLap)}</td>
@@ -98,10 +97,14 @@ export class LiveStandings extends Component {
         <td class="num mono muted">${gap}</td>
         <td class="spark-cell" style="color:${pilot.color}">${renderSparkline(s.laps.slice(-SPARK_LAPS).map((l) => l.lapTimeSec), 96, 26)}</td>
         <td class="col-progress">
-          <div class="sector-progress">
-            <div class="segments">${segments}</div>
-            <span class="sector-tag">${sector >= 0 ? `S${sector + 1}` : "—"}</span>
-          </div>
+          ${
+            s.onTrack
+              ? `<div class="sector-progress">
+                   <div class="segments">${segments}</div>
+                   <span class="sector-tag">${sector >= 0 ? `S${sector + 1}` : "—"}</span>
+                 </div>`
+              : `<span class="idle-tag">${idleLabel}</span>`
+          }
         </td>
       </tr>`;
   }

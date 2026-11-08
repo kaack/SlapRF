@@ -1004,17 +1004,42 @@ body.is-gate-dragging * {
   background: var(--accent);
   color: var(--accent-ink);
 }
-.status-tag {
-  color: var(--text-3);
-  font-size: 12px;
-  white-space: nowrap;
+.table-standings tr.is-on-track {
+  background: linear-gradient(90deg, rgba(52, 211, 153, 0.065) 0%, rgba(52, 211, 153, 0.015) 45%, transparent 100%);
 }
-.status-tag.is-live {
-  color: var(--good);
-  font-weight: 600;
+.table-standings tr.is-on-track:hover {
+  background: var(--surface-2);
+}
+.table-standings tr.is-on-track .pilot-swatch {
+  box-shadow: 0 0 10px var(--c);
+}
+.table-standings .pilot-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.pilot-live-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--good);
+  box-shadow: 0 0 8px var(--good);
+  flex-shrink: 0;
+}
+.table-standings tr.is-idle td {
+  opacity: 0.52;
+  transition: opacity 0.15s ease;
+}
+.table-standings tr.is-idle:hover td {
+  opacity: 0.92;
 }
 .table-standings tr.is-idle .pilot-name {
   color: var(--text-2);
+}
+.idle-tag {
+  color: var(--text-3);
+  font-size: 12px;
+  white-space: nowrap;
 }
 .spark-cell {
   width: 110px;
