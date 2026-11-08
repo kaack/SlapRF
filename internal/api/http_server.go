@@ -3,12 +3,8 @@ package api
 import (
 	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
-	"path/filepath"
 	"strconv"
-
-	"github.com/evanw/esbuild/pkg/api"
 
 	"slaprf/internal/domain"
 	"slaprf/internal/firmware"
@@ -167,8 +163,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/session/reset", s.handleResetSession)
 	mux.HandleFunc("/api/ingest/frame", s.handleIngestFrame)
 
-	// Zero-Node.js pure-Go TypeScript bundle endpoint
+	// Zero-Node.js pure-Go TypeScript bundle and WebAssembly simulation engine endpoints
 	mux.HandleFunc("/dist/app.js", s.handleTypeScriptBundle)
+	mux.HandleFunc("/wasm/wasm_exec.js", s.handleWasmExecJS)
+	mux.HandleFunc("/wasm/slaprf.wasm", s.handleSlaprfWasm)
 
 	// Static assets (HTML + CSS)
 	fs := http.FileServer(http.Dir(s.webRootDir))
@@ -508,42 +506,6 @@ func (s *Server) handleIngestFrame(w http.ResponseWriter, r *http.Request) {
 	}
 	s.realEngine.IngestTelemetryFrame(frame)
 	writeJSON(w, http.StatusOK, map[string]bool{"ingested": true})
-}
-
-// handleTypeScriptBundle compiles `web/src/main.ts` and all imported TypeScript modules
-// in memory using esbuild's native Go library (zero Node.js required).
-func (s *Server) handleTypeScriptBundle(w http.ResponseWriter, _ *http.Request) {
-	absRoot, err := filepath.Abs(s.webRootDir)
-	if err != nil {
-		absRoot = s.webRootDir
-	}
-	if realRoot, err := filepath.EvalSymlinks(absRoot); err == nil {
-		absRoot = realRoot
-	}
-	entryPoint := filepath.Join(absRoot, "src", "main.ts")
-	result := api.Build(api.BuildOptions{
-		AbsWorkingDir: absRoot,
-		EntryPoints:   []string{entryPoint},
-		Bundle:        true,
-		Write:         false,
-		Target:        api.ES2022,
-		Format:        api.FormatIIFE,
-		Sourcemap:     api.SourceMapInline,
-	})
-
-	if len(result.Errors) > 0 {
-		log.Printf("[TS Bundler] Compilation error: %v", result.Errors[0].Text)
-		w.Header().Set("Content-Type", "application/javascript")
-		w.WriteHeader(http.StatusInternalServerError)
-		_, _ = fmt.Fprintf(w, "console.error(%q);", result.Errors[0].Text)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	if len(result.OutputFiles) > 0 {
-		_, _ = w.Write(result.OutputFiles[0].Contents)
-	}
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {

@@ -7,10 +7,10 @@ import (
 	"path/filepath"
 )
 
-// Assets embeds the entire web SPA (HTML, CSS, and TypeScript sources) directly into
-// the compiled Go binary so downloaded release executables run as a single file.
+// Assets embeds the entire web SPA (HTML, CSS, TypeScript sources, and WASM simulation engine)
+// directly into the compiled Go binary so downloaded release executables run as a single file.
 //
-//go:embed index.html styles src
+//go:embed index.html styles src wasm
 var Assets embed.FS
 
 // EnsureWebDir returns webDir if index.html exists on disk (local development),

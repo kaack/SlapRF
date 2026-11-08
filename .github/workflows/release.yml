@@ -22,9 +22,13 @@ jobs:
         with:
           go-version-file: "go.mod"
 
+      - name: Build WASM Simulation Engine for Embedded Web Assets
+        run: go run ./cmd/build-web -web ./web -out ./_site
+
       - name: Build Windows, macOS, and Linux binaries
         run: |
-          mkdir -p dist
+          mkdir -p dist web/wasm
+          cp _site/wasm/wasm_exec.js _site/wasm/slaprf.wasm web/wasm/
           CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -ldflags="-s -w" -o dist/slaprf-windows-amd64.exe ./cmd/slaprf
           CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 go build -ldflags="-s -w" -o dist/slaprf-macos-arm64 ./cmd/slaprf
           CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 go build -ldflags="-s -w" -o dist/slaprf-macos-amd64 ./cmd/slaprf
