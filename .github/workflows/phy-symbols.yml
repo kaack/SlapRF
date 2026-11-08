@@ -21,12 +21,12 @@ jobs:
           NM=$(find / -name 'riscv32-esp-elf-nm' -type f 2>/dev/null | head -1)
           echo "::notice title=nm::${NM:-not found}"
           IDF=${IDF_PATH:-/opt/esp/idf}
-          LIBDIR=$(find "$IDF/components/esp_phy" -type d -name esp32c5 | head -1)
+          LIBDIR=$(dirname "$(find "$IDF/components/esp_phy" -path "*esp32c5*" -name libphy.a | head -1)")
           echo "::notice title=libdir::$LIBDIR :: $(ls "$LIBDIR" | xargs)"
           for lib in "$LIBDIR"/*.a; do
             name=$(basename "$lib")
             syms=$("$NM" -g --defined-only "$lib" 2>/dev/null | awk 'NF==3 {print $3}' |
-              grep -Ei 'xpd|pbus|chanfreq|rf_freq|force_rx|adctrig|rfpll|set_chan|tx_on|tx_off|rx_on|rxclk|freq_mem|ckgen|phy_param|restart_cal|i2c_sdm|set_freq|sigrssi|get_rssi|noise_floor|11p' | sort -u | xargs)
-            [ -n "$syms" ] && echo "::notice title=$name::$syms"
+              grep -Ei 'xpd|pbus|chanfreq|rf_freq|force_rx|adctrig|rfpll|set_chan|tx_on|tx_off|rx_on|rxclk|freq_mem|ckgen|phy_param|restart_cal|i2c_sdm|set_freq|sigrssi|get_rssi|noise_floor|11p' | sort -u | xargs || true)
+            if [ -n "$syms" ]; then echo "::notice title=$name::$syms"; fi
           done
           exit 0
