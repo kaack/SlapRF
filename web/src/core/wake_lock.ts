@@ -10,51 +10,80 @@ interface NavigatorWithWakeLock {
   };
 }
 
+let wakeLockEnabled = true;
+let sentinel: WakeLockSentinelLike | null = null;
+let requesting = false;
+let listenersInstalled = false;
+
+async function acquireWakeLock(): Promise<void> {
+  if (!wakeLockEnabled || requesting || document.visibilityState !== "visible") return;
+  if (sentinel && !sentinel.released) return;
+  const nav = navigator as unknown as NavigatorWithWakeLock;
+  if (!nav.wakeLock || typeof nav.wakeLock.request !== "function") return;
+
+  requesting = true;
+  try {
+    sentinel = await nav.wakeLock.request("screen");
+    sentinel.addEventListener("release", () => {
+      if (wakeLockEnabled && document.visibilityState === "visible") {
+        void acquireWakeLock();
+      }
+    });
+  } catch {
+    // Browser may require a user gesture before granting the first wake lock;
+    // the pointerdown/keydown listeners below will retry automatically.
+  } finally {
+    requesting = false;
+  }
+}
+
+async function releaseWakeLock(): Promise<void> {
+  const current = sentinel;
+  sentinel = null;
+  if (current && !current.released) {
+    try {
+      await current.release();
+    } catch {
+      // Ignore release errors
+    }
+  }
+}
+
+/** Enables or disables the Screen Wake Lock at runtime. */
+export function setWakeLockEnabled(enabled: boolean): void {
+  wakeLockEnabled = enabled;
+  if (enabled) {
+    void acquireWakeLock();
+  } else {
+    void releaseWakeLock();
+  }
+}
+
+export function isWakeLockEnabled(): boolean {
+  return wakeLockEnabled;
+}
+
 /**
  * Keeps the device screen awake while SlapRF is open on a phone, tablet, or laptop
  * using the W3C Screen Wake Lock API (`navigator.wakeLock.request("screen")`).
  *
- * Automatically re-acquires the lock after tab switches or user interactions.
+ * Automatically re-acquires the lock after tab switches or user interactions when enabled.
  */
 export function installWakeLock(): void {
-  const nav = navigator as unknown as NavigatorWithWakeLock;
-  if (!nav.wakeLock || typeof nav.wakeLock.request !== "function") {
-    return;
-  }
+  if (listenersInstalled) return;
+  listenersInstalled = true;
 
-  let sentinel: WakeLockSentinelLike | null = null;
-  let requesting = false;
-
-  const acquire = async (): Promise<void> => {
-    if (requesting || document.visibilityState !== "visible") return;
-    if (sentinel && !sentinel.released) return;
-    requesting = true;
-    try {
-      sentinel = await nav.wakeLock!.request("screen");
-      sentinel.addEventListener("release", () => {
-        if (document.visibilityState === "visible") {
-          void acquire();
-        }
-      });
-    } catch {
-      // Browser may require a user gesture before granting the first wake lock;
-      // the pointerdown/keydown listeners below will retry automatically.
-    } finally {
-      requesting = false;
-    }
-  };
-
-  void acquire();
+  void acquireWakeLock();
 
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") {
-      void acquire();
+    if (wakeLockEnabled && document.visibilityState === "visible") {
+      void acquireWakeLock();
     }
   });
 
   const onUserGesture = (): void => {
-    if (!sentinel || sentinel.released) {
-      void acquire();
+    if (wakeLockEnabled && (!sentinel || sentinel.released)) {
+      void acquireWakeLock();
     }
   };
 

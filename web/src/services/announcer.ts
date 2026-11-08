@@ -1,3 +1,4 @@
+import { setWakeLockEnabled } from "../core/wake_lock";
 import { AppStore } from "../state/store";
 import { GateCrossingEvent, LapRecord } from "../types/models";
 import {
@@ -11,6 +12,7 @@ import {
 
 export interface AnnouncerPrefs {
   enabled: boolean;
+  keepScreenAwake: boolean;
   voiceURI: string;
   rate: number;
   volume: number;
@@ -21,6 +23,7 @@ const STORAGE_KEY = "gate-timer.announcer";
 const PREFERRED_DEFAULT_VOICE = "Google US English";
 const DEFAULT_PREFS: AnnouncerPrefs = {
   enabled: false,
+  keepScreenAwake: true,
   voiceURI: PREFERRED_DEFAULT_VOICE,
   rate: 1.0,
   volume: 1,
@@ -107,6 +110,7 @@ export class Announcer {
   constructor(store: AppStore) {
     this.store = store;
     this.prefs = loadPrefs();
+    setWakeLockEnabled(this.prefs.keepScreenAwake !== false);
     this.piper = new PiperNeuralTts(() => this.notify());
     store.onLapRecorded((lap) => this.onLap(lap));
     store.onStartGateDetected((ev) => this.onStartPass(ev));
@@ -225,6 +229,9 @@ export class Announcer {
     const wasEnabled = this.prefs.enabled;
     this.prefs = { ...this.prefs, ...next };
     localStorage.setItem(STORAGE_KEY, JSON.stringify(this.prefs));
+    if (next.keepScreenAwake !== undefined) {
+      setWakeLockEnabled(this.prefs.keepScreenAwake !== false);
+    }
     const activeURI = this.activeVoiceURI();
     if (isPiperVoiceURI(activeURI) && (this.prefs.enabled || next.voiceURI !== undefined)) {
       void this.piper.preloadVoice(activeURI).catch(() => undefined);
