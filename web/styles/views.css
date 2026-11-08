@@ -1206,7 +1206,7 @@ body.is-gate-dragging * {
 }
 .rule-row {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto 120px;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
   gap: 20px;
   padding: 14px 20px;
@@ -1214,6 +1214,21 @@ body.is-gate-dragging * {
 }
 .rule-row:first-child {
   border-top: 0;
+}
+.rule-control-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rule-input {
+  width: 120px;
+}
+.rule-edit-btn {
+  width: 32px;
+  height: 32px;
+  flex-shrink: 0;
+  border-color: var(--border);
+  background: var(--surface-2);
 }
 .rule-label {
   font-weight: 600;
@@ -1233,8 +1248,7 @@ body.is-gate-dragging * {
 .rule-count:empty {
   display: none;
 }
-.rule-mobile-note,
-.rule-mobile-override {
+.rule-mobile-note {
   display: none;
 }
 @media (max-width: 760px) {
@@ -1248,19 +1262,18 @@ body.is-gate-dragging * {
   .rule-text {
     order: 1;
   }
-  .rule-text > .rule-override,
   .rule-text > .rule-override-note {
     display: none;
   }
-  .rule-input {
+  .rule-control-wrap,
+  .rule-row > .rule-input {
     order: 2;
     width: 100%;
-    max-width: 180px;
+    max-width: 220px;
   }
-  .rule-mobile-override {
-    display: inline-flex;
-    order: 3;
-    margin-top: 0;
+  .rule-control-wrap .rule-input {
+    flex: 1;
+    width: auto;
   }
   .rule-mobile-note {
     display: block;

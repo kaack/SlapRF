@@ -1,5 +1,6 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
+import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import { gateColor, gateLabel } from "../state/selectors";
 import { AppStore } from "../state/store";
@@ -90,22 +91,7 @@ export class TimingRulesEditor extends Component {
     super(el);
     this.store = store;
     this.api = api;
-    this.listen(el, "input", (e) => {
-      const t = e.target as HTMLInputElement;
-      if (t.dataset.override) {
-        // Ticking "override" enables that rule's input; unticking shows the global value again.
-        const row = t.closest(".rule-row");
-        row?.querySelectorAll<HTMLInputElement>(`input[data-override="${t.dataset.override}"]`).forEach((cb) => {
-          cb.checked = t.checked;
-        });
-        const input = this.el.querySelector<HTMLInputElement>(`input[name="${t.dataset.override}"]`);
-        if (input) {
-          input.disabled = !t.checked;
-          if (!t.checked) input.value = String(this.store.rules[t.dataset.override as keyof TimingRules]);
-          else input.focus();
-        }
-        row?.classList.toggle("is-overridden", t.checked);
-      }
+    this.listen(el, "input", () => {
       this.markDirty();
     });
     this.listen(el, "submit", (e) => {
@@ -114,6 +100,26 @@ export class TimingRulesEditor extends Component {
     });
     this.listen(el, "click", (e) => {
       const target = e.target as HTMLElement;
+      const toggleBtn = target.closest<HTMLButtonElement>("[data-override-toggle]");
+      if (toggleBtn) {
+        const key = toggleBtn.dataset.overrideToggle as GateRuleKey;
+        const row = toggleBtn.closest<HTMLElement>(".rule-row");
+        const input = row?.querySelector<HTMLInputElement>(`input[name="${key}"]`);
+        if (row && input) {
+          const nextOn = input.disabled;
+          input.disabled = !nextOn;
+          row.classList.toggle("is-overridden", nextOn);
+          if (!nextOn) {
+            input.value = String(this.store.rules[key]);
+          } else {
+            input.focus();
+            input.select();
+          }
+          this.syncToggleBtn(toggleBtn, nextOn, this.store.rules[key]);
+          this.markDirty();
+        }
+        return;
+      }
       const scope = target.closest<HTMLElement>("[data-scope]");
       if (scope) {
         this.scope = scope.dataset.scope === "all" ? null : Number(scope.dataset.scope);
@@ -184,7 +190,7 @@ export class TimingRulesEditor extends Component {
     }).join("");
 
     const foot = gate
-      ? `<p class="note">Ticked rules apply only at ${esc(gateLabel(this.store, gate.puckId))}; the rest follow All gates.</p>
+      ? `<p class="note">Edited rules apply only at ${esc(gateLabel(this.store, gate.puckId))}; unedited rules inherit from All gates.</p>
          ${Object.keys(overrides).length ? `<button class="btn btn-ghost btn-sm" type="button" data-action="clear">Use all-gate rules</button>` : ""}
          <button class="btn btn-sm" type="submit" disabled>Save ${esc(gateLabel(this.store, gate.puckId))}</button>`
       : `<p class="note">Rules apply to new detections. LiveTime only receives start gate passes that get through them.</p>
@@ -203,7 +209,7 @@ export class TimingRulesEditor extends Component {
     this.renderCounts();
   }
 
-  /** A rule for one gate: tick to override, otherwise it shows the global value greyed out. */
+  /** A rule for one gate: click the pencil icon to edit/override, otherwise it inherits the global value. */
   private renderGateRow(spec: RuleSpec, r: TimingRules, overrides: GateRuleOverrides): string {
     if (!spec.perGate) {
       return `
@@ -213,35 +219,55 @@ export class TimingRulesEditor extends Component {
             <div class="rule-help">Applies to the whole lap, so it's set under All gates.</div>
           </div>
           <span class="rule-count"></span>
-          <div class="input-suffix rule-input">
-            <input class="input mono" type="number" value="${r[spec.key]}" disabled />
-            <span>s</span>
+          <div class="rule-control-wrap">
+            <div class="input-suffix rule-input">
+              <input class="input mono" type="number" value="${r[spec.key]}" disabled />
+              <span>s</span>
+            </div>
           </div>
         </div>`;
     }
     const key = spec.key as GateRuleKey;
     const own = overrides[key];
     const on = own !== undefined;
+    const title = on
+      ? `Revert to All gates default (${r[key]} s)`
+      : `Edit to override at this gate (inherits ${r[key]} s)`;
     return `
       <div class="rule-row ${on ? "is-overridden" : ""}">
         <div class="rule-text">
           <div class="rule-label">${spec.label}</div>
           <div class="rule-help">${spec.help}</div>
-          <label class="check rule-override">
-            <input type="checkbox" data-override="${key}" ${on ? "checked" : ""} />
-            Override at this gate <span class="muted">(all gates: ${r[key]} s)</span>
-          </label>
         </div>
         <span class="rule-count" data-count="${spec.reason}"></span>
-        <div class="input-suffix rule-input">
-          <input class="input mono" type="number" name="${key}" value="${on ? own : r[key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" ${on ? "" : "disabled"} />
-          <span>s</span>
+        <div class="rule-control-wrap">
+          <div class="input-suffix rule-input">
+            <input class="input mono" type="number" name="${key}" value="${on ? own : r[key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" ${on ? "" : "disabled"} />
+            <span>s</span>
+          </div>
+          <button
+            class="btn btn-icon rule-edit-btn ${on ? "btn-armed" : "btn-ghost"}"
+            type="button"
+            data-override-toggle="${key}"
+            title="${title}"
+            aria-label="${title}"
+            aria-pressed="${on}"
+          >
+            ${on ? icons.reset(15) : icons.pencil(15)}
+          </button>
         </div>
-        <label class="check rule-override rule-mobile-override">
-          <input type="checkbox" data-override="${key}" ${on ? "checked" : ""} />
-          Override at this gate <span class="muted">(all gates: ${r[key]} s)</span>
-        </label>
       </div>`;
+  }
+
+  private syncToggleBtn(btn: HTMLButtonElement, on: boolean, globalVal: number): void {
+    const title = on
+      ? `Revert to All gates default (${globalVal} s)`
+      : `Edit to override at this gate (inherits ${globalVal} s)`;
+    btn.className = `btn btn-icon rule-edit-btn ${on ? "btn-armed" : "btn-ghost"}`;
+    btn.title = title;
+    btn.setAttribute("aria-label", title);
+    btn.setAttribute("aria-pressed", String(on));
+    btn.innerHTML = on ? icons.reset(15) : icons.pencil(15);
   }
 
   /** On the All gates view, list which gates override this rule. */
