@@ -51,13 +51,17 @@
   padding: 0 8px;
 }
 .brand-mark {
-  width: 32px;
-  height: 32px;
+  width: 38px;
+  height: 38px;
   display: grid;
   place-items: center;
-  border-radius: 9px;
+  border-radius: 10px;
   background: var(--accent);
   color: var(--accent-ink);
+  flex-shrink: 0;
+}
+.brand-mark svg {
+  shape-rendering: geometricPrecision;
 }
 .brand-name {
   font-weight: 650;

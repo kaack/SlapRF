@@ -3,8 +3,12 @@ const svg = (body: string, size = 16): string =>
 
 export const icons = {
   slaprf: (s?: number) =>
-    svg(`<path d="M4 19V9a8 8 0 0 1 16 0v10"/><path d="M2.5 14.5h5l2.5-6 3 11 2.5-6h6" stroke-width="2.1"/>`, s),
-  gate: (s?: number) => svg(`<path d="M5 20V9a7 7 0 0 1 14 0v11"/><path d="M9 20v-9a3 3 0 0 1 6 0v9"/>`, s),
+    svg(
+      `<path d="M18.21 16.30A8.2 8.2 0 1 1 13.30 5.79" stroke-width="2.2"/><circle cx="10.5" cy="13.5" r="1.8" fill="currentColor" stroke="none"/><path d="M10.5 13.5L15.2 9.8" stroke-width="2.2"/><path d="M15.77 7.22A8.2 8.2 0 0 1 18.70 13.50" stroke-width="2.2"/><path d="M17.64 4.36A11.6 11.6 0 0 1 22.09 13.90" stroke-width="2.1"/>`,
+      s
+    ),
+  gate: (s?: number) =>
+    svg(`<path d="M4 20V5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5V20"/><path d="M8 20V8h8v12"/>`, s),
   flag: (s?: number) => svg(`<path d="M4 22V4"/><path d="M4 4h12l-2 4 2 4H4"/>`, s),
   pilot: (s?: number) => svg(`<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>`, s),
   signal: (s?: number) => svg(`<path d="M3 12h4l3-8 4 16 3-8h4"/>`, s),

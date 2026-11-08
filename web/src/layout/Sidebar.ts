@@ -14,7 +14,7 @@ export class Sidebar extends Component {
 
     el.innerHTML = `
       <div class="brand">
-        <div class="brand-mark">${icons.slaprf(19)}</div>
+        <div class="brand-mark">${icons.slaprf(25)}</div>
         <div>
           <div class="brand-name">SlapRF</div>
           <div class="brand-sub">XIAO ESP32-C5 · 5.8 GHz</div>
