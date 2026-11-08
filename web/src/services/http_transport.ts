@@ -82,9 +82,10 @@ export class HttpRealTransport implements ApiTransport {
     role: "hub" | "spoke",
     puckLabel: string,
     wifiSSID: string,
-    wifiPass: string
+    wifiPass: string,
+    firmwareVersion = "v0.1.4"
   ): Promise<FirmwareImageResult> {
-    const params = new URLSearchParams({ role });
+    const params = new URLSearchParams({ role, version: firmwareVersion });
     if (puckLabel.trim()) params.set("label", puckLabel.trim());
     if (role === "hub" && wifiSSID.trim()) {
       params.set("ssid", wifiSSID.trim());
@@ -100,7 +101,7 @@ export class HttpRealTransport implements ApiTransport {
     return {
       bytes: new Uint8Array(buf),
       sha256,
-      filename: `slaprf-xiao-c5-${slug}.bin`,
+      filename: `slaprf-xiao-c5-${slug}-${firmwareVersion}.bin`,
     };
   }
 

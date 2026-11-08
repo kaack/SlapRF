@@ -26,10 +26,14 @@ var (
 //   - A "hub" puck updates the start/finish gate's PuckLabel.
 //   - A "spoke" puck updates a matching puck by PuckLabel, or claims the next unlabelled
 //     sector gate (creating a new gate up to 16 if all existing gates already have a PuckLabel).
-func (e *Engine) ProvisionGate(role string, puckLabel string) (uint8, error) {
+func (e *Engine) ProvisionGate(role string, puckLabel string, fwVersion ...string) (uint8, error) {
 	puckLabel = strings.TrimSpace(puckLabel)
 	if utf8.RuneCountInString(puckLabel) > domain.MaxGateNameLen {
 		return 0, ErrGateNameTooLong
+	}
+	ver := domain.LatestFirmwareVersion
+	if len(fwVersion) > 0 && strings.TrimSpace(fwVersion[0]) != "" {
+		ver = strings.TrimSpace(fwVersion[0])
 	}
 
 	e.mu.Lock()
@@ -134,6 +138,8 @@ func (e *Engine) ProvisionGate(role string, puckLabel string) (uint8, error) {
 		d.Color = domain.DefaultPuckColor(assignedID)
 	}
 	e.pucks[targetIdx].Color = d.Color
+	e.pucks[targetIdx].FirmwareVersion = ver
+	d.FirmwareVersion = ver
 	if puckLabel != "" {
 		d.PuckLabel = puckLabel
 	}

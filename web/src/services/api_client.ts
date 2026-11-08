@@ -16,6 +16,7 @@ import {
   TimingRules,
 } from "../types/models";
 import { HttpRealTransport } from "./http_transport";
+import { buildOrPatchFirmwareBin, LATEST_FIRMWARE_VERSION } from "./esp_flasher";
 import { ApiTransport } from "./transport";
 import { WasmSimTransport } from "./wasm_transport";
 
@@ -136,29 +137,54 @@ export class ApiClient {
     await this.updateTimerColor(puckId, color);
   }
 
-  /** Registers a newly flashed timer (hub or spoke) with its flashed hardware ID/name. */
-  public async provisionTimer(role: "hub" | "spoke", puckLabel: string): Promise<void> {
+  /** Registers a newly flashed timer (hub or spoke) with its flashed hardware ID/name and firmware version. */
+  public async provisionTimer(
+    role: "hub" | "spoke",
+    puckLabel: string,
+    firmwareVersion = LATEST_FIRMWARE_VERSION
+  ): Promise<void> {
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/timers/provision", { role, puckLabel })
+      await this.transport.request<FullStateResponse>("POST", "/api/timers/provision", {
+        role,
+        puckLabel,
+        firmwareVersion,
+      })
     );
   }
 
-  public async provisionGate(role: "hub" | "spoke", puckLabel: string): Promise<void> {
-    await this.provisionTimer(role, puckLabel);
+  public async provisionGate(
+    role: "hub" | "spoke",
+    puckLabel: string,
+    firmwareVersion = LATEST_FIRMWARE_VERSION
+  ): Promise<void> {
+    await this.provisionTimer(role, puckLabel, firmwareVersion);
   }
 
-  /** Downloads a pre-configured XIAO ESP32-C5 firmware binary stamped with role, puckLabel & active channels. */
+  /**
+   * Builds or patches a pre-configured XIAO ESP32-C5 firmware binary stamped with role,
+   * puckLabel, firmwareVersion & active channels. Works both against the Go backend and
+   * 100% client-side in the browser from static `.bin` assets with zero Go server needed.
+   */
   public async fetchFirmwareImage(
     role: "hub" | "spoke",
     puckLabel = "",
     wifiSSID = "",
-    wifiPass = ""
+    wifiPass = "",
+    firmwareVersion = LATEST_FIRMWARE_VERSION
   ): Promise<{ bytes: Uint8Array; sha256: string; filename: string }> {
     try {
-      return await this.transport.fetchFirmwareImage(role, puckLabel, wifiSSID, wifiPass);
+      return await this.transport.fetchFirmwareImage(role, puckLabel, wifiSSID, wifiPass, firmwareVersion);
     } catch {
-      // Fallback to in-browser WASM firmware builder when running on static GitHub Pages
-      return await this.wasmTransport.fetchFirmwareImage(role, puckLabel, wifiSSID, wifiPass);
+      const freqs = this.store.pilots.slice(0, 8).map((p) => p.frequencyMhz);
+      const built = await buildOrPatchFirmwareBin({
+        role,
+        puckLabel,
+        wifiSSID,
+        wifiPass,
+        firmwareVersion,
+        frequenciesMHz: freqs,
+      });
+      return { bytes: built.bytes, sha256: "", filename: built.filename };
     }
   }
 

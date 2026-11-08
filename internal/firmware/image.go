@@ -57,12 +57,13 @@ var (
 // TimerConfig is the binary configuration stamped into the XIAO ESP32-C5 firmware image
 // at download time so the user never needs a C compiler or CLI toolchain.
 type TimerConfig struct {
-	Role         uint8
-	PuckID       uint8
-	PuckLabel    string // Flashed hardware ID / name (e.g. "Hub-1", "Blue-Timer")
-	SlotFreqsMHz [domain.MaxPilotSlots]uint16
-	WifiSSID     string // Only used by Hub timer
-	WifiPass     string
+	Role            uint8
+	PuckID          uint8
+	PuckLabel       string // Flashed hardware ID / name (e.g. "Hub-1", "Blue-Timer")
+	FirmwareVersion string // Firmware release version (e.g. "v0.1.4", "v0.1.3", "v0.1.2")
+	SlotFreqsMHz    [domain.MaxPilotSlots]uint16
+	WifiSSID        string // Only used by Hub timer
+	WifiPass        string
 }
 
 type PuckConfig = TimerConfig
@@ -119,6 +120,11 @@ func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 		cfg.WifiSSID = ""
 		cfg.WifiPass = ""
 	}
+	if cfg.FirmwareVersion == "" {
+		cfg.FirmwareVersion = domain.LatestFirmwareVersion
+	}
+	verByte := versionToByte(cfg.FirmwareVersion)
+	cfg.FirmwareVersion = byteToVersion(verByte)
 
 	for i, f := range cfg.SlotFreqsMHz {
 		if f < minFreqMHz || f > maxFreqMHz {
@@ -148,12 +154,12 @@ func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 	}
 
 	// 3. Stamp human-readable build banner at 0x0040
-	banner := fmt.Sprintf("SlapRF XIAO-ESP32-C5 SDR Firmware v1.0 (Role=%d Timer=%d Label=%s)", cfg.Role, cfg.PuckID, cfg.PuckLabel)
+	banner := fmt.Sprintf("SlapRF XIAO-ESP32-C5 SDR Firmware %s (Role=%d Timer=%d Label=%s)", cfg.FirmwareVersion, cfg.Role, cfg.PuckID, cfg.PuckLabel)
 	copy(img[0x0040:], []byte(banner))
 
 	// 4. Stamp the 128-byte SLAPRF01 binary configuration block at 0x0100:
 	//    [0..7]     "SLAPRF01" (8 bytes)
-	//    [8]        version = 1
+	//    [8]        version (4 = v0.1.4, 3 = v0.1.3, 2 = v0.1.2, 1 = v0.1.1)
 	//    [9]        role (1 = Hub timer, 2 = Spoke timer)
 	//    [10]       timer_id (1..16)
 	//    [11]       wifi_mode (0 = AP, 1 = Join WifiSSID)
@@ -165,7 +171,7 @@ func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 	//    [127]      xor_crc8 over bytes [0..126]
 	var block [configLen]byte
 	copy(block[0:8], []byte(ConfigMagic))
-	block[8] = 1
+	block[8] = verByte
 	block[9] = cfg.Role
 	block[10] = cfg.PuckID
 	if cfg.WifiSSID != "" {
@@ -199,7 +205,7 @@ func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 	if cfg.Role == RoleSpokeTimer {
 		roleSlug = "spoke"
 	}
-	filename := fmt.Sprintf("slaprf-xiao-c5-%s.bin", roleSlug)
+	filename := fmt.Sprintf("slaprf-xiao-c5-%s-%s.bin", roleSlug, cfg.FirmwareVersion)
 
 	return &BuiltImage{
 		Bytes:     img,
@@ -208,6 +214,34 @@ func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 		ConfigOff: configOff,
 		Filename:  filename,
 	}, nil
+}
+
+func versionToByte(v string) uint8 {
+	switch strings.TrimSpace(strings.ToLower(v)) {
+	case "v0.1.4", "0.1.4", "4":
+		return 4
+	case "v0.1.3", "0.1.3", "3":
+		return 3
+	case "v0.1.2", "0.1.2", "2":
+		return 2
+	case "v0.1.1", "0.1.1", "1":
+		return 1
+	default:
+		return 4
+	}
+}
+
+func byteToVersion(b uint8) string {
+	switch b {
+	case 4:
+		return "v0.1.4"
+	case 3:
+		return "v0.1.3"
+	case 2:
+		return "v0.1.2"
+	default:
+		return "v0.1.1"
+	}
 }
 
 // InspectConfig locates and decodes the SLAPRF01 configuration block inside a built firmware binary.
@@ -225,6 +259,7 @@ func InspectConfig(img []byte) (TimerConfig, error) {
 	if crc != block[configLen-1] {
 		return out, errors.New("SLAPRF01 config checksum mismatch")
 	}
+	out.FirmwareVersion = byteToVersion(block[8])
 	out.Role = block[9]
 	out.PuckID = block[10]
 	for i := 0; i < domain.MaxPilotSlots; i++ {

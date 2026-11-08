@@ -11,18 +11,22 @@ const (
 	PuckRoleSectorGate  PuckRole = "SECTOR_GATE"
 )
 
+// LatestFirmwareVersion is the current XIAO ESP32-C5 SDR timer firmware release.
+const LatestFirmwareVersion = "v0.1.4"
+
 // DetectedPuck represents a physical Seeed Studio XIAO ESP32-C5 board discovered over
 // Wi-Fi / ESP-NOW or flashed over USB, whether or not it is currently assigned to a gate.
 type DetectedPuck struct {
-	PuckID        uint8     `json:"puckId"`
-	PuckLabel     string    `json:"puckLabel"`
-	Color         string    `json:"color"`
-	IsHub         bool      `json:"isHub"`
-	BatteryMv     uint16    `json:"batteryMv"`
-	BatteryPct    uint8     `json:"batteryPct"`
-	NoiseFloorDbm float32   `json:"noiseFloorDbm"`
-	Online        bool      `json:"online"`
-	LastSeenAt    time.Time `json:"lastSeenAt"`
+	PuckID          uint8     `json:"puckId"`
+	PuckLabel       string    `json:"puckLabel"`
+	Color           string    `json:"color"`
+	IsHub           bool      `json:"isHub"`
+	FirmwareVersion string    `json:"firmwareVersion,omitempty"`
+	BatteryMv       uint16    `json:"batteryMv"`
+	BatteryPct      uint8     `json:"batteryPct"`
+	NoiseFloorDbm   float32   `json:"noiseFloorDbm"`
+	Online          bool      `json:"online"`
+	LastSeenAt      time.Time `json:"lastSeenAt"`
 }
 
 // DefaultGateColors is the canonical palette assigned to physical pucks.
@@ -47,10 +51,11 @@ func DefaultPuckColor(puckID uint8) string {
 
 // GatePuck represents a gate on the track and the optional physical XIAO puck assigned to it.
 type GatePuck struct {
-	PuckID         uint8                  `json:"puckId"`         // Unique gate ID on the course (1..16)
-	AssignedPuckID uint8                  `json:"assignedPuckId"` // Bound hardware puck ID (0 = no puck assigned)
-	PuckLabel      string                 `json:"puckLabel"`      // Flashed puck ID / hardware name of the assigned puck
-	Name           string                 `json:"name"`           // Gate name from Setup; empty means "Gate N" by track position
+	PuckID          uint8                  `json:"puckId"`                    // Unique gate ID on the course (1..16)
+	AssignedPuckID  uint8                  `json:"assignedPuckId"`            // Bound hardware puck ID (0 = no puck assigned)
+	PuckLabel       string                 `json:"puckLabel"`                 // Flashed puck ID / hardware name of the assigned puck
+	FirmwareVersion string                 `json:"firmwareVersion,omitempty"` // Running firmware version on the assigned puck (e.g. "v0.1.4")
+	Name            string                 `json:"name"`                      // Gate name from Setup; empty means "Gate N" by track position
 	Color          string                 `json:"color"`          // Hex color originating from the Gates section in System
 	Role           PuckRole               `json:"role"`           // START_FINISH or SECTOR_GATE
 	TrackOrder    int                    `json:"trackOrder"`    // 0-based sequence index around the track
@@ -92,64 +97,68 @@ func DefaultTrackPucks() []GatePuck {
 
 	return []GatePuck{
 		{
-			PuckID:         1,
-			AssignedPuckID: 1,
-			Color:          DefaultGateColors[0],
-			Role:           PuckRoleStartFinish,
-			TrackOrder:     0,
-			MapX:           0.22,
-			MapY:           0.78,
-			BatteryMv:      4120,
-			BatteryPct:     ComputeBatteryPct(4120),
-			NoiseFloorDbm:  -92.0,
-			LastRSSI:       defaultRssi,
-			Online:         true,
-			LastSeenAt:     now,
+			PuckID:          1,
+			AssignedPuckID:  1,
+			FirmwareVersion: LatestFirmwareVersion,
+			Color:           DefaultGateColors[0],
+			Role:            PuckRoleStartFinish,
+			TrackOrder:      0,
+			MapX:            0.22,
+			MapY:            0.78,
+			BatteryMv:       4120,
+			BatteryPct:      ComputeBatteryPct(4120),
+			NoiseFloorDbm:   -92.0,
+			LastRSSI:        defaultRssi,
+			Online:          true,
+			LastSeenAt:      now,
 		},
 		{
-			PuckID:         2,
-			AssignedPuckID: 2,
-			Color:          DefaultGateColors[1],
-			Role:           PuckRoleSectorGate,
-			TrackOrder:     1,
-			MapX:           0.24,
-			MapY:           0.22,
-			BatteryMv:      4080,
-			BatteryPct:     ComputeBatteryPct(4080),
-			NoiseFloorDbm:  -92.5,
-			LastRSSI:       defaultRssi,
-			Online:         true,
-			LastSeenAt:     now,
+			PuckID:          2,
+			AssignedPuckID:  2,
+			FirmwareVersion: LatestFirmwareVersion,
+			Color:           DefaultGateColors[1],
+			Role:            PuckRoleSectorGate,
+			TrackOrder:      1,
+			MapX:            0.24,
+			MapY:            0.22,
+			BatteryMv:       4080,
+			BatteryPct:      ComputeBatteryPct(4080),
+			NoiseFloorDbm:   -92.5,
+			LastRSSI:        defaultRssi,
+			Online:          true,
+			LastSeenAt:      now,
 		},
 		{
-			PuckID:         3,
-			AssignedPuckID: 3,
-			Color:          DefaultGateColors[2],
-			Role:           PuckRoleSectorGate,
-			TrackOrder:     2,
-			MapX:           0.78,
-			MapY:           0.24,
-			BatteryMv:      3990,
-			BatteryPct:     ComputeBatteryPct(3990),
-			NoiseFloorDbm:  -91.8,
-			LastRSSI:       defaultRssi,
-			Online:         true,
-			LastSeenAt:     now,
+			PuckID:          3,
+			AssignedPuckID:  3,
+			FirmwareVersion: LatestFirmwareVersion,
+			Color:           DefaultGateColors[2],
+			Role:            PuckRoleSectorGate,
+			TrackOrder:      2,
+			MapX:            0.78,
+			MapY:            0.24,
+			BatteryMv:       3990,
+			BatteryPct:      ComputeBatteryPct(3990),
+			NoiseFloorDbm:   -91.8,
+			LastRSSI:        defaultRssi,
+			Online:          true,
+			LastSeenAt:      now,
 		},
 		{
-			PuckID:         4,
-			AssignedPuckID: 4,
-			Color:          DefaultGateColors[3],
-			Role:           PuckRoleSectorGate,
-			TrackOrder:     3,
-			MapX:           0.76,
-			MapY:           0.76,
-			BatteryMv:      4050,
-			BatteryPct:     ComputeBatteryPct(4050),
-			NoiseFloorDbm:  -92.2,
-			LastRSSI:       defaultRssi,
-			Online:         true,
-			LastSeenAt:     now,
+			PuckID:          4,
+			AssignedPuckID:  4,
+			FirmwareVersion: "v0.1.3",
+			Color:           DefaultGateColors[3],
+			Role:            PuckRoleSectorGate,
+			TrackOrder:      3,
+			MapX:            0.76,
+			MapY:            0.76,
+			BatteryMv:       4050,
+			BatteryPct:      ComputeBatteryPct(4050),
+			NoiseFloorDbm:   -92.2,
+			LastRSSI:        defaultRssi,
+			Online:          true,
+			LastSeenAt:      now,
 		},
 	}
 }

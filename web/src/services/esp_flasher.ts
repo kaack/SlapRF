@@ -72,6 +72,174 @@ const SLIP_ESC_ESC = 0xdd;
 const FLASH_BLOCK_SIZE = 1024;
 const FLASH_OFFSET = 0x0000;
 
+export interface FirmwareReleaseInfo {
+  version: string;
+  label: string;
+  summary: string;
+  isLatest?: boolean;
+}
+
+export const LATEST_FIRMWARE_VERSION = "v0.1.4";
+
+export const FIRMWARE_RELEASES: FirmwareReleaseInfo[] = [
+  {
+    version: "v0.1.4",
+    label: "v0.1.4 (Latest) — 2.4 GHz LR + 4-Sample Ground FEC",
+    summary:
+      "Espressif LR 500 kbps (+20 dBm Ch 1) + 4-sample sliding-window raw recorder for wet grass & 2.4 GHz ELRS immunity.",
+    isLatest: true,
+  },
+  {
+    version: "v0.1.3",
+    label: "v0.1.3 — Single-Wi-Fi Hub/Spoke Star Topology",
+    summary: "Standard 1 Mbps ESP-NOW Spoke-to-Hub bridge with 350 µs TDMA slots.",
+  },
+  {
+    version: "v0.1.2",
+    label: "v0.1.2 — Initial 5.8 GHz Wideband IQ Sweep",
+    summary: "Baseline 50 Hz 8-channel Raceband RSSI scanner.",
+  },
+];
+
+export function decodeFirmwareVersionByte(code: number): string {
+  switch (code) {
+    case 4:
+      return "v0.1.4";
+    case 3:
+      return "v0.1.3";
+    case 2:
+      return "v0.1.2";
+    default:
+      return "v0.1.1";
+  }
+}
+
+export function encodeFirmwareVersionByte(version: string): number {
+  switch (version.trim().toLowerCase()) {
+    case "v0.1.4":
+    case "0.1.4":
+      return 4;
+    case "v0.1.3":
+    case "0.1.3":
+      return 3;
+    case "v0.1.2":
+    case "0.1.2":
+      return 2;
+    case "v0.1.1":
+    case "0.1.1":
+      return 1;
+    default:
+      return 4;
+  }
+}
+
+/**
+ * Fetches the static base `.bin` image (`./firmware/slaprf-xiao-c5-${version}.bin`) if available
+ * — or constructs the 64 KB Espressif ESP32-C5 (`0x0017`) image directly in the browser —
+ * and patches the 128-byte `SLAPRF01` configuration block at `0x0100` so USB flashing and
+ * `.bin` downloads work 100% client-side with zero Go backend required.
+ */
+export async function buildOrPatchFirmwareBin(opts: {
+  role: "hub" | "spoke";
+  puckLabel: string;
+  wifiSSID: string;
+  wifiPass: string;
+  firmwareVersion?: string;
+  frequenciesMHz?: number[];
+}): Promise<{ bytes: Uint8Array; filename: string }> {
+  const version = opts.firmwareVersion || LATEST_FIRMWARE_VERSION;
+  const verByte = encodeFirmwareVersionByte(version);
+  const canonicalVer = decodeFirmwareVersionByte(verByte);
+  const roleCode = opts.role === "hub" ? 1 : 2;
+  const puckId = opts.role === "hub" ? 1 : 2;
+  const cleanLabel = opts.puckLabel.trim().slice(0, 24);
+  const cleanSSID = opts.role === "hub" ? opts.wifiSSID.trim().slice(0, 32) : "";
+  const cleanPass = opts.role === "hub" ? opts.wifiPass.slice(0, 39) : "";
+  const defaultFreqs = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
+  const freqs = defaultFreqs.map((def, i) => {
+    const f = opts.frequenciesMHz?.[i] ?? def;
+    return f >= 5600 && f <= 5950 ? f : def;
+  });
+
+  const IMAGE_SIZE = 64 * 1024;
+  const CONFIG_OFF = 0x0100;
+  let img: Uint8Array | null = null;
+
+  try {
+    const staticRes = await fetch(`./firmware/slaprf-xiao-c5-${canonicalVer}.bin`, { cache: "no-cache" });
+    if (staticRes.ok) {
+      const buf = await staticRes.arrayBuffer();
+      if (buf.byteLength === IMAGE_SIZE) {
+        img = new Uint8Array(buf);
+      }
+    }
+  } catch {
+    // Offline or static file not found; fall back to client-side image synthesis below.
+  }
+
+  if (!img) {
+    img = new Uint8Array(IMAGE_SIZE);
+    const dv = new DataView(img.buffer);
+    img[0] = 0xe9; // espImageMagic
+    img[1] = 1; // segment count
+    img[2] = 0x02; // DIO SPI flash
+    img[3] = 0x10; // 4MB / 80MHz
+    dv.setUint32(4, 0x40800000, true);
+    dv.setUint16(12, 0x0017, true); // ESP32-C5 chip ID
+    const segLen = IMAGE_SIZE - 32 - 16;
+    dv.setUint32(24, 0x40800000, true);
+    dv.setUint32(28, segLen, true);
+    for (let off = 32; off < IMAGE_SIZE - 16; off += 4) {
+      dv.setUint32(off, 0x00000013, true); // RISC-V NOP
+    }
+  }
+
+  // Stamp build banner at 0x0040
+  const enc = new TextEncoder();
+  const banner = enc.encode(
+    `SlapRF XIAO-ESP32-C5 SDR Firmware ${canonicalVer} (Role=${roleCode} Timer=${puckId} Label=${cleanLabel})`
+  );
+  img.fill(0, 0x0040, 0x00c0);
+  img.set(banner.subarray(0, 0x0080), 0x0040);
+
+  // Stamp 128-byte SLAPRF01 config block at 0x0100
+  const block = new Uint8Array(128);
+  const blockView = new DataView(block.buffer);
+  block.set(enc.encode("SLAPRF01"), 0);
+  block[8] = verByte;
+  block[9] = roleCode;
+  block[10] = puckId;
+  block[11] = cleanSSID ? 1 : 0;
+  for (let i = 0; i < 8; i++) {
+    blockView.setUint16(12 + i * 2, freqs[i], true);
+  }
+  blockView.setUint16(28, (puckId - 1) * 3500, true);
+  block.set(enc.encode(cleanSSID), 30);
+  block.set(enc.encode(cleanPass), 63);
+  block.set(enc.encode(cleanLabel), 103);
+
+  let cfgCrc = 0;
+  for (let i = 0; i < 127; i++) {
+    cfgCrc ^= block[i];
+  }
+  block[127] = cfgCrc;
+  img.set(block, CONFIG_OFF);
+
+  // Recompute Espressif segment XOR checksum at end of image
+  const segLen = IMAGE_SIZE - 32 - 16;
+  let chk = 0xef;
+  for (let i = 32; i < 32 + segLen; i++) {
+    chk ^= img[i];
+  }
+  img[IMAGE_SIZE - 1] = chk;
+
+  const slug = cleanLabel ? cleanLabel.replace(/[^a-zA-Z0-9_-]+/g, "-") : opts.role;
+  return {
+    bytes: img,
+    filename: `slaprf-xiao-c5-${slug}-${canonicalVer}.bin`,
+  };
+}
+
 export function isWebSerialSupported(): boolean {
   return typeof navigator !== "undefined" && Boolean((navigator as unknown as NavigatorWithSerial).serial);
 }
@@ -123,7 +291,7 @@ export function parseSlaprfConfigBlock(bytes: Uint8Array): PuckReadout | null {
     puckLabel: timerLabel,
     wifiSSID,
     frequenciesMHz,
-    firmwareVersion: `SlapRF v1.${version}`,
+    firmwareVersion: decodeFirmwareVersionByte(version),
   };
 }
 

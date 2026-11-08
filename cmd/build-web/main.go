@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"slaprf/internal/api"
+	"slaprf/internal/firmware"
 )
 
 func main() {
@@ -23,9 +24,26 @@ func main() {
 	if err := os.RemoveAll(*outDir); err != nil {
 		log.Fatalf("failed to clean %s: %v", *outDir, err)
 	}
-	for _, sub := range []string{"styles", "dist", "wasm"} {
+	for _, sub := range []string{"styles", "dist", "wasm", "firmware"} {
 		if err := os.MkdirAll(filepath.Join(*outDir, sub), 0o755); err != nil {
 			log.Fatalf("failed to create %s/%s: %v", *outDir, sub, err)
+		}
+	}
+
+	// 0. Emit static base .bin firmware images (v0.1.4, v0.1.3, v0.1.2) so the browser WebSerial
+	// flasher can fetch & patch them directly without a Go backend.
+	for _, ver := range []string{"v0.1.4", "v0.1.3", "v0.1.2"} {
+		built, err := firmware.BuildXIAOC5Image(firmware.TimerConfig{
+			Role:            firmware.RoleHubTimer,
+			PuckID:          1,
+			FirmwareVersion: ver,
+		})
+		if err != nil {
+			log.Fatalf("failed to build static firmware %s: %v", ver, err)
+		}
+		binPath := filepath.Join(*outDir, "firmware", "slaprf-xiao-c5-"+ver+".bin")
+		if err := os.WriteFile(binPath, built.Bytes, 0o644); err != nil {
+			log.Fatalf("failed to write %s: %v", binPath, err)
 		}
 	}
 

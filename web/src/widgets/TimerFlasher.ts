@@ -3,7 +3,9 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import {
+  FIRMWARE_RELEASES,
   FlashProgress,
+  LATEST_FIRMWARE_VERSION,
   TimerReadout,
   flashXiaoC5OverWebSerial,
   isWebSerialSupported,
@@ -39,6 +41,7 @@ export class TimerFlasher extends Component {
 
   private role: "hub" | "spoke" = "hub";
   private timerLabel = "";
+  private firmwareVersion = LATEST_FIRMWARE_VERSION;
   private networks: ScannedWifi[] = [];
   private scanningWifi = false;
   private customMode = false;
@@ -161,6 +164,9 @@ export class TimerFlasher extends Component {
           this.saveSSID(val);
           this.render();
         }
+      } else if (target.matches("[data-fw-version]")) {
+        this.firmwareVersion = target.value || LATEST_FIRMWARE_VERSION;
+        this.render();
       } else if (target.matches("[data-all-ports]")) {
         this.showAllPorts = (target as HTMLInputElement).checked;
       }
@@ -215,7 +221,8 @@ export class TimerFlasher extends Component {
         this.role,
         this.timerLabel.trim(),
         this.wifiSSID.trim(),
-        this.wifiPass
+        this.wifiPass,
+        this.firmwareVersion
       );
       const info = await readXiaoC5OverWebSerial(
         bytes,
@@ -238,9 +245,13 @@ export class TimerFlasher extends Component {
         }
       }
       const idNote = info.timerLabel ? ` (${info.timerLabel})` : "";
+      const verNote =
+        info.firmwareVersion === LATEST_FIRMWARE_VERSION
+          ? `${info.firmwareVersion} — up to date`
+          : `${info.firmwareVersion} — update to ${LATEST_FIRMWARE_VERSION} available`;
       this.lastSuccessMsg = `Read complete — timer is configured as ${
         info.role === "hub" ? "Hub" : "Spoke"
-      }${idNote}.`;
+      }${idNote} running ${verNote}.`;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/No port selected|aborted|cancelled/i.test(msg)) {
@@ -270,7 +281,7 @@ export class TimerFlasher extends Component {
       return;
     }
 
-    const label = `${this.roleLabel} "${cleanLabel}"`;
+    const label = `${this.roleLabel} "${cleanLabel}" (${this.firmwareVersion})`;
     this.busy = true;
     this.errorMsg = null;
     this.lastSuccessMsg = null;
@@ -284,7 +295,13 @@ export class TimerFlasher extends Component {
     try {
       const ssid = this.role === "hub" ? this.wifiSSID.trim() : "";
       const pass = this.role === "hub" ? this.wifiPass : "";
-      const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel, ssid, pass);
+      const { bytes } = await this.api.fetchFirmwareImage(
+        this.role,
+        cleanLabel,
+        ssid,
+        pass,
+        this.firmwareVersion
+      );
 
       const written = await flashXiaoC5OverWebSerial(
         bytes,
@@ -299,7 +316,7 @@ export class TimerFlasher extends Component {
       if (written) {
         this.readout = written;
       }
-      await this.api.provisionTimer(this.role, cleanLabel);
+      await this.api.provisionTimer(this.role, cleanLabel, this.firmwareVersion);
       this.lastSuccessMsg = `${label} flashed and added to Timers & Track! You can unplug this XIAO and plug in the next one.`;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -320,7 +337,13 @@ export class TimerFlasher extends Component {
       const cleanLabel = this.timerLabel.trim();
       const ssid = this.role === "hub" ? this.wifiSSID.trim() : "";
       const pass = this.role === "hub" ? this.wifiPass : "";
-      const { bytes, filename } = await this.api.fetchFirmwareImage(this.role, cleanLabel, ssid, pass);
+      const { bytes, filename } = await this.api.fetchFirmwareImage(
+        this.role,
+        cleanLabel,
+        ssid,
+        pass,
+        this.firmwareVersion
+      );
       const blob = new Blob([bytes], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -349,11 +372,13 @@ export class TimerFlasher extends Component {
     const hasList = this.networks.length > 0;
     const useCustom = this.customMode || !hasList;
     const idPlaceholder = isHub ? "e.g. Hub-1 or Timer-A" : "e.g. Spoke-2, Blue-Timer, or Timer-B";
+    const selectedRel =
+      FIRMWARE_RELEASES.find((r) => r.version === this.firmwareVersion) ?? FIRMWARE_RELEASES[0];
 
     return `
       <div class="flasher-wifi">
         <div class="flasher-wifi-head">
-          <span class="flasher-queue-label">Timer identity &amp; network</span>
+          <span class="flasher-queue-label">Timer identity, firmware &amp; network</span>
           ${
             isHub
               ? `<button type="button" class="btn btn-sm btn-ghost" data-refresh-wifi="1" ${
@@ -362,7 +387,7 @@ export class TimerFlasher extends Component {
                   ${icons.reset(13)}
                   <span>${this.scanningWifi ? "Scanning…" : "Rescan Wi-Fi"}</span>
                 </button>`
-              : `<span class="note">Spoke connects to Hub automatically over ESP-NOW</span>`
+              : `<span class="note">Spoke connects to Hub automatically over 2.4 GHz LR ESP-NOW</span>`
           }
         </div>
 
@@ -374,6 +399,20 @@ export class TimerFlasher extends Component {
             )}" data-timer-label="1" maxlength="24" spellcheck="false" autocomplete="off" ${
               this.busy ? "disabled" : ""
             } />
+          </div>
+
+          <div class="flasher-field">
+            <label class="flasher-field-label">Firmware version</label>
+            <select class="input mono" data-fw-version="1" aria-label="Firmware version" title="${esc(
+              selectedRel.summary
+            )}" ${this.busy ? "disabled" : ""}>
+              ${FIRMWARE_RELEASES.map(
+                (rel) =>
+                  `<option value="${esc(rel.version)}" ${
+                    rel.version === this.firmwareVersion ? "selected" : ""
+                  }>${esc(rel.label)}</option>`
+              ).join("")}
+            </select>
           </div>
 
           ${
@@ -481,7 +520,15 @@ export class TimerFlasher extends Component {
           <div class="flasher-readout">
             <div class="flasher-readout-head">
               <span class="flasher-queue-label">Connected timer</span>
-              <span class="mono note">${esc(this.readout.firmwareVersion)} · ${esc(this.readout.chip)}</span>
+              <span class="mono note">
+                ${esc(this.readout.firmwareVersion)}
+                ${
+                  this.readout.firmwareVersion === LATEST_FIRMWARE_VERSION
+                    ? `<span class="badge tone-good">Latest</span>`
+                    : `<span class="badge tone-warn">Update → ${LATEST_FIRMWARE_VERSION}</span>`
+                }
+                · ${esc(this.readout.chip)}
+              </span>
             </div>
             <div class="flasher-readout-grid">
               <div>
@@ -489,13 +536,17 @@ export class TimerFlasher extends Component {
                 <div class="mono">${esc(this.readout.timerLabel || "(unnamed)")}</div>
               </div>
               <div>
+                <span class="note">Firmware on board</span>
+                <div class="mono">${esc(this.readout.firmwareVersion)}</div>
+              </div>
+              <div>
                 <span class="note">Role on board</span>
-                <div class="mono">${this.readout.role === "hub" ? "Hub (Wi-Fi + ESP-NOW)" : "Spoke (ESP-NOW)"}</div>
+                <div class="mono">${this.readout.role === "hub" ? "Hub (Wi-Fi + ESP-NOW LR)" : "Spoke (ESP-NOW LR)"}</div>
               </div>
               <div>
                 <span class="note">Wi-Fi SSID</span>
                 <div class="mono">${
-                  this.readout.role === "hub" ? esc(this.readout.wifiSSID || "(not set)") : "— (uses ESP-NOW)"
+                  this.readout.role === "hub" ? esc(this.readout.wifiSSID || "(not set)") : "— (uses ESP-NOW LR)"
                 }</div>
               </div>
               <div>

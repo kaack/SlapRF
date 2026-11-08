@@ -106,10 +106,11 @@ export class WasmSimTransport implements ApiTransport {
     role: "hub" | "spoke",
     puckLabel: string,
     wifiSSID: string,
-    wifiPass: string
+    wifiPass: string,
+    firmwareVersion = "v0.1.4"
   ): Promise<FirmwareImageResult> {
     const wasm = await this.ensureReady();
-    const params = new URLSearchParams({ role });
+    const params = new URLSearchParams({ role, version: firmwareVersion });
     if (puckLabel.trim()) params.set("label", puckLabel.trim());
     if (role === "hub" && wifiSSID.trim()) {
       params.set("ssid", wifiSSID.trim());
@@ -123,7 +124,7 @@ export class WasmSimTransport implements ApiTransport {
     return {
       bytes: res.bytes,
       sha256: res.sha256 ?? "",
-      filename: `slaprf-xiao-c5-${slug}.bin`,
+      filename: `slaprf-xiao-c5-${slug}-${firmwareVersion}.bin`,
     };
   }
 

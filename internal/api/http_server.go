@@ -401,16 +401,20 @@ func (s *Server) handleProvisionGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Role      string `json:"role"`
-		PuckLabel string `json:"puckLabel"`
+		Role            string `json:"role"`
+		PuckLabel       string `json:"puckLabel"`
+		FirmwareVersion string `json:"firmwareVersion,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := s.realEngine.ProvisionGate(body.Role, body.PuckLabel); err != nil {
+	if _, err := s.activeEngine().ProvisionGate(body.Role, body.PuckLabel, body.FirmwareVersion); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if s.activeEngine() != s.realEngine {
+		_, _ = s.realEngine.ProvisionGate(body.Role, body.PuckLabel, body.FirmwareVersion)
 	}
 	s.handleGetState(w, r)
 }
@@ -450,12 +454,13 @@ func (s *Server) handleFirmwareImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	built, err := firmware.BuildXIAOC5Image(firmware.PuckConfig{
-		Role:         role,
-		PuckID:       puckID,
-		PuckLabel:    r.URL.Query().Get("label"),
-		SlotFreqsMHz: freqs,
-		WifiSSID:     r.URL.Query().Get("ssid"),
-		WifiPass:     r.URL.Query().Get("pass"),
+		Role:            role,
+		PuckID:          puckID,
+		PuckLabel:       r.URL.Query().Get("label"),
+		FirmwareVersion: r.URL.Query().Get("version"),
+		SlotFreqsMHz:    freqs,
+		WifiSSID:        r.URL.Query().Get("ssid"),
+		WifiPass:        r.URL.Query().Get("pass"),
 	})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)

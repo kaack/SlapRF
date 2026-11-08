@@ -1,6 +1,7 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { ApiClient } from "../services/api_client";
+import { LATEST_FIRMWARE_VERSION } from "../services/esp_flasher";
 import { TIMER_COLORS, timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { DetectedTimer } from "../types/models";
@@ -72,6 +73,7 @@ export class TimersList extends Component {
               puckLabel: p.puckLabel ?? "",
               color: p.color,
               isHub: (p.assignedPuckId ?? p.puckId) === 1,
+              firmwareVersion: p.firmwareVersion ?? LATEST_FIRMWARE_VERSION,
               batteryMv: p.batteryMv,
               batteryPct: p.batteryPct,
               noiseFloorDbm: p.noiseFloorDbm,
@@ -105,6 +107,7 @@ export class TimersList extends Component {
           <span>Timer</span>
           <span>Status</span>
           <span>Role</span>
+          <span>Firmware</span>
           <span>Noise floor</span>
           <span>Battery</span>
         </div>
@@ -117,6 +120,8 @@ export class TimersList extends Component {
     const tone = d.batteryPct <= 20 ? "bad" : d.batteryPct <= 40 ? "warn" : "good";
     const color = timerColor(this.store, d.puckId);
     const isPickerOpen = this.colorPickerTimerId === d.puckId;
+    const fwVer = d.firmwareVersion || LATEST_FIRMWARE_VERSION;
+    const isLatestFw = fwVer === LATEST_FIRMWARE_VERSION;
 
     const popoverHtml = isPickerOpen
       ? `
@@ -167,6 +172,15 @@ export class TimersList extends Component {
 
         <div>
           <span class="detected-role-pill ${d.isHub ? "is-hub" : ""}">${d.isHub ? "Hub" : "Spoke"}</span>
+        </div>
+
+        <div class="puck-fw-cell">
+          <span class="mono">${esc(fwVer)}</span>
+          ${
+            isLatestFw
+              ? `<span class="badge tone-good">Latest</span>`
+              : `<span class="badge tone-warn" title="Flash ${LATEST_FIRMWARE_VERSION} over USB below">Update → ${LATEST_FIRMWARE_VERSION}</span>`
+          }
         </div>
 
         <div class="mono muted">${d.online ? `${d.noiseFloorDbm.toFixed(0)} dBm` : "—"}</div>

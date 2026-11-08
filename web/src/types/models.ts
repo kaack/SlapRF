@@ -25,6 +25,7 @@ export interface DetectedTimer {
   puckLabel: string;
   color?: string;
   isHub: boolean;
+  firmwareVersion?: string;
   batteryMv: number;
   batteryPct: number;
   noiseFloorDbm: number;
@@ -39,6 +40,8 @@ export interface TrackNode {
   assignedPuckId: number;
   /** Flashed hardware ID / name stamped onto the timer (e.g. "Hub-1", "Blue-Timer"). */
   puckLabel?: string;
+  /** Running firmware release version on the assigned timer (e.g. "v0.1.4"). */
+  firmwareVersion?: string;
   /** Optional display-name override configured in the Track editor. */
   name: string;
   /** Hex color originating from the Timers section in System. */

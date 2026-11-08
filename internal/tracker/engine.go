@@ -82,15 +82,16 @@ func NewEngine() *Engine {
 				c = domain.DefaultPuckColor(p.AssignedPuckID)
 			}
 			e.detected[p.AssignedPuckID] = &domain.DetectedPuck{
-				PuckID:        p.AssignedPuckID,
-				PuckLabel:     p.PuckLabel,
-				Color:         c,
-				IsHub:         p.AssignedPuckID == 1,
-				BatteryMv:     p.BatteryMv,
-				BatteryPct:    p.BatteryPct,
-				NoiseFloorDbm: p.NoiseFloorDbm,
-				Online:        p.Online,
-				LastSeenAt:    p.LastSeenAt,
+				PuckID:          p.AssignedPuckID,
+				PuckLabel:       p.PuckLabel,
+				Color:           c,
+				IsHub:           p.AssignedPuckID == 1,
+				FirmwareVersion: p.FirmwareVersion,
+				BatteryMv:       p.BatteryMv,
+				BatteryPct:      p.BatteryPct,
+				NoiseFloorDbm:   p.NoiseFloorDbm,
+				Online:          p.Online,
+				LastSeenAt:      p.LastSeenAt,
 			}
 		}
 	}
@@ -380,16 +381,22 @@ func (e *Engine) touchDetectedPuckLocked(frame domain.PuckTelemetryFrame) {
 	d, ok := e.detected[frame.PuckID]
 	if !ok {
 		d = &domain.DetectedPuck{
-			PuckID:        frame.PuckID,
-			Color:         domain.DefaultPuckColor(frame.PuckID),
-			IsHub:         frame.PuckID == 1,
-			BatteryMv:     4080,
-			BatteryPct:    domain.ComputeBatteryPct(4080),
-			NoiseFloorDbm: -92.0,
+			PuckID:          frame.PuckID,
+			Color:           domain.DefaultPuckColor(frame.PuckID),
+			IsHub:           frame.PuckID == 1,
+			FirmwareVersion: domain.LatestFirmwareVersion,
+			BatteryMv:       4080,
+			BatteryPct:      domain.ComputeBatteryPct(4080),
+			NoiseFloorDbm:   -92.0,
 		}
 		e.detected[frame.PuckID] = d
-	} else if d.Color == "" {
-		d.Color = domain.DefaultPuckColor(frame.PuckID)
+	} else {
+		if d.Color == "" {
+			d.Color = domain.DefaultPuckColor(frame.PuckID)
+		}
+		if d.FirmwareVersion == "" {
+			d.FirmwareVersion = domain.LatestFirmwareVersion
+		}
 	}
 	d.Online = true
 	d.LastSeenAt = now
@@ -427,8 +434,13 @@ func (e *Engine) touchPuckLocked(frame domain.PuckTelemetryFrame) *domain.GatePu
 	if frame.NoiseFloorDbm != 0 {
 		puck.NoiseFloorDbm = frame.NoiseFloorDbm
 	}
-	if d, ok := e.detected[frame.PuckID]; ok && d.PuckLabel != "" {
-		puck.PuckLabel = d.PuckLabel
+	if d, ok := e.detected[frame.PuckID]; ok {
+		if d.PuckLabel != "" {
+			puck.PuckLabel = d.PuckLabel
+		}
+		if d.FirmwareVersion != "" {
+			puck.FirmwareVersion = d.FirmwareVersion
+		}
 	}
 	return puck
 }
@@ -458,6 +470,7 @@ func (e *Engine) StateSnapshot() (
 		if pucks[i].AssignedPuckID == 0 {
 			pucks[i].Online = false
 			pucks[i].PuckLabel = ""
+			pucks[i].FirmwareVersion = ""
 			pucks[i].Color = ""
 			pucks[i].BatteryMv = 0
 			pucks[i].BatteryPct = 0
@@ -465,6 +478,9 @@ func (e *Engine) StateSnapshot() (
 		}
 		if d, ok := e.detected[pucks[i].AssignedPuckID]; ok {
 			pucks[i].PuckLabel = d.PuckLabel
+			if d.FirmwareVersion != "" {
+				pucks[i].FirmwareVersion = d.FirmwareVersion
+			}
 			if d.Color != "" {
 				pucks[i].Color = d.Color
 			}

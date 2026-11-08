@@ -20,7 +20,8 @@ export interface ApiTransport {
     role: "hub" | "spoke",
     puckLabel: string,
     wifiSSID: string,
-    wifiPass: string
+    wifiPass: string,
+    firmwareVersion?: string
   ): Promise<FirmwareImageResult>;
   connectStream(onEnvelope: (msg: StreamEnvelope) => void): void;
   disconnectStream(): void;
