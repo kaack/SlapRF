@@ -26,14 +26,14 @@ You flash and configure the timers from Chrome, Edge, or Brave over USB. No comp
 
 ## Parts List and Cost
 
-Each gate timer uses four off-the-shelf parts. One XIAO ESP32-C5 draws less than `100 mA` at `5 V` (`0.5 W`), so a standard 4S or 6S FPV LiPo battery powers a timer for more than 24 hours.
+Each gate timer uses four off-the-shelf parts. One XIAO ESP32-C5 draws less than `100 mA` at `5 V` (`0.5 W`), so even a small `450 mAh` 3S LiPo battery powers a timer for over 10 hours.
 
 | Part | Purpose | Product Links | Est. Cost (USD) |
 | :--- | :--- | :--- | :--- |
 | **Seeed Studio XIAO ESP32-C5** (includes external 2.4 / 5 GHz U.FL antenna) | Measures 5.8 GHz VTX signal strength and sends data over ESP-NOW and Wi-Fi. | <ul><li>[Seeed Studio XIAO ESP32-C5](https://www.seeedstudio.com/Seeed-Studio-XIAO-ESP32C5-p-6609.html)</li></ul> | $5.90 |
 | **LIPO to USB-C Adapter** | Converts 3S to 6S LiPo battery power to `5 V` USB-C output. | <ul><li>[SpeedyBee Goggles BEC](https://www.google.com/search?tbm=shop&q=SpeedyBee+Goggles+BEC)</li><li>[AOKoda XT60 to USB Converter](https://www.google.com/search?tbm=shop&q=AOKoda+XT60+to+USB+Converter)</li></ul> | $4.00 – $17.00 |
-| **Short USB-C to USB-C cable (straight plugs)** | Connects the LIPO to USB-C Adapter to the XIAO ESP32-C5. Also used to flash firmware from a laptop. | <ul><li>[Adafruit 6" USB-C to USB-C Cable](https://www.adafruit.com/product/4198)</li><li>[SparkFun USB-C to USB-C 0.3m Flexible Silicone Cable](https://www.sparkfun.com/usb-c-to-usb-c-cable-03m-flexible-silicone.html)</li></ul> | $2.50 – $5.00 |
-| **3S–6S FPV LiPo battery (XT60)** | Powers the timer in the field. | <ul><li>[Tattu R-Line 1300mAh 6S XT60](https://genstattu.com/tattu-le-r-line-6-0-1300-6s-160c-lipo-xt60/)</li></ul> | $0 (spare pack) or $25.00+ new |
+| **Short USB-C to USB-C cable (straight plugs)** | Connects the LIPO to USB-C Adapter to the XIAO ESP32-C5. Also used to flash firmware from a laptop. | <ul><li>[Adafruit 6" USB-C to USB-C Cable](https://www.adafruit.com/product/4198)</li></ul> | $4.95 |
+| **Small 3S or 4S LiPo battery (XT60)** | Powers the timer in the field (any `450 mAh`–`850 mAh` 3S/4S pack or retired flight pack). | <ul><li>[3S 450mAh–850mAh XT60 LiPo](https://www.google.com/search?tbm=shop&q=3S+450mAh+850mAh+LiPo+XT60)</li><li>[4S 650mAh–850mAh XT60 LiPo](https://www.google.com/search?tbm=shop&q=4S+650mAh+850mAh+LiPo+XT60)</li></ul> | $0 (spare pack) or $10.00 – $15.00 |
 
 ### Estimated Total Cost
 
