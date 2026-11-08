@@ -46,6 +46,13 @@ export class LiveStandings extends Component {
       return a.pilot.slotIndex - b.pilot.slotIndex;
     });
     const sessionBest = rows[0].bestLap;
+    const bodyHtml = rows.map((r, i) => this.renderRow(r, i + 1, sessionBest)).join("");
+
+    const existingBody = this.el.querySelector<HTMLElement>("table.table-standings tbody");
+    if (existingBody) {
+      existingBody.innerHTML = bodyHtml;
+      return;
+    }
 
     this.el.innerHTML = `
       <div class="table-scroll">
@@ -63,7 +70,7 @@ export class LiveStandings extends Component {
               <th class="col-progress">On track</th>
             </tr>
           </thead>
-          <tbody>${rows.map((r, i) => this.renderRow(r, i + 1, sessionBest)).join("")}</tbody>
+          <tbody>${bodyHtml}</tbody>
         </table>
       </div>`;
   }
