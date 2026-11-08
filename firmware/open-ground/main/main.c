@@ -19,6 +19,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "slaprf_radio.h"
+
 /* ---- Profile tuning (unique to this directory) ------------------------------------------- */
 #define SLAPRF_PROFILE_CODE      1
 #define SWEEP_HZ                 50   // 8-channel 5.8 GHz sweeps per second
@@ -128,21 +130,7 @@ static uint8_t compute_crc8(const uint8_t *data, uint32_t len) {
     return crc;
 }
 
-// Hardware hooks for ESP-IDF 5 GHz IQ power capture & 2.4 GHz ESP-NOW on ESP32-C5
-extern void xiao_c5_select_ufl_antenna(void);
-extern void slaprf_lock_wifi_band_2g4_only(void);
-extern void slaprf_init_2g4_radio(uint8_t channel, uint8_t long_range, uint8_t tx_power_qdbm);
-extern void slaprf_start_wifi_bridge(uint8_t wifi_mode, const char *ssid, const char *pass);
-extern void slaprf_spoke_sync_to_hub_channel(void);
-extern void slaprf_broadcast_hub_sync_beacon(uint8_t seq);
-extern uint32_t slaprf_ms_since_hub_beacon(void);
-extern void slaprf_wait_for_next_sweep_tick(uint32_t interval_us);
-extern void slaprf_forward_udp_to_laptop(const void *frame, uint32_t len);
-extern int8_t esp_sdr_measure_5g_channel_dbm(uint16_t center_freq_mhz);
-extern uint16_t xiao_c5_read_battery_mv(void);
-extern void espnow_send(const void *frame, uint32_t len);
-extern int espnow_poll(void *buf, uint32_t cap);
-extern void delay_microseconds(uint32_t us);
+// Hardware layer (2.4 GHz link, Hub bridge, 5.8 GHz sensing): firmware/components/slaprf_radio
 
 /* ---- Hub: slot table ---------------------------------------------------------------------- */
 
@@ -236,6 +224,9 @@ static uint8_t spoke_join_hub(void) {
 void app_main(void) {
     const uint8_t is_hub = g_flash_cfg.role == ROLE_HUB_TIMER;
     const uint32_t interval_us = 1000000UL / SWEEP_HZ;
+
+    // 0. Let the web flasher read this board's config (fingerprint, role, profile) over USB.
+    slaprf_start_config_query_service(&g_flash_cfg, sizeof(g_flash_cfg));
 
     // 1. External U.FL antenna, 2.4 GHz-only band (never transmit on 5.8 GHz video channels).
     xiao_c5_select_ufl_antenna();

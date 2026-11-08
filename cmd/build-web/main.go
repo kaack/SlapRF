@@ -30,23 +30,23 @@ func main() {
 		}
 	}
 
-	// 0. Build one static base .bin per firmware profile from the current source so the browser
-	// WebSerial flasher can fetch & patch them directly without a Go backend.
+	// 0. One base .bin per firmware profile so the browser WebSerial flasher can fetch & patch it
+	// without a Go backend. Prefer the compiled ESP-IDF image (web/firmware/, filled by CI from
+	// firmware/<profile>/); fall back to the placeholder image when it hasn't been built.
+	compiled := 0
 	for _, p := range firmware.Profiles {
-		built, err := firmware.BuildXIAOC5Image(firmware.TimerConfig{
-			Role:        firmware.RoleHubTimer,
-			Profile:     p.ID,
-			Fingerprint: 1, // Placeholder; the browser stamps the real fingerprint at flash time
-		})
-		if err != nil {
-			log.Fatalf("failed to build static firmware %s: %v", p.ID, err)
+		name := "slaprf-xiao-c5-" + p.ID + ".bin"
+		binPath := filepath.Join(*outDir, "firmware", name)
+		if _, err := os.Stat(filepath.Join(*webDir, "firmware", name)); err == nil {
+			mustCopyFile(filepath.Join(*webDir, "firmware", name), binPath)
+			compiled++
+			continue
 		}
-		binPath := filepath.Join(*outDir, "firmware", "slaprf-xiao-c5-"+p.ID+".bin")
-		if err := os.WriteFile(binPath, built.Bytes, 0o644); err != nil {
+		if err := os.WriteFile(binPath, firmware.SyntheticBase(), 0o644); err != nil {
 			log.Fatalf("failed to write %s: %v", binPath, err)
 		}
 	}
-	log.Printf("[build-web] Built %d firmware profiles", len(firmware.Profiles))
+	log.Printf("[build-web] Firmware profiles: %d compiled, %d placeholder", compiled, len(firmware.Profiles)-compiled)
 
 	// 1. Copy index.html (and 404.html for GitHub Pages SPA fallback) and styles/*.css
 	mustCopyFile(filepath.Join(*webDir, "index.html"), filepath.Join(*outDir, "index.html"))

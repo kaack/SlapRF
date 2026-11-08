@@ -10,7 +10,12 @@ permissions:
   contents: write
 
 jobs:
+  firmware:
+    name: Build firmware profiles
+    uses: ./.github/workflows/firmware.yml
+
   release:
+    needs: firmware
     name: Build Release Binaries
     runs-on: ubuntu-latest
     steps:
@@ -21,6 +26,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+
+      - name: Download compiled firmware images
+        uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-*
+          merge-multiple: true
+          path: web/firmware
 
       - name: Build WASM Simulation Engine for Embedded Web Assets
         run: go run ./cmd/build-web -web ./web -out ./_site
@@ -45,4 +57,5 @@ jobs:
             dist/slaprf-macos-amd64
             dist/slaprf-linux-amd64
             dist/slaprf-linux-arm64
+            web/firmware/*.bin
           generate_release_notes: true

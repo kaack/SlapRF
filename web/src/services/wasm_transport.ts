@@ -152,33 +152,20 @@ export class WasmSimTransport implements ApiTransport {
     return JSON.parse(res.body) as T;
   }
 
+  /**
+   * The in-browser engine has no access to the compiled firmware images, so defer to the
+   * browser patcher (`buildOrPatchFirmwareBin`), which fetches `./firmware/<profile>.bin`.
+   */
   public async fetchFirmwareImage(
-    role: "hub" | "spoke",
-    puckLabel: string,
-    wifiSSID: string,
-    wifiPass: string,
-    profile: string,
-    fingerprint: string
+    _role: "hub" | "spoke",
+    _puckLabel: string,
+    _wifiSSID: string,
+    _wifiPass: string,
+    _profile: string,
+    _fingerprint: string
   ): Promise<FirmwareImageResult> {
-    const wasm = await this.ensureReady();
-    const params = new URLSearchParams({ role, profile, fingerprint });
-    if (puckLabel.trim()) params.set("label", puckLabel.trim());
-    if (role === "hub" && wifiSSID.trim()) {
-      params.set("ssid", wifiSSID.trim());
-      params.set("pass", wifiPass);
-    }
-    const res = wasm.fetchBytes(`/api/firmware/xiao-c5.bin?${params.toString()}`);
-    if (res.status < 200 || res.status >= 300) {
-      throw new Error(`WASM firmware build failed: ${res.status}`);
-    }
-    const slug = puckLabel.trim() ? puckLabel.trim().replace(/[^a-zA-Z0-9_-]+/g, "-") : role;
-    return {
-      bytes: res.bytes,
-      sha256: res.sha256 ?? "",
-      filename: `slaprf-xiao-c5-${slug}-${profile}.bin`,
-    };
+    throw new Error("Firmware images are patched in the browser in simulation mode.");
   }
-
   public connectStream(onEnvelope: (msg: StreamEnvelope) => void): void {
     this.streamCallback = onEnvelope;
     void this.ensureReady().then((wasm) => {

@@ -1,0 +1,12 @@
+# SlapRF firmware profile: obstructed (Seeed XIAO ESP32-C5)
+CONFIG_IDF_TARGET="esp32c5"
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_PARTITION_TABLE_SINGLE_APP=y
+CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# 1 ms ticks so 100 Hz sweeps pace accurately
+CONFIG_FREERTOS_HZ=1000
+
+# Logs on UART0; the native USB port is reserved for the flasher's SLAPRF? config query
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y

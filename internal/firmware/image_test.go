@@ -1,6 +1,9 @@
 package firmware
 
 import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -106,7 +109,7 @@ func TestProfileSourcesMatchManifests(t *testing.T) {
 		return n
 	}
 	for _, p := range Profiles {
-		raw, err := os.ReadFile(filepath.Join("..", "..", "firmware", p.ID, "main.c"))
+		raw, err := os.ReadFile(filepath.Join("..", "..", "firmware", p.ID, "main", "main.c"))
 		if err != nil {
 			t.Fatalf("%s: %v", p.ID, err)
 		}
@@ -129,5 +132,55 @@ func TestProfileSourcesMatchManifests(t *testing.T) {
 func TestBuildRejectsInvalidRole(t *testing.T) {
 	if _, err := BuildXIAOC5Image(TimerConfig{}); err == nil {
 		t.Fatal("expected error for missing role")
+	}
+}
+
+// A real ESP-IDF build is a merged flash image (bootloader + partitions + app at 0x10000) whose
+// app has several segments and an appended SHA-256. Patching must keep it bootable.
+func TestPatchMergedImageRepairsChecksumAndSHA(t *testing.T) {
+	const appOff = 0x10000
+	app := []byte{espImageMagic, 2, 0x02, 0x10}
+	app = append(app, make([]byte, 20)...) // rest of the 24-byte header
+	app[23] = 1                            // hash appended
+	seg := func(data []byte) []byte {
+		h := make([]byte, 8)
+		binary.LittleEndian.PutUint32(h[4:8], uint32(len(data)))
+		return append(h, data...)
+	}
+	rodata := make([]byte, 400)
+	copy(rodata[100:], []byte(ConfigMagic))
+	app = append(app, seg(make([]byte, 64))...)
+	app = append(app, seg(rodata)...)
+	pad := 15 - (len(app) % 16)
+	app = append(app, make([]byte, pad+1+32)...)
+	merged := append(bytes.Repeat([]byte{0xFF}, appOff), app...)
+
+	built, err := PatchImage(merged, TimerConfig{Role: RoleSpokeTimer, Profile: "indoor", Fingerprint: 0x1234ABCD, PuckLabel: "S2"})
+	if err != nil {
+		t.Fatalf("PatchImage: %v", err)
+	}
+	out := built.Bytes
+	parsed, err := InspectConfig(out)
+	if err != nil || parsed.Fingerprint != 0x1234ABCD || parsed.Profile != "indoor" || parsed.PuckLabel != "S2" {
+		t.Fatalf("unexpected parsed config %+v (%v)", parsed, err)
+	}
+
+	// Independently verify checksum + SHA-256 like the ESP-IDF bootloader does.
+	pos := appOff + 24
+	chk := byte(0xEF)
+	for s := 0; s < 2; s++ {
+		n := int(binary.LittleEndian.Uint32(out[pos+4 : pos+8]))
+		for _, b := range out[pos+8 : pos+8+n] {
+			chk ^= b
+		}
+		pos += 8 + n
+	}
+	pos += 15 - ((pos - appOff) % 16)
+	if out[pos] != chk {
+		t.Fatalf("checksum mismatch: got %02x want %02x", out[pos], chk)
+	}
+	want := sha256.Sum256(out[appOff : pos+1])
+	if !bytes.Equal(out[pos+1:pos+33], want[:]) {
+		t.Fatal("appended SHA-256 not updated")
 	}
 }

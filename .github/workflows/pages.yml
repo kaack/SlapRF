@@ -16,7 +16,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  firmware:
+    name: Build firmware profiles
+    uses: ./.github/workflows/firmware.yml
+
   build-github-page:
+    needs: firmware
     name: Build & Push SPA to github-page branch
     runs-on: ubuntu-latest
     steps:
@@ -27,6 +32,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
+
+      - name: Download compiled firmware images
+        uses: actions/download-artifact@v4
+        with:
+          pattern: firmware-*
+          merge-multiple: true
+          path: web/firmware
 
       - name: Build static SPA and Go WASM simulation engine
         run: go run ./cmd/build-web -web ./web -out ./_site

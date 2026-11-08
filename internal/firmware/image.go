@@ -127,10 +127,40 @@ func ParseFingerprint(s string) uint32 {
 	return uint32(v)
 }
 
-// BuildXIAOC5Image constructs a flashable ESP32-C5 firmware image for the given role and
-// firmware profile, stamping the board fingerprint, timer name, 8-channel 5.8 GHz frequency
-// table, and optional Wi-Fi credentials into the `SLAPRF02` block.
+// BuildXIAOC5Image builds a flashable image for the given role and profile from the built-in
+// placeholder base (used when no compiled firmware for the profile is available).
 func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
+	return PatchImage(SyntheticBase(), cfg)
+}
+
+// SyntheticBase returns a 64 KB placeholder ESP32-C5 app image (valid header, RISC-V NOP sled,
+// empty SLAPRF02 block at 0x100). It flashes, but does nothing: real images come from the
+// ESP-IDF builds of firmware/<profile>/ (see firmware/README.md).
+func SyntheticBase() []byte {
+	img := make([]byte, imageSize)
+	img[0] = espImageMagic
+	img[1] = 1                                          // segment count
+	img[2] = 0x02                                       // DIO SPI flash mode
+	img[3] = 0x10                                       // 4MB / 80MHz flash size+speed nibble
+	binary.LittleEndian.PutUint32(img[4:8], 0x40800000) // entry_addr in ESP32-C5 SRAM
+	binary.LittleEndian.PutUint16(img[12:14], esp32c5ChipID)
+	img[23] = 0 // no appended SHA-256
+	segLen := uint32(imageSize - 32 - 16)
+	binary.LittleEndian.PutUint32(img[24:28], 0x40800000)
+	binary.LittleEndian.PutUint32(img[28:32], segLen)
+	for off := 32; off < imageSize-16; off += 4 {
+		binary.LittleEndian.PutUint32(img[off:off+4], 0x00000013)
+	}
+	copy(img[0x0040:], []byte("SlapRF XIAO-ESP32-C5 placeholder image (no compiled firmware)"))
+	copy(img[configOff:], []byte(ConfigMagic))
+	return img
+}
+
+// PatchImage stamps cfg into the SLAPRF02 block of `base` (a copy is returned) and repairs the
+// ESP-IDF app image integrity data (segment XOR checksum and, if present, the appended SHA-256)
+// so the bootloader accepts it. `base` may be a bare app image or a merged flash image
+// (bootloader + partition table + app at 0x10000) as produced by `esptool merge_bin`.
+func PatchImage(base []byte, cfg TimerConfig) (*BuiltImage, error) {
 	if cfg.Role != RoleHubTimer && cfg.Role != RoleSpokeTimer {
 		return nil, ErrInvalidRole
 	}
@@ -160,35 +190,12 @@ func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 		}
 	}
 
-	img := make([]byte, imageSize)
-
-	// 1. Standard 24-byte Espressif esp_image_header_t + 8-byte esp_image_segment_header_t
-	img[0] = espImageMagic
-	img[1] = 1    // segment count
-	img[2] = 0x02 // DIO SPI flash mode
-	img[3] = 0x10 // 4MB / 80MHz flash size+speed nibble
-	binary.LittleEndian.PutUint32(img[4:8], 0x40800000) // entry_addr in ESP32-C5 SRAM
-	binary.LittleEndian.PutUint16(img[12:14], esp32c5ChipID)
-	img[23] = 0 // append_digest disabled for compact single-segment image
-
-	segLen := uint32(imageSize - 32 - 16)
-	binary.LittleEndian.PutUint32(img[24:28], 0x40800000)
-	binary.LittleEndian.PutUint32(img[28:32], segLen)
-
-	// 2. Deterministic RISC-V NOP sled (0x00000013 = addi x0, x0, 0) in code area
-	for off := 32; off < imageSize-16; off += 4 {
-		binary.LittleEndian.PutUint32(img[off:off+4], 0x00000013)
+	img := append([]byte(nil), base...)
+	off := bytes.Index(img, []byte(ConfigMagic))
+	if off < 0 || off+configLen > len(img) {
+		return nil, errors.New("firmware image has no SLAPRF02 config block")
 	}
 
-	// 3. Human-readable build banner at 0x0040
-	banner := fmt.Sprintf("SlapRF XIAO-ESP32-C5 %s profile=%s role=%d fp=%s label=%s",
-		cfg.FirmwareVersion, profile.ID, cfg.Role, FormatFingerprint(cfg.Fingerprint), cfg.PuckLabel)
-	if len(banner) > 0xC0 {
-		banner = banner[:0xC0]
-	}
-	copy(img[0x0040:0x0100], []byte(banner))
-
-	// 4. SLAPRF02 config block
 	var block [configLen]byte
 	copy(block[0:8], []byte(ConfigMagic))
 	maj, min, pat := parseVersion(cfg.FirmwareVersion)
@@ -206,14 +213,11 @@ func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 	copy(block[offPass:offPass+40], []byte(cfg.WifiPass))
 	copy(block[offLabel:offLabel+maxLabelLen], []byte(cfg.PuckLabel))
 	block[offCRC] = xor8(block[:offCRC])
-	copy(img[configOff:configOff+configLen], block[:])
+	copy(img[off:off+configLen], block[:])
 
-	// 5. Espressif image XOR checksum byte at the end of the 16-byte aligned trailer
-	chk := byte(0xEF)
-	for i := 32; i < int(32+segLen); i++ {
-		chk ^= img[i]
+	if err := RepairAppImage(img, off); err != nil {
+		return nil, err
 	}
-	img[imageSize-1] = chk
 
 	sum := sha256.Sum256(img)
 	roleSlug := "hub"
@@ -224,9 +228,60 @@ func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 		Bytes:     img,
 		SHA256Hex: hex.EncodeToString(sum[:]),
 		Config:    cfg,
-		ConfigOff: configOff,
+		ConfigOff: off,
 		Filename:  fmt.Sprintf("slaprf-xiao-c5-%s-%s-%s.bin", roleSlug, profile.ID, cfg.FirmwareVersion),
 	}, nil
+}
+
+// appImageOffsets are where an ESP-IDF app image can start: a bare app (0x0) or the factory
+// app partition inside a merged flash image (0x10000).
+var appImageOffsets = []int{0x10000, 0x0}
+
+// RepairAppImage recomputes the ESP-IDF app image checksum (and appended SHA-256 if enabled)
+// for the app image that contains byte offset `patchedAt`.
+func RepairAppImage(img []byte, patchedAt int) error {
+	start := -1
+	for _, o := range appImageOffsets {
+		if o <= patchedAt && o+24 <= len(img) && img[o] == espImageMagic {
+			start = o
+			break
+		}
+	}
+	if start < 0 {
+		return errors.New("no ESP app image header found before the config block")
+	}
+	segCount := int(img[start+1])
+	hashAppended := img[start+23] == 1
+	pos := start + 24
+	chk := byte(0xEF)
+	for s := 0; s < segCount; s++ {
+		if pos+8 > len(img) {
+			return errors.New("truncated ESP app image segment header")
+		}
+		segLen := int(binary.LittleEndian.Uint32(img[pos+4 : pos+8]))
+		pos += 8
+		if pos+segLen > len(img) {
+			return errors.New("truncated ESP app image segment")
+		}
+		for _, b := range img[pos : pos+segLen] {
+			chk ^= b
+		}
+		pos += segLen
+	}
+	// Pad so the checksum byte is the last byte of a 16-byte block (relative to the image start).
+	pos += 15 - ((pos - start) % 16)
+	if pos >= len(img) {
+		return errors.New("truncated ESP app image checksum")
+	}
+	img[pos] = chk
+	if hashAppended {
+		if pos+1+32 > len(img) {
+			return errors.New("truncated ESP app image SHA-256")
+		}
+		digest := sha256.Sum256(img[start : pos+1])
+		copy(img[pos+1:pos+33], digest[:])
+	}
+	return nil
 }
 
 // InspectConfig locates and decodes the SLAPRF02 configuration block inside a firmware binary.

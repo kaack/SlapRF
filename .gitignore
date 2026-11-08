@@ -19,3 +19,12 @@ dist/
 _site/
 web/wasm/*.wasm
 web/wasm/*.js
+
+# Compiled firmware images (built by CI from firmware/<profile>/)
+web/firmware/*.bin
+# ESP-IDF build outputs
+firmware/*/build/
+firmware/*/sdkconfig
+firmware/*/sdkconfig.old
+firmware/*/managed_components/
+

@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
 
 	"slaprf/internal/domain"
@@ -470,7 +472,7 @@ func (s *Server) handleFirmwareImage(w http.ResponseWriter, r *http.Request) {
 		freqs[i] = pilots[i].FrequencyMHz
 	}
 
-	built, err := firmware.BuildXIAOC5Image(firmware.TimerConfig{
+	cfg := firmware.TimerConfig{
 		Role:         role,
 		Profile:      r.URL.Query().Get("profile"),
 		Fingerprint:  firmware.ParseFingerprint(r.URL.Query().Get("fingerprint")),
@@ -478,7 +480,17 @@ func (s *Server) handleFirmwareImage(w http.ResponseWriter, r *http.Request) {
 		SlotFreqsMHz: freqs,
 		WifiSSID:     r.URL.Query().Get("ssid"),
 		WifiPass:     r.URL.Query().Get("pass"),
-	})
+	}
+	// Prefer the compiled ESP-IDF image for this profile (web/firmware/, filled by CI);
+	// fall back to the built-in placeholder image when it isn't available.
+	var built *firmware.BuiltImage
+	var err error
+	profile := firmware.ProfileByID(cfg.Profile)
+	if base, readErr := os.ReadFile(filepath.Join(s.webRootDir, "firmware", "slaprf-xiao-c5-"+profile.ID+".bin")); readErr == nil {
+		built, err = firmware.PatchImage(base, cfg)
+	} else {
+		built, err = firmware.BuildXIAOC5Image(cfg)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

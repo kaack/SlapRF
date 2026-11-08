@@ -1,9 +1,9 @@
 /**
- * SlapRF firmware profile: Open field · Gate-top mount
+ * SlapRF firmware profile: Indoor · Gym or warehouse
  *
- * Timers are mounted on top of the gate or a pole with clear line of sight to the Hub, so the link has
- * margin to spare. This design spends it on timing resolution instead: 100 Hz sweeps over a standard
- * 1 Mbps link at +14 dBm, sending a 2-sweep window every sweep.
+ * Short distances and reflective walls: the problem is multipath, not range. Low +8 dBm TX keeps the
+ * 2.4 GHz link from flooding the room, 100 Hz sweeps keep timing tight, and a median-of-3 filter on each
+ * channel rejects single-sweep multipath nulls before they reach the laptop.
  *
  * This directory is a complete, self-contained firmware for one situation. Other profiles live
  * next to it (firmware/<profile>/) and intentionally duplicate the shared protocol code so each
@@ -19,13 +19,15 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "slaprf_radio.h"
+
 /* ---- Profile tuning (unique to this directory) ------------------------------------------- */
-#define SLAPRF_PROFILE_CODE      2
+#define SLAPRF_PROFILE_CODE      3
 #define SWEEP_HZ                 100  // 8-channel 5.8 GHz sweeps per second
 #define WINDOW_SAMPLES           2    // Sweeps per window frame
 #define TX_EVERY_SWEEPS          1    // 2 / 1 = every sweep delivered twice
 #define LINK_LONG_RANGE          0    // Standard 1 Mbps ESP-NOW
-#define TX_POWER_QDBM            56   // +14 dBm
+#define TX_POWER_QDBM            32   // +8 dBm
 #define TDMA_SLOT_US             900  // 1 Mbps frame (~0.5 ms) + guard
 
 /* ---- Shared protocol ---------------------------------------------------------------------- */
@@ -128,21 +130,7 @@ static uint8_t compute_crc8(const uint8_t *data, uint32_t len) {
     return crc;
 }
 
-// Hardware hooks for ESP-IDF 5 GHz IQ power capture & 2.4 GHz ESP-NOW on ESP32-C5
-extern void xiao_c5_select_ufl_antenna(void);
-extern void slaprf_lock_wifi_band_2g4_only(void);
-extern void slaprf_init_2g4_radio(uint8_t channel, uint8_t long_range, uint8_t tx_power_qdbm);
-extern void slaprf_start_wifi_bridge(uint8_t wifi_mode, const char *ssid, const char *pass);
-extern void slaprf_spoke_sync_to_hub_channel(void);
-extern void slaprf_broadcast_hub_sync_beacon(uint8_t seq);
-extern uint32_t slaprf_ms_since_hub_beacon(void);
-extern void slaprf_wait_for_next_sweep_tick(uint32_t interval_us);
-extern void slaprf_forward_udp_to_laptop(const void *frame, uint32_t len);
-extern int8_t esp_sdr_measure_5g_channel_dbm(uint16_t center_freq_mhz);
-extern uint16_t xiao_c5_read_battery_mv(void);
-extern void espnow_send(const void *frame, uint32_t len);
-extern int espnow_poll(void *buf, uint32_t cap);
-extern void delay_microseconds(uint32_t us);
+// Hardware layer (2.4 GHz link, Hub bridge, 5.8 GHz sensing): firmware/components/slaprf_radio
 
 /* ---- Hub: slot table ---------------------------------------------------------------------- */
 
@@ -231,11 +219,28 @@ static uint8_t spoke_join_hub(void) {
     }
 }
 
+/* ---- Indoor only: median-of-3 multipath filter ------------------------------------------- */
+
+static int8_t s_hist[2][8] = {
+    {-95, -95, -95, -95, -95, -95, -95, -95},
+    {-95, -95, -95, -95, -95, -95, -95, -95},
+};
+
+static int8_t median3(int8_t a, int8_t b, int8_t c) {
+    if (a > b) { int8_t t = a; a = b; b = t; }
+    if (b > c) { int8_t t = b; b = c; c = t; }
+    if (a > b) { int8_t t = a; a = b; b = t; }
+    return b;
+}
+
 /* ---- Main loop ---------------------------------------------------------------------------- */
 
 void app_main(void) {
     const uint8_t is_hub = g_flash_cfg.role == ROLE_HUB_TIMER;
     const uint32_t interval_us = 1000000UL / SWEEP_HZ;
+
+    // 0. Let the web flasher read this board's config (fingerprint, role, profile) over USB.
+    slaprf_start_config_query_service(&g_flash_cfg, sizeof(g_flash_cfg));
 
     // 1. External U.FL antenna, 2.4 GHz-only band (never transmit on 5.8 GHz video channels).
     xiao_c5_select_ufl_antenna();
@@ -273,7 +278,9 @@ void app_main(void) {
         cur->seq_num = seq++;
         for (int i = 0; i < MAX_PILOT_SLOTS; i++) {
             int8_t raw = esp_sdr_measure_5g_channel_dbm(g_flash_cfg.slot_freqs_mhz[i]);
-            cur->rssi_dbm[i] = raw;
+            cur->rssi_dbm[i] = median3(raw, s_hist[0][i], s_hist[1][i]);
+            s_hist[1][i] = s_hist[0][i];
+            s_hist[0][i] = raw;
         }
         sweeps++;
 

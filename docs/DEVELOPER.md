@@ -27,7 +27,7 @@ SlapRF is designed with a **zero-Node.js, single-toolchain** build architecture:
   - The Go backend embeds the pure-Go [`esbuild`](https://github.com/evanw/esbuild) library (`internal/api/bundler_native.go`), which compiles and bundles `web/src/**/*.ts` into `dist/app.js` in memory in ~15 ms.
   - You do **not** need `node`, `npm`, `pnpm`, `webpack`, or `vite` installed to edit TypeScript, CSS, or Go code.
 - **Required for Browser USB Flashing**: **Chrome, Edge, or Brave** (desktop) for WebSerial API support (`navigator.serial`).
-- **Optional (Firmware C Source Only)**: **Espressif ESP-IDF v5.4+** (`idf.py` with `esp32c5` target support) — only needed if you are modifying the C source in `firmware/xiao_c5_timer/main.c` and regenerating the base `.bin` image. Standard config changes (role, timer label, Wi-Fi credentials, 5.8 GHz channels) are binary-patched at flash time (`SLAPRF01` magic block) without recompiling C code.
+- **Optional (Firmware C Source Only)**: **Espressif ESP-IDF v5.5+** (`idf.py` with `esp32c5` target support) — only needed to build the `firmware/<profile>/` images locally; otherwise CI (`.github/workflows/firmware.yml`) builds them. Per-board settings (role, timer name, fingerprint, Wi-Fi credentials, 5.8 GHz channels) are binary-patched at flash time into the `SLAPRF02` config block without recompiling C code.
 
 ### Verify Your Environment
 
@@ -58,7 +58,7 @@ SlapRF/
 │   ├── api/             # REST + 50 Hz SSE server, pure-Go esbuild TS bundler, OS Wi-Fi scanner
 │   ├── domain/          # Shared data models (pilots, gates, telemetry frames, timing rules, sim state)
 │   ├── dsp/             # 8-channel 5.8 GHz EMA filter, hysteresis detector, parabolic peak fitter
-│   ├── firmware/        # XIAO ESP32-C5 firmware image generator & SLAPRF01 binary config patcher
+│   ├── firmware/        # SLAPRF02 config patcher for compiled XIAO ESP32-C5 images & profile.json loader
 │   ├── ingest/          # 50 Hz multi-gate physics/RF simulator & Hub Wi-Fi UDP (:5404) receiver
 │   ├── laprf/           # ImmersionRC LapRF 8-Way SLIP binary protocol emulator (TCP :5403)
 │   └── tracker/         # Multi-gate timing engine, 5-stage crossing guardrails, section split math
@@ -67,6 +67,7 @@ SlapRF/
 │   ├── index.html       # SPA entry HTML & boot loader
 │   ├── styles/          # Modular CSS (tokens.css, base.css, layout.css, components.css, views.css)
 │   ├── wasm/            # Compiled slaprf.wasm & wasm_exec.js served to the browser
+│   ├── firmware/        # CI-built slaprf-xiao-c5-<profile>.bin images (git-ignored build outputs)
 │   └── src/             # TypeScript SPA source
 │       ├── core/        # Hash router, WakeLock manager, custom select & table scroll helpers
 │       ├── layout/      # AppShell, Sidebar, TopBar
@@ -76,7 +77,14 @@ SlapRF/
 │       ├── views/       # Practice (LiveView), Analytics (PilotView), Simulator (SimView), Settings (SetupView)
 │       └── widgets/     # Oscilloscope chart, lap/section charts, track editor, timing rules, flasher modal
 ├── firmware/
-│   └── xiao_c5_timer/   # C firmware source (main.c) for Seeed Studio XIAO ESP32-C5 (Hub & Spoke roles)
+│   ├── README.md        # Profile overview & shared wire protocol
+│   ├── embed.go         # //go:embed of every */profile.json (firmware profile manifests)
+│   ├── open-ground/     # One ESP-IDF project per profile (main/main.c, profile.json, sdkconfig.defaults)
+│   ├── open-elevated/
+│   ├── indoor/
+│   ├── obstructed/
+│   └── components/
+│       └── slaprf_radio/ # Shared ESP-IDF hardware component (2.4 GHz link, Hub bridge, 5.8 GHz sensing)
 ├── scripts/             # Developer helper scripts (.ps1 for Windows PowerShell, .sh for macOS/Linux)
 └── docs/
     ├── ARCHITECTURE.md  # Low-level RF, protocol, DSP, and state machine reference
@@ -221,9 +229,9 @@ Every core subsystem includes deterministic unit tests:
 | :--- | :--- | :--- |
 | `internal/dsp` | `peak_detector_test.go` | EMA smoothing, hysteresis enter/exit thresholds, sub-frame parabolic vertex interpolation |
 | `internal/tracker` | `crossing_rules_test.go`, `track_rules_test.go`, `thresholds_test.go`, `pilot_conflict_test.go`, `track_test.go` | 5-stage crossing guardrails, per-gate rule overrides, section splits (`S1`–`S4`), channel conflict resolution |
-| `internal/ingest` | `simulator_test.go`, `wifi_udp_test.go` | 50 Hz physics/RF simulator state machine & `0xC5 0x59` 4-sample sliding-window FEC packet reconstruction |
+| `internal/ingest` | `simulator_test.go`, `wifi_udp_test.go` | 50 Hz physics/RF simulator state machine & `0xC5 0x59` variable-length sliding-window FEC packet reconstruction |
 | `internal/laprf` | `protocol_test.go` | ImmersionRC LapRF SLIP framing, CRC-16-CCITT, `RF_SETUP` & passing record encoding |
-| `internal/firmware` | `image_test.go` | `SLAPRF01` 128-byte config block patching, CRC32 verification, Espressif SHA-256 tail recalculation |
+| `internal/firmware` | `image_test.go` | `SLAPRF02` 160-byte config block round-trip for every profile, fingerprint generation, merged-image checksum & SHA-256 repair, `main.c` ↔ `profile.json` consistency |
 | `internal/api` | `http_server_test.go`, `sse_hub_test.go`, `wifi_test.go` | REST endpoints, SSE broadcast fan-out, TypeScript bundler, Wi-Fi SSID parser |
 
 Run all tests:
@@ -242,24 +250,51 @@ go test -v -ldflags="-s -w" ./internal/tracker
 
 ## 7. Hardware Firmware Development (`XIAO ESP32-C5`)
 
-The C firmware for the Seeed Studio XIAO ESP32-C5 lives in [`firmware/xiao_c5_timer/main.c`](../firmware/xiao_c5_timer/main.c).
+The firmware for the Seeed Studio XIAO ESP32-C5 is split into **firmware profiles**, one ESP-IDF project per track type / timer placement (see [`firmware/README.md`](../firmware/README.md)):
 
-### How Binary Patching Works (`SLAPRF01`)
+| Directory | Code | Track | Timer placement |
+| :--- | :--- | :--- | :--- |
+| [`firmware/open-ground/`](../firmware/open-ground/) | `1` | Open field | On the grass at the gate base (default) |
+| [`firmware/open-elevated/`](../firmware/open-elevated/) | `2` | Open field | On top of the gate or a pole |
+| [`firmware/indoor/`](../firmware/indoor/) | `3` | Gym / warehouse | Any |
+| [`firmware/obstructed/`](../firmware/obstructed/) | `4` | Woods, bando, technical | Behind or under obstacles |
 
-Both **Hub** and **Spoke** timers run the **exact same compiled firmware binary**. The C source embeds a 128-byte `slaprf_patch_config_t` struct aligned in `.rodata` prefixed by the 8-byte magic marker `SLAPRF01`:
+- Each profile directory holds `main/main.c` (profile tuning such as `SLAPRF_PROFILE_CODE`, `SWEEP_HZ`, `WINDOW_SAMPLES`, link rate, and TX power `#define`d at the top), `profile.json` (manifest), `CMakeLists.txt`, and `sdkconfig.defaults`.
+- All profiles pull in the shared hardware component [`firmware/components/slaprf_radio/`](../firmware/components/slaprf_radio/) (2.4 GHz ESP-NOW link, Hub Wi-Fi/UDP bridge, sync beacon, 5.8 GHz sensing).
+- `profile.json` files are embedded by [`firmware/embed.go`](../firmware/embed.go) and loaded by [`internal/firmware/profiles.go`](../internal/firmware/profiles.go); they are the single source of truth for the flasher's **Firmware** dropdown, which lists one current build per profile (there is no version list).
+- `go test -ldflags="-s -w" ./internal/firmware/` checks that every `main.c` matches its manifest.
 
-- When a user clicks **Flash Timer** in `Settings > Flasher`, either the Go backend (`internal/firmware/image.go`) or the browser-side TypeScript patcher (`web/src/services/esp_flasher.ts`) locates the `SLAPRF01` magic bytes in the `.bin` image, overwrites the role (`Hub` vs `Spoke`), timer label, Wi-Fi SSID/password, and 8 Raceband frequencies, updates the inner CRC-32, and recalculates the Espressif image XOR checksum and trailing SHA-256 digest before streaming the image over WebSerial to the ESP32-C5 ROM bootloader at `921600` baud.
+> [!NOTE]
+> 5.8 GHz band-power measurement ([`slaprf_rf58.c`](../firmware/components/slaprf_radio/slaprf_rf58.c)) is currently a **placeholder** that returns the noise floor; see its header comment for the planned raw-IQ debug-path approach.
 
-### Compiling Raw C Firmware with ESP-IDF (Optional)
+### How Binary Patching Works (`SLAPRF02`)
 
-If you modify [`firmware/xiao_c5_timer/main.c`](../firmware/xiao_c5_timer/main.c):
+Hub and Spoke timers of the same profile run the **same compiled image**. Each `main.c` embeds a 160-byte `slaprf_flash_config_t` struct starting with the magic `SLAPRF02` (layout in [`docs/ARCHITECTURE.md` §5.2](ARCHITECTURE.md)):
+
+- When a user flashes or downloads a timer image, either the Go backend ([`internal/firmware/image.go`](../internal/firmware/image.go) `PatchImage`) or the browser patcher ([`web/src/services/esp_flasher.ts`](../web/src/services/esp_flasher.ts)) locates the `SLAPRF02` block, writes the role, profile code, board fingerprint, 8 pilot frequencies, Hub Wi-Fi credentials, and timer name, and updates the block's XOR crc8.
+- It then repairs the ESP-IDF app image so the bootloader accepts it: the segment XOR checksum (seed `0xEF`) and, if enabled, the appended SHA-256. This works on bare app images and on merged flash images (app at `0x10000`) produced by `esptool merge_bin`.
+- Every board gets a random, non-zero 32-bit **fingerprint** at flash time. When reflashing, the flasher can **keep** the board's existing fingerprint (read over USB with `SLAPRF?`) or mint a **new** one.
+
+### Building the Firmware with ESP-IDF (Optional)
+
+CI builds every profile, so you only need this when changing C code. With ESP-IDF v5.5+ exported in your shell:
 
 ```bash
-# Requires ESP-IDF v5.4+ with ESP32-C5 target support
-cd firmware/xiao_c5_timer
-idf.py --preview set-target esp32c5
+cd firmware/open-ground            # or any firmware/<profile>
+idf.py set-target esp32c5
 idf.py build
+# Merge bootloader + partition table + app (run from firmware/<profile>/build so @flash_args paths resolve)
+cd build
+python -m esptool --chip esp32c5 merge_bin -o ../../../web/firmware/slaprf-xiao-c5-open-ground.bin @flash_args
 ```
+
+`cmd/build-web` copies `web/firmware/slaprf-xiao-c5-<profile>.bin` into `_site/firmware/`, and the Go server patches the same files for `/api/firmware/xiao-c5.bin`.
+
+### CI Workflow & Placeholder Fallback
+
+- [`.github/workflows/firmware.yml`](../.github/workflows/firmware.yml) lists every `firmware/*/profile.json`, builds each profile in a matrix with `espressif/esp-idf-ci-action` (ESP-IDF `v5.5`, target `esp32c5`), merges the flash image, checks that it contains `SLAPRF02`, and uploads it as a `firmware-<profile>` artifact.
+- `pages.yml` and `release.yml` call it first and download the artifacts into `web/firmware/` before building the site and release binaries.
+- If an image is missing (e.g. a local checkout without ESP-IDF), `cmd/build-web`, the Go server, and the browser flasher fall back to `SyntheticBase()`: a 64 KB placeholder image with a valid header and an empty `SLAPRF02` block that flashes but does nothing.
 
 ---
 

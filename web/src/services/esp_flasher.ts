@@ -151,31 +151,73 @@ function findConfigBlock(bytes: Uint8Array): number {
   return -1;
 }
 
-/** Recompute the Espressif single-segment XOR checksum stored in the image trailer. */
-function fixImageChecksum(img: Uint8Array): void {
-  if (img.length !== IMAGE_SIZE) return;
-  const segLen = IMAGE_SIZE - 32 - 16;
+/** App image start offsets: factory app inside a merged flash image (0x10000), or a bare app (0x0). */
+const APP_IMAGE_OFFSETS = [0x10000, 0x0];
+
+/**
+ * Recompute the ESP-IDF app image checksum (and appended SHA-256, if enabled) for the app image
+ * containing `patchedAt`, so the bootloader accepts an image whose config block was patched.
+ * Mirrors `RepairAppImage` in internal/firmware/image.go.
+ */
+async function repairAppImage(img: Uint8Array, patchedAt: number): Promise<void> {
+  const start = APP_IMAGE_OFFSETS.find((o) => o <= patchedAt && o + 24 <= img.length && img[o] === 0xe9);
+  if (start === undefined) throw new Error("No ESP app image header found before the config block.");
+  const view = new DataView(img.buffer, img.byteOffset, img.byteLength);
+  const segCount = img[start + 1];
+  const hashAppended = img[start + 23] === 1;
+  let pos = start + 24;
   let chk = 0xef;
-  for (let i = 32; i < 32 + segLen; i++) chk ^= img[i];
-  img[IMAGE_SIZE - 1] = chk;
+  for (let s = 0; s < segCount; s++) {
+    const segLen = view.getUint32(pos + 4, true);
+    pos += 8;
+    if (pos + segLen > img.length) throw new Error("Truncated ESP app image segment.");
+    for (let i = pos; i < pos + segLen; i++) chk ^= img[i];
+    pos += segLen;
+  }
+  pos += 15 - ((pos - start) % 16);
+  if (pos >= img.length) throw new Error("Truncated ESP app image checksum.");
+  img[pos] = chk;
+  if (hashAppended) {
+    const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", img.slice(start, pos + 1)));
+    img.set(digest, pos + 1);
+  }
 }
 
-/** Returns a copy of `img` with its board fingerprint replaced (config CRC + image checksum fixed). */
-export function withFingerprint(img: Uint8Array, fingerprintHex: string): Uint8Array {
+/** 64 KB placeholder app image (valid header, NOP sled, empty config block) — mirrors Go `SyntheticBase`. */
+function syntheticBase(): Uint8Array {
+  const img = new Uint8Array(IMAGE_SIZE);
+  const dv = new DataView(img.buffer);
+  img[0] = 0xe9;
+  img[1] = 1;
+  img[2] = 0x02;
+  img[3] = 0x10;
+  dv.setUint32(4, 0x40800000, true);
+  dv.setUint16(12, 0x0017, true); // ESP32-C5 chip ID
+  dv.setUint32(24, 0x40800000, true);
+  dv.setUint32(28, IMAGE_SIZE - 32 - 16, true);
+  for (let off = 32; off < IMAGE_SIZE - 16; off += 4) dv.setUint32(off, 0x00000013, true);
+  const enc = new TextEncoder();
+  img.set(enc.encode("SlapRF XIAO-ESP32-C5 placeholder image (no compiled firmware)"), 0x40);
+  img.set(enc.encode(CONFIG_MAGIC), CONFIG_OFF);
+  return img;
+}
+
+/** Returns a copy of `img` with its board fingerprint replaced (config CRC + image integrity repaired). */
+export async function withFingerprint(img: Uint8Array, fingerprintHex: string): Promise<Uint8Array> {
   const out = new Uint8Array(img);
   const off = findConfigBlock(out);
   const fp = parseInt(fingerprintHex, 16) >>> 0;
   if (off < 0 || !fp) return out;
   new DataView(out.buffer, out.byteOffset + off, CONFIG_LEN).setUint32(OFF_FINGERPRINT, fp, true);
   out[off + OFF_CRC] = xor8(out.subarray(off, off + OFF_CRC));
-  fixImageChecksum(out);
+  await repairAppImage(out, off);
   return out;
 }
 
 /**
- * Fetches the static base `.bin` for the chosen profile (`./firmware/slaprf-xiao-c5-<profile>.bin`)
- * if available — or synthesizes the 64 KB ESP32-C5 (`0x0017`) image in the browser — and stamps
- * the `SLAPRF02` block so USB flashing and `.bin` downloads work with zero Go backend.
+ * Fetches the compiled image for the chosen profile (`./firmware/slaprf-xiao-c5-<profile>.bin`,
+ * built by CI from `firmware/<profile>/`) — or falls back to a placeholder image — and stamps the
+ * `SLAPRF02` block so USB flashing and `.bin` downloads work with zero Go backend.
  */
 export async function buildOrPatchFirmwareBin(opts: {
   role: "hub" | "spoke";
@@ -200,38 +242,18 @@ export async function buildOrPatchFirmwareBin(opts: {
 
   let img: Uint8Array | null = null;
   try {
-    const staticRes = await fetch(`./firmware/slaprf-xiao-c5-${profile.id}.bin`, { cache: "no-cache" });
-    if (staticRes.ok) {
-      const buf = await staticRes.arrayBuffer();
-      if (buf.byteLength === IMAGE_SIZE) img = new Uint8Array(buf);
+    const res = await fetch(`./firmware/slaprf-xiao-c5-${profile.id}.bin`, { cache: "no-cache" });
+    if (res.ok) {
+      const fetched = new Uint8Array(await res.arrayBuffer());
+      if (findConfigBlock(fetched) >= 0) img = fetched;
     }
   } catch {
-    // Offline or static file not found; fall back to client-side image synthesis below.
+    // Offline or not built; fall back to the placeholder image below.
   }
+  if (!img) img = syntheticBase();
 
-  if (!img) {
-    img = new Uint8Array(IMAGE_SIZE);
-    const dv = new DataView(img.buffer);
-    img[0] = 0xe9; // espImageMagic
-    img[1] = 1; // segment count
-    img[2] = 0x02; // DIO SPI flash
-    img[3] = 0x10; // 4MB / 80MHz
-    dv.setUint32(4, 0x40800000, true);
-    dv.setUint16(12, 0x0017, true); // ESP32-C5 chip ID
-    dv.setUint32(24, 0x40800000, true);
-    dv.setUint32(28, IMAGE_SIZE - 32 - 16, true);
-    for (let off = 32; off < IMAGE_SIZE - 16; off += 4) {
-      dv.setUint32(off, 0x00000013, true); // RISC-V NOP
-    }
-  }
-
+  const off = findConfigBlock(img);
   const enc = new TextEncoder();
-  const banner = enc.encode(
-    `SlapRF XIAO-ESP32-C5 ${LATEST_FIRMWARE_VERSION} profile=${profile.id} role=${roleCode} fp=${fingerprint} label=${cleanLabel}`
-  );
-  img.fill(0, 0x0040, CONFIG_OFF);
-  img.set(banner.subarray(0, CONFIG_OFF - 0x0040), 0x0040);
-
   const block = new Uint8Array(CONFIG_LEN);
   const bv = new DataView(block.buffer);
   block.set(enc.encode(CONFIG_MAGIC), 0);
@@ -248,8 +270,8 @@ export async function buildOrPatchFirmwareBin(opts: {
   block.set(enc.encode(cleanPass).subarray(0, 39), OFF_PASS);
   block.set(enc.encode(cleanLabel).subarray(0, 24), OFF_LABEL);
   block[OFF_CRC] = xor8(block.subarray(0, OFF_CRC));
-  img.set(block, CONFIG_OFF);
-  fixImageChecksum(img);
+  img.set(block, off);
+  await repairAppImage(img, off);
 
   const slug = cleanLabel ? cleanLabel.replace(/[^a-zA-Z0-9_-]+/g, "-") : opts.role;
   return {
@@ -257,7 +279,6 @@ export async function buildOrPatchFirmwareBin(opts: {
     filename: `slaprf-xiao-c5-${slug}-${profile.id}-${LATEST_FIRMWARE_VERSION}.bin`,
   };
 }
-
 export function isWebSerialSupported(): boolean {
   return typeof navigator !== "undefined" && Boolean((navigator as unknown as NavigatorWithSerial).serial);
 }
@@ -519,7 +540,7 @@ export async function flashXiaoC5OverWebSerial(
       const rx = await readChunkWithTimeout(reader, 180);
       const existing = rx ? parseSlaprfConfigBlock(rx) : null;
       if (existing?.fingerprint && existing.fingerprint !== "00000000") {
-        imageBytes = withFingerprint(imageBytes, existing.fingerprint);
+        imageBytes = await withFingerprint(imageBytes, existing.fingerprint);
         fingerprintKept = true;
       }
     }

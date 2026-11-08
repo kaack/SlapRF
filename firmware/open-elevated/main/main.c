@@ -1,10 +1,9 @@
 /**
- * SlapRF firmware profile: Technical · Trees & obstacles
+ * SlapRF firmware profile: Open field · Gate-top mount
  *
- * Timers sit behind trees, under ramps, or inside structures, so the Hub link drops out for long
- * stretches. Long Range 500 kbps at +20 dBm with 6-sweep windows sent every 2 sweeps delivers each
- * sample three times (a 100 ms outage loses nothing), and a Spoke that stops hearing the Hub for
- * 2 s re-syncs and re-joins on its own.
+ * Timers are mounted on top of the gate or a pole with clear line of sight to the Hub, so the link has
+ * margin to spare. This design spends it on timing resolution instead: 100 Hz sweeps over a standard
+ * 1 Mbps link at +14 dBm, sending a 2-sweep window every sweep.
  *
  * This directory is a complete, self-contained firmware for one situation. Other profiles live
  * next to it (firmware/<profile>/) and intentionally duplicate the shared protocol code so each
@@ -20,15 +19,16 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "slaprf_radio.h"
+
 /* ---- Profile tuning (unique to this directory) ------------------------------------------- */
-#define SLAPRF_PROFILE_CODE      4
-#define SWEEP_HZ                 50   // 8-channel 5.8 GHz sweeps per second
-#define WINDOW_SAMPLES           6    // Sweeps per window frame
-#define TX_EVERY_SWEEPS          2    // 6 / 2 = every sweep delivered three times
-#define LINK_LONG_RANGE          1    // Espressif LR 500 kbps
-#define TX_POWER_QDBM            80   // +20 dBm
-#define TDMA_SLOT_US             3500 // LR frame (~2.1 ms) + guard
-#define HUB_LOST_MS              2000 // Re-sync and re-join after this long without a Hub beacon
+#define SLAPRF_PROFILE_CODE      2
+#define SWEEP_HZ                 100  // 8-channel 5.8 GHz sweeps per second
+#define WINDOW_SAMPLES           2    // Sweeps per window frame
+#define TX_EVERY_SWEEPS          1    // 2 / 1 = every sweep delivered twice
+#define LINK_LONG_RANGE          0    // Standard 1 Mbps ESP-NOW
+#define TX_POWER_QDBM            56   // +14 dBm
+#define TDMA_SLOT_US             900  // 1 Mbps frame (~0.5 ms) + guard
 
 /* ---- Shared protocol ---------------------------------------------------------------------- */
 #define MAX_PILOT_SLOTS          8
@@ -130,21 +130,7 @@ static uint8_t compute_crc8(const uint8_t *data, uint32_t len) {
     return crc;
 }
 
-// Hardware hooks for ESP-IDF 5 GHz IQ power capture & 2.4 GHz ESP-NOW on ESP32-C5
-extern void xiao_c5_select_ufl_antenna(void);
-extern void slaprf_lock_wifi_band_2g4_only(void);
-extern void slaprf_init_2g4_radio(uint8_t channel, uint8_t long_range, uint8_t tx_power_qdbm);
-extern void slaprf_start_wifi_bridge(uint8_t wifi_mode, const char *ssid, const char *pass);
-extern void slaprf_spoke_sync_to_hub_channel(void);
-extern void slaprf_broadcast_hub_sync_beacon(uint8_t seq);
-extern uint32_t slaprf_ms_since_hub_beacon(void);
-extern void slaprf_wait_for_next_sweep_tick(uint32_t interval_us);
-extern void slaprf_forward_udp_to_laptop(const void *frame, uint32_t len);
-extern int8_t esp_sdr_measure_5g_channel_dbm(uint16_t center_freq_mhz);
-extern uint16_t xiao_c5_read_battery_mv(void);
-extern void espnow_send(const void *frame, uint32_t len);
-extern int espnow_poll(void *buf, uint32_t cap);
-extern void delay_microseconds(uint32_t us);
+// Hardware layer (2.4 GHz link, Hub bridge, 5.8 GHz sensing): firmware/components/slaprf_radio
 
 /* ---- Hub: slot table ---------------------------------------------------------------------- */
 
@@ -239,6 +225,9 @@ void app_main(void) {
     const uint8_t is_hub = g_flash_cfg.role == ROLE_HUB_TIMER;
     const uint32_t interval_us = 1000000UL / SWEEP_HZ;
 
+    // 0. Let the web flasher read this board's config (fingerprint, role, profile) over USB.
+    slaprf_start_config_query_service(&g_flash_cfg, sizeof(g_flash_cfg));
+
     // 1. External U.FL antenna, 2.4 GHz-only band (never transmit on 5.8 GHz video channels).
     xiao_c5_select_ufl_antenna();
     slaprf_lock_wifi_band_2g4_only();
@@ -264,12 +253,6 @@ void app_main(void) {
 
     while (1) {
         slaprf_wait_for_next_sweep_tick(interval_us);
-
-        // Obstructed only: if the Hub beacon has been gone too long, re-sync and re-join.
-        if (!is_hub && slaprf_ms_since_hub_beacon() > HUB_LOST_MS) {
-            slaprf_spoke_sync_to_hub_channel();
-            slot = spoke_join_hub();
-        }
 
         // 3. Sweep all 8 pilot channels into the ring (oldest sample drops off the front).
         if (filled < WINDOW_SAMPLES) {
