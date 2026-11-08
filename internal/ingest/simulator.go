@@ -180,23 +180,39 @@ func (s *TrackSimulator) TriggerPackBurst() {
 }
 
 // SetTrackWalker activates or clears a simulated person walking on the track (e.g. quad recovery).
-// While active, airborne pilots climb to 14m altitude (AVOIDING) and crashed quads are recovered to the pits.
+// While active, some airborne pilots return to the pit bench while others fly high (AVOIDING)
+// until the track is cleared, and crashed quads are recovered to the bench.
 func (s *TrackSimulator) SetTrackWalker(active bool) {
 	var clearSlots []int
 	s.mu.Lock()
 	s.trackWalkerActive = active
 	if active {
 		s.trackWalkerTimerSec = 15.0
+		avoidingCount := 0
 		for i := range s.pilotStates {
 			ps := &s.pilotStates[i]
 			switch ps.status {
 			case domain.SimStatusFlying:
-				ps.status = domain.SimStatusAvoiding
-				ps.altitudeMeters = 14.0
+				// Pilots with lower battery (< 72%) or ~35% chance decide to come back to the bench;
+				// pilots with fuller packs stay airborne and fly high until the track is cleared.
+				returnToBench := ps.batteryPct < 72.0 || (avoidingCount > 0 && s.rng.Float64() < 0.35)
+				if returnToBench {
+					ps.status = domain.SimStatusPitSwap
+					ps.stateTimerSec = 30.0 + s.rng.Float64()*30.0
+					ps.batteryPct = 0.0
+					ps.altitudeMeters = 0.0
+					ps.currentSpeedMps = 0.0
+					ps.trackPosMeters = s.trackLengthMeters - 12.0
+				} else {
+					ps.status = domain.SimStatusAvoiding
+					ps.altitudeMeters = 14.0
+					avoidingCount++
+				}
 				clearSlots = append(clearSlots, ps.slotIndex)
 			case domain.SimStatusCrashedVtxOn, domain.SimStatusCrashedRecovery:
 				ps.status = domain.SimStatusPitSwap
-				ps.stateTimerSec = 6.0
+				ps.stateTimerSec = 30.0 + s.rng.Float64()*20.0
+				ps.batteryPct = 0.0
 				ps.altitudeMeters = 0.0
 				ps.currentSpeedMps = 0.0
 				ps.trackPosMeters = s.trackLengthMeters - 12.0

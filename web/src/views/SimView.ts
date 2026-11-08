@@ -25,13 +25,13 @@ function statusMeta(
       return {
         label: "Flying",
         badgeClass: "sim-status-flying",
-        hint: "On track at race altitude (1.3 m)",
+        hint: "On track racing through gates",
       };
     case "AVOIDING":
       return {
-        label: "Avoiding · 14m",
+        label: "Flying High",
         badgeClass: "sim-status-avoiding",
-        hint: "Flying high (14 m) to avoid person on track — skips gate triggers",
+        hint: "Cruising high above the course while someone is on the track — skips gate triggers",
       };
     case "CRASHED_VTX_ON":
       return {
@@ -113,7 +113,7 @@ export class SimView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Course &amp; pit lane</h2>
-            <p>Live view of pilots moving through the track sections and pit bench. Send someone onto the track to recover quads (airborne pilots climb to 14 m to avoid them), trigger a pack burst, or refill and launch everyone.</p>
+            <p>Live view of pilots moving through the track sections and pit bench. When someone walks onto the track to recover a quad, airborne pilots either return to the bench or fly high until the track is cleared.</p>
           </div>
           <div class="card card-flush" data-slot="course"></div>
         </section>
@@ -497,7 +497,7 @@ export class SimView extends Component {
               <span class="sim-drone-callsign">${esc(p.callsign)}</span>
               ${
                 isAvoiding
-                  ? `<span class="sim-drone-tag">14m</span>`
+                  ? `<span class="sim-drone-tag">HIGH</span>`
                   : isCrashedVtx
                   ? `<span class="sim-drone-tag is-bad">VTX ON</span>`
                   : isCrashedWait
@@ -535,7 +535,7 @@ export class SimView extends Component {
             <span class="gate-track-caption" data-course-caption>
               ${
                 walkerActive
-                  ? `⚠ Person on track (${Math.ceil(walkerSec)}s left) — airborne drones holding 14 m altitude above gates`
+                  ? `⚠ Person on track (${Math.ceil(walkerSec)}s left) — pilots have returned to the bench or are flying high until clear`
                   : `60 fps live course timeline · drones cross #1 → #${nodes.length} and wrap around ${nodes.length > 0 ? `S${nodes.length}` : "the loop"}`
               }
             </span>
@@ -560,7 +560,7 @@ export class SimView extends Component {
           <div class="gate-track-scroll sim-track-scroll">
             <div class="sim-flight-corridor ${walkerActive ? "is-walker-active" : ""}">
               <div class="sim-altitude-lane-label">
-                <span>${walkerActive ? "HIGH-ALTITUDE AVOIDANCE LANE (14 m · GATES SKIPPED)" : "ACTIVE FLIGHT CORRIDOR (1.3 m RACE ALTITUDE)"}</span>
+                <span>${walkerActive ? "PERSON ON TRACK · GATES PAUSED" : "ACTIVE FLIGHT CORRIDOR"}</span>
               </div>
               <div class="sim-drone-track-layer">
                 ${dronesHtml}
@@ -592,7 +592,7 @@ export class SimView extends Component {
       }
       const caption = this.el.querySelector<HTMLElement>("[data-course-caption]");
       if (caption && walkerActive) {
-        caption.textContent = `⚠ Person on track (${Math.ceil(walkerSec)}s left) — airborne drones holding 14 m altitude above gates`;
+        caption.textContent = `⚠ Person on track (${Math.ceil(walkerSec)}s left) — pilots have returned to the bench or are flying high until clear`;
       }
       for (const p of pitPilots) {
         const sub = this.el.querySelector<HTMLElement>(`[data-pit-sub="${p.slotIndex}"]`);
