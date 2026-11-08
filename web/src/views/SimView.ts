@@ -558,10 +558,10 @@ export class SimView extends Component {
           </div>
 
           <div class="gate-track-scroll sim-track-scroll">
+            <div class="sim-altitude-lane-label ${walkerActive ? "is-walker-active" : ""}">
+              <span>${walkerActive ? "PERSON ON TRACK · GATES PAUSED" : "ACTIVE FLIGHT CORRIDOR"}</span>
+            </div>
             <div class="sim-flight-corridor ${walkerActive ? "is-walker-active" : ""}">
-              <div class="sim-altitude-lane-label">
-                <span>${walkerActive ? "PERSON ON TRACK · GATES PAUSED" : "ACTIVE FLIGHT CORRIDOR"}</span>
-              </div>
               <div class="sim-drone-track-layer">
                 ${dronesHtml}
               </div>
