@@ -782,22 +782,22 @@ export class SimView extends Component {
               </div>
 
               <div class="sim-pilot-controls">
-                <button class="btn btn-sm sim-ctrl-btn ${isParked ? "btn-armed" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" data-pilot-btn="${p.slotIndex}-launch" ${isParked ? "" : "disabled"} title="Launch immediately with the battery currently attached to the quad (or best bench pack if unplugged)">
+                <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" data-pilot-btn="${p.slotIndex}-launch" ${isParked ? "" : "disabled"} title="Launch immediately with the battery currently attached to the quad (or best bench pack if unplugged)">
                   ${icons.play(12)}<span>Launch</span>
                 </button>
-                <button class="btn btn-sm sim-ctrl-btn ${p.status === "PIT_SWAP" ? "is-active-cmd" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pit" data-pilot-btn="${p.slotIndex}-pit" ${canSwap ? "" : "disabled"} title="Bring pilot into the pit bench to swap to a fresh 6S battery pack (30–60s)">
+                <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pit" data-pilot-btn="${p.slotIndex}-pit" ${canSwap ? "" : "disabled"} title="Bring pilot into the pit bench to swap to a fresh 6S battery pack (30–60s)">
                   ${icons.reset(12)}<span>Swap pack</span>
                 </button>
-                <button class="btn btn-sm sim-ctrl-btn ${p.status === "PILOT_BREAK" ? "is-active-cmd" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="break" data-pilot-btn="${p.slotIndex}-break" ${isFlying ? "" : "disabled"} title="Land in the pits and rest at the bench while batteries charge">
+                <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="break" data-pilot-btn="${p.slotIndex}-break" ${isFlying ? "" : "disabled"} title="Land in the pits and rest at the bench while batteries charge">
                   ${icons.pause(12)}<span>Land</span>
                 </button>
                 <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="crash" data-pilot-btn="${p.slotIndex}-crash" ${isFlying ? "" : "disabled"} title="Force a mid-track crash near the closest gate (VTX stays on briefly)">
                   ${icons.zapOff(12)}<span>Force crash</span>
                 </button>
-                <button class="btn btn-sm sim-ctrl-btn ${p.status === "TURTLE_RECOVERY" ? "is-active-cmd" : isCrashed && !isTurtleBusy ? "btn-armed" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="recover" data-pilot-btn="${p.slotIndex}-recover" ${isCrashed && !isTurtleBusy ? "" : "disabled"} title="Attempt Turtle Mode recovery (spins motors for 3.5s to flip upright and resume flying)">
+                <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="recover" data-pilot-btn="${p.slotIndex}-recover" ${isCrashed && !isTurtleBusy ? "" : "disabled"} title="Attempt Turtle Mode recovery (spins motors for 3.5s to flip upright and resume flying)">
                   ${icons.play(12)}<span>Turtle flip</span>
                 </button>
-                <button class="btn btn-sm sim-ctrl-btn ${isWalkingOut ? "is-active-cmd" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="walk-recover" data-pilot-btn="${p.slotIndex}-walk-recover" ${isCrashed && !isWalkingOut ? "" : "disabled"} title="Force immediate track walk to retrieve the crashed quad — other drones will either land at the bench or fly high until clear">
+                <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="walk-recover" data-pilot-btn="${p.slotIndex}-walk-recover" ${isCrashed && !isWalkingOut ? "" : "disabled"} title="Force immediate track walk to retrieve the crashed quad — other drones will either land at the bench or fly high until clear">
                   ${icons.pilot(12)}<span>Walk recover</span>
                 </button>
               </div>
@@ -898,21 +898,18 @@ export class SimView extends Component {
       );
       if (launchBtn) {
         launchBtn.disabled = !isParked;
-        launchBtn.className = `btn btn-sm sim-ctrl-btn ${isParked ? "btn-armed" : "btn-ghost"}`;
       }
       const pitBtn = this.el.querySelector<HTMLButtonElement>(
         `[data-pilot-btn="${p.slotIndex}-pit"]`
       );
       if (pitBtn) {
         pitBtn.disabled = !canSwap;
-        pitBtn.className = `btn btn-sm sim-ctrl-btn ${p.status === "PIT_SWAP" ? "is-active-cmd" : "btn-ghost"}`;
       }
       const breakBtn = this.el.querySelector<HTMLButtonElement>(
         `[data-pilot-btn="${p.slotIndex}-break"]`
       );
       if (breakBtn) {
         breakBtn.disabled = !isFlying;
-        breakBtn.className = `btn btn-sm sim-ctrl-btn ${p.status === "PILOT_BREAK" ? "is-active-cmd" : "btn-ghost"}`;
       }
       const crashBtn = this.el.querySelector<HTMLButtonElement>(
         `[data-pilot-btn="${p.slotIndex}-crash"]`
@@ -925,14 +922,12 @@ export class SimView extends Component {
       );
       if (recoverBtn) {
         recoverBtn.disabled = !isCrashed || isTurtleBusy;
-        recoverBtn.className = `btn btn-sm sim-ctrl-btn ${p.status === "TURTLE_RECOVERY" ? "is-active-cmd" : isCrashed && !isTurtleBusy ? "btn-armed" : "btn-ghost"}`;
       }
       const walkBtn = this.el.querySelector<HTMLButtonElement>(
         `[data-pilot-btn="${p.slotIndex}-walk-recover"]`
       );
       if (walkBtn) {
         walkBtn.disabled = !isCrashed || isWalkingOut;
-        walkBtn.className = `btn btn-sm sim-ctrl-btn ${isWalkingOut ? "is-active-cmd" : "btn-ghost"}`;
       }
     }
   }
