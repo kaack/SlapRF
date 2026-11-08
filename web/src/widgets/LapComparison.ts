@@ -31,7 +31,10 @@ export class LapComparison extends Component {
     const maxAbs = Math.max(NEGLIGIBLE_SEC, ...cmp.sections.map((s) => Math.abs(s.delta)));
 
     this.el.innerHTML = `
-      ${this.renderSummary(cmp)}
+      <div class="sub-head">
+        <h3>Section comparison</h3>
+        <p>Split time through each section, Lap ${cmp.lap.lapNumber} against ${esc(cmp.refLabel)}.</p>
+      </div>
       <div class="table-scroll">
         <table class="table cmp-table">
           <thead>
@@ -54,49 +57,59 @@ export class LapComparison extends Component {
             </tr>
           </tfoot>
         </table>
-      </div>`;
+      </div>
+      ${this.renderAnalysis(cmp)}`;
   }
 
-  private renderSummary(cmp: Comparison): string {
+  private sectionName(s: { fromPuckId: number; toPuckId: number }): string {
+    return `${sectionShort(this.store, s.fromPuckId)} · ${sectionLabel(this.store, s.fromPuckId, s.toPuckId)}`;
+  }
+
+  /** Plain-language takeaway for the two laps, in the same style as the Recommendation card. */
+  private renderAnalysis(cmp: Comparison): string {
     const { lap, ref, refLabel, totalDelta } = cmp;
-    const abs = Math.abs(totalDelta).toFixed(3);
     const isEven = Math.abs(totalDelta) < NEGLIGIBLE_SEC;
     const isFaster = totalDelta < 0;
-    const badgeCls = isEven ? "is-neutral" : isFaster ? "is-good" : "is-bad";
-    const badgeText = isEven
-      ? "Matched pace"
-      : `${fmtDelta(totalDelta)}s ${isFaster ? "faster" : "slower"}`;
 
-    let text: string;
-    if (isEven) {
-      text = `<strong>Lap ${lap.lapNumber}</strong> (${fmtTime(lap.lapTimeSec)}) matched the overall time of <strong>${esc(refLabel)}</strong> (${fmtTime(ref.lapTimeSec)}).`;
-    } else {
-      text = `<strong>Lap ${lap.lapNumber}</strong> (${fmtTime(lap.lapTimeSec)}) was <strong>${abs}s ${isFaster ? "faster" : "slower"}</strong> overall than <strong>${esc(refLabel)}</strong> (${fmtTime(ref.lapTimeSec)}).`;
-      const key = decisiveSection(cmp);
-      if (key && Math.abs(key.delta) >= NEGLIGIBLE_SEC) {
-        const secTitle = `${sectionShort(this.store, key.fromPuckId)} (${sectionLabel(this.store, key.fromPuckId, key.toPuckId)})`;
-        text += ` ${isFaster ? "The largest time gain came in" : "Most of the time was lost in"} <strong>${esc(secTitle)}</strong> (<span class="mono">${fmtDelta(key.delta)}s</span>)`;
-        const mph = key.lapExitMph - key.refExitMph;
-        text +=
-          Math.abs(mph) >= NOTABLE_MPH
-            ? `, exiting <strong>${Math.abs(mph).toFixed(0)} mph ${mph < 0 ? "slower" : "faster"}</strong> (${key.lapExitMph.toFixed(0)} mph vs ${key.refExitMph.toFixed(0)} mph).`
-            : ".";
+    const refTime = fmtTime(ref.lapTimeSec);
+    const refText = refLabel.endsWith(")") ? refLabel.replace(/\)$/, `, ${refTime})`) : `${refLabel} (${refTime})`;
+    const lead = isEven
+      ? `Lap ${lap.lapNumber} (${fmtTime(lap.lapTimeSec)}) matched ${esc(refText)}.`
+      : `Lap ${lap.lapNumber} (${fmtTime(lap.lapTimeSec)}) was <strong>${Math.abs(totalDelta).toFixed(3)}s ${isFaster ? "faster" : "slower"}</strong> than ${esc(refText)}.`;
+
+    const points: string[] = [];
+    const key = isEven ? undefined : decisiveSection(cmp);
+    if (key && Math.abs(key.delta) >= NEGLIGIBLE_SEC) {
+      points.push(
+        `${isFaster ? "Most of the gain came in" : "Most of the time was lost in"} <strong>${esc(this.sectionName(key))}</strong> (${fmtDelta(key.delta)}s).`
+      );
+      const mph = key.lapExitMph - key.refExitMph;
+      if (Math.abs(mph) >= NOTABLE_MPH) {
+        points.push(
+          `You exited that section <strong>${Math.abs(mph).toFixed(0)} mph ${mph < 0 ? "slower" : "faster"}</strong> (${key.lapExitMph.toFixed(0)} vs ${key.refExitMph.toFixed(0)} mph)${mph < 0 && !isFaster ? " — carrying less speed out of it cost time into the next one too" : ""}.`
+        );
       }
     }
-    if (cmp.incomplete) {
-      text += ` <span class="muted">Some sections could not be compared because a gate was missed on one of the laps.</span>`;
+    // The biggest section that went the other way, so the pilot sees what still worked (or didn't).
+    const counter = cmp.sections
+      .filter((s) => (isFaster ? s.delta > 0 : s.delta < 0) && Math.abs(s.delta) >= NEGLIGIBLE_SEC)
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta))[0];
+    if (!isEven && counter) {
+      points.push(
+        isFaster
+          ? `It wasn't faster everywhere: <strong>${esc(this.sectionName(counter))}</strong> was ${Math.abs(counter.delta).toFixed(3)}s slower.`
+          : `You did gain time in <strong>${esc(this.sectionName(counter))}</strong> (${fmtDelta(counter.delta)}s).`
+      );
     }
+    if (cmp.incomplete) {
+      points.push(`Some sections couldn't be compared because a gate was missed on one of the laps.`);
+    }
+
     return `
-      <div class="insight-box">
-        <div class="insight-head">
-          <span class="insight-badge mono ${badgeCls}">${badgeText}</span>
-          <div class="insight-chips">
-            <span class="cmp-chip is-review">Lap ${lap.lapNumber} · ${fmtTime(lap.lapTimeSec)}</span>
-            <span class="insight-vs">vs</span>
-            <span class="cmp-chip is-ref">${esc(refLabel)} · ${fmtTime(ref.lapTimeSec)}</span>
-          </div>
-        </div>
-        <p class="insight-body">${text}</p>
+      <div class="lap-analysis">
+        <h3>Lap analysis</h3>
+        <p class="rec-lead">${lead}</p>
+        ${points.length ? `<ul class="rec-list">${points.map((p) => `<li>${p}</li>`).join("")}</ul>` : ""}
       </div>`;
   }
 
