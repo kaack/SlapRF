@@ -1511,42 +1511,34 @@ body.is-gate-dragging * {
 .lap-tip {
   position: absolute;
   z-index: 5;
-  transform: translate(-50%, calc(-100% - 10px));
-  min-width: 140px;
-  padding: 7px 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  transform: translate(-50%, calc(-100% - 8px));
+  padding: 5px 9px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
   background: var(--surface-2);
   box-shadow: 0 8px 20px rgba(0, 0, 0, 0.45);
-  font-size: 12px;
+  color: var(--text-3);
+  font-size: 11.5px;
+  white-space: nowrap;
   pointer-events: none;
 }
 .lap-tip[hidden],
 .lap-avg-dot[hidden] {
   display: none;
 }
-.lap-tip-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 14px;
+.lap-tip strong {
   color: var(--text);
-  white-space: nowrap;
+  font-weight: 600;
 }
-.lap-tip-row.is-sub {
-  margin-top: 2px;
-  color: var(--text-3);
-  font-size: 11.5px;
-}
-.lap-tip-row.is-sub .mono {
-  color: var(--text-2);
-}
-.lap-tip-row span {
+.lap-tip span {
   display: inline-flex;
   align-items: center;
   gap: 6px;
 }
-.lap-tip-row .lg-line {
+.lap-tip .lg-line {
   display: inline-block;
   width: 10px;
 }
@@ -1705,7 +1697,10 @@ body.is-gate-dragging * {
   min-width: 100%;
 }
 .lap-picker-plot {
-  padding-top: 8px;
+  padding-top: 22px;
+}
+.lap-picker-plot.has-stacked-labels {
+  padding-top: 38px;
 }
 .lap-picker-bars {
   position: relative;
@@ -1717,8 +1712,34 @@ body.is-gate-dragging * {
   height: 100%;
   overflow: visible;
 }
-.lap-picker .bar-hit {
+/* Pointer cursor only over the bar itself, not the empty space above it */
+.lap-picker .bar {
   cursor: pointer;
+}
+/* Lap time printed above the inspected and baseline bars */
+.bar-time {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 4px));
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: none;
+}
+.bar-time.is-left {
+  transform: translate(-6px, calc(-100% - 4px));
+}
+.bar-time.is-right {
+  transform: translate(calc(-100% + 6px), calc(-100% - 4px));
+}
+.bar-time.is-raised {
+  margin-top: -16px;
+}
+.bar-time.is-review {
+  color: var(--accent);
+}
+.bar-time.is-ref {
+  color: var(--purple);
 }
 .lap-picker .bar-hit .hit {
   fill: transparent;
