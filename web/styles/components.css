@@ -14,6 +14,7 @@
   display: flex;
   align-items: flex-start;
   justify-content: space-between;
+  flex-wrap: wrap;
   gap: 12px;
   margin-bottom: 14px;
 }
@@ -214,6 +215,8 @@
 /* Segmented control -------------------------------------------------------- */
 .segmented {
   display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
   gap: 2px;
   padding: 3px;
   border: 1px solid var(--border);
@@ -223,6 +226,7 @@
 .segmented button {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 6px;
   height: 28px;
   padding: 0 12px;
@@ -231,6 +235,7 @@
   background: transparent;
   color: var(--text-2);
   font-weight: 500;
+  white-space: nowrap;
   cursor: pointer;
 }
 .segmented button:hover {

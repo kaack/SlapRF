@@ -116,7 +116,6 @@
 .nav-item.is-active {
   background: var(--surface-3);
   color: var(--text);
-  box-shadow: inset 2px 0 0 var(--accent);
 }
 .nav-item.is-active svg {
   color: var(--accent);
@@ -188,6 +187,12 @@
   }
   .nav {
     flex-direction: row;
+  }
+  .nav-flat {
+    margin-top: 0;
+  }
+  .nav-item {
+    white-space: nowrap;
   }
   .nav-group,
   .sidebar-foot,
