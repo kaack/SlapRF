@@ -39,10 +39,19 @@ export class ApiClient {
   }
 
   public async initialize(): Promise<void> {
-    window.addEventListener("pagehide", () => this.source?.close());
-    window.addEventListener("beforeunload", () => this.source?.close());
+    window.addEventListener("pagehide", () => {
+      this.source?.close();
+      this.source = null;
+    });
+    window.addEventListener("beforeunload", () => {
+      this.source?.close();
+      this.source = null;
+    });
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden && (!this.source || this.source.readyState === EventSource.CLOSED)) {
+      if (document.hidden) {
+        this.source?.close();
+        this.source = null;
+      } else {
         this.connectStream();
         void this.refresh().catch(() => undefined);
       }
@@ -191,7 +200,14 @@ export class ApiClient {
 
   private async pollStatus(): Promise<void> {
     try {
-      this.store.applyStatus(await this.request<StatusResponse>("GET", "/api/status"));
+      if (!this.source || this.source.readyState === EventSource.CLOSED) {
+        this.connectStream();
+      }
+      if (!this.source || this.source.readyState !== EventSource.OPEN) {
+        await this.refresh();
+      } else {
+        this.store.applyStatus(await this.request<StatusResponse>("GET", "/api/status"));
+      }
     } catch {
       // Server restarting; the SSE reconnect loop will recover.
     }

@@ -16,9 +16,8 @@ const (
 	// for minutes of race traffic; a client that still overflows it is disconnected and
 	// re-syncs from /api/state when its EventSource reconnects.
 	eventQueueLen = 4096
-	// Browsers cap HTTP/1.1 connections per origin at 6. Capping concurrent SSE streams at 3
-	// guarantees that fetch("/api/state") and asset requests never stall behind stale tabs.
-	maxSSEClients = 3
+	// Cap concurrent SSE streams so leaked clients cannot accumulate unboundedly.
+	maxSSEClients = 16
 )
 
 // StreamEnvelope wraps a typed real-time message sent to the TypeScript SPA.

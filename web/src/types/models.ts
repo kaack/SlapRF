@@ -168,6 +168,7 @@ export interface LiveTimeStatus {
 }
 
 export interface FullStateResponse {
+  serverTimestampUs?: number;
   pilots: PilotSlot[];
   pucks: GatePuck[];
   detectedPucks?: DetectedPuck[];
@@ -183,6 +184,7 @@ export interface FullStateResponse {
 
 /** Lightweight periodic status poll (`GET /api/status`). */
 export interface StatusResponse {
+  serverTimestampUs?: number;
   pucks: GatePuck[];
   detectedPucks?: DetectedPuck[];
   simulatorRunning: boolean;

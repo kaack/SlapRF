@@ -19,27 +19,29 @@ import (
 
 // FullStateResponse is returned by `GET /api/state` on initial SPA load.
 type FullStateResponse struct {
-	Pilots         []domain.PilotSlot         `json:"pilots"`
-	Pucks          []domain.GatePuck          `json:"pucks"`
-	DetectedPucks  []domain.DetectedPuck      `json:"detectedPucks"`
-	Laps           []domain.LapRecord         `json:"laps"`
-	Crossings      []domain.GateCrossingEvent `json:"crossings"`
-	Filtered       []domain.FilteredDetection `json:"filtered"`
-	Summaries      []domain.PilotTrackSummary `json:"summaries"`
-	Rules          domain.TimingRules         `json:"rules"`
-	SimulatorRun   bool                       `json:"simulatorRunning"`
-	RaceArmed      bool                       `json:"raceArmed"`
-	LiveTimeStatus laprf.LiveTimeStatus       `json:"liveTimeStatus"`
+	ServerTimestampUs uint64                     `json:"serverTimestampUs"`
+	Pilots            []domain.PilotSlot         `json:"pilots"`
+	Pucks             []domain.GatePuck          `json:"pucks"`
+	DetectedPucks     []domain.DetectedPuck      `json:"detectedPucks"`
+	Laps              []domain.LapRecord         `json:"laps"`
+	Crossings         []domain.GateCrossingEvent `json:"crossings"`
+	Filtered          []domain.FilteredDetection `json:"filtered"`
+	Summaries         []domain.PilotTrackSummary `json:"summaries"`
+	Rules             domain.TimingRules         `json:"rules"`
+	SimulatorRun      bool                       `json:"simulatorRunning"`
+	RaceArmed         bool                       `json:"raceArmed"`
+	LiveTimeStatus    laprf.LiveTimeStatus       `json:"liveTimeStatus"`
 }
 
 // StatusResponse is the lightweight payload polled by the SPA every few seconds
 // (gate battery / link health, LiveTime connection, timing armed state).
 type StatusResponse struct {
-	Pucks          []domain.GatePuck     `json:"pucks"`
-	DetectedPucks  []domain.DetectedPuck `json:"detectedPucks"`
-	SimulatorRun   bool                  `json:"simulatorRunning"`
-	RaceArmed      bool                  `json:"raceArmed"`
-	LiveTimeStatus laprf.LiveTimeStatus  `json:"liveTimeStatus"`
+	ServerTimestampUs uint64                `json:"serverTimestampUs"`
+	Pucks             []domain.GatePuck     `json:"pucks"`
+	DetectedPucks     []domain.DetectedPuck `json:"detectedPucks"`
+	SimulatorRun      bool                  `json:"simulatorRunning"`
+	RaceArmed         bool                  `json:"raceArmed"`
+	LiveTimeStatus    laprf.LiveTimeStatus  `json:"liveTimeStatus"`
 }
 
 // Server wires HTTP routes, the SSE streaming hub, and the pure-Go TypeScript bundler.
@@ -121,17 +123,18 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
 	pilots, pucks, laps, crossings, summaries := s.engine.StateSnapshot()
 	resp := FullStateResponse{
-		Pilots:         pilots,
-		Pucks:          pucks,
-		DetectedPucks:  s.engine.DetectedPucksSnapshot(),
-		Laps:           laps,
-		Crossings:      crossings,
-		Filtered:       s.engine.FilteredSnapshot(),
-		Summaries:      summaries,
-		Rules:          s.engine.Rules(),
-		SimulatorRun:   s.simulator.IsRunning(),
-		RaceArmed:      s.engine.IsRaceArmed(),
-		LiveTimeStatus: s.laprfServer.Status(),
+		ServerTimestampUs: s.engine.NowUs(),
+		Pilots:            pilots,
+		Pucks:             pucks,
+		DetectedPucks:     s.engine.DetectedPucksSnapshot(),
+		Laps:              laps,
+		Crossings:         crossings,
+		Filtered:          s.engine.FilteredSnapshot(),
+		Summaries:         summaries,
+		Rules:             s.engine.Rules(),
+		SimulatorRun:      s.simulator.IsRunning(),
+		RaceArmed:         s.engine.IsRaceArmed(),
+		LiveTimeStatus:    s.laprfServer.Status(),
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -139,11 +142,12 @@ func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetStatus(w http.ResponseWriter, _ *http.Request) {
 	_, pucks, _, _, _ := s.engine.StateSnapshot()
 	writeJSON(w, http.StatusOK, StatusResponse{
-		Pucks:          pucks,
-		DetectedPucks:  s.engine.DetectedPucksSnapshot(),
-		SimulatorRun:   s.simulator.IsRunning(),
-		RaceArmed:      s.engine.IsRaceArmed(),
-		LiveTimeStatus: s.laprfServer.Status(),
+		ServerTimestampUs: s.engine.NowUs(),
+		Pucks:             pucks,
+		DetectedPucks:     s.engine.DetectedPucksSnapshot(),
+		SimulatorRun:      s.simulator.IsRunning(),
+		RaceArmed:         s.engine.IsRaceArmed(),
+		LiveTimeStatus:    s.laprfServer.Status(),
 	})
 }
 

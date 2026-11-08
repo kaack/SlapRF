@@ -203,8 +203,16 @@ export class AppStore {
     this._liveTime = state.liveTimeStatus;
 
     this.lastCrossingBySlot.clear();
+    let maxTs = state.serverTimestampUs ?? 0;
     for (const ev of this._crossings) {
       this.lastCrossingBySlot.set(ev.slotIndex, ev);
+      if (ev.timestampUs > maxTs) maxTs = ev.timestampUs;
+    }
+    for (const lap of this._laps) {
+      if (lap.completedAtUs > maxTs) maxTs = lap.completedAtUs;
+    }
+    if (maxTs > 0) {
+      this._latestTimestampUs = Math.max(this._latestTimestampUs, maxTs);
     }
     this.ensureValidSelection();
     this.emit("config", "laps", "crossings", "status", "selection", "rules");
@@ -215,6 +223,9 @@ export class AppStore {
     this.setPucks(status.pucks ?? []);
     if (status.detectedPucks) {
       this._detectedPucks = status.detectedPucks;
+    }
+    if (status.serverTimestampUs && status.serverTimestampUs > this._latestTimestampUs) {
+      this._latestTimestampUs = status.serverTimestampUs;
     }
     this._simulatorRunning = status.simulatorRunning;
     this._raceArmed = status.raceArmed;
@@ -260,6 +271,9 @@ export class AppStore {
   public ingestCrossing(ev: GateCrossingEvent): void {
     this._crossings.push(ev);
     if (this._crossings.length > MAX_CROSSINGS) this._crossings.shift();
+    if (ev.timestampUs > this._latestTimestampUs) {
+      this._latestTimestampUs = ev.timestampUs;
+    }
     this.lastCrossingBySlot.set(ev.slotIndex, ev);
     this.emit("crossings");
   }
@@ -267,12 +281,18 @@ export class AppStore {
   public ingestFiltered(f: FilteredDetection): void {
     this._filtered.push(f);
     if (this._filtered.length > MAX_FILTERED) this._filtered.shift();
+    if (f.timestampUs > this._latestTimestampUs) {
+      this._latestTimestampUs = f.timestampUs;
+    }
     this.emit("crossings");
   }
 
   public ingestLap(lap: LapRecord, summaries: PilotTrackSummary[]): void {
     this._laps.push(lap);
     if (this._laps.length > MAX_LAPS) this._laps.shift();
+    if (lap.completedAtUs > this._latestTimestampUs) {
+      this._latestTimestampUs = lap.completedAtUs;
+    }
     this._summaries = summaries;
     this.emit("laps");
     this.lapListeners.forEach((fn) => fn(lap));
