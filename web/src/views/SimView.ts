@@ -170,14 +170,6 @@ function formatPilotVtxText(p: SimPilotState): string {
   return "Pit / Off";
 }
 
-function formatPilotBattHtml(p: SimPilotState): string {
-  const inQuad = (p.packs ?? []).find((pk) => pk.state === "IN_QUAD");
-  if (!inQuad || p.batteryPct === 0) {
-    return `<span class="muted">Quad unplugged</span> · 0.0 V`;
-  }
-  return `<strong>Pack #${inQuad.packIndex}</strong> · ${inQuad.pct}% (${inQuad.volts.toFixed(1)} V)`;
-}
-
 function formatPackStateChip(pack: SimBatteryPack): { text: string; cls: string } {
   switch (pack.state) {
     case "IN_QUAD":
@@ -795,14 +787,8 @@ export class SimView extends Component {
               </div>
 
               <div class="sim-pilot-metrics">
-                <div class="sim-batt-block">
-                  <div class="sim-metric-label">
-                    <span>3-Pack 6S LiPo Rotation (Bench Charger)</span>
-                    <span class="mono" data-pilot-batt-text="${p.slotIndex}">${formatPilotBattHtml(p)}</span>
-                  </div>
-                  <div class="sim-packs-grid">
-                    ${renderPilotPacksHtml(p)}
-                  </div>
+                <div class="sim-packs-grid">
+                  ${renderPilotPacksHtml(p)}
                 </div>
 
                 <div class="sim-telemetry-grid">
@@ -878,10 +864,6 @@ export class SimView extends Component {
         badge.textContent = meta.label;
         badge.className = `sim-status-badge ${meta.badgeClass}`;
         badge.title = meta.hint;
-      }
-      const battText = this.el.querySelector<HTMLElement>(`[data-pilot-batt-text="${p.slotIndex}"]`);
-      if (battText) {
-        battText.innerHTML = formatPilotBattHtml(p);
       }
       for (const pk of p.packs ?? []) {
         const chip = formatPackStateChip(pk);
