@@ -1365,26 +1365,74 @@ body.is-gate-dragging * {
   padding: 0 16px;
 }
 
-.cmp-summary {
+/* Shared insight/takeaway box used in both Analysis and Recommendation */
+.insight-box {
   display: flex;
-  align-items: center;
-  gap: 16px;
-  margin: 0 20px 14px;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0 20px 16px;
   padding: 14px 16px;
   border-radius: var(--radius);
+  border: 1px solid var(--border);
   background: var(--surface-2);
+}
+.insight-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.insight-badge {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.insight-badge.is-good {
+  background: rgba(52, 211, 153, 0.14);
+  color: var(--good);
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+.insight-badge.is-bad {
+  background: rgba(251, 113, 133, 0.14);
+  color: var(--bad);
+  border: 1px solid rgba(251, 113, 133, 0.3);
+}
+.insight-badge.is-accent {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid var(--accent-line);
+}
+.insight-badge.is-neutral {
+  background: var(--surface-3);
   color: var(--text-2);
+  border: 1px solid var(--border-strong);
+}
+.insight-chips {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 12px;
+}
+.insight-vs {
+  color: var(--text-3);
+  font-size: 11.5px;
+}
+.insight-body {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
   line-height: 1.6;
 }
-.cmp-summary strong {
+.insight-body strong {
   color: var(--text);
   font-weight: 600;
-}
-.cmp-total {
-  font-size: 22px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  white-space: nowrap;
 }
 .cmp-table tfoot td {
   border-top: 1px solid var(--border-strong);
@@ -1584,19 +1632,81 @@ body.is-gate-dragging * {
   border-top: 1.5px dashed var(--text-2);
   border-radius: 0 !important;
 }
-/* Pilot analysis: lap picker (step 1) ------------------------------------- */
-.step {
-  display: inline-grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  margin-right: 8px;
-  border-radius: 50%;
-  background: var(--accent-soft);
-  color: var(--accent);
-  font-size: 11px;
-  font-weight: 700;
-  vertical-align: 1px;
+/* Pilot analysis: lap picker (Selection) ---------------------------------- */
+.selection-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.selection-slots {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.sel-slot-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 0.14s, background 0.14s, box-shadow 0.14s;
+}
+.sel-slot-pill:hover:not(:disabled) {
+  border-color: #454c59;
+  background: var(--surface-3);
+}
+.sel-slot-pill:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+.sel-slot-pill.is-review.is-armed {
+  border-color: var(--accent-line);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+.sel-slot-pill.is-ref.is-armed {
+  border-color: rgba(192, 132, 252, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(192, 132, 252, 0.45);
+}
+.sel-slot-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  flex-shrink: 0;
+}
+.sel-slot-dot.is-review {
+  background: var(--accent);
+}
+.sel-slot-dot.is-ref {
+  background: var(--purple);
+}
+.sel-slot-k {
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.sel-slot-time {
+  color: var(--text-2);
+  font-size: 11.5px;
+}
+.sel-vs {
+  color: var(--text-3);
+  font-size: 11.5px;
+  font-weight: 500;
 }
 .cmp-with {
   display: flex;
@@ -1655,7 +1765,7 @@ body.is-gate-dragging * {
   min-width: 100%;
 }
 .lap-picker-plot {
-  padding-top: 48px;
+  padding-top: 8px;
 }
 .lap-picker-bars {
   position: relative;
@@ -2000,8 +2110,7 @@ body.is-gate-dragging * {
   .form-grid {
     grid-template-columns: minmax(0, 1fr);
   }
-  .cmp-summary {
-    flex-wrap: wrap;
+  .insight-box {
     margin: 0 14px 12px;
   }
   .cmp-with {
