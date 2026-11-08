@@ -2567,11 +2567,406 @@ body.is-gate-dragging * {
   flex-wrap: wrap;
   gap: 8px;
 }
+.flasher-readout-head-right {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
 .flasher-readout-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 10px;
   font-size: 12.5px;
+}
+
+/* Sliding Flasher Wizard --------------------------------------------------- */
+.flasher-wizard {
+  gap: 14px;
+}
+.flasher-wizard-stepper {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.flasher-wizard-stepper::-webkit-scrollbar {
+  display: none;
+}
+.flasher-step-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 30px;
+  padding: 0 10px 0 6px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-3);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.14s, color 0.14s, border-color 0.14s;
+}
+.flasher-step-pill:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--surface-3);
+}
+.flasher-step-pill.is-current {
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
+  color: var(--text);
+}
+.flasher-step-pill.is-done {
+  color: var(--text-2);
+}
+.flasher-step-circle {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  display: inline-grid;
+  place-items: center;
+  background: var(--surface-3);
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.flasher-step-pill.is-current .flasher-step-circle {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.flasher-step-pill.is-done .flasher-step-circle {
+  background: rgba(52, 211, 153, 0.18);
+  color: var(--good);
+}
+.flasher-step-label-short {
+  display: none;
+}
+.flasher-step-divider {
+  flex: 1 1 12px;
+  min-width: 8px;
+  max-width: 28px;
+  height: 1px;
+  background: var(--border-strong);
+}
+
+.flasher-wizard-viewport {
+  overflow: hidden;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.flasher-wizard-stage {
+  padding: 18px 20px;
+}
+.flasher-wizard-stage.is-slide-next {
+  animation: flasherSlideNext 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.flasher-wizard-stage.is-slide-prev {
+  animation: flasherSlidePrev 0.22s cubic-bezier(0.22, 1, 0.36, 1);
+}
+@keyframes flasherSlideNext {
+  from {
+    opacity: 0;
+    transform: translateX(26px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+@keyframes flasherSlidePrev {
+  from {
+    opacity: 0;
+    transform: translateX(-26px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+
+.flasher-wizard-body {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.flasher-wizard-intro {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.flasher-wizard-badge-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 2px;
+}
+.flasher-wizard-intro h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+.flasher-wizard-intro p {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.flasher-wizard-intro p strong {
+  color: var(--text-2);
+}
+
+/* Step 1: Role choice cards */
+.flasher-role-choice-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.flasher-choice-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 16px 18px;
+  border-radius: var(--radius);
+  border: 1.5px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s, transform 0.12s, box-shadow 0.15s;
+}
+.flasher-choice-card:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 5%, var(--surface));
+  transform: translateY(-1px);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.35);
+}
+.flasher-choice-card.is-selected {
+  border-color: var(--accent-line);
+}
+.flasher-choice-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.flasher-choice-title {
+  font-size: 14.5px;
+  font-weight: 650;
+  color: var(--text);
+}
+.flasher-choice-desc {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-3);
+}
+.flasher-choice-cta {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.flasher-inspect-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px dashed var(--border-strong);
+  background: rgba(255, 255, 255, 0.015);
+}
+.flasher-inspect-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.flasher-inspect-text strong {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+/* Step 3: Hub Wi-Fi mode switcher + focused credential panel */
+.flasher-mode-segmented {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+.flasher-mode-tab {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 11px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.14s, background 0.14s, color 0.14s;
+}
+.flasher-mode-tab:hover:not(:disabled) {
+  border-color: #3c424d;
+  color: var(--text);
+}
+.flasher-mode-tab.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+  color: var(--text);
+}
+.flasher-mode-tab-top {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.flasher-mode-tab-title {
+  font-size: 13px;
+  font-weight: 650;
+}
+.flasher-mode-tab.is-active .flasher-mode-tab-title {
+  color: var(--accent);
+}
+.flasher-mode-tab-sub {
+  font-size: 11.5px;
+  color: var(--text-3);
+}
+
+.flasher-wifi-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+}
+.flasher-wifi-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+.flasher-wifi-panel-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-3);
+  max-width: 620px;
+}
+.flasher-wifi-panel-desc strong {
+  color: var(--text-2);
+}
+
+/* Step 4: Summary receipt */
+.flasher-receipt {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+.flasher-receipt-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.flasher-receipt-val {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+}
+.flasher-receipt-val > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.flasher-receipt-edit {
+  padding: 2px 7px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text-3);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.flasher-receipt-edit:hover:not(:disabled) {
+  border-color: var(--accent-line);
+  color: var(--accent);
+}
+
+.flasher-wizard-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.flasher-banner.is-ok {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+@media (max-width: 680px) {
+  .flasher-step-label-full {
+    display: none;
+  }
+  .flasher-step-label-short {
+    display: inline;
+  }
+  .flasher-wizard-stage {
+    padding: 14px;
+  }
+  .flasher-role-choice-grid,
+  .flasher-mode-segmented,
+  .flasher-receipt {
+    grid-template-columns: 1fr;
+  }
 }
 
 /* ==========================================================================
