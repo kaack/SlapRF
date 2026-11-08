@@ -51,19 +51,23 @@ func TestSimulatorControlsAndTimerLifecycle(t *testing.T) {
 		t.Fatalf("expected slot 1 to be CRASHED_VTX_ON with VTX active, got %+v", snap.Pilots[0])
 	}
 
-	// 2. Activate track walker -> flying pilots climb to 14m AVOIDING, crashed pilot goes to PIT_SWAP
+	// 2. Activate track walker -> flying pilots climb to AVOIDING or return to pit, crashed pilot stays on field being walked out to
 	sim.SetTrackWalker(true)
 	snap = sim.Snapshot()
 	if !snap.TrackWalkerActive {
 		t.Fatalf("expected TrackWalkerActive=true")
 	}
-	if snap.Pilots[0].Status != "PIT_SWAP" {
-		t.Fatalf("expected crashed pilot to enter PIT_SWAP on track walk, got %s", snap.Pilots[0].Status)
+	if snap.Pilots[0].Status != "CRASHED_WAITING_RECOVERY" || snap.Pilots[0].StateRemainingSec <= 0 {
+		t.Fatalf("expected crashed pilot to remain on field in CRASHED_WAITING_RECOVERY during track walk, got %+v", snap.Pilots[0])
 	}
-	if snap.Pilots[1].Status != "AVOIDING" || snap.Pilots[1].AltitudeMeters < 10.0 {
-		t.Fatalf("expected flying pilot to climb to AVOIDING altitude, got %+v", snap.Pilots[1])
+	if snap.Pilots[1].Status != "AVOIDING" && snap.Pilots[1].Status != "PIT_SWAP" {
+		t.Fatalf("expected flying pilot to react by climbing to AVOIDING or returning to PIT_SWAP, got %+v", snap.Pilots[1])
 	}
 	sim.SetTrackWalker(false)
+	snap = sim.Snapshot()
+	if snap.Pilots[0].Status != "PIT_SWAP" {
+		t.Fatalf("expected crashed pilot to move to PIT_SWAP after recovery walk finishes, got %s", snap.Pilots[0].Status)
+	}
 
 	// 3. Toggle power off on T2, add T5, delete T5
 	if poweredOn := sim.ToggleTimerPower(2); poweredOn {

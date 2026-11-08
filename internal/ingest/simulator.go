@@ -181,13 +181,14 @@ func (s *TrackSimulator) TriggerPackBurst() {
 
 // SetTrackWalker activates or clears a simulated person walking on the track (e.g. quad recovery).
 // While active, some airborne pilots return to the pit bench while others fly high (AVOIDING)
-// until the track is cleared, and crashed quads are recovered to the bench.
+// until the track is cleared; crashed quads stay on the field while being walked out to and move
+// to the pit bench once the recovery walk finishes.
 func (s *TrackSimulator) SetTrackWalker(active bool) {
 	var clearSlots []int
 	s.mu.Lock()
 	s.trackWalkerActive = active
 	if active {
-		s.trackWalkerTimerSec = 15.0
+		s.trackWalkerTimerSec = 14.0
 		avoidingCount := 0
 		for i := range s.pilotStates {
 			ps := &s.pilotStates[i]
@@ -210,12 +211,10 @@ func (s *TrackSimulator) SetTrackWalker(active bool) {
 				}
 				clearSlots = append(clearSlots, ps.slotIndex)
 			case domain.SimStatusCrashedVtxOn, domain.SimStatusCrashedRecovery:
-				ps.status = domain.SimStatusPitSwap
-				ps.stateTimerSec = 30.0 + s.rng.Float64()*20.0
-				ps.batteryPct = 0.0
-				ps.altitudeMeters = 0.0
+				// Quad stays on the field in Pit Mode while the pilot walks out to retrieve it
+				ps.status = domain.SimStatusCrashedRecovery
+				ps.stateTimerSec = s.trackWalkerTimerSec
 				ps.currentSpeedMps = 0.0
-				ps.trackPosMeters = s.trackLengthMeters - 12.0
 				clearSlots = append(clearSlots, ps.slotIndex)
 			}
 		}
@@ -223,10 +222,20 @@ func (s *TrackSimulator) SetTrackWalker(active bool) {
 		s.trackWalkerTimerSec = 0
 		for i := range s.pilotStates {
 			ps := &s.pilotStates[i]
-			if ps.status == domain.SimStatusAvoiding {
+			switch ps.status {
+			case domain.SimStatusAvoiding:
 				ps.status = domain.SimStatusFlying
 				ps.altitudeMeters = 1.25
 				ps.trackPosMeters = s.trackLengthMeters - 14.0 - float64(i)*4.0
+				clearSlots = append(clearSlots, ps.slotIndex)
+			case domain.SimStatusCrashedRecovery:
+				// Recovery walk completed: quad is now back at the pit bench for a fresh pack
+				ps.status = domain.SimStatusPitSwap
+				ps.stateTimerSec = 25.0 + s.rng.Float64()*20.0
+				ps.batteryPct = 0.0
+				ps.altitudeMeters = 0.0
+				ps.currentSpeedMps = 0.0
+				ps.trackPosMeters = s.trackLengthMeters - 12.0
 				clearSlots = append(clearSlots, ps.slotIndex)
 			}
 		}
@@ -512,15 +521,30 @@ func (s *TrackSimulator) step(dtSec float64) {
 	// Handle automatic track-walker recovery timer
 	if s.trackWalkerActive && s.trackWalkerTimerSec > 0 {
 		s.trackWalkerTimerSec -= dtSec
+		for i := range s.pilotStates {
+			if s.pilotStates[i].status == domain.SimStatusCrashedRecovery {
+				s.pilotStates[i].stateTimerSec = math.Max(0, s.trackWalkerTimerSec)
+			}
+		}
 		if s.trackWalkerTimerSec <= 0 {
 			s.trackWalkerActive = false
 			s.trackWalkerTimerSec = 0
 			for i := range s.pilotStates {
 				ps := &s.pilotStates[i]
-				if ps.status == domain.SimStatusAvoiding {
+				switch ps.status {
+				case domain.SimStatusAvoiding:
 					ps.status = domain.SimStatusFlying
 					ps.altitudeMeters = 1.25
 					ps.trackPosMeters = s.trackLengthMeters - 14.0 - float64(i)*4.0
+					clearSlots = append(clearSlots, ps.slotIndex)
+				case domain.SimStatusCrashedRecovery:
+					// Walk completed: quad has been carried off the field back to the pit bench
+					ps.status = domain.SimStatusPitSwap
+					ps.stateTimerSec = 25.0 + s.rng.Float64()*20.0
+					ps.batteryPct = 0.0
+					ps.altitudeMeters = 0.0
+					ps.currentSpeedMps = 0.0
+					ps.trackPosMeters = s.trackLengthMeters - 10.0
 					clearSlots = append(clearSlots, ps.slotIndex)
 				}
 			}
@@ -556,6 +580,17 @@ func (s *TrackSimulator) step(dtSec float64) {
 	sectorLen := s.trackLengthMeters / float64(numPucks)
 
 	// 1. Advance each enabled pilot along the track & update battery/pit/crash state machine
+	hasWaitingRecovery := false
+	for i := range s.pilotStates {
+		if i < len(pilots) && (!pilots[i].Enabled || pilots[i].Channel == 0) {
+			continue
+		}
+		if s.pilotStates[i].status == domain.SimStatusCrashedRecovery {
+			hasWaitingRecovery = true
+			break
+		}
+	}
+
 	waitingRecoveryCount := 0
 	flyingCount := 0
 
@@ -574,7 +609,8 @@ func (s *TrackSimulator) step(dtSec float64) {
 			ps.currentSpeedMps = 0
 			ps.stateTimerSec -= dtSec
 			if ps.stateTimerSec <= 0 {
-				// 35% chance pilot flips over with turtle mode and keeps flying; otherwise enters Pit Mode waiting for recovery
+				// 35% chance pilot flips over with turtle mode and keeps flying; otherwise turns Pit Mode on
+				// and waits on the field for a traffic lull (no pilots flying) to walk out and recover.
 				if s.rng.Float64() < 0.35 && !s.trackWalkerActive {
 					ps.status = domain.SimStatusFlying
 					ps.altitudeMeters = 1.25
@@ -582,6 +618,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 				} else {
 					ps.status = domain.SimStatusCrashedRecovery
 					ps.stateTimerSec = 0
+					waitingRecoveryCount++
 				}
 			}
 			continue
@@ -594,6 +631,11 @@ func (s *TrackSimulator) step(dtSec float64) {
 		case domain.SimStatusPitSwap:
 			ps.currentSpeedMps = 0
 			ps.stateTimerSec -= dtSec
+			// If a crashed pilot is waiting for a lull to walk on the track (or is actively walking on the track),
+			// pilots who have finished swapping packs hold on the launch pad until the recovery walk is done!
+			if (hasWaitingRecovery || s.trackWalkerActive) && ps.stateTimerSec < 3.0 {
+				ps.stateTimerSec = 3.0
+			}
 			// Pack is unplugged (0%) while retrieving quad, walking to bench, unstrapping old pack,
 			// strapping fresh pack, and walking back to the launch pad; in the final 4 seconds on the
 			// launch pad, the pilot plugs in the fresh 100% 6S pack, sits down, arms, and takes off.
@@ -675,18 +717,16 @@ func (s *TrackSimulator) step(dtSec float64) {
 		}
 	}
 
-	// If a crashed drone is waiting on the track and all other pilots have landed for pit swaps,
-	// automatically trigger a brief track walk to recover the crashed drone!
+	// If a crashed drone is waiting on the field and all other pilots have landed for pit swaps
+	// (a natural lull in traffic with 0 pilots flying), the crashed pilot walks out onto the clear
+	// track to recover their quad; once the walk timer finishes, the quad moves to the pit bench.
 	if !s.prewarming && waitingRecoveryCount > 0 && flyingCount == 0 && !s.trackWalkerActive {
 		s.trackWalkerActive = true
-		s.trackWalkerTimerSec = 8.0
+		s.trackWalkerTimerSec = 12.0
 		for i := range s.pilotStates {
 			ps := &s.pilotStates[i]
 			if ps.status == domain.SimStatusCrashedRecovery {
-				ps.status = domain.SimStatusPitSwap
-				ps.stateTimerSec = 8.0
-				ps.trackPosMeters = s.trackLengthMeters - 10.0
-				clearSlots = append(clearSlots, ps.slotIndex)
+				ps.stateTimerSec = s.trackWalkerTimerSec
 			}
 		}
 	}

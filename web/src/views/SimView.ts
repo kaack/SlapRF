@@ -40,10 +40,17 @@ function statusMeta(
         hint: "Down on track near gate with 5.8 GHz VTX still transmitting",
       };
     case "CRASHED_WAITING_RECOVERY":
+      if (remainingSec > 0) {
+        return {
+          label: `Walking to Quad${sec}`,
+          badgeClass: "sim-status-crashed-wait",
+          hint: "Pilot is walking out on the track to retrieve the crashed quad",
+        };
+      }
       return {
-        label: "Crashed · Pit Mode",
+        label: "Crashed · Waiting for Lull",
         badgeClass: "sim-status-crashed-wait",
-        hint: "Pit mode enabled (VTX off) — waiting for track walk recovery",
+        hint: "Quad stays crashed on the field (Pit Mode) until no pilots are flying — or click Walk recover to force an immediate track walk",
       };
     case "PIT_SWAP":
       return {
@@ -508,7 +515,7 @@ export class SimView extends Component {
                   : isCrashedVtx
                   ? `<span class="sim-drone-tag is-bad">VTX ON</span>`
                   : isCrashedWait
-                  ? `<span class="sim-drone-tag is-warn">CRASH</span>`
+                  ? `<span class="sim-drone-tag is-warn" data-drone-tag="${p.slotIndex}">${p.stateRemainingSec > 0 ? `WALK ${Math.ceil(p.stateRemainingSec)}s` : "WAIT LULL"}</span>`
                   : ""
               }
             </div>`;
@@ -599,6 +606,15 @@ export class SimView extends Component {
       if (caption && walkerActive) {
         caption.textContent = `⚠ Person on track (${Math.ceil(walkerSec)}s left) — pilots have returned to the bench or are flying high until clear`;
       }
+      for (const p of onTrackPilots) {
+        if (p.status === "CRASHED_WAITING_RECOVERY") {
+          const tag = this.el.querySelector<HTMLElement>(`[data-drone-tag="${p.slotIndex}"]`);
+          if (tag) {
+            tag.textContent =
+              p.stateRemainingSec > 0 ? `WALK ${Math.ceil(p.stateRemainingSec)}s` : "WAIT LULL";
+          }
+        }
+      }
       for (const p of pitPilots) {
         const sub = this.el.querySelector<HTMLElement>(`[data-pit-sub="${p.slotIndex}"]`);
         if (sub) {
@@ -612,7 +628,12 @@ export class SimView extends Component {
     const activePilots = (simState?.pilots ?? []).filter((p) => p.enabled);
 
     const structSig = activePilots
-      .map((p) => `${p.slotIndex}:${p.callsign}:${p.color}:${p.channel}:${p.status}`)
+      .map(
+        (p) =>
+          `${p.slotIndex}:${p.callsign}:${p.color}:${p.channel}:${p.status}:${
+            p.status === "CRASHED_WAITING_RECOVERY" && p.stateRemainingSec > 0 ? "walking" : "idle"
+          }`
+      )
       .join("|");
 
     if (structSig !== this.lastPilotsStructSig) {
@@ -680,8 +701,8 @@ export class SimView extends Component {
                     ? `<button class="btn btn-sm btn-armed" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="recover" title="Flip quad over in place with turtle mode and resume flying">
                         ${icons.play(13)}<span>Turtle recover</span>
                       </button>
-                      <button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="walk-recover" title="Walk onto the track to retrieve the crashed quad — other drones will either land at the bench or fly high until clear">
-                        ${icons.pilot(13)}<span>Walk recover</span>
+                      <button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="walk-recover" ${p.status === "CRASHED_WAITING_RECOVERY" && p.stateRemainingSec > 0 ? "disabled" : ""} title="Walk onto the track now to retrieve the crashed quad — other drones will either land at the bench or fly high until clear">
+                        ${icons.pilot(13)}<span data-walk-recover-label="${p.slotIndex}">${p.status === "CRASHED_WAITING_RECOVERY" && p.stateRemainingSec > 0 ? `Walking out (${Math.ceil(p.stateRemainingSec)}s)…` : "Walk recover"}</span>
                       </button>`
                     : `<button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="crash" ${isParked ? "disabled" : ""} title="Force a mid-track crash near the closest gate (VTX stays on briefly)">
                         ${icons.zapOff(13)}<span>Force crash</span>
@@ -747,6 +768,15 @@ export class SimView extends Component {
       const packsEl = this.el.querySelector<HTMLElement>(`[data-pilot-packs="${p.slotIndex}"]`);
       if (packsEl) {
         packsEl.textContent = `#${p.packsFlown} · ${p.crashesCount} cr`;
+      }
+      const walkLabelEl = this.el.querySelector<HTMLElement>(
+        `[data-walk-recover-label="${p.slotIndex}"]`
+      );
+      if (walkLabelEl) {
+        walkLabelEl.textContent =
+          p.status === "CRASHED_WAITING_RECOVERY" && p.stateRemainingSec > 0
+            ? `Walking out (${Math.ceil(p.stateRemainingSec)}s)…`
+            : "Walk recover";
       }
     }
   }
