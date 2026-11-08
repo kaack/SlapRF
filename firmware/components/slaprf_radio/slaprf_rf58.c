@@ -4,27 +4,17 @@
  * STATUS: placeholder. Returns the noise floor so the rest of the pipeline (sweeps, windows,
  * TDMA, Hub bridge, laptop ingest) can be built and tested end to end.
  *
- * How it can actually be done (see firmware/README.md for sources):
- *   - The C5's Wi-Fi modem has an undocumented debug path that exposes raw baseband I/Q samples
- *     from the receiver ADC, bypassing the 802.11 MAC/PHY decoders (ESPARGOS "esp-sdr",
- *     h0m3us3r). On the C5 the synthesizer can be tuned across ~4.8-6.0 GHz, which covers every
- *     analog FPV band including Raceband R8 (5917 MHz) above the 5 GHz Wi-Fi channel plan.
- *   - FPVGateC5MK / FPVGateC5RX (Louis Hitchcock) use this to replace RX5808 modules: retune the
- *     LO to each pilot's frequency, capture a short I/Q burst, and compute band power over the
- *     ~10 MHz around the carrier. They hop 8 pilots at ~1 kHz each and hardware-timestamp every
- *     reading.
+ * The method (PHY ADC dump via librftest `adctrig`, PLL-only hops, forced gain, band power over
+ * ~10 MHz with the LO 10 MHz below the pilot; 5180-5917 MHz) and the licensing constraints
+ * (esp-sdr is GPL-3.0, FPVGateC5MK/RX are CC BY-NC-SA) are summarised in firmware/README.md,
+ * "5.8 GHz sensing on the C5". Implement from documented facts, not by copying their code.
  *
- * To implement here: port the tune + I/Q capture + band-power routine from one of those
- * projects (check its license first), keeping this function's contract:
- *   - tune to `center_freq_mhz`, settle, capture N I/Q samples, return 10*log10(mean(I²+Q²))
- *     calibrated to dBm, clamped to int8.
+ * Contract: tune to `center_freq_mhz`, capture, return band power calibrated to dBm, clamped to
+ * int8.
  *
- * Coexistence caveat: the C5 has one radio. While it is parked on 5.8 GHz in debug mode it is
- * deaf on 2.4 GHz, so sweeps and 2.4 GHz TX/RX must be time-sliced (the profile's TDMA slots).
- * A Hub that must also hold a Wi-Fi association (station mode) will miss AP beacons while
- * sweeping; FPVGate sidesteps this by pairing the C5 (pure receiver) with an S3 over UART that
- * owns Wi-Fi. If time-slicing proves unreliable, the same split (C5 sensor + second MCU for
- * the laptop link) is the fallback.
+ * Coexistence caveat: none of the reference projects transmits while scanning; they keep Wi-Fi
+ * in NULL mode, disable PLL tracking and reserve a 128 KiB SRAM bank for the capture engine.
+ * Time-slicing that with ESP-NOW / the Hub's Wi-Fi bridge on one C5 is unproven.
  */
 #include "slaprf_radio.h"
 

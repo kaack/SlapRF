@@ -58,11 +58,16 @@ Without a compiled image, the flasher falls back to a placeholder image. It flas
 
 `components/slaprf_radio/slaprf_rf58.c` currently returns the noise floor. Everything around it (sweeps, windows, TDMA, Hub bridge, laptop ingest) builds and runs, so the whole pipeline can be exercised.
 
-How it can be done:
+What the reference projects actually do. This is from their source and docs, not from search summaries. The key reference is [FPVGateC5MK `docs/RADIO_INTERNALS.md`](https://github.com/LouisHitchcock/FPVGateC5MK/blob/main/docs/RADIO_INTERNALS.md), measured on chip v1.0:
 
-- **Undocumented raw-IQ debug path.** Espressif's Wi-Fi modems have a test path that exposes raw baseband I/Q from the receiver ADC, bypassing the 802.11 decoders. It was found by the ESPARGOS team ([esp-sdr](https://github.com/ESPARGOS/esp-sdr), [espargos.net](https://espargos.net)) and independently by h0m3us3r. On the ESP32-C5 the synthesizer tunes across roughly 4.8–6.0 GHz, which covers every analog FPV band, including Raceband R8 at 5917 MHz, above the Wi-Fi channel plan.
-- **How FPVGate uses it.** [FPVGateC5MK](https://github.com/LouisHitchcock/FPVGateC5MK) (multi-pilot) and [FPVGateC5RX](https://github.com/LouisHitchcock/FPVGateC5RX) (RX5808 drop-in) by Louis Hitchcock retune the local oscillator to each pilot's frequency, capture a short I/Q burst, and compute band power over about 10 MHz around the carrier. They hop up to 8 pilots at about 1 kHz each and hardware-timestamp every reading.
+- **Raw capture.** The PHY has an ADC dump engine reached through `adctrig` in Espressif's `librftest.a`, which is only linked with `CONFIG_ESP_PHY_ENABLE_CERT_TEST=y`. It writes 10-bit I, 10-bit Q and the gain index per 32-bit word at 80 MS/s into SRAM at `0x40830000`, so the whole 128 KiB bank `0x40820000`–`0x4083FFFF` must be reserved from the heap.
+- **Fast captures.** After one stock `adctrig`, driving the dump-control registers directly gives a 256-sample capture in about 10 µs.
+- **Tuning.** `phy_set_chanfreq(5180, 1)` runs once for band calibration. Each hop then only moves the PLL (`phy_set_rf_freq_offset`): about 400 µs, or about 70 µs without its fixed delay. PLL tracking is disabled.
+- **Gain.** Forced to a fixed index with `force_rx_gain`; the AGC isn't used.
+- **Band power.** Set the LO 10 MHz below the pilot (the spectrum is inverted), mix down, sum Hann-windowed 8-sample blocks for the power in about 10 MHz, then apply median-of-3 and an EMA. About 121 µs per pilot visit.
+- **Range.** 5180–5917 MHz verified, including Raceband R8. Boscam E7/E8 (5925/5945) are unreachable with this method.
+- **Receive-only, Wi-Fi idle.** Wi-Fi runs in `WIFI_MODE_NULL` + promiscuous purely to keep the PHY powered. Nothing transmits, and the link to the host is UART or USB.
 
-Porting plan: implement `esp_sdr_measure_5g_channel_dbm()` with that tune → capture → band-power routine. Check the source project's license before reusing code.
+**Licensing.** [esp-sdr](https://github.com/ESPARGOS/esp-sdr) is GPL-3.0. FPVGateC5MK and FPVGateC5RX are CC BY-NC-SA 4.0 (non-commercial, with commercial licences sold separately), written clean-room from facts. Their code can't be copied into SlapRF unless SlapRF's licence is compatible. The facts themselves (register addresses, call order, timings) aren't copyrightable and can be implemented independently. This is not legal advice.
 
-> **Single-radio caveat.** The C5 has one radio. While it is parked on 5.8 GHz it can't hear or send on 2.4 GHz, so sweeps and ESP-NOW have to be time-sliced (the profile's TDMA slots). A Hub that also holds a Wi-Fi station association will miss AP beacons while sweeping. FPVGate avoids this by pairing the C5, as a pure receiver, with an ESP32-S3 over UART that owns Wi-Fi and the UI. If time-slicing proves unreliable, that split is the fallback here too.
+> **Single-radio caveat.** None of these projects transmits on the same C5 while scanning. SlapRF's design has every timer sense 5.8 GHz *and* send ESP-NOW, and the Hub also bridges Wi-Fi. That needs time-slicing the radio between the debug capture mode and the Wi-Fi driver, with PLL tracking off and 128 KiB of SRAM reserved, which is unproven. The proven alternative is FPVGate's split: the C5 as a pure receiver, plus a second MCU for the radio link.
