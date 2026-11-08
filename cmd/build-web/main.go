@@ -47,8 +47,9 @@ func main() {
 		}
 	}
 
-	// 1. Copy index.html and styles/*.css
+	// 1. Copy index.html (and 404.html for GitHub Pages SPA fallback) and styles/*.css
 	mustCopyFile(filepath.Join(*webDir, "index.html"), filepath.Join(*outDir, "index.html"))
+	mustCopyFile(filepath.Join(*webDir, "index.html"), filepath.Join(*outDir, "404.html"))
 	entries, err := os.ReadDir(filepath.Join(*webDir, "styles"))
 	if err != nil {
 		log.Fatalf("failed to read styles dir: %v", err)
