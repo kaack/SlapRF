@@ -56,9 +56,7 @@ export class ApiClient {
     window.addEventListener("pagehide", () => this.transport.disconnectStream());
     window.addEventListener("beforeunload", () => this.transport.disconnectStream());
     document.addEventListener("visibilitychange", () => {
-      if (document.hidden) {
-        this.transport.disconnectStream();
-      } else {
+      if (!document.hidden) {
         this.connectStream();
         void this.refresh().catch(() => undefined);
       }
@@ -66,7 +64,7 @@ export class ApiClient {
     await this.refresh();
     this.connectStream();
     window.setInterval(() => {
-      if (!document.hidden) void this.pollStatus();
+      void this.pollStatus();
     }, STATUS_POLL_MS);
   }
 

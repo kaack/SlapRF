@@ -160,6 +160,12 @@ func main() {
 		return nil
 	}))
 
+	// tick() => advances simulator to wall-clock time (used by background Web Worker when screen is locked)
+	apiObj.Set("tick", js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		sim.AdvanceToNow()
+		return nil
+	}))
+
 	js.Global().Set("slaprfWasm", apiObj)
 	if cb := js.Global().Get("__slaprfWasmOnReady"); cb.Type() == js.TypeFunction {
 		cb.Invoke(apiObj)

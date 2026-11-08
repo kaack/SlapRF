@@ -102,6 +102,7 @@ type TrackSimulator struct {
 	pilotStates         []simPilotState
 	poweredOffTimers    map[uint8]bool
 	seqCounter          uint32
+	lastStepUs          uint64
 	rng                 *rand.Rand
 	stopCh              chan struct{}
 	clock               func() uint64 // Frame timestamps (engine clock; replaceable in tests)
@@ -262,6 +263,9 @@ func (s *TrackSimulator) Stop() {
 // SetRunning enables or pauses simulated telemetry generation.
 func (s *TrackSimulator) SetRunning(running bool) {
 	s.mu.Lock()
+	if running && !s.running {
+		s.lastStepUs = 0
+	}
 	s.running = running
 	s.mu.Unlock()
 }
@@ -657,7 +661,6 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 }
 
 func (s *TrackSimulator) loop() {
-	const dtSec = 0.020 // 50 Hz (20 ms per frame)
 	ticker := time.NewTicker(20 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -666,12 +669,57 @@ func (s *TrackSimulator) loop() {
 		case <-s.stopCh:
 			return
 		case <-ticker.C:
-			s.step(dtSec)
+			s.AdvanceToNow()
 		}
 	}
 }
 
+// AdvanceToNow steps the simulator forward in 20 ms increments to match wall-clock elapsed time
+// (capped at 2.5 seconds per wakeup) so that even if a mobile browser throttles background timers
+// while the phone screen is locked, simulated drones fly at 1.0x real-time speed and emit 50 Hz
+// (20 ms) RSSI frames without missing a single gate peak.
+func (s *TrackSimulator) AdvanceToNow() {
+	const dtSec = 0.020
+	const stepUs = 20_000
+	const maxCatchupSteps = 125 // at most 2.5s per wakeup
+
+	nowUs := s.clock()
+	s.mu.Lock()
+	if !s.running {
+		s.lastStepUs = nowUs
+		s.mu.Unlock()
+		return
+	}
+	if s.lastStepUs == 0 || nowUs < s.lastStepUs {
+		s.lastStepUs = nowUs
+		s.mu.Unlock()
+		s.stepWithTimestamp(dtSec, nowUs)
+		return
+	}
+	elapsedUs := nowUs - s.lastStepUs
+	steps := int(elapsedUs / stepUs)
+	if steps <= 0 {
+		s.mu.Unlock()
+		return
+	}
+	if steps > maxCatchupSteps {
+		s.lastStepUs = nowUs - uint64(maxCatchupSteps)*stepUs
+		steps = maxCatchupSteps
+	}
+	baseUs := s.lastStepUs
+	s.lastStepUs += uint64(steps) * stepUs
+	s.mu.Unlock()
+
+	for i := 1; i <= steps; i++ {
+		s.stepWithTimestamp(dtSec, baseUs+uint64(i)*stepUs)
+	}
+}
+
 func (s *TrackSimulator) step(dtSec float64) {
+	s.stepWithTimestamp(dtSec, 0)
+}
+
+func (s *TrackSimulator) stepWithTimestamp(dtSec float64, overrideNowUs uint64) {
 	s.mu.Lock()
 	if !s.running {
 		s.mu.Unlock()
@@ -681,7 +729,10 @@ func (s *TrackSimulator) step(dtSec float64) {
 	pilots, pucks, _, _, _ := s.engine.StateSnapshot()
 	detected := s.engine.DetectedPucksSnapshot()
 	numPucks := len(pucks)
-	nowUs := s.clock()
+	nowUs := overrideNowUs
+	if nowUs == 0 {
+		nowUs = s.clock()
+	}
 	s.seqCounter++
 
 	var clearSlots []int

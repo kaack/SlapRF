@@ -127,9 +127,9 @@ export class HttpRealTransport implements ApiTransport {
 
     es.onerror = () => {
       es.close();
-      if (document.hidden || !this.onEnvelope || !this.backendAvailable) return;
+      if (!this.onEnvelope || !this.backendAvailable) return;
       this.reconnectTimer = window.setTimeout(() => {
-        if (!document.hidden && this.onEnvelope) {
+        if (this.onEnvelope) {
           this.openEventSource();
         }
       }, RECONNECT_MS);

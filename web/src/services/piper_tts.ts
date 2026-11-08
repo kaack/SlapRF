@@ -279,8 +279,11 @@ export class PiperNeuralTts {
   private readonly cachedVoices = new Set<string>();
   private readonly downloadProgress = new Map<string, number>();
   private readonly audioCache = new Map<string, AudioBuffer>();
+  private readonly wavUrlCache = new Map<string, string>();
   private readonly memoryBlobs = new Map<string, Blob>();
   private activeSource: AudioBufferSourceNode | null = null;
+  private activeHtmlAudio: HTMLAudioElement | null = null;
+  private htmlAudioUnlocked = false;
   private readonly onStatusChange: () => void;
 
   constructor(onStatusChange: () => void) {
@@ -331,6 +334,36 @@ export class PiperNeuralTts {
     await this.ensureVoiceSession(desc);
   }
 
+  /**
+   * Unlocks the dedicated HTML5 `<audio>` element during a user gesture so mobile browsers
+   * allow starting new neural TTS clips even after the phone screen is locked (`document.hidden`).
+   */
+  public unlockAudio(silentWavUrl: string): void {
+    if (this.htmlAudioUnlocked || !silentWavUrl || typeof document === "undefined") return;
+    try {
+      if (!this.activeHtmlAudio) {
+        const el = document.createElement("audio");
+        el.setAttribute("playsinline", "true");
+        el.style.display = "none";
+        document.body?.appendChild(el);
+        this.activeHtmlAudio = el;
+      }
+      const el = this.activeHtmlAudio;
+      el.src = silentWavUrl;
+      el.volume = 0.01;
+      const p = el.play();
+      if (p) {
+        p.then(() => {
+          el.pause();
+          el.currentTime = 0;
+          this.htmlAudioUnlocked = true;
+        }).catch(() => undefined);
+      }
+    } catch {
+      // Ignore
+    }
+  }
+
   /** Stops any currently playing neural utterance immediately. */
   public stop(): void {
     if (this.activeSource) {
@@ -343,10 +376,19 @@ export class PiperNeuralTts {
       }
       this.activeSource = null;
     }
+    if (this.activeHtmlAudio) {
+      try {
+        this.activeHtmlAudio.pause();
+        this.activeHtmlAudio.currentTime = 0;
+      } catch {
+        // Ignore
+      }
+    }
   }
 
   /**
-   * Synthesizes `text` using the specified Piper voice and plays it through `ctx`.
+   * Synthesizes `text` using the specified Piper voice and plays it through `ctx` (or through
+   * an `<audio>` element when the document is hidden/locked on mobile).
    * Resolves when playback finishes (or is stopped).
    */
   public async speak(
@@ -362,14 +404,27 @@ export class PiperNeuralTts {
     const cacheKey = `${desc.voiceId}:${clampedRate.toFixed(2)}:${normalizedText}`;
 
     let audioBuffer = this.audioCache.get(cacheKey);
-    if (!audioBuffer) {
+    let wavUrl = this.wavUrlCache.get(cacheKey);
+    if (!audioBuffer || !wavUrl) {
       const { pcm, sampleRate } = await this.synthesizePcm(normalizedText, desc, clampedRate);
       audioBuffer = ctx.createBuffer(1, pcm.length, sampleRate);
       audioBuffer.getChannelData(0).set(pcm);
       this.setCache(cacheKey, audioBuffer);
+      wavUrl = encodeFloat32ToWavBlobUrl(pcm, sampleRate);
+      this.setWavCache(cacheKey, wavUrl);
     }
 
-    await ctx.resume();
+    // When the phone screen is locked (`document.hidden`), Android/iOS may suspend WebAudio's
+    // AudioContext while allowing HTML5 `<audio>` elements in an active MediaSession to play.
+    if (document.hidden || ctx.state !== "running") {
+      await ctx.resume().catch(() => undefined);
+      if (document.hidden || ctx.state !== "running") {
+        const playedHtml = await this.playViaHtmlAudio(wavUrl, volume);
+        if (playedHtml) return;
+      }
+    }
+
+    await ctx.resume().catch(() => undefined);
     return new Promise<void>((resolve) => {
       this.stop();
       const source = ctx.createBufferSource();
@@ -386,6 +441,50 @@ export class PiperNeuralTts {
       };
       source.start();
     });
+  }
+
+  private playViaHtmlAudio(wavUrl: string, volume: number): Promise<boolean> {
+    return new Promise<boolean>((resolve) => {
+      try {
+        if (!this.activeHtmlAudio) {
+          const el = document.createElement("audio");
+          el.setAttribute("playsinline", "true");
+          el.style.display = "none";
+          document.body?.appendChild(el);
+          this.activeHtmlAudio = el;
+        }
+        const el = this.activeHtmlAudio;
+        el.pause();
+        el.src = wavUrl;
+        el.volume = Math.max(0, Math.min(1, volume));
+        const cleanup = (ok: boolean) => {
+          el.onended = null;
+          el.onerror = null;
+          resolve(ok);
+        };
+        el.onended = () => cleanup(true);
+        el.onerror = () => cleanup(false);
+        el.play().catch(() => cleanup(false));
+      } catch {
+        resolve(false);
+      }
+    });
+  }
+
+  private setWavCache(key: string, url: string): void {
+    if (this.wavUrlCache.has(key)) {
+      const prev = this.wavUrlCache.get(key);
+      if (prev && prev !== url) URL.revokeObjectURL(prev);
+      this.wavUrlCache.delete(key);
+    } else if (this.wavUrlCache.size >= MAX_AUDIO_CACHE_ENTRIES) {
+      const oldest = this.wavUrlCache.keys().next().value;
+      if (oldest !== undefined) {
+        const prev = this.wavUrlCache.get(oldest);
+        if (prev) URL.revokeObjectURL(prev);
+        this.wavUrlCache.delete(oldest);
+      }
+    }
+    this.wavUrlCache.set(key, url);
   }
 
   private setCache(key: string, buf: AudioBuffer): void {
@@ -764,4 +863,39 @@ export class PiperNeuralTts {
 
     return blob;
   }
+}
+
+function encodeFloat32ToWavBlobUrl(pcm: Float32Array, sampleRate: number): string {
+  const numSamples = pcm.length;
+  const byteRate = sampleRate * 2;
+  const dataSize = numSamples * 2;
+  const buf = new ArrayBuffer(44 + dataSize);
+  const view = new DataView(buf);
+
+  const writeStr = (offset: number, str: string) => {
+    for (let i = 0; i < str.length; i++) {
+      view.setUint8(offset + i, str.charCodeAt(i));
+    }
+  };
+
+  writeStr(0, "RIFF");
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, "WAVE");
+  writeStr(12, "fmt ");
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, 1, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, byteRate, true);
+  view.setUint16(32, 2, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, "data");
+  view.setUint32(40, dataSize, true);
+
+  for (let i = 0; i < numSamples; i++) {
+    const s = Math.max(-1, Math.min(1, pcm[i]));
+    view.setInt16(44 + i * 2, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+  }
+
+  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
 }
