@@ -110,6 +110,19 @@ export class Announcer {
     });
     if (this.supported) {
       speechSynthesis.addEventListener("voiceschanged", () => this.notify());
+      // Prime speechSynthesis at boot: Chrome only starts fetching its network "Google ..."
+      // voices after the first getVoices() call, and may populate local OS voices first before
+      // adding remote Google voices a moment later.
+      speechSynthesis.getVoices();
+      let polls = 0;
+      const pollId = window.setInterval(() => {
+        polls++;
+        const list = speechSynthesis.getVoices();
+        if (list.some((v) => !v.localService) || polls >= 10) {
+          window.clearInterval(pollId);
+          this.notify();
+        }
+      }, 300);
     }
   }
 
