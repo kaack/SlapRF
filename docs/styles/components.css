@@ -316,10 +316,12 @@
   background: var(--accent-soft);
 }
 .table-scroll {
-  max-height: 420px;
   overflow-x: auto;
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
+}
+.table-scroll-y {
+  max-height: 420px;
 }
 .table-scroll thead th {
   position: sticky;
