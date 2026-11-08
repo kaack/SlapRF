@@ -418,7 +418,7 @@ export class SimView extends Component {
         void (async () => {
           for (const p of pilots) {
             if (p.enabled && p.channel > 0) {
-              await this.api.simPilotAction(p.slotIndex, "launch");
+              await this.api.simPilotAction(p.slotIndex, "refill-launch");
             }
           }
         })();
@@ -782,7 +782,7 @@ export class SimView extends Component {
               </div>
 
               <div class="sim-pilot-controls">
-                <button class="btn btn-sm sim-ctrl-btn ${isParked ? "btn-armed" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" data-pilot-btn="${p.slotIndex}-launch" ${isParked ? "" : "disabled"} title="Top up best pack to 100% and launch immediately from the starting line">
+                <button class="btn btn-sm sim-ctrl-btn ${isParked ? "btn-armed" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" data-pilot-btn="${p.slotIndex}-launch" ${isParked ? "" : "disabled"} title="Launch immediately with the battery currently attached to the quad (or best bench pack if unplugged)">
                   ${icons.play(12)}<span>Launch</span>
                 </button>
                 <button class="btn btn-sm sim-ctrl-btn ${p.status === "PIT_SWAP" ? "is-active-cmd" : "btn-ghost"}" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pit" data-pilot-btn="${p.slotIndex}-pit" ${canSwap ? "" : "disabled"} title="Bring pilot into the pit bench to swap to a fresh 6S battery pack (30–60s)">
