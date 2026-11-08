@@ -47,9 +47,9 @@ function statusMeta(
       };
     case "PIT_SWAP":
       return {
-        label: `Pit · Swapping Pack${sec}`,
+        label: `Pit · Pack Swap${sec}`,
         badgeClass: "sim-status-pit",
-        hint: "In pit lane with VTX off swapping to a fresh 6S LiPo pack",
+        hint: "Retrieving quad, unplugging spent LiPo, strapping fresh 6S pack at bench, and walking back to launch pad (30–60s)",
       };
     case "PAUSED":
       return {
@@ -58,6 +58,27 @@ function statusMeta(
         hint: "Parked on pit bench with VTX off until launched",
       };
   }
+}
+
+function formatPitSubText(p: SimPilotState): string {
+  if (p.status === "PIT_SWAP") {
+    const sec = Math.ceil(p.stateRemainingSec);
+    if (p.batteryPct === 0) {
+      return `Unplugged · bench pack swap (${sec}s)`;
+    }
+    return `Fresh 6S plugged in · arming (${sec}s)`;
+  }
+  return `Paused on bench · ${p.batteryPct}%`;
+}
+
+function formatPilotBattHtml(p: SimPilotState): string {
+  if (p.status === "PIT_SWAP" && p.batteryPct === 0) {
+    return `<span class="muted">Unplugged</span> · 0.0 V`;
+  }
+  if (p.status === "PIT_SWAP" && p.batteryPct === 100) {
+    return `<strong>100%</strong> · ${p.batteryVolts.toFixed(1)} V <span class="muted">(New pack)</span>`;
+  }
+  return `<strong>${p.batteryPct}%</strong> · ${p.batteryVolts.toFixed(1)} V`;
 }
 
 export class SimView extends Component {
@@ -100,7 +121,7 @@ export class SimView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Pilots &amp; flight packs</h2>
-            <p>Each pilot drains their 6S LiPo pack, finishes their lap at the start gate, pulls into the pit bench for ~20 seconds with VTX off to swap batteries, and launches back onto the course.</p>
+            <p>Each pilot drains their 6S pack, lands in the pit area, unplugs the spent LiPo, walks back to the bench to strap on a fresh pack, sets the quad on the launch pad, plugs in, and takes off (30–60s turnaround).</p>
           </div>
           <div class="sim-pilots-column" data-slot="pilots"></div>
         </section>
@@ -497,11 +518,7 @@ export class SimView extends Component {
                 <span class="unassigned-puck-info">
                   <span class="unassigned-puck-name">${esc(p.callsign)}</span>
                   <span class="unassigned-puck-sub" data-pit-sub="${p.slotIndex}">
-                    ${
-                      p.status === "PIT_SWAP"
-                        ? `Swapping 6S pack · ${p.batteryPct}% (${Math.ceil(p.stateRemainingSec)}s)`
-                        : `Paused on bench · ${p.batteryPct}%`
-                    }
+                    ${esc(formatPitSubText(p))}
                   </span>
                 </span>
                 <button class="btn btn-sm btn-ghost sim-pit-launch-btn" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" title="Launch onto course now">
@@ -580,10 +597,7 @@ export class SimView extends Component {
       for (const p of pitPilots) {
         const sub = this.el.querySelector<HTMLElement>(`[data-pit-sub="${p.slotIndex}"]`);
         if (sub) {
-          sub.textContent =
-            p.status === "PIT_SWAP"
-              ? `Swapping 6S pack · ${p.batteryPct}% (${Math.ceil(p.stateRemainingSec)}s)`
-              : `Paused on bench · ${p.batteryPct}%`;
+          sub.textContent = formatPitSubText(p);
         }
       }
     }
@@ -624,10 +638,10 @@ export class SimView extends Component {
                 <div class="sim-batt-block">
                   <div class="sim-metric-label">
                     <span>6S LiPo Flight Pack</span>
-                    <span class="mono" data-pilot-batt-text="${p.slotIndex}"><strong>${p.batteryPct}%</strong> · ${p.batteryVolts.toFixed(1)} V</span>
+                    <span class="mono" data-pilot-batt-text="${p.slotIndex}">${formatPilotBattHtml(p)}</span>
                   </div>
                   <div class="meter sim-batt-meter">
-                    <span class="meter-fill tone-${tone}" data-pilot-batt-bar="${p.slotIndex}" style="width:${Math.max(4, p.batteryPct)}%"></span>
+                    <span class="meter-fill tone-${tone}" data-pilot-batt-bar="${p.slotIndex}" style="width:${p.batteryPct === 0 ? 0 : Math.max(4, p.batteryPct)}%"></span>
                   </div>
                 </div>
 
@@ -701,12 +715,12 @@ export class SimView extends Component {
       }
       const battText = this.el.querySelector<HTMLElement>(`[data-pilot-batt-text="${p.slotIndex}"]`);
       if (battText) {
-        battText.innerHTML = `<strong>${p.batteryPct}%</strong> · ${p.batteryVolts.toFixed(1)} V`;
+        battText.innerHTML = formatPilotBattHtml(p);
       }
       const battBar = this.el.querySelector<HTMLElement>(`[data-pilot-batt-bar="${p.slotIndex}"]`);
       if (battBar) {
         battBar.className = `meter-fill tone-${tone}`;
-        battBar.style.width = `${Math.max(4, p.batteryPct)}%`;
+        battBar.style.width = `${p.batteryPct === 0 ? 0 : Math.max(4, p.batteryPct)}%`;
       }
       const speedEl = this.el.querySelector<HTMLElement>(`[data-pilot-speed="${p.slotIndex}"]`);
       if (speedEl) {

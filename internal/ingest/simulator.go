@@ -270,7 +270,8 @@ func (s *TrackSimulator) TriggerPilotAction(slotIndex int, action string) {
 			ps.currentSpeedMps = ps.baseSpeedMps
 		case "pit":
 			ps.status = domain.SimStatusPitSwap
-			ps.stateTimerSec = 20.0
+			ps.stateTimerSec = 30.0 + s.rng.Float64()*30.0
+			ps.batteryPct = 0
 			ps.currentSpeedMps = 0
 			ps.altitudeMeters = 0
 			ps.wantPitAtFinish = false
@@ -390,7 +391,10 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 			speedMph = math.Round(ps.currentSpeedMps*2.23694*10) / 10
 		}
 
-		volts := 21.0 + (ps.batteryPct/100.0)*4.2 // 6S LiPo: 21.0V (3.5V/cell) .. 25.2V (4.2V/cell)
+		volts := 0.0
+		if ps.batteryPct > 0 {
+			volts = 21.0 + (ps.batteryPct/100.0)*4.2 // 6S LiPo: 21.0V (3.5V/cell) .. 25.2V (4.2V/cell)
+		}
 		simPilots = append(simPilots, domain.SimPilotState{
 			SlotIndex:         p.SlotIndex,
 			Callsign:          p.Callsign,
@@ -570,8 +574,14 @@ func (s *TrackSimulator) step(dtSec float64) {
 		case domain.SimStatusPitSwap:
 			ps.currentSpeedMps = 0
 			ps.stateTimerSec -= dtSec
-			// Recharge battery visual during pit swap
-			ps.batteryPct = math.Min(100.0, ps.batteryPct+dtSec*5.5)
+			// Pack is unplugged (0%) while retrieving quad, walking to bench, unstrapping old pack,
+			// strapping fresh pack, and walking back to the launch pad; in the final 4 seconds on the
+			// launch pad, the pilot plugs in the fresh 100% 6S pack, sits down, arms, and takes off.
+			if ps.stateTimerSec <= 4.0 && ps.stateTimerSec > 0 {
+				ps.batteryPct = 100.0
+			} else if ps.stateTimerSec > 4.0 {
+				ps.batteryPct = 0.0
+			}
 			if ps.stateTimerSec <= 0 {
 				ps.batteryPct = 100.0
 				ps.packsFlown++
@@ -637,7 +647,8 @@ func (s *TrackSimulator) step(dtSec float64) {
 		// scores the completed lap; ClearPilotProgress is then called when launching the next pack.
 		if !s.prewarming && ps.wantPitAtFinish && prevPos < 10.0 && ps.trackPosMeters >= 10.0 {
 			ps.status = domain.SimStatusPitSwap
-			ps.stateTimerSec = 18.0 + s.rng.Float64()*6.0
+			ps.stateTimerSec = 30.0 + s.rng.Float64()*30.0
+			ps.batteryPct = 0
 			ps.currentSpeedMps = 0
 			ps.altitudeMeters = 0
 			ps.wantPitAtFinish = false
