@@ -6,7 +6,6 @@ interface SlaprfWasmBridge {
   fetchBytes(url: string): { status: number; bytes: Uint8Array; sha256: string };
   onStream(cb: ((envelopeJson: string) => void) | null): void;
   setRunning(running: boolean): void;
-  tick?: () => void;
 }
 
 declare global {
@@ -29,28 +28,6 @@ declare global {
 export class WasmSimTransport implements ApiTransport {
   private readyPromise: Promise<SlaprfWasmBridge> | null = null;
   private streamCallback: ((msg: StreamEnvelope) => void) | null = null;
-  private bgWorker: Worker | null = null;
-
-  private ensureBgTicker(): void {
-    if (this.bgWorker || typeof Worker === "undefined") return;
-    try {
-      const blob = new Blob(
-        ["setInterval(() => { self.postMessage(1); }, 50);"],
-        { type: "text/javascript" }
-      );
-      const url = URL.createObjectURL(blob);
-      const worker = new Worker(url);
-      URL.revokeObjectURL(url);
-      worker.onmessage = () => {
-        if (this.streamCallback && window.slaprfWasm?.tick) {
-          window.slaprfWasm.tick();
-        }
-      };
-      this.bgWorker = worker;
-    } catch {
-      // Ignore if Worker creation is blocked
-    }
-  }
 
   private ensureReady(): Promise<SlaprfWasmBridge> {
     if (window.slaprfWasm) {
@@ -155,7 +132,6 @@ export class WasmSimTransport implements ApiTransport {
   }
 
   private bindStream(wasm: SlaprfWasmBridge, onEnvelope: (msg: StreamEnvelope) => void): void {
-    this.ensureBgTicker();
     wasm.setRunning(true);
     wasm.onStream((raw: string) => {
       try {

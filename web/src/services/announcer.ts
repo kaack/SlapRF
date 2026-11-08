@@ -91,7 +91,6 @@ export class Announcer {
   private readonly listeners = new Set<() => void>();
   private queue: Array<{ text: string; queuedAt: number; slotIndex?: number }> = [];
   private current: SpeechSynthesisUtterance | null = null;
-  private currentWatchdog = 0;
   private neuralSpeaking = false;
   private utteranceToken = 0;
   /** No speaking before this time (ms since epoch) — see AFTER_CANCEL_MS. */
@@ -104,22 +103,12 @@ export class Announcer {
   private lastRaceArmed: boolean | null = null;
   /** Inaudible tone that keeps the audio output awake while the announcer is on. */
   private keepAwake: AudioContext | null = null;
-  private keepAwakeClockNode: ScriptProcessorNode | null = null;
-  /** Looping silent HTMLAudioElement so iOS/Android keep audio & JS active if the screen is manually locked. */
-  private bgMediaEl: HTMLAudioElement | null = null;
-  private bgMediaUrl = "";
 
   constructor(store: AppStore) {
     this.store = store;
     this.prefs = loadPrefs();
     setWakeLockEnabled(this.prefs.keepScreenAwake !== false);
-    this.installMobileBackgroundKeepAlive();
     this.piper = new PiperNeuralTts(() => this.notify());
-    if (isMobileDevice()) {
-      window.setTimeout(() => {
-        void this.piper.preloadVoice(DEFAULT_PIPER_VOICE_URI).catch(() => undefined);
-      }, 1500);
-    }
     store.onLapRecorded((lap) => this.onLap(lap));
     store.onStartGateDetected((ev) => this.onStartPass(ev));
     store.subscribe(["crossings"], () => {
@@ -190,12 +179,7 @@ export class Announcer {
       return getPiperVoice(this.prefs.voiceURI).uri;
     }
     const list = this.voices();
-    const piperReadyForLock =
-      isMobileDevice() && document.hidden && this.piper.isVoiceSessionReady(DEFAULT_PIPER_VOICE_URI);
-    if (isMobileDevice() && document.hidden && !this.piper.isVoiceSessionReady(DEFAULT_PIPER_VOICE_URI)) {
-      void this.piper.preloadVoice(DEFAULT_PIPER_VOICE_URI).catch(() => undefined);
-    }
-    if (this.prefs.voiceURI === "system" && list.length > 0 && !piperReadyForLock) {
+    if (this.prefs.voiceURI === "system" && list.length > 0) {
       return "system";
     }
     const targetURI = this.prefs.voiceURI || PREFERRED_DEFAULT_VOICE;
@@ -203,9 +187,7 @@ export class Announcer {
       list.find((v) => v.voiceURI === targetURI) ??
       list.find((v) => v.name.toLowerCase() === targetURI.toLowerCase());
     const online = typeof navigator === "undefined" ? true : navigator.onLine !== false;
-    // Android & iOS suspend window.speechSynthesis when the phone screen is locked (`document.hidden`),
-    // so route through the WebAudio Piper neural synth while backgrounded once its ONNX session is hot in RAM.
-    if (match && (match.localService || online) && !piperReadyForLock) {
+    if (match && (match.localService || online)) {
       return match.voiceURI;
     }
     return DEFAULT_PIPER_VOICE_URI;
@@ -248,9 +230,8 @@ export class Announcer {
       setWakeLockEnabled(this.prefs.keepScreenAwake !== false);
     }
     const activeURI = this.activeVoiceURI();
-    if ((isPiperVoiceURI(activeURI) || isMobileDevice()) && (this.prefs.enabled || next.voiceURI !== undefined)) {
-      const preloadURI = isPiperVoiceURI(activeURI) ? activeURI : DEFAULT_PIPER_VOICE_URI;
-      void this.piper.preloadVoice(preloadURI).catch(() => undefined);
+    if (isPiperVoiceURI(activeURI) && (this.prefs.enabled || next.voiceURI !== undefined)) {
+      void this.piper.preloadVoice(activeURI).catch(() => undefined);
     }
     if (!wasEnabled && this.prefs.enabled) {
       this.wakeAudio();
@@ -350,8 +331,6 @@ export class Announcer {
   private clear(): void {
     this.queue = [];
     this.current = null;
-    window.clearTimeout(this.currentWatchdog);
-    this.currentWatchdog = 0;
     this.neuralSpeaking = false;
     this.utteranceToken++;
     this.piper.stop();
@@ -365,7 +344,7 @@ export class Announcer {
   private pump(): void {
     if (this.current || this.neuralSpeaking) return;
     const wait = this.holdUntil - Date.now();
-    if (wait > 0 && !document.hidden) {
+    if (wait > 0) {
       window.clearTimeout(this.holdTimer);
       this.holdTimer = window.setTimeout(() => this.pump(), wait);
       return;
@@ -387,7 +366,7 @@ export class Announcer {
           this.sleepAudio();
           return;
         }
-        this.holdUntil = document.hidden ? 0 : Date.now() + BETWEEN_CALLOUTS_MS;
+        this.holdUntil = Date.now() + BETWEEN_CALLOUTS_MS;
         this.pump();
       };
 
@@ -436,25 +415,18 @@ export class Announcer {
     const done = () => {
       if (this.current !== utterance) return; // superseded by clear()
       this.current = null;
-      window.clearTimeout(this.currentWatchdog);
-      this.currentWatchdog = 0;
       if (!this.prefs.enabled && this.queue.length === 0) {
         this.sleepAudio();
         return;
       }
       // Back-to-back callouts (a pack crossing together) also clip on some Windows voices
       // when started the instant the previous one ends; a short breath avoids it.
-      this.holdUntil = document.hidden ? 0 : Date.now() + BETWEEN_CALLOUTS_MS;
+      this.holdUntil = Date.now() + BETWEEN_CALLOUTS_MS;
       this.pump();
     };
     utterance.onend = done;
     utterance.onerror = done;
     this.current = utterance;
-    window.clearTimeout(this.currentWatchdog);
-    this.currentWatchdog = window.setTimeout(done, 4000);
-    if (speechSynthesis.paused) {
-      speechSynthesis.resume();
-    }
     speechSynthesis.speak(utterance);
   }
 
@@ -477,161 +449,16 @@ export class Announcer {
       const gain = ctx.createGain();
       tone.frequency.value = 440;
       gain.gain.value = KEEP_AWAKE_GAIN;
-      // Attach a hardware audio-clock processor node (~46 ms interval at 44.1 kHz) so that
-      // even when the mobile screen is locked and window.setTimeout is throttled by the OS,
-      // the audio thread continuously wakes the WASM timing engine and speech queue.
-      if (typeof ctx.createScriptProcessor === "function") {
-        const proc = ctx.createScriptProcessor(2048, 1, 1);
-        proc.onaudioprocess = (ev) => {
-          const inp = ev.inputBuffer.getChannelData(0);
-          const out = ev.outputBuffer.getChannelData(0);
-          out.set(inp);
-          if (document.hidden) {
-            window.slaprfWasm?.tick?.();
-            if (this.queue.length > 0 && !this.current && !this.neuralSpeaking) {
-              this.pump();
-            }
-          }
-        };
-        tone.connect(gain).connect(proc).connect(ctx.destination);
-        this.keepAwakeClockNode = proc;
-      } else {
-        tone.connect(gain).connect(ctx.destination);
-      }
+      tone.connect(gain).connect(ctx.destination);
       tone.start();
       this.keepAwake = ctx;
     }
     void this.keepAwake.resume();
-    this.startBackgroundMediaSession();
-    if (this.bgMediaUrl) {
-      this.piper.unlockAudio(this.bgMediaUrl);
-    }
   }
 
   private sleepAudio(): void {
-    if (!isMobileDevice()) {
-      void this.keepAwake?.suspend();
-      if (this.bgMediaEl) {
-        this.bgMediaEl.pause();
-      }
-    }
+    void this.keepAwake?.suspend();
   }
-
-  /**
-   * On mobile devices, always starts the background MediaSession + WebAudio keep-alive on the
-   * very first touch/click anywhere in the app so the timer, simulator, and telemetry keep
-   * running even if the phone is manually locked with the screen off.
-   */
-  private installMobileBackgroundKeepAlive(): void {
-    if (!isMobileDevice()) return;
-    const ensureRunning = () => {
-      this.wakeAudio();
-    };
-    window.addEventListener("pointerdown", ensureRunning, { passive: true });
-    window.addEventListener("touchstart", ensureRunning, { passive: true });
-    window.addEventListener("touchend", ensureRunning, { passive: true });
-    window.addEventListener("click", ensureRunning, { passive: true });
-    window.addEventListener("keydown", ensureRunning, { passive: true });
-    document.addEventListener("visibilitychange", () => {
-      this.wakeAudio();
-    });
-  }
-
-  /**
-   * Plays a looping 15-second near-silent WAV through an `<audio>` element so iOS and Android
-   * grant a foreground media playback session and keep Web Audio (`AudioContext`), WebSockets,
-   * and background timers active even if the user manually locks the phone screen.
-   */
-  private startBackgroundMediaSession(): void {
-    try {
-      if (!this.bgMediaEl) {
-        if (!this.bgMediaUrl) {
-          this.bgMediaUrl = createSilentWavBlobUrl();
-        }
-        const audio = document.createElement("audio");
-        audio.src = this.bgMediaUrl;
-        audio.loop = true;
-        audio.volume = 0.05;
-        audio.setAttribute("playsinline", "true");
-        audio.style.display = "none";
-        document.body?.appendChild(audio);
-        this.bgMediaEl = audio;
-      }
-      if (this.bgMediaEl.paused) {
-        void this.bgMediaEl.play().catch(() => undefined);
-      }
-      if ("mediaSession" in navigator && navigator.mediaSession) {
-        if (typeof MediaMetadata !== "undefined") {
-          navigator.mediaSession.metadata = new MediaMetadata({
-            title: "SlapRF Sector Timer",
-            artist: "5.8 GHz Multi-Gate Sector Timer",
-          });
-        }
-        navigator.mediaSession.playbackState = "playing";
-        try {
-          navigator.mediaSession.setActionHandler("play", () => {
-            void this.bgMediaEl?.play().catch(() => undefined);
-          });
-          navigator.mediaSession.setActionHandler("pause", () => {
-            void this.bgMediaEl?.play().catch(() => undefined);
-          });
-        } catch {
-          // Ignore unsupported action handlers
-        }
-      }
-    } catch {
-      // Ignore media session errors
-    }
-  }
-}
-
-function isMobileDevice(): boolean {
-  if (typeof window === "undefined") return false;
-  return (
-    window.matchMedia?.("(pointer: coarse)").matches ||
-    /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent ?? "")
-  );
-}
-
-/**
- * Builds a 15-second 8 kHz mono 16-bit PCM WAV Blob URL with a ±1 LSB (−90 dBFS) signal
- * so Android Chrome's AudioFocus / MediaSession detector treats it as an active media stream
- * (Android requires ≥ 5 seconds and non-zero PCM samples to hold background wake locks when locked).
- */
-function createSilentWavBlobUrl(): string {
-  const sampleRate = 8000;
-  const durationSec = 15;
-  const numSamples = sampleRate * durationSec;
-  const byteRate = sampleRate * 2;
-  const dataSize = numSamples * 2;
-  const buf = new ArrayBuffer(44 + dataSize);
-  const view = new DataView(buf);
-
-  const writeStr = (offset: number, str: string) => {
-    for (let i = 0; i < str.length; i++) {
-      view.setUint8(offset + i, str.charCodeAt(i));
-    }
-  };
-
-  writeStr(0, "RIFF");
-  view.setUint32(4, 36 + dataSize, true);
-  writeStr(8, "WAVE");
-  writeStr(12, "fmt ");
-  view.setUint32(16, 16, true); // PCM chunk size
-  view.setUint16(20, 1, true); // PCM format
-  view.setUint16(22, 1, true); // 1 channel
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, 2, true); // block align
-  view.setUint16(34, 16, true); // bits per sample
-  writeStr(36, "data");
-  view.setUint32(40, dataSize, true);
-
-  for (let i = 0; i < numSamples; i++) {
-    view.setInt16(44 + i * 2, i & 1 ? 1 : -1, true);
-  }
-
-  return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
 }
 
 function loadPrefs(): AnnouncerPrefs {
