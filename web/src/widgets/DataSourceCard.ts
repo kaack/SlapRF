@@ -1,4 +1,5 @@
 import { Component } from "../core/component";
+import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import { AppStore } from "../state/store";
 
@@ -12,7 +13,11 @@ export class DataSourceCard extends Component {
     this.store = store;
     this.api = api;
     el.addEventListener("change", this.handleChange);
-    this.onDispose(() => el.removeEventListener("change", this.handleChange));
+    el.addEventListener("click", this.handleClick);
+    this.onDispose(() => {
+      el.removeEventListener("change", this.handleChange);
+      el.removeEventListener("click", this.handleClick);
+    });
     this.onDispose(store.subscribe(["status"], () => this.render()));
     this.render();
   }
@@ -20,6 +25,12 @@ export class DataSourceCard extends Component {
   private handleChange = (e: Event): void => {
     if ((e.target as HTMLInputElement).name === "simulator") {
       void this.api.toggleSimulator();
+    }
+  };
+
+  private handleClick = (e: Event): void => {
+    if ((e.target as HTMLElement).closest("[data-action='pack']")) {
+      void this.api.simulatePack();
     }
   };
 
@@ -31,10 +42,13 @@ export class DataSourceCard extends Component {
           <div class="option-title">Track simulator</div>
           <div class="option-sub">Generates realistic 8-pilot RSSI at every gate. Turn off once the USB receiver dongle is connected.</div>
         </div>
-        <label class="switch switch-lg">
-          <input type="checkbox" name="simulator" ${sim ? "checked" : ""} />
-          <span></span>
-        </label>
+        <div class="topbar-actions">
+          ${sim ? `<button class="btn btn-sm" type="button" data-action="pack" title="Bunch all pilots up before the start gate">${icons.zap(14)}<span>Simulate pack</span></button>` : ""}
+          <label class="switch switch-lg">
+            <input type="checkbox" name="simulator" ${sim ? "checked" : ""} />
+            <span></span>
+          </label>
+        </div>
       </div>`;
   }
 }

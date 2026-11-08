@@ -21,7 +21,7 @@ export class LiveView extends Component {
     el.innerHTML = `
       <div class="picker-row">
         <div data-slot="picker"></div>
-        <a class="btn btn-ghost" href="#/pilot" data-slot="analyse">${icons.compare()}<span>Analyse laps</span></a>
+        <a class="btn btn-ghost" href="#/pilot" data-slot="analyse">${icons.chart()}<span>Analytics</span></a>
       </div>
       <div class="view-stack" data-slot="panel"></div>`;
 

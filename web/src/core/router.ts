@@ -21,8 +21,8 @@ export const ROUTES: RouteMeta[] = [
   },
   {
     id: "pilot",
-    label: "Analysis",
-    title: "Analysis",
+    label: "Analytics",
+    title: "Analytics",
     subtitle: "Pick laps and see where time was won and lost",
     icon: () => icons.chart(20),
   },
