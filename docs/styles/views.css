@@ -1365,22 +1365,7 @@ body.is-gate-dragging * {
   padding: 0 16px;
 }
 
-/* Lap comparison sub-sections: "Section comparison" table + "Lap analysis" text */
-.sub-head {
-  padding: 2px 20px 10px;
-}
-.sub-head h3,
-.lap-analysis h3 {
-  margin: 0;
-  font-size: 13px;
-  font-weight: 600;
-  color: var(--text);
-}
-.sub-head p {
-  margin: 4px 0 0;
-  color: var(--text-3);
-  font-size: 12.5px;
-}
+/* Lap stats: plain-text lap analysis below the section table */
 .lap-analysis {
   display: flex;
   flex-direction: column;
@@ -1514,7 +1499,7 @@ body.is-gate-dragging * {
 }
 .lap-metrics-compare {
   border-top: 1px solid var(--border);
-  padding-top: 16px;
+  padding-top: 4px;
 }
 .lap-picker.is-picking .bar-hit.is-hovered .bar:not(.is-review) {
   fill: var(--purple) !important;
