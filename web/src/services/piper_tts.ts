@@ -51,14 +51,15 @@ export function getPiperVoice(uri: string): PiperVoiceDescriptor {
 }
 
 /**
- * Normalizes lap-time decimals before passing to espeak-ng so `.00` is spoken as a whole
- * number (`14.00` -> `"14"`) and `.0X` fractional times (`14.08`, `19.02`) are spoken
- * smoothly as `"14 point zero 8"` with no pause.
+ * Normalizes lap-time decimals before passing to espeak-ng so trailing zeros are dropped
+ * (`14.00` -> `"14"`, `14.80` -> `"14.8"`) and `.0X` fractional times (`14.08`, `19.02`)
+ * are spoken smoothly as `"14 point zero 8"` with no pause.
  */
 export function prepareTextForPiper(raw: string): string {
   return raw
     .trim()
     .replace(/\b(\d+)\.00\b/g, "$1")
+    .replace(/\b(\d+)\.([1-9])0\b/g, "$1.$2")
     .replace(/\b(\d+)\.0([1-9])\b/g, "$1 point zero $2")
     .replace(
       /\bpoint\s+(?:o+h*|zero)\s*,?\s*(one|two|three|four|five|six|seven|eight|nine|\d)\b/gi,
