@@ -1035,6 +1035,24 @@ body.is-gate-dragging * {
 .col-progress {
   width: 170px;
 }
+@media (max-width: 1100px) {
+  .table-standings .col-spark {
+    display: none;
+  }
+  .table-standings .col-progress {
+    width: 136px;
+  }
+}
+@media (max-width: 760px) {
+  .table-standings .col-avg {
+    display: none;
+  }
+  .table-standings th,
+  .table-standings td {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+}
 .sector-progress {
   display: flex;
   align-items: center;
