@@ -117,8 +117,10 @@ static uint8_t compute_crc8(const uint8_t *data, uint32_t len) {
 
 // Hardware hooks for ESP-IDF 5GHz IQ power capture & 2.4GHz WIFI_PROTOCOL_LR on ESP32-C5
 extern void xiao_c5_select_ufl_antenna(void);
+extern void slaprf_lock_wifi_band_2g4_only(void);
 extern void slaprf_init_2g4_lr_radio(uint8_t channel, int8_t max_tx_power_qdbm);
 extern void slaprf_start_wifi_bridge(uint8_t wifi_mode, const char *ssid, const char *pass);
+extern void slaprf_spoke_sync_to_hub_channel(void);
 extern void slaprf_broadcast_hub_sync_beacon(uint8_t seq);
 extern void slaprf_wait_for_next_sweep_tick(uint32_t interval_ms);
 extern void slaprf_forward_window_udp_to_laptop(const timer_window_frame_t *frame);
@@ -128,17 +130,25 @@ extern void espnow_lr_send_window_to_hub(const timer_window_frame_t *frame);
 extern void delay_microseconds(uint32_t us);
 
 void app_main(void) {
-    // 1. Route RF switch to the external U.FL antenna & configure 2.4 GHz LR PHY (+20 dBm, Ch 1)
+    // 1. Route RF switch to the external U.FL antenna, force 2.4 GHz-only Wi-Fi band mode
+    //    (WIFI_BAND_MODE_2G_ONLY so the Hub never transmits on 5.8 GHz FPV video channels),
+    //    and configure 2.4 GHz LR PHY (+20 dBm, default Ch 1).
     xiao_c5_select_ufl_antenna();
+    slaprf_lock_wifi_band_2g4_only();
     slaprf_init_2g4_lr_radio(WIFI_CHANNEL_LR, MAX_TX_POWER_QDBM);
 
-    // 2. Hub Timer starts hybrid 802.11n + LR Wi-Fi bridge to laptop and listens for Spoke LR bursts
+    // 2. Hub Timer starts hybrid 802.11n + LR Wi-Fi bridge to laptop:
+    //      - wifi_mode == 0 (empty SSID): Hub hosts "SlapRF" 2.4 GHz AP on Channel 1.
+    //      - wifi_mode == 1 (SSID set):   Hub joins the 2.4 GHz BSSID of the hotspot/router.
+    //    Spoke Timers scan & lock onto the Hub's active 2.4 GHz channel via the Hub sync beacon.
     if (g_flash_cfg.role == ROLE_HUB_TIMER) {
         slaprf_start_wifi_bridge(
             g_flash_cfg.wifi_mode,
             (const char *)g_flash_cfg.wifi_ssid,
             (const char *)g_flash_cfg.wifi_pass
         );
+    } else {
+        slaprf_spoke_sync_to_hub_channel();
     }
 
     uint8_t timer_id = g_flash_cfg.timer_id;

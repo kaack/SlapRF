@@ -45,6 +45,7 @@ export class TimerFlasher extends Component {
   private networks: ScannedWifi[] = [];
   private scanningWifi = false;
   private customMode = false;
+  private hadStoredWifiPref = false;
   private wifiSSID = "";
   private wifiPass = "";
   private showPassword = false;
@@ -60,11 +61,17 @@ export class TimerFlasher extends Component {
     this.store = store;
     this.api = api;
 
+    let hadStoredPref = false;
     try {
-      this.wifiSSID = window.localStorage.getItem(WIFI_SSID_STORAGE_KEY) ?? "";
+      const stored = window.localStorage.getItem(WIFI_SSID_STORAGE_KEY);
+      if (stored !== null) {
+        this.wifiSSID = stored;
+        hadStoredPref = true;
+      }
     } catch {
       // ignore storage errors
     }
+    this.hadStoredWifiPref = hadStoredPref;
 
     this.listen(el, "click", (e) => {
       const t = e.target as HTMLElement;
@@ -178,6 +185,7 @@ export class TimerFlasher extends Component {
 
   private saveSSID(ssid: string): void {
     this.wifiSSID = ssid;
+    this.hadStoredWifiPref = true;
     try {
       window.localStorage.setItem(WIFI_SSID_STORAGE_KEY, this.wifiSSID);
     } catch {
@@ -192,7 +200,7 @@ export class TimerFlasher extends Component {
     this.scanningWifi = false;
     this.networks = list;
 
-    if (!this.wifiSSID && list.length > 0) {
+    if (!this.hadStoredWifiPref && !this.wifiSSID && list.length > 0) {
       this.saveSSID(list[0].ssid);
       this.customMode = false;
     } else if (this.wifiSSID && list.length > 0 && !list.some((n) => n.ssid === this.wifiSSID)) {
@@ -369,8 +377,8 @@ export class TimerFlasher extends Component {
 
   private renderConfigSection(): string {
     const isHub = this.role === "hub";
-    const hasList = this.networks.length > 0;
-    const useCustom = this.customMode || !hasList;
+    const useCustom = this.customMode;
+    const isHostApMode = !useCustom && this.wifiSSID.trim() === "";
     const idPlaceholder = isHub ? "e.g. Hub-1 or Timer-A" : "e.g. Spoke-2, Blue-Timer, or Timer-B";
     const selectedRel =
       FIRMWARE_RELEASES.find((r) => r.version === this.firmwareVersion) ?? FIRMWARE_RELEASES[0];
@@ -378,7 +386,7 @@ export class TimerFlasher extends Component {
     return `
       <div class="flasher-wifi">
         <div class="flasher-wifi-head">
-          <span class="flasher-queue-label">Timer identity, firmware &amp; network</span>
+          <span class="flasher-queue-label">Timer identity, firmware &amp; 2.4 GHz network</span>
           ${
             isHub
               ? `<button type="button" class="btn btn-sm btn-ghost" data-refresh-wifi="1" ${
@@ -387,7 +395,7 @@ export class TimerFlasher extends Component {
                   ${icons.reset(13)}
                   <span>${this.scanningWifi ? "Scanning…" : "Rescan Wi-Fi"}</span>
                 </button>`
-              : `<span class="note">Spoke connects to Hub automatically over 2.4 GHz LR ESP-NOW</span>`
+              : `<span class="note">Spoke auto-locks to Hub's 2.4 GHz LR channel (never uses 5.8 GHz TX)</span>`
           }
         </div>
 
@@ -419,38 +427,37 @@ export class TimerFlasher extends Component {
             isHub
               ? `
             <div class="flasher-field">
-              <label class="flasher-field-label">Wi-Fi / hotspot (SSID)</label>
+              <label class="flasher-field-label">Hub 2.4 GHz Wi-Fi mode / SSID</label>
               ${
                 useCustom
                   ? `<div class="flasher-pass-wrap">
-                      <input class="input flasher-pass-input" type="text" placeholder="Type Wi-Fi / hotspot name (SSID)" value="${esc(
+                      <input class="input flasher-pass-input" type="text" placeholder="Type 2.4 GHz Wi-Fi / hotspot SSID" value="${esc(
                         this.wifiSSID
                       )}" data-wifi-ssid="1" maxlength="32" spellcheck="false" autocomplete="off" ${
                         this.busy ? "disabled" : ""
                       } />
-                      ${
-                        hasList
-                          ? `<button type="button" class="flasher-pass-toggle" data-clear-ssid="1"
-                                    aria-label="Clear custom SSID and return to network list"
-                                    title="Clear and return to Wi-Fi network list">
-                              ${icons.close(14)}
-                            </button>`
-                          : ""
-                      }
+                      <button type="button" class="flasher-pass-toggle" data-clear-ssid="1"
+                                aria-label="Return to Wi-Fi mode &amp; network list"
+                                title="Return to Wi-Fi mode &amp; network list">
+                          ${icons.close(14)}
+                      </button>
                     </div>`
                   : `<div class="flasher-ssid-row">
-                      <select class="input flasher-ssid-select" data-wifi-select="1" aria-label="Wi-Fi network (SSID)" ${
+                      <select class="input flasher-ssid-select" data-wifi-select="1" aria-label="Hub 2.4 GHz Wi-Fi mode or network" ${
                         this.busy ? "disabled" : ""
                       }>
+                        <option value="" ${
+                          this.wifiSSID === "" ? "selected" : ""
+                        }>Host "SlapRF" 2.4 GHz AP (Ch 1 — direct to laptop)</option>
                         ${this.networks
                           .map(
                             (n) =>
                               `<option value="${esc(n.ssid)}" ${
                                 n.ssid === this.wifiSSID ? "selected" : ""
-                              }>${esc(this.formatNetworkOption(n))}</option>`
+                              }>Join: ${esc(this.formatNetworkOption(n))}</option>`
                           )
                           .join("")}
-                        <option value="${CUSTOM_SSID_VALUE}">Other network…</option>
+                        <option value="${CUSTOM_SSID_VALUE}">Other 2.4 GHz network / hotspot…</option>
                       </select>
                       <button type="button" class="btn btn-icon flasher-ssid-edit" data-edit-ssid="1" ${
                         this.busy ? "disabled" : ""
@@ -462,11 +469,15 @@ export class TimerFlasher extends Component {
             </div>
 
             <div class="flasher-field">
-              <label class="flasher-field-label">Wi-Fi password</label>
+              <label class="flasher-field-label">${
+                isHostApMode ? "SlapRF AP password (optional)" : "Wi-Fi / hotspot password"
+              }</label>
               <div class="flasher-pass-wrap">
                 <input class="input flasher-pass-input" type="${
                   this.showPassword ? "text" : "password"
-                }" placeholder="Wi-Fi password" value="${esc(
+                }" placeholder="${
+                  isHostApMode ? "Leave blank for open SlapRF AP" : "Wi-Fi password"
+                }" value="${esc(
                   this.wifiPass
                 )}" data-wifi-pass="1" maxlength="39" spellcheck="false" autocomplete="off" ${
                   this.busy ? "disabled" : ""
@@ -544,9 +555,15 @@ export class TimerFlasher extends Component {
                 <div class="mono">${this.readout.role === "hub" ? "Hub (Wi-Fi + ESP-NOW LR)" : "Spoke (ESP-NOW LR)"}</div>
               </div>
               <div>
-                <span class="note">Wi-Fi SSID</span>
+                <span class="note">2.4 GHz Wi-Fi mode</span>
                 <div class="mono">${
-                  this.readout.role === "hub" ? esc(this.readout.wifiSSID || "(not set)") : "— (uses ESP-NOW LR)"
+                  this.readout.role === "hub"
+                    ? esc(
+                        this.readout.wifiSSID
+                          ? `Join "${this.readout.wifiSSID}" (2.4 GHz)`
+                          : 'Host "SlapRF" 2.4 GHz AP (Ch 1)'
+                      )
+                    : "— (uses 2.4 GHz ESP-NOW LR)"
                 }</div>
               </div>
               <div>
