@@ -83,7 +83,7 @@ func main() {
 	sim.Start()
 
 	laprfSrv := laprf.NewServer(":5403", simEngine)
-	srv := api.NewServer(simEngine, sim, laprfSrv, "")
+	srv := api.NewServer(simEngine, sim, laprfSrv, "", simEngine)
 	handler := srv.Handler()
 
 	streamSub := &wasmStreamSubscriber{sim: sim}

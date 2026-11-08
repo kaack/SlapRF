@@ -76,8 +76,8 @@ export class ApiClient {
   public async toggleSimulator(): Promise<void> {
     this.transport.disconnectStream();
     this.simMode = !this.simMode;
-    await this.refresh();
     this.connectStream();
+    await this.refresh();
   }
 
   public async toggleArmed(): Promise<void> {

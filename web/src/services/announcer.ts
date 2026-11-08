@@ -59,6 +59,7 @@ export class Announcer {
   /** No speaking before this time (ms since epoch) — see AFTER_CANCEL_MS. */
   private holdUntil = 0;
   private holdTimer = 0;
+  private lastSimMode: boolean | null = null;
   /** Inaudible tone that keeps the audio output awake while the announcer is on. */
   private keepAwake: AudioContext | null = null;
 
@@ -66,6 +67,12 @@ export class Announcer {
     this.store = store;
     this.prefs = loadPrefs();
     store.onLapRecorded((lap) => this.onLap(lap));
+    store.subscribe(["status"], () => {
+      if (this.lastSimMode !== null && this.lastSimMode !== this.store.simulatorRunning) {
+        this.clear();
+      }
+      this.lastSimMode = this.store.simulatorRunning;
+    });
     if (this.supported) {
       speechSynthesis.addEventListener("voiceschanged", () => this.notify());
     }

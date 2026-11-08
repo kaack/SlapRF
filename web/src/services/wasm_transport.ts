@@ -94,6 +94,7 @@ export class WasmSimTransport implements ApiTransport {
 
   public async request<T = unknown>(method: "GET" | "POST", url: string, body?: unknown): Promise<T> {
     const wasm = await this.ensureReady();
+    wasm.setRunning(true);
     const res = wasm.request(method, url, body !== undefined ? JSON.stringify(body) : "");
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`WASM ${method} ${url} failed (${res.status}): ${res.body}`);
