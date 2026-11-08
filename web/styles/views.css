@@ -1036,7 +1036,8 @@ body.is-gate-dragging * {
   width: 170px;
 }
 @media (max-width: 1100px) {
-  .table-standings .col-spark {
+  .table-standings .col-spark,
+  .table-standings .col-avg {
     display: none;
   }
   .table-standings .col-progress {
@@ -1044,9 +1045,6 @@ body.is-gate-dragging * {
   }
 }
 @media (max-width: 760px) {
-  .table-standings .col-avg {
-    display: none;
-  }
   .table-standings th,
   .table-standings td {
     padding-left: 10px;
