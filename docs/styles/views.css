@@ -2243,13 +2243,14 @@ body.is-gate-dragging * {
   text-align: left;
   cursor: pointer;
 }
-.channel-legend button.channel:hover {
+.channel-legend button.channel:hover:not(.is-focus):not(.is-hot) {
   border-color: var(--border-strong);
 }
 .channel.is-dim {
   opacity: 0.45;
 }
-.channel.is-focus {
+.channel.is-focus,
+.channel-legend button.channel.is-focus:hover {
   border-color: var(--accent-line);
 }
 
