@@ -27,6 +27,7 @@ type LiveTimeStatus struct {
 type Server struct {
 	addr             string
 	engine           *tracker.Engine
+	subscribed       map[*tracker.Engine]bool
 	listener         net.Listener
 	mu               sync.RWMutex
 	clients          map[net.Conn]struct{}
@@ -36,16 +37,55 @@ type Server struct {
 	stopCh           chan struct{}
 }
 
+type engineCrossingForwarder struct {
+	server *Server
+	engine *tracker.Engine
+}
+
+func (f *engineCrossingForwarder) OnTelemetryFrame(_ domain.PuckTelemetryFrame) {}
+func (f *engineCrossingForwarder) OnGateCrossing(ev domain.GateCrossingEvent) {
+	if f.server.activeEngine() == f.engine {
+		f.server.OnGateCrossing(ev)
+	}
+}
+func (f *engineCrossingForwarder) OnLapCompleted(_ domain.LapRecord, _ []domain.PilotTrackSummary) {}
+func (f *engineCrossingForwarder) OnDetectionFiltered(_ domain.FilteredDetection)                  {}
+func (f *engineCrossingForwarder) OnConfigUpdated(_ []domain.PilotSlot, _ []domain.GatePuck)       {}
+
 // NewServer creates a new LapRF TCP bridge bound to the given address (default ":5403").
 func NewServer(addr string, engine *tracker.Engine) *Server {
 	s := &Server{
-		addr:    addr,
-		engine:  engine,
-		clients: make(map[net.Conn]struct{}),
-		stopCh:  make(chan struct{}),
+		addr:       addr,
+		engine:     engine,
+		subscribed: make(map[*tracker.Engine]bool),
+		clients:    make(map[net.Conn]struct{}),
+		stopCh:     make(chan struct{}),
 	}
-	engine.Subscribe(s)
+	s.SetEngine(engine)
 	return s
+}
+
+// SetEngine switches which timing engine (simulated vs real-world) backs the LiveTime bridge.
+func (s *Server) SetEngine(engine *tracker.Engine) {
+	if engine == nil {
+		return
+	}
+	s.mu.Lock()
+	s.engine = engine
+	already := s.subscribed[engine]
+	if !already {
+		s.subscribed[engine] = true
+	}
+	s.mu.Unlock()
+	if !already {
+		engine.Subscribe(&engineCrossingForwarder{server: s, engine: engine})
+	}
+}
+
+func (s *Server) activeEngine() *tracker.Engine {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.engine
 }
 
 // Start begins listening for MultiGP LiveTime TCP connections and starts the 10 Hz STATUS heartbeat loop.
@@ -77,6 +117,7 @@ func (s *Server) Stop() {
 
 // Status returns the current LiveTime bridge diagnostics.
 func (s *Server) Status() LiveTimeStatus {
+	eng := s.activeEngine()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return LiveTimeStatus{
@@ -85,7 +126,7 @@ func (s *Server) Status() LiveTimeStatus {
 		DetectionsSent:   s.detectionsSent,
 		StatusFramesSent: s.statusFramesSent,
 		LastRFSetupSync:  s.lastRFSetupSync,
-		RaceArmedByHost:  s.engine.IsRaceArmed(),
+		RaceArmedByHost:  eng.IsRaceArmed(),
 	}
 }
 
@@ -151,11 +192,12 @@ func (s *Server) handleClient(conn net.Conn) {
 }
 
 func (s *Server) handleIncomingPacket(conn net.Conn, pkt *Packet) {
+	eng := s.activeEngine()
 	switch pkt.Type {
 	case RecordTime:
 		// LiveTime RTC clock sync query: reply with our engine microsecond clock
 		reply := &Packet{Type: RecordTime}
-		reply.AppendUint64(0x02, s.engine.NowUs())
+		reply.AppendUint64(0x02, eng.NowUs())
 		_, _ = conn.Write(reply.Encode())
 
 	case RecordRFSetup:
@@ -169,7 +211,7 @@ func (s *Server) handleIncomingPacket(conn net.Conn, pkt *Packet) {
 		for _, f := range pkt.Fields {
 			if f.Signature == 0x20 && len(f.Data) >= 1 {
 				armed := f.Data[0] != 0
-				s.engine.SetRaceArmed(armed)
+				eng.SetRaceArmed(armed)
 				log.Printf("[LapRF/LiveTime] Race state set by LiveTime: Armed=%v", armed)
 			}
 		}
@@ -182,7 +224,8 @@ func (s *Server) handleIncomingPacket(conn net.Conn, pkt *Packet) {
 }
 
 func (s *Server) applyRFSetupFromLiveTime(pkt *Packet) {
-	pilots, _, _, _, _ := s.engine.StateSnapshot()
+	eng := s.activeEngine()
+	pilots, _, _, _, _ := eng.StateSnapshot()
 	slotMap := make(map[int]domain.PilotSlot)
 	for _, p := range pilots {
 		slotMap[p.SlotIndex] = p
@@ -254,7 +297,7 @@ func (s *Server) applyRFSetupFromLiveTime(pkt *Packet) {
 
 	if modified {
 		for idx := 1; idx <= domain.MaxPilotSlots; idx++ {
-			s.engine.UpdatePilotSlot(slotMap[idx])
+			eng.UpdatePilotSlot(slotMap[idx])
 		}
 		s.mu.Lock()
 		s.lastRFSetupSync = time.Now()
@@ -264,7 +307,7 @@ func (s *Server) applyRFSetupFromLiveTime(pkt *Packet) {
 }
 
 func (s *Server) buildRFSetupReplyPacket() *Packet {
-	pilots, _, _, _, _ := s.engine.StateSnapshot()
+	pilots, _, _, _, _ := s.activeEngine().StateSnapshot()
 	pkt := &Packet{Type: RecordRFSetup}
 	for _, p := range pilots {
 		pkt.AppendUint8(0x01, uint8(p.SlotIndex))
@@ -305,7 +348,8 @@ func (s *Server) broadcastStatusFrame() {
 		return
 	}
 
-	_, pucks, _, crossings, _ := s.engine.StateSnapshot()
+	eng := s.activeEngine()
+	_, pucks, _, crossings, _ := eng.StateSnapshot()
 	var startPuck domain.GatePuck
 	if len(pucks) > 0 {
 		startPuck = pucks[0]
@@ -321,7 +365,7 @@ func (s *Server) broadcastStatusFrame() {
 	pkt.AppendUint16(0x03, startPuck.BatteryMv) // Battery voltage in mV
 	pkt.AppendUint16(0x01, 0)                   // Status flags
 	var gateState uint8
-	if s.engine.IsRaceArmed() {
+	if eng.IsRaceArmed() {
 		gateState = 1
 	}
 	pkt.AppendUint8(0x23, gateState)

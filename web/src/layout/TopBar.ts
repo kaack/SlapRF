@@ -29,6 +29,9 @@ export class TopBar extends Component {
 
   private handleClick = (e: Event): void => {
     switch ((e.target as HTMLElement).closest<HTMLElement>("[data-action]")?.dataset.action) {
+      case "sim":
+        void this.api.toggleSimulator();
+        break;
       case "announcer":
         this.announcer.update({ enabled: !this.announcer.settings.enabled });
         break;
@@ -47,19 +50,24 @@ export class TopBar extends Component {
 
   private render(): void {
     const meta = this.router.meta();
-    const { liveTime, raceArmed } = this.store;
+    const { liveTime, raceArmed, simulatorRunning: sim } = this.store;
     const ltConnected = liveTime.connectedClients > 0;
     const voiceOn = this.announcer.settings.enabled;
-    const sig = `${meta.id}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}`;
+    const sig = `${meta.id}:${sim ? 1 : 0}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}`;
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
-    let actions = "";
+    const simBtn = `
+      <button class="btn ${sim ? "btn-armed" : "btn-ghost"}" data-action="sim" title="${sim ? "Switch to real-world hardware dataset" : "Switch to simulated track dataset"}" aria-label="${sim ? "Switch to real-world hardware dataset" : "Switch to simulated track dataset"}">
+        ${sim ? icons.zap(19) : icons.zapOff(19)}<span class="topbar-btn-label">${sim ? "Simulation on" : "Simulation off"}</span>
+      </button>`;
+
+    let actions = simBtn;
     if (meta.id === "live") {
       const armTitle = ltConnected
         ? `Timing is controlled by MultiGP LiveTime (${raceArmed ? "currently armed" : "currently disarmed"})`
         : `${raceArmed ? "Pause" : "Resume"} lap timing`;
-      actions = `
+      actions += `
         <button class="btn ${voiceOn ? "btn-armed" : "btn-ghost"}" data-action="announcer" title="${voiceOn ? "Mute" : "Enable"} lap-time callouts" aria-label="${voiceOn ? "Mute" : "Enable"} lap-time callouts">
           ${voiceOn ? icons.speaker(19) : icons.speakerOff(19)}<span class="topbar-btn-label">Announcer</span>
         </button>
@@ -68,7 +76,7 @@ export class TopBar extends Component {
         </button>
         <button class="btn btn-ghost btn-icon" data-action="reset" title="Clear session laps" aria-label="Clear session laps">${icons.reset(19)}</button>`;
     } else if (meta.id === "pilot") {
-      actions = `
+      actions += `
         <button class="btn btn-ghost" data-action="reset" title="Clear session laps" aria-label="Clear session laps">
           ${icons.reset(19)}<span class="topbar-btn-label">Clear laps</span>
         </button>`;
@@ -79,6 +87,6 @@ export class TopBar extends Component {
         <h1>${meta.title}</h1>
         <p>${meta.subtitle}</p>
       </div>
-      ${actions ? `<div class="topbar-actions">${actions}</div>` : ""}`;
+      <div class="topbar-actions">${actions}</div>`;
   }
 }

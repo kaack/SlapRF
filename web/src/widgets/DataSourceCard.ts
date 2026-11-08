@@ -40,7 +40,7 @@ export class DataSourceCard extends Component {
       <div class="option-row">
         <div>
           <div class="option-title">Track simulator</div>
-          <div class="option-sub">Generates realistic 8-pilot RSSI at every gate. Turn off once the USB receiver dongle is connected.</div>
+          <div class="option-sub">Runs in a completely separate simulation dataset (4 simulated timers, 4 gates, synthetic 8-pilot RSSI). Turning it off switches to your clean real-world dataset for physical XIAO timers.</div>
         </div>
         <div class="topbar-actions">
           ${sim ? `<button class="btn btn-ghost" type="button" data-action="pack" title="Bunch all pilots up before the start gate">${icons.zap(18)}<span>Simulate pack</span></button>` : ""}

@@ -99,6 +99,24 @@ func NewEngine() *Engine {
 	return e
 }
 
+// NewRealEngine creates a clean real-world timing engine with no simulated timers,
+// no pre-populated fake gates, and clean pilot slots ready for hardware or LiveTime.
+func NewRealEngine() *Engine {
+	e := &Engine{
+		bootTime:       time.Now(),
+		raceArmed:      true,
+		rules:          domain.DefaultTimingRules(),
+		pilots:         domain.DefaultRealPilotSlots(),
+		pucks:          []domain.GatePuck{},
+		detected:       make(map[uint8]*domain.DetectedPuck),
+		detectors:      make(map[string]*dsp.ChannelDetector),
+		passingNumbers: make(map[uint8]uint32),
+	}
+	e.resetSessionLocked()
+	e.initDetectorsLocked()
+	return e
+}
+
 func (e *Engine) initDetectorsLocked() {
 	for _, puck := range e.pucks {
 		for _, pilot := range e.pilots {

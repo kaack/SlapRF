@@ -77,10 +77,15 @@ export class AppStore {
   private _liveFocus: number | null = null;
   private _comparison: ComparisonSelection = { lapId: null, reference: "best" };
 
-  private readonly history = new Map<number, PuckTelemetryFrame[]>();
+  private readonly simHistory = new Map<number, PuckTelemetryFrame[]>();
+  private readonly realHistory = new Map<number, PuckTelemetryFrame[]>();
   private readonly lastCrossingBySlot = new Map<number, GateCrossingEvent>();
   private readonly listeners = new Map<Topic, Set<Listener>>();
   private readonly lapListeners = new Set<LapListener>();
+
+  private get activeHistory(): Map<number, PuckTelemetryFrame[]> {
+    return this._simulatorRunning ? this.simHistory : this.realHistory;
+  }
 
   // ---- subscriptions -------------------------------------------------------
 
@@ -186,17 +191,16 @@ export class AppStore {
     return this.lastCrossingBySlot.get(slotIndex);
   }
   public historyFor(puckId: number): PuckTelemetryFrame[] {
-    return this.history.get(puckId) ?? [];
+    return this.activeHistory.get(puckId) ?? [];
   }
 
   // ---- mutations -----------------------------------------------------------
 
   public hydrate(state: FullStateResponse): void {
+    const modeChanged = this._simulatorRunning !== state.simulatorRunning;
     this._pilots = state.pilots ?? [];
     this.setPucks(state.pucks ?? []);
-    if (state.detectedPucks) {
-      this._detectedPucks = state.detectedPucks;
-    }
+    this._detectedPucks = state.detectedPucks ?? [];
     this._laps = state.laps ?? [];
     this._crossings = state.crossings ?? [];
     this._filtered = state.filtered ?? [];
@@ -205,6 +209,9 @@ export class AppStore {
     this._simulatorRunning = state.simulatorRunning;
     this._raceArmed = state.raceArmed;
     this._liveTime = state.liveTimeStatus;
+    if (modeChanged) {
+      this._comparison = { lapId: null, reference: "best" };
+    }
 
     this.lastCrossingBySlot.clear();
     let maxTs = state.serverTimestampUs ?? 0;
@@ -215,9 +222,11 @@ export class AppStore {
     for (const lap of this._laps) {
       if (lap.completedAtUs > maxTs) maxTs = lap.completedAtUs;
     }
-    if (maxTs > 0) {
-      this._latestTimestampUs = Math.max(this._latestTimestampUs, maxTs);
+    for (const frames of this.activeHistory.values()) {
+      const last = frames[frames.length - 1];
+      if (last && last.timestampUs > maxTs) maxTs = last.timestampUs;
     }
+    this._latestTimestampUs = maxTs;
     this.ensureValidSelection();
     this.emit("config", "laps", "crossings", "status", "selection", "rules");
   }
@@ -257,10 +266,11 @@ export class AppStore {
   }
 
   public ingestTelemetry(frame: PuckTelemetryFrame): void {
-    let buf = this.history.get(frame.puckId);
+    const hist = this.activeHistory;
+    let buf = hist.get(frame.puckId);
     if (!buf) {
       buf = [];
-      this.history.set(frame.puckId, buf);
+      hist.set(frame.puckId, buf);
     }
     buf.push(frame);
     if (buf.length > HISTORY_SAMPLES + HISTORY_TRIM_SLACK) buf.splice(0, buf.length - HISTORY_SAMPLES);

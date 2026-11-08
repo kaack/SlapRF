@@ -70,7 +70,7 @@ func (p PilotSlot) ChannelLabel() string {
 	return fmt.Sprintf("%s%d (%d MHz)", prefix, p.Channel, p.FrequencyMHz)
 }
 
-// DefaultPilotSlots returns a default 4-active-pilot (8-slot) Raceband configuration.
+// DefaultPilotSlots returns a default 4-active-pilot (8-slot) Raceband configuration for simulation.
 func DefaultPilotSlots() []PilotSlot {
 	callsigns := [MaxPilotSlots]string{
 		"VANOVER", "MCK", "MINCHAN", "HEADSUP",
@@ -87,6 +87,31 @@ func DefaultPilotSlots() []PilotSlot {
 			SlotIndex:       i + 1,
 			Callsign:        callsigns[i],
 			Enabled:         i < 4, // Enable first 4 pilots by default; all 8 available
+			Band:            BandRaceband,
+			Channel:         ch,
+			FrequencyMHz:    freq,
+			EnterThreshold:  -58.0,
+			ExitThreshold:   -68.0,
+			AttenuationGain: 52,
+			Color:           DefaultPilotColors[i],
+		}
+	}
+	return slots
+}
+
+// DefaultRealPilotSlots returns clean real-world pilot slots ("Pilot 1".."Pilot 8")
+// completely separate from the simulated pro callsigns.
+func DefaultRealPilotSlots() []PilotSlot {
+	defaultChannels := [MaxPilotSlots]uint8{1, 3, 5, 8, 2, 4, 6, 7}
+
+	slots := make([]PilotSlot, MaxPilotSlots)
+	for i := 0; i < MaxPilotSlots; i++ {
+		ch := defaultChannels[i]
+		freq := RacebandFrequenciesMHz[ch-1]
+		slots[i] = PilotSlot{
+			SlotIndex:       i + 1,
+			Callsign:        fmt.Sprintf("Pilot %d", i+1),
+			Enabled:         i < 4,
 			Band:            BandRaceband,
 			Channel:         ch,
 			FrequencyMHz:    freq,

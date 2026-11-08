@@ -45,31 +45,91 @@ type StatusResponse struct {
 }
 
 // Server wires HTTP routes, the SSE streaming hub, and the pure-Go TypeScript bundler.
+// It maintains two completely isolated timing engines (`simEngine` for the built-in track
+// simulator and `realEngine` for physical XIAO ESP32-C5 hardware) so simulated timers,
+// gates, pilots, rules, and laps never mix with real-world data.
 type Server struct {
-	engine      *tracker.Engine
+	simEngine   *tracker.Engine
+	realEngine  *tracker.Engine
 	simulator   *ingest.TrackSimulator
 	laprfServer *laprf.Server
 	sseHub      *SSEHub
 	webRootDir  string
 }
 
-// NewServer creates the HTTP and SSE server.
+type gatedEventSubscriber struct {
+	allow func() bool
+	next  tracker.EventSubscriber
+}
+
+func (g *gatedEventSubscriber) OnTelemetryFrame(frame domain.PuckTelemetryFrame) {
+	if g.allow() {
+		g.next.OnTelemetryFrame(frame)
+	}
+}
+func (g *gatedEventSubscriber) OnGateCrossing(event domain.GateCrossingEvent) {
+	if g.allow() {
+		g.next.OnGateCrossing(event)
+	}
+}
+func (g *gatedEventSubscriber) OnDetectionFiltered(f domain.FilteredDetection) {
+	if g.allow() {
+		g.next.OnDetectionFiltered(f)
+	}
+}
+func (g *gatedEventSubscriber) OnLapCompleted(lap domain.LapRecord, summaries []domain.PilotTrackSummary) {
+	if g.allow() {
+		g.next.OnLapCompleted(lap, summaries)
+	}
+}
+func (g *gatedEventSubscriber) OnConfigUpdated(pilots []domain.PilotSlot, pucks []domain.GatePuck) {
+	if g.allow() {
+		g.next.OnConfigUpdated(pilots, pucks)
+	}
+}
+
+// NewServer creates the HTTP and SSE server with separate simulation and real-world engines.
 func NewServer(
-	engine *tracker.Engine,
+	simEngine *tracker.Engine,
 	simulator *ingest.TrackSimulator,
 	laprfServer *laprf.Server,
 	webRootDir string,
+	realEngines ...*tracker.Engine,
 ) *Server {
-	hub := NewSSEHub()
-	engine.Subscribe(hub)
+	var realEngine *tracker.Engine
+	if len(realEngines) > 0 && realEngines[0] != nil {
+		realEngine = realEngines[0]
+	} else {
+		realEngine = tracker.NewRealEngine()
+	}
 
-	return &Server{
-		engine:      engine,
+	hub := NewSSEHub()
+	simEngine.Subscribe(&gatedEventSubscriber{
+		allow: func() bool { return simulator.IsRunning() },
+		next:  hub,
+	})
+	realEngine.Subscribe(&gatedEventSubscriber{
+		allow: func() bool { return !simulator.IsRunning() },
+		next:  hub,
+	})
+
+	s := &Server{
+		simEngine:   simEngine,
+		realEngine:  realEngine,
 		simulator:   simulator,
 		laprfServer: laprfServer,
 		sseHub:      hub,
 		webRootDir:  webRootDir,
 	}
+	laprfServer.SetEngine(s.activeEngine())
+	return s
+}
+
+func (s *Server) activeEngine() *tracker.Engine {
+	if s.simulator.IsRunning() {
+		return s.simEngine
+	}
+	return s.realEngine
 }
 
 // Handler builds the HTTP multiplexer for the application.
@@ -121,32 +181,34 @@ func (s *Server) Handler() http.Handler {
 }
 
 func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
-	pilots, pucks, laps, crossings, summaries := s.engine.StateSnapshot()
+	eng := s.activeEngine()
+	pilots, pucks, laps, crossings, summaries := eng.StateSnapshot()
 	resp := FullStateResponse{
-		ServerTimestampUs: s.engine.NowUs(),
+		ServerTimestampUs: eng.NowUs(),
 		Pilots:            pilots,
 		Pucks:             pucks,
-		DetectedPucks:     s.engine.DetectedPucksSnapshot(),
+		DetectedPucks:     eng.DetectedPucksSnapshot(),
 		Laps:              laps,
 		Crossings:         crossings,
-		Filtered:          s.engine.FilteredSnapshot(),
+		Filtered:          eng.FilteredSnapshot(),
 		Summaries:         summaries,
-		Rules:             s.engine.Rules(),
+		Rules:             eng.Rules(),
 		SimulatorRun:      s.simulator.IsRunning(),
-		RaceArmed:         s.engine.IsRaceArmed(),
+		RaceArmed:         eng.IsRaceArmed(),
 		LiveTimeStatus:    s.laprfServer.Status(),
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
 func (s *Server) handleGetStatus(w http.ResponseWriter, _ *http.Request) {
-	_, pucks, _, _, _ := s.engine.StateSnapshot()
+	eng := s.activeEngine()
+	_, pucks, _, _, _ := eng.StateSnapshot()
 	writeJSON(w, http.StatusOK, StatusResponse{
-		ServerTimestampUs: s.engine.NowUs(),
+		ServerTimestampUs: eng.NowUs(),
 		Pucks:             pucks,
-		DetectedPucks:     s.engine.DetectedPucksSnapshot(),
+		DetectedPucks:     eng.DetectedPucksSnapshot(),
 		SimulatorRun:      s.simulator.IsRunning(),
-		RaceArmed:         s.engine.IsRaceArmed(),
+		RaceArmed:         eng.IsRaceArmed(),
 		LiveTimeStatus:    s.laprfServer.Status(),
 	})
 }
@@ -154,16 +216,17 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, _ *http.Request) {
 // handleRules reads (GET) or replaces (POST) the timing guardrails. Values are clamped
 // server-side; the applied rules are returned.
 func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
+	eng := s.activeEngine()
 	switch r.Method {
 	case http.MethodGet:
-		writeJSON(w, http.StatusOK, s.engine.Rules())
+		writeJSON(w, http.StatusOK, eng.Rules())
 	case http.MethodPost:
 		var rules domain.TimingRules
 		if err := json.NewDecoder(r.Body).Decode(&rules); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeJSON(w, http.StatusOK, s.engine.SetRules(rules))
+		writeJSON(w, http.StatusOK, eng.SetRules(rules))
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -177,7 +240,8 @@ func (s *Server) handleToggleArm(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if s.laprfServer.Status().ConnectedClients == 0 {
-		s.engine.SetRaceArmed(!s.engine.IsRaceArmed())
+		eng := s.activeEngine()
+		eng.SetRaceArmed(!eng.IsRaceArmed())
 	}
 	s.handleGetStatus(w, r)
 }
@@ -198,7 +262,7 @@ func (s *Server) handleUpdatePilot(w http.ResponseWriter, r *http.Request) {
 	if slot.ExitThreshold == 0 || slot.ExitThreshold >= slot.EnterThreshold {
 		slot.ExitThreshold = slot.EnterThreshold - 10.0
 	}
-	s.engine.UpdatePilotSlot(slot)
+	s.activeEngine().UpdatePilotSlot(slot)
 	s.handleGetState(w, r)
 }
 
@@ -214,7 +278,7 @@ func (s *Server) handleThresholds(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.engine.SetGateThresholds(updates); err != nil {
+	if err := s.activeEngine().SetGateThresholds(updates); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -236,7 +300,7 @@ func (s *Server) handleGateRules(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := s.engine.SetGateRules(body.PuckID, body.Overrides); err != nil {
+	if _, err := s.activeEngine().SetGateRules(body.PuckID, body.Overrides); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -253,7 +317,7 @@ func (s *Server) handleUpdateGate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.engine.UpdateGate(upd); err != nil {
+	if err := s.activeEngine().UpdateGate(upd); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -273,7 +337,7 @@ func (s *Server) handleUpdatePuckColor(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.engine.SetPuckColor(body.PuckID, body.Color); err != nil {
+	if err := s.activeEngine().SetPuckColor(body.PuckID, body.Color); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -292,10 +356,11 @@ func (s *Server) handleAddGate(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	var err error
+	eng := s.activeEngine()
 	if body.TrackOrder != nil {
-		_, err = s.engine.AddGate(body.Name, body.AssignedPuckID, *body.TrackOrder)
+		_, err = eng.AddGate(body.Name, body.AssignedPuckID, *body.TrackOrder)
 	} else {
-		_, err = s.engine.AddGate(body.Name, body.AssignedPuckID)
+		_, err = eng.AddGate(body.Name, body.AssignedPuckID)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -316,7 +381,7 @@ func (s *Server) handleRemoveGate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.engine.RemoveGate(body.PuckID); err != nil {
+	if err := s.activeEngine().RemoveGate(body.PuckID); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -324,7 +389,7 @@ func (s *Server) handleRemoveGate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleProvisionGate registers a newly flashed gate puck (or updates its flashed PuckLabel)
-// so its ID/name shows up immediately in the course layout.
+// in the real-world engine (and active engine if different) so its ID/name shows up immediately.
 func (s *Server) handleProvisionGate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -338,7 +403,7 @@ func (s *Server) handleProvisionGate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := s.engine.ProvisionGate(body.Role, body.PuckLabel); err != nil {
+	if _, err := s.realEngine.ProvisionGate(body.Role, body.PuckLabel); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -373,7 +438,7 @@ func (s *Server) handleFirmwareImage(w http.ResponseWriter, r *http.Request) {
 		puckID = uint8(parsed)
 	}
 
-	pilots, _, _, _, _ := s.engine.StateSnapshot()
+	pilots, _, _, _, _ := s.activeEngine().StateSnapshot()
 	var freqs [domain.MaxPilotSlots]uint16
 	for i := 0; i < domain.MaxPilotSlots && i < len(pilots); i++ {
 		freqs[i] = pilots[i].FrequencyMHz
@@ -409,6 +474,7 @@ func (s *Server) handleToggleSim(w http.ResponseWriter, r *http.Request) {
 	}
 	next := !s.simulator.IsRunning()
 	s.simulator.SetRunning(next)
+	s.laprfServer.SetEngine(s.activeEngine())
 	s.handleGetState(w, r)
 }
 
@@ -426,7 +492,7 @@ func (s *Server) handleResetSession(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.engine.ResetSession()
+	s.activeEngine().ResetSession()
 	s.handleGetState(w, r)
 }
 
@@ -440,7 +506,7 @@ func (s *Server) handleIngestFrame(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.engine.IngestTelemetryFrame(frame)
+	s.realEngine.IngestTelemetryFrame(frame)
 	writeJSON(w, http.StatusOK, map[string]bool{"ingested": true})
 }
 

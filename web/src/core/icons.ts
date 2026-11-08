@@ -17,6 +17,8 @@ export const icons = {
   sliders: (s?: number) =>
     svg(`<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>`, s),
   zap: (s?: number) => svg(`<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>`, s),
+  zapOff: (s?: number) =>
+    svg(`<path d="M12.4 6.8 13 2l-2.4 3.2"/><path d="M18.6 12.9 20 11h-5.3"/><path d="M8 8.7 4 14h7l-1 8 5-6.7"/><path d="m2 2 20 20"/>`, s),
   reset: (s?: number) => svg(`<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/>`, s),
   play: (s?: number) => svg(`<path d="M7 4l13 8-13 8z"/>`, s),
   pause: (s?: number) => svg(`<path d="M9 5v14M15 5v14"/>`, s),
