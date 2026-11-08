@@ -92,5 +92,6 @@ Download the latest standalone binary for your operating system from the [Releas
 | **Linux (x64)** | [`slaprf-linux-amd64`](https://github.com/kaack/SlapRF/releases/latest/download/slaprf-linux-amd64) |
 | **Linux (ARM64)** | [`slaprf-linux-arm64`](https://github.com/kaack/SlapRF/releases/latest/download/slaprf-linux-arm64) |
 
-1. Run the downloaded executable (`slaprf-windows-amd64.exe` on Windows, or `chmod +x slaprf-* && ./slaprf-*` on macOS and Linux).
-2. Open `http://localhost:8090` in Chrome, Edge, or Brave.
+1. **Windows**: Double-click `slaprf-windows-amd64.exe`. It starts the server and opens `http://localhost:8090` in your browser automatically.
+2. **macOS and Linux**: Run `chmod +x slaprf-* && ./slaprf-*` in a terminal to start the server and open `http://localhost:8090`.
+3. For USB timer flashing (`System > Flasher`), open `http://localhost:8090` in Chrome, Edge, or Brave.
