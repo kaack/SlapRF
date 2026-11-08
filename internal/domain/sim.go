@@ -7,7 +7,10 @@ const (
 	SimStatusFlying          SimPilotStatus = "FLYING"
 	SimStatusAvoiding        SimPilotStatus = "AVOIDING"
 	SimStatusCrashedVtxOn    SimPilotStatus = "CRASHED_VTX_ON"
+	SimStatusTurtleRecovery  SimPilotStatus = "TURTLE_RECOVERY"
+	SimStatusTurtleFailed    SimPilotStatus = "TURTLE_FAILED"
 	SimStatusCrashedRecovery SimPilotStatus = "CRASHED_WAITING_RECOVERY"
+	SimStatusWalkingRecovery SimPilotStatus = "WALKING_RECOVERY"
 	SimStatusPitSwap         SimPilotStatus = "PIT_SWAP"
 	SimStatusPaused          SimPilotStatus = "PAUSED"
 )

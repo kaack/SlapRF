@@ -175,7 +175,10 @@ export type SimPilotStatus =
   | "FLYING"
   | "AVOIDING"
   | "CRASHED_VTX_ON"
+  | "TURTLE_RECOVERY"
+  | "TURTLE_FAILED"
   | "CRASHED_WAITING_RECOVERY"
+  | "WALKING_RECOVERY"
   | "PIT_SWAP"
   | "PAUSED";
 

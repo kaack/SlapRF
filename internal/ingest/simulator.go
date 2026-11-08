@@ -20,12 +20,13 @@ type simPilotState struct {
 	weakSectorIdx   int     // 0-based sector where this pilot has higher variance/slower speed
 	weaknessPenalty float64 // speed multiplier in weak sector (e.g. 0.76)
 
-	status          domain.SimPilotStatus
-	batteryPct      float64 // 0..100%
-	stateTimerSec   float64 // countdown for CRASHED_VTX_ON or PIT_SWAP
-	wantPitAtFinish bool    // true when battery is low and pilot will pit upon crossing Gate 1
-	crashesCount    int
-	packsFlown      int
+	status             domain.SimPilotStatus
+	batteryPct         float64 // 0..100%
+	stateTimerSec      float64 // countdown for current state machine phase
+	turtleForceSuccess bool    // true when user explicitly clicked "Turtle recover"
+	wantPitAtFinish    bool    // true when battery is low and pilot will pit upon crossing Gate 1
+	crashesCount       int
+	packsFlown         int
 }
 
 // TrackSimulator generates realistic 50 Hz multi-gate 5.8 GHz SDR telemetry streams
@@ -210,10 +211,15 @@ func (s *TrackSimulator) SetTrackWalker(active bool) {
 					avoidingCount++
 				}
 				clearSlots = append(clearSlots, ps.slotIndex)
-			case domain.SimStatusCrashedVtxOn, domain.SimStatusCrashedRecovery:
-				// Quad stays on the field in Pit Mode while the pilot walks out to retrieve it
-				ps.status = domain.SimStatusCrashedRecovery
+			case domain.SimStatusCrashedVtxOn,
+				domain.SimStatusTurtleRecovery,
+				domain.SimStatusTurtleFailed,
+				domain.SimStatusCrashedRecovery,
+				domain.SimStatusWalkingRecovery:
+				// Quad stays on the field in Pit Mode while the pilot walks out on the track to retrieve it
+				ps.status = domain.SimStatusWalkingRecovery
 				ps.stateTimerSec = s.trackWalkerTimerSec
+				ps.turtleForceSuccess = false
 				ps.currentSpeedMps = 0.0
 				clearSlots = append(clearSlots, ps.slotIndex)
 			}
@@ -228,7 +234,7 @@ func (s *TrackSimulator) SetTrackWalker(active bool) {
 				ps.altitudeMeters = 1.25
 				ps.trackPosMeters = s.trackLengthMeters - 14.0 - float64(i)*4.0
 				clearSlots = append(clearSlots, ps.slotIndex)
-			case domain.SimStatusCrashedRecovery:
+			case domain.SimStatusCrashedRecovery, domain.SimStatusWalkingRecovery:
 				// Recovery walk completed: quad is now back at the pit bench for a fresh pack
 				ps.status = domain.SimStatusPitSwap
 				ps.stateTimerSec = 25.0 + s.rng.Float64()*20.0
@@ -276,27 +282,18 @@ func (s *TrackSimulator) TriggerPilotAction(slotIndex int, action string) {
 				ps.trackPosMeters = math.Mod(float64(nearestGateIdx)*sectorLen+2.8, s.trackLengthMeters)
 			}
 			ps.status = domain.SimStatusCrashedVtxOn
-			ps.stateTimerSec = 8.0
+			ps.stateTimerSec = 5.0
+			ps.turtleForceSuccess = false
 			ps.currentSpeedMps = 0
 			ps.altitudeMeters = 0.15
 			ps.crashesCount++
 		case "recover":
-			// Turtle mode / field recovery: resume flying from current position (or launch if battery empty)
-			if ps.batteryPct < 15.0 {
-				ps.batteryPct = 100.0
-				ps.packsFlown++
-				ps.trackPosMeters = s.trackLengthMeters - 12.0
-				clearProgress = true
-			}
-			if s.trackWalkerActive {
-				ps.status = domain.SimStatusAvoiding
-				ps.altitudeMeters = 14.0
-			} else {
-				ps.status = domain.SimStatusFlying
-				ps.altitudeMeters = 1.25
-			}
-			ps.stateTimerSec = 0
-			ps.currentSpeedMps = ps.baseSpeedMps
+			// Step into TURTLE_RECOVERY state (3.5s countdown spinning motors to flip upright) before resuming FLYING
+			ps.status = domain.SimStatusTurtleRecovery
+			ps.stateTimerSec = 3.5
+			ps.turtleForceSuccess = true
+			ps.currentSpeedMps = 0
+			ps.altitudeMeters = 0.15
 		case "pit":
 			ps.status = domain.SimStatusPitSwap
 			ps.stateTimerSec = 30.0 + s.rng.Float64()*30.0
@@ -413,7 +410,8 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 		vtxActive := p.Enabled && p.Channel > 0 &&
 			(ps.status == domain.SimStatusFlying ||
 				ps.status == domain.SimStatusAvoiding ||
-				ps.status == domain.SimStatusCrashedVtxOn)
+				ps.status == domain.SimStatusCrashedVtxOn ||
+				ps.status == domain.SimStatusTurtleRecovery)
 
 		speedMph := 0.0
 		if p.Enabled && p.Channel > 0 && (ps.status == domain.SimStatusFlying || ps.status == domain.SimStatusAvoiding) {
@@ -522,7 +520,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 	if s.trackWalkerActive && s.trackWalkerTimerSec > 0 {
 		s.trackWalkerTimerSec -= dtSec
 		for i := range s.pilotStates {
-			if s.pilotStates[i].status == domain.SimStatusCrashedRecovery {
+			if s.pilotStates[i].status == domain.SimStatusWalkingRecovery {
 				s.pilotStates[i].stateTimerSec = math.Max(0, s.trackWalkerTimerSec)
 			}
 		}
@@ -537,7 +535,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 					ps.altitudeMeters = 1.25
 					ps.trackPosMeters = s.trackLengthMeters - 14.0 - float64(i)*4.0
 					clearSlots = append(clearSlots, ps.slotIndex)
-				case domain.SimStatusCrashedRecovery:
+				case domain.SimStatusCrashedRecovery, domain.SimStatusWalkingRecovery:
 					// Walk completed: quad has been carried off the field back to the pit bench
 					ps.status = domain.SimStatusPitSwap
 					ps.stateTimerSec = 25.0 + s.rng.Float64()*20.0
@@ -585,7 +583,8 @@ func (s *TrackSimulator) step(dtSec float64) {
 		if i < len(pilots) && (!pilots[i].Enabled || pilots[i].Channel == 0) {
 			continue
 		}
-		if s.pilotStates[i].status == domain.SimStatusCrashedRecovery {
+		st := s.pilotStates[i].status
+		if st == domain.SimStatusCrashedRecovery || st == domain.SimStatusWalkingRecovery || st == domain.SimStatusTurtleFailed {
 			hasWaitingRecovery = true
 			break
 		}
@@ -609,12 +608,49 @@ func (s *TrackSimulator) step(dtSec float64) {
 			ps.currentSpeedMps = 0
 			ps.stateTimerSec -= dtSec
 			if ps.stateTimerSec <= 0 {
-				// 35% chance pilot flips over with turtle mode and keeps flying; otherwise turns Pit Mode on
-				// and waits on the field for a traffic lull (no pilots flying) to walk out and recover.
-				if s.rng.Float64() < 0.35 && !s.trackWalkerActive {
-					ps.status = domain.SimStatusFlying
-					ps.altitudeMeters = 1.25
+				// Step 1 -> Step 2 of crash state machine: attempt Turtle Mode recovery
+				ps.status = domain.SimStatusTurtleRecovery
+				ps.stateTimerSec = 4.0
+				ps.turtleForceSuccess = false
+			}
+			continue
+
+		case domain.SimStatusTurtleRecovery:
+			ps.currentSpeedMps = 0
+			ps.stateTimerSec -= dtSec
+			if ps.stateTimerSec <= 0 {
+				// Step 2 -> Step 3: Turtle flip either succeeds (resumes FLYING) or fails (enters TURTLE_FAILED)
+				if ps.turtleForceSuccess || (s.rng.Float64() < 0.40 && !s.trackWalkerActive) {
+					ps.turtleForceSuccess = false
+					if ps.batteryPct < 15.0 {
+						ps.batteryPct = 100.0
+						ps.packsFlown++
+					}
+					if s.trackWalkerActive {
+						ps.status = domain.SimStatusAvoiding
+						ps.altitudeMeters = 14.0
+					} else {
+						ps.status = domain.SimStatusFlying
+						ps.altitudeMeters = 1.25
+					}
 					ps.stateTimerSec = 0
+					ps.currentSpeedMps = ps.baseSpeedMps
+				} else {
+					ps.turtleForceSuccess = false
+					ps.status = domain.SimStatusTurtleFailed
+					ps.stateTimerSec = 3.5
+				}
+			}
+			continue
+
+		case domain.SimStatusTurtleFailed:
+			ps.currentSpeedMps = 0
+			ps.stateTimerSec -= dtSec
+			if ps.stateTimerSec <= 0 {
+				// Step 3 -> Step 4: Disarm & switch VTX to Pit Mode, then wait on field for a lull in traffic
+				if s.trackWalkerActive {
+					ps.status = domain.SimStatusWalkingRecovery
+					ps.stateTimerSec = s.trackWalkerTimerSec
 				} else {
 					ps.status = domain.SimStatusCrashedRecovery
 					ps.stateTimerSec = 0
@@ -626,6 +662,10 @@ func (s *TrackSimulator) step(dtSec float64) {
 		case domain.SimStatusCrashedRecovery:
 			ps.currentSpeedMps = 0
 			waitingRecoveryCount++
+			continue
+
+		case domain.SimStatusWalkingRecovery:
+			ps.currentSpeedMps = 0
 			continue
 
 		case domain.SimStatusPitSwap:
@@ -718,14 +758,15 @@ func (s *TrackSimulator) step(dtSec float64) {
 	}
 
 	// If a crashed drone is waiting on the field and all other pilots have landed for pit swaps
-	// (a natural lull in traffic with 0 pilots flying), the crashed pilot walks out onto the clear
-	// track to recover their quad; once the walk timer finishes, the quad moves to the pit bench.
+	// (a natural lull in traffic with 0 pilots flying), the crashed pilot transitions to WALKING_RECOVERY
+	// and walks out onto the clear track to recover their quad; once the walk timer finishes, the quad moves to PIT_SWAP.
 	if !s.prewarming && waitingRecoveryCount > 0 && flyingCount == 0 && !s.trackWalkerActive {
 		s.trackWalkerActive = true
 		s.trackWalkerTimerSec = 12.0
 		for i := range s.pilotStates {
 			ps := &s.pilotStates[i]
 			if ps.status == domain.SimStatusCrashedRecovery {
+				ps.status = domain.SimStatusWalkingRecovery
 				ps.stateTimerSec = s.trackWalkerTimerSec
 			}
 		}
@@ -752,7 +793,8 @@ func (s *TrackSimulator) step(dtSec float64) {
 				pilots[slotIdx].Channel > 0 &&
 				(ps.status == domain.SimStatusFlying ||
 					ps.status == domain.SimStatusAvoiding ||
-					ps.status == domain.SimStatusCrashedVtxOn)
+					ps.status == domain.SimStatusCrashedVtxOn ||
+					ps.status == domain.SimStatusTurtleRecovery)
 
 			if !vtxOn {
 				rssi[slotIdx] = puck.NoiseFloorDbm + noise

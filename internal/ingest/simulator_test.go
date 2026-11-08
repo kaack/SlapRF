@@ -51,14 +51,21 @@ func TestSimulatorControlsAndTimerLifecycle(t *testing.T) {
 		t.Fatalf("expected slot 1 to be CRASHED_VTX_ON with VTX active, got %+v", snap.Pilots[0])
 	}
 
-	// 2. Activate track walker -> flying pilots climb to AVOIDING or return to pit, crashed pilot stays on field being walked out to
+	// 2. Trigger turtle recovery -> enters TURTLE_RECOVERY before resuming FLYING
+	sim.TriggerPilotAction(1, "recover")
+	snap = sim.Snapshot()
+	if snap.Pilots[0].Status != "TURTLE_RECOVERY" || !snap.Pilots[0].VtxActive {
+		t.Fatalf("expected slot 1 to enter TURTLE_RECOVERY with VTX active, got %+v", snap.Pilots[0])
+	}
+
+	// 3. Activate track walker -> flying pilots climb to AVOIDING or return to pit, crashed pilot enters WALKING_RECOVERY on field
 	sim.SetTrackWalker(true)
 	snap = sim.Snapshot()
 	if !snap.TrackWalkerActive {
 		t.Fatalf("expected TrackWalkerActive=true")
 	}
-	if snap.Pilots[0].Status != "CRASHED_WAITING_RECOVERY" || snap.Pilots[0].StateRemainingSec <= 0 {
-		t.Fatalf("expected crashed pilot to remain on field in CRASHED_WAITING_RECOVERY during track walk, got %+v", snap.Pilots[0])
+	if snap.Pilots[0].Status != "WALKING_RECOVERY" || snap.Pilots[0].StateRemainingSec <= 0 {
+		t.Fatalf("expected crashed pilot to enter WALKING_RECOVERY on field during track walk, got %+v", snap.Pilots[0])
 	}
 	if snap.Pilots[1].Status != "AVOIDING" && snap.Pilots[1].Status != "PIT_SWAP" {
 		t.Fatalf("expected flying pilot to react by climbing to AVOIDING or returning to PIT_SWAP, got %+v", snap.Pilots[1])
