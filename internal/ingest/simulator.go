@@ -292,7 +292,7 @@ func (s *TrackSimulator) SetTrackWalker(active bool) {
 	s.mu.Lock()
 	s.trackWalkerActive = active
 	if active {
-		s.trackWalkerTimerSec = 14.0
+		s.trackWalkerTimerSec = 30.0 + s.rng.Float64()*30.0
 		avoidingCount := 0
 		for i := range s.pilotStates {
 			ps := &s.pilotStates[i]
@@ -1000,7 +1000,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 	// and walks out onto the clear track to recover their quad; once the walk timer finishes, the quad moves to PIT_SWAP.
 	if !s.prewarming && waitingRecoveryCount > 0 && flyingCount == 0 && !s.trackWalkerActive {
 		s.trackWalkerActive = true
-		s.trackWalkerTimerSec = 12.0
+		s.trackWalkerTimerSec = 30.0 + s.rng.Float64()*30.0
 		for i := range s.pilotStates {
 			ps := &s.pilotStates[i]
 			if ps.status == domain.SimStatusCrashedRecovery {

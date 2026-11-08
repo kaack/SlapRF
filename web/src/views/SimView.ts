@@ -66,7 +66,7 @@ function statusMeta(p: SimPilotState): { label: string; badgeClass: string; hint
       return {
         label: `Walking Out${sec}`,
         badgeClass: "sim-status-crashed-wait",
-        hint: "Step 5: Pilot is walking out on the track to pick up the crashed quad and carry it back to the pit bench",
+        hint: "Step 5: Pilot is walking or riding a Onewheel out onto the track to retrieve the crashed quad and return to the bench (30–60s)",
       };
     case "PIT_SWAP":
       if (p.batteryPct === 100) {
