@@ -1,23 +1,23 @@
-name: Deploy GitHub Pages SPA
+name: Build GitHub Page on Release
 
 on:
+  release:
+    types: [created, published]
   push:
-    branches:
-      - main
+    tags:
+      - "v*"
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
-  group: "pages"
+  group: "github-page"
   cancel-in-progress: true
 
 jobs:
-  build:
-    name: Build Pure SPA + WASM Simulator
+  build-github-page:
+    name: Build & Push SPA to github-page branch
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -31,19 +31,42 @@ jobs:
       - name: Build static SPA and Go WASM simulation engine
         run: go run ./cmd/build-web -web ./web -out ./_site
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: ./_site
+      - name: Deploy static files to github-page branch
+        run: |
+          WORKTREE_DIR="$(mktemp -d)"
+          git fetch origin github-page || true
+          if git show-ref --verify --quiet refs/remotes/origin/github-page; then
+            git worktree add -B github-page "$WORKTREE_DIR" origin/github-page
+          else
+            git worktree add --detach "$WORKTREE_DIR"
+            git -C "$WORKTREE_DIR" checkout --orphan github-page
+            git -C "$WORKTREE_DIR" rm -rf . || true
+          fi
 
-  deploy:
-    name: Deploy to GitHub Pages
-    needs: build
-    runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    steps:
-      - name: Deploy to GitHub Pages
-        id: deployment
-        uses: actions/deploy-pages@v4
+          rm -rf "$WORKTREE_DIR/docs"
+          mkdir -p "$WORKTREE_DIR/docs"
+          cp -r ./_site/. "$WORKTREE_DIR/docs/"
+
+          cat > "$WORKTREE_DIR/README.md" << 'EOF'
+          ## SlapRF (GitHub Page)
+
+          This branch just holds the static files for hosting the application as a GitHub page.
+          EOF
+
+          cat > "$WORKTREE_DIR/.gitignore" << 'EOF'
+          .idea
+          *.iml
+          .DS_Store
+          EOF
+
+          cd "$WORKTREE_DIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit on github-page branch."
+          else
+            VERSION="${GITHUB_REF_NAME:-latest}"
+            git commit -m "Build GitHub Page for ${VERSION}"
+            git push origin github-page --force
+          fi
