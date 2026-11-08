@@ -149,7 +149,10 @@ export class Announcer {
   }
 
   public voices(): SpeechSynthesisVoice[] {
-    return "speechSynthesis" in window ? speechSynthesis.getVoices() : [];
+    if (!("speechSynthesis" in window)) return [];
+    const all = speechSynthesis.getVoices();
+    const english = all.filter((v) => /^en(?:[-_]|$)/i.test(v.lang));
+    return english.length > 0 ? english : all;
   }
 
   public piperVoices(): PiperVoiceDescriptor[] {
@@ -159,17 +162,21 @@ export class Announcer {
   /**
    * Resolves the active voice URI:
    * 1. If the user explicitly selected a built-in Piper neural voice (`piper:...`), use it.
-   * 2. If the user's preferred browser voice (defaulting to "Google US English") is present
+   * 2. If the user explicitly selected `"system"`, use the system default browser voice.
+   * 3. If the user's preferred browser voice (defaulting to "Google US English") is present
    *    and available (either local or online), use it.
-   * 3. Otherwise (e.g. inside Antigravity's browser, Edge/Firefox/Safari without "Google US English",
+   * 4. Otherwise (e.g. inside Antigravity's browser, Edge/Firefox/Safari without "Google US English",
    *    or when offline at the flying field), automatically fall back to the built-in offline
-   *    Piper neural voice (`piper:en_US-hfc_female-medium`).
+   *    Piper neural voice (`piper:en_US-lessac-medium`).
    */
   public activeVoiceURI(): string {
     if (isPiperVoiceURI(this.prefs.voiceURI)) {
       return getPiperVoice(this.prefs.voiceURI).uri;
     }
     const list = this.voices();
+    if (this.prefs.voiceURI === "system" && list.length > 0) {
+      return "system";
+    }
     const targetURI = this.prefs.voiceURI || PREFERRED_DEFAULT_VOICE;
     const match =
       list.find((v) => v.voiceURI === targetURI) ??
@@ -189,17 +196,20 @@ export class Announcer {
     const list = this.voices();
     if (list.length === 0) return undefined;
 
-    const targetURI = this.prefs.voiceURI || PREFERRED_DEFAULT_VOICE;
-    const match =
-      list.find((v) => v.voiceURI === targetURI) ??
-      list.find((v) => v.name.toLowerCase() === targetURI.toLowerCase());
+    if (this.prefs.voiceURI && this.prefs.voiceURI !== "system") {
+      const targetURI = this.prefs.voiceURI;
+      const match =
+        list.find((v) => v.voiceURI === targetURI) ??
+        list.find((v) => v.name.toLowerCase() === targetURI.toLowerCase());
 
-    const online = typeof navigator === "undefined" ? true : navigator.onLine !== false;
-    if (match && (match.localService || online)) {
-      return match;
+      const online = typeof navigator === "undefined" ? true : navigator.onLine !== false;
+      if (match && (match.localService || online)) {
+        return match;
+      }
     }
 
     return (
+      list.find((v) => v.default && /^en/i.test(v.lang)) ??
       list.find((v) => v.localService && /^en[-_]US/i.test(v.lang)) ??
       list.find((v) => /^en/i.test(v.lang)) ??
       list[0]
@@ -365,7 +375,12 @@ export class Announcer {
     if (!("speechSynthesis" in window)) return;
     const utterance = new SpeechSynthesisUtterance(text);
     const voice = this.resolveVoice();
-    if (voice) utterance.voice = voice;
+    if (voice) {
+      utterance.voice = voice;
+      if (voice.lang) {
+        utterance.lang = voice.lang;
+      }
+    }
     utterance.rate = this.prefs.rate;
     utterance.volume = this.prefs.volume;
 

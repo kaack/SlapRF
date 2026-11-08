@@ -98,7 +98,7 @@ export class AnnouncerSettings extends Component {
       })
       .join("")}</optgroup>`;
 
-    const browserOpts = [`<option value="">System default</option>`]
+    const browserOpts = [`<option value="system" ${activeURI === "system" ? "selected" : ""}>System default (English)</option>`]
       .concat(
         voices.map(
           (v) =>
@@ -106,7 +106,7 @@ export class AnnouncerSettings extends Component {
         )
       )
       .join("");
-    const browserGroup = `<optgroup label="Browser & OS Voices">${browserOpts}</optgroup>`;
+    const browserGroup = `<optgroup label="Browser & OS Voices (English)">${browserOpts}</optgroup>`;
 
     let neuralStatusHtml = "";
     if (isPiperVoiceURI(activeURI)) {

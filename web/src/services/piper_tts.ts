@@ -51,18 +51,17 @@ export function getPiperVoice(uri: string): PiperVoiceDescriptor {
 }
 
 /**
- * Normalizes lap-time decimals and interjections before passing to espeak-ng so VITS
- * gives full, unclipped vowel duration to "zero" / "oh" in fractional times like 19.02 or 14.08.
+ * Normalizes lap-time decimals before passing to espeak-ng so `.0X` fractional times
+ * (like `14.08` or `19.02`) are spoken smoothly as `"14 point zero 8"` with no pause.
  */
 export function prepareTextForPiper(raw: string): string {
   return raw
     .trim()
-    .replace(/\bo+h+\b/gi, "oh")
-    .replace(/\b(\d+)\.00\b/g, "$1 point zero, zero")
-    .replace(/\b(\d+)\.0([1-9])\b/g, "$1 point zero, $2")
+    .replace(/\b(\d+)\.00\b/g, "$1 point zero zero")
+    .replace(/\b(\d+)\.0([1-9])\b/g, "$1 point zero $2")
     .replace(
-      /\b(point\s+(?:zero|oh))\s+(one|two|three|four|five|six|seven|eight|nine|\d)\b/gi,
-      "$1, $2"
+      /\bpoint\s+(?:o+h*|zero)\s*,?\s*(one|two|three|four|five|six|seven|eight|nine|\d)\b/gi,
+      "point zero $1"
     );
 }
 
