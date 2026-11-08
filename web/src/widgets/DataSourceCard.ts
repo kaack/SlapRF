@@ -43,7 +43,7 @@ export class DataSourceCard extends Component {
           <div class="option-sub">Generates realistic 8-pilot RSSI at every gate. Turn off once the USB receiver dongle is connected.</div>
         </div>
         <div class="topbar-actions">
-          ${sim ? `<button class="btn btn-sm" type="button" data-action="pack" title="Bunch all pilots up before the start gate">${icons.zap(14)}<span>Simulate pack</span></button>` : ""}
+          ${sim ? `<button class="btn btn-ghost" type="button" data-action="pack" title="Bunch all pilots up before the start gate">${icons.zap(18)}<span>Simulate pack</span></button>` : ""}
           <label class="switch switch-lg">
             <input type="checkbox" name="simulator" ${sim ? "checked" : ""} />
             <span></span>

@@ -12,6 +12,8 @@ export const icons = {
   flag: (s?: number) => svg(`<path d="M4 22V4"/><path d="M4 4h12l-2 4 2 4H4"/>`, s),
   pilot: (s?: number) => svg(`<circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 4-6 8-6s8 2 8 6"/>`, s),
   signal: (s?: number) => svg(`<path d="M3 12h4l3-8 4 16 3-8h4"/>`, s),
+  signalOff: (s?: number) =>
+    svg(`<path d="M3 12h4l3-8 .9 3.6"/><path d="M13.1 16.4 14 20l3-8h4"/><path d="m2 2 20 20"/>`, s),
   sliders: (s?: number) =>
     svg(`<path d="M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1"/><circle cx="15" cy="6" r="2"/><circle cx="9" cy="12" r="2"/><circle cx="17" cy="18" r="2"/>`, s),
   zap: (s?: number) => svg(`<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>`, s),

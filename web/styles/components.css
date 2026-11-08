@@ -98,14 +98,14 @@
 .btn {
   display: inline-flex;
   align-items: center;
-  gap: 7px;
-  height: 32px;
+  gap: 8px;
+  height: 34px;
   padding: 0 12px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
   background: var(--surface-2);
   color: var(--text);
-  font-size: 12.5px;
+  font-size: 13px;
   font-weight: 500;
   cursor: pointer;
   transition: background 0.12s, border-color 0.12s, color 0.12s;
@@ -113,6 +113,7 @@
 }
 .btn svg {
   flex-shrink: 0;
+  stroke-width: 2;
   shape-rendering: geometricPrecision;
 }
 .btn:hover:not(:disabled) {

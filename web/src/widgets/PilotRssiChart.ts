@@ -96,10 +96,10 @@ export class PilotRssiChart extends Component {
     this.api = api;
     el.innerHTML = `
       <div class="scope-toolbar">
-        <button class="btn btn-sm" type="button" data-act="live"></button>
+        <button class="btn" type="button" data-act="live"></button>
         <div class="scope-nav">
-          <button class="btn btn-sm" type="button" data-act="prev" title="Previous pass (←)">${icons.chevronLeft(14)}<span>Prev pass</span></button>
-          <button class="btn btn-sm" type="button" data-act="next" title="Next pass (→)"><span>Next pass</span>${icons.chevronRight(14)}</button>
+          <button class="btn btn-ghost" type="button" data-act="prev" title="Previous pass (←)">${icons.chevronLeft(18)}<span>Prev pass</span></button>
+          <button class="btn btn-ghost" type="button" data-act="next" title="Next pass (→)"><span>Next pass</span>${icons.chevronRight(18)}</button>
         </div>
         <div class="segmented" data-slot="windows" role="group" aria-label="Time window">
           ${WINDOWS_SEC.map((s) => `<button type="button" data-window="${s}">${s}s</button>`).join("")}
@@ -715,8 +715,10 @@ export class PilotRssiChart extends Component {
   private renderControls(): void {
     const live = this.endUs === null;
     const btn = this.el.querySelector<HTMLButtonElement>('[data-act="live"]')!;
-    btn.className = `btn btn-sm ${live ? "btn-armed" : ""}`;
-    btn.innerHTML = live ? `${icons.pause(14)}<span>Pause</span>` : `${icons.play(14)}<span>Back to live</span>`;
+    btn.className = `btn ${live ? "btn-armed" : "btn-ghost"}`;
+    btn.title = live ? "Pause live signal stream (Space)" : "Resume live signal stream (Space)";
+    btn.setAttribute("aria-label", btn.title);
+    btn.innerHTML = live ? `${icons.signal(18)}<span>Live stream</span>` : `${icons.signalOff(18)}<span>Stream paused</span>`;
     this.slot("windows")
       .querySelectorAll<HTMLElement>("[data-window]")
       .forEach((b) => b.classList.toggle("is-active", Number(b.dataset.window) * 1e6 === Math.round(this.windowUs)));
@@ -748,9 +750,9 @@ export class PilotRssiChart extends Component {
       const anyCalibrated = this.store.pucks.some((p) => enterThresholdAt(this.store, p.puckId, pilot.slotIndex).calibrated);
       text = this.calibMessage || "Pick a gate to see its threshold and adjust it, or auto-calibrate every gate from the recent signal.";
       actions = `
-        ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">Undo</button>` : ""}
-        ${anyCalibrated ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at every gate">Reset all</button>` : ""}
-        <button class="btn btn-sm" type="button" data-calib="auto" title="Set each gate's threshold from the last ${minutes} minutes of signal">Auto-calibrate all</button>`;
+        ${this.undo ? `<button class="btn btn-ghost" type="button" data-calib="undo">${icons.reset(17)}<span>Undo</span></button>` : ""}
+        ${anyCalibrated ? `<button class="btn btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at every gate">${icons.reset(17)}<span>Reset all</span></button>` : ""}
+        <button class="btn btn-ghost" type="button" data-calib="auto" title="Set each gate's threshold from the last ${minutes} minutes of signal">${icons.target(18)}<span>Auto-calibrate all</span></button>`;
     } else {
       const name = gateLabel(this.store, this.focus);
       const t = enterThresholdAt(this.store, this.focus, pilot.slotIndex);
@@ -758,9 +760,9 @@ export class PilotRssiChart extends Component {
         this.calibMessage ||
         `${name} threshold: ${t.dbm.toFixed(0)} dBm ${t.calibrated ? "(calibrated for this gate)" : `(${pilot.callsign}'s own)`}. Drag the line or its tag up or down to change it.`;
       actions = `
-        ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">Undo</button>` : ""}
-        ${t.calibrated ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at ${esc(name)}">Reset</button>` : ""}
-        <button class="btn btn-sm" type="button" data-calib="auto" title="Set ${esc(name)}'s threshold from the last ${minutes} minutes of signal">Auto-calibrate ${esc(name)}</button>`;
+        ${this.undo ? `<button class="btn btn-ghost" type="button" data-calib="undo">${icons.reset(17)}<span>Undo</span></button>` : ""}
+        ${t.calibrated ? `<button class="btn btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at ${esc(name)}">${icons.reset(17)}<span>Reset</span></button>` : ""}
+        <button class="btn btn-ghost" type="button" data-calib="auto" title="Set ${esc(name)}'s threshold from the last ${minutes} minutes of signal">${icons.target(18)}<span>Auto-calibrate ${esc(name)}</span></button>`;
     }
     this.slot("calib").innerHTML = `
       ${picker}
