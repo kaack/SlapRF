@@ -1747,27 +1747,21 @@ async function handleMessage(msg) {
         <button class="btn ${raceArmed?"btn-armed":"btn-ghost"}" data-action="arm" ${ltConnected?"disabled":""} title="${armTitle}" aria-label="${armTitle}">
           ${raceArmed?icons.timer(19):icons.timerOff(19)}<span class="topbar-btn-label">${raceArmed?"Timing on":"Timing off"}</span>
         </button>
-        ${resetBtn}`}else meta.id==="pilot"&&(actions+=resetBtn);let navItems=ROUTES.filter(r=>!r.simOnly||sim).map(r=>{let active=r.id===meta.id;return`<a class="topbar-nav-item ${active?"is-active":""}" href="#/${r.id}" data-nav-item="${r.id}" ${active?'aria-current="page"':""}>
-          <span class="topbar-nav-icon">${r.icon(17)}</span>
-          <span class="topbar-nav-text">
-            <span class="topbar-nav-label">${r.label}</span>
-            <span class="topbar-nav-sub">${r.subtitle}</span>
-          </span>
-        </a>`}).join("");this.el.innerHTML=`
+        ${resetBtn}`}else meta.id==="pilot"&&(actions+=resetBtn);let navItems=ROUTES.filter(r=>!r.simOnly||sim).map(r=>{let active=r.id===meta.id;return`<a class="nav-item ${active?"is-active":""}" href="#/${r.id}" data-nav-item="${r.id}" ${active?'aria-current="page"':""}>${r.icon()}<span>${r.label}</span></a>`}).join("");this.el.innerHTML=`
       <div class="topbar-left">
         <div class="topbar-menu-wrap">
           <button class="btn btn-ghost topbar-menu-btn ${this.menuOpen?"is-open":""}" data-action="menu" type="button" aria-label="Open navigation menu" aria-expanded="${this.menuOpen?"true":"false"}">
             ${this.menuOpen?icons.close(20):icons.menu(20)}
           </button>
           ${this.menuOpen?`<div class="topbar-nav-popover" role="menu" aria-label="Main navigation">
-                  <div class="topbar-nav-brand">
-                    <span class="brand-mark">${icons.slaprf(20)}</span>
+                  <div class="brand">
+                    <div class="brand-mark">${icons.slaprf(25)}</div>
                     <div>
                       <div class="brand-name">SlapRF</div>
                       <div class="brand-sub">XIAO ESP32-C5 \xB7 5.8 GHz</div>
                     </div>
                   </div>
-                  <div class="topbar-nav-list">${navItems}</div>
+                  <nav class="nav">${navItems}</nav>
                 </div>`:""}
         </div>
         <div class="topbar-title">
