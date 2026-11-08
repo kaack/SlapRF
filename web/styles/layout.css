@@ -177,13 +177,24 @@
   flex-wrap: nowrap;
   flex-shrink: 0;
 }
+.topbar-actions .btn {
+  height: 35px;
+  gap: 8px;
+  font-size: 13px;
+}
+.topbar-actions .btn svg {
+  width: 19px;
+  height: 19px;
+  stroke-width: 2;
+  shape-rendering: geometricPrecision;
+}
 /* Responsive --------------------------------------------------------------- */
 @media (max-width: 960px) {
   .topbar > .topbar-actions .topbar-btn-label {
     display: none;
   }
   .topbar > .topbar-actions .btn[data-action] {
-    width: 32px;
+    width: 35px;
     padding: 0;
     justify-content: center;
   }

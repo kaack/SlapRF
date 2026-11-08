@@ -111,6 +111,10 @@
   transition: background 0.12s, border-color 0.12s, color 0.12s;
   white-space: nowrap;
 }
+.btn svg {
+  flex-shrink: 0;
+  shape-rendering: geometricPrecision;
+}
 .btn:hover:not(:disabled) {
   background: var(--surface-3);
   border-color: #3a3f48;
@@ -130,7 +134,7 @@
   color: var(--text);
 }
 .btn-icon {
-  width: 32px;
+  width: 34px;
   padding: 0;
   justify-content: center;
 }
@@ -150,13 +154,16 @@
   border-color: #e0ff6e;
 }
 .btn-armed {
-  background: var(--accent-soft);
-  border-color: var(--accent-line);
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.btn-armed svg {
   color: var(--accent);
 }
 .btn-armed:hover:not(:disabled) {
-  background: rgba(212, 255, 58, 0.16);
-  border-color: var(--accent);
+  background: #232830;
+  border-color: #3a3f48;
 }
 
 .pill {

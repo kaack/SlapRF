@@ -10,6 +10,7 @@ export class TopBar extends Component {
   private readonly api: ApiClient;
   private readonly router: Router;
   private readonly announcer: Announcer;
+  private lastSig = "";
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient, router: Router, announcer: Announcer) {
     super(el);
@@ -47,21 +48,24 @@ export class TopBar extends Component {
     const meta = this.router.meta();
     const { raceArmed } = this.store;
     const voiceOn = this.announcer.settings.enabled;
+    const sig = `${meta.id}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}`;
+    if (sig === this.lastSig) return;
+    this.lastSig = sig;
 
     let actions = "";
     if (meta.id === "live") {
       actions = `
         <button class="btn ${voiceOn ? "btn-armed" : "btn-ghost"}" data-action="announcer" title="${voiceOn ? "Mute" : "Enable"} lap-time callouts" aria-label="${voiceOn ? "Mute" : "Enable"} lap-time callouts">
-          ${voiceOn ? icons.speaker() : icons.speakerOff()}<span class="topbar-btn-label">Announcer</span>
+          ${voiceOn ? icons.speaker(19) : icons.speakerOff(19)}<span class="topbar-btn-label">Announcer</span>
         </button>
-        <button class="btn ${raceArmed ? "btn-armed" : ""}" data-action="arm" title="${raceArmed ? "Pause" : "Resume"} lap timing" aria-label="${raceArmed ? "Pause" : "Resume"} lap timing">
-          ${raceArmed ? icons.pause() : icons.play()}<span class="topbar-btn-label">${raceArmed ? "Timing on" : "Timing paused"}</span>
+        <button class="btn ${raceArmed ? "btn-armed" : "btn-ghost"}" data-action="arm" title="${raceArmed ? "Pause" : "Resume"} lap timing" aria-label="${raceArmed ? "Pause" : "Resume"} lap timing">
+          ${raceArmed ? icons.pause(19) : icons.play(19)}<span class="topbar-btn-label">${raceArmed ? "Timing on" : "Timing paused"}</span>
         </button>
-        <button class="btn btn-ghost btn-icon" data-action="reset" title="Clear session laps" aria-label="Clear session laps">${icons.reset()}</button>`;
+        <button class="btn btn-ghost btn-icon" data-action="reset" title="Clear session laps" aria-label="Clear session laps">${icons.reset(19)}</button>`;
     } else if (meta.id === "pilot") {
       actions = `
         <button class="btn btn-ghost" data-action="reset" title="Clear session laps" aria-label="Clear session laps">
-          ${icons.reset()}<span class="topbar-btn-label">Clear laps</span>
+          ${icons.reset(19)}<span class="topbar-btn-label">Clear laps</span>
         </button>`;
     }
 
