@@ -25,6 +25,80 @@ interface Series {
 const OUTLIER_FACTOR = 1.35;
 /** Maximum number of laps shown in the viewport at one time. */
 const WINDOW_LAPS = 50;
+/** Maximum pixel distance from a plotted dot to trigger the hover tooltip. */
+const HOVER_DOT_HIT_PX = 14;
+
+interface HoveredPoint {
+  pilot: PilotSlot;
+  lap: number;
+  t: number;
+  x: number;
+  y: number;
+  clipped: boolean;
+}
+
+/**
+ * Draws a smooth Fritsch–Carlson monotone cubic spline through `pts` so the curve passes
+ * smoothly through every data point without artificial overshoot between laps.
+ */
+function traceMonotoneSpline(ctx: CanvasRenderingContext2D, pts: Array<{ x: number; y: number }>): void {
+  const n = pts.length;
+  if (n === 0) return;
+  ctx.moveTo(pts[0].x, pts[0].y);
+  if (n === 1) return;
+  if (n === 2) {
+    ctx.lineTo(pts[1].x, pts[1].y);
+    return;
+  }
+
+  const dx: number[] = new Array(n - 1);
+  const dy: number[] = new Array(n - 1);
+  const m: number[] = new Array(n - 1);
+  for (let i = 0; i < n - 1; i++) {
+    dx[i] = pts[i + 1].x - pts[i].x;
+    dy[i] = pts[i + 1].y - pts[i].y;
+    m[i] = dx[i] !== 0 ? dy[i] / dx[i] : 0;
+  }
+
+  const tangents: number[] = new Array(n);
+  tangents[0] = m[0];
+  tangents[n - 1] = m[n - 2];
+  for (let i = 1; i < n - 1; i++) {
+    if (m[i - 1] * m[i] <= 0) {
+      tangents[i] = 0;
+    } else {
+      tangents[i] = (m[i - 1] + m[i]) / 2;
+    }
+  }
+
+  for (let i = 0; i < n - 1; i++) {
+    if (m[i] === 0) {
+      tangents[i] = 0;
+      tangents[i + 1] = 0;
+    } else {
+      const a = tangents[i] / m[i];
+      const b = tangents[i + 1] / m[i];
+      const h = Math.hypot(a, b);
+      if (h > 3) {
+        const scale = 3 / h;
+        tangents[i] = scale * a * m[i];
+        tangents[i + 1] = scale * b * m[i];
+      }
+    }
+  }
+
+  for (let i = 0; i < n - 1; i++) {
+    const segDx = dx[i] / 3;
+    ctx.bezierCurveTo(
+      pts[i].x + segDx,
+      pts[i].y + tangents[i] * segDx,
+      pts[i + 1].x - segDx,
+      pts[i + 1].y - tangents[i + 1] * segDx,
+      pts[i + 1].x,
+      pts[i + 1].y
+    );
+  }
+}
 
 /** Every pilot's lap (or section) times across the session, lap by lap. Lower is faster. */
 export class ProgressionChart extends Component {
@@ -39,6 +113,8 @@ export class ProgressionChart extends Component {
   private endLap: number | null = null;
   private drag: { startX: number; startEndLap: number; mode: "pan" | "thumb" } | null = null;
   private thumbHovered = false;
+  private hoverPos: { x: number; y: number } | null = null;
+  private hoveredDot = false;
   private plotGeom = { padL: 52, plotW: 1, h: 1 };
 
   constructor(el: HTMLElement, store: AppStore, opts: { slotIndex?: () => number } = {}) {
@@ -76,11 +152,12 @@ export class ProgressionChart extends Component {
     });
 
     this.listen(el, "pointermove", (e) => {
+      const rect = el.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      this.hoverPos = { x, y };
       if (!this.drag) {
         if (this.maxLap > WINDOW_LAPS) {
-          const rect = el.getBoundingClientRect();
-          const x = e.clientX - rect.left;
-          const y = e.clientY - rect.top;
           const overTrack =
             y >= this.plotGeom.h - 18 &&
             x >= this.plotGeom.padL &&
@@ -95,10 +172,14 @@ export class ProgressionChart extends Component {
             overThumb = x >= thumbX && x <= thumbX + thumbW;
           }
           this.thumbHovered = overTrack;
-          el.style.cursor = overThumb ? "grab" : overTrack ? "pointer" : "grab";
+          el.style.cursor = overThumb
+            ? "grab"
+            : overTrack || this.hoveredDot
+              ? "pointer"
+              : "grab";
         } else {
           this.thumbHovered = false;
-          el.style.cursor = "";
+          el.style.cursor = this.hoveredDot ? "pointer" : "";
         }
         return;
       }
@@ -118,6 +199,8 @@ export class ProgressionChart extends Component {
     });
 
     this.listen(el, "pointerleave", () => {
+      this.hoverPos = null;
+      this.hoveredDot = false;
       if (!this.drag) {
         this.thumbHovered = false;
         el.style.cursor = "";
@@ -320,19 +403,50 @@ export class ProgressionChart extends Component {
       ctx.textAlign = "left";
     }
 
+    let closestHover: HoveredPoint | null = null;
+    let closestDist = HOVER_DOT_HIT_PX;
+
     for (const s of visibleSeries) {
+      const screenPts = s.points.map((p) => ({
+        lap: p.lap,
+        t: p.t,
+        x: xOf(p.lap),
+        y: yOf(p.t),
+        clipped: p.t > hi,
+      }));
+
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(padL - 2, padT - 4, plotW + 4, plotH + 8);
+      ctx.clip();
       ctx.strokeStyle = s.pilot.color;
-      ctx.lineWidth = 1.75;
+      ctx.lineWidth = 2;
+      ctx.lineCap = "round";
       ctx.lineJoin = "round";
       ctx.beginPath();
-      s.points.forEach((p, i) => (i === 0 ? ctx.moveTo(xOf(p.lap), yOf(p.t)) : ctx.lineTo(xOf(p.lap), yOf(p.t))));
+      traceMonotoneSpline(ctx, screenPts);
       ctx.stroke();
-      for (const p of s.points) {
+      ctx.restore();
+
+      for (const p of screenPts) {
+        if (!this.drag && this.hoverPos) {
+          const d = Math.hypot(this.hoverPos.x - p.x, this.hoverPos.y - p.y);
+          if (d <= closestDist) {
+            closestDist = d;
+            closestHover = { pilot: s.pilot, ...p };
+          }
+        }
         ctx.beginPath();
-        ctx.arc(xOf(p.lap), yOf(p.t), p.t > hi ? 2 : 2.5, 0, Math.PI * 2);
-        ctx.fillStyle = p.t > hi ? withAlpha(s.pilot.color, 0.4) : s.pilot.color;
+        ctx.arc(p.x, p.y, p.clipped ? 2.2 : 3, 0, Math.PI * 2);
+        ctx.fillStyle = p.clipped ? withAlpha(s.pilot.color, 0.45) : s.pilot.color;
         ctx.fill();
       }
+    }
+
+    this.hoveredDot = closestHover !== null;
+
+    if (closestHover) {
+      this.drawHoverTooltip(ctx, w, padL, padT, plotW, plotH, closestHover);
     }
 
     // Draw horizontal scrollbar when session exceeds 50 laps.
@@ -353,5 +467,74 @@ export class ProgressionChart extends Component {
       ctx.roundRect(thumbX, trackY, thumbW, trackH, 3);
       ctx.fill();
     }
+  }
+
+  private drawHoverTooltip(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    padL: number,
+    padT: number,
+    plotW: number,
+    plotH: number,
+    hp: HoveredPoint
+  ): void {
+    // Highlighted ring + enlarged dot
+    ctx.save();
+    ctx.strokeStyle = withAlpha(hp.pilot.color, 0.35);
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.arc(hp.x, hp.y, 6, 0, Math.PI * 2);
+    ctx.stroke();
+
+    ctx.fillStyle = hp.pilot.color;
+    ctx.strokeStyle = theme.surface;
+    ctx.lineWidth = 1.75;
+    ctx.beginPath();
+    ctx.arc(hp.x, hp.y, 4.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    const titleText = `${hp.pilot.callsign} · Lap ${hp.lap}`;
+    const timeText = `${hp.t.toFixed(3)}s${hp.clipped ? " (clipped)" : ""}`;
+
+    ctx.font = font(600, 11.5);
+    const titleW = ctx.measureText(titleText).width;
+    ctx.font = font(700, 12.5, true);
+    const timeW = ctx.measureText(timeText).width;
+
+    const boxW = Math.max(titleW + 28, timeW + 24);
+    const boxH = 44;
+    let bx = hp.x - boxW / 2;
+    bx = Math.max(padL + 4, Math.min(w - 16 - boxW, bx));
+    let by = hp.y - boxH - 12;
+    if (by < padT + 4) {
+      by = Math.min(padT + plotH - boxH - 4, hp.y + 12);
+    }
+
+    ctx.fillStyle = withAlpha(theme.surface, 0.96);
+    ctx.strokeStyle = withAlpha(hp.pilot.color, 0.7);
+    ctx.lineWidth = 1.25;
+    ctx.beginPath();
+    ctx.roundRect(bx, by, boxW, boxH, 7);
+    ctx.fill();
+    ctx.stroke();
+
+    // Pilot color dot
+    ctx.fillStyle = hp.pilot.color;
+    ctx.beginPath();
+    ctx.arc(bx + 12, by + 15, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Pilot + Lap label
+    ctx.fillStyle = theme.text2;
+    ctx.font = font(600, 11.5);
+    ctx.textAlign = "left";
+    ctx.fillText(titleText, bx + 20, by + 18.5);
+
+    // Exact lap/section time
+    ctx.fillStyle = theme.text;
+    ctx.font = font(700, 12.5, true);
+    ctx.fillText(timeText, bx + 10, by + 35.5);
+    ctx.restore();
   }
 }

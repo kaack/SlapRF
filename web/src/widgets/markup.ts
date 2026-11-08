@@ -51,24 +51,43 @@ export function renderEmpty(title: string, body: string): string {
     </div>`;
 }
 
-/** Tiny inline lap-time sparkline. Faster laps sit higher, so a rising line means improving. */
+/** Tiny inline lap-time sparkline using a smooth cubic spline. Faster laps sit higher, so a rising line means improving. */
 export function renderSparkline(values: number[], width = 120, height = 32): string {
   if (values.length < 2) return `<svg class="spark" width="${width}" height="${height}"></svg>`;
   const lo = Math.min(...values);
   const hi = Math.max(...values);
   const span = Math.max(0.001, hi - lo);
-  const pts = values
-    .map((v, i) => {
-      const x = (i / (values.length - 1)) * (width - 4) + 2;
-      const y = height - 3 - ((hi - v) / span) * (height - 6);
-      return `${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
-  const last = pts.split(" ").pop()!.split(",");
+  const pts = values.map((v, i) => ({
+    x: (i / (values.length - 1)) * (width - 4) + 2,
+    y: height - 3 - ((hi - v) / span) * (height - 6),
+  }));
+  const n = pts.length;
+  let d = `M ${pts[0].x.toFixed(1)},${pts[0].y.toFixed(1)}`;
+  if (n === 2) {
+    d += ` L ${pts[1].x.toFixed(1)},${pts[1].y.toFixed(1)}`;
+  } else {
+    const dx = pts.slice(0, -1).map((p, i) => pts[i + 1].x - p.x);
+    const m = dx.map((w, i) => (w !== 0 ? (pts[i + 1].y - pts[i].y) / w : 0));
+    const t: number[] = new Array(n);
+    t[0] = m[0];
+    t[n - 1] = m[n - 2];
+    for (let i = 1; i < n - 1; i++) {
+      t[i] = m[i - 1] * m[i] <= 0 ? 0 : (m[i - 1] + m[i]) / 2;
+    }
+    for (let i = 0; i < n - 1; i++) {
+      const seg = dx[i] / 3;
+      const c1x = pts[i].x + seg;
+      const c1y = pts[i].y + t[i] * seg;
+      const c2x = pts[i + 1].x - seg;
+      const c2y = pts[i + 1].y - t[i + 1] * seg;
+      d += ` C ${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${pts[i + 1].x.toFixed(1)},${pts[i + 1].y.toFixed(1)}`;
+    }
+  }
+  const last = pts[n - 1];
   return `
     <svg class="spark" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}" aria-hidden="true">
-      <polyline points="${pts}" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round"/>
-      <circle cx="${last[0]}" cy="${last[1]}" r="2.5" fill="currentColor"/>
+      <path d="${d}" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round" stroke-linecap="round"/>
+      <circle cx="${last.x.toFixed(1)}" cy="${last.y.toFixed(1)}" r="2.5" fill="currentColor"/>
     </svg>`;
 }
 
