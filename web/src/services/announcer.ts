@@ -130,8 +130,7 @@ export class Announcer {
       this.say("Announcer on");
     }
     if (wasEnabled && !this.prefs.enabled) {
-      this.clear();
-      this.sleepAudio();
+      this.say("Announcer off", true, true);
     }
     this.notify();
   }
@@ -154,8 +153,8 @@ export class Announcer {
 
   // ---- speech queue --------------------------------------------------------
 
-  private say(text: string, interrupt = false): void {
-    if (!this.prefs.enabled || !this.supported) return;
+  private say(text: string, interrupt = false, force = false): void {
+    if ((!this.prefs.enabled && !force) || !this.supported) return;
     if (interrupt) this.clear();
     this.queue.push({ text, queuedAt: Date.now() });
     this.pump();
@@ -195,6 +194,10 @@ export class Announcer {
     const done = () => {
       if (this.current !== utterance) return; // superseded by clear()
       this.current = null;
+      if (!this.prefs.enabled && this.queue.length === 0) {
+        this.sleepAudio();
+        return;
+      }
       // Back-to-back callouts (a pack crossing together) also clip on some Windows voices
       // when started the instant the previous one ends; a short breath avoids it.
       this.holdUntil = Date.now() + BETWEEN_CALLOUTS_MS;
