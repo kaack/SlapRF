@@ -3,6 +3,7 @@
 *.out
 *.test
 /fpvtimer
+/slaprf
 /slaprf-*
 
 # OS / Editor artifacts
