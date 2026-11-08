@@ -30,15 +30,15 @@ Each gate timer uses four off-the-shelf parts. One XIAO ESP32-C5 draws less than
 
 | Part | Purpose | Product Links | Est. Cost (USD) |
 | :--- | :--- | :--- | :--- |
-| **Seeed Studio XIAO ESP32-C5** (includes external 2.4 / 5 GHz U.FL antenna) | Measures 5.8 GHz VTX signal strength and sends data over ESP-NOW and Wi-Fi. | <ul><li>[Seeed Studio XIAO ESP32-C5](https://www.seeedstudio.com/Seeed-Studio-XIAO-ESP32C5-p-6609.html)</li></ul> | $5.90 |
-| **LIPO to USB-C Adapter** | Converts 3S to 6S LiPo battery power to `5 V` USB-C output. | <ul><li>[SpeedyBee Goggles BEC](https://www.google.com/search?tbm=shop&q=SpeedyBee+Goggles+BEC)</li><li>[AOKoda XT60 to USB Converter](https://www.google.com/search?tbm=shop&q=AOKoda+XT60+to+USB+Converter)</li></ul> | $4.00 – $17.00 |
-| **Short USB-C to USB-C cable (straight plugs)** | Connects the LIPO to USB-C Adapter to the XIAO ESP32-C5. Also used to flash firmware from a laptop. | <ul><li>[Adafruit 6" USB-C to USB-C Cable](https://www.adafruit.com/product/4198)</li></ul> | $4.95 |
-| **Small 3S or 4S LiPo battery (XT60)** | Powers the timer in the field (any `450 mAh`–`850 mAh` 3S/4S pack or retired flight pack). | <ul><li>[3S 450mAh–850mAh XT60 LiPo](https://www.google.com/search?tbm=shop&q=3S+450mAh+850mAh+LiPo+XT60)</li><li>[4S 650mAh–850mAh XT60 LiPo](https://www.google.com/search?tbm=shop&q=4S+650mAh+850mAh+LiPo+XT60)</li></ul> | $0 (spare pack) or $10.00 – $15.00 |
+| **Seeed Studio XIAO ESP32-C5** (includes external 2.4 / 5 GHz U.FL antenna) | Measures 5.8 GHz VTX signal strength and sends data over ESP-NOW and Wi-Fi. | <ul><li>[Seeed Studio XIAO ESP32-C5](https://www.seeedstudio.com/Seeed-Studio-XIAO-ESP32C5-p-6609.html)</li></ul> | $6.90 |
+| **LIPO to USB-C Adapter** | Converts 3S to 6S LiPo battery power to `5 V` USB-C output. | <ul><li>[SpeedyBee Goggles BEC](https://www.google.com/search?tbm=shop&q=SpeedyBee+Goggles+BEC)</li><li>[AOKoda XT60 to USB Converter](https://www.google.com/search?tbm=shop&q=AOKoda+XT60+to+USB+Converter)</li></ul> | $8.00 – $20.00 |
+| **Short USB-C to USB-C cable (straight plugs)** | Connects the LIPO to USB-C Adapter to the XIAO ESP32-C5. Also used to flash firmware from a laptop. | <ul><li>[Adafruit 6" USB-C to USB-C Cable](https://www.adafruit.com/product/4198)</li></ul> | $8.50 |
+| **Small 3S LiPo battery (XT60)** | Powers the timer in the field (or use any retired 3S–6S flight pack). | <ul><li>[Tattu 850mAh 3S 75C XT60 LiPo](https://www.google.com/search?tbm=shop&q=Tattu+850mAh+3S+75C+XT60+LiPo)</li></ul> | $15.00 (or $0 with a spare pack) |
 
 ### Estimated Total Cost
 
-- **1 timer**: $12 to $16 (using an existing LiPo battery)
-- **4-gate track (`1 Hub + 3 Spokes`)**: $48 to $64 total
+- **1 timer**: $23 to $35 (using an existing LiPo battery) or $38 to $50 (with a new 3S LiPo)
+- **4-gate track (`1 Hub + 3 Spokes`)**: $92 to $140 total (using existing LiPo batteries)
 
 ## Hardware Assembly
 
