@@ -773,7 +773,20 @@ select.input.is-custom-select-open {
   width: 100%;
   overflow-x: auto;
   -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+.table-scroll-viewport::-webkit-scrollbar {
+  display: none;
+}
+@media (max-width: 900px) {
+  .table-scroll {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .table-scroll::-webkit-scrollbar {
+    display: none;
+  }
 }
 .table-edge-nav {
   position: absolute;
