@@ -41,27 +41,29 @@ export class LapComparison extends Component {
         </div>
       </header>
       ${this.renderSummary(cmp)}
-      <table class="table cmp-table">
-        <thead>
-          <tr>
-            <th>Section</th>
-            <th class="num">Lap ${cmp.lap.lapNumber}</th>
-            <th class="num">Lap ${cmp.ref.lapNumber}</th>
-            <th class="col-delta">Gained / lost</th>
-            <th class="num">Exit speed</th>
-          </tr>
-        </thead>
-        <tbody>${cmp.sections.map((s) => this.renderRow(s, maxAbs)).join("")}</tbody>
-        <tfoot>
-          <tr>
-            <td>Full lap</td>
-            <td class="num mono strong">${fmtTime(cmp.lap.lapTimeSec)}</td>
-            <td class="num mono muted">${fmtTime(cmp.ref.lapTimeSec)}</td>
-            <td class="col-delta"><span class="mono strong ${toneOf(cmp.totalDelta)}">${fmtDelta(cmp.totalDelta)}</span></td>
-            <td></td>
-          </tr>
-        </tfoot>
-      </table>`;
+      <div class="table-scroll">
+        <table class="table cmp-table">
+          <thead>
+            <tr>
+              <th>Section</th>
+              <th class="num">Lap ${cmp.lap.lapNumber}</th>
+              <th class="num">Lap ${cmp.ref.lapNumber}</th>
+              <th class="col-delta">Gained / lost</th>
+              <th class="num">Exit speed</th>
+            </tr>
+          </thead>
+          <tbody>${cmp.sections.map((s) => this.renderRow(s, maxAbs)).join("")}</tbody>
+          <tfoot>
+            <tr>
+              <td>Full lap</td>
+              <td class="num mono strong">${fmtTime(cmp.lap.lapTimeSec)}</td>
+              <td class="num mono muted">${fmtTime(cmp.ref.lapTimeSec)}</td>
+              <td class="col-delta"><span class="mono strong ${toneOf(cmp.totalDelta)}">${fmtDelta(cmp.totalDelta)}</span></td>
+              <td></td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>`;
   }
 
   private renderSummary(cmp: Comparison): string {

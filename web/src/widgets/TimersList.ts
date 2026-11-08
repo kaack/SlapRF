@@ -102,16 +102,18 @@ export class TimersList extends Component {
     }
 
     this.el.innerHTML = `
-      <div class="slot-table puck-table">
-        <div class="puck-table-row puck-table-head">
-          <span>Timer</span>
-          <span>Status</span>
-          <span>Role</span>
-          <span>Firmware</span>
-          <span>Noise floor</span>
-          <span>Battery</span>
+      <div class="table-scroll">
+        <div class="slot-table puck-table">
+          <div class="puck-table-row puck-table-head">
+            <span>Timer</span>
+            <span>Status</span>
+            <span>Role</span>
+            <span>Firmware</span>
+            <span>Noise floor</span>
+            <span>Battery</span>
+          </div>
+          ${timers.map((d) => this.renderRow(d)).join("")}
         </div>
-        ${timers.map((d) => this.renderRow(d)).join("")}
       </div>`;
   }
 

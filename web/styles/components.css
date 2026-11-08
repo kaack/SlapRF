@@ -317,7 +317,9 @@
 }
 .table-scroll {
   max-height: 420px;
+  overflow-x: auto;
   overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
 }
 .table-scroll thead th {
   position: sticky;
@@ -633,6 +635,55 @@ input[type="range"] {
 }
 
 /* Custom themed dropdown popover (replaces native OS/Android <select> menu) - */
+.custom-select-wrap {
+  position: relative;
+  width: 100%;
+  min-width: 0;
+}
+select.input.is-custom-upgraded {
+  position: absolute !important;
+  inset: 0 !important;
+  width: 1px !important;
+  height: 1px !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+}
+.custom-select-trigger {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  padding-right: 10px;
+}
+.custom-select-trigger:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.custom-select-trigger.is-custom-select-open {
+  border-color: var(--accent-line);
+}
+.custom-select-trigger-label {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.custom-select-trigger-caret {
+  width: 8px;
+  height: 8px;
+  flex-shrink: 0;
+  background-image: linear-gradient(45deg, transparent 50%, var(--text-3) 50%),
+    linear-gradient(135deg, var(--text-3) 50%, transparent 50%);
+  background-position: 0 2px, 4px 2px;
+  background-size: 4px 4px;
+  background-repeat: no-repeat;
+}
 .custom-select-popover {
   position: fixed;
   z-index: 9999;

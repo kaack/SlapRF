@@ -1024,16 +1024,18 @@ export class SimView extends Component {
 
     this.slot("timers-table").innerHTML = `
       ${this.errorMsg ? `<div class="sim-error-note">${esc(this.errorMsg)}</div>` : ""}
-      <div class="slot-table puck-table">
-        <div class="puck-table-row sim-puck-table-row puck-table-head">
-          <span>Timer</span>
-          <span>Power</span>
-          <span>Role</span>
-          <span>Firmware</span>
-          <span>Assigned gate</span>
-          <span class="num">Actions</span>
+      <div class="table-scroll">
+        <div class="slot-table puck-table">
+          <div class="puck-table-row sim-puck-table-row puck-table-head">
+            <span>Timer</span>
+            <span>Power</span>
+            <span>Role</span>
+            <span>Firmware</span>
+            <span>Assigned gate</span>
+            <span class="num">Actions</span>
+          </div>
+          ${rows}
         </div>
-        ${rows}
       </div>`;
   }
 }

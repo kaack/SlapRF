@@ -48,22 +48,24 @@ export class LiveStandings extends Component {
     const sessionBest = rows[0].bestLap;
 
     this.el.innerHTML = `
-      <table class="table table-standings">
-        <thead>
-          <tr>
-            <th class="col-pos">#</th>
-            <th>Pilot</th>
-            <th class="num">Laps</th>
-            <th class="num">Last</th>
-            <th class="num">Best</th>
-            <th class="num col-avg">Avg 5</th>
-            <th class="num col-gap">Gap</th>
-            <th class="col-spark">Recent laps</th>
-            <th class="col-progress">On track</th>
-          </tr>
-        </thead>
-        <tbody>${rows.map((r, i) => this.renderRow(r, i + 1, sessionBest)).join("")}</tbody>
-      </table>`;
+      <div class="table-scroll">
+        <table class="table table-standings">
+          <thead>
+            <tr>
+              <th class="col-pos">#</th>
+              <th>Pilot</th>
+              <th class="num">Laps</th>
+              <th class="num">Last</th>
+              <th class="num">Best</th>
+              <th class="num col-avg">Avg 5</th>
+              <th class="num col-gap">Gap</th>
+              <th class="col-spark">Recent laps</th>
+              <th class="col-progress">On track</th>
+            </tr>
+          </thead>
+          <tbody>${rows.map((r, i) => this.renderRow(r, i + 1, sessionBest)).join("")}</tbody>
+        </table>
+      </div>`;
   }
 
   private renderRow(s: PracticeStats, rank: number, sessionBest: number): string {

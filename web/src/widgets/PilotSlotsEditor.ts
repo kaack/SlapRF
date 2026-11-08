@@ -45,11 +45,13 @@ export class PilotSlotsEditor extends Component {
       }
     }
     this.el.innerHTML = `
-      <div class="slot-table">
-        <div class="slot-row slot-head">
-          <span>On (${enabledCount}/8)</span><span>Pilot</span><span>Channel</span><span>Enter threshold</span>
+      <div class="table-scroll">
+        <div class="slot-table">
+          <div class="slot-row slot-head">
+            <span>On (${enabledCount}/8)</span><span>Pilot</span><span>Channel</span><span>Enter threshold</span>
+          </div>
+          ${this.store.pilots.map((p) => this.renderRow(p, enabledCount, usedChannels)).join("")}
         </div>
-        ${this.store.pilots.map((p) => this.renderRow(p, enabledCount, usedChannels)).join("")}
       </div>`;
   }
 

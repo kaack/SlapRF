@@ -4,6 +4,16 @@ let activePopover: HTMLElement | null = null;
 let activeSelect: HTMLSelectElement | null = null;
 let cleanupListeners: (() => void) | null = null;
 
+const upgradedSelects = new WeakMap<
+  HTMLSelectElement,
+  {
+    wrapper: HTMLElement;
+    trigger: HTMLButtonElement;
+    labelSpan: HTMLElement;
+    sync: () => void;
+  }
+>();
+
 function closeCustomSelect(): void {
   if (cleanupListeners) {
     cleanupListeners();
@@ -15,12 +25,17 @@ function closeCustomSelect(): void {
   }
   if (activeSelect) {
     activeSelect.classList.remove("is-custom-open");
+    const state = upgradedSelects.get(activeSelect);
+    if (state) {
+      state.trigger.classList.remove("is-custom-select-open");
+      state.trigger.setAttribute("aria-expanded", "false");
+    }
     activeSelect = null;
   }
 }
 
-function positionPopover(selectEl: HTMLSelectElement, popover: HTMLElement): void {
-  const rect = selectEl.getBoundingClientRect();
+function positionPopover(anchorEl: HTMLElement, popover: HTMLElement): void {
+  const rect = anchorEl.getBoundingClientRect();
   const vw = window.innerWidth;
   const vh = window.innerHeight;
   const margin = 10;
@@ -63,8 +78,15 @@ function openCustomSelect(selectEl: HTMLSelectElement): void {
   }
   closeCustomSelect();
 
+  const state = upgradedSelects.get(selectEl);
+  const anchorEl = state ? state.trigger : selectEl;
+
   activeSelect = selectEl;
   selectEl.classList.add("is-custom-open");
+  if (state) {
+    state.trigger.classList.add("is-custom-select-open");
+    state.trigger.setAttribute("aria-expanded", "true");
+  }
 
   const popover = document.createElement("div");
   popover.className = "custom-select-popover";
@@ -82,7 +104,7 @@ function openCustomSelect(selectEl: HTMLSelectElement): void {
         aria-selected="${isSelected}"
         ${isDisabled ? "disabled" : ""}
       >
-        <span class="custom-select-opt-label">${esc(opt.textContent ?? opt.label)}</span>
+        <span class="custom-select-opt-text">${esc(opt.textContent ?? opt.label)}</span>
         <span class="custom-select-opt-check" aria-hidden="true">${isSelected ? "✓" : ""}</span>
       </button>`;
   };
@@ -108,7 +130,7 @@ function openCustomSelect(selectEl: HTMLSelectElement): void {
   popover.innerHTML = html;
   document.body.appendChild(popover);
   activePopover = popover;
-  positionPopover(selectEl, popover);
+  positionPopover(anchorEl, popover);
 
   const selectedEl = popover.querySelector<HTMLElement>(".custom-select-option.is-selected");
   if (selectedEl) {
@@ -124,6 +146,7 @@ function openCustomSelect(selectEl: HTMLSelectElement): void {
     const changed = selectEl.selectedIndex !== idx || selectEl.value !== opt.value;
     selectEl.selectedIndex = idx;
     selectEl.value = opt.value;
+    state?.sync();
     closeCustomSelect();
     if (changed) {
       selectEl.dispatchEvent(new Event("input", { bubbles: true }));
@@ -134,7 +157,7 @@ function openCustomSelect(selectEl: HTMLSelectElement): void {
   const onDocPointerDown = (e: PointerEvent) => {
     const t = e.target as Node | null;
     if (!t) return;
-    if (popover.contains(t) || selectEl.contains(t)) return;
+    if (popover.contains(t) || anchorEl.contains(t) || selectEl.contains(t)) return;
     closeCustomSelect();
   };
 
@@ -153,7 +176,7 @@ function openCustomSelect(selectEl: HTMLSelectElement): void {
       closeCustomSelect();
       return;
     }
-    positionPopover(selectEl, popover);
+    positionPopover(anchorEl, popover);
   };
 
   window.addEventListener("pointerdown", onDocPointerDown, true);
@@ -169,57 +192,105 @@ function openCustomSelect(selectEl: HTMLSelectElement): void {
   };
 }
 
-/**
- * Installs a global custom dropdown handler for all `select.input` elements so mobile
- * browsers (Android / iOS) and desktop browsers render a sleek theme-matched dropdown
- * popover instead of the oversized OS-native modal picker.
- */
-export function installCustomSelects(): void {
-  const findSelect = (e: Event): HTMLSelectElement | null => {
-    const t = e.target;
-    if (!(t instanceof Element)) return null;
-    return t.closest<HTMLSelectElement>("select.input");
+function upgradeSelectElement(selectEl: HTMLSelectElement): void {
+  const existing = upgradedSelects.get(selectEl);
+  if (existing) {
+    existing.sync();
+    return;
+  }
+  const parent = selectEl.parentElement;
+  if (!parent) return;
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "custom-select-wrap";
+  if (selectEl.classList.contains("flasher-ssid-select")) {
+    wrapper.classList.add("flasher-ssid-select");
+  }
+  if (selectEl.classList.contains("gate-puck-select")) {
+    wrapper.classList.add("gate-puck-select");
+  }
+
+  const trigger = document.createElement("button");
+  trigger.type = "button";
+  trigger.className = "input custom-select-trigger";
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
+
+  const labelSpan = document.createElement("span");
+  labelSpan.className = "custom-select-trigger-label";
+
+  const caretSpan = document.createElement("span");
+  caretSpan.className = "custom-select-trigger-caret";
+  caretSpan.setAttribute("aria-hidden", "true");
+
+  trigger.appendChild(labelSpan);
+  trigger.appendChild(caretSpan);
+
+  parent.insertBefore(wrapper, selectEl);
+  wrapper.appendChild(selectEl);
+  wrapper.appendChild(trigger);
+
+  selectEl.classList.add("is-custom-upgraded");
+  selectEl.tabIndex = -1;
+
+  const sync = () => {
+    const selectedOpt = selectEl.selectedOptions[0] ?? selectEl.options[selectEl.selectedIndex];
+    labelSpan.textContent = selectedOpt ? (selectedOpt.textContent ?? selectedOpt.label) : "";
+    trigger.disabled = selectEl.disabled;
+    trigger.title = selectEl.title || "";
+    trigger.classList.toggle("mono", selectEl.classList.contains("mono"));
+    trigger.classList.toggle("input-warn", selectEl.classList.contains("input-warn"));
+    if (selectEl.getAttribute("aria-label")) {
+      trigger.setAttribute("aria-label", selectEl.getAttribute("aria-label")!);
+    }
   };
 
-  window.addEventListener(
-    "mousedown",
-    (e) => {
-      const sel = findSelect(e);
-      if (!sel) return;
-      e.preventDefault();
-      openCustomSelect(sel);
-    },
-    { passive: false }
-  );
+  trigger.addEventListener("click", (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    openCustomSelect(selectEl);
+  });
 
-  window.addEventListener(
-    "touchstart",
-    (e) => {
-      const sel = findSelect(e);
-      if (!sel) return;
-      // Prevent Android/iOS from opening the native system modal select
-      e.preventDefault();
-      openCustomSelect(sel);
-    },
-    { passive: false }
-  );
+  selectEl.addEventListener("change", sync);
+  const mo = new MutationObserver(sync);
+  mo.observe(selectEl, {
+    childList: true,
+    subtree: true,
+    attributes: true,
+    attributeFilter: ["disabled", "class", "title", "value"],
+  });
 
-  window.addEventListener(
-    "click",
-    (e) => {
-      const sel = findSelect(e);
-      if (!sel) return;
-      e.preventDefault();
-    },
-    { passive: false }
-  );
+  const state = { wrapper, trigger, labelSpan, sync };
+  upgradedSelects.set(selectEl, state);
+  sync();
+}
 
-  window.addEventListener("keydown", (e) => {
-    const sel = findSelect(e);
-    if (!sel) return;
-    if (e.key === " " || e.key === "Enter" || e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      openCustomSelect(sel);
+/**
+ * Replaces every `select.input` with a real `<button class="input custom-select-trigger">`
+ * while keeping the hidden `<select>` in the DOM for `FormData` and `change` events.
+ * Because the user taps a `<button>`, Android and iOS NEVER open their native system `<select>` modal.
+ */
+export function installCustomSelects(): void {
+  const scan = (root: ParentNode = document) => {
+    root.querySelectorAll<HTMLSelectElement>("select.input").forEach((sel) => {
+      upgradeSelectElement(sel);
+    });
+  };
+
+  scan(document);
+
+  const mo = new MutationObserver((mutations) => {
+    let shouldScan = false;
+    for (const m of mutations) {
+      if (m.addedNodes.length > 0) {
+        shouldScan = true;
+        break;
+      }
+    }
+    if (shouldScan) {
+      scan(document);
     }
   });
+
+  mo.observe(document.body, { childList: true, subtree: true });
 }
