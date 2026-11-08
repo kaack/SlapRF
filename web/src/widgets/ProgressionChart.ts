@@ -38,6 +38,7 @@ export class ProgressionChart extends Component {
   /** Rightmost visible lap number; null follows the most recent lap automatically. */
   private endLap: number | null = null;
   private drag: { startX: number; startEndLap: number; mode: "pan" | "thumb" } | null = null;
+  private thumbHovered = false;
   private plotGeom = { padL: 52, plotW: 1, h: 1 };
 
   constructor(el: HTMLElement, store: AppStore, opts: { slotIndex?: () => number } = {}) {
@@ -50,10 +51,26 @@ export class ProgressionChart extends Component {
     this.listen(el, "pointerdown", (e) => {
       if (e.button !== 0 || this.maxLap <= WINDOW_LAPS) return;
       const rect = el.getBoundingClientRect();
+      const x = e.clientX - rect.left;
       const y = e.clientY - rect.top;
       const effectiveEnd = this.effectiveEndLap();
-      const mode = y >= this.plotGeom.h - 18 ? "thumb" : "pan";
-      this.drag = { startX: e.clientX, startEndLap: effectiveEnd, mode };
+      const onScrollbar = y >= this.plotGeom.h - 18 && x >= this.plotGeom.padL && x <= this.plotGeom.padL + this.plotGeom.plotW;
+      if (onScrollbar) {
+        const plotW = Math.max(1, this.plotGeom.plotW);
+        const thumbW = Math.max(24, (WINDOW_LAPS / this.maxLap) * plotW);
+        const maxStart = Math.max(1, this.maxLap - WINDOW_LAPS);
+        const startLap = Math.max(1, effectiveEnd - WINDOW_LAPS + 1);
+        const thumbX = this.plotGeom.padL + ((startLap - 1) / maxStart) * (plotW - thumbW);
+        // Clicking the track outside the thumb jumps the thumb to that position first.
+        if (x < thumbX || x > thumbX + thumbW) {
+          const ratio = Math.max(0, Math.min(1, (x - this.plotGeom.padL - thumbW / 2) / Math.max(1, plotW - thumbW)));
+          const jumpedEnd = WINDOW_LAPS + ratio * (this.maxLap - WINDOW_LAPS);
+          this.setEndLap(jumpedEnd);
+        }
+        this.drag = { startX: e.clientX, startEndLap: this.effectiveEndLap(), mode: "thumb" };
+      } else {
+        this.drag = { startX: e.clientX, startEndLap: effectiveEnd, mode: "pan" };
+      }
       el.setPointerCapture(e.pointerId);
       el.style.cursor = "grabbing";
     });
@@ -61,8 +78,26 @@ export class ProgressionChart extends Component {
     this.listen(el, "pointermove", (e) => {
       if (!this.drag) {
         if (this.maxLap > WINDOW_LAPS) {
-          el.style.cursor = "grab";
+          const rect = el.getBoundingClientRect();
+          const x = e.clientX - rect.left;
+          const y = e.clientY - rect.top;
+          const overTrack =
+            y >= this.plotGeom.h - 18 &&
+            x >= this.plotGeom.padL &&
+            x <= this.plotGeom.padL + this.plotGeom.plotW;
+          let overThumb = false;
+          if (overTrack) {
+            const plotW = Math.max(1, this.plotGeom.plotW);
+            const thumbW = Math.max(24, (WINDOW_LAPS / this.maxLap) * plotW);
+            const maxStart = Math.max(1, this.maxLap - WINDOW_LAPS);
+            const startLap = Math.max(1, this.effectiveEndLap() - WINDOW_LAPS + 1);
+            const thumbX = this.plotGeom.padL + ((startLap - 1) / maxStart) * (plotW - thumbW);
+            overThumb = x >= thumbX && x <= thumbX + thumbW;
+          }
+          this.thumbHovered = overTrack;
+          el.style.cursor = overThumb ? "grab" : overTrack ? "pointer" : "grab";
         } else {
+          this.thumbHovered = false;
           el.style.cursor = "";
         }
         return;
@@ -80,6 +115,13 @@ export class ProgressionChart extends Component {
         nextEnd = this.drag.startEndLap + deltaLaps;
       }
       this.setEndLap(nextEnd);
+    });
+
+    this.listen(el, "pointerleave", () => {
+      if (!this.drag) {
+        this.thumbHovered = false;
+        el.style.cursor = "";
+      }
     });
 
     const endDrag = (e: PointerEvent) => {
@@ -296,7 +338,7 @@ export class ProgressionChart extends Component {
     // Draw horizontal scrollbar when session exceeds 50 laps.
     if (scrollable) {
       const trackY = h - 10;
-      const trackH = 5;
+      const trackH = 6;
       ctx.fillStyle = "rgba(255, 255, 255, 0.08)";
       ctx.beginPath();
       ctx.roundRect(padL, trackY, plotW, trackH, 3);
@@ -305,7 +347,8 @@ export class ProgressionChart extends Component {
       const thumbW = Math.max(24, (WINDOW_LAPS / this.maxLap) * plotW);
       const maxStart = Math.max(1, this.maxLap - WINDOW_LAPS);
       const thumbX = padL + ((startLap - 1) / maxStart) * (plotW - thumbW);
-      ctx.fillStyle = this.drag ? theme.accent : "rgba(255, 255, 255, 0.32)";
+      ctx.fillStyle =
+        this.drag?.mode === "thumb" || this.thumbHovered ? theme.accent : "rgba(255, 255, 255, 0.32)";
       ctx.beginPath();
       ctx.roundRect(thumbX, trackY, thumbW, trackH, 3);
       ctx.fill();

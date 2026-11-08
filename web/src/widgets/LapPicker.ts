@@ -27,12 +27,19 @@ export class LapPicker extends Component {
   private followLatest = true;
   private savedScrollLeft = 0;
   private lastPilotSlot: number | null = null;
+  private sbDrag: { startX: number; startScrollLeft: number } | null = null;
+  private chartPan: { startX: number; startScrollLeft: number; moved: boolean } | null = null;
+  private suppressClick = false;
 
   constructor(el: HTMLElement, store: AppStore) {
     super(el);
     this.store = store;
 
     const handleAction = (e: Event) => {
+      if (this.suppressClick) {
+        this.suppressClick = false;
+        return;
+      }
       const target = e.target as Element;
       const latestBtn = target.closest<HTMLElement>("[data-scroll-latest]");
       if (latestBtn) {
@@ -60,20 +67,79 @@ export class LapPicker extends Component {
 
     this.listen(el, "pointerdown", (e) => {
       if (e.button !== 0) return;
+      const target = e.target as HTMLElement;
+      const sbTrack = target.closest<HTMLElement>("[data-sb-track]");
+      if (sbTrack) {
+        e.preventDefault();
+        const scroller = this.el.querySelector<HTMLElement>(".lap-picker-scroll");
+        if (!scroller) return;
+        const maxScroll = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+        if (maxScroll <= 0) return;
+        const rect = sbTrack.getBoundingClientRect();
+        const thumb = sbTrack.querySelector<HTMLElement>("[data-sb-thumb]");
+        const thumbW = thumb ? thumb.getBoundingClientRect().width : 32;
+        const travel = Math.max(1, rect.width - thumbW);
+        // If clicking on the track outside the thumb, jump the thumb there first.
+        if (!target.closest("[data-sb-thumb]")) {
+          const clickRatio = Math.max(0, Math.min(1, (e.clientX - rect.left - thumbW / 2) / travel));
+          scroller.scrollLeft = clickRatio * maxScroll;
+          this.onScroll(scroller);
+        }
+        this.sbDrag = { startX: e.clientX, startScrollLeft: scroller.scrollLeft };
+        sbTrack.classList.add("is-dragging");
+        try {
+          el.setPointerCapture(e.pointerId);
+        } catch {
+          // Ignore synthetic pointer capture errors
+        }
+        return;
+      }
+
+      const scrollArea = target.closest<HTMLElement>(".lap-picker-scroll.is-scrollable");
+      if (scrollArea && !target.closest("[data-set-ref]")) {
+        this.chartPan = { startX: e.clientX, startScrollLeft: scrollArea.scrollLeft, moved: false };
+        return;
+      }
+
       handleAction(e);
     });
     this.listen(el, "click", handleAction);
 
-    // Right-click on any bar is a direct shortcut for setting the baseline.
-    this.listen(el, "contextmenu", (e) => {
-      const bar = (e.target as Element).closest<SVGElement>("[data-lap]");
-      if (!bar) return;
-      e.preventDefault();
-      this.selectBaseline(Number(bar.dataset.lap));
-    });
-
-    // Track which bar column the pointer is over so dense sessions highlight the under-bar baseline icon.
     this.listen(el, "pointermove", (e) => {
+      if (this.sbDrag) {
+        const scroller = this.el.querySelector<HTMLElement>(".lap-picker-scroll");
+        const sbTrack = this.el.querySelector<HTMLElement>("[data-sb-track]");
+        const thumb = this.el.querySelector<HTMLElement>("[data-sb-thumb]");
+        if (scroller && sbTrack && thumb) {
+          const maxScroll = Math.max(1, scroller.scrollWidth - scroller.clientWidth);
+          const travel = Math.max(1, sbTrack.clientWidth - thumb.offsetWidth);
+          const dx = e.clientX - this.sbDrag.startX;
+          scroller.scrollLeft = Math.max(0, Math.min(maxScroll, this.sbDrag.startScrollLeft + (dx / travel) * maxScroll));
+          this.onScroll(scroller);
+        }
+        return;
+      }
+
+      if (this.chartPan) {
+        const dx = e.clientX - this.chartPan.startX;
+        if (!this.chartPan.moved && Math.abs(dx) > 5) {
+          this.chartPan.moved = true;
+          this.suppressClick = true;
+          try {
+            el.setPointerCapture(e.pointerId);
+          } catch {
+            // Ignore
+          }
+        }
+        if (this.chartPan.moved) {
+          const scroller = this.el.querySelector<HTMLElement>(".lap-picker-scroll");
+          if (scroller) {
+            scroller.scrollLeft = this.chartPan.startScrollLeft - dx;
+            this.onScroll(scroller);
+          }
+          return;
+        }
+      }
       const track = this.el.querySelector<HTMLElement>(".lap-picker-track");
       if (!track) return;
       const laps = lapsFor(this.store, this.store.selectedPilot);
@@ -89,11 +155,40 @@ export class LapPicker extends Component {
       }
     });
 
+    const endDrag = (e: PointerEvent) => {
+      if (this.sbDrag) {
+        this.sbDrag = null;
+        this.el.querySelector<HTMLElement>("[data-sb-track]")?.classList.remove("is-dragging");
+      }
+      if (this.chartPan) {
+        const wasClick = !this.chartPan.moved;
+        this.chartPan = null;
+        if (wasClick) {
+          handleAction(e);
+        }
+      }
+      if (el.hasPointerCapture(e.pointerId)) {
+        el.releasePointerCapture(e.pointerId);
+      }
+    };
+    this.listen(el, "pointerup", endDrag);
+    this.listen(el, "pointercancel", endDrag);
+
     this.listen(el, "pointerleave", () => {
       if (this.hoveredLapId !== null) {
         this.hoveredLapId = null;
         this.syncHoveredPin();
       }
+    });
+
+    this.listen(el, "dblclick", (e) => {
+      const scroller = this.el.querySelector<HTMLElement>(".lap-picker-scroll");
+      if (!scroller || scroller.scrollWidth <= scroller.clientWidth + 2) return;
+      if ((e.target as HTMLElement).closest("[data-set-ref], [data-ref]")) return;
+      this.followLatest = true;
+      this.scrollToLatest();
+      this.syncLatestButton();
+      this.syncScrollbar();
     });
 
     // Translate mouse wheel over the chart into horizontal scroll when there are more than 50 laps.
@@ -121,6 +216,7 @@ export class LapPicker extends Component {
     const maxScroll = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
     this.followLatest = scroller.scrollLeft >= maxScroll - 8;
     this.syncLatestButton();
+    this.syncScrollbar();
   }
 
   private scrollToLatest(): void {
@@ -128,6 +224,21 @@ export class LapPicker extends Component {
     if (!scroller) return;
     scroller.scrollLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
     this.savedScrollLeft = scroller.scrollLeft;
+    this.syncScrollbar();
+  }
+
+  private syncScrollbar(): void {
+    const scroller = this.el.querySelector<HTMLElement>(".lap-picker-scroll");
+    const thumb = this.el.querySelector<HTMLElement>("[data-sb-thumb]");
+    if (!scroller || !thumb) return;
+    const maxScroll = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+    if (maxScroll <= 0) return;
+    const ratio = scroller.clientWidth / scroller.scrollWidth;
+    const thumbPct = Math.max(6, Math.min(100, ratio * 100));
+    const scrollRatio = Math.max(0, Math.min(1, scroller.scrollLeft / maxScroll));
+    const leftPct = scrollRatio * (100 - thumbPct);
+    thumb.style.width = `${thumbPct.toFixed(2)}%`;
+    thumb.style.left = `${leftPct.toFixed(2)}%`;
   }
 
   private syncLatestButton(): void {
@@ -200,6 +311,7 @@ export class LapPicker extends Component {
         this.scrollToLatest();
       } else {
         nextScroller.scrollLeft = this.savedScrollLeft;
+        this.syncScrollbar();
       }
       this.syncLatestButton();
     }
@@ -325,6 +437,12 @@ export class LapPicker extends Component {
       .map((l, i) => (i % every === 0 || i === laps.length - 1 ? `<span style="left:${xPct(i).toFixed(2)}%">${l.lapNumber}</span>` : ""))
       .join("");
 
+    const scrollbar = scrollable
+      ? `<div class="lap-picker-sb-track" data-sb-track title="Drag or click to scroll through laps">
+           <div class="lap-picker-sb-thumb" data-sb-thumb></div>
+         </div>`
+      : "";
+
     return `
       <div class="lap-picker">
         <div class="lap-picker-scroll ${scrollable ? "is-scrollable" : ""}">
@@ -343,6 +461,7 @@ export class LapPicker extends Component {
             <div class="lap-picker-axis">${axis}</div>
           </div>
         </div>
+        ${scrollbar}
       </div>
       <div class="lap-chart-legend">
         <span><i class="lg-review"></i>Reviewing (click bar)</span>

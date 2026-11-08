@@ -1375,23 +1375,40 @@ body.is-gate-dragging * {
 }
 .lap-picker-scroll.is-scrollable {
   overflow-x: auto;
-  padding-bottom: 6px;
-  scrollbar-width: thin;
-  scrollbar-color: rgba(255, 255, 255, 0.28) rgba(255, 255, 255, 0.06);
+  scrollbar-width: none;
+  cursor: grab;
+}
+.lap-picker-scroll.is-scrollable:active {
+  cursor: grabbing;
 }
 .lap-picker-scroll.is-scrollable::-webkit-scrollbar {
+  display: none;
+}
+.lap-picker-sb-track {
+  position: relative;
   height: 6px;
-}
-.lap-picker-scroll.is-scrollable::-webkit-scrollbar-track {
-  background: rgba(255, 255, 255, 0.06);
+  margin-top: 6px;
   border-radius: 3px;
+  background: rgba(255, 255, 255, 0.08);
+  cursor: pointer;
 }
-.lap-picker-scroll.is-scrollable::-webkit-scrollbar-thumb {
-  background: rgba(255, 255, 255, 0.28);
+.lap-picker-sb-thumb {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  min-width: 24px;
   border-radius: 3px;
+  background: rgba(255, 255, 255, 0.32);
+  cursor: grab;
+  transition: background 0.12s;
 }
-.lap-picker-scroll.is-scrollable::-webkit-scrollbar-thumb:hover {
+.lap-picker-sb-track:hover .lap-picker-sb-thumb,
+.lap-picker-sb-track.is-dragging .lap-picker-sb-thumb {
   background: var(--accent);
+}
+.lap-picker-sb-track.is-dragging,
+.lap-picker-sb-track.is-dragging .lap-picker-sb-thumb {
+  cursor: grabbing;
 }
 .lap-picker-track {
   position: relative;
