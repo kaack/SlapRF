@@ -34,10 +34,12 @@ func main() {
 	// Bind the HTTP port first so double-clicking a second time just opens the browser tab.
 	httpLn, err := net.Listen("tcp", *httpAddr)
 	if err != nil {
-		log.Printf("SlapRF is already running on %s — opening %s in browser...", *httpAddr, uiURL)
+		log.Printf("Port %s is already in use (another SlapRF instance is running).", *httpAddr)
 		if *openBrowser {
+			log.Printf("Opening %s in browser...", uiURL)
 			launchBrowser(uiURL)
 		}
+		waitForEnterOnWindows()
 		return
 	}
 
@@ -108,4 +110,13 @@ func launchBrowser(url string) {
 		cmd = exec.Command("xdg-open", url)
 	}
 	_ = cmd.Start()
+}
+
+func waitForEnterOnWindows() {
+	if runtime.GOOS != "windows" {
+		return
+	}
+	log.Println("Press Enter to close this window...")
+	var b [1]byte
+	_, _ = os.Stdin.Read(b[:])
 }
