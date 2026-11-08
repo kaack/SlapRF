@@ -1,8 +1,6 @@
 import { Component } from "../core/component";
-import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ROUTES, RouteId, Router } from "../core/router";
-import { gateLabel } from "../state/selectors";
 import { AppStore } from "../state/store";
 
 export class Sidebar extends Component {
@@ -22,22 +20,16 @@ export class Sidebar extends Component {
       </div>
       <nav class="nav nav-flat">
         ${ROUTES.map((r) => `<a class="nav-item" href="#/${r.id}" data-route="${r.id}" ${r.simOnly ? 'data-sim-only="1"' : ""}>${r.icon()}<span>${r.label}</span></a>`).join("")}
-      </nav>
-      <div class="sidebar-foot">
-        <div class="nav-group">Gates</div>
-        <div data-slot="gates"></div>
-      </div>`;
+      </nav>`;
 
     this.highlight(router.route);
     this.onDispose(router.subscribe((route) => this.highlight(route)));
     this.onDispose(
-      store.subscribe(["status", "config"], () => {
+      store.subscribe(["status"], () => {
         this.syncSimNav();
-        this.renderGates();
       })
     );
     this.syncSimNav();
-    this.renderGates();
   }
 
   private syncSimNav(): void {
@@ -54,18 +46,5 @@ export class Sidebar extends Component {
       if (active) a.setAttribute("aria-current", "page");
       else a.removeAttribute("aria-current");
     });
-  }
-
-  private renderGates(): void {
-    this.slot("gates").innerHTML = this.store.pucks
-      .map(
-        (p) => `
-        <div class="mini-gate">
-          <span class="status-dot ${p.online ? "is-up" : ""}"></span>
-          <span>${esc(gateLabel(this.store, p.puckId))}</span>
-          <span class="mini-gate-batt mono ${p.batteryPct <= 20 ? "tone-bad" : ""}">${p.batteryPct}%</span>
-        </div>`
-      )
-      .join("");
   }
 }
