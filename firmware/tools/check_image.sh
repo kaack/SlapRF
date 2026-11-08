@@ -9,11 +9,12 @@
 set -euo pipefail
 
 elf=$(ls build/*.elf | head -1)
+syms=$(riscv32-esp-elf-nm "$elf") # read once: grep -q on a live pipe trips pipefail via SIGPIPE
 bank=$((0x40820000))
 fail=0
 
 for sym in _iram_end _data_end _bss_end; do
-  addr=$(riscv32-esp-elf-nm "$elf" | awk -v s="$sym" '$3 == s {print $1}' | head -1)
+  addr=$(awk -v s="$sym" '$3 == s {print $1; exit}' <<< "$syms")
   if [ -z "$addr" ]; then
     echo "::warning::$sym not found in $elf"
     continue
@@ -27,7 +28,7 @@ for sym in _iram_end _data_end _bss_end; do
 done
 
 for sym in adctrig force_rx_gain phy_set_chanfreq phy_set_rf_freq_offset phy_pbus_xpd_tx_off phy_pbus_xpd_tx_on; do
-  if ! riscv32-esp-elf-nm "$elf" | awk '{print $NF}' | grep -qx "$sym"; then
+  if ! awk -v s="$sym" '$NF == s {found = 1} END {exit !found}' <<< "$syms"; then
     echo "::error::$sym is not linked into $elf"
     fail=1
   fi

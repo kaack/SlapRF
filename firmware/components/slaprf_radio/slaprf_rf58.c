@@ -77,7 +77,7 @@ static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 // 0 Hz, and at 80 MS/s that phasor repeats every 8 samples, so every block shares these.
 static int32_t s_coef_re[BLOCK];
 static int32_t s_coef_im[BLOCK];
-static int64_t s_norm; // (sum of window)^2 in Q14^2
+static float s_scale; // 1 / ((window sum in Q14)^2 * blocks)
 
 static uint8_t xtal_sel(void) { return phy_param[PARAM_XTAL_SEL]; }
 
@@ -90,12 +90,13 @@ static int16_t freq_trim(void) {
 static void build_coefficients(void) {
     int64_t wsum = 0;
     for (int n = 0; n < BLOCK; n++) {
-        const double w = 0.5 - 0.5 * cos(2.0 * M_PI * n / BLOCK); // periodic Hann
+        // Hann offset by half a sample so no sample gets zero weight (window sum = BLOCK / 2).
+        const double w = 0.5 - 0.5 * cos(2.0 * M_PI * (n + 0.5) / BLOCK);
         s_coef_re[n] = (int32_t)lrint(w * cos(M_PI * n / 4.0) * 16384.0);
         s_coef_im[n] = (int32_t)lrint(w * sin(M_PI * n / 4.0) * 16384.0);
         wsum += (int64_t)lrint(w * 16384.0);
     }
-    s_norm = wsum * wsum;
+    s_scale = 1.0f / ((float)wsum * (float)wsum * (float)(CAPTURE_SAMPLES / BLOCK));
 }
 
 /** Force the receiver gain, rewriting only when the lock is off or on another index. */
@@ -188,9 +189,9 @@ static float band_power_db(void) {
             re += (int64_t)x_i * s_coef_re[n] - (int64_t)x_q * s_coef_im[n];
             im += (int64_t)x_i * s_coef_im[n] + (int64_t)x_q * s_coef_re[n];
         }
-        acc += (re * re + im * im) / s_norm; // |block|^2, normalised so a tone of amplitude A reads A^2
+        acc += re * re + im * im; // |block|^2 (fits: <= 32 * (1023 * 2^16)^2 * 2)
     }
-    const float power = (float)acc / (float)(CAPTURE_SAMPLES / BLOCK);
+    const float power = (float)acc * s_scale; // a tone of amplitude A reads A^2 (LSB^2)
     return 10.0f * log10f(power + 1e-3f);
 }
 
