@@ -29,8 +29,8 @@ export const ROUTES: RouteMeta[] = [
   },
   {
     id: "sim",
-    label: "Sim",
-    title: "Practice Simulator",
+    label: "Simulator",
+    title: "Simulator",
     subtitle: "Simulated pilots, 6S flight packs, crashes, track recovery walks, and XIAO gate timers",
     icon: () => icons.zap(20),
     simOnly: true,
