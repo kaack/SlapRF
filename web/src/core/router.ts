@@ -15,8 +15,8 @@ export interface RouteMeta {
 export const ROUTES: RouteMeta[] = [
   {
     id: "live",
-    label: "Live",
-    title: "Live",
+    label: "Practice",
+    title: "Practice",
     subtitle: "Who's flying and how times are trending — pick a pilot for their laps and signal",
     icon: () => icons.flag(20),
   },

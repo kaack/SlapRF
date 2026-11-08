@@ -29,7 +29,7 @@ export class SetupView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Timing rules</h2>
-            <p>Guardrails for real-world video-signal detection. Set them for all gates, then pick a gate to override any rule just there — where a timer sits on the track can call for different values. Rejected passes show on each pilot's signal chart in Live.</p>
+            <p>Guardrails for real-world video-signal detection. Set them for all gates, then pick a gate to override any rule just there — where a timer sits on the track can call for different values. Rejected passes show on each pilot's signal chart in Practice.</p>
           </div>
           <div class="card card-flush" data-slot="rules"></div>
         </section>

@@ -11,7 +11,7 @@ import { SectionConsistency } from "../widgets/SectionConsistency";
 
 /**
  * Pilot analysis, read top to bottom: session numbers → (1) pick a lap on the bar chart →
- * (2) where that lap gained or lost time against its reference → where to practise across
+ * (2) where that lap gained or lost time against its reference → where to practice across
  * the whole session. Laps are only ever chosen in step 1; everything below follows it.
  */
 export class PilotView extends Component {
@@ -32,7 +32,7 @@ export class PilotView extends Component {
       <section class="card card-flush">
         <header class="card-head">
           <div>
-            <h2>Where to practise</h2>
+            <h2>Where to practice</h2>
             <p>Across all laps this session, not just the one picked above: each section's typical time vs. this pilot's best there. The biggest gap is the easiest time to find.</p>
           </div>
         </header>
