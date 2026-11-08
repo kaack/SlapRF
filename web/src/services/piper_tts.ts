@@ -6,15 +6,15 @@ export interface PiperVoiceDescriptor {
   modelPath: string;
 }
 
-export const DEFAULT_PIPER_VOICE_URI = "piper:en_US-hfc_female-medium";
+export const DEFAULT_PIPER_VOICE_URI = "piper:en_US-lessac-medium";
 
 export const PIPER_VOICES: PiperVoiceDescriptor[] = [
   {
-    uri: "piper:en_US-hfc_female-medium",
-    voiceId: "en_US-hfc_female-medium",
+    uri: "piper:en_US-lessac-medium",
+    voiceId: "en_US-lessac-medium",
     name: "Piper Neural · US English Female (Offline)",
     lang: "en-US",
-    modelPath: "en/en_US/hfc_female/medium/en_US-hfc_female-medium.onnx",
+    modelPath: "en/en_US/lessac/medium/en_US-lessac-medium.onnx",
   },
   {
     uri: "piper:en_US-hfc_male-medium",
@@ -44,7 +44,26 @@ export function isPiperVoiceURI(uri: string): boolean {
 }
 
 export function getPiperVoice(uri: string): PiperVoiceDescriptor {
+  if (uri === "piper:en_US-hfc_female-medium") {
+    return PIPER_VOICES[0];
+  }
   return PIPER_VOICES.find((v) => v.uri === uri) ?? PIPER_VOICES[0];
+}
+
+/**
+ * Normalizes lap-time decimals and interjections before passing to espeak-ng so VITS
+ * gives full, unclipped vowel duration to "zero" / "oh" in fractional times like 19.02 or 14.08.
+ */
+export function prepareTextForPiper(raw: string): string {
+  return raw
+    .trim()
+    .replace(/\bo+h+\b/gi, "oh")
+    .replace(/\b(\d+)\.00\b/g, "$1 point zero, zero")
+    .replace(/\b(\d+)\.0([1-9])\b/g, "$1 point zero, $2")
+    .replace(
+      /\b(point\s+(?:zero|oh))\s+(one|two|three|four|five|six|seven|eight|nine|\d)\b/gi,
+      "$1, $2"
+    );
 }
 
 const HF_BASE = "https://huggingface.co/diffusionstudio/piper-voices/resolve/main";
@@ -226,7 +245,8 @@ export class PiperNeuralTts {
     const createPhonemize = this.createPiperPhonemize!;
     const ort = this.ort!;
 
-    const inputJson = JSON.stringify([{ text: text.trim() }]);
+    const normalizedText = prepareTextForPiper(text);
+    const inputJson = JSON.stringify([{ text: normalizedText }]);
     const phonemeIds: number[] = await new Promise((resolve, reject) => {
       createPhonemize({
         print: (out: string) => {
@@ -261,7 +281,9 @@ export class PiperNeuralTts {
     const noiseScale = loaded.config.inference.noise_scale;
     // Scale speaking speed directly inside VITS so pitch stays natural
     const lengthScale = loaded.config.inference.length_scale / rate;
-    const noiseW = loaded.config.inference.noise_w;
+    // Keep stochastic duration variance low (<= 0.35) so short diphthongs like "zero" / "oh"
+    // are never randomly compressed between adjacent digits.
+    const noiseW = Math.min(loaded.config.inference.noise_w, 0.35);
 
     const feeds: Record<string, unknown> = {
       input: new ort.Tensor("int64", phonemeIds, [1, phonemeIds.length]),

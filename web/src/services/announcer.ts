@@ -2,6 +2,7 @@ import { AppStore } from "../state/store";
 import { GateCrossingEvent, LapRecord } from "../types/models";
 import {
   DEFAULT_PIPER_VOICE_URI,
+  getPiperVoice,
   isPiperVoiceURI,
   PIPER_VOICES,
   PiperNeuralTts,
@@ -21,7 +22,7 @@ const PREFERRED_DEFAULT_VOICE = "Google US English";
 const DEFAULT_PREFS: AnnouncerPrefs = {
   enabled: false,
   voiceURI: PREFERRED_DEFAULT_VOICE,
-  rate: 1.1,
+  rate: 1.0,
   volume: 1,
   testPhrase: "",
 };
@@ -166,7 +167,7 @@ export class Announcer {
    */
   public activeVoiceURI(): string {
     if (isPiperVoiceURI(this.prefs.voiceURI)) {
-      return this.prefs.voiceURI;
+      return getPiperVoice(this.prefs.voiceURI).uri;
     }
     const list = this.voices();
     const targetURI = this.prefs.voiceURI || PREFERRED_DEFAULT_VOICE;
