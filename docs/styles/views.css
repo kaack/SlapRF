@@ -1619,38 +1619,18 @@ body.is-gate-dragging * {
   scrollbar-width: none;
   cursor: grab;
 }
-.lap-picker-scroll.is-scrollable:active {
-  cursor: grabbing;
+.lap-picker-scroll.is-scrollable:active,
+.lap-picker-scroll.is-scrollable.is-panning,
+.lap-picker-scroll.is-scrollable.is-panning .lap-picker-axis,
+.lap-picker-scroll.is-scrollable.is-panning .bar {
+  cursor: grabbing !important;
 }
 .lap-picker-scroll.is-scrollable::-webkit-scrollbar {
   display: none;
 }
-.lap-picker-sb-track {
-  position: relative;
-  height: 8px;
-  margin-top: 8px;
-  border-radius: 4px;
-  background: rgba(255, 255, 255, 0.08);
-  cursor: pointer;
-  touch-action: none;
-}
-.lap-picker-sb-thumb {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  min-width: 24px;
-  border-radius: 3px;
-  background: rgba(255, 255, 255, 0.32);
-  cursor: grab;
-  transition: background 0.12s;
-}
-.lap-picker-sb-track:hover .lap-picker-sb-thumb,
-.lap-picker-sb-track.is-dragging .lap-picker-sb-thumb {
-  background: var(--accent);
-}
-.lap-picker-sb-track.is-dragging,
-.lap-picker-sb-track.is-dragging .lap-picker-sb-thumb {
-  cursor: grabbing;
+.lap-picker-scroll.is-scrollable .lap-picker-axis {
+  cursor: ew-resize;
+  user-select: none;
 }
 .lap-picker-track {
   position: relative;
@@ -2136,6 +2116,10 @@ body.is-gate-dragging * {
 }
 .scope-canvas.is-over-tag {
   cursor: ns-resize;
+}
+.scope-canvas.is-over-axis,
+.scope-canvas.is-dragging.is-over-axis {
+  cursor: ew-resize;
 }
 @media (max-width: 820px) {
   .scope-hint {
