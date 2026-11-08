@@ -429,15 +429,15 @@
           style="left:${s.xPct}%;top:${s.yPct}%"
           data-pick-node="spoke-${s.slot}"
           ${this.busy?"disabled":""}
-          title="Click to configure & flash ${s.defaultName} (ESP-NOW Client \u2192 Hub)"
+          title="Click to configure & flash ${s.defaultName} (Spoke)"
         >
           <span class="flasher-net-node-code mono">${s.label}</span>
-          <span class="flasher-net-node-sub">${isDone?"\u2713 Flashed":"Client"}</span>
+          <span class="flasher-net-node-sub">${isDone?"\u2713 Flashed":"Spoke"}</span>
         </button>`}).join("");return`
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
           <h3>Select role to flash</h3>
-          <p>Click the central <strong>Hub</strong> (host receiver) or any of the <strong>6 Spokes</strong> (client gate timers that transmit to the Hub).</p>
+          <p>Click the central <strong>Hub</strong> or any of the <strong>6 Spokes</strong> to configure and flash.</p>
         </div>
 
         <div class="flasher-net-canvas" role="group" aria-label="Hub and 6 Spokes role selector">
@@ -462,19 +462,19 @@
             style="left:50%;top:50%"
             data-pick-node="hub"
             ${this.busy?"disabled":""}
-            title="Click to configure & flash Hub H1 (Host)"
+            title="Click to configure & flash H1 (Hub)"
           >
             <span class="flasher-net-hub-icon">${icons.slaprf(18)}</span>
             <span class="flasher-net-node-code mono">H1</span>
-            <span class="flasher-net-node-sub">${hubFlashed?"\u2713 Flashed":"Hub \xB7 Host"}</span>
+            <span class="flasher-net-node-sub">${hubFlashed?"\u2713 Flashed":"Hub"}</span>
           </button>
 
           ${spokesHtml}
         </div>
 
         <div class="flasher-net-legend">
-          <span><i class="dot-hub"></i><strong>Hub H1 (Host)</strong> \xB7 Receives all spokes &amp; bridges over Wi-Fi</span>
-          <span><i class="dot-spoke"></i><strong>Spokes S1\u2013S6 (Clients)</strong> \xB7 Connect to Hub over ESP-NOW LR</span>
+          <span><i class="dot-hub"></i><strong>Hub (H1)</strong> \xB7 Receives all spokes &amp; bridges over Wi-Fi</span>
+          <span><i class="dot-spoke"></i><strong>Spokes (S1\u2013S6)</strong> \xB7 Transmit to Hub over ESP-NOW LR</span>
         </div>
 
         <div class="flasher-inspect-bar">
@@ -790,7 +790,7 @@
             ${icons.chevronRight(15)}
           </button>
         </div>
-      </div>`}renderStepFlash(webSerialOk){let isHub=this.role==="hub",cleanLabel=this.timerLabel.trim()||(isHub?"H1":`S${this.selectedSpokeSlot}`),wifiSummary=isHub?this.hubWifiMode==="host"?`Hub Hotspot "SlapRF" (${this.wifiPass?"WPA2":"Open AP"})`:`Join "${this.wifiSSID.trim()||"(unset)"}" (Station Mode)`:"2.4 GHz ESP-NOW LR (Client \u2192 Hub H1)",pct=this.progress?this.progress.percent:this.lastSuccessMsg?100:0,statusText=this.progress?this.progress.detail:this.lastSuccessMsg?`\u2713 ${this.lastSuccessMsg}`:`Ready to flash ${cleanLabel} (${this.firmwareVersion}) over USB-C`;return`
+      </div>`}renderStepFlash(webSerialOk){let isHub=this.role==="hub",cleanLabel=this.timerLabel.trim()||(isHub?"H1":`S${this.selectedSpokeSlot}`),wifiSummary=isHub?this.hubWifiMode==="host"?`Hub Hotspot "SlapRF" (${this.wifiPass?"WPA2":"Open AP"})`:`Join "${this.wifiSSID.trim()||"(unset)"}" (Station Mode)`:"2.4 GHz ESP-NOW LR \u2192 Hub H1",pct=this.progress?this.progress.percent:this.lastSuccessMsg?100:0,statusText=this.progress?this.progress.detail:this.lastSuccessMsg?`\u2713 ${this.lastSuccessMsg}`:`Ready to flash ${cleanLabel} (${this.firmwareVersion}) over USB-C`;return`
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
           <h3>Ready to flash ${esc(cleanLabel)}</h3>
@@ -802,7 +802,6 @@
             <span class="note">Role</span>
             <div class="flasher-receipt-val">
               <span class="badge ${isHub?"tone-good":""}">${isHub?"Hub":"Spoke"}</span>
-              <button type="button" class="flasher-receipt-edit" data-goto-step="network" ${this.busy?"disabled":""}>Change</button>
             </div>
           </div>
 
@@ -810,7 +809,6 @@
             <span class="note">Timer &amp; Firmware</span>
             <div class="flasher-receipt-val mono">
               <span>${esc(cleanLabel)} \xB7 ${esc(this.firmwareVersion)}</span>
-              <button type="button" class="flasher-receipt-edit" data-goto-step="identity" ${this.busy?"disabled":""}>Edit</button>
             </div>
           </div>
 
@@ -818,7 +816,6 @@
             <span class="note">${isHub?"Wi-Fi Connection":"Radio Link"}</span>
             <div class="flasher-receipt-val mono">
               <span>${esc(wifiSummary)}</span>
-              ${isHub?`<button type="button" class="flasher-receipt-edit" data-goto-step="wifi" ${this.busy?"disabled":""}>Edit</button>`:""}
             </div>
           </div>
         </div>
@@ -909,7 +906,7 @@
           </div>
           <div>
             <span class="note">2.4 GHz link</span>
-            <div class="mono">${this.readout.role==="hub"?esc(this.readout.wifiSSID?`Join "${this.readout.wifiSSID}" (2.4 GHz)`:'Host "SlapRF" 2.4 GHz AP (Ch 1)'):"2.4 GHz ESP-NOW LR (Client \u2192 Hub)"}</div>
+            <div class="mono">${this.readout.role==="hub"?esc(this.readout.wifiSSID?`Join "${this.readout.wifiSSID}" (2.4 GHz)`:'Host "SlapRF" 2.4 GHz AP (Ch 1)'):"2.4 GHz ESP-NOW LR \u2192 Hub"}</div>
           </div>
           <div>
             <span class="note">5.8 GHz channels</span>
