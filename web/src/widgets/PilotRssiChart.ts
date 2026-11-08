@@ -110,10 +110,10 @@ export class PilotRssiChart extends Component {
           ${WINDOWS_SEC.map((s) => `<button type="button" data-window="${s}">${s}s</button>`).join("")}
         </div>
       </div>
-      <div class="scope-calib" data-slot="calib"></div>
       <div class="canvas-host canvas-host-md scope-canvas" data-slot="chart" tabindex="0"
            aria-label="Signal chart. Space pauses, arrow keys jump between passes."></div>
-      <div class="channel-legend" data-slot="legend"></div>`;
+      <div class="channel-legend" data-slot="legend"></div>
+      <div class="scope-calib" data-slot="calib"></div>`;
 
     const host = this.slot("chart");
     const surface = new CanvasSurface(host, (ctx, w, h) => this.draw(ctx, w, h));
@@ -749,25 +749,12 @@ export class PilotRssiChart extends Component {
     const pilot = this.store.pilot(this.store.selectedPilot);
     if (!pilot) return;
     const minutes = Math.round(HISTORY_SECONDS / 60);
-    const picker = `
-      <div class="segmented scope-gates" role="tablist" aria-label="Show">
-        <button type="button" data-focus="all" class="${this.focus === null ? "is-active" : ""}">All gates</button>
-        ${this.store.pucks
-          .map((p) => {
-            const on = this.focus === p.puckId;
-            const cal = enterThresholdAt(this.store, p.puckId, pilot.slotIndex).calibrated;
-            return `<button type="button" data-focus="${p.puckId}" class="${on ? "is-active" : ""}" title="${cal ? "Calibrated for this gate" : `Uses ${esc(pilot.callsign)}'s own threshold`}">
-                      <span class="dot" style="--c:${this.colorOf(p.puckId)}"></span>${esc(gateLabel(this.store, p.puckId))}
-                    </button>`;
-          })
-          .join("")}
-      </div>`;
 
     let text: string;
     let actions: string;
     if (this.focus === null) {
       const anyCalibrated = this.store.pucks.some((p) => enterThresholdAt(this.store, p.puckId, pilot.slotIndex).calibrated);
-      text = this.calibMessage || "Pick a gate to view or drag its threshold.";
+      text = this.calibMessage || "Select a gate above to view or drag its threshold, or auto-calibrate all gates.";
       actions = `
         <div class="scope-calib-actions">
           ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(15)}<span>Undo</span></button>` : ""}
@@ -788,20 +775,24 @@ export class PilotRssiChart extends Component {
         </div>`;
     }
     this.slot("calib").innerHTML = `
-      ${picker}
-      <div class="scope-calib-meta">
-        <span class="scope-calib-text">${esc(text)}</span>
-        ${actions}
-      </div>`;
+      <span class="scope-calib-text">${esc(text)}</span>
+      ${actions}`;
   }
 
-  /** Each gate's reading at the cursor (or at the right edge of the view). */
+  /** Each gate's reading at the cursor (or at the right edge of the view), plus the "All gates" option. */
   private renderLegend(): void {
     const pilot = this.store.pilot(this.store.selectedPilot);
     if (!pilot) return;
     const slot = this.store.pilots.indexOf(pilot);
     const at = this.hoverX !== null && this.hoverX >= this.plot.x && this.hoverX <= this.plot.x + this.plot.w ? this.timeAt(this.hoverX) : this.viewEnd();
-    this.slot("legend").innerHTML = this.store.pucks
+    const allChip = `
+      <button type="button" class="channel channel-all ${this.focus === null ? "is-focus" : "is-dim"}"
+              data-focus="all" title="Show all gates (${this.store.pucks.length})">
+        <span class="dot channel-all-dot"></span>
+        <span class="channel-name">All gates</span>
+        <span class="channel-dbm mono">${this.store.pucks.length} gates</span>
+      </button>`;
+    const gateChips = this.store.pucks
       .map((p) => {
         const dbm = this.rssiAt(p.puckId, slot, at) ?? DBM_MIN;
         const hot = dbm >= this.thresholdOf(p.puckId).dbm;
@@ -815,5 +806,6 @@ export class PilotRssiChart extends Component {
           </button>`;
       })
       .join("");
+    this.slot("legend").innerHTML = allChip + gateChips;
   }
 }
