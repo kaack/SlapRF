@@ -44,11 +44,19 @@ export class PilotLaps extends Component {
       .join("");
     const rows = [...laps].reverse().slice(0, VISIBLE_LAPS).map((lap) => this.renderLap(lap, cols)).join("");
 
+    const tableInnerHtml = `
+          <thead><tr><th>Lap</th>${head}<th class="num">Lap time</th><th class="num">vs best</th></tr></thead>
+          <tbody>${rows}</tbody>`;
+
+    const existingTable = this.el.querySelector<HTMLElement>("table.table-compact");
+    if (existingTable) {
+      existingTable.innerHTML = tableInnerHtml;
+      return;
+    }
+
     this.el.innerHTML = `
       <div class="table-scroll table-scroll-y">
-        <table class="table table-compact">
-          <thead><tr><th>Lap</th>${head}<th class="num">Lap time</th><th class="num">vs best</th></tr></thead>
-          <tbody>${rows}</tbody>
+        <table class="table table-compact">${tableInnerHtml}
         </table>
       </div>
       <div class="legend-row">

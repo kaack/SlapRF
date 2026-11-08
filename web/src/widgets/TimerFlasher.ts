@@ -282,7 +282,19 @@ export class TimerFlasher extends Component {
     });
 
     this.render();
-    void this.refreshWifiNetworks();
+    if (!this.isMobileClient()) {
+      void this.refreshWifiNetworks();
+    }
+  }
+
+  private isMobileClient(): boolean {
+    if (typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)) {
+      return true;
+    }
+    if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
+      return window.matchMedia("(max-width: 720px), (pointer: coarse)").matches;
+    }
+    return false;
   }
 
   private get orderedSteps(): Array<{ id: WizardStepId; title: string; short: string }> {
@@ -894,6 +906,7 @@ export class TimerFlasher extends Component {
 
   private renderStepWifi(): string {
     const isHostApMode = this.hubWifiMode === "host";
+    const isMobile = this.isMobileClient();
     const useCustom = this.customMode;
 
     return `
@@ -964,8 +977,20 @@ export class TimerFlasher extends Component {
                       disabled
                       aria-label="Broadcast hotspot network"
                     />`
-                  : useCustom
-                    ? `<div class="flasher-pass-wrap has-two-actions">
+                  : isMobile
+                    ? `<input
+                        class="input"
+                        type="text"
+                        placeholder="Type 2.4 GHz Wi-Fi / hotspot SSID"
+                        value="${esc(this.wifiSSID)}"
+                        data-wifi-ssid="1"
+                        maxlength="32"
+                        spellcheck="false"
+                        autocomplete="off"
+                        ${this.busy ? "disabled" : ""}
+                      />`
+                    : useCustom
+                      ? `<div class="flasher-pass-wrap has-two-actions">
                         <input
                           class="input flasher-pass-input"
                           type="text"

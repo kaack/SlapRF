@@ -213,9 +213,7 @@ export class TimersList extends Component {
       return;
     }
 
-    this.el.innerHTML = `
-      <div class="table-scroll">
-        <div class="slot-table puck-table">
+    const innerHtml = `
           <div class="puck-table-row puck-table-head">
             <span>Timer</span>
             <span>Status</span>
@@ -224,7 +222,17 @@ export class TimersList extends Component {
             <span>Noise floor</span>
             <span>Battery</span>
           </div>
-          ${timers.map((d) => this.renderRow(d)).join("")}
+          ${timers.map((d) => this.renderRow(d)).join("")}`;
+
+    const existingTable = this.el.querySelector<HTMLElement>(".slot-table.puck-table");
+    if (existingTable) {
+      existingTable.innerHTML = innerHtml;
+      return;
+    }
+
+    this.el.innerHTML = `
+      <div class="table-scroll">
+        <div class="slot-table puck-table">${innerHtml}
         </div>
       </div>`;
   }

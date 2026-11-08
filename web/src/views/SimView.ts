@@ -1021,10 +1021,7 @@ export class SimView extends Component {
       })
       .join("");
 
-    this.slot("timers-table").innerHTML = `
-      ${this.errorMsg ? `<div class="sim-error-note">${esc(this.errorMsg)}</div>` : ""}
-      <div class="table-scroll">
-        <div class="slot-table puck-table">
+    const tableInnerHtml = `
           <div class="puck-table-row sim-puck-table-row puck-table-head">
             <span>Timer</span>
             <span>Power</span>
@@ -1033,7 +1030,30 @@ export class SimView extends Component {
             <span>Assigned gate</span>
             <span class="num">Actions</span>
           </div>
-          ${rows}
+          ${rows}`;
+
+    const slotEl = this.slot("timers-table");
+    const existingTable = slotEl.querySelector<HTMLElement>(".slot-table.puck-table");
+    if (existingTable) {
+      let errEl = slotEl.querySelector<HTMLElement>(".sim-error-note");
+      if (this.errorMsg) {
+        if (!errEl) {
+          errEl = document.createElement("div");
+          errEl.className = "sim-error-note";
+          slotEl.insertBefore(errEl, slotEl.firstChild);
+        }
+        errEl.textContent = this.errorMsg;
+      } else if (errEl) {
+        errEl.remove();
+      }
+      existingTable.innerHTML = tableInnerHtml;
+      return;
+    }
+
+    slotEl.innerHTML = `
+      ${this.errorMsg ? `<div class="sim-error-note">${esc(this.errorMsg)}</div>` : ""}
+      <div class="table-scroll">
+        <div class="slot-table puck-table">${tableInnerHtml}
         </div>
       </div>`;
   }

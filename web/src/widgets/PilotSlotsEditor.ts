@@ -44,13 +44,21 @@ export class PilotSlotsEditor extends Component {
         usedChannels.set(p.channel, p.callsign);
       }
     }
-    this.el.innerHTML = `
-      <div class="table-scroll">
-        <div class="slot-table">
+    const innerHtml = `
           <div class="slot-row slot-head">
             <span>On (${enabledCount}/8)</span><span>Pilot</span><span>Channel</span><span>Enter threshold</span>
           </div>
-          ${this.store.pilots.map((p) => this.renderRow(p, enabledCount, usedChannels)).join("")}
+          ${this.store.pilots.map((p) => this.renderRow(p, enabledCount, usedChannels)).join("")}`;
+
+    const existingTable = this.el.querySelector<HTMLElement>(".slot-table");
+    if (existingTable) {
+      existingTable.innerHTML = innerHtml;
+      return;
+    }
+
+    this.el.innerHTML = `
+      <div class="table-scroll">
+        <div class="slot-table">${innerHtml}
         </div>
       </div>`;
   }

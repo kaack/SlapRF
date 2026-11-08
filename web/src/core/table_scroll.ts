@@ -128,6 +128,10 @@ function enhanceElement(el: HTMLElement, ro: ResizeObserver): void {
     scrollStep(1);
   });
 
+  // Suppress initial fade transition so newly enhanced tables don't flash their sidebars
+  leftBtn.style.transition = "none";
+  rightBtn.style.transition = "none";
+
   // Restore any prior horizontal/vertical scroll position before attaching listener
   restoreScrollOffset(viewport);
 
@@ -150,6 +154,10 @@ function enhanceElement(el: HTMLElement, ro: ResizeObserver): void {
   requestAnimationFrame(() => {
     restoreScrollOffset(viewport);
     state.update();
+    requestAnimationFrame(() => {
+      leftBtn.style.transition = "";
+      rightBtn.style.transition = "";
+    });
   });
 }
 

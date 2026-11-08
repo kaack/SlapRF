@@ -64,11 +64,19 @@ export class SectionRecords extends Component {
       })
       .join("");
 
+    const tableInnerHtml = `
+          <thead><tr><th>Pilot</th>${head}</tr></thead>
+          <tbody>${rows}</tbody>`;
+
+    const existingTable = this.el.querySelector<HTMLElement>("table.table-compact");
+    if (existingTable) {
+      existingTable.innerHTML = tableInnerHtml;
+      return;
+    }
+
     this.el.innerHTML = `
       <div class="table-scroll">
-        <table class="table table-compact">
-          <thead><tr><th>Pilot</th>${head}</tr></thead>
-          <tbody>${rows}</tbody>
+        <table class="table table-compact">${tableInnerHtml}
         </table>
       </div>
       <div class="legend-row"><span><i class="split-purple"></i>Section record</span><span>Others: gap to the record</span></div>`;

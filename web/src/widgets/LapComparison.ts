@@ -30,9 +30,7 @@ export class LapComparison extends Component {
     }
     const maxAbs = Math.max(NEGLIGIBLE_SEC, ...cmp.sections.map((s) => Math.abs(s.delta)));
 
-    this.el.innerHTML = `
-      <div class="table-scroll">
-        <table class="table cmp-table">
+    const tableInnerHtml = `
           <thead>
             <tr>
               <th>Section</th>
@@ -51,7 +49,19 @@ export class LapComparison extends Component {
               <td class="col-delta"><span class="mono strong ${toneOf(cmp.totalDelta)}">${fmtDelta(cmp.totalDelta)}</span></td>
               <td></td>
             </tr>
-          </tfoot>
+          </tfoot>`;
+
+    const existingTable = this.el.querySelector<HTMLElement>("table.cmp-table");
+    const existingAnalysis = this.el.querySelector<HTMLElement>(".lap-analysis");
+    if (existingTable && existingAnalysis) {
+      existingTable.innerHTML = tableInnerHtml;
+      existingAnalysis.outerHTML = this.renderAnalysis(cmp);
+      return;
+    }
+
+    this.el.innerHTML = `
+      <div class="table-scroll">
+        <table class="table cmp-table">${tableInnerHtml}
         </table>
       </div>
       ${this.renderAnalysis(cmp)}`;

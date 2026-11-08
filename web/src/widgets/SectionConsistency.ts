@@ -60,26 +60,11 @@ export class SectionStats extends Component {
     }
     const top = ranked[0].givenAway >= SIGNIFICANT_GAP_SEC ? ranked[0] : undefined;
 
-    this.el.innerHTML = `
-      ${head}
-      <div class="table-scroll">
-        <table class="table stats-table">
-          <thead>
-            <tr>
-              <th>Section</th>
-              <th class="num">Best</th>
-              <th class="num">Typical</th>
-              <th class="num">Lost vs best</th>
-              <th class="num">Exit speed <small>typical / best</small></th>
-              <th class="num">Passes</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${rows
-              .map((r) => {
-                const enough = r.samples >= MIN_SAMPLES;
-                const isTop = r === top;
-                return `
+    const bodyHtml = rows
+      .map((r) => {
+        const enough = r.samples >= MIN_SAMPLES;
+        const isTop = r === top;
+        return `
                   <tr class="${isTop ? "is-top" : ""}">
                     <td>
                       <span class="stats-sec">
@@ -95,8 +80,30 @@ export class SectionStats extends Component {
                     <td class="num mono">${r.typicalExitMph.toFixed(0)} <span class="muted">/ ${r.bestExitMph.toFixed(0)} mph</span></td>
                     <td class="num mono muted">${enough ? r.samples : `${r.samples}/${MIN_SAMPLES}`}</td>
                   </tr>`;
-              })
-              .join("")}
+      })
+      .join("");
+
+    const existingBody = this.el.querySelector<HTMLElement>("table.stats-table tbody");
+    if (existingBody) {
+      existingBody.innerHTML = bodyHtml;
+      return;
+    }
+
+    this.el.innerHTML = `
+      ${head}
+      <div class="table-scroll">
+        <table class="table stats-table">
+          <thead>
+            <tr>
+              <th>Section</th>
+              <th class="num">Best</th>
+              <th class="num">Typical</th>
+              <th class="num">Lost vs best</th>
+              <th class="num">Exit speed <small>typical / best</small></th>
+              <th class="num">Passes</th>
+            </tr>
+          </thead>
+          <tbody>${bodyHtml}
           </tbody>
         </table>
       </div>`;
