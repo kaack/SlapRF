@@ -2348,13 +2348,11 @@ body.is-gate-dragging * {
 }
 
 /* ==========================================================================
-   Practice Simulator View (#/sim)
+   Practice Simulator View (#/sim) — Matches System (.settings) UX Language
    ========================================================================== */
 
-.sim-view-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
+.sim-course-toolbar {
+  flex-wrap: wrap;
 }
 
 .sim-course-actions {
@@ -2370,78 +2368,156 @@ body.is-gate-dragging * {
   color: #fbbf24;
 }
 
-.sim-walker-banner {
-  margin: 0 20px 14px;
-  padding: 10px 14px;
-  border-radius: var(--radius-sm);
-  border: 1px solid rgba(245, 158, 11, 0.45);
-  background: rgba(245, 158, 11, 0.1);
-  color: #fde68a;
-  font-size: 12.5px;
-  line-height: 1.45;
+.sim-track-scroll {
+  position: relative;
+  padding-top: 8px;
 }
 
-.sim-track-canvas-wrap {
-  padding: 6px 20px 18px;
-}
-
-.sim-track-svg {
-  width: 100%;
-  max-height: 240px;
-  display: block;
+/* 60 fps Flight Corridor strip right above the horizontal gate timeline */
+.sim-flight-corridor {
+  position: relative;
+  height: 54px;
+  margin: 0 12px 10px;
   border-radius: var(--radius);
-  background: radial-gradient(circle at 58% 50%, rgba(56, 189, 248, 0.06), rgba(15, 23, 42, 0.45));
   border: 1px solid var(--border);
+  background:
+    linear-gradient(90deg, rgba(255, 255, 255, 0.015) 0%, rgba(212, 255, 58, 0.03) 50%, rgba(255, 255, 255, 0.015) 100%),
+    var(--surface-2);
+  overflow: hidden;
+  transition: border-color 0.18s ease, background 0.18s ease;
 }
 
-.sim-map-zone-title {
-  fill: var(--text-3);
+.sim-flight-corridor.is-walker-active {
+  border-color: rgba(245, 158, 11, 0.45);
+  background:
+    linear-gradient(90deg, rgba(245, 158, 11, 0.05) 0%, rgba(245, 158, 11, 0.11) 50%, rgba(245, 158, 11, 0.05) 100%),
+    var(--surface-2);
+}
+
+.sim-altitude-lane-label {
+  position: absolute;
+  top: 5px;
+  left: 12px;
+  right: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-size: 9.5px;
   font-weight: 700;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.07em;
+  color: var(--text-3);
+  pointer-events: none;
 }
 
-.sim-map-center-note {
-  fill: var(--text-3);
-  font-size: 11px;
-  font-weight: 500;
+.sim-flight-corridor.is-walker-active .sim-altitude-lane-label {
+  color: #fbbf24;
 }
 
-.sim-map-walker-alert {
-  fill: #fbbf24;
+.sim-drone-track-layer {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  top: 20px;
+  bottom: 6px;
+}
+
+.sim-drone-token {
+  position: absolute;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 9px 0 7px;
+  border-radius: 999px;
+  border: 1.5px solid var(--c, var(--accent));
+  background: color-mix(in srgb, var(--c, var(--accent)) 18%, var(--surface));
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.45);
+  white-space: nowrap;
+  will-change: left;
+  z-index: 3;
+}
+
+.sim-drone-token.is-avoiding {
+  top: 32%;
+  border-style: dashed;
+}
+
+.sim-drone-token.is-crashed-vtx {
+  border-color: var(--bad);
+  background: rgba(251, 113, 133, 0.18);
+  box-shadow: 0 0 0 3px rgba(251, 113, 133, 0.22);
+}
+
+.sim-drone-token.is-crashed-wait {
+  opacity: 0.78;
+  border-style: dashed;
+}
+
+.sim-drone-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--c, var(--accent));
+  box-shadow: 0 0 6px var(--c, var(--accent));
+  flex-shrink: 0;
+}
+
+.sim-drone-callsign {
   font-size: 11.5px;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  color: var(--text);
 }
 
-.sim-map-gate-id {
-  fill: var(--text);
-  font-family: var(--font-mono);
-  font-size: 10px;
+.sim-drone-tag {
+  padding: 1px 5px;
+  border-radius: 4px;
+  font-size: 9.5px;
   font-weight: 700;
+  background: rgba(245, 158, 11, 0.2);
+  color: #fbbf24;
 }
 
-.sim-map-gate-name {
-  fill: var(--text-2);
+.sim-drone-tag.is-bad {
+  background: rgba(251, 113, 133, 0.24);
+  color: var(--bad);
+}
+
+.sim-drone-tag.is-warn {
+  background: rgba(251, 146, 60, 0.22);
+  color: #fb923c;
+}
+
+.sim-gate-node .gate-node-circle {
+  cursor: default;
+}
+
+.sim-pit-tray {
+  cursor: default;
+}
+
+.sim-pit-pilot-token {
+  cursor: default;
+  padding-right: 7px;
+}
+
+.sim-pit-launch-btn {
+  height: 24px;
+  padding: 0 8px;
   font-size: 11px;
-  font-weight: 600;
+  margin-left: 4px;
 }
 
-.sim-map-gate.is-off {
-  opacity: 0.45;
-}
-
-.sim-map-pilot-label {
-  fill: var(--text);
-  font-size: 11px;
-  font-weight: 650;
+/* Pilot flight pack boxes in the right column of `.settings-section` */
+.sim-pilots-column {
+  min-width: 0;
 }
 
 .sim-pilots-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(290px, 1fr));
   gap: 14px;
-  padding: 4px 20px 20px;
 }
 
 .sim-pilot-card {
@@ -2449,15 +2525,12 @@ body.is-gate-dragging * {
   flex-direction: column;
   justify-content: space-between;
   gap: 14px;
-  padding: 15px 16px;
-  border-radius: var(--radius);
-  border: 1px solid var(--border);
-  background: var(--surface-2);
+  padding: 16px 18px;
 }
 
 .sim-pilot-card.is-crashed {
-  border-color: rgba(239, 68, 68, 0.45);
-  background: linear-gradient(180deg, rgba(239, 68, 68, 0.07), var(--surface-2));
+  border-color: rgba(251, 113, 133, 0.45);
+  background: linear-gradient(180deg, rgba(251, 113, 133, 0.06), var(--surface));
 }
 
 .sim-pilot-head {
@@ -2475,52 +2548,52 @@ body.is-gate-dragging * {
 }
 
 .sim-pilot-name {
-  font-size: 15px;
-  font-weight: 700;
+  font-size: 14.5px;
+  font-weight: 650;
 }
 
 .sim-status-badge {
   display: inline-flex;
   align-items: center;
-  padding: 3px 9px;
+  padding: 2px 9px;
   border-radius: 999px;
-  font-size: 11.5px;
-  font-weight: 650;
+  font-size: 11px;
+  font-weight: 600;
   border: 1px solid transparent;
 }
 
 .sim-status-flying {
-  background: rgba(52, 211, 153, 0.14);
-  border-color: rgba(52, 211, 153, 0.35);
+  background: rgba(52, 211, 153, 0.12);
+  border-color: rgba(52, 211, 153, 0.32);
   color: var(--good);
 }
 
 .sim-status-avoiding {
-  background: rgba(245, 158, 11, 0.15);
-  border-color: rgba(245, 158, 11, 0.4);
+  background: rgba(245, 158, 11, 0.14);
+  border-color: rgba(245, 158, 11, 0.38);
   color: #fbbf24;
 }
 
 .sim-status-crashed-vtx {
-  background: rgba(239, 68, 68, 0.18);
-  border-color: rgba(239, 68, 68, 0.5);
-  color: #f87171;
+  background: rgba(251, 113, 133, 0.16);
+  border-color: rgba(251, 113, 133, 0.45);
+  color: var(--bad);
 }
 
 .sim-status-crashed-wait {
-  background: rgba(251, 146, 60, 0.15);
-  border-color: rgba(251, 146, 60, 0.4);
+  background: rgba(251, 146, 60, 0.14);
+  border-color: rgba(251, 146, 60, 0.38);
   color: #fb923c;
 }
 
 .sim-status-pit {
-  background: rgba(56, 189, 248, 0.14);
-  border-color: rgba(56, 189, 248, 0.35);
+  background: var(--accent-soft);
+  border-color: var(--accent-line);
   color: var(--accent);
 }
 
 .sim-status-paused {
-  background: rgba(148, 163, 184, 0.12);
+  background: var(--surface-2);
   border-color: var(--border);
   color: var(--text-3);
 }
@@ -2534,7 +2607,7 @@ body.is-gate-dragging * {
 .sim-batt-block {
   display: flex;
   flex-direction: column;
-  gap: 5px;
+  gap: 6px;
 }
 
 .sim-metric-label {
@@ -2545,37 +2618,15 @@ body.is-gate-dragging * {
   color: var(--text-2);
 }
 
-.sim-batt-bar {
-  height: 8px;
-  border-radius: 999px;
-  background: rgba(15, 23, 42, 0.65);
-  border: 1px solid var(--border);
-  overflow: hidden;
-}
-
-.sim-batt-fill {
-  height: 100%;
-  border-radius: 999px;
-  transition: width 0.25s ease;
-}
-
-.sim-batt-fill.is-good {
-  background: linear-gradient(90deg, #10b981, #34d399);
-}
-
-.sim-batt-fill.is-mid {
-  background: linear-gradient(90deg, #d97706, #fbbf24);
-}
-
-.sim-batt-fill.is-low {
-  background: linear-gradient(90deg, #dc2626, #f87171);
+.sim-batt-meter {
+  height: 7px;
 }
 
 .sim-telemetry-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 8px 10px;
-  padding-top: 4px;
+  padding-top: 2px;
 }
 
 .sim-stat-k {
@@ -2594,26 +2645,25 @@ body.is-gate-dragging * {
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
-  padding-top: 10px;
+  padding-top: 12px;
   border-top: 1px solid var(--border);
 }
 
-.sim-timer-id-cell {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
+/* Simulated Timers table matching `.puck-table-row` in System */
+.puck-table-row.sim-puck-table-row {
+  grid-template-columns: minmax(140px, 1.15fr) 115px 80px minmax(145px, 1fr) minmax(130px, 1fr) auto;
 }
 
 .sim-timer-row-actions {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
 }
 
 .sim-btn-delete:hover {
-  border-color: rgba(239, 68, 68, 0.45);
-  color: #f87171;
+  border-color: rgba(251, 113, 133, 0.45);
+  color: var(--bad);
 }
 
 .sim-timer-add-bar {
@@ -2624,7 +2674,7 @@ body.is-gate-dragging * {
   gap: 12px;
   padding: 14px 20px 18px;
   border-top: 1px solid var(--border);
-  background: rgba(15, 23, 42, 0.25);
+  background: var(--surface-2);
 }
 
 .sim-timer-add-fields {
@@ -2637,10 +2687,10 @@ body.is-gate-dragging * {
 .sim-inline-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
   font-size: 11.5px;
-  font-weight: 600;
-  color: var(--text-2);
+  font-weight: 500;
+  color: var(--text-3);
 }
 
 .sim-inline-field .input {
@@ -2649,12 +2699,13 @@ body.is-gate-dragging * {
 }
 
 .sim-error-note {
-  margin: 0 20px 12px;
+  margin: 12px 20px 0;
   padding: 8px 12px;
   border-radius: var(--radius-sm);
-  border: 1px solid rgba(239, 68, 68, 0.45);
-  background: rgba(239, 68, 68, 0.12);
-  color: #fca5a5;
+  border: 1px solid rgba(251, 113, 133, 0.45);
+  background: rgba(251, 113, 133, 0.1);
+  color: var(--bad);
   font-size: 12.5px;
 }
+
 

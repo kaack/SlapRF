@@ -3,14 +3,23 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import { FIRMWARE_RELEASES, LATEST_FIRMWARE_VERSION } from "../services/esp_flasher";
+import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { SimPilotState, SimPilotStatus, SimState, SimTimerState } from "../types/models";
+import { SimPilotState, SimPilotStatus, SimState, SimTimerState, TrackNode } from "../types/models";
+import { renderSectionCapsuleIcon } from "../widgets/markup";
+
+interface PilotMotionState {
+  progress: number;
+  speedProgPerSec: number;
+  status: SimPilotStatus;
+  lastTickMs: number;
+}
 
 function statusMeta(
   status: SimPilotStatus,
   remainingSec: number
 ): { label: string; badgeClass: string; hint: string } {
-  const sec = remainingSec > 0 ? ` (${Math.ceil(remainingSec)}s)` : "";
+  const sec = remainingSec > 0 ? ` · ${Math.ceil(remainingSec)}s` : "";
   switch (status) {
     case "FLYING":
       return {
@@ -20,7 +29,7 @@ function statusMeta(
       };
     case "AVOIDING":
       return {
-        label: "Avoiding · 14m Alt",
+        label: "Avoiding · 14m",
         badgeClass: "sim-status-avoiding",
         hint: "Flying high (14 m) to avoid person on track — skips gate triggers",
       };
@@ -32,7 +41,7 @@ function statusMeta(
       };
     case "CRASHED_WAITING_RECOVERY":
       return {
-        label: "Crashed · Waiting Recovery",
+        label: "Crashed · Pit Mode",
         badgeClass: "sim-status-crashed-wait",
         hint: "Pit mode enabled (VTX off) — waiting for track walk recovery",
       };
@@ -40,13 +49,13 @@ function statusMeta(
       return {
         label: `Pit · Swapping Pack${sec}`,
         badgeClass: "sim-status-pit",
-        hint: "In pits with VTX off swapping to a fresh 6S LiPo pack",
+        hint: "In pit lane with VTX off swapping to a fresh 6S LiPo pack",
       };
     case "PAUSED":
       return {
         label: "Paused in Pits",
         badgeClass: "sim-status-paused",
-        hint: "Parked on bench with VTX off until launched",
+        hint: "Parked on pit bench with VTX off until launched",
       };
   }
 }
@@ -55,12 +64,17 @@ export class SimView extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
   private pollTimer: number | null = null;
+  private rafId: number | null = null;
+  private readonly motionBySlot = new Map<number, PilotMotionState>();
+
+  private lastCourseStructSig = "";
+  private lastPilotsStructSig = "";
+  private lastTimersSig = "";
+
   private addRole: "spoke" | "hub" = "spoke";
   private addLabel = "";
   private addFwVersion = LATEST_FIRMWARE_VERSION;
   private errorMsg = "";
-
-  private lastTimersSig = "";
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
     super(el);
@@ -72,35 +86,56 @@ export class SimView extends Component {
         `<option value="${esc(fw.version)}" ${fw.version === this.addFwVersion ? "selected" : ""}>${esc(fw.label)}</option>`
     ).join("");
 
+    // Uses the exact two-column `.settings` / `.settings-section` / `.card` UX language as System (`SetupView.ts`)
     el.innerHTML = `
-      <div class="sim-view-stack">
-        <section class="panel sim-course-panel" data-slot="course"></section>
-        <section class="panel sim-pilots-panel" data-slot="pilots"></section>
-        <section class="panel sim-timers-panel">
-          <div data-slot="timers-table"></div>
-          <div class="sim-timer-add-bar">
-            <div class="sim-timer-add-fields">
-              <label class="sim-inline-field">
-                <span>Role</span>
-                <select class="input" data-field="timer-role">
-                  <option value="spoke" selected>Spoke · Sector Timer</option>
-                  <option value="hub">Hub · Start Bridge</option>
-                </select>
-              </label>
-              <label class="sim-inline-field">
-                <span>Timer label</span>
-                <input type="text" class="input" data-field="timer-label" placeholder="e.g. T5 Split-S Exit" value="" />
-              </label>
-              <label class="sim-inline-field">
-                <span>Firmware</span>
-                <select class="input" data-field="timer-fw">
-                  ${fwOptions}
-                </select>
-              </label>
+      <div class="settings sim-settings">
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Course &amp; pit lane</h2>
+            <p>Live view of pilots moving through the track sections and pit bench. Send someone onto the track to recover quads (airborne pilots climb to 14 m to avoid them), trigger a pack burst, or refill and launch everyone.</p>
+          </div>
+          <div class="card card-flush" data-slot="course"></div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Pilots &amp; flight packs</h2>
+            <p>Each pilot drains their 6S LiPo pack, finishes their lap at the start gate, pulls into the pit bench for ~20 seconds with VTX off to swap batteries, and launches back onto the course.</p>
+          </div>
+          <div class="sim-pilots-column" data-slot="pilots"></div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Simulated timers</h2>
+            <p>Virtual XIAO ESP32-C5 timers feeding the simulation engine. Power individual timers off to test offline gate behavior, delete timers, or provision new ones (up to 6).</p>
+          </div>
+          <div class="card card-flush">
+            <div data-slot="timers-table"></div>
+            <div class="sim-timer-add-bar">
+              <div class="sim-timer-add-fields">
+                <label class="sim-inline-field">
+                  <span>Role</span>
+                  <select class="input" data-field="timer-role">
+                    <option value="spoke" selected>Spoke · Sector Timer</option>
+                    <option value="hub">Hub · Start Bridge</option>
+                  </select>
+                </label>
+                <label class="sim-inline-field">
+                  <span>Timer ID / name</span>
+                  <input type="text" class="input mono" data-field="timer-label" placeholder="e.g. T5 Tunnel Exit" value="" />
+                </label>
+                <label class="sim-inline-field">
+                  <span>Firmware version</span>
+                  <select class="input mono" data-field="timer-fw">
+                    ${fwOptions}
+                  </select>
+                </label>
+              </div>
+              <button class="btn btn-armed" data-action="timer-add" data-slot="timer-add-btn">
+                + Add simulated timer
+              </button>
             </div>
-            <button class="btn btn-armed" data-action="timer-add" data-slot="timer-add-btn">
-              + Add simulated timer
-            </button>
           </div>
         </section>
       </div>`;
@@ -116,19 +151,100 @@ export class SimView extends Component {
       if (this.pollTimer !== null) {
         window.clearInterval(this.pollTimer);
       }
+      if (this.rafId !== null) {
+        window.cancelAnimationFrame(this.rafId);
+      }
     });
 
     this.onDispose(store.subscribe(["status", "config"], () => this.render()));
 
-    // Poll simulation status at ~3 Hz while SimView is open so track progress,
-    // battery drain, and countdown timers animate smoothly.
     this.pollTimer = window.setInterval(() => {
       if (!document.hidden && this.store.simulatorRunning) {
         void this.api.pollStatusNow();
       }
-    }, 350);
+    }, 250);
 
     this.render();
+    this.startSmoothAnimationLoop();
+  }
+
+  private startSmoothAnimationLoop(): void {
+    const tick = (nowMs: number) => {
+      this.updateDronePositionsSmoothly(nowMs);
+      this.rafId = window.requestAnimationFrame(tick);
+    };
+    this.rafId = window.requestAnimationFrame(tick);
+  }
+
+  private syncMotionFromSnapshot(pilots: SimPilotState[]): void {
+    const nowMs = performance.now();
+    const activeSlots = new Set<number>();
+
+    for (const p of pilots) {
+      if (!p.enabled || p.channel <= 0) continue;
+      activeSlots.add(p.slotIndex);
+
+      const baseRate =
+        p.status === "FLYING" || p.status === "AVOIDING"
+          ? (p.speedMph * 0.44704) / 360.0
+          : 0;
+
+      const existing = this.motionBySlot.get(p.slotIndex);
+      if (!existing || existing.status !== p.status) {
+        this.motionBySlot.set(p.slotIndex, {
+          progress: p.trackProgress,
+          speedProgPerSec: baseRate,
+          status: p.status,
+          lastTickMs: nowMs,
+        });
+        continue;
+      }
+
+      // Compute shortest circular difference on [0, 1)
+      let err = p.trackProgress - existing.progress;
+      if (err > 0.5) err -= 1.0;
+      if (err < -0.5) err += 1.0;
+
+      if (Math.abs(err) > 0.12 || baseRate === 0) {
+        // Snap on large jumps (launch from pits, crash, or pack burst)
+        existing.progress = p.trackProgress;
+        existing.speedProgPerSec = baseRate;
+      } else {
+        // Gently blend velocity to converge without any visible hop
+        existing.speedProgPerSec = Math.max(0.01, baseRate + err * 1.35);
+      }
+      existing.status = p.status;
+      existing.lastTickMs = nowMs;
+    }
+
+    for (const slot of this.motionBySlot.keys()) {
+      if (!activeSlots.has(slot)) {
+        this.motionBySlot.delete(slot);
+      }
+    }
+  }
+
+  private updateDronePositionsSmoothly(nowMs: number): void {
+    const numGates = Math.max(1, this.store.pucks.length);
+    const gateZeroOffset = 0.5 / numGates;
+
+    this.motionBySlot.forEach((m, slotIndex) => {
+      const dtSec = Math.min(0.08, Math.max(0, (nowMs - m.lastTickMs) / 1000));
+      m.lastTickMs = nowMs;
+
+      if (m.status === "FLYING" || m.status === "AVOIDING") {
+        m.progress = (m.progress + m.speedProgPerSec * dtSec) % 1.0;
+        if (m.progress < 0) m.progress += 1.0;
+      }
+
+      const token = this.el.querySelector<HTMLElement>(
+        `[data-drone-token="${slotIndex}"]`
+      );
+      if (token) {
+        const visualPct = ((m.progress + gateZeroOffset) % 1.0) * 100;
+        token.style.left = `${visualPct.toFixed(2)}%`;
+      }
+    });
   }
 
   private handleInput = (e: Event): void => {
@@ -194,6 +310,7 @@ export class SimView extends Component {
           this.errorMsg = "";
           void this.api.simTimerAction({ action: "delete", puckId }).catch((err: unknown) => {
             this.errorMsg = err instanceof Error ? err.message : String(err);
+            this.lastTimersSig = "";
             this.renderTimers(this.store.simState);
           });
         }
@@ -228,230 +345,386 @@ export class SimView extends Component {
 
   private render(): void {
     const simState = this.store.simState;
+    this.syncMotionFromSnapshot(simState?.pilots ?? []);
     this.renderCourse(simState);
     this.renderPilots(simState);
     this.renderTimers(simState);
+  }
+
+  private get orderedNodes(): TrackNode[] {
+    return [...this.store.pucks].sort((a, b) => a.trackOrder - b.trackOrder);
   }
 
   private renderCourse(simState: SimState | null): void {
     const walkerActive = simState?.trackWalkerActive ?? false;
     const walkerSec = simState?.trackWalkerSecLeft ?? 0;
     const pilots = (simState?.pilots ?? []).filter((p) => p.enabled && p.channel > 0);
-    const pucks = this.store.pucks;
+    const nodes = this.orderedNodes;
     const timersById = new Map<number, SimTimerState>(
       (simState?.timers ?? []).map((t) => [t.puckId, t])
     );
 
-    // Build SVG track map with gates & live pilot markers
-    const width = 760;
-    const height = 230;
-    const cx = width / 2;
-    const cy = height / 2;
-    const rx = 275;
-    const ry = 76;
+    const onTrackPilots = pilots.filter(
+      (p) => p.status !== "PIT_SWAP" && p.status !== "PAUSED"
+    );
+    const pitPilots = pilots.filter(
+      (p) => p.status === "PIT_SWAP" || p.status === "PAUSED"
+    );
 
-    const gateAngle = (idx: number, total: number): number => {
-      if (total <= 0) return -Math.PI / 2;
-      return -Math.PI / 2 + (idx / total) * Math.PI * 2;
-    };
+    const structSig = [
+      walkerActive ? "W1" : "W0",
+      nodes
+        .map((n) => {
+          const t = timersById.get(n.assignedPuckId);
+          return `${n.puckId}:${n.assignedPuckId}:${n.name}:${n.role}:${t?.poweredOn ? 1 : 0}:${t?.color ?? ""}`;
+        })
+        .join(","),
+      pilots.map((p) => `${p.slotIndex}:${p.callsign}:${p.color}:${p.status}`).join(","),
+    ].join("|");
 
-    const gatesSvg = pucks
-      .map((g, idx) => {
-        const ang = gateAngle(idx, pucks.length);
-        const gx = cx + rx * Math.cos(ang);
-        const gy = cy + ry * Math.sin(ang);
-        const t = g.assignedPuckId ? timersById.get(g.assignedPuckId) : undefined;
-        const powered = t ? t.poweredOn : false;
-        const color = g.color || t?.color || "#38bdf8";
-        const gateTitle = g.name || `Gate ${idx + 1}`;
-        const timerBadge = g.assignedPuckId ? `T${g.assignedPuckId}` : "Unassigned";
-        const labelY = Math.sin(ang) < 0 ? gy - 22 : gy + 28;
-        return `
-          <g class="sim-map-gate ${powered ? "is-powered" : "is-off"}">
-            <circle cx="${gx.toFixed(1)}" cy="${gy.toFixed(1)}" r="13" fill="var(--bg-elevated)" stroke="${powered ? esc(color) : "var(--border-strong)"}" stroke-width="${powered ? "2.5" : "1.5"}" ${powered ? "" : 'stroke-dasharray="3 3"'} />
-            <text x="${gx.toFixed(1)}" y="${(gy + 4).toFixed(1)}" text-anchor="middle" class="sim-map-gate-id">${esc(timerBadge)}</text>
-            <text x="${gx.toFixed(1)}" y="${labelY.toFixed(1)}" text-anchor="middle" class="sim-map-gate-name">${esc(gateTitle)}</text>
-          </g>`;
-      })
-      .join("");
+    if (structSig !== this.lastCourseStructSig) {
+      this.lastCourseStructSig = structSig;
+      const numGates = Math.max(1, nodes.length);
+      const gateZeroOffset = 0.5 / numGates;
 
-    const pilotsSvg = pilots
-      .map((p, idx) => {
-        if (p.status === "PIT_SWAP" || p.status === "PAUSED") {
-          const px = 54;
-          const py = 46 + idx * 32;
+      const nodesHtml = nodes
+        .map((node, index) => {
+          const total = nodes.length;
+          const isStart = node.role === "START_FINISH";
+          const assignedId = node.assignedPuckId ?? 0;
+          const hasTimer = assignedId > 0;
+          const tiedTimer = timersById.get(assignedId);
+          const powered = tiedTimer ? tiedTimer.poweredOn : false;
+          const shortCode = hasTimer ? `T${assignedId}` : "—";
+          const roleSub = hasTimer ? (tiedTimer?.isHub || assignedId === 1 ? "HUB" : "SPK") : "EMPTY";
+          const color = hasTimer ? timerColor(this.store, assignedId) : "#64748b";
+
+          const lastNode = nodes[(total - 1 + total) % total];
+          const lastAssignedId = lastNode?.assignedPuckId ?? 0;
+          const lastColor = lastAssignedId > 0 ? timerColor(this.store, lastAssignedId) : "#64748b";
+
+          const nextNode = nodes[(index + 1) % total];
+          const nextAssignedId = nextNode?.assignedPuckId ?? 0;
+          const nextColor = nextAssignedId > 0 ? timerColor(this.store, nextAssignedId) : "#64748b";
+
+          const displayName = node.name.trim() || `Gate ${index + 1}`;
+          const sectionTag = `S${index + 1}`;
+          const wrapSectionTag = `S${total}`;
+
           return `
-            <g class="sim-map-pilot is-pit">
-              <circle cx="${px}" cy="${py}" r="8" fill="${esc(p.color)}" opacity="0.55" />
-              <text x="${px + 14}" y="${py + 4}" class="sim-map-pilot-label">${esc(p.callsign)} (${p.status === "PIT_SWAP" ? `${p.batteryPct}%⚡` : "Pit"})</text>
-            </g>`;
-        }
-        const ang = -Math.PI / 2 + p.trackProgress * Math.PI * 2;
-        const altOffset = p.status === "AVOIDING" ? 18 : 0;
-        const px = cx + (rx + altOffset) * Math.cos(ang);
-        const py = cy + (ry + altOffset * 0.5) * Math.sin(ang);
-        const isCrashed = p.status === "CRASHED_VTX_ON" || p.status === "CRASHED_WAITING_RECOVERY";
-        return `
-          <g class="sim-map-pilot ${isCrashed ? "is-crashed" : ""}">
-            ${
-              p.status === "CRASHED_VTX_ON"
-                ? `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="16" fill="none" stroke="#ef4444" stroke-width="1.8" stroke-dasharray="3 2" />`
-                : p.status === "AVOIDING"
-                ? `<circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="14" fill="none" stroke="#f59e0b" stroke-width="1.5" stroke-dasharray="2 2" />`
-                : ""
-            }
-            <circle cx="${px.toFixed(1)}" cy="${py.toFixed(1)}" r="8.5" fill="${esc(p.color)}" stroke="#0b0f17" stroke-width="2" />
-            <text x="${px.toFixed(1)}" y="${(py - 13).toFixed(1)}" text-anchor="middle" class="sim-map-pilot-label">${esc(p.callsign)}${p.status === "AVOIDING" ? " · 14m" : isCrashed ? " ✕" : ""}</text>
-          </g>`;
-      })
-      .join("");
+            <div
+              class="gate-line-item sim-gate-node ${isStart ? "is-start" : ""} ${hasTimer && powered ? "has-puck" : "is-empty-gate"}"
+              style="--c:${color}"
+            >
+              <div class="gate-line-track-seg is-before ${powered ? "" : "is-dashed-seg"}"></div>
+              <div class="gate-line-track-seg is-after ${powered ? "" : "is-dashed-seg"}"></div>
 
-    this.slot("course").innerHTML = `
-      <div class="panel-head">
-        <div>
-          <div class="panel-title">Practice Field &amp; Track Loop</div>
-          <div class="panel-sub">Simulate real practice gaps: battery pack swaps, mid-track crashes with lingering VTX RF, and people walking on the course</div>
-        </div>
-        <div class="sim-course-actions">
-          <button class="btn ${walkerActive ? "btn-danger-active" : "btn-ghost"}" data-action="toggle-walker">
-            ${icons.pilot(16)}
-            <span>${
-              walkerActive
-                ? `Clear track (${Math.ceil(walkerSec)}s)`
-                : "Walk on track (recover quads)"
-            }</span>
-          </button>
-          <button class="btn btn-ghost" data-action="pack-burst" title="Bunch airborne pilots 150 ms apart approaching the Start Gate">
-            ${icons.zap(16)}<span>Pack burst</span>
-          </button>
-          <button class="btn btn-ghost" data-action="launch-all" title="Refill all 6S batteries to 100% and launch all enabled pilots">
-            ${icons.play(16)}<span>Refill &amp; launch all</span>
-          </button>
-        </div>
-      </div>
-      ${
-        walkerActive
-          ? `<div class="sim-walker-banner">
-              <strong>Person on track (quad recovery in progress · ${Math.ceil(walkerSec)}s left):</strong>
-              Airborne pilots have climbed to <strong>14 m altitude</strong> to avoid the person on the field (gates will not trigger), and crashed quads have been carried back to the pits.
-            </div>`
-          : ""
+              <span
+                class="gate-line-sec-pill is-leading sec-id-badge mono"
+                style="--c1:${lastColor};--c2:${color}"
+              >
+                ${renderSectionCapsuleIcon(lastColor, color)}
+                <span class="sec-pill-text">${wrapSectionTag}</span>
+              </span>
+
+              <span
+                class="gate-line-sec-pill is-trailing sec-id-badge mono"
+                style="--c1:${color};--c2:${nextColor}"
+              >
+                ${renderSectionCapsuleIcon(color, nextColor)}
+                <span class="sec-pill-text">${sectionTag}</span>
+              </span>
+
+              <div class="gate-node-top">
+                <span class="gate-node-order mono">#${index + 1}</span>
+                ${
+                  isStart
+                    ? `<span class="gate-node-start-flag" title="Start / Finish gate">${icons.checkered(11)}</span>`
+                    : ""
+                }
+              </div>
+
+              <div class="gate-node-circle ${hasTimer && powered ? "" : "is-unassigned"}">
+                <span class="gate-node-puck-code mono">${esc(shortCode)}</span>
+                <span class="gate-node-puck-meta">
+                  <span class="gate-node-status-dot ${powered ? "is-online" : ""}"></span>
+                  <span>${powered ? roleSub : "OFF"}</span>
+                </span>
+              </div>
+
+              <div class="gate-node-name">${esc(displayName)}</div>
+            </div>`;
+        })
+        .join("");
+
+      const dronesHtml = onTrackPilots
+        .map((p) => {
+          const m = this.motionBySlot.get(p.slotIndex);
+          const prog = m ? m.progress : p.trackProgress;
+          const visualPct = ((prog + gateZeroOffset) % 1.0) * 100;
+          const isAvoiding = p.status === "AVOIDING";
+          const isCrashedVtx = p.status === "CRASHED_VTX_ON";
+          const isCrashedWait = p.status === "CRASHED_WAITING_RECOVERY";
+
+          return `
+            <div
+              class="sim-drone-token ${isAvoiding ? "is-avoiding" : ""} ${isCrashedVtx ? "is-crashed-vtx" : ""} ${isCrashedWait ? "is-crashed-wait" : ""}"
+              data-drone-token="${p.slotIndex}"
+              style="left:${visualPct.toFixed(2)}%;--c:${esc(p.color)}"
+            >
+              <span class="sim-drone-dot"></span>
+              <span class="sim-drone-callsign">${esc(p.callsign)}</span>
+              ${
+                isAvoiding
+                  ? `<span class="sim-drone-tag">14m</span>`
+                  : isCrashedVtx
+                  ? `<span class="sim-drone-tag is-bad">VTX ON</span>`
+                  : isCrashedWait
+                  ? `<span class="sim-drone-tag is-warn">CRASH</span>`
+                  : ""
+              }
+            </div>`;
+        })
+        .join("");
+
+      const pitTokensHtml =
+        pitPilots.length > 0
+          ? pitPilots
+              .map(
+                (p) => `
+              <div class="unassigned-puck-token sim-pit-pilot-token" style="--c:${esc(p.color)}">
+                <span class="unassigned-puck-dot mono">R${p.channel}</span>
+                <span class="unassigned-puck-info">
+                  <span class="unassigned-puck-name">${esc(p.callsign)}</span>
+                  <span class="unassigned-puck-sub" data-pit-sub="${p.slotIndex}">
+                    ${
+                      p.status === "PIT_SWAP"
+                        ? `Swapping 6S pack · ${p.batteryPct}% (${Math.ceil(p.stateRemainingSec)}s)`
+                        : `Paused on bench · ${p.batteryPct}%`
+                    }
+                  </span>
+                </span>
+                <button class="btn btn-sm btn-ghost sim-pit-launch-btn" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" title="Launch onto course now">
+                  ${icons.play(12)}<span>Launch</span>
+                </button>
+              </div>`
+              )
+              .join("")
+          : `<span class="gate-unassigned-empty-chip">All active pilots are currently out on the track</span>`;
+
+      this.slot("course").innerHTML = `
+        <div class="gate-track-stage sim-course-stage">
+          <div class="gate-track-header sim-course-toolbar">
+            <span class="gate-track-caption" data-course-caption>
+              ${
+                walkerActive
+                  ? `⚠ Person on track (${Math.ceil(walkerSec)}s left) — airborne drones holding 14 m altitude above gates`
+                  : `60 fps live course timeline · drones cross #1 → #${nodes.length} and wrap around ${nodes.length > 0 ? `S${nodes.length}` : "the loop"}`
+              }
+            </span>
+            <div class="sim-course-actions">
+              <button class="btn btn-sm ${walkerActive ? "btn-danger-active" : "btn-ghost"}" data-action="toggle-walker">
+                ${icons.pilot(14)}
+                <span data-walker-btn-label>${
+                  walkerActive
+                    ? `Clear track (${Math.ceil(walkerSec)}s)`
+                    : "Walk on track (recover quads)"
+                }</span>
+              </button>
+              <button class="btn btn-sm btn-ghost" data-action="pack-burst" title="Bunch airborne pilots 150 ms apart approaching Gate #1">
+                ${icons.zap(14)}<span>Pack burst</span>
+              </button>
+              <button class="btn btn-sm btn-ghost" data-action="launch-all" title="Refill all 6S batteries to 100% and launch all enabled pilots">
+                ${icons.play(14)}<span>Refill &amp; launch all</span>
+              </button>
+            </div>
+          </div>
+
+          <div class="gate-track-scroll sim-track-scroll">
+            <div class="sim-flight-corridor ${walkerActive ? "is-walker-active" : ""}">
+              <div class="sim-altitude-lane-label">
+                <span>${walkerActive ? "HIGH-ALTITUDE AVOIDANCE LANE (14 m · GATES SKIPPED)" : "ACTIVE FLIGHT CORRIDOR (1.3 m RACE ALTITUDE)"}</span>
+              </div>
+              <div class="sim-drone-track-layer">
+                ${dronesHtml}
+              </div>
+            </div>
+
+            <div class="gate-track-line sim-gate-track-line" role="list" aria-label="Simulated course gates">
+              ${nodesHtml}
+            </div>
+          </div>
+
+          <div class="gate-unassigned-tray sim-pit-tray">
+            <div class="gate-unassigned-label">
+              <span class="gate-unassigned-title">Pit bench &amp; battery swap lane (${pitPilots.length})</span>
+              <span class="gate-unassigned-hint">Pilots land here with VTX off to swap 6S packs or wait while paused</span>
+            </div>
+            <div class="gate-unassigned-list">
+              ${pitTokensHtml}
+            </div>
+          </div>
+        </div>`;
+    } else {
+      // Fast in-place update of countdowns and pit bench percentages without touching DOM structure
+      const walkerLabel = this.el.querySelector<HTMLElement>("[data-walker-btn-label]");
+      if (walkerLabel) {
+        walkerLabel.textContent = walkerActive
+          ? `Clear track (${Math.ceil(walkerSec)}s)`
+          : "Walk on track (recover quads)";
       }
-      <div class="sim-track-canvas-wrap">
-        <svg viewBox="0 0 ${width} ${height}" class="sim-track-svg" role="img" aria-label="Simulated practice track loop">
-          <rect x="14" y="18" width="136" height="${height - 36}" rx="10" fill="rgba(15, 23, 42, 0.55)" stroke="var(--border-subtle)" stroke-dasharray="4 4" />
-          <text x="26" y="34" class="sim-map-zone-title">PIT LANE / BENCH</text>
-          <ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="none" stroke="var(--border-strong)" stroke-width="8" opacity="0.35" />
-          <ellipse cx="${cx}" cy="${cy}" rx="${rx}" ry="${ry}" fill="none" stroke="var(--accent)" stroke-width="2" stroke-dasharray="6 6" opacity="0.55" />
-          ${
-            walkerActive
-              ? `<text x="${cx}" y="${cy + 5}" text-anchor="middle" class="sim-map-walker-alert">⚠ PERSON ON TRACK · PILOTS AT 14m ALTITUDE</text>`
-              : `<text x="${cx}" y="${cy + 4}" text-anchor="middle" class="sim-map-center-note">360 m loop · CCW race direction</text>`
-          }
-          ${gatesSvg}
-          ${pilotsSvg}
-        </svg>
-      </div>`;
+      const caption = this.el.querySelector<HTMLElement>("[data-course-caption]");
+      if (caption && walkerActive) {
+        caption.textContent = `⚠ Person on track (${Math.ceil(walkerSec)}s left) — airborne drones holding 14 m altitude above gates`;
+      }
+      for (const p of pitPilots) {
+        const sub = this.el.querySelector<HTMLElement>(`[data-pit-sub="${p.slotIndex}"]`);
+        if (sub) {
+          sub.textContent =
+            p.status === "PIT_SWAP"
+              ? `Swapping 6S pack · ${p.batteryPct}% (${Math.ceil(p.stateRemainingSec)}s)`
+              : `Paused on bench · ${p.batteryPct}%`;
+        }
+      }
+    }
   }
 
   private renderPilots(simState: SimState | null): void {
-    const allPilots = simState?.pilots ?? [];
-    const activePilots = allPilots.filter((p) => p.enabled);
+    const activePilots = (simState?.pilots ?? []).filter((p) => p.enabled);
 
-    const rows = activePilots
-      .map((p: SimPilotState) => {
-        const meta = statusMeta(p.status, p.stateRemainingSec);
-        const battTone =
-          p.batteryPct <= 20 ? "is-low" : p.batteryPct <= 45 ? "is-mid" : "is-good";
-        const chBadge =
-          p.channel > 0 ? `R${p.channel} · ${p.frequencyMhz} MHz` : "No channel assigned";
-        const isCrashed =
-          p.status === "CRASHED_VTX_ON" || p.status === "CRASHED_WAITING_RECOVERY";
-        const isParked = p.status === "PIT_SWAP" || p.status === "PAUSED";
+    const structSig = activePilots
+      .map((p) => `${p.slotIndex}:${p.callsign}:${p.color}:${p.channel}:${p.status}`)
+      .join("|");
 
-        return `
-          <div class="sim-pilot-card ${isCrashed ? "is-crashed" : ""}">
-            <div class="sim-pilot-head">
-              <div class="sim-pilot-id">
-                <span class="pilot-dot" style="background:${esc(p.color)}"></span>
-                <span class="sim-pilot-name">${esc(p.callsign)}</span>
-                <span class="badge mono">${esc(chBadge)}</span>
-              </div>
-              <span class="sim-status-badge ${meta.badgeClass}" title="${esc(meta.hint)}">${esc(meta.label)}</span>
-            </div>
+    if (structSig !== this.lastPilotsStructSig) {
+      this.lastPilotsStructSig = structSig;
 
-            <div class="sim-pilot-metrics">
-              <div class="sim-batt-block">
-                <div class="sim-metric-label">
-                  <span>6S LiPo Pack</span>
-                  <span class="mono"><strong>${p.batteryPct}%</strong> · ${p.batteryVolts.toFixed(1)} V</span>
+      const cards = activePilots
+        .map((p: SimPilotState) => {
+          const meta = statusMeta(p.status, p.stateRemainingSec);
+          const tone = p.batteryPct <= 20 ? "bad" : p.batteryPct <= 45 ? "warn" : "good";
+          const chBadge =
+            p.channel > 0 ? `R${p.channel} · ${p.frequencyMhz} MHz` : "No channel";
+          const isCrashed =
+            p.status === "CRASHED_VTX_ON" || p.status === "CRASHED_WAITING_RECOVERY";
+          const isParked = p.status === "PIT_SWAP" || p.status === "PAUSED";
+
+          return `
+            <div class="card sim-pilot-card ${isCrashed ? "is-crashed" : ""}" data-pilot-card="${p.slotIndex}">
+              <div class="sim-pilot-head">
+                <div class="sim-pilot-id">
+                  <span class="dot" style="--c:${esc(p.color)}"></span>
+                  <span class="sim-pilot-name">${esc(p.callsign)}</span>
+                  <span class="badge mono">${esc(chBadge)}</span>
                 </div>
-                <div class="sim-batt-bar">
-                  <div class="sim-batt-fill ${battTone}" style="width:${Math.max(4, p.batteryPct)}%"></div>
-                </div>
+                <span class="sim-status-badge ${meta.badgeClass}" data-pilot-badge="${p.slotIndex}" title="${esc(meta.hint)}">${esc(meta.label)}</span>
               </div>
 
-              <div class="sim-telemetry-grid">
-                <div>
-                  <div class="sim-stat-k">Speed</div>
-                  <div class="sim-stat-v mono">${p.speedMph.toFixed(0)} <span class="unit">mph</span></div>
+              <div class="sim-pilot-metrics">
+                <div class="sim-batt-block">
+                  <div class="sim-metric-label">
+                    <span>6S LiPo Flight Pack</span>
+                    <span class="mono" data-pilot-batt-text="${p.slotIndex}"><strong>${p.batteryPct}%</strong> · ${p.batteryVolts.toFixed(1)} V</span>
+                  </div>
+                  <div class="meter sim-batt-meter">
+                    <span class="meter-fill tone-${tone}" data-pilot-batt-bar="${p.slotIndex}" style="width:${Math.max(4, p.batteryPct)}%"></span>
+                  </div>
                 </div>
-                <div>
-                  <div class="sim-stat-k">Altitude</div>
-                  <div class="sim-stat-v mono">${p.altitudeMeters.toFixed(1)} <span class="unit">m</span></div>
-                </div>
-                <div>
-                  <div class="sim-stat-k">5.8 GHz VTX</div>
-                  <div class="sim-stat-v ${p.vtxActive ? "tone-good" : "muted"}">${p.vtxActive ? "TX ON (25mW)" : "Pit / Off"}</div>
-                </div>
-                <div>
-                  <div class="sim-stat-k">Location</div>
-                  <div class="sim-stat-v">${isParked ? "Pit bench" : esc(p.nearestGateLabel)}</div>
-                </div>
-                <div>
-                  <div class="sim-stat-k">Packs / Crashes</div>
-                  <div class="sim-stat-v mono">#${p.packsFlown} · ${p.crashesCount} cr</div>
+
+                <div class="sim-telemetry-grid">
+                  <div>
+                    <div class="sim-stat-k">Speed</div>
+                    <div class="sim-stat-v mono" data-pilot-speed="${p.slotIndex}">${p.speedMph.toFixed(0)} <span class="unit">mph</span></div>
+                  </div>
+                  <div>
+                    <div class="sim-stat-k">Altitude</div>
+                    <div class="sim-stat-v mono" data-pilot-alt="${p.slotIndex}">${p.altitudeMeters.toFixed(1)} <span class="unit">m</span></div>
+                  </div>
+                  <div>
+                    <div class="sim-stat-k">5.8 GHz VTX</div>
+                    <div class="sim-stat-v ${p.vtxActive ? "tone-good" : "muted"}" data-pilot-vtx="${p.slotIndex}">${p.vtxActive ? "TX ON (25mW)" : "Pit / Off"}</div>
+                  </div>
+                  <div>
+                    <div class="sim-stat-k">Nearest Gate</div>
+                    <div class="sim-stat-v" data-pilot-loc="${p.slotIndex}">${isParked ? "Pit bench" : esc(p.nearestGateLabel)}</div>
+                  </div>
+                  <div>
+                    <div class="sim-stat-k">Packs / Crashes</div>
+                    <div class="sim-stat-v mono" data-pilot-packs="${p.slotIndex}">#${p.packsFlown} · ${p.crashesCount} cr</div>
+                  </div>
                 </div>
               </div>
-            </div>
 
-            <div class="sim-pilot-controls">
-              ${
-                isCrashed
-                  ? `<button class="btn btn-sm btn-armed" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="recover" title="Flip quad over with turtle mode or recover and resume flying">
-                      ${icons.play(14)}<span>Recover / Turtle</span>
-                    </button>`
-                  : `<button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="crash" ${isParked ? "disabled" : ""} title="Force a mid-track crash near the closest gate (VTX stays on briefly)">
-                      ${icons.zapOff(14)}<span>Force crash</span>
-                    </button>`
-              }
-              <button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pit" ${p.status === "PIT_SWAP" ? "disabled" : ""} title="Bring pilot into the pits to swap to a fresh 6S battery pack (~20s)">
-                ${icons.reset(14)}<span>Swap battery</span>
-              </button>
-              ${
-                isParked
-                  ? `<button class="btn btn-sm btn-armed" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" title="Launch immediately from the starting line with a fresh 100% pack">
-                      ${icons.play(14)}<span>Launch now</span>
-                    </button>`
-                  : `<button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pause" title="Land and pause flight in the pits with VTX off">
-                      ${icons.pause(14)}<span>Pause flight</span>
-                    </button>`
-              }
-            </div>
-          </div>`;
-      })
-      .join("");
+              <div class="sim-pilot-controls">
+                ${
+                  isCrashed
+                    ? `<button class="btn btn-sm btn-armed" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="recover" title="Flip quad over with turtle mode or recover and resume flying">
+                        ${icons.play(13)}<span>Recover / Turtle</span>
+                      </button>`
+                    : `<button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="crash" ${isParked ? "disabled" : ""} title="Force a mid-track crash near the closest gate (VTX stays on briefly)">
+                        ${icons.zapOff(13)}<span>Force crash</span>
+                      </button>`
+                }
+                <button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pit" ${p.status === "PIT_SWAP" ? "disabled" : ""} title="Bring pilot into the pit bench to swap to a fresh 6S battery pack (~20s)">
+                  ${icons.reset(13)}<span>Swap battery</span>
+                </button>
+                ${
+                  isParked
+                    ? `<button class="btn btn-sm btn-armed" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="launch" title="Launch immediately from the starting line with a fresh 100% pack">
+                        ${icons.play(13)}<span>Launch now</span>
+                      </button>`
+                    : `<button class="btn btn-sm btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="pause" title="Land and pause flight on the pit bench with VTX off">
+                        ${icons.pause(13)}<span>Pause flight</span>
+                      </button>`
+                }
+              </div>
+            </div>`;
+        })
+        .join("");
 
-    this.slot("pilots").innerHTML = `
-      <div class="panel-head">
-        <div>
-          <div class="panel-title">Simulated Pilots &amp; Flight Packs</div>
-          <div class="panel-sub">Pilots automatically drain their 6S packs, finish their current lap, pull into the pits for ~20s to swap batteries, and launch back on track</div>
-        </div>
-      </div>
-      <div class="sim-pilots-grid">
-        ${rows || `<div class="empty-note">No enabled pilots — enable pilots on the System tab to simulate their flights.</div>`}
-      </div>`;
+      this.slot("pilots").innerHTML = `
+        <div class="sim-pilots-grid">
+          ${cards || `<div class="card empty-note">No enabled pilots — enable pilots on the System tab to simulate their flights.</div>`}
+        </div>`;
+      return;
+    }
+
+    // Update live telemetry numbers in-place without recreating pilot cards
+    for (const p of activePilots) {
+      const meta = statusMeta(p.status, p.stateRemainingSec);
+      const tone = p.batteryPct <= 20 ? "bad" : p.batteryPct <= 45 ? "warn" : "good";
+      const isParked = p.status === "PIT_SWAP" || p.status === "PAUSED";
+
+      const badge = this.el.querySelector<HTMLElement>(`[data-pilot-badge="${p.slotIndex}"]`);
+      if (badge) {
+        badge.textContent = meta.label;
+      }
+      const battText = this.el.querySelector<HTMLElement>(`[data-pilot-batt-text="${p.slotIndex}"]`);
+      if (battText) {
+        battText.innerHTML = `<strong>${p.batteryPct}%</strong> · ${p.batteryVolts.toFixed(1)} V`;
+      }
+      const battBar = this.el.querySelector<HTMLElement>(`[data-pilot-batt-bar="${p.slotIndex}"]`);
+      if (battBar) {
+        battBar.className = `meter-fill tone-${tone}`;
+        battBar.style.width = `${Math.max(4, p.batteryPct)}%`;
+      }
+      const speedEl = this.el.querySelector<HTMLElement>(`[data-pilot-speed="${p.slotIndex}"]`);
+      if (speedEl) {
+        speedEl.innerHTML = `${p.speedMph.toFixed(0)} <span class="unit">mph</span>`;
+      }
+      const altEl = this.el.querySelector<HTMLElement>(`[data-pilot-alt="${p.slotIndex}"]`);
+      if (altEl) {
+        altEl.innerHTML = `${p.altitudeMeters.toFixed(1)} <span class="unit">m</span>`;
+      }
+      const locEl = this.el.querySelector<HTMLElement>(`[data-pilot-loc="${p.slotIndex}"]`);
+      if (locEl) {
+        locEl.textContent = isParked ? "Pit bench" : p.nearestGateLabel;
+      }
+      const packsEl = this.el.querySelector<HTMLElement>(`[data-pilot-packs="${p.slotIndex}"]`);
+      if (packsEl) {
+        packsEl.textContent = `#${p.packsFlown} · ${p.crashesCount} cr`;
+      }
+    }
   }
 
   private renderTimers(simState: SimState | null): void {
@@ -470,75 +743,72 @@ export class SimView extends Component {
     const addBtn = this.slot("timer-add-btn") as HTMLButtonElement;
     if (addBtn) addBtn.disabled = !canAdd;
 
+    // Matches `.slot-table.puck-table` / `.puck-table-row` from `TimersList.ts` in System
     const rows = timers
       .map((t: SimTimerState) => {
+        const title = t.puckLabel ? `T${t.puckId} · ${t.puckLabel}` : `T${t.puckId}`;
+        const color = timerColor(this.store, t.puckId);
+        const isLatestFw = t.firmwareVersion === LATEST_FIRMWARE_VERSION;
+
         return `
-          <tr>
-            <td>
-              <div class="sim-timer-id-cell">
-                <span class="pilot-dot" style="background:${esc(t.color)}"></span>
-                <span class="badge mono">T${t.puckId}</span>
-                <strong>${esc(t.puckLabel)}</strong>
-              </div>
-            </td>
-            <td>
-              <span class="badge ${t.isHub ? "badge-hub" : "badge-spoke"}">${
-                t.isHub ? "Hub · Start Bridge" : "Spoke · Sector"
-              }</span>
-            </td>
-            <td class="mono">${esc(t.firmwareVersion)}</td>
-            <td>${
-              t.assignedGateName
-                ? `<strong>${esc(t.assignedGateName)}</strong>`
-                : `<span class="muted">Unassigned (assign in System → Track)</span>`
-            }</td>
-            <td>
-              <span class="status-pill ${t.poweredOn ? "is-up" : "is-down"}">
+          <div class="puck-table-row sim-puck-table-row ${t.poweredOn ? "" : "is-offline"}">
+            <div class="detected-puck-id">
+              <span class="gate-color-swatch" style="--c:${esc(color)};cursor:default"></span>
+              <strong class="mono">${esc(title)}</strong>
+            </div>
+
+            <div>
+              <span class="puck-status-pill ${t.poweredOn ? "is-online" : "is-offline"}">
                 <span class="status-dot ${t.poweredOn ? "is-up" : ""}"></span>
-                ${t.poweredOn ? "Powered On · 50 Hz" : "Powered Off"}
+                <span>${t.poweredOn ? "Powered on" : "Powered off"}</span>
               </span>
-            </td>
-            <td class="num">
-              <div class="sim-timer-row-actions">
-                <button class="btn btn-sm ${t.poweredOn ? "btn-ghost" : "btn-armed"}" data-action="timer-power" data-puck-id="${t.puckId}">
-                  ${t.poweredOn ? "Turn off" : "Turn on"}
-                </button>
-                <button class="btn btn-sm btn-ghost sim-btn-delete" data-action="timer-delete" data-puck-id="${t.puckId}" title="Delete simulated timer T${t.puckId}">
-                  Delete
-                </button>
-              </div>
-            </td>
-          </tr>`;
+            </div>
+
+            <div>
+              <span class="detected-role-pill ${t.isHub ? "is-hub" : ""}">${t.isHub ? "Hub" : "Spoke"}</span>
+            </div>
+
+            <div class="puck-fw-cell">
+              <span class="mono">${esc(t.firmwareVersion)}</span>
+              ${
+                isLatestFw
+                  ? `<span class="badge tone-good">Latest</span>`
+                  : `<span class="badge tone-warn">Update → ${LATEST_FIRMWARE_VERSION}</span>`
+              }
+            </div>
+
+            <div>
+              ${
+                t.assignedGateName
+                  ? `<span>${esc(t.assignedGateName)}</span>`
+                  : `<span class="muted">Unassigned</span>`
+              }
+            </div>
+
+            <div class="sim-timer-row-actions">
+              <button class="btn btn-sm ${t.poweredOn ? "btn-ghost" : "btn-armed"}" data-action="timer-power" data-puck-id="${t.puckId}">
+                ${t.poweredOn ? "Turn off" : "Turn on"}
+              </button>
+              <button class="btn btn-sm btn-ghost sim-btn-delete" data-action="timer-delete" data-puck-id="${t.puckId}" title="Delete simulated timer T${t.puckId}">
+                Delete
+              </button>
+            </div>
+          </div>`;
       })
       .join("");
 
     this.slot("timers-table").innerHTML = `
-      <div class="panel-head">
-        <div>
-          <div class="panel-title">Simulated Hardware Timers (${timers.length} / 6)</div>
-          <div class="panel-sub">Power off individual XIAO ESP32-C5 timers to test offline gate behavior, delete timers, or provision new simulated timers</div>
-        </div>
-      </div>
       ${this.errorMsg ? `<div class="sim-error-note">${esc(this.errorMsg)}</div>` : ""}
-      <div class="table-wrap">
-        <table class="table">
-          <thead>
-            <tr>
-              <th>Timer</th>
-              <th>Role</th>
-              <th>Firmware</th>
-              <th>Assigned Track Gate</th>
-              <th>Power &amp; Telemetry</th>
-              <th class="num">Actions</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${
-              rows ||
-              `<tr><td colspan="6" class="muted">No simulated timers — add one below.</td></tr>`
-            }
-          </tbody>
-        </table>
+      <div class="slot-table puck-table">
+        <div class="puck-table-row sim-puck-table-row puck-table-head">
+          <span>Timer</span>
+          <span>Power</span>
+          <span>Role</span>
+          <span>Firmware</span>
+          <span>Assigned gate</span>
+          <span class="num">Actions</span>
+        </div>
+        ${rows}
       </div>`;
   }
 }
