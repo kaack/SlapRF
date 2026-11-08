@@ -26,8 +26,8 @@ func TestSimulatedLapsVisitEveryGate(t *testing.T) {
 	}
 
 	_, pucks, laps, _, _ := engine.StateSnapshot()
-	if len(laps) < 100 {
-		t.Fatalf("expected well over 100 laps in 10 minutes, got %d", len(laps))
+	if len(laps) < 60 {
+		t.Fatalf("expected at least 60 laps in 10 minutes, got %d", len(laps))
 	}
 	incomplete := 0
 	for _, lap := range laps {

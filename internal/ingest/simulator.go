@@ -124,6 +124,8 @@ func NewTrackSimulator(engine *tracker.Engine) *TrackSimulator {
 	return s
 }
 
+const benchChargeRatePctPerSec = 0.14 // ~10 min to charge a depleted 6S pack from 16% -> 100%
+
 func (s *TrackSimulator) resetPilotsLocked() {
 	// Give each pilot slot a distinct pace, sector bottleneck, and staggered initial battery level
 	baseConfigs := []struct {
@@ -133,10 +135,10 @@ func (s *TrackSimulator) resetPilotsLocked() {
 		penalty float64
 		battPct float64
 	}{
-		{350.0, 29.5, 2, 0.77, 94.0}, // Slot 1 (FAERRY): Fast, loses time in Sector 3
-		{325.0, 28.4, 3, 0.75, 81.0}, // Slot 2 (MeWo): Loses time in Sector 4
-		{295.0, 27.6, 1, 0.80, 68.0}, // Slot 3 (Din): Loses time in Sector 2
-		{265.0, 26.8, 2, 0.74, 55.0}, // Slot 4 (BigRamon): Struggles in Sector 3
+		{350.0, 29.5, 2, 0.77, 84.0}, // Slot 1 (FAERRY): Fast, loses time in Sector 3
+		{325.0, 28.4, 3, 0.75, 58.0}, // Slot 2 (MeWo): Loses time in Sector 4
+		{295.0, 27.6, 1, 0.80, 34.0}, // Slot 3 (Din): Loses time in Sector 2
+		{265.0, 26.8, 2, 0.74, 66.0}, // Slot 4 (BigRamon): Struggles in Sector 3
 		{240.0, 28.0, 0, 0.82, 90.0},
 		{215.0, 27.1, 3, 0.78, 76.0},
 		{190.0, 26.4, 1, 0.79, 84.0},
@@ -153,23 +155,23 @@ func (s *TrackSimulator) resetPilotsLocked() {
 
 	s.pilotStates = make([]simPilotState, len(baseConfigs))
 	for i, cfg := range baseConfigs {
-		// Stagger the 2 bench batteries across pilots so some have 100% READY packs waiting
-		// while others already have packs on the field charger (so charge waits happen naturally).
+		// Stagger the 2 bench batteries across pilots so some have a 100% READY pack waiting
+		// while others have both bench packs still charging (so Waiting for Charge happens naturally).
 		pack2 := 100.0
 		pack3 := 100.0
 		switch i % 4 {
 		case 0:
 			pack2 = 100.0
-			pack3 = 52.0
+			pack3 = 36.0
 		case 1:
-			pack2 = 100.0
-			pack3 = 100.0
+			pack2 = 72.0
+			pack3 = 31.0
 		case 2:
-			pack2 = 64.0
-			pack3 = 28.0
+			pack2 = 78.0
+			pack3 = 40.0
 		case 3:
 			pack2 = 100.0
-			pack3 = 42.0
+			pack3 = 24.0
 		}
 		s.pilotStates[i] = simPilotState{
 			slotIndex:       i + 1,
@@ -721,11 +723,11 @@ func (s *TrackSimulator) step(dtSec float64) {
 			continue
 		}
 
-		// Continuously charge any bench packs that are not currently plugged into the quad (~0.32%/s)
+		// Continuously charge any bench packs that are not currently plugged into the quad (~0.14%/s)
 		if !s.prewarming && s.autoPracticeEvents {
 			for k := 0; k < 3; k++ {
 				if k != ps.activePackIdx && ps.packPct[k] < 100.0 {
-					ps.packPct[k] = math.Min(100.0, ps.packPct[k]+dtSec*0.32)
+					ps.packPct[k] = math.Min(100.0, ps.packPct[k]+dtSec*benchChargeRatePctPerSec)
 				}
 			}
 		}
@@ -824,7 +826,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 				ps.stateTimerSec = 30.0 + s.rng.Float64()*20.0
 			} else {
 				remPct := math.Max(0, 100.0-ps.maxPackPct())
-				ps.stateTimerSec = remPct / 0.32
+				ps.stateTimerSec = remPct / benchChargeRatePctPerSec
 			}
 			continue
 
@@ -855,7 +857,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 			if ps.activePackIdx < 0 && ps.findReadyPack() < 0 {
 				ps.status = domain.SimStatusChargingWait
 				remPct := math.Max(0, 100.0-ps.maxPackPct())
-				ps.stateTimerSec = remPct / 0.32
+				ps.stateTimerSec = remPct / benchChargeRatePctPerSec
 				continue
 			}
 			ps.stateTimerSec -= dtSec
