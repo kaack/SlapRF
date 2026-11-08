@@ -1,6 +1,5 @@
 import { Component } from "../core/component";
 import { fmtTime } from "../core/format";
-import { icons } from "../core/icons";
 import { resolveComparison, rollingAverages } from "../state/analysis";
 import { lapsFor, median } from "../state/selectors";
 import { AppStore } from "../state/store";
@@ -16,15 +15,16 @@ const WINDOW_LAPS_MOBILE = 16;
 const OUTLIER_FACTOR = 1.35;
 
 /**
- * Step 1 of pilot analysis — the only place laps are chosen.
- *   - Left-click any bar to immediately select it as the lap being reviewed.
- *   - Click the target icon underneath a bar, right-click the bar, or use the top-right
- *     "Compare with" presets to choose the comparison baseline.
+ * Two-click lap selection chart:
+ *   - 1st bar click selects the lap being reviewed (Lap A).
+ *   - 2nd bar click on another bar selects the comparison baseline (Lap B), or use the
+ *     top-right "Compare with" presets (Personal best / Previous lap).
  *   - Defaults to showing the most recent 50 laps and scrolls horizontally for earlier laps.
  */
 export class LapPicker extends Component {
   private readonly store: AppStore;
   private hoveredLapId: number | null = null;
+  private nextBarPickSlot: "review" | "ref" = "review";
   private followLatest = true;
   private savedScrollLeft = 0;
   private lastPilotSlot: number | null = null;
@@ -55,10 +55,11 @@ export class LapPicker extends Component {
         this.syncLatestButton();
         return;
       }
-      const setRefBtn = target.closest<HTMLElement>("[data-set-ref]");
-      if (setRefBtn) {
-        e.stopPropagation();
-        this.selectBaseline(Number(setRefBtn.dataset.setRef));
+      const pickModeBtn = target.closest<HTMLElement>("[data-pick-mode]");
+      if (pickModeBtn) {
+        const mode = pickModeBtn.dataset.pickMode;
+        this.nextBarPickSlot = mode === "ref" ? "ref" : "review";
+        this.render();
         return;
       }
       const refPreset = target.closest<HTMLElement>("[data-ref]");
@@ -68,7 +69,7 @@ export class LapPicker extends Component {
       }
       const bar = target.closest<SVGElement>("[data-lap]");
       if (bar) {
-        this.selectReview(Number(bar.dataset.lap));
+        this.onBarClick(Number(bar.dataset.lap));
       }
     };
 
@@ -104,7 +105,7 @@ export class LapPicker extends Component {
 
       if (e.pointerType === "mouse") {
         const scrollArea = target.closest<HTMLElement>(".lap-picker-scroll.is-scrollable");
-        if (scrollArea && !target.closest("[data-set-ref]")) {
+        if (scrollArea) {
           this.chartPan = { startX: e.clientX, startScrollLeft: scrollArea.scrollLeft, moved: false };
           return;
         }
@@ -265,42 +266,38 @@ export class LapPicker extends Component {
   }
 
   private syncHoveredPin(): void {
-    this.el.querySelectorAll<HTMLElement>(".lap-pin-btn[data-set-ref]").forEach((btn) => {
-      btn.classList.toggle("is-hovered", Number(btn.dataset.setRef) === this.hoveredLapId);
-    });
     this.el.querySelectorAll<SVGElement>(".bar-hit[data-lap]").forEach((g) => {
       g.classList.toggle("is-hovered", Number(g.dataset.lap) === this.hoveredLapId);
     });
   }
 
-  private selectReview(lapId: number): void {
-    // If this lap was the custom reference, fall back to personal best rather than comparing it to itself.
+  private onBarClick(lapId: number): void {
+    const laps = lapsFor(this.store, this.store.selectedPilot);
+    const cmp = resolveComparison(this.store, this.store.selectedPilot);
+    const currentReviewId = cmp?.lap.lapId ?? laps[laps.length - 1]?.lapId;
+
+    if (this.nextBarPickSlot === "ref" && laps.length >= 2 && lapId !== currentReviewId) {
+      this.nextBarPickSlot = "review";
+      this.store.setComparison({ reference: lapId });
+      return;
+    }
+
+    // 1st click (or clicking the already-selected review lap): set the reviewed lap (Lap A),
+    // and arm the 2nd click to pick the comparison baseline (Lap B).
+    this.nextBarPickSlot = "ref";
     const ref = this.store.comparison.reference;
     this.store.setComparison(ref === lapId ? { lapId, reference: "best" } : { lapId });
   }
 
-  private selectBaseline(lapId: number): void {
-    const laps = lapsFor(this.store, this.store.selectedPilot);
-    const cmp = resolveComparison(this.store, this.store.selectedPilot);
-    const currentReviewId = cmp?.lap.lapId ?? laps[laps.length - 1]?.lapId;
-    if (currentReviewId === lapId && laps.length >= 2) {
-      const fallbackReview = [...laps].reverse().find((l) => l.lapId !== lapId);
-      this.store.setComparison({
-        lapId: fallbackReview ? fallbackReview.lapId : null,
-        reference: lapId,
-      });
-    } else {
-      this.store.setComparison({ reference: lapId });
-    }
-  }
-
   private setRefPreset(choice: string): void {
+    this.nextBarPickSlot = "review";
     this.store.setComparison({ reference: choice === "previous" ? "previous" : "best" });
   }
 
   private render(): void {
     if (this.lastPilotSlot !== this.store.selectedPilot) {
       this.lastPilotSlot = this.store.selectedPilot;
+      this.nextBarPickSlot = "review";
       this.followLatest = true;
       this.savedScrollLeft = 0;
     }
@@ -355,8 +352,8 @@ export class LapPicker extends Component {
     return `
       <header class="card-head">
         <div>
-          <h2><span class="step">1</span>Pick laps</h2>
-          <p>Tap any bar to review that lap · tap the pin icon under a bar to set it as the baseline${scrollHint}.</p>
+          <h2>Selection</h2>
+          <p>Click a bar to select a lap, then click another bar (or pick a preset) to compare against it${scrollHint}.</p>
         </div>
         <div class="cmp-with">
           ${jumpLatest}
@@ -432,25 +429,8 @@ export class LapPicker extends Component {
                     style="left:${left.toFixed(2)}%;top:${top.toFixed(1)}%">${text}</span>`;
     };
 
-    // Under-bar baseline pin icons: click the icon under any bar to make that lap the comparison baseline.
-    const visibleCount = Math.min(laps.length, winLaps);
-    const dense = visibleCount > 28;
-    const pins = laps
-      .map((l, i) => {
-        const isRef = l.lapId === refId;
-        const isHovered = l.lapId === this.hoveredLapId;
-        return `<button
-          type="button"
-          class="lap-pin-btn ${isRef ? "is-active" : ""} ${isHovered ? "is-hovered" : ""}"
-          data-set-ref="${l.lapId}"
-          style="left:${xPct(i).toFixed(2)}%"
-          title="${isRef ? `Lap ${l.lapNumber} is the current baseline` : `Pin Lap ${l.lapNumber} (${fmtTime(l.lapTimeSec)}) as baseline`}"
-          aria-label="Pin Lap ${l.lapNumber} as baseline"
-        >${icons.pin(13)}</button>`;
-      })
-      .join("");
-
     // Lap numbers along the bottom, spaced for a 50-lap window.
+    const visibleCount = Math.min(laps.length, winLaps);
     const every = Math.max(1, Math.ceil(visibleCount / 16));
     const axis = laps
       .map((l, i) => (i % every === 0 || i === laps.length - 1 ? `<span style="left:${xPct(i).toFixed(2)}%">${l.lapNumber}</span>` : ""))
@@ -473,18 +453,17 @@ export class LapPicker extends Component {
                   <polyline class="avg-line" points="${avg}" vector-effect="non-scaling-stroke"/>
                 </svg>
                 ${review ? tag(review, "is-review", `Lap ${review.lapNumber} · ${fmtTime(review.lapTimeSec)}`, false) : ""}
-                ${ref ? tag(ref, "is-ref", `Lap ${ref.lapNumber}`, close) : ""}
+                ${ref ? tag(ref, "is-ref", `Lap ${ref.lapNumber} · ${fmtTime(ref.lapTimeSec)}`, close) : ""}
               </div>
             </div>
-            <div class="lap-picker-pins ${dense ? "is-dense" : ""}" aria-label="Set baseline lap">${pins}</div>
             <div class="lap-picker-axis">${axis}</div>
           </div>
         </div>
         ${scrollbar}
       </div>
       <div class="lap-chart-legend">
-        <span><i class="lg-review"></i>Reviewing (click bar)</span>
-        <span><i class="lg-ref"></i>Baseline (click ${icons.pin(12)} under bar)</span>
+        <span><i class="lg-review"></i>Selected lap (1st click)</span>
+        <span><i class="lg-ref"></i>Compared lap (2nd click)</span>
         <span><i class="lg-best"></i>Personal best</span>
         <span><i class="lg-line"></i>5-lap average</span>
       </div>`;

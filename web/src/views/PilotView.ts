@@ -30,8 +30,8 @@ export class PilotView extends Component {
       <section class="card card-flush">
         <header class="card-head">
           <div>
-            <h2>Where to practice</h2>
-            <p>Across all laps this session, not just the one picked above: each section's typical time vs. this pilot's best there. The biggest gap is the easiest time to find.</p>
+            <h2>Recommendation</h2>
+            <p>Across all laps this session: each section's typical time vs. this pilot's best there. The biggest gap is the easiest time to find.</p>
           </div>
         </header>
         <div data-slot="consistency"></div>

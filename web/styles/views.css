@@ -1731,58 +1731,13 @@ body.is-gate-dragging * {
   background: var(--purple);
   color: #160b21;
 }
-.lap-picker-pins {
-  position: relative;
-  height: 22px;
-  margin-top: 4px;
-}
-.lap-pin-btn {
-  position: absolute;
-  top: 1px;
-  transform: translateX(-50%);
-  width: 20px;
-  height: 20px;
-  padding: 0;
-  display: inline-grid;
-  place-items: center;
-  border-radius: 50%;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-3);
-  opacity: 0.45;
-  cursor: pointer;
-  transition: opacity 0.12s, color 0.12s, background 0.12s, border-color 0.12s, transform 0.12s;
-}
-.lap-picker-pins.is-dense .lap-pin-btn:not(.is-active):not(.is-hovered) {
-  opacity: 0;
-  pointer-events: none;
-}
-.lap-pin-btn.is-hovered:not(.is-active) {
-  opacity: 0.65;
-  color: var(--text-3);
-}
-.lap-pin-btn:hover {
-  opacity: 1;
-  z-index: 2;
-  color: var(--purple);
-  background: rgba(192, 132, 252, 0.14);
-  border-color: rgba(192, 132, 252, 0.45);
-  transform: translateX(-50%) scale(1.15);
-}
-.lap-pin-btn.is-active {
-  opacity: 1;
-  z-index: 3;
-  color: #160b21;
-  background: var(--purple);
-  border-color: var(--purple);
-}
 .lap-picker .bar-hit.is-hovered .hit {
   fill: rgba(255, 255, 255, 0.04);
 }
 .lap-picker-axis {
   position: relative;
   height: 18px;
-  margin-top: 2px;
+  margin-top: 6px;
   color: var(--text-3);
   font-family: var(--font-mono);
   font-size: 10.5px;

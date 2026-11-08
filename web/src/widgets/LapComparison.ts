@@ -27,7 +27,7 @@ export class LapComparison extends Component {
     const cmp = resolveComparison(this.store, this.store.selectedPilot);
     if (!cmp) {
       this.el.innerHTML = `
-        <header class="card-head"><div><h2><span class="step">2</span>Where the time went</h2></div></header>
+        <header class="card-head"><div><h2>Analysis</h2></div></header>
         ${renderEmpty("Fly at least two laps", "Then pick a lap above to see where it gained or lost time.")}`;
       return;
     }
@@ -36,7 +36,7 @@ export class LapComparison extends Component {
     this.el.innerHTML = `
       <header class="card-head">
         <div>
-          <h2><span class="step">2</span>Where the time went</h2>
+          <h2>Analysis</h2>
           <p><span class="cmp-chip is-review">Lap ${cmp.lap.lapNumber}</span> against <span class="cmp-chip is-ref">${cmp.refLabel}</span>, section by section</p>
         </div>
       </header>
