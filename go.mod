@@ -1,6 +1,6 @@
 module fpv-gate-timer
 
-go 1.27.0
+go 1.22
 
 require (
 	github.com/evanw/esbuild v0.28.2 // indirect
