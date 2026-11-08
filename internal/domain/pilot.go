@@ -73,7 +73,7 @@ func (p PilotSlot) ChannelLabel() string {
 // DefaultPilotSlots returns a default 4-active-pilot (8-slot) Raceband configuration for simulation.
 func DefaultPilotSlots() []PilotSlot {
 	callsigns := [MaxPilotSlots]string{
-		"VANOVER", "MCK", "MINCHAN", "HEADSUP",
+		"VANOVER", "DIN", "MINCHAN", "HEADSUP",
 		"BMSWEB", "NIZZLE", "LEDRIB", "GHOST",
 	}
 	// Standard MultiGP 4-pilot spacing uses R1, R3, R5, R8 (or IMD6) to minimize IMD
