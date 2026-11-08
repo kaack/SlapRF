@@ -31,8 +31,8 @@ Each gate timer uses four off-the-shelf parts. One XIAO ESP32-C5 draws less than
 | Part | Purpose | Product Links | Est. Cost (USD) |
 | :--- | :--- | :--- | :--- |
 | **Seeed Studio XIAO ESP32-C5** (includes external 2.4 / 5 GHz U.FL antenna) | Measures 5.8 GHz VTX signal strength and sends data over ESP-NOW and Wi-Fi. | <ul><li>[Seeed Studio XIAO ESP32-C5](https://www.seeedstudio.com/Seeed-Studio-XIAO-ESP32C5-p-6609.html)</li></ul> | $5.90 |
-| **XT60-to-USB-C 5V BEC adapter** | Converts 3S to 6S LiPo battery power to `5 V` USB-C output. | <ul><li>[SpeedyBee Goggles BEC](https://www.google.com/search?tbm=shop&q=SpeedyBee+Goggles+BEC)</li><li>[AOKoda XT60 to USB Converter](https://www.google.com/search?tbm=shop&q=AOKoda+XT60+to+USB+Converter)</li></ul> | $4.00 – $17.00 |
-| **Short USB-C to USB-C cable (straight plugs)** | Connects the 5V BEC adapter to the XIAO ESP32-C5. Also used to flash firmware from a laptop. | <ul><li>[Adafruit 6" USB-C to USB-C Cable](https://www.adafruit.com/product/4198)</li><li>[SparkFun USB-C to USB-C 0.3m Flexible Silicone Cable](https://www.sparkfun.com/usb-c-to-usb-c-cable-03m-flexible-silicone.html)</li></ul> | $2.50 – $5.00 |
+| **LIPO to USB-C Adapter** | Converts 3S to 6S LiPo battery power to `5 V` USB-C output. | <ul><li>[SpeedyBee Goggles BEC](https://www.google.com/search?tbm=shop&q=SpeedyBee+Goggles+BEC)</li><li>[AOKoda XT60 to USB Converter](https://www.google.com/search?tbm=shop&q=AOKoda+XT60+to+USB+Converter)</li></ul> | $4.00 – $17.00 |
+| **Short USB-C to USB-C cable (straight plugs)** | Connects the LIPO to USB-C Adapter to the XIAO ESP32-C5. Also used to flash firmware from a laptop. | <ul><li>[Adafruit 6" USB-C to USB-C Cable](https://www.adafruit.com/product/4198)</li><li>[SparkFun USB-C to USB-C 0.3m Flexible Silicone Cable](https://www.sparkfun.com/usb-c-to-usb-c-cable-03m-flexible-silicone.html)</li></ul> | $2.50 – $5.00 |
 | **3S–6S FPV LiPo battery (XT60)** | Powers the timer in the field. | <ul><li>[Tattu R-Line 1300mAh 6S XT60](https://genstattu.com/tattu-le-r-line-6-0-1300-6s-160c-lipo-xt60/)</li></ul> | $0 (spare pack) or $25.00+ new |
 
 ### Estimated Total Cost
@@ -45,13 +45,13 @@ Each gate timer uses four off-the-shelf parts. One XIAO ESP32-C5 draws less than
 No soldering is required.
 
 ```text
-[ 2S–6S LiPo Battery ] -> (XT60) -> [ XT60-to-USB 5V BEC ] -> (USB-C) -> [ Seeed XIAO ESP32-C5 ]
+[ 2S–6S LiPo Battery ] -> (XT60) -> [ LIPO to USB-C Adapter ] -> (USB-C) -> [ Seeed XIAO ESP32-C5 ]
 ```
 
 1. Attach the included U.FL antenna to the antenna connector on the XIAO ESP32-C5.
 2. Connect the XIAO ESP32-C5 to your laptop with a USB-C cable.
 3. Open **System > Flasher** in the SlapRF web interface. Flash one timer as **Hub** and the remaining timers as **Spoke**.
-4. At the field, connect each XIAO ESP32-C5 to a 5V BEC adapter and a LiPo battery. Place one timer at each gate.
+4. At the field, connect each XIAO ESP32-C5 to a LIPO to USB-C Adapter and a LiPo battery. Place one timer at each gate.
 5. Open **System > Track** and drag each timer (`T1`, `T2`, `T3`, `T4`) onto the track line in the order pilots fly the course. Click the checkered flag icon below a gate to set the start gate.
 
 ## Running the Server
