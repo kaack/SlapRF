@@ -24,7 +24,7 @@ const OUTLIER_FACTOR = 1.35;
 export class LapPicker extends Component {
   private readonly store: AppStore;
   private hoveredLapId: number | null = null;
-  private nextBarPickSlot: "review" | "ref" = "review";
+  private activeSlot: "review" | "ref" = "review";
   private followLatest = true;
   private savedScrollLeft = 0;
   private lastPilotSlot: number | null = null;
@@ -55,10 +55,10 @@ export class LapPicker extends Component {
         this.syncLatestButton();
         return;
       }
-      const pickModeBtn = target.closest<HTMLElement>("[data-pick-mode]");
-      if (pickModeBtn) {
-        const mode = pickModeBtn.dataset.pickMode;
-        this.nextBarPickSlot = mode === "ref" ? "ref" : "review";
+      const pickSlotBtn = target.closest<HTMLElement>("[data-pick-slot]");
+      if (pickSlotBtn) {
+        const slot = pickSlotBtn.dataset.pickSlot;
+        this.activeSlot = slot === "ref" ? "ref" : "review";
         this.render();
         return;
       }
@@ -276,28 +276,31 @@ export class LapPicker extends Component {
     const cmp = resolveComparison(this.store, this.store.selectedPilot);
     const currentReviewId = cmp?.lap.lapId ?? laps[laps.length - 1]?.lapId;
 
-    if (this.nextBarPickSlot === "ref" && laps.length >= 2 && lapId !== currentReviewId) {
-      this.nextBarPickSlot = "review";
+    if (this.activeSlot === "ref" && laps.length >= 2 && lapId !== currentReviewId) {
+      this.activeSlot = "review";
       this.store.setComparison({ reference: lapId });
       return;
     }
 
-    // 1st click (or clicking the already-selected review lap): set the reviewed lap (Lap A),
-    // and arm the 2nd click to pick the comparison baseline (Lap B).
-    this.nextBarPickSlot = "ref";
+    this.activeSlot = "review";
     const ref = this.store.comparison.reference;
     this.store.setComparison(ref === lapId ? { lapId, reference: "best" } : { lapId });
   }
 
   private setRefPreset(choice: string): void {
-    this.nextBarPickSlot = "review";
+    if (choice === "custom") {
+      this.activeSlot = "ref";
+      this.render();
+      return;
+    }
+    this.activeSlot = "review";
     this.store.setComparison({ reference: choice === "previous" ? "previous" : "best" });
   }
 
   private render(): void {
     if (this.lastPilotSlot !== this.store.selectedPilot) {
       this.lastPilotSlot = this.store.selectedPilot;
-      this.nextBarPickSlot = "review";
+      this.activeSlot = "review";
       this.followLatest = true;
       this.savedScrollLeft = 0;
     }
@@ -309,14 +312,19 @@ export class LapPicker extends Component {
 
     const laps = lapsFor(this.store, this.store.selectedPilot);
     const cmp = resolveComparison(this.store, this.store.selectedPilot);
-    const head = this.renderHead(laps.length, cmp?.ref);
+    const head = this.renderHead(laps.length);
     if (laps.length === 0) {
       this.el.innerHTML = head + renderEmpty("No laps yet", "Each completed lap shows up here as a bar.");
       return;
     }
-    const reviewId = cmp?.lap.lapId ?? laps[laps.length - 1].lapId;
-    const refId = cmp?.ref.lapId ?? -1;
-    this.el.innerHTML = head + this.renderChart(laps, reviewId, refId);
+    const review = cmp?.lap ?? laps[laps.length - 1];
+    const ref = cmp?.ref;
+    const reviewId = review.lapId;
+    const refId = ref?.lapId ?? -1;
+    this.el.innerHTML =
+      head +
+      this.renderSelectionBar(laps.length, review, ref, cmp?.refLabel ?? "") +
+      this.renderChart(laps, reviewId, refId);
 
     const nextScroller = this.el.querySelector<HTMLElement>(".lap-picker-scroll");
     if (nextScroller) {
@@ -331,21 +339,9 @@ export class LapPicker extends Component {
     }
   }
 
-  private renderHead(lapCount: number, refLap: LapRecord | undefined): string {
+  private renderHead(lapCount: number): string {
     const winLaps = this.windowLaps();
-    const canCompare = lapCount >= 2;
     const scrollable = lapCount > winLaps;
-    const ref = this.store.comparison.reference;
-    const btn = (key: string, label: string, active: boolean) =>
-      `<button type="button" data-ref="${key}" class="${active ? "is-active" : ""}" ${canCompare ? "" : "disabled"}>${label}</button>`;
-    // A specific lap chosen as reference shows up as a third, already-active option.
-    const custom =
-      typeof ref === "number" && refLap
-        ? `<button type="button" class="is-active is-ref-chip" data-ref="best" title="Click to reset baseline to Personal best">Lap ${refLap.lapNumber} ×</button>`
-        : "";
-    const scrollHint = scrollable
-      ? ` · showing ${winLaps} laps at a time (${lapCount} total, scroll for earlier laps)`
-      : "";
     const jumpLatest = scrollable
       ? `<button type="button" class="btn btn-sm btn-ghost" data-scroll-latest style="${this.followLatest ? "display:none" : ""}">Latest ${winLaps} →</button>`
       : "";
@@ -353,26 +349,75 @@ export class LapPicker extends Component {
       <header class="card-head">
         <div>
           <h2>Selection</h2>
-          <p>Click a bar to select a lap, then click another bar (or pick a preset) to compare against it${scrollHint}.</p>
+          <p>Choose a lap from the session chart below and select which baseline lap to compare it against.</p>
+        </div>
+        ${jumpLatest}
+      </header>`;
+  }
+
+  private renderSelectionBar(
+    lapCount: number,
+    review: LapRecord,
+    ref: LapRecord | undefined,
+    refLabel: string
+  ): string {
+    const canCompare = lapCount >= 2;
+    const refMode = this.store.comparison.reference;
+    const isCustomMode = typeof refMode === "number" || this.activeSlot === "ref";
+    const btn = (key: string, label: string, active: boolean) =>
+      `<button type="button" data-ref="${key}" class="${active ? "is-active" : ""}" ${canCompare ? "" : "disabled"}>${label}</button>`;
+
+    const refSub = ref
+      ? refLabel.includes("previous")
+        ? "Previous"
+        : refLabel.includes("best")
+        ? "Best"
+        : "Custom"
+      : "";
+
+    return `
+      <div class="selection-bar">
+        <div class="selection-slots">
+          <button
+            type="button"
+            class="sel-slot-pill is-review ${this.activeSlot === "review" ? "is-armed" : ""}"
+            data-pick-slot="review"
+            title="Click a bar on the chart to change the inspected lap"
+          >
+            <span class="sel-slot-dot is-review"></span>
+            <span class="sel-slot-k">Inspecting</span>
+            <strong class="mono">Lap ${review.lapNumber}</strong>
+            <span class="sel-slot-time mono">${fmtTime(review.lapTimeSec)}</span>
+          </button>
+          <span class="sel-vs">vs</span>
+          <button
+            type="button"
+            class="sel-slot-pill is-ref ${this.activeSlot === "ref" ? "is-armed" : ""}"
+            data-pick-slot="ref"
+            ${canCompare ? "" : "disabled"}
+            title="Click here then click any bar on the chart to compare against a specific lap"
+          >
+            <span class="sel-slot-dot is-ref"></span>
+            <span class="sel-slot-k">Baseline${refSub ? ` · ${refSub}` : ""}</span>
+            <strong class="mono">${ref ? `Lap ${ref.lapNumber}` : "—"}</strong>
+            <span class="sel-slot-time mono">${ref ? fmtTime(ref.lapTimeSec) : ""}</span>
+          </button>
         </div>
         <div class="cmp-with">
-          ${jumpLatest}
-          <span>Compare with</span>
+          <span>Baseline</span>
           <div class="segmented">
-            ${btn("best", "Personal best", ref === "best")}
-            ${btn("previous", "Previous lap", ref === "previous")}
-            ${custom}
+            ${btn("best", "Personal best", refMode === "best" && !isCustomMode)}
+            ${btn("previous", "Previous lap", refMode === "previous" && !isCustomMode)}
+            ${btn("custom", this.activeSlot === "ref" ? "Click a bar…" : "Custom lap", isCustomMode)}
           </div>
         </div>
-      </header>`;
+      </div>`;
   }
 
   private renderChart(laps: LapRecord[], reviewId: number, refId: number): string {
     const winLaps = this.windowLaps();
     const times = laps.map((l) => l.lapTimeSec);
     const best = Math.min(...times);
-    // Scale to the typical spread of laps so lap-to-lap differences are visible; unusually
-    // fast laps bottom out at a short stub, crash laps top out at full height.
     const sorted = [...times].sort((a, b) => a - b);
     const q = (p: number) => sorted[Math.min(sorted.length - 1, Math.floor(p * (sorted.length - 1)))];
     const hi = Math.min(Math.max(...times), median(times) * OUTLIER_FACTOR, q(0.95) + (q(0.95) - q(0.05)) * 0.5);
@@ -388,7 +433,6 @@ export class LapPicker extends Component {
     const MIN_BAR = 6;
     const yOf = (t: number) => Math.min(CHART_H - MIN_BAR, CHART_H - ((Math.min(t, hi) - lo) / span) * (CHART_H - 8));
     const xPct = (i: number) => ((i * slot + slot / 2) / svgW) * 100;
-    const topPct = (l: LapRecord) => (yOf(l.lapTimeSec) / CHART_H) * 100;
 
     const bars = laps
       .map((l, i) => {
@@ -401,12 +445,11 @@ export class LapPicker extends Component {
           l.lapId === refId ? "is-ref" : "",
         ].join(" ");
         const hovered = l.lapId === this.hoveredLapId ? "is-hovered" : "";
-        // A full-height transparent hit area makes thin and short bars easy to click.
         return `
           <g data-lap="${l.lapId}" class="bar-hit ${hovered}">
             <rect class="hit" x="${(i * slot).toFixed(1)}" y="0" width="${slot.toFixed(1)}" height="${CHART_H}"/>
             <rect class="${cls}" x="${x.toFixed(1)}" y="${y.toFixed(1)}" width="${barW.toFixed(1)}" height="${(CHART_H - y).toFixed(1)}" rx="2"/>
-            <title>Lap ${l.lapNumber}: ${l.lapTimeSec.toFixed(3)}s — click to review</title>
+            <title>Lap ${l.lapNumber}: ${l.lapTimeSec.toFixed(3)}s</title>
           </g>`;
       })
       .join("");
@@ -414,22 +457,6 @@ export class LapPicker extends Component {
       .map((a, i) => `${(i * slot + slot / 2).toFixed(1)},${yOf(a).toFixed(1)}`)
       .join(" ");
 
-    // Name tags above the reviewed and reference bars, so the link to step 2 is obvious.
-    const review = laps.find((l) => l.lapId === reviewId);
-    const ref = laps.find((l) => l.lapId === refId);
-    // Neighbouring laps would put both tags in the same spot: line both up above the taller
-    // of the two bars and lift the reference tag a row.
-    const close = review && ref ? Math.abs(laps.indexOf(review) - laps.indexOf(ref)) * slot < 120 : false;
-    const taller = review && ref ? (review.lapTimeSec > ref.lapTimeSec ? review : ref) : undefined;
-    const tag = (lap: LapRecord, cls: string, text: string, raised: boolean) => {
-      const idx = laps.indexOf(lap);
-      const left = xPct(idx);
-      const top = topPct(close && taller ? taller : lap);
-      return `<span class="lap-tag ${cls} ${idx >= laps.length - 2 ? "is-right" : idx <= 1 ? "is-left" : ""} ${raised ? "is-raised" : ""}"
-                    style="left:${left.toFixed(2)}%;top:${top.toFixed(1)}%">${text}</span>`;
-    };
-
-    // Lap numbers along the bottom, spaced for a 50-lap window.
     const visibleCount = Math.min(laps.length, winLaps);
     const every = Math.max(1, Math.ceil(visibleCount / 16));
     const axis = laps
@@ -452,8 +479,6 @@ export class LapPicker extends Component {
                   ${bars}
                   <polyline class="avg-line" points="${avg}" vector-effect="non-scaling-stroke"/>
                 </svg>
-                ${review ? tag(review, "is-review", `Lap ${review.lapNumber} · ${fmtTime(review.lapTimeSec)}`, false) : ""}
-                ${ref ? tag(ref, "is-ref", `Lap ${ref.lapNumber} · ${fmtTime(ref.lapTimeSec)}`, close) : ""}
               </div>
             </div>
             <div class="lap-picker-axis">${axis}</div>
@@ -462,8 +487,8 @@ export class LapPicker extends Component {
         ${scrollbar}
       </div>
       <div class="lap-chart-legend">
-        <span><i class="lg-review"></i>Selected lap (1st click)</span>
-        <span><i class="lg-ref"></i>Compared lap (2nd click)</span>
+        <span><i class="lg-review"></i>Inspected lap</span>
+        <span><i class="lg-ref"></i>Baseline lap</span>
         <span><i class="lg-best"></i>Personal best</span>
         <span><i class="lg-line"></i>5-lap average</span>
       </div>`;

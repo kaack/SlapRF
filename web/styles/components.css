@@ -16,20 +16,21 @@
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 .card-flush .card-head {
   padding: 18px 20px 0;
 }
 .card-head h2 {
-  font-size: 13.5px;
+  font-size: 14px;
   font-weight: 600;
   letter-spacing: -0.005em;
 }
 .card-head p {
   color: var(--text-3);
-  font-size: 12px;
-  margin-top: 2px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  margin-top: 6px;
 }
 
 .stack {

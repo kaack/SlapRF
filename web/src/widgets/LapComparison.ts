@@ -1,7 +1,7 @@
 import { Component } from "../core/component";
-import { fmtDelta, fmtTime } from "../core/format";
+import { esc, fmtDelta, fmtTime } from "../core/format";
 import { decisiveSection, LapComparison as Comparison, resolveComparison, SectionDelta } from "../state/analysis";
-import { sectionShort } from "../state/selectors";
+import { sectionLabel, sectionShort } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { renderEmpty, routeLabel } from "./markup";
 
@@ -10,8 +10,7 @@ const NEGLIGIBLE_SEC = 0.01;
 const NOTABLE_MPH = 3;
 
 /**
- * Step 2 of pilot analysis: the lap picked in step 1 against its reference, section by
- * section — where the time went and why. Selection lives in the lap picker only.
+ * Section-by-section comparison between the two laps selected in LapPicker.
  */
 export class LapComparison extends Component {
   private readonly store: AppStore;
@@ -24,22 +23,23 @@ export class LapComparison extends Component {
   }
 
   private render(): void {
+    const head = `
+      <header class="card-head">
+        <div>
+          <h2>Analysis</h2>
+          <p>Section-by-section split times and exit speeds comparing the two selected laps in detail.</p>
+        </div>
+      </header>`;
+
     const cmp = resolveComparison(this.store, this.store.selectedPilot);
     if (!cmp) {
-      this.el.innerHTML = `
-        <header class="card-head"><div><h2>Analysis</h2></div></header>
-        ${renderEmpty("Fly at least two laps", "Then pick a lap above to see where it gained or lost time.")}`;
+      this.el.innerHTML = head + renderEmpty("Fly at least two laps", "Then pick a lap above to see where it gained or lost time.");
       return;
     }
     const maxAbs = Math.max(NEGLIGIBLE_SEC, ...cmp.sections.map((s) => Math.abs(s.delta)));
 
     this.el.innerHTML = `
-      <header class="card-head">
-        <div>
-          <h2>Analysis</h2>
-          <p><span class="cmp-chip is-review">Lap ${cmp.lap.lapNumber}</span> against <span class="cmp-chip is-ref">${cmp.refLabel}</span>, section by section</p>
-        </div>
-      </header>
+      ${head}
       ${this.renderSummary(cmp)}
       <div class="table-scroll">
         <table class="table cmp-table">
@@ -67,27 +67,45 @@ export class LapComparison extends Component {
   }
 
   private renderSummary(cmp: Comparison): string {
-    const { lap, refLabel, totalDelta } = cmp;
+    const { lap, ref, refLabel, totalDelta } = cmp;
     const abs = Math.abs(totalDelta).toFixed(3);
+    const isEven = Math.abs(totalDelta) < NEGLIGIBLE_SEC;
+    const isFaster = totalDelta < 0;
+    const badgeCls = isEven ? "is-neutral" : isFaster ? "is-good" : "is-bad";
+    const badgeText = isEven
+      ? "Matched pace"
+      : `${fmtDelta(totalDelta)}s ${isFaster ? "faster" : "slower"}`;
+
     let text: string;
-    if (Math.abs(totalDelta) < NEGLIGIBLE_SEC) {
-      text = `Lap ${lap.lapNumber} matched ${refLabel}.`;
+    if (isEven) {
+      text = `<strong>Lap ${lap.lapNumber}</strong> (${fmtTime(lap.lapTimeSec)}) matched the overall time of <strong>${esc(refLabel)}</strong> (${fmtTime(ref.lapTimeSec)}).`;
     } else {
-      text = `Lap ${lap.lapNumber} was <strong>${abs}s ${totalDelta < 0 ? "faster" : "slower"}</strong> than ${refLabel}.`;
+      text = `<strong>Lap ${lap.lapNumber}</strong> (${fmtTime(lap.lapTimeSec)}) was <strong>${abs}s ${isFaster ? "faster" : "slower"}</strong> overall than <strong>${esc(refLabel)}</strong> (${fmtTime(ref.lapTimeSec)}).`;
       const key = decisiveSection(cmp);
       if (key && Math.abs(key.delta) >= NEGLIGIBLE_SEC) {
-        text += ` ${totalDelta < 0 ? "The biggest gain came" : "Most of it went"} in <strong>${this.route(key)}</strong> (${fmtDelta(key.delta)}s)`;
+        const secTitle = `${sectionShort(this.store, key.fromPuckId)} (${sectionLabel(this.store, key.fromPuckId, key.toPuckId)})`;
+        text += ` ${isFaster ? "The largest time gain came in" : "Most of the time was lost in"} <strong>${esc(secTitle)}</strong> (<span class="mono">${fmtDelta(key.delta)}s</span>)`;
         const mph = key.lapExitMph - key.refExitMph;
-        text += Math.abs(mph) >= NOTABLE_MPH ? `, exiting ${Math.abs(mph).toFixed(0)} mph ${mph < 0 ? "slower" : "faster"}.` : ".";
+        text +=
+          Math.abs(mph) >= NOTABLE_MPH
+            ? `, exiting <strong>${Math.abs(mph).toFixed(0)} mph ${mph < 0 ? "slower" : "faster"}</strong> (${key.lapExitMph.toFixed(0)} mph vs ${key.refExitMph.toFixed(0)} mph).`
+            : ".";
       }
     }
     if (cmp.incomplete) {
-      text += ` <span class="muted">Some sections can't be compared — a gate was missed on one of the laps.</span>`;
+      text += ` <span class="muted">Some sections could not be compared because a gate was missed on one of the laps.</span>`;
     }
     return `
-      <div class="cmp-summary">
-        <div class="cmp-total mono ${toneOf(totalDelta)}">${fmtDelta(totalDelta)}</div>
-        <p>${text}</p>
+      <div class="insight-box">
+        <div class="insight-head">
+          <span class="insight-badge mono ${badgeCls}">${badgeText}</span>
+          <div class="insight-chips">
+            <span class="cmp-chip is-review">Lap ${lap.lapNumber} · ${fmtTime(lap.lapTimeSec)}</span>
+            <span class="insight-vs">vs</span>
+            <span class="cmp-chip is-ref">${esc(refLabel)} · ${fmtTime(ref.lapTimeSec)}</span>
+          </div>
+        </div>
+        <p class="insight-body">${text}</p>
       </div>`;
   }
 

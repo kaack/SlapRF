@@ -27,15 +27,7 @@ export class PilotView extends Component {
       <div class="stat-row" data-slot="stats"></div>
       <section class="card" data-slot="laps"></section>
       <section class="card card-flush" data-slot="compare"></section>
-      <section class="card card-flush">
-        <header class="card-head">
-          <div>
-            <h2>Recommendation</h2>
-            <p>Across all laps this session: each section's typical time vs. this pilot's best there. The biggest gap is the easiest time to find.</p>
-          </div>
-        </header>
-        <div data-slot="consistency"></div>
-      </section>`;
+      <section class="card card-flush" data-slot="consistency"></section>`;
 
     this.adopt(new PilotPicker(this.slot("picker"), store));
     this.adopt(new LapPicker(this.slot("laps"), store));
