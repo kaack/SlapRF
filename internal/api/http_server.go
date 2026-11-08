@@ -25,6 +25,7 @@ type FullStateResponse struct {
 	Summaries         []domain.PilotTrackSummary `json:"summaries"`
 	Rules             domain.TimingRules         `json:"rules"`
 	SimulatorRun      bool                       `json:"simulatorRunning"`
+	SimState          *domain.SimState           `json:"simState,omitempty"`
 	RaceArmed         bool                       `json:"raceArmed"`
 	LiveTimeStatus    laprf.LiveTimeStatus       `json:"liveTimeStatus"`
 }
@@ -36,6 +37,7 @@ type StatusResponse struct {
 	Pucks             []domain.GatePuck     `json:"pucks"`
 	DetectedPucks     []domain.DetectedPuck `json:"detectedPucks"`
 	SimulatorRun      bool                  `json:"simulatorRunning"`
+	SimState          *domain.SimState      `json:"simState,omitempty"`
 	RaceArmed         bool                  `json:"raceArmed"`
 	LiveTimeStatus    laprf.LiveTimeStatus  `json:"liveTimeStatus"`
 }
@@ -165,6 +167,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/gates/rules", s.handleGateRules)
 	mux.HandleFunc("/api/sim/toggle", s.handleToggleSim)
 	mux.HandleFunc("/api/sim/pack-burst", s.handlePackBurst)
+	mux.HandleFunc("/api/sim/pilot-action", s.handleSimPilotAction)
+	mux.HandleFunc("/api/sim/track-walker", s.handleSimTrackWalker)
+	mux.HandleFunc("/api/sim/timer-action", s.handleSimTimerAction)
 	mux.HandleFunc("/api/session/reset", s.handleResetSession)
 	mux.HandleFunc("/api/ingest/frame", s.handleIngestFrame)
 
@@ -186,6 +191,11 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
 	eng := s.activeEngine()
 	pilots, pucks, laps, crossings, summaries := eng.StateSnapshot()
+	var simState *domain.SimState
+	if s.simulator.IsRunning() {
+		snap := s.simulator.Snapshot()
+		simState = &snap
+	}
 	resp := FullStateResponse{
 		ServerTimestampUs: eng.NowUs(),
 		Pilots:            pilots,
@@ -197,6 +207,7 @@ func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
 		Summaries:         summaries,
 		Rules:             eng.Rules(),
 		SimulatorRun:      s.simulator.IsRunning(),
+		SimState:          simState,
 		RaceArmed:         eng.IsRaceArmed(),
 		LiveTimeStatus:    s.laprfServer.Status(),
 	}
@@ -206,11 +217,17 @@ func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetStatus(w http.ResponseWriter, _ *http.Request) {
 	eng := s.activeEngine()
 	_, pucks, _, _, _ := eng.StateSnapshot()
+	var simState *domain.SimState
+	if s.simulator.IsRunning() {
+		snap := s.simulator.Snapshot()
+		simState = &snap
+	}
 	writeJSON(w, http.StatusOK, StatusResponse{
 		ServerTimestampUs: eng.NowUs(),
 		Pucks:             pucks,
 		DetectedPucks:     eng.DetectedPucksSnapshot(),
 		SimulatorRun:      s.simulator.IsRunning(),
+		SimState:          simState,
 		RaceArmed:         eng.IsRaceArmed(),
 		LiveTimeStatus:    s.laprfServer.Status(),
 	})
@@ -494,7 +511,76 @@ func (s *Server) handlePackBurst(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.simulator.TriggerPackBurst()
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	s.handleGetState(w, r)
+}
+
+func (s *Server) handleSimPilotAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		SlotIndex int    `json:"slotIndex"`
+		Action    string `json:"action"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.simulator.TriggerPilotAction(body.SlotIndex, body.Action)
+	s.handleGetState(w, r)
+}
+
+func (s *Server) handleSimTrackWalker(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Active bool `json:"active"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.simulator.SetTrackWalker(body.Active)
+	s.handleGetState(w, r)
+}
+
+func (s *Server) handleSimTimerAction(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Action          string `json:"action"` // "toggle-power", "delete", "add"
+		PuckID          uint8  `json:"puckId,omitempty"`
+		Role            string `json:"role,omitempty"`
+		Label           string `json:"label,omitempty"`
+		FirmwareVersion string `json:"firmwareVersion,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	switch body.Action {
+	case "toggle-power":
+		s.simulator.ToggleTimerPower(body.PuckID)
+	case "delete":
+		if err := s.simulator.DeleteTimer(body.PuckID); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	case "add":
+		if _, err := s.simulator.AddTimer(body.Role, body.Label, body.FirmwareVersion); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	default:
+		http.Error(w, "unknown timer action", http.StatusBadRequest)
+		return
+	}
+	s.handleGetState(w, r)
 }
 
 func (s *Server) handleResetSession(w http.ResponseWriter, r *http.Request) {

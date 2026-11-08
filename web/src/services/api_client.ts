@@ -86,7 +86,38 @@ export class ApiClient {
   }
 
   public async simulatePack(): Promise<void> {
-    await this.transport.request("POST", "/api/sim/pack-burst");
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/sim/pack-burst"));
+  }
+
+  public async simPilotAction(
+    slotIndex: number,
+    action: "crash" | "recover" | "pit" | "pause" | "launch" | "resume"
+  ): Promise<void> {
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>("POST", "/api/sim/pilot-action", { slotIndex, action })
+    );
+  }
+
+  public async setTrackWalker(active: boolean): Promise<void> {
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>("POST", "/api/sim/track-walker", { active })
+    );
+  }
+
+  public async simTimerAction(payload: {
+    action: "toggle-power" | "delete" | "add";
+    puckId?: number;
+    role?: "hub" | "spoke";
+    label?: string;
+    firmwareVersion?: string;
+  }): Promise<void> {
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>("POST", "/api/sim/timer-action", payload)
+    );
+  }
+
+  public async pollStatusNow(): Promise<void> {
+    await this.pollStatus();
   }
 
   public async resetSession(): Promise<void> {

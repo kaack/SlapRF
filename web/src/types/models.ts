@@ -171,6 +171,57 @@ export interface LiveTimeStatus {
   raceArmedByHost: boolean;
 }
 
+export type SimPilotStatus =
+  | "FLYING"
+  | "AVOIDING"
+  | "CRASHED_VTX_ON"
+  | "CRASHED_WAITING_RECOVERY"
+  | "PIT_SWAP"
+  | "PAUSED";
+
+export interface SimPilotState {
+  slotIndex: number;
+  callsign: string;
+  color: string;
+  channel: number;
+  frequencyMhz: number;
+  enabled: boolean;
+  status: SimPilotStatus;
+  batteryPct: number;
+  batteryVolts: number;
+  trackProgress: number;
+  speedMph: number;
+  altitudeMeters: number;
+  vtxActive: boolean;
+  nearestGateLabel: string;
+  stateRemainingSec: number;
+  crashesCount: number;
+  packsFlown: number;
+}
+
+export interface SimTimerState {
+  puckId: number;
+  puckLabel: string;
+  color: string;
+  isHub: boolean;
+  firmwareVersion: string;
+  poweredOn: boolean;
+  online: boolean;
+  assignedGateName: string;
+  batteryMv: number;
+  batteryPct: number;
+  noiseFloorDbm: number;
+}
+
+export interface SimState {
+  running: boolean;
+  trackWalkerActive: boolean;
+  autoPracticeEvents: boolean;
+  trackWalkerSecLeft: number;
+  pilots: SimPilotState[];
+  timers: SimTimerState[];
+}
+
 export interface FullStateResponse {
   serverTimestampUs?: number;
   pilots: PilotSlot[];
@@ -182,6 +233,7 @@ export interface FullStateResponse {
   summaries: PilotTrackSummary[];
   rules: TimingRules;
   simulatorRunning: boolean;
+  simState?: SimState;
   raceArmed: boolean;
   liveTimeStatus: LiveTimeStatus;
 }
@@ -192,6 +244,7 @@ export interface StatusResponse {
   pucks: GatePuck[];
   detectedPucks?: DetectedPuck[];
   simulatorRunning: boolean;
+  simState?: SimState;
   raceArmed: boolean;
   liveTimeStatus: LiveTimeStatus;
 }

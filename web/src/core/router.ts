@@ -1,6 +1,6 @@
 import { icons } from "./icons";
 
-export type RouteId = "live" | "pilot" | "setup";
+export type RouteId = "live" | "pilot" | "sim" | "setup";
 
 export interface RouteMeta {
   id: RouteId;
@@ -8,6 +8,7 @@ export interface RouteMeta {
   title: string;
   subtitle: string;
   icon: () => string;
+  simOnly?: boolean;
 }
 
 /** One flat level: each section of the app is a single page. */
@@ -25,6 +26,14 @@ export const ROUTES: RouteMeta[] = [
     title: "Analytics",
     subtitle: "Pick laps and see where time was won and lost",
     icon: () => icons.chart(20),
+  },
+  {
+    id: "sim",
+    label: "Sim",
+    title: "Practice Simulator",
+    subtitle: "Simulated pilots, 6S flight packs, crashes, track recovery walks, and XIAO gate timers",
+    icon: () => icons.zap(20),
+    simOnly: true,
   },
   {
     id: "setup",

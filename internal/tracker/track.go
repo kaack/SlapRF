@@ -541,3 +541,183 @@ func (e *Engine) gateLabelLocked(puckID uint8) string {
 func (e *Engine) sectionLabelLocked(fromPuckID, toPuckID uint8) string {
 	return e.gateLabelLocked(fromPuckID) + " → " + e.gateLabelLocked(toPuckID)
 }
+
+// ClearPilotProgress resets in-progress lap/sector tracking for a single pilot (e.g. when a
+// simulated pilot lands in the pits for a battery swap or is recovered after a crash) so their
+// next pass through the Start/Finish gate cleanly starts a fresh lap.
+func (e *Engine) ClearPilotProgress(slotIndex int) {
+	e.mu.Lock()
+	delete(e.progress, slotIndex)
+	e.mu.Unlock()
+}
+
+// SetDetectedPuckOnline immediately marks a physical/simulated timer online or offline.
+func (e *Engine) SetDetectedPuckOnline(puckID uint8, online bool) {
+	e.mu.Lock()
+	now := time.Now()
+	if d, ok := e.detected[puckID]; ok {
+		d.Online = online
+		if online {
+			d.LastSeenAt = now
+		} else {
+			d.LastSeenAt = time.Time{}
+		}
+	}
+	for i := range e.pucks {
+		if e.pucks[i].AssignedPuckID == puckID {
+			e.pucks[i].Online = online
+			if online {
+				e.pucks[i].LastSeenAt = now
+			} else {
+				e.pucks[i].LastSeenAt = time.Time{}
+			}
+		}
+	}
+	pilots := append([]domain.PilotSlot(nil), e.pilots...)
+	pucks := append([]domain.GatePuck(nil), e.pucks...)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	for _, s := range subs {
+		s.OnConfigUpdated(pilots, pucks)
+	}
+}
+
+// DeleteDetectedPuck removes a timer from `e.detected` and unassigns it from any gate on the track.
+func (e *Engine) DeleteDetectedPuck(puckID uint8) error {
+	if puckID == 0 || puckID > maxTimers {
+		return ErrInvalidPuckID
+	}
+	e.mu.Lock()
+	delete(e.detected, puckID)
+	for i := range e.pucks {
+		if e.pucks[i].AssignedPuckID == puckID {
+			e.pucks[i].AssignedPuckID = 0
+			e.pucks[i].PuckLabel = ""
+			e.pucks[i].FirmwareVersion = ""
+			e.pucks[i].Color = ""
+			e.pucks[i].Online = false
+			e.pucks[i].LastSeenAt = time.Time{}
+			e.pucks[i].BatteryMv = 0
+			e.pucks[i].BatteryPct = 0
+		}
+	}
+	e.progress = make(map[int]*pilotProgress)
+	pilots := append([]domain.PilotSlot(nil), e.pilots...)
+	pucks := append([]domain.GatePuck(nil), e.pucks...)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	for _, s := range subs {
+		s.OnConfigUpdated(pilots, pucks)
+	}
+	return nil
+}
+
+// AddSimulatedPuck creates a new simulated XIAO timer (1..6) in `e.detected` and adds a gate
+// on the track for it if fewer than 6 gates exist.
+func (e *Engine) AddSimulatedPuck(role string, label string, fwVersion string) (uint8, error) {
+	label = strings.TrimSpace(label)
+	if utf8.RuneCountInString(label) > domain.MaxGateNameLen {
+		return 0, ErrGateNameTooLong
+	}
+	if strings.TrimSpace(fwVersion) == "" {
+		fwVersion = domain.LatestFirmwareVersion
+	}
+
+	e.mu.Lock()
+	var nextID uint8
+	for id := uint8(1); id <= maxTimers; id++ {
+		if _, exists := e.detected[id]; !exists {
+			nextID = id
+			break
+		}
+	}
+	if nextID == 0 {
+		e.mu.Unlock()
+		return 0, ErrInvalidPuckID
+	}
+
+	now := time.Now()
+	d := &domain.DetectedPuck{
+		PuckID:          nextID,
+		PuckLabel:       label,
+		Color:           domain.DefaultPuckColor(nextID),
+		IsHub:           role == "hub" || nextID == 1,
+		FirmwareVersion: fwVersion,
+		BatteryMv:       4120,
+		BatteryPct:      domain.ComputeBatteryPct(4120),
+		NoiseFloorDbm:   -92.0,
+		Online:          true,
+		LastSeenAt:      now,
+	}
+	e.detected[nextID] = d
+
+	// If there is an existing gate without a timer assigned, bind this timer to it;
+	// otherwise if fewer than maxTimers gates exist, append a new gate for it.
+	bound := false
+	for i := range e.pucks {
+		if e.pucks[i].AssignedPuckID == 0 {
+			e.pucks[i].AssignedPuckID = nextID
+			e.pucks[i].PuckLabel = label
+			e.pucks[i].FirmwareVersion = fwVersion
+			e.pucks[i].Color = d.Color
+			e.pucks[i].BatteryMv = d.BatteryMv
+			e.pucks[i].BatteryPct = d.BatteryPct
+			e.pucks[i].NoiseFloorDbm = d.NoiseFloorDbm
+			e.pucks[i].Online = true
+			e.pucks[i].LastSeenAt = now
+			bound = true
+			break
+		}
+	}
+	if !bound && len(e.pucks) < maxTimers {
+		var gateID uint8
+		usedGate := make(map[uint8]bool, len(e.pucks))
+		for _, p := range e.pucks {
+			usedGate[p.PuckID] = true
+		}
+		for id := uint8(1); id <= maxTimers; id++ {
+			if !usedGate[id] {
+				gateID = id
+				break
+			}
+		}
+		if gateID > 0 {
+			var defaultRssi [domain.MaxPilotPoolSize]float32
+			for k := range defaultRssi {
+				defaultRssi[k] = -92
+			}
+			e.pucks = append(e.pucks, domain.GatePuck{
+				PuckID:          gateID,
+				AssignedPuckID:  nextID,
+				PuckLabel:       label,
+				FirmwareVersion: fwVersion,
+				Color:           d.Color,
+				Role:            domain.PuckRoleSectorGate,
+				TrackOrder:      len(e.pucks),
+				MapX:            0.5,
+				MapY:            0.5,
+				BatteryMv:       d.BatteryMv,
+				BatteryPct:      d.BatteryPct,
+				NoiseFloorDbm:   d.NoiseFloorDbm,
+				LastRSSI:        defaultRssi,
+				Online:          true,
+				LastSeenAt:      now,
+			})
+			e.ensureStartGateLocked()
+			e.initDetectorsLocked()
+			e.progress = make(map[int]*pilotProgress)
+		}
+	}
+
+	pilots := append([]domain.PilotSlot(nil), e.pilots...)
+	pucks := append([]domain.GatePuck(nil), e.pucks...)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	for _, s := range subs {
+		s.OnConfigUpdated(pilots, pucks)
+	}
+	return nextID, nil
+}

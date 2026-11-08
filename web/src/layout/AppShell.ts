@@ -6,6 +6,7 @@ import { AppStore } from "../state/store";
 import { LiveView } from "../views/LiveView";
 import { PilotView } from "../views/PilotView";
 import { SetupView } from "../views/SetupView";
+import { SimView } from "../views/SimView";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 
@@ -35,11 +36,22 @@ export class AppShell extends Component {
     this.adopt(new TopBar(this.slot("topbar"), store, api, router, announcer));
 
     this.onDispose(router.subscribe((route) => this.show(route)));
+    this.onDispose(
+      store.subscribe(["status"], () => {
+        if (!this.store.simulatorRunning && this.router.route === "sim") {
+          this.router.navigate("live");
+        }
+      })
+    );
     this.onDispose(() => this.view?.destroy());
     this.show(router.route);
   }
 
   private show(route: RouteId): void {
+    if (route === "sim" && !this.store.simulatorRunning) {
+      this.router.navigate("live");
+      return;
+    }
     this.view?.destroy();
     const outlet = this.slot("outlet");
     outlet.replaceChildren();
@@ -56,6 +68,8 @@ export class AppShell extends Component {
         return new LiveView(host, this.store, this.api);
       case "pilot":
         return new PilotView(host, this.store);
+      case "sim":
+        return new SimView(host, this.store, this.api);
       case "setup":
         return new SetupView(host, this.store, this.api, this.announcer);
     }

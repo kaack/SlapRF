@@ -21,7 +21,7 @@ export class Sidebar extends Component {
         </div>
       </div>
       <nav class="nav nav-flat">
-        ${ROUTES.map((r) => `<a class="nav-item" href="#/${r.id}" data-route="${r.id}">${r.icon()}<span>${r.label}</span></a>`).join("")}
+        ${ROUTES.map((r) => `<a class="nav-item" href="#/${r.id}" data-route="${r.id}" ${r.simOnly ? 'data-sim-only="1"' : ""}>${r.icon()}<span>${r.label}</span></a>`).join("")}
       </nav>
       <div class="sidebar-foot">
         <div class="nav-group">Gates</div>
@@ -30,8 +30,21 @@ export class Sidebar extends Component {
 
     this.highlight(router.route);
     this.onDispose(router.subscribe((route) => this.highlight(route)));
-    this.onDispose(store.subscribe(["status", "config"], () => this.renderGates()));
+    this.onDispose(
+      store.subscribe(["status", "config"], () => {
+        this.syncSimNav();
+        this.renderGates();
+      })
+    );
+    this.syncSimNav();
     this.renderGates();
+  }
+
+  private syncSimNav(): void {
+    const simOn = this.store.simulatorRunning;
+    this.el.querySelectorAll<HTMLElement>("[data-sim-only]").forEach((a) => {
+      a.style.display = simOn ? "" : "none";
+    });
   }
 
   private highlight(route: RouteId): void {

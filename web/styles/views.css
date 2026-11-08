@@ -2346,3 +2346,315 @@ body.is-gate-dragging * {
   gap: 10px;
   font-size: 12.5px;
 }
+
+/* ==========================================================================
+   Practice Simulator View (#/sim)
+   ========================================================================== */
+
+.sim-view-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.sim-course-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.btn-danger-active {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(245, 158, 11, 0.55);
+  color: #fbbf24;
+}
+
+.sim-walker-banner {
+  margin: 0 20px 14px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.1);
+  color: #fde68a;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.sim-track-canvas-wrap {
+  padding: 6px 20px 18px;
+}
+
+.sim-track-svg {
+  width: 100%;
+  max-height: 240px;
+  display: block;
+  border-radius: var(--radius);
+  background: radial-gradient(circle at 58% 50%, rgba(56, 189, 248, 0.06), rgba(15, 23, 42, 0.45));
+  border: 1px solid var(--border);
+}
+
+.sim-map-zone-title {
+  fill: var(--text-3);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.sim-map-center-note {
+  fill: var(--text-3);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.sim-map-walker-alert {
+  fill: #fbbf24;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.sim-map-gate-id {
+  fill: var(--text);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.sim-map-gate-name {
+  fill: var(--text-2);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.sim-map-gate.is-off {
+  opacity: 0.45;
+}
+
+.sim-map-pilot-label {
+  fill: var(--text);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.sim-pilots-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(310px, 1fr));
+  gap: 14px;
+  padding: 4px 20px 20px;
+}
+
+.sim-pilot-card {
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 15px 16px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.sim-pilot-card.is-crashed {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: linear-gradient(180deg, rgba(239, 68, 68, 0.07), var(--surface-2));
+}
+
+.sim-pilot-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sim-pilot-id {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sim-pilot-name {
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.sim-status-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 650;
+  border: 1px solid transparent;
+}
+
+.sim-status-flying {
+  background: rgba(52, 211, 153, 0.14);
+  border-color: rgba(52, 211, 153, 0.35);
+  color: var(--good);
+}
+
+.sim-status-avoiding {
+  background: rgba(245, 158, 11, 0.15);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
+}
+
+.sim-status-crashed-vtx {
+  background: rgba(239, 68, 68, 0.18);
+  border-color: rgba(239, 68, 68, 0.5);
+  color: #f87171;
+}
+
+.sim-status-crashed-wait {
+  background: rgba(251, 146, 60, 0.15);
+  border-color: rgba(251, 146, 60, 0.4);
+  color: #fb923c;
+}
+
+.sim-status-pit {
+  background: rgba(56, 189, 248, 0.14);
+  border-color: rgba(56, 189, 248, 0.35);
+  color: var(--accent);
+}
+
+.sim-status-paused {
+  background: rgba(148, 163, 184, 0.12);
+  border-color: var(--border);
+  color: var(--text-3);
+}
+
+.sim-pilot-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.sim-batt-block {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.sim-metric-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--text-2);
+}
+
+.sim-batt-bar {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.65);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+
+.sim-batt-fill {
+  height: 100%;
+  border-radius: 999px;
+  transition: width 0.25s ease;
+}
+
+.sim-batt-fill.is-good {
+  background: linear-gradient(90deg, #10b981, #34d399);
+}
+
+.sim-batt-fill.is-mid {
+  background: linear-gradient(90deg, #d97706, #fbbf24);
+}
+
+.sim-batt-fill.is-low {
+  background: linear-gradient(90deg, #dc2626, #f87171);
+}
+
+.sim-telemetry-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px 10px;
+  padding-top: 4px;
+}
+
+.sim-stat-k {
+  font-size: 11px;
+  color: var(--text-3);
+}
+
+.sim-stat-v {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sim-pilot-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-top: 10px;
+  border-top: 1px solid var(--border);
+}
+
+.sim-timer-id-cell {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sim-timer-row-actions {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.sim-btn-delete:hover {
+  border-color: rgba(239, 68, 68, 0.45);
+  color: #f87171;
+}
+
+.sim-timer-add-bar {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 14px 20px 18px;
+  border-top: 1px solid var(--border);
+  background: rgba(15, 23, 42, 0.25);
+}
+
+.sim-timer-add-fields {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.sim-inline-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 11.5px;
+  font-weight: 600;
+  color: var(--text-2);
+}
+
+.sim-inline-field .input {
+  min-width: 170px;
+  height: 34px;
+}
+
+.sim-error-note {
+  margin: 0 20px 12px;
+  padding: 8px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.12);
+  color: #fca5a5;
+  font-size: 12.5px;
+}
+

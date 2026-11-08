@@ -9,6 +9,7 @@ import {
   PilotSlot,
   PilotTrackSummary,
   PuckTelemetryFrame,
+  SimState,
   StatusResponse,
   TimingRules,
 } from "../types/models";
@@ -63,6 +64,7 @@ export class AppStore {
   private _summaries: PilotTrackSummary[] = [];
   private _rules: TimingRules = DEFAULT_RULES;
   private _simulatorRunning = false;
+  private _simState: SimState | null = null;
   private _raceArmed = true;
   private _liveTime: LiveTimeStatus = {
     listenAddr: ":5403",
@@ -169,6 +171,9 @@ export class AppStore {
   public get simulatorRunning(): boolean {
     return this._simulatorRunning;
   }
+  public get simState(): SimState | null {
+    return this._simState;
+  }
   public get raceArmed(): boolean {
     return this._raceArmed;
   }
@@ -218,6 +223,7 @@ export class AppStore {
     this._summaries = state.summaries ?? [];
     this._rules = state.rules ?? DEFAULT_RULES;
     this._simulatorRunning = state.simulatorRunning;
+    this._simState = state.simState ?? null;
     this._raceArmed = state.raceArmed;
     this._liveTime = state.liveTimeStatus;
     if (modeChanged) {
@@ -252,6 +258,11 @@ export class AppStore {
       this._latestTimestampUs = status.serverTimestampUs;
     }
     this._simulatorRunning = status.simulatorRunning;
+    if (status.simState !== undefined) {
+      this._simState = status.simState;
+    } else if (!status.simulatorRunning) {
+      this._simState = null;
+    }
     this._raceArmed = status.raceArmed;
     this._liveTime = status.liveTimeStatus;
 
