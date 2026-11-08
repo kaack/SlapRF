@@ -169,14 +169,16 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// handleToggleArm pauses / resumes lap detection. LiveTime can also arm/disarm timing
-// over the LapRF protocol when it runs a race.
+// handleToggleArm pauses / resumes lap detection. When MultiGP LiveTime is connected,
+// LiveTime owns the arm/disarm state over the LapRF protocol and manual toggling is ignored.
 func (s *Server) handleToggleArm(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.engine.SetRaceArmed(!s.engine.IsRaceArmed())
+	if s.laprfServer.Status().ConnectedClients == 0 {
+		s.engine.SetRaceArmed(!s.engine.IsRaceArmed())
+	}
 	s.handleGetStatus(w, r)
 }
 
