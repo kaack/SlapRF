@@ -61,6 +61,26 @@ func (s *TrackSimulator) resetPilotsLocked() {
 	}
 }
 
+// Prewarm fast-forwards the simulation by `d` at startup so the UI immediately
+// displays completed laps, sector splits, and standings as soon as it opens.
+func (s *TrackSimulator) Prewarm(d time.Duration) {
+	const dtSec = 0.020
+	const stepUs = 20_000
+	steps := int(d.Seconds() / dtSec)
+	if steps <= 0 {
+		return
+	}
+	s.engine.BackdateBootTime(d)
+	var simClockUs uint64 = stepUs
+	origClock := s.clock
+	s.clock = func() uint64 { return simClockUs }
+	for i := 0; i < steps; i++ {
+		s.step(dtSec)
+		simClockUs += stepUs
+	}
+	s.clock = origClock
+}
+
 // Start launches the 50 Hz simulation loop (20 ms tick interval).
 func (s *TrackSimulator) Start() {
 	go s.loop()

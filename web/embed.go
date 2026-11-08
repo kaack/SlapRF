@@ -24,6 +24,9 @@ func EnsureWebDir(webDir string) (string, func(), error) {
 	if err != nil {
 		return "", func() {}, err
 	}
+	if realTmp, err := filepath.EvalSymlinks(tmpDir); err == nil {
+		tmpDir = realTmp
+	}
 	cleanup := func() {
 		_ = os.RemoveAll(tmpDir)
 	}

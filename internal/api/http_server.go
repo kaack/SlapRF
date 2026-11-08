@@ -441,14 +441,22 @@ func (s *Server) handleIngestFrame(w http.ResponseWriter, r *http.Request) {
 // handleTypeScriptBundle compiles `web/src/main.ts` and all imported TypeScript modules
 // in memory using esbuild's native Go library (zero Node.js required).
 func (s *Server) handleTypeScriptBundle(w http.ResponseWriter, _ *http.Request) {
-	entryPoint := filepath.Join(s.webRootDir, "src", "main.ts")
+	absRoot, err := filepath.Abs(s.webRootDir)
+	if err != nil {
+		absRoot = s.webRootDir
+	}
+	if realRoot, err := filepath.EvalSymlinks(absRoot); err == nil {
+		absRoot = realRoot
+	}
+	entryPoint := filepath.Join(absRoot, "src", "main.ts")
 	result := api.Build(api.BuildOptions{
-		EntryPoints: []string{entryPoint},
-		Bundle:      true,
-		Write:       false,
-		Target:      api.ES2022,
-		Format:      api.FormatIIFE,
-		Sourcemap:   api.SourceMapInline,
+		AbsWorkingDir: absRoot,
+		EntryPoints:   []string{entryPoint},
+		Bundle:        true,
+		Write:         false,
+		Target:        api.ES2022,
+		Format:        api.FormatIIFE,
+		Sourcemap:     api.SourceMapInline,
 	})
 
 	if len(result.Errors) > 0 {

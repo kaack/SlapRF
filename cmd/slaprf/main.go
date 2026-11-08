@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 	"syscall"
+	"time"
 
 	"slaprf/internal/api"
 	"slaprf/internal/ingest"
@@ -56,6 +57,7 @@ func main() {
 
 	// 3. Start 8-pilot multi-gate 5.8 GHz track simulator (can be toggled off from UI)
 	sim := ingest.NewTrackSimulator(engine)
+	sim.Prewarm(45 * time.Second)
 	sim.Start()
 	defer sim.Stop()
 

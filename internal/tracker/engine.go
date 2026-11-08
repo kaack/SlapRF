@@ -126,6 +126,14 @@ func (e *Engine) NowUs() uint64 {
 	return uint64(time.Since(e.bootTime).Microseconds())
 }
 
+// BackdateBootTime shifts the engine boot time earlier so pre-warmed simulator laps
+// align seamlessly with real-time monotonic timestamps when live ticking starts.
+func (e *Engine) BackdateBootTime(d time.Duration) {
+	e.mu.Lock()
+	e.bootTime = time.Now().Add(-d)
+	e.mu.Unlock()
+}
+
 // SetRaceArmed enables or pauses lap/crossing detection (synced with LiveTime STATE_CTRL 0xda08).
 func (e *Engine) SetRaceArmed(armed bool) {
 	e.mu.Lock()
