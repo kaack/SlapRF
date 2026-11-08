@@ -1367,6 +1367,34 @@ body.is-gate-dragging * {
   font-size: 12px;
   white-space: nowrap;
 }
+.lap-picker-scroll {
+  overflow-x: hidden;
+  overflow-y: hidden;
+}
+.lap-picker-scroll.is-scrollable {
+  overflow-x: auto;
+  padding-bottom: 6px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.28) rgba(255, 255, 255, 0.06);
+}
+.lap-picker-scroll.is-scrollable::-webkit-scrollbar {
+  height: 6px;
+}
+.lap-picker-scroll.is-scrollable::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.06);
+  border-radius: 3px;
+}
+.lap-picker-scroll.is-scrollable::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.28);
+  border-radius: 3px;
+}
+.lap-picker-scroll.is-scrollable::-webkit-scrollbar-thumb:hover {
+  background: var(--accent);
+}
+.lap-picker-track {
+  position: relative;
+  min-width: 100%;
+}
 .lap-picker-plot {
   padding-top: 48px;
 }

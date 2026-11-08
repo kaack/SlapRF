@@ -9,6 +9,8 @@ import { renderEmpty } from "./markup";
 
 const CHART_W = 1000;
 const CHART_H = 150;
+/** Maximum number of laps visible in the viewport width before horizontal scrolling kicks in. */
+const WINDOW_LAPS = 50;
 /** Slow laps beyond this × median (crashes, landings) are clipped so normal laps keep their resolution. */
 const OUTLIER_FACTOR = 1.35;
 
@@ -17,10 +19,14 @@ const OUTLIER_FACTOR = 1.35;
  *   - Left-click any bar to immediately select it as the lap being reviewed.
  *   - Click the target icon underneath a bar, right-click the bar, or use the top-right
  *     "Compare with" presets to choose the comparison baseline.
+ *   - Defaults to showing the most recent 50 laps and scrolls horizontally for earlier laps.
  */
 export class LapPicker extends Component {
   private readonly store: AppStore;
   private hoveredLapId: number | null = null;
+  private followLatest = true;
+  private savedScrollLeft = 0;
+  private lastPilotSlot: number | null = null;
 
   constructor(el: HTMLElement, store: AppStore) {
     super(el);
@@ -28,6 +34,13 @@ export class LapPicker extends Component {
 
     const handleAction = (e: Event) => {
       const target = e.target as Element;
+      const latestBtn = target.closest<HTMLElement>("[data-scroll-latest]");
+      if (latestBtn) {
+        this.followLatest = true;
+        this.scrollToLatest();
+        this.syncLatestButton();
+        return;
+      }
       const setRefBtn = target.closest<HTMLElement>("[data-set-ref]");
       if (setRefBtn) {
         e.stopPropagation();
@@ -61,11 +74,11 @@ export class LapPicker extends Component {
 
     // Track which bar column the pointer is over so dense sessions highlight the under-bar baseline icon.
     this.listen(el, "pointermove", (e) => {
-      const plot = this.el.querySelector<HTMLElement>(".lap-picker");
-      if (!plot) return;
+      const track = this.el.querySelector<HTMLElement>(".lap-picker-track");
+      if (!track) return;
       const laps = lapsFor(this.store, this.store.selectedPilot);
       if (laps.length === 0) return;
-      const r = plot.getBoundingClientRect();
+      const r = track.getBoundingClientRect();
       if (r.width <= 0) return;
       const relX = Math.max(0, Math.min(0.9999, (e.clientX - r.left) / r.width));
       const idx = Math.floor(relX * laps.length);
@@ -83,8 +96,44 @@ export class LapPicker extends Component {
       }
     });
 
+    // Translate mouse wheel over the chart into horizontal scroll when there are more than 50 laps.
+    this.listen(
+      el,
+      "wheel",
+      (e) => {
+        const scroller = this.el.querySelector<HTMLElement>(".lap-picker-scroll");
+        if (!scroller || scroller.scrollWidth <= scroller.clientWidth + 2) return;
+        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
+        if (delta === 0) return;
+        e.preventDefault();
+        scroller.scrollLeft += delta;
+        this.onScroll(scroller);
+      },
+      { passive: false }
+    );
+
     this.onDispose(store.subscribe(["laps", "selection", "config"], () => this.render()));
     this.render();
+  }
+
+  private onScroll(scroller: HTMLElement): void {
+    this.savedScrollLeft = scroller.scrollLeft;
+    const maxScroll = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+    this.followLatest = scroller.scrollLeft >= maxScroll - 8;
+    this.syncLatestButton();
+  }
+
+  private scrollToLatest(): void {
+    const scroller = this.el.querySelector<HTMLElement>(".lap-picker-scroll");
+    if (!scroller) return;
+    scroller.scrollLeft = Math.max(0, scroller.scrollWidth - scroller.clientWidth);
+    this.savedScrollLeft = scroller.scrollLeft;
+  }
+
+  private syncLatestButton(): void {
+    const btn = this.el.querySelector<HTMLElement>("[data-scroll-latest]");
+    if (!btn) return;
+    btn.style.display = this.followLatest ? "none" : "";
   }
 
   private syncHoveredPin(): void {
@@ -122,9 +171,20 @@ export class LapPicker extends Component {
   }
 
   private render(): void {
+    if (this.lastPilotSlot !== this.store.selectedPilot) {
+      this.lastPilotSlot = this.store.selectedPilot;
+      this.followLatest = true;
+      this.savedScrollLeft = 0;
+    }
+
+    const prevScroller = this.el.querySelector<HTMLElement>(".lap-picker-scroll");
+    if (prevScroller && prevScroller.scrollWidth > prevScroller.clientWidth + 2) {
+      this.onScroll(prevScroller);
+    }
+
     const laps = lapsFor(this.store, this.store.selectedPilot);
     const cmp = resolveComparison(this.store, this.store.selectedPilot);
-    const head = this.renderHead(laps.length >= 2, cmp?.ref);
+    const head = this.renderHead(laps.length, cmp?.ref);
     if (laps.length === 0) {
       this.el.innerHTML = head + renderEmpty("No laps yet", "Each completed lap shows up here as a bar.");
       return;
@@ -132,9 +192,22 @@ export class LapPicker extends Component {
     const reviewId = cmp?.lap.lapId ?? laps[laps.length - 1].lapId;
     const refId = cmp?.ref.lapId ?? -1;
     this.el.innerHTML = head + this.renderChart(laps, reviewId, refId);
+
+    const nextScroller = this.el.querySelector<HTMLElement>(".lap-picker-scroll");
+    if (nextScroller) {
+      nextScroller.addEventListener("scroll", () => this.onScroll(nextScroller), { passive: true });
+      if (this.followLatest) {
+        this.scrollToLatest();
+      } else {
+        nextScroller.scrollLeft = this.savedScrollLeft;
+      }
+      this.syncLatestButton();
+    }
   }
 
-  private renderHead(canCompare: boolean, refLap: LapRecord | undefined): string {
+  private renderHead(lapCount: number, refLap: LapRecord | undefined): string {
+    const canCompare = lapCount >= 2;
+    const scrollable = lapCount > WINDOW_LAPS;
     const ref = this.store.comparison.reference;
     const btn = (key: string, label: string, active: boolean) =>
       `<button type="button" data-ref="${key}" class="${active ? "is-active" : ""}" ${canCompare ? "" : "disabled"}>${label}</button>`;
@@ -143,13 +216,20 @@ export class LapPicker extends Component {
       typeof ref === "number" && refLap
         ? `<button type="button" class="is-active is-ref-chip" data-ref="best" title="Click to reset baseline to Personal best">Lap ${refLap.lapNumber} ×</button>`
         : "";
+    const scrollHint = scrollable
+      ? ` · showing ${WINDOW_LAPS} laps at a time (${lapCount} total, scroll for earlier laps)`
+      : "";
+    const jumpLatest = scrollable
+      ? `<button type="button" class="btn btn-sm btn-ghost" data-scroll-latest style="${this.followLatest ? "display:none" : ""}">Latest ${WINDOW_LAPS} →</button>`
+      : "";
     return `
       <header class="card-head">
         <div>
           <h2><span class="step">1</span>Pick laps</h2>
-          <p>Click any bar to review that lap · click the target icon under a bar (or right-click the bar) to set it as the baseline.</p>
+          <p>Click any bar to review that lap · click the target icon under a bar (or right-click the bar) to set it as the baseline${scrollHint}.</p>
         </div>
         <div class="cmp-with">
+          ${jumpLatest}
           <span>Compare with</span>
           <div class="segmented">
             ${btn("best", "Personal best", ref === "best")}
@@ -171,11 +251,15 @@ export class LapPicker extends Component {
     const floor = Math.max(best, q(0.05) - (q(0.95) - q(0.05)) * 0.5);
     const lo = floor - Math.max(0.02, (hi - floor) * 0.25);
     const span = Math.max(0.001, hi - lo);
-    const slot = CHART_W / laps.length;
-    const barW = Math.max(2, Math.min(26, slot * 0.72));
+
+    const scrollable = laps.length > WINDOW_LAPS;
+    const trackWidthPct = scrollable ? (laps.length / WINDOW_LAPS) * 100 : 100;
+    const svgW = scrollable ? Math.round((laps.length / WINDOW_LAPS) * CHART_W) : CHART_W;
+    const slot = svgW / laps.length;
+    const barW = Math.max(4, Math.min(26, slot * 0.72));
     const MIN_BAR = 6;
     const yOf = (t: number) => Math.min(CHART_H - MIN_BAR, CHART_H - ((Math.min(t, hi) - lo) / span) * (CHART_H - 8));
-    const xPct = (i: number) => ((i * slot + slot / 2) / CHART_W) * 100;
+    const xPct = (i: number) => ((i * slot + slot / 2) / svgW) * 100;
     const topPct = (l: LapRecord) => (yOf(l.lapTimeSec) / CHART_H) * 100;
 
     const bars = laps
@@ -210,14 +294,16 @@ export class LapPicker extends Component {
     const close = review && ref ? Math.abs(laps.indexOf(review) - laps.indexOf(ref)) * slot < 120 : false;
     const taller = review && ref ? (review.lapTimeSec > ref.lapTimeSec ? review : ref) : undefined;
     const tag = (lap: LapRecord, cls: string, text: string, raised: boolean) => {
-      const left = xPct(laps.indexOf(lap));
+      const idx = laps.indexOf(lap);
+      const left = xPct(idx);
       const top = topPct(close && taller ? taller : lap);
-      return `<span class="lap-tag ${cls} ${left > 92 ? "is-right" : left < 8 ? "is-left" : ""} ${raised ? "is-raised" : ""}"
+      return `<span class="lap-tag ${cls} ${idx >= laps.length - 2 ? "is-right" : idx <= 1 ? "is-left" : ""} ${raised ? "is-raised" : ""}"
                     style="left:${left.toFixed(2)}%;top:${top.toFixed(1)}%">${text}</span>`;
     };
 
     // Under-bar baseline pin icons: click the icon under any bar to make that lap the comparison baseline.
-    const dense = laps.length > 28;
+    const visibleCount = Math.min(laps.length, WINDOW_LAPS);
+    const dense = visibleCount > 28;
     const pins = laps
       .map((l, i) => {
         const isRef = l.lapId === refId;
@@ -233,26 +319,30 @@ export class LapPicker extends Component {
       })
       .join("");
 
-    // Lap numbers along the bottom, thinned out to stay readable.
-    const every = Math.max(1, Math.ceil(laps.length / 20));
+    // Lap numbers along the bottom, spaced for a 50-lap window.
+    const every = Math.max(1, Math.ceil(visibleCount / 16));
     const axis = laps
       .map((l, i) => (i % every === 0 || i === laps.length - 1 ? `<span style="left:${xPct(i).toFixed(2)}%">${l.lapNumber}</span>` : ""))
       .join("");
 
     return `
       <div class="lap-picker">
-        <div class="lap-picker-plot">
-          <div class="lap-picker-bars">
-            <svg viewBox="0 0 ${CHART_W} ${CHART_H}" preserveAspectRatio="none" role="img" aria-label="Lap times this session">
-              ${bars}
-              <polyline class="avg-line" points="${avg}" vector-effect="non-scaling-stroke"/>
-            </svg>
-            ${review ? tag(review, "is-review", `Lap ${review.lapNumber} · ${fmtTime(review.lapTimeSec)}`, false) : ""}
-            ${ref ? tag(ref, "is-ref", `Lap ${ref.lapNumber}`, close) : ""}
+        <div class="lap-picker-scroll ${scrollable ? "is-scrollable" : ""}">
+          <div class="lap-picker-track" style="width:${trackWidthPct.toFixed(2)}%">
+            <div class="lap-picker-plot">
+              <div class="lap-picker-bars">
+                <svg viewBox="0 0 ${svgW} ${CHART_H}" preserveAspectRatio="none" role="img" aria-label="Lap times this session">
+                  ${bars}
+                  <polyline class="avg-line" points="${avg}" vector-effect="non-scaling-stroke"/>
+                </svg>
+                ${review ? tag(review, "is-review", `Lap ${review.lapNumber} · ${fmtTime(review.lapTimeSec)}`, false) : ""}
+                ${ref ? tag(ref, "is-ref", `Lap ${ref.lapNumber}`, close) : ""}
+              </div>
+            </div>
+            <div class="lap-picker-pins ${dense ? "is-dense" : ""}" aria-label="Set baseline lap">${pins}</div>
+            <div class="lap-picker-axis">${axis}</div>
           </div>
         </div>
-        <div class="lap-picker-pins ${dense ? "is-dense" : ""}" aria-label="Set baseline lap">${pins}</div>
-        <div class="lap-picker-axis">${axis}</div>
       </div>
       <div class="lap-chart-legend">
         <span><i class="lg-review"></i>Reviewing (click bar)</span>
