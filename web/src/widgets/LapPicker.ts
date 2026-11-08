@@ -32,8 +32,14 @@ export class LapPicker extends Component {
   private chartPan: { startX: number; startScrollLeft: number; moved: boolean } | null = null;
   private suppressClick = false;
   private wasMobileWindow = false;
-  /** Geometry of the last rendered chart, used to place the hover tooltip and average dot. */
-  private chartGeom: { laps: LapRecord[]; best: number; avgs: number[]; xPct: number[]; avgTopPct: number[] } | null = null;
+  /** Geometry of the last rendered chart, used to place the hover lap-time label. */
+  private chartGeom: {
+    laps: LapRecord[];
+    xPct: number[];
+    barTopPct: number[];
+    labelled: Set<number>;
+    edgeClass: (i: number) => string;
+  } | null = null;
 
   private windowLaps(): number {
     return window.innerWidth <= 680 ? WINDOW_LAPS_MOBILE : WINDOW_LAPS_DESKTOP;
@@ -273,35 +279,19 @@ export class LapPicker extends Component {
       g.classList.toggle("is-hovered", Number(g.dataset.lap) === this.hoveredLapId);
     });
 
-    const tip = this.el.querySelector<HTMLElement>("[data-lap-tip]");
-    const dot = this.el.querySelector<HTMLElement>("[data-avg-dot]");
-    const picker = this.el.querySelector<HTMLElement>(".lap-picker");
+    // Hovering an unselected bar prints its lap time above it, like the selected bars have.
+    const label = this.el.querySelector<HTMLElement>("[data-hover-time]");
     const geom = this.chartGeom;
     const idx = geom && this.hoveredLapId !== null ? geom.laps.findIndex((l) => l.lapId === this.hoveredLapId) : -1;
-    const bar = idx >= 0 ? this.el.querySelector<SVGElement>(`.bar-hit[data-lap="${this.hoveredLapId}"] .bar`) : null;
-    if (!tip || !dot || !picker || !geom || idx < 0 || !bar) {
-      if (tip) tip.hidden = true;
-      if (dot) dot.hidden = true;
+    if (!label || !geom || idx < 0 || geom.labelled.has(this.hoveredLapId!)) {
+      if (label) label.hidden = true;
       return;
     }
-
-    dot.hidden = false;
-    dot.style.left = `${geom.xPct[idx].toFixed(2)}%`;
-    dot.style.top = `${geom.avgTopPct[idx].toFixed(2)}%`;
-    tip.innerHTML = `<span><i class="lg-line"></i>5-lap avg</span><strong class="mono">${fmtTime(geom.avgs[idx])}</strong>`;
-    tip.hidden = false;
-
-    // Float the tooltip above whichever is higher: the bar top (plus its time label, if it
-    // has one) or the average-line point.
-    const pr = picker.getBoundingClientRect();
-    const br = bar.getBoundingClientRect();
-    const dr = dot.getBoundingClientRect();
-    const labelled = bar.classList.contains("is-review") || bar.classList.contains("is-ref");
-    const barTop = br.top - (labelled ? 18 : 0);
-    const half = tip.offsetWidth / 2;
-    const cx = br.left + br.width / 2 - pr.left;
-    tip.style.left = `${Math.max(half, Math.min(pr.width - half, cx)).toFixed(1)}px`;
-    tip.style.top = `${(Math.min(barTop, dr.top + dr.height / 2) - pr.top).toFixed(1)}px`;
+    label.textContent = fmtTime(geom.laps[idx].lapTimeSec);
+    label.className = `bar-time is-hover ${geom.edgeClass(idx)}`;
+    label.style.left = `${geom.xPct[idx].toFixed(2)}%`;
+    label.style.top = `${geom.barTopPct[idx].toFixed(2)}%`;
+    label.hidden = false;
   }
 
   private onBarClick(lapId: number): void {
@@ -444,13 +434,11 @@ export class LapPicker extends Component {
       .join("");
     const avgs = rollingAverages(laps);
     const avgPts = avgs.map((a, i) => ({ x: i * slot + slot / 2, y: yOf(a) }));
-    this.chartGeom = {
-      laps,
-      best,
-      avgs,
-      xPct: laps.map((_, i) => xPct(i)),
-      avgTopPct: avgPts.map((p) => (p.y / CHART_H) * 100),
-    };
+
+    // Labels stay centred over their bar; only the first/last bar in a dense chart (where a
+    // centred label would be clipped at the chart edge) gets edge-aligned.
+    const dense = slot < 44;
+    const edgeClass = (i: number) => (!dense ? "" : i === laps.length - 1 ? "is-right" : i === 0 ? "is-left" : "");
 
     // Lap-time labels above the inspected and baseline bars. Neighbouring bars would put both
     // labels in the same spot, so line them up above the taller bar and lift the baseline one.
@@ -461,10 +449,17 @@ export class LapPicker extends Component {
     const timeLabel = (lap: LapRecord, cls: string, raised: boolean) => {
       const i = laps.indexOf(lap);
       const anchor = close && taller ? taller : lap;
-      const edge = i === laps.length - 1 ? "is-right" : i === 0 ? "is-left" : "";
-      return `<span class="bar-time ${cls} ${edge} ${raised ? "is-raised" : ""}" style="left:${xPct(i).toFixed(2)}%;top:${((yOf(anchor.lapTimeSec) / CHART_H) * 100).toFixed(2)}%">${fmtTime(lap.lapTimeSec)}</span>`;
+      return `<span class="bar-time ${cls} ${edgeClass(i)} ${raised ? "is-raised" : ""}" style="left:${xPct(i).toFixed(2)}%;top:${((yOf(anchor.lapTimeSec) / CHART_H) * 100).toFixed(2)}%">${fmtTime(lap.lapTimeSec)}</span>`;
     };
     const labels = (review ? timeLabel(review, "is-review", false) : "") + (ref ? timeLabel(ref, "is-ref", close) : "");
+
+    this.chartGeom = {
+      laps,
+      xPct: laps.map((_, i) => xPct(i)),
+      barTopPct: laps.map((l) => (yOf(l.lapTimeSec) / CHART_H) * 100),
+      labelled: new Set([reviewId, refId]),
+      edgeClass,
+    };
 
     const visibleCount = Math.min(laps.length, winLaps);
     const every = Math.max(1, Math.ceil(visibleCount / 16));
@@ -489,14 +484,13 @@ export class LapPicker extends Component {
                   <path class="avg-line" d="${smoothPath(avgPts)}" vector-effect="non-scaling-stroke"/>
                 </svg>
                 ${labels}
-                <span class="lap-avg-dot" data-avg-dot hidden></span>
+                <span class="bar-time is-hover" data-hover-time hidden></span>
               </div>
             </div>
             <div class="lap-picker-axis">${axis}</div>
           </div>
         </div>
         ${scrollbar}
-        <div class="lap-tip" data-lap-tip hidden></div>
       </div>
       <div class="lap-chart-legend">
         <span><i class="lg-review"></i>Inspected lap</span>
