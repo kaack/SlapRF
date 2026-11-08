@@ -1109,7 +1109,7 @@ body.is-gate-dragging * {
 .chart-legend {
   display: flex;
   flex-wrap: wrap;
-  gap: 16px;
+  gap: 8px;
   margin-top: 12px;
   color: var(--text-2);
   font-size: 12px;
@@ -1123,6 +1123,41 @@ body.is-gate-dragging * {
   width: 12px;
   height: 3px;
   border-radius: 2px;
+  background: var(--c, currentColor);
+  flex-shrink: 0;
+}
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 26px;
+  padding: 0 10px;
+  box-sizing: border-box;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s, border-color 0.12s, color 0.12s, opacity 0.12s;
+}
+.chart-legend-item:hover {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+.chart-legend-item.is-hidden {
+  opacity: 0.45;
+  background: transparent;
+  color: var(--text-3);
+}
+.chart-legend-item.is-hidden i {
+  background: var(--text-3);
+}
+.chart-legend-item.is-hidden span {
+  text-decoration: line-through;
 }
 
 /* =========================================================================

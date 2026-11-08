@@ -127,6 +127,7 @@ export class ProgressionChart extends Component {
   private readonly surface: CanvasSurface;
   /** When set, only this pilot is plotted (re-evaluated on refresh). */
   private readonly slotIndex: (() => number) | undefined;
+  private hiddenSlots = new Set<number>();
   private metric: ProgressionMetric = { kind: "lap" };
   private series: Series[] = [];
   private minTimeSec = 0;
@@ -283,6 +284,11 @@ export class ProgressionChart extends Component {
     this.refresh();
   }
 
+  public setHiddenSlots(hidden: ReadonlySet<number>): void {
+    this.hiddenSlots = new Set(hidden);
+    this.refresh();
+  }
+
   private effectiveEndTimeSec(): number {
     const totalSpan = this.maxTimeSec - this.minTimeSec;
     if (totalSpan <= WINDOW_SEC || this.endTimeSec === null) {
@@ -308,7 +314,11 @@ export class ProgressionChart extends Component {
     const only = this.slotIndex?.();
     let fallbackSec = 0;
     this.series = this.store.enabledPilots
-      .filter((pilot) => only === undefined || pilot.slotIndex === only)
+      .filter(
+        (pilot) =>
+          (only === undefined || pilot.slotIndex === only) &&
+          (only !== undefined || !this.hiddenSlots.has(pilot.slotIndex))
+      )
       .map((pilot) => {
         fallbackSec = 0;
         return {
@@ -347,8 +357,16 @@ export class ProgressionChart extends Component {
       ctx.fillStyle = theme.text3;
       ctx.font = font(500, 12);
       ctx.textAlign = "center";
+      const anyLapsExist =
+        this.slotIndex === undefined &&
+        this.hiddenSlots.size > 0 &&
+        this.store.enabledPilots.some((p) => lapsFor(this.store, p.slotIndex).length > 0);
       ctx.fillText(
-        this.metric.kind === "lap" ? "Lap times appear here as pilots complete laps" : "No times for this section yet",
+        anyLapsExist
+          ? "All pilots hidden — click a pilot in the legend below to plot their laps"
+          : this.metric.kind === "lap"
+          ? "Lap times appear here as pilots complete laps"
+          : "No times for this section yet",
         w / 2,
         h / 2
       );

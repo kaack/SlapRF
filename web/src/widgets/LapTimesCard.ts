@@ -19,6 +19,7 @@ export class LapTimesCard extends Component {
   private readonly store: AppStore;
   private readonly slotIndex: (() => number) | undefined;
   private readonly chart: ProgressionChart;
+  private readonly hiddenSlots = new Set<number>();
   private view: View = { kind: "lap" };
   private renderedTabsSig = "";
 
@@ -58,6 +59,20 @@ export class LapTimesCard extends Component {
       handleSelect(e);
     });
     this.listen(this.slot("views"), "click", handleSelect);
+
+    this.listen(this.slot("legend"), "click", (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLElement>("[data-legend-slot]");
+      if (!btn) return;
+      const slot = Number(btn.dataset.legendSlot);
+      if (!Number.isFinite(slot)) return;
+      if (this.hiddenSlots.has(slot)) {
+        this.hiddenSlots.delete(slot);
+      } else {
+        this.hiddenSlots.add(slot);
+      }
+      this.chart.setHiddenSlots(this.hiddenSlots);
+      this.render();
+    });
 
     this.onDispose(store.subscribe(["laps", "config", "selection"], () => this.render()));
     this.render();
@@ -142,7 +157,13 @@ export class LapTimesCard extends Component {
       ? ""
       : this.store.enabledPilots
           .filter((p) => lapsFor(this.store, p.slotIndex).length > 0)
-          .map((p) => `<span><i style="background:${p.color}"></i>${esc(p.callsign)}</span>`)
+          .map((p) => {
+            const hidden = this.hiddenSlots.has(p.slotIndex);
+            return `<button type="button" class="chart-legend-item ${hidden ? "is-hidden" : ""}" data-legend-slot="${p.slotIndex}" aria-pressed="${!hidden}" title="${hidden ? `Click to show ${esc(p.callsign)} on chart` : `Click to hide ${esc(p.callsign)} from chart`}">
+              <i style="--c:${p.color}"></i>
+              <span>${esc(p.callsign)}</span>
+            </button>`;
+          })
           .join("");
   }
 }
