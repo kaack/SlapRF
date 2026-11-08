@@ -45,7 +45,7 @@ export class PilotLaps extends Component {
     const rows = [...laps].reverse().slice(0, VISIBLE_LAPS).map((lap) => this.renderLap(lap, cols)).join("");
 
     this.el.innerHTML = `
-      <div class="table-scroll">
+      <div class="table-scroll table-scroll-y">
         <table class="table table-compact">
           <thead><tr><th>Lap</th>${head}<th class="num">Lap time</th><th class="num">vs best</th></tr></thead>
           <tbody>${rows}</tbody>
