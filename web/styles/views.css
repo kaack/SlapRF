@@ -2288,21 +2288,59 @@ body.is-gate-dragging * {
 .flasher-progress {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 9px;
   padding: 12px 14px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
-  background: var(--surface-2);
+  background: var(--surface);
+}
+.flasher-progress.is-flashing {
+  border-color: var(--accent-line);
+}
+.flasher-progress.is-complete {
+  border-color: rgba(52, 211, 153, 0.4);
 }
 .flasher-progress-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 10px;
   font-size: 12.5px;
+  color: var(--text-2);
+}
+.flasher-progress.is-flashing .flasher-progress-status {
   color: var(--text);
 }
+.flasher-progress.is-complete .flasher-progress-status {
+  color: var(--good);
+  font-weight: 500;
+}
+.flasher-progress-pct {
+  color: var(--text-3);
+  font-size: 12px;
+}
 .flasher-meter {
-  height: 6px;
+  height: 7px;
+}
+.flasher-progress-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding-top: 2px;
+}
+.flasher-progress-foot-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.flasher-btn-flash .flasher-zap-icon {
+  display: inline-flex;
+  color: var(--accent);
+}
+.flasher-btn-flash:disabled .flasher-zap-icon {
+  opacity: 0.5;
 }
 .flasher-banner {
   padding: 10px 14px;
@@ -2327,7 +2365,6 @@ body.is-gate-dragging * {
   gap: 10px;
 }
 .flasher-port-toggle {
-  margin-left: auto;
   display: inline-flex;
   align-items: center;
   gap: 7px;
@@ -2586,8 +2623,9 @@ body.is-gate-dragging * {
 .flasher-wizard-stepper {
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
-  padding: 8px 10px;
+  padding: 8px 14px;
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface-2);
@@ -2923,7 +2961,7 @@ body.is-gate-dragging * {
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--bg);
-  padding: 8px 10px 4px;
+  padding: 10px 12px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2960,10 +2998,10 @@ body.is-gate-dragging * {
 }
 .flasher-pic-node-title {
   font-family: var(--font-mono);
-  font-size: 9.5px;
+  font-size: 10.5px;
   font-weight: 700;
   fill: var(--text);
-  letter-spacing: 0.02em;
+  letter-spacing: 0.01em;
 }
 .flasher-pic-node-role {
   font-family: var(--font-mono);

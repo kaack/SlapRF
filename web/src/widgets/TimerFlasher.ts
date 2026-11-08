@@ -807,12 +807,12 @@ export class TimerFlasher extends Component {
         </div>
 
         <div class="flasher-wizard-nav">
-          <button type="button" class="btn btn-ghost" data-wizard-prev="1" ${this.busy ? "disabled" : ""}>
+          <button type="button" class="btn" data-wizard-prev="1" ${this.busy ? "disabled" : ""}>
             ${icons.chevronLeft(15)}
-            <span>Back to role</span>
+            <span>Back</span>
           </button>
-          <button type="button" class="btn btn-primary" data-wizard-next="1" ${this.busy ? "disabled" : ""}>
-            <span>${isHub ? "Next: Wi-Fi Mode" : "Next: Review & Flash"}</span>
+          <button type="button" class="btn" data-wizard-next="1" ${this.busy ? "disabled" : ""}>
+            <span>Next</span>
             ${icons.chevronRight(15)}
           </button>
         </div>
@@ -820,12 +820,12 @@ export class TimerFlasher extends Component {
   }
 
   /**
-   * Renders the visual SVG pictorial for Station Mode:
-   * Hub (Client) ---> Router / Hotspot (Host) <--- Laptop / Phone (Client)
+   * Renders the simplified SVG pictorial for Station Mode:
+   * Hub ---> [Router icon] <--- [Laptop icon]
    */
   private renderPictorialStation(): string {
     return `
-      <svg class="flasher-pic-svg" viewBox="0 0 280 96" fill="none" aria-hidden="true">
+      <svg class="flasher-pic-svg" viewBox="0 0 280 68" fill="none" aria-hidden="true">
         <defs>
           <marker id="pic-arrow-sta" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
             <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="currentColor" />
@@ -833,73 +833,62 @@ export class TimerFlasher extends Component {
         </defs>
 
         <!-- Client -> Host directional arrows -->
-        <line x1="64" y1="42" x2="112" y2="42" class="flasher-pic-link" marker-end="url(#pic-arrow-sta)" />
-        <line x1="216" y1="42" x2="168" y2="42" class="flasher-pic-link" marker-end="url(#pic-arrow-sta)" />
+        <line x1="66" y1="34" x2="112" y2="34" class="flasher-pic-link" marker-end="url(#pic-arrow-sta)" />
+        <line x1="214" y1="34" x2="168" y2="34" class="flasher-pic-link" marker-end="url(#pic-arrow-sta)" />
 
-        <!-- Node 1: Hub (Client) -->
-        <g transform="translate(38, 42)">
-          <circle r="22" class="flasher-pic-node is-hub-node" />
-          <text y="-2" text-anchor="middle" class="flasher-pic-node-title">HUB</text>
-          <text y="9" text-anchor="middle" class="flasher-pic-node-role">CLIENT</text>
+        <!-- Hub -->
+        <g transform="translate(42, 34)">
+          <circle r="20" class="flasher-pic-node is-hub-node" />
+          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title">Hub</text>
         </g>
 
-        <!-- Node 2: Router / Hotspot (Host) -->
-        <g transform="translate(140, 42)">
-          <rect x="-24" y="-22" width="48" height="44" rx="8" class="flasher-pic-node is-host-node" />
-          <rect x="-11" y="-7" width="22" height="9" rx="2" stroke="currentColor" stroke-width="1.5" />
-          <line x1="-6" y1="-7" x2="-8" y2="-14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-          <line x1="6" y1="-7" x2="8" y2="-14" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-          <text y="13" text-anchor="middle" class="flasher-pic-node-role is-host-tag">HOST</text>
+        <!-- Router icon only -->
+        <g transform="translate(140, 34)">
+          <rect x="-22" y="-20" width="44" height="40" rx="8" class="flasher-pic-node is-host-node" />
+          <rect x="-12" y="-1" width="24" height="10" rx="2" stroke="currentColor" stroke-width="1.5" />
+          <circle cx="-6" cy="4" r="1.2" fill="currentColor" />
+          <circle cx="0" cy="4" r="1.2" fill="currentColor" />
+          <line x1="-6" y1="-1" x2="-9" y2="-10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
+          <line x1="6" y1="-1" x2="9" y2="-10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
         </g>
 
-        <!-- Node 3: Laptop / Phone (Client) -->
-        <g transform="translate(242, 42)">
-          <rect x="-22" y="-22" width="44" height="44" rx="8" class="flasher-pic-node" />
-          <rect x="-10" y="-12" width="20" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5" />
-          <path d="M-14 3 H14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-          <text y="14" text-anchor="middle" class="flasher-pic-node-role">CLIENT</text>
+        <!-- Laptop icon only -->
+        <g transform="translate(238, 34)">
+          <rect x="-22" y="-20" width="44" height="40" rx="8" class="flasher-pic-node" />
+          <rect x="-11" y="-8" width="22" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5" />
+          <path d="M-15 8 H15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
         </g>
-
-        <text x="38" y="82" text-anchor="middle" class="flasher-pic-caption">Hub Timer</text>
-        <text x="140" y="82" text-anchor="middle" class="flasher-pic-caption">Router / Hotspot</text>
-        <text x="242" y="82" text-anchor="middle" class="flasher-pic-caption">Laptop / Phone</text>
       </svg>`;
   }
 
   /**
-   * Renders the visual SVG pictorial for Direct AP Mode:
-   * Laptop / Phone (Client) ---> Hub AP (Host)
+   * Renders the simplified SVG pictorial for Direct AP Mode:
+   * Hub <--- [Laptop icon]
    */
   private renderPictorialAp(): string {
     return `
-      <svg class="flasher-pic-svg" viewBox="0 0 280 96" fill="none" aria-hidden="true">
+      <svg class="flasher-pic-svg" viewBox="0 0 280 68" fill="none" aria-hidden="true">
         <defs>
           <marker id="pic-arrow-ap" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
             <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="currentColor" />
           </marker>
         </defs>
 
-        <!-- Client (Laptop) -> Host (Hub AP) directional arrow -->
-        <line x1="192" y1="42" x2="90" y2="42" class="flasher-pic-link" marker-end="url(#pic-arrow-ap)" />
-        <text x="141" y="34" text-anchor="middle" class="flasher-pic-link-label">SSID: SlapRF</text>
+        <!-- Client (Laptop) -> Host (Hub) directional arrow -->
+        <line x1="186" y1="34" x2="94" y2="34" class="flasher-pic-link" marker-end="url(#pic-arrow-ap)" />
 
-        <!-- Hub (Host / AP) -->
-        <g transform="translate(62, 42)">
-          <circle r="22" class="flasher-pic-node is-hub-node is-host-node" />
-          <text y="-2" text-anchor="middle" class="flasher-pic-node-title">HUB</text>
-          <text y="9" text-anchor="middle" class="flasher-pic-node-role is-host-tag">HOST (AP)</text>
+        <!-- Hub -->
+        <g transform="translate(68, 34)">
+          <circle r="20" class="flasher-pic-node is-hub-node is-host-node" />
+          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title">Hub</text>
         </g>
 
-        <!-- Laptop / Phone (Client) -->
-        <g transform="translate(218, 42)">
-          <rect x="-22" y="-22" width="44" height="44" rx="8" class="flasher-pic-node" />
-          <rect x="-10" y="-12" width="20" height="12" rx="1.5" stroke="currentColor" stroke-width="1.5" />
-          <path d="M-14 3 H14" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-          <text y="14" text-anchor="middle" class="flasher-pic-node-role">CLIENT</text>
+        <!-- Laptop icon only -->
+        <g transform="translate(212, 34)">
+          <rect x="-22" y="-20" width="44" height="40" rx="8" class="flasher-pic-node" />
+          <rect x="-11" y="-8" width="22" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5" />
+          <path d="M-15 8 H15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
         </g>
-
-        <text x="62" y="82" text-anchor="middle" class="flasher-pic-caption">Hub Timer (Host)</text>
-        <text x="218" y="82" text-anchor="middle" class="flasher-pic-caption">Laptop / Phone (Client)</text>
       </svg>`;
   }
 
@@ -1107,12 +1096,12 @@ export class TimerFlasher extends Component {
         </div>
 
         <div class="flasher-wizard-nav">
-          <button type="button" class="btn btn-ghost" data-wizard-prev="1" ${this.busy ? "disabled" : ""}>
+          <button type="button" class="btn" data-wizard-prev="1" ${this.busy ? "disabled" : ""}>
             ${icons.chevronLeft(15)}
             <span>Back</span>
           </button>
-          <button type="button" class="btn btn-primary" data-wizard-next="1" ${this.busy ? "disabled" : ""}>
-            <span>Next: Review &amp; Flash</span>
+          <button type="button" class="btn" data-wizard-next="1" ${this.busy ? "disabled" : ""}>
+            <span>Next</span>
             ${icons.chevronRight(15)}
           </button>
         </div>
@@ -1127,6 +1116,13 @@ export class TimerFlasher extends Component {
         ? `Hub Hotspot "SlapRF" (${this.wifiPass ? "WPA2" : "Open AP"})`
         : `Join "${this.wifiSSID.trim() || "(unset)"}" (Station Mode)`
       : "2.4 GHz ESP-NOW LR (Client → Hub H1)";
+
+    const pct = this.progress ? this.progress.percent : this.lastSuccessMsg ? 100 : 0;
+    const statusText = this.progress
+      ? this.progress.detail
+      : this.lastSuccessMsg
+      ? `✓ ${this.lastSuccessMsg}`
+      : `Ready to flash ${cleanLabel} (${this.firmwareVersion}) over USB-C`;
 
     return `
       <div class="flasher-wizard-body">
@@ -1167,34 +1163,53 @@ export class TimerFlasher extends Component {
           </div>
         </div>
 
+        <div class="flasher-progress ${this.busy ? "is-flashing" : ""} ${this.lastSuccessMsg && !this.busy ? "is-complete" : ""}">
+          <div class="flasher-progress-top">
+            <span class="flasher-progress-status">${esc(statusText)}</span>
+            <span class="mono flasher-progress-pct">${pct}%</span>
+          </div>
+          <div class="meter flasher-meter">
+            <span class="meter-fill ${this.lastSuccessMsg && !this.busy ? "tone-good" : ""}" style="width:${pct}%"></span>
+          </div>
+          <div class="flasher-progress-foot">
+            <label class="flasher-port-toggle">
+              <input
+                type="checkbox"
+                data-all-ports="1"
+                ${this.showAllPorts ? "checked" : ""}
+                ${this.busy ? "disabled" : ""}
+              />
+              <span>Show all USB serial ports</span>
+            </label>
+            <div class="flasher-progress-foot-actions">
+              ${
+                this.lastSuccessMsg && !this.busy
+                  ? `<button type="button" class="btn btn-sm" data-flash-another="1">Select another role →</button>`
+                  : ""
+              }
+              <button
+                type="button"
+                class="btn btn-sm btn-ghost"
+                data-download-bin="1"
+                ${this.busy ? "disabled" : ""}
+                title="Download the pre-configured .bin image"
+              >
+                <span>Download .bin</span>
+              </button>
+            </div>
+          </div>
+        </div>
+
         ${
-          this.progress
-            ? `
-          <div class="flasher-progress">
-            <div class="flasher-progress-top">
-              <span>${esc(this.progress.detail)}</span>
-              <span class="mono">${this.progress.percent}%</span>
-            </div>
-            <div class="meter flasher-meter">
-              <span class="meter-fill tone-good" style="width:${this.progress.percent}%"></span>
-            </div>
-          </div>`
+          !webSerialOk
+            ? `<p class="note">Direct USB reading and flashing requires Chrome, Edge, or Brave.</p>`
             : ""
         }
 
-        ${
-          this.lastSuccessMsg && !this.busy
-            ? `<div class="flasher-banner is-ok">
-                <span>✓ ${esc(this.lastSuccessMsg)}</span>
-                <button type="button" class="btn btn-sm" data-flash-another="1">Select another role →</button>
-              </div>`
-            : ""
-        }
-
-        <div class="flasher-actions">
+        <div class="flasher-wizard-nav">
           <button
             type="button"
-            class="btn btn-ghost"
+            class="btn"
             data-wizard-prev="1"
             ${this.busy ? "disabled" : ""}
           >
@@ -1204,40 +1219,14 @@ export class TimerFlasher extends Component {
 
           <button
             type="button"
-            class="btn btn-primary"
+            class="btn flasher-btn-flash"
             data-flash-usb="1"
             ${this.busy || !webSerialOk ? "disabled" : ""}
           >
-            ${icons.zap(15)}
-            <span>Flash "${esc(cleanLabel)}" to USB</span>
+            <span class="flasher-zap-icon">${icons.zap(15)}</span>
+            <span>${this.busy ? `Flashing ${esc(cleanLabel)}… (${pct}%)` : `Flash ${esc(cleanLabel)} to USB`}</span>
           </button>
-
-          <button
-            type="button"
-            class="btn btn-ghost"
-            data-download-bin="1"
-            ${this.busy ? "disabled" : ""}
-            title="Download the pre-configured .bin image"
-          >
-            <span>Download .bin</span>
-          </button>
-
-          <label class="flasher-port-toggle">
-            <input
-              type="checkbox"
-              data-all-ports="1"
-              ${this.showAllPorts ? "checked" : ""}
-              ${this.busy ? "disabled" : ""}
-            />
-            <span>Show all USB serial ports</span>
-          </label>
         </div>
-
-        ${
-          !webSerialOk
-            ? `<p class="note">Direct USB reading and flashing requires Chrome, Edge, or Brave.</p>`
-            : ""
-        }
       </div>`;
   }
 
