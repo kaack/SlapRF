@@ -451,7 +451,7 @@ STATUS?`;return first=!1,await this.request(cmd,"status",900)}catch{}await sleep
               <div class="debug-canvas-wrap">
                 <canvas class="debug-canvas debug-signal-canvas" data-signal-canvas></canvas>
               </div>
-              <div class="debug-chart-readout debug-single-readout mono" data-signal-readout></div>
+              <div class="debug-chart-readout debug-single-readout" data-signal-readout></div>
               <div data-slot="signal-legend"></div>
             </div>
             <div class="debug-status-layout" data-slot="noise-table"></div>
@@ -852,7 +852,7 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
         <div class="debug-canvas-wrap">
           <canvas class="debug-canvas debug-spectrum-canvas" data-spectrum-canvas></canvas>
         </div>
-        <div class="debug-chart-readout debug-single-readout mono" data-spectrum-readout></div>
+        <div class="debug-chart-readout debug-single-readout" data-spectrum-readout></div>
         <div class="debug-chart-foot">
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${isFreqZoomed?"is-unarmed":"is-armed"}" data-axis-pill>
@@ -943,7 +943,7 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
         <div class="debug-canvas-wrap">
           <canvas class="debug-canvas debug-waterfall-canvas" data-waterfall-canvas></canvas>
         </div>
-        <div class="debug-chart-readout debug-single-readout mono" data-waterfall-readout></div>
+        <div class="debug-chart-readout debug-single-readout" data-waterfall-readout></div>
         <div class="debug-chart-foot">
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${isFreqZoomed?"is-unarmed":"is-armed"}" data-axis-pill>
