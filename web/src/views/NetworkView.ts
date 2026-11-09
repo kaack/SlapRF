@@ -58,7 +58,7 @@ export class NetworkView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Connectivity</h2>
-            <p>Connect to a timer over <strong>Direct USB-C</strong> (Hub or Spoke) or over <strong>Wi-Fi Stream</strong> (Hub SSE). The top-right LED shows <strong style="color:var(--accent)">Neon</strong> for a Hub, <strong style="color:#38bdf8">Blue</strong> for a Spoke, <strong style="color:var(--warn)">Yellow</strong> while reconnecting, and <strong style="color:var(--bad)">Red</strong> if reconnection fails.</p>
+            <p>Connect to a timer over Direct USB-C or over Wi-Fi to inspect the 2.4 GHz course network and monitored 5.8 GHz channels.</p>
           </div>
           <div class="debug-status-layout" data-slot="connection"></div>
         </section>
@@ -440,10 +440,10 @@ export class NetworkView extends Component {
             ? `${esc(this.console.busyLabel)}…`
             : "Connect USB-C";
       methodBodyHtml = `
-        <div class="option-row" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+        <div class="option-row">
           <div>
-            <div class="option-title">Direct USB-C connection (WebSerial)</div>
-            <div class="option-sub">Plug either a <strong>Hub</strong> (lights the status LED <strong style="color:var(--accent)">Neon</strong>) or a <strong>Spoke</strong> (lights the status LED <strong style="color:#38bdf8">Blue</strong>) into this computer over USB-C. Automatically detects the board's role, TDMA slot, and peer timers.</div>
+            <div class="option-title">Direct USB-C connection</div>
+            <div class="option-sub">Plug a Hub or Spoke timer into this computer over USB-C to automatically detect its role, TDMA slot, and peer timers.</div>
           </div>
           <div class="debug-connect-actions">
             ${
@@ -462,15 +462,16 @@ export class NetworkView extends Component {
         ${!usbSupported ? `<div class="sim-error-note" style="margin-top:8px;">Direct USB-C requires Chrome, Edge, or Brave (WebSerial). Use Wi-Fi Stream on other browsers.</div>` : ""}`;
     } else {
       methodBodyHtml = `
-        <div class="option-row" style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border);">
+        <div class="option-row">
           <div>
-            <div class="option-title">Wi-Fi Hub SSE stream</div>
+            <div class="option-title">Wi-Fi Hub stream</div>
             <div class="option-sub">Connects directly over Wi-Fi to your Hub's real-time stream (<code>http://${esc(hub.hubHost)}/api/hub-stream</code>). Join the Hub's <code>SlapRF</code> Wi-Fi AP (<code>192.168.4.1</code>) or enter its LAN IP address.</div>
           </div>
           <div class="debug-connect-actions" style="flex-wrap:wrap;">
-            <div class="flasher-pass-wrap has-inline-action" style="width:185px;">
+            <div class="flasher-pass-wrap has-inline-action" style="width:170px;">
               <input
                 class="input mono ${isCustomHost ? "flasher-pass-input" : ""}"
+                style="height:28px;font-size:12px;"
                 type="text"
                 name="hubHost"
                 value="${esc(hub.hubHost)}"
@@ -501,8 +502,8 @@ export class NetworkView extends Component {
         </span>
         <div class="debug-connect-actions">
           <div class="segmented" role="group" aria-label="Connectivity method">
-            <button type="button" class="seg ${method === "usb" ? "is-active" : ""}" data-action="conn-method" data-method="usb">Direct USB-C</button>
-            <button type="button" class="seg ${method === "wifi" ? "is-active" : ""}" data-action="conn-method" data-method="wifi">Wi-Fi Stream</button>
+            <button type="button" class="${method === "usb" ? "is-active" : ""}" data-action="conn-method" data-method="usb">Direct USB-C</button>
+            <button type="button" class="${method === "wifi" ? "is-active" : ""}" data-action="conn-method" data-method="wifi">Wi-Fi Stream</button>
           </div>
         </div>
       </div>

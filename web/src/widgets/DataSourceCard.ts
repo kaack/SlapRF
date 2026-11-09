@@ -139,9 +139,9 @@ export class DataSourceCard extends Component {
             </div>
             <div class="option-actions">
               <div class="segmented" role="group" aria-label="Hardware timing runtime">
-                <button type="button" class="seg ${mode === "auto" ? "is-active" : ""}" data-action="engine-mode" data-mode="auto" title="${desktopAvail ? "Desktop server detected (uses Desktop app)" : "Static web host detected (uses Browser WASM)"}">Auto</button>
-                <button type="button" class="seg ${mode === "browser" ? "is-active" : ""}" data-action="engine-mode" data-mode="browser">Browser (WASM)</button>
-                <button type="button" class="seg ${mode === "desktop" ? "is-active" : ""}" data-action="engine-mode" data-mode="desktop">Desktop app</button>
+                <button type="button" class="${mode === "auto" ? "is-active" : ""}" data-action="engine-mode" data-mode="auto" title="${desktopAvail ? "Desktop server detected (uses Desktop app)" : "Static web host detected (uses Browser WASM)"}">Auto</button>
+                <button type="button" class="${mode === "browser" ? "is-active" : ""}" data-action="engine-mode" data-mode="browser">Browser (WASM)</button>
+                <button type="button" class="${mode === "desktop" ? "is-active" : ""}" data-action="engine-mode" data-mode="desktop">Desktop app</button>
               </div>
             </div>
           </div>
