@@ -51,7 +51,7 @@ interface Check {
 
 interface DebugTimerInfo {
   found: boolean;
-  puckId?: number;
+  timerId?: number;
   label?: string;
   online: boolean;
   msSinceSeen?: number;
@@ -126,9 +126,9 @@ export class DebugView extends Component {
   private pilots: PilotThresholdInfo[] = [];
   private serverTimers: DetectedTimer[] = [];
   private serverGates: Array<{
-    puckId: number;
-    assignedPuckId: number;
-    puckLabel: string;
+    gateId: number;
+    assignedTimerId: number;
+    timerLabel: string;
     name: string;
     role: string;
     trackOrder: number;
@@ -1732,11 +1732,10 @@ export class DebugView extends Component {
       const data = (await res.json()) as {
         pilots?: PilotThresholdInfo[];
         timers?: DetectedTimer[];
-        detectedPucks?: DetectedTimer[];
-        pucks?: Array<{
-          puckId: number;
-          assignedPuckId: number;
-          puckLabel: string;
+        gates?: Array<{
+          gateId: number;
+          assignedTimerId: number;
+          timerLabel: string;
           name: string;
           role: string;
           trackOrder: number;
@@ -1747,10 +1746,10 @@ export class DebugView extends Component {
         simulatorActive?: boolean;
       };
       this.serverSimActive = Boolean(data.simulatorActive);
-      if (Array.isArray(data.pucks)) {
-        this.serverGates = data.pucks;
+      if (Array.isArray(data.gates)) {
+        this.serverGates = data.gates;
       }
-      const timers = data.detectedPucks ?? data.timers;
+      const timers = data.timers;
       if (Array.isArray(timers)) {
         this.serverTimers = timers;
         if (!this.serverSimActive) {
@@ -1761,10 +1760,10 @@ export class DebugView extends Component {
               recordKnownHardwareTimer({
                 fp,
                 role: dt.isHub ? "hub" : "spoke",
-                label: dt.puckLabel,
+                label: dt.timerLabel,
                 profile: prof?.code ?? 1,
                 fw: dt.firmwareVersion,
-                slot: dt.puckId >= 1 && dt.puckId <= 7 ? dt.puckId : undefined,
+                slot: dt.timerId >= 1 && dt.timerId <= 7 ? dt.timerId : undefined,
               });
             }
           }
@@ -2598,8 +2597,8 @@ export class DebugView extends Component {
     await sleep(2000);
     const b = await get();
     const perSec = b ? (b.framesRx - a.framesRx) / 2 : 0;
-    if (b && b.framesRx > a.framesRx) return [name, a.simulatorActive ? "warn" : "pass", `online as timer ${a.puckId}, ${perSec.toFixed(0)} frames/s${sim}`];
-    if (!a.framesRx) return [name, a.simulatorActive ? "warn" : "pass", `online as timer ${a.puckId} (not assigned to a gate, so frames aren't counted)${sim}`];
+    if (b && b.framesRx > a.framesRx) return [name, a.simulatorActive ? "warn" : "pass", `online as timer ${a.timerId}, ${perSec.toFixed(0)} frames/s${sim}`];
+    if (!a.framesRx) return [name, a.simulatorActive ? "warn" : "pass", `online as timer ${a.timerId} (not assigned to a gate, so frames aren't counted)${sim}`];
     return [name, "fail", `online but no new frames in 2 s${sim}`];
   }
 
@@ -3079,22 +3078,22 @@ export class DebugView extends Component {
 
       // 2. Real timers from local SlapRF server (/api/state)
       for (const dt of realServerTimers) {
-        if (!dt.isHub && dt.puckId >= 2 && dt.puckId <= 7) {
+        if (!dt.isHub && dt.timerId >= 2 && dt.timerId <= 7) {
           const fp = (dt.fingerprint || "").toUpperCase();
-          const gate = this.serverGates.find((g) => g.assignedPuckId === dt.puckId);
-          const gateName = gate ? (gate.name?.trim() || gate.puckLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
+          const gate = this.serverGates.find((g) => g.assignedTimerId === dt.timerId);
+          const gateName = gate ? (gate.name?.trim() || gate.timerLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
           const serverFrames = gate?.framesRxCount ?? 0;
           const serverRssi = Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined;
-          if (bySlot.has(dt.puckId)) {
-            const cur = bySlot.get(dt.puckId)!;
+          if (bySlot.has(dt.timerId)) {
+            const cur = bySlot.get(dt.timerId)!;
             cur.serverFrames = serverFrames;
             cur.serverGateLabel = gateName;
             cur.serverRssi = serverRssi;
             if (fp && (cur.fp.startsWith("SLOT") || cur.fp.startsWith("53504B"))) {
               cur.fp = fp;
             }
-            if (dt.puckLabel && cur.label === `S${dt.puckId - 1}`) {
-              cur.label = dt.puckLabel;
+            if (dt.timerLabel && cur.label === `S${dt.timerId - 1}`) {
+              cur.label = dt.timerLabel;
             }
             if (fp) usedFps.add(fp);
             continue;
@@ -3102,22 +3101,22 @@ export class DebugView extends Component {
           if (fp && usedFps.has(fp)) continue;
           const known = fp ? knownTimers.find((k) => k.fp === fp) : undefined;
           const spProf = FIRMWARE_PROFILES.find((p) => p.id === dt.firmwareProfile);
-          const prevRate = this.spokeRateTracker.get(dt.puckId);
+          const prevRate = this.spokeRateTracker.get(dt.timerId);
           let ratePktPerSec = prevRate?.ratePktPerSec ?? 0;
           if (prevRate) {
             const dtSec = (nowMs - prevRate.atMs) / 1000;
             if (dtSec >= 0.25) {
               ratePktPerSec = serverFrames >= prevRate.frames ? (serverFrames - prevRate.frames) / dtSec : 0;
-              this.spokeRateTracker.set(dt.puckId, { frames: serverFrames, atMs: nowMs, ratePktPerSec });
+              this.spokeRateTracker.set(dt.timerId, { frames: serverFrames, atMs: nowMs, ratePktPerSec });
             }
           } else {
-            this.spokeRateTracker.set(dt.puckId, { frames: serverFrames, atMs: nowMs, ratePktPerSec: 0 });
+            this.spokeRateTracker.set(dt.timerId, { frames: serverFrames, atMs: nowMs, ratePktPerSec: 0 });
           }
           const serverOnline = Boolean(dt.online && serverFrames > 0);
-          bySlot.set(dt.puckId, {
-            slot: dt.puckId,
+          bySlot.set(dt.timerId, {
+            slot: dt.timerId,
             fp: fp || "—",
-            label: dt.puckLabel || known?.label || `S${dt.puckId - 1}`,
+            label: dt.timerLabel || known?.label || `S${dt.timerId - 1}`,
             profileName: spProf?.name ?? profileName,
             fw: dt.firmwareVersion || known?.fw || s.fw,
             mac: known?.mac,
@@ -3156,8 +3155,8 @@ export class DebugView extends Component {
         }
         if (targetSlot >= 2 && targetSlot <= 7) {
           const spProf = FIRMWARE_PROFILES.find((p) => p.code === k.profile);
-          const gate = this.serverGates.find((g) => g.assignedPuckId === targetSlot);
-          const gateName = gate ? (gate.name?.trim() || gate.puckLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
+          const gate = this.serverGates.find((g) => g.assignedTimerId === targetSlot);
+          const gateName = gate ? (gate.name?.trim() || gate.timerLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
           bySlot.set(targetSlot, {
             slot: targetSlot,
             fp: k.fp,
@@ -3391,7 +3390,7 @@ export class DebugView extends Component {
     const beaconFresh = beaconMsAgo === undefined || beaconMsAgo < 2500;
     const linked = hasSlot && beaconFresh;
     const beaconStale = hasSlot && !beaconFresh;
-    const parentLabel = s.hub?.label || serverHub?.puckLabel || knownHub?.label || "H1";
+    const parentLabel = s.hub?.label || serverHub?.timerLabel || knownHub?.label || "H1";
     const parentFp = s.hub?.fp || serverHub?.fingerprint || knownHub?.fp || "";
     const parentMac = s.hub?.mac || knownHub?.mac || "";
     const parentFw = s.hub?.fw || serverHub?.firmwareVersion || knownHub?.fw || s.fw;

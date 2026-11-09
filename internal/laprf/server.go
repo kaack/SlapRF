@@ -44,7 +44,7 @@ type engineCrossingForwarder struct {
 	engine *tracker.Engine
 }
 
-func (f *engineCrossingForwarder) OnTelemetryFrame(_ domain.PuckTelemetryFrame) {}
+func (f *engineCrossingForwarder) OnTelemetryFrame(_ domain.TimerTelemetryFrame) {}
 func (f *engineCrossingForwarder) OnGateCrossing(ev domain.GateCrossingEvent) {
 	if f.server.activeEngine() == f.engine {
 		f.server.OnGateCrossing(ev)
@@ -52,7 +52,7 @@ func (f *engineCrossingForwarder) OnGateCrossing(ev domain.GateCrossingEvent) {
 }
 func (f *engineCrossingForwarder) OnLapCompleted(_ domain.LapRecord, _ []domain.PilotTrackSummary) {}
 func (f *engineCrossingForwarder) OnDetectionFiltered(_ domain.FilteredDetection)                  {}
-func (f *engineCrossingForwarder) OnConfigUpdated(_ []domain.PilotSlot, _ []domain.GatePuck)       {}
+func (f *engineCrossingForwarder) OnConfigUpdated(_ []domain.PilotSlot, _ []domain.TrackGate)      {}
 
 // NewServer creates a new LapRF TCP bridge bound to the given address (default ":5403").
 func NewServer(addr string, engine *tracker.Engine) *Server {
@@ -378,20 +378,20 @@ func (s *Server) broadcastStatusFrame() {
 	}
 
 	eng := s.activeEngine()
-	_, pucks, _, crossings, _ := eng.StateSnapshot()
-	var startPuck domain.GatePuck
-	if len(pucks) > 0 {
-		startPuck = pucks[0]
-		for _, p := range pucks {
-			if p.Role == domain.PuckRoleStartFinish {
-				startPuck = p
+	_, gates, _, crossings, _ := eng.StateSnapshot()
+	var startGate domain.TrackGate
+	if len(gates) > 0 {
+		startGate = gates[0]
+		for _, g := range gates {
+			if g.Role == domain.GateRoleStartFinish {
+				startGate = g
 				break
 			}
 		}
 	}
 
 	pkt := &Packet{Type: RecordStatus}
-	pkt.AppendUint16(0x03, startPuck.BatteryMv) // Battery voltage in mV
+	pkt.AppendUint16(0x03, startGate.BatteryMv) // Battery voltage in mV
 	pkt.AppendUint16(0x01, 0)                   // Status flags
 	var gateState uint8
 	if eng.IsRaceArmed() {
@@ -402,7 +402,7 @@ func (s *Server) broadcastStatusFrame() {
 
 	for i := 0; i < domain.MaxPilotSlots; i++ {
 		pkt.AppendUint8(0x01, uint8(i+1))
-		rssiHeight := float32(math.Max(300, float64(startPuck.LastRSSI[i]+95.0)*46.0))
+		rssiHeight := float32(math.Max(300, float64(startGate.LastRSSI[i]+95.0)*46.0))
 		pkt.AppendFloat32(0x21, rssiHeight)
 	}
 
@@ -429,10 +429,10 @@ func (s *Server) broadcastWire(wire []byte, isDetection bool) {
 
 // --- tracker.EventSubscriber implementation ---
 
-func (s *Server) OnTelemetryFrame(_ domain.PuckTelemetryFrame) {}
+func (s *Server) OnTelemetryFrame(_ domain.TimerTelemetryFrame) {}
 
 func (s *Server) OnGateCrossing(ev domain.GateCrossingEvent) {
-	// Only crossings at the Start/Finish Gate Puck are sent to MultiGP LiveTime!
+	// Only crossings at the Start/Finish Gate Timer are sent to MultiGP LiveTime!
 	// Intermediate sector gate crossings are handled by our companion Sector Dashboard.
 	if !ev.IsStartFinish || !s.IsEnabled() {
 		return
@@ -451,4 +451,4 @@ func (s *Server) OnLapCompleted(_ domain.LapRecord, _ []domain.PilotTrackSummary
 // Filtered detections are never reported to LiveTime — only accepted start/finish crossings.
 func (s *Server) OnDetectionFiltered(_ domain.FilteredDetection) {}
 
-func (s *Server) OnConfigUpdated(_ []domain.PilotSlot, _ []domain.GatePuck) {}
+func (s *Server) OnConfigUpdated(_ []domain.PilotSlot, _ []domain.TrackGate) {}

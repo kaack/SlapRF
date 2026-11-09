@@ -108,7 +108,7 @@ const (
 // FilteredDetection is a detection the timing rules set aside, kept for the race director.
 type FilteredDetection struct {
 	TimestampUs uint64       `json:"timestampUs"`
-	PuckID      uint8        `json:"puckId"`
+	GateID      uint8        `json:"gateId"`
 	SlotIndex   int          `json:"slotIndex"`
 	Callsign    string       `json:"callsign"`
 	Reason      FilterReason `json:"reason"`

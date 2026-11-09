@@ -19,7 +19,7 @@ func TestPublishNeverBlocksOnStalledClient(t *testing.T) {
 
 	start := time.Now()
 	for i := 0; i < 1000; i++ {
-		hub.OnTelemetryFrame(domain.PuckTelemetryFrame{PuckID: 1})
+		hub.OnTelemetryFrame(domain.TimerTelemetryFrame{TimerID: 1})
 		hub.OnGateCrossing(domain.GateCrossingEvent{EventID: uint64(i)})
 	}
 	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {

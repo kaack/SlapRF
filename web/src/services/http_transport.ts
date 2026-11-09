@@ -198,31 +198,31 @@ export class HttpRealTransport implements ApiTransport {
       }
     } else if (url === "/api/thresholds" && Array.isArray(body)) {
       for (const u of body as GateThresholdUpdate[]) {
-        const node = this.fallbackNodes.find((n) => n.puckId === u.puckId);
+        const node = this.fallbackNodes.find((n) => n.gateId === u.gateId);
         const pos = this.fallbackPilots.findIndex((p) => p.slotIndex === u.slotIndex);
         if (node && pos >= 0) node.enterThresholds[pos] = u.enterDbm;
       }
     } else if ((url === "/api/gates/rules" || url === "/api/track/rules") && body) {
-      const b = body as { puckId: number; overrides: GateRuleOverrides };
-      const node = this.fallbackNodes.find((n) => n.puckId === b.puckId);
+      const b = body as { gateId: number; overrides: GateRuleOverrides };
+      const node = this.fallbackNodes.find((n) => n.gateId === b.gateId);
       if (node) node.ruleOverrides = { ...b.overrides };
     } else if ((url === "/api/track/update" || url === "/api/gates/update") && body) {
       const u = body as GateUpdate;
-      const node = this.fallbackNodes.find((n) => n.puckId === u.puckId);
+      const node = this.fallbackNodes.find((n) => n.gateId === u.gateId);
       if (node) {
         if (u.name !== undefined) node.name = u.name;
         if (u.role === "START_FINISH") {
-          this.fallbackNodes.forEach((n) => (n.role = n.puckId === node.puckId ? "START_FINISH" : "SECTOR_GATE"));
+          this.fallbackNodes.forEach((n) => (n.role = n.gateId === node.gateId ? "START_FINISH" : "SECTOR_GATE"));
         }
       }
     } else if (url === "/api/track/add" || url === "/api/gates/add") {
-      const b = (body ?? {}) as { name?: string; assignedPuckId?: number };
+      const b = (body ?? {}) as { name?: string; assignedTimerId?: number };
       const nextId = this.fallbackNodes.length + 1;
       if (nextId <= 6) {
         this.fallbackNodes.push({
-          puckId: nextId,
-          assignedPuckId: b.assignedPuckId ?? 0,
-          puckLabel: "",
+          gateId: nextId,
+          assignedTimerId: b.assignedTimerId ?? 0,
+          timerLabel: "",
           name: b.name ?? "",
           color: GATE_COLORS[(nextId - 1) % GATE_COLORS.length],
           role: this.fallbackNodes.length === 0 ? "START_FINISH" : "SECTOR_GATE",
@@ -241,36 +241,36 @@ export class HttpRealTransport implements ApiTransport {
         });
       }
     } else if ((url === "/api/track/remove" || url === "/api/gates/remove") && body) {
-      const b = body as { puckId: number };
-      this.fallbackNodes = this.fallbackNodes.filter((n) => n.puckId !== b.puckId);
+      const b = body as { gateId: number };
+      this.fallbackNodes = this.fallbackNodes.filter((n) => n.gateId !== b.gateId);
     } else if (url === "/api/timers/provision" && body) {
       const b = body as {
         role?: "hub" | "spoke";
-        puckLabel?: string;
+        timerLabel?: string;
         firmwareProfile?: string;
         fingerprint?: string;
       };
       const isHub = b.role === "hub";
-      const label = (b.puckLabel ?? (isHub ? "H1" : "S1")).trim();
+      const label = (b.timerLabel ?? (isHub ? "H1" : "S1")).trim();
       const fp = (b.fingerprint ?? "").trim().toUpperCase();
       const existing = this.fallbackDetectedTimers.find(
         (d) =>
           (fp && d.fingerprint?.toUpperCase() === fp) ||
           (isHub && d.isHub) ||
-          d.puckLabel.toUpperCase() === label.toUpperCase()
+          d.timerLabel.toUpperCase() === label.toUpperCase()
       );
       if (existing) {
-        existing.puckLabel = label;
+        existing.timerLabel = label;
         existing.isHub = isHub;
         existing.firmwareProfile = b.firmwareProfile ?? existing.firmwareProfile;
         existing.fingerprint = fp || existing.fingerprint;
       } else {
         const nextId = isHub
           ? 1
-          : Math.max(2, ...this.fallbackDetectedTimers.map((d) => d.puckId + 1));
+          : Math.max(2, ...this.fallbackDetectedTimers.map((d) => d.timerId + 1));
         this.fallbackDetectedTimers.push({
-          puckId: nextId,
-          puckLabel: label,
+          timerId: nextId,
+          timerLabel: label,
           color: GATE_COLORS[(nextId - 1) % GATE_COLORS.length],
           isHub,
           firmwareVersion: "v1.4.2",
@@ -284,10 +284,10 @@ export class HttpRealTransport implements ApiTransport {
         });
       }
     } else if (url === "/api/timers/color" && body) {
-      const b = body as { puckId: number; color: string };
-      const det = this.fallbackDetectedTimers.find((d) => d.puckId === b.puckId);
+      const b = body as { timerId: number; color: string };
+      const det = this.fallbackDetectedTimers.find((d) => d.timerId === b.timerId);
       if (det) det.color = b.color;
-      const gate = this.fallbackNodes.find((n) => (n.assignedPuckId ?? n.puckId) === b.puckId);
+      const gate = this.fallbackNodes.find((n) => (n.assignedTimerId ?? n.gateId) === b.timerId);
       if (gate) gate.color = b.color;
     } else if (url === "/api/wifi/networks") {
       return { networks: [] };
@@ -298,8 +298,8 @@ export class HttpRealTransport implements ApiTransport {
   private offlineStatus(): StatusResponse {
     return {
       serverTimestampUs: 0,
-      pucks: this.fallbackNodes.map((n) => ({ ...n })),
-      detectedPucks: this.fallbackDetectedTimers.map((d) => ({ ...d })),
+      gates: this.fallbackNodes.map((n) => ({ ...n })),
+      timers: this.fallbackDetectedTimers.map((d) => ({ ...d })),
       simulatorRunning: false,
       raceArmed: this.fallbackArmed,
       liveTimeStatus: {

@@ -8,7 +8,7 @@ import { ProgressionChart } from "./ProgressionChart";
 /** Selected view: the whole lap, or the section that starts at this gate. */
 type View =
   | { kind: "lap" }
-  | { kind: "section"; sectorIndex: number; fromPuckId: number; toPuckId: number };
+  | { kind: "section"; sectorIndex: number; fromGateId: number; toGateId: number };
 
 /**
  * Lap times through the session, switchable between the whole lap and any single section —
@@ -47,8 +47,8 @@ export class LapTimesCard extends Component {
           : {
               kind: "section",
               sectorIndex: Number(btn.dataset.sector),
-              fromPuckId: Number(btn.dataset.from),
-              toPuckId: Number(btn.dataset.to),
+              fromGateId: Number(btn.dataset.from),
+              toGateId: Number(btn.dataset.to),
             };
       this.chart.setMetric(this.view);
       this.render();
@@ -80,12 +80,12 @@ export class LapTimesCard extends Component {
 
   /** Sections in course order: each gate to the next, wrapping back to start / finish. */
   private sections(): Array<{ sectorIndex: number; from: number; to: number }> {
-    const pucks = this.store.pucks;
-    if (pucks.length === 0) return [];
-    return pucks.map((p, i) => ({
+    const gates = this.store.nodes;
+    if (gates.length === 0) return [];
+    return gates.map((p, i) => ({
       sectorIndex: i + 1,
-      from: p.puckId,
-      to: pucks[(i + 1) % pucks.length].puckId,
+      from: p.gateId,
+      to: gates[(i + 1) % gates.length].gateId,
     }));
   }
 
@@ -94,25 +94,25 @@ export class LapTimesCard extends Component {
     const v = this.view;
     // If the course was reordered or gates changed, keep the selected section aligned with the course.
     if (v.kind === "section") {
-      const byPair = sections.find((s) => s.from === v.fromPuckId && s.to === v.toPuckId);
+      const byPair = sections.find((s) => s.from === v.fromGateId && s.to === v.toGateId);
       const byIdx = sections.find((s) => s.sectorIndex === v.sectorIndex);
       const match = byPair ?? byIdx;
       if (!match) {
         this.view = { kind: "lap" };
         this.chart.setMetric(this.view);
-      } else if (match.from !== v.fromPuckId || match.to !== v.toPuckId || match.sectorIndex !== v.sectorIndex) {
+      } else if (match.from !== v.fromGateId || match.to !== v.toGateId || match.sectorIndex !== v.sectorIndex) {
         this.view = {
           kind: "section",
           sectorIndex: match.sectorIndex,
-          fromPuckId: match.from,
-          toPuckId: match.to,
+          fromGateId: match.from,
+          toGateId: match.to,
         };
         this.chart.setMetric(this.view);
       }
     }
     const view = this.view;
     const isActive = (from: number, to: number) =>
-      view.kind === "section" && view.fromPuckId === from && view.toPuckId === to;
+      view.kind === "section" && view.fromGateId === from && view.toGateId === to;
 
     const tabsSig = sections
       .map(
@@ -164,7 +164,7 @@ export class LapTimesCard extends Component {
         ? single
           ? "Session timeline · dashed line is their best · gaps show pit swaps and recovery breaks"
           : "Session timeline · pilots flying at the same time align · gaps show pit swaps and breaks"
-        : `${sectionShort(this.store, view.fromPuckId)} (${sectionLabel(this.store, view.fromPuckId, view.toPuckId)}) · ${single ? "their" : "each pilot's"} time on this stretch across the session timeline`;
+        : `${sectionShort(this.store, view.fromGateId)} (${sectionLabel(this.store, view.fromGateId, view.toGateId)}) · ${single ? "their" : "each pilot's"} time on this stretch across the session timeline`;
 
     // One pilot needs no colour key.
     this.slot("legend").innerHTML = single

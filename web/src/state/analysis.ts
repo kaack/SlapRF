@@ -49,12 +49,12 @@ export function rollingAverages(laps: LapRecord[], window = ROLLING_WINDOW): num
 // ---------------------------------------------------------------------------
 
 /** Sections are identified by their gate pair so laps with a missed gate never misalign. */
-export const sectionKey = (fromPuckId: number, toPuckId: number): string => `${fromPuckId}>${toPuckId}`;
+export const sectionKey = (fromGateId: number, toGateId: number): string => `${fromGateId}>${toGateId}`;
 
 export interface SectionDelta {
   key: string;
-  fromPuckId: number;
-  toPuckId: number;
+  fromGateId: number;
+  toGateId: number;
   lapSec: number;
   refSec: number;
   /** lap − reference: positive = time lost, negative = time gained. */
@@ -97,21 +97,21 @@ export function resolveComparison(store: AppStore, slotIndex: number): LapCompar
     refLabel = `Lap ${ref.lapNumber} (${lapIsBest ? "next best" : "best"})`;
   }
 
-  const pucks = store.pucks;
+  const gates = store.nodes;
   const courseKeys = new Set(
-    pucks.map((p, i) => sectionKey(p.puckId, pucks[(i + 1) % pucks.length].puckId))
+    gates.map((p, i) => sectionKey(p.gateId, gates[(i + 1) % gates.length].gateId))
   );
-  const refByKey = new Map(ref.sectors.map((s) => [sectionKey(s.fromPuckId, s.toPuckId), s]));
+  const refByKey = new Map(ref.sectors.map((s) => [sectionKey(s.fromGateId, s.toGateId), s]));
   const sections: SectionDelta[] = [];
   for (const s of lap.sectors) {
-    const key = sectionKey(s.fromPuckId, s.toPuckId);
+    const key = sectionKey(s.fromGateId, s.toGateId);
     if (!courseKeys.has(key)) continue;
     const r = refByKey.get(key);
     if (!r) continue;
     sections.push({
       key,
-      fromPuckId: s.fromPuckId,
-      toPuckId: s.toPuckId,
+      fromGateId: s.fromGateId,
+      toGateId: s.toGateId,
       lapSec: s.splitSeconds,
       refSec: r.splitSeconds,
       delta: s.splitSeconds - r.splitSeconds,
@@ -145,8 +145,8 @@ export function decisiveSection(cmp: LapComparison): SectionDelta | undefined {
 
 export interface SectionConsistency {
   key: string;
-  fromPuckId: number;
-  toPuckId: number;
+  fromGateId: number;
+  toGateId: number;
   samples: number;
   best: number;
   typical: number;
@@ -157,20 +157,20 @@ export interface SectionConsistency {
 }
 
 export function sectionConsistency(store: AppStore, slotIndex: number): SectionConsistency[] {
-  const pucks = store.pucks;
-  if (pucks.length === 0) return [];
+  const gates = store.nodes;
+  if (gates.length === 0) return [];
 
   const groups = new Map<string, { from: number; to: number; times: number[]; exits: number[]; bestExit: number; best: number }>();
-  for (let i = 0; i < pucks.length; i++) {
-    const from = pucks[i].puckId;
-    const to = pucks[(i + 1) % pucks.length].puckId;
+  for (let i = 0; i < gates.length; i++) {
+    const from = gates[i].gateId;
+    const to = gates[(i + 1) % gates.length].gateId;
     if (from === to) continue;
     groups.set(sectionKey(from, to), { from, to, times: [], exits: [], bestExit: 0, best: Infinity });
   }
 
   for (const lap of lapsFor(store, slotIndex)) {
     for (const s of lap.sectors) {
-      const g = groups.get(sectionKey(s.fromPuckId, s.toPuckId));
+      const g = groups.get(sectionKey(s.fromGateId, s.toGateId));
       if (!g) continue;
       g.times.push(s.splitSeconds);
       g.exits.push(s.exitSpeedMph);
@@ -187,8 +187,8 @@ export function sectionConsistency(store: AppStore, slotIndex: number): SectionC
       const typical = median(g.times);
       return {
         key,
-        fromPuckId: g.from,
-        toPuckId: g.to,
+        fromGateId: g.from,
+        toGateId: g.to,
         samples: g.times.length,
         best: g.best,
         typical,
@@ -202,7 +202,7 @@ export function sectionConsistency(store: AppStore, slotIndex: number): SectionC
 /** Sum of the pilot's best time on each section — the lap they could fly by linking them. */
 export function bestPossibleLap(store: AppStore, slotIndex: number): number {
   const sections = sectionConsistency(store, slotIndex);
-  return sections.length === store.pucks.length && sections.length > 0 ? sections.reduce((s, c) => s + c.best, 0) : 0;
+  return sections.length === store.nodes.length && sections.length > 0 ? sections.reduce((s, c) => s + c.best, 0) : 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -211,8 +211,8 @@ export function bestPossibleLap(store: AppStore, slotIndex: number): number {
 
 export interface SectionRecord {
   key: string;
-  fromPuckId: number;
-  toPuckId: number;
+  fromGateId: number;
+  toGateId: number;
   /** Each pilot's best on this section. */
   bests: Map<number, { sec: number; exitMph: number }>;
   recordSlot: number | null;
@@ -221,15 +221,15 @@ export interface SectionRecord {
 
 /** For every section of the track: each pilot's best, and who holds the record. */
 export function sectionRecords(store: AppStore): SectionRecord[] {
-  const pucks = store.pucks;
-  const records: SectionRecord[] = pucks.map((p, i) => {
-    const to = pucks[(i + 1) % pucks.length];
-    return { key: sectionKey(p.puckId, to.puckId), fromPuckId: p.puckId, toPuckId: to.puckId, bests: new Map(), recordSlot: null, recordSec: 0 };
+  const gates = store.nodes;
+  const records: SectionRecord[] = gates.map((p, i) => {
+    const to = gates[(i + 1) % gates.length];
+    return { key: sectionKey(p.gateId, to.gateId), fromGateId: p.gateId, toGateId: to.gateId, bests: new Map(), recordSlot: null, recordSec: 0 };
   });
   const byKey = new Map(records.map((r) => [r.key, r]));
   for (const lap of store.laps) {
     for (const s of lap.sectors) {
-      const r = byKey.get(sectionKey(s.fromPuckId, s.toPuckId));
+      const r = byKey.get(sectionKey(s.fromGateId, s.toGateId));
       if (!r) continue;
       const cur = r.bests.get(lap.slotIndex);
       if (!cur || s.splitSeconds < cur.sec) r.bests.set(lap.slotIndex, { sec: s.splitSeconds, exitMph: s.exitSpeedMph });
@@ -254,8 +254,8 @@ export type LiveSectionState = "done" | "current" | "pending" | "missed";
 
 export interface LiveSection {
   key: string;
-  fromPuckId: number;
-  toPuckId: number;
+  fromGateId: number;
+  toGateId: number;
   state: LiveSectionState;
   /** Done: the split. Current: time since entering the section. */
   splitSec: number;
@@ -277,15 +277,15 @@ export interface CurrentLap {
  * start / finish pass. Returns null if they haven't started a lap or stopped flying.
  */
 export function currentLap(store: AppStore, slotIndex: number): CurrentLap | null {
-  const pucks = store.pucks;
-  const sfIdx = pucks.findIndex((p) => p.role === "START_FINISH");
+  const gates = store.nodes;
+  const sfIdx = gates.findIndex((p) => p.role === "START_FINISH");
   if (sfIdx < 0) return null;
-  const sfId = pucks[sfIdx].puckId;
+  const sfId = gates[sfIdx].gateId;
 
   const mine = store.crossings.filter((c) => c.slotIndex === slotIndex);
   let startIdx = -1;
   for (let i = mine.length - 1; i >= 0; i--) {
-    if (mine[i].puckId === sfId) {
+    if (mine[i].gateId === sfId) {
       startIdx = i;
       break;
     }
@@ -298,21 +298,21 @@ export function currentLap(store: AppStore, slotIndex: number): CurrentLap | nul
   if (elapsedSec > store.rules.maxLapSec) return null;
 
   // Sections around the loop, starting at the start / finish gate.
-  const order = [...pucks.slice(sfIdx), ...pucks.slice(0, sfIdx)];
+  const order = [...gates.slice(sfIdx), ...gates.slice(0, sfIdx)];
   const best = new Map(sectionConsistency(store, slotIndex).map((s) => [s.key, s.best]));
   const sections: LiveSection[] = order.map((p, i) => {
     const to = order[(i + 1) % order.length];
-    const key = sectionKey(p.puckId, to.puckId);
-    return { key, fromPuckId: p.puckId, toPuckId: to.puckId, state: "pending", splitSec: 0, bestSec: best.get(key) ?? 0, delta: NaN };
+    const key = sectionKey(p.gateId, to.gateId);
+    return { key, fromGateId: p.gateId, toGateId: to.gateId, state: "pending", splitSec: 0, bestSec: best.get(key) ?? 0, delta: NaN };
   });
-  const indexOfGate = (puckId: number) => order.findIndex((p) => p.puckId === puckId);
+  const indexOfGate = (gateId: number) => order.findIndex((p) => p.gateId === gateId);
 
   let prev = start;
   let deltaSoFar = 0;
   for (const c of mine.slice(startIdx + 1)) {
     const split = (c.timestampUs - prev.timestampUs) / 1e6;
-    const from = indexOfGate(prev.puckId);
-    const to = indexOfGate(c.puckId);
+    const from = indexOfGate(prev.gateId);
+    const to = indexOfGate(c.gateId);
     if (from >= 0 && to === (from + 1) % order.length) {
       const s = sections[from];
       s.state = "done";
@@ -328,7 +328,7 @@ export function currentLap(store: AppStore, slotIndex: number): CurrentLap | nul
     prev = c;
   }
 
-  const cur = sections.find((s) => s.fromPuckId === prev.puckId && s.state === "pending");
+  const cur = sections.find((s) => s.fromGateId === prev.gateId && s.state === "pending");
   if (cur) {
     cur.state = "current";
     cur.splitSec = (now - prev.timestampUs) / 1e6;

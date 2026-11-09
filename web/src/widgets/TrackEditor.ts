@@ -66,7 +66,7 @@ export class TrackEditor extends Component {
       // Clicking the checkered flag button beneath a node should not start a node drag.
       if (target.closest("[data-make-start]")) return;
 
-      const trayTimerEl = target.closest<HTMLElement>(".unassigned-puck-token[data-puck-id]");
+      const trayTimerEl = target.closest<HTMLElement>(".unassigned-timer-token[data-timer-id]");
       if (trayTimerEl) {
         this.beginTrayTimerDrag(e, trayTimerEl);
         return;
@@ -94,27 +94,27 @@ export class TrackEditor extends Component {
   }
 
   private get orderedNodes(): TrackNode[] {
-    return [...this.store.pucks].sort((a, b) => a.trackOrder - b.trackOrder);
+    return [...this.store.nodes].sort((a, b) => a.trackOrder - b.trackOrder);
   }
 
   private get detectedTimers(): DetectedTimer[] {
     if (this.store.detectedTimers.length > 0) {
-      return [...this.store.detectedTimers].sort((a, b) => a.puckId - b.puckId);
+      return [...this.store.detectedTimers].sort((a, b) => a.timerId - b.timerId);
     }
     return this.store.nodes
-      .filter((p) => (p.assignedPuckId ?? p.puckId) > 0)
+      .filter((p) => (p.assignedTimerId ?? p.gateId) > 0)
       .map((p) => ({
-        puckId: p.assignedPuckId ?? p.puckId,
-        puckLabel: p.puckLabel ?? "",
+        timerId: p.assignedTimerId ?? p.gateId,
+        timerLabel: p.timerLabel ?? "",
         color: p.color,
-        isHub: (p.assignedPuckId ?? p.puckId) === 1,
+        isHub: (p.assignedTimerId ?? p.gateId) === 1,
         batteryMv: p.batteryMv,
         batteryPct: p.batteryPct,
         noiseFloorDbm: p.noiseFloorDbm,
         online: p.online,
         lastSeenAt: p.lastSeenAt,
       }))
-      .sort((a, b) => a.puckId - b.puckId);
+      .sort((a, b) => a.timerId - b.timerId);
   }
 
   private formatTimerShortCode(timerId: number): string {
@@ -126,9 +126,9 @@ export class TrackEditor extends Component {
       this.selectedNodeId = null;
       return null;
     }
-    const found = nodes.find((n) => n.puckId === this.selectedNodeId);
+    const found = nodes.find((n) => n.gateId === this.selectedNodeId);
     if (found) return found;
-    this.selectedNodeId = nodes[0].puckId;
+    this.selectedNodeId = nodes[0].gateId;
     return nodes[0];
   }
 
@@ -137,12 +137,12 @@ export class TrackEditor extends Component {
     const detected = this.detectedTimers;
     const selectedNode = this.ensureSelectedNode(nodes);
     const selectedIndex = selectedNode
-      ? nodes.findIndex((n) => n.puckId === selectedNode.puckId)
+      ? nodes.findIndex((n) => n.gateId === selectedNode.gateId)
       : -1;
     const assignedTimerIds = new Set(
-      nodes.map((n) => n.assignedPuckId ?? 0).filter((id) => id > 0)
+      nodes.map((n) => n.assignedTimerId ?? 0).filter((id) => id > 0)
     );
-    const unassignedTimers = detected.filter((d) => !assignedTimerIds.has(d.puckId));
+    const unassignedTimers = detected.filter((d) => !assignedTimerIds.has(d.timerId));
 
     this.el.innerHTML = `
       <div class="gate-track-stage">
@@ -164,7 +164,7 @@ export class TrackEditor extends Component {
                         idx,
                         nodes,
                         detected,
-                        selectedNode !== null && n.puckId === selectedNode.puckId
+                        selectedNode !== null && n.gateId === selectedNode.gateId
                       )
                     )
                     .join("")
@@ -204,19 +204,19 @@ export class TrackEditor extends Component {
   ): string {
     const total = allNodes.length;
     const isStart = node.role === "START_FINISH";
-    const assignedId = node.assignedPuckId ?? 0;
+    const assignedId = node.assignedTimerId ?? 0;
     const hasTimer = assignedId > 0;
-    const tiedTimer = detected.find((d) => d.puckId === assignedId);
+    const tiedTimer = detected.find((d) => d.timerId === assignedId);
     const shortCode = this.formatTimerShortCode(assignedId);
     const roleSub = hasTimer ? (tiedTimer?.isHub || assignedId === 1 ? "HUB" : "SPK") : "EMPTY";
     const color = hasTimer ? timerColor(this.store, assignedId) : "#64748b";
 
     const lastNode = allNodes[(total - 1 + total) % total];
-    const lastAssignedId = lastNode?.assignedPuckId ?? 0;
+    const lastAssignedId = lastNode?.assignedTimerId ?? 0;
     const lastColor = lastAssignedId > 0 ? timerColor(this.store, lastAssignedId) : "#64748b";
 
     const nextNode = allNodes[(index + 1) % total];
-    const nextAssignedId = nextNode?.assignedPuckId ?? 0;
+    const nextAssignedId = nextNode?.assignedTimerId ?? 0;
     const nextColor = nextAssignedId > 0 ? timerColor(this.store, nextAssignedId) : "#64748b";
 
     const displayName = node.name.trim() || `Gate ${index + 1}`;
@@ -226,10 +226,10 @@ export class TrackEditor extends Component {
 
     return `
       <div
-        class="gate-line-item ${isSelected ? "is-selected" : ""} ${isStart ? "is-start" : ""} ${hasTimer ? "has-puck" : "is-empty-gate"}"
-        data-gate="${node.puckId}"
-        data-assigned-puck="${assignedId}"
-        data-puck-color="${color}"
+        class="gate-line-item ${isSelected ? "is-selected" : ""} ${isStart ? "is-start" : ""} ${hasTimer ? "has-timer" : "is-empty-gate"}"
+        data-gate="${node.gateId}"
+        data-assigned-timer="${assignedId}"
+        data-timer-color="${color}"
         style="--c:${color}"
         role="listitem"
       >
@@ -268,8 +268,8 @@ export class TrackEditor extends Component {
           ${
             hasTimer
               ? `
-                <span class="gate-node-puck-code mono">${esc(shortCode)}</span>
-                <span class="gate-node-puck-meta">
+                <span class="gate-node-timer-code mono">${esc(shortCode)}</span>
+                <span class="gate-node-timer-meta">
                   <span class="gate-node-status-dot ${isOnline ? "is-online" : ""}"></span>
                   <span>${roleSub}</span>
                 </span>`
@@ -278,12 +278,12 @@ export class TrackEditor extends Component {
           }
         </button>
 
-        <div class="gate-node-name" data-node-name="${node.puckId}">${esc(displayName)}</div>
+        <div class="gate-node-name" data-node-name="${node.gateId}">${esc(displayName)}</div>
 
         <button
           type="button"
           class="gate-node-start-btn ${isStart ? "is-active" : ""}"
-          data-make-start="${node.puckId}"
+          data-make-start="${node.gateId}"
           aria-pressed="${isStart}"
           title="${isStart ? "Start gate" : "Set as start gate"}"
           aria-label="${isStart ? `Gate ${index + 1} is the start gate` : `Set Gate ${index + 1} as start gate`}"
@@ -315,22 +315,22 @@ export class TrackEditor extends Component {
   }
 
   private renderTrayTimer(d: DetectedTimer): string {
-    const color = timerColor(this.store, d.puckId);
+    const color = timerColor(this.store, d.timerId);
     const roleSub = d.isHub ? "HUB" : "SPK";
-    const label = d.puckLabel?.trim() ? ` · ${d.puckLabel.trim()}` : "";
+    const label = d.timerLabel?.trim() ? ` · ${d.timerLabel.trim()}` : "";
     return `
       <div
-        class="unassigned-puck-token"
-        data-puck-id="${d.puckId}"
+        class="unassigned-timer-token"
+        data-timer-id="${d.timerId}"
         style="--c:${color}"
-        title="T${d.puckId}${esc(label)} (${roleSub}) · Drag onto the track line above to create a gate"
+        title="T${d.timerId}${esc(label)} (${roleSub}) · Drag onto the track line above to create a gate"
       >
-        <span class="unassigned-puck-dot" style="--c:${color}">
-          <span class="mono">T${d.puckId}</span>
+        <span class="unassigned-timer-dot" style="--c:${color}">
+          <span class="mono">T${d.timerId}</span>
         </span>
-        <div class="unassigned-puck-info">
-          <span class="unassigned-puck-name mono">T${d.puckId}${esc(label)}</span>
-          <span class="unassigned-puck-sub">
+        <div class="unassigned-timer-info">
+          <span class="unassigned-timer-name mono">T${d.timerId}${esc(label)}</span>
+          <span class="unassigned-timer-sub">
             <span class="gate-node-status-dot ${d.online ? "is-online" : ""}"></span>
             ${d.isHub ? "Hub" : "Spoke"} · ${d.online ? `${d.batteryPct}%` : "Offline"}
           </span>
@@ -344,24 +344,24 @@ export class TrackEditor extends Component {
     detected: DetectedTimer[]
   ): string {
     const isStart = node.role === "START_FINISH";
-    const assignedId = node.assignedPuckId ?? 0;
+    const assignedId = node.assignedTimerId ?? 0;
     const hasTimer = assignedId > 0;
-    const tiedTimer = detected.find((d) => d.puckId === assignedId);
+    const tiedTimer = detected.find((d) => d.timerId === assignedId);
     const defaultPlaceholder = `Gate ${index + 1}`;
     const color = hasTimer ? timerColor(this.store, assignedId) : "#64748b";
 
     const timerSummaryHtml = hasTimer
       ? `
-        <div class="gate-inspector-puck-box">
+        <div class="gate-inspector-timer-box">
           <span class="gate-inspector-dot" style="--c:${color}"></span>
-          <strong class="mono">T${assignedId}${tiedTimer?.puckLabel?.trim() ? ` · ${esc(tiedTimer.puckLabel.trim())}` : ""}</strong>
+          <strong class="mono">T${assignedId}${tiedTimer?.timerLabel?.trim() ? ` · ${esc(tiedTimer.timerLabel.trim())}` : ""}</strong>
           <span class="detected-role-pill ${tiedTimer?.isHub || assignedId === 1 ? "is-hub" : ""}">
             ${tiedTimer?.isHub || assignedId === 1 ? "Hub" : "Spoke"}
           </span>
           <span class="muted mono">${tiedTimer ? (tiedTimer.online ? `${tiedTimer.batteryPct}%` : "Offline") : ""}</span>
         </div>`
       : `
-        <div class="gate-inspector-puck-box is-empty">
+        <div class="gate-inspector-timer-box is-empty">
           <span class="muted">No timer assigned</span>
         </div>`;
 
@@ -385,7 +385,7 @@ export class TrackEditor extends Component {
             <span class="field-label">Gate name</span>
             <input
               class="input gate-name-field"
-              data-gate-name="${node.puckId}"
+              data-gate-name="${node.gateId}"
               value="${esc(node.name)}"
               placeholder="${esc(defaultPlaceholder)}"
               maxlength="40"
@@ -403,7 +403,7 @@ export class TrackEditor extends Component {
   }
 
   private syncNodeNamePreview(nodeId: number, rawName: string): void {
-    const idx = this.orderedNodes.findIndex((n) => n.puckId === nodeId);
+    const idx = this.orderedNodes.findIndex((n) => n.gateId === nodeId);
     const display = rawName.trim() || `Gate ${idx >= 0 ? idx + 1 : nodeId}`;
     const nodeLabel = this.el.querySelector<HTMLElement>(`[data-node-name="${nodeId}"]`);
     if (nodeLabel) nodeLabel.textContent = display;
@@ -416,7 +416,7 @@ export class TrackEditor extends Component {
     try {
       await this.api.removeTrackNode(nodeId);
       if (this.selectedNodeId === nodeId) {
-        this.selectedNodeId = this.orderedNodes[0]?.puckId ?? null;
+        this.selectedNodeId = this.orderedNodes[0]?.gateId ?? null;
       }
     } finally {
       this.isDragging = false;
@@ -425,7 +425,7 @@ export class TrackEditor extends Component {
   }
 
   private async renameNode(input: HTMLInputElement): Promise<void> {
-    const node = this.store.puck(Number(input.dataset.gateName));
+    const node = this.store.node(Number(input.dataset.gateName));
     if (!node) return;
     const name = input.value.trim();
     if (name === node.name.trim()) return;
@@ -434,7 +434,7 @@ export class TrackEditor extends Component {
   }
 
   private async makeStart(nodeId: number): Promise<void> {
-    const node = this.store.puck(nodeId);
+    const node = this.store.node(nodeId);
     if (!node || node.role === "START_FINISH") return;
     await this.save(node, { role: "START_FINISH" });
   }
@@ -442,7 +442,7 @@ export class TrackEditor extends Component {
   private createInsertionPreviewSlot(timerId: number, color: string): HTMLElement {
     const slot = document.createElement("div");
     slot.className = "gate-line-item is-drop-slot is-insert-preview";
-    slot.dataset.puckColor = color;
+    slot.dataset.timerColor = color;
     slot.style.setProperty("--c", color);
     slot.innerHTML = `
       <div class="gate-line-track-seg is-before"></div>
@@ -507,7 +507,7 @@ export class TrackEditor extends Component {
       // ignore if synthetic or unsupported
     }
 
-    const timerId = Number(tokenEl.dataset.puckId);
+    const timerId = Number(tokenEl.dataset.timerId);
     const color = timerColor(this.store, timerId);
     const startX = downEvent.clientX;
     const startY = downEvent.clientY;
@@ -562,7 +562,7 @@ export class TrackEditor extends Component {
       ghost.style.width = "58px";
       ghost.style.height = "58px";
       ghost.style.transform = `translate3d(${clientX - 29}px, ${clientY - 29}px, 0) scale(1.06)`;
-      ghost.innerHTML = `<span class="gate-node-puck-code mono">${esc(this.formatTimerShortCode(timerId))}</span>`;
+      ghost.innerHTML = `<span class="gate-node-timer-code mono">${esc(this.formatTimerShortCode(timerId))}</span>`;
       document.body.appendChild(ghost);
       floatingEl = ghost;
     };
@@ -652,17 +652,17 @@ export class TrackEditor extends Component {
         if (previewCircle) {
           previewCircle.className = "gate-node-circle is-filled";
           previewCircle.style.setProperty("--c", color);
-          previewCircle.innerHTML = `<span class="gate-node-puck-code mono">T${timerId}</span>`;
+          previewCircle.innerHTML = `<span class="gate-node-timer-code mono">T${timerId}</span>`;
         }
         targetSlot.classList.remove("is-drop-slot", "is-insert-preview", "is-empty-placeholder");
         tokenEl.style.display = "none";
 
         try {
-          const beforeIds = new Set(this.store.pucks.map((p) => p.puckId));
+          const beforeIds = new Set(this.store.nodes.map((p) => p.gateId));
           await this.api.addTrackNode("", timerId, insertIndex);
-          const created = this.store.pucks.find((p) => !beforeIds.has(p.puckId));
+          const created = this.store.nodes.find((p) => !beforeIds.has(p.gateId));
           if (created) {
-            this.selectedNodeId = created.puckId;
+            this.selectedNodeId = created.gateId;
           }
         } finally {
           this.isDragging = false;
@@ -842,15 +842,15 @@ export class TrackEditor extends Component {
     if (total === 0) return;
 
     const lastItem = items[total - 1];
-    const lastColor = lastItem?.dataset.puckColor || "#64748b";
+    const lastColor = lastItem?.dataset.timerColor || "#64748b";
 
     items.forEach((item, idx) => {
       const orderEl = item.querySelector<HTMLElement>(".gate-node-order");
       if (orderEl) orderEl.textContent = `#${idx + 1}`;
 
-      const c1 = item.dataset.puckColor || "#64748b";
+      const c1 = item.dataset.timerColor || "#64748b";
       const nextItem = items[(idx + 1) % total];
-      const c2 = nextItem?.dataset.puckColor || "#64748b";
+      const c2 = nextItem?.dataset.timerColor || "#64748b";
 
       const leadPill = item.querySelector<HTMLElement>(".gate-line-sec-pill.is-leading");
       if (leadPill) {
@@ -885,8 +885,8 @@ export class TrackEditor extends Component {
     try {
       const items = [...this.el.querySelectorAll<HTMLElement>(".gate-line-item[data-gate]")];
       const newIndex = items.findIndex((r) => Number(r.dataset.gate) === dragId);
-      const oldIndex = this.orderedNodes.findIndex((n) => n.puckId === dragId);
-      const node = this.store.puck(dragId);
+      const oldIndex = this.orderedNodes.findIndex((n) => n.gateId === dragId);
+      const node = this.store.node(dragId);
       if (node && newIndex >= 0 && newIndex !== oldIndex) {
         await this.save(node, { trackOrder: newIndex });
       }
@@ -898,15 +898,15 @@ export class TrackEditor extends Component {
 
   private async save(
     node: TrackNode,
-    change: Partial<Pick<TrackNode, "name" | "color" | "role" | "trackOrder" | "assignedPuckId">>
+    change: Partial<Pick<TrackNode, "name" | "color" | "role" | "trackOrder" | "assignedTimerId">>
   ): Promise<void> {
     await this.api.updateTrackNode({
-      puckId: node.puckId,
+      gateId: node.gateId,
       name: change.name ?? node.name,
       color: change.color ?? node.color,
       role: change.role ?? node.role,
       trackOrder: change.trackOrder,
-      assignedPuckId: change.assignedPuckId,
+      assignedTimerId: change.assignedTimerId,
     });
   }
 }

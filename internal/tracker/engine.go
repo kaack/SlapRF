@@ -10,8 +10,8 @@ import (
 	"slaprf/internal/dsp"
 )
 
-// puckOfflineAfter marks a gate puck offline when no telemetry frame has arrived for this long.
-const puckOfflineAfter = 2 * time.Second
+// timerOfflineAfter marks a gate timer offline when no telemetry frame has arrived for this long.
+const timerOfflineAfter = 2 * time.Second
 
 const (
 	maxStoredLaps      = 5000 // A full practice day for 8 pilots
@@ -23,18 +23,18 @@ const (
 
 // EventSubscriber receives real-time callbacks for telemetry frames, gate crossings, and lap completions.
 type EventSubscriber interface {
-	OnTelemetryFrame(frame domain.PuckTelemetryFrame)
+	OnTelemetryFrame(frame domain.TimerTelemetryFrame)
 	OnGateCrossing(event domain.GateCrossingEvent)
 	OnDetectionFiltered(f domain.FilteredDetection)
 	OnLapCompleted(lap domain.LapRecord, summaries []domain.PilotTrackSummary)
-	OnConfigUpdated(pilots []domain.PilotSlot, pucks []domain.GatePuck)
+	OnConfigUpdated(pilots []domain.PilotSlot, gates []domain.TrackGate)
 }
 
 // pilotProgress tracks where a pilot is on the track between accepted crossings.
 type pilotProgress struct {
-	lastPuckID     uint8  // 0 = no accepted crossing in the current run
+	lastGateID     uint8  // 0 = no accepted crossing in the current run
 	lastGateTimeUs uint64 // timestamp of that crossing
-	prevPuckID     uint8  // gate accepted before lastPuckID (for echo detection)
+	prevGateID     uint8  // gate accepted before lastGateID (for echo detection)
 	lapStartUs     uint64 // 0 = waiting for the first start/finish crossing
 	currentSectors []domain.SectorSplit
 }
@@ -46,11 +46,11 @@ type Engine struct {
 	raceArmed      bool
 	rules          domain.TimingRules
 	pilots         []domain.PilotSlot
-	pucks          []domain.GatePuck
-	detected       map[uint8]*domain.DetectedPuck  // key: physical puckId (1..16)
-	detectors      map[string]*dsp.ChannelDetector // key: "puckId:slotIdx"
+	gates          []domain.TrackGate
+	detected       map[uint8]*domain.DetectedTimer // key: physical timerId (1..16)
+	detectors      map[string]*dsp.ChannelDetector // key: "gateId:slotIdx"
 	progress       map[int]*pilotProgress          // key: 1-based slotIdx
-	lastAcceptedUs map[string]uint64               // key: "puckId:slotIdx" -> last accepted crossing
+	lastAcceptedUs map[string]uint64               // key: "gateId:slotIdx" -> last accepted crossing
 	laps           []domain.LapRecord
 	crossings      []domain.GateCrossingEvent
 	filtered       []domain.FilteredDetection
@@ -59,39 +59,39 @@ type Engine struct {
 	sectorHistory  map[string][]domain.SectorSplit // key: "slotIdx:from>to"
 	nextEventID    uint64
 	nextLapID      uint64
-	passingNumbers map[uint8]uint32 // per-puck passing counter
+	passingNumbers map[uint8]uint32 // per-gate passing counter
 	subscribers    []EventSubscriber
 }
 
-// NewEngine creates and initializes a multi-gate timing engine with default pucks and pilot slots.
+// NewEngine creates and initializes a multi-gate timing engine with default gates and pilot slots.
 func NewEngine() *Engine {
 	e := &Engine{
 		bootTime:       time.Now(),
 		raceArmed:      true,
 		rules:          domain.DefaultTimingRules(),
 		pilots:         domain.DefaultPilotSlots(),
-		pucks:          domain.DefaultTrackPucks(),
-		detected:       make(map[uint8]*domain.DetectedPuck),
+		gates:          domain.DefaultTrackGates(),
+		detected:       make(map[uint8]*domain.DetectedTimer),
 		detectors:      make(map[string]*dsp.ChannelDetector),
 		passingNumbers: make(map[uint8]uint32),
 	}
-	for _, p := range e.pucks {
-		if p.AssignedPuckID > 0 {
-			c := p.Color
+	for _, g := range e.gates {
+		if g.AssignedTimerID > 0 {
+			c := g.Color
 			if c == "" {
-				c = domain.DefaultPuckColor(p.AssignedPuckID)
+				c = domain.DefaultTimerColor(g.AssignedTimerID)
 			}
-			e.detected[p.AssignedPuckID] = &domain.DetectedPuck{
-				PuckID:          p.AssignedPuckID,
-				PuckLabel:       p.PuckLabel,
+			e.detected[g.AssignedTimerID] = &domain.DetectedTimer{
+				TimerID:         g.AssignedTimerID,
+				TimerLabel:      g.TimerLabel,
 				Color:           c,
-				IsHub:           p.AssignedPuckID == 1,
-				FirmwareVersion: p.FirmwareVersion,
-				BatteryMv:       p.BatteryMv,
-				BatteryPct:      p.BatteryPct,
-				NoiseFloorDbm:   p.NoiseFloorDbm,
-				Online:          p.Online,
-				LastSeenAt:      p.LastSeenAt,
+				IsHub:           g.AssignedTimerID == 1,
+				FirmwareVersion: g.FirmwareVersion,
+				BatteryMv:       g.BatteryMv,
+				BatteryPct:      g.BatteryPct,
+				NoiseFloorDbm:   g.NoiseFloorDbm,
+				Online:          g.Online,
+				LastSeenAt:      g.LastSeenAt,
 			}
 		}
 	}
@@ -108,8 +108,8 @@ func NewRealEngine() *Engine {
 		raceArmed:      true,
 		rules:          domain.DefaultTimingRules(),
 		pilots:         domain.DefaultRealPilotSlots(),
-		pucks:          []domain.GatePuck{},
-		detected:       make(map[uint8]*domain.DetectedPuck),
+		gates:          []domain.TrackGate{},
+		detected:       make(map[uint8]*domain.DetectedTimer),
 		detectors:      make(map[string]*dsp.ChannelDetector),
 		passingNumbers: make(map[uint8]uint32),
 	}
@@ -119,18 +119,18 @@ func NewRealEngine() *Engine {
 }
 
 func (e *Engine) initDetectorsLocked() {
-	for _, puck := range e.pucks {
+	for _, gate := range e.gates {
 		for _, pilot := range e.pilots {
-			key := detectorKey(puck.PuckID, pilot.SlotIndex)
+			key := detectorKey(gate.GateID, pilot.SlotIndex)
 			if _, exists := e.detectors[key]; !exists {
-				e.detectors[key] = dsp.NewChannelDetector(puck.PuckID, pilot.SlotIndex)
+				e.detectors[key] = dsp.NewChannelDetector(gate.GateID, pilot.SlotIndex)
 			}
 		}
 	}
 }
 
-func detectorKey(puckID uint8, slotIndex int) string {
-	return fmt.Sprintf("%d:%d", puckID, slotIndex)
+func detectorKey(gateID uint8, slotIndex int) string {
+	return fmt.Sprintf("%d:%d", gateID, slotIndex)
 }
 
 // Subscribe registers an EventSubscriber for real-time telemetry and crossing notifications.
@@ -245,12 +245,12 @@ func (e *Engine) UpdatePilotSlot(updated domain.PilotSlot) {
 		e.pilots[targetIdx] = updated
 	}
 	pilotsCopy := append([]domain.PilotSlot(nil), e.pilots...)
-	pucksCopy := append([]domain.GatePuck(nil), e.pucks...)
+	gatesCopy := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
 	e.mu.Unlock()
 
 	for _, s := range subs {
-		s.OnConfigUpdated(pilotsCopy, pucksCopy)
+		s.OnConfigUpdated(pilotsCopy, gatesCopy)
 	}
 }
 
@@ -308,8 +308,8 @@ func (e *Engine) resetSessionLocked() {
 	e.sectorHistory = make(map[string][]domain.SectorSplit)
 }
 
-// IngestTelemetryFrame processes a single 8-channel 5.8 GHz RSSI frame from a Gate Puck.
-func (e *Engine) IngestTelemetryFrame(frame domain.PuckTelemetryFrame) {
+// IngestTelemetryFrame processes a single 8-channel 5.8 GHz RSSI frame from a Gate Timer.
+func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 	if frame.TimestampUs == 0 {
 		frame.TimestampUs = e.NowUs()
 	}
@@ -320,24 +320,24 @@ func (e *Engine) IngestTelemetryFrame(frame domain.PuckTelemetryFrame) {
 	var summariesSnapshot []domain.PilotTrackSummary
 
 	e.mu.Lock()
-	e.touchDetectedPuckLocked(frame)
-	puck := e.touchPuckLocked(frame)
-	if puck == nil {
+	e.touchDetectedTimerLocked(frame)
+	gate := e.touchGateLocked(frame)
+	if gate == nil {
 		e.mu.Unlock()
 		return
 	}
-	frame.PuckID = puck.PuckID
+	frame.TimerID = gate.GateID
 
 	for i := 0; i < len(e.pilots) && i < domain.MaxPilotPoolSize; i++ {
 		pilot := e.pilots[i]
-		det := e.detectors[detectorKey(puck.PuckID, pilot.SlotIndex)]
+		det := e.detectors[detectorKey(gate.GateID, pilot.SlotIndex)]
 		if det == nil {
-			det = dsp.NewChannelDetector(puck.PuckID, pilot.SlotIndex)
-			e.detectors[detectorKey(puck.PuckID, pilot.SlotIndex)] = det
+			det = dsp.NewChannelDetector(gate.GateID, pilot.SlotIndex)
+			e.detectors[detectorKey(gate.GateID, pilot.SlotIndex)] = det
 		}
-		enter, exit := thresholdsFor(puck, i, pilot)
+		enter, exit := thresholdsFor(gate, i, pilot)
 		candidate := det.ProcessSample(frame.RSSI[i], frame.TimestampUs, enter, exit, detectorDebounceUs)
-		puck.LastRSSI[i] = det.SmoothedRSSI()
+		gate.LastRSSI[i] = det.SmoothedRSSI()
 		frame.RSSI[i] = det.SmoothedRSSI()
 
 		if candidate == nil || !pilot.Enabled || pilot.Channel == 0 || !e.raceArmed {
@@ -345,9 +345,9 @@ func (e *Engine) IngestTelemetryFrame(frame domain.PuckTelemetryFrame) {
 		}
 
 		ev := domain.GateCrossingEvent{
-			PuckID:            puck.PuckID,
-			PuckName:          e.gateLabelLocked(puck.PuckID),
-			IsStartFinish:     puck.Role == domain.PuckRoleStartFinish,
+			GateID:            gate.GateID,
+			GateName:          e.gateLabelLocked(gate.GateID),
+			IsStartFinish:     gate.Role == domain.GateRoleStartFinish,
 			SlotIndex:         pilot.SlotIndex,
 			Callsign:          pilot.Callsign,
 			FrequencyMHz:      pilot.FrequencyMHz,
@@ -358,16 +358,16 @@ func (e *Engine) IngestTelemetryFrame(frame domain.PuckTelemetryFrame) {
 			EstimatedSpeedMph: candidate.EstimatedSpeedMph,
 		}
 
-		out := e.applyCrossingLocked(pilot, *puck, ev)
+		out := e.applyCrossingLocked(pilot, *gate, ev)
 		if out.rejected != nil {
 			filtered = append(filtered, e.storeFilteredLocked(*out.rejected))
 			continue
 		}
 
 		e.nextEventID++
-		e.passingNumbers[puck.PuckID]++
+		e.passingNumbers[gate.GateID]++
 		ev.EventID = e.nextEventID
-		ev.PassingNumber = e.passingNumbers[puck.PuckID]
+		ev.PassingNumber = e.passingNumbers[gate.GateID]
 		ev.StartedLap = ev.IsStartFinish && out.lap == nil
 		e.crossings = append(e.crossings, ev)
 		if len(e.crossings) > maxStoredCrossings {
@@ -408,27 +408,27 @@ func (e *Engine) IngestTelemetryFrame(frame domain.PuckTelemetryFrame) {
 	}
 }
 
-// touchDetectedPuckLocked records or updates the physical XIAO puck in `e.detected`.
-func (e *Engine) touchDetectedPuckLocked(frame domain.PuckTelemetryFrame) {
-	if frame.PuckID == 0 {
+// touchDetectedTimerLocked records or updates the physical XIAO timer in `e.detected`.
+func (e *Engine) touchDetectedTimerLocked(frame domain.TimerTelemetryFrame) {
+	if frame.TimerID == 0 {
 		return
 	}
 	now := time.Now()
-	d, ok := e.detected[frame.PuckID]
+	d, ok := e.detected[frame.TimerID]
 	if !ok {
-		d = &domain.DetectedPuck{
-			PuckID:          frame.PuckID,
-			Color:           domain.DefaultPuckColor(frame.PuckID),
-			IsHub:           frame.PuckID == 1,
+		d = &domain.DetectedTimer{
+			TimerID:         frame.TimerID,
+			Color:           domain.DefaultTimerColor(frame.TimerID),
+			IsHub:           frame.TimerID == 1,
 			FirmwareVersion: domain.LatestFirmwareVersion,
 			BatteryMv:       4080,
 			BatteryPct:      domain.ComputeBatteryPct(4080),
 			NoiseFloorDbm:   -92.0,
 		}
-		e.detected[frame.PuckID] = d
+		e.detected[frame.TimerID] = d
 	} else {
 		if d.Color == "" {
-			d.Color = domain.DefaultPuckColor(frame.PuckID)
+			d.Color = domain.DefaultTimerColor(frame.TimerID)
 		}
 		if d.FirmwareVersion == "" {
 			d.FirmwareVersion = domain.LatestFirmwareVersion
@@ -445,12 +445,12 @@ func (e *Engine) touchDetectedPuckLocked(frame domain.PuckTelemetryFrame) {
 	}
 }
 
-// touchPuckLocked finds the track gate bound to `frame.PuckID` (via `AssignedPuckID`) and refreshes its health.
-// Returns nil if no gate currently has `AssignedPuckID == frame.PuckID`.
-func (e *Engine) touchPuckLocked(frame domain.PuckTelemetryFrame) *domain.GatePuck {
+// touchGateLocked finds the track gate bound to `frame.TimerID` (via `AssignedTimerID`) and refreshes its health.
+// Returns nil if no gate currently has `AssignedTimerID == frame.TimerID`.
+func (e *Engine) touchGateLocked(frame domain.TimerTelemetryFrame) *domain.TrackGate {
 	idx := -1
-	for i := range e.pucks {
-		if e.pucks[i].AssignedPuckID == frame.PuckID {
+	for i := range e.gates {
+		if e.gates[i].AssignedTimerID == frame.TimerID {
 			idx = i
 			break
 		}
@@ -459,26 +459,26 @@ func (e *Engine) touchPuckLocked(frame domain.PuckTelemetryFrame) *domain.GatePu
 		return nil
 	}
 
-	puck := &e.pucks[idx]
-	puck.Online = true
-	puck.LastSeenAt = time.Now()
-	puck.FramesRxCount++
+	gate := &e.gates[idx]
+	gate.Online = true
+	gate.LastSeenAt = time.Now()
+	gate.FramesRxCount++
 	if frame.BatteryMv > 0 {
-		puck.BatteryMv = frame.BatteryMv
-		puck.BatteryPct = domain.ComputeBatteryPct(frame.BatteryMv)
+		gate.BatteryMv = frame.BatteryMv
+		gate.BatteryPct = domain.ComputeBatteryPct(frame.BatteryMv)
 	}
 	if frame.NoiseFloorDbm != 0 {
-		puck.NoiseFloorDbm = frame.NoiseFloorDbm
+		gate.NoiseFloorDbm = frame.NoiseFloorDbm
 	}
-	if d, ok := e.detected[frame.PuckID]; ok {
-		if d.PuckLabel != "" {
-			puck.PuckLabel = d.PuckLabel
+	if d, ok := e.detected[frame.TimerID]; ok {
+		if d.TimerLabel != "" {
+			gate.TimerLabel = d.TimerLabel
 		}
 		if d.FirmwareVersion != "" {
-			puck.FirmwareVersion = d.FirmwareVersion
+			gate.FirmwareVersion = d.FirmwareVersion
 		}
 	}
-	return puck
+	return gate
 }
 
 func (e *Engine) storeFilteredLocked(f domain.FilteredDetection) domain.FilteredDetection {
@@ -492,7 +492,7 @@ func (e *Engine) storeFilteredLocked(f domain.FilteredDetection) domain.Filtered
 // StateSnapshot returns the current configuration, recent laps, crossings, and pilot track summaries.
 func (e *Engine) StateSnapshot() (
 	pilots []domain.PilotSlot,
-	pucks []domain.GatePuck,
+	gates []domain.TrackGate,
 	laps []domain.LapRecord,
 	crossings []domain.GateCrossingEvent,
 	summaries []domain.PilotTrackSummary,
@@ -501,31 +501,31 @@ func (e *Engine) StateSnapshot() (
 	defer e.mu.RUnlock()
 
 	pilots = append([]domain.PilotSlot(nil), e.pilots...)
-	pucks = append([]domain.GatePuck(nil), e.pucks...)
-	for i := range pucks {
-		if pucks[i].AssignedPuckID == 0 {
-			pucks[i].Online = false
-			pucks[i].PuckLabel = ""
-			pucks[i].FirmwareVersion = ""
-			pucks[i].Color = ""
-			pucks[i].BatteryMv = 0
-			pucks[i].BatteryPct = 0
+	gates = append([]domain.TrackGate(nil), e.gates...)
+	for i := range gates {
+		if gates[i].AssignedTimerID == 0 {
+			gates[i].Online = false
+			gates[i].TimerLabel = ""
+			gates[i].FirmwareVersion = ""
+			gates[i].Color = ""
+			gates[i].BatteryMv = 0
+			gates[i].BatteryPct = 0
 			continue
 		}
-		if d, ok := e.detected[pucks[i].AssignedPuckID]; ok {
-			pucks[i].PuckLabel = d.PuckLabel
+		if d, ok := e.detected[gates[i].AssignedTimerID]; ok {
+			gates[i].TimerLabel = d.TimerLabel
 			if d.FirmwareVersion != "" {
-				pucks[i].FirmwareVersion = d.FirmwareVersion
+				gates[i].FirmwareVersion = d.FirmwareVersion
 			}
 			if d.Color != "" {
-				pucks[i].Color = d.Color
+				gates[i].Color = d.Color
 			}
-			pucks[i].BatteryMv = d.BatteryMv
-			pucks[i].BatteryPct = d.BatteryPct
-			pucks[i].NoiseFloorDbm = d.NoiseFloorDbm
-			pucks[i].LastSeenAt = d.LastSeenAt
+			gates[i].BatteryMv = d.BatteryMv
+			gates[i].BatteryPct = d.BatteryPct
+			gates[i].NoiseFloorDbm = d.NoiseFloorDbm
+			gates[i].LastSeenAt = d.LastSeenAt
 		}
-		pucks[i].Online = !pucks[i].LastSeenAt.IsZero() && time.Since(pucks[i].LastSeenAt) < puckOfflineAfter
+		gates[i].Online = !gates[i].LastSeenAt.IsZero() && time.Since(gates[i].LastSeenAt) < timerOfflineAfter
 	}
 	laps = append([]domain.LapRecord(nil), e.laps...)
 	crossings = append([]domain.GateCrossingEvent(nil), e.crossings...)
@@ -533,19 +533,19 @@ func (e *Engine) StateSnapshot() (
 	return
 }
 
-// DetectedPucksSnapshot returns all physical XIAO ESP32-C5 pucks discovered or provisioned,
-// sorted by their hardware PuckID.
-func (e *Engine) DetectedPucksSnapshot() []domain.DetectedPuck {
+// DetectedTimersSnapshot returns all physical XIAO ESP32-C5 timers discovered or provisioned,
+// sorted by their hardware TimerID.
+func (e *Engine) DetectedTimersSnapshot() []domain.DetectedTimer {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
-	out := make([]domain.DetectedPuck, 0, len(e.detected))
+	out := make([]domain.DetectedTimer, 0, len(e.detected))
 	for _, d := range e.detected {
 		cp := *d
-		cp.Online = !cp.LastSeenAt.IsZero() && time.Since(cp.LastSeenAt) < puckOfflineAfter
+		cp.Online = !cp.LastSeenAt.IsZero() && time.Since(cp.LastSeenAt) < timerOfflineAfter
 		out = append(out, cp)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].PuckID < out[j].PuckID })
+	sort.Slice(out, func(i, j int) bool { return out[i].TimerID < out[j].TimerID })
 	return out
 }
 

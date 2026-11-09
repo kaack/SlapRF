@@ -34,7 +34,7 @@ interface LapPayload {
 
 interface ConfigPayload {
   pilots: PilotSlot[];
-  pucks: TrackNode[];
+  gates: TrackNode[];
 }
 
 const STATUS_POLL_MS = 2000;
@@ -94,8 +94,8 @@ export class ApiClient {
       const timerId = isHub ? 1 : Math.max(2, s.slot || 2);
 
       this.store.setUsbDetectedTimer({
-        puckId: timerId,
-        puckLabel: label,
+        timerId,
+        timerLabel: label,
         color: "#d4ff3a",
         isHub,
         firmwareVersion: s.fw || cfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
@@ -185,7 +185,7 @@ export class ApiClient {
 
   public async simTimerAction(payload: {
     action: "toggle-power" | "delete" | "add";
-    puckId?: number;
+    timerId?: number;
     role?: "hub" | "spoke";
     label?: string;
     firmwareProfile?: string;
@@ -219,7 +219,7 @@ export class ApiClient {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("POST", "/api/track/add", {
         name,
-        assignedPuckId: assignedTimerId,
+        assignedTimerId,
         ...(trackOrder !== undefined ? { trackOrder } : {}),
       })
     );
@@ -230,7 +230,7 @@ export class ApiClient {
   }
 
   public async removeTrackNode(nodeId: number): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/track/remove", { puckId: nodeId }));
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/track/remove", { gateId: nodeId }));
   }
 
   public async removeGate(nodeId: number): Promise<void> {
@@ -239,7 +239,7 @@ export class ApiClient {
 
   public async updateTimerColor(timerId: number, color: string): Promise<void> {
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/timers/color", { puckId: timerId, color })
+      await this.transport.request<FullStateResponse>("POST", "/api/timers/color", { timerId, color })
     );
   }
 
@@ -253,7 +253,7 @@ export class ApiClient {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("POST", "/api/timers/provision", {
         role,
-        puckLabel: timerLabel,
+        timerLabel,
         firmwareProfile,
         fingerprint,
       })
@@ -315,7 +315,7 @@ export class ApiClient {
 
   /** One gate's timing-rule overrides; an empty object clears them. */
   public async setGateRules(nodeId: number, overrides: GateRuleOverrides): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/gates/rules", { puckId: nodeId, overrides }));
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/gates/rules", { gateId: nodeId, overrides }));
   }
 
   /** Saves timing guardrails; the server clamps values and returns what it applied. */
@@ -350,7 +350,7 @@ export class ApiClient {
         }
         case "config": {
           const c = msg.payload as ConfigPayload;
-          this.store.applyConfig(c.pilots, c.pucks);
+          this.store.applyConfig(c.pilots, c.gates);
           break;
         }
       }

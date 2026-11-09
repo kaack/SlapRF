@@ -11,8 +11,7 @@
 /* Track timeline ("---O---O---O---O---") + Inspector & Timers table ------ */
 [data-slot="track"],
 [data-slot="gates"],
-[data-slot="timers"],
-[data-slot="pucks"] {
+[data-slot="timers"] {
   overflow: visible;
 }
 .gate-track-stage {
@@ -230,7 +229,7 @@
     0 0 0 5.5px var(--c, var(--accent)),
     0 8px 22px rgba(0, 0, 0, 0.5);
 }
-.gate-line-item.is-puck-drop-target .gate-node-circle {
+.gate-line-item.is-timer-drop-target .gate-node-circle {
   transform: scale(1.1);
   border-style: solid;
   border-color: var(--accent);
@@ -238,14 +237,14 @@
     0 0 0 4px rgba(212, 255, 58, 0.25),
     0 8px 24px rgba(0, 0, 0, 0.5);
 }
-.gate-node-puck-code {
+.gate-node-timer-code {
   font-size: 15px;
   font-weight: 700;
   line-height: 1.05;
   letter-spacing: -0.02em;
   color: var(--text);
 }
-.gate-node-puck-meta {
+.gate-node-timer-meta {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -325,7 +324,7 @@
 .gate-line-item.is-drop-slot .gate-node-start-flag {
   visibility: hidden;
 }
-/* Floating puck circle while dragging */
+/* Floating timer circle while dragging */
 .gate-node-floating {
   position: fixed;
   top: 0;
@@ -356,10 +355,10 @@ body.is-gate-dragging * {
     --edge-pad: 42px;
     min-width: 84px;
   }
-  .gate-node-puck-code {
+  .gate-node-timer-code {
     font-size: 13.5px;
   }
-  .gate-node-puck-meta {
+  .gate-node-timer-meta {
     display: none;
   }
   .gate-node-name {
@@ -389,10 +388,10 @@ body.is-gate-dragging * {
   .gate-line-sec-pill {
     display: none !important;
   }
-  .gate-node-puck-code {
+  .gate-node-timer-code {
     font-size: clamp(10.5px, 3.4cqw, 12.5px);
   }
-  .gate-node-puck-meta {
+  .gate-node-timer-meta {
     display: none;
   }
   .gate-node-name {
@@ -422,10 +421,10 @@ body.is-gate-dragging * {
   .gate-line-sec-pill {
     display: none !important;
   }
-  .gate-node-puck-code {
+  .gate-node-timer-code {
     font-size: 11.5px;
   }
-  .gate-node-puck-meta {
+  .gate-node-timer-meta {
     display: none;
   }
   .gate-node-name {
@@ -434,7 +433,7 @@ body.is-gate-dragging * {
   }
 }
 
-/* Unassigned Pucks tray below the course line */
+/* Unassigned Timers tray below the course line */
 .gate-unassigned-tray {
   margin-top: 16px;
   padding: 11px 14px;
@@ -480,7 +479,7 @@ body.is-gate-dragging * {
   border-radius: 999px;
   border: 1px dashed var(--border);
 }
-.unassigned-puck-token {
+.unassigned-timer-token {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -493,14 +492,14 @@ body.is-gate-dragging * {
   touch-action: none;
   transition: transform 0.12s, box-shadow 0.12s, opacity 0.12s;
 }
-.unassigned-puck-token:hover {
+.unassigned-timer-token:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
-.unassigned-puck-token.is-dragging-source {
+.unassigned-timer-token.is-dragging-source {
   opacity: 0.35;
 }
-.unassigned-puck-dot {
+.unassigned-timer-dot {
   width: 28px;
   height: 28px;
   border-radius: 50%;
@@ -513,17 +512,17 @@ body.is-gate-dragging * {
   font-weight: 700;
   color: var(--text);
 }
-.unassigned-puck-info {
+.unassigned-timer-info {
   display: flex;
   flex-direction: column;
   line-height: 1.15;
 }
-.unassigned-puck-name {
+.unassigned-timer-name {
   font-size: 12px;
   font-weight: 600;
   color: var(--text);
 }
-.unassigned-puck-sub {
+.unassigned-timer-sub {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -605,7 +604,7 @@ body.is-gate-dragging * {
     grid-template-columns: 1fr;
   }
 }
-.gate-inspector-puck-box {
+.gate-inspector-timer-box {
   min-height: 36px;
   padding: 4px 10px;
   border-radius: var(--radius);
@@ -616,7 +615,7 @@ body.is-gate-dragging * {
   gap: 8px;
   flex-wrap: wrap;
 }
-.gate-inspector-puck-box.is-empty {
+.gate-inspector-timer-box.is-empty {
   border-style: dashed;
   background: transparent;
 }
@@ -626,10 +625,7 @@ body.is-gate-dragging * {
 .gate-name-field {
   font-weight: 600;
 }
-[data-slot="pucks"] {
-  overflow: visible;
-}
-.puck-table-row {
+.timer-table-row {
   position: relative;
   z-index: 1;
   display: grid;
@@ -640,16 +636,16 @@ body.is-gate-dragging * {
   padding: 11px 20px;
   border-top: 1px solid var(--border);
 }
-.puck-fw-cell {
+.timer-fw-cell {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
 }
-.puck-table-row.is-offline {
+.timer-table-row.is-offline {
   opacity: 0.72;
 }
-.puck-status-pill {
+.timer-status-pill {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -657,13 +653,13 @@ body.is-gate-dragging * {
   font-weight: 500;
   color: var(--text-2);
 }
-.puck-status-pill.is-offline {
+.timer-status-pill.is-offline {
   color: var(--text-3);
 }
-.puck-table-row.is-picker-open {
+.timer-table-row.is-picker-open {
   z-index: 60;
 }
-.puck-table-row.puck-table-head {
+.timer-table-row.timer-table-head {
   border-top: 0;
   padding-top: 14px;
   padding-bottom: 8px;
@@ -671,16 +667,16 @@ body.is-gate-dragging * {
   font-size: 11.5px;
   font-weight: 500;
 }
-.puck-battery-cell {
+.timer-battery-cell {
   display: flex;
   align-items: center;
   gap: 10px;
 }
-.puck-battery-meter {
+.timer-battery-meter {
   flex: 1;
   min-width: 56px;
 }
-.puck-battery-text {
+.timer-battery-text {
   font-size: 12px;
   color: var(--text-2);
   white-space: nowrap;
@@ -784,7 +780,7 @@ body.is-gate-dragging * {
   min-width: 0;
   font-weight: 600;
 }
-.gate-row-puck-bind {
+.gate-row-timer-bind {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -796,7 +792,7 @@ body.is-gate-dragging * {
   font-weight: 500;
   white-space: nowrap;
 }
-.gate-puck-select {
+.gate-timer-select {
   flex: 1;
   min-width: 170px;
   height: 30px;
@@ -823,34 +819,34 @@ body.is-gate-dragging * {
 .gate-remove-spacer {
   width: 26px;
 }
-.detected-puck-list {
+.detected-timer-list {
   display: flex;
   flex-direction: column;
 }
-.detected-puck-row {
+.detected-timer-row {
   display: flex;
   flex-direction: column;
   gap: 8px;
   padding: 13px 18px;
   border-top: 1px solid var(--border);
 }
-.detected-puck-row:first-child {
+.detected-timer-row:first-child {
   border-top: 0;
 }
-.detected-puck-top {
+.detected-timer-top {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
 }
-.detected-puck-id {
+.detected-timer-id {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   font-size: 13px;
 }
-.detected-puck-id .status-dot.is-up {
+.detected-timer-id .status-dot.is-up {
   background: var(--good);
   box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.16);
 }
@@ -882,7 +878,7 @@ body.is-gate-dragging * {
   background: rgba(52, 211, 153, 0.08);
   color: var(--good);
 }
-.detected-puck-meta {
+.detected-timer-meta {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -2271,7 +2267,7 @@ body.is-gate-dragging * {
   border-color: var(--accent-line);
 }
 
-/* Browser USB Puck Flasher ------------------------------------------------- */
+/* Browser USB Timer Flasher ------------------------------------------------ */
 .flasher {
   display: flex;
   flex-direction: column;
@@ -3751,8 +3747,8 @@ body.is-gate-dragging * {
   color: var(--text);
 }
 
-/* Simulated Timers table matching `.puck-table-row` in System */
-.puck-table-row.sim-puck-table-row {
+/* Simulated Timers table matching `.timer-table-row` in System */
+.timer-table-row.sim-timer-table-row {
   grid-template-columns: minmax(140px, 1.15fr) 115px 80px minmax(145px, 1fr) minmax(130px, 1fr) auto;
 }
 

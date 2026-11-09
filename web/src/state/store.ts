@@ -157,12 +157,12 @@ export class AppStore {
       const matchedDet = this.detectedTimers.find(
         (d) =>
           (usb.fingerprint && d.fingerprint && d.fingerprint.toUpperCase() === usb.fingerprint.toUpperCase()) ||
-          (usb.puckLabel && d.puckLabel.toUpperCase() === usb.puckLabel.toUpperCase()) ||
-          d.puckId === usb.puckId
+          (usb.timerLabel && d.timerLabel.toUpperCase() === usb.timerLabel.toUpperCase()) ||
+          d.timerId === usb.timerId
       );
-      const targetId = matchedDet?.puckId ?? usb.puckId;
+      const targetId = matchedDet?.timerId ?? usb.timerId;
       return this._nodes.map((n) => {
-        const assigned = n.assignedPuckId ?? n.puckId;
+        const assigned = n.assignedTimerId ?? n.gateId;
         if (assigned === targetId) {
           return {
             ...n,
@@ -176,9 +176,6 @@ export class AppStore {
     }
     return this._nodes;
   }
-  public get pucks(): TrackNode[] {
-    return this.nodes;
-  }
   /** Physical XIAO timers discovered over Wi-Fi/ESP-NOW, flashed over USB, or currently plugged in via USB. */
   public get detectedTimers(): DetectedTimer[] {
     if (!this._simulatorRunning && this._usbTimer) {
@@ -187,14 +184,14 @@ export class AppStore {
       const idx = list.findIndex(
         (d) =>
           (usb.fingerprint && d.fingerprint && d.fingerprint.toUpperCase() === usb.fingerprint.toUpperCase()) ||
-          (usb.puckLabel && d.puckLabel.toUpperCase() === usb.puckLabel.toUpperCase()) ||
-          d.puckId === usb.puckId
+          (usb.timerLabel && d.timerLabel.toUpperCase() === usb.timerLabel.toUpperCase()) ||
+          d.timerId === usb.timerId
       );
       if (idx >= 0) {
         const existing = list[idx];
         list[idx] = {
           ...existing,
-          puckLabel: usb.puckLabel || existing.puckLabel,
+          timerLabel: usb.timerLabel || existing.timerLabel,
           isHub: usb.isHub,
           firmwareVersion: usb.firmwareVersion || existing.firmwareVersion,
           firmwareProfile: usb.firmwareProfile || existing.firmwareProfile,
@@ -211,9 +208,6 @@ export class AppStore {
       return list;
     }
     return this._detectedTimers;
-  }
-  public get detectedPucks(): DetectedTimer[] {
-    return this.detectedTimers;
   }
 
   public setUsbDetectedTimer(timer: DetectedTimer | null): void {
@@ -304,10 +298,7 @@ export class AppStore {
     return this._pilots.find((p) => p.slotIndex === slotIndex);
   }
   public node(nodeId: number): TrackNode | undefined {
-    return this._nodes.find((n) => n.puckId === nodeId);
-  }
-  public puck(nodeId: number): TrackNode | undefined {
-    return this.node(nodeId);
+    return this._nodes.find((n) => n.gateId === nodeId);
   }
   public summaryFor(slotIndex: number): PilotTrackSummary | undefined {
     return this._summaries.find((s) => s.slotIndex === slotIndex);
@@ -324,8 +315,8 @@ export class AppStore {
   public hydrate(state: FullStateResponse): void {
     const modeChanged = this._simulatorRunning !== state.simulatorRunning;
     this._pilots = state.pilots ?? [];
-    this.setNodes(state.pucks ?? []);
-    this._detectedTimers = state.detectedPucks ?? [];
+    this.setNodes(state.gates ?? []);
+    this._detectedTimers = state.timers ?? [];
     this._laps = state.laps ?? [];
     this._crossings = state.crossings ?? [];
     this._filtered = state.filtered ?? [];
@@ -361,10 +352,10 @@ export class AppStore {
   }
 
   public applyStatus(status: StatusResponse): void {
-    const before = this._nodes.map((n) => n.puckId).join(",");
-    this.setNodes(status.pucks ?? []);
-    if (status.detectedPucks) {
-      this._detectedTimers = status.detectedPucks;
+    const before = this._nodes.map((n) => n.gateId).join(",");
+    this.setNodes(status.gates ?? []);
+    if (status.timers) {
+      this._detectedTimers = status.timers;
     }
     if (status.serverTimestampUs && status.serverTimestampUs > this._latestTimestampUs) {
       this._latestTimestampUs = status.serverTimestampUs;
@@ -378,7 +369,7 @@ export class AppStore {
     this._raceArmed = status.raceArmed;
     this._liveTime = status.liveTimeStatus;
 
-    const gatesChanged = before !== this._nodes.map((n) => n.puckId).join(",");
+    const gatesChanged = before !== this._nodes.map((n) => n.gateId).join(",");
     if (gatesChanged) {
       this.ensureValidSelection();
       this.emit("status", "config");
@@ -401,10 +392,10 @@ export class AppStore {
 
   public ingestTelemetry(frame: TimerTelemetryFrame): void {
     const hist = this.activeHistory;
-    let buf = hist.get(frame.puckId);
+    let buf = hist.get(frame.timerId);
     if (!buf) {
       buf = [];
-      hist.set(frame.puckId, buf);
+      hist.set(frame.timerId, buf);
     }
     buf.push(frame);
     if (buf.length > HISTORY_SAMPLES + HISTORY_TRIM_SLACK) buf.splice(0, buf.length - HISTORY_SAMPLES);
@@ -416,7 +407,7 @@ export class AppStore {
       this._latestTelemetryTimestampUs = frame.timestampUs;
     }
     this._lastIngestPerfMs = typeof performance !== "undefined" ? performance.now() : Date.now();
-    const node = this.node(frame.puckId);
+    const node = this.node(frame.timerId);
     if (node) node.lastRssi = frame.rssi;
   }
 

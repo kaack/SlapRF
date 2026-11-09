@@ -11,11 +11,11 @@ const (
 	BadgeOffPace      SectorBadge = "OFF_PACE"      // More than 10% slower than the pilot's own best
 )
 
-// SectorSplit represents the elapsed time between two consecutive Gate Pucks on the track.
+// SectorSplit represents the elapsed time between two consecutive Track Gates on the course.
 type SectorSplit struct {
 	SectorIndex    int         `json:"sectorIndex"`    // 1-based sector number (1..N)
-	FromPuckID     uint8       `json:"fromPuckId"`     // Entry gate puck ID
-	ToPuckID       uint8       `json:"toPuckId"`       // Exit gate puck ID
+	FromGateID     uint8       `json:"fromGateId"`     // Entry gate ID
+	ToGateID       uint8       `json:"toGateId"`       // Exit gate ID
 	Label          string      `json:"label"`          // e.g. "S1 (G1 → G2)"
 	SplitSeconds   float64     `json:"splitSeconds"`   // Sector duration in seconds
 	DeltaToBestSec float64     `json:"deltaToBestSec"` // Difference from personal best in this sector (+0.18s)
@@ -23,7 +23,7 @@ type SectorSplit struct {
 	Badge          SectorBadge `json:"badge"`          // OVERALL_BEST, PERSONAL_BEST, NORMAL, or SLOW_SECTION
 }
 
-// LapRecord represents a full lap (Start/Finish Puck -> Intermediate Pucks -> Start/Finish Puck)
+// LapRecord represents a full lap (Start/Finish Gate -> Intermediate Gates -> Start/Finish Gate)
 // with all intermediate sector splits attached.
 type LapRecord struct {
 	LapID         uint64        `json:"lapId"`         // Unique lap ID
@@ -41,8 +41,8 @@ type LapRecord struct {
 type SectorBottleneckStat struct {
 	SectorIndex         int     `json:"sectorIndex"` // 1-based position around the track
 	Label               string  `json:"label"`
-	FromPuckID          uint8   `json:"fromPuckId"`
-	ToPuckID            uint8   `json:"toPuckId"`
+	FromGateID          uint8   `json:"fromGateId"`
+	ToGateID            uint8   `json:"toGateId"`
 	BestSplitSec        float64 `json:"bestSplitSec"`
 	AverageSplitSec     float64 `json:"averageSplitSec"`
 	StdDevSec           float64 `json:"stdDevSec"`
@@ -62,6 +62,6 @@ type PilotTrackSummary struct {
 	TheoreticalBestSec float64                `json:"theoreticalBestSec"` // Sum of best individual sector splits
 	PotentialGainSec   float64                `json:"potentialGainSec"`   // BestLapSec - TheoreticalBestSec
 	CurrentSectorIndex int                    `json:"currentSectorIndex"` // Which sector the drone is currently flying through
-	LastPuckID         uint8                  `json:"lastPuckId"`         // Last gate puck cleared
+	LastGateID         uint8                  `json:"lastGateId"`         // Last gate cleared
 	SectorStats        []SectorBottleneckStat `json:"sectorStats"`        // Per-sector consistency & bottleneck breakdown
 }

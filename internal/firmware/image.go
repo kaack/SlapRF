@@ -84,7 +84,7 @@ type TimerConfig struct {
 	Role            uint8
 	Profile         string // Firmware design ID (see Profiles); empty = DefaultProfileID
 	Fingerprint     uint32 // Stable per-board identity; 0 = generate a new random one
-	PuckLabel       string // Flashed timer name (e.g. "H1", "S3")
+	TimerLabel      string // Flashed timer name (e.g. "H1", "S3")
 	FirmwareVersion string // Filled in from the current build; read back by InspectConfig
 	SlotFreqsMHz    [domain.MaxPilotSlots]uint16
 	WifiSSID        string // Only used by Hub timer
@@ -164,8 +164,8 @@ func PatchImage(base []byte, cfg TimerConfig) (*BuiltImage, error) {
 	if cfg.Role != RoleHubTimer && cfg.Role != RoleSpokeTimer {
 		return nil, ErrInvalidRole
 	}
-	cfg.PuckLabel = strings.TrimSpace(cfg.PuckLabel)
-	if len(cfg.PuckLabel) > maxLabelLen {
+	cfg.TimerLabel = strings.TrimSpace(cfg.TimerLabel)
+	if len(cfg.TimerLabel) > maxLabelLen {
 		return nil, ErrLabelTooLong
 	}
 	if len(cfg.WifiSSID) > maxSSIDLen {
@@ -211,7 +211,7 @@ func PatchImage(base []byte, cfg TimerConfig) (*BuiltImage, error) {
 	}
 	copy(block[offSSID:offSSID+33], []byte(cfg.WifiSSID))
 	copy(block[offPass:offPass+40], []byte(cfg.WifiPass))
-	copy(block[offLabel:offLabel+maxLabelLen], []byte(cfg.PuckLabel))
+	copy(block[offLabel:offLabel+maxLabelLen], []byte(cfg.TimerLabel))
 	block[offCRC] = xor8(block[:offCRC])
 	copy(img[off:off+configLen], block[:])
 
@@ -304,7 +304,7 @@ func InspectConfig(img []byte) (TimerConfig, error) {
 	}
 	out.WifiSSID = cString(block[offSSID : offSSID+33])
 	out.WifiPass = cString(block[offPass : offPass+40])
-	out.PuckLabel = cString(block[offLabel : offLabel+maxLabelLen])
+	out.TimerLabel = cString(block[offLabel : offLabel+maxLabelLen])
 	return out, nil
 }
 

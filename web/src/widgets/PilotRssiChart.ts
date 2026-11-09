@@ -33,7 +33,7 @@ const PAD = { l: 46, r: 16 + TAG_GUTTER, t: 34, b: 26 };
 /** A pass the pilot made through a gate: timed, or set aside by the timing rules. */
 interface PassMarker {
   ts: number;
-  puckId: number;
+  gateId: number;
   counted: boolean;
   title: string;
   detail: string;
@@ -41,7 +41,7 @@ interface PassMarker {
 
 /** Where a gate's threshold tag was drawn, for hit-testing drags. */
 interface TagBox {
-  puckId: number;
+  gateId: number;
   x: number;
   y: number;
   w: number;
@@ -68,7 +68,7 @@ export class PilotRssiChart extends Component {
   private hoverY: number | null = null;
   private drag: { x: number; endUs: number } | null = null;
   /** Threshold being dragged, with its live value. */
-  private tagDrag: { puckId: number; dbm: number } | null = null;
+  private tagDrag: { gateId: number; dbm: number } | null = null;
   /** Values shown while a save is in flight, so the line doesn't jump back. */
   private readonly pending = new Map<number, number>();
   private tags: TagBox[] = [];
@@ -86,8 +86,8 @@ export class PilotRssiChart extends Component {
   }
 
   /** The gates drawn on the chart: the focused one, or all of them. */
-  private get shownPucks() {
-    return this.focus === null ? this.store.pucks : this.store.pucks.filter((p) => p.puckId === this.focus);
+  private get shownGates() {
+    return this.focus === null ? this.store.nodes : this.store.nodes.filter((p) => p.gateId === this.focus);
   }
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
@@ -153,7 +153,7 @@ export class PilotRssiChart extends Component {
       const y = e.clientY - r.top;
       const grabbed = this.tagAt(x, y);
       if (grabbed !== null) {
-        this.tagDrag = { puckId: grabbed, dbm: this.thresholdOf(grabbed).dbm };
+        this.tagDrag = { gateId: grabbed, dbm: this.thresholdOf(grabbed).dbm };
         return;
       }
       const onAxis = y >= r.height - PAD.b && x >= PAD.l && x <= PAD.l + this.plot.w;
@@ -187,9 +187,9 @@ export class PilotRssiChart extends Component {
     });
     const endDrag = () => {
       if (this.tagDrag) {
-        const { puckId, dbm } = this.tagDrag;
+        const { gateId, dbm } = this.tagDrag;
         this.tagDrag = null;
-        if (dbm !== this.thresholdOf(puckId).dbm) void this.saveManual(puckId, dbm);
+        if (dbm !== this.thresholdOf(gateId).dbm) void this.saveManual(gateId, dbm);
       }
       this.drag = null;
       host.classList.remove("is-dragging");
@@ -227,7 +227,7 @@ export class PilotRssiChart extends Component {
     );
     this.onDispose(
       store.subscribe(["config"], () => {
-        if (this.focus !== null && !store.puck(this.focus)) this.focus = null;
+        if (this.focus !== null && !store.node(this.focus)) this.focus = null;
         this.renderCalib();
       })
     );
@@ -247,7 +247,7 @@ export class PilotRssiChart extends Component {
   }
 
   private get earliest(): number {
-    const firsts = this.store.pucks.map((p) => this.store.historyFor(p.puckId)[0]?.timestampUs ?? Infinity);
+    const firsts = this.store.nodes.map((p) => this.store.historyFor(p.gateId)[0]?.timestampUs ?? Infinity);
     const e = Math.min(...firsts);
     return Number.isFinite(e) ? e : this.latest;
   }
@@ -324,36 +324,36 @@ export class PilotRssiChart extends Component {
   // ---- thresholds & calibration ----------------------------------------------
 
   /** The threshold to show for a gate: while dragging, the dragged value; then pending; then stored. */
-  private thresholdOf(puckId: number): { dbm: number; calibrated: boolean } {
-    if (this.tagDrag?.puckId === puckId) return { dbm: this.tagDrag.dbm, calibrated: true };
-    const pending = this.pending.get(puckId);
+  private thresholdOf(gateId: number): { dbm: number; calibrated: boolean } {
+    if (this.tagDrag?.gateId === gateId) return { dbm: this.tagDrag.dbm, calibrated: true };
+    const pending = this.pending.get(gateId);
     if (pending !== undefined) return { dbm: pending, calibrated: pending !== 0 };
-    return enterThresholdAt(this.store, puckId, this.store.selectedPilot);
+    return enterThresholdAt(this.store, gateId, this.store.selectedPilot);
   }
 
   /** Gate whose threshold tag (or line) is under the pointer, if any. Tags win over lines. */
   private tagAt(x: number, y: number): number | null {
     for (const t of this.tags) {
-      if (x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + TAG_H) return t.puckId;
+      if (x >= t.x && x <= t.x + t.w && y >= t.y && y <= t.y + TAG_H) return t.gateId;
     }
     if (x < PAD.l || x > PAD.l + this.plot.w) return null;
     let best: TagBox | null = null;
     for (const t of this.tags) {
       if (Math.abs(y - t.lineY) <= LINE_HIT_PX && (!best || Math.abs(y - t.lineY) < Math.abs(y - best.lineY))) best = t;
     }
-    return best?.puckId ?? null;
+    return best?.gateId ?? null;
   }
 
   /** Raw stored overrides for this pilot (0 = pilot default), for undo. */
   private currentOverrides(): GateThresholdUpdate[] {
     const slotIndex = this.store.selectedPilot;
     const pos = this.store.pilots.findIndex((p) => p.slotIndex === slotIndex);
-    return this.store.pucks.map((p) => ({ puckId: p.puckId, slotIndex, enterDbm: p.enterThresholds?.[pos] ?? 0 }));
+    return this.store.nodes.map((p) => ({ gateId: p.gateId, slotIndex, enterDbm: p.enterThresholds?.[pos] ?? 0 }));
   }
 
   private async apply(updates: GateThresholdUpdate[], message: string): Promise<void> {
-    const before = this.currentOverrides().filter((o) => updates.some((u) => u.puckId === o.puckId));
-    updates.forEach((u) => this.pending.set(u.puckId, u.enterDbm === 0 ? this.pilotDefault() : u.enterDbm));
+    const before = this.currentOverrides().filter((o) => updates.some((u) => u.gateId === o.gateId));
+    updates.forEach((u) => this.pending.set(u.gateId, u.enterDbm === 0 ? this.pilotDefault() : u.enterDbm));
     try {
       await this.api.setGateThresholds(updates);
       this.undo = before;
@@ -361,7 +361,7 @@ export class PilotRssiChart extends Component {
     } catch {
       this.calibMessage = "Couldn't save the thresholds — is the timer still running?";
     } finally {
-      updates.forEach((u) => this.pending.delete(u.puckId));
+      updates.forEach((u) => this.pending.delete(u.gateId));
       this.renderCalib();
     }
   }
@@ -370,10 +370,10 @@ export class PilotRssiChart extends Component {
     return this.store.pilot(this.store.selectedPilot)?.enterThreshold ?? -58;
   }
 
-  private saveManual(puckId: number, dbm: number): Promise<void> {
+  private saveManual(gateId: number, dbm: number): Promise<void> {
     return this.apply(
-      [{ puckId, slotIndex: this.store.selectedPilot, enterDbm: dbm }],
-      `${gateLabel(this.store, puckId)} set to ${dbm} dBm.`
+      [{ gateId, slotIndex: this.store.selectedPilot, enterDbm: dbm }],
+      `${gateLabel(this.store, gateId)} set to ${dbm} dBm.`
     );
   }
 
@@ -388,11 +388,11 @@ export class PilotRssiChart extends Component {
     const updates: GateThresholdUpdate[] = [];
     const done: string[] = [];
     const skipped: string[] = [];
-    for (const puck of this.shownPucks) {
-      const result = suggestThreshold(this.store.historyFor(puck.puckId), pos);
-      const name = gateLabel(this.store, puck.puckId);
+    for (const gate of this.shownGates) {
+      const result = suggestThreshold(this.store.historyFor(gate.gateId), pos);
+      const name = gateLabel(this.store, gate.gateId);
       if (result.ok) {
-        updates.push({ puckId: puck.puckId, slotIndex: pilot.slotIndex, enterDbm: result.enterDbm });
+        updates.push({ gateId: gate.gateId, slotIndex: pilot.slotIndex, enterDbm: result.enterDbm });
         done.push(`${name} ${result.enterDbm}`);
       } else {
         skipped.push(`${name}: ${result.reason}`);
@@ -418,7 +418,7 @@ export class PilotRssiChart extends Component {
         ? `Every gate is back on ${who}'s own threshold (${this.pilotDefault()} dBm).`
         : `${gateLabel(this.store, this.focus)} is back on ${who}'s own threshold (${this.pilotDefault()} dBm).`;
     return this.apply(
-      this.shownPucks.map((p) => ({ puckId: p.puckId, slotIndex, enterDbm: 0 })),
+      this.shownGates.map((p) => ({ gateId: p.gateId, slotIndex, enterDbm: 0 })),
       message
     );
   }
@@ -435,8 +435,8 @@ export class PilotRssiChart extends Component {
 
   // ---- data ------------------------------------------------------------------
 
-  private colorOf(puckId: number): string {
-    return gateColor(this.store, puckId);
+  private colorOf(gateId: number): string {
+    return gateColor(this.store, gateId);
   }
 
   /** This pilot's passes in [from, to], oldest first. */
@@ -446,18 +446,18 @@ export class PilotRssiChart extends Component {
       .filter((c) => c.slotIndex === slot && c.timestampUs >= from && c.timestampUs <= to)
       .map((c) => ({
         ts: c.timestampUs,
-        puckId: c.puckId,
+        gateId: c.gateId,
         counted: true,
-        title: `${gateLabel(this.store, c.puckId)} · ${c.estimatedSpeedMph.toFixed(0)} mph`,
+        title: `${gateLabel(this.store, c.gateId)} · ${c.estimatedSpeedMph.toFixed(0)} mph`,
         detail: `Timed · peak ${c.peakRssiDbm.toFixed(0)} dBm`,
       }));
     const rejected: PassMarker[] = this.store.filtered
       .filter((f) => f.slotIndex === slot && f.timestampUs >= from && f.timestampUs <= to)
       .map((f) => ({
         ts: f.timestampUs,
-        puckId: f.puckId,
+        gateId: f.gateId,
         counted: false,
-        title: `${gateLabel(this.store, f.puckId)} · not counted (${FILTER_LABELS[f.reason]})`,
+        title: `${gateLabel(this.store, f.gateId)} · not counted (${FILTER_LABELS[f.reason]})`,
         detail: f.detail,
       }));
     return [...timed, ...rejected].sort((a, b) => a.ts - b.ts);
@@ -466,7 +466,7 @@ export class PilotRssiChart extends Component {
   /** Passes filtered to the currently focused gate (or all gates when focus is null). */
   private focusedPasses(from: number, to: number): PassMarker[] {
     const all = this.passes(from, to);
-    return this.focus === null ? all : all.filter((p) => p.puckId === this.focus);
+    return this.focus === null ? all : all.filter((p) => p.gateId === this.focus);
   }
 
   /** Index of the first frame at or after ts (binary search; frames are in time order). */
@@ -481,8 +481,8 @@ export class PilotRssiChart extends Component {
     return lo;
   }
 
-  private rssiAt(puckId: number, slot: number, ts: number): number | undefined {
-    const frames = this.store.historyFor(puckId);
+  private rssiAt(gateId: number, slot: number, ts: number): number | undefined {
+    const frames = this.store.historyFor(gateId);
     if (frames.length === 0) return undefined;
     const i = Math.min(frames.length - 1, PilotRssiChart.firstAtOrAfter(frames, ts));
     return frames[i].rssi[slot];
@@ -515,13 +515,13 @@ export class PilotRssiChart extends Component {
       ctx.clip();
       ctx.lineJoin = "round";
       ctx.lineWidth = 1.6;
-      for (const puck of this.shownPucks) {
-        const frames = this.store.historyFor(puck.puckId);
+      for (const gate of this.shownGates) {
+        const frames = this.store.historyFor(gate.gateId);
         const from = Math.max(0, PilotRssiChart.firstAtOrAfter(frames, start) - 1);
         const to = Math.min(frames.length - 1, PilotRssiChart.firstAtOrAfter(frames, end));
         if (to - from < 1) continue;
         const step = Math.max(1, Math.floor((to - from) / plotW));
-        ctx.strokeStyle = this.colorOf(puck.puckId);
+        ctx.strokeStyle = this.colorOf(gate.gateId);
         ctx.beginPath();
         // Start on a multiple of the step so the same samples are drawn as the view scrolls
         // (otherwise zoomed-out traces shimmer).
@@ -559,7 +559,7 @@ export class PilotRssiChart extends Component {
     let hovered: PassMarker | null = null;
     passes.forEach((p) => {
       const x = xOf(p.ts);
-      const color = p.counted ? this.colorOf(p.puckId) : theme.bad;
+      const color = p.counted ? this.colorOf(p.gateId) : theme.bad;
       ctx.save();
       ctx.strokeStyle = withAlpha(color, p.counted ? 0.7 : 0.9);
       ctx.lineWidth = p.counted ? 1 : 1.5;
@@ -587,11 +587,11 @@ export class PilotRssiChart extends Component {
    */
   private drawThresholds(ctx: CanvasRenderingContext2D, w: number, plotW: number): void {
     ctx.font = font(700, 10.5);
-    const items = this.shownPucks.map((p) => {
-      const t = this.thresholdOf(p.puckId);
-      const name = gateLabel(this.store, p.puckId);
+    const items = this.shownGates.map((p) => {
+      const t = this.thresholdOf(p.gateId);
+      const name = gateLabel(this.store, p.gateId);
       const text = `${name.length > 8 ? `${name.slice(0, 7)}…` : name} ${t.dbm.toFixed(0)}`;
-      return { puckId: p.puckId, ...t, text, lineY: this.yOf(t.dbm), width: ctx.measureText(text).width + 14 };
+      return { gateId: p.gateId, ...t, text, lineY: this.yOf(t.dbm), width: ctx.measureText(text).width + 14 };
     });
     const colW = Math.max(...items.map((i) => i.width), 40) + TAG_GAP;
 
@@ -603,15 +603,15 @@ export class PilotRssiChart extends Component {
       let col = 0;
       while (columns[col]?.some((o) => Math.abs(o.top - top) < TAG_H + 2)) col++;
       (columns[col] ??= []).push({ top });
-      placed.push({ puckId: item.puckId, x: w - 16 - item.width - col * colW, y: top, w: item.width, lineY: item.lineY });
+      placed.push({ gateId: item.gateId, x: w - 16 - item.width - col * colW, y: top, w: item.width, lineY: item.lineY });
     }
     this.tags = placed;
 
-    const active = this.tagDrag?.puckId ?? (this.hoverX !== null && this.hoverY !== null ? this.tagAt(this.hoverX, this.hoverY) : null);
+    const active = this.tagDrag?.gateId ?? (this.hoverX !== null && this.hoverY !== null ? this.tagAt(this.hoverX, this.hoverY) : null);
     for (const item of items) {
-      const color = this.colorOf(item.puckId);
-      const box = placed.find((b) => b.puckId === item.puckId)!;
-      const isActive = active === item.puckId;
+      const color = this.colorOf(item.gateId);
+      const box = placed.find((b) => b.gateId === item.gateId)!;
+      const isActive = active === item.gateId;
       // Line across the plot, joined to its tag.
       ctx.save();
       ctx.strokeStyle = withAlpha(color, isActive ? 0.95 : 0.45);
@@ -671,7 +671,7 @@ export class PilotRssiChart extends Component {
   }
 
   private static keyOf(p: PassMarker): string {
-    return `${p.ts}:${p.puckId}:${p.counted ? 1 : 0}`;
+    return `${p.ts}:${p.gateId}:${p.counted ? 1 : 0}`;
   }
 
   private drawGrid(
@@ -784,7 +784,7 @@ export class PilotRssiChart extends Component {
     let text: string;
     let actions: string;
     if (this.focus === null) {
-      const anyCalibrated = this.store.pucks.some((p) => enterThresholdAt(this.store, p.puckId, pilot.slotIndex).calibrated);
+      const anyCalibrated = this.store.nodes.some((p) => enterThresholdAt(this.store, p.gateId, pilot.slotIndex).calibrated);
       text = this.calibMessage || "Select a gate above to view or drag its threshold, or auto-calibrate all gates.";
       actions = `
         <div class="scope-calib-actions">
@@ -818,21 +818,21 @@ export class PilotRssiChart extends Component {
     const at = this.hoverX !== null && this.hoverX >= this.plot.x && this.hoverX <= this.plot.x + this.plot.w ? this.timeAt(this.hoverX) : this.viewEnd();
     const allChip = `
       <button type="button" class="channel channel-all ${this.focus === null ? "is-focus" : "is-dim"}"
-              data-focus="all" title="Show all gates (${this.store.pucks.length})">
+              data-focus="all" title="Show all gates (${this.store.nodes.length})">
         <span class="dot channel-all-dot"></span>
         <span class="channel-name">All gates</span>
-        <span class="channel-dbm mono">${this.store.pucks.length} gates</span>
+        <span class="channel-dbm mono">${this.store.nodes.length} gates</span>
       </button>`;
-    const gateChips = this.store.pucks
+    const gateChips = this.store.nodes
       .map((p) => {
-        const dbm = this.rssiAt(p.puckId, slot, at) ?? DBM_MIN;
-        const hot = dbm >= this.thresholdOf(p.puckId).dbm;
-        const dim = this.focus !== null && this.focus !== p.puckId;
+        const dbm = this.rssiAt(p.gateId, slot, at) ?? DBM_MIN;
+        const hot = dbm >= this.thresholdOf(p.gateId).dbm;
+        const dim = this.focus !== null && this.focus !== p.gateId;
         return `
-          <button type="button" class="channel ${hot ? "is-hot" : ""} ${dim ? "is-dim" : ""} ${this.focus === p.puckId ? "is-focus" : ""}"
-                  data-focus="${this.focus === p.puckId ? "all" : p.puckId}" title="${this.focus === p.puckId ? "Show all gates" : "Show only this gate"}">
-            <span class="dot" style="--c:${this.colorOf(p.puckId)}"></span>
-            <span class="channel-name">${esc(gateLabel(this.store, p.puckId))}</span>
+          <button type="button" class="channel ${hot ? "is-hot" : ""} ${dim ? "is-dim" : ""} ${this.focus === p.gateId ? "is-focus" : ""}"
+                  data-focus="${this.focus === p.gateId ? "all" : p.gateId}" title="${this.focus === p.gateId ? "Show all gates" : "Show only this gate"}">
+            <span class="dot" style="--c:${this.colorOf(p.gateId)}"></span>
+            <span class="channel-name">${esc(gateLabel(this.store, p.gateId))}</span>
             <span class="channel-dbm mono">${dbm.toFixed(0)} dBm</span>
           </button>`;
       })

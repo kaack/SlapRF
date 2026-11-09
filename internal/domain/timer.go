@@ -2,13 +2,13 @@ package domain
 
 import "time"
 
-// PuckRole defines whether a XIAO ESP32-C5 gate puck is the official MultiGP Start/Finish gate
+// GateRole defines whether a XIAO ESP32-C5 gate timer is the official MultiGP Start/Finish gate
 // (which emits detections to LiveTime) or an intermediate sector checkpoint.
-type PuckRole string
+type GateRole string
 
 const (
-	PuckRoleStartFinish PuckRole = "START_FINISH"
-	PuckRoleSectorGate  PuckRole = "SECTOR_GATE"
+	GateRoleStartFinish GateRole = "START_FINISH"
+	GateRoleSectorGate  GateRole = "SECTOR_GATE"
 )
 
 // LatestFirmwareVersion is the current XIAO ESP32-C5 SDR timer firmware build. Every firmware
@@ -18,11 +18,11 @@ const LatestFirmwareVersion = "v0.1.4"
 // DefaultFirmwareProfile is the firmware design assumed when a timer doesn't report one.
 const DefaultFirmwareProfile = "open-ground"
 
-// DetectedPuck represents a physical Seeed Studio XIAO ESP32-C5 board discovered over
+// DetectedTimer represents a physical Seeed Studio XIAO ESP32-C5 board discovered over
 // Wi-Fi / ESP-NOW or flashed over USB, whether or not it is currently assigned to a gate.
-type DetectedPuck struct {
-	PuckID          uint8     `json:"puckId"`
-	PuckLabel       string    `json:"puckLabel"`
+type DetectedTimer struct {
+	TimerID         uint8     `json:"timerId"`
+	TimerLabel      string    `json:"timerLabel"`
 	Fingerprint     string    `json:"fingerprint,omitempty"` // Stable 8-hex-digit board identity stamped at flash time
 	Color           string    `json:"color"`
 	IsHub           bool      `json:"isHub"`
@@ -35,7 +35,7 @@ type DetectedPuck struct {
 	LastSeenAt      time.Time `json:"lastSeenAt"`
 }
 
-// DefaultGateColors is the canonical palette assigned to physical pucks.
+// DefaultGateColors is the canonical palette assigned to physical timers.
 var DefaultGateColors = []string{
 	"#d4ff3a",
 	"#38bdf8",
@@ -47,31 +47,31 @@ var DefaultGateColors = []string{
 	"#f87171",
 }
 
-// DefaultPuckColor returns the default color for a physical puck ID (1-based).
-func DefaultPuckColor(puckID uint8) string {
-	if puckID == 0 || len(DefaultGateColors) == 0 {
+// DefaultTimerColor returns the default color for a physical timer ID (1-based).
+func DefaultTimerColor(timerID uint8) string {
+	if timerID == 0 || len(DefaultGateColors) == 0 {
 		return "#d4ff3a"
 	}
-	return DefaultGateColors[int(puckID-1)%len(DefaultGateColors)]
+	return DefaultGateColors[int(timerID-1)%len(DefaultGateColors)]
 }
 
-// GatePuck represents a gate on the track and the optional physical XIAO puck assigned to it.
-type GatePuck struct {
-	PuckID          uint8                  `json:"puckId"`                    // Unique gate ID on the course (1..16)
-	AssignedPuckID  uint8                  `json:"assignedPuckId"`            // Bound hardware puck ID (0 = no puck assigned)
-	PuckLabel       string                 `json:"puckLabel"`                 // Flashed puck ID / hardware name of the assigned puck
-	FirmwareVersion string                 `json:"firmwareVersion,omitempty"` // Running firmware version on the assigned puck (e.g. "v0.1.4")
-	Name            string                 `json:"name"`                      // Gate name from Setup; empty means "Gate N" by track position
-	Color          string                 `json:"color"`          // Hex color originating from the Gates section in System
-	Role           PuckRole               `json:"role"`           // START_FINISH or SECTOR_GATE
-	TrackOrder    int                    `json:"trackOrder"`    // 0-based sequence index around the track
-	MapX          float64                `json:"mapX"`          // Normalized 0..1 X coordinate for the 2D track topology view
-	MapY          float64                `json:"mapY"`          // Normalized 0..1 Y coordinate for the 2D track topology view
-	BatteryMv     uint16                 `json:"batteryMv"`     // 1S LiPo voltage in millivolts (3300..4200 mV)
-	BatteryPct    uint8                  `json:"batteryPct"`    // Calculated battery percentage (0..100%)
-	NoiseFloorDbm float32                    `json:"noiseFloorDbm"` // Ambient 5.8 GHz noise floor in dBm
-	LastRSSI      [MaxPilotPoolSize]float32  `json:"lastRssi"`      // Latest 5.8 GHz RSSI values (dBm)
-	// EnterThresholds calibrates this gate per pilot slot (same order as LastRSSI). Each puck
+// TrackGate represents a gate on the track and the optional physical XIAO timer assigned to it.
+type TrackGate struct {
+	GateID          uint8                     `json:"gateId"`                    // Unique gate ID on the course (1..16)
+	AssignedTimerID uint8                     `json:"assignedTimerId"`           // Bound hardware timer ID (0 = no timer assigned)
+	TimerLabel      string                    `json:"timerLabel"`                // Flashed timer ID / hardware name of the assigned timer
+	FirmwareVersion string                    `json:"firmwareVersion,omitempty"` // Running firmware version on the assigned timer (e.g. "v0.1.4")
+	Name            string                    `json:"name"`                      // Gate name from Setup; empty means "Gate N" by track position
+	Color           string                    `json:"color"`                     // Hex color originating from the Gates section in System
+	Role            GateRole                  `json:"role"`                      // START_FINISH or SECTOR_GATE
+	TrackOrder      int                       `json:"trackOrder"`                // 0-based sequence index around the track
+	MapX            float64                   `json:"mapX"`                      // Normalized 0..1 X coordinate for the 2D track topology view
+	MapY            float64                   `json:"mapY"`                      // Normalized 0..1 Y coordinate for the 2D track topology view
+	BatteryMv       uint16                    `json:"batteryMv"`                 // 1S LiPo voltage in millivolts (3300..4200 mV)
+	BatteryPct      uint8                     `json:"batteryPct"`                // Calculated battery percentage (0..100%)
+	NoiseFloorDbm   float32                   `json:"noiseFloorDbm"`             // Ambient 5.8 GHz noise floor in dBm
+	LastRSSI        [MaxPilotPoolSize]float32 `json:"lastRssi"`                  // Latest 5.8 GHz RSSI values (dBm)
+	// EnterThresholds calibrates this gate per pilot slot (same order as LastRSSI). Each timer
 	// sees a different signal level (distance, antenna, obstacles), so a pilot's single
 	// threshold rarely suits every gate. 0 means "use the pilot's own threshold".
 	EnterThresholds [MaxPilotPoolSize]float32 `json:"enterThresholds"`
@@ -79,7 +79,7 @@ type GatePuck struct {
 	RuleOverrides GateRuleOverrides `json:"ruleOverrides"`
 	Online        bool              `json:"online"`        // True if frames arrived within the last 2 seconds
 	LastSeenAt    time.Time         `json:"lastSeenAt"`    // Host timestamp of last frame
-	FramesRxCount uint64            `json:"framesRxCount"` // Total telemetry frames received from this puck
+	FramesRxCount uint64            `json:"framesRxCount"` // Total telemetry frames received from this timer
 }
 
 // ComputeBatteryPct converts a 1S LiPo voltage in millivolts (3300..4200 mV) to 0..100%.
@@ -93,21 +93,21 @@ func ComputeBatteryPct(mv uint16) uint8 {
 	return uint8(float64(mv-3300) / 900.0 * 100.0)
 }
 
-// DefaultTrackPucks returns a 4-gate default track layout with Puck #1 as the MultiGP Start/Finish gate.
-func DefaultTrackPucks() []GatePuck {
+// DefaultTrackGates returns a 4-gate default track layout with Timer #1 as the MultiGP Start/Finish gate.
+func DefaultTrackGates() []TrackGate {
 	now := time.Now()
 	var defaultRssi [MaxPilotPoolSize]float32
 	for i := range defaultRssi {
 		defaultRssi[i] = -92
 	}
 
-	return []GatePuck{
+	return []TrackGate{
 		{
-			PuckID:          1,
-			AssignedPuckID:  1,
+			GateID:          1,
+			AssignedTimerID: 1,
 			FirmwareVersion: LatestFirmwareVersion,
 			Color:           DefaultGateColors[0],
-			Role:            PuckRoleStartFinish,
+			Role:            GateRoleStartFinish,
 			TrackOrder:      0,
 			MapX:            0.22,
 			MapY:            0.78,
@@ -119,11 +119,11 @@ func DefaultTrackPucks() []GatePuck {
 			LastSeenAt:      now,
 		},
 		{
-			PuckID:          2,
-			AssignedPuckID:  2,
+			GateID:          2,
+			AssignedTimerID: 2,
 			FirmwareVersion: LatestFirmwareVersion,
 			Color:           DefaultGateColors[1],
-			Role:            PuckRoleSectorGate,
+			Role:            GateRoleSectorGate,
 			TrackOrder:      1,
 			MapX:            0.24,
 			MapY:            0.22,
@@ -135,11 +135,11 @@ func DefaultTrackPucks() []GatePuck {
 			LastSeenAt:      now,
 		},
 		{
-			PuckID:          3,
-			AssignedPuckID:  3,
+			GateID:          3,
+			AssignedTimerID: 3,
 			FirmwareVersion: LatestFirmwareVersion,
 			Color:           DefaultGateColors[2],
-			Role:            PuckRoleSectorGate,
+			Role:            GateRoleSectorGate,
 			TrackOrder:      2,
 			MapX:            0.78,
 			MapY:            0.24,
@@ -151,11 +151,11 @@ func DefaultTrackPucks() []GatePuck {
 			LastSeenAt:      now,
 		},
 		{
-			PuckID:          4,
-			AssignedPuckID:  4,
+			GateID:          4,
+			AssignedTimerID: 4,
 			FirmwareVersion: LatestFirmwareVersion,
 			Color:           DefaultGateColors[3],
-			Role:            PuckRoleSectorGate,
+			Role:            GateRoleSectorGate,
 			TrackOrder:      3,
 			MapX:            0.76,
 			MapY:            0.76,

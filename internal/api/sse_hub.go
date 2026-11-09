@@ -32,10 +32,10 @@ type LapCompletedPayload struct {
 	Summaries []domain.PilotTrackSummary `json:"summaries"`
 }
 
-// ConfigUpdatedPayload bundles updated pilot slots and gate pucks.
+// ConfigUpdatedPayload bundles updated pilot slots and track gates.
 type ConfigUpdatedPayload struct {
 	Pilots []domain.PilotSlot `json:"pilots"`
-	Pucks  []domain.GatePuck  `json:"pucks"`
+	Gates  []domain.TrackGate `json:"gates"`
 }
 
 type sseClient struct {
@@ -163,7 +163,7 @@ func (h *SSEHub) publish(env StreamEnvelope, isEvent bool) {
 
 // --- tracker.EventSubscriber implementation ---
 
-func (h *SSEHub) OnTelemetryFrame(frame domain.PuckTelemetryFrame) {
+func (h *SSEHub) OnTelemetryFrame(frame domain.TimerTelemetryFrame) {
 	h.publish(StreamEnvelope{Type: "telemetry", Payload: frame}, false)
 }
 
@@ -175,8 +175,8 @@ func (h *SSEHub) OnLapCompleted(lap domain.LapRecord, summaries []domain.PilotTr
 	h.publish(StreamEnvelope{Type: "lap", Payload: LapCompletedPayload{Lap: lap, Summaries: summaries}}, true)
 }
 
-func (h *SSEHub) OnConfigUpdated(pilots []domain.PilotSlot, pucks []domain.GatePuck) {
-	h.publish(StreamEnvelope{Type: "config", Payload: ConfigUpdatedPayload{Pilots: pilots, Pucks: pucks}}, true)
+func (h *SSEHub) OnConfigUpdated(pilots []domain.PilotSlot, gates []domain.TrackGate) {
+	h.publish(StreamEnvelope{Type: "config", Payload: ConfigUpdatedPayload{Pilots: pilots, Gates: gates}}, true)
 }
 
 func (h *SSEHub) OnDetectionFiltered(f domain.FilteredDetection) {

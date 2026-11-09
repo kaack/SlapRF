@@ -11,7 +11,7 @@ import (
 // this laptop over the Hub's Wi-Fi link (always from the real engine, never the simulator).
 type debugTimerResponse struct {
 	Found       bool      `json:"found"`
-	PuckID      uint8     `json:"puckId,omitempty"`
+	TimerID     uint8     `json:"timerId,omitempty"`
 	Label       string    `json:"label,omitempty"`
 	Online      bool      `json:"online"`
 	LastSeenAt  time.Time `json:"lastSeenAt,omitempty"`
@@ -25,13 +25,13 @@ func (s *Server) handleDebugTimer(w http.ResponseWriter, r *http.Request) {
 	fp := strings.ToUpper(strings.TrimSpace(r.URL.Query().Get("fp")))
 	resp := debugTimerResponse{Simulator: s.activeEngine() != s.realEngine}
 	if fp != "" {
-		for _, d := range s.realEngine.DetectedPucksSnapshot() {
+		for _, d := range s.realEngine.DetectedTimersSnapshot() {
 			if d.Fingerprint != fp {
 				continue
 			}
 			resp.Found = true
-			resp.PuckID = d.PuckID
-			resp.Label = d.PuckLabel
+			resp.TimerID = d.TimerID
+			resp.Label = d.TimerLabel
 			resp.Online = d.Online
 			resp.LastSeenAt = d.LastSeenAt
 			if !d.LastSeenAt.IsZero() {
@@ -39,7 +39,7 @@ func (s *Server) handleDebugTimer(w http.ResponseWriter, r *http.Request) {
 			}
 			_, gates, _, _, _ := s.realEngine.StateSnapshot()
 			for _, g := range gates {
-				if g.AssignedPuckID == d.PuckID {
+				if g.AssignedTimerID == d.TimerID {
 					resp.FramesRx = g.FramesRxCount
 				}
 			}

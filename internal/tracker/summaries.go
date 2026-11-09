@@ -7,15 +7,15 @@ import (
 	"slaprf/internal/domain"
 )
 
-// orderedPucksLocked returns the gate pucks in track order.
-func (e *Engine) orderedPucksLocked() []domain.GatePuck {
-	ordered := append([]domain.GatePuck(nil), e.pucks...)
+// orderedGatesLocked returns the track gates in track order.
+func (e *Engine) orderedGatesLocked() []domain.TrackGate {
+	ordered := append([]domain.TrackGate(nil), e.gates...)
 	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].TrackOrder < ordered[j].TrackOrder })
 	return ordered
 }
 
 func (e *Engine) computeSummariesLocked() []domain.PilotTrackSummary {
-	ordered := e.orderedPucksLocked()
+	ordered := e.orderedGatesLocked()
 	numSectors := len(ordered)
 	if numSectors < 1 {
 		return []domain.PilotTrackSummary{}
@@ -44,14 +44,14 @@ func (e *Engine) computeSummariesLocked() []domain.PilotTrackSummary {
 		allSectorsHaveBest := true
 
 		for sIdx := 1; sIdx <= numSectors; sIdx++ {
-			fromPuck := ordered[(sIdx-1)%numSectors].PuckID
-			toPuck := ordered[sIdx%numSectors].PuckID
-			hist := e.sectorHistory[sectorKey(pilot.SlotIndex, pairKey(fromPuck, toPuck))]
+			fromGate := ordered[(sIdx-1)%numSectors].GateID
+			toGate := ordered[sIdx%numSectors].GateID
+			hist := e.sectorHistory[sectorKey(pilot.SlotIndex, pairKey(fromGate, toGate))]
 			stat := domain.SectorBottleneckStat{
 				SectorIndex: sIdx,
-				Label:       e.sectionLabelLocked(fromPuck, toPuck),
-				FromPuckID:  fromPuck,
-				ToPuckID:    toPuck,
+				Label:       e.sectionLabelLocked(fromGate, toGate),
+				FromGateID:  fromGate,
+				ToGateID:    toGate,
 			}
 			if len(hist) == 0 {
 				allSectorsHaveBest = false
@@ -90,10 +90,10 @@ func (e *Engine) computeSummariesLocked() []domain.PilotTrackSummary {
 		}
 
 		curSector := 1
-		var lastPuck uint8 = 1
-		if prog, ok := e.progress[pilot.SlotIndex]; ok && prog.lastPuckID > 0 {
+		var lastGate uint8 = 1
+		if prog, ok := e.progress[pilot.SlotIndex]; ok && prog.lastGateID > 0 {
 			curSector = len(prog.currentSectors) + 1
-			lastPuck = prog.lastPuckID
+			lastGate = prog.lastGateID
 		}
 
 		summaries = append(summaries, domain.PilotTrackSummary{
@@ -107,7 +107,7 @@ func (e *Engine) computeSummariesLocked() []domain.PilotTrackSummary {
 			TheoreticalBestSec: round3(theoreticalBest),
 			PotentialGainSec:   potentialGain,
 			CurrentSectorIndex: curSector,
-			LastPuckID:         lastPuck,
+			LastGateID:         lastGate,
 			SectorStats:        sectorStats,
 		})
 	}

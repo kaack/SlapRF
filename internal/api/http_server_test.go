@@ -49,8 +49,8 @@ func TestTypeScriptBundleAndStateAPI(t *testing.T) {
 	if err := json.NewDecoder(recState.Body).Decode(&simState); err != nil {
 		t.Fatalf("failed to decode sim state: %v", err)
 	}
-	if !simState.SimulatorRun || len(simState.Pucks) != 4 || len(simState.DetectedPucks) != 4 {
-		t.Fatalf("expected 4 simulated gates and 4 simulated timers when sim is running, got pucks=%d detected=%d", len(simState.Pucks), len(simState.DetectedPucks))
+	if !simState.SimulatorRun || len(simState.Gates) != 4 || len(simState.Timers) != 4 {
+		t.Fatalf("expected 4 simulated gates and 4 simulated timers when sim is running, got gates=%d timers=%d", len(simState.Gates), len(simState.Timers))
 	}
 
 	// 3. Verify arm toggle flips engine state
@@ -76,8 +76,8 @@ func TestTypeScriptBundleAndStateAPI(t *testing.T) {
 	if realState.SimulatorRun {
 		t.Fatalf("expected SimulatorRun=false after toggle")
 	}
-	if len(realState.Pucks) != 0 || len(realState.DetectedPucks) != 0 || len(realState.Laps) != 0 {
-		t.Fatalf("expected empty real-world timers/gates/laps, got pucks=%d detected=%d laps=%d", len(realState.Pucks), len(realState.DetectedPucks), len(realState.Laps))
+	if len(realState.Gates) != 0 || len(realState.Timers) != 0 || len(realState.Laps) != 0 {
+		t.Fatalf("expected empty real-world timers/gates/laps, got gates=%d timers=%d laps=%d", len(realState.Gates), len(realState.Timers), len(realState.Laps))
 	}
 	if len(realState.Pilots) == 0 || realState.Pilots[0].Callsign != "Pilot 1" {
 		t.Fatalf("expected real-world Pilot 1 callsign, got %+v", realState.Pilots)

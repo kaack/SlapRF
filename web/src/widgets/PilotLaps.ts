@@ -37,8 +37,8 @@ export class PilotLaps extends Component {
     }
 
     // Columns follow the course: each gate to the next, wrapping back to start / finish.
-    const pucks = this.store.pucks;
-    const cols: Column[] = pucks.map((p, i) => ({ from: p.puckId, to: pucks[(i + 1) % pucks.length].puckId }));
+    const gates = this.store.nodes;
+    const cols: Column[] = gates.map((p, i) => ({ from: p.gateId, to: gates[(i + 1) % gates.length].gateId }));
     const head = cols
       .map((c) => `<th class="num" title="${esc(sectionLabel(this.store, c.from, c.to))}"><span class="th-pilot"><span class="dot" style="--c:${gateColor(this.store, c.from)}"></span>${sectionShort(this.store, c.from)}</span></th>`)
       .join("");
@@ -67,7 +67,7 @@ export class PilotLaps extends Component {
   }
 
   private renderLap(lap: LapRecord, cols: Column[]): string {
-    const byKey = new Map(lap.sectors.map((s) => [sectionKey(s.fromPuckId, s.toPuckId), s]));
+    const byKey = new Map(lap.sectors.map((s) => [sectionKey(s.fromGateId, s.toGateId), s]));
     const cells = cols
       .map((c) => {
         const s = byKey.get(sectionKey(c.from, c.to));

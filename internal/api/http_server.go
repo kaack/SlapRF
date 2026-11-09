@@ -19,8 +19,8 @@ import (
 type FullStateResponse struct {
 	ServerTimestampUs uint64                     `json:"serverTimestampUs"`
 	Pilots            []domain.PilotSlot         `json:"pilots"`
-	Pucks             []domain.GatePuck          `json:"pucks"`
-	DetectedPucks     []domain.DetectedPuck      `json:"detectedPucks"`
+	Gates             []domain.TrackGate         `json:"gates"`
+	Timers            []domain.DetectedTimer     `json:"timers"`
 	Laps              []domain.LapRecord         `json:"laps"`
 	Crossings         []domain.GateCrossingEvent `json:"crossings"`
 	Filtered          []domain.FilteredDetection `json:"filtered"`
@@ -35,13 +35,13 @@ type FullStateResponse struct {
 // StatusResponse is the lightweight payload polled by the SPA every few seconds
 // (gate battery / link health, LiveTime connection, timing armed state).
 type StatusResponse struct {
-	ServerTimestampUs uint64                `json:"serverTimestampUs"`
-	Pucks             []domain.GatePuck     `json:"pucks"`
-	DetectedPucks     []domain.DetectedPuck `json:"detectedPucks"`
-	SimulatorRun      bool                  `json:"simulatorRunning"`
-	SimState          *domain.SimState      `json:"simState,omitempty"`
-	RaceArmed         bool                  `json:"raceArmed"`
-	LiveTimeStatus    laprf.LiveTimeStatus  `json:"liveTimeStatus"`
+	ServerTimestampUs uint64                 `json:"serverTimestampUs"`
+	Gates             []domain.TrackGate     `json:"gates"`
+	Timers            []domain.DetectedTimer `json:"timers"`
+	SimulatorRun      bool                   `json:"simulatorRunning"`
+	SimState          *domain.SimState       `json:"simState,omitempty"`
+	RaceArmed         bool                   `json:"raceArmed"`
+	LiveTimeStatus    laprf.LiveTimeStatus   `json:"liveTimeStatus"`
 }
 
 // Server wires HTTP routes, the SSE streaming hub, and the pure-Go TypeScript bundler.
@@ -62,7 +62,7 @@ type gatedEventSubscriber struct {
 	next  tracker.EventSubscriber
 }
 
-func (g *gatedEventSubscriber) OnTelemetryFrame(frame domain.PuckTelemetryFrame) {
+func (g *gatedEventSubscriber) OnTelemetryFrame(frame domain.TimerTelemetryFrame) {
 	if g.allow() {
 		g.next.OnTelemetryFrame(frame)
 	}
@@ -82,9 +82,9 @@ func (g *gatedEventSubscriber) OnLapCompleted(lap domain.LapRecord, summaries []
 		g.next.OnLapCompleted(lap, summaries)
 	}
 }
-func (g *gatedEventSubscriber) OnConfigUpdated(pilots []domain.PilotSlot, pucks []domain.GatePuck) {
+func (g *gatedEventSubscriber) OnConfigUpdated(pilots []domain.PilotSlot, gates []domain.TrackGate) {
 	if g.allow() {
-		g.next.OnConfigUpdated(pilots, pucks)
+		g.next.OnConfigUpdated(pilots, gates)
 	}
 }
 
@@ -156,14 +156,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/track/remove", s.handleRemoveGate)
 	mux.HandleFunc("/api/track/rules", s.handleGateRules)
 	mux.HandleFunc("/api/timers/provision", s.handleProvisionGate)
-	mux.HandleFunc("/api/timers/color", s.handleUpdatePuckColor)
+	mux.HandleFunc("/api/timers/color", s.handleUpdateTimerColor)
 
 	// Legacy aliases
 	mux.HandleFunc("/api/gates/update", s.handleUpdateGate)
 	mux.HandleFunc("/api/gates/add", s.handleAddGate)
 	mux.HandleFunc("/api/gates/remove", s.handleRemoveGate)
 	mux.HandleFunc("/api/gates/provision", s.handleProvisionGate)
-	mux.HandleFunc("/api/pucks/color", s.handleUpdatePuckColor)
 	mux.HandleFunc("/api/firmware/xiao-c5.bin", s.handleFirmwareImage)
 	mux.HandleFunc("/api/debug/timer", s.handleDebugTimer)
 	mux.HandleFunc("/api/wifi/networks", s.handleWifiNetworks)
@@ -194,7 +193,7 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
 	eng := s.activeEngine()
-	pilots, pucks, laps, crossings, summaries := eng.StateSnapshot()
+	pilots, gates, laps, crossings, summaries := eng.StateSnapshot()
 	var simState *domain.SimState
 	if s.simulator.IsRunning() {
 		snap := s.simulator.Snapshot()
@@ -203,8 +202,8 @@ func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
 	resp := FullStateResponse{
 		ServerTimestampUs: eng.NowUs(),
 		Pilots:            pilots,
-		Pucks:             pucks,
-		DetectedPucks:     eng.DetectedPucksSnapshot(),
+		Gates:             gates,
+		Timers:            eng.DetectedTimersSnapshot(),
 		Laps:              laps,
 		Crossings:         crossings,
 		Filtered:          eng.FilteredSnapshot(),
@@ -220,7 +219,7 @@ func (s *Server) handleGetState(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleGetStatus(w http.ResponseWriter, _ *http.Request) {
 	eng := s.activeEngine()
-	_, pucks, _, _, _ := eng.StateSnapshot()
+	_, gates, _, _, _ := eng.StateSnapshot()
 	var simState *domain.SimState
 	if s.simulator.IsRunning() {
 		snap := s.simulator.Snapshot()
@@ -228,8 +227,8 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, _ *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, StatusResponse{
 		ServerTimestampUs: eng.NowUs(),
-		Pucks:             pucks,
-		DetectedPucks:     eng.DetectedPucksSnapshot(),
+		Gates:             gates,
+		Timers:            eng.DetectedTimersSnapshot(),
 		SimulatorRun:      s.simulator.IsRunning(),
 		SimState:          simState,
 		RaceArmed:         eng.IsRaceArmed(),
@@ -309,7 +308,7 @@ func (s *Server) handleUpdatePilot(w http.ResponseWriter, r *http.Request) {
 	s.handleGetState(w, r)
 }
 
-// handleThresholds calibrates gates per pilot: a list of {puckId, slotIndex, enterDbm}
+// handleThresholds calibrates gates per pilot: a list of {gateId, slotIndex, enterDbm}
 // (enterDbm 0 = back to the pilot's own threshold). Applied all-or-nothing.
 func (s *Server) handleThresholds(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -328,7 +327,7 @@ func (s *Server) handleThresholds(w http.ResponseWriter, r *http.Request) {
 	s.handleGetState(w, r)
 }
 
-// handleGateRules sets one gate's timing-rule overrides: {puckId, overrides: {...}}.
+// handleGateRules sets one gate's timing-rule overrides: {gateId, overrides: {...}}.
 // Omitted fields use the global rules; an empty overrides object clears them all.
 func (s *Server) handleGateRules(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -336,14 +335,14 @@ func (s *Server) handleGateRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		PuckID    uint8                    `json:"puckId"`
+		GateID    uint8                    `json:"gateId"`
 		Overrides domain.GateRuleOverrides `json:"overrides"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := s.activeEngine().SetGateRules(body.PuckID, body.Overrides); err != nil {
+	if _, err := s.activeEngine().SetGateRules(body.GateID, body.Overrides); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -367,20 +366,20 @@ func (s *Server) handleUpdateGate(w http.ResponseWriter, r *http.Request) {
 	s.handleGetState(w, r)
 }
 
-func (s *Server) handleUpdatePuckColor(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUpdateTimerColor(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var body struct {
-		PuckID uint8  `json:"puckId"`
-		Color  string `json:"color"`
+		TimerID uint8  `json:"timerId"`
+		Color   string `json:"color"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.activeEngine().SetPuckColor(body.PuckID, body.Color); err != nil {
+	if err := s.activeEngine().SetTimerColor(body.TimerID, body.Color); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -393,17 +392,17 @@ func (s *Server) handleAddGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		Name           string `json:"name"`
-		AssignedPuckID uint8  `json:"assignedPuckId"`
-		TrackOrder     *int   `json:"trackOrder,omitempty"`
+		Name            string `json:"name"`
+		AssignedTimerID uint8  `json:"assignedTimerId"`
+		TrackOrder      *int   `json:"trackOrder,omitempty"`
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	var err error
 	eng := s.activeEngine()
 	if body.TrackOrder != nil {
-		_, err = eng.AddGate(body.Name, body.AssignedPuckID, *body.TrackOrder)
+		_, err = eng.AddGate(body.Name, body.AssignedTimerID, *body.TrackOrder)
 	} else {
-		_, err = eng.AddGate(body.Name, body.AssignedPuckID)
+		_, err = eng.AddGate(body.Name, body.AssignedTimerID)
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -418,20 +417,20 @@ func (s *Server) handleRemoveGate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		PuckID uint8 `json:"puckId"`
+		GateID uint8 `json:"gateId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.activeEngine().RemoveGate(body.PuckID); err != nil {
+	if err := s.activeEngine().RemoveGate(body.GateID); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	s.handleGetState(w, r)
 }
 
-// handleProvisionGate registers a newly flashed gate puck (or updates its flashed PuckLabel)
+// handleProvisionGate registers a newly flashed gate timer (or updates its flashed TimerLabel)
 // in the real-world engine (and active engine if different) so its ID/name shows up immediately.
 func (s *Server) handleProvisionGate(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -440,7 +439,7 @@ func (s *Server) handleProvisionGate(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Role        string `json:"role"`
-		PuckLabel   string `json:"puckLabel"`
+		TimerLabel  string `json:"timerLabel"`
 		Profile     string `json:"firmwareProfile,omitempty"`
 		Fingerprint string `json:"fingerprint,omitempty"`
 	}
@@ -450,7 +449,7 @@ func (s *Server) handleProvisionGate(w http.ResponseWriter, r *http.Request) {
 	}
 	req := tracker.ProvisionRequest{
 		Role:        body.Role,
-		Label:       body.PuckLabel,
+		Label:       body.TimerLabel,
 		Profile:     body.Profile,
 		Fingerprint: body.Fingerprint,
 	}
@@ -466,8 +465,8 @@ func (s *Server) handleProvisionGate(w http.ResponseWriter, r *http.Request) {
 
 // handleFirmwareImage builds and returns the XIAO ESP32-C5 firmware binary with the
 // requested role (`hub` = Start Gate + Wi-Fi Bridge to laptop; `spoke` = ESP-NOW
-// sector gate that talks to the Hub puck), flashed PuckLabel, current 8-channel pilot
-// frequency table, and optional Wi-Fi credentials stamped into the `SLAPRF01` block.
+// sector gate that talks to the Hub timer), flashed TimerLabel, current 8-channel pilot
+// frequency table, and optional Wi-Fi credentials stamped into the `SLAPRF02` block.
 func (s *Server) handleFirmwareImage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -495,7 +494,7 @@ func (s *Server) handleFirmwareImage(w http.ResponseWriter, r *http.Request) {
 		Role:         role,
 		Profile:      r.URL.Query().Get("profile"),
 		Fingerprint:  firmware.ParseFingerprint(r.URL.Query().Get("fingerprint")),
-		PuckLabel:    r.URL.Query().Get("label"),
+		TimerLabel:   r.URL.Query().Get("label"),
 		SlotFreqsMHz: freqs,
 		WifiSSID:     r.URL.Query().Get("ssid"),
 		WifiPass:     r.URL.Query().Get("pass"),
@@ -586,7 +585,7 @@ func (s *Server) handleSimTimerAction(w http.ResponseWriter, r *http.Request) {
 	}
 	var body struct {
 		Action  string `json:"action"` // "toggle-power", "delete", "add"
-		PuckID  uint8  `json:"puckId,omitempty"`
+		TimerID uint8  `json:"timerId,omitempty"`
 		Role    string `json:"role,omitempty"`
 		Label   string `json:"label,omitempty"`
 		Profile string `json:"firmwareProfile,omitempty"`
@@ -597,9 +596,9 @@ func (s *Server) handleSimTimerAction(w http.ResponseWriter, r *http.Request) {
 	}
 	switch body.Action {
 	case "toggle-power":
-		s.simulator.ToggleTimerPower(body.PuckID)
+		s.simulator.ToggleTimerPower(body.TimerID)
 	case "delete":
-		if err := s.simulator.DeleteTimer(body.PuckID); err != nil {
+		if err := s.simulator.DeleteTimer(body.TimerID); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -629,7 +628,7 @@ func (s *Server) handleIngestFrame(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var frame domain.PuckTelemetryFrame
+	var frame domain.TimerTelemetryFrame
 	if err := json.NewDecoder(r.Body).Decode(&frame); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

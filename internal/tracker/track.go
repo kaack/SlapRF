@@ -15,7 +15,7 @@ const maxTimers = 6
 
 var (
 	ErrUnknownGate     = errors.New("unknown gate")
-	ErrInvalidPuckID   = errors.New("timer ID must be between 1 and 6")
+	ErrInvalidTimerID  = errors.New("timer ID must be between 1 and 6")
 	ErrGateNameTooLong = errors.New("gate name is too long")
 	ErrInvalidGateRole = errors.New("unknown gate role")
 	ErrMinOneGate      = errors.New("at least one gate must remain on the course")
@@ -31,13 +31,13 @@ type ProvisionRequest struct {
 
 // ProvisionGate registers a newly flashed timer (hub or spoke).
 //   - A known fingerprint updates that same physical timer in place, keeping its color and gate.
-//   - Otherwise a puck with the same label is updated (a replacement board takes over its gate).
+//   - Otherwise a timer with the same label is updated (a replacement board takes over its gate).
 //   - Otherwise a "hub" claims the start/finish gate and a "spoke" the next unlabelled sector
 //     gate, creating a new gate (up to the timer limit) if every gate is already labelled.
 func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	role := req.Role
-	puckLabel := strings.TrimSpace(req.Label)
-	if utf8.RuneCountInString(puckLabel) > domain.MaxGateNameLen {
+	timerLabel := strings.TrimSpace(req.Label)
+	if utf8.RuneCountInString(timerLabel) > domain.MaxGateNameLen {
 		return 0, ErrGateNameTooLong
 	}
 	profile := strings.TrimSpace(req.Profile)
@@ -54,38 +54,38 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	if fingerprint != "" {
 		for id, d := range e.detected {
 			if d.Fingerprint == fingerprint {
-				if puckLabel != "" {
-					d.PuckLabel = puckLabel
+				if timerLabel != "" {
+					d.TimerLabel = timerLabel
 				}
 				d.FirmwareVersion = ver
 				d.FirmwareProfile = profile
 				d.IsHub = role == "hub"
 				d.Online = true
 				d.LastSeenAt = time.Now()
-				for i := range e.pucks {
-					if e.pucks[i].AssignedPuckID == id {
-						if puckLabel != "" {
-							e.pucks[i].PuckLabel = puckLabel
+				for i := range e.gates {
+					if e.gates[i].AssignedTimerID == id {
+						if timerLabel != "" {
+							e.gates[i].TimerLabel = timerLabel
 						}
-						e.pucks[i].FirmwareVersion = ver
+						e.gates[i].FirmwareVersion = ver
 					}
 				}
 				pilots := append([]domain.PilotSlot(nil), e.pilots...)
-				pucks := append([]domain.GatePuck(nil), e.pucks...)
+				gates := append([]domain.TrackGate(nil), e.gates...)
 				subs := append([]EventSubscriber(nil), e.subscribers...)
 				e.mu.Unlock()
 				for _, s := range subs {
-					s.OnConfigUpdated(pilots, pucks)
+					s.OnConfigUpdated(pilots, gates)
 				}
 				return id, nil
 			}
 		}
 	}
 
-	// 1. If a puck already has this exact PuckLabel, update that one.
-	if puckLabel != "" {
-		for i := range e.pucks {
-			if strings.EqualFold(strings.TrimSpace(e.pucks[i].PuckLabel), puckLabel) {
+	// 1. If a gate already has this exact TimerLabel, update that one.
+	if timerLabel != "" {
+		for i := range e.gates {
+			if strings.EqualFold(strings.TrimSpace(e.gates[i].TimerLabel), timerLabel) {
 				targetIdx = i
 				break
 			}
@@ -95,35 +95,35 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	// 2. Otherwise pick by role (hub -> start/finish gate; spoke -> next unlabelled sector gate).
 	if targetIdx < 0 {
 		if role == "hub" {
-			for i := range e.pucks {
-				if e.pucks[i].Role == domain.PuckRoleStartFinish || e.pucks[i].TrackOrder == 0 {
-					aid := e.pucks[i].AssignedPuckID
+			for i := range e.gates {
+				if e.gates[i].Role == domain.GateRoleStartFinish || e.gates[i].TrackOrder == 0 {
+					aid := e.gates[i].AssignedTimerID
 					if aid == 0 || (e.detected[aid] != nil && e.detected[aid].IsHub) {
 						targetIdx = i
 						break
 					}
 				}
 			}
-			if targetIdx < 0 && len(e.pucks) > 0 && e.pucks[0].AssignedPuckID == 0 {
+			if targetIdx < 0 && len(e.gates) > 0 && e.gates[0].AssignedTimerID == 0 {
 				targetIdx = 0
 			}
 		} else {
-			ordered := e.orderedPucksLocked()
-			for _, op := range ordered {
-				if op.Role == domain.PuckRoleSectorGate && strings.TrimSpace(op.PuckLabel) == "" {
-					targetIdx = indexOfPuck(e.pucks, op.PuckID)
+			ordered := e.orderedGatesLocked()
+			for _, og := range ordered {
+				if og.Role == domain.GateRoleSectorGate && strings.TrimSpace(og.TimerLabel) == "" {
+					targetIdx = indexOfGate(e.gates, og.GateID)
 					break
 				}
 			}
 		}
 	}
 
-	// 3. If all existing sector gates already have a flashed PuckLabel, add a new gate puck (up to 16).
+	// 3. If all existing sector gates already have a flashed TimerLabel, add a new track gate (up to 6).
 	if targetIdx < 0 {
 		var maxID uint8
-		for _, p := range e.pucks {
-			if p.PuckID > maxID {
-				maxID = p.PuckID
+		for _, g := range e.gates {
+			if g.GateID > maxID {
+				maxID = g.GateID
 			}
 		}
 		for id := range e.detected {
@@ -137,43 +137,43 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		}
 		if nextID > maxTimers {
 			e.mu.Unlock()
-			return 0, ErrInvalidPuckID
+			return 0, ErrInvalidTimerID
 		}
-		e.pucks = append(e.pucks, domain.GatePuck{
-			PuckID:         nextID,
-			AssignedPuckID: nextID,
-			PuckLabel:      puckLabel,
-			Color:          domain.DefaultGateColors[len(e.pucks)%len(domain.DefaultGateColors)],
-			Role:           domain.PuckRoleSectorGate,
-			TrackOrder:     len(e.pucks),
-			BatteryMv:      4100,
-			BatteryPct:     domain.ComputeBatteryPct(4100),
-			NoiseFloorDbm:  -92,
-			Online:         true,
-			LastSeenAt:     time.Now(),
+		e.gates = append(e.gates, domain.TrackGate{
+			GateID:          nextID,
+			AssignedTimerID: nextID,
+			TimerLabel:      timerLabel,
+			Color:           domain.DefaultGateColors[len(e.gates)%len(domain.DefaultGateColors)],
+			Role:            domain.GateRoleSectorGate,
+			TrackOrder:      len(e.gates),
+			BatteryMv:       4100,
+			BatteryPct:      domain.ComputeBatteryPct(4100),
+			NoiseFloorDbm:   -92,
+			Online:          true,
+			LastSeenAt:      time.Now(),
 		})
 		e.ensureStartGateLocked()
 		e.initDetectorsLocked()
-		targetIdx = len(e.pucks) - 1
+		targetIdx = len(e.gates) - 1
 	} else {
-		if e.pucks[targetIdx].AssignedPuckID == 0 {
-			e.pucks[targetIdx].AssignedPuckID = e.pucks[targetIdx].PuckID
+		if e.gates[targetIdx].AssignedTimerID == 0 {
+			e.gates[targetIdx].AssignedTimerID = e.gates[targetIdx].GateID
 		}
-		if puckLabel != "" {
-			e.pucks[targetIdx].PuckLabel = puckLabel
+		if timerLabel != "" {
+			e.gates[targetIdx].TimerLabel = timerLabel
 		}
 	}
 
-	assignedID := e.pucks[targetIdx].AssignedPuckID
+	assignedID := e.gates[targetIdx].AssignedTimerID
 	if assignedID == 0 {
-		assignedID = e.pucks[targetIdx].PuckID
+		assignedID = e.gates[targetIdx].GateID
 	}
 	now := time.Now()
 	d, ok := e.detected[assignedID]
 	if !ok {
-		d = &domain.DetectedPuck{
-			PuckID:        assignedID,
-			Color:         domain.DefaultPuckColor(assignedID),
+		d = &domain.DetectedTimer{
+			TimerID:       assignedID,
+			Color:         domain.DefaultTimerColor(assignedID),
 			IsHub:         role == "hub" || assignedID == 1,
 			BatteryMv:     4100,
 			BatteryPct:    domain.ComputeBatteryPct(4100),
@@ -181,10 +181,10 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		}
 		e.detected[assignedID] = d
 	} else if d.Color == "" {
-		d.Color = domain.DefaultPuckColor(assignedID)
+		d.Color = domain.DefaultTimerColor(assignedID)
 	}
-	e.pucks[targetIdx].Color = d.Color
-	e.pucks[targetIdx].FirmwareVersion = ver
+	e.gates[targetIdx].Color = d.Color
+	e.gates[targetIdx].FirmwareVersion = ver
 	d.FirmwareVersion = ver
 	d.FirmwareProfile = profile
 	if fingerprint != "" {
@@ -192,8 +192,8 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	} else if d.Fingerprint == "" {
 		d.Fingerprint = newFingerprintHex()
 	}
-	if puckLabel != "" {
-		d.PuckLabel = puckLabel
+	if timerLabel != "" {
+		d.TimerLabel = timerLabel
 	}
 	if role == "hub" {
 		d.IsHub = true
@@ -202,31 +202,31 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	d.LastSeenAt = now
 
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
-	pucks := append([]domain.GatePuck(nil), e.pucks...)
+	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
 	e.mu.Unlock()
 
 	for _, s := range subs {
-		s.OnConfigUpdated(pilots, pucks)
+		s.OnConfigUpdated(pilots, gates)
 	}
 	return assignedID, nil
 }
 
 // AddGate appends or inserts a new logical gate onto the course.
-func (e *Engine) AddGate(name string, assignedPuckID uint8, trackOrder ...int) (domain.GatePuck, error) {
+func (e *Engine) AddGate(name string, assignedTimerID uint8, trackOrder ...int) (domain.TrackGate, error) {
 	name = strings.TrimSpace(name)
 	if utf8.RuneCountInString(name) > domain.MaxGateNameLen {
-		return domain.GatePuck{}, ErrGateNameTooLong
+		return domain.TrackGate{}, ErrGateNameTooLong
 	}
-	if assignedPuckID > maxTimers {
-		return domain.GatePuck{}, ErrInvalidPuckID
+	if assignedTimerID > maxTimers {
+		return domain.TrackGate{}, ErrInvalidTimerID
 	}
 
 	e.mu.Lock()
 	var maxID uint8
-	for _, p := range e.pucks {
-		if p.PuckID > maxID {
-			maxID = p.PuckID
+	for _, g := range e.gates {
+		if g.GateID > maxID {
+			maxID = g.GateID
 		}
 	}
 	nextID := maxID + 1
@@ -235,9 +235,9 @@ func (e *Engine) AddGate(name string, assignedPuckID uint8, trackOrder ...int) (
 	}
 	if nextID > maxTimers {
 		// Find first unused gate ID in 1..6
-		used := make(map[uint8]bool, len(e.pucks))
-		for _, p := range e.pucks {
-			used[p.PuckID] = true
+		used := make(map[uint8]bool, len(e.gates))
+		for _, g := range e.gates {
+			used[g.GateID] = true
 		}
 		nextID = 0
 		for id := uint8(1); id <= maxTimers; id++ {
@@ -248,49 +248,49 @@ func (e *Engine) AddGate(name string, assignedPuckID uint8, trackOrder ...int) (
 		}
 		if nextID == 0 {
 			e.mu.Unlock()
-			return domain.GatePuck{}, ErrInvalidPuckID
+			return domain.TrackGate{}, ErrInvalidTimerID
 		}
 	}
 
-	if assignedPuckID > 0 {
-		for i := range e.pucks {
-			if e.pucks[i].AssignedPuckID == assignedPuckID {
-				e.pucks[i].AssignedPuckID = 0
-				e.pucks[i].PuckLabel = ""
-				e.pucks[i].Color = ""
-				e.pucks[i].Online = false
-				e.pucks[i].BatteryMv = 0
-				e.pucks[i].BatteryPct = 0
+	if assignedTimerID > 0 {
+		for i := range e.gates {
+			if e.gates[i].AssignedTimerID == assignedTimerID {
+				e.gates[i].AssignedTimerID = 0
+				e.gates[i].TimerLabel = ""
+				e.gates[i].Color = ""
+				e.gates[i].Online = false
+				e.gates[i].BatteryMv = 0
+				e.gates[i].BatteryPct = 0
 			}
 		}
 	}
 
-	newGate := domain.GatePuck{
-		PuckID:         nextID,
-		AssignedPuckID: assignedPuckID,
-		Name:           name,
-		Role:           domain.PuckRoleSectorGate,
-		TrackOrder:     len(e.pucks),
-		MapX:           0.5,
-		MapY:           0.5,
-		NoiseFloorDbm:  -92.0,
+	newGate := domain.TrackGate{
+		GateID:          nextID,
+		AssignedTimerID: assignedTimerID,
+		Name:            name,
+		Role:            domain.GateRoleSectorGate,
+		TrackOrder:      len(e.gates),
+		MapX:            0.5,
+		MapY:            0.5,
+		NoiseFloorDbm:   -92.0,
 	}
-	if assignedPuckID > 0 {
-		if d, ok := e.detected[assignedPuckID]; ok {
-			newGate.PuckLabel = d.PuckLabel
+	if assignedTimerID > 0 {
+		if d, ok := e.detected[assignedTimerID]; ok {
+			newGate.TimerLabel = d.TimerLabel
 			newGate.Color = d.Color
 			newGate.BatteryMv = d.BatteryMv
 			newGate.BatteryPct = d.BatteryPct
 			newGate.NoiseFloorDbm = d.NoiseFloorDbm
 			newGate.LastSeenAt = d.LastSeenAt
-			newGate.Online = !d.LastSeenAt.IsZero() && time.Since(d.LastSeenAt) < puckOfflineAfter
+			newGate.Online = !d.LastSeenAt.IsZero() && time.Since(d.LastSeenAt) < timerOfflineAfter
 		}
 		if newGate.Color == "" {
-			newGate.Color = domain.DefaultPuckColor(assignedPuckID)
+			newGate.Color = domain.DefaultTimerColor(assignedTimerID)
 		}
 	}
 
-	e.pucks = append(e.pucks, newGate)
+	e.gates = append(e.gates, newGate)
 	if len(trackOrder) > 0 {
 		e.moveGateLocked(nextID, trackOrder[0])
 	}
@@ -298,85 +298,85 @@ func (e *Engine) AddGate(name string, assignedPuckID uint8, trackOrder ...int) (
 	e.initDetectorsLocked()
 	e.progress = make(map[int]*pilotProgress)
 
-	createdIdx := indexOfPuck(e.pucks, nextID)
-	created := e.pucks[createdIdx]
+	createdIdx := indexOfGate(e.gates, nextID)
+	created := e.gates[createdIdx]
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
-	pucks := append([]domain.GatePuck(nil), e.pucks...)
+	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
 	e.mu.Unlock()
 
 	for _, s := range subs {
-		s.OnConfigUpdated(pilots, pucks)
+		s.OnConfigUpdated(pilots, gates)
 	}
 	return created, nil
 }
 
-// RemoveGate deletes a gate from the course (any physical puck tied to it remains in
+// RemoveGate deletes a gate from the course (any physical timer tied to it remains in
 // `e.detected` and becomes unassigned).
-func (e *Engine) RemoveGate(puckID uint8) error {
+func (e *Engine) RemoveGate(gateID uint8) error {
 	e.mu.Lock()
-	idx := indexOfPuck(e.pucks, puckID)
+	idx := indexOfGate(e.gates, gateID)
 	if idx < 0 {
 		e.mu.Unlock()
 		return ErrUnknownGate
 	}
-	e.pucks = append(e.pucks[:idx], e.pucks[idx+1:]...)
-	ordered := e.orderedPucksLocked()
+	e.gates = append(e.gates[:idx], e.gates[idx+1:]...)
+	ordered := e.orderedGatesLocked()
 	e.applyOrderLocked(ordered)
 	e.ensureStartGateLocked()
 	e.progress = make(map[int]*pilotProgress)
 
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
-	pucks := append([]domain.GatePuck(nil), e.pucks...)
+	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
 	e.mu.Unlock()
 
 	for _, s := range subs {
-		s.OnConfigUpdated(pilots, pucks)
+		s.OnConfigUpdated(pilots, gates)
 	}
 	return nil
 }
 
-// SetPuckColor updates the physical color of a discovered XIAO ESP32-C5 puck and propagates
-// it to any gate currently tied to that puck.
-func (e *Engine) SetPuckColor(puckID uint8, color string) error {
+// SetTimerColor updates the physical color of a discovered XIAO ESP32-C5 timer and propagates
+// it to any gate currently tied to that timer.
+func (e *Engine) SetTimerColor(timerID uint8, color string) error {
 	color = strings.TrimSpace(color)
-	if puckID == 0 || puckID > maxTimers || color == "" {
-		return ErrInvalidPuckID
+	if timerID == 0 || timerID > maxTimers || color == "" {
+		return ErrInvalidTimerID
 	}
 
 	e.mu.Lock()
-	d, ok := e.detected[puckID]
+	d, ok := e.detected[timerID]
 	if !ok {
-		d = &domain.DetectedPuck{
-			PuckID:        puckID,
+		d = &domain.DetectedTimer{
+			TimerID:       timerID,
 			Color:         color,
-			IsHub:         puckID == 1,
+			IsHub:         timerID == 1,
 			BatteryMv:     4080,
 			BatteryPct:    domain.ComputeBatteryPct(4080),
 			NoiseFloorDbm: -92.0,
 		}
-		e.detected[puckID] = d
+		e.detected[timerID] = d
 	} else {
 		d.Color = color
 	}
-	for i := range e.pucks {
-		if e.pucks[i].AssignedPuckID == puckID {
-			e.pucks[i].Color = color
+	for i := range e.gates {
+		if e.gates[i].AssignedTimerID == timerID {
+			e.gates[i].Color = color
 		}
 	}
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
-	pucks := append([]domain.GatePuck(nil), e.pucks...)
+	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
 	e.mu.Unlock()
 
 	for _, s := range subs {
-		s.OnConfigUpdated(pilots, pucks)
+		s.OnConfigUpdated(pilots, gates)
 	}
 	return nil
 }
 
-// UpdateGate renames a gate, moves it around the track, or assigns/unassigns a physical puck.
+// UpdateGate renames a gate, moves it around the track, or assigns/unassigns a physical timer.
 // An empty name clears the custom name, so the gate is shown as "Gate N" by its position.
 //
 // The first gate in track order is always the start / finish line, so the role is derived
@@ -392,17 +392,17 @@ func (e *Engine) UpdateGate(u domain.GateUpdate) error {
 	if utf8.RuneCountInString(name) > domain.MaxGateNameLen {
 		return ErrGateNameTooLong
 	}
-	if u.Role != domain.PuckRoleStartFinish && u.Role != domain.PuckRoleSectorGate {
+	if u.Role != domain.GateRoleStartFinish && u.Role != domain.GateRoleSectorGate {
 		return ErrInvalidGateRole
 	}
-	if u.AssignedPuckID != nil && *u.AssignedPuckID > maxTimers {
-		return ErrInvalidPuckID
+	if u.AssignedTimerID != nil && *u.AssignedTimerID > maxTimers {
+		return ErrInvalidTimerID
 	}
 
 	e.mu.Lock()
 	idx := -1
-	for i := range e.pucks {
-		if e.pucks[i].PuckID == u.PuckID {
+	for i := range e.gates {
+		if e.gates[i].GateID == u.GateID {
 			idx = i
 			break
 		}
@@ -411,68 +411,68 @@ func (e *Engine) UpdateGate(u domain.GateUpdate) error {
 		e.mu.Unlock()
 		return ErrUnknownGate
 	}
-	e.pucks[idx].Name = name
+	e.gates[idx].Name = name
 	if c := strings.TrimSpace(u.Color); c != "" {
-		e.pucks[idx].Color = c
-		if pid := e.pucks[idx].AssignedPuckID; pid > 0 {
-			if d, ok := e.detected[pid]; ok {
+		e.gates[idx].Color = c
+		if tid := e.gates[idx].AssignedTimerID; tid > 0 {
+			if d, ok := e.detected[tid]; ok {
 				d.Color = c
 			}
 		}
 	}
 
-	if u.AssignedPuckID != nil {
-		wantPuck := *u.AssignedPuckID
-		e.pucks[idx].AssignedPuckID = wantPuck
-		if wantPuck == 0 {
-			e.pucks[idx].PuckLabel = ""
-			e.pucks[idx].Color = ""
-			e.pucks[idx].Online = false
-			e.pucks[idx].BatteryMv = 0
-			e.pucks[idx].BatteryPct = 0
+	if u.AssignedTimerID != nil {
+		wantTimer := *u.AssignedTimerID
+		e.gates[idx].AssignedTimerID = wantTimer
+		if wantTimer == 0 {
+			e.gates[idx].TimerLabel = ""
+			e.gates[idx].Color = ""
+			e.gates[idx].Online = false
+			e.gates[idx].BatteryMv = 0
+			e.gates[idx].BatteryPct = 0
 		} else {
-			// Unassign any other gate that was tied to this physical puck.
-			for j := range e.pucks {
-				if j != idx && e.pucks[j].AssignedPuckID == wantPuck {
-					e.pucks[j].AssignedPuckID = 0
-					e.pucks[j].PuckLabel = ""
-					e.pucks[j].Color = ""
-					e.pucks[j].Online = false
-					e.pucks[j].BatteryMv = 0
-					e.pucks[j].BatteryPct = 0
+			// Unassign any other gate that was tied to this physical timer.
+			for j := range e.gates {
+				if j != idx && e.gates[j].AssignedTimerID == wantTimer {
+					e.gates[j].AssignedTimerID = 0
+					e.gates[j].TimerLabel = ""
+					e.gates[j].Color = ""
+					e.gates[j].Online = false
+					e.gates[j].BatteryMv = 0
+					e.gates[j].BatteryPct = 0
 				}
 			}
-			if d, ok := e.detected[wantPuck]; ok {
-				e.pucks[idx].PuckLabel = d.PuckLabel
+			if d, ok := e.detected[wantTimer]; ok {
+				e.gates[idx].TimerLabel = d.TimerLabel
 				if d.Color != "" {
-					e.pucks[idx].Color = d.Color
+					e.gates[idx].Color = d.Color
 				} else {
-					e.pucks[idx].Color = domain.DefaultPuckColor(wantPuck)
+					e.gates[idx].Color = domain.DefaultTimerColor(wantTimer)
 				}
-				e.pucks[idx].BatteryMv = d.BatteryMv
-				e.pucks[idx].BatteryPct = d.BatteryPct
-				e.pucks[idx].NoiseFloorDbm = d.NoiseFloorDbm
-				e.pucks[idx].LastSeenAt = d.LastSeenAt
-				e.pucks[idx].Online = !d.LastSeenAt.IsZero() && time.Since(d.LastSeenAt) < puckOfflineAfter
+				e.gates[idx].BatteryMv = d.BatteryMv
+				e.gates[idx].BatteryPct = d.BatteryPct
+				e.gates[idx].NoiseFloorDbm = d.NoiseFloorDbm
+				e.gates[idx].LastSeenAt = d.LastSeenAt
+				e.gates[idx].Online = !d.LastSeenAt.IsZero() && time.Since(d.LastSeenAt) < timerOfflineAfter
 			} else {
-				e.pucks[idx].Color = domain.DefaultPuckColor(wantPuck)
+				e.gates[idx].Color = domain.DefaultTimerColor(wantTimer)
 			}
 		}
 	}
 
 	var layoutChanged bool
-	if u.Role == domain.PuckRoleStartFinish && e.pucks[idx].Role != domain.PuckRoleStartFinish {
-		for j := range e.pucks {
+	if u.Role == domain.GateRoleStartFinish && e.gates[idx].Role != domain.GateRoleStartFinish {
+		for j := range e.gates {
 			if j == idx {
-				e.pucks[j].Role = domain.PuckRoleStartFinish
+				e.gates[j].Role = domain.GateRoleStartFinish
 			} else {
-				e.pucks[j].Role = domain.PuckRoleSectorGate
+				e.gates[j].Role = domain.GateRoleSectorGate
 			}
 		}
 		layoutChanged = true
 	}
 	if u.TrackOrder != nil {
-		if e.moveGateLocked(u.PuckID, *u.TrackOrder) {
+		if e.moveGateLocked(u.GateID, *u.TrackOrder) {
 			layoutChanged = true
 		}
 	}
@@ -483,20 +483,20 @@ func (e *Engine) UpdateGate(u domain.GateUpdate) error {
 	}
 
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
-	pucks := append([]domain.GatePuck(nil), e.pucks...)
+	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
 	e.mu.Unlock()
 
 	for _, s := range subs {
-		s.OnConfigUpdated(pilots, pucks)
+		s.OnConfigUpdated(pilots, gates)
 	}
 	return nil
 }
 
 // moveGateLocked places a gate at `position` in track order. Reports whether the order changed.
-func (e *Engine) moveGateLocked(puckID uint8, position int) bool {
-	ordered := e.orderedPucksLocked()
-	from := indexOfPuck(ordered, puckID)
+func (e *Engine) moveGateLocked(gateID uint8, position int) bool {
+	ordered := e.orderedGatesLocked()
+	from := indexOfGate(ordered, gateID)
 	if from < 0 {
 		return false
 	}
@@ -508,63 +508,63 @@ func (e *Engine) moveGateLocked(puckID uint8, position int) bool {
 	}
 	moved := ordered[from]
 	ordered = append(ordered[:from], ordered[from+1:]...)
-	ordered = append(ordered[:position], append([]domain.GatePuck{moved}, ordered[position:]...)...)
+	ordered = append(ordered[:position], append([]domain.TrackGate{moved}, ordered[position:]...)...)
 	return e.applyOrderLocked(ordered)
 }
 
-// rotateToFrontLocked rotates the loop so `puckID` is first, keeping the cyclic order.
-func (e *Engine) rotateToFrontLocked(puckID uint8) bool {
-	ordered := e.orderedPucksLocked()
-	at := indexOfPuck(ordered, puckID)
+// rotateToFrontLocked rotates the loop so `gateID` is first, keeping the cyclic order.
+func (e *Engine) rotateToFrontLocked(gateID uint8) bool {
+	ordered := e.orderedGatesLocked()
+	at := indexOfGate(ordered, gateID)
 	if at <= 0 {
 		return false
 	}
-	rotated := append(append([]domain.GatePuck(nil), ordered[at:]...), ordered[:at]...)
+	rotated := append(append([]domain.TrackGate(nil), ordered[at:]...), ordered[:at]...)
 	return e.applyOrderLocked(rotated)
 }
 
 // applyOrderLocked renumbers every gate 0..n-1 following `ordered`. Reports whether it changed.
-func (e *Engine) applyOrderLocked(ordered []domain.GatePuck) bool {
+func (e *Engine) applyOrderLocked(ordered []domain.TrackGate) bool {
 	newOrder := make(map[uint8]int, len(ordered))
-	for i, p := range ordered {
-		newOrder[p.PuckID] = i
+	for i, g := range ordered {
+		newOrder[g.GateID] = i
 	}
 	changed := false
-	for i := range e.pucks {
-		if e.pucks[i].TrackOrder != newOrder[e.pucks[i].PuckID] {
+	for i := range e.gates {
+		if e.gates[i].TrackOrder != newOrder[e.gates[i].GateID] {
 			changed = true
 		}
-		e.pucks[i].TrackOrder = newOrder[e.pucks[i].PuckID]
+		e.gates[i].TrackOrder = newOrder[e.gates[i].GateID]
 	}
-	sort.SliceStable(e.pucks, func(i, j int) bool { return e.pucks[i].TrackOrder < e.pucks[j].TrackOrder })
+	sort.SliceStable(e.gates, func(i, j int) bool { return e.gates[i].TrackOrder < e.gates[j].TrackOrder })
 	return changed
 }
 
 // ensureStartGateLocked ensures exactly one gate has Role == START_FINISH without tying it to TrackOrder == 0.
 func (e *Engine) ensureStartGateLocked() {
-	if len(e.pucks) == 0 {
+	if len(e.gates) == 0 {
 		return
 	}
 	found := false
-	for i := range e.pucks {
-		if e.pucks[i].Role == domain.PuckRoleStartFinish {
+	for i := range e.gates {
+		if e.gates[i].Role == domain.GateRoleStartFinish {
 			if !found {
 				found = true
 			} else {
-				e.pucks[i].Role = domain.PuckRoleSectorGate
+				e.gates[i].Role = domain.GateRoleSectorGate
 			}
 		} else {
-			e.pucks[i].Role = domain.PuckRoleSectorGate
+			e.gates[i].Role = domain.GateRoleSectorGate
 		}
 	}
 	if !found {
-		e.pucks[0].Role = domain.PuckRoleStartFinish
+		e.gates[0].Role = domain.GateRoleStartFinish
 	}
 }
 
-func indexOfPuck(pucks []domain.GatePuck, id uint8) int {
-	for i, p := range pucks {
-		if p.PuckID == id {
+func indexOfGate(gates []domain.TrackGate, id uint8) int {
+	for i, g := range gates {
+		if g.GateID == id {
 			return i
 		}
 	}
@@ -572,26 +572,26 @@ func indexOfPuck(pucks []domain.GatePuck, id uint8) int {
 }
 
 // gateLabelLocked is how a gate is named in messages: its display-name override (`Name`),
-// or its flashed puck ID/name (`PuckLabel`), or "Gate N" by position on the course when
+// or its flashed timer ID/name (`TimerLabel`), or "Gate N" by position on the course when
 // neither is set. Mirrors gateLabel() in web/src/state/selectors.ts.
-func (e *Engine) gateLabelLocked(puckID uint8) string {
-	ordered := e.orderedPucksLocked()
-	at := indexOfPuck(ordered, puckID)
+func (e *Engine) gateLabelLocked(gateID uint8) string {
+	ordered := e.orderedGatesLocked()
+	at := indexOfGate(ordered, gateID)
 	if at < 0 {
-		return fmt.Sprintf("puck %d", puckID)
+		return fmt.Sprintf("Gate %d", gateID)
 	}
 	if name := strings.TrimSpace(ordered[at].Name); name != "" {
 		return name
 	}
-	if label := strings.TrimSpace(ordered[at].PuckLabel); label != "" {
+	if label := strings.TrimSpace(ordered[at].TimerLabel); label != "" {
 		return label
 	}
 	return fmt.Sprintf("Gate %d", at+1)
 }
 
 // sectionLabelLocked names the stretch of track between two gates, e.g. "Gate 2 → Split-S".
-func (e *Engine) sectionLabelLocked(fromPuckID, toPuckID uint8) string {
-	return e.gateLabelLocked(fromPuckID) + " → " + e.gateLabelLocked(toPuckID)
+func (e *Engine) sectionLabelLocked(fromGateID, toGateID uint8) string {
+	return e.gateLabelLocked(fromGateID) + " → " + e.gateLabelLocked(toGateID)
 }
 
 // ClearPilotProgress resets in-progress lap/sector tracking for a single pilot (e.g. when a
@@ -603,19 +603,19 @@ func (e *Engine) ClearPilotProgress(slotIndex int) {
 	e.mu.Unlock()
 }
 
-// HasDetectedPuck reports whether a physical/provisioned timer with `puckID` exists in `e.detected`.
-func (e *Engine) HasDetectedPuck(puckID uint8) bool {
+// HasDetectedTimer reports whether a physical/provisioned timer with `timerID` exists in `e.detected`.
+func (e *Engine) HasDetectedTimer(timerID uint8) bool {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	_, ok := e.detected[puckID]
+	_, ok := e.detected[timerID]
 	return ok
 }
 
-// SetDetectedPuckOnline immediately marks a physical/simulated timer online or offline.
-func (e *Engine) SetDetectedPuckOnline(puckID uint8, online bool) {
+// SetDetectedTimerOnline immediately marks a physical/simulated timer online or offline.
+func (e *Engine) SetDetectedTimerOnline(timerID uint8, online bool) {
 	e.mu.Lock()
 	now := time.Now()
-	if d, ok := e.detected[puckID]; ok {
+	if d, ok := e.detected[timerID]; ok {
 		d.Online = online
 		if online {
 			d.LastSeenAt = now
@@ -623,60 +623,60 @@ func (e *Engine) SetDetectedPuckOnline(puckID uint8, online bool) {
 			d.LastSeenAt = time.Time{}
 		}
 	}
-	for i := range e.pucks {
-		if e.pucks[i].AssignedPuckID == puckID {
-			e.pucks[i].Online = online
+	for i := range e.gates {
+		if e.gates[i].AssignedTimerID == timerID {
+			e.gates[i].Online = online
 			if online {
-				e.pucks[i].LastSeenAt = now
+				e.gates[i].LastSeenAt = now
 			} else {
-				e.pucks[i].LastSeenAt = time.Time{}
+				e.gates[i].LastSeenAt = time.Time{}
 			}
 		}
 	}
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
-	pucks := append([]domain.GatePuck(nil), e.pucks...)
+	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
 	e.mu.Unlock()
 
 	for _, s := range subs {
-		s.OnConfigUpdated(pilots, pucks)
+		s.OnConfigUpdated(pilots, gates)
 	}
 }
 
-// DeleteDetectedPuck removes a timer from `e.detected` and unassigns it from any gate on the track.
-func (e *Engine) DeleteDetectedPuck(puckID uint8) error {
-	if puckID == 0 || puckID > maxTimers {
-		return ErrInvalidPuckID
+// DeleteDetectedTimer removes a timer from `e.detected` and unassigns it from any gate on the track.
+func (e *Engine) DeleteDetectedTimer(timerID uint8) error {
+	if timerID == 0 || timerID > maxTimers {
+		return ErrInvalidTimerID
 	}
 	e.mu.Lock()
-	delete(e.detected, puckID)
-	for i := range e.pucks {
-		if e.pucks[i].AssignedPuckID == puckID {
-			e.pucks[i].AssignedPuckID = 0
-			e.pucks[i].PuckLabel = ""
-			e.pucks[i].FirmwareVersion = ""
-			e.pucks[i].Color = ""
-			e.pucks[i].Online = false
-			e.pucks[i].LastSeenAt = time.Time{}
-			e.pucks[i].BatteryMv = 0
-			e.pucks[i].BatteryPct = 0
+	delete(e.detected, timerID)
+	for i := range e.gates {
+		if e.gates[i].AssignedTimerID == timerID {
+			e.gates[i].AssignedTimerID = 0
+			e.gates[i].TimerLabel = ""
+			e.gates[i].FirmwareVersion = ""
+			e.gates[i].Color = ""
+			e.gates[i].Online = false
+			e.gates[i].LastSeenAt = time.Time{}
+			e.gates[i].BatteryMv = 0
+			e.gates[i].BatteryPct = 0
 		}
 	}
 	e.progress = make(map[int]*pilotProgress)
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
-	pucks := append([]domain.GatePuck(nil), e.pucks...)
+	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
 	e.mu.Unlock()
 
 	for _, s := range subs {
-		s.OnConfigUpdated(pilots, pucks)
+		s.OnConfigUpdated(pilots, gates)
 	}
 	return nil
 }
 
-// AddSimulatedPuck creates a new simulated XIAO timer (1..6) in `e.detected` running the given
+// AddSimulatedTimer creates a new simulated XIAO timer (1..6) in `e.detected` running the given
 // firmware profile, and adds a gate on the track for it if fewer than 6 gates exist.
-func (e *Engine) AddSimulatedPuck(role string, label string, profile string) (uint8, error) {
+func (e *Engine) AddSimulatedTimer(role string, label string, profile string) (uint8, error) {
 	label = strings.TrimSpace(label)
 	if utf8.RuneCountInString(label) > domain.MaxGateNameLen {
 		return 0, ErrGateNameTooLong
@@ -696,14 +696,14 @@ func (e *Engine) AddSimulatedPuck(role string, label string, profile string) (ui
 	}
 	if nextID == 0 {
 		e.mu.Unlock()
-		return 0, ErrInvalidPuckID
+		return 0, ErrInvalidTimerID
 	}
 
 	now := time.Now()
-	d := &domain.DetectedPuck{
-		PuckID:          nextID,
-		PuckLabel:       label,
-		Color:           domain.DefaultPuckColor(nextID),
+	d := &domain.DetectedTimer{
+		TimerID:         nextID,
+		TimerLabel:      label,
+		Color:           domain.DefaultTimerColor(nextID),
 		IsHub:           role == "hub" || nextID == 1,
 		FirmwareVersion: fwVersion,
 		FirmwareProfile: profile,
@@ -719,26 +719,26 @@ func (e *Engine) AddSimulatedPuck(role string, label string, profile string) (ui
 	// If there is an existing gate without a timer assigned, bind this timer to it;
 	// otherwise if fewer than maxTimers gates exist, append a new gate for it.
 	bound := false
-	for i := range e.pucks {
-		if e.pucks[i].AssignedPuckID == 0 {
-			e.pucks[i].AssignedPuckID = nextID
-			e.pucks[i].PuckLabel = label
-			e.pucks[i].FirmwareVersion = fwVersion
-			e.pucks[i].Color = d.Color
-			e.pucks[i].BatteryMv = d.BatteryMv
-			e.pucks[i].BatteryPct = d.BatteryPct
-			e.pucks[i].NoiseFloorDbm = d.NoiseFloorDbm
-			e.pucks[i].Online = true
-			e.pucks[i].LastSeenAt = now
+	for i := range e.gates {
+		if e.gates[i].AssignedTimerID == 0 {
+			e.gates[i].AssignedTimerID = nextID
+			e.gates[i].TimerLabel = label
+			e.gates[i].FirmwareVersion = fwVersion
+			e.gates[i].Color = d.Color
+			e.gates[i].BatteryMv = d.BatteryMv
+			e.gates[i].BatteryPct = d.BatteryPct
+			e.gates[i].NoiseFloorDbm = d.NoiseFloorDbm
+			e.gates[i].Online = true
+			e.gates[i].LastSeenAt = now
 			bound = true
 			break
 		}
 	}
-	if !bound && len(e.pucks) < maxTimers {
+	if !bound && len(e.gates) < maxTimers {
 		var gateID uint8
-		usedGate := make(map[uint8]bool, len(e.pucks))
-		for _, p := range e.pucks {
-			usedGate[p.PuckID] = true
+		usedGate := make(map[uint8]bool, len(e.gates))
+		for _, g := range e.gates {
+			usedGate[g.GateID] = true
 		}
 		for id := uint8(1); id <= maxTimers; id++ {
 			if !usedGate[id] {
@@ -751,14 +751,14 @@ func (e *Engine) AddSimulatedPuck(role string, label string, profile string) (ui
 			for k := range defaultRssi {
 				defaultRssi[k] = -92
 			}
-			e.pucks = append(e.pucks, domain.GatePuck{
-				PuckID:          gateID,
-				AssignedPuckID:  nextID,
-				PuckLabel:       label,
+			e.gates = append(e.gates, domain.TrackGate{
+				GateID:          gateID,
+				AssignedTimerID: nextID,
+				TimerLabel:      label,
 				FirmwareVersion: fwVersion,
 				Color:           d.Color,
-				Role:            domain.PuckRoleSectorGate,
-				TrackOrder:      len(e.pucks),
+				Role:            domain.GateRoleSectorGate,
+				TrackOrder:      len(e.gates),
 				MapX:            0.5,
 				MapY:            0.5,
 				BatteryMv:       d.BatteryMv,
@@ -775,12 +775,12 @@ func (e *Engine) AddSimulatedPuck(role string, label string, profile string) (ui
 	}
 
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
-	pucks := append([]domain.GatePuck(nil), e.pucks...)
+	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
 	e.mu.Unlock()
 
 	for _, s := range subs {
-		s.OnConfigUpdated(pilots, pucks)
+		s.OnConfigUpdated(pilots, gates)
 	}
 	return nextID, nil
 }

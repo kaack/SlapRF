@@ -92,41 +92,41 @@ export function renderSparkline(values: number[], width = 120, height = 32): str
 }
 
 /** Inline gate label prefixed with its colored dot from the Gates section in System. */
-export function gateBadge(store: AppStore, puckId: number): string {
-  return `<span class="gate-dot-label"><span class="dot" style="--c:${gateColor(store, puckId)}"></span>${esc(gateLabel(store, puckId))}</span>`;
+export function gateBadge(store: AppStore, gateId: number): string {
+  return `<span class="gate-dot-label"><span class="dot" style="--c:${gateColor(store, gateId)}"></span>${esc(gateLabel(store, gateId))}</span>`;
 }
 
 /**
- * Elongated two-tone capsule icon where the left half is the starting gate/puck color (--c1)
- * and the right half is the terminating gate/puck color (--c2).
+ * Elongated two-tone capsule icon where the left half is the starting gate/timer color (--c1)
+ * and the right half is the terminating gate/timer color (--c2).
  */
 export function renderSectionCapsuleIcon(c1: string, c2: string): string {
   return `<span class="sec-bicolor-capsule" style="--c1:${c1};--c2:${c2}" aria-hidden="true"></span>`;
 }
 
 /**
- * Prominent elongated section ID pill ("S1", "S2"…) whose left half represents the gate/puck
- * before and right half represents the gate/puck after/terminating it.
+ * Prominent elongated section ID pill ("S1", "S2"…) whose left half represents the gate/timer
+ * before and right half represents the gate/timer after/terminating it.
  */
-export function sectionIdBadge(store: AppStore, fromPuckId: number, toPuckId?: number): string {
-  const c1 = gateColor(store, fromPuckId);
-  let resolvedTo = toPuckId;
-  if (!resolvedTo && store.pucks.length > 0) {
-    const idx = store.pucks.findIndex((p) => p.puckId === fromPuckId);
+export function sectionIdBadge(store: AppStore, fromGateId: number, toGateId?: number): string {
+  const c1 = gateColor(store, fromGateId);
+  let resolvedTo = toGateId;
+  if (!resolvedTo && store.nodes.length > 0) {
+    const idx = store.nodes.findIndex((p) => p.gateId === fromGateId);
     if (idx >= 0) {
-      resolvedTo = store.pucks[(idx + 1) % store.pucks.length].puckId;
+      resolvedTo = store.nodes[(idx + 1) % store.nodes.length].gateId;
     }
   }
   const c2 = resolvedTo ? gateColor(store, resolvedTo) : c1;
-  return `<span class="sec-id-badge" style="--c1:${c1};--c2:${c2}">${renderSectionCapsuleIcon(c1, c2)}<span>${esc(sectionShort(store, fromPuckId))}</span></span>`;
+  return `<span class="sec-id-badge" style="--c1:${c1};--c2:${c2}">${renderSectionCapsuleIcon(c1, c2)}<span>${esc(sectionShort(store, fromGateId))}</span></span>`;
 }
 
 /** Subtle "Gate 1 → Gate 2" route string for secondary context next to S1/S2/S3. */
-export function subtleRoute(store: AppStore, fromPuckId: number, toPuckId: number): string {
-  return `<span class="sec-route-subtle">${esc(gateLabel(store, fromPuckId))} <span class="muted">→</span> ${esc(gateLabel(store, toPuckId))}</span>`;
+export function subtleRoute(store: AppStore, fromGateId: number, toGateId: number): string {
+  return `<span class="sec-route-subtle">${esc(gateLabel(store, fromGateId))} <span class="muted">→</span> ${esc(gateLabel(store, toGateId))}</span>`;
 }
 
 /** HTML-escaped "[◖◗ S1]  Gate 1 → Gate 2" label for a section, with S1 prominent and gate route subtle. */
-export function routeLabel(store: AppStore, fromPuckId: number, toPuckId: number): string {
-  return `<span class="sec-cell">${sectionIdBadge(store, fromPuckId, toPuckId)}${subtleRoute(store, fromPuckId, toPuckId)}</span>`;
+export function routeLabel(store: AppStore, fromGateId: number, toGateId: number): string {
+  return `<span class="sec-cell">${sectionIdBadge(store, fromGateId, toGateId)}${subtleRoute(store, fromGateId, toGateId)}</span>`;
 }

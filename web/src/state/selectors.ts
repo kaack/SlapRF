@@ -32,7 +32,7 @@ export function median(values: number[]): number {
 export function currentSectorIndex(store: AppStore, slotIndex: number): number {
   const last = store.lastCrossingFor(slotIndex);
   if (!last) return -1;
-  return store.pucks.findIndex((p) => p.puckId === last.puckId);
+  return store.nodes.findIndex((p) => p.gateId === last.gateId);
 }
 
 /** Seconds since the pilot last crossed any gate (Infinity if never). */
@@ -64,9 +64,9 @@ export const GATE_COLORS = TIMER_COLORS;
  */
 export function timerColor(store: AppStore, hardwareTimerId: number): string {
   if (!hardwareTimerId || hardwareTimerId <= 0) return "#64748b";
-  const detected = store.detectedTimers.find((d) => d.puckId === hardwareTimerId);
+  const detected = store.detectedTimers.find((d) => d.timerId === hardwareTimerId);
   if (detected?.color?.trim()) return detected.color.trim();
-  const nodeWithTimer = store.nodes.find((p) => (p.assignedPuckId ?? p.puckId) === hardwareTimerId);
+  const nodeWithTimer = store.nodes.find((p) => (p.assignedTimerId ?? p.gateId) === hardwareTimerId);
   if (nodeWithTimer?.color?.trim()) return nodeWithTimer.color.trim();
   return TIMER_COLORS[(hardwareTimerId - 1) % TIMER_COLORS.length];
 }
@@ -75,11 +75,11 @@ export function timerColor(store: AppStore, hardwareTimerId: number): string {
  * The color of a node on the track, derived from the physical timer assigned to it
  * (used consistently across the RSSI viewer, Timing Rules tabs, section records, and lap analysis).
  */
-export function gateColor(store: AppStore, puckId: number): string {
-  const position = store.pucks.findIndex((p) => p.puckId === puckId);
+export function gateColor(store: AppStore, gateId: number): string {
+  const position = store.nodes.findIndex((p) => p.gateId === gateId);
   if (position < 0) return TIMER_COLORS[0];
-  const p = store.pucks[position];
-  const assignedId = p.assignedPuckId ?? 0;
+  const p = store.nodes[position];
+  const assignedId = p.assignedTimerId ?? 0;
   if (assignedId > 0) {
     return timerColor(store, assignedId);
   }
@@ -89,29 +89,29 @@ export function gateColor(store: AppStore, puckId: number): string {
 /**
  * What a gate is called everywhere in the UI:
  *   1. Its display-name override (`name`) from the Track editor if set,
- *   2. Otherwise its flashed Timer ID / name (`puckLabel`),
+ *   2. Otherwise its flashed Timer ID / name (`timerLabel`),
  *   3. Otherwise "Gate N" by its position on the course.
  */
-export function gateLabel(store: AppStore, puckId: number): string {
-  const position = store.pucks.findIndex((p) => p.puckId === puckId);
+export function gateLabel(store: AppStore, gateId: number): string {
+  const position = store.nodes.findIndex((p) => p.gateId === gateId);
   if (position < 0) return "Unknown gate";
-  const p = store.pucks[position];
-  return p.name.trim() || p.puckLabel?.trim() || `Gate ${position + 1}`;
+  const p = store.nodes[position];
+  return p.name.trim() || p.timerLabel?.trim() || `Gate ${position + 1}`;
 }
 
 /** The permanent hardware ID / name flashed onto a timer. */
-export function timerHardwareId(p: { puckId: number; puckLabel?: string }): string {
-  return p.puckLabel?.trim() || `timer #${p.puckId}`;
+export function timerHardwareId(p: { timerId: number; timerLabel?: string }): string {
+  return p.timerLabel?.trim() || `timer #${p.timerId}`;
 }
 
 /** "Gate 2 → Split-S" style label for the stretch of track between two gates. */
-export function sectionLabel(store: AppStore, fromPuckId: number, toPuckId: number): string {
-  return `${gateLabel(store, fromPuckId)} → ${gateLabel(store, toPuckId)}`;
+export function sectionLabel(store: AppStore, fromGateId: number, toGateId: number): string {
+  return `${gateLabel(store, fromGateId)} → ${gateLabel(store, toGateId)}`;
 }
 
 /** Compact "S1", "S2"… for the section that starts at this gate (for narrow table headers). */
-export function sectionShort(store: AppStore, fromPuckId: number): string {
-  const position = store.pucks.findIndex((p) => p.puckId === fromPuckId);
+export function sectionShort(store: AppStore, fromGateId: number): string {
+  const position = store.nodes.findIndex((p) => p.gateId === fromGateId);
   return position < 0 ? "S?" : `S${position + 1}`;
 }
 
@@ -119,10 +119,10 @@ export function sectionShort(store: AppStore, fromPuckId: number): string {
  * The enter threshold a gate uses for a pilot: the gate's calibrated value if one is set,
  * otherwise the pilot's own (mirrors thresholdsFor in internal/tracker/thresholds.go).
  */
-export function enterThresholdAt(store: AppStore, puckId: number, slotIndex: number): { dbm: number; calibrated: boolean } {
+export function enterThresholdAt(store: AppStore, gateId: number, slotIndex: number): { dbm: number; calibrated: boolean } {
   const pos = store.pilots.findIndex((p) => p.slotIndex === slotIndex);
   const pilot = store.pilots[pos];
-  const override = store.puck(puckId)?.enterThresholds?.[pos] ?? 0;
+  const override = store.node(gateId)?.enterThresholds?.[pos] ?? 0;
   return override !== 0 ? { dbm: override, calibrated: true } : { dbm: pilot?.enterThreshold ?? -58, calibrated: false };
 }
 

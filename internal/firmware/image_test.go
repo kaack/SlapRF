@@ -21,7 +21,7 @@ func TestBuildHubTimerWithWiFi(t *testing.T) {
 		Role:         RoleHubTimer,
 		Profile:      "indoor",
 		Fingerprint:  0xA1B2C3D4,
-		PuckLabel:    "H1",
+		TimerLabel:   "H1",
 		SlotFreqsMHz: freqs,
 		WifiSSID:     "PilotHotspot",
 		WifiPass:     "raceband58",
@@ -37,7 +37,7 @@ func TestBuildHubTimerWithWiFi(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectConfig failed: %v", err)
 	}
-	if parsed.Role != RoleHubTimer || parsed.PuckLabel != "H1" || parsed.Profile != "indoor" {
+	if parsed.Role != RoleHubTimer || parsed.TimerLabel != "H1" || parsed.Profile != "indoor" {
 		t.Fatalf("unexpected hub config: %+v", parsed)
 	}
 	if parsed.Fingerprint != 0xA1B2C3D4 {
@@ -155,13 +155,13 @@ func TestPatchMergedImageRepairsChecksumAndSHA(t *testing.T) {
 	app = append(app, make([]byte, pad+1+32)...)
 	merged := append(bytes.Repeat([]byte{0xFF}, appOff), app...)
 
-	built, err := PatchImage(merged, TimerConfig{Role: RoleSpokeTimer, Profile: "indoor", Fingerprint: 0x1234ABCD, PuckLabel: "S2"})
+	built, err := PatchImage(merged, TimerConfig{Role: RoleSpokeTimer, Profile: "indoor", Fingerprint: 0x1234ABCD, TimerLabel: "S2"})
 	if err != nil {
 		t.Fatalf("PatchImage: %v", err)
 	}
 	out := built.Bytes
 	parsed, err := InspectConfig(out)
-	if err != nil || parsed.Fingerprint != 0x1234ABCD || parsed.Profile != "indoor" || parsed.PuckLabel != "S2" {
+	if err != nil || parsed.Fingerprint != 0x1234ABCD || parsed.Profile != "indoor" || parsed.TimerLabel != "S2" {
 		t.Fatalf("unexpected parsed config %+v (%v)", parsed, err)
 	}
 

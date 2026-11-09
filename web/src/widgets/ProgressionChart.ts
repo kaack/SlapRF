@@ -8,7 +8,7 @@ import { LapRecord, PilotSlot } from "../types/models";
 /** What the chart plots per lap: the whole lap, or one section of it. */
 export type ProgressionMetric =
   | { kind: "lap" }
-  | { kind: "section"; sectorIndex: number; fromPuckId: number; toPuckId: number };
+  | { kind: "section"; sectorIndex: number; fromGateId: number; toGateId: number };
 
 interface Point {
   /** The pilot's lap number this session (1-based). */
@@ -278,8 +278,8 @@ export class ProgressionChart extends Component {
 
   private valueOf(lap: LapRecord): number | undefined {
     if (this.metric.kind === "lap") return lap.lapTimeSec;
-    const { sectorIndex, fromPuckId, toPuckId } = this.metric;
-    const byPair = lap.sectors.find((s) => s.fromPuckId === fromPuckId && s.toPuckId === toPuckId);
+    const { sectorIndex, fromGateId, toGateId } = this.metric;
+    const byPair = lap.sectors.find((s) => s.fromGateId === fromGateId && s.toGateId === toGateId);
     if (byPair) return byPair.splitSeconds;
     return lap.sectors.find((s) => s.sectorIndex === sectorIndex)?.splitSeconds;
   }

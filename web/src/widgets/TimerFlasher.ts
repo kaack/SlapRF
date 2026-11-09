@@ -433,7 +433,7 @@ export class TimerFlasher extends Component {
   private suggestSpokeLabel(): string {
     const taken = new Set<string>();
     for (const d of this.store.detectedTimers) {
-      if (d.puckLabel) taken.add(d.puckLabel.trim().toUpperCase());
+      if (d.timerLabel) taken.add(d.timerLabel.trim().toUpperCase());
     }
     for (const key of this.flashedNodes) {
       if (key.startsWith("spoke:")) taken.add(key.slice(6));

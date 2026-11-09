@@ -9,7 +9,7 @@ const (
 // GateThresholdUpdate calibrates one gate for one pilot. EnterDbm 0 clears the override so
 // the gate goes back to the pilot's own threshold.
 type GateThresholdUpdate struct {
-	PuckID    uint8   `json:"puckId"`
+	GateID    uint8   `json:"gateId"`
 	SlotIndex int     `json:"slotIndex"`
 	EnterDbm  float32 `json:"enterDbm"`
 }

@@ -87,7 +87,7 @@ func (ps *simPilotState) plugInReadyOrBestPack() bool {
 }
 
 // TrackSimulator generates realistic 50 Hz multi-gate 5.8 GHz SDR telemetry streams
-// across all deployed Gate Pucks, modeling inverse-square RF path loss, multipath noise,
+// across all deployed Gate Timers, modeling inverse-square RF path loss, multipath noise,
 // per-sector speed variations, drone battery drain, pit pack swaps, crashes with lingering
 // VTX signals, and track-walk high-altitude avoidance.
 type TrackSimulator struct {
@@ -367,11 +367,11 @@ func (s *TrackSimulator) TriggerPilotAction(slotIndex int, action string) {
 	}
 	var clearProgress bool
 	s.mu.Lock()
-	_, pucks, _, _, _ := s.engine.StateSnapshot()
-	numPucks := len(pucks)
+	_, gates, _, _, _ := s.engine.StateSnapshot()
+	numGates := len(gates)
 	sectorLen := s.trackLengthMeters
-	if numPucks > 0 {
-		sectorLen = s.trackLengthMeters / float64(numPucks)
+	if numGates > 0 {
+		sectorLen = s.trackLengthMeters / float64(numGates)
 	}
 
 	for i := range s.pilotStates {
@@ -382,8 +382,8 @@ func (s *TrackSimulator) TriggerPilotAction(slotIndex int, action string) {
 		switch action {
 		case "crash":
 			// Snap pilot near the closest gate so their lingering VTX signal illuminates that gate
-			if numPucks > 0 {
-				nearestGateIdx := int(math.Round(ps.trackPosMeters/sectorLen)) % numPucks
+			if numGates > 0 {
+				nearestGateIdx := int(math.Round(ps.trackPosMeters/sectorLen)) % numGates
 				ps.trackPosMeters = math.Mod(float64(nearestGateIdx)*sectorLen+2.8, s.trackLengthMeters)
 			}
 			ps.status = domain.SimStatusCrashedVtxOn
@@ -490,32 +490,32 @@ func (s *TrackSimulator) TriggerPilotAction(slotIndex int, action string) {
 }
 
 // ToggleTimerPower turns a simulated XIAO timer (T1..T6) off or back on.
-func (s *TrackSimulator) ToggleTimerPower(puckID uint8) bool {
+func (s *TrackSimulator) ToggleTimerPower(timerID uint8) bool {
 	s.mu.Lock()
-	currentlyOff := s.poweredOffTimers[puckID]
+	currentlyOff := s.poweredOffTimers[timerID]
 	nextOff := !currentlyOff
 	if nextOff {
-		s.poweredOffTimers[puckID] = true
+		s.poweredOffTimers[timerID] = true
 	} else {
-		delete(s.poweredOffTimers, puckID)
+		delete(s.poweredOffTimers, timerID)
 	}
 	s.mu.Unlock()
 
-	s.engine.SetDetectedPuckOnline(puckID, !nextOff)
+	s.engine.SetDetectedTimerOnline(timerID, !nextOff)
 	return !nextOff
 }
 
 // DeleteTimer removes a simulated hardware timer from the simulation and engine.
-func (s *TrackSimulator) DeleteTimer(puckID uint8) error {
+func (s *TrackSimulator) DeleteTimer(timerID uint8) error {
 	s.mu.Lock()
-	delete(s.poweredOffTimers, puckID)
+	delete(s.poweredOffTimers, timerID)
 	s.mu.Unlock()
-	return s.engine.DeleteDetectedPuck(puckID)
+	return s.engine.DeleteDetectedTimer(timerID)
 }
 
 // AddTimer creates a new simulated XIAO timer (up to 6 total) running the given firmware profile.
 func (s *TrackSimulator) AddTimer(role string, label string, profile string) (uint8, error) {
-	id, err := s.engine.AddSimulatedPuck(role, label, profile)
+	id, err := s.engine.AddSimulatedTimer(role, label, profile)
 	if err != nil {
 		return 0, err
 	}
@@ -527,16 +527,16 @@ func (s *TrackSimulator) AddTimer(role string, label string, profile string) (ui
 
 // Snapshot returns the current `domain.SimState` for the Sim UI view.
 func (s *TrackSimulator) Snapshot() domain.SimState {
-	pilots, pucks, _, _, _ := s.engine.StateSnapshot()
-	detected := s.engine.DetectedPucksSnapshot()
+	pilots, gates, _, _, _ := s.engine.StateSnapshot()
+	detected := s.engine.DetectedTimersSnapshot()
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	numPucks := len(pucks)
+	numGates := len(gates)
 	sectorLen := s.trackLengthMeters
-	if numPucks > 0 {
-		sectorLen = s.trackLengthMeters / float64(numPucks)
+	if numGates > 0 {
+		sectorLen = s.trackLengthMeters / float64(numGates)
 	}
 
 	simPilots := make([]domain.SimPilotState, 0, len(pilots))
@@ -546,13 +546,13 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 		}
 		ps := s.pilotStates[i]
 		nearestGate := "Start / Finish"
-		if numPucks > 0 {
-			gIdx := int(math.Round(ps.trackPosMeters/sectorLen)) % numPucks
-			g := pucks[gIdx]
+		if numGates > 0 {
+			gIdx := int(math.Round(ps.trackPosMeters/sectorLen)) % numGates
+			g := gates[gIdx]
 			if g.Name != "" {
 				nearestGate = g.Name
-			} else if g.PuckLabel != "" {
-				nearestGate = g.PuckLabel
+			} else if g.TimerLabel != "" {
+				nearestGate = g.TimerLabel
 			} else {
 				nearestGate = fmt.Sprintf("Gate %d", gIdx+1)
 			}
@@ -613,20 +613,20 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 		})
 	}
 
-	gateByPuck := make(map[uint8]string, len(pucks))
-	for idx, g := range pucks {
-		if g.AssignedPuckID > 0 {
+	gateByTimer := make(map[uint8]string, len(gates))
+	for idx, g := range gates {
+		if g.AssignedTimerID > 0 {
 			if g.Name != "" {
-				gateByPuck[g.AssignedPuckID] = g.Name
+				gateByTimer[g.AssignedTimerID] = g.Name
 			} else {
-				gateByPuck[g.AssignedPuckID] = fmt.Sprintf("Gate %d", idx+1)
+				gateByTimer[g.AssignedTimerID] = fmt.Sprintf("Gate %d", idx+1)
 			}
 		}
 	}
 
 	simTimers := make([]domain.SimTimerState, 0, len(detected))
 	for _, d := range detected {
-		poweredOn := !s.poweredOffTimers[d.PuckID]
+		poweredOn := !s.poweredOffTimers[d.TimerID]
 		fw := d.FirmwareVersion
 		if fw == "" {
 			fw = domain.LatestFirmwareVersion
@@ -636,8 +636,8 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 			profile = domain.DefaultFirmwareProfile
 		}
 		simTimers = append(simTimers, domain.SimTimerState{
-			PuckID:           d.PuckID,
-			PuckLabel:        d.PuckLabel,
+			TimerID:          d.TimerID,
+			TimerLabel:       d.TimerLabel,
 			Color:            d.Color,
 			IsHub:            d.IsHub,
 			FirmwareVersion:  fw,
@@ -645,7 +645,7 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 			Fingerprint:      d.Fingerprint,
 			PoweredOn:        poweredOn,
 			Online:           d.Online && poweredOn,
-			AssignedGateName: gateByPuck[d.PuckID],
+			AssignedGateName: gateByTimer[d.TimerID],
 			BatteryMv:        d.BatteryMv,
 			BatteryPct:       d.BatteryPct,
 			NoiseFloorDbm:    d.NoiseFloorDbm,
@@ -684,9 +684,9 @@ func (s *TrackSimulator) step(dtSec float64) {
 		return
 	}
 
-	pilots, pucks, _, _, _ := s.engine.StateSnapshot()
-	detected := s.engine.DetectedPucksSnapshot()
-	numPucks := len(pucks)
+	pilots, gates, _, _, _ := s.engine.StateSnapshot()
+	detected := s.engine.DetectedTimersSnapshot()
+	numGates := len(gates)
 	nowUs := s.clock()
 	s.seqCounter++
 
@@ -720,18 +720,18 @@ func (s *TrackSimulator) step(dtSec float64) {
 		}
 	}
 
-	if numPucks == 0 {
-		frames := make([]domain.PuckTelemetryFrame, 0, len(detected))
+	if numGates == 0 {
+		frames := make([]domain.TimerTelemetryFrame, 0, len(detected))
 		for _, d := range detected {
-			if s.poweredOffTimers[d.PuckID] {
+			if s.poweredOffTimers[d.TimerID] {
 				continue
 			}
 			var rssi [domain.MaxPilotPoolSize]float32
 			for slotIdx := 0; slotIdx < len(pilots) && slotIdx < domain.MaxPilotPoolSize; slotIdx++ {
 				rssi[slotIdx] = d.NoiseFloorDbm + float32((s.rng.Float64()-0.5)*2.0)
 			}
-			frames = append(frames, domain.PuckTelemetryFrame{
-				PuckID:        d.PuckID,
+			frames = append(frames, domain.TimerTelemetryFrame{
+				TimerID:       d.TimerID,
 				SeqNum:        s.seqCounter,
 				TimestampUs:   nowUs,
 				RSSI:          rssi,
@@ -746,7 +746,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 		return
 	}
 
-	sectorLen := s.trackLengthMeters / float64(numPucks)
+	sectorLen := s.trackLengthMeters / float64(numGates)
 
 	// 1. Advance each enabled pilot along the track & update battery/pit/crash state machine
 	hasWaitingRecovery := false
@@ -1020,7 +1020,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 			}
 		}
 
-		currentSector := int(ps.trackPosMeters/sectorLen) % numPucks
+		currentSector := int(ps.trackPosMeters/sectorLen) % numGates
 		speed := ps.baseSpeedMps
 
 		// Apply realistic cornering / technical sector speed profile
@@ -1074,18 +1074,18 @@ func (s *TrackSimulator) step(dtSec float64) {
 		}
 	}
 
-	// 2. Compute 8-channel 5.8 GHz RSSI at each powered-on Gate Puck and emit frame
-	frames := make([]domain.PuckTelemetryFrame, 0, numPucks+len(detected))
-	assignedSet := make(map[uint8]bool, numPucks)
-	for pIdx, puck := range pucks {
-		if puck.AssignedPuckID == 0 {
+	// 2. Compute 8-channel 5.8 GHz RSSI at each powered-on Gate Timer and emit frame
+	frames := make([]domain.TimerTelemetryFrame, 0, numGates+len(detected))
+	assignedSet := make(map[uint8]bool, numGates)
+	for gIdx, gate := range gates {
+		if gate.AssignedTimerID == 0 {
 			continue
 		}
-		assignedSet[puck.AssignedPuckID] = true
-		if s.poweredOffTimers[puck.AssignedPuckID] {
+		assignedSet[gate.AssignedTimerID] = true
+		if s.poweredOffTimers[gate.AssignedTimerID] {
 			continue // Simulated timer is switched OFF in the Sim tab
 		}
-		gatePosMeters := float64(pIdx) * sectorLen
+		gatePosMeters := float64(gIdx) * sectorLen
 		var rssi [domain.MaxPilotPoolSize]float32
 
 		for slotIdx := 0; slotIdx < len(pilots) && slotIdx < domain.MaxPilotPoolSize && slotIdx < len(s.pilotStates); slotIdx++ {
@@ -1099,7 +1099,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 					ps.status == domain.SimStatusTurtleRecovery)
 
 			if !vtxOn {
-				rssi[slotIdx] = puck.NoiseFloorDbm + noise
+				rssi[slotIdx] = gate.NoiseFloorDbm + noise
 				continue
 			}
 
@@ -1109,7 +1109,7 @@ func (s *TrackSimulator) step(dtSec float64) {
 				dx = s.trackLengthMeters - dx
 			}
 
-			// 3D Euclidean distance to gate puck on ground (altitude = 1.25m normal, 14.0m when avoiding track walker)
+			// 3D Euclidean distance to gate timer on ground (altitude = 1.25m normal, 14.0m when avoiding track walker)
 			alt := ps.altitudeMeters
 			if alt < 0.8 {
 				alt = 0.8
@@ -1120,8 +1120,8 @@ func (s *TrackSimulator) step(dtSec float64) {
 			// Peak inside gate (~1.25m) reaches ~ -26 dBm; drops by ~23.5 dB per decade of distance
 			multipathRipple := math.Sin(dx*2.7)*1.8 + math.Cos(dx*1.3)*1.2
 			sigDbm := -24.5 - 23.5*math.Log10(dist3D) + multipathRipple + float64(noise)
-			if sigDbm < float64(puck.NoiseFloorDbm) {
-				sigDbm = float64(puck.NoiseFloorDbm) + float64(noise)*0.5
+			if sigDbm < float64(gate.NoiseFloorDbm) {
+				sigDbm = float64(gate.NoiseFloorDbm) + float64(noise)*0.5
 			}
 			if sigDbm > -20.0 {
 				sigDbm = -20.0
@@ -1129,25 +1129,25 @@ func (s *TrackSimulator) step(dtSec float64) {
 			rssi[slotIdx] = float32(sigDbm)
 		}
 
-		frames = append(frames, domain.PuckTelemetryFrame{
-			PuckID:        puck.AssignedPuckID,
+		frames = append(frames, domain.TimerTelemetryFrame{
+			TimerID:       gate.AssignedTimerID,
 			SeqNum:        s.seqCounter,
 			TimestampUs:   nowUs,
 			RSSI:          rssi,
-			BatteryMv:     puck.BatteryMv,
-			NoiseFloorDbm: puck.NoiseFloorDbm,
+			BatteryMv:     gate.BatteryMv,
+			NoiseFloorDbm: gate.NoiseFloorDbm,
 		})
 	}
 	for _, d := range detected {
-		if assignedSet[d.PuckID] || s.poweredOffTimers[d.PuckID] {
+		if assignedSet[d.TimerID] || s.poweredOffTimers[d.TimerID] {
 			continue
 		}
 		var rssi [domain.MaxPilotPoolSize]float32
 		for slotIdx := 0; slotIdx < len(pilots) && slotIdx < domain.MaxPilotPoolSize; slotIdx++ {
 			rssi[slotIdx] = d.NoiseFloorDbm + float32((s.rng.Float64()-0.5)*2.0)
 		}
-		frames = append(frames, domain.PuckTelemetryFrame{
-			PuckID:        d.PuckID,
+		frames = append(frames, domain.TimerTelemetryFrame{
+			TimerID:       d.TimerID,
 			SeqNum:        s.seqCounter,
 			TimestampUs:   nowUs,
 			RSSI:          rssi,

@@ -204,7 +204,7 @@ Each profile's `main.c` embeds `slaprf_flash_config_t`. [`internal/firmware/imag
 
 ## 6. DSP Pipeline & Sub-Frame Parabolic Peak Interpolation
 
-Implemented in [`internal/dsp/peak_detector.go`](../internal/dsp/peak_detector.go), each `(GatePuck, PilotSlot)` pair runs an independent `ChannelDetector` on the incoming 50 Hz (`20 ms`) stream:
+Implemented in [`internal/dsp/peak_detector.go`](../internal/dsp/peak_detector.go), each `(GateTimer, PilotSlot)` pair runs an independent `ChannelDetector` on the incoming 50 Hz (`20 ms`) stream:
 
 ```mermaid
 stateDiagram-v2
@@ -233,14 +233,14 @@ Every candidate crossing emitted by `ChannelDetector` passes through the 5-stage
 
 ```mermaid
 flowchart TD
-    Cand["Candidate GateCrossingEvent\n(puck, pilot, timestampUs, peakRssiDbm)"]
+    Cand["Candidate GateCrossingEvent\n(gate, pilot, timestampUs, peakRssiDbm)"]
     R1{"1. Gate Cool-Down\nsinceSameGate < GateCooldownSec\n(default 2.0 s)"}
     R2{"2. Stale Progress\nsinceLastGate > MaxLapSec\n(default 120 s)"}
     ResetProg["Reset pilotProgress{}\n(Pilot landed / swapped packs)"]
-    R3{"3. Min Section Time\npuck != lastPuck &&\nsinceLastGate < MinSectionSec\n(default 0.5 s)"}
-    R4{"4. Previous-Gate Echo\nsinceLastGate < EchoWindowSec (3.0 s)\n&& isPreviousGate(lastPuck, puck)"}
+    R3{"3. Min Section Time\ngate != lastGate &&\nsinceLastGate < MinSectionSec\n(default 0.5 s)"}
+    R4{"4. Previous-Gate Echo\nsinceLastGate < EchoWindowSec (3.0 s)\n&& isPreviousGate(lastGate, gate)"}
     R5{"5. Min Lap Time\nsinceSameGate < MinLapSec\n(default 5.0 s)"}
-    Accept["Accept Crossing\n• Record SectorSplit (fromPuck -> toPuck)\n• Update Overall / Personal Best badges"]
+    Accept["Accept Crossing\n• Record SectorSplit (fromGate -> toGate)\n• Update Overall / Personal Best badges"]
     IsSF{"Is Start / Finish Gate?"}
     HasStart{"Has valid lapStartUs?"}
     StartOnly["Set StartedLap = true\nStart lap clock (lapStartUs = timestampUs)\n🔊 Announcer calls out Pilot Name only"]

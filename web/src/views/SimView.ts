@@ -373,7 +373,7 @@ export class SimView extends Component {
   }
 
   private updateDronePositionsSmoothly(nowMs: number): void {
-    const numGates = Math.max(1, this.store.pucks.length);
+    const numGates = Math.max(1, this.store.nodes.length);
     const gateZeroOffset = 0.5 / numGates;
 
     this.motionBySlot.forEach((m, slotIndex) => {
@@ -453,18 +453,18 @@ export class SimView extends Component {
         break;
       }
       case "timer-power": {
-        const puckId = Number(btn.dataset.puckId);
-        if (Number.isFinite(puckId)) {
+        const timerId = Number(btn.dataset.timerId);
+        if (Number.isFinite(timerId)) {
           this.errorMsg = "";
-          void this.api.simTimerAction({ action: "toggle-power", puckId });
+          void this.api.simTimerAction({ action: "toggle-power", timerId });
         }
         break;
       }
       case "timer-delete": {
-        const puckId = Number(btn.dataset.puckId);
-        if (Number.isFinite(puckId)) {
+        const timerId = Number(btn.dataset.timerId);
+        if (Number.isFinite(timerId)) {
           this.errorMsg = "";
-          void this.api.simTimerAction({ action: "delete", puckId }).catch((err: unknown) => {
+          void this.api.simTimerAction({ action: "delete", timerId }).catch((err: unknown) => {
             this.errorMsg = err instanceof Error ? err.message : String(err);
             this.lastTimersSig = "";
             this.renderTimers(this.store.simState);
@@ -508,7 +508,7 @@ export class SimView extends Component {
   }
 
   private get orderedNodes(): TrackNode[] {
-    return [...this.store.pucks].sort((a, b) => a.trackOrder - b.trackOrder);
+    return [...this.store.nodes].sort((a, b) => a.trackOrder - b.trackOrder);
   }
 
   private renderCourse(simState: SimState | null): void {
@@ -517,7 +517,7 @@ export class SimView extends Component {
     const pilots = (simState?.pilots ?? []).filter((p) => p.enabled && p.channel > 0);
     const nodes = this.orderedNodes;
     const timersById = new Map<number, SimTimerState>(
-      (simState?.timers ?? []).map((t) => [t.puckId, t])
+      (simState?.timers ?? []).map((t) => [t.timerId, t])
     );
 
     const onTrackPilots = pilots.filter((p) => !isPilotInPits(p.status));
@@ -527,8 +527,8 @@ export class SimView extends Component {
       walkerActive ? "W1" : "W0",
       nodes
         .map((n) => {
-          const t = timersById.get(n.assignedPuckId);
-          return `${n.puckId}:${n.assignedPuckId}:${n.name}:${n.role}:${t?.poweredOn ? 1 : 0}:${t?.color ?? ""}`;
+          const t = timersById.get(n.assignedTimerId);
+          return `${n.gateId}:${n.assignedTimerId}:${n.name}:${n.role}:${t?.poweredOn ? 1 : 0}:${t?.color ?? ""}`;
         })
         .join(","),
       pilots.map((p) => `${p.slotIndex}:${p.callsign}:${p.color}:${p.status}`).join(","),
@@ -543,7 +543,7 @@ export class SimView extends Component {
         .map((node, index) => {
           const total = nodes.length;
           const isStart = node.role === "START_FINISH";
-          const assignedId = node.assignedPuckId ?? 0;
+          const assignedId = node.assignedTimerId ?? 0;
           const hasTimer = assignedId > 0;
           const tiedTimer = timersById.get(assignedId);
           const powered = tiedTimer ? tiedTimer.poweredOn : false;
@@ -552,11 +552,11 @@ export class SimView extends Component {
           const color = hasTimer ? timerColor(this.store, assignedId) : "#64748b";
 
           const lastNode = nodes[(total - 1 + total) % total];
-          const lastAssignedId = lastNode?.assignedPuckId ?? 0;
+          const lastAssignedId = lastNode?.assignedTimerId ?? 0;
           const lastColor = lastAssignedId > 0 ? timerColor(this.store, lastAssignedId) : "#64748b";
 
           const nextNode = nodes[(index + 1) % total];
-          const nextAssignedId = nextNode?.assignedPuckId ?? 0;
+          const nextAssignedId = nextNode?.assignedTimerId ?? 0;
           const nextColor = nextAssignedId > 0 ? timerColor(this.store, nextAssignedId) : "#64748b";
 
           const displayName = node.name.trim() || `Gate ${index + 1}`;
@@ -565,7 +565,7 @@ export class SimView extends Component {
 
           return `
             <div
-              class="gate-line-item sim-gate-node ${isStart ? "is-start" : ""} ${hasTimer && powered ? "has-puck" : "is-empty-gate"}"
+              class="gate-line-item sim-gate-node ${isStart ? "is-start" : ""} ${hasTimer && powered ? "has-timer" : "is-empty-gate"}"
               style="--c:${color}"
             >
               <div class="gate-line-track-seg is-before ${powered ? "" : "is-dashed-seg"}"></div>
@@ -592,8 +592,8 @@ export class SimView extends Component {
               </div>
 
               <div class="gate-node-circle ${hasTimer && powered ? "" : "is-unassigned"}">
-                <span class="gate-node-puck-code mono">${esc(shortCode)}</span>
-                <span class="gate-node-puck-meta">
+                <span class="gate-node-timer-code mono">${esc(shortCode)}</span>
+                <span class="gate-node-timer-meta">
                   <span class="gate-node-status-dot ${powered ? "is-online" : ""}"></span>
                   <span>${powered ? roleSub : "OFF"}</span>
                 </span>
@@ -962,7 +962,7 @@ export class SimView extends Component {
       timers
         .map(
           (t) =>
-            `${t.puckId}:${t.puckLabel}:${t.color}:${t.isHub ? 1 : 0}:${t.firmwareVersion}:${t.firmwareProfile}:${t.poweredOn ? 1 : 0}:${t.assignedGateName}`
+            `${t.timerId}:${t.timerLabel}:${t.color}:${t.isHub ? 1 : 0}:${t.firmwareVersion}:${t.firmwareProfile}:${t.poweredOn ? 1 : 0}:${t.assignedGateName}`
         )
         .join("|") + `|err:${this.errorMsg}`;
     if (sig === this.lastTimersSig) return;
@@ -971,22 +971,22 @@ export class SimView extends Component {
     const addBtn = this.slot("timer-add-btn") as HTMLButtonElement;
     if (addBtn) addBtn.disabled = !canAdd;
 
-    // Matches `.slot-table.puck-table` / `.puck-table-row` from `TimersList.ts` in System
+    // Matches `.slot-table.timer-table` / `.timer-table-row` from `TimersList.ts` in System
     const rows = timers
       .map((t: SimTimerState) => {
-        const title = t.puckLabel ? `T${t.puckId} · ${t.puckLabel}` : `T${t.puckId}`;
-        const color = timerColor(this.store, t.puckId);
+        const title = t.timerLabel ? `T${t.timerId} · ${t.timerLabel}` : `T${t.timerId}`;
+        const color = timerColor(this.store, t.timerId);
         const isLatestFw = t.firmwareVersion === LATEST_FIRMWARE_VERSION;
 
         return `
-          <div class="puck-table-row sim-puck-table-row ${t.poweredOn ? "" : "is-offline"}">
-            <div class="detected-puck-id">
+          <div class="timer-table-row sim-timer-table-row ${t.poweredOn ? "" : "is-offline"}">
+            <div class="detected-timer-id">
               <span class="gate-color-swatch" style="--c:${esc(color)};cursor:default"></span>
               <strong class="mono">${esc(title)}</strong>
             </div>
 
             <div>
-              <span class="puck-status-pill ${t.poweredOn ? "is-online" : "is-offline"}">
+              <span class="timer-status-pill ${t.poweredOn ? "is-online" : "is-offline"}">
                 <span class="status-dot ${t.poweredOn ? "is-up" : ""}"></span>
                 <span>${t.poweredOn ? "Powered on" : "Powered off"}</span>
               </span>
@@ -996,7 +996,7 @@ export class SimView extends Component {
               <span class="detected-role-pill ${t.isHub ? "is-hub" : ""}">${t.isHub ? "Hub" : "Spoke"}</span>
             </div>
 
-            <div class="puck-fw-cell" title="${esc(`${firmwareProfile(t.firmwareProfile).name} · ${t.firmwareVersion}`)}">
+            <div class="timer-fw-cell" title="${esc(`${firmwareProfile(t.firmwareProfile).name} · ${t.firmwareVersion}`)}">
               <span>${esc(firmwareProfile(t.firmwareProfile).name)}</span>
               ${isLatestFw ? "" : `<span class="badge tone-warn">Update → ${LATEST_FIRMWARE_VERSION}</span>`}
             </div>
@@ -1010,10 +1010,10 @@ export class SimView extends Component {
             </div>
 
             <div class="sim-timer-row-actions">
-              <button class="btn btn-sm ${t.poweredOn ? "btn-ghost" : "btn-armed"}" data-action="timer-power" data-puck-id="${t.puckId}">
+              <button class="btn btn-sm ${t.poweredOn ? "btn-ghost" : "btn-armed"}" data-action="timer-power" data-timer-id="${t.timerId}">
                 ${t.poweredOn ? "Turn off" : "Turn on"}
               </button>
-              <button class="btn btn-sm btn-ghost sim-btn-delete" data-action="timer-delete" data-puck-id="${t.puckId}" title="Delete simulated timer T${t.puckId}">
+              <button class="btn btn-sm btn-ghost sim-btn-delete" data-action="timer-delete" data-timer-id="${t.timerId}" title="Delete simulated timer T${t.timerId}">
                 Delete
               </button>
             </div>
@@ -1022,7 +1022,7 @@ export class SimView extends Component {
       .join("");
 
     const tableInnerHtml = `
-          <div class="puck-table-row sim-puck-table-row puck-table-head">
+          <div class="timer-table-row sim-timer-table-row timer-table-head">
             <span>Timer</span>
             <span>Power</span>
             <span>Role</span>
@@ -1033,7 +1033,7 @@ export class SimView extends Component {
           ${rows}`;
 
     const slotEl = this.slot("timers-table");
-    const existingTable = slotEl.querySelector<HTMLElement>(".slot-table.puck-table");
+    const existingTable = slotEl.querySelector<HTMLElement>(".slot-table.timer-table");
     if (existingTable) {
       let errEl = slotEl.querySelector<HTMLElement>(".sim-error-note");
       if (this.errorMsg) {
@@ -1053,7 +1053,7 @@ export class SimView extends Component {
     slotEl.innerHTML = `
       ${this.errorMsg ? `<div class="sim-error-note">${esc(this.errorMsg)}</div>` : ""}
       <div class="table-scroll">
-        <div class="slot-table puck-table">${tableInnerHtml}
+        <div class="slot-table timer-table">${tableInnerHtml}
         </div>
       </div>`;
   }

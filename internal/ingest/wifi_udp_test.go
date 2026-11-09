@@ -14,8 +14,8 @@ func TestSlidingWindowRecovers100PercentUnder50PercentPacketLoss(t *testing.T) {
 
 	// Simulate 40 consecutive 20 ms 5.8 GHz sweeps (seq 240..255, wrapping around to 0..23)
 	const totalSweeps = 40
-	var ring []domain.PuckTelemetryFrame
-	var recovered []domain.PuckTelemetryFrame
+	var ring []domain.TimerTelemetryFrame
+	var recovered []domain.TimerTelemetryFrame
 
 	var nowUs uint64 = 1_000_000
 	burstIdx := 0
@@ -25,8 +25,8 @@ func TestSlidingWindowRecovers100PercentUnder50PercentPacketLoss(t *testing.T) {
 		var rssi [domain.MaxPilotPoolSize]float32
 		rssi[0] = -80.0 + float32(step%15)
 
-		ring = append(ring, domain.PuckTelemetryFrame{
-			PuckID:        2,
+		ring = append(ring, domain.TimerTelemetryFrame{
+			TimerID:       2,
 			SeqNum:        uint32(seq),
 			TimestampUs:   nowUs,
 			RSSI:          rssi,
@@ -75,9 +75,9 @@ func TestCorruptedPacketRejectedAndHealedByNextWindow(t *testing.T) {
 	rx := NewWiFiUDPReceiver(":0", eng)
 	rx.IngestPacket(EncodeHelloFrame(3, 2, 0x00000003, 1, 50, "S2"), 0)
 
-	var samples [4]domain.PuckTelemetryFrame
+	var samples [4]domain.TimerTelemetryFrame
 	for i := 0; i < 4; i++ {
-		samples[i] = domain.PuckTelemetryFrame{PuckID: 3, SeqNum: uint32(i + 1)}
+		samples[i] = domain.TimerTelemetryFrame{TimerID: 3, SeqNum: uint32(i + 1)}
 	}
 
 	// Burst 1 (samples 1, 2) corrupted by a 2.4 GHz ELRS hop
@@ -106,10 +106,10 @@ func TestHelloMapsHubSlotToStableTimerByFingerprint(t *testing.T) {
 	rx.IngestPacket(EncodeHelloFrame(5, 2, 0xCAFEBABE, 3, 100, "S7"), 0)
 
 	var timerID uint8
-	for _, d := range eng.DetectedPucksSnapshot() {
+	for _, d := range eng.DetectedTimersSnapshot() {
 		if d.Fingerprint == "CAFEBABE" {
-			timerID = d.PuckID
-			if d.PuckLabel != "S7" || d.FirmwareProfile != "indoor" {
+			timerID = d.TimerID
+			if d.TimerLabel != "S7" || d.FirmwareProfile != "indoor" {
 				t.Fatalf("unexpected registered timer: %+v", d)
 			}
 		}
@@ -118,9 +118,9 @@ func TestHelloMapsHubSlotToStableTimerByFingerprint(t *testing.T) {
 		t.Fatal("expected Hello to register the fingerprinted timer")
 	}
 
-	samples := []domain.PuckTelemetryFrame{{SeqNum: 1}, {SeqNum: 2}}
+	samples := []domain.TimerTelemetryFrame{{SeqNum: 1}, {SeqNum: 2}}
 	got := rx.DecodePacket(EncodeWindowFrame(5, 4100, -92, samples), 1_000_000)
-	if len(got) != 2 || got[0].PuckID != timerID {
+	if len(got) != 2 || got[0].TimerID != timerID {
 		t.Fatalf("expected slot 5 frames to map to timer %d, got %+v", timerID, got)
 	}
 	if got[0].TimestampUs != 1_000_000-10_000 {
@@ -129,8 +129,8 @@ func TestHelloMapsHubSlotToStableTimerByFingerprint(t *testing.T) {
 
 	// Re-joining in a different slot keeps the same stable timer ID.
 	rx.IngestPacket(EncodeHelloFrame(2, 2, 0xCAFEBABE, 3, 100, "S7"), 0)
-	got = rx.DecodePacket(EncodeWindowFrame(2, 4100, -92, []domain.PuckTelemetryFrame{{SeqNum: 9}}), 2_000_000)
-	if len(got) != 1 || got[0].PuckID != timerID {
+	got = rx.DecodePacket(EncodeWindowFrame(2, 4100, -92, []domain.TimerTelemetryFrame{{SeqNum: 9}}), 2_000_000)
+	if len(got) != 1 || got[0].TimerID != timerID {
 		t.Fatalf("expected re-joined board to keep timer %d, got %+v", timerID, got)
 	}
 }
@@ -138,7 +138,7 @@ func TestHelloMapsHubSlotToStableTimerByFingerprint(t *testing.T) {
 func TestFramesFromUnannouncedSlotAreDropped(t *testing.T) {
 	eng := tracker.NewRealEngine()
 	rx := NewWiFiUDPReceiver(":0", eng)
-	if got := rx.DecodePacket(EncodeWindowFrame(4, 4100, -92, []domain.PuckTelemetryFrame{{SeqNum: 1}}), 1_000_000); len(got) != 0 {
+	if got := rx.DecodePacket(EncodeWindowFrame(4, 4100, -92, []domain.TimerTelemetryFrame{{SeqNum: 1}}), 1_000_000); len(got) != 0 {
 		t.Fatalf("expected frames from a slot without HELLO to be dropped, got %d", len(got))
 	}
 }
@@ -177,10 +177,10 @@ func TestSelectivePilotChannelTableAndUpperPoolMapping(t *testing.T) {
 
 	rx := NewWiFiUDPReceiver(":0", eng)
 	rx.IngestPacket(EncodeHelloFrame(1, 1, 0xBE7C0001, 3, 100, "H1"), 0)
-	var sample domain.PuckTelemetryFrame
+	var sample domain.TimerTelemetryFrame
 	sample.SeqNum = 1
 	sample.RSSI[4] = -47 // Hardware slot 4 carries Pilot 10's RSSI
-	decoded := rx.DecodePacket(EncodeWindowFrame(1, 4100, -92, []domain.PuckTelemetryFrame{sample}), 100_000)
+	decoded := rx.DecodePacket(EncodeWindowFrame(1, 4100, -92, []domain.TimerTelemetryFrame{sample}), 100_000)
 	if len(decoded) != 1 || decoded[0].RSSI[9] != -47 {
 		t.Fatalf("expected hardware slot 4 RSSI (-47 dBm) to map to Pilot 10 (idx 9), got %+v", decoded)
 	}

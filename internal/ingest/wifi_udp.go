@@ -88,7 +88,7 @@ func NewWiFiUDPReceiver(addr string, engine *tracker.Engine) *WiFiUDPReceiver {
 }
 
 // OnTelemetryFrame implements tracker.EventSubscriber.
-func (r *WiFiUDPReceiver) OnTelemetryFrame(domain.PuckTelemetryFrame) {}
+func (r *WiFiUDPReceiver) OnTelemetryFrame(domain.TimerTelemetryFrame) {}
 
 // OnGateCrossing implements tracker.EventSubscriber.
 func (r *WiFiUDPReceiver) OnGateCrossing(domain.GateCrossingEvent) {}
@@ -101,7 +101,7 @@ func (r *WiFiUDPReceiver) OnLapCompleted(domain.LapRecord, []domain.PilotTrackSu
 
 // OnConfigUpdated pushes the active pilot channel table to the Hub Timer whenever pilots are
 // enabled/disabled or their channels change.
-func (r *WiFiUDPReceiver) OnConfigUpdated(pilots []domain.PilotSlot, _ []domain.GatePuck) {
+func (r *WiFiUDPReceiver) OnConfigUpdated(pilots []domain.PilotSlot, _ []domain.TrackGate) {
 	freqs, _ := tracker.ComputeActivePilotChannels(pilots)
 	r.sendChannelsToHub(freqs)
 }
@@ -235,7 +235,7 @@ func (r *WiFiUDPReceiver) resolveSlotLocked(slot uint8) (uint8, uint64, bool) {
 	if info, ok := r.slots[slot]; ok {
 		return info.timerID, info.intervalUs, true
 	}
-	if r.engine != nil && r.engine.HasDetectedPuck(slot) {
+	if r.engine != nil && r.engine.HasDetectedTimer(slot) {
 		r.slots[slot] = slotInfo{timerID: slot, intervalUs: SampleIntervalUs}
 		return slot, SampleIntervalUs, true
 	}
@@ -244,7 +244,7 @@ func (r *WiFiUDPReceiver) resolveSlotLocked(slot uint8) (uint8, uint64, bool) {
 
 // DecodePacket parses a binary packet and returns only the newly recovered frames in
 // chronological order. Corrupted packets (CRC8 mismatch) or duplicate overlap samples are ignored.
-func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.PuckTelemetryFrame {
+func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.TimerTelemetryFrame {
 	if len(raw) < SingleFrameLen || raw[0] != FrameMagic0 {
 		return nil
 	}
@@ -278,7 +278,7 @@ func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.PuckTe
 			return nil
 		}
 
-		out := make([]domain.PuckTelemetryFrame, 0, sampleCount)
+		out := make([]domain.TimerTelemetryFrame, 0, sampleCount)
 		for idx := 0; idx < sampleCount; idx++ {
 			off := windowHeaderLen + idx*RawSampleBytes
 			seq := raw[off]
@@ -327,8 +327,8 @@ func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.PuckTe
 				}
 			}
 			r.lastTs[timerID] = sampleTs
-			out = append(out, domain.PuckTelemetryFrame{
-				PuckID:        timerID,
+			out = append(out, domain.TimerTelemetryFrame{
+				TimerID:       timerID,
 				SeqNum:        uint32(seq),
 				TimestampUs:   sampleTs,
 				RSSI:          rssi,
@@ -372,8 +372,8 @@ func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.PuckTe
 				rssi[pIdx] = val
 			}
 		}
-		return []domain.PuckTelemetryFrame{{
-			PuckID:        timerID,
+		return []domain.TimerTelemetryFrame{{
+			TimerID:       timerID,
 			SeqNum:        uint32(seq),
 			TimestampUs:   nowUs,
 			RSSI:          rssi,
@@ -386,7 +386,7 @@ func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.PuckTe
 
 // EncodeWindowFrame packs up to MaxWindowSamples consecutive sweeps (oldest -> newest) into a
 // sliding-window frame matching `timer_window_frame_t` in `firmware/xiao_c5_timer/main.c`.
-func EncodeWindowFrame(slot uint8, battMv uint16, noiseFloorDbm int8, samples []domain.PuckTelemetryFrame) []byte {
+func EncodeWindowFrame(slot uint8, battMv uint16, noiseFloorDbm int8, samples []domain.TimerTelemetryFrame) []byte {
 	count := len(samples)
 	if count > MaxWindowSamples {
 		samples = samples[count-MaxWindowSamples:]

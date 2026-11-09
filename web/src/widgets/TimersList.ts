@@ -26,11 +26,11 @@ export class TimersList extends Component {
 
     this.listen(el, "click", (e) => {
       const target = e.target as HTMLElement;
-      const toggleSwatch = target.closest<HTMLElement>("[data-toggle-puck-color]");
+      const toggleSwatch = target.closest<HTMLElement>("[data-toggle-timer-color]");
       if (toggleSwatch) {
         e.preventDefault();
         e.stopPropagation();
-        const timerId = Number(toggleSwatch.dataset.togglePuckColor);
+        const timerId = Number(toggleSwatch.dataset.toggleTimerColor);
         if (this.colorPickerTimerId === timerId) {
           this.closeColorPopover();
           this.render();
@@ -93,7 +93,7 @@ export class TimersList extends Component {
     this.render();
 
     const currentSwatch =
-      this.el.querySelector<HTMLElement>(`[data-toggle-puck-color="${timerId}"]`) ?? swatchEl;
+      this.el.querySelector<HTMLElement>(`[data-toggle-timer-color="${timerId}"]`) ?? swatchEl;
     const color = timerColor(this.store, timerId);
 
     const popover = document.createElement("div");
@@ -109,8 +109,8 @@ export class TimersList extends Component {
               type="button"
               class="gate-color-option ${selected ? "is-selected" : ""}"
               style="--c:${c}"
-              data-pick-puck-color="${c}"
-              data-for-puck="${timerId}"
+              data-pick-timer-color="${c}"
+              data-for-timer="${timerId}"
               title="${c}"
               aria-label="Select color ${c}"
               aria-selected="${selected}"
@@ -123,9 +123,9 @@ export class TimersList extends Component {
     this.positionColorPopover(currentSwatch, popover);
 
     popover.addEventListener("click", (e) => {
-      const pickBtn = (e.target as HTMLElement).closest<HTMLElement>("[data-pick-puck-color]");
+      const pickBtn = (e.target as HTMLElement).closest<HTMLElement>("[data-pick-timer-color]");
       if (!pickBtn) return;
-      const pickedColor = pickBtn.dataset.pickPuckColor ?? "";
+      const pickedColor = pickBtn.dataset.pickTimerColor ?? "";
       this.closeColorPopover();
       this.render();
       void this.api.updateTimerColor(timerId, pickedColor);
@@ -135,7 +135,7 @@ export class TimersList extends Component {
       const t = e.target as Node | null;
       if (!t) return;
       const liveSwatch = this.el.querySelector<HTMLElement>(
-        `[data-toggle-puck-color="${timerId}"]`
+        `[data-toggle-timer-color="${timerId}"]`
       );
       if (popover.contains(t) || (liveSwatch && liveSwatch.contains(t))) return;
       this.closeColorPopover();
@@ -152,7 +152,7 @@ export class TimersList extends Component {
 
     const onReposition = () => {
       const liveSwatch = this.el.querySelector<HTMLElement>(
-        `[data-toggle-puck-color="${timerId}"]`
+        `[data-toggle-timer-color="${timerId}"]`
       );
       if (!liveSwatch || !document.body.contains(liveSwatch)) {
         this.closeColorPopover();
@@ -179,12 +179,12 @@ export class TimersList extends Component {
       this.store.detectedTimers.length > 0
         ? [...this.store.detectedTimers]
         : this.store.nodes
-            .filter((p) => (p.assignedPuckId ?? p.puckId) > 0)
+            .filter((p) => (p.assignedTimerId ?? p.gateId) > 0)
             .map((p) => ({
-              puckId: p.assignedPuckId ?? p.puckId,
-              puckLabel: p.puckLabel ?? "",
+              timerId: p.assignedTimerId ?? p.gateId,
+              timerLabel: p.timerLabel ?? "",
               color: p.color,
-              isHub: (p.assignedPuckId ?? p.puckId) === 1,
+              isHub: (p.assignedTimerId ?? p.gateId) === 1,
               firmwareVersion: p.firmwareVersion ?? LATEST_FIRMWARE_VERSION,
               batteryMv: p.batteryMv,
               batteryPct: p.batteryPct,
@@ -192,14 +192,14 @@ export class TimersList extends Component {
               online: p.online,
               lastSeenAt: p.lastSeenAt,
             }));
-    return raw.sort((a, b) => a.puckId - b.puckId);
+    return raw.sort((a, b) => a.timerId - b.timerId);
   }
 
   private formatTitle(d: DetectedTimer): string {
-    if (d.puckLabel && d.puckLabel.trim() !== "") {
-      return `T${d.puckId} · ${d.puckLabel.trim()}`;
+    if (d.timerLabel && d.timerLabel.trim() !== "") {
+      return `T${d.timerId} · ${d.timerLabel.trim()}`;
     }
-    return `T${d.puckId}`;
+    return `T${d.timerId}`;
   }
 
   private render(): void {
@@ -214,7 +214,7 @@ export class TimersList extends Component {
     }
 
     const innerHtml = `
-          <div class="puck-table-row puck-table-head">
+          <div class="timer-table-row timer-table-head">
             <span>Timer</span>
             <span>Status</span>
             <span>Role</span>
@@ -224,7 +224,7 @@ export class TimersList extends Component {
           </div>
           ${timers.map((d) => this.renderRow(d)).join("")}`;
 
-    const existingTable = this.el.querySelector<HTMLElement>(".slot-table.puck-table");
+    const existingTable = this.el.querySelector<HTMLElement>(".slot-table.timer-table");
     if (existingTable) {
       existingTable.innerHTML = innerHtml;
       return;
@@ -232,7 +232,7 @@ export class TimersList extends Component {
 
     this.el.innerHTML = `
       <div class="table-scroll">
-        <div class="slot-table puck-table">${innerHtml}
+        <div class="slot-table timer-table">${innerHtml}
         </div>
       </div>`;
   }
@@ -240,23 +240,23 @@ export class TimersList extends Component {
   private renderRow(d: DetectedTimer): string {
     const title = this.formatTitle(d);
     const tone = d.batteryPct <= 20 ? "bad" : d.batteryPct <= 40 ? "warn" : "good";
-    const color = timerColor(this.store, d.puckId);
-    const isPickerOpen = this.colorPickerTimerId === d.puckId;
+    const color = timerColor(this.store, d.timerId);
+    const isPickerOpen = this.colorPickerTimerId === d.timerId;
     const fwVer = d.firmwareVersion || LATEST_FIRMWARE_VERSION;
     const isLatestFw = fwVer === LATEST_FIRMWARE_VERSION;
     const profile = firmwareProfile(d.firmwareProfile);
 
     return `
-      <div class="puck-table-row ${isPickerOpen ? "is-picker-open" : ""} ${d.online ? "" : "is-offline"}">
-        <div class="detected-puck-id">
+      <div class="timer-table-row ${isPickerOpen ? "is-picker-open" : ""} ${d.online ? "" : "is-offline"}">
+        <div class="detected-timer-id">
           <div class="gate-color-wrap">
             <button
               type="button"
               class="gate-color-swatch ${isPickerOpen ? "is-open" : ""}"
-              data-toggle-puck-color="${d.puckId}"
+              data-toggle-timer-color="${d.timerId}"
               style="--c:${color}"
               title="Choose timer color"
-              aria-label="Choose Timer ${d.puckId} color"
+              aria-label="Choose Timer ${d.timerId} color"
               aria-expanded="${isPickerOpen}"
             ></button>
           </div>
@@ -264,7 +264,7 @@ export class TimersList extends Component {
         </div>
 
         <div>
-          <span class="puck-status-pill ${d.online ? "is-online" : "is-offline"}">
+          <span class="timer-status-pill ${d.online ? "is-online" : "is-offline"}">
             <span class="status-dot ${d.online ? "is-up" : ""}"></span>
             <span>${d.online ? "Online" : "Offline"}</span>
           </span>
@@ -274,7 +274,7 @@ export class TimersList extends Component {
           <span class="detected-role-pill ${d.isHub ? "is-hub" : ""}">${d.isHub ? "Hub" : "Spoke"}</span>
         </div>
 
-        <div class="puck-fw-cell" title="${esc(`${profile.name} · ${fwVer}`)}">
+        <div class="timer-fw-cell" title="${esc(`${profile.name} · ${fwVer}`)}">
           <span>${esc(profile.name)}</span>
           ${
             isLatestFw
@@ -285,9 +285,9 @@ export class TimersList extends Component {
 
         <div class="mono muted">${d.online ? `${d.noiseFloorDbm.toFixed(0)} dBm` : "—"}</div>
 
-        <div class="puck-battery-cell">
-          <div class="meter puck-battery-meter"><span class="meter-fill tone-${tone}" style="width:${d.batteryPct}%"></span></div>
-          <span class="mono puck-battery-text">${d.batteryPct}% · ${(d.batteryMv / 1000).toFixed(2)} V</span>
+        <div class="timer-battery-cell">
+          <div class="meter timer-battery-meter"><span class="meter-fill tone-${tone}" style="width:${d.batteryPct}%"></span></div>
+          <span class="mono timer-battery-text">${d.batteryPct}% · ${(d.batteryMv / 1000).toFixed(2)} V</span>
         </div>
       </div>`;
   }

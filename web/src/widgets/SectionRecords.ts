@@ -31,10 +31,10 @@ export class SectionRecords extends Component {
     const head = records
       .map(
         (r) =>
-          `<th class="num" title="${esc(sectionLabel(this.store, r.fromPuckId, r.toPuckId))}">${sectionIdBadge(
+          `<th class="num" title="${esc(sectionLabel(this.store, r.fromGateId, r.toGateId))}">${sectionIdBadge(
             this.store,
-            r.fromPuckId,
-            r.toPuckId
+            r.fromGateId,
+            r.toGateId
           )}</th>`
       )
       .join("");

@@ -27,7 +27,7 @@ function loadConsistency(store: AppStore): ConsistencyData {
 }
 
 function sectionName(store: AppStore, r: ConsistencyRow): string {
-  return `${sectionShort(store, r.fromPuckId)} · ${sectionLabel(store, r.fromPuckId, r.toPuckId)}`;
+  return `${sectionShort(store, r.fromGateId)} · ${sectionLabel(store, r.fromGateId, r.toGateId)}`;
 }
 
 /**
@@ -68,7 +68,7 @@ export class SectionStats extends Component {
                   <tr class="${isTop ? "is-top" : ""}">
                     <td>
                       <span class="stats-sec">
-                        ${routeLabel(this.store, r.fromPuckId, r.toPuckId)}
+                        ${routeLabel(this.store, r.fromGateId, r.toGateId)}
                         ${isTop ? `<span class="badge">Biggest opportunity</span>` : ""}
                       </span>
                     </td>

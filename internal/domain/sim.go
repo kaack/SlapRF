@@ -60,8 +60,8 @@ type SimPilotState struct {
 
 // SimTimerState describes a simulated XIAO ESP32-C5 hardware timer in the Sim tab.
 type SimTimerState struct {
-	PuckID           uint8   `json:"puckId"`
-	PuckLabel        string  `json:"puckLabel"`
+	TimerID          uint8   `json:"timerId"`
+	TimerLabel       string  `json:"timerLabel"`
 	Color            string  `json:"color"`
 	IsHub            bool    `json:"isHub"`
 	FirmwareVersion  string  `json:"firmwareVersion"`

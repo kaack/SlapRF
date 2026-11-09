@@ -42,7 +42,7 @@ flowchart LR
 | Web | `web/src/views/debug/charts.ts` | Canvas charts: signal over time, noise stats, spectrum scan, waterfall, health sparklines, CSV/PNG export |
 | Web | `web/src/core/router.ts`, `layout/AppShell.ts`, `core/icons.ts` | Route `debug`, view factory, `icons.bug` |
 | Web | `web/styles/views.css` (end of file, `.debug-*`) | Styles |
-| Server | `internal/api/debug_timer.go` | `GET /api/debug/timer?fp=XXXXXXXX` → `{found, puckId, label, online, lastSeenAt, msSinceSeen, framesRx, simulatorActive}` (always the real engine) |
+| Server | `internal/api/debug_timer.go` | `GET /api/debug/timer?fp=XXXXXXXX` → `{found, timerId, label, online, lastSeenAt, msSinceSeen, framesRx, simulatorActive}` (always the real engine) |
 | Tools | `firmware/tools/console_check.py COM3` | Protocol regression test (all commands) |
 | Tools | `firmware/tools/noise_stats.py COM3 [s]` | Per-channel noise / hit statistics from `LIVE 2` |
 | Tools | `firmware/tools/benchpatch/main.go.txt` | Stamps role, fingerprint, channel table into a merged image (copy to `cmd/_benchpatch/main.go`, run, delete) |
@@ -168,7 +168,7 @@ per pass) and PNG (`canvas.toBlob`). Include timer label/fp and timestamp in fil
 - Each reflash drops the PC off the Hub's SlapRF Wi-Fi; Windows doesn't rejoin by itself.
 
 ## 8. Later: network health (separate task)
-Each timer sends a small health frame through the Hub every 2 s (new magic `0xC5 0x5E`: uptime, reset reason, max sweep µs, beacon misses, dropped frames, heap, noise floor). The laptop adds a per-timer **Health** drawer on the Timers list (`internal/ingest/wifi_udp.go` decoding + a field on `DetectedPuck`).
+Each timer sends a small health frame through the Hub every 2 s (new magic `0xC5 0x5E`: uptime, reset reason, max sweep µs, beacon misses, dropped frames, heap, noise floor). The laptop adds a per-timer **Health** drawer on the Timers list (`internal/ingest/wifi_udp.go` decoding + a field on `DetectedTimer`).
 
 ## 9. Conventions (must follow)
 - **Builds:** Go always with `-ldflags="-s -w"`; no Node/npm (TS is bundled by Go esbuild, which does **not** type-check: be careful with types). Web: `go run -ldflags="-s -w" ./cmd/build-web -web ./web -out ./_site`. Server: `go build -ldflags="-s -w" -o slaprf.exe ./cmd/slaprf` (stop the running `slaprf.exe` first, restart with `.\slaprf.exe -open=false`, port 8090; it serves the TS bundle on the fly). Firmware: ESP-IDF **v5.5.1** only, `firmware\tools\build_local.bat <profile>`.

@@ -25,13 +25,13 @@ func TestSimulatedLapsVisitEveryGate(t *testing.T) {
 		nowUs += 20_000
 	}
 
-	_, pucks, laps, _, _ := engine.StateSnapshot()
+	_, gates, laps, _, _ := engine.StateSnapshot()
 	if len(laps) < 60 {
 		t.Fatalf("expected at least 60 laps in 10 minutes, got %d", len(laps))
 	}
 	incomplete := 0
 	for _, lap := range laps {
-		if len(lap.Sectors) != len(pucks) {
+		if len(lap.Sectors) != len(gates) {
 			incomplete++
 			t.Logf("%s lap %d: %d sectors %+v", lap.Callsign, lap.LapNumber, len(lap.Sectors), lap.Sectors)
 		}
@@ -99,7 +99,7 @@ func TestSimulatorControlsAndTimerLifecycle(t *testing.T) {
 	}
 	snap = sim.Snapshot()
 	for _, tm := range snap.Timers {
-		if tm.PuckID == 2 && (tm.PoweredOn || tm.Online) {
+		if tm.TimerID == 2 && (tm.PoweredOn || tm.Online) {
 			t.Fatalf("expected T2 PoweredOn=false and Online=false, got %+v", tm)
 		}
 	}

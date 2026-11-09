@@ -145,7 +145,7 @@ export class TimingRulesEditor extends Component {
     // Re-render on rule / gate changes, unless the user is actively typing in an input.
     this.onDispose(
       store.subscribe(["rules", "config"], () => {
-        if (this.scope !== null && !store.puck(this.scope)) this.scope = null;
+        if (this.scope !== null && !store.node(this.scope)) this.scope = null;
         const active = document.activeElement;
         const editing = active instanceof HTMLInputElement && this.el.contains(active);
         if (!editing) this.render();
@@ -161,7 +161,7 @@ export class TimingRulesEditor extends Component {
 
   private render(): void {
     const r = this.store.rules;
-    const gate = this.scope === null ? undefined : this.store.puck(this.scope);
+    const gate = this.scope === null ? undefined : this.store.node(this.scope);
     const overrides = this.overridesOf(gate);
 
     const scopes = [
@@ -169,14 +169,14 @@ export class TimingRulesEditor extends Component {
         <span class="dot channel-all-dot"></span>
         <span class="channel-name">All gates</span>
       </button>`,
-      ...this.store.pucks.map((p) => {
+      ...this.store.nodes.map((p) => {
         const n = Object.keys(this.overridesOf(p)).length;
-        const on = this.scope === p.puckId;
+        const on = this.scope === p.gateId;
         const dim = this.scope !== null && !on;
-        return `<button type="button" class="channel ${on ? "is-focus" : ""} ${dim ? "is-dim" : ""}" data-scope="${p.puckId}"
+        return `<button type="button" class="channel ${on ? "is-focus" : ""} ${dim ? "is-dim" : ""}" data-scope="${p.gateId}"
                   title="${n ? `${n} rule${n > 1 ? "s" : ""} overridden at this gate` : "Uses the global rules"}">
-                  <span class="dot" style="--c:${gateColor(this.store, p.puckId)}"></span>
-                  <span class="channel-name">${esc(gateLabel(this.store, p.puckId))}</span>
+                  <span class="dot" style="--c:${gateColor(this.store, p.gateId)}"></span>
+                  <span class="channel-name">${esc(gateLabel(this.store, p.gateId))}</span>
                   ${n ? `<span class="channel-custom-icon" aria-hidden="true">${icons.pencil(12)}</span>` : ""}
                 </button>`;
       }),
@@ -202,7 +202,7 @@ export class TimingRulesEditor extends Component {
     }).join("");
 
     const foot = gate
-      ? `<p class="note">Edited rules apply only to ${esc(gateLabel(this.store, gate.puckId))}.</p>
+      ? `<p class="note">Edited rules apply only to ${esc(gateLabel(this.store, gate.gateId))}.</p>
          ${Object.keys(overrides).length ? `<button class="btn btn-ghost btn-sm" type="button" data-action="clear">Use all-gate rules</button>` : ""}`
       : `<p class="note">Applies to new detections.</p>
          <button class="btn btn-ghost btn-sm" type="button" data-action="defaults">Restore defaults</button>`;
@@ -280,16 +280,16 @@ export class TimingRulesEditor extends Component {
   private renderOverrideNote(spec: RuleSpec): string {
     if (!spec.perGate) return "";
     const key = spec.key as GateRuleKey;
-    const list = this.store.pucks
+    const list = this.store.nodes
       .filter((p) => this.overridesOf(p)[key] !== undefined)
-      .map((p) => `${esc(gateLabel(this.store, p.puckId))} ${this.overridesOf(p)[key]} s`);
+      .map((p) => `${esc(gateLabel(this.store, p.gateId))} ${this.overridesOf(p)[key]} s`);
     return list.length ? `<div class="rule-override-note">Overridden at ${list.join(", ")}</div>` : "";
   }
 
   private renderCounts(): void {
     const counts = new Map<FilterReason, number>();
     for (const f of this.store.filtered) {
-      if (this.scope !== null && f.puckId !== this.scope) continue;
+      if (this.scope !== null && f.gateId !== this.scope) continue;
       counts.set(f.reason, (counts.get(f.reason) ?? 0) + 1);
     }
     const where = this.scope === null ? "" : " here";

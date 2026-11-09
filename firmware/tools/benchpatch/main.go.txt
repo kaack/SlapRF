@@ -18,7 +18,7 @@ func main() {
 	if err != nil {
 		panic(err)
 	}
-	built, err := firmware.PatchImage(base, firmware.TimerConfig{Role: firmware.RoleHubTimer, Profile: "open-ground", Fingerprint: 0xBE7C0001, PuckLabel: "H1"})
+	built, err := firmware.PatchImage(base, firmware.TimerConfig{Role: firmware.RoleHubTimer, Profile: "open-ground", Fingerprint: 0xBE7C0001, TimerLabel: "H1"})
 	if err != nil {
 		panic(err)
 	}

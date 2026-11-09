@@ -206,8 +206,8 @@ function upgradeSelectElement(selectEl: HTMLSelectElement): void {
   if (selectEl.classList.contains("flasher-ssid-select")) {
     wrapper.classList.add("flasher-ssid-select");
   }
-  if (selectEl.classList.contains("gate-puck-select")) {
-    wrapper.classList.add("gate-puck-select");
+  if (selectEl.classList.contains("gate-timer-select")) {
+    wrapper.classList.add("gate-timer-select");
   }
 
   const trigger = document.createElement("button");

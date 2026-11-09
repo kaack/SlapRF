@@ -19,19 +19,19 @@ func newRig(t *testing.T) *crossingRig {
 	return &crossingRig{t: t, e: e, pilot: e.pilots[0]}
 }
 
-// pass feeds one detection at gate `puckID`, `atSec` seconds into the session.
-func (r *crossingRig) pass(puckID uint8, atSec float64) crossingOutcome {
+// pass feeds one detection at gate `gateID`, `atSec` seconds into the session.
+func (r *crossingRig) pass(gateID uint8, atSec float64) crossingOutcome {
 	r.t.Helper()
 	r.e.mu.Lock()
 	defer r.e.mu.Unlock()
-	var puck domain.GatePuck
-	for _, p := range r.e.pucks {
-		if p.PuckID == puckID {
-			puck = p
+	var gate domain.TrackGate
+	for _, g := range r.e.gates {
+		if g.GateID == gateID {
+			gate = g
 		}
 	}
-	out := r.e.applyCrossingLocked(r.pilot, puck, domain.GateCrossingEvent{
-		PuckID:      puckID,
+	out := r.e.applyCrossingLocked(r.pilot, gate, domain.GateCrossingEvent{
+		GateID:      gateID,
 		SlotIndex:   r.pilot.SlotIndex,
 		TimestampUs: uint64(atSec * 1e6),
 	})
@@ -148,7 +148,7 @@ func TestMissedSectorGateStillCompletesLap(t *testing.T) {
 	r := newRig(t)
 	r.pass(1, 10)
 	r.pass(2, 13)
-	// G3 missed (puck blocked / offline).
+	// G3 missed (timer blocked / offline).
 	r.pass(4, 20)
 	out := r.pass(1, 24)
 	if out.lap == nil || len(out.lap.Sectors) != 3 {

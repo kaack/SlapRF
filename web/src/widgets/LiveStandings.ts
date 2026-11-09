@@ -78,12 +78,12 @@ export class LiveStandings extends Component {
   private renderRow(s: PracticeStats, rank: number, sessionBest: number): string {
     const { pilot } = s;
     const sector = s.onTrack ? currentSectorIndex(this.store, pilot.slotIndex) : -1;
-    const pucks = this.store.pucks;
-    const segments = pucks
+    const gates = this.store.nodes;
+    const segments = gates
       .map((p, i) => {
-        const nextPuck = pucks[(i + 1) % pucks.length];
-        const c1 = gateColor(this.store, p.puckId);
-        const c2 = nextPuck ? gateColor(this.store, nextPuck.puckId) : c1;
+        const nextGate = gates[(i + 1) % gates.length];
+        const c1 = gateColor(this.store, p.gateId);
+        const c2 = nextGate ? gateColor(this.store, nextGate.gateId) : c1;
         return `<span class="seg ${i < sector ? "is-done" : i === sector ? "is-live" : ""}" style="--c1:${c1};--c2:${c2}"></span>`;
       })
       .join("");

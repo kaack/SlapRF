@@ -6,7 +6,7 @@ import (
 
 // CrossingCandidate is returned when a pilot completes a valid gate pass (enter -> peak -> exit nadir).
 type CrossingCandidate struct {
-	PuckID            uint8
+	GateID            uint8
 	SlotIndex         int
 	TimestampUs       uint64
 	PeakRSSIDbm       float32
@@ -20,9 +20,9 @@ type samplePoint struct {
 	rssiDbm     float32
 }
 
-// ChannelDetector tracks the real-time 5.8 GHz RSSI envelope for a single (PuckID, PilotSlot) pair.
+// ChannelDetector tracks the real-time 5.8 GHz RSSI envelope for a single (GateID, PilotSlot) pair.
 type ChannelDetector struct {
-	puckID          uint8
+	gateID          uint8
 	slotIndex       int
 	smoothedRSSI    float32
 	initialized     bool
@@ -41,10 +41,10 @@ type ChannelDetector struct {
 // through are then handled by the engine's gate cool-down rule.
 const rearmTimeoutUs = 2_500_000
 
-// NewChannelDetector initializes a stateful RSSI peak detector for one gate puck and one pilot slot.
-func NewChannelDetector(puckID uint8, slotIndex int) *ChannelDetector {
+// NewChannelDetector initializes a stateful RSSI peak detector for one gate timer and one pilot slot.
+func NewChannelDetector(gateID uint8, slotIndex int) *ChannelDetector {
 	return &ChannelDetector{
-		puckID:        puckID,
+		gateID:        gateID,
 		slotIndex:     slotIndex,
 		smoothedRSSI:  -92.0,
 		windowSamples: make([]samplePoint, 0, 64),
@@ -129,7 +129,7 @@ func (d *ChannelDetector) ProcessSample(
 		laprfHeight := float32(math.Max(400, math.Min(3900, float64(d.peakRSSI+95.0)*46.0)))
 
 		return &CrossingCandidate{
-			PuckID:            d.puckID,
+			GateID:            d.gateID,
 			SlotIndex:         d.slotIndex,
 			TimestampUs:       refinedTimeUs,
 			PeakRSSIDbm:       d.peakRSSI,

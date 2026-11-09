@@ -43,7 +43,7 @@ export class AllPilotsPanel extends Component {
     const s = this.store;
     const flying = s.enabledPilots.filter((p) => practiceStats(s, p).onTrack).length;
     const fastest = fastestLap(s);
-    const online = s.pucks.filter((p) => p.online).length;
+    const online = s.nodes.filter((p) => p.online).length;
 
     this.slot("stats").innerHTML = renderStatTiles([
       { label: "Flying now", value: String(flying), sub: `${s.enabledPilots.length} pilots enabled` },
@@ -56,9 +56,9 @@ export class AllPilotsPanel extends Component {
       },
       {
         label: "Gates online",
-        value: `${online}/${s.pucks.length}`,
-        sub: s.pucks.length ? `Lowest battery ${s.pucks.reduce((m, p) => Math.min(m, p.batteryPct), 100)}%` : "No gates",
-        tone: online < s.pucks.length ? "bad" : undefined,
+        value: `${online}/${s.nodes.length}`,
+        sub: s.nodes.length ? `Lowest battery ${s.nodes.reduce((m, p) => Math.min(m, p.batteryPct), 100)}%` : "No gates",
+        tone: online < s.nodes.length ? "bad" : undefined,
       },
     ]);
   }

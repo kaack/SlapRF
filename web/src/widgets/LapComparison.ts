@@ -67,8 +67,8 @@ export class LapComparison extends Component {
       ${this.renderAnalysis(cmp)}`;
   }
 
-  private sectionName(s: { fromPuckId: number; toPuckId: number }): string {
-    return `${sectionShort(this.store, s.fromPuckId)} · ${sectionLabel(this.store, s.fromPuckId, s.toPuckId)}`;
+  private sectionName(s: { fromGateId: number; toGateId: number }): string {
+    return `${sectionShort(this.store, s.fromGateId)} · ${sectionLabel(this.store, s.fromGateId, s.toGateId)}`;
   }
 
   /** Plain-language takeaway for the two laps, in the same style as the Recommendation card. */
@@ -142,8 +142,8 @@ export class LapComparison extends Component {
       </tr>`;
   }
 
-  private route(s: { fromPuckId: number; toPuckId: number }): string {
-    return routeLabel(this.store, s.fromPuckId, s.toPuckId);
+  private route(s: { fromGateId: number; toGateId: number }): string {
+    return routeLabel(this.store, s.fromGateId, s.toGateId);
   }
 }
 

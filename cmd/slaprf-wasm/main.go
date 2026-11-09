@@ -50,7 +50,7 @@ func (w *wasmStreamSubscriber) send(eventType string, payload interface{}) {
 	cb.Invoke(string(b))
 }
 
-func (w *wasmStreamSubscriber) OnTelemetryFrame(frame domain.PuckTelemetryFrame) {
+func (w *wasmStreamSubscriber) OnTelemetryFrame(frame domain.TimerTelemetryFrame) {
 	w.send("telemetry", frame)
 }
 
@@ -69,10 +69,10 @@ func (w *wasmStreamSubscriber) OnLapCompleted(lap domain.LapRecord, summaries []
 	})
 }
 
-func (w *wasmStreamSubscriber) OnConfigUpdated(pilots []domain.PilotSlot, pucks []domain.GatePuck) {
+func (w *wasmStreamSubscriber) OnConfigUpdated(pilots []domain.PilotSlot, gates []domain.TrackGate) {
 	w.send("config", map[string]interface{}{
 		"pilots": pilots,
-		"pucks":  pucks,
+		"gates":  gates,
 	})
 }
 

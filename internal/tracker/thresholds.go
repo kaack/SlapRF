@@ -17,19 +17,19 @@ const defaultExitGapDb float32 = 10
 func (e *Engine) SetGateThresholds(updates []domain.GateThresholdUpdate) error {
 	e.mu.Lock()
 	type target struct {
-		puck, slot int
+		gate, slot int
 		enter      float32
 	}
 	targets := make([]target, 0, len(updates))
 	for _, u := range updates {
-		pi := -1
-		for i := range e.pucks {
-			if e.pucks[i].PuckID == u.PuckID {
-				pi = i
+		gi := -1
+		for i := range e.gates {
+			if e.gates[i].GateID == u.GateID {
+				gi = i
 				break
 			}
 		}
-		if pi < 0 {
+		if gi < 0 {
 			e.mu.Unlock()
 			return ErrUnknownGate
 		}
@@ -42,19 +42,19 @@ func (e *Engine) SetGateThresholds(updates []domain.GateThresholdUpdate) error {
 		if enter != 0 {
 			enter = clampDbm(enter)
 		}
-		targets = append(targets, target{pi, si, enter})
+		targets = append(targets, target{gi, si, enter})
 	}
 	for _, t := range targets {
-		e.pucks[t.puck].EnterThresholds[t.slot] = t.enter
+		e.gates[t.gate].EnterThresholds[t.slot] = t.enter
 	}
 
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
-	pucks := append([]domain.GatePuck(nil), e.pucks...)
+	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
 	e.mu.Unlock()
 
 	for _, s := range subs {
-		s.OnConfigUpdated(pilots, pucks)
+		s.OnConfigUpdated(pilots, gates)
 	}
 	return nil
 }
@@ -62,13 +62,13 @@ func (e *Engine) SetGateThresholds(updates []domain.GateThresholdUpdate) error {
 // thresholdsFor returns the enter / exit thresholds a gate uses for the pilot at position
 // slotPos: the gate's calibrated value if set, otherwise the pilot's own. The exit
 // threshold keeps the pilot's enter→exit gap.
-func thresholdsFor(puck *domain.GatePuck, slotPos int, pilot domain.PilotSlot) (enter, exit float32) {
+func thresholdsFor(gate *domain.TrackGate, slotPos int, pilot domain.PilotSlot) (enter, exit float32) {
 	gap := pilot.EnterThreshold - pilot.ExitThreshold
 	if gap <= 0 {
 		gap = defaultExitGapDb
 	}
 	enter = pilot.EnterThreshold
-	if v := puck.EnterThresholds[slotPos]; v != 0 {
+	if v := gate.EnterThresholds[slotPos]; v != 0 {
 		enter = v
 	}
 	return enter, enter - gap

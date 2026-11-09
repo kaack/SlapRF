@@ -20,8 +20,8 @@ export interface PilotSlot {
 }
 
 export interface DetectedTimer {
-  puckId: number;
-  puckLabel: string;
+  timerId: number;
+  timerLabel: string;
   color?: string;
   isHub: boolean;
   firmwareVersion?: string;
@@ -37,11 +37,11 @@ export interface DetectedTimer {
 }
 
 export interface TrackNode {
-  puckId: number;
+  gateId: number;
   /** Physical XIAO timer ID placed at this track node (0 = no timer assigned). */
-  assignedPuckId: number;
+  assignedTimerId: number;
   /** Flashed hardware ID / name stamped onto the timer (e.g. "Hub-1", "Blue-Timer"). */
-  puckLabel?: string;
+  timerLabel?: string;
   /** Running firmware release version on the assigned timer (e.g. "v0.1.4"). */
   firmwareVersion?: string;
   /** Optional display-name override configured in the Track editor. */
@@ -67,7 +67,7 @@ export interface TrackNode {
 
 /** Calibrates one track node for one pilot (`POST /api/thresholds`). enterDbm 0 = back to the pilot's default. */
 export interface GateThresholdUpdate {
-  puckId: number;
+  gateId: number;
   slotIndex: number;
   enterDbm: number;
 }
@@ -75,20 +75,20 @@ export interface GateThresholdUpdate {
 /**
  * Edit to one track node (`POST /api/track/update`). An empty name means "Gate N" by position.
  * trackOrder (0-based) moves the node; omit it to leave the node where it is.
- * assignedPuckId binds a physical detected timer (1..16) or 0 to unassign.
+ * assignedTimerId binds a physical detected timer (1..16) or 0 to unassign.
  */
 export interface TrackNodeUpdate {
-  puckId: number;
+  gateId: number;
   name: string;
   color?: string;
   role: TimerRole;
   trackOrder?: number;
-  assignedPuckId?: number;
+  assignedTimerId?: number;
 }
 export type GateUpdate = TrackNodeUpdate;
 
 export interface TimerTelemetryFrame {
-  puckId: number;
+  timerId: number;
   seqNum: number;
   timestampUs: number;
   rssi: number[];
@@ -98,8 +98,8 @@ export interface TimerTelemetryFrame {
 
 export interface GateCrossingEvent {
   eventId: number;
-  puckId: number;
-  puckName: string;
+  gateId: number;
+  gateName: string;
   isStartFinish: boolean;
   startedLap?: boolean;
   slotIndex: number;
@@ -115,8 +115,8 @@ export interface GateCrossingEvent {
 
 export interface SectorSplit {
   sectorIndex: number;
-  fromPuckId: number;
-  toPuckId: number;
+  fromGateId: number;
+  toGateId: number;
   label: string;
   splitSeconds: number;
   deltaToBestSec: number;
@@ -139,8 +139,8 @@ export interface LapRecord {
 export interface SectorBottleneckStat {
   sectorIndex: number;
   label: string;
-  fromPuckId: number;
-  toPuckId: number;
+  fromGateId: number;
+  toGateId: number;
   bestSplitSec: number;
   averageSplitSec: number;
   stdDevSec: number;
@@ -159,7 +159,7 @@ export interface PilotTrackSummary {
   theoreticalBestSec: number;
   potentialGainSec: number;
   currentSectorIndex: number;
-  lastPuckId: number;
+  lastGateId: number;
   sectorStats: SectorBottleneckStat[];
 }
 
@@ -219,8 +219,8 @@ export interface SimPilotState {
 }
 
 export interface SimTimerState {
-  puckId: number;
-  puckLabel: string;
+  timerId: number;
+  timerLabel: string;
   color: string;
   isHub: boolean;
   firmwareVersion: string;
@@ -246,8 +246,8 @@ export interface SimState {
 export interface FullStateResponse {
   serverTimestampUs?: number;
   pilots: PilotSlot[];
-  pucks: TrackNode[];
-  detectedPucks?: DetectedTimer[];
+  gates: TrackNode[];
+  timers?: DetectedTimer[];
   laps: LapRecord[];
   crossings: GateCrossingEvent[];
   filtered: FilteredDetection[];
@@ -262,8 +262,8 @@ export interface FullStateResponse {
 /** Lightweight periodic status poll (`GET /api/status`). */
 export interface StatusResponse {
   serverTimestampUs?: number;
-  pucks: TrackNode[];
-  detectedPucks?: DetectedTimer[];
+  gates: TrackNode[];
+  timers?: DetectedTimer[];
   simulatorRunning: boolean;
   simState?: SimState;
   raceArmed: boolean;
@@ -288,7 +288,7 @@ export type FilterReason = "COOLDOWN" | "TOO_SOON" | "ECHO" | "MIN_LAP" | "LAP_T
 /** A detection the timing rules set aside (or a lap that was too long to count). */
 export interface FilteredDetection {
   timestampUs: number;
-  puckId: number;
+  gateId: number;
   slotIndex: number;
   callsign: string;
   reason: FilterReason;
