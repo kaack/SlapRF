@@ -4309,14 +4309,25 @@ body.is-gate-dragging * {
   margin: 10px 0 0;
   padding: 12px 14px;
   height: 260px;
-  overflow: auto;
+  min-width: max-content;
+  width: 100%;
+  box-sizing: border-box;
+  overflow-y: auto;
   border-top: 1px solid var(--border);
   background: var(--bg);
   color: var(--text-2);
   font-size: 11.5px;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
+  line-height: 1.55;
+  white-space: pre;
+}
+.debug-selftest-log {
+  height: auto;
+  min-height: 72px;
+  max-height: 240px;
+}
+.debug-selftest-name {
+  color: var(--text);
+  font-weight: 500;
 }
 .debug-tone-warn {
   color: var(--warn);
@@ -4333,56 +4344,10 @@ body.is-gate-dragging * {
 .debug-bar-hits.is-active {
   color: var(--accent);
 }
-.debug-checks {
-  list-style: none;
-  margin: 12px 0 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  border-top: 1px solid var(--border);
-}
-.debug-check {
-  display: grid;
-  grid-template-columns: 52px 170px minmax(0, 1fr);
-  align-items: baseline;
-  gap: 10px;
-  padding: 8px 0;
-  border-bottom: 1px solid var(--border);
-  font-size: 13px;
-}
-.debug-check:last-child {
-  border-bottom: 0;
-}
-.debug-check-badge {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-align: center;
-  padding: 2px 0;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border-strong);
-  color: var(--text-3);
-}
-.debug-check.is-pass .debug-check-badge {
-  color: var(--good);
-  border-color: rgba(52, 211, 153, 0.45);
-}
-.debug-check.is-warn .debug-check-badge {
-  color: var(--warn);
-  border-color: rgba(251, 191, 36, 0.45);
-}
-.debug-check.is-fail .debug-check-badge {
-  color: var(--bad);
-  border-color: rgba(248, 113, 113, 0.5);
-}
-.debug-check-detail {
-  color: var(--text-2);
-}
 .debug-channels {
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
   display: flex;
   flex-direction: column;
   gap: 10px;
@@ -4431,6 +4396,7 @@ body.is-gate-dragging * {
 }
 .debug-runs {
   width: 100%;
+  min-width: 480px;
   margin-top: 12px;
   border-collapse: collapse;
   font-size: 12.5px;
@@ -4441,17 +4407,17 @@ body.is-gate-dragging * {
   color: var(--text-3);
   padding: 5px 8px 6px 0;
   border-bottom: 1px solid var(--border);
+  white-space: nowrap;
 }
 .debug-runs td {
   padding: 6px 8px 6px 0;
   border-bottom: 1px solid var(--border);
+  white-space: nowrap;
 }
 .debug-bootlog {
-  margin-top: 14px;
+  margin-top: 0;
 }
 .debug-bootlog .debug-log {
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
   height: 320px;
 }
 
@@ -4625,9 +4591,9 @@ body.is-gate-dragging * {
 
 /* Dedicated Findings log panels (scrollable, timestamped event table) */
 .debug-findings {
-  margin-top: 12px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
+  margin-top: 0;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
   border: 1px solid var(--border);
   display: flex;
   flex-direction: column;
@@ -4637,14 +4603,20 @@ body.is-gate-dragging * {
 .debug-scan-findings {
   height: 192px;
 }
+.debug-findings > .table-scroll-shell {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
 .debug-findings-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: nowrap;
   gap: 10px;
-  height: 36px;
-  padding: 0 12px;
+  height: 38px;
+  padding: 0 14px;
   border-bottom: 1px solid var(--border);
   min-width: 0;
   flex-shrink: 0;
@@ -4675,10 +4647,11 @@ body.is-gate-dragging * {
 }
 .debug-findings-scroll {
   flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
   overscroll-behavior: contain;
-  padding: 0 12px;
+  padding: 0 14px;
 }
 .debug-findings-empty {
   display: flex;
@@ -4688,6 +4661,7 @@ body.is-gate-dragging * {
 }
 .debug-findings-table {
   width: 100%;
+  min-width: 620px;
   table-layout: fixed;
   border-collapse: collapse;
   font-size: 12px;
@@ -4714,7 +4688,7 @@ body.is-gate-dragging * {
 .debug-findings-table th {
   position: sticky;
   top: 0;
-  background: var(--surface-2);
+  background: var(--surface);
   text-align: left;
   font-weight: 500;
   font-size: 11px;
@@ -4761,22 +4735,25 @@ body.is-gate-dragging * {
 .debug-table-scroll {
   width: 100%;
   overflow-x: auto;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
 }
 .debug-noise-table {
   margin-top: 0;
+  min-width: 640px;
 }
 .debug-noise-table th,
 .debug-noise-table td {
   white-space: nowrap;
   padding-right: 12px;
 }
+.debug-noise-table tbody tr:last-child td {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
 .debug-waterfall-section {
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
+  margin-top: 0;
 }
 .debug-waterfall-head {
   display: flex;

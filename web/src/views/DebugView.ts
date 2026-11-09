@@ -288,7 +288,7 @@ export class DebugView extends Component {
             <h2>Self-test</h2>
             <p>Checks the timer end to end in about 10 seconds: console, identity, 5.8 GHz receiver, sweep timing, memory, last restart, Wi-Fi, and whether its data reaches this laptop. Copy the report when asking for help.</p>
           </div>
-          <div class="card" data-slot="selftest"></div>
+          <div class="card card-flush" data-slot="selftest"></div>
         </section>
         <section class="settings-section">
           <div class="settings-intro">
@@ -353,10 +353,10 @@ export class DebugView extends Component {
             <p>What the timer measures on each of its 8 pilot channels. The tick marks the peak since the previous update; hits count readings more than 10 dB above that channel's typical noise (Wi-Fi bursts show up here too; they're far below a lap's enter threshold). Power on a VTX to see its channel rise.</p>
             <p>Try other channels without reflashing, or switch the receiver off to tell whether a problem comes from the 5.8 GHz side. Both reset when the timer restarts.</p>
           </div>
-          <div class="card">
+          <div class="debug-status-layout">
             <div data-slot="live-head"></div>
-            <div data-slot="live"></div>
-            <div data-slot="channels"></div>
+            <div class="debug-subbox" data-slot="live"></div>
+            <div class="debug-subbox" data-slot="channels"></div>
           </div>
         </section>
         <section class="settings-section" data-signal-section>
@@ -365,13 +365,16 @@ export class DebugView extends Component {
             <p>Streams every sweep (50 Hz) while visible so you can see crossing shapes, short 5 GHz Wi-Fi bursts, each channel's typical noise floor and pilot enter thresholds.</p>
             <p>The table below computes mean, spread, max, floor, hits/s and how often noise reaches a pilot's enter threshold ("would trigger" — anything above 0% with no drone flying is a false-lap risk).</p>
           </div>
-          <div class="card">
-            <div data-slot="signal-controls"></div>
-            <div class="debug-canvas-wrap">
-              <canvas class="debug-canvas debug-signal-canvas" data-signal-canvas></canvas>
+          <div class="debug-status-layout">
+            <div data-slot="signal-head"></div>
+            <div class="debug-subbox">
+              <div data-slot="signal-controls"></div>
+              <div class="debug-canvas-wrap">
+                <canvas class="debug-canvas debug-signal-canvas" data-signal-canvas></canvas>
+              </div>
+              <div data-slot="signal-legend"></div>
             </div>
-            <div data-slot="signal-legend"></div>
-            <div data-slot="noise-table"></div>
+            <div class="debug-status-layout" data-slot="noise-table"></div>
           </div>
         </section>
         <section class="settings-section">
@@ -380,14 +383,14 @@ export class DebugView extends Component {
             <p>Sweeps the receiver across 5180–5917 MHz. Use it to find a VTX on an unexpected frequency, or to check a venue for 5 GHz Wi-Fi before racing. Note that Raceband <strong>R3–R6 overlap 5 GHz Wi-Fi UNII-3</strong> (channels 149–165, 5735–5835 MHz).</p>
             <p><strong>Scan once</strong> takes one snapshot and appends a row to the waterfall. <strong>Stream</strong> scans continuously with live, average and max-hold traces (automatically pausing the 8-channel stream while it runs).</p>
           </div>
-          <div class="card" data-slot="scan"></div>
+          <div class="debug-status-layout" data-slot="scan"></div>
         </section>
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Restarts &amp; boot logs</h2>
             <p>The timer keeps its log in memory that survives a crash or restart, so you can read what happened during this boot and the one before it. The restart test checks that the timer comes back cleanly every time.</p>
           </div>
-          <div class="card" data-slot="restart"></div>
+          <div class="debug-status-layout" data-slot="restart"></div>
         </section>
         <section class="settings-section">
           <div class="settings-intro">
@@ -2390,14 +2393,24 @@ export class DebugView extends Component {
           ? `<span class="tone-bad">${counts.fail} problem${counts.fail > 1 ? "s" : ""} found</span>`
           : counts.warn
             ? `<span class="debug-tone-warn">Passed with ${counts.warn} warning${counts.warn > 1 ? "s" : ""}</span>`
-            : `<span class="tone-good">All checks passed</span>`
+            : `All ${this.checks.length} checks passed`
       : running
         ? esc(this.progress)
         : on
           ? "Ready · takes about 10 s (pauses timing briefly during scan)"
           : "Off · connect a timer first";
+    const consoleLines = this.checks.length
+      ? this.checks
+          .map((c) => {
+            const tag = c.result === "pass" ? "[PASS]" : c.result === "warn" ? "[WARN]" : c.result === "fail" ? "[FAIL]" : "[SKIP]";
+            const tagClass = c.result === "fail" ? "tone-bad" : c.result === "warn" ? "debug-tone-warn" : "note";
+            const paddedName = esc(c.name.padEnd(18, " "));
+            return `<span class="${tagClass}">${tag}</span>  <span class="debug-selftest-name">${paddedName}</span>  ${esc(c.detail)}`;
+          })
+          .join("\n")
+      : `<span class="note">${running ? esc(this.progress || "Starting self-test…") : on ? "# Click \"Run self-test\" to verify console, identity, 5.8 GHz receiver, sweep timing, memory, and Wi-Fi." : "# Connect a timer over USB to run the hardware self-test."}</span>`;
     this.slot("selftest").innerHTML = `
-      <div class="debug-card-head">
+      <div class="debug-card-head debug-log-head">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}"></span>
           <span class="note debug-head-note mono">${summary}</span>
@@ -2409,19 +2422,9 @@ export class DebugView extends Component {
           </button>
         </div>
       </div>
-      ${
-        this.checks.length
-          ? `<ul class="debug-checks">${this.checks
-              .map(
-                (c) => `<li class="debug-check is-${c.result}">
-                  <span class="debug-check-badge">${c.result === "pass" ? "PASS" : c.result === "warn" ? "WARN" : c.result === "fail" ? "FAIL" : "SKIP"}</span>
-                  <strong>${esc(c.name)}</strong>
-                  <span class="debug-check-detail">${esc(c.detail)}</span>
-                </li>`
-              )
-              .join("")}</ul>`
-          : ""
-      }`;
+      <div class="table-scroll">
+        <pre class="debug-log debug-selftest-log mono">${consoleLines}</pre>
+      </div>`;
   }
 
   private renderStatus(): void {
@@ -2581,7 +2584,7 @@ export class DebugView extends Component {
             : "Paused — click to stream live 5.8 GHz readings";
     const ledClass = streamActive ? "is-up" : on && (inScanMode || !rfOn) ? "is-warn" : "";
     this.slot("live-head").innerHTML = `
-      <div class="debug-card-head">
+      <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}" data-live-led></span>
           <span class="note debug-head-note mono" data-live-note>${on ? "Waiting for sweep stream…" : "Paused · not connected"}</span>
@@ -2735,8 +2738,8 @@ export class DebugView extends Component {
         : inScanMode
           ? "Paused · scan active"
           : "Paused";
-    this.slot("signal-controls").innerHTML = `
-      <div class="debug-card-head">
+    this.slot("signal-head").innerHTML = `
+      <div class="debug-status-topbar">
         <span class="debug-led-status" title="${liveTitle}">
           <span class="status-dot ${sigLedClass}"></span>
           <span class="note debug-head-note mono">${sigStatusText}</span>
@@ -2747,7 +2750,8 @@ export class DebugView extends Component {
             ${liveFollowOn ? icons.pause(14) : icons.play(14)}<span>${liveLabel}</span>
           </button>
         </div>
-      </div>
+      </div>`;
+    this.slot("signal-controls").innerHTML = `
       <div class="debug-subbar">
         <div class="debug-connect-actions">
           <div class="debug-overlay-checks" role="group" aria-label="Chart overlays">
@@ -2783,7 +2787,7 @@ export class DebugView extends Component {
           <span>${allOn ? "Hide all" : "Show all"}</span>
         </button>
       </div>
-      <div class="debug-chart-foot is-with-divider">
+      <div class="debug-chart-foot">
         <div class="debug-toolbar-left">
           <div class="debug-axis-pill ${this.signalAutoX ? "is-armed" : "is-unarmed"}" data-axis-pill>
             <button type="button" class="debug-axis-pill-main" data-action="${this.signalAutoX ? "toggle-axis-menu" : "signal-reset-x"}" data-menu="signal-x" title="${this.signalAutoX ? `Auto X-axis time window (${xWinLabel}) — click to choose a time window preset` : "Click to reset X-axis time window to Auto X"}">
@@ -3024,7 +3028,7 @@ export class DebugView extends Component {
           </div>
           <button type="button" class="btn btn-sm btn-ghost" data-action="${clearAction}" data-findings-clear disabled>Clear</button>
         </div>
-        <div class="debug-findings-scroll" data-findings-scroll>
+        <div class="debug-findings-scroll table-scroll" data-findings-scroll>
           <div class="debug-findings-empty note" data-findings-empty>${esc(emptyHint)}</div>
           <table class="debug-findings-table" data-findings-table hidden>
             <colgroup>
@@ -3166,23 +3170,25 @@ export class DebugView extends Component {
     if (!findingsHost || !noiseTbody) {
       slotEl.innerHTML = `
         <div class="debug-findings" data-signal-findings-host role="region" aria-label="Signal findings log"></div>
-        <div class="debug-table-scroll">
-          <table class="debug-runs debug-noise-table">
-            <thead>
-              <tr>
-                <th>Channel</th>
-                <th>Pilot / Enter</th>
-                <th>Mean</th>
-                <th>Spread (SD)</th>
-                <th>Max</th>
-                <th>Floor</th>
-                <th>Hits/s (&gt;fl+10)</th>
-                <th>&gt;fl+10 %</th>
-                <th>Would trigger</th>
-              </tr>
-            </thead>
-            <tbody data-noise-tbody></tbody>
-          </table>
+        <div class="debug-subbox debug-noise-box">
+          <div class="debug-table-scroll table-scroll">
+            <table class="debug-runs debug-noise-table">
+              <thead>
+                <tr>
+                  <th>Channel</th>
+                  <th>Pilot / Enter</th>
+                  <th>Mean</th>
+                  <th>Spread (SD)</th>
+                  <th>Max</th>
+                  <th>Floor</th>
+                  <th>Hits/s (&gt;fl+10)</th>
+                  <th>&gt;fl+10 %</th>
+                  <th>Would trigger</th>
+                </tr>
+              </thead>
+              <tbody data-noise-tbody></tbody>
+            </table>
+          </div>
         </div>`;
       findingsHost = slotEl.querySelector<HTMLElement>("[data-signal-findings-host]")!;
       noiseTbody = slotEl.querySelector<HTMLTableSectionElement>("[data-noise-tbody]")!;
@@ -3234,7 +3240,7 @@ export class DebugView extends Component {
     const prevScanScrollTop = prevScanFindingsEl?.querySelector<HTMLElement>("[data-findings-scroll]")?.scrollTop ?? 0;
     const wfRowPresets = [40, 80, 160, 300] as const;
     this.slot("scan").innerHTML = `
-      <div class="debug-card-head">
+      <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${scanActive ? "is-up" : ""}" data-scan-led></span>
           <span class="note debug-head-note mono" data-scan-status-note>${this.scanLive ? "Streaming · live scan" : this.scanning ? "Scanning once…" : "Paused"}</span>
@@ -3248,115 +3254,117 @@ export class DebugView extends Component {
           </button>
         </div>
       </div>
-      <div class="debug-subbar">
-        <div class="debug-connect-actions">
-          <div class="debug-overlay-checks" role="group" aria-label="Spectrum overlays">
-            <label class="check">
-              <input type="checkbox" data-check="scan-hold" ${this.scanShowMaxHold ? "checked" : ""}/>
-              <span>Max hold</span>
-            </label>
-            <label class="check">
-              <input type="checkbox" data-check="scan-avg" ${this.scanShowAvg ? "checked" : ""}/>
-              <span>Average</span>
-            </label>
-            <label class="check">
-              <input type="checkbox" data-check="scan-wifi" ${this.scanShowWifi ? "checked" : ""}/>
-              <span>5 GHz Wi-Fi bands</span>
-            </label>
-            <span class="debug-overlay-sep" role="separator" aria-hidden="true"></span>
-            <button type="button" class="debug-overlay-icon-btn" data-action="clear-hold" ${hasScan ? "" : "disabled"} aria-label="Reset max hold and running average" title="Reset max hold and running average">
-              ${icons.reset(13)}
-            </button>
+      <div class="debug-subbox">
+        <div class="debug-subbar">
+          <div class="debug-connect-actions">
+            <div class="debug-overlay-checks" role="group" aria-label="Spectrum overlays">
+              <label class="check">
+                <input type="checkbox" data-check="scan-hold" ${this.scanShowMaxHold ? "checked" : ""}/>
+                <span>Max hold</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" data-check="scan-avg" ${this.scanShowAvg ? "checked" : ""}/>
+                <span>Average</span>
+              </label>
+              <label class="check">
+                <input type="checkbox" data-check="scan-wifi" ${this.scanShowWifi ? "checked" : ""}/>
+                <span>5 GHz Wi-Fi bands</span>
+              </label>
+              <span class="debug-overlay-sep" role="separator" aria-hidden="true"></span>
+              <button type="button" class="debug-overlay-icon-btn" data-action="clear-hold" ${hasScan ? "" : "disabled"} aria-label="Reset max hold and running average" title="Reset max hold and running average">
+                ${icons.reset(13)}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
-      <div class="debug-canvas-wrap">
-        <canvas class="debug-canvas debug-spectrum-canvas" data-spectrum-canvas></canvas>
-      </div>
-      <div class="debug-chart-foot">
-        <div class="debug-toolbar-left">
-          <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
-            <button type="button" class="debug-axis-pill-main" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="scan-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range — click to choose a frequency band preset, or drag X-axis to zoom"}">
-              ${icons.target(13)}<span>${isFreqZoomed ? `X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz` : "Auto X"}</span>
-            </button>
-            <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-x" aria-expanded="${this.openAxisMenu === "scan-x"}" title="Choose frequency range">
-              ${icons.chevronDown(12)}
-            </button>
-            ${
-              this.openAxisMenu === "scan-x"
-                ? `<div class="debug-axis-menu" role="menu" aria-label="Spectrum X-axis frequency range">
-                    <button type="button" class="debug-axis-menu-item ${!isFreqZoomed ? "is-active" : ""}" data-action="scan-reset-zoom" role="menuitem">
-                      <span>Auto X</span><span class="note">Full scan</span>
-                    </button>
-                    <div class="debug-axis-menu-sep"></div>
-                    <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5650 && Math.round(this.scanZoomStopMHz!) === 5917 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5650" data-stop="5917" role="menuitem">
-                      <span>Raceband</span><span class="note">5650–5917 MHz</span>
-                    </button>
-                    <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5180 && Math.round(this.scanZoomStopMHz!) === 5320 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5180" data-stop="5320" role="menuitem">
-                      <span>UNII-1</span><span class="note">5180–5320 MHz</span>
-                    </button>
-                    <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5725 && Math.round(this.scanZoomStopMHz!) === 5850 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5725" data-stop="5850" role="menuitem">
-                      <span>UNII-3</span><span class="note">5725–5850 MHz</span>
-                    </button>
-                  </div>`
-                : ""
-            }
-          </div>
-          <div class="debug-axis-pill ${this.scanAutoY ? "is-armed" : "is-unarmed"}" data-axis-pill>
-            <button type="button" class="debug-axis-pill-main" data-action="${this.scanAutoY ? "toggle-axis-menu" : "scan-reset-y"}" data-menu="scan-y" title="${this.scanAutoY ? "Auto Y-axis scaling is ON (fits scanned dBm range) — click to choose a scale preset, or drag the Y-axis" : "Click to reset Y-axis range to Auto Y"}">
-              ${icons.target(13)}<span>${this.scanAutoY ? "Auto Y" : `Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} dBm`}</span>
-            </button>
-            <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-y" aria-expanded="${this.openAxisMenu === "scan-y"}" title="Choose spectrum Y-axis dBm scale">
-              ${icons.chevronDown(12)}
-            </button>
-            ${
-              this.openAxisMenu === "scan-y"
-                ? `<div class="debug-axis-menu" role="menu" aria-label="Spectrum Y-axis dBm scale">
-                    <button type="button" class="debug-axis-menu-item ${this.scanAutoY ? "is-active" : ""}" data-action="scan-auto-y" data-force="1" role="menuitem">
-                      <span>Auto Y</span><span class="note">Fit scan</span>
-                    </button>
-                    <div class="debug-axis-menu-sep"></div>
-                    <button type="button" class="debug-axis-menu-item ${!this.scanAutoY && !isScanYZoomed ? "is-active" : ""}" data-action="scan-full-y" role="menuitem">
-                      <span>Full scale</span><span class="note">${DBM_MIN}…${DBM_MAX} dBm</span>
-                    </button>
-                  </div>`
-                : ""
-            }
-          </div>
-          <div class="debug-axis-pill ${isFull5 ? "is-armed" : "is-unarmed"}" data-axis-pill>
-            <button type="button" class="debug-axis-pill-main" data-action="${isFull5 ? "toggle-axis-menu" : "scan-preset"}" data-menu="scan-band" data-start="5180" data-stop="5917" data-step="5" title="${isFull5 ? `Band sweep preset (${this.scanStartMHz}–${this.scanStopMHz} MHz, ${this.scanStepMHz} MHz step) — click to choose a band sweep preset` : "Click to reset band sweep to Full · 3 Hz (5180–5917 MHz, 5 MHz step)"}">
-              ${icons.sliders(13)}<span>${bandLabel}</span>
-            </button>
-            <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-band" aria-expanded="${this.openAxisMenu === "scan-band"}" title="Choose band sweep preset">
-              ${icons.chevronDown(12)}
-            </button>
-            ${
-              this.openAxisMenu === "scan-band"
-                ? `<div class="debug-axis-menu" role="menu" aria-label="Band sweep range and speed">
-                    <button type="button" class="debug-axis-menu-item ${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="5" role="menuitem" title="Full 5.18–5.92 GHz band at 5 MHz step (148 points, ~3.1 passes/s)">
-                      <span>Full · 3 Hz</span><span class="note">5180–5917 · 5 MHz</span>
-                    </button>
-                    <button type="button" class="debug-axis-menu-item ${isFast15 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="15" role="menuitem" title="Full 5.18–5.92 GHz band at 15 MHz step (50 points, ~9 passes/s)">
-                      <span>Fast full · 9 Hz</span><span class="note">5180–5917 · 15 MHz</span>
-                    </button>
-                    <button type="button" class="debug-axis-menu-item ${isRb5 ? "is-active" : ""}" data-action="scan-preset" data-start="5650" data-stop="5925" data-step="5" role="menuitem" title="Raceband R1–R8 + Wi-Fi UNII-3 at 5 MHz step (56 points, ~8 passes/s)">
-                      <span>Raceband · 8 Hz</span><span class="note">5650–5925 · 5 MHz</span>
-                    </button>
-                  </div>`
-                : ""
-            }
-          </div>
-          <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
+        <div class="debug-canvas-wrap">
+          <canvas class="debug-canvas debug-spectrum-canvas" data-spectrum-canvas></canvas>
         </div>
-        <div class="debug-connect-actions">
-          <div class="debug-btn-group" role="group" aria-label="Export spectrum chart">
-            <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-csv" ${hasScan ? "" : "disabled"} title="Download spectrum trace (latest, average, max-hold) as CSV">CSV</button>
-            <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-png" ${hasScan ? "" : "disabled"} title="Save spectrum trace chart as PNG">PNG</button>
+        <div class="debug-chart-foot">
+          <div class="debug-toolbar-left">
+            <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
+              <button type="button" class="debug-axis-pill-main" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="scan-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range — click to choose a frequency band preset, or drag X-axis to zoom"}">
+                ${icons.target(13)}<span>${isFreqZoomed ? `X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz` : "Auto X"}</span>
+              </button>
+              <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-x" aria-expanded="${this.openAxisMenu === "scan-x"}" title="Choose frequency range">
+                ${icons.chevronDown(12)}
+              </button>
+              ${
+                this.openAxisMenu === "scan-x"
+                  ? `<div class="debug-axis-menu" role="menu" aria-label="Spectrum X-axis frequency range">
+                      <button type="button" class="debug-axis-menu-item ${!isFreqZoomed ? "is-active" : ""}" data-action="scan-reset-zoom" role="menuitem">
+                        <span>Auto X</span><span class="note">Full scan</span>
+                      </button>
+                      <div class="debug-axis-menu-sep"></div>
+                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5650 && Math.round(this.scanZoomStopMHz!) === 5917 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5650" data-stop="5917" role="menuitem">
+                        <span>Raceband</span><span class="note">5650–5917 MHz</span>
+                      </button>
+                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5180 && Math.round(this.scanZoomStopMHz!) === 5320 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5180" data-stop="5320" role="menuitem">
+                        <span>UNII-1</span><span class="note">5180–5320 MHz</span>
+                      </button>
+                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5725 && Math.round(this.scanZoomStopMHz!) === 5850 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5725" data-stop="5850" role="menuitem">
+                        <span>UNII-3</span><span class="note">5725–5850 MHz</span>
+                      </button>
+                    </div>`
+                  : ""
+              }
+            </div>
+            <div class="debug-axis-pill ${this.scanAutoY ? "is-armed" : "is-unarmed"}" data-axis-pill>
+              <button type="button" class="debug-axis-pill-main" data-action="${this.scanAutoY ? "toggle-axis-menu" : "scan-reset-y"}" data-menu="scan-y" title="${this.scanAutoY ? "Auto Y-axis scaling is ON (fits scanned dBm range) — click to choose a scale preset, or drag the Y-axis" : "Click to reset Y-axis range to Auto Y"}">
+                ${icons.target(13)}<span>${this.scanAutoY ? "Auto Y" : `Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} dBm`}</span>
+              </button>
+              <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-y" aria-expanded="${this.openAxisMenu === "scan-y"}" title="Choose spectrum Y-axis dBm scale">
+                ${icons.chevronDown(12)}
+              </button>
+              ${
+                this.openAxisMenu === "scan-y"
+                  ? `<div class="debug-axis-menu" role="menu" aria-label="Spectrum Y-axis dBm scale">
+                      <button type="button" class="debug-axis-menu-item ${this.scanAutoY ? "is-active" : ""}" data-action="scan-auto-y" data-force="1" role="menuitem">
+                        <span>Auto Y</span><span class="note">Fit scan</span>
+                      </button>
+                      <div class="debug-axis-menu-sep"></div>
+                      <button type="button" class="debug-axis-menu-item ${!this.scanAutoY && !isScanYZoomed ? "is-active" : ""}" data-action="scan-full-y" role="menuitem">
+                        <span>Full scale</span><span class="note">${DBM_MIN}…${DBM_MAX} dBm</span>
+                      </button>
+                    </div>`
+                  : ""
+              }
+            </div>
+            <div class="debug-axis-pill ${isFull5 ? "is-armed" : "is-unarmed"}" data-axis-pill>
+              <button type="button" class="debug-axis-pill-main" data-action="${isFull5 ? "toggle-axis-menu" : "scan-preset"}" data-menu="scan-band" data-start="5180" data-stop="5917" data-step="5" title="${isFull5 ? `Band sweep preset (${this.scanStartMHz}–${this.scanStopMHz} MHz, ${this.scanStepMHz} MHz step) — click to choose a band sweep preset` : "Click to reset band sweep to Full · 3 Hz (5180–5917 MHz, 5 MHz step)"}">
+                ${icons.sliders(13)}<span>${bandLabel}</span>
+              </button>
+              <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-band" aria-expanded="${this.openAxisMenu === "scan-band"}" title="Choose band sweep preset">
+                ${icons.chevronDown(12)}
+              </button>
+              ${
+                this.openAxisMenu === "scan-band"
+                  ? `<div class="debug-axis-menu" role="menu" aria-label="Band sweep range and speed">
+                      <button type="button" class="debug-axis-menu-item ${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="5" role="menuitem" title="Full 5.18–5.92 GHz band at 5 MHz step (148 points, ~3.1 passes/s)">
+                        <span>Full · 3 Hz</span><span class="note">5180–5917 · 5 MHz</span>
+                      </button>
+                      <button type="button" class="debug-axis-menu-item ${isFast15 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="15" role="menuitem" title="Full 5.18–5.92 GHz band at 15 MHz step (50 points, ~9 passes/s)">
+                        <span>Fast full · 9 Hz</span><span class="note">5180–5917 · 15 MHz</span>
+                      </button>
+                      <button type="button" class="debug-axis-menu-item ${isRb5 ? "is-active" : ""}" data-action="scan-preset" data-start="5650" data-stop="5925" data-step="5" role="menuitem" title="Raceband R1–R8 + Wi-Fi UNII-3 at 5 MHz step (56 points, ~8 passes/s)">
+                        <span>Raceband · 8 Hz</span><span class="note">5650–5925 · 5 MHz</span>
+                      </button>
+                    </div>`
+                  : ""
+              }
+            </div>
+            <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
+          </div>
+          <div class="debug-connect-actions">
+            <div class="debug-btn-group" role="group" aria-label="Export spectrum chart">
+              <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-csv" ${hasScan ? "" : "disabled"} title="Download spectrum trace (latest, average, max-hold) as CSV">CSV</button>
+              <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-png" ${hasScan ? "" : "disabled"} title="Save spectrum trace chart as PNG">PNG</button>
+            </div>
           </div>
         </div>
       </div>
       <div class="debug-findings debug-scan-findings" data-scan-findings role="region" aria-label="Spectrum findings log"></div>
-      <div class="debug-waterfall-section">
+      <div class="debug-subbox debug-waterfall-section">
         <div class="debug-waterfall-head">
           <div class="debug-waterfall-title-group">
             <span class="status-dot" data-wf-led></span>
@@ -3527,7 +3535,7 @@ export class DebugView extends Component {
         ? "Ready · USB reconnects automatically after restart"
         : "Off · connect a timer first";
     this.slot("restart").innerHTML = `
-      <div class="debug-card-head">
+      <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}"></span>
           <span class="note debug-head-note mono">${statusText}</span>
@@ -3538,38 +3546,42 @@ export class DebugView extends Component {
           <button type="button" class="btn btn-sm btn-armed" data-action="restart-capture" ${on && !busy ? "" : "disabled"}>${icons.reset(14)}<span>Restart &amp; capture boot log</span></button>
         </div>
       </div>
-      <div class="debug-subbar">
+      <div class="debug-subbox">
         <div class="debug-restart-test">
           <label>Restart test <input class="input mono" type="number" data-restart-count value="${esc(this.el.querySelector<HTMLInputElement>("[data-restart-count]")?.value ?? "5")}" min="1" max="50"/> times</label>
           <button type="button" class="btn btn-sm" data-action="restart-test" ${on && !busy ? "" : "disabled"}>${icons.reset(14)}<span>${this.busy === "Restart test" ? "Running…" : "Run"}</span></button>
         </div>
+        ${
+          this.runs.length
+            ? `<div class="table-scroll">
+                <table class="debug-runs">
+                  <thead><tr><th>#</th><th>Result</th><th>Back in</th><th>Restart reason</th><th></th></tr></thead>
+                  <tbody>${this.runs
+                    .map(
+                      (r) => `<tr>
+                        <td class="mono">${r.n}</td>
+                        <td><span class="badge ${r.ok && !r.extraBoots ? "badge-good" : r.ok ? "badge-warn" : "badge-bad"}">${r.ok && !r.extraBoots ? "OK" : r.ok ? "WARN" : "FAIL"}</span></td>
+                        <td class="mono">${(r.ms / 1000).toFixed(1)} s</td>
+                        <td>${esc(r.reset)}</td>
+                        <td class="note">${esc(r.note)}</td>
+                      </tr>`
+                    )
+                    .join("")}</tbody>
+                </table>
+              </div>`
+            : ""
+        }
       </div>
       ${
-        this.runs.length
-          ? `<table class="debug-runs">
-              <thead><tr><th>#</th><th>Result</th><th>Back in</th><th>Restart reason</th><th></th></tr></thead>
-              <tbody>${this.runs
-                .map(
-                  (r) => `<tr>
-                    <td class="mono">${r.n}</td>
-                    <td><span class="badge ${r.ok && !r.extraBoots ? "badge-good" : r.ok ? "badge-warn" : "badge-bad"}">${r.ok && !r.extraBoots ? "OK" : r.ok ? "WARN" : "FAIL"}</span></td>
-                    <td class="mono">${(r.ms / 1000).toFixed(1)} s</td>
-                    <td>${esc(r.reset)}</td>
-                    <td class="note">${esc(r.note)}</td>
-                  </tr>`
-                )
-                .join("")}</tbody>
-            </table>`
-          : ""
-      }
-      ${
         l
-          ? `<div class="debug-bootlog">
-              <div class="debug-card-head">
+          ? `<div class="card card-flush debug-bootlog">
+              <div class="debug-card-head debug-log-head">
                 <strong>${esc(this.bootLogHeader(l))}</strong>
                 <button type="button" class="btn btn-sm btn-ghost" data-action="copy-bootlog"><span>Copy log</span></button>
               </div>
-              <pre class="debug-log mono">${esc(l.text || "(empty)")}</pre>
+              <div class="table-scroll">
+                <pre class="debug-log mono">${esc(l.text || "(empty)")}</pre>
+              </div>
             </div>`
           : ""
       }`;
@@ -3605,7 +3617,9 @@ export class DebugView extends Component {
           </button>
         </div>
       </div>
-      <pre class="debug-log mono" data-log-pre>${esc(this.logLines.join("\n"))}</pre>`;
+      <div class="table-scroll">
+        <pre class="debug-log mono" data-log-pre>${esc(this.logLines.join("\n"))}</pre>
+      </div>`;
   }
 }
 

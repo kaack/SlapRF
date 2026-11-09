@@ -144,10 +144,11 @@ function enhanceElement(el: HTMLElement, ro: ResizeObserver): void {
     { passive: true }
   );
   ro.observe(viewport);
-  const innerTable = viewport.firstElementChild;
-  if (innerTable instanceof HTMLElement) {
-    ro.observe(innerTable);
-  }
+  Array.from(viewport.children).forEach((child) => {
+    if (child instanceof HTMLElement) {
+      ro.observe(child);
+    }
+  });
 
   managedTables.set(el, state);
   state.update();
