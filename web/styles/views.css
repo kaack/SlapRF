@@ -3978,6 +3978,7 @@ body.is-gate-dragging * {
   border-color: #3a3f48;
 }
 .debug-axis-pill-main,
+.debug-axis-pill-clear,
 .debug-axis-pill-arrow {
   display: inline-flex;
   align-items: center;
@@ -3996,11 +3997,27 @@ body.is-gate-dragging * {
   border-radius: calc(var(--radius-sm) - 1px) 0 0 calc(var(--radius-sm) - 1px);
   white-space: nowrap;
 }
+.debug-axis-pill-main:only-child {
+  padding-right: 10px;
+  border-radius: calc(var(--radius-sm) - 1px);
+}
 .debug-axis-pill.is-armed .debug-axis-pill-main svg {
   color: var(--accent);
 }
 .debug-axis-pill.is-unarmed .debug-axis-pill-main svg {
   color: var(--text-3);
+}
+.debug-axis-pill-clear {
+  width: 22px;
+  margin-left: -2px;
+  color: var(--text-3);
+}
+.debug-axis-pill-clear:last-child {
+  border-radius: 0 calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 1px) 0;
+}
+.debug-axis-pill-clear:hover {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
 }
 .debug-axis-pill-arrow {
   width: 22px;
