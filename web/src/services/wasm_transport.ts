@@ -79,7 +79,7 @@ export class WasmSimTransport implements ApiTransport {
     if (!window.Go) {
       await new Promise<void>((resolve, reject) => {
         const script = document.createElement("script");
-        script.src = "./wasm/wasm_exec.js?v=214";
+        script.src = "./wasm/wasm_exec.js?v=215";
         script.onload = () => resolve();
         script.onerror = () => reject(new Error("Failed to load ./wasm/wasm_exec.js"));
         document.head.appendChild(script);
@@ -88,7 +88,7 @@ export class WasmSimTransport implements ApiTransport {
 
     window.__slaprfBootStatus?.("Downloading SlapRF 5.8 GHz timing engine…", 28);
     const go = new window.Go!();
-    const wasmUrl = "./wasm/slaprf.wasm?v=214";
+    const wasmUrl = "./wasm/slaprf.wasm?v=215";
 
     const response = await fetch(wasmUrl);
     if (!response.ok) {

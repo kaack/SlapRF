@@ -78,7 +78,7 @@ export class AboutView extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
   private backendVersion: string;
-  private activeLicense: "gpl" | "fair-source" | null = null;
+  private activeLicense: "gpl" | "fair-source" = "gpl";
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
     super(el);
@@ -91,17 +91,13 @@ export class AboutView extends Component {
 
     this.listen(el, "click", (e) => {
       const target = e.target as HTMLElement;
-      const openBtn = target.closest<HTMLElement>("[data-open-license]");
-      if (openBtn) {
-        e.preventDefault();
-        const kind = openBtn.dataset.openLicense as "gpl" | "fair-source";
-        this.activeLicense = this.activeLicense === kind ? null : kind;
-        this.render();
-        return;
-      }
-      if (target.closest("[data-close-license]") || target.classList.contains("about-license-backdrop")) {
-        this.activeLicense = null;
-        this.render();
+      const selectBtn = target.closest<HTMLElement>("[data-select-license]");
+      if (selectBtn) {
+        const kind = selectBtn.dataset.selectLicense as "gpl" | "fair-source";
+        if (kind && kind !== this.activeLicense) {
+          this.activeLicense = kind;
+          this.render();
+        }
         return;
       }
       const donateBtn = target.closest<HTMLElement>("[data-donate-paypal]");
@@ -109,15 +105,6 @@ export class AboutView extends Component {
         window.open(PAYPAL_DONATE_URL, "_blank", "noreferrer");
       }
     });
-
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && this.activeLicense !== null) {
-        this.activeLicense = null;
-        this.render();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    this.onDispose(() => window.removeEventListener("keydown", onKeyDown));
 
     this.render();
     void this.loadBackendVersion();
@@ -188,31 +175,38 @@ export class AboutView extends Component {
           </p>
 
           <div class="about-licenses">
-            <h3>Licenses</h3>
+            <div class="about-licenses-head">
+              <h3>Licenses</h3>
+              <div class="segmented" role="tablist" aria-label="License selector">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected="${this.activeLicense === "gpl" ? "true" : "false"}"
+                  class="${this.activeLicense === "gpl" ? "is-active" : ""}"
+                  data-select-license="gpl"
+                >
+                  GNU GPL v3.0
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected="${this.activeLicense === "fair-source" ? "true" : "false"}"
+                  class="${this.activeLicense === "fair-source" ? "is-active" : ""}"
+                  data-select-license="fair-source"
+                >
+                  Fair Source v0.9
+                </button>
+              </div>
+            </div>
             <p class="about-license-summary">${esc(licenseSummary).replace(/\n/g, "<br/>")}</p>
-            <div class="about-license-links">
-              <a href="#/about" class="about-license-link" data-open-license="gpl">GNU General Public License</a>
-              <a href="#/about" class="about-license-link" data-open-license="fair-source">Fair Source License</a>
+            <div class="about-license-box">
+              <div class="about-license-box-head">
+                <span class="mono strong">${esc(modalTitle)}</span>
+              </div>
+              <pre class="about-license-pre">${esc(modalText)}</pre>
             </div>
           </div>
         </div>
-      </div>
-
-      ${
-        this.activeLicense
-          ? `
-            <div class="about-license-backdrop" role="dialog" aria-modal="true" aria-label="${esc(modalTitle)}">
-              <div class="about-license-modal">
-                <div class="about-license-modal-head">
-                  <strong>${esc(modalTitle)}</strong>
-                  <button type="button" class="btn btn-sm btn-icon btn-ghost" data-close-license="1" aria-label="Close license viewer">
-                    ${icons.close(16)}
-                  </button>
-                </div>
-                <pre class="about-license-pre">${esc(modalText)}</pre>
-              </div>
-            </div>`
-          : ""
-      }`;
+      </div>`;
   }
 }
