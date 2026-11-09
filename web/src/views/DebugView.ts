@@ -296,39 +296,51 @@ export class DebugView extends Component {
           </div>
           <div class="card">
             <div data-slot="status"></div>
-            <div class="debug-health-strip" data-slot="health">
+            <div class="debug-subbox debug-health-subbox" data-slot="health">
+              <div class="debug-subbox-head">
+                <span class="debug-subbox-title">${icons.chart(14)}<span>Health trends</span></span>
+                <span class="note">Last 5 min · 2 s interval</span>
+              </div>
               <div class="debug-health-grid" data-health-grid>
                 <div class="debug-health-card" data-health-card="sweep">
-                  <div class="debug-health-card-head">
+                  <div class="debug-health-info">
                     <span class="debug-health-title">Sweep duration</span>
-                    <span class="debug-health-meta mono note" data-health-meta="sweep">Collecting…</span>
+                    <div class="debug-health-value" data-health-val="sweep">—</div>
+                    <span class="debug-health-meta" data-health-meta="sweep">Waiting for data…</span>
                   </div>
-                  <div class="debug-health-value mono" data-health-val="sweep">—</div>
-                  <canvas class="debug-canvas debug-health-spark" data-spark-canvas="sweep"></canvas>
+                  <div class="debug-health-spark-wrap">
+                    <canvas class="debug-canvas debug-health-spark" data-spark-canvas="sweep"></canvas>
+                  </div>
                 </div>
                 <div class="debug-health-card" data-health-card="heap">
-                  <div class="debug-health-card-head">
+                  <div class="debug-health-info">
                     <span class="debug-health-title">Free heap</span>
-                    <span class="debug-health-meta mono note" data-health-meta="heap">Collecting…</span>
+                    <div class="debug-health-value" data-health-val="heap">—</div>
+                    <span class="debug-health-meta" data-health-meta="heap">Waiting for data…</span>
                   </div>
-                  <div class="debug-health-value mono" data-health-val="heap">—</div>
-                  <canvas class="debug-canvas debug-health-spark" data-spark-canvas="heap"></canvas>
+                  <div class="debug-health-spark-wrap">
+                    <canvas class="debug-canvas debug-health-spark" data-spark-canvas="heap"></canvas>
+                  </div>
                 </div>
                 <div class="debug-health-card" data-health-card="udp">
-                  <div class="debug-health-card-head">
+                  <div class="debug-health-info">
                     <span class="debug-health-title">Laptop UDP link</span>
-                    <span class="debug-health-meta mono note" data-health-meta="udp">Collecting…</span>
+                    <div class="debug-health-value" data-health-val="udp">—</div>
+                    <span class="debug-health-meta" data-health-meta="udp">Waiting for data…</span>
                   </div>
-                  <div class="debug-health-value mono" data-health-val="udp">—</div>
-                  <canvas class="debug-canvas debug-health-spark" data-spark-canvas="udp"></canvas>
+                  <div class="debug-health-spark-wrap">
+                    <canvas class="debug-canvas debug-health-spark" data-spark-canvas="udp"></canvas>
+                  </div>
                 </div>
                 <div class="debug-health-card" data-health-card="usb">
-                  <div class="debug-health-card-head">
+                  <div class="debug-health-info">
                     <span class="debug-health-title">USB live stream</span>
-                    <span class="debug-health-meta mono note" data-health-meta="usb">Collecting…</span>
+                    <div class="debug-health-value" data-health-val="usb">—</div>
+                    <span class="debug-health-meta" data-health-meta="usb">Waiting for data…</span>
                   </div>
-                  <div class="debug-health-value mono" data-health-val="usb">—</div>
-                  <canvas class="debug-canvas debug-health-spark" data-spark-canvas="usb"></canvas>
+                  <div class="debug-health-spark-wrap">
+                    <canvas class="debug-canvas debug-health-spark" data-spark-canvas="usb"></canvas>
+                  </div>
                 </div>
               </div>
             </div>
@@ -2045,50 +2057,139 @@ export class DebugView extends Component {
   }
 
   private renderStatus(): void {
+    const on = this.console.connected;
     const s = this.status;
-    if (!s) {
-      this.slot("status").innerHTML = `<p class="note">${this.console.connected ? "Waiting for the timer…" : "Connect a timer to see its status."}</p>`;
-      return;
-    }
-    const profile = FIRMWARE_PROFILES.find((p) => p.code === s.profile);
-    const budget = s.sweepBudgetUs || (s.sweepHz ? Math.round(1e6 / s.sweepHz) : 0);
-    const badReset = BAD_RESETS.includes(s.reset);
-    const rows: Array<[string, string]> = [
-      ["Timer", `${esc(s.label || "(unnamed)")} · ${s.role === 1 ? "Hub" : "Spoke"}${s.slot ? ` · slot ${s.slot}` : ""}`],
-      ["Firmware", `${esc(profile?.name ?? `profile ${s.profile}`)} · ${esc(s.fw)}`],
-      ["Fingerprint", `<span class="mono">${esc(s.fp)}</span>${s.fp.toUpperCase() === UNPROVISIONED_FP ? ` <span class="badge badge-warn">not set up</span>` : ""}`],
-      ["Chip", s.chip ? `${esc(s.chip.model)} ${esc(s.chip.rev)} · ${s.chip.flashMB} MB flash · <span class="mono">${esc(s.chip.mac)}</span>` : "—"],
-      ["Uptime", `${fmtUptime(s.uptimeMs)} <span class="note">(boot #${s.boots ?? "?"})</span>`],
-      ["Last restart", badReset ? `<span class="tone-bad">${esc(s.reset)}</span> <span class="note">— see the previous boot's log below</span>` : esc(s.reset)],
-      ["Memory free", `${(s.heapFree / 1024).toFixed(0)} KB <span class="note">(lowest ${(s.heapMin / 1024).toFixed(0)} KB)</span>`],
-      [
-        "Sweeps",
-        `${s.sweepHz} Hz · ${(s.sweepUs / 1000).toFixed(2)} ms <span class="note">(slowest <span class="${budget && s.sweepUsMax > budget ? "debug-tone-warn" : ""}">${(s.sweepUsMax / 1000).toFixed(2)} ms</span> of ${(budget / 1000).toFixed(1)} ms)</span>`,
-      ],
-      [
-        "5.8 GHz receiver",
-        !s.rf.ok
-          ? `<span class="badge badge-bad">Boot check failed</span>`
-          : !s.rf.enabled
-            ? `<span class="badge badge-warn">Switched off</span>`
-            : s.scanLive
-              ? `<span class="badge badge-accent">Live scan</span> lap timing paused · floor ${s.rf.floorDb.toFixed(1)} dBm`
-              : `<span class="badge badge-good">OK</span> gain ${s.rf.gain}/${s.rf.gainMax} · floor ${s.rf.floorDb.toFixed(1)} dBm`,
-      ],
-      [
-        "Wi-Fi",
-        s.net
-          ? s.role === 1
-            ? `${esc(s.net.mode)} · channel ${s.channel} · ${s.net.stations} device${s.net.stations === 1 ? "" : "s"} joined`
-            : `${esc(s.net.mode)} · channel ${s.channel}${s.slot >= 2 ? ` · slot ${s.slot}` : " · not joined to a Hub"}`
-          : `channel ${s.channel}`,
-      ],
-      ["Channels", `<span class="mono">${s.freqs.join(" · ")}</span> MHz${s.freqsTemporary ? ` <span class="badge badge-accent">temporary</span>` : ""}`],
-    ];
+    const profile = s ? FIRMWARE_PROFILES.find((p) => p.code === s.profile) : undefined;
+    const budget = s ? s.sweepBudgetUs || (s.sweepHz ? Math.round(1e6 / s.sweepHz) : 0) : 0;
+    const badReset = s ? BAD_RESETS.includes(s.reset) : false;
+    const unprov = s ? s.fp.toUpperCase() === UNPROVISIONED_FP : false;
+    const ledClass = on && s ? "is-up" : on ? "is-warn" : "";
+    const headText = s
+      ? `On · polling every 2 s · up ${fmtUptime(s.uptimeMs)}`
+      : on
+        ? "Waiting for timer status…"
+        : "Off · connect a timer over USB";
+
+    const rfBadge = !s
+      ? `<span class="badge">—</span>`
+      : !s.rf.ok
+        ? `<span class="badge badge-bad">Boot check failed</span>`
+        : !s.rf.enabled
+          ? `<span class="badge badge-warn">Switched off</span>`
+          : s.scanLive
+            ? `<span class="badge badge-accent">Live scan</span>`
+            : `<span class="badge badge-good">OK</span>`;
+
+    const freqs = s?.freqs ?? RACEBAND;
+    const chChips = freqs
+      .map((f, i) => {
+        const rb = racebandName(f) || `Ch${i + 1}`;
+        return `<span class="debug-status-ch mono"><strong>${rb}</strong> ${f}</span>`;
+      })
+      .join("");
+
     this.slot("status").innerHTML = `
-      <dl class="debug-status">
-        ${rows.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}
-      </dl>`;
+      <div class="debug-card-head">
+        <span class="debug-led-status">
+          <span class="status-dot ${ledClass}"></span>
+          <span class="note debug-head-note mono">${headText}</span>
+        </span>
+        <div class="debug-connect-actions">
+          ${
+            s
+              ? `<span class="badge ${s.role === 1 ? "badge-accent" : ""}">${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · Slot ${s.slot}` : ""}`}</span>
+                 <span class="badge mono">${esc(s.fw)}</span>
+                 <span class="badge ${badReset ? "badge-bad" : ""}">Boot #${s.boots ?? "?"} · ${esc(s.reset)}</span>`
+              : `<span class="badge">Disconnected</span>`
+          }
+        </div>
+      </div>
+      <div class="debug-status-panels">
+        <div class="debug-subbox">
+          <div class="debug-subbox-head">
+            <span class="debug-subbox-title">${icons.cpu(14)}<span>Identity &amp; hardware</span></span>
+            <span class="badge ${unprov ? "badge-warn" : "mono"}">${s ? (unprov ? `${esc(s.fp)} · not set up` : esc(s.fp)) : "—"}</span>
+          </div>
+          <dl class="debug-kv-list">
+            <div class="debug-kv-row">
+              <dt>Timer</dt>
+              <dd>${s ? `${esc(s.label || "(unnamed)")} <span class="note">· ${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`}</span>` : "—"}</dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>Firmware</dt>
+              <dd>${s ? `${esc(profile?.name ?? `profile ${s.profile}`)} <span class="note mono">· ${esc(s.fw)}</span>` : "—"}</dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>Chip &amp; flash</dt>
+              <dd>${s?.chip ? `${esc(s.chip.model)} ${esc(s.chip.rev)} <span class="note">· ${s.chip.flashMB} MB</span>` : "—"}</dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>MAC address</dt>
+              <dd>${s?.chip ? `<span class="mono">${esc(s.chip.mac)}</span>` : "—"}</dd>
+            </div>
+          </dl>
+        </div>
+
+        <div class="debug-subbox">
+          <div class="debug-subbox-head">
+            <span class="debug-subbox-title">${icons.signal(14)}<span>5.8 GHz receiver</span></span>
+            ${rfBadge}
+          </div>
+          <dl class="debug-kv-list">
+            <div class="debug-kv-row">
+              <dt>Noise floor</dt>
+              <dd>${s ? `${s.rf.floorDb.toFixed(1)} dBm <span class="note">· gain ${s.rf.gain}/${s.rf.gainMax}</span>` : "—"}</dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>Sweep timing</dt>
+              <dd>${
+                s
+                  ? `${s.sweepHz} Hz · ${(s.sweepUs / 1000).toFixed(2)} ms <span class="note">(max <span class="${budget && s.sweepUsMax > budget ? "debug-tone-warn" : ""}">${(s.sweepUsMax / 1000).toFixed(2)} ms</span> / ${(budget / 1000).toFixed(1)} ms)</span>`
+                  : "—"
+              }</dd>
+            </div>
+            <div class="debug-kv-row is-channels-row">
+              <dt>Channels ${s?.freqsTemporary ? `<span class="badge badge-accent">temp</span>` : ""}</dt>
+              <dd class="debug-status-ch-grid">${chChips}</dd>
+            </div>
+          </dl>
+        </div>
+
+        <div class="debug-subbox">
+          <div class="debug-subbox-head">
+            <span class="debug-subbox-title">${icons.wifi(14)}<span>System &amp; network</span></span>
+            <span class="badge">${s ? (s.net ? `${esc(s.net.mode)} · Ch ${s.channel}` : `Ch ${s.channel}`) : "—"}</span>
+          </div>
+          <dl class="debug-kv-list">
+            <div class="debug-kv-row">
+              <dt>Uptime</dt>
+              <dd>${s ? `${fmtUptime(s.uptimeMs)} <span class="note">· boot #${s.boots ?? "?"}</span>` : "—"}</dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>Last restart</dt>
+              <dd>${s ? (badReset ? `<span class="tone-bad">${esc(s.reset)}</span> <span class="note">— see boot log</span>` : esc(s.reset)) : "—"}</dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>Memory free</dt>
+              <dd>${s ? `${(s.heapFree / 1024).toFixed(0)} KB <span class="note">· lowest ${(s.heapMin / 1024).toFixed(0)} KB</span>` : "—"}</dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>Wi-Fi link</dt>
+              <dd>${
+                s
+                  ? s.net
+                    ? s.role === 1
+                      ? `${s.net.stations} device${s.net.stations === 1 ? "" : "s"} joined`
+                      : s.slot >= 2
+                        ? `Joined Hub · slot ${s.slot}`
+                        : "Not joined to a Hub"
+                    : `Channel ${s.channel}`
+                  : "—"
+              }</dd>
+            </div>
+          </dl>
+        </div>
+      </div>`;
   }
 
   private renderLiveHead(): void {

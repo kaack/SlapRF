@@ -3780,32 +3780,111 @@ body.is-gate-dragging * {
   flex-wrap: wrap;
   gap: 8px;
 }
-.debug-status {
+.debug-status-panels {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-  gap: 12px 20px;
-  margin: 0;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
 }
-.debug-status div {
+.debug-subbox {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  padding: 11px 13px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
   min-width: 0;
 }
-.debug-status dt {
-  font-size: 11.5px;
-  color: var(--text-3);
-}
-.debug-status dd {
-  margin: 0;
-  font-size: 13px;
-  color: var(--text);
-  min-height: 22px;
+.debug-subbox-head {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+}
+.debug-subbox-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-2);
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.debug-subbox-title svg {
+  color: var(--accent);
+  flex-shrink: 0;
+}
+.debug-kv-list {
+  display: flex;
+  flex-direction: column;
+  margin: 0;
+}
+.debug-kv-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 5px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.035);
+  min-width: 0;
+}
+.debug-kv-row:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+.debug-kv-row dt {
+  font-size: 11.5px;
+  font-weight: 400;
+  color: var(--text-3);
+  white-space: nowrap;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.debug-kv-row dd {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text);
+  text-align: right;
+  min-width: 0;
   overflow-wrap: anywhere;
+}
+.debug-kv-row.is-channels-row {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding-top: 6px;
+}
+.debug-status-ch-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 4px;
+  text-align: left !important;
+}
+.debug-status-ch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  font-size: 10.5px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.debug-status-ch strong {
+  font-weight: 500;
+  color: var(--text-3);
 }
 .debug-card-head {
   display: flex;
@@ -4137,65 +4216,74 @@ body.is-gate-dragging * {
 .debug-waterfall-canvas {
   height: 220px;
 }
-.debug-health-strip {
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
+.debug-health-subbox {
+  margin-top: 10px;
 }
 .debug-health-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  gap: 8px;
+  margin-top: 4px;
 }
-.debug-health-grid.is-three-cards .debug-health-card[data-health-card="usb"] {
-  grid-column: 1 / -1;
+.debug-health-grid.is-three-cards {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 .debug-health-card {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  padding: 10px 12px 8px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 11px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--surface);
   min-width: 0;
 }
 .debug-health-card[hidden] {
   display: none;
 }
-.debug-health-card-head {
+.debug-health-info {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  flex-direction: column;
+  gap: 1px;
   min-width: 0;
+  flex: 1 1 auto;
 }
 .debug-health-title {
-  font-size: 12px;
-  font-weight: 500;
+  font-size: 11.5px;
+  font-weight: 400;
   color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.debug-health-value {
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.3;
+  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
 .debug-health-meta {
   font-size: 11px;
+  font-weight: 400;
   color: var(--text-3);
-  white-space: nowrap;
-  flex-shrink: 0;
-}
-.debug-health-value {
-  font-size: 13.5px;
-  font-weight: 600;
-  line-height: 1.35;
-  color: var(--text);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.debug-health-spark-wrap {
+  width: 124px;
+  height: 32px;
+  flex: 0 0 124px;
+  display: flex;
+  align-items: center;
+}
 .debug-health-spark {
-  height: 44px;
-  margin-top: 2px;
+  width: 124px;
+  height: 32px;
   cursor: default;
 }
 .debug-channel-chips {
@@ -4410,6 +4498,15 @@ body.is-gate-dragging * {
   background: linear-gradient(90deg, #0b0c0f 0%, #172554 28%, #0891b2 55%, #d4ff3a 82%, #ffffff 100%);
 }
 
+@media (max-width: 1080px) {
+  .debug-status-panels {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .debug-health-grid.is-three-cards {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
 @media (max-width: 680px) {
   .debug-bar-row {
     grid-template-columns: 70px minmax(0, 1fr) 62px 48px;
@@ -4426,7 +4523,8 @@ body.is-gate-dragging * {
   .debug-channels-inputs {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
-  .debug-health-grid {
+  .debug-health-grid,
+  .debug-health-grid.is-three-cards {
     grid-template-columns: minmax(0, 1fr);
   }
   .debug-findings-meta {

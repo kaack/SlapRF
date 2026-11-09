@@ -66,4 +66,14 @@ export const icons = {
     ),
   close: (s?: number) => svg(`<path d="M18 6 6 18M6 6l12 12"/>`, s),
   menu: (s?: number) => svg(`<path d="M4 6h16M4 12h16M4 18h16"/>`, s),
+  cpu: (s?: number) =>
+    svg(
+      `<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="0.75"/><path d="M9 2v4M15 2v4M9 18v4M15 18v4M2 9h4M2 15h4M18 9h4M18 15h4"/>`,
+      s
+    ),
+  wifi: (s?: number) =>
+    svg(
+      `<path d="M5 12.85a11 11 0 0 1 14 0"/><path d="M1.8 9.2a16 16 0 0 1 20.4 0"/><path d="M8.5 16.4a6 6 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1.2" fill="currentColor" stroke="none"/>`,
+      s
+    ),
 };

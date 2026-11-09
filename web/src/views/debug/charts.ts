@@ -1654,16 +1654,16 @@ function drawSingleSparkCanvas(
   fillRgba: string,
   threshold?: { value: number; color: string }
 ): void {
-  const { ctx, width: W, height: H } = prepareCanvas(canvas, 44);
+  const { ctx, width: W, height: H } = prepareCanvas(canvas, 32);
   ctx.clearRect(0, 0, W, H);
 
   const padX = 4;
-  const plotTop = 5;
-  const plotBot = H - 5;
+  const plotTop = 4;
+  const plotBot = H - 4;
   const plotH = Math.max(12, plotBot - plotTop);
   const plotW = Math.max(20, W - padX * 2);
 
-  // Subtle baseline & mid guideline (always visible even before samples arrive)
+  // Subtle baseline & mid guideline
   ctx.strokeStyle = "rgba(255, 255, 255, 0.045)";
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -1675,20 +1675,24 @@ function drawSingleSparkCanvas(
   ctx.lineTo(padX + plotW, botY);
   ctx.stroke();
 
-  const maxBuckets = Math.max(12, Math.min(28, Math.floor(plotW / 12)));
-  const decimated = downsampleSeries(values, maxBuckets);
-  if (decimated.length < 2) return;
+  const sparkWindow = 36;
+  const decimated = downsampleSeries(values, sparkWindow);
+  if (!decimated.length) return;
 
   const lo = Math.min(minV, ...decimated);
   const hi = Math.max(maxV, ...decimated, lo + 1e-3);
   const yOf = (v: number) => plotBot - ((v - lo) / (hi - lo)) * plotH;
-  const xOf = (i: number) => padX + (i / Math.max(1, decimated.length - 1)) * plotW;
+
+  // Fixed horizontal step (~3.3 px per sample on a 124px sparkline) anchored at the right edge
+  // so early samples grow naturally from the right instead of stretching 2 points across the canvas.
+  const stepX = plotW / (sparkWindow - 1);
+  const xOf = (i: number) => padX + plotW - (decimated.length - 1 - i) * stepX;
 
   if (threshold && threshold.value >= lo && threshold.value <= hi) {
     const ty = Math.round(yOf(threshold.value)) + 0.5;
     ctx.strokeStyle = threshold.color;
-    ctx.globalAlpha = 0.5;
-    ctx.setLineDash([4, 4]);
+    ctx.globalAlpha = 0.45;
+    ctx.setLineDash([3, 3]);
     ctx.beginPath();
     ctx.moveTo(padX, ty);
     ctx.lineTo(padX + plotW, ty);
@@ -1698,33 +1702,50 @@ function drawSingleSparkCanvas(
   }
 
   const coords = decimated.map((v, i) => ({ x: xOf(i), y: yOf(v) }));
+  if (coords.length === 1) {
+    coords.unshift({ x: Math.max(padX, coords[0].x - stepX), y: coords[0].y });
+  }
 
-  // Soft vertical gradient fill under spline
+  // Faint dotted leader from left edge when history has not filled the full sparkWindow yet
+  if (coords[0].x > padX + 2) {
+    ctx.strokeStyle = color;
+    ctx.globalAlpha = 0.22;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath();
+    ctx.moveTo(padX, coords[0].y);
+    ctx.lineTo(coords[0].x, coords[0].y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+
+  // Soft vertical gradient fill under B-spline
   const grad = ctx.createLinearGradient(0, plotTop, 0, plotBot);
   grad.addColorStop(0, fillRgba);
   grad.addColorStop(1, "rgba(0, 0, 0, 0)");
   ctx.fillStyle = grad;
   ctx.beginPath();
-  traceSmoothSpline(ctx, coords);
+  traceBSpline(ctx, coords, true);
   ctx.lineTo(coords[coords.length - 1].x, plotBot);
   ctx.lineTo(coords[0].x, plotBot);
   ctx.closePath();
   ctx.fill();
 
-  // Smooth spline stroke
+  // Smooth B-spline stroke
   ctx.strokeStyle = color;
-  ctx.lineWidth = 1.75;
+  ctx.lineWidth = 1.5;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
   ctx.beginPath();
-  traceSmoothSpline(ctx, coords);
+  traceBSpline(ctx, coords, true);
   ctx.stroke();
 
   // Single live endpoint dot on the rightmost reading
   const tip = coords[coords.length - 1];
   ctx.fillStyle = color;
   ctx.beginPath();
-  ctx.arc(tip.x, tip.y, 3, 0, Math.PI * 2);
+  ctx.arc(tip.x, tip.y, 2.4, 0, Math.PI * 2);
   ctx.fill();
 }
 
@@ -1771,24 +1792,24 @@ export function drawHealthSparklines(root: HTMLElement, health: HealthHistory, h
   const sweepOver = last ? last.sweepUs > last.sweepBudgetUs : false;
   const sweepVals = pts.map((p) => p.sweepUs / 1000);
   const sweepRange = sweepVals.length
-    ? `${Math.min(...sweepVals).toFixed(1)}–${Math.max(...sweepVals).toFixed(1)} ms`
-    : "Collecting…";
+    ? `${Math.min(...sweepVals).toFixed(1)}–${Math.max(...sweepVals).toFixed(1)} ms · ${budgetMs.toFixed(1)} ms budget`
+    : "Waiting for data…";
 
   updateCard(
     "sweep",
-    last ? `${sweepMs.toFixed(2)} ms / ${budgetMs.toFixed(1)} ms` : "—",
+    last ? `${sweepMs.toFixed(2)} ms` : "—",
     sweepRange,
     sweepOver,
     sweepVals,
     4.0,
     Math.max(7.8, budgetMs + 0.5),
     tokens.accent,
-    "rgba(212, 255, 58, 0.16)",
+    "rgba(212, 255, 58, 0.14)",
     { value: budgetMs, color: tokens.warn }
   );
 
   const heapVals = pts.map((p) => p.heapFreeKB);
-  const heapRange = last ? `min ${last.heapMinKB.toFixed(0)} KB` : "Collecting…";
+  const heapRange = last ? `Lowest ${last.heapMinKB.toFixed(0)} KB` : "Waiting for data…";
   updateCard(
     "heap",
     last ? `${last.heapFreeKB.toFixed(0)} KB` : "—",
@@ -1798,7 +1819,7 @@ export function drawHealthSparklines(root: HTMLElement, health: HealthHistory, h
     16,
     80,
     tokens.good,
-    "rgba(52, 211, 153, 0.16)",
+    "rgba(52, 211, 153, 0.14)",
     { value: 20, color: tokens.bad }
   );
 
@@ -1807,24 +1828,24 @@ export function drawHealthSparklines(root: HTMLElement, health: HealthHistory, h
     const fpsVals = pts.map((p) => p.framesPerSec);
     const validFps = fpsVals.filter((v): v is number => v !== null && Number.isFinite(v));
     const fpsRange = validFps.length
-      ? `${Math.min(...validFps).toFixed(0)}–${Math.max(...validFps).toFixed(0)}/s`
-      : "Collecting…";
+      ? `${Math.min(...validFps).toFixed(0)}–${Math.max(...validFps).toFixed(0)} frames/s`
+      : "Waiting for data…";
     updateCard(
       "udp",
-      fps !== null ? `${fps.toFixed(0)} frames/s` : "—",
+      fps !== null ? `${fps.toFixed(0)} / s` : "—",
       fpsRange,
       fps !== null && fps < 10,
       fpsVals,
       0,
       55,
       "#38bdf8",
-      "rgba(56, 189, 248, 0.16)"
+      "rgba(56, 189, 248, 0.14)"
     );
   }
 
   const dropsTotal = pts.reduce((acc, p) => acc + p.droppedDelta, 0);
   const usbVals = pts.map((p) => p.liveRateHz);
-  const usbRange = pts.length ? `${dropsTotal} dropped` : "Collecting…";
+  const usbRange = pts.length ? `${dropsTotal} dropped` : "Waiting for data…";
   updateCard(
     "usb",
     last ? `${last.liveRateHz.toFixed(0)} sweeps/s` : "—",
@@ -1834,7 +1855,7 @@ export function drawHealthSparklines(root: HTMLElement, health: HealthHistory, h
     0,
     55,
     "#c084fc",
-    "rgba(192, 132, 252, 0.16)"
+    "rgba(192, 132, 252, 0.14)"
   );
 }
 
