@@ -4794,6 +4794,10 @@ body.is-gate-dragging * {
   min-width: 0;
   flex-shrink: 0;
 }
+.status-dot.is-spoke {
+  background: #38bdf8;
+  box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.18), 0 0 8px rgba(56, 189, 248, 0.5);
+}
 .status-dot.is-warn {
   background: var(--warn);
   box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.16);
@@ -4801,6 +4805,35 @@ body.is-gate-dragging * {
 .status-dot.is-bad {
   background: var(--bad);
   box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.16);
+}
+.badge-spoke {
+  background: rgba(56, 189, 248, 0.14);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+}
+.network-conn-subbox {
+  padding-top: 12px;
+  padding-bottom: 12px;
+}
+.network-conn-body {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.network-conn-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.network-conn-desc {
+  flex: 1 1 320px;
+  min-width: 0;
+  line-height: 1.45;
+}
+.network-wifi-controls {
+  flex-wrap: wrap;
 }
 @keyframes emergency-siren-dot {
   0%, 100% {

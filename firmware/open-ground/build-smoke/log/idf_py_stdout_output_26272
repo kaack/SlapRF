@@ -1,18 +1,0 @@
-Command: ninja all
-[1/9] Performing build step for 'bootloader'
-[1/1] C:\WINDOWS\system32\cmd.exe /C "cd /D C:\fpv-gate-timer\firmware\open-ground\build-smoke\bootloader\esp-idf\esptool_py && C:\esp\tools\python_env\idf5.5_py3.12_env\Scripts\python.exe C:/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x2000 C:/fpv-gate-timer/firmware/open-ground/build-smoke/bootloader/bootloader.bin"
-Bootloader binary size 0x4d00 bytes. 0x1300 bytes (20%) free.
-[2/9] No install step for 'bootloader'
-[3/9] Completed 'bootloader'
-[4/9] Building C object esp-idf/slaprf_radio/CMakeFiles/__idf_slaprf_radio.dir/slaprf_rf58.c.obj
-[5/9] Linking C static library esp-idf\slaprf_radio\libslaprf_radio.a
-[6/9] Generating esp-idf/esp_system/ld/sections.ld
-[7/9] Linking CXX executable slaprf-open-ground.elf
-[8/9] Generating binary image from built executable
-esptool.py v4.13.0
-Creating esp32c5 image...
-Merged 1 ELF section
-Successfully created esp32c5 image.
-Generated C:/fpv-gate-timer/firmware/open-ground/build-smoke/slaprf-open-ground.bin
-[9/9] C:\WINDOWS\system32\cmd.exe /C "cd /D C:\fpv-gate-timer\firmware\open-ground\build-smoke\esp-idf\esptool_py && C:\esp\tools\python_env\idf5.5_py3.12_env\Scripts\python.exe C:/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app C:/fpv-gate-timer/firmware/open-ground/build-smoke/partition_table/partition-table.bin C:/fpv-gate-timer/firmware/open-ground/build-smoke/slaprf-open-ground.bin"
-slaprf-open-ground.bin binary size 0xe17b0 bytes. Smallest app partition is 0x177000 bytes. 0x95850 bytes (40%) free.

@@ -1,9 +1,0 @@
-
-
-# Load bootloader symbols
-set confirm off
-    # Bootloader elf was not found
-set confirm on
-
-# Load application symbols
-file C:/fpv-gate-timer/firmware/open-ground/build/bootloader/bootloader.elf
