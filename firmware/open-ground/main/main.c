@@ -176,12 +176,18 @@ static void sweep_once(void) {
     cur->seq_num = s_seq++;
 
     const int64_t t0 = slaprf_now_us();
-    slaprf_rf58_enter();
+    const bool rf_on = slaprf_diag_rf_enabled(); // The Debug page can switch the receiver off
+    if (rf_on) {
+        slaprf_rf58_enter();
+    }
     for (int i = 0; i < MAX_PILOT_SLOTS; i++) {
-        int8_t raw = esp_sdr_measure_5g_channel_dbm(g_flash_cfg.slot_freqs_mhz[i]);
+        const uint16_t mhz = slaprf_diag_channel_mhz(i, g_flash_cfg.slot_freqs_mhz[i]);
+        int8_t raw = rf_on ? esp_sdr_measure_5g_channel_dbm(mhz) : -127;
         cur->rssi_dbm[i] = raw;
     }
-    slaprf_rf58_leave();
+    if (rf_on) {
+        slaprf_rf58_leave();
+    }
     const int64_t took = slaprf_now_us() - t0;
     if (took > SWEEP_BUDGET_US) {
         ESP_LOGW(TAG, "sweep took %lld us (budget %d us)", (long long)took, SWEEP_BUDGET_US);
@@ -409,6 +415,7 @@ static void spoke_run(void) {
 void app_main(void) {
     // USB console: the flasher's config readback plus the web app's Debug page.
     slaprf_diag_start(&g_flash_cfg, sizeof(g_flash_cfg), SWEEP_HZ);
+    slaprf_diag_set_sweep_budget(SWEEP_BUDGET_US);
 
     // External U.FL antenna; 2.4 GHz link (the driver never uses 5 GHz); 5.8 GHz capture engine.
     xiao_c5_select_ufl_antenna();

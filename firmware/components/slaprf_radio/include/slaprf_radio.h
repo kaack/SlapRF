@@ -104,11 +104,20 @@ void slaprf_start_config_query_service(const volatile void *cfg, size_t len);
 /** Report one finished sweep (8 channel readings and its duration) for STATUS? / LIVE. */
 void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us);
 
+/** Report the profile's per-sweep time budget (us) so the Debug page can check sweep timing. */
+void slaprf_diag_set_sweep_budget(uint32_t budget_us);
+
 /** Report the TDMA slot this timer is using (1 = Hub). */
 void slaprf_diag_set_slot(uint8_t slot);
 
 /** Run a pending SCAN (call from the main loop while the timer is on its 2.4 GHz gap). */
 void slaprf_diag_service(void);
+
+/** Active frequency for channel index: the Debug page's temporary table (CHANNELS) if set, else configured. */
+uint16_t slaprf_diag_channel_mhz(int index, uint16_t configured);
+
+/** False while the Debug page has switched the 5.8 GHz receiver off (RF 0). */
+bool slaprf_diag_rf_enabled(void);
 
 /** 5.8 GHz boot-check results for STATUS?. */
 void slaprf_rf58_info(bool *ok, int *gain, int *gain_max, float *floor_db);

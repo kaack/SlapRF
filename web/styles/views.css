@@ -3816,7 +3816,7 @@ body.is-gate-dragging * {
 }
 .debug-bar-row {
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr) 72px;
+  grid-template-columns: 84px minmax(0, 1fr) 72px 56px;
   align-items: center;
   gap: 10px;
   font-size: 12px;
@@ -3857,7 +3857,7 @@ body.is-gate-dragging * {
 .debug-scale {
   display: flex;
   justify-content: space-between;
-  margin: 6px 82px 0 94px;
+  margin: 6px 148px 0 94px;
   font-size: 10.5px;
   color: var(--text-3);
 }
@@ -3930,9 +3930,149 @@ body.is-gate-dragging * {
 }
 @media (max-width: 680px) {
   .debug-bar-row {
-    grid-template-columns: 70px minmax(0, 1fr) 62px;
+    grid-template-columns: 70px minmax(0, 1fr) 62px 48px;
   }
   .debug-scale {
-    margin: 6px 70px 0 80px;
+    margin: 6px 130px 0 80px;
+  }
+}
+
+/* Debug page: self-test, channel editor, restart test, boot logs */
+.debug-tone-warn {
+  color: var(--warn);
+}
+.badge.debug-tone-warn {
+  border-color: rgba(251, 191, 36, 0.45);
+}
+.debug-bar-hits {
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-3);
+}
+.debug-bar-hits.is-active {
+  color: var(--accent);
+}
+.debug-checks {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid var(--border);
+}
+.debug-check {
+  display: grid;
+  grid-template-columns: 52px 170px minmax(0, 1fr);
+  align-items: baseline;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.debug-check:last-child {
+  border-bottom: 0;
+}
+.debug-check-badge {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-align: center;
+  padding: 2px 0;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  color: var(--text-3);
+}
+.debug-check.is-pass .debug-check-badge {
+  color: var(--good);
+  border-color: rgba(52, 211, 153, 0.45);
+}
+.debug-check.is-warn .debug-check-badge {
+  color: var(--warn);
+  border-color: rgba(251, 191, 36, 0.45);
+}
+.debug-check.is-fail .debug-check-badge {
+  color: var(--bad);
+  border-color: rgba(248, 113, 113, 0.5);
+}
+.debug-check-detail {
+  color: var(--text-2);
+}
+.debug-channels {
+  margin-top: 16px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.debug-channels-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 13px;
+}
+.debug-channels-inputs {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 8px;
+}
+.debug-channels-inputs label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.debug-channels-inputs .input {
+  width: 100%;
+  min-width: 0;
+  padding-left: 6px;
+  padding-right: 6px;
+}
+.debug-restart-test {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--text-2);
+}
+.debug-restart-test .input {
+  width: 64px;
+  margin: 0 4px;
+}
+.debug-runs {
+  width: 100%;
+  margin-top: 12px;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+.debug-runs th {
+  text-align: left;
+  font-weight: 500;
+  color: var(--text-3);
+  padding: 4px 8px 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.debug-runs td {
+  padding: 6px 8px 6px 0;
+  border-bottom: 1px solid var(--border);
+}
+.debug-bootlog {
+  margin-top: 14px;
+}
+.debug-bootlog .debug-log {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  height: 320px;
+}
+@media (max-width: 680px) {
+  .debug-check {
+    grid-template-columns: 48px minmax(0, 1fr);
+  }
+  .debug-check-detail {
+    grid-column: 2;
+  }
+  .debug-channels-inputs {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
   }
 }

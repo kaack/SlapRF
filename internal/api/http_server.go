@@ -164,6 +164,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/gates/provision", s.handleProvisionGate)
 	mux.HandleFunc("/api/pucks/color", s.handleUpdatePuckColor)
 	mux.HandleFunc("/api/firmware/xiao-c5.bin", s.handleFirmwareImage)
+	mux.HandleFunc("/api/debug/timer", s.handleDebugTimer)
 	mux.HandleFunc("/api/wifi/networks", s.handleWifiNetworks)
 	mux.HandleFunc("/api/thresholds", s.handleThresholds)
 	mux.HandleFunc("/api/gates/rules", s.handleGateRules)
