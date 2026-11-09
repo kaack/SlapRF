@@ -133,7 +133,7 @@ export class DebugView extends Component {
   private signalYMax = -78;
   private signalYZoomBox: { y0: number; y1: number } | null = null;
   private signalDrag: {
-    mode: "undecided" | "time" | "ybox" | "xstretch" | "ystretch";
+    mode: "pan" | "ybox" | "xstretch" | "ystretch";
     startX: number;
     startY: number;
     startEndN: number;
@@ -160,7 +160,7 @@ export class DebugView extends Component {
   private scanHover: { x: number; y: number } | null = null;
   private waterfallHover: { x: number; y: number } | null = null;
   private wfDragging: {
-    mode: "undecided" | "pan" | "scrollbar" | "zoom" | "ystretch" | "xstretch";
+    mode: "pan" | "scrollbar" | "zoom" | "ystretch" | "xstretch";
     startX: number;
     startY: number;
     startScroll: number;
@@ -170,7 +170,7 @@ export class DebugView extends Component {
     anchorFrac: number;
   } | null = null;
   private specDragging: {
-    mode: "zoom" | "ystretch" | "xstretch";
+    mode: "pan" | "zoom" | "ystretch" | "xstretch";
     startX: number;
     startY: number;
     startYMin: number;
@@ -472,15 +472,19 @@ export class DebugView extends Component {
     const latest = this.signalRing.latestN();
     const earliest = this.signalRing.earliestN();
     const sweepHz = this.status?.sweepHz ?? 50;
-    const minEnd = Math.min(latest, earliest + Math.round(this.signalWindowSec * sweepHz));
-    return Math.min(latest, Math.max(minEnd, Math.round(endN)));
+    const minEnd = Math.min(latest, earliest + this.signalWindowSec * sweepHz);
+    return Math.min(latest, Math.max(minEnd, endN));
   }
 
   private pauseSignalAt(endN: number): void {
-    if (this.signalEndN === null) {
+    const wasLive = this.signalEndN === null;
+    if (wasLive) {
       this.signalRefN = this.signalRing.latestN();
     }
     this.signalEndN = this.clampSignalEndN(endN);
+    if (wasLive) {
+      this.renderSignalControls();
+    }
   }
 
   private currentScanBounds(): { vStart: number; vStop: number } | null {
@@ -500,8 +504,8 @@ export class DebugView extends Component {
     const xb = Math.max(L, Math.min(L + plotW, Math.max(box.x0, box.x1)));
     if (xb - xa < 12) return;
     const span = b.vStop - b.vStart;
-    const f0 = Math.round(b.vStart + ((xa - L) / plotW) * span);
-    const f1 = Math.round(b.vStart + ((xb - L) / plotW) * span);
+    const f0 = b.vStart + ((xa - L) / plotW) * span;
+    const f1 = b.vStart + ((xb - L) / plotW) * span;
     if (f1 - f0 >= Math.max(10, s.step * 2)) {
       this.scanZoomStartMHz = f0;
       this.scanZoomStopMHz = f1;
@@ -519,23 +523,46 @@ export class DebugView extends Component {
     const minSpan = Math.max(10, s.step * 3);
     const nextSpan = Math.max(minSpan, Math.min(fullSpan, curSpan * factor));
     const anchorMHz = startMHz0 + anchorFrac * curSpan;
-    let f0 = Math.round(anchorMHz - anchorFrac * nextSpan);
-    let f1 = Math.round(f0 + nextSpan);
+    let f0 = anchorMHz - anchorFrac * nextSpan;
+    let f1 = f0 + nextSpan;
     if (f0 < fullStart) {
       f0 = fullStart;
-      f1 = Math.min(fullStop, Math.round(fullStart + nextSpan));
+      f1 = Math.min(fullStop, fullStart + nextSpan);
     }
     if (f1 > fullStop) {
       f1 = fullStop;
-      f0 = Math.max(fullStart, Math.round(fullStop - nextSpan));
+      f0 = Math.max(fullStart, fullStop - nextSpan);
     }
-    if (f0 <= fullStart && f1 >= fullStop) {
+    if (f0 <= fullStart + 0.5 && f1 >= fullStop - 0.5) {
       this.scanZoomStartMHz = null;
       this.scanZoomStopMHz = null;
     } else {
       this.scanZoomStartMHz = f0;
       this.scanZoomStopMHz = f1;
     }
+    this.dirtySpectrum = true;
+    this.dirtyWaterfall = true;
+  }
+
+  private applyFreqPan(startMHz0: number, startMHz1: number, deltaMHz: number): void {
+    const s = this.spectrumAcc.latest;
+    if (!s || !s.dbm.length) return;
+    const fullStart = s.start;
+    const fullStop = s.start + s.step * (s.dbm.length - 1);
+    const span = Math.max(10, startMHz1 - startMHz0);
+    if (span >= fullStop - fullStart - 0.5) return;
+    let f0 = startMHz0 + deltaMHz;
+    let f1 = f0 + span;
+    if (f0 < fullStart) {
+      f0 = fullStart;
+      f1 = Math.min(fullStop, fullStart + span);
+    }
+    if (f1 > fullStop) {
+      f1 = fullStop;
+      f0 = Math.max(fullStart, fullStop - span);
+    }
+    this.scanZoomStartMHz = f0;
+    this.scanZoomStopMHz = f1;
     this.dirtySpectrum = true;
     this.dirtyWaterfall = true;
   }
@@ -547,18 +574,47 @@ export class DebugView extends Component {
     factor: number,
     target: "signal" | "scan"
   ): void {
-    const curSpan = Math.max(6, startMax - startMin);
-    const nextSpan = Math.max(6, Math.min(DBM_MAX - DBM_MIN, curSpan * factor));
+    const curSpan = Math.max(4, startMax - startMin);
+    const nextSpan = Math.max(4, Math.min(DBM_MAX - DBM_MIN, curSpan * factor));
     const anchorDbm = startMin + anchorFrac * curSpan;
-    let nextMin = Math.round(anchorDbm - anchorFrac * nextSpan);
-    let nextMax = Math.round(nextMin + nextSpan);
+    let nextMin = anchorDbm - anchorFrac * nextSpan;
+    let nextMax = nextMin + nextSpan;
     if (nextMin < DBM_MIN) {
       nextMin = DBM_MIN;
-      nextMax = Math.min(DBM_MAX, Math.round(DBM_MIN + nextSpan));
+      nextMax = Math.min(DBM_MAX, DBM_MIN + nextSpan);
     }
     if (nextMax > DBM_MAX) {
       nextMax = DBM_MAX;
-      nextMin = Math.max(DBM_MIN, Math.round(DBM_MAX - nextSpan));
+      nextMin = Math.max(DBM_MIN, DBM_MAX - nextSpan);
+    }
+    if (target === "signal") {
+      this.signalAutoY = false;
+      this.signalSmoothYMin = nextMin;
+      this.signalSmoothYMax = nextMax;
+      this.signalYMin = nextMin;
+      this.signalYMax = nextMax;
+      this.dirtySignal = true;
+    } else {
+      this.scanAutoY = false;
+      this.scanYMin = nextMin;
+      this.scanYMax = nextMax;
+      this.spectrumAcc.setColorRange(nextMin, Math.min(-25, nextMax));
+      this.dirtySpectrum = true;
+      this.dirtyWaterfall = true;
+    }
+  }
+
+  private applyDbmPan(startMin: number, startMax: number, deltaDbm: number, target: "signal" | "scan"): void {
+    const span = Math.max(4, startMax - startMin);
+    let nextMin = startMin + deltaDbm;
+    let nextMax = nextMin + span;
+    if (nextMin < DBM_MIN) {
+      nextMin = DBM_MIN;
+      nextMax = Math.min(DBM_MAX, DBM_MIN + span);
+    }
+    if (nextMax > DBM_MAX) {
+      nextMax = DBM_MAX;
+      nextMin = Math.max(DBM_MIN, DBM_MAX - span);
     }
     if (target === "signal") {
       this.signalAutoY = false;
@@ -658,8 +714,8 @@ export class DebugView extends Component {
             this.signalSmoothYMin += (targetMin - this.signalSmoothYMin) * alphaMin;
             this.signalSmoothYMax += (targetMax - this.signalSmoothYMax) * alphaMax;
           }
-          this.signalYMin = Math.round(this.signalSmoothYMin);
-          this.signalYMax = Math.max(this.signalYMin + 12, Math.round(this.signalSmoothYMax));
+          this.signalYMin = this.signalSmoothYMin;
+          this.signalYMax = Math.max(this.signalYMin + 12, this.signalSmoothYMax);
         }
       }
     }
@@ -689,8 +745,8 @@ export class DebugView extends Component {
       if (targetMax - targetMin < 20) {
         targetMax = Math.min(DBM_MAX, targetMin + 20);
       }
-      this.scanYMin = Math.round(targetMin);
-      this.scanYMax = Math.round(targetMax);
+      this.scanYMin = targetMin;
+      this.scanYMax = targetMax;
       this.spectrumAcc.setColorRange(this.scanYMin, Math.min(-25, this.scanYMax + 6));
     }
   }
@@ -717,7 +773,7 @@ export class DebugView extends Component {
         const plotH = Math.max(10, r.height - T - 26);
         const plotW = Math.max(10, r.width - L - 14);
         if (x < 48) {
-          // Dragging on left Y-axis stretches/shrinks the dBm scale
+          // Dragging on left Y-axis stretches/shrinks the dBm scale smoothly
           const yFrac = Math.max(0, Math.min(1, 1 - (y - T) / plotH));
           this.signalDrag = {
             mode: "ystretch",
@@ -730,7 +786,7 @@ export class DebugView extends Component {
             anchorFrac: yFrac,
           };
         } else if (y >= r.height - 26 && x >= L) {
-          // Dragging on bottom X-axis stretches/shrinks the time window scale
+          // Dragging on bottom X-axis stretches/shrinks the time window scale smoothly
           const xFrac = Math.max(0, Math.min(1, (x - L) / plotW));
           this.signalDrag = {
             mode: "xstretch",
@@ -755,8 +811,9 @@ export class DebugView extends Component {
           };
           this.signalYZoomBox = { y0: y, y1: y };
         } else {
+          // Normal drag inside plot pans both X (time) and Y (dBm)
           this.signalDrag = {
-            mode: "undecided",
+            mode: "pan",
             startX: x,
             startY: y,
             startEndN: this.signalViewEndN(),
@@ -801,18 +858,32 @@ export class DebugView extends Component {
             anchorFrac: xFrac,
           };
         } else if (x >= L && x <= r.width - 14) {
-          this.specDragging = {
-            mode: "zoom",
-            startX: x,
-            startY: y,
-            startYMin: this.scanYMin,
-            startYMax: this.scanYMax,
-            startMHz0: bounds.vStart,
-            startMHz1: bounds.vStop,
-            anchorFrac: 0.5,
-          };
-          this.scanZoomBox = { x0: x, x1: x };
-          this.dirtySpectrum = true;
+          if (e.shiftKey) {
+            this.specDragging = {
+              mode: "zoom",
+              startX: x,
+              startY: y,
+              startYMin: this.scanYMin,
+              startYMax: this.scanYMax,
+              startMHz0: bounds.vStart,
+              startMHz1: bounds.vStop,
+              anchorFrac: 0.5,
+            };
+            this.scanZoomBox = { x0: x, x1: x };
+            this.dirtySpectrum = true;
+          } else {
+            // Normal drag inside Spectrum plot pans X (frequency MHz) and Y (dBm)
+            this.specDragging = {
+              mode: "pan",
+              startX: x,
+              startY: y,
+              startYMin: this.scanYMin,
+              startYMax: this.scanYMax,
+              startMHz0: bounds.vStart,
+              startMHz1: bounds.vStop,
+              anchorFrac: 0.5,
+            };
+          }
         }
       } else if (target.matches("[data-waterfall-canvas]")) {
         const r = target.getBoundingClientRect();
@@ -859,16 +930,32 @@ export class DebugView extends Component {
           };
           scrubScrollbar(target, e.clientY);
         } else if (x >= L && x < r.width - 18) {
-          this.wfDragging = {
-            mode: "undecided",
-            startX: x,
-            startY: e.clientY,
-            startScroll: this.spectrumAcc.scrollRow,
-            startVisibleRows: this.spectrumAcc.visibleRows,
-            startMHz0: bounds?.vStart ?? 5180,
-            startMHz1: bounds?.vStop ?? 5917,
-            anchorFrac: 0.5,
-          };
+          if (e.shiftKey) {
+            this.wfDragging = {
+              mode: "zoom",
+              startX: x,
+              startY: e.clientY,
+              startScroll: this.spectrumAcc.scrollRow,
+              startVisibleRows: this.spectrumAcc.visibleRows,
+              startMHz0: bounds?.vStart ?? 5180,
+              startMHz1: bounds?.vStop ?? 5917,
+              anchorFrac: 0.5,
+            };
+            this.scanZoomBox = { x0: x, x1: x };
+            this.dirtyWaterfall = true;
+            this.dirtySpectrum = true;
+          } else {
+            this.wfDragging = {
+              mode: "pan",
+              startX: x,
+              startY: e.clientY,
+              startScroll: this.spectrumAcc.scrollRow,
+              startVisibleRows: this.spectrumAcc.visibleRows,
+              startMHz0: bounds?.vStart ?? 5180,
+              startMHz1: bounds?.vStop ?? 5917,
+              anchorFrac: 0.5,
+            };
+          }
         }
       }
     });
@@ -885,8 +972,8 @@ export class DebugView extends Component {
             const yb = Math.max(T, Math.min(T + plotH, Math.max(this.signalYZoomBox.y0, this.signalYZoomBox.y1)));
             if (yb - ya >= 10) {
               const span = this.signalYMax - this.signalYMin;
-              const dHigh = Math.round(this.signalYMin + (1 - (ya - T) / plotH) * span);
-              const dLow = Math.round(this.signalYMin + (1 - (yb - T) / plotH) * span);
+              const dHigh = this.signalYMin + (1 - (ya - T) / plotH) * span;
+              const dLow = this.signalYMin + (1 - (yb - T) / plotH) * span;
               if (dHigh - dLow >= 4) {
                 this.signalAutoY = false;
                 this.signalYMin = Math.max(DBM_MIN, dLow);
@@ -924,7 +1011,7 @@ export class DebugView extends Component {
             const r = c.getBoundingClientRect();
             this.applyFreqZoomFromBox(this.scanZoomBox, Math.max(10, r.width - 44 - 18), 44);
           }
-        } else if (this.wfDragging.mode === "ystretch" || this.wfDragging.mode === "xstretch") {
+        } else if (this.wfDragging.mode === "ystretch" || this.wfDragging.mode === "xstretch" || this.wfDragging.mode === "pan") {
           this.renderScan();
         }
         this.wfDragging = null;
@@ -954,8 +1041,8 @@ export class DebugView extends Component {
       }
     });
 
-    this.listen(this.el, "mousemove", (e) => {
-      const target = e.target as HTMLElement;
+    this.listen(window, "mousemove", (e) => {
+      const target = e.target as HTMLElement | null;
       if (this.signalDrag) {
         const sig = this.el.querySelector<HTMLElement>("[data-signal-canvas]");
         if (sig) {
@@ -964,18 +1051,17 @@ export class DebugView extends Component {
           const y = e.clientY - r.top;
           const dx = x - this.signalDrag.startX;
           const dy = y - this.signalDrag.startY;
-          if (this.signalDrag.mode === "undecided" && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
-            this.signalDrag.mode = Math.abs(dy) > Math.abs(dx) * 1.5 ? "ybox" : "time";
-          }
+          const plotW = Math.max(10, r.width - 44 - 14);
+          const plotH = Math.max(10, r.height - 12 - 26);
           if (this.signalDrag.mode === "ystretch") {
             // Dragging UP stretches Y (zooms in to smaller dBm span); dragging DOWN shrinks back to full span
-            const factor = Math.exp(dy / 110);
+            const factor = Math.exp(dy / 140);
             this.applyDbmStretch(this.signalDrag.startYMin, this.signalDrag.startYMax, this.signalDrag.anchorFrac, factor, "signal");
           } else if (this.signalDrag.mode === "xstretch") {
             // Dragging RIGHT stretches X (smaller windowSec so signals spread out); dragging LEFT shrinks X
             this.signalAutoX = false;
-            const factor = Math.exp(-dx / 120);
-            const nextSec = Math.max(0.4, Math.min(120, Number((this.signalDrag.startWindowSec * factor).toFixed(2))));
+            const factor = Math.exp(-dx / 150);
+            const nextSec = Math.max(0.4, Math.min(120, this.signalDrag.startWindowSec * factor));
             const sweepHz = this.status?.sweepHz ?? 50;
             const anchorN =
               this.signalDrag.startEndN - (1 - this.signalDrag.anchorFrac) * this.signalDrag.startWindowSec * sweepHz;
@@ -988,15 +1074,20 @@ export class DebugView extends Component {
           } else if (this.signalDrag.mode === "ybox") {
             this.signalYZoomBox = { y0: this.signalDrag.startY, y1: y };
             this.dirtySignal = true;
-          } else if (this.signalDrag.mode === "time") {
-            const plotW = Math.max(10, r.width - 44 - 14);
-            const sweepHz = this.status?.sweepHz ?? 50;
-            const windowSweeps = this.signalWindowSec * sweepHz;
-            const deltaN = (dx / plotW) * windowSweeps;
-            this.pauseSignalAt(this.signalDrag.startEndN - deltaN);
-            this.renderSignalControls();
+          } else if (this.signalDrag.mode === "pan") {
+            if (Math.abs(dx) > 2) {
+              const sweepHz = this.status?.sweepHz ?? 50;
+              const windowSweeps = this.signalWindowSec * sweepHz;
+              const deltaN = (dx / plotW) * windowSweeps;
+              this.pauseSignalAt(this.signalDrag.startEndN - deltaN);
+              this.dirtyNoiseTable = true;
+            }
+            if (Math.abs(dy) > 3 || !this.signalAutoY) {
+              const ySpan = this.signalDrag.startYMax - this.signalDrag.startYMin;
+              const deltaDbm = (dy / plotH) * ySpan;
+              this.applyDbmPan(this.signalDrag.startYMin, this.signalDrag.startYMax, deltaDbm, "signal");
+            }
             this.dirtySignal = true;
-            this.dirtyNoiseTable = true;
           }
         }
       }
@@ -1007,18 +1098,31 @@ export class DebugView extends Component {
           const r = spec.getBoundingClientRect();
           const x = e.clientX - r.left;
           const y = e.clientY - r.top;
+          const dx = x - this.specDragging.startX;
+          const dy = y - this.specDragging.startY;
+          const plotW = Math.max(10, r.width - 44 - 14);
+          const plotH = Math.max(10, r.height - 12 - 26);
           if (this.specDragging.mode === "ystretch") {
-            const dy = y - this.specDragging.startY;
-            const factor = Math.exp(dy / 110);
+            const factor = Math.exp(dy / 140);
             this.applyDbmStretch(this.specDragging.startYMin, this.specDragging.startYMax, this.specDragging.anchorFrac, factor, "scan");
           } else if (this.specDragging.mode === "xstretch") {
-            const dx = x - this.specDragging.startX;
-            const factor = Math.exp(-dx / 120);
+            const factor = Math.exp(-dx / 150);
             this.applyFreqStretch(this.specDragging.startMHz0, this.specDragging.startMHz1, this.specDragging.anchorFrac, factor);
           } else if (this.specDragging.mode === "zoom") {
             const clampedX = Math.max(44, Math.min(r.width - 14, x));
             this.scanZoomBox = { x0: this.specDragging.startX, x1: clampedX };
             this.dirtySpectrum = true;
+          } else if (this.specDragging.mode === "pan") {
+            if (Math.abs(dx) > 2) {
+              const fSpan = this.specDragging.startMHz1 - this.specDragging.startMHz0;
+              const deltaMHz = -(dx / plotW) * fSpan;
+              this.applyFreqPan(this.specDragging.startMHz0, this.specDragging.startMHz1, deltaMHz);
+            }
+            if (Math.abs(dy) > 2 || !this.scanAutoY) {
+              const ySpan = this.specDragging.startYMax - this.specDragging.startYMin;
+              const deltaDbm = (dy / plotH) * ySpan;
+              this.applyDbmPan(this.specDragging.startYMin, this.specDragging.startYMax, deltaDbm, "scan");
+            }
           }
         }
       }
@@ -1030,17 +1134,15 @@ export class DebugView extends Component {
           const x = e.clientX - r.left;
           const dx = x - this.wfDragging.startX;
           const dy = e.clientY - this.wfDragging.startY;
-          if (this.wfDragging.mode === "undecided" && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
-            this.wfDragging.mode = Math.abs(dx) >= Math.abs(dy) ? "zoom" : "pan";
-          }
+          const plotW = Math.max(10, r.width - 44 - 18);
           if (this.wfDragging.mode === "ystretch") {
             // Dragging UP stretches rows (fewer visible passes = taller rows); dragging DOWN compresses more passes
-            const factor = Math.exp(dy / 110);
+            const factor = Math.exp(dy / 140);
             this.spectrumAcc.setVisibleRows(this.wfDragging.startVisibleRows * factor);
             this.updateScanFindings();
             this.dirtyWaterfall = true;
           } else if (this.wfDragging.mode === "xstretch") {
-            const factor = Math.exp(-dx / 120);
+            const factor = Math.exp(-dx / 150);
             this.applyFreqStretch(this.wfDragging.startMHz0, this.wfDragging.startMHz1, this.wfDragging.anchorFrac, factor);
           } else if (this.wfDragging.mode === "scrollbar") {
             scrubScrollbar(wf, e.clientY);
@@ -1050,6 +1152,11 @@ export class DebugView extends Component {
             this.dirtyWaterfall = true;
             this.dirtySpectrum = true;
           } else if (this.wfDragging.mode === "pan") {
+            if (Math.abs(dx) > 2) {
+              const fSpan = this.wfDragging.startMHz1 - this.wfDragging.startMHz0;
+              const deltaMHz = -(dx / plotW) * fSpan;
+              this.applyFreqPan(this.wfDragging.startMHz0, this.wfDragging.startMHz1, deltaMHz);
+            }
             const pxPerRow = Math.max(1, (r.height - 30) / this.spectrumAcc.visibleRows);
             const deltaRows = (this.wfDragging.startY - e.clientY) / pxPerRow;
             this.spectrumAcc.setScrollRow(this.wfDragging.startScroll + deltaRows);
@@ -1059,17 +1166,24 @@ export class DebugView extends Component {
         }
       }
 
-      if (target.matches("[data-signal-canvas], [data-spectrum-canvas], [data-waterfall-canvas]")) {
+      if (target && target.matches && target.matches("[data-signal-canvas], [data-spectrum-canvas], [data-waterfall-canvas]")) {
         const r = target.getBoundingClientRect();
         const x = e.clientX - r.left;
         const y = e.clientY - r.top;
-        // Set axis resize cursor when hovering over left Y-axis or bottom X-axis
-        if (x < 48 || (target.matches("[data-waterfall-canvas]") && x >= r.width - 28)) {
+        const isDraggingPlot =
+          (this.signalDrag && this.signalDrag.mode === "pan") ||
+          (this.specDragging && this.specDragging.mode === "pan") ||
+          (this.wfDragging && this.wfDragging.mode === "pan");
+        if (isDraggingPlot) {
+          target.style.cursor = "grabbing";
+        } else if (x < 48 || (target.matches("[data-waterfall-canvas]") && x >= r.width - 28)) {
           target.style.cursor = "ns-resize";
         } else if (y >= r.height - 26 && x >= 44) {
           target.style.cursor = "ew-resize";
-        } else {
+        } else if (e.shiftKey) {
           target.style.cursor = "crosshair";
+        } else {
+          target.style.cursor = "grab";
         }
         if (target.matches("[data-signal-canvas]")) {
           this.signalHover = { x, y };
@@ -1105,7 +1219,7 @@ export class DebugView extends Component {
           const r = target.getBoundingClientRect();
           const x = e.clientX - r.left;
           const y = e.clientY - r.top;
-          const factor = e.deltaY > 0 ? 1.25 : 0.8;
+          const factor = e.deltaY > 0 ? 1.18 : 0.84;
           // Wheel on Y-axis (< 48px) or Shift+Wheel zooms the Y-axis (dBm) around cursor Y
           if (x < 48 || e.shiftKey) {
             const T = 12;
@@ -1123,7 +1237,7 @@ export class DebugView extends Component {
             const curEndN = this.signalViewEndN();
             const curSweeps = this.signalWindowSec * sweepHz;
             const anchorN = curEndN - (1 - frac) * curSweeps;
-            const nextSec = Math.max(0.4, Math.min(120, Number((this.signalWindowSec * factor).toFixed(2))));
+            const nextSec = Math.max(0.4, Math.min(120, this.signalWindowSec * factor));
             this.signalWindowSec = nextSec;
             if (this.signalEndN !== null) {
               this.signalEndN = this.clampSignalEndN(anchorN + (1 - frac) * nextSec * sweepHz);
@@ -1135,19 +1249,18 @@ export class DebugView extends Component {
           return;
         }
         if (target.matches("[data-spectrum-canvas]")) {
+          e.preventDefault();
           const r = target.getBoundingClientRect();
           const x = e.clientX - r.left;
           const y = e.clientY - r.top;
-          const factor = e.deltaY > 0 ? 1.25 : 0.8;
+          const factor = e.deltaY > 0 ? 1.18 : 0.84;
           if (x < 48 || e.shiftKey) {
-            e.preventDefault();
             const T = 12;
             const plotH = Math.max(10, r.height - T - 26);
             const yFrac = Math.max(0, Math.min(1, 1 - (y - T) / plotH));
             this.applyDbmStretch(this.scanYMin, this.scanYMax, yFrac, factor, "scan");
             this.renderScan();
-          } else if (y >= r.height - 26 && x >= 44) {
-            e.preventDefault();
+          } else {
             const bounds = this.currentScanBounds();
             if (bounds) {
               const plotW = Math.max(10, r.width - 44 - 14);
@@ -1161,7 +1274,7 @@ export class DebugView extends Component {
         if (!target.matches("[data-waterfall-canvas]")) return;
         const r = target.getBoundingClientRect();
         const x = e.clientX - r.left;
-        const factor = e.deltaY > 0 ? 1.25 : 0.8;
+        const factor = e.deltaY > 0 ? 1.18 : 0.84;
         if (x < 48 || e.shiftKey) {
           e.preventDefault();
           this.spectrumAcc.setVisibleRows(this.spectrumAcc.visibleRows * factor);
@@ -2394,7 +2507,7 @@ export class DebugView extends Component {
               : ""
           }
           <button type="button" class="btn btn-sm ${this.signalAutoY ? "btn-armed" : "btn-unarmed"} mono" data-action="signal-auto-y" title="${this.signalAutoY ? "Auto Y-axis scaling is ON — fits visible signal traces automatically. Click for full manual scale (-100…-20 dBm), or drag the Y-axis to stretch." : "Manual Y-axis range — click to re-enable Auto Y-axis scaling"}">
-            ${icons.target(13)}<span>${this.signalAutoY ? "Auto Y" : `Y: ${this.signalYMin}…${this.signalYMax} dBm`}</span>
+            ${icons.target(13)}<span>${this.signalAutoY ? "Auto Y" : `Y: ${Math.round(this.signalYMin)}…${Math.round(this.signalYMax)} dBm`}</span>
           </button>
           ${
             !this.signalAutoY && isYZoomed
@@ -2424,7 +2537,7 @@ export class DebugView extends Component {
           <button type="button" class="btn btn-sm btn-ghost debug-ch-all-btn" data-action="signal-ch-all">${allOn ? "Hide all" : "Show all"}</button>
         </div>
         <div class="debug-connect-actions">
-          <span class="note debug-chart-hint">${liveFollowOn ? "Drag X/Y axes to stretch · drag chart to scroll · wheel to zoom" : "Paused · drag X/Y axes to stretch · double-click to reset"}</span>
+          <span class="note debug-chart-hint">${liveFollowOn ? "Drag chart to pan X/Y · drag axes to stretch · wheel to zoom" : "Paused · drag chart to pan X/Y · double-click to reset"}</span>
           <div class="debug-btn-group" role="group" aria-label="Export signal chart">
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts ? "" : "disabled"} title="Download recorded 50 Hz samples as CSV">CSV</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-png" ${hasPts ? "" : "disabled"} title="Save chart snapshot as PNG">PNG</button>
@@ -2753,16 +2866,16 @@ export class DebugView extends Component {
           </div>
           <button type="button" class="btn btn-sm btn-ghost" data-action="clear-hold" ${hasScan ? "" : "disabled"}>Reset hold/avg</button>
           <button type="button" class="btn btn-sm ${this.scanAutoY ? "btn-armed" : "btn-unarmed"} mono" data-action="scan-auto-y" title="${this.scanAutoY ? "Auto Y-axis scaling is on (fits scanned dBm range) — click for full −100…−20 dBm scale, or drag the Y-axis" : "Manual Y-axis range active — click to re-enable Auto Y scaling"}">
-            ${icons.target(13)}<span>${this.scanAutoY ? "Auto Y" : `Y: ${this.scanYMin}…${this.scanYMax} dBm`}</span>
+            ${icons.target(13)}<span>${this.scanAutoY ? "Auto Y" : `Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} dBm`}</span>
           </button>
           ${
             isFreqZoomed
-              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="scan-reset-zoom" title="Reset frequency zoom (or double-click chart)">${icons.target(13)}<span>X: ${this.scanZoomStartMHz}–${this.scanZoomStopMHz} MHz ×</span></button>`
+              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="scan-reset-zoom" title="Reset frequency zoom (or double-click chart)">${icons.target(13)}<span>X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz ×</span></button>`
               : ""
           }
         </div>
         <div class="debug-connect-actions">
-          <span class="note debug-chart-hint">Drag box to zoom MHz · drag X/Y axes to stretch</span>
+          <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
           <div class="debug-btn-group" role="group" aria-label="Export spectrum & waterfall">
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-scan-csv" ${hasScan ? "" : "disabled"} title="Export waterfall scan history as CSV">CSV</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-png" ${hasScan ? "" : "disabled"} title="Save spectrum trace as PNG">Spectrum PNG</button>

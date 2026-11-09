@@ -225,10 +225,11 @@ export class SignalRingBuffer {
   }
 
   /** Slice points within `[endN - windowSec * sweepHz, endN]` (or up to the latest point when `endN` is null). */
-  public windowPoints(windowSec: number, sweepHz = 50, endN: number | null = null): SignalPoint[] {
+  public windowPoints(windowSec: number, sweepHz = 50, endN: number | null = null, padSweeps = 0): SignalPoint[] {
     if (!this.points.length) return [];
     const targetEndN = endN ?? this.points[this.points.length - 1].n;
-    const minN = targetEndN - Math.round(windowSec * sweepHz);
+    const minN = targetEndN - windowSec * sweepHz - padSweeps;
+    const maxN = targetEndN + padSweeps;
     // Binary search for minN
     let lo = 0;
     let hi = this.points.length - 1;
@@ -237,16 +238,16 @@ export class SignalRingBuffer {
       if (this.points[mid].n < minN) lo = mid + 1;
       else hi = mid;
     }
-    if (endN === null) {
+    if (endN === null && padSweeps <= 0) {
       return this.points.slice(lo);
     }
-    // Binary search for first point > targetEndN
+    // Binary search for first point > maxN
     let endIdx = this.points.length;
     let rLo = lo;
     let rHi = this.points.length;
     while (rLo < rHi) {
       const mid = (rLo + rHi) >> 1;
-      if (this.points[mid].n <= targetEndN) rLo = mid + 1;
+      if (this.points[mid].n <= maxN) rLo = mid + 1;
       else rHi = mid;
     }
     endIdx = rLo;
@@ -425,29 +426,27 @@ function traceBSpline(ctx: CanvasRenderingContext2D, pts: Array<{ x: number; y: 
 }
 
 /**
- * Decimate a dense contiguous trace segment to at most `maxBuckets` points before B-spline rendering.
- * Preserves sharp RF bursts/crossings while averaging ±1 dB ADC quantization chatter.
+ * Decimate a dense contiguous trace segment using fixed sweep-number (`n`) buckets so panning
+ * or stretching the X-axis never shifts bucket boundaries.
  */
 function decimateSignalSegment(
-  pts: Array<{ x: number; y: number; dbm: number }>,
-  maxBuckets: number
+  pts: Array<{ n: number; x: number; y: number; dbm: number }>,
+  strideN: number
 ): Array<{ x: number; y: number }> {
-  if (pts.length <= maxBuckets || maxBuckets < 4) {
+  if (strideN <= 1 || pts.length <= 6) {
     return pts;
   }
-  const out: Array<{ x: number; y: number }> = [pts[0]];
-  const innerBuckets = maxBuckets - 2;
-  const span = pts.length - 2;
-  for (let b = 0; b < innerBuckets; b++) {
-    const i0 = 1 + Math.floor((b * span) / innerBuckets);
-    const i1 = Math.min(pts.length - 1, Math.max(i0 + 1, 1 + Math.floor(((b + 1) * span) / innerBuckets)));
+  const out: Array<{ x: number; y: number }> = [];
+  let i = 0;
+  while (i < pts.length) {
+    const bKey = Math.floor(pts[i].n / strideN);
     let sumX = 0;
     let sumY = 0;
     let minDbm = 1000;
     let maxDbm = -1000;
-    let peakPt = pts[i0];
-    const count = i1 - i0;
-    for (let i = i0; i < i1; i++) {
+    let peakPt = pts[i];
+    let count = 0;
+    while (i < pts.length && Math.floor(pts[i].n / strideN) === bKey) {
       const p = pts[i];
       sumX += p.x;
       sumY += p.y;
@@ -456,15 +455,15 @@ function decimateSignalSegment(
         maxDbm = p.dbm;
         peakPt = p;
       }
+      count++;
+      i++;
     }
-    // If bucket contains a significant excursion (>= 5 dB), preserve the peak point
     if (maxDbm - minDbm >= 5) {
       out.push({ x: peakPt.x, y: peakPt.y });
     } else {
       out.push({ x: sumX / count, y: sumY / count });
     }
   }
-  out.push(pts[pts.length - 1]);
   return out;
 }
 
@@ -488,7 +487,6 @@ export function drawSignalOverTimeCanvas(
   const yMin = opts.yMinDbm ?? DBM_MIN;
   const yMax = Math.max(yMin + 4, opts.yMaxDbm ?? DBM_MAX);
   const ySpan = yMax - yMin;
-  const isYZoomed = !opts.autoY && (yMin !== DBM_MIN || yMax !== DBM_MAX);
 
   const yOf = (dbm: number) => {
     return T + (1 - (dbm - yMin) / ySpan) * plotH;
@@ -511,7 +509,7 @@ export function drawSignalOverTimeCanvas(
     ctx.moveTo(L, y);
     ctx.lineTo(W - R, y);
     ctx.stroke();
-    ctx.fillStyle = isYZoomed ? tokens.accent : tokens.text3;
+    ctx.fillStyle = tokens.text3;
     ctx.fillText(`${d}`, L - 6, y);
   }
 
@@ -540,7 +538,6 @@ export function drawSignalOverTimeCanvas(
                   ? 10
                   : 20;
   const stepSweeps = stepSec * opts.sweepHz;
-  const isXCustom = !opts.autoX && ![1, 2, 5, 10, 30, 120].includes(Math.round(opts.windowSec * 10) / 10);
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   if (stepSweeps > 0) {
@@ -554,7 +551,7 @@ export function drawSignalOverTimeCanvas(
       ctx.lineTo(x, T + plotH);
       ctx.stroke();
       const agoSec = Math.max(0, (refN - tN) / opts.sweepHz);
-      ctx.fillStyle = isXCustom ? tokens.accent : tokens.text3;
+      ctx.fillStyle = tokens.text3;
       const lbl =
         agoSec < 0.02
           ? opts.endN === null || opts.endN === undefined
@@ -569,7 +566,7 @@ export function drawSignalOverTimeCanvas(
     }
   }
 
-  const pts = ring.windowPoints(opts.windowSec, opts.sweepHz, opts.endN ?? null);
+  const pts = ring.windowPoints(opts.windowSec, opts.sweepHz, opts.endN ?? null, 3);
   if (!pts.length) {
     ctx.fillStyle = tokens.text3;
     ctx.textAlign = "center";
@@ -656,7 +653,7 @@ export function drawSignalOverTimeCanvas(
   const maxStepN = Math.max(2, Math.round(opts.sweepHz / 5)); // >200 ms gap breaks the line
   const pxPerSweep = plotW / Math.max(1, windowSweeps);
   const showSampleDots = pxPerSweep >= 7.5;
-  const maxSplineBuckets = Math.max(24, Math.floor(plotW / 4.5));
+  const strideN = windowSweeps > 360 ? Math.max(1, Math.floor(windowSweeps / 240)) : 1;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
@@ -667,11 +664,11 @@ export function drawSignalOverTimeCanvas(
     ctx.lineWidth = showSampleDots ? 1.85 : 1.65;
     ctx.beginPath();
 
-    let segment: Array<{ x: number; y: number; dbm: number }> = [];
+    let segment: Array<{ n: number; x: number; y: number; dbm: number }> = [];
     let prevN = -1;
     const flushSegment = () => {
       if (segment.length === 0) return;
-      const smoothed = decimateSignalSegment(segment, maxSplineBuckets);
+      const smoothed = decimateSignalSegment(segment, strideN);
       traceBSpline(ctx, smoothed, true);
       segment = [];
     };
@@ -686,7 +683,7 @@ export function drawSignalOverTimeCanvas(
       if (segment.length > 0 && p.n - prevN > maxStepN) {
         flushSegment();
       }
-      segment.push({ x: xOfN(p.n), y: yOf(v), dbm: v });
+      segment.push({ n: p.n, x: xOfN(p.n), y: yOf(v), dbm: v });
       prevN = p.n;
     }
     flushSegment();
@@ -1241,8 +1238,6 @@ export function drawSpectrumCanvas(
   const yMin = opts.yMinDbm ?? DBM_MIN;
   const yMax = Math.max(yMin + 4, opts.yMaxDbm ?? DBM_MAX);
   const ySpan = yMax - yMin;
-  const isYZoomed = !opts.autoY && (yMin !== DBM_MIN || yMax !== DBM_MAX);
-  const isXZoomed = vStart !== s.start || vStop !== scanStop;
   const xOf = (f: number) => L + ((f - vStart) / span) * plotW;
   const yOf = (d: number) => T + (1 - (d - yMin) / ySpan) * plotH;
 
@@ -1260,7 +1255,7 @@ export function drawSpectrumCanvas(
     ctx.moveTo(L, y);
     ctx.lineTo(W - R, y);
     ctx.stroke();
-    ctx.fillStyle = isYZoomed ? tokens.accent : tokens.text3;
+    ctx.fillStyle = tokens.text3;
     ctx.fillText(`${d}`, L - 6, y);
   }
 
@@ -1270,7 +1265,7 @@ export function drawSpectrumCanvas(
   ctx.textBaseline = "top";
   for (let f = Math.ceil(vStart / fStep) * fStep; f <= vStop; f += fStep) {
     const x = Math.round(xOf(f)) + 0.5;
-    ctx.fillStyle = isXZoomed ? tokens.accent : tokens.text3;
+    ctx.fillStyle = tokens.text3;
     ctx.fillText(`${f}`, x, T + plotH + 6);
   }
 
@@ -1455,13 +1450,11 @@ export function drawWaterfallCanvas(
   const topAgeSec = startRow * passSec;
   const midAgeSec = (startRow + visRows / 2) * passSec;
   const botAgeSec = (startRow + visRows) * passSec;
-  const isRowsStretched = visRows !== 80;
-  ctx.fillStyle = startRow > 0 ? tokens.warn : isRowsStretched ? tokens.accent : tokens.text3;
+  ctx.fillStyle = tokens.text3;
   ctx.font = `10px ${tokens.fontMono}`;
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
   ctx.fillText(startRow === 0 ? "now" : `-${topAgeSec.toFixed(1)}s`, L - 6, T + 6);
-  ctx.fillStyle = isRowsStretched ? tokens.accent : tokens.text3;
   ctx.fillText(visRows <= 30 ? `-${midAgeSec.toFixed(1)}s` : `-${midAgeSec.toFixed(0)}s`, L - 6, T + plotH / 2);
   ctx.fillText(visRows <= 30 ? `-${botAgeSec.toFixed(1)}s` : `-${botAgeSec.toFixed(0)}s`, L - 6, T + plotH - 6);
 
