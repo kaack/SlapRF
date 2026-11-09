@@ -103,7 +103,7 @@ const SLIP_ESC = 0xdb;
 const SLIP_ESC_END = 0xdc;
 const SLIP_ESC_ESC = 0xdd;
 
-const FLASH_BLOCK_SIZE = 4096;
+const FLASH_BLOCK_SIZE = 1024; // ESP32C5ROM.FLASH_WRITE_SIZE = 0x400 (1024 bytes)
 
 /**
  * One firmware design. Each lives in its own directory (`firmware/<id>/main.c`) tuned for a track
@@ -385,22 +385,24 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function enterUsbJtagBootloader(port: SerialPortLike): Promise<void> {
-  // Matches esptool USBJTAGSerialReset for ESP32-C5 USB-Serial-JTAG (including Windows usbser.sys)
-  await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+  // Matches esptool USBJTAGSerialReset for ESP32-C5 USB-Serial-JTAG (including the (1,1) transition)
+  await port.setSignals({ dataTerminalReady: false, requestToSend: false }); // Idle (0,0)
   await sleep(100);
-  await port.setSignals({ dataTerminalReady: true, requestToSend: false });
+  await port.setSignals({ dataTerminalReady: true, requestToSend: false }); // Set IO0 (1,0)
   await sleep(100);
-  await port.setSignals({ dataTerminalReady: false, requestToSend: true });
+  await port.setSignals({ dataTerminalReady: true, requestToSend: true }); // Step through (1,1) before (0,1)
+  await port.setSignals({ dataTerminalReady: false, requestToSend: true }); // Reset (0,1)
   await sleep(100);
-  await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+  await port.setSignals({ dataTerminalReady: false, requestToSend: false }); // Chip out of reset (0,0)
   await sleep(120);
 }
 
 async function hardResetBoard(port: SerialPortLike): Promise<void> {
+  // Matches esptool HardReset(uses_usb=True)
   await port.setSignals({ dataTerminalReady: false, requestToSend: true });
-  await sleep(100);
+  await sleep(200);
   await port.setSignals({ dataTerminalReady: false, requestToSend: false });
-  await sleep(80);
+  await sleep(200);
 }
 
 async function readChunkWithTimeout(
@@ -442,11 +444,17 @@ function parseStatusSnapshot(bytes: Uint8Array): TimerStatusSnapshot | undefined
 
 async function collectSerialReply(
   reader: ReadableStreamDefaultReader<Uint8Array>,
-  maxWaitMs: number
+  maxWaitMs: number,
+  retryWrite?: () => Promise<void>
 ): Promise<Uint8Array> {
   const chunks: Uint8Array[] = [];
   let total = 0;
   let timedOut = false;
+  const retryTimer = retryWrite
+    ? window.setTimeout(() => {
+        void retryWrite().catch(() => undefined);
+      }, Math.floor(maxWaitMs * 0.45))
+    : 0;
   const timer = window.setTimeout(() => {
     timedOut = true;
     void reader.cancel().catch(() => undefined);
@@ -465,13 +473,13 @@ async function collectSerialReply(
         off += c.length;
       }
       if (findConfigBlock(merged) >= 0 && parseStatusSnapshot(merged)) {
-        window.clearTimeout(timer);
         return merged;
       }
     }
   } catch {
     // stream cancelled or closed on timeout
   } finally {
+    if (retryTimer) window.clearTimeout(retryTimer);
     window.clearTimeout(timer);
   }
 
@@ -544,27 +552,7 @@ export async function readXiaoC5OverWebSerial(
     // Query running firmware over USB Serial ("STATUS?\nSLAPRF?\n") without touching bootloader lines.
     const query = new TextEncoder().encode("\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?\n");
     await writer.write(query);
-    let rx = await collectSerialReply(reader, 650);
-
-    // If the board was still booting or in the middle of a command, release & re-acquire reader for one retry.
-    if (findConfigBlock(rx) < 0 && !parseStatusSnapshot(rx)) {
-      try {
-        reader.releaseLock();
-      } catch {
-        // ignore
-      }
-      reader = port.readable?.getReader();
-      if (reader) {
-        await writer.write(query);
-        const retryRx = await collectSerialReply(reader, 650);
-        if (retryRx.length > 0) {
-          const combined = new Uint8Array(rx.length + retryRx.length);
-          combined.set(rx, 0);
-          combined.set(retryRx, rx.length);
-          rx = combined;
-        }
-      }
-    }
+    const rx = await collectSerialReply(reader, 950, () => writer.write(query));
 
     if (rx.length > 0) {
       const parsed = parseSlaprfConfigBlock(rx);
@@ -668,6 +656,8 @@ export async function flashXiaoC5OverWebSerial(
   }
 
   let pumpActive = false;
+  let collectRaw = true;
+  const rawChunks: Uint8Array[] = [];
   const slipQueue: Uint8Array[] = [];
   const slipWaiters: Array<() => void> = [];
 
@@ -681,6 +671,9 @@ export async function flashXiaoC5OverWebSerial(
         while (pumpActive) {
           const { value, done } = await r.read();
           if (done || !value) break;
+          if (collectRaw) {
+            rawChunks.push(value);
+          }
           for (let i = 0; i < value.length; i++) {
             const b = value[i];
             if (b === SLIP_END) {
@@ -745,32 +738,33 @@ export async function flashXiaoC5OverWebSerial(
   };
 
   try {
+    startSlipPump(reader);
+
     let fingerprintKept = false;
-    if (keepFingerprint && reader) {
+    if (keepFingerprint) {
       onProgress({
         stage: "reading",
         percent: 4,
         detail: "Checking board for an existing fingerprint…",
       });
       await writer.write(new TextEncoder().encode("\nLIVE 0\nSCAN STOP\nLOG 0\nSLAPRF?\n"));
-      const rx = await collectSerialReply(reader, 260);
+      await sleep(260);
+      collectRaw = false;
+      let total = 0;
+      for (const c of rawChunks) total += c.length;
+      const rx = new Uint8Array(total);
+      let off = 0;
+      for (const c of rawChunks) {
+        rx.set(c, off);
+        off += c.length;
+      }
       const existing = rx.length > 0 ? parseSlaprfConfigBlock(rx) : null;
       if (existing?.fingerprint && existing.fingerprint !== "00000000" && existing.fingerprint !== "00000001") {
         imageBytes = await withFingerprint(imageBytes, existing.fingerprint);
         fingerprintKept = true;
       }
-      try {
-        reader.releaseLock();
-      } catch {
-        // ignore
-      }
-      reader = port.readable?.getReader();
-      if (!reader) {
-        throw new Error("Could not reopen USB serial reader stream.");
-      }
     }
-
-    startSlipPump(reader);
+    collectRaw = false;
 
     onProgress({
       stage: "bootloader",
