@@ -5145,6 +5145,101 @@ body.is-gate-dragging * {
 .debug-net-slot-card.is-assigned {
   border-color: var(--border-strong);
 }
+.debug-net-slot-card.is-clickable {
+  cursor: pointer;
+  transition: border-color 0.14s ease, background 0.14s ease;
+}
+.debug-net-slot-card.is-clickable:hover {
+  border-color: var(--text-3);
+}
+.debug-net-slot-card.is-selected {
+  border-color: var(--text-2);
+  background: var(--surface);
+}
+.debug-net-spoke-inspector {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.debug-net-inspector-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.debug-net-inspector-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13px;
+  color: var(--text);
+  min-width: 0;
+}
+.debug-net-inspector-alert {
+  padding: 8px 11px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(251, 191, 36, 0.38);
+  background: rgba(251, 191, 36, 0.07);
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.debug-net-inspector-kpis {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+.debug-net-inspector-kpi {
+  padding: 7px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.debug-net-inspector-kpi-label {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.debug-net-inspector-kpi-val {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.debug-net-inspector-bars-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.debug-net-inspector-bars {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 14px;
+}
+.debug-net-inspector-bar-row {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr) 64px;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+.debug-net-inspector-bar-row.is-muted {
+  opacity: 0.42;
+}
 .debug-net-slot-card.is-empty {
   border-style: dashed;
   opacity: 0.62;
@@ -5249,6 +5344,12 @@ body.is-gate-dragging * {
   }
   .debug-net-slot-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .debug-net-inspector-kpis {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .debug-net-inspector-bars {
+    grid-template-columns: minmax(0, 1fr);
   }
   .debug-health-grid.is-three-cards {
     grid-template-columns: minmax(0, 1fr);
