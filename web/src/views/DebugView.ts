@@ -1872,7 +1872,7 @@ export class DebugView extends Component {
   /** Start polling status and streaming live readings on a freshly opened port. */
   private async startSession(): Promise<void> {
     window.clearInterval(this.statusTimer);
-    await this.console.send("STATUS?");
+    await this.console.ensureRunningApp();
     this.statusTimer = window.setInterval(() => void this.console.send("STATUS?").catch(() => undefined), 2000);
     this.liveOn = true;
     this.liveMode = this.signalCardVisible ? 2 : 1;
@@ -1883,7 +1883,13 @@ export class DebugView extends Component {
   }
 
   private async refreshStatus(): Promise<TimerStatus> {
-    return this.console.request<TimerStatus>("STATUS?", "status", 2000);
+    try {
+      return await this.console.request<TimerStatus>("STATUS?", "status", 2000);
+    } catch (err) {
+      const recovered = await this.console.ensureRunningApp();
+      if (recovered) return recovered;
+      throw err;
+    }
   }
 
   private async runBusy(name: string, fn: () => Promise<void>): Promise<void> {
@@ -2634,7 +2640,7 @@ export class DebugView extends Component {
       const pilot = this.pilots.find((p) => Math.abs(p.frequencyMHz - f) <= 2);
       const enterThr = pilot ? pilot.enterThreshold : -65;
       const pilotLabel = pilot?.callsign ? `${pilot.callsign} (${enterThr} dBm)` : `${enterThr} dBm`;
-      const floor = s.floor[i] !== undefined && s.floor[i] > -127 ? s.floor[i] : -95;
+      const floor = s.floor?.[i] !== undefined && s.floor[i] > -127 ? s.floor[i] : -95;
       const v = Math.max(s.dbm[i] ?? -127, s.pk[i] ?? -127);
       const hits = s.hits?.[i] ?? 0;
 
@@ -2696,7 +2702,7 @@ export class DebugView extends Component {
     }
 
     if (this.signalFindings.length === 0 && this.signalRing.points.length >= 25) {
-      const validFloors = s.floor.filter((fl) => fl > -127);
+      const validFloors = (s.floor ?? []).filter((fl) => fl > -127);
       const minFl = validFloors.length ? Math.min(...validFloors) : -95;
       const maxFl = validFloors.length ? Math.max(...validFloors) : -93;
       this.signalFindings.unshift({

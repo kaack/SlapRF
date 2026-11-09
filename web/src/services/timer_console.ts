@@ -207,6 +207,68 @@ export class TimerConsole {
   }
 
   /**
+   * Ensure the timer is running the SlapRF application rather than sitting in ESP32-C5 ROM
+   * download mode (which Windows `usbser.sys` can trigger when a browser tab reloads while
+   * the port is open). Tries `STATUS?` first; if no reply arrives within 900 ms, pulses a
+   * normal-boot RTS reset (`BOOT=1, EN=0 -> EN=1`), reattaches if the USB port re-enumerated,
+   * and waits for the first `status` reply.
+   */
+  public async ensureRunningApp(timeoutMs = 8000): Promise<TimerStatus | null> {
+    if (!this.port) return null;
+    try {
+      return await this.request<TimerStatus>("\nSTATUS?", "status", 900);
+    } catch {
+      // Board did not answer STATUS? — likely stuck in ROM download mode. Pulse normal-boot reset.
+    }
+    this.expectingRestart = true;
+    try {
+      try {
+        await this.port.setSignals({ dataTerminalReady: false, requestToSend: false });
+        await sleep(50);
+        await this.port.setSignals({ dataTerminalReady: false, requestToSend: true });
+        await sleep(80);
+        await this.port.setSignals({ dataTerminalReady: false, requestToSend: false });
+      } catch {
+        // ignore signal errors
+      }
+      const deadline = Date.now() + timeoutMs;
+      await sleep(500);
+      while (Date.now() < deadline) {
+        if (!this.port) {
+          const ports = await serial().getPorts();
+          const match = ports.find((p) => {
+            const info = p.getInfo?.() ?? {};
+            return (
+              !this.portInfo ||
+              (info.usbVendorId === this.portInfo.usbVendorId && info.usbProductId === this.portInfo.usbProductId)
+            );
+          });
+          if (match) {
+            try {
+              await this.openPort(match);
+            } catch {
+              await sleep(300);
+              continue;
+            }
+          } else {
+            await sleep(250);
+            continue;
+          }
+        }
+        try {
+          return await this.request<TimerStatus>("\nSTATUS?", "status", 1000);
+        } catch {
+          // still booting
+        }
+        await sleep(250);
+      }
+      return null;
+    } finally {
+      this.expectingRestart = false;
+    }
+  }
+
+  /**
    * Restart the timer and reattach to it. The USB device re-enumerates on restart, so the old
    * port goes away; reopen the same device (matched by USB VID/PID) without the port picker.
    * Resolves with the first status after the restart.
