@@ -4017,7 +4017,7 @@ body.is-gate-dragging * {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 8px 12px;
+  gap: 6px 12px;
   min-height: 30px;
   margin-top: 8px;
 }
@@ -4026,9 +4026,27 @@ body.is-gate-dragging * {
   margin-bottom: 12px;
   border-bottom: 1px solid var(--border);
 }
+.debug-chart-foot > .debug-toolbar-left {
+  order: 1;
+}
+.debug-chart-foot > .debug-chart-hint {
+  order: 2;
+  margin-right: auto;
+}
 .debug-chart-foot > .debug-connect-actions {
+  order: 3;
   margin-left: auto;
   flex-shrink: 0;
+}
+@media (max-width: 1180px) {
+  .debug-chart-foot > .debug-connect-actions {
+    order: 2;
+  }
+  .debug-chart-foot > .debug-chart-hint {
+    order: 3;
+    flex: 0 0 100%;
+    margin-right: 0;
+  }
 }
 .debug-axis-pill {
   position: relative;

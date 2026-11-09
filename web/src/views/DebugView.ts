@@ -3013,8 +3013,8 @@ export class DebugView extends Component {
                 : ""
             }
           </div>
-          <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
         </div>
+        <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
         <div class="debug-connect-actions">
           <div class="debug-btn-group" role="group" aria-label="Export signal chart">
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts ? "" : "disabled"} title="Download recorded 50 Hz samples as CSV">CSV</button>
@@ -3533,8 +3533,8 @@ export class DebugView extends Component {
                   : ""
               }
             </div>
-            <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
           </div>
+          <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
           <div class="debug-connect-actions">
             <div class="debug-btn-group" role="group" aria-label="Export spectrum chart">
               <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-csv" ${hasScan ? "" : "disabled"} title="Download spectrum trace (latest, average, max-hold) as CSV">CSV</button>
@@ -3615,8 +3615,8 @@ export class DebugView extends Component {
                   : ""
               }
             </div>
-            <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
           </div>
+          <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
           <div class="debug-connect-actions">
             <div class="debug-btn-group" role="group" aria-label="Export waterfall spectrogram">
               <button type="button" class="btn btn-sm btn-ghost" data-action="export-scan-csv" ${hasScan ? "" : "disabled"} title="Download waterfall scan history matrix as CSV">CSV</button>
