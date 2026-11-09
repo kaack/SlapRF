@@ -912,7 +912,23 @@ export async function flashXiaoC5OverWebSerial(
       percent: 98,
       detail: "Verifying checksum & rebooting XIAO ESP32-C5…",
     });
-    const endPayload = new Uint8Array(4); // uint32(0) = reboot immediately
+    // Re-enable LP_WDT (RTC watchdog) in flashboot mode before resetting so that if the ESP32-C5
+    // hits the known first-boot `select_rtc_slow_clk` glitch after a USB-Serial-JTAG RTS reset,
+    // LP_WDT automatically recovers and reboots the chip cleanly (LP_WDT_CONFIG0_REG is in the
+    // LP domain and otherwise stays disabled across an RTS reset).
+    await writeReg(0x600b1c18, 0x50d83aa1); // LP_WDT_WPROTECT_REG = WKEY (unlock)
+    await writeReg(0x600b1c04, 200000); // LP_WDT_CONFIG1_REG = 200000 (~1.5s stage-0 timeout)
+    await writeReg(
+      0x600b1c00,
+      ((1 << 31) | (4 << 28) | (1 << 16) | (1 << 13) | (1 << 12) | (1 << 9) | 20) >>> 0
+    ); // LP_WDT_CONFIG0_REG: WDT_EN=1, STG0=4 (sys reset), FLASHBOOT_MOD_EN=1
+    await writeReg(0x600b1c14, (1 << 31) >>> 0); // LP_WDT_FEED_REG = WDT_FEED
+    await writeReg(0x600b1c18, 0x00000000); // LP_WDT_WPROTECT_REG = 0 (lock)
+
+    // Send ESP_FLASH_END with uint32(1) (finalize flash without soft-jumping from ROM) so that
+    // `hardResetBoard(port)` performs a single clean hardware reset rather than racing a soft boot.
+    const endPayload = new Uint8Array(4);
+    new DataView(endPayload.buffer).setUint32(0, 1, true);
     await writer.write(buildRomCommand(ESP_FLASH_END, endPayload));
     await waitForRomAck(ESP_FLASH_END, 800).catch(() => false);
     await sleep(60);
@@ -1188,6 +1204,14 @@ export async function eraseXiaoC5OverWebSerial(
       percent: 98,
       detail: "Resetting XIAO ESP32-C5…",
     });
+    await writeReg(0x600b1c18, 0x50d83aa1);
+    await writeReg(0x600b1c04, 200000);
+    await writeReg(
+      0x600b1c00,
+      ((1 << 31) | (4 << 28) | (1 << 16) | (1 << 13) | (1 << 12) | (1 << 9) | 20) >>> 0
+    );
+    await writeReg(0x600b1c14, (1 << 31) >>> 0);
+    await writeReg(0x600b1c18, 0x00000000);
     await sleep(60);
     await hardResetBoard(port);
 
