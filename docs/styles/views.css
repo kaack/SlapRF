@@ -1841,6 +1841,12 @@ body.is-gate-dragging * {
   border-top: 0;
   padding-top: 4px;
 }
+.settings-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  min-width: 0;
+}
 .settings-intro {
   min-width: 0;
   max-width: 100%;
