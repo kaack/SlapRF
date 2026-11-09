@@ -85,7 +85,7 @@ export class AnnouncerSettings extends Component {
 
   private render(): void {
     if (!this.announcer.supported) {
-      this.el.innerHTML = `<p class="note">This browser doesn't support speech synthesis. Use Chrome, Edge or Safari.</p>`;
+      this.el.innerHTML = `<div class="card"><p class="note">This browser doesn't support speech synthesis. Use Chrome, Edge or Safari.</p></div>`;
       return;
     }
     const p = this.announcer.settings;
@@ -128,46 +128,58 @@ export class AnnouncerSettings extends Component {
     const samplePhrase = p.testPhrase !== undefined && p.testPhrase !== "" ? p.testPhrase : defaultSample;
 
     this.el.innerHTML = `
-      <div class="option-row">
-        <div>
-          <div class="option-title">Voice announcer</div>
-          <div class="option-sub">Each time a pilot completes a lap at the start gate it calls their name and lap time — e.g. “Vanover, 14.08”. Built-in Piper neural voices run in WebAssembly and work offline in any browser.</div>
+      <div class="card">
+        <div class="option-row">
+          <div>
+            <div class="option-title">Voice announcer</div>
+            <div class="option-sub">Each time a pilot completes a lap at the start gate it calls their name and lap time — e.g. “Vanover, 14.08”. Built-in Piper neural voices run in WebAssembly and work offline in any browser.</div>
+          </div>
+          <label class="switch switch-lg"><input type="checkbox" name="enabled" ${p.enabled ? "checked" : ""} /><span></span></label>
         </div>
-        <label class="switch switch-lg"><input type="checkbox" name="enabled" ${p.enabled ? "checked" : ""} /><span></span></label>
       </div>
-      <div class="option-row" style="padding-top:12px;border-top:1px solid var(--border);">
-        <div>
-          <div class="option-title">Keep screen awake</div>
-          <div class="option-sub">Prevents your phone, tablet, or laptop from dimming or auto-locking while SlapRF is open on the bench.</div>
+
+      <div class="card">
+        <div class="option-row">
+          <div>
+            <div class="option-title">Keep screen awake</div>
+            <div class="option-sub">Prevents your phone, tablet, or laptop from dimming or auto-locking while SlapRF is open on the bench.</div>
+          </div>
+          <label class="switch switch-lg"><input type="checkbox" name="keepScreenAwake" ${p.keepScreenAwake !== false ? "checked" : ""} /><span></span></label>
         </div>
-        <label class="switch switch-lg"><input type="checkbox" name="keepScreenAwake" ${p.keepScreenAwake !== false ? "checked" : ""} /><span></span></label>
       </div>
-      <div class="form-grid">
-        <label class="field">
-          <span>Voice</span>
-          <select class="input" name="voice">${piperGroup}${browserGroup}</select>
-        </label>
-        <label class="field">
-          <span>Speed <em data-out="rate">${p.rate.toFixed(2)}×</em></span>
-          <input type="range" name="rate" min="0.8" max="1.6" step="0.05" value="${p.rate}" />
-        </label>
-        <label class="field">
-          <span>Volume <em data-out="volume">${Math.round(p.volume * 100)}%</em></span>
-          <input type="range" name="volume" min="0" max="1" step="0.05" value="${p.volume}" />
-        </label>
-      </div>
-      <div class="check-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        <input
-          class="input"
-          type="text"
-          name="testPhrase"
-          value="${esc(samplePhrase)}"
-          placeholder="${esc(defaultSample)}"
-          aria-label="Sample voice test sentence"
-          style="flex:1 1 220px;max-width:340px;"
-        />
-        <button class="btn btn-sm" data-action="test" type="button">Test voice</button>
-        ${neuralStatusHtml}
+
+      <div class="card">
+        <div>
+          <div class="option-title">Text to speech</div>
+          <div class="option-sub">Choose an offline neural or system voice, adjust speaking speed and volume, and test a sample callout.</div>
+        </div>
+        <div class="form-grid">
+          <label class="field">
+            <span>Voice</span>
+            <select class="input" name="voice">${piperGroup}${browserGroup}</select>
+          </label>
+          <label class="field">
+            <span>Speed <em data-out="rate">${p.rate.toFixed(2)}×</em></span>
+            <input type="range" name="rate" min="0.8" max="1.6" step="0.05" value="${p.rate}" />
+          </label>
+          <label class="field">
+            <span>Volume <em data-out="volume">${Math.round(p.volume * 100)}%</em></span>
+            <input type="range" name="volume" min="0" max="1" step="0.05" value="${p.volume}" />
+          </label>
+        </div>
+        <div class="check-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <input
+            class="input"
+            type="text"
+            name="testPhrase"
+            value="${esc(samplePhrase)}"
+            placeholder="${esc(defaultSample)}"
+            aria-label="Sample voice test sentence"
+            style="flex:1 1 220px;max-width:340px;"
+          />
+          <button class="btn btn-sm" data-action="test" type="button">Test voice</button>
+          ${neuralStatusHtml}
+        </div>
       </div>`;
   }
 }

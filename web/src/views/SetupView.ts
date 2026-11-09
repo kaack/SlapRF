@@ -27,7 +27,7 @@ export class SetupView extends Component {
             <h2>Announcer</h2>
             <p>Spoken lap times at the start gate. Uses the voices built into this computer — no internet needed.</p>
           </div>
-          <div class="card" data-slot="announcer"></div>
+          <div class="settings-cards" data-slot="announcer"></div>
         </section>
 
         <section class="settings-section">

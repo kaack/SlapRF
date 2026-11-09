@@ -177,7 +177,7 @@ export class TimingRulesEditor extends Component {
                   title="${n ? `${n} rule${n > 1 ? "s" : ""} overridden at this gate` : "Uses the global rules"}">
                   <span class="dot" style="--c:${gateColor(this.store, p.puckId)}"></span>
                   <span class="channel-name">${esc(gateLabel(this.store, p.puckId))}</span>
-                  ${n ? `<span class="channel-custom-icon" aria-hidden="true">${icons.sliders(12)}</span>` : ""}
+                  ${n ? `<span class="channel-custom-icon" aria-hidden="true">${icons.pencil(12)}</span>` : ""}
                 </button>`;
       }),
     ].join("");
