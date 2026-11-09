@@ -749,6 +749,8 @@ export async function flashXiaoC5OverWebSerial(
     startSlipPump(reader);
 
     let fingerprintKept = false;
+    await writer.write(new TextEncoder().encode("\nEMERGENCY 1\n"));
+    await sleep(60);
     if (keepFingerprint) {
       onProgress({
         stage: "reading",

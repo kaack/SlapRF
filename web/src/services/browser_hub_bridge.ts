@@ -66,7 +66,7 @@ function cString(bytes: Uint8Array): string {
 export class BrowserHubBridge {
   private readonly wasm: WasmSimTransport;
   private readonly listeners = new Set<() => void>();
-  private eventSource: EventSource | null = null;
+  private ws: WebSocket | null = null;
   private reconnectTimer: number | null = null;
   private active = false;
   private wifiDesired = false;
@@ -83,6 +83,11 @@ export class BrowserHubBridge {
   public wifiStatus: TimerStatus | null = null;
   public wifiLastDbm: number[] = [-95, -95, -95, -95, -95, -95, -95, -95];
   private readonly wifiSpokes = new Map<number, TimerPeerSpoke & { lastRxMs: number }>();
+  private lastPushedHex = "";
+  private lastKnownWifiSig = "";
+  private lastStreamNotifyMs = 0;
+  private lastWifiPacketMs = 0;
+  private watchdogTimer: number | null = null;
   public onPacketIngested?: () => void;
 
   constructor(wasm: WasmSimTransport) {
@@ -100,17 +105,20 @@ export class BrowserHubBridge {
       // ignore storage errors
     }
 
-    // Forward outbound 19-byte channel table frames (0xC5 0x5E) from WASM to the Hub over Wi-Fi and/or USB-C
+    // Forward outbound 19-byte channel table frames (0xC5 0x5E) from WASM to the Hub over Wi-Fi WebSocket and/or USB-C
     this.wasm.onHubCommand((pkt) => {
       if (sharedTimerConsole.connected && sharedTimerConsole.lastStatus?.role === 1) {
         sharedTimerConsole.sendNetChannelsFromPacket(pkt);
       }
-      if (this.wifiState === "connected" && this.hubHost) {
+      if (this.wifiState === "connected" && this.ws && this.ws.readyState === WebSocket.OPEN && this.active) {
         const hex = bytesToHex(pkt);
-        void fetch(`http://${this.hubHost}/api/hub-channels?hex=${hex}`, {
-          method: "GET",
-          mode: "cors",
-        }).catch(() => undefined);
+        if (hex === this.lastPushedHex) return;
+        this.lastPushedHex = hex;
+        try {
+          this.ws.send(pkt);
+        } catch {
+          // ignore send errors
+        }
       }
     });
 
@@ -120,12 +128,14 @@ export class BrowserHubBridge {
         this.usbFramesRx++;
         this.inspectBinaryPacket(pkt);
         if (this.active) {
-          const n = this.wasm.ingestHubPacket(pkt);
-          if (n > 0 || (pkt.length === 36 && pkt[0] === 0xc5 && pkt[1] === 0x5a)) {
+          this.wasm.ingestHubPacket(pkt);
+          if (pkt.length === 36 && pkt[0] === 0xc5 && pkt[1] === 0x5a) {
             this.onPacketIngested?.();
           }
         }
-        if (this.usbFramesRx === 1 || this.usbFramesRx % 25 === 0) {
+        const nowMs = Date.now();
+        if (this.usbFramesRx === 1 || nowMs - this.lastStreamNotifyMs >= 500) {
+          this.lastStreamNotifyMs = nowMs;
           this.notify();
         }
       },
@@ -298,9 +308,14 @@ export class BrowserHubBridge {
           this.wifiStatus.profile = profileCode;
           this.wifiStatus.sweepHz = sweepHz;
         }
-        recordKnownTimerStatus(this.wifiStatus);
+        const sig = `${fp}:${label}:${profileCode}:${this.wifiSpokes.size}`;
+        if (sig !== this.lastKnownWifiSig) {
+          this.lastKnownWifiSig = sig;
+          recordKnownTimerStatus(this.wifiStatus);
+        }
       } else if (slot >= 2 && slot <= 7) {
         const prev = this.wifiSpokes.get(slot);
+        const identityChanged = !prev || prev.fp !== fp || prev.label !== label;
         this.wifiSpokes.set(slot, {
           slot,
           fp,
@@ -315,6 +330,9 @@ export class BrowserHubBridge {
           lastRxMs: prev?.lastRxMs ?? nowMs,
         });
         this.syncWifiSpokesList();
+        if (identityChanged && this.wifiStatus) {
+          recordKnownTimerStatus(this.wifiStatus);
+        }
       }
       return;
     }
@@ -486,7 +504,7 @@ export class BrowserHubBridge {
     this.saveMethodPref("wifi");
     this.wifiDesired = true;
     this.clearReconnect();
-    this.closeEventSource();
+    this.closeSocket();
     if (!this.hubHost) {
       this.wifiState = "idle";
       this.notify();
@@ -501,65 +519,58 @@ export class BrowserHubBridge {
     this.notify();
 
     try {
-      const url = `http://${this.hubHost}/api/hub-stream`;
-      const es = new EventSource(url);
-      this.eventSource = es;
+      const url = `ws://${this.hubHost}/ws`;
+      const sock = new WebSocket(url);
+      sock.binaryType = "arraybuffer";
+      this.ws = sock;
 
-      es.onopen = () => {
-        if (this.eventSource !== es) return;
+      sock.onopen = () => {
+        if (this.ws !== sock) return;
         this.wifiState = "connected";
         this.wifiReconnectAttempt = 0;
         this.wifiError = null;
-        this.wasm.pushHubChannels();
+        this.lastPushedHex = "";
+        this.lastWifiPacketMs = Date.now();
+        this.startWatchdog();
+        if (this.active) {
+          this.wasm.pushHubChannels();
+        }
         this.notify();
       };
 
-      es.onmessage = (ev) => {
-        if (this.eventSource !== es || typeof ev.data !== "string") return;
-        const pkt = hexToBytes(ev.data);
-        if (!pkt) return;
+      sock.onmessage = (ev) => {
+        if (this.ws !== sock) return;
+        let pkt: Uint8Array | null = null;
+        if (ev.data instanceof ArrayBuffer) {
+          pkt = new Uint8Array(ev.data);
+        } else if (typeof ev.data === "string") {
+          pkt = hexToBytes(ev.data);
+        }
+        if (!pkt || pkt.length < 4) return;
+        const nowMs = Date.now();
+        this.lastWifiPacketMs = nowMs;
         this.wifiFramesRx++;
         this.inspectBinaryPacket(pkt);
         if (this.active) {
-          const n = this.wasm.ingestHubPacket(pkt);
-          if (n > 0 || (pkt.length === 36 && pkt[0] === 0xc5 && pkt[1] === 0x5a)) {
+          this.wasm.ingestHubPacket(pkt);
+          if (pkt.length === 36 && pkt[0] === 0xc5 && pkt[1] === 0x5a) {
             this.onPacketIngested?.();
           }
         }
-        if (this.wifiFramesRx === 1 || this.wifiFramesRx % 15 === 0) {
+        if (this.wifiFramesRx === 1 || nowMs - this.lastStreamNotifyMs >= 500) {
+          this.lastStreamNotifyMs = nowMs;
           this.notify();
         }
       };
 
-      es.onerror = () => {
-        if (this.eventSource !== es) return;
-        this.closeEventSource();
-        if (!this.wifiDesired) {
-          this.wifiState = "idle";
-          this.notify();
-          return;
-        }
-        const nextAttempt = this.wifiReconnectAttempt + 1;
-        if (nextAttempt <= this.maxReconnectAttempts) {
-          this.wifiReconnectAttempt = nextAttempt;
-          this.wifiState = "reconnecting";
-          this.wifiError = `Reconnecting to Hub at http://${this.hubHost} (attempt ${nextAttempt} of ${this.maxReconnectAttempts})…`;
-          this.notify();
-          this.reconnectTimer = window.setTimeout(() => {
-            this.reconnectTimer = null;
-            if (this.wifiDesired) {
-              this.connectWifiStream(false);
-            }
-          }, 1800);
-        } else {
-          this.wifiDesired = false;
-          this.wifiState = "failed";
-          const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
-          this.wifiError = isHttps
-            ? `Failed after ${this.maxReconnectAttempts} attempts to reach http://${this.hubHost} (if blocked by HTTPS mixed-content, allow Insecure Content in site settings or use Direct USB-C).`
-            : `Failed after ${this.maxReconnectAttempts} attempts to reach Hub at http://${this.hubHost}. Verify you are connected to the "SlapRF" Wi-Fi AP or check the Hub IP.`;
-          this.notify();
-        }
+      sock.onerror = () => {
+        if (this.ws !== sock) return;
+        this.handleStreamDisconnect();
+      };
+
+      sock.onclose = () => {
+        if (this.ws !== sock) return;
+        this.handleStreamDisconnect();
       };
     } catch (err) {
       this.wifiDesired = false;
@@ -569,11 +580,59 @@ export class BrowserHubBridge {
     }
   }
 
+  private handleStreamDisconnect(): void {
+    this.closeSocket();
+    if (!this.wifiDesired) {
+      this.wifiState = "idle";
+      this.notify();
+      return;
+    }
+    const nextAttempt = this.wifiReconnectAttempt + 1;
+    if (nextAttempt <= this.maxReconnectAttempts) {
+      this.wifiReconnectAttempt = nextAttempt;
+      this.wifiState = "reconnecting";
+      this.wifiError = `Reconnecting to Hub at ws://${this.hubHost}/ws (attempt ${nextAttempt} of ${this.maxReconnectAttempts})…`;
+      this.notify();
+      this.reconnectTimer = window.setTimeout(() => {
+        this.reconnectTimer = null;
+        if (this.wifiDesired) {
+          this.connectWifiStream(false);
+        }
+      }, 1800);
+    } else {
+      this.wifiDesired = false;
+      this.wifiState = "failed";
+      const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+      this.wifiError = isHttps
+        ? `Failed after ${this.maxReconnectAttempts} attempts to reach ws://${this.hubHost}/ws (if blocked by HTTPS mixed-content, allow Insecure Content in site settings or use Direct USB-C).`
+        : `Failed after ${this.maxReconnectAttempts} attempts to reach Hub at ws://${this.hubHost}/ws. Verify you are connected to the "SlapRF" Wi-Fi AP or check the Hub IP.`;
+      this.notify();
+    }
+  }
+
+  private startWatchdog(): void {
+    this.stopWatchdog();
+    this.watchdogTimer = window.setInterval(() => {
+      if (this.wifiState === "connected" && this.lastWifiPacketMs > 0) {
+        if (Date.now() - this.lastWifiPacketMs > 3500) {
+          this.handleStreamDisconnect();
+        }
+      }
+    }, 1500);
+  }
+
+  private stopWatchdog(): void {
+    if (this.watchdogTimer !== null) {
+      window.clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
+  }
+
   public disconnectWifiStream(): void {
     this.wifiDesired = false;
     this.wifiReconnectAttempt = 0;
     this.clearReconnect();
-    this.closeEventSource();
+    this.closeSocket();
     this.wifiState = "idle";
     this.wifiError = null;
     this.wifiStatus = null;
@@ -588,14 +647,19 @@ export class BrowserHubBridge {
     }
   }
 
-  private closeEventSource(): void {
-    if (this.eventSource) {
+  private closeSocket(): void {
+    this.stopWatchdog();
+    if (this.ws) {
       try {
-        this.eventSource.close();
+        this.ws.onopen = null;
+        this.ws.onmessage = null;
+        this.ws.onerror = null;
+        this.ws.onclose = null;
+        this.ws.close();
       } catch {
         // ignore
       }
-      this.eventSource = null;
+      this.ws = null;
     }
   }
 }

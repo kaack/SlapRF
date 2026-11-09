@@ -276,8 +276,25 @@ export class AppStore {
   }
 
   public setUsbDetectedTimer(timer: DetectedTimer | null): void {
+    const prev = this._usbTimer;
+    if (prev === null && timer === null) return;
+    const identitySame =
+      prev !== null &&
+      timer !== null &&
+      prev.timerId === timer.timerId &&
+      prev.timerLabel === timer.timerLabel &&
+      prev.isHub === timer.isHub &&
+      prev.firmwareVersion === timer.firmwareVersion &&
+      prev.firmwareProfile === timer.firmwareProfile &&
+      prev.fingerprint === timer.fingerprint;
+    const floorDiff =
+      prev && timer ? Math.abs((prev.noiseFloorDbm ?? -92) - (timer.noiseFloorDbm ?? -92)) : 999;
     this._usbTimer = timer;
-    this.emit("status", "config");
+    if (!identitySame) {
+      this.emit("status", "config");
+    } else if (floorDiff >= 2) {
+      this.emit("status");
+    }
   }
   public get laps(): LapRecord[] {
     return this._laps;

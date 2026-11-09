@@ -9,6 +9,7 @@
 
 #include "driver/usb_serial_jtag.h"
 #include "esp_event.h"
+#include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_now.h"
@@ -30,23 +31,31 @@ static const char *TAG = "slaprf_radio";
 #define CHANNELS_MAGIC_1    0x5E // Laptop/Browser -> Hub active pilot channel table (19 bytes: 0xC5, 0x5E, 8 x uint16_t LE, crc8)
 #define RX_QUEUE_DEPTH      32
 #define ESPNOW_MAX_FRAME    250
+#define WS_QUEUE_DEPTH      16
+#define WS_MAX_FRAME        104
 
 typedef struct {
     uint8_t len;
     uint8_t data[ESPNOW_MAX_FRAME];
 } rx_item_t;
 
+typedef struct {
+    uint8_t len;
+    uint8_t data[WS_MAX_FRAME];
+} ws_tx_item_t;
+
 static const uint8_t BROADCAST_MAC[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 static QueueHandle_t s_rx_queue;
+static QueueHandle_t s_ws_tx_queue;
+static httpd_handle_t s_httpd;
+static volatile bool s_ws_work_queued;
 static volatile int64_t s_last_beacon_us;
 static uint8_t s_hub_beacon_mac[6];
 static volatile bool s_has_hub_beacon_mac;
 static esp_netif_t *s_sta_netif;
 static esp_netif_t *s_ap_netif;
-static int s_sse_clients[4] = {-1, -1, -1, -1};
 static uint8_t s_http_hellos[7][36];
-static portMUX_TYPE s_sse_mux = portMUX_INITIALIZER_UNLOCKED;
 static EventGroupHandle_t s_wifi_events;
 #define WIFI_GOT_IP_BIT BIT0
 
@@ -65,123 +74,44 @@ static int hex_nibble(char c) {
     return -1;
 }
 
-static int format_sse_frame(char *dst, size_t cap, const uint8_t *raw, uint32_t len) {
-    static const char hex_lut[16] = {'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
-    if (len == 0 || len > 180 || cap < (size_t)(6 + len * 2 + 3)) return 0;
-    int n = 0;
-    memcpy(dst, "data: ", 6);
-    n += 6;
-    for (uint32_t i = 0; i < len; i++) {
-        dst[n++] = hex_lut[(raw[i] >> 4) & 0x0F];
-        dst[n++] = hex_lut[raw[i] & 0x0F];
-    }
-    dst[n++] = '\n';
-    dst[n++] = '\n';
-    dst[n] = 0;
-    return n;
-}
-
-static void broadcast_sse_frame(const uint8_t *raw, uint32_t len) {
-    if (raw == NULL || len < 4 || len > 180) return;
-    if (len == 36 && raw[0] == BEACON_MAGIC_0 && raw[1] == 0x5A && raw[2] >= 1 && raw[2] <= 7) {
-        memcpy(s_http_hellos[raw[2] - 1], raw, 36);
-    }
-    int fds[4];
-    portENTER_CRITICAL(&s_sse_mux);
-    for (int i = 0; i < 4; i++) fds[i] = s_sse_clients[i];
-    portEXIT_CRITICAL(&s_sse_mux);
-
-    bool any = false;
-    for (int i = 0; i < 4; i++) {
-        if (fds[i] >= 0) { any = true; break; }
-    }
-    if (!any) return;
-
-    char line[384];
-    int line_len = format_sse_frame(line, sizeof(line), raw, len);
-    if (line_len <= 0) return;
-
-    for (int i = 0; i < 4; i++) {
-        if (fds[i] < 0) continue;
-        int sent = send(fds[i], line, (size_t)line_len, MSG_DONTWAIT);
-        if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
-            portENTER_CRITICAL(&s_sse_mux);
-            if (s_sse_clients[i] == fds[i]) {
-                s_sse_clients[i] = -1;
-            }
-            portEXIT_CRITICAL(&s_sse_mux);
-            close(fds[i]);
+static void apply_channels_packet(const uint8_t *pkt, size_t len) {
+    if (len == 19 && pkt[0] == BEACON_MAGIC_0 && pkt[1] == CHANNELS_MAGIC_1 && xor8(pkt, 18) == pkt[18]) {
+        uint16_t freqs[8];
+        for (int i = 0; i < 8; i++) {
+            freqs[i] = (uint16_t)(pkt[2 + i * 2] | ((uint16_t)pkt[3 + i * 2] << 8));
         }
+        slaprf_diag_set_net_channels(freqs);
     }
 }
 
-static void hub_http_server_task(void *arg) {
-    (void)arg;
-    int listen_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
-    if (listen_fd < 0) {
-        vTaskDelete(NULL);
-        return;
-    }
-    int yes = 1;
-    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-    struct sockaddr_in addr = {0};
-    addr.sin_family = AF_INET;
-    addr.sin_port = htons(80);
-    addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 || listen(listen_fd, 4) < 0) {
-        close(listen_fd);
-        vTaskDelete(NULL);
-        return;
-    }
+static void set_cors_headers(httpd_req_t *req) {
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "*");
+    httpd_resp_set_hdr(req, "Access-Control-Allow-Private-Network", "true");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+}
 
-    char req[512];
-    for (;;) {
-        struct sockaddr_in client_addr;
-        socklen_t client_len = sizeof(client_addr);
-        int fd = accept(listen_fd, (struct sockaddr *)&client_addr, &client_len);
-        if (fd < 0) {
-            vTaskDelay(pdMS_TO_TICKS(20));
-            continue;
-        }
-        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
-        struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
-        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-        int n = recv(fd, req, sizeof(req) - 1, 0);
-        if (n <= 0) {
-            close(fd);
-            continue;
-        }
-        req[n] = 0;
+static esp_err_t hub_options_handler(httpd_req_t *req) {
+    set_cors_headers(req);
+    httpd_resp_set_status(req, "204 No Content");
+    return httpd_resp_send(req, NULL, 0);
+}
 
-        if (strncmp(req, "OPTIONS ", 8) == 0) {
-            static const char resp[] =
-                "HTTP/1.1 204 No Content\r\n"
-                "Access-Control-Allow-Origin: *\r\n"
-                "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
-                "Access-Control-Allow-Headers: *\r\n"
-                "Access-Control-Allow-Private-Network: true\r\n"
-                "Connection: close\r\n\r\n";
-            send(fd, resp, sizeof(resp) - 1, 0);
-            close(fd);
-            continue;
-        }
+static esp_err_t hub_info_handler(httpd_req_t *req) {
+    set_cors_headers(req);
+    httpd_resp_set_type(req, "application/json");
+    static const char body[] = "{\"slaprfHub\":true,\"ws\":\"/ws\"}";
+    return httpd_resp_send(req, body, sizeof(body) - 1);
+}
 
-        if (strncmp(req, "GET /api/hub-info", 17) == 0) {
-            static const char resp[] =
-                "HTTP/1.1 200 OK\r\n"
-                "Content-Type: application/json\r\n"
-                "Access-Control-Allow-Origin: *\r\n"
-                "Access-Control-Allow-Private-Network: true\r\n"
-                "Cache-Control: no-store\r\n"
-                "Connection: close\r\n\r\n"
-                "{\"slaprfHub\":true}";
-            send(fd, resp, sizeof(resp) - 1, 0);
-            close(fd);
-            continue;
-        }
-
-        if (strncmp(req, "GET /api/hub-channels?hex=", 26) == 0) {
-            const char *hex = req + 26;
+static esp_err_t hub_channels_handler(httpd_req_t *req) {
+    set_cors_headers(req);
+    char query[96];
+    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
+        const char *hex = strstr(query, "hex=");
+        if (hex != NULL) {
+            hex += 4;
             uint8_t pkt[19];
             bool ok = true;
             for (int i = 0; i < 19; i++) {
@@ -190,69 +120,174 @@ static void hub_http_server_task(void *arg) {
                 if (hi < 0 || lo < 0) { ok = false; break; }
                 pkt[i] = (uint8_t)((hi << 4) | lo);
             }
-            if (ok && pkt[0] == BEACON_MAGIC_0 && pkt[1] == CHANNELS_MAGIC_1 && xor8(pkt, 18) == pkt[18]) {
-                uint16_t freqs[8];
-                for (int i = 0; i < 8; i++) {
-                    freqs[i] = (uint16_t)(pkt[2 + i * 2] | ((uint16_t)pkt[3 + i * 2] << 8));
-                }
-                slaprf_diag_set_net_channels(freqs);
+            if (ok) {
+                apply_channels_packet(pkt, sizeof(pkt));
             }
-            static const char resp[] =
-                "HTTP/1.1 200 OK\r\n"
-                "Content-Type: application/json\r\n"
-                "Access-Control-Allow-Origin: *\r\n"
-                "Access-Control-Allow-Private-Network: true\r\n"
-                "Connection: close\r\n\r\n"
-                "{\"ok\":true}";
-            send(fd, resp, sizeof(resp) - 1, 0);
-            close(fd);
-            continue;
         }
-
-        if (strncmp(req, "GET /api/hub-stream", 19) == 0) {
-            static const char hdr[] =
-                "HTTP/1.1 200 OK\r\n"
-                "Content-Type: text/event-stream\r\n"
-                "Cache-Control: no-cache\r\n"
-                "Connection: keep-alive\r\n"
-                "Access-Control-Allow-Origin: *\r\n"
-                "Access-Control-Allow-Private-Network: true\r\n\r\n";
-            if (send(fd, hdr, sizeof(hdr) - 1, 0) < 0) {
-                close(fd);
-                continue;
-            }
-            // Replay cached HELLO frames immediately so the browser/desktop discovers Hub & Spokes right away
-            char line[128];
-            for (int i = 0; i < 7; i++) {
-                if (s_http_hellos[i][0] == BEACON_MAGIC_0 && s_http_hellos[i][1] == 0x5A) {
-                    int ll = format_sse_frame(line, sizeof(line), s_http_hellos[i], 36);
-                    if (ll > 0) send(fd, line, (size_t)ll, MSG_DONTWAIT);
-                }
-            }
-            int evicted = -1;
-            portENTER_CRITICAL(&s_sse_mux);
-            int slot_idx = -1;
-            for (int i = 0; i < 4; i++) {
-                if (s_sse_clients[i] < 0) { slot_idx = i; break; }
-            }
-            if (slot_idx < 0) {
-                evicted = s_sse_clients[0];
-                slot_idx = 0;
-            }
-            s_sse_clients[slot_idx] = fd;
-            portEXIT_CRITICAL(&s_sse_mux);
-            if (evicted >= 0) close(evicted);
-            continue;
-        }
-
-        static const char not_found[] =
-            "HTTP/1.1 404 Not Found\r\n"
-            "Access-Control-Allow-Origin: *\r\n"
-            "Access-Control-Allow-Private-Network: true\r\n"
-            "Connection: close\r\n\r\n";
-        send(fd, not_found, sizeof(not_found) - 1, 0);
-        close(fd);
     }
+    httpd_resp_set_type(req, "application/json");
+    static const char body[] = "{\"ok\":true}";
+    return httpd_resp_send(req, body, sizeof(body) - 1);
+}
+
+static esp_err_t hub_ws_handler(httpd_req_t *req) {
+    if (req->method == HTTP_GET) {
+        int sockfd = httpd_req_to_sockfd(req);
+        if (sockfd >= 0) {
+            struct timeval tv = {.tv_sec = 0, .tv_usec = 60000};
+            setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+        }
+        // Immediately replay cached HELLO frames as binary WebSocket packets so Hub & Spokes appear right away
+        for (int i = 0; i < 7; i++) {
+            if (s_http_hellos[i][0] == BEACON_MAGIC_0 && s_http_hellos[i][1] == 0x5A) {
+                httpd_ws_frame_t hello_pkt = {
+                    .final = true,
+                    .fragmented = false,
+                    .type = HTTPD_WS_TYPE_BINARY,
+                    .payload = s_http_hellos[i],
+                    .len = 36,
+                };
+                if (httpd_ws_send_frame(req, &hello_pkt) != ESP_OK) {
+                    break;
+                }
+            }
+        }
+        return ESP_OK;
+    }
+
+    httpd_ws_frame_t ws_pkt;
+    memset(&ws_pkt, 0, sizeof(ws_pkt));
+    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
+    if (ret != ESP_OK) {
+        return ret;
+    }
+    if (ws_pkt.len > 0 && ws_pkt.len <= 64) {
+        uint8_t buf[64];
+        ws_pkt.payload = buf;
+        ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
+        if (ret != ESP_OK) {
+            return ret;
+        }
+        if (ws_pkt.type == HTTPD_WS_TYPE_BINARY && ws_pkt.len == 19) {
+            apply_channels_packet(buf, ws_pkt.len);
+        }
+    }
+    return ESP_OK;
+}
+
+static void ws_flush_work_fn(void *arg) {
+    (void)arg;
+    s_ws_work_queued = false;
+    if (s_httpd == NULL || s_ws_tx_queue == NULL) {
+        return;
+    }
+    int client_fds[8];
+    size_t fds_count = 8;
+    int ws_fds[8];
+    size_t ws_count = 0;
+    if (httpd_get_client_list(s_httpd, &fds_count, client_fds) == ESP_OK) {
+        for (size_t i = 0; i < fds_count; i++) {
+            if (httpd_ws_get_fd_info(s_httpd, client_fds[i]) == HTTPD_WS_CLIENT_WEBSOCKET) {
+                ws_fds[ws_count++] = client_fds[i];
+            }
+        }
+    }
+
+    ws_tx_item_t item;
+    while (xQueueReceive(s_ws_tx_queue, &item, 0) == pdTRUE) {
+        if (ws_count == 0) {
+            continue;
+        }
+        httpd_ws_frame_t ws_pkt = {
+            .final = true,
+            .fragmented = false,
+            .type = HTTPD_WS_TYPE_BINARY,
+            .payload = item.data,
+            .len = item.len,
+        };
+        for (size_t i = 0; i < ws_count; i++) {
+            if (ws_fds[i] < 0) continue;
+            if (httpd_ws_send_frame_async(s_httpd, ws_fds[i], &ws_pkt) != ESP_OK) {
+                httpd_sess_trigger_close(s_httpd, ws_fds[i]);
+                ws_fds[i] = -1;
+            }
+        }
+    }
+}
+
+static void enqueue_ws_frame(const uint8_t *raw, uint32_t len) {
+    if (raw == NULL || len < 4 || len > WS_MAX_FRAME) {
+        return;
+    }
+    if (len == 36 && raw[0] == BEACON_MAGIC_0 && raw[1] == 0x5A && raw[2] >= 1 && raw[2] <= 7) {
+        memcpy(s_http_hellos[raw[2] - 1], raw, 36);
+    }
+    if (s_httpd == NULL || s_ws_tx_queue == NULL) {
+        return;
+    }
+    ws_tx_item_t item;
+    item.len = (uint8_t)len;
+    memcpy(item.data, raw, (size_t)len);
+    if (xQueueSend(s_ws_tx_queue, &item, 0) != pdTRUE) {
+        ws_tx_item_t dropped;
+        xQueueReceive(s_ws_tx_queue, &dropped, 0);
+        xQueueSend(s_ws_tx_queue, &item, 0);
+    }
+    if (!s_ws_work_queued) {
+        s_ws_work_queued = true;
+        if (httpd_queue_work(s_httpd, ws_flush_work_fn, NULL) != ESP_OK) {
+            s_ws_work_queued = false;
+        }
+    }
+}
+
+static void start_hub_httpd(void) {
+    if (s_httpd != NULL) {
+        return;
+    }
+    if (s_ws_tx_queue == NULL) {
+        s_ws_tx_queue = xQueueCreate(WS_QUEUE_DEPTH, sizeof(ws_tx_item_t));
+    }
+    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
+    config.max_open_sockets = 4;
+    config.lru_purge_enable = true;
+    config.stack_size = 4096;
+
+    if (httpd_start(&s_httpd, &config) != ESP_OK) {
+        ESP_LOGE(TAG, "Failed to start esp_http_server");
+        return;
+    }
+    static const httpd_uri_t uri_info = {
+        .uri = "/api/hub-info",
+        .method = HTTP_GET,
+        .handler = hub_info_handler,
+    };
+    static const httpd_uri_t uri_info_opt = {
+        .uri = "/api/hub-info",
+        .method = HTTP_OPTIONS,
+        .handler = hub_options_handler,
+    };
+    static const httpd_uri_t uri_channels = {
+        .uri = "/api/hub-channels",
+        .method = HTTP_GET,
+        .handler = hub_channels_handler,
+    };
+    static const httpd_uri_t uri_channels_opt = {
+        .uri = "/api/hub-channels",
+        .method = HTTP_OPTIONS,
+        .handler = hub_options_handler,
+    };
+    static const httpd_uri_t uri_ws = {
+        .uri = "/ws",
+        .method = HTTP_GET,
+        .handler = hub_ws_handler,
+        .is_websocket = true,
+    };
+    httpd_register_uri_handler(s_httpd, &uri_info);
+    httpd_register_uri_handler(s_httpd, &uri_info_opt);
+    httpd_register_uri_handler(s_httpd, &uri_channels);
+    httpd_register_uri_handler(s_httpd, &uri_channels_opt);
+    httpd_register_uri_handler(s_httpd, &uri_ws);
 }
 
 /* ---- Board ---------------------------------------------------------------------------------- */
@@ -392,13 +427,13 @@ void slaprf_start_wifi_bridge(uint8_t wifi_mode, const char *ssid, const char *p
         xEventGroupWaitBits(s_wifi_events, WIFI_GOT_IP_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(15000));
     }
 
-    xTaskCreate(hub_http_server_task, "slaprf_http", 4096, NULL, 2, NULL);
-    ESP_LOGI(TAG, "Hub bridge up (%s), HTTP/SSE :80", wifi_mode == 0 ? "AP SlapRF" : ssid);
+    start_hub_httpd();
+    ESP_LOGI(TAG, "Hub bridge up (%s), HTTP/WS :80", wifi_mode == 0 ? "AP SlapRF" : ssid);
 }
 
 void slaprf_forward_udp_to_laptop(const void *frame, uint32_t len) {
     slaprf_diag_forward_hub_frame(frame, len);
-    broadcast_sse_frame((const uint8_t *)frame, len);
+    enqueue_ws_frame((const uint8_t *)frame, len);
 }
 
 void slaprf_broadcast_hub_sync_beacon(uint8_t seq) {

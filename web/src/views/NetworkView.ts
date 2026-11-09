@@ -41,6 +41,9 @@ export class NetworkView extends Component {
   private barFillAt: number[] = [0, 0, 0, 0, 0, 0, 0, 0];
   private barPeakVal: number[] = [-127, -127, -127, -127, -127, -127, -127, -127];
   private barPeakAt: number[] = [0, 0, 0, 0, 0, 0, 0, 0];
+  private lastConnHtml = "";
+  private lastLiveHeadHtml = "";
+  private lastNetHtml = "";
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
     super(el);
@@ -494,11 +497,11 @@ export class NetworkView extends Component {
         </div>`;
     }
 
-    this.slot("connection").innerHTML = `
+    const connHtml = `
       <div class="debug-status-topbar">
         <span class="debug-led-status">
-          <span class="status-dot ${dotClass}"></span>
-          <span class="debug-head-note">${statusText}</span>
+          <span class="status-dot ${dotClass}" data-conn-dot></span>
+          <span class="debug-head-note" data-conn-status-text>${statusText}</span>
         </span>
         <div class="debug-connect-actions">
           <div class="segmented" role="group" aria-label="Connectivity method">
@@ -511,6 +514,16 @@ export class NetworkView extends Component {
         ${methodBodyHtml}
         ${this.error ? `<div class="sim-error-note" style="margin-top:8px;">${esc(this.error)}</div>` : ""}
       </div>`;
+    const connKey = `${method}|${dotClass}|${methodBodyHtml}|${this.error ?? ""}`;
+    if (connKey === this.lastConnHtml) {
+      const noteEl = this.slot("connection").querySelector<HTMLElement>("[data-conn-status-text]");
+      if (noteEl) {
+        noteEl.innerHTML = statusText;
+        return;
+      }
+    }
+    this.lastConnHtml = connKey;
+    this.slot("connection").innerHTML = connHtml;
   }
 
   private renderNetworkView(): void {
@@ -537,7 +550,7 @@ export class NetworkView extends Component {
           </div>`;
       }).join("");
 
-      this.slot("network").innerHTML = `
+      const emptyHtml = `
         <div class="debug-status-topbar">
           <span class="debug-led-status">
             <span class="status-dot ${this.console.connected ? "is-warn" : ""}"></span>
@@ -580,6 +593,10 @@ export class NetworkView extends Component {
             <div class="debug-net-slot-grid">${emptySlots}</div>
           </div>
         </div>`;
+      if (emptyHtml !== this.lastNetHtml) {
+        this.lastNetHtml = emptyHtml;
+        this.slot("network").innerHTML = emptyHtml;
+      }
       return;
     }
 
@@ -876,7 +893,7 @@ export class NetworkView extends Component {
           </div>`;
       }
 
-      this.slot("network").innerHTML = `
+      const hubNetHtml = `
         <div class="debug-status-topbar">
           <span class="debug-led-status">
             <span class="status-dot ${ledClass}"></span>
@@ -932,6 +949,10 @@ export class NetworkView extends Component {
             ${inspectorHtml}
           </div>
         </div>`;
+      if (hubNetHtml !== this.lastNetHtml) {
+        this.lastNetHtml = hubNetHtml;
+        this.slot("network").innerHTML = hubNetHtml;
+      }
       return;
     }
 
@@ -970,7 +991,7 @@ export class NetworkView extends Component {
           ? `${esc(s.label || "S1")} · Spoke (Slot ${s.slot}) · Hub sync beacon lost (${((beaconMsAgo ?? 0) / 1000).toFixed(1)}s ago) — out of phase or Hub offline`
           : `${esc(s.label || "S1")} · Spoke (Child) · Searching for Parent Hub sync beacon on 2.4 GHz…`;
 
-    this.slot("network").innerHTML = `
+    const spokeNetHtml = `
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}"></span>
@@ -1061,6 +1082,10 @@ export class NetworkView extends Component {
           </dl>
         </div>
       </div>`;
+    if (spokeNetHtml !== this.lastNetHtml) {
+      this.lastNetHtml = spokeNetHtml;
+      this.slot("network").innerHTML = spokeNetHtml;
+    }
   }
 
   private renderLiveHead(): void {
@@ -1081,7 +1106,7 @@ export class NetworkView extends Component {
           ? "is-warn"
           : "";
 
-    this.slot("live-head").innerHTML = `
+    const headHtml = `
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}" data-live-led></span>
@@ -1106,6 +1131,10 @@ export class NetworkView extends Component {
           </button>
         </div>
       </div>`;
+    if (headHtml !== this.lastLiveHeadHtml) {
+      this.lastLiveHeadHtml = headHtml;
+      this.slot("live-head").innerHTML = headHtml;
+    }
     this.updateLive();
   }
 

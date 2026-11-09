@@ -62,6 +62,7 @@ type WiFiUDPReceiver struct {
 	cancelSSE    context.CancelFunc
 	engine       *tracker.Engine
 	outFn        func([]byte)
+	lastChanHex  string
 	slots        map[uint8]slotInfo
 	seenSeq      map[uint8]uint8  // timerID -> last ingested 8-bit sample seq_num
 	hasSeq       map[uint8]bool   // timerID -> true once at least one sample has been ingested
@@ -148,7 +149,7 @@ func (r *WiFiUDPReceiver) pushActiveChannelsToHub() {
 		return
 	}
 	freqs, _ := r.engine.ActivePilotChannels()
-	r.sendChannelsToHub(freqs)
+	r.sendChannelsToHub(freqs, true)
 }
 
 // PushActiveChannels immediately pushes the current active pilot channel table to the Hub.
@@ -163,21 +164,28 @@ func (r *WiFiUDPReceiver) SetOutboundSender(fn func([]byte)) {
 	r.mu.Unlock()
 }
 
-func (r *WiFiUDPReceiver) sendChannelsToHub(freqs [domain.MaxPilotSlots]uint16) {
+func (r *WiFiUDPReceiver) sendChannelsToHub(freqs [domain.MaxPilotSlots]uint16, force ...bool) {
+	pkt := EncodeChannelsFrame(freqs)
+	hexStr := strings.ToUpper(hex.EncodeToString(pkt))
+	forced := len(force) > 0 && force[0]
+
 	r.mu.Lock()
+	if !forced && r.lastChanHex == hexStr {
+		r.mu.Unlock()
+		return
+	}
+	r.lastChanHex = hexStr
 	activeHost := r.activeHost
 	connected := r.sseConnected
 	outFn := r.outFn
 	r.mu.Unlock()
 
-	pkt := EncodeChannelsFrame(freqs)
 	if outFn != nil {
 		outFn(pkt)
 	}
 	if !connected || activeHost == "" {
 		return
 	}
-	hexStr := strings.ToUpper(hex.EncodeToString(pkt))
 	r.sendHTTPChannels(activeHost, hexStr)
 }
 

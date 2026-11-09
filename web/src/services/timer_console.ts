@@ -334,11 +334,30 @@ function serial(): SerialLike {
 
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
+function withTimeout<T>(p: Promise<T> | undefined, ms: number): Promise<T | undefined> {
+  if (!p) return Promise.resolve(undefined);
+  return new Promise<T | undefined>((resolve, reject) => {
+    const t = window.setTimeout(() => resolve(undefined), ms);
+    p.then(
+      (v) => {
+        window.clearTimeout(t);
+        resolve(v);
+      },
+      (err) => {
+        window.clearTimeout(t);
+        reject(err);
+      }
+    );
+  });
+}
+
 export class TimerConsole {
   private port: SerialPortLike | null = null;
   private portInfo: { usbVendorId?: number; usbProductId?: number } | null = null;
   private reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
+  private writeQueue: Promise<void> = Promise.resolve();
+  private lastKnownSpokeSig = "";
   private buf = new Uint8Array(0);
   private readonly decoder = new TextDecoder();
   private readonly subscribers = new Set<ConsoleHandlers>();
@@ -471,8 +490,8 @@ export class TimerConsole {
     window.clearInterval(this.statusPollTimer);
     this.statusPollTimer = 0;
     if (this.connected) {
-      await this.send("LIVE 0\nSCAN STOP\nLOG 0").catch(() => undefined);
-      await sleep(70);
+      await withTimeout(this.send("LIVE 0\nSCAN STOP\nLOG 0"), 250).catch(() => undefined);
+      await sleep(50);
     }
     await this.disconnect();
   }
@@ -499,19 +518,51 @@ export class TimerConsole {
    */
   private async disarmUsbJtagLatch(port: SerialPortLike): Promise<void> {
     try {
-      await port.setSignals({ dataTerminalReady: true, requestToSend: false });
-      await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+      await withTimeout(port.setSignals({ dataTerminalReady: true, requestToSend: false }), 150);
+      await withTimeout(port.setSignals({ dataTerminalReady: false, requestToSend: false }), 150);
     } catch {
       // Ignore on platforms/drivers that do not support setSignals
     }
   }
 
   private async openPort(port: SerialPortLike): Promise<void> {
-    await port.open({ baudRate: 115200, bufferSize: 16384 });
+    if (this.port && this.port !== port) {
+      await this.closePort();
+    }
+    try {
+      await port.open({ baudRate: 115200, bufferSize: 16384 });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (/already open/i.test(msg)) {
+        try {
+          if (this.reader) {
+            await withTimeout(this.reader.cancel(), 200).catch(() => undefined);
+            this.reader.releaseLock();
+            this.reader = null;
+          }
+          if (this.writer) {
+            await withTimeout(this.writer.abort(), 200).catch(() => undefined);
+            this.writer.releaseLock();
+            this.writer = null;
+          }
+          await withTimeout(port.close(), 300).catch(() => undefined);
+          await sleep(80);
+          await port.open({ baudRate: 115200, bufferSize: 16384 });
+        } catch {
+          // If the port is already open with unlocked streams, proceed to attach reader/writer below
+          if (!port.readable || !port.writable) {
+            throw err;
+          }
+        }
+      } else {
+        throw err;
+      }
+    }
     await this.disarmUsbJtagLatch(port);
     this.port = port;
     this.portInfo = port.getInfo?.() ?? this.portInfo;
     this.buf = new Uint8Array(0);
+    this.writeQueue = Promise.resolve();
     this.writer = port.writable?.getWriter() ?? null;
     this.reader = port.readable?.getReader() ?? null;
     void this.readLoop(port);
@@ -523,6 +574,7 @@ export class TimerConsole {
     await this.closePort();
     this.lastStatus = null;
     this.lastConfig = null;
+    this.lastKnownSpokeSig = "";
     this.failWaiters("Disconnected");
     this.subscribers.forEach((h) => h.onDisconnect?.());
     this.notifyStateChange();
@@ -548,10 +600,14 @@ export class TimerConsole {
     if (!port) return;
     const stopBytes = new TextEncoder().encode("\nLIVE 0\nSCAN STOP\nLOG 0\n");
     const writeDone = writer
-      ? writer
-          .write(stopBytes)
+      ? withTimeout(writer.write(stopBytes), 120)
           .catch(() => undefined)
           .finally(() => {
+            try {
+              void writer.abort().catch(() => undefined);
+            } catch {
+              // ignore
+            }
             try {
               writer.releaseLock();
             } catch {
@@ -560,8 +616,7 @@ export class TimerConsole {
           })
       : Promise.resolve();
     const readDone = reader
-      ? reader
-          .cancel()
+      ? withTimeout(reader.cancel(), 120)
           .catch(() => undefined)
           .finally(() => {
             try {
@@ -582,33 +637,60 @@ export class TimerConsole {
 
   private async closePort(): Promise<void> {
     const port = this.port;
+    const reader = this.reader;
+    const writer = this.writer;
     this.port = null;
-    try {
-      await this.reader?.cancel();
-    } catch {
-      // ignore
-    }
-    try {
-      this.reader?.releaseLock();
-      this.writer?.releaseLock();
-    } catch {
-      // ignore
-    }
     this.reader = null;
     this.writer = null;
+    this.writeQueue = Promise.resolve();
+
+    if (reader) {
+      try {
+        await withTimeout(reader.cancel(), 250);
+      } catch {
+        // ignore
+      }
+      try {
+        reader.releaseLock();
+      } catch {
+        // ignore
+      }
+    }
+
+    if (writer) {
+      try {
+        await withTimeout(writer.abort(), 250);
+      } catch {
+        // ignore
+      }
+      try {
+        writer.releaseLock();
+      } catch {
+        // ignore
+      }
+    }
+
     if (port) {
       await this.disarmUsbJtagLatch(port);
-    }
-    try {
-      await port?.close();
-    } catch {
-      // ignore
+      try {
+        await withTimeout(port.close(), 400);
+      } catch {
+        // ignore
+      }
     }
   }
 
   public async send(command: string): Promise<void> {
-    if (!this.writer) throw new Error("Not connected");
-    await this.writer.write(new TextEncoder().encode(command + "\n"));
+    const writer = this.writer;
+    if (!writer) throw new Error("Not connected");
+    const bytes = new TextEncoder().encode(command + "\n");
+    const run = async () => {
+      if (this.writer !== writer) throw new Error("Not connected");
+      await withTimeout(writer.write(bytes), 600);
+    };
+    const next = this.writeQueue.then(run, run);
+    this.writeQueue = next.catch(() => undefined);
+    return next;
   }
 
   /**
@@ -856,8 +938,10 @@ export class TimerConsole {
   }
 
   private emitText(bytes: Uint8Array): void {
-    const line = this.decoder.decode(bytes).replace(/\r$/, "");
-    if (!line) return;
+    const rawLine = this.decoder.decode(bytes).replace(/\r$/, "");
+    if (!rawLine) return;
+    const atIdx = rawLine.lastIndexOf("@{");
+    const line = atIdx > 0 ? rawLine.slice(atIdx) : rawLine;
     if (line.startsWith("@{")) {
       try {
         const msg = JSON.parse(line.slice(1)) as { t: string; msg?: string; hex?: string } & Record<string, unknown>;
@@ -885,9 +969,21 @@ export class TimerConsole {
         switch (msg.t) {
           case "status": {
             const st = msg as unknown as TimerStatus;
-            const labelChanged = this.lastStatus?.label !== st.label || this.lastStatus?.fp !== st.fp;
+            const labelChanged =
+              this.lastStatus?.label !== st.label ||
+              this.lastStatus?.fp !== st.fp ||
+              this.lastStatus?.role !== st.role ||
+              this.lastStatus?.slot !== st.slot ||
+              this.lastStatus?.emergencyMode !== st.emergencyMode;
+            const spokeSig = Array.isArray(st.spokes)
+              ? st.spokes.map((sp) => `${sp.slot}:${sp.fp}:${sp.label}`).join("|")
+              : "";
+            const spokesChanged = spokeSig !== this.lastKnownSpokeSig;
             this.lastStatus = st;
-            recordKnownTimerStatus(st);
+            if (labelChanged || spokesChanged) {
+              this.lastKnownSpokeSig = spokeSig;
+              recordKnownTimerStatus(st);
+            }
             this.subscribers.forEach((h) => h.onStatus?.(st));
             if (labelChanged) {
               this.notifyStateChange();
