@@ -141,19 +141,22 @@ export class DebugView extends Component {
     this.console = new TimerConsole({
       onStatus: (s) => {
         const freqsChanged = this.status?.freqs.join() !== s.freqs.join();
+        const rfChanged = this.status?.rf.enabled !== s.rf.enabled;
         this.status = s;
         // Pick up a live scan still running from before (page reload); skip stale replies right after a toggle.
+        let scanChanged = false;
         if (s.scanLive !== undefined && s.scanLive !== this.scanLive && Date.now() - this.scanToggleAt > 3000) {
           this.scanLive = s.scanLive;
-          this.renderScan();
+          scanChanged = true;
         }
         this.renderConnection();
         this.renderStatus();
         this.renderLiveHead();
-        if (freqsChanged) {
-          this.renderLive();
+        if (freqsChanged || rfChanged || scanChanged) {
+          if (freqsChanged) this.renderLive();
           if (!this.channelsDirty) this.renderChannels();
           this.renderSignalControls();
+          this.renderScan();
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
         }
@@ -871,6 +874,9 @@ export class DebugView extends Component {
           if (!on && !confirm("Switch the 5.8 GHz receiver off? The timer stops timing until you switch it back on or restart it.")) break;
           await this.console.request(`RF ${on ? 1 : 0}`, "ok", 2000);
           await this.refreshStatus();
+          this.renderLiveHead();
+          this.renderSignalControls();
+          this.renderScan();
           break;
         }
         case "channels-apply": {
@@ -1008,6 +1014,8 @@ export class DebugView extends Component {
           }
           this.renderScan();
           this.renderLiveHead();
+          this.renderSignalControls();
+          this.renderChannels();
           break;
         }
         case "clear-hold":
@@ -1511,7 +1519,7 @@ export class DebugView extends Component {
           : !s.rf.enabled
             ? `<span class="badge badge-warn">Switched off</span>`
             : s.scanLive
-              ? `<span class="badge badge-warn">Live scan</span> lap timing paused · floor ${s.rf.floorDb.toFixed(1)} dBm`
+              ? `<span class="badge badge-accent">Live scan</span> lap timing paused · floor ${s.rf.floorDb.toFixed(1)} dBm`
               : `<span class="badge badge-good">OK</span> gain ${s.rf.gain}/${s.rf.gainMax} · floor ${s.rf.floorDb.toFixed(1)} dBm`,
       ],
       [
@@ -1522,7 +1530,7 @@ export class DebugView extends Component {
             : `${esc(s.net.mode)} · channel ${s.channel}${s.slot >= 2 ? ` · slot ${s.slot}` : " · not joined to a Hub"}`
           : `channel ${s.channel}`,
       ],
-      ["Channels", `<span class="mono">${s.freqs.join(" · ")}</span> MHz${s.freqsTemporary ? ` <span class="badge badge-warn">temporary</span>` : ""}`],
+      ["Channels", `<span class="mono">${s.freqs.join(" · ")}</span> MHz${s.freqsTemporary ? ` <span class="badge badge-accent">temporary</span>` : ""}`],
     ];
     this.slot("status").innerHTML = `
       <dl class="debug-status">
@@ -1533,16 +1541,32 @@ export class DebugView extends Component {
   private renderLiveHead(): void {
     const on = this.console.connected;
     const rfOn = this.status?.rf.enabled ?? true;
+    const inScanMode = Boolean(this.scanLive || this.status?.scanLive);
+    const streamDisabled = !on || !rfOn || inScanMode;
+    const streamActive = !streamDisabled && this.liveOn;
+    const streamLabel = inScanMode
+      ? "Stream (scan active)"
+      : !rfOn
+        ? "Stream (RF off)"
+        : streamActive
+          ? "Stream on"
+          : "Stream off";
+    const streamTitle = inScanMode
+      ? "Unavailable while Live spectrum scan is using the 5.8 GHz receiver"
+      : !rfOn
+        ? "Unavailable while the 5.8 GHz receiver is switched off"
+        : streamActive
+          ? "Live sweep stream is on — click to turn off"
+          : "Live sweep stream is off — click to turn on";
     this.slot("live-head").innerHTML = `
       <div class="debug-card-head">
         <span class="note debug-head-note mono" data-live-note>${on ? "Waiting for sweep stream…" : "Not connected"}</span>
         <div class="debug-connect-actions">
-          <label class="debug-switch-inline ${on && this.status ? "" : "is-disabled"}" title="Switch the hardware 5.8 GHz receiver on or off">
-            <span class="debug-switch-label">${rfOn ? icons.signal(13) : icons.signalOff(13)}<span>5.8 GHz receiver</span></span>
-            <span class="switch"><input type="checkbox" data-check="rf-enable" ${rfOn ? "checked" : ""} ${on && this.status ? "" : "disabled"}/><span></span></span>
-          </label>
-          <button type="button" class="btn btn-sm debug-btn-transport ${this.liveOn ? "is-running" : "is-paused"}" data-action="live" ${on ? "" : "disabled"}>
-            ${this.liveOn ? icons.pause(14) : icons.play(14)}<span>${this.liveOn ? "Pause stream" : "Resume stream"}</span>
+          <button type="button" class="btn btn-sm ${rfOn ? "btn-armed" : "btn-unarmed"}" data-action="rf" ${on && this.status && !inScanMode ? "" : "disabled"} title="${inScanMode ? "Stop Live spectrum scan first to toggle the 5.8 GHz receiver" : "Switch the hardware 5.8 GHz receiver on or off"}">
+            ${rfOn ? icons.signal(14) : icons.signalOff(14)}<span>${rfOn ? "Receiver on" : "Receiver off"}</span>
+          </button>
+          <button type="button" class="btn btn-sm ${streamActive ? "btn-armed" : "btn-unarmed"}" data-action="live" ${streamDisabled ? "disabled" : ""} title="${streamTitle}">
+            ${streamActive ? icons.zap(14) : icons.zapOff(14)}<span>${streamLabel}</span>
           </button>
         </div>
       </div>`;
@@ -1613,6 +1637,7 @@ export class DebugView extends Component {
   private renderChannels(): void {
     const on = this.console.connected;
     const s = this.status;
+    const inScanMode = Boolean(this.scanLive || s?.scanLive);
     const freqs = s?.freqs ?? RACEBAND;
     const isTemp = Boolean(s?.freqsTemporary);
     this.slot("channels").innerHTML = `
@@ -1620,19 +1645,19 @@ export class DebugView extends Component {
         <div class="debug-channels-head">
           <div class="debug-channels-title">
             <strong>Try other channels</strong>
-            <span class="badge ${isTemp ? "badge-warn" : ""}">${isTemp ? "Temporary · not saved" : "Saved channels"}</span>
+            <span class="badge ${isTemp ? "badge-accent" : ""}">${isTemp ? "Temporary · not saved" : "Saved channels"}</span>
           </div>
           <div class="debug-connect-actions">
-            <button type="button" class="btn btn-sm btn-ghost" data-action="channels-raceband" ${on ? "" : "disabled"}>Load Raceband</button>
-            <button type="button" class="btn btn-sm btn-ghost" data-action="channels-reset" ${on && isTemp ? "" : "disabled"}>Back to saved</button>
-            <button type="button" class="btn btn-sm btn-armed" data-action="channels-apply" ${on && s ? "" : "disabled"}>Apply until restart</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="channels-raceband" ${on && !inScanMode ? "" : "disabled"}>Load Raceband</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="channels-reset" ${on && isTemp && !inScanMode ? "" : "disabled"}>Back to saved</button>
+            <button type="button" class="btn btn-sm btn-armed" data-action="channels-apply" ${on && s && !inScanMode ? "" : "disabled"} title="${inScanMode ? "Unavailable while Live spectrum scan is running" : "Apply these 8 channels temporarily until the timer restarts"}">Apply until restart</button>
           </div>
         </div>
         <div class="debug-channels-inputs">
           ${freqs
             .map((f, i) => {
               const rb = racebandName(f) || `Ch ${i + 1}`;
-              return `<label><span class="note mono">${rb}</span><input class="input mono" type="number" min="5180" max="5917" data-chan value="${f}" ${on ? "" : "disabled"}/></label>`;
+              return `<label><span class="note mono">${rb}</span><input class="input mono" type="number" min="5180" max="5917" data-chan value="${f}" ${on && !inScanMode ? "" : "disabled"}/></label>`;
             })
             .join("")}
         </div>
@@ -1640,17 +1665,34 @@ export class DebugView extends Component {
   }
 
   private renderSignalControls(): void {
+    const on = this.console.connected;
+    const rfOn = this.status?.rf.enabled ?? true;
+    const inScanMode = Boolean(this.scanLive || this.status?.scanLive);
+    const streamRunning = on && rfOn && this.liveOn && !inScanMode;
     const freqs = this.status?.freqs ?? RACEBAND;
     const hasPts = this.signalRing.points.length > 0;
     const allOn = this.signalEnabledCh.every(Boolean);
     const isLive = this.signalEndN === null;
+    const liveFollowOn = isLive && streamRunning;
+    const liveDisabled = !streamRunning && !hasPts;
     const isYZoomed = this.signalYMin !== DBM_MIN || this.signalYMax !== DBM_MAX;
+    const liveLabel = inScanMode
+      ? "Live (scan active)"
+      : !streamRunning && isLive
+        ? "Live off"
+        : isLive
+          ? "Live on"
+          : "Live off";
+    const liveTitle = inScanMode
+      ? "Live 50 Hz stream is paused while Spectrum scan is active"
+      : !streamRunning
+        ? "Connect and enable Stream on in Live readings to follow live sweeps"
+        : isLive
+          ? "Following live 50 Hz stream — click to pause, or drag the chart to scroll back"
+          : "Paused / scrolled back — click to jump back to live";
     this.slot("signal-controls").innerHTML = `
-      <div class="debug-toolbar">
+      <div class="debug-card-head">
         <div class="debug-toolbar-left">
-          <button type="button" class="btn btn-sm scope-live-btn ${isLive ? "btn-armed" : "btn-ghost"}" data-action="signal-freeze" title="${isLive ? "Following live 50 Hz stream — click to pause, or drag the chart to scroll back" : "Paused / scrolled back — click to jump back to live"}">
-            <span class="status-dot ${isLive ? "is-up" : ""}"></span><span>Live</span>
-          </button>
           <div class="segmented" role="group" aria-label="Time window">
             ${([5, 10, 30, 120] as const)
               .map(
@@ -1677,29 +1719,36 @@ export class DebugView extends Component {
         <div class="debug-connect-actions">
           ${
             isYZoomed
-              ? `<button type="button" class="btn btn-sm debug-btn-transport is-paused mono" data-action="signal-reset-y" title="Reset Y-axis dBm zoom to full scale (${DBM_MIN}…${DBM_MAX} dBm)">Y: ${this.signalYMin}…${this.signalYMax} dBm ×</button>`
+              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="signal-reset-y" title="Reset Y-axis dBm zoom to full scale (${DBM_MIN}…${DBM_MAX} dBm)">${icons.target(13)}<span>Y: ${this.signalYMin}…${this.signalYMax} dBm ×</span></button>`
               : `<button type="button" class="btn btn-sm btn-ghost" data-action="signal-zoom-floor" title="Zoom Y-axis into the noise floor region (−102…−68 dBm), or drag vertically on the Y-axis">Zoom floor Y</button>`
           }
-          <button type="button" class="btn btn-sm" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
+          <button type="button" class="btn btn-sm ${liveFollowOn ? "btn-armed" : "btn-unarmed"}" data-action="signal-freeze" ${liveDisabled || (inScanMode && isLive) ? "disabled" : ""} title="${liveTitle}">
+            ${liveFollowOn ? icons.zap(14) : icons.zapOff(14)}<span>${liveLabel}</span>
+          </button>
+        </div>
+      </div>
+      <div class="debug-subbar">
+        <div class="debug-channel-chips">
+          ${freqs
+            .map((f, i) => {
+              const rb = racebandName(f) || `Ch${i + 1}`;
+              const chOn = this.signalEnabledCh[i];
+              const col = CHANNEL_COLORS[i];
+              return `<button type="button" class="debug-ch-chip mono ${chOn ? "is-on" : ""}" data-action="signal-ch" data-ch="${i}" style="--ch-color:${col}">
+                <span class="debug-ch-dot"></span><strong>${rb}</strong> <span>${f}</span>
+              </button>`;
+            })
+            .join("")}
+          <button type="button" class="btn btn-sm btn-ghost debug-ch-all-btn" data-action="signal-ch-all">${allOn ? "Hide all" : "Show all"}</button>
+        </div>
+        <div class="debug-connect-actions">
+          <span class="note debug-chart-hint">${liveFollowOn ? "Drag to scroll time · wheel to zoom · drag Y-axis to zoom dBm" : "Paused · drag to scroll · double-click to reset"}</span>
           <div class="debug-btn-group" role="group" aria-label="Export signal chart">
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts ? "" : "disabled"} title="Download recorded 50 Hz samples as CSV">CSV</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-png" ${hasPts ? "" : "disabled"} title="Save chart snapshot as PNG">PNG</button>
           </div>
         </div>
-      </div>
-      <div class="debug-channel-chips">
-        ${freqs
-          .map((f, i) => {
-            const rb = racebandName(f) || `Ch${i + 1}`;
-            const on = this.signalEnabledCh[i];
-            const col = CHANNEL_COLORS[i];
-            return `<button type="button" class="debug-ch-chip mono ${on ? "is-on" : ""}" data-action="signal-ch" data-ch="${i}" style="--ch-color:${col}">
-              <span class="debug-ch-dot"></span><strong>${rb}</strong> <span>${f}</span>
-            </button>`;
-          })
-          .join("")}
-        <button type="button" class="btn btn-sm btn-ghost debug-ch-all-btn" data-action="signal-ch-all">${allOn ? "Hide all" : "Show all"}</button>
-        <span class="note debug-chart-hint">${isLive ? "Live · drag horizontally to scroll back, wheel to zoom time, drag Y-axis (or Shift+wheel) to zoom dBm" : "Paused · drag to scroll, wheel to zoom, double-click or click Live to resume"}</span>
       </div>`;
   }
 
@@ -1803,6 +1852,7 @@ export class DebugView extends Component {
 
   private renderScan(): void {
     const on = this.console.connected;
+    const rfOn = this.status?.rf.enabled ?? true;
     const prev = {
       start: this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value ?? "5180",
       stop: this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value ?? "5917",
@@ -1814,8 +1864,10 @@ export class DebugView extends Component {
     const isFast15 = prev.start === "5180" && prev.stop === "5917" && prev.step === "15";
     const isRb5 = prev.start === "5650" && prev.stop === "5925" && prev.step === "5";
     const isFreqZoomed = this.scanZoomStartMHz !== null && this.scanZoomStopMHz !== null;
+    const canScanOnce = on && rfOn && !this.scanning && !this.scanLive;
+    const canScanLive = on && rfOn && !this.scanning;
     this.slot("scan").innerHTML = `
-      <div class="debug-toolbar">
+      <div class="debug-card-head">
         <div class="debug-toolbar-left">
           <div class="segmented" role="group" aria-label="Scan speed and range presets">
             <button type="button" class="${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="5" title="Full 5.18–5.92 GHz band at 5 MHz step (148 points, ~3.1 passes/s)">Full · 3 Hz</button>
@@ -1828,6 +1880,18 @@ export class DebugView extends Component {
             <label>step <input class="input mono" type="number" data-scan-step value="${esc(prev.step)}" min="1" max="50" ${dis}/></label>
             <span class="note">MHz</span>
           </div>
+        </div>
+        <div class="debug-connect-actions">
+          <button type="button" class="btn btn-sm ${this.scanning ? "btn-armed" : "btn-unarmed"}" data-action="scan" ${canScanOnce ? "" : "disabled"} title="${this.scanLive ? "Unavailable while Live scan is running" : !rfOn ? "Unavailable while the 5.8 GHz receiver is off" : "Sweep the band once and add a row to the waterfall"}">
+            ${icons.target(14)}<span>${this.scanning ? "Scanning…" : "Scan once"}</span>
+          </button>
+          <button type="button" class="btn btn-sm ${this.scanLive ? "btn-armed" : "btn-unarmed"}" data-action="scan-live" ${canScanLive ? "" : "disabled"} title="${!rfOn ? "Unavailable while the 5.8 GHz receiver is off" : this.scanLive ? "Continuous spectrum scan is on — click to stop and resume lap timing" : "Start continuous spectrum scan (lap timing pauses while active)"}">
+            ${this.scanLive ? icons.zap(14) : icons.zapOff(14)}<span>${this.scanLive ? "Live scan on" : "Live scan off"}</span>
+          </button>
+        </div>
+      </div>
+      <div class="debug-subbar">
+        <div class="debug-toolbar-left">
           <div class="debug-overlay-checks" role="group" aria-label="Spectrum overlays">
             <label class="check">
               <input type="checkbox" data-check="scan-hold" ${this.scanShowMaxHold ? "checked" : ""}/>
@@ -1842,20 +1906,14 @@ export class DebugView extends Component {
               <span>5 GHz Wi-Fi bands</span>
             </label>
           </div>
-        </div>
-        <div class="debug-connect-actions">
+          <button type="button" class="btn btn-sm btn-ghost" data-action="clear-hold" ${hasScan ? "" : "disabled"}>Reset hold/avg</button>
           ${
             isFreqZoomed
-              ? `<button type="button" class="btn btn-sm debug-btn-transport is-paused mono" data-action="scan-reset-zoom" title="Reset frequency box zoom (or double-click chart)">Zoom: ${this.scanZoomStartMHz}–${this.scanZoomStopMHz} MHz ×</button>`
+              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="scan-reset-zoom" title="Reset frequency box zoom (or double-click chart)">${icons.target(13)}<span>Zoom: ${this.scanZoomStartMHz}–${this.scanZoomStopMHz} MHz ×</span></button>`
               : ""
           }
-          <button type="button" class="btn btn-sm" data-action="scan" ${on && !this.scanning && !this.scanLive ? "" : "disabled"}>
-            ${icons.signal(14)}<span>${this.scanning ? "Scanning…" : "Scan once"}</span>
-          </button>
-          <button type="button" class="btn btn-sm debug-btn-transport ${this.scanLive ? "is-paused" : "is-running"}" data-action="scan-live" ${on && !this.scanning ? "" : "disabled"}>
-            ${this.scanLive ? icons.pause(14) : icons.play(14)}<span>${this.scanLive ? "Stop live" : "Live scan"}</span>
-          </button>
-          <button type="button" class="btn btn-sm btn-ghost" data-action="clear-hold" ${hasScan ? "" : "disabled"}>Reset hold/avg</button>
+        </div>
+        <div class="debug-connect-actions">
           <div class="debug-btn-group" role="group" aria-label="Export spectrum & waterfall">
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-scan-csv" ${hasScan ? "" : "disabled"} title="Export waterfall scan history as CSV">CSV</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-png" ${hasScan ? "" : "disabled"} title="Save spectrum trace as PNG">Spectrum PNG</button>
@@ -1899,10 +1957,10 @@ export class DebugView extends Component {
 
     let badgeTone = "";
     let badgeLabel = "Idle";
-    let metaText = "Click Scan once for a snapshot, or Live scan for ~3 Hz continuous updates.";
+    let metaText = "Click Scan once for a snapshot, or Live scan on for continuous updates.";
 
     if (this.scanLive) {
-      badgeTone = "badge-warn";
+      badgeTone = "badge-accent";
       badgeLabel = "Live scan · timing paused";
       const rateStr = s?.live && s.passMs ? `${(1000 / s.passMs).toFixed(1)} passes/s · ` : "";
       metaText = `${rateStr}${this.spectrumAcc.avgCount} pass${this.spectrumAcc.avgCount === 1 ? "" : "es"} averaged · volt = live, cyan = avg, faint volt = max hold`;
@@ -2034,8 +2092,8 @@ export class DebugView extends Component {
         <span class="note mono debug-head-note" data-log-count>${this.logLines.length} lines</span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="clear-log">Clear</button>
-          <button type="button" class="btn btn-sm debug-btn-transport ${this.logOn ? "is-paused" : "is-running"}" data-action="log" ${on ? "" : "disabled"}>
-            ${this.logOn ? icons.pause(14) : icons.play(14)}<span>${this.logOn ? "Stop log" : "Start log"}</span>
+          <button type="button" class="btn btn-sm ${this.logOn ? "btn-armed" : "btn-unarmed"}" data-action="log" ${on ? "" : "disabled"}>
+            ${this.logOn ? icons.eye(14) : icons.eyeOff(14)}<span>${this.logOn ? "Log on" : "Log off"}</span>
           </button>
         </div>
       </div>

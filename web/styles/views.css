@@ -3814,13 +3814,30 @@ body.is-gate-dragging * {
   flex-wrap: wrap;
   gap: 10px;
   min-height: 32px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
+}
+.debug-card-head > .debug-connect-actions {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .debug-head-note {
   display: inline-flex;
   align-items: center;
   min-height: 22px;
   min-width: 0;
+}
+.debug-subbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-height: 30px;
+  margin-bottom: 8px;
+}
+.debug-subbar > .debug-connect-actions {
+  margin-left: auto;
+  flex-shrink: 0;
 }
 .debug-toolbar {
   display: flex;
@@ -3835,7 +3852,7 @@ body.is-gate-dragging * {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 10px 14px;
+  gap: 8px 12px;
 }
 .debug-overlay-checks {
   display: inline-flex;
@@ -3851,51 +3868,6 @@ body.is-gate-dragging * {
   font-size: 12px;
   color: var(--text-2);
   white-space: nowrap;
-}
-.debug-switch-inline {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  padding: 4px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--text-2);
-  cursor: pointer;
-  user-select: none;
-}
-.debug-switch-inline.is-disabled {
-  opacity: 0.45;
-  pointer-events: none;
-}
-.debug-switch-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-}
-.debug-btn-transport {
-  min-width: 112px;
-  justify-content: center;
-}
-.debug-btn-transport.is-running {
-  background: var(--surface-2);
-  border-color: var(--border-strong);
-  color: var(--text);
-}
-.debug-btn-transport.is-running:hover:not(:disabled) {
-  border-color: rgba(212, 255, 58, 0.45);
-  color: var(--accent);
-}
-.debug-btn-transport.is-paused {
-  background: rgba(251, 191, 36, 0.1);
-  border-color: rgba(251, 191, 36, 0.45);
-  color: var(--warn);
-}
-.debug-btn-transport.is-paused:hover:not(:disabled) {
-  background: rgba(251, 191, 36, 0.16);
-  border-color: var(--warn);
 }
 .debug-btn-group {
   display: inline-flex;
@@ -4171,7 +4143,7 @@ body.is-gate-dragging * {
   border-top: 1px solid var(--border);
 }
 .debug-health-canvas {
-  height: 132px;
+  height: 196px;
   cursor: default;
 }
 .debug-channel-chips {
@@ -4179,7 +4151,6 @@ body.is-gate-dragging * {
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
-  margin-bottom: 8px;
 }
 .debug-ch-chip {
   display: inline-flex;
