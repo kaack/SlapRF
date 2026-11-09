@@ -94,7 +94,7 @@ export const icons = {
     ),
   help: (s?: number) =>
     svg(
-      `<circle cx="12" cy="12" r="9"/><path d="M9.4 9.2a2.6 2.6 0 0 1 5.05.85c0 1.75-2.45 2.2-2.45 3.65"/><circle cx="12" cy="16.9" r="0.8" fill="currentColor" stroke="none"/>`,
+      `<path d="M8.2 8.2a4 4 0 0 1 7.6 1.5c0 2.6-3.8 3.2-3.8 5.5" stroke-width="2.35"/><circle cx="12" cy="19.5" r="1.35" fill="currentColor" stroke="none"/>`,
       s
     ),
   siren: (s?: number) =>
