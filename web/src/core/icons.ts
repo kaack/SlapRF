@@ -97,6 +97,11 @@ export const icons = {
       `<path d="M8.2 8.2a4 4 0 0 1 7.6 1.5c0 2.6-3.8 3.2-3.8 5.5" stroke-width="2.35"/><circle cx="12" cy="19.5" r="1.35" fill="currentColor" stroke="none"/>`,
       s
     ),
+  about: (s?: number) =>
+    svg(
+      `<circle cx="12" cy="12" r="9"/><path d="M9.4 9.3a2.7 2.7 0 0 1 5.2 1c0 1.8-2.6 2.2-2.6 3.7"/><circle cx="12" cy="17.2" r="0.9" fill="currentColor" stroke="none"/>`,
+      s
+    ),
   siren: (s?: number) =>
     svg(
       `<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><circle cx="12" cy="16.8" r="0.8" fill="currentColor" stroke="none"/>`,

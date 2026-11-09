@@ -1,6 +1,6 @@
 import { icons } from "./icons";
 
-export type RouteId = "live" | "pilot" | "pilots" | "track" | "sim" | "setup" | "flasher" | "debug";
+export type RouteId = "live" | "pilot" | "pilots" | "track" | "sim" | "setup" | "flasher" | "debug" | "about";
 
 export interface RouteMeta {
   id: RouteId;
@@ -69,6 +69,13 @@ export const ROUTES: RouteMeta[] = [
     title: "Settings",
     subtitle: "Timing rules, announcer, MultiGP LiveTime, data source, and persistence",
     icon: () => icons.sliders(20),
+  },
+  {
+    id: "about",
+    label: "About",
+    title: "About",
+    subtitle: "Version info, author, support, and dual-license terms",
+    icon: () => icons.about(20),
   },
 ];
 

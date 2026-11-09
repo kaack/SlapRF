@@ -221,6 +221,7 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("/api/stream", s.sseHub)
 
 	// REST API endpoints
+	mux.HandleFunc("/api/version", s.handleGetVersion)
 	mux.HandleFunc("/api/state", s.handleGetState)
 	mux.HandleFunc("/api/status", s.handleGetStatus)
 	mux.HandleFunc("/api/rules", s.handleRules)

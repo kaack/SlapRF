@@ -11,6 +11,7 @@ import { FlasherView } from "../views/FlasherView";
 import { SetupView } from "../views/SetupView";
 import { SimView } from "../views/SimView";
 import { TrackView } from "../views/TrackView";
+import { AboutView } from "../views/AboutView";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 
@@ -84,6 +85,8 @@ export class AppShell extends Component {
         return new FlasherView(host, this.store, this.api);
       case "debug":
         return new DebugView(host);
+      case "about":
+        return new AboutView(host, this.store, this.api);
     }
   }
 }

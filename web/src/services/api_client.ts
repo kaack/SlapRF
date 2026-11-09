@@ -517,6 +517,11 @@ export class ApiClient {
     this.store.applyRules(await this.transport.request<TimingRules>("POST", "/api/rules", rules));
   }
 
+  /** Retrieves backend version info (release tag, commit hash, branch name). */
+  public async getVersionInfo(): Promise<{ release_tag: string; commit_hash: string; branch_name: string }> {
+    return await this.transport.request<{ release_tag: string; commit_hash: string; branch_name: string }>("GET", "/api/version");
+  }
+
   private async pollStatus(): Promise<void> {
     try {
       this.store.applyStatus(await this.transport.request<StatusResponse>("GET", "/api/status"));

@@ -5,6 +5,7 @@ package api
 import (
 	"slaprf/internal/firmware"
 
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -22,6 +23,72 @@ var (
 	wasmExecCache []byte
 	wasmBinCache  []byte
 )
+
+type aboutBuildPayload struct {
+	FrontendVersion   string `json:"frontendVersion"`
+	ReleaseTag        string `json:"releaseTag"`
+	CommitHash        string `json:"commitHash"`
+	BranchName        string `json:"branchName"`
+	LicenseSummary    string `json:"licenseSummary"`
+	LicenseFairSource string `json:"licenseFairSource"`
+	LicenseGpl        string `json:"licenseGpl"`
+}
+
+func resolveGitOut(repoRoot string, args ...string) string {
+	cmd := exec.Command("git", args...)
+	cmd.Dir = repoRoot
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
+func buildAboutInfoJSON(webRootAbs string) string {
+	repoRoot := filepath.Dir(webRootAbs)
+	ver := GetVersionInfo()
+
+	if commit := resolveGitOut(repoRoot, "rev-parse", "HEAD"); len(commit) >= 7 {
+		ver.CommitHash = commit
+	}
+	if branch := resolveGitOut(repoRoot, "rev-parse", "--abbrev-ref", "HEAD"); branch != "" && branch != "HEAD" {
+		ver.BranchName = branch
+	}
+	if tag := resolveGitOut(repoRoot, "describe", "--tags", "--exact-match", "HEAD"); strings.HasPrefix(tag, "v") {
+		ver.ReleaseTag = tag
+	} else if ver.ReleaseTag == "" {
+		ver.ReleaseTag = "(devel)"
+	}
+
+	// Keep internal/api/generated/version.json synced whenever bundling in a git workspace.
+	genPath := filepath.Join(repoRoot, "internal", "api", "generated", "version.json")
+	if b, err := json.MarshalIndent(ver, "", "  "); err == nil {
+		_ = os.WriteFile(genPath, append(b, '\n'), 0o644)
+	}
+
+	readText := func(name string) string {
+		b, err := os.ReadFile(filepath.Join(repoRoot, name))
+		if err != nil {
+			return ""
+		}
+		return strings.ReplaceAll(string(b), "\r\n", "\n")
+	}
+
+	payload := aboutBuildPayload{
+		FrontendVersion:   "0.1.0",
+		ReleaseTag:        ver.ReleaseTag,
+		CommitHash:        ver.CommitHash,
+		BranchName:        ver.BranchName,
+		LicenseSummary:    strings.TrimSpace(readText("LICENSE")),
+		LicenseFairSource: strings.TrimSpace(readText("LICENSE-FAIR-SOURCE")),
+		LicenseGpl:        strings.TrimSpace(readText("LICENSE-GPL")),
+	}
+	b, err := json.Marshal(payload)
+	if err != nil {
+		return "{}"
+	}
+	return string(b)
+}
 
 // BundleTypeScript compiles `src/main.ts` inside `webRootDir` into a single IIFE JS bundle.
 func BundleTypeScript(webRootDir string) ([]byte, error) {
@@ -44,7 +111,10 @@ func BundleTypeScript(webRootDir string) ([]byte, error) {
 		MinifyIdentifiers: false,
 		MinifySyntax:      true,
 		// Firmware profiles come from firmware/<profile>/profile.json (single source of truth).
-		Define: map[string]string{"__SLAPRF_FIRMWARE_PROFILES__": firmware.ProfilesJSON()},
+		Define: map[string]string{
+			"__SLAPRF_FIRMWARE_PROFILES__": firmware.ProfilesJSON(),
+			"__SLAPRF_ABOUT_INFO__":        buildAboutInfoJSON(absRoot),
+		},
 	})
 	if len(result.Errors) > 0 {
 		return nil, fmt.Errorf("%s", result.Errors[0].Text)
