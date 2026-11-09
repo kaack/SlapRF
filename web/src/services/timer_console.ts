@@ -375,8 +375,6 @@ export class TimerConsole {
             // A command was refused: fail whatever is waiting rather than letting it time out.
             if (this.waiters.length) {
               this.failWaiters(msg.msg ?? "error");
-            } else {
-              this.handlers.onError?.(msg.msg ?? "error");
             }
             return;
           default:

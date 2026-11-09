@@ -38,15 +38,6 @@ interface Check {
   detail: string;
 }
 
-interface RestartRun {
-  n: number;
-  ok: boolean;
-  ms: number;
-  reset: string;
-  extraBoots: number;
-  note: string;
-}
-
 interface DebugTimerInfo {
   found: boolean;
   puckId?: number;
@@ -113,7 +104,6 @@ export class DebugView extends Component {
   private checks: Check[] = [];
   private checksAt: Date | null = null;
   private reportExtra = "";
-  private runs: RestartRun[] = [];
   private bootLog: BootLog | null = null;
   private progress = "";
   private channelsDirty = false;
@@ -237,7 +227,6 @@ export class DebugView extends Component {
           this.renderSelfTest();
           this.renderSignalControls();
           this.renderScan();
-          this.renderRestart();
           this.renderLog();
           this.renderSerialConsole();
           this.dirtySignal = true;
@@ -440,10 +429,7 @@ export class DebugView extends Component {
             <h2>Serial console</h2>
             <p>Interactive USB terminal for sending commands directly to the timer and inspecting boot logs across crashes and restarts. Type <span class="mono">HELP</span> in the terminal for available commands.</p>
           </div>
-          <div class="debug-status-layout">
-            <div class="card card-flush" data-slot="serial-console"></div>
-            <div class="debug-subbox" data-slot="restart"></div>
-          </div>
+          <div class="card card-flush" data-slot="serial-console"></div>
         </section>
         <section class="settings-section">
           <div class="settings-intro">
@@ -2108,12 +2094,6 @@ export class DebugView extends Component {
           );
           this.scrollSerialToBottom(true);
           break;
-        case "restart-test": {
-          const n = Math.max(1, Math.min(50, this.num("[data-restart-count]", 5)));
-          await this.runBusy("Restart test", () => this.restartTest(n));
-          this.scrollSerialToBottom(true);
-          break;
-        }
         case "bootlog":
           await this.sendSerialCommand("BOOTLOG?");
           break;
@@ -2202,7 +2182,6 @@ export class DebugView extends Component {
   private setProgress(text: string): void {
     this.progress = text;
     this.renderSelfTest();
-    this.renderRestart();
     this.renderSerialConsole();
   }
 
@@ -2251,49 +2230,6 @@ export class DebugView extends Component {
     this.setProgress("Reading the boot log…");
     await sleep(1500); // let Wi-Fi and the sweep task finish starting so their messages are in the log
     await this.sendSerialCommand("BOOTLOG?");
-    this.renderRestart();
-  }
-
-  private async restartTest(count: number): Promise<void> {
-    this.runs = [];
-    let prev = await this.refreshStatus();
-    for (let n = 1; n <= count; n++) {
-      this.setProgress(`Restart ${n} of ${count}…`);
-      this.appendSerialLine(`${this.serialPrompt()} REBOOT  # restart test ${n}/${count}`);
-      const t0 = performance.now();
-      let run: RestartRun;
-      try {
-        const s = await this.restart();
-        const extra = Math.max(0, s.boots - prev.boots - 1);
-        const bad = BAD_RESETS.includes(s.reset);
-        const ms = Math.round(performance.now() - t0);
-        run = {
-          n,
-          ok: !bad,
-          ms,
-          reset: s.reset,
-          extraBoots: extra,
-          note: bad ? "crashed while starting" : extra ? `restarted ${extra} extra time${extra > 1 ? "s" : ""} while starting` : "",
-        };
-        this.appendSerialLine(
-          `Restart ${n}/${count}: ${!bad && !extra ? "OK" : !bad ? "WARN" : "FAIL"} in ${(ms / 1000).toFixed(1)} s (boot #${s.boots}, reset: ${s.reset}${run.note ? `, ${run.note}` : ""})`
-        );
-        prev = s;
-      } catch (err) {
-        const errMsg = err instanceof Error ? err.message : String(err);
-        this.appendSerialLine(`Restart ${n}/${count}: FAIL — ${errMsg}`);
-        this.runs.push({ n, ok: false, ms: Math.round(performance.now() - t0), reset: "—", extraBoots: 0, note: errMsg });
-        this.renderRestart();
-        return;
-      }
-      this.runs.push(run);
-      this.renderRestart();
-      if (run.extraBoots || !run.ok) {
-        // Grab the crashed boot's log while it is still the "previous" one.
-        await this.sendSerialCommand("LASTLOG?").catch(() => undefined);
-      }
-      await sleep(1000);
-    }
   }
 
   // ---------------------------------------------------------------- self-test
@@ -2487,7 +2423,6 @@ export class DebugView extends Component {
     this.renderSignalControls();
     this.renderNoiseTable();
     this.renderScan();
-    this.renderRestart();
     this.renderSerialConsole();
     this.renderLog();
     this.dirtySignal = true;
@@ -2500,7 +2435,6 @@ export class DebugView extends Component {
     this.renderConnection();
     this.renderSelfTest();
     this.renderStatus();
-    this.renderRestart();
     this.renderSerialConsole();
   }
 
@@ -3781,36 +3715,6 @@ export class DebugView extends Component {
     return `${l.which === "last" ? "Previous boot" : "This boot"} · boot #${l.boots} · restart reason: ${l.reset}`;
   }
 
-  private renderRestart(): void {
-    const on = this.console.connected;
-    const busy = this.busy !== null;
-    this.slot("restart").innerHTML = `
-      <div class="debug-restart-test">
-        <label>Restart test <input class="input mono" type="number" data-restart-count value="${esc(this.el.querySelector<HTMLInputElement>("[data-restart-count]")?.value ?? "5")}" min="1" max="50"/> times</label>
-        <button type="button" class="btn btn-sm" data-action="restart-test" ${on && !busy ? "" : "disabled"}>${icons.reset(14)}<span>${this.busy === "Restart test" ? "Running…" : "Run"}</span></button>
-      </div>
-      ${
-        this.runs.length
-          ? `<div class="table-scroll">
-              <table class="debug-runs">
-                <thead><tr><th>#</th><th>Result</th><th>Back in</th><th>Restart reason</th><th></th></tr></thead>
-                <tbody>${this.runs
-                  .map(
-                    (r) => `<tr>
-                      <td class="mono">${r.n}</td>
-                      <td><span class="badge ${r.ok && !r.extraBoots ? "badge-good" : r.ok ? "badge-warn" : "badge-bad"}">${r.ok && !r.extraBoots ? "OK" : r.ok ? "WARN" : "FAIL"}</span></td>
-                      <td class="mono">${(r.ms / 1000).toFixed(1)} s</td>
-                      <td>${esc(r.reset)}</td>
-                      <td class="note">${esc(r.note)}</td>
-                    </tr>`
-                  )
-                  .join("")}</tbody>
-              </table>
-            </div>`
-          : ""
-      }`;
-  }
-
   private appendLog(line: string): void {
     this.logLines.push(line);
     if (this.logLines.length > LOG_LINES) this.logLines.splice(0, this.logLines.length - LOG_LINES);
@@ -3895,7 +3799,7 @@ export class DebugView extends Component {
     }
 
     this.appendSerialLine(`${this.serialPrompt()} ${cmd}`);
-    if (upper === "HELP" || upper === "?") {
+    if (upper === "HELP" || upper === "HELP?" || upper === "?") {
       const helpLines = [
         "Commands:",
         "  STATUS?              identity, uptime, reset reason, emergency mode, heap, RF, channels",
@@ -3922,72 +3826,76 @@ export class DebugView extends Component {
       return;
     }
 
-    if (upper === "REBOOT") {
-      this.serialAwaitUntil = Date.now() + 4000;
-      const doRestart = async (): Promise<TimerStatus> => this.restart("REBOOT");
-      let s: TimerStatus | null = null;
-      if (this.busy) {
-        s = await doRestart();
-      } else {
-        await this.runBusy("Restarting", async () => {
+    try {
+      if (upper === "REBOOT") {
+        this.serialAwaitUntil = Date.now() + 4000;
+        const doRestart = async (): Promise<TimerStatus> => this.restart("REBOOT");
+        let s: TimerStatus | null = null;
+        if (this.busy) {
           s = await doRestart();
-        });
+        } else {
+          await this.runBusy("Restarting", async () => {
+            s = await doRestart();
+          });
+        }
+        this.appendSerialLine(
+          s
+            ? `Timer restarted and reconnected (boot #${s.boots}, reset: ${s.reset}).`
+            : "Timer restarted and reconnected."
+        );
+        this.scrollSerialToBottom(true);
+        return;
       }
-      this.appendSerialLine(
-        s
-          ? `Timer restarted and reconnected (boot #${s.boots}, reset: ${s.reset}).`
-          : "Timer restarted and reconnected."
-      );
-      this.scrollSerialToBottom(true);
-      return;
-    }
 
-    if (upper === "STATUS?") {
-      this.serialExpectStatus = true;
-    }
-    this.serialAwaitUntil = Date.now() + 3000;
-    if (upper === "BOOTLOG?" || upper === "LASTLOG?") {
-      await this.console.request<BootLog>(cmd, "bootlog", 3000);
-      this.scrollSerialToBottom(true);
-      return;
-    }
-    if (upper.startsWith("EMERGENCY")) {
-      const enter = !upper.endsWith("0");
-      await this.console.request(cmd, "ok", 2000);
-      if (enter) {
-        this.liveOn = false;
-        this.scanLive = false;
-        this.status = await this.refreshStatus();
-      } else {
+      if (upper === "STATUS?") {
+        this.serialExpectStatus = true;
+      }
+      this.serialAwaitUntil = Date.now() + 3000;
+      if (upper === "BOOTLOG?" || upper === "LASTLOG?") {
+        await this.console.request<BootLog>(cmd, "bootlog", 3000);
+        this.scrollSerialToBottom(true);
+        return;
+      }
+      if (upper.startsWith("EMERGENCY")) {
+        const enter = !upper.endsWith("0");
+        await this.console.request(cmd, "ok", 2000);
+        if (enter) {
+          this.liveOn = false;
+          this.scanLive = false;
+          this.status = await this.refreshStatus();
+        } else {
+          await sleep(150);
+          try {
+            this.status = await this.refreshStatus();
+            this.liveOn = true;
+            this.liveMode = this.signalCardVisible ? 2 : 1;
+            await this.console.send(`LIVE ${this.liveMode}`);
+          } catch {
+            this.status = await this.restart("REBOOT");
+          }
+        }
+        this.renderAll();
+        this.scrollSerialToBottom(true);
+        return;
+      }
+
+      await this.console.send(cmd);
+      if (
+        upper.startsWith("RF ") ||
+        upper.startsWith("CHANNELS") ||
+        upper.startsWith("SCAN STOP")
+      ) {
         await sleep(150);
         try {
           this.status = await this.refreshStatus();
-          this.liveOn = true;
-          this.liveMode = this.signalCardVisible ? 2 : 1;
-          await this.console.send(`LIVE ${this.liveMode}`);
+          this.renderAll();
         } catch {
           this.status = await this.restart("REBOOT");
+          this.renderAll();
         }
       }
-      this.renderAll();
-      this.scrollSerialToBottom(true);
-      return;
-    }
-
-    await this.console.send(cmd);
-    if (
-      upper.startsWith("RF ") ||
-      upper.startsWith("CHANNELS") ||
-      upper.startsWith("SCAN STOP")
-    ) {
-      await sleep(150);
-      try {
-        this.status = await this.refreshStatus();
-        this.renderAll();
-      } catch {
-        this.status = await this.restart("REBOOT");
-        this.renderAll();
-      }
+    } catch (err) {
+      this.appendSerialLine(`error: ${err instanceof Error ? err.message : String(err)}`);
     }
     this.scrollSerialToBottom(true);
   }
