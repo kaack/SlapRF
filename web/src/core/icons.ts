@@ -82,4 +82,28 @@ export const icons = {
       `<path d="M5 12.85a11 11 0 0 1 14 0"/><path d="M1.8 9.2a16 16 0 0 1 20.4 0"/><path d="M8.5 16.4a6 6 0 0 1 7 0"/><circle cx="12" cy="19.5" r="1.2" fill="currentColor" stroke="none"/>`,
       s
     ),
+  fileText: (s?: number) =>
+    svg(
+      `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8M8 17h6"/>`,
+      s
+    ),
+  history: (s?: number) =>
+    svg(`<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/>`, s),
+  siren: (s?: number) =>
+    svg(
+      `<path d="M7 18v-6a5 5 0 1 1 10 0v6"/><path d="M5 21a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v1H5v-1Z"/><path d="M12 2v2M4.9 4.9l1.4 1.4M19.1 4.9l-1.4 1.4M2 12h2M20 12h2"/>`,
+      s
+    ),
+  copy: (s?: number) =>
+    svg(
+      `<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>`,
+      s
+    ),
+  trash: (s?: number) =>
+    svg(
+      `<path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M10 11v6M14 11v6"/>`,
+      s
+    ),
+  check: (s?: number) => svg(`<path d="M20 6 9 17l-5-5"/>`, s),
+  terminal: (s?: number) => svg(`<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>`, s),
 };
