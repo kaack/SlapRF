@@ -2085,8 +2085,7 @@ export class DebugView extends Component {
           await this.copy(this.reportText(), t);
           break;
         case "restart-capture":
-          await this.runBusy("Restarting", () => this.restartAndCapture());
-          this.scrollSerialToBottom(true);
+          await this.sendSerialCommand("REBOOT");
           break;
         case "toggle-emergency":
           await this.runBusy(this.status?.emergencyMode ? "Exiting emergency mode" : "Entering emergency mode", () =>
@@ -2222,14 +2221,6 @@ export class DebugView extends Component {
     const enter = !this.status?.emergencyMode;
     this.setProgress(enter ? "Entering emergency mode…" : "Exiting emergency mode…");
     await this.sendSerialCommand(enter ? "EMERGENCY 1" : "EMERGENCY 0");
-  }
-
-  private async restartAndCapture(): Promise<void> {
-    this.setProgress("Restarting the timer…");
-    await this.sendSerialCommand("REBOOT");
-    this.setProgress("Reading the boot log…");
-    await sleep(1500); // let Wi-Fi and the sweep task finish starting so their messages are in the log
-    await this.sendSerialCommand("BOOTLOG?");
   }
 
   // ---------------------------------------------------------------- self-test
@@ -3936,7 +3927,7 @@ export class DebugView extends Component {
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="bootlog" title="Read this boot's log (BOOTLOG?)" aria-label="Read this boot's log">${icons.fileText(17)}</button>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="lastlog" title="Read previous boot's log (LASTLOG?)" aria-label="Read previous boot's log">${icons.history(17)}</button>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="toggle-emergency" title="Enter emergency mode (EMERGENCY 1)" aria-label="Toggle emergency mode">${icons.siren(17)}</button>
-            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="restart-capture" title="Restart timer &amp; capture boot log (REBOOT + BOOTLOG?)" aria-label="Restart timer and capture boot log">${icons.reset(17)}</button>
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="restart-capture" title="Restart timer (REBOOT)" aria-label="Restart timer">${icons.reset(17)}</button>
             <span class="debug-overlay-sep" role="separator" aria-hidden="true"></span>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-wrap" aria-label="Wrap lines">${icons.wrapText(17)}</button>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-serial" title="Copy terminal output" aria-label="Copy terminal output">${icons.copy(17)}</button>
