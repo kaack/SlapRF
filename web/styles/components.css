@@ -156,8 +156,13 @@
   font-size: 12px;
 }
 .btn-sm.btn-icon {
-  width: 28px;
+  width: 30px;
+  height: 28px;
   padding: 0;
+}
+.btn-sm.btn-icon svg {
+  width: 17px;
+  height: 17px;
 }
 .btn-primary {
   background: var(--accent);

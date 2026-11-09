@@ -3763,6 +3763,24 @@ body.is-gate-dragging * {
 .debug-page .check input {
   accent-color: var(--text-2);
 }
+.debug-page .btn-sm.btn-icon.btn-ghost {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text-2);
+}
+.debug-page .btn-sm.btn-icon.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.debug-page .btn-sm.btn-icon.is-emergency-active {
+  background: rgba(250, 204, 21, 0.14);
+  border-color: rgba(250, 204, 21, 0.55);
+  color: #facc15;
+}
+.debug-page .btn-sm.btn-icon.is-emergency-active svg {
+  color: #facc15;
+}
 .debug-port-filter {
   display: inline-flex;
   align-items: center;

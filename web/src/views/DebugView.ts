@@ -2207,7 +2207,7 @@ export class DebugView extends Component {
       window.setTimeout(() => (label.textContent = old), 1500);
     } else {
       const oldHtml = button.innerHTML;
-      button.innerHTML = icons.check(14);
+      button.innerHTML = icons.check(17);
       window.setTimeout(() => (button.innerHTML = oldHtml), 1500);
     }
   }
@@ -2562,8 +2562,8 @@ export class DebugView extends Component {
                   <input type="checkbox" data-all-ports ${this.showAllPorts ? "checked" : ""}/>
                   <span>Show non-XIAO ports</span>
                 </label>`
-              : `<button type="button" class="btn btn-sm btn-icon ${s?.emergencyMode ? "btn-armed" : "btn-ghost"}" data-action="toggle-emergency" ${on && !busy ? "" : "disabled"} title="${s?.emergencyMode ? "Exit emergency mode (EMERGENCY 0)" : "Enter emergency mode (EMERGENCY 1)"}" aria-label="${s?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}">
-                  ${icons.siren(14)}
+              : `<button type="button" class="btn btn-sm btn-icon ${s?.emergencyMode ? "btn-armed is-emergency-active" : "btn-ghost"}" data-action="toggle-emergency" ${on && !busy ? "" : "disabled"} title="${s?.emergencyMode ? "Exit emergency mode (EMERGENCY 0)" : "Enter emergency mode (EMERGENCY 1)"}" aria-label="${s?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}">
+                  ${icons.siren(17)}
                 </button>`
           }
           <button type="button" class="btn btn-sm ${on ? "btn-armed" : "btn-unarmed"}" data-action="${on ? "disconnect" : "connect"}" ${supported && !busy ? "" : "disabled"}>
@@ -2633,7 +2633,7 @@ export class DebugView extends Component {
           <span class="debug-head-note">${summary}</span>
         </span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-report" ${this.checks.length && !running ? "" : "disabled"} title="Copy self-test report" aria-label="Copy self-test report">${icons.copy(14)}</button>
+          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-report" ${this.checks.length && !running ? "" : "disabled"} title="Copy self-test report" aria-label="Copy self-test report">${icons.copy(17)}</button>
           <button type="button" class="btn btn-sm btn-armed" data-action="selftest" ${on && !this.busy ? "" : "disabled"}>
             ${icons.bug(14)}<span>${running ? "Testing…" : "Run self-test"}</span>
           </button>
@@ -2695,12 +2695,12 @@ export class DebugView extends Component {
           <span class="debug-head-note">${headText}</span>
         </span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm btn-icon ${s?.emergencyMode ? "btn-armed" : "btn-ghost"}" data-action="toggle-emergency" ${on && !this.busy ? "" : "disabled"} title="${s?.emergencyMode ? "Exit emergency mode (EMERGENCY 0)" : "Enter emergency mode (EMERGENCY 1)"}" aria-label="${s?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}">
-            ${icons.siren(14)}
+          <button type="button" class="btn btn-sm btn-icon ${s?.emergencyMode ? "btn-armed is-emergency-active" : "btn-ghost"}" data-action="toggle-emergency" ${on && !this.busy ? "" : "disabled"} title="${s?.emergencyMode ? "Exit emergency mode (EMERGENCY 0)" : "Enter emergency mode (EMERGENCY 1)"}" aria-label="${s?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}">
+            ${icons.siren(17)}
           </button>
-          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="read-config" ${on && !this.busy ? "" : "disabled"} title="Read SLAPRF02 config block (SLAPRF?)" aria-label="Read config">${icons.sliders(14)}</button>
+          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="read-config" ${on && !this.busy ? "" : "disabled"} title="Read SLAPRF02 config block (SLAPRF?)" aria-label="Read config">${icons.sliders(17)}</button>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="refresh-status" ${on && !this.busy ? "" : "disabled"} title="Refresh timer status (STATUS?)" aria-label="Refresh status">
-            ${icons.reset(14)}
+            ${icons.reset(17)}
           </button>
         </div>
       </div>
@@ -3274,7 +3274,7 @@ export class DebugView extends Component {
             <span class="badge mono" data-findings-count>0</span>
             <span class="note debug-findings-sub" data-findings-sub>Newest first · coalesces ongoing bursts on the same channel</span>
           </div>
-          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="${clearAction}" data-findings-clear disabled title="Clear findings log" aria-label="Clear findings log">${icons.trash(14)}</button>
+          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="${clearAction}" data-findings-clear disabled title="Clear findings log" aria-label="Clear findings log">${icons.trash(17)}</button>
         </div>
         <div class="debug-findings-scroll table-scroll" data-findings-scroll>
           <div class="debug-findings-empty note" data-findings-empty>${esc(emptyHint)}</div>
@@ -3794,12 +3794,12 @@ export class DebugView extends Component {
           <span class="debug-head-note">${statusText}</span>
         </span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="bootlog" ${on && !busy ? "" : "disabled"} title="Read this boot's log (BOOTLOG?)" aria-label="Read this boot's log">${icons.fileText(14)}</button>
-          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="lastlog" ${on && !busy ? "" : "disabled"} title="Read previous boot's log (LASTLOG?)" aria-label="Read previous boot's log">${icons.history(14)}</button>
-          <button type="button" class="btn btn-sm btn-icon ${this.status?.emergencyMode ? "btn-armed" : "btn-ghost"}" data-action="toggle-emergency" ${on && !busy ? "" : "disabled"} title="${this.status?.emergencyMode ? "Exit emergency mode (EMERGENCY 0)" : "Enter emergency mode (EMERGENCY 1)"}" aria-label="${this.status?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}">
-            ${icons.siren(14)}
+          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="bootlog" ${on && !busy ? "" : "disabled"} title="Read this boot's log (BOOTLOG?)" aria-label="Read this boot's log">${icons.fileText(17)}</button>
+          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="lastlog" ${on && !busy ? "" : "disabled"} title="Read previous boot's log (LASTLOG?)" aria-label="Read previous boot's log">${icons.history(17)}</button>
+          <button type="button" class="btn btn-sm btn-icon ${this.status?.emergencyMode ? "btn-armed is-emergency-active" : "btn-ghost"}" data-action="toggle-emergency" ${on && !busy ? "" : "disabled"} title="${this.status?.emergencyMode ? "Exit emergency mode (EMERGENCY 0)" : "Enter emergency mode (EMERGENCY 1)"}" aria-label="${this.status?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}">
+            ${icons.siren(17)}
           </button>
-          <button type="button" class="btn btn-sm btn-icon btn-armed" data-action="restart-capture" ${on && !busy ? "" : "disabled"} title="Restart timer &amp; capture boot log (REBOOT + BOOTLOG?)" aria-label="Restart timer and capture boot log">${icons.reset(14)}</button>
+          <button type="button" class="btn btn-sm btn-icon btn-armed" data-action="restart-capture" ${on && !busy ? "" : "disabled"} title="Restart timer &amp; capture boot log (REBOOT + BOOTLOG?)" aria-label="Restart timer and capture boot log">${icons.reset(17)}</button>
         </div>
       </div>`;
     this.slot("restart").innerHTML = `
@@ -4039,8 +4039,8 @@ export class DebugView extends Component {
                 <span>Wrap lines</span>
               </label>
             </div>
-            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-serial" ${this.serialLines.length ? "" : "disabled"} title="Copy terminal output" aria-label="Copy terminal output">${icons.copy(14)}</button>
-            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-clear" ${this.serialLines.length ? "" : "disabled"} title="Clear terminal (CLEAR)" aria-label="Clear terminal">${icons.trash(14)}</button>
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-serial" ${this.serialLines.length ? "" : "disabled"} title="Copy terminal output" aria-label="Copy terminal output">${icons.copy(17)}</button>
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-clear" ${this.serialLines.length ? "" : "disabled"} title="Clear terminal (CLEAR)" aria-label="Clear terminal">${icons.trash(17)}</button>
           </div>
         </div>
         <div class="table-scroll">
@@ -4099,7 +4099,7 @@ export class DebugView extends Component {
               <span>Wrap lines</span>
             </label>
           </div>
-          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="clear-log" title="Clear live log" aria-label="Clear live log">${icons.trash(14)}</button>
+          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="clear-log" title="Clear live log" aria-label="Clear live log">${icons.trash(17)}</button>
           <button type="button" class="btn btn-sm ${this.logOn ? "btn-armed" : "btn-unarmed"}" data-action="log" ${on ? "" : "disabled"} title="${this.logOn ? "Streaming USB log mirror — click to pause" : "Paused — click to stream USB log mirror"}">
             ${this.logOn ? icons.pause(14) : icons.play(14)}<span>${this.logOn ? "Pause" : "Stream"}</span>
           </button>

@@ -91,7 +91,7 @@ export const icons = {
     svg(`<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/>`, s),
   siren: (s?: number) =>
     svg(
-      `<path d="M7 18v-6a5 5 0 1 1 10 0v6"/><path d="M5 21a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v1H5v-1Z"/><path d="M12 2v2M4.9 4.9l1.4 1.4M19.1 4.9l-1.4 1.4M2 12h2M20 12h2"/>`,
+      `<path d="M6.5 16v-3.5a5.5 5.5 0 0 1 11 0V16"/><path d="M10 16v-2.5a2 2 0 0 1 4 0V16"/><path d="M4 19h16l-1.5-3H5.5L4 19Z"/><path d="M1.5 11.5h2.5M2.2 7l2.3 1.4M20 11.5h2.5M21.8 7l-2.3 1.4"/>`,
       s
     ),
   copy: (s?: number) =>
