@@ -190,25 +190,7 @@ static void sweep_once(void) {
     if (took > SWEEP_BUDGET_US) {
         ESP_LOGW(TAG, "sweep took %lld us (budget %d us)", (long long)took, SWEEP_BUDGET_US);
     }
-    // Once a second (INFO level; production builds log at WARN): per-channel peak, and how many
-    // sweeps rose > 6 dB above the channel's quietest reading, over the last SWEEP_HZ sweeps.
-    static uint32_t s_sweeps;
-    static int8_t s_peak[MAX_PILOT_SLOTS];
-    static int8_t s_floor[MAX_PILOT_SLOTS];
-    static uint8_t s_hits[MAX_PILOT_SLOTS];
-    for (int i = 0; i < MAX_PILOT_SLOTS; i++) {
-        const int8_t v = cur->rssi_dbm[i];
-        if (s_sweeps % SWEEP_HZ == 0 || v > s_peak[i]) s_peak[i] = v;
-        if (s_sweeps == 0 || v < s_floor[i]) s_floor[i] = v;
-        if (s_sweeps % SWEEP_HZ == 0) s_hits[i] = 0;
-        if (v > s_floor[i] + 6) s_hits[i]++;
-    }
-    if (++s_sweeps % SWEEP_HZ == 0) {
-        ESP_LOGI(TAG, "sweep %lld us | peak dBm %d %d %d %d %d %d %d %d | hits %u %u %u %u %u %u %u %u",
-                 (long long)took, s_peak[0], s_peak[1], s_peak[2], s_peak[3], s_peak[4], s_peak[5],
-                 s_peak[6], s_peak[7], s_hits[0], s_hits[1], s_hits[2], s_hits[3], s_hits[4],
-                 s_hits[5], s_hits[6], s_hits[7]);
-    }
+    slaprf_diag_sweep(cur->rssi_dbm, (uint32_t)took); // Debug page: STATUS? / LIVE
 }
 
 /** Pack the current window into `pkt`; returns the frame length. */
@@ -310,6 +292,7 @@ static void hub_listen_until(int64_t until_us) {
 }
 
 static void hub_run(void) {
+    slaprf_diag_set_slot(HUB_SLOT);
     hub_send_hello(HUB_SLOT, ROLE_HUB_TIMER, g_flash_cfg.fingerprint, SLAPRF_PROFILE_CODE, SWEEP_HZ,
                    (const char *)g_flash_cfg.timer_label);
     uint8_t pkt[sizeof(timer_window_frame_t)];
@@ -336,6 +319,7 @@ static void hub_run(void) {
             // Stop listening a little early so queued UDP leaves before the radio goes deaf.
             hub_listen_until(t_sweep + SWEEP_INTERVAL_US - 500);
         }
+        slaprf_diag_service(); // Debug-page spectrum scan, if one was requested
         t_sf += SUPERFRAME_US;
         if (slaprf_now_us() > t_sf + SWEEP_INTERVAL_US) {
             t_sf = slaprf_now_us() + 1000; // Fell behind (e.g. a slow Wi-Fi call): restart cleanly
@@ -362,6 +346,7 @@ static uint8_t spoke_join_hub(void) {
         espnow_send(&j, sizeof(j)); // Lands in one of the Hub's 2.4 GHz gaps sooner or later
         for (int wait = 0; wait < 50; wait++) { // ~250 ms per attempt
             slaprf_sleep_until_us(slaprf_now_us() + 5000);
+            slaprf_diag_service();
             int n = espnow_poll(buf, sizeof(buf));
             if (n == (int)sizeof(hub_assign_frame_t) && buf[0] == FRAME_MAGIC_0 && buf[1] == FRAME_MAGIC_ASSIGN &&
                 compute_crc8(buf, (uint32_t)n - 1) == buf[n - 1]) {
@@ -391,6 +376,7 @@ static int64_t spoke_wait_beacon(int64_t after_us, int64_t deadline_us) {
 static void spoke_run(void) {
     slaprf_spoke_sync_to_hub_channel();
     uint8_t slot = spoke_join_hub();
+    slaprf_diag_set_slot(slot);
     const uint8_t idx = (uint8_t)(slot - 2);
     const int my_gap = idx / SLOTS_PER_GAP;
     const int64_t my_offset = SLOT_GUARD_US + (int64_t)(idx % SLOTS_PER_GAP) * TDMA_SLOT_US;
@@ -417,6 +403,7 @@ static void spoke_run(void) {
         sweep_once();
         int64_t b = spoke_wait_beacon(beacon, next_sf + SWEEP_BUDGET_US + BEACON_WAIT_US);
         beacon = b ? b : next_sf + SWEEP_BUDGET_US; // Missed it: free-run on the prediction
+        slaprf_diag_service(); // Debug-page spectrum scan, if one was requested
         // Obstructed only: the Hub has been gone too long; start over (re-sync, re-join).
         if (slaprf_ms_since_hub_beacon() > HUB_LOST_MS) {
             ESP_LOGW(TAG, "Hub lost for %d ms, restarting", HUB_LOST_MS);
@@ -428,8 +415,8 @@ static void spoke_run(void) {
 /* ---- Entry -------------------------------------------------------------------------------- */
 
 void app_main(void) {
-    // Let the web flasher read this board's config (fingerprint, role, profile) over USB.
-    slaprf_start_config_query_service(&g_flash_cfg, sizeof(g_flash_cfg));
+    // USB console: the flasher's config readback plus the web app's Debug page.
+    slaprf_diag_start(&g_flash_cfg, sizeof(g_flash_cfg), SWEEP_HZ);
 
     // External U.FL antenna; 2.4 GHz link (the driver never uses 5 GHz); 5.8 GHz capture engine.
     xiao_c5_select_ufl_antenna();

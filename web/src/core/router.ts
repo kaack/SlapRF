@@ -1,6 +1,6 @@
 import { icons } from "./icons";
 
-export type RouteId = "live" | "pilot" | "sim" | "setup";
+export type RouteId = "live" | "pilot" | "sim" | "setup" | "debug";
 
 export interface RouteMeta {
   id: RouteId;
@@ -41,6 +41,13 @@ export const ROUTES: RouteMeta[] = [
     title: "Settings",
     subtitle: "Pilots, timing rules, announcer, gates and LiveTime",
     icon: () => icons.sliders(20),
+  },
+  {
+    id: "debug",
+    label: "Debug",
+    title: "Debug",
+    subtitle: "Connect a timer over USB: live 5.8 GHz readings, spectrum scan, status and log",
+    icon: () => icons.bug(20),
   },
 ];
 

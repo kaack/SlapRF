@@ -90,14 +90,28 @@ void slaprf_wait_for_next_sweep_tick(uint32_t interval_us);
 /** Busy-wait `us` microseconds (TDMA slot offsets). */
 void delay_microseconds(uint32_t us);
 
-/* ---- USB config readback -------------------------------------------------------------------- */
+/* ---- USB debug console (web app Debug page) ---------------------------------------------- */
 
 /**
- * Answer "SLAPRF?\n" on the USB serial console with the raw config block, so the web flasher
- * can read the board's fingerprint / role / profile before reflashing.
+ * Start the USB console: answers the flasher's "SLAPRF?" with the raw config block and serves
+ * the Debug page (STATUS?, LIVE, SCAN, LOG, REBOOT; see slaprf_diag.c).
  */
+void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz);
+
+/** Legacy name for slaprf_diag_start() with a 50 Hz sweep rate. */
 void slaprf_start_config_query_service(const volatile void *cfg, size_t len);
 
+/** Report one finished sweep (8 channel readings and its duration) for STATUS? / LIVE. */
+void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us);
+
+/** Report the TDMA slot this timer is using (1 = Hub). */
+void slaprf_diag_set_slot(uint8_t slot);
+
+/** Run a pending SCAN (call from the main loop while the timer is on its 2.4 GHz gap). */
+void slaprf_diag_service(void);
+
+/** 5.8 GHz boot-check results for STATUS?. */
+void slaprf_rf58_info(bool *ok, int *gain, int *gain_max, float *floor_db);
 #ifdef __cplusplus
 }
 #endif

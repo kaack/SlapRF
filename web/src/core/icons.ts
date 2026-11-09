@@ -59,6 +59,11 @@ export const icons = {
       `<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>`,
       s
     ),
+  bug: (s?: number) =>
+    svg(
+      `<rect x="8" y="6" width="8" height="14" rx="4"/><path d="M9 3l1.5 3M15 3l-1.5 3M8 11H4M20 11h-4M8 16H5M19 16h-3M12 10v10"/>`,
+      s
+    ),
   close: (s?: number) => svg(`<path d="M18 6 6 18M6 6l12 12"/>`, s),
   menu: (s?: number) => svg(`<path d="M4 6h16M4 12h16M4 18h16"/>`, s),
 };

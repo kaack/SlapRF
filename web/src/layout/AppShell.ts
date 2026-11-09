@@ -5,6 +5,7 @@ import { ApiClient } from "../services/api_client";
 import { AppStore } from "../state/store";
 import { LiveView } from "../views/LiveView";
 import { PilotView } from "../views/PilotView";
+import { DebugView } from "../views/DebugView";
 import { SetupView } from "../views/SetupView";
 import { SimView } from "../views/SimView";
 import { Sidebar } from "./Sidebar";
@@ -72,6 +73,8 @@ export class AppShell extends Component {
         return new SimView(host, this.store, this.api);
       case "setup":
         return new SetupView(host, this.store, this.api, this.announcer);
+      case "debug":
+        return new DebugView(host);
     }
   }
 }

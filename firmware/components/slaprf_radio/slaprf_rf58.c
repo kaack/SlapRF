@@ -72,6 +72,8 @@ __attribute__((weak)) int cmd_parse(void *arg) {
 SOC_RESERVE_MEMORY_REGION(IQ_BANK_START, IQ_BANK_END, slaprf_iq_bank);
 
 static bool s_ready;
+static int s_gain_max_seen;
+static float s_floor_db;
 static int s_gain = DEFAULT_GAIN_INDEX;
 static portMUX_TYPE s_mux = portMUX_INITIALIZER_UNLOCKED;
 
@@ -276,9 +278,18 @@ bool slaprf_rf58_init(void) {
     const uint32_t gain_field = (words[0] >> 20) & 0x7FU;
     s_ready = direct_capture();
     const float floor_db = s_ready ? band_power_db() : 0.0f;
+    s_gain_max_seen = (int)gain_max;
+    s_floor_db = floor_db + DBM_OFFSET;
     slaprf_rf58_leave();
 
     ESP_LOGW(TAG, "boot check: direct=%d gain_field=%lu gain=%d max=%lu floor=%.1f dB", s_ready,
              (unsigned long)gain_field, s_gain, (unsigned long)gain_max, floor_db);
     return s_ready;
+}
+
+void slaprf_rf58_info(bool *ok, int *gain, int *gain_max, float *floor_db) {
+    *ok = s_ready;
+    *gain = s_gain;
+    *gain_max = s_gain_max_seen;
+    *floor_db = s_floor_db;
 }
