@@ -7,7 +7,7 @@ import { ApiClient } from "../services/api_client";
 import { suggestThreshold } from "../state/calibration";
 import { enterThresholdAt, gateColor, gateLabel } from "../state/selectors";
 import { AppStore, HISTORY_SECONDS } from "../state/store";
-import { GateThresholdUpdate, PuckTelemetryFrame } from "../types/models";
+import { GateThresholdUpdate, TimerTelemetryFrame } from "../types/models";
 import { FILTER_LABELS } from "./markup";
 
 const DBM_MIN = -95;
@@ -466,7 +466,7 @@ export class PilotRssiChart extends Component {
   }
 
   /** Index of the first frame at or after ts (binary search; frames are in time order). */
-  private static firstAtOrAfter(frames: PuckTelemetryFrame[], ts: number): number {
+  private static firstAtOrAfter(frames: TimerTelemetryFrame[], ts: number): number {
     let lo = 0;
     let hi = frames.length;
     while (lo < hi) {

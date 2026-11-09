@@ -1,17 +1,17 @@
 import {
-  DetectedPuck,
+  DetectedTimer,
   FilteredDetection,
   FullStateResponse,
   GateCrossingEvent,
-  GatePuck,
   LapRecord,
   LiveTimeStatus,
   PilotSlot,
   PilotTrackSummary,
-  PuckTelemetryFrame,
   SimState,
   StatusResponse,
+  TimerTelemetryFrame,
   TimingRules,
+  TrackNode,
 } from "../types/models";
 
 /**
@@ -56,9 +56,9 @@ const DEFAULT_RULES: TimingRules = {
 
 export class AppStore {
   private _pilots: PilotSlot[] = [];
-  private _pucks: GatePuck[] = [];
-  private _detectedPucks: DetectedPuck[] = [];
-  private _usbTimer: DetectedPuck | null = null;
+  private _nodes: TrackNode[] = [];
+  private _detectedTimers: DetectedTimer[] = [];
+  private _usbTimer: DetectedTimer | null = null;
   private _laps: LapRecord[] = [];
   private _crossings: GateCrossingEvent[] = [];
   private _filtered: FilteredDetection[] = [];
@@ -82,14 +82,14 @@ export class AppStore {
   private _liveFocus: number | null = null;
   private _comparison: ComparisonSelection = { lapId: null, reference: "best" };
 
-  private readonly simHistory = new Map<number, PuckTelemetryFrame[]>();
-  private readonly realHistory = new Map<number, PuckTelemetryFrame[]>();
+  private readonly simHistory = new Map<number, TimerTelemetryFrame[]>();
+  private readonly realHistory = new Map<number, TimerTelemetryFrame[]>();
   private readonly lastCrossingBySlot = new Map<number, GateCrossingEvent>();
   private readonly listeners = new Map<Topic, Set<Listener>>();
   private readonly lapListeners = new Set<LapListener>();
   private readonly startGateListeners = new Set<CrossingListener>();
 
-  private get activeHistory(): Map<number, PuckTelemetryFrame[]> {
+  private get activeHistory(): Map<number, TimerTelemetryFrame[]> {
     return this._simulatorRunning ? this.simHistory : this.realHistory;
   }
 
@@ -146,37 +146,40 @@ export class AppStore {
   public get enabledPilots(): PilotSlot[] {
     return this._pilots.filter((p) => p.enabled);
   }
-  /** Gate pucks sorted by their position around the track. */
-  public get pucks(): GatePuck[] {
+  /** Track nodes (gates) sorted by their position around the track. */
+  public get nodes(): TrackNode[] {
     if (!this._simulatorRunning && this._usbTimer) {
       const usb = this._usbTimer;
-      const matchedDet = this.detectedPucks.find(
+      const matchedDet = this.detectedTimers.find(
         (d) =>
           (usb.fingerprint && d.fingerprint && d.fingerprint.toUpperCase() === usb.fingerprint.toUpperCase()) ||
           (usb.puckLabel && d.puckLabel.toUpperCase() === usb.puckLabel.toUpperCase()) ||
           d.puckId === usb.puckId
       );
       const targetId = matchedDet?.puckId ?? usb.puckId;
-      return this._pucks.map((p) => {
-        const assigned = p.assignedPuckId ?? p.puckId;
+      return this._nodes.map((n) => {
+        const assigned = n.assignedPuckId ?? n.puckId;
         if (assigned === targetId) {
           return {
-            ...p,
+            ...n,
             online: true,
             noiseFloorDbm: usb.noiseFloorDbm,
-            lastSeenAt: usb.lastSeenAt || p.lastSeenAt,
+            lastSeenAt: usb.lastSeenAt || n.lastSeenAt,
           };
         }
-        return p;
+        return n;
       });
     }
-    return this._pucks;
+    return this._nodes;
   }
-  /** Physical XIAO pucks discovered over Wi-Fi/ESP-NOW, flashed over USB, or currently plugged in via USB. */
-  public get detectedPucks(): DetectedPuck[] {
+  public get pucks(): TrackNode[] {
+    return this.nodes;
+  }
+  /** Physical XIAO timers discovered over Wi-Fi/ESP-NOW, flashed over USB, or currently plugged in via USB. */
+  public get detectedTimers(): DetectedTimer[] {
     if (!this._simulatorRunning && this._usbTimer) {
       const usb = this._usbTimer;
-      const list = this._detectedPucks.map((d) => ({ ...d }));
+      const list = this._detectedTimers.map((d) => ({ ...d }));
       const idx = list.findIndex(
         (d) =>
           (usb.fingerprint && d.fingerprint && d.fingerprint.toUpperCase() === usb.fingerprint.toUpperCase()) ||
@@ -203,10 +206,13 @@ export class AppStore {
       }
       return list;
     }
-    return this._detectedPucks;
+    return this._detectedTimers;
+  }
+  public get detectedPucks(): DetectedTimer[] {
+    return this.detectedTimers;
   }
 
-  public setUsbDetectedTimer(timer: DetectedPuck | null): void {
+  public setUsbDetectedTimer(timer: DetectedTimer | null): void {
     this._usbTimer = timer;
     this.emit("status", "config");
   }
@@ -255,8 +261,11 @@ export class AppStore {
   public pilot(slotIndex: number): PilotSlot | undefined {
     return this._pilots.find((p) => p.slotIndex === slotIndex);
   }
-  public puck(puckId: number): GatePuck | undefined {
-    return this._pucks.find((p) => p.puckId === puckId);
+  public node(nodeId: number): TrackNode | undefined {
+    return this._nodes.find((n) => n.puckId === nodeId);
+  }
+  public puck(nodeId: number): TrackNode | undefined {
+    return this.node(nodeId);
   }
   public summaryFor(slotIndex: number): PilotTrackSummary | undefined {
     return this._summaries.find((s) => s.slotIndex === slotIndex);
@@ -264,8 +273,8 @@ export class AppStore {
   public lastCrossingFor(slotIndex: number): GateCrossingEvent | undefined {
     return this.lastCrossingBySlot.get(slotIndex);
   }
-  public historyFor(puckId: number): PuckTelemetryFrame[] {
-    return this.activeHistory.get(puckId) ?? [];
+  public historyFor(nodeId: number): TimerTelemetryFrame[] {
+    return this.activeHistory.get(nodeId) ?? [];
   }
 
   // ---- mutations -----------------------------------------------------------
@@ -273,8 +282,8 @@ export class AppStore {
   public hydrate(state: FullStateResponse): void {
     const modeChanged = this._simulatorRunning !== state.simulatorRunning;
     this._pilots = state.pilots ?? [];
-    this.setPucks(state.pucks ?? []);
-    this._detectedPucks = state.detectedPucks ?? [];
+    this.setNodes(state.pucks ?? []);
+    this._detectedTimers = state.detectedPucks ?? [];
     this._laps = state.laps ?? [];
     this._crossings = state.crossings ?? [];
     this._filtered = state.filtered ?? [];
@@ -307,10 +316,10 @@ export class AppStore {
   }
 
   public applyStatus(status: StatusResponse): void {
-    const before = this._pucks.map((p) => p.puckId).join(",");
-    this.setPucks(status.pucks ?? []);
+    const before = this._nodes.map((n) => n.puckId).join(",");
+    this.setNodes(status.pucks ?? []);
     if (status.detectedPucks) {
-      this._detectedPucks = status.detectedPucks;
+      this._detectedTimers = status.detectedPucks;
     }
     if (status.serverTimestampUs && status.serverTimestampUs > this._latestTimestampUs) {
       this._latestTimestampUs = status.serverTimestampUs;
@@ -324,7 +333,7 @@ export class AppStore {
     this._raceArmed = status.raceArmed;
     this._liveTime = status.liveTimeStatus;
 
-    const gatesChanged = before !== this._pucks.map((p) => p.puckId).join(",");
+    const gatesChanged = before !== this._nodes.map((n) => n.puckId).join(",");
     if (gatesChanged) {
       this.ensureValidSelection();
       this.emit("status", "config");
@@ -333,9 +342,9 @@ export class AppStore {
     }
   }
 
-  public applyConfig(pilots: PilotSlot[], pucks: GatePuck[]): void {
+  public applyConfig(pilots: PilotSlot[], nodes: TrackNode[]): void {
     this._pilots = pilots;
-    this.setPucks(pucks);
+    this.setNodes(nodes);
     this.ensureValidSelection();
     this.emit("config");
   }
@@ -345,7 +354,7 @@ export class AppStore {
     this.emit("rules");
   }
 
-  public ingestTelemetry(frame: PuckTelemetryFrame): void {
+  public ingestTelemetry(frame: TimerTelemetryFrame): void {
     const hist = this.activeHistory;
     let buf = hist.get(frame.puckId);
     if (!buf) {
@@ -358,8 +367,8 @@ export class AppStore {
     if (frame.timestampUs > this._latestTimestampUs) {
       this._latestTimestampUs = frame.timestampUs;
     }
-    const puck = this.puck(frame.puckId);
-    if (puck) puck.lastRssi = frame.rssi;
+    const node = this.node(frame.puckId);
+    if (node) node.lastRssi = frame.rssi;
   }
 
   public ingestCrossing(ev: GateCrossingEvent): void {
@@ -415,8 +424,8 @@ export class AppStore {
     this.emit("selection");
   }
 
-  private setPucks(pucks: GatePuck[]): void {
-    this._pucks = [...pucks].sort((a, b) => a.trackOrder - b.trackOrder);
+  private setNodes(nodes: TrackNode[]): void {
+    this._nodes = [...nodes].sort((a, b) => a.trackOrder - b.trackOrder);
   }
 
   private ensureValidSelection(): void {

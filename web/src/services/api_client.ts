@@ -3,17 +3,17 @@ import {
   FilteredDetection,
   FullStateResponse,
   GateCrossingEvent,
-  GatePuck,
   GateRuleOverrides,
   GateThresholdUpdate,
   GateUpdate,
   LapRecord,
   PilotSlot,
   PilotTrackSummary,
-  PuckTelemetryFrame,
   StatusResponse,
   StreamEnvelope,
+  TimerTelemetryFrame,
   TimingRules,
+  TrackNode,
 } from "../types/models";
 import { HttpRealTransport } from "./http_transport";
 import {
@@ -34,7 +34,7 @@ interface LapPayload {
 
 interface ConfigPayload {
   pilots: PilotSlot[];
-  pucks: GatePuck[];
+  pucks: TrackNode[];
 }
 
 const STATUS_POLL_MS = 2000;
@@ -91,10 +91,10 @@ export class ApiClient {
         FIRMWARE_PROFILES.find((p) => p.code === s.profile)?.id ||
         DEFAULT_FIRMWARE_PROFILE;
       const fp = (s.fp || cfg?.fingerprint || "").trim().toUpperCase();
-      const puckId = isHub ? 1 : Math.max(2, s.slot || 2);
+      const timerId = isHub ? 1 : Math.max(2, s.slot || 2);
 
       this.store.setUsbDetectedTimer({
-        puckId,
+        puckId: timerId,
         puckLabel: label,
         color: "#d4ff3a",
         isHub,
@@ -215,49 +215,45 @@ export class ApiClient {
     await this.updateTrackNode(update);
   }
 
-  public async addTrackNode(name = "", assignedPuckId = 0, trackOrder?: number): Promise<void> {
+  public async addTrackNode(name = "", assignedTimerId = 0, trackOrder?: number): Promise<void> {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("POST", "/api/track/add", {
         name,
-        assignedPuckId,
+        assignedPuckId: assignedTimerId,
         ...(trackOrder !== undefined ? { trackOrder } : {}),
       })
     );
   }
 
-  public async addGate(name = "", assignedPuckId = 0, trackOrder?: number): Promise<void> {
-    await this.addTrackNode(name, assignedPuckId, trackOrder);
+  public async addGate(name = "", assignedTimerId = 0, trackOrder?: number): Promise<void> {
+    await this.addTrackNode(name, assignedTimerId, trackOrder);
   }
 
-  public async removeTrackNode(puckId: number): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/track/remove", { puckId }));
+  public async removeTrackNode(nodeId: number): Promise<void> {
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/track/remove", { puckId: nodeId }));
   }
 
-  public async removeGate(puckId: number): Promise<void> {
-    await this.removeTrackNode(puckId);
+  public async removeGate(nodeId: number): Promise<void> {
+    await this.removeTrackNode(nodeId);
   }
 
-  public async updateTimerColor(puckId: number, color: string): Promise<void> {
+  public async updateTimerColor(timerId: number, color: string): Promise<void> {
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/timers/color", { puckId, color })
+      await this.transport.request<FullStateResponse>("POST", "/api/timers/color", { puckId: timerId, color })
     );
-  }
-
-  public async updatePuckColor(puckId: number, color: string): Promise<void> {
-    await this.updateTimerColor(puckId, color);
   }
 
   /** Registers a newly flashed timer (hub or spoke) with its name, firmware profile, and board fingerprint. */
   public async provisionTimer(
     role: "hub" | "spoke",
-    puckLabel: string,
+    timerLabel: string,
     firmwareProfile = DEFAULT_FIRMWARE_PROFILE,
     fingerprint = ""
   ): Promise<void> {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("POST", "/api/timers/provision", {
         role,
-        puckLabel,
+        puckLabel: timerLabel,
         firmwareProfile,
         fingerprint,
       })
@@ -271,19 +267,19 @@ export class ApiClient {
    */
   public async fetchFirmwareImage(
     role: "hub" | "spoke",
-    puckLabel = "",
+    timerLabel = "",
     wifiSSID = "",
     wifiPass = "",
     profile = DEFAULT_FIRMWARE_PROFILE,
     fingerprint = generateFingerprint()
   ): Promise<{ bytes: Uint8Array; sha256: string; filename: string }> {
     try {
-      return await this.transport.fetchFirmwareImage(role, puckLabel, wifiSSID, wifiPass, profile, fingerprint);
+      return await this.transport.fetchFirmwareImage(role, timerLabel, wifiSSID, wifiPass, profile, fingerprint);
     } catch {
       const freqs = this.store.pilots.slice(0, 8).map((p) => p.frequencyMhz);
       const built = await buildOrPatchFirmwareBin({
         role,
-        puckLabel,
+        timerLabel,
         wifiSSID,
         wifiPass,
         profile,
@@ -294,7 +290,7 @@ export class ApiClient {
     }
   }
   /** Forwards a live 16-byte binary telemetry frame received over WebSerial into the timing engine. */
-  public async ingestTelemetryFrame(frame: PuckTelemetryFrame): Promise<void> {
+  public async ingestTelemetryFrame(frame: TimerTelemetryFrame): Promise<void> {
     await this.httpTransport.request("POST", "/api/ingest/frame", frame);
   }
 
@@ -318,8 +314,8 @@ export class ApiClient {
   }
 
   /** One gate's timing-rule overrides; an empty object clears them. */
-  public async setGateRules(puckId: number, overrides: GateRuleOverrides): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/gates/rules", { puckId, overrides }));
+  public async setGateRules(nodeId: number, overrides: GateRuleOverrides): Promise<void> {
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/gates/rules", { puckId: nodeId, overrides }));
   }
 
   /** Saves timing guardrails; the server clamps values and returns what it applied. */
@@ -339,7 +335,7 @@ export class ApiClient {
     this.transport.connectStream((msg: StreamEnvelope) => {
       switch (msg.type) {
         case "telemetry":
-          this.store.ingestTelemetry(msg.payload as PuckTelemetryFrame);
+          this.store.ingestTelemetry(msg.payload as TimerTelemetryFrame);
           break;
         case "crossing":
           this.store.ingestCrossing(msg.payload as GateCrossingEvent);

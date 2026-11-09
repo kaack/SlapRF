@@ -1,4 +1,4 @@
-import { PuckTelemetryFrame } from "../types/models";
+import { TimerTelemetryFrame } from "../types/models";
 import { median } from "./selectors";
 
 /** A pass must rise at least this far above the noise floor to count as one. */
@@ -31,7 +31,7 @@ function percentile(sorted: number[], p: number): number {
  * puts the threshold a bit over halfway up — low enough that weaker passes still clear
  * it, high enough above the floor that noise and neighbouring gates don't.
  */
-export function suggestThreshold(frames: PuckTelemetryFrame[], slotPos: number): CalibrationResult {
+export function suggestThreshold(frames: TimerTelemetryFrame[], slotPos: number): CalibrationResult {
   const values = frames.map((f) => f.rssi[slotPos]).filter((v): v is number => typeof v === "number");
   if (values.length < 100) return { ok: false, reason: "not enough signal recorded yet" };
 

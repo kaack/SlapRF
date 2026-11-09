@@ -4,7 +4,7 @@ import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import { gateColor, gateLabel } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { FilterReason, GatePuck, GateRuleKey, GateRuleOverrides, TimingRules } from "../types/models";
+import { FilterReason, GateRuleKey, GateRuleOverrides, TimingRules, TrackNode } from "../types/models";
 import { FILTER_LABELS } from "./markup";
 
 interface RuleSpec {
@@ -155,7 +155,7 @@ export class TimingRulesEditor extends Component {
     this.render();
   }
 
-  private overridesOf(p: GatePuck | undefined): GateRuleOverrides {
+  private overridesOf(p: TrackNode | undefined): GateRuleOverrides {
     return p?.ruleOverrides ?? {};
   }
 

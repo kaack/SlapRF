@@ -50,8 +50,8 @@ export interface TimerReadout {
   chip: string;
   role: "hub" | "spoke";
   timerLabel: string;
-  puckLabel: string;
   wifiSSID: string;
+  wifiPassSet?: boolean;
   frequenciesMHz: number[];
   firmwareVersion: string;
   firmwareProfile: string;
@@ -61,8 +61,6 @@ export interface TimerReadout {
   /** Live status snapshot when read from a running timer over USB. */
   status?: TimerStatusSnapshot;
 }
-
-export type PuckReadout = TimerReadout;
 
 export type ProgressCallback = (progress: FlashProgress) => void;
 
@@ -252,7 +250,7 @@ export async function withFingerprint(img: Uint8Array, fingerprintHex: string): 
  */
 export async function buildOrPatchFirmwareBin(opts: {
   role: "hub" | "spoke";
-  puckLabel: string;
+  timerLabel: string;
   wifiSSID: string;
   wifiPass: string;
   profile?: string;
@@ -262,7 +260,7 @@ export async function buildOrPatchFirmwareBin(opts: {
   const profile = firmwareProfile(opts.profile);
   const roleCode = opts.role === "hub" ? 1 : 2;
   const fingerprint = opts.fingerprint || generateFingerprint();
-  const cleanLabel = opts.puckLabel.trim().slice(0, 24);
+  const cleanLabel = opts.timerLabel.trim().slice(0, 24);
   const cleanSSID = opts.role === "hub" ? opts.wifiSSID.trim().slice(0, 32) : "";
   const cleanPass = opts.role === "hub" ? opts.wifiPass.slice(0, 39) : "";
   const defaultFreqs = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
@@ -315,7 +313,7 @@ export function isWebSerialSupported(): boolean {
 }
 
 /** Decode the 160-byte `SLAPRF02` configuration block from a firmware binary or flash dump. */
-export function parseSlaprfConfigBlock(bytes: Uint8Array): PuckReadout | null {
+export function parseSlaprfConfigBlock(bytes: Uint8Array): TimerReadout | null {
   const off = findConfigBlock(bytes);
   if (off < 0) return null;
   const block = bytes.subarray(off, off + CONFIG_LEN);
@@ -337,7 +335,6 @@ export function parseSlaprfConfigBlock(bytes: Uint8Array): PuckReadout | null {
     chip: "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
     role: block[OFF_ROLE] === 1 ? "hub" : "spoke",
     timerLabel,
-    puckLabel: timerLabel,
     wifiSSID: cstr(OFF_SSID, 33),
     frequenciesMHz,
     firmwareVersion: `v${block[OFF_VERSION]}.${block[OFF_VERSION + 1]}.${block[OFF_VERSION + 2]}`,
@@ -484,7 +481,7 @@ export async function readXiaoC5OverWebSerial(
   fallbackImageBytes: Uint8Array,
   onProgress: ProgressCallback,
   showAllPorts = false
-): Promise<PuckReadout> {
+): Promise<TimerReadout> {
   const nav = navigator as unknown as NavigatorWithSerial;
   if (!nav.serial) {
     throw new Error("WebSerial is only available in Chrome, Edge, or Brave over localhost / HTTPS.");
@@ -535,7 +532,6 @@ export async function readXiaoC5OverWebSerial(
             : "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
           role: status.role === 1 ? "hub" : "spoke",
           timerLabel: status.label || "",
-          puckLabel: status.label || "",
           wifiSSID: "",
           frequenciesMHz: status.freqs,
           firmwareVersion: status.fw,
@@ -566,7 +562,6 @@ export async function readXiaoC5OverWebSerial(
         chip: "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
         role: "hub",
         timerLabel: "",
-        puckLabel: "",
         wifiSSID: "",
         frequenciesMHz: [5658, 5732, 5806, 5917, 5695, 5769, 5843, 5880],
         firmwareVersion: "unknown",
@@ -606,7 +601,7 @@ export async function flashXiaoC5OverWebSerial(
   onProgress: ProgressCallback,
   showAllPorts = false,
   keepFingerprint = false
-): Promise<PuckReadout | null> {
+): Promise<TimerReadout | null> {
   const nav = navigator as unknown as NavigatorWithSerial;
   if (!nav.serial) {
     throw new Error("WebSerial is only available in Chrome, Edge, or Brave over localhost / HTTPS.");

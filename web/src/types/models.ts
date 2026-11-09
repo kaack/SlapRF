@@ -1,5 +1,4 @@
 export type TimerRole = "START_FINISH" | "SECTOR_GATE";
-export type PuckRole = TimerRole;
 
 export type SectorBadge =
   | "OVERALL_BEST"
@@ -36,7 +35,6 @@ export interface DetectedTimer {
   online: boolean;
   lastSeenAt: string;
 }
-export type DetectedPuck = DetectedTimer;
 
 export interface TrackNode {
   puckId: number;
@@ -66,7 +64,6 @@ export interface TrackNode {
   lastSeenAt: string;
   framesRxCount: number;
 }
-export type GatePuck = TrackNode;
 
 /** Calibrates one track node for one pilot (`POST /api/thresholds`). enterDbm 0 = back to the pilot's default. */
 export interface GateThresholdUpdate {
@@ -90,7 +87,7 @@ export interface TrackNodeUpdate {
 }
 export type GateUpdate = TrackNodeUpdate;
 
-export interface PuckTelemetryFrame {
+export interface TimerTelemetryFrame {
   puckId: number;
   seqNum: number;
   timestampUs: number;
@@ -249,8 +246,8 @@ export interface SimState {
 export interface FullStateResponse {
   serverTimestampUs?: number;
   pilots: PilotSlot[];
-  pucks: GatePuck[];
-  detectedPucks?: DetectedPuck[];
+  pucks: TrackNode[];
+  detectedPucks?: DetectedTimer[];
   laps: LapRecord[];
   crossings: GateCrossingEvent[];
   filtered: FilteredDetection[];
@@ -265,8 +262,8 @@ export interface FullStateResponse {
 /** Lightweight periodic status poll (`GET /api/status`). */
 export interface StatusResponse {
   serverTimestampUs?: number;
-  pucks: GatePuck[];
-  detectedPucks?: DetectedPuck[];
+  pucks: TrackNode[];
+  detectedPucks?: DetectedTimer[];
   simulatorRunning: boolean;
   simState?: SimState;
   raceArmed: boolean;

@@ -428,7 +428,7 @@ export class TimerFlasher extends Component {
   /** Next spoke name (S1, S2, …) not already used by a detected timer or one flashed this session. */
   private suggestSpokeLabel(): string {
     const taken = new Set<string>();
-    for (const d of this.store.detectedPucks) {
+    for (const d of this.store.detectedTimers) {
       if (d.puckLabel) taken.add(d.puckLabel.trim().toUpperCase());
     }
     for (const key of this.flashedNodes) {

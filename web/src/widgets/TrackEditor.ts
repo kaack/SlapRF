@@ -98,10 +98,10 @@ export class TrackEditor extends Component {
   }
 
   private get detectedTimers(): DetectedTimer[] {
-    if (this.store.detectedPucks.length > 0) {
-      return [...this.store.detectedPucks].sort((a, b) => a.puckId - b.puckId);
+    if (this.store.detectedTimers.length > 0) {
+      return [...this.store.detectedTimers].sort((a, b) => a.puckId - b.puckId);
     }
-    return this.store.pucks
+    return this.store.nodes
       .filter((p) => (p.assignedPuckId ?? p.puckId) > 0)
       .map((p) => ({
         puckId: p.assignedPuckId ?? p.puckId,
@@ -323,13 +323,13 @@ export class TrackEditor extends Component {
         class="unassigned-puck-token"
         data-puck-id="${d.puckId}"
         style="--c:${color}"
-        title="P${d.puckId}${esc(label)} (${roleSub}) · Drag onto the track line above to create a gate"
+        title="T${d.puckId}${esc(label)} (${roleSub}) · Drag onto the track line above to create a gate"
       >
         <span class="unassigned-puck-dot" style="--c:${color}">
-          <span class="mono">P${d.puckId}</span>
+          <span class="mono">T${d.puckId}</span>
         </span>
         <div class="unassigned-puck-info">
-          <span class="unassigned-puck-name mono">P${d.puckId}${esc(label)}</span>
+          <span class="unassigned-puck-name mono">T${d.puckId}${esc(label)}</span>
           <span class="unassigned-puck-sub">
             <span class="gate-node-status-dot ${d.online ? "is-online" : ""}"></span>
             ${d.isHub ? "Hub" : "Spoke"} · ${d.online ? `${d.batteryPct}%` : "Offline"}

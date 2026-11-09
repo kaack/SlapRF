@@ -64,13 +64,12 @@ export const GATE_COLORS = TIMER_COLORS;
  */
 export function timerColor(store: AppStore, hardwareTimerId: number): string {
   if (!hardwareTimerId || hardwareTimerId <= 0) return "#64748b";
-  const detected = store.detectedPucks.find((d) => d.puckId === hardwareTimerId);
+  const detected = store.detectedTimers.find((d) => d.puckId === hardwareTimerId);
   if (detected?.color?.trim()) return detected.color.trim();
-  const nodeWithTimer = store.pucks.find((p) => (p.assignedPuckId ?? p.puckId) === hardwareTimerId);
+  const nodeWithTimer = store.nodes.find((p) => (p.assignedPuckId ?? p.puckId) === hardwareTimerId);
   if (nodeWithTimer?.color?.trim()) return nodeWithTimer.color.trim();
   return TIMER_COLORS[(hardwareTimerId - 1) % TIMER_COLORS.length];
 }
-export const puckColor = timerColor;
 
 /**
  * The color of a node on the track, derived from the physical timer assigned to it
@@ -104,7 +103,6 @@ export function gateLabel(store: AppStore, puckId: number): string {
 export function timerHardwareId(p: { puckId: number; puckLabel?: string }): string {
   return p.puckLabel?.trim() || `timer #${p.puckId}`;
 }
-export const puckHardwareId = timerHardwareId;
 
 /** "Gate 2 → Split-S" style label for the stretch of track between two gates. */
 export function sectionLabel(store: AppStore, fromPuckId: number, toPuckId: number): string {

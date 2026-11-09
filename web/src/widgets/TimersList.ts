@@ -176,9 +176,9 @@ export class TimersList extends Component {
 
   private get allTimers(): DetectedTimer[] {
     const raw =
-      this.store.detectedPucks.length > 0
-        ? [...this.store.detectedPucks]
-        : this.store.pucks
+      this.store.detectedTimers.length > 0
+        ? [...this.store.detectedTimers]
+        : this.store.nodes
             .filter((p) => (p.assignedPuckId ?? p.puckId) > 0)
             .map((p) => ({
               puckId: p.assignedPuckId ?? p.puckId,

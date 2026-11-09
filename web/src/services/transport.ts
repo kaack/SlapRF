@@ -18,7 +18,7 @@ export interface ApiTransport {
   request<T = unknown>(method: "GET" | "POST", url: string, body?: unknown): Promise<T>;
   fetchFirmwareImage(
     role: "hub" | "spoke",
-    puckLabel: string,
+    timerLabel: string,
     wifiSSID: string,
     wifiPass: string,
     profile: string,
