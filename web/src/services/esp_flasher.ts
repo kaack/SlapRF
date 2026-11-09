@@ -946,22 +946,17 @@ export async function flashXiaoC5OverWebSerial(
 }
 
 
-export interface EraseResult {
-  previousLabel?: string;
-  previousFp?: string;
-  previousRole?: "hub" | "spoke";
-}
-
 /**
- * Factory-resets / erases a Seeed XIAO ESP32-C5 over USB by entering the ROM bootloader,
- * attaching the 4 MB SPI flash, and erasing the bootloader, partition table, NVS, and
- * application partitions (`0x0000`..`0x190000`).
+ * Factory-resets / erases a Seeed XIAO ESP32-C5 over USB by opening the browser's USB port picker,
+ * entering the ROM bootloader directly (without needing to read the chip first), attaching the
+ * 4 MB SPI flash, and wiping the bootloader, partition table, NVS, and application partitions
+ * (`0x0000`..`0x190000`).
  */
 export async function eraseXiaoC5OverWebSerial(
   onProgress: ProgressCallback,
   showAllPorts = false,
   existingOwner?: ConnectedPortOwner
-): Promise<EraseResult> {
+): Promise<void> {
   const nav = navigator as unknown as NavigatorWithSerial;
   if (!nav.serial) {
     throw new Error("WebSerial is only available in Chrome, Edge, or Brave over localhost / HTTPS.");
@@ -969,8 +964,8 @@ export async function eraseXiaoC5OverWebSerial(
 
   onProgress({
     stage: "connecting",
-    percent: 2,
-    detail: "Select the XIAO ESP32-C5 USB port to factory-reset / erase…",
+    percent: 4,
+    detail: "Select the XIAO ESP32-C5 USB port to wipe…",
   });
 
   const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
@@ -990,8 +985,6 @@ export async function eraseXiaoC5OverWebSerial(
   }
 
   let pumpActive = false;
-  let collectRaw = true;
-  const rawChunks: Uint8Array[] = [];
   const slipQueue: Uint8Array[] = [];
   const slipWaiters: Array<() => void> = [];
 
@@ -1005,9 +998,6 @@ export async function eraseXiaoC5OverWebSerial(
         while (pumpActive) {
           const { value, done } = await r.read();
           if (done || !value) break;
-          if (collectRaw) {
-            rawChunks.push(value);
-          }
           for (let i = 0; i < value.length; i++) {
             const b = value[i];
             if (b === SLIP_END) {
@@ -1071,34 +1061,8 @@ export async function eraseXiaoC5OverWebSerial(
     return false;
   };
 
-  const result: EraseResult = {};
-
   try {
     startSlipPump(reader);
-
-    onProgress({
-      stage: "reading",
-      percent: 5,
-      detail: "Inspecting connected board before erase…",
-    });
-    await writer.write(new TextEncoder().encode("\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?\n"));
-    await sleep(240);
-    collectRaw = false;
-    let total = 0;
-    for (const c of rawChunks) total += c.length;
-    if (total > 0) {
-      const rx = new Uint8Array(total);
-      let off = 0;
-      for (const c of rawChunks) {
-        rx.set(c, off);
-        off += c.length;
-      }
-      const existing = parseSlaprfConfigBlock(rx);
-      const status = parseStatusSnapshot(rx);
-      result.previousLabel = status?.label || existing?.timerLabel || undefined;
-      result.previousFp = status?.fp || existing?.fingerprint || undefined;
-      result.previousRole = status ? (status.role === 1 ? "hub" : "spoke") : existing?.role;
-    }
 
     onProgress({
       stage: "bootloader",
@@ -1147,7 +1111,7 @@ export async function eraseXiaoC5OverWebSerial(
 
     onProgress({
       stage: "erasing",
-      percent: 16,
+      percent: 18,
       detail: "Attaching 4 MB SPI flash…",
     });
     await writer.write(buildRomCommand(ESP_SPI_ATTACH, new Uint8Array(8)));
@@ -1168,26 +1132,26 @@ export async function eraseXiaoC5OverWebSerial(
       {
         offset: 0x0000,
         size: 0x10000,
-        pct: 32,
-        detail: "Erasing bootloader, partition table & NVS (64 KB)…",
+        pct: 35,
+        detail: "Wiping bootloader, partition table & NVS (64 KB)…",
       },
       {
         offset: 0x10000,
         size: 0x80000,
-        pct: 56,
-        detail: "Erasing application flash (512 / 1536 KB)…",
+        pct: 58,
+        detail: "Wiping application flash (512 / 1536 KB)…",
       },
       {
         offset: 0x90000,
         size: 0x80000,
         pct: 78,
-        detail: "Erasing application flash (1024 / 1536 KB)…",
+        detail: "Wiping application flash (1024 / 1536 KB)…",
       },
       {
         offset: 0x110000,
         size: 0x80000,
         pct: 95,
-        detail: "Erasing application flash & config block (1536 / 1536 KB)…",
+        detail: "Wiping application flash & config block (1536 / 1536 KB)…",
       },
     ];
 
@@ -1221,10 +1185,8 @@ export async function eraseXiaoC5OverWebSerial(
     onProgress({
       stage: "done",
       percent: 100,
-      detail: "Factory reset complete — chip flash erased.",
+      detail: "Timer wiped — chip flash erased back to factory blank.",
     });
-
-    return result;
   } finally {
     pumpActive = false;
     try {

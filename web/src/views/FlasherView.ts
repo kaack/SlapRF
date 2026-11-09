@@ -4,7 +4,6 @@ import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import {
   DEFAULT_FIRMWARE_PROFILE,
-  EraseResult,
   FIRMWARE_PROFILES,
   FlashProgress,
   LATEST_FIRMWARE_VERSION,
@@ -14,7 +13,7 @@ import {
   isWebSerialSupported,
   readXiaoC5OverWebSerial,
 } from "../services/esp_flasher";
-import { forgetKnownHardwareTimer, sharedTimerConsole, TimerStatus } from "../services/timer_console";
+import { sharedTimerConsole, TimerStatus } from "../services/timer_console";
 import { AppStore } from "../state/store";
 import { TimerFlasher } from "../widgets/TimerFlasher";
 
@@ -76,15 +75,6 @@ class TimerReaderPanel extends Component {
     this.readout = info;
     this.errorMsg = null;
     this.render();
-  }
-
-  public clearIfMatches(fp?: string): void {
-    if (!this.readout) return;
-    if (!fp || this.readout.fingerprint === fp) {
-      this.readout = null;
-      this.errorMsg = null;
-      this.render();
-    }
   }
 
   private async readFromUsb(): Promise<void> {
@@ -295,19 +285,18 @@ class TimerReaderPanel extends Component {
 }
 
 /**
- * Eraser panel: factory-resets / erases a Seeed XIAO ESP32-C5 over USB back to a blank chip.
+ * Standalone Eraser panel: opens the browser's USB port picker directly (without needing to
+ * read the timer first) and wipes the selected Seeed XIAO ESP32-C5 back to a factory-blank chip.
  */
 class TimerEraserPanel extends Component {
-  private readonly onErased?: (res: EraseResult) => void;
   private busy = false;
   private progress: FlashProgress | null = null;
   private lastSuccessMsg: string | null = null;
   private errorMsg: string | null = null;
   private showAllPorts = false;
 
-  constructor(el: HTMLElement, onErased?: (res: EraseResult) => void) {
+  constructor(el: HTMLElement) {
     super(el);
-    this.onErased = onErased;
     this.showAllPorts = sharedTimerConsole.showAllPorts;
 
     this.listen(el, "click", (e) => {
@@ -330,23 +319,18 @@ class TimerEraserPanel extends Component {
 
   private async eraseFromUsb(): Promise<void> {
     if (this.busy) return;
-    const confirmed = window.confirm(
-      "Factory-reset and erase all flash memory on the selected XIAO ESP32-C5?\n\nThis wipes its bootloader, partition table, NVS calibration/settings, and SlapRF firmware back to a blank chip."
-    );
-    if (!confirmed) return;
-
     this.busy = true;
     this.errorMsg = null;
     this.lastSuccessMsg = null;
     this.progress = {
       stage: "connecting",
       percent: 1,
-      detail: "Select the XIAO ESP32-C5 USB port to factory-reset / erase…",
+      detail: "Select the XIAO ESP32-C5 USB port to wipe…",
     };
     this.render();
 
     try {
-      const res = await eraseXiaoC5OverWebSerial(
+      await eraseXiaoC5OverWebSerial(
         (p) => {
           this.progress = p;
           if (!this.updateProgressInPlace()) {
@@ -357,15 +341,7 @@ class TimerEraserPanel extends Component {
         sharedTimerConsole
       );
 
-      if (res.previousFp) {
-        forgetKnownHardwareTimer(res.previousFp);
-      }
-      this.onErased?.(res);
-
-      const who = res.previousLabel
-        ? `${res.previousRole === "spoke" ? "Spoke" : "Hub"} "${res.previousLabel}"${res.previousFp ? ` (${res.previousFp})` : ""}`
-        : "XIAO ESP32-C5";
-      this.lastSuccessMsg = `Factory reset complete — ${who} flash memory erased back to a blank chip.`;
+      this.lastSuccessMsg = "Timer wiped — bootloader, partition table, NVS, and firmware erased back to factory blank.";
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (!/No port selected|aborted|cancelled|cancel/i.test(msg)) {
@@ -380,19 +356,17 @@ class TimerEraserPanel extends Component {
 
   private updateProgressInPlace(): boolean {
     if (!this.progress) return false;
-    const headEl = this.el.querySelector<HTMLElement>("[data-eraser-head]");
     const statusEl = this.el.querySelector<HTMLElement>("[data-eraser-status]");
     const pctEl = this.el.querySelector<HTMLElement>("[data-eraser-pct]");
     const fillEl = this.el.querySelector<HTMLElement>("[data-eraser-fill]");
     const btnTextEl = this.el.querySelector<HTMLElement>("[data-eraser-btn-text]");
     if (!statusEl || !pctEl || !fillEl) return false;
     const pct = Math.max(0, Math.min(100, Math.round(this.progress.percent)));
-    if (headEl) headEl.textContent = this.progress.detail;
     statusEl.textContent = this.progress.detail;
     pctEl.textContent = `${pct}%`;
     fillEl.style.width = `${pct}%`;
     if (btnTextEl) {
-      btnTextEl.textContent = `Erasing… (${pct}%)`;
+      btnTextEl.textContent = `Wiping timer… (${pct}%)`;
     }
     return true;
   }
@@ -405,55 +379,54 @@ class TimerEraserPanel extends Component {
         ? 100
         : 0;
 
-    const ledClass = this.busy
-      ? "is-warn"
-      : this.errorMsg
-        ? "is-emergency"
-        : this.lastSuccessMsg
-          ? "is-up"
-          : "";
-
-    const headText = this.busy
-      ? esc(this.progress?.detail || "Erasing XIAO ESP32-C5 flash over USB…")
-      : this.errorMsg
-        ? esc(this.errorMsg)
-        : this.lastSuccessMsg
-          ? `✓ ${esc(this.lastSuccessMsg)}`
-          : webSerialOk
-            ? "Ready · plug a XIAO ESP32-C5 into USB and click Erase chip to factory-reset it"
-            : "Direct USB erasing requires Chrome, Edge, or Brave";
-
     const statusText = this.progress
       ? this.progress.detail
       : this.errorMsg
         ? `Error: ${this.errorMsg}`
         : this.lastSuccessMsg
           ? `✓ ${this.lastSuccessMsg}`
-          : "Wipes bootloader (0x2000), partition table (0x8000), NVS settings (0x9000), and SlapRF firmware + config block (0x10000)";
+          : webSerialOk
+            ? "Plug any XIAO ESP32-C5 into USB and click Erase timer to choose which USB device to wipe."
+            : "Direct USB erasing requires Chrome, Edge, or Brave.";
 
     this.el.innerHTML = `
-      <div class="debug-status-topbar">
-        <span class="debug-led-status">
-          <span class="status-dot ${ledClass}"></span>
-          <span class="debug-head-note" data-eraser-head="1">${headText}</span>
-        </span>
-        <div class="debug-connect-actions">
-          <label class="debug-port-check" title="Include all serial ports in the browser picker">
-            <input type="checkbox" data-eraser-all-ports="1" ${this.showAllPorts ? "checked" : ""} ${this.busy ? "disabled" : ""} />
-            <span>All ports</span>
-          </label>
-          <button type="button" class="btn btn-sm btn-bad" data-action="erase-timer" ${this.busy || !webSerialOk ? "disabled" : ""}>
-            ${icons.trash(14)}<span data-eraser-btn-text="1">${this.busy ? `Erasing… (${pct}%)` : "Erase chip"}</span>
-          </button>
-        </div>
-      </div>
-      <div class="flasher-progress ${this.busy ? "is-flashing" : ""} ${this.lastSuccessMsg && !this.busy ? "is-complete" : ""}">
-        <div class="flasher-progress-top">
-          <span class="flasher-progress-status" data-eraser-status="1">${esc(statusText)}</span>
-          <span class="mono flasher-progress-pct" data-eraser-pct="1">${pct}%</span>
-        </div>
-        <div class="meter flasher-meter">
-          <span class="meter-fill ${this.lastSuccessMsg && !this.busy ? "tone-good" : ""}" data-eraser-fill="1" style="width:${pct}%"></span>
+      <div class="flasher flasher-wizard">
+        <div class="flasher-wizard-body">
+          <div class="flasher-progress ${this.busy ? "is-flashing" : ""} ${this.lastSuccessMsg && !this.busy ? "is-complete" : ""}">
+            <div class="flasher-progress-top">
+              <span class="flasher-progress-status" data-eraser-status="1">${esc(statusText)}</span>
+              <span class="mono flasher-progress-pct" data-eraser-pct="1">${pct}%</span>
+            </div>
+            <div class="meter flasher-meter">
+              <span class="meter-fill ${this.lastSuccessMsg && !this.busy ? "tone-good" : ""}" data-eraser-fill="1" style="width:${pct}%"></span>
+            </div>
+            <div class="flasher-progress-foot">
+              <label class="flasher-port-toggle">
+                <input
+                  type="checkbox"
+                  data-eraser-all-ports="1"
+                  ${this.showAllPorts ? "checked" : ""}
+                  ${this.busy ? "disabled" : ""}
+                />
+                <span>Show all USB serial ports</span>
+              </label>
+              <div class="flasher-progress-foot-actions">
+                <span class="note">Enters ESP32-C5 ROM bootloader directly — no read required</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="flasher-wizard-nav is-end">
+            <button
+              type="button"
+              class="btn btn-bad"
+              data-action="erase-timer"
+              ${this.busy || !webSerialOk ? "disabled" : ""}
+            >
+              ${icons.trash(15)}
+              <span data-eraser-btn-text="1">${this.busy ? `Wiping timer… (${pct}%)` : "Erase timer"}</span>
+            </button>
+          </div>
         </div>
       </div>`;
   }
@@ -485,9 +458,9 @@ export class FlasherView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Eraser</h2>
-            <p>Factory-reset a Seeed XIAO ESP32-C5 over USB by erasing its bootloader, partition table, NVS calibration, and SlapRF firmware back to a blank chip.</p>
+            <p>Factory-reset any Seeed XIAO ESP32-C5 over USB without reading it first. Clicking <strong>Erase timer</strong> opens the USB device picker and wipes the selected board's bootloader, partition table, NVS, and firmware back to a blank chip.</p>
           </div>
-          <div class="debug-status-layout" data-slot="eraser"></div>
+          <div class="card" data-slot="eraser"></div>
         </section>
       </div>`;
 
@@ -498,9 +471,7 @@ export class FlasherView extends Component {
     readerPanel = new TimerReaderPanel(this.slot("reader"), api, (readout) => {
       flasher.applyReadout(readout);
     });
-    const eraserPanel = new TimerEraserPanel(this.slot("eraser"), (res) => {
-      readerPanel?.clearIfMatches(res.previousFp);
-    });
+    const eraserPanel = new TimerEraserPanel(this.slot("eraser"));
     this.adopt(flasher);
     this.adopt(readerPanel);
     this.adopt(eraserPanel);
