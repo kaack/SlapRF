@@ -23,6 +23,7 @@ export class TrackEditor extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
   private selectedNodeId: number | null = null;
+  private editingNodeId: number | null = null;
   private isDragging = false;
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
@@ -42,23 +43,22 @@ export class TrackEditor extends Component {
     this.listen(el, "keydown", (e) => {
       const input = e.target as HTMLInputElement;
       if (!input.matches("[data-gate-name]")) return;
-      if (e.key === "Enter") input.blur();
-      if (e.key === "Escape") {
-        input.value = input.defaultValue;
-        this.syncNodeNamePreview(Number(input.dataset.gateName), input.value);
+      if (e.key === "Enter") {
+        e.preventDefault();
         input.blur();
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        this.editingNodeId = null;
+        this.render();
       }
-    });
-
-    this.listen(el, "input", (e) => {
-      const input = e.target as HTMLInputElement;
-      if (!input.matches("[data-gate-name]")) return;
-      this.syncNodeNamePreview(Number(input.dataset.gateName), input.value);
     });
 
     this.listen(el, "focusout", (e) => {
       const input = e.target as HTMLInputElement;
-      if (input.matches("[data-gate-name]")) void this.renameNode(input);
+      if (!input.matches("[data-gate-name]")) return;
+      const related = (e as FocusEvent).relatedTarget as HTMLElement | null;
+      if (related?.closest("[data-clear-gate-name]")) return;
+      void this.finishInlineRename(input);
     });
 
     this.listen(el, "click", (e) => {
@@ -69,9 +69,31 @@ export class TrackEditor extends Component {
         void this.makeStart(Number(makeStartBtn.dataset.makeStart));
         return;
       }
+      const editNameBtn = target.closest<HTMLElement>("[data-edit-gate-name]");
+      if (editNameBtn) {
+        e.stopPropagation();
+        const nodeId = Number(editNameBtn.dataset.editGateName);
+        this.selectedNodeId = nodeId;
+        this.editingNodeId = nodeId;
+        try {
+          window.localStorage.setItem(TRACK_EDITOR_STORAGE_KEY, String(nodeId));
+        } catch {
+          // ignore
+        }
+        this.render();
+        const input = this.el.querySelector<HTMLInputElement>(`input[data-gate-name="${nodeId}"]`);
+        if (input) {
+          input.focus();
+          input.select();
+        }
+        return;
+      }
       const clearNameBtn = target.closest<HTMLButtonElement>("[data-clear-gate-name]");
       if (clearNameBtn) {
-        const node = this.store.node(Number(clearNameBtn.dataset.clearGateName));
+        e.stopPropagation();
+        const nodeId = Number(clearNameBtn.dataset.clearGateName);
+        this.editingNodeId = null;
+        const node = this.store.node(nodeId);
         if (node) void this.save(node, { name: "" });
         return;
       }
@@ -84,8 +106,14 @@ export class TrackEditor extends Component {
       if (e.button !== 0) return;
       const target = e.target as HTMLElement;
 
-      // Clicking the checkered flag button beneath a node should not start a node drag.
-      if (target.closest("[data-make-start]")) return;
+      // Clicking inline controls beneath a node should not start a node drag.
+      if (
+        target.closest(
+          "[data-make-start], [data-edit-gate-name], [data-clear-gate-name], [data-gate-name], .gate-node-name-edit-wrap"
+        )
+      ) {
+        return;
+      }
 
       const trayTimerEl = target.closest<HTMLElement>(".unassigned-timer-token[data-timer-id]");
       if (trayTimerEl) {
@@ -303,7 +331,37 @@ export class TrackEditor extends Component {
           }
         </button>
 
-        <div class="gate-node-name" data-node-name="${node.gateId}">${esc(displayName)}</div>
+        <div class="gate-node-name-row">
+          ${
+            this.editingNodeId === node.gateId
+              ? `<div class="gate-node-name-edit-wrap">
+                  <input
+                    type="text"
+                    class="input gate-node-inline-input ${node.name.trim() ? "has-reset" : ""}"
+                    data-gate-name="${node.gateId}"
+                    value="${esc(node.name)}"
+                    placeholder="Gate ${index + 1}"
+                    maxlength="40"
+                    spellcheck="false"
+                    autocomplete="off"
+                    aria-label="Edit name for Gate ${index + 1}"
+                  />
+                  ${
+                    node.name.trim()
+                      ? `<button type="button" class="gate-node-inline-reset" data-clear-gate-name="${node.gateId}" title="Reset gate name to default (Gate ${index + 1})">${icons.reset(12)}</button>`
+                      : ""
+                  }
+                </div>`
+              : `<div class="gate-node-name" data-node-name="${node.gateId}" title="${esc(displayName)}">${esc(displayName)}</div>
+                 <button
+                   type="button"
+                   class="gate-node-edit-btn"
+                   data-edit-gate-name="${node.gateId}"
+                   title="Rename ${esc(displayName)}"
+                   aria-label="Rename ${esc(displayName)}"
+                 >${icons.pencil(11)}</button>`
+          }
+        </div>
 
         <button
           type="button"
@@ -372,12 +430,12 @@ export class TrackEditor extends Component {
     const assignedId = node.assignedTimerId ?? 0;
     const hasTimer = assignedId > 0;
     const tiedTimer = detected.find((d) => d.timerId === assignedId);
-    const defaultPlaceholder = `Gate ${index + 1}`;
     const color = hasTimer ? timerColor(this.store, assignedId) : "#64748b";
+    const displayName = node.name.trim() || `Gate ${index + 1}`;
 
     const timerSummaryHtml = hasTimer
       ? `
-        <div class="gate-inspector-timer-box">
+        <div class="gate-inspector-timer-meta">
           <span class="gate-inspector-dot" style="--c:${color}"></span>
           <strong class="mono">T${assignedId}${tiedTimer?.timerLabel?.trim() ? ` · ${esc(tiedTimer.timerLabel.trim())}` : ""}</strong>
           <span class="detected-role-pill ${tiedTimer?.isHub || assignedId === 1 ? "is-hub" : ""}">
@@ -386,61 +444,41 @@ export class TrackEditor extends Component {
           <span class="muted mono">${tiedTimer ? (tiedTimer.online ? `${tiedTimer.batteryPct}%` : "Offline") : ""}</span>
         </div>`
       : `
-        <div class="gate-inspector-timer-box is-empty">
+        <div class="gate-inspector-timer-meta is-empty">
           <span class="muted">No timer assigned</span>
         </div>`;
 
     return `
-      <div class="gate-inspector" style="--c:${color}">
-        <div class="gate-inspector-head">
+      <div class="gate-inspector">
+        <div class="gate-inspector-row">
           <div class="gate-inspector-title">
             <span class="gate-inspector-step mono">#${index + 1}</span>
-            ${hasTimer ? `<span class="gate-inspector-dot" style="--c:${color}"></span>` : ""}
-            <strong>${esc(node.name.trim() || `Gate ${index + 1}`)}</strong>
+            <strong data-inspector-name>${esc(displayName)}</strong>
             ${
               isStart
                 ? `<span class="badge badge-accent gate-inspector-start-badge">${icons.checkered(12)} Start gate</span>`
                 : `<span class="badge">Split gate</span>`
             }
           </div>
-        </div>
-
-        <div class="gate-inspector-grid is-two-col">
-          <label class="field">
-            <span class="field-label">Gate name</span>
-            <div class="flasher-pass-wrap ${node.name.trim() ? "has-inline-action" : ""}">
-              <input
-                class="input gate-name-field ${node.name.trim() ? "flasher-pass-input" : ""}"
-                data-gate-name="${node.gateId}"
-                value="${esc(node.name)}"
-                placeholder="${esc(defaultPlaceholder)}"
-                maxlength="40"
-                spellcheck="false"
-                autocomplete="off"
-              />
-              ${
-                node.name.trim()
-                  ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-clear-gate-name="${node.gateId}" title="Reset gate name to default (${esc(defaultPlaceholder)})">${icons.reset(14)}</button>`
-                  : ""
-              }
-            </div>
-          </label>
-
-          <div class="field">
-            <span class="field-label">Timer at this gate</span>
-            ${timerSummaryHtml}
-          </div>
+          ${timerSummaryHtml}
         </div>
       </div>`;
   }
 
-  private syncNodeNamePreview(nodeId: number, rawName: string): void {
-    const idx = this.orderedNodes.findIndex((n) => n.gateId === nodeId);
-    const display = rawName.trim() || `Gate ${idx >= 0 ? idx + 1 : nodeId}`;
-    const nodeLabel = this.el.querySelector<HTMLElement>(`[data-node-name="${nodeId}"]`);
-    if (nodeLabel) nodeLabel.textContent = display;
-    const titleStrong = this.el.querySelector<HTMLElement>(".gate-inspector-title strong");
-    if (titleStrong && this.selectedNodeId === nodeId) titleStrong.textContent = display;
+  private async finishInlineRename(input: HTMLInputElement): Promise<void> {
+    const nodeId = Number(input.dataset.gateName);
+    const node = this.store.node(nodeId);
+    this.editingNodeId = null;
+    if (!node) {
+      this.render();
+      return;
+    }
+    const name = input.value.trim();
+    if (name === node.name.trim()) {
+      this.render();
+      return;
+    }
+    await this.save(node, { name });
   }
 
   private async removeTrackNode(nodeId: number): Promise<void> {
@@ -454,15 +492,6 @@ export class TrackEditor extends Component {
       this.isDragging = false;
       this.render();
     }
-  }
-
-  private async renameNode(input: HTMLInputElement): Promise<void> {
-    const node = this.store.node(Number(input.dataset.gateName));
-    if (!node) return;
-    const name = input.value.trim();
-    if (name === node.name.trim()) return;
-    input.defaultValue = name;
-    await this.save(node, { name });
   }
 
   private async makeStart(nodeId: number): Promise<void> {
