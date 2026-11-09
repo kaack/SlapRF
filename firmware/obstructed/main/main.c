@@ -4,7 +4,7 @@
  * Timers sit behind trees, under ramps, or inside structures, so the Hub link drops out for long
  * stretches. Long Range 500 kbps at +20 dBm with 6-sweep windows sent every 2 sweeps delivers each
  * sample three times (a 100 ms outage loses nothing), and a Spoke that stops hearing the Hub for
- * 2 s restarts to re-sync and re-join on its own.
+ * 2 s re-syncs and re-joins on its own.
  *
  * This directory is a complete, self-contained firmware for one situation. Other profiles live
  * next to it (firmware/<profile>/) and intentionally duplicate the shared protocol code so each
@@ -45,7 +45,7 @@
 #define TX_POWER_QDBM            80   // +20 dBm
 #define TDMA_SLOT_US             3500 // LR frame (~2.1 ms) + guard
 #define SWEEP_BUDGET_US          7000 // Radio away from 2.4 GHz per sweep (measured ~6.3 ms on chip v1.0)
-#define HUB_LOST_MS              2000 // Restart (re-sync + re-join) after this long without a beacon
+#define HUB_LOST_MS              2000 // Re-sync + re-join after this long without a beacon
 
 /* ---- Schedule (derived) ------------------------------------------------------------------- */
 #define MAX_SPOKES               6
@@ -166,8 +166,6 @@ static uint8_t compute_crc8(const uint8_t *data, uint32_t len) {
 static raw_rssi_sample_t s_ring[WINDOW_SAMPLES];
 static uint8_t s_filled;
 static uint8_t s_seq;
-
-#include "esp_system.h"
 
 /** One 8-channel 5.8 GHz sweep into the ring. The 2.4 GHz link is off for its duration. */
 static void sweep_once(void) {
@@ -392,41 +390,50 @@ static int64_t spoke_wait_beacon(int64_t after_us, int64_t deadline_us) {
 }
 
 static void spoke_run(void) {
-    slaprf_spoke_sync_to_hub_channel();
-    uint8_t slot = spoke_join_hub();
-    slaprf_diag_set_slot(slot);
-    const uint8_t idx = (uint8_t)(slot - 2);
-    const int my_gap = idx / SLOTS_PER_GAP;
-    const int64_t my_offset = SLOT_GUARD_US + (int64_t)(idx % SLOTS_PER_GAP) * TDMA_SLOT_US;
-    ESP_LOGI(TAG, "joined as slot %u (gap %d, +%lld us)", slot, my_gap, (long long)my_offset);
-
     uint8_t pkt[sizeof(timer_window_frame_t)];
-    int64_t beacon = spoke_wait_beacon(0, INT64_MAX);
     for (;;) {
-        const int64_t t_sf = beacon - SWEEP_BUDGET_US; // Superframe start implied by the beacon
-        for (int k = 0; k < TX_EVERY_SWEEPS; k++) {
-            const int64_t t_sweep = t_sf + (int64_t)k * SWEEP_INTERVAL_US;
-            if (k > 0) {
-                slaprf_sleep_until_us(t_sweep);
-                sweep_once();
+        slaprf_diag_set_slot(0);
+        slaprf_spoke_sync_to_hub_channel();
+        uint8_t slot = spoke_join_hub();
+        slaprf_diag_set_slot(slot);
+        const uint8_t idx = (uint8_t)(slot - 2);
+        const int my_gap = idx / SLOTS_PER_GAP;
+        const int64_t my_offset = SLOT_GUARD_US + (int64_t)(idx % SLOTS_PER_GAP) * TDMA_SLOT_US;
+        ESP_LOGI(TAG, "joined as slot %u (gap %d, +%lld us)", slot, my_gap, (long long)my_offset);
+
+        int64_t beacon = spoke_wait_beacon(slaprf_now_us(), slaprf_now_us() + 2500000LL);
+        if (!beacon) {
+            beacon = slaprf_now_us() + SWEEP_BUDGET_US;
+        }
+        while (slaprf_ms_since_hub_beacon() <= 2500) {
+            const int64_t t_sf = beacon - SWEEP_BUDGET_US; // Superframe start implied by the beacon
+            for (int k = 0; k < TX_EVERY_SWEEPS; k++) {
+                const int64_t t_sweep = t_sf + (int64_t)k * SWEEP_INTERVAL_US;
+                if (k > 0) {
+                    slaprf_sleep_until_us(t_sweep);
+                    sweep_once();
+                }
+                if (k == my_gap) {
+                    slaprf_sleep_until_us(t_sweep + SWEEP_BUDGET_US + my_offset);
+                    espnow_send(pkt, pack_window(pkt, slot));
+                }
             }
-            if (k == my_gap) {
-                slaprf_sleep_until_us(t_sweep + SWEEP_BUDGET_US + my_offset);
-                espnow_send(pkt, pack_window(pkt, slot));
+            // Sweep 0 of the next superframe, then expect its beacon right after.
+            const int64_t next_sf = t_sf + SUPERFRAME_US;
+            slaprf_sleep_until_us(next_sf);
+            sweep_once();
+            int64_t b = spoke_wait_beacon(next_sf, next_sf + SWEEP_BUDGET_US + BEACON_WAIT_US);
+            beacon = b ? b : next_sf + SWEEP_BUDGET_US; // Missed it: free-run on the prediction
+            if (slaprf_now_us() > beacon + SWEEP_INTERVAL_US) {
+                beacon = slaprf_now_us() + SWEEP_BUDGET_US; // Fell behind (e.g. spectrum scan): resync cleanly
+            }
+            slaprf_diag_service(); // Debug-page spectrum scan, if one was requested
+            // Obstructed only: re-sync + re-join faster (2.0 s) without dropping USB.
+            if (slaprf_ms_since_hub_beacon() > HUB_LOST_MS) {
+                break;
             }
         }
-        // Sweep 0 of the next superframe, then expect its beacon right after.
-        const int64_t next_sf = t_sf + SUPERFRAME_US;
-        slaprf_sleep_until_us(next_sf);
-        sweep_once();
-        int64_t b = spoke_wait_beacon(beacon, next_sf + SWEEP_BUDGET_US + BEACON_WAIT_US);
-        beacon = b ? b : next_sf + SWEEP_BUDGET_US; // Missed it: free-run on the prediction
-        slaprf_diag_service(); // Debug-page spectrum scan, if one was requested
-        // Obstructed only: the Hub has been gone too long; start over (re-sync, re-join).
-        if (slaprf_ms_since_hub_beacon() > HUB_LOST_MS) {
-            ESP_LOGW(TAG, "Hub lost for %d ms, restarting", HUB_LOST_MS);
-            esp_restart();
-        }
+        ESP_LOGW(TAG, "Hub beacon lost for >2.5 s; re-syncing and re-joining Hub");
     }
 }
 

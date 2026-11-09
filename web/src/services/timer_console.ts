@@ -448,8 +448,11 @@ export class TimerConsole {
 
   /** Stops any active debug streams on the timer and closes the USB port. */
   public async disconnectCleanly(): Promise<void> {
+    window.clearInterval(this.statusPollTimer);
+    this.statusPollTimer = 0;
     if (this.connected) {
       await this.send("LIVE 0\nSCAN STOP\nLOG 0").catch(() => undefined);
+      await sleep(70);
     }
     await this.disconnect();
   }
@@ -463,12 +466,29 @@ export class TimerConsole {
     }, 2000);
   }
 
+  /**
+   * Disarms the ESP32-C5 USB-Serial-JTAG download-mode latch by stepping `(1,1) -> (1,0) -> (0,0)`
+   * (clearing RTS first while DTR=1, then clearing DTR while RTS=0).
+   *
+   * On Windows (`usbser.sys`), `port.open()` sets `DTR=1` then `RTS=1`, arming the hardware
+   * download-mode latch (`IO0=0`). If left at `(1,1)`, calling `port.close()` on Disconnect makes
+   * `usbser.sys` drop `DTR` before `RTS` (`(1,1) -> (0,1) -> (0,0)`), asserting chip reset while
+   * `IO0=0` is latched and trapping the board in ROM bootloader mode until power-cycled.
+   * Stepping `(1,1) -> (1,0) -> (0,0)` never visits `(0,1)`, releases the `IO0` latch at `(0,0)`,
+   * and leaves both lines at `0` so `port.close()` is a no-op.
+   */
+  private async disarmUsbJtagLatch(port: SerialPortLike): Promise<void> {
+    try {
+      await port.setSignals({ dataTerminalReady: true, requestToSend: false });
+      await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+    } catch {
+      // Ignore on platforms/drivers that do not support setSignals
+    }
+  }
+
   private async openPort(port: SerialPortLike): Promise<void> {
     await port.open({ baudRate: 115200, bufferSize: 16384 });
-    // Do NOT call port.setSignals({ dataTerminalReady: false, requestToSend: false }) here!
-    // On Windows (usbser.sys), Chromium opens the port at (DTR=1, RTS=1) which is a no-op on
-    // ESP32-C5 USB-Serial-JTAG, whereas clearing both lines executes CLRDTR before CLRRTS,
-    // stepping through (DTR=0, RTS=1) which resets the ESP32-C5 core.
+    await this.disarmUsbJtagLatch(port);
     this.port = port;
     this.portInfo = port.getInfo?.() ?? this.portInfo;
     this.buf = new Uint8Array(0);
@@ -556,6 +576,9 @@ export class TimerConsole {
     }
     this.reader = null;
     this.writer = null;
+    if (port) {
+      await this.disarmUsbJtagLatch(port);
+    }
     try {
       await port?.close();
     } catch {

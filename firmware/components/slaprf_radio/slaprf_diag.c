@@ -76,6 +76,7 @@ static volatile uint8_t s_live; // 0 off, 1 ~10 lines/s with peaks, 2 every swee
 static volatile bool s_log;
 static volatile bool s_rf_enabled = true;
 static volatile bool s_reboot_pending;
+static volatile int64_t s_last_cmd_us;
 static uint8_t s_tx_drops;
 static vprintf_like_t s_prev_vprintf;
 static volatile uint8_t s_slot;
@@ -637,6 +638,7 @@ static void handle_channels(const char *args) {
 }
 
 static void handle_command(char *line) {
+    s_last_cmd_us = esp_timer_get_time();
     if (strcmp(line, "SLAPRF?") == 0) {
         uint8_t copy[CFG_LEN];
         size_t len = s_cfg_len < sizeof(copy) ? s_cfg_len : sizeof(copy);
@@ -826,11 +828,19 @@ void slaprf_diag_note_spoke_rx(uint8_t slot) {
 
 static void update_health_led(void) {
     if (s_emergency_mode) return;
+    if ((s_live || s_scan_live || s_log) && s_last_cmd_us > 0 &&
+        (esp_timer_get_time() - s_last_cmd_us) > 5000000LL) {
+        // USB console closed without disconnect handshake (e.g. tab closed): auto-stop streaming
+        s_live = 0;
+        s_scan_live = false;
+        s_log = false;
+    }
     bool rf_ok = false;
     int gain = 0, gain_max = 0;
     float floor_db = 0;
     slaprf_rf58_info(&rf_ok, &gain, &gain_max, &floor_db);
     bool led_on = false;
+    const uint8_t role = s_cfg ? s_cfg[CFG_OFF_ROLE] : 1;
     if (!rf_ok) {
         // 5.8 GHz RF boot check failed: rapid 10 Hz alarm blink
         led_on = ((s_sweeps / 2) & 1U) == 0;
@@ -839,11 +849,13 @@ static void update_health_led(void) {
         const uint32_t period = s_sweep_hz >= 10 ? s_sweep_hz / 5 : 2;
         const uint32_t phase = s_sweeps % (period ? period : 2);
         led_on = phase < (period / 2 ? period / 2 : 1);
+    } else if (role != 1 && (s_slot < 2 || slaprf_ms_since_hub_beacon() > 2500)) {
+        // Spoke searching for Hub beacon / awaiting TDMA slot assignment: slow 1 Hz blink (500 ms on / 500 ms off)
+        led_on = ((esp_timer_get_time() / 500000LL) & 1LL) == 0;
     } else {
         // Normal timing every 2 seconds:
         //   Hub (role 1, parent):   single-blip (blip ... pause)
         //   Spoke (role 2, joined): double-blip (blip-blip ... pause)
-        const uint8_t role = s_cfg ? s_cfg[CFG_OFF_ROLE] : 1;
         const uint32_t period = (uint32_t)s_sweep_hz * 2;
         const uint32_t phase = s_sweeps % (period ? period : 100);
         const uint32_t blip = s_sweep_hz >= 100 ? 4 : 2;
@@ -910,7 +922,13 @@ void slaprf_diag_service(void) {
         vTaskDelay(pdMS_TO_TICKS(40));
         esp_restart();
     }
-    if (s_sweeps == 0 && !s_emergency_mode) {
+    if ((s_live || s_scan_live || s_log) && s_last_cmd_us > 0 &&
+        (esp_timer_get_time() - s_last_cmd_us) > 5000000LL) {
+        s_live = 0;
+        s_scan_live = false;
+        s_log = false;
+    }
+    if ((s_sweeps == 0 || s_slot == 0) && !s_emergency_mode) {
         // Spoke searching for Hub beacon / awaiting TDMA slot assignment: slow 1 Hz blink (500 ms on / 500 ms off)
         const bool searching_on = ((esp_timer_get_time() / 500000LL) & 1LL) == 0;
         gpio_set_level(XIAO_C5_LED_GPIO, searching_on ? 0 : 1);

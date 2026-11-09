@@ -410,37 +410,47 @@ static int64_t spoke_wait_beacon(int64_t after_us, int64_t deadline_us) {
 }
 
 static void spoke_run(void) {
-    slaprf_spoke_sync_to_hub_channel();
-    uint8_t slot = spoke_join_hub();
-    slaprf_diag_set_slot(slot);
-    const uint8_t idx = (uint8_t)(slot - 2);
-    const int my_gap = idx / SLOTS_PER_GAP;
-    const int64_t my_offset = SLOT_GUARD_US + (int64_t)(idx % SLOTS_PER_GAP) * TDMA_SLOT_US;
-    ESP_LOGI(TAG, "joined as slot %u (gap %d, +%lld us)", slot, my_gap, (long long)my_offset);
-
     uint8_t pkt[sizeof(timer_window_frame_t)];
-    int64_t beacon = spoke_wait_beacon(0, INT64_MAX);
     for (;;) {
-        const int64_t t_sf = beacon - SWEEP_BUDGET_US; // Superframe start implied by the beacon
-        for (int k = 0; k < TX_EVERY_SWEEPS; k++) {
-            const int64_t t_sweep = t_sf + (int64_t)k * SWEEP_INTERVAL_US;
-            if (k > 0) {
-                slaprf_sleep_until_us(t_sweep);
-                sweep_once();
-            }
-            if (k == my_gap) {
-                slaprf_sleep_until_us(t_sweep + SWEEP_BUDGET_US + my_offset);
-                espnow_send(pkt, pack_window(pkt, slot));
-            }
-        }
-        // Sweep 0 of the next superframe, then expect its beacon right after.
-        const int64_t next_sf = t_sf + SUPERFRAME_US;
-        slaprf_sleep_until_us(next_sf);
-        sweep_once();
-        int64_t b = spoke_wait_beacon(beacon, next_sf + SWEEP_BUDGET_US + BEACON_WAIT_US);
-        beacon = b ? b : next_sf + SWEEP_BUDGET_US; // Missed it: free-run on the prediction
-        slaprf_diag_service(); // Debug-page spectrum scan, if one was requested
+        slaprf_diag_set_slot(0);
+        slaprf_spoke_sync_to_hub_channel();
+        uint8_t slot = spoke_join_hub();
+        slaprf_diag_set_slot(slot);
+        const uint8_t idx = (uint8_t)(slot - 2);
+        const int my_gap = idx / SLOTS_PER_GAP;
+        const int64_t my_offset = SLOT_GUARD_US + (int64_t)(idx % SLOTS_PER_GAP) * TDMA_SLOT_US;
+        ESP_LOGI(TAG, "joined as slot %u (gap %d, +%lld us)", slot, my_gap, (long long)my_offset);
 
+        int64_t beacon = spoke_wait_beacon(slaprf_now_us(), slaprf_now_us() + 2500000LL);
+        if (!beacon) {
+            beacon = slaprf_now_us() + SWEEP_BUDGET_US;
+        }
+        while (slaprf_ms_since_hub_beacon() <= 2500) {
+            const int64_t t_sf = beacon - SWEEP_BUDGET_US; // Superframe start implied by the beacon
+            for (int k = 0; k < TX_EVERY_SWEEPS; k++) {
+                const int64_t t_sweep = t_sf + (int64_t)k * SWEEP_INTERVAL_US;
+                if (k > 0) {
+                    slaprf_sleep_until_us(t_sweep);
+                    sweep_once();
+                }
+                if (k == my_gap) {
+                    slaprf_sleep_until_us(t_sweep + SWEEP_BUDGET_US + my_offset);
+                    espnow_send(pkt, pack_window(pkt, slot));
+                }
+            }
+            // Sweep 0 of the next superframe, then expect its beacon right after.
+            const int64_t next_sf = t_sf + SUPERFRAME_US;
+            slaprf_sleep_until_us(next_sf);
+            sweep_once();
+            int64_t b = spoke_wait_beacon(next_sf, next_sf + SWEEP_BUDGET_US + BEACON_WAIT_US);
+            beacon = b ? b : next_sf + SWEEP_BUDGET_US; // Missed it: free-run on the prediction
+            if (slaprf_now_us() > beacon + SWEEP_INTERVAL_US) {
+                beacon = slaprf_now_us() + SWEEP_BUDGET_US; // Fell behind (e.g. spectrum scan): resync cleanly
+            }
+            slaprf_diag_service(); // Debug-page spectrum scan, if one was requested
+
+        }
+        ESP_LOGW(TAG, "Hub beacon lost for >2.5 s; re-syncing and re-joining Hub");
     }
 }
 

@@ -536,6 +536,9 @@ export async function readXiaoC5OverWebSerial(
   }
 
   await port.open({ baudRate: 115200, bufferSize: 16384 });
+  // Step (1,1) -> (1,0) -> (0,0) so closing the port after reading never triggers USB-Serial-JTAG reset
+  await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
+  await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
   const writer = port.writable?.getWriter();
   let reader = port.readable?.getReader();
 
@@ -649,6 +652,9 @@ export async function flashXiaoC5OverWebSerial(
   }
 
   await port.open({ baudRate: 115200, bufferSize: 16384 });
+  // Step (1,1) -> (1,0) -> (0,0) so closing the port after reading never triggers USB-Serial-JTAG reset
+  await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
+  await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
   const writer = port.writable?.getWriter();
   let reader = port.readable?.getReader();
 
@@ -976,6 +982,9 @@ export async function eraseXiaoC5OverWebSerial(
   }
 
   await port.open({ baudRate: 115200, bufferSize: 16384 });
+  // Step (1,1) -> (1,0) -> (0,0) so closing the port after reading never triggers USB-Serial-JTAG reset
+  await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
+  await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
   const writer = port.writable?.getWriter();
   const reader = port.readable?.getReader();
 
