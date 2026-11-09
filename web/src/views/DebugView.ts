@@ -56,6 +56,30 @@ interface DebugTimerInfo {
   simulatorActive: boolean;
 }
 
+interface FindingLogEntry {
+  id: number;
+  key: string;
+  firstMs: number;
+  lastMs: number;
+  timeLabel: string;
+  tone: "badge-warn" | "badge-accent" | "badge-good";
+  badge: string;
+  sourceLabel: string;
+  sourceColor?: string;
+  maxDbm: number;
+  count: number;
+  detail: string;
+}
+
+function fmtWallTimeMs(ms: number): string {
+  const d = new Date(ms);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  const tenths = Math.floor(d.getMilliseconds() / 100);
+  return `${hh}:${mm}:${ss}.${tenths}`;
+}
+
 /**
  * Debug page: connect a timer over USB (WebSerial) and see what it sees. A one-click self-test,
  * status + 5-min health sparklines, live 5.8 GHz readings per channel, signal-over-time 50 Hz
@@ -160,6 +184,11 @@ export class DebugView extends Component {
   private rafId = 0;
   private observer: IntersectionObserver | null = null;
 
+  private signalFindings: FindingLogEntry[] = [];
+  private signalFindingSeq = 0;
+  private scanFindings: FindingLogEntry[] = [];
+  private scanFindingSeq = 0;
+
   constructor(el: HTMLElement) {
     super(el);
     this.console = new TimerConsole({
@@ -190,6 +219,7 @@ export class DebugView extends Component {
         this.live = s;
         this.liveCount++;
         this.signalRing.push(s, this.status?.sweepHz ?? 50, this.liveMode);
+        this.recordSignalFindingFromSample(s);
         this.updateLive();
         if (this.signalEndN === null) {
           this.dirtySignal = true;
@@ -208,6 +238,7 @@ export class DebugView extends Component {
           this.scanZoomStopMHz = null;
         }
         this.spectrumAcc.pushScan(s);
+        this.recordScanFindingFromPass(s);
         if (!s.live) {
           this.scanning = false;
           this.renderScan();
@@ -1173,6 +1204,10 @@ export class DebugView extends Component {
           await this.console.connect(this.showAllPorts);
           this.signalRing.clear();
           this.healthHistory.clear();
+          this.signalFindings = [];
+          this.signalFindingSeq = 0;
+          this.scanFindings = [];
+          this.scanFindingSeq = 0;
           this.renderAll();
           await this.startSession();
           break;
@@ -1272,9 +1307,21 @@ export class DebugView extends Component {
         case "signal-clear":
           this.signalRing.clear();
           this.signalEndN = null;
+          this.signalFindings = [];
+          this.signalFindingSeq = 0;
           this.renderSignalControls();
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
+          break;
+        case "clear-signal-findings":
+          this.signalFindings = [];
+          this.signalFindingSeq = 0;
+          this.renderNoiseTable();
+          break;
+        case "clear-scan-findings":
+          this.scanFindings = [];
+          this.scanFindingSeq = 0;
+          this.updateScanFindings();
           break;
         case "signal-ch": {
           const idx = Number(t.dataset.ch);
@@ -1894,9 +1941,13 @@ export class DebugView extends Component {
         : streamActive
           ? "Live 5.8 GHz stream is on — click to turn off"
           : "Live 5.8 GHz stream is off — click to turn on";
+    const ledClass = streamActive ? "is-up" : on && (inScanMode || !rfOn) ? "is-warn" : "";
     this.slot("live-head").innerHTML = `
       <div class="debug-card-head">
-        <span class="note debug-head-note mono" data-live-note>${on ? "Waiting for sweep stream…" : "Not connected"}</span>
+        <span class="debug-led-status">
+          <span class="status-dot ${ledClass}" data-live-led></span>
+          <span class="note debug-head-note mono" data-live-note>${on ? "Waiting for sweep stream…" : "Off · not connected"}</span>
+        </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm ${rfOn ? "btn-armed" : "btn-unarmed"}" data-action="rf" ${on && this.status && !inScanMode ? "" : "disabled"} title="${inScanMode ? "Stop Spectrum scan first to toggle the 5.8 GHz receiver" : "Switch the hardware 5.8 GHz receiver on or off"}">
             ${rfOn ? icons.signal(14) : icons.signalOff(14)}<span>${rfOn ? "Receiver on" : "Receiver off"}</span>
@@ -1937,19 +1988,27 @@ export class DebugView extends Component {
   private updateLive(): void {
     const l = this.live;
     const note = this.el.querySelector<HTMLElement>("[data-live-note]");
+    const led = this.el.querySelector<HTMLElement>("[data-live-led]");
+    const on = this.console.connected;
+    const rfOn = this.status?.rf.enabled ?? true;
+    const inScanMode = Boolean(this.scanLive || this.status?.scanLive);
+    if (led) {
+      led.classList.toggle("is-up", on && rfOn && !inScanMode && this.liveOn);
+      led.classList.toggle("is-warn", on && (inScanMode || !rfOn));
+    }
     if (note) {
-      if (!this.console.connected) {
-        note.textContent = "Not connected";
-      } else if (this.scanLive || this.status?.scanLive) {
-        note.textContent = "Paused · live spectrum scan is using the 5.8 GHz receiver";
+      if (!on) {
+        note.textContent = "Off · not connected";
+      } else if (inScanMode) {
+        note.textContent = "Paused · Spectrum scan is using the 5.8 GHz receiver";
       } else if (this.status && !this.status.rf.enabled) {
-        note.textContent = "5.8 GHz receiver is switched off";
+        note.textContent = "Off · 5.8 GHz receiver is switched off";
       } else if (!this.liveOn) {
-        note.textContent = "Stream paused";
+        note.textContent = "Off · stream paused";
       } else if (l) {
-        note.textContent = `Sweep ${(l.us / 1000).toFixed(2)} ms · streaming at ${this.liveMode === 2 ? "50 Hz (every sweep)" : "10 Hz"}`;
+        note.textContent = `On · ${this.liveMode === 2 ? "50 Hz (every sweep)" : "10 Hz"} · sweep ${(l.us / 1000).toFixed(2)} ms`;
       } else {
-        note.textContent = "Waiting for sweep stream…";
+        note.textContent = "On · waiting for sweep stream…";
       }
     }
     const pct = (x: number) => Math.max(0, Math.min(100, ((x - DBM_MIN) / (DBM_MAX - DBM_MIN)) * 100));
@@ -2024,9 +2083,21 @@ export class DebugView extends Component {
             : "Paused / scrolled back — click to resume live 50 Hz stream";
     const presets = [1, 2, 5, 10, 30, 120] as const;
     const isCustomWindow = !presets.some((w) => Math.abs(this.signalWindowSec - w) < 0.05);
+    const sigLedClass = liveFollowOn ? "is-up" : streamRunning && !isLive ? "is-warn" : "";
+    const sigStatusText = liveFollowOn
+      ? `On · ${this.liveMode === 2 ? "50 Hz" : "10 Hz"}`
+      : streamRunning && !isLive
+        ? "Paused · scrolled back"
+        : inScanMode
+          ? "Paused · scan active"
+          : "Off";
     this.slot("signal-controls").innerHTML = `
       <div class="debug-card-head">
         <div class="debug-toolbar-left">
+          <span class="debug-led-status" title="${liveTitle}">
+            <span class="status-dot ${sigLedClass}"></span>
+            <span class="note mono">${sigStatusText}</span>
+          </span>
           <div class="segmented" role="group" aria-label="Time window">
             ${presets
               .map(
@@ -2091,65 +2162,220 @@ export class DebugView extends Component {
       </div>`;
   }
 
+  private recordSignalFindingFromSample(s: LiveSample): void {
+    const now = Date.now();
+    const freqs = this.status?.freqs ?? RACEBAND;
+    for (let i = 0; i < 8; i++) {
+      const f = freqs[i] ?? RACEBAND[i];
+      const rb = racebandName(f) || `Ch${i + 1}`;
+      const col = CHANNEL_COLORS[i];
+      const pilot = this.pilots.find((p) => Math.abs(p.frequencyMHz - f) <= 2);
+      const enterThr = pilot ? pilot.enterThreshold : -65;
+      const pilotLabel = pilot?.callsign ? `${pilot.callsign} (${enterThr} dBm)` : `${enterThr} dBm`;
+      const floor = s.floor[i] !== undefined && s.floor[i] > -127 ? s.floor[i] : -95;
+      const v = Math.max(s.dbm[i] ?? -127, s.pk[i] ?? -127);
+      const hits = s.hits?.[i] ?? 0;
+
+      if (v >= enterThr) {
+        const key = `trig:${i}`;
+        const existing = this.signalFindings.find((e) => e.key === key && now - e.lastMs <= 4000);
+        if (existing) {
+          existing.lastMs = now;
+          existing.maxDbm = Math.max(existing.maxDbm, v);
+          existing.count++;
+          const durSec = (existing.lastMs - existing.firstMs) / 1000;
+          existing.detail = `Peak ${existing.maxDbm} dBm reached enter threshold ${pilotLabel} (+${existing.maxDbm - enterThr} dB) · ${existing.count} sweeps${durSec >= 0.2 ? ` over ${durSec.toFixed(1)} s` : ""}`;
+        } else {
+          this.signalFindings.unshift({
+            id: ++this.signalFindingSeq,
+            key,
+            firstMs: now,
+            lastMs: now,
+            timeLabel: fmtWallTimeMs(now),
+            tone: "badge-warn",
+            badge: "Enter thr",
+            sourceLabel: `${rb} · ${f} MHz`,
+            sourceColor: col,
+            maxDbm: v,
+            count: 1,
+            detail: `Peak ${v} dBm reached enter threshold ${pilotLabel} (+${v - enterThr} dB)`,
+          });
+        }
+      } else if (v >= floor + 10 || hits > 0) {
+        const key = `burst:${i}`;
+        const existing = this.signalFindings.find((e) => e.key === key && now - e.lastMs <= 4000);
+        if (existing) {
+          existing.lastMs = now;
+          existing.maxDbm = Math.max(existing.maxDbm, v);
+          existing.count += Math.max(1, hits);
+          const durSec = (existing.lastMs - existing.firstMs) / 1000;
+          existing.detail = `Burst to ${existing.maxDbm} dBm (+${existing.maxDbm - floor} dB above ${floor} dBm floor, ${enterThr - existing.maxDbm} dB below enter) · ${existing.count} hits${durSec >= 0.2 ? ` over ${durSec.toFixed(1)} s` : ""}`;
+        } else {
+          this.signalFindings.unshift({
+            id: ++this.signalFindingSeq,
+            key,
+            firstMs: now,
+            lastMs: now,
+            timeLabel: fmtWallTimeMs(now),
+            tone: "badge-accent",
+            badge: "RF burst",
+            sourceLabel: `${rb} · ${f} MHz`,
+            sourceColor: col,
+            maxDbm: v,
+            count: Math.max(1, hits),
+            detail: `Burst to ${v} dBm (+${v - floor} dB above ${floor} dBm floor, ${enterThr - v} dB below enter — will not trigger a lap)`,
+          });
+        }
+      }
+    }
+
+    if (this.signalFindings.length === 0 && this.signalRing.points.length >= 25) {
+      const validFloors = s.floor.filter((fl) => fl > -127);
+      const minFl = validFloors.length ? Math.min(...validFloors) : -95;
+      const maxFl = validFloors.length ? Math.max(...validFloors) : -93;
+      this.signalFindings.unshift({
+        id: ++this.signalFindingSeq,
+        key: "baseline",
+        firstMs: now,
+        lastMs: now,
+        timeLabel: fmtWallTimeMs(now),
+        tone: "badge-good",
+        badge: "Quiet",
+        sourceLabel: "All 8 channels",
+        maxDbm: maxFl,
+        count: this.signalRing.points.length,
+        detail: `Background noise floor steady at ${minFl}…${maxFl} dBm across all 8 channels (≥ 25 dB headroom below pilot enter thresholds).`,
+      });
+    }
+
+    if (this.signalFindings.length > 100) {
+      this.signalFindings.length = 100;
+    }
+  }
+
+  private recordScanFindingFromPass(s: ScanResult): void {
+    const now = Date.now();
+    const peaks = this.spectrumAcc.topPeaks(5);
+    const sorted = [...s.dbm].sort((a, b) => a - b);
+    const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : -95;
+    const scanStop = s.start + s.step * Math.max(0, s.dbm.length - 1);
+
+    if (peaks.length > 0) {
+      for (const p of peaks) {
+        const binMHz = Math.round(p.freqMHz / 10) * 10;
+        const key = `peak:${binMHz}`;
+        const existing = this.scanFindings.find((e) => e.key === key && now - e.lastMs <= 6000);
+        if (existing) {
+          existing.lastMs = now;
+          existing.maxDbm = Math.max(existing.maxDbm, p.dbm);
+          existing.count++;
+          existing.tone = existing.maxDbm >= -65 ? "badge-warn" : "badge-accent";
+          existing.badge = existing.maxDbm >= -65 ? "Strong peak" : "RF peak";
+          existing.sourceLabel = `${p.freqMHz} MHz · ${p.bandHint}`;
+          existing.detail = `Peak ${existing.maxDbm} dBm (+${existing.maxDbm - median} dB above ${median} dBm median) · seen across ${existing.count} scan passes`;
+        } else {
+          this.scanFindings.unshift({
+            id: ++this.scanFindingSeq,
+            key,
+            firstMs: now,
+            lastMs: now,
+            timeLabel: fmtWallTimeMs(now),
+            tone: p.dbm >= -65 ? "badge-warn" : "badge-accent",
+            badge: p.dbm >= -65 ? "Strong peak" : "RF peak",
+            sourceLabel: `${p.freqMHz} MHz · ${p.bandHint}`,
+            maxDbm: p.dbm,
+            count: 1,
+            detail: `Peak ${p.dbm} dBm (+${p.dbm - median} dB above ${median} dBm band median)`,
+          });
+        }
+      }
+    } else if (!s.live || this.scanFindings.length === 0) {
+      const existingQuiet = this.scanFindings.find((e) => e.key === "quiet" && now - e.lastMs <= 10000);
+      if (existingQuiet) {
+        existingQuiet.lastMs = now;
+        existingQuiet.count++;
+        existingQuiet.detail = `No peaks ≥ 6 dB above the ${median} dBm band median (${s.dbm.length} points, ${existingQuiet.count} passes).`;
+      } else {
+        this.scanFindings.unshift({
+          id: ++this.scanFindingSeq,
+          key: "quiet",
+          firstMs: now,
+          lastMs: now,
+          timeLabel: fmtWallTimeMs(now),
+          tone: "badge-good",
+          badge: "Quiet band",
+          sourceLabel: `${s.start}–${scanStop} MHz`,
+          maxDbm: median,
+          count: 1,
+          detail: `No peaks ≥ 6 dB above the ${median} dBm band median across ${s.dbm.length} points.`,
+        });
+      }
+    }
+
+    if (this.scanFindings.length > 100) {
+      this.scanFindings.length = 100;
+    }
+  }
+
+  private renderFindingsLogHtml(
+    entries: FindingLogEntry[],
+    clearAction: "clear-signal-findings" | "clear-scan-findings",
+    emptyHint: string
+  ): string {
+    return `
+      <div class="debug-findings-head">
+        <div class="debug-findings-title-group">
+          <span class="debug-findings-title">Findings log</span>
+          <span class="badge mono">${entries.length}</span>
+          <span class="note debug-findings-sub">Newest first · coalesces ongoing bursts on the same channel</span>
+        </div>
+        <button type="button" class="btn btn-sm btn-ghost" data-action="${clearAction}" ${entries.length ? "" : "disabled"}>Clear</button>
+      </div>
+      <div class="debug-findings-scroll" data-findings-scroll>
+        ${
+          entries.length === 0
+            ? `<div class="debug-findings-empty note">${esc(emptyHint)}</div>`
+            : `<table class="debug-findings-table">
+                <thead>
+                  <tr>
+                    <th>#</th>
+                    <th>Time</th>
+                    <th>Type</th>
+                    <th>Channel / Freq</th>
+                    <th>Finding</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${entries
+                    .map(
+                      (e) => `<tr>
+                        <td class="mono note">#${e.id}</td>
+                        <td class="mono note">${esc(e.timeLabel)}</td>
+                        <td><span class="badge ${e.tone}">${esc(e.badge)}</span></td>
+                        <td class="mono">${e.sourceColor ? `<span class="debug-ch-inline" style="background:${e.sourceColor}"></span>` : ""}<strong>${esc(e.sourceLabel)}</strong></td>
+                        <td class="debug-finding-detail">${esc(e.detail)}</td>
+                      </tr>`
+                    )
+                    .join("")}
+                </tbody>
+              </table>`
+        }
+      </div>`;
+  }
+
   private renderNoiseTable(): void {
     const freqs = this.status?.freqs ?? RACEBAND;
     const sweepHz = this.status?.sweepHz ?? 50;
     const summary = this.signalRing.computeStats(this.signalWindowSec, freqs, this.pilots, sweepHz, this.signalEndN);
-    const triggerRows = summary.rows.filter((r) => r.pctWouldTrigger > 0);
-    const noisyRows = summary.rows.filter((r) => r.pctWouldTrigger === 0 && (r.hitsPerSec >= 0.5 || (r.sd !== null && r.sd > 2.5)));
-
-    let badgeTone = "";
-    let badgeLabel = "Collecting…";
-    let primaryFinding = "Waiting for 50 Hz sweep samples from the timer…";
-    let secondaryFinding = "Power on a VTX to inspect crossing curves, or watch with all VTXes off to measure venue background noise.";
-
-    if (summary.totalSamples >= 10) {
-      if (triggerRows.length > 0) {
-        badgeTone = "badge-warn";
-        badgeLabel = `${triggerRows.length} ch reached enter`;
-        const list = triggerRows
-          .map((r) => `${r.bandLabel || `Ch${r.index + 1}`} (${r.freqMHz} MHz, max ${r.max ?? "—"} dBm vs ${r.enterThreshold} dBm, ${r.pctWouldTrigger.toFixed(1)}%)`)
-          .join(" · ");
-        primaryFinding = `Signal reached pilot enter threshold on ${list}.`;
-        secondaryFinding =
-          "If a VTX is powered on, this is normal. If no drone is powered, raise that channel's enter threshold or check for a nearby transmitter to prevent false laps.";
-      } else if (noisyRows.length > 0) {
-        badgeTone = "badge-accent";
-        badgeLabel = "In-band RF bursts";
-        const list = noisyRows
-          .map((r) => `${r.bandLabel || `Ch${r.index + 1}`} (${r.hitsPerSec.toFixed(1)} hits/s, max ${r.max ?? "—"} dBm)`)
-          .join(" · ");
-        const minMargin = Math.min(...noisyRows.map((r) => r.enterThreshold - (r.max ?? -120)));
-        primaryFinding = `Short bursts above noise floor on ${list}.`;
-        secondaryFinding = `Peaks remain at least ${minMargin} dB below pilot enter thresholds (0% would trigger) — typical of nearby 5 GHz Wi-Fi on UNII-3 (R3–R6) and will not cause false laps.`;
-      } else {
-        badgeTone = "badge-good";
-        badgeLabel = "All channels quiet";
-        const validRows = summary.rows.filter((r) => r.max !== null);
-        const maxPeak = validRows.length ? Math.max(...validRows.map((r) => r.max!)) : -95;
-        const minMargin = validRows.length ? Math.min(...validRows.map((r) => r.enterThreshold - r.max!)) : 30;
-        primaryFinding = `All 8 channels are steady across the ${summary.durationSec.toFixed(1)} s window (highest reading ${maxPeak} dBm).`;
-        secondaryFinding = `At least ${minMargin} dB of headroom below pilot enter thresholds — 0.0% false-lap risk.`;
-      }
-    }
-
-    if (summary.droppedLines > 0) {
-      secondaryFinding += ` (${summary.droppedLines} truncated USB line${summary.droppedLines === 1 ? "" : "s"} skipped.)`;
-    }
+    const prevScroll = this.slot("noise-table").querySelector<HTMLElement>("[data-findings-scroll]")?.scrollTop ?? 0;
 
     this.slot("noise-table").innerHTML = `
-      <div class="debug-findings" role="status" aria-live="polite">
-        <div class="debug-findings-head">
-          <span class="debug-findings-title">Findings</span>
-          <span class="badge ${badgeTone}">${esc(badgeLabel)}</span>
-          <span class="note mono debug-findings-meta">
-            Window ${summary.durationSec.toFixed(1)} s · ${summary.totalSamples} sweeps · ${summary.rateHz.toFixed(1)} Hz
-          </span>
-        </div>
-        <div class="debug-findings-body">
-          <p class="debug-findings-primary" title="${esc(primaryFinding)}">${esc(primaryFinding)}</p>
-          <p class="note debug-findings-secondary" title="${esc(secondaryFinding)}">${esc(secondaryFinding)}</p>
-        </div>
+      <div class="debug-findings" role="region" aria-label="Signal findings log">
+        ${this.renderFindingsLogHtml(
+          this.signalFindings,
+          "clear-signal-findings",
+          "Waiting for 50 Hz sweep samples — threshold crossings and in-band RF bursts will be logged here with timestamps."
+        )}
       </div>
       <div class="debug-table-scroll">
         <table class="debug-runs debug-noise-table">
@@ -2187,6 +2413,8 @@ export class DebugView extends Component {
           </tbody>
         </table>
       </div>`;
+    const nextScrollEl = this.slot("noise-table").querySelector<HTMLElement>("[data-findings-scroll]");
+    if (nextScrollEl && prevScroll > 0) nextScrollEl.scrollTop = prevScroll;
   }
 
   private renderScan(): void {
@@ -2207,9 +2435,14 @@ export class DebugView extends Component {
     const isWfRowsZoomed = this.spectrumAcc.visibleRows !== 80;
     const canScanOnce = on && rfOn && !this.scanning && !this.scanLive;
     const canScanLive = on && rfOn && !this.scanning;
+    const scanActive = this.scanLive || this.scanning;
     this.slot("scan").innerHTML = `
       <div class="debug-card-head">
         <div class="debug-toolbar-left">
+          <span class="debug-led-status">
+            <span class="status-dot ${scanActive ? "is-up" : ""}" data-scan-led></span>
+            <span class="note mono" data-scan-status-note>${this.scanLive ? "On · live scan" : this.scanning ? "On · scanning…" : "Off"}</span>
+          </span>
           <div class="segmented" role="group" aria-label="Scan speed and range presets">
             <button type="button" class="${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="5" title="Full 5.18–5.92 GHz band at 5 MHz step (148 points, ~3.1 passes/s)">Full · 3 Hz</button>
             <button type="button" class="${isFast15 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="15" title="Full 5.18–5.92 GHz band at 15 MHz step (50 points, ~9 passes/s)">Fast full · 9 Hz</button>
@@ -2271,10 +2504,11 @@ export class DebugView extends Component {
       <div class="debug-canvas-wrap">
         <canvas class="debug-canvas debug-spectrum-canvas" data-spectrum-canvas></canvas>
       </div>
-      <div class="debug-findings debug-scan-findings" data-scan-findings role="status" aria-live="polite"></div>
+      <div class="debug-findings debug-scan-findings" data-scan-findings role="region" aria-label="Spectrum findings log"></div>
       <div class="debug-waterfall-section">
         <div class="debug-waterfall-head">
           <div class="debug-waterfall-title-group">
+            <span class="status-dot" data-wf-led></span>
             <strong>Waterfall spectrogram (frequency × time)</strong>
             <span class="note mono" data-wf-scroll-note></span>
           </div>
@@ -2302,68 +2536,56 @@ export class DebugView extends Component {
   }
 
   private updateScanFindings(): void {
-    const el = this.el.querySelector<HTMLElement>("[data-scan-findings]");
-    if (!el) return;
     const s = this.spectrumAcc.latest;
-    const peaks = this.spectrumAcc.topPeaks(5);
-
-    let badgeTone = "";
-    let badgeLabel = "Idle";
-    let metaText = "Click Scan once for a snapshot, or Live on for continuous updates.";
-
-    if (this.scanLive) {
-      badgeTone = "badge-accent";
-      badgeLabel = "Live on · timing paused";
-      const rateStr = s?.live && s.passMs ? `${(1000 / s.passMs).toFixed(1)} passes/s · ` : "";
-      metaText = `${rateStr}${this.spectrumAcc.avgCount} pass${this.spectrumAcc.avgCount === 1 ? "" : "es"} averaged · volt = live, cyan = avg, faint volt = max hold`;
-    } else if (this.scanning) {
-      badgeTone = "badge-accent";
-      badgeLabel = "Scanning…";
-      metaText = "Sweeping 5180–5917 MHz on the 5.8 GHz receiver…";
-    } else if (s) {
-      badgeTone = peaks.length ? "badge-accent" : "badge-good";
-      badgeLabel = peaks.length ? `${peaks.length} peak${peaks.length === 1 ? "" : "s"} detected` : "Flat band";
-      metaText = `${s.dbm.length} points (${s.start}–${s.start + s.step * (s.dbm.length - 1)} MHz, step ${s.step} MHz) · ${this.spectrumAcc.history.length} pass${this.spectrumAcc.history.length === 1 ? "" : "es"} in waterfall`;
+    const scanLed = this.el.querySelector<HTMLElement>("[data-scan-led]");
+    const scanNote = this.el.querySelector<HTMLElement>("[data-scan-status-note]");
+    if (scanLed) {
+      scanLed.classList.toggle("is-up", this.scanLive || this.scanning);
+    }
+    if (scanNote) {
+      if (this.scanLive) {
+        const rateStr = s?.live && s.passMs ? `${(1000 / s.passMs).toFixed(1)} passes/s` : "live";
+        scanNote.textContent = `On · ${rateStr} · ${this.spectrumAcc.avgCount} avg`;
+      } else if (this.scanning) {
+        scanNote.textContent = "On · scanning…";
+      } else if (s) {
+        scanNote.textContent = `Off · ${s.dbm.length} pts`;
+      } else {
+        scanNote.textContent = "Off";
+      }
     }
 
-    const peaksHtml = !s
-      ? `<span class="note">No scan data yet — run a scan to detect active VTX channels or 5 GHz Wi-Fi activity.</span>`
-      : !peaks.length
-        ? `<span class="note">No peaks ≥ 6 dB above the band median — band is quiet across the scanned range.</span>`
-        : `<span class="note debug-peaks-label">Top peaks (≥ 6 dB above median):</span>
-           <div class="debug-peaks-list">
-             ${peaks
-               .map(
-                 (p) =>
-                   `<span class="debug-peak-pill mono"><strong>${p.freqMHz} MHz</strong> · ${p.dbm} dBm <span class="note">(${esc(p.bandHint)})</span></span>`
-               )
-               .join("")}
-           </div>`;
+    const el = this.el.querySelector<HTMLElement>("[data-scan-findings]");
+    if (el) {
+      const prevScroll = el.querySelector<HTMLElement>("[data-findings-scroll]")?.scrollTop ?? 0;
+      el.innerHTML = this.renderFindingsLogHtml(
+        this.scanFindings,
+        "clear-scan-findings",
+        "Run Scan once or turn Live on — detected RF peaks (≥ 6 dB above band median) and 5 GHz Wi-Fi activity will be logged here with timestamps."
+      );
+      const nextScrollEl = el.querySelector<HTMLElement>("[data-findings-scroll]");
+      if (nextScrollEl && prevScroll > 0) nextScrollEl.scrollTop = prevScroll;
+    }
 
-    el.innerHTML = `
-      <div class="debug-findings-head">
-        <span class="debug-findings-title">Findings</span>
-        <span class="badge ${badgeTone}">${esc(badgeLabel)}</span>
-        <span class="note mono debug-findings-meta" title="${esc(metaText)}">${esc(metaText)}</span>
-      </div>
-      <div class="debug-peaks-row">
-        ${peaksHtml}
-      </div>`;
-
+    const wfLed = this.el.querySelector<HTMLElement>("[data-wf-led]");
     const wfNote = this.el.querySelector<HTMLElement>("[data-wf-scroll-note]");
     const wfJumpBtn = this.el.querySelector<HTMLButtonElement>("[data-wf-jump-btn]");
     const total = this.spectrumAcc.history.length;
     const vis = this.spectrumAcc.visibleRows;
     const sc = this.spectrumAcc.scrollRow;
+    if (wfLed) {
+      wfLed.classList.toggle("is-up", (this.scanLive || this.scanning) && sc === 0);
+      wfLed.classList.toggle("is-warn", sc > 0);
+    }
     if (wfNote) {
       if (!total) {
-        wfNote.textContent = "Drag horizontally to zoom MHz · wheel/drag vertically to scroll time";
+        wfNote.textContent = "Off · drag horizontally to zoom MHz · wheel/drag vertically to scroll time";
       } else if (sc > 0) {
-        wfNote.textContent = `Scrolled · rows -${sc + 1}..-${Math.min(total, sc + vis)} of ${total} · drag box to zoom MHz`;
+        wfNote.textContent = `Paused · rows -${sc + 1}..-${Math.min(total, sc + vis)} of ${total}`;
       } else if (total > vis) {
-        wfNote.textContent = `Live (top ${vis} of ${total} passes · wheel to scroll, drag horizontally to zoom MHz)`;
+        wfNote.textContent = `${this.scanLive ? "On" : "Off"} · top ${vis} of ${total} passes · wheel to scroll`;
       } else {
-        wfNote.textContent = `Live (${total} pass${total === 1 ? "" : "es"} · drag horizontally on chart to zoom MHz)`;
+        wfNote.textContent = `${this.scanLive ? "On" : "Off"} · ${total} pass${total === 1 ? "" : "es"}`;
       }
     }
     if (wfJumpBtn) {
@@ -2434,14 +2656,19 @@ export class DebugView extends Component {
       if (atBottom) pre.scrollTop = pre.scrollHeight;
     }
     const count = this.el.querySelector<HTMLElement>("[data-log-count]");
-    if (count) count.textContent = `${this.logLines.length} lines`;
+    const active = this.console.connected && this.logOn;
+    if (count) count.textContent = `${active ? "On" : "Off"} · ${this.logLines.length} lines`;
   }
 
   private renderLog(): void {
     const on = this.console.connected;
+    const active = on && this.logOn;
     this.slot("log").innerHTML = `
       <div class="debug-card-head debug-log-head">
-        <span class="note mono debug-head-note" data-log-count>${this.logLines.length} lines</span>
+        <span class="debug-led-status">
+          <span class="status-dot ${active ? "is-up" : ""}"></span>
+          <span class="note mono debug-head-note" data-log-count>${active ? "On" : "Off"} · ${this.logLines.length} lines</span>
+        </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="clear-log">Clear</button>
           <button type="button" class="btn btn-sm ${this.logOn ? "btn-armed" : "btn-unarmed"}" data-action="log" ${on ? "" : "disabled"} title="${this.logOn ? "Live USB log mirror is on — click to turn off" : "Live USB log mirror is off — click to turn on"}">

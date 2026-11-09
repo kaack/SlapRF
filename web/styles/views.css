@@ -4251,33 +4251,53 @@ body.is-gate-dragging * {
   vertical-align: middle;
 }
 
-/* Dedicated Findings panels (calm, fixed-structure diagnostic summary) */
+/* Status LED pill for Debug page sections & charts */
+.debug-led-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.status-dot.is-warn {
+  background: var(--warn);
+  box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.16);
+}
+
+/* Dedicated Findings log panels (scrollable, timestamped event table) */
 .debug-findings {
   margin-top: 12px;
-  padding: 10px 14px;
   border-radius: var(--radius-sm);
   background: var(--surface-2);
   border: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  justify-content: center;
-  gap: 5px;
-  height: 86px;
+  height: 176px;
   overflow: hidden;
 }
 .debug-scan-findings {
-  height: 72px;
+  height: 164px;
 }
 .debug-findings-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   flex-wrap: nowrap;
   gap: 10px;
-  height: 22px;
+  height: 36px;
+  padding: 0 12px;
+  border-bottom: 1px solid var(--border);
+  min-width: 0;
+  flex-shrink: 0;
+}
+.debug-findings-title-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   min-width: 0;
   overflow: hidden;
 }
-.debug-findings-head .badge {
+.debug-findings-title-group .badge {
   flex-shrink: 0;
 }
 .debug-findings-title {
@@ -4288,81 +4308,55 @@ body.is-gate-dragging * {
   color: var(--text-3);
   flex-shrink: 0;
 }
-.debug-findings-meta {
-  margin-left: auto;
+.debug-findings-sub {
   font-size: 11.5px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  min-width: 0;
 }
-.debug-findings-body {
+.debug-findings-scroll {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: auto;
+  padding: 0 12px;
+}
+.debug-findings-empty {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.debug-findings-primary {
-  margin: 0;
-  font-size: 12.5px;
-  color: var(--text);
-  height: 18px;
-  line-height: 18px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.debug-findings-secondary {
-  margin: 0;
+  align-items: center;
+  height: 100%;
   font-size: 12px;
-  height: 18px;
-  line-height: 18px;
+}
+.debug-findings-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.debug-findings-table th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-2);
+  text-align: left;
+  font-weight: 500;
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid var(--border);
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  z-index: 1;
 }
-.debug-peaks-row {
-  display: flex;
-  align-items: center;
-  flex-wrap: nowrap;
-  gap: 8px;
-  height: 24px;
-  min-width: 0;
-  overflow: hidden;
+.debug-findings-table td {
+  padding: 6px 10px 6px 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: middle;
   white-space: nowrap;
 }
-.debug-peaks-row > .note {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  min-width: 0;
+.debug-findings-table tr:last-child td {
+  border-bottom: 0;
 }
-.debug-peaks-label {
-  font-size: 11.5px;
-  flex-shrink: 0;
-}
-.debug-peaks-list {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-  overflow: hidden;
-}
-.debug-peak-pill {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  gap: 4px;
-  height: 22px;
-  padding: 0 8px;
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-  border: 1px solid var(--border-strong);
-  font-size: 11.5px;
+.debug-findings-table td.debug-finding-detail {
   color: var(--text-2);
-}
-.debug-peak-pill strong {
-  color: var(--text);
+  white-space: normal;
+  min-width: 240px;
 }
 
 .debug-table-scroll {
