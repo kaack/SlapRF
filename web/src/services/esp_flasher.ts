@@ -95,6 +95,7 @@ const ESP_FLASH_BEGIN = 0x02;
 const ESP_FLASH_DATA = 0x03;
 const ESP_FLASH_END = 0x04;
 const ESP_SYNC = 0x08;
+const ESP_WRITE_REG = 0x09;
 const ESP_SPI_SET_PARAMS = 0x0b;
 const ESP_SPI_ATTACH = 0x0d;
 
@@ -795,6 +796,26 @@ export async function flashXiaoC5OverWebSerial(
       throw new Error("Could not sync with ESP32-C5 ROM bootloader. Hold BOOT while plugging in USB and try again.");
     }
 
+    // Disable LP_WDT (RTC WDT) and enable SWD auto-feed on ESP32-C5 USB-Serial-JTAG.
+    // When entering ROM bootloader over USB-Serial-JTAG, LP_WDT remains active (~10s timeout)
+    // and would otherwise reset the chip mid-flash (~block 700 / 995).
+    const writeReg = async (addr: number, value: number, mask = 0xffffffff) => {
+      const regPayload = new Uint8Array(16);
+      const regView = new DataView(regPayload.buffer);
+      regView.setUint32(0, addr >>> 0, true);
+      regView.setUint32(4, value >>> 0, true);
+      regView.setUint32(8, mask >>> 0, true);
+      regView.setUint32(12, 0, true);
+      await writer.write(buildRomCommand(ESP_WRITE_REG, regPayload));
+      await waitForRomAck(ESP_WRITE_REG, 1000);
+    };
+    await writeReg(0x600b1c18, 0x50d83aa1); // LP_WDT_WPROTECT_REG = WKEY (unlock)
+    await writeReg(0x600b1c00, 0x00000000); // LP_WDT_CONFIG0_REG = 0 (disable RWDT)
+    await writeReg(0x600b1c18, 0x00000000); // LP_WDT_WPROTECT_REG = 0 (lock)
+    await writeReg(0x600b1c20, 0x50d83aa1); // LP_WDT_SWD_WPROTECT_REG = WKEY (unlock)
+    await writeReg(0x600b1c1c, 1 << 18, 1 << 18); // LP_WDT_SWD_CONFIG_REG |= SWD_AUTO_FEED_EN
+    await writeReg(0x600b1c20, 0x00000000); // LP_WDT_SWD_WPROTECT_REG = 0 (lock)
+
     onProgress({
       stage: "erasing",
       percent: 10,
@@ -857,8 +878,15 @@ export async function flashXiaoC5OverWebSerial(
       dataPayload.set(paddedBlock, 16);
 
       const pkt = buildRomCommand(ESP_FLASH_DATA, dataPayload, romChecksum(paddedBlock));
-      await writer.write(pkt);
-      if (!(await waitForRomAck(ESP_FLASH_DATA, 5000))) {
+      let blockAcked = false;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await writer.write(pkt);
+        if (await waitForRomAck(ESP_FLASH_DATA, 3000)) {
+          blockAcked = true;
+          break;
+        }
+      }
+      if (!blockAcked) {
         throw new Error(`Timed out writing flash block ${seq + 1} / ${numBlocks}.`);
       }
 
