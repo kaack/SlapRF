@@ -88,7 +88,15 @@ export const icons = {
       s
     ),
   history: (s?: number) =>
-    svg(`<path d="M3 12a9 9 0 1 0 3-6.7"/><path d="M3 4v5h5"/><path d="M12 7v5l3 2"/>`, s),
+    svg(
+      `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M15.5 15h-7"/><path d="m11.5 12-3 3 3 3"/>`,
+      s
+    ),
+  reboot: (s?: number) =>
+    svg(
+      `<path d="M16.5 4.2A9 9 0 1 1 6.2 5.1"/><path d="M5.8 1.6v3.8h3.8"/><path d="M12 3.5v9.5" stroke-width="2.15"/>`,
+      s
+    ),
   siren: (s?: number) =>
     svg(
       `<path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3Z"/><path d="M12 9v4"/><circle cx="12" cy="16.8" r="0.8" fill="currentColor" stroke="none"/>`,
@@ -109,6 +117,11 @@ export const icons = {
   wrapText: (s?: number) =>
     svg(
       `<path d="M3 6h18"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><path d="m16 16-2 2 2 2"/><path d="M3 18h7"/>`,
+      s
+    ),
+  wrapTextOff: (s?: number) =>
+    svg(
+      `<path d="M3 6h3M11 6h10"/><path d="M3 12h9M17 12h1a3 3 0 0 1 2.1 5.1"/><path d="M3 18h7"/><path d="m2 2 20 20"/>`,
       s
     ),
 };
