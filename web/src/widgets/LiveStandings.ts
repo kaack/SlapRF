@@ -91,15 +91,14 @@ export class LiveStandings extends Component {
     const gap = s.bestLap > 0 && sessionBest > 0 ? (s.bestLap === sessionBest ? `<span class="tone-accent">fastest</span>` : fmtDelta(s.bestLap - sessionBest)) : "";
 
     return `
-      <tr class="row-link ${s.onTrack ? "" : "is-idle"}" data-pilot="${pilot.slotIndex}">
+      <tr class="row-link ${s.onTrack ? "is-live" : "is-idle"}" data-pilot="${pilot.slotIndex}">
         <td class="col-pos"><span class="pos ${rank === 1 && s.bestLap > 0 ? "is-leader" : ""}">${rank}</span></td>
         <td>
           <div class="pilot-cell">
-            <span class="pilot-swatch" style="--c:${pilot.color}"></span>
+            <span class="pilot-swatch ${s.onTrack ? "is-live" : ""}" style="--c:${pilot.color}" title="${statusTitle}"></span>
             <div>
               <div class="pilot-name">
                 <span>${esc(pilot.callsign)}</span>
-                <span class="pilot-live-dot ${s.onTrack ? "is-live" : ""}" title="${statusTitle}"></span>
               </div>
               <div class="pilot-meta">${pilot.channel > 0 ? `R${pilot.channel} · ${pilot.frequencyMhz} MHz` : `<span class="tone-warn">No channel assigned</span>`}</div>
             </div>

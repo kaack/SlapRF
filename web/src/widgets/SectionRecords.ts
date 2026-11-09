@@ -1,9 +1,11 @@
 import { Component } from "../core/component";
 import { esc, fmtDelta } from "../core/format";
-import { sectionRecords } from "../state/analysis";
+import { practiceStats, sectionRecords } from "../state/analysis";
 import { sectionLabel } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { renderEmpty, sectionIdBadge } from "./markup";
+
+const IDLE_REFRESH_MS = 5000;
 
 /**
  * Pilots × sections: each pilot is a row and each section is a column, with the record holder
@@ -16,7 +18,9 @@ export class SectionRecords extends Component {
   constructor(el: HTMLElement, store: AppStore) {
     super(el);
     this.store = store;
-    this.onDispose(store.subscribe(["laps", "config"], () => this.render()));
+    this.onDispose(store.subscribe(["laps", "crossings", "config"], () => this.render()));
+    const timer = window.setInterval(() => this.render(), IDLE_REFRESH_MS);
+    this.onDispose(() => window.clearInterval(timer));
     this.render();
   }
 
@@ -41,6 +45,7 @@ export class SectionRecords extends Component {
 
     const rows = pilots
       .map((p) => {
+        const s = practiceStats(this.store, p);
         const cells = records
           .map((r) => {
             const b = r.bests.get(p.slotIndex);
@@ -55,7 +60,7 @@ export class SectionRecords extends Component {
           <tr>
             <td>
               <div class="pilot-cell">
-                <span class="pilot-swatch" style="--c:${p.color}"></span>
+                <span class="pilot-swatch ${s.onTrack ? "is-live" : ""}" style="--c:${p.color}"></span>
                 <div class="pilot-name">${esc(p.callsign)}</div>
               </div>
             </td>
