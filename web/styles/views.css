@@ -536,6 +536,9 @@ body.is-gate-dragging * {
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--c, var(--accent)) 6%, var(--surface-2)), var(--surface) 64%);
   padding: 16px 20px 18px;
+  border-radius: 0;
+}
+.gate-inspector:last-child {
   border-radius: 0 0 var(--radius-lg) var(--radius-lg);
 }
 .gate-inspector-head {
@@ -1296,6 +1299,10 @@ body.is-gate-dragging * {
   padding: 14px 20px;
   border-top: 1px solid var(--border);
   background: var(--surface-2);
+  border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px);
+}
+.card:not(.card-flush) > .rules-foot {
+  margin: 16px -20px -20px;
 }
 .rules-foot .note {
   margin-right: auto;

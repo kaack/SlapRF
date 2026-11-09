@@ -142,8 +142,10 @@ export class AnnouncerSettings extends Component {
 
     const defaultSample = this.announcer.defaultTestPhrase();
     const samplePhrase = p.testPhrase !== undefined && p.testPhrase !== "" ? p.testPhrase : defaultSample;
-    const ratePct = Math.max(0, Math.min(100, ((p.rate - 0.8) / (1.6 - 0.8)) * 100)).toFixed(1);
-    const volPct = Math.max(0, Math.min(100, p.volume * 100)).toFixed(1);
+    const rateVal = Number.isFinite(p.rate) ? p.rate : 1.0;
+    const volVal = Number.isFinite(p.volume) ? p.volume : 1.0;
+    const ratePct = Math.max(0, Math.min(100, ((rateVal - 0.8) / (1.6 - 0.8)) * 100)).toFixed(1);
+    const volPct = Math.max(0, Math.min(100, volVal * 100)).toFixed(1);
 
     this.el.innerHTML = `
       <div class="card">
@@ -177,20 +179,20 @@ export class AnnouncerSettings extends Component {
             <select class="input" name="voice">${piperGroup}${browserGroup}</select>
           </label>
           <label class="field">
-            <span>Speed <em data-out="rate">${p.rate.toFixed(2)}×</em> ${
-              Math.abs(p.rate - 1.0) > 0.001
-                ? `<button type="button" class="btn-link" data-action="reset-rate" title="Reset speed to default (1.00×)">${icons.reset(12)}</button>`
+            <span><span>Speed</span><span class="field-meta"><em data-out="rate">${rateVal.toFixed(2)}×</em>${
+              Math.abs(rateVal - 1.0) > 0.001
+                ? `<button type="button" class="field-reset-btn" data-action="reset-rate" title="Reset speed to default (1.00×)">${icons.reset(12)}</button>`
                 : ""
-            }</span>
-            <input type="range" name="rate" min="0.8" max="1.6" step="0.05" value="${p.rate}" style="--range-pct:${ratePct}%" />
+            }</span></span>
+            <input type="range" name="rate" min="0.8" max="1.6" step="0.05" value="${rateVal}" style="--range-pct:${ratePct}%" />
           </label>
           <label class="field">
-            <span>Volume <em data-out="volume">${Math.round(p.volume * 100)}%</em> ${
-              Math.abs(p.volume - 1.0) > 0.001
-                ? `<button type="button" class="btn-link" data-action="reset-volume" title="Reset volume to default (100%)">${icons.reset(12)}</button>`
+            <span><span>Volume</span><span class="field-meta"><em data-out="volume">${Math.round(volVal * 100)}%</em>${
+              Math.abs(volVal - 1.0) > 0.001
+                ? `<button type="button" class="field-reset-btn" data-action="reset-volume" title="Reset volume to default (100%)">${icons.reset(12)}</button>`
                 : ""
-            }</span>
-            <input type="range" name="volume" min="0" max="1" step="0.05" value="${p.volume}" style="--range-pct:${volPct}%" />
+            }</span></span>
+            <input type="range" name="volume" min="0" max="1" step="0.05" value="${volVal}" style="--range-pct:${volPct}%" />
           </label>
         </div>
         <div class="check-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">

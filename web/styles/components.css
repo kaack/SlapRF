@@ -524,6 +524,12 @@ select.input option {
 .input-suffix .input {
   padding-right: 42px;
 }
+.input-suffix.has-reset span {
+  right: 32px;
+}
+.input-suffix.has-reset .input {
+  padding-right: 64px;
+}
 
 .switch {
   position: relative;
@@ -631,10 +637,34 @@ select.input option {
 }
 .field > span {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   color: var(--text-3);
   font-size: 12px;
   font-weight: 500;
+}
+.field-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.field-reset-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: color 0.12s, background 0.12s;
+}
+.field-reset-btn:hover {
+  color: var(--accent);
+  background: var(--surface-2);
 }
 .field em {
   font-style: normal;

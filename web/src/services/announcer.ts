@@ -233,7 +233,7 @@ export class Announcer {
   /** Enabling must happen from a click the first time (browser autoplay policy). */
   public update(next: Partial<AnnouncerPrefs>): void {
     const wasEnabled = this.prefs.enabled;
-    this.prefs = { ...this.prefs, ...next };
+    this.prefs = sanitizePrefs({ ...this.prefs, ...next });
     localStorage.setItem(STORAGE_KEY, JSON.stringify(this.prefs));
     if (next.keepScreenAwake !== undefined) {
       setWakeLockEnabled(this.prefs.keepScreenAwake !== false);
@@ -519,10 +519,40 @@ export class Announcer {
   }
 }
 
+function sanitizePrefs(raw: unknown): AnnouncerPrefs {
+  if (!raw || typeof raw !== "object") {
+    return { ...DEFAULT_PREFS };
+  }
+  const obj = raw as Record<string, unknown>;
+  const rateNum = typeof obj.rate === "number" ? obj.rate : Number(obj.rate);
+  const volNum = typeof obj.volume === "number" ? obj.volume : Number(obj.volume);
+  return {
+    enabled: typeof obj.enabled === "boolean" ? obj.enabled : DEFAULT_PREFS.enabled,
+    keepScreenAwake:
+      typeof obj.keepScreenAwake === "boolean"
+        ? obj.keepScreenAwake
+        : DEFAULT_PREFS.keepScreenAwake,
+    voiceURI:
+      typeof obj.voiceURI === "string" && obj.voiceURI.trim() !== ""
+        ? obj.voiceURI
+        : DEFAULT_PREFS.voiceURI,
+    rate:
+      Number.isFinite(rateNum) && rateNum >= 0.8 && rateNum <= 1.6
+        ? rateNum
+        : DEFAULT_PREFS.rate,
+    volume:
+      Number.isFinite(volNum) && volNum >= 0 && volNum <= 1
+        ? volNum
+        : DEFAULT_PREFS.volume,
+    testPhrase:
+      typeof obj.testPhrase === "string" ? obj.testPhrase : DEFAULT_PREFS.testPhrase,
+  };
+}
+
 function loadPrefs(): AnnouncerPrefs {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? { ...DEFAULT_PREFS, ...JSON.parse(raw) } : { ...DEFAULT_PREFS };
+    return raw ? sanitizePrefs(JSON.parse(raw)) : { ...DEFAULT_PREFS };
   } catch {
     return { ...DEFAULT_PREFS };
   }

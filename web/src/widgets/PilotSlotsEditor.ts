@@ -96,12 +96,12 @@ export class PilotSlotsEditor extends Component {
           <input class="input" name="callsign" value="${esc(p.callsign)}" maxlength="16" autocomplete="off" />
         </div>
         <select class="input ${needsChannel ? "input-warn" : ""}" name="channel" title="${needsChannel ? "Assign a channel to this pilot" : ""}">${options}</select>
-        <div class="input-suffix">
+        <div class="input-suffix ${isCustomThreshold ? "has-reset" : ""}">
           <input class="input mono" type="number" name="threshold" value="${p.enterThreshold.toFixed(0)}" min="-90" max="-30" step="1" />
           <span>dBm</span>
           ${
             isCustomThreshold
-              ? `<button type="button" class="btn-link" data-reset-threshold="${p.slotIndex}" title="Restore default threshold (${DEFAULT_ENTER_THRESHOLD_DBM} dBm)">${icons.reset(13)}</button>`
+              ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-threshold="${p.slotIndex}" title="Restore default threshold (${DEFAULT_ENTER_THRESHOLD_DBM} dBm)" aria-label="Restore default threshold (${DEFAULT_ENTER_THRESHOLD_DBM} dBm)">${icons.reset(13)}</button>`
               : ""
           }
         </div>
