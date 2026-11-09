@@ -4310,27 +4310,44 @@ body.is-gate-dragging * {
   min-height: 72px;
   max-height: 240px;
 }
-.debug-serial-input-bar {
+.debug-terminal {
+  display: flex;
+  flex-direction: column;
+  height: 280px;
+  cursor: text;
+}
+.debug-terminal-history {
+  white-space: pre;
+  color: var(--text-2);
+}
+.debug-terminal-cmdline {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--surface-2);
+  min-height: 1.55em;
 }
-.debug-serial-prompt {
-  color: var(--accent);
-  font-size: 13px;
-  font-weight: 600;
+.debug-terminal-ps1 {
+  color: var(--text-3);
   user-select: none;
+  flex-shrink: 0;
 }
-.debug-serial-input {
+.debug-terminal-input {
   flex: 1;
-  min-width: 0;
-  height: 30px;
-  padding: 4px 10px;
-  font-size: 12px;
-  background: var(--bg);
+  min-width: 220px;
+  margin: 0;
+  padding: 0;
+  border: none;
+  outline: none;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: inherit;
+  line-height: inherit;
+  caret-color: var(--text);
+}
+.debug-terminal-input:disabled {
+  cursor: default;
+  opacity: 0.4;
 }
 .debug-selftest-name {
   color: var(--text);

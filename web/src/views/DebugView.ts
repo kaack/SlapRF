@@ -278,8 +278,20 @@ export class DebugView extends Component {
       onLog: (line) => this.appendLog(line),
       onRawReply: (line, msgType) => {
         if (msgType === "ok" || msgType === "err" || Date.now() < this.serialAwaitUntil) {
+          if (msgType === "bootlog") {
+            try {
+              const bl = JSON.parse(line.slice(1)) as BootLog;
+              this.appendSerialLine(`--- ${bl.which} boot log (boot #${bl.boots}, reset: ${bl.reset}) ---`);
+              for (const l of (bl.text || "(empty)").split("\n")) {
+                this.appendSerialLine(l);
+              }
+              return;
+            } catch {
+              // fall through
+            }
+          }
           if (msgType !== "live") {
-            this.appendSerialLine(`< ${line}`);
+            this.appendSerialLine(line);
           }
         }
       },
@@ -287,7 +299,7 @@ export class DebugView extends Component {
         const line = `[config] ${c.role} "${c.timerLabel}" profile=${c.firmwareProfile} fp=${c.fingerprint} fw=${c.firmwareVersion} ch=${c.frequenciesMHz.join(",")}`;
         this.appendLog(line);
         if (Date.now() < this.serialAwaitUntil) {
-          this.appendSerialLine(`< ${line}`);
+          this.appendSerialLine(line);
         }
       },
       onError: (msg) => {
@@ -439,13 +451,51 @@ export class DebugView extends Component {
         </section>
       </div>`;
 
-    this.listen(el, "click", (e) => void this.onClick(e));
+    this.listen(el, "click", (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest("[data-serial-terminal]") && !target.closest("[data-serial-input]")) {
+        const sel = window.getSelection()?.toString() ?? "";
+        if (!sel) {
+          this.el.querySelector<HTMLInputElement>("[data-serial-input]")?.focus();
+        }
+      }
+      void this.onClick(e);
+    });
     this.listen(el, "keydown", (e) => {
       const ke = e as KeyboardEvent;
       const t = ke.target as HTMLElement | null;
       if (!t || !t.matches("[data-serial-input]")) return;
       const inp = t as HTMLInputElement;
-      if (ke.key === "Enter") {
+      if (ke.key === "l" && (ke.ctrlKey || ke.metaKey)) {
+        ke.preventDefault();
+        this.serialLines = [];
+        this.renderSerialConsole();
+        this.el.querySelector<HTMLInputElement>("[data-serial-input]")?.focus();
+      } else if (ke.key === "Tab") {
+        ke.preventDefault();
+        const cur = inp.value.trimStart().toUpperCase();
+        if (!cur) return;
+        const cmds = [
+          "STATUS?",
+          "EMERGENCY ",
+          "RF ",
+          "LIVE ",
+          "SCAN ",
+          "SCAN LIVE ",
+          "SCAN STOP",
+          "CHANNELS ",
+          "CHANNELS RESET",
+          "LOG ",
+          "BOOTLOG?",
+          "LASTLOG?",
+          "SLAPRF?",
+          "REBOOT",
+          "HELP",
+          "CLEAR",
+        ];
+        const match = cmds.find((c) => c.startsWith(cur));
+        if (match) inp.value = match;
+      } else if (ke.key === "Enter") {
         ke.preventDefault();
         void this.sendSerialCommand(inp.value);
       } else if (ke.key === "ArrowUp") {
@@ -3797,28 +3847,39 @@ export class DebugView extends Component {
     if (count) count.textContent = `${active ? "Streaming" : "Paused"} · ${this.logLines.length} lines`;
   }
 
+  private serialPrompt(): string {
+    if (!this.console.connected) return "slaprf>";
+    const name = this.status?.label || this.status?.fp || "timer";
+    return this.status?.emergencyMode ? `slaprf@${name} (emergency)>` : `slaprf@${name}>`;
+  }
+
   private appendSerialLine(line: string): void {
-    this.serialLines.push(`[${fmtWallTimeMs(Date.now())}] ${line}`);
+    this.serialLines.push(line);
     if (this.serialLines.length > LOG_LINES) {
       this.serialLines.splice(0, this.serialLines.length - LOG_LINES);
     }
     const pre = this.el.querySelector<HTMLElement>("[data-serial-pre]");
+    const term = this.el.querySelector<HTMLElement>("[data-serial-terminal]");
     if (pre) {
-      const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 16;
-      pre.textContent = this.serialLines.join("\n");
-      if (atBottom) pre.scrollTop = pre.scrollHeight;
+      pre.textContent = this.serialLines.join("\n") + (this.serialLines.length ? "\n" : "");
+    }
+    if (term) {
+      term.scrollTop = term.scrollHeight;
     }
     const note = this.el.querySelector<HTMLElement>("[data-serial-note]");
     if (note && this.console.connected) {
-      note.textContent = `${this.status?.emergencyMode ? "Emergency mode" : "Ready"} · ${this.serialLines.length} lines`;
+      note.textContent = `${this.status?.emergencyMode ? "Emergency mode" : "Connected"} · ${this.serialLines.length} lines`;
     }
   }
 
   private async sendSerialCommand(rawCmd: string): Promise<void> {
     const cmd = rawCmd.trim();
-    if (!cmd) return;
     const inp = this.el.querySelector<HTMLInputElement>("[data-serial-input]");
     if (inp) inp.value = "";
+    if (!cmd) {
+      this.appendSerialLine(this.serialPrompt());
+      return;
+    }
     if (!this.serialHistory.length || this.serialHistory[this.serialHistory.length - 1] !== cmd) {
       this.serialHistory.push(cmd);
       if (this.serialHistory.length > 50) this.serialHistory.shift();
@@ -3826,30 +3887,37 @@ export class DebugView extends Component {
     this.serialHistoryIdx = -1;
     this.serialDraft = "";
 
-    this.appendSerialLine(`> ${cmd}`);
     const upper = cmd.toUpperCase();
+    if (upper === "CLEAR" || upper === "CLS") {
+      this.serialLines = [];
+      this.renderSerialConsole();
+      this.el.querySelector<HTMLInputElement>("[data-serial-input]")?.focus();
+      return;
+    }
+
+    this.appendSerialLine(`${this.serialPrompt()} ${cmd}`);
     if (upper === "HELP" || upper === "?") {
       const helpLines = [
-        "Available USB commands:",
-        "  STATUS?              Query identity, uptime, reset reason, emergency mode, heap, RF, and channel table",
-        "  EMERGENCY 1|0        Enter (1) or exit (0) emergency rescue mode (radio off, ambulance LED fade)",
-        "  RF 1|0               Switch the 5.8 GHz receiver on (1) or off (0)",
-        "  LIVE 0|1|2           Stream 5.8 GHz channel readings (0 = off, 1 = 10 Hz, 2 = 50 Hz every sweep)",
-        "  SCAN a b s           Single spectrum sweep from a..b MHz in s MHz steps (e.g. SCAN 5650 5917 5)",
-        "  SCAN LIVE a b s      Continuous spectrum sweep (SCAN STOP to end)",
-        "  CHANNELS f1,..,f8    Temporarily set 8 pilot channel frequencies in MHz (CHANNELS RESET to restore)",
-        "  LOG 1|0              Mirror ESP-IDF log output onto USB serial",
-        "  BOOTLOG?             Read this boot's log from RTC memory",
-        "  LASTLOG?             Read the previous boot's log from RTC memory",
-        "  SLAPRF?              Read the 160-byte SLAPRF02 binary configuration block",
-        "  REBOOT               Restart the timer",
+        "Commands:",
+        "  STATUS?              identity, uptime, reset reason, emergency mode, heap, RF, channels",
+        "  EMERGENCY [1|0]      enter (1) or exit (0) emergency rescue mode (radio off, ambulance LED)",
+        "  RF [1|0]             switch 5.8 GHz receiver on (1) or off (0)",
+        "  LIVE [0|1|2]         stream 5.8 GHz readings (0=off, 1=10 Hz, 2=50 Hz every sweep)",
+        "  SCAN <a b s>         single spectrum sweep a..b MHz in s MHz steps (e.g. SCAN 5650 5917 5)",
+        "  SCAN LIVE <a b s>    continuous spectrum sweep (SCAN STOP to end)",
+        "  CHANNELS <f1,..,f8>  temporary 8-channel table in MHz (CHANNELS RESET to restore saved)",
+        "  LOG [1|0]            mirror ESP-IDF log output onto USB serial",
+        "  BOOTLOG? / LASTLOG?  print current or previous boot log from RTC memory",
+        "  SLAPRF?              read 160-byte SLAPRF02 configuration block",
+        "  REBOOT               restart timer and reconnect",
+        "  CLEAR                clear terminal screen",
       ];
-      for (const l of helpLines) this.appendSerialLine(`  ${l}`);
+      for (const l of helpLines) this.appendSerialLine(l);
       return;
     }
 
     if (!this.console.connected) {
-      this.appendSerialLine("! Not connected over USB");
+      this.appendSerialLine("error: not connected over USB");
       return;
     }
 
@@ -3858,7 +3926,8 @@ export class DebugView extends Component {
       await this.runBusy("Restarting", async () => {
         await this.restart("REBOOT");
       });
-      this.appendSerialLine("# Timer restarted and reconnected.");
+      this.appendSerialLine("Timer restarted and reconnected.");
+      this.el.querySelector<HTMLInputElement>("[data-serial-input]")?.focus();
       return;
     }
 
@@ -3878,6 +3947,7 @@ export class DebugView extends Component {
         this.status = await this.restart("REBOOT");
         this.renderAll();
       }
+      this.el.querySelector<HTMLInputElement>("[data-serial-input]")?.focus();
     }
   }
 
@@ -3891,15 +3961,15 @@ export class DebugView extends Component {
     const statusText = !on
       ? "Off · connect a timer first"
       : emg
-        ? `Emergency mode · ${this.serialLines.length ? `${this.serialLines.length} lines` : "ready for rescue commands"}`
-        : `Ready · ${this.serialLines.length ? `${this.serialLines.length} lines` : "type a command or click a preset"}`;
+        ? `Emergency mode · ${this.serialLines.length} lines · type HELP for commands`
+        : `Connected · ${this.serialLines.length} lines · type HELP for commands`;
+    const introBanner = on
+      ? "# SlapRF USB serial terminal — type HELP for commands, Up/Down for history, Tab to complete.\n"
+      : "# Disconnected — connect a timer over USB to open an interactive serial session.\n";
     const bodyText = this.serialLines.length
-      ? esc(this.serialLines.join("\n"))
-      : esc(
-          on
-            ? "# Connected. Type a command below (e.g. STATUS?, EMERGENCY 1, EMERGENCY 0, RF 0, RF 1, BOOTLOG?, REBOOT, or HELP) and press Enter."
-            : "# Connect a timer over USB to send commands interactively."
-        );
+      ? esc(this.serialLines.join("\n") + "\n")
+      : esc(introBanner);
+    const ps1 = esc(this.serialPrompt());
     this.slot("serial-console").innerHTML = `
       <div class="debug-card-head debug-log-head">
         <span class="debug-led-status">
@@ -3907,24 +3977,21 @@ export class DebugView extends Component {
           <span class="debug-head-note" data-serial-note>${statusText}</span>
         </span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm btn-ghost mono" data-action="serial-cmd" data-cmd="STATUS?" ${on ? "" : "disabled"}>STATUS?</button>
-          <button type="button" class="btn btn-sm btn-ghost mono" data-action="serial-cmd" data-cmd="${emg ? "EMERGENCY 0" : "EMERGENCY 1"}" ${on ? "" : "disabled"}>${emg ? "EMERGENCY 0" : "EMERGENCY 1"}</button>
-          <button type="button" class="btn btn-sm btn-ghost mono" data-action="serial-cmd" data-cmd="BOOTLOG?" ${on ? "" : "disabled"}>BOOTLOG?</button>
-          <button type="button" class="btn btn-sm btn-ghost mono" data-action="serial-cmd" data-cmd="HELP">HELP</button>
           <button type="button" class="btn btn-sm btn-ghost" data-action="serial-clear" ${this.serialLines.length ? "" : "disabled"}>Clear</button>
         </div>
       </div>
       <div class="table-scroll">
-        <pre class="debug-log debug-serial-log mono" data-serial-pre>${bodyText}</pre>
-      </div>
-      <div class="debug-serial-input-bar">
-        <span class="debug-serial-prompt mono">&gt;</span>
-        <input type="text" class="input mono debug-serial-input" data-serial-input value="${esc(prevVal)}" placeholder="${on ? "Type a USB command (STATUS?, EMERGENCY 1, EMERGENCY 0, RF 0, HELP…) and press Enter" : "Connect a timer over USB to send commands…"}" ${on ? "" : "disabled"} autocomplete="off" spellcheck="false"/>
-        <button type="button" class="btn btn-sm btn-armed" data-action="serial-send" ${on ? "" : "disabled"}>Send</button>
+        <div class="debug-log debug-terminal mono" data-serial-terminal>
+          <div class="debug-terminal-history" data-serial-pre>${bodyText}</div>
+          <div class="debug-terminal-cmdline">
+            <span class="debug-terminal-ps1">${ps1}</span>
+            <input type="text" class="debug-terminal-input mono" data-serial-input value="${esc(prevVal)}" ${on ? "" : "disabled"} autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Serial terminal command line"/>
+          </div>
+        </div>
       </div>`;
-    const pre = this.el.querySelector<HTMLElement>("[data-serial-pre]");
-    if (pre && this.serialLines.length) {
-      pre.scrollTop = pre.scrollHeight;
+    const term = this.el.querySelector<HTMLElement>("[data-serial-terminal]");
+    if (term && this.serialLines.length) {
+      term.scrollTop = term.scrollHeight;
     }
     if (hadFocus) {
       const nextInput = this.el.querySelector<HTMLInputElement>("[data-serial-input]");
