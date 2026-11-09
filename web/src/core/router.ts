@@ -72,23 +72,49 @@ export const ROUTES: RouteMeta[] = [
   },
 ];
 
-function parseHash(hash: string): RouteId {
+const ROUTE_STORAGE_KEY = "slaprf.ui.route.v1";
+
+function parseHash(hash: string): RouteId | null {
   const id = hash.replace(/^#\/?/, "").split("/")[0];
-  return ROUTES.some((r) => r.id === id) ? (id as RouteId) : "live";
+  return ROUTES.some((r) => r.id === id) ? (id as RouteId) : null;
 }
 
-/** Hash-based router (`#/race`, `#/pilot`, ...) so views are bookmarkable. */
+function loadInitialRoute(): RouteId {
+  const fromHash = parseHash(location.hash);
+  if (fromHash) return fromHash;
+  try {
+    const saved = window.localStorage.getItem(ROUTE_STORAGE_KEY);
+    if (saved && ROUTES.some((r) => r.id === saved)) {
+      return saved as RouteId;
+    }
+  } catch {
+    // Ignore storage access errors
+  }
+  return "live";
+}
+
+/** Hash-based router (`#/live`, `#/pilot`, ...) so views are bookmarkable and survive reloads. */
 export class Router {
-  private current: RouteId = parseHash(location.hash);
+  private current: RouteId = loadInitialRoute();
   private readonly listeners = new Set<(route: RouteId) => void>();
 
   constructor() {
+    this.saveRoute(this.current);
     window.addEventListener("hashchange", () => {
-      const next = parseHash(location.hash);
+      const next = parseHash(location.hash) ?? "live";
       if (next === this.current) return;
       this.current = next;
+      this.saveRoute(next);
       this.listeners.forEach((fn) => fn(next));
     });
+  }
+
+  private saveRoute(id: RouteId): void {
+    try {
+      window.localStorage.setItem(ROUTE_STORAGE_KEY, id);
+    } catch {
+      // Ignore storage access errors
+    }
   }
 
   public get route(): RouteId {

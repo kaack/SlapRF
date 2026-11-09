@@ -103,12 +103,21 @@ export class Announcer {
   private lastRaceArmed: boolean | null = null;
   /** Inaudible tone that keeps the audio output awake while the announcer is on. */
   private keepAwake: AudioContext | null = null;
+  private gestureUnlockBound = false;
 
   constructor(store: AppStore) {
     this.store = store;
     this.prefs = loadPrefs();
     setWakeLockEnabled(this.prefs.keepScreenAwake !== false);
     this.piper = new PiperNeuralTts(() => this.notify());
+    if (this.prefs.enabled) {
+      this.bindGestureAudioUnlock();
+      const activeURI = this.activeVoiceURI();
+      if (isPiperVoiceURI(activeURI)) {
+        void this.piper.preloadVoice(activeURI).catch(() => undefined);
+      }
+      this.resetIdleTimer();
+    }
     store.onLapRecorded((lap) => this.onLap(lap));
     store.onStartGateDetected((ev) => this.onStartPass(ev));
     store.subscribe(["crossings"], () => {
@@ -357,40 +366,45 @@ export class Announcer {
     const activeURI = this.activeVoiceURI();
 
     if (isPiperVoiceURI(activeURI) && this.keepAwake) {
-      const token = ++this.utteranceToken;
-      this.neuralSpeaking = true;
-      const finishNeural = () => {
-        if (this.utteranceToken !== token) return;
-        this.neuralSpeaking = false;
-        if (!this.prefs.enabled && this.queue.length === 0) {
-          this.sleepAudio();
-          return;
-        }
-        this.holdUntil = Date.now() + BETWEEN_CALLOUTS_MS;
-        this.pump();
-      };
-
-      void this.piper
-        .speak(
-          next.text,
-          activeURI,
-          this.prefs.rate,
-          this.prefs.volume,
-          this.keepAwake,
-          next.queuedAt,
-          STALE_AFTER_MS
-        )
-        .then(finishNeural)
-        .catch(() => {
+      if (this.keepAwake.state === "suspended") {
+        void this.keepAwake.resume().catch(() => undefined);
+      }
+      if (this.keepAwake.state === "running") {
+        const token = ++this.utteranceToken;
+        this.neuralSpeaking = true;
+        const finishNeural = () => {
           if (this.utteranceToken !== token) return;
           this.neuralSpeaking = false;
-          if (Date.now() - next!.queuedAt <= STALE_AFTER_MS) {
-            this.speakBrowserUtterance(next!.text);
-          } else {
-            this.pump();
+          if (!this.prefs.enabled && this.queue.length === 0) {
+            this.sleepAudio();
+            return;
           }
-        });
-      return;
+          this.holdUntil = Date.now() + BETWEEN_CALLOUTS_MS;
+          this.pump();
+        };
+
+        void this.piper
+          .speak(
+            next.text,
+            activeURI,
+            this.prefs.rate,
+            this.prefs.volume,
+            this.keepAwake,
+            next.queuedAt,
+            STALE_AFTER_MS
+          )
+          .then(finishNeural)
+          .catch(() => {
+            if (this.utteranceToken !== token) return;
+            this.neuralSpeaking = false;
+            if (Date.now() - next!.queuedAt <= STALE_AFTER_MS) {
+              this.speakBrowserUtterance(next!.text);
+            } else {
+              this.pump();
+            }
+          });
+        return;
+      }
     }
 
     this.speakBrowserUtterance(next.text);
@@ -459,13 +473,32 @@ export class Announcer {
   private sleepAudio(): void {
     void this.keepAwake?.suspend();
   }
+
+  /**
+   * When the announcer is restored as enabled across a page reload, browsers may start
+   * `AudioContext` in a `"suspended"` state until the first pointer/key gesture on the page.
+   * Bind a one-shot listener so any click, tap, or keypress immediately unlocks audio output.
+   */
+  private bindGestureAudioUnlock(): void {
+    if (this.gestureUnlockBound || typeof window === "undefined") return;
+    this.gestureUnlockBound = true;
+    const unlock = () => {
+      window.removeEventListener("pointerdown", unlock, true);
+      window.removeEventListener("keydown", unlock, true);
+      this.gestureUnlockBound = false;
+      if (this.prefs.enabled) {
+        this.wakeAudio();
+      }
+    };
+    window.addEventListener("pointerdown", unlock, true);
+    window.addEventListener("keydown", unlock, true);
+  }
 }
 
 function loadPrefs(): AnnouncerPrefs {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    // Never auto-enable on load: speech needs a fresh user gesture after a reload.
-    return raw ? { ...DEFAULT_PREFS, ...JSON.parse(raw), enabled: false } : { ...DEFAULT_PREFS };
+    return raw ? { ...DEFAULT_PREFS, ...JSON.parse(raw) } : { ...DEFAULT_PREFS };
   } catch {
     return { ...DEFAULT_PREFS };
   }

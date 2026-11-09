@@ -24,6 +24,7 @@ const TAG_GAP = 4;
 const LINE_HIT_PX = 5;
 /** Room on the right for the threshold tags. */
 const TAG_GUTTER = 84;
+const RSSI_CHART_STORAGE_KEY = "slaprf.ui.rssi_chart.v1";
 
 /** One colour per gate, in course order (only gates share this chart, so pilot colours don't apply). */
 const GATE_COLORS = ["#d4ff3a", "#38bdf8", "#f472b6", "#fb923c", "#a78bfa", "#2dd4bf", "#facc15", "#f87171"];
@@ -94,6 +95,7 @@ export class PilotRssiChart extends Component {
     super(el);
     this.store = store;
     this.api = api;
+    this.loadChartPrefs();
     el.innerHTML = `
       <div class="scope-toolbar">
         <div class="scope-transport" role="group" aria-label="Signal playback and pass navigation">
@@ -125,6 +127,7 @@ export class PilotRssiChart extends Component {
       if (btn.dataset.focus) {
         this.focus = btn.dataset.focus === "all" ? null : Number(btn.dataset.focus);
         this.calibMessage = "";
+        this.saveChartPrefs();
         this.renderControls();
         this.renderCalib();
         this.renderLegend();
@@ -273,10 +276,41 @@ export class PilotRssiChart extends Component {
     return Math.max(DBM_MIN, Math.min(DBM_MAX, v));
   }
 
+  private loadChartPrefs(): void {
+    try {
+      const raw = window.localStorage.getItem(RSSI_CHART_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { windowUs?: number; focus?: number | null };
+      if (typeof parsed.windowUs === "number" && parsed.windowUs >= MIN_WINDOW_US && parsed.windowUs <= MAX_WINDOW_US) {
+        this.windowUs = parsed.windowUs;
+      }
+      if (parsed.focus === null || (typeof parsed.focus === "number" && parsed.focus >= 1)) {
+        this.focus = parsed.focus;
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }
+
+  private saveChartPrefs(): void {
+    try {
+      window.localStorage.setItem(
+        RSSI_CHART_STORAGE_KEY,
+        JSON.stringify({
+          windowUs: this.windowUs,
+          focus: this.focus,
+        })
+      );
+    } catch {
+      // Ignore storage access errors
+    }
+  }
+
   private setWindow(us: number): void {
     const center = this.viewEnd() - this.windowUs / 2;
     this.windowUs = us;
     if (this.endUs !== null) this.endUs = this.clampEnd(center + us / 2);
+    this.saveChartPrefs();
     this.renderControls();
   }
 
@@ -287,6 +321,7 @@ export class PilotRssiChart extends Component {
     this.windowUs = next;
     // Following live keeps the right edge at "now"; otherwise zoom around the cursor.
     if (this.endUs !== null) this.endUs = this.clampEnd(anchor + (1 - frac) * next);
+    this.saveChartPrefs();
     this.renderControls();
   }
 

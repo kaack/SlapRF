@@ -17,6 +17,7 @@ import { AppStore } from "../state/store";
 
 const WIFI_SSID_STORAGE_KEY = "slaprf.wifi.ssid";
 const HUB_WIFI_MODE_STORAGE_KEY = "slaprf.wifi.hubMode";
+const FLASHER_PREFS_STORAGE_KEY = "slaprf.ui.flasher_prefs.v1";
 const CUSTOM_SSID_VALUE = "__custom__";
 
 type HubWifiMode = "join" | "host";
@@ -90,6 +91,30 @@ export class TimerFlasher extends Component {
         this.wifiSSID = stored;
         hadStoredPref = true;
       }
+      const rawPrefs = window.localStorage.getItem(FLASHER_PREFS_STORAGE_KEY);
+      if (rawPrefs) {
+        const parsed = JSON.parse(rawPrefs) as {
+          role?: "hub" | "spoke";
+          timerLabel?: string;
+          firmwareProfileId?: string;
+          keepFingerprint?: boolean;
+        };
+        if (parsed.role === "hub" || parsed.role === "spoke") {
+          this.role = parsed.role;
+        }
+        if (typeof parsed.timerLabel === "string" && parsed.timerLabel.trim() !== "") {
+          this.timerLabel = parsed.timerLabel;
+        }
+        if (
+          typeof parsed.firmwareProfileId === "string" &&
+          FIRMWARE_PROFILES.some((p) => p.id === parsed.firmwareProfileId)
+        ) {
+          this.firmwareProfileId = parsed.firmwareProfileId;
+        }
+        if (typeof parsed.keepFingerprint === "boolean") {
+          this.keepFingerprint = parsed.keepFingerprint;
+        }
+      }
     } catch {
       // ignore storage errors
     }
@@ -129,6 +154,7 @@ export class TimerFlasher extends Component {
         if (nextRole !== this.role) {
           this.role = nextRole;
           this.timerLabel = nextRole === "hub" ? "H1" : this.suggestSpokeLabel();
+          this.saveFlasherPrefs();
           this.errorMsg = null;
           this.lastSuccessMsg = null;
           this.slideDir = "none";
@@ -224,6 +250,7 @@ export class TimerFlasher extends Component {
       const input = e.target as HTMLInputElement;
       if (input.matches("[data-timer-label]")) {
         this.timerLabel = input.value;
+        this.saveFlasherPrefs();
       } else if (input.matches("[data-wifi-ssid]")) {
         this.saveSSID(input.value);
       } else if (input.matches("[data-wifi-pass]")) {
@@ -249,12 +276,14 @@ export class TimerFlasher extends Component {
         }
       } else if (target.matches("[data-fw-profile]")) {
         this.firmwareProfileId = target.value || DEFAULT_FIRMWARE_PROFILE;
+        this.saveFlasherPrefs();
         this.slideDir = "none";
         this.render();
       } else if (target.matches("[data-all-ports]")) {
         this.showAllPorts = (target as HTMLInputElement).checked;
       } else if (target.matches("[data-keep-fp]")) {
         this.keepFingerprint = target.value === "keep";
+        this.saveFlasherPrefs();
         this.slideDir = "none";
         this.render();
       }
@@ -290,6 +319,22 @@ export class TimerFlasher extends Component {
       { id: "identity", title: "Name & firmware", short: "Name" },
       { id: "flash", title: "Flash timer", short: "Flash" },
     ];
+  }
+
+  private saveFlasherPrefs(): void {
+    try {
+      window.localStorage.setItem(
+        FLASHER_PREFS_STORAGE_KEY,
+        JSON.stringify({
+          role: this.role,
+          timerLabel: this.timerLabel,
+          firmwareProfileId: this.firmwareProfileId,
+          keepFingerprint: this.keepFingerprint,
+        })
+      );
+    } catch {
+      // ignore storage errors
+    }
   }
 
   private goToStep(next: WizardStepId, dir: "next" | "prev" | "none"): void {

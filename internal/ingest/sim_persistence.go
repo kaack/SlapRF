@@ -7,15 +7,35 @@ import (
 	"slaprf/internal/domain"
 )
 
-// SimPersistedOptions captures the user-configurable simulator controls so they survive restarts.
-type SimPersistedOptions struct {
-	Running           bool    `json:"running"`
-	TrackWalkerActive bool    `json:"trackWalkerActive"`
-	PoweredOffTimers  []uint8 `json:"poweredOffTimers,omitempty"`
-	PausedSlots       []int   `json:"pausedSlots,omitempty"`
+// SimPilotPersistedState captures a simulated pilot's position, status, and 6S LiPo pack state
+// so the simulation resumes smoothly after a page refresh without resetting pilots or batteries.
+type SimPilotPersistedState struct {
+	SlotIndex       int                   `json:"slotIndex"`
+	TrackPosMeters  float64               `json:"trackPosMeters"`
+	CurrentSpeedMps float64               `json:"currentSpeedMps"`
+	AltitudeMeters  float64               `json:"altitudeMeters"`
+	Status          domain.SimPilotStatus `json:"status"`
+	LandingTarget   domain.SimPilotStatus `json:"landingTarget,omitempty"`
+	BatteryPct      float64               `json:"batteryPct"`
+	PackPct         [3]float64            `json:"packPct"`
+	ActivePackIdx   int                   `json:"activePackIdx"`
+	StateTimerSec   float64               `json:"stateTimerSec"`
+	WantPitAtFinish bool                  `json:"wantPitAtFinish,omitempty"`
+	CrashesCount    int                   `json:"crashesCount,omitempty"`
+	PacksFlown      int                   `json:"packsFlown,omitempty"`
 }
 
-// ExportOptions returns a snapshot of the simulator's user-configurable toggles.
+// SimPersistedOptions captures the user-configurable simulator controls so they survive restarts.
+type SimPersistedOptions struct {
+	Running             bool                     `json:"running"`
+	TrackWalkerActive   bool                     `json:"trackWalkerActive"`
+	TrackWalkerTimerSec float64                  `json:"trackWalkerTimerSec,omitempty"`
+	PoweredOffTimers    []uint8                  `json:"poweredOffTimers,omitempty"`
+	PausedSlots         []int                    `json:"pausedSlots,omitempty"`
+	PilotStates         []SimPilotPersistedState `json:"pilotStates,omitempty"`
+}
+
+// ExportOptions returns a snapshot of the simulator's user-configurable toggles and pilot states.
 func (s *TrackSimulator) ExportOptions() SimPersistedOptions {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -29,49 +49,97 @@ func (s *TrackSimulator) ExportOptions() SimPersistedOptions {
 	sort.Slice(offTimers, func(i, j int) bool { return offTimers[i] < offTimers[j] })
 
 	var paused []int
+	pStates := make([]SimPilotPersistedState, 0, len(s.pilotStates))
 	for _, ps := range s.pilotStates {
 		if ps.status == domain.SimStatusPaused {
 			paused = append(paused, ps.slotIndex)
 		}
+		pStates = append(pStates, SimPilotPersistedState{
+			SlotIndex:       ps.slotIndex,
+			TrackPosMeters:  ps.trackPosMeters,
+			CurrentSpeedMps: ps.currentSpeedMps,
+			AltitudeMeters:  ps.altitudeMeters,
+			Status:          ps.status,
+			LandingTarget:   ps.landingTargetStatus,
+			BatteryPct:      ps.batteryPct,
+			PackPct:         ps.packPct,
+			ActivePackIdx:   ps.activePackIdx,
+			StateTimerSec:   ps.stateTimerSec,
+			WantPitAtFinish: ps.wantPitAtFinish,
+			CrashesCount:    ps.crashesCount,
+			PacksFlown:      ps.packsFlown,
+		})
 	}
 	sort.Ints(paused)
 
 	return SimPersistedOptions{
-		Running:           s.running,
-		TrackWalkerActive: s.trackWalkerActive,
-		PoweredOffTimers:  offTimers,
-		PausedSlots:       paused,
+		Running:             s.running,
+		TrackWalkerActive:   s.trackWalkerActive,
+		TrackWalkerTimerSec: s.trackWalkerTimerSec,
+		PoweredOffTimers:    offTimers,
+		PausedSlots:         paused,
+		PilotStates:         pStates,
 	}
 }
 
-// RestoreOptions restores the simulator's user-configurable toggles and powered-off timers.
+// RestoreOptions restores the simulator's user-configurable toggles, powered-off timers, and pilot states.
 func (s *TrackSimulator) RestoreOptions(opts SimPersistedOptions) {
 	s.mu.Lock()
 	s.running = opts.Running
+	s.trackWalkerActive = opts.TrackWalkerActive
+	s.trackWalkerTimerSec = opts.TrackWalkerTimerSec
+	if s.trackWalkerActive && s.trackWalkerTimerSec <= 0 {
+		s.trackWalkerTimerSec = 35.0
+	}
 	s.poweredOffTimers = make(map[uint8]bool, len(opts.PoweredOffTimers))
 	for _, id := range opts.PoweredOffTimers {
 		s.poweredOffTimers[id] = true
 	}
-	pausedSet := make(map[int]bool, len(opts.PausedSlots))
-	for _, slot := range opts.PausedSlots {
-		pausedSet[slot] = true
-	}
-	for i := range s.pilotStates {
-		ps := &s.pilotStates[i]
-		if pausedSet[ps.slotIndex] {
-			ps.status = domain.SimStatusPaused
-			ps.currentSpeedMps = 0
-			ps.altitudeMeters = 0
-			ps.stateTimerSec = 0
+	if len(opts.PilotStates) > 0 {
+		bySlot := make(map[int]SimPilotPersistedState, len(opts.PilotStates))
+		for _, pst := range opts.PilotStates {
+			bySlot[pst.SlotIndex] = pst
+		}
+		for i := range s.pilotStates {
+			ps := &s.pilotStates[i]
+			if saved, ok := bySlot[ps.slotIndex]; ok {
+				ps.trackPosMeters = saved.TrackPosMeters
+				ps.currentSpeedMps = saved.CurrentSpeedMps
+				ps.altitudeMeters = saved.AltitudeMeters
+				if saved.Status != "" {
+					ps.status = saved.Status
+				}
+				ps.landingTargetStatus = saved.LandingTarget
+				ps.batteryPct = saved.BatteryPct
+				ps.packPct = saved.PackPct
+				ps.activePackIdx = saved.ActivePackIdx
+				ps.stateTimerSec = saved.StateTimerSec
+				ps.wantPitAtFinish = saved.WantPitAtFinish
+				ps.crashesCount = saved.CrashesCount
+				if saved.PacksFlown > 0 {
+					ps.packsFlown = saved.PacksFlown
+				}
+			}
+		}
+	} else {
+		pausedSet := make(map[int]bool, len(opts.PausedSlots))
+		for _, slot := range opts.PausedSlots {
+			pausedSet[slot] = true
+		}
+		for i := range s.pilotStates {
+			ps := &s.pilotStates[i]
+			if pausedSet[ps.slotIndex] {
+				ps.status = domain.SimStatusPaused
+				ps.currentSpeedMps = 0
+				ps.altitudeMeters = 0
+				ps.stateTimerSec = 0
+			}
 		}
 	}
 	s.mu.Unlock()
 
 	for _, id := range opts.PoweredOffTimers {
 		s.engine.SetDetectedTimerOnline(id, false)
-	}
-	if opts.TrackWalkerActive {
-		s.SetTrackWalker(true)
 	}
 }
 

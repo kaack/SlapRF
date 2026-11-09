@@ -102,12 +102,25 @@ export class AppStore {
     try {
       const raw = window.localStorage.getItem(UI_PREFS_STORAGE_KEY);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as { selectedPilot?: number; liveFocus?: number | null };
+      const parsed = JSON.parse(raw) as {
+        selectedPilot?: number;
+        liveFocus?: number | null;
+        comparison?: ComparisonSelection;
+      };
       if (typeof parsed.selectedPilot === "number" && parsed.selectedPilot >= 1) {
         this._selectedPilot = parsed.selectedPilot;
       }
       if (parsed.liveFocus === null || (typeof parsed.liveFocus === "number" && parsed.liveFocus >= 1)) {
         this._liveFocus = parsed.liveFocus;
+      }
+      if (parsed.comparison && typeof parsed.comparison === "object") {
+        const ref = parsed.comparison.reference;
+        if (ref === "best" || ref === "previous" || typeof ref === "number") {
+          this._comparison = {
+            lapId: typeof parsed.comparison.lapId === "number" ? parsed.comparison.lapId : null,
+            reference: ref,
+          };
+        }
       }
     } catch {
       // Ignore storage access errors
@@ -121,6 +134,7 @@ export class AppStore {
         JSON.stringify({
           selectedPilot: this._selectedPilot,
           liveFocus: this._liveFocus,
+          comparison: this._comparison,
         })
       );
     } catch {
@@ -352,8 +366,11 @@ export class AppStore {
 
   // ---- mutations -----------------------------------------------------------
 
+  private _hasHydrated = false;
+
   public hydrate(state: FullStateResponse): void {
-    const modeChanged = this._simulatorRunning !== state.simulatorRunning;
+    const modeChanged = this._hasHydrated && this._simulatorRunning !== state.simulatorRunning;
+    this._hasHydrated = true;
     this._pilots = state.pilots ?? [];
     this.setNodes(state.gates ?? []);
     this._detectedTimers = state.timers ?? [];
@@ -505,6 +522,7 @@ export class AppStore {
 
   public setComparison(next: Partial<ComparisonSelection>): void {
     this._comparison = { ...this._comparison, ...next };
+    this.saveUiPrefs();
     this.emit("selection");
   }
 

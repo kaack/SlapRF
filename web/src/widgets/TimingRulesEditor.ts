@@ -74,6 +74,7 @@ const RULES: RuleSpec[] = [
 ];
 
 const DEFAULT_RULES: TimingRules = { minLapSec: 5, maxLapSec: 120, gateCooldownSec: 2, minSectionSec: 0.5, echoWindowSec: 3 };
+const RULES_SCOPE_STORAGE_KEY = "slaprf.ui.rules_scope.v1";
 
 /**
  * Settings section for the detection guardrails. "All gates" edits the global rules; picking a
@@ -90,6 +91,15 @@ export class TimingRulesEditor extends Component {
     super(el);
     this.store = store;
     this.api = api;
+    try {
+      const savedScope = window.localStorage.getItem(RULES_SCOPE_STORAGE_KEY);
+      if (savedScope && savedScope !== "all") {
+        const num = Number(savedScope);
+        if (Number.isFinite(num) && num >= 1) this.scope = num;
+      }
+    } catch {
+      // Ignore storage access errors
+    }
     this.listen(el, "change", () => {
       const form = this.el.querySelector<HTMLFormElement>("form.rules");
       if (form) void this.save(form);
@@ -135,6 +145,11 @@ export class TimingRulesEditor extends Component {
       const scope = target.closest<HTMLElement>("[data-scope]");
       if (scope) {
         this.scope = scope.dataset.scope === "all" ? null : Number(scope.dataset.scope);
+        try {
+          window.localStorage.setItem(RULES_SCOPE_STORAGE_KEY, this.scope === null ? "all" : String(this.scope));
+        } catch {
+          // Ignore storage access errors
+        }
         this.render();
         return;
       }
