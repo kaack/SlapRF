@@ -495,7 +495,6 @@ export interface ConnectedPortOwner {
  * by `existingOwner`, in which case it reads over that existing connection and leaves it open).
  */
 export async function readXiaoC5OverWebSerial(
-  fallbackImageBytes: Uint8Array,
   onProgress: ProgressCallback,
   showAllPorts = false,
   existingOwner?: ConnectedPortOwner
@@ -600,19 +599,7 @@ export async function readXiaoC5OverWebSerial(
       }
     }
 
-    onProgress({ stage: "done", percent: 100, detail: "Read complete." });
-    return (
-      parseSlaprfConfigBlock(fallbackImageBytes) ?? {
-        chip: "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
-        role: "hub",
-        timerLabel: "",
-        wifiSSID: "",
-        frequenciesMHz: [5658, 5732, 5806, 5917, 5695, 5769, 5843, 5880],
-        firmwareVersion: "unknown",
-        firmwareProfile: DEFAULT_FIRMWARE_PROFILE,
-        fingerprint: "",
-      }
-    );
+    throw new Error("No SlapRF firmware detected on this board — flash it above first.");
   } finally {
     try {
       await reader?.cancel();

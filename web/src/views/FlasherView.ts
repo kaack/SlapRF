@@ -83,15 +83,7 @@ class TimerReaderPanel extends Component {
     this.render();
 
     try {
-      const { bytes } = await this.api.fetchFirmwareImage(
-        "hub",
-        "H1",
-        "",
-        "",
-        DEFAULT_FIRMWARE_PROFILE
-      );
       const info = await readXiaoC5OverWebSerial(
-        bytes,
         (p) => {
           this.progressText = p.detail;
           this.render();
@@ -104,6 +96,7 @@ class TimerReaderPanel extends Component {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (!/No port selected|aborted|cancelled|cancel/i.test(msg)) {
+        this.readout = null;
         this.errorMsg = msg;
       }
     } finally {
