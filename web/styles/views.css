@@ -3918,7 +3918,7 @@ body.is-gate-dragging * {
   margin-top: 2px;
   margin-bottom: 6px;
 }
-.debug-chart-legend {
+.debug-chart-foot {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3926,6 +3926,19 @@ body.is-gate-dragging * {
   gap: 8px 12px;
   min-height: 30px;
   margin-top: 6px;
+}
+.debug-chart-foot > .debug-connect-actions {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.debug-chart-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-height: 30px;
+  margin-top: 8px;
   padding-bottom: 12px;
   margin-bottom: 12px;
   border-bottom: 1px solid var(--border);

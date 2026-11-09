@@ -16,6 +16,7 @@ import {
   drawWaterfallCanvas,
   exportScanHistoryCsv,
   exportSignalCsv,
+  exportSpectrumCsv,
   HealthHistory,
   PilotThresholdInfo,
   RACEBAND,
@@ -1763,6 +1764,12 @@ export class DebugView extends Component {
           this.spectrumAcc.setVisibleRows(80);
           this.renderScan();
           break;
+        case "wf-rows": {
+          const rows = Number(t.dataset.rows) || 80;
+          this.spectrumAcc.setVisibleRows(rows);
+          this.renderScan();
+          break;
+        }
         case "scan-reset-zoom":
           this.scanZoomStartMHz = null;
           this.scanZoomStopMHz = null;
@@ -1811,8 +1818,11 @@ export class DebugView extends Component {
           this.scanShowWifi = !this.scanShowWifi;
           this.renderScan();
           break;
+        case "export-spectrum-csv":
+          downloadTextFile(buildFileStamp(this.status, "spectrum", "csv"), exportSpectrumCsv(this.spectrumAcc));
+          break;
         case "export-scan-csv":
-          downloadTextFile(buildFileStamp(this.status, "scans", "csv"), exportScanHistoryCsv(this.spectrumAcc));
+          downloadTextFile(buildFileStamp(this.status, "waterfall", "csv"), exportScanHistoryCsv(this.spectrumAcc));
           break;
         case "export-spectrum-png": {
           const c = this.el.querySelector<HTMLCanvasElement>("[data-spectrum-canvas]");
@@ -2586,7 +2596,7 @@ export class DebugView extends Component {
           </button>
         </div>
       </div>
-      <div class="debug-subbar debug-chart-axisbar">
+      <div class="debug-subbar">
         <div class="debug-toolbar-left">
           <div class="debug-overlay-checks" role="group" aria-label="Chart overlays">
             <label class="check" title="Show per-channel typical noise floor (dotted)">
@@ -2604,7 +2614,10 @@ export class DebugView extends Component {
           </div>
           <span class="note debug-chart-hint">${liveFollowOn ? "Drag chart to pan X/Y · drag axes to stretch · wheel to zoom" : "Paused · drag chart to pan X/Y · double-click to reset"}</span>
         </div>
-        <div class="debug-connect-actions">
+      </div>`;
+    this.slot("signal-legend").innerHTML = `
+      <div class="debug-chart-foot">
+        <div class="debug-toolbar-left">
           <div class="segmented" role="group" aria-label="Time window">
             <button type="button" class="${this.signalAutoX ? "is-active" : ""}" data-action="signal-auto-x" title="Automatically adjust X-axis time window based on incoming sample rate">Auto X</button>
             ${presets
@@ -2630,8 +2643,13 @@ export class DebugView extends Component {
                 : ""
           }
         </div>
-      </div>`;
-    this.slot("signal-legend").innerHTML = `
+        <div class="debug-connect-actions">
+          <div class="debug-btn-group" role="group" aria-label="Export signal chart">
+            <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts ? "" : "disabled"} title="Download recorded 50 Hz samples as CSV">CSV</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-png" ${hasPts ? "" : "disabled"} title="Save signal chart snapshot as PNG">PNG</button>
+          </div>
+        </div>
+      </div>
       <div class="debug-chart-legend">
         <div class="debug-channel-chips" role="group" aria-label="Channel trace legend">
           ${freqs
@@ -2645,12 +2663,6 @@ export class DebugView extends Component {
             })
             .join("")}
           <button type="button" class="btn btn-sm btn-ghost debug-ch-all-btn" data-action="signal-ch-all">${allOn ? "Hide all" : "Show all"}</button>
-        </div>
-        <div class="debug-connect-actions">
-          <div class="debug-btn-group" role="group" aria-label="Export signal chart">
-            <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts ? "" : "disabled"} title="Download recorded 50 Hz samples as CSV">CSV</button>
-            <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-png" ${hasPts ? "" : "disabled"} title="Save chart snapshot as PNG">PNG</button>
-          </div>
         </div>
       </div>`;
   }
@@ -3046,6 +3058,8 @@ export class DebugView extends Component {
     const scanActive = this.scanLive || this.scanning;
     const prevScanFindingsEl = this.slot("scan").querySelector<HTMLElement>("[data-scan-findings]");
     const prevScanScrollTop = prevScanFindingsEl?.querySelector<HTMLElement>("[data-findings-scroll]")?.scrollTop ?? 0;
+    const wfRowPresets = [40, 80, 160, 300] as const;
+    const isCustomWfRows = !wfRowPresets.includes(this.spectrumAcc.visibleRows as 40 | 80 | 160 | 300);
     this.slot("scan").innerHTML = `
       <div class="debug-card-head">
         <span class="debug-led-status">
@@ -3076,15 +3090,6 @@ export class DebugView extends Component {
           </div>
         </div>
         <div class="debug-connect-actions">
-          <div class="debug-btn-group" role="group" aria-label="Export spectrum & waterfall">
-            <button type="button" class="btn btn-sm btn-ghost" data-action="export-scan-csv" ${hasScan ? "" : "disabled"} title="Export waterfall scan history as CSV">CSV</button>
-            <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-png" ${hasScan ? "" : "disabled"} title="Save spectrum trace as PNG">Spectrum PNG</button>
-            <button type="button" class="btn btn-sm btn-ghost" data-action="export-waterfall-png" ${hasScan ? "" : "disabled"} title="Save waterfall spectrogram as PNG">Waterfall PNG</button>
-          </div>
-        </div>
-      </div>
-      <div class="debug-subbar debug-chart-axisbar">
-        <div class="debug-toolbar-left">
           <div class="debug-overlay-checks" role="group" aria-label="Spectrum overlays">
             <label class="check">
               <input type="checkbox" data-check="scan-hold" ${this.scanShowMaxHold ? "checked" : ""}/>
@@ -3100,9 +3105,13 @@ export class DebugView extends Component {
             </label>
           </div>
           <button type="button" class="btn btn-sm btn-ghost" data-action="clear-hold" ${hasScan ? "" : "disabled"}>Reset hold/avg</button>
-          <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
         </div>
-        <div class="debug-connect-actions">
+      </div>
+      <div class="debug-canvas-wrap">
+        <canvas class="debug-canvas debug-spectrum-canvas" data-spectrum-canvas></canvas>
+      </div>
+      <div class="debug-chart-foot">
+        <div class="debug-toolbar-left">
           ${
             isFreqZoomed
               ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="scan-reset-zoom" title="Reset frequency zoom (or double-click chart)">${icons.target(13)}<span>X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz ×</span></button>`
@@ -3116,10 +3125,14 @@ export class DebugView extends Component {
               ? `<button type="button" class="btn btn-sm btn-ghost" data-action="scan-reset-y" title="Reset Y-axis to Auto scaling">Auto Y</button>`
               : ""
           }
+          <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
         </div>
-      </div>
-      <div class="debug-canvas-wrap">
-        <canvas class="debug-canvas debug-spectrum-canvas" data-spectrum-canvas></canvas>
+        <div class="debug-connect-actions">
+          <div class="debug-btn-group" role="group" aria-label="Export spectrum chart">
+            <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-csv" ${hasScan ? "" : "disabled"} title="Download spectrum trace (latest, average, max-hold) as CSV">CSV</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-png" ${hasScan ? "" : "disabled"} title="Save spectrum trace chart as PNG">PNG</button>
+          </div>
+        </div>
       </div>
       <div class="debug-findings debug-scan-findings" data-scan-findings role="region" aria-label="Spectrum findings log"></div>
       <div class="debug-waterfall-section">
@@ -3130,11 +3143,6 @@ export class DebugView extends Component {
             <span class="note mono" data-wf-scroll-note></span>
           </div>
           <div class="debug-connect-actions">
-            ${
-              isWfRowsZoomed
-                ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="wf-reset-rows" title="Reset waterfall Y-axis pass depth to 80 passes">${icons.target(13)}<span>Y: ${this.spectrumAcc.visibleRows} passes ×</span></button>`
-                : ""
-            }
             <button type="button" class="btn btn-sm btn-ghost" data-action="wf-jump-live" data-wf-jump-btn disabled>Jump to live</button>
             <div class="debug-waterfall-legend mono" title="Color scale follows Spectrum Y-axis range">
               <span>${this.spectrumAcc.colorMinDbm} dBm</span>
@@ -3145,6 +3153,34 @@ export class DebugView extends Component {
         </div>
         <div class="debug-canvas-wrap">
           <canvas class="debug-canvas debug-waterfall-canvas" data-waterfall-canvas></canvas>
+        </div>
+        <div class="debug-chart-foot">
+          <div class="debug-toolbar-left">
+            <div class="segmented" role="group" aria-label="Waterfall pass depth">
+              ${wfRowPresets
+                .map(
+                  (r) =>
+                    `<button type="button" class="${this.spectrumAcc.visibleRows === r ? "is-active" : ""}" data-action="wf-rows" data-rows="${r}" title="Show ${r} scan passes vertically on the waterfall (or drag the Y-axis)">${r} passes</button>`
+                )
+                .join("")}
+            </div>
+            ${
+              isCustomWfRows || isWfRowsZoomed
+                ? `<button type="button" class="btn btn-sm ${isCustomWfRows ? "btn-armed" : "btn-ghost"} mono" data-action="wf-reset-rows" title="Reset waterfall Y-axis pass depth to 80 passes">${icons.target(13)}<span>Y: ${this.spectrumAcc.visibleRows} passes ×</span></button>`
+                : ""
+            }
+            ${
+              isFreqZoomed
+                ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="scan-reset-zoom" title="Reset frequency zoom (or double-click chart)">${icons.target(13)}<span>X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz ×</span></button>`
+                : ""
+            }
+          </div>
+          <div class="debug-connect-actions">
+            <div class="debug-btn-group" role="group" aria-label="Export waterfall spectrogram">
+              <button type="button" class="btn btn-sm btn-ghost" data-action="export-scan-csv" ${hasScan ? "" : "disabled"} title="Download waterfall scan history matrix as CSV">CSV</button>
+              <button type="button" class="btn btn-sm btn-ghost" data-action="export-waterfall-png" ${hasScan ? "" : "disabled"} title="Save waterfall spectrogram as PNG">PNG</button>
+            </div>
+          </div>
         </div>
       </div>`;
     if (prevScanFindingsEl) {

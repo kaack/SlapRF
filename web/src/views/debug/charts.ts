@@ -1858,6 +1858,21 @@ export function exportSignalCsv(ring: SignalRingBuffer, sweepHz = 50): string {
   return [header, ...lines].join("\n") + "\n";
 }
 
+export function exportSpectrumCsv(acc: SpectrumAccumulator): string {
+  const s = acc.latest;
+  if (!s || !s.dbm.length) return "";
+  const header = "freq_mhz,latest_dbm,avg_dbm,max_hold_dbm";
+  const rows: string[] = [];
+  for (let i = 0; i < s.dbm.length; i++) {
+    const f = s.start + i * s.step;
+    const latest = s.dbm[i];
+    const avg = acc.avgDbm && acc.avgDbm[i] !== undefined ? acc.avgDbm[i].toFixed(1) : "";
+    const hold = acc.maxHold && acc.maxHold[i] !== undefined ? String(acc.maxHold[i]) : "";
+    rows.push(`${f},${latest},${avg},${hold}`);
+  }
+  return [header, ...rows].join("\n") + "\n";
+}
+
 export function exportScanHistoryCsv(acc: SpectrumAccumulator): string {
   if (!acc.history.length) return "";
   const last = acc.history[acc.history.length - 1];
