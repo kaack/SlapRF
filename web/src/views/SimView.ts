@@ -313,7 +313,7 @@ export class SimView extends Component {
             </div>
             <div class="rules-foot">
               <p class="note">Simulated timers stream 50 Hz RSSI frames into the timing engine.</p>
-              <button class="btn btn-ghost btn-sm" type="button" data-action="timer-reset-defaults">Restore default timers</button>
+              <button class="btn btn-ghost btn-sm" type="button" data-action="timer-reset-defaults">Restore defaults</button>
             </div>
           </div>
         </section>
@@ -548,6 +548,16 @@ export class SimView extends Component {
       }
       case "timer-reset-defaults": {
         this.errorMsg = "";
+        this.addRole = "spoke";
+        this.addLabel = "";
+        this.addProfile = DEFAULT_FIRMWARE_PROFILE;
+        this.saveDraftPrefs();
+        const roleSel = this.el.querySelector<HTMLSelectElement>('select[data-field="timer-role"]');
+        if (roleSel) roleSel.value = this.addRole;
+        const labelInp = this.el.querySelector<HTMLInputElement>('input[data-field="timer-label"]');
+        if (labelInp) labelInp.value = this.addLabel;
+        const fwSel = this.el.querySelector<HTMLSelectElement>('select[data-field="timer-fw"]');
+        if (fwSel) fwSel.value = this.addProfile;
         void this.api.simTimerAction({ action: "reset-timers" }).then(() => {
           this.lastTimersSig = "";
           this.renderTimers(this.store.simState);

@@ -306,6 +306,17 @@ export class PilotRssiChart extends Component {
     }
   }
 
+  public restoreDefaults(): void {
+    this.windowUs = 5_000_000;
+    this.focus = null;
+    this.endUs = null;
+    this.calibMessage = "";
+    this.saveChartPrefs();
+    this.renderControls();
+    this.renderCalib();
+    this.renderLegend();
+  }
+
   private setWindow(us: number): void {
     const center = this.viewEnd() - this.windowUs / 2;
     this.windowUs = us;

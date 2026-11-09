@@ -21,7 +21,7 @@
   gap: 12px;
   margin-bottom: 16px;
 }
-.card-flush .card-head {
+.card-flush > .card-head {
   padding: 18px 20px 0;
 }
 .card-head h2 {

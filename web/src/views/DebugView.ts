@@ -1068,6 +1068,7 @@ export class DebugView extends Component {
             this.spectrumAcc.setVisibleRows(80);
             this.renderScan();
           }
+          this.saveDebugPrefs();
           return;
         }
         lastTapTime = now;
@@ -1292,6 +1293,7 @@ export class DebugView extends Component {
     });
 
     const onPointerEnd = () => {
+      const hadDrag = Boolean(this.signalDrag || this.specDragging || this.wfDragging);
       if (this.signalDrag) {
         if (this.signalDrag.mode === "ybox" && this.signalYZoomBox) {
           const c = this.el.querySelector<HTMLElement>("[data-signal-canvas]");
@@ -1350,6 +1352,9 @@ export class DebugView extends Component {
         this.dirtySpectrum = true;
         this.dirtyWaterfall = true;
       }
+      if (hadDrag) {
+        this.saveDebugPrefs();
+      }
     };
     this.listen(window as unknown as HTMLElement, "pointerup", onPointerEnd);
     this.listen(window as unknown as HTMLElement, "pointercancel", onPointerEnd);
@@ -1365,6 +1370,7 @@ export class DebugView extends Component {
         this.renderSignalControls();
         this.dirtySignal = true;
         this.dirtyNoiseTable = true;
+        this.saveDebugPrefs();
       } else if (target.matches("[data-spectrum-canvas], [data-waterfall-canvas]")) {
         this.scanZoomStartMHz = null;
         this.scanZoomStopMHz = null;
@@ -1374,6 +1380,7 @@ export class DebugView extends Component {
         this.spectrumAcc.setColorRange(-100, -40);
         this.spectrumAcc.setVisibleRows(80);
         this.renderScan();
+        this.saveDebugPrefs();
       } else {
         const chBtn = target.closest<HTMLElement>("[data-action='signal-ch']");
         if (chBtn) {
@@ -1387,6 +1394,7 @@ export class DebugView extends Component {
             this.renderSignalControls();
             this.renderNoiseTable();
             this.dirtySignal = true;
+            this.saveDebugPrefs();
           }
         }
       }
@@ -1598,6 +1606,7 @@ export class DebugView extends Component {
             this.dirtySignal = true;
             this.dirtyNoiseTable = true;
           }
+          this.saveDebugPrefs();
           return;
         }
         if (target.matches("[data-spectrum-canvas]")) {
@@ -1621,6 +1630,7 @@ export class DebugView extends Component {
               this.renderScan();
             }
           }
+          this.saveDebugPrefs();
           return;
         }
         if (!target.matches("[data-waterfall-canvas]")) return;
@@ -1631,6 +1641,7 @@ export class DebugView extends Component {
           e.preventDefault();
           this.spectrumAcc.setVisibleRows(this.spectrumAcc.visibleRows * factor);
           this.renderScan();
+          this.saveDebugPrefs();
           return;
         }
         if (this.spectrumAcc.maxScrollRow() <= 0) return;
@@ -1851,6 +1862,7 @@ export class DebugView extends Component {
           this.renderLog();
           break;
       }
+      this.saveDebugPrefs();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       this.error = msg;
@@ -2345,6 +2357,66 @@ export class DebugView extends Component {
           this.logWrap = !this.logWrap;
           this.renderLog();
           break;
+        case "restore-live-channels":
+          this.signalEnabledCh = [true, true, true, true, true, true, true, true];
+          this.syncChannelMaskToFirmware();
+          this.updateLive();
+          this.renderStatus();
+          this.renderSignalControls();
+          this.renderNoiseTable();
+          this.dirtySignal = true;
+          break;
+        case "restore-signal-defaults":
+          this.openAxisMenu = null;
+          this.signalEndN = null;
+          this.signalAutoX = true;
+          this.signalWindowSec = 10;
+          this.signalAutoY = true;
+          this.signalYMin = DBM_MIN;
+          this.signalYMax = DBM_MAX;
+          this.signalSmoothYMin = null;
+          this.signalSmoothYMax = null;
+          this.signalShowFloor = true;
+          this.signalShowHitLine = true;
+          this.signalShowThresholds = true;
+          this.signalEnabledCh = [true, true, true, true, true, true, true, true];
+          this.syncChannelMaskToFirmware();
+          this.updateLive();
+          this.renderStatus();
+          this.renderSignalControls();
+          this.renderNoiseTable();
+          this.dirtySignal = true;
+          this.dirtyNoiseTable = true;
+          break;
+        case "restore-spectrum-defaults":
+          this.openAxisMenu = null;
+          this.scanShowMaxHold = true;
+          this.scanShowAvg = true;
+          this.scanShowWifi = true;
+          this.scanZoomStartMHz = null;
+          this.scanZoomStopMHz = null;
+          this.scanAutoY = false;
+          this.scanYMin = DBM_MIN;
+          this.scanYMax = DBM_MAX;
+          this.spectrumAcc.setColorRange(-100, -40);
+          this.scanStartMHz = 5180;
+          this.scanStopMHz = 5917;
+          this.scanStepMHz = 5;
+          if (this.scanLive && this.console.connected) {
+            this.scanToggleAt = Date.now();
+            this.spectrumAcc.clearHoldAndAvg();
+            await this.console.request("SCAN LIVE 5180 5917 5", "ok", 2000).catch(() => undefined);
+          }
+          this.renderScan();
+          break;
+        case "restore-waterfall-defaults":
+          this.openAxisMenu = null;
+          this.scanZoomStartMHz = null;
+          this.scanZoomStopMHz = null;
+          this.spectrumAcc.setVisibleRows(80);
+          this.spectrumAcc.setScrollRow(0);
+          this.renderScan();
+          break;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2360,11 +2432,25 @@ export class DebugView extends Component {
       if (!raw) return;
       const p = JSON.parse(raw) as Record<string, unknown>;
       if (typeof p.showAllPorts === "boolean") this.showAllPorts = p.showAllPorts;
+      if (Array.isArray(p.signalEnabledCh) && p.signalEnabledCh.length === 8) {
+        this.signalEnabledCh = p.signalEnabledCh.map(Boolean);
+      }
       if (typeof p.signalWindowSec === "number" && p.signalWindowSec >= 0.4 && p.signalWindowSec <= 120) {
         this.signalWindowSec = p.signalWindowSec;
       }
       if (typeof p.signalAutoX === "boolean") this.signalAutoX = p.signalAutoX;
       if (typeof p.signalAutoY === "boolean") this.signalAutoY = p.signalAutoY;
+      if (
+        !this.signalAutoY &&
+        typeof p.signalYMin === "number" &&
+        typeof p.signalYMax === "number" &&
+        p.signalYMax > p.signalYMin
+      ) {
+        this.signalYMin = Math.max(DBM_MIN, Math.min(DBM_MAX, p.signalYMin));
+        this.signalYMax = Math.max(this.signalYMin + 4, Math.min(DBM_MAX, p.signalYMax));
+        this.signalSmoothYMin = this.signalYMin;
+        this.signalSmoothYMax = this.signalYMax;
+      }
       if (typeof p.signalShowFloor === "boolean") this.signalShowFloor = p.signalShowFloor;
       if (typeof p.signalShowHitLine === "boolean") this.signalShowHitLine = p.signalShowHitLine;
       if (typeof p.signalShowThresholds === "boolean") this.signalShowThresholds = p.signalShowThresholds;
@@ -2372,8 +2458,40 @@ export class DebugView extends Component {
       if (typeof p.scanShowAvg === "boolean") this.scanShowAvg = p.scanShowAvg;
       if (typeof p.scanShowWifi === "boolean") this.scanShowWifi = p.scanShowWifi;
       if (typeof p.scanStartMHz === "number" && p.scanStartMHz >= 5180) this.scanStartMHz = p.scanStartMHz;
-      if (typeof p.scanStopMHz === "number" && p.scanStopMHz <= 5917) this.scanStopMHz = p.scanStopMHz;
+      if (typeof p.scanStopMHz === "number" && p.scanStopMHz <= 5925) this.scanStopMHz = p.scanStopMHz;
       if (typeof p.scanStepMHz === "number" && p.scanStepMHz >= 1) this.scanStepMHz = p.scanStepMHz;
+      if (
+        typeof p.scanZoomStartMHz === "number" &&
+        typeof p.scanZoomStopMHz === "number" &&
+        p.scanZoomStopMHz > p.scanZoomStartMHz
+      ) {
+        this.scanZoomStartMHz = p.scanZoomStartMHz;
+        this.scanZoomStopMHz = p.scanZoomStopMHz;
+      } else if (p.scanZoomStartMHz === null || p.scanZoomStopMHz === null) {
+        this.scanZoomStartMHz = null;
+        this.scanZoomStopMHz = null;
+      }
+      if (typeof p.scanAutoY === "boolean") this.scanAutoY = p.scanAutoY;
+      if (
+        !this.scanAutoY &&
+        typeof p.scanYMin === "number" &&
+        typeof p.scanYMax === "number" &&
+        p.scanYMax > p.scanYMin
+      ) {
+        this.scanYMin = Math.max(DBM_MIN, Math.min(DBM_MAX, p.scanYMin));
+        this.scanYMax = Math.max(this.scanYMin + 4, Math.min(DBM_MAX, p.scanYMax));
+        if (this.scanYMin === DBM_MIN && this.scanYMax === DBM_MAX) {
+          this.spectrumAcc.setColorRange(-100, -40);
+        } else {
+          this.spectrumAcc.setColorRange(this.scanYMin, Math.min(-25, this.scanYMax));
+        }
+      }
+      if (typeof p.wfVisibleRows === "number" && p.wfVisibleRows >= 10 && p.wfVisibleRows <= 300) {
+        this.spectrumAcc.setVisibleRows(p.wfVisibleRows);
+      }
+      if (typeof p.selectedNetworkSpokeSlot === "number" && p.selectedNetworkSpokeSlot >= 2 && p.selectedNetworkSpokeSlot <= 7) {
+        this.selectedNetworkSpokeSlot = p.selectedNetworkSpokeSlot;
+      }
       if (typeof p.serialWrap === "boolean") this.serialWrap = p.serialWrap;
       if (typeof p.logWrap === "boolean") this.logWrap = p.logWrap;
       if (Array.isArray(p.serialHistory)) {
@@ -2390,9 +2508,12 @@ export class DebugView extends Component {
         "slaprf.ui.debug_prefs.v1",
         JSON.stringify({
           showAllPorts: this.showAllPorts,
+          signalEnabledCh: this.signalEnabledCh,
           signalWindowSec: this.signalWindowSec,
           signalAutoX: this.signalAutoX,
           signalAutoY: this.signalAutoY,
+          signalYMin: this.signalYMin,
+          signalYMax: this.signalYMax,
           signalShowFloor: this.signalShowFloor,
           signalShowHitLine: this.signalShowHitLine,
           signalShowThresholds: this.signalShowThresholds,
@@ -2402,6 +2523,13 @@ export class DebugView extends Component {
           scanStartMHz: this.scanStartMHz,
           scanStopMHz: this.scanStopMHz,
           scanStepMHz: this.scanStepMHz,
+          scanZoomStartMHz: this.scanZoomStartMHz,
+          scanZoomStopMHz: this.scanZoomStopMHz,
+          scanAutoY: this.scanAutoY,
+          scanYMin: this.scanYMin,
+          scanYMax: this.scanYMax,
+          wfVisibleRows: this.spectrumAcc.visibleRows,
+          selectedNetworkSpokeSlot: this.selectedNetworkSpokeSlot,
           serialWrap: this.serialWrap,
           logWrap: this.logWrap,
           serialHistory: this.serialHistory.slice(-50),
@@ -3630,7 +3758,11 @@ export class DebugView extends Component {
           })
           .join("")}
       </div>
-      <div class="debug-scale mono"><span>${DBM_MIN} dBm</span><span>${DBM_MAX} dBm</span></div>`;
+      <div class="debug-scale mono"><span>${DBM_MIN} dBm</span><span>${DBM_MAX} dBm</span></div>
+      <div class="rules-foot">
+        <p class="note">Default monitors all 8 pilot channels in every sweep.</p>
+        <button class="btn btn-ghost btn-sm" type="button" data-action="restore-live-channels">Restore defaults</button>
+      </div>`;
     this.updateLive();
   }
 
@@ -3925,6 +4057,10 @@ export class DebugView extends Component {
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-png" ${hasPts ? "" : "disabled"} title="Save signal chart snapshot as PNG">PNG</button>
           </div>
         </div>
+      </div>
+      <div class="rules-foot">
+        <p class="note">Default view uses Auto X and Auto Y scaling with all overlays and channels shown.</p>
+        <button class="btn btn-ghost btn-sm" type="button" data-action="restore-signal-defaults">Restore defaults</button>
       </div>`;
   }
 
@@ -4460,6 +4596,10 @@ export class DebugView extends Component {
             </div>
           </div>
         </div>
+        <div class="rules-foot">
+          <p class="note">Default scan sweeps 5180–5917 MHz (5 MHz step) at Full Y with all overlays shown.</p>
+          <button class="btn btn-ghost btn-sm" type="button" data-action="restore-spectrum-defaults">Restore defaults</button>
+        </div>
       </div>
       <div class="debug-findings debug-scan-findings" data-scan-findings role="region" aria-label="Spectrum findings log"></div>
       <div class="debug-subbox debug-waterfall-section">
@@ -4542,6 +4682,10 @@ export class DebugView extends Component {
               <button type="button" class="btn btn-sm btn-ghost" data-action="export-waterfall-png" ${hasScan ? "" : "disabled"} title="Save waterfall spectrogram as PNG">PNG</button>
             </div>
           </div>
+        </div>
+        <div class="rules-foot">
+          <p class="note">Default waterfall shows the latest 80 passes across the full scanned band.</p>
+          <button class="btn btn-ghost btn-sm" type="button" data-action="restore-waterfall-defaults">Restore defaults</button>
         </div>
       </div>`;
     if (prevScanFindingsEl) {

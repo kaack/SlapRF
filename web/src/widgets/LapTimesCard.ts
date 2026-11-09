@@ -23,20 +23,37 @@ export class LapTimesCard extends Component {
   private view: View = { kind: "lap" };
   private renderedTabsSig = "";
 
+  private get storageKey(): string {
+    return this.slotIndex === undefined ? "slaprf.ui.laptimes_all.v1" : "slaprf.ui.laptimes_pilot.v1";
+  }
+
   constructor(el: HTMLElement, store: AppStore, opts: { slotIndex?: () => number } = {}) {
     super(el);
     this.store = store;
     this.slotIndex = opts.slotIndex;
+    this.loadPrefs();
 
     el.innerHTML = `
-      <header class="card-head">
-        <div class="settings-intro"><h2>Lap times</h2><p><span data-slot="subtitle"></span></p></div>
-      </header>
-      <div class="canvas-host canvas-host-lg" data-slot="chart"></div>
-      <div class="chart-legend" data-slot="legend"></div>
-      <div class="channel-legend" data-slot="views" role="tablist" aria-label="Show"></div>`;
+      <div class="card-body">
+        <header class="card-head">
+          <div class="settings-intro"><h2>Lap times</h2><p><span data-slot="subtitle"></span></p></div>
+        </header>
+        <div class="canvas-host canvas-host-lg" data-slot="chart"></div>
+        <div class="chart-legend" data-slot="legend"></div>
+        <div class="channel-legend" data-slot="views" role="tablist" aria-label="Show"></div>
+      </div>
+      <div class="rules-foot">
+        <p class="note">${
+          this.slotIndex === undefined
+            ? "Default view plots whole-lap times with all enabled pilots visible."
+            : "Default view plots whole-lap times across the latest session window."
+        }</p>
+        <button class="btn btn-ghost btn-sm" type="button" data-action="restore-defaults">Restore defaults</button>
+      </div>`;
 
     this.chart = this.adopt(new ProgressionChart(this.slot("chart"), store, { slotIndex: this.slotIndex }));
+    this.chart.setMetric(this.view);
+    this.chart.setHiddenSlots(this.hiddenSlots);
 
     const handleSelect = (e: Event) => {
       const btn = (e.target as HTMLElement).closest<HTMLElement>("[data-view]");
@@ -50,6 +67,7 @@ export class LapTimesCard extends Component {
               fromGateId: Number(btn.dataset.from),
               toGateId: Number(btn.dataset.to),
             };
+      this.savePrefs();
       this.chart.setMetric(this.view);
       this.render();
     };
@@ -70,12 +88,70 @@ export class LapTimesCard extends Component {
       } else {
         this.hiddenSlots.add(slot);
       }
+      this.savePrefs();
       this.chart.setHiddenSlots(this.hiddenSlots);
+      this.render();
+    });
+
+    this.listen(el, "click", (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-action="restore-defaults"]');
+      if (!btn) return;
+      this.view = { kind: "lap" };
+      this.hiddenSlots.clear();
+      this.savePrefs();
+      this.chart.setMetric(this.view);
+      this.chart.setHiddenSlots(this.hiddenSlots);
+      this.chart.resetView();
       this.render();
     });
 
     this.onDispose(store.subscribe(["laps", "config", "selection"], () => this.render()));
     this.render();
+  }
+
+  private loadPrefs(): void {
+    try {
+      const raw = window.localStorage.getItem(this.storageKey);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        view?: View;
+        hiddenSlots?: number[];
+      };
+      if (parsed.view && parsed.view.kind === "section" && Number.isFinite(parsed.view.sectorIndex)) {
+        this.view = {
+          kind: "section",
+          sectorIndex: Number(parsed.view.sectorIndex),
+          fromGateId: Number(parsed.view.fromGateId),
+          toGateId: Number(parsed.view.toGateId),
+        };
+      } else if (parsed.view && parsed.view.kind === "lap") {
+        this.view = { kind: "lap" };
+      }
+      if (Array.isArray(parsed.hiddenSlots)) {
+        this.hiddenSlots.clear();
+        for (const s of parsed.hiddenSlots) {
+          if (typeof s === "number" && Number.isFinite(s)) {
+            this.hiddenSlots.add(s);
+          }
+        }
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }
+
+  private savePrefs(): void {
+    try {
+      window.localStorage.setItem(
+        this.storageKey,
+        JSON.stringify({
+          view: this.view,
+          hiddenSlots: [...this.hiddenSlots],
+        })
+      );
+    } catch {
+      // Ignore storage access errors
+    }
   }
 
   /** Sections in course order: each gate to the next, wrapping back to start / finish. */

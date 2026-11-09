@@ -260,6 +260,14 @@ export class LapPicker extends Component {
     this.store.setComparison({ reference: choice === "previous" ? "previous" : "best" });
   }
 
+  public restoreDefaults(): void {
+    this.activeSlot = "review";
+    this.followLatest = true;
+    this.savedScrollLeft = 0;
+    this.store.setComparison({ lapId: null, reference: "best" });
+    this.render();
+  }
+
   private render(): void {
     if (this.lastPilotSlot !== this.store.selectedPilot) {
       this.lastPilotSlot = this.store.selectedPilot;

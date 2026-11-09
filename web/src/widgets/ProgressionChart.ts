@@ -261,6 +261,11 @@ export class ProgressionChart extends Component {
     this.refresh();
   }
 
+  public resetView(): void {
+    this.endTimeSec = null;
+    this.surface.requestDraw();
+  }
+
   private effectiveEndTimeSec(): number {
     const winSec = this.windowSec();
     const totalSpan = this.maxTimeSec - this.minTimeSec;

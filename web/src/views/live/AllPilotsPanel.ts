@@ -25,7 +25,7 @@ export class AllPilotsPanel extends Component {
         <header class="card-head"><div class="settings-intro"><h2>Pilots</h2><p>Ranked by best lap · click a pilot to follow their current lap</p></div></header>
         <div data-slot="standings"></div>
       </section>
-      <section class="card" data-slot="laptimes"></section>
+      <section class="card card-flush" data-slot="laptimes"></section>
       <section class="card card-flush">
         <header class="card-head"><div class="settings-intro"><h2>Section records</h2><p>Each pilot's best on every stretch of track — who is quick where</p></div></header>
         <div data-slot="records"></div>

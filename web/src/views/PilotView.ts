@@ -28,15 +28,25 @@ export class PilotView extends Component {
       <section class="card card-flush lap-metrics">
         <div class="lap-metrics-picker" data-slot="laps"></div>
         <div class="lap-metrics-compare" data-slot="compare"></div>
+        <div class="rules-foot">
+          <p class="note">Default view inspects the latest lap against the pilot's personal best.</p>
+          <button class="btn btn-ghost btn-sm" type="button" data-action="restore-lap-defaults">Restore defaults</button>
+        </div>
       </section>
       <section class="card card-flush" data-slot="section-stats"></section>
       <section class="card rec-card" data-slot="recommendation"></section>`;
 
     this.adopt(new PilotPicker(this.slot("picker"), store));
-    this.adopt(new LapPicker(this.slot("laps"), store));
+    const lapPicker = this.adopt(new LapPicker(this.slot("laps"), store));
     this.adopt(new LapComparison(this.slot("compare"), store));
     this.adopt(new SectionStats(this.slot("section-stats"), store));
     this.adopt(new PracticeRecommendation(this.slot("recommendation"), store));
+
+    this.listen(el, "click", (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-action="restore-lap-defaults"]');
+      if (!btn) return;
+      lapPicker.restoreDefaults();
+    });
 
     this.onDispose(store.subscribe(["config", "selection", "laps"], () => this.renderStats()));
     this.renderStats();

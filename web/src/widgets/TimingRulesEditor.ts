@@ -163,7 +163,17 @@ export class TimingRulesEditor extends Component {
       }
       const action = target.closest<HTMLElement>("[data-action]")?.dataset.action;
       if (action === "defaults") void this.api.updateRules(DEFAULT_RULES);
-      if (action === "clear" && this.scope !== null) void this.api.setGateRules(this.scope, {});
+      if (action === "clear" && this.scope !== null) {
+        const targetGate = this.scope;
+        this.scope = null;
+        try {
+          window.localStorage.setItem(RULES_SCOPE_STORAGE_KEY, "all");
+        } catch {
+          // Ignore storage access errors
+        }
+        void this.api.setGateRules(targetGate, {});
+        this.render();
+      }
     });
     // Re-render on rule / gate changes, unless the user is actively typing in an input.
     this.onDispose(
@@ -233,7 +243,7 @@ export class TimingRulesEditor extends Component {
 
     const foot = gate
       ? `<p class="note">Edited rules apply only to ${esc(gateLabel(this.store, gate.gateId))}.</p>
-         ${Object.keys(overrides).length ? `<button class="btn btn-ghost btn-sm" type="button" data-action="clear">Use all-gate rules</button>` : ""}`
+         <button class="btn btn-ghost btn-sm" type="button" data-action="clear">Restore defaults</button>`
       : `<p class="note">Applies to new detections.</p>
          <button class="btn btn-ghost btn-sm" type="button" data-action="defaults">Restore defaults</button>`;
 

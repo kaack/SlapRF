@@ -18,6 +18,33 @@ import { AppStore } from "../state/store";
 import { TimerFlasher } from "../widgets/TimerFlasher";
 
 const RACEBAND = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
+const FLASHER_PORTS_STORAGE_KEY = "slaprf.ui.flasher_ports.v1";
+
+function loadPortPref(): boolean {
+  try {
+    const raw = window.localStorage.getItem(FLASHER_PORTS_STORAGE_KEY);
+    if (raw === "true") {
+      sharedTimerConsole.showAllPorts = true;
+      return true;
+    }
+    if (raw === "false") {
+      sharedTimerConsole.showAllPorts = false;
+      return false;
+    }
+  } catch {
+    // ignore
+  }
+  return sharedTimerConsole.showAllPorts;
+}
+
+function savePortPref(val: boolean): void {
+  sharedTimerConsole.showAllPorts = val;
+  try {
+    window.localStorage.setItem(FLASHER_PORTS_STORAGE_KEY, String(val));
+  } catch {
+    // ignore
+  }
+}
 
 function racebandName(mhz: number): string {
   const idx = RACEBAND.indexOf(mhz);
@@ -51,7 +78,7 @@ class TimerReaderPanel extends Component {
     super(el);
     this.api = api;
     this.onRead = onRead;
-    this.showAllPorts = sharedTimerConsole.showAllPorts;
+    this.showAllPorts = loadPortPref();
 
     this.listen(el, "click", (e) => {
       const t = e.target as HTMLElement;
@@ -64,7 +91,7 @@ class TimerReaderPanel extends Component {
       const t = e.target as HTMLInputElement;
       if (t.matches("[data-reader-all-ports]")) {
         this.showAllPorts = t.checked;
-        sharedTimerConsole.showAllPorts = t.checked;
+        savePortPref(t.checked);
       }
     });
 
@@ -297,7 +324,7 @@ class TimerEraserPanel extends Component {
 
   constructor(el: HTMLElement) {
     super(el);
-    this.showAllPorts = sharedTimerConsole.showAllPorts;
+    this.showAllPorts = loadPortPref();
 
     this.listen(el, "click", (e) => {
       const t = e.target as HTMLElement;
@@ -310,7 +337,7 @@ class TimerEraserPanel extends Component {
       const t = e.target as HTMLInputElement;
       if (t.matches("[data-eraser-all-ports]")) {
         this.showAllPorts = t.checked;
-        sharedTimerConsole.showAllPorts = t.checked;
+        savePortPref(t.checked);
       }
     });
 
@@ -443,7 +470,7 @@ export class FlasherView extends Component {
             <h2>Flasher</h2>
             <p>Plug each Seeed XIAO ESP32-C5 into this computer over USB and flash it directly from the browser — no compiler, drivers, or command line needed.</p>
           </div>
-          <div class="card" data-slot="flasher"></div>
+          <div class="card card-flush" data-slot="flasher"></div>
         </section>
 
         <section class="settings-section">

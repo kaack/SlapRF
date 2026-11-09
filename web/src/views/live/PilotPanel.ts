@@ -26,19 +26,31 @@ export class PilotPanel extends Component {
 
     el.innerHTML = `
       <div class="stat-row" data-slot="stats"></div>
-      <section class="card">
-        <header class="card-head"><div class="settings-intro"><h2>Signal at each gate</h2><p>This pilot's 5.8 GHz signal as every gate sees it · pick one gate to see and adjust its threshold · red pass lines didn't count — hover for why</p></div></header>
-        <div data-slot="rssi"></div>
+      <section class="card card-flush">
+        <div class="card-body">
+          <header class="card-head"><div class="settings-intro"><h2>Signal at each gate</h2><p>This pilot's 5.8 GHz signal as every gate sees it · pick one gate to see and adjust its threshold · red pass lines didn't count — hover for why</p></div></header>
+          <div data-slot="rssi"></div>
+        </div>
+        <div class="rules-foot">
+          <p class="note">Default chart view follows the live 5s stream with all gates visible.</p>
+          <button class="btn btn-ghost btn-sm" type="button" data-action="restore-rssi-defaults">Restore defaults</button>
+        </div>
       </section>
-      <section class="card" data-slot="laptimes"></section>
+      <section class="card card-flush" data-slot="laptimes"></section>
       <section class="card card-flush">
         <header class="card-head"><div class="settings-intro"><h2>Laps</h2><p>Completed laps, newest first · each section against the pilot's own best</p></div></header>
         <div data-slot="laps"></div>
       </section>`;
 
-    this.adopt(new PilotRssiChart(this.slot("rssi"), store, api));
+    const rssiChart = this.adopt(new PilotRssiChart(this.slot("rssi"), store, api));
     this.adopt(new LapTimesCard(this.slot("laptimes"), store, { slotIndex: () => store.selectedPilot }));
     this.adopt(new PilotLaps(this.slot("laps"), store));
+
+    this.listen(el, "click", (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-action="restore-rssi-defaults"]');
+      if (!btn) return;
+      rssiChart.restoreDefaults();
+    });
 
     const timer = window.setInterval(() => this.renderStats(), CLOCK_REFRESH_MS);
     this.onDispose(() => window.clearInterval(timer));

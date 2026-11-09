@@ -94,13 +94,23 @@ export class TimerFlasher extends Component {
       const rawPrefs = window.localStorage.getItem(FLASHER_PREFS_STORAGE_KEY);
       if (rawPrefs) {
         const parsed = JSON.parse(rawPrefs) as {
+          step?: WizardStepId;
           role?: "hub" | "spoke";
           timerLabel?: string;
           firmwareProfileId?: string;
           keepFingerprint?: boolean;
+          showAllPorts?: boolean;
         };
         if (parsed.role === "hub" || parsed.role === "spoke") {
           this.role = parsed.role;
+        }
+        if (
+          parsed.step === "network" ||
+          parsed.step === "identity" ||
+          parsed.step === "wifi" ||
+          parsed.step === "flash"
+        ) {
+          this.step = this.role === "spoke" && parsed.step === "wifi" ? "identity" : parsed.step;
         }
         if (typeof parsed.timerLabel === "string" && parsed.timerLabel.trim() !== "") {
           this.timerLabel = parsed.timerLabel;
@@ -114,8 +124,8 @@ export class TimerFlasher extends Component {
         if (typeof parsed.keepFingerprint === "boolean") {
           this.keepFingerprint = parsed.keepFingerprint;
         }
-        if (typeof (parsed as { showAllPorts?: boolean }).showAllPorts === "boolean") {
-          this.showAllPorts = Boolean((parsed as { showAllPorts?: boolean }).showAllPorts);
+        if (typeof parsed.showAllPorts === "boolean") {
+          this.showAllPorts = parsed.showAllPorts;
         }
       }
     } catch {
@@ -237,6 +247,24 @@ export class TimerFlasher extends Component {
         void this.downloadBin();
         return;
       }
+
+      if (t.closest("[data-restore-defaults]")) {
+        this.step = "network";
+        this.role = "hub";
+        this.timerLabel = "H1";
+        this.firmwareProfileId = DEFAULT_FIRMWARE_PROFILE;
+        this.keepFingerprint = true;
+        this.showAllPorts = false;
+        this.customMode = false;
+        this.errorMsg = null;
+        this.lastSuccessMsg = null;
+        this.progress = null;
+        this.slideDir = "none";
+        this.saveHubWifiMode("join");
+        this.saveFlasherPrefs();
+        this.render();
+        return;
+      }
     });
 
     this.listen(el, "keydown", (e) => {
@@ -330,6 +358,7 @@ export class TimerFlasher extends Component {
       window.localStorage.setItem(
         FLASHER_PREFS_STORAGE_KEY,
         JSON.stringify({
+          step: this.step,
           role: this.role,
           timerLabel: this.timerLabel,
           firmwareProfileId: this.firmwareProfileId,
@@ -346,6 +375,7 @@ export class TimerFlasher extends Component {
     this.step = next;
     this.slideDir = dir;
     this.errorMsg = null;
+    this.saveFlasherPrefs();
     this.render();
   }
 
@@ -1338,41 +1368,47 @@ export class TimerFlasher extends Component {
     }
 
     this.el.innerHTML = `
-      <div class="flasher flasher-wizard">
-        ${this.renderStepper()}
+      <div class="card-body">
+        <div class="flasher flasher-wizard">
+          ${this.renderStepper()}
 
-        <div class="flasher-wizard-viewport">
-          <div class="flasher-wizard-stage ${animClass}">
-            ${stepContent}
+          <div class="flasher-wizard-viewport">
+            <div class="flasher-wizard-stage ${animClass}">
+              ${stepContent}
+            </div>
           </div>
+
+          ${
+            this.step !== "flash" && this.progress
+              ? `
+            <div class="flasher-progress">
+              <div class="flasher-progress-top">
+                <span>${esc(this.progress.detail)}</span>
+                <span class="mono">${this.progress.percent}%</span>
+              </div>
+              <div class="meter flasher-meter">
+                <span class="meter-fill tone-good" style="width:${this.progress.percent}%"></span>
+              </div>
+            </div>`
+              : ""
+          }
+
+          ${
+            this.step !== "flash" && this.lastSuccessMsg && !this.busy
+              ? `<div class="flasher-banner is-ok">✓ ${esc(this.lastSuccessMsg)}</div>`
+              : ""
+          }
+
+          ${
+            this.errorMsg && !this.busy
+              ? `<div class="flasher-banner is-err">${esc(this.errorMsg)}</div>`
+              : ""
+          }
         </div>
-
-        ${
-          this.step !== "flash" && this.progress
-            ? `
-          <div class="flasher-progress">
-            <div class="flasher-progress-top">
-              <span>${esc(this.progress.detail)}</span>
-              <span class="mono">${this.progress.percent}%</span>
-            </div>
-            <div class="meter flasher-meter">
-              <span class="meter-fill tone-good" style="width:${this.progress.percent}%"></span>
-            </div>
-          </div>`
-            : ""
-        }
-
-        ${
-          this.step !== "flash" && this.lastSuccessMsg && !this.busy
-            ? `<div class="flasher-banner is-ok">✓ ${esc(this.lastSuccessMsg)}</div>`
-            : ""
-        }
-
-        ${
-          this.errorMsg && !this.busy
-            ? `<div class="flasher-banner is-err">${esc(this.errorMsg)}</div>`
-            : ""
-        }
+      </div>
+      <div class="rules-foot">
+        <p class="note">Wizard choices are saved automatically on this browser.</p>
+        <button class="btn btn-ghost btn-sm" type="button" data-restore-defaults="1" ${this.busy ? "disabled" : ""}>Restore defaults</button>
       </div>`;
   }
 }
