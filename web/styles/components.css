@@ -447,6 +447,8 @@
   display: block;
   height: 100%;
   border-radius: inherit;
+  background: var(--accent);
+  transition: width 120ms linear;
 }
 .meter-fill.tone-good {
   background: var(--good);

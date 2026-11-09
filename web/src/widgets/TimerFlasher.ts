@@ -496,7 +496,9 @@ export class TimerFlasher extends Component {
         (p) => {
           this.progress = p;
           this.slideDir = "none";
-          this.render();
+          if (!this.updateProgressInPlace(cleanLabel)) {
+            this.render();
+          }
         },
         this.showAllPorts,
         this.keepFingerprint,
@@ -525,6 +527,23 @@ export class TimerFlasher extends Component {
       this.slideDir = "none";
       this.render();
     }
+  }
+
+  private updateProgressInPlace(cleanLabel: string): boolean {
+    if (this.step !== "flash" || !this.progress) return false;
+    const statusEl = this.el.querySelector<HTMLElement>(".flasher-progress-status");
+    const pctEl = this.el.querySelector<HTMLElement>(".flasher-progress-pct");
+    const fillEl = this.el.querySelector<HTMLElement>(".flasher-meter .meter-fill");
+    const btnTextEl = this.el.querySelector<HTMLElement>(".flasher-btn-flash span:last-child");
+    if (!statusEl || !pctEl || !fillEl) return false;
+    const pct = Math.max(0, Math.min(100, Math.round(this.progress.percent)));
+    statusEl.textContent = this.progress.detail;
+    pctEl.textContent = `${pct}%`;
+    fillEl.style.width = `${pct}%`;
+    if (btnTextEl) {
+      btnTextEl.textContent = `Flashing ${cleanLabel}… (${pct}%)`;
+    }
+    return true;
   }
 
   private async downloadBin(): Promise<void> {

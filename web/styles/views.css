@@ -2426,6 +2426,12 @@ body.is-gate-dragging * {
 .flasher-meter {
   height: 7px;
 }
+.flasher-progress.is-flashing .meter-fill {
+  background: var(--accent);
+}
+.flasher-progress.is-complete .meter-fill {
+  background: var(--good);
+}
 .flasher-progress-foot {
   display: flex;
   align-items: center;
