@@ -196,7 +196,7 @@ export class DebugView extends Component {
   private signalFindingSeq = 0;
   private scanFindings: FindingLogEntry[] = [];
   private scanFindingSeq = 0;
-  private openAxisMenu: "signal-x" | "signal-y" | "scan-y" | "wf-y" | null = null;
+  private openAxisMenu: "signal-x" | "signal-y" | "scan-x" | "scan-y" | "wf-x" | "wf-y" | null = null;
 
   constructor(el: HTMLElement) {
     super(el);
@@ -1591,7 +1591,7 @@ export class DebugView extends Component {
           this.renderChannels();
           break;
         case "toggle-axis-menu": {
-          const menu = (t.dataset.menu as "signal-x" | "signal-y" | "scan-y" | "wf-y" | undefined) ?? null;
+          const menu = (t.dataset.menu as "signal-x" | "signal-y" | "scan-x" | "scan-y" | "wf-x" | "wf-y" | undefined) ?? null;
           this.openAxisMenu = this.openAxisMenu === menu ? null : menu;
           if (menu === "signal-x" || menu === "signal-y") {
             this.renderSignalControls();
@@ -1837,6 +1837,17 @@ export class DebugView extends Component {
           this.scanZoomStopMHz = null;
           this.renderScan();
           break;
+        case "scan-zoom-range": {
+          this.openAxisMenu = null;
+          const f0 = Number(t.dataset.start);
+          const f1 = Number(t.dataset.stop);
+          if (f0 > 0 && f1 > f0) {
+            this.scanZoomStartMHz = f0;
+            this.scanZoomStopMHz = f1;
+          }
+          this.renderScan();
+          break;
+        }
         case "scan-reset-y":
           this.openAxisMenu = null;
           this.scanAutoY = true;
@@ -2720,11 +2731,6 @@ export class DebugView extends Component {
             <button type="button" class="debug-axis-pill-main mono" data-action="${this.signalAutoX ? "toggle-axis-menu" : "signal-reset-x"}" data-menu="signal-x" title="${this.signalAutoX ? `Auto X-axis time window (${xWinLabel}) — click to choose a time window preset` : "Click to reset X-axis time window to Auto X"}">
               ${icons.target(13)}<span>${this.signalAutoX ? "Auto X" : `X: ${xWinLabel}`}</span>
             </button>
-            ${
-              !this.signalAutoX
-                ? `<button type="button" class="debug-axis-pill-clear" data-action="signal-reset-x" aria-label="Reset to Auto X" title="Reset X-axis time window to Auto X">${icons.close(11)}</button>`
-                : ""
-            }
             <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="signal-x" aria-expanded="${this.openAxisMenu === "signal-x"}" title="Choose X-axis time window">
               ${icons.chevronDown(12)}
             </button>
@@ -2750,11 +2756,6 @@ export class DebugView extends Component {
             <button type="button" class="debug-axis-pill-main mono" data-action="${this.signalAutoY ? "toggle-axis-menu" : "signal-reset-y"}" data-menu="signal-y" title="${this.signalAutoY ? "Auto Y-axis scaling is ON — fits visible signal traces automatically. Click to choose a scale preset, or drag the Y-axis to stretch." : "Click to reset Y-axis range to Auto Y"}">
               ${icons.target(13)}<span>${this.signalAutoY ? "Auto Y" : `Y: ${Math.round(this.signalYMin)}…${Math.round(this.signalYMax)} dBm`}</span>
             </button>
-            ${
-              !this.signalAutoY
-                ? `<button type="button" class="debug-axis-pill-clear" data-action="signal-reset-y" aria-label="Reset to Auto Y" title="Reset Y-axis range to Auto Y">${icons.close(11)}</button>`
-                : ""
-            }
             <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="signal-y" aria-expanded="${this.openAxisMenu === "signal-y"}" title="Choose Y-axis dBm scale">
               ${icons.chevronDown(12)}
             </button>
@@ -3231,12 +3232,29 @@ export class DebugView extends Component {
       <div class="debug-chart-foot">
         <div class="debug-toolbar-left">
           <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
-            <button type="button" class="debug-axis-pill-main mono" data-action="scan-reset-zoom" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range — drag X-axis or Shift+drag chart to zoom"}">
+            <button type="button" class="debug-axis-pill-main mono" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="scan-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range — click to choose a frequency band preset, or drag X-axis to zoom"}">
               ${icons.target(13)}<span>${isFreqZoomed ? `X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz` : "Auto X"}</span>
             </button>
+            <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-x" aria-expanded="${this.openAxisMenu === "scan-x"}" title="Choose frequency range">
+              ${icons.chevronDown(12)}
+            </button>
             ${
-              isFreqZoomed
-                ? `<button type="button" class="debug-axis-pill-clear" data-action="scan-reset-zoom" aria-label="Reset to Auto X" title="Reset frequency zoom to Auto X">${icons.close(11)}</button>`
+              this.openAxisMenu === "scan-x"
+                ? `<div class="debug-axis-menu mono" role="menu" aria-label="Spectrum X-axis frequency range">
+                    <button type="button" class="debug-axis-menu-item ${!isFreqZoomed ? "is-active" : ""}" data-action="scan-reset-zoom" role="menuitem">
+                      <span>Auto X</span><span class="note">Full scan</span>
+                    </button>
+                    <div class="debug-axis-menu-sep"></div>
+                    <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5650 && Math.round(this.scanZoomStopMHz!) === 5917 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5650" data-stop="5917" role="menuitem">
+                      <span>Raceband</span><span class="note">5650–5917 MHz</span>
+                    </button>
+                    <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5180 && Math.round(this.scanZoomStopMHz!) === 5320 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5180" data-stop="5320" role="menuitem">
+                      <span>UNII-1</span><span class="note">5180–5320 MHz</span>
+                    </button>
+                    <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5725 && Math.round(this.scanZoomStopMHz!) === 5850 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5725" data-stop="5850" role="menuitem">
+                      <span>UNII-3</span><span class="note">5725–5850 MHz</span>
+                    </button>
+                  </div>`
                 : ""
             }
           </div>
@@ -3244,11 +3262,6 @@ export class DebugView extends Component {
             <button type="button" class="debug-axis-pill-main mono" data-action="${this.scanAutoY ? "toggle-axis-menu" : "scan-reset-y"}" data-menu="scan-y" title="${this.scanAutoY ? "Auto Y-axis scaling is ON (fits scanned dBm range) — click to choose a scale preset, or drag the Y-axis" : "Click to reset Y-axis range to Auto Y"}">
               ${icons.target(13)}<span>${this.scanAutoY ? "Auto Y" : `Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} dBm`}</span>
             </button>
-            ${
-              !this.scanAutoY
-                ? `<button type="button" class="debug-axis-pill-clear" data-action="scan-reset-y" aria-label="Reset to Auto Y" title="Reset Y-axis range to Auto Y">${icons.close(11)}</button>`
-                : ""
-            }
             <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-y" aria-expanded="${this.openAxisMenu === "scan-y"}" title="Choose spectrum Y-axis dBm scale">
               ${icons.chevronDown(12)}
             </button>
@@ -3298,12 +3311,29 @@ export class DebugView extends Component {
         <div class="debug-chart-foot">
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
-              <button type="button" class="debug-axis-pill-main mono" data-action="scan-reset-zoom" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range — drag X-axis or Shift+drag chart to zoom"}">
+              <button type="button" class="debug-axis-pill-main mono" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="wf-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range — click to choose a frequency band preset, or drag X-axis to zoom"}">
                 ${icons.target(13)}<span>${isFreqZoomed ? `X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz` : "Auto X"}</span>
               </button>
+              <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="wf-x" aria-expanded="${this.openAxisMenu === "wf-x"}" title="Choose frequency range">
+                ${icons.chevronDown(12)}
+              </button>
               ${
-                isFreqZoomed
-                  ? `<button type="button" class="debug-axis-pill-clear" data-action="scan-reset-zoom" aria-label="Reset to Auto X" title="Reset frequency zoom to Auto X">${icons.close(11)}</button>`
+                this.openAxisMenu === "wf-x"
+                  ? `<div class="debug-axis-menu mono" role="menu" aria-label="Waterfall X-axis frequency range">
+                      <button type="button" class="debug-axis-menu-item ${!isFreqZoomed ? "is-active" : ""}" data-action="scan-reset-zoom" role="menuitem">
+                        <span>Auto X</span><span class="note">Full scan</span>
+                      </button>
+                      <div class="debug-axis-menu-sep"></div>
+                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5650 && Math.round(this.scanZoomStopMHz!) === 5917 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5650" data-stop="5917" role="menuitem">
+                        <span>Raceband</span><span class="note">5650–5917 MHz</span>
+                      </button>
+                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5180 && Math.round(this.scanZoomStopMHz!) === 5320 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5180" data-stop="5320" role="menuitem">
+                        <span>UNII-1</span><span class="note">5180–5320 MHz</span>
+                      </button>
+                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5725 && Math.round(this.scanZoomStopMHz!) === 5850 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5725" data-stop="5850" role="menuitem">
+                        <span>UNII-3</span><span class="note">5725–5850 MHz</span>
+                      </button>
+                    </div>`
                   : ""
               }
             </div>
@@ -3311,11 +3341,6 @@ export class DebugView extends Component {
               <button type="button" class="debug-axis-pill-main mono" data-action="${!isWfRowsZoomed ? "toggle-axis-menu" : "wf-reset-rows"}" data-menu="wf-y" title="${!isWfRowsZoomed ? "Auto Y waterfall depth (80 passes) — click to choose a pass depth, or drag the Y-axis" : "Click to reset waterfall pass depth to Auto Y (80 passes)"}">
                 ${icons.target(13)}<span>${!isWfRowsZoomed ? "Auto Y" : `Y: ${this.spectrumAcc.visibleRows} passes`}</span>
               </button>
-              ${
-                isWfRowsZoomed
-                  ? `<button type="button" class="debug-axis-pill-clear" data-action="wf-reset-rows" aria-label="Reset to Auto Y" title="Reset waterfall pass depth to Auto Y (80 passes)">${icons.close(11)}</button>`
-                  : ""
-              }
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="wf-y" aria-expanded="${this.openAxisMenu === "wf-y"}" title="Choose waterfall vertical pass depth">
                 ${icons.chevronDown(12)}
               </button>

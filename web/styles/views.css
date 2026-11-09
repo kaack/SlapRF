@@ -3978,7 +3978,6 @@ body.is-gate-dragging * {
   border-color: #3a3f48;
 }
 .debug-axis-pill-main,
-.debug-axis-pill-clear,
 .debug-axis-pill-arrow {
   display: inline-flex;
   align-items: center;
@@ -4006,18 +4005,6 @@ body.is-gate-dragging * {
 }
 .debug-axis-pill.is-unarmed .debug-axis-pill-main svg {
   color: var(--text-3);
-}
-.debug-axis-pill-clear {
-  width: 22px;
-  margin-left: -2px;
-  color: var(--text-3);
-}
-.debug-axis-pill-clear:last-child {
-  border-radius: 0 calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 1px) 0;
-}
-.debug-axis-pill-clear:hover {
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text);
 }
 .debug-axis-pill-arrow {
   width: 22px;
@@ -4077,13 +4064,12 @@ body.is-gate-dragging * {
   color: var(--text);
 }
 .debug-axis-menu-item.is-active {
-  background: var(--accent-soft);
-  color: var(--accent);
+  background: var(--surface-3);
+  color: var(--text);
   font-weight: 600;
 }
 .debug-axis-menu-item.is-active .note {
-  color: var(--accent);
-  opacity: 0.85;
+  color: var(--text-2);
 }
 .debug-subbar > .debug-connect-actions {
   margin-left: auto;
