@@ -3927,9 +3927,10 @@ body.is-gate-dragging * {
   flex-wrap: wrap;
   gap: 8px 12px;
   min-height: 30px;
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--border);
+  margin-top: 6px;
+  padding-bottom: 12px;
+  margin-bottom: 12px;
+  border-bottom: 1px solid var(--border);
 }
 .debug-chart-legend > .debug-connect-actions {
   margin-left: auto;
@@ -4503,7 +4504,9 @@ body.is-gate-dragging * {
 .debug-table-scroll {
   width: 100%;
   overflow-x: auto;
-  margin-top: 8px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
 }
 .debug-noise-table {
   margin-top: 0;
