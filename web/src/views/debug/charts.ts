@@ -759,8 +759,13 @@ export function drawSignalOverTimeCanvas(
       const rb = racebandName(f) || `Ch${bestCh + 1}`;
       const v = best.dbm[bestCh];
       const fl = best.floor[bestCh];
+      let chMax = v;
+      for (let k = 0; k < pts.length; k++) {
+        const kv = pts[k].dbm[bestCh];
+        if (kv !== undefined && kv > chMax) chMax = kv;
+      }
       setSignalReadout(
-        `<span><strong>${rb}</strong> (${f} MHz) · <strong>${v} dBm</strong>${fl && fl > -127 ? ` · fl ${fl}` : ""} · -${ageSec}s (#${best.n})</span>`
+        `<span><strong>${rb}</strong> (${f} MHz) · <strong>${v} dBm</strong> · max <strong>${chMax} dBm</strong>${fl && fl > -127 ? ` · fl ${fl}` : ""} · -${ageSec}s (#${best.n})</span>`
       );
     } else {
       setSignalReadout(`<span class="note">Point at chart to inspect channel, dBm &amp; sweep age</span>`);
@@ -1287,7 +1292,8 @@ export function drawSpectrumCanvas(
   }
 
   // Running average trace (B-spline smoothed)
-  const avg = opts.showAverage ? acc.getAverage() : null;
+  const avgAll = acc.getAverage();
+  const avg = opts.showAverage ? avgAll : null;
   if (avg && avg.length === s.dbm.length) {
     ctx.strokeStyle = "#38bdf8";
     ctx.globalAlpha = 0.8;
@@ -1299,37 +1305,22 @@ export function drawSpectrumCanvas(
     ctx.globalAlpha = 1;
   }
 
-  // Live / current scan trace (B-spline smoothed) & peak within visible range
+  // Live / current scan trace (monotone spline)
   ctx.strokeStyle = tokens.accent;
   ctx.lineWidth = 1.75;
-  let peakIdx = -1;
+  let maxHoldPeakIdx = -1;
+  const holdArr = acc.maxHold && acc.maxHold.length === s.dbm.length ? acc.maxHold : s.dbm;
   const livePts: Array<{ x: number; y: number }> = [];
   for (let i = 0; i < s.dbm.length; i++) {
     const f = s.start + i * s.step;
-    if (f >= vStart && f <= vStop && (peakIdx < 0 || s.dbm[i] > s.dbm[peakIdx])) {
-      peakIdx = i;
+    if (f >= vStart && f <= vStop && (maxHoldPeakIdx < 0 || holdArr[i] > holdArr[maxHoldPeakIdx])) {
+      maxHoldPeakIdx = i;
     }
     livePts.push({ x: xOf(f), y: yOf(s.dbm[i]) });
   }
   ctx.beginPath();
   traceBSpline(ctx, livePts, true);
   ctx.stroke();
-
-  // Peak dot & label inside visible range
-  if (peakIdx >= 0) {
-    const peakFreq = s.start + peakIdx * s.step;
-    const px = xOf(peakFreq);
-    const py = yOf(s.dbm[peakIdx]);
-    ctx.fillStyle = tokens.accent;
-    ctx.beginPath();
-    ctx.arc(px, py, 3.5, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = tokens.text;
-    ctx.font = `10.5px ${tokens.fontMono}`;
-    ctx.textAlign = px > W - R - 130 ? "right" : "left";
-    ctx.textBaseline = "bottom";
-    ctx.fillText(`${peakFreq} MHz · ${s.dbm[peakIdx]} dBm`, px + (px > W - R - 130 ? -6 : 6), Math.max(T + 22, py - 5));
-  }
 
   ctx.restore();
 
@@ -1353,6 +1344,14 @@ export function drawSpectrumCanvas(
       ctx.stroke();
       ctx.setLineDash([]);
 
+      if (opts.showMaxHold && acc.maxHold && acc.maxHold[idx] !== undefined) {
+        const mhy = Math.max(T + 3, Math.min(T + plotH - 3, yOf(acc.maxHold[idx])));
+        ctx.fillStyle = "rgba(212, 255, 58, 0.45)";
+        ctx.beginPath();
+        ctx.arc(hx, mhy, 3, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
       const cy = Math.max(T + 3, Math.min(T + plotH - 3, hy));
       ctx.fillStyle = tokens.accent;
       ctx.beginPath();
@@ -1360,16 +1359,20 @@ export function drawSpectrumCanvas(
       ctx.fill();
 
       const hint = nearestBandHint(f);
+      const maxVal = acc.maxHold && acc.maxHold[idx] !== undefined ? acc.maxHold[idx] : s.dbm[idx];
+      const avgVal = avgAll && avgAll[idx] !== undefined ? avgAll[idx] : null;
       setSpecReadout(
-        `<span><strong>${f} MHz</strong> (${hint}) · Cur <strong>${s.dbm[idx]} dBm</strong>${avg ? ` · Avg ${avg[idx].toFixed(1)}` : ""}${acc.maxHold ? ` · Max ${acc.maxHold[idx]}` : ""}</span>`
+        `<span><strong>${f} MHz</strong> (${hint}) · Cur <strong>${s.dbm[idx]} dBm</strong> · Max <strong>${maxVal} dBm</strong>${avgVal !== null ? ` · Avg ${avgVal.toFixed(1)} dBm` : ""}</span>`
       );
     }
   }
   if (!hoveredSpec) {
-    if (peakIdx >= 0) {
-      const pf = s.start + peakIdx * s.step;
+    if (maxHoldPeakIdx >= 0) {
+      const pf = s.start + maxHoldPeakIdx * s.step;
+      const maxDbm = holdArr[maxHoldPeakIdx];
+      const curDbm = s.dbm[maxHoldPeakIdx];
       setSpecReadout(
-        `<span>Peak <strong>${pf} MHz</strong> (${nearestBandHint(pf)}) · <strong>${s.dbm[peakIdx]} dBm</strong> <span class="note">· Point at chart</span></span>`
+        `<span>Max peak <strong>${pf} MHz</strong> (${nearestBandHint(pf)}) · Max <strong>${maxDbm} dBm</strong> · Cur ${curDbm} dBm <span class="note">· Point at chart</span></span>`
       );
     } else {
       setSpecReadout(`<span class="note">Point at chart to inspect frequency &amp; dBm</span>`);
