@@ -1848,6 +1848,10 @@ body.is-gate-dragging * {
   border-top: 0;
   padding-top: 4px;
 }
+.settings-intro {
+  min-width: 0;
+  max-width: 100%;
+}
 .settings-intro h2 {
   font-size: 14px;
   font-weight: 600;
@@ -2029,6 +2033,7 @@ body.is-gate-dragging * {
     align-items: baseline;
     gap: 4px;
     min-width: 0;
+    max-width: 100%;
   }
   .settings-intro-snippet.is-clickable {
     cursor: pointer;
@@ -2036,6 +2041,7 @@ body.is-gate-dragging * {
   .settings-intro-snippet-text {
     flex: 0 1 auto;
     min-width: 0;
+    max-width: min(calc(100% - 76px), 42ch);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -4369,7 +4375,7 @@ body.is-gate-dragging * {
 .debug-bars {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 5px;
 }
 .debug-bar-row {
   display: grid;
@@ -4377,7 +4383,30 @@ body.is-gate-dragging * {
   align-items: center;
   gap: 10px;
   font-size: 12px;
-  height: 20px;
+  height: 24px;
+  padding: 0 6px;
+  margin: 0 -6px;
+  border-radius: 5px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.12s ease, opacity 0.12s ease;
+}
+.debug-bar-row:hover {
+  background: var(--surface-2);
+}
+.debug-bar-row.is-muted {
+  opacity: 0.42;
+}
+.debug-bar-row.is-muted:hover {
+  opacity: 0.68;
+}
+.debug-status-ch.is-muted {
+  opacity: 0.38;
+  text-decoration: line-through;
+}
+.debug-live-ch-hint {
+  font-size: 11px;
+  white-space: nowrap;
 }
 .debug-bar-label {
   color: var(--text-3);
@@ -4398,7 +4427,6 @@ body.is-gate-dragging * {
   position: absolute;
   inset: 0 auto 0 0;
   background: linear-gradient(90deg, rgba(56, 189, 248, 0.55), var(--accent));
-  transition: width 0.09s linear;
 }
 .debug-bar-peak {
   position: absolute;
@@ -5041,6 +5069,9 @@ body.is-gate-dragging * {
 @media (max-width: 680px) {
   .debug-bar-row {
     grid-template-columns: 70px minmax(0, 1fr) 62px 48px;
+  }
+  .debug-live-ch-hint {
+    display: none;
   }
   .debug-scale {
     margin: 6px 130px 0 80px;
