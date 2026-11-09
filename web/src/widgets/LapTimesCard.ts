@@ -30,7 +30,7 @@ export class LapTimesCard extends Component {
 
     el.innerHTML = `
       <header class="card-head">
-        <div><h2>Lap times</h2><p data-slot="subtitle"></p></div>
+        <div class="settings-intro"><h2>Lap times</h2><p><span data-slot="subtitle"></span></p></div>
       </header>
       <div class="canvas-host canvas-host-lg" data-slot="chart"></div>
       <div class="chart-legend" data-slot="legend"></div>

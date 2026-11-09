@@ -1,39 +1,50 @@
 /**
- * Collapses multi-line `.settings-intro` descriptions into a single-line snippet
- * with `… (see more)` when `.settings-section` stacks into a single column
+ * Collapses `.settings-intro` section descriptions into a single-line snippet
+ * with `… (see more)` when sections stack into a single column
  * (`@media (max-width: 1260px)`), expanding to the full description on click.
  */
 
 interface IntroState {
   intro: HTMLElement;
+  key: string;
+  firstP: HTMLParagraphElement;
   snippetEl: HTMLParagraphElement;
   snippetTextEl: HTMLSpanElement;
   moreBtn: HTMLButtonElement;
-  hasMultipleParagraphs: boolean;
-  firstParaText: string;
   update: () => void;
 }
 
 const managedIntros = new WeakMap<HTMLElement, IntroState>();
+const expandedKeys = new Set<string>();
+
+function extractParaText(p: HTMLElement): string {
+  let raw = "";
+  p.childNodes.forEach((node) => {
+    if (node instanceof HTMLElement && node.classList.contains("settings-intro-less")) {
+      return;
+    }
+    raw += node.textContent ?? "";
+  });
+  return raw.replace(/\s+/g, " ").trim();
+}
 
 function updateIntro(state: IntroState): void {
-  const { snippetTextEl, moreBtn, hasMultipleParagraphs, firstParaText } = state;
+  const { snippetTextEl, moreBtn, firstP } = state;
+  const firstParaText = extractParaText(firstP);
+  if (!firstParaText) {
+    moreBtn.hidden = true;
+    state.snippetEl.classList.remove("is-clickable");
+    return;
+  }
   if (snippetTextEl.textContent !== firstParaText) {
     snippetTextEl.textContent = firstParaText;
   }
-  if (hasMultipleParagraphs) {
-    moreBtn.hidden = false;
-    const overflowsWithBtn = snippetTextEl.scrollWidth > snippetTextEl.clientWidth + 1;
-    if (!overflowsWithBtn) {
-      snippetTextEl.textContent = `${firstParaText}…`;
-    }
-    state.snippetEl.classList.add("is-clickable");
-    return;
+  moreBtn.hidden = false;
+  const overflowsWithBtn = snippetTextEl.scrollWidth > snippetTextEl.clientWidth + 1;
+  if (!overflowsWithBtn) {
+    snippetTextEl.textContent = `${firstParaText}…`;
   }
-  moreBtn.hidden = true;
-  const overflowsLine = snippetTextEl.scrollWidth > snippetTextEl.clientWidth + 1;
-  moreBtn.hidden = !overflowsLine;
-  state.snippetEl.classList.toggle("is-clickable", overflowsLine);
+  state.snippetEl.classList.add("is-clickable");
 }
 
 function enhanceIntro(intro: HTMLElement, ro: ResizeObserver): void {
@@ -45,10 +56,8 @@ function enhanceIntro(intro: HTMLElement, ro: ResizeObserver): void {
   const ps = Array.from(intro.querySelectorAll<HTMLParagraphElement>(":scope > p"));
   if (ps.length === 0) return;
 
-  const firstParaText = (ps[0].textContent ?? "").replace(/\s+/g, " ").trim();
-  if (!firstParaText) return;
-
-  const hasMultipleParagraphs = ps.length > 1;
+  const headingText = (intro.querySelector("h2, h3")?.textContent ?? "").replace(/\s+/g, " ").trim();
+  const key = headingText || (ps[0].textContent ?? "").slice(0, 40);
 
   const fullWrap = document.createElement("div");
   fullWrap.className = "settings-intro-full";
@@ -64,6 +73,7 @@ function enhanceIntro(intro: HTMLElement, ro: ResizeObserver): void {
   lessBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     intro.classList.remove("is-expanded");
+    if (key) expandedKeys.delete(key);
     state.update();
   });
   lastP.appendChild(document.createTextNode(" "));
@@ -74,7 +84,7 @@ function enhanceIntro(intro: HTMLElement, ro: ResizeObserver): void {
 
   const snippetTextEl = document.createElement("span");
   snippetTextEl.className = "settings-intro-snippet-text";
-  snippetTextEl.textContent = firstParaText;
+  snippetTextEl.textContent = extractParaText(ps[0]);
 
   const moreBtn = document.createElement("button");
   moreBtn.type = "button";
@@ -85,6 +95,7 @@ function enhanceIntro(intro: HTMLElement, ro: ResizeObserver): void {
     if (moreBtn.hidden) return;
     e.stopPropagation();
     intro.classList.add("is-expanded");
+    if (key) expandedKeys.add(key);
   };
   moreBtn.addEventListener("click", expand);
   snippetEl.addEventListener("click", expand);
@@ -95,16 +106,22 @@ function enhanceIntro(intro: HTMLElement, ro: ResizeObserver): void {
   intro.appendChild(snippetEl);
   intro.appendChild(fullWrap);
   intro.classList.add("has-intro-collapse");
+  if (key && expandedKeys.has(key)) {
+    intro.classList.add("is-expanded");
+  }
 
   const state: IntroState = {
     intro,
+    key,
+    firstP: ps[0],
     snippetEl,
     snippetTextEl,
     moreBtn,
-    hasMultipleParagraphs,
-    firstParaText,
     update: () => updateIntro(state),
   };
+
+  const textMo = new MutationObserver(() => state.update());
+  textMo.observe(ps[0], { childList: true, characterData: true, subtree: true });
 
   managedIntros.set(intro, state);
   ro.observe(intro);

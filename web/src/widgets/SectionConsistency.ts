@@ -47,7 +47,7 @@ export class SectionStats extends Component {
   private render(): void {
     const head = `
       <header class="card-head">
-        <div>
+        <div class="settings-intro">
           <h2>Section stats</h2>
           <p>Your best and typical time through each section, across every lap this session. <strong>Lost vs best</strong> is the gap between the two — the time you usually leave on the table there.</p>
         </div>
@@ -124,7 +124,10 @@ export class PracticeRecommendation extends Component {
   private render(): void {
     const head = `
       <header class="card-head">
-        <div><h2>Recommendation</h2></div>
+        <div class="settings-intro">
+          <h2>Recommendation</h2>
+          <p>Plain-language coaching insights based on where your typical pass loses the most time compared to your best.</p>
+        </div>
       </header>`;
 
     const { ready, ranked } = loadConsistency(this.store);

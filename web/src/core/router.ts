@@ -50,18 +50,18 @@ export const ROUTES: RouteMeta[] = [
     simOnly: true,
   },
   {
-    id: "setup",
-    label: "Settings",
-    title: "Settings",
-    subtitle: "Timing rules, announcer, MultiGP LiveTime, and data source",
-    icon: () => icons.sliders(20),
-  },
-  {
     id: "flasher",
     label: "Flasher",
     title: "Flasher",
     subtitle: "Flash or read Seeed XIAO ESP32-C5 timers over USB directly from the browser",
     icon: () => icons.cpu(20),
+  },
+  {
+    id: "setup",
+    label: "Settings",
+    title: "Settings",
+    subtitle: "Timing rules, announcer, MultiGP LiveTime, and data source",
+    icon: () => icons.sliders(20),
   },
   {
     id: "debug",

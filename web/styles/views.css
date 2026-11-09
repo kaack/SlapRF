@@ -1848,6 +1848,10 @@ body.is-gate-dragging * {
   border-top: 0;
   padding-top: 4px;
 }
+.settings-intro {
+  min-width: 0;
+  max-width: 100%;
+}
 .settings-intro h2 {
   font-size: 14px;
   font-weight: 600;
@@ -2029,6 +2033,7 @@ body.is-gate-dragging * {
     align-items: baseline;
     gap: 4px;
     min-width: 0;
+    max-width: 100%;
   }
   .settings-intro-snippet.is-clickable {
     cursor: pointer;
@@ -2036,6 +2041,7 @@ body.is-gate-dragging * {
   .settings-intro-snippet-text {
     flex: 0 1 auto;
     min-width: 0;
+    max-width: min(calc(100% - 76px), 42ch);
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;

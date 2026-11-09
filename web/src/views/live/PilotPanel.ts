@@ -27,12 +27,12 @@ export class PilotPanel extends Component {
     el.innerHTML = `
       <div class="stat-row" data-slot="stats"></div>
       <section class="card">
-        <header class="card-head"><div><h2>Signal at each gate</h2><p>This pilot's 5.8 GHz signal as every gate sees it · pick one gate to see and adjust its threshold · red pass lines didn't count — hover for why</p></div></header>
+        <header class="card-head"><div class="settings-intro"><h2>Signal at each gate</h2><p>This pilot's 5.8 GHz signal as every gate sees it · pick one gate to see and adjust its threshold · red pass lines didn't count — hover for why</p></div></header>
         <div data-slot="rssi"></div>
       </section>
       <section class="card" data-slot="laptimes"></section>
       <section class="card card-flush">
-        <header class="card-head"><div><h2>Laps</h2><p>Completed laps, newest first · each section against the pilot's own best</p></div></header>
+        <header class="card-head"><div class="settings-intro"><h2>Laps</h2><p>Completed laps, newest first · each section against the pilot's own best</p></div></header>
         <div data-slot="laps"></div>
       </section>`;
 

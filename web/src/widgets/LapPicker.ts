@@ -317,7 +317,7 @@ export class LapPicker extends Component {
       : "";
     return `
       <header class="card-head">
-        <div>
+        <div class="settings-intro">
           <h2>Lap stats</h2>
           <p>Click any bar to inspect that lap, then choose what to compare it against.</p>
         </div>
