@@ -149,6 +149,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/status", s.handleGetStatus)
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/timing/toggle-arm", s.handleToggleArm)
+	mux.HandleFunc("/api/livetime/toggle", s.handleToggleLiveTime)
 	mux.HandleFunc("/api/pilots/update", s.handleUpdatePilot)
 	mux.HandleFunc("/api/track/update", s.handleUpdateGate)
 	mux.HandleFunc("/api/track/add", s.handleAddGate)
@@ -265,6 +266,23 @@ func (s *Server) handleToggleArm(w http.ResponseWriter, r *http.Request) {
 	if s.laprfServer.Status().ConnectedClients == 0 {
 		eng := s.activeEngine()
 		eng.SetRaceArmed(!eng.IsRaceArmed())
+	}
+	s.handleGetStatus(w, r)
+}
+
+func (s *Server) handleToggleLiveTime(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		Enabled *bool `json:"enabled"`
+	}
+	_ = json.NewDecoder(r.Body).Decode(&body)
+	if body.Enabled != nil {
+		s.laprfServer.SetEnabled(*body.Enabled)
+	} else {
+		s.laprfServer.SetEnabled(!s.laprfServer.Status().Enabled)
 	}
 	s.handleGetStatus(w, r)
 }

@@ -167,6 +167,7 @@ export interface PilotTrackSummary {
 }
 
 export interface LiveTimeStatus {
+  enabled: boolean;
   listenAddr: string;
   connectedClients: number;
   detectionsSent: number;

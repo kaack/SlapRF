@@ -49,7 +49,7 @@ export class SetupView extends Component {
 
     this.adopt(new TimingRulesEditor(this.slot("rules"), store, api));
     this.adopt(new AnnouncerSettings(this.slot("announcer"), announcer));
-    this.adopt(new LiveTimeCard(this.slot("livetime"), store));
+    this.adopt(new LiveTimeCard(this.slot("livetime"), store, api));
     this.adopt(new DataSourceCard(this.slot("source"), store, api));
   }
 }

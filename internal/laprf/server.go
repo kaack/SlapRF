@@ -15,6 +15,7 @@ import (
 
 // LiveTimeStatus represents the current connection state of the MultiGP LiveTime TCP bridge.
 type LiveTimeStatus struct {
+	Enabled          bool      `json:"enabled"`
 	ListenAddr       string    `json:"listenAddr"`
 	ConnectedClients int       `json:"connectedClients"`
 	DetectionsSent   uint64    `json:"detectionsSent"`
@@ -30,6 +31,7 @@ type Server struct {
 	subscribed       map[*tracker.Engine]bool
 	listener         net.Listener
 	mu               sync.RWMutex
+	enabled          bool
 	clients          map[net.Conn]struct{}
 	detectionsSent   uint64
 	statusFramesSent uint64
@@ -115,12 +117,34 @@ func (s *Server) Stop() {
 	s.mu.Unlock()
 }
 
+// SetEnabled enables or disables the MultiGP LiveTime integration. When disabled, any active
+// client connections are closed and new connections or crossing broadcasts are ignored.
+func (s *Server) SetEnabled(enabled bool) {
+	s.mu.Lock()
+	s.enabled = enabled
+	if !enabled {
+		for c := range s.clients {
+			_ = c.Close()
+			delete(s.clients, c)
+		}
+	}
+	s.mu.Unlock()
+}
+
+// IsEnabled reports whether MultiGP LiveTime integration is currently enabled.
+func (s *Server) IsEnabled() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.enabled
+}
+
 // Status returns the current LiveTime bridge diagnostics.
 func (s *Server) Status() LiveTimeStatus {
 	eng := s.activeEngine()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return LiveTimeStatus{
+		Enabled:          s.enabled,
 		ListenAddr:       s.addr,
 		ConnectedClients: len(s.clients),
 		DetectionsSent:   s.detectionsSent,
@@ -140,6 +164,10 @@ func (s *Server) acceptLoop() {
 			default:
 				continue
 			}
+		}
+		if !s.IsEnabled() {
+			_ = conn.Close()
+			continue
 		}
 		log.Printf("[LapRF/LiveTime] Client connected from %s", conn.RemoteAddr())
 		s.mu.Lock()
@@ -342,9 +370,10 @@ func (s *Server) statusHeartbeatLoop() {
 
 func (s *Server) broadcastStatusFrame() {
 	s.mu.RLock()
+	enabled := s.enabled
 	numClients := len(s.clients)
 	s.mu.RUnlock()
-	if numClients == 0 {
+	if !enabled || numClients == 0 {
 		return
 	}
 
@@ -405,7 +434,7 @@ func (s *Server) OnTelemetryFrame(_ domain.PuckTelemetryFrame) {}
 func (s *Server) OnGateCrossing(ev domain.GateCrossingEvent) {
 	// Only crossings at the Start/Finish Gate Puck are sent to MultiGP LiveTime!
 	// Intermediate sector gate crossings are handled by our companion Sector Dashboard.
-	if !ev.IsStartFinish {
+	if !ev.IsStartFinish || !s.IsEnabled() {
 		return
 	}
 	pkt := BuildDetectionPacket(

@@ -83,6 +83,12 @@ export class ApiClient {
     this.store.applyStatus(await this.transport.request<StatusResponse>("POST", "/api/timing/toggle-arm"));
   }
 
+  public async setLiveTimeEnabled(enabled: boolean): Promise<void> {
+    this.store.applyStatus(
+      await this.transport.request<StatusResponse>("POST", "/api/livetime/toggle", { enabled })
+    );
+  }
+
   public async simulatePack(): Promise<void> {
     this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/sim/pack-burst"));
   }

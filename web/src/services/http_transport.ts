@@ -49,6 +49,7 @@ export class HttpRealTransport implements ApiTransport {
     echoWindowSec: 3,
   };
   private fallbackArmed = true;
+  private fallbackLiveTimeEnabled = false;
 
   public async request<T = unknown>(method: "GET" | "POST", url: string, body?: unknown): Promise<T> {
     try {
@@ -152,6 +153,11 @@ export class HttpRealTransport implements ApiTransport {
       this.fallbackArmed = !this.fallbackArmed;
       return this.offlineStatus();
     }
+    if (url === "/api/livetime/toggle") {
+      const b = (body ?? {}) as { enabled?: boolean };
+      this.fallbackLiveTimeEnabled = b.enabled !== undefined ? b.enabled : !this.fallbackLiveTimeEnabled;
+      return this.offlineStatus();
+    }
     if (url === "/api/status") {
       return this.offlineStatus();
     }
@@ -249,6 +255,7 @@ export class HttpRealTransport implements ApiTransport {
       simulatorRunning: false,
       raceArmed: this.fallbackArmed,
       liveTimeStatus: {
+        enabled: this.fallbackLiveTimeEnabled,
         listenAddr: ":5403",
         connectedClients: 0,
         detectionsSent: 0,
