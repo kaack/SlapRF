@@ -12,6 +12,206 @@ import {
   TimerReadout,
 } from "./esp_flasher";
 
+export interface TimerPeerSpoke {
+  slot: number;
+  fp: string;
+  label: string;
+  profile?: number;
+  fw?: string;
+  mac?: string;
+  online?: boolean;
+  msAgo?: number;
+  frames?: number;
+}
+
+export interface TimerParentHub {
+  fp?: string;
+  label?: string;
+  mac?: string;
+  fw?: string;
+  profile?: number;
+  channel?: number;
+  beaconMsAgo?: number;
+  linked: boolean;
+}
+
+export interface KnownHardwareTimer {
+  fp: string;
+  role: "hub" | "spoke";
+  label: string;
+  profile: number;
+  fw?: string;
+  mac?: string;
+  slot?: number;
+  channel?: number;
+  wifiSSID?: string;
+  parentHubFp?: string;
+  lastSeenMs: number;
+}
+
+const KNOWN_TIMERS_STORAGE_KEY = "slaprf.hw.knownTimers";
+
+const SEEDED_KNOWN_TIMERS: KnownHardwareTimer[] = [
+  {
+    fp: "BE7C0001",
+    role: "hub",
+    label: "H1",
+    profile: 1,
+    fw: "v0.1.4",
+    mac: "10:BD:A3:C7:F3:C0",
+    slot: 1,
+    channel: 1,
+    lastSeenMs: 1731152894000,
+  },
+  {
+    fp: "DA9B4CA7",
+    role: "spoke",
+    label: "S1",
+    profile: 1,
+    fw: "v0.1.4",
+    mac: "10:BD:A3:C8:0B:88",
+    slot: 2,
+    channel: 1,
+    parentHubFp: "BE7C0001",
+    lastSeenMs: 1731161000000,
+  },
+];
+
+export function getKnownHardwareTimers(): KnownHardwareTimer[] {
+  const map = new Map<string, KnownHardwareTimer>();
+  for (const seed of SEEDED_KNOWN_TIMERS) {
+    map.set(seed.fp.toUpperCase(), { ...seed, fp: seed.fp.toUpperCase() });
+  }
+  if (typeof window !== "undefined" && window.localStorage) {
+    try {
+      const raw = window.localStorage.getItem(KNOWN_TIMERS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (Array.isArray(parsed)) {
+          for (const item of parsed) {
+            if (item && typeof item === "object" && typeof (item as KnownHardwareTimer).fp === "string") {
+              const t = item as KnownHardwareTimer;
+              const fp = t.fp.toUpperCase();
+              if (fp && fp !== "00000001" && !fp.startsWith("SIM000")) {
+                const prev = map.get(fp);
+                map.set(fp, { ...prev, ...t, fp });
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }
+  return [...map.values()].sort((a, b) => b.lastSeenMs - a.lastSeenMs);
+}
+
+export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { fp: string }): void {
+  const fp = (entry.fp || "").trim().toUpperCase();
+  if (!fp || fp === "00000001" || fp.startsWith("SIM000")) return;
+  const list = getKnownHardwareTimers();
+  const byFp = new Map<string, KnownHardwareTimer>(list.map((t) => [t.fp.toUpperCase(), t]));
+  const prev = byFp.get(fp);
+  const role: "hub" | "spoke" = entry.role ?? prev?.role ?? "hub";
+  const profile = entry.profile ?? prev?.profile ?? 1;
+  const channel = entry.channel ?? prev?.channel ?? 1;
+  const slot = entry.slot ?? prev?.slot ?? (role === "hub" ? 1 : undefined);
+
+  // If a Spoke has an assigned TDMA slot (>= 2), associate it with the most recently seen Hub on the same profile.
+  let parentHubFp = entry.parentHubFp ?? prev?.parentHubFp;
+  if (role === "spoke" && slot && slot >= 2 && !parentHubFp) {
+    const matchingHub = list.find((t) => t.role === "hub" && t.profile === profile) ?? list.find((t) => t.role === "hub");
+    if (matchingHub) {
+      parentHubFp = matchingHub.fp;
+    }
+  }
+
+  // If a Spoke claims a TDMA slot (2..7) under the same Hub, clear that slot from any older Spoke record that was replaced.
+  if (role === "spoke" && slot && slot >= 2) {
+    for (const other of byFp.values()) {
+      if (other.fp !== fp && other.role === "spoke" && other.slot === slot && (!parentHubFp || other.parentHubFp === parentHubFp)) {
+        other.slot = undefined;
+      }
+    }
+  }
+
+  const merged: KnownHardwareTimer = {
+    fp,
+    role,
+    label: entry.label || prev?.label || (role === "hub" ? "H1" : "S1"),
+    profile,
+    fw: entry.fw || prev?.fw,
+    mac: entry.mac || prev?.mac,
+    slot,
+    channel,
+    wifiSSID: entry.wifiSSID ?? prev?.wifiSSID,
+    parentHubFp: role === "spoke" ? parentHubFp : undefined,
+    lastSeenMs: entry.lastSeenMs ?? Date.now(),
+  };
+  byFp.set(fp, merged);
+
+  if (typeof window !== "undefined" && window.localStorage) {
+    try {
+      window.localStorage.setItem(KNOWN_TIMERS_STORAGE_KEY, JSON.stringify([...byFp.values()]));
+    } catch {
+      // ignore storage errors
+    }
+  }
+}
+
+export function recordKnownTimerStatus(s: TimerStatus): void {
+  recordKnownHardwareTimer({
+    fp: s.fp,
+    role: s.role === 1 ? "hub" : "spoke",
+    label: s.label,
+    profile: s.profile,
+    fw: s.fw,
+    mac: s.chip?.mac,
+    slot: s.slot || (s.role === 1 ? 1 : undefined),
+    channel: s.channel || 1,
+    parentHubFp: s.hub?.fp,
+    lastSeenMs: Date.now(),
+  });
+  if (s.role === 1 && Array.isArray(s.spokes)) {
+    for (const sp of s.spokes) {
+      if (sp.fp) {
+        recordKnownHardwareTimer({
+          fp: sp.fp,
+          role: "spoke",
+          label: sp.label,
+          profile: sp.profile ?? s.profile,
+          fw: sp.fw,
+          mac: sp.mac,
+          slot: sp.slot,
+          channel: s.channel || 1,
+          parentHubFp: s.fp,
+          lastSeenMs: Date.now(),
+        });
+      }
+    }
+  }
+}
+
+export function recordKnownTimerReadout(r: TimerReadout): void {
+  if (r.status) {
+    recordKnownTimerStatus(r.status);
+  }
+  const prof = FIRMWARE_PROFILES.find((p) => p.id === r.firmwareProfile);
+  recordKnownHardwareTimer({
+    fp: r.fingerprint,
+    role: r.role,
+    label: r.timerLabel,
+    profile: r.status?.profile ?? prof?.code ?? 1,
+    fw: r.firmwareVersion,
+    mac: r.status?.chip?.mac,
+    slot: r.status?.slot ?? (r.role === "hub" ? 1 : undefined),
+    channel: r.status?.channel ?? 1,
+    wifiSSID: r.wifiSSID || undefined,
+    lastSeenMs: Date.now(),
+  });
+}
+
 export interface TimerStatus {
   fw: string;
   role: number;
@@ -35,6 +235,9 @@ export interface TimerStatus {
   net: { mode: string; stations: number };
   channel: number;
   slot: number;
+  beaconMsAgo?: number;
+  hub?: TimerParentHub;
+  spokes?: TimerPeerSpoke[];
   scanLive?: boolean;
   freqsTemporary: boolean;
   chanMask?: number;
@@ -493,6 +696,7 @@ export class TimerConsole {
         const parsed = parseSlaprfConfigBlock(this.buf.subarray(magicAt, magicAt + CONFIG_LEN));
         if (parsed) {
           this.lastConfig = parsed;
+          recordKnownTimerReadout(parsed);
           this.subscribers.forEach((h) => h.onConfig?.(parsed));
           this.resolveWaiters("config", parsed);
           this.notifyStateChange();
@@ -535,6 +739,7 @@ export class TimerConsole {
             const st = msg as unknown as TimerStatus;
             const labelChanged = this.lastStatus?.label !== st.label || this.lastStatus?.fp !== st.fp;
             this.lastStatus = st;
+            recordKnownTimerStatus(st);
             this.subscribers.forEach((h) => h.onStatus?.(st));
             if (labelChanged) {
               this.notifyStateChange();

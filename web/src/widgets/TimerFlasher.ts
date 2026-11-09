@@ -12,7 +12,7 @@ import {
   flashXiaoC5OverWebSerial,
   isWebSerialSupported,
 } from "../services/esp_flasher";
-import { sharedTimerConsole } from "../services/timer_console";
+import { recordKnownTimerReadout, sharedTimerConsole } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
 const WIFI_SSID_STORAGE_KEY = "slaprf.wifi.ssid";
@@ -441,6 +441,7 @@ export class TimerFlasher extends Component {
   }
 
   public applyReadout(info: TimerReadout): void {
+    recordKnownTimerReadout(info);
     if (this.busy) return;
     this.role = info.role;
     if (info.timerLabel) {
@@ -506,6 +507,7 @@ export class TimerFlasher extends Component {
       );
 
       if (written) {
+        recordKnownTimerReadout(written);
         this.onReadout?.(written);
       }
       await this.api.provisionTimer(this.role, cleanLabel, this.firmwareProfileId, written?.fingerprint ?? "");

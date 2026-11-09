@@ -2,7 +2,18 @@ import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { FIRMWARE_PROFILES, TimerReadout } from "../services/esp_flasher";
-import { BootLog, LiveSample, ScanResult, sharedTimerConsole, TimerConsole, TimerStatus } from "../services/timer_console";
+import {
+  BootLog,
+  getKnownHardwareTimers,
+  KnownHardwareTimer,
+  LiveSample,
+  recordKnownHardwareTimer,
+  ScanResult,
+  sharedTimerConsole,
+  TimerConsole,
+  TimerStatus,
+} from "../services/timer_console";
+import { DetectedTimer } from "../types/models";
 import {
   buildFileStamp,
   CHANNEL_COLORS,
@@ -113,6 +124,8 @@ export class DebugView extends Component {
   private readonly spectrumAcc = new SpectrumAccumulator();
   private readonly healthHistory = new HealthHistory();
   private pilots: PilotThresholdInfo[] = [];
+  private serverTimers: DetectedTimer[] = [];
+  private serverSimActive = false;
   private hasServer = false;
 
   private signalWindowSec = 2.5;
@@ -248,6 +261,7 @@ export class DebugView extends Component {
         }
         this.renderConnection();
         this.renderStatus();
+        this.renderNetworkView();
         this.renderLiveHead();
         if (firstStatus || emergencyChanged || freqsChanged || rfChanged || scanChanged || maskChanged) {
           if (freqsChanged) this.renderLive();
@@ -323,6 +337,7 @@ export class DebugView extends Component {
       onConfig: (c) => {
         const line = `[config] ${c.role} "${c.timerLabel}" profile=${c.firmwareProfile} fp=${c.fingerprint} fw=${c.firmwareVersion} ch=${c.frequenciesMHz.join(",")}`;
         this.appendLog(line);
+        this.renderNetworkView();
         if (Date.now() < this.serialAwaitUntil) {
           this.appendSerialLine(line);
         }
@@ -415,6 +430,13 @@ export class DebugView extends Component {
               </div>
             </div>
           </div>
+        </section>
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Network view</h2>
+            <p>Shows how this timer sits in the 2.4 GHz course network: when connected to a Hub (parent, TDMA slot 1), lists the child Spokes tied to it across TDMA slots 2–7; when connected to a Spoke (child), shows the parent Hub it is synced to.</p>
+          </div>
+          <div class="debug-status-layout" data-slot="network"></div>
         </section>
         <section class="settings-section">
           <div class="settings-intro">
@@ -1694,7 +1716,32 @@ export class DebugView extends Component {
     try {
       const res = await fetch("/api/state", { cache: "no-store" });
       if (!res.ok || !(res.headers.get("content-type") ?? "").includes("json")) return;
-      const data = (await res.json()) as { pilots?: PilotThresholdInfo[] };
+      const data = (await res.json()) as {
+        pilots?: PilotThresholdInfo[];
+        timers?: DetectedTimer[];
+        simulatorActive?: boolean;
+      };
+      this.serverSimActive = Boolean(data.simulatorActive);
+      if (Array.isArray(data.timers)) {
+        this.serverTimers = data.timers;
+        if (!this.serverSimActive) {
+          for (const dt of data.timers) {
+            const fp = (dt.fingerprint || "").toUpperCase();
+            if (fp && fp !== "00000001" && !fp.startsWith("SIM000")) {
+              const prof = FIRMWARE_PROFILES.find((p) => p.id === dt.firmwareProfile);
+              recordKnownHardwareTimer({
+                fp,
+                role: dt.isHub ? "hub" : "spoke",
+                label: dt.puckLabel,
+                profile: prof?.code ?? 1,
+                fw: dt.firmwareVersion,
+                slot: dt.puckId >= 1 && dt.puckId <= 7 ? dt.puckId : undefined,
+              });
+            }
+          }
+        }
+        this.renderNetworkView();
+      }
       if (Array.isArray(data.pilots)) {
         this.pilots = data.pilots;
         this.hasServer = true;
@@ -2542,6 +2589,7 @@ export class DebugView extends Component {
     this.renderConnection();
     this.renderSelfTest();
     this.renderStatus();
+    this.renderNetworkView();
     this.renderLiveHead();
     this.renderLive();
     this.renderChannels();
@@ -2560,6 +2608,7 @@ export class DebugView extends Component {
     this.renderConnection();
     this.renderSelfTest();
     this.renderStatus();
+    this.renderNetworkView();
     this.renderSerialConsole();
   }
 
@@ -2838,6 +2887,388 @@ export class DebugView extends Component {
                     : `Channel ${s.channel}`
                   : "—"
               }</dd>
+            </div>
+          </dl>
+        </div>
+      </div>`;
+  }
+
+  private renderNetworkView(): void {
+    const on = this.console.connected;
+    const s = this.status;
+    const knownTimers = getKnownHardwareTimers();
+    const realServerTimers = !this.serverSimActive
+      ? this.serverTimers.filter((t) => !(t.fingerprint || "").toUpperCase().startsWith("SIM000"))
+      : [];
+
+    if (!on || !s) {
+      const emptySlots = Array.from({ length: 6 }, (_, i) => {
+        const slotNum = i + 2;
+        return `
+          <div class="debug-net-slot-card is-empty">
+            <div class="debug-net-slot-head">
+              <span class="debug-net-slot-num mono">TDMA Slot ${slotNum}</span>
+              <span class="note">Open</span>
+            </div>
+            <div class="debug-net-slot-body">
+              <span class="note">Child Spoke S${i + 1}</span>
+            </div>
+          </div>`;
+      }).join("");
+
+      this.slot("network").innerHTML = `
+        <div class="debug-status-topbar">
+          <span class="debug-led-status">
+            <span class="status-dot ${on ? "is-warn" : ""}"></span>
+            <span class="debug-head-note">${on ? "Reading timer network role…" : "Off · connect a Hub or Spoke over USB to inspect its parent/child network links"}</span>
+          </span>
+          <div class="debug-connect-actions">
+            <span class="badge">—</span>
+          </div>
+        </div>
+        <div class="debug-network-panels is-hub-view is-unread">
+          <div class="debug-subbox debug-net-self-card">
+            <div class="debug-subbox-head">
+              <span class="debug-subbox-title">${icons.wifi(14)}<span>Current device (Hub or Spoke)</span></span>
+              <span class="badge">—</span>
+            </div>
+            <dl class="debug-kv-list">
+              <div class="debug-kv-row">
+                <dt>Network role</dt>
+                <dd>—</dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>TDMA slot</dt>
+                <dd>—</dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>2.4 GHz link</dt>
+                <dd>—</dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>Profile &amp; schedule</dt>
+                <dd>—</dd>
+              </div>
+            </dl>
+          </div>
+          <div class="debug-subbox debug-net-peers-card">
+            <div class="debug-subbox-head">
+              <span class="debug-subbox-title">${icons.slaprf(14)}<span>Tied Parent Hub / Child Spokes (TDMA Slots 2–7)</span></span>
+              <span class="badge">—</span>
+            </div>
+            <div class="debug-net-slot-grid">${emptySlots}</div>
+          </div>
+        </div>`;
+      return;
+    }
+
+    const profile = FIRMWARE_PROFILES.find((p) => p.code === s.profile);
+    const profileName = profile?.name ?? `Profile ${s.profile}`;
+    const ch = s.channel || 1;
+
+    if (s.role === 1) {
+      // Connected device is a Hub (Parent, Slot 1): show tied Child Spokes across TDMA Slots 2..7.
+      interface TiedSpokeEntry {
+        slot: number;
+        fp: string;
+        label: string;
+        profileName: string;
+        fw: string;
+        mac?: string;
+        online: boolean;
+        sourceNote: string;
+      }
+      const bySlot = new Map<number, TiedSpokeEntry>();
+      const usedFps = new Set<string>([s.fp.toUpperCase()]);
+
+      // 1. Direct firmware STATUS? spokes if present
+      if (Array.isArray(s.spokes)) {
+        for (const sp of s.spokes) {
+          if (sp.slot >= 2 && sp.slot <= 7) {
+            const fp = (sp.fp || "").toUpperCase();
+            const spProf = FIRMWARE_PROFILES.find((p) => p.code === (sp.profile ?? s.profile));
+            bySlot.set(sp.slot, {
+              slot: sp.slot,
+              fp: fp || `SLOT${sp.slot}`,
+              label: sp.label || `S${sp.slot - 1}`,
+              profileName: spProf?.name ?? profileName,
+              fw: sp.fw || s.fw,
+              mac: sp.mac,
+              online: sp.online ?? (sp.msAgo === undefined || sp.msAgo < 5000),
+              sourceNote: sp.frames !== undefined ? `${sp.frames} frames rx` : `Linked on Ch ${ch}`,
+            });
+            if (fp) usedFps.add(fp);
+          }
+        }
+      }
+
+      // 2. Real timers from local SlapRF server (/api/state)
+      for (const dt of realServerTimers) {
+        if (!dt.isHub && dt.puckId >= 2 && dt.puckId <= 7 && !bySlot.has(dt.puckId)) {
+          const fp = (dt.fingerprint || "").toUpperCase();
+          if (fp && usedFps.has(fp)) continue;
+          const known = fp ? knownTimers.find((k) => k.fp === fp) : undefined;
+          const spProf = FIRMWARE_PROFILES.find((p) => p.id === dt.firmwareProfile);
+          bySlot.set(dt.puckId, {
+            slot: dt.puckId,
+            fp: fp || "—",
+            label: dt.puckLabel || known?.label || `S${dt.puckId - 1}`,
+            profileName: spProf?.name ?? profileName,
+            fw: dt.firmwareVersion || known?.fw || s.fw,
+            mac: known?.mac,
+            online: dt.online,
+            sourceNote: dt.online ? `Online · Ch ${ch}` : `Tied to ${s.label || "H1"}`,
+          });
+          if (fp) usedFps.add(fp);
+        }
+      }
+
+      // 3. Hardware registry Spokes tied to this Hub (or matching this Hub's profile)
+      const candidateSpokes = knownTimers.filter(
+        (k) =>
+          k.role === "spoke" &&
+          !usedFps.has(k.fp.toUpperCase()) &&
+          (!k.parentHubFp || k.parentHubFp.toUpperCase() === s.fp.toUpperCase()) &&
+          k.profile === s.profile
+      );
+      for (const k of candidateSpokes) {
+        let targetSlot = k.slot && k.slot >= 2 && k.slot <= 7 && !bySlot.has(k.slot) ? k.slot : 0;
+        if (!targetSlot) {
+          for (let sl = 2; sl <= 7; sl++) {
+            if (!bySlot.has(sl)) {
+              targetSlot = sl;
+              break;
+            }
+          }
+        }
+        if (targetSlot >= 2 && targetSlot <= 7) {
+          const spProf = FIRMWARE_PROFILES.find((p) => p.code === k.profile);
+          bySlot.set(targetSlot, {
+            slot: targetSlot,
+            fp: k.fp,
+            label: k.label || `S${targetSlot - 1}`,
+            profileName: spProf?.name ?? profileName,
+            fw: k.fw || s.fw,
+            mac: k.mac,
+            online: Boolean(k.slot && k.slot >= 2),
+            sourceNote: k.slot && k.slot >= 2 ? `Assigned TDMA Slot ${k.slot} · Ch ${ch}` : `Provisioned Spoke`,
+          });
+          usedFps.add(k.fp.toUpperCase());
+        }
+      }
+
+      const tiedCount = bySlot.size;
+      const ledClass = s.emergencyMode ? "is-emergency" : "is-up";
+      const topText = s.emergencyMode
+        ? `${esc(s.label || "H1")} · Hub (Parent · Slot 1) · Emergency mode active (2.4 GHz beacon paused)`
+        : `${esc(s.label || "H1")} · Hub (Parent · Slot 1) · ${tiedCount} child Spoke${tiedCount === 1 ? "" : "s"} tied · 2.4 GHz Ch ${ch}`;
+
+      const slotCards = Array.from({ length: 6 }, (_, i) => {
+        const slotNum = i + 2;
+        const child = bySlot.get(slotNum);
+        if (!child) {
+          return `
+            <div class="debug-net-slot-card is-empty">
+              <div class="debug-net-slot-head">
+                <span class="debug-net-slot-num mono">TDMA Slot ${slotNum}</span>
+                <span class="note">Open</span>
+              </div>
+              <div class="debug-net-slot-body">
+                <span class="note">Available for Spoke S${i + 1}</span>
+              </div>
+            </div>`;
+        }
+        return `
+          <div class="debug-net-slot-card is-assigned">
+            <div class="debug-net-slot-head">
+              <span class="debug-net-slot-num mono">TDMA Slot ${slotNum}</span>
+              <span class="badge ${child.online ? "badge-good" : "badge-accent"}">${child.online ? `Tied · Slot ${slotNum}` : "Registered"}</span>
+            </div>
+            <div class="debug-net-slot-main">
+              <div class="debug-net-slot-id">
+                <span class="status-dot ${child.online ? "is-up" : "is-warn"}"></span>
+                <strong>${esc(child.label)}</strong>
+                <span class="note">· Child Spoke</span>
+              </div>
+              <span class="badge mono">${esc(child.fp)}</span>
+            </div>
+            <div class="debug-net-slot-meta">
+              <span>${esc(child.sourceNote)}</span>
+              <span class="mono">${child.mac ? `${esc(child.mac)} · ` : ""}${esc(child.fw)}</span>
+            </div>
+          </div>`;
+      }).join("");
+
+      this.slot("network").innerHTML = `
+        <div class="debug-status-topbar">
+          <span class="debug-led-status">
+            <span class="status-dot ${ledClass}"></span>
+            <span class="debug-head-note">${topText}</span>
+          </span>
+          <div class="debug-connect-actions">
+            <span class="badge badge-good">Parent Hub · Slot 1</span>
+            <span class="badge ${tiedCount > 0 ? "badge-accent" : ""} mono">${tiedCount}/6 Spokes</span>
+          </div>
+        </div>
+        <div class="debug-network-panels is-hub-view">
+          <div class="debug-subbox debug-net-self-card">
+            <div class="debug-subbox-head">
+              <span class="debug-subbox-title is-active">${icons.wifi(14)}<span>Current device · Hub (Parent)</span></span>
+              <span class="badge badge-good">Slot 1 · USB</span>
+            </div>
+            <div class="debug-net-node-banner is-hub">
+              <div class="debug-net-node-main">
+                <span class="debug-net-role-tag is-hub">HUB · PARENT</span>
+                <strong class="debug-net-node-name">${esc(s.label || "H1")}</strong>
+              </div>
+              <span class="badge mono">${esc(s.fp)}</span>
+            </div>
+            <dl class="debug-kv-list">
+              <div class="debug-kv-row">
+                <dt>TDMA slot</dt>
+                <dd>Slot 1 <span class="note">· Beacon master &amp; UDP bridge</span></dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>2.4 GHz link</dt>
+                <dd>ESP-NOW LR (500 kbps) <span class="note">· Ch ${ch}</span></dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>Laptop Wi-Fi</dt>
+                <dd>${s.net ? `${esc(s.net.mode)} <span class="note">· ${s.net.stations} client${s.net.stations === 1 ? "" : "s"} joined</span>` : `Channel ${ch}`}</dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>Child Spokes tied</dt>
+                <dd>${tiedCount > 0 ? `${tiedCount} Spoke${tiedCount === 1 ? "" : "s"} (${[...bySlot.values()].map((c) => esc(c.label)).join(", ")})` : "None yet (listening for JOIN frames)"}</dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>Profile &amp; MAC</dt>
+                <dd>${esc(profileName)} <span class="note mono">· ${esc(s.chip?.mac || "—")}</span></dd>
+              </div>
+            </dl>
+          </div>
+          <div class="debug-subbox debug-net-peers-card">
+            <div class="debug-subbox-head">
+              <span class="debug-subbox-title is-active">${icons.slaprf(14)}<span>Child Spokes tied to ${esc(s.label || "this Hub")} (TDMA Slots 2–7)</span></span>
+              <span class="badge ${tiedCount > 0 ? "badge-good" : ""}">${tiedCount} of 6 slots active</span>
+            </div>
+            <div class="debug-net-slot-grid">${slotCards}</div>
+          </div>
+        </div>`;
+      return;
+    }
+
+    // Connected device is a Spoke (Child, Role 2): show Current Spoke + Link Bridge + Parent Hub (Slot 1).
+    const selfKnown = knownTimers.find((k) => k.fp.toUpperCase() === s.fp.toUpperCase());
+    const serverHub = realServerTimers.find((t) => t.isHub);
+    const knownHub =
+      (s.hub?.fp ? knownTimers.find((k) => k.fp.toUpperCase() === s.hub!.fp!.toUpperCase()) : undefined) ??
+      (selfKnown?.parentHubFp ? knownTimers.find((k) => k.fp.toUpperCase() === selfKnown.parentHubFp!.toUpperCase()) : undefined) ??
+      (serverHub?.fingerprint ? knownTimers.find((k) => k.fp.toUpperCase() === serverHub.fingerprint!.toUpperCase()) : undefined) ??
+      knownTimers.find((k) => k.role === "hub" && k.profile === s.profile) ??
+      knownTimers.find((k) => k.role === "hub");
+
+    const linked = !s.emergencyMode && s.slot >= 2;
+    const parentLabel = s.hub?.label || serverHub?.puckLabel || knownHub?.label || "H1";
+    const parentFp = s.hub?.fp || serverHub?.fingerprint || knownHub?.fp || "";
+    const parentMac = s.hub?.mac || knownHub?.mac || "";
+    const parentFw = s.hub?.fw || serverHub?.firmwareVersion || knownHub?.fw || s.fw;
+    const parentProf = FIRMWARE_PROFILES.find((p) => p.code === (s.hub?.profile ?? knownHub?.profile ?? s.profile));
+    const parentProfileName = parentProf?.name ?? profileName;
+
+    const spokeIdx = s.slot >= 2 ? s.slot - 2 : 0;
+    const tdmaGap = Math.floor(spokeIdx / 3);
+    const tdmaOffsetUs = 300 + (spokeIdx % 3) * 3500;
+
+    const ledClass = s.emergencyMode ? "is-emergency" : linked ? "is-up" : "is-warn";
+    const topText = s.emergencyMode
+      ? `${esc(s.label || "S1")} · Spoke (Child) · Emergency mode active (2.4 GHz link paused)`
+      : linked
+        ? `${esc(s.label || "S1")} · Spoke (Child · TDMA Slot ${s.slot}) · Tied to Parent Hub ${esc(parentLabel)} (Slot 1) on 2.4 GHz Ch ${ch}`
+        : `${esc(s.label || "S1")} · Spoke (Child) · Searching for Parent Hub sync beacon on 2.4 GHz…`;
+
+    this.slot("network").innerHTML = `
+      <div class="debug-status-topbar">
+        <span class="debug-led-status">
+          <span class="status-dot ${ledClass}"></span>
+          <span class="debug-head-note">${topText}</span>
+        </span>
+        <div class="debug-connect-actions">
+          <span class="badge ${linked ? "badge-good" : "badge-warn"}">${linked ? `Child Spoke · Slot ${s.slot}` : "Searching for Hub"}</span>
+          <span class="badge mono">Parent: ${esc(parentLabel)} (Slot 1)</span>
+        </div>
+      </div>
+      <div class="debug-network-panels is-spoke-view">
+        <div class="debug-subbox debug-net-self-card">
+          <div class="debug-subbox-head">
+            <span class="debug-subbox-title is-active">${icons.cpu(14)}<span>Current device · Spoke (Child)</span></span>
+            <span class="badge badge-good">${s.slot >= 2 ? `Slot ${s.slot} · USB` : "USB connected"}</span>
+          </div>
+          <div class="debug-net-node-banner is-spoke">
+            <div class="debug-net-node-main">
+              <span class="debug-net-role-tag is-spoke">SPOKE · CHILD</span>
+              <strong class="debug-net-node-name">${esc(s.label || "S1")}</strong>
+            </div>
+            <span class="badge mono">${esc(s.fp)}</span>
+          </div>
+          <dl class="debug-kv-list">
+            <div class="debug-kv-row">
+              <dt>Assigned TDMA slot</dt>
+              <dd>${linked ? `Slot ${s.slot} of 7 <span class="note">· gap ${tdmaGap}, +${(tdmaOffsetUs / 1000).toFixed(1)} ms</span>` : "Unassigned (sending JOIN)"}</dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>2.4 GHz link</dt>
+              <dd>${linked ? `Synced · ESP-NOW LR Ch ${ch}` : "Scanning 2.4 GHz for Hub beacon"}</dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>Firmware &amp; profile</dt>
+              <dd>${esc(profileName)} <span class="note mono">· ${esc(s.fw)}</span></dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>MAC address</dt>
+              <dd><span class="mono">${esc(s.chip?.mac || "—")}</span></dd>
+            </div>
+          </dl>
+        </div>
+
+        <div class="debug-net-bridge ${linked ? "is-linked" : "is-searching"}">
+          <span class="badge ${linked ? "badge-good" : "badge-warn"}">ESP-NOW LR · 2.4 GHz Ch ${ch}</span>
+          <div class="debug-net-bridge-track">
+            <span class="debug-net-bridge-end mono">${esc(s.label || "S1")} (${linked ? `Slot ${s.slot}` : "Child"})</span>
+            <span class="debug-net-bridge-line"></span>
+            <span class="debug-net-bridge-arrow">${icons.arrowRight(14)}</span>
+            <span class="debug-net-bridge-end mono">${esc(parentLabel)} (Slot 1)</span>
+          </div>
+          <span class="note">${linked ? `Beacon synced · 4-sweep windows → ${esc(parentLabel)}` : "Waiting for Hub beacon & ASSIGN frame…"}</span>
+        </div>
+
+        <div class="debug-subbox debug-net-parent-card">
+          <div class="debug-subbox-head">
+            <span class="debug-subbox-title ${linked ? "is-active" : ""}">${icons.wifi(14)}<span>Parent device · Hub</span></span>
+            <span class="badge ${linked ? "badge-good" : "badge-warn"}">${linked ? `Tied · Slot 1` : "Slot 1 · Waiting"}</span>
+          </div>
+          <div class="debug-net-node-banner is-hub">
+            <div class="debug-net-node-main">
+              <span class="debug-net-role-tag is-hub">HUB · PARENT</span>
+              <strong class="debug-net-node-name">${esc(parentLabel)}</strong>
+            </div>
+            <span class="badge mono">${parentFp ? esc(parentFp) : "Slot 1"}</span>
+          </div>
+          <dl class="debug-kv-list">
+            <div class="debug-kv-row">
+              <dt>Parent Hub</dt>
+              <dd><strong>${esc(parentLabel)}</strong> <span class="note">· Hub · TDMA Slot 1</span></dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>Hub identity</dt>
+              <dd>${parentFp ? `<span class="mono">${esc(parentFp)}</span>${parentMac ? ` <span class="note mono">· ${esc(parentMac)}</span>` : ""}` : `Assigned Slot ${s.slot} over 2.4 GHz`}</dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>Link &amp; beacon</dt>
+              <dd>${linked ? `Active · 2.4 GHz Ch ${ch} sync beacon locked` : "Waiting for Hub beacon"}</dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>Firmware &amp; profile</dt>
+              <dd>${esc(parentProfileName)} <span class="note mono">· ${esc(parentFw)}</span></dd>
             </div>
           </dl>
         </div>
