@@ -168,51 +168,53 @@ export class AnnouncerSettings extends Component {
         </div>
       </div>
 
-      <div class="card">
-        <div>
-          <div class="option-title">Text to speech</div>
-          <div class="option-sub">Choose an offline neural or system voice, adjust speaking speed and volume, and test a sample callout.</div>
-        </div>
-        <div class="form-grid">
-          <label class="field">
-            <span>Voice</span>
-            <select class="input" name="voice">${piperGroup}${browserGroup}</select>
-          </label>
-          <label class="field">
-            <span><span>Speed</span><span class="field-meta"><em data-out="rate">${rateVal.toFixed(2)}×</em>${
-              Math.abs(rateVal - 1.0) > 0.001
-                ? `<button type="button" class="field-reset-btn" data-action="reset-rate" title="Reset speed to default (1.00×)">${icons.reset(12)}</button>`
-                : ""
-            }</span></span>
-            <input type="range" name="rate" min="0.8" max="1.6" step="0.05" value="${rateVal}" style="--range-pct:${ratePct}%" />
-          </label>
-          <label class="field">
-            <span><span>Volume</span><span class="field-meta"><em data-out="volume">${Math.round(volVal * 100)}%</em>${
-              Math.abs(volVal - 1.0) > 0.001
-                ? `<button type="button" class="field-reset-btn" data-action="reset-volume" title="Reset volume to default (100%)">${icons.reset(12)}</button>`
-                : ""
-            }</span></span>
-            <input type="range" name="volume" min="0" max="1" step="0.05" value="${volVal}" style="--range-pct:${volPct}%" />
-          </label>
-        </div>
-        <div class="check-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <div class="flasher-pass-wrap has-inline-action" style="flex:1 1 220px;max-width:340px;">
-            <input
-              class="input ${p.testPhrase ? "flasher-pass-input" : ""}"
-              type="text"
-              name="testPhrase"
-              value="${esc(samplePhrase)}"
-              placeholder="${esc(defaultSample)}"
-              aria-label="Sample voice test sentence"
-            />
-            ${
-              p.testPhrase
-                ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-action="reset-phrase" title="Reset sample phrase to default">${icons.reset(14)}</button>`
-                : ""
-            }
+      <div class="card card-flush">
+        <div class="card-body">
+          <div>
+            <div class="option-title">Text to speech</div>
+            <div class="option-sub">Choose an offline neural or system voice, adjust speaking speed and volume, and test a sample callout.</div>
           </div>
-          <button class="btn btn-sm" data-action="test" type="button">Test voice</button>
-          ${neuralStatusHtml}
+          <div class="form-grid">
+            <label class="field">
+              <span>Voice</span>
+              <select class="input" name="voice">${piperGroup}${browserGroup}</select>
+            </label>
+            <label class="field">
+              <span><span>Speed</span><span class="field-meta"><em data-out="rate">${rateVal.toFixed(2)}×</em>${
+                Math.abs(rateVal - 1.0) > 0.001
+                  ? `<button type="button" class="field-reset-btn" data-action="reset-rate" title="Reset speed to default (1.00×)">${icons.reset(12)}</button>`
+                  : ""
+              }</span></span>
+              <input type="range" name="rate" min="0.8" max="1.6" step="0.05" value="${rateVal}" style="--range-pct:${ratePct}%" />
+            </label>
+            <label class="field">
+              <span><span>Volume</span><span class="field-meta"><em data-out="volume">${Math.round(volVal * 100)}%</em>${
+                Math.abs(volVal - 1.0) > 0.001
+                  ? `<button type="button" class="field-reset-btn" data-action="reset-volume" title="Reset volume to default (100%)">${icons.reset(12)}</button>`
+                  : ""
+              }</span></span>
+              <input type="range" name="volume" min="0" max="1" step="0.05" value="${volVal}" style="--range-pct:${volPct}%" />
+            </label>
+          </div>
+          <div class="check-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+            <div class="flasher-pass-wrap has-inline-action" style="flex:1 1 220px;max-width:340px;">
+              <input
+                class="input ${p.testPhrase ? "flasher-pass-input" : ""}"
+                type="text"
+                name="testPhrase"
+                value="${esc(samplePhrase)}"
+                placeholder="${esc(defaultSample)}"
+                aria-label="Sample voice test sentence"
+              />
+              ${
+                p.testPhrase
+                  ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-action="reset-phrase" title="Reset sample phrase to default">${icons.reset(14)}</button>`
+                  : ""
+              }
+            </div>
+            <button class="btn btn-sm" data-action="test" type="button">Test voice</button>
+            ${neuralStatusHtml}
+          </div>
         </div>
         <div class="rules-foot">
           <p class="note">Applies to spoken lap and holeshot callouts.</p>

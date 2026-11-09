@@ -9,11 +9,6 @@
 }
 
 /* Track timeline ("---O---O---O---O---") + Inspector & Timers table ------ */
-[data-slot="track"],
-[data-slot="gates"],
-[data-slot="timers"] {
-  overflow: visible;
-}
 .gate-track-stage {
   padding: 16px 20px 20px;
 }
@@ -1299,10 +1294,6 @@ body.is-gate-dragging * {
   padding: 14px 20px;
   border-top: 1px solid var(--border);
   background: var(--surface-2);
-  border-radius: 0 0 calc(var(--radius-lg) - 1px) calc(var(--radius-lg) - 1px);
-}
-.card:not(.card-flush) > .rules-foot {
-  margin: 16px -20px -20px;
 }
 .rules-foot .note {
   margin-right: auto;
