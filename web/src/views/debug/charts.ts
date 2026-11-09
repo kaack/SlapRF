@@ -765,7 +765,7 @@ export function drawSignalOverTimeCanvas(
         if (kv !== undefined && kv > chMax) chMax = kv;
       }
       setSignalReadout(
-        `<span><strong>${rb}</strong> (${f} MHz) · <strong>${v} dBm</strong> · max <strong>${chMax} dBm</strong>${fl && fl > -127 ? ` · fl ${fl}` : ""} · -${ageSec}s (#${best.n})</span>`
+        `<span><strong>${rb}</strong> ${f}M · Cur <strong>${v}</strong> · Mx <strong>${chMax}</strong>${fl && fl > -127 ? ` · Fl ${fl}` : ""} dBm · -${ageSec}s</span>`
       );
     } else {
       setSignalReadout(`<span class="note">Point at chart to inspect channel, dBm &amp; sweep age</span>`);
@@ -1019,7 +1019,29 @@ export function nearestBandHint(freqMHz: number): string {
   return parts.join(" · ") || "out of band";
 }
 
-/** Perceptual dark → blue → cyan → volt (#d4ff3a) → white palette (§5.3). */
+export function shortBandHint(freqMHz: number): string {
+  const parts: string[] = [];
+  let bestRb = -1;
+  let bestDist = 999;
+  for (let i = 0; i < RACEBAND.length; i++) {
+    const d = Math.abs(RACEBAND[i] - freqMHz);
+    if (d < bestDist) {
+      bestDist = d;
+      bestRb = i;
+    }
+  }
+  if (bestRb >= 0 && bestDist <= 18) {
+    parts.push(`R${bestRb + 1}`);
+  }
+  for (const b of WIFI_BAND_BLOCKS) {
+    if (freqMHz >= b.startMHz && freqMHz <= b.stopMHz) {
+      const wifiCh = Math.round((freqMHz - 5000) / 5);
+      parts.push(`W${wifiCh}`);
+      break;
+    }
+  }
+  return parts.join("/");
+}
 export function dbmToRgb(dbm: number, minDbm = -100, maxDbm = -40): [number, number, number] {
   const span = Math.max(4, maxDbm - minDbm);
   const t = Math.max(0, Math.min(1, (dbm - minDbm) / span));
@@ -1358,21 +1380,22 @@ export function drawSpectrumCanvas(
       ctx.arc(hx, cy, 3.5, 0, Math.PI * 2);
       ctx.fill();
 
-      const hint = nearestBandHint(f);
+      const tag = shortBandHint(f);
       const maxVal = acc.maxHold && acc.maxHold[idx] !== undefined ? acc.maxHold[idx] : s.dbm[idx];
       const avgVal = avgAll && avgAll[idx] !== undefined ? avgAll[idx] : null;
       setSpecReadout(
-        `<span><strong>${f} MHz</strong> (${hint}) · Cur <strong>${s.dbm[idx]} dBm</strong> · Max <strong>${maxVal} dBm</strong>${avgVal !== null ? ` · Avg ${avgVal.toFixed(1)} dBm` : ""}</span>`
+        `<span><strong>${f}M</strong>${tag ? ` (${tag})` : ""} · Cur <strong>${s.dbm[idx]}</strong> · Mx <strong>${maxVal}</strong>${avgVal !== null ? ` · Av <strong>${Math.round(avgVal)}</strong>` : ""} dBm</span>`
       );
     }
   }
   if (!hoveredSpec) {
     if (maxHoldPeakIdx >= 0) {
       const pf = s.start + maxHoldPeakIdx * s.step;
+      const ptag = shortBandHint(pf);
       const maxDbm = holdArr[maxHoldPeakIdx];
       const curDbm = s.dbm[maxHoldPeakIdx];
       setSpecReadout(
-        `<span>Max peak <strong>${pf} MHz</strong> (${nearestBandHint(pf)}) · Max <strong>${maxDbm} dBm</strong> · Cur ${curDbm} dBm <span class="note">· Point at chart</span></span>`
+        `<span>Pk <strong>${pf}M</strong>${ptag ? ` (${ptag})` : ""} · Mx <strong>${maxDbm}</strong> · Cur <strong>${curDbm}</strong> dBm</span>`
       );
     } else {
       setSpecReadout(`<span class="note">Point at chart to inspect frequency &amp; dBm</span>`);
@@ -1513,7 +1536,7 @@ export function drawWaterfallCanvas(
     const histRow = histIdx >= 0 ? acc.history[histIdx] : null;
     const dbmVal = histRow ? histRow.dbm[binIdx] : null;
     const age = (rowIdx * passSec).toFixed(1);
-    const hint = nearestBandHint(f);
+    const tag = shortBandHint(f);
 
     ctx.save();
     ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
@@ -1529,7 +1552,7 @@ export function drawWaterfallCanvas(
     ctx.restore();
 
     setWfReadout(
-      `<span><strong>${f} MHz</strong> (${hint}) · <strong>${dbmVal !== null && dbmVal !== undefined ? `${dbmVal} dBm` : "—"}</strong> · -${age}s (-${rowIdx + 1}/${acc.history.length})</span>`
+      `<span><strong>${f}M</strong>${tag ? ` (${tag})` : ""} · <strong>${dbmVal !== null && dbmVal !== undefined ? `${dbmVal} dBm` : "—"}</strong> · -${age}s (-${rowIdx + 1}/${acc.history.length})</span>`
     );
   } else {
     setWfReadout(`<span class="note">Point at waterfall to inspect frequency, dBm &amp; pass age</span>`);
