@@ -4,7 +4,13 @@
  * The port carries three kinds of data: '@'-prefixed JSON reply lines, plain-text log lines
  * (after `LOG 1`), and the raw 160-byte SLAPRF02 block in answer to `SLAPRF?`.
  */
-import { parseSlaprfConfigBlock, TimerReadout } from "./esp_flasher";
+import {
+  DEFAULT_FIRMWARE_PROFILE,
+  FIRMWARE_PROFILES,
+  LATEST_FIRMWARE_VERSION,
+  parseSlaprfConfigBlock,
+  TimerReadout,
+} from "./esp_flasher";
 
 export interface TimerStatus {
   fw: string;
@@ -166,6 +172,33 @@ export class TimerConsole {
 
   public get connected(): boolean {
     return this.port !== null;
+  }
+
+  public ownsPort(candidate: unknown): boolean {
+    return this.port !== null && this.port === candidate;
+  }
+
+  public async readSnapshot(): Promise<TimerReadout> {
+    if (!this.connected) {
+      throw new Error("Port is not connected.");
+    }
+    await this.send("STATUS?\nSLAPRF?");
+    await sleep(360);
+    const s = this.lastStatus;
+    const cfg = this.lastConfig;
+    const profileFromStatus = s ? FIRMWARE_PROFILES.find((p) => p.code === s.profile)?.id : undefined;
+    return {
+      chip: s?.chip ? `${s.chip.model} (${s.chip.rev})` : cfg?.chip || "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
+      role: cfg?.role ?? (s?.role === 1 ? "hub" : "spoke"),
+      timerLabel: s?.label || cfg?.timerLabel || (s?.role === 1 ? "H1" : "S1"),
+      wifiSSID: cfg?.wifiSSID ?? "",
+      wifiPassSet: cfg?.wifiPassSet ?? false,
+      firmwareProfile: cfg?.firmwareProfile || profileFromStatus || DEFAULT_FIRMWARE_PROFILE,
+      fingerprint: s?.fp || cfg?.fingerprint || "",
+      firmwareVersion: s?.fw || cfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
+      frequenciesMHz: s?.freqs?.length ? s.freqs : cfg?.frequenciesMHz || [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917],
+      status: s ? (s as unknown as TimerReadout["status"]) : cfg?.status,
+    };
   }
 
   public static supported(): boolean {

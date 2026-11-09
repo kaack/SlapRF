@@ -443,28 +443,37 @@ async function collectSerialReply(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   maxWaitMs: number
 ): Promise<Uint8Array> {
-  const deadline = Date.now() + maxWaitMs;
   const chunks: Uint8Array[] = [];
   let total = 0;
-  while (Date.now() < deadline) {
-    const rem = Math.max(25, deadline - Date.now());
-    const chunk = await readChunkWithTimeout(reader, Math.min(90, rem));
-    if (!chunk) {
-      if (total > 0) break;
-      continue;
+  let timedOut = false;
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    void reader.cancel().catch(() => undefined);
+  }, maxWaitMs);
+
+  try {
+    while (!timedOut) {
+      const { value, done } = await reader.read();
+      if (done || !value || value.length === 0) break;
+      chunks.push(value);
+      total += value.length;
+      const merged = new Uint8Array(total);
+      let off = 0;
+      for (const c of chunks) {
+        merged.set(c, off);
+        off += c.length;
+      }
+      if (findConfigBlock(merged) >= 0 && parseStatusSnapshot(merged)) {
+        window.clearTimeout(timer);
+        return merged;
+      }
     }
-    chunks.push(chunk);
-    total += chunk.length;
-    const merged = new Uint8Array(total);
-    let off = 0;
-    for (const c of chunks) {
-      merged.set(c, off);
-      off += c.length;
-    }
-    if (findConfigBlock(merged) >= 0 && parseStatusSnapshot(merged)) {
-      return merged;
-    }
+  } catch {
+    // stream cancelled or closed on timeout
+  } finally {
+    window.clearTimeout(timer);
   }
+
   const out = new Uint8Array(total);
   let off = 0;
   for (const c of chunks) {
@@ -474,13 +483,22 @@ async function collectSerialReply(
   return out;
 }
 
+export interface ConnectedPortOwner {
+  ownsPort(candidate: unknown): boolean;
+  readSnapshot(): Promise<TimerReadout>;
+  disconnectCleanly(): Promise<void>;
+}
+
 /**
- * Connects to a plugged-in XIAO ESP32-C5 over USB and reads its current configuration.
+ * Connects to a plugged-in XIAO ESP32-C5 over USB and reads its current configuration once,
+ * closing the USB port immediately afterwards (unless the selected port is already held open
+ * by `existingOwner`, in which case it reads over that existing connection and leaves it open).
  */
 export async function readXiaoC5OverWebSerial(
   fallbackImageBytes: Uint8Array,
   onProgress: ProgressCallback,
-  showAllPorts = false
+  showAllPorts = false,
+  existingOwner?: ConnectedPortOwner
 ): Promise<TimerReadout> {
   const nav = navigator as unknown as NavigatorWithSerial;
   if (!nav.serial) {
@@ -496,12 +514,23 @@ export async function readXiaoC5OverWebSerial(
   const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
   const port = await nav.serial.requestPort(filters ? { filters } : undefined);
 
+  if (existingOwner && existingOwner.ownsPort(port)) {
+    onProgress({
+      stage: "reading",
+      percent: 55,
+      detail: "Reading configuration from connected XIAO ESP32-C5…",
+    });
+    const info = await existingOwner.readSnapshot();
+    onProgress({ stage: "done", percent: 100, detail: "Read complete." });
+    return info;
+  }
+
   await port.open({ baudRate: 115200, bufferSize: 16384 });
   const writer = port.writable?.getWriter();
-  const reader = port.readable?.getReader();
+  let reader = port.readable?.getReader();
 
   if (!writer || !reader) {
-    await port.close();
+    await port.close().catch(() => undefined);
     throw new Error("Could not open USB serial streams on the selected port.");
   }
 
@@ -512,23 +541,52 @@ export async function readXiaoC5OverWebSerial(
       detail: "Reading configuration from XIAO ESP32-C5…",
     });
 
-    // 1. Query running firmware over USB Serial first ("STATUS?\nSLAPRF?\n")
+    // Query running firmware over USB Serial ("STATUS?\nSLAPRF?\n") without touching bootloader lines.
     const query = new TextEncoder().encode("\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?\n");
     await writer.write(query);
-    const rx = await collectSerialReply(reader, 320);
+    let rx = await collectSerialReply(reader, 650);
+
+    // If the board was still booting or in the middle of a command, release & re-acquire reader for one retry.
+    if (findConfigBlock(rx) < 0 && !parseStatusSnapshot(rx)) {
+      try {
+        reader.releaseLock();
+      } catch {
+        // ignore
+      }
+      reader = port.readable?.getReader();
+      if (reader) {
+        await writer.write(query);
+        const retryRx = await collectSerialReply(reader, 650);
+        if (retryRx.length > 0) {
+          const combined = new Uint8Array(rx.length + retryRx.length);
+          combined.set(rx, 0);
+          combined.set(retryRx, rx.length);
+          rx = combined;
+        }
+      }
+    }
+
     if (rx.length > 0) {
       const parsed = parseSlaprfConfigBlock(rx);
       const status = parseStatusSnapshot(rx);
       if (parsed) {
         onProgress({ stage: "done", percent: 100, detail: "Read complete." });
-        return { ...parsed, status };
+        return {
+          ...parsed,
+          chip: status?.chip ? `${status.chip.model} (${status.chip.rev})` : parsed.chip,
+          timerLabel: status?.label || parsed.timerLabel,
+          firmwareVersion: status?.fw || parsed.firmwareVersion,
+          fingerprint: status?.fp || parsed.fingerprint,
+          frequenciesMHz: status?.freqs?.length ? status.freqs : parsed.frequenciesMHz,
+          status,
+        };
       }
       if (status) {
         const prof = profileByCode(status.profile);
         onProgress({ stage: "done", percent: 100, detail: "Read complete." });
         return {
           chip: status.chip
-            ? `${status.chip.model} ${status.chip.rev} · ${status.chip.flashMB} MB`
+            ? `${status.chip.model} (${status.chip.rev})`
             : "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
           role: status.role === 1 ? "hub" : "spoke",
           timerLabel: status.label || "",
@@ -541,20 +599,6 @@ export async function readXiaoC5OverWebSerial(
         };
       }
     }
-
-    // 2. Otherwise query ROM bootloader chip register (`ESP_READ_REG = 0x0A`)
-    await enterUsbJtagBootloader(port);
-    const syncPayload = new Uint8Array(36);
-    syncPayload.set([0x07, 0x07, 0x12, 0x20], 0);
-    syncPayload.fill(0x55, 4);
-    await writer.write(buildRomCommand(ESP_SYNC, syncPayload));
-    await readChunkWithTimeout(reader, 100);
-
-    const regAddr = new Uint8Array(4);
-    new DataView(regAddr.buffer).setUint32(0, 0x600b0844, true); // EFUSE MAC word 0
-    await writer.write(buildRomCommand(ESP_READ_REG, regAddr));
-    await readChunkWithTimeout(reader, 100);
-    await hardResetBoard(port);
 
     onProgress({ stage: "done", percent: 100, detail: "Read complete." });
     return (
@@ -571,7 +615,12 @@ export async function readXiaoC5OverWebSerial(
     );
   } finally {
     try {
-      reader.releaseLock();
+      await reader?.cancel();
+    } catch {
+      // ignore
+    }
+    try {
+      reader?.releaseLock();
     } catch {
       // ignore
     }
@@ -600,7 +649,8 @@ export async function flashXiaoC5OverWebSerial(
   label: string,
   onProgress: ProgressCallback,
   showAllPorts = false,
-  keepFingerprint = false
+  keepFingerprint = false,
+  existingOwner?: ConnectedPortOwner
 ): Promise<TimerReadout | null> {
   const nav = navigator as unknown as NavigatorWithSerial;
   if (!nav.serial) {
@@ -615,6 +665,10 @@ export async function flashXiaoC5OverWebSerial(
 
   const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
   const port = await nav.serial.requestPort(filters ? { filters } : undefined);
+
+  if (existingOwner && existingOwner.ownsPort(port)) {
+    await existingOwner.disconnectCleanly();
+  }
 
   await port.open({ baudRate: 115200, bufferSize: 16384 });
   const writer = port.writable?.getWriter();
@@ -727,6 +781,11 @@ export async function flashXiaoC5OverWebSerial(
     const written = parseSlaprfConfigBlock(imageBytes);
     return written ? { ...written, fingerprintKept } : null;
   } finally {
+    try {
+      await reader.cancel();
+    } catch {
+      // ignore
+    }
     try {
       reader.releaseLock();
     } catch {

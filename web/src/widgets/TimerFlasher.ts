@@ -490,10 +490,6 @@ export class TimerFlasher extends Component {
         this.firmwareProfileId
       );
 
-      if (sharedTimerConsole.connected) {
-        await sharedTimerConsole.disconnectCleanly();
-      }
-
       const written = await flashXiaoC5OverWebSerial(
         bytes,
         label,
@@ -503,7 +499,8 @@ export class TimerFlasher extends Component {
           this.render();
         },
         this.showAllPorts,
-        this.keepFingerprint
+        this.keepFingerprint,
+        sharedTimerConsole
       );
 
       if (written) {

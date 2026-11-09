@@ -66,41 +66,7 @@ class TimerReaderPanel extends Component {
       }
     });
 
-    const syncFromConsole = () => {
-      const s = sharedTimerConsole.lastStatus;
-      const cfg = sharedTimerConsole.lastConfig;
-      if (!s && !cfg) return;
-      const profileFromStatus = s ? FIRMWARE_PROFILES.find((p) => p.code === s.profile)?.id : undefined;
-      const merged: TimerReadout = {
-        chip: s?.chip ? `${s.chip.model} (${s.chip.rev})` : cfg?.chip || "ESP32-C5",
-        role: cfg?.role ?? (s?.role === 1 ? "hub" : "spoke"),
-        timerLabel: s?.label || cfg?.timerLabel || (s?.role === 1 ? "H1" : "S1"),
-        wifiSSID: cfg?.wifiSSID ?? "",
-        wifiPassSet: cfg?.wifiPassSet ?? false,
-        firmwareProfile: cfg?.firmwareProfile || profileFromStatus || DEFAULT_FIRMWARE_PROFILE,
-        fingerprint: s?.fp || cfg?.fingerprint || "",
-        firmwareVersion: s?.fw || cfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
-        frequenciesMHz: s?.freqs?.length ? s.freqs : cfg?.frequenciesMHz || RACEBAND,
-        status: s ? (s as unknown as TimerReadout["status"]) : cfg?.status,
-      };
-      this.readout = merged;
-      this.errorMsg = null;
-      this.render();
-      this.onRead?.(merged);
-    };
-
-    this.onDispose(
-      sharedTimerConsole.subscribe({
-        onStatus: () => syncFromConsole(),
-        onConfig: () => syncFromConsole(),
-      })
-    );
-
-    if (sharedTimerConsole.connected && (sharedTimerConsole.lastStatus || sharedTimerConsole.lastConfig)) {
-      syncFromConsole();
-    } else {
-      this.render();
-    }
+    this.render();
   }
 
   public setReadout(info: TimerReadout): void {
@@ -117,35 +83,24 @@ class TimerReaderPanel extends Component {
     this.render();
 
     try {
-      if (sharedTimerConsole.connected) {
-        this.progressText = "Reading timer configuration over USB…";
-        this.render();
-        await sharedTimerConsole.send("STATUS?\nSLAPRF?");
-        await new Promise((r) => window.setTimeout(r, 450));
-      } else {
-        await sharedTimerConsole.connectAndStart(this.showAllPorts);
-        await new Promise((r) => window.setTimeout(r, 350));
-      }
-      if (!this.readout) {
-        await sharedTimerConsole.disconnectCleanly();
-        const { bytes } = await this.api.fetchFirmwareImage(
-          "hub",
-          "H1",
-          "",
-          "",
-          DEFAULT_FIRMWARE_PROFILE
-        );
-        const info = await readXiaoC5OverWebSerial(
-          bytes,
-          (p) => {
-            this.progressText = p.detail;
-            this.render();
-          },
-          this.showAllPorts
-        );
-        this.readout = info;
-        this.onRead?.(info);
-      }
+      const { bytes } = await this.api.fetchFirmwareImage(
+        "hub",
+        "H1",
+        "",
+        "",
+        DEFAULT_FIRMWARE_PROFILE
+      );
+      const info = await readXiaoC5OverWebSerial(
+        bytes,
+        (p) => {
+          this.progressText = p.detail;
+          this.render();
+        },
+        this.showAllPorts,
+        sharedTimerConsole
+      );
+      this.readout = info;
+      this.onRead?.(info);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (!/No port selected|aborted|cancelled|cancel/i.test(msg)) {
