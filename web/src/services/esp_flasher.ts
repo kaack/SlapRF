@@ -944,3 +944,308 @@ export async function flashXiaoC5OverWebSerial(
     }
   }
 }
+
+
+export interface EraseResult {
+  previousLabel?: string;
+  previousFp?: string;
+  previousRole?: "hub" | "spoke";
+}
+
+/**
+ * Factory-resets / erases a Seeed XIAO ESP32-C5 over USB by entering the ROM bootloader,
+ * attaching the 4 MB SPI flash, and erasing the bootloader, partition table, NVS, and
+ * application partitions (`0x0000`..`0x190000`).
+ */
+export async function eraseXiaoC5OverWebSerial(
+  onProgress: ProgressCallback,
+  showAllPorts = false,
+  existingOwner?: ConnectedPortOwner
+): Promise<EraseResult> {
+  const nav = navigator as unknown as NavigatorWithSerial;
+  if (!nav.serial) {
+    throw new Error("WebSerial is only available in Chrome, Edge, or Brave over localhost / HTTPS.");
+  }
+
+  onProgress({
+    stage: "connecting",
+    percent: 2,
+    detail: "Select the XIAO ESP32-C5 USB port to factory-reset / erase…",
+  });
+
+  const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
+  const port = await nav.serial.requestPort(filters ? { filters } : undefined);
+
+  if (existingOwner && existingOwner.ownsPort(port)) {
+    await existingOwner.disconnectCleanly();
+  }
+
+  await port.open({ baudRate: 115200, bufferSize: 16384 });
+  const writer = port.writable?.getWriter();
+  const reader = port.readable?.getReader();
+
+  if (!writer || !reader) {
+    await port.close().catch(() => undefined);
+    throw new Error("Could not open USB serial streams on the selected port.");
+  }
+
+  let pumpActive = false;
+  let collectRaw = true;
+  const rawChunks: Uint8Array[] = [];
+  const slipQueue: Uint8Array[] = [];
+  const slipWaiters: Array<() => void> = [];
+
+  const startSlipPump = (r: ReadableStreamDefaultReader<Uint8Array>) => {
+    pumpActive = true;
+    let inFrame = false;
+    let escaped = false;
+    let frame: number[] = [];
+    void (async () => {
+      try {
+        while (pumpActive) {
+          const { value, done } = await r.read();
+          if (done || !value) break;
+          if (collectRaw) {
+            rawChunks.push(value);
+          }
+          for (let i = 0; i < value.length; i++) {
+            const b = value[i];
+            if (b === SLIP_END) {
+              if (inFrame && frame.length >= 8) {
+                slipQueue.push(new Uint8Array(frame));
+                while (slipWaiters.length > 0) slipWaiters.shift()?.();
+              }
+              inFrame = true;
+              escaped = false;
+              frame = [];
+            } else if (inFrame) {
+              if (escaped) {
+                escaped = false;
+                if (b === SLIP_ESC_END) frame.push(SLIP_END);
+                else if (b === SLIP_ESC_ESC) frame.push(SLIP_ESC);
+                else frame.push(b);
+              } else if (b === SLIP_ESC) {
+                escaped = true;
+              } else {
+                frame.push(b);
+              }
+            }
+          }
+        }
+      } catch {
+        // stream closed or cancelled
+      } finally {
+        while (slipWaiters.length > 0) slipWaiters.shift()?.();
+      }
+    })();
+  };
+
+  const waitForRomAck = async (op: number, timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      for (let i = 0; i < slipQueue.length; i++) {
+        const pkt = slipQueue[i];
+        if (pkt[0] === 0x01 && pkt[1] === op) {
+          slipQueue.splice(i, 1);
+          const len = pkt[2] | (pkt[3] << 8);
+          if (len >= 2 && pkt.length >= 8 + 2) {
+            const status = pkt[8];
+            const errCode = pkt[9];
+            if (status !== 0) {
+              throw new Error(`ROM bootloader command 0x${op.toString(16)} failed (err 0x${errCode.toString(16)})`);
+            }
+          }
+          return true;
+        }
+      }
+      const rem = deadline - Date.now();
+      if (rem <= 0) break;
+      await new Promise<void>((resolve) => {
+        const t = window.setTimeout(resolve, Math.min(120, rem));
+        slipWaiters.push(() => {
+          window.clearTimeout(t);
+          resolve();
+        });
+      });
+    }
+    return false;
+  };
+
+  const result: EraseResult = {};
+
+  try {
+    startSlipPump(reader);
+
+    onProgress({
+      stage: "reading",
+      percent: 5,
+      detail: "Inspecting connected board before erase…",
+    });
+    await writer.write(new TextEncoder().encode("\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?\n"));
+    await sleep(240);
+    collectRaw = false;
+    let total = 0;
+    for (const c of rawChunks) total += c.length;
+    if (total > 0) {
+      const rx = new Uint8Array(total);
+      let off = 0;
+      for (const c of rawChunks) {
+        rx.set(c, off);
+        off += c.length;
+      }
+      const existing = parseSlaprfConfigBlock(rx);
+      const status = parseStatusSnapshot(rx);
+      result.previousLabel = status?.label || existing?.timerLabel || undefined;
+      result.previousFp = status?.fp || existing?.fingerprint || undefined;
+      result.previousRole = status ? (status.role === 1 ? "hub" : "spoke") : existing?.role;
+    }
+
+    onProgress({
+      stage: "bootloader",
+      percent: 10,
+      detail: "Entering ESP32-C5 ROM bootloader…",
+    });
+    await enterUsbJtagBootloader(port);
+    slipQueue.length = 0;
+
+    const syncPayload = new Uint8Array(36);
+    syncPayload.set([0x07, 0x07, 0x12, 0x20], 0);
+    syncPayload.fill(0x55, 4);
+    const syncFrame = buildRomCommand(ESP_SYNC, syncPayload);
+
+    let synced = false;
+    for (let attempt = 0; attempt < 8; attempt++) {
+      await writer.write(syncFrame);
+      if (await waitForRomAck(ESP_SYNC, 150)) {
+        synced = true;
+        await sleep(30);
+        slipQueue.length = 0;
+        break;
+      }
+    }
+    if (!synced) {
+      throw new Error("Could not sync with ESP32-C5 ROM bootloader. Hold BOOT while plugging in USB and try again.");
+    }
+
+    // Disable LP_WDT (RTC WDT) and enable SWD auto-feed on ESP32-C5 USB-Serial-JTAG.
+    const writeReg = async (addr: number, value: number, mask = 0xffffffff) => {
+      const regPayload = new Uint8Array(16);
+      const regView = new DataView(regPayload.buffer);
+      regView.setUint32(0, addr >>> 0, true);
+      regView.setUint32(4, value >>> 0, true);
+      regView.setUint32(8, mask >>> 0, true);
+      regView.setUint32(12, 0, true);
+      await writer.write(buildRomCommand(ESP_WRITE_REG, regPayload));
+      await waitForRomAck(ESP_WRITE_REG, 1000);
+    };
+    await writeReg(0x600b1c18, 0x50d83aa1);
+    await writeReg(0x600b1c00, 0x00000000);
+    await writeReg(0x600b1c18, 0x00000000);
+    await writeReg(0x600b1c20, 0x50d83aa1);
+    await writeReg(0x600b1c1c, 1 << 18, 1 << 18);
+    await writeReg(0x600b1c20, 0x00000000);
+
+    onProgress({
+      stage: "erasing",
+      percent: 16,
+      detail: "Attaching 4 MB SPI flash…",
+    });
+    await writer.write(buildRomCommand(ESP_SPI_ATTACH, new Uint8Array(8)));
+    await waitForRomAck(ESP_SPI_ATTACH, 1500);
+
+    const spiParams = new Uint8Array(24);
+    const spiView = new DataView(spiParams.buffer);
+    spiView.setUint32(0, 0, true);
+    spiView.setUint32(4, 4 * 1024 * 1024, true);
+    spiView.setUint32(8, 64 * 1024, true);
+    spiView.setUint32(12, 4096, true);
+    spiView.setUint32(16, 256, true);
+    spiView.setUint32(20, 0xffff, true);
+    await writer.write(buildRomCommand(ESP_SPI_SET_PARAMS, spiParams));
+    await waitForRomAck(ESP_SPI_SET_PARAMS, 1500);
+
+    const regions: Array<{ offset: number; size: number; pct: number; detail: string }> = [
+      {
+        offset: 0x0000,
+        size: 0x10000,
+        pct: 32,
+        detail: "Erasing bootloader, partition table & NVS (64 KB)…",
+      },
+      {
+        offset: 0x10000,
+        size: 0x80000,
+        pct: 56,
+        detail: "Erasing application flash (512 / 1536 KB)…",
+      },
+      {
+        offset: 0x90000,
+        size: 0x80000,
+        pct: 78,
+        detail: "Erasing application flash (1024 / 1536 KB)…",
+      },
+      {
+        offset: 0x110000,
+        size: 0x80000,
+        pct: 95,
+        detail: "Erasing application flash & config block (1536 / 1536 KB)…",
+      },
+    ];
+
+    for (const reg of regions) {
+      onProgress({
+        stage: "erasing",
+        percent: reg.pct,
+        detail: reg.detail,
+      });
+      const beginPayload = new Uint8Array(20);
+      const beginView = new DataView(beginPayload.buffer);
+      beginView.setUint32(0, reg.size, true);
+      beginView.setUint32(4, 0, true);
+      beginView.setUint32(8, FLASH_BLOCK_SIZE, true);
+      beginView.setUint32(12, reg.offset, true);
+      beginView.setUint32(16, 0, true);
+      await writer.write(buildRomCommand(ESP_FLASH_BEGIN, beginPayload));
+      if (!(await waitForRomAck(ESP_FLASH_BEGIN, 15000))) {
+        throw new Error(`Timed out erasing SPI flash region at 0x${reg.offset.toString(16)}.`);
+      }
+    }
+
+    onProgress({
+      stage: "rebooting",
+      percent: 98,
+      detail: "Resetting XIAO ESP32-C5…",
+    });
+    await sleep(60);
+    await hardResetBoard(port);
+
+    onProgress({
+      stage: "done",
+      percent: 100,
+      detail: "Factory reset complete — chip flash erased.",
+    });
+
+    return result;
+  } finally {
+    pumpActive = false;
+    try {
+      await reader.cancel();
+    } catch {
+      // ignore
+    }
+    try {
+      reader.releaseLock();
+    } catch {
+      // ignore
+    }
+    try {
+      writer.releaseLock();
+    } catch {
+      // ignore
+    }
+    try {
+      await port.close();
+    } catch {
+      // ignore
+    }
+  }
+}

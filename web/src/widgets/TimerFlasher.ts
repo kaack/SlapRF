@@ -159,9 +159,13 @@ export class TimerFlasher extends Component {
         return;
       }
 
-      if (t.closest("[data-flash-another]")) {
+      if (t.closest("[data-finish-wizard]") || t.closest("[data-flash-another]")) {
         this.errorMsg = null;
         this.lastSuccessMsg = null;
+        this.progress = null;
+        if (this.role === "spoke") {
+          this.timerLabel = this.suggestSpokeLabel();
+        }
         this.goToStep("network", "prev");
         return;
       }
@@ -1190,7 +1194,7 @@ export class TimerFlasher extends Component {
             <div class="flasher-progress-foot-actions">
               ${
                 this.lastSuccessMsg && !this.busy
-                  ? `<button type="button" class="btn btn-sm" data-flash-another="1">Select another role →</button>`
+                  ? `<button type="button" class="btn btn-sm btn-armed" data-finish-wizard="1">${icons.check(14)}<span>Finish</span></button>`
                   : ""
               }
               <button
@@ -1223,15 +1227,37 @@ export class TimerFlasher extends Component {
             <span>Back</span>
           </button>
 
-          <button
-            type="button"
-            class="btn flasher-btn-flash"
-            data-flash-usb="1"
-            ${this.busy || !webSerialOk ? "disabled" : ""}
-          >
-            <span class="flasher-zap-icon">${icons.zap(15)}</span>
-            <span>${this.busy ? `Flashing ${esc(cleanLabel)}… (${pct}%)` : `Flash ${esc(cleanLabel)} to USB`}</span>
-          </button>
+          ${
+            this.lastSuccessMsg && !this.busy
+              ? `<div class="row" style="gap: 8px;">
+                  <button
+                    type="button"
+                    class="btn"
+                    data-flash-usb="1"
+                    ${!webSerialOk ? "disabled" : ""}
+                  >
+                    <span class="flasher-zap-icon">${icons.zap(15)}</span>
+                    <span>Flash ${esc(cleanLabel)} again</span>
+                  </button>
+                  <button
+                    type="button"
+                    class="btn flasher-btn-flash"
+                    data-finish-wizard="1"
+                  >
+                    ${icons.check(15)}
+                    <span>Finish</span>
+                  </button>
+                </div>`
+              : `<button
+                  type="button"
+                  class="btn flasher-btn-flash"
+                  data-flash-usb="1"
+                  ${this.busy || !webSerialOk ? "disabled" : ""}
+                >
+                  <span class="flasher-zap-icon">${icons.zap(15)}</span>
+                  <span>${this.busy ? `Flashing ${esc(cleanLabel)}… (${pct}%)` : `Flash ${esc(cleanLabel)} to USB`}</span>
+                </button>`
+          }
         </div>
       </div>`;
   }

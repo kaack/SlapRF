@@ -160,6 +160,19 @@ export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { 
   }
 }
 
+export function forgetKnownHardwareTimer(fp: string): void {
+  const clean = (fp || "").trim().toLowerCase();
+  if (!clean) return;
+  const list = loadKnownHardwareTimers().filter((t) => t.fp !== clean);
+  if (typeof window !== "undefined" && window.localStorage) {
+    try {
+      window.localStorage.setItem(KNOWN_TIMERS_STORAGE_KEY, JSON.stringify(list));
+    } catch {
+      // ignore storage errors
+    }
+  }
+}
+
 export function recordKnownTimerStatus(s: TimerStatus): void {
   recordKnownHardwareTimer({
     fp: s.fp,
