@@ -77,6 +77,9 @@ export class AppStore {
     raceArmedByHost: true,
   };
   private _latestTimestampUs = 0;
+  private _lastIngestPerfMs = 0;
+  private _playheadUs = 0;
+  private _lastPlayheadPerfMs = 0;
   private _selectedPilot = 1;
   /** Live view focus: null shows every pilot, a slot index follows that pilot. */
   private _liveFocus: number | null = null;
@@ -248,6 +251,34 @@ export class AppStore {
   public get latestTimestampUs(): number {
     return this._latestTimestampUs;
   }
+  /**
+   * Smooth 60 FPS live playhead timestamp (microseconds).
+   * Advances continuously using `performance.now()` between 40 ms sliding-window packet
+   * bursts and gently slews to track `_latestTimestampUs` so real-time signal charts glide
+   * smoothly at the display refresh rate instead of stepping only when UDP packets arrive.
+   */
+  public get smoothLatestTimestampUs(): number {
+    if (this._latestTimestampUs === 0) return 0;
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    // If no telemetry has arrived in the last 300 ms (e.g. simulator paused or timers idle), hold steady.
+    if (this._lastIngestPerfMs === 0 || nowMs - this._lastIngestPerfMs > 300) {
+      this._playheadUs = this._latestTimestampUs;
+      this._lastPlayheadPerfMs = nowMs;
+      return this._latestTimestampUs;
+    }
+    const dtUs = Math.max(0, Math.min(100_000, (nowMs - this._lastPlayheadPerfMs) * 1000));
+    this._lastPlayheadPerfMs = nowMs;
+    // Target slightly behind the newest packet's timestamp (~25 ms = half a 40 ms superframe + jitter margin)
+    // so every gate's trace stays anchored to the right edge of the chart without popping.
+    const targetUs = this._latestTimestampUs - 25_000;
+    if (this._playheadUs === 0 || Math.abs(targetUs - this._playheadUs) > 250_000) {
+      this._playheadUs = targetUs;
+      return this._playheadUs;
+    }
+    const nextUs = this._playheadUs + dtUs + (targetUs - (this._playheadUs + dtUs)) * 0.12;
+    this._playheadUs = Math.max(this._playheadUs, nextUs);
+    return Math.round(this._playheadUs);
+  }
   public get selectedPilot(): number {
     return this._selectedPilot;
   }
@@ -295,6 +326,8 @@ export class AppStore {
     this._liveTime = state.liveTimeStatus;
     if (modeChanged) {
       this._comparison = { lapId: null, reference: "best" };
+      this._playheadUs = 0;
+      this._lastIngestPerfMs = 0;
     }
 
     this.lastCrossingBySlot.clear();
@@ -367,6 +400,7 @@ export class AppStore {
     if (frame.timestampUs > this._latestTimestampUs) {
       this._latestTimestampUs = frame.timestampUs;
     }
+    this._lastIngestPerfMs = typeof performance !== "undefined" ? performance.now() : Date.now();
     const node = this.node(frame.puckId);
     if (node) node.lastRssi = frame.rssi;
   }

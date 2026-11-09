@@ -61,8 +61,9 @@ type WiFiUDPReceiver struct {
 	conn    *net.UDPConn
 	hubIP   net.IP
 	slots   map[uint8]slotInfo
-	seenSeq map[uint8]uint8 // timerID -> last ingested 8-bit sample seq_num
-	hasSeq  map[uint8]bool  // timerID -> true once at least one sample has been ingested
+	seenSeq map[uint8]uint8  // timerID -> last ingested 8-bit sample seq_num
+	hasSeq  map[uint8]bool   // timerID -> true once at least one sample has been ingested
+	lastTs  map[uint8]uint64 // timerID -> last reconstructed sample TimestampUs
 	stopCh  chan struct{}
 }
 
@@ -77,6 +78,7 @@ func NewWiFiUDPReceiver(addr string, engine *tracker.Engine) *WiFiUDPReceiver {
 		slots:   make(map[uint8]slotInfo),
 		seenSeq: make(map[uint8]uint8),
 		hasSeq:  make(map[uint8]bool),
+		lastTs:  make(map[uint8]uint64),
 		stopCh:  make(chan struct{}),
 	}
 	if engine != nil {
@@ -223,6 +225,7 @@ func (r *WiFiUDPReceiver) handleHello(raw []byte) {
 	r.mu.Lock()
 	r.slots[slot] = slotInfo{fingerprint: fp, timerID: timerID, intervalUs: interval}
 	delete(r.hasSeq, timerID)
+	delete(r.lastTs, timerID)
 	r.mu.Unlock()
 	r.pushActiveChannelsToHub()
 }
@@ -274,7 +277,9 @@ func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.PuckTe
 		for idx := 0; idx < sampleCount; idx++ {
 			off := windowHeaderLen + idx*RawSampleBytes
 			seq := raw[off]
-			if r.hasSeq[timerID] && !isNewerSeq(seq, r.seenSeq[timerID]) {
+			prevSeq := r.seenSeq[timerID]
+			hadPrev := r.hasSeq[timerID]
+			if hadPrev && !isNewerSeq(seq, prevSeq) {
 				continue // Already received in an earlier overlapping burst
 			}
 			r.seenSeq[timerID] = seq
@@ -288,12 +293,35 @@ func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.PuckTe
 					rssi[pIdx] = val
 				}
 			}
-			// Reconstruct each sample's timestamp relative to the newest sample in the window
+			// Reconstruct each sample's timestamp relative to the newest sample in the window,
+			// advancing monotonically by seqDelta * intervalUs when consecutive samples arrive so
+			// Wi-Fi UDP arrival jitter doesn't bunch or stretch samples on the signal chart.
 			ageUs := uint64(sampleCount-1-idx) * intervalUs
-			sampleTs := nowUs
+			rawTs := nowUs
 			if nowUs > ageUs {
-				sampleTs = nowUs - ageUs
+				rawTs = nowUs - ageUs
 			}
+			sampleTs := rawTs
+			if hadPrev {
+				seqDelta := uint64(seq - prevSeq)
+				if seqDelta >= 1 && seqDelta <= 16 {
+					predicted := r.lastTs[timerID] + seqDelta*intervalUs
+					var diff uint64
+					if rawTs > predicted {
+						diff = rawTs - predicted
+					} else {
+						diff = predicted - rawTs
+					}
+					if diff <= 120_000 {
+						// Gently slew toward wall-clock (1/8th step) while keeping monotonic spacing
+						sampleTs = uint64(int64(predicted) + (int64(rawTs)-int64(predicted))/8)
+						if sampleTs <= r.lastTs[timerID] {
+							sampleTs = r.lastTs[timerID] + intervalUs/2
+						}
+					}
+				}
+			}
+			r.lastTs[timerID] = sampleTs
 			out = append(out, domain.PuckTelemetryFrame{
 				PuckID:        timerID,
 				SeqNum:        uint32(seq),

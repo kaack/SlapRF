@@ -242,6 +242,10 @@ export class PilotRssiChart extends Component {
     return this.store.latestTimestampUs;
   }
 
+  private get livePlayhead(): number {
+    return this.store.smoothLatestTimestampUs;
+  }
+
   private get earliest(): number {
     const firsts = this.store.pucks.map((p) => this.store.historyFor(p.puckId)[0]?.timestampUs ?? Infinity);
     const e = Math.min(...firsts);
@@ -249,7 +253,7 @@ export class PilotRssiChart extends Component {
   }
 
   private viewEnd(): number {
-    return this.endUs ?? this.latest;
+    return this.endUs ?? this.livePlayhead;
   }
 
   private clampEnd(end: number): number {
@@ -303,7 +307,7 @@ export class PilotRssiChart extends Component {
 
   /** "Now" for axis labels: the live edge, or the moment the view was paused. */
   private get ref(): number {
-    return this.endUs === null ? this.latest : this.refUs;
+    return this.endUs === null ? this.livePlayhead : this.refUs;
   }
 
   /** Centre the window on the previous / next pass (timed or not) for the focused gate (or all gates). */
@@ -521,11 +525,23 @@ export class PilotRssiChart extends Component {
         // Start on a multiple of the step so the same samples are drawn as the view scrolls
         // (otherwise zoomed-out traces shimmer).
         const first = Math.max(0, from - (from % step));
+        let lastX = PAD.l;
+        let lastY = PAD.t;
+        let lastTs = 0;
         for (let i = first; i <= to; i += step) {
           const x = xOf(frames[i].timestampUs);
           const y = yOf(frames[i].rssi[slot] ?? DBM_MIN);
           if (i === first) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
+          lastX = x;
+          lastY = y;
+          lastTs = frames[i].timestampUs;
+        }
+        // When following live, extend the newest sample horizontally to the right edge if it is
+        // within one sliding-window interval (<= 120 ms), so traces stay flush with the right edge
+        // between 40 ms packet bursts instead of visibly stepping at the tip.
+        if (this.endUs === null && to === frames.length - 1 && end > lastTs && end - lastTs <= 120_000) {
+          ctx.lineTo(Math.min(PAD.l + plotW, xOf(end)), lastY);
         }
         ctx.stroke();
       }
