@@ -4562,6 +4562,9 @@ body.is-gate-dragging * {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.debug-hint-mobile {
+  display: none;
+}
 .debug-signal-canvas {
   height: 250px;
 }
@@ -4983,6 +4986,12 @@ body.is-gate-dragging * {
   }
   .debug-chart-foot > .debug-connect-actions {
     display: none;
+  }
+  .debug-hint-desktop {
+    display: none;
+  }
+  .debug-hint-mobile {
+    display: inline;
   }
   .debug-waterfall-head {
     flex-wrap: wrap;
