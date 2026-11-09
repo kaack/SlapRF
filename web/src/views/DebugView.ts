@@ -282,7 +282,13 @@ export class DebugView extends Component {
 
     el.innerHTML = `
       <div class="settings debug-page">
-        <div data-slot="connection"></div>
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Debug</h2>
+            <p>Plug a timer in over USB-C to inspect its 5.8 GHz receiver, run a self-test, scan the band, or read crash logs. Wi-Fi timing continues unless scanning or switched off.</p>
+          </div>
+          <div class="debug-status-layout" data-slot="connection"></div>
+        </section>
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Self-test</h2>
@@ -2335,8 +2341,15 @@ export class DebugView extends Component {
         : "Connected over USB · reading timer status…"
       : busy
         ? `${esc(this.busy!)}…`
-        : "Off · click Connect in the top-right corner to open a timer over USB-C";
+        : "Off · connect a timer over USB-C";
     const ledClass = on && s ? "is-up" : on || busy ? "is-warn" : "";
+    const btnLabel = on
+      ? s?.label
+        ? `Connected · ${esc(s.label)}`
+        : "Connected"
+      : busy
+        ? `${esc(this.busy!)}…`
+        : "Connect";
 
     const bannerParts: string[] = [];
     if (!supported) {
@@ -2347,26 +2360,25 @@ export class DebugView extends Component {
     }
 
     this.slot("connection").innerHTML = `
-      <header class="debug-page-head">
-        <div class="debug-page-intro">
-          <h2>Debug</h2>
-          <p>Plug a timer into this laptop with a USB-C cable and click <strong>Connect</strong> in the top-right corner to run a 10-second self-test, inspect live 5.8 GHz readings, sweep the spectrum, or read crash logs. Timing over Wi-Fi continues normally unless you start a spectrum scan or switch the receiver off.</p>
-        </div>
-        <div class="debug-page-meta">
-          <span class="debug-led-status">
-            <span class="status-dot ${ledClass}"></span>
-            <span class="note debug-head-note mono">${statusText}</span>
-          </span>
+      <div class="debug-status-topbar">
+        <span class="debug-led-status">
+          <span class="status-dot ${ledClass}"></span>
+          <span class="debug-head-note">${statusText}</span>
+        </span>
+        <div class="debug-connect-actions">
           ${
             !on
               ? `<label class="check debug-port-filter">
                   <input type="checkbox" data-all-ports ${this.showAllPorts ? "checked" : ""}/>
-                  <span>Show non-XIAO serial ports</span>
+                  <span>Show non-XIAO ports</span>
                 </label>`
               : ""
           }
+          <button type="button" class="btn btn-sm ${on ? "btn-armed" : "btn-unarmed"}" data-action="${on ? "disconnect" : "connect"}" ${supported && !busy ? "" : "disabled"}>
+            ${on ? icons.plug(14) : icons.plugOff(14)}<span>${btnLabel}</span>
+          </button>
         </div>
-      </header>
+      </div>
       ${bannerParts.join("")}`;
   }
 
@@ -2413,7 +2425,7 @@ export class DebugView extends Component {
       <div class="debug-card-head debug-log-head">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}"></span>
-          <span class="note debug-head-note mono">${summary}</span>
+          <span class="debug-head-note">${summary}</span>
         </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="copy-report" ${this.checks.length && !running ? "" : "disabled"}><span>Copy report</span></button>
@@ -2469,7 +2481,7 @@ export class DebugView extends Component {
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}"></span>
-          <span class="note debug-head-note mono">${headText}</span>
+          <span class="debug-head-note">${headText}</span>
         </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="read-config" ${on && !this.busy ? "" : "disabled"}>Read config</button>
@@ -2587,7 +2599,7 @@ export class DebugView extends Component {
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}" data-live-led></span>
-          <span class="note debug-head-note mono" data-live-note>${on ? "Waiting for sweep stream…" : "Paused · not connected"}</span>
+          <span class="debug-head-note" data-live-note>${on ? "Waiting for sweep stream…" : "Paused · not connected"}</span>
         </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm ${rfOn ? "btn-armed" : "btn-unarmed"}" data-action="rf" ${on && this.status && !inScanMode ? "" : "disabled"} title="${inScanMode ? "Pause Spectrum scan first to toggle the 5.8 GHz receiver" : "Switch the hardware 5.8 GHz receiver on or off"}">
@@ -2742,7 +2754,7 @@ export class DebugView extends Component {
       <div class="debug-status-topbar">
         <span class="debug-led-status" title="${liveTitle}">
           <span class="status-dot ${sigLedClass}"></span>
-          <span class="note debug-head-note mono">${sigStatusText}</span>
+          <span class="debug-head-note">${sigStatusText}</span>
         </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
@@ -3243,7 +3255,7 @@ export class DebugView extends Component {
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${scanActive ? "is-up" : ""}" data-scan-led></span>
-          <span class="note debug-head-note mono" data-scan-status-note>${this.scanLive ? "Streaming · live scan" : this.scanning ? "Scanning once…" : "Paused"}</span>
+          <span class="debug-head-note" data-scan-status-note>${this.scanLive ? "Streaming · live scan" : this.scanning ? "Scanning once…" : "Paused"}</span>
         </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm ${this.scanning ? "btn-armed" : "btn-unarmed"}" data-action="scan" ${canScanOnce ? "" : "disabled"} title="${this.scanLive ? "Unavailable while Spectrum scan is streaming" : !rfOn ? "Unavailable while the 5.8 GHz receiver is off" : "Sweep the band once and add a row to the waterfall"}">
@@ -3369,7 +3381,7 @@ export class DebugView extends Component {
           <div class="debug-waterfall-title-group">
             <span class="status-dot" data-wf-led></span>
             <strong>Waterfall spectrogram (frequency × time)</strong>
-            <span class="note mono" data-wf-scroll-note></span>
+            <span class="debug-head-note" data-wf-scroll-note></span>
           </div>
           <div class="debug-connect-actions">
             <button type="button" class="btn btn-sm btn-ghost" data-action="wf-jump-live" data-wf-jump-btn disabled>Jump to live</button>
@@ -3538,7 +3550,7 @@ export class DebugView extends Component {
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}"></span>
-          <span class="note debug-head-note mono">${statusText}</span>
+          <span class="debug-head-note">${statusText}</span>
         </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="bootlog" ${on && !busy ? "" : "disabled"}>This boot's log</button>
@@ -3608,7 +3620,7 @@ export class DebugView extends Component {
       <div class="debug-card-head debug-log-head">
         <span class="debug-led-status">
           <span class="status-dot ${active ? "is-up" : ""}"></span>
-          <span class="note mono debug-head-note" data-log-count>${active ? "Streaming" : "Paused"} · ${this.logLines.length} lines</span>
+          <span class="debug-head-note" data-log-count>${active ? "Streaming" : "Paused"} · ${this.logLines.length} lines</span>
         </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="clear-log">Clear</button>

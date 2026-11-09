@@ -3760,42 +3760,10 @@ body.is-gate-dragging * {
 .debug-page {
   font-variant-numeric: tabular-nums;
 }
-.debug-page-head {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 16px 32px;
-  padding: 4px 0 24px;
-  border-bottom: 1px solid var(--border);
-}
-.debug-page-intro {
-  max-width: 680px;
-}
-.debug-page-intro h2 {
-  font-size: 15px;
-  font-weight: 600;
-  color: var(--text);
-}
-.debug-page-intro p {
-  margin-top: 6px;
-  color: var(--text-3);
-  font-size: 12.5px;
-  line-height: 1.6;
-}
-.debug-page-intro strong {
-  color: var(--text-2);
-  font-weight: 600;
-}
-.debug-page-meta {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 8px;
-  margin-left: auto;
-  padding-top: 2px;
-}
 .debug-port-filter {
+  display: inline-flex;
+  align-items: center;
+  height: 28px;
   font-size: 12px;
   color: var(--text-3);
 }
@@ -3839,8 +3807,9 @@ body.is-gate-dragging * {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 10px;
-  padding: 10px 16px;
+  gap: 10px 14px;
+  min-height: 46px;
+  padding: 8px 16px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--surface);
@@ -3976,7 +3945,13 @@ body.is-gate-dragging * {
 .debug-head-note {
   display: inline-flex;
   align-items: center;
-  min-height: 22px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.2;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: normal;
   min-width: 0;
 }
 .debug-subbar {
@@ -4248,7 +4223,9 @@ body.is-gate-dragging * {
   padding: 4px 9px;
 }
 .debug-log-head {
-  padding: 12px 14px 0;
+  margin-bottom: 0;
+  min-height: 46px;
+  padding: 8px 16px;
 }
 .debug-bars {
   display: flex;
@@ -4306,8 +4283,8 @@ body.is-gate-dragging * {
   color: var(--text-3);
 }
 .debug-log {
-  margin: 10px 0 0;
-  padding: 12px 14px;
+  margin: 0;
+  padding: 12px 16px;
   height: 260px;
   min-width: max-content;
   width: 100%;
@@ -4576,7 +4553,8 @@ body.is-gate-dragging * {
 .debug-led-status {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 9px;
+  min-height: 28px;
   min-width: 0;
   flex-shrink: 0;
 }
