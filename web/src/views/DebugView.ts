@@ -698,22 +698,36 @@ export class DebugView extends Component {
           }
         }
         if (minD <= maxD) {
-          let targetMin = Math.max(DBM_MIN, minD - 4);
-          let targetMax = Math.min(DBM_MAX, maxD + 5);
-          const minSpan = 16;
+          // Snap target bounds to 2 dB steps with padding so minor 1 dB noise jitter never moves the Y-axis
+          let targetMin = Math.max(DBM_MIN, Math.floor((minD - 4) / 2) * 2);
+          let targetMax = Math.min(DBM_MAX, Math.ceil((maxD + 5) / 2) * 2);
+          const minSpan = 18;
           if (targetMax - targetMin < minSpan) {
             const extra = minSpan - (targetMax - targetMin);
-            targetMin = Math.max(DBM_MIN, targetMin - Math.floor(extra * 0.3));
+            targetMin = Math.max(DBM_MIN, targetMin - Math.floor(extra * 0.35));
             targetMax = Math.min(DBM_MAX, targetMin + minSpan);
           }
           if (this.signalSmoothYMin === null || this.signalSmoothYMax === null) {
             this.signalSmoothYMin = targetMin;
             this.signalSmoothYMax = targetMax;
           } else {
-            const alphaMin = targetMin < this.signalSmoothYMin ? 0.6 : 0.14;
-            const alphaMax = targetMax > this.signalSmoothYMax ? 0.65 : 0.14;
-            this.signalSmoothYMin += (targetMin - this.signalSmoothYMin) * alphaMin;
-            this.signalSmoothYMax += (targetMax - this.signalSmoothYMax) * alphaMax;
+            // Hysteresis deadband: keep Y-axis completely stationary unless signal exceeds comfort margins
+            const curMin = this.signalSmoothYMin;
+            const curMax = this.signalSmoothYMax;
+            const needMinMove = minD < curMin + 2 || minD > curMin + 9;
+            const needMaxMove = maxD > curMax - 2 || maxD < curMax - 10;
+            const effTargetMin = needMinMove ? targetMin : curMin;
+            const effTargetMax = needMaxMove ? targetMax : curMax;
+            const diffMin = effTargetMin - curMin;
+            const diffMax = effTargetMax - curMax;
+            if (Math.abs(diffMin) > 0.05) {
+              const alphaMin = diffMin < 0 ? 0.35 : 0.08;
+              this.signalSmoothYMin = Math.abs(diffMin) < 0.25 ? effTargetMin : curMin + diffMin * alphaMin;
+            }
+            if (Math.abs(diffMax) > 0.05) {
+              const alphaMax = diffMax > 0 ? 0.4 : 0.08;
+              this.signalSmoothYMax = Math.abs(diffMax) < 0.25 ? effTargetMax : curMax + diffMax * alphaMax;
+            }
           }
           this.signalYMin = this.signalSmoothYMin;
           this.signalYMax = Math.max(this.signalYMin + 12, this.signalSmoothYMax);

@@ -398,18 +398,52 @@ export interface SignalChartOptions {
 }
 
 /**
- * Trace a clamped uniform cubic B-spline through `pts` using exact cubic Bézier segments.
- * Guaranteed C² continuous, convex-hull bounded (never overshoots peaks), and filters ±1 dB integer quantization steps.
+ * Trace a uniform cubic B-spline through `pts` using exact cubic Bézier segments.
+ * When `clampEnds` is false (used on scrolling time-series traces), only interior B-spline knots
+ * `(p_{i-1} + 4*p_i + p_{i+1}) / 6` are drawn so every knot's vertical position is 100% invariant
+ * as new samples stream in or as the X-axis is panned/stretched.
  */
-function traceBSpline(ctx: CanvasRenderingContext2D, pts: Array<{ x: number; y: number }>, moveFirst = true): void {
+function traceBSpline(
+  ctx: CanvasRenderingContext2D,
+  pts: Array<{ x: number; y: number }>,
+  moveFirst = true,
+  clampEnds = true
+): void {
   const n = pts.length;
   if (n === 0) return;
-  if (moveFirst) ctx.moveTo(pts[0].x, pts[0].y);
-  if (n === 1) return;
+  if (n === 1) {
+    if (moveFirst) ctx.moveTo(pts[0].x, pts[0].y);
+    return;
+  }
   if (n === 2) {
+    if (moveFirst) ctx.moveTo(pts[0].x, pts[0].y);
     ctx.lineTo(pts[1].x, pts[1].y);
     return;
   }
+  if (!clampEnds) {
+    if (n === 3) {
+      if (moveFirst) ctx.moveTo(pts[0].x, pts[0].y);
+      ctx.quadraticCurveTo(pts[1].x, pts[1].y, pts[2].x, pts[2].y);
+      return;
+    }
+    const startX = (pts[0].x + 4 * pts[1].x + pts[2].x) / 6;
+    const startY = (pts[0].y + 4 * pts[1].y + pts[2].y) / 6;
+    if (moveFirst) ctx.moveTo(startX, startY);
+    for (let i = 1; i <= n - 3; i++) {
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = pts[i + 2];
+      const cp1x = (2 * p1.x + p2.x) / 3;
+      const cp1y = (2 * p1.y + p2.y) / 3;
+      const cp2x = (p1.x + 2 * p2.x) / 3;
+      const cp2y = (p1.y + 2 * p2.y) / 3;
+      const endX = (p1.x + 4 * p2.x + p3.x) / 6;
+      const endY = (p1.y + 4 * p2.y + p3.y) / 6;
+      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
+    }
+    return;
+  }
+  if (moveFirst) ctx.moveTo(pts[0].x, pts[0].y);
   const at = (idx: number) => pts[Math.max(0, Math.min(n - 1, idx))];
   for (let i = -1; i <= n - 1; i++) {
     const p1 = at(i);
@@ -423,48 +457,6 @@ function traceBSpline(ctx: CanvasRenderingContext2D, pts: Array<{ x: number; y: 
     const endY = (p1.y + 4 * p2.y + p3.y) / 6;
     ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
   }
-}
-
-/**
- * Decimate a dense contiguous trace segment using fixed sweep-number (`n`) buckets so panning
- * or stretching the X-axis never shifts bucket boundaries.
- */
-function decimateSignalSegment(
-  pts: Array<{ n: number; x: number; y: number; dbm: number }>,
-  strideN: number
-): Array<{ x: number; y: number }> {
-  if (strideN <= 1 || pts.length <= 6) {
-    return pts;
-  }
-  const out: Array<{ x: number; y: number }> = [];
-  let i = 0;
-  while (i < pts.length) {
-    const bKey = Math.floor(pts[i].n / strideN);
-    let sumX = 0;
-    let sumY = 0;
-    let minDbm = 1000;
-    let maxDbm = -1000;
-    let peakPt = pts[i];
-    let count = 0;
-    while (i < pts.length && Math.floor(pts[i].n / strideN) === bKey) {
-      const p = pts[i];
-      sumX += p.x;
-      sumY += p.y;
-      if (p.dbm < minDbm) minDbm = p.dbm;
-      if (p.dbm > maxDbm) {
-        maxDbm = p.dbm;
-        peakPt = p;
-      }
-      count++;
-      i++;
-    }
-    if (maxDbm - minDbm >= 5) {
-      out.push({ x: peakPt.x, y: peakPt.y });
-    } else {
-      out.push({ x: sumX / count, y: sumY / count });
-    }
-  }
-  return out;
 }
 
 /** Render the Signal-over-time multi-channel chart onto `canvas`. */
@@ -651,9 +643,6 @@ export function drawSignalOverTimeCanvas(
 
   // Draw each enabled channel trace using uniform cubic B-splines; break the path when `n` jumps so gaps show honestly
   const maxStepN = Math.max(2, Math.round(opts.sweepHz / 5)); // >200 ms gap breaks the line
-  const pxPerSweep = plotW / Math.max(1, windowSweeps);
-  const showSampleDots = pxPerSweep >= 7.5;
-  const strideN = windowSweeps > 360 ? Math.max(1, Math.floor(windowSweeps / 240)) : 1;
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
 
@@ -661,15 +650,14 @@ export function drawSignalOverTimeCanvas(
     if (!opts.enabledChannels[ch]) continue;
     const col = CHANNEL_COLORS[ch];
     ctx.strokeStyle = col;
-    ctx.lineWidth = showSampleDots ? 1.85 : 1.65;
+    ctx.lineWidth = 1.75;
     ctx.beginPath();
 
-    let segment: Array<{ n: number; x: number; y: number; dbm: number }> = [];
+    let segment: Array<{ x: number; y: number }> = [];
     let prevN = -1;
     const flushSegment = () => {
       if (segment.length === 0) return;
-      const smoothed = decimateSignalSegment(segment, strideN);
-      traceBSpline(ctx, smoothed, true);
+      traceBSpline(ctx, segment, true, false);
       segment = [];
     };
 
@@ -683,25 +671,11 @@ export function drawSignalOverTimeCanvas(
       if (segment.length > 0 && p.n - prevN > maxStepN) {
         flushSegment();
       }
-      segment.push({ n: p.n, x: xOfN(p.n), y: yOf(v), dbm: v });
+      segment.push({ x: xOfN(p.n), y: yOf(v) });
       prevN = p.n;
     }
     flushSegment();
     ctx.stroke();
-
-    // When stretched horizontally (zoomed in on time), render individual sweep sample dots
-    if (showSampleDots) {
-      ctx.fillStyle = col;
-      const dotR = pxPerSweep >= 12 ? 2.3 : 1.7;
-      for (let k = 0; k < pts.length; k++) {
-        const p = pts[k];
-        const v = p.dbm[ch];
-        if (v === undefined || v <= -127) continue;
-        ctx.beginPath();
-        ctx.arc(xOfN(p.n), yOf(v), dotR, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    }
   }
 
   // Draw Y-axis zoom selection band when dragging vertically
@@ -784,15 +758,6 @@ export function drawSignalOverTimeCanvas(
         text: `${mark}${rb} ${f}: ${v} dBm${fl && fl > -127 ? ` (fl ${fl})` : ""}`,
         color: CHANNEL_COLORS[ch],
       });
-      if (ch === bestCh) {
-        const cy = yOf(v);
-        if (cy >= T && cy <= T + plotH) {
-          ctx.fillStyle = CHANNEL_COLORS[ch];
-          ctx.beginPath();
-          ctx.arc(hx, cy, 3.5, 0, Math.PI * 2);
-          ctx.fill();
-        }
-      }
     }
     drawTooltipBox(ctx, hx, opts.hover.y, lines, L, W - R, T, T + plotH, tokens);
   }
@@ -1358,11 +1323,6 @@ export function drawSpectrumCanvas(
       ctx.lineTo(hx, T + plotH);
       ctx.stroke();
       ctx.setLineDash([]);
-
-      ctx.fillStyle = tokens.text;
-      ctx.beginPath();
-      ctx.arc(hx, hy, 3, 0, Math.PI * 2);
-      ctx.fill();
 
       const tipLines: Array<{ text: string; color: string }> = [
         { text: `${f} MHz  (${nearestBandHint(f)})`, color: tokens.text },
