@@ -262,6 +262,10 @@ export class AppStore {
     const latest = this._latestTelemetryTimestampUs || this._latestTimestampUs;
     if (latest === 0) return 0;
     const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    // Same animation frame: return the already-stepped playhead so multiple callers see the exact same value.
+    if (this._playheadUs > 0 && Math.abs(nowMs - this._lastPlayheadPerfMs) < 0.5) {
+      return Math.round(this._playheadUs);
+    }
     // If no telemetry has arrived in the last 500 ms (e.g. simulator paused or timers powered off), hold steady.
     if (this._lastIngestPerfMs === 0 || nowMs - this._lastIngestPerfMs > 500) {
       this._playheadUs = latest;

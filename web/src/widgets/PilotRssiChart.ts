@@ -500,11 +500,12 @@ export class PilotRssiChart extends Component {
 
     if (this.endUs !== null) this.endUs = this.clampEnd(this.endUs);
     const end = this.viewEnd();
+    const ref = this.endUs === null ? end : this.refUs;
     const start = end - this.windowUs;
     const xOf = (ts: number) => PAD.l + plotW * ((ts - start) / this.windowUs);
     const yOf = (dbm: number) => this.yOf(dbm);
 
-    this.drawGrid(ctx, w, h, start, end, xOf, yOf);
+    this.drawGrid(ctx, w, h, start, end, ref, xOf, yOf);
 
     if (this.latest > 0) {
       // Traces, decimated to roughly one point per pixel when zoomed out.
@@ -679,6 +680,7 @@ export class PilotRssiChart extends Component {
     h: number,
     start: number,
     end: number,
+    ref: number,
     xOf: (ts: number) => number,
     yOf: (dbm: number) => number
   ): void {
@@ -697,7 +699,6 @@ export class PilotRssiChart extends Component {
     }
 
     // Time ticks, labelled relative to now (or to when the view was paused).
-    const ref = this.ref;
     const stepSec = this.windowUs <= 6e6 ? 1 : this.windowUs <= 12e6 ? 2 : this.windowUs <= 35e6 ? 5 : 10;
     const stepUs = stepSec * 1e6;
     ctx.textAlign = "center";
