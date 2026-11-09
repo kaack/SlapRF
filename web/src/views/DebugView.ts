@@ -2151,14 +2151,14 @@ export class DebugView extends Component {
     const profile = FIRMWARE_PROFILES.find((p) => p.code === s.profile);
     if (!profile) add("Identity", "fail", `unknown firmware profile ${s.profile}; flash a current SlapRF build`);
     else if (s.fp.toUpperCase() === UNPROVISIONED_FP)
-      add("Identity", "warn", `${profile.name}, but not set up yet (default fingerprint). Use Setup → Timers to give it an identity.`);
-    else add("Identity", "pass", `${s.label || "(unnamed)"} · ${s.role === 1 ? "Hub" : "Spoke"} · ${profile.name} · ${s.fp}`);
+      add("Identity", "warn", `${profile.name}, but not set up yet (default fingerprint). Use Setup -> Timers to give it an identity.`);
+    else add("Identity", "pass", `${s.label || "(unnamed)"} | ${s.role === 1 ? "Hub" : "Spoke"} | ${profile.name} | ${s.fp}`);
 
     // 3. Receiver
     if (!s.rf.ok) add("5.8 GHz receiver", "fail", "the receiver's boot check failed; restart the timer and look at the boot log");
     else if (!s.rf.enabled) add("5.8 GHz receiver", "warn", "switched off from this page; switch it back on in Live readings");
     else if (s.rf.floorDb < -100 || s.rf.floorDb > -80)
-      add("5.8 GHz receiver", "warn", `noise floor ${s.rf.floorDb.toFixed(1)} dBm is outside the usual −100…−80 dBm (antenna, or strong interference nearby)`);
+      add("5.8 GHz receiver", "warn", `noise floor ${s.rf.floorDb.toFixed(1)} dBm is outside the usual -100..-80 dBm (antenna, or strong interference nearby)`);
     else add("5.8 GHz receiver", "pass", `noise floor ${s.rf.floorDb.toFixed(1)} dBm, gain ${s.rf.gain}/${s.rf.gainMax}`);
 
     // 4. Sweep timing
@@ -2214,7 +2214,7 @@ export class DebugView extends Component {
 
     // 9. Last restart
     if (BAD_RESETS.includes(s.reset)) {
-      add("Last restart", "fail", `${s.reset}: the timer crashed or lost power. The previous boot's log is attached to the report.`);
+      add("Last restart", "warn", `${s.reset}, boot #${s.boots} (previous boot crashed or lost power; boot log attached)`);
       try {
         const last = await this.console.request<BootLog>("LASTLOG?", "bootlog", 3000);
         this.bootLog = last;
@@ -2402,9 +2402,9 @@ export class DebugView extends Component {
       ? running
         ? esc(this.progress)
         : counts.fail
-          ? `<span class="tone-bad">${counts.fail} problem${counts.fail > 1 ? "s" : ""} found</span>`
+          ? `${counts.fail} problem${counts.fail > 1 ? "s" : ""} found`
           : counts.warn
-            ? `<span class="debug-tone-warn">Passed with ${counts.warn} warning${counts.warn > 1 ? "s" : ""}</span>`
+            ? `Passed with ${counts.warn} warning${counts.warn > 1 ? "s" : ""}`
             : `All ${this.checks.length} checks passed`
       : running
         ? esc(this.progress)
@@ -2412,15 +2412,21 @@ export class DebugView extends Component {
           ? "Ready · takes about 10 s (pauses timing briefly during scan)"
           : "Off · connect a timer first";
     const consoleLines = this.checks.length
-      ? this.checks
-          .map((c) => {
-            const tag = c.result === "pass" ? "[PASS]" : c.result === "warn" ? "[WARN]" : c.result === "fail" ? "[FAIL]" : "[SKIP]";
-            const tagClass = c.result === "fail" ? "tone-bad" : c.result === "warn" ? "debug-tone-warn" : "note";
-            const paddedName = esc(c.name.padEnd(18, " "));
-            return `<span class="${tagClass}">${tag}</span>  <span class="debug-selftest-name">${paddedName}</span>  ${esc(c.detail)}`;
-          })
-          .join("\n")
-      : `<span class="note">${running ? esc(this.progress || "Starting self-test…") : on ? "# Click \"Run self-test\" to verify console, identity, 5.8 GHz receiver, sweep timing, memory, and Wi-Fi." : "# Connect a timer over USB to run the hardware self-test."}</span>`;
+      ? esc(
+          this.checks
+            .map((c) => {
+              const tag = c.result === "pass" ? "[PASS]" : c.result === "warn" ? "[WARN]" : c.result === "fail" ? "[FAIL]" : "[SKIP]";
+              return `${tag}  ${c.name.padEnd(20, " ")}  ${c.detail}`;
+            })
+            .join("\n")
+        )
+      : esc(
+          running
+            ? this.progress || "Starting self-test..."
+            : on
+              ? "# Click \"Run self-test\" to verify console, identity, 5.8 GHz receiver, sweep timing, memory, and Wi-Fi."
+              : "# Connect a timer over USB to run the hardware self-test."
+        );
     this.slot("selftest").innerHTML = `
       <div class="debug-card-head debug-log-head">
         <span class="debug-led-status">
@@ -2553,7 +2559,7 @@ export class DebugView extends Component {
             </div>
             <div class="debug-kv-row">
               <dt>Last restart</dt>
-              <dd>${s ? (badReset ? `<span class="tone-bad">${esc(s.reset)}</span> <span class="note">— see boot log</span>` : esc(s.reset)) : "—"}</dd>
+              <dd>${s ? (badReset ? `${esc(s.reset)} <span class="note">— see boot log</span>` : esc(s.reset)) : "—"}</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Memory free</dt>
