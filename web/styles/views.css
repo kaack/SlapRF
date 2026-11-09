@@ -3760,6 +3760,9 @@ body.is-gate-dragging * {
 .debug-page {
   font-variant-numeric: tabular-nums;
 }
+.debug-page .check input {
+  accent-color: var(--text-2);
+}
 .debug-port-filter {
   display: inline-flex;
   align-items: center;

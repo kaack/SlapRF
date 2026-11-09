@@ -4007,10 +4007,12 @@ export class DebugView extends Component {
           <span class="note" data-serial-note>${statusText}</span>
         </div>
         <div class="debug-connect-actions">
-          <label class="check">
-            <input type="checkbox" data-check="serial-wrap" ${this.serialWrap ? "checked" : ""}/>
-            <span>Wrap lines</span>
-          </label>
+          <div class="debug-overlay-checks">
+            <label class="check">
+              <input type="checkbox" data-check="serial-wrap" ${this.serialWrap ? "checked" : ""}/>
+              <span>Wrap lines</span>
+            </label>
+          </div>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-serial" ${this.serialLines.length ? "" : "disabled"} title="Copy terminal output" aria-label="Copy terminal output">${icons.copy(14)}</button>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-clear" ${this.serialLines.length ? "" : "disabled"} title="Clear terminal (CLEAR)" aria-label="Clear terminal">${icons.trash(14)}</button>
         </div>
@@ -4045,10 +4047,12 @@ export class DebugView extends Component {
           <span class="debug-head-note" data-log-count>${active ? "Streaming" : "Paused"} · ${this.logLines.length} lines</span>
         </span>
         <div class="debug-connect-actions">
-          <label class="check">
-            <input type="checkbox" data-check="log-wrap" ${this.logWrap ? "checked" : ""}/>
-            <span>Wrap lines</span>
-          </label>
+          <div class="debug-overlay-checks">
+            <label class="check">
+              <input type="checkbox" data-check="log-wrap" ${this.logWrap ? "checked" : ""}/>
+              <span>Wrap lines</span>
+            </label>
+          </div>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="clear-log" title="Clear live log" aria-label="Clear live log">${icons.trash(14)}</button>
           <button type="button" class="btn btn-sm ${this.logOn ? "btn-armed" : "btn-unarmed"}" data-action="log" ${on ? "" : "disabled"} title="${this.logOn ? "Streaming USB log mirror — click to pause" : "Paused — click to stream USB log mirror"}">
             ${this.logOn ? icons.pause(14) : icons.play(14)}<span>${this.logOn ? "Pause" : "Stream"}</span>
