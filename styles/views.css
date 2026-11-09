@@ -4431,6 +4431,7 @@ body.is-gate-dragging * {
   margin-left: -1px;
   background: var(--text);
   opacity: 0.85;
+  transition: left 0.08s linear;
 }
 .debug-bar-value {
   text-align: right;
