@@ -408,7 +408,13 @@ export class DebugView extends Component {
       else if (t.matches("[data-check]")) void this.onCheckChange(t);
     });
     this.listen(el, "input", (e) => {
-      if ((e.target as HTMLElement).matches("[data-chan]")) this.channelsDirty = true;
+      const t = e.target as HTMLElement;
+      if (t.matches("[data-chan]")) {
+        this.channelsDirty = true;
+      } else if (t.matches("[data-scan-start], [data-scan-stop], [data-scan-step]")) {
+        this.dirtySpectrum = true;
+        this.dirtyWaterfall = true;
+      }
     });
 
     this.bindCanvasHover();
@@ -502,26 +508,33 @@ export class DebugView extends Component {
     }
   }
 
-  private currentScanBounds(): { vStart: number; vStop: number } | null {
+  private currentScanBounds(): { vStart: number; vStop: number } {
     const s = this.spectrumAcc.latest;
-    if (!s || !s.dbm.length) return null;
-    const scanStop = s.start + s.step * (s.dbm.length - 1);
-    const vStart = Math.max(s.start, Math.min(scanStop - s.step, this.scanZoomStartMHz ?? s.start));
-    const vStop = Math.min(scanStop, Math.max(vStart + s.step, this.scanZoomStopMHz ?? scanStop));
+    const rawStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || 5180;
+    const rawStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || 5917;
+    const rawStep = Math.max(1, Number(this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value) || 5);
+    const fullStart = s && s.dbm.length ? s.start : Math.max(5180, Math.min(5900, rawStart));
+    const fullStop =
+      s && s.dbm.length
+        ? s.start + s.step * (s.dbm.length - 1)
+        : Math.max(fullStart + rawStep, Math.min(5925, rawStop));
+    const step = s && s.dbm.length ? s.step : rawStep;
+    const vStart = Math.max(fullStart, Math.min(fullStop - step, this.scanZoomStartMHz ?? fullStart));
+    const vStop = Math.min(fullStop, Math.max(vStart + step, this.scanZoomStopMHz ?? fullStop));
     return { vStart, vStop };
   }
 
   private applyFreqZoomFromBox(box: { x0: number; x1: number }, plotW: number, L = 44): void {
     const b = this.currentScanBounds();
     const s = this.spectrumAcc.latest;
-    if (!b || !s) return;
+    const step = s && s.dbm.length ? s.step : Math.max(1, Number(this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value) || 5);
     const xa = Math.max(L, Math.min(L + plotW, Math.min(box.x0, box.x1)));
     const xb = Math.max(L, Math.min(L + plotW, Math.max(box.x0, box.x1)));
     if (xb - xa < 12) return;
     const span = b.vStop - b.vStart;
     const f0 = b.vStart + ((xa - L) / plotW) * span;
     const f1 = b.vStart + ((xb - L) / plotW) * span;
-    if (f1 - f0 >= Math.max(10, s.step * 2)) {
+    if (f1 - f0 >= Math.max(10, step * 2)) {
       this.scanZoomStartMHz = f0;
       this.scanZoomStopMHz = f1;
       this.renderScan();
@@ -530,12 +543,18 @@ export class DebugView extends Component {
 
   private applyFreqStretch(startMHz0: number, startMHz1: number, anchorFrac: number, factor: number): void {
     const s = this.spectrumAcc.latest;
-    if (!s || !s.dbm.length) return;
-    const fullStart = s.start;
-    const fullStop = s.start + s.step * (s.dbm.length - 1);
+    const rawStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || 5180;
+    const rawStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || 5917;
+    const rawStep = Math.max(1, Number(this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value) || 5);
+    const fullStart = s && s.dbm.length ? s.start : Math.max(5180, Math.min(5900, rawStart));
+    const fullStop =
+      s && s.dbm.length
+        ? s.start + s.step * (s.dbm.length - 1)
+        : Math.max(fullStart + rawStep, Math.min(5925, rawStop));
+    const step = s && s.dbm.length ? s.step : rawStep;
     const fullSpan = Math.max(10, fullStop - fullStart);
     const curSpan = Math.max(10, startMHz1 - startMHz0);
-    const minSpan = Math.max(10, s.step * 3);
+    const minSpan = Math.max(10, step * 3);
     const nextSpan = Math.max(minSpan, Math.min(fullSpan, curSpan * factor));
     const anchorMHz = startMHz0 + anchorFrac * curSpan;
     let f0 = anchorMHz - anchorFrac * nextSpan;
@@ -562,9 +581,10 @@ export class DebugView extends Component {
 
   private applyFreqPan(startMHz0: number, startMHz1: number, deltaMHz: number): void {
     const s = this.spectrumAcc.latest;
-    if (!s || !s.dbm.length) return;
-    const fullStart = s.start;
-    const fullStop = s.start + s.step * (s.dbm.length - 1);
+    const rawStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || 5180;
+    const rawStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || 5917;
+    const fullStart = s && s.dbm.length ? s.start : Math.max(5180, Math.min(5900, rawStart));
+    const fullStop = s && s.dbm.length ? s.start + s.step * (s.dbm.length - 1) : Math.max(fullStart + 5, Math.min(5925, rawStop));
     const span = Math.max(10, startMHz1 - startMHz0);
     if (span >= fullStop - fullStart - 0.5) return;
     let f0 = startMHz0 + deltaMHz;
@@ -936,7 +956,7 @@ export class DebugView extends Component {
         const L = 44;
         const plotW = Math.max(10, r.width - L - 18);
         const bounds = this.currentScanBounds();
-        if (x < 48 && this.spectrumAcc.history.length > 0) {
+        if (x < 48) {
           // Dragging on Waterfall Y-axis stretches/shrinks vertical time scale (visibleRows)
           this.wfDragging = {
             mode: "ystretch",
@@ -944,11 +964,11 @@ export class DebugView extends Component {
             startY: e.clientY,
             startScroll: this.spectrumAcc.scrollRow,
             startVisibleRows: this.spectrumAcc.visibleRows,
-            startMHz0: bounds?.vStart ?? 5180,
-            startMHz1: bounds?.vStop ?? 5917,
+            startMHz0: bounds.vStart,
+            startMHz1: bounds.vStop,
             anchorFrac: 0,
           };
-        } else if (y >= r.height - 24 && x >= L && bounds) {
+        } else if (y >= r.height - 24 && x >= L) {
           // Dragging on Waterfall X-axis stretches/shrinks MHz span
           const xFrac = Math.max(0, Math.min(1, (x - L) / plotW));
           this.wfDragging = {
@@ -968,8 +988,8 @@ export class DebugView extends Component {
             startY: e.clientY,
             startScroll: this.spectrumAcc.scrollRow,
             startVisibleRows: this.spectrumAcc.visibleRows,
-            startMHz0: bounds?.vStart ?? 5180,
-            startMHz1: bounds?.vStop ?? 5917,
+            startMHz0: bounds.vStart,
+            startMHz1: bounds.vStop,
             anchorFrac: 0,
           };
           scrubScrollbar(target, e.clientY);
@@ -981,8 +1001,8 @@ export class DebugView extends Component {
               startY: e.clientY,
               startScroll: this.spectrumAcc.scrollRow,
               startVisibleRows: this.spectrumAcc.visibleRows,
-              startMHz0: bounds?.vStart ?? 5180,
-              startMHz1: bounds?.vStop ?? 5917,
+              startMHz0: bounds.vStart,
+              startMHz1: bounds.vStop,
               anchorFrac: 0.5,
             };
             this.scanZoomBox = { x0: x, x1: x };
@@ -995,8 +1015,8 @@ export class DebugView extends Component {
               startY: e.clientY,
               startScroll: this.spectrumAcc.scrollRow,
               startVisibleRows: this.spectrumAcc.visibleRows,
-              startMHz0: bounds?.vStart ?? 5180,
-              startMHz1: bounds?.vStop ?? 5917,
+              startMHz0: bounds.vStart,
+              startMHz1: bounds.vStop,
               anchorFrac: 0.5,
             };
           }
@@ -1386,12 +1406,16 @@ export class DebugView extends Component {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-spectrum-canvas]");
       if (c) {
         this.updateAutoScanY();
+        const fallbackStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || 5180;
+        const fallbackStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || 5917;
         drawSpectrumCanvas(c, this.spectrumAcc, {
           showMaxHold: this.scanShowMaxHold,
           showAverage: this.scanShowAvg,
           showWifiOverlay: this.scanShowWifi,
           viewStartMHz: this.scanZoomStartMHz,
           viewStopMHz: this.scanZoomStopMHz,
+          fallbackStartMHz: fallbackStart,
+          fallbackStopMHz: fallbackStop,
           yMinDbm: this.scanYMin,
           yMaxDbm: this.scanYMax,
           autoY: this.scanAutoY,
@@ -1405,6 +1429,8 @@ export class DebugView extends Component {
     if (this.dirtyWaterfall) {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-waterfall-canvas]");
       if (c) {
+        const fallbackStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || 5180;
+        const fallbackStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || 5917;
         drawWaterfallCanvas(
           c,
           this.spectrumAcc,
@@ -1412,7 +1438,9 @@ export class DebugView extends Component {
           this.waterfallHover,
           this.scanZoomStartMHz,
           this.scanZoomStopMHz,
-          this.scanZoomBox
+          this.scanZoomBox,
+          fallbackStart,
+          fallbackStop
         );
         this.dirtyWaterfall = false;
       }
@@ -2705,7 +2733,6 @@ export class DebugView extends Component {
               <span>Enter threshold</span>
             </label>
           </div>
-          <span class="note debug-chart-hint">${liveFollowOn ? "Drag chart to pan X/Y · drag axes to stretch · wheel to zoom" : "Paused · drag chart to pan X/Y · double-click to reset"}</span>
         </div>
       </div>`;
     this.slot("signal-legend").innerHTML = `
@@ -2776,6 +2803,7 @@ export class DebugView extends Component {
                 : ""
             }
           </div>
+          <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
         </div>
         <div class="debug-connect-actions">
           <div class="debug-btn-group" role="group" aria-label="Export signal chart">
@@ -3361,6 +3389,7 @@ export class DebugView extends Component {
                   : ""
               }
             </div>
+            <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
           </div>
           <div class="debug-connect-actions">
             <div class="debug-btn-group" role="group" aria-label="Export waterfall spectrogram">
@@ -3429,13 +3458,13 @@ export class DebugView extends Component {
     }
     if (wfNote) {
       if (!total) {
-        wfNote.textContent = "Off · drag horizontally to zoom MHz · wheel/drag vertically to scroll time";
+        wfNote.textContent = "Paused";
       } else if (sc > 0) {
         wfNote.textContent = `Paused · rows -${sc + 1}..-${Math.min(total, sc + vis)} of ${total}`;
       } else if (total > vis) {
-        wfNote.textContent = `${this.scanLive ? "On" : "Off"} · top ${vis} of ${total} passes · wheel to scroll`;
+        wfNote.textContent = `${this.scanLive ? "Streaming" : "Paused"} · top ${vis} of ${total} passes`;
       } else {
-        wfNote.textContent = `${this.scanLive ? "On" : "Off"} · ${total} pass${total === 1 ? "" : "es"}`;
+        wfNote.textContent = `${this.scanLive ? "Streaming" : "Paused"} · ${total} pass${total === 1 ? "" : "es"}`;
       }
     }
     if (wfJumpBtn) {

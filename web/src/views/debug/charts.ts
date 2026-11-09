@@ -1110,6 +1110,8 @@ export interface SpectrumCanvasOptions {
   showWifiOverlay: boolean;
   viewStartMHz?: number | null;
   viewStopMHz?: number | null;
+  fallbackStartMHz?: number;
+  fallbackStopMHz?: number;
   yMinDbm?: number;
   yMaxDbm?: number;
   autoY?: boolean;
@@ -1176,6 +1178,7 @@ export function drawSpectrumCanvas(
   opts: SpectrumCanvasOptions
 ): void {
   const s = acc.latest;
+  const hasData = Boolean(s && s.dbm.length);
   const tokens = getThemeTokens();
   const { ctx, width: W, height: H } = prepareCanvas(canvas, 230);
   const L = 44;
@@ -1187,18 +1190,11 @@ export function drawSpectrumCanvas(
 
   ctx.clearRect(0, 0, W, H);
 
-  if (!s || !s.dbm.length) {
-    ctx.fillStyle = tokens.text3;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.font = `12px ${tokens.fontSans}`;
-    ctx.fillText("Click Scan once or Live on to see the 5.8 GHz spectrum.", L + plotW / 2, T + plotH / 2);
-    return;
-  }
-
-  const scanStop = s.start + s.step * (s.dbm.length - 1);
-  const vStart = Math.max(s.start, Math.min(scanStop - s.step, opts.viewStartMHz ?? s.start));
-  const vStop = Math.min(scanStop, Math.max(vStart + s.step, opts.viewStopMHz ?? scanStop));
+  const scanStart = hasData ? s!.start : (opts.fallbackStartMHz ?? 5180);
+  const scanStep = hasData ? s!.step : 5;
+  const scanStop = hasData ? s!.start + s!.step * (s!.dbm.length - 1) : Math.max(scanStart + scanStep, opts.fallbackStopMHz ?? 5917);
+  const vStart = Math.max(scanStart, Math.min(scanStop - scanStep, opts.viewStartMHz ?? scanStart));
+  const vStop = Math.min(scanStop, Math.max(vStart + scanStep, opts.viewStopMHz ?? scanStop));
   const span = Math.max(1, vStop - vStart);
   const yMin = opts.yMinDbm ?? DBM_MIN;
   const yMax = Math.max(yMin + 4, opts.yMaxDbm ?? DBM_MAX);
@@ -1230,6 +1226,14 @@ export function drawSpectrumCanvas(
   ctx.textBaseline = "top";
   for (let f = Math.ceil(vStart / fStep) * fStep; f <= vStop; f += fStep) {
     const x = Math.round(xOf(f)) + 0.5;
+    if (x >= L - 1 && x <= W - R + 1) {
+      ctx.strokeStyle = tokens.border;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, T);
+      ctx.lineTo(x, T + plotH);
+      ctx.stroke();
+    }
     ctx.fillStyle = tokens.text3;
     ctx.fillText(`${f}`, x, T + plotH + 6);
   }
@@ -1240,6 +1244,20 @@ export function drawSpectrumCanvas(
   ctx.clip();
 
   drawBandOverlay(ctx, vStart, vStop, L, R, T, plotW, plotH, opts.showWifiOverlay, tokens);
+
+  if (opts.zoomBox) {
+    drawFreqZoomBox(ctx, opts.zoomBox, vStart, span, L, R, T, W, plotW, plotH, tokens);
+  }
+
+  if (!hasData || !s) {
+    ctx.restore();
+    ctx.fillStyle = tokens.text3;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `12px ${tokens.fontSans}`;
+    ctx.fillText("Click Scan once or Stream to sweep the 5.8 GHz spectrum.", L + plotW / 2, T + plotH / 2);
+    return;
+  }
 
   // Max-hold trace (B-spline smoothed)
   ctx.lineCap = "round";
@@ -1300,10 +1318,6 @@ export function drawSpectrumCanvas(
     ctx.fillText(`${peakFreq} MHz · ${s.dbm[peakIdx]} dBm`, px + (px > W - R - 130 ? -6 : 6), Math.max(T + 22, py - 5));
   }
 
-  if (opts.zoomBox) {
-    drawFreqZoomBox(ctx, opts.zoomBox, vStart, span, L, R, T, W, plotW, plotH, tokens);
-  }
-
   ctx.restore();
 
   // Hover readout
@@ -1352,10 +1366,13 @@ export function drawWaterfallCanvas(
   hover: { x: number; y: number } | null,
   viewStartMHz?: number | null,
   viewStopMHz?: number | null,
-  zoomBox?: { x0: number; x1: number } | null
+  zoomBox?: { x0: number; x1: number } | null,
+  fallbackStartMHz?: number,
+  fallbackStopMHz?: number
 ): void {
   const s = acc.latest;
   const off = acc.getOffscreen();
+  const hasData = Boolean(s && off && acc.history.length > 0 && s.dbm.length > 0);
   const tokens = getThemeTokens();
   const { ctx, width: W, height: H } = prepareCanvas(canvas, 220);
   const L = 44;
@@ -1367,33 +1384,31 @@ export function drawWaterfallCanvas(
 
   ctx.clearRect(0, 0, W, H);
 
-  if (!s || !off || !acc.history.length) {
-    ctx.fillStyle = tokens.text3;
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.font = `12px ${tokens.fontSans}`;
-    ctx.fillText("Scan passes will build a scrollable waterfall history here.", L + plotW / 2, T + plotH / 2);
-    return;
-  }
-
-  const scanStop = s.start + s.step * (s.dbm.length - 1);
-  const vStart = Math.max(s.start, Math.min(scanStop - s.step, viewStartMHz ?? s.start));
-  const vStop = Math.min(scanStop, Math.max(vStart + s.step, viewStopMHz ?? scanStop));
+  const scanStart = hasData ? s!.start : (fallbackStartMHz ?? 5180);
+  const scanStep = hasData ? s!.step : 5;
+  const scanStop = hasData ? s!.start + s!.step * (s!.dbm.length - 1) : Math.max(scanStart + scanStep, fallbackStopMHz ?? 5917);
+  const vStart = Math.max(scanStart, Math.min(scanStop - scanStep, viewStartMHz ?? scanStart));
+  const vStop = Math.min(scanStop, Math.max(vStart + scanStep, viewStopMHz ?? scanStop));
   const span = Math.max(1, vStop - vStart);
   const xOf = (f: number) => L + ((f - vStart) / span) * plotW;
 
   const visRows = acc.visibleRows;
   const startRow = Math.max(0, Math.min(acc.maxScrollRow(), acc.scrollRow));
 
-  // Slice both horizontal frequency bins [bin0 .. bin1] and vertical rows [startRow .. startRow + visRows]
-  const bin0 = Math.max(0, Math.min(off.width - 1, (vStart - s.start) / Math.max(1, s.step)));
-  const bin1 = Math.max(bin0 + 1, Math.min(off.width, (vStop - s.start) / Math.max(1, s.step) + 1));
   ctx.save();
   ctx.beginPath();
   ctx.rect(L, T, plotW, plotH);
   ctx.clip();
-  ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(off, bin0, startRow, bin1 - bin0, visRows, L, T, plotW, plotH);
+  if (hasData && s && off) {
+    // Slice both horizontal frequency bins [bin0 .. bin1] and vertical rows [startRow .. startRow + visRows]
+    const bin0 = Math.max(0, Math.min(off.width - 1, (vStart - s.start) / Math.max(1, s.step)));
+    const bin1 = Math.max(bin0 + 1, Math.min(off.width, (vStop - s.start) / Math.max(1, s.step) + 1));
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(off, bin0, startRow, bin1 - bin0, visRows, L, T, plotW, plotH);
+  } else {
+    ctx.fillStyle = "#0b0c0f";
+    ctx.fillRect(L, T, plotW, plotH);
+  }
   drawBandOverlay(ctx, vStart, vStop, L, R, T, plotW, plotH, showWifiOverlay, tokens);
   if (zoomBox) {
     drawFreqZoomBox(ctx, zoomBox, vStart, span, L, R, T, W, plotW, plotH, tokens);
@@ -1406,7 +1421,7 @@ export function drawWaterfallCanvas(
   ctx.strokeRect(L + 0.5, T + 0.5, plotW - 1, plotH - 1);
 
   // Y-axis age ticks (reflecting current vertical scroll offset and row stretch)
-  const passSec = s.passMs && s.passMs > 20 ? s.passMs / 1000 : 0.32;
+  const passSec = hasData && s && s.passMs && s.passMs > 20 ? s.passMs / 1000 : 0.32;
   const topAgeSec = startRow * passSec;
   const midAgeSec = (startRow + visRows / 2) * passSec;
   const botAgeSec = (startRow + visRows) * passSec;
@@ -1440,6 +1455,15 @@ export function drawWaterfallCanvas(
     const x = Math.round(xOf(f)) + 0.5;
     ctx.fillStyle = tokens.text3;
     ctx.fillText(`${f}`, x, T + plotH + 6);
+  }
+
+  if (!hasData || !s) {
+    ctx.fillStyle = tokens.text3;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.font = `12px ${tokens.fontSans}`;
+    ctx.fillText("Scan passes will build a scrollable waterfall history here.", L + plotW / 2, T + plotH / 2);
+    return;
   }
 
   // Hover readout (MHz, dBm, age, pass index)
