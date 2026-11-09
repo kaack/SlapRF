@@ -95,7 +95,7 @@ const ESP_FLASH_BEGIN = 0x02;
 const ESP_FLASH_DATA = 0x03;
 const ESP_FLASH_END = 0x04;
 const ESP_SYNC = 0x08;
-const ESP_READ_REG = 0x0a;
+const ESP_SPI_SET_PARAMS = 0x0b;
 const ESP_SPI_ATTACH = 0x0d;
 
 const SLIP_END = 0xc0;
@@ -103,8 +103,7 @@ const SLIP_ESC = 0xdb;
 const SLIP_ESC_END = 0xdc;
 const SLIP_ESC_ESC = 0xdd;
 
-const FLASH_BLOCK_SIZE = 1024;
-const FLASH_OFFSET = 0x0000;
+const FLASH_BLOCK_SIZE = 4096;
 
 /**
  * One firmware design. Each lives in its own directory (`firmware/<id>/main.c`) tuned for a track
@@ -386,20 +385,22 @@ function sleep(ms: number): Promise<void> {
 }
 
 async function enterUsbJtagBootloader(port: SerialPortLike): Promise<void> {
+  // Matches esptool USBJTAGSerialReset for ESP32-C5 USB-Serial-JTAG (including Windows usbser.sys)
   await port.setSignals({ dataTerminalReady: false, requestToSend: false });
-  await sleep(40);
+  await sleep(100);
   await port.setSignals({ dataTerminalReady: true, requestToSend: false });
-  await sleep(60);
+  await sleep(100);
   await port.setSignals({ dataTerminalReady: false, requestToSend: true });
-  await sleep(60);
+  await sleep(100);
   await port.setSignals({ dataTerminalReady: false, requestToSend: false });
-  await sleep(80);
+  await sleep(120);
 }
 
 async function hardResetBoard(port: SerialPortLike): Promise<void> {
   await port.setSignals({ dataTerminalReady: false, requestToSend: true });
-  await sleep(60);
+  await sleep(100);
   await port.setSignals({ dataTerminalReady: false, requestToSend: false });
+  await sleep(80);
 }
 
 async function readChunkWithTimeout(
@@ -659,29 +660,117 @@ export async function flashXiaoC5OverWebSerial(
 
   await port.open({ baudRate: 115200, bufferSize: 16384 });
   const writer = port.writable?.getWriter();
-  const reader = port.readable?.getReader();
+  let reader = port.readable?.getReader();
 
   if (!writer || !reader) {
-    await port.close();
+    await port.close().catch(() => undefined);
     throw new Error("Could not open USB serial streams on the selected port.");
   }
 
+  let pumpActive = false;
+  const slipQueue: Uint8Array[] = [];
+  const slipWaiters: Array<() => void> = [];
+
+  const startSlipPump = (r: ReadableStreamDefaultReader<Uint8Array>) => {
+    pumpActive = true;
+    let inFrame = false;
+    let escaped = false;
+    let frame: number[] = [];
+    void (async () => {
+      try {
+        while (pumpActive) {
+          const { value, done } = await r.read();
+          if (done || !value) break;
+          for (let i = 0; i < value.length; i++) {
+            const b = value[i];
+            if (b === SLIP_END) {
+              if (inFrame && frame.length >= 8) {
+                slipQueue.push(new Uint8Array(frame));
+                while (slipWaiters.length > 0) slipWaiters.shift()?.();
+              }
+              inFrame = true;
+              escaped = false;
+              frame = [];
+            } else if (inFrame) {
+              if (escaped) {
+                escaped = false;
+                if (b === SLIP_ESC_END) frame.push(SLIP_END);
+                else if (b === SLIP_ESC_ESC) frame.push(SLIP_ESC);
+                else frame.push(b);
+              } else if (b === SLIP_ESC) {
+                escaped = true;
+              } else {
+                frame.push(b);
+              }
+            }
+          }
+        }
+      } catch {
+        // stream closed or cancelled
+      } finally {
+        while (slipWaiters.length > 0) slipWaiters.shift()?.();
+      }
+    })();
+  };
+
+  const waitForRomAck = async (op: number, timeoutMs: number): Promise<boolean> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      for (let i = 0; i < slipQueue.length; i++) {
+        const pkt = slipQueue[i];
+        if (pkt[0] === 0x01 && pkt[1] === op) {
+          slipQueue.splice(i, 1);
+          const len = pkt[2] | (pkt[3] << 8);
+          if (len >= 2 && pkt.length >= 8 + 2) {
+            const status = pkt[8];
+            const errCode = pkt[9];
+            if (status !== 0) {
+              throw new Error(`ROM bootloader command 0x${op.toString(16)} failed (err 0x${errCode.toString(16)})`);
+            }
+          }
+          return true;
+        }
+      }
+      const rem = deadline - Date.now();
+      if (rem <= 0) break;
+      await new Promise<void>((resolve) => {
+        const t = window.setTimeout(resolve, Math.min(120, rem));
+        slipWaiters.push(() => {
+          window.clearTimeout(t);
+          resolve();
+        });
+      });
+    }
+    return false;
+  };
+
   try {
     let fingerprintKept = false;
-    if (keepFingerprint) {
+    if (keepFingerprint && reader) {
       onProgress({
         stage: "reading",
         percent: 4,
-        detail: "Reading the board's existing fingerprint…",
+        detail: "Checking board for an existing fingerprint…",
       });
-      await writer.write(new TextEncoder().encode("SLAPRF?\n"));
-      const rx = await readChunkWithTimeout(reader, 180);
-      const existing = rx ? parseSlaprfConfigBlock(rx) : null;
-      if (existing?.fingerprint && existing.fingerprint !== "00000000") {
+      await writer.write(new TextEncoder().encode("\nLIVE 0\nSCAN STOP\nLOG 0\nSLAPRF?\n"));
+      const rx = await collectSerialReply(reader, 260);
+      const existing = rx.length > 0 ? parseSlaprfConfigBlock(rx) : null;
+      if (existing?.fingerprint && existing.fingerprint !== "00000000" && existing.fingerprint !== "00000001") {
         imageBytes = await withFingerprint(imageBytes, existing.fingerprint);
         fingerprintKept = true;
       }
+      try {
+        reader.releaseLock();
+      } catch {
+        // ignore
+      }
+      reader = port.readable?.getReader();
+      if (!reader) {
+        throw new Error("Could not reopen USB serial reader stream.");
+      }
     }
+
+    startSlipPump(reader);
 
     onProgress({
       stage: "bootloader",
@@ -689,40 +778,77 @@ export async function flashXiaoC5OverWebSerial(
       detail: "Entering ESP32-C5 ROM bootloader…",
     });
     await enterUsbJtagBootloader(port);
+    slipQueue.length = 0;
 
     const syncPayload = new Uint8Array(36);
     syncPayload.set([0x07, 0x07, 0x12, 0x20], 0);
     syncPayload.fill(0x55, 4);
     const syncFrame = buildRomCommand(ESP_SYNC, syncPayload);
 
-    for (let attempt = 0; attempt < 3; attempt++) {
+    let synced = false;
+    for (let attempt = 0; attempt < 8; attempt++) {
       await writer.write(syncFrame);
-      const acked = await readChunkWithTimeout(reader, 90);
-      if (acked) break;
+      if (await waitForRomAck(ESP_SYNC, 150)) {
+        synced = true;
+        // Drain any extra sync replies queued by the ROM
+        await sleep(30);
+        slipQueue.length = 0;
+        break;
+      }
+    }
+    if (!synced) {
+      throw new Error("Could not sync with ESP32-C5 ROM bootloader. Hold BOOT while plugging in USB and try again.");
     }
 
     onProgress({
       stage: "erasing",
-      percent: 12,
-      detail: "Attaching SPI flash & erasing sectors…",
+      percent: 10,
+      detail: "Attaching 4 MB SPI flash…",
     });
     await writer.write(buildRomCommand(ESP_SPI_ATTACH, new Uint8Array(8)));
-    await readChunkWithTimeout(reader, 80);
+    await waitForRomAck(ESP_SPI_ATTACH, 1500);
 
-    const numBlocks = Math.ceil(imageBytes.length / FLASH_BLOCK_SIZE);
+    // Configure 4 MB SPI flash geometry (fl_id=0, total=4MB, block=64KB, sector=4KB, page=256B, mask=0xFFFF)
+    const spiParams = new Uint8Array(24);
+    const spiView = new DataView(spiParams.buffer);
+    spiView.setUint32(0, 0, true);
+    spiView.setUint32(4, 4 * 1024 * 1024, true);
+    spiView.setUint32(8, 64 * 1024, true);
+    spiView.setUint32(12, 4096, true);
+    spiView.setUint32(16, 256, true);
+    spiView.setUint32(20, 0xffff, true);
+    await writer.write(buildRomCommand(ESP_SPI_SET_PARAMS, spiParams));
+    await waitForRomAck(ESP_SPI_SET_PARAMS, 1500);
+
+    // Merged images from `esptool merge_bin` have 0xFF padding before 0x2000; skip leading 0xFF sectors.
+    let flashOffset = 0;
+    if (imageBytes.length > 0x10000 && imageBytes[0] === 0xff && imageBytes[0x2000] === ESP_IMAGE_MAGIC) {
+      flashOffset = 0x2000;
+    }
+    const payloadBytes = imageBytes.subarray(flashOffset);
+    const numBlocks = Math.ceil(payloadBytes.length / FLASH_BLOCK_SIZE);
+
+    onProgress({
+      stage: "erasing",
+      percent: 13,
+      detail: `Erasing ${Math.round(payloadBytes.length / 1024)} KB of SPI flash (takes a few seconds)…`,
+    });
     const beginPayload = new Uint8Array(20);
     const beginView = new DataView(beginPayload.buffer);
-    beginView.setUint32(0, imageBytes.length, true);
+    beginView.setUint32(0, payloadBytes.length, true);
     beginView.setUint32(4, numBlocks, true);
     beginView.setUint32(8, FLASH_BLOCK_SIZE, true);
-    beginView.setUint32(12, FLASH_OFFSET, true);
+    beginView.setUint32(12, flashOffset, true);
     beginView.setUint32(16, 0, true);
     await writer.write(buildRomCommand(ESP_FLASH_BEGIN, beginPayload));
-    await readChunkWithTimeout(reader, 160);
+    if (!(await waitForRomAck(ESP_FLASH_BEGIN, 20000))) {
+      throw new Error("Timed out waiting for ESP32-C5 SPI flash erase.");
+    }
 
+    const kbTotal = Math.round(payloadBytes.length / 1024);
     for (let seq = 0; seq < numBlocks; seq++) {
       const start = seq * FLASH_BLOCK_SIZE;
-      const slice = imageBytes.subarray(start, Math.min(start + FLASH_BLOCK_SIZE, imageBytes.length));
+      const slice = payloadBytes.subarray(start, Math.min(start + FLASH_BLOCK_SIZE, payloadBytes.length));
       const paddedBlock = new Uint8Array(FLASH_BLOCK_SIZE);
       paddedBlock.fill(0xff);
       paddedBlock.set(slice, 0);
@@ -737,16 +863,19 @@ export async function flashXiaoC5OverWebSerial(
 
       const pkt = buildRomCommand(ESP_FLASH_DATA, dataPayload, romChecksum(paddedBlock));
       await writer.write(pkt);
-      await readChunkWithTimeout(reader, 20);
+      if (!(await waitForRomAck(ESP_FLASH_DATA, 5000))) {
+        throw new Error(`Timed out writing flash block ${seq + 1} / ${numBlocks}.`);
+      }
 
-      const pct = Math.min(95, Math.round(15 + ((seq + 1) / numBlocks) * 80));
-      const kbDone = Math.round(((seq + 1) * FLASH_BLOCK_SIZE) / 1024);
-      const kbTotal = Math.round(imageBytes.length / 1024);
-      onProgress({
-        stage: "writing",
-        percent: pct,
-        detail: `Writing ${label} (${kbDone} / ${kbTotal} KB)…`,
-      });
+      if (seq % 4 === 0 || seq === numBlocks - 1) {
+        const pct = Math.min(96, Math.round(15 + ((seq + 1) / numBlocks) * 81));
+        const kbDone = Math.min(kbTotal, Math.round(((seq + 1) * FLASH_BLOCK_SIZE) / 1024));
+        onProgress({
+          stage: "writing",
+          percent: pct,
+          detail: `Writing ${label} (${kbDone} / ${kbTotal} KB)…`,
+        });
+      }
     }
 
     onProgress({
@@ -754,8 +883,9 @@ export async function flashXiaoC5OverWebSerial(
       percent: 98,
       detail: "Verifying checksum & rebooting XIAO ESP32-C5…",
     });
-    const endPayload = new Uint8Array(4);
+    const endPayload = new Uint8Array(4); // uint32(0) = reboot immediately
     await writer.write(buildRomCommand(ESP_FLASH_END, endPayload));
+    await waitForRomAck(ESP_FLASH_END, 800).catch(() => false);
     await sleep(60);
     await hardResetBoard(port);
 
@@ -768,13 +898,14 @@ export async function flashXiaoC5OverWebSerial(
     const written = parseSlaprfConfigBlock(imageBytes);
     return written ? { ...written, fingerprintKept } : null;
   } finally {
+    pumpActive = false;
     try {
-      await reader.cancel();
+      await reader?.cancel();
     } catch {
       // ignore
     }
     try {
-      reader.releaseLock();
+      reader?.releaseLock();
     } catch {
       // ignore
     }
