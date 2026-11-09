@@ -2718,7 +2718,7 @@ export class DebugView extends Component {
         </div>
       </div>
       <div class="debug-subbar">
-        <div class="debug-toolbar-left">
+        <div class="debug-connect-actions">
           <div class="debug-overlay-checks" role="group" aria-label="Chart overlays">
             <label class="check" title="Show per-channel typical noise floor (dotted)">
               <input type="checkbox" data-check="signal-floor" ${this.signalShowFloor ? "checked" : ""}/>
@@ -3250,8 +3250,11 @@ export class DebugView extends Component {
               <input type="checkbox" data-check="scan-wifi" ${this.scanShowWifi ? "checked" : ""}/>
               <span>5 GHz Wi-Fi bands</span>
             </label>
+            <span class="debug-overlay-sep" role="separator" aria-hidden="true"></span>
+            <button type="button" class="debug-overlay-icon-btn" data-action="clear-hold" ${hasScan ? "" : "disabled"} aria-label="Reset max hold and running average" title="Reset max hold and running average">
+              ${icons.reset(13)}
+            </button>
           </div>
-          <button type="button" class="btn btn-sm btn-ghost" data-action="clear-hold" ${hasScan ? "" : "disabled"}>Reset hold/avg</button>
         </div>
       </div>
       <div class="debug-canvas-wrap">
