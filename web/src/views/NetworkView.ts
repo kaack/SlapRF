@@ -236,7 +236,7 @@ export class NetworkView extends Component {
 
   private syncKnownTimersFromStore(): void {
     if (this.store.simulatorRunning) return;
-    for (const dt of this.store.timers) {
+    for (const dt of this.store.detectedTimers) {
       const fp = (dt.fingerprint || "").toUpperCase();
       if (fp && fp !== "00000001" && !fp.startsWith("SIM000")) {
         const prof = FIRMWARE_PROFILES.find((p) => p.id === dt.firmwareProfile);
@@ -519,7 +519,7 @@ export class NetworkView extends Component {
     const viaLabel = this.console.connected ? "USB-C" : "Wi-Fi";
     const knownTimers = getKnownHardwareTimers();
     const realServerTimers: DetectedTimer[] = !this.store.simulatorRunning
-      ? this.store.timers.filter((t) => !(t.fingerprint || "").toUpperCase().startsWith("SIM000"))
+      ? this.store.detectedTimers.filter((t) => !(t.fingerprint || "").toUpperCase().startsWith("SIM000"))
       : [];
 
     if (!on || !s) {
@@ -662,7 +662,7 @@ export class NetworkView extends Component {
       for (const dt of realServerTimers) {
         if (!dt.isHub && dt.timerId >= 2 && dt.timerId <= 7) {
           const fp = (dt.fingerprint || "").toUpperCase();
-          const gate = this.store.gates.find((g) => g.assignedTimerId === dt.timerId);
+          const gate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === dt.timerId);
           const gateName = gate ? (gate.name?.trim() || gate.timerLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
           const serverFrames = gate?.framesRxCount ?? 0;
           const serverRssi = Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined;
@@ -723,7 +723,7 @@ export class NetworkView extends Component {
         }
         if (targetSlot >= 2 && targetSlot <= 7) {
           const spProf = FIRMWARE_PROFILES.find((p) => p.code === k.profile);
-          const gate = this.store.gates.find((g) => g.assignedTimerId === targetSlot);
+          const gate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === targetSlot);
           const gateName = gate ? (gate.name?.trim() || gate.timerLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
           bySlot.set(targetSlot, {
             slot: targetSlot,
