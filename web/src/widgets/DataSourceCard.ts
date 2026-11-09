@@ -132,7 +132,7 @@ export class DataSourceCard extends Component {
       ? "Simulator (in-browser WASM)"
       : usingBrowser
         ? "Browser engine (WASM direct to Hub)"
-        : "Desktop Go server (UDP :5404 + SQLite)";
+        : "Desktop Go server (Hub SSE + LiveTime TCP :5403 + SQLite)";
 
     this.el.innerHTML = `
       <div class="card">
@@ -155,7 +155,7 @@ export class DataSourceCard extends Component {
           <div class="option-row">
             <div>
               <div class="option-title">Hardware timing runtime</div>
-              <div class="option-sub">Run the 5.8 GHz DSP &amp; lap timing engine right in the browser via WebAssembly (connects directly from the browser to the Hub over Wi-Fi or USB-C with no app download), or use the desktop app for raw UDP and SQLite storage.</div>
+              <div class="option-sub">Run the 5.8 GHz DSP &amp; lap timing engine right in the browser via WebAssembly (streams directly from the Hub over Wi-Fi SSE or USB-C with no app download), or use the desktop app for MultiGP LiveTime TCP (:5403) and SQLite storage.</div>
             </div>
             <div class="option-actions">
               <div class="segmented" role="group" aria-label="Hardware timing runtime">

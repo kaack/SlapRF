@@ -1,10 +1,11 @@
 package ingest
 
 import (
+	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
-	"log"
-	"net"
+	"strings"
 	"sync"
 
 	"slaprf/internal/domain"
@@ -17,7 +18,7 @@ const (
 	FrameMagicSingle   byte = 0x58 // 16-byte single-sample frame
 	FrameMagicWindow   byte = 0x59 // Variable-length sliding-window recorder frame
 	FrameMagicHello    byte = 0x5A // 36-byte timer announcement (fingerprint, name, profile)
-	FrameMagicChannels byte = 0x5E // 19-byte laptop -> Hub active pilot channel table (0 = disabled slot)
+	FrameMagicChannels byte = 0x5E // 19-byte active pilot channel table (0 = disabled slot)
 
 	SingleFrameLen    int = 16
 	HelloFrameLen     int = 36
@@ -30,9 +31,8 @@ const (
 	// WindowFrameLen is the size of a default 4-sample window frame (kept for reference).
 	WindowFrameLen int = windowHeaderLen + SlidingWindowSize*RawSampleBytes + 1
 
-	SampleIntervalUs   uint64 = 20_000 // Default 50 Hz sweep (until a Hello reports the profile)
-	DefaultWiFiUDPAddr string = ":5404"
-	HubUDPPort         int    = 5404
+	SampleIntervalUs uint64 = 20_000 // Default 50 Hz sweep (until a Hello reports the profile)
+	DefaultHubHost   string = "192.168.4.1"
 )
 
 // WindowFrameLenFor returns the byte length of a window frame carrying `samples` sweeps.
@@ -47,34 +47,34 @@ type slotInfo struct {
 	intervalUs  uint64 // Sweep interval for this timer's firmware profile
 }
 
-// WiFiUDPReceiver receives 2.4 GHz sliding-window recorder frames forwarded over Wi-Fi UDP by
-// the Hub timer and reconstructs a gapless telemetry stream per timer.
+// WiFiUDPReceiver receives 2.4 GHz sliding-window recorder frames forwarded over Wi-Fi HTTP SSE
+// (`/api/hub-stream`) or USB-C by the Hub timer and reconstructs a gapless telemetry stream per timer.
 //
 // Frames identify a timer by the short slot number the Hub assigned at join time; Hello frames
 // map each slot to the board's stable fingerprint, which the engine maps to the app's timer ID.
-// Frames from a slot that hasn't announced itself yet are dropped (the Hub repeats every HELLO
-// every 2 s), so no anonymous placeholder timers appear before the real identity is known.
+// Frames from a slot that hasn't announced itself yet are dropped (the Hub replays cached HELLOs
+// on connect and repeats every HELLO every 2 s), so no anonymous placeholder timers appear.
 type WiFiUDPReceiver struct {
-	mu      sync.Mutex
-	addr    string
-	engine  *tracker.Engine
-	conn    *net.UDPConn
-	hubIP   net.IP
-	outFn   func([]byte)
-	slots   map[uint8]slotInfo
-	seenSeq map[uint8]uint8  // timerID -> last ingested 8-bit sample seq_num
-	hasSeq  map[uint8]bool   // timerID -> true once at least one sample has been ingested
-	lastTs  map[uint8]uint64 // timerID -> last reconstructed sample TimestampUs
-	stopCh  chan struct{}
+	mu           sync.Mutex
+	hubHost      string
+	activeHost   string
+	sseConnected bool
+	cancelSSE    context.CancelFunc
+	engine       *tracker.Engine
+	outFn        func([]byte)
+	slots        map[uint8]slotInfo
+	seenSeq      map[uint8]uint8  // timerID -> last ingested 8-bit sample seq_num
+	hasSeq       map[uint8]bool   // timerID -> true once at least one sample has been ingested
+	lastTs       map[uint8]uint64 // timerID -> last reconstructed sample TimestampUs
+	stopCh       chan struct{}
+	stopOnce     sync.Once
 }
 
-// NewWiFiUDPReceiver creates a Wi-Fi UDP telemetry receiver bound to `addr` (e.g. ":5404").
-func NewWiFiUDPReceiver(addr string, engine *tracker.Engine) *WiFiUDPReceiver {
-	if addr == "" {
-		addr = DefaultWiFiUDPAddr
-	}
+// NewWiFiUDPReceiver creates a Hub telemetry receiver targeting `hubHost` (default "192.168.4.1").
+func NewWiFiUDPReceiver(hubHost string, engine *tracker.Engine) *WiFiUDPReceiver {
+	clean := normalizeHubHost(hubHost)
 	r := &WiFiUDPReceiver{
-		addr:    addr,
+		hubHost: clean,
 		engine:  engine,
 		slots:   make(map[uint8]slotInfo),
 		seenSeq: make(map[uint8]uint8),
@@ -86,6 +86,42 @@ func NewWiFiUDPReceiver(addr string, engine *tracker.Engine) *WiFiUDPReceiver {
 		engine.Subscribe(r)
 	}
 	return r
+}
+
+func normalizeHubHost(raw string) string {
+	h := strings.TrimSpace(raw)
+	if h == "" || strings.HasPrefix(h, ":") {
+		return DefaultHubHost
+	}
+	h = strings.TrimPrefix(h, "http://")
+	h = strings.TrimPrefix(h, "https://")
+	if idx := strings.IndexByte(h, '/'); idx >= 0 {
+		h = h[:idx]
+	}
+	if h == "" {
+		return DefaultHubHost
+	}
+	return h
+}
+
+// SetHubHost updates the Hub IP/hostname and triggers an immediate SSE reconnect.
+func (r *WiFiUDPReceiver) SetHubHost(host string) {
+	clean := normalizeHubHost(host)
+	r.mu.Lock()
+	changed := r.hubHost != clean
+	r.hubHost = clean
+	cancel := r.cancelSSE
+	r.mu.Unlock()
+	if changed && cancel != nil {
+		cancel()
+	}
+}
+
+// HubHost returns the currently configured Hub IP/hostname.
+func (r *WiFiUDPReceiver) HubHost() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.hubHost
 }
 
 // OnTelemetryFrame implements tracker.EventSubscriber.
@@ -129,72 +165,36 @@ func (r *WiFiUDPReceiver) SetOutboundSender(fn func([]byte)) {
 
 func (r *WiFiUDPReceiver) sendChannelsToHub(freqs [domain.MaxPilotSlots]uint16) {
 	r.mu.Lock()
-	conn := r.conn
-	hubIP := r.hubIP
+	activeHost := r.activeHost
+	connected := r.sseConnected
 	outFn := r.outFn
 	r.mu.Unlock()
+
 	pkt := EncodeChannelsFrame(freqs)
 	if outFn != nil {
 		outFn(pkt)
 	}
-	if conn == nil || len(hubIP) == 0 {
+	if !connected || activeHost == "" {
 		return
 	}
-	dst := &net.UDPAddr{IP: hubIP, Port: HubUDPPort}
-	_, _ = conn.WriteToUDP(pkt, dst)
+	hexStr := strings.ToUpper(hex.EncodeToString(pkt))
+	r.sendHTTPChannels(activeHost, hexStr)
 }
 
-// Start binds the UDP socket and begins ingesting frames from the Hub Timer in the background.
-func (r *WiFiUDPReceiver) Start() error {
-	udpAddr, err := net.ResolveUDPAddr("udp", r.addr)
-	if err != nil {
-		return err
-	}
-	conn, err := net.ListenUDP("udp", udpAddr)
-	if err != nil {
-		return err
-	}
-	r.conn = conn
-	log.Printf("[Wi-Fi Hub Bridge] Listening on UDP %s (LR Sliding-Window Recorder stream)", r.addr)
-	go r.readLoop()
-	return nil
-}
-
-// Stop closes the UDP listener socket.
+// Stop terminates the background Hub SSE stream client.
 func (r *WiFiUDPReceiver) Stop() {
-	close(r.stopCh)
-	if r.conn != nil {
-		_ = r.conn.Close()
-	}
+	r.stopOnce.Do(func() {
+		close(r.stopCh)
+		r.mu.Lock()
+		cancel := r.cancelSSE
+		r.mu.Unlock()
+		if cancel != nil {
+			cancel()
+		}
+	})
 }
 
-func (r *WiFiUDPReceiver) readLoop() {
-	var buf [512]byte
-	for {
-		n, srcAddr, err := r.conn.ReadFromUDP(buf[:])
-		if err != nil {
-			select {
-			case <-r.stopCh:
-				return
-			default:
-				continue
-			}
-		}
-		if srcAddr != nil && len(srcAddr.IP) > 0 && !srcAddr.IP.IsLoopback() {
-			r.mu.Lock()
-			r.hubIP = append(net.IP(nil), srcAddr.IP...)
-			r.mu.Unlock()
-		}
-		if n > 0 {
-			if n == ChannelsFrameLen && buf[0] == FrameMagic0 && buf[1] == FrameMagicChannels {
-				continue // Ignore our own outbound channel-table frame if received via broadcast
-			}
-			r.IngestPacket(buf[:n], r.engine.NowUs())
-		}
-	}
-}
-
-// IngestPacket handles one UDP datagram: Hello frames register the timer, telemetry frames are
+// IngestPacket handles one binary Hub packet: Hello frames register the timer, telemetry frames are
 // decoded, deduplicated, and forwarded in chronological order to the timing engine.
 func (r *WiFiUDPReceiver) IngestPacket(raw []byte, nowUs uint64) int {
 	if len(raw) >= 2 && raw[0] == FrameMagic0 && raw[1] == FrameMagicHello {
@@ -317,7 +317,7 @@ func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.TimerT
 			}
 			// Reconstruct each sample's timestamp relative to the newest sample in the window,
 			// advancing monotonically by seqDelta * intervalUs when consecutive samples arrive so
-			// Wi-Fi UDP arrival jitter doesn't bunch or stretch samples on the signal chart.
+			// Wi-Fi arrival jitter doesn't bunch or stretch samples on the signal chart.
 			ageUs := uint64(sampleCount-1-idx) * intervalUs
 			rawTs := nowUs
 			if nowUs > ageUs {
@@ -442,8 +442,8 @@ func EncodeHelloFrame(slot uint8, role uint8, fingerprint uint32, profileCode ui
 	return pkt
 }
 
-// EncodeChannelsFrame builds the 19-byte active pilot channel table frame (0xC5 0x5E) sent from
-// the laptop to the Hub Timer over UDP so timers only sweep enabled pilot channels.
+// EncodeChannelsFrame builds the 19-byte active pilot channel table frame (0xC5 0x5E) sent to
+// the Hub Timer over HTTP (`/api/hub-channels`) or USB-C so timers only sweep enabled pilot channels.
 func EncodeChannelsFrame(freqs [domain.MaxPilotSlots]uint16) []byte {
 	pkt := make([]byte, ChannelsFrameLen)
 	pkt[0] = FrameMagic0

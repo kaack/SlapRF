@@ -1,5 +1,5 @@
 /**
- * slaprf_radio — 2.4 GHz Wi-Fi / ESP-NOW link, Hub UDP bridge, sweep pacing, and USB config
+ * slaprf_radio — 2.4 GHz Wi-Fi / ESP-NOW link, Hub HTTP/SSE bridge, sweep pacing, and USB config
  * readback for the XIAO ESP32-C5. Shared by every firmware profile.
  */
 #include "slaprf_radio.h"
@@ -25,10 +25,9 @@
 
 static const char *TAG = "slaprf_radio";
 
-#define LAPTOP_UDP_PORT     5404
 #define BEACON_MAGIC_0      0xC5
 #define BEACON_MAGIC_1      0x5D // Hub -> Spokes sync beacon (4 bytes, or 20 bytes with 8 x uint16_t channel table)
-#define CHANNELS_MAGIC_1    0x5E // Laptop -> Hub active pilot channel table (19 bytes: 0xC5, 0x5E, 8 x uint16_t LE, crc8)
+#define CHANNELS_MAGIC_1    0x5E // Laptop/Browser -> Hub active pilot channel table (19 bytes: 0xC5, 0x5E, 8 x uint16_t LE, crc8)
 #define RX_QUEUE_DEPTH      32
 #define ESPNOW_MAX_FRAME    250
 
@@ -45,7 +44,6 @@ static uint8_t s_hub_beacon_mac[6];
 static volatile bool s_has_hub_beacon_mac;
 static esp_netif_t *s_sta_netif;
 static esp_netif_t *s_ap_netif;
-static int s_udp_sock = -1;
 static int s_sse_clients[4] = {-1, -1, -1, -1};
 static uint8_t s_http_hellos[7][36];
 static portMUX_TYPE s_sse_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -145,6 +143,7 @@ static void hub_http_server_task(void *arg) {
             vTaskDelay(pdMS_TO_TICKS(20));
             continue;
         }
+        setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &yes, sizeof(yes));
         struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
         int n = recv(fd, req, sizeof(req) - 1, 0);
@@ -222,7 +221,7 @@ static void hub_http_server_task(void *arg) {
                 close(fd);
                 continue;
             }
-            // Replay cached HELLO frames immediately so the browser discovers Hub & Spokes right away
+            // Replay cached HELLO frames immediately so the browser/desktop discovers Hub & Spokes right away
             char line[128];
             for (int i = 0; i < 7; i++) {
                 if (s_http_hellos[i][0] == BEACON_MAGIC_0 && s_http_hellos[i][1] == 0x5A) {
@@ -363,7 +362,7 @@ void slaprf_init_2g4_radio(uint8_t channel, uint8_t long_range, uint8_t tx_power
 
 void slaprf_start_wifi_bridge(uint8_t wifi_mode, const char *ssid, const char *pass) {
     if (wifi_mode == 0) {
-        // Host the "SlapRF" AP on the current channel; the laptop joins it directly.
+        // Host the "SlapRF" AP on the current channel; the laptop/browser joins it directly.
         s_ap_netif = esp_netif_create_default_wifi_ap();
         ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
         wifi_config_t ap = {0};
@@ -393,56 +392,16 @@ void slaprf_start_wifi_bridge(uint8_t wifi_mode, const char *ssid, const char *p
         xEventGroupWaitBits(s_wifi_events, WIFI_GOT_IP_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(15000));
     }
 
-    s_udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
-    int yes = 1;
-    setsockopt(s_udp_sock, SOL_SOCKET, SO_BROADCAST, &yes, sizeof(yes));
-    setsockopt(s_udp_sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
-    struct sockaddr_in bind_addr = {0};
-    bind_addr.sin_family = AF_INET;
-    bind_addr.sin_port = htons(LAPTOP_UDP_PORT);
-    bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-    bind(s_udp_sock, (struct sockaddr *)&bind_addr, sizeof(bind_addr));
     xTaskCreate(hub_http_server_task, "slaprf_http", 4096, NULL, 2, NULL);
-    ESP_LOGI(TAG, "Laptop bridge up (%s), UDP broadcast :%d + HTTP/SSE :80", wifi_mode == 0 ? "AP SlapRF" : ssid,
-             LAPTOP_UDP_PORT);
-}
-
-static void poll_laptop_udp(void) {
-    if (s_udp_sock < 0) {
-        return;
-    }
-    uint8_t buf[64];
-    for (int iter = 0; iter < 8; iter++) {
-        int n = recvfrom(s_udp_sock, buf, sizeof(buf), MSG_DONTWAIT, NULL, NULL);
-        if (n <= 0) {
-            break;
-        }
-        if (n == 19 && buf[0] == BEACON_MAGIC_0 && buf[1] == CHANNELS_MAGIC_1 && xor8(buf, 18) == buf[18]) {
-            uint16_t freqs[8];
-            for (int i = 0; i < 8; i++) {
-                freqs[i] = (uint16_t)(buf[2 + i * 2] | ((uint16_t)buf[3 + i * 2] << 8));
-            }
-            slaprf_diag_set_net_channels(freqs);
-        }
-    }
+    ESP_LOGI(TAG, "Hub bridge up (%s), HTTP/SSE :80", wifi_mode == 0 ? "AP SlapRF" : ssid);
 }
 
 void slaprf_forward_udp_to_laptop(const void *frame, uint32_t len) {
     slaprf_diag_forward_hub_frame(frame, len);
     broadcast_sse_frame((const uint8_t *)frame, len);
-    if (s_udp_sock < 0) {
-        return;
-    }
-    poll_laptop_udp();
-    struct sockaddr_in dst = {0};
-    dst.sin_family = AF_INET;
-    dst.sin_port = htons(LAPTOP_UDP_PORT);
-    dst.sin_addr.s_addr = htonl(INADDR_BROADCAST);
-    sendto(s_udp_sock, frame, len, 0, (struct sockaddr *)&dst, sizeof(dst));
 }
 
 void slaprf_broadcast_hub_sync_beacon(uint8_t seq) {
-    poll_laptop_udp();
     uint16_t net_freqs[8];
     if (slaprf_diag_get_net_channels(net_freqs)) {
         uint8_t b[20];

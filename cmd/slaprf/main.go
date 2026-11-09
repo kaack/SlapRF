@@ -24,7 +24,7 @@ import (
 func main() {
 	httpAddr := flag.String("http", ":8090", "HTTP address for the TypeScript Sector & Telemetry SPA")
 	laprfAddr := flag.String("laprf", ":5403", "TCP address for MultiGP LiveTime (ImmersionRC LapRF 8-Way protocol)")
-	udpAddr := flag.String("udp", ":5404", "UDP address for Hub Timer 2.4 GHz LR sliding-window telemetry")
+	hubHost := flag.String("hub", "192.168.4.1", "Hub Timer IP or hostname for Wi-Fi HTTP/SSE telemetry stream (/api/hub-stream)")
 	webDir := flag.String("web", "./web", "Path to the web SPA directory")
 	dbPath := flag.String("db", "slaprf.db", "Path to SQLite database for persisting real-world settings, pilots, track setup, and laps")
 	openBrowser := flag.Bool("open", true, "Automatically open the web UI in the default browser on startup")
@@ -90,11 +90,11 @@ func main() {
 		}
 		httpSrv.SetStore(store)
 	}
-	udpRx := ingest.NewWiFiUDPReceiver(*udpAddr, httpSrv.RealEngine())
-	if err := udpRx.Start(); err != nil {
-		log.Printf("Warning: Hub Timer Wi-Fi UDP listener on %s could not start: %v", *udpAddr, err)
+	hubRx := ingest.NewWiFiUDPReceiver(*hubHost, httpSrv.RealEngine())
+	if err := hubRx.Start(); err != nil {
+		log.Printf("Warning: Hub Timer Wi-Fi SSE client (%s) could not start: %v", *hubHost, err)
 	} else {
-		defer udpRx.Stop()
+		defer hubRx.Stop()
 	}
 	srv := &http.Server{
 		Handler: httpSrv.Handler(),
