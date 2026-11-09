@@ -22,6 +22,8 @@ export interface TimerPeerSpoke {
   online?: boolean;
   msAgo?: number;
   frames?: number;
+  seq?: number;
+  dbm?: number[];
 }
 
 export interface TimerParentHub {
@@ -457,13 +459,13 @@ export class TimerConsole {
     await this.disconnect();
   }
 
-  private startStatusPolling(): void {
+  public startStatusPolling(intervalMs = 1000): void {
     window.clearInterval(this.statusPollTimer);
     this.statusPollTimer = window.setInterval(() => {
       if (this.connected && !this.expectingRestart) {
         void this.send("STATUS?").catch(() => undefined);
       }
-    }, 2000);
+    }, intervalMs);
   }
 
   /**

@@ -87,6 +87,11 @@ typedef struct {
     char label[25];
     int64_t last_rx_us;
     uint32_t frames;
+    uint8_t last_seq;
+    uint16_t batt_mv;
+    int8_t floor_dbm;
+    int8_t dbm[8];
+    bool has_dbm;
 } diag_spoke_peer_t;
 
 static diag_spoke_peer_t s_peer_spokes[6]; // index 0..5 = TDMA slot 2..7
@@ -397,7 +402,7 @@ static void send_status(void) {
     uint8_t mac[6] = {0};
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
 
-    static char out[1400];
+    static char out[2048];
     int n = snprintf(out, sizeof(out),
                      "@{\"t\":\"status\",\"fw\":\"v%u.%u.%u\",\"role\":%u,\"profile\":%u,\"fp\":\"%08lX\","
                      "\"label\":\"%s\",\"uptimeMs\":%lld,\"reset\":\"%s\",\"boots\":%lu,"
@@ -428,16 +433,24 @@ static void send_status(void) {
         n += snprintf(out + n, sizeof(out) - n, ",\"spokes\":[");
         bool first_sp = true;
         const int64_t now_us = esp_timer_get_time();
-        for (int i = 0; i < 6 && n < (int)sizeof(out) - 96; i++) {
-            if (s_peer_spokes[i].fp == 0) continue;
-            const uint32_t ms_ago = s_peer_spokes[i].last_rx_us > 0
-                                        ? (uint32_t)((now_us - s_peer_spokes[i].last_rx_us) / 1000)
+        for (int i = 0; i < 6 && n < (int)sizeof(out) - 180; i++) {
+            const diag_spoke_peer_t *sp = &s_peer_spokes[i];
+            if (sp->fp == 0 && sp->frames == 0) continue;
+            const uint32_t ms_ago = sp->last_rx_us > 0
+                                        ? (uint32_t)((now_us - sp->last_rx_us) / 1000)
                                         : 0;
             n += snprintf(out + n, sizeof(out) - n,
-                          "%s{\"slot\":%d,\"fp\":\"%08lX\",\"label\":\"%s\",\"profile\":%u,\"msAgo\":%lu,\"frames\":%lu}",
-                          first_sp ? "" : ",", i + 2, (unsigned long)s_peer_spokes[i].fp, s_peer_spokes[i].label,
-                          (unsigned)s_peer_spokes[i].profile, (unsigned long)ms_ago,
-                          (unsigned long)s_peer_spokes[i].frames);
+                          "%s{\"slot\":%d,\"fp\":\"%08lX\",\"label\":\"%s\",\"profile\":%u,\"msAgo\":%lu,\"frames\":%lu,\"seq\":%u",
+                          first_sp ? "" : ",", i + 2, (unsigned long)sp->fp, sp->label,
+                          (unsigned)sp->profile, (unsigned long)ms_ago,
+                          (unsigned long)sp->frames, (unsigned)sp->last_seq);
+            if (sp->has_dbm) {
+                n += snprintf(out + n, sizeof(out) - n,
+                              ",\"dbm\":[%d,%d,%d,%d,%d,%d,%d,%d]",
+                              sp->dbm[0], sp->dbm[1], sp->dbm[2], sp->dbm[3],
+                              sp->dbm[4], sp->dbm[5], sp->dbm[6], sp->dbm[7]);
+            }
+            n += snprintf(out + n, sizeof(out) - n, "}");
             first_sp = false;
         }
         n += snprintf(out + n, sizeof(out) - n, "]");
@@ -807,6 +820,10 @@ void slaprf_diag_set_slot(uint8_t slot) {
 void slaprf_diag_note_spoke(uint8_t slot, uint32_t fp, uint8_t profile, const char *label) {
     if (slot < 2 || slot > 7) return;
     diag_spoke_peer_t *p = &s_peer_spokes[slot - 2];
+    if (p->fp != 0 && p->fp != fp && (p->fp & 0xFFFFFF00UL) != 0x53504B00UL) {
+        p->frames = 0;
+        p->has_dbm = false;
+    }
     p->fp = fp;
     p->profile = profile;
     memset(p->label, 0, sizeof(p->label));
@@ -816,7 +833,9 @@ void slaprf_diag_note_spoke(uint8_t slot, uint32_t fp, uint8_t profile, const ch
             p->label[i] = (c == '"' || c == '\\' || c < 0x20) ? '?' : c;
         }
     }
-    p->last_rx_us = esp_timer_get_time();
+    if (p->last_rx_us == 0) {
+        p->last_rx_us = esp_timer_get_time();
+    }
 }
 
 void slaprf_diag_note_spoke_rx(uint8_t slot) {
@@ -824,6 +843,47 @@ void slaprf_diag_note_spoke_rx(uint8_t slot) {
     diag_spoke_peer_t *p = &s_peer_spokes[slot - 2];
     p->last_rx_us = esp_timer_get_time();
     p->frames++;
+}
+
+void slaprf_diag_note_spoke_frame(const uint8_t *frame, uint32_t len) {
+    if (frame == NULL || len < 4) return;
+    const uint8_t slot = frame[2];
+    if (slot < 2 || slot > 7) return;
+    diag_spoke_peer_t *p = &s_peer_spokes[slot - 2];
+    p->last_rx_us = esp_timer_get_time();
+    p->frames++;
+    if (p->label[0] == '\0') {
+        snprintf(p->label, sizeof(p->label), "S%u", (unsigned)(slot - 1));
+    }
+    if (p->profile == 0 && s_cfg != NULL) {
+        p->profile = s_cfg[CFG_OFF_PROFILE];
+    }
+    if (frame[1] == 0x59) { // FRAME_MAGIC_WINDOW
+        const uint8_t sample_count = frame[3];
+        if (sample_count >= 1 && len >= 7U + (uint32_t)sample_count * 9U + 1U) {
+            p->batt_mv = (uint16_t)frame[4] | ((uint16_t)frame[5] << 8);
+            p->floor_dbm = (int8_t)frame[6];
+            const uint32_t newest_off = 7U + (uint32_t)(sample_count - 1U) * 9U;
+            p->last_seq = frame[newest_off];
+            for (int ch = 0; ch < 8; ch++) {
+                int8_t best = (int8_t)frame[newest_off + 1U + (uint32_t)ch];
+                for (uint8_t s = 0; s < sample_count; s++) {
+                    const int8_t v = (int8_t)frame[7U + (uint32_t)s * 9U + 1U + (uint32_t)ch];
+                    if (v > best) best = v;
+                }
+                p->dbm[ch] = best;
+            }
+            p->has_dbm = true;
+        }
+    } else if (frame[1] == 0x58 && len >= 16U) { // FRAME_MAGIC_SINGLE
+        p->last_seq = frame[3];
+        p->batt_mv = (uint16_t)frame[4] | ((uint16_t)frame[5] << 8);
+        p->floor_dbm = (int8_t)frame[6];
+        for (int ch = 0; ch < 8; ch++) {
+            p->dbm[ch] = (int8_t)frame[7 + ch];
+        }
+        p->has_dbm = true;
+    }
 }
 
 static void update_health_led(void) {

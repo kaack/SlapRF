@@ -97,11 +97,14 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		if role == "hub" {
 			for i := range e.pucks {
 				if e.pucks[i].Role == domain.PuckRoleStartFinish || e.pucks[i].TrackOrder == 0 {
-					targetIdx = i
-					break
+					aid := e.pucks[i].AssignedPuckID
+					if aid == 0 || (e.detected[aid] != nil && e.detected[aid].IsHub) {
+						targetIdx = i
+						break
+					}
 				}
 			}
-			if targetIdx < 0 && len(e.pucks) > 0 {
+			if targetIdx < 0 && len(e.pucks) > 0 && e.pucks[0].AssignedPuckID == 0 {
 				targetIdx = 0
 			}
 		} else {
@@ -598,6 +601,14 @@ func (e *Engine) ClearPilotProgress(slotIndex int) {
 	e.mu.Lock()
 	delete(e.progress, slotIndex)
 	e.mu.Unlock()
+}
+
+// HasDetectedPuck reports whether a physical/provisioned timer with `puckID` exists in `e.detected`.
+func (e *Engine) HasDetectedPuck(puckID uint8) bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	_, ok := e.detected[puckID]
+	return ok
 }
 
 // SetDetectedPuckOnline immediately marks a physical/simulated timer online or offline.

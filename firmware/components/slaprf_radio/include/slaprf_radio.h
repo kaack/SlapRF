@@ -119,6 +119,9 @@ void slaprf_diag_note_spoke(uint8_t slot, uint32_t fp, uint8_t profile, const ch
 /** Hub only: record a received telemetry frame from TDMA slot (2..7) for STATUS? Network view. */
 void slaprf_diag_note_spoke_rx(uint8_t slot);
 
+/** Hub only: record a full received Spoke window/single frame (slot, seq, 8-ch dBm) for STATUS? Network view. */
+void slaprf_diag_note_spoke_frame(const uint8_t *frame, uint32_t len);
+
 /** Run a pending SCAN (call from the main loop while the timer is on its 2.4 GHz gap). */
 void slaprf_diag_service(void);
 

@@ -125,8 +125,21 @@ export class DebugView extends Component {
   private readonly healthHistory = new HealthHistory();
   private pilots: PilotThresholdInfo[] = [];
   private serverTimers: DetectedTimer[] = [];
+  private serverGates: Array<{
+    puckId: number;
+    assignedPuckId: number;
+    puckLabel: string;
+    name: string;
+    role: string;
+    trackOrder: number;
+    online: boolean;
+    framesRxCount?: number;
+    lastRssi?: number[];
+  }> = [];
   private serverSimActive = false;
   private hasServer = false;
+  private selectedNetworkSpokeSlot: number | null = null;
+  private spokeRateTracker = new Map<number, { frames: number; atMs: number; ratePktPerSec: number }>();
 
   private signalWindowSec = 2.5;
   private signalAutoX = true;
@@ -1719,13 +1732,29 @@ export class DebugView extends Component {
       const data = (await res.json()) as {
         pilots?: PilotThresholdInfo[];
         timers?: DetectedTimer[];
+        detectedPucks?: DetectedTimer[];
+        pucks?: Array<{
+          puckId: number;
+          assignedPuckId: number;
+          puckLabel: string;
+          name: string;
+          role: string;
+          trackOrder: number;
+          online: boolean;
+          framesRxCount?: number;
+          lastRssi?: number[];
+        }>;
         simulatorActive?: boolean;
       };
       this.serverSimActive = Boolean(data.simulatorActive);
-      if (Array.isArray(data.timers)) {
-        this.serverTimers = data.timers;
+      if (Array.isArray(data.pucks)) {
+        this.serverGates = data.pucks;
+      }
+      const timers = data.detectedPucks ?? data.timers;
+      if (Array.isArray(timers)) {
+        this.serverTimers = timers;
         if (!this.serverSimActive) {
-          for (const dt of data.timers) {
+          for (const dt of timers) {
             const fp = (dt.fingerprint || "").toUpperCase();
             if (fp && fp !== "00000001" && !fp.startsWith("SIM000")) {
               const prof = FIRMWARE_PROFILES.find((p) => p.id === dt.firmwareProfile);
@@ -2257,6 +2286,14 @@ export class DebugView extends Component {
         case "refresh-status":
           await this.refreshStatus();
           break;
+        case "select-net-spoke": {
+          const slotNum = Number(t.dataset.spokeSlot);
+          if (slotNum >= 2 && slotNum <= 7) {
+            this.selectedNetworkSpokeSlot = slotNum;
+            this.renderNetworkView();
+          }
+          break;
+        }
         case "selftest":
           await this.runBusy("Self-test", () => this.runSelfTest());
           break;
@@ -2976,39 +3013,107 @@ export class DebugView extends Component {
         fw: string;
         mac?: string;
         online: boolean;
+        inHubStatus: boolean;
+        frames?: number;
+        msAgo?: number;
+        seq?: number;
+        dbm?: number[];
+        ratePktPerSec?: number;
+        serverFrames?: number;
+        serverGateLabel?: string;
+        serverRssi?: number[];
         sourceNote: string;
       }
       const bySlot = new Map<number, TiedSpokeEntry>();
       const usedFps = new Set<string>([s.fp.toUpperCase()]);
+      const nowMs = performance.now();
 
       // 1. Direct firmware STATUS? spokes if present
       if (Array.isArray(s.spokes)) {
         for (const sp of s.spokes) {
           if (sp.slot >= 2 && sp.slot <= 7) {
-            const fp = (sp.fp || "").toUpperCase();
+            const rawFp = (sp.fp || "").toUpperCase();
+            const isFallbackFp = rawFp.startsWith("53504B");
+            const known = !isFallbackFp && rawFp ? knownTimers.find((k) => k.fp.toUpperCase() === rawFp) : undefined;
+            const fp = (!isFallbackFp && rawFp) || known?.fp || `SLOT${sp.slot}`;
             const spProf = FIRMWARE_PROFILES.find((p) => p.code === (sp.profile ?? s.profile));
+            const frames = sp.frames ?? 0;
+            const prevRate = this.spokeRateTracker.get(sp.slot);
+            let ratePktPerSec = prevRate?.ratePktPerSec ?? 0;
+            if (prevRate) {
+              const dtSec = (nowMs - prevRate.atMs) / 1000;
+              if (dtSec >= 0.25) {
+                ratePktPerSec = frames >= prevRate.frames ? (frames - prevRate.frames) / dtSec : 0;
+                this.spokeRateTracker.set(sp.slot, { frames, atMs: nowMs, ratePktPerSec });
+              }
+            } else {
+              this.spokeRateTracker.set(sp.slot, { frames, atMs: nowMs, ratePktPerSec: 0 });
+            }
+            const activelyReceiving = frames > 0 && (sp.msAgo === undefined || sp.msAgo < 2500);
+            const sourceNote =
+              frames === 0
+                ? `Joined Slot ${sp.slot} · 0 frames rx`
+                : sp.msAgo !== undefined && sp.msAgo >= 2500
+                  ? `Stale (${(sp.msAgo / 1000).toFixed(1)}s ago) · ${frames} frames`
+                  : `${frames} frames rx · ${ratePktPerSec.toFixed(1)} pkt/s`;
             bySlot.set(sp.slot, {
               slot: sp.slot,
-              fp: fp || `SLOT${sp.slot}`,
-              label: sp.label || `S${sp.slot - 1}`,
+              fp,
+              label: sp.label || known?.label || `S${sp.slot - 1}`,
               profileName: spProf?.name ?? profileName,
-              fw: sp.fw || s.fw,
-              mac: sp.mac,
-              online: sp.online ?? (sp.msAgo === undefined || sp.msAgo < 5000),
-              sourceNote: sp.frames !== undefined ? `${sp.frames} frames rx` : `Linked on Ch ${ch}`,
+              fw: sp.fw || known?.fw || s.fw,
+              mac: sp.mac || known?.mac,
+              online: activelyReceiving,
+              inHubStatus: true,
+              frames,
+              msAgo: sp.msAgo,
+              seq: sp.seq,
+              dbm: sp.dbm,
+              ratePktPerSec,
+              sourceNote,
             });
-            if (fp) usedFps.add(fp);
+            if (!isFallbackFp && rawFp) usedFps.add(rawFp);
           }
         }
       }
 
       // 2. Real timers from local SlapRF server (/api/state)
       for (const dt of realServerTimers) {
-        if (!dt.isHub && dt.puckId >= 2 && dt.puckId <= 7 && !bySlot.has(dt.puckId)) {
+        if (!dt.isHub && dt.puckId >= 2 && dt.puckId <= 7) {
           const fp = (dt.fingerprint || "").toUpperCase();
+          const gate = this.serverGates.find((g) => g.assignedPuckId === dt.puckId);
+          const gateName = gate ? (gate.name?.trim() || gate.puckLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
+          const serverFrames = gate?.framesRxCount ?? 0;
+          const serverRssi = Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined;
+          if (bySlot.has(dt.puckId)) {
+            const cur = bySlot.get(dt.puckId)!;
+            cur.serverFrames = serverFrames;
+            cur.serverGateLabel = gateName;
+            cur.serverRssi = serverRssi;
+            if (fp && (cur.fp.startsWith("SLOT") || cur.fp.startsWith("53504B"))) {
+              cur.fp = fp;
+            }
+            if (dt.puckLabel && cur.label === `S${dt.puckId - 1}`) {
+              cur.label = dt.puckLabel;
+            }
+            if (fp) usedFps.add(fp);
+            continue;
+          }
           if (fp && usedFps.has(fp)) continue;
           const known = fp ? knownTimers.find((k) => k.fp === fp) : undefined;
           const spProf = FIRMWARE_PROFILES.find((p) => p.id === dt.firmwareProfile);
+          const prevRate = this.spokeRateTracker.get(dt.puckId);
+          let ratePktPerSec = prevRate?.ratePktPerSec ?? 0;
+          if (prevRate) {
+            const dtSec = (nowMs - prevRate.atMs) / 1000;
+            if (dtSec >= 0.25) {
+              ratePktPerSec = serverFrames >= prevRate.frames ? (serverFrames - prevRate.frames) / dtSec : 0;
+              this.spokeRateTracker.set(dt.puckId, { frames: serverFrames, atMs: nowMs, ratePktPerSec });
+            }
+          } else {
+            this.spokeRateTracker.set(dt.puckId, { frames: serverFrames, atMs: nowMs, ratePktPerSec: 0 });
+          }
+          const serverOnline = Boolean(dt.online && serverFrames > 0);
           bySlot.set(dt.puckId, {
             slot: dt.puckId,
             fp: fp || "—",
@@ -3016,8 +3121,16 @@ export class DebugView extends Component {
             profileName: spProf?.name ?? profileName,
             fw: dt.firmwareVersion || known?.fw || s.fw,
             mac: known?.mac,
-            online: dt.online,
-            sourceNote: dt.online ? `Online · Ch ${ch}` : `Tied to ${s.label || "H1"}`,
+            online: serverOnline,
+            inHubStatus: false,
+            frames: serverFrames,
+            ratePktPerSec,
+            serverFrames,
+            serverGateLabel: gateName,
+            serverRssi,
+            sourceNote: serverOnline
+              ? `${serverFrames} samples on server`
+              : `0 frames rx · not heard by Hub`,
           });
           if (fp) usedFps.add(fp);
         }
@@ -3043,6 +3156,8 @@ export class DebugView extends Component {
         }
         if (targetSlot >= 2 && targetSlot <= 7) {
           const spProf = FIRMWARE_PROFILES.find((p) => p.code === k.profile);
+          const gate = this.serverGates.find((g) => g.assignedPuckId === targetSlot);
+          const gateName = gate ? (gate.name?.trim() || gate.puckLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
           bySlot.set(targetSlot, {
             slot: targetSlot,
             fp: k.fp,
@@ -3050,18 +3165,31 @@ export class DebugView extends Component {
             profileName: spProf?.name ?? profileName,
             fw: k.fw || s.fw,
             mac: k.mac,
-            online: Boolean(k.slot && k.slot >= 2),
-            sourceNote: k.slot && k.slot >= 2 ? `Assigned TDMA Slot ${k.slot} · Ch ${ch}` : `Provisioned Spoke`,
+            online: false,
+            inHubStatus: false,
+            frames: 0,
+            ratePktPerSec: 0,
+            serverFrames: gate?.framesRxCount ?? 0,
+            serverGateLabel: gateName,
+            serverRssi: Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined,
+            sourceNote: `0 frames rx · not joined since Hub boot`,
           });
           usedFps.add(k.fp.toUpperCase());
         }
       }
 
       const tiedCount = bySlot.size;
-      const ledClass = s.emergencyMode ? "is-emergency" : "is-up";
+      const activeRxCount = [...bySlot.values()].filter((c) => c.online).length;
+      if (this.selectedNetworkSpokeSlot === null || !bySlot.has(this.selectedNetworkSpokeSlot)) {
+        this.selectedNetworkSpokeSlot = [...bySlot.keys()][0] ?? null;
+      }
+      const selectedSlot = this.selectedNetworkSpokeSlot;
+      const selectedChild = selectedSlot !== null ? bySlot.get(selectedSlot) : undefined;
+
+      const ledClass = s.emergencyMode ? "is-emergency" : tiedCount > 0 && activeRxCount === 0 ? "is-warn" : "is-up";
       const topText = s.emergencyMode
         ? `${esc(s.label || "H1")} · Hub (Parent · Slot 1) · Emergency mode active (2.4 GHz beacon paused)`
-        : `${esc(s.label || "H1")} · Hub (Parent · Slot 1) · ${tiedCount} child Spoke${tiedCount === 1 ? "" : "s"} tied · 2.4 GHz Ch ${ch}`;
+        : `${esc(s.label || "H1")} · Hub (Parent · Slot 1) · ${activeRxCount}/${tiedCount} child Spoke${tiedCount === 1 ? "" : "s"} actively streaming · 2.4 GHz Ch ${ch}`;
 
       const slotCards = Array.from({ length: 6 }, (_, i) => {
         const slotNum = i + 2;
@@ -3078,11 +3206,20 @@ export class DebugView extends Component {
               </div>
             </div>`;
         }
+        const isSelected = slotNum === selectedSlot;
+        const badgeClass = child.online ? "badge-good" : child.inHubStatus ? "badge-warn" : "";
+        const badgeLabel = child.online
+          ? `Receiving · Slot ${slotNum}`
+          : child.inHubStatus
+            ? (child.frames ?? 0) === 0
+              ? `No Data · Slot ${slotNum}`
+              : `Stale · Slot ${slotNum}`
+            : `No Link · Slot ${slotNum}`;
         return `
-          <div class="debug-net-slot-card is-assigned">
+          <div class="debug-net-slot-card is-assigned is-clickable ${isSelected ? "is-selected" : ""}" data-action="select-net-spoke" data-spoke-slot="${slotNum}" role="button" tabindex="0" aria-pressed="${isSelected}" title="Click to inspect live telemetry received by ${esc(s.label || "this Hub")} from ${esc(child.label)}">
             <div class="debug-net-slot-head">
               <span class="debug-net-slot-num mono">TDMA Slot ${slotNum}</span>
-              <span class="badge ${child.online ? "badge-good" : "badge-accent"}">${child.online ? `Tied · Slot ${slotNum}` : "Registered"}</span>
+              <span class="badge ${badgeClass}">${badgeLabel}</span>
             </div>
             <div class="debug-net-slot-main">
               <div class="debug-net-slot-id">
@@ -3099,6 +3236,87 @@ export class DebugView extends Component {
           </div>`;
       }).join("");
 
+      const freqs = s.freqs?.length === 8 ? s.freqs : RACEBAND;
+      const pct = (x: number) => Math.max(0, Math.min(100, ((x - DBM_MIN) / (DBM_MAX - DBM_MIN)) * 100));
+      let inspectorHtml = "";
+      if (selectedChild) {
+        const rate = selectedChild.ratePktPerSec ?? 0;
+        const frames = selectedChild.frames ?? 0;
+        const dbmSource =
+          selectedChild.dbm && selectedChild.dbm.length === 8
+            ? selectedChild.dbm
+            : selectedChild.online && selectedChild.serverRssi && selectedChild.serverRssi.some((v) => v < 0)
+              ? selectedChild.serverRssi.map((v) => Math.round(v))
+              : null;
+        const diagWarn = !selectedChild.inHubStatus
+          ? `<strong>${esc(selectedChild.label)}</strong> has not sent a <span class="mono">JOIN</span> or window packet to <strong>${esc(s.label || "this Hub")}</strong> since the Hub booted. If ${esc(selectedChild.label)} was already powered on when the Hub was flashed or reset, power-cycle ${esc(selectedChild.label)} (or reflash both timers with the latest v0.1.4 build so Spokes auto-reannounce <span class="mono">JOIN</span>).`
+          : frames === 0
+            ? `<strong>${esc(selectedChild.label)}</strong> joined TDMA Slot ${selectedChild.slot}, but <strong>0 timing window frames</strong> have reached the Hub. Its 5.8 GHz sweep schedule may have drifted out of phase with the Hub's beacon — power-cycle or reflash ${esc(selectedChild.label)} to re-lock.`
+            : selectedChild.msAgo !== undefined && selectedChild.msAgo >= 2500
+              ? `Last window frame from <strong>${esc(selectedChild.label)}</strong> arrived <strong>${(selectedChild.msAgo / 1000).toFixed(1)}s ago</strong> (${frames} total frames). Check that ${esc(selectedChild.label)} is powered on and on the same firmware profile (${esc(profileName)}).`
+              : "";
+        const barsHtml = freqs
+          .map((f, idx) => {
+            const band = racebandName(f) || `Ch${idx + 1}`;
+            const col = CHANNEL_COLORS[idx];
+            const onCh = Boolean(this.signalEnabledCh[idx]);
+            const val = dbmSource ? dbmSource[idx] : undefined;
+            const valid = onCh && val !== undefined && val > -127 && val < 0;
+            const widthPct = valid ? pct(val!) : 0;
+            return `
+              <div class="debug-net-inspector-bar-row ${onCh ? "" : "is-muted"}">
+                <span class="debug-bar-label mono"><span class="debug-ch-inline" style="${onCh ? `background:${col}` : `background:transparent;box-shadow:inset 0 0 0 1.5px ${col}`}"></span><strong>${band}</strong> ${f}</span>
+                <div class="debug-bar-track">
+                  <span class="debug-bar-fill" style="width:${widthPct.toFixed(1)}%"></span>
+                </div>
+                <span class="debug-bar-value mono">${!onCh ? "Off" : valid ? `${val} dBm` : "—"}</span>
+              </div>`;
+          })
+          .join("");
+
+        inspectorHtml = `
+          <div class="debug-net-spoke-inspector" data-spoke-inspector="${selectedChild.slot}">
+            <div class="debug-net-inspector-head">
+              <div class="debug-net-inspector-title">
+                <span class="status-dot ${selectedChild.online ? "is-up" : "is-warn"}"></span>
+                <strong>${esc(selectedChild.label)}</strong>
+                <span class="note">· TDMA Slot ${selectedChild.slot} live stream at ${esc(s.label || "Hub")}</span>
+              </div>
+              <div class="debug-connect-actions">
+                <span class="badge ${selectedChild.online ? "badge-good" : "badge-warn"} mono">${rate.toFixed(1)} pkt/s</span>
+                <span class="badge mono">${frames} frames rx</span>
+                <span class="badge mono">${esc(selectedChild.fp)}</span>
+              </div>
+            </div>
+            ${diagWarn ? `<div class="debug-net-inspector-alert">${diagWarn}</div>` : ""}
+            <div class="debug-net-inspector-kpis">
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Frames received by Hub</span>
+                <strong class="debug-net-inspector-kpi-val mono">${frames} <span class="note">(${rate.toFixed(1)} pkt/s)</span></strong>
+              </div>
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Last frame at Hub</span>
+                <strong class="debug-net-inspector-kpi-val mono">${selectedChild.msAgo !== undefined && frames > 0 ? `${selectedChild.msAgo} ms ago` : "No frames yet"}</strong>
+              </div>
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Latest sweep seq #</span>
+                <strong class="debug-net-inspector-kpi-val mono">${selectedChild.seq !== undefined && frames > 0 ? `#${selectedChild.seq}` : "—"}</strong>
+              </div>
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Practice gate &amp; server rx</span>
+                <strong class="debug-net-inspector-kpi-val">${selectedChild.serverGateLabel ? `${esc(selectedChild.serverGateLabel)} <span class="note mono">· ${selectedChild.serverFrames ?? 0} samples</span>` : `<span class="note">Unassigned in Track</span>`}</strong>
+              </div>
+            </div>
+            <div class="debug-net-inspector-bars-wrap">
+              <div class="debug-subbar">
+                <span class="debug-chart-title">5.8 GHz channels received from ${esc(selectedChild.label)} (Slot ${selectedChild.slot})</span>
+                <span class="note mono">${dbmSource ? (selectedChild.dbm ? "Direct from Hub USB" : "Via Hub UDP stream") : "Waiting for Spoke window frames…"}</span>
+              </div>
+              <div class="debug-net-inspector-bars">${barsHtml}</div>
+            </div>
+          </div>`;
+      }
+
       this.slot("network").innerHTML = `
         <div class="debug-status-topbar">
           <span class="debug-led-status">
@@ -3107,7 +3325,7 @@ export class DebugView extends Component {
           </span>
           <div class="debug-connect-actions">
             <span class="badge badge-good">Parent Hub · Slot 1</span>
-            <span class="badge ${tiedCount > 0 ? "badge-accent" : ""} mono">${tiedCount}/6 Spokes</span>
+            <span class="badge ${activeRxCount > 0 ? "badge-good" : tiedCount > 0 ? "badge-warn" : ""} mono">${activeRxCount}/${tiedCount} Streaming</span>
           </div>
         </div>
         <div class="debug-network-panels is-hub-view">
@@ -3149,9 +3367,10 @@ export class DebugView extends Component {
           <div class="debug-subbox debug-net-peers-card">
             <div class="debug-subbox-head">
               <span class="debug-subbox-title is-active">${icons.slaprf(14)}<span>Child Spokes tied to ${esc(s.label || "this Hub")} (TDMA Slots 2–7)</span></span>
-              <span class="badge ${tiedCount > 0 ? "badge-good" : ""}">${tiedCount} of 6 slots active</span>
+              <span class="note">${tiedCount > 0 ? "Click a Spoke to inspect live data · " : ""}<span class="badge ${activeRxCount > 0 ? "badge-good" : ""}">${tiedCount} of 6 slots</span></span>
             </div>
             <div class="debug-net-slot-grid">${slotCards}</div>
+            ${inspectorHtml}
           </div>
         </div>`;
       return;
@@ -3167,7 +3386,11 @@ export class DebugView extends Component {
       knownTimers.find((k) => k.role === "hub" && k.profile === s.profile) ??
       knownTimers.find((k) => k.role === "hub");
 
-    const linked = !s.emergencyMode && s.slot >= 2;
+    const beaconMsAgo = s.beaconMsAgo ?? s.hub?.beaconMsAgo;
+    const hasSlot = !s.emergencyMode && s.slot >= 2;
+    const beaconFresh = beaconMsAgo === undefined || beaconMsAgo < 2500;
+    const linked = hasSlot && beaconFresh;
+    const beaconStale = hasSlot && !beaconFresh;
     const parentLabel = s.hub?.label || serverHub?.puckLabel || knownHub?.label || "H1";
     const parentFp = s.hub?.fp || serverHub?.fingerprint || knownHub?.fp || "";
     const parentMac = s.hub?.mac || knownHub?.mac || "";
@@ -3183,8 +3406,10 @@ export class DebugView extends Component {
     const topText = s.emergencyMode
       ? `${esc(s.label || "S1")} · Spoke (Child) · Emergency mode active (2.4 GHz link paused)`
       : linked
-        ? `${esc(s.label || "S1")} · Spoke (Child · TDMA Slot ${s.slot}) · Tied to Parent Hub ${esc(parentLabel)} (Slot 1) on 2.4 GHz Ch ${ch}`
-        : `${esc(s.label || "S1")} · Spoke (Child) · Searching for Parent Hub sync beacon on 2.4 GHz…`;
+        ? `${esc(s.label || "S1")} · Spoke (Child · TDMA Slot ${s.slot}) · Tied to Parent Hub ${esc(parentLabel)} (Slot 1) on 2.4 GHz Ch ${ch}${beaconMsAgo !== undefined ? ` · beacon ${beaconMsAgo} ms ago` : ""}`
+        : beaconStale
+          ? `${esc(s.label || "S1")} · Spoke (Slot ${s.slot}) · Hub sync beacon lost (${((beaconMsAgo ?? 0) / 1000).toFixed(1)}s ago) — out of phase or Hub offline`
+          : `${esc(s.label || "S1")} · Spoke (Child) · Searching for Parent Hub sync beacon on 2.4 GHz…`;
 
     this.slot("network").innerHTML = `
       <div class="debug-status-topbar">
@@ -3193,7 +3418,7 @@ export class DebugView extends Component {
           <span class="debug-head-note">${topText}</span>
         </span>
         <div class="debug-connect-actions">
-          <span class="badge ${linked ? "badge-good" : "badge-warn"}">${linked ? `Child Spoke · Slot ${s.slot}` : "Searching for Hub"}</span>
+          <span class="badge ${linked ? "badge-good" : "badge-warn"}">${linked ? `Child Spoke · Slot ${s.slot}` : beaconStale ? `Beacon Lost · Slot ${s.slot}` : "Searching for Hub"}</span>
           <span class="badge mono">Parent: ${esc(parentLabel)} (Slot 1)</span>
         </div>
       </div>
@@ -3213,11 +3438,15 @@ export class DebugView extends Component {
           <dl class="debug-kv-list">
             <div class="debug-kv-row">
               <dt>Assigned TDMA slot</dt>
-              <dd>${linked ? `Slot ${s.slot} of 7 <span class="note">· gap ${tdmaGap}, +${(tdmaOffsetUs / 1000).toFixed(1)} ms</span>` : "Unassigned (sending JOIN)"}</dd>
+              <dd>${hasSlot ? `Slot ${s.slot} of 7 <span class="note">· gap ${tdmaGap}, +${(tdmaOffsetUs / 1000).toFixed(1)} ms</span>` : "Unassigned (sending JOIN)"}</dd>
+            </div>
+            <div class="debug-kv-row">
+              <dt>Last Hub beacon</dt>
+              <dd>${beaconMsAgo !== undefined ? `<span class="mono">${beaconMsAgo} ms ago</span> ${beaconFresh ? `<span class="badge badge-good">Locked</span>` : `<span class="badge badge-warn">Stale (&gt;2.5s)</span>`}` : hasSlot ? "Waiting for beacon…" : "Not heard yet"}</dd>
             </div>
             <div class="debug-kv-row">
               <dt>2.4 GHz link</dt>
-              <dd>${linked ? `Synced · ESP-NOW LR Ch ${ch}` : "Scanning 2.4 GHz for Hub beacon"}</dd>
+              <dd>${linked ? `Synced · ESP-NOW LR Ch ${ch}` : beaconStale ? `De-synced on Ch ${ch} (no recent Hub beacon)` : "Scanning 2.4 GHz for Hub beacon"}</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Firmware &amp; profile</dt>
@@ -3233,12 +3462,12 @@ export class DebugView extends Component {
         <div class="debug-net-bridge ${linked ? "is-linked" : "is-searching"}">
           <span class="badge ${linked ? "badge-good" : "badge-warn"}">ESP-NOW LR · 2.4 GHz Ch ${ch}</span>
           <div class="debug-net-bridge-track">
-            <span class="debug-net-bridge-end mono">${esc(s.label || "S1")} (${linked ? `Slot ${s.slot}` : "Child"})</span>
+            <span class="debug-net-bridge-end mono">${esc(s.label || "S1")} (${hasSlot ? `Slot ${s.slot}` : "Child"})</span>
             <span class="debug-net-bridge-line"></span>
             <span class="debug-net-bridge-arrow">${icons.arrowRight(14)}</span>
             <span class="debug-net-bridge-end mono">${esc(parentLabel)} (Slot 1)</span>
           </div>
-          <span class="note">${linked ? `Beacon synced · 4-sweep windows → ${esc(parentLabel)}` : "Waiting for Hub beacon & ASSIGN frame…"}</span>
+          <span class="note">${linked ? `Beacon synced (${beaconMsAgo ?? 0} ms ago) · 4-sweep windows → ${esc(parentLabel)}` : beaconStale ? `Beacon lost (${((beaconMsAgo ?? 0) / 1000).toFixed(1)}s ago) — power-cycle or reflash Spoke` : "Waiting for Hub beacon & ASSIGN frame…"}</span>
         </div>
 
         <div class="debug-subbox debug-net-parent-card">
@@ -3260,11 +3489,11 @@ export class DebugView extends Component {
             </div>
             <div class="debug-kv-row">
               <dt>Hub identity</dt>
-              <dd>${parentFp ? `<span class="mono">${esc(parentFp)}</span>${parentMac ? ` <span class="note mono">· ${esc(parentMac)}</span>` : ""}` : `Assigned Slot ${s.slot} over 2.4 GHz`}</dd>
+              <dd>${parentFp ? `<span class="mono">${esc(parentFp)}</span>${parentMac ? ` <span class="note mono">· ${esc(parentMac)}</span>` : ""}` : hasSlot ? `Assigned Slot ${s.slot} over 2.4 GHz` : "—"}</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Link &amp; beacon</dt>
-              <dd>${linked ? `Active · 2.4 GHz Ch ${ch} sync beacon locked` : "Waiting for Hub beacon"}</dd>
+              <dd>${linked ? `Active · 2.4 GHz Ch ${ch} sync beacon locked` : beaconStale ? `Beacon lost (${((beaconMsAgo ?? 0) / 1000).toFixed(1)}s ago)` : "Waiting for Hub beacon"}</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Firmware &amp; profile</dt>

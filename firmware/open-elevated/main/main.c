@@ -265,7 +265,7 @@ static void hub_handle_join(const spoke_join_frame_t *j) {
         if (s_slot_fp[i] == j->fingerprint) { idx = i; break; }
     }
     for (int i = 0; idx < 0 && i < MAX_SPOKES; i++) {
-        if (s_slot_fp[i] == 0) { idx = i; }
+        if (s_slot_fp[i] == 0 || (s_slot_fp[i] & 0xFFFFFF00UL) == 0x53504B00UL) { idx = i; }
     }
     if (idx < 0) {
         return; // Course is full
@@ -292,7 +292,19 @@ static void hub_listen_until(int64_t until_us) {
             if (buf[1] == FRAME_MAGIC_JOIN && n == (int)sizeof(spoke_join_frame_t)) {
                 hub_handle_join((const spoke_join_frame_t *)buf);
             } else if (buf[1] == FRAME_MAGIC_WINDOW || buf[1] == FRAME_MAGIC_SINGLE) {
-                slaprf_diag_note_spoke_rx(buf[2]);
+                const uint8_t slot = buf[2];
+                if (slot >= 2 && slot < 2 + MAX_SPOKES && s_hello[slot - 1].magic0 != FRAME_MAGIC_0) {
+                    // Spoke was already running in this TDMA slot before the Hub booted:
+                    // announce a fallback HELLO so the laptop ingests its frames immediately,
+                    // until the Spoke's next periodic JOIN supplies its real fingerprint.
+                    char fallback_label[24] = {0};
+                    fallback_label[0] = 'S';
+                    fallback_label[1] = (char)('0' + (slot - 1));
+                    const uint32_t fp = s_slot_fp[slot - 2] ? s_slot_fp[slot - 2] : (0x53504B00UL | slot);
+                    slaprf_diag_note_spoke(slot, fp, SLAPRF_PROFILE_CODE, fallback_label);
+                    hub_send_hello(slot, ROLE_SPOKE_TIMER, fp, SLAPRF_PROFILE_CODE, SWEEP_HZ, fallback_label);
+                }
+                slaprf_diag_note_spoke_frame(buf, (uint32_t)n);
                 slaprf_forward_udp_to_laptop(buf, (uint32_t)n);
             }
         }
@@ -343,17 +355,21 @@ static void hub_run(void) {
 
 /* ---- Spoke -------------------------------------------------------------------------------- */
 
+static void spoke_fill_join(spoke_join_frame_t *j) {
+    memset(j, 0, sizeof(*j));
+    j->magic0 = FRAME_MAGIC_0;
+    j->magic1 = FRAME_MAGIC_JOIN;
+    j->fingerprint = g_flash_cfg.fingerprint;
+    j->role = ROLE_SPOKE_TIMER;
+    j->profile = SLAPRF_PROFILE_CODE;
+    j->sweep_hz = SWEEP_HZ;
+    memcpy(j->timer_label, (const void *)g_flash_cfg.timer_label, sizeof(j->timer_label));
+    j->crc8 = compute_crc8((const uint8_t *)j, sizeof(*j) - 1);
+}
+
 static uint8_t spoke_join_hub(void) {
     spoke_join_frame_t j;
-    memset(&j, 0, sizeof(j));
-    j.magic0 = FRAME_MAGIC_0;
-    j.magic1 = FRAME_MAGIC_JOIN;
-    j.fingerprint = g_flash_cfg.fingerprint;
-    j.role = ROLE_SPOKE_TIMER;
-    j.profile = SLAPRF_PROFILE_CODE;
-    j.sweep_hz = SWEEP_HZ;
-    memcpy(j.timer_label, (const void *)g_flash_cfg.timer_label, sizeof(j.timer_label));
-    j.crc8 = compute_crc8((const uint8_t *)&j, sizeof(j) - 1);
+    spoke_fill_join(&j);
 
     uint8_t buf[64];
     for (;;) {
@@ -389,20 +405,23 @@ static int64_t spoke_wait_beacon(int64_t after_us, int64_t deadline_us) {
 
 static void spoke_run(void) {
     uint8_t pkt[sizeof(timer_window_frame_t)];
+    spoke_join_frame_t join_pkt;
+    spoke_fill_join(&join_pkt);
     for (;;) {
         slaprf_diag_set_slot(0);
         slaprf_spoke_sync_to_hub_channel();
         uint8_t slot = spoke_join_hub();
         slaprf_diag_set_slot(slot);
-        const uint8_t idx = (uint8_t)(slot - 2);
-        const int my_gap = idx / SLOTS_PER_GAP;
-        const int64_t my_offset = SLOT_GUARD_US + (int64_t)(idx % SLOTS_PER_GAP) * TDMA_SLOT_US;
+        uint8_t idx = (uint8_t)(slot - 2);
+        int my_gap = idx / SLOTS_PER_GAP;
+        int64_t my_offset = SLOT_GUARD_US + (int64_t)(idx % SLOTS_PER_GAP) * TDMA_SLOT_US;
         ESP_LOGI(TAG, "joined as slot %u (gap %d, +%lld us)", slot, my_gap, (long long)my_offset);
 
         int64_t beacon = spoke_wait_beacon(slaprf_now_us(), slaprf_now_us() + 2500000LL);
         if (!beacon) {
-            beacon = slaprf_now_us() + SWEEP_BUDGET_US;
+            continue;
         }
+        int64_t next_join_refresh = beacon + HELLO_REPEAT_US;
         while (slaprf_ms_since_hub_beacon() <= 2500) {
             const int64_t t_sf = beacon - SWEEP_BUDGET_US; // Superframe start implied by the beacon
             for (int k = 0; k < TX_EVERY_SWEEPS; k++) {
@@ -414,6 +433,10 @@ static void spoke_run(void) {
                 if (k == my_gap) {
                     slaprf_sleep_until_us(t_sweep + SWEEP_BUDGET_US + my_offset);
                     espnow_send(pkt, pack_window(pkt, slot));
+                    if (slaprf_now_us() >= next_join_refresh) {
+                        espnow_send(&join_pkt, sizeof(join_pkt));
+                        next_join_refresh = slaprf_now_us() + HELLO_REPEAT_US;
+                    }
                 }
             }
             // Sweep 0 of the next superframe, then expect its beacon right after.
@@ -422,10 +445,35 @@ static void spoke_run(void) {
             sweep_once();
             int64_t b = spoke_wait_beacon(next_sf, next_sf + SWEEP_BUDGET_US + BEACON_WAIT_US);
             beacon = b ? b : next_sf + SWEEP_BUDGET_US; // Missed it: free-run on the prediction
-            if (slaprf_now_us() > beacon + SWEEP_INTERVAL_US) {
-                beacon = slaprf_now_us() + SWEEP_BUDGET_US; // Fell behind (e.g. spectrum scan): resync cleanly
-            }
             slaprf_diag_service(); // Debug-page spectrum scan, if one was requested
+            if (slaprf_now_us() > beacon + SWEEP_INTERVAL_US || slaprf_ms_since_hub_beacon() > 200) {
+                // Fell behind (e.g. spectrum scan) or missed >5 beacons (phase shift / Hub reset):
+                // pause 5.8 GHz sweeps and listen continuously on 2.4 GHz to re-lock phase immediately.
+                const int64_t wait_start = slaprf_now_us();
+                int64_t relock = spoke_wait_beacon(wait_start, wait_start + 600000LL);
+                if (relock) {
+                    beacon = relock;
+                    espnow_send(&join_pkt, sizeof(join_pkt));
+                    next_join_refresh = relock + HELLO_REPEAT_US;
+                } else {
+                    beacon = slaprf_now_us() + SWEEP_BUDGET_US;
+                }
+            }
+            uint8_t rx_buf[250];
+            int rx_n;
+            while ((rx_n = espnow_poll(rx_buf, sizeof(rx_buf))) > 0) {
+                if (rx_n == (int)sizeof(hub_assign_frame_t) && rx_buf[0] == FRAME_MAGIC_0 &&
+                    rx_buf[1] == FRAME_MAGIC_ASSIGN && compute_crc8(rx_buf, (uint32_t)rx_n - 1) == rx_buf[rx_n - 1]) {
+                    const hub_assign_frame_t *a = (const hub_assign_frame_t *)rx_buf;
+                    if (a->fingerprint == g_flash_cfg.fingerprint && a->slot >= 2 && a->slot != slot) {
+                        slot = a->slot;
+                        slaprf_diag_set_slot(slot);
+                        idx = (uint8_t)(slot - 2);
+                        my_gap = idx / SLOTS_PER_GAP;
+                        my_offset = SLOT_GUARD_US + (int64_t)(idx % SLOTS_PER_GAP) * TDMA_SLOT_US;
+                    }
+                }
+            }
 
         }
         ESP_LOGW(TAG, "Hub beacon lost for >2.5 s; re-syncing and re-joining Hub");

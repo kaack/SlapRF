@@ -230,10 +230,16 @@ func (r *WiFiUDPReceiver) handleHello(raw []byte) {
 }
 
 // resolveSlotLocked returns the stable timer ID and sweep interval for a Hub slot, or ok=false if
-// that slot hasn't sent a HELLO yet.
+// that slot hasn't sent a HELLO yet (unless the slot's timer ID was already provisioned).
 func (r *WiFiUDPReceiver) resolveSlotLocked(slot uint8) (uint8, uint64, bool) {
-	info, ok := r.slots[slot]
-	return info.timerID, info.intervalUs, ok
+	if info, ok := r.slots[slot]; ok {
+		return info.timerID, info.intervalUs, true
+	}
+	if r.engine != nil && r.engine.HasDetectedPuck(slot) {
+		r.slots[slot] = slotInfo{timerID: slot, intervalUs: SampleIntervalUs}
+		return slot, SampleIntervalUs, true
+	}
+	return 0, 0, false
 }
 
 // DecodePacket parses a binary packet and returns only the newly recovered frames in
