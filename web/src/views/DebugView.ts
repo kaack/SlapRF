@@ -295,7 +295,7 @@ export class DebugView extends Component {
             <h2>Status &amp; health</h2>
             <p>Identity, chip, uptime, why it last restarted, memory, sweep timing, Wi-Fi and the 5.8 GHz receiver's boot check. Refreshes every 2 seconds and plots the last 5 minutes.</p>
           </div>
-          <div class="card">
+          <div class="debug-status-layout">
             <div data-slot="status"></div>
             <div class="debug-subbox debug-health-subbox" data-slot="health">
               <div class="debug-subbox-head">
@@ -2463,7 +2463,7 @@ export class DebugView extends Component {
     }
 
     this.slot("status").innerHTML = `
-      <div class="debug-card-head">
+      <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}"></span>
           <span class="note debug-head-note mono">${headText}</span>
