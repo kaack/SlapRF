@@ -3773,11 +3773,6 @@ body.is-gate-dragging * {
   border-color: var(--border-strong);
   color: var(--text);
 }
-.debug-page .btn-sm.btn-icon.is-toggled {
-  background: rgba(255, 255, 255, 0.11);
-  border-color: rgba(255, 255, 255, 0.32);
-  color: var(--text);
-}
 .debug-page .btn-sm.btn-icon[data-action="restart-capture"]:hover:not(:disabled) {
   background: rgba(251, 113, 133, 0.14);
   border-color: rgba(251, 113, 133, 0.5);

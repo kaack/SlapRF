@@ -3969,7 +3969,6 @@ export class DebugView extends Component {
 
     const wrapBtn = host.querySelector<HTMLButtonElement>('[data-action="serial-wrap"]');
     if (wrapBtn) {
-      wrapBtn.classList.toggle("is-toggled", this.serialWrap);
       wrapBtn.setAttribute("aria-pressed", String(this.serialWrap));
       wrapBtn.title = this.serialWrap ? "Wrap lines: ON (click to disable)" : "Wrap lines: OFF (click to enable)";
       wrapBtn.innerHTML = this.serialWrap ? icons.wrapText(17) : icons.wrapTextOff(17);
@@ -4008,7 +4007,7 @@ export class DebugView extends Component {
           <span class="debug-head-note" data-log-count>${active ? "Streaming" : "Paused"} · ${this.logLines.length} lines</span>
         </span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm btn-icon btn-ghost ${this.logWrap ? "is-toggled" : ""}" data-action="log-wrap" aria-pressed="${this.logWrap}" title="${this.logWrap ? "Wrap lines: ON (click to disable)" : "Wrap lines: OFF (click to enable)"}" aria-label="Wrap lines">${this.logWrap ? icons.wrapText(17) : icons.wrapTextOff(17)}</button>
+          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="log-wrap" aria-pressed="${this.logWrap}" title="${this.logWrap ? "Wrap lines: ON (click to disable)" : "Wrap lines: OFF (click to enable)"}" aria-label="Wrap lines">${this.logWrap ? icons.wrapText(17) : icons.wrapTextOff(17)}</button>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="clear-log" title="Clear live log" aria-label="Clear live log">${icons.trash(17)}</button>
           <button type="button" class="btn btn-sm ${this.logOn ? "btn-armed" : "btn-unarmed"}" data-action="log" ${on ? "" : "disabled"} title="${this.logOn ? "Streaming USB log mirror — click to pause" : "Paused — click to stream USB log mirror"}">
             ${this.logOn ? icons.pause(14) : icons.play(14)}<span>${this.logOn ? "Pause" : "Stream"}</span>
