@@ -1941,46 +1941,31 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
             </div>
           </dl>
         </div>
-      </div>`}},TimerEraserPanel=class extends Component{busy=!1;progress=null;lastSuccessMsg=null;errorMsg=null;showAllPorts=!1;constructor(el){super(el),this.showAllPorts=sharedTimerConsole.showAllPorts,this.listen(el,"click",e=>{e.target.closest("[data-action='erase-timer']")&&this.eraseFromUsb()}),this.listen(el,"change",e=>{let t=e.target;t.matches("[data-eraser-all-ports]")&&(this.showAllPorts=t.checked,sharedTimerConsole.showAllPorts=t.checked)}),this.render()}async eraseFromUsb(){if(!this.busy){this.busy=!0,this.errorMsg=null,this.lastSuccessMsg=null,this.progress={stage:"connecting",percent:1,detail:"Select the XIAO ESP32-C5 USB port to wipe\u2026"},this.render();try{await eraseXiaoC5OverWebSerial(p=>{this.progress=p,this.updateProgressInPlace()||this.render()},this.showAllPorts,sharedTimerConsole),this.lastSuccessMsg="Timer wiped \u2014 bootloader, partition table, NVS, and firmware erased back to factory blank."}catch(err){let msg=err instanceof Error?err.message:String(err);/No port selected|aborted|cancelled|cancel/i.test(msg)||(this.errorMsg=msg)}finally{this.busy=!1,this.progress=null,this.render()}}}updateProgressInPlace(){if(!this.progress)return!1;let statusEl=this.el.querySelector("[data-eraser-status]"),pctEl=this.el.querySelector("[data-eraser-pct]"),fillEl=this.el.querySelector("[data-eraser-fill]"),btnTextEl=this.el.querySelector("[data-eraser-btn-text]");if(!statusEl||!pctEl||!fillEl)return!1;let pct=Math.max(0,Math.min(100,Math.round(this.progress.percent)));return statusEl.textContent=this.progress.detail,pctEl.textContent=`${pct}%`,fillEl.style.width=`${pct}%`,btnTextEl&&(btnTextEl.textContent=`Wiping timer\u2026 (${pct}%)`),!0}render(){let webSerialOk=isWebSerialSupported(),pct=this.progress?Math.max(0,Math.min(100,Math.round(this.progress.percent))):this.lastSuccessMsg?100:0,statusText=this.progress?this.progress.detail:this.errorMsg?`Error: ${this.errorMsg}`:this.lastSuccessMsg?`\u2713 ${this.lastSuccessMsg}`:webSerialOk?"Plug any XIAO ESP32-C5 into USB and click Erase timer to choose which USB device to wipe.":"Direct USB erasing requires Chrome, Edge, or Brave.";this.el.innerHTML=`
-      <div class="flasher flasher-wizard">
-        <div class="flasher-wizard-body">
-          <div class="flasher-progress ${this.busy?"is-flashing":""} ${this.lastSuccessMsg&&!this.busy?"is-complete":""}">
-            <div class="flasher-progress-top">
-              <span class="flasher-progress-status" data-eraser-status="1">${esc(statusText)}</span>
-              <span class="mono flasher-progress-pct" data-eraser-pct="1">${pct}%</span>
-            </div>
-            <div class="meter flasher-meter">
-              <span class="meter-fill ${this.lastSuccessMsg&&!this.busy?"tone-good":""}" data-eraser-fill="1" style="width:${pct}%"></span>
-            </div>
-            <div class="flasher-progress-foot">
-              <label class="flasher-port-toggle">
-                <input
-                  type="checkbox"
-                  data-eraser-all-ports="1"
-                  ${this.showAllPorts?"checked":""}
-                  ${this.busy?"disabled":""}
-                />
-                <span>Show all USB serial ports</span>
-              </label>
-              <div class="flasher-progress-foot-actions">
-                <span class="note">Enters ESP32-C5 ROM bootloader directly \u2014 no read required</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="flasher-wizard-nav is-end">
-            <button
-              type="button"
-              class="btn btn-bad"
-              data-action="erase-timer"
-              ${this.busy||!webSerialOk?"disabled":""}
-            >
-              ${icons.trash(15)}
-              <span data-eraser-btn-text="1">${this.busy?`Wiping timer\u2026 (${pct}%)`:"Erase timer"}</span>
-            </button>
-          </div>
+      </div>`}},TimerEraserPanel=class extends Component{busy=!1;progress=null;lastSuccessMsg=null;errorMsg=null;showAllPorts=!1;constructor(el){super(el),this.showAllPorts=sharedTimerConsole.showAllPorts,this.listen(el,"click",e=>{e.target.closest("[data-action='erase-timer']")&&this.eraseFromUsb()}),this.listen(el,"change",e=>{let t=e.target;t.matches("[data-eraser-all-ports]")&&(this.showAllPorts=t.checked,sharedTimerConsole.showAllPorts=t.checked)}),this.render()}async eraseFromUsb(){if(!this.busy){this.busy=!0,this.errorMsg=null,this.lastSuccessMsg=null,this.progress={stage:"connecting",percent:1,detail:"Select the XIAO ESP32-C5 USB port to wipe\u2026"},this.render();try{await eraseXiaoC5OverWebSerial(p=>{this.progress=p,this.updateProgressInPlace()||this.render()},this.showAllPorts,sharedTimerConsole),this.lastSuccessMsg="Timer wiped \u2014 bootloader, partition table, NVS, and firmware erased back to factory blank."}catch(err){let msg=err instanceof Error?err.message:String(err);/No port selected|aborted|cancelled|cancel/i.test(msg)||(this.errorMsg=msg)}finally{this.busy=!1,this.progress=null,this.render()}}}updateProgressInPlace(){if(!this.progress)return!1;let headEl=this.el.querySelector("[data-eraser-head]"),statusEl=this.el.querySelector("[data-eraser-status]"),pctEl=this.el.querySelector("[data-eraser-pct]"),fillEl=this.el.querySelector("[data-eraser-fill]"),btnTextEl=this.el.querySelector("[data-eraser-btn-text]");if(!headEl)return!1;let pct=Math.max(0,Math.min(100,Math.round(this.progress.percent)));return headEl.textContent=`${this.progress.detail} (${pct}%)`,statusEl&&(statusEl.textContent=this.progress.detail),pctEl&&(pctEl.textContent=`${pct}%`),fillEl&&(fillEl.style.width=`${pct}%`),btnTextEl&&(btnTextEl.textContent=`Erasing\u2026 (${pct}%)`),!0}render(){let webSerialOk=isWebSerialSupported(),pct=this.progress?Math.max(0,Math.min(100,Math.round(this.progress.percent))):this.lastSuccessMsg?100:0,ledClass=this.busy?"is-warn":this.errorMsg?"is-emergency":this.lastSuccessMsg?"is-up":"",headText=this.busy?esc(`${this.progress?.detail||"Erasing timer over USB\u2026"} (${pct}%)`):this.errorMsg?esc(this.errorMsg):this.lastSuccessMsg?`\u2713 ${esc(this.lastSuccessMsg)}`:webSerialOk?"No timer erased yet \xB7 plug a timer into USB and click Erase timer":"Direct USB erasing requires Chrome, Edge, or Brave";this.el.innerHTML=`
+      <div class="debug-status-topbar">
+        <span class="debug-led-status">
+          <span class="status-dot ${ledClass}"></span>
+          <span class="debug-head-note" data-eraser-head="1">${headText}</span>
+        </span>
+        <div class="debug-connect-actions">
+          <label class="debug-port-check" title="Include all serial ports in the browser picker">
+            <input type="checkbox" data-eraser-all-ports="1" ${this.showAllPorts?"checked":""} ${this.busy?"disabled":""} />
+            <span>All ports</span>
+          </label>
+          <button type="button" class="btn btn-sm btn-bad" data-action="erase-timer" ${this.busy||!webSerialOk?"disabled":""}>
+            ${icons.trash(14)}<span data-eraser-btn-text="1">${this.busy?`Erasing\u2026 (${pct}%)`:"Erase timer"}</span>
+          </button>
         </div>
-      </div>`}},FlasherView=class extends Component{constructor(el,store,api){super(el),el.innerHTML=`
+      </div>
+      ${this.busy||this.lastSuccessMsg?`<div class="flasher-progress ${this.busy?"is-flashing":"is-complete"}">
+              <div class="flasher-progress-top">
+                <span class="flasher-progress-status" data-eraser-status="1">${esc(this.progress?.detail||this.lastSuccessMsg||"")}</span>
+                <span class="mono flasher-progress-pct" data-eraser-pct="1">${pct}%</span>
+              </div>
+              <div class="meter flasher-meter">
+                <span class="meter-fill ${this.lastSuccessMsg&&!this.busy?"tone-good":""}" data-eraser-fill="1" style="width:${pct}%"></span>
+              </div>
+            </div>`:""}`}},FlasherView=class extends Component{constructor(el,store,api){super(el),el.innerHTML=`
       <div class="settings">
         <section class="settings-section">
           <div class="settings-intro">
@@ -2001,9 +1986,9 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Eraser</h2>
-            <p>Factory-reset any Seeed XIAO ESP32-C5 over USB without reading it first. Clicking <strong>Erase timer</strong> opens the USB device picker and wipes the selected board's bootloader, partition table, NVS, and firmware back to a blank chip.</p>
+            <p>Plug a timer into USB and click <strong>Erase timer</strong> to pick which USB device to wipe back to a factory-blank chip.</p>
           </div>
-          <div class="card" data-slot="eraser"></div>
+          <div class="debug-status-layout" data-slot="eraser"></div>
         </section>
       </div>`;let readerPanel=null,flasher=new TimerFlasher(this.slot("flasher"),store,api,written=>{readerPanel?.setReadout(written)});readerPanel=new TimerReaderPanel(this.slot("reader"),api,readout=>{flasher.applyReadout(readout)});let eraserPanel=new TimerEraserPanel(this.slot("eraser"));this.adopt(flasher),this.adopt(readerPanel),this.adopt(eraserPanel)}};var DEFAULT_PIPER_VOICE_URI="piper:en_US-lessac-medium",PIPER_VOICES=[{uri:"piper:en_US-lessac-medium",voiceId:"en_US-lessac-medium",name:"Piper Neural \xB7 US English Female (Offline)",lang:"en-US",modelPath:"en/en_US/lessac/medium/en_US-lessac-medium.onnx"},{uri:"piper:en_US-hfc_male-medium",voiceId:"en_US-hfc_male-medium",name:"Piper Neural \xB7 US English Male (Offline)",lang:"en-US",modelPath:"en/en_US/hfc_male/medium/en_US-hfc_male-medium.onnx"},{uri:"piper:en_US-amy-medium",voiceId:"en_US-amy-medium",name:"Piper Neural \xB7 Amy US English (Offline)",lang:"en-US",modelPath:"en/en_US/amy/medium/en_US-amy-medium.onnx"},{uri:"piper:en_US-ryan-medium",voiceId:"en_US-ryan-medium",name:"Piper Neural \xB7 Ryan US English (Offline)",lang:"en-US",modelPath:"en/en_US/ryan/medium/en_US-ryan-medium.onnx"}];function isPiperVoiceURI(uri){return uri.startsWith("piper:")}function getPiperVoice(uri){return uri==="piper:en_US-hfc_female-medium"?PIPER_VOICES[0]:PIPER_VOICES.find(v=>v.uri===uri)??PIPER_VOICES[0]}function prepareTextForPiper(raw){return raw.trim().replace(/\b(\d+)\.00\b/g,"$1").replace(/\b(\d+)\.([1-9])0\b/g,"$1.$2").replace(/\b(\d+)\.0([1-9])\b/g,"$1 point zero $2").replace(/\bpoint\s+(?:o+h*|zero)\s*,?\s*(one|two|three|four|five|six|seven|eight|nine|\d)\b/gi,"point zero $1")}var HF_BASE="https://huggingface.co/diffusionstudio/piper-voices/resolve/main",PIPER_JS_URL="https://cdn.jsdelivr.net/npm/@mintplex-labs/piper-tts-web@1.0.5/dist/piper-o91UDS6e.js",PIPER_WASM_URL="https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build/piper_phonemize.wasm",PIPER_DATA_URL="https://cdn.jsdelivr.net/npm/@diffusionstudio/piper-wasm@1.0.0/build/piper_phonemize.data",ORT_JS_URL="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/esm/ort.wasm.min.js",ORT_WASM_SIMD_URL="https://cdn.jsdelivr.net/npm/onnxruntime-web@1.18.0/dist/ort-wasm-simd.wasm",MAX_AUDIO_CACHE_ENTRIES=120,runtimeImport=new Function("u","return import(u)"),PIPER_WORKER_SOURCE=`
 let createPiperPhonemize = null;
