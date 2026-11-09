@@ -545,6 +545,7 @@ export class DebugView extends Component {
     }
     this.dirtySpectrum = true;
     this.dirtyWaterfall = true;
+    this.updateScanFindings();
   }
 
   private applyFreqPan(startMHz0: number, startMHz1: number, deltaMHz: number): void {
@@ -568,6 +569,7 @@ export class DebugView extends Component {
     this.scanZoomStopMHz = f1;
     this.dirtySpectrum = true;
     this.dirtyWaterfall = true;
+    this.updateScanFindings();
   }
 
   private applyDbmStretch(
@@ -1055,6 +1057,18 @@ export class DebugView extends Component {
         this.scanAutoY = true;
         this.spectrumAcc.setVisibleRows(80);
         this.renderScan();
+      } else {
+        const chBtn = target.closest<HTMLElement>("[data-action='signal-ch']");
+        if (chBtn) {
+          const idx = Number(chBtn.dataset.ch);
+          if (idx >= 0 && idx < 8) {
+            const isSolo = this.signalEnabledCh[idx] && this.signalEnabledCh.filter(Boolean).length === 1;
+            this.signalEnabledCh = this.signalEnabledCh.map((_, i) => (isSolo ? true : i === idx));
+            this.renderSignalControls();
+            this.renderNoiseTable();
+            this.dirtySignal = true;
+          }
+        }
       }
     });
 
@@ -1359,7 +1373,6 @@ export class DebugView extends Component {
           zoomBox: this.scanZoomBox,
           hover: this.scanHover,
         });
-        this.updateScanFindings();
         this.dirtySpectrum = false;
       }
     }
@@ -2772,111 +2785,213 @@ export class DebugView extends Component {
     }
   }
 
-  private renderFindingsLogHtml(
+  private syncFindingsLogDom(
+    host: HTMLElement,
     entries: FindingLogEntry[],
     clearAction: "clear-signal-findings" | "clear-scan-findings",
     emptyHint: string,
     isInScope?: (e: FindingLogEntry) => boolean
-  ): string {
+  ): void {
+    let scrollEl = host.querySelector<HTMLElement>("[data-findings-scroll]");
+    if (!scrollEl) {
+      host.innerHTML = `
+        <div class="debug-findings-head">
+          <div class="debug-findings-title-group">
+            <span class="debug-findings-title">Findings log</span>
+            <span class="badge mono" data-findings-count>0</span>
+            <span class="note debug-findings-sub" data-findings-sub>Newest first · coalesces ongoing bursts on the same channel</span>
+          </div>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="${clearAction}" data-findings-clear disabled>Clear</button>
+        </div>
+        <div class="debug-findings-scroll" data-findings-scroll>
+          <div class="debug-findings-empty note" data-findings-empty>${esc(emptyHint)}</div>
+          <table class="debug-findings-table" data-findings-table hidden>
+            <colgroup>
+              <col class="col-finding-id" />
+              <col class="col-finding-time" />
+              <col class="col-finding-type" />
+              <col class="col-finding-source" />
+              <col class="col-finding-detail" />
+            </colgroup>
+            <thead>
+              <tr>
+                <th>#</th>
+                <th>Time</th>
+                <th>Type</th>
+                <th>Channel / Freq</th>
+                <th>Finding</th>
+              </tr>
+            </thead>
+            <tbody data-findings-tbody></tbody>
+          </table>
+        </div>`;
+      scrollEl = host.querySelector<HTMLElement>("[data-findings-scroll]")!;
+    }
+
     const inScopeCount = isInScope ? entries.filter(isInScope).length : entries.length;
     const isFiltered = isInScope !== undefined && inScopeCount < entries.length;
-    return `
-      <div class="debug-findings-head">
-        <div class="debug-findings-title-group">
-          <span class="debug-findings-title">Findings log</span>
-          <span class="badge mono">${isFiltered ? `${inScopeCount} / ${entries.length}` : entries.length}</span>
-          <span class="note debug-findings-sub">${isFiltered ? "Highlighting selected scope · unselected channels faded" : "Newest first · coalesces ongoing bursts on the same channel"}</span>
-        </div>
-        <button type="button" class="btn btn-sm btn-ghost" data-action="${clearAction}" ${entries.length ? "" : "disabled"}>Clear</button>
-      </div>
-      <div class="debug-findings-scroll" data-findings-scroll>
-        ${
-          entries.length === 0
-            ? `<div class="debug-findings-empty note">${esc(emptyHint)}</div>`
-            : `<table class="debug-findings-table">
-                <thead>
-                  <tr>
-                    <th>#</th>
-                    <th>Time</th>
-                    <th>Type</th>
-                    <th>Channel / Freq</th>
-                    <th>Finding</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${entries
-                    .map((e) => {
-                      const muted = isInScope ? !isInScope(e) : false;
-                      return `<tr class="${muted ? "is-muted" : ""}">
-                        <td class="mono note">#${e.id}</td>
-                        <td class="mono note">${esc(e.timeLabel)}</td>
-                        <td><span class="badge ${e.tone}">${esc(e.badge)}</span></td>
-                        <td class="mono">${e.sourceColor ? `<span class="debug-ch-inline" style="background:${e.sourceColor}"></span>` : ""}<strong>${esc(e.sourceLabel)}</strong></td>
-                        <td class="debug-finding-detail">${esc(e.detail)}</td>
-                      </tr>`;
-                    })
-                    .join("")}
-                </tbody>
-              </table>`
+
+    const countEl = host.querySelector<HTMLElement>("[data-findings-count]");
+    if (countEl) {
+      const nextCount = isFiltered ? `${inScopeCount} / ${entries.length}` : String(entries.length);
+      if (countEl.textContent !== nextCount) countEl.textContent = nextCount;
+    }
+
+    const subEl = host.querySelector<HTMLElement>("[data-findings-sub]");
+    if (subEl) {
+      const nextSub = isFiltered
+        ? "Highlighting selected scope · unselected channels faded (double-click a channel chip to solo)"
+        : "Newest first · coalesces ongoing bursts on the same channel";
+      if (subEl.textContent !== nextSub) subEl.textContent = nextSub;
+    }
+
+    const clearBtn = host.querySelector<HTMLButtonElement>("[data-findings-clear]");
+    if (clearBtn) {
+      clearBtn.disabled = entries.length === 0;
+    }
+
+    const emptyEl = host.querySelector<HTMLElement>("[data-findings-empty]");
+    const tableEl = host.querySelector<HTMLTableElement>("[data-findings-table]");
+    const tbody = host.querySelector<HTMLTableSectionElement>("[data-findings-tbody]");
+    if (!emptyEl || !tableEl || !tbody) return;
+
+    if (entries.length === 0) {
+      emptyEl.hidden = false;
+      tableEl.hidden = true;
+      if (tbody.firstChild) tbody.innerHTML = "";
+      return;
+    }
+
+    emptyEl.hidden = true;
+    tableEl.hidden = false;
+
+    // Map existing rows by finding ID so we never destroy the scroll container or existing row nodes
+    const existingRows = new Map<number, HTMLTableRowElement>();
+    Array.from(tbody.querySelectorAll<HTMLTableRowElement>("tr[data-finding-id]")).forEach((tr) => {
+      existingRows.set(Number(tr.dataset.findingId), tr);
+    });
+
+    const validIds = new Set<number>(entries.map((e) => e.id));
+    existingRows.forEach((tr, id) => {
+      if (!validIds.has(id)) {
+        tr.remove();
+        existingRows.delete(id);
+      }
+    });
+
+    const prevScrollTop = scrollEl.scrollTop;
+    let newlyInsertedAtTop = 0;
+
+    for (let idx = 0; idx < entries.length; idx++) {
+      const e = entries[idx];
+      const muted = isInScope ? !isInScope(e) : false;
+      let tr = existingRows.get(e.id);
+      if (!tr) {
+        tr = document.createElement("tr");
+        tr.dataset.findingId = String(e.id);
+        tr.className = muted ? "is-muted" : "";
+        tr.innerHTML = `
+          <td class="mono note">#${e.id}</td>
+          <td class="mono note" data-cell-time>${esc(e.timeLabel)}</td>
+          <td><span class="badge ${e.tone}" data-cell-badge>${esc(e.badge)}</span></td>
+          <td class="mono" data-cell-source>${e.sourceColor ? `<span class="debug-ch-inline" style="background:${e.sourceColor}"></span>` : ""}<strong>${esc(e.sourceLabel)}</strong></td>
+          <td class="debug-finding-detail" data-cell-detail title="${esc(e.detail)}">${esc(e.detail)}</td>`;
+        const refNode = tbody.children[idx] ?? null;
+        tbody.insertBefore(tr, refNode);
+        if (idx === newlyInsertedAtTop) {
+          newlyInsertedAtTop++;
         }
-      </div>`;
+      } else {
+        tr.classList.toggle("is-muted", muted);
+        const badgeEl = tr.querySelector<HTMLElement>("[data-cell-badge]");
+        if (badgeEl) {
+          const nextBadgeClass = `badge ${e.tone}`;
+          if (badgeEl.className !== nextBadgeClass) badgeEl.className = nextBadgeClass;
+          if (badgeEl.textContent !== e.badge) badgeEl.textContent = e.badge;
+        }
+        const detailEl = tr.querySelector<HTMLElement>("[data-cell-detail]");
+        if (detailEl && detailEl.textContent !== e.detail) {
+          detailEl.textContent = e.detail;
+          detailEl.title = e.detail;
+        }
+        const curAtIdx = tbody.children[idx];
+        if (curAtIdx !== tr) {
+          tbody.insertBefore(tr, curAtIdx ?? null);
+        }
+      }
+    }
+
+    // If the user has scrolled down to read older findings and new rows arrived at the top, keep their viewport anchored
+    if (prevScrollTop > 4 && newlyInsertedAtTop > 0) {
+      let addedH = 0;
+      for (let i = 0; i < newlyInsertedAtTop; i++) {
+        const row = tbody.children[i] as HTMLElement | undefined;
+        addedH += row?.offsetHeight || 29;
+      }
+      scrollEl.scrollTop = prevScrollTop + addedH;
+    }
   }
 
   private renderNoiseTable(): void {
     const freqs = this.status?.freqs ?? RACEBAND;
     const sweepHz = this.status?.sweepHz ?? 50;
     const summary = this.signalRing.computeStats(this.signalWindowSec, freqs, this.pilots, sweepHz, this.signalEndN);
-    const prevScroll = this.slot("noise-table").querySelector<HTMLElement>("[data-findings-scroll]")?.scrollTop ?? 0;
     const anyChDisabled = this.signalEnabledCh.some((on) => !on);
+    const slotEl = this.slot("noise-table");
 
-    this.slot("noise-table").innerHTML = `
-      <div class="debug-findings" role="region" aria-label="Signal findings log">
-        ${this.renderFindingsLogHtml(
-          this.signalFindings,
-          "clear-signal-findings",
-          "Waiting for 50 Hz sweep samples — threshold crossings and in-band RF bursts will be logged here with timestamps.",
-          anyChDisabled ? (e) => e.channelIndex !== undefined && Boolean(this.signalEnabledCh[e.channelIndex]) : undefined
-        )}
-      </div>
-      <div class="debug-table-scroll">
-        <table class="debug-runs debug-noise-table">
-          <thead>
-            <tr>
-              <th>Channel</th>
-              <th>Pilot / Enter</th>
-              <th>Mean</th>
-              <th>Spread (SD)</th>
-              <th>Max</th>
-              <th>Floor</th>
-              <th>Hits/s (&gt;fl+10)</th>
-              <th>&gt;fl+10 %</th>
-              <th>Would trigger</th>
-            </tr>
-          </thead>
-          <tbody>
-            ${summary.rows
-              .map((r) => {
-                const col = CHANNEL_COLORS[r.index];
-                const trigRisk = r.pctWouldTrigger > 0;
-                const chOn = this.signalEnabledCh[r.index];
-                return `<tr class="${chOn ? "" : "is-muted"}">
-                  <td class="mono"><span class="debug-ch-inline" style="background:${col}"></span>${r.bandLabel ? `<strong>${r.bandLabel}</strong> ` : ""}${r.freqMHz} MHz</td>
-                  <td class="mono note">${r.pilotCallsign ? `${esc(r.pilotCallsign)} (${r.enterThreshold})` : `${r.enterThreshold} dBm`}</td>
-                  <td class="mono">${r.mean !== null ? `${r.mean.toFixed(1)} dBm` : "—"}</td>
-                  <td class="mono ${r.sd !== null && r.sd > 3 ? "debug-tone-warn" : ""}">${r.sd !== null ? `${r.sd.toFixed(1)} dB` : "—"}</td>
-                  <td class="mono">${r.max !== null ? `${r.max} dBm` : "—"}</td>
-                  <td class="mono">${r.floor !== null ? `${r.floor} dBm` : "—"}</td>
-                  <td class="mono ${r.hitsPerSec >= 1 ? "debug-tone-warn" : ""}">${r.samples ? r.hitsPerSec.toFixed(1) : "—"}</td>
-                  <td class="mono">${r.samples ? `${r.pctAboveFloor10.toFixed(1)}%` : "—"}</td>
-                  <td class="mono ${trigRisk ? "debug-tone-warn" : "note"}">${r.samples ? `${r.pctWouldTrigger.toFixed(1)}% (${r.wouldTriggerPerSec.toFixed(1)}/s)` : "—"}</td>
-                </tr>`;
-              })
-              .join("")}
-          </tbody>
-        </table>
-      </div>`;
-    const nextScrollEl = this.slot("noise-table").querySelector<HTMLElement>("[data-findings-scroll]");
-    if (nextScrollEl && prevScroll > 0) nextScrollEl.scrollTop = prevScroll;
+    let findingsHost = slotEl.querySelector<HTMLElement>("[data-signal-findings-host]");
+    let noiseTbody = slotEl.querySelector<HTMLTableSectionElement>("[data-noise-tbody]");
+    if (!findingsHost || !noiseTbody) {
+      slotEl.innerHTML = `
+        <div class="debug-findings" data-signal-findings-host role="region" aria-label="Signal findings log"></div>
+        <div class="debug-table-scroll">
+          <table class="debug-runs debug-noise-table">
+            <thead>
+              <tr>
+                <th>Channel</th>
+                <th>Pilot / Enter</th>
+                <th>Mean</th>
+                <th>Spread (SD)</th>
+                <th>Max</th>
+                <th>Floor</th>
+                <th>Hits/s (&gt;fl+10)</th>
+                <th>&gt;fl+10 %</th>
+                <th>Would trigger</th>
+              </tr>
+            </thead>
+            <tbody data-noise-tbody></tbody>
+          </table>
+        </div>`;
+      findingsHost = slotEl.querySelector<HTMLElement>("[data-signal-findings-host]")!;
+      noiseTbody = slotEl.querySelector<HTMLTableSectionElement>("[data-noise-tbody]")!;
+    }
+
+    this.syncFindingsLogDom(
+      findingsHost,
+      this.signalFindings,
+      "clear-signal-findings",
+      "Waiting for 50 Hz sweep samples — threshold crossings and in-band RF bursts will be logged here with timestamps.",
+      anyChDisabled ? (e) => e.channelIndex !== undefined && Boolean(this.signalEnabledCh[e.channelIndex]) : undefined
+    );
+
+    noiseTbody.innerHTML = summary.rows
+      .map((r) => {
+        const col = CHANNEL_COLORS[r.index];
+        const trigRisk = r.pctWouldTrigger > 0;
+        const chOn = this.signalEnabledCh[r.index];
+        return `<tr class="${chOn ? "" : "is-muted"}">
+          <td class="mono"><span class="debug-ch-inline" style="background:${col}"></span>${r.bandLabel ? `<strong>${r.bandLabel}</strong> ` : ""}${r.freqMHz} MHz</td>
+          <td class="mono note">${r.pilotCallsign ? `${esc(r.pilotCallsign)} (${r.enterThreshold})` : `${r.enterThreshold} dBm`}</td>
+          <td class="mono">${r.mean !== null ? `${r.mean.toFixed(1)} dBm` : "—"}</td>
+          <td class="mono ${r.sd !== null && r.sd > 3 ? "debug-tone-warn" : ""}">${r.sd !== null ? `${r.sd.toFixed(1)} dB` : "—"}</td>
+          <td class="mono">${r.max !== null ? `${r.max} dBm` : "—"}</td>
+          <td class="mono">${r.floor !== null ? `${r.floor} dBm` : "—"}</td>
+          <td class="mono ${r.hitsPerSec >= 1 ? "debug-tone-warn" : ""}">${r.samples ? r.hitsPerSec.toFixed(1) : "—"}</td>
+          <td class="mono">${r.samples ? `${r.pctAboveFloor10.toFixed(1)}%` : "—"}</td>
+          <td class="mono ${trigRisk ? "debug-tone-warn" : "note"}">${r.samples ? `${r.pctWouldTrigger.toFixed(1)}% (${r.wouldTriggerPerSec.toFixed(1)}/s)` : "—"}</td>
+        </tr>`;
+      })
+      .join("");
   }
 
   private renderScan(): void {
@@ -2898,6 +3013,8 @@ export class DebugView extends Component {
     const canScanOnce = on && rfOn && !this.scanning && !this.scanLive;
     const canScanLive = on && rfOn && !this.scanning;
     const scanActive = this.scanLive || this.scanning;
+    const prevScanFindingsEl = this.slot("scan").querySelector<HTMLElement>("[data-scan-findings]");
+    const prevScanScrollTop = prevScanFindingsEl?.querySelector<HTMLElement>("[data-findings-scroll]")?.scrollTop ?? 0;
     this.slot("scan").innerHTML = `
       <div class="debug-card-head">
         <div class="debug-toolbar-left">
@@ -2995,6 +3112,14 @@ export class DebugView extends Component {
           <canvas class="debug-canvas debug-waterfall-canvas" data-waterfall-canvas></canvas>
         </div>
       </div>`;
+    if (prevScanFindingsEl) {
+      const placeholder = this.slot("scan").querySelector<HTMLElement>("[data-scan-findings]");
+      if (placeholder) {
+        placeholder.replaceWith(prevScanFindingsEl);
+        const sc = prevScanFindingsEl.querySelector<HTMLElement>("[data-findings-scroll]");
+        if (sc && prevScanScrollTop > 0) sc.scrollTop = prevScanScrollTop;
+      }
+    }
     this.updateScanFindings();
     this.dirtySpectrum = true;
     this.dirtyWaterfall = true;
@@ -3022,18 +3147,16 @@ export class DebugView extends Component {
 
     const el = this.el.querySelector<HTMLElement>("[data-scan-findings]");
     if (el) {
-      const prevScroll = el.querySelector<HTMLElement>("[data-findings-scroll]")?.scrollTop ?? 0;
       const z0 = this.scanZoomStartMHz;
       const z1 = this.scanZoomStopMHz;
       const isZoomed = z0 !== null && z1 !== null;
-      el.innerHTML = this.renderFindingsLogHtml(
+      this.syncFindingsLogDom(
+        el,
         this.scanFindings,
         "clear-scan-findings",
         "Run Scan once or click Stream — detected RF peaks (≥ 6 dB above band median) and 5 GHz Wi-Fi activity will be logged here with timestamps.",
         isZoomed ? (e) => e.freqMHz !== undefined && e.freqMHz >= z0! && e.freqMHz <= z1! : undefined
       );
-      const nextScrollEl = el.querySelector<HTMLElement>("[data-findings-scroll]");
-      if (nextScrollEl && prevScroll > 0) nextScrollEl.scrollTop = prevScroll;
     }
 
     const wfLed = this.el.querySelector<HTMLElement>("[data-wf-led]");
