@@ -398,64 +398,64 @@ export interface SignalChartOptions {
 }
 
 /**
- * Trace a uniform cubic B-spline through `pts` using exact cubic Bézier segments.
- * When `clampEnds` is false (used on scrolling time-series traces), only interior B-spline knots
- * `(p_{i-1} + 4*p_i + p_{i+1}) / 6` are drawn so every knot's vertical position is 100% invariant
- * as new samples stream in or as the X-axis is panned/stretched.
+ * Trace a local Fritsch–Butland monotone cubic Hermite spline through `pts` using exact cubic Bézier segments.
+ * Every sample point `(pts[i].x, pts[i].y)` is interpolated 100% accurately without corner-cutting or overshoot,
+ * and each interior tangent depends only on its immediate 3-point neighborhood `(i-1, i, i+1)` so scrolling
+ * live traces stay rock-steady.
  */
 function traceBSpline(
   ctx: CanvasRenderingContext2D,
   pts: Array<{ x: number; y: number }>,
   moveFirst = true,
-  clampEnds = true
+  _clampEnds = true
 ): void {
   const n = pts.length;
   if (n === 0) return;
-  if (n === 1) {
-    if (moveFirst) ctx.moveTo(pts[0].x, pts[0].y);
-    return;
-  }
+  if (moveFirst) ctx.moveTo(pts[0].x, pts[0].y);
+  if (n === 1) return;
   if (n === 2) {
-    if (moveFirst) ctx.moveTo(pts[0].x, pts[0].y);
     ctx.lineTo(pts[1].x, pts[1].y);
     return;
   }
-  if (!clampEnds) {
-    if (n === 3) {
-      if (moveFirst) ctx.moveTo(pts[0].x, pts[0].y);
-      ctx.quadraticCurveTo(pts[1].x, pts[1].y, pts[2].x, pts[2].y);
-      return;
-    }
-    const startX = (pts[0].x + 4 * pts[1].x + pts[2].x) / 6;
-    const startY = (pts[0].y + 4 * pts[1].y + pts[2].y) / 6;
-    if (moveFirst) ctx.moveTo(startX, startY);
-    for (let i = 1; i <= n - 3; i++) {
-      const p1 = pts[i];
-      const p2 = pts[i + 1];
-      const p3 = pts[i + 2];
-      const cp1x = (2 * p1.x + p2.x) / 3;
-      const cp1y = (2 * p1.y + p2.y) / 3;
-      const cp2x = (p1.x + 2 * p2.x) / 3;
-      const cp2y = (p1.y + 2 * p2.y) / 3;
-      const endX = (p1.x + 4 * p2.x + p3.x) / 6;
-      const endY = (p1.y + 4 * p2.y + p3.y) / 6;
-      ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
-    }
-    return;
+
+  const dx = new Float64Array(n - 1);
+  const m = new Float64Array(n - 1);
+  for (let i = 0; i < n - 1; i++) {
+    const dxi = pts[i + 1].x - pts[i].x;
+    const dyi = pts[i + 1].y - pts[i].y;
+    dx[i] = dxi;
+    m[i] = dxi > 1e-6 || dxi < -1e-6 ? dyi / dxi : 0;
   }
-  if (moveFirst) ctx.moveTo(pts[0].x, pts[0].y);
-  const at = (idx: number) => pts[Math.max(0, Math.min(n - 1, idx))];
-  for (let i = -1; i <= n - 1; i++) {
-    const p1 = at(i);
-    const p2 = at(i + 1);
-    const p3 = at(i + 2);
-    const cp1x = (2 * p1.x + p2.x) / 3;
-    const cp1y = (2 * p1.y + p2.y) / 3;
-    const cp2x = (p1.x + 2 * p2.x) / 3;
-    const cp2y = (p1.y + 2 * p2.y) / 3;
-    const endX = (p1.x + 4 * p2.x + p3.x) / 6;
-    const endY = (p1.y + 4 * p2.y + p3.y) / 6;
-    ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
+
+  const tangents = new Float64Array(n);
+  tangents[0] = m[0];
+  tangents[n - 1] = m[n - 2];
+  for (let i = 1; i < n - 1; i++) {
+    const m0 = m[i - 1];
+    const m1 = m[i];
+    if (m0 * m1 <= 0) {
+      tangents[i] = 0;
+    } else {
+      const dx0 = Math.abs(dx[i - 1]) || 1;
+      const dx1 = Math.abs(dx[i]) || 1;
+      const w1 = 2 * dx1 + dx0;
+      const w2 = dx1 + 2 * dx0;
+      const t = (3 * (dx0 + dx1)) / (w1 / m0 + w2 / m1);
+      const maxMag = 3 * Math.min(Math.abs(m0), Math.abs(m1));
+      tangents[i] = Math.sign(t) * Math.min(Math.abs(t), maxMag);
+    }
+  }
+
+  for (let i = 0; i < n - 1; i++) {
+    const segDx = dx[i] / 3;
+    ctx.bezierCurveTo(
+      pts[i].x + segDx,
+      pts[i].y + tangents[i] * segDx,
+      pts[i + 1].x - segDx,
+      pts[i + 1].y - tangents[i + 1] * segDx,
+      pts[i + 1].x,
+      pts[i + 1].y
+    );
   }
 }
 
