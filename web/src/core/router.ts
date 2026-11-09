@@ -57,18 +57,18 @@ export const ROUTES: RouteMeta[] = [
     icon: () => icons.cpu(20),
   },
   {
-    id: "setup",
-    label: "Settings",
-    title: "Settings",
-    subtitle: "Timing rules, announcer, MultiGP LiveTime, and data source",
-    icon: () => icons.sliders(20),
-  },
-  {
     id: "debug",
     label: "Debug",
     title: "Debug",
     subtitle: "Connect a timer over USB: live 5.8 GHz readings, spectrum scan, status and log",
     icon: () => icons.bug(20),
+  },
+  {
+    id: "setup",
+    label: "Settings",
+    title: "Settings",
+    subtitle: "Timing rules, announcer, MultiGP LiveTime, and data source",
+    icon: () => icons.sliders(20),
   },
 ];
 

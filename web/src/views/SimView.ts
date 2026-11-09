@@ -173,9 +173,8 @@ function formatPackStateChip(pack: SimBatteryPack): { html: string; cls: string 
 }
 
 function formatPackTone(pack: SimBatteryPack): string {
-  if (pack.state === "CHARGING") return "warn";
-  if (pack.pct <= 20) return "bad";
-  if (pack.pct <= 45) return "warn";
+  if (pack.pct <= 25) return "bad";
+  if (pack.pct < 80) return "warn";
   return "good";
 }
 
