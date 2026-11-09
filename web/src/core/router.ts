@@ -1,6 +1,6 @@
 import { icons } from "./icons";
 
-export type RouteId = "live" | "pilot" | "pilots" | "track" | "sim" | "setup" | "flasher" | "debug" | "about";
+export type RouteId = "live" | "pilot" | "pilots" | "track" | "sim" | "network" | "setup" | "flasher" | "debug" | "about";
 
 export interface RouteMeta {
   id: RouteId;
@@ -50,6 +50,13 @@ export const ROUTES: RouteMeta[] = [
     simOnly: true,
   },
   {
+    id: "network",
+    label: "Network",
+    title: "Network",
+    subtitle: "Connect to your Hub or Spoke timer over USB-C or Wi-Fi, inspect the 2.4 GHz network, and manage monitored 5.8 GHz channels",
+    icon: () => icons.wifi(20),
+  },
+  {
     id: "flasher",
     label: "Flasher",
     title: "Flasher",
@@ -60,7 +67,7 @@ export const ROUTES: RouteMeta[] = [
     id: "debug",
     label: "Debug",
     title: "Debug",
-    subtitle: "Connect a timer over USB: live 5.8 GHz readings, spectrum scan, status and log",
+    subtitle: "5.8 GHz SDR diagnostics: hardware self-test, 50 Hz signal recorder, spectrum analyzer, waterfall, and serial console",
     icon: () => icons.bug(20),
   },
   {

@@ -105,28 +105,8 @@ export class DataSourceCard extends Component {
   private render(): void {
     const sim = this.store.simulatorRunning;
     const mode = this.api.realEngineMode;
-    const hub = this.api.hubBridge;
     const usingBrowser = this.api.usingBrowserRealEngine;
     const desktopAvail = this.api.desktopServerAvailable;
-    const usbConnected = sharedTimerConsole.connected;
-    const isCustomHost = hub.hubHost !== "192.168.4.1";
-
-    let wifiBadge = `<span class="note">Standby (enable Browser engine &amp; turn off simulation)</span>`;
-    if (usingBrowser) {
-      if (hub.wifiState === "connected") {
-        wifiBadge = `<span class="note" style="color:var(--ok,#4dff88);">Connected to http://${esc(hub.hubHost)}/api/hub-stream · ${hub.wifiFramesRx.toLocaleString()} frames</span>`;
-      } else if (hub.wifiState === "connecting") {
-        wifiBadge = `<span class="note">Connecting to http://${esc(hub.hubHost)}/api/hub-stream…</span>`;
-      } else if (hub.wifiError) {
-        wifiBadge = `<span class="note">${esc(hub.wifiError)}</span>`;
-      } else {
-        wifiBadge = `<span class="note">Ready · http://${esc(hub.hubHost)}/api/hub-stream</span>`;
-      }
-    }
-
-    const usbBadge = usbConnected
-      ? `<span class="note" style="color:var(--ok,#4dff88);">USB-C WebSerial connected · ${hub.usbFramesRx.toLocaleString()} frames</span>`
-      : `<span class="note">USB-C WebSerial idle (use Connect in top bar for zero-config USB bridge)</span>`;
 
     const activeRuntimeLabel = sim
       ? "Simulator (in-browser WASM)"
@@ -155,7 +135,7 @@ export class DataSourceCard extends Component {
           <div class="option-row">
             <div>
               <div class="option-title">Hardware timing runtime</div>
-              <div class="option-sub">Run the 5.8 GHz DSP &amp; lap timing engine right in the browser via WebAssembly (streams directly from the Hub over Wi-Fi SSE or USB-C with no app download), or use the desktop app for MultiGP LiveTime TCP (:5403) and SQLite storage.</div>
+              <div class="option-sub">Run the 5.8 GHz DSP &amp; lap timing engine right in the browser via WebAssembly (streams directly from the Hub over Wi-Fi SSE or USB-C on the <a href="#/network" class="link-inline">Network</a> page), or use the desktop app for MultiGP LiveTime TCP (:5403) and SQLite storage.</div>
             </div>
             <div class="option-actions">
               <div class="segmented" role="group" aria-label="Hardware timing runtime">
@@ -164,40 +144,6 @@ export class DataSourceCard extends Component {
                 <button type="button" class="seg ${mode === "desktop" ? "is-active" : ""}" data-action="engine-mode" data-mode="desktop">Desktop app</button>
               </div>
             </div>
-          </div>
-
-          <div class="form-grid" style="margin-top:8px;">
-            <label class="field">
-              <span>Hub Wi-Fi address (AP default <code>192.168.4.1</code> or LAN IP)</span>
-              <div class="check-row" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-                <div class="flasher-pass-wrap has-inline-action" style="flex:1 1 190px;max-width:260px;">
-                  <input
-                    class="input mono ${isCustomHost ? "flasher-pass-input" : ""}"
-                    type="text"
-                    name="hubHost"
-                    value="${esc(hub.hubHost)}"
-                    placeholder="192.168.4.1"
-                    aria-label="Hub IP address or hostname"
-                  />
-                  ${
-                    isCustomHost
-                      ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-action="reset-hub-host" title="Reset Hub address to 192.168.4.1">${icons.reset(14)}</button>`
-                      : ""
-                  }
-                </div>
-                <button type="button" class="btn btn-sm btn-ghost" data-action="discover-hub" ${hub.discovering ? "disabled" : ""}>
-                  ${hub.discovering ? "Scanning…" : "Discover Hub"}
-                </button>
-                <button type="button" class="btn btn-sm" data-action="connect-hub">
-                  Connect Wi-Fi
-                </button>
-              </div>
-            </label>
-          </div>
-
-          <div style="display:flex;flex-direction:column;gap:4px;margin-top:4px;">
-            <div>${wifiBadge}</div>
-            <div>${usbBadge}</div>
           </div>
         </div>
         <div class="rules-foot">

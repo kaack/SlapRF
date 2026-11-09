@@ -8,6 +8,7 @@ import { PilotView } from "../views/PilotView";
 import { PilotsView } from "../views/PilotsView";
 import { DebugView } from "../views/DebugView";
 import { FlasherView } from "../views/FlasherView";
+import { NetworkView } from "../views/NetworkView";
 import { SetupView } from "../views/SetupView";
 import { SimView } from "../views/SimView";
 import { TrackView } from "../views/TrackView";
@@ -79,6 +80,8 @@ export class AppShell extends Component {
         return new TrackView(host, this.store, this.api);
       case "sim":
         return new SimView(host, this.store, this.api);
+      case "network":
+        return new NetworkView(host, this.store, this.api);
       case "setup":
         return new SetupView(host, this.store, this.api, this.announcer);
       case "flasher":

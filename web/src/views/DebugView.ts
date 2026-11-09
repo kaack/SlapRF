@@ -99,7 +99,7 @@ export class DebugView extends Component {
   private liveCount = 0;
   private liveOn = false;
   /** 1 = ~10 Hz bar stream; 2 = every-sweep (50 Hz) when the Signal-over-time card is visible. */
-  private liveMode: 1 | 2 = 1;
+  private liveMode: 1 | 2 = 2;
   private signalCardVisible = true;
   private logOn = false;
   private scanning = false;
@@ -376,13 +376,6 @@ export class DebugView extends Component {
       <div class="settings debug-page">
         <section class="settings-section">
           <div class="settings-intro">
-            <h2>Debug</h2>
-            <p>Plug a timer in over USB-C to inspect its 5.8 GHz receiver, run a self-test, scan the band, or read crash logs. Wi-Fi timing continues unless scanning or switched off.</p>
-          </div>
-          <div class="debug-status-layout" data-slot="connection"></div>
-        </section>
-        <section class="settings-section">
-          <div class="settings-intro">
             <h2>Self-test</h2>
             <p>Checks the timer end to end in about 10 seconds: console, identity, 5.8 GHz receiver, sweep timing, memory, last restart, Wi-Fi, and whether its data reaches this laptop. Copy the report when asking for help.</p>
           </div>
@@ -423,7 +416,7 @@ export class DebugView extends Component {
                 </div>
                 <div class="debug-health-card" data-health-card="udp">
                   <div class="debug-health-info">
-                    <span class="debug-health-title">Laptop UDP link</span>
+                    <span class="debug-health-title">Laptop Wi-Fi link</span>
                     <div class="debug-health-value" data-health-val="udp">—</div>
                     <span class="debug-health-meta" data-health-meta="udp">Waiting for data…</span>
                   </div>
@@ -445,27 +438,10 @@ export class DebugView extends Component {
             </div>
           </div>
         </section>
-        <section class="settings-section">
-          <div class="settings-intro">
-            <h2>Network view</h2>
-            <p>Shows how this timer sits in the 2.4 GHz course network: when connected to a Hub (parent, TDMA slot 1), lists the child Spokes tied to it across TDMA slots 2–7; when connected to a Spoke (child), shows the parent Hub it is synced to.</p>
-          </div>
-          <div class="debug-status-layout" data-slot="network"></div>
-        </section>
-        <section class="settings-section">
-          <div class="settings-intro">
-            <h2>Monitored channels</h2>
-            <p>The 8 pilot channels monitored in each timing sweep (synced from active pilots or overridden via the serial console). Click any channel row to toggle monitoring on or off—fewer active channels make each sweep faster. The tick marks the peak since the previous update; hits count readings more than 10 dB above that channel's typical noise.</p>
-          </div>
-          <div class="debug-status-layout">
-            <div data-slot="live-head"></div>
-            <div class="debug-subbox" data-slot="live"></div>
-          </div>
-        </section>
         <section class="settings-section" data-signal-section>
           <div class="settings-intro">
             <h2>Signal over time &amp; channel noise</h2>
-            <p>Streams every sweep (50 Hz) while visible so you can see crossing shapes, short 5 GHz Wi-Fi bursts, each channel's typical noise floor and pilot enter thresholds.</p>
+            <p>Click <strong>Stream</strong> to record every sweep (50 Hz) so you can inspect crossing shapes, short 5 GHz Wi-Fi bursts, each channel's typical noise floor, and pilot enter thresholds.</p>
             <p>The table below computes mean, spread, max, floor, hits/s and how often noise reaches a pilot's enter threshold ("would trigger" — anything above 0% with no drone flying is a false-lap risk).</p>
           </div>
           <div class="debug-status-layout">
@@ -2544,7 +2520,7 @@ export class DebugView extends Component {
     }
   }
 
-  /** Start polling status and streaming live readings on an opened port. */
+  /** Start polling status on an opened port (streaming only begins when explicitly started by the user). */
   private async startSession(): Promise<void> {
     window.clearInterval(this.statusTimer);
     const s = this.status ?? (await this.console.ensureRunningApp());
@@ -2554,9 +2530,8 @@ export class DebugView extends Component {
       this.liveOn = false;
       this.scanLive = false;
     } else {
-      this.liveOn = true;
-      this.liveMode = this.signalCardVisible ? 2 : 1;
-      await this.console.send(`LIVE ${this.liveMode}`);
+      this.liveOn = false;
+      this.liveMode = 2;
     }
     if (this.logOn) await this.console.send("LOG 1");
     this.renderAll();
@@ -2842,6 +2817,8 @@ export class DebugView extends Component {
   }
 
   private renderConnection(): void {
+    const host = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
+    if (!host) return;
     const on = this.console.connected;
     const supported = TimerConsole.supported();
     const busy = this.busy !== null || this.console.busyLabel !== null;
@@ -2858,7 +2835,7 @@ export class DebugView extends Component {
       : busy
         ? `${esc(busyText)}…`
         : "Off · connect a timer over USB-C";
-    const ledClass = on && s ? (s.emergencyMode ? "is-emergency" : "is-up") : on || busy ? "is-warn" : "";
+    const ledClass = on && s ? (s.emergencyMode ? "is-emergency" : s.role === 2 ? "is-spoke" : "is-up") : on || busy ? "is-warn" : "";
     const btnLabel = on
       ? s?.label
         ? `Connected · ${esc(s.label)}`
@@ -2875,7 +2852,7 @@ export class DebugView extends Component {
       bannerParts.push(`<div class="sim-error-note">${esc(this.error)}</div>`);
     }
 
-    this.slot("connection").innerHTML = `
+    host.innerHTML = `
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}"></span>
@@ -2915,7 +2892,9 @@ export class DebugView extends Component {
               ? "is-warn"
               : "is-up"
           : on
-            ? "is-up"
+            ? this.status?.role === 2
+              ? "is-spoke"
+              : "is-up"
             : "";
     const summary = this.checks.length
       ? running
@@ -2931,7 +2910,7 @@ export class DebugView extends Component {
           ? "Emergency mode active · exit emergency mode to run 5.8 GHz RF checks"
           : on
             ? "Ready · takes about 10 s (pauses timing briefly during scan)"
-            : "Off · connect a timer first";
+            : `Off · <a href="#/network" class="link-inline">connect a timer on the Network page</a>`;
     const consoleLines = this.checks.length
       ? esc(
           this.checks
@@ -2948,7 +2927,7 @@ export class DebugView extends Component {
               ? "# Timer is in Emergency Mode (radio and 50 Hz sweeps halted for rescue/reflashing). Click \"Exit emergency mode\" before running RF self-tests."
               : on
                 ? "# Click \"Run self-test\" to verify console, identity, 5.8 GHz receiver, sweep timing, memory, and Wi-Fi."
-                : "# Connect a timer over USB to run the hardware self-test."
+                : "# Connect a timer over USB-C on the Network page to run the hardware self-test."
         );
     this.slot("selftest").innerHTML = `
       <div class="debug-card-head debug-log-head">
@@ -2975,16 +2954,16 @@ export class DebugView extends Component {
     const budget = s ? s.sweepBudgetUs || (s.sweepHz ? Math.round(1e6 / s.sweepHz) : 0) : 0;
     const badReset = s ? BAD_RESETS.includes(s.reset) : false;
     const unprov = s ? s.fp.toUpperCase() === UNPROVISIONED_FP : false;
-    const ledClass = on && s ? (s.emergencyMode ? "is-emergency" : "is-up") : on ? "is-warn" : "";
+    const ledClass = on && s ? (s.emergencyMode ? "is-emergency" : s.role === 2 ? "is-spoke" : "is-up") : on ? "is-warn" : "";
     const headText = s
       ? s.emergencyMode
         ? (s.crashStreak ?? 0) > 0
           ? `Emergency mode · halted after ${s.crashStreak} consecutive ${esc(s.reset)} resets (radio off, ready for rescue or reflash)`
           : `Emergency mode · forced manually (radio off, ambulance LED fade active · click Exit emergency mode to resume)`
-        : `On · polling every 2 s · up ${fmtUptime(s.uptimeMs)}`
+        : `${esc(s.label || "(unnamed)")} · ${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`} · polling every 2 s · up ${fmtUptime(s.uptimeMs)}`
       : on
         ? "Waiting for timer status…"
-        : "Off · connect a timer over USB";
+        : `Off · <a href="#/network" class="link-inline">connect a timer on the Network page</a>`;
 
     const rfBadge = !s
       ? `<span class="badge">—</span>`
@@ -3123,6 +3102,8 @@ export class DebugView extends Component {
   }
 
   private renderNetworkView(): void {
+    const netSlot = this.el.querySelector<HTMLElement>('[data-slot="network"]');
+    if (!netSlot) return;
     const on = this.console.connected;
     const s = this.status;
     const knownTimers = getKnownHardwareTimers();
@@ -3697,6 +3678,8 @@ export class DebugView extends Component {
   }
 
   private renderLiveHead(): void {
+    const liveHeadSlot = this.el.querySelector<HTMLElement>('[data-slot="live-head"]');
+    if (!liveHeadSlot) return;
     const on = this.console.connected;
     const emg = Boolean(on && this.status?.emergencyMode);
     const rfOn = this.status?.rf.enabled ?? true;
@@ -3736,6 +3719,8 @@ export class DebugView extends Component {
 
   /** Build the bar rows once per channel set; updateLive() then only touches styles and text. */
   private renderLive(): void {
+    const liveSlot = this.el.querySelector<HTMLElement>('[data-slot="live"]');
+    if (!liveSlot) return;
     const freqs = this.status?.freqs ?? RACEBAND;
     const activeCount = this.signalEnabledCh.filter(Boolean).length;
     this.slot("live").innerHTML = `
@@ -3942,16 +3927,28 @@ export class DebugView extends Component {
           : `${Math.round(this.signalWindowSec)}s`;
     const ySigShort = isFloorY ? "Floor" : !isYZoomed ? "Full" : `${Math.round(this.signalYMax - this.signalYMin)}dB`;
     const emg = Boolean(on && this.status?.emergencyMode);
-    const sigLedClass = emg ? "is-emergency" : liveFollowOn ? "is-up" : (streamRunning && !isLive) || (on && inScanMode) ? "is-warn" : "";
+    const sigLedClass = emg
+      ? "is-emergency"
+      : liveFollowOn
+        ? this.status?.role === 2
+          ? "is-spoke"
+          : "is-up"
+        : (streamRunning && !isLive) || (on && (inScanMode || !rfOn))
+          ? "is-warn"
+          : "";
     const sigStatusText = emg
       ? "Emergency mode · sweeps halted"
       : liveFollowOn
-        ? `Streaming · ${this.liveMode === 2 ? "50 Hz" : "10 Hz"}`
+        ? `Streaming · ${this.liveMode === 2 ? "50 Hz" : "10 Hz"}${this.live ? ` · sweep ${(this.live.us / 1000).toFixed(2)} ms` : ""}`
         : streamRunning && !isLive
           ? "Paused · scrolled back"
           : inScanMode
             ? "Paused · scan active"
-            : "Paused";
+            : on && !rfOn
+              ? "Off · 5.8 GHz receiver is switched off"
+              : on
+                ? "Paused · click Stream to record 50 Hz sweeps"
+                : `Paused · <a href="#/network" class="link-inline">connect on the Network page</a>`;
     this.slot("signal-head").innerHTML = `
       <div class="debug-status-topbar">
         <span class="debug-led-status" title="${liveTitle}">
@@ -3959,6 +3956,9 @@ export class DebugView extends Component {
           <span class="debug-head-note">${sigStatusText}</span>
         </span>
         <div class="debug-connect-actions">
+          <button type="button" class="btn btn-sm ${rfOn ? "btn-armed" : "btn-unarmed"}" data-action="rf" ${on && this.status && !inScanMode && !emg ? "" : "disabled"} title="${emg ? "Exit emergency mode first to toggle the 5.8 GHz receiver" : inScanMode ? "Pause Spectrum scan first to toggle the 5.8 GHz receiver" : "Switch the hardware 5.8 GHz receiver on or off"}">
+            ${rfOn ? icons.signal(14) : icons.signalOff(14)}<span>${rfOn ? "Receiver on" : "Receiver off"}</span>
+          </button>
           <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
           <button type="button" class="btn btn-sm ${liveFollowOn ? "btn-armed" : "btn-unarmed"}" data-action="signal-freeze" ${liveDisabled ? "disabled" : ""} title="${liveTitle}">
             ${liveFollowOn ? icons.pause(14) : icons.play(14)}<span>${liveLabel}</span>

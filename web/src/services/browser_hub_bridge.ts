@@ -1,11 +1,21 @@
-import { sharedTimerConsole } from "./timer_console";
+import { FIRMWARE_PROFILES, LATEST_FIRMWARE_VERSION } from "./esp_flasher";
+import { recordKnownTimerStatus, sharedTimerConsole, TimerPeerSpoke, TimerStatus } from "./timer_console";
 import { WasmSimTransport } from "./wasm_transport";
 
 export type RealEngineMode = "auto" | "browser" | "desktop";
-export type HubWifiState = "idle" | "connecting" | "connected" | "error";
+export type HubWifiState = "idle" | "connecting" | "reconnecting" | "connected" | "failed";
+export type ConnectivityMethod = "usb" | "wifi";
+export type ConnectionLedColor = "neon" | "blue" | "yellow" | "red" | "gray";
+
+export interface ConnectionLedSummary {
+  color: ConnectionLedColor;
+  shortLabel: string;
+  detail: string;
+}
 
 const HUB_HOST_STORAGE_KEY = "slaprf.ui.hub_host.v1";
 const REAL_ENGINE_MODE_STORAGE_KEY = "slaprf.ui.real_engine_mode.v1";
+const CONN_METHOD_STORAGE_KEY = "slaprf.ui.conn_method.v1";
 const DEFAULT_HUB_HOST = "192.168.4.1";
 
 function bytesToHex(bytes: Uint8Array): string {
@@ -36,11 +46,22 @@ function normalizeHost(raw: string): string {
   return h || DEFAULT_HUB_HOST;
 }
 
+function cString(bytes: Uint8Array): string {
+  let end = bytes.length;
+  for (let i = 0; i < bytes.length; i++) {
+    if (bytes[i] === 0) {
+      end = i;
+      break;
+    }
+  }
+  return new TextDecoder().decode(bytes.subarray(0, end)).trim();
+}
+
 /**
- * Connects the in-browser WebAssembly timing engine (`slaprf.wasm`) directly to physical
- * XIAO ESP32-C5 Hub & Spoke hardware without needing the desktop Go server (`slaprf.exe`):
- * 1. Over Wi-Fi via the Hub's HTTP/SSE endpoint (`http://<hubHost>/api/hub-stream`).
- * 2. Over USB-C via `sharedTimerConsole` (`WebSerial` `@{"t":"pkt","hex":"..."}`).
+ * Connects the in-browser WebAssembly timing engine (`slaprf.wasm`) and Network page directly
+ * to physical XIAO ESP32-C5 Hub & Spoke hardware:
+ * 1. Over USB-C via `sharedTimerConsole` (`WebSerial` `@{"t":"pkt","hex":"..."}`).
+ * 2. Over Wi-Fi via the Hub's HTTP/SSE endpoint (`http://<hubHost>/api/hub-stream`).
  */
 export class BrowserHubBridge {
   private readonly wasm: WasmSimTransport;
@@ -48,13 +69,20 @@ export class BrowserHubBridge {
   private eventSource: EventSource | null = null;
   private reconnectTimer: number | null = null;
   private active = false;
+  private wifiDesired = false;
 
+  public connMethod: ConnectivityMethod = "usb";
   public hubHost = DEFAULT_HUB_HOST;
   public wifiState: HubWifiState = "idle";
   public wifiError: string | null = null;
+  public wifiReconnectAttempt = 0;
+  public readonly maxReconnectAttempts = 5;
   public wifiFramesRx = 0;
   public usbFramesRx = 0;
   public discovering = false;
+  public wifiStatus: TimerStatus | null = null;
+  public wifiLastDbm: number[] = [-95, -95, -95, -95, -95, -95, -95, -95];
+  private readonly wifiSpokes = new Map<number, TimerPeerSpoke & { lastRxMs: number }>();
   public onPacketIngested?: () => void;
 
   constructor(wasm: WasmSimTransport) {
@@ -64,13 +92,16 @@ export class BrowserHubBridge {
       if (savedHost && savedHost.trim()) {
         this.hubHost = normalizeHost(savedHost);
       }
+      const savedMethod = window.localStorage.getItem(CONN_METHOD_STORAGE_KEY);
+      if (savedMethod === "wifi" || savedMethod === "usb") {
+        this.connMethod = savedMethod;
+      }
     } catch {
       // ignore storage errors
     }
 
     // Forward outbound 19-byte channel table frames (0xC5 0x5E) from WASM to the Hub over Wi-Fi and/or USB-C
     this.wasm.onHubCommand((pkt) => {
-      if (!this.active) return;
       if (sharedTimerConsole.connected && sharedTimerConsole.lastStatus?.role === 1) {
         sharedTimerConsole.sendNetChannelsFromPacket(pkt);
       }
@@ -86,28 +117,261 @@ export class BrowserHubBridge {
     // Forward inbound Hub/Spoke binary frames received over USB-C WebSerial into WASM
     sharedTimerConsole.subscribe({
       onHubPacket: (pkt) => {
-        if (!this.active) return;
         this.usbFramesRx++;
-        const n = this.wasm.ingestHubPacket(pkt);
-        if (n > 0 || (pkt.length === 36 && pkt[0] === 0xc5 && pkt[1] === 0x5a)) {
-          this.onPacketIngested?.();
+        this.inspectBinaryPacket(pkt);
+        if (this.active) {
+          const n = this.wasm.ingestHubPacket(pkt);
+          if (n > 0 || (pkt.length === 36 && pkt[0] === 0xc5 && pkt[1] === 0x5a)) {
+            this.onPacketIngested?.();
+          }
         }
         if (this.usbFramesRx === 1 || this.usbFramesRx % 25 === 0) {
           this.notify();
         }
       },
       onConnect: () => {
-        if (this.active) {
-          window.setTimeout(() => this.wasm.pushHubChannels(), 350);
-          this.notify();
-        }
+        this.connMethod = "usb";
+        this.saveMethodPref("usb");
+        window.setTimeout(() => this.wasm.pushHubChannels(), 350);
+        this.notify();
       },
       onDisconnect: () => {
-        if (this.active) {
-          this.notify();
-        }
+        this.notify();
       },
     });
+    sharedTimerConsole.onStateChange(() => this.notify());
+  }
+
+  public setConnMethod(method: ConnectivityMethod): void {
+    if (this.connMethod === method) return;
+    this.connMethod = method;
+    this.saveMethodPref(method);
+    this.notify();
+  }
+
+  private saveMethodPref(method: ConnectivityMethod): void {
+    try {
+      window.localStorage.setItem(CONN_METHOD_STORAGE_KEY, method);
+    } catch {
+      // ignore
+    }
+  }
+
+  /**
+   * Computes the 5-state LED indicator summary used by the TopBar icon and Network page:
+   * - `neon`: Connected to a Hub (USB-C role 1 or Wi-Fi SSE)
+   * - `blue`: Connected to a Spoke (USB-C role 2)
+   * - `yellow`: Connecting or lost connection and trying to reconnect
+   * - `red`: All reconnect attempts failed (or Emergency Mode)
+   * - `gray`: Disconnected
+   */
+  public getLedSummary(): ConnectionLedSummary {
+    const usb = sharedTimerConsole;
+
+    // 1. Active or recovering USB connection
+    if (usb.reconnecting || usb.busyLabel) {
+      const label = usb.reconnecting
+        ? `Reconnecting USB (${usb.reconnectAttempt}/${usb.maxReconnectAttempts})…`
+        : `${usb.busyLabel}…`;
+      return {
+        color: "yellow",
+        shortLabel: "Reconnecting",
+        detail: `${label} — click to open Network`,
+      };
+    }
+    if (usb.connected) {
+      const s = usb.lastStatus;
+      if (s?.emergencyMode) {
+        return {
+          color: "red",
+          shortLabel: `${s.label || "Timer"} · Emergency`,
+          detail: `${s.label || "Timer"} is in Emergency Mode — click to open Network`,
+        };
+      }
+      if (s && s.role === 2) {
+        return {
+          color: "blue",
+          shortLabel: `${s.label || "S1"} · Spoke`,
+          detail: `Connected to Spoke ${s.label || "S1"} (Slot ${s.slot || "?"}) over USB-C — click to open Network`,
+        };
+      }
+      const hubName = s?.label || "H1";
+      return {
+        color: "neon",
+        shortLabel: `${hubName} · Hub`,
+        detail: `Connected to Hub ${hubName} over USB-C — click to open Network`,
+      };
+    }
+
+    // 2. Active or recovering Wi-Fi SSE connection
+    if (this.wifiState === "connecting" || this.wifiState === "reconnecting") {
+      const att =
+        this.wifiReconnectAttempt > 0
+          ? ` (attempt ${this.wifiReconnectAttempt}/${this.maxReconnectAttempts})`
+          : "";
+      return {
+        color: "yellow",
+        shortLabel: "Connecting Wi-Fi",
+        detail: `Connecting to Hub at ${this.hubHost}${att} — click to open Network`,
+      };
+    }
+    if (this.wifiState === "connected") {
+      const hubName = this.wifiStatus?.label || "H1";
+      return {
+        color: "neon",
+        shortLabel: `${hubName} · Wi-Fi`,
+        detail: `Connected to Hub ${hubName} (${this.hubHost}) over Wi-Fi SSE — click to open Network`,
+      };
+    }
+
+    // 3. Failed reconnect states (Red)
+    if (usb.reconnectFailed && this.connMethod === "usb") {
+      return {
+        color: "red",
+        shortLabel: "USB Failed",
+        detail: `${usb.lastError || "USB reconnect failed"} — click to open Network`,
+      };
+    }
+    if (this.wifiState === "failed" && this.connMethod === "wifi") {
+      return {
+        color: "red",
+        shortLabel: "Wi-Fi Failed",
+        detail: `${this.wifiError || `Failed to connect to Hub at ${this.hubHost}`} — click to open Network`,
+      };
+    }
+
+    // 4. Disconnected (Gray)
+    return {
+      color: "gray",
+      shortLabel: "Disconnected",
+      detail: "No timer connected — click to open Network",
+    };
+  }
+
+  /** Synthesizes live Hub + Spoke status from binary HELLO (0xC5 0x5A) and WINDOW (0xC5 0x59) frames. */
+  private inspectBinaryPacket(pkt: Uint8Array): void {
+    if (pkt.length < 7 || pkt[0] !== 0xc5) return;
+    const nowMs = Date.now();
+
+    if (pkt[1] === 0x5a && pkt.length >= 36) {
+      const slot = pkt[2];
+      const role = pkt[3];
+      const fp =
+        (pkt[4] | (pkt[5] << 8) | (pkt[6] << 16) | ((pkt[7] << 24) >>> 0))
+          .toString(16)
+          .padStart(8, "0")
+          .toUpperCase();
+      const profileCode = pkt[8] || 1;
+      const sweepHz = pkt[9] || 50;
+      const label = cString(pkt.subarray(10, 34)) || (role === 1 ? "H1" : `S${Math.max(1, slot - 1)}`);
+
+      if (role === 1 || slot === 1) {
+        if (!this.wifiStatus) {
+          this.wifiStatus = {
+            fw: LATEST_FIRMWARE_VERSION,
+            role: 1,
+            profile: profileCode,
+            fp,
+            label,
+            uptimeMs: 0,
+            reset: "power-on",
+            boots: 1,
+            heapFree: 180 * 1024,
+            heapMin: 160 * 1024,
+            sweepHz,
+            sweeps: 0,
+            sweepUs: 11200,
+            sweepUsMax: 12400,
+            sweepBudgetUs: Math.round(1_000_000 / sweepHz),
+            rf: { ok: true, enabled: true, gain: 66, gainMax: 66, floorDb: -92 },
+            chip: { model: "ESP32-C5", rev: "v1.0", mac: "", flashMB: 4 },
+            net: { mode: "ap+sta", stations: 1 },
+            channel: 1,
+            slot: 1,
+            spokes: [],
+            freqsTemporary: false,
+            freqs: [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917],
+          };
+        } else {
+          this.wifiStatus.fp = fp;
+          this.wifiStatus.label = label;
+          this.wifiStatus.profile = profileCode;
+          this.wifiStatus.sweepHz = sweepHz;
+        }
+        recordKnownTimerStatus(this.wifiStatus);
+      } else if (slot >= 2 && slot <= 7) {
+        const prev = this.wifiSpokes.get(slot);
+        this.wifiSpokes.set(slot, {
+          slot,
+          fp,
+          label,
+          profile: profileCode,
+          fw: LATEST_FIRMWARE_VERSION,
+          online: true,
+          msAgo: prev ? Math.max(0, nowMs - prev.lastRxMs) : 0,
+          frames: prev?.frames ?? 0,
+          seq: prev?.seq ?? 0,
+          dbm: prev?.dbm,
+          lastRxMs: prev?.lastRxMs ?? nowMs,
+        });
+        this.syncWifiSpokesList();
+      }
+      return;
+    }
+
+    if (pkt[1] === 0x59 && pkt.length >= 16) {
+      const slot = pkt[2];
+      const count = pkt[3];
+      if (count <= 0 || pkt.length < 7 + count * 9 + 1) return;
+      const noiseFloor = (pkt[6] << 24) >> 24;
+      const lastOff = 7 + (count - 1) * 9;
+      const seq = pkt[lastOff];
+      const dbm: number[] = [];
+      for (let ch = 0; ch < 8; ch++) {
+        dbm.push((pkt[lastOff + 1 + ch] << 24) >> 24);
+      }
+
+      if (slot === 1) {
+        this.wifiLastDbm = dbm;
+        if (this.wifiStatus) {
+          this.wifiStatus.rf.floorDb = noiseFloor;
+          this.wifiStatus.sweeps += count;
+        }
+      } else if (slot >= 2 && slot <= 7) {
+        const prev = this.wifiSpokes.get(slot);
+        this.wifiSpokes.set(slot, {
+          slot,
+          fp: prev?.fp || `SLOT${slot}`,
+          label: prev?.label || `S${slot - 1}`,
+          profile: prev?.profile ?? this.wifiStatus?.profile ?? 1,
+          fw: prev?.fw || LATEST_FIRMWARE_VERSION,
+          online: true,
+          msAgo: 0,
+          frames: (prev?.frames ?? 0) + 1,
+          seq,
+          dbm,
+          lastRxMs: nowMs,
+        });
+        this.syncWifiSpokesList();
+      }
+    }
+  }
+
+  private syncWifiSpokesList(): void {
+    if (!this.wifiStatus) return;
+    const nowMs = Date.now();
+    this.wifiStatus.spokes = [...this.wifiSpokes.values()].map((sp) => ({
+      slot: sp.slot,
+      fp: sp.fp,
+      label: sp.label,
+      profile: sp.profile,
+      fw: sp.fw,
+      online: nowMs - sp.lastRxMs < 2500,
+      msAgo: Math.max(0, nowMs - sp.lastRxMs),
+      frames: sp.frames,
+      seq: sp.seq,
+      dbm: sp.dbm,
+    }));
   }
 
   public subscribe(fn: () => void): () => void {
@@ -145,7 +409,7 @@ export class BrowserHubBridge {
     }
   }
 
-  public setHubHost(host: string, reconnectNow = true): void {
+  public setHubHost(host: string, reconnectNow = false): void {
     const next = normalizeHost(host);
     this.hubHost = next;
     try {
@@ -154,27 +418,18 @@ export class BrowserHubBridge {
       // ignore
     }
     this.notify();
-    if (this.active && reconnectNow) {
-      this.connectWifiStream();
+    if (reconnectNow && (this.wifiDesired || this.wifiState === "connected")) {
+      this.connectWifiStream(true);
     }
   }
 
   public setActive(active: boolean): void {
-    if (this.active === active) return;
     this.active = active;
-    if (active) {
-      this.connectWifiStream();
-      if (sharedTimerConsole.connected) {
-        void sharedTimerConsole.send("STATUS?").catch(() => undefined);
-      }
-    } else {
-      this.disconnectWifiStream();
-    }
     this.notify();
   }
 
   public resetDefaults(): void {
-    this.setHubHost(DEFAULT_HUB_HOST, this.active);
+    this.setHubHost(DEFAULT_HUB_HOST, false);
     BrowserHubBridge.saveModePref("auto");
     this.notify();
   }
@@ -193,12 +448,13 @@ export class BrowserHubBridge {
       for (const host of candidates) {
         const ok = await this.probeHost(host, 1400);
         if (ok) {
-          this.setHubHost(host, true);
+          this.setHubHost(host, false);
+          this.connectWifiStream(true);
           return host;
         }
       }
-      this.wifiError = `No Hub found at ${candidates.join(" or ")}. Join the "SlapRF" Wi-Fi AP (192.168.4.1), enter the Hub's LAN IP, or connect via USB-C.`;
-      this.wifiState = "error";
+      this.wifiError = `No Hub found at ${candidates.join(" or ")}. Join the "SlapRF" Wi-Fi AP (192.168.4.1) or enter the Hub's LAN IP.`;
+      this.wifiState = "failed";
       return null;
     } finally {
       this.discovering = false;
@@ -225,16 +481,22 @@ export class BrowserHubBridge {
     }
   }
 
-  public connectWifiStream(): void {
+  public connectWifiStream(resetAttempts = true): void {
+    this.connMethod = "wifi";
+    this.saveMethodPref("wifi");
+    this.wifiDesired = true;
     this.clearReconnect();
     this.closeEventSource();
-    if (!this.active || !this.hubHost) {
+    if (!this.hubHost) {
       this.wifiState = "idle";
       this.notify();
       return;
     }
 
-    this.wifiState = "connecting";
+    if (resetAttempts) {
+      this.wifiReconnectAttempt = 0;
+    }
+    this.wifiState = this.wifiReconnectAttempt > 0 ? "reconnecting" : "connecting";
     this.wifiError = null;
     this.notify();
 
@@ -246,6 +508,7 @@ export class BrowserHubBridge {
       es.onopen = () => {
         if (this.eventSource !== es) return;
         this.wifiState = "connected";
+        this.wifiReconnectAttempt = 0;
         this.wifiError = null;
         this.wasm.pushHubChannels();
         this.notify();
@@ -256,11 +519,14 @@ export class BrowserHubBridge {
         const pkt = hexToBytes(ev.data);
         if (!pkt) return;
         this.wifiFramesRx++;
-        const n = this.wasm.ingestHubPacket(pkt);
-        if (n > 0 || (pkt.length === 36 && pkt[0] === 0xc5 && pkt[1] === 0x5a)) {
-          this.onPacketIngested?.();
+        this.inspectBinaryPacket(pkt);
+        if (this.active) {
+          const n = this.wasm.ingestHubPacket(pkt);
+          if (n > 0 || (pkt.length === 36 && pkt[0] === 0xc5 && pkt[1] === 0x5a)) {
+            this.onPacketIngested?.();
+          }
         }
-        if (this.wifiFramesRx === 1 || this.wifiFramesRx % 25 === 0) {
+        if (this.wifiFramesRx === 1 || this.wifiFramesRx % 15 === 0) {
           this.notify();
         }
       };
@@ -268,30 +534,50 @@ export class BrowserHubBridge {
       es.onerror = () => {
         if (this.eventSource !== es) return;
         this.closeEventSource();
-        const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
-        this.wifiState = "error";
-        this.wifiError = isHttps
-          ? `Waiting for Hub at http://${this.hubHost} (if blocked by HTTPS mixed-content, allow Insecure Content in site settings or connect the Hub over USB-C).`
-          : `Waiting for Hub at http://${this.hubHost}…`;
-        this.notify();
-        if (this.active) {
+        if (!this.wifiDesired) {
+          this.wifiState = "idle";
+          this.notify();
+          return;
+        }
+        const nextAttempt = this.wifiReconnectAttempt + 1;
+        if (nextAttempt <= this.maxReconnectAttempts) {
+          this.wifiReconnectAttempt = nextAttempt;
+          this.wifiState = "reconnecting";
+          this.wifiError = `Reconnecting to Hub at http://${this.hubHost} (attempt ${nextAttempt} of ${this.maxReconnectAttempts})…`;
+          this.notify();
           this.reconnectTimer = window.setTimeout(() => {
             this.reconnectTimer = null;
-            if (this.active) this.connectWifiStream();
-          }, 3500);
+            if (this.wifiDesired) {
+              this.connectWifiStream(false);
+            }
+          }, 1800);
+        } else {
+          this.wifiDesired = false;
+          this.wifiState = "failed";
+          const isHttps = typeof window !== "undefined" && window.location.protocol === "https:";
+          this.wifiError = isHttps
+            ? `Failed after ${this.maxReconnectAttempts} attempts to reach http://${this.hubHost} (if blocked by HTTPS mixed-content, allow Insecure Content in site settings or use Direct USB-C).`
+            : `Failed after ${this.maxReconnectAttempts} attempts to reach Hub at http://${this.hubHost}. Verify you are connected to the "SlapRF" Wi-Fi AP or check the Hub IP.`;
+          this.notify();
         }
       };
     } catch (err) {
-      this.wifiState = "error";
+      this.wifiDesired = false;
+      this.wifiState = "failed";
       this.wifiError = err instanceof Error ? err.message : String(err);
       this.notify();
     }
   }
 
   public disconnectWifiStream(): void {
+    this.wifiDesired = false;
+    this.wifiReconnectAttempt = 0;
     this.clearReconnect();
     this.closeEventSource();
     this.wifiState = "idle";
+    this.wifiError = null;
+    this.wifiStatus = null;
+    this.wifiSpokes.clear();
     this.notify();
   }
 

@@ -347,11 +347,17 @@ export class TimerConsole {
   private statusPollTimer = 0;
   /** While true, a dropped port is an expected restart, not a user-visible disconnect. */
   private expectingRestart = false;
+  private userDisconnecting = false;
 
   public lastStatus: TimerStatus | null = null;
   public lastConfig: TimerReadout | null = null;
   public busyLabel: string | null = null;
   public showAllPorts = false;
+  public reconnecting = false;
+  public reconnectAttempt = 0;
+  public readonly maxReconnectAttempts = 5;
+  public reconnectFailed = false;
+  public lastError: string | null = null;
 
   constructor(handlers?: ConsoleHandlers) {
     if (handlers) {
@@ -429,6 +435,12 @@ export class TimerConsole {
 
   public async connect(showAllPorts = this.showAllPorts): Promise<void> {
     this.showAllPorts = showAllPorts;
+    this.userDisconnecting = false;
+    this.reconnecting = false;
+    this.reconnectAttempt = 0;
+    this.reconnectFailed = false;
+    this.lastError = null;
+    this.notifyStateChange();
     const port = await serial().requestPort(showAllPorts ? undefined : { filters: [{ usbVendorId: ESPRESSIF_USB_VID }] });
     await this.openPort(port);
     this.startStatusPolling();
@@ -451,6 +463,11 @@ export class TimerConsole {
 
   /** Stops any active debug streams on the timer and closes the USB port. */
   public async disconnectCleanly(): Promise<void> {
+    this.userDisconnecting = true;
+    this.reconnecting = false;
+    this.reconnectAttempt = 0;
+    this.reconnectFailed = false;
+    this.lastError = null;
     window.clearInterval(this.statusPollTimer);
     this.statusPollTimer = 0;
     if (this.connected) {
@@ -729,10 +746,68 @@ export class TimerConsole {
     if (this.port === port) {
       if (this.expectingRestart) {
         await this.closePort(); // Device is re-enumerating; restartAndReconnect() reopens it
+      } else if (!this.userDisconnecting) {
+        await this.closePort();
+        void this.attemptAutoReconnect();
       } else {
         await this.disconnect();
       }
     }
+  }
+
+  private async attemptAutoReconnect(): Promise<void> {
+    if (this.reconnecting || this.userDisconnecting) return;
+    this.reconnecting = true;
+    this.reconnectFailed = false;
+    this.reconnectAttempt = 0;
+    this.notifyStateChange();
+
+    for (let attempt = 1; attempt <= this.maxReconnectAttempts; attempt++) {
+      if (this.userDisconnecting || this.connected) {
+        this.reconnecting = false;
+        this.notifyStateChange();
+        return;
+      }
+      this.reconnectAttempt = attempt;
+      this.notifyStateChange();
+      await sleep(1200);
+      if (this.userDisconnecting || this.connected) {
+        this.reconnecting = false;
+        this.notifyStateChange();
+        return;
+      }
+      try {
+        const ports = await serial().getPorts();
+        const match = ports.find((p) => {
+          const info = p.getInfo?.() ?? {};
+          return (
+            !this.portInfo ||
+            (info.usbVendorId === this.portInfo.usbVendorId && info.usbProductId === this.portInfo.usbProductId)
+          );
+        });
+        if (match) {
+          await this.openPort(match);
+          this.reconnecting = false;
+          this.reconnectAttempt = 0;
+          this.reconnectFailed = false;
+          this.lastError = null;
+          this.startStatusPolling();
+          void this.ensureRunningApp().then(() => {
+            if (this.connected) void this.send("SLAPRF?").catch(() => undefined);
+          });
+          this.subscribers.forEach((h) => h.onConnect?.());
+          this.notifyStateChange();
+          return;
+        }
+      } catch {
+        // try next attempt
+      }
+    }
+
+    this.reconnecting = false;
+    this.reconnectFailed = true;
+    this.lastError = `Lost USB connection after ${this.maxReconnectAttempts} reconnect attempts.`;
+    await this.disconnect();
   }
 
   private ingest(chunk: Uint8Array): void {
