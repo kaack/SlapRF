@@ -559,7 +559,29 @@ export function drawSignalOverTimeCanvas(
   }
 
   const pts = ring.windowPoints(opts.windowSec, opts.sweepHz, opts.endN ?? null, 3);
+  const readoutEl = canvas.parentElement?.parentElement?.querySelector<HTMLElement>("[data-signal-readout]") ?? null;
+  const updateSignalReadout = (pt: SignalPoint | null, bestCh: number, isCursor: boolean) => {
+    if (!readoutEl) return;
+    const headTitle = pt
+      ? isCursor
+        ? `-${((refN - pt.n) / opts.sweepHz).toFixed(2)}s · sweep #${pt.n}`
+        : `Latest · sweep #${pt.n}`
+      : "Waiting for sweep samples…";
+    const headSub = isCursor ? "Cursor (dBm)" : "Touch chart for cursor";
+    let cells = "";
+    for (let ch = 0; ch < 8; ch++) {
+      const f = opts.freqs[ch] ?? RACEBAND[ch];
+      const rb = racebandName(f) || `Ch${ch + 1}`;
+      const on = opts.enabledChannels[ch];
+      const v = pt?.dbm[ch];
+      const valText = on && v !== undefined && v > -127 ? `${v}` : "—";
+      cells += `<span class="debug-readout-ch${ch === bestCh ? " is-best" : ""}${!on ? " is-off" : ""}"><i style="background:${CHANNEL_COLORS[ch]}"></i><b>${rb}</b><span>${valText}</span></span>`;
+    }
+    const html = `<div class="debug-readout-head"><span class="debug-readout-title">${headTitle}</span><span class="debug-readout-sub">${headSub}</span></div><div class="debug-readout-grid">${cells}</div>`;
+    if (readoutEl.innerHTML !== html) readoutEl.innerHTML = html;
+  };
   if (!pts.length) {
+    updateSignalReadout(null, -1, false);
     ctx.fillStyle = tokens.text3;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -706,6 +728,7 @@ export function drawSignalOverTimeCanvas(
   ctx.restore();
 
   // Hover readout
+  const isMobile = typeof window !== "undefined" && window.innerWidth <= 680;
   if (!opts.yZoomBox && opts.hover && opts.hover.x >= L && opts.hover.x <= W - R && opts.hover.y >= T && opts.hover.y <= T + plotH) {
     const targetN = startN + ((opts.hover.x - L) / plotW) * windowSweeps;
     // Find nearest point by n
@@ -742,24 +765,38 @@ export function drawSignalOverTimeCanvas(
       }
     }
 
-    const ageSec = ((refN - best.n) / opts.sweepHz).toFixed(2);
-    const lines: Array<{ text: string; color: string }> = [
-      { text: `-${ageSec} s  (sweep #${best.n})`, color: tokens.text2 },
-    ];
-    for (let ch = 0; ch < 8; ch++) {
-      if (!opts.enabledChannels[ch]) continue;
-      const v = best.dbm[ch];
-      if (v === undefined || v <= -127) continue;
-      const f = opts.freqs[ch] ?? RACEBAND[ch];
-      const rb = racebandName(f) || `Ch${ch + 1}`;
-      const fl = best.floor[ch];
-      const mark = ch === bestCh ? "▸ " : "  ";
-      lines.push({
-        text: `${mark}${rb} ${f}: ${v} dBm${fl && fl > -127 ? ` (fl ${fl})` : ""}`,
-        color: CHANNEL_COLORS[ch],
-      });
+    if (bestCh >= 0) {
+      const by = Math.max(T + 3, Math.min(T + plotH - 3, yOf(best.dbm[bestCh])));
+      ctx.fillStyle = CHANNEL_COLORS[bestCh];
+      ctx.beginPath();
+      ctx.arc(hx, by, 3.5, 0, Math.PI * 2);
+      ctx.fill();
     }
-    drawTooltipBox(ctx, hx, opts.hover.y, lines, L, W - R, T, T + plotH, tokens);
+
+    updateSignalReadout(best, bestCh, true);
+
+    if (!isMobile) {
+      const ageSec = ((refN - best.n) / opts.sweepHz).toFixed(2);
+      const lines: Array<{ text: string; color: string }> = [
+        { text: `-${ageSec} s  (sweep #${best.n})`, color: tokens.text2 },
+      ];
+      for (let ch = 0; ch < 8; ch++) {
+        if (!opts.enabledChannels[ch]) continue;
+        const v = best.dbm[ch];
+        if (v === undefined || v <= -127) continue;
+        const f = opts.freqs[ch] ?? RACEBAND[ch];
+        const rb = racebandName(f) || `Ch${ch + 1}`;
+        const fl = best.floor[ch];
+        const mark = ch === bestCh ? "▸ " : "  ";
+        lines.push({
+          text: `${mark}${rb} ${f}: ${v} dBm${fl && fl > -127 ? ` (fl ${fl})` : ""}`,
+          color: CHANNEL_COLORS[ch],
+        });
+      }
+      drawTooltipBox(ctx, hx, opts.hover.y, lines, L, W - R, T, T + plotH, tokens);
+    }
+  } else {
+    updateSignalReadout(pts[pts.length - 1], -1, false);
   }
 }
 
@@ -1249,7 +1286,13 @@ export function drawSpectrumCanvas(
     drawFreqZoomBox(ctx, opts.zoomBox, vStart, span, L, R, T, W, plotW, plotH, tokens);
   }
 
+  const specReadoutEl = canvas.parentElement?.parentElement?.querySelector<HTMLElement>("[data-spectrum-readout]") ?? null;
+  const setSpecReadout = (html: string) => {
+    if (specReadoutEl && specReadoutEl.innerHTML !== html) specReadoutEl.innerHTML = html;
+  };
+
   if (!hasData || !s) {
+    setSpecReadout(`<span class="note">Touch chart to inspect frequency &amp; dBm</span>`);
     ctx.restore();
     ctx.fillStyle = tokens.text3;
     ctx.textAlign = "center";
@@ -1321,6 +1364,8 @@ export function drawSpectrumCanvas(
   ctx.restore();
 
   // Hover readout
+  const isMobile = typeof window !== "undefined" && window.innerWidth <= 680;
+  let hoveredSpec = false;
   if (!opts.zoomBox && opts.hover && opts.hover.x >= L && opts.hover.x <= W - R && opts.hover.y >= T && opts.hover.y <= T + plotH) {
     const fCursor = vStart + ((opts.hover.x - L) / plotW) * span;
     const idx = Math.max(0, Math.min(s.dbm.length - 1, Math.round((fCursor - s.start) / Math.max(1, s.step))));
@@ -1329,6 +1374,7 @@ export function drawSpectrumCanvas(
     const hy = yOf(s.dbm[idx]);
 
     if (hx >= L && hx <= W - R) {
+      hoveredSpec = true;
       ctx.strokeStyle = tokens.text3;
       ctx.lineWidth = 1;
       ctx.setLineDash([2, 2]);
@@ -1338,14 +1384,37 @@ export function drawSpectrumCanvas(
       ctx.stroke();
       ctx.setLineDash([]);
 
-      const tipLines: Array<{ text: string; color: string }> = [
-        { text: `${f} MHz  (${nearestBandHint(f)})`, color: tokens.text },
-        { text: `Current: ${s.dbm[idx]} dBm`, color: tokens.accent },
-      ];
-      if (avg) tipLines.push({ text: `Average: ${avg[idx].toFixed(1)} dBm`, color: "#38bdf8" });
-      if (acc.maxHold) tipLines.push({ text: `Max hold: ${acc.maxHold[idx]} dBm`, color: tokens.text2 });
+      const cy = Math.max(T + 3, Math.min(T + plotH - 3, hy));
+      ctx.fillStyle = tokens.accent;
+      ctx.beginPath();
+      ctx.arc(hx, cy, 3.5, 0, Math.PI * 2);
+      ctx.fill();
 
-      drawTooltipBox(ctx, hx, opts.hover.y, tipLines, L, W - R, T, T + plotH, tokens);
+      const hint = nearestBandHint(f);
+      setSpecReadout(
+        `<span class="debug-readout-title"><strong>${f} MHz</strong> (${hint})</span><span class="debug-readout-vals">Cur <strong>${s.dbm[idx]} dBm</strong>${avg ? ` · Avg ${avg[idx].toFixed(1)}` : ""}${acc.maxHold ? ` · Max ${acc.maxHold[idx]}` : ""}</span>`
+      );
+
+      if (!isMobile) {
+        const tipLines: Array<{ text: string; color: string }> = [
+          { text: `${f} MHz  (${hint})`, color: tokens.text },
+          { text: `Current: ${s.dbm[idx]} dBm`, color: tokens.accent },
+        ];
+        if (avg) tipLines.push({ text: `Average: ${avg[idx].toFixed(1)} dBm`, color: "#38bdf8" });
+        if (acc.maxHold) tipLines.push({ text: `Max hold: ${acc.maxHold[idx]} dBm`, color: tokens.text2 });
+
+        drawTooltipBox(ctx, hx, opts.hover.y, tipLines, L, W - R, T, T + plotH, tokens);
+      }
+    }
+  }
+  if (!hoveredSpec) {
+    if (peakIdx >= 0) {
+      const pf = s.start + peakIdx * s.step;
+      setSpecReadout(
+        `<span class="debug-readout-title">Peak <strong>${pf} MHz</strong> (${nearestBandHint(pf)}) · <strong>${s.dbm[peakIdx]} dBm</strong></span><span class="debug-readout-sub">Touch chart</span>`
+      );
+    } else {
+      setSpecReadout(`<span class="note">Touch chart to inspect frequency &amp; dBm</span>`);
     }
   }
 }
@@ -1457,7 +1526,13 @@ export function drawWaterfallCanvas(
     ctx.fillText(`${f}`, x, T + plotH + 6);
   }
 
+  const wfReadoutEl = canvas.parentElement?.parentElement?.querySelector<HTMLElement>("[data-waterfall-readout]") ?? null;
+  const setWfReadout = (html: string) => {
+    if (wfReadoutEl && wfReadoutEl.innerHTML !== html) wfReadoutEl.innerHTML = html;
+  };
+
   if (!hasData || !s) {
+    setWfReadout(`<span class="note">Touch waterfall to inspect frequency, dBm &amp; pass age</span>`);
     ctx.fillStyle = tokens.text3;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -1467,6 +1542,7 @@ export function drawWaterfallCanvas(
   }
 
   // Hover readout (MHz, dBm, age, pass index)
+  const isMobile = typeof window !== "undefined" && window.innerWidth <= 680;
   if (!zoomBox && hover && hover.x >= L && hover.x <= W - R && hover.y >= T && hover.y <= T + plotH) {
     const fCursor = vStart + ((hover.x - L) / plotW) * span;
     const binIdx = Math.max(0, Math.min(s.dbm.length - 1, Math.round((fCursor - s.start) / Math.max(1, s.step))));
@@ -1477,18 +1553,40 @@ export function drawWaterfallCanvas(
     const histRow = histIdx >= 0 ? acc.history[histIdx] : null;
     const dbmVal = histRow ? histRow.dbm[binIdx] : null;
     const age = (rowIdx * passSec).toFixed(1);
+    const hint = nearestBandHint(f);
 
-    const tipLines: Array<{ text: string; color: string }> = [
-      { text: `${f} MHz  (${nearestBandHint(f)})`, color: tokens.text },
-      {
-        text:
-          dbmVal !== null && dbmVal !== undefined
-            ? `${dbmVal} dBm · -${age} s (pass -${rowIdx + 1} of ${acc.history.length})`
-            : `-${age} s (no pass at row #${rowIdx + 1})`,
-        color: tokens.accent,
-      },
-    ];
-    drawTooltipBox(ctx, hover.x, hover.y, tipLines, L, W - R, T, T + plotH, tokens);
+    ctx.save();
+    ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+    ctx.lineWidth = 1;
+    ctx.setLineDash([2, 2]);
+    ctx.beginPath();
+    ctx.moveTo(hover.x, T);
+    ctx.lineTo(hover.x, T + plotH);
+    ctx.moveTo(L, hover.y);
+    ctx.lineTo(W - R, hover.y);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.restore();
+
+    setWfReadout(
+      `<span class="debug-readout-title"><strong>${f} MHz</strong> (${hint})</span><span class="debug-readout-vals"><strong>${dbmVal !== null && dbmVal !== undefined ? `${dbmVal} dBm` : "—"}</strong> · -${age}s (-${rowIdx + 1}/${acc.history.length})</span>`
+    );
+
+    if (!isMobile) {
+      const tipLines: Array<{ text: string; color: string }> = [
+        { text: `${f} MHz  (${hint})`, color: tokens.text },
+        {
+          text:
+            dbmVal !== null && dbmVal !== undefined
+              ? `${dbmVal} dBm · -${age} s (pass -${rowIdx + 1} of ${acc.history.length})`
+              : `-${age} s (no pass at row #${rowIdx + 1})`,
+          color: tokens.accent,
+        },
+      ];
+      drawTooltipBox(ctx, hover.x, hover.y, tipLines, L, W - R, T, T + plotH, tokens);
+    }
+  } else {
+    setWfReadout(`<span class="note">Touch waterfall to inspect frequency, dBm &amp; pass age</span>`);
   }
 }
 

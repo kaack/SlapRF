@@ -411,6 +411,7 @@ export class DebugView extends Component {
               <div class="debug-canvas-wrap">
                 <canvas class="debug-canvas debug-signal-canvas" data-signal-canvas></canvas>
               </div>
+              <div class="debug-chart-readout debug-signal-readout mono" data-signal-readout></div>
               <div data-slot="signal-legend"></div>
             </div>
             <div class="debug-status-layout" data-slot="noise-table"></div>
@@ -997,6 +998,8 @@ export class DebugView extends Component {
         const r = target.getBoundingClientRect();
         const x = e.clientX - r.left;
         const y = e.clientY - r.top;
+        this.signalHover = { x, y };
+        this.dirtySignal = true;
         const T = 12;
         const L = 44;
         const plotH = Math.max(10, r.height - T - 26);
@@ -1059,6 +1062,8 @@ export class DebugView extends Component {
         const r = target.getBoundingClientRect();
         const x = e.clientX - r.left;
         const y = e.clientY - r.top;
+        this.scanHover = { x, y };
+        this.dirtySpectrum = true;
         const T = 12;
         const L = 44;
         const plotH = Math.max(10, r.height - T - 26);
@@ -1124,6 +1129,8 @@ export class DebugView extends Component {
         const r = target.getBoundingClientRect();
         const x = e.clientX - r.left;
         const y = e.clientY - r.top;
+        this.waterfallHover = { x, y };
+        this.dirtyWaterfall = true;
         const L = 44;
         const plotW = Math.max(10, r.width - L - 18);
         const bounds = this.currentScanBounds();
@@ -1447,6 +1454,7 @@ export class DebugView extends Component {
       }
     });
     this.listen(this.el, "mouseout", (e) => {
+      if (typeof window !== "undefined" && window.innerWidth <= 680) return;
       const target = e.target as HTMLElement;
       if (target.matches("[data-signal-canvas]")) {
         this.signalHover = null;
@@ -3521,6 +3529,7 @@ export class DebugView extends Component {
         <div class="debug-canvas-wrap">
           <canvas class="debug-canvas debug-spectrum-canvas" data-spectrum-canvas></canvas>
         </div>
+        <div class="debug-chart-readout debug-single-readout mono" data-spectrum-readout></div>
         <div class="debug-chart-foot">
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
@@ -3623,6 +3632,7 @@ export class DebugView extends Component {
         <div class="debug-canvas-wrap">
           <canvas class="debug-canvas debug-waterfall-canvas" data-waterfall-canvas></canvas>
         </div>
+        <div class="debug-chart-readout debug-single-readout mono" data-waterfall-readout></div>
         <div class="debug-chart-foot">
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
