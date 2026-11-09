@@ -3915,10 +3915,8 @@ body.is-gate-dragging * {
   margin-bottom: 8px;
 }
 .debug-chart-axisbar {
-  padding-top: 8px;
   margin-top: 2px;
   margin-bottom: 6px;
-  border-top: 1px solid var(--border);
 }
 .debug-chart-legend {
   display: flex;
@@ -4175,7 +4173,7 @@ body.is-gate-dragging * {
   display: flex;
   align-items: center;
   gap: 10px;
-  margin-top: 12px;
+  margin-top: 0;
   font-size: 13px;
   color: var(--text-2);
 }
@@ -4371,6 +4369,10 @@ body.is-gate-dragging * {
 .status-dot.is-warn {
   background: var(--warn);
   box-shadow: 0 0 0 3px rgba(251, 191, 36, 0.16);
+}
+.status-dot.is-bad {
+  background: var(--bad);
+  box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.16);
 }
 
 /* Dedicated Findings log panels (scrollable, timestamped event table) */

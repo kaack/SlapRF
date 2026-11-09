@@ -1836,6 +1836,9 @@ export class DebugView extends Component {
         case "read-config":
           await this.console.send("SLAPRF?");
           break;
+        case "refresh-status":
+          await this.refreshStatus();
+          break;
         case "selftest":
           await this.runBusy("Self-test", () => this.runSelfTest());
           break;
@@ -2180,25 +2183,37 @@ export class DebugView extends Component {
     const on = this.console.connected;
     const supported = TimerConsole.supported();
     const busy = this.busy !== null;
+    const ledClass = on ? "is-up" : busy ? "is-warn" : "";
+    const connText =
+      busy && !on
+        ? `${esc(this.busy!)}…`
+        : on
+          ? this.status
+            ? `Connected · ${esc(this.status.label || "timer")} · ${esc(this.status.fp)}`
+            : "Connected · waiting for status…"
+          : "Disconnected · select a USB port to connect";
     this.slot("connection").innerHTML = `
-      <div class="debug-connect">
-        <div class="debug-connect-state">
-          <span class="status-dot ${on ? "is-up" : ""}"></span>
-          <strong>${busy && !on ? `${esc(this.busy!)}…` : on ? (this.status ? `Connected to ${esc(this.status.label || "timer")}` : "Connected") : "Not connected"}</strong>
-          ${on && this.status ? `<span class="note mono">${esc(this.status.fp)}</span>` : ""}
-        </div>
+      <div class="debug-card-head">
+        <span class="debug-led-status">
+          <span class="status-dot ${ledClass}"></span>
+          <span class="note debug-head-note mono">${connText}</span>
+        </span>
         <div class="debug-connect-actions">
           ${
             on
               ? `<button type="button" class="btn btn-sm btn-ghost" data-action="read-config" ${busy ? "disabled" : ""}>Read config</button>
                  <button type="button" class="btn btn-sm" data-action="disconnect" ${busy ? "disabled" : ""}>Disconnect</button>`
-              : busy
-                ? ""
-                : `<label class="flasher-port-toggle"><input type="checkbox" data-all-ports ${this.showAllPorts ? "checked" : ""}/><span>Show all USB serial ports</span></label>
-                 <button type="button" class="btn btn-armed" data-action="connect" ${supported ? "" : "disabled"}>${icons.plug(15)}<span>Connect over USB</span></button>`
+              : `<button type="button" class="btn btn-sm btn-armed" data-action="connect" ${supported && !busy ? "" : "disabled"}>${icons.plug(14)}<span>Connect over USB</span></button>`
           }
         </div>
       </div>
+      ${
+        !on && !busy
+          ? `<div class="debug-subbar">
+               <label class="check flasher-port-toggle"><input type="checkbox" data-all-ports ${this.showAllPorts ? "checked" : ""}/><span>Show all USB serial ports</span></label>
+             </div>`
+          : ""
+      }
       ${!supported ? `<p class="note">USB debugging needs Chrome, Edge or Brave (WebSerial).</p>` : ""}
       ${this.error ? `<div class="sim-error-note">${esc(this.error)}</div>` : ""}`;
   }
@@ -2208,6 +2223,17 @@ export class DebugView extends Component {
     const running = this.busy === "Self-test";
     const counts = { pass: 0, warn: 0, fail: 0, skip: 0 };
     for (const c of this.checks) counts[c.result]++;
+    const ledClass = running
+      ? "is-warn"
+      : this.checks.length
+        ? counts.fail
+          ? "is-bad"
+          : counts.warn
+            ? "is-warn"
+            : "is-up"
+        : on
+          ? "is-up"
+          : "";
     const summary = this.checks.length
       ? running
         ? esc(this.progress)
@@ -2219,11 +2245,14 @@ export class DebugView extends Component {
       : running
         ? esc(this.progress)
         : on
-          ? "Takes about 10 seconds. Timing pauses briefly during the scan."
-          : "Connect a timer first.";
+          ? "Ready · takes about 10 s (pauses timing briefly during scan)"
+          : "Off · connect a timer first";
     this.slot("selftest").innerHTML = `
       <div class="debug-card-head">
-        <span class="note debug-head-note">${summary}</span>
+        <span class="debug-led-status">
+          <span class="status-dot ${ledClass}"></span>
+          <span class="note debug-head-note mono">${summary}</span>
+        </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="copy-report" ${this.checks.length && !running ? "" : "disabled"}><span>Copy report</span></button>
           <button type="button" class="btn btn-sm btn-armed" data-action="selftest" ${on && !this.busy ? "" : "disabled"}>
@@ -2285,13 +2314,9 @@ export class DebugView extends Component {
           <span class="note debug-head-note mono">${headText}</span>
         </span>
         <div class="debug-connect-actions">
-          ${
-            s
-              ? `<span class="badge ${s.role === 1 ? "badge-accent" : ""}">${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · Slot ${s.slot}` : ""}`}</span>
-                 <span class="badge mono">${esc(s.fw)}</span>
-                 <span class="badge ${badReset ? "badge-bad" : ""}">Boot #${s.boots ?? "?"} · ${esc(s.reset)}</span>`
-              : `<span class="badge">Disconnected</span>`
-          }
+          <button type="button" class="btn btn-sm btn-ghost" data-action="refresh-status" ${on && !this.busy ? "" : "disabled"}>
+            ${icons.reset(14)}<span>Refresh</span>
+          </button>
         </div>
       </div>
       <div class="debug-status-panels">
@@ -2550,11 +2575,19 @@ export class DebugView extends Component {
           : "Paused";
     this.slot("signal-controls").innerHTML = `
       <div class="debug-card-head">
+        <span class="debug-led-status" title="${liveTitle}">
+          <span class="status-dot ${sigLedClass}"></span>
+          <span class="note debug-head-note mono">${sigStatusText}</span>
+        </span>
+        <div class="debug-connect-actions">
+          <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
+          <button type="button" class="btn btn-sm ${liveFollowOn ? "btn-armed" : "btn-unarmed"}" data-action="signal-freeze" ${liveDisabled ? "disabled" : ""} title="${liveTitle}">
+            ${liveFollowOn ? icons.pause(14) : icons.play(14)}<span>${liveLabel}</span>
+          </button>
+        </div>
+      </div>
+      <div class="debug-subbar debug-chart-axisbar">
         <div class="debug-toolbar-left">
-          <span class="debug-led-status" title="${liveTitle}">
-            <span class="status-dot ${sigLedClass}"></span>
-            <span class="note mono">${sigStatusText}</span>
-          </span>
           <div class="debug-overlay-checks" role="group" aria-label="Chart overlays">
             <label class="check" title="Show per-channel typical noise floor (dotted)">
               <input type="checkbox" data-check="signal-floor" ${this.signalShowFloor ? "checked" : ""}/>
@@ -2569,16 +2602,8 @@ export class DebugView extends Component {
               <span>Enter threshold</span>
             </label>
           </div>
+          <span class="note debug-chart-hint">${liveFollowOn ? "Drag chart to pan X/Y · drag axes to stretch · wheel to zoom" : "Paused · drag chart to pan X/Y · double-click to reset"}</span>
         </div>
-        <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
-          <button type="button" class="btn btn-sm ${liveFollowOn ? "btn-armed" : "btn-unarmed"}" data-action="signal-freeze" ${liveDisabled ? "disabled" : ""} title="${liveTitle}">
-            ${liveFollowOn ? icons.pause(14) : icons.play(14)}<span>${liveLabel}</span>
-          </button>
-        </div>
-      </div>
-      <div class="debug-subbar debug-chart-axisbar">
-        <span class="note debug-chart-hint">${liveFollowOn ? "Drag chart to pan X/Y · drag axes to stretch · wheel to zoom" : "Paused · drag chart to pan X/Y · double-click to reset"}</span>
         <div class="debug-connect-actions">
           <div class="segmented" role="group" aria-label="Time window">
             <button type="button" class="${this.signalAutoX ? "is-active" : ""}" data-action="signal-auto-x" title="Automatically adjust X-axis time window based on incoming sample rate">Auto X</button>
@@ -3023,11 +3048,21 @@ export class DebugView extends Component {
     const prevScanScrollTop = prevScanFindingsEl?.querySelector<HTMLElement>("[data-findings-scroll]")?.scrollTop ?? 0;
     this.slot("scan").innerHTML = `
       <div class="debug-card-head">
+        <span class="debug-led-status">
+          <span class="status-dot ${scanActive ? "is-up" : ""}" data-scan-led></span>
+          <span class="note debug-head-note mono" data-scan-status-note>${this.scanLive ? "Streaming · live scan" : this.scanning ? "Scanning once…" : "Paused"}</span>
+        </span>
+        <div class="debug-connect-actions">
+          <button type="button" class="btn btn-sm ${this.scanning ? "btn-armed" : "btn-unarmed"}" data-action="scan" ${canScanOnce ? "" : "disabled"} title="${this.scanLive ? "Unavailable while Spectrum scan is streaming" : !rfOn ? "Unavailable while the 5.8 GHz receiver is off" : "Sweep the band once and add a row to the waterfall"}">
+            ${icons.target(14)}<span>${this.scanning ? "Scanning…" : "Scan once"}</span>
+          </button>
+          <button type="button" class="btn btn-sm ${this.scanLive ? "btn-armed" : "btn-unarmed"}" data-action="scan-live" ${canScanLive ? "" : "disabled"} title="${!rfOn ? "Unavailable while the 5.8 GHz receiver is off" : this.scanLive ? "Streaming continuous spectrum scan — click to pause" : "Paused — click to stream continuous spectrum scan (automatically pauses 8-channel stream)"}">
+            ${this.scanLive ? icons.pause(14) : icons.play(14)}<span>${this.scanLive ? "Pause" : "Stream"}</span>
+          </button>
+        </div>
+      </div>
+      <div class="debug-subbar">
         <div class="debug-toolbar-left">
-          <span class="debug-led-status">
-            <span class="status-dot ${scanActive ? "is-up" : ""}" data-scan-led></span>
-            <span class="note mono" data-scan-status-note>${this.scanLive ? "Streaming · live scan" : this.scanning ? "Scanning once…" : "Paused"}</span>
-          </span>
           <div class="segmented" role="group" aria-label="Scan speed and range presets">
             <button type="button" class="${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="5" title="Full 5.18–5.92 GHz band at 5 MHz step (148 points, ~3.1 passes/s)">Full · 3 Hz</button>
             <button type="button" class="${isFast15 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="15" title="Full 5.18–5.92 GHz band at 15 MHz step (50 points, ~9 passes/s)">Fast full · 9 Hz</button>
@@ -3041,12 +3076,11 @@ export class DebugView extends Component {
           </div>
         </div>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm ${this.scanning ? "btn-armed" : "btn-unarmed"}" data-action="scan" ${canScanOnce ? "" : "disabled"} title="${this.scanLive ? "Unavailable while Spectrum scan is streaming" : !rfOn ? "Unavailable while the 5.8 GHz receiver is off" : "Sweep the band once and add a row to the waterfall"}">
-            ${icons.target(14)}<span>${this.scanning ? "Scanning…" : "Scan once"}</span>
-          </button>
-          <button type="button" class="btn btn-sm ${this.scanLive ? "btn-armed" : "btn-unarmed"}" data-action="scan-live" ${canScanLive ? "" : "disabled"} title="${!rfOn ? "Unavailable while the 5.8 GHz receiver is off" : this.scanLive ? "Streaming continuous spectrum scan — click to pause" : "Paused — click to stream continuous spectrum scan (automatically pauses 8-channel stream)"}">
-            ${this.scanLive ? icons.pause(14) : icons.play(14)}<span>${this.scanLive ? "Pause" : "Stream"}</span>
-          </button>
+          <div class="debug-btn-group" role="group" aria-label="Export spectrum & waterfall">
+            <button type="button" class="btn btn-sm btn-ghost" data-action="export-scan-csv" ${hasScan ? "" : "disabled"} title="Export waterfall scan history as CSV">CSV</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-png" ${hasScan ? "" : "disabled"} title="Save spectrum trace as PNG">Spectrum PNG</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="export-waterfall-png" ${hasScan ? "" : "disabled"} title="Save waterfall spectrogram as PNG">Waterfall PNG</button>
+          </div>
         </div>
       </div>
       <div class="debug-subbar debug-chart-axisbar">
@@ -3082,11 +3116,6 @@ export class DebugView extends Component {
               ? `<button type="button" class="btn btn-sm btn-ghost" data-action="scan-reset-y" title="Reset Y-axis to Auto scaling">Auto Y</button>`
               : ""
           }
-          <div class="debug-btn-group" role="group" aria-label="Export spectrum & waterfall">
-            <button type="button" class="btn btn-sm btn-ghost" data-action="export-scan-csv" ${hasScan ? "" : "disabled"} title="Export waterfall scan history as CSV">CSV</button>
-            <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-png" ${hasScan ? "" : "disabled"} title="Save spectrum trace as PNG">Spectrum PNG</button>
-            <button type="button" class="btn btn-sm btn-ghost" data-action="export-waterfall-png" ${hasScan ? "" : "disabled"} title="Save waterfall spectrogram as PNG">Waterfall PNG</button>
-          </div>
         </div>
       </div>
       <div class="debug-canvas-wrap">
@@ -3200,18 +3229,29 @@ export class DebugView extends Component {
     const busy = this.busy !== null;
     const restartBusy = this.busy === "Restarting" || this.busy === "Restart test";
     const l = this.bootLog;
+    const ledClass = restartBusy ? "is-warn" : on ? "is-up" : "";
+    const statusText = restartBusy
+      ? esc(this.progress)
+      : on
+        ? "Ready · USB reconnects automatically after restart"
+        : "Off · connect a timer first";
     this.slot("restart").innerHTML = `
       <div class="debug-card-head">
-        <span class="note debug-head-note">${restartBusy ? esc(this.progress) : on ? "The USB connection drops during a restart; the page reconnects by itself." : "Connect a timer first."}</span>
+        <span class="debug-led-status">
+          <span class="status-dot ${ledClass}"></span>
+          <span class="note debug-head-note mono">${statusText}</span>
+        </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="bootlog" ${on && !busy ? "" : "disabled"}>This boot's log</button>
           <button type="button" class="btn btn-sm btn-ghost" data-action="lastlog" ${on && !busy ? "" : "disabled"}>Previous boot's log</button>
           <button type="button" class="btn btn-sm btn-armed" data-action="restart-capture" ${on && !busy ? "" : "disabled"}>${icons.reset(14)}<span>Restart &amp; capture boot log</span></button>
         </div>
       </div>
-      <div class="debug-restart-test">
-        <label>Restart test <input class="input mono" type="number" data-restart-count value="${esc(this.el.querySelector<HTMLInputElement>("[data-restart-count]")?.value ?? "5")}" min="1" max="50"/> times</label>
-        <button type="button" class="btn btn-sm" data-action="restart-test" ${on && !busy ? "" : "disabled"}>${icons.reset(14)}<span>${this.busy === "Restart test" ? "Running…" : "Run"}</span></button>
+      <div class="debug-subbar">
+        <div class="debug-restart-test">
+          <label>Restart test <input class="input mono" type="number" data-restart-count value="${esc(this.el.querySelector<HTMLInputElement>("[data-restart-count]")?.value ?? "5")}" min="1" max="50"/> times</label>
+          <button type="button" class="btn btn-sm" data-action="restart-test" ${on && !busy ? "" : "disabled"}>${icons.reset(14)}<span>${this.busy === "Restart test" ? "Running…" : "Run"}</span></button>
+        </div>
       </div>
       ${
         this.runs.length
