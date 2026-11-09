@@ -31,6 +31,7 @@
 #include <string.h>
 
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 #include "driver/usb_serial_jtag.h"
 #include "esp_attr.h"
 #include "esp_chip_info.h"
@@ -506,18 +507,38 @@ void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
         ESP_LOGE("slaprf_diag",
                  "SAFE MODE: halted after %lu consecutive crash resets (%s). Radio and sweeps are off so USB stays up for debugging and reflashing; send REBOOT or power-cycle to retry.",
                  (unsigned long)s_crash_streak, reset_reason_name(esp_reset_reason()));
-        uint32_t tick = 0;
+        ledc_timer_config_t ledc_timer = {
+            .speed_mode      = LEDC_LOW_SPEED_MODE,
+            .duty_resolution = LEDC_TIMER_10_BIT,
+            .timer_num       = LEDC_TIMER_0,
+            .freq_hz         = 5000,
+            .clk_cfg         = LEDC_AUTO_CLK,
+        };
+        ledc_timer_config(&ledc_timer);
+        ledc_channel_config_t ledc_ch = {
+            .gpio_num   = XIAO_C5_LED_GPIO,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel    = LEDC_CHANNEL_0,
+            .timer_sel  = LEDC_TIMER_0,
+            .duty       = 1023,
+            .hpoint     = 0,
+        };
+        ledc_channel_config(&ledc_ch);
+        uint32_t step = 0;
         for (;;) {
             if (s_reboot_pending) {
                 vTaskDelay(pdMS_TO_TICKS(40));
                 esp_restart();
             }
-            // Triple-blink SOS pattern every 1.2 s on the onboard yellow LED
-            const uint32_t phase = tick % 12;
-            const bool led_on = (phase == 0 || phase == 2 || phase == 4);
-            gpio_set_level(XIAO_C5_LED_GPIO, led_on ? 0 : 1);
-            vTaskDelay(pdMS_TO_TICKS(100));
-            tick++;
+            // Ambulance-siren smooth fade: low -> high -> low every 900 ms (60 steps x 15 ms)
+            const uint32_t phase = step % 60U;
+            const uint32_t tri = phase < 30U ? phase : (60U - phase);
+            const uint32_t brightness = 28U + (tri * tri * 995U) / 900U; // Quadratic gamma for linear visual ramp
+            const uint32_t duty = 1023U - brightness; // Active-low LED on GPIO27
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+            vTaskDelay(pdMS_TO_TICKS(15));
+            step++;
         }
     }
 }

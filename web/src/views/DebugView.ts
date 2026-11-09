@@ -2649,6 +2649,9 @@ export class DebugView extends Component {
   private renderLive(): void {
     const freqs = this.status?.freqs ?? RACEBAND;
     this.slot("live").innerHTML = `
+      <div class="debug-subbar">
+        <span class="debug-chart-title">Channel RSSI meter (8 pilot slots)</span>
+      </div>
       <div class="debug-bars">
         ${freqs
           .map((f) => {
@@ -2724,7 +2727,7 @@ export class DebugView extends Component {
       <div class="debug-channels">
         <div class="debug-channels-head">
           <div class="debug-channels-title">
-            <strong>Try other channels</strong>
+            <span class="debug-chart-title">Try other channels</span>
             <span class="badge ${isTemp ? "badge-accent" : ""}">${isTemp ? "Temporary · not saved" : "Saved channels"}</span>
           </div>
           <div class="debug-connect-actions">
@@ -2797,6 +2800,7 @@ export class DebugView extends Component {
       </div>`;
     this.slot("signal-controls").innerHTML = `
       <div class="debug-subbar">
+        <span class="debug-chart-title">Signal over time (dBm × time)</span>
         <div class="debug-connect-actions">
           <div class="debug-overlay-checks" role="group" aria-label="Chart overlays">
             <label class="check" title="Show per-channel typical noise floor (dotted)">
@@ -3215,6 +3219,9 @@ export class DebugView extends Component {
       slotEl.innerHTML = `
         <div class="debug-findings" data-signal-findings-host role="region" aria-label="Signal findings log"></div>
         <div class="debug-subbox debug-noise-box">
+          <div class="debug-subbar">
+            <span class="debug-chart-title">Channel noise statistics</span>
+          </div>
           <div class="debug-table-scroll table-scroll">
             <table class="debug-runs debug-noise-table">
               <thead>
@@ -3300,6 +3307,7 @@ export class DebugView extends Component {
       </div>
       <div class="debug-subbox">
         <div class="debug-subbar">
+          <span class="debug-chart-title">Spectrum scan (dBm × frequency)</span>
           <div class="debug-connect-actions">
             <div class="debug-overlay-checks" role="group" aria-label="Spectrum overlays">
               <label class="check">
@@ -3409,11 +3417,10 @@ export class DebugView extends Component {
       </div>
       <div class="debug-findings debug-scan-findings" data-scan-findings role="region" aria-label="Spectrum findings log"></div>
       <div class="debug-subbox debug-waterfall-section">
-        <div class="debug-waterfall-head">
+        <div class="debug-subbar debug-waterfall-head">
           <div class="debug-waterfall-title-group">
-            <span class="status-dot" data-wf-led></span>
-            <strong>Waterfall spectrogram (frequency × time)</strong>
-            <span class="debug-head-note" data-wf-scroll-note></span>
+            <span class="debug-chart-title">Waterfall spectrogram (frequency × time)</span>
+            <span class="note" data-wf-scroll-note></span>
           </div>
           <div class="debug-connect-actions">
             <button type="button" class="btn btn-sm btn-ghost" data-action="wf-jump-live" data-wf-jump-btn disabled>Jump to live</button>
@@ -3537,25 +3544,20 @@ export class DebugView extends Component {
       );
     }
 
-    const wfLed = this.el.querySelector<HTMLElement>("[data-wf-led]");
     const wfNote = this.el.querySelector<HTMLElement>("[data-wf-scroll-note]");
     const wfJumpBtn = this.el.querySelector<HTMLButtonElement>("[data-wf-jump-btn]");
     const total = this.spectrumAcc.history.length;
     const vis = this.spectrumAcc.visibleRows;
     const sc = this.spectrumAcc.scrollRow;
-    if (wfLed) {
-      wfLed.classList.toggle("is-up", (this.scanLive || this.scanning) && sc === 0);
-      wfLed.classList.toggle("is-warn", sc > 0);
-    }
     if (wfNote) {
       if (!total) {
-        wfNote.textContent = "Paused";
+        wfNote.textContent = "";
       } else if (sc > 0) {
-        wfNote.textContent = `Paused · rows -${sc + 1}..-${Math.min(total, sc + vis)} of ${total}`;
+        wfNote.textContent = `· rows -${sc + 1}..-${Math.min(total, sc + vis)} of ${total}`;
       } else if (total > vis) {
-        wfNote.textContent = `${this.scanLive ? "Streaming" : "Paused"} · top ${vis} of ${total} passes`;
+        wfNote.textContent = `· top ${vis} of ${total} passes`;
       } else {
-        wfNote.textContent = `${this.scanLive ? "Streaming" : "Paused"} · ${total} pass${total === 1 ? "" : "es"}`;
+        wfNote.textContent = `· ${total} pass${total === 1 ? "" : "es"}`;
       }
     }
     if (wfJumpBtn) {
