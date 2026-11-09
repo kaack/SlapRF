@@ -4502,12 +4502,19 @@ body.is-gate-dragging * {
 }
 .debug-findings-table tr.is-muted td,
 .debug-noise-table tr.is-muted td {
-  opacity: 0.25;
+  opacity: 0.18;
+  filter: grayscale(0.85);
   transition: opacity 0.14s ease;
 }
-.debug-findings-table tr.is-muted:hover td,
-.debug-noise-table tr.is-muted:hover td {
-  opacity: 0.72;
+.debug-findings-table tbody tr:not(.is-muted):hover td,
+.debug-noise-table tbody tr:not(.is-muted):hover td {
+  background: rgba(255, 255, 255, 0.03);
+}
+.debug-findings-table.is-scoped tbody tr:not(.is-muted) td {
+  background: rgba(255, 255, 255, 0.022);
+}
+.debug-findings-table.is-scoped tbody tr:not(.is-muted):hover td {
+  background: rgba(255, 255, 255, 0.045);
 }
 .debug-findings-table td.debug-finding-detail {
   color: var(--text-2);

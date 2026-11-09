@@ -2907,6 +2907,7 @@ export class DebugView extends Component {
 
     emptyEl.hidden = true;
     tableEl.hidden = false;
+    tableEl.classList.toggle("is-scoped", isInScope !== undefined);
 
     // Map existing rows by finding ID so we never destroy the scroll container or existing row nodes
     const existingRows = new Map<number, HTMLTableRowElement>();
