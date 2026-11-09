@@ -4142,8 +4142,60 @@ body.is-gate-dragging * {
   padding-top: 14px;
   border-top: 1px solid var(--border);
 }
-.debug-health-canvas {
-  height: 196px;
+.debug-health-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.debug-health-grid.is-three-cards .debug-health-card[data-health-card="usb"] {
+  grid-column: 1 / -1;
+}
+.debug-health-card {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 12px 8px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  min-width: 0;
+}
+.debug-health-card[hidden] {
+  display: none;
+}
+.debug-health-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+.debug-health-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.debug-health-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.debug-health-value {
+  font-size: 13.5px;
+  font-weight: 600;
+  line-height: 1.35;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.debug-health-spark {
+  height: 44px;
+  margin-top: 2px;
   cursor: default;
 }
 .debug-channel-chips {
@@ -4380,8 +4432,8 @@ body.is-gate-dragging * {
   .debug-channels-inputs {
     grid-template-columns: repeat(4, minmax(0, 1fr));
   }
-  .debug-health-canvas {
-    height: 260px;
+  .debug-health-grid {
+    grid-template-columns: minmax(0, 1fr);
   }
   .debug-findings-meta {
     margin-left: 0;

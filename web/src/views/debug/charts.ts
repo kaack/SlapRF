@@ -1569,196 +1569,175 @@ function traceSmoothSpline(ctx: CanvasRenderingContext2D, pts: Array<{ x: number
   }
 }
 
-export function drawHealthSparklines(canvas: HTMLCanvasElement, health: HealthHistory, hasServer: boolean): void {
-  const tokens = getThemeTokens();
-  const rect = canvas.getBoundingClientRect();
-  const isNarrow = (rect.width || canvas.clientWidth || 720) < 520;
-  const totalCells = hasServer ? 4 : 3;
-  const cols = isNarrow ? 1 : 2;
-  const rows = Math.ceil(totalCells / cols);
-  const targetH = rows === 1 ? 104 : rows === 2 ? 196 : rows * 96;
-  const { ctx, width: W, height: H } = prepareCanvas(canvas, targetH);
+function drawSingleSparkCanvas(
+  canvas: HTMLCanvasElement,
+  values: Array<number | null>,
+  minV: number,
+  maxV: number,
+  color: string,
+  fillRgba: string,
+  threshold?: { value: number; color: string }
+): void {
+  const { ctx, width: W, height: H } = prepareCanvas(canvas, 44);
   ctx.clearRect(0, 0, W, H);
 
-  const pts = health.points;
-  const gap = 10;
-  const cellW = (W - gap * (cols - 1)) / cols;
-  const cellH = (H - gap * (rows - 1) - 4) / rows;
+  const padX = 4;
+  const plotTop = 5;
+  const plotBot = H - 5;
+  const plotH = Math.max(12, plotBot - plotTop);
+  const plotW = Math.max(20, W - padX * 2);
 
-  const drawCell = (
-    idx: number,
-    title: string,
+  // Subtle baseline & mid guideline (always visible even before samples arrive)
+  ctx.strokeStyle = "rgba(255, 255, 255, 0.045)";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  const midY = Math.round(plotTop + plotH / 2) + 0.5;
+  const botY = Math.round(plotBot) + 0.5;
+  ctx.moveTo(padX, midY);
+  ctx.lineTo(padX + plotW, midY);
+  ctx.moveTo(padX, botY);
+  ctx.lineTo(padX + plotW, botY);
+  ctx.stroke();
+
+  const maxBuckets = Math.max(12, Math.min(28, Math.floor(plotW / 12)));
+  const decimated = downsampleSeries(values, maxBuckets);
+  if (decimated.length < 2) return;
+
+  const lo = Math.min(minV, ...decimated);
+  const hi = Math.max(maxV, ...decimated, lo + 1e-3);
+  const yOf = (v: number) => plotBot - ((v - lo) / (hi - lo)) * plotH;
+  const xOf = (i: number) => padX + (i / Math.max(1, decimated.length - 1)) * plotW;
+
+  if (threshold && threshold.value >= lo && threshold.value <= hi) {
+    const ty = Math.round(yOf(threshold.value)) + 0.5;
+    ctx.strokeStyle = threshold.color;
+    ctx.globalAlpha = 0.5;
+    ctx.setLineDash([4, 4]);
+    ctx.beginPath();
+    ctx.moveTo(padX, ty);
+    ctx.lineTo(padX + plotW, ty);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.globalAlpha = 1;
+  }
+
+  const coords = decimated.map((v, i) => ({ x: xOf(i), y: yOf(v) }));
+
+  // Soft vertical gradient fill under spline
+  const grad = ctx.createLinearGradient(0, plotTop, 0, plotBot);
+  grad.addColorStop(0, fillRgba);
+  grad.addColorStop(1, "rgba(0, 0, 0, 0)");
+  ctx.fillStyle = grad;
+  ctx.beginPath();
+  traceSmoothSpline(ctx, coords);
+  ctx.lineTo(coords[coords.length - 1].x, plotBot);
+  ctx.lineTo(coords[0].x, plotBot);
+  ctx.closePath();
+  ctx.fill();
+
+  // Smooth spline stroke
+  ctx.strokeStyle = color;
+  ctx.lineWidth = 1.75;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  traceSmoothSpline(ctx, coords);
+  ctx.stroke();
+
+  // Single live endpoint dot on the rightmost reading
+  const tip = coords[coords.length - 1];
+  ctx.fillStyle = color;
+  ctx.beginPath();
+  ctx.arc(tip.x, tip.y, 3, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+export function drawHealthSparklines(root: HTMLElement, health: HealthHistory, hasServer: boolean): void {
+  const tokens = getThemeTokens();
+  const pts = health.points;
+  const last = pts.length ? pts[pts.length - 1] : null;
+
+  const udpCard = root.querySelector<HTMLElement>('[data-health-card="udp"]');
+  if (udpCard) {
+    udpCard.hidden = !hasServer;
+  }
+  root.classList.toggle("is-three-cards", !hasServer);
+
+  const updateCard = (
+    key: "sweep" | "heap" | "udp" | "usb",
     latestText: string,
-    rangeText: string,
-    latestTone: string,
+    metaText: string,
+    isWarn: boolean,
     values: Array<number | null>,
     minV: number,
     maxV: number,
     color: string,
     fillRgba: string,
-    threshold?: { value: number; color: string; label: string }
+    threshold?: { value: number; color: string }
   ) => {
-    const col = idx % cols;
-    const row = Math.floor(idx / cols);
-    const isLastFullSpan = !isNarrow && totalCells === 3 && idx === 2;
-    const wCell = isLastFullSpan ? W : cellW;
-    const x0 = col * (cellW + gap);
-    const y0 = 2 + row * (cellH + gap);
-    const padX = 12;
-    const plotTop = y0 + 40;
-    const plotBot = y0 + cellH - 10;
-    const plotH = Math.max(16, plotBot - plotTop);
-    const plotW = Math.max(20, wCell - padX * 2);
-
-    ctx.fillStyle = tokens.surface2;
-    ctx.strokeStyle = tokens.border;
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.roundRect(x0 + 0.5, y0 + 0.5, wCell - 1, cellH - 1, 8);
-    ctx.fill();
-    ctx.stroke();
-
-    ctx.fillStyle = tokens.text3;
-    ctx.font = `500 11px ${tokens.fontSans}`;
-    ctx.textAlign = "left";
-    ctx.textBaseline = "top";
-    ctx.fillText(title, x0 + padX, y0 + 8);
-
-    if (rangeText) {
-      ctx.fillStyle = tokens.text3;
-      ctx.font = `10.5px ${tokens.fontMono}`;
-      ctx.textAlign = "right";
-      ctx.fillText(rangeText, x0 + wCell - padX, y0 + 8);
+    const valEl = root.querySelector<HTMLElement>(`[data-health-val="${key}"]`);
+    if (valEl) {
+      valEl.textContent = latestText;
+      valEl.classList.toggle("debug-tone-warn", isWarn);
     }
-
-    ctx.fillStyle = latestTone;
-    ctx.font = `600 12.5px ${tokens.fontMono}`;
-    ctx.textAlign = "left";
-    ctx.fillText(latestText, x0 + padX, y0 + 22);
-
-    const maxBuckets = Math.max(12, Math.min(28, Math.floor(plotW / 12)));
-    const decimated = downsampleSeries(values, maxBuckets);
-    if (decimated.length < 2) {
-      ctx.fillStyle = tokens.text3;
-      ctx.font = `11px ${tokens.fontSans}`;
-      ctx.fillText("Collecting samples…", x0 + padX, plotTop + plotH / 2 - 5);
-      return;
+    const metaEl = root.querySelector<HTMLElement>(`[data-health-meta="${key}"]`);
+    if (metaEl) {
+      metaEl.textContent = metaText;
     }
-
-    const lo = Math.min(minV, ...decimated);
-    const hi = Math.max(maxV, ...decimated, lo + 1e-3);
-    const yOf = (v: number) => plotBot - ((v - lo) / (hi - lo)) * plotH;
-    const xOf = (i: number) => x0 + padX + (i / Math.max(1, decimated.length - 1)) * plotW;
-
-    // Subtle baseline & mid guideline
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.04)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    const midY = Math.round(plotTop + plotH / 2) + 0.5;
-    const botY = Math.round(plotBot) + 0.5;
-    ctx.moveTo(x0 + padX, midY);
-    ctx.lineTo(x0 + padX + plotW, midY);
-    ctx.moveTo(x0 + padX, botY);
-    ctx.lineTo(x0 + padX + plotW, botY);
-    ctx.stroke();
-
-    if (threshold && threshold.value >= lo && threshold.value <= hi) {
-      const ty = Math.round(yOf(threshold.value)) + 0.5;
-      ctx.strokeStyle = threshold.color;
-      ctx.globalAlpha = 0.5;
-      ctx.setLineDash([4, 4]);
-      ctx.beginPath();
-      ctx.moveTo(x0 + padX, ty);
-      ctx.lineTo(x0 + padX + plotW, ty);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 1;
+    const c = root.querySelector<HTMLCanvasElement>(`[data-spark-canvas="${key}"]`);
+    if (c) {
+      drawSingleSparkCanvas(c, values, minV, maxV, color, fillRgba, threshold);
     }
-
-    const coords = decimated.map((v, i) => ({ x: xOf(i), y: yOf(v) }));
-
-    // Soft vertical gradient fill under spline
-    const grad = ctx.createLinearGradient(0, plotTop, 0, plotBot);
-    grad.addColorStop(0, fillRgba);
-    grad.addColorStop(1, "rgba(0, 0, 0, 0)");
-    ctx.fillStyle = grad;
-    ctx.beginPath();
-    traceSmoothSpline(ctx, coords);
-    ctx.lineTo(coords[coords.length - 1].x, plotBot);
-    ctx.lineTo(coords[0].x, plotBot);
-    ctx.closePath();
-    ctx.fill();
-
-    // Smooth spline stroke
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1.75;
-    ctx.lineCap = "round";
-    ctx.lineJoin = "round";
-    ctx.beginPath();
-    traceSmoothSpline(ctx, coords);
-    ctx.stroke();
-
-    // Single live endpoint dot on the rightmost reading
-    const tip = coords[coords.length - 1];
-    ctx.fillStyle = color;
-    ctx.beginPath();
-    ctx.arc(tip.x, tip.y, 3, 0, Math.PI * 2);
-    ctx.fill();
   };
 
-  const last = pts.length ? pts[pts.length - 1] : null;
   const budgetMs = last ? last.sweepBudgetUs / 1000 : 7.0;
   const sweepMs = last ? last.sweepUs / 1000 : 0;
   const sweepOver = last ? last.sweepUs > last.sweepBudgetUs : false;
   const sweepVals = pts.map((p) => p.sweepUs / 1000);
   const sweepRange = sweepVals.length
     ? `${Math.min(...sweepVals).toFixed(1)}–${Math.max(...sweepVals).toFixed(1)} ms`
-    : "";
+    : "Collecting…";
 
-  drawCell(
-    0,
-    "Sweep duration",
+  updateCard(
+    "sweep",
     last ? `${sweepMs.toFixed(2)} ms / ${budgetMs.toFixed(1)} ms` : "—",
     sweepRange,
-    sweepOver ? tokens.warn : tokens.text,
+    sweepOver,
     sweepVals,
     4.0,
     Math.max(7.8, budgetMs + 0.5),
     tokens.accent,
     "rgba(212, 255, 58, 0.16)",
-    { value: budgetMs, color: tokens.warn, label: "budget" }
+    { value: budgetMs, color: tokens.warn }
   );
 
   const heapVals = pts.map((p) => p.heapFreeKB);
-  const heapRange = last ? `min ${last.heapMinKB.toFixed(0)} KB` : "";
-  drawCell(
-    1,
-    "Free heap",
+  const heapRange = last ? `min ${last.heapMinKB.toFixed(0)} KB` : "Collecting…";
+  updateCard(
+    "heap",
     last ? `${last.heapFreeKB.toFixed(0)} KB` : "—",
     heapRange,
-    last && last.heapMinKB < 20 ? tokens.warn : tokens.text,
+    Boolean(last && last.heapMinKB < 20),
     heapVals,
     16,
     80,
     tokens.good,
     "rgba(52, 211, 153, 0.16)",
-    { value: 20, color: tokens.bad, label: "20 KB" }
+    { value: 20, color: tokens.bad }
   );
 
-  let cellIdx = 2;
   if (hasServer) {
     const fps = last?.framesPerSec ?? null;
     const fpsVals = pts.map((p) => p.framesPerSec);
     const validFps = fpsVals.filter((v): v is number => v !== null && Number.isFinite(v));
     const fpsRange = validFps.length
       ? `${Math.min(...validFps).toFixed(0)}–${Math.max(...validFps).toFixed(0)}/s`
-      : "";
-    drawCell(
-      cellIdx++,
-      "Laptop UDP link",
+      : "Collecting…";
+    updateCard(
+      "udp",
       fps !== null ? `${fps.toFixed(0)} frames/s` : "—",
       fpsRange,
-      fps !== null && fps < 10 ? tokens.warn : tokens.text,
+      fps !== null && fps < 10,
       fpsVals,
       0,
       55,
@@ -1769,13 +1748,12 @@ export function drawHealthSparklines(canvas: HTMLCanvasElement, health: HealthHi
 
   const dropsTotal = pts.reduce((acc, p) => acc + p.droppedDelta, 0);
   const usbVals = pts.map((p) => p.liveRateHz);
-  const usbRange = `${dropsTotal} dropped`;
-  drawCell(
-    cellIdx,
-    "USB live stream",
+  const usbRange = pts.length ? `${dropsTotal} dropped` : "Collecting…";
+  updateCard(
+    "usb",
     last ? `${last.liveRateHz.toFixed(0)} sweeps/s` : "—",
     usbRange,
-    dropsTotal > 0 ? tokens.warn : tokens.text,
+    dropsTotal > 0,
     usbVals,
     0,
     55,

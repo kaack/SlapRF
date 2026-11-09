@@ -261,7 +261,40 @@ export class DebugView extends Component {
           <div class="card">
             <div data-slot="status"></div>
             <div class="debug-health-strip" data-slot="health">
-              <canvas class="debug-canvas debug-health-canvas" data-health-canvas></canvas>
+              <div class="debug-health-grid" data-health-grid>
+                <div class="debug-health-card" data-health-card="sweep">
+                  <div class="debug-health-card-head">
+                    <span class="debug-health-title">Sweep duration</span>
+                    <span class="debug-health-meta mono note" data-health-meta="sweep">Collecting…</span>
+                  </div>
+                  <div class="debug-health-value mono" data-health-val="sweep">—</div>
+                  <canvas class="debug-canvas debug-health-spark" data-spark-canvas="sweep"></canvas>
+                </div>
+                <div class="debug-health-card" data-health-card="heap">
+                  <div class="debug-health-card-head">
+                    <span class="debug-health-title">Free heap</span>
+                    <span class="debug-health-meta mono note" data-health-meta="heap">Collecting…</span>
+                  </div>
+                  <div class="debug-health-value mono" data-health-val="heap">—</div>
+                  <canvas class="debug-canvas debug-health-spark" data-spark-canvas="heap"></canvas>
+                </div>
+                <div class="debug-health-card" data-health-card="udp">
+                  <div class="debug-health-card-head">
+                    <span class="debug-health-title">Laptop UDP link</span>
+                    <span class="debug-health-meta mono note" data-health-meta="udp">Collecting…</span>
+                  </div>
+                  <div class="debug-health-value mono" data-health-val="udp">—</div>
+                  <canvas class="debug-canvas debug-health-spark" data-spark-canvas="udp"></canvas>
+                </div>
+                <div class="debug-health-card" data-health-card="usb">
+                  <div class="debug-health-card-head">
+                    <span class="debug-health-title">USB live stream</span>
+                    <span class="debug-health-meta mono note" data-health-meta="usb">Collecting…</span>
+                  </div>
+                  <div class="debug-health-value mono" data-health-val="usb">—</div>
+                  <canvas class="debug-canvas debug-health-spark" data-spark-canvas="usb"></canvas>
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -1038,9 +1071,9 @@ export class DebugView extends Component {
     }
 
     if (this.dirtyHealth) {
-      const c = this.el.querySelector<HTMLCanvasElement>("[data-health-canvas]");
-      if (c) {
-        drawHealthSparklines(c, this.healthHistory, this.hasServer);
+      const grid = this.el.querySelector<HTMLElement>("[data-health-grid]");
+      if (grid) {
+        drawHealthSparklines(grid, this.healthHistory, this.hasServer);
         this.dirtyHealth = false;
       }
     }
