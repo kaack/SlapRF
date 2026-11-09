@@ -3952,6 +3952,122 @@ body.is-gate-dragging * {
   margin-left: auto;
   flex-shrink: 0;
 }
+.debug-axis-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+  height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  transition: border-color 0.12s, background 0.12s;
+}
+.debug-axis-pill.is-armed {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  font-weight: 600;
+}
+.debug-axis-pill.is-unarmed {
+  background: var(--surface-2);
+  border-color: var(--border);
+  font-weight: 400;
+}
+.debug-axis-pill:hover {
+  border-color: #3a3f48;
+}
+.debug-axis-pill-main,
+.debug-axis-pill-arrow {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.debug-axis-pill-main {
+  gap: 6px;
+  padding: 0 8px 0 10px;
+  border-radius: calc(var(--radius-sm) - 1px) 0 0 calc(var(--radius-sm) - 1px);
+  white-space: nowrap;
+}
+.debug-axis-pill.is-armed .debug-axis-pill-main svg {
+  color: var(--accent);
+}
+.debug-axis-pill.is-unarmed .debug-axis-pill-main svg {
+  color: var(--text-3);
+}
+.debug-axis-pill-arrow {
+  width: 22px;
+  border-left: 1px solid var(--border);
+  border-radius: 0 calc(var(--radius-sm) - 1px) calc(var(--radius-sm) - 1px) 0;
+  color: var(--text-3);
+}
+.debug-axis-pill.is-armed .debug-axis-pill-arrow {
+  border-left-color: var(--border-strong);
+}
+.debug-axis-pill-main:hover,
+.debug-axis-pill-arrow:hover,
+.debug-axis-pill-arrow[aria-expanded="true"] {
+  background: rgba(255, 255, 255, 0.045);
+  color: var(--text);
+}
+.debug-axis-menu {
+  position: absolute;
+  top: calc(100% + 5px);
+  left: 0;
+  min-width: 148px;
+  padding: 4px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface-2);
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.48);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  z-index: 40;
+}
+.debug-axis-menu-sep {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--border);
+}
+.debug-axis-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-size: 11.5px;
+  font-weight: 400;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.debug-axis-menu-item:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.debug-axis-menu-item.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+  font-weight: 600;
+}
+.debug-axis-menu-item.is-active .note {
+  color: var(--accent);
+  opacity: 0.85;
+}
 .debug-subbar > .debug-connect-actions {
   margin-left: auto;
   flex-shrink: 0;

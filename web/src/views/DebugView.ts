@@ -196,6 +196,7 @@ export class DebugView extends Component {
   private signalFindingSeq = 0;
   private scanFindings: FindingLogEntry[] = [];
   private scanFindingSeq = 0;
+  private openAxisMenu: "signal-x" | "signal-y" | "scan-y" | "wf-y" | null = null;
 
   constructor(el: HTMLElement) {
     super(el);
@@ -780,6 +781,19 @@ export class DebugView extends Component {
       this.updateScanFindings();
       this.dirtyWaterfall = true;
     };
+
+    this.listen(window, "mousedown", (e) => {
+      if (!this.openAxisMenu) return;
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest("[data-axis-pill]")) return;
+      const prev = this.openAxisMenu;
+      this.openAxisMenu = null;
+      if (prev === "signal-x" || prev === "signal-y") {
+        this.renderSignalControls();
+      } else {
+        this.renderScan();
+      }
+    });
 
     this.listen(this.el, "mousedown", (e) => {
       if (e.button !== 0) return;
@@ -1566,13 +1580,29 @@ export class DebugView extends Component {
           await this.refreshStatus();
           this.renderChannels();
           break;
+        case "toggle-axis-menu": {
+          const menu = (t.dataset.menu as "signal-x" | "signal-y" | "scan-y" | "wf-y" | undefined) ?? null;
+          this.openAxisMenu = this.openAxisMenu === menu ? null : menu;
+          if (menu === "signal-x" || menu === "signal-y") {
+            this.renderSignalControls();
+          } else {
+            this.renderScan();
+          }
+          break;
+        }
         case "signal-auto-x":
-          this.signalAutoX = true;
+          this.openAxisMenu = null;
+          if (t.dataset.force === "1") {
+            this.signalAutoX = true;
+          } else {
+            this.signalAutoX = !this.signalAutoX;
+          }
           this.renderSignalControls();
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
           break;
         case "signal-window": {
+          this.openAxisMenu = null;
           const w = Number(t.dataset.win);
           if (w > 0 && w <= 120) {
             this.signalAutoX = false;
@@ -1620,31 +1650,50 @@ export class DebugView extends Component {
           this.dirtyNoiseTable = true;
           break;
         case "signal-auto-y":
-          this.signalAutoY = !this.signalAutoY;
-          if (!this.signalAutoY) {
-            this.signalYMin = DBM_MIN;
-            this.signalYMax = DBM_MAX;
-          } else {
+          this.openAxisMenu = null;
+          if (t.dataset.force === "1") {
+            this.signalAutoY = true;
             this.signalSmoothYMin = null;
             this.signalSmoothYMax = null;
+          } else {
+            this.signalAutoY = !this.signalAutoY;
+            if (!this.signalAutoY) {
+              this.signalYMin = DBM_MIN;
+              this.signalYMax = DBM_MAX;
+            } else {
+              this.signalSmoothYMin = null;
+              this.signalSmoothYMax = null;
+            }
           }
           this.renderSignalControls();
           this.dirtySignal = true;
           break;
         case "signal-reset-y":
+          this.openAxisMenu = null;
           this.signalAutoY = true;
           this.signalSmoothYMin = null;
           this.signalSmoothYMax = null;
           this.renderSignalControls();
           this.dirtySignal = true;
           break;
+        case "signal-full-y":
+          this.openAxisMenu = null;
+          this.signalAutoY = false;
+          this.signalYMin = DBM_MIN;
+          this.signalYMax = DBM_MAX;
+          this.renderSignalControls();
+          this.dirtySignal = true;
+          break;
         case "signal-reset-x":
+          this.openAxisMenu = null;
           this.signalAutoX = true;
           this.renderSignalControls();
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
           break;
         case "signal-zoom-floor":
+          this.openAxisMenu = null;
+          this.signalAutoY = false;
           this.signalYMin = -102;
           this.signalYMax = -68;
           this.renderSignalControls();
@@ -1761,30 +1810,47 @@ export class DebugView extends Component {
           this.dirtyWaterfall = true;
           break;
         case "wf-reset-rows":
+          this.openAxisMenu = null;
           this.spectrumAcc.setVisibleRows(80);
           this.renderScan();
           break;
         case "wf-rows": {
+          this.openAxisMenu = null;
           const rows = Number(t.dataset.rows) || 80;
           this.spectrumAcc.setVisibleRows(rows);
           this.renderScan();
           break;
         }
         case "scan-reset-zoom":
+          this.openAxisMenu = null;
           this.scanZoomStartMHz = null;
           this.scanZoomStopMHz = null;
           this.renderScan();
           break;
         case "scan-reset-y":
+          this.openAxisMenu = null;
           this.scanAutoY = true;
           this.renderScan();
           break;
+        case "scan-full-y":
+          this.openAxisMenu = null;
+          this.scanAutoY = false;
+          this.scanYMin = DBM_MIN;
+          this.scanYMax = DBM_MAX;
+          this.spectrumAcc.setColorRange(-100, -40);
+          this.renderScan();
+          break;
         case "scan-auto-y":
-          this.scanAutoY = !this.scanAutoY;
-          if (!this.scanAutoY) {
-            this.scanYMin = DBM_MIN;
-            this.scanYMax = DBM_MAX;
-            this.spectrumAcc.setColorRange(-100, -40);
+          this.openAxisMenu = null;
+          if (t.dataset.force === "1") {
+            this.scanAutoY = true;
+          } else {
+            this.scanAutoY = !this.scanAutoY;
+            if (!this.scanAutoY) {
+              this.scanYMin = DBM_MIN;
+              this.scanYMax = DBM_MAX;
+              this.spectrumAcc.setColorRange(-100, -40);
+            }
           }
           this.renderScan();
           break;
@@ -2574,7 +2640,13 @@ export class DebugView extends Component {
             ? "Paused while Spectrum scan is streaming — click to pause Spectrum scan and stream 50 Hz sweeps"
             : "Paused — click to stream live 50 Hz sweeps";
     const presets = [1, 2, 5, 10, 30, 120] as const;
-    const isCustomWindow = !this.signalAutoX && !presets.some((w) => Math.abs(this.signalWindowSec - w) < 0.05);
+    const isFloorY = !this.signalAutoY && Math.round(this.signalYMin) === -102 && Math.round(this.signalYMax) === -68;
+    const xWinLabel =
+      this.signalWindowSec === 120
+        ? "2 min"
+        : this.signalWindowSec < 10 && Math.abs(this.signalWindowSec - Math.round(this.signalWindowSec)) >= 0.05
+          ? `${this.signalWindowSec.toFixed(1)} s`
+          : `${Math.round(this.signalWindowSec)} s`;
     const sigLedClass = liveFollowOn ? "is-up" : (streamRunning && !isLive) || (on && inScanMode) ? "is-warn" : "";
     const sigStatusText = liveFollowOn
       ? `Streaming · ${this.liveMode === 2 ? "50 Hz" : "10 Hz"}`
@@ -2634,30 +2706,55 @@ export class DebugView extends Component {
       </div>
       <div class="debug-chart-foot is-with-divider">
         <div class="debug-toolbar-left">
-          <div class="segmented" role="group" aria-label="Time window">
-            <button type="button" class="${this.signalAutoX ? "is-active" : ""}" data-action="signal-auto-x" title="Automatically adjust X-axis time window based on incoming sample rate">Auto X</button>
-            ${presets
-              .map(
-                (w) =>
-                  `<button type="button" class="${!this.signalAutoX && Math.abs(this.signalWindowSec - w) < 0.05 ? "is-active" : ""}" data-action="signal-window" data-win="${w}" title="Set X-axis time window to ${w === 120 ? "2 minutes" : `${w} seconds`} (or drag horizontally on the X-axis)">${w === 120 ? "2 min" : `${w} s`}</button>`
-              )
-              .join("")}
-          </div>
-          ${
-            isCustomWindow
-              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="signal-reset-x" title="Reset X-axis time window to Auto">${icons.target(13)}<span>X: ${this.signalWindowSec < 10 ? this.signalWindowSec.toFixed(1) : Math.round(this.signalWindowSec)} s ×</span></button>`
-              : ""
-          }
-          <button type="button" class="btn btn-sm ${this.signalAutoY ? "btn-armed" : "btn-unarmed"} mono" data-action="signal-auto-y" title="${this.signalAutoY ? "Auto Y-axis scaling is ON — fits visible signal traces automatically. Click for full manual scale (-100…-20 dBm), or drag the Y-axis to stretch." : "Manual Y-axis range — click to re-enable Auto Y-axis scaling"}">
-            ${icons.target(13)}<span>${this.signalAutoY ? "Auto Y" : `Y: ${Math.round(this.signalYMin)}…${Math.round(this.signalYMax)} dBm`}</span>
-          </button>
-          ${
-            !this.signalAutoY && isYZoomed
-              ? `<button type="button" class="btn btn-sm btn-ghost" data-action="signal-reset-y" title="Set Y-axis dBm scale to full range (${DBM_MIN}…${DBM_MAX} dBm)">Full Y</button>`
-              : !this.signalAutoY
-                ? `<button type="button" class="btn btn-sm btn-ghost" data-action="signal-zoom-floor" title="Zoom Y-axis into the noise floor region (−102…−68 dBm), or drag vertically on the Y-axis">Zoom floor Y</button>`
+          <div class="debug-axis-pill ${this.signalAutoX ? "is-armed" : "is-unarmed"}" data-axis-pill>
+            <button type="button" class="debug-axis-pill-main mono" data-action="signal-auto-x" title="${this.signalAutoX ? `Auto X-axis time window (${xWinLabel}) — click to lock window, or open dropdown for presets` : "Manual X-axis time window — click to re-enable Auto X scaling"}">
+              ${icons.target(13)}<span>${this.signalAutoX ? "Auto X" : `X: ${xWinLabel}`}</span>
+            </button>
+            <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="signal-x" aria-expanded="${this.openAxisMenu === "signal-x"}" title="Choose X-axis time window">
+              ${icons.chevronDown(12)}
+            </button>
+            ${
+              this.openAxisMenu === "signal-x"
+                ? `<div class="debug-axis-menu mono" role="menu" aria-label="X-axis time window">
+                    <button type="button" class="debug-axis-menu-item ${this.signalAutoX ? "is-active" : ""}" data-action="signal-auto-x" data-force="1" role="menuitem">
+                      <span>Auto X</span><span class="note">${xWinLabel}</span>
+                    </button>
+                    <div class="debug-axis-menu-sep"></div>
+                    ${presets
+                      .map((w) => {
+                        const active = !this.signalAutoX && Math.abs(this.signalWindowSec - w) < 0.05;
+                        const label = w === 120 ? "2 min" : `${w} s`;
+                        return `<button type="button" class="debug-axis-menu-item ${active ? "is-active" : ""}" data-action="signal-window" data-win="${w}" role="menuitem"><span>${label}</span></button>`;
+                      })
+                      .join("")}
+                  </div>`
                 : ""
-          }
+            }
+          </div>
+          <div class="debug-axis-pill ${this.signalAutoY ? "is-armed" : "is-unarmed"}" data-axis-pill>
+            <button type="button" class="debug-axis-pill-main mono" data-action="signal-auto-y" title="${this.signalAutoY ? "Auto Y-axis scaling is ON — fits visible signal traces automatically. Click for full manual scale, or drag the Y-axis to stretch." : "Manual Y-axis range — click to re-enable Auto Y-axis scaling"}">
+              ${icons.target(13)}<span>${this.signalAutoY ? "Auto Y" : `Y: ${Math.round(this.signalYMin)}…${Math.round(this.signalYMax)} dBm`}</span>
+            </button>
+            <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="signal-y" aria-expanded="${this.openAxisMenu === "signal-y"}" title="Choose Y-axis dBm scale">
+              ${icons.chevronDown(12)}
+            </button>
+            ${
+              this.openAxisMenu === "signal-y"
+                ? `<div class="debug-axis-menu mono" role="menu" aria-label="Y-axis dBm scale">
+                    <button type="button" class="debug-axis-menu-item ${this.signalAutoY ? "is-active" : ""}" data-action="signal-auto-y" data-force="1" role="menuitem">
+                      <span>Auto Y</span><span class="note">Fit traces</span>
+                    </button>
+                    <div class="debug-axis-menu-sep"></div>
+                    <button type="button" class="debug-axis-menu-item ${isFloorY ? "is-active" : ""}" data-action="signal-zoom-floor" role="menuitem">
+                      <span>Noise floor</span><span class="note">−102…−68 dBm</span>
+                    </button>
+                    <button type="button" class="debug-axis-menu-item ${!this.signalAutoY && !isYZoomed ? "is-active" : ""}" data-action="signal-full-y" role="menuitem">
+                      <span>Full scale</span><span class="note">${DBM_MIN}…${DBM_MAX} dBm</span>
+                    </button>
+                  </div>`
+                : ""
+            }
+          </div>
         </div>
         <div class="debug-connect-actions">
           <div class="debug-btn-group" role="group" aria-label="Export signal chart">
@@ -3061,7 +3158,6 @@ export class DebugView extends Component {
     const prevScanFindingsEl = this.slot("scan").querySelector<HTMLElement>("[data-scan-findings]");
     const prevScanScrollTop = prevScanFindingsEl?.querySelector<HTMLElement>("[data-findings-scroll]")?.scrollTop ?? 0;
     const wfRowPresets = [40, 80, 160, 300] as const;
-    const isCustomWfRows = !wfRowPresets.includes(this.spectrumAcc.visibleRows as 40 | 80 | 160 | 300);
     this.slot("scan").innerHTML = `
       <div class="debug-card-head">
         <span class="debug-led-status">
@@ -3114,19 +3210,30 @@ export class DebugView extends Component {
       </div>
       <div class="debug-chart-foot">
         <div class="debug-toolbar-left">
-          ${
-            isFreqZoomed
-              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="scan-reset-zoom" title="Reset frequency zoom (or double-click chart)">${icons.target(13)}<span>X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz ×</span></button>`
-              : ""
-          }
-          <button type="button" class="btn btn-sm ${this.scanAutoY ? "btn-armed" : "btn-unarmed"} mono" data-action="scan-auto-y" title="${this.scanAutoY ? "Auto Y-axis scaling is on (fits scanned dBm range) — click for full −100…−20 dBm scale, or drag the Y-axis" : "Manual Y-axis range active — click to re-enable Auto Y scaling"}">
-            ${icons.target(13)}<span>${this.scanAutoY ? "Auto Y" : `Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} dBm`}</span>
+          <button type="button" class="btn btn-sm ${!isFreqZoomed ? "btn-armed" : "btn-unarmed"} mono" data-action="scan-reset-zoom" title="${isFreqZoomed ? "Manual frequency zoom active — click to reset to full scanned frequency range" : "Full scanned frequency range — drag X-axis or Shift+drag chart to zoom"}">
+            ${icons.target(13)}<span>${isFreqZoomed ? `X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz` : "Auto X"}</span>
           </button>
-          ${
-            !this.scanAutoY && isScanYZoomed
-              ? `<button type="button" class="btn btn-sm btn-ghost" data-action="scan-reset-y" title="Reset Y-axis to Auto scaling">Auto Y</button>`
-              : ""
-          }
+          <div class="debug-axis-pill ${this.scanAutoY ? "is-armed" : "is-unarmed"}" data-axis-pill>
+            <button type="button" class="debug-axis-pill-main mono" data-action="scan-auto-y" title="${this.scanAutoY ? "Auto Y-axis scaling is ON (fits scanned dBm range) — click for full scale, or drag the Y-axis" : "Manual Y-axis range active — click to re-enable Auto Y scaling"}">
+              ${icons.target(13)}<span>${this.scanAutoY ? "Auto Y" : `Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} dBm`}</span>
+            </button>
+            <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-y" aria-expanded="${this.openAxisMenu === "scan-y"}" title="Choose spectrum Y-axis dBm scale">
+              ${icons.chevronDown(12)}
+            </button>
+            ${
+              this.openAxisMenu === "scan-y"
+                ? `<div class="debug-axis-menu mono" role="menu" aria-label="Spectrum Y-axis dBm scale">
+                    <button type="button" class="debug-axis-menu-item ${this.scanAutoY ? "is-active" : ""}" data-action="scan-auto-y" data-force="1" role="menuitem">
+                      <span>Auto Y</span><span class="note">Fit scan</span>
+                    </button>
+                    <div class="debug-axis-menu-sep"></div>
+                    <button type="button" class="debug-axis-menu-item ${!this.scanAutoY && !isScanYZoomed ? "is-active" : ""}" data-action="scan-full-y" role="menuitem">
+                      <span>Full scale</span><span class="note">${DBM_MIN}…${DBM_MAX} dBm</span>
+                    </button>
+                  </div>`
+                : ""
+            }
+          </div>
           <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
         </div>
         <div class="debug-connect-actions">
@@ -3158,24 +3265,33 @@ export class DebugView extends Component {
         </div>
         <div class="debug-chart-foot">
           <div class="debug-toolbar-left">
-            <div class="segmented" role="group" aria-label="Waterfall pass depth">
-              ${wfRowPresets
-                .map(
-                  (r) =>
-                    `<button type="button" class="${this.spectrumAcc.visibleRows === r ? "is-active" : ""}" data-action="wf-rows" data-rows="${r}" title="Show ${r} scan passes vertically on the waterfall (or drag the Y-axis)">${r} passes</button>`
-                )
-                .join("")}
+            <button type="button" class="btn btn-sm ${!isFreqZoomed ? "btn-armed" : "btn-unarmed"} mono" data-action="scan-reset-zoom" title="${isFreqZoomed ? "Manual frequency zoom active — click to reset to full scanned frequency range" : "Full scanned frequency range — drag X-axis or Shift+drag chart to zoom"}">
+              ${icons.target(13)}<span>${isFreqZoomed ? `X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz` : "Auto X"}</span>
+            </button>
+            <div class="debug-axis-pill ${!isWfRowsZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
+              <button type="button" class="debug-axis-pill-main mono" data-action="wf-reset-rows" title="${!isWfRowsZoomed ? "Default waterfall pass depth (80 passes) — open dropdown or drag Y-axis to adjust" : "Custom waterfall pass depth — click to reset to 80 passes"}">
+                ${icons.target(13)}<span>${!isWfRowsZoomed ? "Auto Y" : `Y: ${this.spectrumAcc.visibleRows} passes`}</span>
+              </button>
+              <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="wf-y" aria-expanded="${this.openAxisMenu === "wf-y"}" title="Choose waterfall vertical pass depth">
+                ${icons.chevronDown(12)}
+              </button>
+              ${
+                this.openAxisMenu === "wf-y"
+                  ? `<div class="debug-axis-menu mono" role="menu" aria-label="Waterfall pass depth">
+                      <button type="button" class="debug-axis-menu-item ${!isWfRowsZoomed ? "is-active" : ""}" data-action="wf-rows" data-rows="80" role="menuitem">
+                        <span>Auto Y</span><span class="note">80 passes</span>
+                      </button>
+                      <div class="debug-axis-menu-sep"></div>
+                      ${wfRowPresets
+                        .map((r) => {
+                          const active = this.spectrumAcc.visibleRows === r;
+                          return `<button type="button" class="debug-axis-menu-item ${active ? "is-active" : ""}" data-action="wf-rows" data-rows="${r}" role="menuitem"><span>${r} passes</span></button>`;
+                        })
+                        .join("")}
+                    </div>`
+                  : ""
+              }
             </div>
-            ${
-              isCustomWfRows || isWfRowsZoomed
-                ? `<button type="button" class="btn btn-sm ${isCustomWfRows ? "btn-armed" : "btn-ghost"} mono" data-action="wf-reset-rows" title="Reset waterfall Y-axis pass depth to 80 passes">${icons.target(13)}<span>Y: ${this.spectrumAcc.visibleRows} passes ×</span></button>`
-                : ""
-            }
-            ${
-              isFreqZoomed
-                ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="scan-reset-zoom" title="Reset frequency zoom (or double-click chart)">${icons.target(13)}<span>X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz ×</span></button>`
-                : ""
-            }
           </div>
           <div class="debug-connect-actions">
             <div class="debug-btn-group" role="group" aria-label="Export waterfall spectrogram">
