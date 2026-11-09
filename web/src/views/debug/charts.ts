@@ -1506,7 +1506,7 @@ export function drawWaterfallCanvas(
   const maxScroll = Math.max(1, acc.maxScrollRow());
   const scrollFrac = acc.maxScrollRow() > 0 ? startRow / maxScroll : 0;
   const thumbY = T + Math.round((plotH - thumbH) * scrollFrac);
-  ctx.fillStyle = startRow > 0 ? tokens.warn : acc.history.length > visRows ? tokens.accent : "rgba(255, 255, 255, 0.18)";
+  ctx.fillStyle = startRow > 0 ? tokens.text2 : acc.history.length > visRows ? tokens.text3 : "rgba(255, 255, 255, 0.16)";
   ctx.fillRect(sbX, thumbY, sbW, thumbH);
 
   // Adaptive X-axis frequency ticks
