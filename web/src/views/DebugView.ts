@@ -1978,6 +1978,11 @@ export class DebugView extends Component {
         case "restart-capture":
           await this.runBusy("Restarting", () => this.restartAndCapture());
           break;
+        case "toggle-safemode":
+          await this.runBusy(this.status?.safeMode ? "Exiting safe mode" : "Entering safe mode", () =>
+            this.toggleSafeMode()
+          );
+          break;
         case "restart-test": {
           const n = Math.max(1, Math.min(50, this.num("[data-restart-count]", 5)));
           await this.runBusy("Restart test", () => this.restartTest(n));
@@ -2058,13 +2063,13 @@ export class DebugView extends Component {
   // ---------------------------------------------------------------- restarts
 
   /** Restart, reattach, re-enable the streams the user had on. Returns the first status. */
-  private async restart(): Promise<TimerStatus> {
+  private async restart(cmd: "REBOOT" | "SAFEMODE" = "REBOOT"): Promise<TimerStatus> {
     window.clearInterval(this.statusTimer);
     this.live = null;
     this.scanLive = false; // The firmware forgets it on restart
     this.renderScan();
     try {
-      const s = await this.console.restartAndReconnect();
+      const s = await this.console.restartAndReconnect(15000, cmd);
       this.renderConnection();
       await this.startSession();
       return s;
@@ -2072,6 +2077,14 @@ export class DebugView extends Component {
       await this.console.disconnect();
       throw err;
     }
+  }
+
+  private async toggleSafeMode(): Promise<void> {
+    const enter = !this.status?.safeMode;
+    this.setProgress(enter ? "Rebooting into safe mode…" : "Exiting safe mode…");
+    await this.restart(enter ? "SAFEMODE" : "REBOOT");
+    this.bootLog = await this.console.request<BootLog>("BOOTLOG?", "bootlog", 3000);
+    this.renderRestart();
   }
 
   private async restartAndCapture(): Promise<void> {
@@ -3589,6 +3602,9 @@ export class DebugView extends Component {
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="bootlog" ${on && !busy ? "" : "disabled"}>This boot's log</button>
           <button type="button" class="btn btn-sm btn-ghost" data-action="lastlog" ${on && !busy ? "" : "disabled"}>Previous boot's log</button>
+          <button type="button" class="btn btn-sm ${this.status?.safeMode ? "btn-armed" : "btn-ghost"}" data-action="toggle-safemode" ${on && !busy ? "" : "disabled"} title="${this.status?.safeMode ? "Reboot back into normal timing mode" : "Force the timer into emergency USB Safe Mode (halts radio/sweeps and runs the ambulance-siren LED fade)"}">
+            <span>${this.status?.safeMode ? "Exit safe mode" : "Test safe mode"}</span>
+          </button>
           <button type="button" class="btn btn-sm btn-armed" data-action="restart-capture" ${on && !busy ? "" : "disabled"}>${icons.reset(14)}<span>Restart &amp; capture boot log</span></button>
         </div>
       </div>

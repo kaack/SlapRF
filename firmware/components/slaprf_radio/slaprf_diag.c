@@ -56,6 +56,7 @@
 #define SCAN_MAX_POINTS  200
 #define LOG_RING_BYTES   3072
 #define LOG_RING_MAGIC   0x534C4F48U // "SLOH" (v2 with crash_streak)
+#define SAFE_MODE_MAGIC  0x53414645U // "SAFE" (explicit SAFEMODE command request)
 #define MAX_CRASH_STREAK 3           // Halt in USB safe mode after 3 consecutive panics/watchdogs
 #define RF_MIN_MHZ       5180
 #define RF_MAX_MHZ       5917
@@ -212,7 +213,11 @@ __attribute__((constructor)) static void diag_early_init(void) {
     if (s_ring.magic == LOG_RING_MAGIC && s_ring.len <= LOG_RING_BYTES && s_ring.head < LOG_RING_BYTES) {
         ring_copy_out(s_last_log, &s_last_len);
         s_boots = s_ring.boots + 1;
-        s_crash_streak = is_crash_reset(reason) ? (s_ring.crash_streak + 1) : 0;
+        if (s_ring.crash_streak == SAFE_MODE_MAGIC) {
+            s_crash_streak = MAX_CRASH_STREAK;
+        } else {
+            s_crash_streak = is_crash_reset(reason) ? (s_ring.crash_streak + 1) : 0;
+        }
     } else {
         s_last_len = 0;
         s_boots = 1; // Power-on (RTC memory was not retained)
@@ -439,12 +444,24 @@ static void handle_command(char *line) {
         s_scan_stop = (uint16_t)b;
         s_scan_step = (uint16_t)s;
         s_scan_pending = true;
+    } else if (strcmp(line, "SAFEMODE") == 0) {
+        s_live = 0;
+        s_scan_live = false;
+        s_rf_enabled = false;
+        s_ring.crash_streak = SAFE_MODE_MAGIC;
+        tx_line("@{\"t\":\"ok\",\"cmd\":\"safemode\"}\n");
+        s_reboot_pending = true;
+        vTaskDelay(pdMS_TO_TICKS(50));
+        esp_restart();
     } else if (strcmp(line, "REBOOT") == 0) {
         s_live = 0;
         s_scan_live = false;
         s_rf_enabled = false;
+        s_ring.crash_streak = 0;
         tx_line("@{\"t\":\"ok\",\"cmd\":\"reboot\"}\n");
         s_reboot_pending = true;
+        vTaskDelay(pdMS_TO_TICKS(50));
+        esp_restart();
     } else if (line[0]) {
         tx_line("@{\"t\":\"err\",\"msg\":\"unknown command\"}\n");
     }

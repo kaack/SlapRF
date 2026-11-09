@@ -233,11 +233,11 @@ export class TimerConsole {
    * port goes away; reopen the same device (matched by USB VID/PID) without the port picker.
    * Resolves with the first status after the restart.
    */
-  public async restartAndReconnect(timeoutMs = 15000): Promise<TimerStatus> {
+  public async restartAndReconnect(timeoutMs = 15000, cmd: "REBOOT" | "SAFEMODE" = "REBOOT"): Promise<TimerStatus> {
     const before = await this.request<TimerStatus>("STATUS?", "status", 2000).catch(() => null);
     this.expectingRestart = true;
     try {
-      await this.send("REBOOT").catch(() => undefined);
+      await this.send(cmd).catch(() => undefined);
       const deadline = Date.now() + timeoutMs;
       await sleep(600);
       while (Date.now() < deadline) {
