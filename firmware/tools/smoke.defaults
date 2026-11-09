@@ -1,0 +1,5 @@
+# Bench smoke-test overrides (layered on top of a profile's sdkconfig.defaults by
+# tools/smoke.bat). Production keeps the native USB port for the flasher's SLAPRF? query only;
+# for bring-up we also mirror the console there and log at INFO.
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y

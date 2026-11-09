@@ -265,12 +265,12 @@ int64_t slaprf_now_us(void) {
 }
 
 void slaprf_sleep_until_us(int64_t t_us) {
-    int64_t remaining = t_us - esp_timer_get_time();
-    if (remaining > 2500) {
-        vTaskDelay(pdMS_TO_TICKS((remaining - 1500) / 1000));
+    // Sleep a tick at a time (1 ms at CONFIG_FREERTOS_HZ=1000) so the idle task and the Wi-Fi
+    // stack get CPU, then spin out the final stretch so TDMA slots and sweeps start on time.
+    while (t_us - esp_timer_get_time() > 1200) {
+        vTaskDelay(1);
     }
     while (esp_timer_get_time() < t_us) {
-        // Spin out the last ~1.5 ms so TDMA slots and sweeps start on time
     }
 }
 

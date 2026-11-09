@@ -43,7 +43,7 @@
 #define LINK_LONG_RANGE          0    // Standard 1 Mbps ESP-NOW
 #define TX_POWER_QDBM            56   // +14 dBm
 #define TDMA_SLOT_US             900  // 1 Mbps frame (~0.5 ms) + guard
-#define SWEEP_BUDGET_US          6000 // Radio away from 2.4 GHz for at most this long per sweep
+#define SWEEP_BUDGET_US          7000 // Radio away from 2.4 GHz per sweep (measured ~6.3 ms on chip v1.0)
 
 /* ---- Schedule (derived) ------------------------------------------------------------------- */
 #define MAX_SPOKES               6
@@ -186,6 +186,25 @@ static void sweep_once(void) {
     if (took > SWEEP_BUDGET_US) {
         ESP_LOGW(TAG, "sweep took %lld us (budget %d us)", (long long)took, SWEEP_BUDGET_US);
     }
+    // Once a second (INFO level; production builds log at WARN): per-channel peak, and how many
+    // sweeps rose > 6 dB above the channel's quietest reading, over the last SWEEP_HZ sweeps.
+    static uint32_t s_sweeps;
+    static int8_t s_peak[MAX_PILOT_SLOTS];
+    static int8_t s_floor[MAX_PILOT_SLOTS];
+    static uint8_t s_hits[MAX_PILOT_SLOTS];
+    for (int i = 0; i < MAX_PILOT_SLOTS; i++) {
+        const int8_t v = cur->rssi_dbm[i];
+        if (s_sweeps % SWEEP_HZ == 0 || v > s_peak[i]) s_peak[i] = v;
+        if (s_sweeps == 0 || v < s_floor[i]) s_floor[i] = v;
+        if (s_sweeps % SWEEP_HZ == 0) s_hits[i] = 0;
+        if (v > s_floor[i] + 6) s_hits[i]++;
+    }
+    if (++s_sweeps % SWEEP_HZ == 0) {
+        ESP_LOGI(TAG, "sweep %lld us | peak dBm %d %d %d %d %d %d %d %d | hits %u %u %u %u %u %u %u %u",
+                 (long long)took, s_peak[0], s_peak[1], s_peak[2], s_peak[3], s_peak[4], s_peak[5],
+                 s_peak[6], s_peak[7], s_hits[0], s_hits[1], s_hits[2], s_hits[3], s_hits[4],
+                 s_hits[5], s_hits[6], s_hits[7]);
+    }
 }
 
 /** Pack the current window into `pkt`; returns the frame length. */
@@ -266,7 +285,9 @@ static void hub_listen_until(int64_t until_us) {
         if (slaprf_now_us() >= until_us) {
             return;
         }
-        slaprf_sleep_until_us(slaprf_now_us() + 1000 < until_us ? slaprf_now_us() + 1000 : until_us);
+        // Waits > 1.2 ms sleep a tick (lets the idle task and Wi-Fi run); shorter ones spin.
+        const int64_t now = slaprf_now_us();
+        slaprf_sleep_until_us(until_us - now > 2000 ? now + 2000 : until_us);
     }
 }
 

@@ -27,7 +27,7 @@ for sym in _iram_end _data_end _bss_end; do
   fi
 done
 
-for sym in adctrig force_rx_gain phy_set_chanfreq phy_set_rf_freq_offset phy_pbus_xpd_tx_off phy_pbus_xpd_tx_on; do
+for sym in adctrig force_rx_gain phy_set_chanfreq phy_set_rf_freq_offset phy_pbus_xpd_tx_off phy_pbus_workmode; do
   if ! awk -v s="$sym" '$NF == s {found = 1} END {exit !found}' <<< "$syms"; then
     echo "::error::$sym is not linked into $elf"
     fail=1

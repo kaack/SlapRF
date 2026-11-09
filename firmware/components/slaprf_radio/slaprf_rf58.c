@@ -16,6 +16,7 @@
 #include <string.h>
 
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
@@ -29,8 +30,10 @@ extern uint8_t phy_param[];
 extern int phy_set_chanfreq(uint32_t mhz, uint8_t wide);
 extern void phy_set_rf_freq_offset(uint8_t xtal_sel, uint32_t mhz, int16_t trim);
 extern void phy_pbus_workmode(void);
+// Writes the TX-path power-down values on the PHY's internal bus while it stays in hardware
+// (work) mode. NOTE: phy_pbus_xpd_tx_on() is NOT its inverse: it is an RF-test routine that puts
+// the bus into forced debug mode and drives the TX chain manually, taking TX away from the MAC.
 extern void phy_pbus_xpd_tx_off(void);
-extern void phy_pbus_xpd_tx_on(void);
 extern void force_rx_gain(int enable, int index, int bt_path);
 extern void adctrig(uint32_t count_minus_1, uint32_t selector, uint32_t mode, uint32_t rate,
                     uint32_t unused, uint32_t wait_style, uint32_t w1, uint32_t w2, uint32_t w3);
@@ -109,8 +112,14 @@ static void hold_gain(void) {
 }
 
 /** One capture through the stock trigger: software trigger, receive-only mode, 80 MS/s. */
+static void release_engine(void);
+
 static void stock_capture(void) {
     adctrig(CAPTURE_SAMPLES - 1, 0, 0, 0, 0, 0, 0, 0, 0);
+    // The stock call can leave the modem owning the capture bank. That ownership survives a
+    // USB/RTS system reset and then hangs the ROM loader (watchdog boot loop until power-cycled),
+    // so hand the bank straight back.
+    release_engine();
 }
 
 /** One capture driving the dump registers directly (~10 us). Returns false on timeout/corruption. */
@@ -195,9 +204,24 @@ static float band_power_db(void) {
     return 10.0f * log10f(power + 1e-3f);
 }
 
+/** Put the capture engine and SRAM ownership back to their idle state. */
+static void release_engine(void) {
+    REG32(REG_DUMP_CTRL) &= ~((1U << 31) | (1U << 19));
+    REG32(REG_SRAM_OWNER) &= ~((0xFU << 8) | (1U << 16));
+}
+
+/** esp_restart() / panic path: never leave the modem owning the capture bank across a reset. */
+static void rf58_shutdown(void) {
+    release_engine();
+    force_rx_gain(0, 0, 0);
+}
+
 /* ---- Public API ----------------------------------------------------------------------------- */
 
 void slaprf_rf58_enter(void) {
+#ifdef SLAPRF_RF58_DISABLED
+    return;
+#endif
     phy_pbus_workmode();
     phy_pbus_xpd_tx_off(); // Nothing may transmit while the radio sits in the FPV video band
     phy_set_chanfreq(BAND_SETUP_MHZ, 1);
@@ -205,12 +229,16 @@ void slaprf_rf58_enter(void) {
 }
 
 void slaprf_rf58_leave(void) {
+#ifdef SLAPRF_RF58_DISABLED
+    return;
+#endif
     uint8_t primary = 1;
     wifi_second_chan_t second = WIFI_SECOND_CHAN_NONE;
     esp_wifi_get_channel(&primary, &second);
-    phy_set_chanfreq(2407U + 5U * primary, 0); // Back onto the link channel, 20 MHz
-    force_rx_gain(0, 0, 0);                    // Hand gain back to the AGC for Wi-Fi / ESP-NOW
-    phy_pbus_xpd_tx_on();
+    // Full channel set: reprograms the RF chain (including the TX path) for the 2.4 GHz link.
+    phy_set_chanfreq(2407U + 5U * primary, 0);
+    phy_pbus_workmode();    // PHY bus under hardware (MAC) control
+    force_rx_gain(0, 0, 0); // Hand gain back to the AGC for Wi-Fi / ESP-NOW
 }
 
 int8_t esp_sdr_measure_5g_channel_dbm(uint16_t center_freq_mhz) {
@@ -229,6 +257,12 @@ int8_t esp_sdr_measure_5g_channel_dbm(uint16_t center_freq_mhz) {
 }
 
 bool slaprf_rf58_init(void) {
+#ifdef SLAPRF_RF58_DISABLED
+    ESP_LOGW(TAG, "capture engine disabled at build time (SLAPRF_RF58_DISABLED)");
+    return false;
+#endif
+    release_engine(); // In case a previous run was reset mid-capture
+    esp_register_shutdown_handler(rf58_shutdown);
     build_coefficients();
     const uint32_t gain_max = (REG32(REG_GAIN) >> 8) & 0x7FU;
     if (gain_max > 0 && s_gain > (int)gain_max) {
