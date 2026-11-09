@@ -2494,9 +2494,7 @@ export class DebugView extends Component {
                   <input type="checkbox" data-all-ports ${this.showAllPorts ? "checked" : ""}/>
                   <span>Show non-XIAO ports</span>
                 </label>`
-              : `<button type="button" class="btn btn-sm btn-icon btn-ghost ${s?.emergencyMode ? "is-emergency-active" : ""}" data-action="toggle-emergency" ${on && !busy ? "" : "disabled"} title="${s?.emergencyMode ? "Exit emergency mode (EMERGENCY 0)" : "Enter emergency mode (EMERGENCY 1)"}" aria-label="${s?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}">
-                  ${icons.siren(17)}
-                </button>`
+              : ""
           }
           <button type="button" class="btn btn-sm ${on ? "btn-armed" : "btn-unarmed"}" data-action="${on ? "disconnect" : "connect"}" ${supported && !busy ? "" : "disabled"}>
             ${on ? icons.plug(14) : icons.plugOff(14)}<span>${btnLabel}</span>
@@ -2627,9 +2625,6 @@ export class DebugView extends Component {
           <span class="debug-head-note">${headText}</span>
         </span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm btn-icon btn-ghost ${s?.emergencyMode ? "is-emergency-active" : ""}" data-action="toggle-emergency" ${on && !this.busy ? "" : "disabled"} title="${s?.emergencyMode ? "Exit emergency mode (EMERGENCY 0)" : "Enter emergency mode (EMERGENCY 1)"}" aria-label="${s?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}">
-            ${icons.siren(17)}
-          </button>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="read-config" ${on && !this.busy ? "" : "disabled"} title="Read SLAPRF02 config block (SLAPRF?)" aria-label="Read config">${icons.sliders(17)}</button>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="refresh-status" ${on && !this.busy ? "" : "disabled"} title="Refresh timer status (STATUS?)" aria-label="Refresh status">
             ${icons.reset(17)}
@@ -3926,7 +3921,6 @@ export class DebugView extends Component {
           <div class="debug-connect-actions">
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="bootlog" title="Read this boot's log (BOOTLOG?)" aria-label="Read this boot's log">${icons.fileText(17)}</button>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="lastlog" title="Read previous boot's log (LASTLOG?)" aria-label="Read previous boot's log">${icons.history(17)}</button>
-            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="toggle-emergency" title="Enter emergency mode (EMERGENCY 1)" aria-label="Toggle emergency mode">${icons.siren(17)}</button>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-help" title="Show commands (HELP)" aria-label="Show commands">${icons.help(17)}</button>
             <span class="debug-action-sep" role="separator" aria-hidden="true"></span>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-wrap" aria-label="Wrap lines">${this.serialWrap ? icons.wrapText(17) : icons.wrapTextOff(17)}</button>
@@ -3955,15 +3949,6 @@ export class DebugView extends Component {
     if (bootlogBtn) bootlogBtn.disabled = !on || busy;
     const lastlogBtn = host.querySelector<HTMLButtonElement>('[data-action="lastlog"]');
     if (lastlogBtn) lastlogBtn.disabled = !on || busy;
-    const emgBtn = host.querySelector<HTMLButtonElement>('[data-action="toggle-emergency"]');
-    if (emgBtn) {
-      emgBtn.disabled = !on || busy;
-      emgBtn.classList.toggle("is-emergency-active", Boolean(this.status?.emergencyMode));
-      emgBtn.title = this.status?.emergencyMode
-        ? "Exit emergency mode (EMERGENCY 0)"
-        : "Enter emergency mode (EMERGENCY 1)";
-      emgBtn.setAttribute("aria-label", this.status?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode");
-    }
     const helpBtn = host.querySelector<HTMLButtonElement>('[data-action="serial-help"]');
     if (helpBtn) helpBtn.disabled = busy;
 
