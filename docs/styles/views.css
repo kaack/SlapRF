@@ -5035,6 +5035,9 @@ body.is-gate-dragging * {
     gap: 6px;
     width: 100%;
   }
+  .debug-axis-pill[data-axis-pill] .debug-axis-pill-main {
+    min-width: 68px;
+  }
   .debug-hint-desktop {
     display: none;
   }
