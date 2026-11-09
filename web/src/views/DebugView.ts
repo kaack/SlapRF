@@ -3928,7 +3928,7 @@ export class DebugView extends Component {
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="lastlog" title="Read previous boot's log (LASTLOG?)" aria-label="Read previous boot's log">${icons.history(17)}</button>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="toggle-emergency" title="Enter emergency mode (EMERGENCY 1)" aria-label="Toggle emergency mode">${icons.siren(17)}</button>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-help" title="Show commands (HELP)" aria-label="Show commands">${icons.help(17)}</button>
-            <span class="debug-overlay-sep" role="separator" aria-hidden="true"></span>
+            <span class="debug-action-sep" role="separator" aria-hidden="true"></span>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-wrap" aria-label="Wrap lines">${this.serialWrap ? icons.wrapText(17) : icons.wrapTextOff(17)}</button>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-serial" title="Copy terminal output" aria-label="Copy terminal output">${icons.copy(17)}</button>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-clear" title="Clear terminal (CLEAR)" aria-label="Clear terminal">${icons.trash(17)}</button>

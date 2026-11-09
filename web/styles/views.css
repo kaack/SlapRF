@@ -4273,9 +4273,17 @@ body.is-gate-dragging * {
   z-index: 1;
   flex-wrap: nowrap;
   flex-shrink: 0;
+  gap: 6px;
   padding-left: 8px;
   background: var(--surface);
   box-shadow: -10px 0 8px -2px var(--surface);
+}
+.debug-action-sep {
+  width: 1px;
+  height: 20px;
+  margin: 0 8px;
+  background: var(--border-strong);
+  flex-shrink: 0;
 }
 .debug-bars {
   display: flex;
