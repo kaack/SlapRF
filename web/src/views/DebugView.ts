@@ -3,10 +3,27 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { FIRMWARE_PROFILES, TimerReadout } from "../services/esp_flasher";
 import { BootLog, LiveSample, ScanResult, TimerConsole, TimerStatus } from "../services/timer_console";
+import {
+  buildFileStamp,
+  CHANNEL_COLORS,
+  DBM_MAX,
+  DBM_MIN,
+  downloadCanvasPng,
+  downloadTextFile,
+  drawHealthSparklines,
+  drawSignalOverTimeCanvas,
+  drawSpectrumCanvas,
+  drawWaterfallCanvas,
+  exportScanHistoryCsv,
+  exportSignalCsv,
+  HealthHistory,
+  PilotThresholdInfo,
+  RACEBAND,
+  racebandName,
+  SignalRingBuffer,
+  SpectrumAccumulator,
+} from "./debug/charts";
 
-const RACEBAND = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
-const DBM_MIN = -100;
-const DBM_MAX = -30;
 const LOG_LINES = 400;
 const UNPROVISIONED_FP = "00000001";
 const BAD_RESETS = ["panic", "interrupt-watchdog", "task-watchdog", "watchdog", "brownout"];
@@ -41,8 +58,9 @@ interface DebugTimerInfo {
 
 /**
  * Debug page: connect a timer over USB (WebSerial) and see what it sees. A one-click self-test,
- * status, live 5.8 GHz readings per channel (with temporary channel and receiver controls), a
- * spectrum scan across 5180-5917 MHz, restart / boot-log capture, and the timer's own log.
+ * status + 5-min health sparklines, live 5.8 GHz readings per channel, signal-over-time 50 Hz
+ * recorder with per-channel noise statistics, canvas spectrum scan + scrolling waterfall with
+ * 5 GHz Wi-Fi UNII / Raceband overlays, restart / boot-log capture, and the timer's own log.
  * Firmware side: firmware/components/slaprf_radio/slaprf_diag.c. Spec: docs/DEBUG_PAGE.md.
  */
 export class DebugView extends Component {
@@ -51,13 +69,13 @@ export class DebugView extends Component {
   private live: LiveSample | null = null;
   private liveCount = 0;
   private liveOn = false;
+  /** 1 = ~10 Hz bar stream; 2 = every-sweep (50 Hz) when the Signal-over-time card is visible. */
+  private liveMode: 1 | 2 = 1;
+  private signalCardVisible = true;
   private logOn = false;
-  private scan: ScanResult | null = null;
   private scanning = false;
   /** Continuous scan (SCAN LIVE) running: the sweep slot scans the band, lap timing pauses. */
   private scanLive = false;
-  /** Max-hold trace across continuous-scan passes (catches short bursts). */
-  private maxHold: number[] | null = null;
   private scanToggleAt = 0;
   private logLines: string[] = [];
   private error: string | null = null;
@@ -72,6 +90,36 @@ export class DebugView extends Component {
   private bootLog: BootLog | null = null;
   private progress = "";
   private channelsDirty = false;
+
+  // Chart buffers & state (§5)
+  private readonly signalRing = new SignalRingBuffer();
+  private readonly spectrumAcc = new SpectrumAccumulator();
+  private readonly healthHistory = new HealthHistory();
+  private pilots: PilotThresholdInfo[] = [];
+  private hasServer = false;
+
+  private signalWindowSec: 10 | 30 | 120 = 30;
+  private signalFrozen = false;
+  private signalEnabledCh: boolean[] = [true, true, true, true, true, true, true, true];
+  private signalShowFloor = true;
+  private signalShowHitLine = true;
+  private signalShowThresholds = true;
+  private signalHover: { x: number; y: number } | null = null;
+
+  private scanShowMaxHold = true;
+  private scanShowAvg = true;
+  private scanShowWifi = true;
+  private scanHover: { x: number; y: number } | null = null;
+  private waterfallHover: { x: number; y: number } | null = null;
+
+  private dirtySignal = true;
+  private dirtyNoiseTable = true;
+  private dirtySpectrum = true;
+  private dirtyWaterfall = true;
+  private dirtyHealth = true;
+  private lastNoiseTableRenderAt = 0;
+  private rafId = 0;
+  private observer: IntersectionObserver | null = null;
 
   constructor(el: HTMLElement) {
     super(el);
@@ -90,26 +138,33 @@ export class DebugView extends Component {
         if (freqsChanged) {
           this.renderLive();
           if (!this.channelsDirty) this.renderChannels();
+          this.renderSignalControls();
+          this.dirtySignal = true;
+          this.dirtyNoiseTable = true;
         }
+        void this.pollServerHealth(s);
       },
       onLive: (s) => {
         this.live = s;
         this.liveCount++;
+        this.signalRing.push(s, this.status?.sweepHz ?? 50);
         this.updateLive();
+        if (!this.signalFrozen) {
+          this.dirtySignal = true;
+          this.dirtyNoiseTable = true;
+        }
       },
       onScan: (s) => {
-        if (s.live) {
-          if (!this.scanLive) return; // Stray pass after SCAN STOP
-          const sameRange = this.scan?.live && this.scan.start === s.start && this.scan.step === s.step && this.scan.dbm.length === s.dbm.length;
-          this.maxHold = sameRange && this.maxHold ? this.maxHold.map((v, i) => Math.max(v, s.dbm[i])) : [...s.dbm];
-          this.scan = s;
-          this.renderScanChart();
-          return;
+        if (s.live && !this.scanLive) return; // Stray pass after SCAN STOP
+        this.spectrumAcc.pushScan(s);
+        if (!s.live) {
+          this.scanning = false;
+          this.renderScan();
+        } else {
+          this.updateScanMeta();
         }
-        this.scan = s;
-        this.maxHold = null;
-        this.scanning = false;
-        this.renderScan();
+        this.dirtySpectrum = true;
+        this.dirtyWaterfall = true;
       },
       onLog: (line) => this.appendLog(line),
       onConfig: (c) =>
@@ -149,15 +204,20 @@ export class DebugView extends Component {
         </section>
         <section class="settings-section">
           <div class="settings-intro">
-            <h2>Status</h2>
-            <p>Identity, chip, uptime, why it last restarted, memory, sweep timing, Wi-Fi and the 5.8 GHz receiver's boot check. Refreshes every 2 seconds.</p>
+            <h2>Status &amp; health</h2>
+            <p>Identity, chip, uptime, why it last restarted, memory, sweep timing, Wi-Fi and the 5.8 GHz receiver's boot check. Refreshes every 2 seconds and plots the last 5 minutes.</p>
           </div>
-          <div class="card" data-slot="status"></div>
+          <div class="card">
+            <div data-slot="status"></div>
+            <div class="debug-health-strip" data-slot="health">
+              <canvas class="debug-canvas debug-health-canvas" data-health-canvas></canvas>
+            </div>
+          </div>
         </section>
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Live 5.8 GHz readings</h2>
-            <p>What the timer measures on each of its 8 pilot channels, about 10 times a second. The tick marks the peak since the previous update; hits count readings more than 10 dB above that channel's typical noise (Wi-Fi bursts show up here too; they're far below a lap's enter threshold). Power on a VTX to see its channel rise.</p>
+            <p>What the timer measures on each of its 8 pilot channels. The tick marks the peak since the previous update; hits count readings more than 10 dB above that channel's typical noise (Wi-Fi bursts show up here too; they're far below a lap's enter threshold). Power on a VTX to see its channel rise.</p>
             <p>Try other channels without reflashing, or switch the receiver off to tell whether a problem comes from the 5.8 GHz side. Both reset when the timer restarts.</p>
           </div>
           <div class="card">
@@ -166,11 +226,25 @@ export class DebugView extends Component {
             <div data-slot="channels"></div>
           </div>
         </section>
+        <section class="settings-section" data-signal-section>
+          <div class="settings-intro">
+            <h2>Signal over time &amp; channel noise</h2>
+            <p>Streams every sweep (50 Hz) while visible so you can see crossing shapes, short 5 GHz Wi-Fi bursts, each channel's typical noise floor and pilot enter thresholds.</p>
+            <p>The table below computes mean, spread, max, floor, hits/s and how often noise reaches a pilot's enter threshold ("would trigger" — anything above 0% with no drone flying is a false-lap risk).</p>
+          </div>
+          <div class="card">
+            <div data-slot="signal-controls"></div>
+            <div class="debug-canvas-wrap">
+              <canvas class="debug-canvas debug-signal-canvas" data-signal-canvas></canvas>
+            </div>
+            <div data-slot="noise-table"></div>
+          </div>
+        </section>
         <section class="settings-section">
           <div class="settings-intro">
-            <h2>Spectrum scan</h2>
-            <p>Sweeps the receiver across the band. Use it to find a VTX on an unexpected frequency, or to check a venue for 5 GHz Wi-Fi before racing.</p>
-            <p><strong>Scan</strong> takes one snapshot (timing pauses for a fraction of a second). <strong>Live</strong> keeps scanning several times a second, with a max-hold trace to catch short bursts; lap timing pauses while it runs, the Wi-Fi link stays up.</p>
+            <h2>Spectrum scan &amp; waterfall</h2>
+            <p>Sweeps the receiver across 5180–5917 MHz. Use it to find a VTX on an unexpected frequency, or to check a venue for 5 GHz Wi-Fi before racing. Note that Raceband <strong>R3–R6 overlap 5 GHz Wi-Fi UNII-3</strong> (channels 149–165, 5735–5835 MHz).</p>
+            <p><strong>Scan</strong> takes one snapshot and appends a row to the waterfall. <strong>Live</strong> keeps scanning ~3 times a second with live, average and max-hold traces; lap timing pauses while it runs, the Wi-Fi link stays up.</p>
           </div>
           <div class="card" data-slot="scan"></div>
         </section>
@@ -198,13 +272,186 @@ export class DebugView extends Component {
     this.listen(el, "input", (e) => {
       if ((e.target as HTMLElement).matches("[data-chan]")) this.channelsDirty = true;
     });
+
+    this.bindCanvasHover();
+    this.setupVisibilityObserver();
+    void this.fetchPilotThresholds();
+
+    const onResize = () => {
+      this.dirtySignal = true;
+      this.dirtySpectrum = true;
+      this.dirtyWaterfall = true;
+      this.dirtyHealth = true;
+    };
+    window.addEventListener("resize", onResize);
+
+    const tick = () => {
+      this.renderFrame();
+      this.rafId = window.requestAnimationFrame(tick);
+    };
+    this.rafId = window.requestAnimationFrame(tick);
+
     this.onDispose(() => {
+      window.cancelAnimationFrame(this.rafId);
+      window.removeEventListener("resize", onResize);
+      this.observer?.disconnect();
       window.clearInterval(this.statusTimer);
       // Leaving the page must not leave the timer scanning instead of timing.
       const stop = this.scanLive ? this.console.send("SCAN STOP").catch(() => undefined) : Promise.resolve();
       void stop.then(() => this.console.disconnect());
     });
     this.renderAll();
+  }
+
+  // ---------------------------------------------------------------- observer, hover & animation loop
+
+  private setupVisibilityObserver(): void {
+    const sec = this.el.querySelector<HTMLElement>("[data-signal-section]");
+    if (!sec || typeof IntersectionObserver === "undefined") return;
+    this.observer = new IntersectionObserver(
+      (entries) => {
+        const vis = entries.some((e) => e.isIntersecting);
+        if (vis !== this.signalCardVisible) {
+          this.signalCardVisible = vis;
+          void this.syncLiveMode();
+        }
+      },
+      { threshold: 0.05 }
+    );
+    this.observer.observe(sec);
+  }
+
+  /** Switch between LIVE 2 (50 Hz, while Signal over time is visible) and LIVE 1 (~10 Hz, when scrolled away). */
+  private async syncLiveMode(): Promise<void> {
+    const desired: 1 | 2 = this.signalCardVisible ? 2 : 1;
+    this.liveMode = desired;
+    if (this.console.connected && this.liveOn && !this.busy) {
+      await this.console.send(`LIVE ${desired}`).catch(() => undefined);
+      this.renderSignalControls();
+    }
+  }
+
+  private bindCanvasHover(): void {
+    this.listen(this.el, "mousemove", (e) => {
+      const target = e.target as HTMLElement;
+      if (target.matches("[data-signal-canvas]")) {
+        const r = target.getBoundingClientRect();
+        this.signalHover = { x: e.clientX - r.left, y: e.clientY - r.top };
+        this.dirtySignal = true;
+      } else if (target.matches("[data-spectrum-canvas]")) {
+        const r = target.getBoundingClientRect();
+        this.scanHover = { x: e.clientX - r.left, y: e.clientY - r.top };
+        this.dirtySpectrum = true;
+      } else if (target.matches("[data-waterfall-canvas]")) {
+        const r = target.getBoundingClientRect();
+        this.waterfallHover = { x: e.clientX - r.left, y: e.clientY - r.top };
+        this.dirtyWaterfall = true;
+      }
+    });
+    this.listen(this.el, "mouseout", (e) => {
+      const target = e.target as HTMLElement;
+      if (target.matches("[data-signal-canvas]")) {
+        this.signalHover = null;
+        this.dirtySignal = true;
+      } else if (target.matches("[data-spectrum-canvas]")) {
+        this.scanHover = null;
+        this.dirtySpectrum = true;
+      } else if (target.matches("[data-waterfall-canvas]")) {
+        this.waterfallHover = null;
+        this.dirtyWaterfall = true;
+      }
+    });
+  }
+
+  private renderFrame(): void {
+    if (this.dirtySignal) {
+      const c = this.el.querySelector<HTMLCanvasElement>("[data-signal-canvas]");
+      if (c) {
+        drawSignalOverTimeCanvas(c, this.signalRing, {
+          windowSec: this.signalWindowSec,
+          sweepHz: this.status?.sweepHz ?? 50,
+          freqs: this.status?.freqs ?? RACEBAND,
+          enabledChannels: this.signalEnabledCh,
+          showFloor: this.signalShowFloor,
+          showHitLine: this.signalShowHitLine,
+          showThresholds: this.signalShowThresholds,
+          pilots: this.pilots,
+          hover: this.signalHover,
+        });
+        this.dirtySignal = false;
+      }
+    }
+
+    const now = performance.now();
+    if (this.dirtyNoiseTable && now - this.lastNoiseTableRenderAt >= 250) {
+      this.renderNoiseTable();
+      this.dirtyNoiseTable = false;
+      this.lastNoiseTableRenderAt = now;
+    }
+
+    if (this.dirtySpectrum) {
+      const c = this.el.querySelector<HTMLCanvasElement>("[data-spectrum-canvas]");
+      if (c) {
+        drawSpectrumCanvas(c, this.spectrumAcc, {
+          showMaxHold: this.scanShowMaxHold,
+          showAverage: this.scanShowAvg,
+          showWifiOverlay: this.scanShowWifi,
+          hover: this.scanHover,
+        });
+        this.renderSpectrumPeaks();
+        this.dirtySpectrum = false;
+      }
+    }
+
+    if (this.dirtyWaterfall) {
+      const c = this.el.querySelector<HTMLCanvasElement>("[data-waterfall-canvas]");
+      if (c) {
+        drawWaterfallCanvas(c, this.spectrumAcc, this.scanShowWifi, this.waterfallHover);
+        this.dirtyWaterfall = false;
+      }
+    }
+
+    if (this.dirtyHealth) {
+      const c = this.el.querySelector<HTMLCanvasElement>("[data-health-canvas]");
+      if (c) {
+        drawHealthSparklines(c, this.healthHistory, this.hasServer);
+        this.dirtyHealth = false;
+      }
+    }
+  }
+
+  private async fetchPilotThresholds(): Promise<void> {
+    try {
+      const res = await fetch("/api/state", { cache: "no-store" });
+      if (!res.ok || !(res.headers.get("content-type") ?? "").includes("json")) return;
+      const data = (await res.json()) as { pilots?: PilotThresholdInfo[] };
+      if (Array.isArray(data.pilots)) {
+        this.pilots = data.pilots;
+        this.hasServer = true;
+        this.dirtySignal = true;
+        this.dirtyNoiseTable = true;
+        this.dirtyHealth = true;
+      }
+    } catch {
+      // Static GitHub Pages or offline: skip silently (§5.1)
+    }
+  }
+
+  private async pollServerHealth(s: TimerStatus): Promise<void> {
+    let framesRx: number | null = null;
+    try {
+      const res = await fetch(`/api/debug/timer?fp=${encodeURIComponent(s.fp)}`, { cache: "no-store" });
+      if (res.ok && (res.headers.get("content-type") ?? "").includes("json")) {
+        const info = (await res.json()) as DebugTimerInfo;
+        this.hasServer = true;
+        if (info.found) framesRx = info.framesRx;
+      }
+    } catch {
+      // No local server
+    }
+    void this.fetchPilotThresholds();
+    this.healthHistory.record(s, this.liveCount, this.signalRing.droppedLines, framesRx);
+    this.dirtyHealth = true;
   }
 
   // ---------------------------------------------------------------- actions
@@ -217,6 +464,8 @@ export class DebugView extends Component {
       switch (t.dataset.action) {
         case "connect":
           await this.console.connect(this.showAllPorts);
+          this.signalRing.clear();
+          this.healthHistory.clear();
           this.renderAll();
           await this.startSession();
           break;
@@ -228,8 +477,9 @@ export class DebugView extends Component {
           break;
         case "live":
           this.liveOn = !this.liveOn;
-          await this.console.send(this.liveOn ? "LIVE 1" : "LIVE 0");
+          await this.console.send(this.liveOn ? `LIVE ${this.liveMode}` : "LIVE 0");
           this.renderLiveHead();
+          this.renderSignalControls();
           break;
         case "rf": {
           const on = !(this.status?.rf.enabled ?? true);
@@ -259,6 +509,69 @@ export class DebugView extends Component {
           await this.refreshStatus();
           this.renderChannels();
           break;
+        case "signal-window": {
+          const w = Number(t.dataset.win) as 10 | 30 | 120;
+          if (w === 10 || w === 30 || w === 120) {
+            this.signalWindowSec = w;
+            this.renderSignalControls();
+            this.dirtySignal = true;
+            this.dirtyNoiseTable = true;
+          }
+          break;
+        }
+        case "signal-freeze":
+          this.signalFrozen = !this.signalFrozen;
+          this.renderSignalControls();
+          this.dirtySignal = true;
+          this.dirtyNoiseTable = true;
+          break;
+        case "signal-clear":
+          this.signalRing.clear();
+          this.dirtySignal = true;
+          this.dirtyNoiseTable = true;
+          break;
+        case "signal-ch": {
+          const idx = Number(t.dataset.ch);
+          if (idx >= 0 && idx < 8) {
+            this.signalEnabledCh[idx] = !this.signalEnabledCh[idx];
+            this.renderSignalControls();
+            this.dirtySignal = true;
+          }
+          break;
+        }
+        case "signal-ch-all": {
+          const allOn = this.signalEnabledCh.every(Boolean);
+          this.signalEnabledCh = this.signalEnabledCh.map(() => !allOn);
+          this.renderSignalControls();
+          this.dirtySignal = true;
+          break;
+        }
+        case "signal-toggle-floor":
+          this.signalShowFloor = !this.signalShowFloor;
+          this.renderSignalControls();
+          this.dirtySignal = true;
+          break;
+        case "signal-toggle-hit":
+          this.signalShowHitLine = !this.signalShowHitLine;
+          this.renderSignalControls();
+          this.dirtySignal = true;
+          break;
+        case "signal-toggle-thr":
+          this.signalShowThresholds = !this.signalShowThresholds;
+          this.renderSignalControls();
+          this.dirtySignal = true;
+          break;
+        case "export-signal-csv":
+          downloadTextFile(
+            buildFileStamp(this.status, "signal", "csv"),
+            exportSignalCsv(this.signalRing, this.status?.sweepHz ?? 50)
+          );
+          break;
+        case "export-signal-png": {
+          const c = this.el.querySelector<HTMLCanvasElement>("[data-signal-canvas]");
+          if (c) downloadCanvasPng(c, buildFileStamp(this.status, "signal", "png"));
+          break;
+        }
         case "scan": {
           const start = this.num("[data-scan-start]", 5180);
           const stop = this.num("[data-scan-stop]", 5917);
@@ -281,7 +594,7 @@ export class DebugView extends Component {
             const start = this.num("[data-scan-start]", 5180);
             const stop = this.num("[data-scan-stop]", 5917);
             const step = this.num("[data-scan-step]", 5);
-            this.maxHold = null;
+            this.spectrumAcc.clearHoldAndAvg();
             await this.console.request(`SCAN LIVE ${start} ${stop} ${step}`, "ok", 2000);
             this.scanLive = true;
           }
@@ -290,9 +603,34 @@ export class DebugView extends Component {
           break;
         }
         case "clear-hold":
-          this.maxHold = this.scan ? [...this.scan.dbm] : null;
-          this.renderScanChart();
+          this.spectrumAcc.clearHoldAndAvg();
+          this.dirtySpectrum = true;
           break;
+        case "scan-toggle-hold":
+          this.scanShowMaxHold = !this.scanShowMaxHold;
+          this.renderScan();
+          break;
+        case "scan-toggle-avg":
+          this.scanShowAvg = !this.scanShowAvg;
+          this.renderScan();
+          break;
+        case "scan-toggle-wifi":
+          this.scanShowWifi = !this.scanShowWifi;
+          this.renderScan();
+          break;
+        case "export-scan-csv":
+          downloadTextFile(buildFileStamp(this.status, "scans", "csv"), exportScanHistoryCsv(this.spectrumAcc));
+          break;
+        case "export-spectrum-png": {
+          const c = this.el.querySelector<HTMLCanvasElement>("[data-spectrum-canvas]");
+          if (c) downloadCanvasPng(c, buildFileStamp(this.status, "spectrum", "png"));
+          break;
+        }
+        case "export-waterfall-png": {
+          const c = this.el.querySelector<HTMLCanvasElement>("[data-waterfall-canvas]");
+          if (c) downloadCanvasPng(c, buildFileStamp(this.status, "waterfall", "png"));
+          break;
+        }
         case "log":
           this.logOn = !this.logOn;
           await this.console.send(this.logOn ? "LOG 1" : "LOG 0");
@@ -344,9 +682,11 @@ export class DebugView extends Component {
     await this.console.send("STATUS?");
     this.statusTimer = window.setInterval(() => void this.console.send("STATUS?").catch(() => undefined), 2000);
     this.liveOn = true;
-    await this.console.send("LIVE 1");
+    this.liveMode = this.signalCardVisible ? 2 : 1;
+    await this.console.send(`LIVE ${this.liveMode}`);
     if (this.logOn) await this.console.send("LOG 1");
     this.renderLiveHead();
+    this.renderSignalControls();
   }
 
   private async refreshStatus(): Promise<TimerStatus> {
@@ -499,12 +839,12 @@ export class DebugView extends Component {
     // 5. Live stream
     this.setProgress("Measuring the live stream…");
     const wasLive = this.liveOn;
-    if (!wasLive) await this.console.send("LIVE 1");
+    await this.console.send("LIVE 1");
     await sleep(300);
     const c0 = this.liveCount;
     await sleep(2000);
     const rate = (this.liveCount - c0) / 2;
-    if (!wasLive) await this.console.send("LIVE 0");
+    await this.console.send(wasLive ? `LIVE ${this.liveMode}` : "LIVE 0");
     add("Live readings", rate >= 6 ? "pass" : rate > 0 ? "warn" : "fail", `${rate.toFixed(1)} updates/s (expected about 10)`);
 
     // 6. Spectrum scan
@@ -620,9 +960,15 @@ export class DebugView extends Component {
     this.renderLiveHead();
     this.renderLive();
     this.renderChannels();
+    this.renderSignalControls();
+    this.renderNoiseTable();
     this.renderScan();
     this.renderRestart();
     this.renderLog();
+    this.dirtySignal = true;
+    this.dirtySpectrum = true;
+    this.dirtyWaterfall = true;
+    this.dirtyHealth = true;
   }
 
   private renderBusy(): void {
@@ -801,7 +1147,7 @@ export class DebugView extends Component {
           : this.status && !this.status.rf.enabled
             ? "Receiver off"
             : l
-              ? `sweep ${(l.us / 1000).toFixed(2)} ms`
+              ? `sweep ${(l.us / 1000).toFixed(2)} ms · ${this.liveMode === 2 ? "50 Hz (every sweep)" : "10 Hz"}`
               : "";
     }
     const pct = (x: number) => Math.max(0, Math.min(100, ((x - DBM_MIN) / (DBM_MAX - DBM_MIN)) * 100));
@@ -845,6 +1191,103 @@ export class DebugView extends Component {
       </div>`;
   }
 
+  private renderSignalControls(): void {
+    const freqs = this.status?.freqs ?? RACEBAND;
+    const hasPts = this.signalRing.points.length > 0;
+    this.slot("signal-controls").innerHTML = `
+      <div class="debug-card-head">
+        <div class="debug-chip-group">
+          ${([10, 30, 120] as const)
+            .map(
+              (w) =>
+                `<button type="button" class="btn btn-sm ${this.signalWindowSec === w ? "btn-armed" : "btn-ghost"}" data-action="signal-window" data-win="${w}">${w === 120 ? "2 min" : `${w} s`}</button>`
+            )
+            .join("")}
+          <button type="button" class="btn btn-sm ${this.signalShowFloor ? "btn-armed" : "btn-ghost"}" data-action="signal-toggle-floor" title="Show per-channel typical noise floor (dotted)">Floor</button>
+          <button type="button" class="btn btn-sm ${this.signalShowHitLine ? "btn-armed" : "btn-ghost"}" data-action="signal-toggle-hit" title="Show floor + 10 dB hit line (dashed)">Floor +10 dB</button>
+          <button type="button" class="btn btn-sm ${this.signalShowThresholds ? "btn-armed" : "btn-ghost"}" data-action="signal-toggle-thr" title="Show pilot enter thresholds">Enter thr</button>
+        </div>
+        <div class="debug-connect-actions">
+          <button type="button" class="btn btn-sm ${this.signalFrozen ? "btn-danger-active" : "btn-ghost"}" data-action="signal-freeze">
+            ${this.signalFrozen ? icons.play(14) : icons.pause(14)}<span>${this.signalFrozen ? "Unfreeze" : "Freeze"}</span>
+          </button>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts ? "" : "disabled"}>CSV</button>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-png" ${hasPts ? "" : "disabled"}>PNG</button>
+        </div>
+      </div>
+      <div class="debug-channel-chips">
+        ${freqs
+          .map((f, i) => {
+            const rb = racebandName(f) || `Ch${i + 1}`;
+            const on = this.signalEnabledCh[i];
+            const col = CHANNEL_COLORS[i];
+            return `<button type="button" class="debug-ch-chip mono ${on ? "is-on" : ""}" data-action="signal-ch" data-ch="${i}" style="--ch-color:${col}">
+              <span class="debug-ch-dot"></span><strong>${rb}</strong> ${f}
+            </button>`;
+          })
+          .join("")}
+        <button type="button" class="btn btn-sm btn-ghost" data-action="signal-ch-all">${this.signalEnabledCh.every(Boolean) ? "None" : "All"}</button>
+      </div>`;
+  }
+
+  private renderNoiseTable(): void {
+    const freqs = this.status?.freqs ?? RACEBAND;
+    const sweepHz = this.status?.sweepHz ?? 50;
+    const summary = this.signalRing.computeStats(this.signalWindowSec, freqs, this.pilots, sweepHz);
+    const anyTrigger = summary.rows.some((r) => r.pctWouldTrigger > 0);
+    this.slot("noise-table").innerHTML = `
+      <div class="debug-noise-head">
+        <span class="note">
+          Window: ${summary.durationSec.toFixed(1)} s (${summary.totalSamples} sweeps, ${summary.rateHz.toFixed(1)}/s,
+          <span class="${summary.droppedLines > 0 ? "debug-tone-warn" : ""}">${summary.droppedLines} dropped</span>)
+        </span>
+        ${
+          anyTrigger
+            ? `<span class="badge tone-bad">Signal reached enter threshold — false-lap risk if no VTX is on</span>`
+            : summary.totalSamples > 10
+              ? `<span class="badge tone-good">0% above enter threshold</span>`
+              : ""
+        }
+      </div>
+      <div class="debug-table-scroll">
+        <table class="debug-runs debug-noise-table">
+          <thead>
+            <tr>
+              <th>Channel</th>
+              <th>Pilot / Enter</th>
+              <th>Mean</th>
+              <th>Spread (SD)</th>
+              <th>Max</th>
+              <th>Floor</th>
+              <th>Hits/s (&gt;fl+10)</th>
+              <th>&gt;fl+10 %</th>
+              <th>Would trigger</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${summary.rows
+              .map((r) => {
+                const col = CHANNEL_COLORS[r.index];
+                const trigRisk = r.pctWouldTrigger > 0;
+                return `<tr class="${trigRisk ? "is-risk" : ""}">
+                  <td class="mono"><span class="debug-ch-inline" style="background:${col}"></span>${r.bandLabel ? `<strong>${r.bandLabel}</strong> ` : ""}${r.freqMHz} MHz</td>
+                  <td class="mono note">${r.pilotCallsign ? `${esc(r.pilotCallsign)} (${r.enterThreshold})` : `${r.enterThreshold} dBm`}</td>
+                  <td class="mono">${r.mean !== null ? `${r.mean.toFixed(1)} dBm` : "—"}</td>
+                  <td class="mono ${r.sd !== null && r.sd > 3 ? "debug-tone-warn" : ""}">${r.sd !== null ? `${r.sd.toFixed(1)} dB` : "—"}</td>
+                  <td class="mono">${r.max !== null ? `${r.max} dBm` : "—"}</td>
+                  <td class="mono">${r.floor !== null ? `${r.floor} dBm` : "—"}</td>
+                  <td class="mono ${r.hitsPerSec >= 1 ? "debug-tone-warn" : ""}">${r.samples ? r.hitsPerSec.toFixed(1) : "—"}</td>
+                  <td class="mono">${r.samples ? `${r.pctAboveFloor10.toFixed(1)}%` : "—"}</td>
+                  <td class="mono ${trigRisk ? "tone-bad" : "note"}">${r.samples ? `${r.pctWouldTrigger.toFixed(1)}% (${r.wouldTriggerPerSec.toFixed(1)}/s)` : "—"}</td>
+                </tr>`;
+              })
+              .join("")}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
   private renderScan(): void {
     const on = this.console.connected;
     const prev = {
@@ -853,6 +1296,7 @@ export class DebugView extends Component {
       step: this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value ?? "5",
     };
     const dis = this.scanLive ? "disabled" : "";
+    const hasScan = this.spectrumAcc.latest !== null;
     this.slot("scan").innerHTML = `
       <div class="debug-card-head">
         <div class="debug-scan-inputs">
@@ -860,9 +1304,15 @@ export class DebugView extends Component {
           <label>to <input class="input mono" type="number" data-scan-stop value="${esc(prev.stop)}" min="5180" max="5917" ${dis}/></label>
           <label>step <input class="input mono" type="number" data-scan-step value="${esc(prev.step)}" min="1" max="50" ${dis}/></label>
           <span class="note">MHz</span>
+          <button type="button" class="btn btn-sm ${this.scanShowMaxHold ? "btn-armed" : "btn-ghost"}" data-action="scan-toggle-hold">Max hold</button>
+          <button type="button" class="btn btn-sm ${this.scanShowAvg ? "btn-armed" : "btn-ghost"}" data-action="scan-toggle-avg">Average</button>
+          <button type="button" class="btn btn-sm ${this.scanShowWifi ? "btn-armed" : "btn-ghost"}" data-action="scan-toggle-wifi">Wi-Fi bands</button>
         </div>
         <div class="debug-connect-actions">
-          ${this.scanLive ? `<button type="button" class="btn btn-sm btn-ghost" data-action="clear-hold">Clear max hold</button>` : ""}
+          ${hasScan ? `<button type="button" class="btn btn-sm btn-ghost" data-action="clear-hold">Reset hold/avg</button>` : ""}
+          <button type="button" class="btn btn-sm btn-ghost" data-action="export-scan-csv" ${hasScan ? "" : "disabled"}>CSV</button>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-png" ${hasScan ? "" : "disabled"}>Spectrum PNG</button>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="export-waterfall-png" ${hasScan ? "" : "disabled"}>Waterfall PNG</button>
           <button type="button" class="btn btn-sm btn-ghost" data-action="scan" ${on && !this.scanning && !this.scanLive ? "" : "disabled"}>
             ${icons.signal(14)}<span>${this.scanning ? "Scanning…" : "Scan"}</span>
           </button>
@@ -871,22 +1321,65 @@ export class DebugView extends Component {
           </button>
         </div>
       </div>
-      <div data-scan-chart></div>`;
-    this.renderScanChart();
+      <div class="debug-canvas-wrap">
+        <canvas class="debug-canvas debug-spectrum-canvas" data-spectrum-canvas></canvas>
+      </div>
+      <div data-scan-meta></div>
+      <div data-scan-peaks></div>
+      <div class="debug-waterfall-section">
+        <div class="debug-waterfall-head">
+          <strong>Waterfall spectrogram (frequency × time)</strong>
+          <div class="debug-waterfall-legend mono">
+            <span>-100 dBm</span>
+            <span class="debug-wf-gradient"></span>
+            <span>-40 dBm</span>
+          </div>
+        </div>
+        <div class="debug-canvas-wrap">
+          <canvas class="debug-canvas debug-waterfall-canvas" data-waterfall-canvas></canvas>
+        </div>
+      </div>`;
+    this.updateScanMeta();
+    this.renderSpectrumPeaks();
+    this.dirtySpectrum = true;
+    this.dirtyWaterfall = true;
   }
 
-  /** Redraw only the chart (continuous-scan passes arrive several times a second). */
-  private renderScanChart(): void {
-    const host = this.el.querySelector<HTMLElement>("[data-scan-chart]");
-    if (!host) return;
-    const on = this.console.connected;
-    const s = this.scan;
-    const note = this.scanLive
-      ? `<p class="note debug-scan-live-note"><span class="debug-tone-warn">Live scan: lap timing is paused.</span> ${s?.live && s.passMs ? `${(1000 / s.passMs).toFixed(1)} passes/s · ` : ""}faint line = max hold</p>`
-      : "";
-    host.innerHTML = s
-      ? `${spectrumSvg(s, this.scanLive ? this.maxHold : null)}${note}`
-      : `<p class="note">${this.scanLive ? "Waiting for the first pass…" : on ? "Run a scan to see the band." : "Connect a timer to scan."}</p>`;
+  private updateScanMeta(): void {
+    const el = this.el.querySelector<HTMLElement>("[data-scan-meta]");
+    if (!el) return;
+    const s = this.spectrumAcc.latest;
+    if (this.scanLive) {
+      el.innerHTML = `<p class="note debug-scan-live-note"><span class="debug-tone-warn">Live scan: lap timing is paused.</span> ${
+        s?.live && s.passMs ? `${(1000 / s.passMs).toFixed(1)} passes/s (${this.spectrumAcc.avgCount} passes) · ` : ""
+      }volt = live · cyan = average · faint volt = max hold</p>`;
+    } else if (s) {
+      el.innerHTML = `<p class="note debug-scan-live-note">${s.dbm.length} points (${s.start}–${s.start + s.step * (s.dbm.length - 1)} MHz, step ${s.step} MHz) · ${this.spectrumAcc.history.length} pass${this.spectrumAcc.history.length === 1 ? "" : "es"} in waterfall</p>`;
+    } else {
+      el.innerHTML = "";
+    }
+  }
+
+  private renderSpectrumPeaks(): void {
+    const el = this.el.querySelector<HTMLElement>("[data-scan-peaks]");
+    if (!el) return;
+    const peaks = this.spectrumAcc.topPeaks(5);
+    if (!peaks.length) {
+      el.innerHTML = this.spectrumAcc.latest
+        ? `<p class="note debug-peaks-empty">No peaks ≥ 6 dB above the band median.</p>`
+        : "";
+      return;
+    }
+    el.innerHTML = `
+      <div class="debug-peaks">
+        <span class="note">Top peaks (≥ 6 dB above median):</span>
+        ${peaks
+          .map(
+            (p) =>
+              `<span class="badge mono"><strong>${p.freqMHz} MHz</strong> · ${p.dbm} dBm <span class="note">(${esc(p.bandHint)})</span></span>`
+          )
+          .join("")}
+      </div>`;
   }
 
   private bootLogHeader(l: BootLog): string {
@@ -976,44 +1469,4 @@ function fmtUptime(ms: number): string {
   const h = Math.floor(s / 3600);
   const m = Math.floor((s % 3600) / 60);
   return h ? `${h} h ${m} min` : m ? `${m} min ${s % 60} s` : `${s} s`;
-}
-
-function racebandName(f: number): string {
-  const i = RACEBAND.indexOf(f);
-  return i >= 0 ? `R${i + 1}` : "";
-}
-
-/** Line chart of a scan with Raceband channel markers, plus an optional max-hold trace. */
-function spectrumSvg(s: ScanResult, maxHold: number[] | null = null): string {
-  const W = 760;
-  const H = 220;
-  const L = 44;
-  const R = 10;
-  const T = 10;
-  const B = 28;
-  const stop = s.start + s.step * (s.dbm.length - 1);
-  const span = Math.max(1, stop - s.start);
-  const x = (f: number) => L + ((f - s.start) / span) * (W - L - R);
-  const y = (d: number) => T + (1 - (Math.max(DBM_MIN, Math.min(DBM_MAX, d)) - DBM_MIN) / (DBM_MAX - DBM_MIN)) * (H - T - B);
-  const pts = s.dbm.map((d, i) => `${x(s.start + i * s.step).toFixed(1)},${y(d).toFixed(1)}`).join(" ");
-  const yTicks = [-100, -90, -80, -70, -60, -50, -40, -30];
-  const xTicks: number[] = [];
-  for (let f = Math.ceil(s.start / 100) * 100; f <= stop; f += 100) xTicks.push(f);
-  const peak = s.dbm.reduce((best, d, i) => (d > s.dbm[best] ? i : best), 0);
-  return `
-    <svg class="debug-spectrum" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" role="img" aria-label="Spectrum scan">
-      ${yTicks.map((d) => `<line class="grid" x1="${L}" x2="${W - R}" y1="${y(d)}" y2="${y(d)}"/><text class="axis" x="${L - 6}" y="${y(d) + 3}" text-anchor="end">${d}</text>`).join("")}
-      ${xTicks.map((f) => `<text class="axis" x="${x(f)}" y="${H - 8}" text-anchor="middle">${f}</text>`).join("")}
-      ${RACEBAND.filter((f) => f >= s.start && f <= stop)
-        .map((f) => `<line class="band" x1="${x(f)}" x2="${x(f)}" y1="${T}" y2="${H - B}"/><text class="band-label" x="${x(f)}" y="${T + 10}" text-anchor="middle">R${RACEBAND.indexOf(f) + 1}</text>`)
-        .join("")}
-      ${
-        maxHold && maxHold.length === s.dbm.length
-          ? `<polyline class="hold" points="${maxHold.map((d, i) => `${x(s.start + i * s.step).toFixed(1)},${y(d).toFixed(1)}`).join(" ")}"/>`
-          : ""
-      }
-      <polyline class="trace" points="${pts}"/>
-      <circle class="peak" cx="${x(s.start + peak * s.step)}" cy="${y(s.dbm[peak])}" r="3.5"/>
-      <text class="peak-label" x="${Math.min(W - R - 4, x(s.start + peak * s.step) + 6)}" y="${Math.max(T + 22, y(s.dbm[peak]) - 6)}">${s.start + peak * s.step} MHz · ${s.dbm[peak]} dBm</text>
-    </svg>`;
 }

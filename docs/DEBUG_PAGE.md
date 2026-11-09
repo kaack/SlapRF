@@ -1,8 +1,10 @@
 # Debug page: design and hand-off spec
 
-Status (2026-11-08): **firmware console complete and verified on hardware; web page implemented
-(self-test, status, live bars, channel editor, receiver toggle, spectrum scan + live scan,
-restart & boot logs, live log). Next task: the charts in §5, web-only.**
+Status (2026-11-08): **firmware console complete and verified on hardware; web page and §5
+canvas charts implemented (`web/src/views/debug/charts.ts` + `DebugView.ts`: signal over time at
+50 Hz, per-channel noise table, upgraded canvas spectrum scan with average/max-hold/Wi-Fi UNII
+overlay & top-5 peak list, scrolling waterfall spectrogram, 5-min health sparklines, CSV/PNG
+export).**
 This is the brief for whoever continues. Read it top to bottom before changing code.
 
 ## 1. Goal
@@ -36,7 +38,8 @@ flowchart LR
 | Firmware | `firmware/components/slaprf_radio/include/slaprf_radio.h` | `slaprf_diag_*` hooks, `slaprf_rf58_info` |
 | Firmware | `firmware/tools/main_template.c` → `firmware/*/main/main.c` | Calls the hooks. **Edit the template, then regenerate** with `powershell -ExecutionPolicy Bypass -File firmware\tools\gen_main.ps1`; never hand-edit the four `main.c` |
 | Web | `web/src/services/timer_console.ts` | WebSerial open/read/write, frame demux, `request()` waiters, `restartAndReconnect()` |
-| Web | `web/src/views/DebugView.ts` | Page UI |
+| Web | `web/src/views/DebugView.ts` | Page UI & coordinator |
+| Web | `web/src/views/debug/charts.ts` | Canvas charts: signal over time, noise stats, spectrum scan, waterfall, health sparklines, CSV/PNG export |
 | Web | `web/src/core/router.ts`, `layout/AppShell.ts`, `core/icons.ts` | Route `debug`, view factory, `icons.bug` |
 | Web | `web/styles/views.css` (end of file, `.debug-*`) | Styles |
 | Server | `internal/api/debug_timer.go` | `GET /api/debug/timer?fp=XXXXXXXX` → `{found, puckId, label, online, lastSeenAt, msSinceSeen, framesRx, simulatorActive}` (always the real engine) |
