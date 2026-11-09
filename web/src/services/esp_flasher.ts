@@ -104,6 +104,7 @@ const SLIP_ESC_END = 0xdc;
 const SLIP_ESC_ESC = 0xdd;
 
 const FLASH_BLOCK_SIZE = 1024; // ESP32C5ROM.FLASH_WRITE_SIZE = 0x400 (1024 bytes)
+const ESP_IMAGE_MAGIC = 0xe9;
 
 /**
  * One firmware design. Each lives in its own directory (`firmware/<id>/main.c`) tuned for a track
