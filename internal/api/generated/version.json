@@ -1,5 +1,5 @@
 {
-  "release_tag": "(devel)",
-  "commit_hash": "f6a7362fd1451734cdabe5973300ac7f38107841",
+  "release_tag": "v0.1.5-0.20261109200142-f6a7362fd145+dirty",
+  "commit_hash": "85fec1070fbdc5a053a7f3ba4d4264c9d84051f4",
   "branch_name": "main"
 }

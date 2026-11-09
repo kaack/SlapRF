@@ -184,8 +184,7 @@ export class AboutView extends Component {
 
         <div class="about-body">
           <p class="about-thanks">
-            Special thanks to the <a href="https://www.expresslrs.org/" target="_blank" rel="noopener noreferrer">ExpressLRS</a> and FPV racing community members
-            who helped answer questions, test 5.8 GHz RSSI timing hardware, and troubleshoot issues during the development of this application.
+            <strong>Disclaimer:</strong> This software is developed using Agentic AI coding workflows and is provided "as is", without any express or implied guarantees or warranties of any kind.
           </p>
 
           <div class="about-licenses">
