@@ -5097,10 +5097,7 @@ body.is-gate-dragging * {
   border: 1px solid var(--border);
   background: var(--surface-2);
 }
-.debug-net-node-banner.is-hub {
-  border-color: var(--accent-line);
-  background: linear-gradient(90deg, var(--accent-soft), var(--surface-2));
-}
+.debug-net-node-banner.is-hub,
 .debug-net-node-banner.is-spoke {
   border-color: var(--border-strong);
 }
@@ -5122,11 +5119,6 @@ body.is-gate-dragging * {
   background: var(--surface-3);
   color: var(--text-2);
   border: 1px solid var(--border);
-}
-.debug-net-role-tag.is-hub {
-  color: var(--accent);
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
 }
 .debug-net-node-name {
   font-size: 14px;
@@ -5151,8 +5143,7 @@ body.is-gate-dragging * {
   min-width: 0;
 }
 .debug-net-slot-card.is-assigned {
-  border-color: var(--accent-line);
-  background: linear-gradient(180deg, var(--accent-soft), var(--surface-2));
+  border-color: var(--border-strong);
 }
 .debug-net-slot-card.is-empty {
   border-style: dashed;
@@ -5221,7 +5212,7 @@ body.is-gate-dragging * {
 }
 .debug-net-bridge.is-linked {
   border-style: solid;
-  border-color: var(--accent-line);
+  border-color: var(--border-strong);
 }
 .debug-net-bridge-track {
   display: flex;
@@ -5241,12 +5232,12 @@ body.is-gate-dragging * {
   flex: 1 1 18px;
   height: 2px;
   border-radius: 2px;
-  background: linear-gradient(90deg, var(--border-strong), var(--accent));
+  background: var(--border-strong);
 }
 .debug-net-bridge-arrow {
   display: inline-flex;
   align-items: center;
-  color: var(--accent);
+  color: var(--text-2);
   flex-shrink: 0;
 }
 
