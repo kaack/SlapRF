@@ -205,3 +205,57 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 		e.filtered = e.filtered[len(e.filtered)-maxStoredFiltered:]
 	}
 }
+
+// ResetToFactoryDefaults restores the engine's pilots, track gates, detected timers, rules,
+// and session records back to a clean factory state.
+func (e *Engine) ResetToFactoryDefaults(isSim bool) {
+	e.mu.Lock()
+	e.bootTime = time.Now()
+	e.raceArmed = true
+	e.rules = domain.DefaultTimingRules()
+	e.detected = make(map[uint8]*domain.DetectedTimer)
+	e.detectors = make(map[string]*dsp.ChannelDetector)
+	e.passingNumbers = make(map[uint8]uint32)
+	e.nextEventID = 0
+	e.nextLapID = 0
+
+	if isSim {
+		e.pilots = domain.DefaultPilotSlots()
+		e.gates = domain.DefaultTrackGates()
+		for _, g := range e.gates {
+			if g.AssignedTimerID > 0 {
+				c := g.Color
+				if c == "" {
+					c = domain.DefaultTimerColor(g.AssignedTimerID)
+				}
+				e.detected[g.AssignedTimerID] = &domain.DetectedTimer{
+					TimerID:         g.AssignedTimerID,
+					TimerLabel:      g.TimerLabel,
+					Color:           c,
+					IsHub:           g.AssignedTimerID == 1,
+					FirmwareVersion: g.FirmwareVersion,
+					BatteryMv:       g.BatteryMv,
+					BatteryPct:      g.BatteryPct,
+					NoiseFloorDbm:   g.NoiseFloorDbm,
+					Online:          g.Online,
+					LastSeenAt:      g.LastSeenAt,
+				}
+			}
+		}
+	} else {
+		e.pilots = domain.DefaultRealPilotSlots()
+		e.gates = []domain.TrackGate{}
+	}
+
+	e.resetSessionLocked()
+	e.initDetectorsLocked()
+	pilotsCopy := append([]domain.PilotSlot(nil), e.pilots...)
+	gatesCopy := append([]domain.TrackGate(nil), e.gates...)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	for _, s := range subs {
+		s.OnConfigUpdated(pilotsCopy, gatesCopy)
+	}
+}
+

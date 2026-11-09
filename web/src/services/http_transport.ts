@@ -340,6 +340,35 @@ export class HttpRealTransport implements ApiTransport {
       if (gate) gate.color = b.color;
     } else if (url === "/api/wifi/networks") {
       return { networks: [] };
+    } else if (url === "/api/storage/reset") {
+      this.fallbackPilots = [1, 3, 5, 8, 0, 0, 0, 0].map((ch, i) => ({
+        slotIndex: i + 1,
+        callsign: `Pilot ${i + 1}`,
+        enabled: i < 4,
+        band: 1,
+        channel: ch,
+        frequencyMhz: ch > 0 ? RACEBAND_MHZ[ch - 1] : 0,
+        enterThreshold: -58,
+        exitThreshold: -68,
+        attenuationGain: 52,
+        color: PILOT_COLORS[i],
+      }));
+      this.fallbackNodes = [];
+      this.fallbackDetectedTimers = [];
+      this.fallbackRules = {
+        minLapSec: 5,
+        maxLapSec: 120,
+        gateCooldownSec: 2,
+        minSectionSec: 0.5,
+        echoWindowSec: 3,
+      };
+      this.fallbackArmed = true;
+      try {
+        window.localStorage.removeItem(REAL_FALLBACK_STORAGE_KEY);
+      } catch {
+        // Ignore storage access errors
+      }
+      return this.offlineState();
     }
     if (method === "POST") {
       this.saveOfflineFallback();

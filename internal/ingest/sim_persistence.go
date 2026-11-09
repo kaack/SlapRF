@@ -2,6 +2,7 @@ package ingest
 
 import (
 	"sort"
+	"time"
 
 	"slaprf/internal/domain"
 )
@@ -73,3 +74,17 @@ func (s *TrackSimulator) RestoreOptions(opts SimPersistedOptions) {
 		s.SetTrackWalker(true)
 	}
 }
+
+// ResetToFactoryDefaults resets the simulation engine and simulator state back to a fresh
+// pre-warmed default session.
+func (s *TrackSimulator) ResetToFactoryDefaults() {
+	s.engine.ResetToFactoryDefaults(true)
+	s.mu.Lock()
+	s.trackWalkerActive = false
+	s.trackWalkerTimerSec = 0
+	s.poweredOffTimers = make(map[uint8]bool)
+	s.resetPilotsLocked()
+	s.mu.Unlock()
+	s.Prewarm(45 * time.Second)
+}
+

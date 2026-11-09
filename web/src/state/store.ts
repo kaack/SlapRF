@@ -343,6 +343,13 @@ export class AppStore {
     return this.activeHistory.get(nodeId) ?? [];
   }
 
+  public clearActiveHistory(): void {
+    this.activeHistory.clear();
+    this._playheadUs = 0;
+    this._latestTelemetryTimestampUs = 0;
+    this._lastIngestPerfMs = 0;
+  }
+
   // ---- mutations -----------------------------------------------------------
 
   public hydrate(state: FullStateResponse): void {

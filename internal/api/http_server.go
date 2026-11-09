@@ -250,6 +250,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/sim/track-walker", s.handleSimTrackWalker)
 	mux.HandleFunc("/api/sim/timer-action", s.handleSimTimerAction)
 	mux.HandleFunc("/api/session/reset", s.handleResetSession)
+	mux.HandleFunc("/api/storage/reset", s.handleResetStorage)
 	mux.HandleFunc("/api/ingest/frame", s.handleIngestFrame)
 
 	// Zero-Node.js pure-Go TypeScript bundle and WebAssembly simulation engine endpoints
@@ -705,6 +706,20 @@ func (s *Server) handleResetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	s.activeEngine().ResetSession()
 	s.saveIfRealActive()
+	s.handleGetState(w, r)
+}
+
+func (s *Server) handleResetStorage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.simulator.IsRunning() {
+		s.simulator.ResetToFactoryDefaults()
+	} else {
+		s.realEngine.ResetToFactoryDefaults(false)
+		s.SaveRealStateNow()
+	}
 	s.handleGetState(w, r)
 }
 

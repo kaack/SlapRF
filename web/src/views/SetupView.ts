@@ -43,7 +43,7 @@ export class SetupView extends Component {
             <h2>Data source</h2>
             <p>Switch between physical XIAO gate timers and the built-in simulator. Each keeps its own separate dataset.</p>
           </div>
-          <div class="card" data-slot="source"></div>
+          <div class="settings-cards" data-slot="source"></div>
         </section>
       </div>`;
 

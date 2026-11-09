@@ -219,6 +219,11 @@ export class ApiClient {
     this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/session/reset"));
   }
 
+  public async resetStoredData(): Promise<void> {
+    this.store.clearActiveHistory();
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/storage/reset"));
+  }
+
   public async updatePilotSlot(slot: PilotSlot): Promise<void> {
     this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/pilots/update", slot));
   }
