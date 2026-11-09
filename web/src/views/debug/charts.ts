@@ -560,28 +560,11 @@ export function drawSignalOverTimeCanvas(
 
   const pts = ring.windowPoints(opts.windowSec, opts.sweepHz, opts.endN ?? null, 3);
   const readoutEl = canvas.parentElement?.parentElement?.querySelector<HTMLElement>("[data-signal-readout]") ?? null;
-  const updateSignalReadout = (pt: SignalPoint | null, bestCh: number, isCursor: boolean) => {
-    if (!readoutEl) return;
-    const headTitle = pt
-      ? isCursor
-        ? `-${((refN - pt.n) / opts.sweepHz).toFixed(2)}s · sweep #${pt.n}`
-        : `Latest · sweep #${pt.n}`
-      : "Waiting for sweep samples…";
-    const headSub = isCursor ? "Cursor (dBm)" : "Touch chart for cursor";
-    let cells = "";
-    for (let ch = 0; ch < 8; ch++) {
-      const f = opts.freqs[ch] ?? RACEBAND[ch];
-      const rb = racebandName(f) || `Ch${ch + 1}`;
-      const on = opts.enabledChannels[ch];
-      const v = pt?.dbm[ch];
-      const valText = on && v !== undefined && v > -127 ? `${v}` : "—";
-      cells += `<span class="debug-readout-ch${ch === bestCh ? " is-best" : ""}${!on ? " is-off" : ""}"><i style="background:${CHANNEL_COLORS[ch]}"></i><b>${rb}</b><span>${valText}</span></span>`;
-    }
-    const html = `<div class="debug-readout-head"><span class="debug-readout-title">${headTitle}</span><span class="debug-readout-sub">${headSub}</span></div><div class="debug-readout-grid">${cells}</div>`;
-    if (readoutEl.innerHTML !== html) readoutEl.innerHTML = html;
+  const setSignalReadout = (html: string) => {
+    if (readoutEl && readoutEl.innerHTML !== html) readoutEl.innerHTML = html;
   };
   if (!pts.length) {
-    updateSignalReadout(null, -1, false);
+    setSignalReadout(`<span class="note">Touch chart to inspect channel, dBm &amp; sweep age</span>`);
     ctx.fillStyle = tokens.text3;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -765,18 +748,26 @@ export function drawSignalOverTimeCanvas(
       }
     }
 
+    const ageSec = ((refN - best.n) / opts.sweepHz).toFixed(2);
     if (bestCh >= 0) {
       const by = Math.max(T + 3, Math.min(T + plotH - 3, yOf(best.dbm[bestCh])));
       ctx.fillStyle = CHANNEL_COLORS[bestCh];
       ctx.beginPath();
       ctx.arc(hx, by, 3.5, 0, Math.PI * 2);
       ctx.fill();
+
+      const f = opts.freqs[bestCh] ?? RACEBAND[bestCh];
+      const rb = racebandName(f) || `Ch${bestCh + 1}`;
+      const v = best.dbm[bestCh];
+      const fl = best.floor[bestCh];
+      setSignalReadout(
+        `<span class="debug-readout-title"><strong>${rb}</strong> (${f} MHz)</span><span class="debug-readout-vals"><strong>${v} dBm</strong>${fl && fl > -127 ? ` · fl ${fl}` : ""} · -${ageSec}s (#${best.n})</span>`
+      );
+    } else {
+      setSignalReadout(`<span class="note">Touch chart to inspect channel, dBm &amp; sweep age</span>`);
     }
 
-    updateSignalReadout(best, bestCh, true);
-
     if (!isMobile) {
-      const ageSec = ((refN - best.n) / opts.sweepHz).toFixed(2);
       const lines: Array<{ text: string; color: string }> = [
         { text: `-${ageSec} s  (sweep #${best.n})`, color: tokens.text2 },
       ];
@@ -796,7 +787,7 @@ export function drawSignalOverTimeCanvas(
       drawTooltipBox(ctx, hx, opts.hover.y, lines, L, W - R, T, T + plotH, tokens);
     }
   } else {
-    updateSignalReadout(pts[pts.length - 1], -1, false);
+    setSignalReadout(`<span class="note">Touch chart to inspect channel, dBm &amp; sweep age</span>`);
   }
 }
 

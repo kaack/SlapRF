@@ -411,7 +411,7 @@ export class DebugView extends Component {
               <div class="debug-canvas-wrap">
                 <canvas class="debug-canvas debug-signal-canvas" data-signal-canvas></canvas>
               </div>
-              <div class="debug-chart-readout debug-signal-readout mono" data-signal-readout></div>
+              <div class="debug-chart-readout debug-single-readout mono" data-signal-readout></div>
               <div data-slot="signal-legend"></div>
             </div>
             <div class="debug-status-layout" data-slot="noise-table"></div>
