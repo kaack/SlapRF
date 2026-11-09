@@ -29,19 +29,6 @@ You can choose between one of them if you use this work.`;
 const PAYPAL_DONATE_URL = "https://www.paypal.com/donate/?hosted_button_id=TRHRYKMZ8SM8W";
 const YOUTUBE_CHANNEL_URL = "https://www.youtube.com/@oneeyefpv";
 
-function renderAppLogoSvg(): string {
-  return `
-    <svg class="about-logo-svg" viewBox="0 0 24 24" width="160" height="160" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-      <g transform="translate(0.6 -1.1)">
-        <path class="about-logo-ring" d="M18.21 16.30A8.2 8.2 0 1 1 13.30 5.79" stroke-width="2.2" />
-        <circle class="about-logo-hub" cx="10.5" cy="13.5" r="1.9" stroke="none" />
-        <path class="about-logo-needle" d="M10.5 13.5L15.2 9.8" stroke-width="2.2" />
-        <path class="about-logo-arc" d="M15.77 7.22A8.2 8.2 0 0 1 18.70 13.50" stroke-width="2.2" />
-        <path class="about-logo-arc is-outer" d="M17.64 4.36A11.6 11.6 0 0 1 22.09 13.90" stroke-width="2.2" />
-      </g>
-    </svg>`;
-}
-
 function renderYouTubeIconSvg(): string {
   return `
     <svg class="about-yt-icon" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 22" width="26" height="18" aria-hidden="true">
@@ -139,74 +126,131 @@ export class AboutView extends Component {
         : BUILD_INFO.licenseFairSource || "Fair Source License, version 0.9";
 
     this.el.innerHTML = `
-      <div class="card about-card">
-        <div class="about-hero">
-          <div class="about-app-title">SlapRF</div>
-          <div class="about-app-subtitle">5.8 GHz Multi-Gate FPV Lap &amp; Sector Timer</div>
-          <div class="about-logo-wrap">
-            ${renderAppLogoSvg()}
+      <div class="settings">
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Version</h2>
+            <p>Client and backend build identifiers for this SlapRF instance, plus warranty disclaimer.</p>
           </div>
-          <div class="about-versions">
-            <div>Frontend version: <span class="mono strong">${esc(frontendVersion)}</span></div>
-            <div>Backend version: <span class="mono strong">${esc(this.backendVersion)}</span></div>
+          <div class="settings-cards">
+            <div class="card">
+              <div class="option-row">
+                <div>
+                  <div class="option-title">Frontend version</div>
+                  <div class="option-sub">Web SPA client bundle running in this browser.</div>
+                </div>
+                <div class="option-actions">
+                  <span class="badge mono">${esc(frontendVersion)}</span>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="option-row">
+                <div>
+                  <div class="option-title">Backend version</div>
+                  <div class="option-sub">Timing server and LapRF / MultiGP LiveTime bridge build revision.</div>
+                </div>
+                <div class="option-actions">
+                  <span class="badge mono">${esc(this.backendVersion)}</span>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="option-row">
+                <div>
+                  <div class="option-title">Disclaimer</div>
+                  <div class="option-sub">This software is developed using Agentic AI coding workflows and is provided "as is", without any express or implied guarantees or warranties of any kind.</div>
+                </div>
+              </div>
+            </div>
           </div>
+        </section>
 
-          <div class="about-author-row">
-            <span>Designed, and developed by</span>
-            <a class="about-yt-link" href="${YOUTUBE_CHANNEL_URL}" target="_blank" rel="noopener noreferrer">
-              ${renderYouTubeIconSvg()}
-              <span>@OneEyeFPV</span>
-            </a>
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Author</h2>
+            <p>Designed and developed for the 5.8 GHz FPV racing community.</p>
           </div>
-
-          <div class="about-donate-box">
-            <p>Show your support by donating to my daily drinks 🧋 fund through PayPal.</p>
-            <button type="button" class="about-paypal-btn" data-donate-paypal="1" title="Donate via PayPal" aria-label="Donate via PayPal">
-              ${renderPayPalIconSvg()}
-            </button>
+          <div class="card">
+            <div class="option-row">
+              <div>
+                <div class="option-title">Designed and developed by @OneEyeFPV</div>
+                <div class="option-sub">Follow hardware builds, firmware updates, and race timing guides on YouTube.</div>
+              </div>
+              <div class="option-actions">
+                <a class="btn btn-ghost btn-sm about-yt-btn" href="${YOUTUBE_CHANNEL_URL}" target="_blank" rel="noopener noreferrer">
+                  ${renderYouTubeIconSvg()}
+                  <span>@OneEyeFPV</span>
+                </a>
+              </div>
+            </div>
           </div>
-        </div>
+        </section>
 
-        <div class="about-divider"></div>
-
-        <div class="about-body">
-          <p class="about-thanks">
-            <strong>Disclaimer:</strong> This software is developed using Agentic AI coding workflows and is provided "as is", without any express or implied guarantees or warranties of any kind.
-          </p>
-
-          <div class="about-licenses">
-            <div class="about-licenses-head">
-              <h3>Licenses</h3>
-              <div class="segmented" role="tablist" aria-label="License selector">
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected="${this.activeLicense === "gpl" ? "true" : "false"}"
-                  class="${this.activeLicense === "gpl" ? "is-active" : ""}"
-                  data-select-license="gpl"
-                >
-                  GNU GPL v3.0
-                </button>
-                <button
-                  type="button"
-                  role="tab"
-                  aria-selected="${this.activeLicense === "fair-source" ? "true" : "false"}"
-                  class="${this.activeLicense === "fair-source" ? "is-active" : ""}"
-                  data-select-license="fair-source"
-                >
-                  Fair Source v0.9
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Donations</h2>
+            <p>Support ongoing open hardware, firmware, and software development for SlapRF.</p>
+          </div>
+          <div class="card">
+            <div class="option-row">
+              <div>
+                <div class="option-title">Daily drinks 🧋 fund</div>
+                <div class="option-sub">Show your support by donating to my daily drinks 🧋 fund through PayPal.</div>
+              </div>
+              <div class="option-actions">
+                <button type="button" class="about-paypal-btn" data-donate-paypal="1" title="Donate via PayPal" aria-label="Donate via PayPal">
+                  ${renderPayPalIconSvg()}
                 </button>
               </div>
             </div>
-            <p class="about-license-summary">${esc(licenseSummary).replace(/\n/g, "<br/>")}</p>
-            <div class="about-license-box">
-              <div class="about-license-box-head">
-                <span class="mono strong">${esc(modalTitle)}</span>
+          </div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Licenses</h2>
+            <p>SlapRF is dual-licensed under the GNU General Public License v3.0 and the Fair Source License v0.9.</p>
+          </div>
+          <div class="card">
+            <div class="about-licenses">
+              <div class="option-row">
+                <div>
+                  <div class="option-title">Dual license</div>
+                  <div class="option-sub">${esc(licenseSummary).replace(/\n/g, "<br/>")}</div>
+                </div>
+                <div class="option-actions">
+                  <div class="segmented" role="tablist" aria-label="License selector">
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected="${this.activeLicense === "gpl" ? "true" : "false"}"
+                      class="${this.activeLicense === "gpl" ? "is-active" : ""}"
+                      data-select-license="gpl"
+                    >
+                      GNU GPL v3.0
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected="${this.activeLicense === "fair-source" ? "true" : "false"}"
+                      class="${this.activeLicense === "fair-source" ? "is-active" : ""}"
+                      data-select-license="fair-source"
+                    >
+                      Fair Source v0.9
+                    </button>
+                  </div>
+                </div>
               </div>
-              <pre class="about-license-pre">${esc(modalText)}</pre>
+              <div class="about-license-box">
+                <div class="about-license-box-head">
+                  <span class="mono strong">${esc(modalTitle)}</span>
+                </div>
+                <pre class="about-license-pre">${esc(modalText)}</pre>
+              </div>
             </div>
           </div>
-        </div>
+        </section>
       </div>`;
   }
 }
