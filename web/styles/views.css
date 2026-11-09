@@ -4461,6 +4461,17 @@ body.is-gate-dragging * {
 .debug-findings-table tr:last-child td {
   border-bottom: 0;
 }
+.debug-findings-table tr.is-muted,
+.debug-noise-table tr.is-muted {
+  opacity: 0.24;
+  filter: saturate(0.2);
+  transition: opacity 0.14s ease, filter 0.14s ease;
+}
+.debug-findings-table tr.is-muted:hover,
+.debug-noise-table tr.is-muted:hover {
+  opacity: 0.68;
+  filter: saturate(0.75);
+}
 .debug-findings-table td.debug-finding-detail {
   color: var(--text-2);
   white-space: normal;

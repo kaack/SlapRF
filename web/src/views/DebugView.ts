@@ -66,6 +66,8 @@ interface FindingLogEntry {
   badge: string;
   sourceLabel: string;
   sourceColor?: string;
+  channelIndex?: number;
+  freqMHz?: number;
   maxDbm: number;
   count: number;
   detail: string;
@@ -1658,6 +1660,7 @@ export class DebugView extends Component {
           if (idx >= 0 && idx < 8) {
             this.signalEnabledCh[idx] = !this.signalEnabledCh[idx];
             this.renderSignalControls();
+            this.renderNoiseTable();
             this.dirtySignal = true;
           }
           break;
@@ -1666,6 +1669,7 @@ export class DebugView extends Component {
           const allOn = this.signalEnabledCh.every(Boolean);
           this.signalEnabledCh = this.signalEnabledCh.map(() => !allOn);
           this.renderSignalControls();
+          this.renderNoiseTable();
           this.dirtySignal = true;
           break;
         }
@@ -2641,6 +2645,8 @@ export class DebugView extends Component {
             badge: "Enter thr",
             sourceLabel: `${rb} · ${f} MHz`,
             sourceColor: col,
+            channelIndex: i,
+            freqMHz: f,
             maxDbm: v,
             count: 1,
             detail: `Peak ${v} dBm reached enter threshold ${pilotLabel} (+${v - enterThr} dB)`,
@@ -2666,6 +2672,8 @@ export class DebugView extends Component {
             badge: "RF burst",
             sourceLabel: `${rb} · ${f} MHz`,
             sourceColor: col,
+            channelIndex: i,
+            freqMHz: f,
             maxDbm: v,
             count: Math.max(1, hits),
             detail: `Burst to ${v} dBm (+${v - floor} dB above ${floor} dBm floor, ${enterThr - v} dB below enter — will not trigger a lap)`,
@@ -2714,6 +2722,7 @@ export class DebugView extends Component {
           existing.lastMs = now;
           existing.maxDbm = Math.max(existing.maxDbm, p.dbm);
           existing.count++;
+          existing.freqMHz = p.freqMHz;
           existing.tone = existing.maxDbm >= -65 ? "badge-warn" : "badge-accent";
           existing.badge = existing.maxDbm >= -65 ? "Strong peak" : "RF peak";
           existing.sourceLabel = `${p.freqMHz} MHz · ${p.bandHint}`;
@@ -2728,6 +2737,7 @@ export class DebugView extends Component {
             tone: p.dbm >= -65 ? "badge-warn" : "badge-accent",
             badge: p.dbm >= -65 ? "Strong peak" : "RF peak",
             sourceLabel: `${p.freqMHz} MHz · ${p.bandHint}`,
+            freqMHz: p.freqMHz,
             maxDbm: p.dbm,
             count: 1,
             detail: `Peak ${p.dbm} dBm (+${p.dbm - median} dB above ${median} dBm band median)`,
@@ -2765,14 +2775,17 @@ export class DebugView extends Component {
   private renderFindingsLogHtml(
     entries: FindingLogEntry[],
     clearAction: "clear-signal-findings" | "clear-scan-findings",
-    emptyHint: string
+    emptyHint: string,
+    isInScope?: (e: FindingLogEntry) => boolean
   ): string {
+    const inScopeCount = isInScope ? entries.filter(isInScope).length : entries.length;
+    const isFiltered = isInScope !== undefined && inScopeCount < entries.length;
     return `
       <div class="debug-findings-head">
         <div class="debug-findings-title-group">
           <span class="debug-findings-title">Findings log</span>
-          <span class="badge mono">${entries.length}</span>
-          <span class="note debug-findings-sub">Newest first · coalesces ongoing bursts on the same channel</span>
+          <span class="badge mono">${isFiltered ? `${inScopeCount} / ${entries.length}` : entries.length}</span>
+          <span class="note debug-findings-sub">${isFiltered ? "Highlighting selected scope · unselected channels faded" : "Newest first · coalesces ongoing bursts on the same channel"}</span>
         </div>
         <button type="button" class="btn btn-sm btn-ghost" data-action="${clearAction}" ${entries.length ? "" : "disabled"}>Clear</button>
       </div>
@@ -2792,15 +2805,16 @@ export class DebugView extends Component {
                 </thead>
                 <tbody>
                   ${entries
-                    .map(
-                      (e) => `<tr>
+                    .map((e) => {
+                      const muted = isInScope ? !isInScope(e) : false;
+                      return `<tr class="${muted ? "is-muted" : ""}">
                         <td class="mono note">#${e.id}</td>
                         <td class="mono note">${esc(e.timeLabel)}</td>
                         <td><span class="badge ${e.tone}">${esc(e.badge)}</span></td>
                         <td class="mono">${e.sourceColor ? `<span class="debug-ch-inline" style="background:${e.sourceColor}"></span>` : ""}<strong>${esc(e.sourceLabel)}</strong></td>
                         <td class="debug-finding-detail">${esc(e.detail)}</td>
-                      </tr>`
-                    )
+                      </tr>`;
+                    })
                     .join("")}
                 </tbody>
               </table>`
@@ -2813,13 +2827,15 @@ export class DebugView extends Component {
     const sweepHz = this.status?.sweepHz ?? 50;
     const summary = this.signalRing.computeStats(this.signalWindowSec, freqs, this.pilots, sweepHz, this.signalEndN);
     const prevScroll = this.slot("noise-table").querySelector<HTMLElement>("[data-findings-scroll]")?.scrollTop ?? 0;
+    const anyChDisabled = this.signalEnabledCh.some((on) => !on);
 
     this.slot("noise-table").innerHTML = `
       <div class="debug-findings" role="region" aria-label="Signal findings log">
         ${this.renderFindingsLogHtml(
           this.signalFindings,
           "clear-signal-findings",
-          "Waiting for 50 Hz sweep samples — threshold crossings and in-band RF bursts will be logged here with timestamps."
+          "Waiting for 50 Hz sweep samples — threshold crossings and in-band RF bursts will be logged here with timestamps.",
+          anyChDisabled ? (e) => e.channelIndex !== undefined && Boolean(this.signalEnabledCh[e.channelIndex]) : undefined
         )}
       </div>
       <div class="debug-table-scroll">
@@ -2842,7 +2858,8 @@ export class DebugView extends Component {
               .map((r) => {
                 const col = CHANNEL_COLORS[r.index];
                 const trigRisk = r.pctWouldTrigger > 0;
-                return `<tr>
+                const chOn = this.signalEnabledCh[r.index];
+                return `<tr class="${chOn ? "" : "is-muted"}">
                   <td class="mono"><span class="debug-ch-inline" style="background:${col}"></span>${r.bandLabel ? `<strong>${r.bandLabel}</strong> ` : ""}${r.freqMHz} MHz</td>
                   <td class="mono note">${r.pilotCallsign ? `${esc(r.pilotCallsign)} (${r.enterThreshold})` : `${r.enterThreshold} dBm`}</td>
                   <td class="mono">${r.mean !== null ? `${r.mean.toFixed(1)} dBm` : "—"}</td>
@@ -3006,10 +3023,14 @@ export class DebugView extends Component {
     const el = this.el.querySelector<HTMLElement>("[data-scan-findings]");
     if (el) {
       const prevScroll = el.querySelector<HTMLElement>("[data-findings-scroll]")?.scrollTop ?? 0;
+      const z0 = this.scanZoomStartMHz;
+      const z1 = this.scanZoomStopMHz;
+      const isZoomed = z0 !== null && z1 !== null;
       el.innerHTML = this.renderFindingsLogHtml(
         this.scanFindings,
         "clear-scan-findings",
-        "Run Scan once or click Stream — detected RF peaks (≥ 6 dB above band median) and 5 GHz Wi-Fi activity will be logged here with timestamps."
+        "Run Scan once or click Stream — detected RF peaks (≥ 6 dB above band median) and 5 GHz Wi-Fi activity will be logged here with timestamps.",
+        isZoomed ? (e) => e.freqMHz !== undefined && e.freqMHz >= z0! && e.freqMHz <= z1! : undefined
       );
       const nextScrollEl = el.querySelector<HTMLElement>("[data-findings-scroll]");
       if (nextScrollEl && prevScroll > 0) nextScrollEl.scrollTop = prevScroll;
