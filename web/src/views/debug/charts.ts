@@ -1496,18 +1496,19 @@ export function drawWaterfallCanvas(
   ctx.fillText(visRows <= 30 ? `-${botAgeSec.toFixed(1)}s` : `-${botAgeSec.toFixed(0)}s`, L - 6, T + plotH - 6);
 
   // Vertical scrollbar track + thumb on the right margin when history exceeds 1 viewport
-  const totalStored = Math.max(visRows, acc.history.length);
   const sbX = W - R + 5;
   const sbW = 6;
   ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
   ctx.fillRect(sbX, T, sbW, plotH);
-  const thumbFrac = Math.min(1, visRows / totalStored);
-  const thumbH = Math.max(18, Math.round(plotH * thumbFrac));
-  const maxScroll = Math.max(1, acc.maxScrollRow());
-  const scrollFrac = acc.maxScrollRow() > 0 ? startRow / maxScroll : 0;
-  const thumbY = T + Math.round((plotH - thumbH) * scrollFrac);
-  ctx.fillStyle = startRow > 0 ? tokens.text2 : acc.history.length > visRows ? tokens.text3 : "rgba(255, 255, 255, 0.16)";
-  ctx.fillRect(sbX, thumbY, sbW, thumbH);
+  if (acc.history.length > visRows) {
+    const thumbFrac = Math.min(1, visRows / acc.history.length);
+    const thumbH = Math.max(18, Math.round(plotH * thumbFrac));
+    const maxScroll = Math.max(1, acc.maxScrollRow());
+    const scrollFrac = startRow / maxScroll;
+    const thumbY = T + Math.round((plotH - thumbH) * scrollFrac);
+    ctx.fillStyle = startRow > 0 ? "rgba(255, 255, 255, 0.26)" : "rgba(255, 255, 255, 0.16)";
+    ctx.fillRect(sbX, thumbY, sbW, thumbH);
+  }
 
   // Adaptive X-axis frequency ticks
   const fStep = freqTickStep(span);
