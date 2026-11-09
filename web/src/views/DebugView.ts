@@ -1364,8 +1364,8 @@ export class DebugView extends Component {
           </span>
         </div>
         <div class="debug-findings-body">
-          <p class="debug-findings-primary">${esc(primaryFinding)}</p>
-          <p class="note debug-findings-secondary">${esc(secondaryFinding)}</p>
+          <p class="debug-findings-primary" title="${esc(primaryFinding)}">${esc(primaryFinding)}</p>
+          <p class="note debug-findings-secondary" title="${esc(secondaryFinding)}">${esc(secondaryFinding)}</p>
         </div>
       </div>
       <div class="debug-table-scroll">
@@ -1519,7 +1519,7 @@ export class DebugView extends Component {
       <div class="debug-findings-head">
         <span class="debug-findings-title">Findings</span>
         <span class="badge ${badgeTone}">${esc(badgeLabel)}</span>
-        <span class="note mono debug-findings-meta">${esc(metaText)}</span>
+        <span class="note mono debug-findings-meta" title="${esc(metaText)}">${esc(metaText)}</span>
       </div>
       <div class="debug-peaks-row">
         ${peaksHtml}
