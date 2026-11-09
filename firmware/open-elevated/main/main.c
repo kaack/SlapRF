@@ -1,5 +1,5 @@
 /**
- * SlapRF firmware profile: Open field · Gate-top mount
+ * SlapRF firmware profile: Open field Â· Gate-top mount
  *
  * Timers are mounted on top of the gate or a pole with clear line of sight to the Hub, so the link has
  * margin to spare. This design spends it on timing resolution instead: 100 Hz sweeps over a standard
@@ -180,15 +180,22 @@ static void sweep_once(void) {
     // receiver can be switched off. Either way the pilot readings are -127 for this sweep.
     const bool scanning = slaprf_diag_scan_live_step(SWEEP_BUDGET_US);
     const bool rf_on = !scanning && slaprf_diag_rf_enabled();
-    if (rf_on) {
+    uint16_t ch_mhz[MAX_PILOT_SLOTS];
+    bool any_ch = false;
+    for (int i = 0; i < MAX_PILOT_SLOTS; i++) {
+        ch_mhz[i] = rf_on ? slaprf_diag_channel_mhz(i, g_flash_cfg.slot_freqs_mhz[i]) : 0;
+        if (ch_mhz[i] >= 5180) {
+            any_ch = true;
+        }
+    }
+    if (any_ch) {
         slaprf_rf58_enter();
     }
     for (int i = 0; i < MAX_PILOT_SLOTS; i++) {
-        const uint16_t mhz = slaprf_diag_channel_mhz(i, g_flash_cfg.slot_freqs_mhz[i]);
-        int8_t raw = rf_on ? esp_sdr_measure_5g_channel_dbm(mhz) : -127;
+        int8_t raw = ch_mhz[i] >= 5180 ? esp_sdr_measure_5g_channel_dbm(ch_mhz[i]) : -127;
         cur->rssi_dbm[i] = raw;
     }
-    if (rf_on) {
+    if (any_ch) {
         slaprf_rf58_leave();
     }
     const int64_t took = slaprf_now_us() - t0;

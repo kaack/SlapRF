@@ -13,15 +13,17 @@ import (
 )
 
 const (
-	FrameMagic0      byte = 0xC5
-	FrameMagicSingle byte = 0x58 // 16-byte single-sample frame
-	FrameMagicWindow byte = 0x59 // Variable-length sliding-window recorder frame
-	FrameMagicHello  byte = 0x5A // 36-byte timer announcement (fingerprint, name, profile)
+	FrameMagic0        byte = 0xC5
+	FrameMagicSingle   byte = 0x58 // 16-byte single-sample frame
+	FrameMagicWindow   byte = 0x59 // Variable-length sliding-window recorder frame
+	FrameMagicHello    byte = 0x5A // 36-byte timer announcement (fingerprint, name, profile)
+	FrameMagicChannels byte = 0x5E // 19-byte laptop -> Hub active pilot channel table (0 = disabled slot)
 
 	SingleFrameLen    int = 16
 	HelloFrameLen     int = 36
-	windowHeaderLen   int = 7 // magic0, magic1, slot, sample_count, battery_mv (2), noise_floor
-	SlidingWindowSize int = 4 // Default ("open-ground") window; frames may carry up to MaxWindowSamples
+	ChannelsFrameLen  int = 19 // magic0, magic1, 8 x uint16 LE freqs, crc8
+	windowHeaderLen   int = 7  // magic0, magic1, slot, sample_count, battery_mv (2), noise_floor
+	SlidingWindowSize int = 4  // Default ("open-ground") window; frames may carry up to MaxWindowSamples
 	MaxWindowSamples  int = firmware.MaxWindowSamples
 	RawSampleBytes    int = 1 + domain.MaxPilotSlots // 1-byte seq_num + 8 x int8 rssi_dbm = 9 bytes
 
@@ -30,6 +32,7 @@ const (
 
 	SampleIntervalUs   uint64 = 20_000 // Default 50 Hz sweep (until a Hello reports the profile)
 	DefaultWiFiUDPAddr string = ":5404"
+	HubUDPPort         int    = 5404
 )
 
 // WindowFrameLenFor returns the byte length of a window frame carrying `samples` sweeps.
@@ -56,6 +59,7 @@ type WiFiUDPReceiver struct {
 	addr    string
 	engine  *tracker.Engine
 	conn    *net.UDPConn
+	hubIP   net.IP
 	slots   map[uint8]slotInfo
 	seenSeq map[uint8]uint8 // timerID -> last ingested 8-bit sample seq_num
 	hasSeq  map[uint8]bool  // timerID -> true once at least one sample has been ingested
@@ -67,7 +71,7 @@ func NewWiFiUDPReceiver(addr string, engine *tracker.Engine) *WiFiUDPReceiver {
 	if addr == "" {
 		addr = DefaultWiFiUDPAddr
 	}
-	return &WiFiUDPReceiver{
+	r := &WiFiUDPReceiver{
 		addr:    addr,
 		engine:  engine,
 		slots:   make(map[uint8]slotInfo),
@@ -75,6 +79,50 @@ func NewWiFiUDPReceiver(addr string, engine *tracker.Engine) *WiFiUDPReceiver {
 		hasSeq:  make(map[uint8]bool),
 		stopCh:  make(chan struct{}),
 	}
+	if engine != nil {
+		engine.Subscribe(r)
+	}
+	return r
+}
+
+// OnTelemetryFrame implements tracker.EventSubscriber.
+func (r *WiFiUDPReceiver) OnTelemetryFrame(domain.PuckTelemetryFrame) {}
+
+// OnGateCrossing implements tracker.EventSubscriber.
+func (r *WiFiUDPReceiver) OnGateCrossing(domain.GateCrossingEvent) {}
+
+// OnDetectionFiltered implements tracker.EventSubscriber.
+func (r *WiFiUDPReceiver) OnDetectionFiltered(domain.FilteredDetection) {}
+
+// OnLapCompleted implements tracker.EventSubscriber.
+func (r *WiFiUDPReceiver) OnLapCompleted(domain.LapRecord, []domain.PilotTrackSummary) {}
+
+// OnConfigUpdated pushes the active pilot channel table to the Hub Timer whenever pilots are
+// enabled/disabled or their channels change.
+func (r *WiFiUDPReceiver) OnConfigUpdated(pilots []domain.PilotSlot, _ []domain.GatePuck) {
+	freqs, _ := tracker.ComputeActivePilotChannels(pilots)
+	r.sendChannelsToHub(freqs)
+}
+
+func (r *WiFiUDPReceiver) pushActiveChannelsToHub() {
+	if r.engine == nil {
+		return
+	}
+	freqs, _ := r.engine.ActivePilotChannels()
+	r.sendChannelsToHub(freqs)
+}
+
+func (r *WiFiUDPReceiver) sendChannelsToHub(freqs [domain.MaxPilotSlots]uint16) {
+	r.mu.Lock()
+	conn := r.conn
+	hubIP := r.hubIP
+	r.mu.Unlock()
+	if conn == nil || len(hubIP) == 0 {
+		return
+	}
+	pkt := EncodeChannelsFrame(freqs)
+	dst := &net.UDPAddr{IP: hubIP, Port: HubUDPPort}
+	_, _ = conn.WriteToUDP(pkt, dst)
 }
 
 // Start binds the UDP socket and begins ingesting frames from the Hub Timer in the background.
@@ -104,7 +152,7 @@ func (r *WiFiUDPReceiver) Stop() {
 func (r *WiFiUDPReceiver) readLoop() {
 	var buf [512]byte
 	for {
-		n, _, err := r.conn.ReadFromUDP(buf[:])
+		n, srcAddr, err := r.conn.ReadFromUDP(buf[:])
 		if err != nil {
 			select {
 			case <-r.stopCh:
@@ -113,7 +161,15 @@ func (r *WiFiUDPReceiver) readLoop() {
 				continue
 			}
 		}
+		if srcAddr != nil && len(srcAddr.IP) > 0 && !srcAddr.IP.IsLoopback() {
+			r.mu.Lock()
+			r.hubIP = append(net.IP(nil), srcAddr.IP...)
+			r.mu.Unlock()
+		}
 		if n > 0 {
+			if n == ChannelsFrameLen && buf[0] == FrameMagic0 && buf[1] == FrameMagicChannels {
+				continue // Ignore our own outbound channel-table frame if received via broadcast
+			}
 			r.IngestPacket(buf[:n], r.engine.NowUs())
 		}
 	}
@@ -149,6 +205,7 @@ func (r *WiFiUDPReceiver) handleHello(raw []byte) {
 	r.mu.Lock()
 	if cur, ok := r.slots[slot]; ok && cur.fingerprint == fp {
 		r.mu.Unlock()
+		r.pushActiveChannelsToHub()
 		return // Already registered
 	}
 	r.mu.Unlock()
@@ -167,6 +224,7 @@ func (r *WiFiUDPReceiver) handleHello(raw []byte) {
 	r.slots[slot] = slotInfo{fingerprint: fp, timerID: timerID, intervalUs: interval}
 	delete(r.hasSeq, timerID)
 	r.mu.Unlock()
+	r.pushActiveChannelsToHub()
 }
 
 // resolveSlotLocked returns the stable timer ID and sweep interval for a Hub slot, or ok=false if
@@ -181,6 +239,14 @@ func (r *WiFiUDPReceiver) resolveSlotLocked(slot uint8) (uint8, uint64, bool) {
 func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.PuckTelemetryFrame {
 	if len(raw) < SingleFrameLen || raw[0] != FrameMagic0 {
 		return nil
+	}
+
+	var slotToPilot [domain.MaxPilotSlots]int
+	for ch := 0; ch < domain.MaxPilotSlots; ch++ {
+		slotToPilot[ch] = ch
+	}
+	if r.engine != nil {
+		_, slotToPilot = r.engine.ActivePilotChannels()
 	}
 
 	switch raw[1] {
@@ -216,7 +282,11 @@ func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.PuckTe
 
 			var rssi [domain.MaxPilotPoolSize]float32
 			for ch := 0; ch < domain.MaxPilotSlots; ch++ {
-				rssi[ch] = float32(int8(raw[off+1+ch]))
+				val := float32(int8(raw[off+1+ch]))
+				rssi[ch] = val
+				if pIdx := slotToPilot[ch]; pIdx >= 0 && pIdx < domain.MaxPilotPoolSize {
+					rssi[pIdx] = val
+				}
 			}
 			// Reconstruct each sample's timestamp relative to the newest sample in the window
 			ageUs := uint64(sampleCount-1-idx) * intervalUs
@@ -263,7 +333,11 @@ func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.PuckTe
 
 		var rssi [domain.MaxPilotPoolSize]float32
 		for ch := 0; ch < domain.MaxPilotSlots; ch++ {
-			rssi[ch] = float32(int8(raw[7+ch]))
+			val := float32(int8(raw[7+ch]))
+			rssi[ch] = val
+			if pIdx := slotToPilot[ch]; pIdx >= 0 && pIdx < domain.MaxPilotPoolSize {
+				rssi[pIdx] = val
+			}
 		}
 		return []domain.PuckTelemetryFrame{{
 			PuckID:        timerID,
@@ -315,6 +389,19 @@ func EncodeHelloFrame(slot uint8, role uint8, fingerprint uint32, profileCode ui
 	pkt[9] = sweepHz
 	copy(pkt[10:34], []byte(label))
 	pkt[HelloFrameLen-1] = xorCRC(pkt[:HelloFrameLen-1])
+	return pkt
+}
+
+// EncodeChannelsFrame builds the 19-byte active pilot channel table frame (0xC5 0x5E) sent from
+// the laptop to the Hub Timer over UDP so timers only sweep enabled pilot channels.
+func EncodeChannelsFrame(freqs [domain.MaxPilotSlots]uint16) []byte {
+	pkt := make([]byte, ChannelsFrameLen)
+	pkt[0] = FrameMagic0
+	pkt[1] = FrameMagicChannels
+	for i := 0; i < domain.MaxPilotSlots; i++ {
+		binary.LittleEndian.PutUint16(pkt[2+i*2:4+i*2], freqs[i])
+	}
+	pkt[ChannelsFrameLen-1] = xorCRC(pkt[:ChannelsFrameLen-1])
 	return pkt
 }
 

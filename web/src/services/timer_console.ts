@@ -31,6 +31,7 @@ export interface TimerStatus {
   slot: number;
   scanLive?: boolean;
   freqsTemporary: boolean;
+  chanMask?: number;
   freqs: number[];
 }
 

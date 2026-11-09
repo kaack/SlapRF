@@ -26,7 +26,8 @@ static const char *TAG = "slaprf_radio";
 
 #define LAPTOP_UDP_PORT     5404
 #define BEACON_MAGIC_0      0xC5
-#define BEACON_MAGIC_1      0x5D // Hub -> Spokes sync beacon (4 bytes: magic0, magic1, seq, crc8)
+#define BEACON_MAGIC_1      0x5D // Hub -> Spokes sync beacon (4 bytes, or 20 bytes with 8 x uint16_t channel table)
+#define CHANNELS_MAGIC_1    0x5E // Laptop -> Hub active pilot channel table (19 bytes: 0xC5, 0x5E, 8 x uint16_t LE, crc8)
 #define RX_QUEUE_DEPTH      32
 #define ESPNOW_MAX_FRAME    250
 
@@ -72,8 +73,16 @@ static void espnow_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data,
     if (len <= 0 || len > ESPNOW_MAX_FRAME) {
         return;
     }
-    if (len == 4 && data[0] == BEACON_MAGIC_0 && data[1] == BEACON_MAGIC_1 && xor8(data, 3) == data[3]) {
+    if ((len == 4 || len == 20) && data[0] == BEACON_MAGIC_0 && data[1] == BEACON_MAGIC_1 &&
+        xor8(data, (uint32_t)len - 1) == data[len - 1]) {
         s_last_beacon_us = esp_timer_get_time();
+        if (len == 20) {
+            uint16_t freqs[8];
+            for (int i = 0; i < 8; i++) {
+                freqs[i] = (uint16_t)(data[3 + i * 2] | ((uint16_t)data[4 + i * 2] << 8));
+            }
+            slaprf_diag_set_net_channels(freqs);
+        }
         return;
     }
     rx_item_t item;
@@ -182,14 +191,41 @@ void slaprf_start_wifi_bridge(uint8_t wifi_mode, const char *ssid, const char *p
     s_udp_sock = socket(AF_INET, SOCK_DGRAM, IPPROTO_IP);
     int yes = 1;
     setsockopt(s_udp_sock, SOL_SOCKET, SO_BROADCAST, &yes, sizeof(yes));
+    setsockopt(s_udp_sock, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    struct sockaddr_in bind_addr = {0};
+    bind_addr.sin_family = AF_INET;
+    bind_addr.sin_port = htons(LAPTOP_UDP_PORT);
+    bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    bind(s_udp_sock, (struct sockaddr *)&bind_addr, sizeof(bind_addr));
     ESP_LOGI(TAG, "Laptop bridge up (%s), UDP broadcast :%d", wifi_mode == 0 ? "AP SlapRF" : ssid,
              LAPTOP_UDP_PORT);
+}
+
+static void poll_laptop_udp(void) {
+    if (s_udp_sock < 0) {
+        return;
+    }
+    uint8_t buf[64];
+    for (int iter = 0; iter < 8; iter++) {
+        int n = recvfrom(s_udp_sock, buf, sizeof(buf), MSG_DONTWAIT, NULL, NULL);
+        if (n <= 0) {
+            break;
+        }
+        if (n == 19 && buf[0] == BEACON_MAGIC_0 && buf[1] == CHANNELS_MAGIC_1 && xor8(buf, 18) == buf[18]) {
+            uint16_t freqs[8];
+            for (int i = 0; i < 8; i++) {
+                freqs[i] = (uint16_t)(buf[2 + i * 2] | ((uint16_t)buf[3 + i * 2] << 8));
+            }
+            slaprf_diag_set_net_channels(freqs);
+        }
+    }
 }
 
 void slaprf_forward_udp_to_laptop(const void *frame, uint32_t len) {
     if (s_udp_sock < 0) {
         return;
     }
+    poll_laptop_udp();
     struct sockaddr_in dst = {0};
     dst.sin_family = AF_INET;
     dst.sin_port = htons(LAPTOP_UDP_PORT);
@@ -198,6 +234,21 @@ void slaprf_forward_udp_to_laptop(const void *frame, uint32_t len) {
 }
 
 void slaprf_broadcast_hub_sync_beacon(uint8_t seq) {
+    poll_laptop_udp();
+    uint16_t net_freqs[8];
+    if (slaprf_diag_get_net_channels(net_freqs)) {
+        uint8_t b[20];
+        b[0] = BEACON_MAGIC_0;
+        b[1] = BEACON_MAGIC_1;
+        b[2] = seq;
+        for (int i = 0; i < 8; i++) {
+            b[3 + i * 2] = (uint8_t)(net_freqs[i] & 0xFF);
+            b[4 + i * 2] = (uint8_t)((net_freqs[i] >> 8) & 0xFF);
+        }
+        b[19] = xor8(b, 19);
+        esp_now_send(BROADCAST_MAC, b, sizeof(b));
+        return;
+    }
     uint8_t b[4] = {BEACON_MAGIC_0, BEACON_MAGIC_1, seq, 0};
     b[3] = xor8(b, 3);
     esp_now_send(BROADCAST_MAC, b, sizeof(b));

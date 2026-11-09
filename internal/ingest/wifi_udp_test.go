@@ -142,3 +142,46 @@ func TestFramesFromUnannouncedSlotAreDropped(t *testing.T) {
 		t.Fatalf("expected frames from a slot without HELLO to be dropped, got %d", len(got))
 	}
 }
+
+func TestSelectivePilotChannelTableAndUpperPoolMapping(t *testing.T) {
+	eng := tracker.NewEngine()
+	// By default in NewEngine(), Pilots 1..4 (indices 0..3) are enabled on R1(5658), R3(5732), R5(5806), R8(5917)
+	// and Pilots 5..10 are disabled.
+	freqs, slotToPilot := eng.ActivePilotChannels()
+	wantFreqs := [domain.MaxPilotSlots]uint16{5658, 5732, 5806, 5917, 0, 0, 0, 0}
+	if freqs != wantFreqs {
+		t.Fatalf("expected active pilot channel table %v, got %v", wantFreqs, freqs)
+	}
+	if slotToPilot[0] != 0 || slotToPilot[1] != 1 || slotToPilot[2] != 2 || slotToPilot[3] != 3 {
+		t.Fatalf("unexpected default slotToPilot mapping: %v", slotToPilot)
+	}
+
+	// Enable Pilot 10 (SlotIndex 10, array index 9) on R6 (5843 MHz): should claim free hardware slot 4.
+	eng.UpdatePilotSlot(domain.PilotSlot{
+		SlotIndex:    10,
+		Callsign:     "FreeLove",
+		Band:         domain.BandRaceband,
+		Channel:      6,
+		FrequencyMHz: 5843,
+		Enabled:      true,
+	})
+	freqs, slotToPilot = eng.ActivePilotChannels()
+	if freqs[4] != 5843 || slotToPilot[4] != 9 {
+		t.Fatalf("expected Pilot 10 (idx 9) to claim hardware slot 4 at 5843 MHz, got freqs=%v slotToPilot=%v", freqs, slotToPilot)
+	}
+
+	pkt := EncodeChannelsFrame(freqs)
+	if len(pkt) != ChannelsFrameLen || pkt[0] != FrameMagic0 || pkt[1] != FrameMagicChannels || !validCRC8(pkt) {
+		t.Fatalf("invalid channels frame: %x", pkt)
+	}
+
+	rx := NewWiFiUDPReceiver(":0", eng)
+	rx.IngestPacket(EncodeHelloFrame(1, 1, 0xBE7C0001, 3, 100, "H1"), 0)
+	var sample domain.PuckTelemetryFrame
+	sample.SeqNum = 1
+	sample.RSSI[4] = -47 // Hardware slot 4 carries Pilot 10's RSSI
+	decoded := rx.DecodePacket(EncodeWindowFrame(1, 4100, -92, []domain.PuckTelemetryFrame{sample}), 100_000)
+	if len(decoded) != 1 || decoded[0].RSSI[9] != -47 {
+		t.Fatalf("expected hardware slot 4 RSSI (-47 dBm) to map to Pilot 10 (idx 9), got %+v", decoded)
+	}
+}

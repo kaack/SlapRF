@@ -113,8 +113,17 @@ void slaprf_diag_set_slot(uint8_t slot);
 /** Run a pending SCAN (call from the main loop while the timer is on its 2.4 GHz gap). */
 void slaprf_diag_service(void);
 
-/** Active frequency for channel index: the Debug page's temporary table (CHANNELS) if set, else configured. */
+/**
+ * Active frequency for channel index (5180..5917 MHz), or 0 when the channel slot is disabled
+ * (either unchecked on the Debug page / Serial CHANNELS, or inactive in the Pilots list).
+ */
 uint16_t slaprf_diag_channel_mhz(int index, uint16_t configured);
+
+/** Update the network-synced active pilot channel table (0 = slot disabled, 5180..5917 = active). */
+void slaprf_diag_set_net_channels(const uint16_t freqs[8]);
+
+/** Copy out the network-synced pilot channel table if one has been received from the laptop/Hub. */
+bool slaprf_diag_get_net_channels(uint16_t out_freqs[8]);
 
 /** False while the Debug page has switched the 5.8 GHz receiver off (RF 0). */
 bool slaprf_diag_rf_enabled(void);

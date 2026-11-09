@@ -4369,7 +4369,7 @@ body.is-gate-dragging * {
 .debug-bars {
   display: flex;
   flex-direction: column;
-  gap: 7px;
+  gap: 5px;
 }
 .debug-bar-row {
   display: grid;
@@ -4377,7 +4377,30 @@ body.is-gate-dragging * {
   align-items: center;
   gap: 10px;
   font-size: 12px;
-  height: 20px;
+  height: 24px;
+  padding: 0 6px;
+  margin: 0 -6px;
+  border-radius: 5px;
+  cursor: pointer;
+  user-select: none;
+  transition: background-color 0.12s ease, opacity 0.12s ease;
+}
+.debug-bar-row:hover {
+  background: var(--surface-2);
+}
+.debug-bar-row.is-muted {
+  opacity: 0.42;
+}
+.debug-bar-row.is-muted:hover {
+  opacity: 0.68;
+}
+.debug-status-ch.is-muted {
+  opacity: 0.38;
+  text-decoration: line-through;
+}
+.debug-live-ch-hint {
+  font-size: 11px;
+  white-space: nowrap;
 }
 .debug-bar-label {
   color: var(--text-3);
@@ -5041,6 +5064,9 @@ body.is-gate-dragging * {
 @media (max-width: 680px) {
   .debug-bar-row {
     grid-template-columns: 70px minmax(0, 1fr) 62px 48px;
+  }
+  .debug-live-ch-hint {
+    display: none;
   }
   .debug-scale {
     margin: 6px 130px 0 80px;

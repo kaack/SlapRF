@@ -89,6 +89,12 @@ static uint8_t s_hits[8];     // Sweeps > floor + HIT_MARGIN_DB since the last L
 
 static volatile bool s_chan_override;
 static uint16_t s_chan_mhz[8];
+static volatile uint8_t s_chan_mask = 0xFF;
+
+static volatile bool s_net_chan_valid;
+static uint16_t s_net_chan_mhz[8];
+static uint16_t s_net_raw_freqs[8];
+static volatile uint8_t s_net_chan_mask = 0xFF;
 
 static volatile bool s_scan_pending;
 static uint16_t s_scan_start, s_scan_stop, s_scan_step;
@@ -263,8 +269,78 @@ static uint16_t cfg_u16(size_t off) {
     return (uint16_t)(s_cfg[off] | (s_cfg[off + 1] << 8));
 }
 
+static uint16_t slot_display_mhz(int index) {
+    if (index < 0 || index >= 8) {
+        return 0;
+    }
+    if (s_chan_override && s_chan_mhz[index] >= RF_MIN_MHZ) {
+        return s_chan_mhz[index];
+    }
+    if (s_net_chan_valid && s_net_chan_mhz[index] >= RF_MIN_MHZ) {
+        return s_net_chan_mhz[index];
+    }
+    return s_cfg ? cfg_u16(CFG_OFF_FREQS + (size_t)index * 2) : 0;
+}
+
+static uint8_t active_chan_mask(void) {
+    return s_chan_override ? s_chan_mask : s_net_chan_valid ? s_net_chan_mask : s_chan_mask;
+}
+
 uint16_t slaprf_diag_channel_mhz(int index, uint16_t configured) {
-    return (s_chan_override && index >= 0 && index < 8) ? s_chan_mhz[index] : configured;
+    if (index < 0 || index >= 8) {
+        return 0;
+    }
+    const uint8_t mask = active_chan_mask();
+    if (((mask >> index) & 1U) == 0) {
+        return 0; // Slot disabled: skip 5.8 GHz capture on this slot
+    }
+    if (s_chan_override && s_chan_mhz[index] >= RF_MIN_MHZ) {
+        return s_chan_mhz[index];
+    }
+    if (s_net_chan_valid && s_net_chan_mhz[index] >= RF_MIN_MHZ) {
+        return s_net_chan_mhz[index];
+    }
+    return configured;
+}
+
+void slaprf_diag_set_net_channels(const uint16_t freqs[8]) {
+    if (freqs == NULL) {
+        return;
+    }
+    if (s_net_chan_valid && memcmp(s_net_raw_freqs, freqs, sizeof(s_net_raw_freqs)) == 0) {
+        return;
+    }
+    memcpy(s_net_raw_freqs, freqs, sizeof(s_net_raw_freqs));
+    uint8_t mask = 0;
+    for (int i = 0; i < 8; i++) {
+        if (freqs[i] >= RF_MIN_MHZ && freqs[i] <= RF_MAX_MHZ) {
+            mask |= (uint8_t)(1U << i);
+            if (!s_chan_override && s_net_chan_mhz[i] != freqs[i]) {
+                s_floor_q4[i] = FLOOR_UNSET;
+                s_peak[i] = -127;
+                s_hits[i] = 0;
+            }
+            s_net_chan_mhz[i] = freqs[i];
+        } else {
+            if (s_net_chan_mhz[i] < RF_MIN_MHZ && s_cfg != NULL) {
+                s_net_chan_mhz[i] = cfg_u16(CFG_OFF_FREQS + (size_t)i * 2);
+            }
+            if (!s_chan_override) {
+                s_peak[i] = -127;
+                s_hits[i] = 0;
+            }
+        }
+    }
+    s_net_chan_mask = mask;
+    s_net_chan_valid = true;
+}
+
+bool slaprf_diag_get_net_channels(uint16_t out_freqs[8]) {
+    if (!s_net_chan_valid || out_freqs == NULL) {
+        return false;
+    }
+    memcpy(out_freqs, s_net_raw_freqs, sizeof(s_net_raw_freqs));
+    return true;
 }
 
 bool slaprf_diag_rf_enabled(void) {
@@ -312,7 +388,7 @@ static void send_status(void) {
                      "\"rf\":{\"ok\":%s,\"enabled\":%s,\"gain\":%d,\"gainMax\":%d,\"floorDb\":%.1f},"
                      "\"chip\":{\"model\":\"%s\",\"rev\":\"v%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"flashMB\":%lu},"
                      "\"net\":{\"mode\":\"%s\",\"stations\":%d},"
-                     "\"channel\":%u,\"slot\":%u,\"scanLive\":%s,\"freqsTemporary\":%s,\"freqs\":[",
+                     "\"channel\":%u,\"slot\":%u,\"scanLive\":%s,\"freqsTemporary\":%s,\"chanMask\":%u,\"freqs\":[",
                      s_cfg[CFG_OFF_VERSION], s_cfg[CFG_OFF_VERSION + 1], s_cfg[CFG_OFF_VERSION + 2],
                      s_cfg[CFG_OFF_ROLE], s_cfg[CFG_OFF_PROFILE], (unsigned long)fp, label,
                      (long long)(esp_timer_get_time() / 1000), reset_reason_name(esp_reset_reason()),
@@ -325,10 +401,9 @@ static void send_status(void) {
                      chip.model == CHIP_ESP32C5 ? "ESP32-C5" : "ESP32", chip.revision / 100, chip.revision % 100,
                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (unsigned long)(s_flash_bytes / (1024 * 1024)),
                      mode_name, stas.num, channel, s_slot, s_scan_live ? "true" : "false",
-                     s_chan_override ? "true" : "false");
+                     s_chan_override ? "true" : "false", (unsigned)active_chan_mask());
     for (int i = 0; i < 8 && n < (int)sizeof(out) - 16; i++) {
-        n += snprintf(out + n, sizeof(out) - n, "%s%u", i ? "," : "",
-                      slaprf_diag_channel_mhz(i, cfg_u16(CFG_OFF_FREQS + i * 2)));
+        n += snprintf(out + n, sizeof(out) - n, "%s%u", i ? "," : "", slot_display_mhz(i));
     }
     snprintf(out + n, sizeof(out) - n, "]}\n");
     tx_line(out);
@@ -436,33 +511,80 @@ static void handle_channels(const char *args) {
     while (*args == ' ') args++;
     if (strncmp(args, "RESET", 5) == 0) {
         s_chan_override = false;
+        s_chan_mask = 0xFF;
         for (int i = 0; i < 8; i++) s_floor_q4[i] = FLOOR_UNSET; // New frequencies: relearn the noise
-        tx_line("@{\"t\":\"ok\",\"cmd\":\"channels\",\"temporary\":false}\n");
+        char reply[96];
+        snprintf(reply, sizeof(reply), "@{\"t\":\"ok\",\"cmd\":\"channels\",\"temporary\":false,\"chanMask\":%u}\n",
+                 (unsigned)active_chan_mask());
+        tx_line(reply);
+        return;
+    }
+    if (strncmp(args, "MASK", 4) == 0) {
+        const char *p = args + 4;
+        while (*p == ' ') p++;
+        char *end;
+        long v = strtol(p, &end, 0);
+        if (end == p || v < 0 || v > 255) {
+            tx_line("@{\"t\":\"err\",\"msg\":\"CHANNELS MASK needs 0..255 (bit i = 1 enables slot i)\"}\n");
+            return;
+        }
+        if (!s_chan_override) {
+            for (int i = 0; i < 8; i++) {
+                s_chan_mhz[i] = slot_display_mhz(i);
+            }
+        }
+        s_chan_mask = (uint8_t)v;
+        s_chan_override = true;
+        for (int i = 0; i < 8; i++) {
+            if (((s_chan_mask >> i) & 1U) == 0) {
+                s_peak[i] = -127;
+                s_hits[i] = 0;
+            }
+        }
+        char reply[96];
+        snprintf(reply, sizeof(reply), "@{\"t\":\"ok\",\"cmd\":\"channels\",\"temporary\":true,\"chanMask\":%u}\n",
+                 (unsigned)s_chan_mask);
+        tx_line(reply);
         return;
     }
     uint16_t f[8];
+    uint8_t new_mask = 0;
     int count = 0;
     const char *p = args;
     while (*p && count < 8) {
         char *end;
         long v = strtol(p, &end, 10);
         if (end == p) break;
-        if (v < RF_MIN_MHZ || v > RF_MAX_MHZ) {
-            tx_line("@{\"t\":\"err\",\"msg\":\"channels must be 5180-5917 MHz\"}\n");
+        if (v == 0) {
+            f[count] = slot_display_mhz(count);
+            count++;
+        } else if (v >= RF_MIN_MHZ && v <= RF_MAX_MHZ) {
+            f[count] = (uint16_t)v;
+            new_mask |= (uint8_t)(1U << count);
+            count++;
+        } else {
+            tx_line("@{\"t\":\"err\",\"msg\":\"channels must be 5180-5917 MHz (or 0 to disable a slot)\"}\n");
             return;
         }
-        f[count++] = (uint16_t)v;
         p = end;
         while (*p == ',' || *p == ' ') p++;
     }
     if (count != 8) {
-        tx_line("@{\"t\":\"err\",\"msg\":\"CHANNELS needs 8 frequencies, e.g. CHANNELS 5658,5695,5732,5769,5806,5843,5880,5917\"}\n");
+        tx_line("@{\"t\":\"err\",\"msg\":\"CHANNELS needs 8 values (5180-5917 MHz or 0), e.g. CHANNELS 5658,0,5732,0,5806,0,0,5917\"}\n");
         return;
     }
     memcpy(s_chan_mhz, f, sizeof(f));
+    s_chan_mask = new_mask;
     s_chan_override = true;
-    for (int i = 0; i < 8; i++) s_floor_q4[i] = FLOOR_UNSET;
-    tx_line("@{\"t\":\"ok\",\"cmd\":\"channels\",\"temporary\":true}\n");
+    for (int i = 0; i < 8; i++) {
+        s_floor_q4[i] = FLOOR_UNSET;
+        s_peak[i] = -127;
+        s_hits[i] = 0;
+    }
+    char reply[96];
+    snprintf(reply, sizeof(reply), "@{\"t\":\"ok\",\"cmd\":\"channels\",\"temporary\":true,\"chanMask\":%u}\n",
+             (unsigned)s_chan_mask);
+    tx_line(reply);
 }
 
 static void handle_command(char *line) {

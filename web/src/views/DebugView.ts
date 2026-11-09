@@ -136,6 +136,7 @@ export class DebugView extends Component {
     anchorFrac: number;
   } | null = null;
   private signalEnabledCh: boolean[] = [true, true, true, true, true, true, true, true];
+  private chanMaskToggledAt = 0;
   private signalShowFloor = true;
   private signalShowHitLine = true;
   private signalShowThresholds = true;
@@ -208,6 +209,14 @@ export class DebugView extends Component {
         const rfChanged = this.status?.rf.enabled !== s.rf.enabled;
         const emergencyChanged = Boolean(this.status?.emergencyMode) !== Boolean(s.emergencyMode);
         this.status = s;
+        let maskChanged = false;
+        if (s.chanMask !== undefined && Date.now() - this.chanMaskToggledAt > 1500) {
+          const nextEnabled = Array.from({ length: 8 }, (_, i) => ((s.chanMask! >> i) & 1) !== 0);
+          if (nextEnabled.join() !== this.signalEnabledCh.join()) {
+            this.signalEnabledCh = nextEnabled;
+            maskChanged = true;
+          }
+        }
         if (s.emergencyMode) {
           this.liveOn = false;
           this.scanLive = false;
@@ -221,8 +230,9 @@ export class DebugView extends Component {
         this.renderConnection();
         this.renderStatus();
         this.renderLiveHead();
-        if (firstStatus || emergencyChanged || freqsChanged || rfChanged || scanChanged) {
+        if (firstStatus || emergencyChanged || freqsChanged || rfChanged || scanChanged || maskChanged) {
           if (freqsChanged) this.renderLive();
+          else if (maskChanged) this.updateLive();
           if (!this.channelsDirty) this.renderChannels();
           this.renderSelfTest();
           this.renderSignalControls();
@@ -472,6 +482,7 @@ export class DebugView extends Component {
           "SCAN LIVE ",
           "SCAN STOP",
           "CHANNELS ",
+          "CHANNELS MASK ",
           "CHANNELS RESET",
           "LOG ",
           "BOOTLOG?",
@@ -593,6 +604,21 @@ export class DebugView extends Component {
     if (this.console.connected && this.liveOn && !this.busy) {
       await this.console.send(`LIVE ${desired}`).catch(() => undefined);
       this.renderSignalControls();
+    }
+  }
+
+  /** Push the active 8-channel monitoring bitmask to the timer over USB so unchecked slots are skipped in hardware sweeps. */
+  private syncChannelMaskToFirmware(): void {
+    let mask = 0;
+    for (let i = 0; i < 8; i++) {
+      if (this.signalEnabledCh[i]) mask |= 1 << i;
+    }
+    this.chanMaskToggledAt = Date.now();
+    if (this.status) {
+      this.status.chanMask = mask;
+    }
+    if (this.console.connected && !this.status?.emergencyMode && !this.scanLive) {
+      void this.console.send(`CHANNELS MASK ${mask}`).catch(() => undefined);
     }
   }
 
@@ -1301,6 +1327,9 @@ export class DebugView extends Component {
           if (idx >= 0 && idx < 8) {
             const isSolo = this.signalEnabledCh[idx] && this.signalEnabledCh.filter(Boolean).length === 1;
             this.signalEnabledCh = this.signalEnabledCh.map((_, i) => (isSolo ? true : i === idx));
+            this.syncChannelMaskToFirmware();
+            this.updateLive();
+            this.renderStatus();
             this.renderSignalControls();
             this.renderNoiseTable();
             this.dirtySignal = true;
@@ -1969,6 +1998,9 @@ export class DebugView extends Component {
           const idx = Number(t.dataset.ch);
           if (idx >= 0 && idx < 8) {
             this.signalEnabledCh[idx] = !this.signalEnabledCh[idx];
+            this.syncChannelMaskToFirmware();
+            this.updateLive();
+            this.renderStatus();
             this.renderSignalControls();
             this.renderNoiseTable();
             this.dirtySignal = true;
@@ -1978,6 +2010,9 @@ export class DebugView extends Component {
         case "signal-ch-all": {
           const allOn = this.signalEnabledCh.every(Boolean);
           this.signalEnabledCh = this.signalEnabledCh.map(() => !allOn);
+          this.syncChannelMaskToFirmware();
+          this.updateLive();
+          this.renderStatus();
           this.renderSignalControls();
           this.renderNoiseTable();
           this.dirtySignal = true;
@@ -2699,7 +2734,8 @@ export class DebugView extends Component {
     const chChips = freqs
       .map((f, i) => {
         const rb = racebandName(f) || `Ch${i + 1}`;
-        return `<span class="debug-status-ch mono"><strong>${rb}</strong> ${f}</span>`;
+        const onCh = this.signalEnabledCh[i];
+        return `<span class="debug-status-ch mono ${onCh ? "" : "is-muted"}" title="${onCh ? `Slot ${i + 1}: ${rb} (${f} MHz) — monitored` : `Slot ${i + 1}: ${rb} (${f} MHz) — disabled`}"><strong>${rb}</strong> ${f}</span>`;
       })
       .join("");
 
@@ -2859,18 +2895,25 @@ export class DebugView extends Component {
   /** Build the bar rows once per channel set; updateLive() then only touches styles and text. */
   private renderLive(): void {
     const freqs = this.status?.freqs ?? RACEBAND;
+    const allOn = this.signalEnabledCh.every(Boolean);
+    const activeCount = this.signalEnabledCh.filter(Boolean).length;
     this.slot("live").innerHTML = `
       <div class="debug-subbar">
         <span class="debug-chart-title">Channel RSSI meter (8 pilot slots)</span>
+        <div class="debug-connect-actions">
+          <span class="note debug-live-ch-hint" data-live-ch-note><span class="mono">${activeCount}/8</span> active · click row to toggle · double-click to solo</span>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="signal-ch-all" data-live-ch-all title="${allOn ? "Disable all 8 channels" : "Enable all 8 channels"}">${allOn ? "Disable all" : "Enable all"}</button>
+        </div>
       </div>
       <div class="debug-bars">
         ${freqs
           .map((f, i) => {
             const band = racebandName(f) || `Ch${i + 1}`;
             const col = CHANNEL_COLORS[i];
+            const onCh = this.signalEnabledCh[i];
             return `
-            <div class="debug-bar-row" data-bar>
-              <span class="debug-bar-label mono"><span class="debug-ch-inline" style="background:${col}"></span><strong>${band}</strong> ${f}</span>
+            <div class="debug-bar-row ${onCh ? "" : "is-muted"}" data-bar data-action="signal-ch" data-ch="${i}" role="button" tabindex="0" aria-pressed="${onCh}" title="Click to toggle ${band} (${f} MHz) monitoring on/off · double-click to solo">
+              <span class="debug-bar-label mono"><span class="debug-ch-inline" data-bar-dot style="${onCh ? `background:${col}` : `background:transparent;box-shadow:inset 0 0 0 1.5px ${col}`}"></span><strong>${band}</strong> ${f}</span>
               <div class="debug-bar-track">
                 <span class="debug-bar-fill" style="width:0%"></span>
                 <span class="debug-bar-peak" style="left:0%;display:none"></span>
@@ -2889,10 +2932,21 @@ export class DebugView extends Component {
     const l = this.live;
     const note = this.el.querySelector<HTMLElement>("[data-live-note]");
     const led = this.el.querySelector<HTMLElement>("[data-live-led]");
+    const chNote = this.el.querySelector<HTMLElement>("[data-live-ch-note]");
+    const chAllBtn = this.el.querySelector<HTMLButtonElement>("[data-live-ch-all]");
     const on = this.console.connected;
     const emg = Boolean(on && this.status?.emergencyMode);
     const rfOn = this.status?.rf.enabled ?? true;
     const inScanMode = Boolean(this.scanLive || this.status?.scanLive);
+    const activeCount = this.signalEnabledCh.filter(Boolean).length;
+    const allOn = activeCount === 8;
+    if (chNote) {
+      chNote.innerHTML = `<span class="mono">${activeCount}/8</span> active · click row to toggle · double-click to solo`;
+    }
+    if (chAllBtn) {
+      chAllBtn.textContent = allOn ? "Disable all" : "Enable all";
+      chAllBtn.title = allOn ? "Disable all 8 channels" : "Enable all 8 channels";
+    }
     if (led) {
       led.classList.toggle("is-emergency", emg);
       led.classList.toggle("is-up", !emg && on && rfOn && !inScanMode && this.liveOn);
@@ -2917,19 +2971,28 @@ export class DebugView extends Component {
     }
     const pct = (x: number) => Math.max(0, Math.min(100, ((x - DBM_MIN) / (DBM_MAX - DBM_MIN)) * 100));
     this.el.querySelectorAll<HTMLElement>("[data-bar]").forEach((row, i) => {
+      const onCh = Boolean(this.signalEnabledCh[i]);
+      const col = CHANNEL_COLORS[i];
+      row.classList.toggle("is-muted", !onCh);
+      row.setAttribute("aria-pressed", String(onCh));
+      const dot = row.querySelector<HTMLElement>("[data-bar-dot]");
+      if (dot) {
+        dot.style.background = onCh ? col : "transparent";
+        dot.style.boxShadow = onCh ? "none" : `inset 0 0 0 1.5px ${col}`;
+      }
       const fill = row.querySelector<HTMLElement>(".debug-bar-fill")!;
       const peak = row.querySelector<HTMLElement>(".debug-bar-peak")!;
       const value = row.querySelector<HTMLElement>(".debug-bar-value")!;
       const hits = row.querySelector<HTMLElement>(".debug-bar-hits")!;
-      const v = l?.dbm[i];
-      const pk = l?.pk[i];
-      const h = l?.hits?.[i];
+      const v = onCh ? l?.dbm[i] : undefined;
+      const pk = onCh ? l?.pk[i] : undefined;
+      const h = onCh ? l?.hits?.[i] : undefined;
       fill.style.width = v !== undefined && v > -127 ? `${pct(v)}%` : "0%";
       peak.style.display = pk !== undefined && pk > -127 ? "" : "none";
       if (pk !== undefined) peak.style.left = `${pct(pk)}%`;
-      value.textContent = v !== undefined && v > -127 ? `${v} dBm` : "—";
-      hits.textContent = h !== undefined ? `${h} hit${h === 1 ? "" : "s"}` : "—";
-      hits.classList.toggle("is-active", (h ?? 0) > 0);
+      value.textContent = !onCh ? "Off" : v !== undefined && v > -127 ? `${v} dBm` : "—";
+      hits.textContent = !onCh ? "—" : h !== undefined ? `${h} hit${h === 1 ? "" : "s"}` : "—";
+      hits.classList.toggle("is-active", onCh && (h ?? 0) > 0);
     });
   }
 
@@ -3927,7 +3990,8 @@ export class DebugView extends Component {
         "  LIVE [0|1|2]         stream 5.8 GHz readings (0=off, 1=10 Hz, 2=50 Hz every sweep)",
         "  SCAN <a b s>         single spectrum sweep a..b MHz in s MHz steps (e.g. SCAN 5650 5917 5)",
         "  SCAN LIVE <a b s>    continuous spectrum sweep (SCAN STOP to end)",
-        "  CHANNELS <f1,..,f8>  temporary 8-channel table in MHz (CHANNELS RESET to restore saved)",
+        "  CHANNELS <f1,..,f8>  set 8 channels in MHz (5180..5917, or 0 to disable a slot)",
+        "  CHANNELS MASK <0..255> enable/disable channel slots by bitmask (CHANNELS RESET to restore)",
         "  LOG [1|0]            mirror ESP-IDF log output onto USB serial",
         "  BOOTLOG? / LASTLOG?  print current or previous boot log from RTC memory",
         "  SLAPRF?              read 160-byte SLAPRF02 configuration block",
@@ -4004,9 +4068,15 @@ export class DebugView extends Component {
         upper.startsWith("CHANNELS") ||
         upper.startsWith("SCAN STOP")
       ) {
+        if (upper.startsWith("CHANNELS")) {
+          this.chanMaskToggledAt = 0;
+        }
         await sleep(150);
         try {
           this.status = await this.refreshStatus();
+          if (this.status.chanMask !== undefined) {
+            this.signalEnabledCh = Array.from({ length: 8 }, (_, i) => ((this.status!.chanMask! >> i) & 1) !== 0);
+          }
           this.renderAll();
         } catch {
           this.status = await this.restart("REBOOT");

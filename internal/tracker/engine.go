@@ -261,6 +261,42 @@ func (e *Engine) ResetSession() {
 	e.mu.Unlock()
 }
 
+// ActivePilotChannels returns the 8-slot hardware frequency table (MHz, or 0 for disabled slots)
+// and the mapping from each hardware slot (0..7) to the pilot index in `e.pilots` (0..15).
+// Pilots at indices 0..7 keep their natural hardware slot 0..7 when enabled; any enabled pilot at
+// index >= 8 is placed into the first unused hardware slot 0..7 (since at most 8 pilots can be
+// enabled at once).
+func (e *Engine) ActivePilotChannels() ([domain.MaxPilotSlots]uint16, [domain.MaxPilotSlots]int) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return ComputeActivePilotChannels(e.pilots)
+}
+
+// ComputeActivePilotChannels builds the 8-slot hardware frequency table and slot->pilot index map.
+func ComputeActivePilotChannels(pilots []domain.PilotSlot) ([domain.MaxPilotSlots]uint16, [domain.MaxPilotSlots]int) {
+	var freqs [domain.MaxPilotSlots]uint16
+	var slotToPilot [domain.MaxPilotSlots]int
+	for ch := 0; ch < domain.MaxPilotSlots; ch++ {
+		slotToPilot[ch] = ch
+		if ch < len(pilots) && pilots[ch].Enabled && pilots[ch].FrequencyMHz >= 5180 {
+			freqs[ch] = pilots[ch].FrequencyMHz
+		}
+	}
+	for i := domain.MaxPilotSlots; i < len(pilots) && i < domain.MaxPilotPoolSize; i++ {
+		if !pilots[i].Enabled || pilots[i].FrequencyMHz < 5180 {
+			continue
+		}
+		for ch := 0; ch < domain.MaxPilotSlots; ch++ {
+			if freqs[ch] == 0 {
+				freqs[ch] = pilots[i].FrequencyMHz
+				slotToPilot[ch] = i
+				break
+			}
+		}
+	}
+	return freqs, slotToPilot
+}
+
 func (e *Engine) resetSessionLocked() {
 	e.progress = make(map[int]*pilotProgress)
 	e.lastAcceptedUs = make(map[string]uint64)

@@ -1,5 +1,5 @@
 /**
- * SlapRF firmware profile: Technical · Trees & obstacles
+ * SlapRF firmware profile: Technical Â· Trees & obstacles
  *
  * Timers sit behind trees, under ramps, or inside structures, so the Hub link drops out for long
  * stretches. Long Range 500 kbps at +20 dBm with 6-sweep windows sent every 2 sweeps delivers each
@@ -184,15 +184,22 @@ static void sweep_once(void) {
     // receiver can be switched off. Either way the pilot readings are -127 for this sweep.
     const bool scanning = slaprf_diag_scan_live_step(SWEEP_BUDGET_US);
     const bool rf_on = !scanning && slaprf_diag_rf_enabled();
-    if (rf_on) {
+    uint16_t ch_mhz[MAX_PILOT_SLOTS];
+    bool any_ch = false;
+    for (int i = 0; i < MAX_PILOT_SLOTS; i++) {
+        ch_mhz[i] = rf_on ? slaprf_diag_channel_mhz(i, g_flash_cfg.slot_freqs_mhz[i]) : 0;
+        if (ch_mhz[i] >= 5180) {
+            any_ch = true;
+        }
+    }
+    if (any_ch) {
         slaprf_rf58_enter();
     }
     for (int i = 0; i < MAX_PILOT_SLOTS; i++) {
-        const uint16_t mhz = slaprf_diag_channel_mhz(i, g_flash_cfg.slot_freqs_mhz[i]);
-        int8_t raw = rf_on ? esp_sdr_measure_5g_channel_dbm(mhz) : -127;
+        int8_t raw = ch_mhz[i] >= 5180 ? esp_sdr_measure_5g_channel_dbm(ch_mhz[i]) : -127;
         cur->rssi_dbm[i] = raw;
     }
-    if (rf_on) {
+    if (any_ch) {
         slaprf_rf58_leave();
     }
     const int64_t took = slaprf_now_us() - t0;
