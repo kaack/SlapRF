@@ -411,7 +411,7 @@ export class DebugView extends Component {
               <div class="debug-canvas-wrap">
                 <canvas class="debug-canvas debug-signal-canvas" data-signal-canvas></canvas>
               </div>
-              <div class="debug-chart-readout debug-single-readout mono" data-signal-readout></div>
+              <div class="debug-chart-readout debug-single-readout" data-signal-readout></div>
               <div data-slot="signal-legend"></div>
             </div>
             <div class="debug-status-layout" data-slot="noise-table"></div>
@@ -3529,7 +3529,7 @@ export class DebugView extends Component {
         <div class="debug-canvas-wrap">
           <canvas class="debug-canvas debug-spectrum-canvas" data-spectrum-canvas></canvas>
         </div>
-        <div class="debug-chart-readout debug-single-readout mono" data-spectrum-readout></div>
+        <div class="debug-chart-readout debug-single-readout" data-spectrum-readout></div>
         <div class="debug-chart-foot">
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
@@ -3632,7 +3632,7 @@ export class DebugView extends Component {
         <div class="debug-canvas-wrap">
           <canvas class="debug-canvas debug-waterfall-canvas" data-waterfall-canvas></canvas>
         </div>
-        <div class="debug-chart-readout debug-single-readout mono" data-waterfall-readout></div>
+        <div class="debug-chart-readout debug-single-readout" data-waterfall-readout></div>
         <div class="debug-chart-foot">
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
