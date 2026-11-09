@@ -279,7 +279,7 @@ export class TimersList extends Component {
           ${
             isLatestFw
               ? ""
-              : `<span class="badge tone-warn" title="Reflash over USB below to update to ${LATEST_FIRMWARE_VERSION}">Update → ${LATEST_FIRMWARE_VERSION}</span>`
+              : `<span class="badge tone-warn" title="Reflash over USB on the Flasher page to update to ${LATEST_FIRMWARE_VERSION}">Update → ${LATEST_FIRMWARE_VERSION}</span>`
           }
         </div>
 

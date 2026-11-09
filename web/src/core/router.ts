@@ -1,6 +1,6 @@
 import { icons } from "./icons";
 
-export type RouteId = "live" | "pilot" | "sim" | "setup" | "debug";
+export type RouteId = "live" | "pilot" | "sim" | "setup" | "flasher" | "debug";
 
 export interface RouteMeta {
   id: RouteId;
@@ -41,6 +41,13 @@ export const ROUTES: RouteMeta[] = [
     title: "Settings",
     subtitle: "Pilots, timing rules, announcer, gates and LiveTime",
     icon: () => icons.sliders(20),
+  },
+  {
+    id: "flasher",
+    label: "Flasher",
+    title: "Flasher",
+    subtitle: "Flash or read Seeed XIAO ESP32-C5 timers over USB directly from the browser",
+    icon: () => icons.cpu(20),
   },
   {
     id: "debug",

@@ -6,6 +6,7 @@ import { AppStore } from "../state/store";
 import { LiveView } from "../views/LiveView";
 import { PilotView } from "../views/PilotView";
 import { DebugView } from "../views/DebugView";
+import { FlasherView } from "../views/FlasherView";
 import { SetupView } from "../views/SetupView";
 import { SimView } from "../views/SimView";
 import { Sidebar } from "./Sidebar";
@@ -73,6 +74,8 @@ export class AppShell extends Component {
         return new SimView(host, this.store, this.api);
       case "setup":
         return new SetupView(host, this.store, this.api, this.announcer);
+      case "flasher":
+        return new FlasherView(host, this.store, this.api);
       case "debug":
         return new DebugView(host);
     }

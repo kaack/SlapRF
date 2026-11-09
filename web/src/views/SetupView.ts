@@ -6,7 +6,6 @@ import { AnnouncerSettings } from "../widgets/AnnouncerSettings";
 import { DataSourceCard } from "../widgets/DataSourceCard";
 import { LiveTimeCard } from "../widgets/LiveTimeCard";
 import { PilotSlotsEditor } from "../widgets/PilotSlotsEditor";
-import { TimerFlasher } from "../widgets/TimerFlasher";
 import { TimersList } from "../widgets/TimersList";
 import { TimingRulesEditor } from "../widgets/TimingRulesEditor";
 import { TrackEditor } from "../widgets/TrackEditor";
@@ -52,14 +51,6 @@ export class SetupView extends Component {
 
         <section class="settings-section">
           <div class="settings-intro">
-            <h2>Flasher</h2>
-            <p>Plug each Seeed XIAO ESP32-C5 into this computer over USB and flash or read it directly from the browser — no compiler, drivers, or command line needed.</p>
-          </div>
-          <div class="card" data-slot="flasher"></div>
-        </section>
-
-        <section class="settings-section">
-          <div class="settings-intro">
             <h2>Timers</h2>
             <p>Physical XIAO ESP32-C5 timers discovered over Wi-Fi / ESP-NOW or USB, showing their color, flashed ID, online status, role, RF noise floor, and battery health.</p>
           </div>
@@ -87,7 +78,6 @@ export class SetupView extends Component {
     this.adopt(new TimingRulesEditor(this.slot("rules"), store, api));
     this.adopt(new AnnouncerSettings(this.slot("announcer"), announcer));
     this.adopt(new LiveTimeCard(this.slot("livetime"), store));
-    this.adopt(new TimerFlasher(this.slot("flasher"), store, api));
     this.adopt(new TimersList(this.slot("timers"), store, api));
     this.adopt(new TrackEditor(this.slot("track"), store, api));
     this.adopt(new DataSourceCard(this.slot("source"), store, api));

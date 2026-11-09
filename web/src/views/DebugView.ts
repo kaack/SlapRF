@@ -2388,7 +2388,7 @@ export class DebugView extends Component {
     const profile = FIRMWARE_PROFILES.find((p) => p.code === s.profile);
     if (!profile) add("Identity", "fail", `unknown firmware profile ${s.profile}; flash a current SlapRF build`);
     else if (s.fp.toUpperCase() === UNPROVISIONED_FP)
-      add("Identity", "warn", `${profile.name}, but not set up yet (default fingerprint). Use Setup -> Timers to give it an identity.`);
+      add("Identity", "warn", `${profile.name}, but not set up yet (default fingerprint). Use the Flasher page to give it an identity.`);
     else add("Identity", "pass", `${s.label || "(unnamed)"} | ${s.role === 1 ? "Hub" : "Spoke"} | ${profile.name} | ${s.fp}`);
 
     // 3. Receiver
