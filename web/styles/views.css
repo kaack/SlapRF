@@ -3824,21 +3824,37 @@ body.is-gate-dragging * {
   min-width: 0;
 }
 .debug-status-topbar {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px 14px;
+  flex-wrap: nowrap;
+  gap: 0;
   min-height: 46px;
   padding: 8px 16px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
   background: var(--surface);
   min-width: 0;
+  overflow: hidden;
+}
+.debug-status-topbar > .debug-led-status {
+  flex: 1 1 0%;
+  min-width: 0;
+  white-space: nowrap;
+}
+.debug-status-topbar .debug-head-note {
+  white-space: nowrap;
 }
 .debug-status-topbar > .debug-connect-actions {
+  position: relative;
+  z-index: 1;
   margin-left: auto;
+  flex-wrap: nowrap;
   flex-shrink: 0;
+  padding-left: 8px;
+  background: var(--surface);
+  box-shadow: -10px 0 8px -2px var(--surface);
 }
 .debug-status-panels {
   display: grid;
