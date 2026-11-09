@@ -4055,13 +4055,16 @@ body.is-gate-dragging * {
   flex-shrink: 0;
 }
 @media (max-width: 1180px) {
-  .debug-chart-foot > .debug-connect-actions {
-    order: 2;
-  }
   .debug-chart-foot > .debug-chart-hint {
-    order: 3;
+    order: 1;
     flex: 0 0 100%;
     margin-right: 0;
+  }
+  .debug-chart-foot > .debug-toolbar-left {
+    order: 2;
+  }
+  .debug-chart-foot > .debug-connect-actions {
+    order: 3;
   }
 }
 .debug-axis-pill {
