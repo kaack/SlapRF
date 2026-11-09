@@ -137,9 +137,10 @@ export class DebugView extends Component {
   } | null = null;
   private signalEnabledCh: boolean[] = [true, true, true, true, true, true, true, true];
   private chanMaskToggledAt = 0;
+  private barFillVal: number[] = [-127, -127, -127, -127, -127, -127, -127, -127];
+  private barFillAt: number[] = [0, 0, 0, 0, 0, 0, 0, 0];
   private barPeakVal: number[] = [-127, -127, -127, -127, -127, -127, -127, -127];
   private barPeakAt: number[] = [0, 0, 0, 0, 0, 0, 0, 0];
-  private barLastUpdateAt = 0;
   private signalShowFloor = true;
   private signalShowHitLine = true;
   private signalShowThresholds = true;
@@ -2965,8 +2966,6 @@ export class DebugView extends Component {
       }
     }
     const now = performance.now();
-    const dtSec = this.barLastUpdateAt > 0 ? Math.min(0.5, Math.max(0, (now - this.barLastUpdateAt) / 1000)) : 0;
-    this.barLastUpdateAt = now;
     const pct = (x: number) => Math.max(0, Math.min(100, ((x - DBM_MIN) / (DBM_MAX - DBM_MIN)) * 100));
     this.el.querySelectorAll<HTMLElement>("[data-bar]").forEach((row, i) => {
       const onCh = Boolean(this.signalEnabledCh[i]);
@@ -2983,22 +2982,34 @@ export class DebugView extends Component {
       const value = row.querySelector<HTMLElement>(".debug-bar-value")!;
       const hits = row.querySelector<HTMLElement>(".debug-bar-hits")!;
       const v = onCh ? l?.dbm[i] : undefined;
-      const rawPk = onCh ? Math.max(v ?? -127, l?.pk[i] ?? -127) : -127;
-      if (!onCh || rawPk <= -127) {
+      const sampleDbm = onCh ? Math.max(v ?? -127, l?.pk[i] ?? -127) : -127;
+      if (!onCh || sampleDbm <= -127) {
+        this.barFillVal[i] = -127;
+        this.barFillAt[i] = 0;
         this.barPeakVal[i] = -127;
         this.barPeakAt[i] = 0;
-      } else if (rawPk >= this.barPeakVal[i]) {
-        this.barPeakVal[i] = rawPk;
-        this.barPeakAt[i] = now;
-      } else if (now - this.barPeakAt[i] >= 1200) {
-        this.barPeakVal[i] = Math.max(rawPk, this.barPeakVal[i] - 12 * dtSec);
+      } else {
+        // Green fill bar: instant attack to the spike (including pk), hold 160 ms so brief spikes are clearly visible
+        const rising = sampleDbm >= this.barFillVal[i];
+        if (rising || now - this.barFillAt[i] >= 160) {
+          this.barFillVal[i] = sampleDbm;
+          if (rising) {
+            this.barFillAt[i] = now;
+          }
+        }
+        // White peak tick: instant attack, hold steady for 1.5 s, then snap directly back to current reading (no crawl)
+        if (sampleDbm >= this.barPeakVal[i] || now - this.barPeakAt[i] >= 1500) {
+          this.barPeakVal[i] = sampleDbm;
+          this.barPeakAt[i] = now;
+        }
       }
+      const shownFill = this.barFillVal[i];
       const heldPk = this.barPeakVal[i];
       const h = onCh ? l?.hits?.[i] : undefined;
-      fill.style.width = v !== undefined && v > -127 ? `${pct(v)}%` : "0%";
+      fill.style.width = shownFill > -127 ? `${pct(shownFill)}%` : "0%";
       peak.style.display = heldPk > -127 ? "" : "none";
       if (heldPk > -127) peak.style.left = `${pct(heldPk)}%`;
-      value.textContent = !onCh ? "Off" : v !== undefined && v > -127 ? `${v} dBm` : "—";
+      value.textContent = !onCh ? "Off" : shownFill > -127 ? `${shownFill} dBm` : "—";
       hits.textContent = !onCh ? "—" : h !== undefined ? `${h} hit${h === 1 ? "" : "s"}` : "—";
       hits.classList.toggle("is-active", onCh && (h ?? 0) > 0);
     });
