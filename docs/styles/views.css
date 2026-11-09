@@ -3912,6 +3912,10 @@ body.is-gate-dragging * {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 10px;
+  transition: opacity 0.2s;
+}
+.debug-status-panels.is-unread {
+  opacity: 0.45;
 }
 .debug-subbox {
   display: flex;
