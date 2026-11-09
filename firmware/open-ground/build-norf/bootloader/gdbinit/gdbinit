@@ -1,0 +1,2 @@
+source C:/fpv-gate-timer/firmware/open-ground/build-norf/bootloader/gdbinit/symbols
+source C:/fpv-gate-timer/firmware/open-ground/build-norf/bootloader/gdbinit/connect

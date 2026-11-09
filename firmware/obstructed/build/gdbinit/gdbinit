@@ -1,0 +1,2 @@
+source C:/fpv-gate-timer/firmware/obstructed/build/gdbinit/symbols
+source C:/fpv-gate-timer/firmware/obstructed/build/gdbinit/connect
