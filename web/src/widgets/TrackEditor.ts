@@ -95,9 +95,11 @@ export class TrackEditor extends Component {
         this.editingNodeId = null;
         const node = this.store.node(nodeId);
         if (node) void this.save(node, { name: "" });
+        this.render();
         return;
       }
       if (target.closest("[data-action='restore-default-track']")) {
+        this.editingNodeId = null;
         void this.api.resetTrackToDefault();
       }
     });
@@ -331,37 +333,7 @@ export class TrackEditor extends Component {
           }
         </button>
 
-        <div class="gate-node-name-row">
-          ${
-            this.editingNodeId === node.gateId
-              ? `<div class="gate-node-name-edit-wrap">
-                  <input
-                    type="text"
-                    class="input gate-node-inline-input ${node.name.trim() ? "has-reset" : ""}"
-                    data-gate-name="${node.gateId}"
-                    value="${esc(node.name)}"
-                    placeholder="Gate ${index + 1}"
-                    maxlength="40"
-                    spellcheck="false"
-                    autocomplete="off"
-                    aria-label="Edit name for Gate ${index + 1}"
-                  />
-                  ${
-                    node.name.trim()
-                      ? `<button type="button" class="gate-node-inline-reset" data-clear-gate-name="${node.gateId}" title="Reset gate name to default (Gate ${index + 1})">${icons.reset(12)}</button>`
-                      : ""
-                  }
-                </div>`
-              : `<div class="gate-node-name" data-node-name="${node.gateId}" title="${esc(displayName)}">${esc(displayName)}</div>
-                 <button
-                   type="button"
-                   class="gate-node-edit-btn"
-                   data-edit-gate-name="${node.gateId}"
-                   title="Rename ${esc(displayName)}"
-                   aria-label="Rename ${esc(displayName)}"
-                 >${icons.pencil(11)}</button>`
-          }
-        </div>
+        <div class="gate-node-name" data-node-name="${node.gateId}" title="${esc(displayName)}">${esc(displayName)}</div>
 
         <button
           type="button"
@@ -453,7 +425,37 @@ export class TrackEditor extends Component {
         <div class="gate-inspector-row">
           <div class="gate-inspector-title">
             <span class="gate-inspector-step mono">#${index + 1}</span>
-            <strong data-inspector-name>${esc(displayName)}</strong>
+            ${
+              this.editingNodeId === node.gateId
+                ? `<div class="gate-node-name-edit-wrap">
+                    <input
+                      type="text"
+                      class="input gate-node-inline-input ${node.name.trim() ? "has-reset" : ""}"
+                      data-gate-name="${node.gateId}"
+                      value="${esc(node.name)}"
+                      placeholder="Gate ${index + 1}"
+                      maxlength="40"
+                      spellcheck="false"
+                      autocomplete="off"
+                      aria-label="Edit name for Gate ${index + 1}"
+                    />
+                    ${
+                      node.name.trim()
+                        ? `<button type="button" class="gate-node-inline-reset" data-clear-gate-name="${node.gateId}" title="Reset gate name to default (Gate ${index + 1})">${icons.reset(12)}</button>`
+                        : ""
+                    }
+                  </div>`
+                : `<span class="gate-inspector-name-group">
+                    <strong data-inspector-name>${esc(displayName)}</strong>
+                    <button
+                      type="button"
+                      class="gate-node-edit-btn"
+                      data-edit-gate-name="${node.gateId}"
+                      title="Rename ${esc(displayName)}"
+                      aria-label="Rename ${esc(displayName)}"
+                    >${icons.pencil(12)}</button>
+                  </span>`
+            }
             ${
               isStart
                 ? `<span class="badge badge-accent gate-inspector-start-badge">${icons.checkered(12)} Start gate</span>`
@@ -883,8 +885,9 @@ export class TrackEditor extends Component {
         }
       } else {
         this.isDragging = false;
-        if (this.selectedNodeId !== nodeId) {
+        if (this.selectedNodeId !== nodeId || this.editingNodeId !== null) {
           this.selectedNodeId = nodeId;
+          this.editingNodeId = null;
           try {
             window.localStorage.setItem(TRACK_EDITOR_STORAGE_KEY, String(nodeId));
           } catch {
@@ -913,6 +916,21 @@ export class TrackEditor extends Component {
     items.forEach((item, idx) => {
       const orderEl = item.querySelector<HTMLElement>(".gate-node-order");
       if (orderEl) orderEl.textContent = `#${idx + 1}`;
+
+      const gateId = Number(item.dataset.gate);
+      const node = this.store.node(gateId);
+      const displayName = node?.name.trim() || `Gate ${idx + 1}`;
+      const nameEl = item.querySelector<HTMLElement>("[data-node-name]");
+      if (nameEl) {
+        nameEl.textContent = displayName;
+        nameEl.title = displayName;
+      }
+      if (gateId === this.selectedNodeId) {
+        const inspStepEl = this.el.querySelector<HTMLElement>(".gate-inspector-step");
+        if (inspStepEl) inspStepEl.textContent = `#${idx + 1}`;
+        const inspNameEl = this.el.querySelector<HTMLElement>("[data-inspector-name]");
+        if (inspNameEl) inspNameEl.textContent = displayName;
+      }
 
       const c1 = item.dataset.timerColor || "#64748b";
       const nextItem = items[(idx + 1) % total];
