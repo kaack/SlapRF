@@ -356,17 +356,19 @@ class TimerEraserPanel extends Component {
 
   private updateProgressInPlace(): boolean {
     if (!this.progress) return false;
+    const headEl = this.el.querySelector<HTMLElement>("[data-eraser-head]");
     const statusEl = this.el.querySelector<HTMLElement>("[data-eraser-status]");
     const pctEl = this.el.querySelector<HTMLElement>("[data-eraser-pct]");
     const fillEl = this.el.querySelector<HTMLElement>("[data-eraser-fill]");
     const btnTextEl = this.el.querySelector<HTMLElement>("[data-eraser-btn-text]");
-    if (!statusEl || !pctEl || !fillEl) return false;
+    if (!headEl) return false;
     const pct = Math.max(0, Math.min(100, Math.round(this.progress.percent)));
-    statusEl.textContent = this.progress.detail;
-    pctEl.textContent = `${pct}%`;
-    fillEl.style.width = `${pct}%`;
+    headEl.textContent = `${this.progress.detail} (${pct}%)`;
+    if (statusEl) statusEl.textContent = this.progress.detail;
+    if (pctEl) pctEl.textContent = `${pct}%`;
+    if (fillEl) fillEl.style.width = `${pct}%`;
     if (btnTextEl) {
-      btnTextEl.textContent = `Wiping timer… (${pct}%)`;
+      btnTextEl.textContent = `Erasing… (${pct}%)`;
     }
     return true;
   }
@@ -379,56 +381,53 @@ class TimerEraserPanel extends Component {
         ? 100
         : 0;
 
-    const statusText = this.progress
-      ? this.progress.detail
+    const ledClass = this.busy
+      ? "is-warn"
       : this.errorMsg
-        ? `Error: ${this.errorMsg}`
+        ? "is-emergency"
         : this.lastSuccessMsg
-          ? `✓ ${this.lastSuccessMsg}`
+          ? "is-up"
+          : "";
+
+    const headText = this.busy
+      ? esc(`${this.progress?.detail || "Erasing timer over USB…"} (${pct}%)`)
+      : this.errorMsg
+        ? esc(this.errorMsg)
+        : this.lastSuccessMsg
+          ? `✓ ${esc(this.lastSuccessMsg)}`
           : webSerialOk
-            ? "Plug any XIAO ESP32-C5 into USB and click Erase timer to choose which USB device to wipe."
-            : "Direct USB erasing requires Chrome, Edge, or Brave.";
+            ? "No timer erased yet · plug a timer into USB and click Erase timer"
+            : "Direct USB erasing requires Chrome, Edge, or Brave";
 
     this.el.innerHTML = `
-      <div class="flasher flasher-wizard">
-        <div class="flasher-wizard-body">
-          <div class="flasher-progress ${this.busy ? "is-flashing" : ""} ${this.lastSuccessMsg && !this.busy ? "is-complete" : ""}">
-            <div class="flasher-progress-top">
-              <span class="flasher-progress-status" data-eraser-status="1">${esc(statusText)}</span>
-              <span class="mono flasher-progress-pct" data-eraser-pct="1">${pct}%</span>
-            </div>
-            <div class="meter flasher-meter">
-              <span class="meter-fill ${this.lastSuccessMsg && !this.busy ? "tone-good" : ""}" data-eraser-fill="1" style="width:${pct}%"></span>
-            </div>
-            <div class="flasher-progress-foot">
-              <label class="flasher-port-toggle">
-                <input
-                  type="checkbox"
-                  data-eraser-all-ports="1"
-                  ${this.showAllPorts ? "checked" : ""}
-                  ${this.busy ? "disabled" : ""}
-                />
-                <span>Show all USB serial ports</span>
-              </label>
-              <div class="flasher-progress-foot-actions">
-                <span class="note">Enters ESP32-C5 ROM bootloader directly — no read required</span>
-              </div>
-            </div>
-          </div>
-
-          <div class="flasher-wizard-nav is-end">
-            <button
-              type="button"
-              class="btn btn-bad"
-              data-action="erase-timer"
-              ${this.busy || !webSerialOk ? "disabled" : ""}
-            >
-              ${icons.trash(15)}
-              <span data-eraser-btn-text="1">${this.busy ? `Wiping timer… (${pct}%)` : "Erase timer"}</span>
-            </button>
-          </div>
+      <div class="debug-status-topbar">
+        <span class="debug-led-status">
+          <span class="status-dot ${ledClass}"></span>
+          <span class="debug-head-note" data-eraser-head="1">${headText}</span>
+        </span>
+        <div class="debug-connect-actions">
+          <label class="debug-port-check" title="Include all serial ports in the browser picker">
+            <input type="checkbox" data-eraser-all-ports="1" ${this.showAllPorts ? "checked" : ""} ${this.busy ? "disabled" : ""} />
+            <span>All ports</span>
+          </label>
+          <button type="button" class="btn btn-sm btn-bad" data-action="erase-timer" ${this.busy || !webSerialOk ? "disabled" : ""}>
+            ${icons.trash(14)}<span data-eraser-btn-text="1">${this.busy ? `Erasing… (${pct}%)` : "Erase timer"}</span>
+          </button>
         </div>
-      </div>`;
+      </div>
+      ${
+        this.busy || this.lastSuccessMsg
+          ? `<div class="flasher-progress ${this.busy ? "is-flashing" : "is-complete"}">
+              <div class="flasher-progress-top">
+                <span class="flasher-progress-status" data-eraser-status="1">${esc(this.progress?.detail || this.lastSuccessMsg || "")}</span>
+                <span class="mono flasher-progress-pct" data-eraser-pct="1">${pct}%</span>
+              </div>
+              <div class="meter flasher-meter">
+                <span class="meter-fill ${this.lastSuccessMsg && !this.busy ? "tone-good" : ""}" data-eraser-fill="1" style="width:${pct}%"></span>
+              </div>
+            </div>`
+          : ""
+      }`;
   }
 }
 
@@ -458,9 +457,9 @@ export class FlasherView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Eraser</h2>
-            <p>Factory-reset any Seeed XIAO ESP32-C5 over USB without reading it first. Clicking <strong>Erase timer</strong> opens the USB device picker and wipes the selected board's bootloader, partition table, NVS, and firmware back to a blank chip.</p>
+            <p>Plug a timer into USB and click <strong>Erase timer</strong> to pick which USB device to wipe back to a factory-blank chip.</p>
           </div>
-          <div class="card" data-slot="eraser"></div>
+          <div class="debug-status-layout" data-slot="eraser"></div>
         </section>
       </div>`;
 
