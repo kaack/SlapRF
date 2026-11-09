@@ -2212,8 +2212,22 @@ export class DebugView extends Component {
       `${(s.heapFree / 1024).toFixed(0)} KB free, lowest ${(s.heapMin / 1024).toFixed(0)} KB${s.heapMin > 20 * 1024 ? "" : " (low: it may run out)"}`
     );
 
-    // 9. Last restart
-    if (BAD_RESETS.includes(s.reset)) {
+    // 9. Last restart & safe-mode guard
+    if (s.safeMode) {
+      add(
+        "Last restart",
+        "fail",
+        `SAFE MODE after ${s.crashStreak ?? 3} consecutive ${s.reset} resets — radio & sweeps halted so USB stays up for debugging/reflashing`
+      );
+      try {
+        const last = await this.console.request<BootLog>("LASTLOG?", "bootlog", 3000);
+        this.bootLog = last;
+        this.reportExtra = `\n--- previous boot log (${last.reset}) ---\n${last.text}`;
+        this.renderRestart();
+      } catch {
+        // report without it
+      }
+    } else if (BAD_RESETS.includes(s.reset)) {
       add("Last restart", "warn", `${s.reset}, boot #${s.boots} (previous boot crashed or lost power; boot log attached)`);
       try {
         const last = await this.console.request<BootLog>("LASTLOG?", "bootlog", 3000);
@@ -2452,22 +2466,26 @@ export class DebugView extends Component {
     const budget = s ? s.sweepBudgetUs || (s.sweepHz ? Math.round(1e6 / s.sweepHz) : 0) : 0;
     const badReset = s ? BAD_RESETS.includes(s.reset) : false;
     const unprov = s ? s.fp.toUpperCase() === UNPROVISIONED_FP : false;
-    const ledClass = on && s ? "is-up" : on ? "is-warn" : "";
+    const ledClass = on && s ? (s.safeMode ? "is-bad" : "is-up") : on ? "is-warn" : "";
     const headText = s
-      ? `On · polling every 2 s · up ${fmtUptime(s.uptimeMs)}`
+      ? s.safeMode
+        ? `Safe mode · halted after ${s.crashStreak ?? 3} consecutive ${esc(s.reset)} resets (radio off, ready to debug or reflash)`
+        : `On · polling every 2 s · up ${fmtUptime(s.uptimeMs)}`
       : on
         ? "Waiting for timer status…"
         : "Off · connect a timer over USB";
 
     const rfBadge = !s
       ? `<span class="badge">—</span>`
-      : !s.rf.ok
-        ? `<span class="badge badge-bad">Boot check failed</span>`
-        : !s.rf.enabled
-          ? `<span class="badge badge-warn">Switched off</span>`
-          : s.scanLive
-            ? `<span class="badge badge-accent">Live scan</span>`
-            : `<span class="badge badge-good">OK</span>`;
+      : s.safeMode
+        ? `<span class="badge badge-bad">Safe mode</span>`
+        : !s.rf.ok
+          ? `<span class="badge badge-bad">Boot check failed</span>`
+          : !s.rf.enabled
+            ? `<span class="badge badge-warn">Switched off</span>`
+            : s.scanLive
+              ? `<span class="badge badge-accent">Live scan</span>`
+              : `<span class="badge badge-good">OK</span>`;
 
     const freqs = s?.freqs ?? RACEBAND;
     const chChips = freqs
@@ -2559,7 +2577,15 @@ export class DebugView extends Component {
             </div>
             <div class="debug-kv-row">
               <dt>Last restart</dt>
-              <dd>${s ? (badReset ? `${esc(s.reset)} <span class="note">— see boot log</span>` : esc(s.reset)) : "—"}</dd>
+              <dd>${
+                s
+                  ? s.safeMode
+                    ? `<span class="badge badge-bad">Safe mode</span> ${esc(s.reset)} (${s.crashStreak ?? 3}× in a row)`
+                    : badReset
+                      ? `${esc(s.reset)} <span class="note">— see boot log</span>`
+                      : esc(s.reset)
+                  : "—"
+              }</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Memory free</dt>

@@ -54,7 +54,8 @@
 #define CFG_OFF_LABEL    107
 #define SCAN_MAX_POINTS  200
 #define LOG_RING_BYTES   3072
-#define LOG_RING_MAGIC   0x534C4F47U // "SLOG"
+#define LOG_RING_MAGIC   0x534C4F48U // "SLOH" (v2 with crash_streak)
+#define MAX_CRASH_STREAK 3           // Halt in USB safe mode after 3 consecutive panics/watchdogs
 #define RF_MIN_MHZ       5180
 #define RF_MAX_MHZ       5917
 #define HIT_MARGIN_DB    10 // A "hit" is a reading this far above the channel's typical noise
@@ -107,6 +108,7 @@ typedef struct {
     uint32_t head;
     uint32_t len;
     uint32_t boots;
+    uint32_t crash_streak;
     char data[LOG_RING_BYTES];
 } log_ring_t;
 
@@ -114,6 +116,8 @@ static RTC_NOINIT_ATTR log_ring_t s_ring;
 static char s_last_log[LOG_RING_BYTES]; // Previous boot's log, copied out at startup
 static size_t s_last_len;
 static uint32_t s_boots;
+static uint32_t s_crash_streak;
+static volatile bool s_safe_mode;
 static portMUX_TYPE s_ring_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static void ring_copy_out(char *dst, size_t *out_len) {
@@ -197,19 +201,27 @@ static int log_vprintf(const char *fmt, va_list args) {
     return s_prev_vprintf ? s_prev_vprintf(fmt, args) : vprintf(fmt, args); // UART keeps logging
 }
 
+static bool is_crash_reset(esp_reset_reason_t r) {
+    return r == ESP_RST_PANIC || r == ESP_RST_INT_WDT || r == ESP_RST_TASK_WDT || r == ESP_RST_WDT;
+}
+
 /** Runs before app_main(): start recording the log as early as the app can. */
 __attribute__((constructor)) static void diag_early_init(void) {
+    const esp_reset_reason_t reason = esp_reset_reason();
     if (s_ring.magic == LOG_RING_MAGIC && s_ring.len <= LOG_RING_BYTES && s_ring.head < LOG_RING_BYTES) {
         ring_copy_out(s_last_log, &s_last_len);
         s_boots = s_ring.boots + 1;
+        s_crash_streak = is_crash_reset(reason) ? (s_ring.crash_streak + 1) : 0;
     } else {
         s_last_len = 0;
         s_boots = 1; // Power-on (RTC memory was not retained)
+        s_crash_streak = 0;
     }
     s_ring.magic = LOG_RING_MAGIC;
     s_ring.head = 0;
     s_ring.len = 0;
     s_ring.boots = s_boots;
+    s_ring.crash_streak = s_crash_streak;
     s_prev_vprintf = esp_log_set_vprintf(log_vprintf);
 }
 
@@ -254,15 +266,17 @@ static void send_status(void) {
                         ((uint32_t)s_cfg[CFG_OFF_FP + 2] << 16) | ((uint32_t)s_cfg[CFG_OFF_FP + 3] << 24);
 
     uint8_t channel = 0;
-    wifi_second_chan_t second;
-    esp_wifi_get_channel(&channel, &second);
     wifi_mode_t mode = WIFI_MODE_NULL;
-    esp_wifi_get_mode(&mode);
     wifi_sta_list_t stas = {0};
-    if (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA) {
-        esp_wifi_ap_get_sta_list(&stas);
+    if (!s_safe_mode) {
+        wifi_second_chan_t second;
+        esp_wifi_get_channel(&channel, &second);
+        esp_wifi_get_mode(&mode);
+        if (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA) {
+            esp_wifi_ap_get_sta_list(&stas);
+        }
     }
-    const char *mode_name = mode == WIFI_MODE_APSTA ? "ap+sta" : mode == WIFI_MODE_AP ? "ap" : mode == WIFI_MODE_STA ? "sta" : "off";
+    const char *mode_name = s_safe_mode ? "safe-mode" : mode == WIFI_MODE_APSTA ? "ap+sta" : mode == WIFI_MODE_AP ? "ap" : mode == WIFI_MODE_STA ? "sta" : "off";
 
     bool rf_ok = false;
     int gain = 0, gain_max = 0;
@@ -274,10 +288,11 @@ static void send_status(void) {
     uint8_t mac[6] = {0};
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
 
-    static char out[900];
+    static char out[960];
     int n = snprintf(out, sizeof(out),
                      "@{\"t\":\"status\",\"fw\":\"v%u.%u.%u\",\"role\":%u,\"profile\":%u,\"fp\":\"%08lX\","
-                     "\"label\":\"%s\",\"uptimeMs\":%lld,\"reset\":\"%s\",\"boots\":%lu,\"heapFree\":%lu,\"heapMin\":%lu,"
+                     "\"label\":\"%s\",\"uptimeMs\":%lld,\"reset\":\"%s\",\"boots\":%lu,"
+                     "\"safeMode\":%s,\"crashStreak\":%lu,\"heapFree\":%lu,\"heapMin\":%lu,"
                      "\"sweepHz\":%u,\"sweeps\":%lu,\"sweepUs\":%lu,\"sweepUsMax\":%lu,\"sweepBudgetUs\":%lu,"
                      "\"rf\":{\"ok\":%s,\"enabled\":%s,\"gain\":%d,\"gainMax\":%d,\"floorDb\":%.1f},"
                      "\"chip\":{\"model\":\"%s\",\"rev\":\"v%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"flashMB\":%lu},"
@@ -286,7 +301,8 @@ static void send_status(void) {
                      s_cfg[CFG_OFF_VERSION], s_cfg[CFG_OFF_VERSION + 1], s_cfg[CFG_OFF_VERSION + 2],
                      s_cfg[CFG_OFF_ROLE], s_cfg[CFG_OFF_PROFILE], (unsigned long)fp, label,
                      (long long)(esp_timer_get_time() / 1000), reset_reason_name(esp_reset_reason()),
-                     (unsigned long)s_boots, (unsigned long)esp_get_free_heap_size(),
+                     (unsigned long)s_boots, s_safe_mode ? "true" : "false", (unsigned long)s_crash_streak,
+                     (unsigned long)esp_get_free_heap_size(),
                      (unsigned long)esp_get_minimum_free_heap_size(), s_sweep_hz, (unsigned long)s_sweeps,
                      (unsigned long)s_sweep_us_last, (unsigned long)s_sweep_us_max, (unsigned long)s_sweep_budget_us,
                      rf_ok ? "true" : "false",
@@ -483,6 +499,27 @@ void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
     if (usb_serial_jtag_driver_install(&usb_cfg) == ESP_OK) {
         xTaskCreate(console_task, "slaprf_diag", 4096, NULL, 3, NULL);
     }
+    if (s_crash_streak >= MAX_CRASH_STREAK) {
+        s_safe_mode = true;
+        s_rf_enabled = false;
+        s_ring.crash_streak = 0; // Next explicit REBOOT or reflash attempts a normal boot
+        ESP_LOGE("slaprf_diag",
+                 "SAFE MODE: halted after %lu consecutive crash resets (%s). Radio and sweeps are off so USB stays up for debugging and reflashing; send REBOOT or power-cycle to retry.",
+                 (unsigned long)s_crash_streak, reset_reason_name(esp_reset_reason()));
+        uint32_t tick = 0;
+        for (;;) {
+            if (s_reboot_pending) {
+                vTaskDelay(pdMS_TO_TICKS(40));
+                esp_restart();
+            }
+            // Triple-blink SOS pattern every 1.2 s on the onboard yellow LED
+            const uint32_t phase = tick % 12;
+            const bool led_on = (phase == 0 || phase == 2 || phase == 4);
+            gpio_set_level(XIAO_C5_LED_GPIO, led_on ? 0 : 1);
+            vTaskDelay(pdMS_TO_TICKS(100));
+            tick++;
+        }
+    }
 }
 
 void slaprf_start_config_query_service(const volatile void *cfg, size_t len) {
@@ -522,6 +559,11 @@ static void update_health_led(void) {
 
 void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us) {
     s_sweeps++;
+    if (s_ring.crash_streak != 0 && s_sweeps >= (uint32_t)s_sweep_hz * 5U) {
+        // Survived 5 full seconds of sweeps: clear any prior crash streak
+        s_ring.crash_streak = 0;
+        s_crash_streak = 0;
+    }
     s_sweep_us_last = took_us;
     if (took_us > s_sweep_us_max) s_sweep_us_max = took_us;
     update_health_led();

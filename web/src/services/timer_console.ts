@@ -15,6 +15,8 @@ export interface TimerStatus {
   uptimeMs: number;
   reset: string;
   boots: number;
+  safeMode?: boolean;
+  crashStreak?: number;
   heapFree: number;
   heapMin: number;
   sweepHz: number;
