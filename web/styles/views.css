@@ -4310,6 +4310,28 @@ body.is-gate-dragging * {
   min-height: 72px;
   max-height: 240px;
 }
+.debug-serial-input-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+}
+.debug-serial-prompt {
+  color: var(--accent);
+  font-size: 13px;
+  font-weight: 600;
+  user-select: none;
+}
+.debug-serial-input {
+  flex: 1;
+  min-width: 0;
+  height: 30px;
+  padding: 4px 10px;
+  font-size: 12px;
+  background: var(--bg);
+}
 .debug-selftest-name {
   color: var(--text);
   font-weight: 500;
@@ -4573,6 +4595,20 @@ body.is-gate-dragging * {
 .status-dot.is-bad {
   background: var(--bad);
   box-shadow: 0 0 0 3px rgba(248, 113, 113, 0.16);
+}
+@keyframes emergency-siren-dot {
+  0%, 100% {
+    background: #ef4444;
+    box-shadow: 0 0 0 3px rgba(239, 68, 68, 0.28), 0 0 8px rgba(239, 68, 68, 0.55);
+  }
+  50% {
+    background: #38bdf8;
+    box-shadow: 0 0 0 3px rgba(56, 189, 248, 0.28), 0 0 8px rgba(56, 189, 248, 0.55);
+  }
+}
+.status-dot.is-emergency {
+  background: #ef4444;
+  animation: emergency-siren-dot 1.1s ease-in-out infinite;
 }
 
 /* Dedicated Findings log panels (scrollable, timestamped event table) */

@@ -200,28 +200,43 @@ export class DebugView extends Component {
   private scanFindings: FindingLogEntry[] = [];
   private scanFindingSeq = 0;
   private openAxisMenu: "signal-x" | "signal-y" | "scan-band" | "scan-x" | "scan-y" | "wf-x" | "wf-y" | null = null;
+  private serialLines: string[] = [];
+  private serialHistory: string[] = [];
+  private serialHistoryIdx = -1;
+  private serialDraft = "";
+  private serialAwaitUntil = 0;
 
   constructor(el: HTMLElement) {
     super(el);
     this.console = new TimerConsole({
       onStatus: (s) => {
+        const firstStatus = this.status === null;
         const freqsChanged = this.status?.freqs.join() !== s.freqs.join();
         const rfChanged = this.status?.rf.enabled !== s.rf.enabled;
+        const emergencyChanged = Boolean(this.status?.emergencyMode) !== Boolean(s.emergencyMode);
         this.status = s;
+        if (s.emergencyMode) {
+          this.liveOn = false;
+          this.scanLive = false;
+        }
         // Pick up a live scan still running from before (page reload); skip stale replies right after a toggle.
         let scanChanged = false;
-        if (s.scanLive !== undefined && s.scanLive !== this.scanLive && Date.now() - this.scanToggleAt > 3000) {
+        if (!s.emergencyMode && s.scanLive !== undefined && s.scanLive !== this.scanLive && Date.now() - this.scanToggleAt > 3000) {
           this.scanLive = s.scanLive;
           scanChanged = true;
         }
         this.renderConnection();
         this.renderStatus();
         this.renderLiveHead();
-        if (freqsChanged || rfChanged || scanChanged) {
+        if (firstStatus || emergencyChanged || freqsChanged || rfChanged || scanChanged) {
           if (freqsChanged) this.renderLive();
           if (!this.channelsDirty) this.renderChannels();
+          this.renderSelfTest();
           this.renderSignalControls();
           this.renderScan();
+          this.renderRestart();
+          this.renderLog();
+          this.renderSerialConsole();
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
         }
@@ -261,10 +276,20 @@ export class DebugView extends Component {
         this.dirtyWaterfall = true;
       },
       onLog: (line) => this.appendLog(line),
-      onConfig: (c) =>
-        this.appendLog(
-          `[config] ${c.role} "${c.timerLabel}" profile=${c.firmwareProfile} fp=${c.fingerprint} fw=${c.firmwareVersion} ch=${c.frequenciesMHz.join(",")}`
-        ),
+      onRawReply: (line, msgType) => {
+        if (msgType === "ok" || msgType === "err" || Date.now() < this.serialAwaitUntil) {
+          if (msgType !== "live") {
+            this.appendSerialLine(`< ${line}`);
+          }
+        }
+      },
+      onConfig: (c) => {
+        const line = `[config] ${c.role} "${c.timerLabel}" profile=${c.firmwareProfile} fp=${c.fingerprint} fw=${c.firmwareVersion} ch=${c.frequenciesMHz.join(",")}`;
+        this.appendLog(line);
+        if (Date.now() < this.serialAwaitUntil) {
+          this.appendSerialLine(`< ${line}`);
+        }
+      },
       onError: (msg) => {
         this.error = msg;
         this.scanning = false;
@@ -400,6 +425,13 @@ export class DebugView extends Component {
         </section>
         <section class="settings-section">
           <div class="settings-intro">
+            <h2>Serial console</h2>
+            <p>Send line-based USB commands directly to the timer and inspect its raw JSON replies (<span class="mono">STATUS?</span>, <span class="mono">EMERGENCY 1|0</span>, <span class="mono">RF 1|0</span>, <span class="mono">LIVE 0|1|2</span>, <span class="mono">SCAN a b s</span>, <span class="mono">CHANNELS f1,..,f8</span>, <span class="mono">BOOTLOG?</span>, <span class="mono">LASTLOG?</span>, <span class="mono">REBOOT</span>, or <span class="mono">HELP</span>).</p>
+          </div>
+          <div class="card card-flush" data-slot="serial-console"></div>
+        </section>
+        <section class="settings-section">
+          <div class="settings-intro">
             <h2>Live log</h2>
             <p>The timer's own log messages, mirrored over USB while enabled.</p>
           </div>
@@ -408,6 +440,36 @@ export class DebugView extends Component {
       </div>`;
 
     this.listen(el, "click", (e) => void this.onClick(e));
+    this.listen(el, "keydown", (e) => {
+      const ke = e as KeyboardEvent;
+      const t = ke.target as HTMLElement | null;
+      if (!t || !t.matches("[data-serial-input]")) return;
+      const inp = t as HTMLInputElement;
+      if (ke.key === "Enter") {
+        ke.preventDefault();
+        void this.sendSerialCommand(inp.value);
+      } else if (ke.key === "ArrowUp") {
+        ke.preventDefault();
+        if (!this.serialHistory.length) return;
+        if (this.serialHistoryIdx === -1) {
+          this.serialDraft = inp.value;
+          this.serialHistoryIdx = this.serialHistory.length - 1;
+        } else if (this.serialHistoryIdx > 0) {
+          this.serialHistoryIdx--;
+        }
+        inp.value = this.serialHistory[this.serialHistoryIdx] ?? "";
+      } else if (ke.key === "ArrowDown") {
+        ke.preventDefault();
+        if (this.serialHistoryIdx === -1) return;
+        if (this.serialHistoryIdx < this.serialHistory.length - 1) {
+          this.serialHistoryIdx++;
+          inp.value = this.serialHistory[this.serialHistoryIdx] ?? "";
+        } else {
+          this.serialHistoryIdx = -1;
+          inp.value = this.serialDraft;
+        }
+      }
+    });
     this.listen(document, "click", (e) => {
       const target = e.target as HTMLElement | null;
       if (target && target.closest("[data-topbar-view-actions]")) {
@@ -1999,6 +2061,20 @@ export class DebugView extends Component {
         case "copy-bootlog":
           if (this.bootLog) await this.copy(this.bootLogHeader(this.bootLog) + "\n" + this.bootLog.text, t);
           break;
+        case "serial-send": {
+          const inp = this.el.querySelector<HTMLInputElement>("[data-serial-input]");
+          if (inp) await this.sendSerialCommand(inp.value);
+          break;
+        }
+        case "serial-cmd": {
+          const cmd = t.dataset.cmd ?? "";
+          if (cmd) await this.sendSerialCommand(cmd);
+          break;
+        }
+        case "serial-clear":
+          this.serialLines = [];
+          this.renderSerialConsole();
+          break;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2022,8 +2098,7 @@ export class DebugView extends Component {
       await this.console.send(`LIVE ${this.liveMode}`);
     }
     if (this.logOn) await this.console.send("LOG 1");
-    this.renderLiveHead();
-    this.renderSignalControls();
+    this.renderAll();
   }
 
   private async refreshStatus(): Promise<TimerStatus> {
@@ -2345,6 +2420,7 @@ export class DebugView extends Component {
     this.renderNoiseTable();
     this.renderScan();
     this.renderRestart();
+    this.renderSerialConsole();
     this.renderLog();
     this.dirtySignal = true;
     this.dirtySpectrum = true;
@@ -2355,7 +2431,9 @@ export class DebugView extends Component {
   private renderBusy(): void {
     this.renderConnection();
     this.renderSelfTest();
+    this.renderStatus();
     this.renderRestart();
+    this.renderSerialConsole();
   }
 
   private renderConnection(): void {
@@ -2386,12 +2464,14 @@ export class DebugView extends Component {
     const profile = s ? FIRMWARE_PROFILES.find((p) => p.code === s.profile) : undefined;
     const statusText = on
       ? s
-        ? `${esc(s.label || "(unnamed)")} · ${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`} · ${esc(profile?.name ?? `profile ${s.profile}`)} · ${esc(s.fp)}`
+        ? s.emergencyMode
+          ? `${esc(s.label || "(unnamed)")} · Emergency mode · radio & sweeps halted · ${esc(s.fp)}`
+          : `${esc(s.label || "(unnamed)")} · ${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`} · ${esc(profile?.name ?? `profile ${s.profile}`)} · ${esc(s.fp)}`
         : "Connected over USB · reading timer status…"
       : busy
         ? `${esc(this.busy!)}…`
         : "Off · connect a timer over USB-C";
-    const ledClass = on && s ? "is-up" : on || busy ? "is-warn" : "";
+    const ledClass = on && s ? (s.emergencyMode ? "is-emergency" : "is-up") : on || busy ? "is-warn" : "";
     const btnLabel = on
       ? s?.label
         ? `Connected · ${esc(s.label)}`
@@ -2421,7 +2501,9 @@ export class DebugView extends Component {
                   <input type="checkbox" data-all-ports ${this.showAllPorts ? "checked" : ""}/>
                   <span>Show non-XIAO ports</span>
                 </label>`
-              : ""
+              : `<button type="button" class="btn btn-sm ${s?.emergencyMode ? "btn-armed" : "btn-ghost"}" data-action="toggle-emergency" ${on && !busy ? "" : "disabled"} title="${s?.emergencyMode ? "Exit emergency mode and resume 50 Hz radio sweeps" : "Force the timer into emergency rescue mode (turns off radio and runs the ambulance LED fade)"}">
+                  <span>${s?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}</span>
+                </button>`
           }
           <button type="button" class="btn btn-sm ${on ? "btn-armed" : "btn-unarmed"}" data-action="${on ? "disconnect" : "connect"}" ${supported && !busy ? "" : "disabled"}>
             ${on ? icons.plug(14) : icons.plugOff(14)}<span>${btnLabel}</span>
@@ -2434,19 +2516,22 @@ export class DebugView extends Component {
   private renderSelfTest(): void {
     const on = this.console.connected;
     const running = this.busy === "Self-test";
+    const emg = Boolean(on && this.status?.emergencyMode);
     const counts = { pass: 0, warn: 0, fail: 0, skip: 0 };
     for (const c of this.checks) counts[c.result]++;
     const ledClass = running
       ? "is-warn"
-      : this.checks.length
-        ? counts.fail
-          ? "is-bad"
-          : counts.warn
-            ? "is-warn"
-            : "is-up"
-        : on
-          ? "is-up"
-          : "";
+      : emg
+        ? "is-emergency"
+        : this.checks.length
+          ? counts.fail
+            ? "is-bad"
+            : counts.warn
+              ? "is-warn"
+              : "is-up"
+          : on
+            ? "is-up"
+            : "";
     const summary = this.checks.length
       ? running
         ? esc(this.progress)
@@ -2457,9 +2542,11 @@ export class DebugView extends Component {
             : `All ${this.checks.length} checks passed`
       : running
         ? esc(this.progress)
-        : on
-          ? "Ready · takes about 10 s (pauses timing briefly during scan)"
-          : "Off · connect a timer first";
+        : emg
+          ? "Emergency mode active · exit emergency mode to run 5.8 GHz RF checks"
+          : on
+            ? "Ready · takes about 10 s (pauses timing briefly during scan)"
+            : "Off · connect a timer first";
     const consoleLines = this.checks.length
       ? esc(
           this.checks
@@ -2472,9 +2559,11 @@ export class DebugView extends Component {
       : esc(
           running
             ? this.progress || "Starting self-test..."
-            : on
-              ? "# Click \"Run self-test\" to verify console, identity, 5.8 GHz receiver, sweep timing, memory, and Wi-Fi."
-              : "# Connect a timer over USB to run the hardware self-test."
+            : emg
+              ? "# Timer is in Emergency Mode (radio and 50 Hz sweeps halted for rescue/reflashing). Click \"Exit emergency mode\" before running RF self-tests."
+              : on
+                ? "# Click \"Run self-test\" to verify console, identity, 5.8 GHz receiver, sweep timing, memory, and Wi-Fi."
+                : "# Connect a timer over USB to run the hardware self-test."
         );
     this.slot("selftest").innerHTML = `
       <div class="debug-card-head debug-log-head">
@@ -2501,7 +2590,7 @@ export class DebugView extends Component {
     const budget = s ? s.sweepBudgetUs || (s.sweepHz ? Math.round(1e6 / s.sweepHz) : 0) : 0;
     const badReset = s ? BAD_RESETS.includes(s.reset) : false;
     const unprov = s ? s.fp.toUpperCase() === UNPROVISIONED_FP : false;
-    const ledClass = on && s ? (s.emergencyMode ? "is-bad" : "is-up") : on ? "is-warn" : "";
+    const ledClass = on && s ? (s.emergencyMode ? "is-emergency" : "is-up") : on ? "is-warn" : "";
     const headText = s
       ? s.emergencyMode
         ? (s.crashStreak ?? 0) > 0
@@ -2652,29 +2741,32 @@ export class DebugView extends Component {
 
   private renderLiveHead(): void {
     const on = this.console.connected;
+    const emg = Boolean(on && this.status?.emergencyMode);
     const rfOn = this.status?.rf.enabled ?? true;
     const inScanMode = Boolean(this.scanLive || this.status?.scanLive);
-    const streamDisabled = !on || !rfOn;
+    const streamDisabled = !on || !rfOn || emg;
     const streamActive = !streamDisabled && !inScanMode && this.liveOn;
     const streamLabel = streamActive ? "Pause" : "Stream";
-    const streamTitle = !rfOn
-      ? "Unavailable while the 5.8 GHz receiver is switched off"
-      : !on
-        ? "Connect a timer to stream live 5.8 GHz readings"
-        : streamActive
-          ? "Streaming live 5.8 GHz readings — click to pause"
-          : inScanMode
-            ? "Paused while Spectrum scan is streaming — click to pause Spectrum scan and stream 5.8 GHz channels"
-            : "Paused — click to stream live 5.8 GHz readings";
-    const ledClass = streamActive ? "is-up" : on && (inScanMode || !rfOn) ? "is-warn" : "";
+    const streamTitle = emg
+      ? "Unavailable while the timer is in Emergency Mode"
+      : !rfOn
+        ? "Unavailable while the 5.8 GHz receiver is switched off"
+        : !on
+          ? "Connect a timer to stream live 5.8 GHz readings"
+          : streamActive
+            ? "Streaming live 5.8 GHz readings — click to pause"
+            : inScanMode
+              ? "Paused while Spectrum scan is streaming — click to pause Spectrum scan and stream 5.8 GHz channels"
+              : "Paused — click to stream live 5.8 GHz readings";
+    const ledClass = emg ? "is-emergency" : streamActive ? "is-up" : on && (inScanMode || !rfOn) ? "is-warn" : "";
     this.slot("live-head").innerHTML = `
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}" data-live-led></span>
-          <span class="debug-head-note" data-live-note>${on ? "Waiting for sweep stream…" : "Paused · not connected"}</span>
+          <span class="debug-head-note" data-live-note>${emg ? "Emergency mode · 5.8 GHz receiver & sweeps halted" : on ? "Waiting for sweep stream…" : "Paused · not connected"}</span>
         </span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm ${rfOn ? "btn-armed" : "btn-unarmed"}" data-action="rf" ${on && this.status && !inScanMode ? "" : "disabled"} title="${inScanMode ? "Pause Spectrum scan first to toggle the 5.8 GHz receiver" : "Switch the hardware 5.8 GHz receiver on or off"}">
+          <button type="button" class="btn btn-sm ${rfOn ? "btn-armed" : "btn-unarmed"}" data-action="rf" ${on && this.status && !inScanMode && !emg ? "" : "disabled"} title="${emg ? "Exit emergency mode first to toggle the 5.8 GHz receiver" : inScanMode ? "Pause Spectrum scan first to toggle the 5.8 GHz receiver" : "Switch the hardware 5.8 GHz receiver on or off"}">
             ${rfOn ? icons.signal(14) : icons.signalOff(14)}<span>${rfOn ? "Receiver on" : "Receiver off"}</span>
           </button>
           <button type="button" class="btn btn-sm ${streamActive ? "btn-armed" : "btn-unarmed"}" data-action="live" ${streamDisabled ? "disabled" : ""} title="${streamTitle}">
@@ -2718,15 +2810,19 @@ export class DebugView extends Component {
     const note = this.el.querySelector<HTMLElement>("[data-live-note]");
     const led = this.el.querySelector<HTMLElement>("[data-live-led]");
     const on = this.console.connected;
+    const emg = Boolean(on && this.status?.emergencyMode);
     const rfOn = this.status?.rf.enabled ?? true;
     const inScanMode = Boolean(this.scanLive || this.status?.scanLive);
     if (led) {
-      led.classList.toggle("is-up", on && rfOn && !inScanMode && this.liveOn);
-      led.classList.toggle("is-warn", on && (inScanMode || !rfOn));
+      led.classList.toggle("is-emergency", emg);
+      led.classList.toggle("is-up", !emg && on && rfOn && !inScanMode && this.liveOn);
+      led.classList.toggle("is-warn", !emg && on && (inScanMode || !rfOn));
     }
     if (note) {
       if (!on) {
         note.textContent = "Paused · not connected";
+      } else if (emg) {
+        note.textContent = "Emergency mode · 5.8 GHz receiver & sweeps halted";
       } else if (inScanMode) {
         note.textContent = "Paused · Spectrum scan is streaming";
       } else if (this.status && !this.status.rf.enabled) {
@@ -2817,14 +2913,17 @@ export class DebugView extends Component {
         : this.signalWindowSec < 10 && Math.abs(this.signalWindowSec - Math.round(this.signalWindowSec)) >= 0.05
           ? `${this.signalWindowSec.toFixed(1)} s`
           : `${Math.round(this.signalWindowSec)} s`;
-    const sigLedClass = liveFollowOn ? "is-up" : (streamRunning && !isLive) || (on && inScanMode) ? "is-warn" : "";
-    const sigStatusText = liveFollowOn
-      ? `Streaming · ${this.liveMode === 2 ? "50 Hz" : "10 Hz"}`
-      : streamRunning && !isLive
-        ? "Paused · scrolled back"
-        : inScanMode
-          ? "Paused · scan active"
-          : "Paused";
+    const emg = Boolean(on && this.status?.emergencyMode);
+    const sigLedClass = emg ? "is-emergency" : liveFollowOn ? "is-up" : (streamRunning && !isLive) || (on && inScanMode) ? "is-warn" : "";
+    const sigStatusText = emg
+      ? "Emergency mode · sweeps halted"
+      : liveFollowOn
+        ? `Streaming · ${this.liveMode === 2 ? "50 Hz" : "10 Hz"}`
+        : streamRunning && !isLive
+          ? "Paused · scrolled back"
+          : inScanMode
+            ? "Paused · scan active"
+            : "Paused";
     this.slot("signal-head").innerHTML = `
       <div class="debug-status-topbar">
         <span class="debug-led-status" title="${liveTitle}">
@@ -3315,7 +3414,8 @@ export class DebugView extends Component {
 
   private renderScan(): void {
     const on = this.console.connected;
-    const rfOn = this.status?.rf.enabled ?? true;
+    const emg = Boolean(on && this.status?.emergencyMode);
+    const rfOn = (this.status?.rf.enabled ?? true) && !emg;
     const hasScan = this.spectrumAcc.latest !== null;
     const isFull5 = this.scanStartMHz === 5180 && this.scanStopMHz === 5917 && this.scanStepMHz === 5;
     const isFast15 = this.scanStartMHz === 5180 && this.scanStopMHz === 5917 && this.scanStepMHz === 15;
@@ -3333,8 +3433,8 @@ export class DebugView extends Component {
     this.slot("scan").innerHTML = `
       <div class="debug-status-topbar">
         <span class="debug-led-status">
-          <span class="status-dot ${scanActive ? "is-up" : ""}" data-scan-led></span>
-          <span class="debug-head-note" data-scan-status-note>${this.scanLive ? "Streaming · live scan" : this.scanning ? "Scanning once…" : "Paused"}</span>
+          <span class="status-dot ${emg ? "is-emergency" : scanActive ? "is-up" : ""}" data-scan-led></span>
+          <span class="debug-head-note" data-scan-status-note>${emg ? "Emergency mode · radio halted" : this.scanLive ? "Streaming · live scan" : this.scanning ? "Scanning once…" : "Paused"}</span>
         </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm ${this.scanning ? "btn-armed" : "btn-unarmed"}" data-action="scan" ${canScanOnce ? "" : "disabled"} title="${this.scanLive ? "Unavailable while Spectrum scan is streaming" : !rfOn ? "Unavailable while the 5.8 GHz receiver is off" : "Sweep the band once and add a row to the waterfall"}">
@@ -3552,13 +3652,17 @@ export class DebugView extends Component {
 
   private updateScanFindings(): void {
     const s = this.spectrumAcc.latest;
+    const emg = Boolean(this.console.connected && this.status?.emergencyMode);
     const scanLed = this.el.querySelector<HTMLElement>("[data-scan-led]");
     const scanNote = this.el.querySelector<HTMLElement>("[data-scan-status-note]");
     if (scanLed) {
-      scanLed.classList.toggle("is-up", this.scanLive || this.scanning);
+      scanLed.classList.toggle("is-emergency", emg);
+      scanLed.classList.toggle("is-up", !emg && (this.scanLive || this.scanning));
     }
     if (scanNote) {
-      if (this.scanLive) {
+      if (emg) {
+        scanNote.textContent = "Emergency mode · radio halted";
+      } else if (this.scanLive) {
         const rateStr = s?.live && s.passMs ? `${(1000 / s.passMs).toFixed(1)} passes/s` : "live";
         scanNote.textContent = `Streaming · ${rateStr} · ${this.spectrumAcc.avgCount} avg`;
       } else if (this.scanning) {
@@ -3611,15 +3715,18 @@ export class DebugView extends Component {
 
   private renderRestart(): void {
     const on = this.console.connected;
+    const emg = Boolean(on && this.status?.emergencyMode);
     const busy = this.busy !== null;
     const restartBusy = this.busy === "Restarting" || this.busy === "Restart test";
     const l = this.bootLog;
-    const ledClass = restartBusy ? "is-warn" : on ? "is-up" : "";
+    const ledClass = restartBusy ? "is-warn" : emg ? "is-emergency" : on ? "is-up" : "";
     const statusText = restartBusy
       ? esc(this.progress)
-      : on
-        ? "Ready · USB reconnects automatically after restart"
-        : "Off · connect a timer first";
+      : emg
+        ? "Emergency mode active · click Exit emergency mode to resume normal operation"
+        : on
+          ? "Ready · USB reconnects automatically after restart"
+          : "Off · connect a timer first";
     this.slot("restart").innerHTML = `
       <div class="debug-status-topbar">
         <span class="debug-led-status">
@@ -3690,13 +3797,149 @@ export class DebugView extends Component {
     if (count) count.textContent = `${active ? "Streaming" : "Paused"} · ${this.logLines.length} lines`;
   }
 
+  private appendSerialLine(line: string): void {
+    this.serialLines.push(`[${fmtWallTimeMs(Date.now())}] ${line}`);
+    if (this.serialLines.length > LOG_LINES) {
+      this.serialLines.splice(0, this.serialLines.length - LOG_LINES);
+    }
+    const pre = this.el.querySelector<HTMLElement>("[data-serial-pre]");
+    if (pre) {
+      const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 16;
+      pre.textContent = this.serialLines.join("\n");
+      if (atBottom) pre.scrollTop = pre.scrollHeight;
+    }
+    const note = this.el.querySelector<HTMLElement>("[data-serial-note]");
+    if (note && this.console.connected) {
+      note.textContent = `${this.status?.emergencyMode ? "Emergency mode" : "Ready"} · ${this.serialLines.length} lines`;
+    }
+  }
+
+  private async sendSerialCommand(rawCmd: string): Promise<void> {
+    const cmd = rawCmd.trim();
+    if (!cmd) return;
+    const inp = this.el.querySelector<HTMLInputElement>("[data-serial-input]");
+    if (inp) inp.value = "";
+    if (!this.serialHistory.length || this.serialHistory[this.serialHistory.length - 1] !== cmd) {
+      this.serialHistory.push(cmd);
+      if (this.serialHistory.length > 50) this.serialHistory.shift();
+    }
+    this.serialHistoryIdx = -1;
+    this.serialDraft = "";
+
+    this.appendSerialLine(`> ${cmd}`);
+    const upper = cmd.toUpperCase();
+    if (upper === "HELP" || upper === "?") {
+      const helpLines = [
+        "Available USB commands:",
+        "  STATUS?              Query identity, uptime, reset reason, emergency mode, heap, RF, and channel table",
+        "  EMERGENCY 1|0        Enter (1) or exit (0) emergency rescue mode (radio off, ambulance LED fade)",
+        "  RF 1|0               Switch the 5.8 GHz receiver on (1) or off (0)",
+        "  LIVE 0|1|2           Stream 5.8 GHz channel readings (0 = off, 1 = 10 Hz, 2 = 50 Hz every sweep)",
+        "  SCAN a b s           Single spectrum sweep from a..b MHz in s MHz steps (e.g. SCAN 5650 5917 5)",
+        "  SCAN LIVE a b s      Continuous spectrum sweep (SCAN STOP to end)",
+        "  CHANNELS f1,..,f8    Temporarily set 8 pilot channel frequencies in MHz (CHANNELS RESET to restore)",
+        "  LOG 1|0              Mirror ESP-IDF log output onto USB serial",
+        "  BOOTLOG?             Read this boot's log from RTC memory",
+        "  LASTLOG?             Read the previous boot's log from RTC memory",
+        "  SLAPRF?              Read the 160-byte SLAPRF02 binary configuration block",
+        "  REBOOT               Restart the timer",
+      ];
+      for (const l of helpLines) this.appendSerialLine(`  ${l}`);
+      return;
+    }
+
+    if (!this.console.connected) {
+      this.appendSerialLine("! Not connected over USB");
+      return;
+    }
+
+    if (upper === "REBOOT") {
+      this.serialAwaitUntil = Date.now() + 4000;
+      await this.runBusy("Restarting", async () => {
+        await this.restart("REBOOT");
+      });
+      this.appendSerialLine("# Timer restarted and reconnected.");
+      return;
+    }
+
+    this.serialAwaitUntil = Date.now() + 2500;
+    await this.console.send(cmd);
+    if (
+      upper.startsWith("EMERGENCY") ||
+      upper.startsWith("RF ") ||
+      upper.startsWith("CHANNELS") ||
+      upper.startsWith("SCAN STOP")
+    ) {
+      await sleep(150);
+      try {
+        this.status = await this.refreshStatus();
+        this.renderAll();
+      } catch {
+        this.status = await this.restart("REBOOT");
+        this.renderAll();
+      }
+    }
+  }
+
+  private renderSerialConsole(): void {
+    const on = this.console.connected;
+    const emg = Boolean(on && this.status?.emergencyMode);
+    const prevInput = this.el.querySelector<HTMLInputElement>("[data-serial-input]");
+    const prevVal = prevInput?.value ?? "";
+    const hadFocus = document.activeElement === prevInput;
+    const ledClass = emg ? "is-emergency" : on ? "is-up" : "";
+    const statusText = !on
+      ? "Off · connect a timer first"
+      : emg
+        ? `Emergency mode · ${this.serialLines.length ? `${this.serialLines.length} lines` : "ready for rescue commands"}`
+        : `Ready · ${this.serialLines.length ? `${this.serialLines.length} lines` : "type a command or click a preset"}`;
+    const bodyText = this.serialLines.length
+      ? esc(this.serialLines.join("\n"))
+      : esc(
+          on
+            ? "# Connected. Type a command below (e.g. STATUS?, EMERGENCY 1, EMERGENCY 0, RF 0, RF 1, BOOTLOG?, REBOOT, or HELP) and press Enter."
+            : "# Connect a timer over USB to send commands interactively."
+        );
+    this.slot("serial-console").innerHTML = `
+      <div class="debug-card-head debug-log-head">
+        <span class="debug-led-status">
+          <span class="status-dot ${ledClass}"></span>
+          <span class="debug-head-note" data-serial-note>${statusText}</span>
+        </span>
+        <div class="debug-connect-actions">
+          <button type="button" class="btn btn-sm btn-ghost mono" data-action="serial-cmd" data-cmd="STATUS?" ${on ? "" : "disabled"}>STATUS?</button>
+          <button type="button" class="btn btn-sm btn-ghost mono" data-action="serial-cmd" data-cmd="${emg ? "EMERGENCY 0" : "EMERGENCY 1"}" ${on ? "" : "disabled"}>${emg ? "EMERGENCY 0" : "EMERGENCY 1"}</button>
+          <button type="button" class="btn btn-sm btn-ghost mono" data-action="serial-cmd" data-cmd="BOOTLOG?" ${on ? "" : "disabled"}>BOOTLOG?</button>
+          <button type="button" class="btn btn-sm btn-ghost mono" data-action="serial-cmd" data-cmd="HELP">HELP</button>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="serial-clear" ${this.serialLines.length ? "" : "disabled"}>Clear</button>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <pre class="debug-log debug-serial-log mono" data-serial-pre>${bodyText}</pre>
+      </div>
+      <div class="debug-serial-input-bar">
+        <span class="debug-serial-prompt mono">&gt;</span>
+        <input type="text" class="input mono debug-serial-input" data-serial-input value="${esc(prevVal)}" placeholder="${on ? "Type a USB command (STATUS?, EMERGENCY 1, EMERGENCY 0, RF 0, HELP…) and press Enter" : "Connect a timer over USB to send commands…"}" ${on ? "" : "disabled"} autocomplete="off" spellcheck="false"/>
+        <button type="button" class="btn btn-sm btn-armed" data-action="serial-send" ${on ? "" : "disabled"}>Send</button>
+      </div>`;
+    const pre = this.el.querySelector<HTMLElement>("[data-serial-pre]");
+    if (pre && this.serialLines.length) {
+      pre.scrollTop = pre.scrollHeight;
+    }
+    if (hadFocus) {
+      const nextInput = this.el.querySelector<HTMLInputElement>("[data-serial-input]");
+      nextInput?.focus();
+    }
+  }
+
   private renderLog(): void {
     const on = this.console.connected;
+    const emg = Boolean(on && this.status?.emergencyMode);
     const active = on && this.logOn;
     this.slot("log").innerHTML = `
       <div class="debug-card-head debug-log-head">
         <span class="debug-led-status">
-          <span class="status-dot ${active ? "is-up" : ""}"></span>
+          <span class="status-dot ${emg ? "is-emergency" : active ? "is-up" : ""}"></span>
           <span class="debug-head-note" data-log-count>${active ? "Streaming" : "Paused"} · ${this.logLines.length} lines</span>
         </span>
         <div class="debug-connect-actions">

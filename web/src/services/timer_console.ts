@@ -70,6 +70,7 @@ export interface ConsoleHandlers {
   onScan?: (s: ScanResult) => void;
   onBootLog?: (l: BootLog) => void;
   onLog?: (line: string) => void;
+  onRawReply?: (line: string, msgType?: string) => void;
   onConfig?: (c: TimerReadout) => void;
   onError?: (msg: string) => void;
   onDisconnect?: () => void;
@@ -355,6 +356,7 @@ export class TimerConsole {
     if (line.startsWith("@{")) {
       try {
         const msg = JSON.parse(line.slice(1)) as { t: string; msg?: string } & Record<string, unknown>;
+        this.handlers.onRawReply?.(line, msg.t);
         this.resolveWaiters(msg.t, msg);
         switch (msg.t) {
           case "status":
