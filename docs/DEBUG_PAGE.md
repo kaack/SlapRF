@@ -1,6 +1,6 @@
 # Debug page: design and hand-off spec
 
-Status: **design done, initial implementation committed (`a6adff0`), not yet verified on hardware.**
+Status: **design done, initial implementation committed (`a6adff0`). Firmware console verified on hardware (§5.1); the browser page itself still needs its first run.**
 This document is the brief for whoever completes it. Read it top to bottom before changing code.
 
 ## 1. Goal
@@ -63,6 +63,15 @@ The page uses the same `.settings` / `.settings-section` / `.card` layout as Set
 ## 5. Remaining work (in priority order)
 
 ### 5.1 Bench verification (needs a board; do first)
+
+**Done 2026-11-08 by protocol test** (`firmware/tools/console_check.py COM3`, production `open-ground` build):
+- `STATUS?`: OK. v0.1.4, Hub, profile 1, fp `BE7C0001`, label H1, rf ok (gain 30/80, floor −91.2 dBm), heap about 71 KB, sweeps 6.0–6.6 ms at 50 Hz.
+- `LIVE 1`: 21–22 lines per 2 s. Peaks show home Wi-Fi bursts at R4 (5769, −58 dBm) and R5 (5806, −65 dBm).
+- `SCAN 5180 5917 5`: 148 points in under 1 s. Flat −89 to −93 dBm (4 captures per point rarely catches bursty Wi-Fi; a VTX is continuous and will show).
+- `LOG 1`/`0`, `SLAPRF?` (byte-exact block), and unknown command: all OK.
+- Sweeps occasionally run over the 7 ms budget (max seen 7.2 ms); see §5.3.
+
+Still to do in the browser:
 Board: XIAO ESP32-C5 v1.0 on COM3, flashed with `firmware/open-ground` that includes `slaprf_diag.c`. Power-cycle after flashing: USB resets currently lock up until replug (see §6).
 - [ ] Open `http://localhost:8090/#/debug` in Chrome (run `.\slaprf.exe -open=false`; it bundles the TS on the fly), click Connect, pick the Espressif port.
 - [ ] Status populates and refreshes. Check `rf.ok=true`, `floorDb` ≈ −89, sweep ≈ 6 ms at 50 Hz, `reset` makes sense.
@@ -87,6 +96,7 @@ Board: XIAO ESP32-C5 v1.0 on COM3, flashed with `firmware/open-ground` that incl
 - [ ] `IDENT`: blink the user LED for 5 s. Find the XIAO ESP32-C5 user LED GPIO in the Seeed schematic; skip if there isn't one.
 - [ ] Status: add link stats once they exist (beacons missed, frames dropped), Spoke join state, and the `DBM_OFFSET` calibration value.
 - [ ] Scan: optionally stream progress for long scans. It currently returns one line at the end.
+- [ ] Sweep budget: worst case about 7.2 ms against a 7 ms budget. Either raise `SWEEP_BUDGET_US` (check the slot static-asserts) or add the faster PLL-only hop (`phy_set_rf_freq_offset` without its 300 µs settle wait; see FPVGateC5MK RADIO_INTERNALS §6).
 - [ ] Keep the `slaprf_diag_sweep()` hot path cheap. It runs every sweep on the main task; only format strings when `LIVE` is on.
 
 ### 5.4 Docs
@@ -95,6 +105,7 @@ Board: XIAO ESP32-C5 v1.0 on COM3, flashed with `firmware/open-ground` that incl
 ## 6. Known hardware issues (context, not part of this task)
 - After a USB/RTS reset, the first boot crashes in `select_rtc_slow_clk` and recovers by itself. That's chip / ESP-IDF behaviour: it also happens with the capture engine off.
 - With the capture engine **on**, a USB reset instead lands in a ROM watchdog loop until power-cycled. The root cause hasn't been found. The bank release in `stock_capture()` / the shutdown hook didn't fix it. Avoid USB-triggered resets during testing: flash with `--after no_reset`, then replug.
+- **Clue:** the **production** build (`CONFIG_ESP_CONSOLE_SECONDARY_NONE`, log level WARN) came up cleanly after a USB reset (`reset: usb`, no ROM loop), with the capture engine on. All ROM-loop cases so far were on the smoke/logging build, which adds `CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG`. That suggests the secondary USB console, not the capture engine. Confirm by repeating USB resets on both builds.
 
 ## 7. Later: network health (part 2, separate task)
 Each timer sends a small health frame through the Hub every 2 s (new magic `0xC5 0x5E`: uptime, reset reason, max sweep µs, beacon misses, dropped frames, heap, noise floor). The laptop adds a per-timer **Health** drawer on the Timers list. This needs `internal/ingest/wifi_udp.go` decoding plus a field on `DetectedPuck`.

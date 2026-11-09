@@ -1,0 +1,73 @@
+"""Exercise the timer's USB debug console (bench check for the Debug page protocol)."""
+import json
+import sys
+import time
+
+import serial
+
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+s = serial.Serial()
+s.port = sys.argv[1]
+s.baudrate = 115200
+s.timeout = 0.1
+s.dtr = False
+s.rts = False
+s.open()
+
+
+def run(cmd, seconds):
+    if cmd:
+        s.write((cmd + "\n").encode())
+    end = time.time() + seconds
+    buf = b""
+    while time.time() < end:
+        buf += s.read(4096)
+    return buf
+
+
+def lines(buf):
+    return [l for l in buf.decode("utf-8", "replace").splitlines() if l.strip()]
+
+
+print("== STATUS?")
+for l in lines(run("STATUS?", 1.0)):
+    if l.startswith("@"):
+        print(json.dumps(json.loads(l[1:]), indent=None))
+    else:
+        print("text:", l[:120])
+
+print("== LIVE 1 (2 s)")
+ls = [l for l in lines(run("LIVE 1", 2.0)) if l.startswith("@")]
+print(f"{len(ls)} lines; first: {ls[1] if len(ls) > 1 else ls}")
+run("LIVE 0", 0.3)
+
+print("== SCAN 5180 5917 5")
+t0 = time.time()
+buf = run("SCAN 5180 5917 5", 3.0)
+for l in lines(buf):
+    if l.startswith('@{"t":"scan"'):
+        d = json.loads(l[1:])
+        pts = d["dbm"]
+        peak = max(range(len(pts)), key=lambda i: pts[i])
+        print(f"{len(pts)} points, start {d['start']} step {d['step']}, peak {d['start'] + peak * d['step']} MHz {pts[peak]} dBm, min {min(pts)}")
+        # coarse text plot, 20 MHz buckets
+        row = []
+        for i in range(0, len(pts), 4):
+            row.append(f"{d['start'] + i * d['step']}:{max(pts[i:i + 4])}")
+        print(" ".join(row))
+    elif l.startswith("@"):
+        print(l[:200])
+
+print("== LOG 1 (3 s)")
+ls = lines(run("LOG 1", 3.0))
+print(f"{len(ls)} lines: {ls[:4]}")
+run("LOG 0", 0.3)
+
+print("== SLAPRF?")
+buf = run("SLAPRF?", 0.8)
+i = buf.find(b"SLAPRF02")
+print("config block at", i, buf[i:i + 20].hex() if i >= 0 else "")
+
+print("== bad command")
+print(lines(run("FOO", 0.5)))
+s.close()
