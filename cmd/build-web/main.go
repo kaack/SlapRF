@@ -107,6 +107,7 @@ func main() {
 
 	// 6. Write .nojekyll so GitHub Pages serves all files unaltered
 	_ = os.WriteFile(filepath.Join(*outDir, ".nojekyll"), []byte{}, 0o644)
+	_ = os.WriteFile(filepath.Join(*outDir, "CNAME"), []byte("slaprf.app\n"), 0o644)
 	log.Printf("[build-web] Static site ready in %s", *outDir)
 }
 
