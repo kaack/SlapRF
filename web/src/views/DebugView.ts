@@ -2101,15 +2101,18 @@ export class DebugView extends Component {
           break;
         case "restart-capture":
           await this.runBusy("Restarting", () => this.restartAndCapture());
+          this.scrollSerialToBottom(true);
           break;
         case "toggle-emergency":
           await this.runBusy(this.status?.emergencyMode ? "Exiting emergency mode" : "Entering emergency mode", () =>
             this.toggleEmergencyMode()
           );
+          this.scrollSerialToBottom(true);
           break;
         case "restart-test": {
           const n = Math.max(1, Math.min(50, this.num("[data-restart-count]", 5)));
           await this.runBusy("Restart test", () => this.restartTest(n));
+          this.scrollSerialToBottom(true);
           break;
         }
         case "bootlog":
@@ -2137,6 +2140,7 @@ export class DebugView extends Component {
         case "serial-clear":
           this.serialLines = [];
           this.renderSerialConsole();
+          this.scrollSerialToBottom(true);
           break;
       }
     } catch (err) {
@@ -3845,18 +3849,35 @@ export class DebugView extends Component {
     return this.status?.emergencyMode ? `slaprf@${name} (emergency)>` : `slaprf@${name}>`;
   }
 
+  private scrollSerialToBottom(focusInput = false): void {
+    const apply = () => {
+      const term = this.el.querySelector<HTMLElement>("[data-serial-terminal]");
+      if (term) {
+        term.scrollTop = term.scrollHeight;
+      }
+      if (focusInput) {
+        const inp = this.el.querySelector<HTMLInputElement>("[data-serial-input]");
+        if (inp && !inp.disabled) {
+          inp.focus({ preventScroll: true });
+        }
+      }
+    };
+    apply();
+    window.requestAnimationFrame(apply);
+  }
+
   private appendSerialLine(line: string): void {
     this.serialLines.push(line);
     if (this.serialLines.length > LOG_LINES) {
       this.serialLines.splice(0, this.serialLines.length - LOG_LINES);
     }
     const pre = this.el.querySelector<HTMLElement>("[data-serial-pre]");
-    const term = this.el.querySelector<HTMLElement>("[data-serial-terminal]");
     if (pre) {
       pre.textContent = this.serialLines.join("\n") + (this.serialLines.length ? "\n" : "");
     }
-    if (term) {
-      term.scrollTop = term.scrollHeight;
+    const ps1El = this.el.querySelector<HTMLElement>("[data-serial-ps1]");
+    if (ps1El) {
+      ps1El.textContent = this.serialPrompt();
     }
     const note = this.el.querySelector<HTMLElement>("[data-serial-note]");
     if (note && this.console.connected) {
@@ -3864,6 +3885,7 @@ export class DebugView extends Component {
     }
     this.el.querySelector<HTMLButtonElement>('[data-action="copy-serial"]')?.removeAttribute("disabled");
     this.el.querySelector<HTMLButtonElement>('[data-action="serial-clear"]')?.removeAttribute("disabled");
+    this.scrollSerialToBottom();
   }
 
   private async sendSerialCommand(rawCmd: string): Promise<void> {
@@ -3872,6 +3894,7 @@ export class DebugView extends Component {
     if (inp) inp.value = "";
     if (!cmd) {
       this.appendSerialLine(this.serialPrompt());
+      this.scrollSerialToBottom(true);
       return;
     }
     if (!this.serialHistory.length || this.serialHistory[this.serialHistory.length - 1] !== cmd) {
@@ -3885,7 +3908,7 @@ export class DebugView extends Component {
     if (upper === "CLEAR" || upper === "CLS") {
       this.serialLines = [];
       this.renderSerialConsole();
-      this.el.querySelector<HTMLInputElement>("[data-serial-input]")?.focus();
+      this.scrollSerialToBottom(true);
       return;
     }
 
@@ -3907,11 +3930,13 @@ export class DebugView extends Component {
         "  CLEAR                clear terminal screen",
       ];
       for (const l of helpLines) this.appendSerialLine(l);
+      this.scrollSerialToBottom(true);
       return;
     }
 
     if (!this.console.connected) {
       this.appendSerialLine("error: not connected over USB");
+      this.scrollSerialToBottom(true);
       return;
     }
 
@@ -3931,7 +3956,7 @@ export class DebugView extends Component {
           ? `Timer restarted and reconnected (boot #${s.boots}, reset: ${s.reset}).`
           : "Timer restarted and reconnected."
       );
-      this.el.querySelector<HTMLInputElement>("[data-serial-input]")?.focus();
+      this.scrollSerialToBottom(true);
       return;
     }
 
@@ -3941,7 +3966,7 @@ export class DebugView extends Component {
     this.serialAwaitUntil = Date.now() + 3000;
     if (upper === "BOOTLOG?" || upper === "LASTLOG?") {
       await this.console.request<BootLog>(cmd, "bootlog", 3000);
-      this.el.querySelector<HTMLInputElement>("[data-serial-input]")?.focus();
+      this.scrollSerialToBottom(true);
       return;
     }
     if (upper.startsWith("EMERGENCY")) {
@@ -3963,7 +3988,7 @@ export class DebugView extends Component {
         }
       }
       this.renderAll();
-      this.el.querySelector<HTMLInputElement>("[data-serial-input]")?.focus();
+      this.scrollSerialToBottom(true);
       return;
     }
 
@@ -3981,58 +4006,79 @@ export class DebugView extends Component {
         this.status = await this.restart("REBOOT");
         this.renderAll();
       }
-      this.el.querySelector<HTMLInputElement>("[data-serial-input]")?.focus();
     }
+    this.scrollSerialToBottom(true);
   }
 
   private renderSerialConsole(): void {
     const on = this.console.connected;
-    const prevInput = this.el.querySelector<HTMLInputElement>("[data-serial-input]");
-    const prevVal = prevInput?.value ?? "";
-    const hadFocus = document.activeElement === prevInput;
     const statusText = !on
       ? "Disconnected"
       : `${this.serialLines.length} lines · type HELP for commands`;
     const introBanner = on
       ? "# SlapRF USB serial terminal — type HELP for commands, Up/Down for history, Tab to complete.\n"
       : "# Disconnected — connect a timer over USB to open an interactive serial session.\n";
-    const bodyText = this.serialLines.length
-      ? esc(this.serialLines.join("\n") + "\n")
-      : esc(introBanner);
-    const ps1 = esc(this.serialPrompt());
-    this.slot("serial-console").innerHTML = `
-      <div class="debug-card-head debug-log-head">
-        <div class="debug-waterfall-title-group">
-          <span class="debug-chart-title">Serial terminal</span>
-          <span class="note" data-serial-note>${statusText}</span>
-        </div>
-        <div class="debug-connect-actions">
-          <div class="debug-overlay-checks">
-            <label class="check">
-              <input type="checkbox" data-check="serial-wrap" ${this.serialWrap ? "checked" : ""}/>
-              <span>Wrap lines</span>
-            </label>
+    const bodyRaw = this.serialLines.length
+      ? this.serialLines.join("\n") + "\n"
+      : introBanner;
+    const ps1Raw = this.serialPrompt();
+
+    const host = this.slot("serial-console");
+    let term = host.querySelector<HTMLElement>("[data-serial-terminal]");
+    if (!term) {
+      host.innerHTML = `
+        <div class="debug-card-head debug-log-head">
+          <div class="debug-waterfall-title-group">
+            <span class="debug-chart-title">Serial terminal</span>
+            <span class="note" data-serial-note>${esc(statusText)}</span>
           </div>
-          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-serial" ${this.serialLines.length ? "" : "disabled"} title="Copy terminal output" aria-label="Copy terminal output">${icons.copy(14)}</button>
-          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-clear" ${this.serialLines.length ? "" : "disabled"} title="Clear terminal (CLEAR)" aria-label="Clear terminal">${icons.trash(14)}</button>
-        </div>
-      </div>
-      <div class="table-scroll">
-        <div class="debug-log debug-terminal mono ${this.serialWrap ? "is-wrapped" : ""}" data-serial-terminal>
-          <div class="debug-terminal-history" data-serial-pre>${bodyText}</div>
-          <div class="debug-terminal-cmdline">
-            <span class="debug-terminal-ps1">${ps1}</span>
-            <input type="text" class="debug-terminal-input mono" data-serial-input value="${esc(prevVal)}" ${on ? "" : "disabled"} autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Serial terminal command line"/>
+          <div class="debug-connect-actions">
+            <div class="debug-overlay-checks">
+              <label class="check">
+                <input type="checkbox" data-check="serial-wrap" ${this.serialWrap ? "checked" : ""}/>
+                <span>Wrap lines</span>
+              </label>
+            </div>
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-serial" ${this.serialLines.length ? "" : "disabled"} title="Copy terminal output" aria-label="Copy terminal output">${icons.copy(14)}</button>
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-clear" ${this.serialLines.length ? "" : "disabled"} title="Clear terminal (CLEAR)" aria-label="Clear terminal">${icons.trash(14)}</button>
           </div>
         </div>
-      </div>`;
-    const term = this.el.querySelector<HTMLElement>("[data-serial-terminal]");
-    if (term && this.serialLines.length) {
-      term.scrollTop = term.scrollHeight;
+        <div class="table-scroll">
+          <div class="debug-log debug-terminal mono ${this.serialWrap ? "is-wrapped" : ""}" data-serial-terminal>
+            <div class="debug-terminal-history" data-serial-pre></div>
+            <div class="debug-terminal-cmdline">
+              <span class="debug-terminal-ps1" data-serial-ps1></span>
+              <input type="text" class="debug-terminal-input mono" data-serial-input ${on ? "" : "disabled"} autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="Serial terminal command line"/>
+            </div>
+          </div>
+        </div>`;
+      term = host.querySelector<HTMLElement>("[data-serial-terminal]")!;
     }
-    if (hadFocus) {
-      const nextInput = this.el.querySelector<HTMLInputElement>("[data-serial-input]");
-      nextInput?.focus();
+
+    const noteEl = host.querySelector<HTMLElement>("[data-serial-note]");
+    if (noteEl) noteEl.textContent = statusText;
+    const wrapChk = host.querySelector<HTMLInputElement>('[data-check="serial-wrap"]');
+    if (wrapChk) wrapChk.checked = this.serialWrap;
+    const copyBtn = host.querySelector<HTMLButtonElement>('[data-action="copy-serial"]');
+    if (copyBtn) copyBtn.disabled = !this.serialLines.length;
+    const clearBtn = host.querySelector<HTMLButtonElement>('[data-action="serial-clear"]');
+    if (clearBtn) clearBtn.disabled = !this.serialLines.length;
+
+    term.classList.toggle("is-wrapped", this.serialWrap);
+    const preEl = host.querySelector<HTMLElement>("[data-serial-pre]");
+    if (preEl && preEl.textContent !== bodyRaw) {
+      preEl.textContent = bodyRaw;
+    }
+    const ps1El = host.querySelector<HTMLElement>("[data-serial-ps1]");
+    if (ps1El && ps1El.textContent !== ps1Raw) {
+      ps1El.textContent = ps1Raw;
+    }
+    const inpEl = host.querySelector<HTMLInputElement>("[data-serial-input]");
+    if (inpEl) {
+      inpEl.disabled = !on;
+    }
+    if (this.serialLines.length) {
+      this.scrollSerialToBottom();
     }
   }
 
