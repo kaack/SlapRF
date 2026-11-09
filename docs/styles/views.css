@@ -4059,6 +4059,7 @@ body.is-gate-dragging * {
     order: 1;
     flex: 0 0 100%;
     margin-right: 0;
+    text-align: center;
   }
   .debug-chart-foot > .debug-toolbar-left {
     order: 2;
