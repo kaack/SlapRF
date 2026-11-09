@@ -1978,9 +1978,9 @@ export class DebugView extends Component {
         case "restart-capture":
           await this.runBusy("Restarting", () => this.restartAndCapture());
           break;
-        case "toggle-safemode":
-          await this.runBusy(this.status?.safeMode ? "Exiting safe mode" : "Entering safe mode", () =>
-            this.toggleSafeMode()
+        case "toggle-emergency":
+          await this.runBusy(this.status?.emergencyMode ? "Exiting emergency mode" : "Entering emergency mode", () =>
+            this.toggleEmergencyMode()
           );
           break;
         case "restart-test": {
@@ -2010,11 +2010,17 @@ export class DebugView extends Component {
   /** Start polling status and streaming live readings on a freshly opened port. */
   private async startSession(): Promise<void> {
     window.clearInterval(this.statusTimer);
-    await this.console.ensureRunningApp();
+    const s = await this.console.ensureRunningApp();
+    if (s) this.status = s;
     this.statusTimer = window.setInterval(() => void this.console.send("STATUS?").catch(() => undefined), 2000);
-    this.liveOn = true;
-    this.liveMode = this.signalCardVisible ? 2 : 1;
-    await this.console.send(`LIVE ${this.liveMode}`);
+    if (s?.emergencyMode) {
+      this.liveOn = false;
+      this.scanLive = false;
+    } else {
+      this.liveOn = true;
+      this.liveMode = this.signalCardVisible ? 2 : 1;
+      await this.console.send(`LIVE ${this.liveMode}`);
+    }
     if (this.logOn) await this.console.send("LOG 1");
     this.renderLiveHead();
     this.renderSignalControls();
@@ -2063,7 +2069,7 @@ export class DebugView extends Component {
   // ---------------------------------------------------------------- restarts
 
   /** Restart, reattach, re-enable the streams the user had on. Returns the first status. */
-  private async restart(cmd: "REBOOT" | "SAFEMODE" = "REBOOT"): Promise<TimerStatus> {
+  private async restart(cmd: "REBOOT" | "EMERGENCY" = "REBOOT"): Promise<TimerStatus> {
     window.clearInterval(this.statusTimer);
     this.live = null;
     this.scanLive = false; // The firmware forgets it on restart
@@ -2079,10 +2085,10 @@ export class DebugView extends Component {
     }
   }
 
-  private async toggleSafeMode(): Promise<void> {
-    const enter = !this.status?.safeMode;
-    this.setProgress(enter ? "Entering safe mode…" : "Exiting safe mode…");
-    await this.console.request(enter ? "SAFEMODE 1" : "SAFEMODE 0", "ok", 2000);
+  private async toggleEmergencyMode(): Promise<void> {
+    const enter = !this.status?.emergencyMode;
+    this.setProgress(enter ? "Entering emergency mode…" : "Exiting emergency mode…");
+    await this.console.request(enter ? "EMERGENCY 1" : "EMERGENCY 0", "ok", 2000);
     if (enter) {
       this.liveOn = false;
       this.scanLive = false;
@@ -2095,7 +2101,7 @@ export class DebugView extends Component {
         this.liveMode = this.signalCardVisible ? 2 : 1;
         await this.console.send(`LIVE ${this.liveMode}`);
       } catch {
-        // Boot-latched crash Safe Mode reboots the chip on SAFEMODE 0; reconnect automatically.
+        // Boot-latched crash Emergency Mode reboots the chip on EMERGENCY 0; reconnect automatically.
         this.status = await this.restart("REBOOT");
       }
     }
@@ -2241,12 +2247,12 @@ export class DebugView extends Component {
       `${(s.heapFree / 1024).toFixed(0)} KB free, lowest ${(s.heapMin / 1024).toFixed(0)} KB${s.heapMin > 20 * 1024 ? "" : " (low: it may run out)"}`
     );
 
-    // 9. Last restart & safe-mode guard
-    if (s.safeMode) {
+    // 9. Last restart & emergency-mode guard
+    if (s.emergencyMode) {
       add(
         "Last restart",
         "fail",
-        `SAFE MODE after ${s.crashStreak ?? 3} consecutive ${s.reset} resets — radio & sweeps halted so USB stays up for debugging/reflashing`
+        `EMERGENCY MODE after ${s.crashStreak ?? 3} consecutive ${s.reset} resets — radio & sweeps halted so USB stays up for rescue/reflashing`
       );
       try {
         const last = await this.console.request<BootLog>("LASTLOG?", "bootlog", 3000);
@@ -2495,12 +2501,12 @@ export class DebugView extends Component {
     const budget = s ? s.sweepBudgetUs || (s.sweepHz ? Math.round(1e6 / s.sweepHz) : 0) : 0;
     const badReset = s ? BAD_RESETS.includes(s.reset) : false;
     const unprov = s ? s.fp.toUpperCase() === UNPROVISIONED_FP : false;
-    const ledClass = on && s ? (s.safeMode ? "is-bad" : "is-up") : on ? "is-warn" : "";
+    const ledClass = on && s ? (s.emergencyMode ? "is-bad" : "is-up") : on ? "is-warn" : "";
     const headText = s
-      ? s.safeMode
+      ? s.emergencyMode
         ? (s.crashStreak ?? 0) > 0
-          ? `Safe mode · halted after ${s.crashStreak} consecutive ${esc(s.reset)} resets (radio off, siren LED active)`
-          : `Safe mode · forced manually (radio off, ambulance-siren LED active · click Exit safe mode to resume)`
+          ? `Emergency mode · halted after ${s.crashStreak} consecutive ${esc(s.reset)} resets (radio off, ready for rescue or reflash)`
+          : `Emergency mode · forced manually (radio off, ambulance LED fade active · click Exit emergency mode to resume)`
         : `On · polling every 2 s · up ${fmtUptime(s.uptimeMs)}`
       : on
         ? "Waiting for timer status…"
@@ -2508,8 +2514,8 @@ export class DebugView extends Component {
 
     const rfBadge = !s
       ? `<span class="badge">—</span>`
-      : s.safeMode
-        ? `<span class="badge badge-bad">Safe mode</span>`
+      : s.emergencyMode
+        ? `<span class="badge badge-bad">Emergency mode</span>`
         : !s.rf.ok
           ? `<span class="badge badge-bad">Boot check failed</span>`
           : !s.rf.enabled
@@ -2539,8 +2545,8 @@ export class DebugView extends Component {
           <span class="debug-head-note">${headText}</span>
         </span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm ${s?.safeMode ? "btn-armed" : "btn-ghost"}" data-action="toggle-safemode" ${on && !this.busy ? "" : "disabled"} title="${s?.safeMode ? "Exit emergency Safe Mode and resume 50 Hz radio sweeps" : "Force the timer into emergency Safe Mode (turns off radio and runs the ambulance-siren LED fade)"}">
-            <span>${s?.safeMode ? "Exit safe mode" : "Enter safe mode"}</span>
+          <button type="button" class="btn btn-sm ${s?.emergencyMode ? "btn-armed" : "btn-ghost"}" data-action="toggle-emergency" ${on && !this.busy ? "" : "disabled"} title="${s?.emergencyMode ? "Exit emergency mode and resume 50 Hz radio sweeps" : "Force the timer into emergency rescue mode (turns off radio and runs the ambulance LED fade)"}">
+            <span>${s?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}</span>
           </button>
           <button type="button" class="btn btn-sm btn-ghost" data-action="read-config" ${on && !this.busy ? "" : "disabled"}>Read config</button>
           <button type="button" class="btn btn-sm btn-ghost" data-action="refresh-status" ${on && !this.busy ? "" : "disabled"}>
@@ -3623,8 +3629,8 @@ export class DebugView extends Component {
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="bootlog" ${on && !busy ? "" : "disabled"}>This boot's log</button>
           <button type="button" class="btn btn-sm btn-ghost" data-action="lastlog" ${on && !busy ? "" : "disabled"}>Previous boot's log</button>
-          <button type="button" class="btn btn-sm ${this.status?.safeMode ? "btn-armed" : "btn-ghost"}" data-action="toggle-safemode" ${on && !busy ? "" : "disabled"} title="${this.status?.safeMode ? "Exit emergency Safe Mode and resume 50 Hz radio sweeps" : "Force the timer into emergency Safe Mode (turns off radio and runs the ambulance-siren LED fade)"}">
-            <span>${this.status?.safeMode ? "Exit safe mode" : "Enter safe mode"}</span>
+          <button type="button" class="btn btn-sm ${this.status?.emergencyMode ? "btn-armed" : "btn-ghost"}" data-action="toggle-emergency" ${on && !busy ? "" : "disabled"} title="${this.status?.emergencyMode ? "Exit emergency mode and resume 50 Hz radio sweeps" : "Force the timer into emergency rescue mode (turns off radio and runs the ambulance LED fade)"}">
+            <span>${this.status?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}</span>
           </button>
           <button type="button" class="btn btn-sm btn-armed" data-action="restart-capture" ${on && !busy ? "" : "disabled"}>${icons.reset(14)}<span>Restart &amp; capture boot log</span></button>
         </div>

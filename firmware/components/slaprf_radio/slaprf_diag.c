@@ -20,6 +20,7 @@
  *                    software resets, crashes and watchdog resets (not across power-off)
  *   CHANNELS a,..,h  temporary channel table (8 x 5180-5917 MHz) until reboot; CHANNELS RESET
  *   RF 1|0           5.8 GHz receiver on/off (off: sweeps skip the radio, readings -127)
+ *   EMERGENCY 1|0    enter/exit emergency rescue mode (radio & sweeps off, ambulance-siren LED fade)
  *   REBOOT           restart
  * Every reply line except SLAPRF? and mirrored log text starts with '@'.
  */
@@ -56,8 +57,8 @@
 #define SCAN_MAX_POINTS  200
 #define LOG_RING_BYTES   3072
 #define LOG_RING_MAGIC   0x534C4F48U // "SLOH" (v2 with crash_streak)
-#define SAFE_MODE_MAGIC  0x53414645U // "SAFE" (explicit SAFEMODE command request)
-#define MAX_CRASH_STREAK 3           // Halt in USB safe mode after 3 consecutive panics/watchdogs
+#define EMERGENCY_MAGIC  0x454D5247U // "EMRG" (explicit EMERGENCY command request)
+#define MAX_CRASH_STREAK 3           // Halt in USB emergency rescue mode after 3 consecutive panics/watchdogs
 #define RF_MIN_MHZ       5180
 #define RF_MAX_MHZ       5917
 #define HIT_MARGIN_DB    10 // A "hit" is a reading this far above the channel's typical noise
@@ -119,8 +120,8 @@ static char s_last_log[LOG_RING_BYTES]; // Previous boot's log, copied out at st
 static size_t s_last_len;
 static uint32_t s_boots;
 static uint32_t s_crash_streak;
-static volatile bool s_safe_mode;
-static bool s_booted_safe_mode;
+static volatile bool s_emergency_mode;
+static bool s_booted_emergency_mode;
 static bool s_ledc_initialized;
 static TaskHandle_t s_siren_task;
 static portMUX_TYPE s_ring_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -216,12 +217,12 @@ __attribute__((constructor)) static void diag_early_init(void) {
     if (s_ring.magic == LOG_RING_MAGIC && s_ring.len <= LOG_RING_BYTES && s_ring.head < LOG_RING_BYTES) {
         ring_copy_out(s_last_log, &s_last_len);
         s_boots = s_ring.boots + 1;
-        if (s_ring.crash_streak == SAFE_MODE_MAGIC) {
+        if (s_ring.crash_streak == EMERGENCY_MAGIC) {
             s_crash_streak = MAX_CRASH_STREAK;
         } else if (is_crash_reset(reason)) {
             s_crash_streak = s_ring.crash_streak + 1;
         } else if (s_ring.crash_streak >= MAX_CRASH_STREAK && (reason == ESP_RST_USB || reason == ESP_RST_JTAG)) {
-            // Keep Safe Mode latched across USB serial port open/close resets until explicit exit or power-cycle
+            // Keep Emergency Mode latched across USB serial port open/close resets until explicit exit or power-cycle
             s_crash_streak = s_ring.crash_streak;
         } else {
             s_crash_streak = 0;
@@ -282,7 +283,7 @@ static void send_status(void) {
     uint8_t channel = 0;
     wifi_mode_t mode = WIFI_MODE_NULL;
     wifi_sta_list_t stas = {0};
-    if (!s_safe_mode) {
+    if (!s_emergency_mode) {
         wifi_second_chan_t second;
         esp_wifi_get_channel(&channel, &second);
         esp_wifi_get_mode(&mode);
@@ -290,7 +291,7 @@ static void send_status(void) {
             esp_wifi_ap_get_sta_list(&stas);
         }
     }
-    const char *mode_name = s_safe_mode ? "safe-mode" : mode == WIFI_MODE_APSTA ? "ap+sta" : mode == WIFI_MODE_AP ? "ap" : mode == WIFI_MODE_STA ? "sta" : "off";
+    const char *mode_name = s_emergency_mode ? "emergency-mode" : mode == WIFI_MODE_APSTA ? "ap+sta" : mode == WIFI_MODE_AP ? "ap" : mode == WIFI_MODE_STA ? "sta" : "off";
 
     bool rf_ok = false;
     int gain = 0, gain_max = 0;
@@ -306,7 +307,7 @@ static void send_status(void) {
     int n = snprintf(out, sizeof(out),
                      "@{\"t\":\"status\",\"fw\":\"v%u.%u.%u\",\"role\":%u,\"profile\":%u,\"fp\":\"%08lX\","
                      "\"label\":\"%s\",\"uptimeMs\":%lld,\"reset\":\"%s\",\"boots\":%lu,"
-                     "\"safeMode\":%s,\"crashStreak\":%lu,\"heapFree\":%lu,\"heapMin\":%lu,"
+                     "\"emergencyMode\":%s,\"crashStreak\":%lu,\"heapFree\":%lu,\"heapMin\":%lu,"
                      "\"sweepHz\":%u,\"sweeps\":%lu,\"sweepUs\":%lu,\"sweepUsMax\":%lu,\"sweepBudgetUs\":%lu,"
                      "\"rf\":{\"ok\":%s,\"enabled\":%s,\"gain\":%d,\"gainMax\":%d,\"floorDb\":%.1f},"
                      "\"chip\":{\"model\":\"%s\",\"rev\":\"v%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"flashMB\":%lu},"
@@ -315,7 +316,7 @@ static void send_status(void) {
                      s_cfg[CFG_OFF_VERSION], s_cfg[CFG_OFF_VERSION + 1], s_cfg[CFG_OFF_VERSION + 2],
                      s_cfg[CFG_OFF_ROLE], s_cfg[CFG_OFF_PROFILE], (unsigned long)fp, label,
                      (long long)(esp_timer_get_time() / 1000), reset_reason_name(esp_reset_reason()),
-                     (unsigned long)s_boots, s_safe_mode ? "true" : "false", (unsigned long)s_crash_streak,
+                     (unsigned long)s_boots, s_emergency_mode ? "true" : "false", (unsigned long)s_crash_streak,
                      (unsigned long)esp_get_free_heap_size(),
                      (unsigned long)esp_get_minimum_free_heap_size(), s_sweep_hz, (unsigned long)s_sweeps,
                      (unsigned long)s_sweep_us_last, (unsigned long)s_sweep_us_max, (unsigned long)s_sweep_budget_us,
@@ -360,7 +361,7 @@ static void siren_led_task(void *arg) {
     (void)arg;
     uint32_t step = 0;
     for (;;) {
-        if (s_safe_mode) {
+        if (s_emergency_mode) {
             // Ambulance-siren smooth fade: low -> high -> low every 900 ms (60 steps x 15 ms)
             const uint32_t phase = step % 60U;
             const uint32_t tri = phase < 30U ? phase : (60U - phase);
@@ -377,7 +378,7 @@ static void siren_led_task(void *arg) {
     }
 }
 
-static void set_safe_mode(bool on) {
+static void set_emergency_mode(bool on) {
     if (on) {
         s_live = 0;
         s_scan_live = false;
@@ -402,7 +403,7 @@ static void set_safe_mode(bool on) {
             .hpoint     = 0,
         };
         ledc_channel_config(&ledc_ch);
-        s_safe_mode = true;
+        s_emergency_mode = true;
         s_ring.crash_streak = MAX_CRASH_STREAK;
         if (s_siren_task == NULL) {
             xTaskCreate(siren_led_task, "slaprf_siren", 2048, NULL, 2, &s_siren_task);
@@ -410,12 +411,12 @@ static void set_safe_mode(bool on) {
     } else {
         s_ring.crash_streak = 0;
         s_crash_streak = 0;
-        if (s_booted_safe_mode) {
+        if (s_booted_emergency_mode) {
             s_reboot_pending = true;
             vTaskDelay(pdMS_TO_TICKS(50));
             esp_restart();
         }
-        s_safe_mode = false;
+        s_emergency_mode = false;
         ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 1);
         gpio_reset_pin(XIAO_C5_LED_GPIO);
         gpio_config_t led_cfg = {
@@ -473,7 +474,7 @@ static void handle_command(char *line) {
     } else if (strcmp(line, "STATUS?") == 0) {
         send_status();
     } else if (strncmp(line, "LIVE ", 5) == 0) {
-        s_live = line[5] == '2' ? 2 : line[5] == '1' ? 1 : 0;
+        s_live = (!s_emergency_mode && line[5] == '2') ? 2 : (!s_emergency_mode && line[5] == '1') ? 1 : 0;
         if (s_live) memset(s_hits, 0, sizeof(s_hits)); // Don't report hits counted while paused
         tx_line(s_live ? "@{\"t\":\"ok\",\"cmd\":\"live\",\"on\":true}\n" : "@{\"t\":\"ok\",\"cmd\":\"live\",\"on\":false}\n");
     } else if (strncmp(line, "LOG ", 4) == 0) {
@@ -527,16 +528,16 @@ static void handle_command(char *line) {
         s_scan_stop = (uint16_t)b;
         s_scan_step = (uint16_t)s;
         s_scan_pending = true;
-    } else if (strncmp(line, "SAFEMODE", 8) == 0) {
-        const char *arg = line + 8;
+    } else if (strncmp(line, "EMERGENCY", 9) == 0) {
+        const char *arg = line + 9;
         while (*arg == ' ') arg++;
         const bool on = (*arg != '0');
         if (on) {
-            set_safe_mode(true);
-            tx_line("@{\"t\":\"ok\",\"cmd\":\"safemode\",\"on\":true}\n");
+            set_emergency_mode(true);
+            tx_line("@{\"t\":\"ok\",\"cmd\":\"emergency\",\"on\":true}\n");
         } else {
-            tx_line("@{\"t\":\"ok\",\"cmd\":\"safemode\",\"on\":false}\n");
-            set_safe_mode(false);
+            tx_line("@{\"t\":\"ok\",\"cmd\":\"emergency\",\"on\":false}\n");
+            set_emergency_mode(false);
         }
     } else if (strcmp(line, "REBOOT") == 0) {
         s_live = 0;
@@ -603,10 +604,10 @@ void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
         xTaskCreate(console_task, "slaprf_diag", 4096, NULL, 3, NULL);
     }
     if (s_crash_streak >= MAX_CRASH_STREAK) {
-        s_booted_safe_mode = true;
-        set_safe_mode(true);
+        s_booted_emergency_mode = true;
+        set_emergency_mode(true);
         ESP_LOGE("slaprf_diag",
-                 "SAFE MODE: halted after %lu consecutive crash resets (%s). Radio and sweeps are off so USB stays up for debugging and reflashing; send SAFEMODE 0, REBOOT, or power-cycle to retry.",
+                 "EMERGENCY MODE: halted after %lu consecutive crash resets (%s). Radio and sweeps are off so USB stays up for rescue and reflashing; send EMERGENCY 0, REBOOT, or power-cycle to exit.",
                  (unsigned long)s_crash_streak, reset_reason_name(esp_reset_reason()));
         for (;;) {
             if (s_reboot_pending) {
@@ -631,7 +632,7 @@ void slaprf_diag_set_slot(uint8_t slot) {
 }
 
 static void update_health_led(void) {
-    if (s_safe_mode) return;
+    if (s_emergency_mode) return;
     bool rf_ok = false;
     int gain = 0, gain_max = 0;
     float floor_db = 0;
@@ -655,7 +656,7 @@ static void update_health_led(void) {
 }
 
 void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us) {
-    if (s_safe_mode) return;
+    if (s_emergency_mode) return;
     s_sweeps++;
     if (s_ring.crash_streak != 0 && s_sweeps >= (uint32_t)s_sweep_hz * 5U) {
         // Survived 5 full seconds of sweeps: clear any prior crash streak

@@ -15,7 +15,7 @@ export interface TimerStatus {
   uptimeMs: number;
   reset: string;
   boots: number;
-  safeMode?: boolean;
+  emergencyMode?: boolean;
   crashStreak?: number;
   heapFree: number;
   heapMin: number;
@@ -233,7 +233,7 @@ export class TimerConsole {
    * port goes away; reopen the same device (matched by USB VID/PID) without the port picker.
    * Resolves with the first status after the restart.
    */
-  public async restartAndReconnect(timeoutMs = 15000, cmd: "REBOOT" | "SAFEMODE" = "REBOOT"): Promise<TimerStatus> {
+  public async restartAndReconnect(timeoutMs = 15000, cmd: "REBOOT" | "EMERGENCY" = "REBOOT"): Promise<TimerStatus> {
     const before = await this.request<TimerStatus>("STATUS?", "status", 2000).catch(() => null);
     this.expectingRestart = true;
     try {
