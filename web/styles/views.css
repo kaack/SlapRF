@@ -4305,6 +4305,17 @@ body.is-gate-dragging * {
   line-height: 1.55;
   white-space: pre;
 }
+.debug-log.is-wrapped,
+.debug-terminal.is-wrapped {
+  min-width: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: hidden;
+}
+.debug-terminal.is-wrapped .debug-terminal-history {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 .debug-selftest-log {
   height: auto;
   min-height: 72px;

@@ -205,6 +205,8 @@ export class DebugView extends Component {
   private serialHistoryIdx = -1;
   private serialDraft = "";
   private serialAwaitUntil = 0;
+  private serialWrap = false;
+  private logWrap = false;
 
   constructor(el: HTMLElement) {
     super(el);
@@ -430,17 +432,14 @@ export class DebugView extends Component {
         </section>
         <section class="settings-section">
           <div class="settings-intro">
-            <h2>Restarts &amp; boot logs</h2>
-            <p>The timer keeps its log in memory that survives a crash or restart, so you can read what happened during this boot and the one before it. The restart test checks that the timer comes back cleanly every time.</p>
+            <h2>Serial console &amp; restarts</h2>
+            <p>Interactive USB terminal, boot-log reader, and restart tester. The timer keeps its log in memory across crashes and restarts so you can inspect this boot or the previous one, or type <span class="mono">HELP</span> in the terminal to run commands directly.</p>
           </div>
-          <div class="debug-status-layout" data-slot="restart"></div>
-        </section>
-        <section class="settings-section">
-          <div class="settings-intro">
-            <h2>Serial console</h2>
-            <p>Send line-based USB commands directly to the timer and inspect its raw JSON replies (<span class="mono">STATUS?</span>, <span class="mono">EMERGENCY 1|0</span>, <span class="mono">RF 1|0</span>, <span class="mono">LIVE 0|1|2</span>, <span class="mono">SCAN a b s</span>, <span class="mono">CHANNELS f1,..,f8</span>, <span class="mono">BOOTLOG?</span>, <span class="mono">LASTLOG?</span>, <span class="mono">REBOOT</span>, or <span class="mono">HELP</span>).</p>
+          <div class="debug-status-layout">
+            <div data-slot="restart-head"></div>
+            <div class="card card-flush" data-slot="serial-console"></div>
+            <div class="debug-subbox" data-slot="restart"></div>
           </div>
-          <div class="card card-flush" data-slot="serial-console"></div>
         </section>
         <section class="settings-section">
           <div class="settings-intro">
@@ -1649,6 +1648,14 @@ export class DebugView extends Component {
           this.dirtySpectrum = true;
           this.dirtyWaterfall = true;
           break;
+        case "serial-wrap":
+          this.serialWrap = t.checked;
+          this.renderSerialConsole();
+          break;
+        case "log-wrap":
+          this.logWrap = t.checked;
+          this.renderLog();
+          break;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2101,15 +2108,16 @@ export class DebugView extends Component {
           break;
         }
         case "bootlog":
-          this.bootLog = await this.console.request<BootLog>("BOOTLOG?", "bootlog", 3000);
-          this.renderRestart();
+          await this.sendSerialCommand("BOOTLOG?");
           break;
         case "lastlog":
-          this.bootLog = await this.console.request<BootLog>("LASTLOG?", "bootlog", 3000);
-          this.renderRestart();
+          await this.sendSerialCommand("LASTLOG?");
           break;
         case "copy-bootlog":
           if (this.bootLog) await this.copy(this.bootLogHeader(this.bootLog) + "\n" + this.bootLog.text, t);
+          break;
+        case "copy-serial":
+          await this.copy(this.serialLines.join("\n"), t);
           break;
         case "serial-send": {
           const inp = this.el.querySelector<HTMLInputElement>("[data-serial-input]");
@@ -2230,8 +2238,8 @@ export class DebugView extends Component {
         this.status = await this.restart("REBOOT");
       }
     }
-    this.bootLog = await this.console.request<BootLog>("BOOTLOG?", "bootlog", 3000);
     this.renderAll();
+    await this.sendSerialCommand("BOOTLOG?");
   }
 
   private async restartAndCapture(): Promise<void> {
@@ -2239,7 +2247,7 @@ export class DebugView extends Component {
     await this.restart();
     this.setProgress("Reading the boot log…");
     await sleep(1500); // let Wi-Fi and the sweep task finish starting so their messages are in the log
-    this.bootLog = await this.console.request<BootLog>("BOOTLOG?", "bootlog", 3000);
+    await this.sendSerialCommand("BOOTLOG?");
     this.renderRestart();
   }
 
@@ -3768,7 +3776,6 @@ export class DebugView extends Component {
     const emg = Boolean(on && this.status?.emergencyMode);
     const busy = this.busy !== null;
     const restartBusy = this.busy === "Restarting" || this.busy === "Restart test";
-    const l = this.bootLog;
     const ledClass = restartBusy ? "is-warn" : emg ? "is-emergency" : on ? "is-up" : "";
     const statusText = restartBusy
       ? esc(this.progress)
@@ -3777,7 +3784,7 @@ export class DebugView extends Component {
         : on
           ? "Ready · USB reconnects automatically after restart"
           : "Off · connect a timer first";
-    this.slot("restart").innerHTML = `
+    this.slot("restart-head").innerHTML = `
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}"></span>
@@ -3791,43 +3798,29 @@ export class DebugView extends Component {
           </button>
           <button type="button" class="btn btn-sm btn-armed" data-action="restart-capture" ${on && !busy ? "" : "disabled"}>${icons.reset(14)}<span>Restart &amp; capture boot log</span></button>
         </div>
-      </div>
-      <div class="debug-subbox">
-        <div class="debug-restart-test">
-          <label>Restart test <input class="input mono" type="number" data-restart-count value="${esc(this.el.querySelector<HTMLInputElement>("[data-restart-count]")?.value ?? "5")}" min="1" max="50"/> times</label>
-          <button type="button" class="btn btn-sm" data-action="restart-test" ${on && !busy ? "" : "disabled"}>${icons.reset(14)}<span>${this.busy === "Restart test" ? "Running…" : "Run"}</span></button>
-        </div>
-        ${
-          this.runs.length
-            ? `<div class="table-scroll">
-                <table class="debug-runs">
-                  <thead><tr><th>#</th><th>Result</th><th>Back in</th><th>Restart reason</th><th></th></tr></thead>
-                  <tbody>${this.runs
-                    .map(
-                      (r) => `<tr>
-                        <td class="mono">${r.n}</td>
-                        <td><span class="badge ${r.ok && !r.extraBoots ? "badge-good" : r.ok ? "badge-warn" : "badge-bad"}">${r.ok && !r.extraBoots ? "OK" : r.ok ? "WARN" : "FAIL"}</span></td>
-                        <td class="mono">${(r.ms / 1000).toFixed(1)} s</td>
-                        <td>${esc(r.reset)}</td>
-                        <td class="note">${esc(r.note)}</td>
-                      </tr>`
-                    )
-                    .join("")}</tbody>
-                </table>
-              </div>`
-            : ""
-        }
+      </div>`;
+    this.slot("restart").innerHTML = `
+      <div class="debug-restart-test">
+        <label>Restart test <input class="input mono" type="number" data-restart-count value="${esc(this.el.querySelector<HTMLInputElement>("[data-restart-count]")?.value ?? "5")}" min="1" max="50"/> times</label>
+        <button type="button" class="btn btn-sm" data-action="restart-test" ${on && !busy ? "" : "disabled"}>${icons.reset(14)}<span>${this.busy === "Restart test" ? "Running…" : "Run"}</span></button>
       </div>
       ${
-        l
-          ? `<div class="card card-flush debug-bootlog">
-              <div class="debug-card-head debug-log-head">
-                <strong>${esc(this.bootLogHeader(l))}</strong>
-                <button type="button" class="btn btn-sm btn-ghost" data-action="copy-bootlog"><span>Copy log</span></button>
-              </div>
-              <div class="table-scroll">
-                <pre class="debug-log mono">${esc(l.text || "(empty)")}</pre>
-              </div>
+        this.runs.length
+          ? `<div class="table-scroll">
+              <table class="debug-runs">
+                <thead><tr><th>#</th><th>Result</th><th>Back in</th><th>Restart reason</th><th></th></tr></thead>
+                <tbody>${this.runs
+                  .map(
+                    (r) => `<tr>
+                      <td class="mono">${r.n}</td>
+                      <td><span class="badge ${r.ok && !r.extraBoots ? "badge-good" : r.ok ? "badge-warn" : "badge-bad"}">${r.ok && !r.extraBoots ? "OK" : r.ok ? "WARN" : "FAIL"}</span></td>
+                      <td class="mono">${(r.ms / 1000).toFixed(1)} s</td>
+                      <td>${esc(r.reset)}</td>
+                      <td class="note">${esc(r.note)}</td>
+                    </tr>`
+                  )
+                  .join("")}</tbody>
+              </table>
             </div>`
           : ""
       }`;
@@ -3868,8 +3861,10 @@ export class DebugView extends Component {
     }
     const note = this.el.querySelector<HTMLElement>("[data-serial-note]");
     if (note && this.console.connected) {
-      note.textContent = `${this.status?.emergencyMode ? "Emergency mode" : "Connected"} · ${this.serialLines.length} lines`;
+      note.textContent = `${this.serialLines.length} lines · type HELP for commands`;
     }
+    this.el.querySelector<HTMLButtonElement>('[data-action="copy-serial"]')?.removeAttribute("disabled");
+    this.el.querySelector<HTMLButtonElement>('[data-action="serial-clear"]')?.removeAttribute("disabled");
   }
 
   private async sendSerialCommand(rawCmd: string): Promise<void> {
@@ -3953,16 +3948,12 @@ export class DebugView extends Component {
 
   private renderSerialConsole(): void {
     const on = this.console.connected;
-    const emg = Boolean(on && this.status?.emergencyMode);
     const prevInput = this.el.querySelector<HTMLInputElement>("[data-serial-input]");
     const prevVal = prevInput?.value ?? "";
     const hadFocus = document.activeElement === prevInput;
-    const ledClass = emg ? "is-emergency" : on ? "is-up" : "";
     const statusText = !on
-      ? "Off · connect a timer first"
-      : emg
-        ? `Emergency mode · ${this.serialLines.length} lines · type HELP for commands`
-        : `Connected · ${this.serialLines.length} lines · type HELP for commands`;
+      ? "Disconnected"
+      : `${this.serialLines.length} lines · type HELP for commands`;
     const introBanner = on
       ? "# SlapRF USB serial terminal — type HELP for commands, Up/Down for history, Tab to complete.\n"
       : "# Disconnected — connect a timer over USB to open an interactive serial session.\n";
@@ -3972,16 +3963,21 @@ export class DebugView extends Component {
     const ps1 = esc(this.serialPrompt());
     this.slot("serial-console").innerHTML = `
       <div class="debug-card-head debug-log-head">
-        <span class="debug-led-status">
-          <span class="status-dot ${ledClass}"></span>
-          <span class="debug-head-note" data-serial-note>${statusText}</span>
-        </span>
+        <div class="debug-waterfall-title-group">
+          <span class="debug-chart-title">Serial terminal</span>
+          <span class="note" data-serial-note>${statusText}</span>
+        </div>
         <div class="debug-connect-actions">
+          <label class="check">
+            <input type="checkbox" data-check="serial-wrap" ${this.serialWrap ? "checked" : ""}/>
+            <span>Wrap lines</span>
+          </label>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="copy-serial" ${this.serialLines.length ? "" : "disabled"}><span>Copy</span></button>
           <button type="button" class="btn btn-sm btn-ghost" data-action="serial-clear" ${this.serialLines.length ? "" : "disabled"}>Clear</button>
         </div>
       </div>
       <div class="table-scroll">
-        <div class="debug-log debug-terminal mono" data-serial-terminal>
+        <div class="debug-log debug-terminal mono ${this.serialWrap ? "is-wrapped" : ""}" data-serial-terminal>
           <div class="debug-terminal-history" data-serial-pre>${bodyText}</div>
           <div class="debug-terminal-cmdline">
             <span class="debug-terminal-ps1">${ps1}</span>
@@ -4010,6 +4006,10 @@ export class DebugView extends Component {
           <span class="debug-head-note" data-log-count>${active ? "Streaming" : "Paused"} · ${this.logLines.length} lines</span>
         </span>
         <div class="debug-connect-actions">
+          <label class="check">
+            <input type="checkbox" data-check="log-wrap" ${this.logWrap ? "checked" : ""}/>
+            <span>Wrap lines</span>
+          </label>
           <button type="button" class="btn btn-sm btn-ghost" data-action="clear-log">Clear</button>
           <button type="button" class="btn btn-sm ${this.logOn ? "btn-armed" : "btn-unarmed"}" data-action="log" ${on ? "" : "disabled"} title="${this.logOn ? "Streaming USB log mirror — click to pause" : "Paused — click to stream USB log mirror"}">
             ${this.logOn ? icons.pause(14) : icons.play(14)}<span>${this.logOn ? "Pause" : "Stream"}</span>
@@ -4017,7 +4017,7 @@ export class DebugView extends Component {
         </div>
       </div>
       <div class="table-scroll">
-        <pre class="debug-log mono" data-log-pre>${esc(this.logLines.join("\n"))}</pre>
+        <pre class="debug-log mono ${this.logWrap ? "is-wrapped" : ""}" data-log-pre>${esc(this.logLines.join("\n"))}</pre>
       </div>`;
   }
 }
