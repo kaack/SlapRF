@@ -122,11 +122,15 @@ export class DebugView extends Component {
   private pilots: PilotThresholdInfo[] = [];
   private hasServer = false;
 
-  private signalWindowSec = 30;
+  private signalWindowSec = 2.5;
+  private signalAutoX = true;
+  private signalAutoY = true;
+  private signalSmoothYMin: number | null = null;
+  private signalSmoothYMax: number | null = null;
   private signalEndN: number | null = null;
   private signalRefN = 0;
-  private signalYMin = DBM_MIN;
-  private signalYMax = DBM_MAX;
+  private signalYMin = -100;
+  private signalYMax = -78;
   private signalYZoomBox: { y0: number; y1: number } | null = null;
   private signalDrag: {
     mode: "undecided" | "time" | "ybox" | "xstretch" | "ystretch";
@@ -149,6 +153,7 @@ export class DebugView extends Component {
   private scanShowWifi = true;
   private scanZoomStartMHz: number | null = null;
   private scanZoomStopMHz: number | null = null;
+  private scanAutoY = true;
   private scanYMin = DBM_MIN;
   private scanYMax = DBM_MAX;
   private scanZoomBox: { x0: number; x1: number } | null = null;
@@ -544,15 +549,137 @@ export class DebugView extends Component {
       nextMin = Math.max(DBM_MIN, Math.round(DBM_MAX - nextSpan));
     }
     if (target === "signal") {
+      this.signalAutoY = false;
+      this.signalSmoothYMin = nextMin;
+      this.signalSmoothYMax = nextMax;
       this.signalYMin = nextMin;
       this.signalYMax = nextMax;
       this.dirtySignal = true;
     } else {
+      this.scanAutoY = false;
       this.scanYMin = nextMin;
       this.scanYMax = nextMax;
       this.spectrumAcc.setColorRange(nextMin, Math.min(-25, nextMax));
       this.dirtySpectrum = true;
       this.dirtyWaterfall = true;
+    }
+  }
+
+  private updateAutoSignalAxes(canvasWidth: number): void {
+    const sweepHz = this.status?.sweepHz ?? 50;
+    const ptsAll = this.signalRing.points;
+
+    if (this.signalAutoX) {
+      let effectiveRateHz = this.liveMode === 2 ? sweepHz : Math.max(1, Math.round(sweepHz / 5));
+      if (ptsAll.length >= 12) {
+        const a = ptsAll[Math.max(0, ptsAll.length - 30)];
+        const b = ptsAll[ptsAll.length - 1];
+        const dtSec = (b.wallMs - a.wallMs) / 1000;
+        const count = ptsAll.length - 1 - Math.max(0, ptsAll.length - 30);
+        if (dtSec >= 0.15 && dtSec <= 5 && count >= 5) {
+          effectiveRateHz = Math.max(4, Math.min(sweepHz, count / dtSec));
+        }
+      }
+      const plotW = Math.max(240, (canvasWidth || 700) - 58);
+      // Target ~6.5 px per sample so consecutive sweeps and crossings are clearly separated
+      const targetSamples = Math.max(45, Math.min(160, Math.round(plotW / 6.5)));
+      const rawSec = targetSamples / Math.max(4, effectiveRateHz);
+      const snappedSec = Math.max(1.5, Math.min(15, Math.round(rawSec * 2) / 2));
+      if (Math.abs(this.signalWindowSec - snappedSec) >= 0.4) {
+        this.signalWindowSec = snappedSec;
+      }
+    }
+
+    if (this.signalAutoY) {
+      const pts = this.signalRing.windowPoints(this.signalWindowSec, sweepHz, this.signalEndN);
+      if (pts.length > 0) {
+        let minD = 1000;
+        let maxD = -1000;
+        for (let k = 0; k < pts.length; k++) {
+          const p = pts[k];
+          for (let ch = 0; ch < 8; ch++) {
+            if (!this.signalEnabledCh[ch]) continue;
+            const v = p.dbm[ch];
+            if (v !== undefined && v > -127) {
+              if (v < minD) minD = v;
+              if (v > maxD) maxD = v;
+            }
+            const fl = p.floor[ch];
+            if (fl !== undefined && fl > -127) {
+              if (this.signalShowFloor) {
+                if (fl < minD) minD = fl;
+                if (fl > maxD) maxD = fl;
+              }
+              if (this.signalShowHitLine && fl + 10 > maxD) {
+                maxD = fl + 10;
+              }
+            }
+          }
+        }
+        if (this.signalShowThresholds && maxD > -1000) {
+          const freqs = this.status?.freqs ?? RACEBAND;
+          for (let ch = 0; ch < 8; ch++) {
+            if (!this.signalEnabledCh[ch]) continue;
+            const f = freqs[ch] ?? RACEBAND[ch];
+            const pilot = this.pilots.find((p) => p.enabled && p.frequencyMhz === f);
+            const thr = pilot ? pilot.enterThreshold : ch === 0 ? -58 : null;
+            if (thr !== null && maxD >= thr - 12 && thr > maxD) {
+              maxD = thr;
+            }
+          }
+        }
+        if (minD <= maxD) {
+          let targetMin = Math.max(DBM_MIN, minD - 4);
+          let targetMax = Math.min(DBM_MAX, maxD + 5);
+          const minSpan = 16;
+          if (targetMax - targetMin < minSpan) {
+            const extra = minSpan - (targetMax - targetMin);
+            targetMin = Math.max(DBM_MIN, targetMin - Math.floor(extra * 0.3));
+            targetMax = Math.min(DBM_MAX, targetMin + minSpan);
+          }
+          if (this.signalSmoothYMin === null || this.signalSmoothYMax === null) {
+            this.signalSmoothYMin = targetMin;
+            this.signalSmoothYMax = targetMax;
+          } else {
+            const alphaMin = targetMin < this.signalSmoothYMin ? 0.6 : 0.14;
+            const alphaMax = targetMax > this.signalSmoothYMax ? 0.65 : 0.14;
+            this.signalSmoothYMin += (targetMin - this.signalSmoothYMin) * alphaMin;
+            this.signalSmoothYMax += (targetMax - this.signalSmoothYMax) * alphaMax;
+          }
+          this.signalYMin = Math.round(this.signalSmoothYMin);
+          this.signalYMax = Math.max(this.signalYMin + 12, Math.round(this.signalSmoothYMax));
+        }
+      }
+    }
+  }
+
+  private updateAutoScanY(): void {
+    if (!this.scanAutoY) return;
+    const s = this.spectrumAcc.latest;
+    if (!s || !s.dbm.length) return;
+    const scanStop = s.start + s.step * (s.dbm.length - 1);
+    const vStart = this.scanZoomStartMHz ?? s.start;
+    const vStop = this.scanZoomStopMHz ?? scanStop;
+    let minD = 1000;
+    let maxD = -1000;
+    const hold = this.scanShowMaxHold ? this.spectrumAcc.maxHold : null;
+    for (let i = 0; i < s.dbm.length; i++) {
+      const f = s.start + i * s.step;
+      if (f < vStart || f > vStop) continue;
+      const v = s.dbm[i];
+      if (v < minD) minD = v;
+      if (v > maxD) maxD = v;
+      if (hold && hold[i] > maxD) maxD = hold[i];
+    }
+    if (minD <= maxD) {
+      let targetMin = Math.max(DBM_MIN, minD - 4);
+      let targetMax = Math.min(DBM_MAX, maxD + 6);
+      if (targetMax - targetMin < 20) {
+        targetMax = Math.min(DBM_MAX, targetMin + 20);
+      }
+      this.scanYMin = Math.round(targetMin);
+      this.scanYMax = Math.round(targetMax);
+      this.spectrumAcc.setColorRange(this.scanYMin, Math.min(-25, this.scanYMax + 6));
     }
   }
 
@@ -749,8 +876,11 @@ export class DebugView extends Component {
               const dHigh = Math.round(this.signalYMin + (1 - (ya - T) / plotH) * span);
               const dLow = Math.round(this.signalYMin + (1 - (yb - T) / plotH) * span);
               if (dHigh - dLow >= 4) {
+                this.signalAutoY = false;
                 this.signalYMin = Math.max(DBM_MIN, dLow);
                 this.signalYMax = Math.min(DBM_MAX, dHigh);
+                this.signalSmoothYMin = this.signalYMin;
+                this.signalSmoothYMax = this.signalYMax;
               }
             }
           }
@@ -796,17 +926,17 @@ export class DebugView extends Component {
       const target = e.target as HTMLElement;
       if (target.matches("[data-signal-canvas]")) {
         this.signalEndN = null;
-        this.signalYMin = DBM_MIN;
-        this.signalYMax = DBM_MAX;
+        this.signalAutoX = true;
+        this.signalAutoY = true;
+        this.signalSmoothYMin = null;
+        this.signalSmoothYMax = null;
         this.renderSignalControls();
         this.dirtySignal = true;
         this.dirtyNoiseTable = true;
       } else if (target.matches("[data-spectrum-canvas], [data-waterfall-canvas]")) {
         this.scanZoomStartMHz = null;
         this.scanZoomStopMHz = null;
-        this.scanYMin = DBM_MIN;
-        this.scanYMax = DBM_MAX;
-        this.spectrumAcc.setColorRange(-100, -40);
+        this.scanAutoY = true;
         this.spectrumAcc.setVisibleRows(80);
         this.renderScan();
       }
@@ -831,6 +961,7 @@ export class DebugView extends Component {
             this.applyDbmStretch(this.signalDrag.startYMin, this.signalDrag.startYMax, this.signalDrag.anchorFrac, factor, "signal");
           } else if (this.signalDrag.mode === "xstretch") {
             // Dragging RIGHT stretches X (smaller windowSec so signals spread out); dragging LEFT shrinks X
+            this.signalAutoX = false;
             const factor = Math.exp(-dx / 120);
             const nextSec = Math.max(0.4, Math.min(120, Number((this.signalDrag.startWindowSec * factor).toFixed(2))));
             const sweepHz = this.status?.sweepHz ?? 50;
@@ -972,6 +1103,7 @@ export class DebugView extends Component {
             this.renderSignalControls();
           } else {
             // Wheel on plot or X-axis zooms the time window (0.4 s .. 120 s) around cursor X
+            this.signalAutoX = false;
             const L = 44;
             const plotW = Math.max(10, r.width - L - 14);
             const sweepHz = this.status?.sweepHz ?? 50;
@@ -1039,6 +1171,7 @@ export class DebugView extends Component {
     if (this.dirtySignal) {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-signal-canvas]");
       if (c) {
+        this.updateAutoSignalAxes(c.clientWidth || 700);
         drawSignalOverTimeCanvas(c, this.signalRing, {
           windowSec: this.signalWindowSec,
           sweepHz: this.status?.sweepHz ?? 50,
@@ -1046,6 +1179,8 @@ export class DebugView extends Component {
           refN: this.signalRefN,
           yMinDbm: this.signalYMin,
           yMaxDbm: this.signalYMax,
+          autoX: this.signalAutoX,
+          autoY: this.signalAutoY,
           yZoomBox: this.signalYZoomBox,
           freqs: this.status?.freqs ?? RACEBAND,
           enabledChannels: this.signalEnabledCh,
@@ -1069,6 +1204,7 @@ export class DebugView extends Component {
     if (this.dirtySpectrum) {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-spectrum-canvas]");
       if (c) {
+        this.updateAutoScanY();
         drawSpectrumCanvas(c, this.spectrumAcc, {
           showMaxHold: this.scanShowMaxHold,
           showAverage: this.scanShowAvg,
@@ -1077,6 +1213,7 @@ export class DebugView extends Component {
           viewStopMHz: this.scanZoomStopMHz,
           yMinDbm: this.scanYMin,
           yMaxDbm: this.scanYMax,
+          autoY: this.scanAutoY,
           zoomBox: this.scanZoomBox,
           hover: this.scanHover,
         });
@@ -1256,9 +1393,16 @@ export class DebugView extends Component {
           await this.refreshStatus();
           this.renderChannels();
           break;
+        case "signal-auto-x":
+          this.signalAutoX = true;
+          this.renderSignalControls();
+          this.dirtySignal = true;
+          this.dirtyNoiseTable = true;
+          break;
         case "signal-window": {
           const w = Number(t.dataset.win);
           if (w > 0 && w <= 120) {
+            this.signalAutoX = false;
             const sweepHz = this.status?.sweepHz ?? 50;
             const centerN = this.signalViewEndN() - (this.signalWindowSec * sweepHz) / 2;
             this.signalWindowSec = w;
@@ -1286,14 +1430,27 @@ export class DebugView extends Component {
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
           break;
+        case "signal-auto-y":
+          this.signalAutoY = !this.signalAutoY;
+          if (!this.signalAutoY) {
+            this.signalYMin = DBM_MIN;
+            this.signalYMax = DBM_MAX;
+          } else {
+            this.signalSmoothYMin = null;
+            this.signalSmoothYMax = null;
+          }
+          this.renderSignalControls();
+          this.dirtySignal = true;
+          break;
         case "signal-reset-y":
-          this.signalYMin = DBM_MIN;
-          this.signalYMax = DBM_MAX;
+          this.signalAutoY = true;
+          this.signalSmoothYMin = null;
+          this.signalSmoothYMax = null;
           this.renderSignalControls();
           this.dirtySignal = true;
           break;
         case "signal-reset-x":
-          this.signalWindowSec = 30;
+          this.signalAutoX = true;
           this.renderSignalControls();
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
@@ -1416,9 +1573,16 @@ export class DebugView extends Component {
           this.renderScan();
           break;
         case "scan-reset-y":
-          this.scanYMin = DBM_MIN;
-          this.scanYMax = DBM_MAX;
-          this.spectrumAcc.setColorRange(-100, -40);
+          this.scanAutoY = true;
+          this.renderScan();
+          break;
+        case "scan-auto-y":
+          this.scanAutoY = !this.scanAutoY;
+          if (!this.scanAutoY) {
+            this.scanYMin = DBM_MIN;
+            this.scanYMax = DBM_MAX;
+            this.spectrumAcc.setColorRange(-100, -40);
+          }
           this.renderScan();
           break;
         case "scan-preset": {
@@ -2082,7 +2246,7 @@ export class DebugView extends Component {
             ? "Following live 50 Hz stream — click to pause, or drag the chart to scroll back"
             : "Paused / scrolled back — click to resume live 50 Hz stream";
     const presets = [1, 2, 5, 10, 30, 120] as const;
-    const isCustomWindow = !presets.some((w) => Math.abs(this.signalWindowSec - w) < 0.05);
+    const isCustomWindow = !this.signalAutoX && !presets.some((w) => Math.abs(this.signalWindowSec - w) < 0.05);
     const sigLedClass = liveFollowOn ? "is-up" : streamRunning && !isLive ? "is-warn" : "";
     const sigStatusText = liveFollowOn
       ? `On · ${this.liveMode === 2 ? "50 Hz" : "10 Hz"}`
@@ -2099,10 +2263,11 @@ export class DebugView extends Component {
             <span class="note mono">${sigStatusText}</span>
           </span>
           <div class="segmented" role="group" aria-label="Time window">
+            <button type="button" class="${this.signalAutoX ? "is-active" : ""}" data-action="signal-auto-x" title="Automatically adjust X-axis time window based on incoming sample rate">Auto</button>
             ${presets
               .map(
                 (w) =>
-                  `<button type="button" class="${Math.abs(this.signalWindowSec - w) < 0.05 ? "is-active" : ""}" data-action="signal-window" data-win="${w}" title="Set X-axis time window to ${w === 120 ? "2 minutes" : `${w} seconds`} (or drag horizontally on the X-axis)">${w === 120 ? "2 min" : `${w} s`}</button>`
+                  `<button type="button" class="${!this.signalAutoX && Math.abs(this.signalWindowSec - w) < 0.05 ? "is-active" : ""}" data-action="signal-window" data-win="${w}" title="Set X-axis time window to ${w === 120 ? "2 minutes" : `${w} seconds`} (or drag horizontally on the X-axis)">${w === 120 ? "2 min" : `${w} s`}</button>`
               )
               .join("")}
           </div>
@@ -2124,13 +2289,18 @@ export class DebugView extends Component {
         <div class="debug-connect-actions">
           ${
             isCustomWindow
-              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="signal-reset-x" title="Reset X-axis time window to 30 s">${icons.target(13)}<span>X: ${this.signalWindowSec < 10 ? this.signalWindowSec.toFixed(1) : Math.round(this.signalWindowSec)} s ×</span></button>`
+              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="signal-reset-x" title="Reset X-axis time window to Auto">${icons.target(13)}<span>X: ${this.signalWindowSec < 10 ? this.signalWindowSec.toFixed(1) : Math.round(this.signalWindowSec)} s ×</span></button>`
               : ""
           }
+          <button type="button" class="btn btn-sm ${this.signalAutoY ? "btn-armed" : "btn-unarmed"} mono" data-action="signal-auto-y" title="${this.signalAutoY ? "Auto Y-axis scaling is ON — fits visible signal traces automatically. Click for full manual scale (-100…-20 dBm), or drag the Y-axis to stretch." : "Manual Y-axis range — click to re-enable Auto Y-axis scaling"}">
+            ${icons.target(13)}<span>${this.signalAutoY ? "Auto Y" : `Y: ${this.signalYMin}…${this.signalYMax} dBm`}</span>
+          </button>
           ${
-            isYZoomed
-              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="signal-reset-y" title="Reset Y-axis dBm zoom to full scale (${DBM_MIN}…${DBM_MAX} dBm)">${icons.target(13)}<span>Y: ${this.signalYMin}…${this.signalYMax} dBm ×</span></button>`
-              : `<button type="button" class="btn btn-sm btn-ghost" data-action="signal-zoom-floor" title="Zoom Y-axis into the noise floor region (−102…−68 dBm), or drag vertically on the Y-axis">Zoom floor Y</button>`
+            !this.signalAutoY && isYZoomed
+              ? `<button type="button" class="btn btn-sm btn-ghost" data-action="signal-reset-y" title="Set Y-axis dBm scale to full range (${DBM_MIN}…${DBM_MAX} dBm)">Full Y</button>`
+              : !this.signalAutoY
+                ? `<button type="button" class="btn btn-sm btn-ghost" data-action="signal-zoom-floor" title="Zoom Y-axis into the noise floor region (−102…−68 dBm), or drag vertically on the Y-axis">Zoom floor Y</button>`
+                : ""
           }
           <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
           <button type="button" class="btn btn-sm ${liveFollowOn ? "btn-armed" : "btn-unarmed"}" data-action="signal-freeze" ${liveDisabled || (inScanMode && isLive) ? "disabled" : ""} title="${liveTitle}">
@@ -2481,14 +2651,12 @@ export class DebugView extends Component {
             </label>
           </div>
           <button type="button" class="btn btn-sm btn-ghost" data-action="clear-hold" ${hasScan ? "" : "disabled"}>Reset hold/avg</button>
+          <button type="button" class="btn btn-sm ${this.scanAutoY ? "btn-armed" : "btn-unarmed"} mono" data-action="scan-auto-y" title="${this.scanAutoY ? "Auto Y-axis scaling is on (fits scanned dBm range) — click for full −100…−20 dBm scale, or drag the Y-axis" : "Manual Y-axis range active — click to re-enable Auto Y scaling"}">
+            ${icons.target(13)}<span>${this.scanAutoY ? "Auto Y" : `Y: ${this.scanYMin}…${this.scanYMax} dBm`}</span>
+          </button>
           ${
             isFreqZoomed
               ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="scan-reset-zoom" title="Reset frequency zoom (or double-click chart)">${icons.target(13)}<span>X: ${this.scanZoomStartMHz}–${this.scanZoomStopMHz} MHz ×</span></button>`
-              : ""
-          }
-          ${
-            isScanYZoomed
-              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="scan-reset-y" title="Reset Spectrum Y-axis dBm range (or double-click chart)">${icons.target(13)}<span>Y: ${this.scanYMin}…${this.scanYMax} dBm ×</span></button>`
               : ""
           }
         </div>

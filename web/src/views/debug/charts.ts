@@ -384,6 +384,8 @@ export interface SignalChartOptions {
   refN?: number | null;
   yMinDbm?: number;
   yMaxDbm?: number;
+  autoX?: boolean;
+  autoY?: boolean;
   yZoomBox?: { y0: number; y1: number } | null;
   freqs: number[];
   enabledChannels: boolean[];
@@ -392,6 +394,78 @@ export interface SignalChartOptions {
   showThresholds: boolean;
   pilots: PilotThresholdInfo[];
   hover: { x: number; y: number } | null;
+}
+
+/**
+ * Trace a clamped uniform cubic B-spline through `pts` using exact cubic Bézier segments.
+ * Guaranteed C² continuous, convex-hull bounded (never overshoots peaks), and filters ±1 dB integer quantization steps.
+ */
+function traceBSpline(ctx: CanvasRenderingContext2D, pts: Array<{ x: number; y: number }>, moveFirst = true): void {
+  const n = pts.length;
+  if (n === 0) return;
+  if (moveFirst) ctx.moveTo(pts[0].x, pts[0].y);
+  if (n === 1) return;
+  if (n === 2) {
+    ctx.lineTo(pts[1].x, pts[1].y);
+    return;
+  }
+  const at = (idx: number) => pts[Math.max(0, Math.min(n - 1, idx))];
+  for (let i = -1; i <= n - 1; i++) {
+    const p1 = at(i);
+    const p2 = at(i + 1);
+    const p3 = at(i + 2);
+    const cp1x = (2 * p1.x + p2.x) / 3;
+    const cp1y = (2 * p1.y + p2.y) / 3;
+    const cp2x = (p1.x + 2 * p2.x) / 3;
+    const cp2y = (p1.y + 2 * p2.y) / 3;
+    const endX = (p1.x + 4 * p2.x + p3.x) / 6;
+    const endY = (p1.y + 4 * p2.y + p3.y) / 6;
+    ctx.bezierCurveTo(cp1x, cp1y, cp2x, cp2y, endX, endY);
+  }
+}
+
+/**
+ * Decimate a dense contiguous trace segment to at most `maxBuckets` points before B-spline rendering.
+ * Preserves sharp RF bursts/crossings while averaging ±1 dB ADC quantization chatter.
+ */
+function decimateSignalSegment(
+  pts: Array<{ x: number; y: number; dbm: number }>,
+  maxBuckets: number
+): Array<{ x: number; y: number }> {
+  if (pts.length <= maxBuckets || maxBuckets < 4) {
+    return pts;
+  }
+  const out: Array<{ x: number; y: number }> = [pts[0]];
+  const innerBuckets = maxBuckets - 2;
+  const span = pts.length - 2;
+  for (let b = 0; b < innerBuckets; b++) {
+    const i0 = 1 + Math.floor((b * span) / innerBuckets);
+    const i1 = Math.min(pts.length - 1, Math.max(i0 + 1, 1 + Math.floor(((b + 1) * span) / innerBuckets)));
+    let sumX = 0;
+    let sumY = 0;
+    let minDbm = 1000;
+    let maxDbm = -1000;
+    let peakPt = pts[i0];
+    const count = i1 - i0;
+    for (let i = i0; i < i1; i++) {
+      const p = pts[i];
+      sumX += p.x;
+      sumY += p.y;
+      if (p.dbm < minDbm) minDbm = p.dbm;
+      if (p.dbm > maxDbm) {
+        maxDbm = p.dbm;
+        peakPt = p;
+      }
+    }
+    // If bucket contains a significant excursion (>= 5 dB), preserve the peak point
+    if (maxDbm - minDbm >= 5) {
+      out.push({ x: peakPt.x, y: peakPt.y });
+    } else {
+      out.push({ x: sumX / count, y: sumY / count });
+    }
+  }
+  out.push(pts[pts.length - 1]);
+  return out;
 }
 
 /** Render the Signal-over-time multi-channel chart onto `canvas`. */
@@ -414,7 +488,7 @@ export function drawSignalOverTimeCanvas(
   const yMin = opts.yMinDbm ?? DBM_MIN;
   const yMax = Math.max(yMin + 4, opts.yMaxDbm ?? DBM_MAX);
   const ySpan = yMax - yMin;
-  const isYZoomed = yMin !== DBM_MIN || yMax !== DBM_MAX;
+  const isYZoomed = !opts.autoY && (yMin !== DBM_MIN || yMax !== DBM_MAX);
 
   const yOf = (dbm: number) => {
     return T + (1 - (dbm - yMin) / ySpan) * plotH;
@@ -466,7 +540,7 @@ export function drawSignalOverTimeCanvas(
                   ? 10
                   : 20;
   const stepSweeps = stepSec * opts.sweepHz;
-  const isXCustom = ![1, 2, 5, 10, 30, 120].includes(Math.round(opts.windowSec * 10) / 10);
+  const isXCustom = !opts.autoX && ![1, 2, 5, 10, 30, 120].includes(Math.round(opts.windowSec * 10) / 10);
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   if (stepSweeps > 0) {
@@ -578,41 +652,50 @@ export function drawSignalOverTimeCanvas(
   }
   ctx.globalAlpha = 1;
 
-  // Draw each enabled channel trace; break the path when `n` jumps (dropped lines) so gaps show honestly
+  // Draw each enabled channel trace using uniform cubic B-splines; break the path when `n` jumps so gaps show honestly
   const maxStepN = Math.max(2, Math.round(opts.sweepHz / 5)); // >200 ms gap breaks the line
   const pxPerSweep = plotW / Math.max(1, windowSweeps);
-  const showSampleDots = pxPerSweep >= 5.5;
+  const showSampleDots = pxPerSweep >= 7.5;
+  const maxSplineBuckets = Math.max(24, Math.floor(plotW / 4.5));
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+
   for (let ch = 0; ch < 8; ch++) {
     if (!opts.enabledChannels[ch]) continue;
     const col = CHANNEL_COLORS[ch];
     ctx.strokeStyle = col;
-    ctx.lineWidth = showSampleDots ? 1.65 : 1.4;
+    ctx.lineWidth = showSampleDots ? 1.85 : 1.65;
     ctx.beginPath();
-    let penDown = false;
+
+    let segment: Array<{ x: number; y: number; dbm: number }> = [];
     let prevN = -1;
+    const flushSegment = () => {
+      if (segment.length === 0) return;
+      const smoothed = decimateSignalSegment(segment, maxSplineBuckets);
+      traceBSpline(ctx, smoothed, true);
+      segment = [];
+    };
+
     for (let k = 0; k < pts.length; k++) {
       const p = pts[k];
       const v = p.dbm[ch];
       if (v === undefined || v <= -127) {
-        penDown = false;
+        flushSegment();
         continue;
       }
-      const x = xOfN(p.n);
-      const y = yOf(v);
-      if (!penDown || p.n - prevN > maxStepN) {
-        ctx.moveTo(x, y);
-        penDown = true;
-      } else {
-        ctx.lineTo(x, y);
+      if (segment.length > 0 && p.n - prevN > maxStepN) {
+        flushSegment();
       }
+      segment.push({ x: xOfN(p.n), y: yOf(v), dbm: v });
       prevN = p.n;
     }
+    flushSegment();
     ctx.stroke();
 
     // When stretched horizontally (zoomed in on time), render individual sweep sample dots
     if (showSampleDots) {
       ctx.fillStyle = col;
-      const dotR = pxPerSweep >= 10 ? 2.4 : 1.8;
+      const dotR = pxPerSweep >= 12 ? 2.3 : 1.7;
       for (let k = 0; k < pts.length; k++) {
         const p = pts[k];
         const v = p.dbm[ch];
@@ -1067,6 +1150,7 @@ export interface SpectrumCanvasOptions {
   viewStopMHz?: number | null;
   yMinDbm?: number;
   yMaxDbm?: number;
+  autoY?: boolean;
   zoomBox?: { x0: number; x1: number } | null;
   hover: { x: number; y: number } | null;
 }
@@ -1157,7 +1241,7 @@ export function drawSpectrumCanvas(
   const yMin = opts.yMinDbm ?? DBM_MIN;
   const yMax = Math.max(yMin + 4, opts.yMaxDbm ?? DBM_MAX);
   const ySpan = yMax - yMin;
-  const isYZoomed = yMin !== DBM_MIN || yMax !== DBM_MAX;
+  const isYZoomed = !opts.autoY && (yMin !== DBM_MIN || yMax !== DBM_MAX);
   const isXZoomed = vStart !== s.start || vStop !== scanStop;
   const xOf = (f: number) => L + ((f - vStart) / span) * plotW;
   const yOf = (d: number) => T + (1 - (d - yMin) / ySpan) * plotH;
@@ -1197,55 +1281,47 @@ export function drawSpectrumCanvas(
 
   drawBandOverlay(ctx, vStart, vStop, L, R, T, plotW, plotH, opts.showWifiOverlay, tokens);
 
-  // Max-hold trace
+  // Max-hold trace (B-spline smoothed)
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
   if (opts.showMaxHold && acc.maxHold && acc.maxHold.length === s.dbm.length) {
     ctx.strokeStyle = tokens.accent;
-    ctx.globalAlpha = 0.32;
-    ctx.lineWidth = 1.1;
+    ctx.globalAlpha = 0.34;
+    ctx.lineWidth = 1.2;
+    const holdPts = acc.maxHold.map((v, i) => ({ x: xOf(s.start + i * s.step), y: yOf(v) }));
     ctx.beginPath();
-    for (let i = 0; i < acc.maxHold.length; i++) {
-      const x = xOf(s.start + i * s.step);
-      const y = yOf(acc.maxHold[i]);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
+    traceBSpline(ctx, holdPts, true);
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
-  // Running average trace
+  // Running average trace (B-spline smoothed)
   const avg = opts.showAverage ? acc.getAverage() : null;
   if (avg && avg.length === s.dbm.length) {
     ctx.strokeStyle = "#38bdf8";
-    ctx.globalAlpha = 0.75;
-    ctx.lineWidth = 1.25;
+    ctx.globalAlpha = 0.8;
+    ctx.lineWidth = 1.4;
+    const avgPts = avg.map((v, i) => ({ x: xOf(s.start + i * s.step), y: yOf(v) }));
     ctx.beginPath();
-    for (let i = 0; i < avg.length; i++) {
-      const x = xOf(s.start + i * s.step);
-      const y = yOf(avg[i]);
-      if (i === 0) ctx.moveTo(x, y);
-      else ctx.lineTo(x, y);
-    }
+    traceBSpline(ctx, avgPts, true);
     ctx.stroke();
     ctx.globalAlpha = 1;
   }
 
-  // Live / current scan trace & peak within visible range
+  // Live / current scan trace (B-spline smoothed) & peak within visible range
   ctx.strokeStyle = tokens.accent;
-  ctx.lineWidth = 1.6;
-  ctx.lineJoin = "round";
-  ctx.beginPath();
+  ctx.lineWidth = 1.75;
   let peakIdx = -1;
+  const livePts: Array<{ x: number; y: number }> = [];
   for (let i = 0; i < s.dbm.length; i++) {
     const f = s.start + i * s.step;
     if (f >= vStart && f <= vStop && (peakIdx < 0 || s.dbm[i] > s.dbm[peakIdx])) {
       peakIdx = i;
     }
-    const x = xOf(f);
-    const y = yOf(s.dbm[i]);
-    if (i === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
+    livePts.push({ x: xOf(f), y: yOf(s.dbm[i]) });
   }
+  ctx.beginPath();
+  traceBSpline(ctx, livePts, true);
   ctx.stroke();
 
   // Peak dot & label inside visible range
