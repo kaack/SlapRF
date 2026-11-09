@@ -5,10 +5,12 @@ import { ApiClient } from "../services/api_client";
 import { AppStore } from "../state/store";
 import { LiveView } from "../views/LiveView";
 import { PilotView } from "../views/PilotView";
+import { PilotsView } from "../views/PilotsView";
 import { DebugView } from "../views/DebugView";
 import { FlasherView } from "../views/FlasherView";
 import { SetupView } from "../views/SetupView";
 import { SimView } from "../views/SimView";
+import { TrackView } from "../views/TrackView";
 import { Sidebar } from "./Sidebar";
 import { TopBar } from "./TopBar";
 
@@ -70,6 +72,10 @@ export class AppShell extends Component {
         return new LiveView(host, this.store, this.api);
       case "pilot":
         return new PilotView(host, this.store);
+      case "pilots":
+        return new PilotsView(host, this.store, this.api);
+      case "track":
+        return new TrackView(host, this.store, this.api);
       case "sim":
         return new SimView(host, this.store, this.api);
       case "setup":

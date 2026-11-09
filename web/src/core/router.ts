@@ -1,6 +1,6 @@
 import { icons } from "./icons";
 
-export type RouteId = "live" | "pilot" | "sim" | "setup" | "flasher" | "debug";
+export type RouteId = "live" | "pilot" | "pilots" | "track" | "sim" | "setup" | "flasher" | "debug";
 
 export interface RouteMeta {
   id: RouteId;
@@ -28,6 +28,20 @@ export const ROUTES: RouteMeta[] = [
     icon: () => icons.chart(20),
   },
   {
+    id: "pilots",
+    label: "Pilots",
+    title: "Pilots",
+    subtitle: "Eight timing slots and 5.8 GHz Raceband channels",
+    icon: () => icons.pilot(20),
+  },
+  {
+    id: "track",
+    label: "Track",
+    title: "Track",
+    subtitle: "Gate order, sections, start gate, and discovered timers",
+    icon: () => icons.gate(20),
+  },
+  {
     id: "sim",
     label: "Simulator",
     title: "Simulator",
@@ -39,7 +53,7 @@ export const ROUTES: RouteMeta[] = [
     id: "setup",
     label: "Settings",
     title: "Settings",
-    subtitle: "Pilots, timing rules, announcer, gates and LiveTime",
+    subtitle: "Timing rules, announcer, MultiGP LiveTime, and data source",
     icon: () => icons.sliders(20),
   },
   {

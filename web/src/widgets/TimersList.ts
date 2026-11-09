@@ -208,7 +208,7 @@ export class TimersList extends Component {
     if (timers.length === 0) {
       this.el.innerHTML = renderEmpty(
         "No timers detected yet",
-        "Power on your Hub timer (or start the simulator below) and discovered timers will appear here."
+        "Power on your Hub timer (or enable the simulator) and discovered timers will appear here."
       );
       return;
     }

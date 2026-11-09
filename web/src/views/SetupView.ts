@@ -5,10 +5,7 @@ import { AppStore } from "../state/store";
 import { AnnouncerSettings } from "../widgets/AnnouncerSettings";
 import { DataSourceCard } from "../widgets/DataSourceCard";
 import { LiveTimeCard } from "../widgets/LiveTimeCard";
-import { PilotSlotsEditor } from "../widgets/PilotSlotsEditor";
-import { TimersList } from "../widgets/TimersList";
 import { TimingRulesEditor } from "../widgets/TimingRulesEditor";
-import { TrackEditor } from "../widgets/TrackEditor";
 
 /** Settings page: label/description on the left, controls on the right. */
 export class SetupView extends Component {
@@ -17,14 +14,6 @@ export class SetupView extends Component {
 
     el.innerHTML = `
       <div class="settings">
-        <section class="settings-section">
-          <div class="settings-intro">
-            <h2>Pilots &amp; channels</h2>
-            <p>Eight timing slots, matching LiveTime. Channels are overwritten whenever LiveTime loads a heat.</p>
-          </div>
-          <div class="card card-flush" data-slot="pilots"></div>
-        </section>
-
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Timing rules</h2>
@@ -51,22 +40,6 @@ export class SetupView extends Component {
 
         <section class="settings-section">
           <div class="settings-intro">
-            <h2>Timers</h2>
-            <p>Physical XIAO ESP32-C5 timers discovered over Wi-Fi / ESP-NOW or USB, showing their color, flashed ID, online status, role, RF noise floor, and battery health.</p>
-          </div>
-          <div class="card card-flush" data-slot="timers"></div>
-        </section>
-
-        <section class="settings-section">
-          <div class="settings-intro">
-            <h2>Track</h2>
-            <p>Drag timers onto the track timeline in the order pilots fly them. Each stretch between two timers defines a section (S1, S2, S3…), and clicking a node lets you name the gate or mark it as the start gate.</p>
-          </div>
-          <div class="card card-flush" data-slot="track"></div>
-        </section>
-
-        <section class="settings-section">
-          <div class="settings-intro">
             <h2>Data source</h2>
             <p>Use the simulator to rehearse a race day before the hardware arrives.</p>
           </div>
@@ -74,12 +47,9 @@ export class SetupView extends Component {
         </section>
       </div>`;
 
-    this.adopt(new PilotSlotsEditor(this.slot("pilots"), store, api));
     this.adopt(new TimingRulesEditor(this.slot("rules"), store, api));
     this.adopt(new AnnouncerSettings(this.slot("announcer"), announcer));
     this.adopt(new LiveTimeCard(this.slot("livetime"), store));
-    this.adopt(new TimersList(this.slot("timers"), store, api));
-    this.adopt(new TrackEditor(this.slot("track"), store, api));
     this.adopt(new DataSourceCard(this.slot("source"), store, api));
   }
 }
