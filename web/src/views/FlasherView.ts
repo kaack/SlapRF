@@ -4,12 +4,14 @@ import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import {
   DEFAULT_FIRMWARE_PROFILE,
+  FIRMWARE_PROFILES,
   LATEST_FIRMWARE_VERSION,
   TimerReadout,
   firmwareProfile,
   isWebSerialSupported,
   readXiaoC5OverWebSerial,
 } from "../services/esp_flasher";
+import { sharedTimerConsole, TimerStatus } from "../services/timer_console";
 import { AppStore } from "../state/store";
 import { TimerFlasher } from "../widgets/TimerFlasher";
 
@@ -47,6 +49,7 @@ class TimerReaderPanel extends Component {
     super(el);
     this.api = api;
     this.onRead = onRead;
+    this.showAllPorts = sharedTimerConsole.showAllPorts;
 
     this.listen(el, "click", (e) => {
       const t = e.target as HTMLElement;
@@ -59,10 +62,45 @@ class TimerReaderPanel extends Component {
       const t = e.target as HTMLInputElement;
       if (t.matches("[data-reader-all-ports]")) {
         this.showAllPorts = t.checked;
+        sharedTimerConsole.showAllPorts = t.checked;
       }
     });
 
-    this.render();
+    const syncFromConsole = () => {
+      const s = sharedTimerConsole.lastStatus;
+      const cfg = sharedTimerConsole.lastConfig;
+      if (!s && !cfg) return;
+      const profileFromStatus = s ? FIRMWARE_PROFILES.find((p) => p.code === s.profile)?.id : undefined;
+      const merged: TimerReadout = {
+        chip: s?.chip ? `${s.chip.model} (${s.chip.rev})` : cfg?.chip || "ESP32-C5",
+        role: cfg?.role ?? (s?.role === 1 ? "hub" : "spoke"),
+        timerLabel: s?.label || cfg?.timerLabel || (s?.role === 1 ? "H1" : "S1"),
+        wifiSSID: cfg?.wifiSSID ?? "",
+        wifiPassSet: cfg?.wifiPassSet ?? false,
+        firmwareProfile: cfg?.firmwareProfile || profileFromStatus || DEFAULT_FIRMWARE_PROFILE,
+        fingerprint: s?.fp || cfg?.fingerprint || "",
+        firmwareVersion: s?.fw || cfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
+        frequenciesMHz: s?.freqs?.length ? s.freqs : cfg?.frequenciesMHz || RACEBAND,
+        status: s ? (s as unknown as TimerReadout["status"]) : cfg?.status,
+      };
+      this.readout = merged;
+      this.errorMsg = null;
+      this.render();
+      this.onRead?.(merged);
+    };
+
+    this.onDispose(
+      sharedTimerConsole.subscribe({
+        onStatus: () => syncFromConsole(),
+        onConfig: () => syncFromConsole(),
+      })
+    );
+
+    if (sharedTimerConsole.connected && (sharedTimerConsole.lastStatus || sharedTimerConsole.lastConfig)) {
+      syncFromConsole();
+    } else {
+      this.render();
+    }
   }
 
   public setReadout(info: TimerReadout): void {
@@ -79,26 +117,38 @@ class TimerReaderPanel extends Component {
     this.render();
 
     try {
-      const { bytes } = await this.api.fetchFirmwareImage(
-        "hub",
-        "H1",
-        "",
-        "",
-        DEFAULT_FIRMWARE_PROFILE
-      );
-      const info = await readXiaoC5OverWebSerial(
-        bytes,
-        (p) => {
-          this.progressText = p.detail;
-          this.render();
-        },
-        this.showAllPorts
-      );
-      this.readout = info;
-      this.onRead?.(info);
+      if (sharedTimerConsole.connected) {
+        this.progressText = "Reading timer configuration over USB…";
+        this.render();
+        await sharedTimerConsole.send("STATUS?\nSLAPRF?");
+        await new Promise((r) => window.setTimeout(r, 450));
+      } else {
+        await sharedTimerConsole.connectAndStart(this.showAllPorts);
+        await new Promise((r) => window.setTimeout(r, 350));
+      }
+      if (!this.readout) {
+        await sharedTimerConsole.disconnectCleanly();
+        const { bytes } = await this.api.fetchFirmwareImage(
+          "hub",
+          "H1",
+          "",
+          "",
+          DEFAULT_FIRMWARE_PROFILE
+        );
+        const info = await readXiaoC5OverWebSerial(
+          bytes,
+          (p) => {
+            this.progressText = p.detail;
+            this.render();
+          },
+          this.showAllPorts
+        );
+        this.readout = info;
+        this.onRead?.(info);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (!/No port selected|aborted|cancelled/i.test(msg)) {
+      if (!/No port selected|aborted|cancelled|cancel/i.test(msg)) {
         this.errorMsg = msg;
       }
     } finally {

@@ -74,6 +74,7 @@ export interface ConsoleHandlers {
   onRawReply?: (line: string, msgType?: string) => void;
   onConfig?: (c: TimerReadout) => void;
   onError?: (msg: string) => void;
+  onConnect?: () => void;
   onDisconnect?: () => void;
 }
 
@@ -115,13 +116,52 @@ export class TimerConsole {
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
   private buf = new Uint8Array(0);
   private readonly decoder = new TextDecoder();
-  private readonly handlers: ConsoleHandlers;
+  private readonly subscribers = new Set<ConsoleHandlers>();
+  private readonly stateListeners = new Set<() => void>();
   private waiters: Waiter[] = [];
+  private statusPollTimer = 0;
   /** While true, a dropped port is an expected restart, not a user-visible disconnect. */
   private expectingRestart = false;
 
-  constructor(handlers: ConsoleHandlers) {
-    this.handlers = handlers;
+  public lastStatus: TimerStatus | null = null;
+  public lastConfig: TimerReadout | null = null;
+  public busyLabel: string | null = null;
+  public showAllPorts = false;
+
+  constructor(handlers?: ConsoleHandlers) {
+    if (handlers) {
+      this.subscribers.add(handlers);
+    }
+  }
+
+  public subscribe(handlers: ConsoleHandlers): () => void {
+    this.subscribers.add(handlers);
+    return () => {
+      this.subscribers.delete(handlers);
+    };
+  }
+
+  public onStateChange(fn: () => void): () => void {
+    this.stateListeners.add(fn);
+    return () => {
+      this.stateListeners.delete(fn);
+    };
+  }
+
+  public setBusyLabel(label: string | null): void {
+    if (this.busyLabel === label) return;
+    this.busyLabel = label;
+    this.notifyStateChange();
+  }
+
+  private notifyStateChange(): void {
+    this.stateListeners.forEach((fn) => {
+      try {
+        fn();
+      } catch {
+        // ignore listener errors
+      }
+    });
   }
 
   public get connected(): boolean {
@@ -132,9 +172,43 @@ export class TimerConsole {
     return typeof navigator !== "undefined" && "serial" in navigator;
   }
 
-  public async connect(showAllPorts = false): Promise<void> {
+  public async connect(showAllPorts = this.showAllPorts): Promise<void> {
+    this.showAllPorts = showAllPorts;
     const port = await serial().requestPort(showAllPorts ? undefined : { filters: [{ usbVendorId: ESPRESSIF_USB_VID }] });
     await this.openPort(port);
+    this.startStatusPolling();
+    this.subscribers.forEach((h) => h.onConnect?.());
+    this.notifyStateChange();
+  }
+
+  /**
+   * Opens the USB port (via WebSerial port picker), probes `STATUS?` and `SLAPRF?`, and starts
+   * the 2-second status heartbeat so the connection stays active across all SPA routes.
+   */
+  public async connectAndStart(showAllPorts = this.showAllPorts): Promise<TimerStatus | null> {
+    await this.connect(showAllPorts);
+    const s = await this.ensureRunningApp();
+    if (this.connected) {
+      void this.send("SLAPRF?").catch(() => undefined);
+    }
+    return s;
+  }
+
+  /** Stops any active debug streams on the timer and closes the USB port. */
+  public async disconnectCleanly(): Promise<void> {
+    if (this.connected) {
+      await this.send("LIVE 0\nSCAN STOP\nLOG 0").catch(() => undefined);
+    }
+    await this.disconnect();
+  }
+
+  private startStatusPolling(): void {
+    window.clearInterval(this.statusPollTimer);
+    this.statusPollTimer = window.setInterval(() => {
+      if (this.connected && !this.expectingRestart) {
+        void this.send("STATUS?").catch(() => undefined);
+      }
+    }, 2000);
   }
 
   private async openPort(port: SerialPortLike): Promise<void> {
@@ -152,9 +226,14 @@ export class TimerConsole {
   }
 
   public async disconnect(): Promise<void> {
+    window.clearInterval(this.statusPollTimer);
+    this.statusPollTimer = 0;
     await this.closePort();
+    this.lastStatus = null;
+    this.lastConfig = null;
     this.failWaiters("Disconnected");
-    this.handlers.onDisconnect?.();
+    this.subscribers.forEach((h) => h.onDisconnect?.());
+    this.notifyStateChange();
   }
 
   /**
@@ -163,12 +242,16 @@ export class TimerConsole {
    * so Chromium doesn't strand an active stream or leave the USB port wedged across a refresh.
    */
   public disconnectForUnload(): void {
+    window.clearInterval(this.statusPollTimer);
+    this.statusPollTimer = 0;
     const port = this.port;
     const writer = this.writer;
     const reader = this.reader;
     this.port = null;
     this.writer = null;
     this.reader = null;
+    this.lastStatus = null;
+    this.lastConfig = null;
     this.failWaiters("Page unloading");
     if (!port) return;
     const stopBytes = new TextEncoder().encode("\nLIVE 0\nSCAN STOP\nLOG 0\n");
@@ -303,6 +386,7 @@ export class TimerConsole {
           if (match) {
             try {
               await this.openPort(match);
+              this.startStatusPolling();
             } catch {
               await sleep(400);
               continue;
@@ -345,7 +429,8 @@ export class TimerConsole {
       }
     } catch (err) {
       if (this.port === port && !this.expectingRestart) {
-        this.handlers.onError?.(err instanceof Error ? err.message : String(err));
+        const msg = err instanceof Error ? err.message : String(err);
+        this.subscribers.forEach((h) => h.onError?.(msg));
       }
     }
     if (this.port === port) {
@@ -371,8 +456,10 @@ export class TimerConsole {
         if (magicAt > 0) this.emitText(this.buf.subarray(0, magicAt));
         const parsed = parseSlaprfConfigBlock(this.buf.subarray(magicAt, magicAt + CONFIG_LEN));
         if (parsed) {
-          this.handlers.onConfig?.(parsed);
+          this.lastConfig = parsed;
+          this.subscribers.forEach((h) => h.onConfig?.(parsed));
           this.resolveWaiters("config", parsed);
+          this.notifyStateChange();
         }
         this.buf = this.buf.slice(magicAt + CONFIG_LEN);
         continue;
@@ -405,20 +492,27 @@ export class TimerConsole {
     if (line.startsWith("@{")) {
       try {
         const msg = JSON.parse(line.slice(1)) as { t: string; msg?: string } & Record<string, unknown>;
-        this.handlers.onRawReply?.(line, msg.t);
+        this.subscribers.forEach((h) => h.onRawReply?.(line, msg.t));
         this.resolveWaiters(msg.t, msg);
         switch (msg.t) {
-          case "status":
-            this.handlers.onStatus?.(msg as unknown as TimerStatus);
+          case "status": {
+            const st = msg as unknown as TimerStatus;
+            const labelChanged = this.lastStatus?.label !== st.label || this.lastStatus?.fp !== st.fp;
+            this.lastStatus = st;
+            this.subscribers.forEach((h) => h.onStatus?.(st));
+            if (labelChanged) {
+              this.notifyStateChange();
+            }
             return;
+          }
           case "live":
-            this.handlers.onLive?.(msg as unknown as LiveSample);
+            this.subscribers.forEach((h) => h.onLive?.(msg as unknown as LiveSample));
             return;
           case "scan":
-            this.handlers.onScan?.(msg as unknown as ScanResult);
+            this.subscribers.forEach((h) => h.onScan?.(msg as unknown as ScanResult));
             return;
           case "bootlog":
-            this.handlers.onBootLog?.(msg as unknown as BootLog);
+            this.subscribers.forEach((h) => h.onBootLog?.(msg as unknown as BootLog));
             return;
           case "err":
             // A command was refused: fail whatever is waiting rather than letting it time out.
@@ -433,7 +527,7 @@ export class TimerConsole {
         // fall through: show as log text
       }
     }
-    this.handlers.onLog?.(line);
+    this.subscribers.forEach((h) => h.onLog?.(line));
   }
 }
 
@@ -445,4 +539,20 @@ function indexOf(haystack: Uint8Array, needle: Uint8Array): number {
     return i;
   }
   return -1;
+}
+
+/**
+ * Shared app-wide USB timer connection that persists across SPA route switches and only
+ * disconnects on full page reload/unload, physical USB unplug, or explicit user disconnect.
+ */
+export const sharedTimerConsole = new TimerConsole();
+
+if (typeof window !== "undefined") {
+  const onUnload = () => {
+    if (sharedTimerConsole.connected) {
+      sharedTimerConsole.disconnectForUnload();
+    }
+  };
+  window.addEventListener("pagehide", onUnload);
+  window.addEventListener("beforeunload", onUnload);
 }

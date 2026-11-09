@@ -1,4 +1,5 @@
 import {
+  DetectedPuck,
   FullStateResponse,
   GatePuck,
   GateRuleOverrides,
@@ -41,6 +42,7 @@ export class HttpRealTransport implements ApiTransport {
     color: PILOT_COLORS[i],
   }));
   private fallbackPucks: GatePuck[] = [];
+  private fallbackDetectedPucks: DetectedPuck[] = [];
   private fallbackRules: TimingRules = {
     minLapSec: 5,
     maxLapSec: 120,
@@ -241,6 +243,52 @@ export class HttpRealTransport implements ApiTransport {
     } else if ((url === "/api/track/remove" || url === "/api/gates/remove") && body) {
       const b = body as { puckId: number };
       this.fallbackPucks = this.fallbackPucks.filter((p) => p.puckId !== b.puckId);
+    } else if (url === "/api/timers/provision" && body) {
+      const b = body as {
+        role?: "hub" | "spoke";
+        puckLabel?: string;
+        firmwareProfile?: string;
+        fingerprint?: string;
+      };
+      const isHub = b.role === "hub";
+      const label = (b.puckLabel ?? (isHub ? "H1" : "S1")).trim();
+      const fp = (b.fingerprint ?? "").trim().toUpperCase();
+      const existing = this.fallbackDetectedPucks.find(
+        (d) =>
+          (fp && d.fingerprint?.toUpperCase() === fp) ||
+          (isHub && d.isHub) ||
+          d.puckLabel.toUpperCase() === label.toUpperCase()
+      );
+      if (existing) {
+        existing.puckLabel = label;
+        existing.isHub = isHub;
+        existing.firmwareProfile = b.firmwareProfile ?? existing.firmwareProfile;
+        existing.fingerprint = fp || existing.fingerprint;
+      } else {
+        const nextId = isHub
+          ? 1
+          : Math.max(2, ...this.fallbackDetectedPucks.map((d) => d.puckId + 1));
+        this.fallbackDetectedPucks.push({
+          puckId: nextId,
+          puckLabel: label,
+          color: GATE_COLORS[(nextId - 1) % GATE_COLORS.length],
+          isHub,
+          firmwareVersion: "v1.4.2",
+          firmwareProfile: b.firmwareProfile ?? "balanced",
+          fingerprint: fp,
+          batteryMv: 3950,
+          batteryPct: 82,
+          noiseFloorDbm: -92,
+          online: false,
+          lastSeenAt: new Date().toISOString(),
+        });
+      }
+    } else if (url === "/api/timers/color" && body) {
+      const b = body as { puckId: number; color: string };
+      const det = this.fallbackDetectedPucks.find((d) => d.puckId === b.puckId);
+      if (det) det.color = b.color;
+      const gate = this.fallbackPucks.find((p) => (p.assignedPuckId ?? p.puckId) === b.puckId);
+      if (gate) gate.color = b.color;
     } else if (url === "/api/wifi/networks") {
       return { networks: [] };
     }
@@ -251,7 +299,7 @@ export class HttpRealTransport implements ApiTransport {
     return {
       serverTimestampUs: 0,
       pucks: this.fallbackPucks.map((p) => ({ ...p })),
-      detectedPucks: [],
+      detectedPucks: this.fallbackDetectedPucks.map((d) => ({ ...d })),
       simulatorRunning: false,
       raceArmed: this.fallbackArmed,
       liveTimeStatus: {

@@ -2,7 +2,7 @@ import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { FIRMWARE_PROFILES, TimerReadout } from "../services/esp_flasher";
-import { BootLog, LiveSample, ScanResult, TimerConsole, TimerStatus } from "../services/timer_console";
+import { BootLog, LiveSample, ScanResult, sharedTimerConsole, TimerConsole, TimerStatus } from "../services/timer_console";
 import {
   buildFileStamp,
   CHANNEL_COLORS,
@@ -206,7 +206,22 @@ export class DebugView extends Component {
 
   constructor(el: HTMLElement) {
     super(el);
-    this.console = new TimerConsole({
+    this.console = sharedTimerConsole;
+    this.showAllPorts = this.console.showAllPorts;
+    if (this.console.connected && this.console.lastStatus) {
+      this.status = this.console.lastStatus;
+    }
+    const unsubConsole = this.console.subscribe({
+      onConnect: () => {
+        this.signalRing.clear();
+        this.healthHistory.clear();
+        this.signalFindings = [];
+        this.signalFindingSeq = 0;
+        this.scanFindings = [];
+        this.scanFindingSeq = 0;
+        this.renderAll();
+        void this.startSession();
+      },
       onStatus: (s) => {
         const firstStatus = this.status === null;
         const freqsChanged = this.status?.freqs.join() !== s.freqs.join();
@@ -320,6 +335,7 @@ export class DebugView extends Component {
       },
       onDisconnect: () => {
         window.clearInterval(this.statusTimer);
+        this.status = null;
         this.liveOn = false;
         this.logOn = false;
         this.scanLive = false;
@@ -523,16 +539,12 @@ export class DebugView extends Component {
         }
       }
     });
-    this.listen(document, "click", (e) => {
-      const target = e.target as HTMLElement | null;
-      if (target && target.closest("[data-topbar-view-actions]")) {
-        void this.onClick(e);
-      }
-    });
     this.listen(el, "change", (e) => {
       const t = e.target as HTMLInputElement;
-      if (t.matches("[data-all-ports]")) this.showAllPorts = t.checked;
-      else if (t.matches("[data-check]")) void this.onCheckChange(t);
+      if (t.matches("[data-all-ports]")) {
+        this.showAllPorts = t.checked;
+        this.console.showAllPorts = t.checked;
+      } else if (t.matches("[data-check]")) void this.onCheckChange(t);
     });
     this.listen(el, "input", (e) => {
       const t = e.target as HTMLElement;
@@ -559,30 +571,29 @@ export class DebugView extends Component {
     };
     this.rafId = window.requestAnimationFrame(tick);
 
-    const onPageUnload = () => {
-      if (this.console.connected) {
-        this.console.disconnectForUnload();
-      }
-    };
-    window.addEventListener("pagehide", onPageUnload);
-    window.addEventListener("beforeunload", onPageUnload);
-
     this.onDispose(() => {
+      unsubConsole();
+      this.console.setBusyLabel(null);
       window.cancelAnimationFrame(this.rafId);
       window.removeEventListener("resize", onResize);
-      window.removeEventListener("pagehide", onPageUnload);
-      window.removeEventListener("beforeunload", onPageUnload);
       this.observer?.disconnect();
       window.clearInterval(this.statusTimer);
-      const topSlot = document.querySelector<HTMLElement>("[data-topbar-view-actions]");
-      if (topSlot) topSlot.innerHTML = "";
-      // Leaving the page must not leave the timer streaming or scanning instead of timing.
-      const stop = this.console.connected
-        ? this.console.send(this.scanLive ? "LIVE 0\nSCAN STOP" : "LIVE 0").catch(() => undefined)
-        : Promise.resolve();
-      void stop.then(() => this.console.disconnect());
+      // Leaving the Debug page must stop high-rate LIVE / SCAN / LOG streaming,
+      // while preserving the USB connection across the rest of the SPA.
+      if (this.console.connected) {
+        const cmds: string[] = [];
+        if (this.liveOn) cmds.push("LIVE 0");
+        if (this.scanLive) cmds.push("SCAN STOP");
+        if (this.logOn) cmds.push("LOG 0");
+        if (cmds.length > 0) {
+          void this.console.send(cmds.join("\n")).catch(() => undefined);
+        }
+      }
     });
     this.renderAll();
+    if (this.console.connected) {
+      void this.startSession();
+    }
   }
 
   // ---------------------------------------------------------------- observer, hover & animation loop
@@ -1778,21 +1789,10 @@ export class DebugView extends Component {
     try {
       switch (t.dataset.action) {
         case "connect":
-          await this.console.connect(this.showAllPorts);
-          this.signalRing.clear();
-          this.healthHistory.clear();
-          this.signalFindings = [];
-          this.signalFindingSeq = 0;
-          this.scanFindings = [];
-          this.scanFindingSeq = 0;
-          this.renderAll();
-          await this.startSession();
+          await this.console.connectAndStart(this.showAllPorts);
           break;
         case "disconnect":
-          if (this.scanLive) await this.console.send("SCAN STOP").catch(() => undefined);
-          if (this.liveOn) await this.console.send("LIVE 0").catch(() => undefined);
-          if (this.logOn) await this.console.send("LOG 0").catch(() => undefined);
-          await this.console.disconnect();
+          await this.console.disconnectCleanly();
           break;
         case "live":
           if (this.scanLive || this.status?.scanLive) {
@@ -2268,12 +2268,12 @@ export class DebugView extends Component {
     this.renderConnection();
   }
 
-  /** Start polling status and streaming live readings on a freshly opened port. */
+  /** Start polling status and streaming live readings on an opened port. */
   private async startSession(): Promise<void> {
     window.clearInterval(this.statusTimer);
-    const s = await this.console.ensureRunningApp();
+    const s = this.status ?? (await this.console.ensureRunningApp());
     if (s) this.status = s;
-    this.statusTimer = window.setInterval(() => void this.console.send("STATUS?").catch(() => undefined), 2000);
+    this.console.startStatusPolling();
     if (s?.emergencyMode) {
       this.liveOn = false;
       this.scanLive = false;
@@ -2299,12 +2299,14 @@ export class DebugView extends Component {
   private async runBusy(name: string, fn: () => Promise<void>): Promise<void> {
     if (this.busy) return;
     this.busy = name;
+    this.console.setBusyLabel(name);
     this.progress = "";
     this.renderBusy();
     try {
       await fn();
     } finally {
       this.busy = null;
+      this.console.setBusyLabel(null);
       this.progress = "";
       this.renderBusy();
     }
@@ -2564,26 +2566,8 @@ export class DebugView extends Component {
   private renderConnection(): void {
     const on = this.console.connected;
     const supported = TimerConsole.supported();
-    const busy = this.busy !== null;
-    const topSlot = document.querySelector<HTMLElement>("[data-topbar-view-actions]");
-    if (topSlot) {
-      const label = on
-        ? this.status?.label
-          ? `Connected · ${esc(this.status.label)}`
-          : "Connected"
-        : busy
-          ? `${esc(this.busy!)}…`
-          : "Connect";
-      const title = !supported
-        ? "USB debugging requires Chrome, Edge, or Brave (WebSerial)"
-        : on
-          ? `Connected over USB${this.status ? ` (${this.status.label || "timer"} · ${this.status.fp})` : ""} — click to disconnect`
-          : "Connect a timer over USB-C";
-      topSlot.innerHTML = `
-        <button type="button" class="btn ${on ? "btn-armed" : "btn-ghost"}" data-action="${on ? "disconnect" : "connect"}" ${supported && !busy ? "" : "disabled"} title="${esc(title)}" aria-label="${esc(title)}">
-          ${on ? icons.plug(19) : icons.plugOff(19)}<span class="topbar-btn-label">${label}</span>
-        </button>`;
-    }
+    const busy = this.busy !== null || this.console.busyLabel !== null;
+    const busyText = this.busy ?? this.console.busyLabel ?? "";
 
     const s = this.status;
     const profile = s ? FIRMWARE_PROFILES.find((p) => p.code === s.profile) : undefined;
@@ -2594,7 +2578,7 @@ export class DebugView extends Component {
           : `${esc(s.label || "(unnamed)")} · ${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`} · ${esc(profile?.name ?? `profile ${s.profile}`)} · ${esc(s.fp)}`
         : "Connected over USB · reading timer status…"
       : busy
-        ? `${esc(this.busy!)}…`
+        ? `${esc(busyText)}…`
         : "Off · connect a timer over USB-C";
     const ledClass = on && s ? (s.emergencyMode ? "is-emergency" : "is-up") : on || busy ? "is-warn" : "";
     const btnLabel = on
@@ -2602,7 +2586,7 @@ export class DebugView extends Component {
         ? `Connected · ${esc(s.label)}`
         : "Connected"
       : busy
-        ? `${esc(this.busy!)}…`
+        ? `${esc(busyText)}…`
         : "Connect";
 
     const bannerParts: string[] = [];

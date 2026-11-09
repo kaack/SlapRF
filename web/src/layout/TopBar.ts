@@ -1,8 +1,10 @@
 import { Component } from "../core/component";
+import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ROUTES, Router } from "../core/router";
 import { Announcer } from "../services/announcer";
 import { ApiClient } from "../services/api_client";
+import { sharedTimerConsole, TimerConsole } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
 export class TopBar extends Component {
@@ -41,6 +43,7 @@ export class TopBar extends Component {
     );
     this.onDispose(store.subscribe(["status"], () => this.render()));
     this.onDispose(announcer.subscribe(() => this.render()));
+    this.onDispose(sharedTimerConsole.onStateChange(() => this.render()));
     this.render();
   }
 
@@ -74,6 +77,14 @@ export class TopBar extends Component {
         break;
       case "sim":
         void this.api.toggleSimulator();
+        break;
+      case "usb-toggle":
+        if (sharedTimerConsole.busyLabel) return;
+        if (sharedTimerConsole.connected) {
+          void sharedTimerConsole.disconnectCleanly();
+        } else {
+          void sharedTimerConsole.connectAndStart().catch(() => undefined);
+        }
         break;
       case "announcer":
         this.announcer.update({ enabled: !this.announcer.settings.enabled });
@@ -112,7 +123,11 @@ export class TopBar extends Component {
     const { liveTime, raceArmed, simulatorRunning: sim } = this.store;
     const ltConnected = liveTime.connectedClients > 0;
     const voiceOn = this.announcer.settings.enabled;
-    const sig = `${meta.id}:${sim ? 1 : 0}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.resetFlashActive ? 1 : 0}:${this.menuOpen ? 1 : 0}`;
+    const usbOn = sharedTimerConsole.connected;
+    const usbLabel = sharedTimerConsole.lastStatus?.label ?? "";
+    const usbFp = sharedTimerConsole.lastStatus?.fp ?? "";
+    const usbBusy = sharedTimerConsole.busyLabel ?? "";
+    const sig = `${meta.id}:${sim ? 1 : 0}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.resetFlashActive ? 1 : 0}:${this.menuOpen ? 1 : 0}:${usbOn ? 1 : 0}:${usbLabel}:${usbBusy}`;
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
@@ -123,6 +138,24 @@ export class TopBar extends Component {
     const resetBtn = `
       <button class="btn ${this.resetFlashActive ? "btn-armed" : "btn-ghost"}" data-action="reset" title="Clear session laps" aria-label="Clear session laps">
         ${icons.reset(19)}<span class="topbar-btn-label">Reset laps</span>
+      </button>`;
+
+    const usbSupported = TimerConsole.supported();
+    const usbBtnText = usbOn
+      ? usbLabel
+        ? `Connected · ${esc(usbLabel)}`
+        : "Connected"
+      : usbBusy
+        ? `${esc(usbBusy)}…`
+        : "Connect";
+    const usbTitle = !usbSupported
+      ? "USB connection requires Chrome, Edge, or Brave (WebSerial)"
+      : usbOn
+        ? `Connected over USB${usbLabel || usbFp ? ` (${usbLabel || "timer"}${usbFp ? ` · ${usbFp}` : ""})` : ""} — click to disconnect`
+        : "Connect a timer over USB-C";
+    const usbBtn = `
+      <button type="button" class="btn ${usbOn ? "btn-armed" : "btn-ghost"}" data-action="usb-toggle" ${usbSupported && !usbBusy ? "" : "disabled"} title="${esc(usbTitle)}" aria-label="${esc(usbTitle)}">
+        ${usbOn ? icons.plug(19) : icons.plugOff(19)}<span class="topbar-btn-label">${usbBtnText}</span>
       </button>`;
 
     let actions = simBtn;
@@ -148,8 +181,6 @@ export class TopBar extends Component {
         return `<a class="nav-item ${active ? "is-active" : ""}" href="#/${r.id}" data-nav-item="${r.id}" ${active ? 'aria-current="page"' : ""}>${r.icon()}<span>${r.label}</span></a>`;
       })
       .join("");
-
-    const prevViewActionsHtml = this.el.querySelector<HTMLElement>("[data-topbar-view-actions]")?.innerHTML ?? "";
 
     this.el.innerHTML = `
       <div class="topbar-left">
@@ -179,7 +210,7 @@ export class TopBar extends Component {
       </div>
       <div class="topbar-actions">
         ${actions}
-        <span class="topbar-view-actions" data-topbar-view-actions>${prevViewActionsHtml}</span>
+        ${usbBtn}
       </div>`;
   }
 }

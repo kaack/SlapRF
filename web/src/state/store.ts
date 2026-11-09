@@ -58,6 +58,7 @@ export class AppStore {
   private _pilots: PilotSlot[] = [];
   private _pucks: GatePuck[] = [];
   private _detectedPucks: DetectedPuck[] = [];
+  private _usbTimer: DetectedPuck | null = null;
   private _laps: LapRecord[] = [];
   private _crossings: GateCrossingEvent[] = [];
   private _filtered: FilteredDetection[] = [];
@@ -147,11 +148,67 @@ export class AppStore {
   }
   /** Gate pucks sorted by their position around the track. */
   public get pucks(): GatePuck[] {
+    if (!this._simulatorRunning && this._usbTimer) {
+      const usb = this._usbTimer;
+      const matchedDet = this.detectedPucks.find(
+        (d) =>
+          (usb.fingerprint && d.fingerprint && d.fingerprint.toUpperCase() === usb.fingerprint.toUpperCase()) ||
+          (usb.puckLabel && d.puckLabel.toUpperCase() === usb.puckLabel.toUpperCase()) ||
+          d.puckId === usb.puckId
+      );
+      const targetId = matchedDet?.puckId ?? usb.puckId;
+      return this._pucks.map((p) => {
+        const assigned = p.assignedPuckId ?? p.puckId;
+        if (assigned === targetId) {
+          return {
+            ...p,
+            online: true,
+            noiseFloorDbm: usb.noiseFloorDbm,
+            lastSeenAt: usb.lastSeenAt || p.lastSeenAt,
+          };
+        }
+        return p;
+      });
+    }
     return this._pucks;
   }
-  /** Physical XIAO pucks discovered over Wi-Fi/ESP-NOW or flashed over USB. */
+  /** Physical XIAO pucks discovered over Wi-Fi/ESP-NOW, flashed over USB, or currently plugged in via USB. */
   public get detectedPucks(): DetectedPuck[] {
+    if (!this._simulatorRunning && this._usbTimer) {
+      const usb = this._usbTimer;
+      const list = this._detectedPucks.map((d) => ({ ...d }));
+      const idx = list.findIndex(
+        (d) =>
+          (usb.fingerprint && d.fingerprint && d.fingerprint.toUpperCase() === usb.fingerprint.toUpperCase()) ||
+          (usb.puckLabel && d.puckLabel.toUpperCase() === usb.puckLabel.toUpperCase()) ||
+          d.puckId === usb.puckId
+      );
+      if (idx >= 0) {
+        const existing = list[idx];
+        list[idx] = {
+          ...existing,
+          puckLabel: usb.puckLabel || existing.puckLabel,
+          isHub: usb.isHub,
+          firmwareVersion: usb.firmwareVersion || existing.firmwareVersion,
+          firmwareProfile: usb.firmwareProfile || existing.firmwareProfile,
+          fingerprint: usb.fingerprint || existing.fingerprint,
+          noiseFloorDbm: usb.noiseFloorDbm,
+          batteryMv: existing.batteryMv > 0 ? existing.batteryMv : usb.batteryMv,
+          batteryPct: existing.batteryPct > 0 ? existing.batteryPct : usb.batteryPct,
+          online: true,
+          lastSeenAt: usb.lastSeenAt || existing.lastSeenAt,
+        };
+      } else {
+        list.push({ ...usb });
+      }
+      return list;
+    }
     return this._detectedPucks;
+  }
+
+  public setUsbDetectedTimer(timer: DetectedPuck | null): void {
+    this._usbTimer = timer;
+    this.emit("status", "config");
   }
   public get laps(): LapRecord[] {
     return this._laps;

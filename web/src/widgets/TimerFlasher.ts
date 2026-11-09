@@ -12,6 +12,7 @@ import {
   flashXiaoC5OverWebSerial,
   isWebSerialSupported,
 } from "../services/esp_flasher";
+import { sharedTimerConsole } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
 const WIFI_SSID_STORAGE_KEY = "slaprf.wifi.ssid";
@@ -488,6 +489,10 @@ export class TimerFlasher extends Component {
         pass,
         this.firmwareProfileId
       );
+
+      if (sharedTimerConsole.connected) {
+        await sharedTimerConsole.disconnectCleanly();
+      }
 
       const written = await flashXiaoC5OverWebSerial(
         bytes,

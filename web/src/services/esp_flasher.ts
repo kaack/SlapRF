@@ -431,8 +431,8 @@ function parseStatusSnapshot(bytes: Uint8Array): TimerStatusSnapshot | undefined
     const idx = rawLine.indexOf("@{");
     if (idx === -1) continue;
     try {
-      const parsed = JSON.parse(rawLine.slice(idx + 1)) as TimerStatusSnapshot & { type?: string };
-      if (parsed && parsed.type === "status") {
+      const parsed = JSON.parse(rawLine.slice(idx + 1)) as TimerStatusSnapshot & { t?: string; type?: string };
+      if (parsed && (parsed.t === "status" || parsed.type === "status")) {
         return parsed;
       }
     } catch {

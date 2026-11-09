@@ -16,7 +16,14 @@ import {
   TimingRules,
 } from "../types/models";
 import { HttpRealTransport } from "./http_transport";
-import { buildOrPatchFirmwareBin, DEFAULT_FIRMWARE_PROFILE, generateFingerprint } from "./esp_flasher";
+import {
+  buildOrPatchFirmwareBin,
+  DEFAULT_FIRMWARE_PROFILE,
+  FIRMWARE_PROFILES,
+  generateFingerprint,
+  LATEST_FIRMWARE_VERSION,
+} from "./esp_flasher";
+import { sharedTimerConsole, TimerStatus } from "./timer_console";
 import { ApiTransport } from "./transport";
 import { WasmSimTransport } from "./wasm_transport";
 
@@ -43,6 +50,7 @@ export class ApiClient {
   private readonly wasmTransport = new WasmSimTransport();
   private readonly httpTransport = new HttpRealTransport();
   private simMode = true;
+  private readonly provisionedUsbKeys = new Set<string>();
 
   constructor(store: AppStore) {
     this.store = store;
@@ -61,11 +69,57 @@ export class ApiClient {
         void this.refresh().catch(() => undefined);
       }
     });
+    this.bindUsbTimerSync();
     await this.refresh();
     this.connectStream();
     window.setInterval(() => {
       void this.pollStatus();
     }, STATUS_POLL_MS);
+  }
+
+  private bindUsbTimerSync(): void {
+    const syncFromConsole = (s: TimerStatus | null) => {
+      if (!sharedTimerConsole.connected || !s) {
+        this.store.setUsbDetectedTimer(null);
+        return;
+      }
+      const cfg = sharedTimerConsole.lastConfig;
+      const isHub = s.role === 1 || cfg?.role === "hub";
+      const label = (s.label || cfg?.timerLabel || (isHub ? "H1" : `S${Math.max(1, (s.slot || 2) - 1)}`)).trim();
+      const profileId =
+        cfg?.firmwareProfile ||
+        FIRMWARE_PROFILES.find((p) => p.code === s.profile)?.id ||
+        DEFAULT_FIRMWARE_PROFILE;
+      const fp = (s.fp || cfg?.fingerprint || "").trim().toUpperCase();
+      const puckId = isHub ? 1 : Math.max(2, s.slot || 2);
+
+      this.store.setUsbDetectedTimer({
+        puckId,
+        puckLabel: label,
+        color: "#d4ff3a",
+        isHub,
+        firmwareVersion: s.fw || cfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
+        firmwareProfile: profileId,
+        fingerprint: fp,
+        batteryMv: 3950,
+        batteryPct: 82,
+        noiseFloorDbm: Math.round(s.rf?.floorDb ?? -92),
+        online: true,
+        lastSeenAt: new Date().toISOString(),
+      });
+
+      const provKey = `${this.simMode ? "sim" : "real"}:${isHub ? "hub" : "spoke"}:${label}:${fp}`;
+      if (!this.provisionedUsbKeys.has(provKey)) {
+        this.provisionedUsbKeys.add(provKey);
+        void this.provisionTimer(isHub ? "hub" : "spoke", label, profileId, fp).catch(() => undefined);
+      }
+    };
+
+    sharedTimerConsole.subscribe({
+      onStatus: (s) => syncFromConsole(s),
+      onConfig: () => syncFromConsole(sharedTimerConsole.lastStatus),
+      onDisconnect: () => this.store.setUsbDetectedTimer(null),
+    });
   }
 
   public async refresh(): Promise<void> {
@@ -77,6 +131,18 @@ export class ApiClient {
     this.simMode = !this.simMode;
     this.connectStream();
     await this.refresh();
+    if (!this.simMode && sharedTimerConsole.connected && sharedTimerConsole.lastStatus) {
+      const s = sharedTimerConsole.lastStatus;
+      const cfg = sharedTimerConsole.lastConfig;
+      const isHub = s.role === 1 || cfg?.role === "hub";
+      const label = (s.label || cfg?.timerLabel || (isHub ? "H1" : `S${Math.max(1, (s.slot || 2) - 1)}`)).trim();
+      const profileId =
+        cfg?.firmwareProfile ||
+        FIRMWARE_PROFILES.find((p) => p.code === s.profile)?.id ||
+        DEFAULT_FIRMWARE_PROFILE;
+      const fp = (s.fp || cfg?.fingerprint || "").trim().toUpperCase();
+      await this.provisionTimer(isHub ? "hub" : "spoke", label, profileId, fp).catch(() => undefined);
+    }
   }
 
   public async toggleArmed(): Promise<void> {
