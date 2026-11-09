@@ -41,7 +41,7 @@ export class SetupView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Data source</h2>
-            <p>Use the simulator to rehearse a race day before the hardware arrives.</p>
+            <p>Choose whether SlapRF is fed by your physical XIAO ESP32-C5 gate timers (real-world hardware) or the built-in track simulator. Each mode keeps its own separate pilots, track, timers, and lap history so simulating never overwrites your real-world setup.</p>
           </div>
           <div class="card" data-slot="source"></div>
         </section>
