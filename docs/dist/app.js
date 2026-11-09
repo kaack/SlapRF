@@ -1887,7 +1887,8 @@ async function handleMessage(msg) {
       </button>`,...this.store.pucks.map(p=>{let n=Object.keys(this.overridesOf(p)).length,on=this.scope===p.puckId,dim=this.scope!==null&&!on;return`<button type="button" class="channel ${on?"is-focus":""} ${dim?"is-dim":""}" data-scope="${p.puckId}"
                   title="${n?`${n} rule${n>1?"s":""} overridden at this gate`:"Uses the global rules"}">
                   <span class="dot" style="--c:${gateColor(this.store,p.puckId)}"></span>
-                  <span class="channel-name">${esc(gateLabel(this.store,p.puckId))}${n?" *":""}</span>
+                  <span class="channel-name">${esc(gateLabel(this.store,p.puckId))}</span>
+                  ${n?`<span class="channel-custom-icon" aria-hidden="true">${icons.sliders(12)}</span>`:""}
                 </button>`})].join(""),rows=RULES.map(spec=>{if(gate)return this.renderGateRow(spec,r,overrides);let overrideNote=this.renderOverrideNote(spec);return`
         <div class="rule-row">
           <div class="rule-text">
