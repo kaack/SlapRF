@@ -1322,7 +1322,7 @@ body.is-gate-dragging * {
 }
 .pilot-chip .dot {
   background: var(--c);
-  opacity: 0.45;
+  opacity: 0.32;
 }
 .pilot-chip .dot.is-live {
   opacity: var(--pilot-breathe, 1);
