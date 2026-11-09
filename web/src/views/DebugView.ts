@@ -154,6 +154,10 @@ export class DebugView extends Component {
   private scanShowMaxHold = true;
   private scanShowAvg = true;
   private scanShowWifi = true;
+  private scanStartMHz = 5180;
+  private scanStopMHz = 5917;
+  private scanStepMHz = 5;
+  private scanCustomRange = false;
   private scanZoomStartMHz: number | null = null;
   private scanZoomStopMHz: number | null = null;
   private scanAutoY = true;
@@ -196,7 +200,7 @@ export class DebugView extends Component {
   private signalFindingSeq = 0;
   private scanFindings: FindingLogEntry[] = [];
   private scanFindingSeq = 0;
-  private openAxisMenu: "signal-x" | "signal-y" | "scan-x" | "scan-y" | "wf-x" | "wf-y" | null = null;
+  private openAxisMenu: "signal-x" | "signal-y" | "scan-band" | "scan-x" | "scan-y" | "wf-x" | "wf-y" | null = null;
 
   constructor(el: HTMLElement) {
     super(el);
@@ -412,6 +416,13 @@ export class DebugView extends Component {
       if (t.matches("[data-chan]")) {
         this.channelsDirty = true;
       } else if (t.matches("[data-scan-start], [data-scan-stop], [data-scan-step]")) {
+        const iStart = this.el.querySelector<HTMLInputElement>("[data-scan-start]");
+        const iStop = this.el.querySelector<HTMLInputElement>("[data-scan-stop]");
+        const iStep = this.el.querySelector<HTMLInputElement>("[data-scan-step]");
+        if (iStart) this.scanStartMHz = Number(iStart.value) || 5180;
+        if (iStop) this.scanStopMHz = Number(iStop.value) || 5917;
+        if (iStep) this.scanStepMHz = Math.max(1, Number(iStep.value) || 5);
+        this.scanCustomRange = true;
         this.dirtySpectrum = true;
         this.dirtyWaterfall = true;
       }
@@ -510,9 +521,9 @@ export class DebugView extends Component {
 
   private currentScanBounds(): { vStart: number; vStop: number } {
     const s = this.spectrumAcc.latest;
-    const rawStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || 5180;
-    const rawStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || 5917;
-    const rawStep = Math.max(1, Number(this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value) || 5);
+    const rawStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || this.scanStartMHz;
+    const rawStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || this.scanStopMHz;
+    const rawStep = Math.max(1, Number(this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value) || this.scanStepMHz);
     const fullStart = s && s.dbm.length ? s.start : Math.max(5180, Math.min(5900, rawStart));
     const fullStop =
       s && s.dbm.length
@@ -527,7 +538,7 @@ export class DebugView extends Component {
   private applyFreqZoomFromBox(box: { x0: number; x1: number }, plotW: number, L = 44): void {
     const b = this.currentScanBounds();
     const s = this.spectrumAcc.latest;
-    const step = s && s.dbm.length ? s.step : Math.max(1, Number(this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value) || 5);
+    const step = s && s.dbm.length ? s.step : Math.max(1, Number(this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value) || this.scanStepMHz);
     const xa = Math.max(L, Math.min(L + plotW, Math.min(box.x0, box.x1)));
     const xb = Math.max(L, Math.min(L + plotW, Math.max(box.x0, box.x1)));
     if (xb - xa < 12) return;
@@ -543,9 +554,9 @@ export class DebugView extends Component {
 
   private applyFreqStretch(startMHz0: number, startMHz1: number, anchorFrac: number, factor: number): void {
     const s = this.spectrumAcc.latest;
-    const rawStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || 5180;
-    const rawStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || 5917;
-    const rawStep = Math.max(1, Number(this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value) || 5);
+    const rawStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || this.scanStartMHz;
+    const rawStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || this.scanStopMHz;
+    const rawStep = Math.max(1, Number(this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value) || this.scanStepMHz);
     const fullStart = s && s.dbm.length ? s.start : Math.max(5180, Math.min(5900, rawStart));
     const fullStop =
       s && s.dbm.length
@@ -581,8 +592,8 @@ export class DebugView extends Component {
 
   private applyFreqPan(startMHz0: number, startMHz1: number, deltaMHz: number): void {
     const s = this.spectrumAcc.latest;
-    const rawStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || 5180;
-    const rawStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || 5917;
+    const rawStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || this.scanStartMHz;
+    const rawStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || this.scanStopMHz;
     const fullStart = s && s.dbm.length ? s.start : Math.max(5180, Math.min(5900, rawStart));
     const fullStop = s && s.dbm.length ? s.start + s.step * (s.dbm.length - 1) : Math.max(fullStart + 5, Math.min(5925, rawStop));
     const span = Math.max(10, startMHz1 - startMHz0);
@@ -1406,8 +1417,8 @@ export class DebugView extends Component {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-spectrum-canvas]");
       if (c) {
         this.updateAutoScanY();
-        const fallbackStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || 5180;
-        const fallbackStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || 5917;
+        const fallbackStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || this.scanStartMHz;
+        const fallbackStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || this.scanStopMHz;
         drawSpectrumCanvas(c, this.spectrumAcc, {
           showMaxHold: this.scanShowMaxHold,
           showAverage: this.scanShowAvg,
@@ -1429,8 +1440,8 @@ export class DebugView extends Component {
     if (this.dirtyWaterfall) {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-waterfall-canvas]");
       if (c) {
-        const fallbackStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || 5180;
-        const fallbackStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || 5917;
+        const fallbackStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || this.scanStartMHz;
+        const fallbackStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || this.scanStopMHz;
         drawWaterfallCanvas(
           c,
           this.spectrumAcc,
@@ -1619,7 +1630,7 @@ export class DebugView extends Component {
           this.renderChannels();
           break;
         case "toggle-axis-menu": {
-          const menu = (t.dataset.menu as "signal-x" | "signal-y" | "scan-x" | "scan-y" | "wf-x" | "wf-y" | undefined) ?? null;
+          const menu = (t.dataset.menu as "signal-x" | "signal-y" | "scan-band" | "scan-x" | "scan-y" | "wf-x" | "wf-y" | undefined) ?? null;
           this.openAxisMenu = this.openAxisMenu === menu ? null : menu;
           if (menu === "signal-x" || menu === "signal-y") {
             this.renderSignalControls();
@@ -1801,9 +1812,12 @@ export class DebugView extends Component {
           break;
         }
         case "scan": {
-          const start = this.num("[data-scan-start]", 5180);
-          const stop = this.num("[data-scan-stop]", 5917);
-          const step = this.num("[data-scan-step]", 5);
+          const start = this.num("[data-scan-start]", this.scanStartMHz);
+          const stop = this.num("[data-scan-stop]", this.scanStopMHz);
+          const step = this.num("[data-scan-step]", this.scanStepMHz);
+          this.scanStartMHz = start;
+          this.scanStopMHz = stop;
+          this.scanStepMHz = step;
           this.scanning = true;
           this.renderScan();
           await this.console.request(`SCAN ${start} ${stop} ${step}`, "scan", 5000).catch((err: Error) => {
@@ -1824,9 +1838,12 @@ export class DebugView extends Component {
               await this.console.send("LIVE 0").catch(() => undefined);
             }
           } else {
-            const start = this.num("[data-scan-start]", 5180);
-            const stop = this.num("[data-scan-stop]", 5917);
-            const step = this.num("[data-scan-step]", 5);
+            const start = this.num("[data-scan-start]", this.scanStartMHz);
+            const stop = this.num("[data-scan-stop]", this.scanStopMHz);
+            const step = this.num("[data-scan-step]", this.scanStepMHz);
+            this.scanStartMHz = start;
+            this.scanStopMHz = stop;
+            this.scanStepMHz = step;
             this.spectrumAcc.clearHoldAndAvg();
             await this.console.request(`SCAN LIVE ${start} ${stop} ${step}`, "ok", 2000);
             this.scanLive = true;
@@ -1904,15 +1921,14 @@ export class DebugView extends Component {
           this.renderScan();
           break;
         case "scan-preset": {
+          this.openAxisMenu = null;
           const start = Number(t.dataset.start) || 5180;
           const stop = Number(t.dataset.stop) || 5917;
           const step = Number(t.dataset.step) || 5;
-          const iStart = this.el.querySelector<HTMLInputElement>("[data-scan-start]");
-          const iStop = this.el.querySelector<HTMLInputElement>("[data-scan-stop]");
-          const iStep = this.el.querySelector<HTMLInputElement>("[data-scan-step]");
-          if (iStart) iStart.value = String(start);
-          if (iStop) iStop.value = String(stop);
-          if (iStep) iStep.value = String(step);
+          this.scanStartMHz = start;
+          this.scanStopMHz = stop;
+          this.scanStepMHz = step;
+          this.scanCustomRange = false;
           if (this.scanLive && this.console.connected) {
             this.scanToggleAt = Date.now();
             this.spectrumAcc.clearHoldAndAvg();
@@ -1921,6 +1937,12 @@ export class DebugView extends Component {
           this.renderScan();
           break;
         }
+        case "scan-custom-mode":
+          this.openAxisMenu = null;
+          this.scanCustomRange = true;
+          this.renderScan();
+          this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.focus();
+          break;
         case "scan-toggle-hold":
           this.scanShowMaxHold = !this.scanShowMaxHold;
           this.renderScan();
@@ -3188,16 +3210,25 @@ export class DebugView extends Component {
   private renderScan(): void {
     const on = this.console.connected;
     const rfOn = this.status?.rf.enabled ?? true;
-    const prev = {
-      start: this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value ?? "5180",
-      stop: this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value ?? "5917",
-      step: this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value ?? "5",
-    };
+    const iStart = this.el.querySelector<HTMLInputElement>("[data-scan-start]");
+    const iStop = this.el.querySelector<HTMLInputElement>("[data-scan-stop]");
+    const iStep = this.el.querySelector<HTMLInputElement>("[data-scan-step]");
+    if (iStart) this.scanStartMHz = Number(iStart.value) || this.scanStartMHz;
+    if (iStop) this.scanStopMHz = Number(iStop.value) || this.scanStopMHz;
+    if (iStep) this.scanStepMHz = Math.max(1, Number(iStep.value) || this.scanStepMHz);
     const dis = this.scanLive ? "disabled" : "";
     const hasScan = this.spectrumAcc.latest !== null;
-    const isFull5 = prev.start === "5180" && prev.stop === "5917" && prev.step === "5";
-    const isFast15 = prev.start === "5180" && prev.stop === "5917" && prev.step === "15";
-    const isRb5 = prev.start === "5650" && prev.stop === "5925" && prev.step === "5";
+    const isFull5 = !this.scanCustomRange && this.scanStartMHz === 5180 && this.scanStopMHz === 5917 && this.scanStepMHz === 5;
+    const isFast15 = !this.scanCustomRange && this.scanStartMHz === 5180 && this.scanStopMHz === 5917 && this.scanStepMHz === 15;
+    const isRb5 = !this.scanCustomRange && this.scanStartMHz === 5650 && this.scanStopMHz === 5925 && this.scanStepMHz === 5;
+    const isCustomBand = this.scanCustomRange || (!isFull5 && !isFast15 && !isRb5);
+    const bandLabel = isFull5
+      ? "Full · 3 Hz"
+      : isFast15
+        ? "Fast full · 9 Hz"
+        : isRb5
+          ? "Raceband · 8 Hz"
+          : `Custom (${this.scanStartMHz}–${this.scanStopMHz})`;
     const isFreqZoomed = this.scanZoomStartMHz !== null && this.scanZoomStopMHz !== null;
     const isScanYZoomed = this.scanYMin !== DBM_MIN || this.scanYMax !== DBM_MAX;
     const isWfRowsZoomed = this.spectrumAcc.visibleRows !== 80;
@@ -3224,17 +3255,43 @@ export class DebugView extends Component {
       </div>
       <div class="debug-subbar">
         <div class="debug-toolbar-left">
-          <div class="segmented" role="group" aria-label="Scan speed and range presets">
-            <button type="button" class="${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="5" title="Full 5.18–5.92 GHz band at 5 MHz step (148 points, ~3.1 passes/s)">Full · 3 Hz</button>
-            <button type="button" class="${isFast15 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="15" title="Full 5.18–5.92 GHz band at 15 MHz step (50 points, ~9 passes/s)">Fast full · 9 Hz</button>
-            <button type="button" class="${isRb5 ? "is-active" : ""}" data-action="scan-preset" data-start="5650" data-stop="5925" data-step="5" title="Raceband R1–R8 + Wi-Fi UNII-3 at 5 MHz step (56 points, ~8 passes/s)">Raceband · 8 Hz</button>
+          <div class="debug-axis-pill ${!isCustomBand ? "is-armed" : "is-unarmed"}" data-axis-pill>
+            <button type="button" class="debug-axis-pill-main mono" data-action="${!isCustomBand ? "toggle-axis-menu" : "scan-preset"}" data-menu="scan-band" data-start="5180" data-stop="5917" data-step="5" title="${!isCustomBand ? `Band sweep preset (${this.scanStartMHz}–${this.scanStopMHz} MHz, ${this.scanStepMHz} MHz step) — click to choose a band sweep preset or custom range` : "Click to reset band sweep to Full · 3 Hz (5180–5917 MHz, 5 MHz step)"}">
+              ${icons.sliders(13)}<span>${bandLabel}</span>
+            </button>
+            <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-band" aria-expanded="${this.openAxisMenu === "scan-band"}" title="Choose band sweep preset or custom range">
+              ${icons.chevronDown(12)}
+            </button>
+            ${
+              this.openAxisMenu === "scan-band"
+                ? `<div class="debug-axis-menu mono" role="menu" aria-label="Band sweep range and speed">
+                    <button type="button" class="debug-axis-menu-item ${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="5" role="menuitem" title="Full 5.18–5.92 GHz band at 5 MHz step (148 points, ~3.1 passes/s)">
+                      <span>Full · 3 Hz</span><span class="note">5180–5917 · 5 MHz</span>
+                    </button>
+                    <button type="button" class="debug-axis-menu-item ${isFast15 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="15" role="menuitem" title="Full 5.18–5.92 GHz band at 15 MHz step (50 points, ~9 passes/s)">
+                      <span>Fast full · 9 Hz</span><span class="note">5180–5917 · 15 MHz</span>
+                    </button>
+                    <button type="button" class="debug-axis-menu-item ${isRb5 ? "is-active" : ""}" data-action="scan-preset" data-start="5650" data-stop="5925" data-step="5" role="menuitem" title="Raceband R1–R8 + Wi-Fi UNII-3 at 5 MHz step (56 points, ~8 passes/s)">
+                      <span>Raceband · 8 Hz</span><span class="note">5650–5925 · 5 MHz</span>
+                    </button>
+                    <div class="debug-axis-menu-sep"></div>
+                    <button type="button" class="debug-axis-menu-item ${isCustomBand ? "is-active" : ""}" data-action="scan-custom-mode" role="menuitem">
+                      <span>Custom…</span><span class="note">${this.scanStartMHz}–${this.scanStopMHz} · ${this.scanStepMHz} MHz</span>
+                    </button>
+                  </div>`
+                : ""
+            }
           </div>
-          <div class="debug-scan-inputs">
-            <label>From <input class="input mono" type="number" data-scan-start value="${esc(prev.start)}" min="5180" max="5917" ${dis}/></label>
-            <label>to <input class="input mono" type="number" data-scan-stop value="${esc(prev.stop)}" min="5180" max="5917" ${dis}/></label>
-            <label>step <input class="input mono" type="number" data-scan-step value="${esc(prev.step)}" min="1" max="50" ${dis}/></label>
-            <span class="note">MHz</span>
-          </div>
+          ${
+            isCustomBand
+              ? `<div class="debug-scan-inputs">
+                  <label>From <input class="input mono" type="number" data-scan-start value="${this.scanStartMHz}" min="5180" max="5917" ${dis}/></label>
+                  <label>to <input class="input mono" type="number" data-scan-stop value="${this.scanStopMHz}" min="5180" max="5917" ${dis}/></label>
+                  <label>step <input class="input mono" type="number" data-scan-step value="${this.scanStepMHz}" min="1" max="50" ${dis}/></label>
+                  <span class="note">MHz</span>
+                </div>`
+              : ""
+          }
         </div>
         <div class="debug-connect-actions">
           <div class="debug-overlay-checks" role="group" aria-label="Spectrum overlays">
