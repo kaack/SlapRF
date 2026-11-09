@@ -3918,6 +3918,22 @@ body.is-gate-dragging * {
   margin-top: 2px;
   margin-bottom: 6px;
 }
+.debug-signal-legend {
+  margin-top: 6px;
+  margin-bottom: 10px;
+  padding-left: 44px;
+}
+.debug-signal-legend .chart-legend-item strong {
+  font-weight: 600;
+  color: var(--text);
+}
+.debug-signal-legend .chart-legend-item.is-hidden strong {
+  color: var(--text-3);
+}
+.debug-legend-all {
+  color: var(--text-3);
+  background: transparent;
+}
 .debug-chart-foot {
   display: flex;
   align-items: center;
@@ -3925,25 +3941,14 @@ body.is-gate-dragging * {
   flex-wrap: wrap;
   gap: 8px 12px;
   min-height: 30px;
-  margin-top: 6px;
-}
-.debug-chart-foot > .debug-connect-actions {
-  margin-left: auto;
-  flex-shrink: 0;
-}
-.debug-chart-legend {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 12px;
-  min-height: 30px;
   margin-top: 8px;
+}
+.debug-chart-foot.is-with-divider {
   padding-bottom: 12px;
   margin-bottom: 12px;
   border-bottom: 1px solid var(--border);
 }
-.debug-chart-legend > .debug-connect-actions {
+.debug-chart-foot > .debug-connect-actions {
   margin-left: auto;
   flex-shrink: 0;
 }

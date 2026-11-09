@@ -2616,7 +2616,23 @@ export class DebugView extends Component {
         </div>
       </div>`;
     this.slot("signal-legend").innerHTML = `
-      <div class="debug-chart-foot">
+      <div class="chart-legend debug-signal-legend" role="group" aria-label="Channel trace legend">
+        ${freqs
+          .map((f, i) => {
+            const rb = racebandName(f) || `Ch${i + 1}`;
+            const chOn = this.signalEnabledCh[i];
+            const col = CHANNEL_COLORS[i];
+            return `<button type="button" class="chart-legend-item mono ${chOn ? "" : "is-hidden"}" data-action="signal-ch" data-ch="${i}" aria-pressed="${chOn}" title="${chOn ? `Click to hide ${rb} (${f} MHz) · double-click to solo` : `Click to show ${rb} (${f} MHz) · double-click to solo`}">
+              <i style="--c:${col}"></i>
+              <span><strong>${rb}</strong> ${f}</span>
+            </button>`;
+          })
+          .join("")}
+        <button type="button" class="chart-legend-item debug-legend-all" data-action="signal-ch-all" title="${allOn ? "Hide all 8 channel traces" : "Show all 8 channel traces"}">
+          <span>${allOn ? "Hide all" : "Show all"}</span>
+        </button>
+      </div>
+      <div class="debug-chart-foot is-with-divider">
         <div class="debug-toolbar-left">
           <div class="segmented" role="group" aria-label="Time window">
             <button type="button" class="${this.signalAutoX ? "is-active" : ""}" data-action="signal-auto-x" title="Automatically adjust X-axis time window based on incoming sample rate">Auto X</button>
@@ -2648,21 +2664,6 @@ export class DebugView extends Component {
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts ? "" : "disabled"} title="Download recorded 50 Hz samples as CSV">CSV</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-png" ${hasPts ? "" : "disabled"} title="Save signal chart snapshot as PNG">PNG</button>
           </div>
-        </div>
-      </div>
-      <div class="debug-chart-legend">
-        <div class="debug-channel-chips" role="group" aria-label="Channel trace legend">
-          ${freqs
-            .map((f, i) => {
-              const rb = racebandName(f) || `Ch${i + 1}`;
-              const chOn = this.signalEnabledCh[i];
-              const col = CHANNEL_COLORS[i];
-              return `<button type="button" class="debug-ch-chip mono ${chOn ? "is-on" : ""}" data-action="signal-ch" data-ch="${i}" style="--ch-color:${col}">
-                <span class="debug-ch-dot"></span><strong>${rb}</strong> <span>${f}</span>
-              </button>`;
-            })
-            .join("")}
-          <button type="button" class="btn btn-sm btn-ghost debug-ch-all-btn" data-action="signal-ch-all">${allOn ? "Hide all" : "Show all"}</button>
         </div>
       </div>`;
   }
