@@ -33,10 +33,16 @@ export interface TimerStatus {
 }
 
 export interface LiveSample {
+  /** Sweep counter (50 per second); gaps mean dropped lines. */
+  n?: number;
   us: number;
   dbm: number[];
+  /** LIVE 1: peak since the previous line. LIVE 2 (every sweep): same as dbm. */
   pk: number[];
+  /** Readings more than 10 dB above the channel's floor since the previous line. */
   hits?: number[];
+  /** Typical noise level per channel, dBm (-127 until learned). */
+  floor?: number[];
 }
 
 export interface ScanResult {

@@ -1,117 +1,176 @@
 # Debug page: design and hand-off spec
 
-Status: **design done, initial implementation committed (`a6adff0`). Firmware console verified on hardware (§5.1); the browser page itself still needs its first run.**
-This document is the brief for whoever completes it. Read it top to bottom before changing code.
+Status (2026-11-08): **firmware console complete and verified on hardware; web page implemented
+(self-test, status, live bars, channel editor, receiver toggle, spectrum scan + live scan,
+restart & boot logs, live log). Next task: the charts in §5, web-only.**
+This is the brief for whoever continues. Read it top to bottom before changing code.
 
 ## 1. Goal
 
-A top-level **Debug** page (`#/debug`, sidebar entry with a bug icon) for bench and field troubleshooting of a single timer **connected over USB**. It replaces the ad-hoc serial scripts used during bring-up. Network-wide health for every timer on the course is a separate, later feature (§7).
+A top-level **Debug** page (`#/debug`, sidebar entry with a bug icon) for bench and field
+troubleshooting of a single timer **connected over USB**. Every troubleshooting step done by hand
+during bring-up (serial scripts, reflashing with test channels, power-cycling to read logs)
+should be possible from this page. Network-wide health for every timer on the course is a
+separate, later feature (§8).
 
 ## 2. Architecture
 
 ```mermaid
 flowchart LR
   subgraph Timer["XIAO ESP32-C5 (any profile)"]
-    MAIN["main/main.c<br/>sweep_once → slaprf_diag_sweep()<br/>gap → slaprf_diag_service()"]
-    DIAG["components/slaprf_radio/slaprf_diag.c<br/>USB console task"]
+    MAIN["main/main.c<br/>sweep_once → slaprf_diag_scan_live_step() / slaprf_diag_sweep()<br/>gap → slaprf_diag_service()"]
+    DIAG["components/slaprf_radio/slaprf_diag.c<br/>USB console task + RTC log ring"]
     RF["slaprf_rf58.c<br/>capture engine"]
     MAIN --> DIAG
     DIAG -- "SCAN uses" --> RF
   end
   DIAG <-- "USB-Serial-JTAG<br/>line protocol" --> TC["web/src/services/timer_console.ts<br/>WebSerial client"]
   TC --> DV["web/src/views/DebugView.ts<br/>#/debug"]
+  DV -- "fetch /api/debug/timer?fp=" --> SRV["internal/api/debug_timer.go<br/>(slaprf.exe only)"]
 ```
 
 ### Files
 | Area | File | Role |
 |---|---|---|
-| Firmware | `firmware/components/slaprf_radio/slaprf_diag.c` | USB console: command parser, status JSON, live stream, scan, log mirror |
-| Firmware | `firmware/components/slaprf_radio/include/slaprf_radio.h` | `slaprf_diag_start/sweep/set_slot/service`, `slaprf_rf58_info` |
-| Firmware | `firmware/tools/main_template.c` → `firmware/*/main/main.c` | Calls the hooks. **Edit the template (or per-profile settings in `firmware/tools/gen_main.ps1`), then regenerate** with `powershell -ExecutionPolicy Bypass -File firmware\tools\gen_main.ps1`; never hand-edit the four `main.c` |
-| Web | `web/src/services/timer_console.ts` | WebSerial open/read/write, frame demux (JSON / log text / binary config) |
+| Firmware | `firmware/components/slaprf_radio/slaprf_diag.c` | USB console: commands, status JSON, live stream, scans, boot-log ring, temporary channels, receiver switch |
+| Firmware | `firmware/components/slaprf_radio/include/slaprf_radio.h` | `slaprf_diag_*` hooks, `slaprf_rf58_info` |
+| Firmware | `firmware/tools/main_template.c` → `firmware/*/main/main.c` | Calls the hooks. **Edit the template, then regenerate** with `powershell -ExecutionPolicy Bypass -File firmware\tools\gen_main.ps1`; never hand-edit the four `main.c` |
+| Web | `web/src/services/timer_console.ts` | WebSerial open/read/write, frame demux, `request()` waiters, `restartAndReconnect()` |
 | Web | `web/src/views/DebugView.ts` | Page UI |
 | Web | `web/src/core/router.ts`, `layout/AppShell.ts`, `core/icons.ts` | Route `debug`, view factory, `icons.bug` |
 | Web | `web/styles/views.css` (end of file, `.debug-*`) | Styles |
+| Server | `internal/api/debug_timer.go` | `GET /api/debug/timer?fp=XXXXXXXX` → `{found, puckId, label, online, lastSeenAt, msSinceSeen, framesRx, simulatorActive}` (always the real engine) |
+| Tools | `firmware/tools/console_check.py COM3` | Protocol regression test (all commands) |
+| Tools | `firmware/tools/noise_stats.py COM3 [s]` | Per-channel noise / hit statistics from `LIVE 2` |
+| Tools | `firmware/tools/benchpatch/main.go.txt` | Stamps role, fingerprint, channel table into a merged image (copy to `cmd/_benchpatch/main.go`, run, delete) |
 
-Bench helper: `firmware/tools/benchpatch/main.go.txt` stamps a role, fingerprint and a custom channel table (any 5180–5917 MHz) into a merged image. Copy it to `cmd/_benchpatch/main.go`, run it, then delete it.
+## 3. Wire protocol
 
-## 3. Wire protocol (USB, 115200 baud is nominal; it's native USB)
-
-Host → timer: ASCII command + `\n`. Timer → host: lines starting with `@` carry JSON. The raw 160-byte `SLAPRF02` block is sent unframed, in answer to `SLAPRF?`. Any other line is log text.
+Native USB (baud rate nominal). Host → timer: ASCII command + `\n`. Timer → host: lines starting
+with `@` carry JSON; the raw 160-byte `SLAPRF02` block is sent unframed in answer to `SLAPRF?`;
+any other line is log text. Refused commands reply `@{"t":"err","msg":"…"}`; `timer_console.ts`
+rejects pending `request()`s with that message.
 
 | Command | Reply |
 |---|---|
-| `SLAPRF?` | raw 160-byte config block (the flasher depends on this, so **keep it byte-exact**) |
-| `STATUS?` | `@{"t":"status","fw","role","profile","fp","label","uptimeMs","reset","heapFree","heapMin","sweepHz","sweeps","sweepUs","sweepUsMax","rf":{"ok","gain","gainMax","floorDb"},"channel","slot","freqs":[8]}` |
-| `LIVE 1` / `LIVE 0` | `@{"t":"ok",...}`, then `@{"t":"live","us","dbm":[8],"pk":[8]}` at about 10 Hz (`pk` = peak since the previous line) |
-| `SCAN a b s` | `@{"t":"scan","start","step","dbm":[n]}`, max 200 points, 5180–5917 MHz. Each point is the peak of 4 captures. It runs from the **main loop** during a 2.4 GHz gap (`slaprf_diag_service()`), so it pauses the TDMA schedule for about 60–90 ms |
+| `SLAPRF?` | raw 160-byte config block (the flasher depends on it: **keep byte-exact**) |
+| `STATUS?` | `@{"t":"status","fw","role"(1=Hub),"profile","fp","label","uptimeMs","reset","boots","heapFree","heapMin","sweepHz","sweeps","sweepUs","sweepUsMax","sweepBudgetUs","rf":{"ok","enabled","gain","gainMax","floorDb"},"chip":{"model","rev","mac","flashMB"},"net":{"mode":"ap"/"ap+sta"/"sta"/"off","stations"},"channel","slot","scanLive","freqsTemporary","freqs":[8]}` |
+| `LIVE 1` / `LIVE 2` / `LIVE 0` | `@{"t":"live","n","us","dbm":[8],"pk":[8],"hits":[8],"floor":[8]}`. **1** ≈ 10 lines/s, `pk` = peak since previous line. **2** = every sweep (50/s; `pk` = reading). `n` = sweep counter (gaps = dropped lines; 50 per second, use it as the time base). `floor` = typical noise per channel (−127 until learned). `hits` = readings > floor + 10 dB since the previous line. Lines are best-effort: dropped, never blocking, if USB is busy |
+| `SCAN a b s` | one-shot: `@{"t":"scan","start","step","dbm":[n]}`; ≤ 200 points within 5180–5917 MHz; peak of 4 captures per point; pauses timing ~0.1–0.5 s |
+| `SCAN LIVE a b s` | continuous: each 20 ms sweep slot measures the next chunk of the band instead of the pilot channels; streams `@{"t":"scan","live":true,"passMs","start","step","dbm":[n]}` per pass (full band 148 points ≈ 320 ms/pass ≈ 3 passes/s). **Lap timing pauses; Wi-Fi is unaffected** (verified: 50 frames/s to the laptop throughout). Live readings show −127 meanwhile |
+| `SCAN STOP` | ends the continuous scan |
 | `LOG 1` / `LOG 0` | mirrors `ESP_LOG*` output onto USB (UART0 keeps logging regardless) |
-| `REBOOT` | `@{"t":"ok","cmd":"reboot"}` then `esp_restart()` |
-| other | `@{"t":"err","msg":"…"}` |
+| `BOOTLOG?` / `LASTLOG?` | `@{"t":"bootlog","which":"current"/"last","boots","reset","text"}`. 3 KB RTC ring captured from before `app_main`; `last` survives software resets, panics and watchdogs (not power-off). Non-ASCII / ANSI bytes are dropped |
+| `CHANNELS f1,…,f8` / `CHANNELS RESET` | temporary channel table (5180–5917 MHz) until restart; noise floors relearn |
+| `RF 1` / `RF 0` | 5.8 GHz receiver on/off (off: readings −127, scans refused) |
+| `REBOOT` | `@{"t":"ok","cmd":"reboot"}` then restart (USB re-enumerates; use `restartAndReconnect()`) |
 
-Rules: one line per message, no embedded newlines in JSON, and keep each line under about 700 bytes (the scan line can reach about 1.1 KB, which is OK). Never make the console block the main loop.
+Rules: one line per message, no embedded newlines in JSON; large replies are chunked by the
+firmware (the USB driver silently rejects single writes larger than its 2 KB buffer). Never make
+the console block the sweep task.
 
-## 4. UI (implemented as described; refine, don't redesign)
+## 4. Current UI (implemented; refine, don't redesign)
 
-The page uses the same `.settings` / `.settings-section` / `.card` layout as Settings. It has five sections:
-1. **Connect a timer:** a Connect button (WebSerial, Espressif VID filter, "Show all USB serial ports" toggle), plus Read config / Restart timer / Disconnect when connected. On connect the page sends `STATUS?`, polls it every 2 s, and starts `LIVE 1`.
-2. **Status:** a key/value grid (timer, firmware profile and version, fingerprint, uptime, last restart, memory, sweep timing against the budget, 5.8 GHz boot check, 2.4 GHz channel, channel table).
-3. **Live 5.8 GHz readings:** 8 horizontal bars from −100 to −30 dBm, with a peak tick, Raceband labels (R1–R8) and a Pause/Resume button.
-4. **Spectrum scan:** From/to/step inputs, a Scan button, and an SVG line chart with Raceband markers and a peak label.
-5. **Log:** Start/Stop log, Clear, and a scrolling `<pre>` (last 400 lines) that auto-scrolls when already at the bottom.
+Same `.settings` / `.settings-section` / `.card` layout as Settings. Sections:
+1. **Connect a timer**: WebSerial (Espressif VID filter, "show all ports"), Read config, Disconnect. On connect: `STATUS?` every 2 s + `LIVE 1`.
+2. **Self-test**: 11 checks (console, identity, receiver, sweep timing, live rate, scan, saved config, memory, last restart (+ previous boot log if crashed), Wi-Fi, reaches-this-laptop via `/api/debug/timer`, skipped on static Pages). Copy report.
+3. **Status**: key/value grid.
+4. **Live 5.8 GHz readings**: 8 bars (in-place DOM updates), peak tick, hits; receiver toggle; "Try other channels" editor.
+5. **Spectrum scan**: range inputs, one-shot **Scan**, **Live** (continuous) with max-hold trace; SVG chart with Raceband markers.
+6. **Restarts & boot logs**: Restart & capture boot log (auto-reconnect), This/Previous boot's log, Restart test ×N (flags crashes and extra restarts during boot via the `boots` counter).
+7. **Live log**.
 
-## 5. Remaining work (in priority order)
+## 5. Next task: charts (web only — firmware data is already there)
 
-### 5.1 Bench verification (needs a board; do first)
+Goal: show as much as possible about what the receiver sees **over time**. All charts on
+`<canvas>` (not SVG/innerHTML: data arrives at 50 lines/s and 3 scans/s), drawn in one
+`requestAnimationFrame` loop that only redraws charts that got new data. Device-pixel-ratio aware.
+Colours from CSS tokens (`web/styles/tokens.css`: `--accent`, `--good`, `--warn`, `--bad`,
+`--text-3`, `--border`); read them once with `getComputedStyle`.
 
-**Done 2026-11-08 by protocol test** (`firmware/tools/console_check.py COM3`, production `open-ground` build):
-- `STATUS?`: OK. v0.1.4, Hub, profile 1, fp `BE7C0001`, label H1, rf ok (gain 30/80, floor −91.2 dBm), heap about 71 KB, sweeps 6.0–6.6 ms at 50 Hz.
-- `LIVE 1`: 21–22 lines per 2 s. Peaks show home Wi-Fi bursts at R4 (5769, −58 dBm) and R5 (5806, −65 dBm).
-- `SCAN 5180 5917 5`: 148 points in under 1 s. Flat −89 to −93 dBm (4 captures per point rarely catches bursty Wi-Fi; a VTX is continuous and will show).
-- `LOG 1`/`0`, `SLAPRF?` (byte-exact block), and unknown command: all OK.
-- Sweeps occasionally run over the 7 ms budget (max seen 7.2 ms); see §5.3.
+Put the chart code in a new `web/src/views/debug/` folder (e.g. `charts.ts` with small reusable
+helpers: axes, time series, heat-map colour scale), keep `DebugView.ts` as the coordinator.
 
-Still to do in the browser:
-Board: XIAO ESP32-C5 v1.0 on COM3, flashed with `firmware/open-ground` that includes `slaprf_diag.c`. Power-cycle after flashing: USB resets currently lock up until replug (see §6).
-- [ ] Open `http://localhost:8090/#/debug` in Chrome (run `.\slaprf.exe -open=false`; it bundles the TS on the fly), click Connect, pick the Espressif port.
-- [ ] Status populates and refreshes. Check `rf.ok=true`, `floorDb` ≈ −89, sweep ≈ 6 ms at 50 Hz, `reset` makes sense.
-- [ ] Live bars move about 10×/s. With no VTX all 8 bars sit around −89 dBm.
-- [ ] Scan with defaults (148 points) returns within about 1 s. The board's own home Wi-Fi should show a bump around 5220–5240 MHz.
-- [ ] Log: Start shows `ESP_LOG` lines; Stop stops them.
-- [ ] Read config logs a `[config]` line (fingerprint `BE7C0001` if flashed with the benchpatch helper).
-- [ ] Restart timer: the page sees the reboot (port may drop; it must recover cleanly or show Disconnected).
-- [ ] **Opening the port must not reset the chip.** If it does, adjust `setSignals` in `timer_console.ts`.
-- [ ] Unplug while connected: the page shows Disconnected and doesn't throw.
+### 5.1 Signal over time (most important)
+- New card under Live readings. While the card is visible, switch the stream to `LIVE 2`
+  (every sweep); go back to `LIVE 1` when hidden/paused (`IntersectionObserver`). Keep the bars
+  working from either mode (in `LIVE 2`, `pk` = reading).
+- One line per channel, last 30 s (window selector 10 s / 30 s / 2 min; ring buffer of
+  `{n, dbm[8], floor[8]}`, x-axis from `n` / 50 Hz, so dropped lines leave gaps instead of
+  squashing time). Channel toggles (R1–R8 chips, colour-coded; default all on).
+- Overlays: each channel's `floor` (dotted), floor + 10 dB "hit" line, and the **enter
+  threshold** of the pilot on that frequency when the server is reachable (`GET /api/state` →
+  `pilots[]` with `frequencyMhz`, `enterThreshold`, `exitThreshold`; match on frequency; skip
+  silently if not available).
+- Freeze button (stops scrolling, keeps receiving) and hover read-out (time, channel, dBm).
 
-### 5.2 Web polish
-- [ ] **Live bars:** update the existing elements' `style.width` / text instead of rewriting `innerHTML` 10×/s (keeps the Pause button clickable, avoids layout thrash).
-- [ ] Listen for `navigator.serial` `disconnect` events. Offer **reconnect to the last port** via `navigator.serial.getPorts()` without the picker.
-- [ ] Disable the action buttons while a command is in flight; show "Connecting…".
-- [ ] Spectrum chart: hover read-out (MHz and dBm at the cursor); keep the last scan visible while re-scanning; optional "hold max" across scans.
-- [ ] Mobile layout check at 375 px (bars, scan inputs, chart). The app has `table_scroll` / mobile patterns already.
-- [ ] Explain in the UI when WebSerial isn't available (mobile browsers), as the Flasher does.
+### 5.2 Per-channel noise table
+Under the over-time chart, computed from its ring buffer: mean, standard deviation, max,
+floor, hits/s, % of time ≥ enter threshold ("would trigger"), dropped lines. Highlight a channel
+whose would-trigger rate is > 0 with no drone flying (that's a false-lap risk). Matches what
+`firmware/tools/noise_stats.py` prints; use it to cross-check.
 
-### 5.3 Firmware additions
-- [ ] `CHANNELS f1,…,f8`: temporary channel table in RAM until reboot, for bench tests without reflashing. Validate 5180–5917.
-- [ ] `IDENT`: blink the user LED for 5 s. Find the XIAO ESP32-C5 user LED GPIO in the Seeed schematic; skip if there isn't one.
-- [ ] Status: add link stats once they exist (beacons missed, frames dropped), Spoke join state, and the `DBM_OFFSET` calibration value.
-- [ ] Scan: optionally stream progress for long scans. It currently returns one line at the end.
-- [ ] Sweep budget: worst case about 7.2 ms against a 7 ms budget. Either raise `SWEEP_BUDGET_US` (check the slot static-asserts) or add the faster PLL-only hop (`phy_set_rf_freq_offset` without its 300 µs settle wait; see FPVGateC5MK RADIO_INTERNALS §6).
-- [ ] Keep the `slaprf_diag_sweep()` hot path cheap. It runs every sweep on the main task; only format strings when `LIVE` is on.
+Reference numbers (2026-11-08, home with 5 GHz Wi-Fi, no VTX): all channels mean ≈ −91 dBm,
+sd ≈ 1.0–1.6; R4 (5769) sd 4.4, max −61, 1.5 hits/s from Wi-Fi; nothing ≥ −58 dBm.
 
-### 5.4 Docs
-- [ ] Add the console protocol (§3) to `firmware/README.md` and `docs/DEVELOPER.md`, and the Debug page to `docs/ARCHITECTURE.md` (§8 flasher area).
+### 5.3 Waterfall (spectrogram)
+- Under the spectrum chart, visible while **Live** scan runs: frequency on x (same axis as the
+  spectrum chart), time scrolling downward, colour = dBm (−100 → −40, perceptual palette from
+  dark to `--accent`/white). One row per pass (~3/s); keep the last ~200 rows. Draw by shifting
+  an offscreen canvas one row and painting the new row (`ImageData`), not a full redraw.
+- Raceband markers and Wi-Fi channel blocks on the axis (see 5.5). Hover: MHz, dBm, age.
+- Also feed one-shot scans into it (one row each), so the user can build a history by clicking Scan.
 
-## 6. Known hardware issues (context, not part of this task)
-- After a USB/RTS reset, the first boot crashes in `select_rtc_slow_clk` and recovers by itself. That's chip / ESP-IDF behaviour: it also happens with the capture engine off.
-- With the capture engine **on**, a USB reset instead lands in a ROM watchdog loop until power-cycled. The root cause hasn't been found. The bank release in `stock_capture()` / the shutdown hook didn't fix it. Avoid USB-triggered resets during testing: flash with `--after no_reset`, then replug.
-- **Clue:** the **production** build (`CONFIG_ESP_CONSOLE_SECONDARY_NONE`, log level WARN) came up cleanly after a USB reset (`reset: usb`, no ROM loop), with the capture engine on. All ROM-loop cases so far were on the smoke/logging build, which adds `CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG`. That suggests the secondary USB console, not the capture engine. Confirm by repeating USB resets on both builds.
+### 5.4 Spectrum chart upgrades
+- Port to canvas; add an **average** trace (running mean over passes) next to live and max-hold;
+  hover read-out; keep the last result visible during a new scan.
+- Peak list: top 5 peaks (≥ 6 dB above the median) with MHz, dBm, and the nearest Raceband/Wi-Fi channel.
 
-## 7. Later: network health (part 2, separate task)
-Each timer sends a small health frame through the Hub every 2 s (new magic `0xC5 0x5E`: uptime, reset reason, max sweep µs, beacon misses, dropped frames, heap, noise floor). The laptop adds a per-timer **Health** drawer on the Timers list. This needs `internal/ingest/wifi_udp.go` decoding plus a field on `DetectedPuck`.
+### 5.5 Band overlay (shared by spectrum, waterfall)
+Shaded blocks + labels for 5 GHz Wi-Fi channels in 5180–5917: UNII-1/2 (36–64: 5170–5330),
+UNII-2e (100–144: 5490–5730), UNII-3 (149–165: 5735–5835), and the Raceband R1–R8 markers
+(5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917). Note in the UI that R3–R6 overlap UNII-3.
 
-## 8. Conventions (must follow)
-- **Builds:** Go uses `-ldflags="-s -w"`; no Node/npm (TS is bundled by Go esbuild). Firmware uses ESP-IDF **v5.5.1** only: `firmware\tools\build_local.bat <profile>`.
-- **Before commit:** bump the cache-buster `?v=` in `web/index.html` on web changes (currently `v=69`), and run `go test -ldflags="-s -w" ./...`.
-- **Code hygiene:** keep existing comments; no new lint warnings (`-Werror=all` in ESP-IDF); no screenshots for verification unless the user asks.
+### 5.6 Health over time
+Small sparkline strip (last 5 min, from the 2 s `STATUS?` poll and the live stream):
+sweep duration (`us` vs `sweepBudgetUs`, mark overruns), free heap, frames/s reaching the
+laptop (`/api/debug/timer` `framesRx` delta, poll every 2 s while on the page; hide on static
+Pages), live-line rate / dropped lines.
+
+### 5.7 Export
+"Download data" for each chart: CSV (signal over time: `n,ms,R1..R8,floor1..8`; scans: one row
+per pass) and PNG (`canvas.toBlob`). Include timer label/fp and timestamp in file names.
+
+### 5.8 Acceptance
+- Board connected, page idle on Signal over time for 5 min: no growing memory (bounded ring
+  buffers), CPU modest, 50 lines/s shown with 0 dropped (`n` continuous).
+- Live scan + waterfall for 5 min: smooth, ~3 rows/s.
+- A VTX powered on near the timer shows as a step on its channel in Signal over time, a peak in
+  the spectrum and a vertical stripe in the waterfall.
+- Mobile (375 px): charts stack and stay readable; WebSerial missing → explanation (as now).
+- Leaving the page stops `LIVE`, `SCAN LIVE` and polling (already done for the existing ones).
+
+## 6. Other remaining work
+- [ ] Browser verification by the user of the current page (self-test, restart & capture, restart test, live scan).
+- [ ] `IDENT`: blink the user LED for 5 s (find the XIAO ESP32-C5 user LED GPIO; skip if none).
+- [ ] Decode crash: coredump partition + `esp_core_dump_get_summary`, ship the ELF next to images, symbolise in Go (DWARF) via a server endpoint.
+- [ ] Status: link stats once they exist (beacons missed, frames dropped), Spoke join state, `DBM_OFFSET`.
+- [ ] Sweep budget: worst case ≈ 7.5 ms against 7 ms. Raise `SWEEP_BUDGET_US` (check slot static-asserts) or add the faster PLL-only hop (FPVGateC5MK RADIO_INTERNALS §6). Would also allow a rolling scan during timing.
+- [ ] Boot-log ring is only 3 KB and fills within ~1 s of boot (Wi-Fi warnings); consider 6–8 KB of RTC memory.
+- [ ] Docs: protocol (§3) into `firmware/README.md` and `docs/DEVELOPER.md`; Debug page into `docs/ARCHITECTURE.md`.
+
+## 7. Known hardware issues (context)
+- After a USB/RTS reset, the first boot can crash in `select_rtc_slow_clk` and recover by itself (chip / ESP-IDF behaviour; also with the capture engine off). The restart test shows it as "restarted 1 extra time while starting".
+- ROM watchdog loop after USB reset was only seen on the smoke/logging build (secondary USB console); the production build recovers. Confirm by repeating USB resets on both builds.
+- Each reflash drops the PC off the Hub's SlapRF Wi-Fi; Windows doesn't rejoin by itself.
+
+## 8. Later: network health (separate task)
+Each timer sends a small health frame through the Hub every 2 s (new magic `0xC5 0x5E`: uptime, reset reason, max sweep µs, beacon misses, dropped frames, heap, noise floor). The laptop adds a per-timer **Health** drawer on the Timers list (`internal/ingest/wifi_udp.go` decoding + a field on `DetectedPuck`).
+
+## 9. Conventions (must follow)
+- **Builds:** Go always with `-ldflags="-s -w"`; no Node/npm (TS is bundled by Go esbuild, which does **not** type-check: be careful with types). Web: `go run -ldflags="-s -w" ./cmd/build-web -web ./web -out ./_site`. Server: `go build -ldflags="-s -w" -o slaprf.exe ./cmd/slaprf` (stop the running `slaprf.exe` first, restart with `.\slaprf.exe -open=false`, port 8090; it serves the TS bundle on the fly). Firmware: ESP-IDF **v5.5.1** only, `firmware\tools\build_local.bat <profile>`.
+- **Before commit:** bump the cache-buster `?v=` in `web/index.html` on web changes (currently `v=71`), run `go test -ldflags="-s -w" ./...`.
+- **Files:** UTF-8; don't round-trip source through PowerShell 5 `Get-Content` (it mangles `·`, `…`, `—`). Use the editor tools.
+- **Code hygiene:** keep existing comments; no new lint warnings (`-Werror=all` in ESP-IDF); user-facing copy in plain language; no screenshots for verification unless the user asks.
+- **Server mode:** the server starts in simulator mode; `POST /api/sim/toggle` switches to real timers.
 - **Git:** `$env:PATH += ";C:\Users\miguel\AppData\Local\Programs\MinGit\cmd"`. Commit to `main` with descriptive messages.

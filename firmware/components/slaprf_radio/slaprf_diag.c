@@ -5,7 +5,10 @@
  *   SLAPRF?          raw 160-byte SLAPRF02 config block (binary; used by the flasher)
  *   STATUS?          @{"t":"status",...}  identity, chip, uptime, reset reason, boot count, heap,
  *                    sweeps, 5.8 GHz boot check, receiver on/off, 2.4 GHz network, channel table
- *   LIVE 1|0         stream @{"t":"live","us","dbm":[8],"pk":[8],"hits":[8]} about 10x a second
+ *   LIVE 1|2|0       stream @{"t":"live","n","us","dbm":[8],"pk":[8],"hits":[8],"floor":[8]}:
+ *                    1 = about 10x a second (pk = peak since the previous line), 2 = every sweep.
+ *                    n = sweep counter (gaps = dropped lines), floor = typical noise per channel,
+ *                    hits = readings > floor + 10 dB since the previous line
  *   SCAN a b s       spectrum scan a..b MHz in s MHz steps (peak of 4 captures per point);
  *                    replies @{"t":"scan","start","step","dbm":[...]} from the main loop
  *   SCAN LIVE a b s  continuous scan: each sweep slot measures the next chunk of a..b instead of
@@ -53,6 +56,8 @@
 #define LOG_RING_MAGIC   0x534C4F47U // "SLOG"
 #define RF_MIN_MHZ       5180
 #define RF_MAX_MHZ       5917
+#define HIT_MARGIN_DB    10 // A "hit" is a reading this far above the channel's typical noise
+#define FLOOR_UNSET      INT16_MIN
 
 static const volatile uint8_t *s_cfg;
 static size_t s_cfg_len;
@@ -60,7 +65,7 @@ static uint8_t s_sweep_hz = 50;
 static uint32_t s_sweep_budget_us;
 static SemaphoreHandle_t s_tx_lock;
 
-static volatile bool s_live;
+static volatile uint8_t s_live; // 0 off, 1 ~10 lines/s with peaks, 2 every sweep
 static volatile bool s_log;
 static volatile bool s_rf_enabled = true;
 static vprintf_like_t s_prev_vprintf;
@@ -71,7 +76,7 @@ static volatile uint32_t s_sweep_us_last;
 static volatile uint32_t s_sweep_us_max;
 static int8_t s_peak[8];
 static int16_t s_floor_q4[8]; // Slow-tracking noise floor per channel, dBm * 16
-static uint8_t s_hits[8];     // Sweeps > floor + 6 dB since the last LIVE line
+static uint8_t s_hits[8];     // Sweeps > floor + HIT_MARGIN_DB since the last LIVE line
 
 static volatile bool s_chan_override;
 static uint16_t s_chan_mhz[8];
@@ -147,6 +152,15 @@ static void tx_raw(const void *data, size_t len) {
 
 static void tx_line(const char *s) {
     tx_raw(s, strlen(s));
+}
+
+/** Best-effort write for streamed data: drops the line if the port is busy or the buffer full. */
+static void tx_line_nowait(const char *s) {
+    if (s_tx_lock == NULL || xSemaphoreTake(s_tx_lock, 0) != pdTRUE) {
+        return;
+    }
+    usb_serial_jtag_write_bytes(s, strlen(s), 0);
+    xSemaphoreGive(s_tx_lock);
 }
 
 static int log_vprintf(const char *fmt, va_list args) {
@@ -303,6 +317,7 @@ static void handle_channels(const char *args) {
     while (*args == ' ') args++;
     if (strncmp(args, "RESET", 5) == 0) {
         s_chan_override = false;
+        for (int i = 0; i < 8; i++) s_floor_q4[i] = FLOOR_UNSET; // New frequencies: relearn the noise
         tx_line("@{\"t\":\"ok\",\"cmd\":\"channels\",\"temporary\":false}\n");
         return;
     }
@@ -327,6 +342,7 @@ static void handle_channels(const char *args) {
     }
     memcpy(s_chan_mhz, f, sizeof(f));
     s_chan_override = true;
+    for (int i = 0; i < 8; i++) s_floor_q4[i] = FLOOR_UNSET;
     tx_line("@{\"t\":\"ok\",\"cmd\":\"channels\",\"temporary\":true}\n");
 }
 
@@ -339,7 +355,7 @@ static void handle_command(char *line) {
     } else if (strcmp(line, "STATUS?") == 0) {
         send_status();
     } else if (strncmp(line, "LIVE ", 5) == 0) {
-        s_live = line[5] == '1';
+        s_live = line[5] == '2' ? 2 : line[5] == '1' ? 1 : 0;
         if (s_live) memset(s_hits, 0, sizeof(s_hits)); // Don't report hits counted while paused
         tx_line(s_live ? "@{\"t\":\"ok\",\"cmd\":\"live\",\"on\":true}\n" : "@{\"t\":\"ok\",\"cmd\":\"live\",\"on\":false}\n");
     } else if (strncmp(line, "LOG ", 4) == 0) {
@@ -432,7 +448,7 @@ void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
     s_sweep_hz = sweep_hz ? sweep_hz : 50;
     s_tx_lock = xSemaphoreCreateMutex();
     memset(s_peak, -127, sizeof(s_peak));
-    for (int i = 0; i < 8; i++) s_floor_q4[i] = -95 * 16;
+    for (int i = 0; i < 8; i++) s_floor_q4[i] = FLOOR_UNSET;
     usb_serial_jtag_driver_config_t usb_cfg = {
         .tx_buffer_size = 2048,
         .rx_buffer_size = 256,
@@ -462,27 +478,37 @@ void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us) {
         if (dbm[i] <= -127) continue; // Receiver off or slot used by a live scan: no reading
         const int16_t v = (int16_t)(dbm[i] * 16);
         if (dbm[i] > s_peak[i]) s_peak[i] = dbm[i];
-        // Floor: follow drops at once, rises very slowly (a VTX parked on the channel won't lift it fast).
-        if (v < s_floor_q4[i]) s_floor_q4[i] = v;
-        else s_floor_q4[i] += (v - s_floor_q4[i]) / 256;
-        if (v > s_floor_q4[i] + 6 * 16 && s_hits[i] < 255) s_hits[i]++;
+        // Floor = typical noise level: a slow average of readings that look like noise. Readings
+        // well above it (a VTX, a Wi-Fi burst) are left out, so a parked VTX can't lift it.
+        if (s_floor_q4[i] == FLOOR_UNSET) {
+            s_floor_q4[i] = v; // First reading on this channel (boot, or channel table changed)
+        } else if (v < s_floor_q4[i] + HIT_MARGIN_DB * 16 / 2) {
+            s_floor_q4[i] += (v - s_floor_q4[i]) / 32;
+        } else {
+            s_floor_q4[i] += (v - s_floor_q4[i]) / 2048; // Very slow: follows a lasting rise in noise
+        }
+        if (v > s_floor_q4[i] + HIT_MARGIN_DB * 16 && s_hits[i] < 255) s_hits[i]++;
     }
-    const uint32_t every = s_sweep_hz >= 10 ? s_sweep_hz / 10 : 1;
+    // LIVE 1: about 10 lines a second with the peak since the last line; LIVE 2: every sweep.
+    const uint32_t every = s_live == 2 ? 1 : s_sweep_hz >= 10 ? s_sweep_hz / 10 : 1;
     if (!s_live || s_sweeps % every != 0) {
         return;
     }
-    char out[200];
+    char out[300];
+    int8_t fl[8];
+    for (int i = 0; i < 8; i++) fl[i] = s_floor_q4[i] == FLOOR_UNSET ? -127 : (int8_t)(s_floor_q4[i] / 16);
     snprintf(out, sizeof(out),
-             "@{\"t\":\"live\",\"us\":%lu,\"dbm\":[%d,%d,%d,%d,%d,%d,%d,%d],\"pk\":[%d,%d,%d,%d,%d,%d,%d,%d],"
-             "\"hits\":[%u,%u,%u,%u,%u,%u,%u,%u]}\n",
-             (unsigned long)took_us, dbm[0], dbm[1], dbm[2], dbm[3], dbm[4], dbm[5], dbm[6], dbm[7], s_peak[0],
-             s_peak[1], s_peak[2], s_peak[3], s_peak[4], s_peak[5], s_peak[6], s_peak[7], s_hits[0], s_hits[1],
-             s_hits[2], s_hits[3], s_hits[4], s_hits[5], s_hits[6], s_hits[7]);
+             "@{\"t\":\"live\",\"n\":%lu,\"us\":%lu,\"dbm\":[%d,%d,%d,%d,%d,%d,%d,%d],\"pk\":[%d,%d,%d,%d,%d,%d,%d,%d],"
+             "\"hits\":[%u,%u,%u,%u,%u,%u,%u,%u],\"floor\":[%d,%d,%d,%d,%d,%d,%d,%d]}\n",
+             (unsigned long)s_sweeps, (unsigned long)took_us, dbm[0], dbm[1], dbm[2], dbm[3], dbm[4], dbm[5], dbm[6],
+             dbm[7], s_peak[0], s_peak[1], s_peak[2], s_peak[3], s_peak[4], s_peak[5], s_peak[6], s_peak[7],
+             s_hits[0], s_hits[1], s_hits[2], s_hits[3], s_hits[4], s_hits[5], s_hits[6], s_hits[7], fl[0], fl[1],
+             fl[2], fl[3], fl[4], fl[5], fl[6], fl[7]);
     for (int i = 0; i < 8; i++) {
         s_peak[i] = -127;
         s_hits[i] = 0;
     }
-    tx_line(out);
+    tx_line_nowait(out); // Runs in the sweep task: never block timing on a slow USB host
 }
 
 void slaprf_diag_service(void) {

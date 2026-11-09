@@ -157,7 +157,7 @@ export class DebugView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Live 5.8 GHz readings</h2>
-            <p>What the timer measures on each of its 8 pilot channels, about 10 times a second. The tick marks the peak since the previous update; hits count sweeps more than 6 dB above that channel's noise floor. Power on a VTX to see its channel rise.</p>
+            <p>What the timer measures on each of its 8 pilot channels, about 10 times a second. The tick marks the peak since the previous update; hits count readings more than 10 dB above that channel's typical noise (Wi-Fi bursts show up here too; they're far below a lap's enter threshold). Power on a VTX to see its channel rise.</p>
             <p>Try other channels without reflashing, or switch the receiver off to tell whether a problem comes from the 5.8 GHz side. Both reset when the timer restarts.</p>
           </div>
           <div class="card">
@@ -782,7 +782,7 @@ export class DebugView extends Component {
                 <span class="debug-bar-peak" style="left:0%;display:none"></span>
               </div>
               <span class="debug-bar-value mono">—</span>
-              <span class="debug-bar-hits mono" title="Sweeps more than 6 dB above the noise floor since the previous update">—</span>
+              <span class="debug-bar-hits mono" title="Readings more than 10 dB above this channel's typical noise since the previous update">—</span>
             </div>`;
           })
           .join("")}
