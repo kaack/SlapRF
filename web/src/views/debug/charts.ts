@@ -174,17 +174,19 @@ export class SignalRingBuffer {
     this.synthN = 0;
   }
 
-  public push(sample: LiveSample, sweepHz = 50): void {
+  public push(sample: LiveSample, sweepHz = 50, liveMode: 1 | 2 = 2): void {
+    const now = performance.now();
     const prev = this.points.length ? this.points[this.points.length - 1] : null;
+    const expectedStep = liveMode === 2 ? 1 : Math.max(1, Math.round(sweepHz / 10));
     let n: number;
     if (typeof sample.n === "number") {
       n = sample.n;
-      if (prev && n > prev.n + 1) {
-        // In LIVE 2 (every sweep), step is 1. In LIVE 1 (~10 Hz), step is sweepHz/10 (typically 5).
-        // Only count as dropped if we're in every-sweep mode or if a gap exceeds one LIVE 1 interval.
-        const gap = n - prev.n - 1;
-        if (gap > 0 && gap < 5000) {
-          this.droppedLines += gap;
+      if (prev && n > prev.n + expectedStep) {
+        // Ignore intentional pauses (LIVE 0, spectrum scans, mode switches) where wall-clock gap > 350 ms
+        const wallGapMs = now - prev.tMs;
+        const missedLines = Math.floor((n - prev.n) / expectedStep) - 1;
+        if (missedLines > 0 && missedLines <= 25 && wallGapMs < 350) {
+          this.droppedLines += missedLines;
         }
       } else if (prev && n < prev.n) {
         // Timer rebooted and counter reset
@@ -193,8 +195,7 @@ export class SignalRingBuffer {
       }
       this.synthN = n;
     } else {
-      const step = Math.max(1, Math.round(sweepHz / 10));
-      this.synthN += step;
+      this.synthN += expectedStep;
       n = this.synthN;
     }
 
@@ -205,7 +206,7 @@ export class SignalRingBuffer {
     this.points.push({
       n,
       us: sample.us,
-      tMs: performance.now(),
+      tMs: now,
       dbm,
       floor,
       hits,
@@ -291,7 +292,8 @@ export class SignalRingBuffer {
     let windowDrops = 0;
     for (let k = 1; k < pts.length; k++) {
       const diff = pts[k].n - pts[k - 1].n - 1;
-      if (diff > 0) windowDrops += diff;
+      const wallGapMs = pts[k].tMs - pts[k - 1].tMs;
+      if (diff > 0 && diff <= 25 && wallGapMs < 350) windowDrops += diff;
     }
     const wallSec = Math.max(0.1, (last.tMs - first.tMs) / 1000);
     const rateHz = (pts.length - 1) / wallSec;
@@ -448,18 +450,23 @@ export function drawSignalOverTimeCanvas(
   const xOfN = (n: number) => L + ((n - startN) / windowSweeps) * plotW;
 
   const stepSec =
-    opts.windowSec <= 3
-      ? 0.5
-      : opts.windowSec <= 8
-        ? 1
-        : opts.windowSec <= 16
-          ? 2
-          : opts.windowSec <= 40
-            ? 5
-            : opts.windowSec <= 80
-              ? 10
-              : 20;
+    opts.windowSec <= 0.8
+      ? 0.1
+      : opts.windowSec <= 1.8
+        ? 0.25
+        : opts.windowSec <= 4
+          ? 0.5
+          : opts.windowSec <= 8
+            ? 1
+            : opts.windowSec <= 16
+              ? 2
+              : opts.windowSec <= 40
+                ? 5
+                : opts.windowSec <= 80
+                  ? 10
+                  : 20;
   const stepSweeps = stepSec * opts.sweepHz;
+  const isXCustom = ![1, 2, 5, 10, 30, 120].includes(Math.round(opts.windowSec * 10) / 10);
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
   if (stepSweeps > 0) {
@@ -473,15 +480,17 @@ export function drawSignalOverTimeCanvas(
       ctx.lineTo(x, T + plotH);
       ctx.stroke();
       const agoSec = Math.max(0, (refN - tN) / opts.sweepHz);
-      ctx.fillStyle = tokens.text3;
+      ctx.fillStyle = isXCustom ? tokens.accent : tokens.text3;
       const lbl =
-        agoSec < 0.05
+        agoSec < 0.02
           ? opts.endN === null || opts.endN === undefined
             ? "now"
             : "paused"
-          : stepSec < 1
-            ? `-${agoSec.toFixed(1)}s`
-            : `-${Math.round(agoSec)}s`;
+          : stepSec < 0.5
+            ? `-${agoSec.toFixed(2)}s`
+            : stepSec < 1
+              ? `-${agoSec.toFixed(1)}s`
+              : `-${Math.round(agoSec)}s`;
       ctx.fillText(lbl, x, T + plotH + 6);
     }
   }
@@ -571,10 +580,13 @@ export function drawSignalOverTimeCanvas(
 
   // Draw each enabled channel trace; break the path when `n` jumps (dropped lines) so gaps show honestly
   const maxStepN = Math.max(2, Math.round(opts.sweepHz / 5)); // >200 ms gap breaks the line
+  const pxPerSweep = plotW / Math.max(1, windowSweeps);
+  const showSampleDots = pxPerSweep >= 5.5;
   for (let ch = 0; ch < 8; ch++) {
     if (!opts.enabledChannels[ch]) continue;
-    ctx.strokeStyle = CHANNEL_COLORS[ch];
-    ctx.lineWidth = 1.4;
+    const col = CHANNEL_COLORS[ch];
+    ctx.strokeStyle = col;
+    ctx.lineWidth = showSampleDots ? 1.65 : 1.4;
     ctx.beginPath();
     let penDown = false;
     let prevN = -1;
@@ -596,6 +608,20 @@ export function drawSignalOverTimeCanvas(
       prevN = p.n;
     }
     ctx.stroke();
+
+    // When stretched horizontally (zoomed in on time), render individual sweep sample dots
+    if (showSampleDots) {
+      ctx.fillStyle = col;
+      const dotR = pxPerSweep >= 10 ? 2.4 : 1.8;
+      for (let k = 0; k < pts.length; k++) {
+        const p = pts[k];
+        const v = p.dbm[ch];
+        if (v === undefined || v <= -127) continue;
+        ctx.beginPath();
+        ctx.arc(xOfN(p.n), yOf(v), dotR, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
   }
 
   // Draw Y-axis zoom selection band when dragging vertically
@@ -711,7 +737,9 @@ export class SpectrumAccumulator {
   /** Vertical scroll offset in waterfall rows (0 = pinned to newest row at top). */
   public scrollRow = 0;
   public readonly maxRows = 1200;
-  public readonly visibleRows = 80;
+  public visibleRows = 80;
+  public colorMinDbm = -100;
+  public colorMaxDbm = -40;
   private offscreen: HTMLCanvasElement | null = null;
   private wfWidth = 0;
 
@@ -721,6 +749,20 @@ export class SpectrumAccumulator {
 
   public setScrollRow(row: number): void {
     this.scrollRow = Math.max(0, Math.min(this.maxScrollRow(), Math.round(row)));
+  }
+
+  public setVisibleRows(rows: number): void {
+    this.visibleRows = Math.max(8, Math.min(400, Math.round(rows)));
+    this.setScrollRow(this.scrollRow);
+  }
+
+  public setColorRange(minDbm: number, maxDbm: number): void {
+    const lo = Math.max(-115, Math.min(-35, Math.round(minDbm)));
+    const hi = Math.max(lo + 8, Math.min(-15, Math.round(maxDbm)));
+    if (lo === this.colorMinDbm && hi === this.colorMaxDbm) return;
+    this.colorMinDbm = lo;
+    this.colorMaxDbm = hi;
+    this.repaintOffscreen();
   }
 
   public clearHoldAndAvg(): void {
@@ -806,6 +848,29 @@ export class SpectrumAccumulator {
     this.wfWidth = bins;
   }
 
+  private repaintOffscreen(): void {
+    if (!this.latest || !this.history.length) return;
+    const bins = this.latest.dbm.length;
+    this.resetOffscreen(bins);
+    const c = this.offscreen!;
+    const ctx = c.getContext("2d")!;
+    const rowsToPaint = Math.min(this.maxRows, this.history.length);
+    const img = ctx.createImageData(bins, rowsToPaint);
+    const data = img.data;
+    for (let r = 0; r < rowsToPaint; r++) {
+      const hRow = this.history[this.history.length - 1 - r];
+      for (let i = 0; i < bins; i++) {
+        const [cr, cg, cb] = dbmToRgb(hRow.dbm[i], this.colorMinDbm, this.colorMaxDbm);
+        const o = (r * bins + i) * 4;
+        data[o] = cr;
+        data[o + 1] = cg;
+        data[o + 2] = cb;
+        data[o + 3] = 255;
+      }
+    }
+    ctx.putImageData(img, 0, 0);
+  }
+
   /** Shift the offscreen canvas down by 1 row and paint the new scan on row 0 via ImageData. */
   private appendWaterfallRow(dbm: number[]): void {
     const bins = dbm.length;
@@ -819,7 +884,7 @@ export class SpectrumAccumulator {
     const rowImg = ctx.createImageData(bins, 1);
     const data = rowImg.data;
     for (let i = 0; i < bins; i++) {
-      const [r, g, b] = dbmToRgb(dbm[i]);
+      const [r, g, b] = dbmToRgb(dbm[i], this.colorMinDbm, this.colorMaxDbm);
       const o = i * 4;
       data[o] = r;
       data[o + 1] = g;
@@ -897,9 +962,10 @@ export function nearestBandHint(freqMHz: number): string {
   return parts.join(" · ") || "out of band";
 }
 
-/** Perceptual dark → blue → cyan → volt (#d4ff3a) → white palette for −100…−40 dBm (§5.3). */
-export function dbmToRgb(dbm: number): [number, number, number] {
-  const t = Math.max(0, Math.min(1, (dbm - -100) / (-40 - -100)));
+/** Perceptual dark → blue → cyan → volt (#d4ff3a) → white palette (§5.3). */
+export function dbmToRgb(dbm: number, minDbm = -100, maxDbm = -40): [number, number, number] {
+  const span = Math.max(4, maxDbm - minDbm);
+  const t = Math.max(0, Math.min(1, (dbm - minDbm) / span));
   // 5-stop gradient:
   // 0.00: #0b0c0f (11, 12, 15)
   // 0.28: #172554 (23, 37, 84)
@@ -999,6 +1065,8 @@ export interface SpectrumCanvasOptions {
   showWifiOverlay: boolean;
   viewStartMHz?: number | null;
   viewStopMHz?: number | null;
+  yMinDbm?: number;
+  yMaxDbm?: number;
   zoomBox?: { x0: number; x1: number } | null;
   hover: { x: number; y: number } | null;
 }
@@ -1086,23 +1154,29 @@ export function drawSpectrumCanvas(
   const vStart = Math.max(s.start, Math.min(scanStop - s.step, opts.viewStartMHz ?? s.start));
   const vStop = Math.min(scanStop, Math.max(vStart + s.step, opts.viewStopMHz ?? scanStop));
   const span = Math.max(1, vStop - vStart);
+  const yMin = opts.yMinDbm ?? DBM_MIN;
+  const yMax = Math.max(yMin + 4, opts.yMaxDbm ?? DBM_MAX);
+  const ySpan = yMax - yMin;
+  const isYZoomed = yMin !== DBM_MIN || yMax !== DBM_MAX;
+  const isXZoomed = vStart !== s.start || vStop !== scanStop;
   const xOf = (f: number) => L + ((f - vStart) / span) * plotW;
-  const yOf = (d: number) =>
-    T + (1 - (Math.max(DBM_MIN, Math.min(DBM_MAX, d)) - DBM_MIN) / (DBM_MAX - DBM_MIN)) * plotH;
+  const yOf = (d: number) => T + (1 - (d - yMin) / ySpan) * plotH;
 
-  // Horizontal dBm grid
+  // Horizontal dBm grid with adaptive step when Y-zoomed
+  const dStep = ySpan <= 14 ? 2 : ySpan <= 32 ? 5 : 10;
   ctx.font = `10px ${tokens.fontMono}`;
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
-  for (let d = DBM_MIN; d <= DBM_MAX; d += 10) {
+  for (let d = Math.ceil(yMin / dStep) * dStep; d <= yMax; d += dStep) {
     const y = Math.round(yOf(d)) + 0.5;
+    if (y < T - 1 || y > T + plotH + 1) continue;
     ctx.strokeStyle = tokens.border;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(L, y);
     ctx.lineTo(W - R, y);
     ctx.stroke();
-    ctx.fillStyle = tokens.text3;
+    ctx.fillStyle = isYZoomed ? tokens.accent : tokens.text3;
     ctx.fillText(`${d}`, L - 6, y);
   }
 
@@ -1112,7 +1186,7 @@ export function drawSpectrumCanvas(
   ctx.textBaseline = "top";
   for (let f = Math.ceil(vStart / fStep) * fStep; f <= vStop; f += fStep) {
     const x = Math.round(xOf(f)) + 0.5;
-    ctx.fillStyle = tokens.text3;
+    ctx.fillStyle = isXZoomed ? tokens.accent : tokens.text3;
     ctx.fillText(`${f}`, x, T + plotH + 6);
   }
 
@@ -1300,19 +1374,20 @@ export function drawWaterfallCanvas(
   ctx.lineWidth = 1;
   ctx.strokeRect(L + 0.5, T + 0.5, plotW - 1, plotH - 1);
 
-  // Y-axis age ticks (reflecting current vertical scroll offset)
+  // Y-axis age ticks (reflecting current vertical scroll offset and row stretch)
   const passSec = s.passMs && s.passMs > 20 ? s.passMs / 1000 : 0.32;
   const topAgeSec = startRow * passSec;
   const midAgeSec = (startRow + visRows / 2) * passSec;
   const botAgeSec = (startRow + visRows) * passSec;
-  ctx.fillStyle = startRow > 0 ? tokens.warn : tokens.text3;
+  const isRowsStretched = visRows !== 80;
+  ctx.fillStyle = startRow > 0 ? tokens.warn : isRowsStretched ? tokens.accent : tokens.text3;
   ctx.font = `10px ${tokens.fontMono}`;
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
-  ctx.fillText(startRow === 0 ? "now" : `-${topAgeSec.toFixed(0)}s`, L - 6, T + 6);
-  ctx.fillStyle = tokens.text3;
-  ctx.fillText(`-${midAgeSec.toFixed(0)}s`, L - 6, T + plotH / 2);
-  ctx.fillText(`-${botAgeSec.toFixed(0)}s`, L - 6, T + plotH - 6);
+  ctx.fillText(startRow === 0 ? "now" : `-${topAgeSec.toFixed(1)}s`, L - 6, T + 6);
+  ctx.fillStyle = isRowsStretched ? tokens.accent : tokens.text3;
+  ctx.fillText(visRows <= 30 ? `-${midAgeSec.toFixed(1)}s` : `-${midAgeSec.toFixed(0)}s`, L - 6, T + plotH / 2);
+  ctx.fillText(visRows <= 30 ? `-${botAgeSec.toFixed(1)}s` : `-${botAgeSec.toFixed(0)}s`, L - 6, T + plotH - 6);
 
   // Vertical scrollbar track + thumb on the right margin when history exceeds 1 viewport
   const totalStored = Math.max(visRows, acc.history.length);

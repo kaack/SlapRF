@@ -104,7 +104,16 @@ export class DebugView extends Component {
   private signalYMin = DBM_MIN;
   private signalYMax = DBM_MAX;
   private signalYZoomBox: { y0: number; y1: number } | null = null;
-  private signalDrag: { mode: "undecided" | "time" | "ybox"; startX: number; startY: number; startEndN: number } | null = null;
+  private signalDrag: {
+    mode: "undecided" | "time" | "ybox" | "xstretch" | "ystretch";
+    startX: number;
+    startY: number;
+    startEndN: number;
+    startWindowSec: number;
+    startYMin: number;
+    startYMax: number;
+    anchorFrac: number;
+  } | null = null;
   private signalEnabledCh: boolean[] = [true, true, true, true, true, true, true, true];
   private signalShowFloor = true;
   private signalShowHitLine = true;
@@ -116,16 +125,31 @@ export class DebugView extends Component {
   private scanShowWifi = true;
   private scanZoomStartMHz: number | null = null;
   private scanZoomStopMHz: number | null = null;
+  private scanYMin = DBM_MIN;
+  private scanYMax = DBM_MAX;
   private scanZoomBox: { x0: number; x1: number } | null = null;
   private scanHover: { x: number; y: number } | null = null;
   private waterfallHover: { x: number; y: number } | null = null;
   private wfDragging: {
-    mode: "undecided" | "pan" | "scrollbar" | "zoom";
+    mode: "undecided" | "pan" | "scrollbar" | "zoom" | "ystretch" | "xstretch";
     startX: number;
     startY: number;
     startScroll: number;
+    startVisibleRows: number;
+    startMHz0: number;
+    startMHz1: number;
+    anchorFrac: number;
   } | null = null;
-  private specDragging: { startX: number } | null = null;
+  private specDragging: {
+    mode: "zoom" | "ystretch" | "xstretch";
+    startX: number;
+    startY: number;
+    startYMin: number;
+    startYMax: number;
+    startMHz0: number;
+    startMHz1: number;
+    anchorFrac: number;
+  } | null = null;
 
   private dirtySignal = true;
   private dirtyNoiseTable = true;
@@ -165,7 +189,7 @@ export class DebugView extends Component {
       onLive: (s) => {
         this.live = s;
         this.liveCount++;
-        this.signalRing.push(s, this.status?.sweepHz ?? 50);
+        this.signalRing.push(s, this.status?.sweepHz ?? 50, this.liveMode);
         this.updateLive();
         if (this.signalEndN === null) {
           this.dirtySignal = true;
@@ -404,6 +428,70 @@ export class DebugView extends Component {
     }
   }
 
+  private applyFreqStretch(startMHz0: number, startMHz1: number, anchorFrac: number, factor: number): void {
+    const s = this.spectrumAcc.latest;
+    if (!s || !s.dbm.length) return;
+    const fullStart = s.start;
+    const fullStop = s.start + s.step * (s.dbm.length - 1);
+    const fullSpan = Math.max(10, fullStop - fullStart);
+    const curSpan = Math.max(10, startMHz1 - startMHz0);
+    const minSpan = Math.max(10, s.step * 3);
+    const nextSpan = Math.max(minSpan, Math.min(fullSpan, curSpan * factor));
+    const anchorMHz = startMHz0 + anchorFrac * curSpan;
+    let f0 = Math.round(anchorMHz - anchorFrac * nextSpan);
+    let f1 = Math.round(f0 + nextSpan);
+    if (f0 < fullStart) {
+      f0 = fullStart;
+      f1 = Math.min(fullStop, Math.round(fullStart + nextSpan));
+    }
+    if (f1 > fullStop) {
+      f1 = fullStop;
+      f0 = Math.max(fullStart, Math.round(fullStop - nextSpan));
+    }
+    if (f0 <= fullStart && f1 >= fullStop) {
+      this.scanZoomStartMHz = null;
+      this.scanZoomStopMHz = null;
+    } else {
+      this.scanZoomStartMHz = f0;
+      this.scanZoomStopMHz = f1;
+    }
+    this.dirtySpectrum = true;
+    this.dirtyWaterfall = true;
+  }
+
+  private applyDbmStretch(
+    startMin: number,
+    startMax: number,
+    anchorFrac: number,
+    factor: number,
+    target: "signal" | "scan"
+  ): void {
+    const curSpan = Math.max(6, startMax - startMin);
+    const nextSpan = Math.max(6, Math.min(DBM_MAX - DBM_MIN, curSpan * factor));
+    const anchorDbm = startMin + anchorFrac * curSpan;
+    let nextMin = Math.round(anchorDbm - anchorFrac * nextSpan);
+    let nextMax = Math.round(nextMin + nextSpan);
+    if (nextMin < DBM_MIN) {
+      nextMin = DBM_MIN;
+      nextMax = Math.min(DBM_MAX, Math.round(DBM_MIN + nextSpan));
+    }
+    if (nextMax > DBM_MAX) {
+      nextMax = DBM_MAX;
+      nextMin = Math.max(DBM_MIN, Math.round(DBM_MAX - nextSpan));
+    }
+    if (target === "signal") {
+      this.signalYMin = nextMin;
+      this.signalYMax = nextMax;
+      this.dirtySignal = true;
+    } else {
+      this.scanYMin = nextMin;
+      this.scanYMax = nextMax;
+      this.spectrumAcc.setColorRange(nextMin, Math.min(-25, nextMax));
+      this.dirtySpectrum = true;
+      this.dirtyWaterfall = true;
+    }
+  }
+
   private bindCanvasHover(): void {
     const scrubScrollbar = (canvas: HTMLElement, clientY: number) => {
       const r = canvas.getBoundingClientRect();
@@ -421,38 +509,162 @@ export class DebugView extends Component {
         const r = target.getBoundingClientRect();
         const x = e.clientX - r.left;
         const y = e.clientY - r.top;
-        // Dragging on Y-axis gutter (< 48px) or holding Shift starts immediate Y-axis box zoom
-        if (x < 48 || e.shiftKey) {
-          this.signalDrag = { mode: "ybox", startX: x, startY: y, startEndN: this.signalViewEndN() };
+        const T = 12;
+        const L = 44;
+        const plotH = Math.max(10, r.height - T - 26);
+        const plotW = Math.max(10, r.width - L - 14);
+        if (x < 48) {
+          // Dragging on left Y-axis stretches/shrinks the dBm scale
+          const yFrac = Math.max(0, Math.min(1, 1 - (y - T) / plotH));
+          this.signalDrag = {
+            mode: "ystretch",
+            startX: x,
+            startY: y,
+            startEndN: this.signalViewEndN(),
+            startWindowSec: this.signalWindowSec,
+            startYMin: this.signalYMin,
+            startYMax: this.signalYMax,
+            anchorFrac: yFrac,
+          };
+        } else if (y >= r.height - 26 && x >= L) {
+          // Dragging on bottom X-axis stretches/shrinks the time window scale
+          const xFrac = Math.max(0, Math.min(1, (x - L) / plotW));
+          this.signalDrag = {
+            mode: "xstretch",
+            startX: x,
+            startY: y,
+            startEndN: this.signalViewEndN(),
+            startWindowSec: this.signalWindowSec,
+            startYMin: this.signalYMin,
+            startYMax: this.signalYMax,
+            anchorFrac: xFrac,
+          };
+        } else if (e.shiftKey) {
+          this.signalDrag = {
+            mode: "ybox",
+            startX: x,
+            startY: y,
+            startEndN: this.signalViewEndN(),
+            startWindowSec: this.signalWindowSec,
+            startYMin: this.signalYMin,
+            startYMax: this.signalYMax,
+            anchorFrac: 0.5,
+          };
           this.signalYZoomBox = { y0: y, y1: y };
         } else {
-          this.signalDrag = { mode: "undecided", startX: x, startY: y, startEndN: this.signalViewEndN() };
+          this.signalDrag = {
+            mode: "undecided",
+            startX: x,
+            startY: y,
+            startEndN: this.signalViewEndN(),
+            startWindowSec: this.signalWindowSec,
+            startYMin: this.signalYMin,
+            startYMax: this.signalYMax,
+            anchorFrac: 0.5,
+          };
         }
       } else if (target.matches("[data-spectrum-canvas]")) {
         const r = target.getBoundingClientRect();
         const x = e.clientX - r.left;
-        if (x >= 44 && x <= r.width - 14 && this.spectrumAcc.latest) {
-          this.specDragging = { startX: x };
+        const y = e.clientY - r.top;
+        const T = 12;
+        const L = 44;
+        const plotH = Math.max(10, r.height - T - 26);
+        const plotW = Math.max(10, r.width - L - 14);
+        const bounds = this.currentScanBounds();
+        if (!bounds) return;
+        if (x < 48) {
+          const yFrac = Math.max(0, Math.min(1, 1 - (y - T) / plotH));
+          this.specDragging = {
+            mode: "ystretch",
+            startX: x,
+            startY: y,
+            startYMin: this.scanYMin,
+            startYMax: this.scanYMax,
+            startMHz0: bounds.vStart,
+            startMHz1: bounds.vStop,
+            anchorFrac: yFrac,
+          };
+        } else if (y >= r.height - 26 && x >= L) {
+          const xFrac = Math.max(0, Math.min(1, (x - L) / plotW));
+          this.specDragging = {
+            mode: "xstretch",
+            startX: x,
+            startY: y,
+            startYMin: this.scanYMin,
+            startYMax: this.scanYMax,
+            startMHz0: bounds.vStart,
+            startMHz1: bounds.vStop,
+            anchorFrac: xFrac,
+          };
+        } else if (x >= L && x <= r.width - 14) {
+          this.specDragging = {
+            mode: "zoom",
+            startX: x,
+            startY: y,
+            startYMin: this.scanYMin,
+            startYMax: this.scanYMax,
+            startMHz0: bounds.vStart,
+            startMHz1: bounds.vStop,
+            anchorFrac: 0.5,
+          };
           this.scanZoomBox = { x0: x, x1: x };
           this.dirtySpectrum = true;
         }
       } else if (target.matches("[data-waterfall-canvas]")) {
         const r = target.getBoundingClientRect();
         const x = e.clientX - r.left;
-        if (x >= r.width - 28 && this.spectrumAcc.maxScrollRow() > 0) {
+        const y = e.clientY - r.top;
+        const L = 44;
+        const plotW = Math.max(10, r.width - L - 18);
+        const bounds = this.currentScanBounds();
+        if (x < 48 && this.spectrumAcc.history.length > 0) {
+          // Dragging on Waterfall Y-axis stretches/shrinks vertical time scale (visibleRows)
+          this.wfDragging = {
+            mode: "ystretch",
+            startX: x,
+            startY: e.clientY,
+            startScroll: this.spectrumAcc.scrollRow,
+            startVisibleRows: this.spectrumAcc.visibleRows,
+            startMHz0: bounds?.vStart ?? 5180,
+            startMHz1: bounds?.vStop ?? 5917,
+            anchorFrac: 0,
+          };
+        } else if (y >= r.height - 24 && x >= L && bounds) {
+          // Dragging on Waterfall X-axis stretches/shrinks MHz span
+          const xFrac = Math.max(0, Math.min(1, (x - L) / plotW));
+          this.wfDragging = {
+            mode: "xstretch",
+            startX: x,
+            startY: e.clientY,
+            startScroll: this.spectrumAcc.scrollRow,
+            startVisibleRows: this.spectrumAcc.visibleRows,
+            startMHz0: bounds.vStart,
+            startMHz1: bounds.vStop,
+            anchorFrac: xFrac,
+          };
+        } else if (x >= r.width - 28 && this.spectrumAcc.maxScrollRow() > 0) {
           this.wfDragging = {
             mode: "scrollbar",
             startX: x,
             startY: e.clientY,
             startScroll: this.spectrumAcc.scrollRow,
+            startVisibleRows: this.spectrumAcc.visibleRows,
+            startMHz0: bounds?.vStart ?? 5180,
+            startMHz1: bounds?.vStop ?? 5917,
+            anchorFrac: 0,
           };
           scrubScrollbar(target, e.clientY);
-        } else if (x >= 44 && x < r.width - 18) {
+        } else if (x >= L && x < r.width - 18) {
           this.wfDragging = {
             mode: "undecided",
             startX: x,
             startY: e.clientY,
             startScroll: this.spectrumAcc.scrollRow,
+            startVisibleRows: this.spectrumAcc.visibleRows,
+            startMHz0: bounds?.vStart ?? 5180,
+            startMHz1: bounds?.vStop ?? 5917,
+            anchorFrac: 0.5,
           };
         }
       }
@@ -475,21 +687,23 @@ export class DebugView extends Component {
               if (dHigh - dLow >= 4) {
                 this.signalYMin = Math.max(DBM_MIN, dLow);
                 this.signalYMax = Math.min(DBM_MAX, dHigh);
-                this.renderSignalControls();
               }
             }
           }
         }
         this.signalDrag = null;
         this.signalYZoomBox = null;
+        this.renderSignalControls();
         this.dirtySignal = true;
       }
 
       if (this.specDragging) {
         const c = this.el.querySelector<HTMLElement>("[data-spectrum-canvas]");
-        if (c && this.scanZoomBox) {
+        if (c && this.specDragging.mode === "zoom" && this.scanZoomBox) {
           const r = c.getBoundingClientRect();
           this.applyFreqZoomFromBox(this.scanZoomBox, Math.max(10, r.width - 44 - 14), 44);
+        } else {
+          this.renderScan();
         }
         this.specDragging = null;
         this.scanZoomBox = null;
@@ -504,6 +718,8 @@ export class DebugView extends Component {
             const r = c.getBoundingClientRect();
             this.applyFreqZoomFromBox(this.scanZoomBox, Math.max(10, r.width - 44 - 18), 44);
           }
+        } else if (this.wfDragging.mode === "ystretch" || this.wfDragging.mode === "xstretch") {
+          this.renderScan();
         }
         this.wfDragging = null;
         this.scanZoomBox = null;
@@ -522,11 +738,13 @@ export class DebugView extends Component {
         this.dirtySignal = true;
         this.dirtyNoiseTable = true;
       } else if (target.matches("[data-spectrum-canvas], [data-waterfall-canvas]")) {
-        if (this.scanZoomStartMHz !== null || this.scanZoomStopMHz !== null) {
-          this.scanZoomStartMHz = null;
-          this.scanZoomStopMHz = null;
-          this.renderScan();
-        }
+        this.scanZoomStartMHz = null;
+        this.scanZoomStopMHz = null;
+        this.scanYMin = DBM_MIN;
+        this.scanYMax = DBM_MAX;
+        this.spectrumAcc.setColorRange(-100, -40);
+        this.spectrumAcc.setVisibleRows(80);
+        this.renderScan();
       }
     });
 
@@ -543,7 +761,24 @@ export class DebugView extends Component {
           if (this.signalDrag.mode === "undecided" && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
             this.signalDrag.mode = Math.abs(dy) > Math.abs(dx) * 1.5 ? "ybox" : "time";
           }
-          if (this.signalDrag.mode === "ybox") {
+          if (this.signalDrag.mode === "ystretch") {
+            // Dragging UP stretches Y (zooms in to smaller dBm span); dragging DOWN shrinks back to full span
+            const factor = Math.exp(dy / 110);
+            this.applyDbmStretch(this.signalDrag.startYMin, this.signalDrag.startYMax, this.signalDrag.anchorFrac, factor, "signal");
+          } else if (this.signalDrag.mode === "xstretch") {
+            // Dragging RIGHT stretches X (smaller windowSec so signals spread out); dragging LEFT shrinks X
+            const factor = Math.exp(-dx / 120);
+            const nextSec = Math.max(0.4, Math.min(120, Number((this.signalDrag.startWindowSec * factor).toFixed(2))));
+            const sweepHz = this.status?.sweepHz ?? 50;
+            const anchorN =
+              this.signalDrag.startEndN - (1 - this.signalDrag.anchorFrac) * this.signalDrag.startWindowSec * sweepHz;
+            this.signalWindowSec = nextSec;
+            if (this.signalEndN !== null) {
+              this.signalEndN = this.clampSignalEndN(anchorN + (1 - this.signalDrag.anchorFrac) * nextSec * sweepHz);
+            }
+            this.dirtySignal = true;
+            this.dirtyNoiseTable = true;
+          } else if (this.signalDrag.mode === "ybox") {
             this.signalYZoomBox = { y0: this.signalDrag.startY, y1: y };
             this.dirtySignal = true;
           } else if (this.signalDrag.mode === "time") {
@@ -563,9 +798,21 @@ export class DebugView extends Component {
         const spec = this.el.querySelector<HTMLElement>("[data-spectrum-canvas]");
         if (spec) {
           const r = spec.getBoundingClientRect();
-          const x = Math.max(44, Math.min(r.width - 14, e.clientX - r.left));
-          this.scanZoomBox = { x0: this.specDragging.startX, x1: x };
-          this.dirtySpectrum = true;
+          const x = e.clientX - r.left;
+          const y = e.clientY - r.top;
+          if (this.specDragging.mode === "ystretch") {
+            const dy = y - this.specDragging.startY;
+            const factor = Math.exp(dy / 110);
+            this.applyDbmStretch(this.specDragging.startYMin, this.specDragging.startYMax, this.specDragging.anchorFrac, factor, "scan");
+          } else if (this.specDragging.mode === "xstretch") {
+            const dx = x - this.specDragging.startX;
+            const factor = Math.exp(-dx / 120);
+            this.applyFreqStretch(this.specDragging.startMHz0, this.specDragging.startMHz1, this.specDragging.anchorFrac, factor);
+          } else if (this.specDragging.mode === "zoom") {
+            const clampedX = Math.max(44, Math.min(r.width - 14, x));
+            this.scanZoomBox = { x0: this.specDragging.startX, x1: clampedX };
+            this.dirtySpectrum = true;
+          }
         }
       }
 
@@ -579,7 +826,16 @@ export class DebugView extends Component {
           if (this.wfDragging.mode === "undecided" && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
             this.wfDragging.mode = Math.abs(dx) >= Math.abs(dy) ? "zoom" : "pan";
           }
-          if (this.wfDragging.mode === "scrollbar") {
+          if (this.wfDragging.mode === "ystretch") {
+            // Dragging UP stretches rows (fewer visible passes = taller rows); dragging DOWN compresses more passes
+            const factor = Math.exp(dy / 110);
+            this.spectrumAcc.setVisibleRows(this.wfDragging.startVisibleRows * factor);
+            this.updateScanFindings();
+            this.dirtyWaterfall = true;
+          } else if (this.wfDragging.mode === "xstretch") {
+            const factor = Math.exp(-dx / 120);
+            this.applyFreqStretch(this.wfDragging.startMHz0, this.wfDragging.startMHz1, this.wfDragging.anchorFrac, factor);
+          } else if (this.wfDragging.mode === "scrollbar") {
             scrubScrollbar(wf, e.clientY);
           } else if (this.wfDragging.mode === "zoom") {
             const clampedX = Math.max(44, Math.min(r.width - 18, x));
@@ -596,18 +852,28 @@ export class DebugView extends Component {
         }
       }
 
-      if (target.matches("[data-signal-canvas]")) {
+      if (target.matches("[data-signal-canvas], [data-spectrum-canvas], [data-waterfall-canvas]")) {
         const r = target.getBoundingClientRect();
-        this.signalHover = { x: e.clientX - r.left, y: e.clientY - r.top };
-        this.dirtySignal = true;
-      } else if (target.matches("[data-spectrum-canvas]")) {
-        const r = target.getBoundingClientRect();
-        this.scanHover = { x: e.clientX - r.left, y: e.clientY - r.top };
-        this.dirtySpectrum = true;
-      } else if (target.matches("[data-waterfall-canvas]")) {
-        const r = target.getBoundingClientRect();
-        this.waterfallHover = { x: e.clientX - r.left, y: e.clientY - r.top };
-        this.dirtyWaterfall = true;
+        const x = e.clientX - r.left;
+        const y = e.clientY - r.top;
+        // Set axis resize cursor when hovering over left Y-axis or bottom X-axis
+        if (x < 48 || (target.matches("[data-waterfall-canvas]") && x >= r.width - 28)) {
+          target.style.cursor = "ns-resize";
+        } else if (y >= r.height - 26 && x >= 44) {
+          target.style.cursor = "ew-resize";
+        } else {
+          target.style.cursor = "crosshair";
+        }
+        if (target.matches("[data-signal-canvas]")) {
+          this.signalHover = { x, y };
+          this.dirtySignal = true;
+        } else if (target.matches("[data-spectrum-canvas]")) {
+          this.scanHover = { x, y };
+          this.dirtySpectrum = true;
+        } else if (target.matches("[data-waterfall-canvas]")) {
+          this.waterfallHover = { x, y };
+          this.dirtyWaterfall = true;
+        }
       }
     });
     this.listen(this.el, "mouseout", (e) => {
@@ -638,25 +904,10 @@ export class DebugView extends Component {
             const T = 12;
             const plotH = Math.max(10, r.height - T - 26);
             const yFrac = Math.max(0, Math.min(1, 1 - (y - T) / plotH));
-            const curSpan = this.signalYMax - this.signalYMin;
-            const anchorDbm = this.signalYMin + yFrac * curSpan;
-            const nextSpan = Math.max(6, Math.min(DBM_MAX - DBM_MIN, curSpan * factor));
-            let nextMin = Math.round(anchorDbm - yFrac * nextSpan);
-            let nextMax = Math.round(nextMin + nextSpan);
-            if (nextMin < DBM_MIN) {
-              nextMin = DBM_MIN;
-              nextMax = Math.min(DBM_MAX, Math.round(DBM_MIN + nextSpan));
-            }
-            if (nextMax > DBM_MAX) {
-              nextMax = DBM_MAX;
-              nextMin = Math.max(DBM_MIN, Math.round(DBM_MAX - nextSpan));
-            }
-            this.signalYMin = nextMin;
-            this.signalYMax = nextMax;
+            this.applyDbmStretch(this.signalYMin, this.signalYMax, yFrac, factor, "signal");
             this.renderSignalControls();
-            this.dirtySignal = true;
           } else {
-            // Wheel on plot zooms the time window (1 s .. 120 s) around cursor X, matching PilotRssiChart
+            // Wheel on plot or X-axis zooms the time window (0.4 s .. 120 s) around cursor X
             const L = 44;
             const plotW = Math.max(10, r.width - L - 14);
             const sweepHz = this.status?.sweepHz ?? 50;
@@ -664,7 +915,7 @@ export class DebugView extends Component {
             const curEndN = this.signalViewEndN();
             const curSweeps = this.signalWindowSec * sweepHz;
             const anchorN = curEndN - (1 - frac) * curSweeps;
-            const nextSec = Math.max(1, Math.min(120, Number((this.signalWindowSec * factor).toFixed(1))));
+            const nextSec = Math.max(0.4, Math.min(120, Number((this.signalWindowSec * factor).toFixed(2))));
             this.signalWindowSec = nextSec;
             if (this.signalEndN !== null) {
               this.signalEndN = this.clampSignalEndN(anchorN + (1 - frac) * nextSec * sweepHz);
@@ -675,7 +926,40 @@ export class DebugView extends Component {
           }
           return;
         }
+        if (target.matches("[data-spectrum-canvas]")) {
+          const r = target.getBoundingClientRect();
+          const x = e.clientX - r.left;
+          const y = e.clientY - r.top;
+          const factor = e.deltaY > 0 ? 1.25 : 0.8;
+          if (x < 48 || e.shiftKey) {
+            e.preventDefault();
+            const T = 12;
+            const plotH = Math.max(10, r.height - T - 26);
+            const yFrac = Math.max(0, Math.min(1, 1 - (y - T) / plotH));
+            this.applyDbmStretch(this.scanYMin, this.scanYMax, yFrac, factor, "scan");
+            this.renderScan();
+          } else if (y >= r.height - 26 && x >= 44) {
+            e.preventDefault();
+            const bounds = this.currentScanBounds();
+            if (bounds) {
+              const plotW = Math.max(10, r.width - 44 - 14);
+              const xFrac = Math.max(0, Math.min(1, (x - 44) / plotW));
+              this.applyFreqStretch(bounds.vStart, bounds.vStop, xFrac, factor);
+              this.renderScan();
+            }
+          }
+          return;
+        }
         if (!target.matches("[data-waterfall-canvas]")) return;
+        const r = target.getBoundingClientRect();
+        const x = e.clientX - r.left;
+        const factor = e.deltaY > 0 ? 1.25 : 0.8;
+        if (x < 48 || e.shiftKey) {
+          e.preventDefault();
+          this.spectrumAcc.setVisibleRows(this.spectrumAcc.visibleRows * factor);
+          this.renderScan();
+          return;
+        }
         if (this.spectrumAcc.maxScrollRow() <= 0) return;
         e.preventDefault();
         const step = Math.sign(e.deltaY) * Math.max(2, Math.round(Math.abs(e.deltaY) / 10));
@@ -727,6 +1011,8 @@ export class DebugView extends Component {
           showWifiOverlay: this.scanShowWifi,
           viewStartMHz: this.scanZoomStartMHz,
           viewStopMHz: this.scanZoomStopMHz,
+          yMinDbm: this.scanYMin,
+          yMaxDbm: this.scanYMax,
           zoomBox: this.scanZoomBox,
           hover: this.scanHover,
         });
@@ -931,6 +1217,12 @@ export class DebugView extends Component {
           this.renderSignalControls();
           this.dirtySignal = true;
           break;
+        case "signal-reset-x":
+          this.signalWindowSec = 30;
+          this.renderSignalControls();
+          this.dirtySignal = true;
+          this.dirtyNoiseTable = true;
+          break;
         case "signal-zoom-floor":
           this.signalYMin = -102;
           this.signalYMax = -68;
@@ -1027,9 +1319,19 @@ export class DebugView extends Component {
           this.updateScanFindings();
           this.dirtyWaterfall = true;
           break;
+        case "wf-reset-rows":
+          this.spectrumAcc.setVisibleRows(80);
+          this.renderScan();
+          break;
         case "scan-reset-zoom":
           this.scanZoomStartMHz = null;
           this.scanZoomStopMHz = null;
+          this.renderScan();
+          break;
+        case "scan-reset-y":
+          this.scanYMin = DBM_MIN;
+          this.scanYMax = DBM_MAX;
+          this.spectrumAcc.setColorRange(-100, -40);
           this.renderScan();
           break;
         case "scan-preset": {
@@ -1690,14 +1992,16 @@ export class DebugView extends Component {
         : isLive
           ? "Following live 50 Hz stream — click to pause, or drag the chart to scroll back"
           : "Paused / scrolled back — click to jump back to live";
+    const presets = [1, 2, 5, 10, 30, 120] as const;
+    const isCustomWindow = !presets.some((w) => Math.abs(this.signalWindowSec - w) < 0.05);
     this.slot("signal-controls").innerHTML = `
       <div class="debug-card-head">
         <div class="debug-toolbar-left">
           <div class="segmented" role="group" aria-label="Time window">
-            ${([5, 10, 30, 120] as const)
+            ${presets
               .map(
                 (w) =>
-                  `<button type="button" class="${Math.round(this.signalWindowSec) === w ? "is-active" : ""}" data-action="signal-window" data-win="${w}">${w === 120 ? "2 min" : `${w} s`}</button>`
+                  `<button type="button" class="${Math.abs(this.signalWindowSec - w) < 0.05 ? "is-active" : ""}" data-action="signal-window" data-win="${w}" title="Set X-axis time window to ${w === 120 ? "2 minutes" : `${w} seconds`} (or drag horizontally on the X-axis)">${w === 120 ? "2 min" : `${w} s`}</button>`
               )
               .join("")}
           </div>
@@ -1717,6 +2021,11 @@ export class DebugView extends Component {
           </div>
         </div>
         <div class="debug-connect-actions">
+          ${
+            isCustomWindow
+              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="signal-reset-x" title="Reset X-axis time window to 30 s">${icons.target(13)}<span>X: ${this.signalWindowSec < 10 ? this.signalWindowSec.toFixed(1) : Math.round(this.signalWindowSec)} s ×</span></button>`
+              : ""
+          }
           ${
             isYZoomed
               ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="signal-reset-y" title="Reset Y-axis dBm zoom to full scale (${DBM_MIN}…${DBM_MAX} dBm)">${icons.target(13)}<span>Y: ${this.signalYMin}…${this.signalYMax} dBm ×</span></button>`
@@ -1743,7 +2052,7 @@ export class DebugView extends Component {
           <button type="button" class="btn btn-sm btn-ghost debug-ch-all-btn" data-action="signal-ch-all">${allOn ? "Hide all" : "Show all"}</button>
         </div>
         <div class="debug-connect-actions">
-          <span class="note debug-chart-hint">${liveFollowOn ? "Drag to scroll time · wheel to zoom · drag Y-axis to zoom dBm" : "Paused · drag to scroll · double-click to reset"}</span>
+          <span class="note debug-chart-hint">${liveFollowOn ? "Drag X/Y axes to stretch · drag chart to scroll · wheel to zoom" : "Paused · drag X/Y axes to stretch · double-click to reset"}</span>
           <div class="debug-btn-group" role="group" aria-label="Export signal chart">
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts ? "" : "disabled"} title="Download recorded 50 Hz samples as CSV">CSV</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-png" ${hasPts ? "" : "disabled"} title="Save chart snapshot as PNG">PNG</button>
@@ -1864,6 +2173,8 @@ export class DebugView extends Component {
     const isFast15 = prev.start === "5180" && prev.stop === "5917" && prev.step === "15";
     const isRb5 = prev.start === "5650" && prev.stop === "5925" && prev.step === "5";
     const isFreqZoomed = this.scanZoomStartMHz !== null && this.scanZoomStopMHz !== null;
+    const isScanYZoomed = this.scanYMin !== DBM_MIN || this.scanYMax !== DBM_MAX;
+    const isWfRowsZoomed = this.spectrumAcc.visibleRows !== 80;
     const canScanOnce = on && rfOn && !this.scanning && !this.scanLive;
     const canScanLive = on && rfOn && !this.scanning;
     this.slot("scan").innerHTML = `
@@ -1909,11 +2220,17 @@ export class DebugView extends Component {
           <button type="button" class="btn btn-sm btn-ghost" data-action="clear-hold" ${hasScan ? "" : "disabled"}>Reset hold/avg</button>
           ${
             isFreqZoomed
-              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="scan-reset-zoom" title="Reset frequency box zoom (or double-click chart)">${icons.target(13)}<span>Zoom: ${this.scanZoomStartMHz}–${this.scanZoomStopMHz} MHz ×</span></button>`
+              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="scan-reset-zoom" title="Reset frequency zoom (or double-click chart)">${icons.target(13)}<span>X: ${this.scanZoomStartMHz}–${this.scanZoomStopMHz} MHz ×</span></button>`
+              : ""
+          }
+          ${
+            isScanYZoomed
+              ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="scan-reset-y" title="Reset Spectrum Y-axis dBm range (or double-click chart)">${icons.target(13)}<span>Y: ${this.scanYMin}…${this.scanYMax} dBm ×</span></button>`
               : ""
           }
         </div>
         <div class="debug-connect-actions">
+          <span class="note debug-chart-hint">Drag box to zoom MHz · drag X/Y axes to stretch</span>
           <div class="debug-btn-group" role="group" aria-label="Export spectrum & waterfall">
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-scan-csv" ${hasScan ? "" : "disabled"} title="Export waterfall scan history as CSV">CSV</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-png" ${hasScan ? "" : "disabled"} title="Save spectrum trace as PNG">Spectrum PNG</button>
@@ -1932,11 +2249,16 @@ export class DebugView extends Component {
             <span class="note mono" data-wf-scroll-note></span>
           </div>
           <div class="debug-connect-actions">
+            ${
+              isWfRowsZoomed
+                ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="wf-reset-rows" title="Reset waterfall Y-axis pass depth to 80 passes">${icons.target(13)}<span>Y: ${this.spectrumAcc.visibleRows} passes ×</span></button>`
+                : ""
+            }
             <button type="button" class="btn btn-sm btn-ghost" data-action="wf-jump-live" data-wf-jump-btn disabled>Jump to live</button>
-            <div class="debug-waterfall-legend mono">
-              <span>-100 dBm</span>
+            <div class="debug-waterfall-legend mono" title="Color scale follows Spectrum Y-axis range">
+              <span>${this.spectrumAcc.colorMinDbm} dBm</span>
               <span class="debug-wf-gradient"></span>
-              <span>-40 dBm</span>
+              <span>${this.spectrumAcc.colorMaxDbm} dBm</span>
             </div>
           </div>
         </div>
