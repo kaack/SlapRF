@@ -57,12 +57,12 @@ export const icons = {
     svg(`<path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/><path d="m15 5 4 4"/>`, s),
   plug: (s?: number) =>
     svg(
-      `<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/>`,
+      `<path d="M12 20.5V16"/><path d="M9.5 8.5V3.5"/><path d="M14.5 8.5V3.5"/><path d="M17.5 8.5v4a3.5 3.5 0 0 1-3.5 3.5h-4a3.5 3.5 0 0 1-3.5-3.5v-4Z"/>`,
       s
     ),
   plugOff: (s?: number) =>
     svg(
-      `<path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a4 4 0 0 1-1.2 2.8"/><path d="M13.5 17H10a4 4 0 0 1-4-4V8h2"/><path d="m2 2 20 20"/>`,
+      `<path d="M12 20.5V16"/><path d="M9.5 6V3.5"/><path d="M14.5 8.5V3.5"/><path d="M12 8.5h5.5v4a3.5 3.5 0 0 1-.8 2.2"/><path d="M13.2 16H10a3.5 3.5 0 0 1-3.5-3.5V9"/><path d="m4 4 16 16"/>`,
       s
     ),
   bug: (s?: number) =>
