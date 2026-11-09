@@ -1273,9 +1273,9 @@ body.is-gate-dragging * {
 .rules-foot .note {
   margin-right: auto;
 }
-.debug-subbox > .rules-foot {
+.debug-subbox .rules-foot {
   margin: 12px -16px -13px;
-  padding: 11px 16px;
+  padding: 12px 16px;
 }
 
 .seg-count {
