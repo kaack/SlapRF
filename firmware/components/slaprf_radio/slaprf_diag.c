@@ -74,6 +74,8 @@ static SemaphoreHandle_t s_tx_lock;
 
 static volatile uint8_t s_live; // 0 off, 1 ~10 lines/s with peaks, 2 every sweep
 static volatile bool s_log;
+static volatile bool s_hub_usb_stream;
+static uint8_t s_usb_hellos[7][36];
 static volatile bool s_rf_enabled = true;
 static volatile bool s_reboot_pending;
 static volatile int64_t s_last_cmd_us;
@@ -211,6 +213,7 @@ static void tx_line_nowait(const char *s) {
             s_live = 0;
             s_scan_live = false;
             s_log = false;
+            s_hub_usb_stream = false;
             s_tx_drops = 0;
         }
     } else {
@@ -650,6 +653,65 @@ static void handle_channels(const char *args) {
     tx_line(reply);
 }
 
+static void handle_netchannels(const char *args) {
+    while (*args == ' ') args++;
+    uint16_t f[8] = {0};
+    int count = 0;
+    const char *p = args;
+    while (*p && count < 8) {
+        char *end;
+        long v = strtol(p, &end, 10);
+        if (end == p) break;
+        if (v >= RF_MIN_MHZ && v <= RF_MAX_MHZ) {
+            f[count++] = (uint16_t)v;
+        } else {
+            f[count++] = 0;
+        }
+        p = end;
+        while (*p == ',' || *p == ' ') p++;
+    }
+    if (count != 8) {
+        tx_line("@{\"t\":\"err\",\"msg\":\"NETCHANNELS needs 8 values\"}\n");
+        return;
+    }
+    slaprf_diag_set_net_channels(f);
+    tx_line("@{\"t\":\"ok\",\"cmd\":\"netchannels\"}\n");
+}
+
+static void send_usb_pkt_line(const uint8_t *raw, uint32_t len, bool blocking) {
+    if (raw == NULL || len == 0 || len > 180) return;
+    static const char hex_lut[16] = {'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
+    char line[24 + 360 + 8];
+    int n = snprintf(line, sizeof(line), "@{\"t\":\"pkt\",\"hex\":\"");
+    for (uint32_t i = 0; i < len && n < (int)sizeof(line) - 6; i++) {
+        line[n++] = hex_lut[(raw[i] >> 4) & 0x0F];
+        line[n++] = hex_lut[raw[i] & 0x0F];
+    }
+    line[n++] = '"';
+    line[n++] = '}';
+    line[n++] = '\n';
+    line[n] = 0;
+    if (blocking) {
+        tx_raw(line, (size_t)n);
+    } else {
+        tx_line_nowait(line);
+    }
+}
+
+void slaprf_diag_forward_hub_frame(const void *frame, uint32_t len) {
+    const uint8_t *f = (const uint8_t *)frame;
+    if (f == NULL || len < 4 || len > 180) return;
+    if (len == 36 && f[0] == 0xC5 && f[1] == 0x5A && f[2] >= 1 && f[2] <= 7) {
+        memcpy(s_usb_hellos[f[2] - 1], f, 36);
+    }
+    if (!s_hub_usb_stream || s_scan_live || s_emergency_mode) return;
+    if (s_last_cmd_us == 0 || (esp_timer_get_time() - s_last_cmd_us) > 15000000LL) {
+        s_hub_usb_stream = false;
+        return;
+    }
+    send_usb_pkt_line(f, len, false);
+}
+
 static void handle_command(char *line) {
     s_last_cmd_us = esp_timer_get_time();
     if (strcmp(line, "SLAPRF?") == 0) {
@@ -658,7 +720,20 @@ static void handle_command(char *line) {
         memcpy(copy, (const void *)s_cfg, len);
         tx_raw(copy, len);
     } else if (strcmp(line, "STATUS?") == 0) {
+        const bool was_streaming = s_hub_usb_stream;
+        if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1) {
+            s_hub_usb_stream = true;
+        }
         send_status();
+        if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1 && !was_streaming) {
+            for (int i = 0; i < 7; i++) {
+                if (s_usb_hellos[i][0] == 0xC5 && s_usb_hellos[i][1] == 0x5A) {
+                    send_usb_pkt_line(s_usb_hellos[i], 36, false);
+                }
+            }
+        }
+    } else if (strncmp(line, "NETCHANNELS", 11) == 0) {
+        handle_netchannels(line + 11);
     } else if (strncmp(line, "LIVE ", 5) == 0) {
         s_live = (!s_emergency_mode && line[5] == '2') ? 2 : (!s_emergency_mode && line[5] == '1') ? 1 : 0;
         if (s_live) memset(s_hits, 0, sizeof(s_hits)); // Don't report hits counted while paused

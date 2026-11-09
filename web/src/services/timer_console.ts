@@ -296,6 +296,7 @@ export interface ConsoleHandlers {
   onBootLog?: (l: BootLog) => void;
   onLog?: (line: string) => void;
   onRawReply?: (line: string, msgType?: string) => void;
+  onHubPacket?: (pkt: Uint8Array) => void;
   onConfig?: (c: TimerReadout) => void;
   onError?: (msg: string) => void;
   onConnect?: () => void;
@@ -593,6 +594,21 @@ export class TimerConsole {
     await this.writer.write(new TextEncoder().encode(command + "\n"));
   }
 
+  /**
+   * Decodes a 19-byte active pilot channel table frame (0xC5 0x5E + 8x uint16 LE + crc8) and
+   * forwards it over USB serial via `NETCHANNELS f0,f1,...,f7` when connected to a Hub.
+   */
+  public sendNetChannelsFromPacket(pkt19: Uint8Array): void {
+    if (!this.connected || pkt19.byteLength < 19 || pkt19[0] !== 0xc5 || pkt19[1] !== 0x5e) {
+      return;
+    }
+    const freqs: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      freqs.push(pkt19[2 + i * 2] | (pkt19[3 + i * 2] << 8));
+    }
+    void this.send(`NETCHANNELS ${freqs.join(",")}`).catch(() => undefined);
+  }
+
   /** Send `command` (optional) and resolve with the next message of `type` (`status`, `scan`, ...). */
   public request<T>(command: string | null, type: string, timeoutMs = 3000): Promise<T> {
     return new Promise<T>((resolve, reject) => {
@@ -769,7 +785,26 @@ export class TimerConsole {
     if (!line) return;
     if (line.startsWith("@{")) {
       try {
-        const msg = JSON.parse(line.slice(1)) as { t: string; msg?: string } & Record<string, unknown>;
+        const msg = JSON.parse(line.slice(1)) as { t: string; msg?: string; hex?: string } & Record<string, unknown>;
+        if (msg.t === "pkt" && typeof msg.hex === "string") {
+          const hex = msg.hex.trim();
+          if (hex.length >= 8 && hex.length % 2 === 0) {
+            const out = new Uint8Array(hex.length / 2);
+            let valid = true;
+            for (let i = 0; i < out.length; i++) {
+              const b = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+              if (Number.isNaN(b)) {
+                valid = false;
+                break;
+              }
+              out[i] = b;
+            }
+            if (valid) {
+              this.subscribers.forEach((h) => h.onHubPacket?.(out));
+            }
+          }
+          return;
+        }
         this.subscribers.forEach((h) => h.onRawReply?.(line, msg.t));
         this.resolveWaiters(msg.t, msg);
         switch (msg.t) {

@@ -122,6 +122,9 @@ void slaprf_diag_note_spoke_rx(uint8_t slot);
 /** Hub only: record a full received Spoke window/single frame (slot, seq, 8-ch dBm) for STATUS? Network view. */
 void slaprf_diag_note_spoke_frame(const uint8_t *frame, uint32_t len);
 
+/** Hub only: forward a binary Hub/Spoke frame (HELLO, WINDOW, SINGLE) over USB serial to browser WASM clients. */
+void slaprf_diag_forward_hub_frame(const void *frame, uint32_t len);
+
 /** Run a pending SCAN (call from the main loop while the timer is on its 2.4 GHz gap). */
 void slaprf_diag_service(void);
 

@@ -20,7 +20,7 @@ import (
 
 type wasmStreamSubscriber struct {
 	mu       sync.RWMutex
-	sim      *ingest.TrackSimulator
+	allow    func() bool
 	callback js.Value
 }
 
@@ -31,7 +31,7 @@ func (w *wasmStreamSubscriber) setCallback(cb js.Value) {
 }
 
 func (w *wasmStreamSubscriber) send(eventType string, payload interface{}) {
-	if !w.sim.IsRunning() {
+	if w.allow != nil && !w.allow() {
 		return
 	}
 	w.mu.RLock()
@@ -76,7 +76,10 @@ func (w *wasmStreamSubscriber) OnConfigUpdated(pilots []domain.PilotSlot, gates 
 	})
 }
 
-const simStorageKey = "slaprf.sim_state.v1"
+const (
+	simStorageKey  = "slaprf.sim_state.v1"
+	realStorageKey = "slaprf.real_state.v1"
+)
 
 type persistedSimBundle struct {
 	Engine  tracker.PersistedEngineState `json:"engine"`
@@ -105,20 +108,60 @@ func loadSimFromLocalStorage(simEngine *tracker.Engine, sim *ingest.TrackSimulat
 	return true
 }
 
+func loadRealFromLocalStorage(realEngine *tracker.Engine) bool {
+	ls := js.Global().Get("localStorage")
+	if ls.IsUndefined() || ls.IsNull() {
+		return false
+	}
+	val := ls.Call("getItem", realStorageKey)
+	if val.IsUndefined() || val.IsNull() {
+		return false
+	}
+	raw := val.String()
+	if raw == "" {
+		return false
+	}
+	var state tracker.PersistedEngineState
+	if err := json.Unmarshal([]byte(raw), &state); err != nil {
+		return false
+	}
+	realEngine.RestoreState(state, false)
+	return true
+}
+
 func main() {
 	simEngine := tracker.NewEngine()
+	realEngine := tracker.NewRealEngine()
 	sim := ingest.NewTrackSimulator(simEngine)
 	if !loadSimFromLocalStorage(simEngine, sim) {
 		sim.Prewarm(45 * time.Second)
 	}
+	_ = loadRealFromLocalStorage(realEngine)
 	sim.Start()
 
+	hubRx := ingest.NewWiFiUDPReceiver("", realEngine)
+	var hubCmdMu sync.RWMutex
+	var hubCmdCb js.Value
+	hubRx.SetOutboundSender(func(pkt []byte) {
+		hubCmdMu.RLock()
+		cb := hubCmdCb
+		hubCmdMu.RUnlock()
+		if cb.IsUndefined() || cb.IsNull() {
+			return
+		}
+		u8 := js.Global().Get("Uint8Array").New(len(pkt))
+		js.CopyBytesToJS(u8, pkt)
+		cb.Invoke(u8)
+	})
+
 	laprfSrv := laprf.NewServer(":5403", simEngine)
-	srv := api.NewServer(simEngine, sim, laprfSrv, "", simEngine)
+	srv := api.NewServer(simEngine, sim, laprfSrv, "", realEngine)
 	handler := srv.Handler()
 
-	streamSub := &wasmStreamSubscriber{sim: sim}
-	simEngine.Subscribe(streamSub)
+	simStreamSub := &wasmStreamSubscriber{allow: func() bool { return sim.IsRunning() }}
+	realStreamSub := &wasmStreamSubscriber{allow: func() bool { return !sim.IsRunning() }}
+	simEngine.Subscribe(simStreamSub)
+	realEngine.Subscribe(realStreamSub)
 
 	apiObj := js.Global().Get("Object").New()
 
@@ -176,9 +219,11 @@ func main() {
 	// onStream(callback: ((envelopeJson: string) => void) | null)
 	apiObj.Set("onStream", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		if len(args) > 0 {
-			streamSub.setCallback(args[0])
+			simStreamSub.setCallback(args[0])
+			realStreamSub.setCallback(args[0])
 		} else {
-			streamSub.setCallback(js.Undefined())
+			simStreamSub.setCallback(js.Undefined())
+			realStreamSub.setCallback(js.Undefined())
 		}
 		return nil
 	}))
@@ -189,6 +234,64 @@ func main() {
 			sim.SetRunning(args[0].Bool())
 		}
 		return nil
+	}))
+
+	// ingestHubPacket(bytes: Uint8Array) => number (frames decoded into realEngine)
+	apiObj.Set("ingestHubPacket", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		if len(args) == 0 || args[0].IsUndefined() || args[0].IsNull() {
+			return 0
+		}
+		length := args[0].Get("byteLength").Int()
+		if length <= 0 || length > 512 {
+			return 0
+		}
+		buf := make([]byte, length)
+		js.CopyBytesToGo(buf, args[0])
+		return hubRx.IngestPacket(buf, realEngine.NowUs())
+	}))
+
+	// onHubCommand(callback: ((pkt: Uint8Array) => void) | null)
+	apiObj.Set("onHubCommand", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		hubCmdMu.Lock()
+		if len(args) > 0 {
+			hubCmdCb = args[0]
+		} else {
+			hubCmdCb = js.Undefined()
+		}
+		hubCmdMu.Unlock()
+		return nil
+	}))
+
+	// pushHubChannels()
+	apiObj.Set("pushHubChannels", js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		hubRx.PushActiveChannels()
+		return nil
+	}))
+
+	// exportRealState() => string (JSON of realEngine state)
+	apiObj.Set("exportRealState", js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		b, err := json.Marshal(realEngine.ExportState())
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}))
+
+	// restoreRealState(jsonStr: string) => boolean
+	apiObj.Set("restoreRealState", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		if len(args) == 0 || args[0].Type() != js.TypeString {
+			return false
+		}
+		raw := args[0].String()
+		if raw == "" {
+			return false
+		}
+		var state tracker.PersistedEngineState
+		if err := json.Unmarshal([]byte(raw), &state); err != nil {
+			return false
+		}
+		realEngine.RestoreState(state, false)
+		return true
 	}))
 
 	// exportSimState() => string (JSON of simulated engine + simulator options)

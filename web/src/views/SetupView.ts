@@ -41,9 +41,9 @@ export class SetupView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Data source</h2>
-            <p>Switch between physical XIAO gate timers and the built-in simulator. Each keeps its own separate dataset.</p>
+            <p>Switch between physical XIAO gate timers and the built-in simulator, or connect directly from the browser to your Hub over Wi-Fi or USB-C.</p>
           </div>
-          <div class="card" data-slot="source"></div>
+          <div class="settings-cards" data-slot="source"></div>
         </section>
 
         <section class="settings-section">

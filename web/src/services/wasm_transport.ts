@@ -2,14 +2,20 @@ import { StreamEnvelope } from "../types/models";
 import { ApiTransport, FirmwareImageResult } from "./transport";
 
 const SIM_STORAGE_KEY = "slaprf.sim_state.v1";
+const REAL_STORAGE_KEY = "slaprf.real_state.v1";
 
 interface SlaprfWasmBridge {
   request(method: string, url: string, body?: string): { status: number; body: string };
   fetchBytes(url: string): { status: number; bytes: Uint8Array; sha256: string };
   onStream(cb: ((envelopeJson: string) => void) | null): void;
   setRunning(running: boolean): void;
+  ingestHubPacket?(bytes: Uint8Array): number;
+  onHubCommand?(cb: ((pkt: Uint8Array) => void) | null): void;
+  pushHubChannels?(): void;
   exportSimState?(): string;
   restoreSimState?(jsonStr: string): boolean;
+  exportRealState?(): string;
+  restoreRealState?(jsonStr: string): boolean;
 }
 
 declare global {
@@ -32,8 +38,17 @@ declare global {
 export class WasmSimTransport implements ApiTransport {
   private readyPromise: Promise<SlaprfWasmBridge> | null = null;
   private streamCallback: ((msg: StreamEnvelope) => void) | null = null;
+  private hubCommandCallback: ((pkt: Uint8Array) => void) | null = null;
   private persistTimer: number | null = null;
   private unloadBound = false;
+  private simRunning = true;
+
+  public setSimRunning(running: boolean): void {
+    this.simRunning = running;
+    if (window.slaprfWasm) {
+      window.slaprfWasm.setRunning(running);
+    }
+  }
 
   private persistNow(wasm?: SlaprfWasmBridge | null): void {
     if (this.persistTimer !== null) {
@@ -41,11 +56,19 @@ export class WasmSimTransport implements ApiTransport {
       this.persistTimer = null;
     }
     const target = wasm ?? window.slaprfWasm;
-    if (!target || typeof target.exportSimState !== "function") return;
+    if (!target) return;
     try {
-      const json = target.exportSimState();
-      if (json) {
-        window.localStorage.setItem(SIM_STORAGE_KEY, json);
+      if (typeof target.exportSimState === "function") {
+        const json = target.exportSimState();
+        if (json) {
+          window.localStorage.setItem(SIM_STORAGE_KEY, json);
+        }
+      }
+      if (typeof target.exportRealState === "function") {
+        const realJson = target.exportRealState();
+        if (realJson) {
+          window.localStorage.setItem(REAL_STORAGE_KEY, realJson);
+        }
       }
     } catch {
       // Ignore storage quota or private-browsing errors
@@ -79,7 +102,7 @@ export class WasmSimTransport implements ApiTransport {
     if (!window.Go) {
       await new Promise<void>((resolve, reject) => {
         const script = document.createElement("script");
-        script.src = "./wasm/wasm_exec.js?v=217";
+        script.src = "./wasm/wasm_exec.js?v=218";
         script.onload = () => resolve();
         script.onerror = () => reject(new Error("Failed to load ./wasm/wasm_exec.js"));
         document.head.appendChild(script);
@@ -88,7 +111,7 @@ export class WasmSimTransport implements ApiTransport {
 
     window.__slaprfBootStatus?.("Downloading SlapRF 5.8 GHz timing engine…", 28);
     const go = new window.Go!();
-    const wasmUrl = "./wasm/slaprf.wasm?v=217";
+    const wasmUrl = "./wasm/slaprf.wasm?v=218";
 
     const response = await fetch(wasmUrl);
     if (!response.ok) {
@@ -169,6 +192,9 @@ export class WasmSimTransport implements ApiTransport {
       window.addEventListener("pagehide", flush);
       window.addEventListener("beforeunload", flush);
     }
+    if (this.hubCommandCallback) {
+      window.slaprfWasm.onHubCommand?.(this.hubCommandCallback);
+    }
     if (this.streamCallback) {
       this.bindStream(window.slaprfWasm, this.streamCallback);
     }
@@ -176,7 +202,7 @@ export class WasmSimTransport implements ApiTransport {
   }
 
   private bindStream(wasm: SlaprfWasmBridge, onEnvelope: (msg: StreamEnvelope) => void): void {
-    wasm.setRunning(true);
+    wasm.setRunning(this.simRunning);
     wasm.onStream((raw: string) => {
       try {
         const env = JSON.parse(raw) as StreamEnvelope;
@@ -192,7 +218,7 @@ export class WasmSimTransport implements ApiTransport {
 
   public async request<T = unknown>(method: "GET" | "POST", url: string, body?: unknown): Promise<T> {
     const wasm = await this.ensureReady();
-    wasm.setRunning(true);
+    wasm.setRunning(this.simRunning);
     const res = wasm.request(method, url, body !== undefined ? JSON.stringify(body) : "");
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`WASM ${method} ${url} failed (${res.status}): ${res.body}`);
@@ -201,6 +227,30 @@ export class WasmSimTransport implements ApiTransport {
       this.persistNow(wasm);
     }
     return JSON.parse(res.body) as T;
+  }
+
+  public ingestHubPacket(bytes: Uint8Array): number {
+    if (!window.slaprfWasm || typeof window.slaprfWasm.ingestHubPacket !== "function") {
+      return 0;
+    }
+    return window.slaprfWasm.ingestHubPacket(bytes);
+  }
+
+  public onHubCommand(cb: ((pkt: Uint8Array) => void) | null): void {
+    this.hubCommandCallback = cb;
+    if (window.slaprfWasm && typeof window.slaprfWasm.onHubCommand === "function") {
+      window.slaprfWasm.onHubCommand(cb);
+    } else if (cb) {
+      void this.ensureReady().then((wasm) => {
+        if (this.hubCommandCallback === cb) {
+          wasm.onHubCommand?.(cb);
+        }
+      });
+    }
+  }
+
+  public pushHubChannels(): void {
+    window.slaprfWasm?.pushHubChannels?.();
   }
 
   /**
@@ -262,5 +312,34 @@ export class WasmSimTransport implements ApiTransport {
     }
     const wasm = await this.ensureReady();
     return wasm.restoreSimState?.(jsonStr) ?? false;
+  }
+
+  public async exportRealStateJson(): Promise<string> {
+    if (window.slaprfWasm && typeof window.slaprfWasm.exportRealState === "function") {
+      this.persistNow(window.slaprfWasm);
+      return window.slaprfWasm.exportRealState() || "";
+    }
+    try {
+      const saved = window.localStorage.getItem(REAL_STORAGE_KEY);
+      if (saved) return saved;
+    } catch {
+      // ignore
+    }
+    const wasm = await this.ensureReady();
+    this.persistNow(wasm);
+    return wasm.exportRealState?.() ?? "";
+  }
+
+  public async importRealStateJson(jsonStr: string): Promise<boolean> {
+    try {
+      window.localStorage.setItem(REAL_STORAGE_KEY, jsonStr);
+    } catch {
+      // ignore
+    }
+    if (window.slaprfWasm && typeof window.slaprfWasm.restoreRealState === "function") {
+      return window.slaprfWasm.restoreRealState(jsonStr);
+    }
+    const wasm = await this.ensureReady();
+    return wasm.restoreRealState?.(jsonStr) ?? false;
   }
 }

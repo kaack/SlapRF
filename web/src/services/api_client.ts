@@ -16,6 +16,7 @@ import {
   TrackNode,
 } from "../types/models";
 import { HttpRealTransport } from "./http_transport";
+import { BrowserHubBridge, RealEngineMode } from "./browser_hub_bridge";
 import {
   buildOrPatchFirmwareBin,
   DEFAULT_FIRMWARE_PROFILE,
@@ -44,17 +45,32 @@ const SIM_MODE_STORAGE_KEY = "slaprf.ui.sim_mode.v1";
  * REST + 50 Hz stream client routed through an `ApiTransport` interface:
  * - Simulation mode (`WasmSimTransport`): executes the Go timing & physics engine
  *   compiled to WebAssembly (`slaprf.wasm`) right in the browser (works on static GitHub Pages).
- * - Real-world mode (`HttpRealTransport`): connects to the native Go backend (`/api/*` & `/api/stream`).
+ * - Real-world mode: runs either via the local Desktop Go backend (`HttpRealTransport`) or
+ *   100% in-browser via `WasmSimTransport` + `BrowserHubBridge` (Wi-Fi SSE & USB-C WebSerial).
  */
 export class ApiClient {
   private readonly store: AppStore;
   private readonly wasmTransport = new WasmSimTransport();
   private readonly httpTransport = new HttpRealTransport();
+  public readonly hubBridge: BrowserHubBridge;
   private simMode = true;
+  public desktopServerAvailable = true;
+  public realEngineMode: RealEngineMode = BrowserHubBridge.loadModePref();
   private readonly provisionedUsbKeys = new Set<string>();
+  private hubRefreshTimer: number | null = null;
 
   constructor(store: AppStore) {
     this.store = store;
+    this.hubBridge = new BrowserHubBridge(this.wasmTransport);
+    this.hubBridge.onPacketIngested = () => {
+      if (this.hubRefreshTimer !== null) return;
+      this.hubRefreshTimer = window.setTimeout(() => {
+        this.hubRefreshTimer = null;
+        if (this.usingBrowserRealEngine) {
+          void this.pollStatus();
+        }
+      }, 250);
+    };
     try {
       const savedMode = window.localStorage.getItem(SIM_MODE_STORAGE_KEY);
       if (savedMode === "false") {
@@ -65,21 +81,54 @@ export class ApiClient {
     } catch {
       // Ignore storage access errors
     }
+    this.wasmTransport.setSimRunning(this.simMode);
+  }
+
+  /** True when Real-world hardware mode is executing inside the browser's WebAssembly engine. */
+  public get usingBrowserRealEngine(): boolean {
+    return !this.simMode && (this.realEngineMode === "browser" || !this.desktopServerAvailable);
   }
 
   private get transport(): ApiTransport {
-    return this.simMode ? this.wasmTransport : this.httpTransport;
+    this.wasmTransport.setSimRunning(this.simMode);
+    return this.simMode || this.usingBrowserRealEngine ? this.wasmTransport : this.httpTransport;
+  }
+
+  public async setRealEngineMode(mode: RealEngineMode): Promise<void> {
+    if (this.realEngineMode === mode) return;
+    this.transport.disconnectStream();
+    this.realEngineMode = mode;
+    BrowserHubBridge.saveModePref(mode);
+    this.wasmTransport.setSimRunning(this.simMode);
+    this.hubBridge.setActive(this.usingBrowserRealEngine);
+    this.connectStream();
+    await this.refresh();
   }
 
   public async initialize(): Promise<void> {
-    window.addEventListener("pagehide", () => this.transport.disconnectStream());
-    window.addEventListener("beforeunload", () => this.transport.disconnectStream());
+    window.addEventListener("pagehide", () => {
+      this.transport.disconnectStream();
+      this.hubBridge.setActive(false);
+    });
+    window.addEventListener("beforeunload", () => {
+      this.transport.disconnectStream();
+      this.hubBridge.setActive(false);
+    });
     document.addEventListener("visibilitychange", () => {
       if (!document.hidden) {
         this.connectStream();
         void this.refresh().catch(() => undefined);
       }
     });
+    // Probe whether the local desktop Go server is running (false on GitHub Pages / static hosting)
+    try {
+      await this.httpTransport.request("GET", "/api/version");
+      this.desktopServerAvailable = true;
+    } catch {
+      this.desktopServerAvailable = false;
+    }
+    this.wasmTransport.setSimRunning(this.simMode);
+    this.hubBridge.setActive(this.usingBrowserRealEngine);
     this.bindUsbTimerSync();
     await this.refresh();
     this.connectStream();
@@ -145,6 +194,8 @@ export class ApiClient {
     } catch {
       // Ignore storage access errors
     }
+    this.wasmTransport.setSimRunning(this.simMode);
+    this.hubBridge.setActive(this.usingBrowserRealEngine);
     this.connectStream();
     await this.refresh();
     if (!this.simMode && sharedTimerConsole.connected && sharedTimerConsole.lastStatus) {
@@ -221,6 +272,9 @@ export class ApiClient {
 
   public async resetPilotsToDefault(): Promise<void> {
     this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/pilots/reset"));
+    if (this.usingBrowserRealEngine) {
+      this.wasmTransport.pushHubChannels();
+    }
   }
 
   public async resetTrackToDefault(): Promise<void> {
@@ -254,6 +308,10 @@ export class ApiClient {
       // Ignore storage access errors
     }
 
+    this.realEngineMode = "auto";
+    this.hubBridge.resetDefaults();
+    this.hubBridge.setActive(this.usingBrowserRealEngine);
+
     this.store.clearActiveHistory();
     this.store.resetUiPrefs();
 
@@ -265,7 +323,7 @@ export class ApiClient {
       .catch(() => null);
 
     const [wasmState, httpState] = await Promise.all([wasmResetPromise, httpResetPromise]);
-    const activeState = this.simMode ? wasmState : httpState;
+    const activeState = this.simMode || this.usingBrowserRealEngine ? wasmState : httpState;
     if (activeState) {
       this.store.hydrate(activeState);
     } else {
@@ -287,17 +345,26 @@ export class ApiClient {
     }
 
     let realData: unknown = null;
-    try {
-      realData = await this.httpTransport.request<unknown>("GET", "/api/storage/export");
-      if (realData) {
-        window.localStorage.setItem("slaprf.real_state_backup.v1", JSON.stringify(realData));
-      }
-    } catch {
+    if (!this.usingBrowserRealEngine && this.desktopServerAvailable) {
       try {
-        const fallback = window.localStorage.getItem("slaprf.real_state_backup.v1");
-        if (fallback) realData = JSON.parse(fallback);
+        realData = await this.httpTransport.request<unknown>("GET", "/api/storage/export");
+        if (realData) {
+          window.localStorage.setItem("slaprf.real_state_backup.v1", JSON.stringify(realData));
+        }
       } catch {
-        // ignore
+        // fall through to wasm / localStorage
+      }
+    }
+    if (!realData) {
+      try {
+        realData = await this.wasmTransport.request<unknown>("GET", "/api/storage/export");
+      } catch {
+        try {
+          const fallback = window.localStorage.getItem("slaprf.real_state_backup.v1");
+          if (fallback) realData = JSON.parse(fallback);
+        } catch {
+          // ignore
+        }
       }
     }
 
@@ -309,6 +376,7 @@ export class ApiClient {
           k &&
           (k.startsWith("slaprf.") || k === "gate-timer.announcer") &&
           k !== "slaprf.sim_state.v1" &&
+          k !== "slaprf.real_state.v1" &&
           k !== "slaprf.real_state_backup.v1"
         ) {
           const val = window.localStorage.getItem(k);
@@ -377,17 +445,21 @@ export class ApiClient {
       } catch {
         // ignore
       }
+      await this.wasmTransport.request("POST", "/api/storage/import", bundle.real).catch(() => undefined);
       await this.httpTransport.request("POST", "/api/storage/import", bundle.real).catch(() => undefined);
     }
 
     try {
       const savedMode = window.localStorage.getItem(SIM_MODE_STORAGE_KEY);
       const nextSimMode = savedMode !== "false";
+      this.realEngineMode = BrowserHubBridge.loadModePref();
       if (nextSimMode !== this.simMode) {
         this.transport.disconnectStream();
         this.simMode = nextSimMode;
-        this.connectStream();
       }
+      this.wasmTransport.setSimRunning(this.simMode);
+      this.hubBridge.setActive(this.usingBrowserRealEngine);
+      this.connectStream();
     } catch {
       // ignore
     }
@@ -399,6 +471,9 @@ export class ApiClient {
 
   public async updatePilotSlot(slot: PilotSlot): Promise<void> {
     this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/pilots/update", slot));
+    if (this.usingBrowserRealEngine) {
+      this.wasmTransport.pushHubChannels();
+    }
   }
 
   public async updateTrackNode(update: GateUpdate): Promise<void> {
@@ -485,7 +560,11 @@ export class ApiClient {
   }
   /** Forwards a live 16-byte binary telemetry frame received over WebSerial into the timing engine. */
   public async ingestTelemetryFrame(frame: TimerTelemetryFrame): Promise<void> {
-    await this.httpTransport.request("POST", "/api/ingest/frame", frame);
+    if (this.usingBrowserRealEngine) {
+      await this.wasmTransport.request("POST", "/api/ingest/frame", frame);
+    } else {
+      await this.httpTransport.request("POST", "/api/ingest/frame", frame);
+    }
   }
 
   /** Lists visible & saved Wi-Fi networks detected by this computer. */

@@ -60,6 +60,7 @@ type WiFiUDPReceiver struct {
 	engine  *tracker.Engine
 	conn    *net.UDPConn
 	hubIP   net.IP
+	outFn   func([]byte)
 	slots   map[uint8]slotInfo
 	seenSeq map[uint8]uint8  // timerID -> last ingested 8-bit sample seq_num
 	hasSeq  map[uint8]bool   // timerID -> true once at least one sample has been ingested
@@ -114,15 +115,31 @@ func (r *WiFiUDPReceiver) pushActiveChannelsToHub() {
 	r.sendChannelsToHub(freqs)
 }
 
+// PushActiveChannels immediately pushes the current active pilot channel table to the Hub.
+func (r *WiFiUDPReceiver) PushActiveChannels() {
+	r.pushActiveChannelsToHub()
+}
+
+// SetOutboundSender registers a custom callback for outbound Hub frames (used by the browser WASM bridge).
+func (r *WiFiUDPReceiver) SetOutboundSender(fn func([]byte)) {
+	r.mu.Lock()
+	r.outFn = fn
+	r.mu.Unlock()
+}
+
 func (r *WiFiUDPReceiver) sendChannelsToHub(freqs [domain.MaxPilotSlots]uint16) {
 	r.mu.Lock()
 	conn := r.conn
 	hubIP := r.hubIP
+	outFn := r.outFn
 	r.mu.Unlock()
+	pkt := EncodeChannelsFrame(freqs)
+	if outFn != nil {
+		outFn(pkt)
+	}
 	if conn == nil || len(hubIP) == 0 {
 		return
 	}
-	pkt := EncodeChannelsFrame(freqs)
 	dst := &net.UDPAddr{IP: hubIP, Port: HubUDPPort}
 	_, _ = conn.WriteToUDP(pkt, dst)
 }

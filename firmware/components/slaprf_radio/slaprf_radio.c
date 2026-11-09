@@ -4,6 +4,7 @@
  */
 #include "slaprf_radio.h"
 
+#include <errno.h>
 #include <string.h>
 
 #include "driver/usb_serial_jtag.h"
@@ -45,6 +46,9 @@ static volatile bool s_has_hub_beacon_mac;
 static esp_netif_t *s_sta_netif;
 static esp_netif_t *s_ap_netif;
 static int s_udp_sock = -1;
+static int s_sse_clients[4] = {-1, -1, -1, -1};
+static uint8_t s_http_hellos[7][36];
+static portMUX_TYPE s_sse_mux = portMUX_INITIALIZER_UNLOCKED;
 static EventGroupHandle_t s_wifi_events;
 #define WIFI_GOT_IP_BIT BIT0
 
@@ -54,6 +58,202 @@ static uint8_t xor8(const uint8_t *data, uint32_t len) {
         c ^= data[i];
     }
     return c;
+}
+
+static int hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return c - '0';
+    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+    return -1;
+}
+
+static int format_sse_frame(char *dst, size_t cap, const uint8_t *raw, uint32_t len) {
+    static const char hex_lut[16] = {'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
+    if (len == 0 || len > 180 || cap < (size_t)(6 + len * 2 + 3)) return 0;
+    int n = 0;
+    memcpy(dst, "data: ", 6);
+    n += 6;
+    for (uint32_t i = 0; i < len; i++) {
+        dst[n++] = hex_lut[(raw[i] >> 4) & 0x0F];
+        dst[n++] = hex_lut[raw[i] & 0x0F];
+    }
+    dst[n++] = '\n';
+    dst[n++] = '\n';
+    dst[n] = 0;
+    return n;
+}
+
+static void broadcast_sse_frame(const uint8_t *raw, uint32_t len) {
+    if (raw == NULL || len < 4 || len > 180) return;
+    if (len == 36 && raw[0] == BEACON_MAGIC_0 && raw[1] == 0x5A && raw[2] >= 1 && raw[2] <= 7) {
+        memcpy(s_http_hellos[raw[2] - 1], raw, 36);
+    }
+    int fds[4];
+    portENTER_CRITICAL(&s_sse_mux);
+    for (int i = 0; i < 4; i++) fds[i] = s_sse_clients[i];
+    portEXIT_CRITICAL(&s_sse_mux);
+
+    bool any = false;
+    for (int i = 0; i < 4; i++) {
+        if (fds[i] >= 0) { any = true; break; }
+    }
+    if (!any) return;
+
+    char line[384];
+    int line_len = format_sse_frame(line, sizeof(line), raw, len);
+    if (line_len <= 0) return;
+
+    for (int i = 0; i < 4; i++) {
+        if (fds[i] < 0) continue;
+        int sent = send(fds[i], line, (size_t)line_len, MSG_DONTWAIT);
+        if (sent < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            portENTER_CRITICAL(&s_sse_mux);
+            if (s_sse_clients[i] == fds[i]) {
+                s_sse_clients[i] = -1;
+            }
+            portEXIT_CRITICAL(&s_sse_mux);
+            close(fds[i]);
+        }
+    }
+}
+
+static void hub_http_server_task(void *arg) {
+    (void)arg;
+    int listen_fd = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+    if (listen_fd < 0) {
+        vTaskDelete(NULL);
+        return;
+    }
+    int yes = 1;
+    setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR, &yes, sizeof(yes));
+    struct sockaddr_in addr = {0};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(80);
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    if (bind(listen_fd, (struct sockaddr *)&addr, sizeof(addr)) < 0 || listen(listen_fd, 4) < 0) {
+        close(listen_fd);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    char req[512];
+    for (;;) {
+        struct sockaddr_in client_addr;
+        socklen_t client_len = sizeof(client_addr);
+        int fd = accept(listen_fd, (struct sockaddr *)&client_addr, &client_len);
+        if (fd < 0) {
+            vTaskDelay(pdMS_TO_TICKS(20));
+            continue;
+        }
+        struct timeval tv = {.tv_sec = 1, .tv_usec = 0};
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
+        int n = recv(fd, req, sizeof(req) - 1, 0);
+        if (n <= 0) {
+            close(fd);
+            continue;
+        }
+        req[n] = 0;
+
+        if (strncmp(req, "OPTIONS ", 8) == 0) {
+            static const char resp[] =
+                "HTTP/1.1 204 No Content\r\n"
+                "Access-Control-Allow-Origin: *\r\n"
+                "Access-Control-Allow-Methods: GET, POST, OPTIONS\r\n"
+                "Access-Control-Allow-Headers: *\r\n"
+                "Access-Control-Allow-Private-Network: true\r\n"
+                "Connection: close\r\n\r\n";
+            send(fd, resp, sizeof(resp) - 1, 0);
+            close(fd);
+            continue;
+        }
+
+        if (strncmp(req, "GET /api/hub-info", 17) == 0) {
+            static const char resp[] =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json\r\n"
+                "Access-Control-Allow-Origin: *\r\n"
+                "Access-Control-Allow-Private-Network: true\r\n"
+                "Cache-Control: no-store\r\n"
+                "Connection: close\r\n\r\n"
+                "{\"slaprfHub\":true}";
+            send(fd, resp, sizeof(resp) - 1, 0);
+            close(fd);
+            continue;
+        }
+
+        if (strncmp(req, "GET /api/hub-channels?hex=", 26) == 0) {
+            const char *hex = req + 26;
+            uint8_t pkt[19];
+            bool ok = true;
+            for (int i = 0; i < 19; i++) {
+                int hi = hex_nibble(hex[i * 2]);
+                int lo = hex_nibble(hex[i * 2 + 1]);
+                if (hi < 0 || lo < 0) { ok = false; break; }
+                pkt[i] = (uint8_t)((hi << 4) | lo);
+            }
+            if (ok && pkt[0] == BEACON_MAGIC_0 && pkt[1] == CHANNELS_MAGIC_1 && xor8(pkt, 18) == pkt[18]) {
+                uint16_t freqs[8];
+                for (int i = 0; i < 8; i++) {
+                    freqs[i] = (uint16_t)(pkt[2 + i * 2] | ((uint16_t)pkt[3 + i * 2] << 8));
+                }
+                slaprf_diag_set_net_channels(freqs);
+            }
+            static const char resp[] =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: application/json\r\n"
+                "Access-Control-Allow-Origin: *\r\n"
+                "Access-Control-Allow-Private-Network: true\r\n"
+                "Connection: close\r\n\r\n"
+                "{\"ok\":true}";
+            send(fd, resp, sizeof(resp) - 1, 0);
+            close(fd);
+            continue;
+        }
+
+        if (strncmp(req, "GET /api/hub-stream", 19) == 0) {
+            static const char hdr[] =
+                "HTTP/1.1 200 OK\r\n"
+                "Content-Type: text/event-stream\r\n"
+                "Cache-Control: no-cache\r\n"
+                "Connection: keep-alive\r\n"
+                "Access-Control-Allow-Origin: *\r\n"
+                "Access-Control-Allow-Private-Network: true\r\n\r\n";
+            if (send(fd, hdr, sizeof(hdr) - 1, 0) < 0) {
+                close(fd);
+                continue;
+            }
+            // Replay cached HELLO frames immediately so the browser discovers Hub & Spokes right away
+            char line[128];
+            for (int i = 0; i < 7; i++) {
+                if (s_http_hellos[i][0] == BEACON_MAGIC_0 && s_http_hellos[i][1] == 0x5A) {
+                    int ll = format_sse_frame(line, sizeof(line), s_http_hellos[i], 36);
+                    if (ll > 0) send(fd, line, (size_t)ll, MSG_DONTWAIT);
+                }
+            }
+            int evicted = -1;
+            portENTER_CRITICAL(&s_sse_mux);
+            int slot_idx = -1;
+            for (int i = 0; i < 4; i++) {
+                if (s_sse_clients[i] < 0) { slot_idx = i; break; }
+            }
+            if (slot_idx < 0) {
+                evicted = s_sse_clients[0];
+                slot_idx = 0;
+            }
+            s_sse_clients[slot_idx] = fd;
+            portEXIT_CRITICAL(&s_sse_mux);
+            if (evicted >= 0) close(evicted);
+            continue;
+        }
+
+        static const char not_found[] =
+            "HTTP/1.1 404 Not Found\r\n"
+            "Access-Control-Allow-Origin: *\r\n"
+            "Access-Control-Allow-Private-Network: true\r\n"
+            "Connection: close\r\n\r\n";
+        send(fd, not_found, sizeof(not_found) - 1, 0);
+        close(fd);
+    }
 }
 
 /* ---- Board ---------------------------------------------------------------------------------- */
@@ -202,7 +402,8 @@ void slaprf_start_wifi_bridge(uint8_t wifi_mode, const char *ssid, const char *p
     bind_addr.sin_port = htons(LAPTOP_UDP_PORT);
     bind_addr.sin_addr.s_addr = htonl(INADDR_ANY);
     bind(s_udp_sock, (struct sockaddr *)&bind_addr, sizeof(bind_addr));
-    ESP_LOGI(TAG, "Laptop bridge up (%s), UDP broadcast :%d", wifi_mode == 0 ? "AP SlapRF" : ssid,
+    xTaskCreate(hub_http_server_task, "slaprf_http", 4096, NULL, 2, NULL);
+    ESP_LOGI(TAG, "Laptop bridge up (%s), UDP broadcast :%d + HTTP/SSE :80", wifi_mode == 0 ? "AP SlapRF" : ssid,
              LAPTOP_UDP_PORT);
 }
 
@@ -227,6 +428,8 @@ static void poll_laptop_udp(void) {
 }
 
 void slaprf_forward_udp_to_laptop(const void *frame, uint32_t len) {
+    slaprf_diag_forward_hub_frame(frame, len);
+    broadcast_sse_frame((const uint8_t *)frame, len);
     if (s_udp_sock < 0) {
         return;
     }
