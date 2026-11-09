@@ -4954,4 +4954,7 @@ body.is-gate-dragging * {
     margin-left: 0;
     width: 100%;
   }
+  .debug-chart-foot > .debug-connect-actions {
+    display: none;
+  }
 }
