@@ -1854,18 +1854,26 @@ async function handleMessage(msg) {
         />
         <button class="btn btn-sm" data-action="test" type="button">Test voice</button>
         ${neuralStatusHtml}
-      </div>`}};var DataSourceCard=class extends Component{store;api;constructor(el,store,api){super(el),this.store=store,this.api=api,el.addEventListener("change",this.handleChange),el.addEventListener("click",this.handleClick),this.onDispose(()=>{el.removeEventListener("change",this.handleChange),el.removeEventListener("click",this.handleClick)}),this.onDispose(store.subscribe(["status"],()=>this.render())),this.render()}handleChange=e=>{e.target.name==="simulator"&&this.api.toggleSimulator()};handleClick=e=>{e.target.closest("[data-action='pack']")&&this.api.simulatePack()};render(){let sim=this.store.simulatorRunning;this.el.innerHTML=`
-      <div class="option-row">
-        <div>
-          <div class="option-title">Track simulator</div>
-          <div class="option-sub">Runs in a completely separate simulation dataset (4 simulated timers, 4 gates, synthetic 8-pilot RSSI). Turning it off switches to your clean real-world dataset for physical XIAO timers.</div>
+      </div>`}};var DataSourceCard=class extends Component{store;api;constructor(el,store,api){super(el),this.store=store,this.api=api,el.addEventListener("change",this.handleChange),this.onDispose(()=>{el.removeEventListener("change",this.handleChange)}),this.onDispose(store.subscribe(["status","config"],()=>this.render())),this.render()}handleChange=e=>{e.target.name==="simulator"&&this.api.toggleSimulator()};render(){let sim=this.store.simulatorRunning,onlineTimers=this.store.detectedPucks.filter(p=>p.online).length,totalTimers=this.store.detectedPucks.length,statusUp=sim||onlineTimers>0,statusTitle=sim?"Active source: Track simulator":"Active source: Live hardware (IRL)",statusSub=sim?`${this.store.enabledPilots.length} simulated pilots \xB7 ${totalTimers} virtual gate timers \xB7 isolated simulation dataset`:totalTimers>0?`${onlineTimers} of ${totalTimers} physical timer${totalTimers===1?"":"s"} online \xB7 real-world hardware dataset`:"Waiting for physical XIAO ESP32-C5 timers over Wi-Fi or USB \xB7 real-world hardware dataset";this.el.innerHTML=`
+      <div class="livetime">
+        <div class="livetime-status ${statusUp?"is-up":""}">
+          <span class="status-dot"></span>
+          <div>
+            <div class="livetime-status-title">${statusTitle}</div>
+            <div class="livetime-status-sub">${statusSub}</div>
+          </div>
         </div>
-        <div class="option-actions">
-          ${sim?`<button class="btn btn-ghost" type="button" data-action="pack" title="Bunch all pilots up before the start gate">${icons.zap(18)}<span>Simulate pack</span></button>`:""}
-          <label class="switch switch-lg">
-            <input type="checkbox" name="simulator" ${sim?"checked":""} />
-            <span></span>
-          </label>
+        <div class="option-row" style="padding-top:12px;border-top:1px solid var(--border);">
+          <div>
+            <div class="option-title">Simulated track &amp; pilots</div>
+            <div class="option-sub">Switches to a self-contained simulation dataset (simulated pilots, 6S battery packs, pit swaps, crashes, track recovery walks, and virtual XIAO gate timers) and reveals the Simulator page in the navigation bar. Turn off to use your real-world hardware dataset.</div>
+          </div>
+          <div class="option-actions">
+            <label class="switch switch-lg">
+              <input type="checkbox" name="simulator" ${sim?"checked":""} />
+              <span></span>
+            </label>
+          </div>
         </div>
       </div>`}};var LiveTimeCard=class extends Component{store;constructor(el,store){super(el),this.store=store,this.onDispose(store.subscribe(["status"],()=>this.render())),this.render()}render(){let lt=this.store.liveTime,port=lt.listenAddr.split(":").pop()||"5403",connected=lt.connectedClients>0,lastSync=lt.lastRfSetupSync&&!lt.lastRfSetupSync.startsWith("0001")?new Date(lt.lastRfSetupSync).toLocaleTimeString():"never";this.el.innerHTML=`
       <div class="livetime">
@@ -1972,7 +1980,7 @@ async function handleMessage(msg) {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Data source</h2>
-            <p>Use the simulator to rehearse a race day before the hardware arrives.</p>
+            <p>Choose whether SlapRF is fed by your physical XIAO ESP32-C5 gate timers (real-world hardware) or the built-in track simulator. Each mode keeps its own separate pilots, track, timers, and lap history so simulating never overwrites your real-world setup.</p>
           </div>
           <div class="card" data-slot="source"></div>
         </section>
