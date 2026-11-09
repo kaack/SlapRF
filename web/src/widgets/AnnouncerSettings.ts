@@ -60,6 +60,13 @@ export class AnnouncerSettings extends Component {
   private handleInput = (e: Event): void => {
     const input = e.target as HTMLInputElement;
     if (input.name === "testPhrase") return;
+    if (input.type === "range") {
+      const min = Number(input.min || 0);
+      const max = Number(input.max || 1);
+      const val = Number(input.value);
+      const pct = max > min ? Math.max(0, Math.min(100, ((val - min) / (max - min)) * 100)) : 0;
+      input.style.setProperty("--range-pct", `${pct.toFixed(1)}%`);
+    }
     const out = this.el.querySelector<HTMLElement>(`[data-out="${input.name}"]`);
     if (!out) return;
     out.textContent = input.name === "rate" ? `${Number(input.value).toFixed(2)}×` : `${Math.round(Number(input.value) * 100)}%`;
@@ -126,6 +133,8 @@ export class AnnouncerSettings extends Component {
 
     const defaultSample = this.announcer.defaultTestPhrase();
     const samplePhrase = p.testPhrase !== undefined && p.testPhrase !== "" ? p.testPhrase : defaultSample;
+    const ratePct = Math.max(0, Math.min(100, ((p.rate - 0.8) / (1.6 - 0.8)) * 100)).toFixed(1);
+    const volPct = Math.max(0, Math.min(100, p.volume * 100)).toFixed(1);
 
     this.el.innerHTML = `
       <div class="card">
@@ -160,11 +169,11 @@ export class AnnouncerSettings extends Component {
           </label>
           <label class="field">
             <span>Speed <em data-out="rate">${p.rate.toFixed(2)}×</em></span>
-            <input type="range" name="rate" min="0.8" max="1.6" step="0.05" value="${p.rate}" />
+            <input type="range" name="rate" min="0.8" max="1.6" step="0.05" value="${p.rate}" style="--range-pct:${ratePct}%" />
           </label>
           <label class="field">
             <span>Volume <em data-out="volume">${Math.round(p.volume * 100)}%</em></span>
-            <input type="range" name="volume" min="0" max="1" step="0.05" value="${p.volume}" />
+            <input type="range" name="volume" min="0" max="1" step="0.05" value="${p.volume}" style="--range-pct:${volPct}%" />
           </label>
         </div>
         <div class="check-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
