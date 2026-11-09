@@ -11,7 +11,6 @@ import {
   firmwareProfile,
   flashXiaoC5OverWebSerial,
   isWebSerialSupported,
-  readXiaoC5OverWebSerial,
 } from "../services/esp_flasher";
 import { AppStore } from "../state/store";
 
@@ -44,6 +43,7 @@ interface ScannedWifi {
 export class TimerFlasher extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
+  private readonly onReadout?: (readout: TimerReadout) => void;
 
   private step: WizardStepId = "network";
   private slideDir: "next" | "prev" | "none" = "none";
@@ -63,15 +63,20 @@ export class TimerFlasher extends Component {
   private showPassword = false;
   private busy = false;
   private progress: FlashProgress | null = null;
-  private readout: TimerReadout | null = null;
   private lastSuccessMsg: string | null = null;
   private errorMsg: string | null = null;
   private showAllPorts = false;
 
-  constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
+  constructor(
+    el: HTMLElement,
+    store: AppStore,
+    api: ApiClient,
+    onReadout?: (readout: TimerReadout) => void
+  ) {
     super(el);
     this.store = store;
     this.api = api;
+    this.onReadout = onReadout;
 
     let hadStoredPref = false;
     try {
@@ -156,16 +161,7 @@ export class TimerFlasher extends Component {
       if (t.closest("[data-flash-another]")) {
         this.errorMsg = null;
         this.lastSuccessMsg = null;
-        this.readout = null;
         this.goToStep("network", "prev");
-        return;
-      }
-
-      if (t.closest("[data-clear-readout]")) {
-        this.readout = null;
-        this.lastSuccessMsg = null;
-        this.slideDir = "none";
-        this.render();
         return;
       }
 
@@ -200,11 +196,6 @@ export class TimerFlasher extends Component {
 
       if (t.closest("[data-flash-usb]")) {
         void this.flashUsb();
-        return;
-      }
-
-      if (t.closest("[data-read-usb]")) {
-        void this.readUsb();
         return;
       }
 
@@ -448,74 +439,26 @@ export class TimerFlasher extends Component {
     return "S1";
   }
 
-  private async readUsb(): Promise<void> {
-    this.busy = true;
-    this.errorMsg = null;
-    this.lastSuccessMsg = null;
-    this.slideDir = "none";
-    this.progress = {
-      stage: "connecting",
-      percent: 10,
-      detail: "Connecting to XIAO ESP32-C5 over USB…",
-    };
-    this.render();
-
-    try {
-      const { bytes } = await this.api.fetchFirmwareImage(
-        this.role,
-        this.timerLabel.trim() || "H1",
-        this.effectiveHubSSID,
-        this.wifiPass,
-        this.firmwareProfileId
-      );
-      const info = await readXiaoC5OverWebSerial(
-        bytes,
-        (p) => {
-          this.progress = p;
-          this.slideDir = "none";
-          this.render();
-        },
-        this.showAllPorts
-      );
-
-      this.readout = info;
-      this.role = info.role;
-      if (info.timerLabel) {
-        this.timerLabel = info.timerLabel;
-      }
-      if (info.role === "hub") {
-        if (info.wifiSSID) {
-          this.saveHubWifiMode("join");
-          this.saveSSID(info.wifiSSID);
-          if (!this.networks.some((n) => n.ssid === info.wifiSSID)) {
-            this.networks = [{ ssid: info.wifiSSID, saved: true }, ...this.networks];
-          }
-        } else {
-          this.saveHubWifiMode("host");
-        }
-      }
-      this.firmwareProfileId = info.firmwareProfile;
-      const idNote = info.timerLabel ? ` (${info.timerLabel})` : "";
-      const verNote =
-        info.firmwareVersion === LATEST_FIRMWARE_VERSION
-          ? `up to date`
-          : `update to ${LATEST_FIRMWARE_VERSION} available`;
-      this.lastSuccessMsg = `Read complete — ${info.role === "hub" ? "Hub" : "Spoke"}${idNote} running ${
-        firmwareProfile(info.firmwareProfile).name
-      } (${info.firmwareVersion}, ${verNote}).`;
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (/No port selected|aborted|cancelled/i.test(msg)) {
-        this.errorMsg = null;
-      } else {
-        this.errorMsg = msg;
-      }
-    } finally {
-      this.busy = false;
-      this.progress = null;
-      this.slideDir = "none";
-      this.render();
+  public applyReadout(info: TimerReadout): void {
+    if (this.busy) return;
+    this.role = info.role;
+    if (info.timerLabel) {
+      this.timerLabel = info.timerLabel;
     }
+    if (info.role === "hub") {
+      if (info.wifiSSID) {
+        this.saveHubWifiMode("join");
+        this.saveSSID(info.wifiSSID);
+        if (!this.networks.some((n) => n.ssid === info.wifiSSID)) {
+          this.networks = [{ ssid: info.wifiSSID, saved: true }, ...this.networks];
+        }
+      } else {
+        this.saveHubWifiMode("host");
+      }
+    }
+    this.firmwareProfileId = info.firmwareProfile;
+    this.slideDir = "none";
+    this.render();
   }
 
   private async flashUsb(): Promise<void> {
@@ -559,7 +502,7 @@ export class TimerFlasher extends Component {
       );
 
       if (written) {
-        this.readout = written;
+        this.onReadout?.(written);
       }
       await this.api.provisionTimer(this.role, cleanLabel, this.firmwareProfileId, written?.fingerprint ?? "");
       this.flashedNodes.add(this.role === "hub" ? "hub" : `spoke:${cleanLabel.toUpperCase()}`);
@@ -653,7 +596,7 @@ export class TimerFlasher extends Component {
    * Step 1: Role picker in the same pictorial-card style as the Wi-Fi mode step.
    * Pick **Hub** (one per network) or **Spoke**; picking Spoke reveals the S1–S6 slot chips.
    */
-  private renderStepNetwork(webSerialOk: boolean): string {
+  private renderStepNetwork(): string {
     const isHub = this.role === "hub";
     const hubFlashed = this.flashedNodes.has("hub");
     const flashedSpokes = [...this.flashedNodes].filter((k) => k.startsWith("spoke:")).length;
@@ -708,22 +651,6 @@ export class TimerFlasher extends Component {
             <p class="flasher-pictorial-desc">
               Placed at each sector gate around the course. Sends its passes to the Hub over long-range ESP-NOW — no Wi-Fi setup needed.
             </p>
-          </button>
-        </div>
-
-        <div class="flasher-inspect-bar">
-          <div class="flasher-inspect-text">
-            <strong>Already flashed a timer?</strong>
-            <span>Plug it into USB to inspect its current Timer name, role, and firmware.</span>
-          </div>
-          <button
-            type="button"
-            class="btn btn-sm"
-            data-read-usb="1"
-            ${this.busy || !webSerialOk ? "disabled" : ""}
-          >
-            ${icons.plug(14)}
-            <span>Read timer from USB</span>
           </button>
         </div>
 
@@ -1286,72 +1213,6 @@ export class TimerFlasher extends Component {
       </div>`;
   }
 
-  private renderReadoutCard(): string {
-    if (!this.readout) return "";
-    return `
-      <div class="flasher-readout">
-        <div class="flasher-readout-head">
-          <span class="flasher-queue-label">Connected timer readout</span>
-          <div class="flasher-readout-head-right">
-            <span class="mono note">
-              ${esc(this.readout.firmwareVersion)}
-              ${
-                this.readout.firmwareVersion === LATEST_FIRMWARE_VERSION
-                  ? `<span class="badge tone-good">Latest</span>`
-                  : `<span class="badge tone-warn">Update → ${LATEST_FIRMWARE_VERSION}</span>`
-              }
-              · ${esc(this.readout.chip)}
-            </span>
-            <button type="button" class="btn btn-sm btn-ghost" data-clear-readout="1" title="Dismiss readout">
-              ${icons.close(13)}
-            </button>
-          </div>
-        </div>
-        <div class="flasher-readout-grid">
-          <div>
-            <span class="note">Timer</span>
-            <div class="mono">${esc(this.readout.timerLabel || "(unnamed)")}</div>
-          </div>
-          <div>
-            <span class="note">Role</span>
-            <div class="mono">${
-              this.readout.role === "hub" ? "Hub" : "Spoke"
-            }</div>
-          </div>
-          <div>
-            <span class="note">Firmware</span>
-            <div>${esc(firmwareProfile(this.readout.firmwareProfile).name)}</div>
-          </div>
-          <div>
-            <span class="note">Board fingerprint</span>
-            <div class="mono">${esc(this.readout.fingerprint || "—")}${
-              this.readout.fingerprintKept === true
-                ? ` <span class="badge">Kept</span>`
-                : this.readout.fingerprintKept === false
-                  ? ` <span class="badge">New</span>`
-                  : ""
-            }</div>
-          </div>
-          <div>
-            <span class="note">2.4 GHz link</span>
-            <div class="mono">${
-              this.readout.role === "hub"
-                ? esc(
-                    this.readout.wifiSSID
-                      ? `Join "${this.readout.wifiSSID}" (2.4 GHz)`
-                      : 'Host "SlapRF" 2.4 GHz AP (Ch 1)'
-                  )
-                : "2.4 GHz ESP-NOW LR → Hub"
-            }</div>
-          </div>
-          <div>
-            <span class="note">5.8 GHz channels</span>
-            <div class="mono">${this.readout.frequenciesMHz.join(" · ")} MHz</div>
-          </div>
-        </div>
-      </div>`;
-  }
-
   private render(): void {
     const webSerialOk = isWebSerialSupported();
     const animClass =
@@ -1364,7 +1225,7 @@ export class TimerFlasher extends Component {
     let stepContent = "";
     switch (this.step) {
       case "network":
-        stepContent = this.renderStepNetwork(webSerialOk);
+        stepContent = this.renderStepNetwork();
         break;
       case "identity":
         stepContent = this.renderStepIdentity();
@@ -1413,8 +1274,6 @@ export class TimerFlasher extends Component {
             ? `<div class="flasher-banner is-err">${esc(this.errorMsg)}</div>`
             : ""
         }
-
-        ${this.renderReadoutCard()}
       </div>`;
   }
 }

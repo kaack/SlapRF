@@ -17,6 +17,35 @@ export interface FlashProgress {
   detail: string;
 }
 
+export interface TimerStatusSnapshot {
+  fw: string;
+  role: number;
+  profile: number;
+  fp: string;
+  label: string;
+  uptimeMs: number;
+  reset: string;
+  boots: number;
+  emergencyMode?: boolean;
+  crashStreak?: number;
+  heapFree: number;
+  heapMin: number;
+  sweepHz: number;
+  sweeps: number;
+  sweepUs: number;
+  sweepUsMax: number;
+  sweepBudgetUs: number;
+  rf: { ok: boolean; enabled: boolean; gain: number; gainMax: number; floorDb: number };
+  chip?: { model: string; rev: string; mac: string; flashMB: number };
+  net?: { mode: string; stations: number };
+  channel: number;
+  slot: number;
+  scanLive?: boolean;
+  freqsTemporary: boolean;
+  chanMask?: number;
+  freqs: number[];
+}
+
 export interface TimerReadout {
   chip: string;
   role: "hub" | "spoke";
@@ -29,6 +58,8 @@ export interface TimerReadout {
   fingerprint: string;
   /** Set by `flashXiaoC5OverWebSerial`: true if the board's previous fingerprint was kept. */
   fingerprintKept?: boolean;
+  /** Live status snapshot when read from a running timer over USB. */
+  status?: TimerStatusSnapshot;
 }
 
 export type PuckReadout = TimerReadout;
@@ -394,6 +425,58 @@ async function readChunkWithTimeout(
   }
 }
 
+function parseStatusSnapshot(bytes: Uint8Array): TimerStatusSnapshot | undefined {
+  const text = new TextDecoder().decode(bytes);
+  for (const rawLine of text.split(/\r?\n/)) {
+    const idx = rawLine.indexOf("@{");
+    if (idx === -1) continue;
+    try {
+      const parsed = JSON.parse(rawLine.slice(idx + 1)) as TimerStatusSnapshot & { type?: string };
+      if (parsed && parsed.type === "status") {
+        return parsed;
+      }
+    } catch {
+      // ignore malformed lines
+    }
+  }
+  return undefined;
+}
+
+async function collectSerialReply(
+  reader: ReadableStreamDefaultReader<Uint8Array>,
+  maxWaitMs: number
+): Promise<Uint8Array> {
+  const deadline = Date.now() + maxWaitMs;
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (Date.now() < deadline) {
+    const rem = Math.max(25, deadline - Date.now());
+    const chunk = await readChunkWithTimeout(reader, Math.min(90, rem));
+    if (!chunk) {
+      if (total > 0) break;
+      continue;
+    }
+    chunks.push(chunk);
+    total += chunk.length;
+    const merged = new Uint8Array(total);
+    let off = 0;
+    for (const c of chunks) {
+      merged.set(c, off);
+      off += c.length;
+    }
+    if (findConfigBlock(merged) >= 0 && parseStatusSnapshot(merged)) {
+      return merged;
+    }
+  }
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) {
+    out.set(c, off);
+    off += c.length;
+  }
+  return out;
+}
+
 /**
  * Connects to a plugged-in XIAO ESP32-C5 over USB and reads its current configuration.
  */
@@ -432,15 +515,34 @@ export async function readXiaoC5OverWebSerial(
       detail: "Reading configuration from XIAO ESP32-C5…",
     });
 
-    // 1. Query running firmware over USB Serial first ("SLAPRF?\n")
-    const query = new TextEncoder().encode("SLAPRF?\n");
+    // 1. Query running firmware over USB Serial first ("STATUS?\nSLAPRF?\n")
+    const query = new TextEncoder().encode("\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?\n");
     await writer.write(query);
-    const rx = await readChunkWithTimeout(reader, 180);
-    if (rx) {
+    const rx = await collectSerialReply(reader, 320);
+    if (rx.length > 0) {
       const parsed = parseSlaprfConfigBlock(rx);
+      const status = parseStatusSnapshot(rx);
       if (parsed) {
         onProgress({ stage: "done", percent: 100, detail: "Read complete." });
-        return parsed;
+        return { ...parsed, status };
+      }
+      if (status) {
+        const prof = profileByCode(status.profile);
+        onProgress({ stage: "done", percent: 100, detail: "Read complete." });
+        return {
+          chip: status.chip
+            ? `${status.chip.model} ${status.chip.rev} · ${status.chip.flashMB} MB`
+            : "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
+          role: status.role === 1 ? "hub" : "spoke",
+          timerLabel: status.label || "",
+          puckLabel: status.label || "",
+          wifiSSID: "",
+          frequenciesMHz: status.freqs,
+          firmwareVersion: status.fw,
+          firmwareProfile: prof.id,
+          fingerprint: status.fp,
+          status,
+        };
       }
     }
 
