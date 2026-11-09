@@ -2324,6 +2324,17 @@ export class DebugView extends Component {
         </button>`;
     }
 
+    const s = this.status;
+    const profile = s ? FIRMWARE_PROFILES.find((p) => p.code === s.profile) : undefined;
+    const statusText = on
+      ? s
+        ? `${esc(s.label || "(unnamed)")} · ${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`} · ${esc(profile?.name ?? `profile ${s.profile}`)} · ${esc(s.fp)}`
+        : "Connected over USB · reading timer status…"
+      : busy
+        ? `${esc(this.busy!)}…`
+        : "Off · click Connect in the top-right corner to open a timer over USB-C";
+    const ledClass = on && s ? "is-up" : on || busy ? "is-warn" : "";
+
     const bannerParts: string[] = [];
     if (!supported) {
       bannerParts.push(`<div class="sim-error-note">USB debugging needs Chrome, Edge or Brave (WebSerial).</div>`);
@@ -2331,7 +2342,29 @@ export class DebugView extends Component {
     if (this.error) {
       bannerParts.push(`<div class="sim-error-note">${esc(this.error)}</div>`);
     }
-    this.slot("connection").innerHTML = bannerParts.join("");
+
+    this.slot("connection").innerHTML = `
+      <header class="debug-page-head">
+        <div class="debug-page-intro">
+          <h2>Debug</h2>
+          <p>Plug a timer into this laptop with a USB-C cable and click <strong>Connect</strong> in the top-right corner to run a 10-second self-test, inspect live 5.8 GHz readings, sweep the spectrum, or read crash logs. Timing over Wi-Fi continues normally unless you start a spectrum scan or switch the receiver off.</p>
+        </div>
+        <div class="debug-page-meta">
+          <span class="debug-led-status">
+            <span class="status-dot ${ledClass}"></span>
+            <span class="note debug-head-note mono">${statusText}</span>
+          </span>
+          ${
+            !on
+              ? `<label class="check debug-port-filter">
+                  <input type="checkbox" data-all-ports ${this.showAllPorts ? "checked" : ""}/>
+                  <span>Show non-XIAO serial ports</span>
+                </label>`
+              : ""
+          }
+        </div>
+      </header>
+      ${bannerParts.join("")}`;
   }
 
   private renderSelfTest(): void {

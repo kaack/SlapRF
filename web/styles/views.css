@@ -3760,6 +3760,48 @@ body.is-gate-dragging * {
 .debug-page {
   font-variant-numeric: tabular-nums;
 }
+.debug-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 16px 32px;
+  padding: 4px 0 24px;
+  border-bottom: 1px solid var(--border);
+}
+.debug-page-intro {
+  max-width: 680px;
+}
+.debug-page-intro h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+.debug-page-intro p {
+  margin-top: 6px;
+  color: var(--text-3);
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+.debug-page-intro strong {
+  color: var(--text-2);
+  font-weight: 600;
+}
+.debug-page-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 8px;
+  margin-left: auto;
+  padding-top: 2px;
+}
+.debug-port-filter {
+  font-size: 12px;
+  color: var(--text-3);
+}
+.debug-port-filter input {
+  accent-color: var(--text-2);
+}
 .debug-connect {
   display: flex;
   align-items: center;
