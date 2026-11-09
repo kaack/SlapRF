@@ -1858,6 +1858,27 @@ body.is-gate-dragging * {
   font-size: 12.5px;
   line-height: 1.6;
 }
+.settings-intro-snippet,
+.settings-intro-less {
+  display: none;
+}
+.settings-intro-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.settings-intro-toggle:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.settings-intro-toggle[hidden] {
+  display: none !important;
+}
 .slot-table {
   display: flex;
   flex-direction: column;
@@ -1999,6 +2020,28 @@ body.is-gate-dragging * {
   .settings-section {
     grid-template-columns: minmax(0, 1fr);
     gap: 14px;
+  }
+  .settings-intro.has-intro-collapse:not(.is-expanded) .settings-intro-full {
+    display: none;
+  }
+  .settings-intro.has-intro-collapse:not(.is-expanded) .settings-intro-snippet {
+    display: flex;
+    align-items: baseline;
+    gap: 4px;
+    min-width: 0;
+  }
+  .settings-intro-snippet.is-clickable {
+    cursor: pointer;
+  }
+  .settings-intro-snippet-text {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .settings-intro.has-intro-collapse.is-expanded .settings-intro-less {
+    display: inline;
   }
 }
 @media (max-width: 1200px) {
