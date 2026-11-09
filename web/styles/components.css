@@ -642,7 +642,7 @@ select.input option {
 input[type="range"] {
   width: 100%;
   height: 32px;
-  accent-color: var(--accent);
+  accent-color: var(--text-2);
   background: transparent;
 }
 .check-row {
