@@ -1146,7 +1146,7 @@ export function drawSpectrumCanvas(
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.font = `12px ${tokens.fontSans}`;
-    ctx.fillText("Run a scan or start Live scan to see the 5.8 GHz spectrum.", L + plotW / 2, T + plotH / 2);
+    ctx.fillText("Click Scan once or Live on to see the 5.8 GHz spectrum.", L + plotW / 2, T + plotH / 2);
     return;
   }
 

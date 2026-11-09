@@ -328,7 +328,7 @@ export class DebugView extends Component {
           <div class="settings-intro">
             <h2>Spectrum scan &amp; waterfall</h2>
             <p>Sweeps the receiver across 5180–5917 MHz. Use it to find a VTX on an unexpected frequency, or to check a venue for 5 GHz Wi-Fi before racing. Note that Raceband <strong>R3–R6 overlap 5 GHz Wi-Fi UNII-3</strong> (channels 149–165, 5735–5835 MHz).</p>
-            <p><strong>Scan</strong> takes one snapshot and appends a row to the waterfall. <strong>Live</strong> keeps scanning ~3 times a second with live, average and max-hold traces; lap timing pauses while it runs, the Wi-Fi link stays up.</p>
+            <p><strong>Scan once</strong> takes one snapshot and appends a row to the waterfall. <strong>Live on</strong> keeps scanning continuously with live, average and max-hold traces; lap timing pauses while it runs, the Wi-Fi link stays up.</p>
           </div>
           <div class="card" data-slot="scan"></div>
         </section>
@@ -1184,9 +1184,11 @@ export class DebugView extends Component {
           break;
         case "live":
           this.liveOn = !this.liveOn;
+          if (this.liveOn) this.signalEndN = null;
           await this.console.send(this.liveOn ? `LIVE ${this.liveMode}` : "LIVE 0");
           this.renderLiveHead();
           this.renderSignalControls();
+          this.dirtySignal = true;
           break;
         case "rf": {
           const on = !(this.status?.rf.enabled ?? true);
@@ -1235,7 +1237,12 @@ export class DebugView extends Component {
           break;
         }
         case "signal-freeze":
-          if (this.signalEndN === null) {
+          if (!this.liveOn && this.console.connected) {
+            this.liveOn = true;
+            this.signalEndN = null;
+            await this.console.send(`LIVE ${this.liveMode}`);
+            this.renderLiveHead();
+          } else if (this.signalEndN === null) {
             this.pauseSignalAt(this.signalRing.latestN());
           } else {
             this.signalEndN = null;
@@ -1879,25 +1886,19 @@ export class DebugView extends Component {
     const inScanMode = Boolean(this.scanLive || this.status?.scanLive);
     const streamDisabled = !on || !rfOn || inScanMode;
     const streamActive = !streamDisabled && this.liveOn;
-    const streamLabel = inScanMode
-      ? "Stream (scan active)"
-      : !rfOn
-        ? "Stream (RF off)"
-        : streamActive
-          ? "Stream on"
-          : "Stream off";
+    const streamLabel = streamActive ? "Live on" : "Live off";
     const streamTitle = inScanMode
-      ? "Unavailable while Live spectrum scan is using the 5.8 GHz receiver"
+      ? "Unavailable while Spectrum scan is active"
       : !rfOn
         ? "Unavailable while the 5.8 GHz receiver is switched off"
         : streamActive
-          ? "Live sweep stream is on — click to turn off"
-          : "Live sweep stream is off — click to turn on";
+          ? "Live 5.8 GHz stream is on — click to turn off"
+          : "Live 5.8 GHz stream is off — click to turn on";
     this.slot("live-head").innerHTML = `
       <div class="debug-card-head">
         <span class="note debug-head-note mono" data-live-note>${on ? "Waiting for sweep stream…" : "Not connected"}</span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm ${rfOn ? "btn-armed" : "btn-unarmed"}" data-action="rf" ${on && this.status && !inScanMode ? "" : "disabled"} title="${inScanMode ? "Stop Live spectrum scan first to toggle the 5.8 GHz receiver" : "Switch the hardware 5.8 GHz receiver on or off"}">
+          <button type="button" class="btn btn-sm ${rfOn ? "btn-armed" : "btn-unarmed"}" data-action="rf" ${on && this.status && !inScanMode ? "" : "disabled"} title="${inScanMode ? "Stop Spectrum scan first to toggle the 5.8 GHz receiver" : "Switch the hardware 5.8 GHz receiver on or off"}">
             ${rfOn ? icons.signal(14) : icons.signalOff(14)}<span>${rfOn ? "Receiver on" : "Receiver off"}</span>
           </button>
           <button type="button" class="btn btn-sm ${streamActive ? "btn-armed" : "btn-unarmed"}" data-action="live" ${streamDisabled ? "disabled" : ""} title="${streamTitle}">
@@ -2009,22 +2010,18 @@ export class DebugView extends Component {
     const allOn = this.signalEnabledCh.every(Boolean);
     const isLive = this.signalEndN === null;
     const liveFollowOn = isLive && streamRunning;
-    const liveDisabled = !streamRunning && !hasPts;
+    const liveDisabled = (!on || !rfOn || inScanMode) && !hasPts;
     const isYZoomed = this.signalYMin !== DBM_MIN || this.signalYMax !== DBM_MAX;
-    const liveLabel = inScanMode
-      ? "Live (scan active)"
-      : !streamRunning && isLive
-        ? "Live off"
-        : isLive
-          ? "Live on"
-          : "Live off";
+    const liveLabel = liveFollowOn ? "Live on" : "Live off";
     const liveTitle = inScanMode
-      ? "Live 50 Hz stream is paused while Spectrum scan is active"
-      : !streamRunning
-        ? "Connect and enable Stream on in Live readings to follow live sweeps"
-        : isLive
-          ? "Following live 50 Hz stream — click to pause, or drag the chart to scroll back"
-          : "Paused / scrolled back — click to jump back to live";
+      ? "Unavailable while Spectrum scan is active"
+      : !rfOn
+        ? "Unavailable while the 5.8 GHz receiver is switched off"
+        : !on
+          ? "Connect a timer to stream live 50 Hz sweeps"
+          : liveFollowOn
+            ? "Following live 50 Hz stream — click to pause, or drag the chart to scroll back"
+            : "Paused / scrolled back — click to resume live 50 Hz stream";
     const presets = [1, 2, 5, 10, 30, 120] as const;
     const isCustomWindow = !presets.some((w) => Math.abs(this.signalWindowSec - w) < 0.05);
     this.slot("signal-controls").innerHTML = `
@@ -2229,8 +2226,8 @@ export class DebugView extends Component {
           <button type="button" class="btn btn-sm ${this.scanning ? "btn-armed" : "btn-unarmed"}" data-action="scan" ${canScanOnce ? "" : "disabled"} title="${this.scanLive ? "Unavailable while Live scan is running" : !rfOn ? "Unavailable while the 5.8 GHz receiver is off" : "Sweep the band once and add a row to the waterfall"}">
             ${icons.target(14)}<span>${this.scanning ? "Scanning…" : "Scan once"}</span>
           </button>
-          <button type="button" class="btn btn-sm ${this.scanLive ? "btn-armed" : "btn-unarmed"}" data-action="scan-live" ${canScanLive ? "" : "disabled"} title="${!rfOn ? "Unavailable while the 5.8 GHz receiver is off" : this.scanLive ? "Continuous spectrum scan is on — click to stop and resume lap timing" : "Start continuous spectrum scan (lap timing pauses while active)"}">
-            ${this.scanLive ? icons.zap(14) : icons.zapOff(14)}<span>${this.scanLive ? "Live scan on" : "Live scan off"}</span>
+          <button type="button" class="btn btn-sm ${this.scanLive ? "btn-armed" : "btn-unarmed"}" data-action="scan-live" ${canScanLive ? "" : "disabled"} title="${!rfOn ? "Unavailable while the 5.8 GHz receiver is off" : this.scanLive ? "Continuous spectrum scan is on — click to turn off and resume lap timing" : "Start continuous spectrum scan (lap timing pauses while active)"}">
+            ${this.scanLive ? icons.zap(14) : icons.zapOff(14)}<span>${this.scanLive ? "Live on" : "Live off"}</span>
           </button>
         </div>
       </div>
@@ -2312,11 +2309,11 @@ export class DebugView extends Component {
 
     let badgeTone = "";
     let badgeLabel = "Idle";
-    let metaText = "Click Scan once for a snapshot, or Live scan on for continuous updates.";
+    let metaText = "Click Scan once for a snapshot, or Live on for continuous updates.";
 
     if (this.scanLive) {
       badgeTone = "badge-accent";
-      badgeLabel = "Live scan · timing paused";
+      badgeLabel = "Live on · timing paused";
       const rateStr = s?.live && s.passMs ? `${(1000 / s.passMs).toFixed(1)} passes/s · ` : "";
       metaText = `${rateStr}${this.spectrumAcc.avgCount} pass${this.spectrumAcc.avgCount === 1 ? "" : "es"} averaged · volt = live, cyan = avg, faint volt = max hold`;
     } else if (this.scanning) {
@@ -2447,8 +2444,8 @@ export class DebugView extends Component {
         <span class="note mono debug-head-note" data-log-count>${this.logLines.length} lines</span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="clear-log">Clear</button>
-          <button type="button" class="btn btn-sm ${this.logOn ? "btn-armed" : "btn-unarmed"}" data-action="log" ${on ? "" : "disabled"}>
-            ${this.logOn ? icons.eye(14) : icons.eyeOff(14)}<span>${this.logOn ? "Log on" : "Log off"}</span>
+          <button type="button" class="btn btn-sm ${this.logOn ? "btn-armed" : "btn-unarmed"}" data-action="log" ${on ? "" : "disabled"} title="${this.logOn ? "Live USB log mirror is on — click to turn off" : "Live USB log mirror is off — click to turn on"}">
+            ${this.logOn ? icons.zap(14) : icons.zapOff(14)}<span>${this.logOn ? "Live on" : "Live off"}</span>
           </button>
         </div>
       </div>
