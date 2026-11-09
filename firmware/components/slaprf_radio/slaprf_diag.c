@@ -120,6 +120,9 @@ static size_t s_last_len;
 static uint32_t s_boots;
 static uint32_t s_crash_streak;
 static volatile bool s_safe_mode;
+static bool s_booted_safe_mode;
+static bool s_ledc_initialized;
+static TaskHandle_t s_siren_task;
 static portMUX_TYPE s_ring_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static void ring_copy_out(char *dst, size_t *out_len) {
@@ -215,8 +218,13 @@ __attribute__((constructor)) static void diag_early_init(void) {
         s_boots = s_ring.boots + 1;
         if (s_ring.crash_streak == SAFE_MODE_MAGIC) {
             s_crash_streak = MAX_CRASH_STREAK;
+        } else if (is_crash_reset(reason)) {
+            s_crash_streak = s_ring.crash_streak + 1;
+        } else if (s_ring.crash_streak >= MAX_CRASH_STREAK && (reason == ESP_RST_USB || reason == ESP_RST_JTAG)) {
+            // Keep Safe Mode latched across USB serial port open/close resets until explicit exit or power-cycle
+            s_crash_streak = s_ring.crash_streak;
         } else {
-            s_crash_streak = is_crash_reset(reason) ? (s_ring.crash_streak + 1) : 0;
+            s_crash_streak = 0;
         }
     } else {
         s_last_len = 0;
@@ -348,6 +356,81 @@ static void send_log(const char *which, const char *text, size_t len) {
     tx_raw(out, (size_t)n);
 }
 
+static void siren_led_task(void *arg) {
+    (void)arg;
+    uint32_t step = 0;
+    for (;;) {
+        if (s_safe_mode) {
+            // Ambulance-siren smooth fade: low -> high -> low every 900 ms (60 steps x 15 ms)
+            const uint32_t phase = step % 60U;
+            const uint32_t tri = phase < 30U ? phase : (60U - phase);
+            const uint32_t brightness = 28U + (tri * tri * 995U) / 900U; // Quadratic gamma for linear visual ramp
+            const uint32_t duty = 1023U - brightness; // Active-low LED on GPIO27
+            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
+            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+            step++;
+            vTaskDelay(pdMS_TO_TICKS(15));
+        } else {
+            step = 0;
+            vTaskDelay(pdMS_TO_TICKS(100));
+        }
+    }
+}
+
+static void set_safe_mode(bool on) {
+    if (on) {
+        s_live = 0;
+        s_scan_live = false;
+        s_rf_enabled = false;
+        if (!s_ledc_initialized) {
+            ledc_timer_config_t ledc_timer = {
+                .speed_mode      = LEDC_LOW_SPEED_MODE,
+                .duty_resolution = LEDC_TIMER_10_BIT,
+                .timer_num       = LEDC_TIMER_0,
+                .freq_hz         = 5000,
+                .clk_cfg         = LEDC_AUTO_CLK,
+            };
+            ledc_timer_config(&ledc_timer);
+            s_ledc_initialized = true;
+        }
+        ledc_channel_config_t ledc_ch = {
+            .gpio_num   = XIAO_C5_LED_GPIO,
+            .speed_mode = LEDC_LOW_SPEED_MODE,
+            .channel    = LEDC_CHANNEL_0,
+            .timer_sel  = LEDC_TIMER_0,
+            .duty       = 1023,
+            .hpoint     = 0,
+        };
+        ledc_channel_config(&ledc_ch);
+        s_safe_mode = true;
+        s_ring.crash_streak = MAX_CRASH_STREAK;
+        if (s_siren_task == NULL) {
+            xTaskCreate(siren_led_task, "slaprf_siren", 2048, NULL, 2, &s_siren_task);
+        }
+    } else {
+        s_ring.crash_streak = 0;
+        s_crash_streak = 0;
+        if (s_booted_safe_mode) {
+            s_reboot_pending = true;
+            vTaskDelay(pdMS_TO_TICKS(50));
+            esp_restart();
+        }
+        s_safe_mode = false;
+        ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 1);
+        gpio_reset_pin(XIAO_C5_LED_GPIO);
+        gpio_config_t led_cfg = {
+            .pin_bit_mask = 1ULL << XIAO_C5_LED_GPIO,
+            .mode = GPIO_MODE_OUTPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&led_cfg);
+        gpio_set_level(XIAO_C5_LED_GPIO, 1);
+        s_rf_enabled = true;
+    }
+}
+
 static void handle_channels(const char *args) {
     while (*args == ' ') args++;
     if (strncmp(args, "RESET", 5) == 0) {
@@ -444,15 +527,17 @@ static void handle_command(char *line) {
         s_scan_stop = (uint16_t)b;
         s_scan_step = (uint16_t)s;
         s_scan_pending = true;
-    } else if (strcmp(line, "SAFEMODE") == 0) {
-        s_live = 0;
-        s_scan_live = false;
-        s_rf_enabled = false;
-        s_ring.crash_streak = SAFE_MODE_MAGIC;
-        tx_line("@{\"t\":\"ok\",\"cmd\":\"safemode\"}\n");
-        s_reboot_pending = true;
-        vTaskDelay(pdMS_TO_TICKS(50));
-        esp_restart();
+    } else if (strncmp(line, "SAFEMODE", 8) == 0) {
+        const char *arg = line + 8;
+        while (*arg == ' ') arg++;
+        const bool on = (*arg != '0');
+        if (on) {
+            set_safe_mode(true);
+            tx_line("@{\"t\":\"ok\",\"cmd\":\"safemode\",\"on\":true}\n");
+        } else {
+            tx_line("@{\"t\":\"ok\",\"cmd\":\"safemode\",\"on\":false}\n");
+            set_safe_mode(false);
+        }
     } else if (strcmp(line, "REBOOT") == 0) {
         s_live = 0;
         s_scan_live = false;
@@ -518,44 +603,17 @@ void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
         xTaskCreate(console_task, "slaprf_diag", 4096, NULL, 3, NULL);
     }
     if (s_crash_streak >= MAX_CRASH_STREAK) {
-        s_safe_mode = true;
-        s_rf_enabled = false;
-        s_ring.crash_streak = 0; // Next explicit REBOOT or reflash attempts a normal boot
+        s_booted_safe_mode = true;
+        set_safe_mode(true);
         ESP_LOGE("slaprf_diag",
-                 "SAFE MODE: halted after %lu consecutive crash resets (%s). Radio and sweeps are off so USB stays up for debugging and reflashing; send REBOOT or power-cycle to retry.",
+                 "SAFE MODE: halted after %lu consecutive crash resets (%s). Radio and sweeps are off so USB stays up for debugging and reflashing; send SAFEMODE 0, REBOOT, or power-cycle to retry.",
                  (unsigned long)s_crash_streak, reset_reason_name(esp_reset_reason()));
-        ledc_timer_config_t ledc_timer = {
-            .speed_mode      = LEDC_LOW_SPEED_MODE,
-            .duty_resolution = LEDC_TIMER_10_BIT,
-            .timer_num       = LEDC_TIMER_0,
-            .freq_hz         = 5000,
-            .clk_cfg         = LEDC_AUTO_CLK,
-        };
-        ledc_timer_config(&ledc_timer);
-        ledc_channel_config_t ledc_ch = {
-            .gpio_num   = XIAO_C5_LED_GPIO,
-            .speed_mode = LEDC_LOW_SPEED_MODE,
-            .channel    = LEDC_CHANNEL_0,
-            .timer_sel  = LEDC_TIMER_0,
-            .duty       = 1023,
-            .hpoint     = 0,
-        };
-        ledc_channel_config(&ledc_ch);
-        uint32_t step = 0;
         for (;;) {
             if (s_reboot_pending) {
                 vTaskDelay(pdMS_TO_TICKS(40));
                 esp_restart();
             }
-            // Ambulance-siren smooth fade: low -> high -> low every 900 ms (60 steps x 15 ms)
-            const uint32_t phase = step % 60U;
-            const uint32_t tri = phase < 30U ? phase : (60U - phase);
-            const uint32_t brightness = 28U + (tri * tri * 995U) / 900U; // Quadratic gamma for linear visual ramp
-            const uint32_t duty = 1023U - brightness; // Active-low LED on GPIO27
-            ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty);
-            ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
-            vTaskDelay(pdMS_TO_TICKS(15));
-            step++;
+            vTaskDelay(pdMS_TO_TICKS(100));
         }
     }
 }
@@ -573,6 +631,7 @@ void slaprf_diag_set_slot(uint8_t slot) {
 }
 
 static void update_health_led(void) {
+    if (s_safe_mode) return;
     bool rf_ok = false;
     int gain = 0, gain_max = 0;
     float floor_db = 0;
@@ -596,6 +655,7 @@ static void update_health_led(void) {
 }
 
 void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us) {
+    if (s_safe_mode) return;
     s_sweeps++;
     if (s_ring.crash_streak != 0 && s_sweeps >= (uint32_t)s_sweep_hz * 5U) {
         // Survived 5 full seconds of sweeps: clear any prior crash streak

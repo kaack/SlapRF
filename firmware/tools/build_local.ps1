@@ -88,16 +88,30 @@ foreach ($p in $Profiles) {
         $patchedBin = Join-Path $buildDir "slaprf-$p-patched.bin"
         Write-Host "=== Flashing $p onto $FlashPort (preserving SLAPRF02 config) ===" -ForegroundColor Cyan
         & $python -c @"
-import serial, hashlib, struct, sys
+import serial, hashlib, struct, sys, time
 port, bin_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
-s = serial.Serial(port, 115200, timeout=1)
+s = serial.Serial(port, 115200, timeout=1.5)
+time.sleep(1.2)
+s.reset_input_buffer()
 s.write(b'SLAPRF?\n')
-cfg = s.read(160)
+time.sleep(0.25)
+raw = s.read(512)
 s.close()
+idx = raw.find(b'SLAPRF02')
+cfg = bytearray(raw[idx:idx+160]) if idx >= 0 and len(raw) >= idx + 160 else bytearray()
 data = bytearray(open(bin_path, 'rb').read())
 if len(cfg) == 160 and cfg[:8] == b'SLAPRF02':
     off = data.find(b'SLAPRF02')
     assert off > 0, 'SLAPRF02 not found in binary'
+    # Keep the newly built firmware version bytes [8..10], preserve board identity/settings [11..158]
+    cfg[8:11] = data[off+8:off+11]
+    if struct.unpack_from('<I', cfg, 14)[0] == 1 and not cfg[107]:
+        struct.pack_into('<I', cfg, 14, 0xBE7C0001)
+        cfg[107:109] = b'H1'
+    crc = 0
+    for b in cfg[:159]:
+        crc ^= b
+    cfg[159] = crc
     data[off:off+160] = cfg
     has_sha = data[23] == 1
     body_end = len(data) - (32 if has_sha else 0)
