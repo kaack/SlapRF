@@ -924,7 +924,7 @@ export class DebugView extends Component {
       this.dirtyWaterfall = true;
     };
 
-    this.listen(window, "mousedown", (e) => {
+    this.listen(window as unknown as HTMLElement, "pointerdown", (e: PointerEvent) => {
       if (!this.openAxisMenu) return;
       const target = e.target as HTMLElement | null;
       if (target && target.closest("[data-axis-pill]")) return;
@@ -937,10 +937,63 @@ export class DebugView extends Component {
       }
     });
 
-    this.listen(this.el, "mousedown", (e) => {
-      if (e.button !== 0) return;
+    let lastTapTime = 0;
+    let lastTapX = 0;
+    let lastTapY = 0;
+    let lastTapKind = "";
+
+    this.listen(this.el, "pointerdown", (e: PointerEvent) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
       const target = e.target as HTMLElement;
+      const isTouch = e.pointerType === "touch";
+      if (
+        isTouch &&
+        target.matches("[data-signal-canvas], [data-spectrum-canvas], [data-waterfall-canvas]")
+      ) {
+        const kind = target.matches("[data-signal-canvas]")
+          ? "signal"
+          : target.matches("[data-spectrum-canvas]")
+            ? "spectrum"
+            : "waterfall";
+        const now = performance.now();
+        if (
+          lastTapKind === kind &&
+          now - lastTapTime < 320 &&
+          Math.hypot(e.clientX - lastTapX, e.clientY - lastTapY) < 28
+        ) {
+          lastTapTime = 0;
+          if (kind === "signal") {
+            this.signalEndN = null;
+            this.signalAutoX = true;
+            this.signalAutoY = true;
+            this.signalSmoothYMin = null;
+            this.signalSmoothYMax = null;
+            this.renderSignalControls();
+            this.dirtySignal = true;
+            this.dirtyNoiseTable = true;
+          } else {
+            this.scanZoomStartMHz = null;
+            this.scanZoomStopMHz = null;
+            this.scanAutoY = true;
+            this.spectrumAcc.setVisibleRows(80);
+            this.renderScan();
+          }
+          return;
+        }
+        lastTapTime = now;
+        lastTapX = e.clientX;
+        lastTapY = e.clientY;
+        lastTapKind = kind;
+      }
+
+      const yAxisW = isTouch ? 56 : 48;
+      const xAxisH = isTouch ? 36 : 26;
+      const sbW = isTouch ? 36 : 28;
+
       if (target.matches("[data-signal-canvas]")) {
+        try {
+          target.setPointerCapture(e.pointerId);
+        } catch {}
         const r = target.getBoundingClientRect();
         const x = e.clientX - r.left;
         const y = e.clientY - r.top;
@@ -948,7 +1001,7 @@ export class DebugView extends Component {
         const L = 44;
         const plotH = Math.max(10, r.height - T - 26);
         const plotW = Math.max(10, r.width - L - 14);
-        if (x < 48) {
+        if (x < yAxisW) {
           // Dragging on left Y-axis stretches/shrinks the dBm scale smoothly
           const yFrac = Math.max(0, Math.min(1, 1 - (y - T) / plotH));
           this.signalDrag = {
@@ -961,7 +1014,7 @@ export class DebugView extends Component {
             startYMax: this.signalYMax,
             anchorFrac: yFrac,
           };
-        } else if (y >= r.height - 26 && x >= L) {
+        } else if (y >= r.height - xAxisH && x >= L) {
           // Dragging on bottom X-axis stretches/shrinks the time window scale smoothly
           const xFrac = Math.max(0, Math.min(1, (x - L) / plotW));
           this.signalDrag = {
@@ -1000,6 +1053,9 @@ export class DebugView extends Component {
           };
         }
       } else if (target.matches("[data-spectrum-canvas]")) {
+        try {
+          target.setPointerCapture(e.pointerId);
+        } catch {}
         const r = target.getBoundingClientRect();
         const x = e.clientX - r.left;
         const y = e.clientY - r.top;
@@ -1009,7 +1065,7 @@ export class DebugView extends Component {
         const plotW = Math.max(10, r.width - L - 14);
         const bounds = this.currentScanBounds();
         if (!bounds) return;
-        if (x < 48) {
+        if (x < yAxisW) {
           const yFrac = Math.max(0, Math.min(1, 1 - (y - T) / plotH));
           this.specDragging = {
             mode: "ystretch",
@@ -1021,7 +1077,7 @@ export class DebugView extends Component {
             startMHz1: bounds.vStop,
             anchorFrac: yFrac,
           };
-        } else if (y >= r.height - 26 && x >= L) {
+        } else if (y >= r.height - xAxisH && x >= L) {
           const xFrac = Math.max(0, Math.min(1, (x - L) / plotW));
           this.specDragging = {
             mode: "xstretch",
@@ -1062,13 +1118,16 @@ export class DebugView extends Component {
           }
         }
       } else if (target.matches("[data-waterfall-canvas]")) {
+        try {
+          target.setPointerCapture(e.pointerId);
+        } catch {}
         const r = target.getBoundingClientRect();
         const x = e.clientX - r.left;
         const y = e.clientY - r.top;
         const L = 44;
         const plotW = Math.max(10, r.width - L - 18);
         const bounds = this.currentScanBounds();
-        if (x < 48) {
+        if (x < yAxisW) {
           // Dragging on Waterfall Y-axis stretches/shrinks vertical time scale (visibleRows)
           this.wfDragging = {
             mode: "ystretch",
@@ -1080,7 +1139,7 @@ export class DebugView extends Component {
             startMHz1: bounds.vStop,
             anchorFrac: 0,
           };
-        } else if (y >= r.height - 24 && x >= L) {
+        } else if (y >= r.height - xAxisH && x >= L) {
           // Dragging on Waterfall X-axis stretches/shrinks MHz span
           const xFrac = Math.max(0, Math.min(1, (x - L) / plotW));
           this.wfDragging = {
@@ -1093,7 +1152,7 @@ export class DebugView extends Component {
             startMHz1: bounds.vStop,
             anchorFrac: xFrac,
           };
-        } else if (x >= r.width - 28 && this.spectrumAcc.maxScrollRow() > 0) {
+        } else if (x >= r.width - sbW && this.spectrumAcc.maxScrollRow() > 0) {
           this.wfDragging = {
             mode: "scrollbar",
             startX: x,
@@ -1136,7 +1195,7 @@ export class DebugView extends Component {
       }
     });
 
-    this.listen(window, "mouseup", () => {
+    const onPointerEnd = () => {
       if (this.signalDrag) {
         if (this.signalDrag.mode === "ybox" && this.signalYZoomBox) {
           const c = this.el.querySelector<HTMLElement>("[data-signal-canvas]");
@@ -1195,7 +1254,9 @@ export class DebugView extends Component {
         this.dirtySpectrum = true;
         this.dirtyWaterfall = true;
       }
-    });
+    };
+    this.listen(window as unknown as HTMLElement, "pointerup", onPointerEnd);
+    this.listen(window as unknown as HTMLElement, "pointercancel", onPointerEnd);
 
     this.listen(this.el, "dblclick", (e) => {
       const target = e.target as HTMLElement;
@@ -1229,7 +1290,7 @@ export class DebugView extends Component {
       }
     });
 
-    this.listen(window, "mousemove", (e) => {
+    this.listen(window as unknown as HTMLElement, "pointermove", (e: PointerEvent) => {
       const target = e.target as HTMLElement | null;
       if (this.signalDrag) {
         const sig = this.el.querySelector<HTMLElement>("[data-signal-canvas]");
