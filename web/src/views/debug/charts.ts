@@ -1227,8 +1227,8 @@ export function drawSpectrumCanvas(
   const scanStart = hasData ? s!.start : (opts.fallbackStartMHz ?? 5180);
   const scanStep = hasData ? s!.step : 5;
   const scanStop = hasData ? s!.start + s!.step * (s!.dbm.length - 1) : Math.max(scanStart + scanStep, opts.fallbackStopMHz ?? 5917);
-  const vStart = Math.max(scanStart, Math.min(scanStop - scanStep, opts.viewStartMHz ?? scanStart));
-  const vStop = Math.min(scanStop, Math.max(vStart + scanStep, opts.viewStopMHz ?? scanStop));
+  const vStart = opts.viewStartMHz ?? scanStart;
+  const vStop = Math.max(vStart + scanStep, opts.viewStopMHz ?? scanStop);
   const span = Math.max(1, vStop - vStart);
   const yMin = opts.yMinDbm ?? DBM_MIN;
   const yMax = Math.max(yMin + 4, opts.yMaxDbm ?? DBM_MAX);
@@ -1350,42 +1350,48 @@ export function drawSpectrumCanvas(
   let hoveredSpec = false;
   if (!opts.zoomBox && opts.hover && opts.hover.x >= L && opts.hover.x <= W - R && opts.hover.y >= T && opts.hover.y <= T + plotH) {
     const fCursor = vStart + ((opts.hover.x - L) / plotW) * span;
-    const idx = Math.max(0, Math.min(s.dbm.length - 1, Math.round((fCursor - s.start) / Math.max(1, s.step))));
-    const f = s.start + idx * s.step;
-    const hx = xOf(f);
-    const hy = yOf(s.dbm[idx]);
+    const inSweep = fCursor >= scanStart - s.step * 0.5 && fCursor <= scanStop + s.step * 0.5;
+    if (inSweep) {
+      const idx = Math.max(0, Math.min(s.dbm.length - 1, Math.round((fCursor - s.start) / Math.max(1, s.step))));
+      const f = s.start + idx * s.step;
+      const hx = xOf(f);
+      const hy = yOf(s.dbm[idx]);
 
-    if (hx >= L && hx <= W - R) {
-      hoveredSpec = true;
-      ctx.strokeStyle = tokens.text3;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([2, 2]);
-      ctx.beginPath();
-      ctx.moveTo(hx, T);
-      ctx.lineTo(hx, T + plotH);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      if (opts.showMaxHold && acc.maxHold && acc.maxHold[idx] !== undefined) {
-        const mhy = Math.max(T + 3, Math.min(T + plotH - 3, yOf(acc.maxHold[idx])));
-        ctx.fillStyle = "rgba(212, 255, 58, 0.45)";
+      if (hx >= L && hx <= W - R) {
+        hoveredSpec = true;
+        ctx.strokeStyle = tokens.text3;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([2, 2]);
         ctx.beginPath();
-        ctx.arc(hx, mhy, 3, 0, Math.PI * 2);
+        ctx.moveTo(hx, T);
+        ctx.lineTo(hx, T + plotH);
+        ctx.stroke();
+        ctx.setLineDash([]);
+
+        if (opts.showMaxHold && acc.maxHold && acc.maxHold[idx] !== undefined) {
+          const mhy = Math.max(T + 3, Math.min(T + plotH - 3, yOf(acc.maxHold[idx])));
+          ctx.fillStyle = "rgba(212, 255, 58, 0.45)";
+          ctx.beginPath();
+          ctx.arc(hx, mhy, 3, 0, Math.PI * 2);
+          ctx.fill();
+        }
+
+        const cy = Math.max(T + 3, Math.min(T + plotH - 3, hy));
+        ctx.fillStyle = tokens.accent;
+        ctx.beginPath();
+        ctx.arc(hx, cy, 3.5, 0, Math.PI * 2);
         ctx.fill();
+
+        const tag = shortBandHint(f);
+        const maxVal = acc.maxHold && acc.maxHold[idx] !== undefined ? acc.maxHold[idx] : s.dbm[idx];
+        const avgVal = avgAll && avgAll[idx] !== undefined ? avgAll[idx] : null;
+        setSpecReadout(
+          `<span><strong>${f}M</strong>${tag ? ` (${tag})` : ""} · Cur <strong>${s.dbm[idx]}</strong> · Mx <strong>${maxVal}</strong>${avgVal !== null ? ` · Av <strong>${Math.round(avgVal)}</strong>` : ""} dBm</span>`
+        );
       }
-
-      const cy = Math.max(T + 3, Math.min(T + plotH - 3, hy));
-      ctx.fillStyle = tokens.accent;
-      ctx.beginPath();
-      ctx.arc(hx, cy, 3.5, 0, Math.PI * 2);
-      ctx.fill();
-
-      const tag = shortBandHint(f);
-      const maxVal = acc.maxHold && acc.maxHold[idx] !== undefined ? acc.maxHold[idx] : s.dbm[idx];
-      const avgVal = avgAll && avgAll[idx] !== undefined ? avgAll[idx] : null;
-      setSpecReadout(
-        `<span><strong>${f}M</strong>${tag ? ` (${tag})` : ""} · Cur <strong>${s.dbm[idx]}</strong> · Mx <strong>${maxVal}</strong>${avgVal !== null ? ` · Av <strong>${Math.round(avgVal)}</strong>` : ""} dBm</span>`
-      );
+    } else {
+      hoveredSpec = true;
+      setSpecReadout(`<span><strong>${Math.round(fCursor)}M</strong> · <span class="note">outside sweep (${scanStart}–${scanStop}M)</span></span>`);
     }
   }
   if (!hoveredSpec) {
@@ -1440,8 +1446,8 @@ export function drawWaterfallCanvas(
   const scanStart = hasData ? s!.start : (fallbackStartMHz ?? 5180);
   const scanStep = hasData ? s!.step : 5;
   const scanStop = hasData ? s!.start + s!.step * (s!.dbm.length - 1) : Math.max(scanStart + scanStep, fallbackStopMHz ?? 5917);
-  const vStart = Math.max(scanStart, Math.min(scanStop - scanStep, viewStartMHz ?? scanStart));
-  const vStop = Math.min(scanStop, Math.max(vStart + scanStep, viewStopMHz ?? scanStop));
+  const vStart = viewStartMHz ?? scanStart;
+  const vStop = Math.max(vStart + scanStep, viewStopMHz ?? scanStop);
   const span = Math.max(1, vStop - vStart);
   const xOf = (f: number) => L + ((f - vStart) / span) * plotW;
 
@@ -1452,15 +1458,18 @@ export function drawWaterfallCanvas(
   ctx.beginPath();
   ctx.rect(L, T, plotW, plotH);
   ctx.clip();
-  if (hasData && s && off) {
+  ctx.fillStyle = "#0b0c0f";
+  ctx.fillRect(L, T, plotW, plotH);
+  const dataStartMHz = Math.max(vStart, scanStart);
+  const dataStopMHz = Math.min(vStop, scanStop);
+  if (hasData && s && off && dataStopMHz > dataStartMHz) {
     // Slice both horizontal frequency bins [bin0 .. bin1] and vertical rows [startRow .. startRow + visRows]
-    const bin0 = Math.max(0, Math.min(off.width - 1, (vStart - s.start) / Math.max(1, s.step)));
-    const bin1 = Math.max(bin0 + 1, Math.min(off.width, (vStop - s.start) / Math.max(1, s.step) + 1));
+    const bin0 = Math.max(0, Math.min(off.width - 1, (dataStartMHz - s.start) / Math.max(1, s.step)));
+    const bin1 = Math.max(bin0 + 1, Math.min(off.width, (dataStopMHz - s.start) / Math.max(1, s.step) + 1));
+    const dstX0 = xOf(dataStartMHz);
+    const dstX1 = xOf(dataStopMHz);
     ctx.imageSmoothingEnabled = false;
-    ctx.drawImage(off, bin0, startRow, bin1 - bin0, visRows, L, T, plotW, plotH);
-  } else {
-    ctx.fillStyle = "#0b0c0f";
-    ctx.fillRect(L, T, plotW, plotH);
+    ctx.drawImage(off, bin0, startRow, bin1 - bin0, visRows, dstX0, T, Math.max(1, dstX1 - dstX0), plotH);
   }
   drawBandOverlay(ctx, vStart, vStop, L, R, T, plotW, plotH, showWifiOverlay, tokens);
   if (zoomBox) {
@@ -1528,16 +1537,7 @@ export function drawWaterfallCanvas(
   // Hover readout (MHz, dBm, age, pass index)
   if (!zoomBox && hover && hover.x >= L && hover.x <= W - R && hover.y >= T && hover.y <= T + plotH) {
     const fCursor = vStart + ((hover.x - L) / plotW) * span;
-    const binIdx = Math.max(0, Math.min(s.dbm.length - 1, Math.round((fCursor - s.start) / Math.max(1, s.step))));
-    const localRow = Math.max(0, Math.min(visRows - 1, Math.floor(((hover.y - T) / plotH) * visRows)));
-    const rowIdx = startRow + localRow;
-    const f = s.start + binIdx * s.step;
-    const histIdx = acc.history.length - 1 - rowIdx;
-    const histRow = histIdx >= 0 ? acc.history[histIdx] : null;
-    const dbmVal = histRow ? histRow.dbm[binIdx] : null;
-    const age = (rowIdx * passSec).toFixed(1);
-    const tag = shortBandHint(f);
-
+    const inSweep = fCursor >= scanStart - s.step * 0.5 && fCursor <= scanStop + s.step * 0.5;
     ctx.save();
     ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
     ctx.lineWidth = 1;
@@ -1551,9 +1551,22 @@ export function drawWaterfallCanvas(
     ctx.setLineDash([]);
     ctx.restore();
 
-    setWfReadout(
-      `<span><strong>${f}M</strong>${tag ? ` (${tag})` : ""} · <strong>${dbmVal !== null && dbmVal !== undefined ? `${dbmVal} dBm` : "—"}</strong> · -${age}s (-${rowIdx + 1}/${acc.history.length})</span>`
-    );
+    if (inSweep) {
+      const binIdx = Math.max(0, Math.min(s.dbm.length - 1, Math.round((fCursor - s.start) / Math.max(1, s.step))));
+      const localRow = Math.max(0, Math.min(visRows - 1, Math.floor(((hover.y - T) / plotH) * visRows)));
+      const rowIdx = startRow + localRow;
+      const f = s.start + binIdx * s.step;
+      const histIdx = acc.history.length - 1 - rowIdx;
+      const histRow = histIdx >= 0 ? acc.history[histIdx] : null;
+      const dbmVal = histRow ? histRow.dbm[binIdx] : null;
+      const age = (rowIdx * passSec).toFixed(1);
+      const tag = shortBandHint(f);
+      setWfReadout(
+        `<span><strong>${f}M</strong>${tag ? ` (${tag})` : ""} · <strong>${dbmVal !== null && dbmVal !== undefined ? `${dbmVal} dBm` : "—"}</strong> · -${age}s (-${rowIdx + 1}/${acc.history.length})</span>`
+      );
+    } else {
+      setWfReadout(`<span><strong>${Math.round(fCursor)}M</strong> · <span class="note">outside sweep (${scanStart}–${scanStop}M)</span></span>`);
+    }
   } else {
     setWfReadout(`<span class="note">Point at waterfall to inspect frequency, dBm &amp; pass age</span>`);
   }

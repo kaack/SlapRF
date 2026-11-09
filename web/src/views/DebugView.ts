@@ -632,8 +632,8 @@ export class DebugView extends Component {
         ? s.start + s.step * (s.dbm.length - 1)
         : Math.max(fullStart + rawStep, Math.min(5925, rawStop));
     const step = s && s.dbm.length ? s.step : rawStep;
-    const vStart = Math.max(fullStart, Math.min(fullStop - step, this.scanZoomStartMHz ?? fullStart));
-    const vStop = Math.min(fullStop, Math.max(vStart + step, this.scanZoomStopMHz ?? fullStop));
+    const vStart = this.scanZoomStartMHz ?? fullStart;
+    const vStop = Math.max(vStart + step, this.scanZoomStopMHz ?? fullStop);
     return { vStart, vStop };
   }
 
@@ -672,15 +672,17 @@ export class DebugView extends Component {
     const anchorMHz = startMHz0 + anchorFrac * curSpan;
     let f0 = anchorMHz - anchorFrac * nextSpan;
     let f1 = f0 + nextSpan;
-    if (f0 < fullStart) {
-      f0 = fullStart;
-      f1 = Math.min(fullStop, fullStart + nextSpan);
+    const minF0 = fullStart - nextSpan * 0.8;
+    const maxF1 = fullStop + nextSpan * 0.8;
+    if (f0 < minF0) {
+      f0 = minF0;
+      f1 = f0 + nextSpan;
     }
-    if (f1 > fullStop) {
-      f1 = fullStop;
-      f0 = Math.max(fullStart, fullStop - nextSpan);
+    if (f1 > maxF1) {
+      f1 = maxF1;
+      f0 = f1 - nextSpan;
     }
-    if (f0 <= fullStart + 0.5 && f1 >= fullStop - 0.5) {
+    if (Math.abs(f0 - fullStart) <= 0.5 && Math.abs(f1 - fullStop) <= 0.5) {
       this.scanZoomStartMHz = null;
       this.scanZoomStopMHz = null;
     } else {
@@ -699,19 +701,25 @@ export class DebugView extends Component {
     const fullStart = s && s.dbm.length ? s.start : Math.max(5180, Math.min(5900, rawStart));
     const fullStop = s && s.dbm.length ? s.start + s.step * (s.dbm.length - 1) : Math.max(fullStart + 5, Math.min(5925, rawStop));
     const span = Math.max(10, startMHz1 - startMHz0);
-    if (span >= fullStop - fullStart - 0.5) return;
     let f0 = startMHz0 + deltaMHz;
     let f1 = f0 + span;
-    if (f0 < fullStart) {
-      f0 = fullStart;
-      f1 = Math.min(fullStop, fullStart + span);
+    const minF0 = fullStart - span * 0.8;
+    const maxF1 = fullStop + span * 0.8;
+    if (f0 < minF0) {
+      f0 = minF0;
+      f1 = f0 + span;
     }
-    if (f1 > fullStop) {
-      f1 = fullStop;
-      f0 = Math.max(fullStart, fullStop - span);
+    if (f1 > maxF1) {
+      f1 = maxF1;
+      f0 = f1 - span;
     }
-    this.scanZoomStartMHz = f0;
-    this.scanZoomStopMHz = f1;
+    if (Math.abs(f0 - fullStart) <= 0.5 && Math.abs(f1 - fullStop) <= 0.5) {
+      this.scanZoomStartMHz = null;
+      this.scanZoomStopMHz = null;
+    } else {
+      this.scanZoomStartMHz = f0;
+      this.scanZoomStopMHz = f1;
+    }
     this.dirtySpectrum = true;
     this.dirtyWaterfall = true;
     this.updateScanFindings();
@@ -2098,6 +2106,8 @@ export class DebugView extends Component {
           this.scanStartMHz = start;
           this.scanStopMHz = stop;
           this.scanStepMHz = step;
+          this.scanZoomStartMHz = null;
+          this.scanZoomStopMHz = null;
           if (this.scanLive && this.console.connected) {
             this.scanToggleAt = Date.now();
             this.spectrumAcc.clearHoldAndAvg();
@@ -3499,7 +3509,9 @@ export class DebugView extends Component {
           ? "X: UNII1"
           : Math.round(this.scanZoomStartMHz!) === 5725 && Math.round(this.scanZoomStopMHz!) === 5850
             ? "X: UNII3"
-            : `X: ${Math.round(this.scanZoomStopMHz! - this.scanZoomStartMHz!)}M`;
+            : Math.abs(this.scanZoomStopMHz! - this.scanZoomStartMHz! - (this.scanStopMHz - this.scanStartMHz)) <= 2
+              ? "X: Pan"
+              : `X: ${Math.round(this.scanZoomStopMHz! - this.scanZoomStartMHz!)}M`;
     const yScanShort = this.scanAutoY ? "Auto Y" : `Y: ${Math.round(this.scanYMax - this.scanYMin)}dB`;
     const canScanOnce = on && rfOn && !this.scanning && !this.scanLive;
     const canScanLive = on && rfOn && !this.scanning;
