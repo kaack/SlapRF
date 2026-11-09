@@ -135,12 +135,10 @@ export class TimerConsole {
 
   private async openPort(port: SerialPortLike): Promise<void> {
     await port.open({ baudRate: 115200, bufferSize: 16384 });
-    // Keep EN / BOOT released: on USB-Serial-JTAG, DTR/RTS changes reset the chip.
-    try {
-      await port.setSignals({ dataTerminalReady: false, requestToSend: false });
-    } catch {
-      // Not all platforms allow it; harmless.
-    }
+    // Do NOT call port.setSignals({ dataTerminalReady: false, requestToSend: false }) here!
+    // On Windows (usbser.sys), Chromium opens the port at (DTR=1, RTS=1) which is a no-op on
+    // ESP32-C5 USB-Serial-JTAG, whereas clearing both lines executes CLRDTR before CLRRTS,
+    // stepping through (DTR=0, RTS=1) which resets the ESP32-C5 core.
     this.port = port;
     this.portInfo = port.getInfo?.() ?? this.portInfo;
     this.buf = new Uint8Array(0);
@@ -207,65 +205,22 @@ export class TimerConsole {
   }
 
   /**
-   * Ensure the timer is running the SlapRF application rather than sitting in ESP32-C5 ROM
-   * download mode (which Windows `usbser.sys` can trigger when a browser tab reloads while
-   * the port is open). Tries `STATUS?` first; if no reply arrives within 900 ms, pulses a
-   * normal-boot RTS reset (`BOOT=1, EN=0 -> EN=1`), reattaches if the USB port re-enumerated,
-   * and waits for the first `status` reply.
+   * Probe `STATUS?` up to a few times after opening the port so that if the board was still
+   * finishing boot (or flushing any partial line in its UART RX buffer), we catch its first
+   * status reply cleanly without touching DTR/RTS lines.
    */
-  public async ensureRunningApp(timeoutMs = 8000): Promise<TimerStatus | null> {
+  public async ensureRunningApp(timeoutMs = 3000): Promise<TimerStatus | null> {
     if (!this.port) return null;
-    try {
-      return await this.request<TimerStatus>("\nSTATUS?", "status", 900);
-    } catch {
-      // Board did not answer STATUS? — likely stuck in ROM download mode. Pulse normal-boot reset.
-    }
-    this.expectingRestart = true;
-    try {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline && this.port) {
       try {
-        await this.port.setSignals({ dataTerminalReady: false, requestToSend: false });
-        await sleep(50);
-        await this.port.setSignals({ dataTerminalReady: false, requestToSend: true });
-        await sleep(80);
-        await this.port.setSignals({ dataTerminalReady: false, requestToSend: false });
+        return await this.request<TimerStatus>("\nSTATUS?", "status", 900);
       } catch {
-        // ignore signal errors
+        // retry after a short pause
       }
-      const deadline = Date.now() + timeoutMs;
-      await sleep(500);
-      while (Date.now() < deadline) {
-        if (!this.port) {
-          const ports = await serial().getPorts();
-          const match = ports.find((p) => {
-            const info = p.getInfo?.() ?? {};
-            return (
-              !this.portInfo ||
-              (info.usbVendorId === this.portInfo.usbVendorId && info.usbProductId === this.portInfo.usbProductId)
-            );
-          });
-          if (match) {
-            try {
-              await this.openPort(match);
-            } catch {
-              await sleep(300);
-              continue;
-            }
-          } else {
-            await sleep(250);
-            continue;
-          }
-        }
-        try {
-          return await this.request<TimerStatus>("\nSTATUS?", "status", 1000);
-        } catch {
-          // still booting
-        }
-        await sleep(250);
-      }
-      return null;
-    } finally {
-      this.expectingRestart = false;
+      await sleep(150);
     }
+    return null;
   }
 
   /**
