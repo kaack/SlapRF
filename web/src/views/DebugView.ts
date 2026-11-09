@@ -429,13 +429,23 @@ export class DebugView extends Component {
     };
     this.rafId = window.requestAnimationFrame(tick);
 
+    const onBeforeUnload = () => {
+      if (this.console.connected) {
+        void this.console.send("LIVE 0\nSCAN STOP\nLOG 0").catch(() => undefined);
+      }
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+
     this.onDispose(() => {
       window.cancelAnimationFrame(this.rafId);
       window.removeEventListener("resize", onResize);
+      window.removeEventListener("beforeunload", onBeforeUnload);
       this.observer?.disconnect();
       window.clearInterval(this.statusTimer);
-      // Leaving the page must not leave the timer scanning instead of timing.
-      const stop = this.scanLive ? this.console.send("SCAN STOP").catch(() => undefined) : Promise.resolve();
+      // Leaving the page must not leave the timer streaming or scanning instead of timing.
+      const stop = this.console.connected
+        ? this.console.send(this.scanLive ? "LIVE 0\nSCAN STOP" : "LIVE 0").catch(() => undefined)
+        : Promise.resolve();
       void stop.then(() => this.console.disconnect());
     });
     this.renderAll();

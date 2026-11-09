@@ -212,9 +212,12 @@ export class TimerConsole {
   public async ensureRunningApp(timeoutMs = 3000): Promise<TimerStatus | null> {
     if (!this.port) return null;
     const deadline = Date.now() + timeoutMs;
+    let first = true;
     while (Date.now() < deadline && this.port) {
       try {
-        return await this.request<TimerStatus>("\nSTATUS?", "status", 900);
+        const cmd = first ? "\nLIVE 0\nSTATUS?" : "\nSTATUS?";
+        first = false;
+        return await this.request<TimerStatus>(cmd, "status", 900);
       } catch {
         // retry after a short pause
       }

@@ -30,6 +30,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
 #include "esp_attr.h"
 #include "esp_chip_info.h"
@@ -58,16 +59,20 @@
 #define RF_MAX_MHZ       5917
 #define HIT_MARGIN_DB    10 // A "hit" is a reading this far above the channel's typical noise
 #define FLOOR_UNSET      INT16_MIN
+#define XIAO_C5_LED_GPIO 27 // Seeed Studio XIAO ESP32-C5 yellow user LED (active-low: 0 = ON, 1 = OFF)
 
 static const volatile uint8_t *s_cfg;
 static size_t s_cfg_len;
 static uint8_t s_sweep_hz = 50;
 static uint32_t s_sweep_budget_us;
+static uint32_t s_flash_bytes;
 static SemaphoreHandle_t s_tx_lock;
 
 static volatile uint8_t s_live; // 0 off, 1 ~10 lines/s with peaks, 2 every sweep
 static volatile bool s_log;
 static volatile bool s_rf_enabled = true;
+static volatile bool s_reboot_pending;
+static uint8_t s_tx_drops;
 static vprintf_like_t s_prev_vprintf;
 static volatile uint8_t s_slot;
 
@@ -133,15 +138,15 @@ static void ring_append(const char *s, size_t n) {
 /* ---- Output ------------------------------------------------------------------------------- */
 
 static void tx_raw(const void *data, size_t len) {
-    if (s_tx_lock == NULL || xSemaphoreTake(s_tx_lock, pdMS_TO_TICKS(100)) != pdTRUE) {
+    if (s_tx_lock == NULL || xSemaphoreTake(s_tx_lock, pdMS_TO_TICKS(150)) != pdTRUE) {
         return;
     }
-    // The driver's TX ring buffer rejects any single write larger than itself, so large replies
-    // (boot logs, scans) go out in chunks, each with time for the host to drain the buffer.
+    // Small 128-byte chunks ensure control replies (STATUS?, SLAPRF?) never stall waiting for a
+    // 512-byte contiguous slot in the FreeRTOS byte ringbuffer while LIVE is active.
     const uint8_t *p = (const uint8_t *)data;
     while (len > 0) {
-        const size_t chunk = len > 512 ? 512 : len;
-        if (usb_serial_jtag_write_bytes(p, chunk, pdMS_TO_TICKS(100)) <= 0) {
+        const size_t chunk = len > 128 ? 128 : len;
+        if (usb_serial_jtag_write_bytes(p, chunk, pdMS_TO_TICKS(120)) <= 0) {
             break; // Host not reading (port closed): drop the rest
         }
         p += chunk;
@@ -159,7 +164,20 @@ static void tx_line_nowait(const char *s) {
     if (s_tx_lock == NULL || xSemaphoreTake(s_tx_lock, 0) != pdTRUE) {
         return;
     }
-    usb_serial_jtag_write_bytes(s, strlen(s), 0);
+    const size_t len = strlen(s);
+    const int written = usb_serial_jtag_write_bytes(s, len, 0);
+    if (written < (int)len) {
+        // If the USB host closed the port or refreshed the browser tab, stop streaming after ~300 ms
+        // of consecutive full-buffer drops so the TX ring buffer stays clear for the next STATUS?.
+        if (++s_tx_drops >= 15) {
+            s_live = 0;
+            s_scan_live = false;
+            s_log = false;
+            s_tx_drops = 0;
+        }
+    } else {
+        s_tx_drops = 0;
+    }
     xSemaphoreGive(s_tx_lock);
 }
 
@@ -255,13 +273,8 @@ static void send_status(void) {
     esp_chip_info(&chip);
     uint8_t mac[6] = {0};
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    uint32_t flash_bytes = 0;
-    // Physical (JEDEC-detected) size; esp_flash_get_size() reports the size the image was built for.
-    if (esp_flash_get_physical_size(NULL, &flash_bytes) != ESP_OK) {
-        esp_flash_get_size(NULL, &flash_bytes);
-    }
 
-    char out[900];
+    static char out[900];
     int n = snprintf(out, sizeof(out),
                      "@{\"t\":\"status\",\"fw\":\"v%u.%u.%u\",\"role\":%u,\"profile\":%u,\"fp\":\"%08lX\","
                      "\"label\":\"%s\",\"uptimeMs\":%lld,\"reset\":\"%s\",\"boots\":%lu,\"heapFree\":%lu,\"heapMin\":%lu,"
@@ -279,7 +292,7 @@ static void send_status(void) {
                      rf_ok ? "true" : "false",
                      s_rf_enabled ? "true" : "false", gain, gain_max, floor_db,
                      chip.model == CHIP_ESP32C5 ? "ESP32-C5" : "ESP32", chip.revision / 100, chip.revision % 100,
-                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (unsigned long)(flash_bytes / (1024 * 1024)),
+                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (unsigned long)(s_flash_bytes / (1024 * 1024)),
                      mode_name, stas.num, channel, s_slot, s_scan_live ? "true" : "false",
                      s_chan_override ? "true" : "false");
     for (int i = 0; i < 8 && n < (int)sizeof(out) - 16; i++) {
@@ -410,9 +423,11 @@ static void handle_command(char *line) {
         s_scan_step = (uint16_t)s;
         s_scan_pending = true;
     } else if (strcmp(line, "REBOOT") == 0) {
+        s_live = 0;
+        s_scan_live = false;
+        s_rf_enabled = false;
         tx_line("@{\"t\":\"ok\",\"cmd\":\"reboot\"}\n");
-        vTaskDelay(pdMS_TO_TICKS(50));
-        esp_restart();
+        s_reboot_pending = true;
     } else if (line[0]) {
         tx_line("@{\"t\":\"err\",\"msg\":\"unknown command\"}\n");
     }
@@ -449,9 +464,21 @@ void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
     s_tx_lock = xSemaphoreCreateMutex();
     memset(s_peak, -127, sizeof(s_peak));
     for (int i = 0; i < 8; i++) s_floor_q4[i] = FLOOR_UNSET;
+    if (esp_flash_get_physical_size(NULL, &s_flash_bytes) != ESP_OK) {
+        esp_flash_get_size(NULL, &s_flash_bytes);
+    }
+    gpio_config_t led_cfg = {
+        .pin_bit_mask = 1ULL << XIAO_C5_LED_GPIO,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&led_cfg);
+    gpio_set_level(XIAO_C5_LED_GPIO, 0); // Solid ON during startup until sweeps begin
     usb_serial_jtag_driver_config_t usb_cfg = {
-        .tx_buffer_size = 2048,
-        .rx_buffer_size = 256,
+        .tx_buffer_size = 4096,
+        .rx_buffer_size = 512,
     };
     if (usb_serial_jtag_driver_install(&usb_cfg) == ESP_OK) {
         xTaskCreate(console_task, "slaprf_diag", 4096, NULL, 3, NULL);
@@ -470,10 +497,34 @@ void slaprf_diag_set_slot(uint8_t slot) {
     s_slot = slot;
 }
 
+static void update_health_led(void) {
+    bool rf_ok = false;
+    int gain = 0, gain_max = 0;
+    float floor_db = 0;
+    slaprf_rf58_info(&rf_ok, &gain, &gain_max, &floor_db);
+    bool led_on = false;
+    if (!rf_ok) {
+        // 5.8 GHz RF boot check failed: rapid 10 Hz alarm blink
+        led_on = ((s_sweeps / 2) & 1U) == 0;
+    } else if (s_live || s_scan_live) {
+        // USB Debug stream active (LIVE 1|2 or SCAN LIVE): brisk 5 Hz activity pulse
+        const uint32_t period = s_sweep_hz >= 10 ? s_sweep_hz / 5 : 2;
+        const uint32_t phase = s_sweeps % (period ? period : 2);
+        led_on = phase < (period / 2 ? period / 2 : 1);
+    } else {
+        // Healthy & running 50 Hz sweeps: double-blip heartbeat every 2 seconds
+        const uint32_t period = (uint32_t)s_sweep_hz * 2;
+        const uint32_t phase = s_sweeps % (period ? period : 100);
+        led_on = (phase < 2) || (phase >= 7 && phase < 9);
+    }
+    gpio_set_level(XIAO_C5_LED_GPIO, led_on ? 0 : 1); // Active-low user LED
+}
+
 void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us) {
     s_sweeps++;
     s_sweep_us_last = took_us;
     if (took_us > s_sweep_us_max) s_sweep_us_max = took_us;
+    update_health_led();
     for (int i = 0; i < 8; i++) {
         if (dbm[i] <= -127) continue; // Receiver off or slot used by a live scan: no reading
         const int16_t v = (int16_t)(dbm[i] * 16);
@@ -494,7 +545,7 @@ void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us) {
     if (!s_live || s_sweeps % every != 0) {
         return;
     }
-    char out[300];
+    static char out[300];
     int8_t fl[8];
     for (int i = 0; i < 8; i++) fl[i] = s_floor_q4[i] == FLOOR_UNSET ? -127 : (int8_t)(s_floor_q4[i] / 16);
     snprintf(out, sizeof(out),
@@ -512,6 +563,10 @@ void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us) {
 }
 
 void slaprf_diag_service(void) {
+    if (s_reboot_pending) {
+        vTaskDelay(pdMS_TO_TICKS(40));
+        esp_restart();
+    }
     if (s_ls_ready) {
         // A live-scan pass finished in the last sweep slot; send it from here (outside the slot).
         static char live_out[96 + SCAN_MAX_POINTS * 5];
