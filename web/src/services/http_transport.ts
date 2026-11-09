@@ -13,6 +13,7 @@ import {
 import { ApiTransport, FirmwareImageResult } from "./transport";
 
 const RECONNECT_MS = 1500;
+const REAL_FALLBACK_STORAGE_KEY = "slaprf.real_fallback.v1";
 const RACEBAND_MHZ = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
 const PILOT_COLORS = ["#ef4444", "#3b82f6", "#10b981", "#f59e0b", "#a855f7", "#06b6d4", "#ec4899", "#84cc16"];
 const GATE_COLORS = ["#d4ff3a", "#38bdf8", "#f472b6", "#fb923c", "#a78bfa", "#2dd4bf", "#facc15", "#f87171"];
@@ -52,6 +53,51 @@ export class HttpRealTransport implements ApiTransport {
   };
   private fallbackArmed = true;
   private fallbackLiveTimeEnabled = false;
+
+  constructor() {
+    this.loadOfflineFallback();
+  }
+
+  private loadOfflineFallback(): void {
+    try {
+      const raw = window.localStorage.getItem(REAL_FALLBACK_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as {
+        pilots?: PilotSlot[];
+        nodes?: TrackNode[];
+        timers?: DetectedTimer[];
+        rules?: TimingRules;
+        armed?: boolean;
+        liveTimeEnabled?: boolean;
+      };
+      if (Array.isArray(parsed.pilots) && parsed.pilots.length > 0) this.fallbackPilots = parsed.pilots;
+      if (Array.isArray(parsed.nodes)) this.fallbackNodes = parsed.nodes;
+      if (Array.isArray(parsed.timers)) this.fallbackDetectedTimers = parsed.timers;
+      if (parsed.rules) this.fallbackRules = { ...this.fallbackRules, ...parsed.rules };
+      if (typeof parsed.armed === "boolean") this.fallbackArmed = parsed.armed;
+      if (typeof parsed.liveTimeEnabled === "boolean") this.fallbackLiveTimeEnabled = parsed.liveTimeEnabled;
+    } catch {
+      // Ignore storage parse errors
+    }
+  }
+
+  private saveOfflineFallback(): void {
+    try {
+      window.localStorage.setItem(
+        REAL_FALLBACK_STORAGE_KEY,
+        JSON.stringify({
+          pilots: this.fallbackPilots,
+          nodes: this.fallbackNodes,
+          timers: this.fallbackDetectedTimers,
+          rules: this.fallbackRules,
+          armed: this.fallbackArmed,
+          liveTimeEnabled: this.fallbackLiveTimeEnabled,
+        })
+      );
+    } catch {
+      // Ignore storage quota errors
+    }
+  }
 
   public async request<T = unknown>(method: "GET" | "POST", url: string, body?: unknown): Promise<T> {
     try {
@@ -150,14 +196,16 @@ export class HttpRealTransport implements ApiTransport {
     this.source = null;
   }
 
-  private handleOfflineFallback(_method: string, url: string, body?: unknown): unknown {
+  private handleOfflineFallback(method: string, url: string, body?: unknown): unknown {
     if (url === "/api/timing/toggle-arm") {
       this.fallbackArmed = !this.fallbackArmed;
+      this.saveOfflineFallback();
       return this.offlineStatus();
     }
     if (url === "/api/livetime/toggle") {
       const b = (body ?? {}) as { enabled?: boolean };
       this.fallbackLiveTimeEnabled = b.enabled !== undefined ? b.enabled : !this.fallbackLiveTimeEnabled;
+      this.saveOfflineFallback();
       return this.offlineStatus();
     }
     if (url === "/api/status") {
@@ -166,6 +214,7 @@ export class HttpRealTransport implements ApiTransport {
     if (url === "/api/rules") {
       if (body) {
         this.fallbackRules = { ...this.fallbackRules, ...(body as TimingRules) };
+        this.saveOfflineFallback();
       }
       return { ...this.fallbackRules };
     }
@@ -291,6 +340,9 @@ export class HttpRealTransport implements ApiTransport {
       if (gate) gate.color = b.color;
     } else if (url === "/api/wifi/networks") {
       return { networks: [] };
+    }
+    if (method === "POST") {
+      this.saveOfflineFallback();
     }
     return this.offlineState();
   }

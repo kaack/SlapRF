@@ -7,11 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"sync"
+	"time"
 
 	"slaprf/internal/domain"
 	"slaprf/internal/firmware"
 	"slaprf/internal/ingest"
 	"slaprf/internal/laprf"
+	"slaprf/internal/storage"
 	"slaprf/internal/tracker"
 )
 
@@ -55,6 +58,31 @@ type Server struct {
 	laprfServer *laprf.Server
 	sseHub      *SSEHub
 	webRootDir  string
+	store       storage.Store
+	saveMu      sync.Mutex
+	saveTimer   *time.Timer
+}
+
+type realPersistenceSubscriber struct {
+	srv *Server
+}
+
+func (p *realPersistenceSubscriber) OnTelemetryFrame(domain.TimerTelemetryFrame) {}
+
+func (p *realPersistenceSubscriber) OnGateCrossing(domain.GateCrossingEvent) {
+	p.srv.scheduleRealSave()
+}
+
+func (p *realPersistenceSubscriber) OnDetectionFiltered(domain.FilteredDetection) {
+	p.srv.scheduleRealSave()
+}
+
+func (p *realPersistenceSubscriber) OnLapCompleted(domain.LapRecord, []domain.PilotTrackSummary) {
+	p.srv.scheduleRealSave()
+}
+
+func (p *realPersistenceSubscriber) OnConfigUpdated([]domain.PilotSlot, []domain.TrackGate) {
+	p.srv.SaveRealStateNow()
 }
 
 type gatedEventSubscriber struct {
@@ -135,6 +163,54 @@ func (s *Server) activeEngine() *tracker.Engine {
 // RealEngine returns the hardware timing engine fed by the physical XIAO ESP32-C5 Hub Timer.
 func (s *Server) RealEngine() *tracker.Engine {
 	return s.realEngine
+}
+
+// SetStore attaches a persistence store for the real-world timing engine (`realEngine`).
+func (s *Server) SetStore(st storage.Store) {
+	s.saveMu.Lock()
+	s.store = st
+	s.saveMu.Unlock()
+	if st != nil && s.realEngine != nil {
+		s.realEngine.Subscribe(&realPersistenceSubscriber{srv: s})
+	}
+}
+
+// SaveRealStateNow immediately writes the current `realEngine` and LiveTime state to the attached store.
+func (s *Server) SaveRealStateNow() {
+	s.saveMu.Lock()
+	st := s.store
+	if s.saveTimer != nil {
+		s.saveTimer.Stop()
+		s.saveTimer = nil
+	}
+	s.saveMu.Unlock()
+	if st == nil || s.realEngine == nil {
+		return
+	}
+	_ = st.Save(storage.RealBackendState{
+		Engine:          s.realEngine.ExportState(),
+		LiveTimeEnabled: s.laprfServer.Status().Enabled,
+	})
+}
+
+func (s *Server) scheduleRealSave() {
+	s.saveMu.Lock()
+	defer s.saveMu.Unlock()
+	if s.store == nil || s.realEngine == nil {
+		return
+	}
+	if s.saveTimer != nil {
+		return
+	}
+	s.saveTimer = time.AfterFunc(250*time.Millisecond, func() {
+		s.SaveRealStateNow()
+	})
+}
+
+func (s *Server) saveIfRealActive() {
+	if s.activeEngine() == s.realEngine {
+		s.SaveRealStateNow()
+	}
 }
 
 // Handler builds the HTTP multiplexer for the application.
@@ -249,7 +325,9 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		writeJSON(w, http.StatusOK, eng.SetRules(rules))
+		applied := eng.SetRules(rules)
+		s.saveIfRealActive()
+		writeJSON(w, http.StatusOK, applied)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -265,6 +343,7 @@ func (s *Server) handleToggleArm(w http.ResponseWriter, r *http.Request) {
 	if s.laprfServer.Status().ConnectedClients == 0 {
 		eng := s.activeEngine()
 		eng.SetRaceArmed(!eng.IsRaceArmed())
+		s.saveIfRealActive()
 	}
 	s.handleGetStatus(w, r)
 }
@@ -283,6 +362,7 @@ func (s *Server) handleToggleLiveTime(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.laprfServer.SetEnabled(!s.laprfServer.Status().Enabled)
 	}
+	s.SaveRealStateNow()
 	s.handleGetStatus(w, r)
 }
 
@@ -324,6 +404,7 @@ func (s *Server) handleThresholds(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	s.saveIfRealActive()
 	s.handleGetState(w, r)
 }
 
@@ -346,6 +427,7 @@ func (s *Server) handleGateRules(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	s.saveIfRealActive()
 	s.handleGetState(w, r)
 }
 
@@ -363,6 +445,7 @@ func (s *Server) handleUpdateGate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	s.saveIfRealActive()
 	s.handleGetState(w, r)
 }
 
@@ -383,6 +466,7 @@ func (s *Server) handleUpdateTimerColor(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	s.saveIfRealActive()
 	s.handleGetState(w, r)
 }
 
@@ -620,6 +704,7 @@ func (s *Server) handleResetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.activeEngine().ResetSession()
+	s.saveIfRealActive()
 	s.handleGetState(w, r)
 }
 

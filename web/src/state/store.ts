@@ -45,6 +45,7 @@ const HISTORY_TRIM_SLACK = 250;
 const MAX_CROSSINGS = 1500;
 const MAX_FILTERED = 500;
 const MAX_LAPS = 5000;
+const UI_PREFS_STORAGE_KEY = "slaprf.ui.prefs.v1";
 
 const DEFAULT_RULES: TimingRules = {
   minLapSec: 5,
@@ -92,6 +93,40 @@ export class AppStore {
   private readonly listeners = new Map<Topic, Set<Listener>>();
   private readonly lapListeners = new Set<LapListener>();
   private readonly startGateListeners = new Set<CrossingListener>();
+
+  constructor() {
+    this.loadUiPrefs();
+  }
+
+  private loadUiPrefs(): void {
+    try {
+      const raw = window.localStorage.getItem(UI_PREFS_STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as { selectedPilot?: number; liveFocus?: number | null };
+      if (typeof parsed.selectedPilot === "number" && parsed.selectedPilot >= 1) {
+        this._selectedPilot = parsed.selectedPilot;
+      }
+      if (parsed.liveFocus === null || (typeof parsed.liveFocus === "number" && parsed.liveFocus >= 1)) {
+        this._liveFocus = parsed.liveFocus;
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+  }
+
+  private saveUiPrefs(): void {
+    try {
+      window.localStorage.setItem(
+        UI_PREFS_STORAGE_KEY,
+        JSON.stringify({
+          selectedPilot: this._selectedPilot,
+          liveFocus: this._liveFocus,
+        })
+      );
+    } catch {
+      // Ignore storage access errors
+    }
+  }
 
   private get activeHistory(): Map<number, TimerTelemetryFrame[]> {
     return this._simulatorRunning ? this.simHistory : this.realHistory;
@@ -457,6 +492,7 @@ export class AppStore {
     if (slotIndex === this._selectedPilot) return;
     this._selectedPilot = slotIndex;
     this._comparison = { lapId: null, reference: "best" };
+    this.saveUiPrefs();
     this.emit("selection");
   }
 
@@ -470,6 +506,7 @@ export class AppStore {
     if (slotIndex !== null) this.selectPilot(slotIndex);
     if (slotIndex === this._liveFocus) return;
     this._liveFocus = slotIndex;
+    this.saveUiPrefs();
     this.emit("selection");
   }
 

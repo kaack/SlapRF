@@ -16,6 +16,7 @@ import (
 	"slaprf/internal/api"
 	"slaprf/internal/ingest"
 	"slaprf/internal/laprf"
+	"slaprf/internal/storage"
 	"slaprf/internal/tracker"
 	webassets "slaprf/web"
 )
@@ -25,6 +26,7 @@ func main() {
 	laprfAddr := flag.String("laprf", ":5403", "TCP address for MultiGP LiveTime (ImmersionRC LapRF 8-Way protocol)")
 	udpAddr := flag.String("udp", ":5404", "UDP address for Hub Timer 2.4 GHz LR sliding-window telemetry")
 	webDir := flag.String("web", "./web", "Path to the web SPA directory")
+	dbPath := flag.String("db", "slaprf.db", "Path to SQLite database for persisting real-world settings, pilots, track setup, and laps")
 	openBrowser := flag.Bool("open", true, "Automatically open the web UI in the default browser on startup")
 	flag.Parse()
 
@@ -70,6 +72,24 @@ func main() {
 	defer cleanupWeb()
 
 	httpSrv := api.NewServer(engine, sim, laprfSrv, resolvedWebDir)
+	store, err := storage.NewSQLiteStore(*dbPath)
+	if err != nil {
+		log.Printf("Warning: SQLite persistence store (%s) could not be opened: %v", *dbPath, err)
+	} else {
+		defer func() {
+			httpSrv.SaveRealStateNow()
+			_ = store.Close()
+		}()
+		if saved, found, loadErr := store.Load(); loadErr != nil {
+			log.Printf("Warning: Failed to load persisted state from %s: %v", *dbPath, loadErr)
+		} else if found && saved != nil {
+			httpSrv.RealEngine().RestoreState(saved.Engine, false)
+			laprfSrv.SetEnabled(saved.LiveTimeEnabled)
+			log.Printf("[SQLite Store] Rehydrated real-world state from %s (%d pilots, %d gates, %d timers, %d laps)",
+				*dbPath, len(saved.Engine.Pilots), len(saved.Engine.Gates), len(saved.Engine.Timers), len(saved.Engine.Laps))
+		}
+		httpSrv.SetStore(store)
+	}
 	udpRx := ingest.NewWiFiUDPReceiver(*udpAddr, httpSrv.RealEngine())
 	if err := udpRx.Start(); err != nil {
 		log.Printf("Warning: Hub Timer Wi-Fi UDP listener on %s could not start: %v", *udpAddr, err)

@@ -29,3 +29,6 @@ firmware/*/sdkconfig.old
 firmware/*/managed_components/
 
 firmware/*/build-*/
+*.db
+*.db-wal
+*.db-shm

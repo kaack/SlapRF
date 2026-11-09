@@ -38,6 +38,7 @@ interface ConfigPayload {
 }
 
 const STATUS_POLL_MS = 2000;
+const SIM_MODE_STORAGE_KEY = "slaprf.ui.sim_mode.v1";
 
 /**
  * REST + 50 Hz stream client routed through an `ApiTransport` interface:
@@ -54,6 +55,16 @@ export class ApiClient {
 
   constructor(store: AppStore) {
     this.store = store;
+    try {
+      const savedMode = window.localStorage.getItem(SIM_MODE_STORAGE_KEY);
+      if (savedMode === "false") {
+        this.simMode = false;
+      } else if (savedMode === "true") {
+        this.simMode = true;
+      }
+    } catch {
+      // Ignore storage access errors
+    }
   }
 
   private get transport(): ApiTransport {
@@ -129,6 +140,11 @@ export class ApiClient {
   public async toggleSimulator(): Promise<void> {
     this.transport.disconnectStream();
     this.simMode = !this.simMode;
+    try {
+      window.localStorage.setItem(SIM_MODE_STORAGE_KEY, String(this.simMode));
+    } catch {
+      // Ignore storage access errors
+    }
     this.connectStream();
     await this.refresh();
     if (!this.simMode && sharedTimerConsole.connected && sharedTimerConsole.lastStatus) {

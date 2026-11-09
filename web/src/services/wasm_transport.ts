@@ -1,11 +1,15 @@
 import { StreamEnvelope } from "../types/models";
 import { ApiTransport, FirmwareImageResult } from "./transport";
 
+const SIM_STORAGE_KEY = "slaprf.sim_state.v1";
+
 interface SlaprfWasmBridge {
   request(method: string, url: string, body?: string): { status: number; body: string };
   fetchBytes(url: string): { status: number; bytes: Uint8Array; sha256: string };
   onStream(cb: ((envelopeJson: string) => void) | null): void;
   setRunning(running: boolean): void;
+  exportSimState?(): string;
+  restoreSimState?(jsonStr: string): boolean;
 }
 
 declare global {
@@ -28,6 +32,33 @@ declare global {
 export class WasmSimTransport implements ApiTransport {
   private readyPromise: Promise<SlaprfWasmBridge> | null = null;
   private streamCallback: ((msg: StreamEnvelope) => void) | null = null;
+  private persistTimer: number | null = null;
+  private unloadBound = false;
+
+  private persistNow(wasm?: SlaprfWasmBridge | null): void {
+    if (this.persistTimer !== null) {
+      window.clearTimeout(this.persistTimer);
+      this.persistTimer = null;
+    }
+    const target = wasm ?? window.slaprfWasm;
+    if (!target || typeof target.exportSimState !== "function") return;
+    try {
+      const json = target.exportSimState();
+      if (json) {
+        window.localStorage.setItem(SIM_STORAGE_KEY, json);
+      }
+    } catch {
+      // Ignore storage quota or private-browsing errors
+    }
+  }
+
+  private schedulePersist(wasm: SlaprfWasmBridge): void {
+    if (this.persistTimer !== null) return;
+    this.persistTimer = window.setTimeout(() => {
+      this.persistTimer = null;
+      this.persistNow(wasm);
+    }, 350);
+  }
 
   private ensureReady(): Promise<SlaprfWasmBridge> {
     if (window.slaprfWasm) {
@@ -48,7 +79,7 @@ export class WasmSimTransport implements ApiTransport {
     if (!window.Go) {
       await new Promise<void>((resolve, reject) => {
         const script = document.createElement("script");
-        script.src = "./wasm/wasm_exec.js?v=44";
+        script.src = "./wasm/wasm_exec.js?v=199";
         script.onload = () => resolve();
         script.onerror = () => reject(new Error("Failed to load ./wasm/wasm_exec.js"));
         document.head.appendChild(script);
@@ -57,7 +88,7 @@ export class WasmSimTransport implements ApiTransport {
 
     window.__slaprfBootStatus?.("Downloading SlapRF 5.8 GHz timing engine…", 28);
     const go = new window.Go!();
-    const wasmUrl = "./wasm/slaprf.wasm?v=44";
+    const wasmUrl = "./wasm/slaprf.wasm?v=199";
 
     const response = await fetch(wasmUrl);
     if (!response.ok) {
@@ -125,6 +156,19 @@ export class WasmSimTransport implements ApiTransport {
     }
 
     window.__slaprfBootStatus?.("Hydrating track state…", 95);
+    try {
+      if (!window.localStorage.getItem(SIM_STORAGE_KEY)) {
+        this.persistNow(window.slaprfWasm);
+      }
+    } catch {
+      // Ignore storage access errors
+    }
+    if (!this.unloadBound) {
+      this.unloadBound = true;
+      const flush = () => this.persistNow(window.slaprfWasm);
+      window.addEventListener("pagehide", flush);
+      window.addEventListener("beforeunload", flush);
+    }
     if (this.streamCallback) {
       this.bindStream(window.slaprfWasm, this.streamCallback);
     }
@@ -135,7 +179,11 @@ export class WasmSimTransport implements ApiTransport {
     wasm.setRunning(true);
     wasm.onStream((raw: string) => {
       try {
-        onEnvelope(JSON.parse(raw) as StreamEnvelope);
+        const env = JSON.parse(raw) as StreamEnvelope;
+        if (env.type !== "telemetry") {
+          this.schedulePersist(wasm);
+        }
+        onEnvelope(env);
       } catch (err) {
         console.error("[WasmSimTransport] stream parse error:", err);
       }
@@ -148,6 +196,9 @@ export class WasmSimTransport implements ApiTransport {
     const res = wasm.request(method, url, body !== undefined ? JSON.stringify(body) : "");
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`WASM ${method} ${url} failed (${res.status}): ${res.body}`);
+    }
+    if (method === "POST") {
+      this.persistNow(wasm);
     }
     return JSON.parse(res.body) as T;
   }
@@ -178,6 +229,7 @@ export class WasmSimTransport implements ApiTransport {
   public disconnectStream(): void {
     this.streamCallback = null;
     if (window.slaprfWasm) {
+      this.persistNow(window.slaprfWasm);
       window.slaprfWasm.onStream(null);
       window.slaprfWasm.setRunning(false);
     }

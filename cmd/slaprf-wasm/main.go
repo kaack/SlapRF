@@ -76,10 +76,41 @@ func (w *wasmStreamSubscriber) OnConfigUpdated(pilots []domain.PilotSlot, gates 
 	})
 }
 
+const simStorageKey = "slaprf.sim_state.v1"
+
+type persistedSimBundle struct {
+	Engine  tracker.PersistedEngineState `json:"engine"`
+	Options ingest.SimPersistedOptions   `json:"options"`
+}
+
+func loadSimFromLocalStorage(simEngine *tracker.Engine, sim *ingest.TrackSimulator) bool {
+	ls := js.Global().Get("localStorage")
+	if ls.IsUndefined() || ls.IsNull() {
+		return false
+	}
+	val := ls.Call("getItem", simStorageKey)
+	if val.IsUndefined() || val.IsNull() {
+		return false
+	}
+	raw := val.String()
+	if raw == "" {
+		return false
+	}
+	var payload persistedSimBundle
+	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+		return false
+	}
+	simEngine.RestoreState(payload.Engine, true)
+	sim.RestoreOptions(payload.Options)
+	return true
+}
+
 func main() {
 	simEngine := tracker.NewEngine()
 	sim := ingest.NewTrackSimulator(simEngine)
-	sim.Prewarm(45 * time.Second)
+	if !loadSimFromLocalStorage(simEngine, sim) {
+		sim.Prewarm(45 * time.Second)
+	}
 	sim.Start()
 
 	laprfSrv := laprf.NewServer(":5403", simEngine)
@@ -158,6 +189,43 @@ func main() {
 			sim.SetRunning(args[0].Bool())
 		}
 		return nil
+	}))
+
+	// exportSimState() => string (JSON of simulated engine + simulator options)
+	apiObj.Set("exportSimState", js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		payload := struct {
+			Engine  tracker.PersistedEngineState `json:"engine"`
+			Options ingest.SimPersistedOptions   `json:"options"`
+		}{
+			Engine:  simEngine.ExportState(),
+			Options: sim.ExportOptions(),
+		}
+		b, err := json.Marshal(payload)
+		if err != nil {
+			return ""
+		}
+		return string(b)
+	}))
+
+	// restoreSimState(jsonStr: string) => boolean
+	apiObj.Set("restoreSimState", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		if len(args) == 0 || args[0].Type() != js.TypeString {
+			return false
+		}
+		raw := args[0].String()
+		if raw == "" {
+			return false
+		}
+		var payload struct {
+			Engine  tracker.PersistedEngineState `json:"engine"`
+			Options ingest.SimPersistedOptions   `json:"options"`
+		}
+		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
+			return false
+		}
+		simEngine.RestoreState(payload.Engine, true)
+		sim.RestoreOptions(payload.Options)
+		return true
 	}))
 
 	js.Global().Set("slaprfWasm", apiObj)
