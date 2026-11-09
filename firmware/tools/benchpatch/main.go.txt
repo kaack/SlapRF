@@ -1,0 +1,42 @@
+package main
+
+// Bench tool: merge a smoke build, stamp a custom channel table (bypassing the 5600-5950 MHz
+// production limit) plus role/fingerprint into its SLAPRF02 block, repair checksum/SHA.
+// Usage: go run ./cmd/_benchpatch <merged.bin> <out.bin> <mhz,mhz,...x8>
+import (
+	"bytes"
+	"encoding/binary"
+	"os"
+	"strconv"
+	"strings"
+
+	"slaprf/internal/firmware"
+)
+
+func main() {
+	base, err := os.ReadFile(os.Args[1])
+	if err != nil {
+		panic(err)
+	}
+	built, err := firmware.PatchImage(base, firmware.TimerConfig{Role: firmware.RoleHubTimer, Profile: "open-ground", Fingerprint: 0xBE7C0001, PuckLabel: "H1"})
+	if err != nil {
+		panic(err)
+	}
+	img := built.Bytes
+	off := bytes.Index(img, []byte(firmware.ConfigMagic))
+	for i, f := range strings.Split(os.Args[3], ",") {
+		v, _ := strconv.Atoi(strings.TrimSpace(f))
+		binary.LittleEndian.PutUint16(img[off+18+i*2:], uint16(v))
+	}
+	var crc byte
+	for _, b := range img[off : off+159] {
+		crc ^= b
+	}
+	img[off+159] = crc
+	if err := firmware.RepairAppImage(img, off); err != nil {
+		panic(err)
+	}
+	if err := os.WriteFile(os.Args[2], img, 0o644); err != nil {
+		panic(err)
+	}
+}
