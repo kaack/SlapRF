@@ -2142,6 +2142,14 @@ export class DebugView extends Component {
           this.renderSerialConsole();
           this.scrollSerialToBottom(true);
           break;
+        case "serial-wrap":
+          this.serialWrap = !this.serialWrap;
+          this.renderSerialConsole();
+          break;
+        case "log-wrap":
+          this.logWrap = !this.logWrap;
+          this.renderLog();
+          break;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2235,7 +2243,6 @@ export class DebugView extends Component {
     const enter = !this.status?.emergencyMode;
     this.setProgress(enter ? "Entering emergency mode…" : "Exiting emergency mode…");
     await this.sendSerialCommand(enter ? "EMERGENCY 1" : "EMERGENCY 0");
-    await this.sendSerialCommand("BOOTLOG?");
   }
 
   private async restartAndCapture(): Promise<void> {
@@ -4033,12 +4040,7 @@ export class DebugView extends Component {
             <span class="note" data-serial-note>${esc(statusText)}</span>
           </div>
           <div class="debug-connect-actions">
-            <div class="debug-overlay-checks">
-              <label class="check">
-                <input type="checkbox" data-check="serial-wrap" ${this.serialWrap ? "checked" : ""}/>
-                <span>Wrap lines</span>
-              </label>
-            </div>
+            <button type="button" class="btn btn-sm btn-icon btn-ghost ${this.serialWrap ? "is-toggled" : ""}" data-action="serial-wrap" aria-pressed="${this.serialWrap}" title="${this.serialWrap ? "Wrap lines: ON (click to disable)" : "Wrap lines: OFF (click to enable)"}" aria-label="Wrap lines">${icons.wrapText(17)}</button>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-serial" ${this.serialLines.length ? "" : "disabled"} title="Copy terminal output" aria-label="Copy terminal output">${icons.copy(17)}</button>
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-clear" ${this.serialLines.length ? "" : "disabled"} title="Clear terminal (CLEAR)" aria-label="Clear terminal">${icons.trash(17)}</button>
           </div>
@@ -4057,8 +4059,12 @@ export class DebugView extends Component {
 
     const noteEl = host.querySelector<HTMLElement>("[data-serial-note]");
     if (noteEl) noteEl.textContent = statusText;
-    const wrapChk = host.querySelector<HTMLInputElement>('[data-check="serial-wrap"]');
-    if (wrapChk) wrapChk.checked = this.serialWrap;
+    const wrapBtn = host.querySelector<HTMLButtonElement>('[data-action="serial-wrap"]');
+    if (wrapBtn) {
+      wrapBtn.classList.toggle("is-toggled", this.serialWrap);
+      wrapBtn.setAttribute("aria-pressed", String(this.serialWrap));
+      wrapBtn.title = this.serialWrap ? "Wrap lines: ON (click to disable)" : "Wrap lines: OFF (click to enable)";
+    }
     const copyBtn = host.querySelector<HTMLButtonElement>('[data-action="copy-serial"]');
     if (copyBtn) copyBtn.disabled = !this.serialLines.length;
     const clearBtn = host.querySelector<HTMLButtonElement>('[data-action="serial-clear"]');
@@ -4093,12 +4099,7 @@ export class DebugView extends Component {
           <span class="debug-head-note" data-log-count>${active ? "Streaming" : "Paused"} · ${this.logLines.length} lines</span>
         </span>
         <div class="debug-connect-actions">
-          <div class="debug-overlay-checks">
-            <label class="check">
-              <input type="checkbox" data-check="log-wrap" ${this.logWrap ? "checked" : ""}/>
-              <span>Wrap lines</span>
-            </label>
-          </div>
+          <button type="button" class="btn btn-sm btn-icon btn-ghost ${this.logWrap ? "is-toggled" : ""}" data-action="log-wrap" aria-pressed="${this.logWrap}" title="${this.logWrap ? "Wrap lines: ON (click to disable)" : "Wrap lines: OFF (click to enable)"}" aria-label="Wrap lines">${icons.wrapText(17)}</button>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="clear-log" title="Clear live log" aria-label="Clear live log">${icons.trash(17)}</button>
           <button type="button" class="btn btn-sm ${this.logOn ? "btn-armed" : "btn-unarmed"}" data-action="log" ${on ? "" : "disabled"} title="${this.logOn ? "Streaming USB log mirror — click to pause" : "Paused — click to stream USB log mirror"}">
             ${this.logOn ? icons.pause(14) : icons.play(14)}<span>${this.logOn ? "Pause" : "Stream"}</span>

@@ -106,4 +106,9 @@ export const icons = {
     ),
   check: (s?: number) => svg(`<path d="M20 6 9 17l-5-5"/>`, s),
   terminal: (s?: number) => svg(`<path d="m4 17 6-6-6-6"/><path d="M12 19h8"/>`, s),
+  wrapText: (s?: number) =>
+    svg(
+      `<path d="M3 6h18"/><path d="M3 12h15a3 3 0 1 1 0 6h-4"/><path d="m16 16-2 2 2 2"/><path d="M3 18h7"/>`,
+      s
+    ),
 };
