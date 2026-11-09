@@ -1894,13 +1894,14 @@ async function handleMessage(msg) {
           <div class="rule-text">
             <div class="rule-label">${spec.label}</div>
             <div class="rule-help">${spec.help}</div>
-            ${overrideNote}
+            <div class="rule-meta">
+              <span class="rule-count" data-count="${spec.reason}"></span>
+              ${overrideNote}
+            </div>
           </div>
-          <span class="rule-count" data-count="${spec.reason}"></span>
           <div class="rule-input">
             <input class="input mono" type="number" name="${spec.key}" value="${r[spec.key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" />
           </div>
-          ${overrideNote?`<div class="rule-mobile-note">${overrideNote}</div>`:""}
         </div>`}).join(""),foot=gate?`<p class="note">Edited rules apply only to ${esc(gateLabel(this.store,gate.puckId))}.</p>
          ${Object.keys(overrides).length?'<button class="btn btn-ghost btn-sm" type="button" data-action="clear">Use all-gate rules</button>':""}`:`<p class="note">Applies to new detections.</p>
          <button class="btn btn-ghost btn-sm" type="button" data-action="defaults">Restore defaults</button>`;this.el.innerHTML=`
@@ -1916,8 +1917,8 @@ async function handleMessage(msg) {
           <div class="rule-text">
             <div class="rule-label">${spec.label}</div>
             <div class="rule-help">Applies to the whole lap, so it's set under All gates.</div>
+            <div class="rule-meta"></div>
           </div>
-          <span class="rule-count"></span>
           <div class="rule-input">
             <input class="input mono" type="number" value="${r[spec.key]}" disabled />
           </div>
@@ -1926,8 +1927,10 @@ async function handleMessage(msg) {
         <div class="rule-text">
           <div class="rule-label">${spec.label}</div>
           <div class="rule-help">${spec.help}</div>
+          <div class="rule-meta">
+            <span class="rule-count" data-count="${spec.reason}"></span>
+          </div>
         </div>
-        <span class="rule-count" data-count="${spec.reason}"></span>
         <div class="flasher-pass-wrap rule-input has-inline-action">
           <input class="input mono flasher-pass-input" type="number" name="${key}" value="${on?own:r[key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" ${on?"":"disabled"} />
           <button
