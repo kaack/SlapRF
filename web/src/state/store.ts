@@ -163,12 +163,10 @@ export class AppStore {
       const targetId = matchedDet?.timerId ?? usb.timerId;
       return this._nodes.map((n) => {
         const assigned = n.assignedTimerId ?? n.gateId;
-        if (assigned === targetId) {
+        if (assigned === targetId && n.online) {
           return {
             ...n,
-            online: true,
             noiseFloorDbm: usb.noiseFloorDbm,
-            lastSeenAt: usb.lastSeenAt || n.lastSeenAt,
           };
         }
         return n;
@@ -196,14 +194,14 @@ export class AppStore {
           firmwareVersion: usb.firmwareVersion || existing.firmwareVersion,
           firmwareProfile: usb.firmwareProfile || existing.firmwareProfile,
           fingerprint: usb.fingerprint || existing.fingerprint,
-          noiseFloorDbm: usb.noiseFloorDbm,
+          noiseFloorDbm: existing.online ? existing.noiseFloorDbm : usb.noiseFloorDbm,
           batteryMv: existing.batteryMv > 0 ? existing.batteryMv : usb.batteryMv,
           batteryPct: existing.batteryPct > 0 ? existing.batteryPct : usb.batteryPct,
-          online: true,
-          lastSeenAt: usb.lastSeenAt || existing.lastSeenAt,
+          online: existing.online,
+          lastSeenAt: existing.lastSeenAt,
         };
       } else {
-        list.push({ ...usb });
+        list.push({ ...usb, online: false, lastSeenAt: "" });
       }
       return list;
     }
@@ -407,8 +405,19 @@ export class AppStore {
       this._latestTelemetryTimestampUs = frame.timestampUs;
     }
     this._lastIngestPerfMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const nowIso = new Date().toISOString();
     const node = this.node(frame.timerId);
-    if (node) node.lastRssi = frame.rssi;
+    if (node) {
+      node.lastRssi = frame.rssi;
+      node.online = true;
+      node.lastSeenAt = nowIso;
+    }
+    const assignedTimerId = node?.assignedTimerId ?? frame.timerId;
+    const det = this._detectedTimers.find((d) => d.timerId === assignedTimerId);
+    if (det) {
+      det.online = true;
+      det.lastSeenAt = nowIso;
+    }
   }
 
   public ingestCrossing(ev: GateCrossingEvent): void {

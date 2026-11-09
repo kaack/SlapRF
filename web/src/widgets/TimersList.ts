@@ -40,6 +40,8 @@ export class TimersList extends Component {
       }
     });
 
+    const ageRefreshTimer = window.setInterval(() => this.render(), 1000);
+    this.onDispose(() => window.clearInterval(ageRefreshTimer));
     this.onDispose(() => this.closeColorPopover());
     this.onDispose(store.subscribe(["config", "status"], () => this.render()));
     this.render();
@@ -202,6 +204,23 @@ export class TimersList extends Component {
     return `T${d.timerId}`;
   }
 
+  private formatLastSeen(lastSeenAt?: string): string {
+    if (!lastSeenAt) return "never";
+    const parsedMs = Date.parse(lastSeenAt);
+    if (!Number.isFinite(parsedMs) || parsedMs <= 0) return "never";
+    const elapsedSec = Math.max(0, Math.floor((Date.now() - parsedMs) / 1000));
+    if (elapsedSec < 1) return "<1s ago";
+    if (elapsedSec < 60) return `${elapsedSec}s ago`;
+    if (elapsedSec < 3600) {
+      const m = Math.floor(elapsedSec / 60);
+      const s = elapsedSec % 60;
+      return s > 0 ? `${m}m ${s}s ago` : `${m}m ago`;
+    }
+    const h = Math.floor(elapsedSec / 3600);
+    const m = Math.floor((elapsedSec % 3600) / 60);
+    return m > 0 ? `${h}h ${m}m ago` : `${h}h ago`;
+  }
+
   private render(): void {
     const timers = this.allTimers;
 
@@ -264,9 +283,13 @@ export class TimersList extends Component {
         </div>
 
         <div>
-          <span class="timer-status-pill ${d.online ? "is-online" : "is-offline"}">
+          <span
+            class="timer-status-pill ${d.online ? "is-online" : "is-offline"}"
+            title="${d.lastSeenAt ? `Last check: ${esc(new Date(d.lastSeenAt).toLocaleTimeString())}` : "No timing frames received yet"}"
+          >
             <span class="status-dot ${d.online ? "is-up" : ""}"></span>
             <span>${d.online ? "Online" : "Offline"}</span>
+            <span class="timer-status-age">(${esc(this.formatLastSeen(d.lastSeenAt))})</span>
           </span>
         </div>
 

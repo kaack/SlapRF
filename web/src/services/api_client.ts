@@ -104,8 +104,8 @@ export class ApiClient {
         batteryMv: 3950,
         batteryPct: 82,
         noiseFloorDbm: Math.round(s.rf?.floorDb ?? -92),
-        online: true,
-        lastSeenAt: new Date().toISOString(),
+        online: false,
+        lastSeenAt: "",
       });
 
       const provKey = `${this.simMode ? "sim" : "real"}:${isHub ? "hub" : "spoke"}:${label}:${fp}`;
