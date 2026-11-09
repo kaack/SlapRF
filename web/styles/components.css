@@ -393,14 +393,15 @@
   height: 28px;
   border-radius: 2px;
   background: var(--c);
-  opacity: 0.45;
+  opacity: 0.35;
   flex-shrink: 0;
+  transition: opacity 0.2s ease, box-shadow 0.2s ease;
 }
 .pilot-swatch.is-live {
-  opacity: var(--pilot-breathe, 1);
+  opacity: 1;
   box-shadow:
-    0 0 calc(var(--pilot-breathe, 1) * 9px) var(--c),
-    0 0 calc(var(--pilot-breathe, 1) * 3px) var(--c);
+    0 0 9px var(--c),
+    0 0 3px var(--c);
 }
 .pilot-name {
   font-weight: 600;
