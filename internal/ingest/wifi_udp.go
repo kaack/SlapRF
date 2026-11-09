@@ -49,7 +49,8 @@ type slotInfo struct {
 //
 // Frames identify a timer by the short slot number the Hub assigned at join time; Hello frames
 // map each slot to the board's stable fingerprint, which the engine maps to the app's timer ID.
-// Until a Hello arrives for a slot, the slot number is used as the timer ID directly.
+// Frames from a slot that hasn't announced itself yet are dropped (the Hub repeats every HELLO
+// every 2 s), so no anonymous placeholder timers appear before the real identity is known.
 type WiFiUDPReceiver struct {
 	mu      sync.Mutex
 	addr    string
@@ -168,12 +169,11 @@ func (r *WiFiUDPReceiver) handleHello(raw []byte) {
 	r.mu.Unlock()
 }
 
-// resolveSlotLocked returns the stable timer ID and sweep interval for a Hub slot.
-func (r *WiFiUDPReceiver) resolveSlotLocked(slot uint8) (uint8, uint64) {
-	if info, ok := r.slots[slot]; ok {
-		return info.timerID, info.intervalUs
-	}
-	return slot, SampleIntervalUs
+// resolveSlotLocked returns the stable timer ID and sweep interval for a Hub slot, or ok=false if
+// that slot hasn't sent a HELLO yet.
+func (r *WiFiUDPReceiver) resolveSlotLocked(slot uint8) (uint8, uint64, bool) {
+	info, ok := r.slots[slot]
+	return info.timerID, info.intervalUs, ok
 }
 
 // DecodePacket parses a binary packet and returns only the newly recovered frames in
@@ -199,7 +199,10 @@ func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.PuckTe
 
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		timerID, intervalUs := r.resolveSlotLocked(slot)
+		timerID, intervalUs, known := r.resolveSlotLocked(slot)
+		if !known {
+			return nil
+		}
 
 		out := make([]domain.PuckTelemetryFrame, 0, sampleCount)
 		for idx := 0; idx < sampleCount; idx++ {
@@ -245,7 +248,11 @@ func (r *WiFiUDPReceiver) DecodePacket(raw []byte, nowUs uint64) []domain.PuckTe
 		noiseFloor := float32(int8(raw[6]))
 
 		r.mu.Lock()
-		timerID, _ := r.resolveSlotLocked(slot)
+		timerID, _, known := r.resolveSlotLocked(slot)
+		if !known {
+			r.mu.Unlock()
+			return nil
+		}
 		if r.hasSeq[timerID] && !isNewerSeq(seq, r.seenSeq[timerID]) {
 			r.mu.Unlock()
 			return nil

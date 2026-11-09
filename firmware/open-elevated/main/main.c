@@ -225,6 +225,8 @@ static uint32_t pack_window(uint8_t *pkt, uint8_t slot) {
 /* ---- Hub ---------------------------------------------------------------------------------- */
 
 static uint32_t s_slot_fp[MAX_SPOKES]; // slot = index + 2
+static hub_hello_frame_t s_hello[1 + MAX_SPOKES]; // [0] = Hub, [n] = slot n + 1; magic0 == 0 means unused
+#define HELLO_REPEAT_US 2000000 // Re-announce every timer so a laptop that (re)connects late learns them
 
 static void hub_send_hello(uint8_t slot, uint8_t role, uint32_t fp, uint8_t profile, uint8_t sweep_hz,
                            const char *label) {
@@ -240,6 +242,18 @@ static void hub_send_hello(uint8_t slot, uint8_t role, uint32_t fp, uint8_t prof
     memcpy(h.timer_label, label, sizeof(h.timer_label));
     h.crc8 = compute_crc8((const uint8_t *)&h, sizeof(h) - 1);
     slaprf_forward_udp_to_laptop(&h, sizeof(h));
+    if (slot >= 1 && slot <= 1 + MAX_SPOKES) {
+        s_hello[slot - 1] = h;
+    }
+}
+
+/** Repeat every known HELLO (laptops that join or restart after boot still map slots). */
+static void hub_repeat_hellos(void) {
+    for (int i = 0; i < 1 + MAX_SPOKES; i++) {
+        if (s_hello[i].magic0 == FRAME_MAGIC_0) {
+            slaprf_forward_udp_to_laptop(&s_hello[i], sizeof(s_hello[i]));
+        }
+    }
 }
 
 /** Reuse a Spoke's slot if its fingerprint is known, else hand out the first free one. */
@@ -297,6 +311,7 @@ static void hub_run(void) {
     uint8_t pkt[sizeof(timer_window_frame_t)];
     uint8_t beacon_seq = 0;
     int64_t t_sf = slaprf_now_us() + 10000;
+    int64_t next_hello = t_sf + HELLO_REPEAT_US;
     for (;;) {
         for (int k = 0; k < TX_EVERY_SWEEPS; k++) {
             const int64_t t_sweep = t_sf + (int64_t)k * SWEEP_INTERVAL_US;
@@ -309,6 +324,10 @@ static void hub_run(void) {
             }
             if (k == TX_EVERY_SWEEPS - 1) {
                 slaprf_forward_udp_to_laptop(pkt, pack_window(pkt, HUB_SLOT));
+                if (slaprf_now_us() >= next_hello) {
+                    hub_repeat_hellos();
+                    next_hello += HELLO_REPEAT_US;
+                }
             }
             // Stop listening a little early so queued UDP leaves before the radio goes deaf.
             hub_listen_until(t_sweep + SWEEP_INTERVAL_US - 500);
