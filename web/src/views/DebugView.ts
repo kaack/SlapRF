@@ -441,7 +441,6 @@ export class DebugView extends Component {
             <p>Interactive USB terminal for sending commands directly to the timer and inspecting boot logs across crashes and restarts. Type <span class="mono">HELP</span> in the terminal for available commands.</p>
           </div>
           <div class="debug-status-layout">
-            <div data-slot="restart-head"></div>
             <div class="card card-flush" data-slot="serial-console"></div>
             <div class="debug-subbox" data-slot="restart"></div>
           </div>
@@ -2204,6 +2203,7 @@ export class DebugView extends Component {
     this.progress = text;
     this.renderSelfTest();
     this.renderRestart();
+    this.renderSerialConsole();
   }
 
   private async copy(text: string, button: HTMLElement): Promise<void> {
@@ -2569,7 +2569,7 @@ export class DebugView extends Component {
                   <input type="checkbox" data-all-ports ${this.showAllPorts ? "checked" : ""}/>
                   <span>Show non-XIAO ports</span>
                 </label>`
-              : `<button type="button" class="btn btn-sm btn-icon ${s?.emergencyMode ? "btn-armed is-emergency-active" : "btn-ghost"}" data-action="toggle-emergency" ${on && !busy ? "" : "disabled"} title="${s?.emergencyMode ? "Exit emergency mode (EMERGENCY 0)" : "Enter emergency mode (EMERGENCY 1)"}" aria-label="${s?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}">
+              : `<button type="button" class="btn btn-sm btn-icon btn-ghost ${s?.emergencyMode ? "is-emergency-active" : ""}" data-action="toggle-emergency" ${on && !busy ? "" : "disabled"} title="${s?.emergencyMode ? "Exit emergency mode (EMERGENCY 0)" : "Enter emergency mode (EMERGENCY 1)"}" aria-label="${s?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}">
                   ${icons.siren(17)}
                 </button>`
           }
@@ -2702,7 +2702,7 @@ export class DebugView extends Component {
           <span class="debug-head-note">${headText}</span>
         </span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm btn-icon ${s?.emergencyMode ? "btn-armed is-emergency-active" : "btn-ghost"}" data-action="toggle-emergency" ${on && !this.busy ? "" : "disabled"} title="${s?.emergencyMode ? "Exit emergency mode (EMERGENCY 0)" : "Enter emergency mode (EMERGENCY 1)"}" aria-label="${s?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}">
+          <button type="button" class="btn btn-sm btn-icon btn-ghost ${s?.emergencyMode ? "is-emergency-active" : ""}" data-action="toggle-emergency" ${on && !this.busy ? "" : "disabled"} title="${s?.emergencyMode ? "Exit emergency mode (EMERGENCY 0)" : "Enter emergency mode (EMERGENCY 1)"}" aria-label="${s?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}">
             ${icons.siren(17)}
           </button>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="read-config" ${on && !this.busy ? "" : "disabled"} title="Read SLAPRF02 config block (SLAPRF?)" aria-label="Read config">${icons.sliders(17)}</button>
@@ -3783,32 +3783,7 @@ export class DebugView extends Component {
 
   private renderRestart(): void {
     const on = this.console.connected;
-    const emg = Boolean(on && this.status?.emergencyMode);
     const busy = this.busy !== null;
-    const restartBusy = this.busy === "Restarting" || this.busy === "Restart test";
-    const ledClass = restartBusy ? "is-warn" : emg ? "is-emergency" : on ? "is-up" : "";
-    const statusText = restartBusy
-      ? esc(this.progress)
-      : emg
-        ? "Emergency mode active · click Exit emergency mode to resume normal operation"
-        : on
-          ? "Ready · USB reconnects automatically after restart"
-          : "Off · connect a timer first";
-    this.slot("restart-head").innerHTML = `
-      <div class="debug-status-topbar">
-        <span class="debug-led-status">
-          <span class="status-dot ${ledClass}"></span>
-          <span class="debug-head-note">${statusText}</span>
-        </span>
-        <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="bootlog" ${on && !busy ? "" : "disabled"} title="Read this boot's log (BOOTLOG?)" aria-label="Read this boot's log">${icons.fileText(17)}</button>
-          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="lastlog" ${on && !busy ? "" : "disabled"} title="Read previous boot's log (LASTLOG?)" aria-label="Read previous boot's log">${icons.history(17)}</button>
-          <button type="button" class="btn btn-sm btn-icon ${this.status?.emergencyMode ? "btn-armed is-emergency-active" : "btn-ghost"}" data-action="toggle-emergency" ${on && !busy ? "" : "disabled"} title="${this.status?.emergencyMode ? "Exit emergency mode (EMERGENCY 0)" : "Enter emergency mode (EMERGENCY 1)"}" aria-label="${this.status?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode"}">
-            ${icons.siren(17)}
-          </button>
-          <button type="button" class="btn btn-sm btn-icon btn-armed" data-action="restart-capture" ${on && !busy ? "" : "disabled"} title="Restart timer &amp; capture boot log (REBOOT + BOOTLOG?)" aria-label="Restart timer and capture boot log">${icons.reset(17)}</button>
-        </div>
-      </div>`;
     this.slot("restart").innerHTML = `
       <div class="debug-restart-test">
         <label>Restart test <input class="input mono" type="number" data-restart-count value="${esc(this.el.querySelector<HTMLInputElement>("[data-restart-count]")?.value ?? "5")}" min="1" max="50"/> times</label>
@@ -3887,8 +3862,8 @@ export class DebugView extends Component {
       ps1El.textContent = this.serialPrompt();
     }
     const note = this.el.querySelector<HTMLElement>("[data-serial-note]");
-    if (note && this.console.connected) {
-      note.textContent = `${this.serialLines.length} lines · type HELP for commands`;
+    if (note && this.console.connected && !this.busy) {
+      note.textContent = `${this.status?.emergencyMode ? "Emergency mode" : "Connected"} · ${this.serialLines.length} lines · type HELP for commands`;
     }
     this.el.querySelector<HTMLButtonElement>('[data-action="copy-serial"]')?.removeAttribute("disabled");
     this.el.querySelector<HTMLButtonElement>('[data-action="serial-clear"]')?.removeAttribute("disabled");
@@ -4019,9 +3994,19 @@ export class DebugView extends Component {
 
   private renderSerialConsole(): void {
     const on = this.console.connected;
-    const statusText = !on
-      ? "Disconnected"
-      : `${this.serialLines.length} lines · type HELP for commands`;
+    const emg = Boolean(on && this.status?.emergencyMode);
+    const busy = this.busy !== null;
+    const restartBusy =
+      this.busy === "Restarting" ||
+      this.busy === "Restart test" ||
+      this.busy === "Entering emergency mode" ||
+      this.busy === "Exiting emergency mode";
+    const ledClass = restartBusy ? "is-warn" : emg ? "is-emergency" : on ? "is-up" : "";
+    const statusText = restartBusy && this.progress
+      ? this.progress
+      : !on
+        ? "Off · connect a timer first"
+        : `${emg ? "Emergency mode" : "Connected"} · ${this.serialLines.length} lines · type HELP for commands`;
     const introBanner = on
       ? "# SlapRF USB serial terminal — type HELP for commands, Up/Down for history, Tab to complete.\n"
       : "# Disconnected — connect a timer over USB to open an interactive serial session.\n";
@@ -4035,14 +4020,19 @@ export class DebugView extends Component {
     if (!term) {
       host.innerHTML = `
         <div class="debug-card-head debug-log-head">
-          <div class="debug-waterfall-title-group">
-            <span class="debug-chart-title">Serial terminal</span>
-            <span class="note" data-serial-note>${esc(statusText)}</span>
-          </div>
+          <span class="debug-led-status">
+            <span class="status-dot ${ledClass}" data-serial-led></span>
+            <span class="debug-head-note" data-serial-note>${esc(statusText)}</span>
+          </span>
           <div class="debug-connect-actions">
-            <button type="button" class="btn btn-sm btn-icon btn-ghost ${this.serialWrap ? "is-toggled" : ""}" data-action="serial-wrap" aria-pressed="${this.serialWrap}" title="${this.serialWrap ? "Wrap lines: ON (click to disable)" : "Wrap lines: OFF (click to enable)"}" aria-label="Wrap lines">${icons.wrapText(17)}</button>
-            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-serial" ${this.serialLines.length ? "" : "disabled"} title="Copy terminal output" aria-label="Copy terminal output">${icons.copy(17)}</button>
-            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-clear" ${this.serialLines.length ? "" : "disabled"} title="Clear terminal (CLEAR)" aria-label="Clear terminal">${icons.trash(17)}</button>
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="bootlog" title="Read this boot's log (BOOTLOG?)" aria-label="Read this boot's log">${icons.fileText(17)}</button>
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="lastlog" title="Read previous boot's log (LASTLOG?)" aria-label="Read previous boot's log">${icons.history(17)}</button>
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="toggle-emergency" title="Enter emergency mode (EMERGENCY 1)" aria-label="Toggle emergency mode">${icons.siren(17)}</button>
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="restart-capture" title="Restart timer &amp; capture boot log (REBOOT + BOOTLOG?)" aria-label="Restart timer and capture boot log">${icons.reset(17)}</button>
+            <span class="debug-overlay-sep" role="separator" aria-hidden="true"></span>
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-wrap" aria-label="Wrap lines">${icons.wrapText(17)}</button>
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-serial" title="Copy terminal output" aria-label="Copy terminal output">${icons.copy(17)}</button>
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="serial-clear" title="Clear terminal (CLEAR)" aria-label="Clear terminal">${icons.trash(17)}</button>
           </div>
         </div>
         <div class="table-scroll">
@@ -4057,8 +4047,27 @@ export class DebugView extends Component {
       term = host.querySelector<HTMLElement>("[data-serial-terminal]")!;
     }
 
+    const ledEl = host.querySelector<HTMLElement>("[data-serial-led]");
+    if (ledEl) ledEl.className = `status-dot ${ledClass}`;
     const noteEl = host.querySelector<HTMLElement>("[data-serial-note]");
     if (noteEl) noteEl.textContent = statusText;
+
+    const bootlogBtn = host.querySelector<HTMLButtonElement>('[data-action="bootlog"]');
+    if (bootlogBtn) bootlogBtn.disabled = !on || busy;
+    const lastlogBtn = host.querySelector<HTMLButtonElement>('[data-action="lastlog"]');
+    if (lastlogBtn) lastlogBtn.disabled = !on || busy;
+    const emgBtn = host.querySelector<HTMLButtonElement>('[data-action="toggle-emergency"]');
+    if (emgBtn) {
+      emgBtn.disabled = !on || busy;
+      emgBtn.classList.toggle("is-emergency-active", Boolean(this.status?.emergencyMode));
+      emgBtn.title = this.status?.emergencyMode
+        ? "Exit emergency mode (EMERGENCY 0)"
+        : "Enter emergency mode (EMERGENCY 1)";
+      emgBtn.setAttribute("aria-label", this.status?.emergencyMode ? "Exit emergency mode" : "Enter emergency mode");
+    }
+    const restartBtn = host.querySelector<HTMLButtonElement>('[data-action="restart-capture"]');
+    if (restartBtn) restartBtn.disabled = !on || busy;
+
     const wrapBtn = host.querySelector<HTMLButtonElement>('[data-action="serial-wrap"]');
     if (wrapBtn) {
       wrapBtn.classList.toggle("is-toggled", this.serialWrap);
