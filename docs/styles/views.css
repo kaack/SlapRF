@@ -5030,6 +5030,11 @@ body.is-gate-dragging * {
   .debug-chart-foot > .debug-connect-actions {
     display: none;
   }
+  .debug-chart-foot > .debug-toolbar-left {
+    flex-wrap: nowrap;
+    gap: 6px;
+    width: 100%;
+  }
   .debug-hint-desktop {
     display: none;
   }

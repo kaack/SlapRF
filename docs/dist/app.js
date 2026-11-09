@@ -700,7 +700,7 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
         <div class="debug-toolbar-left">
           <div class="debug-axis-pill ${this.signalAutoX?"is-armed":"is-unarmed"}" data-axis-pill>
             <button type="button" class="debug-axis-pill-main" data-action="${this.signalAutoX?"toggle-axis-menu":"signal-reset-x"}" data-menu="signal-x" title="${this.signalAutoX?`Auto X-axis time window (${xWinLabel}) \u2014 click to choose a time window preset`:"Click to reset X-axis time window to Auto X"}">
-              ${icons.target(13)}<span>${this.signalAutoX?"Auto X":`X: ${xWinLabel}`}</span>
+              ${icons.target(13)}<span>${this.signalAutoX?"Auto X":`<span class="debug-hint-desktop">X: ${xWinLabel}</span><span class="debug-hint-mobile">Auto X</span>`}</span>
             </button>
             <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="signal-x" aria-expanded="${this.openAxisMenu==="signal-x"}" title="Choose X-axis time window">
               ${icons.chevronDown(12)}
@@ -715,7 +715,7 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
           </div>
           <div class="debug-axis-pill ${this.signalAutoY?"is-armed":"is-unarmed"}" data-axis-pill>
             <button type="button" class="debug-axis-pill-main" data-action="${this.signalAutoY?"toggle-axis-menu":"signal-reset-y"}" data-menu="signal-y" title="${this.signalAutoY?"Auto Y-axis scaling is ON \u2014 fits visible signal traces automatically. Click to choose a scale preset, or drag the Y-axis to stretch.":"Click to reset Y-axis range to Auto Y"}">
-              ${icons.target(13)}<span>${this.signalAutoY?"Auto Y":`Y: ${Math.round(this.signalYMin)}\u2026${Math.round(this.signalYMax)} dBm`}</span>
+              ${icons.target(13)}<span>${this.signalAutoY?"Auto Y":`<span class="debug-hint-desktop">Y: ${Math.round(this.signalYMin)}\u2026${Math.round(this.signalYMax)} dBm</span><span class="debug-hint-mobile">Auto Y</span>`}</span>
             </button>
             <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="signal-y" aria-expanded="${this.openAxisMenu==="signal-y"}" title="Choose Y-axis dBm scale">
               ${icons.chevronDown(12)}
@@ -810,7 +810,7 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
           <td class="mono ${r.hitsPerSec>=1?"debug-tone-warn":""}">${r.samples?r.hitsPerSec.toFixed(1):"\u2014"}</td>
           <td class="mono">${r.samples?`${r.pctAboveFloor10.toFixed(1)}%`:"\u2014"}</td>
           <td class="mono ${trigRisk?"debug-tone-warn":"note"}">${r.samples?`${r.pctWouldTrigger.toFixed(1)}% (${r.wouldTriggerPerSec.toFixed(1)}/s)`:"\u2014"}</td>
-        </tr>`}).join("")}renderScan(){let on=this.console.connected,emg=!!(on&&this.status?.emergencyMode),rfOn=(this.status?.rf.enabled??!0)&&!emg,hasScan=this.spectrumAcc.latest!==null,isFull5=this.scanStartMHz===5180&&this.scanStopMHz===5917&&this.scanStepMHz===5,isFast15=this.scanStartMHz===5180&&this.scanStopMHz===5917&&this.scanStepMHz===15,isRb5=this.scanStartMHz===5650&&this.scanStopMHz===5925&&this.scanStepMHz===5,bandLabel=isFast15?"Fast full \xB7 9 Hz":isRb5?"Raceband \xB7 8 Hz":"Full \xB7 3 Hz",isFreqZoomed=this.scanZoomStartMHz!==null&&this.scanZoomStopMHz!==null,isScanYZoomed=this.scanYMin!==DBM_MIN2||this.scanYMax!==DBM_MAX2,isWfRowsZoomed=this.spectrumAcc.visibleRows!==80,canScanOnce=on&&rfOn&&!this.scanning&&!this.scanLive,canScanLive=on&&rfOn&&!this.scanning,scanActive=this.scanLive||this.scanning,prevScanFindingsEl=this.slot("scan").querySelector("[data-scan-findings]"),prevScanScrollTop=prevScanFindingsEl?.querySelector("[data-findings-scroll]")?.scrollTop??0,wfRowPresets=[40,80,160,300];if(this.slot("scan").innerHTML=`
+        </tr>`}).join("")}renderScan(){let on=this.console.connected,emg=!!(on&&this.status?.emergencyMode),rfOn=(this.status?.rf.enabled??!0)&&!emg,hasScan=this.spectrumAcc.latest!==null,isFull5=this.scanStartMHz===5180&&this.scanStopMHz===5917&&this.scanStepMHz===5,isFast15=this.scanStartMHz===5180&&this.scanStopMHz===5917&&this.scanStepMHz===15,isRb5=this.scanStartMHz===5650&&this.scanStopMHz===5925&&this.scanStepMHz===5,bandLabel=isFast15?"Fast \xB7 9 Hz":isRb5?"Race \xB7 8 Hz":"Full \xB7 3 Hz",isFreqZoomed=this.scanZoomStartMHz!==null&&this.scanZoomStopMHz!==null,isScanYZoomed=this.scanYMin!==DBM_MIN2||this.scanYMax!==DBM_MAX2,isWfRowsZoomed=this.spectrumAcc.visibleRows!==80,canScanOnce=on&&rfOn&&!this.scanning&&!this.scanLive,canScanLive=on&&rfOn&&!this.scanning,scanActive=this.scanLive||this.scanning,prevScanFindingsEl=this.slot("scan").querySelector("[data-scan-findings]"),prevScanScrollTop=prevScanFindingsEl?.querySelector("[data-findings-scroll]")?.scrollTop??0,wfRowPresets=[40,80,160,300];if(this.slot("scan").innerHTML=`
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${emg?"is-emergency":scanActive?"is-up":""}" data-scan-led></span>
@@ -857,7 +857,7 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${isFreqZoomed?"is-unarmed":"is-armed"}" data-axis-pill>
               <button type="button" class="debug-axis-pill-main" data-action="${isFreqZoomed?"scan-reset-zoom":"toggle-axis-menu"}" data-menu="scan-x" title="${isFreqZoomed?"Click to reset frequency zoom to Auto X":"Full scanned frequency range \u2014 click to choose a frequency band preset, or drag X-axis to zoom"}">
-                ${icons.target(13)}<span>${isFreqZoomed?`X: ${Math.round(this.scanZoomStartMHz)}\u2013${Math.round(this.scanZoomStopMHz)} MHz`:"Auto X"}</span>
+                ${icons.target(13)}<span>${isFreqZoomed?`<span class="debug-hint-desktop">X: ${Math.round(this.scanZoomStartMHz)}\u2013${Math.round(this.scanZoomStopMHz)} MHz</span><span class="debug-hint-mobile">Auto X</span>`:"Auto X"}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-x" aria-expanded="${this.openAxisMenu==="scan-x"}" title="Choose frequency range">
                 ${icons.chevronDown(12)}
@@ -880,7 +880,7 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
             </div>
             <div class="debug-axis-pill ${this.scanAutoY?"is-armed":"is-unarmed"}" data-axis-pill>
               <button type="button" class="debug-axis-pill-main" data-action="${this.scanAutoY?"toggle-axis-menu":"scan-reset-y"}" data-menu="scan-y" title="${this.scanAutoY?"Auto Y-axis scaling is ON (fits scanned dBm range) \u2014 click to choose a scale preset, or drag the Y-axis":"Click to reset Y-axis range to Auto Y"}">
-                ${icons.target(13)}<span>${this.scanAutoY?"Auto Y":`Y: ${Math.round(this.scanYMin)}\u2026${Math.round(this.scanYMax)} dBm`}</span>
+                ${icons.target(13)}<span>${this.scanAutoY?"Auto Y":`<span class="debug-hint-desktop">Y: ${Math.round(this.scanYMin)}\u2026${Math.round(this.scanYMax)} dBm</span><span class="debug-hint-mobile">Auto Y</span>`}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-y" aria-expanded="${this.openAxisMenu==="scan-y"}" title="Choose spectrum Y-axis dBm scale">
                 ${icons.chevronDown(12)}
@@ -907,10 +907,10 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
                         <span>Full \xB7 3 Hz</span><span class="note">5180\u20135917 \xB7 5 MHz</span>
                       </button>
                       <button type="button" class="debug-axis-menu-item ${isFast15?"is-active":""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="15" role="menuitem" title="Full 5.18\u20135.92 GHz band at 15 MHz step (50 points, ~9 passes/s)">
-                        <span>Fast full \xB7 9 Hz</span><span class="note">5180\u20135917 \xB7 15 MHz</span>
+                        <span>Fast \xB7 9 Hz</span><span class="note">5180\u20135917 \xB7 15 MHz</span>
                       </button>
                       <button type="button" class="debug-axis-menu-item ${isRb5?"is-active":""}" data-action="scan-preset" data-start="5650" data-stop="5925" data-step="5" role="menuitem" title="Raceband R1\u2013R8 + Wi-Fi UNII-3 at 5 MHz step (56 points, ~8 passes/s)">
-                        <span>Raceband \xB7 8 Hz</span><span class="note">5650\u20135925 \xB7 5 MHz</span>
+                        <span>Race \xB7 8 Hz</span><span class="note">5650\u20135925 \xB7 5 MHz</span>
                       </button>
                     </div>`:""}
             </div>
@@ -948,7 +948,7 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${isFreqZoomed?"is-unarmed":"is-armed"}" data-axis-pill>
               <button type="button" class="debug-axis-pill-main" data-action="${isFreqZoomed?"scan-reset-zoom":"toggle-axis-menu"}" data-menu="wf-x" title="${isFreqZoomed?"Click to reset frequency zoom to Auto X":"Full scanned frequency range \u2014 click to choose a frequency band preset, or drag X-axis to zoom"}">
-                ${icons.target(13)}<span>${isFreqZoomed?`X: ${Math.round(this.scanZoomStartMHz)}\u2013${Math.round(this.scanZoomStopMHz)} MHz`:"Auto X"}</span>
+                ${icons.target(13)}<span>${isFreqZoomed?`<span class="debug-hint-desktop">X: ${Math.round(this.scanZoomStartMHz)}\u2013${Math.round(this.scanZoomStopMHz)} MHz</span><span class="debug-hint-mobile">Auto X</span>`:"Auto X"}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="wf-x" aria-expanded="${this.openAxisMenu==="wf-x"}" title="Choose frequency range">
                 ${icons.chevronDown(12)}
@@ -971,7 +971,7 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
             </div>
             <div class="debug-axis-pill ${isWfRowsZoomed?"is-unarmed":"is-armed"}" data-axis-pill>
               <button type="button" class="debug-axis-pill-main" data-action="${isWfRowsZoomed?"wf-reset-rows":"toggle-axis-menu"}" data-menu="wf-y" title="${isWfRowsZoomed?"Click to reset waterfall pass depth to Auto Y (80 passes)":"Auto Y waterfall depth (80 passes) \u2014 click to choose a pass depth, or drag the Y-axis"}">
-                ${icons.target(13)}<span>${isWfRowsZoomed?`Y: ${this.spectrumAcc.visibleRows} passes`:"Auto Y"}</span>
+                ${icons.target(13)}<span>${isWfRowsZoomed?`<span class="debug-hint-desktop">Y: ${this.spectrumAcc.visibleRows} passes</span><span class="debug-hint-mobile">Auto Y</span>`:"Auto Y"}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="wf-y" aria-expanded="${this.openAxisMenu==="wf-y"}" title="Choose waterfall vertical pass depth">
                 ${icons.chevronDown(12)}
