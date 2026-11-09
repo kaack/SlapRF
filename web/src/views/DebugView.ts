@@ -398,8 +398,8 @@ export class DebugView extends Component {
         </section>
         <section class="settings-section">
           <div class="settings-intro">
-            <h2>Live 5.8 GHz readings</h2>
-            <p>What the timer measures on each of its 8 pilot channels. The tick marks the peak since the previous update; hits count readings more than 10 dB above that channel's typical noise (Wi-Fi bursts show up here too; they're far below a lap's enter threshold). Power on a VTX to see its channel rise.</p>
+            <h2>Monitored channels</h2>
+            <p>The 8 pilot channels monitored in each timing sweep (synced from active pilots or overridden via the serial console). Click any channel row to toggle monitoring on or off—fewer active channels make each sweep faster. The tick marks the peak since the previous update; hits count readings more than 10 dB above that channel's typical noise.</p>
           </div>
           <div class="debug-status-layout">
             <div data-slot="live-head"></div>
@@ -2895,15 +2895,11 @@ export class DebugView extends Component {
   /** Build the bar rows once per channel set; updateLive() then only touches styles and text. */
   private renderLive(): void {
     const freqs = this.status?.freqs ?? RACEBAND;
-    const allOn = this.signalEnabledCh.every(Boolean);
     const activeCount = this.signalEnabledCh.filter(Boolean).length;
     this.slot("live").innerHTML = `
       <div class="debug-subbar">
         <span class="debug-chart-title">Channel RSSI meter (8 pilot slots)</span>
-        <div class="debug-connect-actions">
-          <span class="note debug-live-ch-hint" data-live-ch-note><span class="mono">${activeCount}/8</span> active · click row to toggle · double-click to solo</span>
-          <button type="button" class="btn btn-sm btn-ghost" data-action="signal-ch-all" data-live-ch-all title="${allOn ? "Disable all 8 channels" : "Enable all 8 channels"}">${allOn ? "Disable all" : "Enable all"}</button>
-        </div>
+        <span class="note debug-live-ch-hint" data-live-ch-note><span class="mono">${activeCount}/8</span> active · click row to toggle · double-click to solo</span>
       </div>
       <div class="debug-bars">
         ${freqs
@@ -2933,19 +2929,13 @@ export class DebugView extends Component {
     const note = this.el.querySelector<HTMLElement>("[data-live-note]");
     const led = this.el.querySelector<HTMLElement>("[data-live-led]");
     const chNote = this.el.querySelector<HTMLElement>("[data-live-ch-note]");
-    const chAllBtn = this.el.querySelector<HTMLButtonElement>("[data-live-ch-all]");
     const on = this.console.connected;
     const emg = Boolean(on && this.status?.emergencyMode);
     const rfOn = this.status?.rf.enabled ?? true;
     const inScanMode = Boolean(this.scanLive || this.status?.scanLive);
     const activeCount = this.signalEnabledCh.filter(Boolean).length;
-    const allOn = activeCount === 8;
     if (chNote) {
       chNote.innerHTML = `<span class="mono">${activeCount}/8</span> active · click row to toggle · double-click to solo`;
-    }
-    if (chAllBtn) {
-      chAllBtn.textContent = allOn ? "Disable all" : "Enable all";
-      chAllBtn.title = allOn ? "Disable all 8 channels" : "Enable all 8 channels";
     }
     if (led) {
       led.classList.toggle("is-emergency", emg);
