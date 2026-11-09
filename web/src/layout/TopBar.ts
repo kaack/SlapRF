@@ -134,9 +134,8 @@ export class TopBar extends Component {
       </button>`;
 
     const ledIndicator = `
-      <button type="button" class="topbar-conn-led is-${led.color} ${meta.id === "network" ? "is-active-route" : ""}" data-action="go-network" title="${esc(`${led.detail} — click to open Network`)}" aria-label="${esc(`${led.detail} — click to open Network`)}">
+      <button type="button" class="topbar-conn-led is-${led.color}" data-action="go-network" title="${esc(led.detail)}" aria-label="${esc(led.detail)}">
         <span class="topbar-conn-led-bulb" aria-hidden="true"></span>
-        <span class="topbar-conn-led-label">${esc(led.shortLabel)}</span>
       </button>`;
 
     let actions = simBtn;
