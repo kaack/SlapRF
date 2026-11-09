@@ -3757,12 +3757,16 @@ body.is-gate-dragging * {
 /* ==========================================================================
    Debug page (#/debug): USB timer console
    ========================================================================== */
+.debug-page {
+  font-variant-numeric: tabular-nums;
+}
 .debug-connect {
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 12px;
+  min-height: 36px;
 }
 .debug-connect-state {
   display: flex;
@@ -3796,6 +3800,11 @@ body.is-gate-dragging * {
   margin: 0;
   font-size: 13px;
   color: var(--text);
+  min-height: 22px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
   overflow-wrap: anywhere;
 }
 .debug-card-head {
@@ -3804,7 +3813,103 @@ body.is-gate-dragging * {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 10px;
+  min-height: 32px;
   margin-bottom: 12px;
+}
+.debug-head-note {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  min-width: 0;
+}
+.debug-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  min-height: 34px;
+  margin-bottom: 10px;
+}
+.debug-toolbar-left {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+}
+.debug-overlay-checks {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.debug-overlay-checks .check {
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.debug-switch-inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--text-2);
+  cursor: pointer;
+  user-select: none;
+}
+.debug-switch-inline.is-disabled {
+  opacity: 0.45;
+  pointer-events: none;
+}
+.debug-switch-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.debug-btn-transport {
+  min-width: 112px;
+  justify-content: center;
+}
+.debug-btn-transport.is-running {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+.debug-btn-transport.is-running:hover:not(:disabled) {
+  border-color: rgba(212, 255, 58, 0.45);
+  color: var(--accent);
+}
+.debug-btn-transport.is-paused {
+  background: rgba(251, 191, 36, 0.1);
+  border-color: rgba(251, 191, 36, 0.45);
+  color: var(--warn);
+}
+.debug-btn-transport.is-paused:hover:not(:disabled) {
+  background: rgba(251, 191, 36, 0.16);
+  border-color: var(--warn);
+}
+.debug-btn-group {
+  display: inline-flex;
+  align-items: center;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px;
+  gap: 1px;
+}
+.debug-btn-group .btn {
+  border: 0;
+  border-radius: 4px;
+  padding: 4px 9px;
 }
 .debug-log-head {
   padding: 12px 14px 0;
@@ -3820,9 +3925,11 @@ body.is-gate-dragging * {
   align-items: center;
   gap: 10px;
   font-size: 12px;
+  height: 20px;
 }
 .debug-bar-label {
   color: var(--text-3);
+  white-space: nowrap;
 }
 .debug-bar-label strong {
   color: var(--text-2);
@@ -3853,6 +3960,7 @@ body.is-gate-dragging * {
 .debug-bar-value {
   text-align: right;
   color: var(--text);
+  white-space: nowrap;
 }
 .debug-scale {
   display: flex;
@@ -3862,7 +3970,7 @@ body.is-gate-dragging * {
   color: var(--text-3);
 }
 .debug-scan-inputs {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 8px;
@@ -3875,45 +3983,8 @@ body.is-gate-dragging * {
   gap: 6px;
 }
 .debug-scan-inputs .input {
-  width: 78px;
+  width: 74px;
   padding: 4px 8px;
-}
-.debug-spectrum {
-  display: block;
-  width: 100%;
-  height: 220px;
-}
-.debug-spectrum .grid {
-  stroke: var(--border);
-  stroke-width: 1;
-}
-.debug-spectrum .axis {
-  fill: var(--text-3);
-  font-size: 10px;
-  font-family: var(--font-mono);
-}
-.debug-spectrum .band {
-  stroke: rgba(212, 255, 58, 0.25);
-  stroke-dasharray: 3 3;
-}
-.debug-spectrum .band-label {
-  fill: rgba(212, 255, 58, 0.7);
-  font-size: 9.5px;
-  font-family: var(--font-mono);
-}
-.debug-spectrum .trace {
-  fill: none;
-  stroke: var(--accent);
-  stroke-width: 1.6;
-  stroke-linejoin: round;
-}
-.debug-spectrum .peak {
-  fill: var(--accent);
-}
-.debug-spectrum .peak-label {
-  fill: var(--text);
-  font-size: 10.5px;
-  font-family: var(--font-mono);
 }
 .debug-log {
   margin: 10px 0 0;
@@ -3928,26 +3999,6 @@ body.is-gate-dragging * {
   white-space: pre-wrap;
   word-break: break-word;
 }
-@media (max-width: 680px) {
-  .debug-bar-row {
-    grid-template-columns: 70px minmax(0, 1fr) 62px 48px;
-  }
-  .debug-scale {
-    margin: 6px 130px 0 80px;
-  }
-}
-
-/* Debug page: self-test, channel editor, restart test, boot logs */
-.debug-spectrum .hold {
-  fill: none;
-  stroke: var(--accent);
-  stroke-opacity: 0.3;
-  stroke-width: 1;
-  vector-effect: non-scaling-stroke;
-}
-.debug-scan-live-note {
-  margin: 6px 0 0;
-}
 .debug-tone-warn {
   color: var(--warn);
 }
@@ -3958,6 +4009,7 @@ body.is-gate-dragging * {
   text-align: right;
   font-size: 11px;
   color: var(--text-3);
+  white-space: nowrap;
 }
 .debug-bar-hits.is-active {
   color: var(--accent);
@@ -4019,8 +4071,16 @@ body.is-gate-dragging * {
 .debug-channels-head {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
   gap: 10px;
+  min-height: 32px;
   font-size: 13px;
+}
+.debug-channels-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
 }
 .debug-channels-inputs {
   display: grid;
@@ -4030,7 +4090,7 @@ body.is-gate-dragging * {
 .debug-channels-inputs label {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
 .debug-channels-inputs .input {
   width: 100%;
@@ -4060,7 +4120,7 @@ body.is-gate-dragging * {
   text-align: left;
   font-weight: 500;
   color: var(--text-3);
-  padding: 4px 8px 6px 0;
+  padding: 5px 8px 6px 0;
   border-bottom: 1px solid var(--border);
 }
 .debug-runs td {
@@ -4105,12 +4165,6 @@ body.is-gate-dragging * {
   height: 132px;
   cursor: default;
 }
-.debug-chip-group {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
 .debug-channel-chips {
   display: flex;
   align-items: center;
@@ -4122,29 +4176,39 @@ body.is-gate-dragging * {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 9px;
+  padding: 5px 10px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text-3);
   font-size: 11.5px;
   cursor: pointer;
-  transition: border-color 0.12s, color 0.12s, background 0.12s;
+  opacity: 0.45;
+  transition: border-color 0.12s, color 0.12s, background 0.12s, opacity 0.12s;
+}
+.debug-ch-chip:hover {
+  opacity: 0.8;
+  border-color: var(--border-strong);
 }
 .debug-ch-chip.is-on {
-  border-color: var(--ch-color, var(--accent));
+  opacity: 1;
+  border-color: var(--border-strong);
   color: var(--text);
-  background: rgba(255, 255, 255, 0.03);
+  background: var(--surface-2);
+}
+.debug-ch-chip.is-on strong {
+  color: var(--text);
 }
 .debug-ch-dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
   background: var(--ch-color, var(--accent));
-  opacity: 0.35;
+  box-shadow: 0 0 8px var(--ch-color, var(--accent));
 }
-.debug-ch-chip.is-on .debug-ch-dot {
-  opacity: 1;
+.debug-ch-all-btn {
+  min-width: 72px;
+  justify-content: center;
 }
 .debug-ch-inline {
   display: inline-block;
@@ -4154,37 +4218,102 @@ body.is-gate-dragging * {
   margin-right: 6px;
   vertical-align: middle;
 }
-.debug-noise-head {
+
+/* Dedicated Findings panels (calm, fixed-structure diagnostic summary) */
+.debug-findings {
+  margin-top: 12px;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  min-height: 76px;
+}
+.debug-scan-findings {
+  min-height: 72px;
+}
+.debug-findings-head {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px solid var(--border);
+  gap: 8px 10px;
+  min-height: 22px;
 }
+.debug-findings-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+}
+.debug-findings-meta {
+  margin-left: auto;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+.debug-findings-body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.debug-findings-primary {
+  margin: 0;
+  font-size: 12.5px;
+  color: var(--text);
+  line-height: 1.4;
+}
+.debug-findings-secondary {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+.debug-peaks-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  overflow-x: auto;
+  white-space: nowrap;
+}
+.debug-peaks-label {
+  font-size: 11.5px;
+  flex-shrink: 0;
+}
+.debug-peaks-list {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.debug-peak-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  font-size: 11.5px;
+  color: var(--text-2);
+}
+.debug-peak-pill strong {
+  color: var(--text);
+}
+
 .debug-table-scroll {
   width: 100%;
   overflow-x: auto;
+  margin-top: 8px;
+}
+.debug-noise-table {
+  margin-top: 0;
 }
 .debug-noise-table th,
 .debug-noise-table td {
   white-space: nowrap;
   padding-right: 12px;
-}
-.debug-noise-table tr.is-risk td {
-  background: rgba(248, 113, 113, 0.07);
-}
-.debug-peaks {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-  margin-top: 8px;
-}
-.debug-peaks-empty {
-  margin: 6px 0 0;
 }
 .debug-waterfall-section {
   margin-top: 16px;
@@ -4217,6 +4346,12 @@ body.is-gate-dragging * {
 }
 
 @media (max-width: 680px) {
+  .debug-bar-row {
+    grid-template-columns: 70px minmax(0, 1fr) 62px 48px;
+  }
+  .debug-scale {
+    margin: 6px 130px 0 80px;
+  }
   .debug-check {
     grid-template-columns: 48px minmax(0, 1fr);
   }
@@ -4228,5 +4363,9 @@ body.is-gate-dragging * {
   }
   .debug-health-canvas {
     height: 260px;
+  }
+  .debug-findings-meta {
+    margin-left: 0;
+    width: 100%;
   }
 }

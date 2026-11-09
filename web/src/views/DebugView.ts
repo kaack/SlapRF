@@ -161,7 +161,7 @@ export class DebugView extends Component {
           this.scanning = false;
           this.renderScan();
         } else {
-          this.updateScanMeta();
+          this.updateScanFindings();
         }
         this.dirtySpectrum = true;
         this.dirtyWaterfall = true;
@@ -268,6 +268,7 @@ export class DebugView extends Component {
     this.listen(el, "change", (e) => {
       const t = e.target as HTMLInputElement;
       if (t.matches("[data-all-ports]")) this.showAllPorts = t.checked;
+      else if (t.matches("[data-check]")) void this.onCheckChange(t);
     });
     this.listen(el, "input", (e) => {
       if ((e.target as HTMLElement).matches("[data-chan]")) this.channelsDirty = true;
@@ -398,7 +399,7 @@ export class DebugView extends Component {
           showWifiOverlay: this.scanShowWifi,
           hover: this.scanHover,
         });
-        this.renderSpectrumPeaks();
+        this.updateScanFindings();
         this.dirtySpectrum = false;
       }
     }
@@ -455,6 +456,54 @@ export class DebugView extends Component {
   }
 
   // ---------------------------------------------------------------- actions
+
+  private async onCheckChange(t: HTMLInputElement): Promise<void> {
+    this.error = null;
+    try {
+      switch (t.dataset.check) {
+        case "rf-enable": {
+          const on = t.checked;
+          if (!on && !confirm("Switch the 5.8 GHz receiver off? The timer stops timing until you switch it back on or restart it.")) {
+            t.checked = true;
+            return;
+          }
+          await this.console.request(`RF ${on ? 1 : 0}`, "ok", 2000);
+          await this.refreshStatus();
+          break;
+        }
+        case "signal-floor":
+          this.signalShowFloor = t.checked;
+          this.dirtySignal = true;
+          break;
+        case "signal-hit":
+          this.signalShowHitLine = t.checked;
+          this.dirtySignal = true;
+          break;
+        case "signal-thr":
+          this.signalShowThresholds = t.checked;
+          this.dirtySignal = true;
+          break;
+        case "scan-hold":
+          this.scanShowMaxHold = t.checked;
+          this.dirtySpectrum = true;
+          break;
+        case "scan-avg":
+          this.scanShowAvg = t.checked;
+          this.dirtySpectrum = true;
+          break;
+        case "scan-wifi":
+          this.scanShowWifi = t.checked;
+          this.dirtySpectrum = true;
+          this.dirtyWaterfall = true;
+          break;
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      this.error = msg;
+      this.renderConnection();
+      this.renderLiveHead();
+    }
+  }
 
   private async onClick(e: Event): Promise<void> {
     const t = (e.target as HTMLElement).closest<HTMLElement>("[data-action]");
@@ -1024,9 +1073,9 @@ export class DebugView extends Component {
           : "Connect a timer first.";
     this.slot("selftest").innerHTML = `
       <div class="debug-card-head">
-        <span class="note">${summary}</span>
+        <span class="note debug-head-note">${summary}</span>
         <div class="debug-connect-actions">
-          ${this.checks.length && !running ? `<button type="button" class="btn btn-sm btn-ghost" data-action="copy-report"><span>Copy report</span></button>` : ""}
+          <button type="button" class="btn btn-sm btn-ghost" data-action="copy-report" ${this.checks.length && !running ? "" : "disabled"}><span>Copy report</span></button>
           <button type="button" class="btn btn-sm btn-armed" data-action="selftest" ${on && !this.busy ? "" : "disabled"}>
             ${icons.bug(14)}<span>${running ? "Testing…" : "Run self-test"}</span>
           </button>
@@ -1059,7 +1108,7 @@ export class DebugView extends Component {
     const rows: Array<[string, string]> = [
       ["Timer", `${esc(s.label || "(unnamed)")} · ${s.role === 1 ? "Hub" : "Spoke"}${s.slot ? ` · slot ${s.slot}` : ""}`],
       ["Firmware", `${esc(profile?.name ?? `profile ${s.profile}`)} · ${esc(s.fw)}`],
-      ["Fingerprint", `<span class="mono">${esc(s.fp)}</span>${s.fp.toUpperCase() === UNPROVISIONED_FP ? ` <span class="badge debug-tone-warn">not set up</span>` : ""}`],
+      ["Fingerprint", `<span class="mono">${esc(s.fp)}</span>${s.fp.toUpperCase() === UNPROVISIONED_FP ? ` <span class="badge badge-warn">not set up</span>` : ""}`],
       ["Chip", s.chip ? `${esc(s.chip.model)} ${esc(s.chip.rev)} · ${s.chip.flashMB} MB flash · <span class="mono">${esc(s.chip.mac)}</span>` : "—"],
       ["Uptime", `${fmtUptime(s.uptimeMs)} <span class="note">(boot #${s.boots ?? "?"})</span>`],
       ["Last restart", badReset ? `<span class="tone-bad">${esc(s.reset)}</span> <span class="note">— see the previous boot's log below</span>` : esc(s.reset)],
@@ -1071,12 +1120,12 @@ export class DebugView extends Component {
       [
         "5.8 GHz receiver",
         !s.rf.ok
-          ? `<span class="badge tone-bad">Boot check failed</span>`
+          ? `<span class="badge badge-bad">Boot check failed</span>`
           : !s.rf.enabled
-            ? `<span class="badge debug-tone-warn">Switched off</span>`
+            ? `<span class="badge badge-warn">Switched off</span>`
             : s.scanLive
-              ? `<span class="badge debug-tone-warn">Live scan</span> lap timing paused · floor ${s.rf.floorDb.toFixed(1)} dBm`
-              : `<span class="badge tone-good">OK</span> gain ${s.rf.gain}/${s.rf.gainMax} · floor ${s.rf.floorDb.toFixed(1)} dBm`,
+              ? `<span class="badge badge-warn">Live scan</span> lap timing paused · floor ${s.rf.floorDb.toFixed(1)} dBm`
+              : `<span class="badge badge-good">OK</span> gain ${s.rf.gain}/${s.rf.gainMax} · floor ${s.rf.floorDb.toFixed(1)} dBm`,
       ],
       [
         "Wi-Fi",
@@ -1086,7 +1135,7 @@ export class DebugView extends Component {
             : `${esc(s.net.mode)} · channel ${s.channel}${s.slot >= 2 ? ` · slot ${s.slot}` : " · not joined to a Hub"}`
           : `channel ${s.channel}`,
       ],
-      ["Channels", `<span class="mono">${s.freqs.join(" · ")}</span> MHz${s.freqsTemporary ? ` <span class="badge debug-tone-warn">temporary</span>` : ""}`],
+      ["Channels", `<span class="mono">${s.freqs.join(" · ")}</span> MHz${s.freqsTemporary ? ` <span class="badge badge-warn">temporary</span>` : ""}`],
     ];
     this.slot("status").innerHTML = `
       <dl class="debug-status">
@@ -1099,13 +1148,14 @@ export class DebugView extends Component {
     const rfOn = this.status?.rf.enabled ?? true;
     this.slot("live-head").innerHTML = `
       <div class="debug-card-head">
-        <span class="note" data-live-note>${on ? "" : "Not connected"}</span>
+        <span class="note debug-head-note mono" data-live-note>${on ? "Waiting for sweep stream…" : "Not connected"}</span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm ${rfOn ? "btn-ghost" : "btn-danger-active"}" data-action="rf" ${on && this.status ? "" : "disabled"}>
-            ${rfOn ? icons.signal(14) : icons.signalOff(14)}<span>${rfOn ? "Receiver on" : "Receiver off"}</span>
-          </button>
-          <button type="button" class="btn btn-sm ${this.liveOn ? "btn-armed" : "btn-ghost"}" data-action="live" ${on ? "" : "disabled"}>
-            ${this.liveOn ? icons.pause(14) : icons.play(14)}<span>${this.liveOn ? "Pause" : "Resume"}</span>
+          <label class="debug-switch-inline ${on && this.status ? "" : "is-disabled"}" title="Switch the hardware 5.8 GHz receiver on or off">
+            <span class="debug-switch-label">${rfOn ? icons.signal(13) : icons.signalOff(13)}<span>5.8 GHz receiver</span></span>
+            <span class="switch"><input type="checkbox" data-check="rf-enable" ${rfOn ? "checked" : ""} ${on && this.status ? "" : "disabled"}/><span></span></span>
+          </label>
+          <button type="button" class="btn btn-sm debug-btn-transport ${this.liveOn ? "is-running" : "is-paused"}" data-action="live" ${on ? "" : "disabled"}>
+            ${this.liveOn ? icons.pause(14) : icons.play(14)}<span>${this.liveOn ? "Pause stream" : "Resume stream"}</span>
           </button>
         </div>
       </div>`;
@@ -1140,15 +1190,20 @@ export class DebugView extends Component {
   private updateLive(): void {
     const l = this.live;
     const note = this.el.querySelector<HTMLElement>("[data-live-note]");
-    if (note && this.console.connected) {
-      note.textContent =
-        this.scanLive || this.status?.scanLive
-          ? "Paused: the live spectrum scan is using the receiver"
-          : this.status && !this.status.rf.enabled
-            ? "Receiver off"
-            : l
-              ? `sweep ${(l.us / 1000).toFixed(2)} ms · ${this.liveMode === 2 ? "50 Hz (every sweep)" : "10 Hz"}`
-              : "";
+    if (note) {
+      if (!this.console.connected) {
+        note.textContent = "Not connected";
+      } else if (this.scanLive || this.status?.scanLive) {
+        note.textContent = "Paused · live spectrum scan is using the 5.8 GHz receiver";
+      } else if (this.status && !this.status.rf.enabled) {
+        note.textContent = "5.8 GHz receiver is switched off";
+      } else if (!this.liveOn) {
+        note.textContent = "Stream paused";
+      } else if (l) {
+        note.textContent = `Sweep ${(l.us / 1000).toFixed(2)} ms · streaming at ${this.liveMode === 2 ? "50 Hz (every sweep)" : "10 Hz"}`;
+      } else {
+        note.textContent = "Waiting for sweep stream…";
+      }
     }
     const pct = (x: number) => Math.max(0, Math.min(100, ((x - DBM_MIN) / (DBM_MAX - DBM_MIN)) * 100));
     this.el.querySelectorAll<HTMLElement>("[data-bar]").forEach((row, i) => {
@@ -1163,7 +1218,7 @@ export class DebugView extends Component {
       peak.style.display = pk !== undefined && pk > -127 ? "" : "none";
       if (pk !== undefined) peak.style.left = `${pct(pk)}%`;
       value.textContent = v !== undefined && v > -127 ? `${v} dBm` : "—";
-      hits.textContent = h !== undefined ? `${h} hit${h === 1 ? "" : "s"}` : "";
+      hits.textContent = h !== undefined ? `${h} hit${h === 1 ? "" : "s"}` : "—";
       hits.classList.toggle("is-active", (h ?? 0) > 0);
     });
   }
@@ -1172,21 +1227,27 @@ export class DebugView extends Component {
     const on = this.console.connected;
     const s = this.status;
     const freqs = s?.freqs ?? RACEBAND;
+    const isTemp = Boolean(s?.freqsTemporary);
     this.slot("channels").innerHTML = `
       <div class="debug-channels">
         <div class="debug-channels-head">
-          <strong>Try other channels</strong>
-          ${s?.freqsTemporary ? `<span class="badge debug-tone-warn">temporary: not saved</span>` : `<span class="note">Saved channels in use</span>`}
+          <div class="debug-channels-title">
+            <strong>Try other channels</strong>
+            <span class="badge ${isTemp ? "badge-warn" : ""}">${isTemp ? "Temporary · not saved" : "Saved channels"}</span>
+          </div>
+          <div class="debug-connect-actions">
+            <button type="button" class="btn btn-sm btn-ghost" data-action="channels-raceband" ${on ? "" : "disabled"}>Load Raceband</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="channels-reset" ${on && isTemp ? "" : "disabled"}>Back to saved</button>
+            <button type="button" class="btn btn-sm btn-armed" data-action="channels-apply" ${on && s ? "" : "disabled"}>Apply until restart</button>
+          </div>
         </div>
         <div class="debug-channels-inputs">
           ${freqs
-            .map((f, i) => `<label><span class="note">${i + 1}</span><input class="input mono" type="number" min="5180" max="5917" data-chan value="${f}" ${on ? "" : "disabled"}/></label>`)
+            .map((f, i) => {
+              const rb = racebandName(f) || `Ch ${i + 1}`;
+              return `<label><span class="note mono">${rb}</span><input class="input mono" type="number" min="5180" max="5917" data-chan value="${f}" ${on ? "" : "disabled"}/></label>`;
+            })
             .join("")}
-        </div>
-        <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm btn-ghost" data-action="channels-raceband" ${on ? "" : "disabled"}>Raceband</button>
-          ${s?.freqsTemporary ? `<button type="button" class="btn btn-sm btn-ghost" data-action="channels-reset" ${on ? "" : "disabled"}>Back to saved</button>` : ""}
-          <button type="button" class="btn btn-sm btn-armed" data-action="channels-apply" ${on && s ? "" : "disabled"}>Apply until restart</button>
         </div>
       </div>`;
   }
@@ -1194,26 +1255,42 @@ export class DebugView extends Component {
   private renderSignalControls(): void {
     const freqs = this.status?.freqs ?? RACEBAND;
     const hasPts = this.signalRing.points.length > 0;
+    const allOn = this.signalEnabledCh.every(Boolean);
     this.slot("signal-controls").innerHTML = `
-      <div class="debug-card-head">
-        <div class="debug-chip-group">
-          ${([10, 30, 120] as const)
-            .map(
-              (w) =>
-                `<button type="button" class="btn btn-sm ${this.signalWindowSec === w ? "btn-armed" : "btn-ghost"}" data-action="signal-window" data-win="${w}">${w === 120 ? "2 min" : `${w} s`}</button>`
-            )
-            .join("")}
-          <button type="button" class="btn btn-sm ${this.signalShowFloor ? "btn-armed" : "btn-ghost"}" data-action="signal-toggle-floor" title="Show per-channel typical noise floor (dotted)">Floor</button>
-          <button type="button" class="btn btn-sm ${this.signalShowHitLine ? "btn-armed" : "btn-ghost"}" data-action="signal-toggle-hit" title="Show floor + 10 dB hit line (dashed)">Floor +10 dB</button>
-          <button type="button" class="btn btn-sm ${this.signalShowThresholds ? "btn-armed" : "btn-ghost"}" data-action="signal-toggle-thr" title="Show pilot enter thresholds">Enter thr</button>
+      <div class="debug-toolbar">
+        <div class="debug-toolbar-left">
+          <div class="segmented" role="group" aria-label="Time window">
+            ${([10, 30, 120] as const)
+              .map(
+                (w) =>
+                  `<button type="button" class="${this.signalWindowSec === w ? "is-active" : ""}" data-action="signal-window" data-win="${w}">${w === 120 ? "2 min" : `${w} s`}</button>`
+              )
+              .join("")}
+          </div>
+          <div class="debug-overlay-checks" role="group" aria-label="Chart overlays">
+            <label class="check" title="Show per-channel typical noise floor (dotted)">
+              <input type="checkbox" data-check="signal-floor" ${this.signalShowFloor ? "checked" : ""}/>
+              <span>Floor</span>
+            </label>
+            <label class="check" title="Show floor + 10 dB hit threshold (dashed)">
+              <input type="checkbox" data-check="signal-hit" ${this.signalShowHitLine ? "checked" : ""}/>
+              <span>Hit line (+10 dB)</span>
+            </label>
+            <label class="check" title="Show pilot enter thresholds">
+              <input type="checkbox" data-check="signal-thr" ${this.signalShowThresholds ? "checked" : ""}/>
+              <span>Enter threshold</span>
+            </label>
+          </div>
         </div>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm ${this.signalFrozen ? "btn-danger-active" : "btn-ghost"}" data-action="signal-freeze">
-            ${this.signalFrozen ? icons.play(14) : icons.pause(14)}<span>${this.signalFrozen ? "Unfreeze" : "Freeze"}</span>
+          <button type="button" class="btn btn-sm debug-btn-transport ${this.signalFrozen ? "is-paused" : "is-running"}" data-action="signal-freeze">
+            ${this.signalFrozen ? icons.play(14) : icons.pause(14)}<span>${this.signalFrozen ? "Resume" : "Freeze"}</span>
           </button>
-          <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
-          <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts ? "" : "disabled"}>CSV</button>
-          <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-png" ${hasPts ? "" : "disabled"}>PNG</button>
+          <button type="button" class="btn btn-sm" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
+          <div class="debug-btn-group" role="group" aria-label="Export signal chart">
+            <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts ? "" : "disabled"} title="Download recorded 50 Hz samples as CSV">CSV</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-png" ${hasPts ? "" : "disabled"} title="Save chart snapshot as PNG">PNG</button>
+          </div>
         </div>
       </div>
       <div class="debug-channel-chips">
@@ -1223,11 +1300,11 @@ export class DebugView extends Component {
             const on = this.signalEnabledCh[i];
             const col = CHANNEL_COLORS[i];
             return `<button type="button" class="debug-ch-chip mono ${on ? "is-on" : ""}" data-action="signal-ch" data-ch="${i}" style="--ch-color:${col}">
-              <span class="debug-ch-dot"></span><strong>${rb}</strong> ${f}
+              <span class="debug-ch-dot"></span><strong>${rb}</strong> <span>${f}</span>
             </button>`;
           })
           .join("")}
-        <button type="button" class="btn btn-sm btn-ghost" data-action="signal-ch-all">${this.signalEnabledCh.every(Boolean) ? "None" : "All"}</button>
+        <button type="button" class="btn btn-sm btn-ghost debug-ch-all-btn" data-action="signal-ch-all">${allOn ? "Hide all" : "Show all"}</button>
       </div>`;
   }
 
@@ -1235,20 +1312,61 @@ export class DebugView extends Component {
     const freqs = this.status?.freqs ?? RACEBAND;
     const sweepHz = this.status?.sweepHz ?? 50;
     const summary = this.signalRing.computeStats(this.signalWindowSec, freqs, this.pilots, sweepHz);
-    const anyTrigger = summary.rows.some((r) => r.pctWouldTrigger > 0);
+    const triggerRows = summary.rows.filter((r) => r.pctWouldTrigger > 0);
+    const noisyRows = summary.rows.filter((r) => r.pctWouldTrigger === 0 && (r.hitsPerSec >= 0.5 || (r.sd !== null && r.sd > 2.5)));
+
+    let badgeTone = "";
+    let badgeLabel = "Collecting…";
+    let primaryFinding = "Waiting for 50 Hz sweep samples from the timer…";
+    let secondaryFinding = "Power on a VTX to inspect crossing curves, or watch with all VTXes off to measure venue background noise.";
+
+    if (summary.totalSamples >= 10) {
+      if (triggerRows.length > 0) {
+        badgeTone = "badge-warn";
+        badgeLabel = `${triggerRows.length} ch reached enter`;
+        const list = triggerRows
+          .map((r) => `${r.bandLabel || `Ch${r.index + 1}`} (${r.freqMHz} MHz, max ${r.max ?? "—"} dBm vs ${r.enterThreshold} dBm, ${r.pctWouldTrigger.toFixed(1)}%)`)
+          .join(" · ");
+        primaryFinding = `Signal reached pilot enter threshold on ${list}.`;
+        secondaryFinding =
+          "If a VTX is powered on, this is normal. If no drone is powered, raise that channel's enter threshold or check for a nearby transmitter to prevent false laps.";
+      } else if (noisyRows.length > 0) {
+        badgeTone = "badge-accent";
+        badgeLabel = "In-band RF bursts";
+        const list = noisyRows
+          .map((r) => `${r.bandLabel || `Ch${r.index + 1}`} (${r.hitsPerSec.toFixed(1)} hits/s, max ${r.max ?? "—"} dBm)`)
+          .join(" · ");
+        const minMargin = Math.min(...noisyRows.map((r) => r.enterThreshold - (r.max ?? -120)));
+        primaryFinding = `Short bursts above noise floor on ${list}.`;
+        secondaryFinding = `Peaks remain at least ${minMargin} dB below pilot enter thresholds (0% would trigger) — typical of nearby 5 GHz Wi-Fi on UNII-3 (R3–R6) and will not cause false laps.`;
+      } else {
+        badgeTone = "badge-good";
+        badgeLabel = "All channels quiet";
+        const validRows = summary.rows.filter((r) => r.max !== null);
+        const maxPeak = validRows.length ? Math.max(...validRows.map((r) => r.max!)) : -95;
+        const minMargin = validRows.length ? Math.min(...validRows.map((r) => r.enterThreshold - r.max!)) : 30;
+        primaryFinding = `All 8 channels are steady across the ${summary.durationSec.toFixed(1)} s window (highest reading ${maxPeak} dBm).`;
+        secondaryFinding = `At least ${minMargin} dB of headroom below pilot enter thresholds — 0.0% false-lap risk.`;
+      }
+    }
+
+    if (summary.droppedLines > 0) {
+      secondaryFinding += ` (${summary.droppedLines} truncated USB line${summary.droppedLines === 1 ? "" : "s"} skipped.)`;
+    }
+
     this.slot("noise-table").innerHTML = `
-      <div class="debug-noise-head">
-        <span class="note">
-          Window: ${summary.durationSec.toFixed(1)} s (${summary.totalSamples} sweeps, ${summary.rateHz.toFixed(1)}/s,
-          <span class="${summary.droppedLines > 0 ? "debug-tone-warn" : ""}">${summary.droppedLines} dropped</span>)
-        </span>
-        ${
-          anyTrigger
-            ? `<span class="badge tone-bad">Signal reached enter threshold — false-lap risk if no VTX is on</span>`
-            : summary.totalSamples > 10
-              ? `<span class="badge tone-good">0% above enter threshold</span>`
-              : ""
-        }
+      <div class="debug-findings" role="status" aria-live="polite">
+        <div class="debug-findings-head">
+          <span class="debug-findings-title">Findings</span>
+          <span class="badge ${badgeTone}">${esc(badgeLabel)}</span>
+          <span class="note mono debug-findings-meta">
+            Window ${summary.durationSec.toFixed(1)} s · ${summary.totalSamples} sweeps · ${summary.rateHz.toFixed(1)} Hz
+          </span>
+        </div>
+        <div class="debug-findings-body">
+          <p class="debug-findings-primary">${esc(primaryFinding)}</p>
+          <p class="note debug-findings-secondary">${esc(secondaryFinding)}</p>
+        </div>
       </div>
       <div class="debug-table-scroll">
         <table class="debug-runs debug-noise-table">
@@ -1270,7 +1388,7 @@ export class DebugView extends Component {
               .map((r) => {
                 const col = CHANNEL_COLORS[r.index];
                 const trigRisk = r.pctWouldTrigger > 0;
-                return `<tr class="${trigRisk ? "is-risk" : ""}">
+                return `<tr>
                   <td class="mono"><span class="debug-ch-inline" style="background:${col}"></span>${r.bandLabel ? `<strong>${r.bandLabel}</strong> ` : ""}${r.freqMHz} MHz</td>
                   <td class="mono note">${r.pilotCallsign ? `${esc(r.pilotCallsign)} (${r.enterThreshold})` : `${r.enterThreshold} dBm`}</td>
                   <td class="mono">${r.mean !== null ? `${r.mean.toFixed(1)} dBm` : "—"}</td>
@@ -1279,7 +1397,7 @@ export class DebugView extends Component {
                   <td class="mono">${r.floor !== null ? `${r.floor} dBm` : "—"}</td>
                   <td class="mono ${r.hitsPerSec >= 1 ? "debug-tone-warn" : ""}">${r.samples ? r.hitsPerSec.toFixed(1) : "—"}</td>
                   <td class="mono">${r.samples ? `${r.pctAboveFloor10.toFixed(1)}%` : "—"}</td>
-                  <td class="mono ${trigRisk ? "tone-bad" : "note"}">${r.samples ? `${r.pctWouldTrigger.toFixed(1)}% (${r.wouldTriggerPerSec.toFixed(1)}/s)` : "—"}</td>
+                  <td class="mono ${trigRisk ? "debug-tone-warn" : "note"}">${r.samples ? `${r.pctWouldTrigger.toFixed(1)}% (${r.wouldTriggerPerSec.toFixed(1)}/s)` : "—"}</td>
                 </tr>`;
               })
               .join("")}
@@ -1298,34 +1416,48 @@ export class DebugView extends Component {
     const dis = this.scanLive ? "disabled" : "";
     const hasScan = this.spectrumAcc.latest !== null;
     this.slot("scan").innerHTML = `
-      <div class="debug-card-head">
-        <div class="debug-scan-inputs">
-          <label>From <input class="input mono" type="number" data-scan-start value="${esc(prev.start)}" min="5180" max="5917" ${dis}/></label>
-          <label>to <input class="input mono" type="number" data-scan-stop value="${esc(prev.stop)}" min="5180" max="5917" ${dis}/></label>
-          <label>step <input class="input mono" type="number" data-scan-step value="${esc(prev.step)}" min="1" max="50" ${dis}/></label>
-          <span class="note">MHz</span>
-          <button type="button" class="btn btn-sm ${this.scanShowMaxHold ? "btn-armed" : "btn-ghost"}" data-action="scan-toggle-hold">Max hold</button>
-          <button type="button" class="btn btn-sm ${this.scanShowAvg ? "btn-armed" : "btn-ghost"}" data-action="scan-toggle-avg">Average</button>
-          <button type="button" class="btn btn-sm ${this.scanShowWifi ? "btn-armed" : "btn-ghost"}" data-action="scan-toggle-wifi">Wi-Fi bands</button>
+      <div class="debug-toolbar">
+        <div class="debug-toolbar-left">
+          <div class="debug-scan-inputs">
+            <label>From <input class="input mono" type="number" data-scan-start value="${esc(prev.start)}" min="5180" max="5917" ${dis}/></label>
+            <label>to <input class="input mono" type="number" data-scan-stop value="${esc(prev.stop)}" min="5180" max="5917" ${dis}/></label>
+            <label>step <input class="input mono" type="number" data-scan-step value="${esc(prev.step)}" min="1" max="50" ${dis}/></label>
+            <span class="note">MHz</span>
+          </div>
+          <div class="debug-overlay-checks" role="group" aria-label="Spectrum overlays">
+            <label class="check">
+              <input type="checkbox" data-check="scan-hold" ${this.scanShowMaxHold ? "checked" : ""}/>
+              <span>Max hold</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" data-check="scan-avg" ${this.scanShowAvg ? "checked" : ""}/>
+              <span>Average</span>
+            </label>
+            <label class="check">
+              <input type="checkbox" data-check="scan-wifi" ${this.scanShowWifi ? "checked" : ""}/>
+              <span>5 GHz Wi-Fi bands</span>
+            </label>
+          </div>
         </div>
         <div class="debug-connect-actions">
-          ${hasScan ? `<button type="button" class="btn btn-sm btn-ghost" data-action="clear-hold">Reset hold/avg</button>` : ""}
-          <button type="button" class="btn btn-sm btn-ghost" data-action="export-scan-csv" ${hasScan ? "" : "disabled"}>CSV</button>
-          <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-png" ${hasScan ? "" : "disabled"}>Spectrum PNG</button>
-          <button type="button" class="btn btn-sm btn-ghost" data-action="export-waterfall-png" ${hasScan ? "" : "disabled"}>Waterfall PNG</button>
-          <button type="button" class="btn btn-sm btn-ghost" data-action="scan" ${on && !this.scanning && !this.scanLive ? "" : "disabled"}>
-            ${icons.signal(14)}<span>${this.scanning ? "Scanning…" : "Scan"}</span>
+          <button type="button" class="btn btn-sm" data-action="scan" ${on && !this.scanning && !this.scanLive ? "" : "disabled"}>
+            ${icons.signal(14)}<span>${this.scanning ? "Scanning…" : "Scan once"}</span>
           </button>
-          <button type="button" class="btn btn-sm ${this.scanLive ? "btn-danger-active" : "btn-armed"}" data-action="scan-live" ${on && !this.scanning ? "" : "disabled"}>
-            ${this.scanLive ? icons.pause(14) : icons.play(14)}<span>${this.scanLive ? "Stop live scan" : "Live"}</span>
+          <button type="button" class="btn btn-sm debug-btn-transport ${this.scanLive ? "is-paused" : "is-running"}" data-action="scan-live" ${on && !this.scanning ? "" : "disabled"}>
+            ${this.scanLive ? icons.pause(14) : icons.play(14)}<span>${this.scanLive ? "Stop live" : "Live scan"}</span>
           </button>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="clear-hold" ${hasScan ? "" : "disabled"}>Reset hold/avg</button>
+          <div class="debug-btn-group" role="group" aria-label="Export spectrum & waterfall">
+            <button type="button" class="btn btn-sm btn-ghost" data-action="export-scan-csv" ${hasScan ? "" : "disabled"} title="Export waterfall scan history as CSV">CSV</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-png" ${hasScan ? "" : "disabled"} title="Save spectrum trace as PNG">Spectrum PNG</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="export-waterfall-png" ${hasScan ? "" : "disabled"} title="Save waterfall spectrogram as PNG">Waterfall PNG</button>
+          </div>
         </div>
       </div>
       <div class="debug-canvas-wrap">
         <canvas class="debug-canvas debug-spectrum-canvas" data-spectrum-canvas></canvas>
       </div>
-      <div data-scan-meta></div>
-      <div data-scan-peaks></div>
+      <div class="debug-findings debug-scan-findings" data-scan-findings role="status" aria-live="polite"></div>
       <div class="debug-waterfall-section">
         <div class="debug-waterfall-head">
           <strong>Waterfall spectrogram (frequency × time)</strong>
@@ -1339,46 +1471,58 @@ export class DebugView extends Component {
           <canvas class="debug-canvas debug-waterfall-canvas" data-waterfall-canvas></canvas>
         </div>
       </div>`;
-    this.updateScanMeta();
-    this.renderSpectrumPeaks();
+    this.updateScanFindings();
     this.dirtySpectrum = true;
     this.dirtyWaterfall = true;
   }
 
-  private updateScanMeta(): void {
-    const el = this.el.querySelector<HTMLElement>("[data-scan-meta]");
+  private updateScanFindings(): void {
+    const el = this.el.querySelector<HTMLElement>("[data-scan-findings]");
     if (!el) return;
     const s = this.spectrumAcc.latest;
-    if (this.scanLive) {
-      el.innerHTML = `<p class="note debug-scan-live-note"><span class="debug-tone-warn">Live scan: lap timing is paused.</span> ${
-        s?.live && s.passMs ? `${(1000 / s.passMs).toFixed(1)} passes/s (${this.spectrumAcc.avgCount} passes) · ` : ""
-      }volt = live · cyan = average · faint volt = max hold</p>`;
-    } else if (s) {
-      el.innerHTML = `<p class="note debug-scan-live-note">${s.dbm.length} points (${s.start}–${s.start + s.step * (s.dbm.length - 1)} MHz, step ${s.step} MHz) · ${this.spectrumAcc.history.length} pass${this.spectrumAcc.history.length === 1 ? "" : "es"} in waterfall</p>`;
-    } else {
-      el.innerHTML = "";
-    }
-  }
-
-  private renderSpectrumPeaks(): void {
-    const el = this.el.querySelector<HTMLElement>("[data-scan-peaks]");
-    if (!el) return;
     const peaks = this.spectrumAcc.topPeaks(5);
-    if (!peaks.length) {
-      el.innerHTML = this.spectrumAcc.latest
-        ? `<p class="note debug-peaks-empty">No peaks ≥ 6 dB above the band median.</p>`
-        : "";
-      return;
+
+    let badgeTone = "";
+    let badgeLabel = "Idle";
+    let metaText = "Click Scan once for a snapshot, or Live scan for ~3 Hz continuous updates.";
+
+    if (this.scanLive) {
+      badgeTone = "badge-warn";
+      badgeLabel = "Live scan · timing paused";
+      const rateStr = s?.live && s.passMs ? `${(1000 / s.passMs).toFixed(1)} passes/s · ` : "";
+      metaText = `${rateStr}${this.spectrumAcc.avgCount} pass${this.spectrumAcc.avgCount === 1 ? "" : "es"} averaged · volt = live, cyan = avg, faint volt = max hold`;
+    } else if (this.scanning) {
+      badgeTone = "badge-accent";
+      badgeLabel = "Scanning…";
+      metaText = "Sweeping 5180–5917 MHz on the 5.8 GHz receiver…";
+    } else if (s) {
+      badgeTone = peaks.length ? "badge-accent" : "badge-good";
+      badgeLabel = peaks.length ? `${peaks.length} peak${peaks.length === 1 ? "" : "s"} detected` : "Flat band";
+      metaText = `${s.dbm.length} points (${s.start}–${s.start + s.step * (s.dbm.length - 1)} MHz, step ${s.step} MHz) · ${this.spectrumAcc.history.length} pass${this.spectrumAcc.history.length === 1 ? "" : "es"} in waterfall`;
     }
+
+    const peaksHtml = !s
+      ? `<span class="note">No scan data yet — run a scan to detect active VTX channels or 5 GHz Wi-Fi activity.</span>`
+      : !peaks.length
+        ? `<span class="note">No peaks ≥ 6 dB above the band median — band is quiet across the scanned range.</span>`
+        : `<span class="note debug-peaks-label">Top peaks (≥ 6 dB above median):</span>
+           <div class="debug-peaks-list">
+             ${peaks
+               .map(
+                 (p) =>
+                   `<span class="debug-peak-pill mono"><strong>${p.freqMHz} MHz</strong> · ${p.dbm} dBm <span class="note">(${esc(p.bandHint)})</span></span>`
+               )
+               .join("")}
+           </div>`;
+
     el.innerHTML = `
-      <div class="debug-peaks">
-        <span class="note">Top peaks (≥ 6 dB above median):</span>
-        ${peaks
-          .map(
-            (p) =>
-              `<span class="badge mono"><strong>${p.freqMHz} MHz</strong> · ${p.dbm} dBm <span class="note">(${esc(p.bandHint)})</span></span>`
-          )
-          .join("")}
+      <div class="debug-findings-head">
+        <span class="debug-findings-title">Findings</span>
+        <span class="badge ${badgeTone}">${esc(badgeLabel)}</span>
+        <span class="note mono debug-findings-meta">${esc(metaText)}</span>
+      </div>
+      <div class="debug-peaks-row">
+        ${peaksHtml}
       </div>`;
   }
 
@@ -1393,7 +1537,7 @@ export class DebugView extends Component {
     const l = this.bootLog;
     this.slot("restart").innerHTML = `
       <div class="debug-card-head">
-        <span class="note">${restartBusy ? esc(this.progress) : on ? "The USB connection drops during a restart; the page reconnects by itself." : "Connect a timer first."}</span>
+        <span class="note debug-head-note">${restartBusy ? esc(this.progress) : on ? "The USB connection drops during a restart; the page reconnects by itself." : "Connect a timer first."}</span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="bootlog" ${on && !busy ? "" : "disabled"}>This boot's log</button>
           <button type="button" class="btn btn-sm btn-ghost" data-action="lastlog" ${on && !busy ? "" : "disabled"}>Previous boot's log</button>
@@ -1402,7 +1546,7 @@ export class DebugView extends Component {
       </div>
       <div class="debug-restart-test">
         <label>Restart test <input class="input mono" type="number" data-restart-count value="${esc(this.el.querySelector<HTMLInputElement>("[data-restart-count]")?.value ?? "5")}" min="1" max="50"/> times</label>
-        <button type="button" class="btn btn-sm btn-ghost" data-action="restart-test" ${on && !busy ? "" : "disabled"}>${icons.reset(14)}<span>${this.busy === "Restart test" ? "Running…" : "Run"}</span></button>
+        <button type="button" class="btn btn-sm" data-action="restart-test" ${on && !busy ? "" : "disabled"}>${icons.reset(14)}<span>${this.busy === "Restart test" ? "Running…" : "Run"}</span></button>
       </div>
       ${
         this.runs.length
@@ -1412,7 +1556,7 @@ export class DebugView extends Component {
                 .map(
                   (r) => `<tr>
                     <td class="mono">${r.n}</td>
-                    <td><span class="badge ${r.ok && !r.extraBoots ? "tone-good" : r.ok ? "debug-tone-warn" : "tone-bad"}">${r.ok && !r.extraBoots ? "OK" : r.ok ? "WARN" : "FAIL"}</span></td>
+                    <td><span class="badge ${r.ok && !r.extraBoots ? "badge-good" : r.ok ? "badge-warn" : "badge-bad"}">${r.ok && !r.extraBoots ? "OK" : r.ok ? "WARN" : "FAIL"}</span></td>
                     <td class="mono">${(r.ms / 1000).toFixed(1)} s</td>
                     <td>${esc(r.reset)}</td>
                     <td class="note">${esc(r.note)}</td>
@@ -1452,11 +1596,11 @@ export class DebugView extends Component {
     const on = this.console.connected;
     this.slot("log").innerHTML = `
       <div class="debug-card-head debug-log-head">
-        <span class="note" data-log-count>${this.logLines.length} lines</span>
+        <span class="note mono debug-head-note" data-log-count>${this.logLines.length} lines</span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-ghost" data-action="clear-log">Clear</button>
-          <button type="button" class="btn btn-sm ${this.logOn ? "btn-armed" : "btn-ghost"}" data-action="log" ${on ? "" : "disabled"}>
-            ${this.logOn ? "Stop log" : "Start log"}
+          <button type="button" class="btn btn-sm debug-btn-transport ${this.logOn ? "is-paused" : "is-running"}" data-action="log" ${on ? "" : "disabled"}>
+            ${this.logOn ? icons.pause(14) : icons.play(14)}<span>${this.logOn ? "Stop log" : "Start log"}</span>
           </button>
         </div>
       </div>
