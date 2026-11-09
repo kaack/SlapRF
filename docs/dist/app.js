@@ -734,7 +734,7 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
                   </div>`:""}
           </div>
         </div>
-        <span class="note debug-chart-hint">Drag chart to pan \xB7 Shift+drag box to zoom \xB7 drag axes to stretch</span>
+        <span class="note debug-chart-hint"><span class="debug-hint-desktop">Drag chart to pan \xB7 Shift+drag box to zoom \xB7 drag axes to stretch</span><span class="debug-hint-mobile">Drag chart to pan \xB7 drag axes to stretch \xB7 double-tap to reset</span></span>
         <div class="debug-connect-actions">
           <div class="debug-btn-group" role="group" aria-label="Export signal chart">
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts?"":"disabled"} title="Download recorded 50 Hz samples as CSV">CSV</button>
@@ -915,7 +915,7 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
                     </div>`:""}
             </div>
           </div>
-          <span class="note debug-chart-hint">Drag chart to pan \xB7 Shift+drag box to zoom \xB7 drag axes to stretch</span>
+          <span class="note debug-chart-hint"><span class="debug-hint-desktop">Drag chart to pan \xB7 Shift+drag box to zoom \xB7 drag axes to stretch</span><span class="debug-hint-mobile">Drag chart to pan \xB7 drag axes to stretch \xB7 double-tap to reset</span></span>
           <div class="debug-connect-actions">
             <div class="debug-btn-group" role="group" aria-label="Export spectrum chart">
               <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-csv" ${hasScan?"":"disabled"} title="Download spectrum trace (latest, average, max-hold) as CSV">CSV</button>
@@ -985,7 +985,7 @@ ${last.text}`,this.renderRestart()}catch{}}else add("Last restart","pass",`${s.r
                     </div>`:""}
             </div>
           </div>
-          <span class="note debug-chart-hint">Drag chart to pan \xB7 Shift+drag box to zoom \xB7 drag axes to stretch</span>
+          <span class="note debug-chart-hint"><span class="debug-hint-desktop">Drag chart to pan \xB7 Shift+drag box to zoom \xB7 drag axes to stretch</span><span class="debug-hint-mobile">Drag chart to pan \xB7 drag axes to stretch \xB7 double-tap to reset</span></span>
           <div class="debug-connect-actions">
             <div class="debug-btn-group" role="group" aria-label="Export waterfall spectrogram">
               <button type="button" class="btn btn-sm btn-ghost" data-action="export-scan-csv" ${hasScan?"":"disabled"} title="Download waterfall scan history matrix as CSV">CSV</button>
