@@ -405,7 +405,9 @@ static void send_status(void) {
     uint8_t mac[6] = {0};
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
 
-    static char out[2048];
+    char (*out_buf)[2048] = malloc(sizeof(*out_buf));
+    if (!out_buf) return;
+    #define out (*out_buf)
     int n = snprintf(out, sizeof(out),
                      "@{\"t\":\"status\",\"fw\":\"v%u.%u.%u\",\"role\":%u,\"profile\":%u,\"fp\":\"%08lX\","
                      "\"label\":\"%s\",\"uptimeMs\":%lld,\"reset\":\"%s\",\"boots\":%lu,"
@@ -473,11 +475,15 @@ static void send_status(void) {
     }
     snprintf(out + n, sizeof(out) - n, "}\n");
     tx_line(out);
+    #undef out
+    free(out_buf);
 }
 
 /** Send a log buffer as one JSON line (escaped). */
 static void send_log(const char *which, const char *text, size_t len) {
-    static char out[64 + LOG_RING_BYTES * 2 + 96];
+    char (*out_buf)[64 + LOG_RING_BYTES * 2 + 96] = malloc(sizeof(*out_buf));
+    if (!out_buf) return;
+    #define out (*out_buf)
     int n = snprintf(out, sizeof(out), "@{\"t\":\"bootlog\",\"which\":\"%s\",\"boots\":%lu,\"reset\":\"%s\",\"text\":\"",
                      which, (unsigned long)s_boots, reset_reason_name(esp_reset_reason()));
     for (size_t i = 0; i < len && n < (int)sizeof(out) - 8; i++) {
@@ -496,6 +502,8 @@ static void send_log(const char *which, const char *text, size_t len) {
     }
     n += snprintf(out + n, sizeof(out) - n, "\"}\n");
     tx_raw(out, (size_t)n);
+    #undef out
+    free(out_buf);
 }
 
 static void siren_led_task(void *arg) {
@@ -742,12 +750,15 @@ static void handle_command(char *line) {
         s_log = line[4] == '1';
         tx_line(s_log ? "@{\"t\":\"ok\",\"cmd\":\"log\",\"on\":true}\n" : "@{\"t\":\"ok\",\"cmd\":\"log\",\"on\":false}\n");
     } else if (strcmp(line, "BOOTLOG?") == 0) {
-        static char cur[LOG_RING_BYTES];
-        size_t len = 0;
-        portENTER_CRITICAL(&s_ring_mux);
-        ring_copy_out(cur, &len);
-        portEXIT_CRITICAL(&s_ring_mux);
-        send_log("current", cur, len);
+        char *cur = (char *)malloc(LOG_RING_BYTES);
+        if (cur) {
+            size_t len = 0;
+            portENTER_CRITICAL(&s_ring_mux);
+            ring_copy_out(cur, &len);
+            portEXIT_CRITICAL(&s_ring_mux);
+            send_log("current", cur, len);
+            free(cur);
+        }
     } else if (strcmp(line, "LASTLOG?") == 0) {
         send_log("last", s_last_log, s_last_len);
     } else if (strncmp(line, "CHANNELS", 8) == 0) {

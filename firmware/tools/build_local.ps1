@@ -73,6 +73,19 @@ foreach ($p in $Profiles) {
     & $ninja -C $buildDir
     if ($LASTEXITCODE -ne 0) { throw "ninja build failed for $p" }
 
+    $nm = "C:\esp\tools\tools\riscv32-esp-elf\esp-14.2.0_20241119\riscv32-esp-elf\bin\riscv32-esp-elf-nm.exe"
+    $elfPath = Join-Path $buildDir "slaprf-$p.elf"
+    $bssLine = & $nm $elfPath | Select-String " _bss_end$"
+    if ($bssLine) {
+        $bssHex = ($bssLine.ToString().Trim() -split "\s+")[0]
+        $bssAddr = [Convert]::ToUInt64($bssHex, 16)
+        $headroom = 0x40820000 - $bssAddr
+        Write-Host (" -> _bss_end = 0x{0} ({1} bytes headroom below 0x40820000 IQ bank)" -f $bssHex, $headroom) -ForegroundColor DarkGray
+        if ($bssAddr -ge 0x40820000) {
+            throw "_bss_end (0x$bssHex) overlaps 0x40820000 IQ capture bank!"
+        }
+    }
+
     Push-Location $buildDir
     try {
         $mergedOut = Join-Path $outDir "slaprf-xiao-c5-$p.bin"
