@@ -67,7 +67,7 @@ export const ROUTES: RouteMeta[] = [
     id: "setup",
     label: "Settings",
     title: "Settings",
-    subtitle: "Timing rules, announcer, MultiGP LiveTime, and data source",
+    subtitle: "Timing rules, announcer, MultiGP LiveTime, data source, and persistence",
     icon: () => icons.sliders(20),
   },
 ];

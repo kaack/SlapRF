@@ -3,7 +3,7 @@ import { Announcer } from "../services/announcer";
 import { ApiClient } from "../services/api_client";
 import { AppStore } from "../state/store";
 import { AnnouncerSettings } from "../widgets/AnnouncerSettings";
-import { DataSourceCard } from "../widgets/DataSourceCard";
+import { DataSourceCard, PersistenceSettings } from "../widgets/DataSourceCard";
 import { LiveTimeCard } from "../widgets/LiveTimeCard";
 import { TimingRulesEditor } from "../widgets/TimingRulesEditor";
 
@@ -40,16 +40,25 @@ export class SetupView extends Component {
 
         <section class="settings-section">
           <div class="settings-intro">
-            <h2>Data source &amp; storage</h2>
-            <p>Switch between physical XIAO gate timers and the built-in simulator, export or import a full JSON backup of all application state, or wipe saved application data.</p>
+            <h2>Data source</h2>
+            <p>Switch between physical XIAO gate timers and the built-in simulator. Each keeps its own separate dataset.</p>
           </div>
-          <div class="settings-cards" data-slot="source"></div>
+          <div class="card" data-slot="source"></div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Persistence</h2>
+            <p>Export or import a full JSON snapshot of all application state, or wipe saved data back to clean system defaults.</p>
+          </div>
+          <div class="settings-cards" data-slot="persistence"></div>
         </section>
       </div>`;
 
     this.adopt(new TimingRulesEditor(this.slot("rules"), store, api));
     this.adopt(new AnnouncerSettings(this.slot("announcer"), announcer));
     this.adopt(new LiveTimeCard(this.slot("livetime"), store, api));
-    this.adopt(new DataSourceCard(this.slot("source"), store, api, announcer));
+    this.adopt(new DataSourceCard(this.slot("source"), store, api));
+    this.adopt(new PersistenceSettings(this.slot("persistence"), api, announcer));
   }
 }
