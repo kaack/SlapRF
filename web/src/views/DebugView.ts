@@ -390,12 +390,10 @@ export class DebugView extends Component {
           <div class="settings-intro">
             <h2>Live 5.8 GHz readings</h2>
             <p>What the timer measures on each of its 8 pilot channels. The tick marks the peak since the previous update; hits count readings more than 10 dB above that channel's typical noise (Wi-Fi bursts show up here too; they're far below a lap's enter threshold). Power on a VTX to see its channel rise.</p>
-            <p>Try other channels without reflashing, or switch the receiver off to tell whether a problem comes from the 5.8 GHz side. Both reset when the timer restarts.</p>
           </div>
           <div class="debug-status-layout">
             <div data-slot="live-head"></div>
             <div class="debug-subbox" data-slot="live"></div>
-            <div class="debug-subbox" data-slot="channels"></div>
           </div>
         </section>
         <section class="settings-section" data-signal-section>
@@ -2936,46 +2934,7 @@ export class DebugView extends Component {
   }
 
   private renderChannels(): void {
-    const on = this.console.connected;
-    const s = this.status;
-    const emg = Boolean(on && s?.emergencyMode);
-    const inScanMode = Boolean(this.scanLive || s?.scanLive);
-    const canEdit = Boolean(on && s && !inScanMode && !emg);
-    const freqs = s?.freqs ?? RACEBAND;
-    const isTemp = Boolean(s?.freqsTemporary);
-    const isAlreadyRb = freqs.length === 8 && freqs.every((f, i) => f === RACEBAND[i]);
-    const noteText = this.channelsDirty
-      ? "· unsaved edits"
-      : isTemp
-        ? "· temporary override"
-        : "· saved in NVS";
-    this.slot("channels").innerHTML = `
-      <div class="debug-channels">
-        <div class="debug-subbar debug-waterfall-head">
-          <div class="debug-waterfall-title-group">
-            <span class="debug-chart-title">Channel frequency override (MHz)</span>
-            <span class="note" data-channels-note>${noteText}</span>
-          </div>
-          <div class="debug-connect-actions">
-            <button type="button" class="btn btn-sm btn-ghost" data-action="channels-raceband" data-channels-rb-btn ${canEdit && !isAlreadyRb ? "" : "disabled"} title="Fill standard Raceband R1–R8 frequencies (5658–5917 MHz)">Raceband</button>
-            <button type="button" class="btn btn-sm btn-ghost" data-action="channels-reset" data-channels-reset-btn ${canEdit && (isTemp || this.channelsDirty) ? "" : "disabled"} title="Restore saved NVS channels">
-              ${icons.reset(14)}<span>Reset</span>
-            </button>
-            <button type="button" class="btn btn-sm ${this.channelsDirty || isTemp ? "btn-armed" : "btn-unarmed"}" data-action="channels-apply" data-channels-apply-btn ${canEdit && this.channelsDirty ? "" : "disabled"} title="${inScanMode ? "Unavailable while Spectrum scan is streaming" : "Apply these 8 channels temporarily until the timer restarts"}">
-              ${icons.check(14)}<span data-channels-apply-label>${isTemp && !this.channelsDirty ? "Applied" : "Apply"}</span>
-            </button>
-          </div>
-        </div>
-        <div class="debug-channels-inputs">
-          ${freqs
-            .map((f, i) => {
-              const rb = racebandName(f) || `Ch ${i + 1}`;
-              const col = CHANNEL_COLORS[i];
-              return `<label class="debug-chan-field"><span class="debug-chan-label mono"><span class="debug-ch-inline" style="background:${col}"></span><strong data-chan-tag="${i}">${rb}</strong></span><input class="input mono" type="number" min="5180" max="5917" data-chan="${i}" value="${f}" ${canEdit ? "" : "disabled"}/></label>`;
-            })
-            .join("")}
-        </div>
-      </div>`;
+    // Channel overrides are managed via the Serial console (CHANNELS <f1,...,f8> / CHANNELS RESET).
   }
 
   private syncChannelInputsState(): void {
