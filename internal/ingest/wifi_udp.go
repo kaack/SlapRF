@@ -207,7 +207,6 @@ func (r *WiFiUDPReceiver) handleHello(raw []byte) {
 	r.mu.Lock()
 	if cur, ok := r.slots[slot]; ok && cur.fingerprint == fp {
 		r.mu.Unlock()
-		r.pushActiveChannelsToHub()
 		return // Already registered
 	}
 	r.mu.Unlock()

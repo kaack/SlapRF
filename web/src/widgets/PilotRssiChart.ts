@@ -538,9 +538,9 @@ export class PilotRssiChart extends Component {
           lastTs = frames[i].timestampUs;
         }
         // When following live, extend the newest sample horizontally to the right edge if it is
-        // within one sliding-window interval (<= 120 ms), so traces stay flush with the right edge
+        // within a few superframes (<= 300 ms), so traces stay flush with the right edge
         // between 40 ms packet bursts instead of visibly stepping at the tip.
-        if (this.endUs === null && to === frames.length - 1 && end > lastTs && end - lastTs <= 120_000) {
+        if (this.endUs === null && to === frames.length - 1 && end > lastTs && end - lastTs <= 300_000) {
           ctx.lineTo(Math.min(PAD.l + plotW, xOf(end)), lastY);
         }
         ctx.stroke();

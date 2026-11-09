@@ -77,6 +77,7 @@ export class AppStore {
     raceArmedByHost: true,
   };
   private _latestTimestampUs = 0;
+  private _latestTelemetryTimestampUs = 0;
   private _lastIngestPerfMs = 0;
   private _playheadUs = 0;
   private _lastPlayheadPerfMs = 0;
@@ -258,25 +259,31 @@ export class AppStore {
    * smoothly at the display refresh rate instead of stepping only when UDP packets arrive.
    */
   public get smoothLatestTimestampUs(): number {
-    if (this._latestTimestampUs === 0) return 0;
+    const latest = this._latestTelemetryTimestampUs || this._latestTimestampUs;
+    if (latest === 0) return 0;
     const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
-    // If no telemetry has arrived in the last 300 ms (e.g. simulator paused or timers idle), hold steady.
-    if (this._lastIngestPerfMs === 0 || nowMs - this._lastIngestPerfMs > 300) {
-      this._playheadUs = this._latestTimestampUs;
+    // If no telemetry has arrived in the last 500 ms (e.g. simulator paused or timers powered off), hold steady.
+    if (this._lastIngestPerfMs === 0 || nowMs - this._lastIngestPerfMs > 500) {
+      this._playheadUs = latest;
       this._lastPlayheadPerfMs = nowMs;
-      return this._latestTimestampUs;
+      return latest;
     }
     const dtUs = Math.max(0, Math.min(100_000, (nowMs - this._lastPlayheadPerfMs) * 1000));
     this._lastPlayheadPerfMs = nowMs;
-    // Target slightly behind the newest packet's timestamp (~25 ms = half a 40 ms superframe + jitter margin)
-    // so every gate's trace stays anchored to the right edge of the chart without popping.
-    const targetUs = this._latestTimestampUs - 25_000;
-    if (this._playheadUs === 0 || Math.abs(targetUs - this._playheadUs) > 250_000) {
+    // Target slightly behind the newest telemetry sample (~35 ms = ~1 superframe) so every gate's
+    // trace stays anchored to the right edge and brief Wi-Fi jitter never stalls the playhead.
+    const targetUs = latest - 35_000;
+    if (this._playheadUs === 0 || Math.abs(targetUs - this._playheadUs) > 400_000) {
       this._playheadUs = targetUs;
-      return this._playheadUs;
+      return Math.round(this._playheadUs);
     }
-    const nextUs = this._playheadUs + dtUs + (targetUs - (this._playheadUs + dtUs)) * 0.12;
-    this._playheadUs = Math.max(this._playheadUs, nextUs);
+    // Advance at true wall-clock rate (`dtUs`), plus a gentle proportional nudge (4% per frame,
+    // clamped to ±35% of `dtUs`) so the chart ALWAYS scrolls forward smoothly at 60 FPS and never
+    // pauses between 40 ms sliding-window bursts or during minor Wi-Fi latency spikes.
+    const errorUs = targetUs - (this._playheadUs + dtUs);
+    const maxCorrectionUs = dtUs * 0.35;
+    const correctionUs = Math.max(-maxCorrectionUs, Math.min(maxCorrectionUs, errorUs * 0.04));
+    this._playheadUs += dtUs + correctionUs;
     return Math.round(this._playheadUs);
   }
   public get selectedPilot(): number {
@@ -327,6 +334,7 @@ export class AppStore {
     if (modeChanged) {
       this._comparison = { lapId: null, reference: "best" };
       this._playheadUs = 0;
+      this._latestTelemetryTimestampUs = 0;
       this._lastIngestPerfMs = 0;
     }
 
@@ -399,6 +407,9 @@ export class AppStore {
 
     if (frame.timestampUs > this._latestTimestampUs) {
       this._latestTimestampUs = frame.timestampUs;
+    }
+    if (frame.timestampUs > this._latestTelemetryTimestampUs) {
+      this._latestTelemetryTimestampUs = frame.timestampUs;
     }
     this._lastIngestPerfMs = typeof performance !== "undefined" ? performance.now() : Date.now();
     const node = this.node(frame.puckId);
