@@ -163,7 +163,13 @@ static void tx_raw(const void *data, size_t len) {
     while (len > 0) {
         const size_t chunk = len > 128 ? 128 : len;
         if (usb_serial_jtag_write_bytes(p, chunk, pdMS_TO_TICKS(120)) <= 0) {
-            break; // Host not reading (port closed): drop the rest
+            // Host not reading (port closed or browser refreshed): stop all background streams
+            // immediately so the TX ringbuffer stops filling and the main loop never stalls.
+            s_live = 0;
+            s_scan_live = false;
+            s_log = false;
+            s_tx_drops = 0;
+            break;
         }
         p += chunk;
         len -= chunk;
@@ -183,9 +189,9 @@ static void tx_line_nowait(const char *s) {
     const size_t len = strlen(s);
     const int written = usb_serial_jtag_write_bytes(s, len, 0);
     if (written < (int)len) {
-        // If the USB host closed the port or refreshed the browser tab, stop streaming after ~300 ms
-        // of consecutive full-buffer drops so the TX ring buffer stays clear for the next STATUS?.
-        if (++s_tx_drops >= 15) {
+        // If the USB host closed the port or refreshed the browser tab, stop streaming after a few
+        // consecutive drops so the TX ring buffer stays clear for the next STATUS? on reconnect.
+        if (++s_tx_drops >= 4) {
             s_live = 0;
             s_scan_live = false;
             s_log = false;
@@ -207,7 +213,8 @@ static int log_vprintf(const char *fmt, va_list args) {
         const size_t n = (size_t)(m < (int)sizeof(buf) ? m : (int)sizeof(buf) - 1);
         ring_append(buf, n);
         if (s_log) {
-            tx_raw(buf, n);
+            buf[n] = 0;
+            tx_line_nowait(buf);
         }
     }
     return s_prev_vprintf ? s_prev_vprintf(fmt, args) : vprintf(fmt, args); // UART keeps logging
@@ -842,7 +849,7 @@ void slaprf_diag_service(void) {
         }
         snprintf(live_out + n, sizeof(live_out) - n, "]}\n");
         s_ls_ready = false;
-        tx_line(live_out);
+        tx_line_nowait(live_out);
     }
     if (!s_scan_pending) {
         return;

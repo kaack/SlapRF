@@ -157,6 +157,54 @@ export class TimerConsole {
     this.handlers.onDisconnect?.();
   }
 
+  /**
+   * Best-effort synchronous/immediate teardown for page reload (`beforeunload` / `pagehide`).
+   * Stops active firmware streams, cancels the reader, and closes the WebSerial port immediately
+   * so Chromium doesn't strand an active stream or leave the USB port wedged across a refresh.
+   */
+  public disconnectForUnload(): void {
+    const port = this.port;
+    const writer = this.writer;
+    const reader = this.reader;
+    this.port = null;
+    this.writer = null;
+    this.reader = null;
+    this.failWaiters("Page unloading");
+    if (!port) return;
+    const stopBytes = new TextEncoder().encode("\nLIVE 0\nSCAN STOP\nLOG 0\n");
+    const writeDone = writer
+      ? writer
+          .write(stopBytes)
+          .catch(() => undefined)
+          .finally(() => {
+            try {
+              writer.releaseLock();
+            } catch {
+              // ignore
+            }
+          })
+      : Promise.resolve();
+    const readDone = reader
+      ? reader
+          .cancel()
+          .catch(() => undefined)
+          .finally(() => {
+            try {
+              reader.releaseLock();
+            } catch {
+              // ignore
+            }
+          })
+      : Promise.resolve();
+    void Promise.all([writeDone, readDone]).finally(() => {
+      try {
+        void port.close().catch(() => undefined);
+      } catch {
+        // ignore
+      }
+    });
+  }
+
   private async closePort(): Promise<void> {
     const port = this.port;
     this.port = null;
@@ -219,7 +267,7 @@ export class TimerConsole {
     let first = true;
     while (Date.now() < deadline && this.port) {
       try {
-        const cmd = first ? "\nLIVE 0\nSTATUS?" : "\nSTATUS?";
+        const cmd = first ? "\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?" : "\nSTATUS?";
         first = false;
         return await this.request<TimerStatus>(cmd, "status", 900);
       } catch {

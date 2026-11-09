@@ -558,17 +558,19 @@ export class DebugView extends Component {
     };
     this.rafId = window.requestAnimationFrame(tick);
 
-    const onBeforeUnload = () => {
+    const onPageUnload = () => {
       if (this.console.connected) {
-        void this.console.send("LIVE 0\nSCAN STOP\nLOG 0").catch(() => undefined);
+        this.console.disconnectForUnload();
       }
     };
-    window.addEventListener("beforeunload", onBeforeUnload);
+    window.addEventListener("pagehide", onPageUnload);
+    window.addEventListener("beforeunload", onPageUnload);
 
     this.onDispose(() => {
       window.cancelAnimationFrame(this.rafId);
       window.removeEventListener("resize", onResize);
-      window.removeEventListener("beforeunload", onBeforeUnload);
+      window.removeEventListener("pagehide", onPageUnload);
+      window.removeEventListener("beforeunload", onPageUnload);
       this.observer?.disconnect();
       window.clearInterval(this.statusTimer);
       const topSlot = document.querySelector<HTMLElement>("[data-topbar-view-actions]");
