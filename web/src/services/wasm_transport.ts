@@ -79,7 +79,7 @@ export class WasmSimTransport implements ApiTransport {
     if (!window.Go) {
       await new Promise<void>((resolve, reject) => {
         const script = document.createElement("script");
-        script.src = "./wasm/wasm_exec.js?v=201";
+        script.src = "./wasm/wasm_exec.js?v=202";
         script.onload = () => resolve();
         script.onerror = () => reject(new Error("Failed to load ./wasm/wasm_exec.js"));
         document.head.appendChild(script);
@@ -88,7 +88,7 @@ export class WasmSimTransport implements ApiTransport {
 
     window.__slaprfBootStatus?.("Downloading SlapRF 5.8 GHz timing engine…", 28);
     const go = new window.Go!();
-    const wasmUrl = "./wasm/slaprf.wasm?v=201";
+    const wasmUrl = "./wasm/slaprf.wasm?v=202";
 
     const response = await fetch(wasmUrl);
     if (!response.ok) {
@@ -233,5 +233,34 @@ export class WasmSimTransport implements ApiTransport {
       window.slaprfWasm.onStream(null);
       window.slaprfWasm.setRunning(false);
     }
+  }
+
+  public async exportSimStateJson(): Promise<string> {
+    if (window.slaprfWasm && typeof window.slaprfWasm.exportSimState === "function") {
+      this.persistNow(window.slaprfWasm);
+      return window.slaprfWasm.exportSimState() || "";
+    }
+    try {
+      const saved = window.localStorage.getItem(SIM_STORAGE_KEY);
+      if (saved) return saved;
+    } catch {
+      // ignore
+    }
+    const wasm = await this.ensureReady();
+    this.persistNow(wasm);
+    return wasm.exportSimState?.() ?? "";
+  }
+
+  public async importSimStateJson(jsonStr: string): Promise<boolean> {
+    try {
+      window.localStorage.setItem(SIM_STORAGE_KEY, jsonStr);
+    } catch {
+      // ignore
+    }
+    if (window.slaprfWasm && typeof window.slaprfWasm.restoreSimState === "function") {
+      return window.slaprfWasm.restoreSimState(jsonStr);
+    }
+    const wasm = await this.ensureReady();
+    return wasm.restoreSimState?.(jsonStr) ?? false;
   }
 }

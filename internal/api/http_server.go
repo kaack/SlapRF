@@ -227,10 +227,12 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/timing/toggle-arm", s.handleToggleArm)
 	mux.HandleFunc("/api/livetime/toggle", s.handleToggleLiveTime)
 	mux.HandleFunc("/api/pilots/update", s.handleUpdatePilot)
+	mux.HandleFunc("/api/pilots/reset", s.handleResetPilots)
 	mux.HandleFunc("/api/track/update", s.handleUpdateGate)
 	mux.HandleFunc("/api/track/add", s.handleAddGate)
 	mux.HandleFunc("/api/track/remove", s.handleRemoveGate)
 	mux.HandleFunc("/api/track/rules", s.handleGateRules)
+	mux.HandleFunc("/api/track/reset", s.handleResetTrack)
 	mux.HandleFunc("/api/timers/provision", s.handleProvisionGate)
 	mux.HandleFunc("/api/timers/color", s.handleUpdateTimerColor)
 
@@ -251,6 +253,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/sim/timer-action", s.handleSimTimerAction)
 	mux.HandleFunc("/api/session/reset", s.handleResetSession)
 	mux.HandleFunc("/api/storage/reset", s.handleResetStorage)
+	mux.HandleFunc("/api/storage/export", s.handleExportStorage)
+	mux.HandleFunc("/api/storage/import", s.handleImportStorage)
 	mux.HandleFunc("/api/ingest/frame", s.handleIngestFrame)
 
 	// Zero-Node.js pure-Go TypeScript bundle and WebAssembly simulation engine endpoints
@@ -692,9 +696,38 @@ func (s *Server) handleSimTimerAction(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
+	case "reset-timers":
+		s.simulator.ResetTimersAndTrackToDefault()
 	default:
 		http.Error(w, "unknown timer action", http.StatusBadRequest)
 		return
+	}
+	s.handleGetState(w, r)
+}
+
+func (s *Server) handleResetPilots(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	isSim := s.simulator.IsRunning()
+	s.activeEngine().ResetPilotsToDefault(isSim)
+	if !isSim {
+		s.SaveRealStateNow()
+	}
+	s.handleGetState(w, r)
+}
+
+func (s *Server) handleResetTrack(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	if s.simulator.IsRunning() {
+		s.simulator.ResetTimersAndTrackToDefault()
+	} else {
+		s.realEngine.ResetTrackToDefault(false)
+		s.SaveRealStateNow()
 	}
 	s.handleGetState(w, r)
 }
@@ -714,12 +747,39 @@ func (s *Server) handleResetStorage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if s.simulator.IsRunning() {
-		s.simulator.ResetToFactoryDefaults()
-	} else {
+	s.simulator.ResetToFactoryDefaults()
+	if s.realEngine != nil && s.realEngine != s.simEngine {
 		s.realEngine.ResetToFactoryDefaults(false)
+		s.laprfServer.SetEnabled(false)
 		s.SaveRealStateNow()
 	}
+	s.handleGetState(w, r)
+}
+
+func (s *Server) handleExportStorage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	writeJSON(w, http.StatusOK, storage.RealBackendState{
+		Engine:          s.realEngine.ExportState(),
+		LiveTimeEnabled: s.laprfServer.Status().Enabled,
+	})
+}
+
+func (s *Server) handleImportStorage(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var state storage.RealBackendState
+	if err := json.NewDecoder(r.Body).Decode(&state); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.realEngine.RestoreState(state.Engine, false)
+	s.laprfServer.SetEnabled(state.LiveTimeEnabled)
+	s.SaveRealStateNow()
 	s.handleGetState(w, r)
 }
 

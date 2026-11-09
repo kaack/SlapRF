@@ -258,6 +258,30 @@ export class Announcer {
     return () => this.listeners.delete(fn);
   }
 
+  /** Restores the voice, speed, volume, and sample phrase to system defaults without changing the on/off toggle. */
+  public resetVoiceDefaults(): void {
+    this.update({
+      voiceURI: PREFERRED_DEFAULT_VOICE,
+      rate: 1.0,
+      volume: 1.0,
+      testPhrase: "",
+    });
+  }
+
+  /** Reloads announcer preferences from `localStorage` (used after JSON import or wipe). */
+  public reloadPrefs(): void {
+    this.prefs = loadPrefs();
+    setWakeLockEnabled(this.prefs.keepScreenAwake !== false);
+    if (this.prefs.enabled) {
+      this.bindGestureAudioUnlock();
+    } else {
+      this.clear();
+      this.sleepAudio();
+    }
+    this.resetIdleTimer();
+    this.notify();
+  }
+
   public defaultTestPhrase(): string {
     const pilot = this.store.enabledPilots[0];
     return lapCallout(pilot?.callsign ?? "Vanover", 14.08);

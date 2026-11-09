@@ -14,8 +14,31 @@ interface IntroState {
   update: () => void;
 }
 
+const INTROS_EXPANDED_STORAGE_KEY = "slaprf.ui.intros_expanded.v1";
 const managedIntros = new WeakMap<HTMLElement, IntroState>();
 const expandedKeys = new Set<string>();
+
+try {
+  const raw = window.localStorage.getItem(INTROS_EXPANDED_STORAGE_KEY);
+  if (raw) {
+    const parsed = JSON.parse(raw) as unknown;
+    if (Array.isArray(parsed)) {
+      for (const k of parsed) {
+        if (typeof k === "string" && k) expandedKeys.add(k);
+      }
+    }
+  }
+} catch {
+  // Ignore storage access errors
+}
+
+function saveExpandedKeys(): void {
+  try {
+    window.localStorage.setItem(INTROS_EXPANDED_STORAGE_KEY, JSON.stringify([...expandedKeys]));
+  } catch {
+    // Ignore storage access errors
+  }
+}
 
 function extractParaText(p: HTMLElement): string {
   let raw = "";
@@ -73,7 +96,10 @@ function enhanceIntro(intro: HTMLElement, ro: ResizeObserver): void {
   lessBtn.addEventListener("click", (e) => {
     e.stopPropagation();
     intro.classList.remove("is-expanded");
-    if (key) expandedKeys.delete(key);
+    if (key) {
+      expandedKeys.delete(key);
+      saveExpandedKeys();
+    }
     state.update();
   });
   lastP.appendChild(document.createTextNode(" "));
@@ -95,7 +121,10 @@ function enhanceIntro(intro: HTMLElement, ro: ResizeObserver): void {
     if (moreBtn.hidden) return;
     e.stopPropagation();
     intro.classList.add("is-expanded");
-    if (key) expandedKeys.add(key);
+    if (key) {
+      expandedKeys.add(key);
+      saveExpandedKeys();
+    }
   };
   moreBtn.addEventListener("click", expand);
   snippetEl.addEventListener("click", expand);

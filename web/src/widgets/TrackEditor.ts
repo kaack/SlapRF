@@ -17,6 +17,8 @@ import { renderSectionCapsuleIcon } from "./markup";
  *     start gate, muted on split gates); clicking it directly sets that gate as the start gate.
  *   - Clicking any timer on the line selects it and shows its gate details below.
  */
+const TRACK_EDITOR_STORAGE_KEY = "slaprf.ui.track_editor.v1";
+
 export class TrackEditor extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
@@ -27,6 +29,15 @@ export class TrackEditor extends Component {
     super(el);
     this.store = store;
     this.api = api;
+    try {
+      const savedId = window.localStorage.getItem(TRACK_EDITOR_STORAGE_KEY);
+      if (savedId) {
+        const num = Number(savedId);
+        if (Number.isFinite(num) && num >= 1) this.selectedNodeId = num;
+      }
+    } catch {
+      // Ignore storage access errors
+    }
 
     this.listen(el, "keydown", (e) => {
       const input = e.target as HTMLInputElement;
@@ -56,6 +67,16 @@ export class TrackEditor extends Component {
       if (makeStartBtn) {
         e.stopPropagation();
         void this.makeStart(Number(makeStartBtn.dataset.makeStart));
+        return;
+      }
+      const clearNameBtn = target.closest<HTMLButtonElement>("[data-clear-gate-name]");
+      if (clearNameBtn) {
+        const node = this.store.node(Number(clearNameBtn.dataset.clearGateName));
+        if (node) void this.save(node, { name: "" });
+        return;
+      }
+      if (target.closest("[data-action='restore-default-track']")) {
+        void this.api.resetTrackToDefault();
       }
     });
 
@@ -176,6 +197,10 @@ export class TrackEditor extends Component {
       </div>
 
       ${selectedNode ? this.renderInspector(selectedNode, selectedIndex, detected) : ""}
+      <div class="rules-foot">
+        <p class="note">Gate order defines section splits around the course.</p>
+        <button class="btn btn-ghost btn-sm" type="button" data-action="restore-default-track">Restore default track</button>
+      </div>
     `;
   }
 
@@ -383,15 +408,22 @@ export class TrackEditor extends Component {
         <div class="gate-inspector-grid is-two-col">
           <label class="field">
             <span class="field-label">Gate name</span>
-            <input
-              class="input gate-name-field"
-              data-gate-name="${node.gateId}"
-              value="${esc(node.name)}"
-              placeholder="${esc(defaultPlaceholder)}"
-              maxlength="40"
-              spellcheck="false"
-              autocomplete="off"
-            />
+            <div class="flasher-pass-wrap ${node.name.trim() ? "has-inline-action" : ""}">
+              <input
+                class="input gate-name-field ${node.name.trim() ? "flasher-pass-input" : ""}"
+                data-gate-name="${node.gateId}"
+                value="${esc(node.name)}"
+                placeholder="${esc(defaultPlaceholder)}"
+                maxlength="40"
+                spellcheck="false"
+                autocomplete="off"
+              />
+              ${
+                node.name.trim()
+                  ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-clear-gate-name="${node.gateId}" title="Reset gate name to default (${esc(defaultPlaceholder)})">${icons.reset(14)}</button>`
+                  : ""
+              }
+            </div>
           </label>
 
           <div class="field">
@@ -824,6 +856,11 @@ export class TrackEditor extends Component {
         this.isDragging = false;
         if (this.selectedNodeId !== nodeId) {
           this.selectedNodeId = nodeId;
+          try {
+            window.localStorage.setItem(TRACK_EDITOR_STORAGE_KEY, String(nodeId));
+          } catch {
+            // ignore
+          }
           this.render();
         }
       }

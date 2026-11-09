@@ -1,5 +1,6 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
+import { icons } from "../core/icons";
 import { Announcer } from "../services/announcer";
 import { isPiperVoiceURI } from "../services/piper_tts";
 
@@ -87,6 +88,14 @@ export class AnnouncerSettings extends Component {
       this.announcer.test(phraseInput ? phraseInput.value : undefined);
     } else if (target.closest("[data-action=cache-neural]")) {
       void this.announcer.piper.preloadVoice(this.announcer.activeVoiceURI()).catch(() => undefined);
+    } else if (target.closest("[data-action=restore-defaults]")) {
+      this.announcer.resetVoiceDefaults();
+    } else if (target.closest("[data-action=reset-rate]")) {
+      this.announcer.update({ rate: 1.0 });
+    } else if (target.closest("[data-action=reset-volume]")) {
+      this.announcer.update({ volume: 1.0 });
+    } else if (target.closest("[data-action=reset-phrase]")) {
+      this.announcer.update({ testPhrase: "" });
     }
   };
 
@@ -168,26 +177,44 @@ export class AnnouncerSettings extends Component {
             <select class="input" name="voice">${piperGroup}${browserGroup}</select>
           </label>
           <label class="field">
-            <span>Speed <em data-out="rate">${p.rate.toFixed(2)}×</em></span>
+            <span>Speed <em data-out="rate">${p.rate.toFixed(2)}×</em> ${
+              Math.abs(p.rate - 1.0) > 0.001
+                ? `<button type="button" class="btn-link" data-action="reset-rate" title="Reset speed to default (1.00×)">${icons.reset(12)}</button>`
+                : ""
+            }</span>
             <input type="range" name="rate" min="0.8" max="1.6" step="0.05" value="${p.rate}" style="--range-pct:${ratePct}%" />
           </label>
           <label class="field">
-            <span>Volume <em data-out="volume">${Math.round(p.volume * 100)}%</em></span>
+            <span>Volume <em data-out="volume">${Math.round(p.volume * 100)}%</em> ${
+              Math.abs(p.volume - 1.0) > 0.001
+                ? `<button type="button" class="btn-link" data-action="reset-volume" title="Reset volume to default (100%)">${icons.reset(12)}</button>`
+                : ""
+            }</span>
             <input type="range" name="volume" min="0" max="1" step="0.05" value="${p.volume}" style="--range-pct:${volPct}%" />
           </label>
         </div>
         <div class="check-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <input
-            class="input"
-            type="text"
-            name="testPhrase"
-            value="${esc(samplePhrase)}"
-            placeholder="${esc(defaultSample)}"
-            aria-label="Sample voice test sentence"
-            style="flex:1 1 220px;max-width:340px;"
-          />
+          <div class="flasher-pass-wrap has-inline-action" style="flex:1 1 220px;max-width:340px;">
+            <input
+              class="input ${p.testPhrase ? "flasher-pass-input" : ""}"
+              type="text"
+              name="testPhrase"
+              value="${esc(samplePhrase)}"
+              placeholder="${esc(defaultSample)}"
+              aria-label="Sample voice test sentence"
+            />
+            ${
+              p.testPhrase
+                ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-action="reset-phrase" title="Reset sample phrase to default">${icons.reset(14)}</button>`
+                : ""
+            }
+          </div>
           <button class="btn btn-sm" data-action="test" type="button">Test voice</button>
           ${neuralStatusHtml}
+        </div>
+        <div class="rules-foot">
+          <p class="note">Applies to spoken lap and holeshot callouts.</p>
+          <button class="btn btn-ghost btn-sm" type="button" data-action="restore-defaults">Restore defaults</button>
         </div>
       </div>`;
   }

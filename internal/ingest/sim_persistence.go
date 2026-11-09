@@ -156,3 +156,13 @@ func (s *TrackSimulator) ResetToFactoryDefaults() {
 	s.Prewarm(45 * time.Second)
 }
 
+// ResetTimersAndTrackToDefault restores the 4 default simulated timers and 4-gate loop
+// without wiping pilot configurations or completed laps.
+func (s *TrackSimulator) ResetTimersAndTrackToDefault() {
+	s.mu.Lock()
+	s.poweredOffTimers = make(map[uint8]bool)
+	s.mu.Unlock()
+	s.engine.ResetTrackToDefault(true)
+}
+
+

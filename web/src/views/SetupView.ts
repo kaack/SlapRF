@@ -40,8 +40,8 @@ export class SetupView extends Component {
 
         <section class="settings-section">
           <div class="settings-intro">
-            <h2>Data source</h2>
-            <p>Switch between physical XIAO gate timers and the built-in simulator. Each keeps its own separate dataset.</p>
+            <h2>Data source &amp; storage</h2>
+            <p>Switch between physical XIAO gate timers and the built-in simulator, export or import a full JSON backup of all application state, or wipe saved application data.</p>
           </div>
           <div class="settings-cards" data-slot="source"></div>
         </section>
@@ -50,6 +50,6 @@ export class SetupView extends Component {
     this.adopt(new TimingRulesEditor(this.slot("rules"), store, api));
     this.adopt(new AnnouncerSettings(this.slot("announcer"), announcer));
     this.adopt(new LiveTimeCard(this.slot("livetime"), store, api));
-    this.adopt(new DataSourceCard(this.slot("source"), store, api));
+    this.adopt(new DataSourceCard(this.slot("source"), store, api, announcer));
   }
 }

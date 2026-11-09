@@ -259,3 +259,98 @@ func (e *Engine) ResetToFactoryDefaults(isSim bool) {
 	}
 }
 
+// ResetPilotsToDefault restores the pilot slots to system defaults (`DefaultPilotSlots` in
+// simulation mode, `DefaultRealPilotSlots` in real hardware mode) without wiping laps or track setup.
+func (e *Engine) ResetPilotsToDefault(isSim bool) {
+	e.mu.Lock()
+	if isSim {
+		e.pilots = domain.DefaultPilotSlots()
+	} else {
+		e.pilots = domain.DefaultRealPilotSlots()
+	}
+	e.initDetectorsLocked()
+	pilotsCopy := append([]domain.PilotSlot(nil), e.pilots...)
+	gatesCopy := append([]domain.TrackGate(nil), e.gates...)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	for _, s := range subs {
+		s.OnConfigUpdated(pilotsCopy, gatesCopy)
+	}
+}
+
+// ResetTrackToDefault restores the track layout and timer colors to system defaults without
+// wiping pilot configurations or recorded laps.
+func (e *Engine) ResetTrackToDefault(isSim bool) {
+	e.mu.Lock()
+	if isSim {
+		e.gates = domain.DefaultTrackGates()
+		e.detected = make(map[uint8]*domain.DetectedTimer)
+		for _, g := range e.gates {
+			if g.AssignedTimerID > 0 {
+				c := g.Color
+				if c == "" {
+					c = domain.DefaultTimerColor(g.AssignedTimerID)
+				}
+				e.detected[g.AssignedTimerID] = &domain.DetectedTimer{
+					TimerID:         g.AssignedTimerID,
+					TimerLabel:      g.TimerLabel,
+					Color:           c,
+					IsHub:           g.AssignedTimerID == 1,
+					FirmwareVersion: g.FirmwareVersion,
+					BatteryMv:       g.BatteryMv,
+					BatteryPct:      g.BatteryPct,
+					NoiseFloorDbm:   g.NoiseFloorDbm,
+					Online:          g.Online,
+					LastSeenAt:      g.LastSeenAt,
+				}
+			}
+		}
+	} else {
+		ids := make([]int, 0, len(e.detected))
+		for id := range e.detected {
+			ids = append(ids, int(id))
+		}
+		sort.Ints(ids)
+		newGates := make([]domain.TrackGate, 0, len(ids))
+		for idx, rawID := range ids {
+			tid := uint8(rawID)
+			d := e.detected[tid]
+			d.Color = domain.DefaultTimerColor(tid)
+			role := domain.GateRoleSectorGate
+			if idx == 0 {
+				role = domain.GateRoleStartFinish
+			}
+			newGates = append(newGates, domain.TrackGate{
+				GateID:          uint8(idx + 1),
+				AssignedTimerID: tid,
+				TimerLabel:      d.TimerLabel,
+				Name:            "",
+				Color:           d.Color,
+				Role:            role,
+				TrackOrder:      idx,
+				MapX:            0.5,
+				MapY:            0.5,
+				Online:          d.Online,
+				BatteryMv:       d.BatteryMv,
+				BatteryPct:      d.BatteryPct,
+				NoiseFloorDbm:   d.NoiseFloorDbm,
+				FirmwareVersion: d.FirmwareVersion,
+				LastSeenAt:      d.LastSeenAt,
+			})
+		}
+		e.gates = newGates
+	}
+	e.progress = make(map[int]*pilotProgress)
+	e.initDetectorsLocked()
+	pilotsCopy := append([]domain.PilotSlot(nil), e.pilots...)
+	gatesCopy := append([]domain.TrackGate(nil), e.gates...)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	for _, s := range subs {
+		s.OnConfigUpdated(pilotsCopy, gatesCopy)
+	}
+}
+
+

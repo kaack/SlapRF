@@ -1,10 +1,12 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
+import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import { AppStore } from "../state/store";
 import { PilotSlot } from "../types/models";
 
 const RACEBAND_MHZ = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
+const DEFAULT_ENTER_THRESHOLD_DBM = -58;
 
 /** Editable pilot / VTX channel table. Every field auto-saves on change. */
 export class PilotSlotsEditor extends Component {
@@ -18,10 +20,12 @@ export class PilotSlotsEditor extends Component {
     el.addEventListener("submit", this.handleSubmit);
     el.addEventListener("change", this.handleChange);
     el.addEventListener("keydown", this.handleKeyDown);
+    el.addEventListener("click", this.handleClick);
     this.onDispose(() => {
       el.removeEventListener("submit", this.handleSubmit);
       el.removeEventListener("change", this.handleChange);
       el.removeEventListener("keydown", this.handleKeyDown);
+      el.removeEventListener("click", this.handleClick);
     });
     this.onDispose(
       store.subscribe(["config"], () => {
@@ -60,12 +64,17 @@ export class PilotSlotsEditor extends Component {
       <div class="table-scroll">
         <div class="slot-table">${innerHtml}
         </div>
+      </div>
+      <div class="rules-foot">
+        <p class="note">Changes save automatically and sync to timing detectors.</p>
+        <button class="btn btn-ghost btn-sm" type="button" data-action="restore-default-pilots">Restore defaults</button>
       </div>`;
   }
 
   private renderRow(p: PilotSlot, enabledCount: number, usedChannels: Map<number, string>): string {
     const atLimit = !p.enabled && enabledCount >= 8;
     const needsChannel = p.enabled && p.channel === 0;
+    const isCustomThreshold = Math.round(p.enterThreshold) !== DEFAULT_ENTER_THRESHOLD_DBM;
     const unassignedOpt = `<option value="0" ${p.channel === 0 ? "selected" : ""}>— Select channel —</option>`;
     const options =
       unassignedOpt +
@@ -90,9 +99,34 @@ export class PilotSlotsEditor extends Component {
         <div class="input-suffix">
           <input class="input mono" type="number" name="threshold" value="${p.enterThreshold.toFixed(0)}" min="-90" max="-30" step="1" />
           <span>dBm</span>
+          ${
+            isCustomThreshold
+              ? `<button type="button" class="btn-link" data-reset-threshold="${p.slotIndex}" title="Restore default threshold (${DEFAULT_ENTER_THRESHOLD_DBM} dBm)">${icons.reset(13)}</button>`
+              : ""
+          }
         </div>
       </form>`;
   }
+
+  private handleClick = (e: Event): void => {
+    const target = e.target as HTMLElement;
+    const resetThreshBtn = target.closest<HTMLButtonElement>("[data-reset-threshold]");
+    if (resetThreshBtn) {
+      const slotIndex = Number(resetThreshBtn.dataset.resetThreshold);
+      const current = this.store.pilot(slotIndex);
+      if (current) {
+        void this.api.updatePilotSlot({
+          ...current,
+          enterThreshold: DEFAULT_ENTER_THRESHOLD_DBM,
+          exitThreshold: DEFAULT_ENTER_THRESHOLD_DBM - 10,
+        });
+      }
+      return;
+    }
+    if (target.closest("[data-action=restore-default-pilots]")) {
+      void this.api.resetPilotsToDefault();
+    }
+  };
 
   private handleKeyDown = (e: KeyboardEvent): void => {
     const target = e.target;

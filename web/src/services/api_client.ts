@@ -200,7 +200,7 @@ export class ApiClient {
   }
 
   public async simTimerAction(payload: {
-    action: "toggle-power" | "delete" | "add";
+    action: "toggle-power" | "delete" | "add" | "reset-timers";
     timerId?: number;
     role?: "hub" | "spoke";
     label?: string;
@@ -219,9 +219,182 @@ export class ApiClient {
     this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/session/reset"));
   }
 
+  public async resetPilotsToDefault(): Promise<void> {
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/pilots/reset"));
+  }
+
+  public async resetTrackToDefault(): Promise<void> {
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/track/reset"));
+  }
+
   public async resetStoredData(): Promise<void> {
+    await this.wipeApplicationData();
+  }
+
+  /**
+   * Wipes all saved application state (pilots, track, laps, timing rules, announcer settings,
+   * simulator state, and UI preferences) across both localStorage and backend SQLite storage,
+   * restoring clean system defaults.
+   */
+  public async wipeApplicationData(): Promise<void> {
+    const keepSimMode = this.simMode;
+    try {
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (k && (k.startsWith("slaprf.") || k === "gate-timer.announcer")) {
+          keysToRemove.push(k);
+        }
+      }
+      for (const k of keysToRemove) {
+        window.localStorage.removeItem(k);
+      }
+      window.localStorage.setItem(SIM_MODE_STORAGE_KEY, String(keepSimMode));
+    } catch {
+      // Ignore storage access errors
+    }
+
     this.store.clearActiveHistory();
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/storage/reset"));
+    this.store.resetUiPrefs();
+
+    const wasmResetPromise = this.wasmTransport
+      .request<FullStateResponse>("POST", "/api/storage/reset")
+      .catch(() => null);
+    const httpResetPromise = this.httpTransport
+      .request<FullStateResponse>("POST", "/api/storage/reset")
+      .catch(() => null);
+
+    const [wasmState, httpState] = await Promise.all([wasmResetPromise, httpResetPromise]);
+    const activeState = this.simMode ? wasmState : httpState;
+    if (activeState) {
+      this.store.hydrate(activeState);
+    } else {
+      await this.refresh();
+    }
+  }
+
+  /**
+   * Exports the full application state (simulator state, real hardware backend state, announcer
+   * settings, known timers, and UI preferences) as a JSON-serializable bundle.
+   */
+  public async exportApplicationData(): Promise<Record<string, unknown>> {
+    let simData: unknown = null;
+    try {
+      const rawSim = await this.wasmTransport.exportSimStateJson();
+      if (rawSim) simData = JSON.parse(rawSim);
+    } catch {
+      // ignore
+    }
+
+    let realData: unknown = null;
+    try {
+      realData = await this.httpTransport.request<unknown>("GET", "/api/storage/export");
+      if (realData) {
+        window.localStorage.setItem("slaprf.real_state_backup.v1", JSON.stringify(realData));
+      }
+    } catch {
+      try {
+        const fallback = window.localStorage.getItem("slaprf.real_state_backup.v1");
+        if (fallback) realData = JSON.parse(fallback);
+      } catch {
+        // ignore
+      }
+    }
+
+    const clientPrefs: Record<string, unknown> = {};
+    try {
+      for (let i = 0; i < window.localStorage.length; i++) {
+        const k = window.localStorage.key(i);
+        if (
+          k &&
+          (k.startsWith("slaprf.") || k === "gate-timer.announcer") &&
+          k !== "slaprf.sim_state.v1" &&
+          k !== "slaprf.real_state_backup.v1"
+        ) {
+          const val = window.localStorage.getItem(k);
+          if (val !== null) {
+            try {
+              clientPrefs[k] = JSON.parse(val);
+            } catch {
+              clientPrefs[k] = val;
+            }
+          }
+        }
+      }
+    } catch {
+      // ignore
+    }
+
+    return {
+      app: "SlapRF",
+      version: 1,
+      exportedAt: new Date().toISOString(),
+      sim: simData,
+      real: realData,
+      preferences: clientPrefs,
+    };
+  }
+
+  /**
+   * Imports a previously exported JSON application state bundle, restoring simulator state,
+   * real hardware backend state, announcer settings, and all UI preferences.
+   */
+  public async importApplicationData(rawBundle: unknown): Promise<void> {
+    if (!rawBundle || typeof rawBundle !== "object") {
+      throw new Error("Invalid application data file: expected a JSON object.");
+    }
+    const bundle = rawBundle as Record<string, unknown>;
+    if (bundle.app !== undefined && bundle.app !== "SlapRF") {
+      throw new Error("Invalid application data file: not a SlapRF export.");
+    }
+    if (!("sim" in bundle) && !("real" in bundle) && !("preferences" in bundle)) {
+      throw new Error("Invalid application data file: missing state sections.");
+    }
+
+    const prefs = bundle.preferences;
+    if (prefs && typeof prefs === "object") {
+      for (const [k, v] of Object.entries(prefs as Record<string, unknown>)) {
+        if (!k.startsWith("slaprf.") && k !== "gate-timer.announcer") continue;
+        try {
+          if (typeof v === "string") {
+            window.localStorage.setItem(k, v);
+          } else {
+            window.localStorage.setItem(k, JSON.stringify(v));
+          }
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (bundle.sim && typeof bundle.sim === "object") {
+      await this.wasmTransport.importSimStateJson(JSON.stringify(bundle.sim));
+    }
+
+    if (bundle.real && typeof bundle.real === "object") {
+      try {
+        window.localStorage.setItem("slaprf.real_state_backup.v1", JSON.stringify(bundle.real));
+      } catch {
+        // ignore
+      }
+      await this.httpTransport.request("POST", "/api/storage/import", bundle.real).catch(() => undefined);
+    }
+
+    try {
+      const savedMode = window.localStorage.getItem(SIM_MODE_STORAGE_KEY);
+      const nextSimMode = savedMode !== "false";
+      if (nextSimMode !== this.simMode) {
+        this.transport.disconnectStream();
+        this.simMode = nextSimMode;
+        this.connectStream();
+      }
+    } catch {
+      // ignore
+    }
+
+    this.store.clearActiveHistory();
+    this.store.reloadUiPrefs();
+    await this.refresh();
   }
 
   public async updatePilotSlot(slot: PilotSlot): Promise<void> {

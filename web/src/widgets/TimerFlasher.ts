@@ -114,6 +114,9 @@ export class TimerFlasher extends Component {
         if (typeof parsed.keepFingerprint === "boolean") {
           this.keepFingerprint = parsed.keepFingerprint;
         }
+        if (typeof (parsed as { showAllPorts?: boolean }).showAllPorts === "boolean") {
+          this.showAllPorts = Boolean((parsed as { showAllPorts?: boolean }).showAllPorts);
+        }
       }
     } catch {
       // ignore storage errors
@@ -281,6 +284,7 @@ export class TimerFlasher extends Component {
         this.render();
       } else if (target.matches("[data-all-ports]")) {
         this.showAllPorts = (target as HTMLInputElement).checked;
+        this.saveFlasherPrefs();
       } else if (target.matches("[data-keep-fp]")) {
         this.keepFingerprint = target.value === "keep";
         this.saveFlasherPrefs();
@@ -330,6 +334,7 @@ export class TimerFlasher extends Component {
           timerLabel: this.timerLabel,
           firmwareProfileId: this.firmwareProfileId,
           keepFingerprint: this.keepFingerprint,
+          showAllPorts: this.showAllPorts,
         })
       );
     } catch {

@@ -208,6 +208,8 @@ function renderPilotPacksHtml(p: SimPilotState): string {
     .join("");
 }
 
+const SIM_VIEW_STORAGE_KEY = "slaprf.ui.sim_view.v1";
+
 export class SimView extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
@@ -228,6 +230,31 @@ export class SimView extends Component {
     super(el);
     this.store = store;
     this.api = api;
+
+    try {
+      const raw = window.localStorage.getItem(SIM_VIEW_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          addRole?: "spoke" | "hub";
+          addLabel?: string;
+          addProfile?: string;
+        };
+        if (parsed.addRole === "spoke" || parsed.addRole === "hub") {
+          this.addRole = parsed.addRole;
+        }
+        if (typeof parsed.addLabel === "string") {
+          this.addLabel = parsed.addLabel;
+        }
+        if (
+          typeof parsed.addProfile === "string" &&
+          FIRMWARE_PROFILES.some((p) => p.id === parsed.addProfile)
+        ) {
+          this.addProfile = parsed.addProfile;
+        }
+      }
+    } catch {
+      // Ignore storage access errors
+    }
 
     const fwOptions = FIRMWARE_PROFILES.map(
       (fw) =>
@@ -265,13 +292,13 @@ export class SimView extends Component {
                 <label class="sim-inline-field">
                   <span>Role</span>
                   <select class="input" data-field="timer-role">
-                    <option value="spoke" selected>Spoke · Sector Timer</option>
-                    <option value="hub">Hub · Start Bridge</option>
+                    <option value="spoke" ${this.addRole === "spoke" ? "selected" : ""}>Spoke · Sector Timer</option>
+                    <option value="hub" ${this.addRole === "hub" ? "selected" : ""}>Hub · Start Bridge</option>
                   </select>
                 </label>
                 <label class="sim-inline-field">
                   <span>Timer ID / name</span>
-                  <input type="text" class="input mono" data-field="timer-label" placeholder="e.g. T5 Tunnel Exit" value="" />
+                  <input type="text" class="input mono" data-field="timer-label" placeholder="e.g. T5 Tunnel Exit" value="${esc(this.addLabel)}" />
                 </label>
                 <label class="sim-inline-field">
                   <span>Firmware profile</span>
@@ -283,6 +310,10 @@ export class SimView extends Component {
               <button class="btn btn-armed" data-action="timer-add" data-slot="timer-add-btn">
                 + Add simulated timer
               </button>
+            </div>
+            <div class="rules-foot">
+              <p class="note">Simulated timers stream 50 Hz RSSI frames into the timing engine.</p>
+              <button class="btn btn-ghost btn-sm" type="button" data-action="timer-reset-defaults">Restore default timers</button>
             </div>
           </div>
         </section>
@@ -395,10 +426,26 @@ export class SimView extends Component {
     });
   }
 
+  private saveDraftPrefs(): void {
+    try {
+      window.localStorage.setItem(
+        SIM_VIEW_STORAGE_KEY,
+        JSON.stringify({
+          addRole: this.addRole,
+          addLabel: this.addLabel,
+          addProfile: this.addProfile,
+        })
+      );
+    } catch {
+      // Ignore storage access errors
+    }
+  }
+
   private handleInput = (e: Event): void => {
     const target = e.target as HTMLInputElement;
     if (target.dataset.field === "timer-label") {
       this.addLabel = target.value;
+      this.saveDraftPrefs();
     }
   };
 
@@ -406,8 +453,10 @@ export class SimView extends Component {
     const target = e.target as HTMLSelectElement;
     if (target.dataset.field === "timer-role") {
       this.addRole = target.value === "hub" ? "hub" : "spoke";
+      this.saveDraftPrefs();
     } else if (target.dataset.field === "timer-fw") {
       this.addProfile = target.value;
+      this.saveDraftPrefs();
     }
   };
 
@@ -484,6 +533,7 @@ export class SimView extends Component {
           })
           .then(() => {
             this.addLabel = "";
+            this.saveDraftPrefs();
             const input = this.el.querySelector<HTMLInputElement>('input[data-field="timer-label"]');
             if (input) input.value = "";
             this.lastTimersSig = "";
@@ -494,6 +544,14 @@ export class SimView extends Component {
             this.lastTimersSig = "";
             this.renderTimers(this.store.simState);
           });
+        break;
+      }
+      case "timer-reset-defaults": {
+        this.errorMsg = "";
+        void this.api.simTimerAction({ action: "reset-timers" }).then(() => {
+          this.lastTimersSig = "";
+          this.renderTimers(this.store.simState);
+        });
         break;
       }
     }

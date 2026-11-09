@@ -233,7 +233,8 @@ export class DebugView extends Component {
   constructor(el: HTMLElement) {
     super(el);
     this.console = sharedTimerConsole;
-    this.showAllPorts = this.console.showAllPorts;
+    this.loadDebugPrefs();
+    this.console.showAllPorts = this.showAllPorts;
     if (this.console.connected && this.console.lastStatus) {
       this.status = this.console.lastStatus;
     }
@@ -579,6 +580,7 @@ export class DebugView extends Component {
       if (t.matches("[data-all-ports]")) {
         this.showAllPorts = t.checked;
         this.console.showAllPorts = t.checked;
+        this.saveDebugPrefs();
       } else if (t.matches("[data-check]")) void this.onCheckChange(t);
     });
     this.listen(el, "input", (e) => {
@@ -2349,6 +2351,65 @@ export class DebugView extends Component {
       if (!/No port selected|cancel/i.test(msg)) this.error = msg;
     }
     this.renderConnection();
+    this.saveDebugPrefs();
+  }
+
+  private loadDebugPrefs(): void {
+    try {
+      const raw = window.localStorage.getItem("slaprf.ui.debug_prefs.v1");
+      if (!raw) return;
+      const p = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof p.showAllPorts === "boolean") this.showAllPorts = p.showAllPorts;
+      if (typeof p.signalWindowSec === "number" && p.signalWindowSec >= 0.4 && p.signalWindowSec <= 120) {
+        this.signalWindowSec = p.signalWindowSec;
+      }
+      if (typeof p.signalAutoX === "boolean") this.signalAutoX = p.signalAutoX;
+      if (typeof p.signalAutoY === "boolean") this.signalAutoY = p.signalAutoY;
+      if (typeof p.signalShowFloor === "boolean") this.signalShowFloor = p.signalShowFloor;
+      if (typeof p.signalShowHitLine === "boolean") this.signalShowHitLine = p.signalShowHitLine;
+      if (typeof p.signalShowThresholds === "boolean") this.signalShowThresholds = p.signalShowThresholds;
+      if (typeof p.scanShowMaxHold === "boolean") this.scanShowMaxHold = p.scanShowMaxHold;
+      if (typeof p.scanShowAvg === "boolean") this.scanShowAvg = p.scanShowAvg;
+      if (typeof p.scanShowWifi === "boolean") this.scanShowWifi = p.scanShowWifi;
+      if (typeof p.scanStartMHz === "number" && p.scanStartMHz >= 5180) this.scanStartMHz = p.scanStartMHz;
+      if (typeof p.scanStopMHz === "number" && p.scanStopMHz <= 5917) this.scanStopMHz = p.scanStopMHz;
+      if (typeof p.scanStepMHz === "number" && p.scanStepMHz >= 1) this.scanStepMHz = p.scanStepMHz;
+      if (typeof p.serialWrap === "boolean") this.serialWrap = p.serialWrap;
+      if (typeof p.logWrap === "boolean") this.logWrap = p.logWrap;
+      if (Array.isArray(p.serialHistory)) {
+        this.serialHistory = p.serialHistory.filter((x): x is string => typeof x === "string").slice(-50);
+      }
+    } catch {
+      // ignore storage errors
+    }
+  }
+
+  private saveDebugPrefs(): void {
+    try {
+      window.localStorage.setItem(
+        "slaprf.ui.debug_prefs.v1",
+        JSON.stringify({
+          showAllPorts: this.showAllPorts,
+          signalWindowSec: this.signalWindowSec,
+          signalAutoX: this.signalAutoX,
+          signalAutoY: this.signalAutoY,
+          signalShowFloor: this.signalShowFloor,
+          signalShowHitLine: this.signalShowHitLine,
+          signalShowThresholds: this.signalShowThresholds,
+          scanShowMaxHold: this.scanShowMaxHold,
+          scanShowAvg: this.scanShowAvg,
+          scanShowWifi: this.scanShowWifi,
+          scanStartMHz: this.scanStartMHz,
+          scanStopMHz: this.scanStopMHz,
+          scanStepMHz: this.scanStepMHz,
+          serialWrap: this.serialWrap,
+          logWrap: this.logWrap,
+          serialHistory: this.serialHistory.slice(-50),
+        })
+      );
+    } catch {
+      // ignore storage errors
+    }
   }
 
   /** Start polling status and streaming live readings on an opened port. */

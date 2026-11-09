@@ -121,6 +121,14 @@ export class TimingRulesEditor extends Component {
     });
     this.listen(el, "click", (e) => {
       const target = e.target as HTMLElement;
+      const resetGlobalBtn = target.closest<HTMLButtonElement>("[data-reset-global]");
+      if (resetGlobalBtn) {
+        const key = resetGlobalBtn.dataset.resetGlobal as keyof TimingRules;
+        if (key in DEFAULT_RULES) {
+          void this.api.updateRules({ ...this.store.rules, [key]: DEFAULT_RULES[key] });
+        }
+        return;
+      }
       const toggleBtn = target.closest<HTMLButtonElement>("[data-override-toggle]");
       if (toggleBtn) {
         const key = toggleBtn.dataset.overrideToggle as GateRuleKey;
@@ -200,8 +208,10 @@ export class TimingRulesEditor extends Component {
     const rows = RULES.map((spec) => {
       if (gate) return this.renderGateRow(spec, r, overrides);
       const overrideNote = this.renderOverrideNote(spec);
+      const defVal = DEFAULT_RULES[spec.key];
+      const isCustom = Math.abs(r[spec.key] - defVal) > 1e-6;
       return `
-        <div class="rule-row">
+        <div class="rule-row ${isCustom ? "is-overridden" : ""}">
           <div class="rule-text">
             <div class="rule-label">${spec.label}</div>
             <div class="rule-help">${spec.help}</div>
@@ -210,8 +220,13 @@ export class TimingRulesEditor extends Component {
               ${overrideNote}
             </div>
           </div>
-          <div class="rule-input">
-            <input class="input mono" type="number" name="${spec.key}" value="${r[spec.key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" />
+          <div class="flasher-pass-wrap rule-input ${isCustom ? "has-inline-action" : ""}">
+            <input class="input mono ${isCustom ? "flasher-pass-input" : ""}" type="number" name="${spec.key}" value="${r[spec.key]}" step="${spec.step}" min="${spec.min}" max="${spec.max}" />
+            ${
+              isCustom
+                ? `<button class="flasher-pass-toggle rule-inline-btn is-active" type="button" data-reset-global="${spec.key}" title="Restore default (${defVal} s)" aria-label="Restore default (${defVal} s)">${icons.reset(14)}</button>`
+                : ""
+            }
           </div>
         </div>`;
     }).join("");

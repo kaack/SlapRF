@@ -98,6 +98,24 @@ export class AppStore {
     this.loadUiPrefs();
   }
 
+  public reloadUiPrefs(): void {
+    this._selectedPilot = 1;
+    this._liveFocus = null;
+    this._comparison = { lapId: null, reference: "best" };
+    this.loadUiPrefs();
+    this.ensureValidSelection();
+    this.emit("selection");
+  }
+
+  public resetUiPrefs(): void {
+    this._selectedPilot = 1;
+    this._liveFocus = null;
+    this._comparison = { lapId: null, reference: "best" };
+    this.saveUiPrefs();
+    this.ensureValidSelection();
+    this.emit("selection");
+  }
+
   private loadUiPrefs(): void {
     try {
       const raw = window.localStorage.getItem(UI_PREFS_STORAGE_KEY);
