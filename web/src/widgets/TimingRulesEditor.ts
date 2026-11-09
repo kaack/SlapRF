@@ -168,7 +168,6 @@ export class TimingRulesEditor extends Component {
       `<button type="button" class="channel channel-all ${this.scope === null ? "is-focus" : "is-dim"}" data-scope="all" title="Global rules for all gates">
         <span class="dot channel-all-dot"></span>
         <span class="channel-name">All gates</span>
-        <span class="channel-dbm mono">Global</span>
       </button>`,
       ...this.store.pucks.map((p) => {
         const n = Object.keys(this.overridesOf(p)).length;
@@ -177,8 +176,7 @@ export class TimingRulesEditor extends Component {
         return `<button type="button" class="channel ${on ? "is-focus" : ""} ${dim ? "is-dim" : ""}" data-scope="${p.puckId}"
                   title="${n ? `${n} rule${n > 1 ? "s" : ""} overridden at this gate` : "Uses the global rules"}">
                   <span class="dot" style="--c:${gateColor(this.store, p.puckId)}"></span>
-                  <span class="channel-name">${esc(gateLabel(this.store, p.puckId))}</span>
-                  <span class="channel-dbm mono">${n ? `<span class="seg-count">${n} custom</span>` : "Default"}</span>
+                  <span class="channel-name">${esc(gateLabel(this.store, p.puckId))}${n ? " *" : ""}</span>
                 </button>`;
       }),
     ].join("");

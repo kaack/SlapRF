@@ -2234,11 +2234,10 @@ body.is-gate-dragging * {
 }
 .rule-override-note {
   margin-top: 6px;
-  color: var(--accent);
+  color: var(--text-3);
   font-size: 12px;
 }
 .rule-row.is-overridden {
-  background: var(--accent-soft);
   box-shadow: inset 2px 0 0 var(--accent);
 }
 .rule-row.is-global-only {
