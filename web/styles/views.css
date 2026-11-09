@@ -4515,37 +4515,46 @@ body.is-gate-dragging * {
   border-top: 0;
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-.debug-channels-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-  min-height: 32px;
-  font-size: 13px;
-}
-.debug-channels-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
+  gap: 8px;
 }
 .debug-channels-inputs {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: 8px;
 }
-.debug-channels-inputs label {
+.debug-chan-field {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 5px;
+  min-width: 0;
+}
+.debug-chan-label {
+  display: inline-flex;
+  align-items: center;
+  font-size: 11.5px;
+  color: var(--text-3);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+.debug-chan-label strong {
+  color: var(--text-2);
+  font-weight: 600;
 }
 .debug-channels-inputs .input {
   width: 100%;
   min-width: 0;
-  padding-left: 6px;
-  padding-right: 6px;
+  height: 30px;
+  padding: 0 8px;
+  font-size: 12.5px;
+  text-align: center;
+  background: var(--surface-2);
+  border-color: var(--border);
+  -moz-appearance: textfield;
+}
+.debug-channels-inputs .input::-webkit-outer-spin-button,
+.debug-channels-inputs .input::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
 }
 .debug-restart-test {
   display: flex;

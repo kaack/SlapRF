@@ -524,7 +524,7 @@ export class DebugView extends Component {
     this.listen(el, "input", (e) => {
       const t = e.target as HTMLElement;
       if (t.matches("[data-chan]")) {
-        this.channelsDirty = true;
+        this.syncChannelInputsState();
       }
     });
 
@@ -1804,18 +1804,30 @@ export class DebugView extends Component {
           await this.console.request(`CHANNELS ${freqs.join(",")}`, "ok", 2000);
           this.channelsDirty = false;
           await this.refreshStatus();
+          this.renderLive();
           this.renderChannels();
+          this.renderSignalControls();
+          this.renderNoiseTable();
           break;
         }
         case "channels-raceband":
           this.el.querySelectorAll<HTMLInputElement>("[data-chan]").forEach((i, n) => (i.value = String(RACEBAND[n])));
-          this.channelsDirty = true;
+          this.syncChannelInputsState();
           break;
         case "channels-reset":
-          await this.console.request("CHANNELS RESET", "ok", 2000);
-          this.channelsDirty = false;
-          await this.refreshStatus();
-          this.renderChannels();
+          if (this.status?.freqsTemporary) {
+            await this.console.request("CHANNELS RESET", "ok", 2000);
+            this.channelsDirty = false;
+            await this.refreshStatus();
+            this.renderLive();
+            this.renderChannels();
+            this.renderSignalControls();
+            this.renderNoiseTable();
+          } else {
+            const saved = this.status?.freqs ?? RACEBAND;
+            this.el.querySelectorAll<HTMLInputElement>("[data-chan]").forEach((i, n) => (i.value = String(saved[n] ?? RACEBAND[n])));
+            this.syncChannelInputsState();
+          }
           break;
         case "toggle-axis-menu": {
           const menu = (t.dataset.menu as "signal-x" | "signal-y" | "scan-band" | "scan-x" | "scan-y" | "wf-x" | "wf-y" | undefined) ?? null;
@@ -2855,11 +2867,12 @@ export class DebugView extends Component {
       </div>
       <div class="debug-bars">
         ${freqs
-          .map((f) => {
-            const band = racebandName(f);
+          .map((f, i) => {
+            const band = racebandName(f) || `Ch${i + 1}`;
+            const col = CHANNEL_COLORS[i];
             return `
             <div class="debug-bar-row" data-bar>
-              <span class="debug-bar-label mono">${band ? `<strong>${band}</strong> ` : ""}${f}</span>
+              <span class="debug-bar-label mono"><span class="debug-ch-inline" style="background:${col}"></span><strong>${band}</strong> ${f}</span>
               <div class="debug-bar-track">
                 <span class="debug-bar-fill" style="width:0%"></span>
                 <span class="debug-bar-peak" style="left:0%;display:none"></span>
@@ -2925,31 +2938,89 @@ export class DebugView extends Component {
   private renderChannels(): void {
     const on = this.console.connected;
     const s = this.status;
+    const emg = Boolean(on && s?.emergencyMode);
     const inScanMode = Boolean(this.scanLive || s?.scanLive);
+    const canEdit = Boolean(on && s && !inScanMode && !emg);
     const freqs = s?.freqs ?? RACEBAND;
     const isTemp = Boolean(s?.freqsTemporary);
+    const isAlreadyRb = freqs.length === 8 && freqs.every((f, i) => f === RACEBAND[i]);
+    const noteText = this.channelsDirty
+      ? "· unsaved edits"
+      : isTemp
+        ? "· temporary override"
+        : "· saved in NVS";
     this.slot("channels").innerHTML = `
       <div class="debug-channels">
-        <div class="debug-channels-head">
-          <div class="debug-channels-title">
-            <span class="debug-chart-title">Try other channels</span>
-            <span class="badge ${isTemp ? "badge-accent" : ""}">${isTemp ? "Temporary · not saved" : "Saved channels"}</span>
+        <div class="debug-subbar debug-waterfall-head">
+          <div class="debug-waterfall-title-group">
+            <span class="debug-chart-title">Channel frequency override (MHz)</span>
+            <span class="note" data-channels-note>${noteText}</span>
           </div>
           <div class="debug-connect-actions">
-            <button type="button" class="btn btn-sm btn-ghost" data-action="channels-raceband" ${on && !inScanMode ? "" : "disabled"}>Load Raceband</button>
-            <button type="button" class="btn btn-sm btn-ghost" data-action="channels-reset" ${on && isTemp && !inScanMode ? "" : "disabled"}>Back to saved</button>
-            <button type="button" class="btn btn-sm btn-armed" data-action="channels-apply" ${on && s && !inScanMode ? "" : "disabled"} title="${inScanMode ? "Unavailable while Live spectrum scan is running" : "Apply these 8 channels temporarily until the timer restarts"}">Apply until restart</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="channels-raceband" data-channels-rb-btn ${canEdit && !isAlreadyRb ? "" : "disabled"} title="Fill standard Raceband R1–R8 frequencies (5658–5917 MHz)">Raceband</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="channels-reset" data-channels-reset-btn ${canEdit && (isTemp || this.channelsDirty) ? "" : "disabled"} title="Restore saved NVS channels">
+              ${icons.reset(14)}<span>Reset</span>
+            </button>
+            <button type="button" class="btn btn-sm ${this.channelsDirty || isTemp ? "btn-armed" : "btn-unarmed"}" data-action="channels-apply" data-channels-apply-btn ${canEdit && this.channelsDirty ? "" : "disabled"} title="${inScanMode ? "Unavailable while Spectrum scan is streaming" : "Apply these 8 channels temporarily until the timer restarts"}">
+              ${icons.check(14)}<span data-channels-apply-label>${isTemp && !this.channelsDirty ? "Applied" : "Apply"}</span>
+            </button>
           </div>
         </div>
         <div class="debug-channels-inputs">
           ${freqs
             .map((f, i) => {
               const rb = racebandName(f) || `Ch ${i + 1}`;
-              return `<label><span class="note mono">${rb}</span><input class="input mono" type="number" min="5180" max="5917" data-chan value="${f}" ${on && !inScanMode ? "" : "disabled"}/></label>`;
+              const col = CHANNEL_COLORS[i];
+              return `<label class="debug-chan-field"><span class="debug-chan-label mono"><span class="debug-ch-inline" style="background:${col}"></span><strong data-chan-tag="${i}">${rb}</strong></span><input class="input mono" type="number" min="5180" max="5917" data-chan="${i}" value="${f}" ${canEdit ? "" : "disabled"}/></label>`;
             })
             .join("")}
         </div>
       </div>`;
+  }
+
+  private syncChannelInputsState(): void {
+    const on = this.console.connected;
+    const s = this.status;
+    const emg = Boolean(on && s?.emergencyMode);
+    const inScanMode = Boolean(this.scanLive || s?.scanLive);
+    const canEdit = Boolean(on && s && !inScanMode && !emg);
+    const activeFreqs = s?.freqs ?? RACEBAND;
+    const isTemp = Boolean(s?.freqsTemporary);
+    const inputs = [...this.el.querySelectorAll<HTMLInputElement>("[data-chan]")];
+    const curVals = inputs.map((inp, i) => {
+      const v = Math.round(Number(inp.value));
+      const tagEl = this.el.querySelector<HTMLElement>(`[data-chan-tag="${i}"]`);
+      if (tagEl) {
+        tagEl.textContent = racebandName(v) || `Ch ${i + 1}`;
+      }
+      return v;
+    });
+    const dirty = curVals.some((v, i) => v !== (activeFreqs[i] ?? RACEBAND[i]));
+    const isRb = curVals.length === 8 && curVals.every((v, i) => v === RACEBAND[i]);
+    this.channelsDirty = dirty;
+
+    const noteEl = this.el.querySelector<HTMLElement>("[data-channels-note]");
+    if (noteEl) {
+      noteEl.textContent = dirty ? "· unsaved edits" : isTemp ? "· temporary override" : "· saved in NVS";
+    }
+    const rbBtn = this.el.querySelector<HTMLButtonElement>("[data-channels-rb-btn]");
+    if (rbBtn) {
+      rbBtn.disabled = !canEdit || isRb;
+    }
+    const resetBtn = this.el.querySelector<HTMLButtonElement>("[data-channels-reset-btn]");
+    if (resetBtn) {
+      resetBtn.disabled = !canEdit || (!isTemp && !dirty);
+    }
+    const applyBtn = this.el.querySelector<HTMLButtonElement>("[data-channels-apply-btn]");
+    if (applyBtn) {
+      applyBtn.disabled = !canEdit || !dirty;
+      applyBtn.classList.toggle("btn-armed", dirty || isTemp);
+      applyBtn.classList.toggle("btn-unarmed", !dirty && !isTemp);
+    }
+    const applyLbl = this.el.querySelector<HTMLElement>("[data-channels-apply-label]");
+    if (applyLbl) {
+      applyLbl.textContent = isTemp && !dirty ? "Applied" : "Apply";
+    }
   }
 
   private renderSignalControls(): void {
