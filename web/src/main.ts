@@ -1,5 +1,6 @@
 import { installCustomSelects } from "./core/custom_select";
 import { Router } from "./core/router";
+import { installSettingsIntroCollapse } from "./core/settings_intro";
 import { installTableScrollIndicators } from "./core/table_scroll";
 import { installWakeLock } from "./core/wake_lock";
 import { AppShell } from "./layout/AppShell";
@@ -39,6 +40,7 @@ async function bootstrap(): Promise<void> {
   setBootStatus("Initializing UI components…", 18);
   installCustomSelects();
   installTableScrollIndicators();
+  installSettingsIntroCollapse();
   installWakeLock();
 
   const store = new AppStore();
