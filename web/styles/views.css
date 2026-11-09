@@ -3914,6 +3914,27 @@ body.is-gate-dragging * {
   min-height: 30px;
   margin-bottom: 8px;
 }
+.debug-chart-axisbar {
+  padding-top: 8px;
+  margin-top: 2px;
+  margin-bottom: 6px;
+  border-top: 1px solid var(--border);
+}
+.debug-chart-legend {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+  min-height: 30px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+}
+.debug-chart-legend > .debug-connect-actions {
+  margin-left: auto;
+  flex-shrink: 0;
+}
 .debug-subbar > .debug-connect-actions {
   margin-left: auto;
   flex-shrink: 0;
@@ -4201,7 +4222,6 @@ body.is-gate-dragging * {
   touch-action: none;
 }
 .debug-chart-hint {
-  margin-left: auto;
   font-size: 11.5px;
   white-space: nowrap;
   overflow: hidden;

@@ -369,6 +369,7 @@ export class DebugView extends Component {
             <div class="debug-canvas-wrap">
               <canvas class="debug-canvas debug-signal-canvas" data-signal-canvas></canvas>
             </div>
+            <div data-slot="signal-legend"></div>
             <div data-slot="noise-table"></div>
           </div>
         </section>
@@ -2517,15 +2518,6 @@ export class DebugView extends Component {
             <span class="status-dot ${sigLedClass}"></span>
             <span class="note mono">${sigStatusText}</span>
           </span>
-          <div class="segmented" role="group" aria-label="Time window">
-            <button type="button" class="${this.signalAutoX ? "is-active" : ""}" data-action="signal-auto-x" title="Automatically adjust X-axis time window based on incoming sample rate">Auto</button>
-            ${presets
-              .map(
-                (w) =>
-                  `<button type="button" class="${!this.signalAutoX && Math.abs(this.signalWindowSec - w) < 0.05 ? "is-active" : ""}" data-action="signal-window" data-win="${w}" title="Set X-axis time window to ${w === 120 ? "2 minutes" : `${w} seconds`} (or drag horizontally on the X-axis)">${w === 120 ? "2 min" : `${w} s`}</button>`
-              )
-              .join("")}
-          </div>
           <div class="debug-overlay-checks" role="group" aria-label="Chart overlays">
             <label class="check" title="Show per-channel typical noise floor (dotted)">
               <input type="checkbox" data-check="signal-floor" ${this.signalShowFloor ? "checked" : ""}/>
@@ -2542,6 +2534,24 @@ export class DebugView extends Component {
           </div>
         </div>
         <div class="debug-connect-actions">
+          <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
+          <button type="button" class="btn btn-sm ${liveFollowOn ? "btn-armed" : "btn-unarmed"}" data-action="signal-freeze" ${liveDisabled ? "disabled" : ""} title="${liveTitle}">
+            ${liveFollowOn ? icons.pause(14) : icons.play(14)}<span>${liveLabel}</span>
+          </button>
+        </div>
+      </div>
+      <div class="debug-subbar debug-chart-axisbar">
+        <span class="note debug-chart-hint">${liveFollowOn ? "Drag chart to pan X/Y · drag axes to stretch · wheel to zoom" : "Paused · drag chart to pan X/Y · double-click to reset"}</span>
+        <div class="debug-connect-actions">
+          <div class="segmented" role="group" aria-label="Time window">
+            <button type="button" class="${this.signalAutoX ? "is-active" : ""}" data-action="signal-auto-x" title="Automatically adjust X-axis time window based on incoming sample rate">Auto X</button>
+            ${presets
+              .map(
+                (w) =>
+                  `<button type="button" class="${!this.signalAutoX && Math.abs(this.signalWindowSec - w) < 0.05 ? "is-active" : ""}" data-action="signal-window" data-win="${w}" title="Set X-axis time window to ${w === 120 ? "2 minutes" : `${w} seconds`} (or drag horizontally on the X-axis)">${w === 120 ? "2 min" : `${w} s`}</button>`
+              )
+              .join("")}
+          </div>
           ${
             isCustomWindow
               ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="signal-reset-x" title="Reset X-axis time window to Auto">${icons.target(13)}<span>X: ${this.signalWindowSec < 10 ? this.signalWindowSec.toFixed(1) : Math.round(this.signalWindowSec)} s ×</span></button>`
@@ -2557,14 +2567,11 @@ export class DebugView extends Component {
                 ? `<button type="button" class="btn btn-sm btn-ghost" data-action="signal-zoom-floor" title="Zoom Y-axis into the noise floor region (−102…−68 dBm), or drag vertically on the Y-axis">Zoom floor Y</button>`
                 : ""
           }
-          <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
-          <button type="button" class="btn btn-sm ${liveFollowOn ? "btn-armed" : "btn-unarmed"}" data-action="signal-freeze" ${liveDisabled ? "disabled" : ""} title="${liveTitle}">
-            ${liveFollowOn ? icons.pause(14) : icons.play(14)}<span>${liveLabel}</span>
-          </button>
         </div>
-      </div>
-      <div class="debug-subbar">
-        <div class="debug-channel-chips">
+      </div>`;
+    this.slot("signal-legend").innerHTML = `
+      <div class="debug-chart-legend">
+        <div class="debug-channel-chips" role="group" aria-label="Channel trace legend">
           ${freqs
             .map((f, i) => {
               const rb = racebandName(f) || `Ch${i + 1}`;
@@ -2578,7 +2585,6 @@ export class DebugView extends Component {
           <button type="button" class="btn btn-sm btn-ghost debug-ch-all-btn" data-action="signal-ch-all">${allOn ? "Hide all" : "Show all"}</button>
         </div>
         <div class="debug-connect-actions">
-          <span class="note debug-chart-hint">${liveFollowOn ? "Drag chart to pan X/Y · drag axes to stretch · wheel to zoom" : "Paused · drag chart to pan X/Y · double-click to reset"}</span>
           <div class="debug-btn-group" role="group" aria-label="Export signal chart">
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts ? "" : "disabled"} title="Download recorded 50 Hz samples as CSV">CSV</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-png" ${hasPts ? "" : "disabled"} title="Save chart snapshot as PNG">PNG</button>
@@ -2889,7 +2895,7 @@ export class DebugView extends Component {
           </button>
         </div>
       </div>
-      <div class="debug-subbar">
+      <div class="debug-subbar debug-chart-axisbar">
         <div class="debug-toolbar-left">
           <div class="debug-overlay-checks" role="group" aria-label="Spectrum overlays">
             <label class="check">
@@ -2906,17 +2912,22 @@ export class DebugView extends Component {
             </label>
           </div>
           <button type="button" class="btn btn-sm btn-ghost" data-action="clear-hold" ${hasScan ? "" : "disabled"}>Reset hold/avg</button>
-          <button type="button" class="btn btn-sm ${this.scanAutoY ? "btn-armed" : "btn-unarmed"} mono" data-action="scan-auto-y" title="${this.scanAutoY ? "Auto Y-axis scaling is on (fits scanned dBm range) — click for full −100…−20 dBm scale, or drag the Y-axis" : "Manual Y-axis range active — click to re-enable Auto Y scaling"}">
-            ${icons.target(13)}<span>${this.scanAutoY ? "Auto Y" : `Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} dBm`}</span>
-          </button>
+          <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
+        </div>
+        <div class="debug-connect-actions">
           ${
             isFreqZoomed
               ? `<button type="button" class="btn btn-sm btn-armed mono" data-action="scan-reset-zoom" title="Reset frequency zoom (or double-click chart)">${icons.target(13)}<span>X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz ×</span></button>`
               : ""
           }
-        </div>
-        <div class="debug-connect-actions">
-          <span class="note debug-chart-hint">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span>
+          <button type="button" class="btn btn-sm ${this.scanAutoY ? "btn-armed" : "btn-unarmed"} mono" data-action="scan-auto-y" title="${this.scanAutoY ? "Auto Y-axis scaling is on (fits scanned dBm range) — click for full −100…−20 dBm scale, or drag the Y-axis" : "Manual Y-axis range active — click to re-enable Auto Y scaling"}">
+            ${icons.target(13)}<span>${this.scanAutoY ? "Auto Y" : `Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} dBm`}</span>
+          </button>
+          ${
+            !this.scanAutoY && isScanYZoomed
+              ? `<button type="button" class="btn btn-sm btn-ghost" data-action="scan-reset-y" title="Reset Y-axis to Auto scaling">Auto Y</button>`
+              : ""
+          }
           <div class="debug-btn-group" role="group" aria-label="Export spectrum & waterfall">
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-scan-csv" ${hasScan ? "" : "disabled"} title="Export waterfall scan history as CSV">CSV</button>
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-spectrum-png" ${hasScan ? "" : "disabled"} title="Save spectrum trace as PNG">Spectrum PNG</button>
