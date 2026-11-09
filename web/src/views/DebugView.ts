@@ -149,7 +149,7 @@ export class DebugView extends Component {
   private scanStepMHz = 5;
   private scanZoomStartMHz: number | null = null;
   private scanZoomStopMHz: number | null = null;
-  private scanAutoY = true;
+  private scanAutoY = false;
   private scanYMin = DBM_MIN;
   private scanYMax = DBM_MAX;
   private scanZoomBox: { x0: number; x1: number } | null = null;
@@ -975,7 +975,10 @@ export class DebugView extends Component {
           } else {
             this.scanZoomStartMHz = null;
             this.scanZoomStopMHz = null;
-            this.scanAutoY = true;
+            this.scanAutoY = false;
+            this.scanYMin = DBM_MIN;
+            this.scanYMax = DBM_MAX;
+            this.spectrumAcc.setColorRange(-100, -40);
             this.spectrumAcc.setVisibleRows(80);
             this.renderScan();
           }
@@ -1279,7 +1282,10 @@ export class DebugView extends Component {
       } else if (target.matches("[data-spectrum-canvas], [data-waterfall-canvas]")) {
         this.scanZoomStartMHz = null;
         this.scanZoomStopMHz = null;
-        this.scanAutoY = true;
+        this.scanAutoY = false;
+        this.scanYMin = DBM_MIN;
+        this.scanYMax = DBM_MAX;
+        this.spectrumAcc.setColorRange(-100, -40);
         this.spectrumAcc.setVisibleRows(80);
         this.renderScan();
       } else {
@@ -2062,10 +2068,6 @@ export class DebugView extends Component {
           break;
         }
         case "scan-reset-y":
-          this.openAxisMenu = null;
-          this.scanAutoY = true;
-          this.renderScan();
-          break;
         case "scan-full-y":
           this.openAxisMenu = null;
           this.scanAutoY = false;
@@ -3487,6 +3489,7 @@ export class DebugView extends Component {
     const bandLabel = isFast15 ? "Fast · 9 Hz" : isRb5 ? "Race · 8 Hz" : "Full · 3 Hz";
     const isFreqZoomed = this.scanZoomStartMHz !== null && this.scanZoomStopMHz !== null;
     const isScanYZoomed = this.scanYMin !== DBM_MIN || this.scanYMax !== DBM_MAX;
+    const isScanFullY = !this.scanAutoY && !isScanYZoomed;
     const isWfRowsZoomed = this.spectrumAcc.visibleRows !== 80;
     const xScanShort = !isFreqZoomed
       ? "Auto X"
@@ -3497,7 +3500,7 @@ export class DebugView extends Component {
           : Math.round(this.scanZoomStartMHz!) === 5725 && Math.round(this.scanZoomStopMHz!) === 5850
             ? "X: UNII3"
             : `X: ${Math.round(this.scanZoomStopMHz! - this.scanZoomStartMHz!)}M`;
-    const yScanShort = !isScanYZoomed ? "Y: Full" : `Y: ${Math.round(this.scanYMax - this.scanYMin)}dB`;
+    const yScanShort = this.scanAutoY ? "Auto Y" : `Y: ${Math.round(this.scanYMax - this.scanYMin)}dB`;
     const canScanOnce = on && rfOn && !this.scanning && !this.scanLive;
     const canScanLive = on && rfOn && !this.scanning;
     const scanActive = this.scanLive || this.scanning;
@@ -3576,9 +3579,9 @@ export class DebugView extends Component {
                   : ""
               }
             </div>
-            <div class="debug-axis-pill ${this.scanAutoY ? "is-armed" : "is-unarmed"}" data-axis-pill>
-              <button type="button" class="debug-axis-pill-main" data-action="${this.scanAutoY ? "toggle-axis-menu" : "scan-reset-y"}" data-menu="scan-y" title="${this.scanAutoY ? "Auto Y-axis scaling is ON (fits scanned dBm range) — click to choose a scale preset, or drag the Y-axis" : "Click to reset Y-axis range to Auto Y"}">
-                ${icons.target(13)}<span>${this.scanAutoY ? "Auto Y" : `<span class="debug-hint-desktop">Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} dBm</span><span class="debug-hint-mobile">${yScanShort}</span>`}</span>
+            <div class="debug-axis-pill ${isScanFullY ? "is-armed" : "is-unarmed"}" data-axis-pill>
+              <button type="button" class="debug-axis-pill-main" data-action="${isScanFullY ? "toggle-axis-menu" : "scan-full-y"}" data-menu="scan-y" title="${isScanFullY ? `Full Y-axis scale (${DBM_MIN}…${DBM_MAX} dBm) — click to choose a scale preset, or drag the Y-axis` : "Click to reset Y-axis range to Full Y"}">
+                ${icons.target(13)}<span>${isScanFullY ? "Full Y" : this.scanAutoY ? "Auto Y" : `<span class="debug-hint-desktop">Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} dBm</span><span class="debug-hint-mobile">${yScanShort}</span>`}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-y" aria-expanded="${this.openAxisMenu === "scan-y"}" title="Choose spectrum Y-axis dBm scale">
                 ${icons.chevronDown(12)}
@@ -3586,12 +3589,12 @@ export class DebugView extends Component {
               ${
                 this.openAxisMenu === "scan-y"
                   ? `<div class="debug-axis-menu" role="menu" aria-label="Spectrum Y-axis dBm scale">
-                      <button type="button" class="debug-axis-menu-item ${this.scanAutoY ? "is-active" : ""}" data-action="scan-auto-y" data-force="1" role="menuitem">
-                        <span>Auto Y</span><span class="note">Fit scan</span>
+                      <button type="button" class="debug-axis-menu-item ${isScanFullY ? "is-active" : ""}" data-action="scan-full-y" role="menuitem">
+                        <span>Full Y</span><span class="note">${DBM_MIN}…${DBM_MAX} dBm</span>
                       </button>
                       <div class="debug-axis-menu-sep"></div>
-                      <button type="button" class="debug-axis-menu-item ${!this.scanAutoY && !isScanYZoomed ? "is-active" : ""}" data-action="scan-full-y" role="menuitem">
-                        <span>Full scale</span><span class="note">${DBM_MIN}…${DBM_MAX} dBm</span>
+                      <button type="button" class="debug-axis-menu-item ${this.scanAutoY ? "is-active" : ""}" data-action="scan-auto-y" data-force="1" role="menuitem">
+                        <span>Auto Y</span><span class="note">Fit scan</span>
                       </button>
                     </div>`
                   : ""
