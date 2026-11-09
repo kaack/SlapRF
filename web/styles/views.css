@@ -5009,27 +5009,15 @@ body.is-gate-dragging * {
 .debug-single-readout {
   height: 28px;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   white-space: nowrap;
+  color: var(--text);
 }
 .debug-single-readout > span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.debug-readout-title {
-  color: var(--text);
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.debug-readout-sub {
-  color: var(--text-3);
-  flex-shrink: 0;
-}
-.debug-readout-vals {
-  color: var(--text);
-  flex-shrink: 0;
 }
 
 @media (max-width: 1080px) {

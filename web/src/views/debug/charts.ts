@@ -760,7 +760,7 @@ export function drawSignalOverTimeCanvas(
       const v = best.dbm[bestCh];
       const fl = best.floor[bestCh];
       setSignalReadout(
-        `<span class="debug-readout-title"><strong>${rb}</strong> (${f} MHz)</span><span class="debug-readout-vals"><strong>${v} dBm</strong>${fl && fl > -127 ? ` · fl ${fl}` : ""} · -${ageSec}s (#${best.n})</span>`
+        `<span><strong>${rb}</strong> (${f} MHz) · <strong>${v} dBm</strong>${fl && fl > -127 ? ` · fl ${fl}` : ""} · -${ageSec}s (#${best.n})</span>`
       );
     } else {
       setSignalReadout(`<span class="note">Point at chart to inspect channel, dBm &amp; sweep age</span>`);
@@ -1361,7 +1361,7 @@ export function drawSpectrumCanvas(
 
       const hint = nearestBandHint(f);
       setSpecReadout(
-        `<span class="debug-readout-title"><strong>${f} MHz</strong> (${hint})</span><span class="debug-readout-vals">Cur <strong>${s.dbm[idx]} dBm</strong>${avg ? ` · Avg ${avg[idx].toFixed(1)}` : ""}${acc.maxHold ? ` · Max ${acc.maxHold[idx]}` : ""}</span>`
+        `<span><strong>${f} MHz</strong> (${hint}) · Cur <strong>${s.dbm[idx]} dBm</strong>${avg ? ` · Avg ${avg[idx].toFixed(1)}` : ""}${acc.maxHold ? ` · Max ${acc.maxHold[idx]}` : ""}</span>`
       );
     }
   }
@@ -1369,7 +1369,7 @@ export function drawSpectrumCanvas(
     if (peakIdx >= 0) {
       const pf = s.start + peakIdx * s.step;
       setSpecReadout(
-        `<span class="debug-readout-title">Peak <strong>${pf} MHz</strong> (${nearestBandHint(pf)}) · <strong>${s.dbm[peakIdx]} dBm</strong></span><span class="debug-readout-sub">Point at chart</span>`
+        `<span>Peak <strong>${pf} MHz</strong> (${nearestBandHint(pf)}) · <strong>${s.dbm[peakIdx]} dBm</strong> <span class="note">· Point at chart</span></span>`
       );
     } else {
       setSpecReadout(`<span class="note">Point at chart to inspect frequency &amp; dBm</span>`);
@@ -1526,7 +1526,7 @@ export function drawWaterfallCanvas(
     ctx.restore();
 
     setWfReadout(
-      `<span class="debug-readout-title"><strong>${f} MHz</strong> (${hint})</span><span class="debug-readout-vals"><strong>${dbmVal !== null && dbmVal !== undefined ? `${dbmVal} dBm` : "—"}</strong> · -${age}s (-${rowIdx + 1}/${acc.history.length})</span>`
+      `<span><strong>${f} MHz</strong> (${hint}) · <strong>${dbmVal !== null && dbmVal !== undefined ? `${dbmVal} dBm` : "—"}</strong> · -${age}s (-${rowIdx + 1}/${acc.history.length})</span>`
     );
   } else {
     setWfReadout(`<span class="note">Point at waterfall to inspect frequency, dBm &amp; pass age</span>`);
