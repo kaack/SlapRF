@@ -111,6 +111,7 @@ export class DebugView extends Component {
   private scanShowWifi = true;
   private scanHover: { x: number; y: number } | null = null;
   private waterfallHover: { x: number; y: number } | null = null;
+  private wfDragging: { mode: "pan" | "scrollbar"; startY: number; startScroll: number } | null = null;
 
   private dirtySignal = true;
   private dirtyNoiseTable = true;
@@ -333,8 +334,49 @@ export class DebugView extends Component {
   }
 
   private bindCanvasHover(): void {
+    const scrubScrollbar = (canvas: HTMLElement, clientY: number) => {
+      const r = canvas.getBoundingClientRect();
+      const plotH = Math.max(10, r.height - 6 - 24);
+      const frac = Math.max(0, Math.min(1, (clientY - r.top - 6) / plotH));
+      this.spectrumAcc.setScrollRow(frac * this.spectrumAcc.maxScrollRow());
+      this.updateScanFindings();
+      this.dirtyWaterfall = true;
+    };
+
+    this.listen(this.el, "mousedown", (e) => {
+      const target = e.target as HTMLElement;
+      if (!target.matches("[data-waterfall-canvas]") || this.spectrumAcc.maxScrollRow() <= 0) return;
+      const r = target.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      if (x >= r.width - 28) {
+        this.wfDragging = { mode: "scrollbar", startY: e.clientY, startScroll: this.spectrumAcc.scrollRow };
+        scrubScrollbar(target, e.clientY);
+      } else {
+        this.wfDragging = { mode: "pan", startY: e.clientY, startScroll: this.spectrumAcc.scrollRow };
+      }
+    });
+
+    this.listen(window, "mouseup", () => {
+      this.wfDragging = null;
+    });
+
     this.listen(this.el, "mousemove", (e) => {
       const target = e.target as HTMLElement;
+      if (this.wfDragging) {
+        const wf = this.el.querySelector<HTMLElement>("[data-waterfall-canvas]");
+        if (wf) {
+          if (this.wfDragging.mode === "scrollbar") {
+            scrubScrollbar(wf, e.clientY);
+          } else {
+            const r = wf.getBoundingClientRect();
+            const pxPerRow = Math.max(1, (r.height - 30) / this.spectrumAcc.visibleRows);
+            const deltaRows = (this.wfDragging.startY - e.clientY) / pxPerRow;
+            this.spectrumAcc.setScrollRow(this.wfDragging.startScroll + deltaRows);
+            this.updateScanFindings();
+            this.dirtyWaterfall = true;
+          }
+        }
+      }
       if (target.matches("[data-signal-canvas]")) {
         const r = target.getBoundingClientRect();
         this.signalHover = { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -362,6 +404,20 @@ export class DebugView extends Component {
         this.dirtyWaterfall = true;
       }
     });
+    this.el.addEventListener(
+      "wheel",
+      (e: WheelEvent) => {
+        const target = e.target as HTMLElement;
+        if (!target.matches("[data-waterfall-canvas]")) return;
+        if (this.spectrumAcc.maxScrollRow() <= 0) return;
+        e.preventDefault();
+        const step = Math.sign(e.deltaY) * Math.max(2, Math.round(Math.abs(e.deltaY) / 10));
+        this.spectrumAcc.setScrollRow(this.spectrumAcc.scrollRow + step);
+        this.updateScanFindings();
+        this.dirtyWaterfall = true;
+      },
+      { passive: false }
+    );
   }
 
   private renderFrame(): void {
@@ -655,6 +711,29 @@ export class DebugView extends Component {
           this.spectrumAcc.clearHoldAndAvg();
           this.dirtySpectrum = true;
           break;
+        case "wf-jump-live":
+          this.spectrumAcc.setScrollRow(0);
+          this.updateScanFindings();
+          this.dirtyWaterfall = true;
+          break;
+        case "scan-preset": {
+          const start = Number(t.dataset.start) || 5180;
+          const stop = Number(t.dataset.stop) || 5917;
+          const step = Number(t.dataset.step) || 5;
+          const iStart = this.el.querySelector<HTMLInputElement>("[data-scan-start]");
+          const iStop = this.el.querySelector<HTMLInputElement>("[data-scan-stop]");
+          const iStep = this.el.querySelector<HTMLInputElement>("[data-scan-step]");
+          if (iStart) iStart.value = String(start);
+          if (iStop) iStop.value = String(stop);
+          if (iStep) iStep.value = String(step);
+          if (this.scanLive && this.console.connected) {
+            this.scanToggleAt = Date.now();
+            this.spectrumAcc.clearHoldAndAvg();
+            await this.console.request(`SCAN LIVE ${start} ${stop} ${step}`, "ok", 2000);
+          }
+          this.renderScan();
+          break;
+        }
         case "scan-toggle-hold":
           this.scanShowMaxHold = !this.scanShowMaxHold;
           this.renderScan();
@@ -1415,9 +1494,17 @@ export class DebugView extends Component {
     };
     const dis = this.scanLive ? "disabled" : "";
     const hasScan = this.spectrumAcc.latest !== null;
+    const isFull5 = prev.start === "5180" && prev.stop === "5917" && prev.step === "5";
+    const isFast15 = prev.start === "5180" && prev.stop === "5917" && prev.step === "15";
+    const isRb5 = prev.start === "5650" && prev.stop === "5925" && prev.step === "5";
     this.slot("scan").innerHTML = `
       <div class="debug-toolbar">
         <div class="debug-toolbar-left">
+          <div class="segmented" role="group" aria-label="Scan speed and range presets">
+            <button type="button" class="${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="5" title="Full 5.18–5.92 GHz band at 5 MHz step (148 points, ~3.1 passes/s)">Full · 3 Hz</button>
+            <button type="button" class="${isFast15 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="15" title="Full 5.18–5.92 GHz band at 15 MHz step (50 points, ~9 passes/s)">Fast full · 9 Hz</button>
+            <button type="button" class="${isRb5 ? "is-active" : ""}" data-action="scan-preset" data-start="5650" data-stop="5925" data-step="5" title="Raceband R1–R8 + Wi-Fi UNII-3 at 5 MHz step (56 points, ~8 passes/s)">Raceband · 8 Hz</button>
+          </div>
           <div class="debug-scan-inputs">
             <label>From <input class="input mono" type="number" data-scan-start value="${esc(prev.start)}" min="5180" max="5917" ${dis}/></label>
             <label>to <input class="input mono" type="number" data-scan-stop value="${esc(prev.stop)}" min="5180" max="5917" ${dis}/></label>
@@ -1460,11 +1547,17 @@ export class DebugView extends Component {
       <div class="debug-findings debug-scan-findings" data-scan-findings role="status" aria-live="polite"></div>
       <div class="debug-waterfall-section">
         <div class="debug-waterfall-head">
-          <strong>Waterfall spectrogram (frequency × time)</strong>
-          <div class="debug-waterfall-legend mono">
-            <span>-100 dBm</span>
-            <span class="debug-wf-gradient"></span>
-            <span>-40 dBm</span>
+          <div class="debug-waterfall-title-group">
+            <strong>Waterfall spectrogram (frequency × time)</strong>
+            <span class="note mono" data-wf-scroll-note></span>
+          </div>
+          <div class="debug-connect-actions">
+            <button type="button" class="btn btn-sm btn-ghost" data-action="wf-jump-live" data-wf-jump-btn disabled>Jump to live</button>
+            <div class="debug-waterfall-legend mono">
+              <span>-100 dBm</span>
+              <span class="debug-wf-gradient"></span>
+              <span>-40 dBm</span>
+            </div>
           </div>
         </div>
         <div class="debug-canvas-wrap">
@@ -1524,6 +1617,26 @@ export class DebugView extends Component {
       <div class="debug-peaks-row">
         ${peaksHtml}
       </div>`;
+
+    const wfNote = this.el.querySelector<HTMLElement>("[data-wf-scroll-note]");
+    const wfJumpBtn = this.el.querySelector<HTMLButtonElement>("[data-wf-jump-btn]");
+    const total = this.spectrumAcc.history.length;
+    const vis = this.spectrumAcc.visibleRows;
+    const sc = this.spectrumAcc.scrollRow;
+    if (wfNote) {
+      if (!total) {
+        wfNote.textContent = "Scroll wheel or drag to inspect history";
+      } else if (sc > 0) {
+        wfNote.textContent = `Scrolled · rows -${sc + 1}..-${Math.min(total, sc + vis)} of ${total}`;
+      } else if (total > vis) {
+        wfNote.textContent = `Live (top ${vis} of ${total} passes · wheel/drag to scroll)`;
+      } else {
+        wfNote.textContent = `Live (${total} pass${total === 1 ? "" : "es"})`;
+      }
+    }
+    if (wfJumpBtn) {
+      wfJumpBtn.disabled = sc <= 0;
+    }
   }
 
   private bootLogHeader(l: BootLog): string {

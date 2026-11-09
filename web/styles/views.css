@@ -4154,7 +4154,7 @@ body.is-gate-dragging * {
   height: 230px;
 }
 .debug-waterfall-canvas {
-  height: 200px;
+  height: 220px;
 }
 .debug-health-strip {
   margin-top: 16px;
@@ -4357,8 +4357,16 @@ body.is-gate-dragging * {
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 8px;
+  min-height: 28px;
   margin-bottom: 6px;
   font-size: 13px;
+}
+.debug-waterfall-title-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  min-width: 0;
 }
 .debug-waterfall-legend {
   display: inline-flex;

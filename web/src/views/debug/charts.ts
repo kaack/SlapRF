@@ -617,9 +617,20 @@ export class SpectrumAccumulator {
   public avgSum: number[] | null = null;
   public avgCount = 0;
   public history: Array<{ tsIso: string; passMs: number; start: number; step: number; dbm: number[] }> = [];
+  /** Vertical scroll offset in waterfall rows (0 = pinned to newest row at top). */
+  public scrollRow = 0;
+  public readonly maxRows = 1200;
+  public readonly visibleRows = 80;
   private offscreen: HTMLCanvasElement | null = null;
   private wfWidth = 0;
-  private readonly maxRows = 200;
+
+  public maxScrollRow(): number {
+    return Math.max(0, this.history.length - this.visibleRows);
+  }
+
+  public setScrollRow(row: number): void {
+    this.scrollRow = Math.max(0, Math.min(this.maxScrollRow(), Math.round(row)));
+  }
 
   public clearHoldAndAvg(): void {
     if (this.latest) {
@@ -639,6 +650,7 @@ export class SpectrumAccumulator {
     this.avgSum = null;
     this.avgCount = 0;
     this.history = [];
+    this.scrollRow = 0;
     this.offscreen = null;
     this.wfWidth = 0;
   }
@@ -656,6 +668,8 @@ export class SpectrumAccumulator {
       this.maxHold = [...s.dbm];
       this.avgSum = [...s.dbm];
       this.avgCount = 1;
+      this.history = [];
+      this.scrollRow = 0;
       this.resetOffscreen(n);
     } else {
       this.avgCount++;
@@ -679,6 +693,10 @@ export class SpectrumAccumulator {
     }
 
     this.appendWaterfallRow(s.dbm);
+    // If the user has scrolled down to inspect an older row, keep that historical slice stationary
+    if (this.scrollRow > 0) {
+      this.setScrollRow(this.scrollRow + 1);
+    }
   }
 
   public getAverage(): number[] | null {
@@ -1046,7 +1064,7 @@ export function drawSpectrumCanvas(
   }
 }
 
-/** Draw the scrolling Waterfall spectrogram canvas (§5.3). */
+/** Draw the vertically scrollable Waterfall spectrogram canvas (§5.3). */
 export function drawWaterfallCanvas(
   canvas: HTMLCanvasElement,
   acc: SpectrumAccumulator,
@@ -1056,9 +1074,9 @@ export function drawWaterfallCanvas(
   const s = acc.latest;
   const off = acc.getOffscreen();
   const tokens = getThemeTokens();
-  const { ctx, width: W, height: H } = prepareCanvas(canvas, 200);
+  const { ctx, width: W, height: H } = prepareCanvas(canvas, 220);
   const L = 44;
-  const R = 14;
+  const R = 18;
   const T = 6;
   const B = 24;
   const plotW = Math.max(10, W - L - R);
@@ -1071,7 +1089,7 @@ export function drawWaterfallCanvas(
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.font = `12px ${tokens.fontSans}`;
-    ctx.fillText("Scan passes will build a waterfall history here.", L + plotW / 2, T + plotH / 2);
+    ctx.fillText("Scan passes will build a scrollable waterfall history here.", L + plotW / 2, T + plotH / 2);
     return;
   }
 
@@ -1079,10 +1097,13 @@ export function drawWaterfallCanvas(
   const span = Math.max(1, stop - s.start);
   const xOf = (f: number) => L + ((f - s.start) / span) * plotW;
 
-  // Draw offscreen ImageData scaled into the plot box
+  const visRows = acc.visibleRows;
+  const startRow = Math.max(0, Math.min(acc.maxScrollRow(), acc.scrollRow));
+
+  // Draw the visible vertical slice [startRow .. startRow + visRows] from the offscreen history canvas
   ctx.save();
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(off, 0, 0, off.width, off.height, L, T, plotW, plotH);
+  ctx.drawImage(off, 0, startRow, off.width, visRows, L, T, plotW, plotH);
   ctx.restore();
 
   // Border around waterfall plot
@@ -1090,16 +1111,33 @@ export function drawWaterfallCanvas(
   ctx.lineWidth = 1;
   ctx.strokeRect(L + 0.5, T + 0.5, plotW - 1, plotH - 1);
 
-  // Y-axis age ticks (rows)
+  // Y-axis age ticks (reflecting current vertical scroll offset)
   const passSec = s.passMs && s.passMs > 20 ? s.passMs / 1000 : 0.32;
-  const totalSec = off.height * passSec;
-  ctx.fillStyle = tokens.text3;
+  const topAgeSec = startRow * passSec;
+  const midAgeSec = (startRow + visRows / 2) * passSec;
+  const botAgeSec = (startRow + visRows) * passSec;
+  ctx.fillStyle = startRow > 0 ? tokens.warn : tokens.text3;
   ctx.font = `10px ${tokens.fontMono}`;
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
-  ctx.fillText("now", L - 6, T + 6);
-  ctx.fillText(`-${Math.round(totalSec / 2)}s`, L - 6, T + plotH / 2);
-  ctx.fillText(`-${Math.round(totalSec)}s`, L - 6, T + plotH - 6);
+  ctx.fillText(startRow === 0 ? "now" : `-${topAgeSec.toFixed(0)}s`, L - 6, T + 6);
+  ctx.fillStyle = tokens.text3;
+  ctx.fillText(`-${midAgeSec.toFixed(0)}s`, L - 6, T + plotH / 2);
+  ctx.fillText(`-${botAgeSec.toFixed(0)}s`, L - 6, T + plotH - 6);
+
+  // Vertical scrollbar track + thumb on the right margin when history exceeds 1 viewport
+  const totalStored = Math.max(visRows, acc.history.length);
+  const sbX = W - R + 5;
+  const sbW = 6;
+  ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
+  ctx.fillRect(sbX, T, sbW, plotH);
+  const thumbFrac = Math.min(1, visRows / totalStored);
+  const thumbH = Math.max(18, Math.round(plotH * thumbFrac));
+  const maxScroll = Math.max(1, acc.maxScrollRow());
+  const scrollFrac = acc.maxScrollRow() > 0 ? startRow / maxScroll : 0;
+  const thumbY = T + Math.round((plotH - thumbH) * scrollFrac);
+  ctx.fillStyle = startRow > 0 ? tokens.warn : acc.history.length > visRows ? tokens.accent : "rgba(255, 255, 255, 0.18)";
+  ctx.fillRect(sbX, thumbY, sbW, thumbH);
 
   // X-axis frequency ticks
   ctx.textAlign = "center";
@@ -1112,11 +1150,12 @@ export function drawWaterfallCanvas(
 
   drawBandOverlay(ctx, s.start, stop, L, R, T, plotW, plotH, showWifiOverlay, tokens);
 
-  // Hover readout (MHz, dBm, age)
+  // Hover readout (MHz, dBm, age, pass index)
   if (hover && hover.x >= L && hover.x <= W - R && hover.y >= T && hover.y <= T + plotH) {
     const fCursor = s.start + ((hover.x - L) / plotW) * span;
     const binIdx = Math.max(0, Math.min(s.dbm.length - 1, Math.round((fCursor - s.start) / Math.max(1, s.step))));
-    const rowIdx = Math.max(0, Math.min(off.height - 1, Math.floor(((hover.y - T) / plotH) * off.height)));
+    const localRow = Math.max(0, Math.min(visRows - 1, Math.floor(((hover.y - T) / plotH) * visRows)));
+    const rowIdx = startRow + localRow;
     const f = s.start + binIdx * s.step;
     const histIdx = acc.history.length - 1 - rowIdx;
     const histRow = histIdx >= 0 ? acc.history[histIdx] : null;
@@ -1125,7 +1164,13 @@ export function drawWaterfallCanvas(
 
     const tipLines: Array<{ text: string; color: string }> = [
       { text: `${f} MHz  (${nearestBandHint(f)})`, color: tokens.text },
-      { text: dbmVal !== null && dbmVal !== undefined ? `${dbmVal} dBm · -${age} s (row #${rowIdx + 1})` : `-${age} s`, color: tokens.accent },
+      {
+        text:
+          dbmVal !== null && dbmVal !== undefined
+            ? `${dbmVal} dBm · -${age} s (pass -${rowIdx + 1} of ${acc.history.length})`
+            : `-${age} s (no pass at row #${rowIdx + 1})`,
+        color: tokens.accent,
+      },
     ];
     drawTooltipBox(ctx, hover.x, hover.y, tipLines, L, W - R, T, T + plotH, tokens);
   }
