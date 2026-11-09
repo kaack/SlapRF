@@ -98,8 +98,13 @@ export class DebugView extends Component {
   private pilots: PilotThresholdInfo[] = [];
   private hasServer = false;
 
-  private signalWindowSec: 10 | 30 | 120 = 30;
-  private signalFrozen = false;
+  private signalWindowSec = 30;
+  private signalEndN: number | null = null;
+  private signalRefN = 0;
+  private signalYMin = DBM_MIN;
+  private signalYMax = DBM_MAX;
+  private signalYZoomBox: { y0: number; y1: number } | null = null;
+  private signalDrag: { mode: "undecided" | "time" | "ybox"; startX: number; startY: number; startEndN: number } | null = null;
   private signalEnabledCh: boolean[] = [true, true, true, true, true, true, true, true];
   private signalShowFloor = true;
   private signalShowHitLine = true;
@@ -109,9 +114,18 @@ export class DebugView extends Component {
   private scanShowMaxHold = true;
   private scanShowAvg = true;
   private scanShowWifi = true;
+  private scanZoomStartMHz: number | null = null;
+  private scanZoomStopMHz: number | null = null;
+  private scanZoomBox: { x0: number; x1: number } | null = null;
   private scanHover: { x: number; y: number } | null = null;
   private waterfallHover: { x: number; y: number } | null = null;
-  private wfDragging: { mode: "pan" | "scrollbar"; startY: number; startScroll: number } | null = null;
+  private wfDragging: {
+    mode: "undecided" | "pan" | "scrollbar" | "zoom";
+    startX: number;
+    startY: number;
+    startScroll: number;
+  } | null = null;
+  private specDragging: { startX: number } | null = null;
 
   private dirtySignal = true;
   private dirtyNoiseTable = true;
@@ -150,13 +164,22 @@ export class DebugView extends Component {
         this.liveCount++;
         this.signalRing.push(s, this.status?.sweepHz ?? 50);
         this.updateLive();
-        if (!this.signalFrozen) {
+        if (this.signalEndN === null) {
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
         }
       },
       onScan: (s) => {
         if (s.live && !this.scanLive) return; // Stray pass after SCAN STOP
+        const gridChanged =
+          this.spectrumAcc.latest !== null &&
+          (this.spectrumAcc.latest.start !== s.start ||
+            this.spectrumAcc.latest.step !== s.step ||
+            this.spectrumAcc.latest.dbm.length !== s.dbm.length);
+        if (gridChanged) {
+          this.scanZoomStartMHz = null;
+          this.scanZoomStopMHz = null;
+        }
         this.spectrumAcc.pushScan(s);
         if (!s.live) {
           this.scanning = false;
@@ -333,6 +356,51 @@ export class DebugView extends Component {
     }
   }
 
+  private signalViewEndN(): number {
+    return this.signalEndN ?? this.signalRing.latestN();
+  }
+
+  private clampSignalEndN(endN: number): number {
+    const latest = this.signalRing.latestN();
+    const earliest = this.signalRing.earliestN();
+    const sweepHz = this.status?.sweepHz ?? 50;
+    const minEnd = Math.min(latest, earliest + Math.round(this.signalWindowSec * sweepHz));
+    return Math.min(latest, Math.max(minEnd, Math.round(endN)));
+  }
+
+  private pauseSignalAt(endN: number): void {
+    if (this.signalEndN === null) {
+      this.signalRefN = this.signalRing.latestN();
+    }
+    this.signalEndN = this.clampSignalEndN(endN);
+  }
+
+  private currentScanBounds(): { vStart: number; vStop: number } | null {
+    const s = this.spectrumAcc.latest;
+    if (!s || !s.dbm.length) return null;
+    const scanStop = s.start + s.step * (s.dbm.length - 1);
+    const vStart = Math.max(s.start, Math.min(scanStop - s.step, this.scanZoomStartMHz ?? s.start));
+    const vStop = Math.min(scanStop, Math.max(vStart + s.step, this.scanZoomStopMHz ?? scanStop));
+    return { vStart, vStop };
+  }
+
+  private applyFreqZoomFromBox(box: { x0: number; x1: number }, plotW: number, L = 44): void {
+    const b = this.currentScanBounds();
+    const s = this.spectrumAcc.latest;
+    if (!b || !s) return;
+    const xa = Math.max(L, Math.min(L + plotW, Math.min(box.x0, box.x1)));
+    const xb = Math.max(L, Math.min(L + plotW, Math.max(box.x0, box.x1)));
+    if (xb - xa < 12) return;
+    const span = b.vStop - b.vStart;
+    const f0 = Math.round(b.vStart + ((xa - L) / plotW) * span);
+    const f1 = Math.round(b.vStart + ((xb - L) / plotW) * span);
+    if (f1 - f0 >= Math.max(10, s.step * 2)) {
+      this.scanZoomStartMHz = f0;
+      this.scanZoomStopMHz = f1;
+      this.renderScan();
+    }
+  }
+
   private bindCanvasHover(): void {
     const scrubScrollbar = (canvas: HTMLElement, clientY: number) => {
       const r = canvas.getBoundingClientRect();
@@ -344,31 +412,178 @@ export class DebugView extends Component {
     };
 
     this.listen(this.el, "mousedown", (e) => {
+      if (e.button !== 0) return;
       const target = e.target as HTMLElement;
-      if (!target.matches("[data-waterfall-canvas]") || this.spectrumAcc.maxScrollRow() <= 0) return;
-      const r = target.getBoundingClientRect();
-      const x = e.clientX - r.left;
-      if (x >= r.width - 28) {
-        this.wfDragging = { mode: "scrollbar", startY: e.clientY, startScroll: this.spectrumAcc.scrollRow };
-        scrubScrollbar(target, e.clientY);
-      } else {
-        this.wfDragging = { mode: "pan", startY: e.clientY, startScroll: this.spectrumAcc.scrollRow };
+      if (target.matches("[data-signal-canvas]")) {
+        const r = target.getBoundingClientRect();
+        const x = e.clientX - r.left;
+        const y = e.clientY - r.top;
+        // Dragging on Y-axis gutter (< 48px) or holding Shift starts immediate Y-axis box zoom
+        if (x < 48 || e.shiftKey) {
+          this.signalDrag = { mode: "ybox", startX: x, startY: y, startEndN: this.signalViewEndN() };
+          this.signalYZoomBox = { y0: y, y1: y };
+        } else {
+          this.signalDrag = { mode: "undecided", startX: x, startY: y, startEndN: this.signalViewEndN() };
+        }
+      } else if (target.matches("[data-spectrum-canvas]")) {
+        const r = target.getBoundingClientRect();
+        const x = e.clientX - r.left;
+        if (x >= 44 && x <= r.width - 14 && this.spectrumAcc.latest) {
+          this.specDragging = { startX: x };
+          this.scanZoomBox = { x0: x, x1: x };
+          this.dirtySpectrum = true;
+        }
+      } else if (target.matches("[data-waterfall-canvas]")) {
+        const r = target.getBoundingClientRect();
+        const x = e.clientX - r.left;
+        if (x >= r.width - 28 && this.spectrumAcc.maxScrollRow() > 0) {
+          this.wfDragging = {
+            mode: "scrollbar",
+            startX: x,
+            startY: e.clientY,
+            startScroll: this.spectrumAcc.scrollRow,
+          };
+          scrubScrollbar(target, e.clientY);
+        } else if (x >= 44 && x < r.width - 18) {
+          this.wfDragging = {
+            mode: "undecided",
+            startX: x,
+            startY: e.clientY,
+            startScroll: this.spectrumAcc.scrollRow,
+          };
+        }
       }
     });
 
     this.listen(window, "mouseup", () => {
-      this.wfDragging = null;
+      if (this.signalDrag) {
+        if (this.signalDrag.mode === "ybox" && this.signalYZoomBox) {
+          const c = this.el.querySelector<HTMLElement>("[data-signal-canvas]");
+          if (c) {
+            const r = c.getBoundingClientRect();
+            const T = 12;
+            const plotH = Math.max(10, r.height - T - 26);
+            const ya = Math.max(T, Math.min(T + plotH, Math.min(this.signalYZoomBox.y0, this.signalYZoomBox.y1)));
+            const yb = Math.max(T, Math.min(T + plotH, Math.max(this.signalYZoomBox.y0, this.signalYZoomBox.y1)));
+            if (yb - ya >= 10) {
+              const span = this.signalYMax - this.signalYMin;
+              const dHigh = Math.round(this.signalYMin + (1 - (ya - T) / plotH) * span);
+              const dLow = Math.round(this.signalYMin + (1 - (yb - T) / plotH) * span);
+              if (dHigh - dLow >= 4) {
+                this.signalYMin = Math.max(DBM_MIN, dLow);
+                this.signalYMax = Math.min(DBM_MAX, dHigh);
+                this.renderSignalControls();
+              }
+            }
+          }
+        }
+        this.signalDrag = null;
+        this.signalYZoomBox = null;
+        this.dirtySignal = true;
+      }
+
+      if (this.specDragging) {
+        const c = this.el.querySelector<HTMLElement>("[data-spectrum-canvas]");
+        if (c && this.scanZoomBox) {
+          const r = c.getBoundingClientRect();
+          this.applyFreqZoomFromBox(this.scanZoomBox, Math.max(10, r.width - 44 - 14), 44);
+        }
+        this.specDragging = null;
+        this.scanZoomBox = null;
+        this.dirtySpectrum = true;
+        this.dirtyWaterfall = true;
+      }
+
+      if (this.wfDragging) {
+        if (this.wfDragging.mode === "zoom" && this.scanZoomBox) {
+          const c = this.el.querySelector<HTMLElement>("[data-waterfall-canvas]");
+          if (c) {
+            const r = c.getBoundingClientRect();
+            this.applyFreqZoomFromBox(this.scanZoomBox, Math.max(10, r.width - 44 - 18), 44);
+          }
+        }
+        this.wfDragging = null;
+        this.scanZoomBox = null;
+        this.dirtySpectrum = true;
+        this.dirtyWaterfall = true;
+      }
+    });
+
+    this.listen(this.el, "dblclick", (e) => {
+      const target = e.target as HTMLElement;
+      if (target.matches("[data-signal-canvas]")) {
+        this.signalEndN = null;
+        this.signalYMin = DBM_MIN;
+        this.signalYMax = DBM_MAX;
+        this.renderSignalControls();
+        this.dirtySignal = true;
+        this.dirtyNoiseTable = true;
+      } else if (target.matches("[data-spectrum-canvas], [data-waterfall-canvas]")) {
+        if (this.scanZoomStartMHz !== null || this.scanZoomStopMHz !== null) {
+          this.scanZoomStartMHz = null;
+          this.scanZoomStopMHz = null;
+          this.renderScan();
+        }
+      }
     });
 
     this.listen(this.el, "mousemove", (e) => {
       const target = e.target as HTMLElement;
+      if (this.signalDrag) {
+        const sig = this.el.querySelector<HTMLElement>("[data-signal-canvas]");
+        if (sig) {
+          const r = sig.getBoundingClientRect();
+          const x = e.clientX - r.left;
+          const y = e.clientY - r.top;
+          const dx = x - this.signalDrag.startX;
+          const dy = y - this.signalDrag.startY;
+          if (this.signalDrag.mode === "undecided" && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
+            this.signalDrag.mode = Math.abs(dy) > Math.abs(dx) * 1.5 ? "ybox" : "time";
+          }
+          if (this.signalDrag.mode === "ybox") {
+            this.signalYZoomBox = { y0: this.signalDrag.startY, y1: y };
+            this.dirtySignal = true;
+          } else if (this.signalDrag.mode === "time") {
+            const plotW = Math.max(10, r.width - 44 - 14);
+            const sweepHz = this.status?.sweepHz ?? 50;
+            const windowSweeps = this.signalWindowSec * sweepHz;
+            const deltaN = (dx / plotW) * windowSweeps;
+            this.pauseSignalAt(this.signalDrag.startEndN - deltaN);
+            this.renderSignalControls();
+            this.dirtySignal = true;
+            this.dirtyNoiseTable = true;
+          }
+        }
+      }
+
+      if (this.specDragging) {
+        const spec = this.el.querySelector<HTMLElement>("[data-spectrum-canvas]");
+        if (spec) {
+          const r = spec.getBoundingClientRect();
+          const x = Math.max(44, Math.min(r.width - 14, e.clientX - r.left));
+          this.scanZoomBox = { x0: this.specDragging.startX, x1: x };
+          this.dirtySpectrum = true;
+        }
+      }
+
       if (this.wfDragging) {
         const wf = this.el.querySelector<HTMLElement>("[data-waterfall-canvas]");
         if (wf) {
+          const r = wf.getBoundingClientRect();
+          const x = e.clientX - r.left;
+          const dx = x - this.wfDragging.startX;
+          const dy = e.clientY - this.wfDragging.startY;
+          if (this.wfDragging.mode === "undecided" && (Math.abs(dx) > 4 || Math.abs(dy) > 4)) {
+            this.wfDragging.mode = Math.abs(dx) >= Math.abs(dy) ? "zoom" : "pan";
+          }
           if (this.wfDragging.mode === "scrollbar") {
             scrubScrollbar(wf, e.clientY);
-          } else {
-            const r = wf.getBoundingClientRect();
+          } else if (this.wfDragging.mode === "zoom") {
+            const clampedX = Math.max(44, Math.min(r.width - 18, x));
+            this.scanZoomBox = { x0: this.wfDragging.startX, x1: clampedX };
+            this.dirtyWaterfall = true;
+            this.dirtySpectrum = true;
+          } else if (this.wfDragging.mode === "pan") {
             const pxPerRow = Math.max(1, (r.height - 30) / this.spectrumAcc.visibleRows);
             const deltaRows = (this.wfDragging.startY - e.clientY) / pxPerRow;
             this.spectrumAcc.setScrollRow(this.wfDragging.startScroll + deltaRows);
@@ -377,6 +592,7 @@ export class DebugView extends Component {
           }
         }
       }
+
       if (target.matches("[data-signal-canvas]")) {
         const r = target.getBoundingClientRect();
         this.signalHover = { x: e.clientX - r.left, y: e.clientY - r.top };
@@ -408,6 +624,54 @@ export class DebugView extends Component {
       "wheel",
       (e: WheelEvent) => {
         const target = e.target as HTMLElement;
+        if (target.matches("[data-signal-canvas]")) {
+          e.preventDefault();
+          const r = target.getBoundingClientRect();
+          const x = e.clientX - r.left;
+          const y = e.clientY - r.top;
+          const factor = e.deltaY > 0 ? 1.25 : 0.8;
+          // Wheel on Y-axis (< 48px) or Shift+Wheel zooms the Y-axis (dBm) around cursor Y
+          if (x < 48 || e.shiftKey) {
+            const T = 12;
+            const plotH = Math.max(10, r.height - T - 26);
+            const yFrac = Math.max(0, Math.min(1, 1 - (y - T) / plotH));
+            const curSpan = this.signalYMax - this.signalYMin;
+            const anchorDbm = this.signalYMin + yFrac * curSpan;
+            const nextSpan = Math.max(6, Math.min(DBM_MAX - DBM_MIN, curSpan * factor));
+            let nextMin = Math.round(anchorDbm - yFrac * nextSpan);
+            let nextMax = Math.round(nextMin + nextSpan);
+            if (nextMin < DBM_MIN) {
+              nextMin = DBM_MIN;
+              nextMax = Math.min(DBM_MAX, Math.round(DBM_MIN + nextSpan));
+            }
+            if (nextMax > DBM_MAX) {
+              nextMax = DBM_MAX;
+              nextMin = Math.max(DBM_MIN, Math.round(DBM_MAX - nextSpan));
+            }
+            this.signalYMin = nextMin;
+            this.signalYMax = nextMax;
+            this.renderSignalControls();
+            this.dirtySignal = true;
+          } else {
+            // Wheel on plot zooms the time window (1 s .. 120 s) around cursor X, matching PilotRssiChart
+            const L = 44;
+            const plotW = Math.max(10, r.width - L - 14);
+            const sweepHz = this.status?.sweepHz ?? 50;
+            const frac = Math.max(0, Math.min(1, (x - L) / plotW));
+            const curEndN = this.signalViewEndN();
+            const curSweeps = this.signalWindowSec * sweepHz;
+            const anchorN = curEndN - (1 - frac) * curSweeps;
+            const nextSec = Math.max(1, Math.min(120, Number((this.signalWindowSec * factor).toFixed(1))));
+            this.signalWindowSec = nextSec;
+            if (this.signalEndN !== null) {
+              this.signalEndN = this.clampSignalEndN(anchorN + (1 - frac) * nextSec * sweepHz);
+            }
+            this.renderSignalControls();
+            this.dirtySignal = true;
+            this.dirtyNoiseTable = true;
+          }
+          return;
+        }
         if (!target.matches("[data-waterfall-canvas]")) return;
         if (this.spectrumAcc.maxScrollRow() <= 0) return;
         e.preventDefault();
@@ -427,6 +691,11 @@ export class DebugView extends Component {
         drawSignalOverTimeCanvas(c, this.signalRing, {
           windowSec: this.signalWindowSec,
           sweepHz: this.status?.sweepHz ?? 50,
+          endN: this.signalEndN,
+          refN: this.signalRefN,
+          yMinDbm: this.signalYMin,
+          yMaxDbm: this.signalYMax,
+          yZoomBox: this.signalYZoomBox,
           freqs: this.status?.freqs ?? RACEBAND,
           enabledChannels: this.signalEnabledCh,
           showFloor: this.signalShowFloor,
@@ -453,6 +722,9 @@ export class DebugView extends Component {
           showMaxHold: this.scanShowMaxHold,
           showAverage: this.scanShowAvg,
           showWifiOverlay: this.scanShowWifi,
+          viewStartMHz: this.scanZoomStartMHz,
+          viewStopMHz: this.scanZoomStopMHz,
+          zoomBox: this.scanZoomBox,
           hover: this.scanHover,
         });
         this.updateScanFindings();
@@ -463,7 +735,15 @@ export class DebugView extends Component {
     if (this.dirtyWaterfall) {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-waterfall-canvas]");
       if (c) {
-        drawWaterfallCanvas(c, this.spectrumAcc, this.scanShowWifi, this.waterfallHover);
+        drawWaterfallCanvas(
+          c,
+          this.spectrumAcc,
+          this.scanShowWifi,
+          this.waterfallHover,
+          this.scanZoomStartMHz,
+          this.scanZoomStopMHz,
+          this.scanZoomBox
+        );
         this.dirtyWaterfall = false;
       }
     }
@@ -615,9 +895,14 @@ export class DebugView extends Component {
           this.renderChannels();
           break;
         case "signal-window": {
-          const w = Number(t.dataset.win) as 10 | 30 | 120;
-          if (w === 10 || w === 30 || w === 120) {
+          const w = Number(t.dataset.win);
+          if (w > 0 && w <= 120) {
+            const sweepHz = this.status?.sweepHz ?? 50;
+            const centerN = this.signalViewEndN() - (this.signalWindowSec * sweepHz) / 2;
             this.signalWindowSec = w;
+            if (this.signalEndN !== null) {
+              this.signalEndN = this.clampSignalEndN(centerN + (w * sweepHz) / 2);
+            }
             this.renderSignalControls();
             this.dirtySignal = true;
             this.dirtyNoiseTable = true;
@@ -625,13 +910,31 @@ export class DebugView extends Component {
           break;
         }
         case "signal-freeze":
-          this.signalFrozen = !this.signalFrozen;
+          if (this.signalEndN === null) {
+            this.pauseSignalAt(this.signalRing.latestN());
+          } else {
+            this.signalEndN = null;
+          }
           this.renderSignalControls();
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
           break;
+        case "signal-reset-y":
+          this.signalYMin = DBM_MIN;
+          this.signalYMax = DBM_MAX;
+          this.renderSignalControls();
+          this.dirtySignal = true;
+          break;
+        case "signal-zoom-floor":
+          this.signalYMin = -102;
+          this.signalYMax = -68;
+          this.renderSignalControls();
+          this.dirtySignal = true;
+          break;
         case "signal-clear":
           this.signalRing.clear();
+          this.signalEndN = null;
+          this.renderSignalControls();
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
           break;
@@ -715,6 +1018,11 @@ export class DebugView extends Component {
           this.spectrumAcc.setScrollRow(0);
           this.updateScanFindings();
           this.dirtyWaterfall = true;
+          break;
+        case "scan-reset-zoom":
+          this.scanZoomStartMHz = null;
+          this.scanZoomStopMHz = null;
+          this.renderScan();
           break;
         case "scan-preset": {
           const start = Number(t.dataset.start) || 5180;
@@ -1335,14 +1643,19 @@ export class DebugView extends Component {
     const freqs = this.status?.freqs ?? RACEBAND;
     const hasPts = this.signalRing.points.length > 0;
     const allOn = this.signalEnabledCh.every(Boolean);
+    const isLive = this.signalEndN === null;
+    const isYZoomed = this.signalYMin !== DBM_MIN || this.signalYMax !== DBM_MAX;
     this.slot("signal-controls").innerHTML = `
       <div class="debug-toolbar">
         <div class="debug-toolbar-left">
+          <button type="button" class="btn btn-sm scope-live-btn ${isLive ? "btn-armed" : "btn-ghost"}" data-action="signal-freeze" title="${isLive ? "Following live 50 Hz stream — click to pause, or drag the chart to scroll back" : "Paused / scrolled back — click to jump back to live"}">
+            <span class="status-dot ${isLive ? "is-up" : ""}"></span><span>Live</span>
+          </button>
           <div class="segmented" role="group" aria-label="Time window">
-            ${([10, 30, 120] as const)
+            ${([5, 10, 30, 120] as const)
               .map(
                 (w) =>
-                  `<button type="button" class="${this.signalWindowSec === w ? "is-active" : ""}" data-action="signal-window" data-win="${w}">${w === 120 ? "2 min" : `${w} s`}</button>`
+                  `<button type="button" class="${Math.round(this.signalWindowSec) === w ? "is-active" : ""}" data-action="signal-window" data-win="${w}">${w === 120 ? "2 min" : `${w} s`}</button>`
               )
               .join("")}
           </div>
@@ -1362,9 +1675,11 @@ export class DebugView extends Component {
           </div>
         </div>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm debug-btn-transport ${this.signalFrozen ? "is-paused" : "is-running"}" data-action="signal-freeze">
-            ${this.signalFrozen ? icons.play(14) : icons.pause(14)}<span>${this.signalFrozen ? "Resume" : "Freeze"}</span>
-          </button>
+          ${
+            isYZoomed
+              ? `<button type="button" class="btn btn-sm debug-btn-transport is-paused mono" data-action="signal-reset-y" title="Reset Y-axis dBm zoom to full scale (${DBM_MIN}…${DBM_MAX} dBm)">Y: ${this.signalYMin}…${this.signalYMax} dBm ×</button>`
+              : `<button type="button" class="btn btn-sm btn-ghost" data-action="signal-zoom-floor" title="Zoom Y-axis into the noise floor region (−102…−68 dBm), or drag vertically on the Y-axis">Zoom floor Y</button>`
+          }
           <button type="button" class="btn btn-sm" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
           <div class="debug-btn-group" role="group" aria-label="Export signal chart">
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts ? "" : "disabled"} title="Download recorded 50 Hz samples as CSV">CSV</button>
@@ -1384,13 +1699,14 @@ export class DebugView extends Component {
           })
           .join("")}
         <button type="button" class="btn btn-sm btn-ghost debug-ch-all-btn" data-action="signal-ch-all">${allOn ? "Hide all" : "Show all"}</button>
+        <span class="note debug-chart-hint">${isLive ? "Live · drag horizontally to scroll back, wheel to zoom time, drag Y-axis (or Shift+wheel) to zoom dBm" : "Paused · drag to scroll, wheel to zoom, double-click or click Live to resume"}</span>
       </div>`;
   }
 
   private renderNoiseTable(): void {
     const freqs = this.status?.freqs ?? RACEBAND;
     const sweepHz = this.status?.sweepHz ?? 50;
-    const summary = this.signalRing.computeStats(this.signalWindowSec, freqs, this.pilots, sweepHz);
+    const summary = this.signalRing.computeStats(this.signalWindowSec, freqs, this.pilots, sweepHz, this.signalEndN);
     const triggerRows = summary.rows.filter((r) => r.pctWouldTrigger > 0);
     const noisyRows = summary.rows.filter((r) => r.pctWouldTrigger === 0 && (r.hitsPerSec >= 0.5 || (r.sd !== null && r.sd > 2.5)));
 
@@ -1497,6 +1813,7 @@ export class DebugView extends Component {
     const isFull5 = prev.start === "5180" && prev.stop === "5917" && prev.step === "5";
     const isFast15 = prev.start === "5180" && prev.stop === "5917" && prev.step === "15";
     const isRb5 = prev.start === "5650" && prev.stop === "5925" && prev.step === "5";
+    const isFreqZoomed = this.scanZoomStartMHz !== null && this.scanZoomStopMHz !== null;
     this.slot("scan").innerHTML = `
       <div class="debug-toolbar">
         <div class="debug-toolbar-left">
@@ -1527,6 +1844,11 @@ export class DebugView extends Component {
           </div>
         </div>
         <div class="debug-connect-actions">
+          ${
+            isFreqZoomed
+              ? `<button type="button" class="btn btn-sm debug-btn-transport is-paused mono" data-action="scan-reset-zoom" title="Reset frequency box zoom (or double-click chart)">Zoom: ${this.scanZoomStartMHz}–${this.scanZoomStopMHz} MHz ×</button>`
+              : ""
+          }
           <button type="button" class="btn btn-sm" data-action="scan" ${on && !this.scanning && !this.scanLive ? "" : "disabled"}>
             ${icons.signal(14)}<span>${this.scanning ? "Scanning…" : "Scan once"}</span>
           </button>
@@ -1625,13 +1947,13 @@ export class DebugView extends Component {
     const sc = this.spectrumAcc.scrollRow;
     if (wfNote) {
       if (!total) {
-        wfNote.textContent = "Scroll wheel or drag to inspect history";
+        wfNote.textContent = "Drag horizontally to zoom MHz · wheel/drag vertically to scroll time";
       } else if (sc > 0) {
-        wfNote.textContent = `Scrolled · rows -${sc + 1}..-${Math.min(total, sc + vis)} of ${total}`;
+        wfNote.textContent = `Scrolled · rows -${sc + 1}..-${Math.min(total, sc + vis)} of ${total} · drag box to zoom MHz`;
       } else if (total > vis) {
-        wfNote.textContent = `Live (top ${vis} of ${total} passes · wheel/drag to scroll)`;
+        wfNote.textContent = `Live (top ${vis} of ${total} passes · wheel to scroll, drag horizontally to zoom MHz)`;
       } else {
-        wfNote.textContent = `Live (${total} pass${total === 1 ? "" : "es"})`;
+        wfNote.textContent = `Live (${total} pass${total === 1 ? "" : "es"} · drag horizontally on chart to zoom MHz)`;
       }
     }
     if (wfJumpBtn) {

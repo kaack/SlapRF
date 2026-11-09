@@ -215,11 +215,19 @@ export class SignalRingBuffer {
     }
   }
 
-  /** Slice points within the last `windowSec` seconds (based on `n` at `sweepHz`). */
-  public windowPoints(windowSec: number, sweepHz = 50): SignalPoint[] {
+  public latestN(): number {
+    return this.points.length ? this.points[this.points.length - 1].n : 0;
+  }
+
+  public earliestN(): number {
+    return this.points.length ? this.points[0].n : 0;
+  }
+
+  /** Slice points within `[endN - windowSec * sweepHz, endN]` (or up to the latest point when `endN` is null). */
+  public windowPoints(windowSec: number, sweepHz = 50, endN: number | null = null): SignalPoint[] {
     if (!this.points.length) return [];
-    const lastN = this.points[this.points.length - 1].n;
-    const minN = lastN - Math.round(windowSec * sweepHz);
+    const targetEndN = endN ?? this.points[this.points.length - 1].n;
+    const minN = targetEndN - Math.round(windowSec * sweepHz);
     // Binary search for minN
     let lo = 0;
     let hi = this.points.length - 1;
@@ -228,7 +236,20 @@ export class SignalRingBuffer {
       if (this.points[mid].n < minN) lo = mid + 1;
       else hi = mid;
     }
-    return this.points.slice(lo);
+    if (endN === null) {
+      return this.points.slice(lo);
+    }
+    // Binary search for first point > targetEndN
+    let endIdx = this.points.length;
+    let rLo = lo;
+    let rHi = this.points.length;
+    while (rLo < rHi) {
+      const mid = (rLo + rHi) >> 1;
+      if (this.points[mid].n <= targetEndN) rLo = mid + 1;
+      else rHi = mid;
+    }
+    endIdx = rLo;
+    return this.points.slice(lo, endIdx);
   }
 
   /** Compute per-channel statistics over the active window (§5.2, matching noise_stats.py). */
@@ -236,9 +257,10 @@ export class SignalRingBuffer {
     windowSec: number,
     freqs: number[],
     pilots: PilotThresholdInfo[],
-    sweepHz = 50
+    sweepHz = 50,
+    endN: number | null = null
   ): SignalStatsSummary {
-    const pts = this.windowPoints(windowSec, sweepHz);
+    const pts = this.windowPoints(windowSec, sweepHz, endN);
     if (pts.length < 2) {
       const emptyRows: ChannelNoiseRow[] = freqs.map((f, i) => {
         const pilot = pilots.find((p) => p.enabled && p.frequencyMhz === f);
@@ -356,6 +378,11 @@ export class SignalRingBuffer {
 export interface SignalChartOptions {
   windowSec: number;
   sweepHz: number;
+  endN?: number | null;
+  refN?: number | null;
+  yMinDbm?: number;
+  yMaxDbm?: number;
+  yZoomBox?: { y0: number; y1: number } | null;
   freqs: number[];
   enabledChannels: boolean[];
   showFloor: boolean;
@@ -382,44 +409,84 @@ export function drawSignalOverTimeCanvas(
 
   ctx.clearRect(0, 0, W, H);
 
+  const yMin = opts.yMinDbm ?? DBM_MIN;
+  const yMax = Math.max(yMin + 4, opts.yMaxDbm ?? DBM_MAX);
+  const ySpan = yMax - yMin;
+  const isYZoomed = yMin !== DBM_MIN || yMax !== DBM_MAX;
+
   const yOf = (dbm: number) => {
-    const c = Math.max(DBM_MIN, Math.min(DBM_MAX, dbm));
-    return T + (1 - (c - DBM_MIN) / (DBM_MAX - DBM_MIN)) * plotH;
+    return T + (1 - (dbm - yMin) / ySpan) * plotH;
+  };
+  const dbmAtY = (y: number) => {
+    return yMin + (1 - (y - T) / plotH) * ySpan;
   };
 
-  // Horizontal grid lines (dBm)
+  // Horizontal grid lines (dBm) with adaptive step when Y-zoomed
+  const dStep = ySpan <= 12 ? 2 : ySpan <= 30 ? 5 : 10;
   ctx.font = `10px ${tokens.fontMono}`;
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
-  for (let d = DBM_MIN; d <= DBM_MAX; d += 10) {
+  for (let d = Math.ceil(yMin / dStep) * dStep; d <= yMax; d += dStep) {
     const y = Math.round(yOf(d)) + 0.5;
+    if (y < T - 1 || y > T + plotH + 1) continue;
     ctx.strokeStyle = tokens.border;
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(L, y);
     ctx.lineTo(W - R, y);
     ctx.stroke();
-    ctx.fillStyle = tokens.text3;
+    ctx.fillStyle = isYZoomed ? tokens.accent : tokens.text3;
     ctx.fillText(`${d}`, L - 6, y);
   }
 
-  // Vertical time grid lines
-  const windowSweeps = Math.max(1, Math.round(opts.windowSec * opts.sweepHz));
-  const stepSec = opts.windowSec <= 15 ? 2 : opts.windowSec <= 40 ? 5 : 20;
+  // Vertical time grid lines (labelled relative to now or to when the view was paused, matching PilotRssiChart)
+  const windowSweeps = Math.max(1, opts.windowSec * opts.sweepHz);
+  const latestN = ring.latestN();
+  const viewEndN = opts.endN ?? latestN;
+  const refN = opts.endN === null || opts.endN === undefined ? latestN : (opts.refN ?? latestN);
+  const startN = viewEndN - windowSweeps;
+  const xOfN = (n: number) => L + ((n - startN) / windowSweeps) * plotW;
+
+  const stepSec =
+    opts.windowSec <= 3
+      ? 0.5
+      : opts.windowSec <= 8
+        ? 1
+        : opts.windowSec <= 16
+          ? 2
+          : opts.windowSec <= 40
+            ? 5
+            : opts.windowSec <= 80
+              ? 10
+              : 20;
+  const stepSweeps = stepSec * opts.sweepHz;
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  for (let s = 0; s <= opts.windowSec; s += stepSec) {
-    const x = Math.round(L + (1 - s / opts.windowSec) * plotW) + 0.5;
-    ctx.strokeStyle = tokens.border;
-    ctx.beginPath();
-    ctx.moveTo(x, T);
-    ctx.lineTo(x, T + plotH);
-    ctx.stroke();
-    ctx.fillStyle = tokens.text3;
-    ctx.fillText(s === 0 ? "now" : `-${s}s`, x, T + plotH + 6);
+  if (stepSweeps > 0) {
+    const firstTickN = refN - Math.floor((refN - startN) / stepSweeps) * stepSweeps;
+    for (let tN = firstTickN; tN <= viewEndN + 0.5; tN += stepSweeps) {
+      const x = Math.round(xOfN(tN)) + 0.5;
+      if (x < L - 1 || x > W - R + 1) continue;
+      ctx.strokeStyle = tokens.border;
+      ctx.beginPath();
+      ctx.moveTo(x, T);
+      ctx.lineTo(x, T + plotH);
+      ctx.stroke();
+      const agoSec = Math.max(0, (refN - tN) / opts.sweepHz);
+      ctx.fillStyle = tokens.text3;
+      const lbl =
+        agoSec < 0.05
+          ? opts.endN === null || opts.endN === undefined
+            ? "now"
+            : "paused"
+          : stepSec < 1
+            ? `-${agoSec.toFixed(1)}s`
+            : `-${Math.round(agoSec)}s`;
+      ctx.fillText(lbl, x, T + plotH + 6);
+    }
   }
 
-  const pts = ring.windowPoints(opts.windowSec, opts.sweepHz);
+  const pts = ring.windowPoints(opts.windowSec, opts.sweepHz, opts.endN ?? null);
   if (!pts.length) {
     ctx.fillStyle = tokens.text3;
     ctx.textAlign = "center";
@@ -428,10 +495,6 @@ export function drawSignalOverTimeCanvas(
     ctx.fillText("Waiting for live sweep samples…", L + plotW / 2, T + plotH / 2);
     return;
   }
-
-  const lastN = pts[pts.length - 1].n;
-  const startN = lastN - windowSweeps;
-  const xOfN = (n: number) => L + ((n - startN) / windowSweeps) * plotW;
 
   // Clip plot region
   ctx.save();
@@ -535,10 +598,35 @@ export function drawSignalOverTimeCanvas(
     ctx.stroke();
   }
 
+  // Draw Y-axis zoom selection band when dragging vertically
+  if (opts.yZoomBox) {
+    const ya = Math.max(T, Math.min(T + plotH, Math.min(opts.yZoomBox.y0, opts.yZoomBox.y1)));
+    const yb = Math.max(T, Math.min(T + plotH, Math.max(opts.yZoomBox.y0, opts.yZoomBox.y1)));
+    ctx.fillStyle = "rgba(212, 255, 58, 0.12)";
+    ctx.fillRect(L, ya, plotW, Math.max(1, yb - ya));
+    ctx.strokeStyle = tokens.accent;
+    ctx.lineWidth = 1;
+    ctx.setLineDash([4, 3]);
+    ctx.beginPath();
+    ctx.moveTo(L, ya + 0.5);
+    ctx.lineTo(W - R, ya + 0.5);
+    ctx.moveTo(L, yb + 0.5);
+    ctx.lineTo(W - R, yb + 0.5);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    const dHigh = Math.round(dbmAtY(ya));
+    const dLow = Math.round(dbmAtY(yb));
+    ctx.fillStyle = tokens.accent;
+    ctx.font = `10.5px ${tokens.fontMono}`;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(`Zoom Y: ${dLow} to ${dHigh} dBm`, L + 8, (ya + yb) / 2);
+  }
+
   ctx.restore();
 
   // Hover readout
-  if (opts.hover && opts.hover.x >= L && opts.hover.x <= W - R && opts.hover.y >= T && opts.hover.y <= T + plotH) {
+  if (!opts.yZoomBox && opts.hover && opts.hover.x >= L && opts.hover.x <= W - R && opts.hover.y >= T && opts.hover.y <= T + plotH) {
     const targetN = startN + ((opts.hover.x - L) / plotW) * windowSweeps;
     // Find nearest point by n
     let best = pts[0];
@@ -574,7 +662,7 @@ export function drawSignalOverTimeCanvas(
       }
     }
 
-    const ageSec = ((lastN - best.n) / opts.sweepHz).toFixed(2);
+    const ageSec = ((refN - best.n) / opts.sweepHz).toFixed(2);
     const lines: Array<{ text: string; color: string }> = [
       { text: `-${ageSec} s  (sweep #${best.n})`, color: tokens.text2 },
     ];
@@ -591,10 +679,13 @@ export function drawSignalOverTimeCanvas(
         color: CHANNEL_COLORS[ch],
       });
       if (ch === bestCh) {
-        ctx.fillStyle = CHANNEL_COLORS[ch];
-        ctx.beginPath();
-        ctx.arc(hx, yOf(v), 3.5, 0, Math.PI * 2);
-        ctx.fill();
+        const cy = yOf(v);
+        if (cy >= T && cy <= T + plotH) {
+          ctx.fillStyle = CHANNEL_COLORS[ch];
+          ctx.beginPath();
+          ctx.arc(hx, cy, 3.5, 0, Math.PI * 2);
+          ctx.fill();
+        }
       }
     }
     drawTooltipBox(ctx, hx, opts.hover.y, lines, L, W - R, T, T + plotH, tokens);
@@ -906,7 +997,62 @@ export interface SpectrumCanvasOptions {
   showMaxHold: boolean;
   showAverage: boolean;
   showWifiOverlay: boolean;
+  viewStartMHz?: number | null;
+  viewStopMHz?: number | null;
+  zoomBox?: { x0: number; x1: number } | null;
   hover: { x: number; y: number } | null;
+}
+
+function freqTickStep(spanMHz: number): number {
+  if (spanMHz <= 40) return 5;
+  if (spanMHz <= 90) return 10;
+  if (spanMHz <= 200) return 20;
+  if (spanMHz <= 420) return 50;
+  return 100;
+}
+
+function drawFreqZoomBox(
+  ctx: CanvasRenderingContext2D,
+  zoomBox: { x0: number; x1: number },
+  vStart: number,
+  span: number,
+  L: number,
+  R: number,
+  T: number,
+  W: number,
+  plotW: number,
+  plotH: number,
+  tokens: ThemeTokens
+): void {
+  const xa = Math.max(L, Math.min(W - R, Math.min(zoomBox.x0, zoomBox.x1)));
+  const xb = Math.max(L, Math.min(W - R, Math.max(zoomBox.x0, zoomBox.x1)));
+  ctx.fillStyle = "rgba(212, 255, 58, 0.14)";
+  ctx.fillRect(xa, T, Math.max(1, xb - xa), plotH);
+  ctx.strokeStyle = tokens.accent;
+  ctx.lineWidth = 1;
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath();
+  ctx.moveTo(xa + 0.5, T);
+  ctx.lineTo(xa + 0.5, T + plotH);
+  ctx.moveTo(xb + 0.5, T);
+  ctx.lineTo(xb + 0.5, T + plotH);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  const f0 = Math.round(vStart + ((xa - L) / plotW) * span);
+  const f1 = Math.round(vStart + ((xb - L) / plotW) * span);
+  const label = `${f0}–${f1} MHz (${Math.max(0, f1 - f0)} MHz)`;
+  ctx.font = `10.5px ${tokens.fontMono}`;
+  const tw = ctx.measureText(label).width + 12;
+  const cx = Math.max(L + tw / 2 + 4, Math.min(W - R - tw / 2 - 4, (xa + xb) / 2));
+  ctx.fillStyle = "rgba(11, 12, 15, 0.88)";
+  ctx.fillRect(cx - tw / 2, T + 8, tw, 18);
+  ctx.strokeStyle = tokens.accent;
+  ctx.strokeRect(cx - tw / 2 + 0.5, T + 8.5, tw - 1, 17);
+  ctx.fillStyle = tokens.accent;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText(label, cx, T + 17);
 }
 
 /** Draw the upgraded Spectrum Scan canvas (§5.4 + §5.5). */
@@ -936,9 +1082,11 @@ export function drawSpectrumCanvas(
     return;
   }
 
-  const stop = s.start + s.step * (s.dbm.length - 1);
-  const span = Math.max(1, stop - s.start);
-  const xOf = (f: number) => L + ((f - s.start) / span) * plotW;
+  const scanStop = s.start + s.step * (s.dbm.length - 1);
+  const vStart = Math.max(s.start, Math.min(scanStop - s.step, opts.viewStartMHz ?? s.start));
+  const vStop = Math.min(scanStop, Math.max(vStart + s.step, opts.viewStopMHz ?? scanStop));
+  const span = Math.max(1, vStop - vStart);
+  const xOf = (f: number) => L + ((f - vStart) / span) * plotW;
   const yOf = (d: number) =>
     T + (1 - (Math.max(DBM_MIN, Math.min(DBM_MAX, d)) - DBM_MIN) / (DBM_MAX - DBM_MIN)) * plotH;
 
@@ -958,16 +1106,22 @@ export function drawSpectrumCanvas(
     ctx.fillText(`${d}`, L - 6, y);
   }
 
-  // Frequency ticks every 100 MHz
+  // Adaptive frequency ticks
+  const fStep = freqTickStep(span);
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  for (let f = Math.ceil(s.start / 100) * 100; f <= stop; f += 100) {
+  for (let f = Math.ceil(vStart / fStep) * fStep; f <= vStop; f += fStep) {
     const x = Math.round(xOf(f)) + 0.5;
     ctx.fillStyle = tokens.text3;
     ctx.fillText(`${f}`, x, T + plotH + 6);
   }
 
-  drawBandOverlay(ctx, s.start, stop, L, R, T, plotW, plotH, opts.showWifiOverlay, tokens);
+  ctx.save();
+  ctx.beginPath();
+  ctx.rect(L, T, plotW, plotH);
+  ctx.clip();
+
+  drawBandOverlay(ctx, vStart, vStop, L, R, T, plotW, plotH, opts.showWifiOverlay, tokens);
 
   // Max-hold trace
   if (opts.showMaxHold && acc.maxHold && acc.maxHold.length === s.dbm.length) {
@@ -1002,74 +1156,98 @@ export function drawSpectrumCanvas(
     ctx.globalAlpha = 1;
   }
 
-  // Live / current scan trace
+  // Live / current scan trace & peak within visible range
   ctx.strokeStyle = tokens.accent;
   ctx.lineWidth = 1.6;
   ctx.lineJoin = "round";
   ctx.beginPath();
-  let peakIdx = 0;
+  let peakIdx = -1;
   for (let i = 0; i < s.dbm.length; i++) {
-    if (s.dbm[i] > s.dbm[peakIdx]) peakIdx = i;
-    const x = xOf(s.start + i * s.step);
+    const f = s.start + i * s.step;
+    if (f >= vStart && f <= vStop && (peakIdx < 0 || s.dbm[i] > s.dbm[peakIdx])) {
+      peakIdx = i;
+    }
+    const x = xOf(f);
     const y = yOf(s.dbm[i]);
     if (i === 0) ctx.moveTo(x, y);
     else ctx.lineTo(x, y);
   }
   ctx.stroke();
 
-  // Peak dot & label
-  const peakFreq = s.start + peakIdx * s.step;
-  const px = xOf(peakFreq);
-  const py = yOf(s.dbm[peakIdx]);
-  ctx.fillStyle = tokens.accent;
-  ctx.beginPath();
-  ctx.arc(px, py, 3.5, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.fillStyle = tokens.text;
-  ctx.font = `10.5px ${tokens.fontMono}`;
-  ctx.textAlign = px > W - R - 130 ? "right" : "left";
-  ctx.textBaseline = "bottom";
-  ctx.fillText(`${peakFreq} MHz · ${s.dbm[peakIdx]} dBm`, px + (px > W - R - 130 ? -6 : 6), Math.max(T + 22, py - 5));
+  // Peak dot & label inside visible range
+  if (peakIdx >= 0) {
+    const peakFreq = s.start + peakIdx * s.step;
+    const px = xOf(peakFreq);
+    const py = yOf(s.dbm[peakIdx]);
+    ctx.fillStyle = tokens.accent;
+    ctx.beginPath();
+    ctx.arc(px, py, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = tokens.text;
+    ctx.font = `10.5px ${tokens.fontMono}`;
+    ctx.textAlign = px > W - R - 130 ? "right" : "left";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(`${peakFreq} MHz · ${s.dbm[peakIdx]} dBm`, px + (px > W - R - 130 ? -6 : 6), Math.max(T + 22, py - 5));
+  }
+
+  if (opts.zoomBox) {
+    drawFreqZoomBox(ctx, opts.zoomBox, vStart, span, L, R, T, W, plotW, plotH, tokens);
+  }
+
+  ctx.restore();
 
   // Hover readout
-  if (opts.hover && opts.hover.x >= L && opts.hover.x <= W - R && opts.hover.y >= T && opts.hover.y <= T + plotH) {
-    const fCursor = s.start + ((opts.hover.x - L) / plotW) * span;
+  if (!opts.zoomBox && opts.hover && opts.hover.x >= L && opts.hover.x <= W - R && opts.hover.y >= T && opts.hover.y <= T + plotH) {
+    const fCursor = vStart + ((opts.hover.x - L) / plotW) * span;
     const idx = Math.max(0, Math.min(s.dbm.length - 1, Math.round((fCursor - s.start) / Math.max(1, s.step))));
     const f = s.start + idx * s.step;
     const hx = xOf(f);
     const hy = yOf(s.dbm[idx]);
 
-    ctx.strokeStyle = tokens.text3;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([2, 2]);
-    ctx.beginPath();
-    ctx.moveTo(hx, T);
-    ctx.lineTo(hx, T + plotH);
-    ctx.stroke();
-    ctx.setLineDash([]);
+    if (hx >= L && hx <= W - R) {
+      ctx.strokeStyle = tokens.text3;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([2, 2]);
+      ctx.beginPath();
+      ctx.moveTo(hx, T);
+      ctx.lineTo(hx, T + plotH);
+      ctx.stroke();
+      ctx.setLineDash([]);
 
-    ctx.fillStyle = tokens.text;
-    ctx.beginPath();
-    ctx.arc(hx, hy, 3, 0, Math.PI * 2);
-    ctx.fill();
+      ctx.fillStyle = tokens.text;
+      ctx.beginPath();
+      ctx.arc(hx, hy, 3, 0, Math.PI * 2);
+      ctx.fill();
 
-    const tipLines: Array<{ text: string; color: string }> = [
-      { text: `${f} MHz  (${nearestBandHint(f)})`, color: tokens.text },
-      { text: `Current: ${s.dbm[idx]} dBm`, color: tokens.accent },
-    ];
-    if (avg) tipLines.push({ text: `Average: ${avg[idx].toFixed(1)} dBm`, color: "#38bdf8" });
-    if (acc.maxHold) tipLines.push({ text: `Max hold: ${acc.maxHold[idx]} dBm`, color: tokens.text2 });
+      const tipLines: Array<{ text: string; color: string }> = [
+        { text: `${f} MHz  (${nearestBandHint(f)})`, color: tokens.text },
+        { text: `Current: ${s.dbm[idx]} dBm`, color: tokens.accent },
+      ];
+      if (avg) tipLines.push({ text: `Average: ${avg[idx].toFixed(1)} dBm`, color: "#38bdf8" });
+      if (acc.maxHold) tipLines.push({ text: `Max hold: ${acc.maxHold[idx]} dBm`, color: tokens.text2 });
 
-    drawTooltipBox(ctx, hx, opts.hover.y, tipLines, L, W - R, T, T + plotH, tokens);
+      drawTooltipBox(ctx, hx, opts.hover.y, tipLines, L, W - R, T, T + plotH, tokens);
+    }
   }
 }
 
-/** Draw the vertically scrollable Waterfall spectrogram canvas (§5.3). */
+export interface WaterfallCanvasOptions {
+  showWifiOverlay: boolean;
+  viewStartMHz?: number | null;
+  viewStopMHz?: number | null;
+  zoomBox?: { x0: number; x1: number } | null;
+  hover: { x: number; y: number } | null;
+}
+
+/** Draw the vertically scrollable & frequency-zoomable Waterfall spectrogram canvas (§5.3). */
 export function drawWaterfallCanvas(
   canvas: HTMLCanvasElement,
   acc: SpectrumAccumulator,
   showWifiOverlay: boolean,
-  hover: { x: number; y: number } | null
+  hover: { x: number; y: number } | null,
+  viewStartMHz?: number | null,
+  viewStopMHz?: number | null,
+  zoomBox?: { x0: number; x1: number } | null
 ): void {
   const s = acc.latest;
   const off = acc.getOffscreen();
@@ -1093,17 +1271,28 @@ export function drawWaterfallCanvas(
     return;
   }
 
-  const stop = s.start + s.step * (s.dbm.length - 1);
-  const span = Math.max(1, stop - s.start);
-  const xOf = (f: number) => L + ((f - s.start) / span) * plotW;
+  const scanStop = s.start + s.step * (s.dbm.length - 1);
+  const vStart = Math.max(s.start, Math.min(scanStop - s.step, viewStartMHz ?? s.start));
+  const vStop = Math.min(scanStop, Math.max(vStart + s.step, viewStopMHz ?? scanStop));
+  const span = Math.max(1, vStop - vStart);
+  const xOf = (f: number) => L + ((f - vStart) / span) * plotW;
 
   const visRows = acc.visibleRows;
   const startRow = Math.max(0, Math.min(acc.maxScrollRow(), acc.scrollRow));
 
-  // Draw the visible vertical slice [startRow .. startRow + visRows] from the offscreen history canvas
+  // Slice both horizontal frequency bins [bin0 .. bin1] and vertical rows [startRow .. startRow + visRows]
+  const bin0 = Math.max(0, Math.min(off.width - 1, (vStart - s.start) / Math.max(1, s.step)));
+  const bin1 = Math.max(bin0 + 1, Math.min(off.width, (vStop - s.start) / Math.max(1, s.step) + 1));
   ctx.save();
+  ctx.beginPath();
+  ctx.rect(L, T, plotW, plotH);
+  ctx.clip();
   ctx.imageSmoothingEnabled = false;
-  ctx.drawImage(off, 0, startRow, off.width, visRows, L, T, plotW, plotH);
+  ctx.drawImage(off, bin0, startRow, bin1 - bin0, visRows, L, T, plotW, plotH);
+  drawBandOverlay(ctx, vStart, vStop, L, R, T, plotW, plotH, showWifiOverlay, tokens);
+  if (zoomBox) {
+    drawFreqZoomBox(ctx, zoomBox, vStart, span, L, R, T, W, plotW, plotH, tokens);
+  }
   ctx.restore();
 
   // Border around waterfall plot
@@ -1139,20 +1328,19 @@ export function drawWaterfallCanvas(
   ctx.fillStyle = startRow > 0 ? tokens.warn : acc.history.length > visRows ? tokens.accent : "rgba(255, 255, 255, 0.18)";
   ctx.fillRect(sbX, thumbY, sbW, thumbH);
 
-  // X-axis frequency ticks
+  // Adaptive X-axis frequency ticks
+  const fStep = freqTickStep(span);
   ctx.textAlign = "center";
   ctx.textBaseline = "top";
-  for (let f = Math.ceil(s.start / 100) * 100; f <= stop; f += 100) {
+  for (let f = Math.ceil(vStart / fStep) * fStep; f <= vStop; f += fStep) {
     const x = Math.round(xOf(f)) + 0.5;
     ctx.fillStyle = tokens.text3;
     ctx.fillText(`${f}`, x, T + plotH + 6);
   }
 
-  drawBandOverlay(ctx, s.start, stop, L, R, T, plotW, plotH, showWifiOverlay, tokens);
-
   // Hover readout (MHz, dBm, age, pass index)
-  if (hover && hover.x >= L && hover.x <= W - R && hover.y >= T && hover.y <= T + plotH) {
-    const fCursor = s.start + ((hover.x - L) / plotW) * span;
+  if (!zoomBox && hover && hover.x >= L && hover.x <= W - R && hover.y >= T && hover.y <= T + plotH) {
+    const fCursor = vStart + ((hover.x - L) / plotW) * span;
     const binIdx = Math.max(0, Math.min(s.dbm.length - 1, Math.round((fCursor - s.start) / Math.max(1, s.step))));
     const localRow = Math.max(0, Math.min(visRows - 1, Math.floor(((hover.y - T) / plotH) * visRows)));
     const rowIdx = startRow + localRow;
