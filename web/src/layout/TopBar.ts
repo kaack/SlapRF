@@ -149,6 +149,8 @@ export class TopBar extends Component {
       })
       .join("");
 
+    const prevViewActionsHtml = this.el.querySelector<HTMLElement>("[data-topbar-view-actions]")?.innerHTML ?? "";
+
     this.el.innerHTML = `
       <div class="topbar-left">
         <div class="topbar-menu-wrap">
@@ -175,6 +177,9 @@ export class TopBar extends Component {
           <p>${meta.subtitle}</p>
         </div>
       </div>
-      <div class="topbar-actions">${actions}</div>`;
+      <div class="topbar-actions">
+        ${actions}
+        <span class="topbar-view-actions" data-topbar-view-actions>${prevViewActionsHtml}</span>
+      </div>`;
   }
 }

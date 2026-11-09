@@ -204,6 +204,9 @@
   flex-wrap: nowrap;
   flex-shrink: 0;
 }
+.topbar-view-actions {
+  display: contents;
+}
 .topbar-actions .btn {
   height: 35px;
   gap: 8px;

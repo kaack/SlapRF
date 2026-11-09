@@ -283,13 +283,7 @@ export class DebugView extends Component {
 
     el.innerHTML = `
       <div class="settings debug-page">
-        <section class="settings-section">
-          <div class="settings-intro">
-            <h2>Connect a timer</h2>
-            <p>Plug a timer into this computer over USB-C. Works with the firmware already on the board; nothing is flashed or saved.</p>
-          </div>
-          <div class="card" data-slot="connection"></div>
-        </section>
+        <div data-slot="connection"></div>
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Self-test</h2>
@@ -306,7 +300,7 @@ export class DebugView extends Component {
             <div data-slot="status"></div>
             <div class="debug-subbox debug-health-subbox" data-slot="health">
               <div class="debug-subbox-head">
-                <span class="debug-subbox-title">${icons.chart(14)}<span>Health trends</span></span>
+                <span class="debug-subbox-title" data-health-title>${icons.chart(14)}<span>Health trends</span></span>
                 <span class="note">Last 5 min · 2 s interval</span>
               </div>
               <div class="debug-health-grid" data-health-grid>
@@ -406,6 +400,12 @@ export class DebugView extends Component {
       </div>`;
 
     this.listen(el, "click", (e) => void this.onClick(e));
+    this.listen(document, "click", (e) => {
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest("[data-topbar-view-actions]")) {
+        void this.onClick(e);
+      }
+    });
     this.listen(el, "change", (e) => {
       const t = e.target as HTMLInputElement;
       if (t.matches("[data-all-ports]")) this.showAllPorts = t.checked;
@@ -459,6 +459,8 @@ export class DebugView extends Component {
       window.removeEventListener("beforeunload", onBeforeUnload);
       this.observer?.disconnect();
       window.clearInterval(this.statusTimer);
+      const topSlot = document.querySelector<HTMLElement>("[data-topbar-view-actions]");
+      if (topSlot) topSlot.innerHTML = "";
       // Leaving the page must not leave the timer streaming or scanning instead of timing.
       const stop = this.console.connected
         ? this.console.send(this.scanLive ? "LIVE 0\nSCAN STOP" : "LIVE 0").catch(() => undefined)
@@ -2330,39 +2332,34 @@ export class DebugView extends Component {
     const on = this.console.connected;
     const supported = TimerConsole.supported();
     const busy = this.busy !== null;
-    const ledClass = on ? "is-up" : busy ? "is-warn" : "";
-    const connText =
-      busy && !on
-        ? `${esc(this.busy!)}…`
+    const topSlot = document.querySelector<HTMLElement>("[data-topbar-view-actions]");
+    if (topSlot) {
+      const label = on
+        ? this.status?.label
+          ? `Connected · ${esc(this.status.label)}`
+          : "Connected"
+        : busy
+          ? `${esc(this.busy!)}…`
+          : "Connect";
+      const title = !supported
+        ? "USB debugging requires Chrome, Edge, or Brave (WebSerial)"
         : on
-          ? this.status
-            ? `Connected · ${esc(this.status.label || "timer")} · ${esc(this.status.fp)}`
-            : "Connected · waiting for status…"
-          : "Disconnected · select a USB port to connect";
-    this.slot("connection").innerHTML = `
-      <div class="debug-card-head">
-        <span class="debug-led-status">
-          <span class="status-dot ${ledClass}"></span>
-          <span class="note debug-head-note mono">${connText}</span>
-        </span>
-        <div class="debug-connect-actions">
-          ${
-            on
-              ? `<button type="button" class="btn btn-sm btn-ghost" data-action="read-config" ${busy ? "disabled" : ""}>Read config</button>
-                 <button type="button" class="btn btn-sm" data-action="disconnect" ${busy ? "disabled" : ""}>Disconnect</button>`
-              : `<button type="button" class="btn btn-sm btn-armed" data-action="connect" ${supported && !busy ? "" : "disabled"}>${icons.plug(14)}<span>Connect over USB</span></button>`
-          }
-        </div>
-      </div>
-      ${
-        !on && !busy
-          ? `<div class="debug-subbar">
-               <label class="check flasher-port-toggle"><input type="checkbox" data-all-ports ${this.showAllPorts ? "checked" : ""}/><span>Show all USB serial ports</span></label>
-             </div>`
-          : ""
-      }
-      ${!supported ? `<p class="note">USB debugging needs Chrome, Edge or Brave (WebSerial).</p>` : ""}
-      ${this.error ? `<div class="sim-error-note">${esc(this.error)}</div>` : ""}`;
+          ? `Connected over USB${this.status ? ` (${this.status.label || "timer"} · ${this.status.fp})` : ""} — click to disconnect`
+          : "Connect a timer over USB-C";
+      topSlot.innerHTML = `
+        <button type="button" class="btn ${on ? "btn-armed" : "btn-ghost"}" data-action="${on ? "disconnect" : "connect"}" ${supported && !busy ? "" : "disabled"} title="${esc(title)}" aria-label="${esc(title)}">
+          ${on ? icons.plug(19) : icons.plugOff(19)}<span class="topbar-btn-label">${label}</span>
+        </button>`;
+    }
+
+    const bannerParts: string[] = [];
+    if (!supported) {
+      bannerParts.push(`<div class="sim-error-note">USB debugging needs Chrome, Edge or Brave (WebSerial).</div>`);
+    }
+    if (this.error) {
+      bannerParts.push(`<div class="sim-error-note">${esc(this.error)}</div>`);
+    }
+    this.slot("connection").innerHTML = bannerParts.join("");
   }
 
   private renderSelfTest(): void {
@@ -2454,6 +2451,12 @@ export class DebugView extends Component {
       })
       .join("");
 
+    const active = Boolean(on && s);
+    const healthTitle = this.el.querySelector<HTMLElement>("[data-health-title]");
+    if (healthTitle) {
+      healthTitle.classList.toggle("is-active", active);
+    }
+
     this.slot("status").innerHTML = `
       <div class="debug-card-head">
         <span class="debug-led-status">
@@ -2461,6 +2464,7 @@ export class DebugView extends Component {
           <span class="note debug-head-note mono">${headText}</span>
         </span>
         <div class="debug-connect-actions">
+          <button type="button" class="btn btn-sm btn-ghost" data-action="read-config" ${on && !this.busy ? "" : "disabled"}>Read config</button>
           <button type="button" class="btn btn-sm btn-ghost" data-action="refresh-status" ${on && !this.busy ? "" : "disabled"}>
             ${icons.reset(14)}<span>Refresh</span>
           </button>
@@ -2469,7 +2473,7 @@ export class DebugView extends Component {
       <div class="debug-status-panels">
         <div class="debug-subbox">
           <div class="debug-subbox-head">
-            <span class="debug-subbox-title">${icons.cpu(14)}<span>Identity &amp; hardware</span></span>
+            <span class="debug-subbox-title ${active ? "is-active" : ""}">${icons.cpu(14)}<span>Identity &amp; hardware</span></span>
             <span class="badge ${unprov ? "badge-warn" : "mono"}">${s ? (unprov ? `${esc(s.fp)} · not set up` : esc(s.fp)) : "—"}</span>
           </div>
           <dl class="debug-kv-list">
@@ -2494,7 +2498,7 @@ export class DebugView extends Component {
 
         <div class="debug-subbox">
           <div class="debug-subbox-head">
-            <span class="debug-subbox-title">${icons.signal(14)}<span>5.8 GHz receiver</span></span>
+            <span class="debug-subbox-title ${active && s?.rf.ok && s?.rf.enabled ? "is-active" : ""}">${icons.signal(14)}<span>5.8 GHz receiver</span></span>
             ${rfBadge}
           </div>
           <dl class="debug-kv-list">
@@ -2519,7 +2523,7 @@ export class DebugView extends Component {
 
         <div class="debug-subbox">
           <div class="debug-subbox-head">
-            <span class="debug-subbox-title">${icons.wifi(14)}<span>System &amp; network</span></span>
+            <span class="debug-subbox-title ${active ? "is-active" : ""}">${icons.wifi(14)}<span>System &amp; network</span></span>
             <span class="badge">${s ? (s.net ? `${esc(s.net.mode)} · Ch ${s.channel}` : `Ch ${s.channel}`) : "—"}</span>
           </div>
           <dl class="debug-kv-list">

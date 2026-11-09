@@ -3817,8 +3817,12 @@ body.is-gate-dragging * {
   text-overflow: ellipsis;
 }
 .debug-subbox-title svg {
-  color: var(--accent);
+  color: var(--text-3);
   flex-shrink: 0;
+  transition: color 0.15s;
+}
+.debug-subbox-title.is-active svg {
+  color: var(--accent);
 }
 .debug-kv-list {
   display: flex;
@@ -4001,7 +4005,7 @@ body.is-gate-dragging * {
   border-radius: calc(var(--radius-sm) - 1px);
 }
 .debug-axis-pill.is-armed .debug-axis-pill-main svg {
-  color: var(--accent);
+  color: var(--text-2);
 }
 .debug-axis-pill.is-unarmed .debug-axis-pill-main svg {
   color: var(--text-3);
@@ -4105,6 +4109,9 @@ body.is-gate-dragging * {
   font-size: 12px;
   color: var(--text-2);
   white-space: nowrap;
+}
+.debug-overlay-checks .check input {
+  accent-color: var(--text-2);
 }
 .debug-overlay-sep {
   width: 1px;
