@@ -276,6 +276,7 @@ static void hub_handle_join(const spoke_join_frame_t *j) {
     hub_assign_frame_t a = { FRAME_MAGIC_0, FRAME_MAGIC_ASSIGN, j->fingerprint, slot, 0 };
     a.crc8 = compute_crc8((const uint8_t *)&a, sizeof(a) - 1);
     espnow_send(&a, sizeof(a));
+    slaprf_diag_note_spoke(slot, j->fingerprint, j->profile, j->timer_label);
     hub_send_hello(slot, j->role, j->fingerprint, j->profile, j->sweep_hz, j->timer_label);
 }
 
@@ -291,6 +292,7 @@ static void hub_listen_until(int64_t until_us) {
             if (buf[1] == FRAME_MAGIC_JOIN && n == (int)sizeof(spoke_join_frame_t)) {
                 hub_handle_join((const spoke_join_frame_t *)buf);
             } else if (buf[1] == FRAME_MAGIC_WINDOW || buf[1] == FRAME_MAGIC_SINGLE) {
+                slaprf_diag_note_spoke_rx(buf[2]);
                 slaprf_forward_udp_to_laptop(buf, (uint32_t)n);
             }
         }

@@ -80,6 +80,16 @@ static uint8_t s_tx_drops;
 static vprintf_like_t s_prev_vprintf;
 static volatile uint8_t s_slot;
 
+typedef struct {
+    uint32_t fp;
+    uint8_t profile;
+    char label[25];
+    int64_t last_rx_us;
+    uint32_t frames;
+} diag_spoke_peer_t;
+
+static diag_spoke_peer_t s_peer_spokes[6]; // index 0..5 = TDMA slot 2..7
+
 static volatile uint32_t s_sweeps;
 static volatile uint32_t s_sweep_us_last;
 static volatile uint32_t s_sweep_us_max;
@@ -386,7 +396,7 @@ static void send_status(void) {
     uint8_t mac[6] = {0};
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
 
-    static char out[960];
+    static char out[1400];
     int n = snprintf(out, sizeof(out),
                      "@{\"t\":\"status\",\"fw\":\"v%u.%u.%u\",\"role\":%u,\"profile\":%u,\"fp\":\"%08lX\","
                      "\"label\":\"%s\",\"uptimeMs\":%lld,\"reset\":\"%s\",\"boots\":%lu,"
@@ -409,10 +419,42 @@ static void send_status(void) {
                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (unsigned long)(s_flash_bytes / (1024 * 1024)),
                      mode_name, stas.num, channel, s_slot, s_scan_live ? "true" : "false",
                      s_chan_override ? "true" : "false", (unsigned)active_chan_mask());
-    for (int i = 0; i < 8 && n < (int)sizeof(out) - 16; i++) {
+    for (int i = 0; i < 8 && n < (int)sizeof(out) - 64; i++) {
         n += snprintf(out + n, sizeof(out) - n, "%s%u", i ? "," : "", slot_display_mhz(i));
     }
-    snprintf(out + n, sizeof(out) - n, "]}\n");
+    n += snprintf(out + n, sizeof(out) - n, "]");
+    if (s_cfg[CFG_OFF_ROLE] == 1) {
+        n += snprintf(out + n, sizeof(out) - n, ",\"spokes\":[");
+        bool first_sp = true;
+        const int64_t now_us = esp_timer_get_time();
+        for (int i = 0; i < 6 && n < (int)sizeof(out) - 96; i++) {
+            if (s_peer_spokes[i].fp == 0) continue;
+            const uint32_t ms_ago = s_peer_spokes[i].last_rx_us > 0
+                                        ? (uint32_t)((now_us - s_peer_spokes[i].last_rx_us) / 1000)
+                                        : 0;
+            n += snprintf(out + n, sizeof(out) - n,
+                          "%s{\"slot\":%d,\"fp\":\"%08lX\",\"label\":\"%s\",\"profile\":%u,\"msAgo\":%lu,\"frames\":%lu}",
+                          first_sp ? "" : ",", i + 2, (unsigned long)s_peer_spokes[i].fp, s_peer_spokes[i].label,
+                          (unsigned)s_peer_spokes[i].profile, (unsigned long)ms_ago,
+                          (unsigned long)s_peer_spokes[i].frames);
+            first_sp = false;
+        }
+        n += snprintf(out + n, sizeof(out) - n, "]");
+    } else {
+        const uint32_t b_ms = slaprf_ms_since_hub_beacon();
+        uint8_t hub_mac[6] = {0};
+        if (b_ms != UINT32_MAX) {
+            n += snprintf(out + n, sizeof(out) - n, ",\"beaconMsAgo\":%lu", (unsigned long)b_ms);
+            if (slaprf_hub_beacon_mac(hub_mac)) {
+                n += snprintf(out + n, sizeof(out) - n,
+                              ",\"hub\":{\"linked\":%s,\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"beaconMsAgo\":%lu}",
+                              (s_slot >= 2 && b_ms < 5000) ? "true" : "false",
+                              hub_mac[0], hub_mac[1], hub_mac[2], hub_mac[3], hub_mac[4], hub_mac[5],
+                              (unsigned long)b_ms);
+            }
+        }
+    }
+    snprintf(out + n, sizeof(out) - n, "}\n");
     tx_line(out);
 }
 
@@ -760,6 +802,28 @@ void slaprf_diag_set_slot(uint8_t slot) {
     s_slot = slot;
 }
 
+void slaprf_diag_note_spoke(uint8_t slot, uint32_t fp, uint8_t profile, const char *label) {
+    if (slot < 2 || slot > 7) return;
+    diag_spoke_peer_t *p = &s_peer_spokes[slot - 2];
+    p->fp = fp;
+    p->profile = profile;
+    memset(p->label, 0, sizeof(p->label));
+    if (label) {
+        for (int i = 0; i < 24 && label[i]; i++) {
+            char c = label[i];
+            p->label[i] = (c == '"' || c == '\\' || c < 0x20) ? '?' : c;
+        }
+    }
+    p->last_rx_us = esp_timer_get_time();
+}
+
+void slaprf_diag_note_spoke_rx(uint8_t slot) {
+    if (slot < 2 || slot > 7) return;
+    diag_spoke_peer_t *p = &s_peer_spokes[slot - 2];
+    p->last_rx_us = esp_timer_get_time();
+    p->frames++;
+}
+
 static void update_health_led(void) {
     if (s_emergency_mode) return;
     bool rf_ok = false;
@@ -776,10 +840,19 @@ static void update_health_led(void) {
         const uint32_t phase = s_sweeps % (period ? period : 2);
         led_on = phase < (period / 2 ? period / 2 : 1);
     } else {
-        // Healthy & running 50 Hz sweeps: double-blip heartbeat every 2 seconds
+        // Normal timing every 2 seconds:
+        //   Hub (role 1, parent):   single-blip (blip ... pause)
+        //   Spoke (role 2, joined): double-blip (blip-blip ... pause)
+        const uint8_t role = s_cfg ? s_cfg[CFG_OFF_ROLE] : 1;
         const uint32_t period = (uint32_t)s_sweep_hz * 2;
         const uint32_t phase = s_sweeps % (period ? period : 100);
-        led_on = (phase < 2) || (phase >= 7 && phase < 9);
+        const uint32_t blip = s_sweep_hz >= 100 ? 4 : 2;
+        const uint32_t gap = s_sweep_hz >= 100 ? 14 : 7;
+        if (role == 1) {
+            led_on = (phase < blip);
+        } else {
+            led_on = (phase < blip) || (phase >= gap && phase < gap + blip);
+        }
     }
     gpio_set_level(XIAO_C5_LED_GPIO, led_on ? 0 : 1); // Active-low user LED
 }
@@ -836,6 +909,11 @@ void slaprf_diag_service(void) {
     if (s_reboot_pending) {
         vTaskDelay(pdMS_TO_TICKS(40));
         esp_restart();
+    }
+    if (s_sweeps == 0 && !s_emergency_mode) {
+        // Spoke searching for Hub beacon / awaiting TDMA slot assignment: slow 1 Hz blink (500 ms on / 500 ms off)
+        const bool searching_on = ((esp_timer_get_time() / 500000LL) & 1LL) == 0;
+        gpio_set_level(XIAO_C5_LED_GPIO, searching_on ? 0 : 1);
     }
     if (s_ls_ready) {
         // A live-scan pass finished in the last sweep slot; send it from here (outside the slot).

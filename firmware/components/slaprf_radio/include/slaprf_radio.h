@@ -47,6 +47,9 @@ void slaprf_spoke_sync_to_hub_channel(void);
 /** Spoke only: milliseconds since the last Hub sync beacon (UINT32_MAX if never heard). */
 uint32_t slaprf_ms_since_hub_beacon(void);
 
+/** Spoke only: copy out the 6-byte Wi-Fi STA MAC of the Hub whose sync beacon was heard. */
+bool slaprf_hub_beacon_mac(uint8_t out_mac[6]);
+
 /** Broadcast an ESP-NOW frame. */
 void espnow_send(const void *frame, uint32_t len);
 
@@ -109,6 +112,12 @@ void slaprf_diag_set_sweep_budget(uint32_t budget_us);
 
 /** Report the TDMA slot this timer is using (1 = Hub). */
 void slaprf_diag_set_slot(uint8_t slot);
+
+/** Hub only: record a child Spoke that joined a TDMA slot (2..7) for STATUS? Network view. */
+void slaprf_diag_note_spoke(uint8_t slot, uint32_t fp, uint8_t profile, const char *label);
+
+/** Hub only: record a received telemetry frame from TDMA slot (2..7) for STATUS? Network view. */
+void slaprf_diag_note_spoke_rx(uint8_t slot);
 
 /** Run a pending SCAN (call from the main loop while the timer is on its 2.4 GHz gap). */
 void slaprf_diag_service(void);

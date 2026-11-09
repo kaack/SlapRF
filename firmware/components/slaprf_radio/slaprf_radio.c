@@ -40,6 +40,8 @@ static const uint8_t BROADCAST_MAC[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 
 
 static QueueHandle_t s_rx_queue;
 static volatile int64_t s_last_beacon_us;
+static uint8_t s_hub_beacon_mac[6];
+static volatile bool s_has_hub_beacon_mac;
 static esp_netif_t *s_sta_netif;
 static esp_netif_t *s_ap_netif;
 static int s_udp_sock = -1;
@@ -69,13 +71,16 @@ uint16_t xiao_c5_read_battery_mv(void) {
 /* ---- 2.4 GHz link --------------------------------------------------------------------------- */
 
 static void espnow_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
-    (void)info;
     if (len <= 0 || len > ESPNOW_MAX_FRAME) {
         return;
     }
     if ((len == 4 || len == 20) && data[0] == BEACON_MAGIC_0 && data[1] == BEACON_MAGIC_1 &&
         xor8(data, (uint32_t)len - 1) == data[len - 1]) {
         s_last_beacon_us = esp_timer_get_time();
+        if (info && info->src_addr) {
+            memcpy(s_hub_beacon_mac, info->src_addr, 6);
+            s_has_hub_beacon_mac = true;
+        }
         if (len == 20) {
             uint16_t freqs[8];
             for (int i = 0; i < 8; i++) {
@@ -259,10 +264,13 @@ void slaprf_spoke_sync_to_hub_channel(void) {
     for (;;) {
         for (uint8_t ch = 1; ch <= 13; ch++) {
             esp_wifi_set_channel(ch, WIFI_SECOND_CHAN_NONE);
-            vTaskDelay(pdMS_TO_TICKS(120)); // Beacons arrive every 20-40 ms
-            if (s_last_beacon_us != 0) {
-                ESP_LOGI(TAG, "Hub found on 2.4 GHz channel %u", ch);
-                return;
+            for (int tick = 0; tick < 6; tick++) { // 6 x 20 ms = 120 ms per channel; services LED & USB
+                slaprf_diag_service();
+                vTaskDelay(pdMS_TO_TICKS(20));
+                if (s_last_beacon_us != 0) {
+                    ESP_LOGI(TAG, "Hub found on 2.4 GHz channel %u", ch);
+                    return;
+                }
             }
         }
     }
@@ -273,6 +281,14 @@ uint32_t slaprf_ms_since_hub_beacon(void) {
         return UINT32_MAX;
     }
     return (uint32_t)((esp_timer_get_time() - s_last_beacon_us) / 1000);
+}
+
+bool slaprf_hub_beacon_mac(uint8_t out_mac[6]) {
+    if (!s_has_hub_beacon_mac || out_mac == NULL) {
+        return false;
+    }
+    memcpy(out_mac, s_hub_beacon_mac, 6);
+    return true;
 }
 
 void espnow_send(const void *frame, uint32_t len) {
