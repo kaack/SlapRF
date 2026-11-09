@@ -3773,11 +3773,6 @@ body.is-gate-dragging * {
   border-color: var(--border-strong);
   color: var(--text);
 }
-.debug-page .btn-sm.btn-icon[data-action="restart-capture"]:hover:not(:disabled) {
-  background: rgba(251, 113, 133, 0.14);
-  border-color: rgba(251, 113, 133, 0.5);
-  color: var(--bad);
-}
 .debug-page .btn-sm.btn-icon.is-emergency-active {
   background: rgba(250, 204, 21, 0.14);
   border-color: rgba(250, 204, 21, 0.55);

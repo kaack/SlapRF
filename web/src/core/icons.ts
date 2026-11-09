@@ -92,9 +92,9 @@ export const icons = {
       `<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M15.5 15h-7"/><path d="m11.5 12-3 3 3 3"/>`,
       s
     ),
-  reboot: (s?: number) =>
+  help: (s?: number) =>
     svg(
-      `<path d="M16.5 4.2A9 9 0 1 1 6.2 5.1"/><path d="M5.8 1.6v3.8h3.8"/><path d="M12 3.5v9.5" stroke-width="2.15"/>`,
+      `<circle cx="12" cy="12" r="9"/><path d="M9.4 9.2a2.6 2.6 0 0 1 5.05.85c0 1.75-2.45 2.2-2.45 3.65"/><circle cx="12" cy="16.9" r="0.8" fill="currentColor" stroke="none"/>`,
       s
     ),
   siren: (s?: number) =>
