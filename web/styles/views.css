@@ -4991,7 +4991,45 @@ body.is-gate-dragging * {
   background: linear-gradient(90deg, #0b0c0f 0%, #172554 28%, #0891b2 55%, #d4ff3a 82%, #ffffff 100%);
 }
 .debug-chart-readout {
-  display: none;
+  display: flex;
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 6px;
+  padding: 0 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  line-height: 1.25;
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  overflow: hidden;
+}
+.debug-single-readout {
+  height: 28px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  white-space: nowrap;
+}
+.debug-single-readout > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.debug-readout-title {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.debug-readout-sub {
+  color: var(--text-3);
+  flex-shrink: 0;
+}
+.debug-readout-vals {
+  color: var(--text);
+  flex-shrink: 0;
 }
 
 @media (max-width: 1080px) {
@@ -5058,46 +5096,5 @@ body.is-gate-dragging * {
     width: 100%;
     margin-left: 0;
     justify-content: space-between;
-  }
-  .debug-chart-readout {
-    display: flex;
-    box-sizing: border-box;
-    width: 100%;
-    margin-top: 6px;
-    padding: 0 10px;
-    border-radius: var(--radius-sm);
-    border: 1px solid var(--border);
-    background: var(--surface-2);
-    font-family: var(--font-sans);
-    font-size: 12px;
-    line-height: 1.25;
-    color: var(--text-2);
-    font-variant-numeric: tabular-nums;
-    overflow: hidden;
-  }
-  .debug-single-readout {
-    height: 28px;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    white-space: nowrap;
-  }
-  .debug-single-readout > span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .debug-readout-title {
-    color: var(--text);
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .debug-readout-sub {
-    color: var(--text-3);
-    flex-shrink: 0;
-  }
-  .debug-readout-vals {
-    color: var(--text);
-    flex-shrink: 0;
   }
 }
