@@ -274,69 +274,6 @@
   color: var(--text);
   font-weight: 600;
 }
-.gate-inspector-name-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-.gate-node-edit-btn {
-  display: inline-grid;
-  place-items: center;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border-radius: 5px;
-  border: 1px solid transparent;
-  background: transparent;
-  color: var(--text-3);
-  opacity: 0.75;
-  flex-shrink: 0;
-  cursor: pointer;
-  transition: opacity 0.14s ease, color 0.14s ease, background 0.14s ease, border-color 0.14s ease;
-}
-.gate-node-edit-btn:hover {
-  opacity: 1;
-  color: var(--text);
-  background: var(--surface-2);
-  border-color: var(--border-strong);
-}
-.gate-node-name-edit-wrap {
-  position: relative;
-  display: inline-flex;
-  align-items: center;
-}
-.gate-node-inline-input {
-  width: 150px;
-  height: 26px;
-  padding: 0 9px;
-  font-size: 13px;
-  font-weight: 600;
-  text-align: left;
-  border-radius: 6px;
-}
-.gate-node-inline-input.has-reset {
-  padding-right: 24px;
-}
-.gate-node-inline-reset {
-  position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 18px;
-  height: 18px;
-  padding: 0;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--text-3);
-  display: inline-grid;
-  place-items: center;
-  cursor: pointer;
-}
-.gate-node-inline-reset:hover {
-  color: var(--accent);
-  background: var(--surface-2);
-}
 .gate-node-start-btn {
   margin-top: 5px;
   display: inline-grid;
@@ -609,24 +546,46 @@ body.is-gate-dragging * {
   font-size: 13.5px;
 }
 .gate-inspector-step {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 32px;
+  padding: 0 9px;
   font-size: 12px;
   font-weight: 600;
-  color: var(--text-3);
-  padding: 2px 7px;
-  border-radius: 6px;
+  color: var(--text-2);
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
-  border: 1px solid var(--border);
+  border: 1px solid var(--border-strong);
+}
+.gate-inspector-name-wrap {
+  width: 210px;
+}
+.gate-inspector-name-input {
+  font-weight: 600;
+  border-color: var(--border-strong);
+  background: var(--bg);
+  color: var(--text);
+}
+.gate-inspector-name-input.is-readonly {
+  cursor: default;
+  user-select: none;
+}
+.gate-inspector-name-input:focus,
+.gate-inspector-name-input:focus-visible {
+  outline: none;
+  border-color: #3e4452;
+  box-shadow: none;
+}
+.gate-inspector-name-wrap .flasher-pass-toggle.is-active {
+  background: var(--surface-3);
+  color: var(--text);
 }
 .gate-inspector-dot {
   width: 9px;
   height: 9px;
   border-radius: 50%;
   background: var(--c, var(--accent));
-}
-.gate-inspector-start-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
 }
 .gate-inspector-timer-meta {
   display: inline-flex;

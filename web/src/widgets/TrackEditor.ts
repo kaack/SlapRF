@@ -56,8 +56,9 @@ export class TrackEditor extends Component {
     this.listen(el, "focusout", (e) => {
       const input = e.target as HTMLInputElement;
       if (!input.matches("[data-gate-name]")) return;
+      if (this.editingNodeId === null) return;
       const related = (e as FocusEvent).relatedTarget as HTMLElement | null;
-      if (related?.closest("[data-clear-gate-name]")) return;
+      if (related?.closest("[data-clear-gate-name], [data-edit-gate-name]")) return;
       void this.finishInlineRename(input);
     });
 
@@ -73,6 +74,16 @@ export class TrackEditor extends Component {
       if (editNameBtn) {
         e.stopPropagation();
         const nodeId = Number(editNameBtn.dataset.editGateName);
+        if (this.editingNodeId === nodeId) {
+          const input = this.el.querySelector<HTMLInputElement>(`input[data-gate-name="${nodeId}"]`);
+          if (input) {
+            void this.finishInlineRename(input);
+          } else {
+            this.editingNodeId = null;
+            this.render();
+          }
+          return;
+        }
         this.selectedNodeId = nodeId;
         this.editingNodeId = nodeId;
         try {
@@ -420,47 +431,49 @@ export class TrackEditor extends Component {
           <span class="muted">No timer assigned</span>
         </div>`;
 
+    const isEditing = this.editingNodeId === node.gateId;
+    const hasCustomName = node.name.trim().length > 0;
+
     return `
       <div class="gate-inspector">
         <div class="gate-inspector-row">
           <div class="gate-inspector-title">
             <span class="gate-inspector-step mono">#${index + 1}</span>
-            ${
-              this.editingNodeId === node.gateId
-                ? `<div class="gate-node-name-edit-wrap">
-                    <input
-                      type="text"
-                      class="input gate-node-inline-input ${node.name.trim() ? "has-reset" : ""}"
-                      data-gate-name="${node.gateId}"
-                      value="${esc(node.name)}"
-                      placeholder="Gate ${index + 1}"
-                      maxlength="40"
-                      spellcheck="false"
-                      autocomplete="off"
-                      aria-label="Edit name for Gate ${index + 1}"
-                    />
-                    ${
-                      node.name.trim()
-                        ? `<button type="button" class="gate-node-inline-reset" data-clear-gate-name="${node.gateId}" title="Reset gate name to default (Gate ${index + 1})">${icons.reset(12)}</button>`
-                        : ""
-                    }
-                  </div>`
-                : `<span class="gate-inspector-name-group">
-                    <strong data-inspector-name>${esc(displayName)}</strong>
-                    <button
-                      type="button"
-                      class="gate-node-edit-btn"
-                      data-edit-gate-name="${node.gateId}"
-                      title="Rename ${esc(displayName)}"
-                      aria-label="Rename ${esc(displayName)}"
-                    >${icons.pencil(12)}</button>
-                  </span>`
-            }
-            ${
-              isStart
-                ? `<span class="badge badge-accent gate-inspector-start-badge">${icons.checkered(12)} Start gate</span>`
-                : `<span class="badge">Split gate</span>`
-            }
+            <div class="flasher-pass-wrap gate-inspector-name-wrap ${hasCustomName ? "has-two-actions" : ""}">
+              <input
+                type="text"
+                class="input flasher-pass-input gate-inspector-name-input ${isEditing ? "is-editing" : "is-readonly"}"
+                data-gate-name="${node.gateId}"
+                data-inspector-name
+                value="${esc(isEditing ? (node.name.trim() || displayName) : displayName)}"
+                placeholder="Gate ${index + 1}"
+                maxlength="40"
+                spellcheck="false"
+                autocomplete="off"
+                ${isEditing ? "" : 'readonly tabindex="-1"'}
+                aria-label="Gate ${index + 1} name"
+              />
+              <div class="flasher-inline-actions">
+                ${
+                  hasCustomName
+                    ? `<button
+                        type="button"
+                        class="flasher-pass-toggle"
+                        data-clear-gate-name="${node.gateId}"
+                        title="Reset gate name to default (Gate ${index + 1})"
+                        aria-label="Reset gate name to default (Gate ${index + 1})"
+                      >${icons.reset(14)}</button>`
+                    : ""
+                }
+                <button
+                  type="button"
+                  class="flasher-pass-toggle ${isEditing ? "is-active" : ""}"
+                  data-edit-gate-name="${node.gateId}"
+                  title="${isEditing ? "Save gate name" : `Edit ${esc(displayName)} name`}"
+                  aria-label="${isEditing ? "Save gate name" : `Edit ${esc(displayName)} name`}"
+                >${icons.pencil(14)}</button>
+              </div>
+            </div>
           </div>
           ${timerSummaryHtml}
         </div>
@@ -475,12 +488,16 @@ export class TrackEditor extends Component {
       this.render();
       return;
     }
-    const name = input.value.trim();
+    const idx = this.orderedNodes.findIndex((n) => n.gateId === nodeId);
+    const defaultName = idx >= 0 ? `Gate ${idx + 1}` : "";
+    const raw = input.value.trim();
+    const name = raw === defaultName ? "" : raw;
     if (name === node.name.trim()) {
       this.render();
       return;
     }
     await this.save(node, { name });
+    this.render();
   }
 
   private async removeTrackNode(nodeId: number): Promise<void> {
@@ -928,8 +945,11 @@ export class TrackEditor extends Component {
       if (gateId === this.selectedNodeId) {
         const inspStepEl = this.el.querySelector<HTMLElement>(".gate-inspector-step");
         if (inspStepEl) inspStepEl.textContent = `#${idx + 1}`;
-        const inspNameEl = this.el.querySelector<HTMLElement>("[data-inspector-name]");
-        if (inspNameEl) inspNameEl.textContent = displayName;
+        const inspNameEl = this.el.querySelector<HTMLInputElement>("[data-inspector-name]");
+        if (inspNameEl) {
+          inspNameEl.value = displayName;
+          inspNameEl.placeholder = `Gate ${idx + 1}`;
+        }
       }
 
       const c1 = item.dataset.timerColor || "#64748b";
