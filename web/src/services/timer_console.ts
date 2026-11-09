@@ -27,6 +27,7 @@ export interface TimerStatus {
   net: { mode: string; stations: number };
   channel: number;
   slot: number;
+  scanLive?: boolean;
   freqsTemporary: boolean;
   freqs: number[];
 }
@@ -42,6 +43,10 @@ export interface ScanResult {
   start: number;
   step: number;
   dbm: number[];
+  /** Set on passes of a continuous scan (SCAN LIVE). */
+  live?: boolean;
+  /** How long the pass took, ms (continuous scan only). */
+  passMs?: number;
 }
 
 export interface BootLog {

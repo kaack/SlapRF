@@ -119,6 +119,13 @@ uint16_t slaprf_diag_channel_mhz(int index, uint16_t configured);
 /** False while the Debug page has switched the 5.8 GHz receiver off (RF 0). */
 bool slaprf_diag_rf_enabled(void);
 
+/**
+ * Debug page continuous scan ("SCAN LIVE"): when active, measures the next chunk of the band
+ * within `budget_us` and returns true; the caller then skips its pilot channels (readings -127).
+ * Returns false (and does nothing) when no live scan is running.
+ */
+bool slaprf_diag_scan_live_step(uint32_t budget_us);
+
 /** 5.8 GHz boot-check results for STATUS?. */
 void slaprf_rf58_info(bool *ok, int *gain, int *gain_max, float *floor_db);
 #ifdef __cplusplus

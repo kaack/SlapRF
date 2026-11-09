@@ -176,7 +176,10 @@ static void sweep_once(void) {
     cur->seq_num = s_seq++;
 
     const int64_t t0 = slaprf_now_us();
-    const bool rf_on = slaprf_diag_rf_enabled(); // The Debug page can switch the receiver off
+    // Debug page: a live spectrum scan takes over the sweep slot (lap timing pauses), and the
+    // receiver can be switched off. Either way the pilot readings are -127 for this sweep.
+    const bool scanning = slaprf_diag_scan_live_step(SWEEP_BUDGET_US);
+    const bool rf_on = !scanning && slaprf_diag_rf_enabled();
     if (rf_on) {
         slaprf_rf58_enter();
     }

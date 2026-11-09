@@ -8,6 +8,9 @@
  *   LIVE 1|0         stream @{"t":"live","us","dbm":[8],"pk":[8],"hits":[8]} about 10x a second
  *   SCAN a b s       spectrum scan a..b MHz in s MHz steps (peak of 4 captures per point);
  *                    replies @{"t":"scan","start","step","dbm":[...]} from the main loop
+ *   SCAN LIVE a b s  continuous scan: each sweep slot measures the next chunk of a..b instead of
+ *                    the pilot channels (lap timing pauses, Wi-Fi unaffected); streams
+ *                    @{"t":"scan","live":true,"passMs",...} per completed pass. SCAN STOP ends it.
  *   LOG 1|0          mirror ESP-IDF log lines onto the USB port (plain text)
  *   BOOTLOG?         @{"t":"bootlog","which":"current",...,"text":"..."}  log since this boot
  *   LASTLOG?         @{"t":"bootlog","which":"last",...}  log of the previous boot, kept across
@@ -75,6 +78,17 @@ static uint16_t s_chan_mhz[8];
 
 static volatile bool s_scan_pending;
 static uint16_t s_scan_start, s_scan_stop, s_scan_step;
+
+/* Continuous scan ("SCAN LIVE"): replaces the pilot channels in each sweep slot, so the band is
+ * swept a chunk per superframe while the 2.4 GHz link keeps its time. Lap timing pauses. */
+static volatile bool s_scan_live;
+static uint16_t s_ls_start, s_ls_step, s_ls_count, s_ls_idx;
+static int8_t s_ls_points[SCAN_MAX_POINTS];
+static int8_t s_ls_out[SCAN_MAX_POINTS];
+static volatile bool s_ls_ready;
+static uint32_t s_ls_point_us = 800; // Measured cost of one point (PLL hop + capture)
+static int64_t s_ls_pass_t0;
+static uint32_t s_ls_pass_ms;
 
 /* ---- Boot log ring (RTC memory: survives software resets, panics and watchdogs) ------------ */
 
@@ -241,7 +255,7 @@ static void send_status(void) {
                      "\"rf\":{\"ok\":%s,\"enabled\":%s,\"gain\":%d,\"gainMax\":%d,\"floorDb\":%.1f},"
                      "\"chip\":{\"model\":\"%s\",\"rev\":\"v%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"flashMB\":%lu},"
                      "\"net\":{\"mode\":\"%s\",\"stations\":%d},"
-                     "\"channel\":%u,\"slot\":%u,\"freqsTemporary\":%s,\"freqs\":[",
+                     "\"channel\":%u,\"slot\":%u,\"scanLive\":%s,\"freqsTemporary\":%s,\"freqs\":[",
                      s_cfg[CFG_OFF_VERSION], s_cfg[CFG_OFF_VERSION + 1], s_cfg[CFG_OFF_VERSION + 2],
                      s_cfg[CFG_OFF_ROLE], s_cfg[CFG_OFF_PROFILE], (unsigned long)fp, label,
                      (long long)(esp_timer_get_time() / 1000), reset_reason_name(esp_reset_reason()),
@@ -252,7 +266,8 @@ static void send_status(void) {
                      s_rf_enabled ? "true" : "false", gain, gain_max, floor_db,
                      chip.model == CHIP_ESP32C5 ? "ESP32-C5" : "ESP32", chip.revision / 100, chip.revision % 100,
                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (unsigned long)(flash_bytes / (1024 * 1024)),
-                     mode_name, stas.num, channel, s_slot, s_chan_override ? "true" : "false");
+                     mode_name, stas.num, channel, s_slot, s_scan_live ? "true" : "false",
+                     s_chan_override ? "true" : "false");
     for (int i = 0; i < 8 && n < (int)sizeof(out) - 16; i++) {
         n += snprintf(out + n, sizeof(out) - n, "%s%u", i ? "," : "",
                       slaprf_diag_channel_mhz(i, cfg_u16(CFG_OFF_FREQS + i * 2)));
@@ -344,9 +359,13 @@ static void handle_command(char *line) {
     } else if (strncmp(line, "RF ", 3) == 0) {
         s_rf_enabled = line[3] == '1';
         tx_line(s_rf_enabled ? "@{\"t\":\"ok\",\"cmd\":\"rf\",\"on\":true}\n" : "@{\"t\":\"ok\",\"cmd\":\"rf\",\"on\":false}\n");
+    } else if (strncmp(line, "SCAN STOP", 9) == 0) {
+        s_scan_live = false;
+        tx_line("@{\"t\":\"ok\",\"cmd\":\"scan\",\"live\":false}\n");
     } else if (strncmp(line, "SCAN", 4) == 0) {
+        const bool live = strncmp(line + 4, " LIVE", 5) == 0;
         unsigned a = RF_MIN_MHZ, b = RF_MAX_MHZ, s = 5;
-        sscanf(line + 4, "%u %u %u", &a, &b, &s);
+        sscanf(line + (live ? 9 : 4), "%u %u %u", &a, &b, &s);
         if (a < RF_MIN_MHZ) a = RF_MIN_MHZ;
         if (b > RF_MAX_MHZ) b = RF_MAX_MHZ;
         if (s < 1) s = 1;
@@ -356,6 +375,18 @@ static void handle_command(char *line) {
         }
         if (!s_rf_enabled) {
             tx_line("@{\"t\":\"err\",\"msg\":\"5.8 GHz receiver is off (RF 1 to enable)\"}\n");
+            return;
+        }
+        if (live) {
+            s_scan_live = false; // Sweep task sees a consistent setup when it flips back on
+            s_ls_start = (uint16_t)a;
+            s_ls_step = (uint16_t)s;
+            s_ls_count = (uint16_t)((b - a) / s + 1);
+            s_ls_idx = 0;
+            s_ls_ready = false;
+            s_ls_pass_t0 = esp_timer_get_time();
+            s_scan_live = true;
+            tx_line("@{\"t\":\"ok\",\"cmd\":\"scan\",\"live\":true}\n");
             return;
         }
         s_scan_start = (uint16_t)a;
@@ -428,6 +459,7 @@ void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us) {
     s_sweep_us_last = took_us;
     if (took_us > s_sweep_us_max) s_sweep_us_max = took_us;
     for (int i = 0; i < 8; i++) {
+        if (dbm[i] <= -127) continue; // Receiver off or slot used by a live scan: no reading
         const int16_t v = (int16_t)(dbm[i] * 16);
         if (dbm[i] > s_peak[i]) s_peak[i] = dbm[i];
         // Floor: follow drops at once, rises very slowly (a VTX parked on the channel won't lift it fast).
@@ -454,6 +486,20 @@ void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us) {
 }
 
 void slaprf_diag_service(void) {
+    if (s_ls_ready) {
+        // A live-scan pass finished in the last sweep slot; send it from here (outside the slot).
+        static char live_out[96 + SCAN_MAX_POINTS * 5];
+        const uint16_t count = s_ls_count;
+        int n = snprintf(live_out, sizeof(live_out),
+                         "@{\"t\":\"scan\",\"live\":true,\"passMs\":%lu,\"start\":%u,\"step\":%u,\"dbm\":[",
+                         (unsigned long)s_ls_pass_ms, s_ls_start, s_ls_step);
+        for (int i = 0; i < count; i++) {
+            n += snprintf(live_out + n, sizeof(live_out) - n, "%s%d", i ? "," : "", s_ls_out[i]);
+        }
+        snprintf(live_out + n, sizeof(live_out) - n, "]}\n");
+        s_ls_ready = false;
+        tx_line(live_out);
+    }
     if (!s_scan_pending) {
         return;
     }
@@ -478,4 +524,30 @@ void slaprf_diag_service(void) {
     }
     snprintf(out + n, sizeof(out) - n, "]}\n");
     tx_line(out);
+}
+
+bool slaprf_diag_scan_live_step(uint32_t budget_us) {
+    if (!s_scan_live || !s_rf_enabled || s_ls_count == 0) {
+        return false;
+    }
+    const int64_t t0 = esp_timer_get_time();
+    const int64_t margin = 300; // Leave room for leave() and slot overhead
+    slaprf_rf58_enter();
+    while (esp_timer_get_time() - t0 + (int64_t)s_ls_point_us + margin < (int64_t)budget_us) {
+        const int64_t tp = esp_timer_get_time();
+        s_ls_points[s_ls_idx] = esp_sdr_measure_5g_channel_dbm((uint16_t)(s_ls_start + s_ls_idx * s_ls_step));
+        const uint32_t took = (uint32_t)(esp_timer_get_time() - tp);
+        s_ls_point_us = (s_ls_point_us * 7 + took) / 8; // Track the real per-point cost
+        if (++s_ls_idx >= s_ls_count) {
+            const int64_t now = esp_timer_get_time();
+            memcpy(s_ls_out, s_ls_points, s_ls_count);
+            s_ls_pass_ms = (uint32_t)((now - s_ls_pass_t0) / 1000);
+            s_ls_pass_t0 = now;
+            s_ls_idx = 0;
+            s_ls_ready = true;
+            break; // Send this pass before starting the next
+        }
+    }
+    slaprf_rf58_leave();
+    return true;
 }

@@ -3938,6 +3938,16 @@ body.is-gate-dragging * {
 }
 
 /* Debug page: self-test, channel editor, restart test, boot logs */
+.debug-spectrum .hold {
+  fill: none;
+  stroke: var(--accent);
+  stroke-opacity: 0.3;
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+.debug-scan-live-note {
+  margin: 6px 0 0;
+}
 .debug-tone-warn {
   color: var(--warn);
 }

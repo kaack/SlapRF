@@ -54,6 +54,11 @@ export class DebugView extends Component {
   private logOn = false;
   private scan: ScanResult | null = null;
   private scanning = false;
+  /** Continuous scan (SCAN LIVE) running: the sweep slot scans the band, lap timing pauses. */
+  private scanLive = false;
+  /** Max-hold trace across continuous-scan passes (catches short bursts). */
+  private maxHold: number[] | null = null;
+  private scanToggleAt = 0;
   private logLines: string[] = [];
   private error: string | null = null;
   private showAllPorts = false;
@@ -74,6 +79,11 @@ export class DebugView extends Component {
       onStatus: (s) => {
         const freqsChanged = this.status?.freqs.join() !== s.freqs.join();
         this.status = s;
+        // Pick up a live scan still running from before (page reload); skip stale replies right after a toggle.
+        if (s.scanLive !== undefined && s.scanLive !== this.scanLive && Date.now() - this.scanToggleAt > 3000) {
+          this.scanLive = s.scanLive;
+          this.renderScan();
+        }
         this.renderConnection();
         this.renderStatus();
         this.renderLiveHead();
@@ -88,7 +98,16 @@ export class DebugView extends Component {
         this.updateLive();
       },
       onScan: (s) => {
+        if (s.live) {
+          if (!this.scanLive) return; // Stray pass after SCAN STOP
+          const sameRange = this.scan?.live && this.scan.start === s.start && this.scan.step === s.step && this.scan.dbm.length === s.dbm.length;
+          this.maxHold = sameRange && this.maxHold ? this.maxHold.map((v, i) => Math.max(v, s.dbm[i])) : [...s.dbm];
+          this.scan = s;
+          this.renderScanChart();
+          return;
+        }
         this.scan = s;
+        this.maxHold = null;
         this.scanning = false;
         this.renderScan();
       },
@@ -107,6 +126,7 @@ export class DebugView extends Component {
         window.clearInterval(this.statusTimer);
         this.liveOn = false;
         this.logOn = false;
+        this.scanLive = false;
         this.renderAll();
       },
     });
@@ -149,7 +169,8 @@ export class DebugView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Spectrum scan</h2>
-            <p>Sweeps the receiver across the band. Use it to find a VTX on an unexpected frequency, or to check a venue for 5 GHz Wi-Fi before racing. The timer pauses timing for a fraction of a second while it scans.</p>
+            <p>Sweeps the receiver across the band. Use it to find a VTX on an unexpected frequency, or to check a venue for 5 GHz Wi-Fi before racing.</p>
+            <p><strong>Scan</strong> takes one snapshot (timing pauses for a fraction of a second). <strong>Live</strong> keeps scanning several times a second, with a max-hold trace to catch short bursts; lap timing pauses while it runs, the Wi-Fi link stays up.</p>
           </div>
           <div class="card" data-slot="scan"></div>
         </section>
@@ -179,7 +200,9 @@ export class DebugView extends Component {
     });
     this.onDispose(() => {
       window.clearInterval(this.statusTimer);
-      void this.console.disconnect();
+      // Leaving the page must not leave the timer scanning instead of timing.
+      const stop = this.scanLive ? this.console.send("SCAN STOP").catch(() => undefined) : Promise.resolve();
+      void stop.then(() => this.console.disconnect());
     });
     this.renderAll();
   }
@@ -198,6 +221,7 @@ export class DebugView extends Component {
           await this.startSession();
           break;
         case "disconnect":
+          if (this.scanLive) await this.console.send("SCAN STOP").catch(() => undefined);
           if (this.liveOn) await this.console.send("LIVE 0").catch(() => undefined);
           if (this.logOn) await this.console.send("LOG 0").catch(() => undefined);
           await this.console.disconnect();
@@ -248,6 +272,27 @@ export class DebugView extends Component {
           });
           break;
         }
+        case "scan-live": {
+          this.scanToggleAt = Date.now();
+          if (this.scanLive) {
+            this.scanLive = false;
+            await this.console.request("SCAN STOP", "ok", 2000).catch(() => undefined);
+          } else {
+            const start = this.num("[data-scan-start]", 5180);
+            const stop = this.num("[data-scan-stop]", 5917);
+            const step = this.num("[data-scan-step]", 5);
+            this.maxHold = null;
+            await this.console.request(`SCAN LIVE ${start} ${stop} ${step}`, "ok", 2000);
+            this.scanLive = true;
+          }
+          this.renderScan();
+          this.renderLiveHead();
+          break;
+        }
+        case "clear-hold":
+          this.maxHold = this.scan ? [...this.scan.dbm] : null;
+          this.renderScanChart();
+          break;
         case "log":
           this.logOn = !this.logOn;
           await this.console.send(this.logOn ? "LOG 1" : "LOG 0");
@@ -344,6 +389,8 @@ export class DebugView extends Component {
   private async restart(): Promise<TimerStatus> {
     window.clearInterval(this.statusTimer);
     this.live = null;
+    this.scanLive = false; // The firmware forgets it on restart
+    this.renderScan();
     try {
       const s = await this.console.restartAndReconnect();
       this.renderConnection();
@@ -405,6 +452,13 @@ export class DebugView extends Component {
     this.checks = [];
     this.reportExtra = "";
     this.checksAt = new Date();
+    if (this.scanLive) {
+      // Give the receiver back to the timing sweep so the checks see normal operation.
+      this.scanLive = false;
+      this.scanToggleAt = Date.now();
+      await this.console.request("SCAN STOP", "ok", 2000).catch(() => undefined);
+      this.renderScan();
+    }
     const add = (name: string, result: CheckResult, detail: string) => {
       this.checks.push({ name, result, detail });
       this.renderSelfTest();
@@ -674,7 +728,9 @@ export class DebugView extends Component {
           ? `<span class="badge tone-bad">Boot check failed</span>`
           : !s.rf.enabled
             ? `<span class="badge debug-tone-warn">Switched off</span>`
-            : `<span class="badge tone-good">OK</span> gain ${s.rf.gain}/${s.rf.gainMax} · floor ${s.rf.floorDb.toFixed(1)} dBm`,
+            : s.scanLive
+              ? `<span class="badge debug-tone-warn">Live scan</span> lap timing paused · floor ${s.rf.floorDb.toFixed(1)} dBm`
+              : `<span class="badge tone-good">OK</span> gain ${s.rf.gain}/${s.rf.gainMax} · floor ${s.rf.floorDb.toFixed(1)} dBm`,
       ],
       [
         "Wi-Fi",
@@ -739,7 +795,14 @@ export class DebugView extends Component {
     const l = this.live;
     const note = this.el.querySelector<HTMLElement>("[data-live-note]");
     if (note && this.console.connected) {
-      note.textContent = this.status && !this.status.rf.enabled ? "Receiver off" : l ? `sweep ${(l.us / 1000).toFixed(2)} ms` : "";
+      note.textContent =
+        this.scanLive || this.status?.scanLive
+          ? "Paused: the live spectrum scan is using the receiver"
+          : this.status && !this.status.rf.enabled
+            ? "Receiver off"
+            : l
+              ? `sweep ${(l.us / 1000).toFixed(2)} ms`
+              : "";
     }
     const pct = (x: number) => Math.max(0, Math.min(100, ((x - DBM_MIN) / (DBM_MAX - DBM_MIN)) * 100));
     this.el.querySelectorAll<HTMLElement>("[data-bar]").forEach((row, i) => {
@@ -784,25 +847,46 @@ export class DebugView extends Component {
 
   private renderScan(): void {
     const on = this.console.connected;
-    const s = this.scan;
     const prev = {
       start: this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value ?? "5180",
       stop: this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value ?? "5917",
       step: this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value ?? "5",
     };
+    const dis = this.scanLive ? "disabled" : "";
     this.slot("scan").innerHTML = `
       <div class="debug-card-head">
         <div class="debug-scan-inputs">
-          <label>From <input class="input mono" type="number" data-scan-start value="${esc(prev.start)}" min="5180" max="5917"/></label>
-          <label>to <input class="input mono" type="number" data-scan-stop value="${esc(prev.stop)}" min="5180" max="5917"/></label>
-          <label>step <input class="input mono" type="number" data-scan-step value="${esc(prev.step)}" min="1" max="50"/></label>
+          <label>From <input class="input mono" type="number" data-scan-start value="${esc(prev.start)}" min="5180" max="5917" ${dis}/></label>
+          <label>to <input class="input mono" type="number" data-scan-stop value="${esc(prev.stop)}" min="5180" max="5917" ${dis}/></label>
+          <label>step <input class="input mono" type="number" data-scan-step value="${esc(prev.step)}" min="1" max="50" ${dis}/></label>
           <span class="note">MHz</span>
         </div>
-        <button type="button" class="btn btn-sm btn-armed" data-action="scan" ${on && !this.scanning ? "" : "disabled"}>
-          ${icons.signal(14)}<span>${this.scanning ? "Scanning…" : "Scan"}</span>
-        </button>
+        <div class="debug-connect-actions">
+          ${this.scanLive ? `<button type="button" class="btn btn-sm btn-ghost" data-action="clear-hold">Clear max hold</button>` : ""}
+          <button type="button" class="btn btn-sm btn-ghost" data-action="scan" ${on && !this.scanning && !this.scanLive ? "" : "disabled"}>
+            ${icons.signal(14)}<span>${this.scanning ? "Scanning…" : "Scan"}</span>
+          </button>
+          <button type="button" class="btn btn-sm ${this.scanLive ? "btn-danger-active" : "btn-armed"}" data-action="scan-live" ${on && !this.scanning ? "" : "disabled"}>
+            ${this.scanLive ? icons.pause(14) : icons.play(14)}<span>${this.scanLive ? "Stop live scan" : "Live"}</span>
+          </button>
+        </div>
       </div>
-      ${s ? spectrumSvg(s) : `<p class="note">${on ? "Run a scan to see the band." : "Connect a timer to scan."}</p>`}`;
+      <div data-scan-chart></div>`;
+    this.renderScanChart();
+  }
+
+  /** Redraw only the chart (continuous-scan passes arrive several times a second). */
+  private renderScanChart(): void {
+    const host = this.el.querySelector<HTMLElement>("[data-scan-chart]");
+    if (!host) return;
+    const on = this.console.connected;
+    const s = this.scan;
+    const note = this.scanLive
+      ? `<p class="note debug-scan-live-note"><span class="debug-tone-warn">Live scan: lap timing is paused.</span> ${s?.live && s.passMs ? `${(1000 / s.passMs).toFixed(1)} passes/s · ` : ""}faint line = max hold</p>`
+      : "";
+    host.innerHTML = s
+      ? `${spectrumSvg(s, this.scanLive ? this.maxHold : null)}${note}`
+      : `<p class="note">${this.scanLive ? "Waiting for the first pass…" : on ? "Run a scan to see the band." : "Connect a timer to scan."}</p>`;
   }
 
   private bootLogHeader(l: BootLog): string {
@@ -899,8 +983,8 @@ function racebandName(f: number): string {
   return i >= 0 ? `R${i + 1}` : "";
 }
 
-/** Line chart of a scan with Raceband channel markers. */
-function spectrumSvg(s: ScanResult): string {
+/** Line chart of a scan with Raceband channel markers, plus an optional max-hold trace. */
+function spectrumSvg(s: ScanResult, maxHold: number[] | null = null): string {
   const W = 760;
   const H = 220;
   const L = 44;
@@ -923,6 +1007,11 @@ function spectrumSvg(s: ScanResult): string {
       ${RACEBAND.filter((f) => f >= s.start && f <= stop)
         .map((f) => `<line class="band" x1="${x(f)}" x2="${x(f)}" y1="${T}" y2="${H - B}"/><text class="band-label" x="${x(f)}" y="${T + 10}" text-anchor="middle">R${RACEBAND.indexOf(f) + 1}</text>`)
         .join("")}
+      ${
+        maxHold && maxHold.length === s.dbm.length
+          ? `<polyline class="hold" points="${maxHold.map((d, i) => `${x(s.start + i * s.step).toFixed(1)},${y(d).toFixed(1)}`).join(" ")}"/>`
+          : ""
+      }
       <polyline class="trace" points="${pts}"/>
       <circle class="peak" cx="${x(s.start + peak * s.step)}" cy="${y(s.dbm[peak])}" r="3.5"/>
       <text class="peak-label" x="${Math.min(W - R - 4, x(s.start + peak * s.step) + 6)}" y="${Math.max(T + 22, y(s.dbm[peak]) - 6)}">${s.start + peak * s.step} MHz · ${s.dbm[peak]} dBm</text>
