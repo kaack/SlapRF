@@ -477,6 +477,10 @@ export class DebugView extends Component {
               </div>
               <div class="debug-chart-readout debug-single-readout" data-signal-readout></div>
               <div data-slot="signal-legend"></div>
+              <div class="rules-foot">
+                <p class="note">Default view uses Auto X and Auto Y scaling with all overlays and channels shown.</p>
+                <button class="btn btn-ghost btn-sm" type="button" data-action="restore-signal-defaults">Restore defaults</button>
+              </div>
             </div>
             <div class="debug-status-layout" data-slot="noise-table"></div>
           </div>
@@ -4057,10 +4061,6 @@ export class DebugView extends Component {
             <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-png" ${hasPts ? "" : "disabled"} title="Save signal chart snapshot as PNG">PNG</button>
           </div>
         </div>
-      </div>
-      <div class="rules-foot">
-        <p class="note">Default view uses Auto X and Auto Y scaling with all overlays and channels shown.</p>
-        <button class="btn btn-ghost btn-sm" type="button" data-action="restore-signal-defaults">Restore defaults</button>
       </div>`;
   }
 
