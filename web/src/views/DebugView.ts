@@ -157,7 +157,6 @@ export class DebugView extends Component {
   private scanStartMHz = 5180;
   private scanStopMHz = 5917;
   private scanStepMHz = 5;
-  private scanCustomRange = false;
   private scanZoomStartMHz: number | null = null;
   private scanZoomStopMHz: number | null = null;
   private scanAutoY = true;
@@ -415,16 +414,6 @@ export class DebugView extends Component {
       const t = e.target as HTMLElement;
       if (t.matches("[data-chan]")) {
         this.channelsDirty = true;
-      } else if (t.matches("[data-scan-start], [data-scan-stop], [data-scan-step]")) {
-        const iStart = this.el.querySelector<HTMLInputElement>("[data-scan-start]");
-        const iStop = this.el.querySelector<HTMLInputElement>("[data-scan-stop]");
-        const iStep = this.el.querySelector<HTMLInputElement>("[data-scan-step]");
-        if (iStart) this.scanStartMHz = Number(iStart.value) || 5180;
-        if (iStop) this.scanStopMHz = Number(iStop.value) || 5917;
-        if (iStep) this.scanStepMHz = Math.max(1, Number(iStep.value) || 5);
-        this.scanCustomRange = true;
-        this.dirtySpectrum = true;
-        this.dirtyWaterfall = true;
       }
     });
 
@@ -523,9 +512,9 @@ export class DebugView extends Component {
 
   private currentScanBounds(): { vStart: number; vStop: number } {
     const s = this.spectrumAcc.latest;
-    const rawStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || this.scanStartMHz;
-    const rawStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || this.scanStopMHz;
-    const rawStep = Math.max(1, Number(this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value) || this.scanStepMHz);
+    const rawStart = this.scanStartMHz;
+    const rawStop = this.scanStopMHz;
+    const rawStep = Math.max(1, this.scanStepMHz);
     const fullStart = s && s.dbm.length ? s.start : Math.max(5180, Math.min(5900, rawStart));
     const fullStop =
       s && s.dbm.length
@@ -540,7 +529,7 @@ export class DebugView extends Component {
   private applyFreqZoomFromBox(box: { x0: number; x1: number }, plotW: number, L = 44): void {
     const b = this.currentScanBounds();
     const s = this.spectrumAcc.latest;
-    const step = s && s.dbm.length ? s.step : Math.max(1, Number(this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value) || this.scanStepMHz);
+    const step = s && s.dbm.length ? s.step : Math.max(1, this.scanStepMHz);
     const xa = Math.max(L, Math.min(L + plotW, Math.min(box.x0, box.x1)));
     const xb = Math.max(L, Math.min(L + plotW, Math.max(box.x0, box.x1)));
     if (xb - xa < 12) return;
@@ -556,9 +545,9 @@ export class DebugView extends Component {
 
   private applyFreqStretch(startMHz0: number, startMHz1: number, anchorFrac: number, factor: number): void {
     const s = this.spectrumAcc.latest;
-    const rawStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || this.scanStartMHz;
-    const rawStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || this.scanStopMHz;
-    const rawStep = Math.max(1, Number(this.el.querySelector<HTMLInputElement>("[data-scan-step]")?.value) || this.scanStepMHz);
+    const rawStart = this.scanStartMHz;
+    const rawStop = this.scanStopMHz;
+    const rawStep = Math.max(1, this.scanStepMHz);
     const fullStart = s && s.dbm.length ? s.start : Math.max(5180, Math.min(5900, rawStart));
     const fullStop =
       s && s.dbm.length
@@ -594,8 +583,8 @@ export class DebugView extends Component {
 
   private applyFreqPan(startMHz0: number, startMHz1: number, deltaMHz: number): void {
     const s = this.spectrumAcc.latest;
-    const rawStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || this.scanStartMHz;
-    const rawStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || this.scanStopMHz;
+    const rawStart = this.scanStartMHz;
+    const rawStop = this.scanStopMHz;
     const fullStart = s && s.dbm.length ? s.start : Math.max(5180, Math.min(5900, rawStart));
     const fullStop = s && s.dbm.length ? s.start + s.step * (s.dbm.length - 1) : Math.max(fullStart + 5, Math.min(5925, rawStop));
     const span = Math.max(10, startMHz1 - startMHz0);
@@ -1419,16 +1408,14 @@ export class DebugView extends Component {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-spectrum-canvas]");
       if (c) {
         this.updateAutoScanY();
-        const fallbackStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || this.scanStartMHz;
-        const fallbackStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || this.scanStopMHz;
         drawSpectrumCanvas(c, this.spectrumAcc, {
           showMaxHold: this.scanShowMaxHold,
           showAverage: this.scanShowAvg,
           showWifiOverlay: this.scanShowWifi,
           viewStartMHz: this.scanZoomStartMHz,
           viewStopMHz: this.scanZoomStopMHz,
-          fallbackStartMHz: fallbackStart,
-          fallbackStopMHz: fallbackStop,
+          fallbackStartMHz: this.scanStartMHz,
+          fallbackStopMHz: this.scanStopMHz,
           yMinDbm: this.scanYMin,
           yMaxDbm: this.scanYMax,
           autoY: this.scanAutoY,
@@ -1442,8 +1429,6 @@ export class DebugView extends Component {
     if (this.dirtyWaterfall) {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-waterfall-canvas]");
       if (c) {
-        const fallbackStart = Number(this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.value) || this.scanStartMHz;
-        const fallbackStop = Number(this.el.querySelector<HTMLInputElement>("[data-scan-stop]")?.value) || this.scanStopMHz;
         drawWaterfallCanvas(
           c,
           this.spectrumAcc,
@@ -1452,8 +1437,8 @@ export class DebugView extends Component {
           this.scanZoomStartMHz,
           this.scanZoomStopMHz,
           this.scanZoomBox,
-          fallbackStart,
-          fallbackStop
+          this.scanStartMHz,
+          this.scanStopMHz
         );
         this.dirtyWaterfall = false;
       }
@@ -1814,12 +1799,9 @@ export class DebugView extends Component {
           break;
         }
         case "scan": {
-          const start = this.num("[data-scan-start]", this.scanStartMHz);
-          const stop = this.num("[data-scan-stop]", this.scanStopMHz);
-          const step = this.num("[data-scan-step]", this.scanStepMHz);
-          this.scanStartMHz = start;
-          this.scanStopMHz = stop;
-          this.scanStepMHz = step;
+          const start = this.scanStartMHz;
+          const stop = this.scanStopMHz;
+          const step = this.scanStepMHz;
           this.scanning = true;
           this.renderScan();
           await this.console.request(`SCAN ${start} ${stop} ${step}`, "scan", 5000).catch((err: Error) => {
@@ -1840,12 +1822,9 @@ export class DebugView extends Component {
               await this.console.send("LIVE 0").catch(() => undefined);
             }
           } else {
-            const start = this.num("[data-scan-start]", this.scanStartMHz);
-            const stop = this.num("[data-scan-stop]", this.scanStopMHz);
-            const step = this.num("[data-scan-step]", this.scanStepMHz);
-            this.scanStartMHz = start;
-            this.scanStopMHz = stop;
-            this.scanStepMHz = step;
+            const start = this.scanStartMHz;
+            const stop = this.scanStopMHz;
+            const step = this.scanStepMHz;
             this.spectrumAcc.clearHoldAndAvg();
             await this.console.request(`SCAN LIVE ${start} ${stop} ${step}`, "ok", 2000);
             this.scanLive = true;
@@ -1930,7 +1909,6 @@ export class DebugView extends Component {
           this.scanStartMHz = start;
           this.scanStopMHz = stop;
           this.scanStepMHz = step;
-          this.scanCustomRange = false;
           if (this.scanLive && this.console.connected) {
             this.scanToggleAt = Date.now();
             this.spectrumAcc.clearHoldAndAvg();
@@ -1939,12 +1917,6 @@ export class DebugView extends Component {
           this.renderScan();
           break;
         }
-        case "scan-custom-mode":
-          this.openAxisMenu = null;
-          this.scanCustomRange = true;
-          this.renderScan();
-          this.el.querySelector<HTMLInputElement>("[data-scan-start]")?.focus();
-          break;
         case "scan-toggle-hold":
           this.scanShowMaxHold = !this.scanShowMaxHold;
           this.renderScan();
@@ -2781,7 +2753,7 @@ export class DebugView extends Component {
       <div class="debug-chart-foot is-with-divider">
         <div class="debug-toolbar-left">
           <div class="debug-axis-pill ${this.signalAutoX ? "is-armed" : "is-unarmed"}" data-axis-pill>
-            <button type="button" class="debug-axis-pill-main mono" data-action="${this.signalAutoX ? "toggle-axis-menu" : "signal-reset-x"}" data-menu="signal-x" title="${this.signalAutoX ? `Auto X-axis time window (${xWinLabel}) — click to choose a time window preset` : "Click to reset X-axis time window to Auto X"}">
+            <button type="button" class="debug-axis-pill-main" data-action="${this.signalAutoX ? "toggle-axis-menu" : "signal-reset-x"}" data-menu="signal-x" title="${this.signalAutoX ? `Auto X-axis time window (${xWinLabel}) — click to choose a time window preset` : "Click to reset X-axis time window to Auto X"}">
               ${icons.target(13)}<span>${this.signalAutoX ? "Auto X" : `X: ${xWinLabel}`}</span>
             </button>
             <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="signal-x" aria-expanded="${this.openAxisMenu === "signal-x"}" title="Choose X-axis time window">
@@ -2789,7 +2761,7 @@ export class DebugView extends Component {
             </button>
             ${
               this.openAxisMenu === "signal-x"
-                ? `<div class="debug-axis-menu mono" role="menu" aria-label="X-axis time window">
+                ? `<div class="debug-axis-menu" role="menu" aria-label="X-axis time window">
                     <button type="button" class="debug-axis-menu-item ${this.signalAutoX ? "is-active" : ""}" data-action="signal-auto-x" data-force="1" role="menuitem">
                       <span>Auto X</span><span class="note">${xWinLabel}</span>
                     </button>
@@ -2806,7 +2778,7 @@ export class DebugView extends Component {
             }
           </div>
           <div class="debug-axis-pill ${this.signalAutoY ? "is-armed" : "is-unarmed"}" data-axis-pill>
-            <button type="button" class="debug-axis-pill-main mono" data-action="${this.signalAutoY ? "toggle-axis-menu" : "signal-reset-y"}" data-menu="signal-y" title="${this.signalAutoY ? "Auto Y-axis scaling is ON — fits visible signal traces automatically. Click to choose a scale preset, or drag the Y-axis to stretch." : "Click to reset Y-axis range to Auto Y"}">
+            <button type="button" class="debug-axis-pill-main" data-action="${this.signalAutoY ? "toggle-axis-menu" : "signal-reset-y"}" data-menu="signal-y" title="${this.signalAutoY ? "Auto Y-axis scaling is ON — fits visible signal traces automatically. Click to choose a scale preset, or drag the Y-axis to stretch." : "Click to reset Y-axis range to Auto Y"}">
               ${icons.target(13)}<span>${this.signalAutoY ? "Auto Y" : `Y: ${Math.round(this.signalYMin)}…${Math.round(this.signalYMax)} dBm`}</span>
             </button>
             <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="signal-y" aria-expanded="${this.openAxisMenu === "signal-y"}" title="Choose Y-axis dBm scale">
@@ -2814,7 +2786,7 @@ export class DebugView extends Component {
             </button>
             ${
               this.openAxisMenu === "signal-y"
-                ? `<div class="debug-axis-menu mono" role="menu" aria-label="Y-axis dBm scale">
+                ? `<div class="debug-axis-menu" role="menu" aria-label="Y-axis dBm scale">
                     <button type="button" class="debug-axis-menu-item ${this.signalAutoY ? "is-active" : ""}" data-action="signal-auto-y" data-force="1" role="menuitem">
                       <span>Auto Y</span><span class="note">Fit traces</span>
                     </button>
@@ -3214,25 +3186,11 @@ export class DebugView extends Component {
   private renderScan(): void {
     const on = this.console.connected;
     const rfOn = this.status?.rf.enabled ?? true;
-    const iStart = this.el.querySelector<HTMLInputElement>("[data-scan-start]");
-    const iStop = this.el.querySelector<HTMLInputElement>("[data-scan-stop]");
-    const iStep = this.el.querySelector<HTMLInputElement>("[data-scan-step]");
-    if (iStart) this.scanStartMHz = Number(iStart.value) || this.scanStartMHz;
-    if (iStop) this.scanStopMHz = Number(iStop.value) || this.scanStopMHz;
-    if (iStep) this.scanStepMHz = Math.max(1, Number(iStep.value) || this.scanStepMHz);
-    const dis = this.scanLive ? "disabled" : "";
     const hasScan = this.spectrumAcc.latest !== null;
-    const isFull5 = !this.scanCustomRange && this.scanStartMHz === 5180 && this.scanStopMHz === 5917 && this.scanStepMHz === 5;
-    const isFast15 = !this.scanCustomRange && this.scanStartMHz === 5180 && this.scanStopMHz === 5917 && this.scanStepMHz === 15;
-    const isRb5 = !this.scanCustomRange && this.scanStartMHz === 5650 && this.scanStopMHz === 5925 && this.scanStepMHz === 5;
-    const isCustomBand = this.scanCustomRange || (!isFull5 && !isFast15 && !isRb5);
-    const bandLabel = isFull5
-      ? "Full · 3 Hz"
-      : isFast15
-        ? "Fast full · 9 Hz"
-        : isRb5
-          ? "Raceband · 8 Hz"
-          : `Custom (${this.scanStartMHz}–${this.scanStopMHz})`;
+    const isFull5 = this.scanStartMHz === 5180 && this.scanStopMHz === 5917 && this.scanStepMHz === 5;
+    const isFast15 = this.scanStartMHz === 5180 && this.scanStopMHz === 5917 && this.scanStepMHz === 15;
+    const isRb5 = this.scanStartMHz === 5650 && this.scanStopMHz === 5925 && this.scanStepMHz === 5;
+    const bandLabel = isFast15 ? "Fast full · 9 Hz" : isRb5 ? "Raceband · 8 Hz" : "Full · 3 Hz";
     const isFreqZoomed = this.scanZoomStartMHz !== null && this.scanZoomStopMHz !== null;
     const isScanYZoomed = this.scanYMin !== DBM_MIN || this.scanYMax !== DBM_MAX;
     const isWfRowsZoomed = this.spectrumAcc.visibleRows !== 80;
@@ -3258,45 +3216,6 @@ export class DebugView extends Component {
         </div>
       </div>
       <div class="debug-subbar">
-        <div class="debug-toolbar-left">
-          <div class="debug-axis-pill ${!isCustomBand ? "is-armed" : "is-unarmed"}" data-axis-pill>
-            <button type="button" class="debug-axis-pill-main mono" data-action="${!isCustomBand ? "toggle-axis-menu" : "scan-preset"}" data-menu="scan-band" data-start="5180" data-stop="5917" data-step="5" title="${!isCustomBand ? `Band sweep preset (${this.scanStartMHz}–${this.scanStopMHz} MHz, ${this.scanStepMHz} MHz step) — click to choose a band sweep preset or custom range` : "Click to reset band sweep to Full · 3 Hz (5180–5917 MHz, 5 MHz step)"}">
-              ${icons.sliders(13)}<span>${bandLabel}</span>
-            </button>
-            <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-band" aria-expanded="${this.openAxisMenu === "scan-band"}" title="Choose band sweep preset or custom range">
-              ${icons.chevronDown(12)}
-            </button>
-            ${
-              this.openAxisMenu === "scan-band"
-                ? `<div class="debug-axis-menu mono" role="menu" aria-label="Band sweep range and speed">
-                    <button type="button" class="debug-axis-menu-item ${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="5" role="menuitem" title="Full 5.18–5.92 GHz band at 5 MHz step (148 points, ~3.1 passes/s)">
-                      <span>Full · 3 Hz</span><span class="note">5180–5917 · 5 MHz</span>
-                    </button>
-                    <button type="button" class="debug-axis-menu-item ${isFast15 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="15" role="menuitem" title="Full 5.18–5.92 GHz band at 15 MHz step (50 points, ~9 passes/s)">
-                      <span>Fast full · 9 Hz</span><span class="note">5180–5917 · 15 MHz</span>
-                    </button>
-                    <button type="button" class="debug-axis-menu-item ${isRb5 ? "is-active" : ""}" data-action="scan-preset" data-start="5650" data-stop="5925" data-step="5" role="menuitem" title="Raceband R1–R8 + Wi-Fi UNII-3 at 5 MHz step (56 points, ~8 passes/s)">
-                      <span>Raceband · 8 Hz</span><span class="note">5650–5925 · 5 MHz</span>
-                    </button>
-                    <div class="debug-axis-menu-sep"></div>
-                    <button type="button" class="debug-axis-menu-item ${isCustomBand ? "is-active" : ""}" data-action="scan-custom-mode" role="menuitem">
-                      <span>Custom…</span><span class="note">${this.scanStartMHz}–${this.scanStopMHz} · ${this.scanStepMHz} MHz</span>
-                    </button>
-                  </div>`
-                : ""
-            }
-          </div>
-          ${
-            isCustomBand
-              ? `<div class="debug-scan-inputs">
-                  <label>From <input class="input mono" type="number" data-scan-start value="${this.scanStartMHz}" min="5180" max="5917" ${dis}/></label>
-                  <label>to <input class="input mono" type="number" data-scan-stop value="${this.scanStopMHz}" min="5180" max="5917" ${dis}/></label>
-                  <label>step <input class="input mono" type="number" data-scan-step value="${this.scanStepMHz}" min="1" max="50" ${dis}/></label>
-                  <span class="note">MHz</span>
-                </div>`
-              : ""
-          }
-        </div>
         <div class="debug-connect-actions">
           <div class="debug-overlay-checks" role="group" aria-label="Spectrum overlays">
             <label class="check">
@@ -3324,7 +3243,7 @@ export class DebugView extends Component {
       <div class="debug-chart-foot">
         <div class="debug-toolbar-left">
           <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
-            <button type="button" class="debug-axis-pill-main mono" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="scan-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range — click to choose a frequency band preset, or drag X-axis to zoom"}">
+            <button type="button" class="debug-axis-pill-main" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="scan-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range — click to choose a frequency band preset, or drag X-axis to zoom"}">
               ${icons.target(13)}<span>${isFreqZoomed ? `X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz` : "Auto X"}</span>
             </button>
             <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-x" aria-expanded="${this.openAxisMenu === "scan-x"}" title="Choose frequency range">
@@ -3332,7 +3251,7 @@ export class DebugView extends Component {
             </button>
             ${
               this.openAxisMenu === "scan-x"
-                ? `<div class="debug-axis-menu mono" role="menu" aria-label="Spectrum X-axis frequency range">
+                ? `<div class="debug-axis-menu" role="menu" aria-label="Spectrum X-axis frequency range">
                     <button type="button" class="debug-axis-menu-item ${!isFreqZoomed ? "is-active" : ""}" data-action="scan-reset-zoom" role="menuitem">
                       <span>Auto X</span><span class="note">Full scan</span>
                     </button>
@@ -3351,7 +3270,7 @@ export class DebugView extends Component {
             }
           </div>
           <div class="debug-axis-pill ${this.scanAutoY ? "is-armed" : "is-unarmed"}" data-axis-pill>
-            <button type="button" class="debug-axis-pill-main mono" data-action="${this.scanAutoY ? "toggle-axis-menu" : "scan-reset-y"}" data-menu="scan-y" title="${this.scanAutoY ? "Auto Y-axis scaling is ON (fits scanned dBm range) — click to choose a scale preset, or drag the Y-axis" : "Click to reset Y-axis range to Auto Y"}">
+            <button type="button" class="debug-axis-pill-main" data-action="${this.scanAutoY ? "toggle-axis-menu" : "scan-reset-y"}" data-menu="scan-y" title="${this.scanAutoY ? "Auto Y-axis scaling is ON (fits scanned dBm range) — click to choose a scale preset, or drag the Y-axis" : "Click to reset Y-axis range to Auto Y"}">
               ${icons.target(13)}<span>${this.scanAutoY ? "Auto Y" : `Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} dBm`}</span>
             </button>
             <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-y" aria-expanded="${this.openAxisMenu === "scan-y"}" title="Choose spectrum Y-axis dBm scale">
@@ -3359,13 +3278,36 @@ export class DebugView extends Component {
             </button>
             ${
               this.openAxisMenu === "scan-y"
-                ? `<div class="debug-axis-menu mono" role="menu" aria-label="Spectrum Y-axis dBm scale">
+                ? `<div class="debug-axis-menu" role="menu" aria-label="Spectrum Y-axis dBm scale">
                     <button type="button" class="debug-axis-menu-item ${this.scanAutoY ? "is-active" : ""}" data-action="scan-auto-y" data-force="1" role="menuitem">
                       <span>Auto Y</span><span class="note">Fit scan</span>
                     </button>
                     <div class="debug-axis-menu-sep"></div>
                     <button type="button" class="debug-axis-menu-item ${!this.scanAutoY && !isScanYZoomed ? "is-active" : ""}" data-action="scan-full-y" role="menuitem">
                       <span>Full scale</span><span class="note">${DBM_MIN}…${DBM_MAX} dBm</span>
+                    </button>
+                  </div>`
+                : ""
+            }
+          </div>
+          <div class="debug-axis-pill ${isFull5 ? "is-armed" : "is-unarmed"}" data-axis-pill>
+            <button type="button" class="debug-axis-pill-main" data-action="${isFull5 ? "toggle-axis-menu" : "scan-preset"}" data-menu="scan-band" data-start="5180" data-stop="5917" data-step="5" title="${isFull5 ? `Band sweep preset (${this.scanStartMHz}–${this.scanStopMHz} MHz, ${this.scanStepMHz} MHz step) — click to choose a band sweep preset` : "Click to reset band sweep to Full · 3 Hz (5180–5917 MHz, 5 MHz step)"}">
+              ${icons.sliders(13)}<span>${bandLabel}</span>
+            </button>
+            <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-band" aria-expanded="${this.openAxisMenu === "scan-band"}" title="Choose band sweep preset">
+              ${icons.chevronDown(12)}
+            </button>
+            ${
+              this.openAxisMenu === "scan-band"
+                ? `<div class="debug-axis-menu" role="menu" aria-label="Band sweep range and speed">
+                    <button type="button" class="debug-axis-menu-item ${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="5" role="menuitem" title="Full 5.18–5.92 GHz band at 5 MHz step (148 points, ~3.1 passes/s)">
+                      <span>Full · 3 Hz</span><span class="note">5180–5917 · 5 MHz</span>
+                    </button>
+                    <button type="button" class="debug-axis-menu-item ${isFast15 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="15" role="menuitem" title="Full 5.18–5.92 GHz band at 15 MHz step (50 points, ~9 passes/s)">
+                      <span>Fast full · 9 Hz</span><span class="note">5180–5917 · 15 MHz</span>
+                    </button>
+                    <button type="button" class="debug-axis-menu-item ${isRb5 ? "is-active" : ""}" data-action="scan-preset" data-start="5650" data-stop="5925" data-step="5" role="menuitem" title="Raceband R1–R8 + Wi-Fi UNII-3 at 5 MHz step (56 points, ~8 passes/s)">
+                      <span>Raceband · 8 Hz</span><span class="note">5650–5925 · 5 MHz</span>
                     </button>
                   </div>`
                 : ""
@@ -3403,7 +3345,7 @@ export class DebugView extends Component {
         <div class="debug-chart-foot">
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
-              <button type="button" class="debug-axis-pill-main mono" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="wf-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range — click to choose a frequency band preset, or drag X-axis to zoom"}">
+              <button type="button" class="debug-axis-pill-main" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="wf-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range — click to choose a frequency band preset, or drag X-axis to zoom"}">
                 ${icons.target(13)}<span>${isFreqZoomed ? `X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz` : "Auto X"}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="wf-x" aria-expanded="${this.openAxisMenu === "wf-x"}" title="Choose frequency range">
@@ -3411,7 +3353,7 @@ export class DebugView extends Component {
               </button>
               ${
                 this.openAxisMenu === "wf-x"
-                  ? `<div class="debug-axis-menu mono" role="menu" aria-label="Waterfall X-axis frequency range">
+                  ? `<div class="debug-axis-menu" role="menu" aria-label="Waterfall X-axis frequency range">
                       <button type="button" class="debug-axis-menu-item ${!isFreqZoomed ? "is-active" : ""}" data-action="scan-reset-zoom" role="menuitem">
                         <span>Auto X</span><span class="note">Full scan</span>
                       </button>
@@ -3430,7 +3372,7 @@ export class DebugView extends Component {
               }
             </div>
             <div class="debug-axis-pill ${!isWfRowsZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
-              <button type="button" class="debug-axis-pill-main mono" data-action="${!isWfRowsZoomed ? "toggle-axis-menu" : "wf-reset-rows"}" data-menu="wf-y" title="${!isWfRowsZoomed ? "Auto Y waterfall depth (80 passes) — click to choose a pass depth, or drag the Y-axis" : "Click to reset waterfall pass depth to Auto Y (80 passes)"}">
+              <button type="button" class="debug-axis-pill-main" data-action="${!isWfRowsZoomed ? "toggle-axis-menu" : "wf-reset-rows"}" data-menu="wf-y" title="${!isWfRowsZoomed ? "Auto Y waterfall depth (80 passes) — click to choose a pass depth, or drag the Y-axis" : "Click to reset waterfall pass depth to Auto Y (80 passes)"}">
                 ${icons.target(13)}<span>${!isWfRowsZoomed ? "Auto Y" : `Y: ${this.spectrumAcc.visibleRows} passes`}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="wf-y" aria-expanded="${this.openAxisMenu === "wf-y"}" title="Choose waterfall vertical pass depth">
@@ -3438,7 +3380,7 @@ export class DebugView extends Component {
               </button>
               ${
                 this.openAxisMenu === "wf-y"
-                  ? `<div class="debug-axis-menu mono" role="menu" aria-label="Waterfall pass depth">
+                  ? `<div class="debug-axis-menu" role="menu" aria-label="Waterfall pass depth">
                       <button type="button" class="debug-axis-menu-item ${!isWfRowsZoomed ? "is-active" : ""}" data-action="wf-rows" data-rows="80" role="menuitem">
                         <span>Auto Y</span><span class="note">80 passes</span>
                       </button>

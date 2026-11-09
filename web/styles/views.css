@@ -3965,7 +3965,10 @@ body.is-gate-dragging * {
   border: 1px solid var(--border);
   background: var(--surface-2);
   color: var(--text);
+  font-family: var(--font-sans);
   font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: normal;
   transition: border-color 0.12s, background 0.12s;
 }
 .debug-axis-pill.is-armed {
@@ -3976,7 +3979,7 @@ body.is-gate-dragging * {
 .debug-axis-pill.is-unarmed {
   background: var(--surface-2);
   border-color: var(--border);
-  font-weight: 400;
+  font-weight: 500;
 }
 .debug-axis-pill:hover {
   border-color: #3a3f48;
@@ -3990,6 +3993,8 @@ body.is-gate-dragging * {
   background: transparent;
   color: inherit;
   font: inherit;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: normal;
   cursor: pointer;
   padding: 0;
   transition: background 0.12s, color 0.12s;
@@ -4029,7 +4034,7 @@ body.is-gate-dragging * {
   position: absolute;
   top: calc(100% + 5px);
   left: 0;
-  min-width: 148px;
+  min-width: 156px;
   padding: 4px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
@@ -4038,6 +4043,10 @@ body.is-gate-dragging * {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: normal;
   z-index: 40;
 }
 .debug-axis-menu-sep {
@@ -4049,19 +4058,29 @@ body.is-gate-dragging * {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 14px;
   width: 100%;
   padding: 5px 8px;
   border: 0;
   border-radius: 4px;
   background: transparent;
   color: var(--text-2);
-  font: inherit;
-  font-size: 11.5px;
-  font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: normal;
+  line-height: 1.35;
   text-align: left;
   white-space: nowrap;
   cursor: pointer;
+}
+.debug-axis-menu-item .note {
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
 }
 .debug-axis-menu-item:hover {
   background: var(--surface-3);
@@ -4215,30 +4234,6 @@ body.is-gate-dragging * {
   margin: 6px 148px 0 94px;
   font-size: 10.5px;
   color: var(--text-3);
-}
-.debug-scan-inputs {
-  display: inline-flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-  min-height: 28px;
-  padding: 2px 9px;
-  border-radius: var(--radius-sm);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  font-size: 12px;
-  color: var(--text-2);
-}
-.debug-scan-inputs label {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-.debug-scan-inputs .input {
-  width: 66px;
-  height: 22px;
-  padding: 2px 6px;
-  font-size: 11.5px;
 }
 .debug-log {
   margin: 10px 0 0;
