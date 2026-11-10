@@ -427,7 +427,7 @@ export class NetworkView extends Component {
       hub = {
         populated: true,
         online: !s.emergencyMode,
-        label: s.label || "H1",
+        label: s.label || hubServerTimer?.timerLabel || "",
         fp: s.fp || "—",
         fw: s.fw || "—",
         mac: s.chip?.mac || knownHub?.mac || "—",
@@ -450,25 +450,25 @@ export class NetworkView extends Component {
       const hasSlot = !s.emergencyMode && s.slot >= 2;
       const beaconFresh = beaconMsAgo === undefined || beaconMsAgo < 2500;
       const linked = hasSlot && beaconFresh;
-      const parentLabel = s.hub?.label || hubServerTimer?.timerLabel || matchedHub?.label || "H1";
+      const parentLabel = s.hub?.label || hubServerTimer?.timerLabel || matchedHub?.label || "";
       const parentFp = s.hub?.fp || hubServerTimer?.fingerprint || matchedHub?.fp || "";
       const parentFw = s.hub?.fw || hubServerTimer?.firmwareVersion || matchedHub?.fw || s.fw;
       const parentMac = s.hub?.mac || matchedHub?.mac || "—";
       hub = {
-        populated: Boolean(linked || parentFp || matchedHub),
+        populated: linked,
         online: linked,
-        label: parentLabel,
-        fp: parentFp || "Slot 1",
-        fw: parentFw || "—",
-        mac: parentMac,
+        label: linked ? parentLabel : "",
+        fp: linked ? parentFp || "—" : "—",
+        fw: linked ? parentFw || "—" : "—",
+        mac: linked ? parentMac : "—",
         ch,
         viaUsb: false,
         emergencyMode: false,
-        gateLabel: hubGateName,
-        serverFrames: Math.max(hubGate?.framesRxCount ?? 0, hubServerTimer?.framesRxCount ?? 0),
-        statusNote: linked ? `Sync beacon locked` : hasSlot ? "Beacon lost" : "Waiting for beacon",
+        gateLabel: linked ? hubGateName : undefined,
+        serverFrames: linked ? Math.max(hubGate?.framesRxCount ?? 0, hubServerTimer?.framesRxCount ?? 0) : 0,
+        statusNote: linked ? `Sync beacon locked` : hasSlot ? "Beacon lost" : "Not connected",
       };
-    } else if (hubServerTimer) {
+    } else if (hubServerTimer && (this.store.simulatorRunning || hubServerTimer.online)) {
       const liveDbm = Array.isArray(hubGate?.lastRssi)
         ? hubGate!.lastRssi!.slice(0, 8).map((v) => Math.round(v))
         : Array.isArray(hubServerTimer.lastRssi)
@@ -477,7 +477,7 @@ export class NetworkView extends Component {
       hub = {
         populated: true,
         online: Boolean(hubServerTimer.online),
-        label: hubServerTimer.timerLabel || "H1",
+        label: hubServerTimer.timerLabel || "",
         fp: hubServerTimer.fingerprint || "—",
         fw: hubServerTimer.firmwareVersion || "—",
         mac: knownHub?.mac || "—",
@@ -487,28 +487,13 @@ export class NetworkView extends Component {
         gateLabel: hubGateName,
         serverFrames: Math.max(hubGate?.framesRxCount ?? 0, hubServerTimer.framesRxCount ?? 0),
         dbm: liveDbm,
-        statusNote: this.store.simulatorRunning ? "Simulated Hub" : hubServerTimer.online ? "Detected on engine" : "Offline",
-      };
-    } else if (knownHub) {
-      hub = {
-        populated: true,
-        online: false,
-        label: knownHub.label || "H1",
-        fp: knownHub.fp,
-        fw: knownHub.fw || "—",
-        mac: knownHub.mac || "—",
-        ch: 1,
-        viaUsb: false,
-        emergencyMode: false,
-        gateLabel: hubGateName,
-        serverFrames: hubGate?.framesRxCount ?? 0,
-        statusNote: "Disconnected · Known Hub",
+        statusNote: this.store.simulatorRunning ? "Simulated Hub" : "Online",
       };
     } else {
       hub = {
         populated: false,
         online: false,
-        label: "H1",
+        label: "",
         fp: "—",
         fw: "—",
         mac: "—",
@@ -567,7 +552,7 @@ export class NetworkView extends Component {
             espNowActive: activelyReceiving,
             inHubStatus: true,
             viaUsb: false,
-            label: cleanSpLabel || matchedDt?.timerLabel || known?.label || `T${sp.slot - 1}`,
+            label: cleanSpLabel || matchedDt?.timerLabel || known?.label || "",
             fp,
             fw: sp.fw || matchedDt?.firmwareVersion || known?.fw || s.fw,
             mac: sp.mac || known?.mac,
@@ -606,7 +591,7 @@ export class NetworkView extends Component {
         espNowActive: linked,
         inHubStatus: linked,
         viaUsb: true,
-        label: s.label || matchedDt?.timerLabel || `T${slotNum - 1}`,
+        label: s.label || matchedDt?.timerLabel || "",
         fp: s.fp || "—",
         fw: s.fw || "—",
         mac: s.chip?.mac,
@@ -628,9 +613,10 @@ export class NetworkView extends Component {
       if (s.fp) usedFps.add(s.fp.toUpperCase());
     }
 
-    // 3. Merge detected timers from store (engine / simulator)
+    // 3. Merge active detected timers from store (simulator or live engine)
     for (const dt of detectedTimers) {
       if (!dt.isHub && dt.timerId >= 2 && dt.timerId <= 7) {
+        if (!this.store.simulatorRunning && !dt.online) continue;
         const fp = (dt.fingerprint || "").toUpperCase();
         const gate = this.store.nodes.find((g) => g.assignedTimerId === dt.timerId);
         const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
@@ -674,7 +660,7 @@ export class NetworkView extends Component {
           espNowActive: serverOnline,
           inHubStatus: serverOnline,
           viaUsb: false,
-          label: dt.timerLabel || known?.label || `T${targetSlot - 1}`,
+          label: dt.timerLabel || known?.label || "",
           fp: fp || "—",
           fw: dt.firmwareVersion || known?.fw || hub.fw,
           mac: known?.mac,
@@ -693,51 +679,7 @@ export class NetworkView extends Component {
       }
     }
 
-    // 4. Fill remaining slots with known hardware spokes (inactive / dashed)
-    if (!this.store.simulatorRunning) {
-      const candidateSpokes = knownTimers.filter(
-        (k) =>
-          k.role === "spoke" &&
-          !usedFps.has(k.fp.toUpperCase()) &&
-          (!k.parentHubFp || !hub.fp || hub.fp === "—" || k.parentHubFp.toUpperCase() === hub.fp.toUpperCase())
-      );
-      for (const k of candidateSpokes) {
-        let targetSlot = k.slot && k.slot >= 2 && k.slot <= 7 && !spokes.has(k.slot) ? k.slot : 0;
-        if (!targetSlot) {
-          for (let sl = 2; sl <= 7; sl++) {
-            if (!spokes.has(sl)) {
-              targetSlot = sl;
-              break;
-            }
-          }
-        }
-        if (targetSlot >= 2 && targetSlot <= 7) {
-          const matchedDt = detectedTimers.find((t) => (t.fingerprint || "").toUpperCase() === k.fp.toUpperCase());
-          const gate = matchedDt ? this.store.nodes.find((g) => g.assignedTimerId === matchedDt.timerId) : undefined;
-          const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
-          spokes.set(targetSlot, {
-            slot: targetSlot,
-            populated: true,
-            espNowActive: false,
-            inHubStatus: false,
-            viaUsb: false,
-            label: k.label || `T${targetSlot - 1}`,
-            fp: k.fp,
-            fw: k.fw || hub.fw,
-            mac: k.mac,
-            frames: 0,
-            ratePktPerSec: 0,
-            serverFrames: gate?.framesRxCount ?? 0,
-            serverGateLabel: gateName,
-            serverRssi: Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined,
-            sourceNote: `Inactive · not joined`,
-          });
-          usedFps.add(k.fp.toUpperCase());
-        }
-      }
-    }
-
-    // 5. Fill any remaining slots (2..7) with empty placeholders
+    // 4. Fill any remaining slots (2..7) with empty placeholders (no pre-assigned timer name)
     for (let slotNum = 2; slotNum <= 7; slotNum++) {
       if (!spokes.has(slotNum)) {
         spokes.set(slotNum, {
@@ -746,7 +688,7 @@ export class NetworkView extends Component {
           espNowActive: false,
           inHubStatus: false,
           viaUsb: false,
-          label: `T${slotNum - 1}`,
+          label: "",
           fp: "—",
           fw: "—",
           frames: 0,
@@ -811,11 +753,10 @@ export class NetworkView extends Component {
           </div>
           <div class="debug-topo-node-main">
             <span class="status-dot"></span>
-            <strong class="debug-topo-node-label">${esc(sp.label)}</strong>
-            <span class="note">· Unassigned</span>
+            <span class="note">Unassigned</span>
           </div>
           <div class="debug-topo-node-foot">
-            <span class="note">Available for Spoke ${esc(sp.label)}</span>
+            <span class="note">Available Spoke slot</span>
           </div>
         </button>`;
     }
@@ -957,12 +898,12 @@ export class NetworkView extends Component {
             </div>
             <div class="debug-topo-node-main is-hub-main">
               <span class="status-dot ${hubDotClass}"></span>
-              <strong class="debug-topo-hub-name">${esc(hub.label)}</strong>
-              ${hub.fp && hub.fp !== "—" ? `<span class="badge mono">${esc(hub.fp)}</span>` : ""}
+              ${hub.populated && hub.label ? `<strong class="debug-topo-hub-name">${esc(hub.label)}</strong>` : `<span class="note">Unassigned</span>`}
+              ${hub.populated && hub.fp && hub.fp !== "—" ? `<span class="badge mono">${esc(hub.fp)}</span>` : ""}
             </div>
             <div class="debug-topo-hub-meta">
               <span>${esc(hub.statusNote)}</span>
-              <span class="mono">2.4 GHz Ch ${hub.ch} · ${activeCount}/${tiedCount} active</span>
+              ${hub.populated ? `<span class="mono">2.4 GHz Ch ${hub.ch} · ${activeCount}/${tiedCount} active</span>` : `<span class="note">Available Hub slot</span>`}
             </div>
           </button>
         </div>
@@ -1024,6 +965,27 @@ export class NetworkView extends Component {
     const freqs = s?.freqs?.length === 8 ? s.freqs : RACEBAND;
 
     if (selectedSlot === 1) {
+      if (!hub.populated) {
+        const emptyHubHtml = `
+          <div class="debug-status-topbar">
+            <span class="debug-led-status">
+              <span class="status-dot"></span>
+              <span class="debug-head-note"><strong>TDMA Slot 1</strong> · Open parent Hub slot</span>
+            </span>
+            <div class="debug-connect-actions">
+              <span class="badge">Slot 1 · Open</span>
+            </div>
+          </div>
+          <div class="debug-subbox">
+            <p class="note">No Hub timer is currently connected on TDMA Slot 1. Connect your Hub over USB-C (or enable the simulator) to coordinate the 2.4 GHz network.</p>
+          </div>`;
+        if (emptyHubHtml !== this.lastTimerHtml) {
+          this.lastTimerHtml = emptyHubHtml;
+          this.slot("timer-detail").innerHTML = emptyHubHtml;
+        }
+        return;
+      }
+
       const populatedSpokes = [...spokes.values()].filter((sp) => sp.populated);
       const activeSpokes = populatedSpokes.filter((sp) => sp.espNowActive);
       const totalSpokeFrames = populatedSpokes.reduce((acc, sp) => acc + (sp.frames ?? 0), 0);
@@ -1161,7 +1123,7 @@ export class NetworkView extends Component {
         <div class="debug-status-topbar">
           <span class="debug-led-status">
             <span class="status-dot"></span>
-            <span class="debug-head-note"><strong>TDMA Slot ${selectedSlot}</strong> · Open child Spoke slot (${esc(sp?.label || `T${selectedSlot - 1}`)})</span>
+            <span class="debug-head-note"><strong>TDMA Slot ${selectedSlot}</strong> · Open child Spoke slot</span>
           </span>
           <div class="debug-connect-actions">
             <span class="badge">Slot ${selectedSlot} · Open</span>
