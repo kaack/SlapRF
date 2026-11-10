@@ -5383,7 +5383,7 @@ body.is-gate-dragging * {
 .debug-topo-node.is-hub {
   padding: 14px 15px;
   gap: 9px;
-  background: var(--surface);
+  background: var(--surface-2);
   border-width: 1.5px;
 }
 .debug-topo-node.is-hub.is-active-link {
@@ -5391,14 +5391,15 @@ body.is-gate-dragging * {
   border-color: rgba(34, 197, 94, 0.45);
 }
 .debug-topo-node:hover {
-  border-color: var(--text-2);
+  background: #1d222b;
   opacity: 1;
 }
 .debug-topo-node.is-selected {
-  border-color: var(--text);
-  background: var(--surface);
-  box-shadow: 0 0 0 1px var(--text-2);
+  background: #262d3a;
   opacity: 1;
+}
+.debug-topo-node.is-selected:hover {
+  background: #2b3342;
 }
 .debug-topo-node-head {
   display: flex;

@@ -147,6 +147,12 @@ export class NetworkView extends Component {
       this.renderAll();
     });
 
+    this.listen(el, "pointerdown", (e) => {
+      if ((e as PointerEvent).button !== 0) return;
+      const t = (e.target as HTMLElement).closest<HTMLElement>('[data-action="select-topology-slot"]');
+      if (!t) return;
+      this.selectTopologySlot(Number(t.dataset.slotNum));
+    });
     this.listen(el, "click", (e) => void this.onClick(e));
 
     this.onDispose(() => {
@@ -174,8 +180,10 @@ export class NetworkView extends Component {
       }
       if (typeof p.selectedSlot === "number" && p.selectedSlot >= 1 && p.selectedSlot <= 7) {
         this.selectedSlot = p.selectedSlot;
+        this.userPickedSlot = true;
       } else if (typeof p.selectedNetworkSpokeSlot === "number" && p.selectedNetworkSpokeSlot >= 2 && p.selectedNetworkSpokeSlot <= 7) {
         this.selectedSlot = p.selectedNetworkSpokeSlot;
+        this.userPickedSlot = true;
       }
     } catch {
       // ignore
@@ -219,17 +227,20 @@ export class NetworkView extends Component {
     return null;
   }
 
+  private selectTopologySlot(slotNum: number): void {
+    if (slotNum >= 1 && slotNum <= 7) {
+      this.selectedSlot = slotNum;
+      this.userPickedSlot = true;
+      this.renderAll();
+      this.savePrefs();
+    }
+  }
+
   private async onClick(e: Event): Promise<void> {
     const t = (e.target as HTMLElement).closest<HTMLElement>("[data-action]");
     if (!t) return;
     if (t.dataset.action === "select-topology-slot") {
-      const slotNum = Number(t.dataset.slotNum);
-      if (slotNum >= 1 && slotNum <= 7) {
-        this.selectedSlot = slotNum;
-        this.userPickedSlot = true;
-        this.renderAll();
-        this.savePrefs();
-      }
+      this.selectTopologySlot(Number(t.dataset.slotNum));
     }
   }
 
@@ -632,6 +643,17 @@ export class NetworkView extends Component {
     const dotClass = active ? "is-spoke" : sp.inHubStatus ? "is-warn" : "";
     const stateBadgeClass = active ? "badge-good" : sp.inHubStatus ? "badge-warn" : "";
     const stateBadgeText = active ? "ESP-NOW Active" : sp.viaUsb ? "USB-C" : sp.inHubStatus ? "Stale" : "Inactive";
+    const cardStatusText = active
+      ? this.store.simulatorRunning
+        ? "Simulated link"
+        : sp.viaUsb
+          ? "Synced via USB-C"
+          : "Streaming telemetry"
+      : sp.viaUsb
+        ? "Connected via USB-C"
+        : sp.inHubStatus
+          ? "No recent frames"
+          : "Inactive · not joined";
 
     return `
       <button type="button" class="debug-topo-node is-spoke is-populated ${active ? "is-active-link" : "is-inactive-link"} ${isSelected ? "is-selected" : ""}" data-action="select-topology-slot" data-slot-num="${slotNum}" aria-pressed="${isSelected}" title="Click to inspect ${esc(sp.label)} (TDMA Slot ${slotNum})">
@@ -645,7 +667,7 @@ export class NetworkView extends Component {
           <span class="badge mono">${esc(sp.fp)}</span>
         </div>
         <div class="debug-topo-node-foot">
-          <span>${esc(sp.sourceNote)}</span>
+          <span>${esc(cardStatusText)}</span>
           ${sp.serverGateLabel ? `<span class="mono">${esc(sp.serverGateLabel)}</span>` : `<span class="mono">${esc(sp.fw)}</span>`}
         </div>
       </button>`;
