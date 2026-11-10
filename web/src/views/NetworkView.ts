@@ -299,7 +299,8 @@ export class NetworkView extends Component {
         (s.hub?.fp ? knownTimers.find((k) => k.fp.toUpperCase() === s.hub!.fp!.toUpperCase()) : undefined) ??
         (selfKnown?.parentHubFp ? knownTimers.find((k) => k.fp.toUpperCase() === selfKnown.parentHubFp!.toUpperCase()) : undefined) ??
         knownHub;
-      const beaconMsAgo = s.beaconMsAgo ?? s.hub?.beaconMsAgo;
+      const rawBeaconMsAgo = s.beaconMsAgo ?? s.hub?.beaconMsAgo;
+      const beaconMsAgo = rawBeaconMsAgo !== undefined && rawBeaconMsAgo >= 0x80000000 ? 0 : rawBeaconMsAgo;
       const hasSlot = !s.emergencyMode && s.slot >= 2;
       const beaconFresh = beaconMsAgo === undefined || beaconMsAgo < 2500;
       const linked = hasSlot && beaconFresh;
@@ -398,14 +399,15 @@ export class NetworkView extends Component {
           } else {
             this.spokeRateTracker.set(sp.slot, { frames, atMs: nowMs, ratePktPerSec: 0 });
           }
-          const activelyReceiving = frames > 0 && (sp.msAgo === undefined || sp.msAgo < 2500);
+          const msAgo = sp.msAgo !== undefined && sp.msAgo >= 0x80000000 ? 0 : sp.msAgo;
+          const activelyReceiving = frames > 0 && (msAgo === undefined || msAgo < 2500);
           const gate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === sp.slot);
           const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
           const sourceNote =
             frames === 0
               ? `Joined · 0 frames rx`
-              : sp.msAgo !== undefined && sp.msAgo >= 2500
-                ? `Stale (${(sp.msAgo / 1000).toFixed(1)}s ago)`
+              : msAgo !== undefined && msAgo >= 2500
+                ? `Stale (${(msAgo / 1000).toFixed(1)}s ago)`
                 : `${ratePktPerSec.toFixed(1)} pkt/s · ${frames} frames`;
           spokes.set(sp.slot, {
             slot: sp.slot,
@@ -418,7 +420,7 @@ export class NetworkView extends Component {
             fw: sp.fw || known?.fw || s.fw,
             mac: sp.mac || known?.mac,
             frames,
-            msAgo: sp.msAgo,
+            msAgo,
             seq: sp.seq,
             dbm: sp.dbm,
             ratePktPerSec,
@@ -435,7 +437,8 @@ export class NetworkView extends Component {
     // 2. If connected to a Spoke over USB, populate its slot directly
     if (s && s.role === 2) {
       const slotNum = s.slot >= 2 && s.slot <= 7 ? s.slot : 2;
-      const beaconMsAgo = s.beaconMsAgo ?? s.hub?.beaconMsAgo;
+      const rawBeaconMsAgo = s.beaconMsAgo ?? s.hub?.beaconMsAgo;
+      const beaconMsAgo = rawBeaconMsAgo !== undefined && rawBeaconMsAgo >= 0x80000000 ? 0 : rawBeaconMsAgo;
       const hasSlot = !s.emergencyMode && s.slot >= 2;
       const beaconFresh = beaconMsAgo === undefined || beaconMsAgo < 2500;
       const linked = hasSlot && beaconFresh;

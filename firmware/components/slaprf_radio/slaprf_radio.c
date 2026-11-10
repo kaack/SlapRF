@@ -322,10 +322,12 @@ void slaprf_spoke_sync_to_hub_channel(void) {
 }
 
 uint32_t slaprf_ms_since_hub_beacon(void) {
-    if (s_last_beacon_us == 0) {
+    const int64_t last_us = s_last_beacon_us;
+    if (last_us == 0) {
         return UINT32_MAX;
     }
-    return (uint32_t)((esp_timer_get_time() - s_last_beacon_us) / 1000);
+    const int64_t diff_us = esp_timer_get_time() - last_us;
+    return diff_us > 0 ? (uint32_t)(diff_us / 1000) : 0;
 }
 
 bool slaprf_hub_beacon_mac(uint8_t out_mac[6]) {

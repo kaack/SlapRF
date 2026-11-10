@@ -501,12 +501,13 @@ static void send_status(void) {
     if (s_cfg[CFG_OFF_ROLE] == 1) {
         n += snprintf(out + n, sizeof(out) - n, ",\"spokes\":[");
         bool first_sp = true;
-        const int64_t now_us = esp_timer_get_time();
         for (int i = 0; i < 6 && n < (int)sizeof(out) - 180; i++) {
             const diag_spoke_peer_t *sp = &s_peer_spokes[i];
             if (sp->fp == 0 && sp->frames == 0) continue;
-            const uint32_t ms_ago = sp->last_rx_us > 0
-                                        ? (uint32_t)((now_us - sp->last_rx_us) / 1000)
+            const int64_t last_rx_us = sp->last_rx_us;
+            const int64_t diff_us = esp_timer_get_time() - last_rx_us;
+            const uint32_t ms_ago = (last_rx_us > 0 && diff_us > 0)
+                                        ? (uint32_t)(diff_us / 1000)
                                         : 0;
             n += snprintf(out + n, sizeof(out) - n,
                           "%s{\"slot\":%d,\"fp\":\"%08lX\",\"label\":\"%s\",\"msAgo\":%lu,\"frames\":%lu,\"seq\":%u",

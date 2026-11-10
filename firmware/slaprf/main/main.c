@@ -276,39 +276,54 @@ static void hub_handle_join(const spoke_join_frame_t *j) {
     hub_send_hello(slot, j->role, j->fingerprint, j->sweep_hz, j->timer_label);
 }
 
+/** Process one received ESP-NOW frame on the Hub. */
+static void hub_handle_rx_frame(const uint8_t *buf, int n) {
+    if (n < 3 || buf[0] != FRAME_MAGIC_0 || compute_crc8(buf, (uint32_t)n - 1) != buf[n - 1]) {
+        return;
+    }
+    if (buf[1] == FRAME_MAGIC_JOIN && n == (int)sizeof(spoke_join_frame_t)) {
+        hub_handle_join((const spoke_join_frame_t *)buf);
+    } else if (buf[1] == FRAME_MAGIC_WINDOW || buf[1] == FRAME_MAGIC_SINGLE) {
+        const uint8_t slot = buf[2];
+        if (slot >= 2 && slot < 2 + MAX_SPOKES && s_hello[slot - 1].magic0 != FRAME_MAGIC_0) {
+            // Spoke was already running in this TDMA slot before the Hub booted:
+            // announce a fallback HELLO so the laptop ingests its frames immediately,
+            // until the Spoke's next periodic JOIN supplies its real fingerprint.
+            char fallback_label[24] = {0};
+            fallback_label[0] = 'S';
+            fallback_label[1] = (char)('0' + (slot - 1));
+            const uint32_t fp = s_slot_fp[slot - 2] ? s_slot_fp[slot - 2] : (0x53504B00UL | slot);
+            slaprf_diag_note_spoke(slot, fp, fallback_label);
+            hub_send_hello(slot, ROLE_SPOKE_TIMER, fp, SWEEP_HZ, fallback_label);
+        }
+        slaprf_diag_note_spoke_frame(buf, (uint32_t)n);
+        slaprf_forward_to_laptop(buf, (uint32_t)n);
+    }
+}
+
+/** Drain all currently queued ESP-NOW frames without blocking. */
+static void hub_drain_rx(void) {
+    uint8_t buf[250];
+    for (int n = espnow_poll(buf, sizeof(buf)); n > 0; n = espnow_poll(buf, sizeof(buf))) {
+        hub_handle_rx_frame(buf, n);
+    }
+}
+
 /** Drain received ESP-NOW frames (joins, Spoke windows) until `until_us`. */
 static void hub_listen_until(int64_t until_us) {
     uint8_t buf[250];
+    hub_drain_rx();
     for (;;) {
         // Block on the receive queue (wakes the instant a frame arrives, so it's forwarded to USB
         // within microseconds) but stop ~1.2 ms early so the caller can spin out an exact deadline.
         const int64_t left_us = until_us - slaprf_now_us() - 1200;
         if (left_us <= 0) {
+            hub_drain_rx();
             return;
         }
         int n = espnow_wait(buf, sizeof(buf), (uint32_t)(left_us / 1000 > 0 ? left_us / 1000 : 1));
         for (; n > 0; n = espnow_poll(buf, sizeof(buf))) {
-            if (n < 3 || buf[0] != FRAME_MAGIC_0 || compute_crc8(buf, (uint32_t)n - 1) != buf[n - 1]) {
-                continue;
-            }
-            if (buf[1] == FRAME_MAGIC_JOIN && n == (int)sizeof(spoke_join_frame_t)) {
-                hub_handle_join((const spoke_join_frame_t *)buf);
-            } else if (buf[1] == FRAME_MAGIC_WINDOW || buf[1] == FRAME_MAGIC_SINGLE) {
-                const uint8_t slot = buf[2];
-                if (slot >= 2 && slot < 2 + MAX_SPOKES && s_hello[slot - 1].magic0 != FRAME_MAGIC_0) {
-                    // Spoke was already running in this TDMA slot before the Hub booted:
-                    // announce a fallback HELLO so the laptop ingests its frames immediately,
-                    // until the Spoke's next periodic JOIN supplies its real fingerprint.
-                    char fallback_label[24] = {0};
-                    fallback_label[0] = 'S';
-                    fallback_label[1] = (char)('0' + (slot - 1));
-                    const uint32_t fp = s_slot_fp[slot - 2] ? s_slot_fp[slot - 2] : (0x53504B00UL | slot);
-                    slaprf_diag_note_spoke(slot, fp, fallback_label);
-                    hub_send_hello(slot, ROLE_SPOKE_TIMER, fp, SWEEP_HZ, fallback_label);
-                }
-                slaprf_diag_note_spoke_frame(buf, (uint32_t)n);
-                slaprf_forward_to_laptop(buf, (uint32_t)n);
-            }
+            hub_handle_rx_frame(buf, n);
         }
     }
 }
@@ -325,6 +340,7 @@ static void hub_run(void) {
             const int64_t t_sweep = t_sf + (int64_t)k * SWEEP_INTERVAL_US;
             const int64_t t_gap = t_sweep + SWEEP_BUDGET_US;
             slaprf_sleep_until_us(t_sweep);
+            hub_drain_rx(); // Forward any Spoke frame that arrived during the final spin before sweeping
             // The Hub always sweeps 5.8 GHz in the shared sweep interval, identically to a Spoke.
             // All Spokes are also on 5.8 GHz during this window, so no 2.4 GHz frames are missed.
             sweep_once();
