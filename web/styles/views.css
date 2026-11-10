@@ -3760,24 +3760,15 @@ body.is-gate-dragging * {
 .debug-page {
   font-variant-numeric: tabular-nums;
 }
-.debug-usb-bar {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  padding-bottom: 18px;
-  border-bottom: 1px solid var(--border);
+.debug-usb-picker-row {
+  min-height: 38px;
 }
 .debug-usb-picker {
   align-items: center;
 }
-.debug-usb-bar-label {
-  font-size: 12px;
-  font-weight: 500;
-  color: var(--text-3);
-  margin-right: 4px;
-}
 .debug-usb-chip {
-  padding: 0 6px 0 0;
+  height: 38px;
+  padding: 0 7px 0 0;
   gap: 2px;
 }
 .debug-usb-chip-select {
@@ -3785,7 +3776,7 @@ body.is-gate-dragging * {
   align-items: center;
   gap: 8px;
   height: 100%;
-  padding: 0 8px 0 12px;
+  padding: 0 8px 0 13px;
   background: none;
   border: 0;
   color: inherit;
@@ -3796,8 +3787,8 @@ body.is-gate-dragging * {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 22px;
-  height: 22px;
+  width: 24px;
+  height: 24px;
   border-radius: 999px;
   border: 0;
   background: transparent;
@@ -3810,8 +3801,15 @@ body.is-gate-dragging * {
   color: var(--text);
 }
 .debug-usb-add-chip {
+  height: 38px;
+  padding: 0 15px 0 12px;
   border-style: dashed;
   color: var(--text-2);
+}
+.debug-usb-add-chip svg {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
 }
 .debug-usb-add-chip:hover:not(:disabled) {
   border-style: solid;

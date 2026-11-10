@@ -243,7 +243,13 @@ export class DebugView extends Component {
 
     el.innerHTML = `
       <div class="settings debug-page">
-        <div class="debug-usb-bar" data-slot="connection"></div>
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Connection</h2>
+            <p>Connect up to 3 timers over USB-C at the same time (for example, keep the Hub running while debugging a Spoke) and choose which timer this page inspects.</p>
+          </div>
+          <div class="debug-status-layout" data-slot="connection"></div>
+        </section>
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Self-test</h2>
@@ -2947,7 +2953,7 @@ export class DebugView extends Component {
           ${supported && !busy ? "" : "disabled"}
           title="Connect ${connected.length > 0 ? "another " : ""}timer over USB-C (${connected.length}/${MAX_USB_CONNECTIONS} active)"
         >
-          ${icons.plug(15)}
+          ${icons.plug(20)}
           <span class="pilot-chip-name">${busy ? `${esc(busyText)}…` : connected.length > 0 ? "+ Connect USB" : "Connect USB"}</span>
           <span class="pilot-chip-time">${connected.length}/${MAX_USB_CONNECTIONS}</span>
         </button>`
@@ -2964,7 +2970,6 @@ export class DebugView extends Component {
     host.innerHTML = `
       <div class="picker-row debug-usb-picker-row">
         <div class="pilot-picker debug-usb-picker" role="tablist" aria-label="Debug target USB connection">
-          <span class="debug-usb-bar-label">Debug on</span>
           ${chipsHtml}
           ${addBtnHtml}
         </div>
