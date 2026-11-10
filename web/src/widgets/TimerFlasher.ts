@@ -143,7 +143,7 @@ export class TimerFlasher extends Component {
     });
 
     const unsubPool = usbPool.onChange(() => {
-      if (!this.busy) {
+      if (!this.busy && this.step === "flash") {
         this.slideDir = "none";
         this.render();
       }

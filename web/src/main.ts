@@ -9,6 +9,7 @@ import { ApiClient } from "./services/api_client";
 import { BrowserHubBridge } from "./services/browser_hub_bridge";
 import { sharedLiveTimeRelay } from "./services/livetime_relay";
 import { installOffline, isDevHost } from "./services/offline";
+import { usbPool } from "./services/timer_console";
 import { AppStore } from "./state/store";
 
 interface SlaprfHMRState {
@@ -71,6 +72,7 @@ function hotReloadUI(hmr: SlaprfHMRState): void {
   } catch (err) {
     console.warn("[HMR] Error destroying previous shell:", err);
   }
+  usbPool.rebindSlots();
   hmr.router.clearListeners();
   hmr.shell = new AppShell(root, hmr.store, hmr.api, hmr.router, hmr.announcer);
 

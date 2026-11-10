@@ -504,7 +504,7 @@ div.input {
 }
 .input:focus {
   outline: none;
-  border-color: var(--accent-line);
+  border-color: #6b7280;
 }
 .input.input-warn {
   border-color: rgba(251, 191, 36, 0.65);

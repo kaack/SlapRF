@@ -1312,7 +1312,25 @@ export class UsbConnectionPool {
 
   constructor(slots: [TimerConsole, TimerConsole, TimerConsole]) {
     this.slots = slots;
+    this.rebindSlots();
+    this.initBlankPortStabilizer();
+  }
+
+  /**
+   * Re-attaches pool-level state listeners to each slot after clearing any stale listeners left
+   * behind by prior HMR module evaluations.
+   */
+  public rebindSlots(): void {
     for (const c of this.slots) {
+      const subs = (c as unknown as { subscribers?: Set<Record<string, unknown>> }).subscribers;
+      if (subs) {
+        for (const sub of [...subs]) {
+          if (sub && "onConnect" in sub && "onConfig" in sub) {
+            subs.delete(sub);
+          }
+        }
+      }
+      (c as unknown as { stateListeners?: Set<() => void> }).stateListeners?.clear();
       c.onStateChange(() => this.notify());
       c.subscribe({
         onConnect: () => this.notify(),
@@ -1328,7 +1346,6 @@ export class UsbConnectionPool {
         },
       });
     }
-    this.initBlankPortStabilizer();
   }
 
   private readonly checkedBlankPorts = new WeakSet<object>();
