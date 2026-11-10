@@ -2913,9 +2913,10 @@ export class DebugView extends Component {
     const emg = Boolean(on && this.status?.emergencyMode);
     const counts = { pass: 0, warn: 0, fail: 0, skip: 0 };
     for (const c of this.checks) counts[c.result]++;
+    const isOther = Boolean(on && this.console.isOtherDevice);
     const ledClass = running
       ? "is-warn"
-      : emg
+      : emg || isOther
         ? "is-emergency"
         : this.checks.length
           ? counts.fail
@@ -2940,9 +2941,11 @@ export class DebugView extends Component {
         ? esc(this.progress)
         : emg
           ? "Emergency mode active · exit emergency mode to run 5.8 GHz RF checks"
-          : on
-            ? "Ready · takes about 10 s (pauses timing briefly during scan)"
-            : "Off · click Connect in the top bar";
+          : isOther
+            ? "Connected XIAO ESP32-C5 (Other) has no SlapRF firmware — open Flasher to write firmware"
+            : on
+              ? "Ready · takes about 10 s (pauses timing briefly during scan)"
+              : "Off · click Connect in the top bar";
     const consoleLines = this.checks.length
       ? esc(
           this.checks
@@ -2985,7 +2988,18 @@ export class DebugView extends Component {
     const budget = s ? s.sweepBudgetUs || (s.sweepHz ? Math.round(1e6 / s.sweepHz) : 0) : 0;
     const badReset = s ? BAD_RESETS.includes(s.reset) : false;
     const unprov = s ? s.fp.toUpperCase() === UNPROVISIONED_FP : false;
-    const ledClass = on && s ? (s.emergencyMode ? "is-emergency" : s.role === 2 ? "is-spoke" : "is-up") : on ? "is-warn" : "";
+    const ledClass =
+      on && s
+        ? s.emergencyMode
+          ? "is-emergency"
+          : s.role === 2
+            ? "is-spoke"
+            : "is-up"
+        : on
+          ? this.console.isOtherDevice
+            ? "is-emergency"
+            : "is-warn"
+          : "";
     const headText = s
       ? s.emergencyMode
         ? (s.crashStreak ?? 0) > 0

@@ -228,7 +228,7 @@ export class TopBar extends Component {
               ? `USB ${c.slotIndex + 1}`
               : "Reading…";
         const fp = s?.fp || cfg?.fingerprint || "";
-        const dotClass = s?.emergencyMode ? "is-emergency" : isOther ? "is-warn" : isSpoke ? "is-spoke" : "is-up";
+        const dotClass = s?.emergencyMode || isOther ? "is-emergency" : isSpoke ? "is-spoke" : "is-up";
         return `
           <div class="topbar-usb-item ${isActive ? "is-active" : ""}">
             <button
@@ -268,18 +268,15 @@ export class TopBar extends Component {
             <div class="topbar-usb-list">
               ${usbMenuRowsHtml}
             </div>
-            <div class="topbar-usb-foot">
-              ${
-                canAddMoreUsb
-                  ? `<button type="button" class="btn btn-sm btn-ghost topbar-usb-foot-btn" data-action="usb-connect-add" ${usbBusy ? "disabled" : ""}>
+            ${
+              canAddMoreUsb
+                ? `<div class="topbar-usb-foot">
+                    <button type="button" class="btn btn-sm btn-ghost topbar-usb-foot-btn" data-action="usb-connect-add" ${usbBusy ? "disabled" : ""}>
                       ${icons.plug(16)}<span>+ Connect USB (${connectedUsb.length}/${MAX_USB_CONNECTIONS})</span>
-                    </button>`
-                  : ""
-              }
-              <button type="button" class="btn btn-sm btn-bad topbar-usb-foot-btn" data-action="usb-disconnect-all">
-                ${icons.plugOff(16)}<span>${connectedUsb.length > 1 ? "Disconnect all" : "Disconnect"}</span>
-              </button>
-            </div>
+                    </button>
+                  </div>`
+                : ""
+            }
           </div>`
         : "";
 

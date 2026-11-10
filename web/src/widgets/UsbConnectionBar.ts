@@ -43,10 +43,10 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
           : isOther
             ? `USB ${c.slotIndex + 1}`
             : "Reading…";
-      const chipColor = s?.emergencyMode
-        ? "#facc15"
-        : isOther
-          ? "#94a3b8"
+      const chipColor = isOther
+        ? "#f87171"
+        : s?.emergencyMode
+          ? "#facc15"
           : isSpoke
             ? "#38bdf8"
             : "#d4ff3a";

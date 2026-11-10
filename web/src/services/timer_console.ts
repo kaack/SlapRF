@@ -475,7 +475,7 @@ export class TimerConsole {
     return typeof navigator !== "undefined" && "serial" in navigator;
   }
 
-  public async connect(showAllPorts = true): Promise<void> {
+  public async connect(showAllPorts = false): Promise<void> {
     this.showAllPorts = showAllPorts;
     this.userDisconnecting = false;
     this.reconnecting = false;
@@ -483,7 +483,7 @@ export class TimerConsole {
     this.reconnectFailed = false;
     this.lastError = null;
     this.notifyStateChange();
-    const port = await serial().requestPort();
+    const port = await serial().requestPort({ filters: [{ usbVendorId: ESPRESSIF_USB_VID }] });
     await this.openPort(port);
     this.startStatusPolling();
     this.subscribers.forEach((h) => h.onConnect?.());
@@ -1349,14 +1349,14 @@ export class UsbConnectionPool {
   }
 
   public async connectNew(
-    showAllPorts = true,
+    showAllPorts = false,
     selectForDebug = true
   ): Promise<{ console: TimerConsole; status: TimerStatus | null; alreadyConnected: boolean }> {
     const free = this.slots.find((c) => !c.connected && !c.busyLabel && !c.reconnecting);
     if (!free) {
       throw new Error(`Maximum of ${MAX_USB_CONNECTIONS} USB connections already active. Disconnect one first.`);
     }
-    const port = await serial().requestPort();
+    const port = await serial().requestPort({ filters: [{ usbVendorId: ESPRESSIF_USB_VID }] });
     const existing = this.findOwnerOfPort(port);
     if (existing) {
       if (selectForDebug) {

@@ -605,18 +605,18 @@ export async function flashXiaoC5OverWebSerial(
   });
 
   const taken = existingOwner?.takeActivePort ? await existingOwner.takeActivePort() : null;
-  let port: SerialPortLike;
-  if (taken) {
-    port = taken.port;
-  } else {
-    const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
-    port = await nav.serial.requestPort(filters ? { filters } : undefined);
-    if (existingOwner && existingOwner.ownsPort(port)) {
-      await existingOwner.disconnectCleanly();
-    }
+  if (!taken) {
+    throw new Error("Connect a timer over USB in Connection above first.");
   }
+  const port = taken.port;
 
-  await port.open({ baudRate: 115200, bufferSize: 16384 });
+  try {
+    await port.open({ baudRate: 115200, bufferSize: 16384 });
+  } catch {
+    await sleep(120);
+    await port.close().catch(() => undefined);
+    await port.open({ baudRate: 115200, bufferSize: 16384 });
+  }
   // Step (1,1) -> (1,0) -> (0,0) so closing the port after reading never triggers USB-Serial-JTAG reset
   await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
   await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
@@ -961,18 +961,18 @@ export async function eraseXiaoC5OverWebSerial(
   });
 
   const taken = existingOwner?.takeActivePort ? await existingOwner.takeActivePort() : null;
-  let port: SerialPortLike;
-  if (taken) {
-    port = taken.port;
-  } else {
-    const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
-    port = await nav.serial.requestPort(filters ? { filters } : undefined);
-    if (existingOwner && existingOwner.ownsPort(port)) {
-      await existingOwner.disconnectCleanly();
-    }
+  if (!taken) {
+    throw new Error("Connect a timer over USB in Connection above first.");
   }
+  const port = taken.port;
 
-  await port.open({ baudRate: 115200, bufferSize: 16384 });
+  try {
+    await port.open({ baudRate: 115200, bufferSize: 16384 });
+  } catch {
+    await sleep(120);
+    await port.close().catch(() => undefined);
+    await port.open({ baudRate: 115200, bufferSize: 16384 });
+  }
   // Step (1,1) -> (1,0) -> (0,0) so closing the port after reading never triggers USB-Serial-JTAG reset
   await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
   await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);

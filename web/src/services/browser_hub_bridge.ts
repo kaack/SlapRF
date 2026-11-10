@@ -113,6 +113,13 @@ export class BrowserHubBridge {
           : c.lastStatus?.label || c.lastConfig?.timerLabel || (c.lastStatus?.role === 1 ? "H1" : `USB ${c.slotIndex + 1}`)
       );
       const joined = names.join(" + ");
+      if (usbPool.debugConsole.isOtherDevice) {
+        return {
+          color: "red",
+          shortLabel: "Other · Unflashed",
+          detail: "Selected XIAO ESP32-C5 (Other) has no SlapRF firmware — open Flasher to write firmware",
+        };
+      }
       if (hub) {
         const s = hub.lastStatus;
         const hubName = s?.label || "H1";
@@ -138,10 +145,17 @@ export class BrowserHubBridge {
               : `Connected to Spoke ${spokeName} (Slot ${first?.slot || "?"}) over USB-C — click to open Network`,
         };
       }
+      if (connected.some((c) => c.isOtherDevice)) {
+        return {
+          color: "red",
+          shortLabel: connected.length > 1 ? `${joined}` : "Other · Unflashed",
+          detail: `Connected XIAO ESP32-C5 (${joined}) has no SlapRF firmware — open Flasher to write firmware`,
+        };
+      }
       return {
         color: "yellow",
-        shortLabel: connected.length > 1 ? `${joined}` : "Other · USB",
-        detail: `Connected to non-timer USB port (${joined}) — open Flasher to write firmware`,
+        shortLabel: "Connecting…",
+        detail: "Reading timer identity over USB-C…",
       };
     }
 

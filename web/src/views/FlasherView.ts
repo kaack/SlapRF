@@ -136,7 +136,7 @@ class TimerReaderPanel extends Component {
 
     const ledClass = this.busy
       ? "is-warn"
-      : this.errorMsg
+      : this.errorMsg || isOther
         ? "is-emergency"
         : active
           ? s?.emergencyMode
@@ -155,7 +155,7 @@ class TimerReaderPanel extends Component {
         : r
           ? `Read ${esc(r.timerLabel || "(unnamed)")} · ${r.role === "hub" ? "Hub" : "Spoke"} · firmware ${esc(r.firmwareVersion)}`
           : isOther
-            ? "Connected device (Other) has no SlapRF firmware — use Writer above to flash it"
+            ? "Connected XIAO ESP32-C5 (Other) has no SlapRF firmware — use Writer below to flash it"
             : isConnected
               ? "Connected over USB · click Read timer to inspect"
               : webSerialOk
@@ -401,7 +401,7 @@ class TimerEraserPanel extends Component {
 
     const ledClass = this.busy
       ? "is-warn"
-      : this.errorMsg
+      : this.errorMsg || activeConsole.isOtherDevice
         ? "is-emergency"
         : this.lastSuccessMsg
           ? "is-up"
@@ -469,24 +469,24 @@ export class FlasherView extends Component {
 
         <section class="settings-section">
           <div class="settings-intro">
-            <h2>Writer</h2>
-            <p>Plug each Seeed XIAO ESP32-C5 into this computer over USB and flash it directly from the browser — no compiler, drivers, or command line needed.</p>
-          </div>
-          <div class="card card-flush" data-slot="flasher"></div>
-        </section>
-
-        <section class="settings-section">
-          <div class="settings-intro">
             <h2>Reader</h2>
-            <p>Read a plugged-in timer over USB to inspect its flashed identity, 5.8 GHz receiver channels, and 2.4 GHz network configuration.</p>
+            <p>Read the selected USB timer to inspect its flashed identity, 5.8 GHz receiver channels, and 2.4 GHz network configuration.</p>
           </div>
           <div class="debug-status-layout" data-slot="reader"></div>
         </section>
 
         <section class="settings-section">
           <div class="settings-intro">
+            <h2>Writer</h2>
+            <p>Configure role and identity and flash the selected Seeed XIAO ESP32-C5 directly from the browser — no compiler, drivers, or command line needed.</p>
+          </div>
+          <div class="card card-flush" data-slot="flasher"></div>
+        </section>
+
+        <section class="settings-section">
+          <div class="settings-intro">
             <h2>Eraser</h2>
-            <p>Plug a timer into USB and click <strong>Erase timer</strong> to pick which USB device to wipe back to a factory-blank chip.</p>
+            <p>Click <strong>Erase timer</strong> to wipe the selected USB device back to a factory-blank chip.</p>
           </div>
           <div class="debug-status-layout" data-slot="eraser"></div>
         </section>
