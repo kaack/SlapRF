@@ -461,7 +461,7 @@ export class TrackEditor extends Component {
                 maxlength="40"
                 spellcheck="false"
                 autocomplete="off"
-                ${isEditing ? "" : 'readonly tabindex="-1"'}
+                ${isEditing ? "" : "disabled"}
                 aria-label="Gate ${index + 1} name"
               />
               <div class="flasher-inline-actions">

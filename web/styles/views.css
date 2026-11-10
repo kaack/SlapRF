@@ -566,14 +566,19 @@ body.is-gate-dragging * {
   background: var(--bg);
   color: var(--text);
 }
+.gate-inspector-name-input:disabled,
 .gate-inspector-name-input.is-readonly {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text-2);
   cursor: default;
   user-select: none;
+  pointer-events: none;
 }
 .gate-inspector-name-input:focus,
 .gate-inspector-name-input:focus-visible {
   outline: none;
-  border-color: #3e4452;
+  border-color: #6b7280;
   box-shadow: none;
 }
 .gate-inspector-name-wrap .flasher-pass-toggle.is-active {
