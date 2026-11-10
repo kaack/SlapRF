@@ -3860,6 +3860,30 @@ body.is-gate-dragging * {
   height: 38px;
   padding: 0 7px 0 0;
   gap: 2px;
+  background: var(--surface);
+  border-color: var(--border);
+}
+.debug-usb-chip:hover {
+  background: var(--surface-2);
+  border-color: var(--border-strong);
+}
+.debug-usb-chip.is-active {
+  background: var(--surface);
+  border-color: #6b7280;
+}
+.debug-usb-chip.is-active:hover {
+  background: var(--surface-2);
+  border-color: #828a99;
+}
+.debug-usb-chip.is-writing,
+.debug-usb-chip.is-active.is-writing {
+  background: var(--surface);
+  border-color: #6b7280;
+  border-style: dashed;
+}
+.debug-usb-chip-close:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
 }
 .debug-usb-chip-select {
   display: inline-flex;

@@ -26,23 +26,26 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
       const cfg = c.lastConfig;
       const active = c === opts.activeConsole;
       const isOther = c.isOtherDevice;
+      const isWriting = c.writing;
       const isSpoke = s ? s.role === 2 : cfg?.role === "spoke";
       const label = isOther
         ? "Other"
         : s?.label || cfg?.timerLabel || (s?.role === 1 || cfg?.role === "hub" ? "H1" : `USB ${c.slotIndex + 1}`);
-      const roleMeta = s
-        ? s.emergencyMode
-          ? "Emergency"
-          : s.role === 1
-            ? "Hub"
-            : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`
-        : cfg
-          ? cfg.role === "hub"
-            ? "Hub"
-            : "Spoke"
-          : isOther
-            ? `USB ${c.slotIndex + 1}`
-            : "Reading…";
+      const roleMeta = isWriting
+        ? "Writing…"
+        : s
+          ? s.emergencyMode
+            ? "Emergency"
+            : s.role === 1
+              ? "Hub"
+              : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`
+          : cfg
+            ? cfg.role === "hub"
+              ? "Hub"
+              : "Spoke"
+            : isOther
+              ? `USB ${c.slotIndex + 1}`
+              : "Reading…";
       const chipColor = isOther
         ? "#f87171"
         : s?.emergencyMode
@@ -53,7 +56,7 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
       const fp = s?.fp || cfg?.fingerprint || "";
       const fpNote = fp ? ` · ${fp}` : "";
       return `
-        <div class="pilot-chip debug-usb-chip ${active ? "is-active" : ""}" style="--c:${chipColor}">
+        <div class="pilot-chip debug-usb-chip ${active ? "is-active" : ""} ${isWriting ? "is-writing" : ""}" style="--c:${chipColor}">
           <button
             type="button"
             class="debug-usb-chip-select"
@@ -72,6 +75,7 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
             class="debug-usb-chip-close"
             data-action="disconnect-usb-slot"
             data-usb-slot="${c.slotIndex}"
+            ${isWriting ? "disabled" : ""}
             title="Disconnect ${esc(label)}"
             aria-label="Disconnect ${esc(label)}"
           >${icons.close(13)}</button>

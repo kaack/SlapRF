@@ -383,6 +383,7 @@ export class TimerConsole {
   public lastStatus: TimerStatus | null = null;
   public lastConfig: TimerReadout | null = null;
   public probing = false;
+  public writing = false;
   public hubOwnFrames = 0;
   public hubLastFrameAtMs = 0;
   public hubLastSeq: number | undefined = undefined;
@@ -433,7 +434,7 @@ export class TimerConsole {
   }
 
   public get connected(): boolean {
-    return this.port !== null;
+    return this.port !== null || this.writing;
   }
 
   public get rawPort(): SerialPortLike | null {
@@ -442,7 +443,7 @@ export class TimerConsole {
 
   /** True when a USB port is open and probing finished without finding SlapRF timer firmware. */
   public get isOtherDevice(): boolean {
-    return this.port !== null && !this.probing && !this.lastStatus && !this.lastConfig;
+    return this.connected && !this.probing && !this.lastStatus && !this.lastConfig;
   }
 
   public ownsPort(candidate: unknown): boolean {
@@ -541,11 +542,34 @@ export class TimerConsole {
   }
 
   /**
+   * Releases the underlying `SerialPort` for flashing or erasing while keeping this slot active
+   * (`connected === true`, `writing === true`) so its connection pill stays visible in the UI.
+   */
+  public async releasePortForWrite(): Promise<SerialPortLike | null> {
+    const port = this.port;
+    if (!port) return null;
+    this.writing = true;
+    this.expectingRestart = true;
+    window.clearInterval(this.statusPollTimer);
+    this.statusPollTimer = 0;
+    if (this.lastStatus || this.lastConfig) {
+      await withTimeout(this.send("LIVE 0\nSCAN STOP\nLOG 0"), 200).catch(() => undefined);
+      await sleep(40);
+    }
+    await this.closePort();
+    this.failWaiters("Port busy for flash/erase");
+    this.notifyStateChange();
+    return port;
+  }
+
+  /**
    * Re-attaches this console slot to the board after `flashXiaoC5OverWebSerial` or
    * `eraseXiaoC5OverWebSerial` resets and closes the raw port.
    */
   public async reopenPortAfterFlash(fallbackPort?: unknown): Promise<void> {
     this.probing = true;
+    this.lastStatus = null;
+    this.lastConfig = null;
     this.notifyStateChange();
     try {
       const deadline = Date.now() + 5000;
@@ -577,6 +601,8 @@ export class TimerConsole {
         await sleep(350);
       }
     } finally {
+      this.writing = false;
+      this.expectingRestart = false;
       this.probing = false;
       this.notifyStateChange();
     }
@@ -1379,9 +1405,8 @@ export class UsbConnectionPool {
    */
   public async takeActivePort(): Promise<{ port: SerialPortLike; reopen: () => Promise<void> } | null> {
     const active = this.debugConsole;
-    const port = active.rawPort;
-    if (!active.connected || !port) return null;
-    await active.disconnectCleanly();
+    const port = await active.releasePortForWrite();
+    if (!port) return null;
     return {
       port,
       reopen: () => active.reopenPortAfterFlash(port),
