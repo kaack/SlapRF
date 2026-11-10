@@ -2077,6 +2077,10 @@ body.is-gate-dragging * {
   margin-top: 2px;
   max-width: 640px;
 }
+.option-sub.livetime-enabled-note {
+  margin-top: 8px;
+  color: var(--text-2);
+}
 .option-actions {
   display: flex;
   align-items: center;
