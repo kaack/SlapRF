@@ -10,9 +10,10 @@ import {
   isWebSerialSupported,
   readXiaoC5OverWebSerial,
 } from "../services/esp_flasher";
-import { sharedTimerConsole, TimerStatus, usbPool } from "../services/timer_console";
+import { sharedTimerConsole, TimerConsole, TimerStatus, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 import { TimerFlasher } from "../widgets/TimerFlasher";
+import { renderUsbConnectionBarHtml } from "../widgets/UsbConnectionBar";
 
 const RACEBAND = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
 const FLASHER_PORTS_STORAGE_KEY = "slaprf.ui.flasher_ports.v1";
@@ -446,11 +447,22 @@ class TimerEraserPanel extends Component {
 
 /** Flasher page: flash, read, or factory-reset Seeed XIAO ESP32-C5 timers over USB (WebSerial). */
 export class FlasherView extends Component {
+  private showAllPorts = loadPortPref();
+  private connError: string | null = null;
+
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
     super(el);
 
     el.innerHTML = `
-      <div class="settings">
+      <div class="settings debug-page">
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Connection</h2>
+            <p>Connect up to 3 timers over USB-C at the same time and choose which connected timer to inspect, reflash, or wipe.</p>
+          </div>
+          <div class="debug-status-layout" data-slot="connection"></div>
+        </section>
+
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Flasher</h2>
@@ -487,5 +499,111 @@ export class FlasherView extends Component {
     this.adopt(flasher);
     this.adopt(readerPanel);
     this.adopt(eraserPanel);
+
+    const readoutFromConsole = (c: TimerConsole): TimerReadout | null => {
+      if (!c.connected) return null;
+      const s = c.lastStatus;
+      const cfg = c.lastConfig;
+      if (!s && !cfg) return null;
+      const role: "hub" | "spoke" = s ? (s.role === 1 ? "hub" : "spoke") : cfg!.role;
+      return {
+        chip: s?.chip ? `${s.chip.model} ${s.chip.rev}` : "ESP32-C5",
+        firmwareVersion: s?.fw || cfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
+        role,
+        timerLabel: s?.label || cfg?.timerLabel || (role === "hub" ? "H1" : "S1"),
+        fingerprint: s?.fp || cfg?.fingerprint || "",
+        frequenciesMHz: s?.freqs?.length ? s.freqs : cfg?.frequenciesMHz?.length ? cfg.frequenciesMHz : RACEBAND,
+        status: s ?? undefined,
+      };
+    };
+
+    const syncSelectedConsole = (applyToFlasher = false) => {
+      const connHost = this.slot("connection");
+      connHost.innerHTML = renderUsbConnectionBarHtml({
+        activeConsole: usbPool.debugConsole,
+        showAllPorts: this.showAllPorts,
+        error: this.connError,
+      });
+      const r = readoutFromConsole(usbPool.debugConsole);
+      if (r) {
+        readerPanel?.setReadout(r);
+        if (applyToFlasher) {
+          flasher.applyReadout(r);
+        }
+      }
+    };
+
+    const unsubs = usbPool.slots.map((c) =>
+      c.subscribe({
+        onStatus: () => {
+          if (c === usbPool.debugConsole) syncSelectedConsole(false);
+          else {
+            this.slot("connection").innerHTML = renderUsbConnectionBarHtml({
+              activeConsole: usbPool.debugConsole,
+              showAllPorts: this.showAllPorts,
+              error: this.connError,
+            });
+          }
+        },
+        onConfig: () => {
+          if (c === usbPool.debugConsole) syncSelectedConsole(false);
+        },
+      })
+    );
+    const unsubPool = usbPool.onChange(() => syncSelectedConsole(false));
+    this.onDispose(() => {
+      unsubs.forEach((fn) => fn());
+      unsubPool();
+    });
+
+    this.listen(this.slot("connection"), "change", (e) => {
+      const t = e.target as HTMLInputElement;
+      if (t.matches("[data-all-ports]")) {
+        this.showAllPorts = t.checked;
+        savePortPref(t.checked);
+      }
+    });
+
+    this.listen(this.slot("connection"), "click", (e) => {
+      const t = (e.target as HTMLElement).closest<HTMLElement>("[data-action]");
+      if (!t) return;
+      void (async () => {
+        switch (t.dataset.action) {
+          case "select-usb-slot": {
+            const idx = Number(t.dataset.usbSlot);
+            if (Number.isFinite(idx)) {
+              this.connError = null;
+              usbPool.selectDebugSlot(idx);
+              syncSelectedConsole(true);
+            }
+            break;
+          }
+          case "disconnect-usb-slot": {
+            const idx = Number(t.dataset.usbSlot);
+            if (Number.isFinite(idx) && usbPool.slots[idx]) {
+              this.connError = null;
+              await usbPool.slots[idx].disconnectCleanly();
+            }
+            break;
+          }
+          case "connect-add": {
+            this.connError = null;
+            try {
+              await usbPool.connectNew(this.showAllPorts);
+              syncSelectedConsole(true);
+            } catch (err) {
+              const msg = err instanceof Error ? err.message : String(err);
+              if (!/No port selected|aborted|cancelled|cancel/i.test(msg)) {
+                this.connError = msg;
+              }
+              syncSelectedConsole(false);
+            }
+            break;
+          }
+        }
+      })();
+    });
+
+    syncSelectedConsole(false);
   }
 }

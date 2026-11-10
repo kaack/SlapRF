@@ -4,7 +4,7 @@ import { icons } from "../core/icons";
 import { ROUTES, Router } from "../core/router";
 import { Announcer } from "../services/announcer";
 import { ApiClient } from "../services/api_client";
-import { TimerConsole, usbPool } from "../services/timer_console";
+import { MAX_USB_CONNECTIONS, TimerConsole, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
 export class TopBar extends Component {
@@ -14,6 +14,7 @@ export class TopBar extends Component {
   private readonly announcer: Announcer;
   private lastSig = "";
   private menuOpen = false;
+  private usbMenuOpen = false;
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient, router: Router, announcer: Announcer) {
     super(el);
@@ -33,27 +34,46 @@ export class TopBar extends Component {
     this.onDispose(
       router.subscribe(() => {
         this.menuOpen = false;
+        this.usbMenuOpen = false;
         this.render();
       })
     );
     this.onDispose(store.subscribe(["status"], () => this.render()));
     this.onDispose(announcer.subscribe(() => this.render()));
-    this.onDispose(usbPool.onChange(() => this.render()));
+    this.onDispose(
+      usbPool.onChange(() => {
+        if (usbPool.connectedConsoles().length === 0) {
+          this.usbMenuOpen = false;
+        }
+        this.render();
+      })
+    );
     this.onDispose(api.hubBridge.subscribe(() => this.render()));
     this.render();
   }
 
   private handleOutsidePointer = (e: PointerEvent): void => {
-    if (!this.menuOpen) return;
+    if (!this.menuOpen && !this.usbMenuOpen) return;
     const t = e.target as Node | null;
-    if (t && this.el.contains(t)) return;
-    this.menuOpen = false;
+    if (this.menuOpen) {
+      const menuWrap = this.el.querySelector(".topbar-menu-wrap");
+      if (!t || !menuWrap?.contains(t)) {
+        this.menuOpen = false;
+      }
+    }
+    if (this.usbMenuOpen) {
+      const usbWrap = this.el.querySelector(".topbar-usb-wrap");
+      if (!t || !usbWrap?.contains(t)) {
+        this.usbMenuOpen = false;
+      }
+    }
     this.render();
   };
 
   private handleKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === "Escape" && this.menuOpen) {
+    if (e.key === "Escape" && (this.menuOpen || this.usbMenuOpen)) {
       this.menuOpen = false;
+      this.usbMenuOpen = false;
       this.render();
     }
   };
@@ -66,9 +86,11 @@ export class TopBar extends Component {
       return;
     }
 
-    switch (target.closest<HTMLElement>("[data-action]")?.dataset.action) {
+    const actionEl = target.closest<HTMLElement>("[data-action]");
+    switch (actionEl?.dataset.action) {
       case "menu":
         this.menuOpen = !this.menuOpen;
+        this.usbMenuOpen = false;
         this.render();
         break;
       case "sim":
@@ -79,10 +101,41 @@ export class TopBar extends Component {
         if (busySlot) return;
         const connected = usbPool.connectedConsoles();
         if (connected.length > 0) {
-          void usbPool.disconnectAllCleanly();
+          this.usbMenuOpen = !this.usbMenuOpen;
+          this.menuOpen = false;
+          this.render();
         } else {
+          this.usbMenuOpen = false;
           void usbPool.connectNew().catch(() => undefined);
         }
+        break;
+      }
+      case "usb-select-slot": {
+        const idx = Number(actionEl.dataset.usbSlot);
+        if (Number.isFinite(idx)) {
+          usbPool.selectDebugSlot(idx);
+          this.usbMenuOpen = false;
+          this.render();
+        }
+        break;
+      }
+      case "usb-disconnect-slot": {
+        const idx = Number(actionEl.dataset.usbSlot);
+        if (Number.isFinite(idx) && usbPool.slots[idx]) {
+          void usbPool.slots[idx].disconnectCleanly();
+        }
+        break;
+      }
+      case "usb-connect-add": {
+        this.usbMenuOpen = false;
+        this.render();
+        void usbPool.connectNew().catch(() => undefined);
+        break;
+      }
+      case "usb-disconnect-all": {
+        this.usbMenuOpen = false;
+        this.render();
+        void usbPool.disconnectAllCleanly();
         break;
       }
       case "go-network":
@@ -108,11 +161,19 @@ export class TopBar extends Component {
     const voiceOn = this.announcer.settings.enabled;
     const connectedUsb = usbPool.connectedConsoles();
     const usbOn = connectedUsb.length > 0;
-    const usbLabels = connectedUsb.map((c) => c.lastStatus?.label || (c.lastStatus?.role === 1 ? "H1" : "S1")).join(" + ");
+    const activeConsole = usbPool.debugConsole;
+    const activeLabel = activeConsole.connected
+      ? activeConsole.lastStatus?.label ||
+        activeConsole.lastConfig?.timerLabel ||
+        (activeConsole.lastStatus?.role === 1 ? "H1" : `USB ${activeConsole.slotIndex + 1}`)
+      : "";
+    const usbLabels = connectedUsb
+      .map((c) => c.lastStatus?.label || c.lastConfig?.timerLabel || (c.lastStatus?.role === 1 ? "H1" : "S1"))
+      .join(" + ");
     const usbFps = connectedUsb.map((c) => c.lastStatus?.fp || "").filter(Boolean).join(", ");
     const usbBusy = usbPool.slots.find((c) => c.busyLabel)?.busyLabel ?? "";
     const led = this.api.hubBridge.getLedSummary();
-    const sig = `${meta.id}:${sim ? 1 : 0}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.menuOpen ? 1 : 0}:${connectedUsb.length}:${usbLabels}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}`;
+    const sig = `${meta.id}:${sim ? 1 : 0}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.menuOpen ? 1 : 0}:${this.usbMenuOpen ? 1 : 0}:${connectedUsb.length}:${activeConsole.slotIndex}:${activeLabel}:${usbLabels}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}`;
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
@@ -123,8 +184,10 @@ export class TopBar extends Component {
 
     const usbSupported = TimerConsole.supported();
     const usbBtnText = usbOn
-      ? usbLabels
-        ? `Connected · ${esc(usbLabels)}`
+      ? activeLabel
+        ? connectedUsb.length > 1
+          ? `Connected · ${esc(activeLabel)} (${connectedUsb.length}/${MAX_USB_CONNECTIONS})`
+          : `Connected · ${esc(activeLabel)}`
         : "Connected"
       : usbBusy
         ? `${esc(usbBusy)}…`
@@ -132,12 +195,90 @@ export class TopBar extends Component {
     const usbTitle = !usbSupported
       ? "USB connection requires Chrome, Edge, or Brave (WebSerial)"
       : usbOn
-        ? `Connected over USB (${connectedUsb.length}/3${usbLabels ? `: ${usbLabels}` : ""}${usbFps ? ` · ${usbFps}` : ""}) — click to disconnect`
+        ? `Connected over USB (${connectedUsb.length}/${MAX_USB_CONNECTIONS}${usbLabels ? `: ${usbLabels}` : ""}${usbFps ? ` · ${usbFps}` : ""}) — click to switch or disconnect`
         : "Connect a timer over USB-C";
+
+    const usbMenuRowsHtml = connectedUsb
+      .map((c) => {
+        const s = c.lastStatus;
+        const cfg = c.lastConfig;
+        const isActive = c === activeConsole;
+        const isSpoke = s ? s.role === 2 : cfg?.role === "spoke";
+        const label = s?.label || cfg?.timerLabel || (s?.role === 1 || cfg?.role === "hub" ? "H1" : `USB ${c.slotIndex + 1}`);
+        const roleMeta = s
+          ? s.emergencyMode
+            ? "Emergency"
+            : s.role === 1
+              ? "Hub"
+              : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`
+          : cfg
+            ? cfg.role === "hub"
+              ? "Hub"
+              : "Spoke"
+            : "Reading…";
+        const fp = s?.fp || cfg?.fingerprint || "";
+        const dotClass = s?.emergencyMode ? "is-emergency" : isSpoke ? "is-spoke" : "is-up";
+        return `
+          <div class="topbar-usb-item ${isActive ? "is-active" : ""}">
+            <button
+              type="button"
+              class="topbar-usb-select"
+              data-action="usb-select-slot"
+              data-usb-slot="${c.slotIndex}"
+              title="Switch active USB connection to ${esc(label)}"
+            >
+              <span class="status-dot ${dotClass}"></span>
+              <span class="topbar-usb-item-main">
+                <span class="topbar-usb-item-name">${esc(label)} <span class="note">· ${esc(roleMeta)}</span></span>
+                ${fp ? `<span class="topbar-usb-item-fp mono">${esc(fp)}</span>` : ""}
+              </span>
+              ${isActive ? `<span class="badge badge-good">Active</span>` : ""}
+            </button>
+            <button
+              type="button"
+              class="btn btn-sm btn-icon btn-ghost topbar-usb-item-disc"
+              data-action="usb-disconnect-slot"
+              data-usb-slot="${c.slotIndex}"
+              title="Disconnect ${esc(label)}"
+              aria-label="Disconnect ${esc(label)}"
+            >${icons.plugOff(15)}</button>
+          </div>`;
+      })
+      .join("");
+
+    const canAddMoreUsb = connectedUsb.length < MAX_USB_CONNECTIONS;
+    const usbPopoverHtml =
+      usbOn && this.usbMenuOpen
+        ? `<div class="topbar-usb-popover" role="menu" aria-label="USB connections">
+            <div class="topbar-usb-head">
+              <span>USB connections</span>
+              <span class="mono">${connectedUsb.length}/${MAX_USB_CONNECTIONS}</span>
+            </div>
+            <div class="topbar-usb-list">
+              ${usbMenuRowsHtml}
+            </div>
+            <div class="topbar-usb-foot">
+              ${
+                canAddMoreUsb
+                  ? `<button type="button" class="btn btn-sm btn-ghost topbar-usb-foot-btn" data-action="usb-connect-add" ${usbBusy ? "disabled" : ""}>
+                      ${icons.plug(16)}<span>+ Connect USB (${connectedUsb.length}/${MAX_USB_CONNECTIONS})</span>
+                    </button>`
+                  : ""
+              }
+              <button type="button" class="btn btn-sm btn-bad topbar-usb-foot-btn" data-action="usb-disconnect-all">
+                ${icons.plugOff(16)}<span>${connectedUsb.length > 1 ? "Disconnect all" : "Disconnect"}</span>
+              </button>
+            </div>
+          </div>`
+        : "";
+
     const usbBtn = `
-      <button type="button" class="btn ${usbOn ? "btn-armed" : "btn-ghost"}" data-action="usb-toggle" ${usbSupported && !usbBusy ? "" : "disabled"} title="${esc(usbTitle)}" aria-label="${esc(usbTitle)}">
-        ${usbOn ? icons.plug(19) : icons.plugOff(19)}<span class="topbar-btn-label">${usbBtnText}</span>
-      </button>`;
+      <div class="topbar-usb-wrap">
+        <button type="button" class="btn ${usbOn ? "btn-armed" : "btn-ghost"} ${this.usbMenuOpen ? "is-open" : ""}" data-action="usb-toggle" aria-expanded="${this.usbMenuOpen ? "true" : "false"}" ${usbSupported && !usbBusy ? "" : "disabled"} title="${esc(usbTitle)}" aria-label="${esc(usbTitle)}">
+          ${usbOn ? icons.plug(19) : icons.plugOff(19)}<span class="topbar-btn-label">${usbBtnText}</span>${usbOn ? `<span class="topbar-usb-caret">${icons.chevronDown(14)}</span>` : ""}
+        </button>
+        ${usbPopoverHtml}
+      </div>`;
 
     const ledIndicator = `
       <button type="button" class="topbar-conn-led is-${led.color}" data-action="go-network" title="${esc(led.detail)}" aria-label="${esc(led.detail)}">

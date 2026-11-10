@@ -17,6 +17,7 @@ import {
   usbPool,
 } from "../services/timer_console";
 import { DetectedTimer } from "../types/models";
+import { renderUsbConnectionBarHtml } from "../widgets/UsbConnectionBar";
 import {
   buildFileStamp,
   CHANNEL_COLORS,
@@ -2898,93 +2899,12 @@ export class DebugView extends Component {
   private renderConnection(): void {
     const host = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
     if (!host) return;
-    const supported = TimerConsole.supported();
-    const busy = this.busy !== null || this.console.busyLabel !== null;
-    const busyText = this.busy ?? this.console.busyLabel ?? "";
-    const connected = usbPool.connectedConsoles();
-
-    const chipsHtml = connected
-      .map((c) => {
-        const s = c.lastStatus;
-        const active = c === this.console;
-        const label = s?.label || (s?.role === 1 ? "H1" : `USB ${c.slotIndex + 1}`);
-        const roleMeta = s
-          ? s.emergencyMode
-            ? "Emergency"
-            : s.role === 1
-              ? "Hub"
-              : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`
-          : "Reading…";
-        const chipColor = s?.emergencyMode ? "#facc15" : s?.role === 2 ? "#38bdf8" : "#d4ff3a";
-        const fpNote = s?.fp ? ` · ${s.fp}` : "";
-        return `
-          <div class="pilot-chip debug-usb-chip ${active ? "is-active" : ""}" style="--c:${chipColor}">
-            <button
-              type="button"
-              class="debug-usb-chip-select"
-              role="tab"
-              aria-selected="${active}"
-              data-action="select-usb-slot"
-              data-usb-slot="${c.slotIndex}"
-              title="Debug on ${esc(label)} (${esc(roleMeta)}${esc(fpNote)})"
-            >
-              <span class="dot is-live"></span>
-              <span class="pilot-chip-name">${esc(label)}</span>
-              <span class="pilot-chip-time">${esc(roleMeta)}</span>
-            </button>
-            <button
-              type="button"
-              class="debug-usb-chip-close"
-              data-action="disconnect-usb-slot"
-              data-usb-slot="${c.slotIndex}"
-              title="Disconnect ${esc(label)}"
-              aria-label="Disconnect ${esc(label)}"
-            >${icons.close(13)}</button>
-          </div>`;
-      })
-      .join("");
-
-    const canAdd = connected.length < MAX_USB_CONNECTIONS;
-    const addBtnHtml = canAdd
-      ? `<button
-          type="button"
-          class="pilot-chip debug-usb-add-chip"
-          data-action="connect-add"
-          ${supported && !busy ? "" : "disabled"}
-          title="Connect ${connected.length > 0 ? "another " : ""}timer over USB-C (${connected.length}/${MAX_USB_CONNECTIONS} active)"
-        >
-          ${icons.plug(20)}
-          <span class="pilot-chip-name">${busy ? `${esc(busyText)}…` : connected.length > 0 ? "+ Connect USB" : "Connect USB"}</span>
-          <span class="pilot-chip-time">${connected.length}/${MAX_USB_CONNECTIONS}</span>
-        </button>`
-      : "";
-
-    const bannerParts: string[] = [];
-    if (!supported) {
-      bannerParts.push(`<div class="sim-error-note">USB debugging needs Chrome, Edge or Brave (WebSerial).</div>`);
-    }
-    if (this.error) {
-      bannerParts.push(`<div class="sim-error-note">${esc(this.error)}</div>`);
-    }
-
-    host.innerHTML = `
-      <div class="picker-row debug-usb-picker-row">
-        <div class="pilot-picker debug-usb-picker" role="tablist" aria-label="Debug target USB connection">
-          ${chipsHtml}
-          ${addBtnHtml}
-        </div>
-        <div class="debug-connect-actions">
-          ${
-            canAdd
-              ? `<label class="check debug-port-filter">
-                  <input type="checkbox" data-all-ports ${this.showAllPorts ? "checked" : ""}/>
-                  <span>Show non-XIAO ports</span>
-                </label>`
-              : `<span class="note">${MAX_USB_CONNECTIONS}/${MAX_USB_CONNECTIONS} USB connections active</span>`
-          }
-        </div>
-      </div>
-      ${bannerParts.join("")}`;
+    host.innerHTML = renderUsbConnectionBarHtml({
+      activeConsole: this.console,
+      showAllPorts: this.showAllPorts,
+      busyText: this.busy,
+      error: this.error,
+    });
   }
 
   private renderSelfTest(): void {

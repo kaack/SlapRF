@@ -13,6 +13,7 @@ import {
 } from "../services/timer_console";
 import { AppStore } from "../state/store";
 import { DetectedTimer } from "../types/models";
+import { renderUsbConnectionBarHtml } from "../widgets/UsbConnectionBar";
 import { CHANNEL_COLORS, DBM_MAX, DBM_MIN, RACEBAND, racebandName } from "./debug/charts";
 
 const NETWORK_PREFS_KEY = "slaprf.ui.network_prefs.v1";
@@ -75,6 +76,8 @@ export class NetworkView extends Component {
   private signalEnabledCh: boolean[] = [true, true, true, true, true, true, true, true];
   private lastTopologyHtml = "";
   private lastTimerHtml = "";
+  private showAllPorts = false;
+  private connError: string | null = null;
   /** Identify toggles sent but not yet confirmed by a status line (fingerprint -> wanted state). */
   private identifyPending = new Map<string, { on: boolean; atMs: number }>();
 
@@ -90,6 +93,14 @@ export class NetworkView extends Component {
 
     el.innerHTML = `
       <div class="settings debug-page network-page">
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Connection</h2>
+            <p>Connect up to 3 timers over USB-C at the same time (for example, keep the Hub running while inspecting a Spoke) and choose which timer to inspect.</p>
+          </div>
+          <div class="debug-status-layout" data-slot="connection"></div>
+        </section>
+
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Topology</h2>
@@ -110,12 +121,12 @@ export class NetworkView extends Component {
     const unsubs = usbPool.slots.map((c) =>
       c.subscribe({
         onConnect: () => {
-          this.status = usbPool.primaryConsole().lastStatus;
+          this.status = this.activeStatus();
           this.renderAll();
         },
         onStatus: (s) => {
-          if (c === usbPool.primaryConsole()) {
-            this.status = s;
+          if (c === usbPool.debugConsole || c === usbPool.primaryConsole()) {
+            this.status = this.activeStatus();
             if (s.chanMask !== undefined) {
               const nextEnabled = Array.from({ length: 8 }, (_, i) => ((s.chanMask! >> i) & 1) !== 0);
               if (nextEnabled.join() !== this.signalEnabledCh.join()) {
@@ -126,7 +137,7 @@ export class NetworkView extends Component {
           this.renderAll();
         },
         onLive: (l) => {
-          if (c === usbPool.primaryConsole()) {
+          if (c === usbPool.debugConsole || c === usbPool.primaryConsole()) {
             this.live = l;
             if (this.selectedSlot === 1 || (this.status?.role === 2 && this.selectedSlot === this.status.slot)) {
               this.renderAll();
@@ -137,17 +148,15 @@ export class NetworkView extends Component {
           this.renderAll();
         },
         onDisconnect: () => {
-          const primary = usbPool.primaryConsole();
-          this.status = primary.connected ? primary.lastStatus : null;
-          if (!primary.connected) this.live = null;
+          this.status = this.activeStatus();
+          if (!this.status) this.live = null;
           this.renderAll();
         },
       })
     );
 
     const unsubState = usbPool.onChange(() => {
-      const primary = usbPool.primaryConsole();
-      this.status = primary.connected ? primary.lastStatus : null;
+      this.status = this.activeStatus();
       this.renderAll();
     });
 
@@ -172,6 +181,13 @@ export class NetworkView extends Component {
       this.selectTopologySlot(Number(t.dataset.slotNum));
     });
     this.listen(el, "click", (e) => void this.onClick(e));
+    this.listen(el, "change", (e) => {
+      const t = e.target as HTMLInputElement;
+      if (t.matches("[data-all-ports]")) {
+        this.showAllPorts = t.checked;
+        this.savePrefs();
+      }
+    });
 
     this.onDispose(() => {
       unsubs.forEach((fn) => fn());
@@ -193,6 +209,9 @@ export class NetworkView extends Component {
       const raw = window.localStorage.getItem(NETWORK_PREFS_KEY);
       if (!raw) return;
       const p = JSON.parse(raw) as Record<string, unknown>;
+      if (typeof p.showAllPorts === "boolean") {
+        this.showAllPorts = p.showAllPorts;
+      }
       if (Array.isArray(p.signalEnabledCh) && p.signalEnabledCh.length === 8) {
         this.signalEnabledCh = p.signalEnabledCh.map(Boolean);
       }
@@ -213,6 +232,7 @@ export class NetworkView extends Component {
       window.localStorage.setItem(
         NETWORK_PREFS_KEY,
         JSON.stringify({
+          showAllPorts: this.showAllPorts,
           signalEnabledCh: this.signalEnabledCh,
           selectedSlot: this.selectedSlot,
         })
@@ -239,6 +259,10 @@ export class NetworkView extends Component {
   }
 
   private activeStatus(): TimerStatus | null {
+    const active = usbPool.debugConsole;
+    if (active.connected && active.lastStatus) {
+      return active.lastStatus;
+    }
     const primary = usbPool.primaryConsole();
     if (primary.connected && primary.lastStatus) {
       return primary.lastStatus;
@@ -316,8 +340,53 @@ export class NetworkView extends Component {
   private async onClick(e: Event): Promise<void> {
     const t = (e.target as HTMLElement).closest<HTMLElement>("[data-action]");
     if (!t) return;
-    if (t.dataset.action === "select-topology-slot") {
-      this.selectTopologySlot(Number(t.dataset.slotNum));
+    switch (t.dataset.action) {
+      case "select-topology-slot":
+        this.selectTopologySlot(Number(t.dataset.slotNum));
+        break;
+      case "select-usb-slot": {
+        const idx = Number(t.dataset.usbSlot);
+        if (Number.isFinite(idx)) {
+          this.connError = null;
+          usbPool.selectDebugSlot(idx);
+          const s = usbPool.slots[idx]?.lastStatus;
+          if (s?.role === 1) {
+            this.selectTopologySlot(1);
+          } else if (s?.role === 2 && s.slot >= 2 && s.slot <= 7) {
+            this.selectTopologySlot(s.slot);
+          } else {
+            this.renderAll();
+          }
+        }
+        break;
+      }
+      case "disconnect-usb-slot": {
+        const idx = Number(t.dataset.usbSlot);
+        if (Number.isFinite(idx) && usbPool.slots[idx]) {
+          this.connError = null;
+          await usbPool.slots[idx].disconnectCleanly();
+        }
+        break;
+      }
+      case "connect-add": {
+        this.connError = null;
+        try {
+          const c = await usbPool.connectNew(this.showAllPorts);
+          const s = c.lastStatus;
+          if (s?.role === 1) {
+            this.selectTopologySlot(1);
+          } else if (s?.role === 2 && s.slot >= 2 && s.slot <= 7) {
+            this.selectTopologySlot(s.slot);
+          }
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!/No port selected|aborted|cancelled|cancel/i.test(msg)) {
+            this.connError = msg;
+          }
+        }
+        this.renderAll();
+        break;
+      }
     }
   }
 
@@ -693,6 +762,14 @@ export class NetworkView extends Component {
   }
 
   private renderAll(): void {
+    const connHost = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
+    if (connHost) {
+      connHost.innerHTML = renderUsbConnectionBarHtml({
+        activeConsole: usbPool.debugConsole,
+        showAllPorts: this.showAllPorts,
+        error: this.connError,
+      });
+    }
     const { hub, spokes } = this.buildTopologyState();
     const sel = this.ensureSelectedSlot(hub, spokes);
     this.renderTopologySection(hub, spokes, sel);
