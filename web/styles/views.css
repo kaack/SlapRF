@@ -2853,7 +2853,7 @@ body.is-gate-dragging * {
 
 /* Sliding Flasher Wizard --------------------------------------------------- */
 .flasher-wizard {
-  gap: 14px;
+  gap: 10px;
   container-type: inline-size;
 }
 .flasher-wizard-stepper {
@@ -2862,9 +2862,9 @@ body.is-gate-dragging * {
   justify-content: space-between;
   gap: 0;
   padding: 8px 14px;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--surface);
   overflow: hidden;
 }
 .flasher-step-pill {
@@ -2979,9 +2979,9 @@ body.is-gate-dragging * {
 
 .flasher-wizard-viewport {
   overflow: hidden;
-  border-radius: var(--radius);
+  border-radius: var(--radius-lg);
   border: 1px solid var(--border);
-  background: var(--surface-2);
+  background: var(--surface);
   min-width: 0;
 }
 .flasher-wizard-stage {

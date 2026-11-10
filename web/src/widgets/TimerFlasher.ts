@@ -12,8 +12,6 @@ import {
 import { recordKnownTimerReadout, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
-const FLASHER_PREFS_STORAGE_KEY = "slaprf.ui.flasher_prefs.v1";
-
 type WizardStepId = "network" | "identity" | "flash";
 
 /**
@@ -57,36 +55,6 @@ export class TimerFlasher extends Component {
     this.api = api;
     this.onReadout = onReadout;
 
-    try {
-      const rawPrefs = window.localStorage.getItem(FLASHER_PREFS_STORAGE_KEY);
-      if (rawPrefs) {
-        const parsed = JSON.parse(rawPrefs) as {
-          step?: WizardStepId;
-          role?: "hub" | "spoke";
-          timerLabel?: string;
-          keepFingerprint?: boolean;
-          showAllPorts?: boolean;
-        };
-        if (parsed.role === "hub" || parsed.role === "spoke") {
-          this.role = parsed.role;
-        }
-        if (parsed.step === "network" || parsed.step === "identity" || parsed.step === "flash") {
-          this.step = parsed.step;
-        }
-        if (typeof parsed.timerLabel === "string" && parsed.timerLabel.trim() !== "") {
-          this.timerLabel = parsed.timerLabel.trim().slice(0, 2);
-        }
-        if (typeof parsed.keepFingerprint === "boolean") {
-          this.keepFingerprint = parsed.keepFingerprint;
-        }
-        if (typeof parsed.showAllPorts === "boolean") {
-          this.showAllPorts = parsed.showAllPorts;
-        }
-      }
-    } catch {
-      // ignore storage errors
-    }
-
     this.listen(el, "click", (e) => {
       const t = e.target as HTMLElement;
 
@@ -105,7 +73,6 @@ export class TimerFlasher extends Component {
         if (nextRole !== this.role) {
           this.role = nextRole;
           this.timerLabel = nextRole === "hub" ? "H1" : this.suggestSpokeLabel();
-          this.saveFlasherPrefs();
           this.errorMsg = null;
           this.lastSuccessMsg = null;
           this.slideDir = "none";
@@ -144,21 +111,6 @@ export class TimerFlasher extends Component {
         void this.downloadBin();
         return;
       }
-
-      if (t.closest("[data-restore-defaults]")) {
-        this.step = "network";
-        this.role = "hub";
-        this.timerLabel = "H1";
-        this.keepFingerprint = true;
-        this.showAllPorts = false;
-        this.errorMsg = null;
-        this.lastSuccessMsg = null;
-        this.progress = null;
-        this.slideDir = "none";
-        this.saveFlasherPrefs();
-        this.render();
-        return;
-      }
     });
 
     this.listen(el, "keydown", (e) => {
@@ -178,7 +130,6 @@ export class TimerFlasher extends Component {
           input.value = input.value.slice(0, 2);
         }
         this.timerLabel = input.value;
-        this.saveFlasherPrefs();
       }
     });
 
@@ -186,7 +137,6 @@ export class TimerFlasher extends Component {
       const target = e.target as HTMLInputElement | HTMLSelectElement;
       if (target.matches("[data-erase-before-flash]")) {
         this.keepFingerprint = !(target as HTMLInputElement).checked;
-        this.saveFlasherPrefs();
         this.slideDir = "none";
         this.render();
       }
@@ -211,28 +161,10 @@ export class TimerFlasher extends Component {
     ];
   }
 
-  private saveFlasherPrefs(): void {
-    try {
-      window.localStorage.setItem(
-        FLASHER_PREFS_STORAGE_KEY,
-        JSON.stringify({
-          step: this.step,
-          role: this.role,
-          timerLabel: this.timerLabel,
-          keepFingerprint: this.keepFingerprint,
-          showAllPorts: this.showAllPorts,
-        })
-      );
-    } catch {
-      // ignore storage errors
-    }
-  }
-
   private goToStep(next: WizardStepId, dir: "next" | "prev" | "none"): void {
     this.step = next;
     this.slideDir = dir;
     this.errorMsg = null;
-    this.saveFlasherPrefs();
     this.render();
   }
 
@@ -813,47 +745,41 @@ export class TimerFlasher extends Component {
     }
 
     this.el.innerHTML = `
-      <div class="card-body">
-        <div class="flasher flasher-wizard">
-          ${this.renderStepper()}
+      <div class="flasher flasher-wizard">
+        ${this.renderStepper()}
 
-          <div class="flasher-wizard-viewport">
-            <div class="flasher-wizard-stage ${animClass}">
-              ${stepContent}
-            </div>
+        <div class="flasher-wizard-viewport">
+          <div class="flasher-wizard-stage ${animClass}">
+            ${stepContent}
           </div>
-
-          ${
-            this.step !== "flash" && this.progress
-              ? `
-            <div class="flasher-progress">
-              <div class="flasher-progress-top">
-                <span>${esc(this.progress.detail)}</span>
-                <span class="mono">${this.progress.percent}%</span>
-              </div>
-              <div class="meter flasher-meter">
-                <span class="meter-fill tone-good" style="width:${this.progress.percent}%"></span>
-              </div>
-            </div>`
-              : ""
-          }
-
-          ${
-            this.step !== "flash" && this.lastSuccessMsg && !this.busy
-              ? `<div class="flasher-banner is-ok">✓ ${esc(this.lastSuccessMsg)}</div>`
-              : ""
-          }
-
-          ${
-            this.errorMsg && !this.busy
-              ? `<div class="flasher-banner is-err">${esc(this.errorMsg)}</div>`
-              : ""
-          }
         </div>
-      </div>
-      <div class="rules-foot">
-        <p class="note">Wizard choices are saved automatically on this browser.</p>
-        <button class="btn btn-ghost btn-sm" type="button" data-restore-defaults="1" ${this.busy ? "disabled" : ""}>Restore defaults</button>
+
+        ${
+          this.step !== "flash" && this.progress
+            ? `
+          <div class="flasher-progress">
+            <div class="flasher-progress-top">
+              <span>${esc(this.progress.detail)}</span>
+              <span class="mono">${this.progress.percent}%</span>
+            </div>
+            <div class="meter flasher-meter">
+              <span class="meter-fill tone-good" style="width:${this.progress.percent}%"></span>
+            </div>
+          </div>`
+            : ""
+        }
+
+        ${
+          this.step !== "flash" && this.lastSuccessMsg && !this.busy
+            ? `<div class="flasher-banner is-ok">✓ ${esc(this.lastSuccessMsg)}</div>`
+            : ""
+        }
+
+        ${
+          this.errorMsg && !this.busy
+            ? `<div class="flasher-banner is-err">${esc(this.errorMsg)}</div>`
+            : ""
+        }
       </div>`;
   }
 }

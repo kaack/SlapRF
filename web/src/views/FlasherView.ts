@@ -480,7 +480,7 @@ export class FlasherView extends Component {
             <h2>Writer</h2>
             <p>Configure role and identity and flash the selected Seeed XIAO ESP32-C5 directly from the browser — no compiler, drivers, or command line needed.</p>
           </div>
-          <div class="card card-flush" data-slot="flasher"></div>
+          <div class="debug-status-layout" data-slot="flasher"></div>
         </section>
 
         <section class="settings-section">
