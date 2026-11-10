@@ -51,6 +51,7 @@ export interface PersistedEngineStateJson {
   pilots: unknown[] | null;
   gates: unknown[] | null;
   timers: unknown[] | null;
+  deletedSpokeFp?: string[] | null;
   laps: unknown[] | null;
   crossings: unknown[] | null;
   filtered: unknown[] | null;
@@ -65,6 +66,7 @@ export interface RealConfigDoc {
   pilots: unknown[] | null;
   gates: unknown[] | null;
   timers: unknown[] | null;
+  deletedSpokeFp?: string[] | null;
 }
 
 export interface SimStateDoc {
@@ -120,6 +122,7 @@ export function splitRealState(state: PersistedEngineStateJson): {
       pilots: state.pilots ?? null,
       gates: state.gates ?? null,
       timers: state.timers ?? null,
+      deletedSpokeFp: state.deletedSpokeFp ?? null,
     },
     laps: validRecords("laps", state.laps),
     crossings: validRecords("crossings", state.crossings),
@@ -154,6 +157,7 @@ export function assembleRealState(
     pilots: config?.pilots ?? null,
     gates: config?.gates ?? null,
     timers: config?.timers ?? null,
+    deletedSpokeFp: config?.deletedSpokeFp ?? null,
     laps: l,
     crossings: c,
     filtered: f,

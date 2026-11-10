@@ -75,6 +75,10 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		}
 		return id, nil
 	}
+	if req.FromHubHello && fingerprint != "" && e.deletedSpokeFp != nil && e.deletedSpokeFp[fingerprint] {
+		e.mu.Unlock()
+		return 0, nil
+	}
 	var targetIdx = -1
 
 	// 0. Same physical board re-flashed (fingerprint kept): update it in place.
@@ -86,8 +90,10 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 				}
 				d.FirmwareVersion = ver
 				d.IsHub = role == "hub"
-				d.Online = true
-				d.LastSeenAt = time.Now()
+				if !req.FromHubHello {
+					d.Online = true
+					d.LastSeenAt = time.Now()
+				}
 				for i := range e.gates {
 					if e.gates[i].AssignedTimerID == id {
 						if timerLabel != "" {
@@ -191,8 +197,10 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	if timerLabel != "" {
 		d.TimerLabel = timerLabel
 	}
-	d.Online = true
-	d.LastSeenAt = now
+	if !req.FromHubHello {
+		d.Online = true
+		d.LastSeenAt = now
+	}
 
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
 	gates := append([]domain.TrackGate(nil), e.gates...)

@@ -12,15 +12,16 @@ import (
 // so it can be persisted to SQLite (native Go server) or browser WebStorage (WASM simulator) and
 // rehydrated on restart.
 type PersistedEngineState struct {
-	ElapsedUs uint64                     `json:"elapsedUs"`
-	RaceArmed bool                       `json:"raceArmed"`
-	Rules     domain.TimingRules         `json:"rules"`
-	Pilots    []domain.PilotSlot         `json:"pilots"`
-	Gates     []domain.TrackGate         `json:"gates"`
-	Timers    []domain.DetectedTimer     `json:"timers"`
-	Laps      []domain.LapRecord         `json:"laps"`
-	Crossings []domain.GateCrossingEvent `json:"crossings"`
-	Filtered  []domain.FilteredDetection `json:"filtered"`
+	ElapsedUs      uint64                     `json:"elapsedUs"`
+	RaceArmed      bool                       `json:"raceArmed"`
+	Rules          domain.TimingRules         `json:"rules"`
+	Pilots         []domain.PilotSlot         `json:"pilots"`
+	Gates          []domain.TrackGate         `json:"gates"`
+	Timers         []domain.DetectedTimer     `json:"timers"`
+	DeletedSpokeFp []string                   `json:"deletedSpokeFp,omitempty"`
+	Laps           []domain.LapRecord         `json:"laps"`
+	Crossings      []domain.GateCrossingEvent `json:"crossings"`
+	Filtered       []domain.FilteredDetection `json:"filtered"`
 }
 
 // ExportState returns a deep copy of the engine's persistable configuration and session records.
@@ -64,16 +65,25 @@ func (e *Engine) ExportState() PersistedEngineState {
 	crossings := append([]domain.GateCrossingEvent(nil), e.crossings...)
 	filtered := append([]domain.FilteredDetection(nil), e.filtered...)
 
+	var deletedFp []string
+	for fp, deleted := range e.deletedSpokeFp {
+		if deleted && fp != "" {
+			deletedFp = append(deletedFp, fp)
+		}
+	}
+	sort.Strings(deletedFp)
+
 	return PersistedEngineState{
-		ElapsedUs: elapsedUs,
-		RaceArmed: e.raceArmed,
-		Rules:     e.rules,
-		Pilots:    pilots,
-		Gates:     gates,
-		Timers:    timers,
-		Laps:      laps,
-		Crossings: crossings,
-		Filtered:  filtered,
+		ElapsedUs:      elapsedUs,
+		RaceArmed:      e.raceArmed,
+		Rules:          e.rules,
+		Pilots:         pilots,
+		Gates:          gates,
+		Timers:         timers,
+		DeletedSpokeFp: deletedFp,
+		Laps:           laps,
+		Crossings:      crossings,
+		Filtered:       filtered,
 	}
 }
 
@@ -109,6 +119,12 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 
 	if len(s.Pilots) > 0 {
 		e.pilots = append([]domain.PilotSlot(nil), s.Pilots...)
+	}
+	e.deletedSpokeFp = make(map[string]bool, len(s.DeletedSpokeFp))
+	for _, fp := range s.DeletedSpokeFp {
+		if fp != "" {
+			e.deletedSpokeFp[fp] = true
+		}
 	}
 	e.detected = make(map[uint8]*domain.DetectedTimer, len(s.Timers))
 	now := time.Now()
