@@ -13,7 +13,7 @@ func TestBundleTypeScript(t *testing.T) {
 		t.Fatalf("BundleTypeScript: %v", err)
 	}
 	body := string(js)
-	for _, name := range []string{"AppShell", "LiveView", "AllPilotsPanel", "PilotPanel", "LapTimesCard", "PilotView", "LapPicker", "LapComparison", "PilotRssiChart", "PilotLaps", "SetupView", "TrackEditor", "TimersList", "TimerFlasher", "Announcer", "TimingRulesEditor"} {
+	for _, name := range []string{"AppShell", "LiveView", "AllPilotsPanel", "PilotPanel", "LapTimesCard", "PilotView", "LapPicker", "LapComparison", "PilotRssiChart", "PilotLaps", "SetupView", "TrackEditor", "NetworkView", "TimerFlasher", "Announcer", "TimingRulesEditor"} {
 		if !strings.Contains(body, name) {
 			t.Fatalf("compiled TypeScript bundle missing %s", name)
 		}

@@ -38,7 +38,7 @@ export const ROUTES: RouteMeta[] = [
     id: "track",
     label: "Track",
     title: "Track",
-    subtitle: "Gate order, sections, start gate, and discovered timers",
+    subtitle: "Gate order, sections, and start gate",
     icon: () => icons.gate(20),
   },
   {
