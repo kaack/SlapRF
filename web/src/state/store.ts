@@ -462,9 +462,9 @@ export class AppStore {
     }
   }
 
-  public applyConfig(pilots: PilotSlot[], nodes: TrackNode[]): void {
-    this._pilots = pilots;
-    this.setNodes(nodes);
+  public applyConfig(pilots: PilotSlot[] | null | undefined, nodes: TrackNode[] | null | undefined): void {
+    this._pilots = pilots ?? [];
+    this.setNodes(nodes ?? []);
     this.ensureValidSelection();
     this.emit("config");
   }
@@ -589,8 +589,8 @@ export class AppStore {
     this.emit("selection");
   }
 
-  private setNodes(nodes: TrackNode[]): void {
-    this._nodes = [...nodes].sort((a, b) => a.trackOrder - b.trackOrder);
+  private setNodes(nodes: TrackNode[] | null | undefined): void {
+    this._nodes = [...(nodes ?? [])].sort((a, b) => a.trackOrder - b.trackOrder);
   }
 
   private ensureValidSelection(): void {
