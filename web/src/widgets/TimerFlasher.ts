@@ -186,14 +186,14 @@ export class TimerFlasher extends Component {
   private validateIdentityStep(): boolean {
     const clean = this.timerLabel.trim();
     if (!clean) {
-      this.errorMsg = "Give this timer a 1–2 character name (e.g. H1, S1, S2) before continuing.";
+      this.errorMsg = "Give this timer a 1–2 character name (e.g. H1, T1, T2) before continuing.";
       this.slideDir = "none";
       this.render();
       this.el.querySelector<HTMLInputElement>("[data-timer-label]")?.focus();
       return false;
     }
     if (clean.length > 2) {
-      this.errorMsg = "Timer name must be at most 2 characters (e.g. H1, S1, S2).";
+      this.errorMsg = "Timer name must be at most 2 characters (e.g. H1, T1, T2).";
       this.slideDir = "none";
       this.render();
       this.el.querySelector<HTMLInputElement>("[data-timer-label]")?.focus();
@@ -227,7 +227,7 @@ export class TimerFlasher extends Component {
     return this.role === "hub" ? "Hub" : "Spoke";
   }
 
-  /** Next spoke name (S1, S2, …) not already used by a detected timer or one flashed this session. */
+  /** Next spoke name (T1, T2, …) not already used by a detected timer or one flashed this session. */
   private suggestSpokeLabel(): string {
     const taken = new Set<string>();
     for (const d of this.store.detectedTimers) {
@@ -237,9 +237,9 @@ export class TimerFlasher extends Component {
       if (key.startsWith("spoke:")) taken.add(key.slice(6));
     }
     for (let n = 1; n <= 99; n++) {
-      if (!taken.has(`S${n}`)) return `S${n}`;
+      if (!taken.has(`T${n}`)) return `T${n}`;
     }
-    return "S1";
+    return "T1";
   }
 
   public applyReadout(info: TimerReadout): void {
@@ -512,7 +512,7 @@ export class TimerFlasher extends Component {
 
   private renderStepIdentity(): string {
     const isHub = this.role === "hub";
-    const idPlaceholder = isHub ? "e.g. H1" : "e.g. S1";
+    const idPlaceholder = isHub ? "e.g. H1" : "e.g. T1";
 
     return `
       <div class="flasher-wizard-body">
@@ -524,7 +524,7 @@ export class TimerFlasher extends Component {
           <p>${
             isHub
               ? "Give your Hub a short 1–2 character label (usually <strong>H1</strong>) so it is easy to recognize across Track, Network, and Debug."
-              : "Give this Spoke a short 1–2 character label (such as <strong>S1</strong>–<strong>S6</strong>) so you can tell each gate apart on the course."
+              : "Give this Spoke a short 1–2 character label (such as <strong>T1</strong>–<strong>T6</strong>) so you can tell each gate timer apart on the course."
           }</p>
         </div>
 
@@ -542,7 +542,7 @@ export class TimerFlasher extends Component {
               autocomplete="off"
               ${this.busy ? "disabled" : ""}
             />
-            <span class="flasher-field-help">Editable · 1–2 characters (${isHub ? "e.g. H1" : "e.g. S1, S2, S3"}) stamped into flash.</span>
+            <span class="flasher-field-help">Editable · 1–2 characters (${isHub ? "e.g. H1" : "e.g. T1, T2, T3"}) stamped into flash.</span>
           </div>
 
           <div class="flasher-field">
