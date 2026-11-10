@@ -2416,9 +2416,6 @@ body.is-gate-dragging * {
   border: 1px solid var(--border-strong);
   background: var(--surface);
 }
-.flasher-progress.is-flashing {
-  border-color: var(--accent-line);
-}
 .flasher-progress-top {
   display: flex;
   align-items: center;
@@ -2433,9 +2430,6 @@ body.is-gate-dragging * {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.flasher-progress.is-flashing .flasher-progress-status {
-  color: var(--text);
-}
 .flasher-progress-pct {
   color: var(--text-3);
   font-size: 12px;
@@ -2443,9 +2437,8 @@ body.is-gate-dragging * {
 .flasher-meter {
   height: 7px;
 }
-.flasher-progress.is-flashing .meter-fill {
-  background: var(--accent);
-}
+.flasher-meter .meter-fill,
+.flasher-progress.is-flashing .meter-fill,
 .flasher-progress.is-complete .meter-fill,
 .flasher-meter .meter-fill.tone-good {
   background: rgba(52, 211, 153, 0.28);
