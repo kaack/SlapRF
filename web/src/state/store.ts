@@ -36,10 +36,11 @@ export interface ComparisonSelection {
 
 /** Signal history kept per gate, so the RSSI chart can be paused and scrolled back. */
 export const HISTORY_SECONDS = 120;
-/** Gates stream telemetry at 50 Hz. */
-const HISTORY_SAMPLES = HISTORY_SECONDS * 50;
+const HISTORY_US = HISTORY_SECONDS * 1_000_000;
+/** Timers sweep at up to 100 Hz; history is trimmed by time, this only bounds memory. */
+const HISTORY_SAMPLES = HISTORY_SECONDS * 100;
 /** Trim in batches rather than shifting one frame at a time. */
-const HISTORY_TRIM_SLACK = 250;
+const HISTORY_TRIM_SLACK = 500;
 
 /** Enough timed passes (and rejected ones) to cover the signal history. */
 const MAX_CROSSINGS = 1500;
@@ -78,6 +79,8 @@ export class AppStore {
   private _latestTimestampUs = 0;
   private _latestTelemetryTimestampUs = 0;
   private _lastIngestPerfMs = 0;
+  private _lastSeenIso = "";
+  private _lastSeenIsoAtMs = -Infinity;
   private _playheadUs = 0;
   private _lastPlayheadPerfMs = 0;
   private _selectedPilot = 1;
@@ -488,7 +491,9 @@ export class AppStore {
       hist.set(frame.timerId, buf);
     }
     buf.push(frame);
-    if (buf.length > HISTORY_SAMPLES + HISTORY_TRIM_SLACK) buf.splice(0, buf.length - HISTORY_SAMPLES);
+    if (buf.length > HISTORY_SAMPLES + HISTORY_TRIM_SLACK || (buf.length & 1023) === 0) {
+      this.trimHistory(buf);
+    }
 
     if (frame.timestampUs > this._latestTimestampUs) {
       this._latestTimestampUs = frame.timestampUs;
@@ -496,8 +501,14 @@ export class AppStore {
     if (frame.timestampUs > this._latestTelemetryTimestampUs) {
       this._latestTelemetryTimestampUs = frame.timestampUs;
     }
-    this._lastIngestPerfMs = typeof performance !== "undefined" ? performance.now() : Date.now();
-    const nowIso = new Date().toISOString();
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    this._lastIngestPerfMs = nowMs;
+    // Up to ~700 samples/s on real hardware: format the "last seen" stamp at most every 100 ms.
+    if (nowMs - this._lastSeenIsoAtMs >= 100) {
+      this._lastSeenIsoAtMs = nowMs;
+      this._lastSeenIso = new Date().toISOString();
+    }
+    const nowIso = this._lastSeenIso;
     const node = this.node(frame.timerId);
     if (node) {
       node.lastRssi = frame.rssi;
@@ -510,6 +521,24 @@ export class AppStore {
       det.online = true;
       det.lastSeenAt = nowIso;
     }
+  }
+
+  /** Drops samples older than HISTORY_SECONDS behind the newest one (and caps the count). */
+  private trimHistory(buf: TimerTelemetryFrame[]): void {
+    const cutoffUs = buf[buf.length - 1].timestampUs - HISTORY_US;
+    let drop = 0;
+    if (buf[0].timestampUs < cutoffUs) {
+      let lo = 0;
+      let hi = buf.length;
+      while (lo < hi) {
+        const mid = (lo + hi) >> 1;
+        if (buf[mid].timestampUs < cutoffUs) lo = mid + 1;
+        else hi = mid;
+      }
+      drop = lo;
+    }
+    drop = Math.max(drop, buf.length - HISTORY_SAMPLES);
+    if (drop > 0) buf.splice(0, drop);
   }
 
   public ingestCrossing(ev: GateCrossingEvent): void {

@@ -1,12 +1,16 @@
-import { StreamEnvelope } from "../types/models";
+import { StreamEnvelope, TimerTelemetryFrame } from "../types/models";
 import { BootState, enginePersistence } from "./engine_persistence";
 import { ApiTransport } from "./transport";
 
 interface SlaprfWasmBridge {
   request(method: string, url: string, body?: string): { status: number; body: string };
   onStream(cb: ((envelopeJson: string) => void) | null): void;
+  /** Binary telemetry batches (see `decodeTelemetryBatch`); when set, telemetry skips `onStream`. */
+  onTelemetry?(cb: ((batch: Uint8Array) => void) | null): void;
   setRunning(running: boolean): void;
   ingestHubPacket?(bytes: Uint8Array): number;
+  /** Many Hub frames in one call, packed as `[len u8][frame bytes]` records. */
+  ingestHubPackets?(packed: Uint8Array): number;
   onHubCommand?(cb: ((pkt: Uint8Array) => void) | null): void;
   pushHubChannels?(): void;
   exportSimState?(): string;
@@ -27,6 +31,38 @@ declare global {
     /** Persisted engine state handed to the Go runtime at startup (read once by cmd/slaprf-wasm). */
     __slaprfBootState?: BootState;
   }
+}
+
+/**
+ * Decodes a binary telemetry batch from `cmd/slaprf-wasm` (little-endian):
+ * header `[version=1 u8][rssiCount u8][count u16]`, then `count` records of
+ * `[timerId u8][pad u8][batteryMv u16][seqNum u32][timestampUs f64][noiseFloorDbm f32][rssi f32 × rssiCount]`.
+ * Replaces one JSON envelope per sample (Go json.Marshal + JSON.parse at up to ~700 samples/s).
+ */
+export function decodeTelemetryBatch(bytes: Uint8Array): TimerTelemetryFrame[] {
+  if (bytes.length < 4 || bytes[0] !== 1) return [];
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  const rssiCount = bytes[1];
+  const count = view.getUint16(2, true);
+  const recLen = 20 + 4 * rssiCount;
+  const out: TimerTelemetryFrame[] = new Array(count);
+  let o = 4;
+  for (let i = 0; i < count && o + recLen <= bytes.length; i++, o += recLen) {
+    const rssi: number[] = new Array(rssiCount);
+    for (let k = 0; k < rssiCount; k++) {
+      // float32 -> shortest-ish decimal, like the JSON encoding of the Go float32 did
+      rssi[k] = Math.round(view.getFloat32(o + 20 + 4 * k, true) * 1e4) / 1e4;
+    }
+    out[i] = {
+      timerId: bytes[o],
+      seqNum: view.getUint32(o + 4, true),
+      timestampUs: view.getFloat64(o + 8, true),
+      rssi,
+      batteryMv: view.getUint16(o + 2, true),
+      noiseFloorDbm: Math.round(view.getFloat32(o + 16, true) * 1e4) / 1e4,
+    };
+  }
+  return out;
 }
 
 /**
@@ -164,6 +200,18 @@ export class WasmSimTransport implements ApiTransport {
 
   private bindStream(wasm: SlaprfWasmBridge, onEnvelope: (msg: StreamEnvelope) => void): void {
     wasm.setRunning(this.simRunning);
+    // Telemetry (not persisted) arrives as binary batches — one per WASM ingest call — and is
+    // handed to the store synchronously, so a sample reaches the live views' next animation frame.
+    wasm.onTelemetry?.((batch: Uint8Array) => {
+      try {
+        const frames = decodeTelemetryBatch(batch);
+        for (let i = 0; i < frames.length; i++) {
+          onEnvelope({ type: "telemetry", payload: frames[i] });
+        }
+      } catch (err) {
+        console.error("[WasmSimTransport] telemetry decode error:", err);
+      }
+    });
     wasm.onStream((raw: string) => {
       try {
         const env = JSON.parse(raw) as StreamEnvelope;
@@ -198,6 +246,25 @@ export class WasmSimTransport implements ApiTransport {
     return window.slaprfWasm.ingestHubPacket(bytes);
   }
 
+  /**
+   * Ingests every Hub frame of one USB read (`[len u8][frame]` records) with a single WASM call;
+   * falls back to one `ingestHubPacket` call per frame on an older engine build.
+   */
+  public ingestHubPackets(packed: Uint8Array, _count?: number): number {
+    const wasm = window.slaprfWasm;
+    if (!wasm) return 0;
+    enginePersistence.noteRealActivity();
+    if (typeof wasm.ingestHubPackets === "function") {
+      return wasm.ingestHubPackets(packed);
+    }
+    if (typeof wasm.ingestHubPacket !== "function") return 0;
+    let n = 0;
+    for (let o = 0; o < packed.length; o += 1 + packed[o]) {
+      n += wasm.ingestHubPacket(packed.subarray(o + 1, o + 1 + packed[o]));
+    }
+    return n;
+  }
+
   public onHubCommand(cb: ((pkt: Uint8Array) => void) | null): void {
     this.hubCommandCallback = cb;
     if (window.slaprfWasm && typeof window.slaprfWasm.onHubCommand === "function") {
@@ -229,6 +296,7 @@ export class WasmSimTransport implements ApiTransport {
     if (window.slaprfWasm) {
       // Mode switch / pagehide: persist whatever the active engine changed since the last save.
       enginePersistence.flushNow();
+      window.slaprfWasm.onTelemetry?.(null);
       window.slaprfWasm.onStream(null);
       window.slaprfWasm.setRunning(false);
     }

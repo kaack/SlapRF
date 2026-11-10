@@ -48,7 +48,7 @@ type Engine struct {
 	pilots         []domain.PilotSlot
 	gates          []domain.TrackGate
 	detected       map[uint8]*domain.DetectedTimer // key: physical timerId (1..16)
-	detectors      map[string]*dsp.ChannelDetector // key: "gateId:slotIdx"
+	detectors      map[detKey]*dsp.ChannelDetector // key: (gateId, slotIdx)
 	progress       map[int]*pilotProgress          // key: 1-based slotIdx
 	lastAcceptedUs map[string]uint64               // key: "gateId:slotIdx" -> last accepted crossing
 	laps           []domain.LapRecord
@@ -74,7 +74,7 @@ func NewEngine() *Engine {
 		pilots:         domain.DefaultPilotSlots(),
 		gates:          domain.DefaultTrackGates(),
 		detected:       make(map[uint8]*domain.DetectedTimer),
-		detectors:      make(map[string]*dsp.ChannelDetector),
+		detectors:      make(map[detKey]*dsp.ChannelDetector),
 		passingNumbers: make(map[uint8]uint32),
 	}
 	e.seedSimTimersLocked()
@@ -135,7 +135,7 @@ func NewRealEngine() *Engine {
 		pilots:         domain.DefaultRealPilotSlots(),
 		gates:          []domain.TrackGate{},
 		detected:       make(map[uint8]*domain.DetectedTimer),
-		detectors:      make(map[string]*dsp.ChannelDetector),
+		detectors:      make(map[detKey]*dsp.ChannelDetector),
 		passingNumbers: make(map[uint8]uint32),
 	}
 	e.resetSessionLocked()
@@ -146,12 +146,19 @@ func NewRealEngine() *Engine {
 func (e *Engine) initDetectorsLocked() {
 	for _, gate := range e.gates {
 		for _, pilot := range e.pilots {
-			key := detectorKey(gate.GateID, pilot.SlotIndex)
+			key := detKey{gate.GateID, pilot.SlotIndex}
 			if _, exists := e.detectors[key]; !exists {
 				e.detectors[key] = dsp.NewChannelDetector(gate.GateID, pilot.SlotIndex)
 			}
 		}
 	}
+}
+
+// detKey identifies one (gate, pilot slot) RSSI detector. A struct key keeps the per-sample
+// detector lookup allocation-free (it runs for every pilot of every sample: ~11k/s at 100 Hz).
+type detKey struct {
+	gateID    uint8
+	slotIndex int
 }
 
 func detectorKey(gateID uint8, slotIndex int) string {
@@ -355,10 +362,10 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 
 	for i := 0; i < len(e.pilots) && i < domain.MaxPilotPoolSize; i++ {
 		pilot := e.pilots[i]
-		det := e.detectors[detectorKey(gate.GateID, pilot.SlotIndex)]
+		det := e.detectors[detKey{gate.GateID, pilot.SlotIndex}]
 		if det == nil {
 			det = dsp.NewChannelDetector(gate.GateID, pilot.SlotIndex)
-			e.detectors[detectorKey(gate.GateID, pilot.SlotIndex)] = det
+			e.detectors[detKey{gate.GateID, pilot.SlotIndex}] = det
 		}
 		enter, exit := thresholdsFor(gate, i, pilot)
 		candidate := det.ProcessSample(frame.RSSI[i], frame.TimestampUs, enter, exit, detectorDebounceUs)

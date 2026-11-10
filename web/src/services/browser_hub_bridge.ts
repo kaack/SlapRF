@@ -9,6 +9,14 @@ export interface ConnectionLedSummary {
   detail: string;
 }
 
+/** True if a `[len][frame]…` batch holds a 36-byte HELLO (0xC5 0x5A) frame. */
+function containsHello(packed: Uint8Array): boolean {
+  for (let o = 0; o < packed.length; o += 1 + packed[o]) {
+    if (packed[o] === 36 && packed[o + 1] === 0xc5 && packed[o + 2] === 0x5a) return true;
+  }
+  return false;
+}
+
 /**
  * Connects the in-browser WebAssembly timing engine (`slaprf.wasm`) to the physical Hub — a
  * XIAO ESP32-C5 USB dongle — over USB-C via `sharedTimerConsole` (WebSerial). Hub packets arrive
@@ -34,18 +42,20 @@ export class BrowserHubBridge {
       }
     });
 
-    // Forward inbound Hub/Spoke binary frames received over USB-C WebSerial into WASM
+    // Forward inbound Hub/Spoke binary frames received over USB-C WebSerial into WASM: every frame
+    // of one USB read goes in with a single WASM call, synchronously (no throttling / coalescing
+    // of data). Only the slow-changing UI counters below are refreshed at most every 500 ms.
     sharedTimerConsole.subscribe({
-      onHubPacket: (pkt) => {
-        this.usbFramesRx++;
+      onHubPackets: (packed, count) => {
+        this.usbFramesRx += count;
         if (this.active) {
-          this.wasm.ingestHubPacket(pkt);
-          if (pkt.length === 36 && pkt[0] === 0xc5 && pkt[1] === 0x5a) {
-            this.onPacketIngested?.();
+          this.wasm.ingestHubPackets(packed, count);
+          if (this.onPacketIngested && containsHello(packed)) {
+            this.onPacketIngested();
           }
         }
-        const nowMs = Date.now();
-        if (this.usbFramesRx === 1 || nowMs - this.lastStreamNotifyMs >= 500) {
+        const nowMs = performance.now();
+        if (this.usbFramesRx === count || nowMs - this.lastStreamNotifyMs >= 500) {
           this.lastStreamNotifyMs = nowMs;
           this.notify();
         }

@@ -149,7 +149,7 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 		e.detected[cp.TimerID] = &cp
 	}
 
-	e.detectors = make(map[string]*dsp.ChannelDetector)
+	e.detectors = make(map[detKey]*dsp.ChannelDetector)
 	e.initDetectorsLocked()
 	e.resetSessionLocked()
 	e.passingNumbers = make(map[uint8]uint32)
@@ -214,7 +214,7 @@ func (e *Engine) ResetToFactoryDefaults(isSim bool) {
 	e.raceArmed = true
 	e.rules = domain.DefaultTimingRules()
 	e.detected = make(map[uint8]*domain.DetectedTimer)
-	e.detectors = make(map[string]*dsp.ChannelDetector)
+	e.detectors = make(map[detKey]*dsp.ChannelDetector)
 	e.passingNumbers = make(map[uint8]uint32)
 	e.nextEventID = 0
 	e.nextLapID = 0

@@ -1328,11 +1328,13 @@ body.is-gate-dragging * {
   background: var(--c);
   opacity: 0.32;
 }
+/* Live pilot: steady glow, same as the live .pilot-swatch bars (no animation — a page-wide
+   breathing animation used to restyle the whole document every frame). */
 .pilot-chip .dot.is-live {
-  opacity: var(--pilot-breathe, 1);
+  opacity: 1;
   box-shadow:
-    0 0 calc(var(--pilot-breathe, 1) * 8px) var(--c),
-    0 0 calc(var(--pilot-breathe, 1) * 3px) var(--c);
+    0 0 9px var(--c),
+    0 0 3px var(--c);
 }
 .pilot-chip-name {
   font-family: var(--font-sans);

@@ -3,7 +3,9 @@
 package main
 
 import (
+	"encoding/binary"
 	"encoding/json"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -22,6 +24,14 @@ type wasmStreamSubscriber struct {
 	mu       sync.RWMutex
 	allow    func() bool
 	callback js.Value
+	// telemetryCb, when set, receives telemetry as binary batches (encodeTelemetryBatch) instead
+	// of one JSON envelope per sample on `callback`.
+	telemetryCb js.Value
+
+	batchMu  sync.Mutex
+	batching int                          // >0 while inside an ingest call: telemetry is buffered
+	pending  []domain.TimerTelemetryFrame // buffered telemetry, flushed as one batch
+	encBuf   []byte
 }
 
 func (w *wasmStreamSubscriber) setCallback(cb js.Value) {
@@ -30,10 +40,93 @@ func (w *wasmStreamSubscriber) setCallback(cb js.Value) {
 	w.mu.Unlock()
 }
 
+func (w *wasmStreamSubscriber) setTelemetryCallback(cb js.Value) {
+	w.mu.Lock()
+	w.telemetryCb = cb
+	w.mu.Unlock()
+}
+
+// beginBatch buffers telemetry until the matching endBatch, so one ingest call (all Hub frames of
+// a USB read) crosses the JS boundary once instead of once per sample.
+func (w *wasmStreamSubscriber) beginBatch() {
+	w.batchMu.Lock()
+	w.batching++
+	w.batchMu.Unlock()
+}
+
+func (w *wasmStreamSubscriber) endBatch() {
+	w.batchMu.Lock()
+	w.batching--
+	w.batchMu.Unlock()
+	w.flushTelemetry()
+}
+
+// flushTelemetry delivers buffered telemetry (also called before any other event, so the JS side
+// sees events in engine order).
+func (w *wasmStreamSubscriber) flushTelemetry() {
+	w.mu.RLock()
+	cb := w.telemetryCb
+	w.mu.RUnlock()
+
+	w.batchMu.Lock()
+	if len(w.pending) == 0 {
+		w.batchMu.Unlock()
+		return
+	}
+	if cb.IsUndefined() || cb.IsNull() {
+		w.pending = w.pending[:0]
+		w.batchMu.Unlock()
+		return
+	}
+	w.encBuf = encodeTelemetryBatch(w.encBuf[:0], w.pending)
+	w.pending = w.pending[:0]
+	u8 := js.Global().Get("Uint8Array").New(len(w.encBuf))
+	js.CopyBytesToJS(u8, w.encBuf)
+	w.batchMu.Unlock()
+	cb.Invoke(u8)
+}
+
+// encodeTelemetryBatch appends the binary telemetry batch decoded by `decodeTelemetryBatch` in
+// web/src/services/wasm_transport.ts (little-endian):
+// [1][rssiCount][count u16] then per frame
+// [timerId u8][0][batteryMv u16][seqNum u32][timestampUs f64][noiseFloorDbm f32][rssi f32 x rssiCount].
+func encodeTelemetryBatch(dst []byte, frames []domain.TimerTelemetryFrame) []byte {
+	const rssiCount = domain.MaxPilotPoolSize
+	const recLen = 20 + 4*rssiCount
+	n := len(frames)
+	if n > 0xFFFF {
+		n = 0xFFFF
+	}
+	need := 4 + n*recLen
+	if cap(dst) < need {
+		dst = make([]byte, 0, need*2)
+	}
+	b := dst[:need]
+	b[0] = 1
+	b[1] = rssiCount
+	binary.LittleEndian.PutUint16(b[2:4], uint16(n))
+	o := 4
+	for i := 0; i < n; i++ {
+		f := &frames[i]
+		b[o] = f.TimerID
+		b[o+1] = 0
+		binary.LittleEndian.PutUint16(b[o+2:], f.BatteryMv)
+		binary.LittleEndian.PutUint32(b[o+4:], f.SeqNum)
+		binary.LittleEndian.PutUint64(b[o+8:], math.Float64bits(float64(f.TimestampUs)))
+		binary.LittleEndian.PutUint32(b[o+16:], math.Float32bits(f.NoiseFloorDbm))
+		for k := 0; k < rssiCount; k++ {
+			binary.LittleEndian.PutUint32(b[o+20+4*k:], math.Float32bits(f.RSSI[k]))
+		}
+		o += recLen
+	}
+	return b
+}
+
 func (w *wasmStreamSubscriber) send(eventType string, payload interface{}) {
 	if w.allow != nil && !w.allow() {
 		return
 	}
+	w.flushTelemetry()
 	w.mu.RLock()
 	cb := w.callback
 	w.mu.RUnlock()
@@ -51,7 +144,23 @@ func (w *wasmStreamSubscriber) send(eventType string, payload interface{}) {
 }
 
 func (w *wasmStreamSubscriber) OnTelemetryFrame(frame domain.TimerTelemetryFrame) {
-	w.send("telemetry", frame)
+	w.mu.RLock()
+	binaryTelemetry := !w.telemetryCb.IsUndefined() && !w.telemetryCb.IsNull()
+	w.mu.RUnlock()
+	if !binaryTelemetry {
+		w.send("telemetry", frame)
+		return
+	}
+	if w.allow != nil && !w.allow() {
+		return
+	}
+	w.batchMu.Lock()
+	w.pending = append(w.pending, frame)
+	immediate := w.batching == 0
+	w.batchMu.Unlock()
+	if immediate {
+		w.flushTelemetry() // e.g. simulator ticks: deliver right away
+	}
 }
 
 func (w *wasmStreamSubscriber) OnGateCrossing(event domain.GateCrossingEvent) {
@@ -204,6 +313,18 @@ func main() {
 		return nil
 	}))
 
+	// onTelemetry(callback: ((batch: Uint8Array) => void) | null): binary telemetry batches
+	// (see encodeTelemetryBatch). While set, telemetry no longer goes through onStream.
+	apiObj.Set("onTelemetry", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		cb := js.Undefined()
+		if len(args) > 0 && args[0].Type() == js.TypeFunction {
+			cb = args[0]
+		}
+		simStreamSub.setTelemetryCallback(cb)
+		realStreamSub.setTelemetryCallback(cb)
+		return nil
+	}))
+
 	// setRunning(running: boolean)
 	apiObj.Set("setRunning", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		if len(args) > 0 {
@@ -223,7 +344,42 @@ func main() {
 		}
 		buf := make([]byte, length)
 		js.CopyBytesToGo(buf, args[0])
+		realStreamSub.beginBatch()
+		defer realStreamSub.endBatch()
 		return hubRx.IngestPacket(buf, realEngine.NowUs())
+	}))
+
+	// ingestHubPackets(packed: Uint8Array) => number: every Hub frame of one USB read, packed as
+	// [len u8][frame bytes] records, in one call (one copy, one arrival timestamp, and one
+	// telemetry batch back to JS instead of per-frame boundary crossings).
+	var packBuf []byte
+	apiObj.Set("ingestHubPackets", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		if len(args) == 0 || args[0].IsUndefined() || args[0].IsNull() {
+			return 0
+		}
+		length := args[0].Get("byteLength").Int()
+		if length <= 0 || length > 1<<20 {
+			return 0
+		}
+		if cap(packBuf) < length {
+			packBuf = make([]byte, length*2)
+		}
+		buf := packBuf[:length]
+		js.CopyBytesToGo(buf, args[0])
+		nowUs := realEngine.NowUs()
+		realStreamSub.beginBatch()
+		defer realStreamSub.endBatch()
+		total := 0
+		for o := 0; o < length; {
+			n := int(buf[o])
+			o++
+			if o+n > length {
+				break
+			}
+			total += hubRx.IngestPacket(buf[o:o+n], nowUs)
+			o += n
+		}
+		return total
 	}))
 
 	// onHubCommand(callback: ((pkt: Uint8Array) => void) | null)

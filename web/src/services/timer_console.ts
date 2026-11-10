@@ -300,6 +300,12 @@ export interface ConsoleHandlers {
   onLog?: (line: string) => void;
   onRawReply?: (line: string, msgType?: string) => void;
   onHubPacket?: (pkt: Uint8Array) => void;
+  /**
+   * Batched alternative to `onHubPacket`: every valid Hub frame parsed from one USB read, packed
+   * as `[len u8][frame bytes]` records (`count` of them), delivered once per read. Subscribers
+   * that define it don't get `onHubPacket`. The buffer is a fresh copy owned by the callee.
+   */
+  onHubPackets?: (packed: Uint8Array, count: number) => void;
   onConfig?: (c: TimerReadout) => void;
   onError?: (msg: string) => void;
   onConnect?: () => void;
@@ -333,12 +339,33 @@ const CONFIG_LEN = 160;
 /** Start byte of a binary Hub packet record on the USB link (ASCII Record Separator). */
 const PKT_RECORD_SEP = 0x1e;
 
-/** A Hub frame starts with 0xC5 and ends with the XOR of all preceding bytes. */
-function isValidHubFrame(frame: Uint8Array): boolean {
-  if (frame.length < 4 || frame[0] !== 0xc5) return false;
+/** A Hub frame at `buf[at, at+len)` starts with 0xC5 and ends with the XOR of all preceding bytes. */
+function isValidHubFrameAt(buf: Uint8Array, at: number, len: number): boolean {
+  if (len < 4 || buf[at] !== 0xc5) return false;
   let crc = 0;
-  for (let i = 0; i < frame.length - 1; i++) crc ^= frame[i];
-  return crc === frame[frame.length - 1];
+  const last = at + len - 1;
+  for (let i = at; i < last; i++) crc ^= buf[i];
+  return crc === buf[last];
+}
+
+/** First index of `value` in `buf[from, to)`, or -1. */
+function indexOfByte(buf: Uint8Array, value: number, from: number, to: number): number {
+  for (let i = from; i < to; i++) if (buf[i] === value) return i;
+  return -1;
+}
+
+/** First index in `[from, startBefore)` where `needle` starts (it may extend up to `to`), or -1. */
+function indexOfSeq(buf: Uint8Array, needle: Uint8Array, from: number, startBefore: number, to: number): number {
+  const first = needle[0];
+  const last = Math.min(startBefore, to - needle.length + 1);
+  outer: for (let i = from; i < last; i++) {
+    if (buf[i] !== first) continue;
+    for (let j = 1; j < needle.length; j++) {
+      if (buf[i + j] !== needle[j]) continue outer;
+    }
+    return i;
+  }
+  return -1;
 }
 
 function serial(): SerialLike {
@@ -371,7 +398,18 @@ export class TimerConsole {
   private writer: WritableStreamDefaultWriter<Uint8Array> | null = null;
   private writeQueue: Promise<void> = Promise.resolve();
   private lastKnownSpokeSig = "";
-  private buf = new Uint8Array(0);
+  /**
+   * Receive buffer: unparsed bytes live in `buf[bufStart, bufEnd)`. Parsing advances `bufStart`
+   * instead of re-slicing, and the buffer is compacted/grown only when a read doesn't fit, so a
+   * large USB read costs O(n) rather than O(n²).
+   */
+  private buf = new Uint8Array(16384);
+  private bufStart = 0;
+  private bufEnd = 0;
+  /** Hub frames parsed from the current read, packed as `[len][frame]`, flushed once per read. */
+  private pack = new Uint8Array(4096);
+  private packLen = 0;
+  private packCount = 0;
   private readonly decoder = new TextDecoder();
   private readonly subscribers = new Set<ConsoleHandlers>();
   private readonly stateListeners = new Set<() => void>();
@@ -579,7 +617,10 @@ export class TimerConsole {
     await this.disarmUsbJtagLatch(port);
     this.port = port;
     this.portInfo = port.getInfo?.() ?? this.portInfo;
-    this.buf = new Uint8Array(0);
+    this.bufStart = 0;
+    this.bufEnd = 0;
+    this.packLen = 0;
+    this.packCount = 0;
     this.writeQueue = Promise.resolve();
     this.writer = port.writable?.getWriter() ?? null;
     this.reader = port.readable?.getReader() ?? null;
@@ -911,34 +952,41 @@ export class TimerConsole {
   }
 
   private ingest(chunk: Uint8Array): void {
-    const merged = new Uint8Array(this.buf.length + chunk.length);
-    merged.set(this.buf);
-    merged.set(chunk, this.buf.length);
-    this.buf = merged;
+    this.appendToBuffer(chunk);
+    const b = this.buf;
+    const end = this.bufEnd;
+    let pos = this.bufStart;
 
-    for (;;) {
-      const recAt = this.buf.indexOf(PKT_RECORD_SEP);
-      const magicAt = indexOf(this.buf, CONFIG_MAGIC);
-      const nl = this.buf.indexOf(0x0a);
+    while (pos < end) {
+      const recAt = indexOfByte(b, PKT_RECORD_SEP, pos, end);
+      const nl = indexOfByte(b, 0x0a, pos, end);
+      // A config block only wins if it starts before the first record separator / newline.
+      let limit = end;
+      if (recAt >= 0) limit = recAt;
+      if (nl >= 0 && nl < limit) limit = nl;
+      const magicAt = indexOfSeq(b, CONFIG_MAGIC, pos, limit, end);
       // Binary Hub packet record: [0x1E][len][frame bytes, ending in XOR crc8]
       if (recAt >= 0 && (nl < 0 || recAt < nl) && (magicAt < 0 || recAt < magicAt)) {
-        if (this.buf.length < recAt + 2) return;
-        const len = this.buf[recAt + 1];
-        if (this.buf.length < recAt + 2 + len) return; // wait for the rest of the record
-        if (recAt > 0) this.emitText(this.buf.subarray(0, recAt));
-        const frame = this.buf.slice(recAt + 2, recAt + 2 + len);
-        if (isValidHubFrame(frame)) {
-          this.subscribers.forEach((h) => h.onHubPacket?.(frame));
-          this.buf = this.buf.slice(recAt + 2 + len);
+        if (end < recAt + 2) break;
+        const len = b[recAt + 1];
+        if (end < recAt + 2 + len) break; // wait for the rest of the record
+        if (recAt > pos) {
+          this.flushHubPackets();
+          this.emitText(b.subarray(pos, recAt));
+        }
+        if (isValidHubFrameAt(b, recAt + 2, len)) {
+          this.queueHubPacket(b, recAt + 2, len);
+          pos = recAt + 2 + len;
         } else {
-          this.buf = this.buf.slice(recAt + 1); // Not a real record: skip the separator and resync
+          pos = recAt + 1; // Not a real record: skip the separator and resync
         }
         continue;
       }
       if (magicAt >= 0 && (nl < 0 || magicAt < nl)) {
-        if (this.buf.length < magicAt + CONFIG_LEN) return; // wait for the rest of the block
-        if (magicAt > 0) this.emitText(this.buf.subarray(0, magicAt));
-        const parsed = parseSlaprfConfigBlock(this.buf.subarray(magicAt, magicAt + CONFIG_LEN));
+        if (end < magicAt + CONFIG_LEN) break; // wait for the rest of the block
+        this.flushHubPackets();
+        if (magicAt > pos) this.emitText(b.subarray(pos, magicAt));
+        const parsed = parseSlaprfConfigBlock(b.subarray(magicAt, magicAt + CONFIG_LEN));
         if (parsed) {
           this.lastConfig = parsed;
           recordKnownTimerReadout(parsed);
@@ -946,19 +994,84 @@ export class TimerConsole {
           this.resolveWaiters("config", parsed);
           this.notifyStateChange();
         }
-        this.buf = this.buf.slice(magicAt + CONFIG_LEN);
+        pos = magicAt + CONFIG_LEN;
         continue;
       }
       if (nl < 0) {
-        if (this.buf.length > 16384) {
-          this.emitText(this.buf);
-          this.buf = new Uint8Array(0);
+        if (end - pos > 16384) {
+          this.flushHubPackets();
+          this.emitText(b.subarray(pos, end));
+          pos = end;
         }
-        return;
+        break;
       }
-      this.emitText(this.buf.subarray(0, nl));
-      this.buf = this.buf.slice(nl + 1);
+      this.flushHubPackets();
+      this.emitText(b.subarray(pos, nl));
+      pos = nl + 1;
     }
+
+    // A callback may have reset the buffer (disconnect); only advance if it's still ours.
+    if (this.buf === b && this.bufEnd === end) {
+      this.bufStart = pos;
+      if (pos >= end) {
+        this.bufStart = 0;
+        this.bufEnd = 0;
+      }
+    }
+    this.flushHubPackets();
+  }
+
+  /** Appends a USB read to `buf[bufStart, bufEnd)`, compacting or growing (amortized O(1)/byte). */
+  private appendToBuffer(chunk: Uint8Array): void {
+    const pending = this.bufEnd - this.bufStart;
+    if (this.bufEnd + chunk.length > this.buf.length) {
+      if (pending + chunk.length <= this.buf.length) {
+        this.buf.copyWithin(0, this.bufStart, this.bufEnd);
+      } else {
+        let cap = this.buf.length * 2;
+        while (cap < pending + chunk.length) cap *= 2;
+        const grown = new Uint8Array(cap);
+        grown.set(this.buf.subarray(this.bufStart, this.bufEnd));
+        this.buf = grown;
+      }
+      this.bufStart = 0;
+      this.bufEnd = pending;
+    }
+    this.buf.set(chunk, this.bufEnd);
+    this.bufEnd += chunk.length;
+  }
+
+  private queueHubPacket(src: Uint8Array, at: number, len: number): void {
+    if (this.packLen + 1 + len > this.pack.length) {
+      const grown = new Uint8Array(Math.max(this.pack.length * 2, this.packLen + 1 + len));
+      grown.set(this.pack.subarray(0, this.packLen));
+      this.pack = grown;
+    }
+    this.pack[this.packLen] = len;
+    this.pack.set(src.subarray(at, at + len), this.packLen + 1);
+    this.packLen += 1 + len;
+    this.packCount++;
+  }
+
+  /**
+   * Delivers the Hub frames queued so far (in arrival order, before any text/config that follows
+   * them): one `onHubPackets` call per subscriber that batches, else one `onHubPacket` per frame.
+   */
+  private flushHubPackets(): void {
+    if (this.packCount === 0) return;
+    const packed = this.pack.slice(0, this.packLen);
+    const count = this.packCount;
+    this.packLen = 0;
+    this.packCount = 0;
+    this.subscribers.forEach((h) => {
+      if (h.onHubPackets) {
+        h.onHubPackets(packed, count);
+      } else if (h.onHubPacket) {
+        for (let o = 0; o < packed.length; o += 1 + packed[o]) {
+          h.onHubPacket(packed.subarray(o + 1, o + 1 + packed[o]));
+        }
+      }
+    });
   }
 
   private resolveWaiters(type: string, msg: unknown): void {
@@ -1030,16 +1143,6 @@ export class TimerConsole {
     }
     this.subscribers.forEach((h) => h.onLog?.(line));
   }
-}
-
-function indexOf(haystack: Uint8Array, needle: Uint8Array): number {
-  outer: for (let i = 0; i <= haystack.length - needle.length; i++) {
-    for (let j = 0; j < needle.length; j++) {
-      if (haystack[i + j] !== needle[j]) continue outer;
-    }
-    return i;
-  }
-  return -1;
 }
 
 /**

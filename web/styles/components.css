@@ -364,24 +364,6 @@
   z-index: 1;
 }
 
-/* Synchronized breathing phase shared by all active pilot bars & pill LEDs - */
-@property --pilot-breathe {
-  syntax: "<number>";
-  inherits: true;
-  initial-value: 1;
-}
-:root {
-  animation: pilotBreatheSync 1.6s ease-in-out infinite;
-}
-@keyframes pilotBreatheSync {
-  0%, 100% {
-    --pilot-breathe: 0.2;
-  }
-  50% {
-    --pilot-breathe: 1;
-  }
-}
-
 /* Pilot cells -------------------------------------------------------------- */
 .pilot-cell {
   display: flex;

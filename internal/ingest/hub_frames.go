@@ -63,16 +63,20 @@ type HubFrameDecoder struct {
 	seenSeq     map[uint8]uint8  // timerID -> last ingested 8-bit sample seq_num
 	hasSeq      map[uint8]bool   // timerID -> true once at least one sample has been ingested
 	lastTs      map[uint8]uint64 // timerID -> last reconstructed sample TimestampUs
+	lastArrival map[uint8]uint64 // timerID -> arrival time (nowUs) of its last telemetry frame
+	timelines   map[uint8]*tsTracker
 }
 
 // NewHubFrameDecoder creates a Hub frame decoder feeding `engine`.
 func NewHubFrameDecoder(engine *tracker.Engine) *HubFrameDecoder {
 	r := &HubFrameDecoder{
-		engine:  engine,
-		slots:   make(map[uint8]slotInfo),
-		seenSeq: make(map[uint8]uint8),
-		hasSeq:  make(map[uint8]bool),
-		lastTs:  make(map[uint8]uint64),
+		engine:      engine,
+		slots:       make(map[uint8]slotInfo),
+		seenSeq:     make(map[uint8]uint8),
+		hasSeq:      make(map[uint8]bool),
+		lastTs:      make(map[uint8]uint64),
+		lastArrival: make(map[uint8]uint64),
+		timelines:   make(map[uint8]*tsTracker),
 	}
 	if engine != nil {
 		engine.Subscribe(r)
@@ -190,6 +194,8 @@ func (r *HubFrameDecoder) handleHello(raw []byte) {
 	r.slots[slot] = slotInfo{fingerprint: fp, timerID: timerID, intervalUs: interval}
 	delete(r.hasSeq, timerID)
 	delete(r.lastTs, timerID)
+	delete(r.lastArrival, timerID)
+	delete(r.timelines, timerID)
 	r.mu.Unlock()
 	r.pushActiveChannelsToHub()
 }
@@ -205,6 +211,112 @@ func (r *HubFrameDecoder) resolveSlotLocked(slot uint8) (uint8, uint64, bool) {
 		return slot, SampleIntervalUs, true
 	}
 	return 0, 0, false
+}
+
+const (
+	// maxSeqRunSamples bounds the sequence gap still bridged by the seq-predicted timeline
+	// (640 ms at 100 Hz); longer gaps re-seed from the arrival time.
+	maxSeqRunSamples = 64
+	// staleSeqSamples: after this many sample intervals without a frame from a timer, its 8-bit
+	// sequence number may have wrapped half-way (128), so dedupe/timeline state is reset instead of
+	// silently dropping fresh samples as "old" (1 s at 100 Hz, 2 s at 50 Hz).
+	staleSeqSamples = 100
+	// lateToleranceUs: how late (USB batching, a busy browser main thread, radio retries) a frame may
+	// arrive and still be placed on the seq-predicted timeline rather than re-seeding from arrival.
+	lateToleranceUs = 1_000_000
+	// earlyToleranceUs: how far ahead of arrival a prediction may drift before re-seeding.
+	earlyToleranceUs = 120_000
+	// latencyWindowUs: the timeline is advanced by the smallest lateness seen over each window
+	// (the true offset: clock drift / sweep-rate mismatch), never by burst latency.
+	latencyWindowUs = 1_000_000
+)
+
+// tsTracker is the per-timer state of the lower-envelope timestamp reconstruction.
+type tsTracker struct {
+	winStartUs uint64 // arrival time the current latency window started
+	minLateUs  uint64 // smallest (arrival - predicted) seen in the window
+	pendingUs  uint64 // correction still to spread over the next samples
+}
+
+func (r *HubFrameDecoder) trackerLocked(timerID uint8, nowUs uint64) *tsTracker {
+	tr := r.timelines[timerID]
+	if tr == nil {
+		tr = &tsTracker{winStartUs: nowUs, minLateUs: ^uint64(0)}
+		r.timelines[timerID] = tr
+	}
+	return tr
+}
+
+// expireStaleSeqLocked forgets a timer's sequence/timeline state when it has been silent long enough
+// for its 8-bit sequence counter to wrap past the dedupe window.
+func (r *HubFrameDecoder) expireStaleSeqLocked(timerID uint8, intervalUs, nowUs uint64) {
+	if last, ok := r.lastArrival[timerID]; ok && nowUs > last && nowUs-last > staleSeqSamples*intervalUs {
+		delete(r.hasSeq, timerID)
+		delete(r.lastTs, timerID)
+		delete(r.timelines, timerID)
+	}
+	r.lastArrival[timerID] = nowUs
+}
+
+// sampleTimestampLocked reconstructs a sample's capture time from its frame's arrival time
+// (`nowUs`, minus `age` sweeps for older samples in the window) and its sequence number.
+//
+// Arrival time = capture time + latency, and latency is never negative, so the timeline follows
+// the lower envelope of arrivals: consecutive samples are spaced exactly `seqDelta × interval`
+// (no bunching or stretching when frames arrive in bursts — 4-sample windows every 20 ms, a whole
+// USB read at once, a stalled main thread), a sample arriving *earlier* than predicted pulls the
+// timeline back toward its arrival (staying monotonic), and the smallest lateness seen over each
+// second is spread forward over the following samples (clock drift, sweep-rate mismatch).
+func (r *HubFrameDecoder) sampleTimestampLocked(timerID uint8, hadPrev bool, seqDelta uint8, age int, intervalUs, nowUs uint64) uint64 {
+	ageUs := uint64(age) * intervalUs
+	rawTs := nowUs
+	if nowUs > ageUs {
+		rawTs = nowUs - ageUs
+	}
+	last, ok := r.lastTs[timerID]
+	if !ok || !hadPrev || seqDelta < 1 || int(seqDelta) > maxSeqRunSamples {
+		delete(r.timelines, timerID)
+		return rawTs
+	}
+	tr := r.trackerLocked(timerID, nowUs)
+	predicted := last + uint64(seqDelta)*intervalUs
+	if rawTs < predicted {
+		early := predicted - rawTs
+		if early > earlyToleranceUs {
+			delete(r.timelines, timerID)
+			return rawTs // timeline ran away (e.g. wrong sweep rate): re-seed
+		}
+		tr.pendingUs = 0
+		tr.minLateUs = 0
+		ts := rawTs
+		if minTs := last + intervalUs/2; ts < minTs {
+			ts = minTs // stay strictly monotonic
+		}
+		return ts
+	}
+	late := rawTs - predicted
+	if late > lateToleranceUs {
+		delete(r.timelines, timerID)
+		return rawTs
+	}
+	if late < tr.minLateUs {
+		tr.minLateUs = late
+	}
+	if nowUs >= tr.winStartUs+latencyWindowUs {
+		tr.pendingUs = tr.minLateUs
+		tr.minLateUs = ^uint64(0)
+		tr.winStartUs = nowUs
+	}
+	ts := predicted
+	if tr.pendingUs > 0 {
+		step := tr.pendingUs
+		if maxStep := intervalUs / 10; step > maxStep {
+			step = maxStep
+		}
+		ts += step
+		tr.pendingUs -= step
+	}
+	return ts
 }
 
 // DecodePacket parses a binary packet and returns only the newly recovered frames in
@@ -242,6 +354,7 @@ func (r *HubFrameDecoder) DecodePacket(raw []byte, nowUs uint64) []domain.TimerT
 		if !known {
 			return nil
 		}
+		r.expireStaleSeqLocked(timerID, intervalUs, nowUs)
 
 		out := make([]domain.TimerTelemetryFrame, 0, sampleCount)
 		for idx := 0; idx < sampleCount; idx++ {
@@ -263,34 +376,7 @@ func (r *HubFrameDecoder) DecodePacket(raw []byte, nowUs uint64) []domain.TimerT
 					rssi[pIdx] = val
 				}
 			}
-			// Reconstruct each sample's timestamp relative to the newest sample in the window,
-			// advancing monotonically by seqDelta * intervalUs when consecutive samples arrive so
-			// USB/radio arrival jitter doesn't bunch or stretch samples on the signal chart.
-			ageUs := uint64(sampleCount-1-idx) * intervalUs
-			rawTs := nowUs
-			if nowUs > ageUs {
-				rawTs = nowUs - ageUs
-			}
-			sampleTs := rawTs
-			if hadPrev {
-				seqDelta := uint64(seq - prevSeq)
-				if seqDelta >= 1 && seqDelta <= 16 {
-					predicted := r.lastTs[timerID] + seqDelta*intervalUs
-					var diff uint64
-					if rawTs > predicted {
-						diff = rawTs - predicted
-					} else {
-						diff = predicted - rawTs
-					}
-					if diff <= 120_000 {
-						// Gently slew toward wall-clock (1/8th step) while keeping monotonic spacing
-						sampleTs = uint64(int64(predicted) + (int64(rawTs)-int64(predicted))/8)
-						if sampleTs <= r.lastTs[timerID] {
-							sampleTs = r.lastTs[timerID] + intervalUs/2
-						}
-					}
-				}
-			}
+			sampleTs := r.sampleTimestampLocked(timerID, hadPrev, seq-prevSeq, sampleCount-1-idx, intervalUs, nowUs)
 			r.lastTs[timerID] = sampleTs
 			out = append(out, domain.TimerTelemetryFrame{
 				TimerID:       timerID,
@@ -316,11 +402,12 @@ func (r *HubFrameDecoder) DecodePacket(raw []byte, nowUs uint64) []domain.TimerT
 		noiseFloor := float32(int8(raw[6]))
 
 		r.mu.Lock()
-		timerID, _, known := r.resolveSlotLocked(slot)
+		timerID, intervalUs, known := r.resolveSlotLocked(slot)
 		if !known {
 			r.mu.Unlock()
 			return nil
 		}
+		r.expireStaleSeqLocked(timerID, intervalUs, nowUs)
 		if r.hasSeq[timerID] && !isNewerSeq(seq, r.seenSeq[timerID]) {
 			r.mu.Unlock()
 			return nil
