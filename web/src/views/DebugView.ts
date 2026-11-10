@@ -441,6 +441,16 @@ export class DebugView extends Component {
             </div>
           </div>
         </section>
+        <section class="settings-section">
+          <div class="settings-intro">
+            <h2>Monitored channels</h2>
+            <p>The 8 pilot channels monitored in each timing sweep (synced from active pilots). Click any channel row to toggle monitoring on or off—fewer active channels make each sweep faster. Click <strong>Stream</strong> to inspect live 5.8 GHz channel bars.</p>
+          </div>
+          <div class="debug-status-layout">
+            <div data-slot="live-head"></div>
+            <div class="debug-subbox" data-slot="live"></div>
+          </div>
+        </section>
         <section class="settings-section" data-signal-section>
           <div class="settings-intro">
             <h2>Signal over time &amp; channel noise</h2>
@@ -3676,12 +3686,20 @@ export class DebugView extends Component {
             : inScanMode
               ? "Paused while Spectrum scan is streaming — click to pause Spectrum scan and stream 5.8 GHz channels"
               : "Paused — click to stream live 5.8 GHz readings";
-    const ledClass = emg ? "is-emergency" : streamActive ? "is-up" : on && (inScanMode || !rfOn) ? "is-warn" : "";
+    const ledClass = emg
+      ? "is-emergency"
+      : streamActive
+        ? this.status?.role === 2
+          ? "is-spoke"
+          : "is-up"
+        : on && (inScanMode || !rfOn)
+          ? "is-warn"
+          : "";
     this.slot("live-head").innerHTML = `
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}" data-live-led></span>
-          <span class="debug-head-note" data-live-note>${emg ? "Emergency mode · 5.8 GHz receiver & sweeps halted" : on ? "Waiting for sweep stream…" : "Paused · not connected"}</span>
+          <span class="debug-head-note" data-live-note>${emg ? "Emergency mode · 5.8 GHz receiver & sweeps halted" : on ? "Waiting for sweep stream…" : `Paused · <a href="#/network" class="link-inline">connect on the Network page</a>`}</span>
         </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm ${rfOn ? "btn-armed" : "btn-unarmed"}" data-action="rf" ${on && this.status && !inScanMode && !emg ? "" : "disabled"} title="${emg ? "Exit emergency mode first to toggle the 5.8 GHz receiver" : inScanMode ? "Pause Spectrum scan first to toggle the 5.8 GHz receiver" : "Switch the hardware 5.8 GHz receiver on or off"}">
@@ -3747,13 +3765,15 @@ export class DebugView extends Component {
       chNote.innerHTML = `<span class="mono">${activeCount}/8</span> active · click row to toggle · double-click to solo`;
     }
     if (led) {
+      const streaming = !emg && on && rfOn && !inScanMode && this.liveOn;
       led.classList.toggle("is-emergency", emg);
-      led.classList.toggle("is-up", !emg && on && rfOn && !inScanMode && this.liveOn);
+      led.classList.toggle("is-up", streaming && this.status?.role !== 2);
+      led.classList.toggle("is-spoke", streaming && this.status?.role === 2);
       led.classList.toggle("is-warn", !emg && on && (inScanMode || !rfOn));
     }
     if (note) {
       if (!on) {
-        note.textContent = "Paused · not connected";
+        note.innerHTML = `Paused · <a href="#/network" class="link-inline">connect on the Network page</a>`;
       } else if (emg) {
         note.textContent = "Emergency mode · 5.8 GHz receiver & sweeps halted";
       } else if (inScanMode) {
@@ -3761,9 +3781,10 @@ export class DebugView extends Component {
       } else if (this.status && !this.status.rf.enabled) {
         note.textContent = "Off · 5.8 GHz receiver is switched off";
       } else if (!this.liveOn) {
-        note.textContent = "Paused";
+        note.textContent = "Paused · click Stream to view live 5.8 GHz readings";
       } else if (l) {
-        note.textContent = `Streaming · ${this.liveMode === 2 ? "50 Hz (every sweep)" : "10 Hz"} · sweep ${(l.us / 1000).toFixed(2)} ms`;
+        const hz = this.status?.sweepHz ?? 100;
+        note.textContent = `Streaming · ${this.liveMode === 2 ? `${hz} Hz (every sweep)` : "10 Hz"} · sweep ${(l.us / 1000).toFixed(2)} ms`;
       } else {
         note.textContent = "Streaming · waiting for sweeps…";
       }

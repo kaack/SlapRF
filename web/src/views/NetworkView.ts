@@ -20,27 +20,18 @@ const NETWORK_PREFS_KEY = "slaprf.ui.network_prefs.v1";
  * Dedicated Network page (`#/network`):
  * 1. Connect to a Hub or Spoke timer via Direct USB-C (WebSerial).
  * 2. Inspect the 2.4 GHz TDMA network topology (Parent Hub Slot 1 + Child Spokes Slots 2–7, with live Spoke RSSI inspector).
- * 3. View & toggle the 8 monitored 5.8 GHz pilot channels and live RSSI meters.
  */
 export class NetworkView extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
   private readonly console: TimerConsole;
   private status: TimerStatus | null = null;
-  private live: LiveSample | null = null;
-  private liveOn = false;
   private showAllPorts = false;
   private error: string | null = null;
   private selectedNetworkSpokeSlot: number | null = null;
   private spokeRateTracker = new Map<number, { frames: number; atMs: number; ratePktPerSec: number }>();
   private signalEnabledCh: boolean[] = [true, true, true, true, true, true, true, true];
-  private chanMaskToggledAt = 0;
-  private barFillVal: number[] = [-127, -127, -127, -127, -127, -127, -127, -127];
-  private barFillAt: number[] = [0, 0, 0, 0, 0, 0, 0, 0];
-  private barPeakVal: number[] = [-127, -127, -127, -127, -127, -127, -127, -127];
-  private barPeakAt: number[] = [0, 0, 0, 0, 0, 0, 0, 0];
   private lastConnHtml = "";
-  private lastLiveHeadHtml = "";
   private lastNetHtml = "";
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
@@ -59,7 +50,7 @@ export class NetworkView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Connectivity</h2>
-            <p>Connect the Hub (or a Spoke) over Direct USB-C to inspect the 2.4 GHz course network and monitored 5.8 GHz channels.</p>
+            <p>Connect the Hub (or a Spoke) over Direct USB-C to inspect the 2.4 GHz course network.</p>
           </div>
           <div class="debug-status-layout" data-slot="connection"></div>
         </section>
@@ -71,17 +62,6 @@ export class NetworkView extends Component {
           </div>
           <div class="debug-status-layout" data-slot="network"></div>
         </section>
-
-        <section class="settings-section">
-          <div class="settings-intro">
-            <h2>Monitored channels</h2>
-            <p>The 8 pilot channels monitored in each timing sweep (synced from active pilots). Click any channel row to toggle monitoring on or off—fewer active channels make each sweep faster. Click <strong>Stream</strong> to inspect live 5.8 GHz channel bars.</p>
-          </div>
-          <div class="debug-status-layout">
-            <div data-slot="live-head"></div>
-            <div class="debug-subbox" data-slot="live"></div>
-          </div>
-        </section>
       </div>`;
 
     const unsubConsole = this.console.subscribe({
@@ -90,29 +70,15 @@ export class NetworkView extends Component {
         this.renderAll();
       },
       onStatus: (s) => {
-        const freqsChanged = this.status?.freqs.join() !== s.freqs.join();
         this.status = s;
-        if (s.chanMask !== undefined && Date.now() - this.chanMaskToggledAt > 1500) {
+        if (s.chanMask !== undefined) {
           const nextEnabled = Array.from({ length: 8 }, (_, i) => ((s.chanMask! >> i) & 1) !== 0);
           if (nextEnabled.join() !== this.signalEnabledCh.join()) {
             this.signalEnabledCh = nextEnabled;
           }
         }
-        if (s.emergencyMode) {
-          this.liveOn = false;
-        }
         this.renderConnection();
         this.renderNetworkView();
-        this.renderLiveHead();
-        if (freqsChanged) {
-          this.renderLive();
-        } else {
-          this.updateLive();
-        }
-      },
-      onLive: (s) => {
-        this.live = s;
-        this.updateLive();
       },
       onConfig: () => {
         this.renderNetworkView();
@@ -123,7 +89,6 @@ export class NetworkView extends Component {
       },
       onDisconnect: () => {
         this.status = null;
-        this.liveOn = false;
         this.renderAll();
       },
     });
@@ -135,8 +100,6 @@ export class NetworkView extends Component {
     const unsubBridge = this.api.hubBridge.subscribe(() => {
       this.renderConnection();
       this.renderNetworkView();
-      this.renderLiveHead();
-      this.updateLive();
     });
 
     const unsubStore = this.store.subscribe(["status", "config"], () => {
@@ -145,18 +108,6 @@ export class NetworkView extends Component {
     });
 
     this.listen(el, "click", (e) => void this.onClick(e));
-    this.listen(el, "dblclick", (e) => {
-      const bar = (e.target as HTMLElement).closest<HTMLElement>("[data-bar]");
-      if (!bar) return;
-      const idx = Number(bar.dataset.ch);
-      if (idx >= 0 && idx < 8) {
-        const onlyThisOn = this.signalEnabledCh.every((on, i) => (i === idx ? on : !on));
-        this.signalEnabledCh = this.signalEnabledCh.map((_, i) => (onlyThisOn ? true : i === idx));
-        this.syncChannelMaskToFirmware();
-        this.updateLive();
-        this.savePrefs();
-      }
-    });
     this.listen(el, "change", (e) => {
       const t = e.target as HTMLInputElement;
       if (t.matches("[data-all-ports]")) {
@@ -171,9 +122,6 @@ export class NetworkView extends Component {
       unsubState();
       unsubBridge();
       unsubStore();
-      if (this.console.connected && this.liveOn) {
-        void this.console.send("LIVE 0").catch(() => undefined);
-      }
     });
 
     this.syncKnownTimersFromStore();
@@ -228,17 +176,6 @@ export class NetworkView extends Component {
     }
   }
 
-  private syncChannelMaskToFirmware(): void {
-    this.chanMaskToggledAt = Date.now();
-    let mask = 0;
-    for (let i = 0; i < 8; i++) {
-      if (this.signalEnabledCh[i]) mask |= 1 << i;
-    }
-    if (this.console.connected) {
-      void this.console.send(`CHANNELS MASK ${mask}`).catch(() => undefined);
-    }
-  }
-
   private activeStatus(): TimerStatus | null {
     if (this.console.connected && this.status) {
       return this.status;
@@ -256,7 +193,6 @@ export class NetworkView extends Component {
           await this.console.connectAndStart(this.showAllPorts);
           break;
         case "usb-disconnect":
-          this.liveOn = false;
           await this.console.disconnectCleanly();
           break;
         case "select-net-spoke": {
@@ -268,41 +204,6 @@ export class NetworkView extends Component {
           }
           break;
         }
-        case "rf": {
-          if (!this.console.connected) break;
-          const on = !(this.status?.rf.enabled ?? true);
-          if (!on && !confirm("Switch the 5.8 GHz receiver off? The timer stops timing until you switch it back on or restart it.")) {
-            break;
-          }
-          await this.console.request(`RF ${on ? 1 : 0}`, "ok", 2000);
-          const next = await this.console.request<TimerStatus>("STATUS?", "status", 2000).catch(() => null);
-          if (next) this.status = next;
-          this.renderLiveHead();
-          break;
-        }
-        case "live": {
-          if (!this.console.connected) break;
-          this.liveOn = !this.liveOn;
-          await this.console.send(this.liveOn ? "LIVE 1" : "LIVE 0");
-          this.renderLiveHead();
-          break;
-        }
-        case "signal-ch": {
-          const idx = Number(t.dataset.ch);
-          if (idx >= 0 && idx < 8) {
-            this.signalEnabledCh[idx] = !this.signalEnabledCh[idx];
-            this.syncChannelMaskToFirmware();
-            this.updateLive();
-            this.savePrefs();
-          }
-          break;
-        }
-        case "restore-live-channels":
-          this.signalEnabledCh = [true, true, true, true, true, true, true, true];
-          this.syncChannelMaskToFirmware();
-          this.updateLive();
-          this.savePrefs();
-          break;
       }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -316,8 +217,6 @@ export class NetworkView extends Component {
   private renderAll(): void {
     this.renderConnection();
     this.renderNetworkView();
-    this.renderLiveHead();
-    this.renderLive();
   }
 
   private renderConnection(): void {
@@ -950,174 +849,5 @@ export class NetworkView extends Component {
       this.lastNetHtml = spokeNetHtml;
       this.slot("network").innerHTML = spokeNetHtml;
     }
-  }
-
-  private renderLiveHead(): void {
-    const usbOn = this.console.connected;
-    const s = this.activeStatus();
-    const emg = Boolean(usbOn && this.status?.emergencyMode);
-    const rfOn = s?.rf.enabled ?? true;
-    const streamDisabled = !usbOn || !rfOn || emg;
-    const streamActive = !streamDisabled && this.liveOn;
-    const ledClass = emg
-      ? "is-emergency"
-      : streamActive
-        ? s?.role === 2
-          ? "is-spoke"
-          : "is-up"
-        : usbOn && !rfOn
-          ? "is-warn"
-          : "";
-
-    const headHtml = `
-      <div class="debug-status-topbar">
-        <span class="debug-led-status">
-          <span class="status-dot ${ledClass}" data-live-led></span>
-          <span class="debug-head-note" data-live-note>${
-            emg
-              ? "Emergency mode · 5.8 GHz receiver & sweeps halted"
-              : usbOn
-                ? this.liveOn
-                  ? "Streaming · waiting for sweeps…"
-                  : "Paused · click Stream to view live 5.8 GHz readings"
-                : "Paused · not connected"
-          }</span>
-        </span>
-        <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm ${rfOn ? "btn-armed" : "btn-unarmed"}" data-action="rf" ${usbOn && this.status && !emg ? "" : "disabled"} title="Switch the hardware 5.8 GHz receiver on or off">
-            ${rfOn ? icons.signal(14) : icons.signalOff(14)}<span>${rfOn ? "Receiver on" : "Receiver off"}</span>
-          </button>
-          <button type="button" class="btn btn-sm ${streamActive ? "btn-armed" : "btn-unarmed"}" data-action="live" ${streamDisabled ? "disabled" : ""} title="${usbOn ? (this.liveOn ? "Pause live 5.8 GHz readings" : "Stream live 5.8 GHz readings") : "Connect over Direct USB-C to toggle USB channel stream"}">
-            ${streamActive ? icons.pause(14) : icons.play(14)}<span>${streamActive ? "Pause" : "Stream"}</span>
-          </button>
-        </div>
-      </div>`;
-    if (headHtml !== this.lastLiveHeadHtml) {
-      this.lastLiveHeadHtml = headHtml;
-      this.slot("live-head").innerHTML = headHtml;
-    }
-    this.updateLive();
-  }
-
-  private renderLive(): void {
-    const s = this.activeStatus();
-    const freqs = s?.freqs ?? RACEBAND;
-    const activeCount = this.signalEnabledCh.filter(Boolean).length;
-    this.slot("live").innerHTML = `
-      <div class="debug-subbar">
-        <span class="debug-chart-title">Channel RSSI meter (8 pilot slots)</span>
-        <span class="note debug-live-ch-hint" data-live-ch-note><span class="mono">${activeCount}/8</span> active · click row to toggle · double-click to solo</span>
-      </div>
-      <div class="debug-bars">
-        ${freqs
-          .map((f, i) => {
-            const band = racebandName(f) || `Ch${i + 1}`;
-            const col = CHANNEL_COLORS[i];
-            const onCh = this.signalEnabledCh[i];
-            return `
-            <div class="debug-bar-row ${onCh ? "" : "is-muted"}" data-bar data-action="signal-ch" data-ch="${i}" role="button" tabindex="0" aria-pressed="${onCh}" title="Click to toggle ${band} (${f} MHz) monitoring on/off · double-click to solo">
-              <span class="debug-bar-label mono"><span class="debug-ch-inline" data-bar-dot style="${onCh ? `background:${col}` : `background:transparent;box-shadow:inset 0 0 0 1.5px ${col}`}"></span><strong>${band}</strong> ${f}</span>
-              <div class="debug-bar-track">
-                <span class="debug-bar-fill" style="width:0%"></span>
-                <span class="debug-bar-peak" style="left:0%;display:none"></span>
-              </div>
-              <span class="debug-bar-value mono">—</span>
-              <span class="debug-bar-hits mono" title="Readings more than 10 dB above this channel's typical noise since the previous update">—</span>
-            </div>`;
-          })
-          .join("")}
-      </div>
-      <div class="debug-scale mono"><span>${DBM_MIN} dBm</span><span>${DBM_MAX} dBm</span></div>
-      <div class="rules-foot">
-        <p class="note">Default monitors all 8 pilot channels in every sweep.</p>
-        <button class="btn btn-ghost btn-sm" type="button" data-action="restore-live-channels">Restore defaults</button>
-      </div>`;
-    this.updateLive();
-  }
-
-  private updateLive(): void {
-    const usbOn = this.console.connected;
-    const on = usbOn;
-    const l = usbOn && this.liveOn ? this.live : null;
-    const note = this.el.querySelector<HTMLElement>("[data-live-note]");
-    const led = this.el.querySelector<HTMLElement>("[data-live-led]");
-    const chNote = this.el.querySelector<HTMLElement>("[data-live-ch-note]");
-    const s = this.activeStatus();
-    const emg = Boolean(usbOn && this.status?.emergencyMode);
-    const rfOn = s?.rf.enabled ?? true;
-    const activeCount = this.signalEnabledCh.filter(Boolean).length;
-
-    if (chNote) {
-      chNote.innerHTML = `<span class="mono">${activeCount}/8</span> active · click row to toggle · double-click to solo`;
-    }
-    if (led) {
-      const streaming = !emg && on && rfOn && this.liveOn;
-      led.classList.toggle("is-emergency", emg);
-      led.classList.toggle("is-up", streaming && s?.role !== 2);
-      led.classList.toggle("is-spoke", streaming && s?.role === 2);
-      led.classList.toggle("is-warn", !emg && usbOn && !rfOn);
-    }
-    if (note) {
-      if (!on) {
-        note.textContent = "Paused · not connected";
-      } else if (emg) {
-        note.textContent = "Emergency mode · 5.8 GHz receiver & sweeps halted";
-      } else if (s && !s.rf.enabled) {
-        note.textContent = "Off · 5.8 GHz receiver is switched off";
-      } else if (!this.liveOn) {
-        note.textContent = "Paused · click Stream to view live 5.8 GHz readings";
-      } else if (l) {
-        note.textContent = `Streaming · 10 Hz · sweep ${(l.us / 1000).toFixed(2)} ms`;
-      } else {
-        note.textContent = "Streaming · waiting for sweeps…";
-      }
-    }
-
-    const now = performance.now();
-    const pct = (x: number) => Math.max(0, Math.min(100, ((x - DBM_MIN) / (DBM_MAX - DBM_MIN)) * 100));
-    this.el.querySelectorAll<HTMLElement>("[data-bar]").forEach((row, i) => {
-      const onCh = Boolean(this.signalEnabledCh[i]);
-      const col = CHANNEL_COLORS[i];
-      row.classList.toggle("is-muted", !onCh);
-      row.setAttribute("aria-pressed", String(onCh));
-      const dot = row.querySelector<HTMLElement>("[data-bar-dot]");
-      if (dot) {
-        dot.style.background = onCh ? col : "transparent";
-        dot.style.boxShadow = onCh ? "none" : `inset 0 0 0 1.5px ${col}`;
-      }
-      const fill = row.querySelector<HTMLElement>(".debug-bar-fill")!;
-      const peak = row.querySelector<HTMLElement>(".debug-bar-peak")!;
-      const value = row.querySelector<HTMLElement>(".debug-bar-value")!;
-      const hits = row.querySelector<HTMLElement>(".debug-bar-hits")!;
-      const v = onCh ? l?.dbm[i] : undefined;
-      const sampleDbm = onCh ? Math.max(v ?? -127, l?.pk[i] ?? -127) : -127;
-      if (!onCh || sampleDbm <= -127) {
-        this.barFillVal[i] = -127;
-        this.barFillAt[i] = 0;
-        this.barPeakVal[i] = -127;
-        this.barPeakAt[i] = 0;
-      } else {
-        const rising = sampleDbm >= this.barFillVal[i];
-        if (rising || now - this.barFillAt[i] >= 160) {
-          this.barFillVal[i] = sampleDbm;
-          if (rising) {
-            this.barFillAt[i] = now;
-          }
-        }
-        if (sampleDbm >= this.barPeakVal[i] || now - this.barPeakAt[i] >= 1500) {
-          this.barPeakVal[i] = sampleDbm;
-          this.barPeakAt[i] = now;
-        }
-      }
-      const shownFill = this.barFillVal[i];
-      const heldPk = this.barPeakVal[i];
-      const h = onCh ? l?.hits?.[i] : undefined;
-      fill.style.width = shownFill > -127 ? `${pct(shownFill)}%` : "0%";
-      peak.style.display = heldPk > -127 ? "" : "none";
-      if (heldPk > -127) peak.style.left = `${pct(heldPk)}%`;
-      value.textContent = !onCh ? "Off" : shownFill > -127 ? `${shownFill} dBm` : "—";
-      hits.textContent = !onCh ? "—" : h !== undefined ? `${h} hit${h === 1 ? "" : "s"}` : "—";
-      hits.classList.toggle("is-active", onCh && (h ?? 0) > 0);
-    });
   }
 }
