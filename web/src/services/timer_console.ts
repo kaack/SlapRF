@@ -240,6 +240,7 @@ export interface TimerStatus {
   freqsTemporary: boolean;
   chanMask?: number;
   freqs: number[];
+  dbm?: number[];
   /**
    * Hub only: true while the Hub also sweeps 5.8 GHz and sends its own telemetry (slot 1), set
    * with the `HUBGATE 1|0` USB command. Runtime-only (0 after a Hub reboot); missing = false.
@@ -409,6 +410,10 @@ export class TimerConsole {
 
   public lastStatus: TimerStatus | null = null;
   public lastConfig: TimerReadout | null = null;
+  public hubOwnFrames = 0;
+  public hubLastFrameAtMs = 0;
+  public hubLastSeq: number | undefined = undefined;
+  public hubLastDbm: number[] | undefined = undefined;
   public busyLabel: string | null = null;
   public showAllPorts = false;
   public reconnecting = false;
@@ -605,6 +610,10 @@ export class TimerConsole {
     this.bufEnd = 0;
     this.packLen = 0;
     this.packCount = 0;
+    this.hubOwnFrames = 0;
+    this.hubLastFrameAtMs = 0;
+    this.hubLastSeq = undefined;
+    this.hubLastDbm = undefined;
     this.writeQueue = Promise.resolve();
     this.writer = port.writable?.getWriter() ?? null;
     this.reader = port.readable?.getReader() ?? null;
@@ -617,6 +626,10 @@ export class TimerConsole {
     await this.closePort();
     this.lastStatus = null;
     this.lastConfig = null;
+    this.hubOwnFrames = 0;
+    this.hubLastFrameAtMs = 0;
+    this.hubLastSeq = undefined;
+    this.hubLastDbm = undefined;
     this.lastKnownSpokeSig = "";
     this.failWaiters("Disconnected");
     this.subscribers.forEach((h) => h.onDisconnect?.());
@@ -1026,6 +1039,37 @@ export class TimerConsole {
   }
 
   private queueHubPacket(src: Uint8Array, at: number, len: number): void {
+    if (len >= 16 && src[at] === 0xc5 && src[at + 2] === 1) {
+      const kind = src[at + 1];
+      if (kind === 0x59) {
+        const sampleCount = src[at + 3];
+        if (sampleCount >= 1 && len >= 7 + sampleCount * 9 + 1) {
+          this.hubOwnFrames++;
+          this.hubLastFrameAtMs = Date.now();
+          const newestOff = at + 7 + (sampleCount - 1) * 9;
+          this.hubLastSeq = src[newestOff];
+          const dbm: number[] = [];
+          for (let ch = 0; ch < 8; ch++) {
+            let best = (src[newestOff + 1 + ch] << 24) >> 24;
+            for (let s = 0; s < sampleCount; s++) {
+              const v = (src[at + 7 + s * 9 + 1 + ch] << 24) >> 24;
+              if (v > best) best = v;
+            }
+            dbm.push(best);
+          }
+          this.hubLastDbm = dbm;
+        }
+      } else if (kind === 0x58) {
+        this.hubOwnFrames++;
+        this.hubLastFrameAtMs = Date.now();
+        this.hubLastSeq = src[at + 3];
+        const dbm: number[] = [];
+        for (let ch = 0; ch < 8; ch++) {
+          dbm.push((src[at + 7 + ch] << 24) >> 24);
+        }
+        this.hubLastDbm = dbm;
+      }
+    }
     if (this.packLen + 1 + len > this.pack.length) {
       const grown = new Uint8Array(Math.max(this.pack.length * 2, this.packLen + 1 + len));
       grown.set(this.pack.subarray(0, this.packLen));

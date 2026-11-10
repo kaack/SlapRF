@@ -99,14 +99,14 @@ export class HubGateSync {
     this.unsubs.splice(0).forEach((u) => u());
   }
 
-  /** Desired Hub mode from the real engine's course (as mirrored in the store). */
+  /** The Hub always sweeps 5.8 GHz in its own TDMA slot (Slot 1), just like a Spoke. */
   public get desired(): boolean {
-    return hubShouldSweep(this.store.detectedTimers, this.store.nodes);
+    return true;
   }
 
   private reconcile(status: TimerStatus | null): void {
     const realMode = this.api.usingBrowserRealEngine && !this.store.simulatorRunning;
-    const desired = realMode ? this.desired : false;
+    const desired = true;
     if (status && (status.hubGate === true) === desired) {
       this.last = null; // Confirmed: forget unconfirmed attempts
       return;

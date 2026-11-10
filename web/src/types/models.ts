@@ -30,6 +30,8 @@ export interface DetectedTimer {
   batteryMv: number;
   batteryPct: number;
   noiseFloorDbm: number;
+  lastRssi?: number[];
+  framesRxCount?: number;
   online: boolean;
   lastSeenAt: string;
 }

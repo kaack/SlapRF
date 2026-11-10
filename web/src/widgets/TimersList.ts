@@ -293,7 +293,7 @@ export class TimersList extends Component {
         </div>
 
         <div>
-          <span class="detected-role-pill ${d.isHub ? "is-hub" : ""}">${esc(timerRoleText(this.store, d))}</span>
+          <span class="detected-role-pill">${esc(timerRoleText(this.store, d))}</span>
         </div>
 
         <div class="timer-fw-cell" title="SlapRF firmware ${esc(fwVer)}">

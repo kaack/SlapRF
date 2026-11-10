@@ -72,9 +72,8 @@ static uint32_t s_flash_bytes;
 static SemaphoreHandle_t s_tx_lock;
 
 static volatile uint8_t s_live; // 0 off, 1 ~10 lines/s with peaks, 2 every sweep
-// Hub placed on a gate by the app (HUBGATE 1): sweep 5.8 GHz and send its own telemetry window.
-// Runtime only (cleared on reboot); the browser re-sends it whenever it sees the Hub's status.
-static volatile bool s_hub_gate;
+// Hub always sweeps 5.8 GHz in its own slot (Slot 1) and sends its own telemetry window.
+static volatile bool s_hub_gate = true;
 // A USB host (the browser) is listening: set by any command, cleared when writes keep failing.
 // While set, status_push_task sends a status line every second so the host never has to poll.
 static volatile bool s_host_attached;
@@ -105,6 +104,8 @@ static diag_spoke_peer_t s_peer_spokes[6]; // index 0..5 = TDMA slot 2..7
 static volatile uint32_t s_sweeps;
 static volatile uint32_t s_sweep_us_last;
 static volatile uint32_t s_sweep_us_max;
+static int8_t s_last_dbm[8];
+static volatile bool s_has_dbm;
 static int8_t s_peak[8];
 static int16_t s_floor_q4[8]; // Slow-tracking noise floor per channel, dBm * 16
 static uint8_t s_hits[8];     // Sweeps > floor + HIT_MARGIN_DB since the last LIVE line
@@ -503,6 +504,12 @@ static void send_status(void) {
         n += snprintf(out + n, sizeof(out) - n, "%s%u", i ? "," : "", slot_display_mhz(i));
     }
     n += snprintf(out + n, sizeof(out) - n, "]");
+    if (s_has_dbm && n < (int)sizeof(out) - 96) {
+        n += snprintf(out + n, sizeof(out) - n,
+                      ",\"dbm\":[%d,%d,%d,%d,%d,%d,%d,%d]",
+                      s_last_dbm[0], s_last_dbm[1], s_last_dbm[2], s_last_dbm[3],
+                      s_last_dbm[4], s_last_dbm[5], s_last_dbm[6], s_last_dbm[7]);
+    }
     if (s_cfg[CFG_OFF_ROLE] == 1) {
         n += snprintf(out + n, sizeof(out) - n, ",\"spokes\":[");
         bool first_sp = true;
@@ -1165,6 +1172,8 @@ void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us) {
     }
     s_sweep_us_last = took_us;
     if (took_us > s_sweep_us_max) s_sweep_us_max = took_us;
+    memcpy(s_last_dbm, dbm, sizeof(s_last_dbm));
+    s_has_dbm = true;
     update_health_led();
     for (int i = 0; i < 8; i++) {
         if (dbm[i] <= -127) continue; // Receiver off or slot used by a live scan: no reading

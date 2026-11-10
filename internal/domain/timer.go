@@ -17,17 +17,19 @@ const LatestFirmwareVersion = "v0.1.4"
 // DetectedTimer represents a physical Seeed Studio XIAO ESP32-C5 board discovered over
 // the USB Hub (ESP-NOW) or flashed over USB, whether or not it is currently assigned to a gate.
 type DetectedTimer struct {
-	TimerID         uint8     `json:"timerId"`
-	TimerLabel      string    `json:"timerLabel"`
-	Fingerprint     string    `json:"fingerprint,omitempty"` // Stable 8-hex-digit board identity stamped at flash time
-	Color           string    `json:"color"`
-	IsHub           bool      `json:"isHub"`
-	FirmwareVersion string    `json:"firmwareVersion,omitempty"`
-	BatteryMv       uint16    `json:"batteryMv"`
-	BatteryPct      uint8     `json:"batteryPct"`
-	NoiseFloorDbm   float32   `json:"noiseFloorDbm"`
-	Online          bool      `json:"online"`
-	LastSeenAt      time.Time `json:"lastSeenAt"`
+	TimerID         uint8                     `json:"timerId"`
+	TimerLabel      string                    `json:"timerLabel"`
+	Fingerprint     string                    `json:"fingerprint,omitempty"` // Stable 8-hex-digit board identity stamped at flash time
+	Color           string                    `json:"color"`
+	IsHub           bool                      `json:"isHub"`
+	FirmwareVersion string                    `json:"firmwareVersion,omitempty"`
+	BatteryMv       uint16                    `json:"batteryMv"`
+	BatteryPct      uint8                     `json:"batteryPct"`
+	NoiseFloorDbm   float32                   `json:"noiseFloorDbm"`
+	LastRSSI        [MaxPilotPoolSize]float32 `json:"lastRssi"`
+	FramesRxCount   uint64                    `json:"framesRxCount"`
+	Online          bool                      `json:"online"`
+	LastSeenAt      time.Time                 `json:"lastSeenAt"`
 }
 
 // DefaultGateColors is the canonical palette assigned to physical timers.

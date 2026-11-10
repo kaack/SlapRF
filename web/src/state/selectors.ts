@@ -112,12 +112,10 @@ export function timerHasGate(store: AppStore, timerId: number): boolean {
 }
 
 /**
- * Role text for a timer: a Hub is a USB collector dongle ("Hub · dongle (USB)") unless it has been
- * dragged onto a gate, where it also sweeps 5.8 GHz ("Hub · sweeping (USB)").
+ * Role text for a timer: "Hub" or "Spoke".
  */
-export function timerRoleText(store: AppStore, d: { timerId: number; isHub: boolean }): string {
-  if (!d.isHub) return "Spoke";
-  return timerHasGate(store, d.timerId) ? "Hub · sweeping (USB)" : "Hub · dongle (USB)";
+export function timerRoleText(_store: AppStore, d: { timerId: number; isHub: boolean }): string {
+  return d.isHub ? "Hub" : "Spoke";
 }
 
 /** "Gate 2 → Split-S" style label for the stretch of track between two gates. */

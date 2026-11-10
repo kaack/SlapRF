@@ -265,7 +265,7 @@ export class SimView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Simulated timers</h2>
-            <p>Virtual XIAO ESP32-C5 timers feeding the simulation engine, matching real hardware: the Hub is a USB dongle with no gate (drag it onto a gate on the Track page to make it sweep too) and Spokes time the gates. Power individual timers off to test offline gate behavior, delete timers, or provision new ones (one Hub plus up to 6 Spokes).</p>
+            <p>Virtual XIAO ESP32-C5 timers feeding the simulation engine, matching real hardware: both the Hub and Spokes sweep 5.8 GHz in their own TDMA slots and can be assigned to any gate on the Track page. Power individual timers off to test offline gate behavior, delete timers, or provision new ones (one Hub plus up to 6 Spokes).</p>
           </div>
           <div class="card card-flush">
             <div data-slot="timers-table"></div>
@@ -274,8 +274,8 @@ export class SimView extends Component {
                 <label class="sim-inline-field">
                   <span>Role</span>
                   <select class="input" data-field="timer-role">
-                    <option value="spoke" ${this.addRole === "spoke" ? "selected" : ""}>Spoke · Sector Timer</option>
-                    <option value="hub" ${this.addRole === "hub" ? "selected" : ""}>Hub · USB dongle</option>
+                    <option value="spoke" ${this.addRole === "spoke" ? "selected" : ""}>Spoke</option>
+                    <option value="hub" ${this.addRole === "hub" ? "selected" : ""}>Hub</option>
                   </select>
                 </label>
                 <label class="sim-inline-field">
@@ -1030,9 +1030,7 @@ export class SimView extends Component {
             </div>
 
             <div>
-              <span class="detected-role-pill ${t.isHub ? "is-hub" : ""}">${
-                t.isHub ? (t.assignedGateName ? "Hub · sweeping (USB)" : "Hub · dongle (USB)") : "Spoke"
-              }</span>
+              <span class="detected-role-pill">${t.isHub ? "Hub" : "Spoke"}</span>
             </div>
 
             <div class="timer-fw-cell" title="SlapRF firmware ${esc(t.firmwareVersion)}">
@@ -1044,7 +1042,7 @@ export class SimView extends Component {
               ${
                 t.assignedGateName
                   ? `<span>${esc(t.assignedGateName)}</span>`
-                  : `<span class="muted">${t.isHub ? "No gate · collects Spokes" : "Unassigned"}</span>`
+                  : `<span class="muted">Unassigned</span>`
               }
             </div>
 

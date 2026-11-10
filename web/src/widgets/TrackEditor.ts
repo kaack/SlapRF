@@ -2,7 +2,7 @@ import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
-import { HUB_ON_GATE_NOTE, timerColor, timerRoleText } from "../state/selectors";
+import { timerColor, timerRoleText } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { DetectedTimer, TrackNode } from "../types/models";
 import { renderSectionCapsuleIcon } from "./markup";
@@ -240,7 +240,7 @@ export class TrackEditor extends Component {
           </div>
         </div>
 
-        ${this.renderUnassignedTray(unassignedTimers, detected.some((d) => d.isHub))}
+        ${this.renderUnassignedTray(unassignedTimers)}
       </div>
 
       ${selectedNode ? this.renderInspector(selectedNode, selectedIndex, detected) : ""}
@@ -338,8 +338,8 @@ export class TrackEditor extends Component {
           type="button"
           class="gate-node-circle ${hasTimer ? "is-filled" : "is-unassigned"}"
           aria-pressed="${isSelected}"
-          aria-label="Gate ${index + 1}: ${esc(displayName)} (${hasTimer ? shortCode : "Unassigned"}${isHubGate ? " · Hub sweeping over USB" : ""})"
-          title="${isHubGate ? "Hub · sweeping (USB) · " : ""}Click to inspect · Drag left/right to reorder · Drag down to Unassigned timers to remove gate"
+          aria-label="Gate ${index + 1}: ${esc(displayName)} (${hasTimer ? shortCode : "Unassigned"})"
+          title="Click to inspect · Drag left/right to reorder · Drag down to Unassigned timers to remove gate"
         >
           ${
             hasTimer
@@ -367,7 +367,7 @@ export class TrackEditor extends Component {
       </div>`;
   }
 
-  private renderUnassignedTray(unassigned: DetectedTimer[], hasHub: boolean): string {
+  private renderUnassignedTray(unassigned: DetectedTimer[]): string {
     return `
       <div class="gate-unassigned-tray" data-unassigned-tray>
         <div class="gate-unassigned-label">
@@ -379,7 +379,6 @@ export class TrackEditor extends Component {
                 : "All timers are on the track · drag a timer off the line into this box to remove its gate"
             }
           </span>
-          ${hasHub ? `<span class="gate-unassigned-hint" data-hub-gate-note>${esc(HUB_ON_GATE_NOTE)}</span>` : ""}
         </div>
         <div class="gate-unassigned-list">
           ${
@@ -393,14 +392,14 @@ export class TrackEditor extends Component {
 
   private renderTrayTimer(d: DetectedTimer): string {
     const color = timerColor(this.store, d.timerId);
-    const roleSub = d.isHub ? "HUB" : "SPK";
+    const roleLabel = d.isHub ? "Hub" : "Spoke";
     const timerName = this.formatTimerShortCode(d.timerId, [d], d.timerLabel);
     return `
       <div
         class="unassigned-timer-token"
         data-timer-id="${d.timerId}"
         style="--c:${color}"
-        title="${esc(timerName)} (${roleSub}) · Drag onto the track line above to create a gate"
+        title="${esc(timerName)} (${roleLabel}) · Drag onto the track line above to create a gate"
       >
         <span class="unassigned-timer-dot" style="--c:${color}">
           <span class="mono">${esc(timerName)}</span>
@@ -409,7 +408,7 @@ export class TrackEditor extends Component {
           <span class="unassigned-timer-name mono">${esc(timerName)}</span>
           <span class="unassigned-timer-sub">
             <span class="gate-node-status-dot ${d.online ? "is-online" : ""}"></span>
-            ${d.isHub ? "Hub · dongle (USB)" : `Spoke · ${d.online ? `${d.batteryPct}%` : "Offline"}`}
+            ${roleLabel} · ${d.online ? `${d.batteryPct}%` : "Offline"}
           </span>
         </div>
       </div>`;
@@ -433,10 +432,10 @@ export class TrackEditor extends Component {
         <div class="gate-inspector-timer-meta">
           <span class="gate-inspector-dot" style="--c:${color}"></span>
           <strong class="mono">${esc(timerName)}</strong>
-          <span class="detected-role-pill ${tiedTimer?.isHub ? "is-hub" : ""}">
+          <span class="detected-role-pill">
             ${esc(tiedTimer ? timerRoleText(this.store, tiedTimer) : "Spoke")}
           </span>
-          <span class="muted mono">${tiedTimer ? (tiedTimer.isHub ? "USB powered" : tiedTimer.online ? `${tiedTimer.batteryPct}%` : "Offline") : ""}</span>
+          <span class="muted mono">${tiedTimer ? (tiedTimer.online ? `${tiedTimer.batteryPct}%` : "Offline") : ""}</span>
         </div>`
       : `
         <div class="gate-inspector-timer-meta is-empty">
@@ -489,7 +488,6 @@ export class TrackEditor extends Component {
           </div>
           ${timerSummaryHtml}
         </div>
-        ${hasTimer && tiedTimer?.isHub ? `<p class="note gate-inspector-hub-note">${esc(HUB_ON_GATE_NOTE)}</p>` : ""}
       </div>`;
   }
 

@@ -5,8 +5,8 @@
  * name are stamped into the SLAPRF02 config block at flash time. The design: 100 Hz 8-channel
  * 5.8 GHz sweeps, 4-sweep windows sent every 2 sweeps (every 20 ms) so every sample arrives twice,
  * over 6 Mbps OFDM ESP-NOW at +20 dBm. Link rate and TX power can be overridden from the USB serial
- * console (LINKRATE / TXPOWER / LINKRESET, saved in NVS). The Hub is a USB collector dongle; it
- * also sweeps when the app places it on a gate (HUBGATE 1).
+ * console (LINKRATE / TXPOWER / LINKRESET, saved in NVS). The Hub sweeps 5.8 GHz in its own slot
+ * (Slot 1) identically to a Spoke while also collecting Spoke frames and streaming all frames over USB.
  *
  * Anything on the wire (config block, frame layouts) must stay in sync with
  * internal/firmware/image.go, internal/ingest/hub_frames.go and web/src/services/esp_flasher.ts.
@@ -325,22 +325,13 @@ static void hub_run(void) {
             const int64_t t_sweep = t_sf + (int64_t)k * SWEEP_INTERVAL_US;
             const int64_t t_gap = t_sweep + SWEEP_BUDGET_US;
             slaprf_sleep_until_us(t_sweep);
-            if (slaprf_diag_wants_sweeps()) {
-                // The Hub sweeps only when the app placed it on a gate (HUBGATE 1) or the Debug page
-                // asks for LIVE sweeps (SDR view). Spokes never transmit during sweeps, so nothing is missed.
-                sweep_once();
-            } else {
-                // Normal operation: the radio never leaves 2.4 GHz, so keep collecting Spoke frames.
-                hub_listen_until(t_gap);
-            }
+            // The Hub always sweeps 5.8 GHz in the shared sweep interval, identically to a Spoke.
+            // All Spokes are also on 5.8 GHz during this window, so no 2.4 GHz frames are missed.
+            sweep_once();
             slaprf_sleep_until_us(t_gap);
             if (k == 0) {
                 slaprf_broadcast_hub_sync_beacon(beacon_seq++); // Anchors every Spoke's schedule
-            }
-            if (slaprf_diag_hub_is_gate()) {
-                // Hub placed on a gate: its own readings go straight to USB (no TDMA slot needed), so
-                // send after EVERY sweep for the lowest latency. The window repeats recent samples.
-                slaprf_forward_to_laptop(pkt, pack_window(pkt, HUB_SLOT));
+                slaprf_forward_to_laptop(pkt, pack_window(pkt, HUB_SLOT)); // Hub's own Slot 1 window frame
             }
             if (k == TX_EVERY_SWEEPS - 1 && slaprf_now_us() >= next_hello) {
                 hub_repeat_hellos();

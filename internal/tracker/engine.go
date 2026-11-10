@@ -465,6 +465,8 @@ func (e *Engine) touchDetectedTimerLocked(frame domain.TimerTelemetryFrame) {
 	}
 	d.Online = true
 	d.LastSeenAt = now
+	d.FramesRxCount++
+	d.LastRSSI = frame.RSSI
 	if frame.BatteryMv > 0 {
 		d.BatteryMv = frame.BatteryMv
 		d.BatteryPct = domain.ComputeBatteryPct(frame.BatteryMv)

@@ -250,7 +250,23 @@ export class NetworkView extends Component {
 
     let hub: TopologyHubInfo;
     if (s && s.role === 1) {
-      const liveDbm = this.live?.dbm?.length === 8 ? this.live.dbm : Array.isArray(hubGate?.lastRssi) ? hubGate!.lastRssi!.slice(0, 8).map((v) => Math.round(v)) : undefined;
+      const liveDbm =
+        this.live?.dbm?.length === 8
+          ? this.live.dbm
+          : s.dbm?.length === 8
+            ? s.dbm
+            : sharedTimerConsole.hubLastDbm?.length === 8
+              ? sharedTimerConsole.hubLastDbm
+              : Array.isArray(hubGate?.lastRssi)
+                ? hubGate!.lastRssi!.slice(0, 8).map((v) => Math.round(v))
+                : Array.isArray(hubServerTimer?.lastRssi)
+                  ? hubServerTimer!.lastRssi!.slice(0, 8).map((v) => Math.round(v))
+                  : undefined;
+      const hubFrames = Math.max(
+        sharedTimerConsole.hubOwnFrames,
+        hubGate?.framesRxCount ?? 0,
+        hubServerTimer?.framesRxCount ?? 0
+      );
       hub = {
         populated: true,
         online: !s.emergencyMode,
@@ -262,7 +278,7 @@ export class NetworkView extends Component {
         viaUsb: true,
         emergencyMode: Boolean(s.emergencyMode),
         gateLabel: hubGateName,
-        serverFrames: hubGate?.framesRxCount ?? 0,
+        serverFrames: hubFrames,
         dbm: liveDbm,
         statusNote: s.emergencyMode ? "Emergency mode" : "USB-C · Beacon master",
       };
@@ -291,11 +307,15 @@ export class NetworkView extends Component {
         viaUsb: false,
         emergencyMode: false,
         gateLabel: hubGateName,
-        serverFrames: hubGate?.framesRxCount ?? 0,
+        serverFrames: Math.max(hubGate?.framesRxCount ?? 0, hubServerTimer?.framesRxCount ?? 0),
         statusNote: linked ? `Sync beacon locked` : hasSlot ? "Beacon lost" : "Waiting for beacon",
       };
     } else if (hubServerTimer) {
-      const liveDbm = Array.isArray(hubGate?.lastRssi) ? hubGate!.lastRssi!.slice(0, 8).map((v) => Math.round(v)) : undefined;
+      const liveDbm = Array.isArray(hubGate?.lastRssi)
+        ? hubGate!.lastRssi!.slice(0, 8).map((v) => Math.round(v))
+        : Array.isArray(hubServerTimer.lastRssi)
+          ? hubServerTimer.lastRssi.slice(0, 8).map((v) => Math.round(v))
+          : undefined;
       hub = {
         populated: true,
         online: Boolean(hubServerTimer.online),
@@ -307,7 +327,7 @@ export class NetworkView extends Component {
         viaUsb: false,
         emergencyMode: false,
         gateLabel: hubGateName,
-        serverFrames: hubGate?.framesRxCount ?? 0,
+        serverFrames: Math.max(hubGate?.framesRxCount ?? 0, hubServerTimer.framesRxCount ?? 0),
         dbm: liveDbm,
         statusNote: this.store.simulatorRunning ? "Simulated Hub" : hubServerTimer.online ? "Detected on engine" : "Offline",
       };
@@ -807,10 +827,13 @@ export class NetworkView extends Component {
       const totalSpokeRate = populatedSpokes.reduce((acc, sp) => acc + (sp.ratePktPerSec ?? 0), 0);
       const hubOwnFrames = hub.serverFrames ?? 0;
       const totalFrames = totalSpokeFrames + hubOwnFrames;
-      const hubOwnRate = hub.online && hub.gateLabel ? 25 : 0;
+      const hubOwnRate = hub.online ? (s && s.role === 1 && s.sweepHz ? s.sweepHz / 2 : 50) : 0;
       const totalRate = totalSpokeRate + hubOwnRate;
 
-      let minMsAgo: number | null = null;
+      let minMsAgo: number | null =
+        sharedTimerConsole.hubLastFrameAtMs > 0
+          ? Math.max(0, Date.now() - sharedTimerConsole.hubLastFrameAtMs)
+          : null;
       let latestSpokeSeq: number | null = null;
       for (const sp of populatedSpokes) {
         if ((sp.frames ?? 0) > 0 && sp.msAgo !== undefined) {
@@ -823,25 +846,27 @@ export class NetworkView extends Component {
       const lastFrameText =
         minMsAgo !== null
           ? `${minMsAgo} ms ago`
-          : hub.online && hubOwnFrames > 0
-            ? "< 40 ms ago"
+          : hub.online && (hubOwnFrames > 0 || (s && s.role === 1 && s.sweeps > 0))
+            ? "< 20 ms ago"
             : "No frames yet";
       const hubSweepSeq =
-        s && s.role === 1 && s.sweeps > 0
-          ? `#${s.sweeps}`
-          : this.live?.n !== undefined
-            ? `#${this.live.n}`
-            : latestSpokeSeq !== null
-              ? `#${latestSpokeSeq}`
-              : hub.viaUsb && !hub.gateLabel
-                ? "Idle (not on gate)"
-                : "—";
+        sharedTimerConsole.hubLastSeq !== undefined
+          ? `#${sharedTimerConsole.hubLastSeq}`
+          : s && s.role === 1 && s.sweeps > 0
+            ? `#${s.sweeps}`
+            : this.live?.n !== undefined
+              ? `#${this.live.n}`
+              : hubOwnFrames > 0
+                ? `#${hubOwnFrames}`
+                : latestSpokeSeq !== null
+                  ? `#${latestSpokeSeq}`
+                  : "—";
 
       const ledClass = hub.emergencyMode ? "is-emergency" : hub.online ? "is-up" : hub.populated ? "is-warn" : "";
       const barsHtml = this.renderRssiBars(
         freqs,
         hub.dbm,
-        hub.dbm ? (hub.viaUsb ? "Direct via USB-C" : "Engine telemetry") : "Assign Hub to a gate in Track or stream in Debug to view 5.8 GHz readings",
+        hub.dbm ? (hub.viaUsb ? "Direct via USB-C" : "Engine telemetry") : "Waiting for 5.8 GHz sweep data",
         `5.8 GHz channels at ${esc(hub.label)} (Hub · Slot 1)`
       );
 

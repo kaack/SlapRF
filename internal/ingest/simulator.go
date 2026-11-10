@@ -1123,22 +1123,63 @@ func (s *TrackSimulator) step(dtSec float64) {
 			NoiseFloorDbm: gate.NoiseFloorDbm,
 		})
 	}
-	// Gate-less timers (the collector Hub by default, or a Spoke removed from its gate) send no
-	// RSSI telemetry; like the real Hub's HELLO beacons, they just stay online.
-	var idle []uint8
+	// Gate-less timers (the Hub or an unassigned Spoke) also sweep 5.8 GHz in their TDMA slot,
+	// identical to a timer assigned to a gate (the engine records their telemetry on DetectedTimer
+	// and only scores crossings while they are assigned to a gate).
 	for _, d := range detected {
 		if assignedSet[d.TimerID] || s.poweredOffTimers[d.TimerID] {
 			continue
 		}
-		idle = append(idle, d.TimerID)
+		var rssi [domain.MaxPilotPoolSize]float32
+		floor := d.NoiseFloorDbm
+		if floor == 0 {
+			floor = -92.0
+		}
+		for slotIdx := 0; slotIdx < len(pilots) && slotIdx < domain.MaxPilotPoolSize && slotIdx < len(s.pilotStates); slotIdx++ {
+			noise := float32((s.rng.Float64() - 0.5) * 2.2)
+			ps := s.pilotStates[slotIdx]
+			vtxOn := pilots[slotIdx].Enabled &&
+				pilots[slotIdx].Channel > 0 &&
+				(ps.status == domain.SimStatusFlying ||
+					ps.status == domain.SimStatusAvoiding ||
+					ps.status == domain.SimStatusCrashedVtxOn ||
+					ps.status == domain.SimStatusTurtleRecovery)
+			if !vtxOn {
+				rssi[slotIdx] = floor + noise
+				continue
+			}
+			dx := math.Abs(ps.trackPosMeters)
+			if dx > s.trackLengthMeters/2.0 {
+				dx = s.trackLengthMeters - dx
+			}
+			alt := ps.altitudeMeters
+			if alt < 0.8 {
+				alt = 0.8
+			}
+			dist3D := math.Sqrt(dx*dx + alt*alt)
+			multipathRipple := math.Sin(dx*2.7)*1.8 + math.Cos(dx*1.3)*1.2
+			sigDbm := -24.5 - 23.5*math.Log10(dist3D) + multipathRipple + float64(noise)
+			if sigDbm < float64(floor) {
+				sigDbm = float64(floor) + float64(noise)*0.5
+			}
+			if sigDbm > -20.0 {
+				sigDbm = -20.0
+			}
+			rssi[slotIdx] = float32(sigDbm)
+		}
+		frames = append(frames, domain.TimerTelemetryFrame{
+			TimerID:       d.TimerID,
+			SeqNum:        s.seqCounter,
+			TimestampUs:   nowUs,
+			RSSI:          rssi,
+			BatteryMv:     d.BatteryMv,
+			NoiseFloorDbm: floor,
+		})
 	}
 	s.mu.Unlock()
 
 	for _, slot := range clearSlots {
 		s.engine.ClearPilotProgress(slot)
-	}
-	for _, id := range idle {
-		s.engine.MarkTimerSeen(id)
 	}
 	for _, f := range frames {
 		s.engine.IngestTelemetryFrame(f)

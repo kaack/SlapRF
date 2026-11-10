@@ -841,11 +841,6 @@ body.is-gate-dragging * {
   font-size: 11px;
   font-weight: 600;
 }
-.detected-role-pill.is-hub {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
-  color: var(--accent);
-}
 .detected-assigned-pill {
   padding: 2px 8px;
   border-radius: 6px;
