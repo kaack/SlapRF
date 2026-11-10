@@ -47,35 +47,8 @@ export interface KnownHardwareTimer {
 
 const KNOWN_TIMERS_STORAGE_KEY = "slaprf.hw.knownTimers";
 
-const SEEDED_KNOWN_TIMERS: KnownHardwareTimer[] = [
-  {
-    fp: "BE7C0001",
-    role: "hub",
-    label: "H1",
-    fw: "v0.1.4",
-    mac: "10:BD:A3:C7:F3:C0",
-    slot: 1,
-    channel: 1,
-    lastSeenMs: 1731152894000,
-  },
-  {
-    fp: "DA9B4CA7",
-    role: "spoke",
-    label: "S1",
-    fw: "v0.1.4",
-    mac: "10:BD:A3:C8:0B:88",
-    slot: 2,
-    channel: 1,
-    parentHubFp: "BE7C0001",
-    lastSeenMs: 1731161000000,
-  },
-];
-
 export function getKnownHardwareTimers(): KnownHardwareTimer[] {
   const map = new Map<string, KnownHardwareTimer>();
-  for (const seed of SEEDED_KNOWN_TIMERS) {
-    map.set(seed.fp.toUpperCase(), { ...seed, fp: seed.fp.toUpperCase() });
-  }
   if (typeof window !== "undefined" && window.localStorage) {
     try {
       const raw = window.localStorage.getItem(KNOWN_TIMERS_STORAGE_KEY);
@@ -152,9 +125,9 @@ export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { 
 }
 
 export function forgetKnownHardwareTimer(fp: string): void {
-  const clean = (fp || "").trim().toLowerCase();
+  const clean = (fp || "").trim().toUpperCase();
   if (!clean) return;
-  const list = loadKnownHardwareTimers().filter((t) => t.fp !== clean);
+  const list = getKnownHardwareTimers().filter((t) => t.fp.toUpperCase() !== clean);
   if (typeof window !== "undefined" && window.localStorage) {
     try {
       window.localStorage.setItem(KNOWN_TIMERS_STORAGE_KEY, JSON.stringify(list));
