@@ -1144,13 +1144,10 @@ static void start_led_timer(void) {
 /** Loop-side housekeeping: auto-stop orphaned USB streams and publish RF health for the LED. */
 static void update_health_led(void) {
     if (s_emergency_mode) return;
-    if ((s_live || s_scan_live || s_log) && s_last_cmd_us > 0 &&
-        (esp_timer_get_time() - s_last_cmd_us) > 5000000LL) {
-        // USB console closed without disconnect handshake (e.g. tab closed): auto-stop streaming
-        s_live = 0;
-        s_scan_live = false;
-        s_log = false;
-    }
+    // Streams (LIVE / SCAN LIVE / LOG) run until the host stops them or USB writes keep failing
+    // (tab closed: see tx_bytes_nowait / tx_raw). No command-silence timeout: the browser no longer
+    // polls, so a timeout would cut off a LIVE stream the Debug page is still showing.
+
     bool rf_ok = false;
     int gain = 0, gain_max = 0;
     float floor_db = 0;
@@ -1217,12 +1214,10 @@ void slaprf_diag_service(void) {
         vTaskDelay(pdMS_TO_TICKS(40));
         esp_restart();
     }
-    if ((s_live || s_scan_live || s_log) && s_last_cmd_us > 0 &&
-        (esp_timer_get_time() - s_last_cmd_us) > 5000000LL) {
-        s_live = 0;
-        s_scan_live = false;
-        s_log = false;
-    }
+    // Streams (LIVE / SCAN LIVE / LOG) run until the host stops them or USB writes keep failing
+    // (tab closed: see tx_bytes_nowait / tx_raw). No command-silence timeout: the browser no longer
+    // polls, so a timeout would cut off a LIVE stream the Debug page is still showing.
+
     // Health LED (Hub single blip, Spoke double blip, Spoke searching 1 Hz, ...). Also refreshed on
     // every sweep; the collector Hub doesn't sweep, so this keeps its heartbeat going.
     update_health_led();
