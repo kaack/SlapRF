@@ -297,7 +297,7 @@ export class EnginePersistence {
   }
 
   private fail(msg: string): void {
-    console.error(`[storage] ${msg} — engine state will not be saved in this tab.`);
+    console.error(`[storage] ${msg}: engine state will not be saved in this tab.`);
     this.mode = "unavailable";
     this.lastError = msg;
     this.enabled = false;
@@ -603,8 +603,8 @@ function showReadOnlyBanner(p: EnginePersistence): void {
     el.innerHTML = `
       <span class="storage-banner-text">${
         takeover
-          ? "The other SlapRF tab was closed — reload to save changes from this tab."
-          : "SlapRF is open in another tab — this tab is read-only (changes here are not saved)."
+          ? "The other SlapRF tab was closed. Reload to save changes from this tab."
+          : "SlapRF is open in another tab. This tab is read-only (changes here are not saved)."
       }</span>
       <button type="button" class="btn btn-ghost btn-sm" data-action="reload">Reload</button>`;
     el.querySelector<HTMLButtonElement>('[data-action="reload"]')?.addEventListener("click", () => window.location.reload());

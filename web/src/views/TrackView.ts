@@ -13,7 +13,7 @@ export class TrackView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Track</h2>
-            <p>Drag timers onto the track timeline in the order pilots fly them. Each stretch between two timers defines a section (S1, S2, S3…), and clicking the checkered flag beneath a timer marks it as the start timer where laps are counted.</p>
+            <p>Drag timers onto the line in flying order. Each span between timers is a section (S1, S2, S3…). Click the checkered flag under a timer to set the start timer where laps are counted.</p>
           </div>
           <div class="card card-flush" data-slot="track"></div>
         </section>

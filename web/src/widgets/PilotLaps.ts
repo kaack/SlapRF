@@ -73,7 +73,7 @@ export class PilotLaps extends Component {
         const s = byKey.get(sectionKey(c.from, c.to));
         return s
           ? `<td class="num"><span class="split ${SPLIT_CLASS[s.badge]}">${s.splitSeconds.toFixed(3)}</span></td>`
-          : `<td class="num muted" title="Gate missed">—</td>`;
+          : `<td class="num muted" title="Timer missed">—</td>`;
       })
       .join("");
     const vs = lap.isBestLap && lap.lapNumber > 1 ? `<span class="badge badge-good">PB</span>` : lap.deltaToBest > 0 ? fmtDelta(lap.deltaToBest) : "best";

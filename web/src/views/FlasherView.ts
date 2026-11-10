@@ -156,7 +156,7 @@ class TimerReaderPanel extends Component {
         : r
           ? `Read ${esc(r.timerLabel || "(unnamed)")} · ${r.role === "hub" ? "Hub" : "Spoke"} · firmware ${esc(r.firmwareVersion)}`
           : isOther
-            ? "Connected XIAO ESP32-C5 (Other) has no SlapRF firmware — use Writer below to flash it"
+            ? "Connected XIAO ESP32-C5 (Other) has no SlapRF firmware · use Writer below to flash it"
             : isConnected
               ? "Connected over USB · click Read timer to inspect"
               : webSerialOk
@@ -183,7 +183,7 @@ class TimerReaderPanel extends Component {
         const rb = racebandName(f) || `Ch${i + 1}`;
         const onCh = active && (s?.chanMask !== undefined ? ((s.chanMask >> i) & 1) !== 0 : true);
         return `<span class="debug-status-ch mono ${onCh ? "" : "is-muted"}" title="${
-          active ? `Slot ${i + 1}: ${rb} (${f} MHz)` : `Slot ${i + 1}: ${rb} (${f} MHz) — read a timer to inspect`
+          active ? `Slot ${i + 1}: ${rb} (${f} MHz)` : `Slot ${i + 1}: ${rb} (${f} MHz) · read a timer to inspect`
         }"><strong>${rb}</strong> ${f}</span>`;
       })
       .join("");
@@ -356,7 +356,7 @@ class TimerEraserPanel extends Component {
         usbPool
       );
 
-      this.lastSuccessMsg = "Timer wiped — bootloader, partition table, NVS, and firmware erased back to factory blank.";
+      this.lastSuccessMsg = "Timer wiped: bootloader, partition table, NVS, and firmware erased to factory blank.";
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (!/No port selected|aborted|cancelled|cancel/i.test(msg)) {
@@ -466,7 +466,7 @@ export class FlasherView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Connection</h2>
-            <p>Connect a Seeed XIAO ESP32-C5 timer over USB-C to read, flash, or wipe its firmware.</p>
+            <p>Connect a XIAO ESP32-C5 over USB-C to read, flash, or wipe its firmware.</p>
           </div>
           <div class="debug-status-layout" data-slot="connection"></div>
         </section>
@@ -474,7 +474,7 @@ export class FlasherView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Reader</h2>
-            <p>Read the selected USB timer to inspect its flashed identity, 5.8 GHz receiver channels, and 2.4 GHz network configuration.</p>
+            <p>Inspect the connected USB timer's flashed identity, 5.8 GHz receiver channels, and 2.4 GHz network status.</p>
           </div>
           <div class="debug-status-layout" data-slot="reader"></div>
         </section>
@@ -482,7 +482,7 @@ export class FlasherView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Writer</h2>
-            <p>Configure role and identity and flash the selected Seeed XIAO ESP32-C5 directly from the browser — no compiler, drivers, or command line needed.</p>
+            <p>Set the timer's role and name, then flash the connected XIAO ESP32-C5 directly from the browser.</p>
           </div>
           <div class="debug-status-layout" data-slot="flasher"></div>
         </section>
@@ -490,7 +490,7 @@ export class FlasherView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Eraser</h2>
-            <p>Click <strong>Erase timer</strong> to wipe the selected USB device back to a factory-blank chip.</p>
+            <p>Wipe the connected USB device back to a factory-blank chip.</p>
           </div>
           <div class="debug-status-layout" data-slot="eraser"></div>
         </section>

@@ -28,7 +28,7 @@ export class AllPilotsPanel extends Component {
       <div class="stat-row" data-slot="stats"></div>
       <section class="card card-flush">
         <header class="card-head">
-          <div class="settings-intro"><h2>Pilots</h2><p>Ranked by best lap · click a pilot to follow their current lap</p></div>
+          <div class="settings-intro"><h2>Pilots</h2><p>Ranked by best lap. Click a pilot to follow their live lap.</p></div>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="reset-laps" title="Clear session laps" aria-label="Clear session laps">
             ${icons.trash(17)}
           </button>
@@ -37,7 +37,7 @@ export class AllPilotsPanel extends Component {
       </section>
       <section class="card card-flush" data-slot="laptimes"></section>
       <section class="card card-flush">
-        <header class="card-head"><div class="settings-intro"><h2>Section records</h2><p>Each pilot's best on every stretch of track — who is quick where</p></div></header>
+        <header class="card-head"><div class="settings-intro"><h2>Section records</h2><p>Fastest time for each pilot in every section.</p></div></header>
         <div data-slot="records"></div>
       </section>`;
 

@@ -297,7 +297,7 @@ export class TimerFlasher extends Component {
       const fpNote = written?.fingerprintKept
         ? `kept its fingerprint ${written.fingerprint}`
         : `got new fingerprint ${written?.fingerprint ?? ""}`;
-      this.lastSuccessMsg = `${label} flashed and ${fpNote} — added to Timers & Track.`;
+      this.lastSuccessMsg = `${label} flashed (${fpNote}).`;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/No port selected|aborted|cancelled/i.test(msg)) {
@@ -523,8 +523,8 @@ export class TimerFlasher extends Component {
           </div>
           <p>${
             isHub
-              ? "Give your Hub a short 1–2 character label (usually <strong>H1</strong>) so it is easy to recognize across Track, Network, and Debug."
-              : "Give this Spoke a short 1–2 character label (such as <strong>T1</strong>–<strong>T6</strong>) so you can tell each timer apart on the course."
+              ? "Short 1–2 character label (usually <strong>H1</strong>) shown across Track, Network, and Debug."
+              : "Short 1–2 character label (e.g. <strong>T1</strong>–<strong>T6</strong>) shown on the course."
           }</p>
         </div>
 

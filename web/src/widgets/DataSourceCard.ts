@@ -44,7 +44,7 @@ export class DataSourceCard extends Component {
         <div class="option-row">
           <div>
             <div class="option-title">Simulation active</div>
-            <div class="option-sub">Feeds the app with simulated pilots, timers, and 6S flight packs in a separate dataset. Turn off to use your physical timers: the in-browser engine then times laps from the USB-C Hub on the <a href="#/network" class="link-inline">Network</a> page.</div>
+            <div class="option-sub">Runs simulated pilots, timers, and 6S flight packs in a separate dataset. Turn off to time laps with your physical USB-C Hub on the <a href="#/network" class="link-inline">Network</a> page.</div>
           </div>
           <div class="option-actions">
             <label class="switch switch-lg">
@@ -182,7 +182,7 @@ export class PersistenceSettings extends Component {
         <div class="option-row">
           <div>
             <div class="option-title">Saved data &amp; backup</div>
-            <div class="option-sub">Pilots, track, timers, rules, and recorded laps are saved automatically in this browser. Export a JSON backup regularly — browser data can be cleared.</div>
+            <div class="option-sub">Pilots, track, timers, rules, and laps are saved automatically in this browser. Export a JSON backup regularly, as browser storage can be cleared.</div>
             <div class="option-sub storage-status" data-storage-status></div>
           </div>
           <div class="option-actions">
@@ -196,7 +196,7 @@ export class PersistenceSettings extends Component {
         <div class="option-row">
           <div>
             <div class="option-title">Import application data</div>
-            <div class="option-sub">Restore all application settings, pilots, track layout, timers, recorded laps, and UI preferences from a saved JSON snapshot.</div>
+            <div class="option-sub">Restore settings, pilots, track layout, timers, and recorded laps from a saved JSON backup.</div>
           </div>
           <div class="option-actions">
             <button type="button" class="btn btn-ghost btn-sm" data-action="import-data">
@@ -210,7 +210,7 @@ export class PersistenceSettings extends Component {
         <div class="option-row">
           <div>
             <div class="option-title">Wipe application data</div>
-            <div class="option-sub">Clears all saved application state in this browser, returning every setting, pilot, track layout, and session to clean system defaults.</div>
+            <div class="option-sub">Clears all saved data in this browser and resets settings, pilots, track, and laps to system defaults.</div>
           </div>
           <div class="option-actions">
             <button type="button" class="btn btn-ghost btn-sm" data-action="wipe-data">

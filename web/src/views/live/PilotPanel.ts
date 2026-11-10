@@ -28,7 +28,7 @@ export class PilotPanel extends Component {
       <div class="stat-row" data-slot="stats"></div>
       <section class="card card-flush">
         <div class="card-body">
-          <header class="card-head"><div class="settings-intro"><h2>Signal at each timer</h2><p>This pilot's 5.8 GHz signal as every timer sees it · pick one timer to see and adjust its threshold · red pass lines didn't count — hover for why</p></div></header>
+          <header class="card-head"><div class="settings-intro"><h2>Signal at each timer</h2><p>Live 5.8 GHz signal at each timer. Select a timer to adjust its threshold. Red lines mark rejected passes (hover for reason).</p></div></header>
           <div data-slot="rssi"></div>
         </div>
         <div class="rules-foot">
@@ -38,7 +38,7 @@ export class PilotPanel extends Component {
       </section>
       <section class="card card-flush" data-slot="laptimes"></section>
       <section class="card card-flush">
-        <header class="card-head"><div class="settings-intro"><h2>Laps</h2><p>Completed laps, newest first · each section against the pilot's own best</p></div></header>
+        <header class="card-head"><div class="settings-intro"><h2>Laps</h2><p>Completed laps, newest first, with section splits compared to personal best.</p></div></header>
         <div data-slot="laps"></div>
       </section>`;
 

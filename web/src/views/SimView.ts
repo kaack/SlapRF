@@ -30,13 +30,13 @@ function statusMeta(p: SimPilotState): { label: string; badgeClass: string; hint
       return {
         label: "Flying",
         badgeClass: "sim-status-flying",
-        hint: "On track racing through gates",
+        hint: "On track racing past timers",
       };
     case "AVOIDING":
       return {
         label: "Flying High",
         badgeClass: "sim-status-avoiding",
-        hint: "Hovering or circling high above the course while a person is on the track — avoids flying through gates",
+        hint: "Circling high above the course while a person is on the track",
       };
     case "LANDING":
       return {
@@ -48,7 +48,7 @@ function statusMeta(p: SimPilotState): { label: string; badgeClass: string; hint
       return {
         label: `Crashed · VTX On${sec}`,
         badgeClass: "sim-status-crashed-vtx",
-        hint: "Step 1: Down on track near gate with 5.8 GHz VTX still transmitting while pilot assesses crash",
+        hint: "Step 1: Down on track near timer with 5.8 GHz VTX still transmitting while pilot assesses crash",
       };
     case "TURTLE_RECOVERY":
       return {
@@ -60,26 +60,26 @@ function statusMeta(p: SimPilotState): { label: string; badgeClass: string; hint
       return {
         label: `Turtle Failed${sec}`,
         badgeClass: "sim-status-crashed-vtx",
-        hint: "Step 3: Turtle flip failed (prop stuck in grass/netting) — pilot disarms and switches VTX to Pit Mode",
+        hint: "Step 3: Turtle flip failed (prop stuck in grass/netting); pilot disarms and switches VTX to Pit Mode",
       };
     case "CRASHED_WAITING_RECOVERY":
       return {
         label: "Wait for Lull",
         badgeClass: "sim-status-crashed-wait",
-        hint: "Step 4: Quad stays crashed on the field (Pit Mode) until no pilots are flying — or click Walk recover to force an immediate track walk",
+        hint: "Step 4: Quad stays crashed on the field (Pit Mode) until no pilots are flying, or click Walk recover to force an immediate track walk",
       };
     case "WALKING_RECOVERY":
       return {
         label: `Walking Out${sec}`,
         badgeClass: "sim-status-crashed-wait",
-        hint: "Step 5: Pilot is walking or riding a Onewheel out onto the track to retrieve the crashed quad and return to the bench (30–60s)",
+        hint: "Step 5: Pilot is walking out onto the track to retrieve the crashed quad and return to the bench (30–60s)",
       };
     case "PIT_SWAP":
       if (p.batteryPct === 100) {
         return {
           label: `Arming${sec}`,
           badgeClass: "sim-status-pit",
-          hint: "Fresh 100% 6S pack plugged in on launch pad — arming and taking off when track is clear",
+          hint: "Fresh 100% 6S pack plugged in on launch pad; arming and taking off when track is clear",
         };
       }
       return {
@@ -91,13 +91,13 @@ function statusMeta(p: SimPilotState): { label: string; badgeClass: string; hint
       return {
         label: `Launch Hold${sec}`,
         badgeClass: "sim-status-charging",
-        hint: "Ready on launch pad with 100% LiPo plugged in — holding launch with VTX off (to prevent VTX overheating) so crashed pilot can recover",
+        hint: "Ready on launch pad with 100% LiPo plugged in; holding launch with VTX off so crashed pilot can recover",
       };
     case "CHARGING_WAIT":
       return {
         label: `Charging${sec}`,
         badgeClass: "sim-status-charging",
-        hint: "All 3 6S packs are depleted — waiting at the pit bench until a battery finishes charging to 100%",
+        hint: "All 3 6S packs depleted; waiting at the pit bench until a battery finishes charging to 100%",
       };
     case "PILOT_BREAK":
       return {
@@ -249,7 +249,7 @@ export class SimView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Course &amp; pit lane</h2>
-            <p>Live view of pilots moving through the track sections and pit bench. When someone walks onto the track to recover a quad, airborne pilots either return to the bench or fly high until the track is cleared.</p>
+            <p>Live view of simulated pilots on the track and in the pits. During a track walk, airborne pilots either land or circle high until the track is clear.</p>
           </div>
           <div class="card card-flush" data-slot="course"></div>
         </section>
@@ -257,7 +257,7 @@ export class SimView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Pilots &amp; flight packs</h2>
-            <p>Each pilot drains their 6S pack, lands in the pit area, unplugs the spent LiPo, walks back to the bench to strap on a fresh pack, sets the quad on the launch pad, plugs in, and takes off (30–60s turnaround).</p>
+            <p>Pilots fly until their 6S pack drains, land in the pits, swap to a charged pack at the bench (30–60s turnaround), and relaunch.</p>
           </div>
           <div class="sim-pilots-column" data-slot="pilots"></div>
         </section>
@@ -265,7 +265,7 @@ export class SimView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Simulated timers</h2>
-            <p>Virtual XIAO ESP32-C5 timers feeding the simulation engine, matching real hardware: both the Hub and Spokes sweep 5.8 GHz in their own TDMA slots and can be placed on the track on the Track page. Power individual timers off to test offline timer behavior, delete timers, or provision new ones (one Hub plus up to 6 Spokes).</p>
+            <p>Virtual XIAO ESP32-C5 timers (1 Hub + up to 6 Spokes) streaming 50 Hz RSSI into the timing engine. Power timers off to test offline behavior, delete them, or add new ones.</p>
           </div>
           <div class="card card-flush">
             <div data-slot="timers-table"></div>
@@ -693,7 +693,7 @@ export class SimView extends Component {
             <span class="gate-track-caption" data-course-caption>
               ${
                 walkerActive
-                  ? `⚠ Person on track (${Math.ceil(walkerSec)}s left) — airborne pilots land or circle high above the track`
+                  ? `⚠ Person on track (${Math.ceil(walkerSec)}s left) · airborne pilots land or circle high above the track`
                   : `60 fps live course timeline · drones cross #1 → #${nodes.length} and wrap around ${nodes.length > 0 ? `S${nodes.length}` : "the loop"}`
               }
             </span>
@@ -743,7 +743,7 @@ export class SimView extends Component {
       }
       const caption = this.el.querySelector<HTMLElement>("[data-course-caption]");
       if (caption && walkerActive) {
-        caption.textContent = `⚠ Person on track (${Math.ceil(walkerSec)}s left) — airborne pilots land or circle high above the track`;
+        caption.textContent = `⚠ Person on track (${Math.ceil(walkerSec)}s left) · airborne pilots land or circle high above the track`;
       }
       const pitLabel = this.el.querySelector<HTMLElement>("[data-pit-lane-label]");
       if (pitLabel) {
@@ -846,7 +846,7 @@ export class SimView extends Component {
                 <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="recover" data-pilot-btn="${p.slotIndex}-recover" ${isCrashed && !isTurtleBusy ? "" : "disabled"} title="Attempt Turtle Mode recovery (spins motors for 3.5s to flip upright and resume flying)">
                   ${icons.play(12)}<span>Turtle flip</span>
                 </button>
-                <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="walk-recover" data-pilot-btn="${p.slotIndex}-walk-recover" ${isCrashed && !isWalkingOut ? "" : "disabled"} title="Force immediate track walk to retrieve the crashed quad — other drones will either land at the bench or fly high until clear">
+                <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="walk-recover" data-pilot-btn="${p.slotIndex}-walk-recover" ${isCrashed && !isWalkingOut ? "" : "disabled"} title="Force immediate track walk to retrieve the crashed quad (other drones will land at the bench or fly high until clear)">
                   ${icons.pilot(12)}<span>Walk recover</span>
                 </button>
               </div>
@@ -856,7 +856,7 @@ export class SimView extends Component {
 
       this.slot("pilots").innerHTML = `
         <div class="sim-pilots-grid">
-          ${cards || `<div class="card empty-note">No enabled pilots — enable pilots on the System tab to simulate their flights.</div>`}
+          ${cards || `<div class="card empty-note">No enabled pilots. Enable pilots on the Pilots tab to simulate their flights.</div>`}
         </div>`;
       return;
     }

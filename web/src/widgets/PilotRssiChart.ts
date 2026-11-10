@@ -781,7 +781,7 @@ export class PilotRssiChart extends Component {
       this.undo = before;
       this.calibMessage = message;
     } catch {
-      this.calibMessage = "Couldn't save the thresholds — is the timer still running?";
+      this.calibMessage = "Could not save thresholds.";
     } finally {
       updates.forEach((u) => this.pending.delete(u.gateId));
       this.renderCalib();
@@ -821,7 +821,7 @@ export class PilotRssiChart extends Component {
       }
     }
     if (updates.length === 0) {
-      this.calibMessage = `Couldn't calibrate yet — ${skipped[0] ?? "no signal"}. Let ${pilot.callsign} fly a few laps with this page open, then try again.`;
+      this.calibMessage = `Cannot calibrate yet (${skipped[0] ?? "no signal"}). Let ${pilot.callsign} fly a few laps with this page open, then try again.`;
       this.renderCalib();
       return;
     }
@@ -1239,7 +1239,7 @@ export class PilotRssiChart extends Component {
     const live = this.endUs === null;
     const btn = this.el.querySelector<HTMLButtonElement>('[data-act="live"]')!;
     btn.className = `btn btn-sm scope-live-btn ${live ? "btn-armed" : "btn-ghost"}`;
-    btn.title = live ? "Following live signal stream — click to pause (Space)" : "Stream paused — click to resume live stream (Space)";
+    btn.title = live ? "Following live signal stream · click to pause (Space)" : "Stream paused · click to resume live stream (Space)";
     btn.setAttribute("aria-label", btn.title);
     btn.setAttribute("aria-pressed", String(live));
     btn.innerHTML = `<span class="status-dot ${live ? "is-up" : ""}"></span><span>Live</span>`;
@@ -1270,7 +1270,7 @@ export class PilotRssiChart extends Component {
 
     this.slot("axis-controls").innerHTML = `
       <div class="debug-axis-pill ${this.autoX ? "is-armed" : "is-unarmed"}" data-axis-pill>
-        <button type="button" class="debug-axis-pill-main" data-axis-act="${this.autoX ? "toggle-menu" : "auto-x"}" data-menu="rssi-x" title="${this.autoX ? `Auto X-axis time window (${xWinLabel}) — click to choose a time window preset, or drag X-axis to stretch` : "Click to reset X-axis time window to Auto X (5 s)"}">
+        <button type="button" class="debug-axis-pill-main" data-axis-act="${this.autoX ? "toggle-menu" : "auto-x"}" data-menu="rssi-x" title="${this.autoX ? `Auto X-axis time window (${xWinLabel}) · click to choose a time window preset, or drag X-axis to stretch` : "Click to reset X-axis time window to Auto X (5 s)"}">
           ${icons.target(13)}<span>${this.autoX ? "Auto X" : `<span class="debug-hint-desktop">X: ${xWinLabel}</span><span class="debug-hint-mobile">X: ${xWinShort}</span>`}</span>
         </button>
         <button type="button" class="debug-axis-pill-arrow" data-axis-act="toggle-menu" data-menu="rssi-x" aria-expanded="${this.openAxisMenu === "rssi-x"}" title="Choose X-axis time window">
@@ -1293,7 +1293,7 @@ export class PilotRssiChart extends Component {
         }
       </div>
       <div class="debug-axis-pill ${this.autoY ? "is-armed" : "is-unarmed"}" data-axis-pill>
-        <button type="button" class="debug-axis-pill-main" data-axis-act="${this.autoY ? "toggle-menu" : "auto-y"}" data-menu="rssi-y" title="${this.autoY ? "Auto Y-axis scaling is ON — fits visible timer traces automatically. Click to choose a scale preset, or drag the Y-axis to stretch." : "Click to reset Y-axis range to Auto Y"}">
+        <button type="button" class="debug-axis-pill-main" data-axis-act="${this.autoY ? "toggle-menu" : "auto-y"}" data-menu="rssi-y" title="${this.autoY ? "Auto Y-axis scaling is ON (fits visible timer traces automatically). Click to choose a scale preset, or drag the Y-axis to stretch." : "Click to reset Y-axis range to Auto Y"}">
           ${icons.target(13)}<span>${this.autoY ? "Auto Y" : `<span class="debug-hint-desktop">Y: ${Math.round(this.yMin)}…${Math.round(this.yMax)} dBm</span><span class="debug-hint-mobile">Y: ${yShort}</span>`}</span>
         </button>
         <button type="button" class="debug-axis-pill-arrow" data-axis-act="toggle-menu" data-menu="rssi-y" aria-expanded="${this.openAxisMenu === "rssi-y"}" title="Choose Y-axis dBm scale">

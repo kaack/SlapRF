@@ -66,7 +66,7 @@ export class PilotSlotsEditor extends Component {
         </div>
       </div>
       <div class="rules-foot">
-        <p class="note">Changes save automatically and sync to timing detectors.</p>
+        <p class="note">Changes save automatically and sync to timers.</p>
         <button class="btn btn-ghost btn-sm" type="button" data-action="restore-default-pilots">Restore defaults</button>
       </div>`;
   }
@@ -75,7 +75,7 @@ export class PilotSlotsEditor extends Component {
     const atLimit = !p.enabled && enabledCount >= 8;
     const needsChannel = p.enabled && p.channel === 0;
     const isCustomThreshold = Math.round(p.enterThreshold) !== DEFAULT_ENTER_THRESHOLD_DBM;
-    const unassignedOpt = `<option value="0" ${p.channel === 0 ? "selected" : ""}>— Select channel —</option>`;
+    const unassignedOpt = `<option value="0" ${p.channel === 0 ? "selected" : ""}>Select channel</option>`;
     const options =
       unassignedOpt +
       RACEBAND_MHZ.map((mhz, i) => {

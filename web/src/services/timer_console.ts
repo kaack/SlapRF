@@ -466,7 +466,7 @@ export class TimerConsole {
     const s = this.lastStatus;
     const cfg = this.lastConfig;
     if (!s && !cfg) {
-      throw new Error("No SlapRF firmware detected on this board — flash it above first.");
+      throw new Error("No SlapRF firmware detected on this board. Flash it above first.");
     }
     return {
       chip: s?.chip ? `${s.chip.model} (${s.chip.rev})` : cfg?.chip || "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",

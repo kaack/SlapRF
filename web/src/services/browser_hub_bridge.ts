@@ -92,7 +92,7 @@ export class BrowserHubBridge {
       return {
         color: "yellow",
         shortLabel: "Reconnecting",
-        detail: `${label} — click to open Network`,
+        detail: `${label} · click to open Network`,
       };
     }
     if (main.connected) {
@@ -102,14 +102,14 @@ export class BrowserHubBridge {
         return {
           color: "red",
           shortLabel: `${s.label || "Timer"} · Emergency`,
-          detail: `${s.label || "Timer"} is in Emergency Mode — click to open Network`,
+          detail: `${s.label || "Timer"} is in Emergency Mode · click to open Network`,
         };
       }
       if (main.isOtherDevice) {
         return {
           color: "red",
           shortLabel: "Other · Unflashed",
-          detail: "Connected XIAO ESP32-C5 (Other) has no SlapRF firmware — open Flasher to write firmware",
+          detail: "Connected XIAO ESP32-C5 (Other) has no SlapRF firmware · open Flasher to write firmware",
         };
       }
       if (s?.role === 1 || cfg?.role === "hub") {
@@ -117,7 +117,7 @@ export class BrowserHubBridge {
         return {
           color: "neon",
           shortLabel: `${hubName} · Hub`,
-          detail: `Connected to Hub ${hubName} over USB-C — click to open Network`,
+          detail: `Connected to Hub ${hubName} over USB-C · click to open Network`,
         };
       }
       if (s?.role === 2 || cfg?.role === "spoke") {
@@ -125,7 +125,7 @@ export class BrowserHubBridge {
         return {
           color: "blue",
           shortLabel: `${spokeName} · Spoke`,
-          detail: `Connected to Spoke ${spokeName} (Slot ${s?.slot || "?"}) over USB-C — click to open Network`,
+          detail: `Connected to Spoke ${spokeName} (Slot ${s?.slot || "?"}) over USB-C · click to open Network`,
         };
       }
       return {
@@ -139,14 +139,14 @@ export class BrowserHubBridge {
       return {
         color: "red",
         shortLabel: "USB Failed",
-        detail: `${main.lastError || "USB reconnect failed"} — click to open Network`,
+        detail: `${main.lastError || "USB reconnect failed"} · click to open Network`,
       };
     }
 
     return {
       color: "gray",
       shortLabel: "Disconnected",
-      detail: "No timer connected — click to open Network",
+      detail: "No timer connected · click to open Network",
     };
   }
 

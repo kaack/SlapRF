@@ -92,7 +92,7 @@ export class LapComparison extends Component {
       const mph = key.lapExitMph - key.refExitMph;
       if (Math.abs(mph) >= NOTABLE_MPH) {
         points.push(
-          `You exited that section <strong>${Math.abs(mph).toFixed(0)} mph ${mph < 0 ? "slower" : "faster"}</strong> (${key.lapExitMph.toFixed(0)} vs ${key.refExitMph.toFixed(0)} mph)${mph < 0 && !isFaster ? " — carrying less speed out of it cost time into the next one too" : ""}.`
+          `You exited that section <strong>${Math.abs(mph).toFixed(0)} mph ${mph < 0 ? "slower" : "faster"}</strong> (${key.lapExitMph.toFixed(0)} vs ${key.refExitMph.toFixed(0)} mph)${mph < 0 && !isFaster ? ", which also cost time into the next section" : ""}.`
         );
       }
     }

@@ -140,7 +140,7 @@ export class TopBar extends Component {
     const usbTitle = !usbSupported
       ? "USB connection requires Chrome, Edge, or Brave (WebSerial)"
       : usbOn
-        ? `Connected over USB${activeLabel ? ` (${activeLabel}${usbFp ? ` · ${usbFp}` : ""})` : ""} — click to disconnect`
+        ? `Connected over USB${activeLabel ? ` (${activeLabel}${usbFp ? ` · ${usbFp}` : ""})` : ""} · click to disconnect`
         : "Connect a timer over USB-C";
 
     const usbBtn = `

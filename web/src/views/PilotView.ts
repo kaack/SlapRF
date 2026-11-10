@@ -78,7 +78,7 @@ export class PilotView extends Component {
       {
         label: "Best possible lap",
         value: fmtTime(possible),
-        sub: possible > 0 ? (linkGain > 0.0005 ? `${fmtDelta(-linkGain)} by linking your best sections` : "Your best lap links every best section") : "Fly every gate to unlock",
+        sub: possible > 0 ? (linkGain > 0.0005 ? `${fmtDelta(-linkGain)} by linking your best sections` : "Your best lap links every best section") : "Fly every section to unlock",
       },
     ]);
   }

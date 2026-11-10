@@ -94,7 +94,7 @@ export class NetworkView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Connection</h2>
-            <p>Connect the Hub (or a Spoke) over USB-C to inspect live 2.4 GHz network topology and 5.8 GHz channel readings.</p>
+            <p>Connect the Hub (or a Spoke) over USB-C to inspect the 2.4 GHz network and 5.8 GHz channel readings.</p>
           </div>
           <div class="debug-status-layout" data-slot="connection"></div>
         </section>
@@ -102,7 +102,7 @@ export class NetworkView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Topology</h2>
-            <p>2.4 GHz ESP-NOW hub-and-spoke network topology with the parent Hub (TDMA Slot 1) in the center and 6 child Spoke slots (TDMA Slots 2–7) around it. Active ESP-NOW links appear solid; inactive or open slots appear dashed. Click any slot to inspect it below.</p>
+            <p>Parent Hub (Slot 1) in the center with 6 Spoke slots (Slots 2–7) around it. Active ESP-NOW links are solid; open or inactive slots are dashed. Click any slot to inspect it below.</p>
           </div>
           <div class="debug-status-layout" data-slot="topology"></div>
         </section>
@@ -110,7 +110,7 @@ export class NetworkView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Timer</h2>
-            <p>Identity, 2.4 GHz TDMA link telemetry, and live 5.8 GHz channel readings for the timer selected in the topology above.</p>
+            <p>Identity, 2.4 GHz TDMA link stats, and live 5.8 GHz channel readings for the selected slot.</p>
           </div>
           <div class="debug-status-layout" data-slot="timer-detail"></div>
         </section>
@@ -672,7 +672,7 @@ export class NetworkView extends Component {
     const slotNum = sp.slot;
     if (!sp.populated) {
       return `
-        <button type="button" class="debug-topo-node is-spoke is-empty is-inactive-link ${isSelected ? "is-selected" : ""}" data-action="select-topology-slot" data-slot-num="${slotNum}" aria-pressed="${isSelected}" title="TDMA Slot ${slotNum} (Open) — click to view slot details">
+        <button type="button" class="debug-topo-node is-spoke is-empty is-inactive-link ${isSelected ? "is-selected" : ""}" data-action="select-topology-slot" data-slot-num="${slotNum}" aria-pressed="${isSelected}" title="TDMA Slot ${slotNum} (Open) · click to view slot details">
           <div class="debug-topo-node-head">
             <span class="debug-topo-slot-tag mono">Slot ${slotNum}</span>
             <span class="note">Open</span>

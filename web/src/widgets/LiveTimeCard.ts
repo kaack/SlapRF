@@ -130,7 +130,7 @@ export class LiveTimeCard extends Component {
         <div class="option-row">
           <div>
             <div class="option-title">LiveTime integration</div>
-            <div class="option-sub">Emulates an ImmersionRC LapRF 8-way timer so MultiGP LiveTime can sync pilot channels, start and stop races, and receive start-gate lap passings. Needs the small <code>slaprf-relay</code> helper running on this computer.</div>
+            <div class="option-sub">Emulates an ImmersionRC LapRF 8-way timer so MultiGP LiveTime can sync pilot channels, control races, and receive start-timer lap passes via <code>slaprf-relay</code>.</div>
           </div>
           <label class="switch switch-lg"><input type="checkbox" data-action="toggle-livetime" ${s.enabled ? "checked" : ""} /><span></span></label>
         </div>
@@ -144,9 +144,9 @@ export class LiveTimeCard extends Component {
             <li><div class="step-body"><span>Download <code>slaprf-relay</code> (one file, no installer):</span><span class="livetime-downloads">${this.downloads()}</span><a class="link-inline" href="${RELEASES_URL}" target="_blank" rel="noopener">All downloads</a></div></li>
             <li><div class="step-body"><span>Run it on this computer and keep its window open. Windows: <em>More info → Run anyway</em>; macOS: <em>right-click → Open</em>; Linux/macOS terminal: <code>chmod +x slaprf-relay-*</code>. Allow network access if the firewall asks.</span></div></li>
             <li><div class="step-body"><span>In LiveTime, add a timing device of type</span> <code>ImmersionRC LapRF (8-way)</code> <span>at this computer's IP address, port</span> <code>${LIVETIME_PORT}</code> <span>(use</span> <code>127.0.0.1</code> <span>if LiveTime runs on this computer).</span></div></li>
-            <li><div class="step-body"><span>Load a heat — pilot channels are pushed to every gate automatically.</span></div></li>
+            <li><div class="step-body"><span>Load a heat: pilot channels are pushed to every timer automatically.</span></div></li>
           </ol>
-          <p class="note">Chrome may ask to let this site access devices on your local network — choose <strong>Allow</strong> so the page can reach the relay. One LiveTime connection at a time. Keep this tab open while racing. Only the start gate reports laps to LiveTime; sector gates feed Pilot insights.</p>
+          <p class="note">If Chrome asks to access devices on your local network, choose <strong>Allow</strong> so the page can reach the relay. Keep this tab open while racing. Only the start timer reports laps to LiveTime; other timers on the track record section splits.</p>
         </div>`
             : ""
         }

@@ -17,7 +17,7 @@ export class SetupView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Timing rules</h2>
-            <p>Filters out false passes and stray signals. Set rules for all timers, or pick a single timer to customize it.</p>
+            <p>Filters out false passes and stray signals. Set rules for all timers, or customize a single timer.</p>
           </div>
           <div class="card card-flush" data-slot="rules"></div>
         </section>
@@ -25,7 +25,7 @@ export class SetupView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Announcer</h2>
-            <p>Spoken lap times at the start timer. Uses the voices built into this computer — no internet needed.</p>
+            <p>Calls out lap times at the start timer using offline voices built into the app and browser.</p>
           </div>
           <div class="settings-cards" data-slot="announcer"></div>
         </section>
@@ -33,7 +33,7 @@ export class SetupView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>MultiGP LiveTime</h2>
-            <p>This app emulates an ImmersionRC LapRF 8-way timer, so LiveTime connects without plugins, through the small slaprf-relay helper.</p>
+            <p>Emulates an ImmersionRC LapRF 8-way timer so LiveTime connects without plugins via the slaprf-relay helper.</p>
           </div>
           <div class="card" data-slot="livetime"></div>
         </section>
@@ -41,7 +41,7 @@ export class SetupView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Data source</h2>
-            <p>Switch between physical XIAO timers and the built-in simulator, or connect directly from the browser to your Hub over USB-C.</p>
+            <p>Switch between the built-in simulator and physical USB timers.</p>
           </div>
           <div class="settings-cards" data-slot="source"></div>
         </section>
@@ -49,7 +49,7 @@ export class SetupView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Persistence</h2>
-            <p>Export or import a full JSON snapshot of all application state, or wipe saved data back to clean system defaults.</p>
+            <p>Back up, restore, or reset all saved app data in this browser.</p>
           </div>
           <div class="settings-cards" data-slot="persistence"></div>
         </section>

@@ -591,7 +591,7 @@ export async function readXiaoC5OverWebSerial(
       }
     }
 
-    throw new Error("No SlapRF firmware detected on this board — flash it above first.");
+    throw new Error("No SlapRF firmware detected on this board. Flash it above first.");
   } finally {
     try {
       await reader?.cancel();
@@ -1221,7 +1221,7 @@ export async function eraseXiaoC5OverWebSerial(
     onProgress({
       stage: "done",
       percent: 100,
-      detail: "Timer wiped — chip flash erased back to factory blank.",
+      detail: "Timer wiped: chip flash erased to factory blank.",
     });
   } finally {
     pumpActive = false;

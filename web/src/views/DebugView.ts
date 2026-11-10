@@ -247,21 +247,21 @@ export class DebugView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Connection</h2>
-            <p>Inspects the main USB connection by default, or click <strong>Debug another USB</strong> to inspect a different USB device while keeping the main connection running.</p>
+            <p>Inspects the main USB connection by default. Click <strong>Debug another USB</strong> to inspect a second USB device without disconnecting the main one.</p>
           </div>
           <div class="debug-status-layout" data-slot="connection"></div>
         </section>
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Self-test</h2>
-            <p>Checks the timer end to end in about 10 seconds: console, identity, 5.8 GHz receiver, sweep timing, memory, last restart, course link, and whether its data reaches the timing engine. Copy the report when asking for help.</p>
+            <p>Runs a 10-second end-to-end check: console, identity, 5.8 GHz receiver, sweep timing, memory, last restart, course link, and engine feed. Copy the report when troubleshooting.</p>
           </div>
           <div class="card card-flush" data-slot="selftest"></div>
         </section>
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Status &amp; health</h2>
-            <p>Identity, chip, uptime, why it last restarted, memory, sweep timing, course link and the 5.8 GHz receiver's boot check. Refreshes every 2 seconds and plots the last 5 minutes.</p>
+            <p>Identity, chip, uptime, last restart reason, free memory, sweep timing, and 5.8 GHz boot check. Updates every 2 seconds with a 5-minute trend.</p>
           </div>
           <div class="debug-status-layout">
             <div data-slot="status"></div>
@@ -318,7 +318,7 @@ export class DebugView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Monitored channels</h2>
-            <p>The 8 pilot channels monitored in each timing sweep (synced from active pilots). Click any channel row to toggle monitoring on or off—fewer active channels make each sweep faster. Click <strong>Stream</strong> to inspect live 5.8 GHz channel bars.</p>
+            <p>The 8 pilot channels scanned each sweep. Click a channel to toggle it on or off (fewer active channels sweep faster). Click <strong>Stream</strong> for live 5.8 GHz signal bars.</p>
           </div>
           <div class="debug-status-layout">
             <div data-slot="live-head"></div>
@@ -328,8 +328,8 @@ export class DebugView extends Component {
         <section class="settings-section" data-signal-section>
           <div class="settings-intro">
             <h2>Signal over time &amp; channel noise</h2>
-            <p>Click <strong>Stream</strong> to record every sweep (50 Hz) so you can inspect crossing shapes, short 5 GHz Wi-Fi bursts, each channel's typical noise floor, and pilot enter thresholds.</p>
-            <p>The table below computes mean, spread, max, floor, hits/s and how often noise reaches a pilot's enter threshold ("would trigger" — anything above 0% with no drone flying is a false-lap risk).</p>
+            <p>Click <strong>Stream</strong> to plot live 50 Hz sweeps, crossing peaks, 5 GHz Wi-Fi bursts, noise floors, and pilot thresholds.</p>
+            <p>The table below shows mean, spread, max, floor, hits/s, and how often noise reaches a pilot's enter threshold ("would trigger": anything above 0% with no drone flying risks false passes).</p>
           </div>
           <div class="debug-status-layout">
             <div data-slot="signal-head"></div>
@@ -351,22 +351,22 @@ export class DebugView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Spectrum scan &amp; waterfall</h2>
-            <p>Sweeps the receiver across 5180–5917 MHz. Use it to find a VTX on an unexpected frequency, or to check a venue for 5 GHz Wi-Fi before racing. Note that Raceband <strong>R3–R6 overlap 5 GHz Wi-Fi UNII-3</strong> (channels 149–165, 5735–5835 MHz).</p>
-            <p><strong>Scan once</strong> takes one snapshot and appends a row to the waterfall. <strong>Stream</strong> scans continuously with live, average and max-hold traces (automatically pausing the 8-channel stream while it runs).</p>
+            <p>Scans 5180–5917 MHz to spot rogue VTXs or 5 GHz Wi-Fi interference (Raceband <strong>R3–R6 overlap Wi-Fi UNII-3</strong>, channels 149–165, 5735–5835 MHz).</p>
+            <p><strong>Scan once</strong> captures a single sweep. <strong>Stream</strong> scans continuously with live, average, and max-hold traces (pausing the 8-channel stream while active).</p>
           </div>
           <div class="debug-status-layout" data-slot="scan"></div>
         </section>
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Serial console</h2>
-            <p>Interactive USB terminal for sending commands directly to the timer and inspecting boot logs across crashes and restarts. Type <span class="mono">HELP</span> in the terminal for available commands.</p>
+            <p>USB terminal for sending commands directly to the timer and reading boot/crash logs. Type <span class="mono">HELP</span> for commands.</p>
           </div>
           <div class="card card-flush" data-slot="serial-console"></div>
         </section>
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Live log</h2>
-            <p>The timer's own log messages, mirrored over USB while enabled.</p>
+            <p>Live firmware log messages mirrored over USB.</p>
           </div>
           <div class="card card-flush" data-slot="log"></div>
         </section>
@@ -2803,7 +2803,7 @@ export class DebugView extends Component {
       add(
         "Last restart",
         "fail",
-        `EMERGENCY MODE after ${s.crashStreak ?? 3} consecutive ${s.reset} resets — radio & sweeps halted so USB stays up for rescue/reflashing`
+        `EMERGENCY MODE after ${s.crashStreak ?? 3} consecutive ${s.reset} resets: radio & sweeps halted so USB stays up for rescue/reflashing`
       );
       try {
         const last = await this.console.request<BootLog>("LASTLOG?", "bootlog", 3000);
@@ -2853,7 +2853,7 @@ export class DebugView extends Component {
     const b = await get();
     const perSec = b ? (b.framesRx - a.framesRx) / 2 : 0;
     if (b && b.framesRx > a.framesRx) return [name, a.simulatorActive ? "warn" : "pass", `online as timer ${a.timerId}, ${perSec.toFixed(0)} frames/s${sim}`];
-    if (!a.framesRx) return [name, a.simulatorActive ? "warn" : "pass", `online as timer ${a.timerId} (not assigned to a gate, so frames aren't counted)${sim}`];
+    if (!a.framesRx) return [name, a.simulatorActive ? "warn" : "pass", `online as timer ${a.timerId} (not on the track, so frames aren't counted)${sim}`];
     return [name, "fail", `online but no new frames in 2 s${sim}`];
   }
 
@@ -2949,7 +2949,7 @@ export class DebugView extends Component {
         : emg
           ? "Emergency mode active · exit emergency mode to run 5.8 GHz RF checks"
           : isOther
-            ? "Connected XIAO ESP32-C5 (Other) has no SlapRF firmware — open Flasher to write firmware"
+            ? "Connected XIAO ESP32-C5 (Other) has no SlapRF firmware · open Flasher to write firmware"
             : on
               ? "Ready · takes about 10 s (pauses timing briefly during scan)"
               : "Off · click Connect in the top bar";
@@ -3015,7 +3015,7 @@ export class DebugView extends Component {
         : `${esc(s.label || "(unnamed)")} · ${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`} · polling every 2 s · up ${fmtUptime(s.uptimeMs)}`
       : on
         ? this.console.isOtherDevice
-          ? "Connected device (Other) has no SlapRF firmware — open Flasher to write firmware"
+          ? "Connected device (Other) has no SlapRF firmware · open Flasher to write firmware"
           : "Waiting for timer status…"
         : "Off · click Connect in the top bar";
 
@@ -3036,7 +3036,7 @@ export class DebugView extends Component {
       .map((f, i) => {
         const rb = racebandName(f) || `Ch${i + 1}`;
         const onCh = this.signalEnabledCh[i];
-        return `<span class="debug-status-ch mono ${onCh ? "" : "is-muted"}" title="${onCh ? `Slot ${i + 1}: ${rb} (${f} MHz) — monitored` : `Slot ${i + 1}: ${rb} (${f} MHz) — disabled`}"><strong>${rb}</strong> ${f}</span>`;
+        return `<span class="debug-status-ch mono ${onCh ? "" : "is-muted"}" title="${onCh ? `Slot ${i + 1}: ${rb} (${f} MHz) · monitored` : `Slot ${i + 1}: ${rb} (${f} MHz) · disabled`}"><strong>${rb}</strong> ${f}</span>`;
       })
       .join("");
 
@@ -3127,7 +3127,7 @@ export class DebugView extends Component {
                   ? s.emergencyMode
                     ? `<span class="badge badge-bad">Emergency mode</span> ${esc(s.reset)}${(s.crashStreak ?? 0) > 0 ? ` (${s.crashStreak}× in a row)` : ""}`
                     : badReset
-                      ? `${esc(s.reset)} <span class="note">— see boot log</span>`
+                      ? `${esc(s.reset)} <span class="note">· see boot log</span>`
                       : esc(s.reset)
                   : "—"
               }</dd>
@@ -3466,7 +3466,7 @@ export class DebugView extends Component {
         const diagWarn = !selectedChild.inHubStatus
           ? `<strong>${esc(selectedChild.label)}</strong> has not sent a <span class="mono">JOIN</span> or window packet to <strong>${esc(s.label || "this Hub")}</strong> since the Hub booted. If ${esc(selectedChild.label)} was already powered on when the Hub was flashed or reset, power-cycle ${esc(selectedChild.label)} (or reflash both timers with the latest v0.1.4 build so Spokes auto-reannounce <span class="mono">JOIN</span>).`
           : frames === 0
-            ? `<strong>${esc(selectedChild.label)}</strong> joined TDMA Slot ${selectedChild.slot}, but <strong>0 timing window frames</strong> have reached the Hub. Its 5.8 GHz sweep schedule may have drifted out of phase with the Hub's beacon — power-cycle or reflash ${esc(selectedChild.label)} to re-lock.`
+            ? `<strong>${esc(selectedChild.label)}</strong> joined TDMA Slot ${selectedChild.slot}, but <strong>0 timing window frames</strong> have reached the Hub. Its 5.8 GHz sweep schedule may have drifted out of phase with the Hub's beacon; power-cycle or reflash ${esc(selectedChild.label)} to re-lock.`
             : selectedChild.msAgo !== undefined && selectedChild.msAgo >= 2500
               ? `Last window frame from <strong>${esc(selectedChild.label)}</strong> arrived <strong>${(selectedChild.msAgo / 1000).toFixed(1)}s ago</strong> (${frames} total frames). Check that ${esc(selectedChild.label)} is powered on and running the same firmware (${esc(s.fw)}).`
               : "";
@@ -3518,8 +3518,8 @@ export class DebugView extends Component {
                 <strong class="debug-net-inspector-kpi-val mono">${selectedChild.seq !== undefined && frames > 0 ? `#${selectedChild.seq}` : "—"}</strong>
               </div>
               <div class="debug-net-inspector-kpi">
-                <span class="debug-net-inspector-kpi-label">Practice gate &amp; server rx</span>
-                <strong class="debug-net-inspector-kpi-val">${selectedChild.serverGateLabel ? `${esc(selectedChild.serverGateLabel)} <span class="note mono">· ${selectedChild.serverFrames ?? 0} samples</span>` : `<span class="note">Unassigned in Track</span>`}</strong>
+                <span class="debug-net-inspector-kpi-label">Track timer &amp; server rx</span>
+                <strong class="debug-net-inspector-kpi-val">${selectedChild.serverGateLabel ? `${esc(selectedChild.serverGateLabel)} <span class="note mono">· ${selectedChild.serverFrames ?? 0} samples</span>` : `<span class="note">Off track</span>`}</strong>
               </div>
             </div>
             <div class="debug-net-inspector-bars-wrap">
@@ -3616,7 +3616,7 @@ export class DebugView extends Component {
       : linked
         ? `${esc(s.label || "T1")} · Spoke (Child · TDMA Slot ${s.slot}) · Tied to Parent Hub ${esc(parentLabel)} (Slot 1) on 2.4 GHz Ch ${ch}${beaconMsAgo !== undefined ? ` · beacon ${beaconMsAgo} ms ago` : ""}`
         : beaconStale
-          ? `${esc(s.label || "T1")} · Spoke (Slot ${s.slot}) · Hub sync beacon lost (${((beaconMsAgo ?? 0) / 1000).toFixed(1)}s ago) — out of phase or Hub offline`
+          ? `${esc(s.label || "T1")} · Spoke (Slot ${s.slot}) · Hub sync beacon lost (${((beaconMsAgo ?? 0) / 1000).toFixed(1)}s ago) · out of phase or Hub offline`
           : `${esc(s.label || "T1")} · Spoke (Child) · Searching for Parent Hub sync beacon on 2.4 GHz…`;
 
     this.slot("network").innerHTML = `
@@ -3675,7 +3675,7 @@ export class DebugView extends Component {
             <span class="debug-net-bridge-arrow">${icons.arrowRight(14)}</span>
             <span class="debug-net-bridge-end mono">${esc(parentLabel)} (Slot 1)</span>
           </div>
-          <span class="note">${linked ? `Beacon synced (${beaconMsAgo ?? 0} ms ago) · 4-sweep windows → ${esc(parentLabel)}` : beaconStale ? `Beacon lost (${((beaconMsAgo ?? 0) / 1000).toFixed(1)}s ago) — power-cycle or reflash Spoke` : "Waiting for Hub beacon & ASSIGN frame…"}</span>
+          <span class="note">${linked ? `Beacon synced (${beaconMsAgo ?? 0} ms ago) · 4-sweep windows → ${esc(parentLabel)}` : beaconStale ? `Beacon lost (${((beaconMsAgo ?? 0) / 1000).toFixed(1)}s ago) · power-cycle or reflash Spoke` : "Waiting for Hub beacon & ASSIGN frame…"}</span>
         </div>
 
         <div class="debug-subbox debug-net-parent-card">
@@ -3729,10 +3729,10 @@ export class DebugView extends Component {
         : !on
           ? "Connect a timer to stream live 5.8 GHz readings"
           : streamActive
-            ? "Streaming live 5.8 GHz readings — click to pause"
+            ? "Streaming live 5.8 GHz readings · click to pause"
             : inScanMode
-              ? "Paused while Spectrum scan is streaming — click to pause Spectrum scan and stream 5.8 GHz channels"
-              : "Paused — click to stream live 5.8 GHz readings";
+              ? "Paused while Spectrum scan is streaming · click to pause Spectrum scan and stream 5.8 GHz channels"
+              : "Paused · click to stream live 5.8 GHz readings";
     const ledClass = emg
       ? "is-emergency"
       : streamActive
@@ -3953,10 +3953,10 @@ export class DebugView extends Component {
       : !on
         ? "Connect a timer to stream live 50 Hz sweeps"
         : liveFollowOn
-          ? "Streaming 50 Hz sweeps — click to pause, or drag the chart to scroll back"
+          ? "Streaming 50 Hz sweeps · click to pause, or drag the chart to scroll back"
           : inScanMode
-            ? "Paused while Spectrum scan is streaming — click to pause Spectrum scan and stream 50 Hz sweeps"
-            : "Paused — click to stream live 50 Hz sweeps";
+            ? "Paused while Spectrum scan is streaming · click to pause Spectrum scan and stream 50 Hz sweeps"
+            : "Paused · click to stream live 50 Hz sweeps";
     const presets = [1, 2, 5, 10, 30, 120] as const;
     const isFloorY = !this.signalAutoY && Math.round(this.signalYMin) === -102 && Math.round(this.signalYMax) === -68;
     const xWinLabel =
@@ -4051,7 +4051,7 @@ export class DebugView extends Component {
       <div class="debug-chart-foot">
         <div class="debug-toolbar-left">
           <div class="debug-axis-pill ${this.signalAutoX ? "is-armed" : "is-unarmed"}" data-axis-pill>
-            <button type="button" class="debug-axis-pill-main" data-action="${this.signalAutoX ? "toggle-axis-menu" : "signal-reset-x"}" data-menu="signal-x" title="${this.signalAutoX ? `Auto X-axis time window (${xWinLabel}) — click to choose a time window preset` : "Click to reset X-axis time window to Auto X"}">
+            <button type="button" class="debug-axis-pill-main" data-action="${this.signalAutoX ? "toggle-axis-menu" : "signal-reset-x"}" data-menu="signal-x" title="${this.signalAutoX ? `Auto X-axis time window (${xWinLabel}) · click to choose a time window preset` : "Click to reset X-axis time window to Auto X"}">
               ${icons.target(13)}<span>${this.signalAutoX ? "Auto X" : `<span class="debug-hint-desktop">X: ${xWinLabel}</span><span class="debug-hint-mobile">X: ${xWinShort}</span>`}</span>
             </button>
             <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="signal-x" aria-expanded="${this.openAxisMenu === "signal-x"}" title="Choose X-axis time window">
@@ -4076,7 +4076,7 @@ export class DebugView extends Component {
             }
           </div>
           <div class="debug-axis-pill ${this.signalAutoY ? "is-armed" : "is-unarmed"}" data-axis-pill>
-            <button type="button" class="debug-axis-pill-main" data-action="${this.signalAutoY ? "toggle-axis-menu" : "signal-reset-y"}" data-menu="signal-y" title="${this.signalAutoY ? "Auto Y-axis scaling is ON — fits visible signal traces automatically. Click to choose a scale preset, or drag the Y-axis to stretch." : "Click to reset Y-axis range to Auto Y"}">
+            <button type="button" class="debug-axis-pill-main" data-action="${this.signalAutoY ? "toggle-axis-menu" : "signal-reset-y"}" data-menu="signal-y" title="${this.signalAutoY ? "Auto Y-axis scaling is ON (fits visible signal traces automatically). Click to choose a scale preset, or drag the Y-axis to stretch." : "Click to reset Y-axis range to Auto Y"}">
               ${icons.target(13)}<span>${this.signalAutoY ? "Auto Y" : `<span class="debug-hint-desktop">Y: ${Math.round(this.signalYMin)}…${Math.round(this.signalYMax)} dBm</span><span class="debug-hint-mobile">Y: ${ySigShort}</span>`}</span>
             </button>
             <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="signal-y" aria-expanded="${this.openAxisMenu === "signal-y"}" title="Choose Y-axis dBm scale">
@@ -4175,7 +4175,7 @@ export class DebugView extends Component {
             freqMHz: f,
             maxDbm: v,
             count: Math.max(1, hits),
-            detail: `Burst to ${v} dBm (+${v - floor} dB above ${floor} dBm floor, ${enterThr - v} dB below enter — will not trigger a lap)`,
+            detail: `Burst to ${v} dBm (+${v - floor} dB above ${floor} dBm floor, ${enterThr - v} dB below enter; will not trigger a lap)`,
           });
         }
       }
@@ -4462,7 +4462,7 @@ export class DebugView extends Component {
       findingsHost,
       this.signalFindings,
       "clear-signal-findings",
-      "Waiting for 50 Hz sweep samples — threshold crossings and in-band RF bursts will be logged here with timestamps.",
+      "Waiting for 50 Hz sweep samples. Threshold crossings and in-band RF bursts will be logged here with timestamps.",
       anyChDisabled ? (e) => e.channelIndex !== undefined && Boolean(this.signalEnabledCh[e.channelIndex]) : undefined
     );
 
@@ -4527,7 +4527,7 @@ export class DebugView extends Component {
           <button type="button" class="btn btn-sm ${this.scanning ? "btn-armed" : "btn-unarmed"}" data-action="scan" ${canScanOnce ? "" : "disabled"} title="${this.scanLive ? "Unavailable while Spectrum scan is streaming" : !rfOn ? "Unavailable while the 5.8 GHz receiver is off" : "Sweep the band once and add a row to the waterfall"}">
             ${icons.target(14)}<span>${this.scanning ? "Scanning…" : "Scan once"}</span>
           </button>
-          <button type="button" class="btn btn-sm ${this.scanLive ? "btn-armed" : "btn-unarmed"}" data-action="scan-live" ${canScanLive ? "" : "disabled"} title="${!rfOn ? "Unavailable while the 5.8 GHz receiver is off" : this.scanLive ? "Streaming continuous spectrum scan — click to pause" : "Paused — click to stream continuous spectrum scan (automatically pauses 8-channel stream)"}">
+          <button type="button" class="btn btn-sm ${this.scanLive ? "btn-armed" : "btn-unarmed"}" data-action="scan-live" ${canScanLive ? "" : "disabled"} title="${!rfOn ? "Unavailable while the 5.8 GHz receiver is off" : this.scanLive ? "Streaming continuous spectrum scan · click to pause" : "Paused · click to stream continuous spectrum scan (automatically pauses 8-channel stream)"}">
             ${this.scanLive ? icons.pause(14) : icons.play(14)}<span>${this.scanLive ? "Pause" : "Stream"}</span>
           </button>
         </div>
@@ -4563,7 +4563,7 @@ export class DebugView extends Component {
         <div class="debug-chart-foot">
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
-              <button type="button" class="debug-axis-pill-main" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="scan-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range — click to choose a frequency band preset, or drag X-axis to zoom"}">
+              <button type="button" class="debug-axis-pill-main" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="scan-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range · click to choose a frequency band preset, or drag X-axis to zoom"}">
                 ${icons.target(13)}<span>${isFreqZoomed ? `<span class="debug-hint-desktop">X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz</span><span class="debug-hint-mobile">${xScanShort}</span>` : "Auto X"}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-x" aria-expanded="${this.openAxisMenu === "scan-x"}" title="Choose frequency range">
@@ -4590,7 +4590,7 @@ export class DebugView extends Component {
               }
             </div>
             <div class="debug-axis-pill ${isScanFullY ? "is-armed" : "is-unarmed"}" data-axis-pill>
-              <button type="button" class="debug-axis-pill-main" data-action="${isScanFullY ? "toggle-axis-menu" : "scan-full-y"}" data-menu="scan-y" title="${isScanFullY ? `Full Y-axis scale (${DBM_MIN}…${DBM_MAX} dBm) — click to choose a scale preset, or drag the Y-axis` : "Click to reset Y-axis range to Full Y"}">
+              <button type="button" class="debug-axis-pill-main" data-action="${isScanFullY ? "toggle-axis-menu" : "scan-full-y"}" data-menu="scan-y" title="${isScanFullY ? `Full Y-axis scale (${DBM_MIN}…${DBM_MAX} dBm) · click to choose a scale preset, or drag the Y-axis` : "Click to reset Y-axis range to Full Y"}">
                 ${icons.target(13)}<span>${isScanFullY ? "Full Y" : this.scanAutoY ? "Auto Y" : `<span class="debug-hint-desktop">Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} dBm</span><span class="debug-hint-mobile">${yScanShort}</span>`}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-y" aria-expanded="${this.openAxisMenu === "scan-y"}" title="Choose spectrum Y-axis dBm scale">
@@ -4611,7 +4611,7 @@ export class DebugView extends Component {
               }
             </div>
             <div class="debug-axis-pill ${isFull5 ? "is-armed" : "is-unarmed"}" data-axis-pill>
-              <button type="button" class="debug-axis-pill-main" data-action="${isFull5 ? "toggle-axis-menu" : "scan-preset"}" data-menu="scan-band" data-start="5180" data-stop="5917" data-step="5" title="${isFull5 ? `Band sweep preset (${this.scanStartMHz}–${this.scanStopMHz} MHz, ${this.scanStepMHz} MHz step) — click to choose a band sweep preset` : "Click to reset band sweep to Full · 3 Hz (5180–5917 MHz, 5 MHz step)"}">
+              <button type="button" class="debug-axis-pill-main" data-action="${isFull5 ? "toggle-axis-menu" : "scan-preset"}" data-menu="scan-band" data-start="5180" data-stop="5917" data-step="5" title="${isFull5 ? `Band sweep preset (${this.scanStartMHz}–${this.scanStopMHz} MHz, ${this.scanStepMHz} MHz step) · click to choose a band sweep preset` : "Click to reset band sweep to Full · 3 Hz (5180–5917 MHz, 5 MHz step)"}">
                 ${icons.sliders(13)}<span>${bandLabel}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-band" aria-expanded="${this.openAxisMenu === "scan-band"}" title="Choose band sweep preset">
@@ -4670,7 +4670,7 @@ export class DebugView extends Component {
         <div class="debug-chart-foot">
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
-              <button type="button" class="debug-axis-pill-main" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="wf-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range — click to choose a frequency band preset, or drag X-axis to zoom"}">
+              <button type="button" class="debug-axis-pill-main" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="wf-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range · click to choose a frequency band preset, or drag X-axis to zoom"}">
                 ${icons.target(13)}<span>${isFreqZoomed ? `<span class="debug-hint-desktop">X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz</span><span class="debug-hint-mobile">${xScanShort}</span>` : "Auto X"}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="wf-x" aria-expanded="${this.openAxisMenu === "wf-x"}" title="Choose frequency range">
@@ -4697,7 +4697,7 @@ export class DebugView extends Component {
               }
             </div>
             <div class="debug-axis-pill ${!isWfRowsZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
-              <button type="button" class="debug-axis-pill-main" data-action="${!isWfRowsZoomed ? "toggle-axis-menu" : "wf-reset-rows"}" data-menu="wf-y" title="${!isWfRowsZoomed ? "Auto Y waterfall depth (80 passes) — click to choose a pass depth, or drag the Y-axis" : "Click to reset waterfall pass depth to Auto Y (80 passes)"}">
+              <button type="button" class="debug-axis-pill-main" data-action="${!isWfRowsZoomed ? "toggle-axis-menu" : "wf-reset-rows"}" data-menu="wf-y" title="${!isWfRowsZoomed ? "Auto Y waterfall depth (80 passes) · click to choose a pass depth, or drag the Y-axis" : "Click to reset waterfall pass depth to Auto Y (80 passes)"}">
                 ${icons.target(13)}<span>${!isWfRowsZoomed ? "Auto Y" : `<span class="debug-hint-desktop">Y: ${this.spectrumAcc.visibleRows} passes</span><span class="debug-hint-mobile">Y: ${this.spectrumAcc.visibleRows}p</span>`}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="wf-y" aria-expanded="${this.openAxisMenu === "wf-y"}" title="Choose waterfall vertical pass depth">
@@ -4780,7 +4780,7 @@ export class DebugView extends Component {
         el,
         this.scanFindings,
         "clear-scan-findings",
-        "Run Scan once or click Stream — detected RF peaks (≥ 6 dB above band median) and 5 GHz Wi-Fi activity will be logged here with timestamps.",
+        "Run Scan once or click Stream. Detected RF peaks (≥ 6 dB above band median) and 5 GHz Wi-Fi activity will be logged here with timestamps.",
         isZoomed ? (e) => e.freqMHz !== undefined && e.freqMHz >= z0! && e.freqMHz <= z1! : undefined
       );
     }
@@ -5018,8 +5018,8 @@ export class DebugView extends Component {
         ? "Off · connect a timer first"
         : `${emg ? "Emergency mode" : "Connected"} · ${this.serialLines.length} lines · type HELP for commands`;
     const introBanner = on
-      ? "# SlapRF USB serial terminal — type HELP for commands, Up/Down for history, Tab to complete.\n"
-      : "# Disconnected — connect a timer over USB to open an interactive serial session.\n";
+      ? "# SlapRF USB serial terminal · type HELP for commands, Up/Down for history, Tab to complete.\n"
+      : "# Disconnected · connect a timer over USB to open an interactive serial session.\n";
     const bodyRaw = this.serialLines.length
       ? this.serialLines.join("\n") + "\n"
       : introBanner;
@@ -5110,7 +5110,7 @@ export class DebugView extends Component {
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="log-wrap" aria-pressed="${this.logWrap}" title="${this.logWrap ? "Wrap lines: ON (click to disable)" : "Wrap lines: OFF (click to enable)"}" aria-label="Wrap lines">${this.logWrap ? icons.wrapText(17) : icons.wrapTextOff(17)}</button>
           <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="clear-log" title="Clear live log" aria-label="Clear live log">${icons.trash(17)}</button>
-          <button type="button" class="btn btn-sm ${this.logOn ? "btn-armed" : "btn-unarmed"}" data-action="log" ${on ? "" : "disabled"} title="${this.logOn ? "Streaming USB log mirror — click to pause" : "Paused — click to stream USB log mirror"}">
+          <button type="button" class="btn btn-sm ${this.logOn ? "btn-armed" : "btn-unarmed"}" data-action="log" ${on ? "" : "disabled"} title="${this.logOn ? "Streaming USB log mirror · click to pause" : "Paused · click to stream USB log mirror"}">
             ${this.logOn ? icons.pause(14) : icons.play(14)}<span>${this.logOn ? "Pause" : "Stream"}</span>
           </button>
         </div>

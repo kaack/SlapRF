@@ -49,7 +49,7 @@ export class SectionStats extends Component {
       <header class="card-head">
         <div class="settings-intro">
           <h2>Section stats</h2>
-          <p>Your best and typical time through each section, across every lap this session. <strong>Lost vs best</strong> is the gap between the two — the time you usually leave on the table there.</p>
+          <p>Best and median time in each section across the session. <strong>Lost vs best</strong> shows how much time you typically lose compared to your best pass.</p>
         </div>
       </header>`;
 
@@ -126,7 +126,7 @@ export class PracticeRecommendation extends Component {
       <header class="card-head">
         <div class="settings-intro">
           <h2>Recommendation</h2>
-          <p>Plain-language coaching insights based on where your typical pass loses the most time compared to your best.</p>
+          <p>Where your typical pass loses the most time compared to your best.</p>
         </div>
       </header>`;
 
@@ -147,7 +147,7 @@ export class PracticeRecommendation extends Component {
     const points: string[] = [];
 
     if (top.givenAway < SIGNIFICANT_GAP_SEC) {
-      lead = `You're flying consistently — your typical pass is within ${SIGNIFICANT_GAP_SEC.toFixed(2)}s of your best in every section.`;
+      lead = `You're flying consistently: your typical pass is within ${SIGNIFICANT_GAP_SEC.toFixed(2)}s of your best in every section.`;
       const slowestExit = [...ready].sort((a, b) => a.typicalExitMph - b.typicalExitMph)[0];
       points.push(
         `To go faster now you need new personal bests rather than more consistency. Try carrying more speed out of <strong>${esc(sectionName(this.store, slowestExit))}</strong>, where your exit speed is lowest (${slowestExit.typicalExitMph.toFixed(0)} mph).`
@@ -155,7 +155,7 @@ export class PracticeRecommendation extends Component {
     } else {
       lead = `Practice <strong>${esc(sectionName(this.store, top))}</strong> next.`;
       points.push(
-        `Your typical pass takes <strong class="mono">${fmtTime(top.typical)}</strong>, but your best is <strong class="mono">${fmtTime(top.best)}</strong> — that's <strong>${top.givenAway.toFixed(3)}s</strong> left on the table every lap, more than any other section.`
+        `Your typical pass takes <strong class="mono">${fmtTime(top.typical)}</strong> vs your best of <strong class="mono">${fmtTime(top.best)}</strong> (<strong>${top.givenAway.toFixed(3)}s</strong> lost per lap, more than any other section).`
       );
       const mphDrop = top.bestExitMph - top.typicalExitMph;
       if (mphDrop >= NOTABLE_MPH) {
@@ -171,7 +171,7 @@ export class PracticeRecommendation extends Component {
     }
     if (linkGain > 0.005) {
       points.push(
-        `Linking your best time in every section would be a <strong class="mono">${fmtTime(possible)}</strong> lap — ${linkGain.toFixed(3)}s faster than your current best of ${fmtTime(bestLap)}.`
+        `Linking your best time in every section would be a <strong class="mono">${fmtTime(possible)}</strong> lap (${linkGain.toFixed(3)}s faster than your current best of ${fmtTime(bestLap)}).`
       );
     }
 

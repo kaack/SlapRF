@@ -113,7 +113,7 @@ export function timerHardwareId(p: { timerId: number; timerLabel?: string; isHub
 }
 
 /** Shown wherever timers are placed on the track (the Hub is a USB dongle that may also time on the track). */
-export const HUB_ON_GATE_NOTE = "Placing the Hub on the track makes it sweep too — keep it within USB cable reach";
+export const HUB_ON_GATE_NOTE = "Placing the Hub on the track makes it time passes too (keep it within USB cable reach).";
 
 /** True when the timer is currently assigned to a gate on the active course. */
 export function timerHasGate(store: AppStore, timerId: number): boolean {

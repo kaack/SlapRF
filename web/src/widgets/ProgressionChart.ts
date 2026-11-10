@@ -344,7 +344,7 @@ export class ProgressionChart extends Component {
         this.store.enabledPilots.some((p) => lapsFor(this.store, p.slotIndex).length > 0);
       ctx.fillText(
         anyLapsExist
-          ? "All pilots hidden — click a pilot in the legend below to plot their laps"
+          ? "All pilots hidden. Click a pilot in the legend below to plot their laps."
           : this.metric.kind === "lap"
           ? "Lap times appear here as pilots complete laps"
           : "No times for this section yet",
