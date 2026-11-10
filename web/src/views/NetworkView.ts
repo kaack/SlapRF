@@ -18,20 +18,16 @@ const NETWORK_PREFS_KEY = "slaprf.ui.network_prefs.v1";
 
 /**
  * Dedicated Network page (`#/network`):
- * 1. Connect to a Hub or Spoke timer via Direct USB-C (WebSerial).
- * 2. Inspect the 2.4 GHz TDMA network topology (Parent Hub Slot 1 + Child Spokes Slots 2–7, with live Spoke RSSI inspector).
+ * Inspect the 2.4 GHz TDMA network topology (Parent Hub Slot 1 + Child Spokes Slots 2–7, with live Spoke RSSI inspector).
  */
 export class NetworkView extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
   private readonly console: TimerConsole;
   private status: TimerStatus | null = null;
-  private showAllPorts = false;
-  private error: string | null = null;
   private selectedNetworkSpokeSlot: number | null = null;
   private spokeRateTracker = new Map<number, { frames: number; atMs: number; ratePktPerSec: number }>();
   private signalEnabledCh: boolean[] = [true, true, true, true, true, true, true, true];
-  private lastConnHtml = "";
   private lastNetHtml = "";
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
@@ -40,21 +36,12 @@ export class NetworkView extends Component {
     this.api = api;
     this.console = sharedTimerConsole;
     this.loadPrefs();
-    this.console.showAllPorts = this.showAllPorts;
     if (this.console.connected && this.console.lastStatus) {
       this.status = this.console.lastStatus;
     }
 
     el.innerHTML = `
       <div class="settings debug-page network-page">
-        <section class="settings-section">
-          <div class="settings-intro">
-            <h2>Connectivity</h2>
-            <p>Connect the Hub (or a Spoke) over Direct USB-C to inspect the 2.4 GHz course network.</p>
-          </div>
-          <div class="debug-status-layout" data-slot="connection"></div>
-        </section>
-
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Network view</h2>
@@ -66,7 +53,6 @@ export class NetworkView extends Component {
 
     const unsubConsole = this.console.subscribe({
       onConnect: () => {
-        this.error = null;
         this.renderAll();
       },
       onStatus: (s) => {
@@ -77,15 +63,10 @@ export class NetworkView extends Component {
             this.signalEnabledCh = nextEnabled;
           }
         }
-        this.renderConnection();
         this.renderNetworkView();
       },
       onConfig: () => {
         this.renderNetworkView();
-      },
-      onError: (msg) => {
-        this.error = msg;
-        this.renderConnection();
       },
       onDisconnect: () => {
         this.status = null;
@@ -94,11 +75,10 @@ export class NetworkView extends Component {
     });
 
     const unsubState = this.console.onStateChange(() => {
-      this.renderConnection();
+      this.renderNetworkView();
     });
 
     const unsubBridge = this.api.hubBridge.subscribe(() => {
-      this.renderConnection();
       this.renderNetworkView();
     });
 
@@ -108,14 +88,6 @@ export class NetworkView extends Component {
     });
 
     this.listen(el, "click", (e) => void this.onClick(e));
-    this.listen(el, "change", (e) => {
-      const t = e.target as HTMLInputElement;
-      if (t.matches("[data-all-ports]")) {
-        this.showAllPorts = t.checked;
-        this.console.showAllPorts = t.checked;
-        this.savePrefs();
-      }
-    });
 
     this.onDispose(() => {
       unsubConsole();
@@ -133,7 +105,6 @@ export class NetworkView extends Component {
       const raw = window.localStorage.getItem(NETWORK_PREFS_KEY);
       if (!raw) return;
       const p = JSON.parse(raw) as Record<string, unknown>;
-      if (typeof p.showAllPorts === "boolean") this.showAllPorts = p.showAllPorts;
       if (Array.isArray(p.signalEnabledCh) && p.signalEnabledCh.length === 8) {
         this.signalEnabledCh = p.signalEnabledCh.map(Boolean);
       }
@@ -150,7 +121,6 @@ export class NetworkView extends Component {
       window.localStorage.setItem(
         NETWORK_PREFS_KEY,
         JSON.stringify({
-          showAllPorts: this.showAllPorts,
           signalEnabledCh: this.signalEnabledCh,
           selectedNetworkSpokeSlot: this.selectedNetworkSpokeSlot,
         })
@@ -186,124 +156,18 @@ export class NetworkView extends Component {
   private async onClick(e: Event): Promise<void> {
     const t = (e.target as HTMLElement).closest<HTMLElement>("[data-action]");
     if (!t) return;
-    this.error = null;
-    try {
-      switch (t.dataset.action) {
-        case "usb-connect":
-          await this.console.connectAndStart(this.showAllPorts);
-          break;
-        case "usb-disconnect":
-          await this.console.disconnectCleanly();
-          break;
-        case "select-net-spoke": {
-          const slotNum = Number(t.dataset.spokeSlot);
-          if (slotNum >= 2 && slotNum <= 7) {
-            this.selectedNetworkSpokeSlot = slotNum;
-            this.renderNetworkView();
-            this.savePrefs();
-          }
-          break;
-        }
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      if (!/No port selected|cancel/i.test(msg)) {
-        this.error = msg;
+    if (t.dataset.action === "select-net-spoke") {
+      const slotNum = Number(t.dataset.spokeSlot);
+      if (slotNum >= 2 && slotNum <= 7) {
+        this.selectedNetworkSpokeSlot = slotNum;
+        this.renderNetworkView();
+        this.savePrefs();
       }
     }
-    this.renderConnection();
   }
 
   private renderAll(): void {
-    this.renderConnection();
     this.renderNetworkView();
-  }
-
-  private renderConnection(): void {
-    const hub = this.api.hubBridge;
-    const led = hub.getLedSummary();
-    const usbOn = this.console.connected;
-    const usbSupported = TimerConsole.supported();
-    const usbBusy = Boolean(this.console.busyLabel || this.console.reconnecting);
-    const s = this.activeStatus();
-
-    const dotClass =
-      led.color === "neon"
-        ? "is-up"
-        : led.color === "blue"
-          ? "is-spoke"
-          : led.color === "yellow"
-            ? "is-warn"
-            : led.color === "red"
-              ? "is-bad"
-              : "";
-
-    let statusText = "Disconnected · plug in the Hub over USB-C and connect below";
-    if (usbOn && this.status) {
-      const st = this.status;
-      statusText = st.emergencyMode
-        ? `${esc(st.label || "(unnamed)")} · Emergency mode · radio & sweeps halted · ${esc(st.fp)}`
-        : `${esc(st.label || "(unnamed)")} · ${st.role === 1 ? "Hub (Parent · Slot 1)" : `Spoke (Child · Slot ${st.slot || "?"})`} · ${esc(st.fw)} · ${esc(st.fp)} · Direct USB-C`;
-    } else if (usbOn) {
-      statusText = "Connected over Direct USB-C · reading timer identity…";
-    } else if (this.console.reconnecting) {
-      statusText = `Lost USB connection · trying to reconnect (${this.console.reconnectAttempt}/${this.console.maxReconnectAttempts})…`;
-    } else if (led.color === "red") {
-      statusText = esc(this.console.lastError || "All reconnect attempts failed.");
-    }
-
-    const usbBtnLabel = usbOn
-      ? this.status?.label
-        ? `Disconnect · ${esc(this.status.label)}`
-        : "Disconnect USB"
-      : this.console.reconnecting
-        ? `Reconnecting (${this.console.reconnectAttempt}/${this.console.maxReconnectAttempts})…`
-        : this.console.busyLabel
-          ? `${esc(this.console.busyLabel)}…`
-          : "Connect USB-C";
-    const methodBodyHtml = `
-        <div class="option-row">
-          <div>
-            <div class="option-title">Direct USB-C connection</div>
-            <div class="option-sub">Plug the Hub (or a Spoke) into this computer over USB-C to automatically detect its role, TDMA slot, and peer timers.</div>
-          </div>
-          <div class="debug-connect-actions">
-            ${
-              !usbOn
-                ? `<label class="check debug-port-filter">
-                    <input type="checkbox" data-all-ports ${this.showAllPorts ? "checked" : ""}/>
-                    <span>Show non-XIAO ports</span>
-                  </label>`
-                : ""
-            }
-            <button type="button" class="btn btn-sm ${usbOn ? "btn-armed" : "btn-unarmed"}" data-action="${usbOn ? "usb-disconnect" : "usb-connect"}" ${usbSupported && !usbBusy ? "" : "disabled"}>
-              ${usbOn ? icons.plug(14) : icons.plugOff(14)}<span>${usbBtnLabel}</span>
-            </button>
-          </div>
-        </div>
-        ${!usbSupported ? `<div class="sim-error-note" style="margin-top:8px;">Direct USB-C requires Chrome, Edge, or Brave (WebSerial).</div>` : ""}`;
-
-    const connHtml = `
-      <div class="debug-status-topbar">
-        <span class="debug-led-status">
-          <span class="status-dot ${dotClass}" data-conn-dot></span>
-          <span class="debug-head-note" data-conn-status-text>${statusText}</span>
-        </span>
-      </div>
-      <div class="debug-subbox">
-        ${methodBodyHtml}
-        ${this.error ? `<div class="sim-error-note" style="margin-top:8px;">${esc(this.error)}</div>` : ""}
-      </div>`;
-    const connKey = `${dotClass}|${methodBodyHtml}|${this.error ?? ""}`;
-    if (connKey === this.lastConnHtml) {
-      const noteEl = this.slot("connection").querySelector<HTMLElement>("[data-conn-status-text]");
-      if (noteEl) {
-        noteEl.innerHTML = statusText;
-        return;
-      }
-    }
-    this.lastConnHtml = connKey;
-    this.slot("connection").innerHTML = connHtml;
   }
 
   private renderNetworkView(): void {
@@ -334,7 +198,7 @@ export class NetworkView extends Component {
         <div class="debug-status-topbar">
           <span class="debug-led-status">
             <span class="status-dot ${this.console.connected ? "is-warn" : ""}"></span>
-            <span class="debug-head-note">${this.console.connected ? "Reading timer network role…" : "Off · connect a Hub or Spoke above to inspect its parent/child network links"}</span>
+            <span class="debug-head-note">${this.console.connected ? "Reading timer network role…" : "Off · click Connect in the top bar to inspect parent/child network links"}</span>
           </span>
           <div class="debug-connect-actions">
             <span class="badge">—</span>

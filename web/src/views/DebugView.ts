@@ -2918,7 +2918,7 @@ export class DebugView extends Component {
           ? "Emergency mode active · exit emergency mode to run 5.8 GHz RF checks"
           : on
             ? "Ready · takes about 10 s (pauses timing briefly during scan)"
-            : `Off · <a href="#/network" class="link-inline">connect a timer on the Network page</a>`;
+            : "Off · click Connect in the top bar";
     const consoleLines = this.checks.length
       ? esc(
           this.checks
@@ -2935,7 +2935,7 @@ export class DebugView extends Component {
               ? "# Timer is in Emergency Mode (radio and 50 Hz sweeps halted for rescue/reflashing). Click \"Exit emergency mode\" before running RF self-tests."
               : on
                 ? "# Click \"Run self-test\" to verify console, identity, 5.8 GHz receiver, sweep timing, memory, and course link."
-                : "# Connect a timer over USB-C on the Network page to run the hardware self-test."
+                : "# Connect a timer over USB-C in the top bar to run the hardware self-test."
         );
     this.slot("selftest").innerHTML = `
       <div class="debug-card-head debug-log-head">
@@ -2970,7 +2970,7 @@ export class DebugView extends Component {
         : `${esc(s.label || "(unnamed)")} · ${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`} · polling every 2 s · up ${fmtUptime(s.uptimeMs)}`
       : on
         ? "Waiting for timer status…"
-        : `Off · <a href="#/network" class="link-inline">connect a timer on the Network page</a>`;
+        : "Off · click Connect in the top bar";
 
     const rfBadge = !s
       ? `<span class="badge">—</span>`
@@ -3699,7 +3699,7 @@ export class DebugView extends Component {
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}" data-live-led></span>
-          <span class="debug-head-note" data-live-note>${emg ? "Emergency mode · 5.8 GHz receiver & sweeps halted" : on ? "Waiting for sweep stream…" : `Paused · <a href="#/network" class="link-inline">connect on the Network page</a>`}</span>
+          <span class="debug-head-note" data-live-note>${emg ? "Emergency mode · 5.8 GHz receiver & sweeps halted" : on ? "Waiting for sweep stream…" : "Paused · click Connect in the top bar"}</span>
         </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm ${rfOn ? "btn-armed" : "btn-unarmed"}" data-action="rf" ${on && this.status && !inScanMode && !emg ? "" : "disabled"} title="${emg ? "Exit emergency mode first to toggle the 5.8 GHz receiver" : inScanMode ? "Pause Spectrum scan first to toggle the 5.8 GHz receiver" : "Switch the hardware 5.8 GHz receiver on or off"}">
@@ -3773,7 +3773,7 @@ export class DebugView extends Component {
     }
     if (note) {
       if (!on) {
-        note.innerHTML = `Paused · <a href="#/network" class="link-inline">connect on the Network page</a>`;
+        note.textContent = "Paused · click Connect in the top bar";
       } else if (emg) {
         note.textContent = "Emergency mode · 5.8 GHz receiver & sweeps halted";
       } else if (inScanMode) {
@@ -3947,7 +3947,7 @@ export class DebugView extends Component {
               ? "Off · 5.8 GHz receiver is switched off"
               : on
                 ? "Paused · click Stream to record 50 Hz sweeps"
-                : `Paused · <a href="#/network" class="link-inline">connect on the Network page</a>`;
+                : "Paused · click Connect in the top bar";
     this.slot("signal-head").innerHTML = `
       <div class="debug-status-topbar">
         <span class="debug-led-status" title="${liveTitle}">
