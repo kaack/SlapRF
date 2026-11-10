@@ -9,7 +9,7 @@ import (
 
 func TestSlidingWindowRecovers100PercentUnder50PercentPacketLoss(t *testing.T) {
 	eng := tracker.NewRealEngine()
-	rx := NewWiFiUDPReceiver(":0", eng)
+	rx := NewHubFrameDecoder(eng)
 	rx.IngestPacket(EncodeHelloFrame(2, 2, 0x00000002, 1, 50, "S1"), 0)
 
 	// Simulate 40 consecutive 20 ms 5.8 GHz sweeps (seq 240..255, wrapping around to 0..23)
@@ -72,7 +72,7 @@ func TestSlidingWindowRecovers100PercentUnder50PercentPacketLoss(t *testing.T) {
 
 func TestCorruptedPacketRejectedAndHealedByNextWindow(t *testing.T) {
 	eng := tracker.NewRealEngine()
-	rx := NewWiFiUDPReceiver(":0", eng)
+	rx := NewHubFrameDecoder(eng)
 	rx.IngestPacket(EncodeHelloFrame(3, 2, 0x00000003, 1, 50, "S2"), 0)
 
 	var samples [4]domain.TimerTelemetryFrame
@@ -100,7 +100,7 @@ func TestCorruptedPacketRejectedAndHealedByNextWindow(t *testing.T) {
 
 func TestHelloMapsHubSlotToStableTimerByFingerprint(t *testing.T) {
 	eng := tracker.NewRealEngine()
-	rx := NewWiFiUDPReceiver(":0", eng)
+	rx := NewHubFrameDecoder(eng)
 
 	// Board announces itself in Hub slot 5 running the 100 Hz indoor profile.
 	rx.IngestPacket(EncodeHelloFrame(5, 2, 0xCAFEBABE, 3, 100, "S7"), 0)
@@ -137,7 +137,7 @@ func TestHelloMapsHubSlotToStableTimerByFingerprint(t *testing.T) {
 
 func TestFramesFromUnannouncedSlotAreDropped(t *testing.T) {
 	eng := tracker.NewRealEngine()
-	rx := NewWiFiUDPReceiver(":0", eng)
+	rx := NewHubFrameDecoder(eng)
 	if got := rx.DecodePacket(EncodeWindowFrame(4, 4100, -92, []domain.TimerTelemetryFrame{{SeqNum: 1}}), 1_000_000); len(got) != 0 {
 		t.Fatalf("expected frames from a slot without HELLO to be dropped, got %d", len(got))
 	}
@@ -175,7 +175,7 @@ func TestSelectivePilotChannelTableAndUpperPoolMapping(t *testing.T) {
 		t.Fatalf("invalid channels frame: %x", pkt)
 	}
 
-	rx := NewWiFiUDPReceiver(":0", eng)
+	rx := NewHubFrameDecoder(eng)
 	rx.IngestPacket(EncodeHelloFrame(1, 1, 0xBE7C0001, 3, 100, "H1"), 0)
 	var sample domain.TimerTelemetryFrame
 	sample.SeqNum = 1

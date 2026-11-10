@@ -244,7 +244,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/gates/provision", s.handleProvisionGate)
 	mux.HandleFunc("/api/firmware/xiao-c5.bin", s.handleFirmwareImage)
 	mux.HandleFunc("/api/debug/timer", s.handleDebugTimer)
-	mux.HandleFunc("/api/wifi/networks", s.handleWifiNetworks)
 	mux.HandleFunc("/api/thresholds", s.handleThresholds)
 	mux.HandleFunc("/api/gates/rules", s.handleGateRules)
 	mux.HandleFunc("/api/sim/toggle", s.handleToggleSim)
@@ -554,9 +553,9 @@ func (s *Server) handleProvisionGate(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleFirmwareImage builds and returns the XIAO ESP32-C5 firmware binary with the
-// requested role (`hub` = Start Gate + Wi-Fi Bridge to laptop; `spoke` = ESP-NOW
-// sector gate that talks to the Hub timer), flashed TimerLabel, current 8-channel pilot
-// frequency table, and optional Wi-Fi credentials stamped into the `SLAPRF02` block.
+// requested role (`hub` = Start Gate + USB dongle bridge to the laptop; `spoke` = ESP-NOW
+// sector gate that talks to the Hub timer), flashed TimerLabel, and current 8-channel pilot
+// frequency table stamped into the `SLAPRF02` block (Wi-Fi fields are left empty).
 func (s *Server) handleFirmwareImage(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -586,8 +585,6 @@ func (s *Server) handleFirmwareImage(w http.ResponseWriter, r *http.Request) {
 		Fingerprint:  firmware.ParseFingerprint(r.URL.Query().Get("fingerprint")),
 		TimerLabel:   r.URL.Query().Get("label"),
 		SlotFreqsMHz: freqs,
-		WifiSSID:     r.URL.Query().Get("ssid"),
-		WifiPass:     r.URL.Query().Get("pass"),
 	}
 	// Prefer the compiled ESP-IDF image for this profile (web/firmware/, filled by CI);
 	// fall back to the built-in placeholder image when it isn't available.

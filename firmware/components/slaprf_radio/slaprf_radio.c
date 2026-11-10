@@ -1,15 +1,13 @@
 /**
- * slaprf_radio — 2.4 GHz Wi-Fi / ESP-NOW link, Hub HTTP/SSE bridge, sweep pacing, and USB config
- * readback for the XIAO ESP32-C5. Shared by every firmware profile.
+ * slaprf_radio — 2.4 GHz Wi-Fi / ESP-NOW link, USB relay of Hub frames, sweep pacing, and USB
+ * config readback for the XIAO ESP32-C5. Shared by every firmware profile.
  */
 #include "slaprf_radio.h"
 
-#include <errno.h>
 #include <string.h>
 
 #include "driver/usb_serial_jtag.h"
 #include "esp_event.h"
-#include "esp_http_server.h"
 #include "esp_log.h"
 #include "esp_netif.h"
 #include "esp_now.h"
@@ -17,10 +15,8 @@
 #include "esp_timer.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
-#include "freertos/event_groups.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-#include "lwip/sockets.h"
 #include "nvs_flash.h"
 #include "soc/soc_caps.h"
 
@@ -28,36 +24,21 @@ static const char *TAG = "slaprf_radio";
 
 #define BEACON_MAGIC_0      0xC5
 #define BEACON_MAGIC_1      0x5D // Hub -> Spokes sync beacon (4 bytes, or 20 bytes with 8 x uint16_t channel table)
-#define CHANNELS_MAGIC_1    0x5E // Laptop/Browser -> Hub active pilot channel table (19 bytes: 0xC5, 0x5E, 8 x uint16_t LE, crc8)
 #define RX_QUEUE_DEPTH      32
 #define ESPNOW_MAX_FRAME    250
-#define WS_QUEUE_DEPTH      16
-#define WS_MAX_FRAME        104
 
 typedef struct {
     uint8_t len;
     uint8_t data[ESPNOW_MAX_FRAME];
 } rx_item_t;
 
-typedef struct {
-    uint8_t len;
-    uint8_t data[WS_MAX_FRAME];
-} ws_tx_item_t;
-
 static const uint8_t BROADCAST_MAC[ESP_NOW_ETH_ALEN] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 static QueueHandle_t s_rx_queue;
-static QueueHandle_t s_ws_tx_queue;
-static httpd_handle_t s_httpd;
-static volatile bool s_ws_work_queued;
 static volatile int64_t s_last_beacon_us;
 static uint8_t s_hub_beacon_mac[6];
 static volatile bool s_has_hub_beacon_mac;
 static esp_netif_t *s_sta_netif;
-static esp_netif_t *s_ap_netif;
-static uint8_t s_http_hellos[7][36];
-static EventGroupHandle_t s_wifi_events;
-#define WIFI_GOT_IP_BIT BIT0
 
 static uint8_t xor8(const uint8_t *data, uint32_t len) {
     uint8_t c = 0;
@@ -65,234 +46,6 @@ static uint8_t xor8(const uint8_t *data, uint32_t len) {
         c ^= data[i];
     }
     return c;
-}
-
-static int hex_nibble(char c) {
-    if (c >= '0' && c <= '9') return c - '0';
-    if (c >= 'A' && c <= 'F') return c - 'A' + 10;
-    if (c >= 'a' && c <= 'f') return c - 'a' + 10;
-    return -1;
-}
-
-static void apply_channels_packet(const uint8_t *pkt, size_t len) {
-    if (len == 19 && pkt[0] == BEACON_MAGIC_0 && pkt[1] == CHANNELS_MAGIC_1 && xor8(pkt, 18) == pkt[18]) {
-        uint16_t freqs[8];
-        for (int i = 0; i < 8; i++) {
-            freqs[i] = (uint16_t)(pkt[2 + i * 2] | ((uint16_t)pkt[3 + i * 2] << 8));
-        }
-        slaprf_diag_set_net_channels(freqs);
-    }
-}
-
-static void set_cors_headers(httpd_req_t *req) {
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Methods", "GET, POST, OPTIONS");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Headers", "*");
-    httpd_resp_set_hdr(req, "Access-Control-Allow-Private-Network", "true");
-    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
-}
-
-static esp_err_t hub_options_handler(httpd_req_t *req) {
-    set_cors_headers(req);
-    httpd_resp_set_status(req, "204 No Content");
-    return httpd_resp_send(req, NULL, 0);
-}
-
-static esp_err_t hub_info_handler(httpd_req_t *req) {
-    set_cors_headers(req);
-    httpd_resp_set_type(req, "application/json");
-    static const char body[] = "{\"slaprfHub\":true,\"ws\":\"/ws\"}";
-    return httpd_resp_send(req, body, sizeof(body) - 1);
-}
-
-static esp_err_t hub_channels_handler(httpd_req_t *req) {
-    set_cors_headers(req);
-    char query[96];
-    if (httpd_req_get_url_query_str(req, query, sizeof(query)) == ESP_OK) {
-        const char *hex = strstr(query, "hex=");
-        if (hex != NULL) {
-            hex += 4;
-            uint8_t pkt[19];
-            bool ok = true;
-            for (int i = 0; i < 19; i++) {
-                int hi = hex_nibble(hex[i * 2]);
-                int lo = hex_nibble(hex[i * 2 + 1]);
-                if (hi < 0 || lo < 0) { ok = false; break; }
-                pkt[i] = (uint8_t)((hi << 4) | lo);
-            }
-            if (ok) {
-                apply_channels_packet(pkt, sizeof(pkt));
-            }
-        }
-    }
-    httpd_resp_set_type(req, "application/json");
-    static const char body[] = "{\"ok\":true}";
-    return httpd_resp_send(req, body, sizeof(body) - 1);
-}
-
-static esp_err_t hub_ws_handler(httpd_req_t *req) {
-    if (req->method == HTTP_GET) {
-        int sockfd = httpd_req_to_sockfd(req);
-        if (sockfd >= 0) {
-            struct timeval tv = {.tv_sec = 0, .tv_usec = 250000};
-            setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-        }
-        // Immediately replay cached HELLO frames as binary WebSocket packets so Hub & Spokes appear right away
-        for (int i = 0; i < 7; i++) {
-            if (s_http_hellos[i][0] == BEACON_MAGIC_0 && s_http_hellos[i][1] == 0x5A) {
-                httpd_ws_frame_t hello_pkt = {
-                    .final = true,
-                    .fragmented = false,
-                    .type = HTTPD_WS_TYPE_BINARY,
-                    .payload = s_http_hellos[i],
-                    .len = 36,
-                };
-                if (httpd_ws_send_frame(req, &hello_pkt) != ESP_OK) {
-                    break;
-                }
-            }
-        }
-        return ESP_OK;
-    }
-
-    httpd_ws_frame_t ws_pkt;
-    memset(&ws_pkt, 0, sizeof(ws_pkt));
-    esp_err_t ret = httpd_ws_recv_frame(req, &ws_pkt, 0);
-    if (ret != ESP_OK) {
-        return ret;
-    }
-    if (ws_pkt.len > 0 && ws_pkt.len <= 64) {
-        uint8_t buf[64];
-        ws_pkt.payload = buf;
-        ret = httpd_ws_recv_frame(req, &ws_pkt, ws_pkt.len);
-        if (ret != ESP_OK) {
-            return ret;
-        }
-        if (ws_pkt.type == HTTPD_WS_TYPE_BINARY && ws_pkt.len == 19) {
-            apply_channels_packet(buf, ws_pkt.len);
-        }
-    }
-    return ESP_OK;
-}
-
-static void ws_flush_work_fn(void *arg) {
-    (void)arg;
-    s_ws_work_queued = false;
-    if (s_httpd == NULL || s_ws_tx_queue == NULL) {
-        return;
-    }
-    int client_fds[8];
-    size_t fds_count = 8;
-    int ws_fds[8];
-    size_t ws_count = 0;
-    if (httpd_get_client_list(s_httpd, &fds_count, client_fds) == ESP_OK) {
-        for (size_t i = 0; i < fds_count; i++) {
-            if (httpd_ws_get_fd_info(s_httpd, client_fds[i]) == HTTPD_WS_CLIENT_WEBSOCKET) {
-                ws_fds[ws_count++] = client_fds[i];
-            }
-        }
-    }
-
-    ws_tx_item_t item;
-    while (xQueueReceive(s_ws_tx_queue, &item, 0) == pdTRUE) {
-        if (ws_count == 0) {
-            continue;
-        }
-        httpd_ws_frame_t ws_pkt = {
-            .final = true,
-            .fragmented = false,
-            .type = HTTPD_WS_TYPE_BINARY,
-            .payload = item.data,
-            .len = item.len,
-        };
-        for (size_t i = 0; i < ws_count; i++) {
-            if (ws_fds[i] < 0) continue;
-            if (httpd_ws_send_frame_async(s_httpd, ws_fds[i], &ws_pkt) == ESP_OK) {
-                httpd_sess_update_lru_counter(s_httpd, ws_fds[i]);
-            } else {
-                httpd_sess_trigger_close(s_httpd, ws_fds[i]);
-                ws_fds[i] = -1;
-            }
-        }
-    }
-}
-
-static void enqueue_ws_frame(const uint8_t *raw, uint32_t len) {
-    if (raw == NULL || len < 4 || len > WS_MAX_FRAME) {
-        return;
-    }
-    if (len == 36 && raw[0] == BEACON_MAGIC_0 && raw[1] == 0x5A && raw[2] >= 1 && raw[2] <= 7) {
-        memcpy(s_http_hellos[raw[2] - 1], raw, 36);
-    }
-    if (s_httpd == NULL || s_ws_tx_queue == NULL) {
-        return;
-    }
-    ws_tx_item_t item;
-    item.len = (uint8_t)len;
-    memcpy(item.data, raw, (size_t)len);
-    if (xQueueSend(s_ws_tx_queue, &item, 0) != pdTRUE) {
-        ws_tx_item_t dropped;
-        xQueueReceive(s_ws_tx_queue, &dropped, 0);
-        xQueueSend(s_ws_tx_queue, &item, 0);
-    }
-    if (!s_ws_work_queued) {
-        s_ws_work_queued = true;
-        if (httpd_queue_work(s_httpd, ws_flush_work_fn, NULL) != ESP_OK) {
-            s_ws_work_queued = false;
-        }
-    }
-}
-
-static void start_hub_httpd(void) {
-    if (s_httpd != NULL) {
-        return;
-    }
-    if (s_ws_tx_queue == NULL) {
-        s_ws_tx_queue = xQueueCreate(WS_QUEUE_DEPTH, sizeof(ws_tx_item_t));
-    }
-    httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_open_sockets = 6;
-    config.backlog_conn = 4;
-    config.lru_purge_enable = true;
-    config.enable_so_linger = true;
-    config.linger_timeout = 0;
-    config.stack_size = 4096;
-
-    if (httpd_start(&s_httpd, &config) != ESP_OK) {
-        ESP_LOGE(TAG, "Failed to start esp_http_server");
-        return;
-    }
-    static const httpd_uri_t uri_info = {
-        .uri = "/api/hub-info",
-        .method = HTTP_GET,
-        .handler = hub_info_handler,
-    };
-    static const httpd_uri_t uri_info_opt = {
-        .uri = "/api/hub-info",
-        .method = HTTP_OPTIONS,
-        .handler = hub_options_handler,
-    };
-    static const httpd_uri_t uri_channels = {
-        .uri = "/api/hub-channels",
-        .method = HTTP_GET,
-        .handler = hub_channels_handler,
-    };
-    static const httpd_uri_t uri_channels_opt = {
-        .uri = "/api/hub-channels",
-        .method = HTTP_OPTIONS,
-        .handler = hub_options_handler,
-    };
-    static const httpd_uri_t uri_ws = {
-        .uri = "/ws",
-        .method = HTTP_GET,
-        .handler = hub_ws_handler,
-        .is_websocket = true,
-    };
-    httpd_register_uri_handler(s_httpd, &uri_info);
-    httpd_register_uri_handler(s_httpd, &uri_info_opt);
-    httpd_register_uri_handler(s_httpd, &uri_channels);
-    httpd_register_uri_handler(s_httpd, &uri_channels_opt);
-    httpd_register_uri_handler(s_httpd, &uri_ws);
 }
 
 /* ---- Board ---------------------------------------------------------------------------------- */
@@ -335,17 +88,6 @@ static void espnow_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data,
     xQueueSend(s_rx_queue, &item, 0);
 }
 
-static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data) {
-    (void)arg;
-    (void)data;
-    if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        xEventGroupClearBits(s_wifi_events, WIFI_GOT_IP_BIT);
-        esp_wifi_connect();
-    } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
-        xEventGroupSetBits(s_wifi_events, WIFI_GOT_IP_BIT);
-    }
-}
-
 void slaprf_lock_wifi_band_2g4_only(void) {
     // Applied in slaprf_init_2g4_radio() once Wi-Fi is started (the API needs a running driver).
 }
@@ -359,7 +101,6 @@ void slaprf_init_2g4_radio(uint8_t channel, uint8_t long_range, uint8_t tx_power
     ESP_ERROR_CHECK(err);
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
-    s_wifi_events = xEventGroupCreate();
     s_rx_queue = xQueueCreate(RX_QUEUE_DEPTH, sizeof(rx_item_t));
     s_sta_netif = esp_netif_create_default_wifi_sta();
 
@@ -367,8 +108,6 @@ void slaprf_init_2g4_radio(uint8_t channel, uint8_t long_range, uint8_t tx_power
     ESP_ERROR_CHECK(esp_wifi_init(&cfg));
     ESP_ERROR_CHECK(esp_wifi_set_storage(WIFI_STORAGE_RAM));
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
-    ESP_ERROR_CHECK(esp_event_handler_register(WIFI_EVENT, ESP_EVENT_ANY_ID, wifi_event_handler, NULL));
-    ESP_ERROR_CHECK(esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, wifi_event_handler, NULL));
     ESP_ERROR_CHECK(esp_wifi_start());
     // Keep the PHY powered between frames: the 5.8 GHz capture engine needs it, and modem sleep
     // would break the TDMA schedule.
@@ -400,45 +139,9 @@ void slaprf_init_2g4_radio(uint8_t channel, uint8_t long_range, uint8_t tx_power
              tx_power_qdbm);
 }
 
-void slaprf_start_wifi_bridge(uint8_t wifi_mode, const char *ssid, const char *pass) {
-    if (wifi_mode == 0) {
-        // Host the "SlapRF" AP on the current channel; the laptop/browser joins it directly.
-        s_ap_netif = esp_netif_create_default_wifi_ap();
-        ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_APSTA));
-        wifi_config_t ap = {0};
-        strlcpy((char *)ap.ap.ssid, "SlapRF", sizeof(ap.ap.ssid));
-        ap.ap.ssid_len = strlen("SlapRF");
-        ap.ap.max_connection = 4;
-        uint8_t primary = 1;
-        wifi_second_chan_t second;
-        esp_wifi_get_channel(&primary, &second);
-        ap.ap.channel = primary;
-        size_t pass_len = pass ? strnlen(pass, 40) : 0;
-        if (pass_len >= 8) {
-            strlcpy((char *)ap.ap.password, pass, sizeof(ap.ap.password));
-            ap.ap.authmode = WIFI_AUTH_WPA2_PSK;
-        } else {
-            ap.ap.authmode = WIFI_AUTH_OPEN;
-        }
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_AP, &ap));
-        esp_netif_set_default_netif(s_ap_netif);
-    } else {
-        // Join the field router / phone hotspot. ESP-NOW follows the router's channel.
-        wifi_config_t sta = {0};
-        strlcpy((char *)sta.sta.ssid, ssid, sizeof(sta.sta.ssid));
-        strlcpy((char *)sta.sta.password, pass ? pass : "", sizeof(sta.sta.password));
-        ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &sta));
-        esp_wifi_connect();
-        xEventGroupWaitBits(s_wifi_events, WIFI_GOT_IP_BIT, pdFALSE, pdTRUE, pdMS_TO_TICKS(15000));
-    }
-
-    start_hub_httpd();
-    ESP_LOGI(TAG, "Hub bridge up (%s), HTTP/WS :80", wifi_mode == 0 ? "AP SlapRF" : ssid);
-}
-
-void slaprf_forward_udp_to_laptop(const void *frame, uint32_t len) {
+/** Hub: relay a frame (Spoke window, HELLO) to the laptop over USB. */
+void slaprf_forward_to_laptop(const void *frame, uint32_t len) {
     slaprf_diag_forward_hub_frame(frame, len);
-    enqueue_ws_frame((const uint8_t *)frame, len);
 }
 
 void slaprf_broadcast_hub_sync_beacon(uint8_t seq) {
@@ -534,6 +237,10 @@ int64_t slaprf_now_us(void) {
 }
 
 void slaprf_sleep_until_us(int64_t t_us) {
+    if (t_us <= 0) {
+        vTaskDelay(1);
+        return;
+    }
     // Sleep a tick at a time (1 ms at CONFIG_FREERTOS_HZ=1000) so the idle task and the Wi-Fi
     // stack get CPU, then spin out the final stretch so TDMA slots and sweeps start on time.
     while (t_us - esp_timer_get_time() > 1200) {

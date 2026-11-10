@@ -241,7 +241,7 @@ export class AppStore {
     }
     return this._nodes;
   }
-  /** Physical XIAO timers discovered over Wi-Fi/ESP-NOW, flashed over USB, or currently plugged in via USB. */
+  /** Physical XIAO timers discovered via the USB Hub (ESP-NOW), flashed over USB, or currently plugged in via USB. */
   public get detectedTimers(): DetectedTimer[] {
     if (!this._simulatorRunning && this._usbTimer) {
       const usb = this._usbTimer;
@@ -351,7 +351,7 @@ export class AppStore {
     const dtUs = Math.max(0, Math.min(100_000, (nowMs - this._lastPlayheadPerfMs) * 1000));
     this._lastPlayheadPerfMs = nowMs;
     // Target slightly behind the newest telemetry sample (~35 ms = ~1 superframe) so every gate's
-    // trace stays anchored to the right edge and brief Wi-Fi jitter never stalls the playhead.
+    // trace stays anchored to the right edge and brief link jitter never stalls the playhead.
     const targetUs = latest - 35_000;
     if (this._playheadUs === 0 || Math.abs(targetUs - this._playheadUs) > 400_000) {
       this._playheadUs = targetUs;
@@ -359,7 +359,7 @@ export class AppStore {
     }
     // Advance at true wall-clock rate (`dtUs`), plus a gentle proportional nudge (4% per frame,
     // clamped to ±35% of `dtUs`) so the chart ALWAYS scrolls forward smoothly at 60 FPS and never
-    // pauses between 40 ms sliding-window bursts or during minor Wi-Fi latency spikes.
+    // pauses between 40 ms sliding-window bursts or during minor link latency spikes.
     const errorUs = targetUs - (this._playheadUs + dtUs);
     const maxCorrectionUs = dtUs * 0.35;
     const correctionUs = Math.max(-maxCorrectionUs, Math.min(maxCorrectionUs, errorUs * 0.04));

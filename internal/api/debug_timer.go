@@ -8,7 +8,7 @@ import (
 )
 
 // debugTimerResponse tells the Debug page whether a USB-connected timer's data is also reaching
-// this laptop over the Hub's Wi-Fi link (always from the real engine, never the simulator).
+// this laptop's timing engine via the Hub (always from the real engine, never the simulator).
 type debugTimerResponse struct {
 	Found       bool      `json:"found"`
 	TimerID     uint8     `json:"timerId,omitempty"`

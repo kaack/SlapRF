@@ -239,7 +239,7 @@ static void hub_send_hello(uint8_t slot, uint8_t role, uint32_t fp, uint8_t prof
     h.sweep_hz = sweep_hz;
     memcpy(h.timer_label, label, sizeof(h.timer_label));
     h.crc8 = compute_crc8((const uint8_t *)&h, sizeof(h) - 1);
-    slaprf_forward_udp_to_laptop(&h, sizeof(h));
+    slaprf_forward_to_laptop(&h, sizeof(h));
     if (slot >= 1 && slot <= 1 + MAX_SPOKES) {
         s_hello[slot - 1] = h;
     }
@@ -249,7 +249,7 @@ static void hub_send_hello(uint8_t slot, uint8_t role, uint32_t fp, uint8_t prof
 static void hub_repeat_hellos(void) {
     for (int i = 0; i < 1 + MAX_SPOKES; i++) {
         if (s_hello[i].magic0 == FRAME_MAGIC_0) {
-            slaprf_forward_udp_to_laptop(&s_hello[i], sizeof(s_hello[i]));
+            slaprf_forward_to_laptop(&s_hello[i], sizeof(s_hello[i]));
         }
     }
 }
@@ -305,7 +305,7 @@ static void hub_listen_until(int64_t until_us) {
                     hub_send_hello(slot, ROLE_SPOKE_TIMER, fp, SLAPRF_PROFILE_CODE, SWEEP_HZ, fallback_label);
                 }
                 slaprf_diag_note_spoke_frame(buf, (uint32_t)n);
-                slaprf_forward_udp_to_laptop(buf, (uint32_t)n);
+                slaprf_forward_to_laptop(buf, (uint32_t)n);
             }
         }
         if (slaprf_now_us() >= until_us) {
@@ -336,7 +336,7 @@ static void hub_run(void) {
                 slaprf_broadcast_hub_sync_beacon(beacon_seq++); // Anchors every Spoke's schedule
             }
             if (k == TX_EVERY_SWEEPS - 1) {
-                slaprf_forward_udp_to_laptop(pkt, pack_window(pkt, HUB_SLOT));
+                slaprf_forward_to_laptop(pkt, pack_window(pkt, HUB_SLOT));
                 if (slaprf_now_us() >= next_hello) {
                     hub_repeat_hellos();
                     next_hello += HELLO_REPEAT_US;
@@ -495,8 +495,6 @@ void app_main(void) {
     }
 
     if (g_flash_cfg.role == ROLE_HUB_TIMER) {
-        slaprf_start_wifi_bridge(g_flash_cfg.wifi_mode, (const char *)g_flash_cfg.wifi_ssid,
-                                 (const char *)g_flash_cfg.wifi_pass);
         hub_run();
     } else {
         spoke_run();

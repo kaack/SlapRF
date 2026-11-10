@@ -61,6 +61,10 @@ type Engine struct {
 	nextLapID      uint64
 	passingNumbers map[uint8]uint32 // per-gate passing counter
 	subscribers    []EventSubscriber
+	// hubIsCollector: real hardware only. The Hub is a USB/Wi-Fi collector dongle that relays
+	// Spoke frames to the laptop and never measures laps itself, so it gets a timer entry but no
+	// gate. The simulator keeps the classic model where the simulated Hub times a gate.
+	hubIsCollector bool
 }
 
 // NewEngine creates and initializes a multi-gate timing engine with default gates and pilot slots.
@@ -112,6 +116,7 @@ func NewRealEngine() *Engine {
 		detected:       make(map[uint8]*domain.DetectedTimer),
 		detectors:      make(map[string]*dsp.ChannelDetector),
 		passingNumbers: make(map[uint8]uint32),
+		hubIsCollector: true,
 	}
 	e.resetSessionLocked()
 	e.initDetectorsLocked()

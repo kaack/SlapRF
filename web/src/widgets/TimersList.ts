@@ -9,7 +9,7 @@ import { renderEmpty } from "./markup";
 
 /**
  * Dedicated "Timers" section in System: purely physical information about all Seeed Studio
- * XIAO ESP32-C5 boards discovered over Wi-Fi / ESP-NOW or flashed over USB, whether currently
+ * XIAO ESP32-C5 boards discovered via the USB Hub (ESP-NOW) or flashed over USB, whether currently
  * online or offline and whether assigned to the track or unassigned.
  */
 export class TimersList extends Component {

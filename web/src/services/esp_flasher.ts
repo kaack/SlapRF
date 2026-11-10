@@ -5,7 +5,7 @@
  * `navigator.serial` API to a Seeed Studio XIAO ESP32-C5 (USB VID `0x303A` / PID `0x1001`):
  *   - Read (`readXiaoC5OverWebSerial`): Queries the connected XIAO over USB for its chip ID
  *     and decodes its `SLAPRF02` configuration block (role, firmware profile, board fingerprint,
- *     Wi-Fi SSID, and programmed 5.8 GHz channel table).
+ *     and programmed 5.8 GHz channel table).
  *   - Write (`flashXiaoC5OverWebSerial`): Optionally reads the board's existing fingerprint so it
  *     can be kept, enters Download Mode via DTR/RTS, erases flash, streams 1 KB blocks
  *     (`ESP_FLASH_DATA`), and reboots into the new firmware.
@@ -50,8 +50,6 @@ export interface TimerReadout {
   chip: string;
   role: "hub" | "spoke";
   timerLabel: string;
-  wifiSSID: string;
-  wifiPassSet?: boolean;
   frequenciesMHz: number[];
   firmwareVersion: string;
   firmwareProfile: string;
@@ -154,11 +152,9 @@ const CONFIG_LEN = 160;
 const OFF_VERSION = 8;
 const OFF_ROLE = 11;
 const OFF_PROFILE = 12;
-const OFF_WIFI_MODE = 13;
+const OFF_WIFI_MODE = 13; // Reserved (always 0). Bytes 34..106 (legacy SSID/pass) stay zeroed.
 const OFF_FINGERPRINT = 14;
 const OFF_FREQS = 18;
-const OFF_SSID = 34;
-const OFF_PASS = 67;
 const OFF_LABEL = 107;
 
 const OFF_CRC = CONFIG_LEN - 1;
@@ -252,8 +248,6 @@ export async function withFingerprint(img: Uint8Array, fingerprintHex: string): 
 export async function buildOrPatchFirmwareBin(opts: {
   role: "hub" | "spoke";
   timerLabel: string;
-  wifiSSID: string;
-  wifiPass: string;
   profile?: string;
   fingerprint?: string;
   frequenciesMHz?: number[];
@@ -262,8 +256,6 @@ export async function buildOrPatchFirmwareBin(opts: {
   const roleCode = opts.role === "hub" ? 1 : 2;
   const fingerprint = opts.fingerprint || generateFingerprint();
   const cleanLabel = opts.timerLabel.trim().slice(0, 24);
-  const cleanSSID = opts.role === "hub" ? opts.wifiSSID.trim().slice(0, 32) : "";
-  const cleanPass = opts.role === "hub" ? opts.wifiPass.slice(0, 39) : "";
   const defaultFreqs = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
   const freqs = defaultFreqs.map((def, i) => {
     const f = opts.frequenciesMHz?.[i] ?? def;
@@ -293,11 +285,9 @@ export async function buildOrPatchFirmwareBin(opts: {
   block[OFF_VERSION + 2] = pat;
   block[OFF_ROLE] = roleCode;
   block[OFF_PROFILE] = profile.code;
-  block[OFF_WIFI_MODE] = cleanSSID ? 1 : 0;
+  block[OFF_WIFI_MODE] = 0; // Reserved: the Hub is a USB dongle; no Wi-Fi (SSID/pass stay zeroed)
   bv.setUint32(OFF_FINGERPRINT, parseInt(fingerprint, 16) >>> 0, true);
   for (let i = 0; i < 8; i++) bv.setUint16(OFF_FREQS + i * 2, freqs[i], true);
-  block.set(enc.encode(cleanSSID).subarray(0, 32), OFF_SSID);
-  block.set(enc.encode(cleanPass).subarray(0, 39), OFF_PASS);
   block.set(enc.encode(cleanLabel).subarray(0, 24), OFF_LABEL);
   block[OFF_CRC] = xor8(block.subarray(0, OFF_CRC));
   img.set(block, off);
@@ -336,7 +326,6 @@ export function parseSlaprfConfigBlock(bytes: Uint8Array): TimerReadout | null {
     chip: "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
     role: block[OFF_ROLE] === 1 ? "hub" : "spoke",
     timerLabel,
-    wifiSSID: cstr(OFF_SSID, 33),
     frequenciesMHz,
     firmwareVersion: `v${block[OFF_VERSION]}.${block[OFF_VERSION + 1]}.${block[OFF_VERSION + 2]}`,
     firmwareProfile: profileByCode(block[OFF_PROFILE]).id,
@@ -583,7 +572,6 @@ export async function readXiaoC5OverWebSerial(
             : "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
           role: status.role === 1 ? "hub" : "spoke",
           timerLabel: status.label || "",
-          wifiSSID: "",
           frequenciesMHz: status.freqs,
           firmwareVersion: status.fw,
           firmwareProfile: prof.id,

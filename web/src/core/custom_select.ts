@@ -203,9 +203,6 @@ function upgradeSelectElement(selectEl: HTMLSelectElement): void {
 
   const wrapper = document.createElement("div");
   wrapper.className = "custom-select-wrap";
-  if (selectEl.classList.contains("flasher-ssid-select")) {
-    wrapper.classList.add("flasher-ssid-select");
-  }
   if (selectEl.classList.contains("gate-timer-select")) {
     wrapper.classList.add("gate-timer-select");
   }

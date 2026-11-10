@@ -2562,23 +2562,6 @@ body.is-gate-dragging * {
   font-weight: 600;
   color: var(--accent);
 }
-.flasher-ssid-row {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-.flasher-ssid-select {
-  flex: 1;
-  min-width: 0;
-}
-.flasher-ssid-edit {
-  flex-shrink: 0;
-  color: var(--text-2);
-}
-.flasher-ssid-edit:hover:not(:disabled) {
-  color: var(--accent);
-  border-color: var(--accent-line);
-}
 .flasher-pass-wrap {
   position: relative;
   display: flex;
@@ -3180,36 +3163,6 @@ body.is-gate-dragging * {
 .flasher-inspect-text strong {
   color: var(--text-2);
   font-weight: 600;
-}
-
-.flasher-wifi-panel {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-  padding: 14px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--surface);
-  min-width: 0;
-  max-width: 100%;
-  box-sizing: border-box;
-}
-.flasher-wifi-panel-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 10px;
-}
-.flasher-wifi-panel-desc {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-3);
-  max-width: 620px;
-}
-.flasher-wifi-panel-desc strong {
-  color: var(--text-2);
 }
 
 /* Step 4: Summary receipt */

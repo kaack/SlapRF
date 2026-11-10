@@ -139,7 +139,7 @@ func main() {
 	_ = loadRealFromLocalStorage(realEngine)
 	sim.Start()
 
-	hubRx := ingest.NewWiFiUDPReceiver("", realEngine)
+	hubRx := ingest.NewHubFrameDecoder(realEngine)
 	var hubCmdMu sync.RWMutex
 	var hubCmdCb js.Value
 	hubRx.SetOutboundSender(func(pkt []byte) {

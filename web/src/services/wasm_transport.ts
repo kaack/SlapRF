@@ -260,8 +260,6 @@ export class WasmSimTransport implements ApiTransport {
   public async fetchFirmwareImage(
     _role: "hub" | "spoke",
     _timerLabel: string,
-    _wifiSSID: string,
-    _wifiPass: string,
     _profile: string,
     _fingerprint: string
   ): Promise<FirmwareImageResult> {

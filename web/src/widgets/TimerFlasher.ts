@@ -15,32 +15,21 @@ import {
 import { recordKnownTimerReadout, sharedTimerConsole } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
-const WIFI_SSID_STORAGE_KEY = "slaprf.wifi.ssid";
-const HUB_WIFI_MODE_STORAGE_KEY = "slaprf.wifi.hubMode";
 const FLASHER_PREFS_STORAGE_KEY = "slaprf.ui.flasher_prefs.v1";
-const CUSTOM_SSID_VALUE = "__custom__";
 
-type HubWifiMode = "join" | "host";
-type WizardStepId = "network" | "identity" | "wifi" | "flash";
-
-interface ScannedWifi {
-  ssid: string;
-  signalPct?: number;
-  connected?: boolean;
-  saved?: boolean;
-}
-
+type WizardStepId = "network" | "identity" | "flash";
 
 /**
  * Interactive Hub & Spoke network flasher wizard for Seeed Studio XIAO ESP32-C5 timers.
  *
- *   - Step 1 (`network`): Pick the **Hub** or **Spoke** role via pictorial cards (same style as
- *     the Wi-Fi mode step); Spoke reveals the **S1–S6** slot chips.
+ *   - Step 1 (`network`): Pick the **Hub** or **Spoke** role via pictorial cards; Spoke reveals
+ *     the **S1–S6** slot chips.
  *   - Step 2 (`identity`): Set **Timer ID / name** (pre-filled from the node you clicked) and
  *     **Firmware version**.
- *   - Step 3 (`wifi`, Hub only): Two visual pictorial diagrams comparing **Station Mode**
- *     (Hub → Router/Hotspot → Laptop) vs **Direct AP Mode** (Hub broadcasts "SlapRF" → Laptop).
- *   - Step 4 (`flash`): Summary receipt + **Flash to USB** / **Download .bin**.
+ *   - Step 3 (`flash`): Summary receipt + **Flash to USB** / **Download .bin**.
+ *
+ * The Hub is a USB dongle that talks to this computer over USB serial only, so there is no
+ * Wi-Fi setup step.
  */
 export class TimerFlasher extends Component {
   private readonly store: AppStore;
@@ -51,18 +40,10 @@ export class TimerFlasher extends Component {
   private slideDir: "next" | "prev" | "none" = "none";
   private role: "hub" | "spoke" = "hub";
   private flashedNodes = new Set<string>();
-  private hubWifiMode: HubWifiMode = "join";
   private timerLabel = "H1";
   private firmwareProfileId = DEFAULT_FIRMWARE_PROFILE;
   /** Keep the board's existing fingerprint when reflashing (vs. mint a new one). */
   private keepFingerprint = true;
-  private networks: ScannedWifi[] = [];
-  private scanningWifi = false;
-  private customMode = false;
-  private hadStoredWifiPref = false;
-  private wifiSSID = "";
-  private wifiPass = "";
-  private showPassword = false;
   private busy = false;
   private progress: FlashProgress | null = null;
   private lastSuccessMsg: string | null = null;
@@ -80,17 +61,7 @@ export class TimerFlasher extends Component {
     this.api = api;
     this.onReadout = onReadout;
 
-    let hadStoredPref = false;
     try {
-      const storedMode = window.localStorage.getItem(HUB_WIFI_MODE_STORAGE_KEY);
-      if (storedMode === "host" || storedMode === "join") {
-        this.hubWifiMode = storedMode;
-      }
-      const stored = window.localStorage.getItem(WIFI_SSID_STORAGE_KEY);
-      if (stored !== null && stored !== "") {
-        this.wifiSSID = stored;
-        hadStoredPref = true;
-      }
       const rawPrefs = window.localStorage.getItem(FLASHER_PREFS_STORAGE_KEY);
       if (rawPrefs) {
         const parsed = JSON.parse(rawPrefs) as {
@@ -104,13 +75,8 @@ export class TimerFlasher extends Component {
         if (parsed.role === "hub" || parsed.role === "spoke") {
           this.role = parsed.role;
         }
-        if (
-          parsed.step === "network" ||
-          parsed.step === "identity" ||
-          parsed.step === "wifi" ||
-          parsed.step === "flash"
-        ) {
-          this.step = this.role === "spoke" && parsed.step === "wifi" ? "identity" : parsed.step;
+        if (parsed.step === "network" || parsed.step === "identity" || parsed.step === "flash") {
+          this.step = parsed.step;
         }
         if (typeof parsed.timerLabel === "string" && parsed.timerLabel.trim() !== "") {
           this.timerLabel = parsed.timerLabel;
@@ -131,26 +97,9 @@ export class TimerFlasher extends Component {
     } catch {
       // ignore storage errors
     }
-    this.hadStoredWifiPref = hadStoredPref;
 
     this.listen(el, "click", (e) => {
       const t = e.target as HTMLElement;
-
-      if (t.closest("[data-toggle-pass]")) {
-        this.showPassword = !this.showPassword;
-        const passInput = this.el.querySelector<HTMLInputElement>("[data-wifi-pass]");
-        const selStart = passInput?.selectionStart ?? null;
-        this.slideDir = "none";
-        this.render();
-        const nextInput = this.el.querySelector<HTMLInputElement>("[data-wifi-pass]");
-        if (nextInput) {
-          nextInput.focus();
-          if (selStart !== null) {
-            nextInput.setSelectionRange(selStart, selStart);
-          }
-        }
-        return;
-      }
 
       if (this.busy) return;
 
@@ -170,18 +119,6 @@ export class TimerFlasher extends Component {
           this.saveFlasherPrefs();
           this.errorMsg = null;
           this.lastSuccessMsg = null;
-          this.slideDir = "none";
-          this.render();
-        }
-        return;
-      }
-
-      const pickHubMode = t.closest<HTMLElement>("[data-pick-hub-mode]");
-      if (pickHubMode) {
-        const nextMode: HubWifiMode = pickHubMode.dataset.pickHubMode === "host" ? "host" : "join";
-        if (nextMode !== this.hubWifiMode) {
-          this.saveHubWifiMode(nextMode);
-          this.errorMsg = null;
           this.slideDir = "none";
           this.render();
         }
@@ -209,35 +146,6 @@ export class TimerFlasher extends Component {
         return;
       }
 
-      if (t.closest("[data-refresh-wifi]")) {
-        void this.refreshWifiNetworks();
-        return;
-      }
-
-      if (t.closest("[data-edit-ssid]")) {
-        this.customMode = true;
-        this.slideDir = "none";
-        this.render();
-        const input = this.el.querySelector<HTMLInputElement>("[data-wifi-ssid]");
-        if (input) {
-          input.focus();
-          input.select();
-        }
-        return;
-      }
-
-      if (t.closest("[data-clear-ssid]")) {
-        this.customMode = false;
-        if (this.networks.length > 0) {
-          this.saveSSID(this.networks[0].ssid);
-        } else {
-          this.saveSSID("");
-        }
-        this.slideDir = "none";
-        this.render();
-        return;
-      }
-
       if (t.closest("[data-flash-usb]")) {
         void this.flashUsb();
         return;
@@ -255,12 +163,10 @@ export class TimerFlasher extends Component {
         this.firmwareProfileId = DEFAULT_FIRMWARE_PROFILE;
         this.keepFingerprint = true;
         this.showAllPorts = false;
-        this.customMode = false;
         this.errorMsg = null;
         this.lastSuccessMsg = null;
         this.progress = null;
         this.slideDir = "none";
-        this.saveHubWifiMode("join");
         this.saveFlasherPrefs();
         this.render();
         return;
@@ -270,7 +176,7 @@ export class TimerFlasher extends Component {
     this.listen(el, "keydown", (e) => {
       if (e.key === "Enter") {
         const target = e.target as HTMLElement;
-        if (target.matches("[data-timer-label], [data-wifi-ssid], [data-wifi-pass]")) {
+        if (target.matches("[data-timer-label]")) {
           e.preventDefault();
           this.advanceStep();
         }
@@ -282,30 +188,12 @@ export class TimerFlasher extends Component {
       if (input.matches("[data-timer-label]")) {
         this.timerLabel = input.value;
         this.saveFlasherPrefs();
-      } else if (input.matches("[data-wifi-ssid]")) {
-        this.saveSSID(input.value);
-      } else if (input.matches("[data-wifi-pass]")) {
-        this.wifiPass = input.value;
       }
     });
 
     this.listen(el, "change", (e) => {
       const target = e.target as HTMLInputElement | HTMLSelectElement;
-      if (target.matches("[data-wifi-select]")) {
-        const val = target.value;
-        if (val === CUSTOM_SSID_VALUE) {
-          this.customMode = true;
-          this.wifiSSID = "";
-          this.slideDir = "none";
-          this.render();
-          this.el.querySelector<HTMLInputElement>("[data-wifi-ssid]")?.focus();
-        } else {
-          this.customMode = false;
-          this.saveSSID(val);
-          this.slideDir = "none";
-          this.render();
-        }
-      } else if (target.matches("[data-fw-profile]")) {
+      if (target.matches("[data-fw-profile]")) {
         this.firmwareProfileId = target.value || DEFAULT_FIRMWARE_PROFILE;
         this.saveFlasherPrefs();
         this.slideDir = "none";
@@ -322,30 +210,9 @@ export class TimerFlasher extends Component {
     });
 
     this.render();
-    if (!this.isMobileClient()) {
-      void this.refreshWifiNetworks();
-    }
-  }
-
-  private isMobileClient(): boolean {
-    if (typeof navigator !== "undefined" && /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent)) {
-      return true;
-    }
-    if (typeof window !== "undefined" && typeof window.matchMedia === "function") {
-      return window.matchMedia("(max-width: 720px), (pointer: coarse)").matches;
-    }
-    return false;
   }
 
   private get orderedSteps(): Array<{ id: WizardStepId; title: string; short: string }> {
-    if (this.role === "hub") {
-      return [
-        { id: "network", title: "Select role", short: "Role" },
-        { id: "identity", title: "Name & firmware", short: "Name" },
-        { id: "wifi", title: "Wi-Fi mode", short: "Wi-Fi" },
-        { id: "flash", title: "Flash timer", short: "Flash" },
-      ];
-    }
     return [
       { id: "network", title: "Select role", short: "Role" },
       { id: "identity", title: "Name & firmware", short: "Name" },
@@ -389,13 +256,6 @@ export class TimerFlasher extends Component {
       if (curIdx <= steps.indexOf("identity") && targetIdx > steps.indexOf("identity")) {
         if (!this.validateIdentityStep()) return;
       }
-      if (
-        this.role === "hub" &&
-        curIdx <= steps.indexOf("wifi") &&
-        targetIdx > steps.indexOf("wifi")
-      ) {
-        if (!this.validateWifiStep()) return;
-      }
     }
 
     this.goToStep(target, targetIdx > curIdx ? "next" : "prev");
@@ -412,25 +272,6 @@ export class TimerFlasher extends Component {
     return true;
   }
 
-  private validateWifiStep(): boolean {
-    if (this.role !== "hub") return true;
-    if (this.hubWifiMode === "join" && !this.wifiSSID.trim()) {
-      this.errorMsg =
-        'Select or enter a 2.4 GHz Wi-Fi / hotspot SSID to join, or switch to Direct AP mode.';
-      this.slideDir = "none";
-      this.render();
-      return false;
-    }
-    if (this.hubWifiMode === "host" && this.wifiPass.length > 0 && this.wifiPass.length < 8) {
-      this.errorMsg =
-        "WPA2 password for the SlapRF AP must be at least 8 characters (or leave blank for an open AP).";
-      this.slideDir = "none";
-      this.render();
-      return false;
-    }
-    return true;
-  }
-
   private advanceStep(): void {
     if (this.step === "network") {
       this.goToStep("identity", "next");
@@ -438,71 +279,18 @@ export class TimerFlasher extends Component {
     }
     if (this.step === "identity") {
       if (!this.validateIdentityStep()) return;
-      this.goToStep(this.role === "hub" ? "wifi" : "flash", "next");
-      return;
-    }
-    if (this.step === "wifi") {
-      if (!this.validateWifiStep()) return;
       this.goToStep("flash", "next");
     }
   }
 
   private retreatStep(): void {
     if (this.step === "flash") {
-      this.goToStep(this.role === "hub" ? "wifi" : "identity", "prev");
-      return;
-    }
-    if (this.step === "wifi") {
       this.goToStep("identity", "prev");
       return;
     }
     if (this.step === "identity") {
       this.goToStep("network", "prev");
     }
-  }
-
-  private saveHubWifiMode(mode: HubWifiMode): void {
-    this.hubWifiMode = mode;
-    try {
-      window.localStorage.setItem(HUB_WIFI_MODE_STORAGE_KEY, mode);
-    } catch {
-      // ignore
-    }
-  }
-
-  private saveSSID(ssid: string): void {
-    this.wifiSSID = ssid;
-    this.hadStoredWifiPref = true;
-    try {
-      window.localStorage.setItem(WIFI_SSID_STORAGE_KEY, this.wifiSSID);
-    } catch {
-      // ignore
-    }
-  }
-
-  private get effectiveHubSSID(): string {
-    if (this.role !== "hub" || this.hubWifiMode === "host") {
-      return "";
-    }
-    return this.wifiSSID.trim();
-  }
-
-  private async refreshWifiNetworks(): Promise<void> {
-    this.scanningWifi = true;
-    this.slideDir = "none";
-    this.render();
-    const list = await this.api.listWifiNetworks();
-    this.scanningWifi = false;
-    this.networks = list;
-
-    if (!this.hadStoredWifiPref && !this.wifiSSID && list.length > 0) {
-      this.saveSSID(list[0].ssid);
-      this.customMode = false;
-    } else if (this.wifiSSID && list.length > 0 && !list.some((n) => n.ssid === this.wifiSSID)) {
-      this.networks = [{ ssid: this.wifiSSID, saved: true }, ...list];
-    }
-    this.slideDir = "none";
-    this.render();
   }
 
   private get roleLabel(): string {
@@ -531,24 +319,13 @@ export class TimerFlasher extends Component {
     if (info.timerLabel) {
       this.timerLabel = info.timerLabel;
     }
-    if (info.role === "hub") {
-      if (info.wifiSSID) {
-        this.saveHubWifiMode("join");
-        this.saveSSID(info.wifiSSID);
-        if (!this.networks.some((n) => n.ssid === info.wifiSSID)) {
-          this.networks = [{ ssid: info.wifiSSID, saved: true }, ...this.networks];
-        }
-      } else {
-        this.saveHubWifiMode("host");
-      }
-    }
     this.firmwareProfileId = info.firmwareProfile;
     this.slideDir = "none";
     this.render();
   }
 
   private async flashUsb(): Promise<void> {
-    if (!this.validateIdentityStep() || !this.validateWifiStep()) {
+    if (!this.validateIdentityStep()) {
       return;
     }
     const cleanLabel = this.timerLabel.trim();
@@ -565,15 +342,7 @@ export class TimerFlasher extends Component {
     this.render();
 
     try {
-      const ssid = this.effectiveHubSSID;
-      const pass = this.role === "hub" ? this.wifiPass : "";
-      const { bytes } = await this.api.fetchFirmwareImage(
-        this.role,
-        cleanLabel,
-        ssid,
-        pass,
-        this.firmwareProfileId
-      );
+      const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel, this.firmwareProfileId);
 
       const written = await flashXiaoC5OverWebSerial(
         bytes,
@@ -633,20 +402,12 @@ export class TimerFlasher extends Component {
   }
 
   private async downloadBin(): Promise<void> {
-    if (!this.validateIdentityStep() || !this.validateWifiStep()) {
+    if (!this.validateIdentityStep()) {
       return;
     }
     try {
       const cleanLabel = this.timerLabel.trim();
-      const ssid = this.effectiveHubSSID;
-      const pass = this.role === "hub" ? this.wifiPass : "";
-      const { bytes, filename } = await this.api.fetchFirmwareImage(
-        this.role,
-        cleanLabel,
-        ssid,
-        pass,
-        this.firmwareProfileId
-      );
+      const { bytes, filename } = await this.api.fetchFirmwareImage(this.role, cleanLabel, this.firmwareProfileId);
       const blob = new Blob([bytes], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -661,14 +422,6 @@ export class TimerFlasher extends Component {
       this.slideDir = "none";
       this.render();
     }
-  }
-
-  private formatNetworkOption(n: ScannedWifi): string {
-    const tags: string[] = [];
-    if (n.connected) tags.push("Connected");
-    else if (n.saved) tags.push("Saved");
-    if (n.signalPct && n.signalPct > 0) tags.push(`${n.signalPct}%`);
-    return tags.length > 0 ? `${n.ssid} (${tags.join(" · ")})` : n.ssid;
   }
 
   private renderStepper(): string {
@@ -700,7 +453,7 @@ export class TimerFlasher extends Component {
   }
 
   /**
-   * Step 1: Role picker in the same pictorial-card style as the Wi-Fi mode step.
+   * Step 1: Role picker using pictorial cards.
    * Pick **Hub** (one per network) or **Spoke**; picking Spoke reveals the S1–S6 slot chips.
    */
   private renderStepNetwork(): string {
@@ -712,7 +465,7 @@ export class TimerFlasher extends Component {
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
           <div class="flasher-wizard-badge-row">
-            <span class="note">Step 1 of ${isHub ? 4 : 3} · One Hub plus up to 6 Spokes per course</span>
+            <span class="note">Step 1 of 3 · One Hub plus up to 6 Spokes per course</span>
           </div>
           <h3>What role will this timer play?</h3>
         </div>
@@ -734,7 +487,7 @@ export class TimerFlasher extends Component {
               ${this.renderPictorialRoleHub()}
             </div>
             <p class="flasher-pictorial-desc">
-              Usually the start / finish gate. Collects every Spoke's passes and talks to this computer over Wi-Fi.
+              USB dongle plugged into this computer. Collects every Spoke's passes over long-range ESP-NOW and streams them over USB-C.
             </p>
           </button>
 
@@ -756,7 +509,7 @@ export class TimerFlasher extends Component {
               ${this.renderPictorialRoleSpoke()}
             </div>
             <p class="flasher-pictorial-desc">
-              Placed at each sector gate around the course. Sends its passes to the Hub over long-range ESP-NOW — no Wi-Fi setup needed.
+              Placed at each sector gate around the course. Sends its passes to the Hub over long-range ESP-NOW.
             </p>
           </button>
         </div>
@@ -770,7 +523,7 @@ export class TimerFlasher extends Component {
       </div>`;
   }
 
-  /** Pictorial for the Hub role: Spokes ──▶ Hub ◀── Laptop (Wi-Fi). */
+  /** Pictorial for the Hub role: Spokes ──▶ Hub ◀── Laptop (USB-C). */
   private renderPictorialRoleHub(): string {
     return `
       <svg class="flasher-pic-svg" viewBox="0 0 280 68" fill="none" aria-hidden="true">
@@ -841,7 +594,7 @@ export class TimerFlasher extends Component {
             }</span>
             <span class="note">${
               isHub
-                ? "Step 2 of 4 · Stamped into XIAO flash"
+                ? "Step 2 of 3 · Stamped into XIAO flash"
                 : "Step 2 of 3 · Stamped into XIAO flash (auto-pairs with Hub)"
             }</span>
           </div>
@@ -903,302 +656,11 @@ export class TimerFlasher extends Component {
       </div>`;
   }
 
-  /**
-   * Renders the simplified SVG pictorial for Station Mode:
-   * Hub ---> [Router icon] <--- [Laptop icon]
-   */
-  private renderPictorialStation(): string {
-    return `
-      <svg class="flasher-pic-svg" viewBox="0 0 280 68" fill="none" aria-hidden="true">
-        <defs>
-          <marker id="pic-arrow-sta" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-            <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="currentColor" />
-          </marker>
-        </defs>
-
-        <!-- Client -> Host directional arrows -->
-        <line x1="66" y1="34" x2="112" y2="34" class="flasher-pic-link" marker-end="url(#pic-arrow-sta)" />
-        <line x1="214" y1="34" x2="168" y2="34" class="flasher-pic-link" marker-end="url(#pic-arrow-sta)" />
-
-        <!-- Hub -->
-        <g transform="translate(42, 34)">
-          <circle r="20" class="flasher-pic-node is-hub-node" />
-          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title">Hub</text>
-        </g>
-
-        <!-- Router icon only -->
-        <g transform="translate(140, 34)">
-          <rect x="-22" y="-20" width="44" height="40" rx="8" class="flasher-pic-node is-host-node" />
-          <rect x="-12" y="-1" width="24" height="10" rx="2" stroke="currentColor" stroke-width="1.5" />
-          <circle cx="-6" cy="4" r="1.2" fill="currentColor" />
-          <circle cx="0" cy="4" r="1.2" fill="currentColor" />
-          <line x1="-6" y1="-1" x2="-9" y2="-10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-          <line x1="6" y1="-1" x2="9" y2="-10" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" />
-        </g>
-
-        <!-- Laptop icon only -->
-        <g transform="translate(238, 34)">
-          <rect x="-22" y="-20" width="44" height="40" rx="8" class="flasher-pic-node" />
-          <rect x="-11" y="-8" width="22" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5" />
-          <path d="M-15 8 H15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-        </g>
-      </svg>`;
-  }
-
-  /**
-   * Renders the simplified SVG pictorial for Direct AP Mode:
-   * Hub <--- [Laptop icon]
-   */
-  private renderPictorialAp(): string {
-    return `
-      <svg class="flasher-pic-svg" viewBox="0 0 280 68" fill="none" aria-hidden="true">
-        <defs>
-          <marker id="pic-arrow-ap" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto">
-            <path d="M 1 1.5 L 8.5 5 L 1 8.5 z" fill="currentColor" />
-          </marker>
-        </defs>
-
-        <!-- Client (Laptop) -> Host (Hub) directional arrow -->
-        <line x1="186" y1="34" x2="94" y2="34" class="flasher-pic-link" marker-end="url(#pic-arrow-ap)" />
-
-        <!-- Hub -->
-        <g transform="translate(68, 34)">
-          <circle r="20" class="flasher-pic-node is-hub-node is-host-node" />
-          <text y="3.5" text-anchor="middle" class="flasher-pic-node-title">Hub</text>
-        </g>
-
-        <!-- Laptop icon only -->
-        <g transform="translate(212, 34)">
-          <rect x="-22" y="-20" width="44" height="40" rx="8" class="flasher-pic-node" />
-          <rect x="-11" y="-8" width="22" height="13" rx="1.5" stroke="currentColor" stroke-width="1.5" />
-          <path d="M-15 8 H15" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" />
-        </g>
-      </svg>`;
-  }
-
-  private renderStepWifi(): string {
-    const isHostApMode = this.hubWifiMode === "host";
-    const isMobile = this.isMobileClient();
-    const useCustom = this.customMode;
-
-    return `
-      <div class="flasher-wizard-body">
-        <div class="flasher-wizard-intro">
-          <div class="flasher-wizard-badge-row">
-            <span class="badge tone-good">Role: Hub · ${esc(this.timerLabel.trim() || "H1")}</span>
-            <span class="note">Step 3 of 4 · 2.4 GHz Wi-Fi only (5.8 GHz is disabled to protect FPV video)</span>
-          </div>
-          <h3>How should the Hub connect to your computer?</h3>
-        </div>
-
-        <div class="flasher-pictorial-grid" role="radiogroup" aria-label="Hub 2.4 GHz Wi-Fi mode">
-          <button
-            type="button"
-            role="radio"
-            aria-checked="${!isHostApMode}"
-            class="flasher-pictorial-card ${!isHostApMode ? "is-active" : ""}"
-            data-pick-hub-mode="join"
-            ${this.busy ? "disabled" : ""}
-          >
-            <div class="flasher-pictorial-head">
-              <span class="flasher-pictorial-title">Hub Connects to Router / Hotspot</span>
-              <span class="badge ${!isHostApMode ? "tone-good" : ""}">Station Mode</span>
-            </div>
-            <div class="flasher-pictorial-art">
-              ${this.renderPictorialStation()}
-            </div>
-            <p class="flasher-pictorial-desc">
-              Hub joins your phone hotspot or field router. Best when your laptop stays on internet Wi-Fi.
-            </p>
-          </button>
-
-          <button
-            type="button"
-            role="radio"
-            aria-checked="${isHostApMode}"
-            class="flasher-pictorial-card ${isHostApMode ? "is-active" : ""}"
-            data-pick-hub-mode="host"
-            ${this.busy ? "disabled" : ""}
-          >
-            <div class="flasher-pictorial-head">
-              <span class="flasher-pictorial-title">Hub Acts as Hotspot</span>
-              <span class="badge ${isHostApMode ? "tone-good" : ""}">Direct AP · Ch 1</span>
-            </div>
-            <div class="flasher-pictorial-art">
-              ${this.renderPictorialAp()}
-            </div>
-            <p class="flasher-pictorial-desc">
-              Hub broadcasts its own <strong>"SlapRF"</strong> Wi-Fi (<code>192.168.4.1</code>). Connect your laptop directly to it.
-            </p>
-          </button>
-        </div>
-
-        <div class="flasher-wifi-panel">
-          <div class="flasher-wifi-inputs flasher-two-col">
-            <div class="flasher-field">
-              <label class="flasher-field-label">${
-                isHostApMode ? "2.4 GHz Hub hotspot SSID" : "2.4 GHz Wi-Fi / hotspot SSID"
-              }</label>
-              ${
-                isHostApMode
-                  ? `<input
-                      class="input mono"
-                      type="text"
-                      value="SlapRF · Ch 1 · 192.168.4.1"
-                      readonly
-                      disabled
-                      aria-label="Broadcast hotspot network"
-                    />`
-                  : isMobile
-                    ? `<input
-                        class="input"
-                        type="text"
-                        placeholder="Type 2.4 GHz Wi-Fi / hotspot SSID"
-                        value="${esc(this.wifiSSID)}"
-                        data-wifi-ssid="1"
-                        maxlength="32"
-                        spellcheck="false"
-                        autocomplete="off"
-                        ${this.busy ? "disabled" : ""}
-                      />`
-                    : useCustom
-                      ? `<div class="flasher-pass-wrap has-two-actions">
-                        <input
-                          class="input flasher-pass-input"
-                          type="text"
-                          placeholder="Type 2.4 GHz Wi-Fi / hotspot SSID"
-                          value="${esc(this.wifiSSID)}"
-                          data-wifi-ssid="1"
-                          maxlength="32"
-                          spellcheck="false"
-                          autocomplete="off"
-                          ${this.busy ? "disabled" : ""}
-                        />
-                        <div class="flasher-inline-actions">
-                          <button
-                            type="button"
-                            class="flasher-pass-toggle"
-                            data-clear-ssid="1"
-                            ${this.busy ? "disabled" : ""}
-                            aria-label="Return to scanned Wi-Fi network list"
-                            title="Return to scanned Wi-Fi network list"
-                          >
-                            ${icons.close(14)}
-                          </button>
-                          <button
-                            type="button"
-                            class="flasher-pass-toggle"
-                            data-refresh-wifi="1"
-                            ${this.busy || this.scanningWifi ? "disabled" : ""}
-                            aria-label="Rescan nearby 2.4 GHz Wi-Fi networks"
-                            title="Rescan nearby 2.4 GHz Wi-Fi networks"
-                          >
-                            ${icons.reset(14)}
-                          </button>
-                        </div>
-                      </div>`
-                    : `<div class="flasher-pass-wrap has-two-actions">
-                        <select
-                          class="input flasher-ssid-select"
-                          data-wifi-select="1"
-                          aria-label="2.4 GHz Wi-Fi network to join"
-                          ${this.busy ? "disabled" : ""}
-                        >
-                          ${
-                            this.networks.length === 0
-                              ? `<option value="" disabled ${!this.wifiSSID ? "selected" : ""}>No networks scanned</option>`
-                              : ""
-                          }
-                          ${this.networks
-                            .map(
-                              (n) =>
-                                `<option value="${esc(n.ssid)}" ${
-                                  n.ssid === this.wifiSSID ? "selected" : ""
-                                }>${esc(this.formatNetworkOption(n))}</option>`
-                            )
-                            .join("")}
-                          <option value="${CUSTOM_SSID_VALUE}">Type custom SSID…</option>
-                        </select>
-                        <div class="flasher-inline-actions">
-                          <button
-                            type="button"
-                            class="flasher-pass-toggle"
-                            data-edit-ssid="1"
-                            ${this.busy ? "disabled" : ""}
-                            aria-label="Type custom Wi-Fi / hotspot name"
-                            title="Type custom Wi-Fi / hotspot name"
-                          >
-                            ${icons.pencil(14)}
-                          </button>
-                          <button
-                            type="button"
-                            class="flasher-pass-toggle"
-                            data-refresh-wifi="1"
-                            ${this.busy || this.scanningWifi ? "disabled" : ""}
-                            aria-label="Rescan nearby 2.4 GHz Wi-Fi networks"
-                            title="Rescan nearby 2.4 GHz Wi-Fi networks"
-                          >
-                            ${icons.reset(14)}
-                          </button>
-                        </div>
-                      </div>`
-              }
-            </div>
-
-            <div class="flasher-field">
-              <label class="flasher-field-label">${
-                isHostApMode ? "Hotspot password (optional)" : "Wi-Fi / hotspot password"
-              }</label>
-              <div class="flasher-pass-wrap">
-                <input
-                  class="input flasher-pass-input"
-                  type="${this.showPassword ? "text" : "password"}"
-                  placeholder="${
-                    isHostApMode ? "Blank = open hotspot (or 8+ chars WPA2)" : "Wi-Fi / hotspot password"
-                  }"
-                  value="${esc(this.wifiPass)}"
-                  data-wifi-pass="1"
-                  maxlength="39"
-                  spellcheck="false"
-                  autocomplete="off"
-                  ${this.busy ? "disabled" : ""}
-                />
-                <button
-                  type="button"
-                  class="flasher-pass-toggle"
-                  data-toggle-pass="1"
-                  aria-label="${this.showPassword ? "Hide password" : "Show password"}"
-                  title="${this.showPassword ? "Hide password" : "Show password"}"
-                >
-                  ${this.showPassword ? icons.eyeOff(15) : icons.eye(15)}
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div class="flasher-wizard-nav">
-          <button type="button" class="btn" data-wizard-prev="1" ${this.busy ? "disabled" : ""}>
-            ${icons.chevronLeft(15)}
-            <span>Back</span>
-          </button>
-          <button type="button" class="btn" data-wizard-next="1" ${this.busy ? "disabled" : ""}>
-            <span>Next</span>
-            ${icons.chevronRight(15)}
-          </button>
-        </div>
-      </div>`;
-  }
-
   private renderStepFlash(webSerialOk: boolean): string {
     const isHub = this.role === "hub";
     const cleanLabel = this.timerLabel.trim() || (isHub ? "H1" : this.suggestSpokeLabel());
     const profile = firmwareProfile(this.firmwareProfileId);
-    const wifiSummary = isHub
-      ? this.hubWifiMode === "host"
-        ? `Hub Hotspot "SlapRF" (${this.wifiPass ? "WPA2" : "Open AP"})`
-        : `Join "${this.wifiSSID.trim() || "(unset)"}" (Station Mode)`
-      : `ESP-NOW ${profile.link} → Hub`;
+    const linkSummary = isHub ? "USB-C dongle → this computer" : `ESP-NOW ${profile.link} → Hub`;
 
     const pct = this.progress ? this.progress.percent : this.lastSuccessMsg ? 100 : 0;
     const statusText = this.progress
@@ -1232,9 +694,9 @@ export class TimerFlasher extends Component {
           </div>
 
           <div class="flasher-receipt-item">
-            <span class="note">${isHub ? "Wi-Fi Connection" : "Radio Link"}</span>
+            <span class="note">${isHub ? "Computer Link" : "Radio Link"}</span>
             <div class="flasher-receipt-val mono">
-              <span>${esc(wifiSummary)}</span>
+              <span>${esc(linkSummary)}</span>
             </div>
           </div>
         </div>
@@ -1358,9 +820,6 @@ export class TimerFlasher extends Component {
         break;
       case "identity":
         stepContent = this.renderStepIdentity();
-        break;
-      case "wifi":
-        stepContent = this.renderStepWifi();
         break;
       case "flash":
         stepContent = this.renderStepFlash(webSerialOk);

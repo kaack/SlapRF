@@ -19,8 +19,6 @@ export interface ApiTransport {
   fetchFirmwareImage(
     role: "hub" | "spoke",
     timerLabel: string,
-    wifiSSID: string,
-    wifiPass: string,
     profile: string,
     fingerprint: string
   ): Promise<FirmwareImageResult>;

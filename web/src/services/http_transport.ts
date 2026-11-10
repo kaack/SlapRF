@@ -130,17 +130,11 @@ export class HttpRealTransport implements ApiTransport {
   public async fetchFirmwareImage(
     role: "hub" | "spoke",
     timerLabel: string,
-    wifiSSID: string,
-    wifiPass: string,
     profile: string,
     fingerprint: string
   ): Promise<FirmwareImageResult> {
     const params = new URLSearchParams({ role, profile, fingerprint });
     if (timerLabel.trim()) params.set("label", timerLabel.trim());
-    if (role === "hub" && wifiSSID.trim()) {
-      params.set("ssid", wifiSSID.trim());
-      params.set("pass", wifiPass);
-    }
     const res = await fetch(`/api/firmware/xiao-c5.bin?${params.toString()}`, { cache: "no-store" });
     if (!res.ok) {
       throw new Error(`Firmware build failed: ${res.status}`);
@@ -338,8 +332,6 @@ export class HttpRealTransport implements ApiTransport {
       if (det) det.color = b.color;
       const gate = this.fallbackNodes.find((n) => (n.assignedTimerId ?? n.gateId) === b.timerId);
       if (gate) gate.color = b.color;
-    } else if (url === "/api/wifi/networks") {
-      return { networks: [] };
     } else if (url === "/api/storage/reset") {
       this.fallbackPilots = [1, 3, 5, 8, 0, 0, 0, 0].map((ch, i) => ({
         slotIndex: i + 1,

@@ -30,7 +30,8 @@ func TestSQLiteStoreRoundTripAndRealEngineRehydration(t *testing.T) {
 		Profile:     "open-ground",
 		Fingerprint: "A0767469",
 	})
-	_, _ = realEng.ProvisionGate(tracker.ProvisionRequest{
+	// The Hub is a gate-less USB collector, so the Spoke's gate is the course's only (start/finish) gate.
+	spokeGateID, _ := realEng.ProvisionGate(tracker.ProvisionRequest{
 		Role:        "spoke",
 		Label:       "S1",
 		Profile:     "open-ground",
@@ -56,7 +57,7 @@ func TestSQLiteStoreRoundTripAndRealEngineRehydration(t *testing.T) {
 		Color:           "#ff0055",
 	})
 	_ = realEng.SetGateThresholds([]domain.GateThresholdUpdate{
-		{GateID: 1, SlotIndex: 1, EnterDbm: -49},
+		{GateID: spokeGateID, SlotIndex: 1, EnterDbm: -49},
 	})
 
 	snap := realEng.ExportState()

@@ -53,7 +53,7 @@ export const ROUTES: RouteMeta[] = [
     id: "network",
     label: "Network",
     title: "Network",
-    subtitle: "Connect to your Hub or Spoke timer over USB-C or Wi-Fi, inspect the 2.4 GHz network, and manage monitored 5.8 GHz channels",
+    subtitle: "Connect to your Hub or Spoke timer over USB-C, inspect the 2.4 GHz network, and manage monitored 5.8 GHz channels",
     icon: () => icons.wifi(20),
   },
   {

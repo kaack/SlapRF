@@ -48,6 +48,17 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	ver := domain.LatestFirmwareVersion
 
 	e.mu.Lock()
+	if role == "hub" && e.hubIsCollector {
+		id := e.provisionCollectorHubLocked(fingerprint, timerLabel, profile, ver)
+		pilots := append([]domain.PilotSlot(nil), e.pilots...)
+		gates := append([]domain.TrackGate(nil), e.gates...)
+		subs := append([]EventSubscriber(nil), e.subscribers...)
+		e.mu.Unlock()
+		for _, s := range subs {
+			s.OnConfigUpdated(pilots, gates)
+		}
+		return id, nil
+	}
 	var targetIdx = -1
 
 	// 0. Same physical board re-flashed (fingerprint kept): update it in place.
@@ -110,7 +121,8 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		} else {
 			ordered := e.orderedGatesLocked()
 			for _, og := range ordered {
-				if og.Role == domain.GateRoleSectorGate && strings.TrimSpace(og.TimerLabel) == "" {
+				canClaim := og.Role == domain.GateRoleSectorGate || (e.hubIsCollector && og.AssignedTimerID == 0)
+				if canClaim && strings.TrimSpace(og.TimerLabel) == "" {
 					targetIdx = indexOfGate(e.gates, og.GateID)
 					break
 				}
@@ -134,6 +146,9 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		nextID := maxID + 1
 		if nextID < 1 {
 			nextID = 1
+		}
+		if e.hubIsCollector && nextID < 2 {
+			nextID = 2 // Timer ID 1 is reserved for the collector Hub, which never holds a gate
 		}
 		if nextID > maxTimers {
 			e.mu.Unlock()
@@ -210,6 +225,73 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		s.OnConfigUpdated(pilots, gates)
 	}
 	return assignedID, nil
+}
+
+// provisionCollectorHubLocked registers the real-hardware Hub (a USB collector dongle) as a timer
+// with no gate: it shows up on the Network page with its status and firmware, but never times
+// laps. It keeps timer ID 1 (or its existing ID if this board is already known).
+func (e *Engine) provisionCollectorHubLocked(fingerprint, label, profile, ver string) uint8 {
+	var id uint8
+	for tid, d := range e.detected {
+		if fingerprint != "" && d.Fingerprint == fingerprint {
+			id = tid
+			break
+		}
+	}
+	if id == 0 {
+		for tid, d := range e.detected {
+			if d.IsHub {
+				id = tid
+				break
+			}
+		}
+	}
+	if id == 0 {
+		id = 1
+	}
+	// Invariant: the collector Hub is never tied to a gate.
+	for i := range e.gates {
+		if e.gates[i].AssignedTimerID == id {
+			e.gates[i].AssignedTimerID = 0
+			e.gates[i].TimerLabel = ""
+		}
+	}
+	d, ok := e.detected[id]
+	if !ok {
+		d = &domain.DetectedTimer{
+			TimerID:       id,
+			Color:         domain.DefaultTimerColor(id),
+			BatteryMv:     4100,
+			BatteryPct:    domain.ComputeBatteryPct(4100),
+			NoiseFloorDbm: -92.0,
+		}
+		e.detected[id] = d
+	}
+	d.IsHub = true
+	d.FirmwareVersion = ver
+	d.FirmwareProfile = profile
+	if fingerprint != "" {
+		d.Fingerprint = fingerprint
+	} else if d.Fingerprint == "" {
+		d.Fingerprint = newFingerprintHex()
+	}
+	if label != "" {
+		d.TimerLabel = label
+	}
+	d.Online = true
+	d.LastSeenAt = time.Now()
+	return id
+}
+
+// MarkTimerSeen refreshes a timer's online status. Used for the collector Hub, which sends no
+// telemetry of its own, only periodic HELLO announcements.
+func (e *Engine) MarkTimerSeen(timerID uint8) {
+	e.mu.Lock()
+	if d, ok := e.detected[timerID]; ok {
+		d.Online = true
+		d.LastSeenAt = time.Now()
+	}
+	e.mu.Unlock()
 }
 
 // AddGate appends or inserts a new logical gate onto the course.

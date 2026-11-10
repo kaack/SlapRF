@@ -239,7 +239,7 @@ static void hub_send_hello(uint8_t slot, uint8_t role, uint32_t fp, uint8_t prof
     h.sweep_hz = sweep_hz;
     memcpy(h.timer_label, label, sizeof(h.timer_label));
     h.crc8 = compute_crc8((const uint8_t *)&h, sizeof(h) - 1);
-    slaprf_forward_udp_to_laptop(&h, sizeof(h));
+    slaprf_forward_to_laptop(&h, sizeof(h));
     if (slot >= 1 && slot <= 1 + MAX_SPOKES) {
         s_hello[slot - 1] = h;
     }
@@ -249,7 +249,7 @@ static void hub_send_hello(uint8_t slot, uint8_t role, uint32_t fp, uint8_t prof
 static void hub_repeat_hellos(void) {
     for (int i = 0; i < 1 + MAX_SPOKES; i++) {
         if (s_hello[i].magic0 == FRAME_MAGIC_0) {
-            slaprf_forward_udp_to_laptop(&s_hello[i], sizeof(s_hello[i]));
+            slaprf_forward_to_laptop(&s_hello[i], sizeof(s_hello[i]));
         }
     }
 }
@@ -305,15 +305,14 @@ static void hub_listen_until(int64_t until_us) {
                     hub_send_hello(slot, ROLE_SPOKE_TIMER, fp, SLAPRF_PROFILE_CODE, SWEEP_HZ, fallback_label);
                 }
                 slaprf_diag_note_spoke_frame(buf, (uint32_t)n);
-                slaprf_forward_udp_to_laptop(buf, (uint32_t)n);
+                slaprf_forward_to_laptop(buf, (uint32_t)n);
             }
         }
-        if (slaprf_now_us() >= until_us) {
+        if (until_us - slaprf_now_us() <= 1200) {
             return;
         }
-        // Waits > 1.2 ms sleep a tick (lets the idle task and Wi-Fi run); shorter ones spin.
-        const int64_t now = slaprf_now_us();
-        slaprf_sleep_until_us(until_us - now > 2000 ? now + 2000 : until_us);
+        // Yield 1 FreeRTOS tick (1 ms) without busy-spinning so the Wi-Fi/ESP-NOW and USB tasks get CPU during the gap.
+        slaprf_sleep_until_us(0);
     }
 }
 
@@ -321,7 +320,6 @@ static void hub_run(void) {
     slaprf_diag_set_slot(HUB_SLOT);
     hub_send_hello(HUB_SLOT, ROLE_HUB_TIMER, g_flash_cfg.fingerprint, SLAPRF_PROFILE_CODE, SWEEP_HZ,
                    (const char *)g_flash_cfg.timer_label);
-    uint8_t pkt[sizeof(timer_window_frame_t)];
     uint8_t beacon_seq = 0;
     int64_t t_sf = slaprf_now_us() + 10000;
     int64_t next_hello = t_sf + HELLO_REPEAT_US;
@@ -330,13 +328,18 @@ static void hub_run(void) {
             const int64_t t_sweep = t_sf + (int64_t)k * SWEEP_INTERVAL_US;
             const int64_t t_gap = t_sweep + SWEEP_BUDGET_US;
             slaprf_sleep_until_us(t_sweep);
-            sweep_once();
+            if (slaprf_diag_wants_sweeps()) {
+                // Collector Hub: only sweeps 5.8 GHz on demand for the Debug page (LIVE / SDR view).
+                sweep_once();
+            } else {
+                // Normal operation: the radio never leaves 2.4 GHz, so keep collecting Spoke frames.
+                hub_listen_until(t_gap);
+            }
             slaprf_sleep_until_us(t_gap);
             if (k == 0) {
                 slaprf_broadcast_hub_sync_beacon(beacon_seq++); // Anchors every Spoke's schedule
             }
             if (k == TX_EVERY_SWEEPS - 1) {
-                slaprf_forward_udp_to_laptop(pkt, pack_window(pkt, HUB_SLOT));
                 if (slaprf_now_us() >= next_hello) {
                     hub_repeat_hellos();
                     next_hello += HELLO_REPEAT_US;
@@ -495,8 +498,6 @@ void app_main(void) {
     }
 
     if (g_flash_cfg.role == ROLE_HUB_TIMER) {
-        slaprf_start_wifi_bridge(g_flash_cfg.wifi_mode, (const char *)g_flash_cfg.wifi_ssid,
-                                 (const char *)g_flash_cfg.wifi_pass);
         hub_run();
     } else {
         spoke_run();

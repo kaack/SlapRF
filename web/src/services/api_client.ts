@@ -46,7 +46,7 @@ const SIM_MODE_STORAGE_KEY = "slaprf.ui.sim_mode.v1";
  * - Simulation mode (`WasmSimTransport`): executes the Go timing & physics engine
  *   compiled to WebAssembly (`slaprf.wasm`) right in the browser (works on static GitHub Pages).
  * - Real-world mode: runs either via the local Desktop Go backend (`HttpRealTransport`) or
- *   100% in-browser via `WasmSimTransport` + `BrowserHubBridge` (Wi-Fi SSE & USB-C WebSerial).
+ *   100% in-browser via `WasmSimTransport` + `BrowserHubBridge` (USB-C WebSerial).
  */
 export class ApiClient {
   private readonly store: AppStore;
@@ -537,20 +537,16 @@ export class ApiClient {
   public async fetchFirmwareImage(
     role: "hub" | "spoke",
     timerLabel = "",
-    wifiSSID = "",
-    wifiPass = "",
     profile = DEFAULT_FIRMWARE_PROFILE,
     fingerprint = generateFingerprint()
   ): Promise<{ bytes: Uint8Array; sha256: string; filename: string }> {
     try {
-      return await this.transport.fetchFirmwareImage(role, timerLabel, wifiSSID, wifiPass, profile, fingerprint);
+      return await this.transport.fetchFirmwareImage(role, timerLabel, profile, fingerprint);
     } catch {
       const freqs = this.store.pilots.slice(0, 8).map((p) => p.frequencyMhz);
       const built = await buildOrPatchFirmwareBin({
         role,
         timerLabel,
-        wifiSSID,
-        wifiPass,
         profile,
         fingerprint,
         frequenciesMHz: freqs,
@@ -564,20 +560,6 @@ export class ApiClient {
       await this.wasmTransport.request("POST", "/api/ingest/frame", frame);
     } else {
       await this.httpTransport.request("POST", "/api/ingest/frame", frame);
-    }
-  }
-
-  /** Lists visible & saved Wi-Fi networks detected by this computer. */
-  public async listWifiNetworks(): Promise<
-    Array<{ ssid: string; signalPct?: number; connected?: boolean; saved?: boolean }>
-  > {
-    try {
-      const res = await this.httpTransport.request<{
-        networks?: Array<{ ssid: string; signalPct?: number; connected?: boolean; saved?: boolean }>;
-      }>("GET", "/api/wifi/networks");
-      return res.networks ?? [];
-    } catch {
-      return [];
     }
   }
 

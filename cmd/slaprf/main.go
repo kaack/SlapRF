@@ -24,7 +24,6 @@ import (
 func main() {
 	httpAddr := flag.String("http", ":8090", "HTTP address for the TypeScript Sector & Telemetry SPA")
 	laprfAddr := flag.String("laprf", ":5403", "TCP address for MultiGP LiveTime (ImmersionRC LapRF 8-Way protocol)")
-	hubHost := flag.String("hub", "192.168.4.1", "Hub Timer IP or hostname for Wi-Fi HTTP/SSE telemetry stream (/api/hub-stream)")
 	webDir := flag.String("web", "./web", "Path to the web SPA directory")
 	dbPath := flag.String("db", "slaprf.db", "Path to SQLite database for persisting real-world settings, pilots, track setup, and laps")
 	openBrowser := flag.Bool("open", true, "Automatically open the web UI in the default browser on startup")
@@ -90,12 +89,8 @@ func main() {
 		}
 		httpSrv.SetStore(store)
 	}
-	hubRx := ingest.NewWiFiUDPReceiver(*hubHost, httpSrv.RealEngine())
-	if err := hubRx.Start(); err != nil {
-		log.Printf("Warning: Hub Timer Wi-Fi SSE client (%s) could not start: %v", *hubHost, err)
-	} else {
-		defer hubRx.Stop()
-	}
+	// The Hub is a USB dongle read by the browser (WebSerial + WASM engine); this desktop server
+	// has no serial reader, so it does not receive hardware frames directly.
 	srv := &http.Server{
 		Handler: httpSrv.Handler(),
 	}

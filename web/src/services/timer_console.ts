@@ -46,7 +46,6 @@ export interface KnownHardwareTimer {
   mac?: string;
   slot?: number;
   channel?: number;
-  wifiSSID?: string;
   parentHubFp?: string;
   lastSeenMs: number;
 }
@@ -147,7 +146,6 @@ export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { 
     mac: entry.mac || prev?.mac,
     slot,
     channel,
-    wifiSSID: entry.wifiSSID ?? prev?.wifiSSID,
     parentHubFp: role === "spoke" ? parentHubFp : undefined,
     lastSeenMs: entry.lastSeenMs ?? Date.now(),
   };
@@ -222,7 +220,6 @@ export function recordKnownTimerReadout(r: TimerReadout): void {
     mac: r.status?.chip?.mac,
     slot: r.status?.slot ?? (r.role === "hub" ? 1 : undefined),
     channel: r.status?.channel ?? 1,
-    wifiSSID: r.wifiSSID || undefined,
     lastSeenMs: Date.now(),
   });
 }
@@ -327,6 +324,16 @@ interface Waiter {
 const ESPRESSIF_USB_VID = 0x303a;
 const CONFIG_MAGIC = new TextEncoder().encode("SLAPRF02");
 const CONFIG_LEN = 160;
+/** Start byte of a binary Hub packet record on the USB link (ASCII Record Separator). */
+const PKT_RECORD_SEP = 0x1e;
+
+/** A Hub frame starts with 0xC5 and ends with the XOR of all preceding bytes. */
+function isValidHubFrame(frame: Uint8Array): boolean {
+  if (frame.length < 4 || frame[0] !== 0xc5) return false;
+  let crc = 0;
+  for (let i = 0; i < frame.length - 1; i++) crc ^= frame[i];
+  return crc === frame[frame.length - 1];
+}
 
 function serial(): SerialLike {
   return (navigator as unknown as { serial: SerialLike }).serial;
@@ -438,8 +445,6 @@ export class TimerConsole {
       chip: s?.chip ? `${s.chip.model} (${s.chip.rev})` : cfg?.chip || "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
       role: cfg?.role ?? (s?.role === 1 ? "hub" : "spoke"),
       timerLabel: s?.label || cfg?.timerLabel || (s?.role === 1 ? "H1" : "S1"),
-      wifiSSID: cfg?.wifiSSID ?? "",
-      wifiPassSet: cfg?.wifiPassSet ?? false,
       firmwareProfile: cfg?.firmwareProfile || profileFromStatus || DEFAULT_FIRMWARE_PROFILE,
       fingerprint: s?.fp || cfg?.fingerprint || "",
       firmwareVersion: s?.fw || cfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
@@ -899,8 +904,24 @@ export class TimerConsole {
     this.buf = merged;
 
     for (;;) {
+      const recAt = this.buf.indexOf(PKT_RECORD_SEP);
       const magicAt = indexOf(this.buf, CONFIG_MAGIC);
       const nl = this.buf.indexOf(0x0a);
+      // Binary Hub packet record: [0x1E][len][frame bytes, ending in XOR crc8]
+      if (recAt >= 0 && (nl < 0 || recAt < nl) && (magicAt < 0 || recAt < magicAt)) {
+        if (this.buf.length < recAt + 2) return;
+        const len = this.buf[recAt + 1];
+        if (this.buf.length < recAt + 2 + len) return; // wait for the rest of the record
+        if (recAt > 0) this.emitText(this.buf.subarray(0, recAt));
+        const frame = this.buf.slice(recAt + 2, recAt + 2 + len);
+        if (isValidHubFrame(frame)) {
+          this.subscribers.forEach((h) => h.onHubPacket?.(frame));
+          this.buf = this.buf.slice(recAt + 2 + len);
+        } else {
+          this.buf = this.buf.slice(recAt + 1); // Not a real record: skip the separator and resync
+        }
+        continue;
+      }
       if (magicAt >= 0 && (nl < 0 || magicAt < nl)) {
         if (this.buf.length < magicAt + CONFIG_LEN) return; // wait for the rest of the block
         if (magicAt > 0) this.emitText(this.buf.subarray(0, magicAt));
@@ -944,26 +965,7 @@ export class TimerConsole {
     const line = atIdx > 0 ? rawLine.slice(atIdx) : rawLine;
     if (line.startsWith("@{")) {
       try {
-        const msg = JSON.parse(line.slice(1)) as { t: string; msg?: string; hex?: string } & Record<string, unknown>;
-        if (msg.t === "pkt" && typeof msg.hex === "string") {
-          const hex = msg.hex.trim();
-          if (hex.length >= 8 && hex.length % 2 === 0) {
-            const out = new Uint8Array(hex.length / 2);
-            let valid = true;
-            for (let i = 0; i < out.length; i++) {
-              const b = Number.parseInt(hex.slice(i * 2, i * 2 + 2), 16);
-              if (Number.isNaN(b)) {
-                valid = false;
-                break;
-              }
-              out[i] = b;
-            }
-            if (valid) {
-              this.subscribers.forEach((h) => h.onHubPacket?.(out));
-            }
-          }
-          return;
-        }
+        const msg = JSON.parse(line.slice(1)) as { t: string; msg?: string } & Record<string, unknown>;
         this.subscribers.forEach((h) => h.onRawReply?.(line, msg.t));
         this.resolveWaiters(msg.t, msg);
         switch (msg.t) {

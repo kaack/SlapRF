@@ -140,9 +140,48 @@ typedef struct {
 } log_ring_t;
 
 static RTC_NOINIT_ATTR log_ring_t s_ring;
+
+/* ---- Panic capture (RTC memory) ----------------------------------------------------------------
+ * The panic handler prints its backtrace to UART0, which the laptop can't see. We wrap
+ * esp_panic_handler (linker --wrap, see CMakeLists.txt) to stash the faulting PC, return address
+ * and cause in RTC memory; the next boot reports it via PANIC? so it can be mapped with addr2line.
+ */
+#include "esp_private/panic_internal.h"
+#include "riscv/rvruntime-frames.h"
+#define PANIC_REC_MAGIC 0x50414E43U // "PANC"
+typedef struct {
+    uint32_t magic;
+    uint32_t boot;   // Boot number that crashed
+    uint32_t exc;    // panic_exception_t
+    uint32_t pc;     // info->addr (faulting instruction)
+    uint32_t mepc;
+    uint32_t ra;
+    uint32_t sp;
+    uint32_t mcause;
+    uint32_t mtval;
+} panic_rec_t;
+static RTC_NOINIT_ATTR panic_rec_t s_panic_rec;
+static uint32_t s_boots;
+void __real_esp_panic_handler(panic_info_t *info);
+void IRAM_ATTR __wrap_esp_panic_handler(panic_info_t *info) {
+    if (info != NULL) {
+        s_panic_rec.boot = s_boots;
+        s_panic_rec.exc = (uint32_t)info->exception;
+        s_panic_rec.pc = (uint32_t)info->addr;
+        const RvExcFrame *fr = (const RvExcFrame *)info->frame;
+        if (fr != NULL) {
+            s_panic_rec.mepc = fr->mepc;
+            s_panic_rec.ra = fr->ra;
+            s_panic_rec.sp = fr->sp;
+            s_panic_rec.mcause = fr->mcause;
+            s_panic_rec.mtval = fr->mtval;
+        }
+        s_panic_rec.magic = PANIC_REC_MAGIC;
+    }
+    __real_esp_panic_handler(info);
+}
 static char s_last_log[LOG_RING_BYTES]; // Previous boot's log, copied out at startup
 static size_t s_last_len;
-static uint32_t s_boots;
 static uint32_t s_crash_streak;
 static volatile bool s_emergency_mode;
 static bool s_booted_emergency_mode;
@@ -200,12 +239,11 @@ static void tx_line(const char *s) {
 }
 
 /** Best-effort write for streamed data: drops the line if the port is busy or the buffer full. */
-static void tx_line_nowait(const char *s) {
+static void tx_bytes_nowait(const void *data, size_t len) {
     if (s_tx_lock == NULL || xSemaphoreTake(s_tx_lock, 0) != pdTRUE) {
         return;
     }
-    const size_t len = strlen(s);
-    const int written = usb_serial_jtag_write_bytes(s, len, 0);
+    const int written = usb_serial_jtag_write_bytes(data, len, 0);
     if (written < (int)len) {
         // If the USB host closed the port or refreshed the browser tab, stop streaming after a few
         // consecutive drops so the TX ring buffer stays clear for the next STATUS? on reconnect.
@@ -220,6 +258,10 @@ static void tx_line_nowait(const char *s) {
         s_tx_drops = 0;
     }
     xSemaphoreGive(s_tx_lock);
+}
+
+static void tx_line_nowait(const char *s) {
+    tx_bytes_nowait(s, strlen(s));
 }
 
 static int log_vprintf(const char *fmt, va_list args) {
@@ -367,6 +409,11 @@ bool slaprf_diag_get_net_channels(uint16_t out_freqs[8]) {
     }
     memcpy(out_freqs, s_net_raw_freqs, sizeof(s_net_raw_freqs));
     return true;
+}
+
+/** True while the Debug page wants live 5.8 GHz sweeps (LIVE 1/2), e.g. on the collector Hub. */
+bool slaprf_diag_wants_sweeps(void) {
+    return s_live != 0;
 }
 
 bool slaprf_diag_rf_enabled(void) {
@@ -686,23 +733,25 @@ static void handle_netchannels(const char *args) {
     tx_line("@{\"t\":\"ok\",\"cmd\":\"netchannels\"}\n");
 }
 
+/**
+ * Streams one Hub frame to the laptop as a compact binary record on the USB serial link:
+ *
+ *   [0x1E][len][frame bytes...]
+ *
+ * 0x1E (ASCII Record Separator) never appears in the text/JSON lines, so the host parser can
+ * tell records and lines apart; every frame ends with its own XOR crc8, which the host checks to
+ * resync if a record is ever cut short. Costs len + 2 bytes instead of ~2.5x as hex-in-JSON.
+ */
 static void send_usb_pkt_line(const uint8_t *raw, uint32_t len, bool blocking) {
-    if (raw == NULL || len == 0 || len > 180) return;
-    static const char hex_lut[16] = {'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F'};
-    char line[24 + 360 + 8];
-    int n = snprintf(line, sizeof(line), "@{\"t\":\"pkt\",\"hex\":\"");
-    for (uint32_t i = 0; i < len && n < (int)sizeof(line) - 6; i++) {
-        line[n++] = hex_lut[(raw[i] >> 4) & 0x0F];
-        line[n++] = hex_lut[raw[i] & 0x0F];
-    }
-    line[n++] = '"';
-    line[n++] = '}';
-    line[n++] = '\n';
-    line[n] = 0;
+    if (raw == NULL || len == 0 || len > 250) return;
+    uint8_t rec[2 + 250];
+    rec[0] = 0x1E;
+    rec[1] = (uint8_t)len;
+    memcpy(rec + 2, raw, len);
     if (blocking) {
-        tx_raw(line, (size_t)n);
+        tx_raw(rec, (size_t)len + 2);
     } else {
-        tx_line_nowait(line);
+        tx_bytes_nowait(rec, (size_t)len + 2);
     }
 }
 
@@ -759,6 +808,19 @@ static void handle_command(char *line) {
             send_log("current", cur, len);
             free(cur);
         }
+    } else if (strcmp(line, "PANIC?") == 0) {
+        char msg[220];
+        if (s_panic_rec.magic == PANIC_REC_MAGIC) {
+            snprintf(msg, sizeof(msg),
+                     "@{\"t\":\"panic\",\"boot\":%lu,\"exc\":%lu,\"pc\":\"0x%08lx\",\"mepc\":\"0x%08lx\",\"ra\":\"0x%08lx\","
+                     "\"sp\":\"0x%08lx\",\"mcause\":%lu,\"mtval\":\"0x%08lx\"}\n",
+                     (unsigned long)s_panic_rec.boot, (unsigned long)s_panic_rec.exc, (unsigned long)s_panic_rec.pc,
+                     (unsigned long)s_panic_rec.mepc, (unsigned long)s_panic_rec.ra, (unsigned long)s_panic_rec.sp,
+                     (unsigned long)s_panic_rec.mcause, (unsigned long)s_panic_rec.mtval);
+        } else {
+            snprintf(msg, sizeof(msg), "@{\"t\":\"panic\",\"none\":true}\n");
+        }
+        tx_line(msg);
     } else if (strcmp(line, "LASTLOG?") == 0) {
         send_log("last", s_last_log, s_last_len);
     } else if (strncmp(line, "CHANNELS", 8) == 0) {
@@ -1064,6 +1126,12 @@ void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us) {
 }
 
 void slaprf_diag_service(void) {
+    if (s_ring.crash_streak != 0 && s_ring.crash_streak != EMERGENCY_MAGIC && !s_emergency_mode &&
+        esp_timer_get_time() > 10000000LL) {
+        // Survived 10 s: clear any prior crash streak (the collector Hub doesn't sweep, so the
+        // sweep-based clear in slaprf_diag_sweep() never runs there).
+        s_ring.crash_streak = 0;
+    }
     if (s_reboot_pending) {
         vTaskDelay(pdMS_TO_TICKS(40));
         esp_restart();

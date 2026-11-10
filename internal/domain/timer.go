@@ -19,7 +19,7 @@ const LatestFirmwareVersion = "v0.1.4"
 const DefaultFirmwareProfile = "open-ground"
 
 // DetectedTimer represents a physical Seeed Studio XIAO ESP32-C5 board discovered over
-// Wi-Fi / ESP-NOW or flashed over USB, whether or not it is currently assigned to a gate.
+// the USB Hub (ESP-NOW) or flashed over USB, whether or not it is currently assigned to a gate.
 type DetectedTimer struct {
 	TimerID         uint8     `json:"timerId"`
 	TimerLabel      string    `json:"timerLabel"`

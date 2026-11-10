@@ -3,7 +3,7 @@
  *
  * Profiles (firmware/<profile>/main/main.c) own the timing design: sweep rate, window size,
  * link choice, filters. This component owns "how do I talk to the XIAO ESP32-C5 hardware":
- * 2.4 GHz Wi-Fi / ESP-NOW, the Hub's UDP bridge to the laptop, sweep pacing, and the 5.8 GHz
+ * 2.4 GHz Wi-Fi / ESP-NOW, the Hub's USB relay to the laptop, sweep pacing, and the 5.8 GHz
  * RSSI measurement.
  */
 #pragma once
@@ -32,11 +32,8 @@ void slaprf_lock_wifi_band_2g4_only(void);
 /** Bring up Wi-Fi + ESP-NOW on `channel` (1..13). `long_range` enables Espressif LR 500 kbps. */
 void slaprf_init_2g4_radio(uint8_t channel, uint8_t long_range, uint8_t tx_power_qdbm);
 
-/** Hub only: host the "SlapRF" AP (wifi_mode 0) or join `ssid` (wifi_mode 1), then open UDP. */
-void slaprf_start_wifi_bridge(uint8_t wifi_mode, const char *ssid, const char *pass);
-
-/** Hub only: send a frame to the laptop (UDP broadcast to port 5404). */
-void slaprf_forward_udp_to_laptop(const void *frame, uint32_t len);
+/** Hub only: relay a frame (Spoke window, HELLO) to the laptop over USB. */
+void slaprf_forward_to_laptop(const void *frame, uint32_t len);
 
 /** Hub only: broadcast the sync beacon Spokes align their TDMA slots to. */
 void slaprf_broadcast_hub_sync_beacon(uint8_t seq);
@@ -142,6 +139,9 @@ bool slaprf_diag_get_net_channels(uint16_t out_freqs[8]);
 
 /** False while the Debug page has switched the 5.8 GHz receiver off (RF 0). */
 bool slaprf_diag_rf_enabled(void);
+
+/** True while the Debug page has LIVE sweeps enabled (the collector Hub only sweeps on demand). */
+bool slaprf_diag_wants_sweeps(void);
 
 /**
  * Debug page continuous scan ("SCAN LIVE"): when active, measures the next chunk of the band

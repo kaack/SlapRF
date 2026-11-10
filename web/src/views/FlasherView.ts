@@ -194,22 +194,12 @@ class TimerReaderPanel extends Component {
         : ` <span class="badge badge-warn">Update → ${LATEST_FIRMWARE_VERSION}</span>`
       : "";
 
-    const netBadge = !r
-      ? "—"
-      : s?.net
-        ? `${esc(s.net.mode)} · Ch ${s.channel}`
-        : r.role === "hub"
-          ? r.wifiSSID
-            ? "STA · 2.4 GHz"
-            : "AP · Ch 1"
-          : "ESP-NOW LR";
+    const netBadge = !r ? "—" : r.role === "hub" ? `USB · Ch ${s?.channel ?? 1}` : "ESP-NOW LR";
 
-    const wifiLinkText = !r
+    const courseLinkText = !r
       ? "—"
       : r.role === "hub"
-        ? r.wifiSSID
-          ? `Join "${esc(r.wifiSSID)}"${s?.net ? ` <span class="note">· ${s.net.stations} device${s.net.stations === 1 ? "" : "s"}</span>` : ""}`
-          : `Host "SlapRF" AP${s?.net ? ` <span class="note">· ${s.net.stations} device${s.net.stations === 1 ? "" : "s"} joined</span>` : ' <span class="note">· Ch 1</span>'}`
+        ? `USB dongle · beacon master${s ? ` <span class="note">· Ch ${s.channel}</span>` : ""}`
         : s && s.slot >= 2
           ? `Joined Hub · slot ${s.slot}`
           : "ESP-NOW LR → Hub";
@@ -302,8 +292,8 @@ class TimerReaderPanel extends Component {
               <dd>${s ? `${(s.heapFree / 1024).toFixed(0)} KB <span class="note">· lowest ${(s.heapMin / 1024).toFixed(0)} KB</span>` : "—"}</dd>
             </div>
             <div class="debug-kv-row">
-              <dt>Wi-Fi link</dt>
-              <dd>${wifiLinkText}</dd>
+              <dt>Course link</dt>
+              <dd>${courseLinkText}</dd>
             </div>
           </dl>
         </div>

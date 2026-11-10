@@ -22,7 +22,7 @@ export class TrackView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Timers</h2>
-            <p>Physical XIAO ESP32-C5 timers discovered over Wi-Fi / ESP-NOW or USB, showing their color, flashed ID, online status, role, RF noise floor, and battery health.</p>
+            <p>Physical XIAO ESP32-C5 timers discovered via the USB Hub (ESP-NOW) or USB, showing their color, flashed ID, online status, role, RF noise floor, and battery health.</p>
           </div>
           <div class="card card-flush" data-slot="timers"></div>
         </section>

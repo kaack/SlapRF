@@ -2,7 +2,6 @@ import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
-import { ConnectivityMethod } from "../services/browser_hub_bridge";
 import { FIRMWARE_PROFILES } from "../services/esp_flasher";
 import {
   getKnownHardwareTimers,
@@ -20,7 +19,7 @@ const NETWORK_PREFS_KEY = "slaprf.ui.network_prefs.v1";
 
 /**
  * Dedicated Network page (`#/network`):
- * 1. Connect to a Hub or Spoke timer via Direct USB-C (WebSerial) or Wi-Fi Stream (SSE `/api/hub-stream`).
+ * 1. Connect to a Hub or Spoke timer via Direct USB-C (WebSerial).
  * 2. Inspect the 2.4 GHz TDMA network topology (Parent Hub Slot 1 + Child Spokes Slots 2–7, with live Spoke RSSI inspector).
  * 3. View & toggle the 8 monitored 5.8 GHz pilot channels and live RSSI meters.
  */
@@ -61,7 +60,7 @@ export class NetworkView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Connectivity</h2>
-            <p>Connect to a timer over Direct USB-C or over Wi-Fi to inspect the 2.4 GHz course network and monitored 5.8 GHz channels.</p>
+            <p>Connect the Hub (or a Spoke) over Direct USB-C to inspect the 2.4 GHz course network and monitored 5.8 GHz channels.</p>
           </div>
           <div class="debug-status-layout" data-slot="connection"></div>
         </section>
@@ -135,18 +134,6 @@ export class NetworkView extends Component {
     });
 
     const unsubBridge = this.api.hubBridge.subscribe(() => {
-      const active = document.activeElement;
-      if (active instanceof HTMLInputElement && active.name === "hubHost" && this.el.contains(active)) {
-        return;
-      }
-      if (!this.console.connected && this.api.hubBridge.wifiState === "connected") {
-        const dbm = this.api.hubBridge.wifiLastDbm;
-        this.live = {
-          us: 11200,
-          dbm,
-          pk: dbm,
-        };
-      }
       this.renderConnection();
       this.renderNetworkView();
       this.renderLiveHead();
@@ -177,17 +164,6 @@ export class NetworkView extends Component {
         this.showAllPorts = t.checked;
         this.console.showAllPorts = t.checked;
         this.savePrefs();
-      } else if (t.name === "hubHost") {
-        this.api.hubBridge.setHubHost(t.value, false);
-      }
-    });
-    this.listen(el, "keydown", (e) => {
-      const ke = e as KeyboardEvent;
-      const t = ke.target as HTMLInputElement;
-      if (t && t.name === "hubHost" && ke.key === "Enter") {
-        ke.preventDefault();
-        this.api.hubBridge.setHubHost(t.value, true);
-        this.api.hubBridge.connectWifiStream(true);
       }
     });
 
@@ -270,14 +246,6 @@ export class NetworkView extends Component {
     if (this.console.connected && this.status) {
       return this.status;
     }
-    if (this.api.hubBridge.wifiState === "connected" && this.api.hubBridge.wifiStatus) {
-      const st = { ...this.api.hubBridge.wifiStatus };
-      const pilotFreqs = this.store.pilots.slice(0, 8).map((p) => p.frequencyMhz);
-      if (pilotFreqs.length === 8) {
-        st.freqs = pilotFreqs;
-      }
-      return st;
-    }
     return null;
   }
 
@@ -287,42 +255,12 @@ export class NetworkView extends Component {
     this.error = null;
     try {
       switch (t.dataset.action) {
-        case "conn-method": {
-          const method = t.dataset.method as ConnectivityMethod | undefined;
-          if (method === "usb" || method === "wifi") {
-            this.api.hubBridge.setConnMethod(method);
-            this.renderConnection();
-          }
-          break;
-        }
         case "usb-connect":
           await this.console.connectAndStart(this.showAllPorts);
           break;
         case "usb-disconnect":
           this.liveOn = false;
           await this.console.disconnectCleanly();
-          break;
-        case "wifi-discover": {
-          const inp = this.el.querySelector<HTMLInputElement>('input[name="hubHost"]');
-          if (inp && inp.value.trim()) {
-            this.api.hubBridge.setHubHost(inp.value, false);
-          }
-          await this.api.hubBridge.discoverHub();
-          break;
-        }
-        case "wifi-connect": {
-          const inp = this.el.querySelector<HTMLInputElement>('input[name="hubHost"]');
-          if (inp && inp.value.trim()) {
-            this.api.hubBridge.setHubHost(inp.value, false);
-          }
-          this.api.hubBridge.connectWifiStream(true);
-          break;
-        }
-        case "wifi-disconnect":
-          this.api.hubBridge.disconnectWifiStream();
-          break;
-        case "reset-hub-host":
-          this.api.hubBridge.setHubHost("192.168.4.1", false);
           break;
         case "select-net-spoke": {
           const slotNum = Number(t.dataset.spokeSlot);
@@ -387,7 +325,6 @@ export class NetworkView extends Component {
 
   private renderConnection(): void {
     const hub = this.api.hubBridge;
-    const method = hub.connMethod;
     const led = hub.getLedSummary();
     const usbOn = this.console.connected;
     const usbSupported = TimerConsole.supported();
@@ -406,7 +343,7 @@ export class NetworkView extends Component {
               ? "is-bad"
               : "";
 
-    let statusText = "Disconnected · choose Direct USB-C or Wi-Fi Stream below to connect";
+    let statusText = "Disconnected · plug in the Hub over USB-C and connect below";
     if (usbOn && this.status) {
       const st = this.status;
       statusText = st.emergencyMode
@@ -416,37 +353,24 @@ export class NetworkView extends Component {
       statusText = "Connected over Direct USB-C · reading timer identity…";
     } else if (this.console.reconnecting) {
       statusText = `Lost USB connection · trying to reconnect (${this.console.reconnectAttempt}/${this.console.maxReconnectAttempts})…`;
-    } else if (hub.wifiState === "connected") {
-      const hubLabel = s?.label || "H1";
-      statusText = `${esc(hubLabel)} · Hub (Parent · Slot 1) · Wi-Fi Stream (${esc(hub.hubHost)}) · ${hub.wifiFramesRx.toLocaleString()} frames rx`;
-    } else if (hub.wifiState === "connecting" || hub.wifiState === "reconnecting") {
-      statusText =
-        hub.wifiReconnectAttempt > 0
-          ? `Lost Wi-Fi connection · trying to reconnect to ${esc(hub.hubHost)} (${hub.wifiReconnectAttempt}/${hub.maxReconnectAttempts})…`
-          : `Connecting to Hub over Wi-Fi at http://${esc(hub.hubHost)}/api/hub-stream…`;
     } else if (led.color === "red") {
-      statusText = esc(hub.wifiError || this.console.lastError || "All reconnect attempts failed.");
+      statusText = esc(this.console.lastError || "All reconnect attempts failed.");
     }
 
-    const isCustomHost = hub.hubHost !== "192.168.4.1";
-    const wifiConnected = hub.wifiState === "connected" || hub.wifiState === "connecting" || hub.wifiState === "reconnecting";
-
-    let methodBodyHtml = "";
-    if (method === "usb") {
-      const usbBtnLabel = usbOn
-        ? this.status?.label
-          ? `Disconnect · ${esc(this.status.label)}`
-          : "Disconnect USB"
-        : this.console.reconnecting
-          ? `Reconnecting (${this.console.reconnectAttempt}/${this.console.maxReconnectAttempts})…`
-          : this.console.busyLabel
-            ? `${esc(this.console.busyLabel)}…`
-            : "Connect USB-C";
-      methodBodyHtml = `
+    const usbBtnLabel = usbOn
+      ? this.status?.label
+        ? `Disconnect · ${esc(this.status.label)}`
+        : "Disconnect USB"
+      : this.console.reconnecting
+        ? `Reconnecting (${this.console.reconnectAttempt}/${this.console.maxReconnectAttempts})…`
+        : this.console.busyLabel
+          ? `${esc(this.console.busyLabel)}…`
+          : "Connect USB-C";
+    const methodBodyHtml = `
         <div class="option-row">
           <div>
             <div class="option-title">Direct USB-C connection</div>
-            <div class="option-sub">Plug a Hub or Spoke timer into this computer over USB-C to automatically detect its role, TDMA slot, and peer timers.</div>
+            <div class="option-sub">Plug the Hub (or a Spoke) into this computer over USB-C to automatically detect its role, TDMA slot, and peer timers.</div>
           </div>
           <div class="debug-connect-actions">
             ${
@@ -462,40 +386,7 @@ export class NetworkView extends Component {
             </button>
           </div>
         </div>
-        ${!usbSupported ? `<div class="sim-error-note" style="margin-top:8px;">Direct USB-C requires Chrome, Edge, or Brave (WebSerial). Use Wi-Fi Stream on other browsers.</div>` : ""}`;
-    } else {
-      methodBodyHtml = `
-        <div class="option-row">
-          <div>
-            <div class="option-title">Wi-Fi Hub stream</div>
-            <div class="option-sub">Connects directly over Wi-Fi to your Hub's real-time stream (<code>http://${esc(hub.hubHost)}/api/hub-stream</code>). Join the Hub's <code>SlapRF</code> Wi-Fi AP (<code>192.168.4.1</code>) or enter its LAN IP address.</div>
-          </div>
-          <div class="debug-connect-actions" style="flex-wrap:wrap;">
-            <div class="flasher-pass-wrap has-inline-action" style="width:170px;">
-              <input
-                class="input mono ${isCustomHost ? "flasher-pass-input" : ""}"
-                style="height:28px;font-size:12px;"
-                type="text"
-                name="hubHost"
-                value="${esc(hub.hubHost)}"
-                placeholder="192.168.4.1"
-                aria-label="Hub IP address or hostname"
-              />
-              ${
-                isCustomHost
-                  ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-action="reset-hub-host" title="Reset Hub address to 192.168.4.1">${icons.reset(14)}</button>`
-                  : ""
-              }
-            </div>
-            <button type="button" class="btn btn-sm btn-ghost" data-action="wifi-discover" ${hub.discovering ? "disabled" : ""}>
-              ${hub.discovering ? "Scanning…" : "Discover Hub"}
-            </button>
-            <button type="button" class="btn btn-sm ${hub.wifiState === "connected" ? "btn-armed" : "btn-unarmed"}" data-action="${wifiConnected ? "wifi-disconnect" : "wifi-connect"}">
-              ${icons.wifi(14)}<span>${hub.wifiState === "connected" ? `Disconnect · ${esc(hub.hubHost)}` : wifiConnected ? "Cancel" : "Connect Wi-Fi"}</span>
-            </button>
-          </div>
-        </div>`;
-    }
+        ${!usbSupported ? `<div class="sim-error-note" style="margin-top:8px;">Direct USB-C requires Chrome, Edge, or Brave (WebSerial).</div>` : ""}`;
 
     const connHtml = `
       <div class="debug-status-topbar">
@@ -503,18 +394,12 @@ export class NetworkView extends Component {
           <span class="status-dot ${dotClass}" data-conn-dot></span>
           <span class="debug-head-note" data-conn-status-text>${statusText}</span>
         </span>
-        <div class="debug-connect-actions">
-          <div class="segmented" role="group" aria-label="Connectivity method">
-            <button type="button" class="${method === "usb" ? "is-active" : ""}" data-action="conn-method" data-method="usb">Direct USB-C</button>
-            <button type="button" class="${method === "wifi" ? "is-active" : ""}" data-action="conn-method" data-method="wifi">Wi-Fi Stream</button>
-          </div>
-        </div>
       </div>
       <div class="debug-subbox">
         ${methodBodyHtml}
         ${this.error ? `<div class="sim-error-note" style="margin-top:8px;">${esc(this.error)}</div>` : ""}
       </div>`;
-    const connKey = `${method}|${dotClass}|${methodBodyHtml}|${this.error ?? ""}`;
+    const connKey = `${dotClass}|${methodBodyHtml}|${this.error ?? ""}`;
     if (connKey === this.lastConnHtml) {
       const noteEl = this.slot("connection").querySelector<HTMLElement>("[data-conn-status-text]");
       if (noteEl) {
@@ -529,7 +414,7 @@ export class NetworkView extends Component {
   private renderNetworkView(): void {
     const s = this.activeStatus();
     const on = s !== null;
-    const viaLabel = this.console.connected ? "USB-C" : "Wi-Fi";
+    const viaLabel = "USB-C";
     const knownTimers = getKnownHardwareTimers();
     const realServerTimers: DetectedTimer[] = !this.store.simulatorRunning
       ? this.store.detectedTimers.filter((t) => !(t.fingerprint || "").toUpperCase().startsWith("SIM000"))
@@ -920,15 +805,11 @@ export class NetworkView extends Component {
             <dl class="debug-kv-list">
               <div class="debug-kv-row">
                 <dt>TDMA slot</dt>
-                <dd>Slot 1 <span class="note">· Beacon master &amp; SSE bridge</span></dd>
+                <dd>Slot 1 <span class="note">· Beacon master &amp; USB bridge</span></dd>
               </div>
               <div class="debug-kv-row">
                 <dt>2.4 GHz link</dt>
                 <dd>ESP-NOW LR (500 kbps) <span class="note">· Ch ${ch}</span></dd>
-              </div>
-              <div class="debug-kv-row">
-                <dt>Wi-Fi network</dt>
-                <dd>${s.net ? `${esc(s.net.mode)} <span class="note">· ${s.net.stations} client${s.net.stations === 1 ? "" : "s"} joined</span>` : `Channel ${ch}`}</dd>
               </div>
               <div class="debug-kv-row">
                 <dt>Child Spokes tied</dt>
@@ -1090,12 +971,11 @@ export class NetworkView extends Component {
 
   private renderLiveHead(): void {
     const usbOn = this.console.connected;
-    const wifiOn = !usbOn && this.api.hubBridge.wifiState === "connected";
     const s = this.activeStatus();
     const emg = Boolean(usbOn && this.status?.emergencyMode);
     const rfOn = s?.rf.enabled ?? true;
     const streamDisabled = !usbOn || !rfOn || emg;
-    const streamActive = wifiOn || (!streamDisabled && this.liveOn);
+    const streamActive = !streamDisabled && this.liveOn;
     const ledClass = emg
       ? "is-emergency"
       : streamActive
@@ -1113,13 +993,11 @@ export class NetworkView extends Component {
           <span class="debug-head-note" data-live-note>${
             emg
               ? "Emergency mode · 5.8 GHz receiver & sweeps halted"
-              : wifiOn
-                ? "Streaming live 5.8 GHz readings via Hub Wi-Fi SSE"
-                : usbOn
-                  ? this.liveOn
-                    ? "Streaming · waiting for sweeps…"
-                    : "Paused · click Stream to view live 5.8 GHz readings"
-                  : "Paused · not connected"
+              : usbOn
+                ? this.liveOn
+                  ? "Streaming · waiting for sweeps…"
+                  : "Paused · click Stream to view live 5.8 GHz readings"
+                : "Paused · not connected"
           }</span>
         </span>
         <div class="debug-connect-actions">
@@ -1176,9 +1054,8 @@ export class NetworkView extends Component {
 
   private updateLive(): void {
     const usbOn = this.console.connected;
-    const wifiOn = !usbOn && this.api.hubBridge.wifiState === "connected";
-    const on = usbOn || wifiOn;
-    const l = (usbOn && this.liveOn) || wifiOn ? this.live : null;
+    const on = usbOn;
+    const l = usbOn && this.liveOn ? this.live : null;
     const note = this.el.querySelector<HTMLElement>("[data-live-note]");
     const led = this.el.querySelector<HTMLElement>("[data-live-led]");
     const chNote = this.el.querySelector<HTMLElement>("[data-live-ch-note]");
@@ -1191,7 +1068,7 @@ export class NetworkView extends Component {
       chNote.innerHTML = `<span class="mono">${activeCount}/8</span> active · click row to toggle · double-click to solo`;
     }
     if (led) {
-      const streaming = !emg && on && rfOn && (wifiOn || this.liveOn);
+      const streaming = !emg && on && rfOn && this.liveOn;
       led.classList.toggle("is-emergency", emg);
       led.classList.toggle("is-up", streaming && s?.role !== 2);
       led.classList.toggle("is-spoke", streaming && s?.role === 2);
@@ -1204,8 +1081,6 @@ export class NetworkView extends Component {
         note.textContent = "Emergency mode · 5.8 GHz receiver & sweeps halted";
       } else if (s && !s.rf.enabled) {
         note.textContent = "Off · 5.8 GHz receiver is switched off";
-      } else if (wifiOn) {
-        note.textContent = `Streaming via Hub Wi-Fi SSE (${this.api.hubBridge.hubHost})`;
       } else if (!this.liveOn) {
         note.textContent = "Paused · click Stream to view live 5.8 GHz readings";
       } else if (l) {

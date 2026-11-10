@@ -377,14 +377,14 @@ export class DebugView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Self-test</h2>
-            <p>Checks the timer end to end in about 10 seconds: console, identity, 5.8 GHz receiver, sweep timing, memory, last restart, Wi-Fi, and whether its data reaches this laptop. Copy the report when asking for help.</p>
+            <p>Checks the timer end to end in about 10 seconds: console, identity, 5.8 GHz receiver, sweep timing, memory, last restart, course link, and whether its data reaches this laptop. Copy the report when asking for help.</p>
           </div>
           <div class="card card-flush" data-slot="selftest"></div>
         </section>
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Status &amp; health</h2>
-            <p>Identity, chip, uptime, why it last restarted, memory, sweep timing, Wi-Fi and the 5.8 GHz receiver's boot check. Refreshes every 2 seconds and plots the last 5 minutes.</p>
+            <p>Identity, chip, uptime, why it last restarted, memory, sweep timing, course link and the 5.8 GHz receiver's boot check. Refreshes every 2 seconds and plots the last 5 minutes.</p>
           </div>
           <div class="debug-status-layout">
             <div data-slot="status"></div>
@@ -416,7 +416,7 @@ export class DebugView extends Component {
                 </div>
                 <div class="debug-health-card" data-health-card="udp">
                   <div class="debug-health-info">
-                    <span class="debug-health-title">Laptop Wi-Fi link</span>
+                    <span class="debug-health-title">Server frames rx</span>
                     <div class="debug-health-value" data-health-val="udp">—</div>
                     <span class="debug-health-meta" data-health-meta="udp">Waiting for data…</span>
                   </div>
@@ -2690,7 +2690,7 @@ export class DebugView extends Component {
       const c = await this.console.request<TimerReadout>("SLAPRF?", "config", 2000);
       if (c.fingerprint.toUpperCase() !== s.fp.toUpperCase())
         add("Saved configuration", "fail", `saved fingerprint ${c.fingerprint} doesn't match the running one ${s.fp}`);
-      else add("Saved configuration", "pass", `${c.role} "${c.timerLabel}", ${c.frequenciesMHz.length} channels, Wi-Fi "${c.wifiSSID}"`);
+      else add("Saved configuration", "pass", `${c.role} "${c.timerLabel}", ${c.frequenciesMHz.length} channels`);
     } catch (err) {
       add("Saved configuration", "fail", `couldn't read it (${err instanceof Error ? err.message : err})`);
     }
@@ -2729,12 +2729,11 @@ export class DebugView extends Component {
       }
     } else add("Last restart", "pass", `${s.reset}, boot #${s.boots}`);
 
-    // 10. Wi-Fi role
+    // 10. Course link (2.4 GHz ESP-NOW)
     if (s.role === 1) {
-      const ap = s.net.mode === "ap" || s.net.mode === "ap+sta";
-      add("Wi-Fi", ap ? "pass" : "fail", ap ? `Hub network up on channel ${s.channel}, ${s.net.stations} device${s.net.stations === 1 ? "" : "s"} joined` : `Hub network is not running (mode ${s.net.mode})`);
+      add("Course link", "pass", `Hub beaconing on channel ${s.channel}`);
     } else {
-      add("Wi-Fi", s.slot >= 2 ? "pass" : "warn", s.slot >= 2 ? `joined the Hub, slot ${s.slot}, channel ${s.channel}` : "not joined to a Hub yet (is the Hub on and in range?)");
+      add("Course link", s.slot >= 2 ? "pass" : "warn", s.slot >= 2 ? `joined the Hub, slot ${s.slot}, channel ${s.channel}` : "not joined to a Hub yet (is the Hub on and in range?)");
     }
 
     // 11. Data reaching this laptop
@@ -2756,7 +2755,7 @@ export class DebugView extends Component {
     const a = await get();
     if (!a) return [name, "skip", "no SlapRF server here (open this page from slaprf on the race laptop to check)"];
     if (!a.found) {
-      const hint = s.role === 1 ? "Is this laptop joined to the timer's Wi-Fi network?" : "Is the Hub on, and this laptop joined to its Wi-Fi network?";
+      const hint = s.role === 1 ? "Is the Hub plugged into this laptop over USB-C?" : "Is the Hub on and plugged into this laptop over USB-C?";
       return [name, "fail", `the server hasn't heard from ${s.fp}. ${hint}`];
     }
     const sim = a.simulatorActive ? " (the app is showing the simulator; switch to real timers to use it)" : "";
@@ -2926,7 +2925,7 @@ export class DebugView extends Component {
             : emg
               ? "# Timer is in Emergency Mode (radio and 50 Hz sweeps halted for rescue/reflashing). Click \"Exit emergency mode\" before running RF self-tests."
               : on
-                ? "# Click \"Run self-test\" to verify console, identity, 5.8 GHz receiver, sweep timing, memory, and Wi-Fi."
+                ? "# Click \"Run self-test\" to verify console, identity, 5.8 GHz receiver, sweep timing, memory, and course link."
                 : "# Connect a timer over USB-C on the Network page to run the hardware self-test."
         );
     this.slot("selftest").innerHTML = `
@@ -3059,7 +3058,7 @@ export class DebugView extends Component {
         <div class="debug-subbox">
           <div class="debug-subbox-head">
             <span class="debug-subbox-title ${active ? "is-active" : ""}">${icons.wifi(14)}<span>System &amp; network</span></span>
-            <span class="badge">${s ? (s.net ? `${esc(s.net.mode)} · Ch ${s.channel}` : `Ch ${s.channel}`) : "—"}</span>
+            <span class="badge">${s ? `Ch ${s.channel}` : "—"}</span>
           </div>
           <dl class="debug-kv-list">
             <div class="debug-kv-row">
@@ -3083,16 +3082,14 @@ export class DebugView extends Component {
               <dd>${s ? `${(s.heapFree / 1024).toFixed(0)} KB <span class="note">· lowest ${(s.heapMin / 1024).toFixed(0)} KB</span>` : "—"}</dd>
             </div>
             <div class="debug-kv-row">
-              <dt>Wi-Fi link</dt>
+              <dt>Course link</dt>
               <dd>${
                 s
-                  ? s.net
-                    ? s.role === 1
-                      ? `${s.net.stations} device${s.net.stations === 1 ? "" : "s"} joined`
-                      : s.slot >= 2
-                        ? `Joined Hub · slot ${s.slot}`
-                        : "Not joined to a Hub"
-                    : `Channel ${s.channel}`
+                  ? s.role === 1
+                    ? `Hub · Ch ${s.channel}`
+                    : s.slot >= 2
+                      ? `Joined Hub · slot ${s.slot}`
+                      : "Not joined to a Hub"
                   : "—"
               }</dd>
             </div>
@@ -3483,7 +3480,7 @@ export class DebugView extends Component {
             <div class="debug-net-inspector-bars-wrap">
               <div class="debug-subbar">
                 <span class="debug-chart-title">5.8 GHz channels received from ${esc(selectedChild.label)} (Slot ${selectedChild.slot})</span>
-                <span class="note mono">${dbmSource ? (selectedChild.dbm ? "Direct from Hub USB" : "Via Hub UDP stream") : "Waiting for Spoke window frames…"}</span>
+                <span class="note mono">${dbmSource ? (selectedChild.dbm ? "Direct from Hub USB" : "Via Hub USB stream") : "Waiting for Spoke window frames…"}</span>
               </div>
               <div class="debug-net-inspector-bars">${barsHtml}</div>
             </div>
@@ -3517,15 +3514,11 @@ export class DebugView extends Component {
             <dl class="debug-kv-list">
               <div class="debug-kv-row">
                 <dt>TDMA slot</dt>
-                <dd>Slot 1 <span class="note">· Beacon master &amp; UDP bridge</span></dd>
+                <dd>Slot 1 <span class="note">· Beacon master &amp; USB bridge</span></dd>
               </div>
               <div class="debug-kv-row">
                 <dt>2.4 GHz link</dt>
                 <dd>ESP-NOW LR (500 kbps) <span class="note">· Ch ${ch}</span></dd>
-              </div>
-              <div class="debug-kv-row">
-                <dt>Laptop Wi-Fi</dt>
-                <dd>${s.net ? `${esc(s.net.mode)} <span class="note">· ${s.net.stations} client${s.net.stations === 1 ? "" : "s"} joined</span>` : `Channel ${ch}`}</dd>
               </div>
               <div class="debug-kv-row">
                 <dt>Child Spokes tied</dt>

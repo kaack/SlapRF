@@ -18,30 +18,12 @@ export class DataSourceCard extends Component {
     this.api = api;
     el.addEventListener("change", this.handleChange);
     el.addEventListener("click", this.handleClick);
-    el.addEventListener("keydown", this.handleKeyDown);
     this.onDispose(() => {
       el.removeEventListener("change", this.handleChange);
       el.removeEventListener("click", this.handleClick);
-      el.removeEventListener("keydown", this.handleKeyDown);
     });
-    this.onDispose(
-      store.subscribe(["status"], () => {
-        const active = document.activeElement;
-        if (active instanceof HTMLInputElement && active.name === "hubHost" && this.el.contains(active)) {
-          return;
-        }
-        this.render();
-      })
-    );
-    this.onDispose(
-      api.hubBridge.subscribe(() => {
-        const active = document.activeElement;
-        if (active instanceof HTMLInputElement && active.name === "hubHost" && this.el.contains(active)) {
-          return;
-        }
-        this.render();
-      })
-    );
+    this.onDispose(store.subscribe(["status"], () => this.render()));
+    this.onDispose(api.hubBridge.subscribe(() => this.render()));
     this.render();
   }
 
@@ -49,18 +31,6 @@ export class DataSourceCard extends Component {
     const target = e.target as HTMLInputElement;
     if (target.name === "simulator") {
       void this.api.toggleSimulator();
-      return;
-    }
-    if (target.name === "hubHost") {
-      this.api.hubBridge.setHubHost(target.value, true);
-    }
-  };
-
-  private handleKeyDown = (e: KeyboardEvent): void => {
-    const target = e.target as HTMLInputElement;
-    if (target.name === "hubHost" && e.key === "Enter") {
-      e.preventDefault();
-      this.api.hubBridge.setHubHost(target.value, true);
     }
   };
 
@@ -74,26 +44,6 @@ export class DataSourceCard extends Component {
       if (mode === "auto" || mode === "browser" || mode === "desktop") {
         void this.api.setRealEngineMode(mode).then(() => this.render());
       }
-      return;
-    }
-    if (action === "discover-hub") {
-      const input = this.el.querySelector<HTMLInputElement>('input[name="hubHost"]');
-      if (input && input.value.trim()) {
-        this.api.hubBridge.setHubHost(input.value, false);
-      }
-      void this.api.hubBridge.discoverHub();
-      return;
-    }
-    if (action === "connect-hub") {
-      const input = this.el.querySelector<HTMLInputElement>('input[name="hubHost"]');
-      this.api.hubBridge.setHubHost(input ? input.value : this.api.hubBridge.hubHost, true);
-      if (this.api.usingBrowserRealEngine) {
-        this.api.hubBridge.connectWifiStream();
-      }
-      return;
-    }
-    if (action === "reset-hub-host") {
-      this.api.hubBridge.setHubHost("192.168.4.1", true);
       return;
     }
     if (action === "restore-hub-defaults") {
@@ -112,7 +62,7 @@ export class DataSourceCard extends Component {
       ? "Simulator (in-browser WASM)"
       : usingBrowser
         ? "Browser engine (WASM direct to Hub)"
-        : "Desktop Go server (Hub SSE + LiveTime TCP :5403 + SQLite)";
+        : "Desktop Go server (LiveTime TCP :5403 + SQLite)";
 
     this.el.innerHTML = `
       <div class="card">
@@ -135,7 +85,7 @@ export class DataSourceCard extends Component {
           <div class="option-row">
             <div>
               <div class="option-title">Hardware timing runtime</div>
-              <div class="option-sub">Run the 5.8 GHz DSP &amp; lap timing engine right in the browser via WebAssembly (streams directly from the Hub over Wi-Fi SSE or USB-C on the <a href="#/network" class="link-inline">Network</a> page), or use the desktop app for MultiGP LiveTime TCP (:5403) and SQLite storage.</div>
+              <div class="option-sub">Run the 5.8 GHz DSP &amp; lap timing engine right in the browser via WebAssembly (streams directly from the USB-C Hub on the <a href="#/network" class="link-inline">Network</a> page), or use the desktop app for MultiGP LiveTime TCP (:5403) and SQLite storage.</div>
             </div>
             <div class="option-actions">
               <div class="segmented" role="group" aria-label="Hardware timing runtime">
