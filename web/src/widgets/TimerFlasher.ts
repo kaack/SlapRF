@@ -184,16 +184,21 @@ export class TimerFlasher extends Component {
 
     this.listen(el, "change", (e) => {
       const target = e.target as HTMLInputElement | HTMLSelectElement;
-      if (target.matches("[data-all-ports]")) {
-        this.showAllPorts = (target as HTMLInputElement).checked;
-        this.saveFlasherPrefs();
-      } else if (target.matches("[data-erase-before-flash]")) {
+      if (target.matches("[data-erase-before-flash]")) {
         this.keepFingerprint = !(target as HTMLInputElement).checked;
         this.saveFlasherPrefs();
         this.slideDir = "none";
         this.render();
       }
     });
+
+    const unsubPool = usbPool.onChange(() => {
+      if (!this.busy) {
+        this.slideDir = "none";
+        this.render();
+      }
+    });
+    this.onDispose(unsubPool);
 
     this.render();
   }
@@ -635,13 +640,22 @@ export class TimerFlasher extends Component {
     const cleanLabel = this.timerLabel.trim() || (isHub ? "H1" : this.suggestSpokeLabel());
     const linkSummary = isHub ? "USB-C → Computer" : "2.4 GHz ESP-NOW → Hub";
     const eraseBeforeFlash = !this.keepFingerprint;
+    const activeConsole = usbPool.debugConsole;
+    const isConnected = activeConsole.connected;
+    const targetName = isConnected
+      ? activeConsole.isOtherDevice
+        ? "Other"
+        : activeConsole.lastStatus?.label || activeConsole.lastConfig?.timerLabel || `USB ${activeConsole.slotIndex + 1}`
+      : "";
 
     const pct = this.progress ? this.progress.percent : this.lastSuccessMsg ? 100 : 0;
     const statusText = this.progress
       ? this.progress.detail
       : this.lastSuccessMsg
       ? `✓ ${this.lastSuccessMsg}`
-      : `Ready to flash ${cleanLabel} over USB-C`;
+      : isConnected
+        ? `Ready to flash ${cleanLabel} to connected USB device (${targetName})`
+        : "Off · connect a USB device in Connection above to flash";
 
     return `
       <div class="flasher-wizard-body">
@@ -650,7 +664,11 @@ export class TimerFlasher extends Component {
             <span class="note">Step 3 of 3 · Review &amp; write over USB-C</span>
           </div>
           <h3>Ready to flash ${esc(cleanLabel)}</h3>
-          <p>Plug your <strong>Seeed Studio XIAO ESP32-C5</strong> into USB-C and click <strong>Flash ${esc(cleanLabel)} to USB</strong>.</p>
+          <p>${
+            isConnected
+              ? `Connected to <strong>${esc(targetName)}</strong> over USB-C. Click <strong>Flash ${esc(cleanLabel)} to USB</strong> to write the firmware.`
+              : `Connect your <strong>Seeed Studio XIAO ESP32-C5</strong> in <strong>Connection</strong> above, then click <strong>Flash ${esc(cleanLabel)} to USB</strong>.`
+          }</p>
         </div>
 
         <div class="flasher-summary-grid">
@@ -697,15 +715,9 @@ export class TimerFlasher extends Component {
             <span class="meter-fill ${this.lastSuccessMsg && !this.busy ? "tone-good" : ""}" style="width:${pct}%"></span>
           </div>
           <div class="flasher-progress-foot">
-            <label class="flasher-port-toggle">
-              <input
-                type="checkbox"
-                data-all-ports="1"
-                ${this.showAllPorts ? "checked" : ""}
-                ${this.busy ? "disabled" : ""}
-              />
-              <span>Show all USB serial ports</span>
-            </label>
+            <span class="note">${
+              isConnected ? `Target USB connection: ${esc(targetName)}` : "Connect a USB port above or download the binary image"
+            }</span>
             <div class="flasher-progress-foot-actions">
               ${
                 this.lastSuccessMsg && !this.busy
@@ -749,7 +761,7 @@ export class TimerFlasher extends Component {
                     type="button"
                     class="btn"
                     data-flash-usb="1"
-                    ${!webSerialOk ? "disabled" : ""}
+                    ${!webSerialOk || !isConnected ? "disabled" : ""}
                   >
                     <span class="flasher-zap-icon">${icons.zap(15)}</span>
                     <span>Flash ${esc(cleanLabel)} again</span>
@@ -767,7 +779,7 @@ export class TimerFlasher extends Component {
                   type="button"
                   class="btn flasher-btn-flash"
                   data-flash-usb="1"
-                  ${this.busy || !webSerialOk ? "disabled" : ""}
+                  ${this.busy || !webSerialOk || !isConnected ? "disabled" : ""}
                 >
                   <span class="flasher-zap-icon">${icons.zap(15)}</span>
                   <span>${this.busy ? `Flashing ${esc(cleanLabel)}… (${pct}%)` : `Flash ${esc(cleanLabel)} to USB`}</span>

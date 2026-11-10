@@ -460,6 +460,7 @@ export interface ConnectedPortOwner {
   ownsPort(candidate: unknown): boolean;
   readSnapshot(): Promise<TimerReadout>;
   disconnectCleanly(): Promise<void>;
+  takeActivePort?(): Promise<{ port: SerialPortLike; reopen: () => Promise<void> } | null>;
 }
 
 /**
@@ -600,14 +601,19 @@ export async function flashXiaoC5OverWebSerial(
   onProgress({
     stage: "connecting",
     percent: 2,
-    detail: `Select the XIAO ESP32-C5 USB port to flash as ${label}…`,
+    detail: `Opening USB port to flash as ${label}…`,
   });
 
-  const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
-  const port = await nav.serial.requestPort(filters ? { filters } : undefined);
-
-  if (existingOwner && existingOwner.ownsPort(port)) {
-    await existingOwner.disconnectCleanly();
+  const taken = existingOwner?.takeActivePort ? await existingOwner.takeActivePort() : null;
+  let port: SerialPortLike;
+  if (taken) {
+    port = taken.port;
+  } else {
+    const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
+    port = await nav.serial.requestPort(filters ? { filters } : undefined);
+    if (existingOwner && existingOwner.ownsPort(port)) {
+      await existingOwner.disconnectCleanly();
+    }
   }
 
   await port.open({ baudRate: 115200, bufferSize: 16384 });
@@ -925,6 +931,9 @@ export async function flashXiaoC5OverWebSerial(
     } catch {
       // ignore
     }
+    if (taken) {
+      await taken.reopen().catch(() => undefined);
+    }
   }
 }
 
@@ -948,14 +957,19 @@ export async function eraseXiaoC5OverWebSerial(
   onProgress({
     stage: "connecting",
     percent: 4,
-    detail: "Select the XIAO ESP32-C5 USB port to wipe…",
+    detail: "Opening USB port to wipe…",
   });
 
-  const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
-  const port = await nav.serial.requestPort(filters ? { filters } : undefined);
-
-  if (existingOwner && existingOwner.ownsPort(port)) {
-    await existingOwner.disconnectCleanly();
+  const taken = existingOwner?.takeActivePort ? await existingOwner.takeActivePort() : null;
+  let port: SerialPortLike;
+  if (taken) {
+    port = taken.port;
+  } else {
+    const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
+    port = await nav.serial.requestPort(filters ? { filters } : undefined);
+    if (existingOwner && existingOwner.ownsPort(port)) {
+      await existingOwner.disconnectCleanly();
+    }
   }
 
   await port.open({ baudRate: 115200, bufferSize: 16384 });
@@ -1202,6 +1216,9 @@ export async function eraseXiaoC5OverWebSerial(
       await port.close();
     } catch {
       // ignore
+    }
+    if (taken) {
+      await taken.reopen().catch(() => undefined);
     }
   }
 }

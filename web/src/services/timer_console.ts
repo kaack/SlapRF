@@ -382,12 +382,13 @@ export class TimerConsole {
   public readonly slotIndex: number;
   public lastStatus: TimerStatus | null = null;
   public lastConfig: TimerReadout | null = null;
+  public probing = false;
   public hubOwnFrames = 0;
   public hubLastFrameAtMs = 0;
   public hubLastSeq: number | undefined = undefined;
   public hubLastDbm: number[] | undefined = undefined;
   public busyLabel: string | null = null;
-  public showAllPorts = false;
+  public showAllPorts = true;
   public reconnecting = false;
   public reconnectAttempt = 0;
   public readonly maxReconnectAttempts = 5;
@@ -435,6 +436,15 @@ export class TimerConsole {
     return this.port !== null;
   }
 
+  public get rawPort(): SerialPortLike | null {
+    return this.port;
+  }
+
+  /** True when a USB port is open and probing finished without finding SlapRF timer firmware. */
+  public get isOtherDevice(): boolean {
+    return this.port !== null && !this.probing && !this.lastStatus && !this.lastConfig;
+  }
+
   public ownsPort(candidate: unknown): boolean {
     return this.port !== null && this.port === candidate;
   }
@@ -465,7 +475,7 @@ export class TimerConsole {
     return typeof navigator !== "undefined" && "serial" in navigator;
   }
 
-  public async connect(showAllPorts = this.showAllPorts): Promise<void> {
+  public async connect(showAllPorts = true): Promise<void> {
     this.showAllPorts = showAllPorts;
     this.userDisconnecting = false;
     this.reconnecting = false;
@@ -473,7 +483,7 @@ export class TimerConsole {
     this.reconnectFailed = false;
     this.lastError = null;
     this.notifyStateChange();
-    const port = await serial().requestPort(showAllPorts ? undefined : { filters: [{ usbVendorId: ESPRESSIF_USB_VID }] });
+    const port = await serial().requestPort();
     await this.openPort(port);
     this.startStatusPolling();
     this.subscribers.forEach((h) => h.onConnect?.());
@@ -482,38 +492,94 @@ export class TimerConsole {
 
   /**
    * Opens an already-picked WebSerial port, probes `STATUS?` and `SLAPRF?`, and starts the status
-   * heartbeat. Used by `usbPool.connectNew()` after checking for duplicate port selection.
+   * heartbeat. If the port does not run SlapRF firmware, it stays connected as `"Other"` so it can
+   * still be flashed or erased on the Flasher page.
    */
-  public async connectWithPort(port: SerialPortLike, showAllPorts = this.showAllPorts): Promise<TimerStatus | null> {
+  public async connectWithPort(port: SerialPortLike, showAllPorts = true): Promise<TimerStatus | null> {
     this.showAllPorts = showAllPorts;
     this.userDisconnecting = false;
     this.reconnecting = false;
     this.reconnectAttempt = 0;
     this.reconnectFailed = false;
     this.lastError = null;
+    this.probing = true;
     this.notifyStateChange();
-    await this.openPort(port);
-    this.startStatusPolling();
-    this.subscribers.forEach((h) => h.onConnect?.());
-    this.notifyStateChange();
-    const s = await this.ensureRunningApp();
-    if (this.connected) {
-      void this.send("SLAPRF?").catch(() => undefined);
+    try {
+      await this.openPort(port);
+      this.startStatusPolling();
+      this.subscribers.forEach((h) => h.onConnect?.());
+      this.notifyStateChange();
+      const s = await this.ensureRunningApp(1600);
+      if (this.connected) {
+        void this.send("SLAPRF?").catch(() => undefined);
+      }
+      return s;
+    } finally {
+      this.probing = false;
+      this.notifyStateChange();
     }
-    return s;
   }
 
   /**
    * Opens the USB port (via WebSerial port picker), probes `STATUS?` and `SLAPRF?`, and starts
    * the 2-second status heartbeat so the connection stays active across all SPA routes.
    */
-  public async connectAndStart(showAllPorts = this.showAllPorts): Promise<TimerStatus | null> {
-    await this.connect(showAllPorts);
-    const s = await this.ensureRunningApp();
-    if (this.connected) {
-      void this.send("SLAPRF?").catch(() => undefined);
+  public async connectAndStart(showAllPorts = true): Promise<TimerStatus | null> {
+    this.probing = true;
+    this.notifyStateChange();
+    try {
+      await this.connect(showAllPorts);
+      const s = await this.ensureRunningApp(1600);
+      if (this.connected) {
+        void this.send("SLAPRF?").catch(() => undefined);
+      }
+      return s;
+    } finally {
+      this.probing = false;
+      this.notifyStateChange();
     }
-    return s;
+  }
+
+  /**
+   * Re-attaches this console slot to the board after `flashXiaoC5OverWebSerial` or
+   * `eraseXiaoC5OverWebSerial` resets and closes the raw port.
+   */
+  public async reopenPortAfterFlash(fallbackPort?: unknown): Promise<void> {
+    this.probing = true;
+    this.notifyStateChange();
+    try {
+      const deadline = Date.now() + 5000;
+      await sleep(600);
+      while (Date.now() < deadline) {
+        let candidate: SerialPortLike | undefined = undefined;
+        try {
+          const ports = await serial().getPorts();
+          candidate = ports.find((p) => {
+            if (usbPool.findOwnerOfPort(p)) return false;
+            const info = p.getInfo?.() ?? {};
+            return (
+              !this.portInfo ||
+              (info.usbVendorId === this.portInfo.usbVendorId && info.usbProductId === this.portInfo.usbProductId)
+            );
+          });
+        } catch {
+          // ignore
+        }
+        const target = candidate ?? (fallbackPort as SerialPortLike | undefined);
+        if (target) {
+          try {
+            await this.connectWithPort(target, this.showAllPorts);
+            return;
+          } catch {
+            // port still re-enumerating after hardware reset
+          }
+        }
+        await sleep(350);
+      }
+    } finally {
+      this.probing = false;
+      this.notifyStateChange();
+    }
   }
 
   /** Stops any active debug streams on the timer and closes the USB port. */
@@ -525,7 +591,7 @@ export class TimerConsole {
     this.lastError = null;
     window.clearInterval(this.statusPollTimer);
     this.statusPollTimer = 0;
-    if (this.connected) {
+    if (this.connected && (this.lastStatus || this.lastConfig)) {
       await withTimeout(this.send("LIVE 0\nSCAN STOP\nLOG 0"), 250).catch(() => undefined);
       await sleep(50);
     }
@@ -540,7 +606,12 @@ export class TimerConsole {
   public startStatusPolling(silenceMs = 4000): void {
     window.clearInterval(this.statusPollTimer);
     this.statusPollTimer = window.setInterval(() => {
-      if (this.connected && !this.expectingRestart && Date.now() - this.lastStatusAtMs > silenceMs) {
+      if (
+        this.connected &&
+        !this.expectingRestart &&
+        (this.lastStatus !== null || this.lastConfig !== null || this.probing) &&
+        Date.now() - this.lastStatusAtMs > silenceMs
+      ) {
         void this.send("STATUS?").catch(() => undefined);
       }
     }, 1000);
@@ -620,6 +691,7 @@ export class TimerConsole {
     window.clearInterval(this.statusPollTimer);
     this.statusPollTimer = 0;
     await this.closePort();
+    this.probing = false;
     this.lastStatus = null;
     this.lastConfig = null;
     this.hubOwnFrames = 0;
@@ -796,19 +868,20 @@ export class TimerConsole {
    * finishing boot (or flushing any partial line in its UART RX buffer), we catch its first
    * status reply cleanly without touching DTR/RTS lines.
    */
-  public async ensureRunningApp(timeoutMs = 3000): Promise<TimerStatus | null> {
+  public async ensureRunningApp(timeoutMs = 1600): Promise<TimerStatus | null> {
     if (!this.port) return null;
     const deadline = Date.now() + timeoutMs;
     let first = true;
     while (Date.now() < deadline && this.port) {
       try {
-        const cmd = first ? "\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?" : "\nSTATUS?";
+        const cmd = first ? "\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?" : "\nSTATUS?";
         first = false;
-        return await this.request<TimerStatus>(cmd, "status", 900);
+        return await this.request<TimerStatus>(cmd, "status", 750);
       } catch {
+        if (this.lastConfig) return this.lastStatus;
         // retry after a short pause
       }
-      await sleep(150);
+      await sleep(120);
     }
     return null;
   }
@@ -989,6 +1062,7 @@ export class TimerConsole {
         if (magicAt > pos) this.emitText(b.subarray(pos, magicAt));
         const parsed = parseSlaprfConfigBlock(b.subarray(magicAt, magicAt + CONFIG_LEN));
         if (parsed) {
+          this.probing = false;
           this.lastConfig = parsed;
           recordKnownTimerReadout(parsed);
           this.subscribers.forEach((h) => h.onConfig?.(parsed));
@@ -1129,7 +1203,10 @@ export class TimerConsole {
         switch (msg.t) {
           case "status": {
             const st = msg as unknown as TimerStatus;
+            const wasProbing = this.probing;
+            this.probing = false;
             const labelChanged =
+              wasProbing ||
               this.lastStatus?.label !== st.label ||
               this.lastStatus?.fp !== st.fp ||
               this.lastStatus?.role !== st.role ||
@@ -1234,6 +1311,10 @@ export class UsbConnectionPool {
     }
   }
 
+  public selectDebugSlot(slotIndex: number): void {
+    this.setDebugSlot(slotIndex);
+  }
+
   public connectedConsoles(): TimerConsole[] {
     return this.slots.filter((c) => c.connected);
   }
@@ -1268,14 +1349,14 @@ export class UsbConnectionPool {
   }
 
   public async connectNew(
-    showAllPorts = false,
+    showAllPorts = true,
     selectForDebug = true
   ): Promise<{ console: TimerConsole; status: TimerStatus | null; alreadyConnected: boolean }> {
     const free = this.slots.find((c) => !c.connected && !c.busyLabel && !c.reconnecting);
     if (!free) {
       throw new Error(`Maximum of ${MAX_USB_CONNECTIONS} USB connections already active. Disconnect one first.`);
     }
-    const port = await serial().requestPort(showAllPorts ? undefined : { filters: [{ usbVendorId: ESPRESSIF_USB_VID }] });
+    const port = await serial().requestPort();
     const existing = this.findOwnerOfPort(port);
     if (existing) {
       if (selectForDebug) {
@@ -1289,6 +1370,22 @@ export class UsbConnectionPool {
     }
     const status = await free.connectWithPort(port, showAllPorts);
     return { console: free, status, alreadyConnected: false };
+  }
+
+  /**
+   * Releases the active debug USB connection's open `SerialPort` so the Flasher or Eraser can talk
+   * to the ESP32-C5 ROM bootloader directly without popping up a second USB port picker, and
+   * returns a `reopen` callback that re-attaches the same `TimerConsole` slot afterwards.
+   */
+  public async takeActivePort(): Promise<{ port: SerialPortLike; reopen: () => Promise<void> } | null> {
+    const active = this.debugConsole;
+    const port = active.rawPort;
+    if (!active.connected || !port) return null;
+    await active.disconnectCleanly();
+    return {
+      port,
+      reopen: () => active.reopenPortAfterFlash(port),
+    };
   }
 
   public async disconnectAllCleanly(): Promise<void> {

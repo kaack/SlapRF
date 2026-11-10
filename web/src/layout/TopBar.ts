@@ -163,12 +163,18 @@ export class TopBar extends Component {
     const usbOn = connectedUsb.length > 0;
     const activeConsole = usbPool.debugConsole;
     const activeLabel = activeConsole.connected
-      ? activeConsole.lastStatus?.label ||
-        activeConsole.lastConfig?.timerLabel ||
-        (activeConsole.lastStatus?.role === 1 ? "H1" : `USB ${activeConsole.slotIndex + 1}`)
+      ? activeConsole.isOtherDevice
+        ? "Other"
+        : activeConsole.lastStatus?.label ||
+          activeConsole.lastConfig?.timerLabel ||
+          (activeConsole.lastStatus?.role === 1 ? "H1" : `USB ${activeConsole.slotIndex + 1}`)
       : "";
     const usbLabels = connectedUsb
-      .map((c) => c.lastStatus?.label || c.lastConfig?.timerLabel || (c.lastStatus?.role === 1 ? "H1" : "S1"))
+      .map((c) =>
+        c.isOtherDevice
+          ? "Other"
+          : c.lastStatus?.label || c.lastConfig?.timerLabel || (c.lastStatus?.role === 1 ? "H1" : `USB ${c.slotIndex + 1}`)
+      )
       .join(" + ");
     const usbFps = connectedUsb.map((c) => c.lastStatus?.fp || "").filter(Boolean).join(", ");
     const usbBusy = usbPool.slots.find((c) => c.busyLabel)?.busyLabel ?? "";
@@ -203,8 +209,11 @@ export class TopBar extends Component {
         const s = c.lastStatus;
         const cfg = c.lastConfig;
         const isActive = c === activeConsole;
+        const isOther = c.isOtherDevice;
         const isSpoke = s ? s.role === 2 : cfg?.role === "spoke";
-        const label = s?.label || cfg?.timerLabel || (s?.role === 1 || cfg?.role === "hub" ? "H1" : `USB ${c.slotIndex + 1}`);
+        const label = isOther
+          ? "Other"
+          : s?.label || cfg?.timerLabel || (s?.role === 1 || cfg?.role === "hub" ? "H1" : `USB ${c.slotIndex + 1}`);
         const roleMeta = s
           ? s.emergencyMode
             ? "Emergency"
@@ -215,9 +224,11 @@ export class TopBar extends Component {
             ? cfg.role === "hub"
               ? "Hub"
               : "Spoke"
-            : "Reading…";
+            : isOther
+              ? `USB ${c.slotIndex + 1}`
+              : "Reading…";
         const fp = s?.fp || cfg?.fingerprint || "";
-        const dotClass = s?.emergencyMode ? "is-emergency" : isSpoke ? "is-spoke" : "is-up";
+        const dotClass = s?.emergencyMode ? "is-emergency" : isOther ? "is-warn" : isSpoke ? "is-spoke" : "is-up";
         return `
           <div class="topbar-usb-item ${isActive ? "is-active" : ""}">
             <button

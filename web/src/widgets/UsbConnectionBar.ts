@@ -25,8 +25,11 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
       const s = c.lastStatus;
       const cfg = c.lastConfig;
       const active = c === opts.activeConsole;
+      const isOther = c.isOtherDevice;
       const isSpoke = s ? s.role === 2 : cfg?.role === "spoke";
-      const label = s?.label || cfg?.timerLabel || (s?.role === 1 || cfg?.role === "hub" ? "H1" : `USB ${c.slotIndex + 1}`);
+      const label = isOther
+        ? "Other"
+        : s?.label || cfg?.timerLabel || (s?.role === 1 || cfg?.role === "hub" ? "H1" : `USB ${c.slotIndex + 1}`);
       const roleMeta = s
         ? s.emergencyMode
           ? "Emergency"
@@ -37,8 +40,16 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
           ? cfg.role === "hub"
             ? "Hub"
             : "Spoke"
-          : "Reading…";
-      const chipColor = s?.emergencyMode ? "#facc15" : isSpoke ? "#38bdf8" : "#d4ff3a";
+          : isOther
+            ? `USB ${c.slotIndex + 1}`
+            : "Reading…";
+      const chipColor = s?.emergencyMode
+        ? "#facc15"
+        : isOther
+          ? "#94a3b8"
+          : isSpoke
+            ? "#38bdf8"
+            : "#d4ff3a";
       const fp = s?.fp || cfg?.fingerprint || "";
       const fpNote = fp ? ` · ${fp}` : "";
       return `
@@ -75,7 +86,7 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
         class="pilot-chip debug-usb-add-chip"
         data-action="connect-add"
         ${supported && !busy ? "" : "disabled"}
-        title="Connect ${connected.length > 0 ? "another " : ""}timer over USB-C (${connected.length}/${MAX_USB_CONNECTIONS} active)"
+        title="Connect ${connected.length > 0 ? "another " : ""}USB device (${connected.length}/${MAX_USB_CONNECTIONS} active)"
       >
         ${icons.plug(20)}
         <span class="pilot-chip-name">${busy ? `${esc(busyText)}…` : connected.length > 0 ? "+ Connect USB" : "Connect USB"}</span>
@@ -97,16 +108,11 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
         ${chipsHtml}
         ${addBtnHtml}
       </div>
-      <div class="debug-connect-actions">
-        ${
-          canAdd
-            ? `<label class="check debug-port-filter">
-                <input type="checkbox" data-all-ports ${opts.showAllPorts ? "checked" : ""}/>
-                <span>Show non-XIAO ports</span>
-              </label>`
-            : `<span class="note">${MAX_USB_CONNECTIONS}/${MAX_USB_CONNECTIONS} USB connections active</span>`
-        }
-      </div>
+      ${
+        !canAdd
+          ? `<div class="debug-connect-actions"><span class="note">${MAX_USB_CONNECTIONS}/${MAX_USB_CONNECTIONS} USB connections active</span></div>`
+          : ""
+      }
     </div>
     ${bannerParts.join("")}`;
 }

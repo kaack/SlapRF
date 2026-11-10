@@ -2993,7 +2993,9 @@ export class DebugView extends Component {
           : `Emergency mode · forced manually (radio off, ambulance LED fade active · click Exit emergency mode to resume)`
         : `${esc(s.label || "(unnamed)")} · ${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`} · polling every 2 s · up ${fmtUptime(s.uptimeMs)}`
       : on
-        ? "Waiting for timer status…"
+        ? this.console.isOtherDevice
+          ? "Connected device (Other) has no SlapRF firmware — open Flasher to write firmware"
+          : "Waiting for timer status…"
         : "Off · click Connect in the top bar";
 
     const rfBadge = !s

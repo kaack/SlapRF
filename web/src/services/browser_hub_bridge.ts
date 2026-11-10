@@ -107,7 +107,11 @@ export class BrowserHubBridge {
         };
       }
       const hub = usbPool.hubConsole();
-      const names = connected.map((c) => c.lastStatus?.label || (c.lastStatus?.role === 1 ? "H1" : "S1"));
+      const names = connected.map((c) =>
+        c.isOtherDevice
+          ? "Other"
+          : c.lastStatus?.label || c.lastConfig?.timerLabel || (c.lastStatus?.role === 1 ? "H1" : `USB ${c.slotIndex + 1}`)
+      );
       const joined = names.join(" + ");
       if (hub) {
         const s = hub.lastStatus;
@@ -121,14 +125,23 @@ export class BrowserHubBridge {
               : `Connected to Hub ${hubName} over USB-C — click to open Network`,
         };
       }
-      const first = connected[0].lastStatus;
+      const spoke = connected.find((c) => c.lastStatus?.role === 2 || c.lastConfig?.role === "spoke");
+      if (spoke) {
+        const first = spoke.lastStatus;
+        const spokeName = first?.label || spoke.lastConfig?.timerLabel || "S1";
+        return {
+          color: "blue",
+          shortLabel: connected.length > 1 ? `${joined}` : `${spokeName} · Spoke`,
+          detail:
+            connected.length > 1
+              ? `Connected over USB-C (${connected.length}/3): ${joined} — click to open Network`
+              : `Connected to Spoke ${spokeName} (Slot ${first?.slot || "?"}) over USB-C — click to open Network`,
+        };
+      }
       return {
-        color: "blue",
-        shortLabel: connected.length > 1 ? `${joined}` : `${first?.label || "S1"} · Spoke`,
-        detail:
-          connected.length > 1
-            ? `Connected over USB-C (${connected.length}/3): ${joined} — click to open Network`
-            : `Connected to Spoke ${first?.label || "S1"} (Slot ${first?.slot || "?"}) over USB-C — click to open Network`,
+        color: "yellow",
+        shortLabel: connected.length > 1 ? `${joined}` : "Other · USB",
+        detail: `Connected to non-timer USB port (${joined}) — open Flasher to write firmware`,
       };
     }
 

@@ -126,7 +126,9 @@ class TimerReaderPanel extends Component {
 
   private render(): void {
     const webSerialOk = isWebSerialSupported();
-    const isConnected = usbPool.debugConsole.connected;
+    const activeConsole = usbPool.debugConsole;
+    const isConnected = activeConsole.connected;
+    const isOther = activeConsole.isOtherDevice;
     const r = this.readout;
     const s = r?.status;
     const active = Boolean(r);
@@ -152,11 +154,13 @@ class TimerReaderPanel extends Component {
         ? esc(this.errorMsg)
         : r
           ? `Read ${esc(r.timerLabel || "(unnamed)")} · ${r.role === "hub" ? "Hub" : "Spoke"} · firmware ${esc(r.firmwareVersion)}`
-          : isConnected
-            ? "Connected over USB · click Read timer to inspect"
-            : webSerialOk
-              ? "Off · connect a timer in Connection above to read its settings"
-              : "Direct USB reading requires Chrome, Edge, or Brave";
+          : isOther
+            ? "Connected device (Other) has no SlapRF firmware — use Writer above to flash it"
+            : isConnected
+              ? "Connected over USB · click Read timer to inspect"
+              : webSerialOk
+                ? "Off · connect a timer in Connection above to read its settings"
+                : "Direct USB reading requires Chrome, Edge, or Brave";
 
     const rfBadge = !r
       ? `<span class="badge">—</span>`
@@ -314,26 +318,25 @@ class TimerEraserPanel extends Component {
       }
     });
 
-    this.listen(el, "change", (e) => {
-      const t = e.target as HTMLInputElement;
-      if (t.matches("[data-eraser-all-ports]")) {
-        this.showAllPorts = t.checked;
-        savePortPref(t.checked);
+    const unsubPool = usbPool.onChange(() => {
+      if (!this.busy) {
+        this.render();
       }
     });
+    this.onDispose(unsubPool);
 
     this.render();
   }
 
   private async eraseFromUsb(): Promise<void> {
-    if (this.busy) return;
+    if (this.busy || !usbPool.debugConsole.connected) return;
     this.busy = true;
     this.errorMsg = null;
     this.lastSuccessMsg = null;
     this.progress = {
       stage: "connecting",
       percent: 1,
-      detail: "Select the XIAO ESP32-C5 USB port to wipe…",
+      detail: "Opening connected USB port to wipe…",
     };
     this.render();
 
@@ -383,6 +386,13 @@ class TimerEraserPanel extends Component {
 
   private render(): void {
     const webSerialOk = isWebSerialSupported();
+    const activeConsole = usbPool.debugConsole;
+    const isConnected = activeConsole.connected;
+    const targetName = isConnected
+      ? activeConsole.isOtherDevice
+        ? "Other"
+        : activeConsole.lastStatus?.label || activeConsole.lastConfig?.timerLabel || `USB ${activeConsole.slotIndex + 1}`
+      : "";
     const pct = this.progress
       ? Math.max(0, Math.min(100, Math.round(this.progress.percent)))
       : this.lastSuccessMsg
@@ -395,7 +405,9 @@ class TimerEraserPanel extends Component {
         ? "is-emergency"
         : this.lastSuccessMsg
           ? "is-up"
-          : "";
+          : isConnected
+            ? "is-warn"
+            : "";
 
     const headText = this.busy
       ? esc(`${this.progress?.detail || "Erasing timer over USB…"} (${pct}%)`)
@@ -403,9 +415,11 @@ class TimerEraserPanel extends Component {
         ? esc(this.errorMsg)
         : this.lastSuccessMsg
           ? `✓ ${esc(this.lastSuccessMsg)}`
-          : webSerialOk
-            ? "No timer erased yet · plug a timer into USB and click Erase timer"
-            : "Direct USB erasing requires Chrome, Edge, or Brave";
+          : isConnected
+            ? `Connected to ${esc(targetName)} · click Erase timer to wipe back to factory blank`
+            : webSerialOk
+              ? "Off · connect a USB device in Connection above to erase"
+              : "Direct USB erasing requires Chrome, Edge, or Brave";
 
     this.el.innerHTML = `
       <div class="debug-status-topbar">
@@ -414,11 +428,7 @@ class TimerEraserPanel extends Component {
           <span class="debug-head-note" data-eraser-head="1">${headText}</span>
         </span>
         <div class="debug-connect-actions">
-          <label class="debug-port-check" title="Include all serial ports in the browser picker">
-            <input type="checkbox" data-eraser-all-ports="1" ${this.showAllPorts ? "checked" : ""} ${this.busy ? "disabled" : ""} />
-            <span>All ports</span>
-          </label>
-          <button type="button" class="btn btn-sm btn-bad" data-action="erase-timer" ${this.busy || !webSerialOk ? "disabled" : ""}>
+          <button type="button" class="btn btn-sm btn-bad" data-action="erase-timer" ${this.busy || !webSerialOk || !isConnected ? "disabled" : ""}>
             ${icons.trash(14)}<span data-eraser-btn-text="1">${this.busy ? `Erasing… (${pct}%)` : "Erase timer"}</span>
           </button>
         </div>
@@ -524,7 +534,7 @@ export class FlasherView extends Component {
         if (applyToFlasher) {
           flasher.applyReadout(r);
         }
-      } else if (!usbPool.debugConsole.connected) {
+      } else if (!usbPool.debugConsole.connected || usbPool.debugConsole.isOtherDevice) {
         readerPanel?.setReadout(null);
       }
     };
