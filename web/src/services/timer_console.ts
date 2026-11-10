@@ -125,10 +125,15 @@ export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { 
   }
 }
 
-export function forgetKnownHardwareTimer(fp: string): void {
-  const clean = (fp || "").trim().toUpperCase();
-  if (!clean) return;
-  const list = getKnownHardwareTimers().filter((t) => t.fp.toUpperCase() !== clean);
+export function forgetKnownHardwareTimer(fp?: string, label?: string): void {
+  const cleanFp = (fp || "").trim().toUpperCase();
+  const cleanLabel = (label || "").trim().toUpperCase();
+  if (!cleanFp && !cleanLabel) return;
+  const list = getKnownHardwareTimers().filter((t) => {
+    if (cleanFp && t.fp.toUpperCase() === cleanFp) return false;
+    if (!cleanFp && cleanLabel && (t.label || "").trim().toUpperCase() === cleanLabel) return false;
+    return true;
+  });
   if (typeof window !== "undefined" && window.localStorage) {
     try {
       window.localStorage.setItem(KNOWN_TIMERS_STORAGE_KEY, JSON.stringify(list));

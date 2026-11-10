@@ -22,7 +22,7 @@ import {
   generateFingerprint,
   LATEST_FIRMWARE_VERSION,
 } from "./esp_flasher";
-import { TimerConsole, TimerStatus, usbPool } from "./timer_console";
+import { forgetKnownHardwareTimer, TimerConsole, TimerStatus, usbPool } from "./timer_console";
 import { WasmSimTransport } from "./wasm_transport";
 
 interface LapPayload {
@@ -457,6 +457,21 @@ export class ApiClient {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("POST", "/api/timers/color", { timerId, color })
     );
+  }
+
+  public async deleteTimer(timerId: number, fingerprint?: string, timerLabel?: string): Promise<void> {
+    forgetKnownHardwareTimer(fingerprint, timerLabel);
+    const cleanFp = (fingerprint || "").trim().toUpperCase();
+    const cleanLabel = (timerLabel || "").trim();
+    for (const k of [...this.provisionedUsbKeys]) {
+      if ((cleanFp && k.endsWith(`:${cleanFp}`)) || (cleanLabel && k.includes(`:${cleanLabel}:`))) {
+        this.provisionedUsbKeys.delete(k);
+      }
+    }
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>("POST", "/api/timers/delete", { timerId })
+    );
+    await enginePersistence.reconcileNow().catch(() => undefined);
   }
 
   /** Registers a newly flashed timer (hub or spoke) with its name and board fingerprint. */

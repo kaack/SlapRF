@@ -122,6 +122,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/track/reset", s.handleResetTrack)
 	mux.HandleFunc("/api/timers/provision", s.handleProvisionGate)
 	mux.HandleFunc("/api/timers/color", s.handleUpdateTimerColor)
+	mux.HandleFunc("/api/timers/delete", s.handleDeleteTimer)
 
 	// Legacy aliases
 	mux.HandleFunc("/api/gates/update", s.handleUpdateGate)
@@ -316,6 +317,31 @@ func (s *Server) handleUpdateTimerColor(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.activeEngine().SetTimerColor(body.TimerID, body.Color); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	s.handleGetState(w, r)
+}
+
+func (s *Server) handleDeleteTimer(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		TimerID uint8 `json:"timerId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var err error
+	if s.simulator.IsRunning() {
+		err = s.simulator.DeleteTimer(body.TimerID)
+	} else {
+		err = s.realEngine.DeleteDetectedTimer(body.TimerID)
+	}
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

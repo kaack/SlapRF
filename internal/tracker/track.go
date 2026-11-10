@@ -691,25 +691,24 @@ func (e *Engine) SetDetectedTimerOnline(timerID uint8, online bool) {
 	}
 }
 
-// DeleteDetectedTimer removes a timer from `e.detected` and unassigns it from any gate on the track.
+// DeleteDetectedTimer removes a timer from `e.detected` and deletes any gate assigned to it from the track.
 func (e *Engine) DeleteDetectedTimer(timerID uint8) error {
 	if timerID == 0 || timerID > maxTimers {
 		return ErrInvalidTimerID
 	}
 	e.mu.Lock()
 	delete(e.detected, timerID)
-	for i := range e.gates {
-		if e.gates[i].AssignedTimerID == timerID {
-			e.gates[i].AssignedTimerID = 0
-			e.gates[i].TimerLabel = ""
-			e.gates[i].FirmwareVersion = ""
-			e.gates[i].Color = ""
-			e.gates[i].Online = false
-			e.gates[i].LastSeenAt = time.Time{}
-			e.gates[i].BatteryMv = 0
-			e.gates[i].BatteryPct = 0
+	kept := e.gates[:0]
+	for _, g := range e.gates {
+		if g.AssignedTimerID != timerID {
+			kept = append(kept, g)
 		}
 	}
+	e.gates = kept
+	ordered := e.orderedGatesLocked()
+	e.applyOrderLocked(ordered)
+	e.ensureStartGateLocked()
+	e.initDetectorsLocked()
 	e.progress = make(map[int]*pilotProgress)
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
 	gates := append([]domain.TrackGate(nil), e.gates...)

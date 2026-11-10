@@ -603,12 +603,17 @@ body.is-gate-dragging * {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(130px, 1.1fr) minmax(148px, 1.1fr) 140px minmax(150px, 1fr) 95px minmax(160px, 1.15fr);
-  min-width: 840px;
+  grid-template-columns: minmax(130px, 1.1fr) minmax(148px, 1.1fr) 140px minmax(150px, 1fr) 95px minmax(160px, 1.15fr) 32px;
+  min-width: 876px;
   align-items: center;
   gap: 12px;
   padding: 11px 20px;
   border-top: 1px solid var(--border);
+}
+.timer-row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
 }
 .timer-fw-cell {
   display: inline-flex;

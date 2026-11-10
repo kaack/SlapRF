@@ -1,5 +1,6 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
+import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import { LATEST_FIRMWARE_VERSION } from "../services/esp_flasher";
 import { TIMER_COLORS, timerColor, timerRoleText } from "../state/selectors";
@@ -26,6 +27,19 @@ export class TimersList extends Component {
 
     this.listen(el, "click", (e) => {
       const target = e.target as HTMLElement;
+      const deleteBtn = target.closest<HTMLElement>("[data-delete-timer]");
+      if (deleteBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        const timerId = Number(deleteBtn.dataset.deleteTimer);
+        const timer = this.allTimers.find((t) => t.timerId === timerId);
+        if (this.colorPickerTimerId === timerId) {
+          this.closeColorPopover();
+        }
+        void this.api.deleteTimer(timerId, timer?.fingerprint, timer?.timerLabel);
+        return;
+      }
+
       const toggleSwatch = target.closest<HTMLElement>("[data-toggle-timer-color]");
       if (toggleSwatch) {
         e.preventDefault();
@@ -240,6 +254,7 @@ export class TimersList extends Component {
             <span>Firmware</span>
             <span>Noise floor</span>
             <span>Battery</span>
+            <span aria-hidden="true"></span>
           </div>
           ${timers.map((d) => this.renderRow(d)).join("")}`;
 
@@ -310,6 +325,16 @@ export class TimersList extends Component {
         <div class="timer-battery-cell">
           <div class="meter timer-battery-meter"><span class="meter-fill tone-${tone}" style="width:${d.batteryPct}%"></span></div>
           <span class="mono timer-battery-text">${d.batteryPct}% · ${(d.batteryMv / 1000).toFixed(2)} V</span>
+        </div>
+
+        <div class="timer-row-actions">
+          <button
+            type="button"
+            class="gate-remove-btn timer-delete-btn"
+            data-delete-timer="${d.timerId}"
+            title="Delete timer ${esc(title)} (and any assigned gate)"
+            aria-label="Delete timer ${esc(title)}"
+          >${icons.trash(14)}</button>
         </div>
       </div>`;
   }

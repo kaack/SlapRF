@@ -226,3 +226,17 @@ func TestAddUnassignedGateAndBindDetectedTimer(t *testing.T) {
 		t.Fatalf("expected 5 detected timers (hub + 4 spokes) to remain after removing gate #5, got %d", len(detected))
 	}
 }
+
+func TestDeleteDetectedTimerRemovesAssignedGate(t *testing.T) {
+	e := NewEngine() // 4 gates bound to timers 2, 3, 4, 5 (plus hub timer 1)
+	assertLayout(t, e, 1, 2, 3, 4)
+
+	// Delete timer #3 (bound to Gate #2) -> both timer #3 and Gate #2 should be deleted.
+	if err := e.DeleteDetectedTimer(3); err != nil {
+		t.Fatal(err)
+	}
+	if e.HasDetectedTimer(3) {
+		t.Fatalf("expected timer #3 to be deleted from detected timers")
+	}
+	assertLayout(t, e, 1, 3, 4)
+}

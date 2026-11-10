@@ -171,7 +171,7 @@ func (r *HubFrameDecoder) handleHello(raw []byte) {
 		return
 	}
 	r.mu.Lock()
-	if cur, ok := r.slots[slot]; ok && cur.fingerprint == fp {
+	if cur, ok := r.slots[slot]; ok && cur.fingerprint == fp && (r.engine == nil || r.engine.HasDetectedTimer(cur.timerID)) {
 		r.mu.Unlock()
 		if r.engine != nil {
 			r.engine.MarkTimerSeen(cur.timerID) // Keeps the collector Hub (HELLO-only) online
