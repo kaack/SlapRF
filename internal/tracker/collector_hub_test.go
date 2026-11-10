@@ -36,6 +36,18 @@ func TestCollectorHubNeverHoldsAGate(t *testing.T) {
 	}
 
 	_, gates, _, _, _ = e.StateSnapshot()
+	if len(gates) != 0 {
+		t.Fatalf("got %d gates, want 0 (newly discovered spokes stay unassigned until dragged onto the track)", len(gates))
+	}
+
+	// Dragging Spoke 1 and Spoke 2 onto the track creates gates for them.
+	if _, err := e.AddGate("", s1); err != nil {
+		t.Fatalf("add gate for s1: %v", err)
+	}
+	if _, err := e.AddGate("", s2); err != nil {
+		t.Fatalf("add gate for s2: %v", err)
+	}
+	_, gates, _, _, _ = e.StateSnapshot()
 	if len(gates) != 2 {
 		t.Fatalf("got %d gates, want 2 (one per spoke)", len(gates))
 	}

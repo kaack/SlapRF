@@ -29,14 +29,13 @@ type ProvisionRequest struct {
 	Fingerprint string // 8-hex-digit board fingerprint; empty = unknown
 }
 
-// ProvisionGate registers a newly flashed timer (hub or spoke). Real and simulated engines
-// follow the same rules:
+// ProvisionGate registers a newly flashed or discovered timer (hub or spoke):
 //   - A "hub" is a USB collector dongle: it gets a timer entry (ID 1) but is never placed on a
 //     gate automatically (see provisionCollectorHubLocked).
 //   - A known fingerprint updates that same physical timer in place, keeping its color and gate.
 //   - Otherwise a timer with the same label is updated (a replacement board takes over its gate).
-//   - Otherwise a "spoke" claims the next free gate in track order (so the first Spoke becomes
-//     start/finish), creating a new gate (up to the timer limit) if every gate is taken.
+//   - Otherwise a "spoke" claims an existing unassigned/placeholder gate if one exists, or is
+//     registered in `e.detected` as an unassigned timer (without auto-creating a gate).
 func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	role := req.Role
 	timerLabel := strings.TrimSpace(req.Label)
@@ -101,11 +100,14 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		}
 	}
 
-	// 2. Otherwise a spoke takes the next free (or never-labelled sector) gate in track order.
+	// 2. Otherwise a spoke takes an existing gate only if that gate has no timer or is a
+	//    never-labelled placeholder gate on the course. If all existing gates already have a
+	//    timer (or there are no gates on the track), the new Spoke is registered in `e.detected`
+	//    as an unassigned timer so the user can drag it onto the track line where they want it.
 	if targetIdx < 0 {
 		ordered := e.orderedGatesLocked()
 		for _, og := range ordered {
-			canClaim := og.Role == domain.GateRoleSectorGate || og.AssignedTimerID == 0
+			canClaim := og.AssignedTimerID == 0 || (og.Role == domain.GateRoleSectorGate && strings.TrimSpace(og.TimerLabel) == "")
 			if canClaim && strings.TrimSpace(og.TimerLabel) == "" {
 				targetIdx = indexOfGate(e.gates, og.GateID)
 				break
@@ -113,46 +115,18 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		}
 	}
 
-	// 3. If all existing sector gates already have a flashed TimerLabel, add a new track gate (up to 6).
+	var assignedID uint8
 	if targetIdx < 0 {
-		var maxID uint8
-		for _, g := range e.gates {
-			if g.GateID > maxID {
-				maxID = g.GateID
+		for id := uint8(2); id <= maxTimers; id++ {
+			if _, exists := e.detected[id]; !exists {
+				assignedID = id
+				break
 			}
 		}
-		for id := range e.detected {
-			if id > maxID {
-				maxID = id
-			}
-		}
-		nextID := maxID + 1
-		if nextID < 1 {
-			nextID = 1
-		}
-		if nextID < 2 {
-			nextID = 2 // Timer ID 1 is reserved for the collector Hub, which never auto-holds a gate
-		}
-		if nextID > maxTimers {
+		if assignedID == 0 {
 			e.mu.Unlock()
 			return 0, ErrInvalidTimerID
 		}
-		e.gates = append(e.gates, domain.TrackGate{
-			GateID:          nextID,
-			AssignedTimerID: nextID,
-			TimerLabel:      timerLabel,
-			Color:           domain.DefaultGateColors[len(e.gates)%len(domain.DefaultGateColors)],
-			Role:            domain.GateRoleSectorGate,
-			TrackOrder:      len(e.gates),
-			BatteryMv:       4100,
-			BatteryPct:      domain.ComputeBatteryPct(4100),
-			NoiseFloorDbm:   -92,
-			Online:          true,
-			LastSeenAt:      time.Now(),
-		})
-		e.ensureStartGateLocked()
-		e.initDetectorsLocked()
-		targetIdx = len(e.gates) - 1
 	} else {
 		if e.gates[targetIdx].AssignedTimerID == 0 {
 			e.gates[targetIdx].AssignedTimerID = e.gates[targetIdx].GateID
@@ -160,12 +134,12 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		if timerLabel != "" {
 			e.gates[targetIdx].TimerLabel = timerLabel
 		}
+		assignedID = e.gates[targetIdx].AssignedTimerID
+		if assignedID == 0 {
+			assignedID = e.gates[targetIdx].GateID
+		}
 	}
 
-	assignedID := e.gates[targetIdx].AssignedTimerID
-	if assignedID == 0 {
-		assignedID = e.gates[targetIdx].GateID
-	}
 	now := time.Now()
 	d, ok := e.detected[assignedID]
 	if !ok {
@@ -180,8 +154,10 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	} else if d.Color == "" {
 		d.Color = domain.DefaultTimerColor(assignedID)
 	}
-	e.gates[targetIdx].Color = d.Color
-	e.gates[targetIdx].FirmwareVersion = ver
+	if targetIdx >= 0 {
+		e.gates[targetIdx].Color = d.Color
+		e.gates[targetIdx].FirmwareVersion = ver
+	}
 	d.FirmwareVersion = ver
 	if fingerprint != "" {
 		d.Fingerprint = fingerprint
