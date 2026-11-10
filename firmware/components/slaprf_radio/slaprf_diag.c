@@ -85,6 +85,21 @@ static uint8_t s_tx_drops;
 static vprintf_like_t s_prev_vprintf;
 static volatile uint8_t s_slot;
 
+/* ---- Identify (find-my-timer LED strobe), toggled from the app ----------------------------
+ * Own board (USB `IDENTIFY <own fp> 1|0`): strobes until switched off.
+ * Spoke over the air: the Hub re-sends IDENTIFY every ~200 ms while it is on, and the Spoke
+ * strobes while refreshes keep arriving (IDENTIFY_HOLD_US), so a lost "off" frame or a Hub that
+ * goes away can never leave a Spoke strobing forever. */
+#define IDENTIFY_HOLD_US       1500000LL
+#define IDENTIFY_REFRESH_SF    10 // Superframes between Hub refreshes (10 x 20 ms = 200 ms)
+#define IDENTIFY_OFF_REPEATS   5  // Explicit "off" frames sent when switched off
+static volatile bool s_identify_local;
+static volatile int64_t s_identify_until_us;
+static volatile uint32_t s_identify_target_fp; // Hub: Spoke being identified (0 = none)
+static volatile uint32_t s_identify_off_fp;
+static volatile uint8_t s_identify_off_repeats;
+static uint8_t s_identify_tick;
+
 typedef struct {
     uint32_t fp;
     char label[25];
@@ -538,10 +553,83 @@ static void send_status(void) {
             }
         }
     }
+    const bool identifying = s_identify_local || esp_timer_get_time() < s_identify_until_us;
+    n += snprintf(out + n, sizeof(out) - n, ",\"identify\":%s", identifying ? "true" : "false");
+    if (s_identify_target_fp != 0) {
+        n += snprintf(out + n, sizeof(out) - n, ",\"identifyFp\":\"%08lX\"", (unsigned long)s_identify_target_fp);
+    }
     snprintf(out + n, sizeof(out) - n, "}\n");
     tx_line(out);
     #undef out
     free(out_buf);
+}
+
+static uint32_t own_fingerprint(void) {
+    return (uint32_t)s_cfg[CFG_OFF_FP] | ((uint32_t)s_cfg[CFG_OFF_FP + 1] << 8) |
+           ((uint32_t)s_cfg[CFG_OFF_FP + 2] << 16) | ((uint32_t)s_cfg[CFG_OFF_FP + 3] << 24);
+}
+
+/** `IDENTIFY <fp hex> 1|0`: strobe this board's LED, or (Hub) relay to the Spoke with that fp. */
+static void handle_identify(const char *args) {
+    while (*args == ' ') args++;
+    char *end;
+    const unsigned long fp = strtoul(args, &end, 16);
+    while (*end == ' ') end++;
+    if (end == args || fp == 0 || (*end != '0' && *end != '1')) {
+        tx_line("@{\"t\":\"err\",\"msg\":\"IDENTIFY needs <fingerprint hex> 1|0\"}\n");
+        return;
+    }
+    const bool on = *end == '1';
+    if ((uint32_t)fp == own_fingerprint()) {
+        s_identify_local = on;
+    } else if (s_cfg[CFG_OFF_ROLE] == 1) {
+        const uint32_t prev = s_identify_target_fp;
+        if (on) {
+            if (prev != 0 && prev != (uint32_t)fp) {
+                s_identify_off_fp = prev; // Only one Spoke at a time: switch the previous one off
+                s_identify_off_repeats = IDENTIFY_OFF_REPEATS;
+            }
+            s_identify_tick = IDENTIFY_REFRESH_SF; // Send the first refresh right away
+            s_identify_target_fp = (uint32_t)fp;
+        } else {
+            if (prev == (uint32_t)fp) {
+                s_identify_target_fp = 0;
+            }
+            s_identify_off_fp = (uint32_t)fp;
+            s_identify_off_repeats = IDENTIFY_OFF_REPEATS;
+        }
+    } else {
+        tx_line("@{\"t\":\"err\",\"msg\":\"IDENTIFY: not this timer (connect the Hub to identify a Spoke)\"}\n");
+        return;
+    }
+    char reply[96];
+    snprintf(reply, sizeof(reply), "@{\"t\":\"ok\",\"cmd\":\"identify\",\"fp\":\"%08lX\",\"on\":%s}\n", fp,
+             on ? "true" : "false");
+    tx_line(reply);
+}
+
+void slaprf_diag_identify_rx(bool on) {
+    s_identify_until_us = on ? esp_timer_get_time() + IDENTIFY_HOLD_US : 0;
+}
+
+bool slaprf_diag_identify_next_frame(uint32_t *fp, bool *on) {
+    if (s_identify_off_repeats > 0) {
+        s_identify_off_repeats--;
+        *fp = s_identify_off_fp;
+        *on = false;
+        return true;
+    }
+    const uint32_t target = s_identify_target_fp;
+    if (target == 0) {
+        return false;
+    }
+    if (++s_identify_tick < IDENTIFY_REFRESH_SF) {
+        return false;
+    }
+    s_identify_tick = 0;
+    *fp = target;
+    *on = true;
+    return true;
 }
 
 /** Send a log buffer as one JSON line (escaped). */
@@ -860,6 +948,8 @@ static void handle_command(char *line) {
         send_log("last", s_last_log, s_last_len);
     } else if (strncmp(line, "CHANNELS", 8) == 0) {
         handle_channels(line + 8);
+    } else if (strncmp(line, "IDENTIFY", 8) == 0) {
+        handle_identify(line + 8);
     } else if (strncmp(line, "RF ", 3) == 0) {
         s_rf_enabled = line[3] == '1';
         tx_line(s_rf_enabled ? "@{\"t\":\"ok\",\"cmd\":\"rf\",\"on\":true}\n" : "@{\"t\":\"ok\",\"cmd\":\"rf\",\"on\":false}\n");
@@ -1102,7 +1192,12 @@ static void led_timer_cb(void *arg) {
     const uint8_t role = s_cfg ? s_cfg[CFG_OFF_ROLE] : 1;
     const int64_t now_ms = esp_timer_get_time() / 1000;
     bool led_on;
-    if (!s_led_rf_ok) {
+    if (s_identify_local || esp_timer_get_time() < s_identify_until_us) {
+        // Identify: 3 quick flashes, then dark (600 ms cycle). The pause sets it apart from the
+        // continuous 10 Hz "5.8 GHz boot check bad" blink.
+        const int64_t phase = now_ms % 600;
+        led_on = phase < 300 && ((phase / 50) & 1LL) == 0;
+    } else if (!s_led_rf_ok) {
         led_on = ((now_ms / 50) & 1LL) == 0;
     } else if (s_live || s_scan_live) {
         led_on = ((now_ms / 100) & 1LL) == 0;

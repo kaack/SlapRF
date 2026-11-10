@@ -214,6 +214,10 @@ export interface TimerStatus {
   chanMask?: number;
   freqs: number[];
   dbm?: number[];
+  /** This board's LED is running the identify strobe. */
+  identify?: boolean;
+  /** Hub only: fingerprint of the Spoke it is currently telling to identify. */
+  identifyFp?: string;
 }
 
 export interface LiveSample {
@@ -729,6 +733,14 @@ export class TimerConsole {
       freqs.push(pkt19[2 + i * 2] | (pkt19[3 + i * 2] << 8));
     }
     void this.send(`NETCHANNELS ${freqs.join(",")}`).catch(() => undefined);
+  }
+
+  /**
+   * Toggle the LED identify strobe on the timer with fingerprint `fp`: this board itself, or
+   * (when connected to the Hub) one of its Spokes, relayed over ESP-NOW. Stays on until toggled off.
+   */
+  public async setIdentify(fp: string, on: boolean): Promise<void> {
+    await this.request(`IDENTIFY ${fp.toUpperCase()} ${on ? 1 : 0}`, "ok", 2000);
   }
 
   /** Send `command` (optional) and resolve with the next message of `type` (`status`, `scan`, ...). */

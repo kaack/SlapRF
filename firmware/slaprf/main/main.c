@@ -70,6 +70,7 @@ _Static_assert(WINDOW_SAMPLES >= TX_EVERY_SWEEPS, "window must cover every sweep
 #define FRAME_MAGIC_HELLO        0x5A // Hub -> laptop: slot <-> fingerprint announcement (36 bytes)
 #define FRAME_MAGIC_JOIN         0x5B // Spoke -> Hub: request a TDMA slot
 #define FRAME_MAGIC_ASSIGN       0x5C // Hub -> Spoke: slot assignment
+#define FRAME_MAGIC_IDENTIFY     0x5F // Hub -> Spoke: LED identify strobe on/off (refreshed while on)
 
 #define ROLE_HUB_TIMER           1
 #define ROLE_SPOKE_TIMER         2
@@ -128,6 +129,13 @@ typedef struct {
     uint8_t  slot;                            // 2..7
     uint8_t  crc8;
 } hub_assign_frame_t;
+
+typedef struct {
+    uint8_t  magic0, magic1;                  // 0xC5 0x5F
+    uint32_t fingerprint;                     // Target Spoke
+    uint8_t  on;                              // 1 = strobe (refresh), 0 = stop
+    uint8_t  crc8;
+} hub_identify_frame_t;
 
 typedef struct {
     uint8_t  magic0, magic1;                  // 0xC5 0x5A
@@ -348,6 +356,13 @@ static void hub_run(void) {
             if (k == 0) {
                 slaprf_broadcast_hub_sync_beacon(beacon_seq++); // Anchors every Spoke's schedule
                 slaprf_forward_to_laptop(pkt, pack_window(pkt, HUB_SLOT)); // Hub's own Slot 1 window frame
+                uint32_t id_fp;
+                bool id_on;
+                if (slaprf_diag_identify_next_frame(&id_fp, &id_on)) {
+                    hub_identify_frame_t f = { FRAME_MAGIC_0, FRAME_MAGIC_IDENTIFY, id_fp, id_on ? 1 : 0, 0 };
+                    f.crc8 = compute_crc8((const uint8_t *)&f, sizeof(f) - 1);
+                    espnow_send(&f, sizeof(f));
+                }
             }
             if (k == TX_EVERY_SWEEPS - 1 && slaprf_now_us() >= next_hello) {
                 hub_repeat_hellos();
@@ -475,6 +490,14 @@ static void spoke_run(void) {
             uint8_t rx_buf[250];
             int rx_n;
             while ((rx_n = espnow_poll(rx_buf, sizeof(rx_buf))) > 0) {
+                if (rx_n == (int)sizeof(hub_identify_frame_t) && rx_buf[0] == FRAME_MAGIC_0 &&
+                    rx_buf[1] == FRAME_MAGIC_IDENTIFY && compute_crc8(rx_buf, (uint32_t)rx_n - 1) == rx_buf[rx_n - 1]) {
+                    const hub_identify_frame_t *f = (const hub_identify_frame_t *)rx_buf;
+                    if (f->fingerprint == g_flash_cfg.fingerprint) {
+                        slaprf_diag_identify_rx(f->on != 0);
+                    }
+                    continue;
+                }
                 if (rx_n == (int)sizeof(hub_assign_frame_t) && rx_buf[0] == FRAME_MAGIC_0 &&
                     rx_buf[1] == FRAME_MAGIC_ASSIGN && compute_crc8(rx_buf, (uint32_t)rx_n - 1) == rx_buf[rx_n - 1]) {
                     const hub_assign_frame_t *a = (const hub_assign_frame_t *)rx_buf;

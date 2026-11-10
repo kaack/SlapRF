@@ -74,6 +74,8 @@ export class NetworkView extends Component {
   private signalEnabledCh: boolean[] = [true, true, true, true, true, true, true, true];
   private lastTopologyHtml = "";
   private lastTimerHtml = "";
+  /** Identify toggles sent but not yet confirmed by a status line (fingerprint -> wanted state). */
+  private identifyPending = new Map<string, { on: boolean; atMs: number }>();
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
     super(el);
@@ -149,6 +151,11 @@ export class NetworkView extends Component {
 
     this.listen(el, "pointerdown", (e) => {
       if ((e as PointerEvent).button !== 0) return;
+      const idBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-action="toggle-identify"]');
+      if (idBtn) {
+        if (!idBtn.disabled) void this.toggleIdentify(idBtn.dataset.fp || "", idBtn.dataset.on !== "1");
+        return;
+      }
       const t = (e.target as HTMLElement).closest<HTMLElement>('[data-action="select-topology-slot"]');
       if (!t) return;
       this.selectTopologySlot(Number(t.dataset.slotNum));
@@ -225,6 +232,58 @@ export class NetworkView extends Component {
       return this.status;
     }
     return null;
+  }
+
+  /** True/false = identify state of `fp` as reported by the USB-connected board; null = not reachable. */
+  private identifyActual(fp: string): boolean | null {
+    const s = this.activeStatus();
+    if (!s || s.emergencyMode) return null;
+    if ((s.fp || "").toUpperCase() === fp) return Boolean(s.identify);
+    if (s.role === 1) return (s.identifyFp || "").toUpperCase() === fp;
+    return null;
+  }
+
+  private async toggleIdentify(fp: string, on: boolean): Promise<void> {
+    const FP = fp.toUpperCase();
+    if (!FP) return;
+    this.identifyPending.set(FP, { on, atMs: Date.now() });
+    this.renderAll();
+    try {
+      await this.console.setIdentify(FP, on);
+    } catch {
+      this.identifyPending.delete(FP); // Old firmware ("unknown command") or disconnected
+      this.renderAll();
+    }
+  }
+
+  /**
+   * Identify toggle for timer `fp`. Shown only when the USB-connected board can reach it (the board
+   * itself, or a Spoke of the connected Hub). Turning on needs a live link; turning off always works.
+   */
+  private renderIdentifyButton(fp: string, linked: boolean, label: string): string {
+    const FP = (fp || "").toUpperCase();
+    if (!/^[0-9A-F]{8}$/.test(FP) || FP.startsWith("53504B")) return "";
+    const actual = this.identifyActual(FP);
+    if (actual === null) return "";
+    let on = actual;
+    const pending = this.identifyPending.get(FP);
+    if (pending) {
+      if (pending.on === actual || Date.now() - pending.atMs > 4000) {
+        this.identifyPending.delete(FP);
+      } else {
+        on = pending.on;
+      }
+    }
+    const enabled = on || linked;
+    const title = on
+      ? `${label}'s LED is strobing (3 quick flashes, pause). Click to stop.`
+      : linked
+        ? `Strobe ${label}'s LED (3 quick flashes, pause) until you switch it off, to find which board it is`
+        : `${label} isn't linked right now`;
+    return `
+      <button type="button" class="btn btn-sm ${on ? "btn-armed" : "btn-unarmed"}" data-action="toggle-identify" data-fp="${FP}" data-on="${on ? 1 : 0}" aria-pressed="${on}" ${enabled ? "" : "disabled"} title="${esc(title)}">
+        ${icons.target(14)}<span>${on ? "Identifying" : "Identify"}</span>
+      </button>`;
   }
 
   private selectTopologySlot(slotNum: number): void {
@@ -902,6 +961,7 @@ export class NetworkView extends Component {
             <span class="debug-head-note"><strong>${esc(hub.label)}</strong> · Parent Hub (TDMA Slot 1) · ${esc(hub.statusNote)}</span>
           </span>
           <div class="debug-connect-actions">
+            ${this.renderIdentifyButton(hub.fp, hub.online, hub.label)}
             <span class="badge ${hub.online ? "badge-good" : "badge-warn"} mono">${totalRate.toFixed(1)} pkt/s</span>
             <span class="badge mono">${totalFrames} frames rx</span>
             ${hub.fp && hub.fp !== "—" ? `<span class="badge mono">${esc(hub.fp)}</span>` : ""}
@@ -1024,6 +1084,7 @@ export class NetworkView extends Component {
           <span class="debug-head-note"><strong>${esc(sp.label)}</strong> · Child Spoke (TDMA Slot ${sp.slot}) · ${sp.espNowActive ? `ESP-NOW active with ${esc(hub.label)}` : "ESP-NOW inactive"}</span>
         </span>
         <div class="debug-connect-actions">
+          ${this.renderIdentifyButton(sp.fp, sp.espNowActive, sp.label)}
           <span class="badge ${sp.espNowActive ? "badge-good" : "badge-warn"} mono">${rate.toFixed(1)} pkt/s</span>
           <span class="badge mono">${frames} frames rx</span>
           <span class="badge mono">${esc(sp.fp)}</span>

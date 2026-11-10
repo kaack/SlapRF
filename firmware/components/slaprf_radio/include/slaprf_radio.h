@@ -162,6 +162,12 @@ bool slaprf_diag_get_net_channels(uint16_t out_freqs[8]);
 /** False while the Debug page has switched the 5.8 GHz receiver off (RF 0). */
 bool slaprf_diag_rf_enabled(void);
 
+/** Spoke: an IDENTIFY frame for this board arrived (on = keep strobing ~1.5 s, off = stop now). */
+void slaprf_diag_identify_rx(bool on);
+
+/** Hub: call once per superframe; true when an IDENTIFY frame {fp, on} should go out now. */
+bool slaprf_diag_identify_next_frame(uint32_t *fp, bool *on);
+
 /**
  * Debug page continuous scan ("SCAN LIVE"): when active, measures the next chunk of the band
  * within `budget_us` and returns true; the caller then skips its pilot channels (readings -127).
