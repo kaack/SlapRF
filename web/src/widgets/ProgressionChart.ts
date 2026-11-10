@@ -284,9 +284,10 @@ export class ProgressionChart extends Component {
   private valueOf(lap: LapRecord): number | undefined {
     if (this.metric.kind === "lap") return lap.lapTimeSec;
     const { sectorIndex, fromGateId, toGateId } = this.metric;
-    const byPair = lap.sectors.find((s) => s.fromGateId === fromGateId && s.toGateId === toGateId);
+    const sectors = lap.sectors ?? [];
+    const byPair = sectors.find((s) => s.fromGateId === fromGateId && s.toGateId === toGateId);
     if (byPair) return byPair.splitSeconds;
-    return lap.sectors.find((s) => s.sectorIndex === sectorIndex)?.splitSeconds;
+    return sectors.find((s) => s.sectorIndex === sectorIndex)?.splitSeconds;
   }
 
   private refresh(): void {

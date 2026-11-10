@@ -67,7 +67,7 @@ export class PilotLaps extends Component {
   }
 
   private renderLap(lap: LapRecord, cols: Column[]): string {
-    const byKey = new Map(lap.sectors.map((s) => [sectionKey(s.fromGateId, s.toGateId), s]));
+    const byKey = new Map((lap.sectors ?? []).map((s) => [sectionKey(s.fromGateId, s.toGateId), s]));
     const cells = cols
       .map((c) => {
         const s = byKey.get(sectionKey(c.from, c.to));

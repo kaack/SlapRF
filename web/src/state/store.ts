@@ -408,7 +408,7 @@ export class AppStore {
     this._pilots = state.pilots ?? [];
     this.setNodes(state.gates ?? []);
     this._detectedTimers = state.timers ?? [];
-    this._laps = state.laps ?? [];
+    this._laps = (state.laps ?? []).map((l) => (Array.isArray(l.sectors) ? l : { ...l, sectors: [] }));
     this._crossings = state.crossings ?? [];
     this._filtered = state.filtered ?? [];
     this._summaries = state.summaries ?? [];
@@ -562,14 +562,15 @@ export class AppStore {
   }
 
   public ingestLap(lap: LapRecord, summaries: PilotTrackSummary[]): void {
-    this._laps.push(lap);
+    const normalized: LapRecord = Array.isArray(lap.sectors) ? lap : { ...lap, sectors: [] };
+    this._laps.push(normalized);
     if (this._laps.length > MAX_LAPS) this._laps.shift();
-    if (lap.completedAtUs > this._latestTimestampUs) {
-      this._latestTimestampUs = lap.completedAtUs;
+    if (normalized.completedAtUs > this._latestTimestampUs) {
+      this._latestTimestampUs = normalized.completedAtUs;
     }
     this._summaries = summaries;
     this.emit("laps");
-    this.lapListeners.forEach((fn) => fn(lap));
+    this.lapListeners.forEach((fn) => fn(normalized));
   }
 
   public selectPilot(slotIndex: number): void {

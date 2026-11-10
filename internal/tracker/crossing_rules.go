@@ -225,7 +225,7 @@ func (e *Engine) buildLapLocked(pilot domain.PilotSlot, prog *pilotProgress, lap
 		LapNumber:     lapNum,
 		LapTimeSec:    round3(lapSec),
 		DeltaToBest:   delta,
-		Sectors:       append([]domain.SectorSplit(nil), prog.currentSectors...),
+		Sectors:       append([]domain.SectorSplit{}, prog.currentSectors...),
 		CompletedAtUs: completedAtUs,
 		IsBestLap:     bestLap == 0 || lapSec < bestLap,
 	}

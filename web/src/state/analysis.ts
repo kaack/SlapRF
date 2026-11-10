@@ -99,11 +99,13 @@ export function resolveComparison(store: AppStore, slotIndex: number): LapCompar
 
   const gates = store.nodes;
   const courseKeys = new Set(
-    gates.map((p, i) => sectionKey(p.gateId, gates[(i + 1) % gates.length].gateId))
+    gates.length > 0 ? gates.map((p, i) => sectionKey(p.gateId, gates[(i + 1) % gates.length].gateId)) : []
   );
-  const refByKey = new Map(ref.sectors.map((s) => [sectionKey(s.fromGateId, s.toGateId), s]));
+  const lapSectors = lap.sectors ?? [];
+  const refSectors = ref.sectors ?? [];
+  const refByKey = new Map(refSectors.map((s) => [sectionKey(s.fromGateId, s.toGateId), s]));
   const sections: SectionDelta[] = [];
-  for (const s of lap.sectors) {
+  for (const s of lapSectors) {
     const key = sectionKey(s.fromGateId, s.toGateId);
     if (!courseKeys.has(key)) continue;
     const r = refByKey.get(key);
@@ -126,7 +128,7 @@ export function resolveComparison(store: AppStore, slotIndex: number): LapCompar
     refLabel,
     sections,
     totalDelta: lap.lapTimeSec - ref.lapTimeSec,
-    incomplete: sections.length < Math.max(lap.sectors.length, ref.sectors.length),
+    incomplete: sections.length < Math.max(lapSectors.length, refSectors.length),
   };
 }
 
@@ -169,7 +171,7 @@ export function sectionConsistency(store: AppStore, slotIndex: number): SectionC
   }
 
   for (const lap of lapsFor(store, slotIndex)) {
-    for (const s of lap.sectors) {
+    for (const s of lap.sectors ?? []) {
       const g = groups.get(sectionKey(s.fromGateId, s.toGateId));
       if (!g) continue;
       g.times.push(s.splitSeconds);
@@ -228,7 +230,7 @@ export function sectionRecords(store: AppStore): SectionRecord[] {
   });
   const byKey = new Map(records.map((r) => [r.key, r]));
   for (const lap of store.laps) {
-    for (const s of lap.sectors) {
+    for (const s of lap.sectors ?? []) {
       const r = byKey.get(sectionKey(s.fromGateId, s.toGateId));
       if (!r) continue;
       const cur = r.bests.get(lap.slotIndex);

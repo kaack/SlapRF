@@ -58,7 +58,7 @@ func (e *Engine) ExportState() PersistedEngineState {
 	laps := make([]domain.LapRecord, len(e.laps))
 	for i, l := range e.laps {
 		cp := l
-		cp.Sectors = append([]domain.SectorSplit(nil), l.Sectors...)
+		cp.Sectors = append([]domain.SectorSplit{}, l.Sectors...)
 		laps[i] = cp
 	}
 	crossings := append([]domain.GateCrossingEvent(nil), e.crossings...)
@@ -158,7 +158,7 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 
 	for _, l := range s.Laps {
 		cp := l
-		cp.Sectors = append([]domain.SectorSplit(nil), l.Sectors...)
+		cp.Sectors = append([]domain.SectorSplit{}, l.Sectors...)
 		e.laps = append(e.laps, cp)
 		if cp.LapID > e.nextLapID {
 			e.nextLapID = cp.LapID
