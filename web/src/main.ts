@@ -6,9 +6,23 @@ import { installWakeLock } from "./core/wake_lock";
 import { AppShell } from "./layout/AppShell";
 import { Announcer } from "./services/announcer";
 import { ApiClient } from "./services/api_client";
+import { BrowserHubBridge } from "./services/browser_hub_bridge";
 import { sharedLiveTimeRelay } from "./services/livetime_relay";
-import { installOffline } from "./services/offline";
+import { installOffline, isDevHost } from "./services/offline";
 import { AppStore } from "./state/store";
+
+interface SlaprfHMRState {
+  store: AppStore;
+  api: ApiClient;
+  router: Router;
+  announcer: Announcer;
+  shell: AppShell;
+  es?: EventSource;
+  cssStamp?: number;
+  tsStamp?: number;
+}
+
+type HMRWindow = Window & { __slaprfHMR?: SlaprfHMRState };
 
 const MIN_BOOT_LOADER_MS = 2200;
 
@@ -32,6 +46,67 @@ function dismissBootLoader(): void {
   window.setTimeout(() => loader.remove(), 550);
 }
 
+function hotReloadUI(hmr: SlaprfHMRState): void {
+  const root = document.getElementById("app");
+  if (!root) return;
+
+  // Upgrade live singletons in-place so edited methods on Store / ApiClient / Router / Announcer
+  // take effect immediately without losing USB WebSerial connections, WASM state, or lap history.
+  Object.setPrototypeOf(hmr.store, AppStore.prototype);
+  Object.setPrototypeOf(hmr.api, ApiClient.prototype);
+  if (hmr.api.hubBridge) {
+    Object.setPrototypeOf(hmr.api.hubBridge, BrowserHubBridge.prototype);
+  }
+  Object.setPrototypeOf(hmr.router, Router.prototype);
+  Object.setPrototypeOf(hmr.announcer, Announcer.prototype);
+
+  const prevScrollX = window.scrollX;
+  const prevScrollY = window.scrollY;
+
+  hmr.shell.destroy();
+  hmr.shell = new AppShell(root, hmr.store, hmr.api, hmr.router, hmr.announcer);
+
+  window.scrollTo({ left: prevScrollX, top: prevScrollY });
+  console.info("[HMR] UI hot-reloaded (USB & state preserved)");
+}
+
+function installDevHotReload(hmr: SlaprfHMRState): void {
+  if (!isDevHost() || typeof EventSource === "undefined" || hmr.es) return;
+
+  const es = new EventSource("/__dev/events");
+  hmr.es = es;
+
+  es.addEventListener("message", (ev) => {
+    try {
+      const data = JSON.parse(ev.data) as { css?: number; ts?: number };
+      if (typeof data.css === "number") {
+        if (hmr.cssStamp !== undefined && hmr.cssStamp !== data.css) {
+          const link = document.querySelector<HTMLLinkElement>('link[rel="stylesheet"][href^="styles.css"]');
+          if (link) {
+            link.href = `styles.css?v=${data.css}`;
+            console.info("[HMR] Stylesheet hot-reloaded");
+          }
+        }
+        hmr.cssStamp = data.css;
+      }
+      if (typeof data.ts === "number") {
+        if (hmr.tsStamp !== undefined && hmr.tsStamp !== data.ts) {
+          hmr.tsStamp = data.ts;
+          document.querySelectorAll('script[data-slaprf-hmr="1"]').forEach((s) => s.remove());
+          const script = document.createElement("script");
+          script.src = `/dist/app.js?v=${data.ts}`;
+          script.dataset.slaprfHmr = "1";
+          document.body.appendChild(script);
+          return;
+        }
+        hmr.tsStamp = data.ts;
+      }
+    } catch {
+      // Ignore malformed SSE payloads
+    }
+  });
+}
+
 async function bootstrap(): Promise<void> {
   const bootStartMs = performance.now();
   window.__slaprfBootStatus = setBootStatus;
@@ -51,7 +126,11 @@ async function bootstrap(): Promise<void> {
   // Lives for the whole app so lap calls happen whichever view is open.
   const announcer = new Announcer(store);
 
-  new AppShell(root, store, api, router, announcer);
+  const shell = new AppShell(root, store, api, router, announcer);
+  const hmr: SlaprfHMRState = { store, api, router, announcer, shell };
+  (window as HMRWindow).__slaprfHMR = hmr;
+  installDevHotReload(hmr);
+
   await api.initialize();
   // LiveTime (via slaprf-relay) needs the WASM engine, which is ready now. Refresh the polled
   // LapRF counters immediately whenever the link changes (TopBar locks the arm button on it).
@@ -77,11 +156,21 @@ async function bootstrap(): Promise<void> {
   dismissBootLoader();
 }
 
-document.addEventListener("DOMContentLoaded", () => {
-  installOffline();
-  bootstrap().catch((err) => {
-    console.error("Gate Timer failed to start:", err);
-    setBootStatus(`Startup error: ${err instanceof Error ? err.message : String(err)}`, 100);
-    window.setTimeout(() => dismissBootLoader(), 1500);
-  });
-});
+const existingHMR = (window as HMRWindow).__slaprfHMR;
+if (existingHMR) {
+  hotReloadUI(existingHMR);
+} else {
+  const start = () => {
+    installOffline();
+    bootstrap().catch((err) => {
+      console.error("Gate Timer failed to start:", err);
+      setBootStatus(`Startup error: ${err instanceof Error ? err.message : String(err)}`, 100);
+      window.setTimeout(() => dismissBootLoader(), 1500);
+    });
+  };
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", start, { once: true });
+  } else {
+    start();
+  }
+}

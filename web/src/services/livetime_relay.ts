@@ -295,5 +295,17 @@ export class LiveTimeRelay {
   }
 }
 
-/** App-wide LiveTime relay link (one per tab). */
-export const sharedLiveTimeRelay = new LiveTimeRelay();
+const relayWin = (typeof window !== "undefined" ? window : undefined) as
+  | (Window & { __slaprfLiveTimeRelay?: LiveTimeRelay })
+  | undefined;
+
+/** App-wide LiveTime relay link (one per tab, preserved across dev HMR). */
+export const sharedLiveTimeRelay: LiveTimeRelay = (() => {
+  if (relayWin?.__slaprfLiveTimeRelay) {
+    Object.setPrototypeOf(relayWin.__slaprfLiveTimeRelay, LiveTimeRelay.prototype);
+    return relayWin.__slaprfLiveTimeRelay;
+  }
+  const inst = new LiveTimeRelay();
+  if (relayWin) relayWin.__slaprfLiveTimeRelay = inst;
+  return inst;
+})();

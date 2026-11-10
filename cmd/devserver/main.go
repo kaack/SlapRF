@@ -14,12 +14,15 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"slaprf/internal/devbundle"
 )
@@ -65,6 +68,56 @@ func main() {
 		}
 		serveBytes(w, "application/wasm", b)
 	})
+	mux.HandleFunc("/__dev/events", func(w http.ResponseWriter, r *http.Request) {
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Connection", "keep-alive")
+
+		lastCSS, lastTS := scanWebStamps(absWeb)
+		_, _ = fmt.Fprintf(w, "data: {\"css\":%d,\"ts\":%d}\n\n", lastCSS, lastTS)
+		flusher.Flush()
+
+		ticker := time.NewTicker(250 * time.Millisecond)
+		defer ticker.Stop()
+
+		var lastErrTS int64
+		for {
+			select {
+			case <-r.Context().Done():
+				return
+			case <-ticker.C:
+				css, ts := scanWebStamps(absWeb)
+				if css == lastCSS && ts == lastTS {
+					continue
+				}
+				if ts != lastTS {
+					if ts == lastErrTS {
+						// Still on the same broken TS edit; wait for the next save.
+						if css != lastCSS {
+							lastCSS = css
+							_, _ = fmt.Fprintf(w, "data: {\"css\":%d,\"ts\":%d}\n\n", lastCSS, lastTS)
+							flusher.Flush()
+						}
+						continue
+					}
+					if _, err := devbundle.BundleTypeScript(absWeb); err != nil {
+						lastErrTS = ts
+						log.Printf("[devserver] HMR skipped (TypeScript error): %v", err)
+						continue
+					}
+					lastTS = ts
+				}
+				lastCSS = css
+				_, _ = fmt.Fprintf(w, "data: {\"css\":%d,\"ts\":%d}\n\n", lastCSS, lastTS)
+				flusher.Flush()
+			}
+		}
+	})
 	files := http.FileServer(http.Dir(absWeb))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -87,6 +140,26 @@ func serveBytes(w http.ResponseWriter, contentType string, b []byte) {
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(b)))
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(b)
+}
+
+func scanWebStamps(absWeb string) (cssStamp int64, tsStamp int64) {
+	if info, err := os.Stat(filepath.Join(absWeb, "styles.css")); err == nil {
+		cssStamp = info.ModTime().UnixNano()
+	}
+	_ = filepath.WalkDir(filepath.Join(absWeb, "src"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(path, ".ts") {
+			if info, err := d.Info(); err == nil {
+				if t := info.ModTime().UnixNano(); t > tsStamp {
+					tsStamp = t
+				}
+			}
+		}
+		return nil
+	})
+	return cssStamp, tsStamp
 }
 
 func launchBrowser(url string) {

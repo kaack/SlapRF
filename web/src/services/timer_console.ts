@@ -1152,13 +1152,26 @@ export class TimerConsole {
   }
 }
 
-/**
- * Shared app-wide USB timer connection that persists across SPA route switches and only
- * disconnects on full page reload/unload, physical USB unplug, or explicit user disconnect.
- */
-export const sharedTimerConsole = new TimerConsole();
+const timerWin = (typeof window !== "undefined" ? window : undefined) as
+  | (Window & { __slaprfTimerConsole?: TimerConsole; __slaprfTimerUnloadBound?: boolean })
+  | undefined;
 
-if (typeof window !== "undefined") {
+/**
+ * Shared app-wide USB timer connection that persists across SPA route switches (and dev HMR) and
+ * only disconnects on full page reload/unload, physical USB unplug, or explicit user disconnect.
+ */
+export const sharedTimerConsole: TimerConsole = (() => {
+  if (timerWin?.__slaprfTimerConsole) {
+    Object.setPrototypeOf(timerWin.__slaprfTimerConsole, TimerConsole.prototype);
+    return timerWin.__slaprfTimerConsole;
+  }
+  const inst = new TimerConsole();
+  if (timerWin) timerWin.__slaprfTimerConsole = inst;
+  return inst;
+})();
+
+if (timerWin && !timerWin.__slaprfTimerUnloadBound) {
+  timerWin.__slaprfTimerUnloadBound = true;
   const onUnload = () => {
     if (sharedTimerConsole.connected) {
       sharedTimerConsole.disconnectForUnload();

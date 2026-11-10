@@ -628,10 +628,19 @@ export function recordBackupNow(): void {
   }
 }
 
-/** App-wide singleton (one WASM runtime per page). */
-export const enginePersistence = new EnginePersistence();
+const persistenceWin = (typeof window !== "undefined" ? window : undefined) as
+  | (Window & { __slaprfPersistence?: EnginePersistence })
+  | undefined;
 
-// Dev-only diagnostics handle (localhost / 127.0.0.1) for E2E checks from DevTools/CDP.
-if (isDevHost()) {
-  (window as Window & { __slaprfPersistence?: EnginePersistence }).__slaprfPersistence = enginePersistence;
-}
+/** App-wide singleton (one WASM runtime per page, preserved across dev HMR). */
+export const enginePersistence: EnginePersistence = (() => {
+  if (persistenceWin?.__slaprfPersistence) {
+    Object.setPrototypeOf(persistenceWin.__slaprfPersistence, EnginePersistence.prototype);
+    return persistenceWin.__slaprfPersistence;
+  }
+  const inst = new EnginePersistence();
+  if (persistenceWin && isDevHost()) {
+    persistenceWin.__slaprfPersistence = inst;
+  }
+  return inst;
+})();
