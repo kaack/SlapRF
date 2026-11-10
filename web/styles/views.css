@@ -203,6 +203,21 @@
   color: var(--text-3);
   box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.35);
 }
+.gate-node-circle.is-offline {
+  border: 2px dashed #4b5563;
+  background: var(--surface-2);
+  color: var(--text-3);
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.35);
+}
+.gate-node-circle.is-offline:hover {
+  box-shadow:
+    0 4px 14px rgba(0, 0, 0, 0.4),
+    0 0 0 3px rgba(100, 116, 139, 0.2);
+}
+.gate-node-circle.is-offline .gate-node-timer-code,
+.gate-node-circle.is-offline .gate-node-timer-meta {
+  color: var(--text-3);
+}
 .gate-node-empty-label {
   display: flex;
   align-items: center;
@@ -222,6 +237,14 @@
   box-shadow:
     0 0 0 3px var(--surface),
     0 0 0 5.5px var(--c, var(--accent)),
+    0 8px 22px rgba(0, 0, 0, 0.5);
+}
+.gate-line-item.is-selected .gate-node-circle.is-offline {
+  border-style: solid;
+  border-color: #64748b;
+  box-shadow:
+    0 0 0 3px var(--surface),
+    0 0 0 5px #64748b,
     0 8px 22px rgba(0, 0, 0, 0.5);
 }
 .gate-line-item.is-timer-drop-target .gate-node-circle {
@@ -494,6 +517,19 @@ body.is-gate-dragging * {
 .unassigned-timer-token.is-dragging-source {
   opacity: 0.35;
 }
+.unassigned-timer-token.is-offline {
+  border-color: var(--border-strong);
+  background: var(--surface-2);
+}
+.unassigned-timer-token.is-offline .unassigned-timer-dot {
+  border-style: dashed;
+  border-color: #4b5563;
+  background: var(--surface-2);
+  color: var(--text-3);
+}
+.unassigned-timer-token.is-offline .unassigned-timer-name {
+  color: var(--text-3);
+}
 .unassigned-timer-dot {
   width: 28px;
   height: 28px;
@@ -591,12 +627,18 @@ body.is-gate-dragging * {
   border-radius: 50%;
   background: var(--c, var(--accent));
 }
+.gate-inspector-dot.is-offline {
+  background: var(--text-3);
+}
 .gate-inspector-timer-meta {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
   font-size: 13px;
+}
+.gate-inspector-timer-meta.is-offline strong {
+  color: var(--text-3);
 }
 .gate-inspector-hub-note {
   margin: 8px 0 0;

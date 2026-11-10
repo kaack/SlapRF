@@ -2,6 +2,7 @@ import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
+import { usbPool } from "../services/timer_console";
 import { timerColor, timerRoleText } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { DetectedTimer, TrackNode } from "../types/models";
@@ -140,16 +141,61 @@ export class TrackEditor extends Component {
       }
     });
 
-    this.onDispose(
-      store.subscribe(["config", "status"], () => {
-        const active = document.activeElement;
-        const editing =
-          (active instanceof HTMLInputElement || active instanceof HTMLSelectElement) &&
-          this.el.contains(active);
-        if (!editing && !this.isDragging) this.render();
+    const refreshIfIdle = () => {
+      const active = document.activeElement;
+      const editing =
+        (active instanceof HTMLInputElement || active instanceof HTMLSelectElement) &&
+        this.el.contains(active);
+      if (!editing && !this.isDragging) this.render();
+    };
+
+    const unsubStore = store.subscribe(["config", "status"], refreshIfIdle);
+    const unsubPool = usbPool.onChange(refreshIfIdle);
+    const unsubSlots = usbPool.slots.map((c) =>
+      c.subscribe({
+        onConnect: refreshIfIdle,
+        onStatus: refreshIfIdle,
+        onDisconnect: refreshIfIdle,
       })
     );
+    this.onDispose(() => {
+      unsubStore();
+      unsubPool();
+      unsubSlots.forEach((fn) => fn());
+    });
     this.render();
+  }
+
+  private isTimerActive(d?: DetectedTimer, node?: TrackNode): boolean {
+    if (this.store.simulatorRunning) {
+      return Boolean(d ? d.online : node?.online);
+    }
+    const connected = usbPool.connectedConsoles();
+    if (connected.length === 0) {
+      return false;
+    }
+    const fp = (d?.fingerprint || "").toUpperCase();
+    if (fp) {
+      const direct = usbPool.findByFingerprint(fp);
+      if (direct && direct.connected && !direct.lastStatus?.emergencyMode) {
+        return true;
+      }
+    }
+    const hub = usbPool.hubConsole();
+    if (hub && hub.connected && !hub.lastStatus?.emergencyMode) {
+      if (d?.isHub) {
+        return true;
+      }
+      if (fp && Array.isArray(hub.lastStatus?.spokes)) {
+        const sp = hub.lastStatus!.spokes!.find((s) => (s.fp || "").toUpperCase() === fp);
+        if (sp) {
+          const msAgo = sp.msAgo !== undefined && sp.msAgo >= 0x80000000 ? 0 : sp.msAgo;
+          return (sp.frames ?? 0) > 0 && (msAgo === undefined || msAgo < 5000);
+        }
+      }
+      return Boolean(d ? d.online : node?.online);
+    }
+    return false;
   }
 
   private get orderedNodes(): TrackNode[] {
@@ -288,13 +334,13 @@ export class TrackEditor extends Component {
     const nextColor = nextAssignedId > 0 ? timerColor(this.store, nextAssignedId) : "#64748b";
 
     const displayName = node.name.trim() || `Gate ${index + 1}`;
-    const isOnline = tiedTimer ? tiedTimer.online : node.online;
+    const isOnline = this.isTimerActive(tiedTimer, node);
     const sectionTag = `S${index + 1}`;
     const wrapSectionTag = `S${total}`;
 
     return `
       <div
-        class="gate-line-item ${isSelected ? "is-selected" : ""} ${isStart ? "is-start" : ""} ${hasTimer ? "has-timer" : "is-empty-gate"}"
+        class="gate-line-item ${isSelected ? "is-selected" : ""} ${isStart ? "is-start" : ""} ${hasTimer ? "has-timer" : "is-empty-gate"} ${hasTimer && !isOnline ? "is-offline" : ""}"
         data-gate="${node.gateId}"
         data-assigned-timer="${assignedId}"
         data-timer-color="${color}"
@@ -328,10 +374,10 @@ export class TrackEditor extends Component {
 
         <button
           type="button"
-          class="gate-node-circle ${hasTimer ? "is-filled" : "is-unassigned"}"
+          class="gate-node-circle ${hasTimer ? (isOnline ? "is-filled" : "is-filled is-offline") : "is-unassigned"}"
           aria-pressed="${isSelected}"
-          aria-label="Gate ${index + 1}: ${esc(displayName)} (${hasTimer ? shortCode : "Unassigned"})"
-          title="Click to inspect · Drag left/right to reorder · Drag down to Unassigned timers to remove gate"
+          aria-label="Gate ${index + 1}: ${esc(displayName)} (${hasTimer ? `${shortCode}${isOnline ? "" : " · Offline"}` : "Unassigned"})"
+          title="${hasTimer && !isOnline ? `${esc(shortCode)} is assigned to this gate but not currently connected · ` : ""}Click to inspect · Drag left/right to reorder · Drag down to Unassigned timers to remove gate"
         >
           ${
             hasTimer
@@ -386,12 +432,13 @@ export class TrackEditor extends Component {
     const color = timerColor(this.store, d.timerId);
     const roleLabel = d.isHub ? "Hub" : "Spoke";
     const timerName = this.formatTimerShortCode(d.timerId, [d], d.timerLabel);
+    const isOnline = this.isTimerActive(d);
     return `
       <div
-        class="unassigned-timer-token"
+        class="unassigned-timer-token ${isOnline ? "" : "is-offline"}"
         data-timer-id="${d.timerId}"
         style="--c:${color}"
-        title="${esc(timerName)} (${roleLabel}) · Drag onto the track line above to create a gate"
+        title="${esc(timerName)} (${roleLabel}${isOnline ? "" : " · Offline"}) · Drag onto the track line above to create a gate"
       >
         <span class="unassigned-timer-dot" style="--c:${color}">
           <span class="mono">${esc(timerName)}</span>
@@ -399,8 +446,8 @@ export class TrackEditor extends Component {
         <div class="unassigned-timer-info">
           <span class="unassigned-timer-name mono">${esc(timerName)}</span>
           <span class="unassigned-timer-sub">
-            <span class="gate-node-status-dot ${d.online ? "is-online" : ""}"></span>
-            ${roleLabel} · ${d.online ? `${d.batteryPct}%` : "Offline"}
+            <span class="gate-node-status-dot ${isOnline ? "is-online" : ""}"></span>
+            ${roleLabel} · ${isOnline ? `${d.batteryPct}%` : "Offline"}
           </span>
         </div>
       </div>`;
@@ -418,16 +465,17 @@ export class TrackEditor extends Component {
     const timerName = this.formatTimerShortCode(assignedId, detected, node.timerLabel);
     const color = hasTimer ? timerColor(this.store, assignedId) : "#64748b";
     const displayName = node.name.trim() || `Gate ${index + 1}`;
+    const isOnline = this.isTimerActive(tiedTimer, node);
 
     const timerSummaryHtml = hasTimer
       ? `
-        <div class="gate-inspector-timer-meta">
-          <span class="gate-inspector-dot" style="--c:${color}"></span>
+        <div class="gate-inspector-timer-meta ${isOnline ? "" : "is-offline"}">
+          <span class="gate-inspector-dot ${isOnline ? "" : "is-offline"}" style="--c:${color}"></span>
           <strong class="mono">${esc(timerName)}</strong>
           <span class="detected-role-pill">
             ${esc(tiedTimer ? timerRoleText(this.store, tiedTimer) : "Spoke")}
           </span>
-          <span class="muted mono">${tiedTimer ? (tiedTimer.online ? `${tiedTimer.batteryPct}%` : "Offline") : ""}</span>
+          <span class="muted mono">${isOnline ? (tiedTimer && tiedTimer.batteryPct > 0 ? `${tiedTimer.batteryPct}%` : "Online") : "Offline"}</span>
         </div>`
       : `
         <div class="gate-inspector-timer-meta is-empty">
