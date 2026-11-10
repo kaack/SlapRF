@@ -1,6 +1,6 @@
 import { icons } from "./icons";
 
-export type RouteId = "live" | "pilot" | "pilots" | "track" | "sim" | "network" | "setup" | "flasher" | "debug" | "about";
+export type RouteId = "live" | "pilot" | "pilots" | "track" | "livetime" | "sim" | "network" | "setup" | "flasher" | "debug" | "about";
 
 export interface RouteMeta {
   id: RouteId;
@@ -9,6 +9,7 @@ export interface RouteMeta {
   subtitle: string;
   icon: () => string;
   simOnly?: boolean;
+  liveTimeOnly?: boolean;
 }
 
 /** One flat level: each section of the app is a single page. */
@@ -38,14 +39,22 @@ export const ROUTES: RouteMeta[] = [
     id: "track",
     label: "Track",
     title: "Track",
-    subtitle: "Gate order, sections, and start gate",
+    subtitle: "Timer order, sections, and start timer",
     icon: () => icons.gate(20),
+  },
+  {
+    id: "livetime",
+    label: "LiveTime",
+    title: "LiveTime",
+    subtitle: "MultiGP LiveTime connection status, slaprf-relay helper, and LapRF 8-way setup",
+    icon: () => icons.timer(20),
+    liveTimeOnly: true,
   },
   {
     id: "sim",
     label: "Simulator",
     title: "Simulator",
-    subtitle: "Simulated pilots, 6S flight packs, crashes, track recovery walks, and XIAO gate timers",
+    subtitle: "Simulated pilots, 6S flight packs, crashes, track recovery walks, and XIAO timers",
     icon: () => icons.zap(20),
     simOnly: true,
   },

@@ -2,8 +2,10 @@ import { Component } from "../core/component";
 import { RouteId, Router } from "../core/router";
 import { Announcer } from "../services/announcer";
 import { ApiClient } from "../services/api_client";
+import { sharedLiveTimeRelay } from "../services/livetime_relay";
 import { AppStore } from "../state/store";
 import { LiveView } from "../views/LiveView";
+import { LiveTimeView } from "../views/LiveTimeView";
 import { PilotView } from "../views/PilotView";
 import { PilotsView } from "../views/PilotsView";
 import { DebugView } from "../views/DebugView";
@@ -49,6 +51,13 @@ export class AppShell extends Component {
         }
       })
     );
+    this.onDispose(
+      sharedLiveTimeRelay.subscribe(() => {
+        if (!sharedLiveTimeRelay.snapshot.enabled && this.router.route === "livetime") {
+          this.router.navigate("setup");
+        }
+      })
+    );
     this.onDispose(() => this.view?.destroy());
     this.show(router.route);
   }
@@ -56,6 +65,10 @@ export class AppShell extends Component {
   private show(route: RouteId): void {
     if (route === "sim" && !this.store.simulatorRunning) {
       this.router.navigate("live");
+      return;
+    }
+    if (route === "livetime" && !sharedLiveTimeRelay.snapshot.enabled) {
+      this.router.navigate("setup");
       return;
     }
     this.view?.destroy();
@@ -82,6 +95,8 @@ export class AppShell extends Component {
         return new PilotsView(host, this.store, this.api);
       case "track":
         return new TrackView(host, this.store, this.api);
+      case "livetime":
+        return new LiveTimeView(host, this.store);
       case "sim":
         return new SimView(host, this.store, this.api);
       case "network":

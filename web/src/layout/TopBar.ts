@@ -4,6 +4,7 @@ import { icons } from "../core/icons";
 import { ROUTES, Router } from "../core/router";
 import { Announcer } from "../services/announcer";
 import { ApiClient } from "../services/api_client";
+import { sharedLiveTimeRelay } from "../services/livetime_relay";
 import { TimerConsole, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
@@ -40,6 +41,7 @@ export class TopBar extends Component {
     this.onDispose(announcer.subscribe(() => this.render()));
     this.onDispose(usbPool.onChange(() => this.render()));
     this.onDispose(api.hubBridge.subscribe(() => this.render()));
+    this.onDispose(sharedLiveTimeRelay.subscribe(() => this.render()));
     this.render();
   }
 
@@ -107,6 +109,7 @@ export class TopBar extends Component {
     const meta = this.router.meta();
     const { liveTime, raceArmed, simulatorRunning: sim } = this.store;
     const ltConnected = liveTime.connectedClients > 0;
+    const ltEnabled = sharedLiveTimeRelay.snapshot.enabled;
     const voiceOn = this.announcer.settings.enabled;
     const main = usbPool.mainConsole;
     const usbOn = main.connected;
@@ -120,7 +123,7 @@ export class TopBar extends Component {
     const usbFp = main.lastStatus?.fp || main.lastConfig?.fingerprint || "";
     const usbBusy = main.busyLabel ?? "";
     const led = this.api.hubBridge.getLedSummary();
-    const sig = `${meta.id}:${sim ? 1 : 0}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.menuOpen ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}`;
+    const sig = `${meta.id}:${sim ? 1 : 0}:${ltEnabled ? 1 : 0}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.menuOpen ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}`;
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
@@ -167,7 +170,7 @@ export class TopBar extends Component {
         </button>`;
     }
 
-    const navItems = ROUTES.filter((r) => !r.simOnly || sim)
+    const navItems = ROUTES.filter((r) => (!r.simOnly || sim) && (!r.liveTimeOnly || ltEnabled))
       .map((r) => {
         const active = r.id === meta.id;
         return `<a class="nav-item ${active ? "is-active" : ""}" href="#/${r.id}" data-nav-item="${r.id}" ${active ? 'aria-current="page"' : ""}>${r.icon()}<span>${r.label}</span></a>`;

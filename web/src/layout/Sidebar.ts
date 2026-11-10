@@ -1,6 +1,7 @@
 import { Component } from "../core/component";
 import { icons } from "../core/icons";
 import { ROUTES, RouteId, Router } from "../core/router";
+import { sharedLiveTimeRelay } from "../services/livetime_relay";
 import { AppStore } from "../state/store";
 
 export class Sidebar extends Component {
@@ -19,23 +20,32 @@ export class Sidebar extends Component {
         </div>
       </div>
       <nav class="nav nav-flat">
-        ${ROUTES.map((r) => `<a class="nav-item" href="#/${r.id}" data-route="${r.id}" ${r.simOnly ? 'data-sim-only="1"' : ""}>${r.icon()}<span>${r.label}</span></a>`).join("")}
+        ${ROUTES.map((r) => `<a class="nav-item" href="#/${r.id}" data-route="${r.id}" ${r.simOnly ? 'data-sim-only="1"' : ""}${r.liveTimeOnly ? 'data-livetime-only="1"' : ""}>${r.icon()}<span>${r.label}</span></a>`).join("")}
       </nav>`;
 
     this.highlight(router.route);
     this.onDispose(router.subscribe((route) => this.highlight(route)));
     this.onDispose(
       store.subscribe(["status"], () => {
-        this.syncSimNav();
+        this.syncConditionalNav();
       })
     );
-    this.syncSimNav();
+    this.onDispose(
+      sharedLiveTimeRelay.subscribe(() => {
+        this.syncConditionalNav();
+      })
+    );
+    this.syncConditionalNav();
   }
 
-  private syncSimNav(): void {
+  private syncConditionalNav(): void {
     const simOn = this.store.simulatorRunning;
     this.el.querySelectorAll<HTMLElement>("[data-sim-only]").forEach((a) => {
       a.style.display = simOn ? "" : "none";
+    });
+    const ltOn = sharedLiveTimeRelay.snapshot.enabled;
+    this.el.querySelectorAll<HTMLElement>("[data-livetime-only]").forEach((a) => {
+      a.style.display = ltOn ? "" : "none";
     });
   }
 
