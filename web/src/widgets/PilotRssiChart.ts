@@ -10,11 +10,14 @@ import { AppStore, HISTORY_SECONDS } from "../state/store";
 import { GateThresholdUpdate, TimerTelemetryFrame } from "../types/models";
 import { FILTER_LABELS } from "./markup";
 
-const DBM_MIN = -95;
-const DBM_MAX = -20;
-const WINDOWS_SEC = [5, 10, 30, 60];
-const MIN_WINDOW_US = 1_000_000;
-const MAX_WINDOW_US = 60_000_000;
+const DBM_MIN = -100;
+const DBM_MAX = -15;
+const DEFAULT_Y_MIN = -95;
+const DEFAULT_Y_MAX = -20;
+const WINDOWS_SEC = [1, 2, 5, 10, 30, 60, 120] as const;
+const DEFAULT_WINDOW_US = 5_000_000;
+const MIN_WINDOW_US = 400_000;
+const MAX_WINDOW_US = 120_000_000;
 const LEGEND_REFRESH_MS = 150;
 /** How close (px) the cursor must be to a pass marker to show its details. */
 const MARKER_HIT_PX = 7;
@@ -25,9 +28,6 @@ const LINE_HIT_PX = 5;
 /** Room on the right for the threshold tags. */
 const TAG_GUTTER = 84;
 const RSSI_CHART_STORAGE_KEY = "slaprf.ui.rssi_chart.v1";
-
-/** One colour per gate, in course order (only gates share this chart, so pilot colours don't apply). */
-const GATE_COLORS = ["#d4ff3a", "#38bdf8", "#f472b6", "#fb923c", "#a78bfa", "#2dd4bf", "#facc15", "#f87171"];
 
 const PAD = { l: 46, r: 16 + TAG_GUTTER, t: 34, b: 26 };
 
@@ -49,25 +49,65 @@ interface TagBox {
   lineY: number;
 }
 
+type RssiDragState =
+  | {
+      mode: "pan";
+      startX: number;
+      startY: number;
+      startEndUs: number;
+      startYMin: number;
+      startYMax: number;
+    }
+  | {
+      mode: "xstretch";
+      startX: number;
+      startEndUs: number;
+      startWindowUs: number;
+      anchorFrac: number;
+    }
+  | {
+      mode: "ystretch";
+      startY: number;
+      startYMin: number;
+      startYMax: number;
+      anchorFrac: number;
+    }
+  | {
+      mode: "ybox";
+      startY: number;
+    };
+
 /**
  * The selected pilot's 5.8 GHz signal as seen by every gate, and the place to calibrate
  * detection. "All gates" overlays every trace without thresholds, to keep it readable;
  * picking one gate (above the chart, or by clicking its chip below) shows just that trace
  * with its threshold line, which you drag to adjust — or let Auto-calibrate work it out from
- * the recent signal. Also: pause, drag to scroll back (up to two minutes), wheel to zoom, and
- * jump pass to pass — including passes that didn't count.
+ * the recent signal.
+ *
+ * Supports the same X and Y axis controls and axis-stretching gestures as the Debug charts:
+ * - X and Y axis split-pill presets (`Auto X`, `1s..2m`, `Auto Y`, `Noise floor`, `Full scale`)
+ * - Drag left Y-axis to stretch/shrink dBm scale; drag bottom X-axis to stretch/shrink time scale
+ * - Drag plot to pan X (time) and Y (dBm); Shift+drag to box-zoom Y; double-click to reset axes
  */
 export class PilotRssiChart extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
-  private windowUs = 5_000_000;
+  private windowUs = DEFAULT_WINDOW_US;
+  private autoX = true;
+  private autoY = true;
+  private yMin = DEFAULT_Y_MIN;
+  private yMax = DEFAULT_Y_MAX;
+  private smoothYMin: number | null = null;
+  private smoothYMax: number | null = null;
+  private openAxisMenu: "rssi-x" | "rssi-y" | null = null;
   /** End of the visible window; null follows live. */
   private endUs: number | null = null;
   /** Latest timestamp at the moment of pausing — the zero point of the axis while paused. */
   private refUs = 0;
   private hoverX: number | null = null;
   private hoverY: number | null = null;
-  private drag: { x: number; endUs: number } | null = null;
+  private drag: RssiDragState | null = null;
+  private yZoomBox: { y0: number; y1: number } | null = null;
   /** Threshold being dragged, with its live value. */
   private tagDrag: { gateId: number; dbm: number } | null = null;
   /** Values shown while a save is in flight, so the line doesn't jump back. */
@@ -108,9 +148,7 @@ export class PilotRssiChart extends Component {
           </button>
         </div>
         <span class="scope-hint" data-slot="hint"></span>
-        <div class="segmented scope-windows" data-slot="windows" role="group" aria-label="Time window">
-          ${WINDOWS_SEC.map((s) => `<button type="button" data-window="${s}">${s}s</button>`).join("")}
-        </div>
+        <div class="scope-axis-controls" data-slot="axis-controls" role="group" aria-label="X and Y axis scale controls"></div>
       </div>
       <div class="canvas-host canvas-host-md scope-canvas" data-slot="chart" tabindex="0"
            aria-label="Signal chart. Space pauses, arrow keys jump between passes."></div>
@@ -121,8 +159,19 @@ export class PilotRssiChart extends Component {
     const surface = new CanvasSurface(host, (ctx, w, h) => this.draw(ctx, w, h));
     this.onDispose(() => surface.destroy());
 
+    // Close open axis dropdown menu when clicking outside
+    this.listen(window as unknown as HTMLElement, "pointerdown", (e: PointerEvent) => {
+      if (!this.openAxisMenu) return;
+      const target = e.target as HTMLElement | null;
+      if (target && target.closest("[data-axis-pill]")) return;
+      this.openAxisMenu = null;
+      this.renderControls();
+    });
+
     this.listen(el, "click", (e) => {
-      const btn = (e.target as HTMLElement).closest<HTMLElement>("[data-act], [data-window], [data-calib], [data-focus]");
+      const btn = (e.target as HTMLElement).closest<HTMLElement>(
+        "[data-act], [data-window], [data-axis-act], [data-calib], [data-focus]"
+      );
       if (!btn) return;
       if (btn.dataset.focus) {
         this.focus = btn.dataset.focus === "all" ? null : Number(btn.dataset.focus);
@@ -131,13 +180,51 @@ export class PilotRssiChart extends Component {
         this.renderControls();
         this.renderCalib();
         this.renderLegend();
-      } else if (btn.dataset.window) this.setWindow(Number(btn.dataset.window) * 1e6);
-      else if (btn.dataset.calib === "auto") void this.autoCalibrate();
+      } else if (btn.dataset.axisAct === "toggle-menu") {
+        const menu = btn.dataset.menu as "rssi-x" | "rssi-y";
+        this.openAxisMenu = this.openAxisMenu === menu ? null : menu;
+        this.renderControls();
+      } else if (btn.dataset.axisAct === "auto-x") {
+        this.autoX = true;
+        this.windowUs = DEFAULT_WINDOW_US;
+        this.openAxisMenu = null;
+        this.saveChartPrefs();
+        this.renderControls();
+      } else if (btn.dataset.axisAct === "auto-y") {
+        this.autoY = true;
+        this.smoothYMin = null;
+        this.smoothYMax = null;
+        this.openAxisMenu = null;
+        this.saveChartPrefs();
+        this.renderControls();
+      } else if (btn.dataset.axisAct === "floor-y") {
+        this.autoY = false;
+        this.yMin = -98;
+        this.yMax = -64;
+        this.smoothYMin = this.yMin;
+        this.smoothYMax = this.yMax;
+        this.openAxisMenu = null;
+        this.saveChartPrefs();
+        this.renderControls();
+      } else if (btn.dataset.axisAct === "full-y") {
+        this.autoY = false;
+        this.yMin = DEFAULT_Y_MIN;
+        this.yMax = DEFAULT_Y_MAX;
+        this.smoothYMin = this.yMin;
+        this.smoothYMax = this.yMax;
+        this.openAxisMenu = null;
+        this.saveChartPrefs();
+        this.renderControls();
+      } else if (btn.dataset.window) {
+        this.openAxisMenu = null;
+        this.setWindow(Number(btn.dataset.window) * 1e6, false);
+      } else if (btn.dataset.calib === "auto") void this.autoCalibrate();
       else if (btn.dataset.calib === "reset") void this.resetToDefault();
       else if (btn.dataset.calib === "undo") void this.undoLast();
       else if (btn.dataset.act === "live") this.toggleLive();
       else if (btn.dataset.act) this.jump(btn.dataset.act === "prev" ? -1 : 1);
     });
+
     this.listen(host, "keydown", (e) => {
       if (e.key === " ") this.toggleLive();
       else if (e.key === "ArrowLeft") this.jump(-1);
@@ -145,7 +232,29 @@ export class PilotRssiChart extends Component {
       else return;
       e.preventDefault();
     });
+
+    let lastTapTime = 0;
+    let lastTapX = 0;
+    let lastTapY = 0;
+
+    this.listen(host, "dblclick", () => {
+      this.resetAxesToAuto();
+    });
+
     this.listen(host, "pointerdown", (e) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return;
+      if (e.pointerType === "touch") {
+        const now = performance.now();
+        if (now - lastTapTime < 320 && Math.hypot(e.clientX - lastTapX, e.clientY - lastTapY) < 28) {
+          lastTapTime = 0;
+          this.resetAxesToAuto();
+          return;
+        }
+        lastTapTime = now;
+        lastTapX = e.clientX;
+        lastTapY = e.clientY;
+      }
+
       try {
         host.setPointerCapture(e.pointerId);
       } catch {
@@ -154,48 +263,160 @@ export class PilotRssiChart extends Component {
       const r = host.getBoundingClientRect();
       const x = e.clientX - r.left;
       const y = e.clientY - r.top;
+      this.hoverX = x;
+      this.hoverY = y;
+
       const grabbed = this.tagAt(x, y);
       if (grabbed !== null) {
         this.tagDrag = { gateId: grabbed, dbm: this.thresholdOf(grabbed).dbm };
         return;
       }
-      const onAxis = y >= r.height - PAD.b && x >= PAD.l && x <= PAD.l + this.plot.w;
-      this.drag = { x: e.clientX, endUs: this.viewEnd() };
+
+      const isTouch = e.pointerType === "touch";
+      const yAxisW = isTouch ? 54 : PAD.l;
+      const xAxisH = isTouch ? 34 : PAD.b;
+
+      if (x < yAxisW) {
+        // Dragging on left Y-axis stretches/shrinks the dBm scale smoothly
+        const yFrac = Math.max(0, Math.min(1, 1 - (y - PAD.t) / Math.max(10, this.plot.h)));
+        this.drag = {
+          mode: "ystretch",
+          startY: y,
+          startYMin: this.yMin,
+          startYMax: this.yMax,
+          anchorFrac: yFrac,
+        };
+        host.classList.add("is-dragging", "is-over-yaxis");
+        return;
+      }
+
+      if (y >= r.height - xAxisH && x >= PAD.l && x <= PAD.l + this.plot.w) {
+        // Dragging on bottom X-axis stretches/shrinks the time window smoothly
+        const xFrac = Math.max(0, Math.min(1, (x - PAD.l) / Math.max(10, this.plot.w)));
+        this.drag = {
+          mode: "xstretch",
+          startX: x,
+          startEndUs: this.viewEnd(),
+          startWindowUs: this.windowUs,
+          anchorFrac: xFrac,
+        };
+        host.classList.add("is-dragging", "is-over-axis");
+        return;
+      }
+
+      if (e.shiftKey) {
+        this.drag = {
+          mode: "ybox",
+          startY: y,
+        };
+        this.yZoomBox = { y0: y, y1: y };
+        host.classList.add("is-dragging");
+        return;
+      }
+
+      this.drag = {
+        mode: "pan",
+        startX: x,
+        startY: y,
+        startEndUs: this.viewEnd(),
+        startYMin: this.yMin,
+        startYMax: this.yMax,
+      };
       host.classList.add("is-dragging");
-      if (onAxis) host.classList.add("is-over-axis");
     });
+
     this.listen(host, "pointermove", (e) => {
       const r = host.getBoundingClientRect();
-      this.hoverX = e.clientX - r.left;
-      this.hoverY = e.clientY - r.top;
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      this.hoverX = x;
+      this.hoverY = y;
+
       if (this.tagDrag) {
-        this.tagDrag.dbm = Math.round(this.dbmAt(this.hoverY));
+        this.tagDrag.dbm = Math.round(this.dbmAt(y));
         return;
       }
+
       if (!this.drag) {
-        const overTag = this.tagAt(this.hoverX, this.hoverY) !== null;
-        const overAxis =
-          !overTag &&
-          this.hoverY >= r.height - PAD.b &&
-          this.hoverX >= PAD.l &&
-          this.hoverX <= PAD.l + this.plot.w;
+        const overTag = this.tagAt(x, y) !== null;
+        const overYAxis = !overTag && x < PAD.l && y >= PAD.t && y <= r.height - PAD.b;
+        const overXAxis =
+          !overTag && !overYAxis && y >= r.height - PAD.b && x >= PAD.l && x <= PAD.l + this.plot.w;
         host.classList.toggle("is-over-tag", overTag);
-        host.classList.toggle("is-over-axis", overAxis);
+        host.classList.toggle("is-over-yaxis", overYAxis);
+        host.classList.toggle("is-over-axis", overXAxis);
         return;
       }
-      const dx = e.clientX - this.drag.x;
-      if (Math.abs(dx) < 2 && this.endUs === null) return;
-      this.pauseAt(this.drag.endUs - (dx / this.plot.w) * this.windowUs);
+
+      if (this.drag.mode === "ystretch") {
+        const dy = y - this.drag.startY;
+        const factor = Math.exp(dy / 140);
+        this.applyDbmStretch(this.drag.startYMin, this.drag.startYMax, this.drag.anchorFrac, factor);
+        this.renderControls();
+        return;
+      }
+
+      if (this.drag.mode === "xstretch") {
+        const dx = x - this.drag.startX;
+        this.autoX = false;
+        const factor = Math.exp(-dx / 150);
+        const nextUs = Math.max(MIN_WINDOW_US, Math.min(MAX_WINDOW_US, this.drag.startWindowUs * factor));
+        const anchorUs = this.drag.startEndUs - (1 - this.drag.anchorFrac) * this.drag.startWindowUs;
+        this.windowUs = nextUs;
+        if (this.endUs !== null) {
+          this.endUs = this.clampEnd(anchorUs + (1 - this.drag.anchorFrac) * nextUs);
+        }
+        this.renderControls();
+        return;
+      }
+
+      if (this.drag.mode === "ybox") {
+        this.yZoomBox = { y0: this.drag.startY, y1: y };
+        return;
+      }
+
+      // mode === "pan"
+      const dx = x - this.drag.startX;
+      const dy = y - this.drag.startY;
+      if (Math.abs(dx) >= 2 || this.endUs !== null) {
+        this.pauseAt(this.drag.startEndUs - (dx / Math.max(10, this.plot.w)) * this.windowUs);
+      }
+      if (Math.abs(dy) > 3 || !this.autoY) {
+        const ySpan = this.drag.startYMax - this.drag.startYMin;
+        const deltaDbm = (dy / Math.max(10, this.plot.h)) * ySpan;
+        this.applyDbmPan(this.drag.startYMin, this.drag.startYMax, deltaDbm);
+      }
       this.renderControls();
     });
+
     const endDrag = () => {
       if (this.tagDrag) {
         const { gateId, dbm } = this.tagDrag;
         this.tagDrag = null;
         if (dbm !== this.thresholdOf(gateId).dbm) void this.saveManual(gateId, dbm);
       }
-      this.drag = null;
-      host.classList.remove("is-dragging");
+      if (this.drag) {
+        if (this.drag.mode === "ybox" && this.yZoomBox) {
+          const ya = Math.max(PAD.t, Math.min(PAD.t + this.plot.h, Math.min(this.yZoomBox.y0, this.yZoomBox.y1)));
+          const yb = Math.max(PAD.t, Math.min(PAD.t + this.plot.h, Math.max(this.yZoomBox.y0, this.yZoomBox.y1)));
+          if (yb - ya >= 10) {
+            const dHigh = this.dbmAt(ya);
+            const dLow = this.dbmAt(yb);
+            if (dHigh - dLow >= 4) {
+              this.autoY = false;
+              this.yMin = Math.max(DBM_MIN, dLow);
+              this.yMax = Math.min(DBM_MAX, dHigh);
+              this.smoothYMin = this.yMin;
+              this.smoothYMax = this.yMax;
+            }
+          }
+        }
+        this.drag = null;
+        this.yZoomBox = null;
+        this.saveChartPrefs();
+        this.renderControls();
+      }
+      host.classList.remove("is-dragging", "is-over-axis", "is-over-yaxis");
     };
     this.listen(host, "pointerup", endDrag);
     this.listen(host, "pointercancel", endDrag);
@@ -203,13 +424,24 @@ export class PilotRssiChart extends Component {
       this.hoverX = null;
       this.hoverY = null;
       if (!this.drag) {
-        host.classList.remove("is-over-tag", "is-over-axis");
+        host.classList.remove("is-over-tag", "is-over-axis", "is-over-yaxis");
       }
     });
-    // Wheel zooms around the cursor; needs a non-passive listener to stop the page scrolling.
+    // Wheel zooms around the cursor (or stretches Y when over the left Y-axis).
     const onWheel = (e: WheelEvent) => {
       e.preventDefault();
-      this.zoom(e.deltaY > 0 ? 1.25 : 0.8, e.clientX - host.getBoundingClientRect().left);
+      const rect = host.getBoundingClientRect();
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      if (x < PAD.l) {
+        const factor = e.deltaY > 0 ? 1.18 : 0.85;
+        const yFrac = Math.max(0, Math.min(1, 1 - (y - PAD.t) / Math.max(10, this.plot.h)));
+        this.applyDbmStretch(this.yMin, this.yMax, yFrac, factor);
+        this.saveChartPrefs();
+        this.renderControls();
+      } else {
+        this.zoom(e.deltaY > 0 ? 1.25 : 0.8, x);
+      }
     };
     host.addEventListener("wheel", onWheel, { passive: false });
     this.onDispose(() => host.removeEventListener("wheel", onWheel));
@@ -224,6 +456,8 @@ export class PilotRssiChart extends Component {
         // Undo belongs to the pilot it was made for.
         this.undo = null;
         this.calibMessage = "";
+        this.smoothYMin = null;
+        this.smoothYMax = null;
         this.renderControls();
         this.renderCalib();
       })
@@ -239,7 +473,7 @@ export class PilotRssiChart extends Component {
     this.renderLegend();
   }
 
-  // ---- view window -----------------------------------------------------------
+  // ---- view window & Y scale -------------------------------------------------
 
   private get latest(): number {
     return this.store.latestTimestampUs;
@@ -268,21 +502,151 @@ export class PilotRssiChart extends Component {
   }
 
   private yOf(dbm: number): number {
-    return PAD.t + this.plot.h * (1 - (Math.max(DBM_MIN, Math.min(DBM_MAX, dbm)) - DBM_MIN) / (DBM_MAX - DBM_MIN));
+    const span = Math.max(4, this.yMax - this.yMin);
+    return PAD.t + this.plot.h * (1 - (dbm - this.yMin) / span);
   }
 
   private dbmAt(y: number): number {
-    const v = DBM_MIN + (1 - (y - PAD.t) / this.plot.h) * (DBM_MAX - DBM_MIN);
+    const span = Math.max(4, this.yMax - this.yMin);
+    const v = this.yMin + (1 - (y - PAD.t) / this.plot.h) * span;
     return Math.max(DBM_MIN, Math.min(DBM_MAX, v));
+  }
+
+  private applyDbmStretch(startMin: number, startMax: number, anchorFrac: number, factor: number): void {
+    const curSpan = Math.max(6, startMax - startMin);
+    const nextSpan = Math.max(6, Math.min(DBM_MAX - DBM_MIN, curSpan * factor));
+    const anchorDbm = startMin + anchorFrac * curSpan;
+    let nextMin = anchorDbm - anchorFrac * nextSpan;
+    let nextMax = nextMin + nextSpan;
+    if (nextMin < DBM_MIN) {
+      nextMin = DBM_MIN;
+      nextMax = Math.min(DBM_MAX, DBM_MIN + nextSpan);
+    }
+    if (nextMax > DBM_MAX) {
+      nextMax = DBM_MAX;
+      nextMin = Math.max(DBM_MIN, DBM_MAX - nextSpan);
+    }
+    this.autoY = false;
+    this.yMin = nextMin;
+    this.yMax = nextMax;
+    this.smoothYMin = nextMin;
+    this.smoothYMax = nextMax;
+  }
+
+  private applyDbmPan(startMin: number, startMax: number, deltaDbm: number): void {
+    const span = Math.max(6, startMax - startMin);
+    let nextMin = startMin + deltaDbm;
+    let nextMax = nextMin + span;
+    if (nextMin < DBM_MIN) {
+      nextMin = DBM_MIN;
+      nextMax = Math.min(DBM_MAX, DBM_MIN + span);
+    }
+    if (nextMax > DBM_MAX) {
+      nextMax = DBM_MAX;
+      nextMin = Math.max(DBM_MIN, DBM_MAX - span);
+    }
+    this.autoY = false;
+    this.yMin = nextMin;
+    this.yMax = nextMax;
+    this.smoothYMin = nextMin;
+    this.smoothYMax = nextMax;
+  }
+
+  private updateAutoY(start: number, end: number, slot: number): void {
+    if (!this.autoY) return;
+    let minD = 1000;
+    let maxD = -1000;
+    for (const gate of this.shownGates) {
+      const frames = this.store.historyFor(gate.gateId);
+      if (!frames.length) continue;
+      const from = Math.max(0, PilotRssiChart.firstAtOrAfter(frames, start) - 1);
+      const to = Math.min(frames.length - 1, PilotRssiChart.firstAtOrAfter(frames, end));
+      for (let i = from; i <= to; i++) {
+        const v = frames[i]?.rssi[slot];
+        if (v !== undefined && v > -127 && v < 0) {
+          if (v < minD) minD = v;
+          if (v > maxD) maxD = v;
+        }
+      }
+      const thr = this.thresholdOf(gate.gateId).dbm;
+      if (this.focus !== null || maxD >= thr - 14) {
+        if (thr > maxD) maxD = thr;
+        if (thr < minD) minD = thr;
+      }
+    }
+    if (minD > maxD) {
+      this.yMin = DEFAULT_Y_MIN;
+      this.yMax = DEFAULT_Y_MAX;
+      return;
+    }
+    let targetMin = Math.max(DBM_MIN, Math.floor((minD - 5) / 2) * 2);
+    let targetMax = Math.min(DBM_MAX, Math.ceil((maxD + 6) / 2) * 2);
+    const minSpan = 22;
+    if (targetMax - targetMin < minSpan) {
+      const extra = minSpan - (targetMax - targetMin);
+      targetMin = Math.max(DBM_MIN, targetMin - Math.floor(extra * 0.35));
+      targetMax = Math.min(DBM_MAX, targetMin + minSpan);
+    }
+    if (this.smoothYMin === null || this.smoothYMax === null) {
+      this.smoothYMin = targetMin;
+      this.smoothYMax = targetMax;
+    } else {
+      const curMin = this.smoothYMin;
+      const curMax = this.smoothYMax;
+      const needMinMove = minD < curMin + 2 || minD > curMin + 9;
+      const needMaxMove = maxD > curMax - 2 || maxD < curMax - 10;
+      const effTargetMin = needMinMove ? targetMin : curMin;
+      const effTargetMax = needMaxMove ? targetMax : curMax;
+      const diffMin = effTargetMin - curMin;
+      const diffMax = effTargetMax - curMax;
+      if (Math.abs(diffMin) > 0.05) {
+        const alphaMin = diffMin < 0 ? 0.35 : 0.08;
+        this.smoothYMin = Math.abs(diffMin) < 0.25 ? effTargetMin : curMin + diffMin * alphaMin;
+      }
+      if (Math.abs(diffMax) > 0.05) {
+        const alphaMax = diffMax > 0 ? 0.4 : 0.08;
+        this.smoothYMax = Math.abs(diffMax) < 0.25 ? effTargetMax : curMax + diffMax * alphaMax;
+      }
+    }
+    this.yMin = this.smoothYMin;
+    this.yMax = Math.max(this.yMin + 12, this.smoothYMax);
+  }
+
+  private resetAxesToAuto(): void {
+    this.endUs = null;
+    this.autoX = true;
+    this.windowUs = DEFAULT_WINDOW_US;
+    this.autoY = true;
+    this.smoothYMin = null;
+    this.smoothYMax = null;
+    this.saveChartPrefs();
+    this.renderControls();
   }
 
   private loadChartPrefs(): void {
     try {
       const raw = window.localStorage.getItem(RSSI_CHART_STORAGE_KEY);
       if (!raw) return;
-      const parsed = JSON.parse(raw) as { windowUs?: number; focus?: number | null };
+      const parsed = JSON.parse(raw) as {
+        windowUs?: number;
+        autoX?: boolean;
+        autoY?: boolean;
+        yMin?: number;
+        yMax?: number;
+        focus?: number | null;
+      };
       if (typeof parsed.windowUs === "number" && parsed.windowUs >= MIN_WINDOW_US && parsed.windowUs <= MAX_WINDOW_US) {
         this.windowUs = parsed.windowUs;
+      }
+      if (typeof parsed.autoX === "boolean") {
+        this.autoX = parsed.autoX;
+      }
+      if (typeof parsed.autoY === "boolean") {
+        this.autoY = parsed.autoY;
+      }
+      if (typeof parsed.yMin === "number" && typeof parsed.yMax === "number" && parsed.yMax - parsed.yMin >= 6) {
+        this.yMin = Math.max(DBM_MIN, parsed.yMin);
+        this.yMax = Math.min(DBM_MAX, parsed.yMax);
       }
       if (parsed.focus === null || (typeof parsed.focus === "number" && parsed.focus >= 1)) {
         this.focus = parsed.focus;
@@ -298,6 +662,10 @@ export class PilotRssiChart extends Component {
         RSSI_CHART_STORAGE_KEY,
         JSON.stringify({
           windowUs: this.windowUs,
+          autoX: this.autoX,
+          autoY: this.autoY,
+          yMin: this.yMin,
+          yMax: this.yMax,
           focus: this.focus,
         })
       );
@@ -307,7 +675,13 @@ export class PilotRssiChart extends Component {
   }
 
   public restoreDefaults(): void {
-    this.windowUs = 5_000_000;
+    this.windowUs = DEFAULT_WINDOW_US;
+    this.autoX = true;
+    this.autoY = true;
+    this.yMin = DEFAULT_Y_MIN;
+    this.yMax = DEFAULT_Y_MAX;
+    this.smoothYMin = null;
+    this.smoothYMax = null;
     this.focus = null;
     this.endUs = null;
     this.calibMessage = "";
@@ -317,9 +691,10 @@ export class PilotRssiChart extends Component {
     this.renderLegend();
   }
 
-  private setWindow(us: number): void {
+  private setWindow(us: number, isAuto = false): void {
     const center = this.viewEnd() - this.windowUs / 2;
     this.windowUs = us;
+    this.autoX = isAuto;
     if (this.endUs !== null) this.endUs = this.clampEnd(center + us / 2);
     this.saveChartPrefs();
     this.renderControls();
@@ -330,6 +705,7 @@ export class PilotRssiChart extends Component {
     const frac = Math.min(1, Math.max(0, (x - this.plot.x) / this.plot.w));
     const next = Math.min(MAX_WINDOW_US, Math.max(MIN_WINDOW_US, this.windowUs * factor));
     this.windowUs = next;
+    this.autoX = false;
     // Following live keeps the right edge at "now"; otherwise zoom around the cursor.
     if (this.endUs !== null) this.endUs = this.clampEnd(anchor + (1 - frac) * next);
     this.saveChartPrefs();
@@ -548,6 +924,9 @@ export class PilotRssiChart extends Component {
     const end = this.viewEnd();
     const ref = this.endUs === null ? end : this.refUs;
     const start = end - this.windowUs;
+
+    this.updateAutoY(start, end, slot);
+
     const xOf = (ts: number) => PAD.l + plotW * ((ts - start) / this.windowUs);
     const yOf = (dbm: number) => this.yOf(dbm);
 
@@ -572,15 +951,13 @@ export class PilotRssiChart extends Component {
         // Start on a multiple of the step so the same samples are drawn as the view scrolls
         // (otherwise zoomed-out traces shimmer).
         const first = Math.max(0, from - (from % step));
-        let lastX = PAD.l;
         let lastY = PAD.t;
         let lastTs = 0;
         for (let i = first; i <= to; i += step) {
           const x = xOf(frames[i].timestampUs);
-          const y = yOf(frames[i].rssi[slot] ?? DBM_MIN);
+          const y = yOf(frames[i].rssi[slot] ?? this.yMin);
           if (i === first) ctx.moveTo(x, y);
           else ctx.lineTo(x, y);
-          lastX = x;
           lastY = y;
           lastTs = frames[i].timestampUs;
         }
@@ -595,7 +972,33 @@ export class PilotRssiChart extends Component {
       ctx.restore();
     }
 
-    if (this.focus !== null) this.drawThresholds(ctx, w, plotW);
+    // Shift+drag Y box-zoom overlay
+    if (this.yZoomBox) {
+      const ya = Math.max(PAD.t, Math.min(PAD.t + plotH, Math.min(this.yZoomBox.y0, this.yZoomBox.y1)));
+      const yb = Math.max(PAD.t, Math.min(PAD.t + plotH, Math.max(this.yZoomBox.y0, this.yZoomBox.y1)));
+      ctx.save();
+      ctx.fillStyle = "rgba(212, 255, 58, 0.12)";
+      ctx.fillRect(PAD.l, ya, plotW, Math.max(1, yb - ya));
+      ctx.strokeStyle = theme.accent;
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.beginPath();
+      ctx.moveTo(PAD.l, ya + 0.5);
+      ctx.lineTo(w - this.padR, ya + 0.5);
+      ctx.moveTo(PAD.l, yb + 0.5);
+      ctx.lineTo(w - this.padR, yb + 0.5);
+      ctx.stroke();
+      ctx.setLineDash([]);
+      const dHigh = Math.round(this.dbmAt(ya));
+      const dLow = Math.round(this.dbmAt(yb));
+      ctx.fillStyle = theme.accent;
+      ctx.font = font(600, 10.5, true);
+      ctx.textAlign = "left";
+      ctx.fillText(`Zoom Y: ${dLow} to ${dHigh} dBm`, PAD.l + 8, (ya + yb) / 2 + 3.5);
+      ctx.restore();
+    }
+
+    if (this.focus !== null) this.drawThresholds(ctx, w, plotW, plotH);
     if (this.latest === 0) return;
 
     // Pass markers: dashed in the gate's colour when timed, red when set aside.
@@ -621,7 +1024,7 @@ export class PilotRssiChart extends Component {
       if (this.hoverX !== null && Math.abs(this.hoverX - x) <= MARKER_HIT_PX) hovered = p;
     });
 
-    if (!this.tagDrag && this.hoverX !== null && this.hoverX >= PAD.l && this.hoverX <= PAD.l + plotW) {
+    if (!this.tagDrag && !this.yZoomBox && this.hoverX !== null && this.hoverX >= PAD.l && this.hoverX <= PAD.l + plotW) {
       this.drawCursor(ctx, h, plotH, this.hoverX, hovered);
     }
   }
@@ -631,13 +1034,14 @@ export class PilotRssiChart extends Component {
    * edge. Tags that would overlap are moved into extra columns to the left. Outlined tags
    * use the pilot's own threshold; filled tags are calibrated for that gate.
    */
-  private drawThresholds(ctx: CanvasRenderingContext2D, w: number, plotW: number): void {
+  private drawThresholds(ctx: CanvasRenderingContext2D, w: number, plotW: number, plotH: number): void {
     ctx.font = font(700, 10.5);
     const items = this.shownGates.map((p) => {
       const t = this.thresholdOf(p.gateId);
       const name = gateLabel(this.store, p.gateId);
       const text = `${name.length > 8 ? `${name.slice(0, 7)}…` : name} ${t.dbm.toFixed(0)}`;
-      return { gateId: p.gateId, ...t, text, lineY: this.yOf(t.dbm), width: ctx.measureText(text).width + 14 };
+      const clampedY = Math.max(PAD.t, Math.min(PAD.t + plotH, this.yOf(t.dbm)));
+      return { gateId: p.gateId, ...t, text, lineY: clampedY, width: ctx.measureText(text).width + 14 };
     });
     const colW = Math.max(...items.map((i) => i.width), 40) + TAG_GAP;
 
@@ -732,8 +1136,11 @@ export class PilotRssiChart extends Component {
   ): void {
     ctx.font = font(500, 10.5, true);
     ctx.lineWidth = 1;
-    for (const level of [-90, -75, -60, -45, -30]) {
+    const ySpan = Math.max(4, this.yMax - this.yMin);
+    const dStep = ySpan <= 14 ? 2 : ySpan <= 32 ? 5 : ySpan <= 60 ? 10 : 15;
+    for (let level = Math.ceil(this.yMin / dStep) * dStep; level <= this.yMax; level += dStep) {
       const y = Math.round(yOf(level)) + 0.5;
+      if (y < PAD.t - 1 || y > h - PAD.b + 1) continue;
       ctx.strokeStyle = theme.grid;
       ctx.beginPath();
       ctx.moveTo(PAD.l, y);
@@ -745,13 +1152,41 @@ export class PilotRssiChart extends Component {
     }
 
     // Time ticks, labelled relative to now (or to when the view was paused).
-    const stepSec = this.windowUs <= 6e6 ? 1 : this.windowUs <= 12e6 ? 2 : this.windowUs <= 35e6 ? 5 : 10;
+    const winSec = this.windowUs / 1e6;
+    const stepSec =
+      winSec <= 0.8
+        ? 0.1
+        : winSec <= 1.8
+          ? 0.25
+          : winSec <= 4
+            ? 0.5
+            : winSec <= 8
+              ? 1
+              : winSec <= 16
+                ? 2
+                : winSec <= 38
+                  ? 5
+                  : winSec <= 75
+                    ? 10
+                    : 20;
     const stepUs = stepSec * 1e6;
     ctx.textAlign = "center";
     ctx.fillStyle = theme.text3;
     for (let t = ref - Math.floor((ref - start) / stepUs) * stepUs; t <= end + 1; t += stepUs) {
-      const ago = Math.round((ref - t) / 1e6);
-      ctx.fillText(ago === 0 ? (this.endUs === null ? "now" : "paused") : `−${ago}s`, xOf(t), h - 8);
+      const x = xOf(t);
+      if (x < PAD.l - 4 || x > w - this.padR + 4) continue;
+      const agoSec = Math.max(0, (ref - t) / 1e6);
+      const lbl =
+        agoSec < 0.02
+          ? this.endUs === null
+            ? "now"
+            : "paused"
+          : stepSec < 0.5
+            ? `−${agoSec.toFixed(2)}s`
+            : stepSec < 1
+              ? `−${agoSec.toFixed(1)}s`
+              : `−${Math.round(agoSec)}s`;
+      ctx.fillText(lbl, x, h - 8);
     }
     ctx.textAlign = "left";
   }
@@ -815,10 +1250,76 @@ export class PilotRssiChart extends Component {
     if (prevBtn) prevBtn.title = `Previous pass at ${gateScope} (←)`;
     if (nextBtn) nextBtn.title = `Next pass at ${gateScope} (→)`;
 
-    this.slot("windows")
-      .querySelectorAll<HTMLElement>("[data-window]")
-      .forEach((b) => b.classList.toggle("is-active", Number(b.dataset.window) * 1e6 === Math.round(this.windowUs)));
-    this.slot("hint").textContent = live ? "Live · drag to scroll back, wheel to zoom" : "Paused · drag to scroll, wheel to zoom";
+    const winSec = this.windowUs / 1e6;
+    const xWinLabel =
+      Math.round(winSec) === 120
+        ? "2 min"
+        : winSec < 10 && Math.abs(winSec - Math.round(winSec)) >= 0.05
+          ? `${winSec.toFixed(1)} s`
+          : `${Math.round(winSec)} s`;
+    const xWinShort =
+      Math.round(winSec) === 120
+        ? "2m"
+        : winSec < 10 && Math.abs(winSec - Math.round(winSec)) >= 0.05
+          ? `${winSec.toFixed(1)}s`
+          : `${Math.round(winSec)}s`;
+
+    const isFloorY = !this.autoY && Math.round(this.yMin) === -98 && Math.round(this.yMax) === -64;
+    const isFullY = !this.autoY && Math.round(this.yMin) === DEFAULT_Y_MIN && Math.round(this.yMax) === DEFAULT_Y_MAX;
+    const yShort = isFloorY ? "Floor" : isFullY ? "Full" : `${Math.round(this.yMax - this.yMin)}dB`;
+
+    this.slot("axis-controls").innerHTML = `
+      <div class="debug-axis-pill ${this.autoX ? "is-armed" : "is-unarmed"}" data-axis-pill>
+        <button type="button" class="debug-axis-pill-main" data-axis-act="${this.autoX ? "toggle-menu" : "auto-x"}" data-menu="rssi-x" title="${this.autoX ? `Auto X-axis time window (${xWinLabel}) — click to choose a time window preset, or drag X-axis to stretch` : "Click to reset X-axis time window to Auto X (5 s)"}">
+          ${icons.target(13)}<span>${this.autoX ? "Auto X" : `<span class="debug-hint-desktop">X: ${xWinLabel}</span><span class="debug-hint-mobile">X: ${xWinShort}</span>`}</span>
+        </button>
+        <button type="button" class="debug-axis-pill-arrow" data-axis-act="toggle-menu" data-menu="rssi-x" aria-expanded="${this.openAxisMenu === "rssi-x"}" title="Choose X-axis time window">
+          ${icons.chevronDown(12)}
+        </button>
+        ${
+          this.openAxisMenu === "rssi-x"
+            ? `<div class="debug-axis-menu" role="menu" aria-label="X-axis time window">
+                <button type="button" class="debug-axis-menu-item ${this.autoX ? "is-active" : ""}" data-axis-act="auto-x" role="menuitem">
+                  <span>Auto X</span><span class="note">5 s</span>
+                </button>
+                <div class="debug-axis-menu-sep"></div>
+                ${WINDOWS_SEC.map((w) => {
+                  const active = !this.autoX && Math.abs(winSec - w) < 0.05;
+                  const label = w === 120 ? "2 min" : `${w} s`;
+                  return `<button type="button" class="debug-axis-menu-item ${active ? "is-active" : ""}" data-window="${w}" role="menuitem"><span>${label}</span></button>`;
+                }).join("")}
+              </div>`
+            : ""
+        }
+      </div>
+      <div class="debug-axis-pill ${this.autoY ? "is-armed" : "is-unarmed"}" data-axis-pill>
+        <button type="button" class="debug-axis-pill-main" data-axis-act="${this.autoY ? "toggle-menu" : "auto-y"}" data-menu="rssi-y" title="${this.autoY ? "Auto Y-axis scaling is ON — fits visible gate traces automatically. Click to choose a scale preset, or drag the Y-axis to stretch." : "Click to reset Y-axis range to Auto Y"}">
+          ${icons.target(13)}<span>${this.autoY ? "Auto Y" : `<span class="debug-hint-desktop">Y: ${Math.round(this.yMin)}…${Math.round(this.yMax)} dBm</span><span class="debug-hint-mobile">Y: ${yShort}</span>`}</span>
+        </button>
+        <button type="button" class="debug-axis-pill-arrow" data-axis-act="toggle-menu" data-menu="rssi-y" aria-expanded="${this.openAxisMenu === "rssi-y"}" title="Choose Y-axis dBm scale">
+          ${icons.chevronDown(12)}
+        </button>
+        ${
+          this.openAxisMenu === "rssi-y"
+            ? `<div class="debug-axis-menu" role="menu" aria-label="Y-axis dBm scale">
+                <button type="button" class="debug-axis-menu-item ${this.autoY ? "is-active" : ""}" data-axis-act="auto-y" role="menuitem">
+                  <span>Auto Y</span><span class="note">Fit traces</span>
+                </button>
+                <div class="debug-axis-menu-sep"></div>
+                <button type="button" class="debug-axis-menu-item ${isFloorY ? "is-active" : ""}" data-axis-act="floor-y" role="menuitem">
+                  <span>Noise floor</span><span class="note">−98…−64 dBm</span>
+                </button>
+                <button type="button" class="debug-axis-menu-item ${isFullY ? "is-active" : ""}" data-axis-act="full-y" role="menuitem">
+                  <span>Full scale</span><span class="note">${DEFAULT_Y_MIN}…${DEFAULT_Y_MAX} dBm</span>
+                </button>
+              </div>`
+            : ""
+        }
+      </div>`;
+
+    this.slot("hint").textContent = live
+      ? "Live · drag chart to pan · Shift+drag box to zoom · drag axes to stretch"
+      : "Paused · drag chart to pan · Shift+drag box to zoom · drag axes to stretch";
   }
 
   /** The calibration row: what the tags mean, Auto-calibrate, Reset, and the last result with Undo. */
@@ -871,7 +1372,7 @@ export class PilotRssiChart extends Component {
       </button>`;
     const gateChips = this.store.nodes
       .map((p) => {
-        const dbm = this.rssiAt(p.gateId, slot, at) ?? DBM_MIN;
+        const dbm = this.rssiAt(p.gateId, slot, at) ?? DEFAULT_Y_MIN;
         const hot = dbm >= this.thresholdOf(p.gateId).dbm;
         const dim = this.focus !== null && this.focus !== p.gateId;
         return `

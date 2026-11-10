@@ -2129,9 +2129,19 @@ body.is-gate-dragging * {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.scope-windows {
+.scope-windows,
+.scope-axis-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   margin-left: auto;
   flex-shrink: 0;
+}
+.scope-axis-controls .debug-axis-menu {
+  top: calc(100% + 5px);
+  bottom: auto;
+  right: 0;
+  left: auto;
 }
 .scope-canvas {
   cursor: grab;
@@ -2178,7 +2188,9 @@ body.is-gate-dragging * {
 .channel-all-dot {
   background: conic-gradient(#d4ff3a, #38bdf8, #f472b6, #fb923c, #d4ff3a);
 }
-.scope-canvas.is-over-tag {
+.scope-canvas.is-over-tag,
+.scope-canvas.is-over-yaxis,
+.scope-canvas.is-dragging.is-over-yaxis {
   cursor: ns-resize;
 }
 .scope-canvas.is-over-axis,
