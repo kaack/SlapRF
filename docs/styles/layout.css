@@ -207,16 +207,130 @@
 .topbar-view-actions {
   display: contents;
 }
-.topbar-actions .btn {
+.topbar-actions > .btn,
+.topbar-usb-wrap > .btn {
   height: 35px;
   gap: 8px;
   font-size: 13px;
 }
-.topbar-actions .btn svg {
+.topbar-actions > .btn > svg,
+.topbar-usb-wrap > .btn > svg {
   width: 19px;
   height: 19px;
   stroke-width: 2;
   shape-rendering: geometricPrecision;
+}
+
+.topbar-usb-wrap {
+  position: relative;
+  display: inline-flex;
+}
+.topbar-usb-caret {
+  display: inline-flex;
+  align-items: center;
+  margin-left: -2px;
+  opacity: 0.78;
+}
+.topbar-usb-caret svg {
+  width: 14px;
+  height: 14px;
+}
+.topbar-usb-popover {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  z-index: 210;
+  width: 300px;
+  padding: 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-strong);
+  background: rgba(18, 20, 25, 0.98);
+  backdrop-filter: blur(16px);
+  box-shadow:
+    0 18px 42px rgba(0, 0, 0, 0.65),
+    0 0 0 1px rgba(255, 255, 255, 0.04);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.topbar-usb-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 4px 6px;
+  border-bottom: 1px solid var(--border);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-3);
+}
+.topbar-usb-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.topbar-usb-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  transition: border-color 0.12s, background 0.12s;
+}
+.topbar-usb-item.is-active {
+  border-color: var(--accent-line);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+}
+.topbar-usb-select {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 5px 8px;
+  border: 0;
+  background: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.topbar-usb-item-main {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.topbar-usb-item-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.topbar-usb-item-fp {
+  font-size: 11px;
+  color: var(--text-3);
+  line-height: 1.1;
+}
+.topbar-usb-item-disc {
+  flex-shrink: 0;
+}
+.topbar-usb-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+.topbar-usb-foot-btn {
+  width: 100%;
+  justify-content: center;
 }
 
 /* Top-right 5-state Connection LED Indicator ------------------------------- */
@@ -287,10 +401,12 @@
 
 /* Responsive --------------------------------------------------------------- */
 @media (max-width: 960px) {
-  .topbar > .topbar-actions .topbar-btn-label {
+  .topbar > .topbar-actions .topbar-btn-label,
+  .topbar > .topbar-actions .topbar-usb-caret {
     display: none;
   }
-  .topbar > .topbar-actions .btn[data-action] {
+  .topbar > .topbar-actions > .btn[data-action],
+  .topbar > .topbar-actions .topbar-usb-wrap > .btn[data-action] {
     width: 35px;
     padding: 0;
     justify-content: center;

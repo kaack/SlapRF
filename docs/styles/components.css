@@ -25,8 +25,9 @@
   padding: 18px 20px 0;
 }
 .card-head h2 {
-  font-size: 14px;
-  font-weight: 600;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-2);
   letter-spacing: -0.005em;
 }
 .card-head p {
@@ -166,6 +167,16 @@
 .btn-sm.btn-icon svg {
   width: 17px;
   height: 17px;
+}
+.btn-sm.btn-icon.btn-ghost {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text-2);
+}
+.btn-sm.btn-icon.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  color: var(--text);
 }
 .btn-primary {
   background: var(--accent);
@@ -364,24 +375,6 @@
   z-index: 1;
 }
 
-/* Synchronized breathing phase shared by all active pilot bars & pill LEDs - */
-@property --pilot-breathe {
-  syntax: "<number>";
-  inherits: true;
-  initial-value: 1;
-}
-:root {
-  animation: pilotBreatheSync 1.6s ease-in-out infinite;
-}
-@keyframes pilotBreatheSync {
-  0%, 100% {
-    --pilot-breathe: 0.2;
-  }
-  50% {
-    --pilot-breathe: 1;
-  }
-}
-
 /* Pilot cells -------------------------------------------------------------- */
 .pilot-cell {
   display: flex;
@@ -505,9 +498,13 @@
   font: inherit;
   font-size: 12.5px;
 }
+div.input {
+  display: flex;
+  align-items: center;
+}
 .input:focus {
   outline: none;
-  border-color: var(--accent-line);
+  border-color: #6b7280;
 }
 .input.input-warn {
   border-color: rgba(251, 191, 36, 0.65);
@@ -991,4 +988,68 @@ select.input.is-custom-select-open {
 .table-edge-arrow svg {
   display: block;
   flex-shrink: 0;
+}
+
+/* Service-worker "Update available" prompt (web/src/services/offline.ts). Non-blocking, bottom-right. */
+.update-toast {
+  position: fixed;
+  right: 16px;
+  bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  z-index: 9000;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 8px 8px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--accent-line);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.update-toast-text {
+  margin-right: 4px;
+}
+@media (max-width: 600px) {
+  .update-toast {
+    left: 12px;
+    right: 12px;
+    justify-content: flex-end;
+  }
+  .update-toast-text {
+    margin-right: auto;
+  }
+}
+/* Engine-state storage (web/src/services/engine_persistence.ts): read-only tab banner + status line. */
+.storage-banner {
+  position: fixed;
+  top: calc(8px + env(safe-area-inset-top, 0px));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 9001;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: calc(100vw - 24px);
+  padding: 6px 6px 6px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--warn);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 500;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+.storage-status {
+  margin-top: 6px;
+  font-variant-numeric: tabular-nums;
+}
+.storage-status strong {
+  color: var(--text);
+  font-weight: 600;
+}
+.storage-status-error {
+  color: var(--warn);
+  margin-top: 2px;
 }
