@@ -432,14 +432,14 @@ export class TimerFlasher extends Component {
             <div class="flasher-pictorial-head">
               <span class="flasher-pictorial-title">Spoke</span>
               <span class="badge ${!isHub ? "tone-good" : ""}">${
-                flashedSpokes > 0 ? `✓ ${flashedSpokes} flashed` : "Up to 6 · Sector gates"
+                flashedSpokes > 0 ? `✓ ${flashedSpokes} flashed` : "Up to 6 · Track timers"
               }</span>
             </div>
             <div class="flasher-pictorial-art">
               ${this.renderPictorialRoleSpoke()}
             </div>
             <p class="flasher-pictorial-desc">
-              Placed at each sector gate around the course. Sends its passes to the Hub over long-range ESP-NOW.
+              Placed around the course to time each section. Sends its passes to the Hub over long-range ESP-NOW.
             </p>
           </button>
         </div>
@@ -524,7 +524,7 @@ export class TimerFlasher extends Component {
           <p>${
             isHub
               ? "Give your Hub a short 1–2 character label (usually <strong>H1</strong>) so it is easy to recognize across Track, Network, and Debug."
-              : "Give this Spoke a short 1–2 character label (such as <strong>T1</strong>–<strong>T6</strong>) so you can tell each gate timer apart on the course."
+              : "Give this Spoke a short 1–2 character label (such as <strong>T1</strong>–<strong>T6</strong>) so you can tell each timer apart on the course."
           }</p>
         </div>
 

@@ -837,7 +837,7 @@ export class PilotRssiChart extends Component {
     const who = this.store.pilot(slotIndex)?.callsign ?? "the pilot";
     const message =
       this.focus === null
-        ? `Every gate is back on ${who}'s own threshold (${this.pilotDefault()} dBm).`
+        ? `Every timer is back on ${who}'s own threshold (${this.pilotDefault()} dBm).`
         : `${gateLabel(this.store, this.focus)} is back on ${who}'s own threshold (${this.pilotDefault()} dBm).`;
     return this.apply(
       this.shownGates.map((p) => ({ gateId: p.gateId, slotIndex, enterDbm: 0 })),
@@ -1244,7 +1244,7 @@ export class PilotRssiChart extends Component {
     btn.setAttribute("aria-pressed", String(live));
     btn.innerHTML = `<span class="status-dot ${live ? "is-up" : ""}"></span><span>Live</span>`;
 
-    const gateScope = this.focus === null ? "all gates" : gateLabel(this.store, this.focus);
+    const gateScope = this.focus === null ? "all timers" : gateLabel(this.store, this.focus);
     const prevBtn = this.el.querySelector<HTMLButtonElement>('[data-act="prev"]');
     const nextBtn = this.el.querySelector<HTMLButtonElement>('[data-act="next"]');
     if (prevBtn) prevBtn.title = `Previous pass at ${gateScope} (←)`;
@@ -1293,7 +1293,7 @@ export class PilotRssiChart extends Component {
         }
       </div>
       <div class="debug-axis-pill ${this.autoY ? "is-armed" : "is-unarmed"}" data-axis-pill>
-        <button type="button" class="debug-axis-pill-main" data-axis-act="${this.autoY ? "toggle-menu" : "auto-y"}" data-menu="rssi-y" title="${this.autoY ? "Auto Y-axis scaling is ON — fits visible gate traces automatically. Click to choose a scale preset, or drag the Y-axis to stretch." : "Click to reset Y-axis range to Auto Y"}">
+        <button type="button" class="debug-axis-pill-main" data-axis-act="${this.autoY ? "toggle-menu" : "auto-y"}" data-menu="rssi-y" title="${this.autoY ? "Auto Y-axis scaling is ON — fits visible timer traces automatically. Click to choose a scale preset, or drag the Y-axis to stretch." : "Click to reset Y-axis range to Auto Y"}">
           ${icons.target(13)}<span>${this.autoY ? "Auto Y" : `<span class="debug-hint-desktop">Y: ${Math.round(this.yMin)}…${Math.round(this.yMax)} dBm</span><span class="debug-hint-mobile">Y: ${yShort}</span>`}</span>
         </button>
         <button type="button" class="debug-axis-pill-arrow" data-axis-act="toggle-menu" data-menu="rssi-y" aria-expanded="${this.openAxisMenu === "rssi-y"}" title="Choose Y-axis dBm scale">
@@ -1332,12 +1332,12 @@ export class PilotRssiChart extends Component {
     let actions: string;
     if (this.focus === null) {
       const anyCalibrated = this.store.nodes.some((p) => enterThresholdAt(this.store, p.gateId, pilot.slotIndex).calibrated);
-      text = this.calibMessage || "Select a gate above to view or drag its threshold, or auto-calibrate all gates.";
+      text = this.calibMessage || "Select a timer above to view or drag its threshold, or auto-calibrate all timers.";
       actions = `
         <div class="scope-calib-actions">
           ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(15)}<span>Undo</span></button>` : ""}
-          ${anyCalibrated ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at every gate">${icons.reset(15)}<span>Reset all</span></button>` : ""}
-          <button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Set each gate's threshold from the last ${minutes} minutes of signal">${icons.target(16)}<span>Auto-calibrate all</span></button>
+          ${anyCalibrated ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at every timer">${icons.reset(15)}<span>Reset all</span></button>` : ""}
+          <button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Set each timer's threshold from the last ${minutes} minutes of signal">${icons.target(16)}<span>Auto-calibrate all</span></button>
         </div>`;
     } else {
       const name = gateLabel(this.store, this.focus);
@@ -1357,7 +1357,7 @@ export class PilotRssiChart extends Component {
       ${actions}`;
   }
 
-  /** Each gate's reading at the cursor (or at the right edge of the view), plus the "All gates" option. */
+  /** Each timer's reading at the cursor (or at the right edge of the view), plus the "All timers" option. */
   private renderLegend(): void {
     const pilot = this.store.pilot(this.store.selectedPilot);
     if (!pilot) return;
@@ -1365,10 +1365,10 @@ export class PilotRssiChart extends Component {
     const at = this.hoverX !== null && this.hoverX >= this.plot.x && this.hoverX <= this.plot.x + this.plot.w ? this.timeAt(this.hoverX) : this.viewEnd();
     const allChip = `
       <button type="button" class="channel channel-all ${this.focus === null ? "is-focus" : "is-dim"}"
-              data-focus="all" title="Show all gates (${this.store.nodes.length})">
+              data-focus="all" title="Show all timers (${this.store.nodes.length})">
         <span class="dot channel-all-dot"></span>
-        <span class="channel-name">All gates</span>
-        <span class="channel-dbm mono">${this.store.nodes.length} gates</span>
+        <span class="channel-name">All timers</span>
+        <span class="channel-dbm mono">${this.store.nodes.length} timers</span>
       </button>`;
     const gateChips = this.store.nodes
       .map((p) => {
@@ -1377,7 +1377,7 @@ export class PilotRssiChart extends Component {
         const dim = this.focus !== null && this.focus !== p.gateId;
         return `
           <button type="button" class="channel ${hot ? "is-hot" : ""} ${dim ? "is-dim" : ""} ${this.focus === p.gateId ? "is-focus" : ""}"
-                  data-focus="${this.focus === p.gateId ? "all" : p.gateId}" title="${this.focus === p.gateId ? "Show all gates" : "Show only this gate"}">
+                  data-focus="${this.focus === p.gateId ? "all" : p.gateId}" title="${this.focus === p.gateId ? "Show all timers" : "Show only this timer"}">
             <span class="dot" style="--c:${this.colorOf(p.gateId)}"></span>
             <span class="channel-name">${esc(gateLabel(this.store, p.gateId))}</span>
             <span class="channel-dbm mono">${dbm.toFixed(0)} dBm</span>

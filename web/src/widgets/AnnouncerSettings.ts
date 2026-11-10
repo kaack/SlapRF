@@ -152,7 +152,7 @@ export class AnnouncerSettings extends Component {
         <div class="option-row">
           <div>
             <div class="option-title">Voice announcer</div>
-            <div class="option-sub">Each time a pilot completes a lap at the start gate it calls their name and lap time — e.g. “Vanover, 14.08”. Built-in Piper neural voices run in WebAssembly and work offline in any browser.</div>
+            <div class="option-sub">Each time a pilot completes a lap at the start timer it calls their name and lap time — e.g. “Vanover, 14.08”. Built-in Piper neural voices run in WebAssembly and work offline in any browser.</div>
           </div>
           <label class="switch switch-lg"><input type="checkbox" name="enabled" ${p.enabled ? "checked" : ""} /><span></span></label>
         </div>

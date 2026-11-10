@@ -93,9 +93,9 @@ export class AllPilotsPanel extends Component {
         tone: fastest ? "accent" : undefined,
       },
       {
-        label: "Gates online",
+        label: "Timers online",
         value: `${online}/${s.nodes.length}`,
-        sub: s.nodes.length ? `Lowest battery ${s.nodes.reduce((m, p) => Math.min(m, p.batteryPct), 100)}%` : "No gates",
+        sub: s.nodes.length ? `Lowest battery ${s.nodes.reduce((m, p) => Math.min(m, p.batteryPct), 100)}%` : "No timers",
         tone: online < s.nodes.length ? "bad" : undefined,
       },
     ]);

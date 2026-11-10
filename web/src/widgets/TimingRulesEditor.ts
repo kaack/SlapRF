@@ -24,7 +24,7 @@ const RULES: RuleSpec[] = [
   {
     key: "minLapSec",
     label: "Minimum lap time (seconds)",
-    help: "Shortest valid time before the same gate can count a pilot again.",
+    help: "Shortest valid time before the same timer can count a pilot again.",
     step: 0.5,
     min: 1,
     max: 120,
@@ -43,8 +43,8 @@ const RULES: RuleSpec[] = [
   },
   {
     key: "gateCooldownSec",
-    label: "Gate cool-down (seconds)",
-    help: "Time a gate ignores a pilot right after counting them.",
+    label: "Timer cool-down (seconds)",
+    help: "Time a timer ignores a pilot right after counting them.",
     step: 0.1,
     min: 0.2,
     max: 15,
@@ -54,7 +54,7 @@ const RULES: RuleSpec[] = [
   {
     key: "minSectionSec",
     label: "Minimum section time (seconds)",
-    help: "Shortest valid transit time from the previous gate.",
+    help: "Shortest valid transit time from the previous timer.",
     step: 0.1,
     min: 0.1,
     max: 15,
@@ -63,8 +63,8 @@ const RULES: RuleSpec[] = [
   },
   {
     key: "echoWindowSec",
-    label: "Previous-gate echo window (seconds)",
-    help: "Ignores repeat triggers at the gate a pilot just left (0 disables).",
+    label: "Previous-timer echo window (seconds)",
+    help: "Ignores repeat triggers at the timer a pilot just left (0 disables).",
     step: 0.5,
     min: 0,
     max: 15,
@@ -198,16 +198,16 @@ export class TimingRulesEditor extends Component {
     const overrides = this.overridesOf(gate);
 
     const scopes = [
-      `<button type="button" class="channel channel-all ${this.scope === null ? "is-focus" : "is-dim"}" data-scope="all" title="Global rules for all gates">
+      `<button type="button" class="channel channel-all ${this.scope === null ? "is-focus" : "is-dim"}" data-scope="all" title="Global rules for all timers">
         <span class="dot channel-all-dot"></span>
-        <span class="channel-name">All gates</span>
+        <span class="channel-name">All timers</span>
       </button>`,
       ...this.store.nodes.map((p) => {
         const n = Object.keys(this.overridesOf(p)).length;
         const on = this.scope === p.gateId;
         const dim = this.scope !== null && !on;
         return `<button type="button" class="channel ${on ? "is-focus" : ""} ${dim ? "is-dim" : ""}" data-scope="${p.gateId}"
-                  title="${n ? `${n} rule${n > 1 ? "s" : ""} overridden at this gate` : "Uses the global rules"}">
+                  title="${n ? `${n} rule${n > 1 ? "s" : ""} overridden at this timer` : "Uses the global rules"}">
                   <span class="dot" style="--c:${gateColor(this.store, p.gateId)}"></span>
                   <span class="channel-name">${esc(gateLabel(this.store, p.gateId))}</span>
                   ${n ? `<span class="channel-custom-icon" aria-hidden="true">${icons.pencil(12)}</span>` : ""}
@@ -259,14 +259,14 @@ export class TimingRulesEditor extends Component {
     this.renderCounts();
   }
 
-  /** A rule for one gate: click the inline pencil icon inside the input to edit/override, or reset icon to revert. */
+  /** A rule for one timer: click the inline pencil icon inside the input to edit/override, or reset icon to revert. */
   private renderGateRow(spec: RuleSpec, r: TimingRules, overrides: GateRuleOverrides): string {
     if (!spec.perGate) {
       return `
         <div class="rule-row is-global-only">
           <div class="rule-text">
             <div class="rule-label">${spec.label}</div>
-            <div class="rule-help">Applies to the whole lap, so it's set under All gates.</div>
+            <div class="rule-help">Applies to the whole lap, so it's set under All timers.</div>
             <div class="rule-meta"></div>
           </div>
           <div class="rule-input">
@@ -278,8 +278,8 @@ export class TimingRulesEditor extends Component {
     const own = overrides[key];
     const on = own !== undefined;
     const title = on
-      ? `Revert to All gates default (${r[key]} s)`
-      : `Edit to override at this gate (inherits ${r[key]} s)`;
+      ? `Revert to All timers default (${r[key]} s)`
+      : `Edit to override at this timer (inherits ${r[key]} s)`;
     return `
       <div class="rule-row ${on ? "is-overridden" : ""}">
         <div class="rule-text">
@@ -307,8 +307,8 @@ export class TimingRulesEditor extends Component {
 
   private syncToggleBtn(btn: HTMLButtonElement, on: boolean, globalVal: number): void {
     const title = on
-      ? `Revert to All gates default (${globalVal} s)`
-      : `Edit to override at this gate (inherits ${globalVal} s)`;
+      ? `Revert to All timers default (${globalVal} s)`
+      : `Edit to override at this timer (inherits ${globalVal} s)`;
     btn.className = `flasher-pass-toggle rule-inline-btn ${on ? "is-active" : ""}`;
     btn.title = title;
     btn.setAttribute("aria-label", title);

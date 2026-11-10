@@ -87,15 +87,24 @@ export function gateColor(store: AppStore, gateId: number): string {
 }
 
 /**
- * What a gate is called everywhere in the UI:
- *   1. Its display-name override (`name`) from the Track editor if set,
- *   2. Otherwise "Gate N" by its position on the course.
+ * What a timer on the track is called everywhere in the UI:
+ * its flashed timer label (e.g. "T1", "H1"), custom name override if any,
+ * or default hardware ID ("H1" for Hub, "T1".."T6" for Spokes).
  */
 export function gateLabel(store: AppStore, gateId: number): string {
   const position = store.nodes.findIndex((p) => p.gateId === gateId);
-  if (position < 0) return "Unknown gate";
+  if (position < 0) return `T${gateId}`;
   const p = store.nodes[position];
-  return p.name.trim() || `Gate ${position + 1}`;
+  const assignedId = p.assignedTimerId ?? 0;
+  const detected = assignedId > 0 ? store.detectedTimers.find((d) => d.timerId === assignedId) : undefined;
+  const custom = p.name?.trim();
+  if (custom) return custom;
+  const lbl = detected?.timerLabel?.trim() || p.timerLabel?.trim();
+  if (lbl) return lbl;
+  if (assignedId > 0) {
+    return detected?.isHub || assignedId === 1 ? "H1" : `T${Math.max(1, assignedId - 1)}`;
+  }
+  return `T${position + 1}`;
 }
 
 /** The permanent hardware ID / name flashed onto a timer. */
@@ -103,8 +112,8 @@ export function timerHardwareId(p: { timerId: number; timerLabel?: string; isHub
   return p.timerLabel?.trim() || (p.isHub ? "H1" : `T${Math.max(1, p.timerId - 1)}`);
 }
 
-/** Shown wherever timers are placed on gates (the Hub is a USB dongle that may also time a gate). */
-export const HUB_ON_GATE_NOTE = "Placing the Hub on a gate makes it sweep too — keep it within USB cable reach";
+/** Shown wherever timers are placed on the track (the Hub is a USB dongle that may also time on the track). */
+export const HUB_ON_GATE_NOTE = "Placing the Hub on the track makes it sweep too — keep it within USB cable reach";
 
 /** True when the timer is currently assigned to a gate on the active course. */
 export function timerHasGate(store: AppStore, timerId: number): boolean {

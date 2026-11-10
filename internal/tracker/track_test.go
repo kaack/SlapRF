@@ -127,7 +127,7 @@ func TestReorderCheckpoints(t *testing.T) {
 	assertLayout(t, e, 1, 4, 2, 3)
 }
 
-// Unnamed gates are labelled by position, so their label follows them as the course is reordered.
+// Timers on the track are labelled by their timer identity (e.g. T1..T4) or custom name override.
 func TestUnnamedGatesAreLabelledByPosition(t *testing.T) {
 	e := NewEngine()
 	if err := e.UpdateGate(domain.GateUpdate{GateID: 2, Name: "Split-S", Role: domain.GateRoleSectorGate}); err != nil {
@@ -139,7 +139,7 @@ func TestUnnamedGatesAreLabelledByPosition(t *testing.T) {
 
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	for id, want := range map[uint8]string{4: "Gate 1", 1: "Gate 2", 2: "Split-S", 3: "Gate 4"} {
+	for id, want := range map[uint8]string{4: "T4", 1: "T1", 2: "Split-S", 3: "T3"} {
 		if got := e.gateLabelLocked(id); got != want {
 			t.Errorf("gate %d: got %q, want %q", id, got, want)
 		}
@@ -158,12 +158,12 @@ func TestTimerLabelAndDisplayNameOverride(t *testing.T) {
 		t.Fatalf("expected spoke timer to claim timer #3, got #%d", id)
 	}
 
-	// Without a display-name override, gateLabelLocked returns "Gate N" (never the hardware TimerLabel).
+	// Without a display-name override, gateLabelLocked returns the hardware TimerLabel.
 	e.mu.Lock()
 	gotDefault := e.gateLabelLocked(2)
 	e.mu.Unlock()
-	if gotDefault != "Gate 2" {
-		t.Fatalf("expected default gate label 'Gate 2', got %q", gotDefault)
+	if gotDefault != "Blue-Timer" {
+		t.Fatalf("expected default timer label 'Blue-Timer', got %q", gotDefault)
 	}
 
 	// Setting a display name in the Gates editor overrides the UI label while preserving TimerLabel.

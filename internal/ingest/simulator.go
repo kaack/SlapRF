@@ -545,14 +545,18 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 			break
 		}
 		ps := s.pilotStates[i]
-		nearestGate := "Start / Finish"
+		nearestGate := "Start"
 		if numGates > 0 {
 			gIdx := int(math.Round(ps.trackPosMeters/sectorLen)) % numGates
 			g := gates[gIdx]
-			if g.Name != "" {
+			if g.TimerLabel != "" {
+				nearestGate = g.TimerLabel
+			} else if g.Name != "" {
 				nearestGate = g.Name
+			} else if g.AssignedTimerID > 0 {
+				nearestGate = domain.DefaultTimerLabel(g.AssignedTimerID, g.AssignedTimerID == domain.SimHubTimerID)
 			} else {
-				nearestGate = fmt.Sprintf("Gate %d", gIdx+1)
+				nearestGate = fmt.Sprintf("T%d", gIdx+1)
 			}
 		}
 
@@ -614,10 +618,10 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 	gateByTimer := make(map[uint8]string, len(gates))
 	for idx, g := range gates {
 		if g.AssignedTimerID > 0 {
-			if g.Name != "" {
-				gateByTimer[g.AssignedTimerID] = g.Name
+			if g.Role == domain.GateRoleStartFinish {
+				gateByTimer[g.AssignedTimerID] = fmt.Sprintf("#%d (Start)", idx+1)
 			} else {
-				gateByTimer[g.AssignedTimerID] = fmt.Sprintf("Gate %d", idx+1)
+				gateByTimer[g.AssignedTimerID] = fmt.Sprintf("#%d", idx+1)
 			}
 		}
 	}
@@ -629,9 +633,13 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 		if fw == "" {
 			fw = domain.LatestFirmwareVersion
 		}
+		tLabel := d.TimerLabel
+		if tLabel == "" {
+			tLabel = domain.DefaultTimerLabel(d.TimerID, d.IsHub)
+		}
 		simTimers = append(simTimers, domain.SimTimerState{
 			TimerID:          d.TimerID,
-			TimerLabel:       d.TimerLabel,
+			TimerLabel:       tLabel,
 			Color:            d.Color,
 			IsHub:            d.IsHub,
 			FirmwareVersion:  fw,

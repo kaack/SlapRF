@@ -1,6 +1,9 @@
 package domain
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // GateRole defines whether a XIAO ESP32-C5 gate timer is the official MultiGP Start/Finish gate
 // (which emits detections to LiveTime) or an intermediate sector checkpoint.
@@ -97,9 +100,22 @@ const SimHubTimerID uint8 = 1
 // DefaultSimHubLabel is the flashed name of the simulated Hub.
 const DefaultSimHubLabel = "H1"
 
-// DefaultTrackGates returns the 4-gate default simulator layout. Every gate is timed by a
-// simulated Spoke (timers 2..5); the first Spoke holds the MultiGP Start/Finish
-// gate. The simulated Hub (SimHubTimerID) is registered separately and is not on any gate.
+// DefaultTimerLabel returns the default short label for a physical timer:
+// "H1" for the Hub, or "T1".."T6" for Spokes (timer IDs 2..7).
+func DefaultTimerLabel(timerID uint8, isHub bool) string {
+	if isHub || timerID == SimHubTimerID {
+		return DefaultSimHubLabel
+	}
+	idx := int(timerID) - 1
+	if idx < 1 {
+		idx = 1
+	}
+	return fmt.Sprintf("T%d", idx)
+}
+
+// DefaultTrackGates returns the 4-timer default simulator track layout. Every track slot is a
+// simulated Spoke (timers 2..5, T1..T4); the first Spoke is the MultiGP Start/Finish
+// timer. The simulated Hub (SimHubTimerID) is registered separately off-track.
 func DefaultTrackGates() []TrackGate {
 	now := time.Now()
 	var defaultRssi [MaxPilotPoolSize]float32

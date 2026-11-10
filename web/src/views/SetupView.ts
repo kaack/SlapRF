@@ -17,7 +17,7 @@ export class SetupView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Timing rules</h2>
-            <p>Filters out false passes and stray signals. Set rules for all gates, or pick a single gate to customize it.</p>
+            <p>Filters out false passes and stray signals. Set rules for all timers, or pick a single timer to customize it.</p>
           </div>
           <div class="card card-flush" data-slot="rules"></div>
         </section>
@@ -25,7 +25,7 @@ export class SetupView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Announcer</h2>
-            <p>Spoken lap times at the start gate. Uses the voices built into this computer — no internet needed.</p>
+            <p>Spoken lap times at the start timer. Uses the voices built into this computer — no internet needed.</p>
           </div>
           <div class="settings-cards" data-slot="announcer"></div>
         </section>
@@ -41,7 +41,7 @@ export class SetupView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Data source</h2>
-            <p>Switch between physical XIAO gate timers and the built-in simulator, or connect directly from the browser to your Hub over USB-C.</p>
+            <p>Switch between physical XIAO timers and the built-in simulator, or connect directly from the browser to your Hub over USB-C.</p>
           </div>
           <div class="settings-cards" data-slot="source"></div>
         </section>

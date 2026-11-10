@@ -631,18 +631,33 @@ func indexOfGate(gates []domain.TrackGate, id uint8) int {
 	return -1
 }
 
-// gateLabelLocked is how a gate is named in messages: its display-name override (`Name`),
-// or "Gate N" by position on the course when not set. Mirrors gateLabel() in web/src/state/selectors.ts.
+// gateLabelLocked is how a timer on the track is named in events and section splits:
+// its custom Name if set, otherwise its flashed TimerLabel (e.g. "T1", "H1"), or
+// DefaultTimerLabel by hardware timer ID. Mirrors gateLabel() in web/src/state/selectors.ts.
 func (e *Engine) gateLabelLocked(gateID uint8) string {
 	ordered := e.orderedGatesLocked()
 	at := indexOfGate(ordered, gateID)
 	if at < 0 {
-		return fmt.Sprintf("Gate %d", gateID)
+		return fmt.Sprintf("T%d", gateID)
 	}
-	if name := strings.TrimSpace(ordered[at].Name); name != "" {
+	g := ordered[at]
+	if name := strings.TrimSpace(g.Name); name != "" {
 		return name
 	}
-	return fmt.Sprintf("Gate %d", at+1)
+	if lbl := strings.TrimSpace(g.TimerLabel); lbl != "" {
+		return lbl
+	}
+	tid := g.AssignedTimerID
+	if tid > 0 {
+		if d, ok := e.detected[tid]; ok {
+			if lbl := strings.TrimSpace(d.TimerLabel); lbl != "" {
+				return lbl
+			}
+			return domain.DefaultTimerLabel(tid, d.IsHub)
+		}
+		return domain.DefaultTimerLabel(tid, false)
+	}
+	return fmt.Sprintf("T%d", at+1)
 }
 
 // sectionLabelLocked names the stretch of track between two gates, e.g. "Gate 2 → Split-S".
@@ -800,8 +815,8 @@ func (e *Engine) AddSimulatedTimer(role string, label string) (uint8, error) {
 		e.mu.Unlock()
 		return 0, ErrInvalidTimerID
 	}
-	if label == "" && isHub {
-		label = domain.DefaultSimHubLabel
+	if label == "" {
+		label = domain.DefaultTimerLabel(nextID, isHub)
 	}
 
 	now := time.Now()

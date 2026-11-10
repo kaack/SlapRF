@@ -3,28 +3,23 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import { usbPool } from "../services/timer_console";
-import { timerColor, timerRoleText } from "../state/selectors";
+import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { DetectedTimer, TrackNode } from "../types/models";
 import { renderSectionCapsuleIcon } from "./markup";
 
 /**
- * Interactive course-line ("---O---O---O---O---") Track editor in System:
- *   - Dropping an unassigned timer onto the track line creates a gate at that position.
+ * Interactive course-line ("---O---O---O---O---") Track editor:
+ *   - Dropping an unassigned timer onto the track line places that timer at that position.
  *   - Dragging a timer along the track line reorders the course.
- *   - Dragging a timer off the track line into the Unassigned Timers box removes that gate
+ *   - Dragging a timer off the track line into the Unassigned Timers box removes it from the track
  *     when the mouse is released (keeping the dashed slot on the track until drop).
- *   - Below each gate on the track line sits a checkered flag icon button (active on the
- *     start gate, muted on split gates); clicking it directly sets that gate as the start gate.
- *   - Clicking any timer on the line selects it and shows its gate details below.
+ *   - Below each timer on the track line sits a checkered flag icon button (active on the
+ *     start timer, muted on intermediate timers); clicking it sets that timer as the start timer.
  */
-const TRACK_EDITOR_STORAGE_KEY = "slaprf.ui.track_editor.v1";
-
 export class TrackEditor extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
-  private selectedNodeId: number | null = null;
-  private editingNodeId: number | null = null;
   private isDragging = false;
   private lastRenderedHtml = "";
 
@@ -32,37 +27,6 @@ export class TrackEditor extends Component {
     super(el);
     this.store = store;
     this.api = api;
-    try {
-      const savedId = window.localStorage.getItem(TRACK_EDITOR_STORAGE_KEY);
-      if (savedId) {
-        const num = Number(savedId);
-        if (Number.isFinite(num) && num >= 1) this.selectedNodeId = num;
-      }
-    } catch {
-      // Ignore storage access errors
-    }
-
-    this.listen(el, "keydown", (e) => {
-      const input = e.target as HTMLInputElement;
-      if (!input.matches("[data-gate-name]")) return;
-      if (e.key === "Enter") {
-        e.preventDefault();
-        input.blur();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        this.editingNodeId = null;
-        this.render();
-      }
-    });
-
-    this.listen(el, "focusout", (e) => {
-      const input = e.target as HTMLInputElement;
-      if (!input.matches("[data-gate-name]")) return;
-      if (this.editingNodeId === null) return;
-      const related = (e as FocusEvent).relatedTarget as HTMLElement | null;
-      if (related?.closest("[data-clear-gate-name], [data-edit-gate-name]")) return;
-      void this.finishInlineRename(input);
-    });
 
     this.listen(el, "click", (e) => {
       const target = e.target as HTMLElement;
@@ -70,45 +34,6 @@ export class TrackEditor extends Component {
       if (makeStartBtn) {
         e.stopPropagation();
         void this.makeStart(Number(makeStartBtn.dataset.makeStart));
-        return;
-      }
-      const editNameBtn = target.closest<HTMLElement>("[data-edit-gate-name]");
-      if (editNameBtn) {
-        e.stopPropagation();
-        const nodeId = Number(editNameBtn.dataset.editGateName);
-        if (this.editingNodeId === nodeId) {
-          const input = this.el.querySelector<HTMLInputElement>(`input[data-gate-name="${nodeId}"]`);
-          if (input) {
-            void this.finishInlineRename(input);
-          } else {
-            this.editingNodeId = null;
-            this.render();
-          }
-          return;
-        }
-        this.selectedNodeId = nodeId;
-        this.editingNodeId = nodeId;
-        try {
-          window.localStorage.setItem(TRACK_EDITOR_STORAGE_KEY, String(nodeId));
-        } catch {
-          // ignore
-        }
-        this.render();
-        const input = this.el.querySelector<HTMLInputElement>(`input[data-gate-name="${nodeId}"]`);
-        if (input) {
-          input.focus();
-          input.select();
-        }
-        return;
-      }
-      const clearNameBtn = target.closest<HTMLButtonElement>("[data-clear-gate-name]");
-      if (clearNameBtn) {
-        e.stopPropagation();
-        const nodeId = Number(clearNameBtn.dataset.clearGateName);
-        this.editingNodeId = null;
-        const node = this.store.node(nodeId);
-        if (node) void this.save(node, { name: "" });
-        this.render();
         return;
       }
       const deleteTimerBtn = target.closest<HTMLButtonElement>("[data-delete-timer]");
@@ -127,11 +52,7 @@ export class TrackEditor extends Component {
       const target = e.target as HTMLElement;
 
       // Clicking inline controls beneath a node should not start a node drag.
-      if (
-        target.closest(
-          "[data-make-start], [data-edit-gate-name], [data-clear-gate-name], [data-gate-name], [data-delete-timer], .gate-node-name-edit-wrap"
-        )
-      ) {
+      if (target.closest("[data-make-start], [data-delete-timer]")) {
         return;
       }
 
@@ -142,7 +63,7 @@ export class TrackEditor extends Component {
       }
 
       const interactiveNodePart = target.closest<HTMLElement>(
-        ".gate-node-circle, .gate-node-name, .gate-node-top"
+        ".gate-node-circle, .gate-node-top"
       );
       const nodeEl = interactiveNodePart?.closest<HTMLElement>(".gate-line-item[data-gate]");
       if (nodeEl) {
@@ -240,24 +161,9 @@ export class TrackEditor extends Component {
     return d?.isHub ? "H1" : `T${Math.max(1, timerId - 1)}`;
   }
 
-  private ensureSelectedNode(nodes: TrackNode[]): TrackNode | null {
-    if (nodes.length === 0) {
-      this.selectedNodeId = null;
-      return null;
-    }
-    const found = nodes.find((n) => n.gateId === this.selectedNodeId);
-    if (found) return found;
-    this.selectedNodeId = nodes[0].gateId;
-    return nodes[0];
-  }
-
   private render(force = false): void {
     const nodes = this.orderedNodes;
     const detected = this.detectedTimers;
-    const selectedNode = this.ensureSelectedNode(nodes);
-    const selectedIndex = selectedNode
-      ? nodes.findIndex((n) => n.gateId === selectedNode.gateId)
-      : -1;
     const assignedTimerIds = new Set(
       nodes.map((n) => n.assignedTimerId ?? 0).filter((id) => id > 0)
     );
@@ -267,12 +173,12 @@ export class TrackEditor extends Component {
       <div class="gate-track-stage">
         <div class="gate-track-header">
           <span class="gate-track-caption">
-            Drag timers onto the line to add gates · drag along the line to reorder · drag into Unassigned timers to remove
+            Drag timers onto the line to add them to the track · drag along the line to reorder · drag into Unassigned timers to remove
           </span>
         </div>
 
         <div class="gate-track-scroll" data-track-dropzone>
-          <div class="gate-track-line ${nodes.length === 0 ? "is-empty-line" : ""}" data-track-line role="list" aria-label="Course gate order">
+          <div class="gate-track-line ${nodes.length === 0 ? "is-empty-line" : ""}" data-track-line role="list" aria-label="Course timer order">
             ${
               nodes.length === 0
                 ? this.renderEmptyTimelinePlaceholder()
@@ -282,8 +188,7 @@ export class TrackEditor extends Component {
                         n,
                         idx,
                         nodes,
-                        detected,
-                        selectedNode !== null && n.gateId === selectedNode.gateId
+                        detected
                       )
                     )
                     .join("")
@@ -293,8 +198,6 @@ export class TrackEditor extends Component {
 
         ${this.renderUnassignedTray(unassignedTimers)}
       </div>
-
-      ${selectedNode ? this.renderInspector(selectedNode, selectedIndex, detected) : ""}
     `;
     if (!force && html === this.lastRenderedHtml) return;
     this.lastRenderedHtml = html;
@@ -312,7 +215,7 @@ export class TrackEditor extends Component {
         <div class="gate-node-circle is-unassigned is-empty-slot-circle">
           <span class="gate-node-empty-label" data-empty-circle-label>Drop<br/>timer</span>
         </div>
-        <div class="gate-node-name is-empty-slot-caption" data-empty-slot-name>Drag a timer onto the line to create Gate #1</div>
+        <div class="gate-node-name is-empty-slot-caption" data-empty-slot-name>Drag a timer onto the line to start your track</div>
         <span class="gate-node-start-btn is-placeholder-flag" aria-hidden="true">${icons.checkered(13)}</span>
       </div>`;
   }
@@ -321,8 +224,7 @@ export class TrackEditor extends Component {
     node: TrackNode,
     index: number,
     allNodes: TrackNode[],
-    detected: DetectedTimer[],
-    isSelected: boolean
+    detected: DetectedTimer[]
   ): string {
     const total = allNodes.length;
     const isStart = node.role === "START_FINISH";
@@ -342,14 +244,13 @@ export class TrackEditor extends Component {
     const nextAssignedId = nextNode?.assignedTimerId ?? 0;
     const nextColor = nextAssignedId > 0 ? timerColor(this.store, nextAssignedId) : "#64748b";
 
-    const displayName = node.name.trim() || `Gate ${index + 1}`;
     const isOnline = this.isTimerActive(tiedTimer, node);
     const sectionTag = `S${index + 1}`;
     const wrapSectionTag = `S${total}`;
 
     return `
       <div
-        class="gate-line-item ${isSelected ? "is-selected" : ""} ${isStart ? "is-start" : ""} ${hasTimer ? "has-timer" : "is-empty-gate"} ${hasTimer && !isOnline ? "is-offline" : ""}"
+        class="gate-line-item ${isStart ? "is-start" : ""} ${hasTimer ? "has-timer" : "is-empty-gate"} ${hasTimer && !isOnline ? "is-offline" : ""}"
         data-gate="${node.gateId}"
         data-assigned-timer="${assignedId}"
         data-timer-color="${color}"
@@ -384,9 +285,8 @@ export class TrackEditor extends Component {
         <button
           type="button"
           class="gate-node-circle ${hasTimer ? (isOnline ? "is-filled" : "is-filled is-offline") : "is-unassigned"}"
-          aria-pressed="${isSelected}"
-          aria-label="Gate ${index + 1}: ${esc(displayName)} (${hasTimer ? `${shortCode}${isOnline ? "" : " · Offline"}` : "Unassigned"})"
-          title="${hasTimer && !isOnline ? `${esc(shortCode)} is assigned to this gate but not currently connected · ` : ""}Click to inspect · Drag left/right to reorder · Drag down to Unassigned timers to remove gate"
+          aria-label="Track #${index + 1}: ${esc(shortCode)}${isOnline ? "" : " (Offline)"}"
+          title="${hasTimer && !isOnline ? `${esc(shortCode)} is on the track but not currently connected · ` : ""}Drag left/right to reorder · Drag down to Unassigned timers to remove from track"
         >
           ${
             hasTimer
@@ -401,15 +301,13 @@ export class TrackEditor extends Component {
           }
         </button>
 
-        <div class="gate-node-name" data-node-name="${node.gateId}" title="${esc(displayName)}">${esc(displayName)}</div>
-
         <button
           type="button"
           class="gate-node-start-btn ${isStart ? "is-active" : ""}"
           data-make-start="${node.gateId}"
           aria-pressed="${isStart}"
-          title="${isStart ? "Start gate" : "Set as start gate"}"
-          aria-label="${isStart ? `Gate ${index + 1} is the start gate` : `Set Gate ${index + 1} as start gate`}"
+          title="${isStart ? "Start timer (laps are counted here)" : "Set as start timer"}"
+          aria-label="${isStart ? `${esc(shortCode)} is the start timer` : `Set ${esc(shortCode)} as start timer`}"
         >${icons.checkered(13)}</button>
       </div>`;
   }
@@ -422,8 +320,8 @@ export class TrackEditor extends Component {
           <span class="gate-unassigned-hint">
             ${
               unassigned.length > 0
-                ? "Drag a timer onto the track line above to create a gate at that spot"
-                : "All timers are on the track · drag a timer off the line into this box to remove its gate"
+                ? "Drag a timer onto the track line above to place it on the track"
+                : "All timers are on the track · drag a timer off the line into this box to remove it from the track"
             }
           </span>
         </div>
@@ -431,7 +329,7 @@ export class TrackEditor extends Component {
           ${
             unassigned.length > 0
               ? unassigned.map((d) => this.renderTrayTimer(d)).join("")
-              : `<span class="gate-unassigned-empty-chip">Drop a timer here to remove its gate from the track</span>`
+              : `<span class="gate-unassigned-empty-chip">Drop a timer here to remove it from the track</span>`
           }
         </div>
       </div>`;
@@ -447,7 +345,7 @@ export class TrackEditor extends Component {
         class="unassigned-timer-token ${isOnline ? "" : "is-offline"}"
         data-timer-id="${d.timerId}"
         style="--c:${color}"
-        title="${esc(timerName)} (${roleLabel}) · Drag onto the track line above to create a gate"
+        title="${esc(timerName)} (${roleLabel}) · Drag onto the track line above to place on the track"
       >
         <span class="unassigned-timer-dot" style="--c:${color}">
           <span class="mono">${esc(timerName)}</span>
@@ -476,125 +374,10 @@ export class TrackEditor extends Component {
       </div>`;
   }
 
-  private renderInspector(
-    node: TrackNode,
-    index: number,
-    detected: DetectedTimer[]
-  ): string {
-    const isStart = node.role === "START_FINISH";
-    const assignedId = node.assignedTimerId ?? 0;
-    const hasTimer = assignedId > 0;
-    const tiedTimer = detected.find((d) => d.timerId === assignedId);
-    const timerName = this.formatTimerShortCode(assignedId, detected, node.timerLabel);
-    const color = hasTimer ? timerColor(this.store, assignedId) : "#64748b";
-    const displayName = node.name.trim() || `Gate ${index + 1}`;
-    const isOnline = this.isTimerActive(tiedTimer, node);
-
-    const timerSummaryHtml = hasTimer
-      ? `
-        <div class="gate-inspector-timer-meta ${isOnline ? "" : "is-offline"}">
-          <span class="gate-inspector-dot ${isOnline ? "" : "is-offline"}" style="--c:${color}"></span>
-          <strong class="mono">${esc(timerName)}</strong>
-          <span class="detected-role-pill">
-            ${esc(tiedTimer ? timerRoleText(this.store, tiedTimer) : "Spoke")}
-          </span>
-          ${isOnline && tiedTimer && tiedTimer.batteryPct > 0 ? `<span class="muted mono">${tiedTimer.batteryPct}%</span>` : ""}
-          ${
-            !isOnline
-              ? `
-            <button
-              type="button"
-              class="unassigned-timer-delete"
-              data-delete-timer="${assignedId}"
-              data-delete-fp="${esc(tiedTimer?.fingerprint || "")}"
-              data-delete-label="${esc(timerName)}"
-              title="Delete ${esc(timerName)}"
-              aria-label="Delete ${esc(timerName)}"
-            >${icons.trash(16)}</button>`
-              : ""
-          }
-        </div>`
-      : `
-        <div class="gate-inspector-timer-meta is-empty">
-          <span class="muted">No timer assigned</span>
-        </div>`;
-
-    const isEditing = this.editingNodeId === node.gateId;
-    const hasCustomName = node.name.trim().length > 0;
-
-    return `
-      <div class="gate-inspector">
-        <div class="gate-inspector-row">
-          <div class="gate-inspector-title">
-            <span class="gate-inspector-step mono">#${index + 1}</span>
-            <div class="flasher-pass-wrap gate-inspector-name-wrap ${hasCustomName ? "has-two-actions" : ""}">
-              <input
-                type="text"
-                class="input flasher-pass-input gate-inspector-name-input ${isEditing ? "is-editing" : "is-readonly"}"
-                data-gate-name="${node.gateId}"
-                data-inspector-name
-                value="${esc(isEditing ? (node.name.trim() || displayName) : displayName)}"
-                placeholder="Gate ${index + 1}"
-                maxlength="40"
-                spellcheck="false"
-                autocomplete="off"
-                ${isEditing ? "" : "disabled"}
-                aria-label="Gate ${index + 1} name"
-              />
-              <div class="flasher-inline-actions">
-                ${
-                  hasCustomName
-                    ? `<button
-                        type="button"
-                        class="flasher-pass-toggle"
-                        data-clear-gate-name="${node.gateId}"
-                        title="Reset gate name to default (Gate ${index + 1})"
-                        aria-label="Reset gate name to default (Gate ${index + 1})"
-                      >${icons.reset(14)}</button>`
-                    : ""
-                }
-                <button
-                  type="button"
-                  class="flasher-pass-toggle ${isEditing ? "is-active" : ""}"
-                  data-edit-gate-name="${node.gateId}"
-                  title="${isEditing ? "Save gate name" : `Edit ${esc(displayName)} name`}"
-                  aria-label="${isEditing ? "Save gate name" : `Edit ${esc(displayName)} name`}"
-                >${icons.pencil(14)}</button>
-              </div>
-            </div>
-          </div>
-          ${timerSummaryHtml}
-        </div>
-      </div>`;
-  }
-
-  private async finishInlineRename(input: HTMLInputElement): Promise<void> {
-    const nodeId = Number(input.dataset.gateName);
-    const node = this.store.node(nodeId);
-    this.editingNodeId = null;
-    if (!node) {
-      this.render();
-      return;
-    }
-    const idx = this.orderedNodes.findIndex((n) => n.gateId === nodeId);
-    const defaultName = idx >= 0 ? `Gate ${idx + 1}` : "";
-    const raw = input.value.trim();
-    const name = raw === defaultName ? "" : raw;
-    if (name === node.name.trim()) {
-      this.render();
-      return;
-    }
-    await this.save(node, { name });
-    this.render();
-  }
-
   private async removeTrackNode(nodeId: number): Promise<void> {
     this.isDragging = true;
     try {
       await this.api.removeTrackNode(nodeId);
-      if (this.selectedNodeId === nodeId) {
-        this.selectedNodeId = this.orderedNodes[0]?.gateId ?? null;
-      }
     } finally {
       this.isDragging = false;
       this.render(true);
@@ -629,7 +412,6 @@ export class TrackEditor extends Component {
       <div class="gate-node-circle is-unassigned is-landing-preview" style="--c:${color}">
         <span class="gate-node-empty-label mono">${esc(this.formatTimerShortCode(timerId))}</span>
       </div>
-      <div class="gate-node-name">New gate</div>
       <span class="gate-node-start-btn is-placeholder-flag" aria-hidden="true">${icons.checkered(13)}</span>
     `;
     return slot;
@@ -705,7 +487,7 @@ export class TrackEditor extends Component {
           circle.style.setProperty("--c", color);
         }
         if (label) label.textContent = this.formatTimerShortCode(timerId);
-        if (nameEl) nameEl.textContent = "New gate";
+        if (nameEl) nameEl.textContent = this.formatTimerShortCode(timerId);
       } else {
         emptyPlaceholder.classList.remove("is-insert-preview");
         emptyPlaceholder.style.removeProperty("--c");
@@ -714,7 +496,7 @@ export class TrackEditor extends Component {
           circle.style.removeProperty("--c");
         }
         if (label) label.innerHTML = "Drop<br/>timer";
-        if (nameEl) nameEl.textContent = "Drag a timer onto the line to create Gate #1";
+        if (nameEl) nameEl.textContent = "Drag a timer onto the line to start your track";
       }
     };
 
@@ -826,12 +608,7 @@ export class TrackEditor extends Component {
         tokenEl.style.display = "none";
 
         try {
-          const beforeIds = new Set(this.store.nodes.map((p) => p.gateId));
           await this.api.addTrackNode("", timerId, insertIndex);
-          const created = this.store.nodes.find((p) => !beforeIds.has(p.gateId));
-          if (created) {
-            this.selectedNodeId = created.gateId;
-          }
         } finally {
           this.isDragging = false;
           this.render(true);
@@ -856,11 +633,10 @@ export class TrackEditor extends Component {
   }
 
   /**
-   * Clicking or dragging a node on the track line:
-   *   - Click: selects the node in the inspector below.
-   *   - Drag horizontally along the line: reorders the node in the flying loop.
+   * Dragging a timer node on the track line:
+   *   - Drag horizontally along the line: reorders the timer in the flying loop.
    *   - Drag down onto the Unassigned Timers box: keeps the dashed circle slot on the
-   *     track line until the mouse is actually released, then removes the node.
+   *     track line until the mouse is actually released, then removes the timer from the track.
    */
   private beginTrackNodeInteraction(downEvent: PointerEvent, item: HTMLElement): void {
     try {
@@ -890,7 +666,6 @@ export class TrackEditor extends Component {
     const startDrag = (clientX: number, clientY: number) => {
       started = true;
       this.isDragging = true;
-      this.selectedNodeId = nodeId;
       document.body.classList.add("is-gate-dragging");
 
       const clone = circle.cloneNode(true) as HTMLElement;
@@ -990,16 +765,6 @@ export class TrackEditor extends Component {
         }
       } else {
         this.isDragging = false;
-        if (this.selectedNodeId !== nodeId || this.editingNodeId !== null) {
-          this.selectedNodeId = nodeId;
-          this.editingNodeId = null;
-          try {
-            window.localStorage.setItem(TRACK_EDITOR_STORAGE_KEY, String(nodeId));
-          } catch {
-            // ignore
-          }
-          this.render();
-        }
       }
     };
 
@@ -1021,24 +786,6 @@ export class TrackEditor extends Component {
     items.forEach((item, idx) => {
       const orderEl = item.querySelector<HTMLElement>(".gate-node-order");
       if (orderEl) orderEl.textContent = `#${idx + 1}`;
-
-      const gateId = Number(item.dataset.gate);
-      const node = this.store.node(gateId);
-      const displayName = node?.name.trim() || `Gate ${idx + 1}`;
-      const nameEl = item.querySelector<HTMLElement>("[data-node-name]");
-      if (nameEl) {
-        nameEl.textContent = displayName;
-        nameEl.title = displayName;
-      }
-      if (gateId === this.selectedNodeId) {
-        const inspStepEl = this.el.querySelector<HTMLElement>(".gate-inspector-step");
-        if (inspStepEl) inspStepEl.textContent = `#${idx + 1}`;
-        const inspNameEl = this.el.querySelector<HTMLInputElement>("[data-inspector-name]");
-        if (inspNameEl) {
-          inspNameEl.value = displayName;
-          inspNameEl.placeholder = `Gate ${idx + 1}`;
-        }
-      }
 
       const c1 = item.dataset.timerColor || "#64748b";
       const nextItem = items[(idx + 1) % total];

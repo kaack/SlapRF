@@ -44,7 +44,7 @@ export class DataSourceCard extends Component {
         <div class="option-row">
           <div>
             <div class="option-title">Simulation active</div>
-            <div class="option-sub">Feeds the app with simulated pilots, gates, and 6S flight packs in a separate dataset. Turn off to use your physical timers: the in-browser engine then times laps from the USB-C Hub on the <a href="#/network" class="link-inline">Network</a> page.</div>
+            <div class="option-sub">Feeds the app with simulated pilots, timers, and 6S flight packs in a separate dataset. Turn off to use your physical timers: the in-browser engine then times laps from the USB-C Hub on the <a href="#/network" class="link-inline">Network</a> page.</div>
           </div>
           <div class="option-actions">
             <label class="switch switch-lg">

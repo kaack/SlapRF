@@ -265,7 +265,7 @@ export class SimView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Simulated timers</h2>
-            <p>Virtual XIAO ESP32-C5 timers feeding the simulation engine, matching real hardware: both the Hub and Spokes sweep 5.8 GHz in their own TDMA slots and can be assigned to any gate on the Track page. Power individual timers off to test offline gate behavior, delete timers, or provision new ones (one Hub plus up to 6 Spokes).</p>
+            <p>Virtual XIAO ESP32-C5 timers feeding the simulation engine, matching real hardware: both the Hub and Spokes sweep 5.8 GHz in their own TDMA slots and can be placed on the track on the Track page. Power individual timers off to test offline timer behavior, delete timers, or provision new ones (one Hub plus up to 6 Spokes).</p>
           </div>
           <div class="card card-flush">
             <div data-slot="timers-table"></div>
@@ -596,7 +596,6 @@ export class SimView extends Component {
           const nextAssignedId = nextNode?.assignedTimerId ?? 0;
           const nextColor = nextAssignedId > 0 ? timerColor(this.store, nextAssignedId) : "#64748b";
 
-          const displayName = node.name.trim() || `Gate ${index + 1}`;
           const sectionTag = `S${index + 1}`;
           const wrapSectionTag = `S${total}`;
 
@@ -636,10 +635,9 @@ export class SimView extends Component {
                 </span>
               </div>
 
-              <div class="gate-node-name">${esc(displayName)}</div>
               <span
                 class="gate-node-start-btn ${isStart ? "is-active" : "is-placeholder-flag"}"
-                ${isStart ? 'title="Start / Finish gate" aria-label="Start / Finish gate"' : 'aria-hidden="true"'}
+                ${isStart ? 'title="Start timer" aria-label="Start timer"' : 'aria-hidden="true"'}
               >${icons.checkered(13)}</span>
             </div>`;
         })
@@ -695,7 +693,7 @@ export class SimView extends Component {
             <span class="gate-track-caption" data-course-caption>
               ${
                 walkerActive
-                  ? `⚠ Person on track (${Math.ceil(walkerSec)}s left) — airborne pilots land or circle high above the gates`
+                  ? `⚠ Person on track (${Math.ceil(walkerSec)}s left) — airborne pilots land or circle high above the track`
                   : `60 fps live course timeline · drones cross #1 → #${nodes.length} and wrap around ${nodes.length > 0 ? `S${nodes.length}` : "the loop"}`
               }
             </span>
@@ -704,7 +702,7 @@ export class SimView extends Component {
                 ${icons.pilot(14)}
                 <span>Clear track</span>
               </button>
-              <button class="btn btn-sm btn-ghost" data-action="pack-burst" title="Bunch airborne pilots 150 ms apart approaching Gate #1">
+              <button class="btn btn-sm btn-ghost" data-action="pack-burst" title="Bunch airborne pilots 150 ms apart approaching the start timer">
                 ${icons.zap(14)}<span>Pack burst</span>
               </button>
               <button class="btn btn-sm btn-ghost" data-action="launch-all" title="Refill all 6S batteries to 100% and launch all enabled pilots">
@@ -723,7 +721,7 @@ export class SimView extends Component {
               </div>
             </div>
 
-            <div class="gate-track-line sim-gate-track-line" role="list" aria-label="Simulated course gates">
+            <div class="gate-track-line sim-gate-track-line" role="list" aria-label="Simulated course timers">
               ${nodesHtml}
             </div>
           </div>
@@ -745,7 +743,7 @@ export class SimView extends Component {
       }
       const caption = this.el.querySelector<HTMLElement>("[data-course-caption]");
       if (caption && walkerActive) {
-        caption.textContent = `⚠ Person on track (${Math.ceil(walkerSec)}s left) — airborne pilots land or circle high above the gates`;
+        caption.textContent = `⚠ Person on track (${Math.ceil(walkerSec)}s left) — airborne pilots land or circle high above the track`;
       }
       const pitLabel = this.el.querySelector<HTMLElement>("[data-pit-lane-label]");
       if (pitLabel) {
@@ -822,7 +820,7 @@ export class SimView extends Component {
                     <div class="sim-stat-v ${p.vtxActive ? "tone-good" : "muted"}" data-pilot-vtx="${p.slotIndex}">${formatPilotVtxText(p)}</div>
                   </div>
                   <div>
-                    <div class="sim-stat-k">Nearest Gate</div>
+                    <div class="sim-stat-k">Nearest Timer</div>
                     <div class="sim-stat-v" data-pilot-loc="${p.slotIndex}">${p.status === "LANDING" ? "Landing pad" : p.status === "LAUNCH_HOLD" ? "Launch pad" : isParked ? "Pit bench" : esc(p.nearestGateLabel)}</div>
                   </div>
                   <div>
@@ -842,7 +840,7 @@ export class SimView extends Component {
                 <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="break" data-pilot-btn="${p.slotIndex}-break" ${isFlying ? "" : "disabled"} title="Land in the pits and rest at the bench while batteries charge">
                   ${icons.pause(12)}<span>Land</span>
                 </button>
-                <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="crash" data-pilot-btn="${p.slotIndex}-crash" ${isFlying ? "" : "disabled"} title="Force a mid-track crash near the closest gate (VTX stays on briefly)">
+                <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="crash" data-pilot-btn="${p.slotIndex}-crash" ${isFlying ? "" : "disabled"} title="Force a mid-track crash near the closest timer (VTX stays on briefly)">
                   ${icons.zapOff(12)}<span>Force crash</span>
                 </button>
                 <button class="btn btn-sm sim-ctrl-btn btn-ghost" data-action="pilot-cmd" data-slot="${p.slotIndex}" data-cmd="recover" data-pilot-btn="${p.slotIndex}-recover" ${isCrashed && !isTurtleBusy ? "" : "disabled"} title="Attempt Turtle Mode recovery (spins motors for 3.5s to flip upright and resume flying)">
@@ -1042,7 +1040,7 @@ export class SimView extends Component {
               ${
                 t.assignedGateName
                   ? `<span>${esc(t.assignedGateName)}</span>`
-                  : `<span class="muted">Unassigned</span>`
+                  : `<span class="muted">Off track</span>`
               }
             </div>
 
@@ -1064,7 +1062,7 @@ export class SimView extends Component {
             <span>Power</span>
             <span>Role</span>
             <span>Firmware</span>
-            <span>Assigned gate</span>
+            <span>Track</span>
             <span class="num">Actions</span>
           </div>
           ${rows}`;

@@ -108,7 +108,7 @@ export class LapComparison extends Component {
       );
     }
     if (cmp.incomplete) {
-      points.push(`Some sections couldn't be compared because a gate was missed on one of the laps.`);
+      points.push(`Some sections couldn't be compared because a timer was missed on one of the laps.`);
     }
 
     return `

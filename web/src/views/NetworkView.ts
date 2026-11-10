@@ -359,8 +359,11 @@ export class NetworkView extends Component {
     const ch = hubUsbStatus?.channel || s?.channel || 1;
     const nowMs = performance.now();
 
+    const formatTrackPos = (g: { trackOrder: number; role: string }) =>
+      `Track #${g.trackOrder + 1}${g.role === "START_FINISH" ? " (Start)" : ""}`;
+
     const hubGate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === 1);
-    const hubGateName = hubGate ? (hubGate.name?.trim() || `Gate ${hubGate.trackOrder + 1}`) : undefined;
+    const hubGateName = hubGate ? formatTrackPos(hubGate) : undefined;
     const hubServerTimer = detectedTimers.find((t) => t.isHub || t.timerId === 1);
 
     let hub: TopologyHubInfo;
@@ -488,7 +491,7 @@ export class NetworkView extends Component {
             ? detectedTimers.find((t) => (t.fingerprint || "").toUpperCase() === rawFp)
             : undefined;
           const gate = matchedDt ? this.store.nodes.find((g) => g.assignedTimerId === matchedDt.timerId) : undefined;
-          const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
+          const gateName = gate ? formatTrackPos(gate) : undefined;
           const cleanSpLabel = isFallbackFp ? "" : sp.label;
           const sourceNote =
             frames === 0
@@ -534,7 +537,7 @@ export class NetworkView extends Component {
         const sFp = (spStatus.fp || "").toUpperCase();
         const matchedDt = sFp ? detectedTimers.find((t) => (t.fingerprint || "").toUpperCase() === sFp) : undefined;
         const gate = matchedDt ? this.store.nodes.find((g) => g.assignedTimerId === matchedDt.timerId) : undefined;
-        const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
+        const gateName = gate ? formatTrackPos(gate) : undefined;
         const existingFromHub = spokes.get(slotNum);
         const isCurrentConsole = s === spStatus;
         spokes.set(slotNum, {
@@ -578,7 +581,7 @@ export class NetworkView extends Component {
         if (!dt.isHub && dt.timerId >= 2 && dt.timerId <= 7) {
           const fp = (dt.fingerprint || "").toUpperCase();
           const gate = this.store.nodes.find((g) => g.assignedTimerId === dt.timerId);
-          const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
+          const gateName = gate ? formatTrackPos(gate) : undefined;
           const serverFrames = gate?.framesRxCount ?? dt.framesRxCount ?? 0;
           const serverRssi = Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined;
           const serverOnline = Boolean(dt.online);
@@ -986,8 +989,8 @@ export class NetworkView extends Component {
             <strong class="debug-net-inspector-kpi-val mono">${hubSweepSeq}</strong>
           </div>
           <div class="debug-net-inspector-kpi">
-            <span class="debug-net-inspector-kpi-label">Practice gate &amp; engine rx</span>
-            <strong class="debug-net-inspector-kpi-val">${hub.gateLabel ? `${esc(hub.gateLabel)} <span class="note mono">· ${hub.serverFrames ?? 0} samples</span>` : `<span class="note">Unassigned in Track</span>`}</strong>
+            <span class="debug-net-inspector-kpi-label">Track position &amp; engine rx</span>
+            <strong class="debug-net-inspector-kpi-val">${hub.gateLabel ? `${esc(hub.gateLabel)} <span class="note mono">· ${hub.serverFrames ?? 0} samples</span>` : `<span class="note">Off track</span>`}</strong>
           </div>
         </div>
 
@@ -1018,8 +1021,8 @@ export class NetworkView extends Component {
                 <dd>${populatedSpokes.length > 0 ? `${activeSpokes.length}/${populatedSpokes.length} active (${populatedSpokes.map((c) => esc(c.label)).join(", ")})` : "None tied yet"}</dd>
               </div>
               <div class="debug-kv-row">
-                <dt>Practice gate</dt>
-                <dd>${hub.gateLabel ? `${esc(hub.gateLabel)} <span class="note mono">· ${hub.serverFrames ?? 0} samples</span>` : `<span class="note">Unassigned in Track (collector-only mode)</span>`}</dd>
+                <dt>Track position</dt>
+                <dd>${hub.gateLabel ? `${esc(hub.gateLabel)} <span class="note mono">· ${hub.serverFrames ?? 0} samples</span>` : `<span class="note">Off track (collector-only mode)</span>`}</dd>
               </div>
               <div class="debug-kv-row">
                 <dt>Firmware &amp; MAC</dt>
@@ -1109,8 +1112,8 @@ export class NetworkView extends Component {
           <strong class="debug-net-inspector-kpi-val mono">${sp.seq !== undefined && frames > 0 ? `#${sp.seq}` : "—"}</strong>
         </div>
         <div class="debug-net-inspector-kpi">
-          <span class="debug-net-inspector-kpi-label">Practice gate &amp; engine rx</span>
-          <strong class="debug-net-inspector-kpi-val">${sp.serverGateLabel ? `${esc(sp.serverGateLabel)} <span class="note mono">· ${sp.serverFrames ?? 0} samples</span>` : `<span class="note">Unassigned in Track</span>`}</strong>
+          <span class="debug-net-inspector-kpi-label">Track position &amp; engine rx</span>
+          <strong class="debug-net-inspector-kpi-val">${sp.serverGateLabel ? `${esc(sp.serverGateLabel)} <span class="note mono">· ${sp.serverFrames ?? 0} samples</span>` : `<span class="note">Off track</span>`}</strong>
         </div>
       </div>
 

@@ -28,11 +28,11 @@ export class PilotPanel extends Component {
       <div class="stat-row" data-slot="stats"></div>
       <section class="card card-flush">
         <div class="card-body">
-          <header class="card-head"><div class="settings-intro"><h2>Signal at each gate</h2><p>This pilot's 5.8 GHz signal as every gate sees it · pick one gate to see and adjust its threshold · red pass lines didn't count — hover for why</p></div></header>
+          <header class="card-head"><div class="settings-intro"><h2>Signal at each timer</h2><p>This pilot's 5.8 GHz signal as every timer sees it · pick one timer to see and adjust its threshold · red pass lines didn't count — hover for why</p></div></header>
           <div data-slot="rssi"></div>
         </div>
         <div class="rules-foot">
-          <p class="note">Default chart view follows the live 5s stream with all gates visible.</p>
+          <p class="note">Default chart view follows the live 5s stream with all timers visible.</p>
           <button class="btn btn-ghost btn-sm" type="button" data-action="restore-rssi-defaults">Restore defaults</button>
         </div>
       </section>
