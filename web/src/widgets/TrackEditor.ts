@@ -111,6 +111,15 @@ export class TrackEditor extends Component {
         this.render();
         return;
       }
+      const deleteTimerBtn = target.closest<HTMLButtonElement>("[data-delete-timer]");
+      if (deleteTimerBtn) {
+        e.stopPropagation();
+        const timerId = Number(deleteTimerBtn.dataset.deleteTimer);
+        const fp = deleteTimerBtn.dataset.deleteFp || "";
+        const label = deleteTimerBtn.dataset.deleteLabel || "";
+        void this.api.deleteTimer(timerId, fp, label);
+        return;
+      }
     });
 
     this.listen(el, "pointerdown", (e) => {
@@ -120,7 +129,7 @@ export class TrackEditor extends Component {
       // Clicking inline controls beneath a node should not start a node drag.
       if (
         target.closest(
-          "[data-make-start], [data-edit-gate-name], [data-clear-gate-name], [data-gate-name], .gate-node-name-edit-wrap"
+          "[data-make-start], [data-edit-gate-name], [data-clear-gate-name], [data-gate-name], [data-delete-timer], .gate-node-name-edit-wrap"
         )
       ) {
         return;
@@ -438,7 +447,7 @@ export class TrackEditor extends Component {
         class="unassigned-timer-token ${isOnline ? "" : "is-offline"}"
         data-timer-id="${d.timerId}"
         style="--c:${color}"
-        title="${esc(timerName)} (${roleLabel}${isOnline ? "" : " · Offline"}) · Drag onto the track line above to create a gate"
+        title="${esc(timerName)} (${roleLabel}) · Drag onto the track line above to create a gate"
       >
         <span class="unassigned-timer-dot" style="--c:${color}">
           <span class="mono">${esc(timerName)}</span>
@@ -447,9 +456,23 @@ export class TrackEditor extends Component {
           <span class="unassigned-timer-name mono">${esc(timerName)}</span>
           <span class="unassigned-timer-sub">
             <span class="gate-node-status-dot ${isOnline ? "is-online" : ""}"></span>
-            ${roleLabel} · ${isOnline ? `${d.batteryPct}%` : "Offline"}
+            ${roleLabel}${isOnline && d.batteryPct > 0 ? ` · ${d.batteryPct}%` : ""}
           </span>
         </div>
+        ${
+          !isOnline
+            ? `
+          <button
+            type="button"
+            class="unassigned-timer-delete"
+            data-delete-timer="${d.timerId}"
+            data-delete-fp="${esc(d.fingerprint || "")}"
+            data-delete-label="${esc(timerName)}"
+            title="Delete ${esc(timerName)}"
+            aria-label="Delete ${esc(timerName)}"
+          >${icons.trash(13)}</button>`
+            : ""
+        }
       </div>`;
   }
 
@@ -475,7 +498,21 @@ export class TrackEditor extends Component {
           <span class="detected-role-pill">
             ${esc(tiedTimer ? timerRoleText(this.store, tiedTimer) : "Spoke")}
           </span>
-          <span class="muted mono">${isOnline ? (tiedTimer && tiedTimer.batteryPct > 0 ? `${tiedTimer.batteryPct}%` : "Online") : "Offline"}</span>
+          ${isOnline && tiedTimer && tiedTimer.batteryPct > 0 ? `<span class="muted mono">${tiedTimer.batteryPct}%</span>` : ""}
+          ${
+            !isOnline
+              ? `
+            <button
+              type="button"
+              class="unassigned-timer-delete"
+              data-delete-timer="${assignedId}"
+              data-delete-fp="${esc(tiedTimer?.fingerprint || "")}"
+              data-delete-label="${esc(timerName)}"
+              title="Delete ${esc(timerName)}"
+              aria-label="Delete ${esc(timerName)}"
+            >${icons.trash(13)}</button>`
+              : ""
+          }
         </div>`
       : `
         <div class="gate-inspector-timer-meta is-empty">
