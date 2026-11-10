@@ -1442,22 +1442,30 @@ export class UsbConnectionPool {
     return this._debugSlotIndex;
   }
 
+  /** The main USB connection (Slot 0) used across the app (TopBar, Network, Flasher). */
+  public get mainConsole(): TimerConsole {
+    return this.slots[0];
+  }
+
+  /**
+   * The USB connection inspected by the Debug page: defaults to `mainConsole` (Slot 0),
+   * or Slot 1 when the user swaps to debug a second USB device in the Debug window.
+   */
   public get debugConsole(): TimerConsole {
-    const chosen = this.slots[this._debugSlotIndex];
-    if (chosen && (chosen.connected || chosen.busyLabel || chosen.reconnecting)) {
-      return chosen;
+    if (this._debugSlotIndex === 1) {
+      const swapSlot = this.slots[1];
+      if (swapSlot && (swapSlot.connected || swapSlot.busyLabel || swapSlot.reconnecting)) {
+        return swapSlot;
+      }
+      this._debugSlotIndex = 0;
     }
-    const firstActive = this.slots.find((c) => c.connected || c.busyLabel || c.reconnecting);
-    if (firstActive) {
-      this._debugSlotIndex = firstActive.slotIndex;
-      return firstActive;
-    }
-    return chosen ?? this.slots[0];
+    return this.slots[0];
   }
 
   public setDebugSlot(slotIndex: number): void {
-    if (slotIndex >= 0 && slotIndex < MAX_USB_CONNECTIONS && slotIndex !== this._debugSlotIndex) {
-      this._debugSlotIndex = slotIndex;
+    const next = slotIndex === 1 ? 1 : 0;
+    if (next !== this._debugSlotIndex) {
+      this._debugSlotIndex = next;
       this.notify();
     }
   }
@@ -1471,15 +1479,17 @@ export class UsbConnectionPool {
   }
 
   public hubConsole(): TimerConsole | null {
+    const main = this.slots[0];
+    if (main.connected && main.lastStatus?.role === 1) return main;
     return this.slots.find((c) => c.connected && c.lastStatus?.role === 1) ?? null;
   }
 
   public primaryConsole(): TimerConsole {
-    return this.hubConsole() ?? this.connectedConsoles()[0] ?? this.slots[0];
+    return this.slots[0];
   }
 
   public canConnectMore(): boolean {
-    return this.connectedConsoles().length < MAX_USB_CONNECTIONS;
+    return !this.slots[0].connected;
   }
 
   public findByFingerprint(fp: string): TimerConsole | null {
@@ -1499,37 +1509,87 @@ export class UsbConnectionPool {
     return this.slots.find((c) => c.ownsPort(candidate)) ?? null;
   }
 
-  public async connectNew(
-    showAllPorts = false,
-    selectForDebug = true
+  /** Connects the main USB connection (Slot 0). */
+  public async connectMain(
+    showAllPorts = false
   ): Promise<{ console: TimerConsole; status: TimerStatus | null; alreadyConnected: boolean }> {
-    const free = this.slots.find((c) => !c.connected && !c.busyLabel && !c.reconnecting);
-    if (!free) {
-      throw new Error(`Maximum of ${MAX_USB_CONNECTIONS} USB connections already active. Disconnect one first.`);
-    }
-    const port = await serial().requestPort({ filters: [{ usbVendorId: ESPRESSIF_USB_VID }] });
+    const main = this.slots[0];
+    const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
+    const port = await serial().requestPort(filters ? { filters } : undefined);
     const existing = this.findOwnerOfPort(port);
     if (existing) {
-      if (selectForDebug) {
-        this.setDebugSlot(existing.slotIndex);
+      if (existing === main) {
+        return { console: main, status: main.lastStatus, alreadyConnected: true };
       }
-      return { console: existing, status: existing.lastStatus, alreadyConnected: true };
+      await existing.disconnectCleanly();
     }
-    if (selectForDebug) {
-      this._debugSlotIndex = free.slotIndex;
-      this.notify();
+    if (main.connected) {
+      await main.disconnectCleanly();
     }
-    const status = await free.connectWithPort(port, showAllPorts);
-    return { console: free, status, alreadyConnected: false };
+    const status = await main.connectWithPort(port, showAllPorts);
+    return { console: main, status, alreadyConnected: false };
   }
 
   /**
-   * Releases the active debug USB connection's open `SerialPort` so the Flasher or Eraser can talk
+   * Connects or swaps the Debug window's target USB device:
+   * - If `mainConsole` (Slot 0) is not connected, connects `mainConsole`.
+   * - If `mainConsole` is connected, opens the port picker to swap the Debug window to another USB
+   *   device in Slot 1 (disconnecting any previous Slot 1 debug device first) while keeping
+   *   `mainConsole` connected in the background.
+   */
+  public async connectOrSwapDebug(
+    showAllPorts = false
+  ): Promise<{ console: TimerConsole; status: TimerStatus | null; alreadyConnected: boolean }> {
+    const main = this.slots[0];
+    if (!main.connected && !main.reconnecting) {
+      this._debugSlotIndex = 0;
+      return await this.connectMain(showAllPorts);
+    }
+    const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
+    const port = await serial().requestPort(filters ? { filters } : undefined);
+    const existing = this.findOwnerOfPort(port);
+    if (existing) {
+      this.setDebugSlot(existing.slotIndex === 1 ? 1 : 0);
+      return { console: existing, status: existing.lastStatus, alreadyConnected: true };
+    }
+    const swapSlot = this.slots[1];
+    if (swapSlot.connected || swapSlot.reconnecting) {
+      await swapSlot.disconnectCleanly();
+    }
+    this._debugSlotIndex = 1;
+    this.notify();
+    const status = await swapSlot.connectWithPort(port, showAllPorts);
+    return { console: swapSlot, status, alreadyConnected: false };
+  }
+
+  /** Disconnects the swapped Debug USB device (Slot 1) and returns Debug to the main USB connection (Slot 0). */
+  public async revertDebugToMain(): Promise<void> {
+    const swapSlot = this.slots[1];
+    this._debugSlotIndex = 0;
+    if (swapSlot.connected || swapSlot.reconnecting) {
+      await swapSlot.disconnectCleanly();
+    } else {
+      this.notify();
+    }
+  }
+
+  public async connectNew(
+    showAllPorts = false,
+    selectForDebug = false
+  ): Promise<{ console: TimerConsole; status: TimerStatus | null; alreadyConnected: boolean }> {
+    if (selectForDebug) {
+      return await this.connectOrSwapDebug(showAllPorts);
+    }
+    return await this.connectMain(showAllPorts);
+  }
+
+  /**
+   * Releases the main USB connection's open `SerialPort` so the Flasher or Eraser can talk
    * to the ESP32-C5 ROM bootloader directly without popping up a second USB port picker, and
-   * returns a `reopen` callback that re-attaches the same `TimerConsole` slot afterwards.
+   * returns a `reopen` callback that re-attaches the main `TimerConsole` slot afterwards.
    */
   public async takeActivePort(): Promise<{ port: SerialPortLike; reopen: () => Promise<void> } | null> {
-    const active = this.debugConsole;
+    const active = this.mainConsole;
     const port = await active.releasePortForWrite();
     if (!port) return null;
     return {

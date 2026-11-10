@@ -94,7 +94,7 @@ export class NetworkView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Connection</h2>
-            <p>Connect up to 3 timers over USB-C at the same time (for example, keep the Hub running while inspecting a Spoke) and choose which timer to inspect.</p>
+            <p>Connect the Hub (or a Spoke) over USB-C to inspect live 2.4 GHz network topology and 5.8 GHz channel readings.</p>
           </div>
           <div class="debug-status-layout" data-slot="connection"></div>
         </section>
@@ -116,46 +116,40 @@ export class NetworkView extends Component {
         </section>
       </div>`;
 
-    const unsubs = usbPool.slots.map((c) =>
-      c.subscribe({
-        onConnect: () => {
-          this.status = this.activeStatus();
-          this.renderAll();
-        },
-        onStatus: (s) => {
-          if (c === usbPool.debugConsole || c === usbPool.primaryConsole()) {
-            this.status = this.activeStatus();
-            if (s.chanMask !== undefined) {
-              const nextEnabled = Array.from({ length: 8 }, (_, i) => ((s.chanMask! >> i) & 1) !== 0);
-              if (nextEnabled.join() !== this.signalEnabledCh.join()) {
-                this.signalEnabledCh = nextEnabled;
-              }
-            }
+    const unsubMain = this.console.subscribe({
+      onConnect: () => {
+        this.status = this.activeStatus();
+        this.renderAll();
+      },
+      onStatus: (s) => {
+        this.status = this.activeStatus();
+        if (s.chanMask !== undefined) {
+          const nextEnabled = Array.from({ length: 8 }, (_, i) => ((s.chanMask! >> i) & 1) !== 0);
+          if (nextEnabled.join() !== this.signalEnabledCh.join()) {
+            this.signalEnabledCh = nextEnabled;
           }
+        }
+        this.renderAll();
+      },
+      onLive: (l) => {
+        this.live = l;
+        if (this.selectedSlot === 1 || (this.status?.role === 2 && this.selectedSlot === this.status.slot)) {
           this.renderAll();
-        },
-        onLive: (l) => {
-          if (c === usbPool.debugConsole || c === usbPool.primaryConsole()) {
-            this.live = l;
-            if (this.selectedSlot === 1 || (this.status?.role === 2 && this.selectedSlot === this.status.slot)) {
-              this.renderAll();
-            }
-          }
-        },
-        onConfig: () => {
-          this.renderAll();
-        },
-        onDisconnect: () => {
-          this.status = this.activeStatus();
-          if (!this.status) {
-            this.live = null;
-            this.userPickedSlot = false;
-            this.selectedSlot = 1;
-          }
-          this.renderAll();
-        },
-      })
-    );
+        }
+      },
+      onConfig: () => {
+        this.renderAll();
+      },
+      onDisconnect: () => {
+        this.status = this.activeStatus();
+        if (!this.status) {
+          this.live = null;
+          this.userPickedSlot = false;
+          this.selectedSlot = 1;
+        }
+        this.renderAll();
+      },
+    });
 
     const unsubState = usbPool.onChange(() => {
       this.status = this.activeStatus();
@@ -191,7 +185,7 @@ export class NetworkView extends Component {
     });
 
     this.onDispose(() => {
-      unsubs.forEach((fn) => fn());
+      unsubMain();
       unsubState();
       unsubBridge();
       unsubStore();
@@ -235,11 +229,7 @@ export class NetworkView extends Component {
   }
 
   private activeStatus(): TimerStatus | null {
-    const active = usbPool.debugConsole;
-    if (active.connected && active.lastStatus) {
-      return active.lastStatus;
-    }
-    const primary = usbPool.primaryConsole();
+    const primary = usbPool.mainConsole;
     if (primary.connected && primary.lastStatus) {
       return primary.lastStatus;
     }
@@ -321,34 +311,26 @@ export class NetworkView extends Component {
         this.selectTopologySlot(Number(t.dataset.slotNum));
         break;
       case "select-usb-slot": {
-        const idx = Number(t.dataset.usbSlot);
-        if (Number.isFinite(idx)) {
-          this.connError = null;
-          usbPool.selectDebugSlot(idx);
-          const s = usbPool.slots[idx]?.lastStatus;
-          if (s?.role === 1) {
-            this.selectTopologySlot(1);
-          } else if (s?.role === 2 && s.slot >= 2 && s.slot <= 7) {
-            this.selectTopologySlot(s.slot);
-          } else {
-            this.renderAll();
-          }
+        const s = usbPool.mainConsole.lastStatus;
+        if (s?.role === 1) {
+          this.selectTopologySlot(1);
+        } else if (s?.role === 2 && s.slot >= 2 && s.slot <= 7) {
+          this.selectTopologySlot(s.slot);
+        } else {
+          this.renderAll();
         }
         break;
       }
       case "disconnect-usb-slot": {
-        const idx = Number(t.dataset.usbSlot);
-        if (Number.isFinite(idx) && usbPool.slots[idx]) {
-          this.connError = null;
-          await usbPool.slots[idx].disconnectCleanly();
-        }
+        this.connError = null;
+        await usbPool.mainConsole.disconnectCleanly();
         break;
       }
       case "connect-add": {
         this.connError = null;
         try {
-          const c = await usbPool.connectNew(this.showAllPorts);
-          const s = c.lastStatus;
+          const c = await usbPool.connectMain(this.showAllPorts);
+          const s = c.status;
           if (s?.role === 1) {
             this.selectTopologySlot(1);
           } else if (s?.role === 2 && s.slot >= 2 && s.slot <= 7) {
@@ -538,11 +520,11 @@ export class NetworkView extends Component {
       }
     }
 
-    // 2. Live Hardware: Populate any Spoke currently connected over USB
+    // 2. Live Hardware: Populate Spoke if the main USB connection is a Spoke
     if (!this.store.simulatorRunning) {
-      for (const c of usbPool.connectedConsoles()) {
-        const spStatus = c.lastStatus;
-        if (!spStatus || spStatus.role !== 2) continue;
+      const c = usbPool.mainConsole;
+      const spStatus = c.connected ? c.lastStatus : null;
+      if (spStatus && spStatus.role === 2) {
         const slotNum = spStatus.slot >= 2 && spStatus.slot <= 7 ? spStatus.slot : 2;
         const rawBeaconMsAgo = spStatus.beaconMsAgo ?? spStatus.hub?.beaconMsAgo;
         const beaconMsAgo = rawBeaconMsAgo !== undefined && rawBeaconMsAgo >= 0x80000000 ? 0 : rawBeaconMsAgo;
@@ -673,7 +655,7 @@ export class NetworkView extends Component {
   private renderAll(): void {
     const connHost = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
     patchUsbConnectionBar(connHost, {
-      activeConsole: usbPool.debugConsole,
+      activeConsole: usbPool.mainConsole,
       showAllPorts: this.showAllPorts,
       error: this.connError,
     });

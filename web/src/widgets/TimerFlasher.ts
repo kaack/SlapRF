@@ -573,12 +573,12 @@ export class TimerFlasher extends Component {
     const cleanLabel = this.timerLabel.trim() || (isHub ? "H1" : this.suggestSpokeLabel());
     const linkSummary = isHub ? "USB-C → Computer" : "2.4 GHz ESP-NOW → Hub";
     const eraseBeforeFlash = !this.keepFingerprint;
-    const activeConsole = usbPool.debugConsole;
+    const activeConsole = usbPool.mainConsole;
     const isConnected = activeConsole.connected;
     const targetName = isConnected
       ? activeConsole.isOtherDevice
         ? "Other"
-        : activeConsole.lastStatus?.label || activeConsole.lastConfig?.timerLabel || `USB ${activeConsole.slotIndex + 1}`
+        : activeConsole.lastStatus?.label || activeConsole.lastConfig?.timerLabel || "USB"
       : "";
 
     const pct = this.progress ? this.progress.percent : this.lastSuccessMsg ? 100 : 0;

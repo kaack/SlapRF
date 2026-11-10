@@ -104,7 +104,7 @@ class TimerReaderPanel extends Component {
   }
 
   private async readFromUsb(): Promise<void> {
-    const activeConsole = usbPool.debugConsole;
+    const activeConsole = usbPool.mainConsole;
     if (this.busy || !activeConsole.connected) return;
     this.busy = true;
     this.errorMsg = null;
@@ -127,7 +127,7 @@ class TimerReaderPanel extends Component {
 
   private render(): void {
     const webSerialOk = isWebSerialSupported();
-    const activeConsole = usbPool.debugConsole;
+    const activeConsole = usbPool.mainConsole;
     const isConnected = activeConsole.connected;
     const isOther = activeConsole.isOtherDevice;
     const r = this.readout;
@@ -333,7 +333,7 @@ class TimerEraserPanel extends Component {
   }
 
   private async eraseFromUsb(): Promise<void> {
-    if (this.busy || !usbPool.debugConsole.connected) return;
+    if (this.busy || !usbPool.mainConsole.connected) return;
     this.busy = true;
     this.errorMsg = null;
     this.lastSuccessMsg = null;
@@ -390,12 +390,12 @@ class TimerEraserPanel extends Component {
 
   private render(): void {
     const webSerialOk = isWebSerialSupported();
-    const activeConsole = usbPool.debugConsole;
+    const activeConsole = usbPool.mainConsole;
     const isConnected = activeConsole.connected;
     const targetName = isConnected
       ? activeConsole.isOtherDevice
         ? "Other"
-        : activeConsole.lastStatus?.label || activeConsole.lastConfig?.timerLabel || `USB ${activeConsole.slotIndex + 1}`
+        : activeConsole.lastStatus?.label || activeConsole.lastConfig?.timerLabel || "USB"
       : "";
     const pct = this.progress
       ? Math.max(0, Math.min(100, Math.round(this.progress.percent)))
@@ -466,7 +466,7 @@ export class FlasherView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Connection</h2>
-            <p>Connect up to 3 timers over USB-C at the same time and choose which connected timer to inspect, reflash, or wipe.</p>
+            <p>Connect a Seeed XIAO ESP32-C5 timer over USB-C to read, flash, or wipe its firmware.</p>
           </div>
           <div class="debug-status-layout" data-slot="connection"></div>
         </section>
@@ -527,41 +527,28 @@ export class FlasherView extends Component {
 
     const syncSelectedConsole = (applyToFlasher = false) => {
       patchUsbConnectionBar(this.slot("connection"), {
-        activeConsole: usbPool.debugConsole,
+        activeConsole: usbPool.mainConsole,
         showAllPorts: this.showAllPorts,
         error: this.connError,
       });
-      const r = readoutFromConsole(usbPool.debugConsole);
+      const r = readoutFromConsole(usbPool.mainConsole);
       if (r) {
         readerPanel?.setReadout(r);
         if (applyToFlasher) {
           flasher.applyReadout(r);
         }
-      } else if (!usbPool.debugConsole.connected || usbPool.debugConsole.isOtherDevice) {
+      } else if (!usbPool.mainConsole.connected || usbPool.mainConsole.isOtherDevice) {
         readerPanel?.setReadout(null);
       }
     };
 
-    const unsubs = usbPool.slots.map((c) =>
-      c.subscribe({
-        onStatus: () => {
-          if (c === usbPool.debugConsole) syncSelectedConsole(false);
-          else {
-            patchUsbConnectionBar(this.slot("connection"), {
-              activeConsole: usbPool.debugConsole,
-              showAllPorts: this.showAllPorts,
-              error: this.connError,
-            });
-          }
-        },
-        onConfig: () => {
-          if (c === usbPool.debugConsole) syncSelectedConsole(false);
-        },
-      })
-    );
+    const unsubMain = usbPool.mainConsole.subscribe({
+      onStatus: () => syncSelectedConsole(false),
+      onConfig: () => syncSelectedConsole(false),
+    });
     const unsubPool = usbPool.onChange(() => syncSelectedConsole(false));
     this.onDispose(() => {
-      unsubs.forEach((fn) => fn());
+      unsubMain();
       unsubPool();
     });
 
@@ -578,27 +565,15 @@ export class FlasherView extends Component {
       if (!t) return;
       void (async () => {
         switch (t.dataset.action) {
-          case "select-usb-slot": {
-            const idx = Number(t.dataset.usbSlot);
-            if (Number.isFinite(idx)) {
-              this.connError = null;
-              usbPool.selectDebugSlot(idx);
-              syncSelectedConsole(true);
-            }
-            break;
-          }
           case "disconnect-usb-slot": {
-            const idx = Number(t.dataset.usbSlot);
-            if (Number.isFinite(idx) && usbPool.slots[idx]) {
-              this.connError = null;
-              await usbPool.slots[idx].disconnectCleanly();
-            }
+            this.connError = null;
+            await usbPool.mainConsole.disconnectCleanly();
             break;
           }
           case "connect-add": {
             this.connError = null;
             try {
-              await usbPool.connectNew(this.showAllPorts);
+              await usbPool.connectMain(this.showAllPorts);
               syncSelectedConsole(true);
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);

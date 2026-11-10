@@ -247,7 +247,7 @@ export class DebugView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Connection</h2>
-            <p>Connect up to 3 timers over USB-C at the same time (for example, keep the Hub running while debugging a Spoke) and choose which timer this page inspects.</p>
+            <p>Inspects the main USB connection by default, or click <strong>Swap USB</strong> to temporarily debug a different USB device while keeping the main connection running.</p>
           </div>
           <div class="debug-status-layout" data-slot="connection"></div>
         </section>
@@ -494,8 +494,11 @@ export class DebugView extends Component {
       this.observer?.disconnect();
       window.clearInterval(this.statusTimer);
       // Leaving the Debug page must stop high-rate LIVE / SCAN / LOG streaming,
-      // while preserving the USB connection across the rest of the SPA.
+      // and if Debug was swapped to a secondary USB device (Slot 1), disconnect it and revert to main.
       this.stopActiveStreamsOn(this.console);
+      if (usbPool.debugSlotIndex === 1) {
+        void usbPool.revertDebugToMain();
+      }
     });
     this.bindConsole(this.console);
   }
@@ -1934,7 +1937,10 @@ export class DebugView extends Component {
       switch (t.dataset.action) {
         case "connect":
         case "connect-add":
-          await usbPool.connectNew(this.showAllPorts, true);
+          await usbPool.connectOrSwapDebug(this.showAllPorts);
+          break;
+        case "revert-usb-main":
+          await usbPool.revertDebugToMain();
           break;
         case "select-usb-slot": {
           const slot = Number(t.dataset.usbSlot);
@@ -1945,9 +1951,13 @@ export class DebugView extends Component {
         }
         case "disconnect-usb-slot": {
           const slot = Number(t.dataset.usbSlot);
-          const target = usbPool.slots[slot];
-          if (target) {
-            await target.disconnectCleanly();
+          if (slot === 1) {
+            await usbPool.revertDebugToMain();
+          } else {
+            const target = usbPool.slots[slot];
+            if (target) {
+              await target.disconnectCleanly();
+            }
           }
           break;
         }
@@ -2901,6 +2911,7 @@ export class DebugView extends Component {
     patchUsbConnectionBar(host, {
       activeConsole: this.console,
       showAllPorts: this.showAllPorts,
+      allowSwap: true,
       busyText: this.busy,
       error: this.error,
     });

@@ -83,73 +83,49 @@ export class BrowserHubBridge {
    * - `gray`: Disconnected
    */
   public getLedSummary(): ConnectionLedSummary {
-    const busyOrReconnecting = usbPool.slots.find((c) => c.reconnecting || c.busyLabel);
-    const connected = usbPool.connectedConsoles();
+    const main = usbPool.mainConsole;
 
-    if (busyOrReconnecting && connected.length === 0) {
-      const label = busyOrReconnecting.reconnecting
-        ? `Reconnecting USB (${busyOrReconnecting.reconnectAttempt}/${busyOrReconnecting.maxReconnectAttempts})…`
-        : `${busyOrReconnecting.busyLabel}…`;
+    if ((main.reconnecting || main.busyLabel) && !main.connected) {
+      const label = main.reconnecting
+        ? `Reconnecting USB (${main.reconnectAttempt}/${main.maxReconnectAttempts})…`
+        : `${main.busyLabel}…`;
       return {
         color: "yellow",
         shortLabel: "Reconnecting",
         detail: `${label} — click to open Network`,
       };
     }
-    if (connected.length > 0) {
-      const emg = connected.find((c) => c.lastStatus?.emergencyMode);
-      if (emg) {
-        const s = emg.lastStatus!;
+    if (main.connected) {
+      const s = main.lastStatus;
+      const cfg = main.lastConfig;
+      if (s?.emergencyMode) {
         return {
           color: "red",
           shortLabel: `${s.label || "Timer"} · Emergency`,
           detail: `${s.label || "Timer"} is in Emergency Mode — click to open Network`,
         };
       }
-      const hub = usbPool.hubConsole();
-      const names = connected.map((c) =>
-        c.isOtherDevice
-          ? "Other"
-          : c.lastStatus?.label || c.lastConfig?.timerLabel || (c.lastStatus?.role === 1 ? "H1" : `USB ${c.slotIndex + 1}`)
-      );
-      const joined = names.join(" + ");
-      if (usbPool.debugConsole.isOtherDevice) {
+      if (main.isOtherDevice) {
         return {
           color: "red",
           shortLabel: "Other · Unflashed",
-          detail: "Selected XIAO ESP32-C5 (Other) has no SlapRF firmware — open Flasher to write firmware",
+          detail: "Connected XIAO ESP32-C5 (Other) has no SlapRF firmware — open Flasher to write firmware",
         };
       }
-      if (hub) {
-        const s = hub.lastStatus;
-        const hubName = s?.label || "H1";
+      if (s?.role === 1 || cfg?.role === "hub") {
+        const hubName = s?.label || cfg?.timerLabel || "H1";
         return {
           color: "neon",
-          shortLabel: connected.length > 1 ? `${joined}` : `${hubName} · Hub`,
-          detail:
-            connected.length > 1
-              ? `Connected over USB-C (${connected.length}/3): ${joined} — click to open Network`
-              : `Connected to Hub ${hubName} over USB-C — click to open Network`,
+          shortLabel: `${hubName} · Hub`,
+          detail: `Connected to Hub ${hubName} over USB-C — click to open Network`,
         };
       }
-      const spoke = connected.find((c) => c.lastStatus?.role === 2 || c.lastConfig?.role === "spoke");
-      if (spoke) {
-        const first = spoke.lastStatus;
-        const spokeName = first?.label || spoke.lastConfig?.timerLabel || "T1";
+      if (s?.role === 2 || cfg?.role === "spoke") {
+        const spokeName = s?.label || cfg?.timerLabel || "T1";
         return {
           color: "blue",
-          shortLabel: connected.length > 1 ? `${joined}` : `${spokeName} · Spoke`,
-          detail:
-            connected.length > 1
-              ? `Connected over USB-C (${connected.length}/3): ${joined} — click to open Network`
-              : `Connected to Spoke ${spokeName} (Slot ${first?.slot || "?"}) over USB-C — click to open Network`,
-        };
-      }
-      if (connected.some((c) => c.isOtherDevice)) {
-        return {
-          color: "red",
-          shortLabel: connected.length > 1 ? `${joined}` : "Other · Unflashed",
-          detail: `Connected XIAO ESP32-C5 (${joined}) has no SlapRF firmware — open Flasher to write firmware`,
+          shortLabel: `${spokeName} · Spoke`,
+          detail: `Connected to Spoke ${spokeName} (Slot ${s?.slot || "?"}) over USB-C — click to open Network`,
         };
       }
       return {
@@ -159,12 +135,11 @@ export class BrowserHubBridge {
       };
     }
 
-    const failed = usbPool.slots.find((c) => c.reconnectFailed);
-    if (failed) {
+    if (main.reconnectFailed) {
       return {
         color: "red",
         shortLabel: "USB Failed",
-        detail: `${failed.lastError || "USB reconnect failed"} — click to open Network`,
+        detail: `${main.lastError || "USB reconnect failed"} — click to open Network`,
       };
     }
 
