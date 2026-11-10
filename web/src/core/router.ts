@@ -119,8 +119,18 @@ export class Router {
       if (next === this.current) return;
       this.current = next;
       this.saveRoute(next);
-      this.listeners.forEach((fn) => fn(next));
+      this.listeners.forEach((fn) => {
+        try {
+          fn(next);
+        } catch (err) {
+          console.error("[Router] subscriber error:", err);
+        }
+      });
     });
+  }
+
+  public clearListeners(): void {
+    this.listeners.clear();
   }
 
   private saveRoute(id: RouteId): void {

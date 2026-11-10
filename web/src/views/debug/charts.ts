@@ -834,6 +834,10 @@ export class SpectrumAccumulator {
     }
   }
 
+  public clear(): void {
+    this.clearAll();
+  }
+
   public clearAll(): void {
     this.latest = null;
     this.maxHold = null;

@@ -529,7 +529,7 @@ export class DebugView extends Component {
     this.serialLines = [];
     this.signalRing.clear();
     this.healthHistory.clear();
-    this.spectrumAcc.clear();
+    this.spectrumAcc.clearAll();
     this.signalFindings = [];
     this.signalFindingSeq = 0;
     this.scanFindings = [];

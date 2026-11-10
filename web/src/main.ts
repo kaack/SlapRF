@@ -54,6 +54,9 @@ function hotReloadUI(hmr: SlaprfHMRState): void {
   // take effect immediately without losing USB WebSerial connections, WASM state, or lap history.
   Object.setPrototypeOf(hmr.store, AppStore.prototype);
   Object.setPrototypeOf(hmr.api, ApiClient.prototype);
+  if (!(hmr.api as unknown as { provisionedUsbKeys?: Set<string> }).provisionedUsbKeys) {
+    (hmr.api as unknown as { provisionedUsbKeys: Set<string> }).provisionedUsbKeys = new Set<string>();
+  }
   if (hmr.api.hubBridge) {
     Object.setPrototypeOf(hmr.api.hubBridge, BrowserHubBridge.prototype);
   }
@@ -63,7 +66,12 @@ function hotReloadUI(hmr: SlaprfHMRState): void {
   const prevScrollX = window.scrollX;
   const prevScrollY = window.scrollY;
 
-  hmr.shell.destroy();
+  try {
+    hmr.shell?.destroy();
+  } catch (err) {
+    console.warn("[HMR] Error destroying previous shell:", err);
+  }
+  hmr.router.clearListeners();
   hmr.shell = new AppShell(root, hmr.store, hmr.api, hmr.router, hmr.announcer);
 
   window.scrollTo({ left: prevScrollX, top: prevScrollY });

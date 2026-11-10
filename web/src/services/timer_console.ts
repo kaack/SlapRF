@@ -1351,13 +1351,15 @@ const timerWin = (typeof window !== "undefined" ? window : undefined) as
 export const usbPool: UsbConnectionPool = (() => {
   if (timerWin?.__slaprfUsbPool) {
     Object.setPrototypeOf(timerWin.__slaprfUsbPool, UsbConnectionPool.prototype);
-    for (const c of timerWin.__slaprfUsbPool.slots) {
+    timerWin.__slaprfUsbPool.slots.forEach((c, idx) => {
       Object.setPrototypeOf(c, TimerConsole.prototype);
-    }
+      (c as { slotIndex: number }).slotIndex = idx;
+    });
     return timerWin.__slaprfUsbPool;
   }
   const slot0 = timerWin?.__slaprfTimerConsole ?? new TimerConsole(undefined, 0);
   Object.setPrototypeOf(slot0, TimerConsole.prototype);
+  (slot0 as { slotIndex: number }).slotIndex = 0;
   const pool = new UsbConnectionPool([slot0, new TimerConsole(undefined, 1), new TimerConsole(undefined, 2)]);
   if (timerWin) {
     timerWin.__slaprfTimerConsole = slot0;

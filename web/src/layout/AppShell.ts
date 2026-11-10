@@ -64,7 +64,11 @@ export class AppShell extends Component {
     const host = document.createElement("div");
     host.className = `view view-${route}`;
     outlet.appendChild(host);
-    this.view = this.createView(route, host);
+    try {
+      this.view = this.createView(route, host);
+    } catch (err) {
+      console.error(`[AppShell] Failed to mount view "${route}":`, err);
+    }
     window.scrollTo({ top: 0 });
   }
 
