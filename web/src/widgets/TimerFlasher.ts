@@ -465,6 +465,7 @@ export class TimerFlasher extends Component {
             <h3 class="flasher-pane-title">What role will this timer play?</h3>
             <span class="note flasher-step-count">Step 1 of 3</span>
           </div>
+          <p>One <strong>Hub</strong> plugs into this computer over USB-C and collects passes from up to 6 <strong>Spokes</strong> on the course.</p>
         </div>
 
         <div class="flasher-pictorial-grid" role="radiogroup" aria-label="Timer role">

@@ -2410,8 +2410,8 @@ body.is-gate-dragging * {
 .flasher-progress {
   display: flex;
   flex-direction: column;
-  gap: 9px;
-  padding: 12px 14px;
+  gap: 7px;
+  padding: 10px 14px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
   background: var(--surface);
@@ -2561,7 +2561,7 @@ body.is-gate-dragging * {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
-  padding: 13px 16px;
+  padding: 10px 14px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border-strong);
   background: var(--surface);
@@ -2599,7 +2599,7 @@ body.is-gate-dragging * {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  padding: 12px 15px;
+  padding: 10px 14px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface);
@@ -3018,7 +3018,8 @@ body.is-gate-dragging * {
 .flasher-wizard-body {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 13px;
+  min-height: 376px;
 }
 .flasher-wizard-intro {
   display: flex;
@@ -3312,6 +3313,8 @@ body.is-gate-dragging * {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+  margin-top: auto;
+  padding-top: 4px;
 }
 
 .flasher-banner.is-ok {
