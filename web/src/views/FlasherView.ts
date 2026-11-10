@@ -518,7 +518,7 @@ export class FlasherView extends Component {
         chip: s?.chip ? `${s.chip.model} ${s.chip.rev}` : "ESP32-C5",
         firmwareVersion: s?.fw || cfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
         role,
-        timerLabel: s?.label || cfg?.timerLabel || (role === "hub" ? "H1" : "S1"),
+        timerLabel: s?.label || cfg?.timerLabel || (role === "hub" ? "H1" : "T1"),
         fingerprint: s?.fp || cfg?.fingerprint || "",
         frequenciesMHz: s?.freqs?.length ? s.freqs : cfg?.frequenciesMHz?.length ? cfg.frequenciesMHz : RACEBAND,
         status: s ?? undefined,

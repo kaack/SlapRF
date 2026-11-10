@@ -41,8 +41,17 @@ func WindowFrameLenFor(samples int) int {
 // slotInfo is what the decoder learned about a Hub TDMA slot from its Hello frame.
 type slotInfo struct {
 	fingerprint uint32
+	label       string
 	timerID     uint8  // Stable app-side timer ID (engine)
 	intervalUs  uint64 // Sweep interval reported in this timer's Hello
+}
+
+type helloInfo struct {
+	fingerprint uint32
+	fpHex       string
+	isHub       bool
+	sweepHz     uint8
+	label       string
 }
 
 // HubFrameDecoder decodes binary Hub frames (2.4 GHz sliding-window recorder frames, Hellos)
@@ -60,6 +69,7 @@ type HubFrameDecoder struct {
 	outFn       func([]byte)
 	lastChanHex string
 	slots       map[uint8]slotInfo
+	lastHello   map[uint8]helloInfo
 	seenSeq     map[uint8]uint8  // timerID -> last ingested 8-bit sample seq_num
 	hasSeq      map[uint8]bool   // timerID -> true once at least one sample has been ingested
 	lastTs      map[uint8]uint64 // timerID -> last reconstructed sample TimestampUs
@@ -72,6 +82,7 @@ func NewHubFrameDecoder(engine *tracker.Engine) *HubFrameDecoder {
 	r := &HubFrameDecoder{
 		engine:      engine,
 		slots:       make(map[uint8]slotInfo),
+		lastHello:   make(map[uint8]helloInfo),
 		seenSeq:     make(map[uint8]uint8),
 		hasSeq:      make(map[uint8]bool),
 		lastTs:      make(map[uint8]uint64),
@@ -150,6 +161,20 @@ func (r *HubFrameDecoder) IngestPacket(raw []byte, nowUs uint64) int {
 		r.handleHello(raw)
 		return 0
 	}
+	if len(raw) >= 4 && raw[0] == FrameMagic0 && (raw[1] == FrameMagicWindow || raw[1] == FrameMagicSingle) && validCRC8(raw) {
+		slot := raw[2]
+		if slot >= 2 && r.engine != nil {
+			r.mu.Lock()
+			cur, hasSlot := r.slots[slot]
+			aliveInEngine := hasSlot && r.engine.HasDetectedTimer(cur.timerID)
+			hello, hasHello := r.lastHello[slot]
+			r.mu.Unlock()
+			if !aliveInEngine && hasHello {
+				r.engine.ClearDeletedSpokeFingerprint(hello.fpHex)
+				r.registerHello(slot, hello)
+			}
+		}
+	}
 	frames := r.DecodePacket(raw, nowUs)
 	for _, f := range frames {
 		r.engine.IngestTelemetryFrame(f)
@@ -167,11 +192,29 @@ func (r *HubFrameDecoder) handleHello(raw []byte) {
 	}
 	slot := raw[2]
 	fp := binary.LittleEndian.Uint32(raw[4:8])
-	if slot == 0 || fp == 0 {
+	// Ignore synthetic Hub placeholder HELLOs (0x53504B00 | slot, "S1".."S6"); wait for the Spoke's real JOIN.
+	if slot == 0 || fp == 0 || (fp&0xFFFFFF00) == 0x53504B00 {
 		return
 	}
+	label := cString(raw[10:34])
+	isHub := raw[3] == firmware.RoleHubTimer
+	fpHex := fmt.Sprintf("%08X", fp)
+	hello := helloInfo{
+		fingerprint: fp,
+		fpHex:       fpHex,
+		isHub:       isHub,
+		sweepHz:     raw[9],
+		label:       label,
+	}
+
 	r.mu.Lock()
-	if cur, ok := r.slots[slot]; ok && cur.fingerprint == fp && (r.engine == nil || r.engine.HasDetectedTimer(cur.timerID)) {
+	r.lastHello[slot] = hello
+	if !isHub && r.engine != nil && r.engine.IsDeletedSpokeFingerprint(fpHex) {
+		delete(r.slots, slot)
+		r.mu.Unlock()
+		return
+	}
+	if cur, ok := r.slots[slot]; ok && cur.fingerprint == fp && cur.label == label && (r.engine == nil || r.engine.HasDetectedTimer(cur.timerID)) {
 		r.mu.Unlock()
 		if r.engine != nil {
 			r.engine.MarkTimerSeen(cur.timerID) // Keeps the collector Hub (HELLO-only) online
@@ -180,17 +223,23 @@ func (r *HubFrameDecoder) handleHello(raw []byte) {
 	}
 	r.mu.Unlock()
 
-	label := cString(raw[10:34])
-	timerID, err := r.engine.RegisterTimerHello(fmt.Sprintf("%08X", fp), raw[3] == firmware.RoleHubTimer, label)
+	r.registerHello(slot, hello)
+}
+
+func (r *HubFrameDecoder) registerHello(slot uint8, hello helloInfo) {
+	if r.engine == nil {
+		return
+	}
+	timerID, err := r.engine.RegisterTimerHello(hello.fpHex, hello.isHub, hello.label)
 	if err != nil || timerID == 0 {
 		return
 	}
 	interval := SampleIntervalUs
-	if hz := raw[9]; hz > 0 {
+	if hz := hello.sweepHz; hz > 0 {
 		interval = 1_000_000 / uint64(hz)
 	}
 	r.mu.Lock()
-	r.slots[slot] = slotInfo{fingerprint: fp, timerID: timerID, intervalUs: interval}
+	r.slots[slot] = slotInfo{fingerprint: hello.fingerprint, label: hello.label, timerID: timerID, intervalUs: interval}
 	delete(r.hasSeq, timerID)
 	delete(r.lastTs, timerID)
 	delete(r.lastArrival, timerID)
@@ -200,14 +249,14 @@ func (r *HubFrameDecoder) handleHello(raw []byte) {
 }
 
 // resolveSlotLocked returns the stable timer ID and sweep interval for a Hub slot, or ok=false if
-// that slot hasn't sent a HELLO yet (unless the slot's timer ID was already provisioned).
+// that slot hasn't sent a HELLO yet (or its timer was deleted).
 func (r *HubFrameDecoder) resolveSlotLocked(slot uint8) (uint8, uint64, bool) {
 	if info, ok := r.slots[slot]; ok {
+		if r.engine != nil && !r.engine.HasDetectedTimer(info.timerID) {
+			delete(r.slots, slot)
+			return 0, 0, false
+		}
 		return info.timerID, info.intervalUs, true
-	}
-	if r.engine != nil && r.engine.HasDetectedTimer(slot) {
-		r.slots[slot] = slotInfo{timerID: slot, intervalUs: SampleIntervalUs}
-		return slot, SampleIntervalUs, true
 	}
 	return 0, 0, false
 }

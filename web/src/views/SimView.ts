@@ -584,7 +584,7 @@ export class SimView extends Component {
           const tiedTimer = timersById.get(assignedId);
           const powered = tiedTimer ? tiedTimer.poweredOn : false;
           const givenName = tiedTimer?.timerLabel?.trim() || node.timerLabel?.trim();
-          const shortCode = hasTimer ? (givenName ? givenName.slice(0, 2) : tiedTimer?.isHub ? "H1" : `S${Math.max(1, assignedId - 1)}`) : "—";
+          const shortCode = hasTimer ? (givenName ? givenName.slice(0, 2) : tiedTimer?.isHub ? "H1" : `T${Math.max(1, assignedId - 1)}`) : "—";
           const roleSub = hasTimer ? (tiedTimer?.isHub ? "HUB" : "SPK") : "EMPTY";
           const color = hasTimer ? timerColor(this.store, assignedId) : "#64748b";
 
@@ -1011,7 +1011,7 @@ export class SimView extends Component {
     // Matches `.slot-table.timer-table` / `.timer-table-row` from `TimersList.ts` in System
     const rows = timers
       .map((t: SimTimerState) => {
-        const title = t.timerLabel?.trim() ? t.timerLabel.trim().slice(0, 2) : t.isHub ? "H1" : `S${Math.max(1, t.timerId - 1)}`;
+        const title = t.timerLabel?.trim() ? t.timerLabel.trim().slice(0, 2) : t.isHub ? "H1" : `T${Math.max(1, t.timerId - 1)}`;
         const color = timerColor(this.store, t.timerId);
         const isLatestFw = t.firmwareVersion === LATEST_FIRMWARE_VERSION;
 

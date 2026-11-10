@@ -29,8 +29,9 @@ func (e *Engine) RegisterTimerHello(fingerprint string, isHub bool, label string
 		role = "hub"
 	}
 	return e.ProvisionGate(ProvisionRequest{
-		Role:        role,
-		Label:       label,
-		Fingerprint: fingerprint,
+		Role:         role,
+		Label:        label,
+		Fingerprint:  fingerprint,
+		FromHubHello: true,
 	})
 }

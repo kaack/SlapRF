@@ -186,7 +186,7 @@ export class TrackEditor extends Component {
     const d = list.find((t) => t.timerId === timerId);
     const given = d?.timerLabel?.trim() || fallbackLabel?.trim();
     if (given) return given.slice(0, 2);
-    return d?.isHub ? "H1" : `S${Math.max(1, timerId - 1)}`;
+    return d?.isHub ? "H1" : `T${Math.max(1, timerId - 1)}`;
   }
 
   private ensureSelectedNode(nodes: TrackNode[]): TrackNode | null {

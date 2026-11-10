@@ -110,22 +110,6 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 	if len(s.Pilots) > 0 {
 		e.pilots = append([]domain.PilotSlot(nil), s.Pilots...)
 	}
-	if s.Gates != nil {
-		e.gates = make([]domain.TrackGate, len(s.Gates))
-		now := time.Now()
-		for i, g := range s.Gates {
-			cp := g
-			if markTimersOnline && cp.AssignedTimerID > 0 {
-				cp.Online = true
-				cp.LastSeenAt = now
-			} else {
-				cp.Online = false
-				cp.LastSeenAt = time.Time{}
-			}
-			e.gates[i] = cp
-		}
-	}
-
 	e.detected = make(map[uint8]*domain.DetectedTimer, len(s.Timers))
 	now := time.Now()
 	for _, d := range s.Timers {
@@ -147,6 +131,32 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 			cp.LastSeenAt = time.Time{}
 		}
 		e.detected[cp.TimerID] = &cp
+	}
+
+	if s.Gates != nil {
+		e.gates = make([]domain.TrackGate, 0, len(s.Gates))
+		for _, g := range s.Gates {
+			cp := g
+			// In real hardware mode, drop gates whose assigned timer no longer exists in e.detected.
+			if !markTimersOnline && cp.AssignedTimerID > 0 {
+				if d, ok := e.detected[cp.AssignedTimerID]; !ok {
+					continue
+				} else if d.TimerLabel != "" {
+					cp.TimerLabel = d.TimerLabel
+				}
+			}
+			if markTimersOnline && cp.AssignedTimerID > 0 {
+				cp.Online = true
+				cp.LastSeenAt = now
+			} else {
+				cp.Online = false
+				cp.LastSeenAt = time.Time{}
+			}
+			e.gates = append(e.gates, cp)
+		}
+		ordered := e.orderedGatesLocked()
+		e.applyOrderLocked(ordered)
+		e.ensureStartGateLocked()
 	}
 
 	e.detectors = make(map[detKey]*dsp.ChannelDetector)

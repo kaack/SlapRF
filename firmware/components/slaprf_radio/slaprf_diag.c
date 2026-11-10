@@ -1143,7 +1143,7 @@ void slaprf_diag_note_spoke_frame(const uint8_t *frame, uint32_t len) {
     p->last_rx_us = esp_timer_get_time();
     p->frames++;
     if (p->label[0] == '\0') {
-        snprintf(p->label, sizeof(p->label), "S%u", (unsigned)(slot - 1));
+        snprintf(p->label, sizeof(p->label), "T%u", (unsigned)(slot - 1));
     }
     if (frame[1] == 0x59) { // FRAME_MAGIC_WINDOW
         const uint8_t sample_count = frame[3];

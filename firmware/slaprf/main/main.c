@@ -298,7 +298,7 @@ static void hub_handle_rx_frame(const uint8_t *buf, int n) {
             // announce a fallback HELLO so the laptop ingests its frames immediately,
             // until the Spoke's next periodic JOIN supplies its real fingerprint.
             char fallback_label[24] = {0};
-            fallback_label[0] = 'S';
+            fallback_label[0] = 'T';
             fallback_label[1] = (char)('0' + (slot - 1));
             const uint32_t fp = s_slot_fp[slot - 2] ? s_slot_fp[slot - 2] : (0x53504B00UL | slot);
             slaprf_diag_note_spoke(slot, fp, fallback_label);

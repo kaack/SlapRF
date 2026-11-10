@@ -135,7 +135,7 @@ export class BrowserHubBridge {
       const spoke = connected.find((c) => c.lastStatus?.role === 2 || c.lastConfig?.role === "spoke");
       if (spoke) {
         const first = spoke.lastStatus;
-        const spokeName = first?.label || spoke.lastConfig?.timerLabel || "S1";
+        const spokeName = first?.label || spoke.lastConfig?.timerLabel || "T1";
         return {
           color: "blue",
           shortLabel: connected.length > 1 ? `${joined}` : `${spokeName} · Spoke`,

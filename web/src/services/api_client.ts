@@ -109,6 +109,7 @@ export class ApiClient {
   }
 
   private bindUsbTimerSync(): void {
+    const lastKeyByConsole = new Map<TimerConsole, string>();
     const syncConsole = (c: TimerConsole, s: TimerStatus | null) => {
       const primary = usbPool.primaryConsole();
       if (!primary.connected || !primary.lastStatus) {
@@ -117,7 +118,7 @@ export class ApiClient {
         const ps = primary.lastStatus;
         const pcfg = primary.lastConfig;
         const pIsHub = ps.role === 1 || pcfg?.role === "hub";
-        const pLabel = (ps.label || pcfg?.timerLabel || (pIsHub ? "H1" : `S${Math.max(1, (ps.slot || 2) - 1)}`)).trim();
+        const pLabel = (ps.label || pcfg?.timerLabel || (pIsHub ? "H1" : "T1")).trim();
         const pFp = (ps.fp || pcfg?.fingerprint || "").trim().toUpperCase();
         const pTimerId = pIsHub ? 1 : Math.max(2, ps.slot || 2);
         this.store.setUsbDetectedTimer({
@@ -135,12 +136,21 @@ export class ApiClient {
         });
       }
 
-      if (!c.connected || !s) return;
+      if (!c.connected || !s) {
+        const prevKey = lastKeyByConsole.get(c);
+        if (prevKey) {
+          this.provisionedUsbKeys.delete(prevKey);
+          lastKeyByConsole.delete(c);
+        }
+        return;
+      }
       const cfg = c.lastConfig;
       const isHub = s.role === 1 || cfg?.role === "hub";
-      const label = (s.label || cfg?.timerLabel || (isHub ? "H1" : `S${Math.max(1, (s.slot || 2) - 1)}`)).trim();
+      const label = (s.label || cfg?.timerLabel || (isHub ? "H1" : "T1")).trim();
       const fp = (s.fp || cfg?.fingerprint || "").trim().toUpperCase();
+      if (!fp || fp.startsWith("53504B")) return;
       const provKey = `${this.simMode ? "sim" : "real"}:${isHub ? "hub" : "spoke"}:${label}:${fp}`;
+      lastKeyByConsole.set(c, provKey);
       if (!this.provisionedUsbKeys.has(provKey)) {
         this.provisionedUsbKeys.add(provKey);
         void this.provisionTimer(isHub ? "hub" : "spoke", label, fp).catch(() => undefined);
@@ -178,8 +188,9 @@ export class ApiClient {
         if (!s) continue;
         const cfg = c.lastConfig;
         const isHub = s.role === 1 || cfg?.role === "hub";
-        const label = (s.label || cfg?.timerLabel || (isHub ? "H1" : `S${Math.max(1, (s.slot || 2) - 1)}`)).trim();
+        const label = (s.label || cfg?.timerLabel || (isHub ? "H1" : "T1")).trim();
         const fp = (s.fp || cfg?.fingerprint || "").trim().toUpperCase();
+        if (!fp || fp.startsWith("53504B")) continue;
         await this.provisionTimer(isHub ? "hub" : "spoke", label, fp).catch(() => undefined);
       }
     }
@@ -461,11 +472,10 @@ export class ApiClient {
 
   public async deleteTimer(timerId: number, fingerprint?: string, timerLabel?: string): Promise<void> {
     forgetKnownHardwareTimer(fingerprint, timerLabel);
-    const cleanFp = (fingerprint || "").trim().toUpperCase();
-    const cleanLabel = (timerLabel || "").trim();
-    for (const k of [...this.provisionedUsbKeys]) {
-      if ((cleanFp && k.endsWith(`:${cleanFp}`)) || (cleanLabel && k.includes(`:${cleanLabel}:`))) {
-        this.provisionedUsbKeys.delete(k);
+    if (this.store.detectedTimers.some((d) => d.timerId === timerId)) {
+      const usb = usbPool.primaryConsole();
+      if (usb.lastStatus && fingerprint && usb.lastStatus.fp?.toUpperCase() === fingerprint.toUpperCase()) {
+        this.store.setUsbDetectedTimer(null);
       }
     }
     this.store.hydrate(

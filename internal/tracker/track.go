@@ -24,18 +24,18 @@ var (
 
 // ProvisionRequest describes a timer that was just flashed (or registered) by the flasher.
 type ProvisionRequest struct {
-	Role        string // "hub" or "spoke"
-	Label       string // Flashed timer name (e.g. "H1", "S3")
-	Fingerprint string // 8-hex-digit board fingerprint; empty = unknown
+	Role         string // "hub" or "spoke"
+	Label        string // Flashed timer name (e.g. "H1", "T1")
+	Fingerprint  string // 8-hex-digit board fingerprint; empty = unknown
+	FromHubHello bool   // True when announced over 2.4 GHz via Hub HELLO rather than direct USB provision
 }
 
 // ProvisionGate registers a newly flashed or discovered timer (hub or spoke):
 //   - A "hub" is a USB collector dongle: it gets a timer entry (ID 1) but is never placed on a
 //     gate automatically (see provisionCollectorHubLocked).
 //   - A known fingerprint updates that same physical timer in place, keeping its color and gate.
-//   - Otherwise a timer with the same label is updated (a replacement board takes over its gate).
-//   - Otherwise a "spoke" claims an existing unassigned/placeholder gate if one exists, or is
-//     registered in `e.detected` as an unassigned timer (without auto-creating a gate).
+//   - A newly discovered or flashed hardware timer (with a fingerprint) is always registered in
+//     `e.detected` as an unassigned timer (never auto-assigned to a gate).
 func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	role := req.Role
 	timerLabel := strings.TrimSpace(req.Label)
@@ -46,6 +46,24 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	ver := domain.LatestFirmwareVersion
 
 	e.mu.Lock()
+	if fingerprint != "" {
+		if !req.FromHubHello {
+			if e.deletedSpokeFp != nil {
+				delete(e.deletedSpokeFp, fingerprint)
+			}
+			if timerLabel != "" {
+				if e.usbLabels == nil {
+					e.usbLabels = make(map[string]string)
+				}
+				e.usbLabels[fingerprint] = timerLabel
+			}
+		} else if e.usbLabels != nil {
+			if usbLabel, ok := e.usbLabels[fingerprint]; ok && usbLabel != "" {
+				timerLabel = usbLabel
+			}
+		}
+	}
+
 	if role == "hub" {
 		id := e.provisionCollectorHubLocked(fingerprint, timerLabel, ver)
 		pilots := append([]domain.PilotSlot(nil), e.pilots...)
@@ -90,27 +108,24 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		}
 	}
 
-	// 1. If a gate already has this exact TimerLabel, update that one.
-	if timerLabel != "" {
-		for i := range e.gates {
-			if strings.EqualFold(strings.TrimSpace(e.gates[i].TimerLabel), timerLabel) {
-				targetIdx = i
-				break
+	// Legacy simulator fallback when no hardware fingerprint is provided:
+	if fingerprint == "" {
+		if timerLabel != "" {
+			for i := range e.gates {
+				if strings.EqualFold(strings.TrimSpace(e.gates[i].TimerLabel), timerLabel) {
+					targetIdx = i
+					break
+				}
 			}
 		}
-	}
-
-	// 2. Otherwise a spoke takes an existing gate only if that gate has no timer or is a
-	//    never-labelled placeholder gate on the course. If all existing gates already have a
-	//    timer (or there are no gates on the track), the new Spoke is registered in `e.detected`
-	//    as an unassigned timer so the user can drag it onto the track line where they want it.
-	if targetIdx < 0 {
-		ordered := e.orderedGatesLocked()
-		for _, og := range ordered {
-			canClaim := og.AssignedTimerID == 0 || (og.Role == domain.GateRoleSectorGate && strings.TrimSpace(og.TimerLabel) == "")
-			if canClaim && strings.TrimSpace(og.TimerLabel) == "" {
-				targetIdx = indexOfGate(e.gates, og.GateID)
-				break
+		if targetIdx < 0 {
+			ordered := e.orderedGatesLocked()
+			for _, og := range ordered {
+				canClaim := og.AssignedTimerID == 0 || (og.Role == domain.GateRoleSectorGate && strings.TrimSpace(og.TimerLabel) == "")
+				if canClaim && strings.TrimSpace(og.TimerLabel) == "" {
+					targetIdx = indexOfGate(e.gates, og.GateID)
+					break
+				}
 			}
 		}
 	}
@@ -126,6 +141,15 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		if assignedID == 0 {
 			e.mu.Unlock()
 			return 0, ErrInvalidTimerID
+		}
+		// Ensure no stale/orphaned gate holds this newly allocated timer ID.
+		for i := range e.gates {
+			if e.gates[i].AssignedTimerID == assignedID {
+				e.gates[i].AssignedTimerID = 0
+				e.gates[i].TimerLabel = ""
+				e.gates[i].Online = false
+				e.gates[i].LastSeenAt = time.Time{}
+			}
 		}
 	} else {
 		if e.gates[targetIdx].AssignedTimerID == 0 {
@@ -667,12 +691,44 @@ func (e *Engine) SetDetectedTimerOnline(timerID uint8, online bool) {
 	}
 }
 
+// IsDeletedSpokeFingerprint reports whether a Spoke fingerprint was explicitly deleted by the user.
+func (e *Engine) IsDeletedSpokeFingerprint(fingerprint string) bool {
+	fp := strings.ToUpper(strings.TrimSpace(fingerprint))
+	if fp == "" {
+		return false
+	}
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.deletedSpokeFp != nil && e.deletedSpokeFp[fp]
+}
+
+// ClearDeletedSpokeFingerprint clears the deleted marker once a Spoke transmits live telemetry frames.
+func (e *Engine) ClearDeletedSpokeFingerprint(fingerprint string) {
+	fp := strings.ToUpper(strings.TrimSpace(fingerprint))
+	if fp == "" {
+		return
+	}
+	e.mu.Lock()
+	if e.deletedSpokeFp != nil {
+		delete(e.deletedSpokeFp, fp)
+	}
+	e.mu.Unlock()
+}
+
 // DeleteDetectedTimer removes a timer from `e.detected` and deletes any gate assigned to it from the track.
 func (e *Engine) DeleteDetectedTimer(timerID uint8) error {
 	if timerID == 0 || timerID > maxTimers {
 		return ErrInvalidTimerID
 	}
 	e.mu.Lock()
+	if d, ok := e.detected[timerID]; ok {
+		if fp := strings.ToUpper(strings.TrimSpace(d.Fingerprint)); fp != "" && !d.IsHub {
+			if e.deletedSpokeFp == nil {
+				e.deletedSpokeFp = make(map[string]bool)
+			}
+			e.deletedSpokeFp[fp] = true
+		}
+	}
 	delete(e.detected, timerID)
 	kept := e.gates[:0]
 	for _, g := range e.gates {

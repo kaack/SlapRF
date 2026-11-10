@@ -246,13 +246,13 @@ export class NetworkView extends Component {
     if (this.store.simulatorRunning) return;
     for (const dt of this.store.detectedTimers) {
       const fp = (dt.fingerprint || "").toUpperCase();
-      if (fp && fp !== "00000001" && !fp.startsWith("SIM000")) {
+      if (fp && fp !== "00000001" && !fp.startsWith("SIM000") && !fp.startsWith("53504B")) {
         recordKnownHardwareTimer({
           fp,
           role: dt.isHub ? "hub" : "spoke",
           label: dt.timerLabel,
           fw: dt.firmwareVersion,
-          slot: dt.timerId >= 1 && dt.timerId <= 7 ? dt.timerId : undefined,
+          slot: dt.isHub ? 1 : undefined,
         });
       }
     }
@@ -547,8 +547,14 @@ export class NetworkView extends Component {
           }
           const msAgo = sp.msAgo !== undefined && sp.msAgo >= 0x80000000 ? 0 : sp.msAgo;
           const activelyReceiving = frames > 0 && (msAgo === undefined || msAgo < 2500);
-          const gate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === sp.slot);
+          const matchedDt = detectedTimers.find(
+            (t) =>
+              (!isFallbackFp && rawFp && (t.fingerprint || "").toUpperCase() === rawFp) ||
+              (!isFallbackFp && sp.label && (t.timerLabel || "").toUpperCase() === sp.label.toUpperCase())
+          );
+          const gate = matchedDt ? this.store.nodes.find((g) => g.assignedTimerId === matchedDt.timerId) : undefined;
           const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
+          const cleanSpLabel = isFallbackFp ? "" : sp.label;
           const sourceNote =
             frames === 0
               ? `Joined · 0 frames rx`
@@ -561,16 +567,16 @@ export class NetworkView extends Component {
             espNowActive: activelyReceiving,
             inHubStatus: true,
             viaUsb: false,
-            label: sp.label || known?.label || `S${sp.slot - 1}`,
+            label: cleanSpLabel || matchedDt?.timerLabel || known?.label || `T${sp.slot - 1}`,
             fp,
-            fw: sp.fw || known?.fw || s.fw,
+            fw: sp.fw || matchedDt?.firmwareVersion || known?.fw || s.fw,
             mac: sp.mac || known?.mac,
             frames,
             msAgo,
             seq: sp.seq,
             dbm: sp.dbm,
             ratePktPerSec,
-            serverFrames: gate?.framesRxCount ?? 0,
+            serverFrames: gate?.framesRxCount ?? matchedDt?.framesRxCount ?? 0,
             serverGateLabel: gateName,
             serverRssi: Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined,
             sourceNote,
@@ -588,7 +594,11 @@ export class NetworkView extends Component {
       const hasSlot = !s.emergencyMode && s.slot >= 2;
       const beaconFresh = beaconMsAgo === undefined || beaconMsAgo < 2500;
       const linked = hasSlot && beaconFresh;
-      const gate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === slotNum);
+      const sFp = (s.fp || "").toUpperCase();
+      const matchedDt = detectedTimers.find(
+        (t) => (sFp && (t.fingerprint || "").toUpperCase() === sFp) || (s.label && (t.timerLabel || "").toUpperCase() === s.label.toUpperCase())
+      );
+      const gate = matchedDt ? this.store.nodes.find((g) => g.assignedTimerId === matchedDt.timerId) : undefined;
       const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
       spokes.set(slotNum, {
         slot: slotNum,
@@ -596,15 +606,15 @@ export class NetworkView extends Component {
         espNowActive: linked,
         inHubStatus: linked,
         viaUsb: true,
-        label: s.label || `S${slotNum - 1}`,
+        label: s.label || matchedDt?.timerLabel || `T${slotNum - 1}`,
         fp: s.fp || "—",
         fw: s.fw || "—",
         mac: s.chip?.mac,
-        frames: gate?.framesRxCount ?? 0,
+        frames: gate?.framesRxCount ?? matchedDt?.framesRxCount ?? 0,
         beaconMsAgo,
         dbm: this.live?.dbm?.length === 8 ? this.live.dbm : undefined,
         ratePktPerSec: linked ? 25 : 0,
-        serverFrames: gate?.framesRxCount ?? 0,
+        serverFrames: gate?.framesRxCount ?? matchedDt?.framesRxCount ?? 0,
         serverGateLabel: gateName,
         serverRssi: Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined,
         sourceNote: s.emergencyMode
@@ -622,34 +632,49 @@ export class NetworkView extends Component {
     for (const dt of detectedTimers) {
       if (!dt.isHub && dt.timerId >= 2 && dt.timerId <= 7) {
         const fp = (dt.fingerprint || "").toUpperCase();
-        const gate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === dt.timerId);
+        const gate = this.store.nodes.find((g) => g.assignedTimerId === dt.timerId);
         const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
-        const serverFrames = gate?.framesRxCount ?? 0;
+        const serverFrames = gate?.framesRxCount ?? dt.framesRxCount ?? 0;
         const serverRssi = Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined;
-        if (spokes.has(dt.timerId)) {
-          const cur = spokes.get(dt.timerId)!;
-          cur.serverFrames = serverFrames;
-          cur.serverGateLabel = gateName;
-          cur.serverRssi = serverRssi;
-          if (fp && (cur.fp.startsWith("SLOT") || cur.fp.startsWith("53504B"))) {
-            cur.fp = fp;
+        const existingSlotEntry = [...spokes.values()].find(
+          (sp) => (fp && sp.fp.toUpperCase() === fp) || (dt.timerLabel && sp.label.toUpperCase() === dt.timerLabel.toUpperCase())
+        );
+        if (existingSlotEntry) {
+          existingSlotEntry.serverFrames = serverFrames;
+          existingSlotEntry.serverGateLabel = gateName;
+          existingSlotEntry.serverRssi = serverRssi;
+          if (fp && (existingSlotEntry.fp.startsWith("SLOT") || existingSlotEntry.fp.startsWith("53504B"))) {
+            existingSlotEntry.fp = fp;
           }
-          if (dt.timerLabel && cur.label === `S${dt.timerId - 1}`) {
-            cur.label = dt.timerLabel;
+          if (dt.timerLabel) {
+            existingSlotEntry.label = dt.timerLabel;
           }
           if (fp) usedFps.add(fp);
           continue;
         }
         if (fp && usedFps.has(fp)) continue;
         const known = fp ? knownTimers.find((k) => k.fp === fp) : undefined;
+        let targetSlot = known?.slot && known.slot >= 2 && known.slot <= 7 && !spokes.has(known.slot) ? known.slot : 0;
+        if (!targetSlot && !spokes.has(dt.timerId)) {
+          targetSlot = dt.timerId;
+        }
+        if (!targetSlot) {
+          for (let sl = 2; sl <= 7; sl++) {
+            if (!spokes.has(sl)) {
+              targetSlot = sl;
+              break;
+            }
+          }
+        }
+        if (targetSlot < 2 || targetSlot > 7) continue;
         const serverOnline = Boolean(dt.online && (serverFrames > 0 || this.store.simulatorRunning));
-        spokes.set(dt.timerId, {
-          slot: dt.timerId,
+        spokes.set(targetSlot, {
+          slot: targetSlot,
           populated: true,
           espNowActive: serverOnline,
           inHubStatus: serverOnline,
           viaUsb: false,
-          label: dt.timerLabel || known?.label || `S${dt.timerId - 1}`,
+          label: dt.timerLabel || known?.label || `T${targetSlot - 1}`,
           fp: fp || "—",
           fw: dt.firmwareVersion || known?.fw || hub.fw,
           mac: known?.mac,
@@ -687,7 +712,8 @@ export class NetworkView extends Component {
           }
         }
         if (targetSlot >= 2 && targetSlot <= 7) {
-          const gate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === targetSlot);
+          const matchedDt = detectedTimers.find((t) => (t.fingerprint || "").toUpperCase() === k.fp.toUpperCase());
+          const gate = matchedDt ? this.store.nodes.find((g) => g.assignedTimerId === matchedDt.timerId) : undefined;
           const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
           spokes.set(targetSlot, {
             slot: targetSlot,
@@ -695,7 +721,7 @@ export class NetworkView extends Component {
             espNowActive: false,
             inHubStatus: false,
             viaUsb: false,
-            label: k.label || `S${targetSlot - 1}`,
+            label: k.label || `T${targetSlot - 1}`,
             fp: k.fp,
             fw: k.fw || hub.fw,
             mac: k.mac,
@@ -720,7 +746,7 @@ export class NetworkView extends Component {
           espNowActive: false,
           inHubStatus: false,
           viaUsb: false,
-          label: `S${slotNum - 1}`,
+          label: `T${slotNum - 1}`,
           fp: "—",
           fw: "—",
           frames: 0,
@@ -846,10 +872,10 @@ export class NetworkView extends Component {
       const ownSpoke = spokes.get(s.slot >= 2 ? s.slot : 2);
       topLed = s.emergencyMode ? "is-emergency" : "is-spoke";
       topText = s.emergencyMode
-        ? `${esc(s.label || "S1")} · Spoke · Emergency mode active`
+        ? `${esc(s.label || "T1")} · Spoke · Emergency mode active`
         : ownSpoke?.espNowActive
-          ? `${esc(s.label || "S1")} · Spoke (Slot ${s.slot}) · Synced to Hub ${esc(hub.label)} on 2.4 GHz Ch ${hub.ch}`
-          : `${esc(s.label || "S1")} · Spoke · Searching for Hub sync beacon on 2.4 GHz…`;
+          ? `${esc(s.label || "T1")} · Spoke (Slot ${s.slot}) · Synced to Hub ${esc(hub.label)} on 2.4 GHz Ch ${hub.ch}`
+          : `${esc(s.label || "T1")} · Spoke · Searching for Hub sync beacon on 2.4 GHz…`;
     } else if (this.store.simulatorRunning) {
       topLed = "is-up";
       topText = `Simulator active · Hub ${esc(hub.label)} + ${activeCount} simulated Spoke${activeCount === 1 ? "" : "s"}`;
@@ -1135,7 +1161,7 @@ export class NetworkView extends Component {
         <div class="debug-status-topbar">
           <span class="debug-led-status">
             <span class="status-dot"></span>
-            <span class="debug-head-note"><strong>TDMA Slot ${selectedSlot}</strong> · Open child Spoke slot (${esc(sp?.label || `S${selectedSlot - 1}`)})</span>
+            <span class="debug-head-note"><strong>TDMA Slot ${selectedSlot}</strong> · Open child Spoke slot (${esc(sp?.label || `T${selectedSlot - 1}`)})</span>
           </span>
           <div class="debug-connect-actions">
             <span class="badge">Slot ${selectedSlot} · Open</span>

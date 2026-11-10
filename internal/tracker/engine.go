@@ -60,6 +60,8 @@ type Engine struct {
 	nextEventID    uint64
 	nextLapID      uint64
 	passingNumbers map[uint8]uint32 // per-gate passing counter
+	usbLabels      map[string]string
+	deletedSpokeFp map[string]bool
 	subscribers    []EventSubscriber
 }
 

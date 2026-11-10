@@ -215,7 +215,7 @@ export class TimersList extends Component {
     if (d.timerLabel && d.timerLabel.trim() !== "") {
       return d.timerLabel.trim().slice(0, 2);
     }
-    return d.isHub ? "H1" : `S${Math.max(1, d.timerId - 1)}`;
+    return d.isHub ? "H1" : `T${Math.max(1, d.timerId - 1)}`;
   }
 
   private formatLastSeen(lastSeenAt?: string): string {

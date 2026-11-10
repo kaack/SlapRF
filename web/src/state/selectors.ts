@@ -100,7 +100,7 @@ export function gateLabel(store: AppStore, gateId: number): string {
 
 /** The permanent hardware ID / name flashed onto a timer. */
 export function timerHardwareId(p: { timerId: number; timerLabel?: string; isHub?: boolean }): string {
-  return p.timerLabel?.trim() || (p.isHub ? "H1" : `S${Math.max(1, p.timerId - 1)}`);
+  return p.timerLabel?.trim() || (p.isHub ? "H1" : `T${Math.max(1, p.timerId - 1)}`);
 }
 
 /** Shown wherever timers are placed on gates (the Hub is a USB dongle that may also time a gate). */

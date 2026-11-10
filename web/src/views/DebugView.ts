@@ -3272,7 +3272,7 @@ export class DebugView extends Component {
             bySlot.set(sp.slot, {
               slot: sp.slot,
               fp,
-              label: sp.label || known?.label || `S${sp.slot - 1}`,
+              label: sp.label || known?.label || `T${sp.slot - 1}`,
               fw: sp.fw || known?.fw || s.fw,
               mac: sp.mac || known?.mac,
               online: activelyReceiving,
@@ -3305,7 +3305,7 @@ export class DebugView extends Component {
             if (fp && (cur.fp.startsWith("SLOT") || cur.fp.startsWith("53504B"))) {
               cur.fp = fp;
             }
-            if (dt.timerLabel && cur.label === `S${dt.timerId - 1}`) {
+            if (dt.timerLabel && cur.label === `T${dt.timerId - 1}`) {
               cur.label = dt.timerLabel;
             }
             if (fp) usedFps.add(fp);
@@ -3328,7 +3328,7 @@ export class DebugView extends Component {
           bySlot.set(dt.timerId, {
             slot: dt.timerId,
             fp: fp || "—",
-            label: dt.timerLabel || known?.label || `S${dt.timerId - 1}`,
+            label: dt.timerLabel || known?.label || `T${dt.timerId - 1}`,
             fw: dt.firmwareVersion || known?.fw || s.fw,
             mac: known?.mac,
             online: serverOnline,
@@ -3369,7 +3369,7 @@ export class DebugView extends Component {
           bySlot.set(targetSlot, {
             slot: targetSlot,
             fp: k.fp,
-            label: k.label || `S${targetSlot - 1}`,
+            label: k.label || `T${targetSlot - 1}`,
             fw: k.fw || s.fw,
             mac: k.mac,
             online: false,
@@ -3604,12 +3604,12 @@ export class DebugView extends Component {
 
     const ledClass = s.emergencyMode ? "is-emergency" : linked ? "is-up" : "is-warn";
     const topText = s.emergencyMode
-      ? `${esc(s.label || "S1")} · Spoke (Child) · Emergency mode active (2.4 GHz link paused)`
+      ? `${esc(s.label || "T1")} · Spoke (Child) · Emergency mode active (2.4 GHz link paused)`
       : linked
-        ? `${esc(s.label || "S1")} · Spoke (Child · TDMA Slot ${s.slot}) · Tied to Parent Hub ${esc(parentLabel)} (Slot 1) on 2.4 GHz Ch ${ch}${beaconMsAgo !== undefined ? ` · beacon ${beaconMsAgo} ms ago` : ""}`
+        ? `${esc(s.label || "T1")} · Spoke (Child · TDMA Slot ${s.slot}) · Tied to Parent Hub ${esc(parentLabel)} (Slot 1) on 2.4 GHz Ch ${ch}${beaconMsAgo !== undefined ? ` · beacon ${beaconMsAgo} ms ago` : ""}`
         : beaconStale
-          ? `${esc(s.label || "S1")} · Spoke (Slot ${s.slot}) · Hub sync beacon lost (${((beaconMsAgo ?? 0) / 1000).toFixed(1)}s ago) — out of phase or Hub offline`
-          : `${esc(s.label || "S1")} · Spoke (Child) · Searching for Parent Hub sync beacon on 2.4 GHz…`;
+          ? `${esc(s.label || "T1")} · Spoke (Slot ${s.slot}) · Hub sync beacon lost (${((beaconMsAgo ?? 0) / 1000).toFixed(1)}s ago) — out of phase or Hub offline`
+          : `${esc(s.label || "T1")} · Spoke (Child) · Searching for Parent Hub sync beacon on 2.4 GHz…`;
 
     this.slot("network").innerHTML = `
       <div class="debug-status-topbar">
@@ -3631,7 +3631,7 @@ export class DebugView extends Component {
           <div class="debug-net-node-banner is-spoke">
             <div class="debug-net-node-main">
               <span class="debug-net-role-tag is-spoke">SPOKE · CHILD</span>
-              <strong class="debug-net-node-name">${esc(s.label || "S1")}</strong>
+              <strong class="debug-net-node-name">${esc(s.label || "T1")}</strong>
             </div>
             <span class="badge mono">${esc(s.fp)}</span>
           </div>
@@ -3662,7 +3662,7 @@ export class DebugView extends Component {
         <div class="debug-net-bridge ${linked ? "is-linked" : "is-searching"}">
           <span class="badge ${linked ? "badge-good" : "badge-warn"}">ESP-NOW LR · 2.4 GHz Ch ${ch}</span>
           <div class="debug-net-bridge-track">
-            <span class="debug-net-bridge-end mono">${esc(s.label || "S1")} (${hasSlot ? `Slot ${s.slot}` : "Child"})</span>
+            <span class="debug-net-bridge-end mono">${esc(s.label || "T1")} (${hasSlot ? `Slot ${s.slot}` : "Child"})</span>
             <span class="debug-net-bridge-line"></span>
             <span class="debug-net-bridge-arrow">${icons.arrowRight(14)}</span>
             <span class="debug-net-bridge-end mono">${esc(parentLabel)} (Slot 1)</span>

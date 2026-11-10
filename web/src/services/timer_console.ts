@@ -60,7 +60,7 @@ export function getKnownHardwareTimers(): KnownHardwareTimer[] {
             if (item && typeof item === "object" && typeof (item as KnownHardwareTimer).fp === "string") {
               const t = item as KnownHardwareTimer;
               const fp = t.fp.toUpperCase();
-              if (fp && fp !== "00000001" && !fp.startsWith("SIM000")) {
+              if (fp && fp !== "00000001" && !fp.startsWith("SIM000") && !fp.startsWith("53504B")) {
                 const prev = map.get(fp);
                 map.set(fp, { ...prev, ...t, fp });
               }
@@ -77,7 +77,7 @@ export function getKnownHardwareTimers(): KnownHardwareTimer[] {
 
 export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { fp: string }): void {
   const fp = (entry.fp || "").trim().toUpperCase();
-  if (!fp || fp === "00000001" || fp.startsWith("SIM000")) return;
+  if (!fp || fp === "00000001" || fp.startsWith("SIM000") || fp.startsWith("53504B")) return;
   const list = getKnownHardwareTimers();
   const byFp = new Map<string, KnownHardwareTimer>(list.map((t) => [t.fp.toUpperCase(), t]));
   const prev = byFp.get(fp);
@@ -106,7 +106,7 @@ export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { 
   const merged: KnownHardwareTimer = {
     fp,
     role,
-    label: entry.label || prev?.label || (role === "hub" ? "H1" : "S1"),
+    label: entry.label || prev?.label || (role === "hub" ? "H1" : "T1"),
     fw: entry.fw || prev?.fw,
     mac: entry.mac || prev?.mac,
     slot,
@@ -471,7 +471,7 @@ export class TimerConsole {
     return {
       chip: s?.chip ? `${s.chip.model} (${s.chip.rev})` : cfg?.chip || "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
       role: cfg?.role ?? (s?.role === 1 ? "hub" : "spoke"),
-      timerLabel: s?.label || cfg?.timerLabel || (s?.role === 1 ? "H1" : "S1"),
+      timerLabel: s?.label || cfg?.timerLabel || (s?.role === 1 ? "H1" : "T1"),
       fingerprint: s?.fp || cfg?.fingerprint || "",
       firmwareVersion: s?.fw || cfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
       frequenciesMHz: s?.freqs?.length ? s.freqs : cfg?.frequenciesMHz || [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917],

@@ -220,38 +220,33 @@ export class AppStore {
   }
   /** Track nodes (gates) sorted by their position around the track. */
   public get nodes(): TrackNode[] {
-    if (!this._simulatorRunning && this._usbTimer) {
+    if (!this._simulatorRunning && this._usbTimer && this._usbTimer.fingerprint) {
       const usb = this._usbTimer;
       const matchedDet = this.detectedTimers.find(
-        (d) =>
-          (usb.fingerprint && d.fingerprint && d.fingerprint.toUpperCase() === usb.fingerprint.toUpperCase()) ||
-          (usb.timerLabel && d.timerLabel.toUpperCase() === usb.timerLabel.toUpperCase()) ||
-          d.timerId === usb.timerId
+        (d) => d.fingerprint && d.fingerprint.toUpperCase() === usb.fingerprint!.toUpperCase()
       );
-      const targetId = matchedDet?.timerId ?? usb.timerId;
-      return this._nodes.map((n) => {
-        const assigned = n.assignedTimerId ?? n.gateId;
-        if (assigned === targetId && n.online) {
-          return {
-            ...n,
-            noiseFloorDbm: usb.noiseFloorDbm,
-          };
-        }
-        return n;
-      });
+      if (matchedDet) {
+        return this._nodes.map((n) => {
+          const assigned = n.assignedTimerId ?? n.gateId;
+          if (assigned === matchedDet.timerId && n.online) {
+            return {
+              ...n,
+              noiseFloorDbm: usb.noiseFloorDbm,
+            };
+          }
+          return n;
+        });
+      }
     }
     return this._nodes;
   }
   /** Physical XIAO timers discovered via the USB Hub (ESP-NOW), flashed over USB, or currently plugged in via USB. */
   public get detectedTimers(): DetectedTimer[] {
-    if (!this._simulatorRunning && this._usbTimer) {
+    if (!this._simulatorRunning && this._usbTimer && this._usbTimer.fingerprint) {
       const usb = this._usbTimer;
       const list = this._detectedTimers.map((d) => ({ ...d }));
       const idx = list.findIndex(
-        (d) =>
-          (usb.fingerprint && d.fingerprint && d.fingerprint.toUpperCase() === usb.fingerprint.toUpperCase()) ||
-          (usb.timerLabel && d.timerLabel.toUpperCase() === usb.timerLabel.toUpperCase()) ||
-          d.timerId === usb.timerId
+        (d) => d.fingerprint && d.fingerprint.toUpperCase() === usb.fingerprint!.toUpperCase()
       );
       if (idx >= 0) {
         const existing = list[idx];
@@ -267,8 +262,6 @@ export class AppStore {
           online: existing.online,
           lastSeenAt: existing.lastSeenAt,
         };
-      } else {
-        list.push({ ...usb, online: false, lastSeenAt: "" });
       }
       return list;
     }
