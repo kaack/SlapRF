@@ -167,6 +167,16 @@
   width: 17px;
   height: 17px;
 }
+.btn-sm.btn-icon.btn-ghost {
+  background: var(--surface-2);
+  border-color: var(--border);
+  color: var(--text-2);
+}
+.btn-sm.btn-icon.btn-ghost:hover:not(:disabled) {
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+  color: var(--text);
+}
 .btn-primary {
   background: var(--accent);
   border-color: var(--accent);

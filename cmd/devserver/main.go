@@ -17,7 +17,6 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -143,9 +142,19 @@ func serveBytes(w http.ResponseWriter, contentType string, b []byte) {
 }
 
 func scanWebStamps(absWeb string) (cssStamp int64, tsStamp int64) {
-	if info, err := os.Stat(filepath.Join(absWeb, "styles.css")); err == nil {
-		cssStamp = info.ModTime().UnixNano()
-	}
+	_ = filepath.WalkDir(filepath.Join(absWeb, "styles"), func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if strings.HasSuffix(path, ".css") {
+			if info, err := d.Info(); err == nil {
+				if t := info.ModTime().UnixNano(); t > cssStamp {
+					cssStamp = t
+				}
+			}
+		}
+		return nil
+	})
 	_ = filepath.WalkDir(filepath.Join(absWeb, "src"), func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil

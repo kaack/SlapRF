@@ -29,8 +29,8 @@ export class AllPilotsPanel extends Component {
       <section class="card card-flush">
         <header class="card-head">
           <div class="settings-intro"><h2>Pilots</h2><p>Ranked by best lap · click a pilot to follow their current lap</p></div>
-          <button type="button" class="btn btn-sm btn-ghost" data-action="reset-laps" title="Clear session laps" aria-label="Clear session laps">
-            ${icons.reset(15)}<span>Reset laps</span>
+          <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="reset-laps" title="Clear session laps" aria-label="Clear session laps">
+            ${icons.trash(17)}
           </button>
         </header>
         <div data-slot="standings"></div>
@@ -75,6 +75,10 @@ export class AllPilotsPanel extends Component {
 
   private renderStats(): void {
     const s = this.store;
+    const resetBtn = this.el.querySelector<HTMLButtonElement>('[data-action="reset-laps"]');
+    if (resetBtn) {
+      resetBtn.disabled = s.laps.length === 0 && s.crossings.length === 0;
+    }
     const flying = s.enabledPilots.filter((p) => practiceStats(s, p).onTrack).length;
     const fastest = fastestLap(s);
     const online = s.nodes.filter((p) => p.online).length;

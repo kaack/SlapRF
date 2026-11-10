@@ -81,11 +81,11 @@ function installDevHotReload(hmr: SlaprfHMRState): void {
       const data = JSON.parse(ev.data) as { css?: number; ts?: number };
       if (typeof data.css === "number") {
         if (hmr.cssStamp !== undefined && hmr.cssStamp !== data.css) {
-          const link = document.querySelector<HTMLLinkElement>('link[rel="stylesheet"][href^="styles.css"]');
-          if (link) {
-            link.href = `styles.css?v=${data.css}`;
-            console.info("[HMR] Stylesheet hot-reloaded");
-          }
+          document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]').forEach((link) => {
+            const base = link.getAttribute("href")?.split("?")[0];
+            if (base) link.href = `${base}?v=${data.css}`;
+          });
+          console.info("[HMR] Stylesheets hot-reloaded");
         }
         hmr.cssStamp = data.css;
       }
