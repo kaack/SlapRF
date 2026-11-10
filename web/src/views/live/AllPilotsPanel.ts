@@ -41,10 +41,6 @@ export class AllPilotsPanel extends Component {
         <div data-slot="records"></div>
       </section>`;
 
-    this.adopt(new LiveStandings(this.slot("standings"), store, follow));
-    this.adopt(new LapTimesCard(this.slot("laptimes"), store));
-    this.adopt(new SectionRecords(this.slot("records"), store));
-
     this.listen(el, "click", (e) => {
       const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-action="reset-laps"]');
       if (!btn) return;
@@ -62,6 +58,10 @@ export class AllPilotsPanel extends Component {
         void this.api.resetSession();
       }
     });
+
+    this.adopt(new LiveStandings(this.slot("standings"), store, follow));
+    this.adopt(new LapTimesCard(this.slot("laptimes"), store));
+    this.adopt(new SectionRecords(this.slot("records"), store));
 
     this.onDispose(() => {
       if (this.resetFlashTimer !== null) {

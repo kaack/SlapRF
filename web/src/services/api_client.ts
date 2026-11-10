@@ -223,6 +223,7 @@ export class ApiClient {
 
   public async resetSession(): Promise<void> {
     this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/session/reset"));
+    await enginePersistence.reconcileNow().catch(() => undefined);
   }
 
   public async resetPilotsToDefault(): Promise<void> {
