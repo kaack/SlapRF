@@ -2872,10 +2872,10 @@ body.is-gate-dragging * {
   align-items: center;
   gap: 8px;
   height: 30px;
-  padding: 0 10px 0 6px;
+  padding: 0 11px 0 6px;
   border-radius: 999px;
-  border: 1px solid transparent;
-  background: transparent;
+  border: 1px solid var(--border);
+  background: var(--surface-2);
   color: var(--text-3);
   font: inherit;
   font-size: 12px;
@@ -2888,8 +2888,11 @@ body.is-gate-dragging * {
 .flasher-step-pill:hover:not(:disabled) {
   color: var(--text);
   background: var(--surface-3);
+  border-color: var(--border-strong);
 }
 .flasher-step-pill.is-current {
+  background: var(--surface-2);
+  border-color: #6b7280;
   color: var(--text);
 }
 .flasher-step-pill.is-done {
