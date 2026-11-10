@@ -1,6 +1,6 @@
 # SlapRF
 
-[![SlapRF](docs/slaprf-hero.png)](https://kaack.github.io/SlapRF/)
+[![SlapRF](docs/slaprf-hero.png)](https://slaprf.app)
 
 SlapRF is a multi-gate 5.8 GHz sector timing system for FPV drone racing.
 
@@ -12,7 +12,7 @@ A standard lap timer measures only total lap time at the start gate. SlapRF plac
 
 Try SlapRF right in your browser—no hardware or installation required:
 
-👉 **[Launch the Live Demo (`kaack.github.io/SlapRF`)](https://kaack.github.io/SlapRF/)**
+👉 **[Launch the Live Demo (`slaprf.app`)](https://slaprf.app)**
 
 The live demo runs a built-in 4-gate, 4-pilot track simulator so you can explore live lap & section timing (`S1`–`S4`), per-pilot bottleneck analytics, 5.8 GHz gate signal traces, spoken lap callouts, and the USB firmware flasher directly in the browser.
 
@@ -54,7 +54,7 @@ flowchart LR
     UI -. "Optional Start Gate Passings (via LiveTime relay)" .-> LiveTime
 ```
 
-You flash and configure the timers directly from Chrome, Edge, or Brave over USB-C (even from the [web app](https://kaack.github.io/SlapRF/) with no software installed). No compiler, driver installation, or command-line tool is required.
+You flash and configure the timers directly from Chrome, Edge, or Brave over USB-C (even from the [web app](https://slaprf.app) with no software installed). No compiler, driver installation, or command-line tool is required.
 
 ## Parts List and Cost
 
@@ -85,13 +85,13 @@ flowchart LR
 
 1. Attach the included U.FL antenna to the antenna connector on the XIAO ESP32-C5.
 2. Connect the XIAO ESP32-C5 to your laptop with a USB-C cable.
-3. Open **Settings > Flasher** in the SlapRF web interface. Flash one timer as **Hub** and the remaining timers as **Spoke**.
-4. At the field, connect each XIAO ESP32-C5 to a LIPO to USB-C Adapter and a LiPo battery. Place one timer at each gate.
-5. Open **Settings > Track** and drag each timer (`T1`, `T2`, `T3`, `T4`) onto the track line in the order pilots fly the course. Click the checkered flag icon below a gate to set the start gate.
+3. Open **Flasher** in the SlapRF web interface. Flash one timer as **Hub** and the remaining timers as **Spoke**.
+4. At the field, connect each Spoke timer to a LIPO to USB-C Adapter and a LiPo battery, and place one timer at each gate. Plug the Hub timer into your laptop over USB-C.
+5. Open **Track** and drag each timer onto the track line in the order pilots fly the course. Click the checkered flag icon below a gate to set the start gate.
 
 ## Run
 
-Open **[slaprf.app](https://slaprf.app)** in Chrome, Edge, or Brave. There is nothing to download or install: the whole timing engine runs in the browser (WebAssembly), and the Hub timer plugs into your laptop over USB-C (WebSerial). The same page flashes timers from **Settings > Flasher**.
+Open **[slaprf.app](https://slaprf.app)** in Chrome, Edge, or Brave. There is nothing to download or install: the whole timing engine runs in the browser (WebAssembly), and the Hub timer plugs into your laptop over USB-C (WebSerial). The same app flashes timers from the **Flasher** page and troubleshoots timers over USB from the **Debug** page.
 
 Developers can run the app locally with `go run ./cmd/devserver` (dev-only server on `http://localhost:8090`); see [docs/DEVELOPER.md](docs/DEVELOPER.md).
 
@@ -101,7 +101,7 @@ Browsers can't accept TCP connections, so MultiGP LiveTime reaches SlapRF throug
 
 1. Download the relay for your OS from the [latest release](https://github.com/kaack/SlapRF/releases/latest): `slaprf-relay-windows-amd64.exe`, `slaprf-relay-macos-arm64`, `slaprf-relay-macos-amd64`, `slaprf-relay-linux-amd64` or `slaprf-relay-linux-arm64` (on macOS/Linux run `chmod +x` on it first).
 2. Run it on the computer that has SlapRF open, and leave its window open.
-3. In SlapRF, open **Settings > MultiGP LiveTime** and turn it on. Chrome may ask to allow access to devices on your local network: choose **Allow**.
+3. In SlapRF, open **Setup > MultiGP LiveTime** and turn it on. Chrome may ask to allow access to devices on your local network: choose **Allow**.
 4. In LiveTime, add an **ImmersionRC LapRF (8-way)** timing device at the relay computer's IP address, port `5403` (`127.0.0.1` if LiveTime runs on the same computer). Allow the firewall prompt if LiveTime is on another PC.
 
 The relay accepts one LiveTime connection and one SlapRF tab at a time (a new one replaces the old). It only accepts browser connections from `https://slaprf.app` and `localhost`; add others with `-allow-origin`. Run `slaprf-relay -h` for all options.

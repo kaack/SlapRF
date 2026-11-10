@@ -73,10 +73,7 @@ flowchart TB
 
 ## 3. XIAO ESP32-C5 5.8 GHz SDR & Time-Division Radio Schedule
 
-Each Seeed Studio XIAO ESP32-C5 is designed to use its 5 GHz wideband receiver path to measure in-band power across the 8 configured pilot frequencies (`slot_freqs_mhz[0..7]`, defaulting to Raceband `5658`, `5695`, `5732`, `5769`, `5806`, `5843`, `5880`, `5917` MHz). There is one firmware: a single ESP-IDF project ([`firmware/slaprf/`](../firmware/slaprf/), see [`firmware/README.md`](../firmware/README.md)) with one tuned configuration in [`main/main.c`](../firmware/slaprf/main/main.c), built on the [`firmware/components/slaprf_radio/`](../firmware/components/slaprf_radio/) hardware component. Every timer, Hub or Spoke, runs the same compiled image.
-
-> [!NOTE]
-> 5.8 GHz sensing is currently a **placeholder**: [`slaprf_rf58.c`](../firmware/components/slaprf_radio/slaprf_rf58.c) returns the noise floor so the rest of the pipeline can be tested end to end. It is pending a port of the raw-IQ approach (the C5's undocumented baseband debug path) used by ESPARGOS **esp-sdr** and **FPVGateC5MK**: retune the LO to each pilot frequency, capture a short I/Q burst, and compute band power.
+Each Seeed Studio XIAO ESP32-C5 uses its 5 GHz wideband receiver path ([`slaprf_rf58.c`](../firmware/components/slaprf_radio/slaprf_rf58.c)) to measure in-band power across the 8 configured pilot frequencies (`slot_freqs_mhz[0..7]`, defaulting to Raceband `5658`, `5695`, `5732`, `5769`, `5806`, `5843`, `5880`, `5917` MHz). There is one firmware: a single ESP-IDF project ([`firmware/slaprf/`](../firmware/slaprf/), see [`firmware/README.md`](../firmware/README.md)) with one tuned configuration in [`main/main.c`](../firmware/slaprf/main/main.c), built on the [`firmware/components/slaprf_radio/`](../firmware/components/slaprf_radio/) hardware component. Every timer, Hub or Spoke, runs the same compiled image.
 
 ### Why Time-Division Multiplexing Is Required
 
@@ -193,12 +190,10 @@ The firmware's `main.c` embeds `slaprf_flash_config_t`. [`internal/firmware/imag
 | `0..7` | `8 B` | `char[8]` | `magic` | `"SLAPRF02"` (`53 4C 41 50 52 46 30 32`) |
 | `8..10` | `3 B` | `uint8[3]` | `version` | Firmware build version (major, minor, patch) |
 | `11` | `1 B` | `uint8` | `role` | `1` = Hub Timer (`ROLE_HUB_TIMER`), `2` = Spoke Timer (`ROLE_SPOKE_TIMER`) |
-| `12` | `1 B` | `uint8` | `reserved0` | Reserved (written `0`, ignored on read) |
-| `13` | `1 B` | `uint8` | `wifi_mode` | Hub only: `0` = Host `"SlapRF"` AP, `1` = Join `wifi_ssid` |
+| `12..13` | `2 B` | `uint8[2]` | `reserved0` | Reserved (written `0`, ignored on read) |
 | `14..17` | `4 B` | `uint32 LE` | `fingerprint` | Random per-board identity stamped at flash time (never `0`) |
 | `18..33` | `16 B` | `uint16 LE[8]` | `slot_freqs_mhz` | 8 pilot 5.8 GHz frequencies in MHz (`5600..5950`, else Raceband default) |
-| `34..66` | `33 B` | `char[33]` | `wifi_ssid` | Null-terminated Wi-Fi SSID (Hub Timer only) |
-| `67..106` | `40 B` | `char[40]` | `wifi_pass` | Null-terminated Wi-Fi password (Hub Timer only) |
+| `34..106` | `73 B` | `uint8[73]` | `reserved1` | Reserved (zero) |
 | `107..130` | `24 B` | `char[24]` | `timer_label` | Null-padded timer name (e.g., `"H1"`, `"S3"`) |
 | `131..158` | `28 B` | `uint8[28]` | `reserved` | Zero |
 | `159` | `1 B` | `uint8` | `crc8` | XOR checksum over bytes `[0..158]` |
@@ -285,7 +280,7 @@ Implemented in [`web/src/services/esp_flasher.ts`](../web/src/services/esp_flash
    - There is one firmware image and nothing to choose: every timer, Hub or Spoke, is flashed with `slaprf-xiao-c5.bin`, built from [`firmware/slaprf/`](../firmware/slaprf/).
    - CI ([`.github/workflows/firmware.yml`](../.github/workflows/firmware.yml)) or [`firmware/tools/build_local.ps1`](../firmware/tools/build_local.ps1) compiles it into a merged flash image at `web/firmware/slaprf-xiao-c5.bin` (committed). `cmd/build-web` copies it to `_site/firmware/` (or writes a placeholder image if it hasn't been built, see [`web/firmware/README.md`](../web/firmware/README.md)), and the service worker precaches it.
 2. **Client-Side `SLAPRF02` Patching of the Compiled Image**:
-   - When the user clicks **Flash to USB** or **Download .bin**, the browser fetches `FIRMWARE_IMAGE_URL` (`./firmware/slaprf-xiao-c5.bin`), locates the 160-byte `SLAPRF02` block, and stamps `role`, `fingerprint`, `timer_label`, `wifi_ssid`, `wifi_pass`, and the active 8-channel `slot_freqs_mhz` (see [§5.2](#52-160-byte-slaprf02-flash-configuration-block)).
+   - When the user clicks **Flash to USB** or **Download .bin**, the browser fetches `FIRMWARE_IMAGE_URL` (`./firmware/slaprf-xiao-c5.bin`), locates the 160-byte `SLAPRF02` block, and stamps `role`, `fingerprint`, `timer_label`, and the active 8-channel `slot_freqs_mhz` (see [§5.2](#52-160-byte-slaprf02-flash-configuration-block)).
    - It then repairs the ESP-IDF app image (at `0x10000` in a merged image, or `0x0` for a bare app): the segment XOR checksum (`seed 0xEF`) and, if enabled, the appended SHA-256 digest.
 3. **Board Fingerprints (Keep / New)**:
    - Every board carries a random, non-zero 32-bit fingerprint that the laptop uses as its stable timer identity (Spokes have no fixed slot; the Hub assigns one at join time).
@@ -293,9 +288,9 @@ Implemented in [`web/src/services/esp_flasher.ts`](../web/src/services/esp_flash
 4. **WebSerial Espressif ROM Bootloader Protocol (`navigator.serial`)**:
    - Toggles USB-JTAG `DTR` / `RTS` lines to reset the XIAO ESP32-C5 (`VID 0x303A`) into ROM Download Mode.
    - Exchanges SLIP-framed (`0xC0 ... 0xC0`) ROM bootloader commands: `ESP_SYNC (0x08)`, `ESP_SPI_ATTACH (0x0D)`, `ESP_FLASH_BEGIN (0x02)`, 1 KB `ESP_FLASH_DATA (0x03)` blocks written from flash offset `0x0`, and `ESP_FLASH_END (0x04)`, then hard-resets the board into the new firmware.
-5. **Build Detection**:
-   - **Over USB (`Read timer from USB`)**: Reads the `SLAPRF02` block from the connected XIAO ESP32-C5 and shows its role, fingerprint, and build version, flagging when an update to the current build is available.
-   - **In Setup → Timers (`TimersList.ts`)**: Displays each discovered timer's firmware build alongside a **`Latest`** or **`Update → <current build>`** badge.
+5. **Build Detection & USB Console (`TimerConsole`)**:
+   - **Over USB**: `web/src/services/timer_console.ts` maintains the main USB connection (`usbPool.mainConsole`, Slot 0) shared across the TopBar, Network, Flasher, and Debug views, plus a secondary Debug-only slot (Slot 1) when inspecting another USB timer in the **Debug** (`#/debug`) view while keeping the Hub connected.
+   - **In Network (`#/network`) & Flasher (`#/flasher`)**: Displays each discovered timer's role, fingerprint, and firmware build alongside an update indicator when a newer firmware image is bundled.
 
 ---
 

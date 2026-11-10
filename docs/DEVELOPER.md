@@ -12,7 +12,7 @@ For deep technical details on the 5.8 GHz / 2.4 GHz radio schedule, binary wire 
 2. [Repository Layout](#2-repository-layout)
 3. [Quick-Start Scripts](#3-quick-start-scripts)
 4. [Day-to-Day Development Workflows](#4-day-to-day-development-workflows)
-5. [Compiling Standalone Binaries & Static GitHub Pages Build](#5-compiling-standalone-binaries--static-github-pages-build)
+5. [Static Site Build (`https://slaprf.app`)](#5-static-site-build-httpsslaprfapp)
 6. [Running the Test Suite](#6-running-the-test-suite)
 7. [Hardware Firmware Development (`XIAO ESP32-C5`)](#7-hardware-firmware-development-xiao-esp32-c5)
 8. [Common Gotchas & Tips](#8-common-gotchas--tips)
@@ -27,7 +27,7 @@ SlapRF is designed with a **zero-Node.js, single-toolchain** build architecture:
   - `cmd/build-web` and `cmd/devserver` use the pure-Go [`esbuild`](https://github.com/evanw/esbuild) library (`internal/devbundle`), which compiles and bundles `web/src/**/*.ts` into `dist/app.js` in memory in ~15 ms.
   - You do **not** need `node`, `npm`, `pnpm`, `webpack`, or `vite` installed to edit TypeScript, CSS, or Go code.
 - **Required for Browser USB Flashing**: **Chrome, Edge, or Brave** (desktop) for WebSerial API support (`navigator.serial`).
-- **Optional (Firmware C Source Only)**: **Espressif ESP-IDF v5.5.1** (`idf.py` with `esp32c5` target support) — only needed to build the `firmware/slaprf/` image locally; otherwise CI (`.github/workflows/firmware.yml`) builds it. Per-board settings (role, timer name, fingerprint, Wi-Fi credentials, 5.8 GHz channels) are binary-patched at flash time into the `SLAPRF02` config block without recompiling C code.
+- **Optional (Firmware C Source Only)**: **Espressif ESP-IDF v5.5.1** (`idf.py` with `esp32c5` target support) — only needed to build the `firmware/slaprf/` image locally; otherwise CI (`.github/workflows/firmware.yml`) builds it. Per-board settings (role, timer name, fingerprint, 5.8 GHz channels) are binary-patched at flash time into the `SLAPRF02` config block without recompiling C code.
 
 ### Verify Your Environment
 
@@ -73,11 +73,11 @@ SlapRF/
 │   └── src/             # TypeScript SPA source
 │       ├── core/        # Hash router, WakeLock manager, custom select & table scroll helpers
 │       ├── layout/      # AppShell, Sidebar, TopBar
-│       ├── services/    # ApiClient, WasmSimTransport, BrowserHubBridge, Announcer, PiperNeuralTts, EspFlasher
+│       ├── services/    # ApiClient, WasmSimTransport, BrowserHubBridge, TimerConsole, EnginePersistence, Announcer, EspFlasher
 │       ├── state/       # Reactive AppStore
 │       ├── types/       # TypeScript interfaces matching internal/domain JSON payloads
-│       ├── views/       # Practice (LiveView), Analytics (PilotView), Simulator (SimView), Settings (SetupView)
-│       └── widgets/     # Oscilloscope chart, lap/section charts, track editor, timing rules, flasher modal
+│       ├── views/       # Practice (LiveView), Analytics (PilotView), Track, Pilots, Network, Flasher, Debug, Simulator, Setup
+│       └── widgets/     # Oscilloscope chart, lap/section charts, track editor, timing rules, USB connection bar, flasher
 ├── firmware/
 │   ├── README.md        # Firmware design overview, build steps & shared wire protocol
 │   ├── slaprf/          # The ESP-IDF project (main/main.c, CMakeLists.txt, sdkconfig.defaults)
@@ -149,9 +149,9 @@ Both Simulation Mode and Real Hardware Mode run the Go engine compiled to WebAss
 
 LiveTime speaks the ImmersionRC LapRF protocol over TCP `:5403`. The protocol is implemented in [`internal/laprf`](../internal/laprf/server.go) and runs **inside the WASM engine**: `laprf.Server.ServeConn` serves one session over any `net.Conn`, and [`cmd/slaprf-wasm/livetime.go`](../cmd/slaprf-wasm/livetime.go) bridges a `net.Pipe` to JS (`slaprfWasm.liveTimeOpen / liveTimeData / liveTimeClose / onLiveTimeOut`). [`cmd/slaprf-relay`](../cmd/slaprf-relay/main.go) is a separate, protocol-agnostic binary that copies bytes between LiveTime's TCP socket and a loopback WebSocket that [`web/src/services/livetime_relay.ts`](../web/src/services/livetime_relay.ts) connects to.
 
-`	ext
+```text
 LiveTime --TCP :5403--> slaprf-relay --ws://127.0.0.1:5404 (binary = raw LapRF, text = JSON events)--> tab --net.Pipe--> laprf.ServeConn
-`
+```
 
 To try it locally: `go run ./cmd/slaprf-relay` next to the dev server, enable LiveTime in **Settings**, and point LiveTime (or any LapRF client) at `127.0.0.1:5403`. The relay accepts WebSocket upgrades only from `https://slaprf.app` and `http(s)://localhost|127.0.0.1:<any port>` (extend with `-allow-origin`). `go test ./cmd/slaprf-relay` includes an end-to-end test that runs the LapRF emulator behind the relay. Release builds for Windows/macOS/Linux are attached to each GitHub release by [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
@@ -213,14 +213,11 @@ There is **one firmware** for the Seeed Studio XIAO ESP32-C5: the ESP-IDF projec
 - The Hub is a USB collector dongle: it forwards frames to the laptop over USB serial. When placed on a gate (`HUBGATE 1`), it also sweeps and sends its own window after every sweep.
 - [`internal/firmware/firmware.go`](../internal/firmware/firmware.go) mirrors the firmware on the Go side (`ImageName`, `SweepHz = 100`, `MaxWindowSamples = 6`); `go test -ldflags="-s -w" ./internal/firmware/` checks that `main.c` still matches it.
 
-> [!NOTE]
-> 5.8 GHz band-power measurement ([`slaprf_rf58.c`](../firmware/components/slaprf_radio/slaprf_rf58.c)) is currently a **placeholder** that returns the noise floor; see its header comment for the planned raw-IQ debug-path approach.
-
 ### How Binary Patching Works (`SLAPRF02`)
 
 Hub and Spoke timers run the **same compiled image**. `main.c` embeds a 160-byte `slaprf_flash_config_t` struct starting with the magic `SLAPRF02` (layout in [`docs/ARCHITECTURE.md` §5.2](ARCHITECTURE.md)):
 
-- When a user flashes or downloads a timer image, the browser patcher ([`web/src/services/esp_flasher.ts`](../web/src/services/esp_flasher.ts)) locates the `SLAPRF02` block, writes the role, board fingerprint, 8 pilot frequencies, Hub Wi-Fi credentials, and timer name (byte 12 is reserved and written `0`), and updates the block's XOR crc8.
+- When a user flashes or downloads a timer image, the browser patcher ([`web/src/services/esp_flasher.ts`](../web/src/services/esp_flasher.ts)) locates the `SLAPRF02` block, writes the role, board fingerprint, 8 pilot frequencies, and timer name (reserved bytes are written `0`), and updates the block's XOR crc8.
 - It then repairs the ESP-IDF app image so the bootloader accepts it: the segment XOR checksum (seed `0xEF`) and, if enabled, the appended SHA-256. This works on bare app images and on merged flash images (app at `0x10000`) produced by `esptool merge_bin`.
 - Every board gets a random, non-zero 32-bit **fingerprint** at flash time. When reflashing, the flasher can **keep** the board's existing fingerprint (read over USB with `SLAPRF?`) or mint a **new** one.
 

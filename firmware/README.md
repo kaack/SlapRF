@@ -45,20 +45,21 @@ Both CI and `tools/check_image.sh` check that static code and data end below the
 
 Without a compiled image, the flasher falls back to a placeholder image. It flashes, but it doesn't run anything.
 
-**Per-board settings are patched, not compiled.** The flasher (Go `internal/firmware.PatchImage` or browser `esp_flasher.ts`) finds the `SLAPRF02` block in the compiled image and writes role, fingerprint, channel table, Hub Wi-Fi and timer name into it. It then recomputes the ESP-IDF segment checksum and the appended SHA-256 so the bootloader still accepts the image.
+**Per-board settings are patched, not compiled.** The flasher (Go `internal/firmware.PatchImage` or browser `esp_flasher.ts`) finds the `SLAPRF02` block in the compiled image and writes role, fingerprint, channel table, and timer name into it. It then recomputes the ESP-IDF segment checksum and the appended SHA-256 so the bootloader still accepts the image.
 
 ## Wire protocol (keep in sync with the Go and TypeScript sides)
 
-- `SLAPRF02` 160-byte config block: layout in `internal/firmware/image.go` and `web/src/services/esp_flasher.ts`. Byte 12 is reserved (written 0, ignored).
-- ESP-NOW frames: window `0xC5 0x59` (up to 6 sweeps), Hello `0xC5 0x5A`, Join `0x5B`, Assign `0x5C`, Hub beacon `0x5D` (inside `slaprf_radio`). The reserved byte in Join/Hello (where older builds carried a design code) is 0. Laptop side in `internal/ingest/hub_frames.go`.
-- USB: the running firmware answers `SLAPRF?\n` with its raw config block, so the flasher can keep a board's fingerprint when reflashing.
-## 5.8 GHz sensing on the C5 (status: implemented, not yet bench-tested)
+- `SLAPRF02` 160-byte config block: layout in `internal/firmware/image.go` and `web/src/services/esp_flasher.ts`.
+- ESP-NOW frames: window `0xC5 0x59` (up to 6 sweeps), Hello `0xC5 0x5A`, Join `0x5B`, Assign `0x5C`, Hub beacon `0x5D` (inside `slaprf_radio`). Laptop side in `internal/ingest/hub_frames.go`.
+- USB: the running firmware answers `SLAPRF?\n` with its raw config block (so the flasher can keep a board's fingerprint when reflashing) and provides an interactive line-based diagnostic console (`STATUS?`, `LIVE 1/2/0`, `SCAN`, `SCAN LIVE`, `SCAN STOP`, `CHANNELS`, `CHANNELS MASK`, `CHANNELS RESET`, `RF 1/0`, `EMERGENCY 1/0`, `HUBGATE 1/0`, `LINKRATE`, `TXPOWER`, `LINKRESET`, `LOG 1/0`, `BOOTLOG?`, `LASTLOG?`, `REBOOT`, `HELP`) used by the WebApp's Network and Debug pages.
 
-[`components/slaprf_radio/slaprf_rf58.c`](components/slaprf_radio/slaprf_rf58.c) implements the capture-engine method below. It compiles, links, and passes the SRAM-layout check, but it hasn't run on a board yet. The values to bench-verify are marked in the source: `DBM_OFFSET` calibration, the gain index, and the 2.4 GHz return path in `slaprf_rf58_leave()`.
+## 5.8 GHz sensing on the C5
 
-**Time-slicing (design choice (a): one C5 per timer).** All timers share one beacon-anchored TDMA schedule, so every radio leaves 2.4 GHz for a sweep at the same moment, with the transmitter path forced off (`phy_pbus_xpd_tx_off`). Every radio then comes back for the gap, in which the Hub beacons, Spokes send in their slots, and the Hub forwards to the laptop. Sweeps start exactly one interval apart, so sample timestamps stay uniform. The schedule is described at the top of `slaprf/main/main.c`, and a compile-time assert guarantees enough slots for 6 Spokes.
+[`components/slaprf_radio/slaprf_rf58.c`](components/slaprf_radio/slaprf_rf58.c) implements the capture-engine method below:
 
-What the reference projects actually do. This is from their source and docs, not from search summaries. The key reference is [FPVGateC5MK `docs/RADIO_INTERNALS.md`](https://github.com/LouisHitchcock/FPVGateC5MK/blob/main/docs/RADIO_INTERNALS.md), measured on chip v1.0:
+**Time-slicing (one C5 per timer).** All timers share one beacon-anchored TDMA schedule, so every radio leaves 2.4 GHz for a sweep at the same moment, with the transmitter path forced off (`phy_pbus_xpd_tx_off`). Every radio then comes back for the gap, in which the Hub beacons, Spokes send in their slots, and the Hub forwards to the laptop over USB serial. Sweeps start one interval apart so sample timestamps stay uniform. The schedule is described at the top of `slaprf/main/main.c`, and a compile-time assert guarantees enough slots for 6 Spokes.
+
+The key hardware reference is [FPVGateC5MK `docs/RADIO_INTERNALS.md`](https://github.com/LouisHitchcock/FPVGateC5MK/blob/main/docs/RADIO_INTERNALS.md), measured on chip v1.0:
 
 - **Raw capture.** The PHY has an ADC dump engine reached through `adctrig` in Espressif's `librftest.a`, which is only linked with `CONFIG_ESP_PHY_ENABLE_CERT_TEST=y`. It writes 10-bit I, 10-bit Q and the gain index per 32-bit word at 80 MS/s into SRAM at `0x40830000`, so the whole 128 KiB bank `0x40820000`–`0x4083FFFF` must be reserved from the heap.
 - **Fast captures.** After one stock `adctrig`, driving the dump-control registers directly gives a 256-sample capture in about 10 µs.
@@ -66,8 +67,5 @@ What the reference projects actually do. This is from their source and docs, not
 - **Gain.** Forced to a fixed index with `force_rx_gain`; the AGC isn't used.
 - **Band power.** Set the LO 10 MHz below the pilot (the spectrum is inverted), mix down, sum Hann-windowed 8-sample blocks for the power in about 10 MHz, then apply median-of-3 and an EMA. About 121 µs per pilot visit.
 - **Range.** 5180–5917 MHz verified, including Raceband R8. Boscam E7/E8 (5925/5945) are unreachable with this method.
-- **Receive-only, Wi-Fi idle.** Wi-Fi runs in `WIFI_MODE_NULL` + promiscuous purely to keep the PHY powered. Nothing transmits, and the link to the host is UART or USB.
 
 **Licensing.** [esp-sdr](https://github.com/ESPARGOS/esp-sdr) is GPL-3.0. FPVGateC5MK and FPVGateC5RX are CC BY-NC-SA 4.0 (non-commercial, with commercial licences sold separately), written clean-room from facts. Their code can't be copied into SlapRF unless SlapRF's licence is compatible. The facts themselves (register addresses, call order, timings) aren't copyrightable and can be implemented independently. This is not legal advice.
-
-> **What's unproven.** None of the reference projects transmits on the same C5 while scanning: they keep Wi-Fi idle. The parts to verify first on a bench are that `phy_set_chanfreq(2.4 GHz)` + `phy_pbus_xpd_tx_on` really return the Wi-Fi driver to a working link after each sweep, that nothing is emitted while on 5.8 GHz (check with a spectrum analyser or a second C5 in esp-sdr), and how many Hub AP beacons are lost. If this doesn't hold up, the fallback is FPVGate's split: the C5 as a pure receiver, plus a second MCU for the link.
