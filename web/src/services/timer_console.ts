@@ -5,6 +5,7 @@
  * (after `LOG 1`), and the raw 160-byte SLAPRF02 block in answer to `SLAPRF?`.
  */
 import {
+  haltBlankEsp32C5BootLoop,
   LATEST_FIRMWARE_VERSION,
   parseSlaprfConfigBlock,
   TimerReadout,
@@ -378,6 +379,7 @@ export class TimerConsole {
   /** While true, a dropped port is an expected restart, not a user-visible disconnect. */
   private expectingRestart = false;
   private userDisconnecting = false;
+  private sawRomBootloader = false;
 
   public readonly slotIndex: number;
   public lastStatus: TimerStatus | null = null;
@@ -512,7 +514,11 @@ export class TimerConsole {
       this.notifyStateChange();
       const s = await this.ensureRunningApp(1600);
       if (this.connected) {
-        void this.send("SLAPRF?").catch(() => undefined);
+        if (!s && !this.lastConfig && this.port && this.writer) {
+          await haltBlankEsp32C5BootLoop(this.port, this.writer).catch(() => undefined);
+        } else {
+          void this.send("SLAPRF?").catch(() => undefined);
+        }
       }
       return s;
     } finally {
@@ -532,7 +538,11 @@ export class TimerConsole {
       await this.connect(showAllPorts);
       const s = await this.ensureRunningApp(1600);
       if (this.connected) {
-        void this.send("SLAPRF?").catch(() => undefined);
+        if (!s && !this.lastConfig && this.port && this.writer) {
+          await haltBlankEsp32C5BootLoop(this.port, this.writer).catch(() => undefined);
+        } else {
+          void this.send("SLAPRF?").catch(() => undefined);
+        }
       }
       return s;
     } finally {
@@ -699,6 +709,7 @@ export class TimerConsole {
     await this.disarmUsbJtagLatch(port);
     this.port = port;
     this.portInfo = port.getInfo?.() ?? this.portInfo;
+    this.sawRomBootloader = false;
     this.bufStart = 0;
     this.bufEnd = 0;
     this.packLen = 0;
@@ -898,16 +909,17 @@ export class TimerConsole {
     if (!this.port) return null;
     const deadline = Date.now() + timeoutMs;
     let first = true;
-    while (Date.now() < deadline && this.port) {
+    while (Date.now() < deadline && this.port && !this.sawRomBootloader) {
       try {
         const cmd = first ? "\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?" : "\nSTATUS?";
         first = false;
-        return await this.request<TimerStatus>(cmd, "status", 750);
+        return await this.request<TimerStatus>(cmd, "status", 450);
       } catch {
         if (this.lastConfig) return this.lastStatus;
+        if (this.sawRomBootloader) return null;
         // retry after a short pause
       }
-      await sleep(120);
+      await sleep(90);
     }
     return null;
   }
@@ -1219,6 +1231,12 @@ export class TimerConsole {
   private emitText(bytes: Uint8Array): void {
     const rawLine = this.decoder.decode(bytes).replace(/\r$/, "");
     if (!rawLine) return;
+    if (rawLine.includes("invalid header:") || rawLine.includes("waiting for download")) {
+      this.sawRomBootloader = true;
+      if (this.waiters.length) {
+        this.failWaiters("ROM bootloader detected");
+      }
+    }
     const atIdx = rawLine.lastIndexOf("@{");
     const line = atIdx > 0 ? rawLine.slice(atIdx) : rawLine;
     if (line.startsWith("@{")) {
@@ -1310,6 +1328,92 @@ export class UsbConnectionPool {
           this.notify();
         },
       });
+    }
+    this.initBlankPortStabilizer();
+  }
+
+  private readonly checkedBlankPorts = new WeakSet<object>();
+  private calmingBlankPorts = false;
+
+  /**
+   * When an ESP32-C5 has factory-blank / erased SPI flash (`0xFF` at `0x2000`), its ROM bootloader
+   * loops on `invalid header: 0xffffffff` and hardware-resets USB every ~3.2 seconds, causing its
+   * COM port to appear and disappear in the WebSerial port picker. For any previously-authorized
+   * port in `navigator.serial.getPorts()` that is boot-looping, automatically enter ROM download
+   * mode and disable `LP_WDT` so its COM port stays stable.
+   */
+  private initBlankPortStabilizer(): void {
+    if (!TimerConsole.supported()) return;
+    const navSerial = serial() as SerialLike & { addEventListener?(type: string, fn: () => void): void };
+    const run = () => {
+      void this.calmBootLoopingBlankPorts();
+    };
+    window.setTimeout(run, 150);
+    navSerial.addEventListener?.("connect", run);
+  }
+
+  private async calmBootLoopingBlankPorts(): Promise<void> {
+    if (this.calmingBlankPorts) return;
+    if (this.slots.some((c) => c.writing || c.probing || c.reconnecting)) return;
+    this.calmingBlankPorts = true;
+    try {
+      const ports = await serial().getPorts();
+      for (const port of ports) {
+        if (this.checkedBlankPorts.has(port as unknown as object)) continue;
+        if (this.findOwnerOfPort(port)) continue;
+        if (port.readable || port.writable) continue;
+        const info = port.getInfo?.() ?? {};
+        if (info.usbVendorId && info.usbVendorId !== ESPRESSIF_USB_VID) {
+          this.checkedBlankPorts.add(port as unknown as object);
+          continue;
+        }
+        try {
+          await port.open({ baudRate: 115200, bufferSize: 4096 });
+          await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
+          await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
+          const reader = port.readable?.getReader();
+          const writer = port.writable?.getWriter();
+          let sawBootLoop = false;
+          if (reader) {
+            const deadline = Date.now() + 260;
+            const dec = new TextDecoder();
+            let acc = "";
+            while (Date.now() < deadline) {
+              const rem = Math.max(20, deadline - Date.now());
+              const chunk = await withTimeout(reader.read(), rem).catch(() => undefined);
+              if (!chunk || chunk.done || !chunk.value) break;
+              acc += dec.decode(chunk.value, { stream: true });
+              if (acc.includes("invalid header:") || acc.includes("waiting for download")) {
+                sawBootLoop = true;
+                break;
+              }
+              if (acc.includes("@{")) {
+                break;
+              }
+            }
+          }
+          if (sawBootLoop && writer) {
+            await haltBlankEsp32C5BootLoop(port, writer).catch(() => undefined);
+          }
+          try {
+            await withTimeout(reader?.cancel(), 120);
+          } catch {}
+          try {
+            reader?.releaseLock();
+          } catch {}
+          try {
+            writer?.releaseLock();
+          } catch {}
+          await withTimeout(port.close(), 250).catch(() => undefined);
+          this.checkedBlankPorts.add(port as unknown as object);
+        } catch {
+          // port busy or disconnected mid-check
+        }
+      }
+    } catch {
+      // ignore
+    } finally {
+      this.calmingBlankPorts = false;
     }
   }
 

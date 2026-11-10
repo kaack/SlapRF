@@ -369,6 +369,44 @@ async function hardResetBoard(port: SerialPortLike): Promise<void> {
   await sleep(200);
 }
 
+/**
+ * Enters the ESP32-C5 ROM bootloader over USB-Serial-JTAG and disables LP_WDT (RTC WDT) + enables
+ * SWD auto-feed so a factory-blank / erased ESP32-C5 stops resetting its USB port every ~3 seconds
+ * on `invalid header: 0xffffffff`.
+ */
+export async function haltBlankEsp32C5BootLoop(
+  port: SerialPortLike,
+  writer: WritableStreamDefaultWriter<Uint8Array>
+): Promise<void> {
+  await enterUsbJtagBootloader(port);
+  const syncPayload = new Uint8Array(36);
+  syncPayload.set([0x07, 0x07, 0x12, 0x20], 0);
+  syncPayload.fill(0x55, 4);
+  const syncFrame = buildRomCommand(ESP_SYNC, syncPayload);
+  for (let i = 0; i < 3; i++) {
+    await writer.write(syncFrame);
+    await sleep(25);
+  }
+  const sendReg = async (addr: number, value: number, mask = 0xffffffff) => {
+    const regPayload = new Uint8Array(16);
+    const regView = new DataView(regPayload.buffer);
+    regView.setUint32(0, addr >>> 0, true);
+    regView.setUint32(4, value >>> 0, true);
+    regView.setUint32(8, mask >>> 0, true);
+    regView.setUint32(12, 0, true);
+    await writer.write(buildRomCommand(ESP_WRITE_REG, regPayload));
+    await sleep(12);
+  };
+  await sendReg(0x600b1c18, 0x50d83aa1); // LP_WDT_WPROTECT_REG = WKEY (unlock)
+  await sendReg(0x600b1c00, 0x00000000); // LP_WDT_CONFIG0_REG = 0 (disable RWDT)
+  await sendReg(0x600b1c18, 0x00000000); // LP_WDT_WPROTECT_REG = 0 (lock)
+  await sendReg(0x600b1c20, 0x50d83aa1); // LP_WDT_SWD_WPROTECT_REG = WKEY (unlock)
+  await sendReg(0x600b1c1c, 1 << 18, 1 << 18); // LP_WDT_SWD_CONFIG_REG |= SWD_AUTO_FEED_EN
+  await sendReg(0x600b1c20, 0x00000000); // LP_WDT_SWD_WPROTECT_REG = 0 (lock)
+  await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
+  await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
+}
+
 async function readChunkWithTimeout(
   reader: ReadableStreamDefaultReader<Uint8Array>,
   timeoutMs: number
@@ -1174,21 +1212,11 @@ export async function eraseXiaoC5OverWebSerial(
       }
     }
 
-    onProgress({
-      stage: "rebooting",
-      percent: 98,
-      detail: "Resetting XIAO ESP32-C5…",
-    });
-    await writeReg(0x600b1c18, 0x50d83aa1);
-    await writeReg(0x600b1c04, 200000);
-    await writeReg(
-      0x600b1c00,
-      ((1 << 31) | (4 << 28) | (1 << 16) | (1 << 13) | (1 << 12) | (1 << 9) | 20) >>> 0
-    );
-    await writeReg(0x600b1c14, (1 << 31) >>> 0);
-    await writeReg(0x600b1c18, 0x00000000);
-    await sleep(60);
-    await hardResetBoard(port);
+    // Leave the wiped chip in quiet ROM bootloader mode with LP_WDT disabled (rather than resetting
+    // into empty SPI flash, which would cause the ROM to loop on `invalid header: 0xffffffff` and
+    // reset USB every ~3 seconds).
+    await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
+    await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
 
     onProgress({
       stage: "done",
