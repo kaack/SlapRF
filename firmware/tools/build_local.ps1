@@ -4,18 +4,15 @@ Fast local firmware build & optional in-place USB flasher for SlapRF (Seeed Stud
 
 .DESCRIPTION
 Configures the ESP-IDF v5.5.1 toolchain paths directly (skipping the slow export.bat check),
-compiles the specified firmware profile(s) with Ninja + ccache, writes the merged flasher image to
-web\firmware\slaprf-xiao-c5-<profile>.bin, and optionally flashes a connected board over USB while
+compiles the firmware (firmware\slaprf) with Ninja + ccache, writes the merged flasher image to
+web\firmware\slaprf-xiao-c5.bin, and optionally flashes a connected board over USB while
 preserving its existing 160-byte SLAPRF02 identity/config block.
 
 .EXAMPLE
-.\firmware\tools\build_local.ps1 open-ground
-.\firmware\tools\build_local.ps1 open-ground -FlashPort COM3
 .\firmware\tools\build_local.ps1
+.\firmware\tools\build_local.ps1 -FlashPort COM3
 #>
 param(
-    [Parameter(Position = 0)]
-    [string[]]$Profiles = @(),
     [Parameter()]
     [string]$FlashPort = ""
 )
@@ -44,63 +41,56 @@ $env:PATH = ($toolDirs -join ";") + ";" + $env:PATH
 $python = "C:\esp\tools\python_env\idf5.5_py3.12_env\Scripts\python.exe"
 $ninja  = "C:\esp\tools\tools\ninja\1.12.1\ninja.exe"
 
-if (-not $Profiles -or $Profiles.Count -eq 0) {
-    $Profiles = Get-ChildItem -Path (Join-Path $Root "firmware") -Directory |
-        Where-Object { Test-Path (Join-Path $_.FullName "profile.json") } |
-        Select-Object -ExpandProperty Name
-}
-
 $outDir = Join-Path $Root "web\firmware"
 if (-not (Test-Path $outDir)) {
     New-Item -ItemType Directory -Path $outDir | Out-Null
 }
 
-foreach ($p in $Profiles) {
-    $projDir = Join-Path $Root "firmware\$p"
-    $buildDir = Join-Path $projDir "build"
-    Write-Host "=== Building profile: $p ===" -ForegroundColor Cyan
+$projDir = Join-Path $Root "firmware\slaprf"
+$buildDir = Join-Path $projDir "build"
+Write-Host "=== Building firmware ===" -ForegroundColor Cyan
 
-    if (-not (Test-Path (Join-Path $buildDir "build.ninja"))) {
-        Push-Location $projDir
-        try {
-            & $python "$env:IDF_PATH/tools/idf.py" reconfigure
-            if ($LASTEXITCODE -ne 0) { throw "idf.py reconfigure failed for $p" }
-        } finally {
-            Pop-Location
-        }
-    }
-
-    & $ninja -C $buildDir
-    if ($LASTEXITCODE -ne 0) { throw "ninja build failed for $p" }
-
-    $nm = "C:\esp\tools\tools\riscv32-esp-elf\esp-14.2.0_20241119\riscv32-esp-elf\bin\riscv32-esp-elf-nm.exe"
-    $elfPath = Join-Path $buildDir "slaprf-$p.elf"
-    $bssLine = & $nm $elfPath | Select-String " _bss_end$"
-    if ($bssLine) {
-        $bssHex = ($bssLine.ToString().Trim() -split "\s+")[0]
-        $bssAddr = [Convert]::ToUInt64($bssHex, 16)
-        $headroom = 0x40820000 - $bssAddr
-        Write-Host (" -> _bss_end = 0x{0} ({1} bytes headroom below 0x40820000 IQ bank)" -f $bssHex, $headroom) -ForegroundColor DarkGray
-        if ($bssAddr -ge 0x40820000) {
-            throw "_bss_end (0x$bssHex) overlaps 0x40820000 IQ capture bank!"
-        }
-    }
-
-    Push-Location $buildDir
+if (-not (Test-Path (Join-Path $buildDir "build.ninja"))) {
+    Push-Location $projDir
     try {
-        $mergedOut = Join-Path $outDir "slaprf-xiao-c5-$p.bin"
-        & $python -m esptool --chip esp32c5 merge_bin -o $mergedOut "@flash_args"
-        if ($LASTEXITCODE -ne 0) { throw "esptool merge_bin failed for $p" }
-        Write-Host " -> Updated $mergedOut" -ForegroundColor Green
+        & $python "$env:IDF_PATH/tools/idf.py" reconfigure
+        if ($LASTEXITCODE -ne 0) { throw "idf.py reconfigure failed" }
     } finally {
         Pop-Location
     }
+}
 
-    if ($FlashPort -ne "") {
-        $appBin = Join-Path $buildDir "slaprf-$p.bin"
-        $patchedBin = Join-Path $buildDir "slaprf-$p-patched.bin"
-        Write-Host "=== Flashing $p onto $FlashPort (preserving SLAPRF02 config) ===" -ForegroundColor Cyan
-        & $python -c @"
+& $ninja -C $buildDir
+if ($LASTEXITCODE -ne 0) { throw "ninja build failed" }
+
+$nm = "C:\esp\tools\tools\riscv32-esp-elf\esp-14.2.0_20241119\riscv32-esp-elf\bin\riscv32-esp-elf-nm.exe"
+$elfPath = Join-Path $buildDir "slaprf.elf"
+$bssLine = & $nm $elfPath | Select-String " _bss_end$"
+if ($bssLine) {
+    $bssHex = ($bssLine.ToString().Trim() -split "\s+")[0]
+    $bssAddr = [Convert]::ToUInt64($bssHex, 16)
+    $headroom = 0x40820000 - $bssAddr
+    Write-Host (" -> _bss_end = 0x{0} ({1} bytes headroom below 0x40820000 IQ bank)" -f $bssHex, $headroom) -ForegroundColor DarkGray
+    if ($bssAddr -ge 0x40820000) {
+        throw "_bss_end (0x$bssHex) overlaps 0x40820000 IQ capture bank!"
+    }
+}
+
+Push-Location $buildDir
+try {
+    $mergedOut = Join-Path $outDir "slaprf-xiao-c5.bin"
+    & $python -m esptool --chip esp32c5 merge_bin -o $mergedOut "@flash_args"
+    if ($LASTEXITCODE -ne 0) { throw "esptool merge_bin failed" }
+    Write-Host " -> Updated $mergedOut" -ForegroundColor Green
+} finally {
+    Pop-Location
+}
+
+if ($FlashPort -ne "") {
+    $appBin = Join-Path $buildDir "slaprf.bin"
+    $patchedBin = Join-Path $buildDir "slaprf-patched.bin"
+    Write-Host "=== Flashing firmware onto $FlashPort (preserving SLAPRF02 config) ===" -ForegroundColor Cyan
+    & $python -c @"
 import serial, hashlib, struct, sys, time
 port, bin_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
 s = serial.Serial(port, 115200, timeout=1.5)
@@ -120,6 +110,7 @@ if len(cfg) == 160 and cfg[:8] == b'SLAPRF02':
     assert off > 0, 'SLAPRF02 not found in binary'
     # Keep the newly built firmware version bytes [8..10], preserve board identity/settings [11..158]
     cfg[8:11] = data[off+8:off+11]
+    cfg[12] = 0  # Reserved byte
     if struct.unpack_from('<I', cfg, 14)[0] == 1 and not cfg[107]:
         struct.pack_into('<I', cfg, 14, 0xBE7C0001)
         cfg[107:109] = b'H1'
@@ -145,12 +136,11 @@ else:
     print('Warning: no existing SLAPRF02 config read from port; flashing default config')
 open(out_path, 'wb').write(data)
 "@ $FlashPort $appBin $patchedBin
-        if ($LASTEXITCODE -ne 0) { throw "Failed to prepare patched image for $FlashPort" }
-        try {
-            & $python -m esptool --chip esp32c5 -p $FlashPort -b 460800 --before default_reset --after hard_reset write_flash 0x10000 $patchedBin
-            if ($LASTEXITCODE -ne 0) { throw "esptool write_flash failed on $FlashPort" }
-        } finally {
-            Remove-Item -ErrorAction SilentlyContinue $patchedBin
-        }
+    if ($LASTEXITCODE -ne 0) { throw "Failed to prepare patched image for $FlashPort" }
+    try {
+        & $python -m esptool --chip esp32c5 -p $FlashPort -b 460800 --before default_reset --after hard_reset write_flash 0x10000 $patchedBin
+        if ($LASTEXITCODE -ne 0) { throw "esptool write_flash failed on $FlashPort" }
+    } finally {
+        Remove-Item -ErrorAction SilentlyContinue $patchedBin
     }
 }

@@ -2,7 +2,6 @@ import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
-import { FIRMWARE_PROFILES } from "../services/esp_flasher";
 import {
   getKnownHardwareTimers,
   LiveSample,
@@ -218,12 +217,10 @@ export class NetworkView extends Component {
     for (const dt of this.store.detectedTimers) {
       const fp = (dt.fingerprint || "").toUpperCase();
       if (fp && fp !== "00000001" && !fp.startsWith("SIM000")) {
-        const prof = FIRMWARE_PROFILES.find((p) => p.id === dt.firmwareProfile);
         recordKnownHardwareTimer({
           fp,
           role: dt.isHub ? "hub" : "spoke",
           label: dt.timerLabel,
-          profile: prof?.code ?? 1,
           fw: dt.firmwareVersion,
           slot: dt.timerId >= 1 && dt.timerId <= 7 ? dt.timerId : undefined,
         });
@@ -330,7 +327,6 @@ export class NetworkView extends Component {
     const usbSupported = TimerConsole.supported();
     const usbBusy = Boolean(this.console.busyLabel || this.console.reconnecting);
     const s = this.activeStatus();
-    const profile = s ? FIRMWARE_PROFILES.find((p) => p.code === s.profile) : undefined;
 
     const dotClass =
       led.color === "neon"
@@ -348,7 +344,7 @@ export class NetworkView extends Component {
       const st = this.status;
       statusText = st.emergencyMode
         ? `${esc(st.label || "(unnamed)")} · Emergency mode · radio & sweeps halted · ${esc(st.fp)}`
-        : `${esc(st.label || "(unnamed)")} · ${st.role === 1 ? "Hub (Parent · Slot 1)" : `Spoke (Child · Slot ${st.slot || "?"})`} · ${esc(profile?.name ?? `Profile ${st.profile}`)} · ${esc(st.fp)} · Direct USB-C`;
+        : `${esc(st.label || "(unnamed)")} · ${st.role === 1 ? "Hub (Parent · Slot 1)" : `Spoke (Child · Slot ${st.slot || "?"})`} · ${esc(st.fw)} · ${esc(st.fp)} · Direct USB-C`;
     } else if (usbOn) {
       statusText = "Connected over Direct USB-C · reading timer identity…";
     } else if (this.console.reconnecting) {
@@ -465,7 +461,7 @@ export class NetworkView extends Component {
                 <dd>—</dd>
               </div>
               <div class="debug-kv-row">
-                <dt>Profile &amp; schedule</dt>
+                <dt>Schedule</dt>
                 <dd>—</dd>
               </div>
             </dl>
@@ -485,8 +481,6 @@ export class NetworkView extends Component {
       return;
     }
 
-    const profile = FIRMWARE_PROFILES.find((p) => p.code === s.profile);
-    const profileName = profile?.name ?? `Profile ${s.profile}`;
     const ch = s.channel || 1;
 
     if (s.role === 1) {
@@ -494,7 +488,6 @@ export class NetworkView extends Component {
         slot: number;
         fp: string;
         label: string;
-        profileName: string;
         fw: string;
         mac?: string;
         online: boolean;
@@ -520,7 +513,6 @@ export class NetworkView extends Component {
             const isFallbackFp = rawFp.startsWith("53504B");
             const known = !isFallbackFp && rawFp ? knownTimers.find((k) => k.fp.toUpperCase() === rawFp) : undefined;
             const fp = (!isFallbackFp && rawFp) || known?.fp || `SLOT${sp.slot}`;
-            const spProf = FIRMWARE_PROFILES.find((p) => p.code === (sp.profile ?? s.profile));
             const frames = sp.frames ?? 0;
             const prevRate = this.spokeRateTracker.get(sp.slot);
             let ratePktPerSec = prevRate?.ratePktPerSec ?? 0;
@@ -544,7 +536,6 @@ export class NetworkView extends Component {
               slot: sp.slot,
               fp,
               label: sp.label || known?.label || `S${sp.slot - 1}`,
-              profileName: spProf?.name ?? profileName,
               fw: sp.fw || known?.fw || s.fw,
               mac: sp.mac || known?.mac,
               online: activelyReceiving,
@@ -584,13 +575,11 @@ export class NetworkView extends Component {
           }
           if (fp && usedFps.has(fp)) continue;
           const known = fp ? knownTimers.find((k) => k.fp === fp) : undefined;
-          const spProf = FIRMWARE_PROFILES.find((p) => p.id === dt.firmwareProfile);
           const serverOnline = Boolean(dt.online && serverFrames > 0);
           bySlot.set(dt.timerId, {
             slot: dt.timerId,
             fp: fp || "—",
             label: dt.timerLabel || known?.label || `S${dt.timerId - 1}`,
-            profileName: spProf?.name ?? profileName,
             fw: dt.firmwareVersion || known?.fw || s.fw,
             mac: known?.mac,
             online: serverOnline,
@@ -610,8 +599,7 @@ export class NetworkView extends Component {
         (k) =>
           k.role === "spoke" &&
           !usedFps.has(k.fp.toUpperCase()) &&
-          (!k.parentHubFp || k.parentHubFp.toUpperCase() === s.fp.toUpperCase()) &&
-          k.profile === s.profile
+          (!k.parentHubFp || k.parentHubFp.toUpperCase() === s.fp.toUpperCase())
       );
       for (const k of candidateSpokes) {
         let targetSlot = k.slot && k.slot >= 2 && k.slot <= 7 && !bySlot.has(k.slot) ? k.slot : 0;
@@ -624,14 +612,12 @@ export class NetworkView extends Component {
           }
         }
         if (targetSlot >= 2 && targetSlot <= 7) {
-          const spProf = FIRMWARE_PROFILES.find((p) => p.code === k.profile);
           const gate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === targetSlot);
           const gateName = gate ? (gate.name?.trim() || gate.timerLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
           bySlot.set(targetSlot, {
             slot: targetSlot,
             fp: k.fp,
             label: k.label || `S${targetSlot - 1}`,
-            profileName: spProf?.name ?? profileName,
             fw: k.fw || s.fw,
             mac: k.mac,
             online: false,
@@ -816,8 +802,8 @@ export class NetworkView extends Component {
                 <dd>${tiedCount > 0 ? `${tiedCount} Spoke${tiedCount === 1 ? "" : "s"} (${[...bySlot.values()].map((c) => esc(c.label)).join(", ")})` : "None yet (listening for JOIN frames)"}</dd>
               </div>
               <div class="debug-kv-row">
-                <dt>Profile &amp; MAC</dt>
-                <dd>${esc(profileName)} <span class="note mono">· ${esc(s.chip?.mac || "—")}</span></dd>
+                <dt>MAC address</dt>
+                <dd><span class="mono">${esc(s.chip?.mac || "—")}</span></dd>
               </div>
             </dl>
           </div>
@@ -844,7 +830,6 @@ export class NetworkView extends Component {
       (s.hub?.fp ? knownTimers.find((k) => k.fp.toUpperCase() === s.hub!.fp!.toUpperCase()) : undefined) ??
       (selfKnown?.parentHubFp ? knownTimers.find((k) => k.fp.toUpperCase() === selfKnown.parentHubFp!.toUpperCase()) : undefined) ??
       (serverHub?.fingerprint ? knownTimers.find((k) => k.fp.toUpperCase() === serverHub.fingerprint!.toUpperCase()) : undefined) ??
-      knownTimers.find((k) => k.role === "hub" && k.profile === s.profile) ??
       knownTimers.find((k) => k.role === "hub");
 
     const beaconMsAgo = s.beaconMsAgo ?? s.hub?.beaconMsAgo;
@@ -856,8 +841,6 @@ export class NetworkView extends Component {
     const parentFp = s.hub?.fp || serverHub?.fingerprint || knownHub?.fp || "";
     const parentMac = s.hub?.mac || knownHub?.mac || "";
     const parentFw = s.hub?.fw || serverHub?.firmwareVersion || knownHub?.fw || s.fw;
-    const parentProf = FIRMWARE_PROFILES.find((p) => p.code === (s.hub?.profile ?? knownHub?.profile ?? s.profile));
-    const parentProfileName = parentProf?.name ?? profileName;
 
     const spokeIdx = s.slot >= 2 ? s.slot - 2 : 0;
     const tdmaGap = Math.floor(spokeIdx / 3);
@@ -910,8 +893,8 @@ export class NetworkView extends Component {
               <dd>${linked ? `Synced · ESP-NOW LR Ch ${ch}` : beaconStale ? `De-synced on Ch ${ch} (no recent Hub beacon)` : "Scanning 2.4 GHz for Hub beacon"}</dd>
             </div>
             <div class="debug-kv-row">
-              <dt>Firmware &amp; profile</dt>
-              <dd>${esc(profileName)} <span class="note mono">· ${esc(s.fw)}</span></dd>
+              <dt>Firmware</dt>
+              <dd><span class="mono">${esc(s.fw)}</span></dd>
             </div>
             <div class="debug-kv-row">
               <dt>MAC address</dt>
@@ -957,8 +940,8 @@ export class NetworkView extends Component {
               <dd>${linked ? `Active · 2.4 GHz Ch ${ch} sync beacon locked` : beaconStale ? `Beacon lost (${((beaconMsAgo ?? 0) / 1000).toFixed(1)}s ago)` : "Waiting for Hub beacon"}</dd>
             </div>
             <div class="debug-kv-row">
-              <dt>Firmware &amp; profile</dt>
-              <dd>${esc(parentProfileName)} <span class="note mono">· ${esc(parentFw)}</span></dd>
+              <dt>Firmware</dt>
+              <dd><span class="mono">${esc(parentFw)}</span></dd>
             </div>
           </dl>
         </div>

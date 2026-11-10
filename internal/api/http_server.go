@@ -376,7 +376,6 @@ func (s *Server) handleProvisionGate(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Role        string `json:"role"`
 		TimerLabel  string `json:"timerLabel"`
-		Profile     string `json:"firmwareProfile,omitempty"`
 		Fingerprint string `json:"fingerprint,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -386,7 +385,6 @@ func (s *Server) handleProvisionGate(w http.ResponseWriter, r *http.Request) {
 	req := tracker.ProvisionRequest{
 		Role:        body.Role,
 		Label:       body.TimerLabel,
-		Profile:     body.Profile,
 		Fingerprint: body.Fingerprint,
 	}
 	if _, err := s.activeEngine().ProvisionGate(req); err != nil {
@@ -461,7 +459,6 @@ func (s *Server) handleSimTimerAction(w http.ResponseWriter, r *http.Request) {
 		TimerID uint8  `json:"timerId,omitempty"`
 		Role    string `json:"role,omitempty"`
 		Label   string `json:"label,omitempty"`
-		Profile string `json:"firmwareProfile,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -476,7 +473,7 @@ func (s *Server) handleSimTimerAction(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	case "add":
-		if _, err := s.simulator.AddTimer(body.Role, body.Label, body.Profile); err != nil {
+		if _, err := s.simulator.AddTimer(body.Role, body.Label); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}

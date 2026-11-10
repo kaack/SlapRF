@@ -260,7 +260,6 @@ export class AppStore {
           timerLabel: usb.timerLabel || existing.timerLabel,
           isHub: usb.isHub,
           firmwareVersion: usb.firmwareVersion || existing.firmwareVersion,
-          firmwareProfile: usb.firmwareProfile || existing.firmwareProfile,
           fingerprint: usb.fingerprint || existing.fingerprint,
           noiseFloorDbm: existing.online ? existing.noiseFloorDbm : usb.noiseFloorDbm,
           batteryMv: existing.batteryMv > 0 ? existing.batteryMv : usb.batteryMv,
@@ -286,7 +285,6 @@ export class AppStore {
       prev.timerLabel === timer.timerLabel &&
       prev.isHub === timer.isHub &&
       prev.firmwareVersion === timer.firmwareVersion &&
-      prev.firmwareProfile === timer.firmwareProfile &&
       prev.fingerprint === timer.fingerprint;
     const floorDiff =
       prev && timer ? Math.abs((prev.noiseFloorDbm ?? -92) - (timer.noiseFloorDbm ?? -92)) : 999;

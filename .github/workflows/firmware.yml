@@ -1,9 +1,9 @@
 name: Build Firmware
 
-# Builds every firmware/<profile>/ ESP-IDF project for the Seeed XIAO ESP32-C5 and publishes one
-# merged flash image per profile (bootloader + partition table + app) as `slaprf-xiao-c5-<id>.bin`.
-# Called by the Pages and Release workflows so the web flasher and release binaries ship real
-# firmware; also runs on its own whenever firmware sources change.
+# Builds the firmware/slaprf ESP-IDF project for the Seeed XIAO ESP32-C5 and publishes the merged
+# flash image (bootloader + partition table + app) as `slaprf-xiao-c5.bin`.
+# Called by the Pages and Release workflows so the web flasher and release ship real firmware;
+# also runs on its own whenever firmware sources change.
 
 on:
   push:
@@ -18,27 +18,9 @@ on:
   workflow_call:
 
 jobs:
-  profiles:
-    name: List firmware profiles
-    runs-on: ubuntu-latest
-    outputs:
-      ids: ${{ steps.list.outputs.ids }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: list
-        run: |
-          ids=$(for f in firmware/*/profile.json; do basename "$(dirname "$f")"; done | jq -R . | jq -cs .)
-          echo "ids=$ids" >> "$GITHUB_OUTPUT"
-          echo "Profiles: $ids"
-
   build:
-    name: Build ${{ matrix.profile }}
-    needs: profiles
+    name: Build firmware
     runs-on: ubuntu-latest
-    strategy:
-      fail-fast: false
-      matrix:
-        profile: ${{ fromJson(needs.profiles.outputs.ids) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -47,17 +29,17 @@ jobs:
         with:
           esp_idf_version: v5.5.1
           target: esp32c5
-          path: firmware/${{ matrix.profile }}
+          path: firmware/slaprf
           command: bash ../tools/ci_build.sh
 
       - name: Check config block is present
         run: |
-          bin="firmware/${{ matrix.profile }}/build/slaprf-xiao-c5-${{ matrix.profile }}.bin"
+          bin="firmware/slaprf/build/slaprf-xiao-c5.bin"
           grep -qa SLAPRF02 "$bin" || { echo "SLAPRF02 config block missing from $bin"; exit 1; }
           ls -l "$bin"
 
       - uses: actions/upload-artifact@v4
         with:
-          name: firmware-${{ matrix.profile }}
-          path: firmware/${{ matrix.profile }}/build/slaprf-xiao-c5-${{ matrix.profile }}.bin
+          name: firmware
+          path: firmware/slaprf/build/slaprf-xiao-c5.bin
           if-no-files-found: error

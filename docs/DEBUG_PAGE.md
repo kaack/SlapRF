@@ -2,7 +2,7 @@
 
 Status (2026-11-08): **firmware console complete and verified on hardware; web page and §5
 canvas charts implemented (`web/src/views/debug/charts.ts` + `DebugView.ts`: signal over time at
-50 Hz, per-channel noise table, upgraded canvas spectrum scan with average/max-hold/Wi-Fi UNII
+the sweep rate, per-channel noise table, upgraded canvas spectrum scan with average/max-hold/Wi-Fi UNII
 overlay & top-5 peak list, scrolling waterfall spectrogram, 5-min health sparklines, CSV/PNG
 export).**
 This is the brief for whoever continues. Read it top to bottom before changing code.
@@ -19,7 +19,7 @@ separate, later feature (§8).
 
 ```mermaid
 flowchart LR
-  subgraph Timer["XIAO ESP32-C5 (any profile)"]
+  subgraph Timer["XIAO ESP32-C5 (Hub or Spoke)"]
     MAIN["main/main.c<br/>sweep_once → slaprf_diag_scan_live_step() / slaprf_diag_sweep()<br/>gap → slaprf_diag_service()"]
     DIAG["components/slaprf_radio/slaprf_diag.c<br/>USB console task + RTC log ring"]
     RF["slaprf_rf58.c<br/>capture engine"]
@@ -57,10 +57,10 @@ rejects pending `request()`s with that message.
 | Command | Reply |
 |---|---|
 | `SLAPRF?` | raw 160-byte config block (the flasher depends on it: **keep byte-exact**) |
-| `STATUS?` | `@{"t":"status","fw","role"(1=Hub),"profile","fp","label","uptimeMs","reset","boots","heapFree","heapMin","sweepHz","sweeps","sweepUs","sweepUsMax","sweepBudgetUs","rf":{"ok","enabled","gain","gainMax","floorDb"},"chip":{"model","rev","mac","flashMB"},"net":{"mode":"ap"/"ap+sta"/"sta"/"off","stations"},"channel","slot","scanLive","freqsTemporary","freqs":[8]}` |
+| `STATUS?` | `@{"t":"status","fw","role"(1=Hub),"fp","label","uptimeMs","reset","boots","heapFree","heapMin","sweepHz","sweeps","sweepUs","sweepUsMax","sweepBudgetUs","rf":{"ok","enabled","gain","gainMax","floorDb"},"chip":{"model","rev","mac","flashMB"},"net":{"mode":"ap"/"ap+sta"/"sta"/"off","stations"},"channel","slot","scanLive","freqsTemporary","freqs":[8]}` |
 | `LIVE 1` / `LIVE 2` / `LIVE 0` | `@{"t":"live","n","us","dbm":[8],"pk":[8],"hits":[8],"floor":[8]}`. **1** ≈ 10 lines/s, `pk` = peak since previous line. **2** = every sweep (50/s; `pk` = reading). `n` = sweep counter (gaps = dropped lines; 50 per second, use it as the time base). `floor` = typical noise per channel (−127 until learned). `hits` = readings > floor + 10 dB since the previous line. Lines are best-effort: dropped, never blocking, if USB is busy |
 | `SCAN a b s` | one-shot: `@{"t":"scan","start","step","dbm":[n]}`; ≤ 200 points within 5180–5917 MHz; peak of 4 captures per point; pauses timing ~0.1–0.5 s |
-| `SCAN LIVE a b s` | continuous: each 20 ms sweep slot measures the next chunk of the band instead of the pilot channels; streams `@{"t":"scan","live":true,"passMs","start","step","dbm":[n]}` per pass (full band 148 points ≈ 320 ms/pass ≈ 3 passes/s). **Lap timing pauses; Wi-Fi is unaffected** (verified: 50 frames/s to the laptop throughout). Live readings show −127 meanwhile |
+| `SCAN LIVE a b s` | continuous: each 10 ms sweep slot measures the next chunk of the band instead of the pilot channels; streams `@{"t":"scan","live":true,"passMs","start","step","dbm":[n]}` per pass (full band 148 points ≈ 320 ms/pass ≈ 3 passes/s). **Lap timing pauses; Wi-Fi is unaffected** (verified: 50 frames/s to the laptop throughout). Live readings show −127 meanwhile |
 | `SCAN STOP` | ends the continuous scan |
 | `LOG 1` / `LOG 0` | mirrors `ESP_LOG*` output onto USB (UART0 keeps logging regardless) |
 | `BOOTLOG?` / `LASTLOG?` | `@{"t":"bootlog","which":"current"/"last","boots","reset","text"}`. 3 KB RTC ring captured from before `app_main`; `last` survives software resets, panics and watchdogs (not power-off). Non-ASCII / ANSI bytes are dropped |
@@ -99,7 +99,7 @@ helpers: axes, time series, heat-map colour scale), keep `DebugView.ts` as the c
   (every sweep); go back to `LIVE 1` when hidden/paused (`IntersectionObserver`). Keep the bars
   working from either mode (in `LIVE 2`, `pk` = reading).
 - One line per channel, last 30 s (window selector 10 s / 30 s / 2 min; ring buffer of
-  `{n, dbm[8], floor[8]}`, x-axis from `n` / 50 Hz, so dropped lines leave gaps instead of
+  `{n, dbm[8], floor[8]}`, x-axis from `n` / `sweepHz`, so dropped lines leave gaps instead of
   squashing time). Channel toggles (R1–R8 chips, colour-coded; default all on).
 - Overlays: each channel's `floor` (dotted), floor + 10 dB "hit" line, and the **enter
   threshold** of the pilot on that frequency when the server is reachable (`GET /api/state` →
@@ -168,10 +168,10 @@ per pass) and PNG (`canvas.toBlob`). Include timer label/fp and timestamp in fil
 - Each reflash drops the PC off the Hub's SlapRF Wi-Fi; Windows doesn't rejoin by itself.
 
 ## 8. Later: network health (separate task)
-Each timer sends a small health frame through the Hub every 2 s (new magic `0xC5 0x5E`: uptime, reset reason, max sweep µs, beacon misses, dropped frames, heap, noise floor). The laptop adds a per-timer **Health** drawer on the Timers list (`internal/ingest/wifi_udp.go` decoding + a field on `DetectedTimer`).
+Each timer sends a small health frame through the Hub every 2 s (new magic `0xC5 0x5E`: uptime, reset reason, max sweep µs, beacon misses, dropped frames, heap, noise floor). The laptop adds a per-timer **Health** drawer on the Timers list (`internal/ingest/hub_frames.go` decoding + a field on `DetectedTimer`).
 
 ## 9. Conventions (must follow)
-- **Builds:** Go always with `-ldflags="-s -w"`; no Node/npm (TS is bundled by Go esbuild, which does **not** type-check: be careful with types). Web: `go run -ldflags="-s -w" ./cmd/build-web -web ./web -out ./_site`. Dev server: `go run -ldflags="-s -w" ./cmd/devserver` (dev-only, port 8090; bundles the TS and rebuilds the WASM engine on the fly). Firmware: ESP-IDF **v5.5.1** only, `firmware\tools\build_local.bat <profile>`.
+- **Builds:** Go always with `-ldflags="-s -w"`; no Node/npm (TS is bundled by Go esbuild, which does **not** type-check: be careful with types). Web: `go run -ldflags="-s -w" ./cmd/build-web -web ./web -out ./_site`. Dev server: `go run -ldflags="-s -w" ./cmd/devserver` (dev-only, port 8090; bundles the TS and rebuilds the WASM engine on the fly). Firmware: ESP-IDF **v5.5.1** only, `firmware\tools\build_local.bat` (or `build_local.ps1`).
 - **Before commit:** bump the cache-buster `?v=` in `web/index.html` on web changes (currently `v=71`), run `go test -ldflags="-s -w" ./...`.
 - **Files:** UTF-8; don't round-trip source through PowerShell 5 `Get-Content` (it mangles `·`, `…`, `—`). Use the editor tools.
 - **Code hygiene:** keep existing comments; no new lint warnings (`-Werror=all` in ESP-IDF); user-facing copy in plain language; no screenshots for verification unless the user asks.

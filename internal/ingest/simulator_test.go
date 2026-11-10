@@ -108,7 +108,7 @@ func TestSimulatorControlsAndTimerLifecycle(t *testing.T) {
 		t.Fatalf("expected T2 to be powered back on")
 	}
 
-	newID, err := sim.AddTimer("spoke", "T6 Split-S Exit", "open-ground")
+	newID, err := sim.AddTimer("spoke", "T6 Split-S Exit")
 	if err != nil || newID != 6 {
 		t.Fatalf("expected AddTimer to create T6 (id=6; T1 hub + T2..T5 spokes exist), got id=%d err=%v", newID, err)
 	}

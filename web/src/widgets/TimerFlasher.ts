@@ -3,12 +3,9 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import {
-  DEFAULT_FIRMWARE_PROFILE,
-  FIRMWARE_PROFILES,
   FlashProgress,
   LATEST_FIRMWARE_VERSION,
   TimerReadout,
-  firmwareProfile,
   flashXiaoC5OverWebSerial,
   isWebSerialSupported,
 } from "../services/esp_flasher";
@@ -24,8 +21,8 @@ type WizardStepId = "network" | "identity" | "flash";
  *
  *   - Step 1 (`network`): Pick the **Hub** or **Spoke** role via pictorial cards; Spoke reveals
  *     the **S1–S6** slot chips.
- *   - Step 2 (`identity`): Set **Timer ID / name** (pre-filled from the node you clicked) and
- *     **Firmware version**.
+ *   - Step 2 (`identity`): Set **Timer ID / name** (pre-filled from the node you clicked). Every timer
+ *     gets the same firmware; only the role, name and fingerprint differ.
  *   - Step 3 (`flash`): Summary receipt + **Flash to USB** / **Download .bin**.
  *
  * The Hub is a USB dongle that talks to this computer over USB serial only, so there is no
@@ -41,7 +38,6 @@ export class TimerFlasher extends Component {
   private role: "hub" | "spoke" = "hub";
   private flashedNodes = new Set<string>();
   private timerLabel = "H1";
-  private firmwareProfileId = DEFAULT_FIRMWARE_PROFILE;
   /** Keep the board's existing fingerprint when reflashing (vs. mint a new one). */
   private keepFingerprint = true;
   private busy = false;
@@ -68,7 +64,6 @@ export class TimerFlasher extends Component {
           step?: WizardStepId;
           role?: "hub" | "spoke";
           timerLabel?: string;
-          firmwareProfileId?: string;
           keepFingerprint?: boolean;
           showAllPorts?: boolean;
         };
@@ -80,12 +75,6 @@ export class TimerFlasher extends Component {
         }
         if (typeof parsed.timerLabel === "string" && parsed.timerLabel.trim() !== "") {
           this.timerLabel = parsed.timerLabel;
-        }
-        if (
-          typeof parsed.firmwareProfileId === "string" &&
-          FIRMWARE_PROFILES.some((p) => p.id === parsed.firmwareProfileId)
-        ) {
-          this.firmwareProfileId = parsed.firmwareProfileId;
         }
         if (typeof parsed.keepFingerprint === "boolean") {
           this.keepFingerprint = parsed.keepFingerprint;
@@ -160,7 +149,6 @@ export class TimerFlasher extends Component {
         this.step = "network";
         this.role = "hub";
         this.timerLabel = "H1";
-        this.firmwareProfileId = DEFAULT_FIRMWARE_PROFILE;
         this.keepFingerprint = true;
         this.showAllPorts = false;
         this.errorMsg = null;
@@ -193,12 +181,7 @@ export class TimerFlasher extends Component {
 
     this.listen(el, "change", (e) => {
       const target = e.target as HTMLInputElement | HTMLSelectElement;
-      if (target.matches("[data-fw-profile]")) {
-        this.firmwareProfileId = target.value || DEFAULT_FIRMWARE_PROFILE;
-        this.saveFlasherPrefs();
-        this.slideDir = "none";
-        this.render();
-      } else if (target.matches("[data-all-ports]")) {
+      if (target.matches("[data-all-ports]")) {
         this.showAllPorts = (target as HTMLInputElement).checked;
         this.saveFlasherPrefs();
       } else if (target.matches("[data-keep-fp]")) {
@@ -215,7 +198,7 @@ export class TimerFlasher extends Component {
   private get orderedSteps(): Array<{ id: WizardStepId; title: string; short: string }> {
     return [
       { id: "network", title: "Select role", short: "Role" },
-      { id: "identity", title: "Name & firmware", short: "Name" },
+      { id: "identity", title: "Name timer", short: "Name" },
       { id: "flash", title: "Flash timer", short: "Flash" },
     ];
   }
@@ -228,7 +211,6 @@ export class TimerFlasher extends Component {
           step: this.step,
           role: this.role,
           timerLabel: this.timerLabel,
-          firmwareProfileId: this.firmwareProfileId,
           keepFingerprint: this.keepFingerprint,
           showAllPorts: this.showAllPorts,
         })
@@ -319,7 +301,6 @@ export class TimerFlasher extends Component {
     if (info.timerLabel) {
       this.timerLabel = info.timerLabel;
     }
-    this.firmwareProfileId = info.firmwareProfile;
     this.slideDir = "none";
     this.render();
   }
@@ -342,7 +323,7 @@ export class TimerFlasher extends Component {
     this.render();
 
     try {
-      const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel, this.firmwareProfileId);
+      const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel);
 
       const written = await flashXiaoC5OverWebSerial(
         bytes,
@@ -363,7 +344,7 @@ export class TimerFlasher extends Component {
         recordKnownTimerReadout(written);
         this.onReadout?.(written);
       }
-      await this.api.provisionTimer(this.role, cleanLabel, this.firmwareProfileId, written?.fingerprint ?? "");
+      await this.api.provisionTimer(this.role, cleanLabel, written?.fingerprint ?? "");
       this.flashedNodes.add(this.role === "hub" ? "hub" : `spoke:${cleanLabel.toUpperCase()}`);
       const fpNote = written?.fingerprintKept
         ? `kept its fingerprint ${written.fingerprint}`
@@ -407,7 +388,7 @@ export class TimerFlasher extends Component {
     }
     try {
       const cleanLabel = this.timerLabel.trim();
-      const { bytes, filename } = await this.api.fetchFirmwareImage(this.role, cleanLabel, this.firmwareProfileId);
+      const { bytes, filename } = await this.api.fetchFirmwareImage(this.role, cleanLabel);
       const blob = new Blob([bytes], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -583,7 +564,6 @@ export class TimerFlasher extends Component {
   private renderStepIdentity(): string {
     const isHub = this.role === "hub";
     const idPlaceholder = isHub ? "e.g. H1" : "e.g. S1";
-    const profile = firmwareProfile(this.firmwareProfileId);
 
     return `
       <div class="flasher-wizard-body">
@@ -598,8 +578,8 @@ export class TimerFlasher extends Component {
                 : "Step 2 of 3 · Stamped into XIAO flash (auto-pairs with Hub)"
             }</span>
           </div>
-          <h3>Name this ${isHub ? "Hub" : "Spoke"} &amp; choose firmware</h3>
-          <p>The name is how this timer shows up in Timers and on the Track. Pick the firmware that matches your track and where the timer will sit on the gate.</p>
+          <h3>Name this ${isHub ? "Hub" : "Spoke"}</h3>
+          <p>The name is how this timer shows up in Timers and on the Track.</p>
         </div>
 
         <div class="flasher-wifi-inputs flasher-two-col">
@@ -620,27 +600,8 @@ export class TimerFlasher extends Component {
 
           <div class="flasher-field">
             <label class="flasher-field-label">Firmware</label>
-            <select
-              class="input"
-              data-fw-profile="1"
-              aria-label="Firmware profile"
-              ${this.busy ? "disabled" : ""}
-            >
-              ${FIRMWARE_PROFILES.map(
-                (p) =>
-                  `<option value="${esc(p.id)}" ${p.id === profile.id ? "selected" : ""}>${esc(p.name)}</option>`
-              ).join("")}
-            </select>
+            <div class="input mono" aria-label="Firmware version">SlapRF ${LATEST_FIRMWARE_VERSION}</div>
           </div>
-        </div>
-
-        <div class="flasher-profile-hint">
-          <div class="flasher-profile-tags">
-            <span class="badge">${esc(profile.track)}</span>
-            <span class="badge">${esc(profile.mount)}</span>
-            <span class="note mono">${LATEST_FIRMWARE_VERSION}</span>
-          </div>
-          <p>${esc(profile.summary)}</p>
         </div>
 
         <div class="flasher-wizard-nav">
@@ -659,8 +620,7 @@ export class TimerFlasher extends Component {
   private renderStepFlash(webSerialOk: boolean): string {
     const isHub = this.role === "hub";
     const cleanLabel = this.timerLabel.trim() || (isHub ? "H1" : this.suggestSpokeLabel());
-    const profile = firmwareProfile(this.firmwareProfileId);
-    const linkSummary = isHub ? "USB-C dongle → this computer" : `ESP-NOW ${profile.link} → Hub`;
+    const linkSummary = isHub ? "USB-C dongle → this computer" : "ESP-NOW → Hub";
 
     const pct = this.progress ? this.progress.percent : this.lastSuccessMsg ? 100 : 0;
     const statusText = this.progress
@@ -688,8 +648,7 @@ export class TimerFlasher extends Component {
 
           <div class="flasher-receipt-item">
             <span class="note">Timer &amp; Firmware</span>
-            <div class="flasher-receipt-val" title="${esc(profile.summary)}">
-              <span><span class="mono">${esc(cleanLabel)}</span> · ${esc(profile.name)}</span>
+            <div class="flasher-receipt-val">
             </div>
           </div>
 

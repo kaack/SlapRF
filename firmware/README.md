@@ -1,32 +1,26 @@
 # SlapRF timer firmware
 
-Each profile directory is a complete ESP-IDF project for the Seeed XIAO ESP32-C5, tuned for one situation: a track type plus where the timers sit on the gates.
+One ESP-IDF project for the Seeed XIAO ESP32-C5, with one tuned configuration. Every timer (Hub or Spoke) runs the same image; the role and per-board settings are patched in at flash time.
 
-| Directory | Track | Timer placement |
-|---|---|---|
-| [`open-ground/`](open-ground/) | Open field | On the grass at the gate base (default) |
-| [`open-elevated/`](open-elevated/) | Open field | On top of the gate or a pole |
-| [`indoor/`](indoor/) | Gym / warehouse | Any |
-| [`obstructed/`](obstructed/) | Woods, bando, technical | Behind or under obstacles |
+The design: 100 Hz 8-channel 5.8 GHz sweeps, 4-sweep windows sent every 2 sweeps (every 20 ms, so every sample arrives twice) over 6 Mbps OFDM ESP-NOW at +20 dBm. The Hub is a USB collector dongle; when the app places it on a gate it also sweeps and streams its own readings after every sweep.
+
+Link rate and TX power can be changed only from the USB serial console (`LINKRATE`, `TXPOWER`, `LINKRESET`); the values are saved in NVS and survive reflashing.
 
 ```
 firmware/
-  <profile>/
+  slaprf/
     CMakeLists.txt        ESP-IDF project (pulls in ../components)
     sdkconfig.defaults    target esp32c5, 1 kHz FreeRTOS tick, console on UART0
-    profile.json          manifest: id, code, name, track, mount, link, sweepHz, summary
-    main/main.c           the timing design for this profile
+    main/main.c           timing design: sweep rate, window size, TDMA schedule, Hub/Spoke logic
   components/
-    slaprf_radio/         hardware layer shared by all profiles (2.4 GHz link, Hub bridge,
-                          sweep pacing, USB config readback, 5.8 GHz sensing)
-  embed.go                embeds every */profile.json for the Go builder and the web app
+    slaprf_radio/         hardware layer (2.4 GHz link, Hub bridge, sweep pacing,
+                          USB config readback and serial console, 5.8 GHz sensing)
+  tools/                  local build / flash / bench scripts
 ```
-
-Profiles own the timing design: sweep rate, window size, link rate, TX power, filters, recovery behaviour. Each `main/main.c` is deliberately self-contained, so profiles can change without affecting each other. The hardware layer is shared because it describes the board, not the situation.
 
 ## Building
 
-**CI (normal path):** [`.github/workflows/firmware.yml`](../.github/workflows/firmware.yml) builds every profile with ESP-IDF **v5.5.1** (pinned: the PHY test libraries differ between 5.5.x releases; 5.5.0 fails to link) and merges each into one flash image, `slaprf-xiao-c5-<profile>.bin` (bootloader + partition table + app). The Pages and Release workflows run it first and drop the images into `web/firmware/`. From there the web flasher serves them, the Go binary embeds them, and they are attached to each GitHub release.
+**CI (normal path):** [`.github/workflows/firmware.yml`](../.github/workflows/firmware.yml) builds `firmware/slaprf` with ESP-IDF **v5.5.1** (pinned: the PHY test libraries differ between 5.5.x releases; 5.5.0 fails to link) and merges it into one flash image, `slaprf-xiao-c5.bin` (bootloader + partition table + app). The Pages and Release workflows run it first and drop the image into `web/firmware/`. From there the web flasher serves it, and it is attached to each GitHub release.
 
 **Locally on Windows** (no WSL needed). One-time install of ESP-IDF v5.5.1 into `C:\esp`:
 
@@ -36,38 +30,33 @@ set IDF_TOOLS_PATH=C:\esp\tools
 C:\esp\esp-idf\install.bat esp32c5
 ```
 
-Then build one, several, or all profiles. Each merged image lands in `web/firmware/`, where the local server and flasher pick it up:
+Then build. The merged image lands in `web/firmware/slaprf-xiao-c5.bin`, where the local server and flasher pick it up:
 
-```bat
-firmware\tools\build_local.bat               & rem every profile
-firmware\tools\build_local.bat open-ground   & rem just one
+```powershell
+firmware\tools\build_local.ps1                   # build only
+firmware\tools\build_local.ps1 -FlashPort COM3   # build and reflash a connected board, keeping its SLAPRF02 config
 ```
 
-On Linux or macOS, with ESP-IDF exported: `cd firmware/<profile> && idf.py build && cd build && python -m esptool --chip esp32c5 merge_bin -o ../../../web/firmware/slaprf-xiao-c5-<profile>.bin @flash_args`.
+(`firmware\tools\build_local.bat` does the same build through `export.bat`.)
 
-Both CI and `tools/check_image.sh` check that static code and data end below the capture bank at `0x40820000` (open-ground leaves about 19 KB), that the PHY entry points are linked, and that the `SLAPRF02` block is present.
+On Linux or macOS, with ESP-IDF exported: `cd firmware/slaprf && idf.py build && cd build && python -m esptool --chip esp32c5 merge_bin -o ../../../web/firmware/slaprf-xiao-c5.bin @flash_args`.
+
+Both CI and `tools/check_image.sh` check that static code and data end below the capture bank at `0x40820000`, that the PHY entry points are linked, and that the `SLAPRF02` block is present.
 
 Without a compiled image, the flasher falls back to a placeholder image. It flashes, but it doesn't run anything.
 
-**Per-board settings are patched, not compiled.** The flasher (Go `internal/firmware.PatchImage` or browser `esp_flasher.ts`) finds the `SLAPRF02` block in the compiled image and writes role, profile code, fingerprint, channel table, Hub Wi-Fi and timer name into it. It then recomputes the ESP-IDF segment checksum and the appended SHA-256 so the bootloader still accepts the image.
+**Per-board settings are patched, not compiled.** The flasher (Go `internal/firmware.PatchImage` or browser `esp_flasher.ts`) finds the `SLAPRF02` block in the compiled image and writes role, fingerprint, channel table, Hub Wi-Fi and timer name into it. It then recomputes the ESP-IDF segment checksum and the appended SHA-256 so the bootloader still accepts the image.
 
-## Adding a profile
+## Wire protocol (keep in sync with the Go and TypeScript sides)
 
-1. Copy an existing profile directory to `firmware/<new-id>/` and rename the `project()` in its `CMakeLists.txt`.
-2. Give it a unique `code` in `profile.json`, with `id` matching the directory name, and set the same `SLAPRF_PROFILE_CODE` and `SWEEP_HZ` in `main/main.c`.
-3. Run `go test -ldflags="-s -w" ./internal/firmware/`. It checks every `main.c` against its manifest. CI picks the new directory up automatically.
-
-## Shared wire protocol (keep in sync in every `main.c`)
-
-- `SLAPRF02` 160-byte config block: layout in `internal/firmware/image.go` and `web/src/services/esp_flasher.ts`.
-- ESP-NOW / UDP frames: window `0xC5 0x59` (up to 6 sweeps), Hello `0xC5 0x5A`, Join `0x5B`, Assign `0x5C`, Hub beacon `0x5D` (inside `slaprf_radio`). Laptop side in `internal/ingest/wifi_udp.go`.
+- `SLAPRF02` 160-byte config block: layout in `internal/firmware/image.go` and `web/src/services/esp_flasher.ts`. Byte 12 is reserved (written 0, ignored).
+- ESP-NOW frames: window `0xC5 0x59` (up to 6 sweeps), Hello `0xC5 0x5A`, Join `0x5B`, Assign `0x5C`, Hub beacon `0x5D` (inside `slaprf_radio`). The reserved byte in Join/Hello (where older builds carried a design code) is 0. Laptop side in `internal/ingest/hub_frames.go`.
 - USB: the running firmware answers `SLAPRF?\n` with its raw config block, so the flasher can keep a board's fingerprint when reflashing.
-
 ## 5.8 GHz sensing on the C5 (status: implemented, not yet bench-tested)
 
 [`components/slaprf_radio/slaprf_rf58.c`](components/slaprf_radio/slaprf_rf58.c) implements the capture-engine method below. It compiles, links, and passes the SRAM-layout check, but it hasn't run on a board yet. The values to bench-verify are marked in the source: `DBM_OFFSET` calibration, the gain index, and the 2.4 GHz return path in `slaprf_rf58_leave()`.
 
-**Time-slicing (design choice (a): one C5 per timer).** All timers share one beacon-anchored TDMA schedule, so every radio leaves 2.4 GHz for a sweep at the same moment, with the transmitter path forced off (`phy_pbus_xpd_tx_off`). Every radio then comes back for the gap, in which the Hub beacons, Spokes send in their slots, and the Hub forwards to the laptop. Sweeps start exactly one interval apart, so sample timestamps stay uniform. The schedule is described at the top of each `main/main.c`, and a compile-time assert guarantees enough slots for 6 Spokes. All timers on a course must run the same profile.
+**Time-slicing (design choice (a): one C5 per timer).** All timers share one beacon-anchored TDMA schedule, so every radio leaves 2.4 GHz for a sweep at the same moment, with the transmitter path forced off (`phy_pbus_xpd_tx_off`). Every radio then comes back for the gap, in which the Hub beacons, Spokes send in their slots, and the Hub forwards to the laptop. Sweeps start exactly one interval apart, so sample timestamps stay uniform. The schedule is described at the top of `slaprf/main/main.c`, and a compile-time assert guarantees enough slots for 6 Spokes.
 
 What the reference projects actually do. This is from their source and docs, not from search summaries. The key reference is [FPVGateC5MK `docs/RADIO_INTERNALS.md`](https://github.com/LouisHitchcock/FPVGateC5MK/blob/main/docs/RADIO_INTERNALS.md), measured on chip v1.0:
 

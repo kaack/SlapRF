@@ -3,13 +3,10 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import {
-  DEFAULT_FIRMWARE_PROFILE,
-  FIRMWARE_PROFILES,
-  FlashProgress,
+  FIRMWARE_SWEEP_HZ,
   LATEST_FIRMWARE_VERSION,
   TimerReadout,
   eraseXiaoC5OverWebSerial,
-  firmwareProfile,
   isWebSerialSupported,
   readXiaoC5OverWebSerial,
 } from "../services/esp_flasher";
@@ -140,7 +137,6 @@ class TimerReaderPanel extends Component {
     const r = this.readout;
     const s = r?.status;
     const active = Boolean(r);
-    const profile = r ? firmwareProfile(r.firmwareProfile) : undefined;
     const budget = s ? s.sweepBudgetUs || (s.sweepHz ? Math.round(1e6 / s.sweepHz) : 0) : 0;
 
     const ledClass = this.busy
@@ -158,7 +154,7 @@ class TimerReaderPanel extends Component {
       : this.errorMsg
         ? esc(this.errorMsg)
         : r
-          ? `Read ${esc(r.timerLabel || "(unnamed)")} · ${r.role === "hub" ? "Hub" : "Spoke"} · ${esc(profile?.name ?? r.firmwareProfile)} (${esc(r.firmwareVersion)})`
+          ? `Read ${esc(r.timerLabel || "(unnamed)")} · ${r.role === "hub" ? "Hub" : "Spoke"} · firmware ${esc(r.firmwareVersion)}`
           : webSerialOk
             ? "No timer read yet · plug a timer into USB and click Read timer"
             : "Direct USB reading requires Chrome, Edge, or Brave";
@@ -233,7 +229,7 @@ class TimerReaderPanel extends Component {
             </div>
             <div class="debug-kv-row">
               <dt>Firmware</dt>
-              <dd>${r ? `${esc(profile?.name ?? r.firmwareProfile)} <span class="note mono">· ${esc(r.firmwareVersion)}</span>${fwBadge}` : "—"}</dd>
+              <dd>${r ? `SlapRF <span class="note mono">· ${esc(r.firmwareVersion)}</span>${fwBadge}` : "—"}</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Chip &amp; flash</dt>
@@ -261,8 +257,8 @@ class TimerReaderPanel extends Component {
               <dd>${
                 s
                   ? `${s.sweepHz} Hz · ${(s.sweepUs / 1000).toFixed(2)} ms <span class="note">(max <span class="${budget && s.sweepUsMax > budget ? "debug-tone-warn" : ""}">${(s.sweepUsMax / 1000).toFixed(2)} ms</span> / ${(budget / 1000).toFixed(1)} ms)</span>`
-                  : r && profile
-                    ? `${profile.sweepHz} Hz <span class="note">· 8 slots</span>`
+                  : r
+                    ? `${FIRMWARE_SWEEP_HZ} Hz <span class="note">· 8 slots</span>`
                     : "—"
               }</dd>
             </div>

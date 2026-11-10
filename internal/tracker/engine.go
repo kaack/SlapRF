@@ -100,7 +100,6 @@ func (e *Engine) seedSimTimersLocked() {
 			TimerLabel:      g.TimerLabel,
 			Color:           c,
 			FirmwareVersion: g.FirmwareVersion,
-			FirmwareProfile: domain.DefaultFirmwareProfile,
 			Fingerprint:     newFingerprintHex(),
 			BatteryMv:       g.BatteryMv,
 			BatteryPct:      g.BatteryPct,
@@ -115,7 +114,6 @@ func (e *Engine) seedSimTimersLocked() {
 		Color:           domain.DefaultGateColors[4%len(domain.DefaultGateColors)],
 		IsHub:           true,
 		FirmwareVersion: domain.LatestFirmwareVersion,
-		FirmwareProfile: domain.DefaultFirmwareProfile,
 		Fingerprint:     newFingerprintHex(),
 		BatteryMv:       4200, // USB powered
 		BatteryPct:      100,

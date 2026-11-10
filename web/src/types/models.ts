@@ -25,8 +25,6 @@ export interface DetectedTimer {
   color?: string;
   isHub: boolean;
   firmwareVersion?: string;
-  /** Firmware design ID (e.g. "open-ground"); see FIRMWARE_PROFILES. */
-  firmwareProfile?: string;
   /** Stable 8-hex-digit board fingerprint stamped at flash time. */
   fingerprint?: string;
   batteryMv: number;
@@ -223,7 +221,6 @@ export interface SimTimerState {
   color: string;
   isHub: boolean;
   firmwareVersion: string;
-  firmwareProfile: string;
   fingerprint: string;
   poweredOn: boolean;
   online: boolean;

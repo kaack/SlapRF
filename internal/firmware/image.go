@@ -43,13 +43,13 @@ const (
 )
 
 // SLAPRF02 config block layout (160 bytes, little-endian). The radio / sweep tuning is compiled
-// into each profile's own firmware (firmware/<profile>/main.c); the block only carries what is
-// per-board or per-event:
+// into the firmware (firmware/slaprf/main/main.c); the block only carries what is per-board or
+// per-event:
 //
 //	[0..7]     "SLAPRF02"
 //	[8..10]    firmware version major / minor / patch
 //	[11]       role (1 = Hub, 2 = Spoke)
-//	[12]       profile code (see firmware/<profile>/profile.json)
+//	[12]       reserved (0; ignored on read)
 //	[13]       wifi_mode (0 = host "SlapRF" AP, 1 = join wifi_ssid) — Hub only
 //	[14..17]   fingerprint (uint32) — stable per-board identity, never 0
 //	[18..33]   slot_freqs_mhz[8] (uint16)
@@ -61,7 +61,7 @@ const (
 const (
 	offVersion     = 8
 	offRole        = 11
-	offProfile     = 12
+	offReserved    = 12
 	offWifiMode    = 13
 	offFingerprint = 14
 	offFreqs       = 18
@@ -82,7 +82,6 @@ var (
 // at download time so the user never needs a C compiler or CLI toolchain.
 type TimerConfig struct {
 	Role            uint8
-	Profile         string // Firmware design ID (see Profiles); empty = DefaultProfileID
 	Fingerprint     uint32 // Stable per-board identity; 0 = generate a new random one
 	TimerLabel      string // Flashed timer name (e.g. "H1", "S3")
 	FirmwareVersion string // Filled in from the current build; read back by InspectConfig
@@ -127,15 +126,15 @@ func ParseFingerprint(s string) uint32 {
 	return uint32(v)
 }
 
-// BuildXIAOC5Image builds a flashable image for the given role and profile from the built-in
-// placeholder base (used when no compiled firmware for the profile is available).
+// BuildXIAOC5Image builds a flashable image for the given role from the built-in placeholder base
+// (used when no compiled firmware is available).
 func BuildXIAOC5Image(cfg TimerConfig) (*BuiltImage, error) {
 	return PatchImage(SyntheticBase(), cfg)
 }
 
 // SyntheticBase returns a 64 KB placeholder ESP32-C5 app image (valid header, RISC-V NOP sled,
 // empty SLAPRF02 block at 0x100). It flashes, but does nothing: real images come from the
-// ESP-IDF builds of firmware/<profile>/ (see firmware/README.md).
+// ESP-IDF build of firmware/slaprf (see firmware/README.md).
 func SyntheticBase() []byte {
 	img := make([]byte, imageSize)
 	img[0] = espImageMagic
@@ -178,8 +177,6 @@ func PatchImage(base []byte, cfg TimerConfig) (*BuiltImage, error) {
 		cfg.WifiSSID = ""
 		cfg.WifiPass = ""
 	}
-	profile := ProfileByID(cfg.Profile)
-	cfg.Profile = profile.ID
 	if cfg.Fingerprint == 0 {
 		cfg.Fingerprint = NewFingerprint()
 	}
@@ -201,7 +198,7 @@ func PatchImage(base []byte, cfg TimerConfig) (*BuiltImage, error) {
 	maj, min, pat := parseVersion(cfg.FirmwareVersion)
 	block[offVersion], block[offVersion+1], block[offVersion+2] = maj, min, pat
 	block[offRole] = cfg.Role
-	block[offProfile] = profile.Code
+	block[offReserved] = 0
 	if cfg.WifiSSID != "" {
 		block[offWifiMode] = 1
 	}
@@ -229,7 +226,7 @@ func PatchImage(base []byte, cfg TimerConfig) (*BuiltImage, error) {
 		SHA256Hex: hex.EncodeToString(sum[:]),
 		Config:    cfg,
 		ConfigOff: off,
-		Filename:  fmt.Sprintf("slaprf-xiao-c5-%s-%s-%s.bin", roleSlug, profile.ID, cfg.FirmwareVersion),
+		Filename:  fmt.Sprintf("slaprf-xiao-c5-%s-%s.bin", roleSlug, cfg.FirmwareVersion),
 	}, nil
 }
 
@@ -297,7 +294,6 @@ func InspectConfig(img []byte) (TimerConfig, error) {
 	}
 	out.FirmwareVersion = fmt.Sprintf("v%d.%d.%d", block[offVersion], block[offVersion+1], block[offVersion+2])
 	out.Role = block[offRole]
-	out.Profile = ProfileByCode(block[offProfile]).ID
 	out.Fingerprint = binary.LittleEndian.Uint32(block[offFingerprint : offFingerprint+4])
 	for i := 0; i < domain.MaxPilotSlots; i++ {
 		out.SlotFreqsMHz[i] = binary.LittleEndian.Uint16(block[offFreqs+i*2 : offFreqs+i*2+2])

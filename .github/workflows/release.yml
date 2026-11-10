@@ -1,6 +1,6 @@
 name: Release
 
-# Publishes the compiled firmware images and the slaprf-relay LiveTime helper (cmd/slaprf-relay)
+# Publishes the compiled firmware image and the slaprf-relay LiveTime helper (cmd/slaprf-relay)
 # on version tags. The app itself is the static site deployed to https://slaprf.app by pages.yml.
 # The relay asset names are linked from web/src/widgets/LiveTimeCard.ts; keep them in sync.
 
@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   firmware:
-    name: Build firmware profiles
+    name: Build firmware
     uses: ./.github/workflows/firmware.yml
 
   relay:
@@ -62,11 +62,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Download compiled firmware images
+      - name: Download compiled firmware image
         uses: actions/download-artifact@v4
         with:
-          pattern: firmware-*
-          merge-multiple: true
+          name: firmware
           path: web/firmware
 
       - name: Download slaprf-relay binaries
@@ -81,6 +80,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            web/firmware/*.bin
+            web/firmware/slaprf-xiao-c5.bin
             dist/slaprf-relay-*
           generate_release_notes: true

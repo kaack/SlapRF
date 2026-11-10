@@ -2,7 +2,7 @@ import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
-import { FIRMWARE_PROFILES, TimerReadout } from "../services/esp_flasher";
+import { TimerReadout } from "../services/esp_flasher";
 import {
   BootLog,
   getKnownHardwareTimers,
@@ -352,7 +352,7 @@ export class DebugView extends Component {
         }
       },
       onConfig: (c) => {
-        const line = `[config] ${c.role} "${c.timerLabel}" profile=${c.firmwareProfile} fp=${c.fingerprint} fw=${c.firmwareVersion} ch=${c.frequenciesMHz.join(",")}`;
+        const line = `[config] ${c.role} "${c.timerLabel}" fp=${c.fingerprint} fw=${c.firmwareVersion} ch=${c.frequenciesMHz.join(",")}`;
         this.appendLog(line);
         this.renderNetworkView();
         if (Date.now() < this.serialAwaitUntil) {
@@ -1766,12 +1766,10 @@ export class DebugView extends Component {
           for (const dt of timers) {
             const fp = (dt.fingerprint || "").toUpperCase();
             if (fp && fp !== "00000001" && !fp.startsWith("SIM000")) {
-              const prof = FIRMWARE_PROFILES.find((p) => p.id === dt.firmwareProfile);
               recordKnownHardwareTimer({
                 fp,
                 role: dt.isHub ? "hub" : "spoke",
                 label: dt.timerLabel,
-                profile: prof?.code ?? 1,
                 fw: dt.firmwareVersion,
                 slot: dt.timerId >= 1 && dt.timerId <= 7 ? dt.timerId : undefined,
               });
@@ -2650,11 +2648,9 @@ export class DebugView extends Component {
     }
 
     // 2. Identity
-    const profile = FIRMWARE_PROFILES.find((p) => p.code === s.profile);
-    if (!profile) add("Identity", "fail", `unknown firmware profile ${s.profile}; flash a current SlapRF build`);
-    else if (s.fp.toUpperCase() === UNPROVISIONED_FP)
-      add("Identity", "warn", `${profile.name}, but not set up yet (default fingerprint). Use the Flasher page to give it an identity.`);
-    else add("Identity", "pass", `${s.label || "(unnamed)"} | ${s.role === 1 ? "Hub" : "Spoke"} | ${profile.name} | ${s.fp}`);
+    if (s.fp.toUpperCase() === UNPROVISIONED_FP)
+      add("Identity", "warn", `Firmware ${s.fw}, but not set up yet (default fingerprint). Use the Flasher page to give it an identity.`);
+    else add("Identity", "pass", `${s.label || "(unnamed)"} | ${s.role === 1 ? "Hub" : "Spoke"} | ${s.fw} | ${s.fp}`);
 
     // 3. Receiver
     if (!s.rf.ok) add("5.8 GHz receiver", "fail", "the receiver's boot check failed; restart the timer and look at the boot log");
@@ -2777,7 +2773,7 @@ export class DebugView extends Component {
     const s = this.status;
     const lines = [
       `SlapRF self-test · ${this.checksAt?.toISOString() ?? ""}`,
-      s ? `${s.label || "(unnamed)"} · ${s.role === 1 ? "Hub" : "Spoke"} · fp ${s.fp} · fw ${s.fw} · profile ${s.profile}` : "",
+      s ? `${s.label || "(unnamed)"} · ${s.role === 1 ? "Hub" : "Spoke"} · fp ${s.fp} · fw ${s.fw}` : "",
       s ? `${s.chip.model} ${s.chip.rev} · ${s.chip.mac} · ${s.chip.flashMB} MB flash · boot #${s.boots} (${s.reset})` : "",
       "",
       ...this.checks.map((c) => `[${c.result.toUpperCase().padEnd(4)}] ${c.name}: ${c.detail}`),
@@ -2828,12 +2824,11 @@ export class DebugView extends Component {
     const busyText = this.busy ?? this.console.busyLabel ?? "";
 
     const s = this.status;
-    const profile = s ? FIRMWARE_PROFILES.find((p) => p.code === s.profile) : undefined;
     const statusText = on
       ? s
         ? s.emergencyMode
           ? `${esc(s.label || "(unnamed)")} · Emergency mode · radio & sweeps halted · ${esc(s.fp)}`
-          : `${esc(s.label || "(unnamed)")} · ${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`} · ${esc(profile?.name ?? `profile ${s.profile}`)} · ${esc(s.fp)}`
+          : `${esc(s.label || "(unnamed)")} · ${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`} · ${esc(s.fw)} · ${esc(s.fp)}`
         : "Connected over USB · reading timer status…"
       : busy
         ? `${esc(busyText)}…`
@@ -2953,7 +2948,6 @@ export class DebugView extends Component {
   private renderStatus(): void {
     const on = this.console.connected;
     const s = this.status;
-    const profile = s ? FIRMWARE_PROFILES.find((p) => p.code === s.profile) : undefined;
     const budget = s ? s.sweepBudgetUs || (s.sweepHz ? Math.round(1e6 / s.sweepHz) : 0) : 0;
     const badReset = s ? BAD_RESETS.includes(s.reset) : false;
     const unprov = s ? s.fp.toUpperCase() === UNPROVISIONED_FP : false;
@@ -3021,7 +3015,7 @@ export class DebugView extends Component {
             </div>
             <div class="debug-kv-row">
               <dt>Firmware</dt>
-              <dd>${s ? `${esc(profile?.name ?? `profile ${s.profile}`)} <span class="note mono">· ${esc(s.fw)}</span>` : "—"}</dd>
+              <dd>${s ? `<span class="mono">${esc(s.fw)}</span>` : "—"}</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Chip &amp; flash</dt>
@@ -3157,7 +3151,7 @@ export class DebugView extends Component {
                 <dd>—</dd>
               </div>
               <div class="debug-kv-row">
-                <dt>Profile &amp; schedule</dt>
+                <dt>Schedule</dt>
                 <dd>—</dd>
               </div>
             </dl>
@@ -3173,8 +3167,6 @@ export class DebugView extends Component {
       return;
     }
 
-    const profile = FIRMWARE_PROFILES.find((p) => p.code === s.profile);
-    const profileName = profile?.name ?? `Profile ${s.profile}`;
     const ch = s.channel || 1;
 
     if (s.role === 1) {
@@ -3183,7 +3175,6 @@ export class DebugView extends Component {
         slot: number;
         fp: string;
         label: string;
-        profileName: string;
         fw: string;
         mac?: string;
         online: boolean;
@@ -3210,7 +3201,6 @@ export class DebugView extends Component {
             const isFallbackFp = rawFp.startsWith("53504B");
             const known = !isFallbackFp && rawFp ? knownTimers.find((k) => k.fp.toUpperCase() === rawFp) : undefined;
             const fp = (!isFallbackFp && rawFp) || known?.fp || `SLOT${sp.slot}`;
-            const spProf = FIRMWARE_PROFILES.find((p) => p.code === (sp.profile ?? s.profile));
             const frames = sp.frames ?? 0;
             const prevRate = this.spokeRateTracker.get(sp.slot);
             let ratePktPerSec = prevRate?.ratePktPerSec ?? 0;
@@ -3234,7 +3224,6 @@ export class DebugView extends Component {
               slot: sp.slot,
               fp,
               label: sp.label || known?.label || `S${sp.slot - 1}`,
-              profileName: spProf?.name ?? profileName,
               fw: sp.fw || known?.fw || s.fw,
               mac: sp.mac || known?.mac,
               online: activelyReceiving,
@@ -3275,7 +3264,6 @@ export class DebugView extends Component {
           }
           if (fp && usedFps.has(fp)) continue;
           const known = fp ? knownTimers.find((k) => k.fp === fp) : undefined;
-          const spProf = FIRMWARE_PROFILES.find((p) => p.id === dt.firmwareProfile);
           const prevRate = this.spokeRateTracker.get(dt.timerId);
           let ratePktPerSec = prevRate?.ratePktPerSec ?? 0;
           if (prevRate) {
@@ -3292,7 +3280,6 @@ export class DebugView extends Component {
             slot: dt.timerId,
             fp: fp || "—",
             label: dt.timerLabel || known?.label || `S${dt.timerId - 1}`,
-            profileName: spProf?.name ?? profileName,
             fw: dt.firmwareVersion || known?.fw || s.fw,
             mac: known?.mac,
             online: serverOnline,
@@ -3310,13 +3297,12 @@ export class DebugView extends Component {
         }
       }
 
-      // 3. Hardware registry Spokes tied to this Hub (or matching this Hub's profile)
+      // 3. Hardware registry Spokes tied to this Hub
       const candidateSpokes = knownTimers.filter(
         (k) =>
           k.role === "spoke" &&
           !usedFps.has(k.fp.toUpperCase()) &&
-          (!k.parentHubFp || k.parentHubFp.toUpperCase() === s.fp.toUpperCase()) &&
-          k.profile === s.profile
+          (!k.parentHubFp || k.parentHubFp.toUpperCase() === s.fp.toUpperCase())
       );
       for (const k of candidateSpokes) {
         let targetSlot = k.slot && k.slot >= 2 && k.slot <= 7 && !bySlot.has(k.slot) ? k.slot : 0;
@@ -3329,14 +3315,12 @@ export class DebugView extends Component {
           }
         }
         if (targetSlot >= 2 && targetSlot <= 7) {
-          const spProf = FIRMWARE_PROFILES.find((p) => p.code === k.profile);
           const gate = this.serverGates.find((g) => g.assignedTimerId === targetSlot);
           const gateName = gate ? (gate.name?.trim() || gate.timerLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
           bySlot.set(targetSlot, {
             slot: targetSlot,
             fp: k.fp,
             label: k.label || `S${targetSlot - 1}`,
-            profileName: spProf?.name ?? profileName,
             fw: k.fw || s.fw,
             mac: k.mac,
             online: false,
@@ -3427,7 +3411,7 @@ export class DebugView extends Component {
           : frames === 0
             ? `<strong>${esc(selectedChild.label)}</strong> joined TDMA Slot ${selectedChild.slot}, but <strong>0 timing window frames</strong> have reached the Hub. Its 5.8 GHz sweep schedule may have drifted out of phase with the Hub's beacon — power-cycle or reflash ${esc(selectedChild.label)} to re-lock.`
             : selectedChild.msAgo !== undefined && selectedChild.msAgo >= 2500
-              ? `Last window frame from <strong>${esc(selectedChild.label)}</strong> arrived <strong>${(selectedChild.msAgo / 1000).toFixed(1)}s ago</strong> (${frames} total frames). Check that ${esc(selectedChild.label)} is powered on and on the same firmware profile (${esc(profileName)}).`
+              ? `Last window frame from <strong>${esc(selectedChild.label)}</strong> arrived <strong>${(selectedChild.msAgo / 1000).toFixed(1)}s ago</strong> (${frames} total frames). Check that ${esc(selectedChild.label)} is powered on and running the same firmware (${esc(s.fw)}).`
               : "";
         const barsHtml = freqs
           .map((f, idx) => {
@@ -3529,8 +3513,8 @@ export class DebugView extends Component {
                 <dd>${tiedCount > 0 ? `${tiedCount} Spoke${tiedCount === 1 ? "" : "s"} (${[...bySlot.values()].map((c) => esc(c.label)).join(", ")})` : "None yet (listening for JOIN frames)"}</dd>
               </div>
               <div class="debug-kv-row">
-                <dt>Profile &amp; MAC</dt>
-                <dd>${esc(profileName)} <span class="note mono">· ${esc(s.chip?.mac || "—")}</span></dd>
+                <dt>MAC address</dt>
+                <dd><span class="mono">${esc(s.chip?.mac || "—")}</span></dd>
               </div>
             </dl>
           </div>
@@ -3553,7 +3537,6 @@ export class DebugView extends Component {
       (s.hub?.fp ? knownTimers.find((k) => k.fp.toUpperCase() === s.hub!.fp!.toUpperCase()) : undefined) ??
       (selfKnown?.parentHubFp ? knownTimers.find((k) => k.fp.toUpperCase() === selfKnown.parentHubFp!.toUpperCase()) : undefined) ??
       (serverHub?.fingerprint ? knownTimers.find((k) => k.fp.toUpperCase() === serverHub.fingerprint!.toUpperCase()) : undefined) ??
-      knownTimers.find((k) => k.role === "hub" && k.profile === s.profile) ??
       knownTimers.find((k) => k.role === "hub");
 
     const beaconMsAgo = s.beaconMsAgo ?? s.hub?.beaconMsAgo;
@@ -3565,8 +3548,6 @@ export class DebugView extends Component {
     const parentFp = s.hub?.fp || serverHub?.fingerprint || knownHub?.fp || "";
     const parentMac = s.hub?.mac || knownHub?.mac || "";
     const parentFw = s.hub?.fw || serverHub?.firmwareVersion || knownHub?.fw || s.fw;
-    const parentProf = FIRMWARE_PROFILES.find((p) => p.code === (s.hub?.profile ?? knownHub?.profile ?? s.profile));
-    const parentProfileName = parentProf?.name ?? profileName;
 
     const spokeIdx = s.slot >= 2 ? s.slot - 2 : 0;
     const tdmaGap = Math.floor(spokeIdx / 3);
@@ -3619,8 +3600,8 @@ export class DebugView extends Component {
               <dd>${linked ? `Synced · ESP-NOW LR Ch ${ch}` : beaconStale ? `De-synced on Ch ${ch} (no recent Hub beacon)` : "Scanning 2.4 GHz for Hub beacon"}</dd>
             </div>
             <div class="debug-kv-row">
-              <dt>Firmware &amp; profile</dt>
-              <dd>${esc(profileName)} <span class="note mono">· ${esc(s.fw)}</span></dd>
+              <dt>Firmware</dt>
+              <dd><span class="mono">${esc(s.fw)}</span></dd>
             </div>
             <div class="debug-kv-row">
               <dt>MAC address</dt>
@@ -3666,8 +3647,8 @@ export class DebugView extends Component {
               <dd>${linked ? `Active · 2.4 GHz Ch ${ch} sync beacon locked` : beaconStale ? `Beacon lost (${((beaconMsAgo ?? 0) / 1000).toFixed(1)}s ago)` : "Waiting for Hub beacon"}</dd>
             </div>
             <div class="debug-kv-row">
-              <dt>Firmware &amp; profile</dt>
-              <dd>${esc(parentProfileName)} <span class="note mono">· ${esc(parentFw)}</span></dd>
+              <dt>Firmware</dt>
+              <dd><span class="mono">${esc(parentFw)}</span></dd>
             </div>
           </dl>
         </div>

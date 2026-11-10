@@ -11,7 +11,7 @@ import (
 func TestCollectorHubNeverHoldsAGate(t *testing.T) {
 	e := NewRealEngine()
 
-	hubID, err := e.RegisterTimerHello("A0767469", true, domain.DefaultFirmwareProfile, "H1")
+	hubID, err := e.RegisterTimerHello("A0767469", true, "H1")
 	if err != nil {
 		t.Fatalf("register hub: %v", err)
 	}
@@ -23,11 +23,11 @@ func TestCollectorHubNeverHoldsAGate(t *testing.T) {
 		t.Fatalf("hub created %d gate(s), want 0", len(gates))
 	}
 
-	s1, err := e.RegisterTimerHello("DA9B4CA7", false, domain.DefaultFirmwareProfile, "S1")
+	s1, err := e.RegisterTimerHello("DA9B4CA7", false, "S1")
 	if err != nil {
 		t.Fatalf("register spoke 1: %v", err)
 	}
-	s2, err := e.RegisterTimerHello("11223344", false, domain.DefaultFirmwareProfile, "S2")
+	s2, err := e.RegisterTimerHello("11223344", false, "S2")
 	if err != nil {
 		t.Fatalf("register spoke 2: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestCollectorHubNeverHoldsAGate(t *testing.T) {
 	if err := e.UpdateGate(domain.GateUpdate{GateID: startGate.GateID, Name: startGate.Name, Role: startGate.Role, AssignedTimerID: &hub}); err != nil {
 		t.Fatalf("drag hub onto gate: %v", err)
 	}
-	if _, err := e.RegisterTimerHello("A0767469", true, domain.DefaultFirmwareProfile, "H1"); err != nil {
+	if _, err := e.RegisterTimerHello("A0767469", true, "H1"); err != nil {
 		t.Fatalf("re-register hub: %v", err)
 	}
 	_, gates, _, _, _ = e.StateSnapshot()
@@ -87,7 +87,7 @@ func TestCollectorHubNeverHoldsAGate(t *testing.T) {
 	}
 
 	// Re-announcing the hub (periodic HELLO) keeps it gate-less and on ID 1.
-	again, err := e.RegisterTimerHello("A0767469", true, domain.DefaultFirmwareProfile, "H1")
+	again, err := e.RegisterTimerHello("A0767469", true, "H1")
 	if err != nil || again != hubID {
 		t.Fatalf("re-register hub: id=%d err=%v", again, err)
 	}
@@ -138,10 +138,10 @@ func TestSimulatorEngineUsesCollectorHubModel(t *testing.T) {
 	}
 
 	// A second simulated hub is rejected; a new spoke never takes timer ID 1.
-	if _, err := e.AddSimulatedTimer("hub", "", ""); err != ErrHubExists {
+	if _, err := e.AddSimulatedTimer("hub", ""); err != ErrHubExists {
 		t.Fatalf("adding a 2nd hub: err=%v, want ErrHubExists", err)
 	}
-	id, err := e.AddSimulatedTimer("spoke", "", "")
+	id, err := e.AddSimulatedTimer("spoke", "")
 	if err != nil || id == domain.SimHubTimerID {
 		t.Fatalf("add spoke: id=%d err=%v", id, err)
 	}

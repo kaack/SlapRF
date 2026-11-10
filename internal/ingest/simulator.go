@@ -513,10 +513,9 @@ func (s *TrackSimulator) DeleteTimer(timerID uint8) error {
 	return s.engine.DeleteDetectedTimer(timerID)
 }
 
-// AddTimer creates a new simulated XIAO timer (one Hub plus up to 6 Spokes) running the given
-// firmware profile. A new Hub joins without a gate; a new Spoke takes a free gate.
-func (s *TrackSimulator) AddTimer(role string, label string, profile string) (uint8, error) {
-	id, err := s.engine.AddSimulatedTimer(role, label, profile)
+// AddTimer creates a new simulated XIAO timer (one Hub plus up to 6 Spokes). A new Hub joins without a gate; a new Spoke takes a free gate.
+func (s *TrackSimulator) AddTimer(role string, label string) (uint8, error) {
+	id, err := s.engine.AddSimulatedTimer(role, label)
 	if err != nil {
 		return 0, err
 	}
@@ -632,17 +631,12 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 		if fw == "" {
 			fw = domain.LatestFirmwareVersion
 		}
-		profile := d.FirmwareProfile
-		if profile == "" {
-			profile = domain.DefaultFirmwareProfile
-		}
 		simTimers = append(simTimers, domain.SimTimerState{
 			TimerID:          d.TimerID,
 			TimerLabel:       d.TimerLabel,
 			Color:            d.Color,
 			IsHub:            d.IsHub,
 			FirmwareVersion:  fw,
-			FirmwareProfile:  profile,
 			Fingerprint:      d.Fingerprint,
 			PoweredOn:        poweredOn,
 			Online:           d.Online && poweredOn,

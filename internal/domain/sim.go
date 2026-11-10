@@ -65,7 +65,6 @@ type SimTimerState struct {
 	Color            string  `json:"color"`
 	IsHub            bool    `json:"isHub"`
 	FirmwareVersion  string  `json:"firmwareVersion"`
-	FirmwareProfile  string  `json:"firmwareProfile"`
 	Fingerprint      string  `json:"fingerprint"`
 	PoweredOn        bool    `json:"poweredOn"`
 	Online           bool    `json:"online"`

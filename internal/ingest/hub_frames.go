@@ -16,21 +16,21 @@ const (
 	FrameMagic0        byte = 0xC5
 	FrameMagicSingle   byte = 0x58 // 16-byte single-sample frame
 	FrameMagicWindow   byte = 0x59 // Variable-length sliding-window recorder frame
-	FrameMagicHello    byte = 0x5A // 36-byte timer announcement (fingerprint, name, profile)
+	FrameMagicHello    byte = 0x5A // 36-byte timer announcement (fingerprint, name, sweep rate)
 	FrameMagicChannels byte = 0x5E // 19-byte active pilot channel table (0 = disabled slot)
 
 	SingleFrameLen    int = 16
 	HelloFrameLen     int = 36
 	ChannelsFrameLen  int = 19 // magic0, magic1, 8 x uint16 LE freqs, crc8
 	windowHeaderLen   int = 7  // magic0, magic1, slot, sample_count, battery_mv (2), noise_floor
-	SlidingWindowSize int = 4  // Default ("open-ground") window; frames may carry up to MaxWindowSamples
+	SlidingWindowSize int = 4  // Firmware window; frames may carry up to MaxWindowSamples
 	MaxWindowSamples  int = firmware.MaxWindowSamples
 	RawSampleBytes    int = 1 + domain.MaxPilotSlots // 1-byte seq_num + 8 x int8 rssi_dbm = 9 bytes
 
 	// WindowFrameLen is the size of a default 4-sample window frame (kept for reference).
 	WindowFrameLen int = windowHeaderLen + SlidingWindowSize*RawSampleBytes + 1
 
-	SampleIntervalUs uint64 = 20_000 // Default 50 Hz sweep (until a Hello reports the profile)
+	SampleIntervalUs uint64 = 1_000_000 / firmware.SweepHz // Firmware sweep interval (a Hello's sweep_hz overrides it)
 )
 
 // WindowFrameLenFor returns the byte length of a window frame carrying `samples` sweeps.
@@ -42,7 +42,7 @@ func WindowFrameLenFor(samples int) int {
 type slotInfo struct {
 	fingerprint uint32
 	timerID     uint8  // Stable app-side timer ID (engine)
-	intervalUs  uint64 // Sweep interval for this timer's firmware profile
+	intervalUs  uint64 // Sweep interval reported in this timer's Hello
 }
 
 // HubFrameDecoder decodes binary Hub frames (2.4 GHz sliding-window recorder frames, Hellos)
@@ -159,7 +159,7 @@ func (r *HubFrameDecoder) IngestPacket(raw []byte, nowUs uint64) int {
 
 // handleHello maps a Hub slot to the board's stable timer ID.
 //
-//	[0] 0xC5 [1] 0x5A [2] slot [3] role [4..7] fingerprint (LE) [8] profile code
+//	[0] 0xC5 [1] 0x5A [2] slot [3] role [4..7] fingerprint (LE) [8] reserved (0)
 //	[9] sweep_hz [10..33] timer_label (24) [34] reserved [35] crc8
 func (r *HubFrameDecoder) handleHello(raw []byte) {
 	if len(raw) < HelloFrameLen || !validCRC8(raw[:HelloFrameLen]) {
@@ -180,9 +180,8 @@ func (r *HubFrameDecoder) handleHello(raw []byte) {
 	}
 	r.mu.Unlock()
 
-	profile := firmware.ProfileByCode(raw[8])
 	label := cString(raw[10:34])
-	timerID, err := r.engine.RegisterTimerHello(fmt.Sprintf("%08X", fp), raw[3] == firmware.RoleHubTimer, profile.ID, label)
+	timerID, err := r.engine.RegisterTimerHello(fmt.Sprintf("%08X", fp), raw[3] == firmware.RoleHubTimer, label)
 	if err != nil || timerID == 0 {
 		return
 	}
@@ -463,14 +462,13 @@ func EncodeWindowFrame(slot uint8, battMv uint16, noiseFloorDbm int8, samples []
 }
 
 // EncodeHelloFrame builds the 36-byte announcement the Hub forwards when a timer joins.
-func EncodeHelloFrame(slot uint8, role uint8, fingerprint uint32, profileCode uint8, sweepHz uint8, label string) []byte {
+func EncodeHelloFrame(slot uint8, role uint8, fingerprint uint32, sweepHz uint8, label string) []byte {
 	pkt := make([]byte, HelloFrameLen)
 	pkt[0] = FrameMagic0
 	pkt[1] = FrameMagicHello
 	pkt[2] = slot
 	pkt[3] = role
 	binary.LittleEndian.PutUint32(pkt[4:8], fingerprint)
-	pkt[8] = profileCode
 	pkt[9] = sweepHz
 	copy(pkt[10:34], []byte(label))
 	pkt[HelloFrameLen-1] = xorCRC(pkt[:HelloFrameLen-1])

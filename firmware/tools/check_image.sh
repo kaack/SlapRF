@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Post-build checks for a SlapRF firmware profile (run from the profile directory after
+# Post-build checks for the SlapRF firmware (run from firmware/slaprf after
 # `idf.py build`, with the ESP-IDF toolchain on PATH).
 #
 #  1. The 5.8 GHz capture engine writes into SRAM 0x40820000-0x4083FFFF, which the firmware

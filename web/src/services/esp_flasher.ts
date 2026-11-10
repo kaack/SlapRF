@@ -4,7 +4,7 @@
  * Speaks the SLIP-framed Espressif ROM bootloader protocol directly over Chrome/Edge's
  * `navigator.serial` API to a Seeed Studio XIAO ESP32-C5 (USB VID `0x303A` / PID `0x1001`):
  *   - Read (`readXiaoC5OverWebSerial`): Queries the connected XIAO over USB for its chip ID
- *     and decodes its `SLAPRF02` configuration block (role, firmware profile, board fingerprint,
+ *     and decodes its `SLAPRF02` configuration block (role, board fingerprint,
  *     and programmed 5.8 GHz channel table).
  *   - Write (`flashXiaoC5OverWebSerial`): Optionally reads the board's existing fingerprint so it
  *     can be kept, enters Download Mode via DTR/RTS, erases flash, streams 1 KB blocks
@@ -20,7 +20,6 @@ export interface FlashProgress {
 export interface TimerStatusSnapshot {
   fw: string;
   role: number;
-  profile: number;
   fp: string;
   label: string;
   uptimeMs: number;
@@ -52,7 +51,6 @@ export interface TimerReadout {
   timerLabel: string;
   frequenciesMHz: number[];
   firmwareVersion: string;
-  firmwareProfile: string;
   fingerprint: string;
   /** Set by `flashXiaoC5OverWebSerial`: true if the board's previous fingerprint was kept. */
   fingerprintKept?: boolean;
@@ -105,36 +103,14 @@ const SLIP_ESC_ESC = 0xdd;
 const FLASH_BLOCK_SIZE = 1024; // ESP32C5ROM.FLASH_WRITE_SIZE = 0x400 (1024 bytes)
 const ESP_IMAGE_MAGIC = 0xe9;
 
-/**
- * One firmware design. Each lives in its own directory (`firmware/<id>/main.c`) tuned for a track
- * type and timer placement; `firmware/<id>/profile.json` is injected here at bundle time.
- */
-export interface FirmwareProfileInfo {
-  id: string;
-  code: number;
-  name: string;
-  track: string;
-  mount: string;
-  link: string;
-  sweepHz: number;
-  summary: string;
-}
-
-/** Current firmware build. Every profile is rebuilt at this version on each release. */
+/** Current firmware build (firmware/slaprf). */
 export const LATEST_FIRMWARE_VERSION = "v0.1.4";
 
-declare const __SLAPRF_FIRMWARE_PROFILES__: FirmwareProfileInfo[];
+/** The one compiled firmware image, built from firmware/slaprf and served next to the app. */
+export const FIRMWARE_IMAGE_URL = "./firmware/slaprf-xiao-c5.bin";
 
-export const FIRMWARE_PROFILES: FirmwareProfileInfo[] = __SLAPRF_FIRMWARE_PROFILES__;
-export const DEFAULT_FIRMWARE_PROFILE = "open-ground";
-
-export function firmwareProfile(id: string | undefined): FirmwareProfileInfo {
-  return FIRMWARE_PROFILES.find((p) => p.id === id) ?? FIRMWARE_PROFILES[0];
-}
-
-function profileByCode(code: number): FirmwareProfileInfo {
-  return FIRMWARE_PROFILES.find((p) => p.code === code) ?? FIRMWARE_PROFILES[0];
-}
+/** 5.8 GHz sweep rate compiled into the firmware (SWEEP_HZ in firmware/slaprf/main/main.c). */
+export const FIRMWARE_SWEEP_HZ = 100;
 
 /** Random, non-zero 32-bit board fingerprint rendered as 8 upper-case hex digits. */
 export function generateFingerprint(): string {
@@ -151,7 +127,7 @@ const CONFIG_OFF = 0x0100;
 const CONFIG_LEN = 160;
 const OFF_VERSION = 8;
 const OFF_ROLE = 11;
-const OFF_PROFILE = 12;
+const OFF_RESERVED = 12; // Reserved (always 0, ignored on read)
 const OFF_WIFI_MODE = 13; // Reserved (always 0). Bytes 34..106 (legacy SSID/pass) stay zeroed.
 const OFF_FINGERPRINT = 14;
 const OFF_FREQS = 18;
@@ -241,18 +217,16 @@ export async function withFingerprint(img: Uint8Array, fingerprintHex: string): 
 }
 
 /**
- * Fetches the compiled image for the chosen profile (`./firmware/slaprf-xiao-c5-<profile>.bin`,
- * built by CI from `firmware/<profile>/`) — or falls back to a placeholder image — and stamps the
- * `SLAPRF02` block so USB flashing and `.bin` downloads work with zero Go backend.
+ * Fetches the compiled firmware image (`FIRMWARE_IMAGE_URL`, built by CI from `firmware/slaprf/`) —
+ * or falls back to a placeholder image — and stamps the `SLAPRF02` block so USB flashing and `.bin`
+ * downloads work with zero Go backend.
  */
 export async function buildOrPatchFirmwareBin(opts: {
   role: "hub" | "spoke";
   timerLabel: string;
-  profile?: string;
   fingerprint?: string;
   frequenciesMHz?: number[];
 }): Promise<{ bytes: Uint8Array; filename: string }> {
-  const profile = firmwareProfile(opts.profile);
   const roleCode = opts.role === "hub" ? 1 : 2;
   const fingerprint = opts.fingerprint || generateFingerprint();
   const cleanLabel = opts.timerLabel.trim().slice(0, 24);
@@ -264,7 +238,7 @@ export async function buildOrPatchFirmwareBin(opts: {
 
   let img: Uint8Array | null = null;
   try {
-    const res = await fetch(`./firmware/slaprf-xiao-c5-${profile.id}.bin`, { cache: "no-cache" });
+    const res = await fetch(FIRMWARE_IMAGE_URL, { cache: "no-cache" });
     if (res.ok) {
       const fetched = new Uint8Array(await res.arrayBuffer());
       if (findConfigBlock(fetched) >= 0) img = fetched;
@@ -284,7 +258,7 @@ export async function buildOrPatchFirmwareBin(opts: {
   block[OFF_VERSION + 1] = min;
   block[OFF_VERSION + 2] = pat;
   block[OFF_ROLE] = roleCode;
-  block[OFF_PROFILE] = profile.code;
+  block[OFF_RESERVED] = 0;
   block[OFF_WIFI_MODE] = 0; // Reserved: the Hub is a USB dongle; no Wi-Fi (SSID/pass stay zeroed)
   bv.setUint32(OFF_FINGERPRINT, parseInt(fingerprint, 16) >>> 0, true);
   for (let i = 0; i < 8; i++) bv.setUint16(OFF_FREQS + i * 2, freqs[i], true);
@@ -296,7 +270,7 @@ export async function buildOrPatchFirmwareBin(opts: {
   const slug = cleanLabel ? cleanLabel.replace(/[^a-zA-Z0-9_-]+/g, "-") : opts.role;
   return {
     bytes: img,
-    filename: `slaprf-xiao-c5-${slug}-${profile.id}-${LATEST_FIRMWARE_VERSION}.bin`,
+    filename: `slaprf-xiao-c5-${slug}-${LATEST_FIRMWARE_VERSION}.bin`,
   };
 }
 export function isWebSerialSupported(): boolean {
@@ -328,7 +302,6 @@ export function parseSlaprfConfigBlock(bytes: Uint8Array): TimerReadout | null {
     timerLabel,
     frequenciesMHz,
     firmwareVersion: `v${block[OFF_VERSION]}.${block[OFF_VERSION + 1]}.${block[OFF_VERSION + 2]}`,
-    firmwareProfile: profileByCode(block[OFF_PROFILE]).id,
     fingerprint: view.getUint32(OFF_FINGERPRINT, true).toString(16).toUpperCase().padStart(8, "0"),
   };
 }
@@ -564,7 +537,6 @@ export async function readXiaoC5OverWebSerial(
         };
       }
       if (status) {
-        const prof = profileByCode(status.profile);
         onProgress({ stage: "done", percent: 100, detail: "Read complete." });
         return {
           chip: status.chip
@@ -574,7 +546,6 @@ export async function readXiaoC5OverWebSerial(
           timerLabel: status.label || "",
           frequenciesMHz: status.freqs,
           firmwareVersion: status.fw,
-          firmwareProfile: prof.id,
           fingerprint: status.fp,
           status,
         };

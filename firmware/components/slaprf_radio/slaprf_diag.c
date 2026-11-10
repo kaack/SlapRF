@@ -50,7 +50,6 @@
 #define CFG_LEN          160
 #define CFG_OFF_VERSION  8
 #define CFG_OFF_ROLE     11
-#define CFG_OFF_PROFILE  12
 #define CFG_OFF_FP       14
 #define CFG_OFF_FREQS    18
 #define CFG_OFF_LABEL    107
@@ -91,7 +90,6 @@ static volatile uint8_t s_slot;
 
 typedef struct {
     uint32_t fp;
-    uint8_t profile;
     char label[25];
     int64_t last_rx_us;
     uint32_t frames;
@@ -479,7 +477,7 @@ static void send_status(void) {
     if (!out_buf) return;
     #define out (*out_buf)
     int n = snprintf(out, sizeof(out),
-                     "@{\"t\":\"status\",\"fw\":\"v%u.%u.%u\",\"role\":%u,\"profile\":%u,\"fp\":\"%08lX\","
+                     "@{\"t\":\"status\",\"fw\":\"v%u.%u.%u\",\"role\":%u,\"fp\":\"%08lX\","
                      "\"label\":\"%s\",\"uptimeMs\":%lld,\"reset\":\"%s\",\"boots\":%lu,"
                      "\"emergencyMode\":%s,\"hubGate\":%s,\"crashStreak\":%lu,\"heapFree\":%lu,\"heapMin\":%lu,"
                      "\"sweepHz\":%u,\"sweeps\":%lu,\"sweepUs\":%lu,\"sweepUsMax\":%lu,\"sweepBudgetUs\":%lu,"
@@ -488,7 +486,7 @@ static void send_status(void) {
                      "\"net\":{\"mode\":\"%s\",\"stations\":%d},\"link\":{\"rssi\":%d,\"rate\":%u,\"fmt\":%u,\"beacons\":%lu,\"data\":%lu,\"tx\":\"%s\",\"txPowerDbm\":%.2f,\"saved\":%s},"
                      "\"channel\":%u,\"slot\":%u,\"scanLive\":%s,\"freqsTemporary\":%s,\"chanMask\":%u,\"freqs\":[",
                      s_cfg[CFG_OFF_VERSION], s_cfg[CFG_OFF_VERSION + 1], s_cfg[CFG_OFF_VERSION + 2],
-                     s_cfg[CFG_OFF_ROLE], s_cfg[CFG_OFF_PROFILE], (unsigned long)fp, label,
+                     s_cfg[CFG_OFF_ROLE], (unsigned long)fp, label,
                      (long long)(esp_timer_get_time() / 1000), reset_reason_name(esp_reset_reason()),
                      (unsigned long)s_boots, s_emergency_mode ? "true" : "false", s_hub_gate ? "true" : "false", (unsigned long)s_crash_streak,
                      (unsigned long)esp_get_free_heap_size(),
@@ -516,9 +514,9 @@ static void send_status(void) {
                                         ? (uint32_t)((now_us - sp->last_rx_us) / 1000)
                                         : 0;
             n += snprintf(out + n, sizeof(out) - n,
-                          "%s{\"slot\":%d,\"fp\":\"%08lX\",\"label\":\"%s\",\"profile\":%u,\"msAgo\":%lu,\"frames\":%lu,\"seq\":%u",
+                          "%s{\"slot\":%d,\"fp\":\"%08lX\",\"label\":\"%s\",\"msAgo\":%lu,\"frames\":%lu,\"seq\":%u",
                           first_sp ? "" : ",", i + 2, (unsigned long)sp->fp, sp->label,
-                          (unsigned)sp->profile, (unsigned long)ms_ago,
+                          (unsigned long)ms_ago,
                           (unsigned long)sp->frames, (unsigned)sp->last_seq);
             if (sp->has_dbm) {
                 n += snprintf(out + n, sizeof(out) - n,
@@ -1032,7 +1030,7 @@ void slaprf_diag_set_slot(uint8_t slot) {
     s_slot = slot;
 }
 
-void slaprf_diag_note_spoke(uint8_t slot, uint32_t fp, uint8_t profile, const char *label) {
+void slaprf_diag_note_spoke(uint8_t slot, uint32_t fp, const char *label) {
     if (slot < 2 || slot > 7) return;
     diag_spoke_peer_t *p = &s_peer_spokes[slot - 2];
     if (p->fp != 0 && p->fp != fp && (p->fp & 0xFFFFFF00UL) != 0x53504B00UL) {
@@ -1040,7 +1038,6 @@ void slaprf_diag_note_spoke(uint8_t slot, uint32_t fp, uint8_t profile, const ch
         p->has_dbm = false;
     }
     p->fp = fp;
-    p->profile = profile;
     memset(p->label, 0, sizeof(p->label));
     if (label) {
         for (int i = 0; i < 24 && label[i]; i++) {
@@ -1069,9 +1066,6 @@ void slaprf_diag_note_spoke_frame(const uint8_t *frame, uint32_t len) {
     p->frames++;
     if (p->label[0] == '\0') {
         snprintf(p->label, sizeof(p->label), "S%u", (unsigned)(slot - 1));
-    }
-    if (p->profile == 0 && s_cfg != NULL) {
-        p->profile = s_cfg[CFG_OFF_PROFILE];
     }
     if (frame[1] == 0x59) { // FRAME_MAGIC_WINDOW
         const uint8_t sample_count = frame[3];

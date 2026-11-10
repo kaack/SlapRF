@@ -4,15 +4,16 @@ import (
 	"testing"
 
 	"slaprf/internal/domain"
+	"slaprf/internal/firmware"
 	"slaprf/internal/tracker"
 )
 
 func TestSlidingWindowRecovers100PercentUnder50PercentPacketLoss(t *testing.T) {
 	eng := tracker.NewRealEngine()
 	rx := NewHubFrameDecoder(eng)
-	rx.IngestPacket(EncodeHelloFrame(2, 2, 0x00000002, 1, 50, "S1"), 0)
+	rx.IngestPacket(EncodeHelloFrame(2, 2, 0x00000002, firmware.SweepHz, "S1"), 0)
 
-	// Simulate 40 consecutive 20 ms 5.8 GHz sweeps (seq 240..255, wrapping around to 0..23)
+	// Simulate 40 consecutive 10 ms 5.8 GHz sweeps (seq 240..255, wrapping around to 0..23)
 	const totalSweeps = 40
 	var ring []domain.TimerTelemetryFrame
 	var recovered []domain.TimerTelemetryFrame
@@ -73,7 +74,7 @@ func TestSlidingWindowRecovers100PercentUnder50PercentPacketLoss(t *testing.T) {
 func TestCorruptedPacketRejectedAndHealedByNextWindow(t *testing.T) {
 	eng := tracker.NewRealEngine()
 	rx := NewHubFrameDecoder(eng)
-	rx.IngestPacket(EncodeHelloFrame(3, 2, 0x00000003, 1, 50, "S2"), 0)
+	rx.IngestPacket(EncodeHelloFrame(3, 2, 0x00000003, firmware.SweepHz, "S2"), 0)
 
 	var samples [4]domain.TimerTelemetryFrame
 	for i := 0; i < 4; i++ {
@@ -87,13 +88,13 @@ func TestCorruptedPacketRejectedAndHealedByNextWindow(t *testing.T) {
 		t.Fatalf("expected corrupted packet to be rejected by CRC8, got %d frames", len(got))
 	}
 
-	// Burst 2 (40 ms later) carries sliding window [1, 2, 3, 4] and heals samples 1 & 2 automatically
+	// Burst 2 (40 ms later, 10 ms sweeps) carries sliding window [1, 2, 3, 4] and heals samples 1 & 2 automatically
 	goodPkt := EncodeWindowFrame(3, 4100, -92, samples[:4])
 	got := rx.DecodePacket(goodPkt[:], 140_000)
 	if len(got) != 4 {
 		t.Fatalf("expected all 4 samples healed by next window, got %d", len(got))
 	}
-	if got[0].TimestampUs != 80_000 || got[1].TimestampUs != 100_000 || got[2].TimestampUs != 120_000 || got[3].TimestampUs != 140_000 {
+	if got[0].TimestampUs != 110_000 || got[1].TimestampUs != 120_000 || got[2].TimestampUs != 130_000 || got[3].TimestampUs != 140_000 {
 		t.Fatalf("unexpected reconstructed timestamps: %+v", got)
 	}
 }
@@ -102,14 +103,14 @@ func TestHelloMapsHubSlotToStableTimerByFingerprint(t *testing.T) {
 	eng := tracker.NewRealEngine()
 	rx := NewHubFrameDecoder(eng)
 
-	// Board announces itself in Hub slot 5 running the 100 Hz indoor profile.
-	rx.IngestPacket(EncodeHelloFrame(5, 2, 0xCAFEBABE, 3, 100, "S7"), 0)
+	// Board announces itself in Hub slot 5 sweeping at 100 Hz.
+	rx.IngestPacket(EncodeHelloFrame(5, 2, 0xCAFEBABE, 100, "S7"), 0)
 
 	var timerID uint8
 	for _, d := range eng.DetectedTimersSnapshot() {
 		if d.Fingerprint == "CAFEBABE" {
 			timerID = d.TimerID
-			if d.TimerLabel != "S7" || d.FirmwareProfile != "indoor" {
+			if d.TimerLabel != "S7" {
 				t.Fatalf("unexpected registered timer: %+v", d)
 			}
 		}
@@ -124,11 +125,11 @@ func TestHelloMapsHubSlotToStableTimerByFingerprint(t *testing.T) {
 		t.Fatalf("expected slot 5 frames to map to timer %d, got %+v", timerID, got)
 	}
 	if got[0].TimestampUs != 1_000_000-10_000 {
-		t.Fatalf("expected 10 ms spacing for 100 Hz profile, got %d", got[0].TimestampUs)
+		t.Fatalf("expected 10 ms spacing for 100 Hz sweeps, got %d", got[0].TimestampUs)
 	}
 
 	// Re-joining in a different slot keeps the same stable timer ID.
-	rx.IngestPacket(EncodeHelloFrame(2, 2, 0xCAFEBABE, 3, 100, "S7"), 0)
+	rx.IngestPacket(EncodeHelloFrame(2, 2, 0xCAFEBABE, 100, "S7"), 0)
 	got = rx.DecodePacket(EncodeWindowFrame(2, 4100, -92, []domain.TimerTelemetryFrame{{SeqNum: 9}}), 2_000_000)
 	if len(got) != 1 || got[0].TimerID != timerID {
 		t.Fatalf("expected re-joined board to keep timer %d, got %+v", timerID, got)
@@ -176,7 +177,7 @@ func TestSelectivePilotChannelTableAndUpperPoolMapping(t *testing.T) {
 	}
 
 	rx := NewHubFrameDecoder(eng)
-	rx.IngestPacket(EncodeHelloFrame(1, 1, 0xBE7C0001, 3, 100, "H1"), 0)
+	rx.IngestPacket(EncodeHelloFrame(1, 1, 0xBE7C0001, 100, "H1"), 0)
 	var sample domain.TimerTelemetryFrame
 	sample.SeqNum = 1
 	sample.RSSI[4] = -47 // Hardware slot 4 carries Pilot 10's RSSI

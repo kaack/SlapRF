@@ -20,10 +20,10 @@ func newFingerprintHex() string {
 	}
 }
 
-// RegisterTimerHello maps a timer announced by the Hub (fingerprint + name + profile) to its
+// RegisterTimerHello maps a timer announced by the Hub (fingerprint + name) to its
 // stable app-side timer ID, creating the timer the first time a fingerprint is seen.
 // The Hub's own short TDMA slot number is translated to this ID by the ingest layer.
-func (e *Engine) RegisterTimerHello(fingerprint string, isHub bool, profile, label string) (uint8, error) {
+func (e *Engine) RegisterTimerHello(fingerprint string, isHub bool, label string) (uint8, error) {
 	role := "spoke"
 	if isHub {
 		role = "hub"
@@ -31,7 +31,6 @@ func (e *Engine) RegisterTimerHello(fingerprint string, isHub bool, profile, lab
 	return e.ProvisionGate(ProvisionRequest{
 		Role:        role,
 		Label:       label,
-		Profile:     profile,
 		Fingerprint: fingerprint,
 	})
 }

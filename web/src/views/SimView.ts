@@ -2,12 +2,7 @@ import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
-import {
-  DEFAULT_FIRMWARE_PROFILE,
-  FIRMWARE_PROFILES,
-  firmwareProfile,
-  LATEST_FIRMWARE_VERSION,
-} from "../services/esp_flasher";
+import { LATEST_FIRMWARE_VERSION } from "../services/esp_flasher";
 import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
 import {
@@ -223,7 +218,6 @@ export class SimView extends Component {
 
   private addRole: "spoke" | "hub" = "spoke";
   private addLabel = "";
-  private addProfile = DEFAULT_FIRMWARE_PROFILE;
   private errorMsg = "";
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
@@ -237,7 +231,6 @@ export class SimView extends Component {
         const parsed = JSON.parse(raw) as {
           addRole?: "spoke" | "hub";
           addLabel?: string;
-          addProfile?: string;
         };
         if (parsed.addRole === "spoke" || parsed.addRole === "hub") {
           this.addRole = parsed.addRole;
@@ -245,21 +238,10 @@ export class SimView extends Component {
         if (typeof parsed.addLabel === "string") {
           this.addLabel = parsed.addLabel;
         }
-        if (
-          typeof parsed.addProfile === "string" &&
-          FIRMWARE_PROFILES.some((p) => p.id === parsed.addProfile)
-        ) {
-          this.addProfile = parsed.addProfile;
-        }
       }
     } catch {
       // Ignore storage access errors
     }
-
-    const fwOptions = FIRMWARE_PROFILES.map(
-      (fw) =>
-        `<option value="${esc(fw.id)}" ${fw.id === this.addProfile ? "selected" : ""}>${esc(fw.name)}</option>`
-    ).join("");
 
     // Uses the exact two-column `.settings` / `.settings-section` / `.card` UX language as System (`SetupView.ts`)
     el.innerHTML = `
@@ -299,12 +281,6 @@ export class SimView extends Component {
                 <label class="sim-inline-field">
                   <span>Timer ID / name</span>
                   <input type="text" class="input mono" data-field="timer-label" placeholder="e.g. T5 Tunnel Exit" value="${esc(this.addLabel)}" />
-                </label>
-                <label class="sim-inline-field">
-                  <span>Firmware profile</span>
-                  <select class="input" data-field="timer-fw">
-                    ${fwOptions}
-                  </select>
                 </label>
               </div>
               <button class="btn btn-armed" data-action="timer-add" data-slot="timer-add-btn">
@@ -433,7 +409,6 @@ export class SimView extends Component {
         JSON.stringify({
           addRole: this.addRole,
           addLabel: this.addLabel,
-          addProfile: this.addProfile,
         })
       );
     } catch {
@@ -453,9 +428,6 @@ export class SimView extends Component {
     const target = e.target as HTMLSelectElement;
     if (target.dataset.field === "timer-role") {
       this.addRole = target.value === "hub" ? "hub" : "spoke";
-      this.saveDraftPrefs();
-    } else if (target.dataset.field === "timer-fw") {
-      this.addProfile = target.value;
       this.saveDraftPrefs();
     }
   };
@@ -529,7 +501,6 @@ export class SimView extends Component {
             action: "add",
             role: this.addRole,
             label,
-            firmwareProfile: this.addProfile,
           })
           .then(() => {
             this.addLabel = "";
@@ -550,14 +521,11 @@ export class SimView extends Component {
         this.errorMsg = "";
         this.addRole = "spoke";
         this.addLabel = "";
-        this.addProfile = DEFAULT_FIRMWARE_PROFILE;
         this.saveDraftPrefs();
         const roleSel = this.el.querySelector<HTMLSelectElement>('select[data-field="timer-role"]');
         if (roleSel) roleSel.value = this.addRole;
         const labelInp = this.el.querySelector<HTMLInputElement>('input[data-field="timer-label"]');
         if (labelInp) labelInp.value = this.addLabel;
-        const fwSel = this.el.querySelector<HTMLSelectElement>('select[data-field="timer-fw"]');
-        if (fwSel) fwSel.value = this.addProfile;
         void this.api.simTimerAction({ action: "reset-timers" }).then(() => {
           this.lastTimersSig = "";
           this.renderTimers(this.store.simState);
@@ -1030,7 +998,7 @@ export class SimView extends Component {
       timers
         .map(
           (t) =>
-            `${t.timerId}:${t.timerLabel}:${t.color}:${t.isHub ? 1 : 0}:${t.firmwareVersion}:${t.firmwareProfile}:${t.poweredOn ? 1 : 0}:${t.assignedGateName}`
+            `${t.timerId}:${t.timerLabel}:${t.color}:${t.isHub ? 1 : 0}:${t.firmwareVersion}:${t.poweredOn ? 1 : 0}:${t.assignedGateName}`
         )
         .join("|") + `|err:${this.errorMsg}`;
     if (sig === this.lastTimersSig) return;
@@ -1066,8 +1034,8 @@ export class SimView extends Component {
               }</span>
             </div>
 
-            <div class="timer-fw-cell" title="${esc(`${firmwareProfile(t.firmwareProfile).name} · ${t.firmwareVersion}`)}">
-              <span>${esc(firmwareProfile(t.firmwareProfile).name)}</span>
+            <div class="timer-fw-cell" title="SlapRF firmware ${esc(t.firmwareVersion)}">
+              <span class="mono">${esc(t.firmwareVersion)}</span>
               ${isLatestFw ? "" : `<span class="badge tone-warn">Update → ${LATEST_FIRMWARE_VERSION}</span>`}
             </div>
 

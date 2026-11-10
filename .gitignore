@@ -20,7 +20,7 @@ _site/
 web/wasm/*.wasm
 web/wasm/*.js
 
-# Compiled firmware images (built by CI from firmware/<profile>/)
+# Compiled firmware image (built by CI from firmware/slaprf/; web/firmware/slaprf-xiao-c5.bin is force-added)
 web/firmware/*.bin
 # ESP-IDF build outputs
 firmware/*/build/

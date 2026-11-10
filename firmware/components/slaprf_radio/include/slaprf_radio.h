@@ -1,7 +1,7 @@
 /**
- * slaprf_radio — hardware layer shared by every SlapRF firmware profile.
+ * slaprf_radio — hardware layer of the SlapRF firmware.
  *
- * Profiles (firmware/<profile>/main/main.c) own the timing design: sweep rate, window size,
+ * The application (firmware/slaprf/main/main.c) owns the timing design: sweep rate, window size,
  * link choice, filters. This component owns "how do I talk to the XIAO ESP32-C5 hardware":
  * 2.4 GHz Wi-Fi / ESP-NOW, the Hub's USB relay to the laptop, sweep pacing, and the 5.8 GHz
  * RSSI measurement.
@@ -126,14 +126,14 @@ void slaprf_start_config_query_service(const volatile void *cfg, size_t len);
 /** Report one finished sweep (8 channel readings and its duration) for STATUS? / LIVE. */
 void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us);
 
-/** Report the profile's per-sweep time budget (us) so the Debug page can check sweep timing. */
+/** Report the firmware's per-sweep time budget (us) so the Debug page can check sweep timing. */
 void slaprf_diag_set_sweep_budget(uint32_t budget_us);
 
 /** Report the TDMA slot this timer is using (1 = Hub). */
 void slaprf_diag_set_slot(uint8_t slot);
 
 /** Hub only: record a child Spoke that joined a TDMA slot (2..7) for STATUS? Network view. */
-void slaprf_diag_note_spoke(uint8_t slot, uint32_t fp, uint8_t profile, const char *label);
+void slaprf_diag_note_spoke(uint8_t slot, uint32_t fp, const char *label);
 
 /** Hub only: record a received telemetry frame from TDMA slot (2..7) for STATUS? Network view. */
 void slaprf_diag_note_spoke_rx(uint8_t slot);

@@ -14,7 +14,7 @@
  * Strategy:
  *   - install:  precache every manifest entry into `slaprf-precache-<version>`. Entries whose
  *               content hash is unchanged are copied from the previous cache instead of being
- *               re-downloaded (the wasm + 4 firmware images are ~12 MB).
+ *               re-downloaded (the wasm + firmware image are ~9 MB).
  *   - activate: delete every other `slaprf-precache-*` cache, claim clients.
  *   - fetch:    non-GET or cross-origin → not intercepted.
  *               navigations → network-first (with timeout), falling back to cached index.html

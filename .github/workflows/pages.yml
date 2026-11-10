@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   firmware:
-    name: Build firmware profiles
+    name: Build firmware
     uses: ./.github/workflows/firmware.yml
 
   build-github-page:
@@ -33,11 +33,10 @@ jobs:
         with:
           go-version-file: "go.mod"
 
-      - name: Download compiled firmware images
+      - name: Download compiled firmware image
         uses: actions/download-artifact@v4
         with:
-          pattern: firmware-*
-          merge-multiple: true
+          name: firmware
           path: web/firmware
 
       - name: Build static SPA and Go WASM simulation engine

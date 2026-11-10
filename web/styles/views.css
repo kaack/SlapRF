@@ -2950,31 +2950,6 @@ body.is-gate-dragging * {
 }
 
 /* Step 1: Role picker (Hub / Spoke) */
-/* Step 2: Firmware profile hint */
-.flasher-profile-hint {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 12px 14px;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--surface);
-}
-.flasher-profile-tags {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.flasher-profile-tags .note {
-  margin-left: auto;
-}
-.flasher-profile-hint p {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.5;
-  color: var(--text-3);
-}
 
 /* Step 4: Board fingerprint keep / new choice */
 .flasher-fp-option {

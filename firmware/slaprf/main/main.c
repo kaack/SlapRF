@@ -1,19 +1,20 @@
 /**
- * SlapRF firmware profile: Open field Â· Gate-top mount
+ * SlapRF firmware for the Seeed XIAO ESP32-C5 (one firmware, one tuned configuration).
  *
- * Timers are mounted on top of the gate or a pole with clear line of sight to the Hub, so the link has
- * margin to spare. This design spends it on timing resolution instead: 100 Hz sweeps over a standard
- * 1 Mbps link at +14 dBm, with 4-sweep windows sent every 2 sweeps so every sample arrives twice.
+ * Every timer runs this same image; the role (Hub or Spoke), fingerprint, channel table and timer
+ * name are stamped into the SLAPRF02 config block at flash time. The design: 100 Hz 8-channel
+ * 5.8 GHz sweeps, 4-sweep windows sent every 2 sweeps (every 20 ms) so every sample arrives twice,
+ * over 6 Mbps OFDM ESP-NOW at +20 dBm. Link rate and TX power can be overridden from the USB serial
+ * console (LINKRATE / TXPOWER / LINKRESET, saved in NVS). The Hub is a USB collector dongle; it
+ * also sweeps when the app places it on a gate (HUBGATE 1).
  *
- * This directory is a complete, self-contained firmware for one situation. Other profiles live
- * next to it (firmware/<profile>/) and intentionally duplicate the shared protocol code so each
- * design can evolve independently. Anything on the wire (config block, frame layouts) must stay
- * in sync with internal/firmware/image.go and internal/ingest/wifi_udp.go.
+ * Anything on the wire (config block, frame layouts) must stay in sync with
+ * internal/firmware/image.go, internal/ingest/hub_frames.go and web/src/services/esp_flasher.ts.
  *
  * Identity: every board carries a random 32-bit fingerprint stamped at flash time. Spokes have no
- * fixed slot: on boot they send JOIN {fingerprint, name, profile} until the Hub replies ASSIGN
- * {fingerprint, slot}; the Hub forwards HELLO {slot, fingerprint} so the laptop maps the slot back
- * to the stable timer.
+ * fixed slot: on boot they send JOIN {fingerprint, name} until the Hub replies ASSIGN
+ * {fingerprint, slot}; the Hub forwards HELLO {slot, fingerprint, name} so the laptop maps the slot
+ * back to the stable timer.
  *
  * One radio, time-sliced (TDMA superframe):
  *   The C5 has a single radio. It is either measuring 5.8 GHz (transmitter off) or on the 2.4 GHz
@@ -26,7 +27,6 @@
  *     GUARD + (j % SLOTS_PER_GAP) * TDMA_SLOT_US after the gap opens.
  *
  *   Sweeps start exactly one interval apart, so sample timestamps stay uniform for the laptop.
- *   All timers on one course must run the same profile (the schedule depends on it).
  */
 
 #include <stdint.h>
@@ -35,13 +35,13 @@
 #include "esp_log.h"
 #include "slaprf_radio.h"
 
-/* ---- Profile tuning (unique to this directory) ------------------------------------------- */
-#define SLAPRF_PROFILE_CODE      2
+/* ---- Tuning ------------------------------------------------------------------------------ */
 #define SWEEP_HZ                 100  // 8-channel 5.8 GHz sweeps per second
 #define WINDOW_SAMPLES           4    // Sweeps per window frame
 #define TX_EVERY_SWEEPS          2    // 4 / 2 = every sweep delivered twice
-#define LINK_LONG_RANGE          0    // Standard 1 Mbps ESP-NOW
-#define TX_POWER_QDBM            56   // +14 dBm
+#define LINK_LONG_RANGE          1    // Also receive Espressif LR frames (TX rate is set by LINK_TX_RATE)
+#define LINK_TX_RATE             "6m" // ESP-NOW transmit PHY: 6 Mbps OFDM (~0.15 ms per frame; measured best at 100 Hz)
+#define TX_POWER_QDBM            80   // +20 dBm
 #define TDMA_SLOT_US             900  // 1 Mbps frame (~0.5 ms) + guard
 #define SWEEP_BUDGET_US          7000 // Radio away from 2.4 GHz per sweep (measured ~6.3 ms on chip v1.0)
 
@@ -52,7 +52,10 @@
 #define SLOT_GUARD_US            300
 #define GAP_US                   (SWEEP_INTERVAL_US - SWEEP_BUDGET_US)
 #define SLOTS_PER_GAP            ((GAP_US - SLOT_GUARD_US) / TDMA_SLOT_US)
-#define BEACON_WAIT_US           3000 // How long a Spoke waits past the predicted beacon
+#define BEACON_WAIT_US           3000 // Initial lock: how long a Spoke waits past the predicted beacon
+// Once locked, wait only this long past the predicted beacon before free-running on the prediction
+// (crystal drift is < 1 us per superframe), so a missed beacon never delays the Spoke's TX slot.
+#define BEACON_GRACE_US          250
 
 _Static_assert(SLOTS_PER_GAP * TX_EVERY_SWEEPS >= MAX_SPOKES,
                "schedule has fewer TDMA slots per superframe than Spokes");
@@ -81,7 +84,7 @@ typedef struct {
     char     magic[8];                        // "SLAPRF02"
     uint8_t  version[3];                      // major, minor, patch
     uint8_t  role;                            // ROLE_HUB_TIMER / ROLE_SPOKE_TIMER
-    uint8_t  profile;                         // Profile code (must equal SLAPRF_PROFILE_CODE)
+    uint8_t  reserved0;                       // Reserved (0)
     uint8_t  wifi_mode;                       // Hub: 0 = host "SlapRF" AP, 1 = join wifi_ssid
     uint32_t fingerprint;                     // Stable per-board identity, never 0
     uint16_t slot_freqs_mhz[MAX_PILOT_SLOTS]; // 8 pilot frequencies in MHz
@@ -113,7 +116,7 @@ typedef struct {
     uint8_t  magic0, magic1;                  // 0xC5 0x5B
     uint32_t fingerprint;
     uint8_t  role;
-    uint8_t  profile;
+    uint8_t  reserved0;                       // Reserved (0)
     uint8_t  sweep_hz;
     char     timer_label[24];
     uint8_t  crc8;
@@ -131,7 +134,7 @@ typedef struct {
     uint8_t  slot;
     uint8_t  role;
     uint32_t fingerprint;
-    uint8_t  profile;
+    uint8_t  reserved0;                       // Reserved (0)
     uint8_t  sweep_hz;
     char     timer_label[24];
     uint8_t  reserved;
@@ -145,7 +148,6 @@ static const volatile slaprf_flash_config_t g_flash_cfg = {
     .magic          = {'S', 'L', 'A', 'P', 'R', 'F', '0', '2'},
     .version        = {0, 1, 4},
     .role           = ROLE_HUB_TIMER,
-    .profile        = SLAPRF_PROFILE_CODE,
     .wifi_mode      = 0,
     .fingerprint    = 1,
     .slot_freqs_mhz = {5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917},
@@ -226,8 +228,7 @@ static uint32_t s_slot_fp[MAX_SPOKES]; // slot = index + 2
 static hub_hello_frame_t s_hello[1 + MAX_SPOKES]; // [0] = Hub, [n] = slot n + 1; magic0 == 0 means unused
 #define HELLO_REPEAT_US 2000000 // Re-announce every timer so a laptop that (re)connects late learns them
 
-static void hub_send_hello(uint8_t slot, uint8_t role, uint32_t fp, uint8_t profile, uint8_t sweep_hz,
-                           const char *label) {
+static void hub_send_hello(uint8_t slot, uint8_t role, uint32_t fp, uint8_t sweep_hz, const char *label) {
     hub_hello_frame_t h;
     memset(&h, 0, sizeof(h));
     h.magic0 = FRAME_MAGIC_0;
@@ -235,7 +236,6 @@ static void hub_send_hello(uint8_t slot, uint8_t role, uint32_t fp, uint8_t prof
     h.slot = slot;
     h.role = role;
     h.fingerprint = fp;
-    h.profile = profile;
     h.sweep_hz = sweep_hz;
     memcpy(h.timer_label, label, sizeof(h.timer_label));
     h.crc8 = compute_crc8((const uint8_t *)&h, sizeof(h) - 1);
@@ -256,10 +256,6 @@ static void hub_repeat_hellos(void) {
 
 /** Reuse a Spoke's slot if its fingerprint is known, else hand out the first free one. */
 static void hub_handle_join(const spoke_join_frame_t *j) {
-    if (j->profile != SLAPRF_PROFILE_CODE) {
-        ESP_LOGW(TAG, "Spoke %08lx runs profile %u, Hub runs %u: schedules won't line up",
-                 (unsigned long)j->fingerprint, j->profile, SLAPRF_PROFILE_CODE);
-    }
     int idx = -1;
     for (int i = 0; i < MAX_SPOKES; i++) {
         if (s_slot_fp[i] == j->fingerprint) { idx = i; break; }
@@ -276,16 +272,22 @@ static void hub_handle_join(const spoke_join_frame_t *j) {
     hub_assign_frame_t a = { FRAME_MAGIC_0, FRAME_MAGIC_ASSIGN, j->fingerprint, slot, 0 };
     a.crc8 = compute_crc8((const uint8_t *)&a, sizeof(a) - 1);
     espnow_send(&a, sizeof(a));
-    slaprf_diag_note_spoke(slot, j->fingerprint, j->profile, j->timer_label);
-    hub_send_hello(slot, j->role, j->fingerprint, j->profile, j->sweep_hz, j->timer_label);
+    slaprf_diag_note_spoke(slot, j->fingerprint, j->timer_label);
+    hub_send_hello(slot, j->role, j->fingerprint, j->sweep_hz, j->timer_label);
 }
 
 /** Drain received ESP-NOW frames (joins, Spoke windows) until `until_us`. */
 static void hub_listen_until(int64_t until_us) {
     uint8_t buf[250];
     for (;;) {
-        int n;
-        while ((n = espnow_poll(buf, sizeof(buf))) > 0) {
+        // Block on the receive queue (wakes the instant a frame arrives, so it's forwarded to USB
+        // within microseconds) but stop ~1.2 ms early so the caller can spin out an exact deadline.
+        const int64_t left_us = until_us - slaprf_now_us() - 1200;
+        if (left_us <= 0) {
+            return;
+        }
+        int n = espnow_wait(buf, sizeof(buf), (uint32_t)(left_us / 1000 > 0 ? left_us / 1000 : 1));
+        for (; n > 0; n = espnow_poll(buf, sizeof(buf))) {
             if (n < 3 || buf[0] != FRAME_MAGIC_0 || compute_crc8(buf, (uint32_t)n - 1) != buf[n - 1]) {
                 continue;
             }
@@ -301,26 +303,19 @@ static void hub_listen_until(int64_t until_us) {
                     fallback_label[0] = 'S';
                     fallback_label[1] = (char)('0' + (slot - 1));
                     const uint32_t fp = s_slot_fp[slot - 2] ? s_slot_fp[slot - 2] : (0x53504B00UL | slot);
-                    slaprf_diag_note_spoke(slot, fp, SLAPRF_PROFILE_CODE, fallback_label);
-                    hub_send_hello(slot, ROLE_SPOKE_TIMER, fp, SLAPRF_PROFILE_CODE, SWEEP_HZ, fallback_label);
+                    slaprf_diag_note_spoke(slot, fp, fallback_label);
+                    hub_send_hello(slot, ROLE_SPOKE_TIMER, fp, SWEEP_HZ, fallback_label);
                 }
                 slaprf_diag_note_spoke_frame(buf, (uint32_t)n);
                 slaprf_forward_to_laptop(buf, (uint32_t)n);
             }
         }
-        if (slaprf_now_us() >= until_us) {
-            return;
-        }
-        // Waits > 1.2 ms sleep a tick (lets the idle task and Wi-Fi run); shorter ones spin.
-        const int64_t now = slaprf_now_us();
-        slaprf_sleep_until_us(until_us - now > 2000 ? now + 2000 : until_us);
     }
 }
 
 static void hub_run(void) {
     slaprf_diag_set_slot(HUB_SLOT);
-    hub_send_hello(HUB_SLOT, ROLE_HUB_TIMER, g_flash_cfg.fingerprint, SLAPRF_PROFILE_CODE, SWEEP_HZ,
-                   (const char *)g_flash_cfg.timer_label);
+    hub_send_hello(HUB_SLOT, ROLE_HUB_TIMER, g_flash_cfg.fingerprint, SWEEP_HZ, (const char *)g_flash_cfg.timer_label);
     uint8_t pkt[sizeof(timer_window_frame_t)];
     uint8_t beacon_seq = 0;
     int64_t t_sf = slaprf_now_us() + 10000;
@@ -330,17 +325,26 @@ static void hub_run(void) {
             const int64_t t_sweep = t_sf + (int64_t)k * SWEEP_INTERVAL_US;
             const int64_t t_gap = t_sweep + SWEEP_BUDGET_US;
             slaprf_sleep_until_us(t_sweep);
-            sweep_once();
+            if (slaprf_diag_wants_sweeps()) {
+                // The Hub sweeps only when the app placed it on a gate (HUBGATE 1) or the Debug page
+                // asks for LIVE sweeps (SDR view). Spokes never transmit during sweeps, so nothing is missed.
+                sweep_once();
+            } else {
+                // Normal operation: the radio never leaves 2.4 GHz, so keep collecting Spoke frames.
+                hub_listen_until(t_gap);
+            }
             slaprf_sleep_until_us(t_gap);
             if (k == 0) {
                 slaprf_broadcast_hub_sync_beacon(beacon_seq++); // Anchors every Spoke's schedule
             }
-            if (k == TX_EVERY_SWEEPS - 1) {
+            if (slaprf_diag_hub_is_gate()) {
+                // Hub placed on a gate: its own readings go straight to USB (no TDMA slot needed), so
+                // send after EVERY sweep for the lowest latency. The window repeats recent samples.
                 slaprf_forward_to_laptop(pkt, pack_window(pkt, HUB_SLOT));
-                if (slaprf_now_us() >= next_hello) {
-                    hub_repeat_hellos();
-                    next_hello += HELLO_REPEAT_US;
-                }
+            }
+            if (k == TX_EVERY_SWEEPS - 1 && slaprf_now_us() >= next_hello) {
+                hub_repeat_hellos();
+                next_hello += HELLO_REPEAT_US;
             }
             // Stop listening a little early so queued UDP leaves before the radio goes deaf.
             hub_listen_until(t_sweep + SWEEP_INTERVAL_US - 500);
@@ -361,7 +365,6 @@ static void spoke_fill_join(spoke_join_frame_t *j) {
     j->magic1 = FRAME_MAGIC_JOIN;
     j->fingerprint = g_flash_cfg.fingerprint;
     j->role = ROLE_SPOKE_TIMER;
-    j->profile = SLAPRF_PROFILE_CODE;
     j->sweep_hz = SWEEP_HZ;
     memcpy(j->timer_label, (const void *)g_flash_cfg.timer_label, sizeof(j->timer_label));
     j->crc8 = compute_crc8((const uint8_t *)j, sizeof(*j) - 1);
@@ -443,8 +446,11 @@ static void spoke_run(void) {
             const int64_t next_sf = t_sf + SUPERFRAME_US;
             slaprf_sleep_until_us(next_sf);
             sweep_once();
-            int64_t b = spoke_wait_beacon(next_sf, next_sf + SWEEP_BUDGET_US + BEACON_WAIT_US);
-            beacon = b ? b : next_sf + SWEEP_BUDGET_US; // Missed it: free-run on the prediction
+            // Predicted beacon = last beacon + one superframe. Wait just past it (never into our TX
+            // slot); if it's missed, free-run on the prediction so the schedule never slips.
+            const int64_t predicted = beacon + SUPERFRAME_US;
+            int64_t b = spoke_wait_beacon(next_sf, predicted + BEACON_GRACE_US);
+            beacon = b ? b : predicted;
             slaprf_diag_service(); // Debug-page spectrum scan, if one was requested
             if (slaprf_now_us() > beacon + SWEEP_INTERVAL_US || slaprf_ms_since_hub_beacon() > 200) {
                 // Fell behind (e.g. spectrum scan) or missed >5 beacons (phase shift / Hub reset):
@@ -490,6 +496,8 @@ void app_main(void) {
     // External U.FL antenna; 2.4 GHz link (the driver never uses 5 GHz); 5.8 GHz capture engine.
     xiao_c5_select_ufl_antenna();
     slaprf_init_2g4_radio(WIFI_CHANNEL, LINK_LONG_RANGE, TX_POWER_QDBM);
+    // Link rate / TX power: firmware defaults, unless changed (and saved) from the serial console.
+    slaprf_apply_link_settings(LINK_TX_RATE, TX_POWER_QDBM);
     if (!slaprf_rf58_init()) {
         ESP_LOGE(TAG, "5.8 GHz capture engine failed its boot check; readings will be the noise floor");
     }

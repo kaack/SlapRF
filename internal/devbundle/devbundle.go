@@ -20,7 +20,6 @@ import (
 	"github.com/evanw/esbuild/pkg/api"
 
 	slaprfapi "slaprf/internal/api"
-	"slaprf/internal/firmware"
 )
 
 type aboutBuildPayload struct {
@@ -109,10 +108,8 @@ func BundleTypeScript(webRootDir string) ([]byte, error) {
 		MinifyWhitespace:  true,
 		MinifyIdentifiers: false,
 		MinifySyntax:      true,
-		// Firmware profiles come from firmware/<profile>/profile.json (single source of truth).
 		Define: map[string]string{
-			"__SLAPRF_FIRMWARE_PROFILES__": firmware.ProfilesJSON(),
-			"__SLAPRF_ABOUT_INFO__":        buildAboutInfoJSON(absRoot),
+			"__SLAPRF_ABOUT_INFO__": buildAboutInfoJSON(absRoot),
 		},
 	})
 	if len(result.Errors) > 0 {

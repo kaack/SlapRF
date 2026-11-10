@@ -19,7 +19,6 @@ func TestBuildHubTimerWithWiFi(t *testing.T) {
 
 	built, err := BuildXIAOC5Image(TimerConfig{
 		Role:         RoleHubTimer,
-		Profile:      "indoor",
 		Fingerprint:  0xA1B2C3D4,
 		TimerLabel:   "H1",
 		SlotFreqsMHz: freqs,
@@ -37,7 +36,7 @@ func TestBuildHubTimerWithWiFi(t *testing.T) {
 	if err != nil {
 		t.Fatalf("InspectConfig failed: %v", err)
 	}
-	if parsed.Role != RoleHubTimer || parsed.TimerLabel != "H1" || parsed.Profile != "indoor" {
+	if parsed.Role != RoleHubTimer || parsed.TimerLabel != "H1" {
 		t.Fatalf("unexpected hub config: %+v", parsed)
 	}
 	if parsed.Fingerprint != 0xA1B2C3D4 {
@@ -68,67 +67,63 @@ func TestBuildSpokeGeneratesFingerprintAndDropsWiFi(t *testing.T) {
 	if pa.Fingerprint == 0 || pa.Fingerprint == pb.Fingerprint {
 		t.Fatalf("expected distinct non-zero fingerprints, got %08X and %08X", pa.Fingerprint, pb.Fingerprint)
 	}
-	if pa.Profile != DefaultProfileID {
-		t.Fatalf("expected default profile, got %s", pa.Profile)
+}
+
+// The block's reserved byte (12) is always written as 0, so every board carries an identical
+// config layout regardless of what an older image had there.
+func TestReservedByteIsZero(t *testing.T) {
+	base := SyntheticBase()
+	base[configOff+offReserved] = 7 // stale value from an older image
+	built, err := PatchImage(base, TimerConfig{Role: RoleSpokeTimer, Fingerprint: 0x01020304})
+	if err != nil {
+		t.Fatalf("PatchImage: %v", err)
+	}
+	if got := built.Bytes[built.ConfigOff+offReserved]; got != 0 {
+		t.Fatalf("reserved byte = %d, want 0", got)
+	}
+	if built.Filename != "slaprf-xiao-c5-spoke-"+domain.LatestFirmwareVersion+".bin" {
+		t.Fatalf("unexpected filename %q", built.Filename)
 	}
 }
 
-func TestEveryProfileRoundTrips(t *testing.T) {
-	if len(Profiles) == 0 {
-		t.Fatal("no firmware profiles found under firmware/")
+// firmware/slaprf/main/main.c must agree with the Go side: same sweep rate, same firmware
+// version, a window the laptop ingest accepts, and the SLAPRF02 block layout with the reserved
+// byte in place of the old design code.
+func TestFirmwareSourceMatchesGo(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "firmware", "slaprf", "main", "main.c"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	seen := map[uint8]string{}
-	for _, p := range Profiles {
-		if other, dup := seen[p.Code]; dup {
-			t.Fatalf("profiles %s and %s share code %d", p.ID, other, p.Code)
-		}
-		seen[p.Code] = p.ID
-		built, err := BuildXIAOC5Image(TimerConfig{Role: RoleSpokeTimer, Profile: p.ID})
-		if err != nil {
-			t.Fatalf("%s: %v", p.ID, err)
-		}
-		parsed, err := InspectConfig(built.Bytes)
-		if err != nil || parsed.Profile != p.ID {
-			t.Fatalf("%s: round trip failed (%v, %+v)", p.ID, err, parsed)
-		}
-	}
-	if ProfileByID("").ID != DefaultProfileID {
-		t.Fatalf("default profile %s missing", DefaultProfileID)
-	}
-}
-
-// Each firmware/<profile>/main.c must declare the same code and sweep rate as its manifest,
-// and keep its window within what the laptop ingest accepts.
-func TestProfileSourcesMatchManifests(t *testing.T) {
-	define := func(src, name string) int {
+	src := string(raw)
+	define := func(name string) int {
 		m := regexp.MustCompile(`(?m)^#define\s+` + name + `\s+(\d+)`).FindStringSubmatch(src)
 		if m == nil {
-			return -1
+			t.Fatalf("main.c: #define %s not found", name)
 		}
 		n, _ := strconv.Atoi(m[1])
 		return n
 	}
-	for _, p := range Profiles {
-		raw, err := os.ReadFile(filepath.Join("..", "..", "firmware", p.ID, "main", "main.c"))
-		if err != nil {
-			t.Fatalf("%s: %v", p.ID, err)
-		}
-		src := string(raw)
-		if got := define(src, "SLAPRF_PROFILE_CODE"); got != int(p.Code) {
-			t.Errorf("%s: main.c SLAPRF_PROFILE_CODE=%d, manifest code=%d", p.ID, got, p.Code)
-		}
-		if got := define(src, "SWEEP_HZ"); got != int(p.SweepHz) {
-			t.Errorf("%s: main.c SWEEP_HZ=%d, manifest sweepHz=%d", p.ID, got, p.SweepHz)
-		}
-		if w := define(src, "WINDOW_SAMPLES"); w < 1 || w > MaxWindowSamples {
-			t.Errorf("%s: WINDOW_SAMPLES=%d outside 1..%d", p.ID, w, MaxWindowSamples)
-		}
-		if !strings.Contains(src, `"SLAPRF02"`) && !strings.Contains(src, `'S', 'L', 'A', 'P', 'R', 'F', '0', '2'`) {
-			t.Errorf("%s: main.c does not use the SLAPRF02 config block", p.ID)
-		}
+	if got := define("SWEEP_HZ"); got != SweepHz {
+		t.Errorf("main.c SWEEP_HZ=%d, firmware.SweepHz=%d", got, SweepHz)
+	}
+	if w := define("WINDOW_SAMPLES"); w < 1 || w > MaxWindowSamples {
+		t.Errorf("WINDOW_SAMPLES=%d outside 1..%d", w, MaxWindowSamples)
+	}
+	if !strings.Contains(src, `'S', 'L', 'A', 'P', 'R', 'F', '0', '2'`) {
+		t.Error("main.c does not use the SLAPRF02 config block")
+	}
+	m := regexp.MustCompile(`\.version\s*=\s*\{(\d+),\s*(\d+),\s*(\d+)\}`).FindStringSubmatch(src)
+	if m == nil {
+		t.Fatal("main.c: .version initializer not found")
+	}
+	if v := "v" + m[1] + "." + m[2] + "." + m[3]; v != domain.LatestFirmwareVersion {
+		t.Errorf("main.c version %s, domain.LatestFirmwareVersion %s", v, domain.LatestFirmwareVersion)
+	}
+	cfg := regexp.MustCompile(`(?s)uint8_t\s+role;.*?uint8_t\s+reserved0;.*?uint8_t\s+wifi_mode;`)
+	if !cfg.MatchString(src) {
+		t.Error("main.c config block: expected role, reserved0, wifi_mode at bytes 11..13")
 	}
 }
-
 func TestBuildRejectsInvalidRole(t *testing.T) {
 	if _, err := BuildXIAOC5Image(TimerConfig{}); err == nil {
 		t.Fatal("expected error for missing role")
@@ -155,13 +150,13 @@ func TestPatchMergedImageRepairsChecksumAndSHA(t *testing.T) {
 	app = append(app, make([]byte, pad+1+32)...)
 	merged := append(bytes.Repeat([]byte{0xFF}, appOff), app...)
 
-	built, err := PatchImage(merged, TimerConfig{Role: RoleSpokeTimer, Profile: "indoor", Fingerprint: 0x1234ABCD, TimerLabel: "S2"})
+	built, err := PatchImage(merged, TimerConfig{Role: RoleSpokeTimer, Fingerprint: 0x1234ABCD, TimerLabel: "S2"})
 	if err != nil {
 		t.Fatalf("PatchImage: %v", err)
 	}
 	out := built.Bytes
 	parsed, err := InspectConfig(out)
-	if err != nil || parsed.Fingerprint != 0x1234ABCD || parsed.Profile != "indoor" || parsed.TimerLabel != "S2" {
+	if err != nil || parsed.Fingerprint != 0x1234ABCD || parsed.TimerLabel != "S2" {
 		t.Fatalf("unexpected parsed config %+v (%v)", parsed, err)
 	}
 

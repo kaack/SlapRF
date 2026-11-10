@@ -8,12 +8,12 @@ For setting up your local development environment, running the live dev server, 
 
 - **[1. System Overview & Design Principles](#1-system-overview--design-principles)** — Why Spokes are pure recording sensors with all DSP centralized on the laptop.
 - **[2. End-to-End Data Flow](#2-end-to-end-data-flow)** — Architecture diagram from 5.8 GHz VTX signals across the track to the Web SPA and MultiGP LiveTime.
-- **[3. XIAO ESP32-C5 5.8 GHz SDR & Time-Division Schedule](#3-xiao-esp32-c5-58-ghz-sdr--time-division-radio-schedule)** — Single-synthesizer 5.8 GHz / 2.4 GHz multiplexing and the 40 ms superframe schedule.
-- **[4. Ground-Interference Mitigation & 2.4 GHz LR Protocol](#4-ground-interference-mitigation--24-ghz-lr-protocol)** — Two-ray grass path-loss physics, `+11 dB` DSSS coding gain, 3.5 ms TDMA slots, and 4-sample sliding-window recovery under 50% packet loss.
+- **[3. XIAO ESP32-C5 5.8 GHz SDR & Time-Division Schedule](#3-xiao-esp32-c5-58-ghz-sdr--time-division-radio-schedule)** — Single-synthesizer 5.8 GHz / 2.4 GHz multiplexing and the 20 ms superframe schedule.
+- **[4. Ground-Interference Mitigation & 2.4 GHz Link Protocol](#4-ground-interference-mitigation--24-ghz-link-protocol)** — Two-ray grass path-loss physics, 6 Mbps OFDM ESP-NOW at `+20 dBm`, 900 µs TDMA slots, and 4-sample sliding-window recovery under 50% packet loss.
 - **[5. Binary Wire Formats (`0xC5 0x59` & `SLAPRF02`)](#5-binary-wire-formats-0xc5-0x59-sliding-window--slaprf02)** — Byte-by-byte layouts of the variable-length sliding-window frame, the Hello / Join / Assign / beacon frames, and the 160-byte flash config block.
 - **[6. DSP Pipeline & Parabolic Peak Interpolation](#6-dsp-pipeline--sub-frame-parabolic-peak-interpolation)** — Zero-phase EMA smoothing, hysteresis state machine, and `< 2 ms` sub-frame parabolic vertex fitting.
 - **[7. Multi-Gate Timing Rules & Section Analytics Engine](#7-multi-gate-timing-rules--section-analytics-engine)** — The 5-stage guardrail pipeline (cool-down, stale progress, min section, previous-gate echo, min/max lap) and bottleneck math.
-- **[8. Browser-Native WebSerial ROM Flasher & Firmware Profiles](#8-browser-native-webserial-rom-flasher--firmware-profiles)** — Client-side patching of compiled `.bin` images, board fingerprints, and the SLIP ROM bootloader protocol.
+- **[8. Browser-Native WebSerial ROM Flasher & Firmware Image](#8-browser-native-webserial-rom-flasher--firmware-image)** — Client-side patching of the compiled `.bin` image, board fingerprints, and the SLIP ROM bootloader protocol.
 - **[9. ImmersionRC LapRF 8-Way Emulation (`TCP :5403`)](#9-immersionrc-laprf-8-way-emulation-tcp-5403)** — TCP `:5403` LiveTime bridge for official race scoring alongside SlapRF section splits.
 - **[10. Web SPA & In-Browser WebAssembly Engine](#10-web-spa--in-browser-webassembly-engine)** — `ApiTransport` and the `slaprf.wasm` in-browser timing engine.
 
@@ -24,12 +24,12 @@ For setting up your local development environment, running the live dev server, 
 SlapRF is built around four core engineering constraints:
 
 1. **Zero Compute on Spoke Timers (Pure Recording Sensors)**:
-   Spoke timers (`T2`–`T6`) placed out on the track perform **no peak detection, no threshold filtering, and no lap math**. They act purely as synchronized 50 Hz 8-channel 5.8 GHz RSSI recorders that stream raw dBm sweeps back to the laptop. Centralizing all DSP and timing rules on the laptop (`internal/dsp`, `internal/tracker`) allows live threshold recalibration, retrospective signal inspection, and cross-gate echo rejection without reflashing or reconfiguring field hardware.
+   Spoke timers (`T2`–`T6`) placed out on the track perform **no peak detection, no threshold filtering, and no lap math**. They act purely as synchronized 100 Hz 8-channel 5.8 GHz RSSI recorders that stream raw dBm sweeps back to the laptop. Centralizing all DSP and timing rules on the laptop (`internal/dsp`, `internal/tracker`) allows live threshold recalibration, retrospective signal inspection, and cross-gate echo rejection without reflashing or reconfiguring field hardware.
 2. **Single-Radio Dual-Band Multiplexing on Seeed Studio XIAO ESP32-C5**:
    Each gate timer uses a single `$6.90` dual-band (2.4 GHz / 5 GHz) RISC-V **XIAO ESP32-C5** module. Because a single RF synthesizer is shared between 5.8 GHz VTX power measurement and 2.4 GHz telemetry transport, the Hub (`T1`) and Spokes (`T2`–`T6`) follow a deterministic time-division schedule so no Spoke transmits on 2.4 GHz while the Hub is off-channel sweeping 5.8 GHz.
    **Hub role**: the Hub is a USB collector dongle (timer ID 1, `isHub`). Neither the real nor the simulated engine ever puts it on a gate automatically (`internal/tracker/track.go`: `provisionCollectorHubLocked`, `ProvisionGate`, `AddSimulatedTimer`); Spokes take the gates and the first one becomes start/finish. If the user drags the Hub onto a gate (a normal gate assignment, `AssignedTimerID` = the Hub's timer ID), the Hub also sweeps 5.8 GHz and times that gate. The browser keeps the Hub in sync over USB (`web/src/services/hub_gate_sync.ts`): the Hub's STATUS JSON reports `"hubGate"`, and `HUBGATE 1` / `HUBGATE 0` turns its own sweep + slot-1 telemetry on/off. The flag is runtime-only (off after a Hub reboot), so the browser re-sends it whenever the reported value differs from the course (at most once per second). The simulator follows the same model: the simulated Hub (`H1`) only generates RSSI telemetry while it is on a gate.
 3. **Ground-Grazing & 2.4 GHz ELRS Immunity**:
-   Gate timers typically sit flat on the grass beneath gates separated by 40–150 m while pilots transmit 250 mW – 1 W of 2.4 GHz ExpressLRS FHSS control packets nearby. SlapRF combines **Espressif 2.4 GHz Long Range (`WIFI_PROTOCOL_LR`, 512 kbps DSSS)** with a **4-sample sliding-window packet (`2×` overlap Forward Error Correction)** so even **50% packet loss** results in **0% lost 50 Hz telemetry samples** at the laptop.
+   Gate timers typically sit flat on the grass beneath gates separated by 40–150 m while pilots transmit 250 mW – 1 W of 2.4 GHz ExpressLRS FHSS control packets nearby. SlapRF combines short **6 Mbps OFDM ESP-NOW frames at `+20 dBm`** in a beacon-synchronized TDMA schedule with a **4-sample sliding-window packet sent every 2 sweeps (`2×` overlap Forward Error Correction)** so even **50% packet loss** results in **0% lost 100 Hz telemetry samples** at the laptop.
 4. **Zero-Toolchain Deployment**:
    The static site (built with a pure-Go TypeScript bundler, `esbuild`) ships a WebAssembly build of the entire Go timing/physics engine (`slaprf.wasm`), and a client-side `SLAPRF02` firmware binary patcher + WebSerial Espressif ROM bootloader client—requiring zero Node.js, zero Python `esptool`, and zero C toolchains.
 
@@ -42,26 +42,26 @@ flowchart TB
     subgraph Field["FPV Race Track (Up to 6 XIAO ESP32-C5 Timers)"]
         direction LR
         VTX["8x 5.8 GHz Drone VTXs\n(Raceband R1–R8: 5658–5917 MHz)"]
-        Spokes["Spoke Timers T2–T6\n• 50 Hz 8-ch 5.8 GHz sweep\n• 4-sample ring buffer (80 ms)\n• Zero on-board DSP"]
-        Hub["Hub Timer T1 (USB collector dongle)\n• 25 Hz Sync Beacon (Ch 1)\n• Hybrid 802.11n + LR Bridge\n• Sweeps 5.8 GHz only when placed on a gate"]
+        Spokes["Spoke Timers T2–T6\n• 100 Hz 8-ch 5.8 GHz sweep\n• 4-sample ring buffer (40 ms)\n• Zero on-board DSP"]
+        Hub["Hub Timer T1 (USB collector dongle)\n• 50 Hz Sync Beacon (Ch 1)\n• ESP-NOW → USB serial bridge\n• Sweeps 5.8 GHz only when placed on a gate"]
 
         VTX -. "5.8 GHz RF\n(-95 to -20 dBm)" .-> Spokes
         VTX -. "5.8 GHz RF\n(-95 to -20 dBm)" .-> Hub
-        Hub -- "25 Hz Sync Beacon\n(2.4 GHz LR Broadcast)" --> Spokes
-        Spokes -- "Sliding Window (0xC5 0x59, 7 + n×9 + 1 B)\n2.4 GHz LR 500 kbps (+20 dBm, 3.5 ms TDMA)" --> Hub
+        Hub -- "50 Hz Sync Beacon\n(2.4 GHz ESP-NOW Broadcast)" --> Spokes
+        Spokes -- "Sliding Window (0xC5 0x59, 7 + n×9 + 1 B)\n2.4 GHz ESP-NOW 6 Mbps OFDM (+20 dBm, 900 µs TDMA)" --> Hub
     end
 
-    subgraph Laptop["Field Laptop (Go Backend or Browser WASM)"]
-        UDP["Wi-Fi UDP Receiver (:5404)\ninternal/ingest/wifi_udp.go\n• CRC8 check & seq_num deduplication\n• Reconstructs gapless 50 Hz stream"]
+    subgraph Laptop["Field Laptop (Browser WASM)"]
+        Ingest["Hub Frame Decoder (USB serial)\ninternal/ingest/hub_frames.go\n• CRC8 check & seq_num deduplication\n• Reconstructs gapless 100 Hz stream"]
         DSP["8-Channel DSP Peak Detector\ninternal/dsp/peak_detector.go\n• EMA filter (α = 0.42)\n• Hysteresis state machine\n• 3-point parabolic peak fit (< 2 ms)"]
         Rules["Multi-Gate Timing Engine\ninternal/tracker/crossing_rules.go\n1. Gate cool-down\n2. Stale progress reset\n3. Min section time\n4. Previous-gate echo filter\n5. Min/Max lap time"]
         LapRF["LapRF 8-Way Emulator (:5403)\ninternal/laprf/protocol.go\n• SLIP-framed binary TCP\n• RF_SETUP (0xda01) & TOR (0xda09)"]
-        SPA["TypeScript Web SPA (slaprf.app)\n• Live 50 Hz RSSI Scope\n• Section Splits (S1–S4)\n• Offline TTS Announcer\n• WebSerial USB Flasher"]
+        SPA["TypeScript Web SPA (slaprf.app)\n• Live RSSI Scope\n• Section Splits (S1–S4)\n• Offline TTS Announcer\n• WebSerial USB Flasher"]
 
-        Hub -- "Wi-Fi UDP (:5404)" --> UDP
-        UDP --> DSP
+        Hub -- "USB serial (WebSerial)" --> Ingest
+        Ingest --> DSP
         DSP --> Rules
-        Rules -- "50 Hz stream (in-process, WASM onStream)" --> SPA
+        Rules -- "Telemetry stream (in-process, WASM onStream)" --> SPA
         Rules -- "Start Gate Passings" --> LapRF
     end
 
@@ -73,7 +73,7 @@ flowchart TB
 
 ## 3. XIAO ESP32-C5 5.8 GHz SDR & Time-Division Radio Schedule
 
-Each Seeed Studio XIAO ESP32-C5 is designed to use its 5 GHz wideband receiver path to measure in-band power across the 8 configured pilot frequencies (`slot_freqs_mhz[0..7]`, defaulting to Raceband `5658`, `5695`, `5732`, `5769`, `5806`, `5843`, `5880`, `5917` MHz). The firmware is split into per-profile ESP-IDF projects (`firmware/<profile>/`, see [`firmware/README.md`](../firmware/README.md)) sharing the [`firmware/components/slaprf_radio/`](../firmware/components/slaprf_radio/) hardware component.
+Each Seeed Studio XIAO ESP32-C5 is designed to use its 5 GHz wideband receiver path to measure in-band power across the 8 configured pilot frequencies (`slot_freqs_mhz[0..7]`, defaulting to Raceband `5658`, `5695`, `5732`, `5769`, `5806`, `5843`, `5880`, `5917` MHz). There is one firmware: a single ESP-IDF project ([`firmware/slaprf/`](../firmware/slaprf/), see [`firmware/README.md`](../firmware/README.md)) with one tuned configuration in [`main/main.c`](../firmware/slaprf/main/main.c), built on the [`firmware/components/slaprf_radio/`](../firmware/components/slaprf_radio/) hardware component. Every timer, Hub or Spoke, runs the same compiled image.
 
 > [!NOTE]
 > 5.8 GHz sensing is currently a **placeholder**: [`slaprf_rf58.c`](../firmware/components/slaprf_radio/slaprf_rf58.c) returns the noise floor so the rest of the pipeline can be tested end to end. It is pending a port of the raw-IQ approach (the C5's undocumented baseband debug path) used by ESPARGOS **esp-sdr** and **FPVGateC5MK**: retune the LO to each pilot frequency, capture a short I/Q burst, and compute band power.
@@ -81,37 +81,39 @@ Each Seeed Studio XIAO ESP32-C5 is designed to use its 5 GHz wideband receiver p
 ### Why Time-Division Multiplexing Is Required
 
 Because the ESP32-C5 has a **single RF synthesizer** shared between the 5 GHz and 2.4 GHz bands:
-- While a timer's PLL is tuned to `5658–5917 MHz` measuring the 8 pilot VTX channels (~`3.2 ms` total for an 8-channel sweep), its **2.4 GHz receiver is deaf**.
+- While a timer's PLL is tuned to `5658–5917 MHz` measuring the 8 pilot VTX channels (budget `SWEEP_BUDGET_US` = 7 ms per sweep, measured ~6.3 ms on chip v1.0), its **2.4 GHz receiver is deaf**.
 - If Spoke `T2` transmits an ESP-NOW packet on `2412 MHz` while Hub `T1` is sweeping `5806 MHz`, `T1` misses the packet completely.
 
-### 40 ms Superframe Schedule (2× 20 ms Sweeps + Synchronized LR TDMA Window)
+### 20 ms Superframe Schedule (2× 10 ms Sweeps + Synchronized TDMA Gaps)
 
-To eliminate both cross-band deafness and Spoke-to-Spoke packet collisions, the Hub (`T1`) and Spokes (`T2`–`T6`) lock to a **40 ms superframe** (two 20 ms 50 Hz sweeps per radio burst):
+To eliminate both cross-band deafness and Spoke-to-Spoke packet collisions, the Hub (`T1`) and Spokes (`T2`–`T6`) lock to a **20 ms superframe** (two 10 ms, 100 Hz sweep intervals). Each interval is a sweep (all timers on 5.8 GHz, transmitter off) followed by a ~3 ms gap on 2.4 GHz Channel 1 holding three 900 µs TDMA slots after a 300 µs guard. Gap 0 opens with the Hub beacon; Spoke slots `2–4` transmit in gap 0 and slots `5–7` in gap 1, so every Spoke sends one 4-sample window per superframe. The Hub forwards each received frame to the laptop over USB serial as it arrives. When placed on a gate (`HUBGATE 1`), the Hub also sweeps and forwards its own window (slot `1`) after **every** sweep, since it needs no TDMA slot.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    participant T1 as Hub T1 (Gate 1)
-    participant T2 as Spoke T2 (Gate 2)
-    participant T3 as Spoke T3 (Gate 3)
-    participant T4 as Spoke T4 (Gate 4)
-    participant PC as Laptop (:5404 UDP)
+    participant T1 as Hub T1 (USB dongle)
+    participant T2 as Spoke T2 (slot 2)
+    participant T3 as Spoke T3 (slot 3)
+    participant T5 as Spoke T5 (slot 5)
+    participant PC as Laptop (USB serial)
 
-    Note over T1,T4: t = 0..3.2 ms — Sweep N-1 (5.8 GHz PLL active on all timers)\nRecord raw_rssi_sample_t[seq = N-1] into 4-sample ring buffer
-    Note over T1,T4: t = 20.0..23.2 ms — Sweep N (5.8 GHz PLL active on all timers)\nRecord raw_rssi_sample_t[seq = N] into 4-sample ring buffer
-    Note over T1,T4: t = 23.2 ms — All timers switch PLL back to 2.4 GHz Channel 1 (2412 MHz)
-    T1->>T2: t = 23.5 ms: Hub Sync Beacon (seq = N)
-    T1->>T3: t = 23.5 ms: Hub Sync Beacon (seq = N)
-    T1->>T4: t = 23.5 ms: Hub Sync Beacon (seq = N)
-    T2->>T1: t = 27.0 ms (+3.5 ms TDMA): T2 Window [N-3, N-2, N-1, N] (44 B LR 500K)
-    T3->>T1: t = 30.5 ms (+7.0 ms TDMA): T3 Window [N-3, N-2, N-1, N] (44 B LR 500K)
-    T4->>T1: t = 34.0 ms (+10.5 ms TDMA): T4 Window [N-3, N-2, N-1, N] (44 B LR 500K)
-    T1->>PC: t = 36.5 ms: Forward T1..T4 Window Frames over Wi-Fi UDP (:5404)
+    Note over T1,T5: t = 0..7 ms — Sweep N-1 (5.8 GHz on all timers, 2.4 GHz TX off)\nRecord raw_rssi_sample_t[seq = N-1] into 4-sample ring buffer
+    Note over T1,T5: t = 7 ms — Gap 0: all timers back on 2.4 GHz Channel 1 (2412 MHz)
+    T1->>T2: t = 7.0 ms: Hub Sync Beacon
+    T1->>T3: t = 7.0 ms: Hub Sync Beacon
+    T1->>T5: t = 7.0 ms: Hub Sync Beacon
+    T2->>T1: t = 7.3 ms (gap 0, +0.3 ms): T2 Window [N-4, N-3, N-2, N-1] (44 B, 6 Mbps OFDM)
+    T1->>PC: Forward T2 window over USB
+    T3->>T1: t = 8.2 ms (gap 0, +1.2 ms): T3 Window [N-4, N-3, N-2, N-1] (44 B, 6 Mbps OFDM)
+    T1->>PC: Forward T3 window over USB
+    Note over T1,T5: t = 10..17 ms — Sweep N\nRecord raw_rssi_sample_t[seq = N]
+    T5->>T1: t = 17.3 ms (gap 1, +0.3 ms): T5 Window [N-3, N-2, N-1, N] (44 B, 6 Mbps OFDM)
+    T1->>PC: Forward T5 window over USB
 ```
 
 ---
 
-## 4. Ground-Interference Mitigation & 2.4 GHz LR Protocol
+## 4. Ground-Interference Mitigation & 2.4 GHz Link Protocol
 
 ### Two-Ray Ground Reflection Physics at Gate Level
 
@@ -121,29 +123,29 @@ When timers are placed directly on the grass under gates ($h_t = h_r \approx 0.0
 
 | Layer | Mechanism | Engineering Effect |
 | :--- | :--- | :--- |
-| **1. Frequency Selection** | Fixed **2.4 GHz Channel 1 (`2412 MHz`)** (`WIFI_CHANNEL_LR = 1`) | Longest 2.4 GHz wavelength ($\lambda = 12.43\text{ cm}$), lowest dielectric absorption in moist grass, and furthest from upper-band Wi-Fi/Bluetooth congestion. |
-| **2. PA & PHY Coding Gain** | **`+20.0 dBm` (`80` quarter-dBm)** + **`WIFI_PROTOCOL_LR` (`WIFI_PHY_RATE_LORA_500K`)** | DSSS spreading improves receiver sensitivity from `-91 dBm` (1 Mbps) to **`-102 dBm` (`+11 dB` link budget gain $\approx 3.5\times$ linear range)**. |
-| **3. Hybrid Hub Coexistence** | Hub advertises `WIFI_PROTOCOL_11B \| 11G \| 11N \| LR` | The laptop associates with the Hub using standard **802.11n**, while Spokes transmit connectionless ESP-NOW frames pinned to the **512 kbps LR PHY rate** on the same channel. |
-| **4. 4-Sample Sliding-Window FEC** | Each 40 ms burst sends **`[seq-3, seq-2, seq-1, seq]`** (`44 bytes` in the default `open-ground` profile) | Every 20 ms 5.8 GHz sweep is transmitted **twice** in consecutive bursts 40 ms apart. **Even if 50% of bursts are wiped out** by ground multipath or a pilot's 2.4 GHz ELRS hop, the very next burst delivers the missing 20 ms sweeps with zero gaps. |
+| **1. Frequency Selection** | Fixed **2.4 GHz Channel 1 (`2412 MHz`)** (`WIFI_CHANNEL = 1`) | Longest 2.4 GHz wavelength ($\lambda = 12.43\text{ cm}$), lowest dielectric absorption in moist grass, and furthest from upper-band Wi-Fi/Bluetooth congestion. |
+| **2. PA & PHY Rate** | **`+20.0 dBm` (`80` quarter-dBm)** + **6 Mbps OFDM ESP-NOW** (`LINK_TX_RATE "6m"`; Espressif LR frames are still received) | ~0.15 ms on air per frame, so each window fits a 900 µs TDMA slot and three Spokes share each ~3 ms gap. Link rate and TX power can only be changed from the USB serial console (`LINKRATE`, `TXPOWER`, `LINKRESET`); the values are saved in NVS. |
+| **3. USB Collector Hub** | The Hub forwards every frame to the laptop over **USB serial** (WebSerial) | No Wi-Fi hop to the laptop: the 2.4 GHz channel only carries the Hub beacon, Join / Assign frames, and Spoke windows. |
+| **4. 4-Sample Sliding-Window FEC** | Each Spoke sends **`[seq-3, seq-2, seq-1, seq]`** (`44 bytes`) once per 20 ms superframe, i.e. every 2 sweeps | Every 10 ms 5.8 GHz sweep is transmitted **twice** in consecutive windows 20 ms apart. **Even if 50% of windows are wiped out** by ground multipath or a pilot's 2.4 GHz ELRS hop, the very next window delivers the missing sweeps with zero gaps. |
 
 ### Sliding-Window Recovery Under 50% Packet Loss
 
 ```mermaid
 flowchart LR
-    subgraph Spoke["Spoke T2 50 Hz Ring Buffer (20 ms steps)"]
-        S1["Sweep #10\n(t = 200 ms)"]
-        S2["Sweep #11\n(t = 220 ms)"]
-        S3["Sweep #12\n(t = 240 ms)"]
-        S4["Sweep #13\n(t = 260 ms)"]
-        S5["Sweep #14\n(t = 280 ms)"]
-        S6["Sweep #15\n(t = 300 ms)"]
+    subgraph Spoke["Spoke T2 100 Hz Ring Buffer (10 ms steps)"]
+        S1["Sweep #10\n(t = 100 ms)"]
+        S2["Sweep #11\n(t = 110 ms)"]
+        S3["Sweep #12\n(t = 120 ms)"]
+        S4["Sweep #13\n(t = 130 ms)"]
+        S5["Sweep #14\n(t = 140 ms)"]
+        S6["Sweep #15\n(t = 150 ms)"]
     end
 
-    B1["Burst A (t = 220 ms)\nCarries [#8, #9, #10, #11]"]
-    B2["Burst B (t = 260 ms)\nCarries [#10, #11, #12, #13]\n❌ DROPPED IN GRASS / ELRS HOP"]
-    B3["Burst C (t = 300 ms)\nCarries [#12, #13, #14, #15]"]
+    B1["Window A (t = 110 ms)\nCarries [#8, #9, #10, #11]"]
+    B2["Window B (t = 130 ms)\nCarries [#10, #11, #12, #13]\n❌ DROPPED IN GRASS / ELRS HOP"]
+    B3["Window C (t = 150 ms)\nCarries [#12, #13, #14, #15]"]
 
-    Dedup["Laptop WiFiUDPReceiver\ninternal/ingest/wifi_udp.go\n• Burst A ingests #10, #11\n• Burst B lost\n• Burst C heals #12, #13 (backdated -60/-40 ms)\n  and ingests #14, #15\n✅ 100% of 50 Hz stream recovered"]
+    Dedup["Laptop hub frame decoder\ninternal/ingest/hub_frames.go\n• Window A ingests #10, #11\n• Window B lost\n• Window C heals #12, #13 (backdated -30/-20 ms)\n  and ingests #14, #15\n✅ 100% of 100 Hz stream recovered"]
 
     S1 & S2 --> B1
     S3 & S4 --> B2
@@ -158,7 +160,7 @@ flowchart LR
 
 ### 5.1 Sliding-Window Telemetry Frame (`timer_window_frame_t`, Magic `0xC5 0x59`)
 
-Defined in every `firmware/<profile>/main/main.c` and decoded by [`internal/ingest/wifi_udp.go`](../internal/ingest/wifi_udp.go). The frame is variable-length: a 7-byte header, `n` 9-byte samples (`n = 1..6`, set per profile by `WINDOW_SAMPLES`), and a trailing crc8, i.e. `7 + n×9 + 1` bytes (`44 B` for the default 4-sample `open-ground` window, `62 B` max):
+Defined in [`firmware/slaprf/main/main.c`](../firmware/slaprf/main/main.c) and decoded by [`internal/ingest/hub_frames.go`](../internal/ingest/hub_frames.go). The frame is variable-length: a 7-byte header, `n` 9-byte samples, and a trailing crc8, i.e. `7 + n×9 + 1` bytes. The firmware sends `n = 4` (`WINDOW_SAMPLES`, `44 B`); the laptop accepts `n = 1..6` (`MaxWindowSamples`, `62 B` max):
 
 | Byte Offset | Type | Field | Description |
 | :--- | :--- | :--- | :--- |
@@ -175,23 +177,23 @@ Spokes have no fixed slot; a short handshake maps each Hub slot to the board's s
 
 | Frame | Magic | Size | Direction | Payload |
 | :--- | :--- | :--- | :--- | :--- |
-| **Join** | `0xC5 0x5B` | `34 B` | Spoke → Hub (ESP-NOW) | `fingerprint (uint32 LE)`, `role`, `profile`, `sweep_hz`, `timer_label[24]`, `crc8`; repeated until assigned |
+| **Join** | `0xC5 0x5B` | `34 B` | Spoke → Hub (ESP-NOW) | `fingerprint (uint32 LE)`, `role`, `reserved0` (`0`), `sweep_hz`, `timer_label[24]`, `crc8`; repeated until assigned |
 | **Assign** | `0xC5 0x5C` | `8 B` | Hub → Spoke (ESP-NOW) | `fingerprint (uint32 LE)`, `slot (2..7)`, `crc8` |
-| **Hello** | `0xC5 0x5A` | `36 B` | Hub → Laptop (UDP) | `slot`, `role`, `fingerprint (uint32 LE)`, `profile`, `sweep_hz`, `timer_label[24]`, `reserved`, `crc8` |
+| **Hello** | `0xC5 0x5A` | `36 B` | Hub → Laptop (USB serial) | `slot`, `role`, `fingerprint (uint32 LE)`, `reserved0` (`0`), `sweep_hz`, `timer_label[24]`, `reserved`, `crc8` |
 | **Sync beacon** | `0xC5 0x5D` | `4 B` | Hub → Spokes (ESP-NOW broadcast) | `seq`, `crc8`; Spokes transmit `(slot - 2)` TDMA slots after it |
 
 The laptop keys timers by fingerprint (`%08X`): until a Hello arrives for a slot, the slot number is used as the timer ID directly.
 
 ### 5.2 160-Byte `SLAPRF02` Flash Configuration Block
 
-Each profile's `main.c` embeds `slaprf_flash_config_t`. [`internal/firmware/image.go`](../internal/firmware/image.go) (`PatchImage`) and [`web/src/services/esp_flasher.ts`](../web/src/services/esp_flasher.ts) locate it by its magic (at `0x0100` in the placeholder image), stamp it, and repair the ESP-IDF image checksum / appended SHA-256. Radio and sweep tuning is compiled into each profile; the block only carries per-board and per-event settings (all multi-byte fields little-endian):
+The firmware's `main.c` embeds `slaprf_flash_config_t`. [`internal/firmware/image.go`](../internal/firmware/image.go) (`PatchImage`) and [`web/src/services/esp_flasher.ts`](../web/src/services/esp_flasher.ts) locate it by its magic (at `0x0100` in the placeholder image), stamp it, and repair the ESP-IDF image checksum / appended SHA-256. Radio and sweep tuning is compiled into the firmware (link rate and TX power can be overridden from the USB serial console); the block only carries per-board and per-event settings (all multi-byte fields little-endian):
 
 | Byte Offset | Size | Type | Field | Description |
 | :--- | :--- | :--- | :--- | :--- |
 | `0..7` | `8 B` | `char[8]` | `magic` | `"SLAPRF02"` (`53 4C 41 50 52 46 30 32`) |
 | `8..10` | `3 B` | `uint8[3]` | `version` | Firmware build version (major, minor, patch) |
 | `11` | `1 B` | `uint8` | `role` | `1` = Hub Timer (`ROLE_HUB_TIMER`), `2` = Spoke Timer (`ROLE_SPOKE_TIMER`) |
-| `12` | `1 B` | `uint8` | `profile` | Profile code from `firmware/<profile>/profile.json` (`1` = `open-ground`, `2` = `open-elevated`, `3` = `indoor`, `4` = `obstructed`) |
+| `12` | `1 B` | `uint8` | `reserved0` | Reserved (written `0`, ignored on read) |
 | `13` | `1 B` | `uint8` | `wifi_mode` | Hub only: `0` = Host `"SlapRF"` AP, `1` = Join `wifi_ssid` |
 | `14..17` | `4 B` | `uint32 LE` | `fingerprint` | Random per-board identity stamped at flash time (never `0`) |
 | `18..33` | `16 B` | `uint16 LE[8]` | `slot_freqs_mhz` | 8 pilot 5.8 GHz frequencies in MHz (`5600..5950`, else Raceband default) |
@@ -205,7 +207,7 @@ Each profile's `main.c` embeds `slaprf_flash_config_t`. [`internal/firmware/imag
 
 ## 6. DSP Pipeline & Sub-Frame Parabolic Peak Interpolation
 
-Implemented in [`internal/dsp/peak_detector.go`](../internal/dsp/peak_detector.go), each `(GateTimer, PilotSlot)` pair runs an independent `ChannelDetector` on the incoming 50 Hz (`20 ms`) stream:
+Implemented in [`internal/dsp/peak_detector.go`](../internal/dsp/peak_detector.go), each `(GateTimer, PilotSlot)` pair runs an independent `ChannelDetector` on the incoming sample stream (100 Hz / `10 ms` from the firmware; the built-in simulator runs at 50 Hz):
 
 ```mermaid
 stateDiagram-v2
@@ -220,9 +222,9 @@ stateDiagram-v2
    $$y_n = \alpha x_n + (1 - \alpha) y_{n-1}, \quad \alpha = 0.42$$
    Suppresses high-frequency multipath spikes from carbon-fiber frames and chain-link fences while preserving the bell-shaped inverse-square gate approach envelope.
 2. **3-Point Parabolic Vertex Interpolation (`parabolicPeakTimestamp`)**:
-   At 60 mph (`26.8 m/s`), a quad moves `53 cm` between 20 ms samples. Fitting a parabola through the discrete peak sample $(t_0, y_0)$ and its immediate neighbors $(t_{-1}, y_{-1})$ and $(t_{+1}, y_{+1})$ yields the fractional sample offset $\delta \in [-0.5, +0.5]$:
+   At 60 mph (`26.8 m/s`), a quad moves `27 cm` between 10 ms samples. Fitting a parabola through the discrete peak sample $(t_0, y_0)$ and its immediate neighbors $(t_{-1}, y_{-1})$ and $(t_{+1}, y_{+1})$ yields the fractional sample offset $\delta \in [-0.5, +0.5]$:
    $$\delta = \frac{1}{2} \cdot \frac{y_{-1} - y_{+1}}{y_{-1} - 2y_0 + y_{+1}}, \quad t_{\text{peak}} = t_0 + \delta \cdot (t_0 - t_{-1})$$
-   This achieves **`< 2 ms` crossing timestamp precision** from a 50 Hz (`20 ms`) sample stream.
+   This achieves **`< 2 ms` crossing timestamp precision** from a 100 Hz (`10 ms`) sample stream.
 3. **Gate Speed Estimation**:
    Measures the `-6 dB` beamwidth $\Delta t_{-6\text{dB}}$ (time spent within `6 dB` of peak RSSI) to estimate the crossing speed through the gate aperture.
 
@@ -275,15 +277,15 @@ For each pilot and each track section $s \in \{S_1, \dots, S_k\}$:
 
 ---
 
-## 8. Browser-Native WebSerial ROM Flasher & Firmware Profiles
+## 8. Browser-Native WebSerial ROM Flasher & Firmware Image
 
 Implemented in [`web/src/services/esp_flasher.ts`](../web/src/services/esp_flasher.ts) and [`web/src/widgets/TimerFlasher.ts`](../web/src/widgets/TimerFlasher.ts), the USB flasher operates **100% inside the browser** without requiring a Go backend:
 
-1. **Firmware Profiles & Static `.bin` Fetch (`buildOrPatchFirmwareBin`)**:
-   - The **Firmware** dropdown lists firmware profiles (from `firmware/*/profile.json`, injected into the bundle at build time), not versions: every profile is rebuilt on each release, so there is one current build per profile.
-   - CI ([`.github/workflows/firmware.yml`](../.github/workflows/firmware.yml)) compiles each profile into a merged flash image; `cmd/build-web` publishes it as `firmware/slaprf-xiao-c5-<profile>.bin` (or a placeholder image if it hasn't been built, see [`web/firmware/README.md`](../web/firmware/README.md)).
-2. **Client-Side `SLAPRF02` Patching of Compiled Images**:
-   - When the user clicks **Flash to USB** or **Download .bin**, the browser fetches `./firmware/slaprf-xiao-c5-<profile>.bin`, locates the 160-byte `SLAPRF02` block, and stamps `role`, `profile`, `fingerprint`, `timer_label`, `wifi_ssid`, `wifi_pass`, and the active 8-channel `slot_freqs_mhz` (see [§5.2](#52-160-byte-slaprf02-flash-configuration-block)).
+1. **Single Firmware Image & Static `.bin` Fetch (`buildOrPatchFirmwareBin`)**:
+   - There is one firmware image and nothing to choose: every timer, Hub or Spoke, is flashed with `slaprf-xiao-c5.bin`, built from [`firmware/slaprf/`](../firmware/slaprf/).
+   - CI ([`.github/workflows/firmware.yml`](../.github/workflows/firmware.yml)) or [`firmware/tools/build_local.ps1`](../firmware/tools/build_local.ps1) compiles it into a merged flash image at `web/firmware/slaprf-xiao-c5.bin` (committed). `cmd/build-web` copies it to `_site/firmware/` (or writes a placeholder image if it hasn't been built, see [`web/firmware/README.md`](../web/firmware/README.md)), and the service worker precaches it.
+2. **Client-Side `SLAPRF02` Patching of the Compiled Image**:
+   - When the user clicks **Flash to USB** or **Download .bin**, the browser fetches `FIRMWARE_IMAGE_URL` (`./firmware/slaprf-xiao-c5.bin`), locates the 160-byte `SLAPRF02` block, and stamps `role`, `fingerprint`, `timer_label`, `wifi_ssid`, `wifi_pass`, and the active 8-channel `slot_freqs_mhz` (see [§5.2](#52-160-byte-slaprf02-flash-configuration-block)).
    - It then repairs the ESP-IDF app image (at `0x10000` in a merged image, or `0x0` for a bare app): the segment XOR checksum (`seed 0xEF`) and, if enabled, the appended SHA-256 digest.
 3. **Board Fingerprints (Keep / New)**:
    - Every board carries a random, non-zero 32-bit fingerprint that the laptop uses as its stable timer identity (Spokes have no fixed slot; the Hub assigns one at join time).
@@ -291,9 +293,9 @@ Implemented in [`web/src/services/esp_flasher.ts`](../web/src/services/esp_flash
 4. **WebSerial Espressif ROM Bootloader Protocol (`navigator.serial`)**:
    - Toggles USB-JTAG `DTR` / `RTS` lines to reset the XIAO ESP32-C5 (`VID 0x303A`) into ROM Download Mode.
    - Exchanges SLIP-framed (`0xC0 ... 0xC0`) ROM bootloader commands: `ESP_SYNC (0x08)`, `ESP_SPI_ATTACH (0x0D)`, `ESP_FLASH_BEGIN (0x02)`, 1 KB `ESP_FLASH_DATA (0x03)` blocks written from flash offset `0x0`, and `ESP_FLASH_END (0x04)`, then hard-resets the board into the new firmware.
-5. **Profile & Build Detection**:
-   - **Over USB (`Read timer from USB`)**: Reads the `SLAPRF02` block from the connected XIAO ESP32-C5 and shows its role, profile, fingerprint, and build version, flagging when an update to the current build is available.
-   - **In Setup → Timers (`TimersList.ts`)**: Displays each discovered timer's firmware profile and build alongside a **`Latest`** or **`Update → <current build>`** badge.
+5. **Build Detection**:
+   - **Over USB (`Read timer from USB`)**: Reads the `SLAPRF02` block from the connected XIAO ESP32-C5 and shows its role, fingerprint, and build version, flagging when an update to the current build is available.
+   - **In Setup → Timers (`TimersList.ts`)**: Displays each discovered timer's firmware build alongside a **`Latest`** or **`Update → <current build>`** badge.
 
 ---
 

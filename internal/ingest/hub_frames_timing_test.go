@@ -22,7 +22,7 @@ func windowAt(slot uint8, newest int) []byte {
 func TestWindowTimestampsStayEvenUnderBurstyArrival(t *testing.T) {
 	eng := tracker.NewRealEngine()
 	rx := NewHubFrameDecoder(eng)
-	rx.IngestPacket(EncodeHelloFrame(2, 2, 0x00000002, 1, 100, "S1"), 0)
+	rx.IngestPacket(EncodeHelloFrame(2, 2, 0x00000002, 100, "S1"), 0)
 
 	const frames = 200
 	var got []domain.TimerTelemetryFrame
@@ -67,7 +67,7 @@ func TestWindowTimestampsStayEvenUnderBurstyArrival(t *testing.T) {
 func TestSilentTimerSamplesAcceptedAfterSequenceWrap(t *testing.T) {
 	eng := tracker.NewRealEngine()
 	rx := NewHubFrameDecoder(eng)
-	rx.IngestPacket(EncodeHelloFrame(3, 2, 0x00000003, 1, 100, "S2"), 0)
+	rx.IngestPacket(EncodeHelloFrame(3, 2, 0x00000003, 100, "S2"), 0)
 
 	if got := rx.DecodePacket(windowAt(3, 10), 1_000_000); len(got) != 4 {
 		t.Fatalf("expected 4 samples, got %d", len(got))
@@ -87,7 +87,7 @@ func TestSilentTimerSamplesAcceptedAfterSequenceWrap(t *testing.T) {
 func TestEarlyArrivalPullsTimelineBack(t *testing.T) {
 	eng := tracker.NewRealEngine()
 	rx := NewHubFrameDecoder(eng)
-	rx.IngestPacket(EncodeHelloFrame(4, 2, 0x00000004, 1, 100, "S3"), 0)
+	rx.IngestPacket(EncodeHelloFrame(4, 2, 0x00000004, 100, "S3"), 0)
 
 	// Newest sample swept at 1.03 s but delivered 60 ms late.
 	rx.DecodePacket(windowAt(4, 3), 1_090_000)

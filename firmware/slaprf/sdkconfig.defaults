@@ -1,4 +1,4 @@
-# SlapRF firmware profile: open-ground (Seeed XIAO ESP32-C5)
+# SlapRF firmware (Seeed XIAO ESP32-C5)
 CONFIG_IDF_TARGET="esp32c5"
 CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
 # App is ~0.9 MB; the 1.5 MB single-app layout leaves room to grow

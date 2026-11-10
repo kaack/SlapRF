@@ -11,12 +11,8 @@ const (
 	GateRoleSectorGate  GateRole = "SECTOR_GATE"
 )
 
-// LatestFirmwareVersion is the current XIAO ESP32-C5 SDR timer firmware build. Every firmware
-// profile is rebuilt at this version on each release.
+// LatestFirmwareVersion is the current XIAO ESP32-C5 SDR timer firmware build (firmware/slaprf).
 const LatestFirmwareVersion = "v0.1.4"
-
-// DefaultFirmwareProfile is the firmware design assumed when a timer doesn't report one.
-const DefaultFirmwareProfile = "open-ground"
 
 // DetectedTimer represents a physical Seeed Studio XIAO ESP32-C5 board discovered over
 // the USB Hub (ESP-NOW) or flashed over USB, whether or not it is currently assigned to a gate.
@@ -27,7 +23,6 @@ type DetectedTimer struct {
 	Color           string    `json:"color"`
 	IsHub           bool      `json:"isHub"`
 	FirmwareVersion string    `json:"firmwareVersion,omitempty"`
-	FirmwareProfile string    `json:"firmwareProfile,omitempty"` // Firmware design ID (e.g. "open-ground")
 	BatteryMv       uint16    `json:"batteryMv"`
 	BatteryPct      uint8     `json:"batteryPct"`
 	NoiseFloorDbm   float32   `json:"noiseFloorDbm"`

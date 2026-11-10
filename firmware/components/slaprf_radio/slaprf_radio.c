@@ -1,6 +1,6 @@
 /**
  * slaprf_radio — 2.4 GHz Wi-Fi / ESP-NOW link, USB relay of Hub frames, sweep pacing, and USB
- * config readback for the XIAO ESP32-C5. Shared by every firmware profile.
+ * config readback for the XIAO ESP32-C5.
  */
 #include "slaprf_radio.h"
 
@@ -74,7 +74,7 @@ static int8_t s_tx_power_qdbm;    // Active max TX power (quarter dBm)
 static bool s_link_saved;         // True if rate and/or power came from saved serial-console settings
 
 #define LINK_NVS_NAMESPACE "slaprf_link"
-static const char *s_default_rate = "6m";   // Firmware defaults (from the profile), used by LINKRESET
+static const char *s_default_rate = "6m";   // Firmware defaults (from main.c), used by LINKRESET
 static int8_t s_default_qdbm = 80;
 void slaprf_link_settings(int8_t *tx_power_qdbm, bool *saved) {
     if (tx_power_qdbm) *tx_power_qdbm = s_tx_power_qdbm;

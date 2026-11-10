@@ -5,8 +5,6 @@
  * (after `LOG 1`), and the raw 160-byte SLAPRF02 block in answer to `SLAPRF?`.
  */
 import {
-  DEFAULT_FIRMWARE_PROFILE,
-  FIRMWARE_PROFILES,
   LATEST_FIRMWARE_VERSION,
   parseSlaprfConfigBlock,
   TimerReadout,
@@ -16,7 +14,6 @@ export interface TimerPeerSpoke {
   slot: number;
   fp: string;
   label: string;
-  profile?: number;
   fw?: string;
   mac?: string;
   online?: boolean;
@@ -31,7 +28,6 @@ export interface TimerParentHub {
   label?: string;
   mac?: string;
   fw?: string;
-  profile?: number;
   channel?: number;
   beaconMsAgo?: number;
   linked: boolean;
@@ -41,7 +37,6 @@ export interface KnownHardwareTimer {
   fp: string;
   role: "hub" | "spoke";
   label: string;
-  profile: number;
   fw?: string;
   mac?: string;
   slot?: number;
@@ -57,7 +52,6 @@ const SEEDED_KNOWN_TIMERS: KnownHardwareTimer[] = [
     fp: "BE7C0001",
     role: "hub",
     label: "H1",
-    profile: 1,
     fw: "v0.1.4",
     mac: "10:BD:A3:C7:F3:C0",
     slot: 1,
@@ -68,7 +62,6 @@ const SEEDED_KNOWN_TIMERS: KnownHardwareTimer[] = [
     fp: "DA9B4CA7",
     role: "spoke",
     label: "S1",
-    profile: 1,
     fw: "v0.1.4",
     mac: "10:BD:A3:C8:0B:88",
     slot: 2,
@@ -115,14 +108,13 @@ export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { 
   const byFp = new Map<string, KnownHardwareTimer>(list.map((t) => [t.fp.toUpperCase(), t]));
   const prev = byFp.get(fp);
   const role: "hub" | "spoke" = entry.role ?? prev?.role ?? "hub";
-  const profile = entry.profile ?? prev?.profile ?? 1;
   const channel = entry.channel ?? prev?.channel ?? 1;
   const slot = entry.slot ?? prev?.slot ?? (role === "hub" ? 1 : undefined);
 
-  // If a Spoke has an assigned TDMA slot (>= 2), associate it with the most recently seen Hub on the same profile.
+  // If a Spoke has an assigned TDMA slot (>= 2), associate it with the most recently seen Hub.
   let parentHubFp = entry.parentHubFp ?? prev?.parentHubFp;
   if (role === "spoke" && slot && slot >= 2 && !parentHubFp) {
-    const matchingHub = list.find((t) => t.role === "hub" && t.profile === profile) ?? list.find((t) => t.role === "hub");
+    const matchingHub = list.find((t) => t.role === "hub");
     if (matchingHub) {
       parentHubFp = matchingHub.fp;
     }
@@ -141,7 +133,6 @@ export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { 
     fp,
     role,
     label: entry.label || prev?.label || (role === "hub" ? "H1" : "S1"),
-    profile,
     fw: entry.fw || prev?.fw,
     mac: entry.mac || prev?.mac,
     slot,
@@ -178,7 +169,6 @@ export function recordKnownTimerStatus(s: TimerStatus): void {
     fp: s.fp,
     role: s.role === 1 ? "hub" : "spoke",
     label: s.label,
-    profile: s.profile,
     fw: s.fw,
     mac: s.chip?.mac,
     slot: s.slot || (s.role === 1 ? 1 : undefined),
@@ -193,7 +183,6 @@ export function recordKnownTimerStatus(s: TimerStatus): void {
           fp: sp.fp,
           role: "spoke",
           label: sp.label,
-          profile: sp.profile ?? s.profile,
           fw: sp.fw,
           mac: sp.mac,
           slot: sp.slot,
@@ -210,12 +199,10 @@ export function recordKnownTimerReadout(r: TimerReadout): void {
   if (r.status) {
     recordKnownTimerStatus(r.status);
   }
-  const prof = FIRMWARE_PROFILES.find((p) => p.id === r.firmwareProfile);
   recordKnownHardwareTimer({
     fp: r.fingerprint,
     role: r.role,
     label: r.timerLabel,
-    profile: r.status?.profile ?? prof?.code ?? 1,
     fw: r.firmwareVersion,
     mac: r.status?.chip?.mac,
     slot: r.status?.slot ?? (r.role === "hub" ? 1 : undefined),
@@ -227,7 +214,6 @@ export function recordKnownTimerReadout(r: TimerReadout): void {
 export interface TimerStatus {
   fw: string;
   role: number;
-  profile: number;
   fp: string;
   label: string;
   uptimeMs: number;
@@ -486,12 +472,10 @@ export class TimerConsole {
     if (!s && !cfg) {
       throw new Error("No SlapRF firmware detected on this board — flash it above first.");
     }
-    const profileFromStatus = s ? FIRMWARE_PROFILES.find((p) => p.code === s.profile)?.id : undefined;
     return {
       chip: s?.chip ? `${s.chip.model} (${s.chip.rev})` : cfg?.chip || "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
       role: cfg?.role ?? (s?.role === 1 ? "hub" : "spoke"),
       timerLabel: s?.label || cfg?.timerLabel || (s?.role === 1 ? "H1" : "S1"),
-      firmwareProfile: cfg?.firmwareProfile || profileFromStatus || DEFAULT_FIRMWARE_PROFILE,
       fingerprint: s?.fp || cfg?.fingerprint || "",
       firmwareVersion: s?.fw || cfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
       frequenciesMHz: s?.freqs?.length ? s.freqs : cfg?.frequenciesMHz || [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917],

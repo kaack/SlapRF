@@ -19,8 +19,6 @@ import { BrowserHubBridge } from "./browser_hub_bridge";
 import { enginePersistence, LAST_BACKUP_STORAGE_KEY, LEGACY_LOCALSTORAGE_KEYS } from "./engine_persistence";
 import {
   buildOrPatchFirmwareBin,
-  DEFAULT_FIRMWARE_PROFILE,
-  FIRMWARE_PROFILES,
   generateFingerprint,
   LATEST_FIRMWARE_VERSION,
 } from "./esp_flasher";
@@ -119,10 +117,6 @@ export class ApiClient {
       const cfg = sharedTimerConsole.lastConfig;
       const isHub = s.role === 1 || cfg?.role === "hub";
       const label = (s.label || cfg?.timerLabel || (isHub ? "H1" : `S${Math.max(1, (s.slot || 2) - 1)}`)).trim();
-      const profileId =
-        cfg?.firmwareProfile ||
-        FIRMWARE_PROFILES.find((p) => p.code === s.profile)?.id ||
-        DEFAULT_FIRMWARE_PROFILE;
       const fp = (s.fp || cfg?.fingerprint || "").trim().toUpperCase();
       const timerId = isHub ? 1 : Math.max(2, s.slot || 2);
 
@@ -132,7 +126,6 @@ export class ApiClient {
         color: "#d4ff3a",
         isHub,
         firmwareVersion: s.fw || cfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
-        firmwareProfile: profileId,
         fingerprint: fp,
         batteryMv: 3950,
         batteryPct: 82,
@@ -144,7 +137,7 @@ export class ApiClient {
       const provKey = `${this.simMode ? "sim" : "real"}:${isHub ? "hub" : "spoke"}:${label}:${fp}`;
       if (!this.provisionedUsbKeys.has(provKey)) {
         this.provisionedUsbKeys.add(provKey);
-        void this.provisionTimer(isHub ? "hub" : "spoke", label, profileId, fp).catch(() => undefined);
+        void this.provisionTimer(isHub ? "hub" : "spoke", label, fp).catch(() => undefined);
       }
     };
 
@@ -176,12 +169,8 @@ export class ApiClient {
       const cfg = sharedTimerConsole.lastConfig;
       const isHub = s.role === 1 || cfg?.role === "hub";
       const label = (s.label || cfg?.timerLabel || (isHub ? "H1" : `S${Math.max(1, (s.slot || 2) - 1)}`)).trim();
-      const profileId =
-        cfg?.firmwareProfile ||
-        FIRMWARE_PROFILES.find((p) => p.code === s.profile)?.id ||
-        DEFAULT_FIRMWARE_PROFILE;
       const fp = (s.fp || cfg?.fingerprint || "").trim().toUpperCase();
-      await this.provisionTimer(isHub ? "hub" : "spoke", label, profileId, fp).catch(() => undefined);
+      await this.provisionTimer(isHub ? "hub" : "spoke", label, fp).catch(() => undefined);
     }
   }
 
@@ -222,7 +211,6 @@ export class ApiClient {
     timerId?: number;
     role?: "hub" | "spoke";
     label?: string;
-    firmwareProfile?: string;
   }): Promise<void> {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("POST", "/api/sim/timer-action", payload)
@@ -459,18 +447,16 @@ export class ApiClient {
     );
   }
 
-  /** Registers a newly flashed timer (hub or spoke) with its name, firmware profile, and board fingerprint. */
+  /** Registers a newly flashed timer (hub or spoke) with its name and board fingerprint. */
   public async provisionTimer(
     role: "hub" | "spoke",
     timerLabel: string,
-    firmwareProfile = DEFAULT_FIRMWARE_PROFILE,
     fingerprint = ""
   ): Promise<void> {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("POST", "/api/timers/provision", {
         role,
         timerLabel,
-        firmwareProfile,
         fingerprint,
       })
     );
@@ -478,20 +464,18 @@ export class ApiClient {
 
   /**
    * Builds or patches a pre-configured XIAO ESP32-C5 firmware binary stamped with role, name,
-   * firmware profile, board fingerprint & active channels, 100% client-side in the browser from
-   * the static `./firmware/<profile>.bin` assets.
+   * board fingerprint & active channels, 100% client-side in the browser from the static
+   * `./firmware/slaprf-xiao-c5.bin` image.
    */
   public async fetchFirmwareImage(
     role: "hub" | "spoke",
     timerLabel = "",
-    profile = DEFAULT_FIRMWARE_PROFILE,
     fingerprint = generateFingerprint()
   ): Promise<{ bytes: Uint8Array; sha256: string; filename: string }> {
     const freqs = this.store.pilots.slice(0, 8).map((p) => p.frequencyMhz);
     const built = await buildOrPatchFirmwareBin({
       role,
       timerLabel,
-      profile,
       fingerprint,
       frequenciesMHz: freqs,
     });

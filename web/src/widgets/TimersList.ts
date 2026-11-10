@@ -1,7 +1,7 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { ApiClient } from "../services/api_client";
-import { firmwareProfile, LATEST_FIRMWARE_VERSION } from "../services/esp_flasher";
+import { LATEST_FIRMWARE_VERSION } from "../services/esp_flasher";
 import { TIMER_COLORS, timerColor, timerRoleText } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { DetectedTimer } from "../types/models";
@@ -263,7 +263,6 @@ export class TimersList extends Component {
     const isPickerOpen = this.colorPickerTimerId === d.timerId;
     const fwVer = d.firmwareVersion || LATEST_FIRMWARE_VERSION;
     const isLatestFw = fwVer === LATEST_FIRMWARE_VERSION;
-    const profile = firmwareProfile(d.firmwareProfile);
 
     return `
       <div class="timer-table-row ${isPickerOpen ? "is-picker-open" : ""} ${d.online ? "" : "is-offline"}">
@@ -297,8 +296,8 @@ export class TimersList extends Component {
           <span class="detected-role-pill ${d.isHub ? "is-hub" : ""}">${esc(timerRoleText(this.store, d))}</span>
         </div>
 
-        <div class="timer-fw-cell" title="${esc(`${profile.name} · ${fwVer}`)}">
-          <span>${esc(profile.name)}</span>
+        <div class="timer-fw-cell" title="SlapRF firmware ${esc(fwVer)}">
+          <span class="mono">${esc(fwVer)}</span>
           ${
             isLatestFw
               ? ""

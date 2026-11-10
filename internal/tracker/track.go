@@ -26,7 +26,6 @@ var (
 type ProvisionRequest struct {
 	Role        string // "hub" or "spoke"
 	Label       string // Flashed timer name (e.g. "H1", "S3")
-	Profile     string // Firmware profile ID; empty = domain.DefaultFirmwareProfile
 	Fingerprint string // 8-hex-digit board fingerprint; empty = unknown
 }
 
@@ -44,16 +43,12 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	if utf8.RuneCountInString(timerLabel) > domain.MaxGateNameLen {
 		return 0, ErrGateNameTooLong
 	}
-	profile := strings.TrimSpace(req.Profile)
-	if profile == "" {
-		profile = domain.DefaultFirmwareProfile
-	}
 	fingerprint := strings.ToUpper(strings.TrimSpace(req.Fingerprint))
 	ver := domain.LatestFirmwareVersion
 
 	e.mu.Lock()
 	if role == "hub" {
-		id := e.provisionCollectorHubLocked(fingerprint, timerLabel, profile, ver)
+		id := e.provisionCollectorHubLocked(fingerprint, timerLabel, ver)
 		pilots := append([]domain.PilotSlot(nil), e.pilots...)
 		gates := append([]domain.TrackGate(nil), e.gates...)
 		subs := append([]EventSubscriber(nil), e.subscribers...)
@@ -73,7 +68,6 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 					d.TimerLabel = timerLabel
 				}
 				d.FirmwareVersion = ver
-				d.FirmwareProfile = profile
 				d.IsHub = role == "hub"
 				d.Online = true
 				d.LastSeenAt = time.Now()
@@ -189,7 +183,6 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	e.gates[targetIdx].Color = d.Color
 	e.gates[targetIdx].FirmwareVersion = ver
 	d.FirmwareVersion = ver
-	d.FirmwareProfile = profile
 	if fingerprint != "" {
 		d.Fingerprint = fingerprint
 	} else if d.Fingerprint == "" {
@@ -216,7 +209,7 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 // placed on a gate automatically, but the user may drag it onto one: a Hub tied to a gate also
 // sweeps 5.8 GHz and times that gate (the browser tells the Hub over USB). It keeps timer ID 1
 // (or its existing ID if this board is already known).
-func (e *Engine) provisionCollectorHubLocked(fingerprint, label, profile, ver string) uint8 {
+func (e *Engine) provisionCollectorHubLocked(fingerprint, label, ver string) uint8 {
 	var id uint8
 	for tid, d := range e.detected {
 		if fingerprint != "" && d.Fingerprint == fingerprint {
@@ -248,7 +241,6 @@ func (e *Engine) provisionCollectorHubLocked(fingerprint, label, profile, ver st
 	}
 	d.IsHub = true
 	d.FirmwareVersion = ver
-	d.FirmwareProfile = profile
 	if fingerprint != "" {
 		d.Fingerprint = fingerprint
 	} else if d.Fingerprint == "" {
@@ -734,21 +726,17 @@ func (e *Engine) DeleteDetectedTimer(timerID uint8) error {
 	return nil
 }
 
-// AddSimulatedTimer creates a new simulated XIAO timer in `e.detected` running the given firmware
-// profile, following the same Hub/Spoke model as real hardware:
+// AddSimulatedTimer creates a new simulated XIAO timer in `e.detected`, following the same Hub/Spoke model as real hardware:
 //   - "hub": the simulated USB collector dongle (one per course, timer ID 1 when free). It is
 //     registered without a gate; dragging it onto a gate later makes it sweep that gate.
 //   - "spoke": takes the first free timer ID from 2 up and binds to the first gate without a
 //     timer, or appends a new gate for it.
 //
 // An empty label defaults to "H1" for the Hub (Spokes may stay unnamed, shown by gate position).
-func (e *Engine) AddSimulatedTimer(role string, label string, profile string) (uint8, error) {
+func (e *Engine) AddSimulatedTimer(role string, label string) (uint8, error) {
 	label = strings.TrimSpace(label)
 	if utf8.RuneCountInString(label) > domain.MaxGateNameLen {
 		return 0, ErrGateNameTooLong
-	}
-	if strings.TrimSpace(profile) == "" {
-		profile = domain.DefaultFirmwareProfile
 	}
 	fwVersion := domain.LatestFirmwareVersion
 	isHub := role == "hub"
@@ -788,7 +776,6 @@ func (e *Engine) AddSimulatedTimer(role string, label string, profile string) (u
 		Color:           domain.DefaultTimerColor(nextID),
 		IsHub:           isHub,
 		FirmwareVersion: fwVersion,
-		FirmwareProfile: profile,
 		Fingerprint:     newFingerprintHex(),
 		BatteryMv:       4120,
 		BatteryPct:      domain.ComputeBatteryPct(4120),
