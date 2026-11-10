@@ -87,7 +87,7 @@ export class AppShell extends Component {
       case "flasher":
         return new FlasherView(host, this.store, this.api);
       case "debug":
-        return new DebugView(host);
+        return new DebugView(host, this.api);
       case "about":
         return new AboutView(host, this.store, this.api);
     }

@@ -254,6 +254,12 @@ export interface TimerStatus {
   freqsTemporary: boolean;
   chanMask?: number;
   freqs: number[];
+  /**
+   * Hub only: true while the Hub also sweeps 5.8 GHz and sends its own telemetry (slot 1), set
+   * with the `HUBGATE 1|0` USB command. Runtime-only (0 after a Hub reboot); missing = false.
+   * The browser keeps it in sync with the course (services/hub_gate_sync.ts).
+   */
+  hubGate?: boolean;
 }
 
 export interface LiveSample {
@@ -371,6 +377,8 @@ export class TimerConsole {
   private readonly stateListeners = new Set<() => void>();
   private waiters: Waiter[] = [];
   private statusPollTimer = 0;
+  /** When the last status line arrived (the board pushes one every ~1 s once a host is attached). */
+  private lastStatusAtMs = 0;
   /** While true, a dropped port is an expected restart, not a user-visible disconnect. */
   private expectingRestart = false;
   private userDisconnecting = false;
@@ -501,13 +509,18 @@ export class TimerConsole {
     await this.disconnect();
   }
 
-  public startStatusPolling(intervalMs = 1000): void {
+  /**
+   * Status watchdog. Boards push a status line about once a second on their own (from a
+   * low-priority task, so polling never disturbs sweeps or beacons). We only ask with STATUS? when
+   * pushes go quiet for `silenceMs` (just connected, board rebooted, or it stopped streaming).
+   */
+  public startStatusPolling(silenceMs = 4000): void {
     window.clearInterval(this.statusPollTimer);
     this.statusPollTimer = window.setInterval(() => {
-      if (this.connected && !this.expectingRestart) {
+      if (this.connected && !this.expectingRestart && Date.now() - this.lastStatusAtMs > silenceMs) {
         void this.send("STATUS?").catch(() => undefined);
       }
-    }, intervalMs);
+    }, 1000);
   }
 
   /**
@@ -982,6 +995,7 @@ export class TimerConsole {
               : "";
             const spokesChanged = spokeSig !== this.lastKnownSpokeSig;
             this.lastStatus = st;
+            this.lastStatusAtMs = Date.now();
             if (labelChanged || spokesChanged) {
               this.lastKnownSpokeSig = spokeSig;
               recordKnownTimerStatus(st);

@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"slaprf/internal/api"
+	"slaprf/internal/devbundle"
 	"slaprf/internal/firmware"
 )
 
@@ -62,7 +62,7 @@ func main() {
 	}
 
 	// 2. Bundle TypeScript -> dist/app.js using pure-Go esbuild
-	jsBytes, err := api.BundleTypeScript(*webDir)
+	jsBytes, err := devbundle.BundleTypeScript(*webDir)
 	if err != nil {
 		log.Fatalf("TypeScript bundle failed: %v", err)
 	}
@@ -95,8 +95,8 @@ func main() {
 	info, _ := os.Stat(wasmOut)
 	log.Printf("[build-web] Built wasm/slaprf.wasm (%d bytes)", info.Size())
 
-	// 5. Also sync wasm/wasm_exec.js and wasm/slaprf.wasm into <webDir>/wasm/ so `//go:embed wasm`
-	// and local `go run ./cmd/slaprf` have the latest compiled WASM simulation engine on disk.
+	// 5. Also sync wasm/wasm_exec.js and wasm/slaprf.wasm into <webDir>/wasm/ so the web/ tree
+	// has the latest compiled WASM engine on disk.
 	webWasmDir := filepath.Join(*webDir, "wasm")
 	if err := os.MkdirAll(webWasmDir, 0o755); err == nil {
 		if filepath.Clean(webWasmDir) != filepath.Clean(filepath.Join(*outDir, "wasm")) {
@@ -108,6 +108,27 @@ func main() {
 	// 6. Write .nojekyll so GitHub Pages serves all files unaltered
 	_ = os.WriteFile(filepath.Join(*outDir, ".nojekyll"), []byte{}, 0o644)
 	_ = os.WriteFile(filepath.Join(*outDir, "CNAME"), []byte("slaprf.app\n"), 0o644)
+	// 7. PWA: web app manifest + icons, then the service worker (last, so its content-hashed
+	// precache manifest covers every file written above).
+	mustCopyFile(filepath.Join(*webDir, "manifest.webmanifest"), filepath.Join(*outDir, "manifest.webmanifest"))
+	if err := os.MkdirAll(filepath.Join(*outDir, "icons"), 0o755); err != nil {
+		log.Fatalf("failed to create %s/icons: %v", *outDir, err)
+	}
+	iconEntries, err := os.ReadDir(filepath.Join(*webDir, "icons"))
+	if err != nil {
+		log.Fatalf("failed to read icons dir: %v", err)
+	}
+	for _, e := range iconEntries {
+		if !e.IsDir() {
+			mustCopyFile(filepath.Join(*webDir, "icons", e.Name()), filepath.Join(*outDir, "icons", e.Name()))
+		}
+	}
+	swVersion, swCount, err := writeServiceWorker(*webDir, *outDir)
+	if err != nil {
+		log.Fatalf("service worker generation failed: %v", err)
+	}
+	log.Printf("[build-web] Generated sw.js (cache version %s, %d precached files)", swVersion, swCount)
+
 	log.Printf("[build-web] Static site ready in %s", *outDir)
 }
 

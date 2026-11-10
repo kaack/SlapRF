@@ -1,6 +1,6 @@
 # SlapRF Developer Guide
 
-This guide explains how to set up your local development environment, understand the repository layout, run the live development server, compile the WebAssembly simulation engine and standalone native binaries, and run the test suite.
+This guide explains how to set up your local development environment, understand the repository layout, run the dev-only local web server, build the static site (WebAssembly engine + TypeScript bundle), and run the test suite.
 
 For deep technical details on the 5.8 GHz / 2.4 GHz radio schedule, binary wire protocols, DSP pipeline, and timing state machines, see **[`docs/ARCHITECTURE.md`](ARCHITECTURE.md)**.
 
@@ -24,7 +24,7 @@ For deep technical details on the 5.8 GHz / 2.4 GHz radio schedule, binary wire 
 SlapRF is designed with a **zero-Node.js, single-toolchain** build architecture:
 
 - **Required**: **[Go 1.24+](https://go.dev/dl/)**
-  - The Go backend embeds the pure-Go [`esbuild`](https://github.com/evanw/esbuild) library (`internal/api/bundler_native.go`), which compiles and bundles `web/src/**/*.ts` into `dist/app.js` in memory in ~15 ms.
+  - `cmd/build-web` and `cmd/devserver` use the pure-Go [`esbuild`](https://github.com/evanw/esbuild) library (`internal/devbundle`), which compiles and bundles `web/src/**/*.ts` into `dist/app.js` in memory in ~15 ms.
   - You do **not** need `node`, `npm`, `pnpm`, `webpack`, or `vite` installed to edit TypeScript, CSS, or Go code.
 - **Required for Browser USB Flashing**: **Chrome, Edge, or Brave** (desktop) for WebSerial API support (`navigator.serial`).
 - **Optional (Firmware C Source Only)**: **Espressif ESP-IDF v5.5+** (`idf.py` with `esp32c5` target support) — only needed to build the `firmware/<profile>/` images locally; otherwise CI (`.github/workflows/firmware.yml`) builds them. Per-board settings (role, timer name, fingerprint, Wi-Fi credentials, 5.8 GHz channels) are binary-patched at flash time into the `SLAPRF02` config block without recompiling C code.
@@ -51,16 +51,18 @@ go mod download
 ```text
 SlapRF/
 ├── cmd/
-│   ├── slaprf/          # Main native server entry point (HTTP :8090, LapRF TCP :5403, Wi-Fi UDP :5404)
+│   ├── devserver/       # DEV-ONLY local web server (:8090), bundles TS + builds WASM on the fly
 │   ├── slaprf-wasm/     # Go -> WebAssembly entry point (GOOS=js GOARCH=wasm -> slaprf.wasm)
+│   ├── slaprf-relay/    # LiveTime relay: TCP :5403 <-> WebSocket 127.0.0.1:5404 byte copier (released binary)
 │   └── build-web/       # Static site & WASM builder (outputs ./_site and syncs ./web/wasm/)
 ├── internal/
-│   ├── api/             # REST + 50 Hz SSE server, pure-Go esbuild TS bundler, OS Wi-Fi scanner
+│   ├── api/             # /api/* request router used in-process by the WASM engine
+│   ├── devbundle/       # Host-side asset builder: esbuild TS bundle, wasm_exec.js, slaprf.wasm (build-web, devserver)
 │   ├── domain/          # Shared data models (pilots, gates, telemetry frames, timing rules, sim state)
 │   ├── dsp/             # 8-channel 5.8 GHz EMA filter, hysteresis detector, parabolic peak fitter
 │   ├── firmware/        # SLAPRF02 config patcher for compiled XIAO ESP32-C5 images & profile.json loader
 │   ├── ingest/          # 50 Hz multi-gate physics/RF simulator & Hub Wi-Fi UDP (:5404) receiver
-│   ├── laprf/           # ImmersionRC LapRF 8-Way SLIP binary protocol emulator (TCP :5403)
+│   ├── laprf/           # ImmersionRC LapRF 8-Way binary protocol emulator (runs in WASM; ServeConn over any stream)
 │   └── tracker/         # Multi-gate timing engine, 5-stage crossing guardrails, section split math
 ├── web/
 │   ├── embed.go         # //go:embed directive bundling index.html, styles/, src/, and wasm/ into the binary
@@ -71,7 +73,7 @@ SlapRF/
 │   └── src/             # TypeScript SPA source
 │       ├── core/        # Hash router, WakeLock manager, custom select & table scroll helpers
 │       ├── layout/      # AppShell, Sidebar, TopBar
-│       ├── services/    # ApiClient, WasmSimTransport, HttpRealTransport, Announcer, PiperNeuralTts, EspFlasher
+│       ├── services/    # ApiClient, WasmSimTransport, BrowserHubBridge, Announcer, PiperNeuralTts, EspFlasher
 │       ├── state/       # Reactive AppStore
 │       ├── types/       # TypeScript interfaces matching internal/domain JSON payloads
 │       ├── views/       # Practice (LiveView), Analytics (PilotView), Simulator (SimView), Settings (SetupView)
@@ -99,124 +101,79 @@ Ready-to-run helper scripts are included in the [`scripts/`](../scripts) folder 
 
 | Task | Windows (PowerShell) | macOS / Linux (Bash) | What It Does |
 | :--- | :--- | :--- | :--- |
-| **Start Dev Server** | `.\scripts\dev.ps1` | `./scripts/dev.sh` | Rebuilds `slaprf.wasm` + `_site`, then launches the local server on `http://localhost:8090`. |
-| **Full Build** | `.\scripts\build.ps1` | `./scripts/build.sh` | Builds the static SPA (`./_site`), updates `./web/wasm/slaprf.wasm`, and compiles `./slaprf` (`./slaprf.exe`). |
+| **Start Dev Server** | `.\scripts\dev.ps1` | `./scripts/dev.sh` | Runs the dev-only server (`go run ./cmd/devserver`) on `http://localhost:8090`. |
+| **Full Build** | `.\scripts\build.ps1` | `./scripts/build.sh` | Builds the static site (`./_site`, what https://slaprf.app serves) and updates `./web/wasm/slaprf.wasm`. |
 | **Run Unit Tests** | `.\scripts\test.ps1` | `./scripts/test.sh` | Runs the complete Go unit test suite (`go test -v -ldflags="-s -w" ./...`). |
 
 ---
 
 ## 4. Day-to-Day Development Workflows
 
-### Workflow A: Editing Frontend TypeScript or CSS (`web/src/**`, `web/styles/**`)
+There is no desktop server: the whole app (UI + Go timing engine compiled to WebAssembly) runs in the browser and talks to the Hub over WebSerial. For development, [`cmd/devserver`](../cmd/devserver/main.go) is a small **dev-only** web server (never shipped) that serves `web/` with `Cache-Control: no-store` and builds the generated assets on the fly:
 
-When running the server with `-web ./web`, the Go HTTP server compiles `web/src/main.ts` on the fly using `esbuild` whenever `/dist/app.js` is requested and serves `web/styles/*.css` directly from disk:
+| URL | Built from |
+| :--- | :--- |
+| `/dist/app.js` | `web/src/main.ts` bundled by pure-Go `esbuild` on **every** request |
+| `/wasm/slaprf.wasm` | `./cmd/slaprf-wasm` (`GOOS=js GOARCH=wasm`), rebuilt on the next request after any `.go` file under `cmd/` or `internal/` changes |
+| `/wasm/wasm_exec.js` | the local Go toolchain (`GOROOT`) |
 
 **Windows (PowerShell):**
 ```powershell
-go run -ldflags="-s -w" ./cmd/slaprf -web ./web -open=false
+go run -ldflags="-s -w" ./cmd/devserver
 ```
 
 **macOS / Linux (Bash):**
 ```bash
-go run -ldflags="-s -w" ./cmd/slaprf -web ./web -open=false
+go run -ldflags="-s -w" ./cmd/devserver
 ```
 
-1. Open `http://localhost:8090` in your browser.
-2. Edit any file under `web/src/` or `web/styles/`.
-3. **Simply refresh the browser (`F5` / `Cmd+R`)** — the Go server re-bundles `dist/app.js` in ~15 ms with no manual build step.
+Flags:
 
----
+```text
+  -addr string
+        listen address (default "127.0.0.1:8090")
+  -web string
+        path to the web/ directory (default "./web")
+  -open
+        open the app in the default browser
+```
+
+### Workflow A: Editing Frontend TypeScript or CSS (`web/src/**`, `web/styles/**`)
+
+1. Open `http://localhost:8090` in Chrome, Edge, or Brave (WebSerial needs `localhost` or HTTPS).
+2. Edit any file under `web/src/` or `web/styles/`.
+3. **Refresh the browser (`F5` / `Cmd+R`)**: the dev server re-bundles `dist/app.js` with no manual build step.
 
 ### Workflow B: Editing Go Timing / DSP / Simulator Code (`internal/**`, `cmd/**`)
 
-Because the web UI's **Simulation Mode** runs the Go timing and physics engine compiled to WebAssembly (`web/wasm/slaprf.wasm`) right inside the browser, any changes to `internal/domain`, `internal/dsp`, `internal/tracker`, `internal/ingest`, or `cmd/slaprf-wasm` must be compiled into `web/wasm/slaprf.wasm` before they take effect in Simulation Mode:
+Both Simulation Mode and Real Hardware Mode run the Go engine compiled to WebAssembly. After changing Go code, just refresh the browser: the dev server notices the newer source files and recompiles `slaprf.wasm` (takes a few seconds) before serving it.
 
-**Windows (PowerShell):**
-```powershell
-# Recompile WASM engine + static bundle, then start the server
-.\scripts\dev.ps1
-```
+### Workflow C: MultiGP LiveTime via `slaprf-relay`
 
-**macOS / Linux (Bash):**
-```bash
-# Recompile WASM engine + static bundle, then start the server
-./scripts/dev.sh
-```
+LiveTime speaks the ImmersionRC LapRF protocol over TCP `:5403`. The protocol is implemented in [`internal/laprf`](../internal/laprf/server.go) and runs **inside the WASM engine**: `laprf.Server.ServeConn` serves one session over any `net.Conn`, and [`cmd/slaprf-wasm/livetime.go`](../cmd/slaprf-wasm/livetime.go) bridges a `net.Pipe` to JS (`slaprfWasm.liveTimeOpen / liveTimeData / liveTimeClose / onLiveTimeOut`). [`cmd/slaprf-relay`](../cmd/slaprf-relay/main.go) is a separate, protocol-agnostic binary that copies bytes between LiveTime's TCP socket and a loopback WebSocket that [`web/src/services/livetime_relay.ts`](../web/src/services/livetime_relay.ts) connects to.
 
-Or if you only want to recompile `web/wasm/slaprf.wasm` directly while the server is already running:
+`	ext
+LiveTime --TCP :5403--> slaprf-relay --ws://127.0.0.1:5404 (binary = raw LapRF, text = JSON events)--> tab --net.Pipe--> laprf.ServeConn
+`
 
-**Windows (PowerShell):**
-```powershell
-$env:GOOS="js"; $env:GOARCH="wasm"
-go build -ldflags="-s -w" -o web/wasm/slaprf.wasm ./cmd/slaprf-wasm
-Remove-Item Env:\GOOS; Remove-Item Env:\GOARCH
-```
-
-**macOS / Linux (Bash):**
-```bash
-GOOS=js GOARCH=wasm go build -ldflags="-s -w" -o web/wasm/slaprf.wasm ./cmd/slaprf-wasm
-```
+To try it locally: `go run ./cmd/slaprf-relay` next to the dev server, enable LiveTime in **Settings**, and point LiveTime (or any LapRF client) at `127.0.0.1:5403`. The relay accepts WebSocket upgrades only from `https://slaprf.app` and `http(s)://localhost|127.0.0.1:<any port>` (extend with `-allow-origin`). `go test ./cmd/slaprf-relay` includes an end-to-end test that runs the LapRF emulator behind the relay. Release builds for Windows/macOS/Linux are attached to each GitHub release by [`.github/workflows/release.yml`](../.github/workflows/release.yml).
 
 ---
+## 5. Static Site Build (https://slaprf.app)
 
-### Workflow C: Server Flags (`cmd/slaprf`)
+[`cmd/build-web`](../cmd/build-web/main.go) produces the complete static site in `./_site` (`index.html`, `styles/`, `dist/app.js`, `wasm/slaprf.wasm`, `wasm/wasm_exec.js`, `firmware/slaprf-xiao-c5-*.bin`); [`.github/workflows/pages.yml`](../.github/workflows/pages.yml) deploys it.
 
-You can customize ports and startup behavior when running `./slaprf` or `go run ./cmd/slaprf`:
-
-```text
-  -http string
-        HTTP address for the TypeScript Sector & Telemetry SPA (default ":8090")
-  -laprf string
-        TCP address for MultiGP LiveTime (ImmersionRC LapRF 8-Way protocol) (default ":5403")
-  -udp string
-        UDP address for Hub Timer 2.4 GHz LR sliding-window telemetry (default ":5404")
-  -web string
-        Path to the web SPA directory (default "./web")
-  -open
-        Automatically open the web UI in the default browser on startup (default true)
-```
-
----
-
-## 5. Compiling Standalone Binaries & Static GitHub Pages Build
-
-The standalone `slaprf` binary embeds `web/index.html`, `web/styles/*`, `web/src/**`, and `web/wasm/*` via Go's `//go:embed` (`web/embed.go`). Therefore, **always run `cmd/build-web` before `go build ./cmd/slaprf`** so the embedded `web/wasm/slaprf.wasm` is up to date.
-
-### Build for Your Current OS
-
-**Windows (PowerShell):**
-```powershell
-go run -ldflags="-s -w" ./cmd/build-web -web ./web -out ./_site
-go build -ldflags="-s -w" -o slaprf.exe ./cmd/slaprf
-```
-
-**macOS / Linux (Bash):**
 ```bash
 go run -ldflags="-s -w" ./cmd/build-web -web ./web -out ./_site
-go build -ldflags="-s -w" -o slaprf ./cmd/slaprf
 ```
 
-### Test the Static GitHub Pages Output (`./_site`)
+### Test the Static Output (`./_site`)
 
-After running `cmd/build-web`, `./_site` contains the complete static SPA (including `dist/app.js`, `wasm/slaprf.wasm`, `wasm/wasm_exec.js`, and `firmware/slaprf-xiao-c5-*.bin`) that can be hosted on any static file server with no Go backend:
+`./_site` can be hosted on any static file server with no Go backend:
 
 ```bash
 # Serve ./_site on http://localhost:8000 using Python's built-in HTTP server (or any static server)
 python3 -m http.server 8000 --directory ./_site
-```
-
-### Cross-Compiling Release Binaries (All Platforms)
-
-```bash
-# 1. Refresh embedded WASM & static site first
-go run -ldflags="-s -w" ./cmd/build-web -web ./web -out ./_site
-
-# 2. Cross-compile standalone binaries
-GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o dist/slaprf-windows-amd64.exe ./cmd/slaprf
-GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o dist/slaprf-macos-arm64       ./cmd/slaprf
-GOOS=darwin  GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o dist/slaprf-macos-amd64       ./cmd/slaprf
-GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build -ldflags="-s -w" -o dist/slaprf-linux-amd64       ./cmd/slaprf
-GOOS=linux   GOARCH=arm64 CGO_ENABLED=0 go build -ldflags="-s -w" -o dist/slaprf-linux-arm64       ./cmd/slaprf
 ```
 
 ---
@@ -232,7 +189,8 @@ Every core subsystem includes deterministic unit tests:
 | `internal/ingest` | `simulator_test.go`, `wifi_udp_test.go` | 50 Hz physics/RF simulator state machine & `0xC5 0x59` variable-length sliding-window FEC packet reconstruction |
 | `internal/laprf` | `protocol_test.go` | ImmersionRC LapRF SLIP framing, CRC-16-CCITT, `RF_SETUP` & passing record encoding |
 | `internal/firmware` | `image_test.go` | `SLAPRF02` 160-byte config block round-trip for every profile, fingerprint generation, merged-image checksum & SHA-256 repair, `main.c` ↔ `profile.json` consistency |
-| `internal/api` | `http_server_test.go`, `sse_hub_test.go`, `wifi_test.go` | REST endpoints, SSE broadcast fan-out, TypeScript bundler, Wi-Fi SSID parser |
+| `internal/api` | `http_server_test.go` | `/api/*` request routing, sim/real engine isolation |
+| `internal/devbundle` | `devbundle_test.go` | pure-Go esbuild TypeScript bundle |
 
 Run all tests:
 
@@ -271,7 +229,7 @@ The firmware for the Seeed Studio XIAO ESP32-C5 is split into **firmware profile
 
 Hub and Spoke timers of the same profile run the **same compiled image**. Each `main.c` embeds a 160-byte `slaprf_flash_config_t` struct starting with the magic `SLAPRF02` (layout in [`docs/ARCHITECTURE.md` §5.2](ARCHITECTURE.md)):
 
-- When a user flashes or downloads a timer image, either the Go backend ([`internal/firmware/image.go`](../internal/firmware/image.go) `PatchImage`) or the browser patcher ([`web/src/services/esp_flasher.ts`](../web/src/services/esp_flasher.ts)) locates the `SLAPRF02` block, writes the role, profile code, board fingerprint, 8 pilot frequencies, Hub Wi-Fi credentials, and timer name, and updates the block's XOR crc8.
+- When a user flashes or downloads a timer image, the browser patcher ([`web/src/services/esp_flasher.ts`](../web/src/services/esp_flasher.ts)) locates the `SLAPRF02` block, writes the role, profile code, board fingerprint, 8 pilot frequencies, Hub Wi-Fi credentials, and timer name, and updates the block's XOR crc8.
 - It then repairs the ESP-IDF app image so the bootloader accepts it: the segment XOR checksum (seed `0xEF`) and, if enabled, the appended SHA-256. This works on bare app images and on merged flash images (app at `0x10000`) produced by `esptool merge_bin`.
 - Every board gets a random, non-zero 32-bit **fingerprint** at flash time. When reflashing, the flasher can **keep** the board's existing fingerprint (read over USB with `SLAPRF?`) or mint a **new** one.
 
@@ -288,13 +246,13 @@ cd build
 python -m esptool --chip esp32c5 merge_bin -o ../../../web/firmware/slaprf-xiao-c5-open-ground.bin @flash_args
 ```
 
-`cmd/build-web` copies `web/firmware/slaprf-xiao-c5-<profile>.bin` into `_site/firmware/`, and the Go server patches the same files for `/api/firmware/xiao-c5.bin`.
+`cmd/build-web` copies `web/firmware/slaprf-xiao-c5-<profile>.bin` into `_site/firmware/`, and the browser flasher fetches and patches them from there.
 
 ### CI Workflow & Placeholder Fallback
 
 - [`.github/workflows/firmware.yml`](../.github/workflows/firmware.yml) lists every `firmware/*/profile.json`, builds each profile in a matrix with `espressif/esp-idf-ci-action` (ESP-IDF `v5.5`, target `esp32c5`), merges the flash image, checks that it contains `SLAPRF02`, and uploads it as a `firmware-<profile>` artifact.
 - `pages.yml` and `release.yml` call it first and download the artifacts into `web/firmware/` before building the site and release binaries.
-- If an image is missing (e.g. a local checkout without ESP-IDF), `cmd/build-web`, the Go server, and the browser flasher fall back to `SyntheticBase()`: a 64 KB placeholder image with a valid header and an empty `SLAPRF02` block that flashes but does nothing.
+- If an image is missing (e.g. a local checkout without ESP-IDF), `cmd/build-web` and the browser flasher fall back to `SyntheticBase()`: a 64 KB placeholder image with a valid header and an empty `SLAPRF02` block that flashes but does nothing.
 
 ---
 
@@ -302,8 +260,7 @@ python -m esptool --chip esp32c5 merge_bin -o ../../../web/firmware/slaprf-xiao-
 
 1. **Always pass `-ldflags="-s -w"` on Windows**:
    - Windows Defender / antivirus heuristics frequently flag or delay unsigned Go test/build executables that contain DWARF debug symbol tables. Passing `-ldflags="-s -w"` to `go run`, `go build`, and `go test` strips DWARF symbols and prevents false positives.
-2. **Simulation Mode uses `web/wasm/slaprf.wasm` (even on `localhost:8090`)**:
-   - In the web UI, **Simulation Mode** (`WasmSimTransport`) runs in-browser via `web/wasm/slaprf.wasm`, while **Real Hardware Mode** (`HttpRealTransport`) talks to the native Go server over `/api/*` and `/api/stream`.
-   - If you change Go code under `internal/` and want to see it in **Simulation Mode**, remember to run `.\scripts\dev.ps1` (or `go run -ldflags="-s -w" ./cmd/build-web`) so `web/wasm/slaprf.wasm` is recompiled.
+2. **Go changes show up after a browser refresh**:
+   - Simulation and Real Hardware Mode both run `slaprf.wasm` in the browser. `cmd/devserver` rebuilds it when Go sources change; for the static site, re-run `go run -ldflags="-s -w" ./cmd/build-web`.
 3. **Browser Cache Busting (`web/index.html`)**:
    - If you deploy changes to GitHub Pages and want returning browsers to immediately pick up new CSS or JS without a hard refresh, bump the `?v=...` query string on the `<link>` and `<script>` tags in [`web/index.html`](../web/index.html).

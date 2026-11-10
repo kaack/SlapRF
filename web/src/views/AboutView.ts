@@ -130,7 +130,7 @@ export class AboutView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Version</h2>
-            <p>Client and backend build identifiers for this SlapRF instance, plus warranty disclaimer.</p>
+            <p>App and timing-engine build identifiers for this SlapRF instance, plus warranty disclaimer.</p>
           </div>
           <div class="settings-cards">
             <div class="card">
@@ -147,8 +147,8 @@ export class AboutView extends Component {
             <div class="card">
               <div class="option-row">
                 <div>
-                  <div class="option-title">Backend version</div>
-                  <div class="option-sub">Timing server and LapRF / MultiGP LiveTime bridge build revision.</div>
+                  <div class="option-title">Engine version</div>
+                  <div class="option-sub">In-browser WebAssembly timing engine (slaprf.wasm) build revision.</div>
                 </div>
                 <div class="option-actions">
                   <span class="badge mono">${esc(this.backendVersion)}</span>

@@ -1,0 +1,21 @@
+{
+  "name": "SlapRF",
+  "short_name": "SlapRF",
+  "description": "5.8 GHz multi-gate FPV lap and sector timer. Works offline after the first visit.",
+  "id": "/",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0b0c0f",
+  "theme_color": "#0b0c0f",
+  "categories": ["sports", "utilities"],
+  "icons": [
+    {
+      "src": "icons/icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

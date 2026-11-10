@@ -22,37 +22,36 @@ SlapRF does not replace official race timing systems such as **MultiGP LiveTime*
 
 You can use SlapRF in two ways:
 
-1. **Companion to MultiGP LiveTime**: SlapRF emulates an ImmersionRC LapRF 8-way timer over TCP on port `5403`. When you connect LiveTime to `localhost:5403`, SlapRF receives the pilot callsigns and 5.8 GHz frequencies from LiveTime. When a pilot crosses the start gate, SlapRF sends that crossing to LiveTime for official lap scoring and records the intermediate section splits (`S1`, `S2`, `S3`, `S4`) in the SlapRF web interface.
+1. **Companion to MultiGP LiveTime**: SlapRF emulates an ImmersionRC LapRF 8-way timer on TCP port `5403` (through the small [`slaprf-relay`](#livetime) helper). When you connect LiveTime to it, SlapRF receives the pilot callsigns and 5.8 GHz frequencies from LiveTime. When a pilot crosses the start gate, SlapRF sends that crossing to LiveTime for official lap scoring and records the intermediate section splits (`S1`, `S2`, `S3`, `S4`) in the SlapRF web interface.
 2. **Standalone practice timer**: You can run SlapRF on a laptop or phone at the field with 1 to 6 timers. The web interface provides spoken lap times, live 5.8 GHz signal graphs, threshold calibration, and section comparisons.
 
 ## How It Works
 
-A SlapRF setup uses one **Hub timer** and up to 5 **Spoke timers** (up to 6 timers total):
+A SlapRF setup uses one **Hub timer** and up to 6 **Spoke timers**:
 
-- **Hub timer**: Placed at the start/finish gate and connected to your laptop or phone hotspot over Wi-Fi. It measures 5.8 GHz VTX signal strength at its own gate and collects wireless readings from all Spoke timers on the course.
-- **Spoke timers**: Placed at intermediate gates around the track. They continuously measure 5.8 GHz VTX signal strength for up to 8 pilots and stream their readings wirelessly back to the Hub.
+- **Hub timer**: A USB-C dongle plugged into your laptop. It collects the wireless readings from all Spoke timers and passes them to the browser; by default it is not on any gate and does not measure anything itself. If a gate is within USB cable reach, you can drag the Hub onto it in the **Track** editor: it then times that gate too (it sweeps 5.8 GHz like a Spoke). Drag it off to make it a pure dongle again.
+- **Spoke timers**: Placed at the gates around the track (the first Spoke becomes the start/finish gate). They continuously measure 5.8 GHz VTX signal strength for up to 8 pilots and stream their readings wirelessly back to the Hub.
 
 ```mermaid
 flowchart LR
     subgraph Track["FPV Track (5.8 GHz VTX Signal)"]
-        T2["Gate 2: Spoke Timer (T2)"]
-        T3["Gate 3: Spoke Timer (T3)"]
-        T4["Gate 4: Spoke Timer (T4)"]
-        T1["Start Gate: Hub Timer (T1)"]
+        T2["Start Gate: Spoke Timer (T2)"]
+        T3["Gate 2: Spoke Timer (T3)"]
+        T4["Gate 3: Spoke Timer (T4)"]
     end
 
+    T1["Hub Timer (T1): USB dongle, optionally also times a gate"]
+
     subgraph Laptop["Field Laptop"]
-        Server["SlapRF Server"]
-        UI["Web UI (:8090) - Section Splits S1-S4"]
+        UI["Browser: slaprf.app (WASM timing engine) - Section Splits S1-S4"]
         LiveTime["MultiGP LiveTime (:5403 LapRF TCP)"]
     end
 
     T2 -- "Wireless Link" --> T1
     T3 -- "Wireless Link" --> T1
     T4 -- "Wireless Link" --> T1
-    T1 -- "Wi-Fi" --> Server
-    Server --> UI
-    Server -. "Optional Start Gate Passings" .-> LiveTime
+    T1 -- "USB-C (WebSerial)" --> UI
+    UI -. "Optional Start Gate Passings (via LiveTime relay)" .-> LiveTime
 ```
 
 You flash and configure the timers directly from Chrome, Edge, or Brave over USB-C (even from the [web app](https://kaack.github.io/SlapRF/) with no software installed). No compiler, driver installation, or command-line tool is required.
@@ -71,7 +70,7 @@ Each gate timer uses four off-the-shelf parts. One XIAO ESP32-C5 draws less than
 ### Estimated Total Cost
 
 - **1 timer**: $23 to $35 (using an existing LiPo battery) or $38 to $50 (with a new 3S LiPo)
-- **4-gate track (`1 Hub + 3 Spokes`)**: $92 to $140 total (using existing LiPo batteries)
+- **3-gate track (`1 Hub + 3 Spokes`)**: $92 to $140 total (using existing LiPo batteries; drag the Hub onto a fourth gate if it is within USB cable reach)
 
 ## Hardware Assembly
 
@@ -90,18 +89,19 @@ flowchart LR
 4. At the field, connect each XIAO ESP32-C5 to a LIPO to USB-C Adapter and a LiPo battery. Place one timer at each gate.
 5. Open **Settings > Track** and drag each timer (`T1`, `T2`, `T3`, `T4`) onto the track line in the order pilots fly the course. Click the checkered flag icon below a gate to set the start gate.
 
-## Download and Run
+## Run
 
-Download the latest standalone binary for your operating system from the [Releases page](https://github.com/kaack/SlapRF/releases/latest):
+Open **[slaprf.app](https://slaprf.app)** in Chrome, Edge, or Brave. There is nothing to download or install: the whole timing engine runs in the browser (WebAssembly), and the Hub timer plugs into your laptop over USB-C (WebSerial). The same page flashes timers from **Settings > Flasher**.
 
-| Operating System | Download |
-| :--- | :--- |
-| **Windows (x64)** | [`slaprf-windows-amd64.exe`](https://github.com/kaack/SlapRF/releases/latest/download/slaprf-windows-amd64.exe) |
-| **macOS (Apple Silicon)** | [`slaprf-macos-arm64`](https://github.com/kaack/SlapRF/releases/latest/download/slaprf-macos-arm64) |
-| **macOS (Intel)** | [`slaprf-macos-amd64`](https://github.com/kaack/SlapRF/releases/latest/download/slaprf-macos-amd64) |
-| **Linux (x64)** | [`slaprf-linux-amd64`](https://github.com/kaack/SlapRF/releases/latest/download/slaprf-linux-amd64) |
-| **Linux (ARM64)** | [`slaprf-linux-arm64`](https://github.com/kaack/SlapRF/releases/latest/download/slaprf-linux-arm64) |
+Developers can run the app locally with `go run ./cmd/devserver` (dev-only server on `http://localhost:8090`); see [docs/DEVELOPER.md](docs/DEVELOPER.md).
 
-1. **Windows**: Double-click `slaprf-windows-amd64.exe`. It starts the server and opens `http://localhost:8090` in your browser automatically.
-2. **macOS and Linux**: Run `chmod +x slaprf-* && ./slaprf-*` in a terminal to start the server and open `http://localhost:8090`.
-3. For USB timer flashing (`Settings > Flasher`), open `http://localhost:8090` in Chrome, Edge, or Brave.
+## LiveTime
+
+Browsers can't accept TCP connections, so MultiGP LiveTime reaches SlapRF through **`slaprf-relay`**, a tiny single-file helper that copies bytes between LiveTime (TCP `5403`) and the SlapRF tab (WebSocket on `127.0.0.1:5404`). All LapRF protocol logic runs in the browser.
+
+1. Download the relay for your OS from the [latest release](https://github.com/kaack/SlapRF/releases/latest): `slaprf-relay-windows-amd64.exe`, `slaprf-relay-macos-arm64`, `slaprf-relay-macos-amd64`, `slaprf-relay-linux-amd64` or `slaprf-relay-linux-arm64` (on macOS/Linux run `chmod +x` on it first).
+2. Run it on the computer that has SlapRF open, and leave its window open.
+3. In SlapRF, open **Settings > MultiGP LiveTime** and turn it on. Chrome may ask to allow access to devices on your local network: choose **Allow**.
+4. In LiveTime, add an **ImmersionRC LapRF (8-way)** timing device at the relay computer's IP address, port `5403` (`127.0.0.1` if LiveTime runs on the same computer). Allow the firewall prompt if LiveTime is on another PC.
+
+The relay accepts one LiveTime connection and one SlapRF tab at a time (a new one replaces the old). It only accepts browser connections from `https://slaprf.app` and `localhost`; add others with `-allow-origin`. Run `slaprf-relay -h` for all options.

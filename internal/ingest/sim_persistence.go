@@ -25,8 +25,14 @@ type SimPilotPersistedState struct {
 	PacksFlown      int                   `json:"packsFlown,omitempty"`
 }
 
+// SimModelVersion identifies the simulated Hub/Spoke model stored in persisted sim state.
+// Version 2: the simulated Hub is a gate-less collector dongle (same model as real hardware).
+// Saved state from another version is discarded (see SimStateCompatible).
+const SimModelVersion = 2
+
 // SimPersistedOptions captures the user-configurable simulator controls so they survive restarts.
 type SimPersistedOptions struct {
+	Model               int                      `json:"model,omitempty"`
 	Running             bool                     `json:"running"`
 	TrackWalkerActive   bool                     `json:"trackWalkerActive"`
 	TrackWalkerTimerSec float64                  `json:"trackWalkerTimerSec,omitempty"`
@@ -73,6 +79,7 @@ func (s *TrackSimulator) ExportOptions() SimPersistedOptions {
 	sort.Ints(paused)
 
 	return SimPersistedOptions{
+		Model:               SimModelVersion,
 		Running:             s.running,
 		TrackWalkerActive:   s.trackWalkerActive,
 		TrackWalkerTimerSec: s.trackWalkerTimerSec,
@@ -80,6 +87,13 @@ func (s *TrackSimulator) ExportOptions() SimPersistedOptions {
 		PausedSlots:         paused,
 		PilotStates:         pStates,
 	}
+}
+
+// SimStateCompatible reports whether persisted simulator options were saved by the current sim
+// model. Older saves (where the simulated Hub timed the start/finish gate) are not migrated:
+// callers drop them and start from the default course.
+func SimStateCompatible(opts SimPersistedOptions) bool {
+	return opts.Model == SimModelVersion
 }
 
 // RestoreOptions restores the simulator's user-configurable toggles, powered-off timers, and pilot states.
@@ -156,8 +170,8 @@ func (s *TrackSimulator) ResetToFactoryDefaults() {
 	s.Prewarm(45 * time.Second)
 }
 
-// ResetTimersAndTrackToDefault restores the 4 default simulated timers and 4-gate loop
-// without wiping pilot configurations or completed laps.
+// ResetTimersAndTrackToDefault restores the default simulated timers (gate-less Hub H1 plus
+// Spokes S1..S4) and the 4-gate loop without wiping pilot configurations or completed laps.
 func (s *TrackSimulator) ResetTimersAndTrackToDefault() {
 	s.mu.Lock()
 	s.poweredOffTimers = make(map[uint8]bool)

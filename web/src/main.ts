@@ -6,6 +6,9 @@ import { installWakeLock } from "./core/wake_lock";
 import { AppShell } from "./layout/AppShell";
 import { Announcer } from "./services/announcer";
 import { ApiClient } from "./services/api_client";
+import { HubGateSync } from "./services/hub_gate_sync";
+import { sharedLiveTimeRelay } from "./services/livetime_relay";
+import { installOffline } from "./services/offline";
 import { AppStore } from "./state/store";
 
 const MIN_BOOT_LOADER_MS = 2200;
@@ -51,6 +54,12 @@ async function bootstrap(): Promise<void> {
 
   new AppShell(root, store, api, router, announcer);
   await api.initialize();
+  // LiveTime (via slaprf-relay) needs the WASM engine, which is ready now. Refresh the polled
+  // LapRF counters immediately whenever the link changes (TopBar locks the arm button on it).
+  sharedLiveTimeRelay.subscribe(() => void api.pollStatusNow().catch(() => undefined));
+  sharedLiveTimeRelay.start();
+  // Real hardware: tell the USB Hub to sweep while it's dragged onto a gate (HUBGATE 1/0).
+  new HubGateSync(store, api).start();
 
   // Keep the radar boot sequence visible long enough to enjoy even on fast local/cached loads
   const elapsedMs = performance.now() - bootStartMs;
@@ -72,6 +81,7 @@ async function bootstrap(): Promise<void> {
 }
 
 document.addEventListener("DOMContentLoaded", () => {
+  installOffline();
   bootstrap().catch((err) => {
     console.error("Gate Timer failed to start:", err);
     setBootStatus(`Startup error: ${err instanceof Error ? err.message : String(err)}`, 100);

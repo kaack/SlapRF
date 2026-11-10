@@ -2,7 +2,7 @@ import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { ApiClient } from "../services/api_client";
 import { firmwareProfile, LATEST_FIRMWARE_VERSION } from "../services/esp_flasher";
-import { TIMER_COLORS, timerColor } from "../state/selectors";
+import { TIMER_COLORS, timerColor, timerRoleText } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { DetectedTimer } from "../types/models";
 import { renderEmpty } from "./markup";
@@ -186,7 +186,7 @@ export class TimersList extends Component {
               timerId: p.assignedTimerId ?? p.gateId,
               timerLabel: p.timerLabel ?? "",
               color: p.color,
-              isHub: (p.assignedTimerId ?? p.gateId) === 1,
+              isHub: false,
               firmwareVersion: p.firmwareVersion ?? LATEST_FIRMWARE_VERSION,
               batteryMv: p.batteryMv,
               batteryPct: p.batteryPct,
@@ -294,7 +294,7 @@ export class TimersList extends Component {
         </div>
 
         <div>
-          <span class="detected-role-pill ${d.isHub ? "is-hub" : ""}">${d.isHub ? "Hub" : "Spoke"}</span>
+          <span class="detected-role-pill ${d.isHub ? "is-hub" : ""}">${esc(timerRoleText(this.store, d))}</span>
         </div>
 
         <div class="timer-fw-cell" title="${esc(`${profile.name} · ${fwVer}`)}">

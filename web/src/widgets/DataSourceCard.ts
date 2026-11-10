@@ -3,11 +3,18 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { Announcer } from "../services/announcer";
 import { ApiClient } from "../services/api_client";
-import { RealEngineMode } from "../services/browser_hub_bridge";
-import { sharedTimerConsole } from "../services/timer_console";
+import { enginePersistence, formatBytes, getLastBackupAt, recordBackupNow } from "../services/engine_persistence";
+import { getStorageStatus, StorageStatus } from "../services/offline";
 import { AppStore } from "../state/store";
 
-/** Toggle between real-world physical XIAO hardware, the browser WASM Hub bridge, and the built-in track simulator. */
+function fmtWhen(ms: number | null): string {
+  if (!ms) return "never";
+  const d = new Date(ms);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  return sameDay ? d.toLocaleTimeString() : d.toLocaleString();
+}
+
+/** Toggle between the built-in track simulator and real-world physical XIAO hardware (USB-C Hub), both timed by the in-browser WASM engine. */
 export class DataSourceCard extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
@@ -17,13 +24,8 @@ export class DataSourceCard extends Component {
     this.store = store;
     this.api = api;
     el.addEventListener("change", this.handleChange);
-    el.addEventListener("click", this.handleClick);
-    this.onDispose(() => {
-      el.removeEventListener("change", this.handleChange);
-      el.removeEventListener("click", this.handleClick);
-    });
+    this.onDispose(() => el.removeEventListener("change", this.handleChange));
     this.onDispose(store.subscribe(["status"], () => this.render()));
-    this.onDispose(api.hubBridge.subscribe(() => this.render()));
     this.render();
   }
 
@@ -34,42 +36,15 @@ export class DataSourceCard extends Component {
     }
   };
 
-  private handleClick = (e: Event): void => {
-    const btn = (e.target as HTMLElement).closest<HTMLElement>("[data-action]");
-    if (!btn) return;
-    const action = btn.dataset.action;
-
-    if (action === "engine-mode") {
-      const mode = btn.dataset.mode as RealEngineMode | undefined;
-      if (mode === "auto" || mode === "browser" || mode === "desktop") {
-        void this.api.setRealEngineMode(mode).then(() => this.render());
-      }
-      return;
-    }
-    if (action === "restore-hub-defaults") {
-      this.api.hubBridge.resetDefaults();
-      void this.api.setRealEngineMode("auto").then(() => this.render());
-    }
-  };
-
   private render(): void {
     const sim = this.store.simulatorRunning;
-    const mode = this.api.realEngineMode;
-    const usingBrowser = this.api.usingBrowserRealEngine;
-    const desktopAvail = this.api.desktopServerAvailable;
-
-    const activeRuntimeLabel = sim
-      ? "Simulator (in-browser WASM)"
-      : usingBrowser
-        ? "Browser engine (WASM direct to Hub)"
-        : "Desktop Go server (LiveTime TCP :5403 + SQLite)";
 
     this.el.innerHTML = `
       <div class="card">
         <div class="option-row">
           <div>
             <div class="option-title">Simulation active</div>
-            <div class="option-sub">Feeds the app with simulated pilots, gates, and 6S flight packs in a separate dataset. Turn off to use your physical timers.</div>
+            <div class="option-sub">Feeds the app with simulated pilots, gates, and 6S flight packs in a separate dataset. Turn off to use your physical timers: the in-browser engine then times laps from the USB-C Hub on the <a href="#/network" class="link-inline">Network</a> page.</div>
           </div>
           <div class="option-actions">
             <label class="switch switch-lg">
@@ -78,36 +53,16 @@ export class DataSourceCard extends Component {
             </label>
           </div>
         </div>
-      </div>
-
-      <div class="card card-flush">
-        <div class="card-body">
-          <div class="option-row">
-            <div>
-              <div class="option-title">Hardware timing runtime</div>
-              <div class="option-sub">Run the 5.8 GHz DSP &amp; lap timing engine right in the browser via WebAssembly (streams directly from the USB-C Hub on the <a href="#/network" class="link-inline">Network</a> page), or use the desktop app for MultiGP LiveTime TCP (:5403) and SQLite storage.</div>
-            </div>
-            <div class="option-actions">
-              <div class="segmented" role="group" aria-label="Hardware timing runtime">
-                <button type="button" class="${mode === "auto" ? "is-active" : ""}" data-action="engine-mode" data-mode="auto" title="${desktopAvail ? "Desktop server detected (uses Desktop app)" : "Static web host detected (uses Browser WASM)"}">Auto</button>
-                <button type="button" class="${mode === "browser" ? "is-active" : ""}" data-action="engine-mode" data-mode="browser">Browser (WASM)</button>
-                <button type="button" class="${mode === "desktop" ? "is-active" : ""}" data-action="engine-mode" data-mode="desktop">Desktop app</button>
-              </div>
-            </div>
-          </div>
-        </div>
-        <div class="rules-foot">
-          <p class="note">Active runtime: <strong>${esc(activeRuntimeLabel)}</strong></p>
-          <button class="btn btn-ghost btn-sm" type="button" data-action="restore-hub-defaults">Restore defaults</button>
-        </div>
       </div>`;
   }
 }
 
-/** Persistence section with Export, Import, and Wipe application data sub-cards. */
+/** Persistence section: storage status + Export backup, Import, and Wipe application data sub-cards. */
 export class PersistenceSettings extends Component {
   private readonly api: ApiClient;
   private readonly announcer?: Announcer;
+  private storage: StorageStatus | null = null;
+  private storageFetchedAt = 0;
 
   constructor(el: HTMLElement, api: ApiClient, announcer?: Announcer) {
     super(el);
@@ -119,7 +74,45 @@ export class PersistenceSettings extends Component {
       el.removeEventListener("change", this.handleChange);
       el.removeEventListener("click", this.handleClick);
     });
+    this.onDispose(enginePersistence.subscribe(() => this.refreshStorage(false)));
+    const tick = window.setInterval(() => this.renderStatus(), 15_000);
+    this.onDispose(() => window.clearInterval(tick));
     this.render();
+    this.refreshStorage(true);
+  }
+
+  /** Re-reads persisted/usage/quota (throttled; `estimate()` is async but not free). */
+  private refreshStorage(force: boolean): void {
+    this.renderStatus();
+    if (!force && performance.now() - this.storageFetchedAt < 5000) return;
+    this.storageFetchedAt = performance.now();
+    void getStorageStatus().then((s) => {
+      this.storage = s;
+      this.renderStatus();
+    });
+  }
+
+  private renderStatus(): void {
+    const host = this.el.querySelector<HTMLElement>("[data-storage-status]");
+    if (!host) return;
+    const st = enginePersistence.getStatus();
+    const s = this.storage;
+    const modeLabel: Record<string, string> = {
+      booting: "starting…",
+      active: "saving",
+      "read-only": "read-only (open in another tab)",
+      unavailable: "not saving",
+    };
+    const parts = [
+      `Storage: <strong>${st.backend}</strong> · ${modeLabel[st.mode] ?? st.mode}`,
+      `persisted: ${s ? (s.persisted ? "yes" : "no") : "…"}`,
+      `used: ${s ? `${formatBytes(s.usage)} / ${formatBytes(s.quota)}` : "…"}`,
+      `last saved: ${fmtWhen(st.lastSavedAt)}`,
+      `last backup: ${fmtWhen(getLastBackupAt())}`,
+    ];
+    host.innerHTML =
+      parts.join(" · ") +
+      (st.lastError ? `<div class="storage-status-error">${esc(st.lastError)}</div>` : "");
   }
 
   private handleChange = (e: Event): void => {
@@ -172,6 +165,8 @@ export class PersistenceSettings extends Component {
     a.click();
     document.body.removeChild(a);
     window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    recordBackupNow();
+    this.refreshStorage(true);
   }
 
   private async handleImportFile(file: File): Promise<void> {
@@ -186,12 +181,13 @@ export class PersistenceSettings extends Component {
       <div class="card">
         <div class="option-row">
           <div>
-            <div class="option-title">Export application data</div>
-            <div class="option-sub">Download a complete JSON snapshot of all application state (pilots, track layout, timers, timing rules, announcer settings, laps, and UI preferences).</div>
+            <div class="option-title">Saved data &amp; backup</div>
+            <div class="option-sub">Pilots, track, timers, rules, and recorded laps are saved automatically in this browser. Export a JSON backup regularly — browser data can be cleared.</div>
+            <div class="option-sub storage-status" data-storage-status></div>
           </div>
           <div class="option-actions">
             <button type="button" class="btn btn-ghost btn-sm" data-action="export-data">
-              ${icons.download(14)}<span>Export JSON</span>
+              ${icons.download(14)}<span>Export backup</span>
             </button>
           </div>
         </div>
@@ -214,7 +210,7 @@ export class PersistenceSettings extends Component {
         <div class="option-row">
           <div>
             <div class="option-title">Wipe application data</div>
-            <div class="option-sub">Clears all saved application state across both browser storage and the local database, returning every setting, pilot, track layout, and session to clean system defaults.</div>
+            <div class="option-sub">Clears all saved application state in this browser, returning every setting, pilot, track layout, and session to clean system defaults.</div>
           </div>
           <div class="option-actions">
             <button type="button" class="btn btn-ghost btn-sm" data-action="wipe-data">
@@ -223,5 +219,6 @@ export class PersistenceSettings extends Component {
           </div>
         </div>
       </div>`;
+    this.renderStatus();
   }
 }

@@ -222,26 +222,7 @@ func (e *Engine) ResetToFactoryDefaults(isSim bool) {
 	if isSim {
 		e.pilots = domain.DefaultPilotSlots()
 		e.gates = domain.DefaultTrackGates()
-		for _, g := range e.gates {
-			if g.AssignedTimerID > 0 {
-				c := g.Color
-				if c == "" {
-					c = domain.DefaultTimerColor(g.AssignedTimerID)
-				}
-				e.detected[g.AssignedTimerID] = &domain.DetectedTimer{
-					TimerID:         g.AssignedTimerID,
-					TimerLabel:      g.TimerLabel,
-					Color:           c,
-					IsHub:           g.AssignedTimerID == 1,
-					FirmwareVersion: g.FirmwareVersion,
-					BatteryMv:       g.BatteryMv,
-					BatteryPct:      g.BatteryPct,
-					NoiseFloorDbm:   g.NoiseFloorDbm,
-					Online:          g.Online,
-					LastSeenAt:      g.LastSeenAt,
-				}
-			}
-		}
+		e.seedSimTimersLocked()
 	} else {
 		e.pilots = domain.DefaultRealPilotSlots()
 		e.gates = []domain.TrackGate{}
@@ -285,30 +266,15 @@ func (e *Engine) ResetTrackToDefault(isSim bool) {
 	e.mu.Lock()
 	if isSim {
 		e.gates = domain.DefaultTrackGates()
-		e.detected = make(map[uint8]*domain.DetectedTimer)
-		for _, g := range e.gates {
-			if g.AssignedTimerID > 0 {
-				c := g.Color
-				if c == "" {
-					c = domain.DefaultTimerColor(g.AssignedTimerID)
-				}
-				e.detected[g.AssignedTimerID] = &domain.DetectedTimer{
-					TimerID:         g.AssignedTimerID,
-					TimerLabel:      g.TimerLabel,
-					Color:           c,
-					IsHub:           g.AssignedTimerID == 1,
-					FirmwareVersion: g.FirmwareVersion,
-					BatteryMv:       g.BatteryMv,
-					BatteryPct:      g.BatteryPct,
-					NoiseFloorDbm:   g.NoiseFloorDbm,
-					Online:          g.Online,
-					LastSeenAt:      g.LastSeenAt,
-				}
-			}
-		}
+		e.seedSimTimersLocked()
 	} else {
+		// Real hardware: one gate per Spoke in timer-ID order (the first is start/finish). The
+		// Hub is a collector dongle and gets no gate (the user may drag it onto one later).
 		ids := make([]int, 0, len(e.detected))
-		for id := range e.detected {
+		for id, d := range e.detected {
+			if d.IsHub {
+				continue
+			}
 			ids = append(ids, int(id))
 		}
 		sort.Ints(ids)

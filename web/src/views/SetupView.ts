@@ -33,7 +33,7 @@ export class SetupView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>MultiGP LiveTime</h2>
-            <p>This app emulates an ImmersionRC LapRF 8-way timer, so LiveTime connects without plugins.</p>
+            <p>This app emulates an ImmersionRC LapRF 8-way timer, so LiveTime connects without plugins, through the small slaprf-relay helper.</p>
           </div>
           <div class="card" data-slot="livetime"></div>
         </section>
@@ -57,7 +57,7 @@ export class SetupView extends Component {
 
     this.adopt(new TimingRulesEditor(this.slot("rules"), store, api));
     this.adopt(new AnnouncerSettings(this.slot("announcer"), announcer));
-    this.adopt(new LiveTimeCard(this.slot("livetime"), store, api));
+    this.adopt(new LiveTimeCard(this.slot("livetime"), store));
     this.adopt(new DataSourceCard(this.slot("source"), store, api));
     this.adopt(new PersistenceSettings(this.slot("persistence"), api, announcer));
   }

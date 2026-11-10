@@ -93,7 +93,16 @@ func ComputeBatteryPct(mv uint16) uint8 {
 	return uint8(float64(mv-3300) / 900.0 * 100.0)
 }
 
-// DefaultTrackGates returns a 4-gate default track layout with Timer #1 as the MultiGP Start/Finish gate.
+// SimHubTimerID is the timer ID of the simulated Hub. Like the real Hub it is a USB collector
+// dongle that holds no gate by default; the user may drag it onto a gate to make it sweep too.
+const SimHubTimerID uint8 = 1
+
+// DefaultSimHubLabel is the flashed name of the simulated Hub.
+const DefaultSimHubLabel = "H1"
+
+// DefaultTrackGates returns the 4-gate default simulator layout. Every gate is timed by a
+// simulated Spoke (timers 2..5); the first Spoke holds the MultiGP Start/Finish
+// gate. The simulated Hub (SimHubTimerID) is registered separately and is not on any gate.
 func DefaultTrackGates() []TrackGate {
 	now := time.Now()
 	var defaultRssi [MaxPilotPoolSize]float32
@@ -104,7 +113,7 @@ func DefaultTrackGates() []TrackGate {
 	return []TrackGate{
 		{
 			GateID:          1,
-			AssignedTimerID: 1,
+			AssignedTimerID: 2,
 			FirmwareVersion: LatestFirmwareVersion,
 			Color:           DefaultGateColors[0],
 			Role:            GateRoleStartFinish,
@@ -120,7 +129,7 @@ func DefaultTrackGates() []TrackGate {
 		},
 		{
 			GateID:          2,
-			AssignedTimerID: 2,
+			AssignedTimerID: 3,
 			FirmwareVersion: LatestFirmwareVersion,
 			Color:           DefaultGateColors[1],
 			Role:            GateRoleSectorGate,
@@ -136,7 +145,7 @@ func DefaultTrackGates() []TrackGate {
 		},
 		{
 			GateID:          3,
-			AssignedTimerID: 3,
+			AssignedTimerID: 4,
 			FirmwareVersion: LatestFirmwareVersion,
 			Color:           DefaultGateColors[2],
 			Role:            GateRoleSectorGate,
@@ -152,7 +161,7 @@ func DefaultTrackGates() []TrackGate {
 		},
 		{
 			GateID:          4,
-			AssignedTimerID: 4,
+			AssignedTimerID: 5,
 			FirmwareVersion: LatestFirmwareVersion,
 			Color:           DefaultGateColors[3],
 			Role:            GateRoleSectorGate,

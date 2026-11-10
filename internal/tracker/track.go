@@ -11,14 +11,15 @@ import (
 	"slaprf/internal/domain"
 )
 
-const maxTimers = 6
+const maxTimers = 7 // One Hub plus up to 6 Spokes
 
 var (
 	ErrUnknownGate     = errors.New("unknown gate")
-	ErrInvalidTimerID  = errors.New("timer ID must be between 1 and 6")
+	ErrInvalidTimerID  = errors.New("timer ID must be between 1 and 7")
 	ErrGateNameTooLong = errors.New("gate name is too long")
 	ErrInvalidGateRole = errors.New("unknown gate role")
 	ErrMinOneGate      = errors.New("at least one gate must remain on the course")
+	ErrHubExists       = errors.New("a Hub is already registered (one Hub per course)")
 )
 
 // ProvisionRequest describes a timer that was just flashed (or registered) by the flasher.
@@ -29,11 +30,14 @@ type ProvisionRequest struct {
 	Fingerprint string // 8-hex-digit board fingerprint; empty = unknown
 }
 
-// ProvisionGate registers a newly flashed timer (hub or spoke).
+// ProvisionGate registers a newly flashed timer (hub or spoke). Real and simulated engines
+// follow the same rules:
+//   - A "hub" is a USB collector dongle: it gets a timer entry (ID 1) but is never placed on a
+//     gate automatically (see provisionCollectorHubLocked).
 //   - A known fingerprint updates that same physical timer in place, keeping its color and gate.
 //   - Otherwise a timer with the same label is updated (a replacement board takes over its gate).
-//   - Otherwise a "hub" claims the start/finish gate and a "spoke" the next unlabelled sector
-//     gate, creating a new gate (up to the timer limit) if every gate is already labelled.
+//   - Otherwise a "spoke" claims the next free gate in track order (so the first Spoke becomes
+//     start/finish), creating a new gate (up to the timer limit) if every gate is taken.
 func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	role := req.Role
 	timerLabel := strings.TrimSpace(req.Label)
@@ -48,7 +52,7 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	ver := domain.LatestFirmwareVersion
 
 	e.mu.Lock()
-	if role == "hub" && e.hubIsCollector {
+	if role == "hub" {
 		id := e.provisionCollectorHubLocked(fingerprint, timerLabel, profile, ver)
 		pilots := append([]domain.PilotSlot(nil), e.pilots...)
 		gates := append([]domain.TrackGate(nil), e.gates...)
@@ -103,29 +107,14 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		}
 	}
 
-	// 2. Otherwise pick by role (hub -> start/finish gate; spoke -> next unlabelled sector gate).
+	// 2. Otherwise a spoke takes the next free (or never-labelled sector) gate in track order.
 	if targetIdx < 0 {
-		if role == "hub" {
-			for i := range e.gates {
-				if e.gates[i].Role == domain.GateRoleStartFinish || e.gates[i].TrackOrder == 0 {
-					aid := e.gates[i].AssignedTimerID
-					if aid == 0 || (e.detected[aid] != nil && e.detected[aid].IsHub) {
-						targetIdx = i
-						break
-					}
-				}
-			}
-			if targetIdx < 0 && len(e.gates) > 0 && e.gates[0].AssignedTimerID == 0 {
-				targetIdx = 0
-			}
-		} else {
-			ordered := e.orderedGatesLocked()
-			for _, og := range ordered {
-				canClaim := og.Role == domain.GateRoleSectorGate || (e.hubIsCollector && og.AssignedTimerID == 0)
-				if canClaim && strings.TrimSpace(og.TimerLabel) == "" {
-					targetIdx = indexOfGate(e.gates, og.GateID)
-					break
-				}
+		ordered := e.orderedGatesLocked()
+		for _, og := range ordered {
+			canClaim := og.Role == domain.GateRoleSectorGate || og.AssignedTimerID == 0
+			if canClaim && strings.TrimSpace(og.TimerLabel) == "" {
+				targetIdx = indexOfGate(e.gates, og.GateID)
+				break
 			}
 		}
 	}
@@ -147,8 +136,8 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		if nextID < 1 {
 			nextID = 1
 		}
-		if e.hubIsCollector && nextID < 2 {
-			nextID = 2 // Timer ID 1 is reserved for the collector Hub, which never holds a gate
+		if nextID < 2 {
+			nextID = 2 // Timer ID 1 is reserved for the collector Hub, which never auto-holds a gate
 		}
 		if nextID > maxTimers {
 			e.mu.Unlock()
@@ -189,7 +178,6 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		d = &domain.DetectedTimer{
 			TimerID:       assignedID,
 			Color:         domain.DefaultTimerColor(assignedID),
-			IsHub:         role == "hub" || assignedID == 1,
 			BatteryMv:     4100,
 			BatteryPct:    domain.ComputeBatteryPct(4100),
 			NoiseFloorDbm: -92.0,
@@ -210,9 +198,6 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	if timerLabel != "" {
 		d.TimerLabel = timerLabel
 	}
-	if role == "hub" {
-		d.IsHub = true
-	}
 	d.Online = true
 	d.LastSeenAt = now
 
@@ -227,9 +212,10 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	return assignedID, nil
 }
 
-// provisionCollectorHubLocked registers the real-hardware Hub (a USB collector dongle) as a timer
-// with no gate: it shows up on the Network page with its status and firmware, but never times
-// laps. It keeps timer ID 1 (or its existing ID if this board is already known).
+// provisionCollectorHubLocked registers the Hub (a USB collector dongle) as a timer. It is never
+// placed on a gate automatically, but the user may drag it onto one: a Hub tied to a gate also
+// sweeps 5.8 GHz and times that gate (the browser tells the Hub over USB). It keeps timer ID 1
+// (or its existing ID if this board is already known).
 func (e *Engine) provisionCollectorHubLocked(fingerprint, label, profile, ver string) uint8 {
 	var id uint8
 	for tid, d := range e.detected {
@@ -248,13 +234,6 @@ func (e *Engine) provisionCollectorHubLocked(fingerprint, label, profile, ver st
 	}
 	if id == 0 {
 		id = 1
-	}
-	// Invariant: the collector Hub is never tied to a gate.
-	for i := range e.gates {
-		if e.gates[i].AssignedTimerID == id {
-			e.gates[i].AssignedTimerID = 0
-			e.gates[i].TimerLabel = ""
-		}
 	}
 	d, ok := e.detected[id]
 	if !ok {
@@ -433,7 +412,6 @@ func (e *Engine) SetTimerColor(timerID uint8, color string) error {
 		d = &domain.DetectedTimer{
 			TimerID:       timerID,
 			Color:         color,
-			IsHub:         timerID == 1,
 			BatteryMv:     4080,
 			BatteryPct:    domain.ComputeBatteryPct(4080),
 			NoiseFloorDbm: -92.0,
@@ -756,8 +734,14 @@ func (e *Engine) DeleteDetectedTimer(timerID uint8) error {
 	return nil
 }
 
-// AddSimulatedTimer creates a new simulated XIAO timer (1..6) in `e.detected` running the given
-// firmware profile, and adds a gate on the track for it if fewer than 6 gates exist.
+// AddSimulatedTimer creates a new simulated XIAO timer in `e.detected` running the given firmware
+// profile, following the same Hub/Spoke model as real hardware:
+//   - "hub": the simulated USB collector dongle (one per course, timer ID 1 when free). It is
+//     registered without a gate; dragging it onto a gate later makes it sweep that gate.
+//   - "spoke": takes the first free timer ID from 2 up and binds to the first gate without a
+//     timer, or appends a new gate for it.
+//
+// An empty label defaults to "H1" for the Hub (Spokes may stay unnamed, shown by gate position).
 func (e *Engine) AddSimulatedTimer(role string, label string, profile string) (uint8, error) {
 	label = strings.TrimSpace(label)
 	if utf8.RuneCountInString(label) > domain.MaxGateNameLen {
@@ -767,18 +751,34 @@ func (e *Engine) AddSimulatedTimer(role string, label string, profile string) (u
 		profile = domain.DefaultFirmwareProfile
 	}
 	fwVersion := domain.LatestFirmwareVersion
+	isHub := role == "hub"
 
 	e.mu.Lock()
+	if isHub {
+		for _, d := range e.detected {
+			if d.IsHub {
+				e.mu.Unlock()
+				return 0, ErrHubExists
+			}
+		}
+	}
 	var nextID uint8
-	for id := uint8(1); id <= maxTimers; id++ {
+	if isHub {
+		if _, taken := e.detected[domain.SimHubTimerID]; !taken {
+			nextID = domain.SimHubTimerID
+		}
+	}
+	for id := uint8(2); nextID == 0 && id <= maxTimers; id++ {
 		if _, exists := e.detected[id]; !exists {
 			nextID = id
-			break
 		}
 	}
 	if nextID == 0 {
 		e.mu.Unlock()
 		return 0, ErrInvalidTimerID
+	}
+	if label == "" && isHub {
+		label = domain.DefaultSimHubLabel
 	}
 
 	now := time.Now()
@@ -786,7 +786,7 @@ func (e *Engine) AddSimulatedTimer(role string, label string, profile string) (u
 		TimerID:         nextID,
 		TimerLabel:      label,
 		Color:           domain.DefaultTimerColor(nextID),
-		IsHub:           role == "hub" || nextID == 1,
+		IsHub:           isHub,
 		FirmwareVersion: fwVersion,
 		FirmwareProfile: profile,
 		Fingerprint:     newFingerprintHex(),
@@ -796,12 +796,20 @@ func (e *Engine) AddSimulatedTimer(role string, label string, profile string) (u
 		Online:          true,
 		LastSeenAt:      now,
 	}
+	if isHub {
+		d.Color = domain.DefaultGateColors[4%len(domain.DefaultGateColors)]
+		d.BatteryMv = 4200 // USB powered
+		d.BatteryPct = 100
+	}
 	e.detected[nextID] = d
 
-	// If there is an existing gate without a timer assigned, bind this timer to it;
-	// otherwise if fewer than maxTimers gates exist, append a new gate for it.
-	bound := false
+	// A Spoke binds to an existing gate without a timer, or (if fewer than maxTimers gates
+	// exist) gets a new gate appended. The Hub never takes a gate on its own.
+	bound := isHub
 	for i := range e.gates {
+		if bound {
+			break
+		}
 		if e.gates[i].AssignedTimerID == 0 {
 			e.gates[i].AssignedTimerID = nextID
 			e.gates[i].TimerLabel = label

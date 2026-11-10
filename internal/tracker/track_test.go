@@ -148,13 +148,14 @@ func TestUnnamedGatesAreLabelledByPosition(t *testing.T) {
 
 func TestTimerLabelAndDisplayNameOverride(t *testing.T) {
 	e := NewEngine()
-	// Flash a Spoke timer with ID "Blue-Timer" -> claims the first unlabelled sector gate (Gate 2).
+	// Flash a Spoke timer with ID "Blue-Timer" -> claims the first unlabelled sector gate (Gate 2),
+	// taking over that gate's simulated Spoke (timer #3; timer #1 is the gate-less Hub).
 	id, err := e.ProvisionGate(ProvisionRequest{Role: "spoke", Label: "Blue-Timer"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if id != 2 {
-		t.Fatalf("expected spoke timer to claim timer #2, got #%d", id)
+	if id != 3 {
+		t.Fatalf("expected spoke timer to claim timer #3, got #%d", id)
 	}
 
 	// Without a display-name override, gateLabelLocked returns the flashed TimerLabel ("Blue-Timer").
@@ -196,32 +197,32 @@ func TestAddUnassignedGateAndBindDetectedTimer(t *testing.T) {
 		t.Fatalf("expected unassigned offline gate #5, got %+v", created)
 	}
 
-	// Tie physical timer #2 ("Spoke-Alpha") to Gate #5 -> Gate #2 becomes unassigned, Gate #5 gets timer #2.
-	timer2 := uint8(2)
+	// Tie physical timer #3 ("Spoke-Alpha", on Gate #2) to Gate #5 -> Gate #2 becomes unassigned, Gate #5 gets timer #3.
+	timer3 := uint8(3)
 	if err := e.UpdateGate(domain.GateUpdate{
 		GateID:          5,
 		Name:            "Dive Gate",
 		Role:            domain.GateRoleSectorGate,
-		AssignedTimerID: &timer2,
+		AssignedTimerID: &timer3,
 	}); err != nil {
 		t.Fatal(err)
 	}
 
 	g2 := gateByID(t, e, 2)
 	if g2.AssignedTimerID != 0 {
-		t.Fatalf("expected gate #2 to be unassigned after moving timer #2 to gate #5, got %d", g2.AssignedTimerID)
+		t.Fatalf("expected gate #2 to be unassigned after moving timer #3 to gate #5, got %d", g2.AssignedTimerID)
 	}
 	g5 := gateByID(t, e, 5)
-	if g5.AssignedTimerID != 2 || g5.TimerLabel != "Spoke-Alpha" {
-		t.Fatalf("expected gate #5 to have AssignedTimerID=2 and TimerLabel='Spoke-Alpha', got %+v", g5)
+	if g5.AssignedTimerID != 3 || g5.TimerLabel != "Spoke-Alpha" {
+		t.Fatalf("expected gate #5 to have AssignedTimerID=3 and TimerLabel='Spoke-Alpha', got %+v", g5)
 	}
 
-	// Removing Gate #5 leaves physical timer #2 in DetectedTimersSnapshot().
+	// Removing Gate #5 leaves physical timer #3 in DetectedTimersSnapshot().
 	if err := e.RemoveGate(5); err != nil {
 		t.Fatal(err)
 	}
 	detected := e.DetectedTimersSnapshot()
-	if len(detected) != 4 {
-		t.Fatalf("expected 4 detected timers to remain after removing gate #5, got %d", len(detected))
+	if len(detected) != 5 {
+		t.Fatalf("expected 5 detected timers (hub + 4 spokes) to remain after removing gate #5, got %d", len(detected))
 	}
 }

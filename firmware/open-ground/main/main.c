@@ -37,12 +37,13 @@
 
 /* ---- Profile tuning (unique to this directory) ------------------------------------------- */
 #define SLAPRF_PROFILE_CODE      1
-#define SWEEP_HZ                 50   // 8-channel 5.8 GHz sweeps per second
+#define SWEEP_HZ                 100  // 8-channel 5.8 GHz sweeps per second
 #define WINDOW_SAMPLES           4    // Sweeps per window frame
 #define TX_EVERY_SWEEPS          2    // 4 / 2 = every sweep delivered twice
-#define LINK_LONG_RANGE          1    // Espressif LR 500 kbps
+#define LINK_LONG_RANGE          1    // Also receive Espressif LR frames (TX rate is set by LINK_TX_RATE)
+#define LINK_TX_RATE             "6m" // ESP-NOW transmit PHY: 6 Mbps OFDM (~0.15 ms per frame; measured best at 100 Hz)
 #define TX_POWER_QDBM            80   // +20 dBm
-#define TDMA_SLOT_US             3500 // LR frame (~2.1 ms) + guard
+#define TDMA_SLOT_US             900  // 1 Mbps frame (~0.5 ms) + guard
 #define SWEEP_BUDGET_US          7000 // Radio away from 2.4 GHz per sweep (measured ~6.3 ms on chip v1.0)
 
 /* ---- Schedule (derived) ------------------------------------------------------------------- */
@@ -52,7 +53,10 @@
 #define SLOT_GUARD_US            300
 #define GAP_US                   (SWEEP_INTERVAL_US - SWEEP_BUDGET_US)
 #define SLOTS_PER_GAP            ((GAP_US - SLOT_GUARD_US) / TDMA_SLOT_US)
-#define BEACON_WAIT_US           3000 // How long a Spoke waits past the predicted beacon
+#define BEACON_WAIT_US           3000 // Initial lock: how long a Spoke waits past the predicted beacon
+// Once locked, wait only this long past the predicted beacon before free-running on the prediction
+// (crystal drift is < 1 us per superframe), so a missed beacon never delays the Spoke's TX slot.
+#define BEACON_GRACE_US          250
 
 _Static_assert(SLOTS_PER_GAP * TX_EVERY_SWEEPS >= MAX_SPOKES,
                "schedule has fewer TDMA slots per superframe than Spokes");
@@ -284,8 +288,14 @@ static void hub_handle_join(const spoke_join_frame_t *j) {
 static void hub_listen_until(int64_t until_us) {
     uint8_t buf[250];
     for (;;) {
-        int n;
-        while ((n = espnow_poll(buf, sizeof(buf))) > 0) {
+        // Block on the receive queue (wakes the instant a frame arrives, so it's forwarded to USB
+        // within microseconds) but stop ~1.2 ms early so the caller can spin out an exact deadline.
+        const int64_t left_us = until_us - slaprf_now_us() - 1200;
+        if (left_us <= 0) {
+            return;
+        }
+        int n = espnow_wait(buf, sizeof(buf), (uint32_t)(left_us / 1000 > 0 ? left_us / 1000 : 1));
+        for (; n > 0; n = espnow_poll(buf, sizeof(buf))) {
             if (n < 3 || buf[0] != FRAME_MAGIC_0 || compute_crc8(buf, (uint32_t)n - 1) != buf[n - 1]) {
                 continue;
             }
@@ -308,11 +318,6 @@ static void hub_listen_until(int64_t until_us) {
                 slaprf_forward_to_laptop(buf, (uint32_t)n);
             }
         }
-        if (until_us - slaprf_now_us() <= 1200) {
-            return;
-        }
-        // Yield 1 FreeRTOS tick (1 ms) without busy-spinning so the Wi-Fi/ESP-NOW and USB tasks get CPU during the gap.
-        slaprf_sleep_until_us(0);
     }
 }
 
@@ -320,6 +325,7 @@ static void hub_run(void) {
     slaprf_diag_set_slot(HUB_SLOT);
     hub_send_hello(HUB_SLOT, ROLE_HUB_TIMER, g_flash_cfg.fingerprint, SLAPRF_PROFILE_CODE, SWEEP_HZ,
                    (const char *)g_flash_cfg.timer_label);
+    uint8_t pkt[sizeof(timer_window_frame_t)];
     uint8_t beacon_seq = 0;
     int64_t t_sf = slaprf_now_us() + 10000;
     int64_t next_hello = t_sf + HELLO_REPEAT_US;
@@ -329,7 +335,8 @@ static void hub_run(void) {
             const int64_t t_gap = t_sweep + SWEEP_BUDGET_US;
             slaprf_sleep_until_us(t_sweep);
             if (slaprf_diag_wants_sweeps()) {
-                // Collector Hub: only sweeps 5.8 GHz on demand for the Debug page (LIVE / SDR view).
+                // The Hub sweeps only when the app placed it on a gate (HUBGATE 1) or the Debug page
+                // asks for LIVE sweeps (SDR view). Spokes never transmit during sweeps, so nothing is missed.
                 sweep_once();
             } else {
                 // Normal operation: the radio never leaves 2.4 GHz, so keep collecting Spoke frames.
@@ -339,11 +346,14 @@ static void hub_run(void) {
             if (k == 0) {
                 slaprf_broadcast_hub_sync_beacon(beacon_seq++); // Anchors every Spoke's schedule
             }
-            if (k == TX_EVERY_SWEEPS - 1) {
-                if (slaprf_now_us() >= next_hello) {
-                    hub_repeat_hellos();
-                    next_hello += HELLO_REPEAT_US;
-                }
+            if (slaprf_diag_hub_is_gate()) {
+                // Hub placed on a gate: its own readings go straight to USB (no TDMA slot needed), so
+                // send after EVERY sweep for the lowest latency. The window repeats recent samples.
+                slaprf_forward_to_laptop(pkt, pack_window(pkt, HUB_SLOT));
+            }
+            if (k == TX_EVERY_SWEEPS - 1 && slaprf_now_us() >= next_hello) {
+                hub_repeat_hellos();
+                next_hello += HELLO_REPEAT_US;
             }
             // Stop listening a little early so queued UDP leaves before the radio goes deaf.
             hub_listen_until(t_sweep + SWEEP_INTERVAL_US - 500);
@@ -446,8 +456,11 @@ static void spoke_run(void) {
             const int64_t next_sf = t_sf + SUPERFRAME_US;
             slaprf_sleep_until_us(next_sf);
             sweep_once();
-            int64_t b = spoke_wait_beacon(next_sf, next_sf + SWEEP_BUDGET_US + BEACON_WAIT_US);
-            beacon = b ? b : next_sf + SWEEP_BUDGET_US; // Missed it: free-run on the prediction
+            // Predicted beacon = last beacon + one superframe. Wait just past it (never into our TX
+            // slot); if it's missed, free-run on the prediction so the schedule never slips.
+            const int64_t predicted = beacon + SUPERFRAME_US;
+            int64_t b = spoke_wait_beacon(next_sf, predicted + BEACON_GRACE_US);
+            beacon = b ? b : predicted;
             slaprf_diag_service(); // Debug-page spectrum scan, if one was requested
             if (slaprf_now_us() > beacon + SWEEP_INTERVAL_US || slaprf_ms_since_hub_beacon() > 200) {
                 // Fell behind (e.g. spectrum scan) or missed >5 beacons (phase shift / Hub reset):
@@ -493,6 +506,8 @@ void app_main(void) {
     // External U.FL antenna; 2.4 GHz link (the driver never uses 5 GHz); 5.8 GHz capture engine.
     xiao_c5_select_ufl_antenna();
     slaprf_init_2g4_radio(WIFI_CHANNEL, LINK_LONG_RANGE, TX_POWER_QDBM);
+    // Link rate / TX power: firmware defaults, unless changed (and saved) from the serial console.
+    slaprf_apply_link_settings(LINK_TX_RATE, TX_POWER_QDBM);
     if (!slaprf_rf58_init()) {
         ESP_LOGE(TAG, "5.8 GHz capture engine failed its boot check; readings will be the noise floor");
     }

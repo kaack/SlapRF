@@ -4,6 +4,7 @@ import (
 	"math/rand"
 	"testing"
 
+	"slaprf/internal/domain"
 	"slaprf/internal/tracker"
 	_ "slaprf/web"
 )
@@ -107,12 +108,94 @@ func TestSimulatorControlsAndTimerLifecycle(t *testing.T) {
 		t.Fatalf("expected T2 to be powered back on")
 	}
 
-	newID, err := sim.AddTimer("spoke", "T5 Split-S Exit", "open-ground")
-	if err != nil || newID != 5 {
-		t.Fatalf("expected AddTimer to create T5 (id=5), got id=%d err=%v", newID, err)
+	newID, err := sim.AddTimer("spoke", "T6 Split-S Exit", "open-ground")
+	if err != nil || newID != 6 {
+		t.Fatalf("expected AddTimer to create T6 (id=6; T1 hub + T2..T5 spokes exist), got id=%d err=%v", newID, err)
 	}
 	if err := sim.DeleteTimer(newID); err != nil {
-		t.Fatalf("expected DeleteTimer(5) to succeed, got %v", err)
+		t.Fatalf("expected DeleteTimer(6) to succeed, got %v", err)
+	}
+}
+
+// The simulated Hub is a gate-less collector: it produces no telemetry or crossings until it is
+// dragged onto a gate, then times that gate like a Spoke, and stops again once dragged off.
+func TestSimulatedHubSweepsOnlyWhileOnAGate(t *testing.T) {
+	engine := tracker.NewEngine()
+	sim := NewTrackSimulator(engine)
+	sim.rng = rand.New(rand.NewSource(7))
+	var nowUs uint64 = 1_000_000
+	sim.clock = func() uint64 { return nowUs }
+	run := func(seconds int) {
+		for i := 0; i < seconds*50; i++ {
+			sim.step(0.020)
+			nowUs += 20_000
+		}
+	}
+	hubID := domain.SimHubTimerID
+	gateOf := func() (domain.TrackGate, bool) {
+		_, gates, _, _, _ := engine.StateSnapshot()
+		for _, g := range gates {
+			if g.AssignedTimerID == hubID {
+				return g, true
+			}
+		}
+		return domain.TrackGate{}, false
+	}
+	crossingsAt := func(gateID uint8) int {
+		_, _, _, crossings, _ := engine.StateSnapshot()
+		n := 0
+		for _, c := range crossings {
+			if c.GateID == gateID {
+				n++
+			}
+		}
+		return n
+	}
+
+	run(30)
+	if _, onGate := gateOf(); onGate {
+		t.Fatal("simulated hub must not hold a gate by default")
+	}
+	hubOnline := false
+	for _, d := range engine.DetectedTimersSnapshot() {
+		if d.TimerID == hubID {
+			hubOnline = d.IsHub && d.Online
+		}
+	}
+	if !hubOnline {
+		t.Fatal("gate-less simulated hub should still be registered and online")
+	}
+
+	// Drag the hub onto gate 3 (replacing its spoke): the gate keeps producing crossings, now
+	// from the hub's own sweep.
+	_, gates, _, _, _ := engine.StateSnapshot()
+	target := gates[2]
+	if err := engine.UpdateGate(domain.GateUpdate{GateID: target.GateID, Name: target.Name, Role: target.Role, AssignedTimerID: &hubID}); err != nil {
+		t.Fatal(err)
+	}
+	before := crossingsAt(target.GateID)
+	framesBefore := target.FramesRxCount
+	run(30)
+	g, onGate := gateOf()
+	if !onGate || g.GateID != target.GateID {
+		t.Fatal("hub should time the gate it was dragged onto")
+	}
+	if g.FramesRxCount <= framesBefore || crossingsAt(target.GateID) <= before {
+		t.Fatalf("hub on gate %d produced no telemetry/crossings (frames %d->%d)", target.GateID, framesBefore, g.FramesRxCount)
+	}
+
+	// Drag it off (leave the gate empty): no more telemetry or crossings at that gate.
+	none := uint8(0)
+	if err := engine.UpdateGate(domain.GateUpdate{GateID: target.GateID, Name: target.Name, Role: target.Role, AssignedTimerID: &none}); err != nil {
+		t.Fatal(err)
+	}
+	_, gates, _, _, _ = engine.StateSnapshot()
+	framesOff := gates[2].FramesRxCount
+	offCount := crossingsAt(target.GateID)
+	run(30)
+	_, gates, _, _, _ = engine.StateSnapshot()
+	if gates[2].FramesRxCount != framesOff || crossingsAt(target.GateID) != offCount {
+		t.Fatalf("empty gate %d kept receiving telemetry after the hub was dragged off", target.GateID)
 	}
 }
 

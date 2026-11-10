@@ -1,12 +1,9 @@
 import { StreamEnvelope } from "../types/models";
-import { ApiTransport, FirmwareImageResult } from "./transport";
-
-const SIM_STORAGE_KEY = "slaprf.sim_state.v1";
-const REAL_STORAGE_KEY = "slaprf.real_state.v1";
+import { BootState, enginePersistence } from "./engine_persistence";
+import { ApiTransport } from "./transport";
 
 interface SlaprfWasmBridge {
   request(method: string, url: string, body?: string): { status: number; body: string };
-  fetchBytes(url: string): { status: number; bytes: Uint8Array; sha256: string };
   onStream(cb: ((envelopeJson: string) => void) | null): void;
   setRunning(running: boolean): void;
   ingestHubPacket?(bytes: Uint8Array): number;
@@ -27,20 +24,20 @@ declare global {
     slaprfWasm?: SlaprfWasmBridge;
     __slaprfWasmOnReady?: (wasm: SlaprfWasmBridge) => void;
     __slaprfBootStatus?: (detail: string, pct?: number) => void;
+    /** Persisted engine state handed to the Go runtime at startup (read once by cmd/slaprf-wasm). */
+    __slaprfBootState?: BootState;
   }
 }
 
 /**
  * In-browser WebAssembly transport backed by `cmd/slaprf-wasm` (`slaprf.wasm`).
  * Shares the exact same Go `internal/domain`, `internal/dsp`, `internal/tracker`,
- * `internal/ingest`, `internal/firmware`, and `internal/api` packages as the native binary.
+ * `internal/ingest`, and `internal/api` packages as the Go tests and tools.
  */
 export class WasmSimTransport implements ApiTransport {
   private readyPromise: Promise<SlaprfWasmBridge> | null = null;
   private streamCallback: ((msg: StreamEnvelope) => void) | null = null;
   private hubCommandCallback: ((pkt: Uint8Array) => void) | null = null;
-  private persistTimer: number | null = null;
-  private unloadBound = false;
   private simRunning = true;
 
   public setSimRunning(running: boolean): void {
@@ -48,39 +45,6 @@ export class WasmSimTransport implements ApiTransport {
     if (window.slaprfWasm) {
       window.slaprfWasm.setRunning(running);
     }
-  }
-
-  private persistNow(wasm?: SlaprfWasmBridge | null): void {
-    if (this.persistTimer !== null) {
-      window.clearTimeout(this.persistTimer);
-      this.persistTimer = null;
-    }
-    const target = wasm ?? window.slaprfWasm;
-    if (!target) return;
-    try {
-      if (typeof target.exportSimState === "function") {
-        const json = target.exportSimState();
-        if (json) {
-          window.localStorage.setItem(SIM_STORAGE_KEY, json);
-        }
-      }
-      if (typeof target.exportRealState === "function") {
-        const realJson = target.exportRealState();
-        if (realJson) {
-          window.localStorage.setItem(REAL_STORAGE_KEY, realJson);
-        }
-      }
-    } catch {
-      // Ignore storage quota or private-browsing errors
-    }
-  }
-
-  private schedulePersist(wasm: SlaprfWasmBridge): void {
-    if (this.persistTimer !== null) return;
-    this.persistTimer = window.setTimeout(() => {
-      this.persistTimer = null;
-      this.persistNow(wasm);
-    }, 350);
   }
 
   private ensureReady(): Promise<SlaprfWasmBridge> {
@@ -98,6 +62,8 @@ export class WasmSimTransport implements ApiTransport {
   }
 
   private async bootWasm(): Promise<SlaprfWasmBridge> {
+    // Read the persisted engine state from IndexedDB in parallel with the wasm download.
+    const bootStatePromise = enginePersistence.loadBootState();
     window.__slaprfBootStatus?.("Loading WebAssembly runtime…", 18);
     if (!window.Go) {
       await new Promise<void>((resolve, reject) => {
@@ -160,6 +126,11 @@ export class WasmSimTransport implements ApiTransport {
       window.__slaprfWasmOnReady = (bridge) => resolve(bridge);
     });
 
+    // The Go runtime restores both engines from this before starting the simulator, so the very
+    // first /api/state already contains the saved data (no empty-state flash, no prewarm waste).
+    window.__slaprfBootStatus?.("Hydrating track state…", 90);
+    window.__slaprfBootState = await bootStatePromise;
+
     // Start the Go WASM runtime (registers window.slaprfWasm and invokes __slaprfWasmOnReady).
     void go.run(instance);
 
@@ -178,20 +149,10 @@ export class WasmSimTransport implements ApiTransport {
       throw new Error("slaprfWasm failed to initialize");
     }
 
-    window.__slaprfBootStatus?.("Hydrating track state…", 95);
-    try {
-      if (!window.localStorage.getItem(SIM_STORAGE_KEY)) {
-        this.persistNow(window.slaprfWasm);
-      }
-    } catch {
-      // Ignore storage access errors
-    }
-    if (!this.unloadBound) {
-      this.unloadBound = true;
-      const flush = () => this.persistNow(window.slaprfWasm);
-      window.addEventListener("pagehide", flush);
-      window.addEventListener("beforeunload", flush);
-    }
+    // Boot state has been consumed by Go; drop the (potentially large) strings.
+    delete window.__slaprfBootState;
+    // Writes start only now: the engines hold the restored state, never the empty defaults.
+    enginePersistence.attach(window.slaprfWasm);
     if (this.hubCommandCallback) {
       window.slaprfWasm.onHubCommand?.(this.hubCommandCallback);
     }
@@ -207,7 +168,7 @@ export class WasmSimTransport implements ApiTransport {
       try {
         const env = JSON.parse(raw) as StreamEnvelope;
         if (env.type !== "telemetry") {
-          this.schedulePersist(wasm);
+          enginePersistence.onStreamEvent(env.type, env.payload, this.simRunning);
         }
         onEnvelope(env);
       } catch (err) {
@@ -224,7 +185,7 @@ export class WasmSimTransport implements ApiTransport {
       throw new Error(`WASM ${method} ${url} failed (${res.status}): ${res.body}`);
     }
     if (method === "POST") {
-      this.persistNow(wasm);
+      enginePersistence.notePost();
     }
     return JSON.parse(res.body) as T;
   }
@@ -233,6 +194,7 @@ export class WasmSimTransport implements ApiTransport {
     if (!window.slaprfWasm || typeof window.slaprfWasm.ingestHubPacket !== "function") {
       return 0;
     }
+    enginePersistence.noteRealActivity();
     return window.slaprfWasm.ingestHubPacket(bytes);
   }
 
@@ -253,18 +215,6 @@ export class WasmSimTransport implements ApiTransport {
     window.slaprfWasm?.pushHubChannels?.();
   }
 
-  /**
-   * The in-browser engine has no access to the compiled firmware images, so defer to the
-   * browser patcher (`buildOrPatchFirmwareBin`), which fetches `./firmware/<profile>.bin`.
-   */
-  public async fetchFirmwareImage(
-    _role: "hub" | "spoke",
-    _timerLabel: string,
-    _profile: string,
-    _fingerprint: string
-  ): Promise<FirmwareImageResult> {
-    throw new Error("Firmware images are patched in the browser in simulation mode.");
-  }
   public connectStream(onEnvelope: (msg: StreamEnvelope) => void): void {
     this.streamCallback = onEnvelope;
     void this.ensureReady().then((wasm) => {
@@ -277,67 +227,38 @@ export class WasmSimTransport implements ApiTransport {
   public disconnectStream(): void {
     this.streamCallback = null;
     if (window.slaprfWasm) {
-      this.persistNow(window.slaprfWasm);
+      // Mode switch / pagehide: persist whatever the active engine changed since the last save.
+      enginePersistence.flushNow();
       window.slaprfWasm.onStream(null);
       window.slaprfWasm.setRunning(false);
     }
   }
 
+  /** Live simulator state JSON (engine + options) straight from the WASM engine. */
   public async exportSimStateJson(): Promise<string> {
-    if (window.slaprfWasm && typeof window.slaprfWasm.exportSimState === "function") {
-      this.persistNow(window.slaprfWasm);
-      return window.slaprfWasm.exportSimState() || "";
-    }
-    try {
-      const saved = window.localStorage.getItem(SIM_STORAGE_KEY);
-      if (saved) return saved;
-    } catch {
-      // ignore
-    }
     const wasm = await this.ensureReady();
-    this.persistNow(wasm);
     return wasm.exportSimState?.() ?? "";
   }
 
+  /** Restores the simulator engine; the caller persists via `enginePersistence.reconcileNow()`. */
   public async importSimStateJson(jsonStr: string): Promise<boolean> {
-    try {
-      window.localStorage.setItem(SIM_STORAGE_KEY, jsonStr);
-    } catch {
-      // ignore
-    }
-    if (window.slaprfWasm && typeof window.slaprfWasm.restoreSimState === "function") {
-      return window.slaprfWasm.restoreSimState(jsonStr);
-    }
     const wasm = await this.ensureReady();
-    return wasm.restoreSimState?.(jsonStr) ?? false;
+    const ok = wasm.restoreSimState?.(jsonStr) ?? false;
+    if (ok) enginePersistence.notePost();
+    return ok;
   }
 
+  /** Live real-engine `PersistedEngineState` JSON straight from the WASM engine. */
   public async exportRealStateJson(): Promise<string> {
-    if (window.slaprfWasm && typeof window.slaprfWasm.exportRealState === "function") {
-      this.persistNow(window.slaprfWasm);
-      return window.slaprfWasm.exportRealState() || "";
-    }
-    try {
-      const saved = window.localStorage.getItem(REAL_STORAGE_KEY);
-      if (saved) return saved;
-    } catch {
-      // ignore
-    }
     const wasm = await this.ensureReady();
-    this.persistNow(wasm);
     return wasm.exportRealState?.() ?? "";
   }
 
+  /** Restores the real engine; the caller persists via `enginePersistence.reconcileNow()`. */
   public async importRealStateJson(jsonStr: string): Promise<boolean> {
-    try {
-      window.localStorage.setItem(REAL_STORAGE_KEY, jsonStr);
-    } catch {
-      // ignore
-    }
-    if (window.slaprfWasm && typeof window.slaprfWasm.restoreRealState === "function") {
-      return window.slaprfWasm.restoreRealState(jsonStr);
-    }
     const wasm = await this.ensureReady();
-    return wasm.restoreRealState?.(jsonStr) ?? false;
+    const ok = wasm.restoreRealState?.(jsonStr) ?? false;
+    if (ok) enginePersistence.notePost();
+    return ok;
   }
 }

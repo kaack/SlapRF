@@ -1,6 +1,6 @@
 # SlapRF Low-Level Architecture & Protocol Reference
 
-This document details the hardware, RF link layer, binary wire protocols, digital signal processing (DSP), timing engine state machines, browser-native USB firmware patching, and WebAssembly dual-transport architecture of **SlapRF**.
+This document details the hardware, RF link layer, binary wire protocols, digital signal processing (DSP), timing engine state machines, browser-native USB firmware patching, and in-browser WebAssembly architecture of **SlapRF**.
 
 For setting up your local development environment, running the live dev server, compiling binaries/WASM, and running the test suite, see **[`docs/DEVELOPER.md`](DEVELOPER.md)**.
 
@@ -15,7 +15,7 @@ For setting up your local development environment, running the live dev server, 
 - **[7. Multi-Gate Timing Rules & Section Analytics Engine](#7-multi-gate-timing-rules--section-analytics-engine)** — The 5-stage guardrail pipeline (cool-down, stale progress, min section, previous-gate echo, min/max lap) and bottleneck math.
 - **[8. Browser-Native WebSerial ROM Flasher & Firmware Profiles](#8-browser-native-webserial-rom-flasher--firmware-profiles)** — Client-side patching of compiled `.bin` images, board fingerprints, and the SLIP ROM bootloader protocol.
 - **[9. ImmersionRC LapRF 8-Way Emulation (`TCP :5403`)](#9-immersionrc-laprf-8-way-emulation-tcp-5403)** — TCP `:5403` LiveTime bridge for official race scoring alongside SlapRF section splits.
-- **[10. Dual-Transport Web SPA & In-Browser WebAssembly Simulator](#10-dual-transport-web-spa--in-browser-webassembly-simulator)** — `ApiTransport` dual-mode architecture and `slaprf.wasm` in-browser timing engine.
+- **[10. Web SPA & In-Browser WebAssembly Engine](#10-web-spa--in-browser-webassembly-engine)** — `ApiTransport` and the `slaprf.wasm` in-browser timing engine.
 
 ---
 
@@ -27,10 +27,11 @@ SlapRF is built around four core engineering constraints:
    Spoke timers (`T2`–`T6`) placed out on the track perform **no peak detection, no threshold filtering, and no lap math**. They act purely as synchronized 50 Hz 8-channel 5.8 GHz RSSI recorders that stream raw dBm sweeps back to the laptop. Centralizing all DSP and timing rules on the laptop (`internal/dsp`, `internal/tracker`) allows live threshold recalibration, retrospective signal inspection, and cross-gate echo rejection without reflashing or reconfiguring field hardware.
 2. **Single-Radio Dual-Band Multiplexing on Seeed Studio XIAO ESP32-C5**:
    Each gate timer uses a single `$6.90` dual-band (2.4 GHz / 5 GHz) RISC-V **XIAO ESP32-C5** module. Because a single RF synthesizer is shared between 5.8 GHz VTX power measurement and 2.4 GHz telemetry transport, the Hub (`T1`) and Spokes (`T2`–`T6`) follow a deterministic time-division schedule so no Spoke transmits on 2.4 GHz while the Hub is off-channel sweeping 5.8 GHz.
+   **Hub role**: the Hub is a USB collector dongle (timer ID 1, `isHub`). Neither the real nor the simulated engine ever puts it on a gate automatically (`internal/tracker/track.go`: `provisionCollectorHubLocked`, `ProvisionGate`, `AddSimulatedTimer`); Spokes take the gates and the first one becomes start/finish. If the user drags the Hub onto a gate (a normal gate assignment, `AssignedTimerID` = the Hub's timer ID), the Hub also sweeps 5.8 GHz and times that gate. The browser keeps the Hub in sync over USB (`web/src/services/hub_gate_sync.ts`): the Hub's STATUS JSON reports `"hubGate"`, and `HUBGATE 1` / `HUBGATE 0` turns its own sweep + slot-1 telemetry on/off. The flag is runtime-only (off after a Hub reboot), so the browser re-sends it whenever the reported value differs from the course (at most once per second). The simulator follows the same model: the simulated Hub (`H1`) only generates RSSI telemetry while it is on a gate.
 3. **Ground-Grazing & 2.4 GHz ELRS Immunity**:
    Gate timers typically sit flat on the grass beneath gates separated by 40–150 m while pilots transmit 250 mW – 1 W of 2.4 GHz ExpressLRS FHSS control packets nearby. SlapRF combines **Espressif 2.4 GHz Long Range (`WIFI_PROTOCOL_LR`, 512 kbps DSSS)** with a **4-sample sliding-window packet (`2×` overlap Forward Error Correction)** so even **50% packet loss** results in **0% lost 50 Hz telemetry samples** at the laptop.
 4. **Zero-Toolchain Deployment**:
-   The Go binary embeds a pure-Go TypeScript bundler (`esbuild`), a WebAssembly build of the entire Go timing/physics engine (`slaprf.wasm`), and a client-side `SLAPRF02` firmware binary patcher + WebSerial Espressif ROM bootloader client—requiring zero Node.js, zero Python `esptool`, and zero C toolchains.
+   The static site (built with a pure-Go TypeScript bundler, `esbuild`) ships a WebAssembly build of the entire Go timing/physics engine (`slaprf.wasm`), and a client-side `SLAPRF02` firmware binary patcher + WebSerial Espressif ROM bootloader client—requiring zero Node.js, zero Python `esptool`, and zero C toolchains.
 
 ---
 
@@ -42,7 +43,7 @@ flowchart TB
         direction LR
         VTX["8x 5.8 GHz Drone VTXs\n(Raceband R1–R8: 5658–5917 MHz)"]
         Spokes["Spoke Timers T2–T6\n• 50 Hz 8-ch 5.8 GHz sweep\n• 4-sample ring buffer (80 ms)\n• Zero on-board DSP"]
-        Hub["Hub Timer T1 (Start/Finish)\n• 50 Hz 8-ch 5.8 GHz sweep\n• 25 Hz Sync Beacon (Ch 1)\n• Hybrid 802.11n + LR Bridge"]
+        Hub["Hub Timer T1 (USB collector dongle)\n• 25 Hz Sync Beacon (Ch 1)\n• Hybrid 802.11n + LR Bridge\n• Sweeps 5.8 GHz only when placed on a gate"]
 
         VTX -. "5.8 GHz RF\n(-95 to -20 dBm)" .-> Spokes
         VTX -. "5.8 GHz RF\n(-95 to -20 dBm)" .-> Hub
@@ -55,12 +56,12 @@ flowchart TB
         DSP["8-Channel DSP Peak Detector\ninternal/dsp/peak_detector.go\n• EMA filter (α = 0.42)\n• Hysteresis state machine\n• 3-point parabolic peak fit (< 2 ms)"]
         Rules["Multi-Gate Timing Engine\ninternal/tracker/crossing_rules.go\n1. Gate cool-down\n2. Stale progress reset\n3. Min section time\n4. Previous-gate echo filter\n5. Min/Max lap time"]
         LapRF["LapRF 8-Way Emulator (:5403)\ninternal/laprf/protocol.go\n• SLIP-framed binary TCP\n• RF_SETUP (0xda01) & TOR (0xda09)"]
-        SPA["TypeScript Web SPA (:8090)\n• Live 50 Hz RSSI Scope\n• Section Splits (S1–S4)\n• Offline TTS Announcer\n• WebSerial USB Flasher"]
+        SPA["TypeScript Web SPA (slaprf.app)\n• Live 50 Hz RSSI Scope\n• Section Splits (S1–S4)\n• Offline TTS Announcer\n• WebSerial USB Flasher"]
 
         Hub -- "Wi-Fi UDP (:5404)" --> UDP
         UDP --> DSP
         DSP --> Rules
-        Rules -- "50 Hz SSE (/api/stream)" --> SPA
+        Rules -- "50 Hz stream (in-process, WASM onStream)" --> SPA
         Rules -- "Start Gate Passings" --> LapRF
     end
 
@@ -311,21 +312,22 @@ Implemented in [`internal/laprf/protocol.go`](../internal/laprf/protocol.go) and
 
 ---
 
-## 10. Dual-Transport Web SPA & In-Browser WebAssembly Simulator
+## 10. Web SPA & In-Browser WebAssembly Engine
 
-Implemented in [`web/src/services/transport.ts`](../web/src/services/transport.ts), [`wasm_transport.ts`](../web/src/services/wasm_transport.ts), and [`http_transport.ts`](../web/src/services/http_transport.ts), the TypeScript frontend communicates through the `ApiTransport` interface:
+All app logic runs in the browser. Implemented in [`web/src/services/transport.ts`](../web/src/services/transport.ts), [`wasm_transport.ts`](../web/src/services/wasm_transport.ts), and [`browser_hub_bridge.ts`](../web/src/services/browser_hub_bridge.ts), the TypeScript frontend talks to a single `ApiTransport` (`WasmSimTransport`) for both modes:
 
 ```mermaid
 flowchart LR
     UI["TypeScript SPA\n(LiveView, PilotView, SetupView, Announcer)"]
     Client["ApiClient\nweb/src/services/api_client.ts"]
-    WASM["WasmSimTransport\n• Runs cmd/slaprf-wasm (slaprf.wasm)\n• Full Go tracker + 50 Hz physics simulator\n• Works 100% offline on GitHub Pages"]
-    HTTP["HttpRealTransport\n• Connects to Go Server (:8090)\n• 50 Hz SSE (/api/stream) + REST\n• LiveTime (:5403) + Hub Wi-Fi UDP (:5404)"]
+    WASM["WasmSimTransport\n• Runs cmd/slaprf-wasm (slaprf.wasm)\n• internal/api router in-process\n• Isolated sim + real engines"]
+    Hub["BrowserHubBridge\n• Hub USB dongle over WebSerial"]
 
     UI --> Client
-    Client -- "Simulation On" --> WASM
-    Client -- "Simulation Off (Real Hardware)" --> HTTP
+    Client --> WASM
+    Hub -- "Hub packets (Simulation Off)" --> WASM
 ```
 
-- **Simulation Mode (`WasmSimTransport`)**: Runs the exact same Go packages (`internal/domain`, `internal/dsp`, `internal/tracker`, `internal/ingest`, `internal/firmware`, `internal/api`) compiled to WebAssembly (`GOOS=js GOARCH=wasm`), allowing the full interactive dashboard and USB flasher to run directly from static GitHub Pages (`https://kaack.github.io/SlapRF/`).
-- **Real-World Hardware Mode (`HttpRealTransport`)**: Connects to the native Go binary (`slaprf`) for live Wi-Fi UDP telemetry from the Hub timer (`:5404`) and MultiGP LiveTime TCP bridging (`:5403`).
+- **Simulation Mode**: the built-in 50 Hz track simulator feeds the isolated simulation engine.
+- **Real-World Hardware Mode**: `BrowserHubBridge` feeds packets from the Hub (USB-C, WebSerial) into the isolated real-world engine.
+- Both run the exact same Go packages (`internal/domain`, `internal/dsp`, `internal/tracker`, `internal/ingest`, `internal/api`) compiled to WebAssembly (`GOOS=js GOARCH=wasm`), so the full dashboard and USB flasher run from the static site (https://slaprf.app). MultiGP LiveTime (LapRF TCP `:5403`) is reached through the small `slaprf-relay` helper (`cmd/slaprf-relay`), which copies bytes between LiveTime's TCP socket and a loopback WebSocket; the LapRF emulator itself runs in the WASM engine.

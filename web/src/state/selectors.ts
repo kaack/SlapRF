@@ -104,6 +104,23 @@ export function timerHardwareId(p: { timerId: number; timerLabel?: string }): st
   return p.timerLabel?.trim() || `timer #${p.timerId}`;
 }
 
+/** Shown wherever timers are placed on gates (the Hub is a USB dongle that may also time a gate). */
+export const HUB_ON_GATE_NOTE = "Placing the Hub on a gate makes it sweep too — keep it within USB cable reach";
+
+/** True when the timer is currently assigned to a gate on the active course. */
+export function timerHasGate(store: AppStore, timerId: number): boolean {
+  return timerId > 0 && store.nodes.some((n) => (n.assignedTimerId ?? 0) === timerId);
+}
+
+/**
+ * Role text for a timer: a Hub is a USB collector dongle ("Hub · dongle (USB)") unless it has been
+ * dragged onto a gate, where it also sweeps 5.8 GHz ("Hub · sweeping (USB)").
+ */
+export function timerRoleText(store: AppStore, d: { timerId: number; isHub: boolean }): string {
+  if (!d.isHub) return "Spoke";
+  return timerHasGate(store, d.timerId) ? "Hub · sweeping (USB)" : "Hub · dongle (USB)";
+}
+
 /** "Gate 2 → Split-S" style label for the stretch of track between two gates. */
 export function sectionLabel(store: AppStore, fromGateId: number, toGateId: number): string {
   return `${gateLabel(store, fromGateId)} → ${gateLabel(store, toGateId)}`;

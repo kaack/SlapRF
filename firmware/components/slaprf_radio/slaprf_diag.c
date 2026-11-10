@@ -73,6 +73,12 @@ static uint32_t s_flash_bytes;
 static SemaphoreHandle_t s_tx_lock;
 
 static volatile uint8_t s_live; // 0 off, 1 ~10 lines/s with peaks, 2 every sweep
+// Hub placed on a gate by the app (HUBGATE 1): sweep 5.8 GHz and send its own telemetry window.
+// Runtime only (cleared on reboot); the browser re-sends it whenever it sees the Hub's status.
+static volatile bool s_hub_gate;
+// A USB host (the browser) is listening: set by any command, cleared when writes keep failing.
+// While set, status_push_task sends a status line every second so the host never has to poll.
+static volatile bool s_host_attached;
 static volatile bool s_log;
 static volatile bool s_hub_usb_stream;
 static uint8_t s_usb_hellos[7][36];
@@ -240,7 +246,9 @@ static void tx_line(const char *s) {
 
 /** Best-effort write for streamed data: drops the line if the port is busy or the buffer full. */
 static void tx_bytes_nowait(const void *data, size_t len) {
-    if (s_tx_lock == NULL || xSemaphoreTake(s_tx_lock, 0) != pdTRUE) {
+    // Wait up to 2 ms: if the low-priority console task holds the lock mid-reply, the mutex's
+    // priority inheritance lets it finish quickly instead of this streamed frame being dropped.
+    if (s_tx_lock == NULL || xSemaphoreTake(s_tx_lock, pdMS_TO_TICKS(2)) != pdTRUE) {
         return;
     }
     const int written = usb_serial_jtag_write_bytes(data, len, 0);
@@ -252,6 +260,7 @@ static void tx_bytes_nowait(const void *data, size_t len) {
             s_scan_live = false;
             s_log = false;
             s_hub_usb_stream = false;
+            s_host_attached = false;
             s_tx_drops = 0;
         }
     } else {
@@ -413,7 +422,12 @@ bool slaprf_diag_get_net_channels(uint16_t out_freqs[8]) {
 
 /** True while the Debug page wants live 5.8 GHz sweeps (LIVE 1/2), e.g. on the collector Hub. */
 bool slaprf_diag_wants_sweeps(void) {
-    return s_live != 0;
+    return s_live != 0 || s_hub_gate;
+}
+
+/** Hub: true while the app has placed the Hub on a gate (HUBGATE 1), so it sweeps and reports. */
+bool slaprf_diag_hub_is_gate(void) {
+    return s_hub_gate;
 }
 
 bool slaprf_diag_rf_enabled(void) {
@@ -429,16 +443,17 @@ static void send_status(void) {
     const uint32_t fp = (uint32_t)s_cfg[CFG_OFF_FP] | ((uint32_t)s_cfg[CFG_OFF_FP + 1] << 8) |
                         ((uint32_t)s_cfg[CFG_OFF_FP + 2] << 16) | ((uint32_t)s_cfg[CFG_OFF_FP + 3] << 24);
 
-    uint8_t channel = 0;
-    wifi_mode_t mode = WIFI_MODE_NULL;
+    // Wi-Fi channel/mode are cached and refreshed at most every 5 s: querying the Wi-Fi driver on
+    // every status line measurably cost the timing loop beacons.
+    static uint8_t channel = 0;
+    static wifi_mode_t mode = WIFI_MODE_NULL;
+    static int64_t wifi_queried_us = 0;
     wifi_sta_list_t stas = {0};
-    if (!s_emergency_mode) {
+    if (!s_emergency_mode && (wifi_queried_us == 0 || esp_timer_get_time() - wifi_queried_us > 5000000LL)) {
         wifi_second_chan_t second;
         esp_wifi_get_channel(&channel, &second);
         esp_wifi_get_mode(&mode);
-        if (mode == WIFI_MODE_AP || mode == WIFI_MODE_APSTA) {
-            esp_wifi_ap_get_sta_list(&stas);
-        }
+        wifi_queried_us = esp_timer_get_time();
     }
     const char *mode_name = s_emergency_mode ? "emergency-mode" : mode == WIFI_MODE_APSTA ? "ap+sta" : mode == WIFI_MODE_AP ? "ap" : mode == WIFI_MODE_STA ? "sta" : "off";
 
@@ -452,22 +467,30 @@ static void send_status(void) {
     uint8_t mac[6] = {0};
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
 
+    int8_t lk_rssi = 0;
+    uint8_t lk_rate = 0, lk_fmt = 0;
+    uint32_t lk_beacons = 0, lk_data = 0;
+    const char *lk_tx = "";
+    slaprf_link_stats(&lk_rssi, &lk_rate, &lk_fmt, &lk_beacons, &lk_data, &lk_tx);
+    int8_t lk_qdbm = 0;
+    bool lk_saved = false;
+    slaprf_link_settings(&lk_qdbm, &lk_saved);
     char (*out_buf)[2048] = malloc(sizeof(*out_buf));
     if (!out_buf) return;
     #define out (*out_buf)
     int n = snprintf(out, sizeof(out),
                      "@{\"t\":\"status\",\"fw\":\"v%u.%u.%u\",\"role\":%u,\"profile\":%u,\"fp\":\"%08lX\","
                      "\"label\":\"%s\",\"uptimeMs\":%lld,\"reset\":\"%s\",\"boots\":%lu,"
-                     "\"emergencyMode\":%s,\"crashStreak\":%lu,\"heapFree\":%lu,\"heapMin\":%lu,"
+                     "\"emergencyMode\":%s,\"hubGate\":%s,\"crashStreak\":%lu,\"heapFree\":%lu,\"heapMin\":%lu,"
                      "\"sweepHz\":%u,\"sweeps\":%lu,\"sweepUs\":%lu,\"sweepUsMax\":%lu,\"sweepBudgetUs\":%lu,"
                      "\"rf\":{\"ok\":%s,\"enabled\":%s,\"gain\":%d,\"gainMax\":%d,\"floorDb\":%.1f},"
                      "\"chip\":{\"model\":\"%s\",\"rev\":\"v%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"flashMB\":%lu},"
-                     "\"net\":{\"mode\":\"%s\",\"stations\":%d},"
+                     "\"net\":{\"mode\":\"%s\",\"stations\":%d},\"link\":{\"rssi\":%d,\"rate\":%u,\"fmt\":%u,\"beacons\":%lu,\"data\":%lu,\"tx\":\"%s\",\"txPowerDbm\":%.2f,\"saved\":%s},"
                      "\"channel\":%u,\"slot\":%u,\"scanLive\":%s,\"freqsTemporary\":%s,\"chanMask\":%u,\"freqs\":[",
                      s_cfg[CFG_OFF_VERSION], s_cfg[CFG_OFF_VERSION + 1], s_cfg[CFG_OFF_VERSION + 2],
                      s_cfg[CFG_OFF_ROLE], s_cfg[CFG_OFF_PROFILE], (unsigned long)fp, label,
                      (long long)(esp_timer_get_time() / 1000), reset_reason_name(esp_reset_reason()),
-                     (unsigned long)s_boots, s_emergency_mode ? "true" : "false", (unsigned long)s_crash_streak,
+                     (unsigned long)s_boots, s_emergency_mode ? "true" : "false", s_hub_gate ? "true" : "false", (unsigned long)s_crash_streak,
                      (unsigned long)esp_get_free_heap_size(),
                      (unsigned long)esp_get_minimum_free_heap_size(), s_sweep_hz, (unsigned long)s_sweeps,
                      (unsigned long)s_sweep_us_last, (unsigned long)s_sweep_us_max, (unsigned long)s_sweep_budget_us,
@@ -475,7 +498,8 @@ static void send_status(void) {
                      s_rf_enabled ? "true" : "false", gain, gain_max, floor_db,
                      chip.model == CHIP_ESP32C5 ? "ESP32-C5" : "ESP32", chip.revision / 100, chip.revision % 100,
                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (unsigned long)(s_flash_bytes / (1024 * 1024)),
-                     mode_name, stas.num, channel, s_slot, s_scan_live ? "true" : "false",
+                     mode_name, stas.num, (int)lk_rssi, (unsigned)lk_rate, (unsigned)lk_fmt, (unsigned long)lk_beacons,
+                     (unsigned long)lk_data, lk_tx, lk_qdbm / 4.0, lk_saved ? "true" : "false", channel, s_slot, s_scan_live ? "true" : "false",
                      s_chan_override ? "true" : "false", (unsigned)active_chan_mask());
     for (int i = 0; i < 8 && n < (int)sizeof(out) - 64; i++) {
         n += snprintf(out + n, sizeof(out) - n, "%s%u", i ? "," : "", slot_display_mhz(i));
@@ -761,28 +785,27 @@ void slaprf_diag_forward_hub_frame(const void *frame, uint32_t len) {
     if (len == 36 && f[0] == 0xC5 && f[1] == 0x5A && f[2] >= 1 && f[2] <= 7) {
         memcpy(s_usb_hellos[f[2] - 1], f, 36);
     }
+    // Streams while a host is attached (set by any command, cleared when USB writes start failing).
     if (!s_hub_usb_stream || s_scan_live || s_emergency_mode) return;
-    if (s_last_cmd_us == 0 || (esp_timer_get_time() - s_last_cmd_us) > 15000000LL) {
-        s_hub_usb_stream = false;
-        return;
-    }
     send_usb_pkt_line(f, len, false);
 }
 
 static void handle_command(char *line) {
     s_last_cmd_us = esp_timer_get_time();
+    s_host_attached = true;
+    if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1) {
+        s_hub_usb_stream = true;
+    }
     if (strcmp(line, "SLAPRF?") == 0) {
         uint8_t copy[CFG_LEN];
         size_t len = s_cfg_len < sizeof(copy) ? s_cfg_len : sizeof(copy);
         memcpy(copy, (const void *)s_cfg, len);
         tx_raw(copy, len);
     } else if (strcmp(line, "STATUS?") == 0) {
-        const bool was_streaming = s_hub_usb_stream;
-        if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1) {
-            s_hub_usb_stream = true;
-        }
         send_status();
-        if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1 && !was_streaming) {
+        // The host only asks on connect or after pushes went quiet: replay cached HELLOs so it
+        // can map every slot to its timer straight away.
+        if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1) {
             for (int i = 0; i < 7; i++) {
                 if (s_usb_hellos[i][0] == 0xC5 && s_usb_hellos[i][1] == 0x5A) {
                     send_usb_pkt_line(s_usb_hellos[i], 36, false);
@@ -807,6 +830,32 @@ static void handle_command(char *line) {
             portEXIT_CRITICAL(&s_ring_mux);
             send_log("current", cur, len);
             free(cur);
+        }
+    } else if (strncmp(line, "LINKRATE ", 9) == 0) {
+        // Serial-console tuning (not exposed in the app): ESP-NOW TX PHY, saved to flash.
+        if (slaprf_set_link_rate(line + 9, true)) {
+            tx_line("@{\"t\":\"ok\",\"cmd\":\"linkrate\",\"saved\":true}\n");
+        } else {
+            tx_line("@{\"t\":\"err\",\"msg\":\"LINKRATE needs lr250|lr500|1m|6m|mcs0\"}\n");
+        }
+    } else if (strncmp(line, "TXPOWER ", 8) == 0) {
+        // Serial-console tuning: max TX power in dBm (2..20), saved to flash.
+        if (slaprf_set_tx_power_dbm(atoi(line + 8), true)) {
+            tx_line("@{\"t\":\"ok\",\"cmd\":\"txpower\",\"saved\":true}\n");
+        } else {
+            tx_line("@{\"t\":\"err\",\"msg\":\"TXPOWER needs 2..20 (dBm)\"}\n");
+        }
+    } else if (strcmp(line, "LINKRESET") == 0) {
+        // Forget saved LINKRATE / TXPOWER and return to the firmware defaults.
+        slaprf_reset_link_settings();
+        tx_line("@{\"t\":\"ok\",\"cmd\":\"linkreset\"}\n");
+    } else if (strncmp(line, "HUBGATE ", 8) == 0) {
+        const bool on = (line[8] == '1');
+        if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1 && !s_emergency_mode) {
+            s_hub_gate = on;
+            tx_line(on ? "@{\"t\":\"ok\",\"cmd\":\"hubgate\",\"on\":true}\n" : "@{\"t\":\"ok\",\"cmd\":\"hubgate\",\"on\":false}\n");
+        } else {
+            tx_line("@{\"t\":\"err\",\"msg\":\"HUBGATE is only valid on a Hub\"}\n");
         }
     } else if (strcmp(line, "PANIC?") == 0) {
         char msg[220];
@@ -911,6 +960,20 @@ static void console_task(void *arg) {
 
 /* ---- Public API --------------------------------------------------------------------------- */
 
+static void start_led_timer(void); // Health LED renderer, defined below
+static void send_status(void);
+
+/** Pushes a status line every second while a host is attached (priority 0: never delays timing). */
+static void status_push_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        vTaskDelay(pdMS_TO_TICKS(1000));
+        if (s_host_attached && !s_emergency_mode && !s_scan_live) {
+            send_status();
+        }
+    }
+}
+
 void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
     s_cfg = (const volatile uint8_t *)cfg;
     s_cfg_len = len;
@@ -929,13 +992,17 @@ void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&led_cfg);
-    gpio_set_level(XIAO_C5_LED_GPIO, 0); // Solid ON during startup until sweeps begin
+    gpio_set_level(XIAO_C5_LED_GPIO, 1);
+    start_led_timer();
     usb_serial_jtag_driver_config_t usb_cfg = {
         .tx_buffer_size = 4096,
         .rx_buffer_size = 512,
     };
     if (usb_serial_jtag_driver_install(&usb_cfg) == ESP_OK) {
-        xTaskCreate(console_task, "slaprf_diag", 4096, NULL, 3, NULL);
+        // Priority 0 (below the main timing loop at 1): USB commands such as STATUS? run only in the
+        // idle time the loop already yields between sweeps, so they never delay sweeps or beacons.
+        xTaskCreate(console_task, "slaprf_diag", 4096, NULL, 0, NULL);
+        xTaskCreate(status_push_task, "slaprf_status", 4096, NULL, 0, NULL);
     }
     if (s_crash_streak >= MAX_CRASH_STREAK) {
         s_booted_emergency_mode = true;
@@ -1034,6 +1101,53 @@ void slaprf_diag_note_spoke_frame(const uint8_t *frame, uint32_t len) {
     }
 }
 
+/* ---- Health LED ------------------------------------------------------------------------------
+ * Rendered by a 10 ms esp_timer, independent of the radio loop, so blink timing never depends on
+ * when sweeps or the service loop happen to run. The loop only publishes state (s_led_rf_ok etc.).
+ *   Hub:                    single blip every 2 s
+ *   Spoke, joined:          double blip every 2 s
+ *   Spoke searching:        slow 1 Hz blink
+ *   Debug LIVE / SCAN LIVE: 5 Hz
+ *   5.8 GHz boot check bad: 10 Hz
+ *   Emergency mode:         siren fade (LEDC, see siren_led_task)
+ */
+static volatile bool s_led_rf_ok = true;
+static esp_timer_handle_t s_led_timer;
+
+static void led_timer_cb(void *arg) {
+    (void)arg;
+    if (s_emergency_mode) return; // The siren task owns the LED (LEDC) in emergency mode
+    const uint8_t role = s_cfg ? s_cfg[CFG_OFF_ROLE] : 1;
+    const int64_t now_ms = esp_timer_get_time() / 1000;
+    bool led_on;
+    if (!s_led_rf_ok) {
+        led_on = ((now_ms / 50) & 1LL) == 0;
+    } else if (s_live || s_scan_live) {
+        led_on = ((now_ms / 100) & 1LL) == 0;
+    } else if (role != 1 && (s_slot < 2 || slaprf_ms_since_hub_beacon() > 2500)) {
+        led_on = ((now_ms / 500) & 1LL) == 0;
+    } else {
+        const int64_t phase = now_ms % 2000;
+        const int64_t blip = 70;
+        const int64_t gap = 220; // Start of the Spoke's second blip
+        led_on = phase < blip || (role != 1 && phase >= gap && phase < gap + blip);
+    }
+    gpio_set_level(XIAO_C5_LED_GPIO, led_on ? 0 : 1); // Active-low user LED
+}
+
+static void start_led_timer(void) {
+    if (s_led_timer != NULL) return;
+    const esp_timer_create_args_t args = {
+        .callback = led_timer_cb,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "slaprf_led",
+    };
+    if (esp_timer_create(&args, &s_led_timer) == ESP_OK) {
+        esp_timer_start_periodic(s_led_timer, 10000);
+    }
+}
+
+/** Loop-side housekeeping: auto-stop orphaned USB streams and publish RF health for the LED. */
 static void update_health_led(void) {
     if (s_emergency_mode) return;
     if ((s_live || s_scan_live || s_log) && s_last_cmd_us > 0 &&
@@ -1047,34 +1161,7 @@ static void update_health_led(void) {
     int gain = 0, gain_max = 0;
     float floor_db = 0;
     slaprf_rf58_info(&rf_ok, &gain, &gain_max, &floor_db);
-    bool led_on = false;
-    const uint8_t role = s_cfg ? s_cfg[CFG_OFF_ROLE] : 1;
-    if (!rf_ok) {
-        // 5.8 GHz RF boot check failed: rapid 10 Hz alarm blink
-        led_on = ((s_sweeps / 2) & 1U) == 0;
-    } else if (s_live || s_scan_live) {
-        // USB Debug stream active (LIVE 1|2 or SCAN LIVE): brisk 5 Hz activity pulse
-        const uint32_t period = s_sweep_hz >= 10 ? s_sweep_hz / 5 : 2;
-        const uint32_t phase = s_sweeps % (period ? period : 2);
-        led_on = phase < (period / 2 ? period / 2 : 1);
-    } else if (role != 1 && (s_slot < 2 || slaprf_ms_since_hub_beacon() > 2500)) {
-        // Spoke searching for Hub beacon / awaiting TDMA slot assignment: slow 1 Hz blink (500 ms on / 500 ms off)
-        led_on = ((esp_timer_get_time() / 500000LL) & 1LL) == 0;
-    } else {
-        // Normal timing every 2 seconds:
-        //   Hub (role 1, parent):   single-blip (blip ... pause)
-        //   Spoke (role 2, joined): double-blip (blip-blip ... pause)
-        const uint32_t period = (uint32_t)s_sweep_hz * 2;
-        const uint32_t phase = s_sweeps % (period ? period : 100);
-        const uint32_t blip = s_sweep_hz >= 100 ? 4 : 2;
-        const uint32_t gap = s_sweep_hz >= 100 ? 14 : 7;
-        if (role == 1) {
-            led_on = (phase < blip);
-        } else {
-            led_on = (phase < blip) || (phase >= gap && phase < gap + blip);
-        }
-    }
-    gpio_set_level(XIAO_C5_LED_GPIO, led_on ? 0 : 1); // Active-low user LED
+    s_led_rf_ok = rf_ok;
 }
 
 void slaprf_diag_sweep(const int8_t *dbm, uint32_t took_us) {
@@ -1142,11 +1229,9 @@ void slaprf_diag_service(void) {
         s_scan_live = false;
         s_log = false;
     }
-    if ((s_sweeps == 0 || s_slot == 0) && !s_emergency_mode) {
-        // Spoke searching for Hub beacon / awaiting TDMA slot assignment: slow 1 Hz blink (500 ms on / 500 ms off)
-        const bool searching_on = ((esp_timer_get_time() / 500000LL) & 1LL) == 0;
-        gpio_set_level(XIAO_C5_LED_GPIO, searching_on ? 0 : 1);
-    }
+    // Health LED (Hub single blip, Spoke double blip, Spoke searching 1 Hz, ...). Also refreshed on
+    // every sweep; the collector Hub doesn't sweep, so this keeps its heartbeat going.
+    update_health_led();
     if (s_ls_ready) {
         // A live-scan pass finished in the last sweep slot; send it from here (outside the slot).
         static char live_out[96 + SCAN_MAX_POINTS * 5];

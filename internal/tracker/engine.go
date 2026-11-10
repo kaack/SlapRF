@@ -61,13 +61,11 @@ type Engine struct {
 	nextLapID      uint64
 	passingNumbers map[uint8]uint32 // per-gate passing counter
 	subscribers    []EventSubscriber
-	// hubIsCollector: real hardware only. The Hub is a USB/Wi-Fi collector dongle that relays
-	// Spoke frames to the laptop and never measures laps itself, so it gets a timer entry but no
-	// gate. The simulator keeps the classic model where the simulated Hub times a gate.
-	hubIsCollector bool
 }
 
-// NewEngine creates and initializes a multi-gate timing engine with default gates and pilot slots.
+// NewEngine creates the simulation engine with the default course and pilot slots. It follows
+// the same Hub/Spoke model as real hardware: the simulated Hub is a collector dongle registered
+// as a timer with no gate, and simulated Spokes time every gate (the first one is start/finish).
 func NewEngine() *Engine {
 	e := &Engine{
 		bootTime:       time.Now(),
@@ -79,29 +77,52 @@ func NewEngine() *Engine {
 		detectors:      make(map[string]*dsp.ChannelDetector),
 		passingNumbers: make(map[uint8]uint32),
 	}
-	for _, g := range e.gates {
-		if g.AssignedTimerID > 0 {
-			c := g.Color
-			if c == "" {
-				c = domain.DefaultTimerColor(g.AssignedTimerID)
-			}
-			e.detected[g.AssignedTimerID] = &domain.DetectedTimer{
-				TimerID:         g.AssignedTimerID,
-				TimerLabel:      g.TimerLabel,
-				Color:           c,
-				IsHub:           g.AssignedTimerID == 1,
-				FirmwareVersion: g.FirmwareVersion,
-				BatteryMv:       g.BatteryMv,
-				BatteryPct:      g.BatteryPct,
-				NoiseFloorDbm:   g.NoiseFloorDbm,
-				Online:          g.Online,
-				LastSeenAt:      g.LastSeenAt,
-			}
-		}
-	}
+	e.seedSimTimersLocked()
 	e.resetSessionLocked()
 	e.initDetectorsLocked()
 	return e
+}
+
+// seedSimTimersLocked registers the default simulated timers: one Spoke per default gate plus
+// the gate-less simulated Hub. Replaces `e.detected`.
+func (e *Engine) seedSimTimersLocked() {
+	e.detected = make(map[uint8]*domain.DetectedTimer)
+	for _, g := range e.gates {
+		if g.AssignedTimerID == 0 {
+			continue
+		}
+		c := g.Color
+		if c == "" {
+			c = domain.DefaultTimerColor(g.AssignedTimerID)
+		}
+		e.detected[g.AssignedTimerID] = &domain.DetectedTimer{
+			TimerID:         g.AssignedTimerID,
+			TimerLabel:      g.TimerLabel,
+			Color:           c,
+			FirmwareVersion: g.FirmwareVersion,
+			FirmwareProfile: domain.DefaultFirmwareProfile,
+			Fingerprint:     newFingerprintHex(),
+			BatteryMv:       g.BatteryMv,
+			BatteryPct:      g.BatteryPct,
+			NoiseFloorDbm:   g.NoiseFloorDbm,
+			Online:          g.Online,
+			LastSeenAt:      g.LastSeenAt,
+		}
+	}
+	e.detected[domain.SimHubTimerID] = &domain.DetectedTimer{
+		TimerID:         domain.SimHubTimerID,
+		TimerLabel:      domain.DefaultSimHubLabel,
+		Color:           domain.DefaultGateColors[4%len(domain.DefaultGateColors)],
+		IsHub:           true,
+		FirmwareVersion: domain.LatestFirmwareVersion,
+		FirmwareProfile: domain.DefaultFirmwareProfile,
+		Fingerprint:     newFingerprintHex(),
+		BatteryMv:       4200, // USB powered
+		BatteryPct:      100,
+		NoiseFloorDbm:   -92.0,
+		Online:          true,
+		LastSeenAt:      time.Now(),
+	}
 }
 
 // NewRealEngine creates a clean real-world timing engine with no simulated timers,
@@ -116,7 +137,6 @@ func NewRealEngine() *Engine {
 		detected:       make(map[uint8]*domain.DetectedTimer),
 		detectors:      make(map[string]*dsp.ChannelDetector),
 		passingNumbers: make(map[uint8]uint32),
-		hubIsCollector: true,
 	}
 	e.resetSessionLocked()
 	e.initDetectorsLocked()
@@ -424,7 +444,6 @@ func (e *Engine) touchDetectedTimerLocked(frame domain.TimerTelemetryFrame) {
 		d = &domain.DetectedTimer{
 			TimerID:         frame.TimerID,
 			Color:           domain.DefaultTimerColor(frame.TimerID),
-			IsHub:           frame.TimerID == 1,
 			FirmwareVersion: domain.LatestFirmwareVersion,
 			BatteryMv:       4080,
 			BatteryPct:      domain.ComputeBatteryPct(4080),

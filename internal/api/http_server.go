@@ -2,19 +2,11 @@ package api
 
 import (
 	"encoding/json"
-	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
-	"strconv"
-	"sync"
-	"time"
 
 	"slaprf/internal/domain"
-	"slaprf/internal/firmware"
 	"slaprf/internal/ingest"
 	"slaprf/internal/laprf"
-	"slaprf/internal/storage"
 	"slaprf/internal/tracker"
 )
 
@@ -47,7 +39,23 @@ type StatusResponse struct {
 	LiveTimeStatus    laprf.LiveTimeStatus   `json:"liveTimeStatus"`
 }
 
-// Server wires HTTP routes, the SSE streaming hub, and the pure-Go TypeScript bundler.
+// RealBackendState is the real-world engine snapshot exchanged by `GET /api/storage/export`
+// and `POST /api/storage/import` (the "real" section of the app's JSON export file).
+// Older exports may carry a `liveTimeEnabled` flag; it is ignored on import because the
+// LiveTime toggle is now a browser UI preference (see web/src/services/livetime_relay.ts).
+type RealBackendState struct {
+	Engine tracker.PersistedEngineState `json:"engine"`
+}
+
+// StreamEnvelope wraps a typed real-time message sent to the TypeScript SPA
+// (delivered in-process by the WASM bridge's `onStream` callback).
+type StreamEnvelope struct {
+	Type    string      `json:"type"` // "telemetry" | "crossing" | "filtered" | "lap" | "config"
+	Payload interface{} `json:"payload"`
+}
+
+// Server is the in-browser request router: cmd/slaprf-wasm sends every JS
+// `request(method, url, body)` through Handler().ServeHTTP in-process.
 // It maintains two completely isolated timing engines (`simEngine` for the built-in track
 // simulator and `realEngine` for physical XIAO ESP32-C5 hardware) so simulated timers,
 // gates, pilots, rules, and laps never mix with real-world data.
@@ -56,72 +64,13 @@ type Server struct {
 	realEngine  *tracker.Engine
 	simulator   *ingest.TrackSimulator
 	laprfServer *laprf.Server
-	sseHub      *SSEHub
-	webRootDir  string
-	store       storage.Store
-	saveMu      sync.Mutex
-	saveTimer   *time.Timer
 }
 
-type realPersistenceSubscriber struct {
-	srv *Server
-}
-
-func (p *realPersistenceSubscriber) OnTelemetryFrame(domain.TimerTelemetryFrame) {}
-
-func (p *realPersistenceSubscriber) OnGateCrossing(domain.GateCrossingEvent) {
-	p.srv.scheduleRealSave()
-}
-
-func (p *realPersistenceSubscriber) OnDetectionFiltered(domain.FilteredDetection) {
-	p.srv.scheduleRealSave()
-}
-
-func (p *realPersistenceSubscriber) OnLapCompleted(domain.LapRecord, []domain.PilotTrackSummary) {
-	p.srv.scheduleRealSave()
-}
-
-func (p *realPersistenceSubscriber) OnConfigUpdated([]domain.PilotSlot, []domain.TrackGate) {
-	p.srv.SaveRealStateNow()
-}
-
-type gatedEventSubscriber struct {
-	allow func() bool
-	next  tracker.EventSubscriber
-}
-
-func (g *gatedEventSubscriber) OnTelemetryFrame(frame domain.TimerTelemetryFrame) {
-	if g.allow() {
-		g.next.OnTelemetryFrame(frame)
-	}
-}
-func (g *gatedEventSubscriber) OnGateCrossing(event domain.GateCrossingEvent) {
-	if g.allow() {
-		g.next.OnGateCrossing(event)
-	}
-}
-func (g *gatedEventSubscriber) OnDetectionFiltered(f domain.FilteredDetection) {
-	if g.allow() {
-		g.next.OnDetectionFiltered(f)
-	}
-}
-func (g *gatedEventSubscriber) OnLapCompleted(lap domain.LapRecord, summaries []domain.PilotTrackSummary) {
-	if g.allow() {
-		g.next.OnLapCompleted(lap, summaries)
-	}
-}
-func (g *gatedEventSubscriber) OnConfigUpdated(pilots []domain.PilotSlot, gates []domain.TrackGate) {
-	if g.allow() {
-		g.next.OnConfigUpdated(pilots, gates)
-	}
-}
-
-// NewServer creates the HTTP and SSE server with separate simulation and real-world engines.
+// NewServer creates the request router with separate simulation and real-world engines.
 func NewServer(
 	simEngine *tracker.Engine,
 	simulator *ingest.TrackSimulator,
 	laprfServer *laprf.Server,
-	webRootDir string,
 	realEngines ...*tracker.Engine,
 ) *Server {
 	var realEngine *tracker.Engine
@@ -131,25 +80,15 @@ func NewServer(
 		realEngine = tracker.NewRealEngine()
 	}
 
-	hub := NewSSEHub()
-	simEngine.Subscribe(&gatedEventSubscriber{
-		allow: func() bool { return simulator.IsRunning() },
-		next:  hub,
-	})
-	realEngine.Subscribe(&gatedEventSubscriber{
-		allow: func() bool { return !simulator.IsRunning() },
-		next:  hub,
-	})
-
 	s := &Server{
 		simEngine:   simEngine,
 		realEngine:  realEngine,
 		simulator:   simulator,
 		laprfServer: laprfServer,
-		sseHub:      hub,
-		webRootDir:  webRootDir,
 	}
-	laprfServer.SetEngine(s.activeEngine())
+	// The LapRF (LiveTime) emulation always serves whichever engine is active, whether the
+	// simulator is toggled via /api/sim/toggle or directly (WASM bridge `setRunning`).
+	laprfServer.Follow(s.activeEngine, simEngine, realEngine)
 	return s
 }
 
@@ -165,68 +104,15 @@ func (s *Server) RealEngine() *tracker.Engine {
 	return s.realEngine
 }
 
-// SetStore attaches a persistence store for the real-world timing engine (`realEngine`).
-func (s *Server) SetStore(st storage.Store) {
-	s.saveMu.Lock()
-	s.store = st
-	s.saveMu.Unlock()
-	if st != nil && s.realEngine != nil {
-		s.realEngine.Subscribe(&realPersistenceSubscriber{srv: s})
-	}
-}
-
-// SaveRealStateNow immediately writes the current `realEngine` and LiveTime state to the attached store.
-func (s *Server) SaveRealStateNow() {
-	s.saveMu.Lock()
-	st := s.store
-	if s.saveTimer != nil {
-		s.saveTimer.Stop()
-		s.saveTimer = nil
-	}
-	s.saveMu.Unlock()
-	if st == nil || s.realEngine == nil {
-		return
-	}
-	_ = st.Save(storage.RealBackendState{
-		Engine:          s.realEngine.ExportState(),
-		LiveTimeEnabled: s.laprfServer.Status().Enabled,
-	})
-}
-
-func (s *Server) scheduleRealSave() {
-	s.saveMu.Lock()
-	defer s.saveMu.Unlock()
-	if s.store == nil || s.realEngine == nil {
-		return
-	}
-	if s.saveTimer != nil {
-		return
-	}
-	s.saveTimer = time.AfterFunc(250*time.Millisecond, func() {
-		s.SaveRealStateNow()
-	})
-}
-
-func (s *Server) saveIfRealActive() {
-	if s.activeEngine() == s.realEngine {
-		s.SaveRealStateNow()
-	}
-}
-
-// Handler builds the HTTP multiplexer for the application.
+// Handler builds the HTTP multiplexer for the application's `/api/*` routes.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 
-	// Real-time 50 Hz SSE stream
-	mux.Handle("/api/stream", s.sseHub)
-
-	// REST API endpoints
 	mux.HandleFunc("/api/version", s.handleGetVersion)
 	mux.HandleFunc("/api/state", s.handleGetState)
 	mux.HandleFunc("/api/status", s.handleGetStatus)
 	mux.HandleFunc("/api/rules", s.handleRules)
 	mux.HandleFunc("/api/timing/toggle-arm", s.handleToggleArm)
-	mux.HandleFunc("/api/livetime/toggle", s.handleToggleLiveTime)
 	mux.HandleFunc("/api/pilots/update", s.handleUpdatePilot)
 	mux.HandleFunc("/api/pilots/reset", s.handleResetPilots)
 	mux.HandleFunc("/api/track/update", s.handleUpdateGate)
@@ -242,8 +128,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/gates/add", s.handleAddGate)
 	mux.HandleFunc("/api/gates/remove", s.handleRemoveGate)
 	mux.HandleFunc("/api/gates/provision", s.handleProvisionGate)
-	mux.HandleFunc("/api/firmware/xiao-c5.bin", s.handleFirmwareImage)
-	mux.HandleFunc("/api/debug/timer", s.handleDebugTimer)
 	mux.HandleFunc("/api/thresholds", s.handleThresholds)
 	mux.HandleFunc("/api/gates/rules", s.handleGateRules)
 	mux.HandleFunc("/api/sim/toggle", s.handleToggleSim)
@@ -255,19 +139,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/storage/reset", s.handleResetStorage)
 	mux.HandleFunc("/api/storage/export", s.handleExportStorage)
 	mux.HandleFunc("/api/storage/import", s.handleImportStorage)
-	mux.HandleFunc("/api/ingest/frame", s.handleIngestFrame)
-
-	// Zero-Node.js pure-Go TypeScript bundle and WebAssembly simulation engine endpoints
-	mux.HandleFunc("/dist/app.js", s.handleTypeScriptBundle)
-	mux.HandleFunc("/wasm/wasm_exec.js", s.handleWasmExecJS)
-	mux.HandleFunc("/wasm/slaprf.wasm", s.handleSlaprfWasm)
-
-	// Static assets (HTML + CSS)
-	fs := http.FileServer(http.Dir(s.webRootDir))
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-store")
-		fs.ServeHTTP(w, r)
-	})
 
 	return mux
 }
@@ -331,7 +202,6 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		applied := eng.SetRules(rules)
-		s.saveIfRealActive()
 		writeJSON(w, http.StatusOK, applied)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -348,26 +218,7 @@ func (s *Server) handleToggleArm(w http.ResponseWriter, r *http.Request) {
 	if s.laprfServer.Status().ConnectedClients == 0 {
 		eng := s.activeEngine()
 		eng.SetRaceArmed(!eng.IsRaceArmed())
-		s.saveIfRealActive()
 	}
-	s.handleGetStatus(w, r)
-}
-
-func (s *Server) handleToggleLiveTime(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		Enabled *bool `json:"enabled"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	if body.Enabled != nil {
-		s.laprfServer.SetEnabled(*body.Enabled)
-	} else {
-		s.laprfServer.SetEnabled(!s.laprfServer.Status().Enabled)
-	}
-	s.SaveRealStateNow()
 	s.handleGetStatus(w, r)
 }
 
@@ -409,7 +260,6 @@ func (s *Server) handleThresholds(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.saveIfRealActive()
 	s.handleGetState(w, r)
 }
 
@@ -432,7 +282,6 @@ func (s *Server) handleGateRules(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.saveIfRealActive()
 	s.handleGetState(w, r)
 }
 
@@ -450,7 +299,6 @@ func (s *Server) handleUpdateGate(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.saveIfRealActive()
 	s.handleGetState(w, r)
 }
 
@@ -471,7 +319,6 @@ func (s *Server) handleUpdateTimerColor(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	s.saveIfRealActive()
 	s.handleGetState(w, r)
 }
 
@@ -552,66 +399,6 @@ func (s *Server) handleProvisionGate(w http.ResponseWriter, r *http.Request) {
 	s.handleGetState(w, r)
 }
 
-// handleFirmwareImage builds and returns the XIAO ESP32-C5 firmware binary with the
-// requested role (`hub` = Start Gate + USB dongle bridge to the laptop; `spoke` = ESP-NOW
-// sector gate that talks to the Hub timer), flashed TimerLabel, and current 8-channel pilot
-// frequency table stamped into the `SLAPRF02` block (Wi-Fi fields are left empty).
-func (s *Server) handleFirmwareImage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var role uint8
-	switch r.URL.Query().Get("role") {
-	case "hub":
-		role = firmware.RoleHubTimer
-	case "spoke":
-		role = firmware.RoleSpokeTimer
-	default:
-		http.Error(w, "role must be hub or spoke", http.StatusBadRequest)
-		return
-	}
-
-	pilots, _, _, _, _ := s.activeEngine().StateSnapshot()
-	var freqs [domain.MaxPilotSlots]uint16
-	for i := 0; i < domain.MaxPilotSlots && i < len(pilots); i++ {
-		freqs[i] = pilots[i].FrequencyMHz
-	}
-
-	cfg := firmware.TimerConfig{
-		Role:         role,
-		Profile:      r.URL.Query().Get("profile"),
-		Fingerprint:  firmware.ParseFingerprint(r.URL.Query().Get("fingerprint")),
-		TimerLabel:   r.URL.Query().Get("label"),
-		SlotFreqsMHz: freqs,
-	}
-	// Prefer the compiled ESP-IDF image for this profile (web/firmware/, filled by CI);
-	// fall back to the built-in placeholder image when it isn't available.
-	var built *firmware.BuiltImage
-	var err error
-	profile := firmware.ProfileByID(cfg.Profile)
-	if base, readErr := os.ReadFile(filepath.Join(s.webRootDir, "firmware", "slaprf-xiao-c5-"+profile.ID+".bin")); readErr == nil {
-		built, err = firmware.PatchImage(base, cfg)
-	} else {
-		built, err = firmware.BuildXIAOC5Image(cfg)
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", built.Filename))
-	w.Header().Set("X-SlapRF-SHA256", built.SHA256Hex)
-	w.Header().Set("X-SlapRF-Fingerprint", firmware.FormatFingerprint(built.Config.Fingerprint))
-	w.Header().Set("X-SlapRF-Profile", built.Config.Profile)
-	w.Header().Set("X-SlapRF-Role", strconv.Itoa(int(built.Config.Role)))
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(built.Bytes)
-}
-
 func (s *Server) handleToggleSim(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -619,7 +406,6 @@ func (s *Server) handleToggleSim(w http.ResponseWriter, r *http.Request) {
 	}
 	next := !s.simulator.IsRunning()
 	s.simulator.SetRunning(next)
-	s.laprfServer.SetEngine(s.activeEngine())
 	s.handleGetState(w, r)
 }
 
@@ -708,11 +494,7 @@ func (s *Server) handleResetPilots(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	isSim := s.simulator.IsRunning()
-	s.activeEngine().ResetPilotsToDefault(isSim)
-	if !isSim {
-		s.SaveRealStateNow()
-	}
+	s.activeEngine().ResetPilotsToDefault(s.simulator.IsRunning())
 	s.handleGetState(w, r)
 }
 
@@ -725,7 +507,6 @@ func (s *Server) handleResetTrack(w http.ResponseWriter, r *http.Request) {
 		s.simulator.ResetTimersAndTrackToDefault()
 	} else {
 		s.realEngine.ResetTrackToDefault(false)
-		s.SaveRealStateNow()
 	}
 	s.handleGetState(w, r)
 }
@@ -736,7 +517,6 @@ func (s *Server) handleResetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.activeEngine().ResetSession()
-	s.saveIfRealActive()
 	s.handleGetState(w, r)
 }
 
@@ -748,8 +528,6 @@ func (s *Server) handleResetStorage(w http.ResponseWriter, r *http.Request) {
 	s.simulator.ResetToFactoryDefaults()
 	if s.realEngine != nil && s.realEngine != s.simEngine {
 		s.realEngine.ResetToFactoryDefaults(false)
-		s.laprfServer.SetEnabled(false)
-		s.SaveRealStateNow()
 	}
 	s.handleGetState(w, r)
 }
@@ -759,9 +537,8 @@ func (s *Server) handleExportStorage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	writeJSON(w, http.StatusOK, storage.RealBackendState{
-		Engine:          s.realEngine.ExportState(),
-		LiveTimeEnabled: s.laprfServer.Status().Enabled,
+	writeJSON(w, http.StatusOK, RealBackendState{
+		Engine: s.realEngine.ExportState(),
 	})
 }
 
@@ -770,29 +547,13 @@ func (s *Server) handleImportStorage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var state storage.RealBackendState
+	var state RealBackendState
 	if err := json.NewDecoder(r.Body).Decode(&state); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	s.realEngine.RestoreState(state.Engine, false)
-	s.laprfServer.SetEnabled(state.LiveTimeEnabled)
-	s.SaveRealStateNow()
 	s.handleGetState(w, r)
-}
-
-func (s *Server) handleIngestFrame(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var frame domain.TimerTelemetryFrame
-	if err := json.NewDecoder(r.Body).Decode(&frame); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.realEngine.IngestTelemetryFrame(frame)
-	writeJSON(w, http.StatusOK, map[string]bool{"ingested": true})
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {

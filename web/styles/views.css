@@ -594,6 +594,9 @@ body.is-gate-dragging * {
   flex-wrap: wrap;
   font-size: 13px;
 }
+.gate-inspector-hub-note {
+  margin: 8px 0 0;
+}
 .gate-inspector-timer-meta.is-empty {
   color: var(--text-3);
 }
@@ -601,8 +604,8 @@ body.is-gate-dragging * {
   position: relative;
   z-index: 1;
   display: grid;
-  grid-template-columns: minmax(130px, 1.1fr) minmax(148px, 1.1fr) 80px minmax(150px, 1fr) 95px minmax(160px, 1.15fr);
-  min-width: 780px;
+  grid-template-columns: minmax(130px, 1.1fr) minmax(148px, 1.1fr) 140px minmax(150px, 1fr) 95px minmax(160px, 1.15fr);
+  min-width: 840px;
   align-items: center;
   gap: 12px;
   padding: 11px 20px;
@@ -830,6 +833,7 @@ body.is-gate-dragging * {
   box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.16);
 }
 .detected-role-pill {
+  white-space: nowrap;
   padding: 1px 7px;
   border-radius: 999px;
   border: 1px solid var(--border);
@@ -1931,6 +1935,15 @@ body.is-gate-dragging * {
 .livetime-status.is-up .status-dot {
   background: var(--good);
   box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15);
+}
+.livetime-status-text {
+  flex: 1;
+  min-width: 0;
+}
+.livetime-downloads {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 6px;
 }
 .steps {
   margin: 0;
@@ -3701,7 +3714,7 @@ body.is-gate-dragging * {
 
 /* Simulated Timers table matching `.timer-table-row` in System */
 .timer-table-row.sim-timer-table-row {
-  grid-template-columns: minmax(140px, 1.15fr) 115px 80px minmax(145px, 1fr) minmax(130px, 1fr) auto;
+  grid-template-columns: minmax(140px, 1.15fr) 115px 140px minmax(145px, 1fr) minmax(130px, 1fr) auto;
 }
 
 .sim-timer-row-actions {

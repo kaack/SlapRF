@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"path/filepath"
-	"strings"
 	"testing"
 
 	"slaprf/internal/ingest"
@@ -13,31 +11,15 @@ import (
 	"slaprf/internal/tracker"
 )
 
-func TestTypeScriptBundleAndStateAPI(t *testing.T) {
+func TestStateAPI(t *testing.T) {
 	engine := tracker.NewEngine()
 	sim := ingest.NewTrackSimulator(engine)
-	laprfSrv := laprf.NewServer("127.0.0.1:0", engine)
-	webRoot := filepath.Join("..", "..", "web")
+	laprfSrv := laprf.NewServer(engine)
 
-	srv := NewServer(engine, sim, laprfSrv, webRoot)
+	srv := NewServer(engine, sim, laprfSrv)
 	handler := srv.Handler()
 
-	// 1. Verify TypeScript compilation via pure-Go esbuild
-	reqTS := httptest.NewRequest(http.MethodGet, "/dist/app.js", nil)
-	recTS := httptest.NewRecorder()
-	handler.ServeHTTP(recTS, reqTS)
-
-	if recTS.Code != http.StatusOK {
-		t.Fatalf("expected 200 OK from /dist/app.js, got %d: %s", recTS.Code, recTS.Body.String())
-	}
-	body := recTS.Body.String()
-	for _, name := range []string{"AppShell", "LiveView", "AllPilotsPanel", "PilotPanel", "LapTimesCard", "PilotView", "LapPicker", "LapComparison", "PilotRssiChart", "PilotLaps", "SetupView", "TrackEditor", "TimersList", "TimerFlasher", "Announcer", "TimingRulesEditor"} {
-		if !strings.Contains(body, name) {
-			t.Fatalf("compiled TypeScript bundle missing %s", name)
-		}
-	}
-
-	// 2. Verify /api/state JSON snapshot in simulation mode
+	// 1. Verify /api/state JSON snapshot in simulation mode
 	reqState := httptest.NewRequest(http.MethodGet, "/api/state", nil)
 	recState := httptest.NewRecorder()
 	handler.ServeHTTP(recState, reqState)
@@ -49,11 +31,11 @@ func TestTypeScriptBundleAndStateAPI(t *testing.T) {
 	if err := json.NewDecoder(recState.Body).Decode(&simState); err != nil {
 		t.Fatalf("failed to decode sim state: %v", err)
 	}
-	if !simState.SimulatorRun || len(simState.Gates) != 4 || len(simState.Timers) != 4 {
-		t.Fatalf("expected 4 simulated gates and 4 simulated timers when sim is running, got gates=%d timers=%d", len(simState.Gates), len(simState.Timers))
+	if !simState.SimulatorRun || len(simState.Gates) != 4 || len(simState.Timers) != 5 {
+		t.Fatalf("expected 4 simulated gates and 5 simulated timers (gate-less hub + 4 spokes) when sim is running, got gates=%d timers=%d", len(simState.Gates), len(simState.Timers))
 	}
 
-	// 3. Verify arm toggle flips engine state
+	// 2. Verify arm toggle flips engine state
 	before := engine.IsRaceArmed()
 	reqArm := httptest.NewRequest(http.MethodPost, "/api/timing/toggle-arm", nil)
 	recArm := httptest.NewRecorder()
@@ -62,7 +44,7 @@ func TestTypeScriptBundleAndStateAPI(t *testing.T) {
 		t.Fatalf("toggle-arm did not flip race armed state (code %d)", recArm.Code)
 	}
 
-	// 4. Verify toggling simulation off switches to the isolated real-world dataset
+	// 3. Verify toggling simulation off switches to the isolated real-world dataset
 	reqToggleSim := httptest.NewRequest(http.MethodPost, "/api/sim/toggle", nil)
 	recToggleSim := httptest.NewRecorder()
 	handler.ServeHTTP(recToggleSim, reqToggleSim)

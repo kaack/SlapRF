@@ -15,8 +15,8 @@ import {
   TimingRules,
   TrackNode,
 } from "../types/models";
-import { HttpRealTransport } from "./http_transport";
-import { BrowserHubBridge, RealEngineMode } from "./browser_hub_bridge";
+import { BrowserHubBridge } from "./browser_hub_bridge";
+import { enginePersistence, LAST_BACKUP_STORAGE_KEY, LEGACY_LOCALSTORAGE_KEYS } from "./engine_persistence";
 import {
   buildOrPatchFirmwareBin,
   DEFAULT_FIRMWARE_PROFILE,
@@ -25,7 +25,6 @@ import {
   LATEST_FIRMWARE_VERSION,
 } from "./esp_flasher";
 import { sharedTimerConsole, TimerStatus } from "./timer_console";
-import { ApiTransport } from "./transport";
 import { WasmSimTransport } from "./wasm_transport";
 
 interface LapPayload {
@@ -42,26 +41,23 @@ const STATUS_POLL_MS = 2000;
 const SIM_MODE_STORAGE_KEY = "slaprf.ui.sim_mode.v1";
 
 /**
- * REST + 50 Hz stream client routed through an `ApiTransport` interface:
- * - Simulation mode (`WasmSimTransport`): executes the Go timing & physics engine
- *   compiled to WebAssembly (`slaprf.wasm`) right in the browser (works on static GitHub Pages).
- * - Real-world mode: runs either via the local Desktop Go backend (`HttpRealTransport`) or
- *   100% in-browser via `WasmSimTransport` + `BrowserHubBridge` (USB-C WebSerial).
+ * REST + 50 Hz stream client. Every call runs in-browser against the Go timing engine compiled
+ * to WebAssembly (`slaprf.wasm`, via `WasmSimTransport`), in both modes:
+ * - Simulation mode: the built-in track simulator feeds the isolated simulation engine.
+ * - Real-world mode: the physical Hub (USB-C WebSerial, via `BrowserHubBridge`) feeds the
+ *   isolated real-world engine.
  */
 export class ApiClient {
   private readonly store: AppStore;
-  private readonly wasmTransport = new WasmSimTransport();
-  private readonly httpTransport = new HttpRealTransport();
+  private readonly transport = new WasmSimTransport();
   public readonly hubBridge: BrowserHubBridge;
   private simMode = true;
-  public desktopServerAvailable = true;
-  public realEngineMode: RealEngineMode = BrowserHubBridge.loadModePref();
   private readonly provisionedUsbKeys = new Set<string>();
   private hubRefreshTimer: number | null = null;
 
   constructor(store: AppStore) {
     this.store = store;
-    this.hubBridge = new BrowserHubBridge(this.wasmTransport);
+    this.hubBridge = new BrowserHubBridge(this.transport);
     this.hubBridge.onPacketIngested = () => {
       if (this.hubRefreshTimer !== null) return;
       this.hubRefreshTimer = window.setTimeout(() => {
@@ -81,28 +77,12 @@ export class ApiClient {
     } catch {
       // Ignore storage access errors
     }
-    this.wasmTransport.setSimRunning(this.simMode);
+    this.transport.setSimRunning(this.simMode);
   }
 
-  /** True when Real-world hardware mode is executing inside the browser's WebAssembly engine. */
+  /** True when Real-world hardware mode is active (the in-browser engine is fed by the Hub). */
   public get usingBrowserRealEngine(): boolean {
-    return !this.simMode && (this.realEngineMode === "browser" || !this.desktopServerAvailable);
-  }
-
-  private get transport(): ApiTransport {
-    this.wasmTransport.setSimRunning(this.simMode);
-    return this.simMode || this.usingBrowserRealEngine ? this.wasmTransport : this.httpTransport;
-  }
-
-  public async setRealEngineMode(mode: RealEngineMode): Promise<void> {
-    if (this.realEngineMode === mode) return;
-    this.transport.disconnectStream();
-    this.realEngineMode = mode;
-    BrowserHubBridge.saveModePref(mode);
-    this.wasmTransport.setSimRunning(this.simMode);
-    this.hubBridge.setActive(this.usingBrowserRealEngine);
-    this.connectStream();
-    await this.refresh();
+    return !this.simMode;
   }
 
   public async initialize(): Promise<void> {
@@ -120,14 +100,7 @@ export class ApiClient {
         void this.refresh().catch(() => undefined);
       }
     });
-    // Probe whether the local desktop Go server is running (false on GitHub Pages / static hosting)
-    try {
-      await this.httpTransport.request("GET", "/api/version");
-      this.desktopServerAvailable = true;
-    } catch {
-      this.desktopServerAvailable = false;
-    }
-    this.wasmTransport.setSimRunning(this.simMode);
+    this.transport.setSimRunning(this.simMode);
     this.hubBridge.setActive(this.usingBrowserRealEngine);
     this.bindUsbTimerSync();
     await this.refresh();
@@ -194,7 +167,7 @@ export class ApiClient {
     } catch {
       // Ignore storage access errors
     }
-    this.wasmTransport.setSimRunning(this.simMode);
+    this.transport.setSimRunning(this.simMode);
     this.hubBridge.setActive(this.usingBrowserRealEngine);
     this.connectStream();
     await this.refresh();
@@ -214,12 +187,6 @@ export class ApiClient {
 
   public async toggleArmed(): Promise<void> {
     this.store.applyStatus(await this.transport.request<StatusResponse>("POST", "/api/timing/toggle-arm"));
-  }
-
-  public async setLiveTimeEnabled(enabled: boolean): Promise<void> {
-    this.store.applyStatus(
-      await this.transport.request<StatusResponse>("POST", "/api/livetime/toggle", { enabled })
-    );
   }
 
   public async simulatePack(): Promise<void> {
@@ -273,7 +240,7 @@ export class ApiClient {
   public async resetPilotsToDefault(): Promise<void> {
     this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/pilots/reset"));
     if (this.usingBrowserRealEngine) {
-      this.wasmTransport.pushHubChannels();
+      this.transport.pushHubChannels();
     }
   }
 
@@ -287,7 +254,7 @@ export class ApiClient {
 
   /**
    * Wipes all saved application state (pilots, track, laps, timing rules, announcer settings,
-   * simulator state, and UI preferences) across both localStorage and backend SQLite storage,
+   * simulator state, and UI preferences) in browser storage and the in-browser engines,
    * restoring clean system defaults.
    */
   public async wipeApplicationData(): Promise<void> {
@@ -308,64 +275,46 @@ export class ApiClient {
       // Ignore storage access errors
     }
 
-    this.realEngineMode = "auto";
-    this.hubBridge.resetDefaults();
     this.hubBridge.setActive(this.usingBrowserRealEngine);
 
     this.store.clearActiveHistory();
     this.store.resetUiPrefs();
 
-    const wasmResetPromise = this.wasmTransport
+    const state = await this.transport
       .request<FullStateResponse>("POST", "/api/storage/reset")
       .catch(() => null);
-    const httpResetPromise = this.httpTransport
-      .request<FullStateResponse>("POST", "/api/storage/reset")
-      .catch(() => null);
-
-    const [wasmState, httpState] = await Promise.all([wasmResetPromise, httpResetPromise]);
-    const activeState = this.simMode || this.usingBrowserRealEngine ? wasmState : httpState;
-    if (activeState) {
-      this.store.hydrate(activeState);
+    // Clear IndexedDB and store the engines' fresh defaults in one transaction.
+    await enginePersistence.wipeAndReconcile().catch((err) => {
+      console.error("[storage] wipe failed:", err);
+    });
+    if (state) {
+      this.store.hydrate(state);
     } else {
       await this.refresh();
     }
   }
 
   /**
-   * Exports the full application state (simulator state, real hardware backend state, announcer
+   * Exports the full application state (simulator state, real hardware engine state, announcer
    * settings, known timers, and UI preferences) as a JSON-serializable bundle.
    */
   public async exportApplicationData(): Promise<Record<string, unknown>> {
+    // Make sure IndexedDB matches the engines before taking the backup (no-op in read-only tabs).
+    await enginePersistence.reconcileNow().catch(() => undefined);
+
     let simData: unknown = null;
     try {
-      const rawSim = await this.wasmTransport.exportSimStateJson();
+      const rawSim = await this.transport.exportSimStateJson();
       if (rawSim) simData = JSON.parse(rawSim);
     } catch {
       // ignore
     }
 
     let realData: unknown = null;
-    if (!this.usingBrowserRealEngine && this.desktopServerAvailable) {
-      try {
-        realData = await this.httpTransport.request<unknown>("GET", "/api/storage/export");
-        if (realData) {
-          window.localStorage.setItem("slaprf.real_state_backup.v1", JSON.stringify(realData));
-        }
-      } catch {
-        // fall through to wasm / localStorage
-      }
-    }
-    if (!realData) {
-      try {
-        realData = await this.wasmTransport.request<unknown>("GET", "/api/storage/export");
-      } catch {
-        try {
-          const fallback = window.localStorage.getItem("slaprf.real_state_backup.v1");
-          if (fallback) realData = JSON.parse(fallback);
-        } catch {
-          // ignore
-        }
-      }
+    try {
+      realData = await this.transport.request<unknown>("GET", "/api/storage/export");
+    } catch {
+      // ignore
     }
 
     const clientPrefs: Record<string, unknown> = {};
@@ -375,9 +324,8 @@ export class ApiClient {
         if (
           k &&
           (k.startsWith("slaprf.") || k === "gate-timer.announcer") &&
-          k !== "slaprf.sim_state.v1" &&
-          k !== "slaprf.real_state.v1" &&
-          k !== "slaprf.real_state_backup.v1"
+          !LEGACY_LOCALSTORAGE_KEYS.includes(k) &&
+          k !== LAST_BACKUP_STORAGE_KEY
         ) {
           const val = window.localStorage.getItem(k);
           if (val !== null) {
@@ -405,7 +353,7 @@ export class ApiClient {
 
   /**
    * Imports a previously exported JSON application state bundle, restoring simulator state,
-   * real hardware backend state, announcer settings, and all UI preferences.
+   * real hardware engine state, announcer settings, and all UI preferences.
    */
   public async importApplicationData(rawBundle: unknown): Promise<void> {
     if (!rawBundle || typeof rawBundle !== "object") {
@@ -423,6 +371,7 @@ export class ApiClient {
     if (prefs && typeof prefs === "object") {
       for (const [k, v] of Object.entries(prefs as Record<string, unknown>)) {
         if (!k.startsWith("slaprf.") && k !== "gate-timer.announcer") continue;
+        if (LEGACY_LOCALSTORAGE_KEYS.includes(k) || k === LAST_BACKUP_STORAGE_KEY) continue;
         try {
           if (typeof v === "string") {
             window.localStorage.setItem(k, v);
@@ -436,28 +385,26 @@ export class ApiClient {
     }
 
     if (bundle.sim && typeof bundle.sim === "object") {
-      await this.wasmTransport.importSimStateJson(JSON.stringify(bundle.sim));
+      await this.transport.importSimStateJson(JSON.stringify(bundle.sim));
     }
 
     if (bundle.real && typeof bundle.real === "object") {
-      try {
-        window.localStorage.setItem("slaprf.real_state_backup.v1", JSON.stringify(bundle.real));
-      } catch {
-        // ignore
-      }
-      await this.wasmTransport.request("POST", "/api/storage/import", bundle.real).catch(() => undefined);
-      await this.httpTransport.request("POST", "/api/storage/import", bundle.real).catch(() => undefined);
+      await this.transport.request("POST", "/api/storage/import", bundle.real).catch(() => undefined);
     }
+
+    // Persist the imported engines to IndexedDB now (one transaction), not on the next debounce.
+    await enginePersistence.reconcileNow().catch((err) => {
+      console.error("[storage] saving imported state failed:", err);
+    });
 
     try {
       const savedMode = window.localStorage.getItem(SIM_MODE_STORAGE_KEY);
       const nextSimMode = savedMode !== "false";
-      this.realEngineMode = BrowserHubBridge.loadModePref();
       if (nextSimMode !== this.simMode) {
         this.transport.disconnectStream();
         this.simMode = nextSimMode;
       }
-      this.wasmTransport.setSimRunning(this.simMode);
+      this.transport.setSimRunning(this.simMode);
       this.hubBridge.setActive(this.usingBrowserRealEngine);
       this.connectStream();
     } catch {
@@ -472,7 +419,7 @@ export class ApiClient {
   public async updatePilotSlot(slot: PilotSlot): Promise<void> {
     this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/pilots/update", slot));
     if (this.usingBrowserRealEngine) {
-      this.wasmTransport.pushHubChannels();
+      this.transport.pushHubChannels();
     }
   }
 
@@ -531,8 +478,8 @@ export class ApiClient {
 
   /**
    * Builds or patches a pre-configured XIAO ESP32-C5 firmware binary stamped with role, name,
-   * firmware profile, board fingerprint & active channels. Works both against the Go backend and
-   * 100% client-side in the browser from static `.bin` assets with zero Go server needed.
+   * firmware profile, board fingerprint & active channels, 100% client-side in the browser from
+   * the static `./firmware/<profile>.bin` assets.
    */
   public async fetchFirmwareImage(
     role: "hub" | "spoke",
@@ -540,26 +487,28 @@ export class ApiClient {
     profile = DEFAULT_FIRMWARE_PROFILE,
     fingerprint = generateFingerprint()
   ): Promise<{ bytes: Uint8Array; sha256: string; filename: string }> {
-    try {
-      return await this.transport.fetchFirmwareImage(role, timerLabel, profile, fingerprint);
-    } catch {
-      const freqs = this.store.pilots.slice(0, 8).map((p) => p.frequencyMhz);
-      const built = await buildOrPatchFirmwareBin({
-        role,
-        timerLabel,
-        profile,
-        fingerprint,
-        frequenciesMHz: freqs,
-      });
-      return { bytes: built.bytes, sha256: "", filename: built.filename };
-    }
+    const freqs = this.store.pilots.slice(0, 8).map((p) => p.frequencyMhz);
+    const built = await buildOrPatchFirmwareBin({
+      role,
+      timerLabel,
+      profile,
+      fingerprint,
+      frequenciesMHz: freqs,
+    });
+    return { bytes: built.bytes, sha256: "", filename: built.filename };
   }
-  /** Forwards a live 16-byte binary telemetry frame received over WebSerial into the timing engine. */
-  public async ingestTelemetryFrame(frame: TimerTelemetryFrame): Promise<void> {
-    if (this.usingBrowserRealEngine) {
-      await this.wasmTransport.request("POST", "/api/ingest/frame", frame);
-    } else {
-      await this.httpTransport.request("POST", "/api/ingest/frame", frame);
+
+  /**
+   * Current state of the real-world (hardware) engine, or null while the simulator is active
+   * (the in-browser router only serves the active engine). Used by the Debug page.
+   */
+  public async getRealEngineState(): Promise<FullStateResponse | null> {
+    if (this.simMode) return null;
+    try {
+      const state = await this.transport.request<FullStateResponse>("GET", "/api/state");
+      return state.simulatorRunning ? null : state;
+    } catch {
+      return null;
     }
   }
 
@@ -578,7 +527,7 @@ export class ApiClient {
     this.store.applyRules(await this.transport.request<TimingRules>("POST", "/api/rules", rules));
   }
 
-  /** Retrieves backend version info (release tag, commit hash, branch name). */
+  /** Retrieves the WASM engine's build version info (release tag, commit hash, branch name). */
   public async getVersionInfo(): Promise<{ release_tag: string; commit_hash: string; branch_name: string }> {
     return await this.transport.request<{ release_tag: string; commit_hash: string; branch_name: string }>("GET", "/api/version");
   }

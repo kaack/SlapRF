@@ -163,9 +163,8 @@ export interface PilotTrackSummary {
   sectorStats: SectorBottleneckStat[];
 }
 
+/** LapRF emulator counters from the WASM engine (enabled/relay state lives in services/livetime_relay.ts). */
 export interface LiveTimeStatus {
-  enabled: boolean;
-  listenAddr: string;
   connectedClients: number;
   detectionsSent: number;
   statusFramesSent: number;

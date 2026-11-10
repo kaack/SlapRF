@@ -32,3 +32,7 @@ firmware/*/build-*/
 *.db
 *.db-wal
 *.db-shm
+
+# Leftovers from the removed desktop server (cmd/slaprf)
+slaprf.exe
+slaprf.db*

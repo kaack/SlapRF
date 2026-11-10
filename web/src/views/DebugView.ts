@@ -1,6 +1,7 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
+import { ApiClient } from "../services/api_client";
 import { FIRMWARE_PROFILES, TimerReadout } from "../services/esp_flasher";
 import {
   BootLog,
@@ -138,6 +139,7 @@ export class DebugView extends Component {
   }> = [];
   private serverSimActive = false;
   private hasServer = false;
+  private readonly api?: ApiClient;
   private selectedNetworkSpokeSlot: number | null = null;
   private spokeRateTracker = new Map<number, { frames: number; atMs: number; ratePktPerSec: number }>();
 
@@ -230,8 +232,9 @@ export class DebugView extends Component {
   private serialWrap = false;
   private logWrap = false;
 
-  constructor(el: HTMLElement) {
+  constructor(el: HTMLElement, api?: ApiClient) {
     super(el);
+    this.api = api;
     this.console = sharedTimerConsole;
     this.loadDebugPrefs();
     this.console.showAllPorts = this.showAllPorts;
@@ -377,7 +380,7 @@ export class DebugView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Self-test</h2>
-            <p>Checks the timer end to end in about 10 seconds: console, identity, 5.8 GHz receiver, sweep timing, memory, last restart, course link, and whether its data reaches this laptop. Copy the report when asking for help.</p>
+            <p>Checks the timer end to end in about 10 seconds: console, identity, 5.8 GHz receiver, sweep timing, memory, last restart, course link, and whether its data reaches the timing engine. Copy the report when asking for help.</p>
           </div>
           <div class="card card-flush" data-slot="selftest"></div>
         </section>
@@ -1718,25 +1721,39 @@ export class DebugView extends Component {
     }
   }
 
+  /**
+   * Real-world engine view of one timer (by board fingerprint) from the in-browser WASM engine,
+   * or null when it isn't available (simulator active, or no ApiClient).
+   */
+  private async engineTimerInfo(fp: string): Promise<DebugTimerInfo | null> {
+    const state = await this.api?.getRealEngineState();
+    if (!state) return null;
+    const want = fp.toUpperCase();
+    const dt = (state.timers ?? []).find((t) => (t.fingerprint || "").toUpperCase() === want);
+    if (!dt) return { found: false, online: false, framesRx: 0, simulatorActive: false };
+    const seenMs = Date.parse(dt.lastSeenAt);
+    const gate = state.gates.find((g) => g.assignedTimerId === dt.timerId);
+    return {
+      found: true,
+      timerId: dt.timerId,
+      label: dt.timerLabel,
+      online: dt.online,
+      msSinceSeen: Number.isFinite(seenMs) && seenMs > 0 ? Math.max(0, Date.now() - seenMs) : undefined,
+      framesRx: gate?.framesRxCount ?? 0,
+      simulatorActive: false,
+    };
+  }
+
   private async fetchPilotThresholds(): Promise<void> {
     try {
-      const res = await fetch("/api/state", { cache: "no-store" });
-      if (!res.ok || !(res.headers.get("content-type") ?? "").includes("json")) return;
-      const data = (await res.json()) as {
-        pilots?: PilotThresholdInfo[];
-        timers?: DetectedTimer[];
-        gates?: Array<{
-          gateId: number;
-          assignedTimerId: number;
-          timerLabel: string;
-          name: string;
-          role: string;
-          trackOrder: number;
-          online: boolean;
-          framesRxCount?: number;
-          lastRssi?: number[];
-        }>;
-        simulatorActive?: boolean;
+      // Real-world engine state from the in-browser WASM engine (null while the simulator runs).
+      const state = await this.api?.getRealEngineState();
+      if (!state) return;
+      const data = {
+        pilots: state.pilots as PilotThresholdInfo[],
+        timers: state.timers,
+        gates: state.gates.map((g) => ({ ...g, timerLabel: g.timerLabel ?? "", online: Boolean(g.online) })),
+        simulatorActive: state.simulatorRunning,
       };
       this.serverSimActive = Boolean(data.simulatorActive);
       if (Array.isArray(data.gates)) {
@@ -1771,21 +1788,16 @@ export class DebugView extends Component {
         this.dirtyHealth = true;
       }
     } catch {
-      // Static GitHub Pages or offline: skip silently (§5.1)
+      // Engine not ready yet: skip silently (§5.1)
     }
   }
 
   private async pollServerHealth(s: TimerStatus): Promise<void> {
     let framesRx: number | null = null;
-    try {
-      const res = await fetch(`/api/debug/timer?fp=${encodeURIComponent(s.fp)}`, { cache: "no-store" });
-      if (res.ok && (res.headers.get("content-type") ?? "").includes("json")) {
-        const info = (await res.json()) as DebugTimerInfo;
-        this.hasServer = true;
-        if (info.found) framesRx = info.framesRx;
-      }
-    } catch {
-      // No local server
+    const info = await this.engineTimerInfo(s.fp);
+    if (info) {
+      this.hasServer = true;
+      if (info.found) framesRx = info.framesRx;
     }
     void this.fetchPilotThresholds();
     this.healthHistory.record(s, this.liveCount, this.signalRing.droppedLines, framesRx);
@@ -2736,27 +2748,19 @@ export class DebugView extends Component {
       add("Course link", s.slot >= 2 ? "pass" : "warn", s.slot >= 2 ? `joined the Hub, slot ${s.slot}, channel ${s.channel}` : "not joined to a Hub yet (is the Hub on and in range?)");
     }
 
-    // 11. Data reaching this laptop
-    this.setProgress("Checking that its data reaches this laptop…");
+    // 11. Data reaching the in-browser timing engine
+    this.setProgress("Checking that its data reaches the timing engine…");
     add(...(await this.checkNetworkPath(s)));
   }
 
   private async checkNetworkPath(s: TimerStatus): Promise<[string, CheckResult, string]> {
-    const name = "Reaches this laptop";
-    const get = async (): Promise<DebugTimerInfo | null> => {
-      try {
-        const res = await fetch(`/api/debug/timer?fp=${encodeURIComponent(s.fp)}`, { cache: "no-store" });
-        if (!res.ok || !(res.headers.get("content-type") ?? "").includes("json")) return null;
-        return (await res.json()) as DebugTimerInfo;
-      } catch {
-        return null;
-      }
-    };
+    const name = "Reaches the timing engine";
+    const get = (): Promise<DebugTimerInfo | null> => this.engineTimerInfo(s.fp);
     const a = await get();
-    if (!a) return [name, "skip", "no SlapRF server here (open this page from slaprf on the race laptop to check)"];
+    if (!a) return [name, "skip", "the simulator is on (switch Simulation off in Setup to check real timers)"];
     if (!a.found) {
       const hint = s.role === 1 ? "Is the Hub plugged into this laptop over USB-C?" : "Is the Hub on and plugged into this laptop over USB-C?";
-      return [name, "fail", `the server hasn't heard from ${s.fp}. ${hint}`];
+      return [name, "fail", `the timing engine hasn't heard from ${s.fp}. ${hint}`];
     }
     const sim = a.simulatorActive ? " (the app is showing the simulator; switch to real timers to use it)" : "";
     if (!a.online || (a.msSinceSeen ?? 0) > 3000)
@@ -3247,7 +3251,7 @@ export class DebugView extends Component {
         }
       }
 
-      // 2. Real timers from local SlapRF server (/api/state)
+      // 2. Real timers from the in-browser real-world engine (/api/state via WASM)
       for (const dt of realServerTimers) {
         if (!dt.isHub && dt.timerId >= 2 && dt.timerId <= 7) {
           const fp = (dt.fingerprint || "").toUpperCase();

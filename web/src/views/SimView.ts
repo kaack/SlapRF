@@ -283,7 +283,7 @@ export class SimView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Simulated timers</h2>
-            <p>Virtual XIAO ESP32-C5 timers feeding the simulation engine. Power individual timers off to test offline gate behavior, delete timers, or provision new ones (up to 6).</p>
+            <p>Virtual XIAO ESP32-C5 timers feeding the simulation engine, matching real hardware: the Hub is a USB dongle with no gate (drag it onto a gate on the Track page to make it sweep too) and Spokes time the gates. Power individual timers off to test offline gate behavior, delete timers, or provision new ones (one Hub plus up to 6 Spokes).</p>
           </div>
           <div class="card card-flush">
             <div data-slot="timers-table"></div>
@@ -293,7 +293,7 @@ export class SimView extends Component {
                   <span>Role</span>
                   <select class="input" data-field="timer-role">
                     <option value="spoke" ${this.addRole === "spoke" ? "selected" : ""}>Spoke · Sector Timer</option>
-                    <option value="hub" ${this.addRole === "hub" ? "selected" : ""}>Hub · Start Bridge</option>
+                    <option value="hub" ${this.addRole === "hub" ? "selected" : ""}>Hub · USB dongle</option>
                   </select>
                 </label>
                 <label class="sim-inline-field">
@@ -616,7 +616,7 @@ export class SimView extends Component {
           const tiedTimer = timersById.get(assignedId);
           const powered = tiedTimer ? tiedTimer.poweredOn : false;
           const shortCode = hasTimer ? `T${assignedId}` : "—";
-          const roleSub = hasTimer ? (tiedTimer?.isHub || assignedId === 1 ? "HUB" : "SPK") : "EMPTY";
+          const roleSub = hasTimer ? (tiedTimer?.isHub ? "HUB" : "SPK") : "EMPTY";
           const color = hasTimer ? timerColor(this.store, assignedId) : "#64748b";
 
           const lastNode = nodes[(total - 1 + total) % total];
@@ -1025,7 +1025,7 @@ export class SimView extends Component {
 
   private renderTimers(simState: SimState | null): void {
     const timers = simState?.timers ?? [];
-    const canAdd = timers.length < 6;
+    const canAdd = timers.length < 7; // One Hub plus up to 6 Spokes
     const sig =
       timers
         .map(
@@ -1061,7 +1061,9 @@ export class SimView extends Component {
             </div>
 
             <div>
-              <span class="detected-role-pill ${t.isHub ? "is-hub" : ""}">${t.isHub ? "Hub" : "Spoke"}</span>
+              <span class="detected-role-pill ${t.isHub ? "is-hub" : ""}">${
+                t.isHub ? (t.assignedGateName ? "Hub · sweeping (USB)" : "Hub · dongle (USB)") : "Spoke"
+              }</span>
             </div>
 
             <div class="timer-fw-cell" title="${esc(`${firmwareProfile(t.firmwareProfile).name} · ${t.firmwareVersion}`)}">
@@ -1073,7 +1075,7 @@ export class SimView extends Component {
               ${
                 t.assignedGateName
                   ? `<span>${esc(t.assignedGateName)}</span>`
-                  : `<span class="muted">Unassigned</span>`
+                  : `<span class="muted">${t.isHub ? "No gate · collects Spokes" : "Unassigned"}</span>`
               }
             </div>
 

@@ -69,8 +69,6 @@ export class AppStore {
   private _simState: SimState | null = null;
   private _raceArmed = true;
   private _liveTime: LiveTimeStatus = {
-    enabled: false,
-    listenAddr: ":5403",
     connectedClients: 0,
     detectionsSent: 0,
     statusFramesSent: 0,

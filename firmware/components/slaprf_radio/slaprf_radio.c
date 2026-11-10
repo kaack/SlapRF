@@ -17,6 +17,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
+#include "nvs.h"
 #include "nvs_flash.h"
 #include "soc/soc_caps.h"
 
@@ -62,13 +63,151 @@ uint16_t xiao_c5_read_battery_mv(void) {
 
 /* ---- 2.4 GHz link --------------------------------------------------------------------------- */
 
+/* ---- Link diagnostics: what the last ESP-NOW frames looked like on air ---------------------- */
+static volatile int8_t s_rx_rssi;
+static volatile uint8_t s_rx_rate;    // rx_ctrl->rate (11b rate code, or L-SIG rate field otherwise)
+static volatile uint8_t s_rx_format;  // rx_ctrl->cur_bb_format (frame format: 11b / 11g / HT / HE / LR...)
+static volatile uint32_t s_rx_beacons;
+static volatile uint32_t s_rx_data;
+static const char *s_tx_mode = "default";
+static int8_t s_tx_power_qdbm;    // Active max TX power (quarter dBm)
+static bool s_link_saved;         // True if rate and/or power came from saved serial-console settings
+
+#define LINK_NVS_NAMESPACE "slaprf_link"
+static const char *s_default_rate = "6m";   // Firmware defaults (from the profile), used by LINKRESET
+static int8_t s_default_qdbm = 80;
+void slaprf_link_settings(int8_t *tx_power_qdbm, bool *saved) {
+    if (tx_power_qdbm) *tx_power_qdbm = s_tx_power_qdbm;
+    if (saved) *saved = s_link_saved;
+}
+
+void slaprf_link_stats(int8_t *rssi, uint8_t *rate, uint8_t *format, uint32_t *beacons, uint32_t *data,
+                       const char **tx_mode) {
+    if (rssi) *rssi = s_rx_rssi;
+    if (rate) *rate = s_rx_rate;
+    if (format) *format = s_rx_format;
+    if (beacons) *beacons = s_rx_beacons;
+    if (data) *data = s_rx_data;
+    if (tx_mode) *tx_mode = s_tx_mode;
+}
+
+/** Set the PHY mode/rate used for every ESP-NOW frame this board transmits (broadcast peer). */
+static bool apply_link_rate(const char *mode) {
+    esp_now_rate_config_t cfg = {0};
+    if (strcmp(mode, "lr250") == 0) {
+        cfg.phymode = WIFI_PHY_MODE_LR; cfg.rate = WIFI_PHY_RATE_LORA_250K;
+    } else if (strcmp(mode, "lr500") == 0) {
+        cfg.phymode = WIFI_PHY_MODE_LR; cfg.rate = WIFI_PHY_RATE_LORA_500K;
+    } else if (strcmp(mode, "1m") == 0) {
+        cfg.phymode = WIFI_PHY_MODE_11B; cfg.rate = WIFI_PHY_RATE_1M_L;
+    } else if (strcmp(mode, "6m") == 0) {
+        cfg.phymode = WIFI_PHY_MODE_11G; cfg.rate = WIFI_PHY_RATE_6M;
+    } else if (strcmp(mode, "mcs0") == 0) {
+        cfg.phymode = WIFI_PHY_MODE_HT20; cfg.rate = WIFI_PHY_RATE_MCS0_LGI;
+    } else {
+        return false;
+    }
+    if (esp_now_set_peer_rate_config(BROADCAST_MAC, &cfg) != ESP_OK) {
+        return false;
+    }
+    static const char *const names[] = {"lr250", "lr500", "1m", "6m", "mcs0"};
+    for (size_t i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+        if (strcmp(mode, names[i]) == 0) s_tx_mode = names[i];
+    }
+    return true;
+}
+
+static void nvs_save_str(const char *key, const char *value) {
+    nvs_handle_t h;
+    if (nvs_open(LINK_NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, key, value);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static void nvs_save_i8(const char *key, int8_t value) {
+    nvs_handle_t h;
+    if (nvs_open(LINK_NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_i8(h, key, value);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+bool slaprf_set_link_rate(const char *mode, bool persist) {
+    if (!apply_link_rate(mode)) {
+        return false;
+    }
+    if (persist) {
+        nvs_save_str("rate", mode);
+        s_link_saved = true;
+    }
+    return true;
+}
+
+bool slaprf_set_tx_power_dbm(int dbm, bool persist) {
+    if (dbm < 2 || dbm > 20) {
+        return false;
+    }
+    const int8_t qdbm = (int8_t)(dbm * 4);
+    if (esp_wifi_set_max_tx_power(qdbm) != ESP_OK) {
+        return false;
+    }
+    s_tx_power_qdbm = qdbm;
+    if (persist) {
+        nvs_save_i8("txpwr", qdbm);
+        s_link_saved = true;
+    }
+    return true;
+}
+
+void slaprf_apply_link_settings(const char *default_rate, int8_t default_tx_power_qdbm) {
+    s_default_rate = default_rate;
+    s_default_qdbm = default_tx_power_qdbm;
+    char rate[8] = {0};
+    int8_t qdbm = default_tx_power_qdbm;
+    bool saved = false;
+    nvs_handle_t h;
+    if (nvs_open(LINK_NVS_NAMESPACE, NVS_READONLY, &h) == ESP_OK) {
+        size_t len = sizeof(rate);
+        if (nvs_get_str(h, "rate", rate, &len) == ESP_OK) saved = true; else rate[0] = 0;
+        if (nvs_get_i8(h, "txpwr", &qdbm) == ESP_OK) saved = true; else qdbm = default_tx_power_qdbm;
+        nvs_close(h);
+    }
+    if (rate[0] == 0 || !apply_link_rate(rate)) {
+        apply_link_rate(default_rate);
+    }
+    if (esp_wifi_set_max_tx_power(qdbm) == ESP_OK) {
+        s_tx_power_qdbm = qdbm;
+    }
+    s_link_saved = saved;
+    ESP_LOGI(TAG, "link: tx %s, %d qdBm (%s)", s_tx_mode, s_tx_power_qdbm, saved ? "saved settings" : "defaults");
+}
+
+void slaprf_reset_link_settings(void) {
+    nvs_handle_t h;
+    if (nvs_open(LINK_NVS_NAMESPACE, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_all(h);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+    slaprf_apply_link_settings(s_default_rate, s_default_qdbm);
+}
+
 static void espnow_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data, int len) {
     if (len <= 0 || len > ESPNOW_MAX_FRAME) {
         return;
     }
+    if (info && info->rx_ctrl) {
+        s_rx_rssi = (int8_t)info->rx_ctrl->rssi;
+        s_rx_rate = (uint8_t)info->rx_ctrl->rate;
+        s_rx_format = (uint8_t)info->rx_ctrl->cur_bb_format;
+    }
     if ((len == 4 || len == 20) && data[0] == BEACON_MAGIC_0 && data[1] == BEACON_MAGIC_1 &&
         xor8(data, (uint32_t)len - 1) == data[len - 1]) {
         s_last_beacon_us = esp_timer_get_time();
+        s_rx_beacons++;
         if (info && info->src_addr) {
             memcpy(s_hub_beacon_mac, info->src_addr, 6);
             s_has_hub_beacon_mac = true;
@@ -82,6 +221,7 @@ static void espnow_recv_cb(const esp_now_recv_info_t *info, const uint8_t *data,
         }
         return;
     }
+    s_rx_data++;
     rx_item_t item;
     item.len = (uint8_t)len;
     memcpy(item.data, data, (size_t)len);
@@ -198,6 +338,16 @@ bool slaprf_hub_beacon_mac(uint8_t out_mac[6]) {
 
 void espnow_send(const void *frame, uint32_t len) {
     esp_now_send(BROADCAST_MAC, (const uint8_t *)frame, len);
+}
+
+int espnow_wait(void *buf, uint32_t cap, uint32_t timeout_ms) {
+    rx_item_t item;
+    if (s_rx_queue == NULL || xQueueReceive(s_rx_queue, &item, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
+        return 0;
+    }
+    uint32_t n = item.len < cap ? item.len : cap;
+    memcpy(buf, item.data, n);
+    return (int)n;
 }
 
 int espnow_poll(void *buf, uint32_t cap) {

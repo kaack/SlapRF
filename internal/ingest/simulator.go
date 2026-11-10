@@ -513,7 +513,8 @@ func (s *TrackSimulator) DeleteTimer(timerID uint8) error {
 	return s.engine.DeleteDetectedTimer(timerID)
 }
 
-// AddTimer creates a new simulated XIAO timer (up to 6 total) running the given firmware profile.
+// AddTimer creates a new simulated XIAO timer (one Hub plus up to 6 Spokes) running the given
+// firmware profile. A new Hub joins without a gate; a new Spoke takes a free gate.
 func (s *TrackSimulator) AddTimer(role string, label string, profile string) (uint8, error) {
 	id, err := s.engine.AddSimulatedTimer(role, label, profile)
 	if err != nil {
@@ -721,27 +722,17 @@ func (s *TrackSimulator) step(dtSec float64) {
 	}
 
 	if numGates == 0 {
-		frames := make([]domain.TimerTelemetryFrame, 0, len(detected))
+		// No course: nothing to sweep. Timers not tied to a gate send no telemetry (just like a
+		// collector Hub or an idle Spoke); keep their powered-on boards online.
+		var seen []uint8
 		for _, d := range detected {
-			if s.poweredOffTimers[d.TimerID] {
-				continue
+			if !s.poweredOffTimers[d.TimerID] {
+				seen = append(seen, d.TimerID)
 			}
-			var rssi [domain.MaxPilotPoolSize]float32
-			for slotIdx := 0; slotIdx < len(pilots) && slotIdx < domain.MaxPilotPoolSize; slotIdx++ {
-				rssi[slotIdx] = d.NoiseFloorDbm + float32((s.rng.Float64()-0.5)*2.0)
-			}
-			frames = append(frames, domain.TimerTelemetryFrame{
-				TimerID:       d.TimerID,
-				SeqNum:        s.seqCounter,
-				TimestampUs:   nowUs,
-				RSSI:          rssi,
-				BatteryMv:     d.BatteryMv,
-				NoiseFloorDbm: d.NoiseFloorDbm,
-			})
 		}
 		s.mu.Unlock()
-		for _, f := range frames {
-			s.engine.IngestTelemetryFrame(f)
+		for _, id := range seen {
+			s.engine.MarkTimerSeen(id)
 		}
 		return
 	}
@@ -1074,8 +1065,10 @@ func (s *TrackSimulator) step(dtSec float64) {
 		}
 	}
 
-	// 2. Compute 8-channel 5.8 GHz RSSI at each powered-on Gate Timer and emit frame
-	frames := make([]domain.TimerTelemetryFrame, 0, numGates+len(detected))
+	// 2. Compute 8-channel 5.8 GHz RSSI at each powered-on timer that is tied to a gate and emit a
+	// frame. Only gate timers sweep: the simulated Hub sweeps (and produces crossings) only while
+	// the user has dragged it onto a gate, exactly like a Spoke on that gate.
+	frames := make([]domain.TimerTelemetryFrame, 0, numGates)
 	assignedSet := make(map[uint8]bool, numGates)
 	for gIdx, gate := range gates {
 		if gate.AssignedTimerID == 0 {
@@ -1138,27 +1131,22 @@ func (s *TrackSimulator) step(dtSec float64) {
 			NoiseFloorDbm: gate.NoiseFloorDbm,
 		})
 	}
+	// Gate-less timers (the collector Hub by default, or a Spoke removed from its gate) send no
+	// RSSI telemetry; like the real Hub's HELLO beacons, they just stay online.
+	var idle []uint8
 	for _, d := range detected {
 		if assignedSet[d.TimerID] || s.poweredOffTimers[d.TimerID] {
 			continue
 		}
-		var rssi [domain.MaxPilotPoolSize]float32
-		for slotIdx := 0; slotIdx < len(pilots) && slotIdx < domain.MaxPilotPoolSize; slotIdx++ {
-			rssi[slotIdx] = d.NoiseFloorDbm + float32((s.rng.Float64()-0.5)*2.0)
-		}
-		frames = append(frames, domain.TimerTelemetryFrame{
-			TimerID:       d.TimerID,
-			SeqNum:        s.seqCounter,
-			TimestampUs:   nowUs,
-			RSSI:          rssi,
-			BatteryMv:     d.BatteryMv,
-			NoiseFloorDbm: d.NoiseFloorDbm,
-		})
+		idle = append(idle, d.TimerID)
 	}
 	s.mu.Unlock()
 
 	for _, slot := range clearSlots {
 		s.engine.ClearPilotProgress(slot)
+	}
+	for _, id := range idle {
+		s.engine.MarkTimerSeen(id)
 	}
 	for _, f := range frames {
 		s.engine.IngestTelemetryFrame(f)

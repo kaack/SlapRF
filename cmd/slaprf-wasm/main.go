@@ -76,26 +76,28 @@ func (w *wasmStreamSubscriber) OnConfigUpdated(pilots []domain.PilotSlot, gates 
 	})
 }
 
-const (
-	simStorageKey  = "slaprf.sim_state.v1"
-	realStorageKey = "slaprf.real_state.v1"
-)
-
 type persistedSimBundle struct {
 	Engine  tracker.PersistedEngineState `json:"engine"`
 	Options ingest.SimPersistedOptions   `json:"options"`
 }
 
-func loadSimFromLocalStorage(simEngine *tracker.Engine, sim *ingest.TrackSimulator) bool {
-	ls := js.Global().Get("localStorage")
-	if ls.IsUndefined() || ls.IsNull() {
-		return false
+// bootStateString returns `globalThis.__slaprfBootState[field]` — the persisted engine state the
+// TypeScript app loads from IndexedDB (web/src/services/engine_persistence.ts) and hands over
+// before starting this runtime — or "" when absent. Persistence itself lives entirely in TS.
+func bootStateString(field string) string {
+	bs := js.Global().Get("__slaprfBootState")
+	if bs.Type() != js.TypeObject {
+		return ""
 	}
-	val := ls.Call("getItem", simStorageKey)
-	if val.IsUndefined() || val.IsNull() {
-		return false
+	v := bs.Get(field)
+	if v.Type() != js.TypeString {
+		return ""
 	}
-	raw := val.String()
+	return v.String()
+}
+
+func loadSimFromBootState(simEngine *tracker.Engine, sim *ingest.TrackSimulator) bool {
+	raw := bootStateString("sim")
 	if raw == "" {
 		return false
 	}
@@ -103,21 +105,16 @@ func loadSimFromLocalStorage(simEngine *tracker.Engine, sim *ingest.TrackSimulat
 	if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 		return false
 	}
+	if !ingest.SimStateCompatible(payload.Options) {
+		return false // Saved by an older sim model: start from the default course instead
+	}
 	simEngine.RestoreState(payload.Engine, true)
 	sim.RestoreOptions(payload.Options)
 	return true
 }
 
-func loadRealFromLocalStorage(realEngine *tracker.Engine) bool {
-	ls := js.Global().Get("localStorage")
-	if ls.IsUndefined() || ls.IsNull() {
-		return false
-	}
-	val := ls.Call("getItem", realStorageKey)
-	if val.IsUndefined() || val.IsNull() {
-		return false
-	}
-	raw := val.String()
+func loadRealFromBootState(realEngine *tracker.Engine) bool {
+	raw := bootStateString("real")
 	if raw == "" {
 		return false
 	}
@@ -133,10 +130,10 @@ func main() {
 	simEngine := tracker.NewEngine()
 	realEngine := tracker.NewRealEngine()
 	sim := ingest.NewTrackSimulator(simEngine)
-	if !loadSimFromLocalStorage(simEngine, sim) {
+	if !loadSimFromBootState(simEngine, sim) {
 		sim.Prewarm(45 * time.Second)
 	}
-	_ = loadRealFromLocalStorage(realEngine)
+	_ = loadRealFromBootState(realEngine)
 	sim.Start()
 
 	hubRx := ingest.NewHubFrameDecoder(realEngine)
@@ -154,8 +151,8 @@ func main() {
 		cb.Invoke(u8)
 	})
 
-	laprfSrv := laprf.NewServer(":5403", simEngine)
-	srv := api.NewServer(simEngine, sim, laprfSrv, "", realEngine)
+	laprfSrv := laprf.NewServer(simEngine) // api.NewServer re-points it at the active engine
+	srv := api.NewServer(simEngine, sim, laprfSrv, realEngine)
 	handler := srv.Handler()
 
 	simStreamSub := &wasmStreamSubscriber{allow: func() bool { return sim.IsRunning() }}
@@ -192,27 +189,6 @@ func main() {
 		res := js.Global().Get("Object").New()
 		res.Set("status", rec.Code)
 		res.Set("body", rec.Body.String())
-		return res
-	}))
-
-	// fetchBytes(url: string) => { status: number, bytes: Uint8Array, sha256: string }
-	apiObj.Set("fetchBytes", js.FuncOf(func(_ js.Value, args []js.Value) any {
-		url := ""
-		if len(args) > 0 {
-			url = args[0].String()
-		}
-		req := httptest.NewRequest(http.MethodGet, url, nil)
-		rec := httptest.NewRecorder()
-		handler.ServeHTTP(rec, req)
-
-		raw := rec.Body.Bytes()
-		u8 := js.Global().Get("Uint8Array").New(len(raw))
-		js.CopyBytesToJS(u8, raw)
-
-		res := js.Global().Get("Object").New()
-		res.Set("status", rec.Code)
-		res.Set("bytes", u8)
-		res.Set("sha256", rec.Header().Get("X-SlapRF-SHA256"))
 		return res
 	}))
 
@@ -326,10 +302,15 @@ func main() {
 		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 			return false
 		}
+		if !ingest.SimStateCompatible(payload.Options) {
+			return false
+		}
 		simEngine.RestoreState(payload.Engine, true)
 		sim.RestoreOptions(payload.Options)
 		return true
 	}))
+
+	registerLiveTimeAPI(apiObj, laprfSrv)
 
 	js.Global().Set("slaprfWasm", apiObj)
 	if cb := js.Global().Get("__slaprfWasmOnReady"); cb.Type() == js.TypeFunction {

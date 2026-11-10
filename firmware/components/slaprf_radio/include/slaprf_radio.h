@@ -32,6 +32,25 @@ void slaprf_lock_wifi_band_2g4_only(void);
 /** Bring up Wi-Fi + ESP-NOW on `channel` (1..13). `long_range` enables Espressif LR 500 kbps. */
 void slaprf_init_2g4_radio(uint8_t channel, uint8_t long_range, uint8_t tx_power_qdbm);
 
+/** Set the ESP-NOW transmit PHY: "lr250", "lr500", "1m", "6m" or "mcs0" (persist: save to flash). */
+bool slaprf_set_link_rate(const char *mode, bool persist);
+
+/** Set max TX power in dBm (2..20) (persist: save to flash). */
+bool slaprf_set_tx_power_dbm(int dbm, bool persist);
+
+/** Boot: apply saved serial-console link settings, falling back to the firmware defaults. */
+void slaprf_apply_link_settings(const char *default_rate, int8_t default_tx_power_qdbm);
+
+/** Erase saved link settings and re-apply the firmware defaults. */
+void slaprf_reset_link_settings(void);
+
+/** Active TX power (quarter dBm) and whether rate/power come from saved settings. */
+void slaprf_link_settings(int8_t *tx_power_qdbm, bool *saved);
+
+/** Last received ESP-NOW frame's RSSI / rate / format, beacon and data frame counters, TX mode. */
+void slaprf_link_stats(int8_t *rssi, uint8_t *rate, uint8_t *format, uint32_t *beacons, uint32_t *data,
+                       const char **tx_mode);
+
 /** Hub only: relay a frame (Spoke window, HELLO) to the laptop over USB. */
 void slaprf_forward_to_laptop(const void *frame, uint32_t len);
 
@@ -49,6 +68,9 @@ bool slaprf_hub_beacon_mac(uint8_t out_mac[6]);
 
 /** Broadcast an ESP-NOW frame. */
 void espnow_send(const void *frame, uint32_t len);
+
+/** Wait up to `timeout_ms` for a received ESP-NOW frame; returns as soon as one arrives (0 on timeout). */
+int espnow_wait(void *buf, uint32_t cap, uint32_t timeout_ms);
 
 /** Pop one received ESP-NOW frame into `buf` (non-blocking). Returns its length, or 0. */
 int espnow_poll(void *buf, uint32_t cap);
@@ -142,6 +164,9 @@ bool slaprf_diag_rf_enabled(void);
 
 /** True while the Debug page has LIVE sweeps enabled (the collector Hub only sweeps on demand). */
 bool slaprf_diag_wants_sweeps(void);
+
+/** Hub: true while the app has placed the Hub on a gate (HUBGATE 1); it then sweeps and reports. */
+bool slaprf_diag_hub_is_gate(void);
 
 /**
  * Debug page continuous scan ("SCAN LIVE"): when active, measures the next chunk of the band

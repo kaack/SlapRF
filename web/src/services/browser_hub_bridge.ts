@@ -1,7 +1,6 @@
 import { sharedTimerConsole } from "./timer_console";
 import { WasmSimTransport } from "./wasm_transport";
 
-export type RealEngineMode = "auto" | "browser" | "desktop";
 export type ConnectionLedColor = "neon" | "blue" | "yellow" | "red" | "gray";
 
 export interface ConnectionLedSummary {
@@ -9,8 +8,6 @@ export interface ConnectionLedSummary {
   shortLabel: string;
   detail: string;
 }
-
-const REAL_ENGINE_MODE_STORAGE_KEY = "slaprf.ui.real_engine_mode.v1";
 
 /**
  * Connects the in-browser WebAssembly timing engine (`slaprf.wasm`) to the physical Hub — a
@@ -139,33 +136,8 @@ export class BrowserHubBridge {
     });
   }
 
-  public static loadModePref(): RealEngineMode {
-    try {
-      const v = window.localStorage.getItem(REAL_ENGINE_MODE_STORAGE_KEY);
-      if (v === "browser" || v === "desktop" || v === "auto") {
-        return v;
-      }
-    } catch {
-      // ignore
-    }
-    return "auto";
-  }
-
-  public static saveModePref(mode: RealEngineMode): void {
-    try {
-      window.localStorage.setItem(REAL_ENGINE_MODE_STORAGE_KEY, mode);
-    } catch {
-      // ignore
-    }
-  }
-
   public setActive(active: boolean): void {
     this.active = active;
-    this.notify();
-  }
-
-  public resetDefaults(): void {
-    BrowserHubBridge.saveModePref("auto");
     this.notify();
   }
 }
