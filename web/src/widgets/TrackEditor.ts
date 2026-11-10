@@ -470,7 +470,7 @@ export class TrackEditor extends Component {
             data-delete-label="${esc(timerName)}"
             title="Delete ${esc(timerName)}"
             aria-label="Delete ${esc(timerName)}"
-          >${icons.trash(13)}</button>`
+          >${icons.trash(16)}</button>`
             : ""
         }
       </div>`;
@@ -510,7 +510,7 @@ export class TrackEditor extends Component {
               data-delete-label="${esc(timerName)}"
               title="Delete ${esc(timerName)}"
               aria-label="Delete ${esc(timerName)}"
-            >${icons.trash(13)}</button>`
+            >${icons.trash(16)}</button>`
               : ""
           }
         </div>`
