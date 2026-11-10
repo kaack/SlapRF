@@ -281,7 +281,7 @@ export class NetworkView extends Component {
         ? `Strobe ${label}'s LED (3 quick flashes, pause) until you switch it off, to find which board it is`
         : `${label} isn't linked right now`;
     return `
-      <button type="button" class="btn btn-sm ${on ? "btn-armed" : "btn-unarmed"}" data-action="toggle-identify" data-fp="${FP}" data-on="${on ? 1 : 0}" aria-pressed="${on}" ${enabled ? "" : "disabled"} title="${esc(title)}">
+      <button type="button" class="btn btn-sm ${on ? "btn-armed" : "btn-unarmed"}" style="min-width:106px;justify-content:center" data-action="toggle-identify" data-fp="${FP}" data-on="${on ? 1 : 0}" aria-pressed="${on}" ${enabled ? "" : "disabled"} title="${esc(title)}">
         ${icons.target(14)}<span>${on ? "Identifying" : "Identify"}</span>
       </button>`;
   }
@@ -961,10 +961,10 @@ export class NetworkView extends Component {
             <span class="debug-head-note"><strong>${esc(hub.label)}</strong> · Parent Hub (TDMA Slot 1) · ${esc(hub.statusNote)}</span>
           </span>
           <div class="debug-connect-actions">
-            ${this.renderIdentifyButton(hub.fp, hub.online, hub.label)}
             <span class="badge ${hub.online ? "badge-good" : "badge-warn"} mono">${totalRate.toFixed(1)} pkt/s</span>
             <span class="badge mono">${totalFrames} frames rx</span>
             ${hub.fp && hub.fp !== "—" ? `<span class="badge mono">${esc(hub.fp)}</span>` : ""}
+            ${this.renderIdentifyButton(hub.fp, hub.online, hub.label)}
           </div>
         </div>
 
@@ -1084,10 +1084,10 @@ export class NetworkView extends Component {
           <span class="debug-head-note"><strong>${esc(sp.label)}</strong> · Child Spoke (TDMA Slot ${sp.slot}) · ${sp.espNowActive ? `ESP-NOW active with ${esc(hub.label)}` : "ESP-NOW inactive"}</span>
         </span>
         <div class="debug-connect-actions">
-          ${this.renderIdentifyButton(sp.fp, sp.espNowActive, sp.label)}
           <span class="badge ${sp.espNowActive ? "badge-good" : "badge-warn"} mono">${rate.toFixed(1)} pkt/s</span>
           <span class="badge mono">${frames} frames rx</span>
           <span class="badge mono">${esc(sp.fp)}</span>
+          ${this.renderIdentifyButton(sp.fp, sp.espNowActive, sp.label)}
         </div>
       </div>
 
