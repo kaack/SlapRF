@@ -2596,6 +2596,20 @@ body.is-gate-dragging * {
 .flasher-erase-toggle-row:hover {
   border-color: var(--border-strong);
 }
+.flasher-erase-toggle-row .switch input:focus,
+.flasher-erase-toggle-row .switch input:focus-visible {
+  outline: none;
+}
+.flasher-erase-toggle-row .switch span::after {
+  background: var(--text-3);
+}
+.flasher-erase-toggle-row .switch input:checked + span {
+  background: #3f4654;
+  border-color: #6b7280;
+}
+.flasher-erase-toggle-row .switch input:checked + span::after {
+  background: var(--text);
+}
 .flasher-erase-toggle-text {
   display: flex;
   flex-direction: column;
