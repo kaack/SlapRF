@@ -2293,6 +2293,7 @@ body.is-gate-dragging * {
   display: flex;
   flex-direction: column;
   gap: 18px;
+  min-width: 0;
 }
 .flasher-steps {
   display: grid;
@@ -2428,6 +2429,12 @@ body.is-gate-dragging * {
   gap: 10px;
   font-size: 12.5px;
   color: var(--text-2);
+  min-width: 0;
+}
+.flasher-progress-status {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .flasher-progress.is-flashing .flasher-progress-status {
   color: var(--text);
@@ -2975,9 +2982,11 @@ body.is-gate-dragging * {
   border-radius: var(--radius);
   border: 1px solid var(--border);
   background: var(--surface-2);
+  min-width: 0;
 }
 .flasher-wizard-stage {
   padding: 18px 20px;
+  min-width: 0;
 }
 .flasher-wizard-stage.is-slide-next {
   animation: flasherSlideNext 0.22s cubic-bezier(0.22, 1, 0.36, 1);
