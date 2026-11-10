@@ -22,7 +22,7 @@ import {
   generateFingerprint,
   LATEST_FIRMWARE_VERSION,
 } from "./esp_flasher";
-import { sharedTimerConsole, TimerStatus } from "./timer_console";
+import { TimerConsole, TimerStatus, usbPool } from "./timer_console";
 import { WasmSimTransport } from "./wasm_transport";
 
 interface LapPayload {
@@ -109,31 +109,37 @@ export class ApiClient {
   }
 
   private bindUsbTimerSync(): void {
-    const syncFromConsole = (s: TimerStatus | null) => {
-      if (!sharedTimerConsole.connected || !s) {
+    const syncConsole = (c: TimerConsole, s: TimerStatus | null) => {
+      const primary = usbPool.primaryConsole();
+      if (!primary.connected || !primary.lastStatus) {
         this.store.setUsbDetectedTimer(null);
-        return;
+      } else {
+        const ps = primary.lastStatus;
+        const pcfg = primary.lastConfig;
+        const pIsHub = ps.role === 1 || pcfg?.role === "hub";
+        const pLabel = (ps.label || pcfg?.timerLabel || (pIsHub ? "H1" : `S${Math.max(1, (ps.slot || 2) - 1)}`)).trim();
+        const pFp = (ps.fp || pcfg?.fingerprint || "").trim().toUpperCase();
+        const pTimerId = pIsHub ? 1 : Math.max(2, ps.slot || 2);
+        this.store.setUsbDetectedTimer({
+          timerId: pTimerId,
+          timerLabel: pLabel,
+          color: "#d4ff3a",
+          isHub: pIsHub,
+          firmwareVersion: ps.fw || pcfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
+          fingerprint: pFp,
+          batteryMv: 3950,
+          batteryPct: 82,
+          noiseFloorDbm: Math.round(ps.rf?.floorDb ?? -92),
+          online: false,
+          lastSeenAt: "",
+        });
       }
-      const cfg = sharedTimerConsole.lastConfig;
+
+      if (!c.connected || !s) return;
+      const cfg = c.lastConfig;
       const isHub = s.role === 1 || cfg?.role === "hub";
       const label = (s.label || cfg?.timerLabel || (isHub ? "H1" : `S${Math.max(1, (s.slot || 2) - 1)}`)).trim();
       const fp = (s.fp || cfg?.fingerprint || "").trim().toUpperCase();
-      const timerId = isHub ? 1 : Math.max(2, s.slot || 2);
-
-      this.store.setUsbDetectedTimer({
-        timerId,
-        timerLabel: label,
-        color: "#d4ff3a",
-        isHub,
-        firmwareVersion: s.fw || cfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
-        fingerprint: fp,
-        batteryMv: 3950,
-        batteryPct: 82,
-        noiseFloorDbm: Math.round(s.rf?.floorDb ?? -92),
-        online: false,
-        lastSeenAt: "",
-      });
-
       const provKey = `${this.simMode ? "sim" : "real"}:${isHub ? "hub" : "spoke"}:${label}:${fp}`;
       if (!this.provisionedUsbKeys.has(provKey)) {
         this.provisionedUsbKeys.add(provKey);
@@ -141,11 +147,13 @@ export class ApiClient {
       }
     };
 
-    sharedTimerConsole.subscribe({
-      onStatus: (s) => syncFromConsole(s),
-      onConfig: () => syncFromConsole(sharedTimerConsole.lastStatus),
-      onDisconnect: () => this.store.setUsbDetectedTimer(null),
-    });
+    for (const c of usbPool.slots) {
+      c.subscribe({
+        onStatus: (s) => syncConsole(c, s),
+        onConfig: () => syncConsole(c, c.lastStatus),
+        onDisconnect: () => syncConsole(c, null),
+      });
+    }
   }
 
   public async refresh(): Promise<void> {
@@ -164,13 +172,16 @@ export class ApiClient {
     this.hubBridge.setActive(this.usingBrowserRealEngine);
     this.connectStream();
     await this.refresh();
-    if (!this.simMode && sharedTimerConsole.connected && sharedTimerConsole.lastStatus) {
-      const s = sharedTimerConsole.lastStatus;
-      const cfg = sharedTimerConsole.lastConfig;
-      const isHub = s.role === 1 || cfg?.role === "hub";
-      const label = (s.label || cfg?.timerLabel || (isHub ? "H1" : `S${Math.max(1, (s.slot || 2) - 1)}`)).trim();
-      const fp = (s.fp || cfg?.fingerprint || "").trim().toUpperCase();
-      await this.provisionTimer(isHub ? "hub" : "spoke", label, fp).catch(() => undefined);
+    if (!this.simMode) {
+      for (const c of usbPool.connectedConsoles()) {
+        const s = c.lastStatus;
+        if (!s) continue;
+        const cfg = c.lastConfig;
+        const isHub = s.role === 1 || cfg?.role === "hub";
+        const label = (s.label || cfg?.timerLabel || (isHub ? "H1" : `S${Math.max(1, (s.slot || 2) - 1)}`)).trim();
+        const fp = (s.fp || cfg?.fingerprint || "").trim().toUpperCase();
+        await this.provisionTimer(isHub ? "hub" : "spoke", label, fp).catch(() => undefined);
+      }
     }
   }
 

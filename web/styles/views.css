@@ -3760,6 +3760,67 @@ body.is-gate-dragging * {
 .debug-page {
   font-variant-numeric: tabular-nums;
 }
+.debug-usb-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border);
+}
+.debug-usb-picker {
+  align-items: center;
+}
+.debug-usb-bar-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-3);
+  margin-right: 4px;
+}
+.debug-usb-chip {
+  padding: 0 6px 0 0;
+  gap: 2px;
+}
+.debug-usb-chip-select {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 8px 0 12px;
+  background: none;
+  border: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.debug-usb-chip-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  border: 0;
+  background: transparent;
+  color: var(--text-3);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+}
+.debug-usb-chip-close:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.debug-usb-add-chip {
+  border-style: dashed;
+  color: var(--text-2);
+}
+.debug-usb-add-chip:hover:not(:disabled) {
+  border-style: solid;
+  color: var(--text);
+}
+.debug-usb-add-chip:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
 .debug-page .check input {
   accent-color: var(--text-2);
 }

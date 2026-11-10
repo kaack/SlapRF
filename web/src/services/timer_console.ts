@@ -379,6 +379,7 @@ export class TimerConsole {
   private expectingRestart = false;
   private userDisconnecting = false;
 
+  public readonly slotIndex: number;
   public lastStatus: TimerStatus | null = null;
   public lastConfig: TimerReadout | null = null;
   public hubOwnFrames = 0;
@@ -393,7 +394,8 @@ export class TimerConsole {
   public reconnectFailed = false;
   public lastError: string | null = null;
 
-  constructor(handlers?: ConsoleHandlers) {
+  constructor(handlers?: ConsoleHandlers, slotIndex = 0) {
+    this.slotIndex = slotIndex;
     if (handlers) {
       this.subscribers.add(handlers);
     }
@@ -476,6 +478,29 @@ export class TimerConsole {
     this.startStatusPolling();
     this.subscribers.forEach((h) => h.onConnect?.());
     this.notifyStateChange();
+  }
+
+  /**
+   * Opens an already-picked WebSerial port, probes `STATUS?` and `SLAPRF?`, and starts the status
+   * heartbeat. Used by `usbPool.connectNew()` after checking for duplicate port selection.
+   */
+  public async connectWithPort(port: SerialPortLike, showAllPorts = this.showAllPorts): Promise<TimerStatus | null> {
+    this.showAllPorts = showAllPorts;
+    this.userDisconnecting = false;
+    this.reconnecting = false;
+    this.reconnectAttempt = 0;
+    this.reconnectFailed = false;
+    this.lastError = null;
+    this.notifyStateChange();
+    await this.openPort(port);
+    this.startStatusPolling();
+    this.subscribers.forEach((h) => h.onConnect?.());
+    this.notifyStateChange();
+    const s = await this.ensureRunningApp();
+    if (this.connected) {
+      void this.send("SLAPRF?").catch(() => undefined);
+    }
+    return s;
   }
 
   /**
@@ -1152,30 +1177,205 @@ export class TimerConsole {
   }
 }
 
-const timerWin = (typeof window !== "undefined" ? window : undefined) as
-  | (Window & { __slaprfTimerConsole?: TimerConsole; __slaprfTimerUnloadBound?: boolean })
-  | undefined;
+export const MAX_USB_CONNECTIONS = 3;
 
 /**
- * Shared app-wide USB timer connection that persists across SPA route switches (and dev HMR) and
- * only disconnects on full page reload/unload, physical USB unplug, or explicit user disconnect.
+ * Manages up to 3 simultaneous WebSerial USB timer connections (e.g. keeping the Hub connected in
+ * Slot 0 while debugging one or two Spokes over USB in Slots 1–2).
  */
-export const sharedTimerConsole: TimerConsole = (() => {
-  if (timerWin?.__slaprfTimerConsole) {
-    Object.setPrototypeOf(timerWin.__slaprfTimerConsole, TimerConsole.prototype);
-    return timerWin.__slaprfTimerConsole;
+export class UsbConnectionPool {
+  public readonly slots: readonly [TimerConsole, TimerConsole, TimerConsole];
+  private _debugSlotIndex = 0;
+  private lastCheckedOwner: TimerConsole | null = null;
+  private readonly listeners = new Set<() => void>();
+
+  constructor(slots: [TimerConsole, TimerConsole, TimerConsole]) {
+    this.slots = slots;
+    for (const c of this.slots) {
+      c.onStateChange(() => this.notify());
+      c.subscribe({
+        onConnect: () => this.notify(),
+        onStatus: () => this.notify(),
+        onConfig: () => this.notify(),
+        onDisconnect: () => {
+          if (!this.slots[this._debugSlotIndex]?.connected) {
+            const first = this.slots.find((s) => s.connected);
+            if (first) {
+              this._debugSlotIndex = first.slotIndex;
+            }
+          }
+          this.notify();
+        },
+      });
+    }
   }
-  const inst = new TimerConsole();
-  if (timerWin) timerWin.__slaprfTimerConsole = inst;
-  return inst;
+
+  public get debugSlotIndex(): number {
+    return this._debugSlotIndex;
+  }
+
+  public get debugConsole(): TimerConsole {
+    const chosen = this.slots[this._debugSlotIndex];
+    if (chosen && (chosen.connected || chosen.busyLabel || chosen.reconnecting)) {
+      return chosen;
+    }
+    const firstActive = this.slots.find((c) => c.connected || c.busyLabel || c.reconnecting);
+    if (firstActive) {
+      this._debugSlotIndex = firstActive.slotIndex;
+      return firstActive;
+    }
+    return chosen ?? this.slots[0];
+  }
+
+  public setDebugSlot(slotIndex: number): void {
+    if (slotIndex >= 0 && slotIndex < MAX_USB_CONNECTIONS && slotIndex !== this._debugSlotIndex) {
+      this._debugSlotIndex = slotIndex;
+      this.notify();
+    }
+  }
+
+  public connectedConsoles(): TimerConsole[] {
+    return this.slots.filter((c) => c.connected);
+  }
+
+  public hubConsole(): TimerConsole | null {
+    return this.slots.find((c) => c.connected && c.lastStatus?.role === 1) ?? null;
+  }
+
+  public primaryConsole(): TimerConsole {
+    return this.hubConsole() ?? this.connectedConsoles()[0] ?? this.slots[0];
+  }
+
+  public canConnectMore(): boolean {
+    return this.connectedConsoles().length < MAX_USB_CONNECTIONS;
+  }
+
+  public findByFingerprint(fp: string): TimerConsole | null {
+    const target = (fp || "").toUpperCase();
+    if (!target) return null;
+    return this.slots.find((c) => c.connected && (c.lastStatus?.fp || "").toUpperCase() === target) ?? null;
+  }
+
+  public findByTimerSlot(timerSlot: number): TimerConsole | null {
+    if (timerSlot === 1) {
+      return this.hubConsole();
+    }
+    return this.slots.find((c) => c.connected && c.lastStatus?.role === 2 && c.lastStatus?.slot === timerSlot) ?? null;
+  }
+
+  public findOwnerOfPort(candidate: unknown): TimerConsole | null {
+    return this.slots.find((c) => c.ownsPort(candidate)) ?? null;
+  }
+
+  public async connectNew(
+    showAllPorts = false,
+    selectForDebug = true
+  ): Promise<{ console: TimerConsole; status: TimerStatus | null; alreadyConnected: boolean }> {
+    const free = this.slots.find((c) => !c.connected && !c.busyLabel && !c.reconnecting);
+    if (!free) {
+      throw new Error(`Maximum of ${MAX_USB_CONNECTIONS} USB connections already active. Disconnect one first.`);
+    }
+    const port = await serial().requestPort(showAllPorts ? undefined : { filters: [{ usbVendorId: ESPRESSIF_USB_VID }] });
+    const existing = this.findOwnerOfPort(port);
+    if (existing) {
+      if (selectForDebug) {
+        this.setDebugSlot(existing.slotIndex);
+      }
+      return { console: existing, status: existing.lastStatus, alreadyConnected: true };
+    }
+    if (selectForDebug) {
+      this._debugSlotIndex = free.slotIndex;
+      this.notify();
+    }
+    const status = await free.connectWithPort(port, showAllPorts);
+    return { console: free, status, alreadyConnected: false };
+  }
+
+  public async disconnectAllCleanly(): Promise<void> {
+    await Promise.all(
+      this.slots.map((c) => (c.connected || c.reconnecting ? c.disconnectCleanly().catch(() => undefined) : Promise.resolve()))
+    );
+  }
+
+  public disconnectAllForUnload(): void {
+    for (const c of this.slots) {
+      if (c.connected) {
+        c.disconnectForUnload();
+      }
+    }
+  }
+
+  public ownsPort(candidate: unknown): boolean {
+    const owner = this.findOwnerOfPort(candidate);
+    this.lastCheckedOwner = owner;
+    return owner !== null;
+  }
+
+  public async readSnapshot(): Promise<TimerReadout> {
+    const target = this.lastCheckedOwner ?? this.primaryConsole();
+    return await target.readSnapshot();
+  }
+
+  public async disconnectCleanly(): Promise<void> {
+    const target = this.lastCheckedOwner ?? this.primaryConsole();
+    this.lastCheckedOwner = null;
+    await target.disconnectCleanly();
+  }
+
+  public onChange(fn: () => void): () => void {
+    this.listeners.add(fn);
+    return () => {
+      this.listeners.delete(fn);
+    };
+  }
+
+  private notify(): void {
+    this.listeners.forEach((fn) => {
+      try {
+        fn();
+      } catch {
+        // ignore listener errors
+      }
+    });
+  }
+}
+
+const timerWin = (typeof window !== "undefined" ? window : undefined) as
+  | (Window & {
+      __slaprfTimerConsole?: TimerConsole;
+      __slaprfUsbPool?: UsbConnectionPool;
+      __slaprfTimerUnloadBound?: boolean;
+    })
+  | undefined;
+
+export const usbPool: UsbConnectionPool = (() => {
+  if (timerWin?.__slaprfUsbPool) {
+    Object.setPrototypeOf(timerWin.__slaprfUsbPool, UsbConnectionPool.prototype);
+    for (const c of timerWin.__slaprfUsbPool.slots) {
+      Object.setPrototypeOf(c, TimerConsole.prototype);
+    }
+    return timerWin.__slaprfUsbPool;
+  }
+  const slot0 = timerWin?.__slaprfTimerConsole ?? new TimerConsole(undefined, 0);
+  Object.setPrototypeOf(slot0, TimerConsole.prototype);
+  const pool = new UsbConnectionPool([slot0, new TimerConsole(undefined, 1), new TimerConsole(undefined, 2)]);
+  if (timerWin) {
+    timerWin.__slaprfTimerConsole = slot0;
+    timerWin.__slaprfUsbPool = pool;
+  }
+  return pool;
 })();
+
+/**
+ * Primary USB timer slot (Slot 0) kept as a named export for compatibility; callers that support
+ * multi-USB use `usbPool`.
+ */
+export const sharedTimerConsole: TimerConsole = usbPool.slots[0];
 
 if (timerWin && !timerWin.__slaprfTimerUnloadBound) {
   timerWin.__slaprfTimerUnloadBound = true;
   const onUnload = () => {
-    if (sharedTimerConsole.connected) {
-      sharedTimerConsole.disconnectForUnload();
-    }
+    usbPool.disconnectAllForUnload();
   };
   window.addEventListener("pagehide", onUnload);
   window.addEventListener("beforeunload", onUnload);

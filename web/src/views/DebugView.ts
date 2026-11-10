@@ -8,11 +8,13 @@ import {
   getKnownHardwareTimers,
   KnownHardwareTimer,
   LiveSample,
+  MAX_USB_CONNECTIONS,
   recordKnownHardwareTimer,
   ScanResult,
   sharedTimerConsole,
   TimerConsole,
   TimerStatus,
+  usbPool,
 } from "../services/timer_console";
 import { DetectedTimer } from "../types/models";
 import {
@@ -94,7 +96,8 @@ function fmtWallTimeMs(ms: number): string {
  * Firmware side: firmware/components/slaprf_radio/slaprf_diag.c. Spec: docs/DEBUG_PAGE.md.
  */
 export class DebugView extends Component {
-  private readonly console: TimerConsole;
+  private console: TimerConsole;
+  private unsubConsole: (() => void) | null = null;
   private status: TimerStatus | null = null;
   private live: LiveSample | null = null;
   private liveCount = 0;
@@ -235,148 +238,12 @@ export class DebugView extends Component {
   constructor(el: HTMLElement, api?: ApiClient) {
     super(el);
     this.api = api;
-    this.console = sharedTimerConsole;
+    this.console = usbPool.debugConsole;
     this.loadDebugPrefs();
-    this.console.showAllPorts = this.showAllPorts;
-    if (this.console.connected && this.console.lastStatus) {
-      this.status = this.console.lastStatus;
-    }
-    const unsubConsole = this.console.subscribe({
-      onConnect: () => {
-        this.signalRing.clear();
-        this.healthHistory.clear();
-        this.signalFindings = [];
-        this.signalFindingSeq = 0;
-        this.scanFindings = [];
-        this.scanFindingSeq = 0;
-        this.renderAll();
-        void this.startSession();
-      },
-      onStatus: (s) => {
-        const firstStatus = this.status === null;
-        const freqsChanged = this.status?.freqs.join() !== s.freqs.join();
-        const rfChanged = this.status?.rf.enabled !== s.rf.enabled;
-        const emergencyChanged = Boolean(this.status?.emergencyMode) !== Boolean(s.emergencyMode);
-        this.status = s;
-        let maskChanged = false;
-        if (s.chanMask !== undefined && Date.now() - this.chanMaskToggledAt > 1500) {
-          const nextEnabled = Array.from({ length: 8 }, (_, i) => ((s.chanMask! >> i) & 1) !== 0);
-          if (nextEnabled.join() !== this.signalEnabledCh.join()) {
-            this.signalEnabledCh = nextEnabled;
-            maskChanged = true;
-          }
-        }
-        if (s.emergencyMode) {
-          this.liveOn = false;
-          this.scanLive = false;
-        }
-        // Pick up a live scan still running from before (page reload); skip stale replies right after a toggle.
-        let scanChanged = false;
-        if (!s.emergencyMode && s.scanLive !== undefined && s.scanLive !== this.scanLive && Date.now() - this.scanToggleAt > 3000) {
-          this.scanLive = s.scanLive;
-          scanChanged = true;
-        }
-        this.renderConnection();
-        this.renderStatus();
-        this.renderNetworkView();
-        this.renderLiveHead();
-        if (firstStatus || emergencyChanged || freqsChanged || rfChanged || scanChanged || maskChanged) {
-          if (freqsChanged) this.renderLive();
-          else if (maskChanged) this.updateLive();
-          if (!this.channelsDirty) this.renderChannels();
-          this.renderSelfTest();
-          this.renderSignalControls();
-          this.renderScan();
-          this.renderLog();
-          this.renderSerialConsole();
-          this.dirtySignal = true;
-          this.dirtyNoiseTable = true;
-        }
-        void this.pollServerHealth(s);
-      },
-      onLive: (s) => {
-        this.live = s;
-        this.liveCount++;
-        this.signalRing.push(s, this.status?.sweepHz ?? 50, this.liveMode);
-        this.recordSignalFindingFromSample(s);
-        this.updateLive();
-        if (this.signalEndN === null) {
-          this.dirtySignal = true;
-          this.dirtyNoiseTable = true;
-        }
-      },
-      onScan: (s) => {
-        if (s.live && !this.scanLive) return; // Stray pass after SCAN STOP
-        const gridChanged =
-          this.spectrumAcc.latest !== null &&
-          (this.spectrumAcc.latest.start !== s.start ||
-            this.spectrumAcc.latest.step !== s.step ||
-            this.spectrumAcc.latest.dbm.length !== s.dbm.length);
-        if (gridChanged) {
-          this.scanZoomStartMHz = null;
-          this.scanZoomStopMHz = null;
-        }
-        this.spectrumAcc.pushScan(s);
-        this.recordScanFindingFromPass(s);
-        if (!s.live) {
-          this.scanning = false;
-          this.renderScan();
-        } else {
-          this.updateScanFindings();
-        }
-        this.dirtySpectrum = true;
-        this.dirtyWaterfall = true;
-      },
-      onLog: (line) => this.appendLog(line),
-      onRawReply: (line, msgType) => {
-        if (msgType === "status") {
-          if (!this.serialExpectStatus) return;
-          this.serialExpectStatus = false;
-        }
-        if (msgType === "ok" || msgType === "err" || Date.now() < this.serialAwaitUntil) {
-          if (msgType === "bootlog") {
-            try {
-              const bl = JSON.parse(line.slice(1)) as BootLog;
-              this.appendSerialLine(`--- ${bl.which} boot log (boot #${bl.boots}, reset: ${bl.reset}) ---`);
-              for (const l of (bl.text || "(empty)").split("\n")) {
-                this.appendSerialLine(l);
-              }
-              return;
-            } catch {
-              // fall through
-            }
-          }
-          if (msgType !== "live") {
-            this.appendSerialLine(line);
-          }
-        }
-      },
-      onConfig: (c) => {
-        const line = `[config] ${c.role} "${c.timerLabel}" fp=${c.fingerprint} fw=${c.firmwareVersion} ch=${c.frequenciesMHz.join(",")}`;
-        this.appendLog(line);
-        this.renderNetworkView();
-        if (Date.now() < this.serialAwaitUntil) {
-          this.appendSerialLine(line);
-        }
-      },
-      onError: (msg) => {
-        this.error = msg;
-        this.scanning = false;
-        this.renderConnection();
-        this.renderScan();
-      },
-      onDisconnect: () => {
-        window.clearInterval(this.statusTimer);
-        this.status = null;
-        this.liveOn = false;
-        this.logOn = false;
-        this.scanLive = false;
-        this.renderAll();
-      },
-    });
 
     el.innerHTML = `
       <div class="settings debug-page">
+        <div class="debug-usb-bar" data-slot="connection"></div>
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Self-test</h2>
@@ -601,8 +468,19 @@ export class DebugView extends Component {
     };
     this.rafId = window.requestAnimationFrame(tick);
 
+    const unsubPool = usbPool.onChange(() => {
+      const target = usbPool.debugConsole;
+      if (target !== this.console) {
+        this.bindConsole(target);
+      } else {
+        this.renderConnection();
+      }
+    });
+
     this.onDispose(() => {
-      unsubConsole();
+      unsubPool();
+      this.unsubConsole?.();
+      this.unsubConsole = null;
       this.console.setBusyLabel(null);
       window.cancelAnimationFrame(this.rafId);
       window.removeEventListener("resize", onResize);
@@ -610,16 +488,186 @@ export class DebugView extends Component {
       window.clearInterval(this.statusTimer);
       // Leaving the Debug page must stop high-rate LIVE / SCAN / LOG streaming,
       // while preserving the USB connection across the rest of the SPA.
-      if (this.console.connected) {
-        const cmds: string[] = [];
-        if (this.liveOn) cmds.push("LIVE 0");
-        if (this.scanLive) cmds.push("SCAN STOP");
-        if (this.logOn) cmds.push("LOG 0");
-        if (cmds.length > 0) {
-          void this.console.send(cmds.join("\n")).catch(() => undefined);
-        }
-      }
+      this.stopActiveStreamsOn(this.console);
     });
+    this.bindConsole(this.console);
+  }
+
+  private stopActiveStreamsOn(target: TimerConsole): void {
+    if (!target.connected) return;
+    const cmds: string[] = [];
+    if (this.liveOn) cmds.push("LIVE 0");
+    if (this.scanLive) cmds.push("SCAN STOP");
+    if (this.logOn) cmds.push("LOG 0");
+    if (cmds.length > 0) {
+      void target.send(cmds.join("\n")).catch(() => undefined);
+    }
+  }
+
+  private bindConsole(next: TimerConsole): void {
+    if (this.unsubConsole && this.console !== next) {
+      this.stopActiveStreamsOn(this.console);
+      this.console.setBusyLabel(null);
+    }
+    this.unsubConsole?.();
+    window.clearInterval(this.statusTimer);
+
+    this.console = next;
+    this.console.showAllPorts = this.showAllPorts;
+    this.status = this.console.connected ? this.console.lastStatus : null;
+    this.live = null;
+    this.liveCount = 0;
+    this.liveOn = false;
+    this.logOn = false;
+    this.scanning = false;
+    this.scanLive = Boolean(this.status?.scanLive);
+    this.checks = [];
+    this.checksAt = null;
+    this.reportExtra = "";
+    this.bootLog = null;
+    this.logLines = [];
+    this.serialLines = [];
+    this.signalRing.clear();
+    this.healthHistory.clear();
+    this.spectrumAcc.clear();
+    this.signalFindings = [];
+    this.signalFindingSeq = 0;
+    this.scanFindings = [];
+    this.scanFindingSeq = 0;
+
+    this.unsubConsole = this.console.subscribe({
+      onConnect: () => {
+        this.signalRing.clear();
+        this.healthHistory.clear();
+        this.signalFindings = [];
+        this.signalFindingSeq = 0;
+        this.scanFindings = [];
+        this.scanFindingSeq = 0;
+        this.renderAll();
+        void this.startSession();
+      },
+      onStatus: (s) => {
+        const firstStatus = this.status === null;
+        const freqsChanged = this.status?.freqs.join() !== s.freqs.join();
+        const rfChanged = this.status?.rf.enabled !== s.rf.enabled;
+        const emergencyChanged = Boolean(this.status?.emergencyMode) !== Boolean(s.emergencyMode);
+        this.status = s;
+        let maskChanged = false;
+        if (s.chanMask !== undefined && Date.now() - this.chanMaskToggledAt > 1500) {
+          const nextEnabled = Array.from({ length: 8 }, (_, i) => ((s.chanMask! >> i) & 1) !== 0);
+          if (nextEnabled.join() !== this.signalEnabledCh.join()) {
+            this.signalEnabledCh = nextEnabled;
+            maskChanged = true;
+          }
+        }
+        if (s.emergencyMode) {
+          this.liveOn = false;
+          this.scanLive = false;
+        }
+        let scanChanged = false;
+        if (!s.emergencyMode && s.scanLive !== undefined && s.scanLive !== this.scanLive && Date.now() - this.scanToggleAt > 3000) {
+          this.scanLive = s.scanLive;
+          scanChanged = true;
+        }
+        this.renderConnection();
+        this.renderStatus();
+        this.renderNetworkView();
+        this.renderLiveHead();
+        if (firstStatus || emergencyChanged || freqsChanged || rfChanged || scanChanged || maskChanged) {
+          if (freqsChanged) this.renderLive();
+          else if (maskChanged) this.updateLive();
+          if (!this.channelsDirty) this.renderChannels();
+          this.renderSelfTest();
+          this.renderSignalControls();
+          this.renderScan();
+          this.renderLog();
+          this.renderSerialConsole();
+          this.dirtySignal = true;
+          this.dirtyNoiseTable = true;
+        }
+        void this.pollServerHealth(s);
+      },
+      onLive: (s) => {
+        this.live = s;
+        this.liveCount++;
+        this.signalRing.push(s, this.status?.sweepHz ?? 50, this.liveMode);
+        this.recordSignalFindingFromSample(s);
+        this.updateLive();
+        if (this.signalEndN === null) {
+          this.dirtySignal = true;
+          this.dirtyNoiseTable = true;
+        }
+      },
+      onScan: (s) => {
+        if (s.live && !this.scanLive) return;
+        const gridChanged =
+          this.spectrumAcc.latest !== null &&
+          (this.spectrumAcc.latest.start !== s.start ||
+            this.spectrumAcc.latest.step !== s.step ||
+            this.spectrumAcc.latest.dbm.length !== s.dbm.length);
+        if (gridChanged) {
+          this.scanZoomStartMHz = null;
+          this.scanZoomStopMHz = null;
+        }
+        this.spectrumAcc.pushScan(s);
+        this.recordScanFindingFromPass(s);
+        if (!s.live) {
+          this.scanning = false;
+          this.renderScan();
+        } else {
+          this.updateScanFindings();
+        }
+        this.dirtySpectrum = true;
+        this.dirtyWaterfall = true;
+      },
+      onLog: (line) => this.appendLog(line),
+      onRawReply: (line, msgType) => {
+        if (msgType === "status") {
+          if (!this.serialExpectStatus) return;
+          this.serialExpectStatus = false;
+        }
+        if (msgType === "ok" || msgType === "err" || Date.now() < this.serialAwaitUntil) {
+          if (msgType === "bootlog") {
+            try {
+              const bl = JSON.parse(line.slice(1)) as BootLog;
+              this.appendSerialLine(`--- ${bl.which} boot log (boot #${bl.boots}, reset: ${bl.reset}) ---`);
+              for (const l of (bl.text || "(empty)").split("\n")) {
+                this.appendSerialLine(l);
+              }
+              return;
+            } catch {
+              // fall through
+            }
+          }
+          if (msgType !== "live") {
+            this.appendSerialLine(line);
+          }
+        }
+      },
+      onConfig: (c) => {
+        const line = `[config] ${c.role} "${c.timerLabel}" fp=${c.fingerprint} fw=${c.firmwareVersion} ch=${c.frequenciesMHz.join(",")}`;
+        this.appendLog(line);
+        this.renderNetworkView();
+        if (Date.now() < this.serialAwaitUntil) {
+          this.appendSerialLine(line);
+        }
+      },
+      onError: (msg) => {
+        this.error = msg;
+        this.scanning = false;
+        this.renderConnection();
+        this.renderScan();
+      },
+      onDisconnect: () => {
+        window.clearInterval(this.statusTimer);
+        this.status = null;
+        this.liveOn = false;
+        this.logOn = false;
+        this.scanLive = false;
+        this.renderAll();
+      },
+    });
+
     this.renderAll();
     if (this.console.connected) {
       void this.startSession();
@@ -1878,8 +1926,24 @@ export class DebugView extends Component {
     try {
       switch (t.dataset.action) {
         case "connect":
-          await this.console.connectAndStart(this.showAllPorts);
+        case "connect-add":
+          await usbPool.connectNew(this.showAllPorts, true);
           break;
+        case "select-usb-slot": {
+          const slot = Number(t.dataset.usbSlot);
+          if (Number.isFinite(slot)) {
+            usbPool.setDebugSlot(slot);
+          }
+          break;
+        }
+        case "disconnect-usb-slot": {
+          const slot = Number(t.dataset.usbSlot);
+          const target = usbPool.slots[slot];
+          if (target) {
+            await target.disconnectCleanly();
+          }
+          break;
+        }
         case "disconnect":
           await this.console.disconnectCleanly();
           break;
@@ -2828,29 +2892,66 @@ export class DebugView extends Component {
   private renderConnection(): void {
     const host = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
     if (!host) return;
-    const on = this.console.connected;
     const supported = TimerConsole.supported();
     const busy = this.busy !== null || this.console.busyLabel !== null;
     const busyText = this.busy ?? this.console.busyLabel ?? "";
+    const connected = usbPool.connectedConsoles();
 
-    const s = this.status;
-    const statusText = on
-      ? s
-        ? s.emergencyMode
-          ? `${esc(s.label || "(unnamed)")} · Emergency mode · radio & sweeps halted · ${esc(s.fp)}`
-          : `${esc(s.label || "(unnamed)")} · ${s.role === 1 ? "Hub" : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`} · ${esc(s.fw)} · ${esc(s.fp)}`
-        : "Connected over USB · reading timer status…"
-      : busy
-        ? `${esc(busyText)}…`
-        : "Off · connect a timer over USB-C";
-    const ledClass = on && s ? (s.emergencyMode ? "is-emergency" : s.role === 2 ? "is-spoke" : "is-up") : on || busy ? "is-warn" : "";
-    const btnLabel = on
-      ? s?.label
-        ? `Connected · ${esc(s.label)}`
-        : "Connected"
-      : busy
-        ? `${esc(busyText)}…`
-        : "Connect";
+    const chipsHtml = connected
+      .map((c) => {
+        const s = c.lastStatus;
+        const active = c === this.console;
+        const label = s?.label || (s?.role === 1 ? "H1" : `USB ${c.slotIndex + 1}`);
+        const roleMeta = s
+          ? s.emergencyMode
+            ? "Emergency"
+            : s.role === 1
+              ? "Hub"
+              : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`
+          : "Reading…";
+        const chipColor = s?.emergencyMode ? "#facc15" : s?.role === 2 ? "#38bdf8" : "#d4ff3a";
+        const fpNote = s?.fp ? ` · ${s.fp}` : "";
+        return `
+          <div class="pilot-chip debug-usb-chip ${active ? "is-active" : ""}" style="--c:${chipColor}">
+            <button
+              type="button"
+              class="debug-usb-chip-select"
+              role="tab"
+              aria-selected="${active}"
+              data-action="select-usb-slot"
+              data-usb-slot="${c.slotIndex}"
+              title="Debug on ${esc(label)} (${esc(roleMeta)}${esc(fpNote)})"
+            >
+              <span class="dot is-live"></span>
+              <span class="pilot-chip-name">${esc(label)}</span>
+              <span class="pilot-chip-time">${esc(roleMeta)}</span>
+            </button>
+            <button
+              type="button"
+              class="debug-usb-chip-close"
+              data-action="disconnect-usb-slot"
+              data-usb-slot="${c.slotIndex}"
+              title="Disconnect ${esc(label)}"
+              aria-label="Disconnect ${esc(label)}"
+            >${icons.close(13)}</button>
+          </div>`;
+      })
+      .join("");
+
+    const canAdd = connected.length < MAX_USB_CONNECTIONS;
+    const addBtnHtml = canAdd
+      ? `<button
+          type="button"
+          class="pilot-chip debug-usb-add-chip"
+          data-action="connect-add"
+          ${supported && !busy ? "" : "disabled"}
+          title="Connect ${connected.length > 0 ? "another " : ""}timer over USB-C (${connected.length}/${MAX_USB_CONNECTIONS} active)"
+        >
+          ${icons.plug(15)}
+          <span class="pilot-chip-name">${busy ? `${esc(busyText)}…` : connected.length > 0 ? "+ Connect USB" : "Connect USB"}</span>
+          <span class="pilot-chip-time">${connected.length}/${MAX_USB_CONNECTIONS}</span>
+        </button>`
+      : "";
 
     const bannerParts: string[] = [];
     if (!supported) {
@@ -2861,23 +2962,21 @@ export class DebugView extends Component {
     }
 
     host.innerHTML = `
-      <div class="debug-status-topbar">
-        <span class="debug-led-status">
-          <span class="status-dot ${ledClass}"></span>
-          <span class="debug-head-note">${statusText}</span>
-        </span>
+      <div class="picker-row debug-usb-picker-row">
+        <div class="pilot-picker debug-usb-picker" role="tablist" aria-label="Debug target USB connection">
+          <span class="debug-usb-bar-label">Debug on</span>
+          ${chipsHtml}
+          ${addBtnHtml}
+        </div>
         <div class="debug-connect-actions">
           ${
-            !on
+            canAdd
               ? `<label class="check debug-port-filter">
                   <input type="checkbox" data-all-ports ${this.showAllPorts ? "checked" : ""}/>
                   <span>Show non-XIAO ports</span>
                 </label>`
-              : ""
+              : `<span class="note">${MAX_USB_CONNECTIONS}/${MAX_USB_CONNECTIONS} USB connections active</span>`
           }
-          <button type="button" class="btn btn-sm ${on ? "btn-armed" : "btn-unarmed"}" data-action="${on ? "disconnect" : "connect"}" ${supported && !busy ? "" : "disabled"}>
-            ${on ? icons.plug(14) : icons.plugOff(14)}<span>${btnLabel}</span>
-          </button>
         </div>
       </div>
       ${bannerParts.join("")}`;

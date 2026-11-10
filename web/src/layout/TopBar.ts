@@ -4,7 +4,7 @@ import { icons } from "../core/icons";
 import { ROUTES, Router } from "../core/router";
 import { Announcer } from "../services/announcer";
 import { ApiClient } from "../services/api_client";
-import { sharedTimerConsole, TimerConsole } from "../services/timer_console";
+import { TimerConsole, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
 export class TopBar extends Component {
@@ -38,14 +38,7 @@ export class TopBar extends Component {
     );
     this.onDispose(store.subscribe(["status"], () => this.render()));
     this.onDispose(announcer.subscribe(() => this.render()));
-    this.onDispose(sharedTimerConsole.onStateChange(() => this.render()));
-    this.onDispose(
-      sharedTimerConsole.subscribe({
-        onConnect: () => this.render(),
-        onStatus: () => this.render(),
-        onDisconnect: () => this.render(),
-      })
-    );
+    this.onDispose(usbPool.onChange(() => this.render()));
     this.onDispose(api.hubBridge.subscribe(() => this.render()));
     this.render();
   }
@@ -81,14 +74,17 @@ export class TopBar extends Component {
       case "sim":
         void this.api.toggleSimulator();
         break;
-      case "usb-toggle":
-        if (sharedTimerConsole.busyLabel) return;
-        if (sharedTimerConsole.connected) {
-          void sharedTimerConsole.disconnectCleanly();
+      case "usb-toggle": {
+        const busySlot = usbPool.slots.find((c) => c.busyLabel);
+        if (busySlot) return;
+        const connected = usbPool.connectedConsoles();
+        if (connected.length > 0) {
+          void usbPool.disconnectAllCleanly();
         } else {
-          void sharedTimerConsole.connectAndStart().catch(() => undefined);
+          void usbPool.connectNew().catch(() => undefined);
         }
         break;
+      }
       case "go-network":
         this.router.navigate("network");
         break;
@@ -110,12 +106,13 @@ export class TopBar extends Component {
     const { liveTime, raceArmed, simulatorRunning: sim } = this.store;
     const ltConnected = liveTime.connectedClients > 0;
     const voiceOn = this.announcer.settings.enabled;
-    const usbOn = sharedTimerConsole.connected;
-    const usbLabel = sharedTimerConsole.lastStatus?.label ?? "";
-    const usbFp = sharedTimerConsole.lastStatus?.fp ?? "";
-    const usbBusy = sharedTimerConsole.busyLabel ?? "";
+    const connectedUsb = usbPool.connectedConsoles();
+    const usbOn = connectedUsb.length > 0;
+    const usbLabels = connectedUsb.map((c) => c.lastStatus?.label || (c.lastStatus?.role === 1 ? "H1" : "S1")).join(" + ");
+    const usbFps = connectedUsb.map((c) => c.lastStatus?.fp || "").filter(Boolean).join(", ");
+    const usbBusy = usbPool.slots.find((c) => c.busyLabel)?.busyLabel ?? "";
     const led = this.api.hubBridge.getLedSummary();
-    const sig = `${meta.id}:${sim ? 1 : 0}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.menuOpen ? 1 : 0}:${usbOn ? 1 : 0}:${usbLabel}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}`;
+    const sig = `${meta.id}:${sim ? 1 : 0}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.menuOpen ? 1 : 0}:${connectedUsb.length}:${usbLabels}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}`;
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
@@ -126,8 +123,8 @@ export class TopBar extends Component {
 
     const usbSupported = TimerConsole.supported();
     const usbBtnText = usbOn
-      ? usbLabel
-        ? `Connected · ${esc(usbLabel)}`
+      ? usbLabels
+        ? `Connected · ${esc(usbLabels)}`
         : "Connected"
       : usbBusy
         ? `${esc(usbBusy)}…`
@@ -135,7 +132,7 @@ export class TopBar extends Component {
     const usbTitle = !usbSupported
       ? "USB connection requires Chrome, Edge, or Brave (WebSerial)"
       : usbOn
-        ? `Connected over USB${usbLabel || usbFp ? ` (${usbLabel || "timer"}${usbFp ? ` · ${usbFp}` : ""})` : ""} — click to disconnect`
+        ? `Connected over USB (${connectedUsb.length}/3${usbLabels ? `: ${usbLabels}` : ""}${usbFps ? ` · ${usbFps}` : ""}) — click to disconnect`
         : "Connect a timer over USB-C";
     const usbBtn = `
       <button type="button" class="btn ${usbOn ? "btn-armed" : "btn-ghost"}" data-action="usb-toggle" ${usbSupported && !usbBusy ? "" : "disabled"} title="${esc(usbTitle)}" aria-label="${esc(usbTitle)}">

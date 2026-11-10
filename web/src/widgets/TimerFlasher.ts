@@ -9,7 +9,7 @@ import {
   flashXiaoC5OverWebSerial,
   isWebSerialSupported,
 } from "../services/esp_flasher";
-import { recordKnownTimerReadout, sharedTimerConsole } from "../services/timer_console";
+import { recordKnownTimerReadout, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
 const FLASHER_PREFS_STORAGE_KEY = "slaprf.ui.flasher_prefs.v1";
@@ -348,7 +348,7 @@ export class TimerFlasher extends Component {
         },
         this.showAllPorts,
         this.keepFingerprint,
-        sharedTimerConsole
+        usbPool
       );
 
       if (written) {

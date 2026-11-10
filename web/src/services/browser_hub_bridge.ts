@@ -1,4 +1,4 @@
-import { sharedTimerConsole } from "./timer_console";
+import { usbPool } from "./timer_console";
 import { WasmSimTransport } from "./wasm_transport";
 
 export type ConnectionLedColor = "neon" | "blue" | "yellow" | "red" | "gray";
@@ -37,38 +37,41 @@ export class BrowserHubBridge {
 
     // Forward outbound 19-byte channel table frames (0xC5 0x5E) from WASM to the Hub over USB-C
     this.wasm.onHubCommand((pkt) => {
-      if (sharedTimerConsole.connected && sharedTimerConsole.lastStatus?.role === 1) {
-        sharedTimerConsole.sendNetChannelsFromPacket(pkt);
+      const hub = usbPool.hubConsole();
+      if (hub) {
+        hub.sendNetChannelsFromPacket(pkt);
       }
     });
 
     // Forward inbound Hub/Spoke binary frames received over USB-C WebSerial into WASM: every frame
     // of one USB read goes in with a single WASM call, synchronously (no throttling / coalescing
     // of data). Only the slow-changing UI counters below are refreshed at most every 500 ms.
-    sharedTimerConsole.subscribe({
-      onHubPackets: (packed, count) => {
-        this.usbFramesRx += count;
-        if (this.active) {
-          this.wasm.ingestHubPackets(packed, count);
-          if (this.onPacketIngested && containsHello(packed)) {
-            this.onPacketIngested();
+    for (const c of usbPool.slots) {
+      c.subscribe({
+        onHubPackets: (packed, count) => {
+          this.usbFramesRx += count;
+          if (this.active) {
+            this.wasm.ingestHubPackets(packed, count);
+            if (this.onPacketIngested && containsHello(packed)) {
+              this.onPacketIngested();
+            }
           }
-        }
-        const nowMs = performance.now();
-        if (this.usbFramesRx === count || nowMs - this.lastStreamNotifyMs >= 500) {
-          this.lastStreamNotifyMs = nowMs;
+          const nowMs = performance.now();
+          if (this.usbFramesRx === count || nowMs - this.lastStreamNotifyMs >= 500) {
+            this.lastStreamNotifyMs = nowMs;
+            this.notify();
+          }
+        },
+        onConnect: () => {
+          window.setTimeout(() => this.wasm.pushHubChannels(), 350);
           this.notify();
-        }
-      },
-      onConnect: () => {
-        window.setTimeout(() => this.wasm.pushHubChannels(), 350);
-        this.notify();
-      },
-      onDisconnect: () => {
-        this.notify();
-      },
-    });
-    sharedTimerConsole.onStateChange(() => this.notify());
+        },
+        onDisconnect: () => {
+          this.notify();
+        },
+      });
+    }
+    usbPool.onChange(() => this.notify());
   }
 
   /**
@@ -80,47 +83,61 @@ export class BrowserHubBridge {
    * - `gray`: Disconnected
    */
   public getLedSummary(): ConnectionLedSummary {
-    const usb = sharedTimerConsole;
+    const busyOrReconnecting = usbPool.slots.find((c) => c.reconnecting || c.busyLabel);
+    const connected = usbPool.connectedConsoles();
 
-    if (usb.reconnecting || usb.busyLabel) {
-      const label = usb.reconnecting
-        ? `Reconnecting USB (${usb.reconnectAttempt}/${usb.maxReconnectAttempts})…`
-        : `${usb.busyLabel}…`;
+    if (busyOrReconnecting && connected.length === 0) {
+      const label = busyOrReconnecting.reconnecting
+        ? `Reconnecting USB (${busyOrReconnecting.reconnectAttempt}/${busyOrReconnecting.maxReconnectAttempts})…`
+        : `${busyOrReconnecting.busyLabel}…`;
       return {
         color: "yellow",
         shortLabel: "Reconnecting",
         detail: `${label} — click to open Network`,
       };
     }
-    if (usb.connected) {
-      const s = usb.lastStatus;
-      if (s?.emergencyMode) {
+    if (connected.length > 0) {
+      const emg = connected.find((c) => c.lastStatus?.emergencyMode);
+      if (emg) {
+        const s = emg.lastStatus!;
         return {
           color: "red",
           shortLabel: `${s.label || "Timer"} · Emergency`,
           detail: `${s.label || "Timer"} is in Emergency Mode — click to open Network`,
         };
       }
-      if (s && s.role === 2) {
+      const hub = usbPool.hubConsole();
+      const names = connected.map((c) => c.lastStatus?.label || (c.lastStatus?.role === 1 ? "H1" : "S1"));
+      const joined = names.join(" + ");
+      if (hub) {
+        const s = hub.lastStatus;
+        const hubName = s?.label || "H1";
         return {
-          color: "blue",
-          shortLabel: `${s.label || "S1"} · Spoke`,
-          detail: `Connected to Spoke ${s.label || "S1"} (Slot ${s.slot || "?"}) over USB-C — click to open Network`,
+          color: "neon",
+          shortLabel: connected.length > 1 ? `${joined}` : `${hubName} · Hub`,
+          detail:
+            connected.length > 1
+              ? `Connected over USB-C (${connected.length}/3): ${joined} — click to open Network`
+              : `Connected to Hub ${hubName} over USB-C — click to open Network`,
         };
       }
-      const hubName = s?.label || "H1";
+      const first = connected[0].lastStatus;
       return {
-        color: "neon",
-        shortLabel: `${hubName} · Hub`,
-        detail: `Connected to Hub ${hubName} over USB-C — click to open Network`,
+        color: "blue",
+        shortLabel: connected.length > 1 ? `${joined}` : `${first?.label || "S1"} · Spoke`,
+        detail:
+          connected.length > 1
+            ? `Connected over USB-C (${connected.length}/3): ${joined} — click to open Network`
+            : `Connected to Spoke ${first?.label || "S1"} (Slot ${first?.slot || "?"}) over USB-C — click to open Network`,
       };
     }
 
-    if (usb.reconnectFailed) {
+    const failed = usbPool.slots.find((c) => c.reconnectFailed);
+    if (failed) {
       return {
         color: "red",
         shortLabel: "USB Failed",
-        detail: `${usb.lastError || "USB reconnect failed"} — click to open Network`,
+        detail: `${failed.lastError || "USB reconnect failed"} — click to open Network`,
       };
     }
 

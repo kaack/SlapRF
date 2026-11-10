@@ -10,7 +10,7 @@ import {
   isWebSerialSupported,
   readXiaoC5OverWebSerial,
 } from "../services/esp_flasher";
-import { sharedTimerConsole, TimerStatus } from "../services/timer_console";
+import { sharedTimerConsole, TimerStatus, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 import { TimerFlasher } from "../widgets/TimerFlasher";
 
@@ -115,7 +115,7 @@ class TimerReaderPanel extends Component {
           this.render();
         },
         this.showAllPorts,
-        sharedTimerConsole
+        usbPool
       );
       this.readout = info;
       this.onRead?.(info);
@@ -351,7 +351,7 @@ class TimerEraserPanel extends Component {
           }
         },
         this.showAllPorts,
-        sharedTimerConsole
+        usbPool
       );
 
       this.lastSuccessMsg = "Timer wiped — bootloader, partition table, NVS, and firmware erased back to factory blank.";

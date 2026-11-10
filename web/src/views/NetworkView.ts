@@ -9,6 +9,7 @@ import {
   sharedTimerConsole,
   TimerConsole,
   TimerStatus,
+  usbPool,
 } from "../services/timer_console";
 import { AppStore } from "../state/store";
 import { DetectedTimer } from "../types/models";
@@ -81,7 +82,7 @@ export class NetworkView extends Component {
     super(el);
     this.store = store;
     this.api = api;
-    this.console = sharedTimerConsole;
+    this.console = usbPool.primaryConsole();
     this.loadPrefs();
     if (this.console.connected && this.console.lastStatus) {
       this.status = this.console.lastStatus;
@@ -106,37 +107,47 @@ export class NetworkView extends Component {
         </section>
       </div>`;
 
-    const unsubConsole = this.console.subscribe({
-      onConnect: () => {
-        this.renderAll();
-      },
-      onStatus: (s) => {
-        this.status = s;
-        if (s.chanMask !== undefined) {
-          const nextEnabled = Array.from({ length: 8 }, (_, i) => ((s.chanMask! >> i) & 1) !== 0);
-          if (nextEnabled.join() !== this.signalEnabledCh.join()) {
-            this.signalEnabledCh = nextEnabled;
-          }
-        }
-        this.renderAll();
-      },
-      onLive: (l) => {
-        this.live = l;
-        if (this.selectedSlot === 1 || (this.status?.role === 2 && this.selectedSlot === this.status.slot)) {
+    const unsubs = usbPool.slots.map((c) =>
+      c.subscribe({
+        onConnect: () => {
+          this.status = usbPool.primaryConsole().lastStatus;
           this.renderAll();
-        }
-      },
-      onConfig: () => {
-        this.renderAll();
-      },
-      onDisconnect: () => {
-        this.status = null;
-        this.live = null;
-        this.renderAll();
-      },
-    });
+        },
+        onStatus: (s) => {
+          if (c === usbPool.primaryConsole()) {
+            this.status = s;
+            if (s.chanMask !== undefined) {
+              const nextEnabled = Array.from({ length: 8 }, (_, i) => ((s.chanMask! >> i) & 1) !== 0);
+              if (nextEnabled.join() !== this.signalEnabledCh.join()) {
+                this.signalEnabledCh = nextEnabled;
+              }
+            }
+          }
+          this.renderAll();
+        },
+        onLive: (l) => {
+          if (c === usbPool.primaryConsole()) {
+            this.live = l;
+            if (this.selectedSlot === 1 || (this.status?.role === 2 && this.selectedSlot === this.status.slot)) {
+              this.renderAll();
+            }
+          }
+        },
+        onConfig: () => {
+          this.renderAll();
+        },
+        onDisconnect: () => {
+          const primary = usbPool.primaryConsole();
+          this.status = primary.connected ? primary.lastStatus : null;
+          if (!primary.connected) this.live = null;
+          this.renderAll();
+        },
+      })
+    );
 
-    const unsubState = this.console.onStateChange(() => {
+    const unsubState = usbPool.onChange(() => {
+      const primary = usbPool.primaryConsole();
+      this.status = primary.connected ? primary.lastStatus : null;
       this.renderAll();
     });
 
@@ -163,7 +174,7 @@ export class NetworkView extends Component {
     this.listen(el, "click", (e) => void this.onClick(e));
 
     this.onDispose(() => {
-      unsubConsole();
+      unsubs.forEach((fn) => fn());
       unsubState();
       unsubBridge();
       unsubStore();
@@ -228,18 +239,24 @@ export class NetworkView extends Component {
   }
 
   private activeStatus(): TimerStatus | null {
-    if (this.console.connected && this.status) {
-      return this.status;
+    const primary = usbPool.primaryConsole();
+    if (primary.connected && primary.lastStatus) {
+      return primary.lastStatus;
     }
     return null;
   }
 
   /** True/false = identify state of `fp` as reported by the USB-connected board; null = not reachable. */
   private identifyActual(fp: string): boolean | null {
-    const s = this.activeStatus();
-    if (!s || s.emergencyMode) return null;
-    if ((s.fp || "").toUpperCase() === fp) return Boolean(s.identify);
-    if (s.role === 1) return (s.identifyFp || "").toUpperCase() === fp;
+    const direct = usbPool.findByFingerprint(fp);
+    if (direct && direct.lastStatus && !direct.lastStatus.emergencyMode) {
+      return Boolean(direct.lastStatus.identify);
+    }
+    const hub = usbPool.hubConsole();
+    if (hub && hub.lastStatus && !hub.lastStatus.emergencyMode) {
+      if ((hub.lastStatus.fp || "").toUpperCase() === fp) return Boolean(hub.lastStatus.identify);
+      return (hub.lastStatus.identifyFp || "").toUpperCase() === fp;
+    }
     return null;
   }
 
@@ -249,7 +266,8 @@ export class NetworkView extends Component {
     this.identifyPending.set(FP, { on, atMs: Date.now() });
     this.renderAll();
     try {
-      await this.console.setIdentify(FP, on);
+      const target = usbPool.findByFingerprint(FP) ?? usbPool.hubConsole() ?? usbPool.primaryConsole();
+      await target.setIdentify(FP, on);
     } catch {
       this.identifyPending.delete(FP); // Old firmware ("unknown command") or disconnected
       this.renderAll();
