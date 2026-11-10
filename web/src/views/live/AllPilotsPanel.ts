@@ -1,5 +1,7 @@
 import { Component } from "../../core/component";
 import { fmtTime } from "../../core/format";
+import { icons } from "../../core/icons";
+import { ApiClient } from "../../services/api_client";
 import { practiceStats } from "../../state/analysis";
 import { fastestLap } from "../../state/selectors";
 import { AppStore } from "../../state/store";
@@ -14,15 +16,23 @@ import { SectionRecords } from "../../widgets/SectionRecords";
  */
 export class AllPilotsPanel extends Component {
   private readonly store: AppStore;
+  private readonly api: ApiClient;
+  private resetFlashTimer: number | null = null;
 
-  constructor(el: HTMLElement, store: AppStore, follow: (slotIndex: number) => void) {
+  constructor(el: HTMLElement, store: AppStore, api: ApiClient, follow: (slotIndex: number) => void) {
     super(el);
     this.store = store;
+    this.api = api;
 
     el.innerHTML = `
       <div class="stat-row" data-slot="stats"></div>
       <section class="card card-flush">
-        <header class="card-head"><div class="settings-intro"><h2>Pilots</h2><p>Ranked by best lap · click a pilot to follow their current lap</p></div></header>
+        <header class="card-head">
+          <div class="settings-intro"><h2>Pilots</h2><p>Ranked by best lap · click a pilot to follow their current lap</p></div>
+          <button type="button" class="btn btn-sm btn-ghost" data-action="reset-laps" title="Clear session laps" aria-label="Clear session laps">
+            ${icons.reset(15)}<span>Reset laps</span>
+          </button>
+        </header>
         <div data-slot="standings"></div>
       </section>
       <section class="card card-flush" data-slot="laptimes"></section>
@@ -34,6 +44,30 @@ export class AllPilotsPanel extends Component {
     this.adopt(new LiveStandings(this.slot("standings"), store, follow));
     this.adopt(new LapTimesCard(this.slot("laptimes"), store));
     this.adopt(new SectionRecords(this.slot("records"), store));
+
+    this.listen(el, "click", (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-action="reset-laps"]');
+      if (!btn) return;
+      if (confirm("Clear all laps for this session?")) {
+        btn.classList.remove("btn-ghost");
+        btn.classList.add("btn-armed");
+        if (this.resetFlashTimer !== null) {
+          window.clearTimeout(this.resetFlashTimer);
+        }
+        this.resetFlashTimer = window.setTimeout(() => {
+          this.resetFlashTimer = null;
+          btn.classList.remove("btn-armed");
+          btn.classList.add("btn-ghost");
+        }, 350);
+        void this.api.resetSession();
+      }
+    });
+
+    this.onDispose(() => {
+      if (this.resetFlashTimer !== null) {
+        window.clearTimeout(this.resetFlashTimer);
+      }
+    });
 
     this.onDispose(store.subscribe(["laps", "crossings", "config", "status"], () => this.renderStats()));
     this.renderStats();

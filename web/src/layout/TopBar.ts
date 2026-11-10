@@ -13,8 +13,6 @@ export class TopBar extends Component {
   private readonly router: Router;
   private readonly announcer: Announcer;
   private lastSig = "";
-  private resetFlashActive = false;
-  private resetFlashTimer: number | null = null;
   private menuOpen = false;
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient, router: Router, announcer: Announcer) {
@@ -31,9 +29,6 @@ export class TopBar extends Component {
       el.removeEventListener("click", this.handleClick);
       document.removeEventListener("pointerdown", this.handleOutsidePointer, true);
       document.removeEventListener("keydown", this.handleKeyDown);
-      if (this.resetFlashTimer !== null) {
-        window.clearTimeout(this.resetFlashTimer);
-      }
     });
     this.onDispose(
       router.subscribe(() => {
@@ -107,27 +102,8 @@ export class TopBar extends Component {
       case "pack":
         void this.api.simulatePack();
         break;
-      case "reset":
-        if (confirm("Clear all laps for this session?")) {
-          this.flashResetButton();
-          void this.api.resetSession();
-        }
-        break;
     }
   };
-
-  private flashResetButton(): void {
-    this.resetFlashActive = true;
-    this.render();
-    if (this.resetFlashTimer !== null) {
-      window.clearTimeout(this.resetFlashTimer);
-    }
-    this.resetFlashTimer = window.setTimeout(() => {
-      this.resetFlashTimer = null;
-      this.resetFlashActive = false;
-      this.render();
-    }, 350);
-  }
 
   private render(): void {
     const meta = this.router.meta();
@@ -139,17 +115,13 @@ export class TopBar extends Component {
     const usbFp = sharedTimerConsole.lastStatus?.fp ?? "";
     const usbBusy = sharedTimerConsole.busyLabel ?? "";
     const led = this.api.hubBridge.getLedSummary();
-    const sig = `${meta.id}:${sim ? 1 : 0}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.resetFlashActive ? 1 : 0}:${this.menuOpen ? 1 : 0}:${usbOn ? 1 : 0}:${usbLabel}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}`;
+    const sig = `${meta.id}:${sim ? 1 : 0}:${raceArmed ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.menuOpen ? 1 : 0}:${usbOn ? 1 : 0}:${usbLabel}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}`;
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
     const simBtn = `
       <button class="btn ${sim ? "btn-armed" : "btn-ghost"}" data-action="sim" title="${sim ? "Switch to real-world hardware dataset" : "Switch to simulated track dataset"}" aria-label="${sim ? "Switch to real-world hardware dataset" : "Switch to simulated track dataset"}">
         ${sim ? icons.zap(19) : icons.zapOff(19)}<span class="topbar-btn-label">${sim ? "Simulation on" : "Simulation off"}</span>
-      </button>`;
-    const resetBtn = `
-      <button class="btn ${this.resetFlashActive ? "btn-armed" : "btn-ghost"}" data-action="reset" title="Clear session laps" aria-label="Clear session laps">
-        ${icons.reset(19)}<span class="topbar-btn-label">Reset laps</span>
       </button>`;
 
     const usbSupported = TimerConsole.supported();
@@ -186,10 +158,7 @@ export class TopBar extends Component {
         </button>
         <button class="btn ${raceArmed ? "btn-armed" : "btn-ghost"}" data-action="arm" ${ltConnected ? "disabled" : ""} title="${armTitle}" aria-label="${armTitle}">
           ${raceArmed ? icons.timer(19) : icons.timerOff(19)}<span class="topbar-btn-label">${raceArmed ? "Timing on" : "Timing off"}</span>
-        </button>
-        ${resetBtn}`;
-    } else if (meta.id === "pilot") {
-      actions += resetBtn;
+        </button>`;
     }
 
     const navItems = ROUTES.filter((r) => !r.simOnly || sim)

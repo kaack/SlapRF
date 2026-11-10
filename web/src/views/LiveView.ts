@@ -49,7 +49,7 @@ export class LiveView extends Component {
     const host = this.slot("panel");
     this.panel =
       focus === null
-        ? new AllPilotsPanel(host, this.store, (slot) => this.store.setLiveFocus(slot))
+        ? new AllPilotsPanel(host, this.store, this.api, (slot) => this.store.setLiveFocus(slot))
         : new PilotPanel(host, this.store, this.api);
   }
 }
