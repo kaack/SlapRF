@@ -162,12 +162,6 @@ bool slaprf_diag_get_net_channels(uint16_t out_freqs[8]);
 /** False while the Debug page has switched the 5.8 GHz receiver off (RF 0). */
 bool slaprf_diag_rf_enabled(void);
 
-/** True while the Debug page has LIVE sweeps enabled (the collector Hub only sweeps on demand). */
-bool slaprf_diag_wants_sweeps(void);
-
-/** Hub: true while the app has placed the Hub on a gate (HUBGATE 1); it then sweeps and reports. */
-bool slaprf_diag_hub_is_gate(void);
-
 /**
  * Debug page continuous scan ("SCAN LIVE"): when active, measures the next chunk of the band
  * within `budget_us` and returns true; the caller then skips its pilot channels (readings -127).

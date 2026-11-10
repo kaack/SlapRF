@@ -72,8 +72,6 @@ static uint32_t s_flash_bytes;
 static SemaphoreHandle_t s_tx_lock;
 
 static volatile uint8_t s_live; // 0 off, 1 ~10 lines/s with peaks, 2 every sweep
-// Hub always sweeps 5.8 GHz in its own slot (Slot 1) and sends its own telemetry window.
-static volatile bool s_hub_gate = true;
 // A USB host (the browser) is listening: set by any command, cleared when writes keep failing.
 // While set, status_push_task sends a status line every second so the host never has to poll.
 static volatile bool s_host_attached;
@@ -419,16 +417,6 @@ bool slaprf_diag_get_net_channels(uint16_t out_freqs[8]) {
     return true;
 }
 
-/** True while the Debug page wants live 5.8 GHz sweeps (LIVE 1/2), e.g. on the collector Hub. */
-bool slaprf_diag_wants_sweeps(void) {
-    return s_live != 0 || s_hub_gate;
-}
-
-/** Hub: true while the app has placed the Hub on a gate (HUBGATE 1), so it sweeps and reports. */
-bool slaprf_diag_hub_is_gate(void) {
-    return s_hub_gate;
-}
-
 bool slaprf_diag_rf_enabled(void) {
     return s_rf_enabled;
 }
@@ -480,7 +468,7 @@ static void send_status(void) {
     int n = snprintf(out, sizeof(out),
                      "@{\"t\":\"status\",\"fw\":\"v%u.%u.%u\",\"role\":%u,\"fp\":\"%08lX\","
                      "\"label\":\"%s\",\"uptimeMs\":%lld,\"reset\":\"%s\",\"boots\":%lu,"
-                     "\"emergencyMode\":%s,\"hubGate\":%s,\"crashStreak\":%lu,\"heapFree\":%lu,\"heapMin\":%lu,"
+                     "\"emergencyMode\":%s,\"crashStreak\":%lu,\"heapFree\":%lu,\"heapMin\":%lu,"
                      "\"sweepHz\":%u,\"sweeps\":%lu,\"sweepUs\":%lu,\"sweepUsMax\":%lu,\"sweepBudgetUs\":%lu,"
                      "\"rf\":{\"ok\":%s,\"enabled\":%s,\"gain\":%d,\"gainMax\":%d,\"floorDb\":%.1f},"
                      "\"chip\":{\"model\":\"%s\",\"rev\":\"v%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"flashMB\":%lu},"
@@ -489,7 +477,7 @@ static void send_status(void) {
                      s_cfg[CFG_OFF_VERSION], s_cfg[CFG_OFF_VERSION + 1], s_cfg[CFG_OFF_VERSION + 2],
                      s_cfg[CFG_OFF_ROLE], (unsigned long)fp, label,
                      (long long)(esp_timer_get_time() / 1000), reset_reason_name(esp_reset_reason()),
-                     (unsigned long)s_boots, s_emergency_mode ? "true" : "false", s_hub_gate ? "true" : "false", (unsigned long)s_crash_streak,
+                     (unsigned long)s_boots, s_emergency_mode ? "true" : "false", (unsigned long)s_crash_streak,
                      (unsigned long)esp_get_free_heap_size(),
                      (unsigned long)esp_get_minimum_free_heap_size(), s_sweep_hz, (unsigned long)s_sweeps,
                      (unsigned long)s_sweep_us_last, (unsigned long)s_sweep_us_max, (unsigned long)s_sweep_budget_us,
@@ -854,14 +842,6 @@ static void handle_command(char *line) {
         // Forget saved LINKRATE / TXPOWER and return to the firmware defaults.
         slaprf_reset_link_settings();
         tx_line("@{\"t\":\"ok\",\"cmd\":\"linkreset\"}\n");
-    } else if (strncmp(line, "HUBGATE ", 8) == 0) {
-        const bool on = (line[8] == '1');
-        if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1 && !s_emergency_mode) {
-            s_hub_gate = on;
-            tx_line(on ? "@{\"t\":\"ok\",\"cmd\":\"hubgate\",\"on\":true}\n" : "@{\"t\":\"ok\",\"cmd\":\"hubgate\",\"on\":false}\n");
-        } else {
-            tx_line("@{\"t\":\"err\",\"msg\":\"HUBGATE is only valid on a Hub\"}\n");
-        }
     } else if (strcmp(line, "PANIC?") == 0) {
         char msg[220];
         if (s_panic_rec.magic == PANIC_REC_MAGIC) {

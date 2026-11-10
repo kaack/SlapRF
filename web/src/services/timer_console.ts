@@ -241,12 +241,6 @@ export interface TimerStatus {
   chanMask?: number;
   freqs: number[];
   dbm?: number[];
-  /**
-   * Hub only: true while the Hub also sweeps 5.8 GHz and sends its own telemetry (slot 1), set
-   * with the `HUBGATE 1|0` USB command. Runtime-only (0 after a Hub reboot); missing = false.
-   * The browser keeps it in sync with the course (services/hub_gate_sync.ts).
-   */
-  hubGate?: boolean;
 }
 
 export interface LiveSample {
