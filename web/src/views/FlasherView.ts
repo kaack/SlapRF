@@ -13,7 +13,7 @@ import {
 import { sharedTimerConsole, TimerConsole, TimerStatus, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 import { TimerFlasher } from "../widgets/TimerFlasher";
-import { renderUsbConnectionBarHtml } from "../widgets/UsbConnectionBar";
+import { patchUsbConnectionBar } from "../widgets/UsbConnectionBar";
 
 const RACEBAND = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
 const FLASHER_PORTS_STORAGE_KEY = "slaprf.ui.flasher_ports.v1";
@@ -71,6 +71,7 @@ class TimerReaderPanel extends Component {
   private progressText: string | null = null;
   private errorMsg: string | null = null;
   private showAllPorts = false;
+  private lastHtml = "";
 
   constructor(el: HTMLElement, api: ApiClient, onRead?: (readout: TimerReadout) => void) {
     super(el);
@@ -203,7 +204,7 @@ class TimerReaderPanel extends Component {
           ? `Joined Hub · slot ${s.slot}`
           : "ESP-NOW LR → Hub";
 
-    this.el.innerHTML = `
+    const nextHtml = `
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${ledClass}"></span>
@@ -293,6 +294,9 @@ class TimerReaderPanel extends Component {
           </dl>
         </div>
       </div>`;
+    if (nextHtml === this.lastHtml) return;
+    this.lastHtml = nextHtml;
+    this.el.innerHTML = nextHtml;
   }
 }
 
@@ -522,8 +526,7 @@ export class FlasherView extends Component {
     };
 
     const syncSelectedConsole = (applyToFlasher = false) => {
-      const connHost = this.slot("connection");
-      connHost.innerHTML = renderUsbConnectionBarHtml({
+      patchUsbConnectionBar(this.slot("connection"), {
         activeConsole: usbPool.debugConsole,
         showAllPorts: this.showAllPorts,
         error: this.connError,
@@ -544,7 +547,7 @@ export class FlasherView extends Component {
         onStatus: () => {
           if (c === usbPool.debugConsole) syncSelectedConsole(false);
           else {
-            this.slot("connection").innerHTML = renderUsbConnectionBarHtml({
+            patchUsbConnectionBar(this.slot("connection"), {
               activeConsole: usbPool.debugConsole,
               showAllPorts: this.showAllPorts,
               error: this.connError,

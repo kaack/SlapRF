@@ -9,6 +9,22 @@ export interface UsbConnectionBarOptions {
   error?: string | null;
 }
 
+const lastBarHtmlByHost = new WeakMap<HTMLElement, string>();
+
+/**
+ * Updates `host.innerHTML` with the USB connection bar only when the rendered markup changes,
+ * preserving live DOM nodes and `:hover` state across 1 Hz status and 50 Hz live ticks.
+ */
+export function patchUsbConnectionBar(host: HTMLElement | null, opts: UsbConnectionBarOptions): void {
+  if (!host) return;
+  const html = renderUsbConnectionBarHtml(opts);
+  if (lastBarHtmlByHost.get(host) === html && host.childElementCount > 0) {
+    return;
+  }
+  lastBarHtmlByHost.set(host, html);
+  host.innerHTML = html;
+}
+
 /**
  * Renders the right-hand column of the 2-column "Connection" `<section class="settings-section">`
  * shared across Network, Flasher, and Debug pages.

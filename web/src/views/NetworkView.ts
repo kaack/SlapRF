@@ -13,7 +13,7 @@ import {
 } from "../services/timer_console";
 import { AppStore } from "../state/store";
 import { DetectedTimer } from "../types/models";
-import { renderUsbConnectionBarHtml } from "../widgets/UsbConnectionBar";
+import { patchUsbConnectionBar } from "../widgets/UsbConnectionBar";
 import { CHANNEL_COLORS, DBM_MAX, DBM_MIN, RACEBAND, racebandName } from "./debug/charts";
 
 const NETWORK_PREFS_KEY = "slaprf.ui.network_prefs.v1";
@@ -763,13 +763,11 @@ export class NetworkView extends Component {
 
   private renderAll(): void {
     const connHost = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
-    if (connHost) {
-      connHost.innerHTML = renderUsbConnectionBarHtml({
-        activeConsole: usbPool.debugConsole,
-        showAllPorts: this.showAllPorts,
-        error: this.connError,
-      });
-    }
+    patchUsbConnectionBar(connHost, {
+      activeConsole: usbPool.debugConsole,
+      showAllPorts: this.showAllPorts,
+      error: this.connError,
+    });
     const { hub, spokes } = this.buildTopologyState();
     const sel = this.ensureSelectedSlot(hub, spokes);
     this.renderTopologySection(hub, spokes, sel);

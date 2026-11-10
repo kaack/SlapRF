@@ -1316,7 +1316,6 @@ export class UsbConnectionPool {
       c.onStateChange(() => this.notify());
       c.subscribe({
         onConnect: () => this.notify(),
-        onStatus: () => this.notify(),
         onConfig: () => this.notify(),
         onDisconnect: () => {
           if (!this.slots[this._debugSlotIndex]?.connected) {

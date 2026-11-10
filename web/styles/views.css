@@ -2879,6 +2879,9 @@ body.is-gate-dragging * {
   cursor: pointer;
   transition: background 0.14s, color 0.14s, border-color 0.14s;
 }
+.flasher-step-pill > * {
+  pointer-events: none;
+}
 .flasher-step-pill:hover:not(:disabled),
 .flasher-step-pill.is-current {
   color: var(--text);
@@ -3899,6 +3902,11 @@ body.is-gate-dragging * {
   color: inherit;
   font: inherit;
   cursor: pointer;
+}
+.debug-usb-chip-select > *,
+.debug-usb-chip-close > *,
+.debug-usb-add-chip > * {
+  pointer-events: none;
 }
 .debug-usb-chip-close {
   display: inline-flex;

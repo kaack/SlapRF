@@ -17,7 +17,7 @@ import {
   usbPool,
 } from "../services/timer_console";
 import { DetectedTimer } from "../types/models";
-import { renderUsbConnectionBarHtml } from "../widgets/UsbConnectionBar";
+import { patchUsbConnectionBar } from "../widgets/UsbConnectionBar";
 import {
   buildFileStamp,
   CHANNEL_COLORS,
@@ -2898,8 +2898,7 @@ export class DebugView extends Component {
 
   private renderConnection(): void {
     const host = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
-    if (!host) return;
-    host.innerHTML = renderUsbConnectionBarHtml({
+    patchUsbConnectionBar(host, {
       activeConsole: this.console,
       showAllPorts: this.showAllPorts,
       busyText: this.busy,
