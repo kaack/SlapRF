@@ -2890,8 +2890,6 @@ body.is-gate-dragging * {
   background: var(--surface-3);
 }
 .flasher-step-pill.is-current {
-  background: var(--accent-soft);
-  border-color: var(--accent-line);
   color: var(--text);
 }
 .flasher-step-pill.is-done {
