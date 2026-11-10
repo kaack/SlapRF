@@ -1556,10 +1556,19 @@ export class UsbConnectionPool {
     if (swapSlot.connected || swapSlot.reconnecting) {
       await swapSlot.disconnectCleanly();
     }
+    swapSlot.setBusyLabel("Connecting");
     this._debugSlotIndex = 1;
     this.notify();
-    const status = await swapSlot.connectWithPort(port, showAllPorts);
-    return { console: swapSlot, status, alreadyConnected: false };
+    try {
+      const status = await swapSlot.connectWithPort(port, showAllPorts);
+      this._debugSlotIndex = swapSlot.connected ? 1 : 0;
+      this.notify();
+      return { console: swapSlot, status, alreadyConnected: false };
+    } catch (err) {
+      this._debugSlotIndex = 0;
+      this.notify();
+      throw err;
+    }
   }
 
   /** Disconnects the swapped Debug USB device (Slot 1) and returns Debug to the main USB connection (Slot 0). */

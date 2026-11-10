@@ -247,7 +247,7 @@ export class DebugView extends Component {
         <section class="settings-section">
           <div class="settings-intro">
             <h2>Connection</h2>
-            <p>Inspects the main USB connection by default, or click <strong>Swap USB</strong> to temporarily debug a different USB device while keeping the main connection running.</p>
+            <p>Inspects the main USB connection by default, or click <strong>Debug another USB</strong> to inspect a different USB device while keeping the main connection running.</p>
           </div>
           <div class="debug-status-layout" data-slot="connection"></div>
         </section>
@@ -494,9 +494,9 @@ export class DebugView extends Component {
       this.observer?.disconnect();
       window.clearInterval(this.statusTimer);
       // Leaving the Debug page must stop high-rate LIVE / SCAN / LOG streaming,
-      // and if Debug was swapped to a secondary USB device (Slot 1), disconnect it and revert to main.
+      // and if a secondary debug USB device (Slot 1) is connected, disconnect it and revert to main.
       this.stopActiveStreamsOn(this.console);
-      if (usbPool.debugSlotIndex === 1) {
+      if (usbPool.debugSlotIndex === 1 || usbPool.slots[1]?.connected) {
         void usbPool.revertDebugToMain();
       }
     });
@@ -1953,16 +1953,13 @@ export class DebugView extends Component {
           const slot = Number(t.dataset.usbSlot);
           if (slot === 1) {
             await usbPool.revertDebugToMain();
-          } else {
-            const target = usbPool.slots[slot];
-            if (target) {
-              await target.disconnectCleanly();
-            }
           }
           break;
         }
         case "disconnect":
-          await this.console.disconnectCleanly();
+          if (this.console.slotIndex === 1) {
+            await usbPool.revertDebugToMain();
+          }
           break;
         case "live":
           if (this.scanLive || this.status?.scanLive) {

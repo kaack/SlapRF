@@ -3981,6 +3981,9 @@ body.is-gate-dragging * {
   font: inherit;
   cursor: pointer;
 }
+.debug-usb-chip-select:only-child {
+  padding-right: 7px;
+}
 .debug-usb-chip-select > *,
 .debug-usb-chip-close > *,
 .debug-usb-add-chip > * {

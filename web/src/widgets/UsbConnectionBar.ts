@@ -27,7 +27,7 @@ export function patchUsbConnectionBar(host: HTMLElement | null, opts: UsbConnect
   host.innerHTML = html;
 }
 
-function renderChip(c: TimerConsole, active: boolean): string {
+function renderChip(c: TimerConsole, active: boolean, canDisconnect = true): string {
   const s = c.lastStatus;
   const cfg = c.lastConfig;
   const isOther = c.isOtherDevice;
@@ -60,6 +60,17 @@ function renderChip(c: TimerConsole, active: boolean): string {
         : "#d4ff3a";
   const fp = s?.fp || cfg?.fingerprint || "";
   const fpNote = fp ? ` · ${fp}` : "";
+  const closeBtn = canDisconnect
+    ? `<button
+        type="button"
+        class="debug-usb-chip-close"
+        data-action="disconnect-usb-slot"
+        data-usb-slot="${c.slotIndex}"
+        ${isWriting ? "disabled" : ""}
+        title="Disconnect ${esc(label)}"
+        aria-label="Disconnect ${esc(label)}"
+      >${icons.close(13)}</button>`
+    : "";
   return `
     <div class="pilot-chip debug-usb-chip ${active ? "is-active" : ""} ${isWriting ? "is-writing" : ""}" style="--c:${chipColor}">
       <button
@@ -75,15 +86,7 @@ function renderChip(c: TimerConsole, active: boolean): string {
         <span class="pilot-chip-name">${esc(label)}</span>
         <span class="pilot-chip-time">${esc(roleMeta)}</span>
       </button>
-      <button
-        type="button"
-        class="debug-usb-chip-close"
-        data-action="disconnect-usb-slot"
-        data-usb-slot="${c.slotIndex}"
-        ${isWriting ? "disabled" : ""}
-        title="Disconnect ${esc(label)}"
-        aria-label="Disconnect ${esc(label)}"
-      >${icons.close(13)}</button>
+      ${closeBtn}
     </div>`;
 }
 
@@ -103,54 +106,48 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
   let actionBtnHtml = "";
 
   if (opts.allowSwap) {
-    // Debug page: shows the currently inspected USB connection and a "Swap USB" button when connected.
-    const c = opts.activeConsole;
-    if (c.connected) {
-      chipsHtml = renderChip(c, true);
-      const isSwapped = c === swapSlot && main.connected;
-      const mainLabel =
-        main.lastStatus?.label || main.lastConfig?.timerLabel || (main.lastStatus?.role === 1 ? "H1" : "Main USB");
-      actionBtnHtml = `
-        <button
-          type="button"
-          class="pilot-chip debug-usb-add-chip"
-          data-action="connect-add"
-          ${supported && !busy ? "" : "disabled"}
-          title="Swap this Debug window to inspect a different USB device while keeping ${esc(mainLabel)} connected"
-        >
-          ${icons.plug(20)}
-          <span class="pilot-chip-name">${busy ? `${esc(busyText)}…` : "Swap USB"}</span>
-        </button>
-        ${
-          isSwapped
-            ? `<button
-                type="button"
-                class="pilot-chip debug-usb-add-chip"
-                data-action="revert-usb-main"
-                ${supported && !busy ? "" : "disabled"}
-                title="Switch Debug back to main USB connection (${esc(mainLabel)})"
-              >
-                <span class="pilot-chip-name">Back to ${esc(mainLabel)}</span>
-              </button>`
-            : ""
-        }`;
-    } else {
-      actionBtnHtml = `
-        <button
-          type="button"
-          class="pilot-chip debug-usb-add-chip"
-          data-action="connect-add"
-          ${supported && !busy ? "" : "disabled"}
-          title="Connect a USB device"
-        >
-          ${icons.plug(20)}
-          <span class="pilot-chip-name">${busy ? `${esc(busyText)}…` : "Connect USB"}</span>
-        </button>`;
+    // Debug page:
+    // - Never allow disconnecting the main/Hub USB connection (Slot 0) from the Debug window (`canDisconnect = false`).
+    // - Allow choosing a second USB connection (Slot 1) to debug on, shown alongside the main connection so the user
+    //   can switch between them or close the secondary debug USB connection (`canDisconnect = true`).
+    const chips: string[] = [];
+    if (main.connected) {
+      chips.push(renderChip(main, opts.activeConsole === main, false));
     }
+    if (swapSlot.connected) {
+      chips.push(renderChip(swapSlot, opts.activeConsole === swapSlot, true));
+    }
+    chipsHtml = chips.join("");
+
+    const mainLabel =
+      main.lastStatus?.label || main.lastConfig?.timerLabel || (main.lastStatus?.role === 1 ? "H1" : "Main USB");
+    const btnLabel = busy
+      ? `${esc(busyText)}…`
+      : swapSlot.connected
+        ? "Swap debug USB"
+        : main.connected
+          ? "Debug another USB"
+          : "Connect USB";
+    const btnTitle = main.connected
+      ? `Choose a different USB device to debug while keeping ${esc(mainLabel)} connected`
+      : swapSlot.connected
+        ? "Choose a different USB device to debug"
+        : "Connect a USB device";
+    actionBtnHtml = `
+      <button
+        type="button"
+        class="pilot-chip debug-usb-add-chip"
+        data-action="connect-add"
+        ${supported && !busy ? "" : "disabled"}
+        title="${btnTitle}"
+      >
+        ${icons.plug(20)}
+        <span class="pilot-chip-name">${btnLabel}</span>
+      </button>`;
   } else {
     // Network & Flasher pages: strictly single main USB connection (Slot 0).
     if (main.connected) {
-      chipsHtml = renderChip(main, true);
+      chipsHtml = renderChip(main, true, true);
     } else {
       actionBtnHtml = `
         <button
