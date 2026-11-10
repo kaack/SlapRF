@@ -3207,8 +3207,6 @@ body.is-gate-dragging * {
   align-items: center;
   justify-content: space-between;
   gap: 10px;
-  padding-top: 6px;
-  border-top: 1px solid var(--border);
 }
 
 .flasher-banner.is-ok {
