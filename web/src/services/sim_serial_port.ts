@@ -38,13 +38,51 @@ let boundStore: AppStore | null = null;
 const fwStateByTimerId = new Map<number, SimTimerFirmwareState>();
 let activeIdentifyFp: string | null = null;
 const openSimPorts = new Set<SimulatedSerialPort>();
+let activePickerCancel: (() => void) | null = null;
+
+type SimStoreWindow = Window & {
+  __slaprfSimSerialStore?: AppStore;
+  __slaprfHMR?: { store?: AppStore };
+};
+
+function getBoundStore(): AppStore | null {
+  if (boundStore) return boundStore;
+  if (typeof window !== "undefined") {
+    const w = window as SimStoreWindow;
+    if (w.__slaprfSimSerialStore) {
+      boundStore = w.__slaprfSimSerialStore;
+      return boundStore;
+    }
+    if (w.__slaprfHMR?.store) {
+      boundStore = w.__slaprfHMR.store;
+      return boundStore;
+    }
+  }
+  return null;
+}
 
 export function bindSimSerialStore(store: AppStore): void {
   boundStore = store;
+  if (typeof window !== "undefined") {
+    (window as SimStoreWindow).__slaprfSimSerialStore = store;
+  }
 }
 
 export function isSimulatedUsbMode(): boolean {
-  return Boolean(boundStore?.simulatorRunning);
+  const store = getBoundStore();
+  if (store && (store.simulatorRunning || store.nodes.length > 0 || store.detectedTimers.length > 0)) {
+    return Boolean(store.simulatorRunning);
+  }
+  if (typeof window !== "undefined" && window.localStorage) {
+    try {
+      const saved = window.localStorage.getItem("slaprf.ui.sim_mode.v1");
+      if (saved === "false") return false;
+      if (saved === "true") return true;
+    } catch {
+      // ignore storage errors
+    }
+  }
+  return Boolean(store?.simulatorRunning ?? true);
 }
 
 export function isSimulatedSerialPort(port: unknown): port is SimulatedSerialPort {
@@ -103,7 +141,7 @@ export interface SimTimerDescriptor {
 }
 
 export function listSimulatedTimers(): SimTimerDescriptor[] {
-  const store = boundStore;
+  const store = getBoundStore();
   if (!store) return [];
   const simTimers: SimTimerState[] = store.simState?.timers ?? [];
   const detected: DetectedTimer[] = store.detectedTimers ?? [];
@@ -152,7 +190,7 @@ export function listSimulatedTimers(): SimTimerDescriptor[] {
 }
 
 function savedFrequenciesMHz(): number[] {
-  const pilots = boundStore?.pilots ?? [];
+  const pilots = getBoundStore()?.pilots ?? [];
   return RACEBAND_DEFAULT.map((def, i) => {
     const f = pilots[i]?.frequencyMhz ?? def;
     return f >= 5180 && f <= 5917 ? f : def;
@@ -192,7 +230,7 @@ function sampleTimerChannelDbm(
   st: SimTimerFirmwareState,
   freqs: number[]
 ): { dbm: number[]; floor: number[] } {
-  const store = boundStore;
+  const store = getBoundStore();
   const baseFloor = Math.round(desc.noiseFloorDbm || -92);
   const floor = Array.from({ length: 8 }, (_, i) => baseFloor - (i % 2));
 
@@ -283,7 +321,7 @@ function synthesizeSpectrumScan(
   const baseFloor = desc.noiseFloorDbm || -92;
   const savedFreqs = savedFrequenciesMHz();
   const { dbm: chDbm } = sampleTimerChannelDbm(desc, st, savedFreqs);
-  const store = boundStore;
+  const store = getBoundStore();
   const pilots = store?.pilots ?? [];
 
   // Intermittent Wi-Fi OFDM activity on Ch 40 (5200 MHz) and Ch 149 (5745 MHz)
@@ -529,11 +567,12 @@ export class SimulatedSerialPort implements SerialPortLike {
     let hub: TimerStatus["hub"] | undefined;
 
     if (desc.isHub) {
+      const store = getBoundStore();
       spokes = spokesDesc.map((sp) => {
         const spFw = getOrCreateFwState(sp.timerId);
         const spSample = sampleTimerChannelDbm(sp, spFw, freqs);
-        const node = boundStore?.nodes.find((n) => (n.assignedTimerId ?? n.gateId) === sp.timerId);
-        const det = boundStore?.detectedTimers.find((d) => d.timerId === sp.timerId);
+        const node = store?.nodes.find((n) => (n.assignedTimerId ?? n.gateId) === sp.timerId);
+        const det = store?.detectedTimers.find((d) => d.timerId === sp.timerId);
         const frames = Math.max(
           Math.floor(spFw.sweeps / 2),
           node?.framesRxCount ?? 0,
@@ -559,6 +598,7 @@ export class SimulatedSerialPort implements SerialPortLike {
         fw: hubDesc.firmwareVersion,
         mac: macForTimer(hubDesc.timerId),
         beaconMsAgo: Math.floor(Math.random() * 16) + 2,
+        linked: true,
       };
     }
 
@@ -931,10 +971,18 @@ export class SimulatedSerialPort implements SerialPortLike {
  * (`H1`, `T1`, `T2`, `T3`, …) to connect over virtual USB-C in simulation mode.
  */
 export function pickSimulatedUsbPort(excludeTimerIds: number[] = []): Promise<SimulatedSerialPort> {
+  if (activePickerCancel) {
+    activePickerCancel();
+    activePickerCancel = null;
+  }
+  document.querySelectorAll(".confirm-modal-backdrop").forEach((el) => el.remove());
+
   return new Promise<SimulatedSerialPort>((resolve, reject) => {
     const timers = listSimulatedTimers();
     const backdrop = document.createElement("div");
     backdrop.className = "confirm-modal-backdrop";
+    backdrop.style.cssText =
+      "position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(6,7,10,0.76);backdrop-filter:blur(8px)";
 
     const rowsHtml = timers
       .map((t) => {
@@ -954,7 +1002,7 @@ export function pickSimulatedUsbPort(excludeTimerIds: number[] = []): Promise<Si
             class="sim-usb-picker-item ${disabled ? "is-disabled" : ""}"
             data-pick-sim-timer="${t.timerId}"
             ${disabled ? "disabled" : ""}
-            style="display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-elev);color:var(--text);text-align:left;cursor:${disabled ? "not-allowed" : "pointer"};opacity:${disabled ? "0.55" : "1"};transition:border-color 0.15s,background 0.15s"
+            style="display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border,#22252c);background:var(--surface-2,#15181d);color:var(--text,#ecedef);text-align:left;cursor:${disabled ? "not-allowed" : "pointer"};opacity:${disabled ? "0.55" : "1"};transition:border-color 0.15s,background 0.15s"
           >
             <div style="display:flex;align-items:center;gap:10px;min-width:0">
               <span class="gate-color-swatch" style="--c:${esc(t.color)};cursor:default;flex-shrink:0"></span>
@@ -973,23 +1021,26 @@ export function pickSimulatedUsbPort(excludeTimerIds: number[] = []): Promise<Si
       .join("");
 
     backdrop.innerHTML = `
-      <div class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="sim-usb-picker-title" style="max-width:480px;width:92vw">
-        <div class="confirm-modal-head">
-          <span class="confirm-modal-icon">${icons.plug(18)}</span>
-          <h3 id="sim-usb-picker-title">Connect simulated USB timer</h3>
+      <div class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="sim-usb-picker-title" style="max-width:480px;width:92vw;padding:20px;border-radius:14px;border:1px solid var(--border-strong,#2d3139);background:var(--surface,#111317);color:var(--text,#ecedef);box-shadow:0 24px 64px rgba(0,0,0,0.75)">
+        <div class="confirm-modal-head" style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <span class="confirm-modal-icon" style="width:32px;height:32px;display:grid;place-items:center;border-radius:8px;background:var(--surface-2,#15181d);border:1px solid var(--border-strong,#2d3139);color:var(--accent,#d4ff3a);flex-shrink:0">${icons.plug(18)}</span>
+          <h3 id="sim-usb-picker-title" style="font-size:15px;font-weight:650">Connect simulated USB timer</h3>
         </div>
-        <p class="confirm-modal-body" style="margin-bottom:12px">
+        <p class="confirm-modal-body" style="color:var(--text-2,#a3a8b3);font-size:12.5px;line-height:1.5;margin-bottom:14px">
           Select a simulated XIAO ESP32-C5 timer to connect over virtual USB-C. You can power timers on or off in the Simulator tab.
         </p>
         <div style="display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto;margin-bottom:16px">
           ${rowsHtml || `<div class="empty-note">No simulated timers available. Add or reset timers in the Simulator tab.</div>`}
         </div>
-        <div class="confirm-modal-actions">
+        <div class="confirm-modal-actions" style="display:flex;align-items:center;justify-content:flex-end;gap:8px">
           <button type="button" class="btn btn-ghost" data-modal="cancel">Cancel</button>
         </div>
       </div>`;
 
     const cleanup = () => {
+      if (activePickerCancel === cancel) {
+        activePickerCancel = null;
+      }
       document.removeEventListener("keydown", onKey, true);
       backdrop.remove();
     };
@@ -998,6 +1049,7 @@ export function pickSimulatedUsbPort(excludeTimerIds: number[] = []): Promise<Si
       cleanup();
       reject(new Error("No port selected"));
     };
+    activePickerCancel = cancel;
 
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {

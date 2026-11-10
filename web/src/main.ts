@@ -57,9 +57,6 @@ function hotReloadUI(hmr: SlaprfHMRState): void {
   Object.setPrototypeOf(hmr.store, AppStore.prototype);
   Object.setPrototypeOf(hmr.api, ApiClient.prototype);
   bindSimSerialStore(hmr.store);
-  if (hmr.store.simulatorRunning && !usbPool.mainConsole.connected) {
-    void (hmr.api as unknown as { autoConnectSimulatedHub?: () => Promise<void> }).autoConnectSimulatedHub?.();
-  }
   if (!(hmr.api as unknown as { provisionedUsbKeys?: Set<string> }).provisionedUsbKeys) {
     (hmr.api as unknown as { provisionedUsbKeys: Set<string> }).provisionedUsbKeys = new Set<string>();
   }
@@ -78,6 +75,7 @@ function hotReloadUI(hmr: SlaprfHMRState): void {
     console.warn("[HMR] Error destroying previous shell:", err);
   }
   usbPool.rebindSlots();
+  hmr.api.bindUsbTimerSync();
   hmr.router.clearListeners();
   hmr.shell = new AppShell(root, hmr.store, hmr.api, hmr.router, hmr.announcer);
 

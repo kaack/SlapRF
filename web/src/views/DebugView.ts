@@ -1923,7 +1923,9 @@ export class DebugView extends Component {
       this.saveDebugPrefs();
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.error = msg;
+      if (!/No port selected|aborted|cancelled|cancel/i.test(msg)) {
+        this.error = msg;
+      }
       this.renderConnection();
       this.renderLiveHead();
     }

@@ -22,7 +22,7 @@ import {
   generateFingerprint,
   LATEST_FIRMWARE_VERSION,
 } from "./esp_flasher";
-import { bindSimSerialStore, isSimulatedSerialPort, listSimulatedTimers } from "./sim_serial_port";
+import { bindSimSerialStore, isSimulatedSerialPort } from "./sim_serial_port";
 import { forgetKnownHardwareTimer, TimerConsole, TimerStatus, usbPool } from "./timer_console";
 import { WasmSimTransport } from "./wasm_transport";
 
@@ -104,25 +104,13 @@ export class ApiClient {
     this.hubBridge.setActive(this.usingBrowserRealEngine);
     this.bindUsbTimerSync();
     await this.refresh();
-    if (this.simMode) {
-      await this.autoConnectSimulatedHub();
-    }
     this.connectStream();
     window.setInterval(() => {
       void this.pollStatus();
     }, STATUS_POLL_MS);
   }
 
-  private async autoConnectSimulatedHub(): Promise<void> {
-    if (!this.simMode || usbPool.mainConsole.connected) return;
-    const timers = listSimulatedTimers();
-    const target = timers.find((t) => t.isHub && t.poweredOn) ?? timers.find((t) => t.poweredOn);
-    if (target) {
-      await usbPool.connectSimulatedTimer(target.timerId, 0).catch(() => undefined);
-    }
-  }
-
-  private bindUsbTimerSync(): void {
+  public bindUsbTimerSync(): void {
     const lastKeyByConsole = new Map<TimerConsole, string>();
     const syncConsole = (c: TimerConsole, s: TimerStatus | null) => {
       const primary = usbPool.primaryConsole();
@@ -203,9 +191,7 @@ export class ApiClient {
     this.hubBridge.setActive(this.usingBrowserRealEngine);
     this.connectStream();
     await this.refresh();
-    if (this.simMode) {
-      await this.autoConnectSimulatedHub();
-    } else {
+    if (!this.simMode) {
       for (const c of usbPool.connectedConsoles()) {
         const s = c.lastStatus;
         if (!s) continue;
@@ -261,9 +247,6 @@ export class ApiClient {
       await this.transport.request<FullStateResponse>("POST", "/api/sim/timer-action", payload)
     );
     await usbPool.reconcileSimulatedPorts();
-    if (payload.action === "reset-timers") {
-      await this.autoConnectSimulatedHub();
-    }
   }
 
   public async pollStatusNow(): Promise<void> {
