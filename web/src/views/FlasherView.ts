@@ -96,36 +96,27 @@ class TimerReaderPanel extends Component {
     this.render();
   }
 
-  public setReadout(info: TimerReadout): void {
+  public setReadout(info: TimerReadout | null): void {
     this.readout = info;
     this.errorMsg = null;
     this.render();
   }
 
   private async readFromUsb(): Promise<void> {
-    if (this.busy) return;
+    const activeConsole = usbPool.debugConsole;
+    if (this.busy || !activeConsole.connected) return;
     this.busy = true;
     this.errorMsg = null;
-    this.progressText = "Connecting to XIAO ESP32-C5 over USB…";
+    this.progressText = "Reading timer configuration over USB…";
     this.render();
 
     try {
-      const info = await readXiaoC5OverWebSerial(
-        (p) => {
-          this.progressText = p.detail;
-          this.render();
-        },
-        this.showAllPorts,
-        usbPool
-      );
+      const info = await activeConsole.readSnapshot();
       this.readout = info;
       this.onRead?.(info);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      if (!/No port selected|aborted|cancelled|cancel/i.test(msg)) {
-        this.readout = null;
-        this.errorMsg = msg;
-      }
+      this.errorMsg = msg;
     } finally {
       this.busy = false;
       this.progressText = null;
@@ -135,6 +126,7 @@ class TimerReaderPanel extends Component {
 
   private render(): void {
     const webSerialOk = isWebSerialSupported();
+    const isConnected = usbPool.debugConsole.connected;
     const r = this.readout;
     const s = r?.status;
     const active = Boolean(r);
@@ -147,8 +139,12 @@ class TimerReaderPanel extends Component {
         : active
           ? s?.emergencyMode
             ? "is-emergency"
-            : "is-up"
-          : "";
+            : s?.role === 2 || r?.role === "spoke"
+              ? "is-spoke"
+              : "is-up"
+          : isConnected
+            ? "is-warn"
+            : "";
 
     const headText = this.busy
       ? esc(this.progressText || "Reading timer over USB…")
@@ -156,9 +152,11 @@ class TimerReaderPanel extends Component {
         ? esc(this.errorMsg)
         : r
           ? `Read ${esc(r.timerLabel || "(unnamed)")} · ${r.role === "hub" ? "Hub" : "Spoke"} · firmware ${esc(r.firmwareVersion)}`
-          : webSerialOk
-            ? "No timer read yet · plug a timer into USB and click Read timer"
-            : "Direct USB reading requires Chrome, Edge, or Brave";
+          : isConnected
+            ? "Connected over USB · click Read timer to inspect"
+            : webSerialOk
+              ? "Off · connect a timer in Connection above to read its settings"
+              : "Direct USB reading requires Chrome, Edge, or Brave";
 
     const rfBadge = !r
       ? `<span class="badge">—</span>`
@@ -208,12 +206,8 @@ class TimerReaderPanel extends Component {
           <span class="debug-head-note">${headText}</span>
         </span>
         <div class="debug-connect-actions">
-          <label class="debug-port-check" title="Include all serial ports in the browser picker">
-            <input type="checkbox" data-reader-all-ports="1" ${this.showAllPorts ? "checked" : ""} ${this.busy ? "disabled" : ""} />
-            <span>All ports</span>
-          </label>
-          <button type="button" class="btn btn-sm btn-armed" data-action="read-timer" ${this.busy || !webSerialOk ? "disabled" : ""}>
-            ${icons.plug(14)}<span>${this.busy ? "Reading…" : "Read timer"}</span>
+          <button type="button" class="btn btn-sm btn-armed" data-action="read-timer" ${this.busy || !webSerialOk || !isConnected ? "disabled" : ""}>
+            ${icons.reset(14)}<span>${this.busy ? "Reading…" : "Read timer"}</span>
           </button>
         </div>
       </div>
@@ -530,6 +524,8 @@ export class FlasherView extends Component {
         if (applyToFlasher) {
           flasher.applyReadout(r);
         }
+      } else if (!usbPool.debugConsole.connected) {
+        readerPanel?.setReadout(null);
       }
     };
 
