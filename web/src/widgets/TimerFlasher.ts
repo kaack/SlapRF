@@ -461,10 +461,10 @@ export class TimerFlasher extends Component {
     return `
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
-          <div class="flasher-wizard-badge-row">
-            <span class="note">Step 1 of 3 · One Hub plus up to 6 Spokes per course</span>
+          <div class="flasher-wizard-head">
+            <h3 class="flasher-pane-title">What role will this timer play?</h3>
+            <span class="note flasher-step-count">Step 1 of 3</span>
           </div>
-          <h3>What role will this timer play?</h3>
         </div>
 
         <div class="flasher-pictorial-grid" role="radiogroup" aria-label="Timer role">
@@ -584,10 +584,10 @@ export class TimerFlasher extends Component {
     return `
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
-          <div class="flasher-wizard-badge-row">
-            <span class="note">Step 2 of 3 · Timer identity</span>
+          <div class="flasher-wizard-head">
+            <h3 class="flasher-pane-title">Name this ${isHub ? "Hub" : "Spoke"}</h3>
+            <span class="note flasher-step-count">Step 2 of 3</span>
           </div>
-          <h3>Name this ${isHub ? "Hub" : "Spoke"}</h3>
           <p>${
             isHub
               ? "Give your Hub a short 1–2 character label (usually <strong>H1</strong>) so it is easy to recognize across Track, Network, and Debug."
@@ -660,10 +660,10 @@ export class TimerFlasher extends Component {
     return `
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
-          <div class="flasher-wizard-badge-row">
-            <span class="note">Step 3 of 3 · Review &amp; write over USB-C</span>
+          <div class="flasher-wizard-head">
+            <h3 class="flasher-pane-title">Ready to flash ${esc(cleanLabel)}</h3>
+            <span class="note flasher-step-count">Step 3 of 3</span>
           </div>
-          <h3>Ready to flash ${esc(cleanLabel)}</h3>
           <p>${
             isConnected
               ? `Connected to <strong>${esc(targetName)}</strong> over USB-C. Click <strong>Flash ${esc(cleanLabel)} to USB</strong> to write the firmware.`
