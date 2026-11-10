@@ -158,12 +158,12 @@ func TestTimerLabelAndDisplayNameOverride(t *testing.T) {
 		t.Fatalf("expected spoke timer to claim timer #3, got #%d", id)
 	}
 
-	// Without a display-name override, gateLabelLocked returns the flashed TimerLabel ("Blue-Timer").
+	// Without a display-name override, gateLabelLocked returns "Gate N" (never the hardware TimerLabel).
 	e.mu.Lock()
 	gotDefault := e.gateLabelLocked(2)
 	e.mu.Unlock()
-	if gotDefault != "Blue-Timer" {
-		t.Fatalf("expected flashed label 'Blue-Timer', got %q", gotDefault)
+	if gotDefault != "Gate 2" {
+		t.Fatalf("expected default gate label 'Gate 2', got %q", gotDefault)
 	}
 
 	// Setting a display name in the Gates editor overrides the UI label while preserving TimerLabel.

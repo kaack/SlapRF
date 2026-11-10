@@ -244,7 +244,7 @@ export class NetworkView extends Component {
     const nowMs = performance.now();
 
     const hubGate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === 1);
-    const hubGateName = hubGate ? (hubGate.name?.trim() || hubGate.timerLabel?.trim() || `Gate ${hubGate.trackOrder + 1}`) : undefined;
+    const hubGateName = hubGate ? (hubGate.name?.trim() || `Gate ${hubGate.trackOrder + 1}`) : undefined;
     const hubServerTimer = detectedTimers.find((t) => t.isHub || t.timerId === 1);
     const knownHub = knownTimers.find((k) => k.role === "hub");
 
@@ -369,7 +369,7 @@ export class NetworkView extends Component {
           }
           const activelyReceiving = frames > 0 && (sp.msAgo === undefined || sp.msAgo < 2500);
           const gate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === sp.slot);
-          const gateName = gate ? (gate.name?.trim() || gate.timerLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
+          const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
           const sourceNote =
             frames === 0
               ? `Joined · 0 frames rx`
@@ -409,7 +409,7 @@ export class NetworkView extends Component {
       const beaconFresh = beaconMsAgo === undefined || beaconMsAgo < 2500;
       const linked = hasSlot && beaconFresh;
       const gate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === slotNum);
-      const gateName = gate ? (gate.name?.trim() || gate.timerLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
+      const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
       spokes.set(slotNum, {
         slot: slotNum,
         populated: true,
@@ -443,7 +443,7 @@ export class NetworkView extends Component {
       if (!dt.isHub && dt.timerId >= 2 && dt.timerId <= 7) {
         const fp = (dt.fingerprint || "").toUpperCase();
         const gate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === dt.timerId);
-        const gateName = gate ? (gate.name?.trim() || gate.timerLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
+        const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
         const serverFrames = gate?.framesRxCount ?? 0;
         const serverRssi = Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined;
         if (spokes.has(dt.timerId)) {
@@ -508,7 +508,7 @@ export class NetworkView extends Component {
         }
         if (targetSlot >= 2 && targetSlot <= 7) {
           const gate = this.store.nodes.find((g) => (g.assignedTimerId ?? g.gateId) === targetSlot);
-          const gateName = gate ? (gate.name?.trim() || gate.timerLabel?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
+          const gateName = gate ? (gate.name?.trim() || `Gate ${gate.trackOrder + 1}`) : undefined;
           spokes.set(targetSlot, {
             slot: targetSlot,
             populated: true,

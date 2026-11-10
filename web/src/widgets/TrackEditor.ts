@@ -180,8 +180,13 @@ export class TrackEditor extends Component {
       .sort((a, b) => a.timerId - b.timerId);
   }
 
-  private formatTimerShortCode(timerId: number): string {
-    return timerId > 0 ? `T${timerId}` : "—";
+  private formatTimerShortCode(timerId: number, detected?: DetectedTimer[], fallbackLabel?: string): string {
+    if (timerId <= 0) return "—";
+    const list = detected ?? this.detectedTimers;
+    const d = list.find((t) => t.timerId === timerId);
+    const given = d?.timerLabel?.trim() || fallbackLabel?.trim();
+    if (given) return given.slice(0, 2);
+    return d?.isHub ? "H1" : `S${Math.max(1, timerId - 1)}`;
   }
 
   private ensureSelectedNode(nodes: TrackNode[]): TrackNode | null {
@@ -277,7 +282,7 @@ export class TrackEditor extends Component {
     const assignedId = node.assignedTimerId ?? 0;
     const hasTimer = assignedId > 0;
     const tiedTimer = detected.find((d) => d.timerId === assignedId);
-    const shortCode = this.formatTimerShortCode(assignedId);
+    const shortCode = this.formatTimerShortCode(assignedId, detected, node.timerLabel);
     const isHubGate = hasTimer && tiedTimer?.isHub === true;
     const roleSub = hasTimer ? (isHubGate ? "HUB" : "SPK") : "EMPTY";
     const color = hasTimer ? timerColor(this.store, assignedId) : "#64748b";
@@ -389,19 +394,19 @@ export class TrackEditor extends Component {
   private renderTrayTimer(d: DetectedTimer): string {
     const color = timerColor(this.store, d.timerId);
     const roleSub = d.isHub ? "HUB" : "SPK";
-    const label = d.timerLabel?.trim() ? ` · ${d.timerLabel.trim()}` : "";
+    const timerName = this.formatTimerShortCode(d.timerId, [d], d.timerLabel);
     return `
       <div
         class="unassigned-timer-token"
         data-timer-id="${d.timerId}"
         style="--c:${color}"
-        title="T${d.timerId}${esc(label)} (${roleSub}) · Drag onto the track line above to create a gate"
+        title="${esc(timerName)} (${roleSub}) · Drag onto the track line above to create a gate"
       >
         <span class="unassigned-timer-dot" style="--c:${color}">
-          <span class="mono">T${d.timerId}</span>
+          <span class="mono">${esc(timerName)}</span>
         </span>
         <div class="unassigned-timer-info">
-          <span class="unassigned-timer-name mono">T${d.timerId}${esc(label)}</span>
+          <span class="unassigned-timer-name mono">${esc(timerName)}</span>
           <span class="unassigned-timer-sub">
             <span class="gate-node-status-dot ${d.online ? "is-online" : ""}"></span>
             ${d.isHub ? "Hub · dongle (USB)" : `Spoke · ${d.online ? `${d.batteryPct}%` : "Offline"}`}
@@ -419,6 +424,7 @@ export class TrackEditor extends Component {
     const assignedId = node.assignedTimerId ?? 0;
     const hasTimer = assignedId > 0;
     const tiedTimer = detected.find((d) => d.timerId === assignedId);
+    const timerName = this.formatTimerShortCode(assignedId, detected, node.timerLabel);
     const color = hasTimer ? timerColor(this.store, assignedId) : "#64748b";
     const displayName = node.name.trim() || `Gate ${index + 1}`;
 
@@ -426,7 +432,7 @@ export class TrackEditor extends Component {
       ? `
         <div class="gate-inspector-timer-meta">
           <span class="gate-inspector-dot" style="--c:${color}"></span>
-          <strong class="mono">T${assignedId}${tiedTimer?.timerLabel?.trim() ? ` · ${esc(tiedTimer.timerLabel.trim())}` : ""}</strong>
+          <strong class="mono">${esc(timerName)}</strong>
           <span class="detected-role-pill ${tiedTimer?.isHub ? "is-hub" : ""}">
             ${esc(tiedTimer ? timerRoleText(this.store, tiedTimer) : "Spoke")}
           </span>
@@ -546,7 +552,7 @@ export class TrackEditor extends Component {
         <span class="gate-node-order mono">#1</span>
       </div>
       <div class="gate-node-circle is-unassigned is-landing-preview" style="--c:${color}">
-        <span class="gate-node-empty-label mono">T${timerId}</span>
+        <span class="gate-node-empty-label mono">${esc(this.formatTimerShortCode(timerId))}</span>
       </div>
       <div class="gate-node-name">New gate</div>
       <span class="gate-node-start-btn is-placeholder-flag" aria-hidden="true">${icons.checkered(13)}</span>
@@ -623,7 +629,7 @@ export class TrackEditor extends Component {
           circle.classList.add("is-landing-preview");
           circle.style.setProperty("--c", color);
         }
-        if (label) label.textContent = `T${timerId}`;
+        if (label) label.textContent = this.formatTimerShortCode(timerId);
         if (nameEl) nameEl.textContent = "New gate";
       } else {
         emptyPlaceholder.classList.remove("is-insert-preview");
@@ -739,7 +745,7 @@ export class TrackEditor extends Component {
         if (previewCircle) {
           previewCircle.className = "gate-node-circle is-filled";
           previewCircle.style.setProperty("--c", color);
-          previewCircle.innerHTML = `<span class="gate-node-timer-code mono">T${timerId}</span>`;
+          previewCircle.innerHTML = `<span class="gate-node-timer-code mono">${esc(this.formatTimerShortCode(timerId))}</span>`;
         }
         targetSlot.classList.remove("is-drop-slot", "is-insert-preview", "is-empty-placeholder");
         tokenEl.style.display = "none";

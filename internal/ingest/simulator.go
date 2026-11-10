@@ -551,8 +551,6 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 			g := gates[gIdx]
 			if g.Name != "" {
 				nearestGate = g.Name
-			} else if g.TimerLabel != "" {
-				nearestGate = g.TimerLabel
 			} else {
 				nearestGate = fmt.Sprintf("Gate %d", gIdx+1)
 			}

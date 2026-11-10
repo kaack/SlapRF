@@ -74,7 +74,7 @@ export class TimerFlasher extends Component {
           this.step = parsed.step;
         }
         if (typeof parsed.timerLabel === "string" && parsed.timerLabel.trim() !== "") {
-          this.timerLabel = parsed.timerLabel;
+          this.timerLabel = parsed.timerLabel.trim().slice(0, 2);
         }
         if (typeof parsed.keepFingerprint === "boolean") {
           this.keepFingerprint = parsed.keepFingerprint;
@@ -174,6 +174,9 @@ export class TimerFlasher extends Component {
     this.listen(el, "input", (e) => {
       const input = e.target as HTMLInputElement;
       if (input.matches("[data-timer-label]")) {
+        if (input.value.length > 2) {
+          input.value = input.value.slice(0, 2);
+        }
         this.timerLabel = input.value;
         this.saveFlasherPrefs();
       }
@@ -244,8 +247,16 @@ export class TimerFlasher extends Component {
   }
 
   private validateIdentityStep(): boolean {
-    if (!this.timerLabel.trim()) {
-      this.errorMsg = "Give this timer a name (e.g. H1, S1, S2) before continuing.";
+    const clean = this.timerLabel.trim();
+    if (!clean) {
+      this.errorMsg = "Give this timer a 1–2 character name (e.g. H1, S1, S2) before continuing.";
+      this.slideDir = "none";
+      this.render();
+      this.el.querySelector<HTMLInputElement>("[data-timer-label]")?.focus();
+      return false;
+    }
+    if (clean.length > 2) {
+      this.errorMsg = "Timer name must be at most 2 characters (e.g. H1, S1, S2).";
       this.slideDir = "none";
       this.render();
       this.el.querySelector<HTMLInputElement>("[data-timer-label]")?.focus();
@@ -299,7 +310,7 @@ export class TimerFlasher extends Component {
     if (this.busy) return;
     this.role = info.role;
     if (info.timerLabel) {
-      this.timerLabel = info.timerLabel;
+      this.timerLabel = info.timerLabel.trim().slice(0, 2);
     }
     this.slideDir = "none";
     this.render();
@@ -579,19 +590,19 @@ export class TimerFlasher extends Component {
             }</span>
           </div>
           <h3>Name this ${isHub ? "Hub" : "Spoke"}</h3>
-          <p>The name is how this timer shows up in Timers and on the Track.</p>
+          <p>The 1–2 character name (e.g. ${isHub ? "H1" : "S1, S2"}) is how this timer shows up in Timers and on the Track.</p>
         </div>
 
         <div class="flasher-wifi-inputs flasher-two-col">
           <div class="flasher-field">
-            <label class="flasher-field-label">Timer name</label>
+            <label class="flasher-field-label">Timer name (max 2 chars)</label>
             <input
               class="input mono"
               type="text"
               placeholder="${idPlaceholder}"
               value="${esc(this.timerLabel)}"
               data-timer-label="1"
-              maxlength="24"
+              maxlength="2"
               spellcheck="false"
               autocomplete="off"
               ${this.busy ? "disabled" : ""}
@@ -648,7 +659,8 @@ export class TimerFlasher extends Component {
 
           <div class="flasher-receipt-item">
             <span class="note">Timer &amp; Firmware</span>
-            <div class="flasher-receipt-val">
+            <div class="flasher-receipt-val mono">
+              <span>${esc(cleanLabel)} · SlapRF ${LATEST_FIRMWARE_VERSION}</span>
             </div>
           </div>
 

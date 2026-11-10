@@ -199,9 +199,9 @@ export class TimersList extends Component {
 
   private formatTitle(d: DetectedTimer): string {
     if (d.timerLabel && d.timerLabel.trim() !== "") {
-      return `T${d.timerId} · ${d.timerLabel.trim()}`;
+      return d.timerLabel.trim().slice(0, 2);
     }
-    return `T${d.timerId}`;
+    return d.isHub ? "H1" : `S${Math.max(1, d.timerId - 1)}`;
   }
 
   private formatLastSeen(lastSeenAt?: string): string {

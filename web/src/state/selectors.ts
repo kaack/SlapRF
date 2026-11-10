@@ -89,19 +89,18 @@ export function gateColor(store: AppStore, gateId: number): string {
 /**
  * What a gate is called everywhere in the UI:
  *   1. Its display-name override (`name`) from the Track editor if set,
- *   2. Otherwise its flashed Timer ID / name (`timerLabel`),
- *   3. Otherwise "Gate N" by its position on the course.
+ *   2. Otherwise "Gate N" by its position on the course.
  */
 export function gateLabel(store: AppStore, gateId: number): string {
   const position = store.nodes.findIndex((p) => p.gateId === gateId);
   if (position < 0) return "Unknown gate";
   const p = store.nodes[position];
-  return p.name.trim() || p.timerLabel?.trim() || `Gate ${position + 1}`;
+  return p.name.trim() || `Gate ${position + 1}`;
 }
 
 /** The permanent hardware ID / name flashed onto a timer. */
-export function timerHardwareId(p: { timerId: number; timerLabel?: string }): string {
-  return p.timerLabel?.trim() || `timer #${p.timerId}`;
+export function timerHardwareId(p: { timerId: number; timerLabel?: string; isHub?: boolean }): string {
+  return p.timerLabel?.trim() || (p.isHub ? "H1" : `S${Math.max(1, p.timerId - 1)}`);
 }
 
 /** Shown wherever timers are placed on gates (the Hub is a USB dongle that may also time a gate). */

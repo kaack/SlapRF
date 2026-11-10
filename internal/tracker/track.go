@@ -624,8 +624,7 @@ func indexOfGate(gates []domain.TrackGate, id uint8) int {
 }
 
 // gateLabelLocked is how a gate is named in messages: its display-name override (`Name`),
-// or its flashed timer ID/name (`TimerLabel`), or "Gate N" by position on the course when
-// neither is set. Mirrors gateLabel() in web/src/state/selectors.ts.
+// or "Gate N" by position on the course when not set. Mirrors gateLabel() in web/src/state/selectors.ts.
 func (e *Engine) gateLabelLocked(gateID uint8) string {
 	ordered := e.orderedGatesLocked()
 	at := indexOfGate(ordered, gateID)
@@ -634,9 +633,6 @@ func (e *Engine) gateLabelLocked(gateID uint8) string {
 	}
 	if name := strings.TrimSpace(ordered[at].Name); name != "" {
 		return name
-	}
-	if label := strings.TrimSpace(ordered[at].TimerLabel); label != "" {
-		return label
 	}
 	return fmt.Sprintf("Gate %d", at+1)
 }
