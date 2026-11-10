@@ -486,10 +486,9 @@ body.is-gate-dragging * {
   cursor: grab;
   user-select: none;
   touch-action: none;
-  transition: transform 0.12s, box-shadow 0.12s, opacity 0.12s;
+  transition: box-shadow 0.12s, opacity 0.12s;
 }
 .unassigned-timer-token:hover {
-  transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
 }
 .unassigned-timer-token.is-dragging-source {

@@ -25,6 +25,7 @@ export class TrackEditor extends Component {
   private selectedNodeId: number | null = null;
   private editingNodeId: number | null = null;
   private isDragging = false;
+  private lastRenderedHtml = "";
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
     super(el);
@@ -194,7 +195,7 @@ export class TrackEditor extends Component {
     return nodes[0];
   }
 
-  private render(): void {
+  private render(force = false): void {
     const nodes = this.orderedNodes;
     const detected = this.detectedTimers;
     const selectedNode = this.ensureSelectedNode(nodes);
@@ -206,7 +207,7 @@ export class TrackEditor extends Component {
     );
     const unassignedTimers = detected.filter((d) => !assignedTimerIds.has(d.timerId));
 
-    this.el.innerHTML = `
+    const html = `
       <div class="gate-track-stage">
         <div class="gate-track-header">
           <span class="gate-track-caption">
@@ -243,6 +244,9 @@ export class TrackEditor extends Component {
         <button class="btn btn-ghost btn-sm" type="button" data-action="restore-default-track">Restore default track</button>
       </div>
     `;
+    if (!force && html === this.lastRenderedHtml) return;
+    this.lastRenderedHtml = html;
+    this.el.innerHTML = html;
   }
 
   private renderEmptyTimelinePlaceholder(): string {
@@ -512,7 +516,7 @@ export class TrackEditor extends Component {
       }
     } finally {
       this.isDragging = false;
-      this.render();
+      this.render(true);
     }
   }
 
@@ -749,7 +753,7 @@ export class TrackEditor extends Component {
           }
         } finally {
           this.isDragging = false;
-          this.render();
+          this.render(true);
         }
       } else {
         tokenEl.classList.remove("is-dragging-source");
@@ -761,7 +765,7 @@ export class TrackEditor extends Component {
           previewSlot = null;
         }
         this.isDragging = false;
-        if (started) this.render();
+        if (started) this.render(true);
       }
     };
 
@@ -999,7 +1003,7 @@ export class TrackEditor extends Component {
       }
     } finally {
       this.isDragging = false;
-      this.render();
+      this.render(true);
     }
   }
 
