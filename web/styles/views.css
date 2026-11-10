@@ -2419,9 +2419,6 @@ body.is-gate-dragging * {
 .flasher-progress.is-flashing {
   border-color: var(--accent-line);
 }
-.flasher-progress.is-complete {
-  border-color: rgba(52, 211, 153, 0.4);
-}
 .flasher-progress-top {
   display: flex;
   align-items: center;
@@ -2439,10 +2436,6 @@ body.is-gate-dragging * {
 .flasher-progress.is-flashing .flasher-progress-status {
   color: var(--text);
 }
-.flasher-progress.is-complete .flasher-progress-status {
-  color: var(--good);
-  font-weight: 500;
-}
 .flasher-progress-pct {
   color: var(--text-3);
   font-size: 12px;
@@ -2453,8 +2446,9 @@ body.is-gate-dragging * {
 .flasher-progress.is-flashing .meter-fill {
   background: var(--accent);
 }
-.flasher-progress.is-complete .meter-fill {
-  background: var(--good);
+.flasher-progress.is-complete .meter-fill,
+.flasher-meter .meter-fill.tone-good {
+  background: rgba(52, 211, 153, 0.28);
 }
 .flasher-progress-foot {
   display: flex;

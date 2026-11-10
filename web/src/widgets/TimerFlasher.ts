@@ -652,11 +652,6 @@ export class TimerFlasher extends Component {
               isConnected ? `Target USB connection: ${esc(targetName)}` : "Connect a USB port above or download the binary image"
             }</span>
             <div class="flasher-progress-foot-actions">
-              ${
-                this.lastSuccessMsg && !this.busy
-                  ? `<button type="button" class="btn btn-sm btn-armed" data-finish-wizard="1">${icons.check(14)}<span>Finish</span></button>`
-                  : ""
-              }
               <button
                 type="button"
                 class="btn btn-sm btn-ghost"
@@ -689,25 +684,14 @@ export class TimerFlasher extends Component {
 
           ${
             this.lastSuccessMsg && !this.busy
-              ? `<div class="row" style="gap: 8px;">
-                  <button
-                    type="button"
-                    class="btn"
-                    data-flash-usb="1"
-                    ${!webSerialOk || !isConnected ? "disabled" : ""}
-                  >
-                    <span class="flasher-zap-icon">${icons.zap(15)}</span>
-                    <span>Flash ${esc(cleanLabel)} again</span>
-                  </button>
-                  <button
-                    type="button"
-                    class="btn flasher-btn-flash"
-                    data-finish-wizard="1"
-                  >
-                    ${icons.check(15)}
-                    <span>Finish</span>
-                  </button>
-                </div>`
+              ? `<button
+                  type="button"
+                  class="btn flasher-btn-flash"
+                  data-finish-wizard="1"
+                >
+                  ${icons.check(15)}
+                  <span>Finish</span>
+                </button>`
               : `<button
                   type="button"
                   class="btn flasher-btn-flash"
