@@ -803,6 +803,40 @@ export class NetworkView extends Component {
     if (selectedSlot === 1) {
       const populatedSpokes = [...spokes.values()].filter((sp) => sp.populated);
       const activeSpokes = populatedSpokes.filter((sp) => sp.espNowActive);
+      const totalSpokeFrames = populatedSpokes.reduce((acc, sp) => acc + (sp.frames ?? 0), 0);
+      const totalSpokeRate = populatedSpokes.reduce((acc, sp) => acc + (sp.ratePktPerSec ?? 0), 0);
+      const hubOwnFrames = hub.serverFrames ?? 0;
+      const totalFrames = totalSpokeFrames + hubOwnFrames;
+      const hubOwnRate = hub.online && hub.gateLabel ? 25 : 0;
+      const totalRate = totalSpokeRate + hubOwnRate;
+
+      let minMsAgo: number | null = null;
+      let latestSpokeSeq: number | null = null;
+      for (const sp of populatedSpokes) {
+        if ((sp.frames ?? 0) > 0 && sp.msAgo !== undefined) {
+          if (minMsAgo === null || sp.msAgo < minMsAgo) minMsAgo = sp.msAgo;
+        }
+        if ((sp.frames ?? 0) > 0 && sp.seq !== undefined) {
+          if (latestSpokeSeq === null || sp.seq > latestSpokeSeq) latestSpokeSeq = sp.seq;
+        }
+      }
+      const lastFrameText =
+        minMsAgo !== null
+          ? `${minMsAgo} ms ago`
+          : hub.online && hubOwnFrames > 0
+            ? "< 40 ms ago"
+            : "No frames yet";
+      const hubSweepSeq =
+        s && s.role === 1 && s.sweeps > 0
+          ? `#${s.sweeps}`
+          : this.live?.n !== undefined
+            ? `#${this.live.n}`
+            : latestSpokeSeq !== null
+              ? `#${latestSpokeSeq}`
+              : hub.viaUsb && !hub.gateLabel
+                ? "Idle (not on gate)"
+                : "—";
+
       const ledClass = hub.emergencyMode ? "is-emergency" : hub.online ? "is-up" : hub.populated ? "is-warn" : "";
       const barsHtml = this.renderRssiBars(
         freqs,
@@ -818,8 +852,28 @@ export class NetworkView extends Component {
             <span class="debug-head-note"><strong>${esc(hub.label)}</strong> · Parent Hub (TDMA Slot 1) · ${esc(hub.statusNote)}</span>
           </span>
           <div class="debug-connect-actions">
-            <span class="badge ${hub.online ? "badge-good" : ""}">TDMA Slot 1 · Hub</span>
+            <span class="badge ${hub.online ? "badge-good" : "badge-warn"} mono">${totalRate.toFixed(1)} pkt/s</span>
+            <span class="badge mono">${totalFrames} frames rx</span>
             ${hub.fp && hub.fp !== "—" ? `<span class="badge mono">${esc(hub.fp)}</span>` : ""}
+          </div>
+        </div>
+
+        <div class="debug-net-inspector-kpis">
+          <div class="debug-net-inspector-kpi">
+            <span class="debug-net-inspector-kpi-label">Frames received by Hub</span>
+            <strong class="debug-net-inspector-kpi-val mono">${totalFrames} <span class="note">(${totalRate.toFixed(1)} pkt/s)</span></strong>
+          </div>
+          <div class="debug-net-inspector-kpi">
+            <span class="debug-net-inspector-kpi-label">Last frame at Hub</span>
+            <strong class="debug-net-inspector-kpi-val mono">${lastFrameText}</strong>
+          </div>
+          <div class="debug-net-inspector-kpi">
+            <span class="debug-net-inspector-kpi-label">Latest sweep seq #</span>
+            <strong class="debug-net-inspector-kpi-val mono">${hubSweepSeq}</strong>
+          </div>
+          <div class="debug-net-inspector-kpi">
+            <span class="debug-net-inspector-kpi-label">Practice gate &amp; engine rx</span>
+            <strong class="debug-net-inspector-kpi-val">${hub.gateLabel ? `${esc(hub.gateLabel)} <span class="note mono">· ${hub.serverFrames ?? 0} samples</span>` : `<span class="note">Unassigned in Track</span>`}</strong>
           </div>
         </div>
 
