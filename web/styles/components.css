@@ -487,6 +487,10 @@
   font: inherit;
   font-size: 12.5px;
 }
+div.input {
+  display: flex;
+  align-items: center;
+}
 .input:focus {
   outline: none;
   border-color: var(--accent-line);
