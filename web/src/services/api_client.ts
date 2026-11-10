@@ -22,6 +22,7 @@ import {
   generateFingerprint,
   LATEST_FIRMWARE_VERSION,
 } from "./esp_flasher";
+import { bindSimSerialStore, isSimulatedSerialPort, listSimulatedTimers } from "./sim_serial_port";
 import { forgetKnownHardwareTimer, TimerConsole, TimerStatus, usbPool } from "./timer_console";
 import { WasmSimTransport } from "./wasm_transport";
 
@@ -55,6 +56,7 @@ export class ApiClient {
 
   constructor(store: AppStore) {
     this.store = store;
+    bindSimSerialStore(this.store);
     this.hubBridge = new BrowserHubBridge(this.transport);
     this.hubBridge.onPacketIngested = () => {
       if (this.hubRefreshTimer !== null) return;
@@ -102,10 +104,22 @@ export class ApiClient {
     this.hubBridge.setActive(this.usingBrowserRealEngine);
     this.bindUsbTimerSync();
     await this.refresh();
+    if (this.simMode) {
+      await this.autoConnectSimulatedHub();
+    }
     this.connectStream();
     window.setInterval(() => {
       void this.pollStatus();
     }, STATUS_POLL_MS);
+  }
+
+  private async autoConnectSimulatedHub(): Promise<void> {
+    if (!this.simMode || usbPool.mainConsole.connected) return;
+    const timers = listSimulatedTimers();
+    const target = timers.find((t) => t.isHub && t.poweredOn) ?? timers.find((t) => t.poweredOn);
+    if (target) {
+      await usbPool.connectSimulatedTimer(target.timerId, 0).catch(() => undefined);
+    }
   }
 
   private bindUsbTimerSync(): void {
@@ -144,6 +158,7 @@ export class ApiClient {
         }
         return;
       }
+      if (this.simMode || isSimulatedSerialPort(c.rawPort)) return;
       const cfg = c.lastConfig;
       const isHub = s.role === 1 || cfg?.role === "hub";
       const label = (s.label || cfg?.timerLabel || (isHub ? "H1" : "T1")).trim();
@@ -172,7 +187,13 @@ export class ApiClient {
 
   public async toggleSimulator(): Promise<void> {
     this.transport.disconnectStream();
-    this.simMode = !this.simMode;
+    const nextSimMode = !this.simMode;
+    if (!nextSimMode) {
+      await usbPool.disconnectSimulatedPorts();
+    } else {
+      await usbPool.disconnectAllCleanly();
+    }
+    this.simMode = nextSimMode;
     try {
       window.localStorage.setItem(SIM_MODE_STORAGE_KEY, String(this.simMode));
     } catch {
@@ -182,7 +203,9 @@ export class ApiClient {
     this.hubBridge.setActive(this.usingBrowserRealEngine);
     this.connectStream();
     await this.refresh();
-    if (!this.simMode) {
+    if (this.simMode) {
+      await this.autoConnectSimulatedHub();
+    } else {
       for (const c of usbPool.connectedConsoles()) {
         const s = c.lastStatus;
         if (!s) continue;
@@ -237,6 +260,10 @@ export class ApiClient {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("POST", "/api/sim/timer-action", payload)
     );
+    await usbPool.reconcileSimulatedPorts();
+    if (payload.action === "reset-timers") {
+      await this.autoConnectSimulatedHub();
+    }
   }
 
   public async pollStatusNow(): Promise<void> {
@@ -520,14 +547,12 @@ export class ApiClient {
   }
 
   /**
-   * Current state of the real-world (hardware) engine, or null while the simulator is active
-   * (the in-browser router only serves the active engine). Used by the Debug page.
+   * Current state of the active timing engine. Used by the Debug page for pilot thresholds,
+   * timer status, and frame-rate checks.
    */
   public async getRealEngineState(): Promise<FullStateResponse | null> {
-    if (this.simMode) return null;
     try {
-      const state = await this.transport.request<FullStateResponse>("GET", "/api/state");
-      return state.simulatorRunning ? null : state;
+      return await this.transport.request<FullStateResponse>("GET", "/api/state");
     } catch {
       return null;
     }

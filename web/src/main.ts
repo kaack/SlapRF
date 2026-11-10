@@ -9,6 +9,7 @@ import { ApiClient } from "./services/api_client";
 import { BrowserHubBridge } from "./services/browser_hub_bridge";
 import { sharedLiveTimeRelay } from "./services/livetime_relay";
 import { installOffline, isDevHost } from "./services/offline";
+import { bindSimSerialStore } from "./services/sim_serial_port";
 import { usbPool } from "./services/timer_console";
 import { AppStore } from "./state/store";
 
@@ -55,6 +56,10 @@ function hotReloadUI(hmr: SlaprfHMRState): void {
   // take effect immediately without losing USB WebSerial connections, WASM state, or lap history.
   Object.setPrototypeOf(hmr.store, AppStore.prototype);
   Object.setPrototypeOf(hmr.api, ApiClient.prototype);
+  bindSimSerialStore(hmr.store);
+  if (hmr.store.simulatorRunning && !usbPool.mainConsole.connected) {
+    void (hmr.api as unknown as { autoConnectSimulatedHub?: () => Promise<void> }).autoConnectSimulatedHub?.();
+  }
   if (!(hmr.api as unknown as { provisionedUsbKeys?: Set<string> }).provisionedUsbKeys) {
     (hmr.api as unknown as { provisionedUsbKeys: Set<string> }).provisionedUsbKeys = new Set<string>();
   }

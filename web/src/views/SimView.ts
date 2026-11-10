@@ -3,6 +3,8 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import { LATEST_FIRMWARE_VERSION } from "../services/esp_flasher";
+import { isSimulatedSerialPort } from "../services/sim_serial_port";
+import { usbPool } from "../services/timer_console";
 import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
 import {
@@ -312,6 +314,7 @@ export class SimView extends Component {
     });
 
     this.onDispose(store.subscribe(["status", "config"], () => this.render()));
+    this.onDispose(usbPool.onChange(() => this.render()));
 
     this.pollTimer = window.setInterval(() => {
       if (!document.hidden && this.store.simulatorRunning) {
@@ -993,11 +996,17 @@ export class SimView extends Component {
   private renderTimers(simState: SimState | null): void {
     const timers = simState?.timers ?? [];
     const canAdd = timers.length < 7; // One Hub plus up to 6 Spokes
+    const usbConnectedIds = new Set<number>();
+    for (const c of usbPool.slots) {
+      if (c.connected && isSimulatedSerialPort(c.rawPort)) {
+        usbConnectedIds.add(c.rawPort.simulatedTimerId);
+      }
+    }
     const sig =
       timers
         .map(
           (t) =>
-            `${t.timerId}:${t.timerLabel}:${t.color}:${t.isHub ? 1 : 0}:${t.firmwareVersion}:${t.poweredOn ? 1 : 0}:${t.assignedGateName}`
+            `${t.timerId}:${t.timerLabel}:${t.color}:${t.isHub ? 1 : 0}:${t.firmwareVersion}:${t.poweredOn ? 1 : 0}:${t.assignedGateName}:${usbConnectedIds.has(t.timerId) ? 1 : 0}`
         )
         .join("|") + `|err:${this.errorMsg}`;
     if (sig === this.lastTimersSig) return;
@@ -1012,12 +1021,14 @@ export class SimView extends Component {
         const title = t.timerLabel?.trim() ? t.timerLabel.trim().slice(0, 2) : t.isHub ? "H1" : `T${Math.max(1, t.timerId - 1)}`;
         const color = timerColor(this.store, t.timerId);
         const isLatestFw = t.firmwareVersion === LATEST_FIRMWARE_VERSION;
+        const isUsbConnected = usbConnectedIds.has(t.timerId);
 
         return `
           <div class="timer-table-row sim-timer-table-row ${t.poweredOn ? "" : "is-offline"}">
             <div class="detected-timer-id">
               <span class="gate-color-swatch" style="--c:${esc(color)};cursor:default"></span>
               <strong class="mono">${esc(title)}</strong>
+              ${isUsbConnected ? `<span class="badge tone-good" title="Connected over simulated USB">USB</span>` : ""}
             </div>
 
             <div>

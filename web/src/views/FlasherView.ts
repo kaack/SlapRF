@@ -126,7 +126,7 @@ class TimerReaderPanel extends Component {
   }
 
   private render(): void {
-    const webSerialOk = isWebSerialSupported();
+    const webSerialOk = TimerConsole.supported();
     const activeConsole = usbPool.mainConsole;
     const isConnected = activeConsole.connected;
     const isOther = activeConsole.isOtherDevice;
@@ -389,7 +389,7 @@ class TimerEraserPanel extends Component {
   }
 
   private render(): void {
-    const webSerialOk = isWebSerialSupported();
+    const webSerialOk = TimerConsole.supported();
     const activeConsole = usbPool.mainConsole;
     const isConnected = activeConsole.connected;
     const targetName = isConnected

@@ -367,7 +367,7 @@ export class NetworkView extends Component {
     const hubServerTimer = detectedTimers.find((t) => t.isHub || t.timerId === 1);
 
     let hub: TopologyHubInfo;
-    if (!this.store.simulatorRunning && hubUsbStatus && hubUsbStatus.role === 1) {
+    if (hubUsbStatus && hubUsbStatus.role === 1) {
       const liveDbm =
         s && s.role === 1 && this.live?.dbm?.length === 8
           ? this.live.dbm
@@ -400,7 +400,7 @@ export class NetworkView extends Component {
         dbm: liveDbm,
         statusNote: hubUsbStatus.emergencyMode ? "Emergency mode" : "USB-C · Beacon master",
       };
-    } else if (!this.store.simulatorRunning && s && s.role === 2) {
+    } else if (s && s.role === 2) {
       const rawBeaconMsAgo = s.beaconMsAgo ?? s.hub?.beaconMsAgo;
       const beaconMsAgo = rawBeaconMsAgo !== undefined && rawBeaconMsAgo >= 0x80000000 ? 0 : rawBeaconMsAgo;
       const hasSlot = !s.emergencyMode && s.slot >= 2;
@@ -424,27 +424,6 @@ export class NetworkView extends Component {
         serverFrames: linked ? Math.max(hubGate?.framesRxCount ?? 0, hubServerTimer?.framesRxCount ?? 0) : 0,
         statusNote: linked ? `Sync beacon locked` : hasSlot ? "Beacon lost" : "Not connected",
       };
-    } else if (this.store.simulatorRunning && hubServerTimer) {
-      const liveDbm = Array.isArray(hubGate?.lastRssi)
-        ? hubGate!.lastRssi!.slice(0, 8).map((v) => Math.round(v))
-        : Array.isArray(hubServerTimer.lastRssi)
-          ? hubServerTimer.lastRssi.slice(0, 8).map((v) => Math.round(v))
-          : undefined;
-      hub = {
-        populated: true,
-        online: Boolean(hubServerTimer.online),
-        label: hubServerTimer.timerLabel || "",
-        fp: hubServerTimer.fingerprint || "—",
-        fw: hubServerTimer.firmwareVersion || "—",
-        mac: "—",
-        ch: 1,
-        viaUsb: false,
-        emergencyMode: false,
-        gateLabel: hubGateName,
-        serverFrames: Math.max(hubGate?.framesRxCount ?? 0, hubServerTimer.framesRxCount ?? 0),
-        dbm: liveDbm,
-        statusNote: "Simulated Hub",
-      };
     } else {
       hub = {
         populated: false,
@@ -462,8 +441,8 @@ export class NetworkView extends Component {
 
     const spokes = new Map<number, TopologySpokeInfo>();
 
-    // 1. Live Hardware: If connected to a Hub over USB, populate only active Spokes detected by the Hub
-    if (!this.store.simulatorRunning && hubUsbStatus && hubUsbStatus.role === 1 && Array.isArray(hubUsbStatus.spokes)) {
+    // 1. If connected to a Hub over USB, populate active Spokes detected by the Hub
+    if (hubUsbStatus && hubUsbStatus.role === 1 && Array.isArray(hubUsbStatus.spokes)) {
       for (const sp of hubUsbStatus.spokes) {
         if (sp.slot >= 2 && sp.slot <= 7) {
           const rawFp = (sp.fp || "").toUpperCase();
@@ -523,89 +502,57 @@ export class NetworkView extends Component {
       }
     }
 
-    // 2. Live Hardware: Populate Spoke if the main USB connection is a Spoke
-    if (!this.store.simulatorRunning) {
-      const c = usbPool.mainConsole;
-      const spStatus = c.connected ? c.lastStatus : null;
-      if (spStatus && spStatus.role === 2) {
-        const slotNum = spStatus.slot >= 2 && spStatus.slot <= 7 ? spStatus.slot : 2;
-        const rawBeaconMsAgo = spStatus.beaconMsAgo ?? spStatus.hub?.beaconMsAgo;
-        const beaconMsAgo = rawBeaconMsAgo !== undefined && rawBeaconMsAgo >= 0x80000000 ? 0 : rawBeaconMsAgo;
-        const hasSlot = !spStatus.emergencyMode && spStatus.slot >= 2;
-        const beaconFresh = beaconMsAgo !== undefined && beaconMsAgo < 2500;
-        const linked = hasSlot && beaconFresh;
-        const sFp = (spStatus.fp || "").toUpperCase();
-        const matchedDt = sFp ? detectedTimers.find((t) => (t.fingerprint || "").toUpperCase() === sFp) : undefined;
-        const gate = matchedDt ? this.store.nodes.find((g) => g.assignedTimerId === matchedDt.timerId) : undefined;
-        const gateName = gate ? formatTrackPos(gate) : undefined;
-        const existingFromHub = spokes.get(slotNum);
-        const isCurrentConsole = s === spStatus;
-        spokes.set(slotNum, {
-          slot: slotNum,
-          populated: true,
-          espNowActive: linked || Boolean(existingFromHub?.espNowActive),
-          inHubStatus: linked || Boolean(existingFromHub?.inHubStatus),
-          viaUsb: true,
-          label: spStatus.label || matchedDt?.timerLabel || existingFromHub?.label || "",
-          fp: spStatus.fp || existingFromHub?.fp || "—",
-          fw: spStatus.fw || existingFromHub?.fw || "—",
-          mac: spStatus.chip?.mac || existingFromHub?.mac,
-          frames: existingFromHub?.frames ?? gate?.framesRxCount ?? matchedDt?.framesRxCount ?? 0,
-          msAgo: existingFromHub?.msAgo,
-          beaconMsAgo,
-          seq: existingFromHub?.seq,
-          dbm:
-            isCurrentConsole && this.live?.dbm?.length === 8
-              ? this.live.dbm
-              : spStatus.dbm?.length === 8
-                ? spStatus.dbm
-                : existingFromHub?.dbm,
-          ratePktPerSec: existingFromHub?.ratePktPerSec ?? (linked ? 25 : 0),
-          serverFrames: gate?.framesRxCount ?? matchedDt?.framesRxCount ?? 0,
-          serverGateLabel: gateName,
-          serverRssi: Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined,
-          sourceNote: spStatus.emergencyMode
-            ? "Emergency mode · USB-C"
-            : linked
-              ? `USB-C · Synced (${beaconMsAgo ?? 0} ms)`
-              : hasSlot
-                ? "USB-C · Beacon lost"
-                : "USB-C · Searching for Hub",
-        });
-      }
+    // 2. Populate Spoke if the main USB connection is a Spoke
+    const c = usbPool.mainConsole;
+    const spStatus = c.connected ? c.lastStatus : null;
+    if (spStatus && spStatus.role === 2) {
+      const slotNum = spStatus.slot >= 2 && spStatus.slot <= 7 ? spStatus.slot : 2;
+      const rawBeaconMsAgo = spStatus.beaconMsAgo ?? spStatus.hub?.beaconMsAgo;
+      const beaconMsAgo = rawBeaconMsAgo !== undefined && rawBeaconMsAgo >= 0x80000000 ? 0 : rawBeaconMsAgo;
+      const hasSlot = !spStatus.emergencyMode && spStatus.slot >= 2;
+      const beaconFresh = beaconMsAgo !== undefined && beaconMsAgo < 2500;
+      const linked = hasSlot && beaconFresh;
+      const sFp = (spStatus.fp || "").toUpperCase();
+      const matchedDt = sFp ? detectedTimers.find((t) => (t.fingerprint || "").toUpperCase() === sFp) : undefined;
+      const gate = matchedDt ? this.store.nodes.find((g) => g.assignedTimerId === matchedDt.timerId) : undefined;
+      const gateName = gate ? formatTrackPos(gate) : undefined;
+      const existingFromHub = spokes.get(slotNum);
+      const isCurrentConsole = s === spStatus;
+      spokes.set(slotNum, {
+        slot: slotNum,
+        populated: true,
+        espNowActive: linked || Boolean(existingFromHub?.espNowActive),
+        inHubStatus: linked || Boolean(existingFromHub?.inHubStatus),
+        viaUsb: true,
+        label: spStatus.label || matchedDt?.timerLabel || existingFromHub?.label || "",
+        fp: spStatus.fp || existingFromHub?.fp || "—",
+        fw: spStatus.fw || existingFromHub?.fw || "—",
+        mac: spStatus.chip?.mac || existingFromHub?.mac,
+        frames: existingFromHub?.frames ?? gate?.framesRxCount ?? matchedDt?.framesRxCount ?? 0,
+        msAgo: existingFromHub?.msAgo,
+        beaconMsAgo,
+        seq: existingFromHub?.seq,
+        dbm:
+          isCurrentConsole && this.live?.dbm?.length === 8
+            ? this.live.dbm
+            : spStatus.dbm?.length === 8
+              ? spStatus.dbm
+              : existingFromHub?.dbm,
+        ratePktPerSec: existingFromHub?.ratePktPerSec ?? (linked ? 25 : 0),
+        serverFrames: gate?.framesRxCount ?? matchedDt?.framesRxCount ?? 0,
+        serverGateLabel: gateName,
+        serverRssi: Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined,
+        sourceNote: spStatus.emergencyMode
+          ? "Emergency mode · USB-C"
+          : linked
+            ? `USB-C · Synced (${beaconMsAgo ?? 0} ms)`
+            : hasSlot
+              ? "USB-C · Beacon lost"
+              : "USB-C · Searching for Hub",
+      });
     }
 
-    // 3. Simulator: Populate simulated Spokes when the simulator is running
-    if (this.store.simulatorRunning) {
-      for (const dt of detectedTimers) {
-        if (!dt.isHub && dt.timerId >= 2 && dt.timerId <= 7) {
-          const fp = (dt.fingerprint || "").toUpperCase();
-          const gate = this.store.nodes.find((g) => g.assignedTimerId === dt.timerId);
-          const gateName = gate ? formatTrackPos(gate) : undefined;
-          const serverFrames = gate?.framesRxCount ?? dt.framesRxCount ?? 0;
-          const serverRssi = Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined;
-          const serverOnline = Boolean(dt.online);
-          spokes.set(dt.timerId, {
-            slot: dt.timerId,
-            populated: true,
-            espNowActive: serverOnline,
-            inHubStatus: serverOnline,
-            viaUsb: false,
-            label: dt.timerLabel || "",
-            fp: fp || "—",
-            fw: dt.firmwareVersion || hub.fw,
-            frames: serverFrames,
-            ratePktPerSec: dt.online ? 25 : 0,
-            serverFrames,
-            serverGateLabel: gateName,
-            serverRssi,
-            sourceNote: serverOnline ? `Simulating · ${serverFrames} frames` : `Offline · 0 frames rx`,
-          });
-        }
-      }
-    }
-
-    // 4. Fill any remaining slots (2..7) with empty placeholders (no pre-assigned timer name)
+    // 3. Fill any remaining slots (2..7) with empty placeholders (no pre-assigned timer name)
     for (let slotNum = 2; slotNum <= 7; slotNum++) {
       if (!spokes.has(slotNum)) {
         spokes.set(slotNum, {
@@ -692,11 +639,9 @@ export class NetworkView extends Component {
     const stateBadgeClass = active ? "badge-good" : sp.inHubStatus ? "badge-warn" : "";
     const stateBadgeText = active ? "ESP-NOW Active" : sp.viaUsb ? "USB-C" : sp.inHubStatus ? "Stale" : "Inactive";
     const cardStatusText = active
-      ? this.store.simulatorRunning
-        ? "Simulated link"
-        : sp.viaUsb
-          ? "Synced via USB-C"
-          : "Streaming telemetry"
+      ? sp.viaUsb
+        ? "Synced via USB-C"
+        : "Streaming telemetry"
       : sp.viaUsb
         ? "Connected via USB-C"
         : sp.inHubStatus
@@ -743,9 +688,6 @@ export class NetworkView extends Component {
         : ownSpoke?.espNowActive
           ? `${esc(s.label || "T1")} · Spoke (Slot ${s.slot}) · Synced to Hub ${esc(hub.label)} on 2.4 GHz Ch ${hub.ch}`
           : `${esc(s.label || "T1")} · Spoke · Searching for Hub sync beacon on 2.4 GHz…`;
-    } else if (this.store.simulatorRunning) {
-      topLed = "is-up";
-      topText = `Simulator active · Hub ${esc(hub.label)} + ${activeCount} simulated Spoke${activeCount === 1 ? "" : "s"}`;
     } else if (hub.populated || tiedCount > 0) {
       topLed = activeCount > 0 ? "is-up" : "";
       topText = `Offline preview · click Connect in the top bar for live 2.4 GHz ESP-NOW telemetry`;

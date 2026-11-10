@@ -10,6 +10,13 @@ import {
   parseSlaprfConfigBlock,
   TimerReadout,
 } from "./esp_flasher";
+import {
+  isSimulatedSerialPort,
+  isSimulatedUsbMode,
+  listSimulatedTimers,
+  pickSimulatedUsbPort,
+  SimulatedSerialPort,
+} from "./sim_serial_port";
 
 export interface TimerPeerSpoke {
   slot: number;
@@ -76,6 +83,7 @@ export function getKnownHardwareTimers(): KnownHardwareTimer[] {
 }
 
 export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { fp: string }): void {
+  if (isSimulatedUsbMode()) return;
   const fp = (entry.fp || "").trim().toUpperCase();
   if (!fp || fp === "00000001" || fp.startsWith("SIM000") || fp.startsWith("53504B")) return;
   const list = getKnownHardwareTimers();
@@ -276,7 +284,7 @@ export interface ConsoleHandlers {
   onDisconnect?: () => void;
 }
 
-interface SerialPortLike {
+export interface SerialPortLike {
   open(options: { baudRate: number; bufferSize?: number }): Promise<void>;
   close(): Promise<void>;
   setSignals(signals: { dataTerminalReady?: boolean; requestToSend?: boolean }): Promise<void>;
@@ -480,6 +488,7 @@ export class TimerConsole {
   }
 
   public static supported(): boolean {
+    if (isSimulatedUsbMode()) return true;
     return typeof navigator !== "undefined" && "serial" in navigator;
   }
 
@@ -491,7 +500,9 @@ export class TimerConsole {
     this.reconnectFailed = false;
     this.lastError = null;
     this.notifyStateChange();
-    const port = await serial().requestPort({ filters: [{ usbVendorId: ESPRESSIF_USB_VID }] });
+    const port = isSimulatedUsbMode()
+      ? await pickSimulatedUsbPort()
+      : await serial().requestPort({ filters: [{ usbVendorId: ESPRESSIF_USB_VID }] });
     await this.openPort(port);
     this.startStatusPolling();
     this.subscribers.forEach((h) => h.onConnect?.());
@@ -1004,7 +1015,7 @@ export class TimerConsole {
     if (this.port === port) {
       if (this.expectingRestart) {
         await this.closePort(); // Device is re-enumerating; restartAndReconnect() reopens it
-      } else if (!this.userDisconnecting) {
+      } else if (!this.userDisconnecting && !isSimulatedSerialPort(port)) {
         await this.closePort();
         void this.attemptAutoReconnect();
       } else {
@@ -1514,6 +1525,23 @@ export class UsbConnectionPool {
     showAllPorts = false
   ): Promise<{ console: TimerConsole; status: TimerStatus | null; alreadyConnected: boolean }> {
     const main = this.slots[0];
+    if (isSimulatedUsbMode()) {
+      const port = await pickSimulatedUsbPort();
+      const existing = this.slots.find(
+        (c) => isSimulatedSerialPort(c.rawPort) && c.rawPort.simulatedTimerId === port.simulatedTimerId
+      );
+      if (existing) {
+        if (existing === main) {
+          return { console: main, status: main.lastStatus, alreadyConnected: true };
+        }
+        await existing.disconnectCleanly();
+      }
+      if (main.connected) {
+        await main.disconnectCleanly();
+      }
+      const status = await main.connectWithPort(port, showAllPorts);
+      return { console: main, status, alreadyConnected: false };
+    }
     const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
     const port = await serial().requestPort(filters ? { filters } : undefined);
     const existing = this.findOwnerOfPort(port);
@@ -1531,6 +1559,77 @@ export class UsbConnectionPool {
   }
 
   /**
+   * Connects a specific simulated timer directly to `slotIndex` (0 = main USB, 1 = secondary Debug USB)
+   * without opening the port picker modal.
+   */
+  public async connectSimulatedTimer(timerId: number, slotIndex: 0 | 1 = 0): Promise<TimerStatus | null> {
+    if (!isSimulatedUsbMode()) return null;
+    const target = this.slots[slotIndex];
+    const existing = this.slots.find(
+      (c) => isSimulatedSerialPort(c.rawPort) && c.rawPort.simulatedTimerId === timerId
+    );
+    if (existing) {
+      if (existing === target) {
+        if (slotIndex === 1) this.setDebugSlot(1);
+        return target.lastStatus;
+      }
+      await existing.disconnectCleanly();
+    }
+    if (target.connected || target.reconnecting) {
+      await target.disconnectCleanly();
+    }
+    const port = new SimulatedSerialPort(timerId);
+    if (slotIndex === 1) {
+      this._debugSlotIndex = 1;
+      this.notify();
+    }
+    const status = await target.connectWithPort(port, true);
+    if (slotIndex === 1) {
+      this._debugSlotIndex = target.connected ? 1 : 0;
+    }
+    this.notify();
+    return status;
+  }
+
+  /** Disconnects any slot currently connected to a `SimulatedSerialPort`. */
+  public async disconnectSimulatedPorts(): Promise<void> {
+    for (const c of this.slots) {
+      if (isSimulatedSerialPort(c.rawPort)) {
+        await c.disconnectCleanly().catch(() => undefined);
+      }
+    }
+    if (!this.slots[1].connected) {
+      this._debugSlotIndex = 0;
+    }
+    this.notify();
+  }
+
+  /**
+   * Disconnects any simulated USB slot whose underlying simulated timer was powered off or deleted
+   * on the Simulator tab.
+   */
+  public async reconcileSimulatedPorts(): Promise<void> {
+    if (!isSimulatedUsbMode()) {
+      await this.disconnectSimulatedPorts();
+      return;
+    }
+    const activeTimers = listSimulatedTimers();
+    for (const c of this.slots) {
+      if (isSimulatedSerialPort(c.rawPort)) {
+        const tid = c.rawPort.simulatedTimerId;
+        const found = activeTimers.find((t) => t.timerId === tid && t.poweredOn);
+        if (!found) {
+          await c.disconnectCleanly().catch(() => undefined);
+        }
+      }
+    }
+    if (!this.slots[1].connected && this._debugSlotIndex === 1) {
+      this._debugSlotIndex = 0;
+      this.notify();
+    }
+  }
+
+  /**
    * Connects or swaps the Debug window's target USB device:
    * - If `mainConsole` (Slot 0) is not connected, connects `mainConsole`.
    * - If `mainConsole` is connected, opens the port picker to swap the Debug window to another USB
@@ -1544,6 +1643,30 @@ export class UsbConnectionPool {
     if (!main.connected && !main.reconnecting) {
       this._debugSlotIndex = 0;
       return await this.connectMain(showAllPorts);
+    }
+    if (isSimulatedUsbMode()) {
+      const excludeIds: number[] = [];
+      if (isSimulatedSerialPort(main.rawPort)) {
+        excludeIds.push(main.rawPort.simulatedTimerId);
+      }
+      const port = await pickSimulatedUsbPort(excludeIds);
+      const swapSlot = this.slots[1];
+      if (swapSlot.connected || swapSlot.reconnecting) {
+        await swapSlot.disconnectCleanly();
+      }
+      swapSlot.setBusyLabel("Connecting");
+      this._debugSlotIndex = 1;
+      this.notify();
+      try {
+        const status = await swapSlot.connectWithPort(port, showAllPorts);
+        this._debugSlotIndex = swapSlot.connected ? 1 : 0;
+        this.notify();
+        return { console: swapSlot, status, alreadyConnected: false };
+      } catch (err) {
+        this._debugSlotIndex = 0;
+        this.notify();
+        throw err;
+      }
     }
     const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
     const port = await serial().requestPort(filters ? { filters } : undefined);

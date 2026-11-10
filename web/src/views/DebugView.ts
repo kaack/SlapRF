@@ -2841,20 +2841,19 @@ export class DebugView extends Component {
     const name = "Reaches the timing engine";
     const get = (): Promise<DebugTimerInfo | null> => this.engineTimerInfo(s.fp);
     const a = await get();
-    if (!a) return [name, "skip", "the simulator is on (switch Simulation off in Setup to check real timers)"];
+    if (!a) return [name, "skip", "timing engine state is not available"];
     if (!a.found) {
       const hint = s.role === 1 ? "Is the Hub plugged into this laptop over USB-C?" : "Is the Hub on and plugged into this laptop over USB-C?";
       return [name, "fail", `the timing engine hasn't heard from ${s.fp}. ${hint}`];
     }
-    const sim = a.simulatorActive ? " (the app is showing the simulator; switch to real timers to use it)" : "";
     if (!a.online || (a.msSinceSeen ?? 0) > 3000)
-      return [name, "fail", `last heard ${((a.msSinceSeen ?? 0) / 1000).toFixed(0)} s ago${sim}`];
+      return [name, "fail", `last heard ${((a.msSinceSeen ?? 0) / 1000).toFixed(0)} s ago`];
     await sleep(2000);
     const b = await get();
     const perSec = b ? (b.framesRx - a.framesRx) / 2 : 0;
-    if (b && b.framesRx > a.framesRx) return [name, a.simulatorActive ? "warn" : "pass", `online as timer ${a.timerId}, ${perSec.toFixed(0)} frames/s${sim}`];
-    if (!a.framesRx) return [name, a.simulatorActive ? "warn" : "pass", `online as timer ${a.timerId} (not on the track, so frames aren't counted)${sim}`];
-    return [name, "fail", `online but no new frames in 2 s${sim}`];
+    if (b && b.framesRx > a.framesRx) return [name, "pass", `online as timer ${a.timerId}, ${perSec.toFixed(0)} frames/s`];
+    if (!a.framesRx) return [name, "pass", `online as timer ${a.timerId} (not on the track, so frames aren't counted)`];
+    return [name, "fail", `online but no new frames in 2 s`];
   }
 
   private reportText(): string {
@@ -3159,9 +3158,9 @@ export class DebugView extends Component {
     const on = this.console.connected;
     const s = this.status;
     const knownTimers = getKnownHardwareTimers();
-    const realServerTimers = !this.serverSimActive
-      ? this.serverTimers.filter((t) => !(t.fingerprint || "").toUpperCase().startsWith("SIM000"))
-      : [];
+    const realServerTimers = this.serverTimers.filter(
+      (t) => !(t.fingerprint || "").toUpperCase().startsWith("SIM000")
+    );
 
     if (!on || !s) {
       const emptySlots = Array.from({ length: 6 }, (_, i) => {
