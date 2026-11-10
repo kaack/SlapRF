@@ -5391,15 +5391,15 @@ body.is-gate-dragging * {
   border-color: rgba(34, 197, 94, 0.45);
 }
 .debug-topo-node:hover {
-  background: #1d222b;
+  background: #181c22;
   opacity: 1;
 }
 .debug-topo-node.is-selected {
-  background: #262d3a;
+  background: var(--surface-3);
   opacity: 1;
 }
 .debug-topo-node.is-selected:hover {
-  background: #2b3342;
+  background: #1e232a;
 }
 .debug-topo-node-head {
   display: flex;
