@@ -110,10 +110,6 @@ export class TrackEditor extends Component {
         this.render();
         return;
       }
-      if (target.closest("[data-action='restore-default-track']")) {
-        this.editingNodeId = null;
-        void this.api.resetTrackToDefault();
-      }
     });
 
     this.listen(el, "pointerdown", (e) => {
@@ -244,10 +240,6 @@ export class TrackEditor extends Component {
       </div>
 
       ${selectedNode ? this.renderInspector(selectedNode, selectedIndex, detected) : ""}
-      <div class="rules-foot">
-        <p class="note">Gate order defines section splits around the course.</p>
-        <button class="btn btn-ghost btn-sm" type="button" data-action="restore-default-track">Restore default track</button>
-      </div>
     `;
     if (!force && html === this.lastRenderedHtml) return;
     this.lastRenderedHtml = html;
