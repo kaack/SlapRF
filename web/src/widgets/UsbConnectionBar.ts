@@ -110,6 +110,7 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
     // - Never allow disconnecting the main/Hub USB connection (Slot 0) from the Debug window (`canDisconnect = false`).
     // - Allow choosing a second USB connection (Slot 1) to debug on, shown alongside the main connection so the user
     //   can switch between them or close the secondary debug USB connection (`canDisconnect = true`).
+    // - Once a secondary debug USB connection is active, hide the connect button until the user disconnects it.
     const chips: string[] = [];
     if (main.connected) {
       chips.push(renderChip(main, opts.activeConsole === main, false));
@@ -119,31 +120,25 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
     }
     chipsHtml = chips.join("");
 
-    const mainLabel =
-      main.lastStatus?.label || main.lastConfig?.timerLabel || (main.lastStatus?.role === 1 ? "H1" : "Main USB");
-    const btnLabel = busy
-      ? `${esc(busyText)}…`
-      : swapSlot.connected
-        ? "Swap debug USB"
-        : main.connected
-          ? "Debug another USB"
-          : "Connect USB";
-    const btnTitle = main.connected
-      ? `Choose a different USB device to debug while keeping ${esc(mainLabel)} connected`
-      : swapSlot.connected
-        ? "Choose a different USB device to debug"
+    if (!swapSlot.connected) {
+      const mainLabel =
+        main.lastStatus?.label || main.lastConfig?.timerLabel || (main.lastStatus?.role === 1 ? "H1" : "Main USB");
+      const btnLabel = busy ? `${esc(busyText)}…` : main.connected ? "Debug another USB" : "Connect USB";
+      const btnTitle = main.connected
+        ? `Choose a different USB device to debug while keeping ${esc(mainLabel)} connected`
         : "Connect a USB device";
-    actionBtnHtml = `
-      <button
-        type="button"
-        class="pilot-chip debug-usb-add-chip"
-        data-action="connect-add"
-        ${supported && !busy ? "" : "disabled"}
-        title="${btnTitle}"
-      >
-        ${icons.plug(20)}
-        <span class="pilot-chip-name">${btnLabel}</span>
-      </button>`;
+      actionBtnHtml = `
+        <button
+          type="button"
+          class="pilot-chip debug-usb-add-chip"
+          data-action="connect-add"
+          ${supported && !busy ? "" : "disabled"}
+          title="${btnTitle}"
+        >
+          ${icons.plug(20)}
+          <span class="pilot-chip-name">${btnLabel}</span>
+        </button>`;
+    }
   } else {
     // Network & Flasher pages: strictly single main USB connection (Slot 0).
     if (main.connected) {
