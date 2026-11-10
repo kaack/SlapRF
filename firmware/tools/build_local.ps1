@@ -105,7 +105,7 @@ import serial, hashlib, struct, sys, time
 port, bin_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
 s = serial.Serial(port, 115200, timeout=1.5)
 time.sleep(1.2)
-s.write(b'EMERGENCY 1\n')
+s.write(b'RF 0\n')
 time.sleep(0.1)
 s.reset_input_buffer()
 s.write(b'SLAPRF?\n')

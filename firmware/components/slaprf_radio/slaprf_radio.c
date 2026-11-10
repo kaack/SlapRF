@@ -134,7 +134,7 @@ static esp_err_t hub_ws_handler(httpd_req_t *req) {
     if (req->method == HTTP_GET) {
         int sockfd = httpd_req_to_sockfd(req);
         if (sockfd >= 0) {
-            struct timeval tv = {.tv_sec = 0, .tv_usec = 60000};
+            struct timeval tv = {.tv_sec = 0, .tv_usec = 250000};
             setsockopt(sockfd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
         }
         // Immediately replay cached HELLO frames as binary WebSocket packets so Hub & Spokes appear right away
@@ -207,7 +207,9 @@ static void ws_flush_work_fn(void *arg) {
         };
         for (size_t i = 0; i < ws_count; i++) {
             if (ws_fds[i] < 0) continue;
-            if (httpd_ws_send_frame_async(s_httpd, ws_fds[i], &ws_pkt) != ESP_OK) {
+            if (httpd_ws_send_frame_async(s_httpd, ws_fds[i], &ws_pkt) == ESP_OK) {
+                httpd_sess_update_lru_counter(s_httpd, ws_fds[i]);
+            } else {
                 httpd_sess_trigger_close(s_httpd, ws_fds[i]);
                 ws_fds[i] = -1;
             }
@@ -249,8 +251,11 @@ static void start_hub_httpd(void) {
         s_ws_tx_queue = xQueueCreate(WS_QUEUE_DEPTH, sizeof(ws_tx_item_t));
     }
     httpd_config_t config = HTTPD_DEFAULT_CONFIG();
-    config.max_open_sockets = 4;
+    config.max_open_sockets = 6;
+    config.backlog_conn = 4;
     config.lru_purge_enable = true;
+    config.enable_so_linger = true;
+    config.linger_timeout = 0;
     config.stack_size = 4096;
 
     if (httpd_start(&s_httpd, &config) != ESP_OK) {
