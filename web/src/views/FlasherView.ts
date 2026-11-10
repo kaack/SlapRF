@@ -465,7 +465,7 @@ export class FlasherView extends Component {
 
         <section class="settings-section">
           <div class="settings-intro">
-            <h2>Flasher</h2>
+            <h2>Writer</h2>
             <p>Plug each Seeed XIAO ESP32-C5 into this computer over USB and flash it directly from the browser — no compiler, drivers, or command line needed.</p>
           </div>
           <div class="card card-flush" data-slot="flasher"></div>
@@ -473,7 +473,7 @@ export class FlasherView extends Component {
 
         <section class="settings-section">
           <div class="settings-intro">
-            <h2>Timer settings</h2>
+            <h2>Reader</h2>
             <p>Read a plugged-in timer over USB to inspect its flashed identity, 5.8 GHz receiver channels, and 2.4 GHz network configuration.</p>
           </div>
           <div class="debug-status-layout" data-slot="reader"></div>

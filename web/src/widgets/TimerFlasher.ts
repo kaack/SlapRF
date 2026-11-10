@@ -187,8 +187,8 @@ export class TimerFlasher extends Component {
       if (target.matches("[data-all-ports]")) {
         this.showAllPorts = (target as HTMLInputElement).checked;
         this.saveFlasherPrefs();
-      } else if (target.matches("[data-keep-fp]")) {
-        this.keepFingerprint = target.value === "keep";
+      } else if (target.matches("[data-erase-before-flash]")) {
+        this.keepFingerprint = !(target as HTMLInputElement).checked;
         this.saveFlasherPrefs();
         this.slideDir = "none";
         this.render();
@@ -580,22 +580,19 @@ export class TimerFlasher extends Component {
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
           <div class="flasher-wizard-badge-row">
-            <span class="badge ${isHub ? "tone-good" : ""}">Role: ${
-              isHub ? "Hub" : "Spoke"
-            }</span>
-            <span class="note">${
-              isHub
-                ? "Step 2 of 3 · Stamped into XIAO flash"
-                : "Step 2 of 3 · Stamped into XIAO flash (auto-pairs with Hub)"
-            }</span>
+            <span class="note">Step 2 of 3 · Timer identity</span>
           </div>
           <h3>Name this ${isHub ? "Hub" : "Spoke"}</h3>
-          <p>The 1–2 character name (e.g. ${isHub ? "H1" : "S1, S2"}) is how this timer shows up in Timers and on the Track.</p>
+          <p>${
+            isHub
+              ? "Give your Hub a short 1–2 character label (usually <strong>H1</strong>) so it is easy to recognize across Track, Network, and Debug."
+              : "Give this Spoke a short 1–2 character label (such as <strong>S1</strong>–<strong>S6</strong>) so you can tell each gate apart on the course."
+          }</p>
         </div>
 
         <div class="flasher-wifi-inputs flasher-two-col">
           <div class="flasher-field">
-            <label class="flasher-field-label">Timer name (max 2 chars)</label>
+            <label class="flasher-field-label">Timer name</label>
             <input
               class="input mono"
               type="text"
@@ -607,11 +604,16 @@ export class TimerFlasher extends Component {
               autocomplete="off"
               ${this.busy ? "disabled" : ""}
             />
+            <span class="flasher-field-help">Editable · 1–2 characters (${isHub ? "e.g. H1" : "e.g. S1, S2, S3"}) stamped into flash.</span>
           </div>
 
           <div class="flasher-field">
             <label class="flasher-field-label">Firmware</label>
-            <div class="input mono" aria-label="Firmware version">SlapRF ${LATEST_FIRMWARE_VERSION}</div>
+            <div class="input input-readonly mono" aria-label="Firmware version" aria-readonly="true">
+              <span>SlapRF ${LATEST_FIRMWARE_VERSION}</span>
+              <span class="badge">Bundled</span>
+            </div>
+            <span class="flasher-field-help">Read-only · Unified image for Seeed XIAO ESP32-C5.</span>
           </div>
         </div>
 
@@ -631,7 +633,8 @@ export class TimerFlasher extends Component {
   private renderStepFlash(webSerialOk: boolean): string {
     const isHub = this.role === "hub";
     const cleanLabel = this.timerLabel.trim() || (isHub ? "H1" : this.suggestSpokeLabel());
-    const linkSummary = isHub ? "USB-C dongle → this computer" : "ESP-NOW → Hub";
+    const linkSummary = isHub ? "USB-C → Computer" : "2.4 GHz ESP-NOW → Hub";
+    const eraseBeforeFlash = !this.keepFingerprint;
 
     const pct = this.progress ? this.progress.percent : this.lastSuccessMsg ? 100 : 0;
     const statusText = this.progress
@@ -643,48 +646,47 @@ export class TimerFlasher extends Component {
     return `
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
+          <div class="flasher-wizard-badge-row">
+            <span class="note">Step 3 of 3 · Review &amp; write over USB-C</span>
+          </div>
           <h3>Ready to flash ${esc(cleanLabel)}</h3>
-          <p>Plug your <strong>Seeed Studio XIAO ESP32-C5</strong> into USB-C and click <strong>Flash to USB</strong>.</p>
+          <p>Plug your <strong>Seeed Studio XIAO ESP32-C5</strong> into USB-C and click <strong>Flash ${esc(cleanLabel)} to USB</strong>.</p>
         </div>
 
-        <div class="flasher-receipt">
-          <div class="flasher-receipt-item">
-            <span class="note">Role</span>
-            <div class="flasher-receipt-val">
-              <span class="badge ${isHub ? "tone-good" : ""}">${
-                isHub ? "Hub" : "Spoke"
-              }</span>
-            </div>
+        <div class="flasher-summary-grid">
+          <div class="flasher-summary-cell">
+            <span class="flasher-summary-label">Timer</span>
+            <strong class="flasher-summary-value mono">${esc(cleanLabel)}</strong>
           </div>
-
-          <div class="flasher-receipt-item">
-            <span class="note">Timer &amp; Firmware</span>
-            <div class="flasher-receipt-val mono">
-              <span>${esc(cleanLabel)} · SlapRF ${LATEST_FIRMWARE_VERSION}</span>
-            </div>
+          <div class="flasher-summary-cell">
+            <span class="flasher-summary-label">Role</span>
+            <span class="flasher-summary-value"><span class="badge ${isHub ? "tone-good" : ""}">${isHub ? "Hub · Slot 1" : "Spoke · Slots 2–7"}</span></span>
           </div>
-
-          <div class="flasher-receipt-item">
-            <span class="note">${isHub ? "Computer Link" : "Radio Link"}</span>
-            <div class="flasher-receipt-val mono">
-              <span>${esc(linkSummary)}</span>
-            </div>
+          <div class="flasher-summary-cell">
+            <span class="flasher-summary-label">Firmware</span>
+            <span class="flasher-summary-value mono">SlapRF ${LATEST_FIRMWARE_VERSION}</span>
+          </div>
+          <div class="flasher-summary-cell">
+            <span class="flasher-summary-label">Link</span>
+            <span class="flasher-summary-value">${esc(linkSummary)}</span>
           </div>
         </div>
 
-        <div class="flasher-fp-option" role="radiogroup" aria-label="Board fingerprint">
-          <span class="flasher-field-label">Board fingerprint</span>
-          <div class="flasher-fp-choices">
-            <label class="flasher-fp-choice ${this.keepFingerprint ? "is-active" : ""}">
-              <input type="radio" name="flasher-fp" value="keep" data-keep-fp="keep" ${this.keepFingerprint ? "checked" : ""} ${this.busy ? "disabled" : ""} />
-              <span><strong>Keep existing</strong> · Reflash or update this board; it stays the same timer with its color, gate, and history.</span>
-            </label>
-            <label class="flasher-fp-choice ${!this.keepFingerprint ? "is-active" : ""}">
-              <input type="radio" name="flasher-fp" value="new" data-keep-fp="new" ${!this.keepFingerprint ? "checked" : ""} ${this.busy ? "disabled" : ""} />
-              <span><strong>Generate new</strong> · Repurposed or swapped board; it shows up as a brand-new timer.</span>
-            </label>
+        <label class="flasher-erase-toggle-row">
+          <div class="flasher-erase-toggle-text">
+            <strong>Erase before flash</strong>
+            <span>Wipe existing board identity and assign a brand-new ID (leave off when updating an existing timer).</span>
           </div>
-        </div>
+          <span class="switch">
+            <input
+              type="checkbox"
+              data-erase-before-flash="1"
+              ${eraseBeforeFlash ? "checked" : ""}
+              ${this.busy ? "disabled" : ""}
+            />
+            <span></span>
+          </span>
+        </label>
 
         <div class="flasher-progress ${this.busy ? "is-flashing" : ""} ${this.lastSuccessMsg && !this.busy ? "is-complete" : ""}">
           <div class="flasher-progress-top">

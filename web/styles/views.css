@@ -2518,8 +2518,8 @@ body.is-gate-dragging * {
 .flasher-wifi-inputs {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-  align-items: end;
+  gap: 14px;
+  align-items: start;
   width: 100%;
   min-width: 0;
   max-width: 100%;
@@ -2532,6 +2532,90 @@ body.is-gate-dragging * {
   .flasher-wifi-inputs.flasher-two-col {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+.flasher-field-help {
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--text-3);
+}
+.input.input-readonly {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: var(--surface-3);
+  border-color: var(--border);
+  color: var(--text-2);
+  cursor: default;
+  user-select: none;
+}
+.flasher-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  padding: 13px 16px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+@media (max-width: 780px) {
+  .flasher-summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.flasher-summary-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+.flasher-summary-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-3);
+}
+.flasher-summary-value {
+  display: inline-flex;
+  align-items: center;
+  min-height: 22px;
+  font-size: 13px;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.flasher-erase-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 15px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--surface);
+  cursor: pointer;
+  transition: border-color 0.14s, background 0.14s;
+}
+.flasher-erase-toggle-row:hover {
+  border-color: var(--border-strong);
+}
+.flasher-erase-toggle-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.flasher-erase-toggle-text strong {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text);
+}
+.flasher-erase-toggle-text span {
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-3);
 }
 .flasher-role-card.is-compact {
   padding: 11px 13px;
