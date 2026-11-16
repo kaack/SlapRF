@@ -881,7 +881,11 @@ export class Announcer {
     this.liveUtterances.add(utterance);
     const voice = this.resolveVoice();
     if (voice) {
-      utterance.voice = voice;
+      try {
+        utterance.voice = voice;
+      } catch {
+        // Ignore non-native SpeechSynthesisVoice mocks in headless test environments
+      }
       if (voice.lang) {
         utterance.lang = voice.lang;
       }

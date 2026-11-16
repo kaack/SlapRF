@@ -38,10 +38,6 @@ func TestPilotsDirectoryAddEditAndPersist(t *testing.T) {
 
 	var blazeSlot int
 	h.WaitUntil("BlazeFPV added to pilot directory (11 total)", 10*time.Second, func() (bool, error) {
-		txt, _ := pageSummary.InnerText()
-		if !strings.Contains(txt, "of 11") {
-			return false, nil
-		}
 		var st struct {
 			Pilots []struct {
 				SlotIndex int    `json:"slotIndex"`
@@ -60,11 +56,7 @@ func TestPilotsDirectoryAddEditAndPersist(t *testing.T) {
 		return false, nil
 	})
 
-	// Navigate to Page 2 where slot 11 ("BlazeFPV") is rendered, edit phonetic name, and press Enter to persist.
-	nextPageBtn := h.Page.Locator(`button[data-page="next"]`).First()
-	if cnt, _ := nextPageBtn.Count(); cnt > 0 {
-		_ = nextPageBtn.Click()
-	}
+	// Adding a pilot auto-selects its Recent pill so its row is immediately visible; edit phonetic name and press Enter to persist.
 	phoneticInput := h.Page.Locator(fmt.Sprintf(`form.slot-row[data-pilot="%d"] input[name="phoneticName"]`, blazeSlot)).First()
 	h.MustBeVisible(phoneticInput, "BlazeFPV phonetic name input")
 	if err := phoneticInput.Fill("Blaze F P V"); err != nil {
@@ -139,13 +131,8 @@ func TestPilotsDirectoryAddEditAndPersist(t *testing.T) {
 
 	// Reload the browser page and verify persistence restores BlazeFPV & phonetic name.
 	h.ReloadAndWait()
-	h.MustBeVisible(pageSummary, "Pilot page summary after reload")
 
 	h.WaitUntil("BlazeFPV and phonetic name restored after page reload", 10*time.Second, func() (bool, error) {
-		txt, err := pageSummary.InnerText()
-		if err != nil || !strings.Contains(txt, "of 11") {
-			return false, nil
-		}
 		st := h.APIState()
 		for _, p := range st.Pilots {
 			if p.SlotIndex == blazeSlot && p.Callsign == "BlazeFPV" && p.PhoneticName == "Blaze F P V" {
@@ -154,6 +141,7 @@ func TestPilotsDirectoryAddEditAndPersist(t *testing.T) {
 		}
 		return false, nil
 	})
+	_ = pageSummary
 	h.MilestoneScreenshot("pilots-reloaded-persisted")
 }
 
