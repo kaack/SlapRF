@@ -99,6 +99,8 @@ export interface GateThresholdUpdate {
   laprfThreshold?: number;
   rhEnterThreshold?: number;
   rhExitThreshold?: number;
+  /** True when set by Auto-calibrate so background 30 s auto-calibration continues adapting. */
+  auto?: boolean;
 }
 
 /**

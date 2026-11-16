@@ -57,20 +57,16 @@ func TestComponent_FlasherViewFirmwarePatchOptionsAndReaderPanel(t *testing.T) {
 	h.MustBeVisible(flasherSlot, "Flasher Firmware Patch section")
 	h.MustBeVisible(eraserSlot, "Flasher Eraser section")
 
-	// Before connecting USB, Read Timer button is disabled.
+	// Flasher uses one-shot USB port selection on click, so Read Timer is enabled upfront.
 	readBtn := h.Page.Locator(`button[data-action="read-timer"]`).First()
 	dis, err := readBtn.IsDisabled()
-	if err != nil || !dis {
-		t.Fatalf("expected read-timer button disabled before USB connect, got disabled=%v (err=%v)", dis, err)
+	if err != nil || dis {
+		t.Fatalf("expected read-timer button enabled for one-shot USB selection, got disabled=%v (err=%v)", dis, err)
 	}
 	h.MilestoneScreenshot("flasher-disconnected-state")
 
-	// Connect simulated USB H1 -> Read Timer enables -> click Read Timer to inspect board metadata!
+	// Connect simulated USB H1 -> click Read Timer to inspect board metadata!
 	h.ConnectSimHubH1()
-	h.WaitUntil("read-timer button enabled once USB connected", 5*time.Second, func() (bool, error) {
-		d, gErr := readBtn.IsDisabled()
-		return gErr == nil && !d, nil
-	})
 	if err := readBtn.Click(); err != nil {
 		t.Fatalf("click read-timer: %v", err)
 	}

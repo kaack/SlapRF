@@ -65,6 +65,7 @@ type Engine struct {
 	gates          []domain.TrackGate
 	detected       map[uint8]*domain.DetectedTimer // key: physical timerId (1..16)
 	detectors      map[detKey]*dsp.ChannelDetector // key: (gateId, slotIdx)
+	autoCalib      map[detKey]*autoCalibState      // key: (gateId, slotIdx) rolling pass-waveform calibration
 	progress       map[int]*pilotProgress          // key: 1-based slotIdx
 	lastAcceptedUs map[string]uint64               // key: "gateId:slotIdx" -> last accepted crossing
 	laps           []domain.LapRecord
@@ -718,6 +719,10 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 		return
 	}
 	frame.TimerID = gate.GateID
+	hwMode := domain.NormalizeTimingHardwareMode(e.timingHardwareMode)
+	isSlapRFMode := hwMode == domain.HardwareModeSlapRF
+	var autoCalibChanged bool
+	var autoCalibSFChanged bool
 
 	for i := 0; i < len(e.pilots) && i < domain.MaxPilotPoolSize; i++ {
 		pilot := e.pilots[i]
@@ -735,6 +740,16 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 		candidate := det.ProcessSample(frame.RSSI[i], frame.TimestampUs, enter, exit, detectorDebounceUs)
 		gate.LastRSSI[i] = det.SmoothedRSSI()
 		frame.RSSI[i] = det.SmoothedRSSI()
+
+		if isSlapRFMode && e.raceArmed && pilot.Enabled && pilot.Channel > 0 {
+			if chg, sfChg := e.recordAutoCalibSampleLocked(gate, i, pilot, det, frame.RSSI[i], frame.TimestampUs); chg {
+				autoCalibChanged = true
+				if sfChg {
+					autoCalibSFChanged = true
+				}
+				enter, exit = thresholdsFor(gate, i, pilot)
+			}
+		}
 
 		if gate.Role == domain.GateRoleStartFinish && pilot.Enabled && pilot.Channel > 0 {
 			e.recordHeatRssiSampleLocked(pilot.SlotIndex, frame.TimestampUs, frame.RSSI[i], enter, exit)
@@ -828,23 +843,29 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 			practiceSnap = clonePracticeManagerState(e.practiceState)
 		}
 	}
+	if autoCalibSFChanged {
+		if e.syncStartFinishThresholdsToRaceLocked(hwMode) != nil {
+			raceChanged = true
+		}
+	}
+	cfgChanged := raceCfgRestored || autoCalibChanged
 	var pilotsCopy []domain.PilotSlot
 	var gatesCopy []domain.TrackGate
 	if raceChanged {
 		e.resolveActiveTournamentLocked()
 		e.syncActiveRaceToEventLocked()
 		raceSnap = cloneRaceState(e.raceState)
-		if raceCfgRestored {
-			pilotsCopy = append([]domain.PilotSlot(nil), e.pilots...)
-			gatesCopy = append([]domain.TrackGate(nil), e.gates...)
-		}
+	}
+	if cfgChanged {
+		pilotsCopy = append([]domain.PilotSlot(nil), e.pilots...)
+		gatesCopy = append([]domain.TrackGate(nil), e.gates...)
 	}
 	subs := append([]EventSubscriber(nil), e.subscribers...)
 	e.mu.Unlock()
 
 	// Dispatch outside the lock.
 	for _, s := range subs {
-		if raceCfgRestored {
+		if cfgChanged {
 			s.OnConfigUpdated(pilotsCopy, gatesCopy)
 		}
 		s.OnTelemetryFrame(frame)

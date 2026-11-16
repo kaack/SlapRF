@@ -56,6 +56,15 @@ func (d *ChannelDetector) SmoothedRSSI() float32 {
 	return d.smoothedRSSI
 }
 
+// RearmIfBelow clears any stale in-gate or awaiting-rearm state when thresholds change while the
+// smoothed signal is already at or below the new exit threshold.
+func (d *ChannelDetector) RearmIfBelow(exitThresholdDbm float32) {
+	if d.initialized && d.smoothedRSSI <= exitThresholdDbm {
+		d.inGate = false
+		d.awaitingRearm = false
+	}
+}
+
 // ProcessSample ingests a single RSSI sample (in dBm) at timestampUs and returns a CrossingCandidate
 // if a gate crossing peak was just confirmed by an exit nadir.
 func (d *ChannelDetector) ProcessSample(

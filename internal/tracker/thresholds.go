@@ -21,6 +21,9 @@ func (e *Engine) SetGateThresholds(updates []domain.GateThresholdUpdate) error {
 	e.mu.Lock()
 	type target struct {
 		gate, slot                  int
+		slotIndex                   int
+		gateID                      uint8
+		auto                        bool
 		enter, exit, laprfT         float32
 		rhEnter, rhExit             float32
 		hasDbm, hasLaprf, hasRH     bool
@@ -50,6 +53,9 @@ func (e *Engine) SetGateThresholds(updates []domain.GateThresholdUpdate) error {
 		var t target
 		t.gate = gi
 		t.slot = si
+		t.slotIndex = u.SlotIndex
+		t.gateID = u.GateID
+		t.auto = u.Auto
 
 		if u.RHEnterThreshold != 0 || u.RHExitThreshold != 0 || (isRHMode && u.EnterDbm >= 0) {
 			rawEn := u.RHEnterThreshold
@@ -131,6 +137,11 @@ func (e *Engine) SetGateThresholds(updates []domain.GateThresholdUpdate) error {
 			if t.hasDbm {
 				e.gates[t.gate].EnterThresholds[t.slot] = t.enter
 				e.gates[t.gate].ExitThresholds[t.slot] = t.exit
+				e.setAutoCalibManualPinLocked(t.gateID, t.slotIndex, t.enter != 0 && !t.auto, t.enter == 0)
+				if det := e.detectors[detKey{t.gateID, t.slotIndex}]; det != nil {
+					_, effEx := thresholdsFor(&e.gates[t.gate], t.slot, e.pilots[t.slot])
+					det.RearmIfBelow(effEx)
+				}
 			}
 			if t.hasLaprf {
 				e.gates[t.gate].LapRFThresholds[t.slot] = t.laprfT
@@ -147,57 +158,8 @@ func (e *Engine) SetGateThresholds(updates []domain.GateThresholdUpdate) error {
 
 	// Keep Start/Finish seat threshold snapshots and editable race/practice track snapshots in sync
 	var raceSnap *domain.RaceTournamentState
-	if sfGateUpdated && e.raceState.Generated {
-		var sfGate *domain.TrackGate
-		for gi := range e.gates {
-			if e.gates[gi].Role == domain.GateRoleStartFinish {
-				sfGate = &e.gates[gi]
-				break
-			}
-		}
-		if sfGate != nil {
-			changedRace := false
-			for hi := range e.raceState.Heats {
-				h := &e.raceState.Heats[hi]
-				if h.State == domain.HeatConfirmed {
-					continue
-				}
-				for si := range h.Seats {
-					slotIdx := h.Seats[si].PilotSlotIndex
-					if slotIdx <= 0 {
-						continue
-					}
-					pPos := e.slotPositionLocked(slotIdx)
-					if pPos < 0 {
-						continue
-					}
-					var en, ex float32
-					switch hwMode {
-					case domain.HardwareModeLapRF:
-						en = laprfThresholdFor(sfGate, pPos, e.pilots[pPos])
-						ex = en
-					case domain.HardwareModeRotorHazard, domain.HardwareModeRotorHazardUSB:
-						en, ex = rhThresholdsFor(sfGate, pPos, e.pilots[pPos])
-					default:
-						en, ex = thresholdsFor(sfGate, pPos, e.pilots[pPos])
-					}
-					if h.Seats[si].EnterRssiDbm != en || h.Seats[si].ExitRssiDbm != ex {
-						h.Seats[si].EnterRssiDbm = en
-						h.Seats[si].ExitRssiDbm = ex
-						changedRace = true
-					}
-				}
-			}
-			if isRaceTrackEditable(&e.raceState) {
-				e.raceState.TrackSnapshot = e.snapshotOrderedGatesLocked()
-				changedRace = true
-			}
-			if changedRace {
-				e.syncActiveRaceToEventLocked()
-				cp := cloneRaceState(e.raceState)
-				raceSnap = &cp
-			}
-		}
+	if sfGateUpdated {
+		raceSnap = e.syncStartFinishThresholdsToRaceLocked(hwMode)
 	}
 
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
@@ -212,6 +174,64 @@ func (e *Engine) SetGateThresholds(updates []domain.GateThresholdUpdate) error {
 		e.notifyRaceUpdated(*raceSnap, nil, subs)
 	}
 	return nil
+}
+
+func (e *Engine) syncStartFinishThresholdsToRaceLocked(hwMode domain.TimingHardwareMode) *domain.RaceTournamentState {
+	if !e.raceState.Generated {
+		return nil
+	}
+	var sfGate *domain.TrackGate
+	for gi := range e.gates {
+		if e.gates[gi].Role == domain.GateRoleStartFinish {
+			sfGate = &e.gates[gi]
+			break
+		}
+	}
+	if sfGate == nil {
+		return nil
+	}
+	changedRace := false
+	for hi := range e.raceState.Heats {
+		h := &e.raceState.Heats[hi]
+		if h.State == domain.HeatConfirmed {
+			continue
+		}
+		for si := range h.Seats {
+			slotIdx := h.Seats[si].PilotSlotIndex
+			if slotIdx <= 0 {
+				continue
+			}
+			pPos := e.slotPositionLocked(slotIdx)
+			if pPos < 0 {
+				continue
+			}
+			var en, ex float32
+			switch hwMode {
+			case domain.HardwareModeLapRF:
+				en = laprfThresholdFor(sfGate, pPos, e.pilots[pPos])
+				ex = en
+			case domain.HardwareModeRotorHazard, domain.HardwareModeRotorHazardUSB:
+				en, ex = rhThresholdsFor(sfGate, pPos, e.pilots[pPos])
+			default:
+				en, ex = thresholdsFor(sfGate, pPos, e.pilots[pPos])
+			}
+			if h.Seats[si].EnterRssiDbm != en || h.Seats[si].ExitRssiDbm != ex {
+				h.Seats[si].EnterRssiDbm = en
+				h.Seats[si].ExitRssiDbm = ex
+				changedRace = true
+			}
+		}
+	}
+	if isRaceTrackEditable(&e.raceState) {
+		e.raceState.TrackSnapshot = e.snapshotOrderedGatesLocked()
+		changedRace = true
+	}
+	if !changedRace {
+		return nil
+	}
+	e.syncActiveRaceToEventLocked()
+	cp := cloneRaceState(e.raceState)
+	return &cp
 }
 
 // thresholdsFor returns the enter / exit thresholds a gate uses for the pilot at position

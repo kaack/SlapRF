@@ -22,8 +22,8 @@ const RH_Y_ABS_MIN = 0;
 const RH_Y_ABS_MAX = 260;
 const RH_DEFAULT_Y_MIN = 0;
 const RH_DEFAULT_Y_MAX = 255;
-const WINDOWS_SEC = [1, 2, 5, 10, 30, 60, 120] as const;
-const DEFAULT_WINDOW_US = 5_000_000;
+const WINDOWS_SEC = [1, 2, 5, 10, 15, 30, 60, 120] as const;
+const DEFAULT_WINDOW_US = 15_000_000;
 const MIN_WINDOW_US = 400_000;
 const MAX_WINDOW_US = 120_000_000;
 const LEGEND_REFRESH_MS = 150;
@@ -813,11 +813,13 @@ export class PilotRssiChart extends Component {
         yMax?: number;
         focus?: number | null;
       };
-      if (typeof parsed.windowUs === "number" && parsed.windowUs >= MIN_WINDOW_US && parsed.windowUs <= MAX_WINDOW_US) {
-        this.windowUs = parsed.windowUs;
-      }
       if (typeof parsed.autoX === "boolean") {
         this.autoX = parsed.autoX;
+      }
+      if (this.autoX) {
+        this.windowUs = DEFAULT_WINDOW_US;
+      } else if (typeof parsed.windowUs === "number" && parsed.windowUs >= MIN_WINDOW_US && parsed.windowUs <= MAX_WINDOW_US) {
+        this.windowUs = parsed.windowUs;
       }
       if (typeof parsed.autoY === "boolean") {
         this.autoY = parsed.autoY;
@@ -1129,6 +1131,7 @@ export class PilotRssiChart extends Component {
             slotIndex: pilot.slotIndex,
             enterDbm: result.enterDbm,
             exitDbm: result.exitDbm,
+            auto: true,
           });
           done.push(`${name} ${result.enterDbm}/${result.exitDbm}`);
         }
@@ -1673,13 +1676,15 @@ export class PilotRssiChart extends Component {
             ? 0.5
             : winSec <= 8
               ? 1
-              : winSec <= 16
+              : winSec <= 12
                 ? 2
-                : winSec <= 38
-                  ? 5
-                  : winSec <= 75
-                    ? 10
-                    : 20;
+                : winSec <= 20
+                  ? 3
+                  : winSec <= 38
+                    ? 5
+                    : winSec <= 75
+                      ? 10
+                      : 20;
     const stepUs = stepSec * 1e6;
     ctx.textAlign = "center";
     ctx.fillStyle = theme.text3;
@@ -1792,7 +1797,7 @@ export class PilotRssiChart extends Component {
 
     this.slot("axis-controls").innerHTML = `
       <div class="debug-axis-pill ${this.autoX ? "is-armed" : "is-unarmed"}" data-axis-pill>
-        <button type="button" class="debug-axis-pill-main" data-axis-act="${this.autoX ? "toggle-menu" : "auto-x"}" data-menu="rssi-x" title="${this.autoX ? `Auto X-axis time window (${xWinLabel}) · click to choose a time window preset, or drag X-axis to stretch` : "Click to reset X-axis time window to Auto X (5 s)"}">
+        <button type="button" class="debug-axis-pill-main" data-axis-act="${this.autoX ? "toggle-menu" : "auto-x"}" data-menu="rssi-x" title="${this.autoX ? `Auto X-axis time window (${xWinLabel}) · click to choose a time window preset, or drag X-axis to stretch` : "Click to reset X-axis time window to Auto X (15 s)"}">
           ${icons.target(13)}<span>${this.autoX ? "Auto X" : `<span class="debug-hint-desktop">X: ${xWinLabel}</span><span class="debug-hint-mobile">X: ${xWinShort}</span>`}</span>
         </button>
         <button type="button" class="debug-axis-pill-arrow" data-axis-act="toggle-menu" data-menu="rssi-x" aria-expanded="${this.openAxisMenu === "rssi-x"}" title="Choose X-axis time window">
@@ -1802,7 +1807,7 @@ export class PilotRssiChart extends Component {
           this.openAxisMenu === "rssi-x"
             ? `<div class="debug-axis-menu" role="menu" aria-label="X-axis time window">
                 <button type="button" class="debug-axis-menu-item ${this.autoX ? "is-active" : ""}" data-axis-act="auto-x" role="menuitem">
-                  <span>Auto X</span><span class="note">5 s</span>
+                  <span>Auto X</span><span class="note">15 s</span>
                 </button>
                 <div class="debug-axis-menu-sep"></div>
                 ${WINDOWS_SEC.map((w) => {
@@ -1879,7 +1884,7 @@ export class PilotRssiChart extends Component {
           ? "Select a timer above to view or drag its LapRF crossing threshold (300–3500)."
           : isRH
             ? "Select a timer above to view or drag its RotorHazard Enter & Exit thresholds (0–255)."
-            : "Select a timer above to view or drag its Enter & Exit thresholds, or auto-calibrate all timers.");
+            : "Timers auto-calibrate every 30 s from live lap passes · select a timer above to inspect or drag its thresholds.");
       actions = `
         <div class="scope-calib-actions">
           ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(15)}<span>Undo</span></button>` : ""}

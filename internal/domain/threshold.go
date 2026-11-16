@@ -26,4 +26,7 @@ type GateThresholdUpdate struct {
 	LapRFThreshold   float32 `json:"laprfThreshold,omitempty"`
 	RHEnterThreshold float32 `json:"rhEnterThreshold,omitempty"`
 	RHExitThreshold  float32 `json:"rhExitThreshold,omitempty"`
+	// Auto marks updates computed by the UI's Auto-calibrate action so background 30 s
+	// auto-calibration keeps adapting instead of treating the threshold as manually pinned.
+	Auto bool `json:"auto,omitempty"`
 }
