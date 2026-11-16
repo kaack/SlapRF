@@ -1,8 +1,11 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
+import { getAppTheme, subscribeAppTheme } from "../core/theme";
 import { ApiClient } from "../services/api_client";
 import { TimerReadout } from "../services/esp_flasher";
+import { sharedLapRFLink } from "../services/laprf_hardware_link";
+import { RHClientDiagSnapshot, sharedRHLink } from "../services/rh_hardware_link";
 import {
   BootLog,
   getKnownHardwareTimers,
@@ -16,26 +19,32 @@ import {
   TimerStatus,
   usbPool,
 } from "../services/timer_console";
-import { DetectedTimer } from "../types/models";
+import { AppStore } from "../state/store";
+import { DetectedTimer, isRotorHazardMode, TimingHardwareMode } from "../types/models";
 import { patchUsbConnectionBar } from "../widgets/UsbConnectionBar";
 import {
   buildFileStamp,
-  CHANNEL_COLORS,
+  channelColor,
   DBM_MAX,
   DBM_MIN,
   downloadCanvasPng,
   downloadTextFile,
   drawHealthSparklines,
+  drawRHHealthSparklines,
   drawSignalOverTimeCanvas,
   drawSpectrumCanvas,
   drawWaterfallCanvas,
   exportScanHistoryCsv,
   exportSignalCsv,
   exportSpectrumCsv,
+  formatHardwareFreq,
+  hardwareBandLabel,
   HealthHistory,
+  invalidateDebugChartThemeCache,
   PilotThresholdInfo,
   RACEBAND,
   racebandName,
+  RHHealthHistory,
   SignalRingBuffer,
   SpectrumAccumulator,
 } from "./debug/charts";
@@ -128,6 +137,7 @@ export class DebugView extends Component {
   private readonly signalRing = new SignalRingBuffer();
   private readonly spectrumAcc = new SpectrumAccumulator();
   private readonly healthHistory = new HealthHistory();
+  private readonly rhHealthHistory = new RHHealthHistory();
   private pilots: PilotThresholdInfo[] = [];
   private serverTimers: DetectedTimer[] = [];
   private serverGates: Array<{
@@ -144,6 +154,18 @@ export class DebugView extends Component {
   private serverSimActive = false;
   private hasServer = false;
   private readonly api?: ApiClient;
+  private readonly store?: AppStore;
+  private lastSyncedHwMode: TimingHardwareMode = "slaprf";
+  private selectedRhTimerId: number | null = null;
+  private rhLiveOn = false;
+  private rhSampleSeq = 0;
+  private rhLastHeartbeatsRx = -1;
+  private rhLastSamplePushAt = 0;
+  private rhLastHealthPushAt = 0;
+  private rhNodeBaseline: number[] = [-128, -128, -128, -128, -128, -128, -128, -128];
+  private rhStructuralDigest = "";
+  private rhPollTimer = 0;
+  private rhPollInFlight = false;
   private selectedNetworkSpokeSlot: number | null = null;
   private spokeRateTracker = new Map<number, { frames: number; atMs: number; ratePktPerSec: number }>();
 
@@ -182,7 +204,7 @@ export class DebugView extends Component {
   private scanShowAvg = true;
   private scanShowWifi = true;
   private scanStartMHz = 5180;
-  private scanStopMHz = 5917;
+  private scanStopMHz = 5945;
   private scanStepMHz = 5;
   private scanZoomStartMHz: number | null = null;
   private scanZoomStopMHz: number | null = null;
@@ -236,29 +258,31 @@ export class DebugView extends Component {
   private serialWrap = false;
   private logWrap = false;
 
-  constructor(el: HTMLElement, api?: ApiClient) {
+  constructor(el: HTMLElement, api?: ApiClient, store?: AppStore) {
     super(el);
     this.api = api;
+    this.store = store;
+    this.lastSyncedHwMode = store?.timingHardwareMode ?? "slaprf";
     this.console = usbPool.debugConsole;
     this.loadDebugPrefs();
 
     el.innerHTML = `
       <div class="settings debug-page">
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="connection">
           <div class="settings-intro">
             <h2>Connection</h2>
             <p>Inspects the main USB connection by default. Click <strong>Debug another USB</strong> to inspect a second USB device without disconnecting the main one.</p>
           </div>
           <div class="debug-status-layout" data-slot="connection"></div>
         </section>
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="self-test">
           <div class="settings-intro">
             <h2>Self-test</h2>
             <p>Runs a 10-second end-to-end check: console, identity, 5.8 GHz receiver, sweep timing, memory, last restart, course link, and engine feed. Copy the report when troubleshooting.</p>
           </div>
           <div class="card card-flush" data-slot="selftest"></div>
         </section>
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="status-health">
           <div class="settings-intro">
             <h2>Status &amp; health</h2>
             <p>Identity, chip, uptime, last restart reason, free memory, sweep timing, and 5.8 GHz boot check. Updates every 2 seconds with a 5-minute trend.</p>
@@ -315,7 +339,7 @@ export class DebugView extends Component {
             </div>
           </div>
         </section>
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="monitored-channels">
           <div class="settings-intro">
             <h2>Monitored channels</h2>
             <p>The 8 pilot channels scanned each sweep. Click a channel to toggle it on or off (fewer active channels sweep faster). Click <strong>Stream</strong> for live 5.8 GHz signal bars.</p>
@@ -325,7 +349,7 @@ export class DebugView extends Component {
             <div class="debug-subbox" data-slot="live"></div>
           </div>
         </section>
-        <section class="settings-section" data-signal-section>
+        <section class="settings-section" data-signal-section data-section-anchor="signal-noise">
           <div class="settings-intro">
             <h2>Signal over time &amp; channel noise</h2>
             <p>Click <strong>Stream</strong> to plot live 50 Hz sweeps, crossing peaks, 5 GHz Wi-Fi bursts, noise floors, and pilot thresholds.</p>
@@ -348,7 +372,7 @@ export class DebugView extends Component {
             <div class="debug-status-layout" data-slot="noise-table"></div>
           </div>
         </section>
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="spectrum-scan">
           <div class="settings-intro">
             <h2>Spectrum scan &amp; waterfall</h2>
             <p>Scans 5180–5917 MHz to spot rogue VTXs or 5 GHz Wi-Fi interference (Raceband <strong>R3–R6 overlap Wi-Fi UNII-3</strong>, channels 149–165, 5735–5835 MHz).</p>
@@ -356,14 +380,14 @@ export class DebugView extends Component {
           </div>
           <div class="debug-status-layout" data-slot="scan"></div>
         </section>
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="serial-console">
           <div class="settings-intro">
             <h2>Serial console</h2>
             <p>USB terminal for sending commands directly to the timer and reading boot/crash logs. Type <span class="mono">HELP</span> for commands.</p>
           </div>
           <div class="card card-flush" data-slot="serial-console"></div>
         </section>
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="live-log">
           <div class="settings-intro">
             <h2>Live log</h2>
             <p>Live firmware log messages mirrored over USB.</p>
@@ -479,13 +503,52 @@ export class DebugView extends Component {
       const target = usbPool.debugConsole;
       if (target !== this.console) {
         this.bindConsole(target);
-      } else {
+      } else if (this.isSlapRFMode()) {
         this.renderConnection();
       }
     });
 
+    const onExternalState = () => {
+      const curMode = this.hwMode();
+      if (curMode !== this.lastSyncedHwMode) {
+        if (isRotorHazardMode(this.lastSyncedHwMode)) {
+          this.rhLiveOn = false;
+          void this.api?.setRHDebugStream?.(0, false)?.catch(() => undefined);
+        }
+        this.lastSyncedHwMode = curMode;
+        this.resetSignalBuffersForTargetChange();
+        this.syncHardwareModeDom();
+        this.renderAll();
+        return;
+      }
+      if (this.isRotorHazardMode()) {
+        this.ingestRotorHazardSample();
+      } else if (this.isLapRFMode()) {
+        this.renderConnection();
+      }
+    };
+
+    const unsubStore = this.store ? this.store.subscribe(["config", "status"], onExternalState) : null;
+    const unsubRH = this.store ? sharedRHLink.subscribe(onExternalState) : null;
+    const unsubLapRF = this.store ? sharedLapRFLink.subscribe(onExternalState) : null;
+    const unsubTheme = subscribeAppTheme(() => {
+      invalidateDebugChartThemeCache();
+      this.spectrumAcc.repaintForTheme();
+      this.renderAll();
+    });
+
+    if (this.store) {
+      this.rhPollTimer = window.setInterval(() => {
+        void this.tickNonSlapRFTelemetry();
+      }, 120);
+    }
+
     this.onDispose(() => {
       unsubPool();
+      unsubStore?.();
+      unsubRH?.();
+      unsubLapRF?.();
+      unsubTheme();
       this.unsubConsole?.();
       this.unsubConsole = null;
       this.console.setBusyLabel(null);
@@ -493,6 +556,14 @@ export class DebugView extends Component {
       window.removeEventListener("resize", onResize);
       this.observer?.disconnect();
       window.clearInterval(this.statusTimer);
+      window.clearInterval(this.rhPollTimer);
+      const wasRhActive = this.rhLiveOn || this.isRotorHazardMode();
+      if (this.rhLiveOn) {
+        this.rhLiveOn = false;
+      }
+      if (wasRhActive) {
+        void this.api?.setRHDebugStream?.(0, false)?.catch(() => undefined);
+      }
       // Leaving the Debug page must stop high-rate LIVE / SCAN / LOG streaming,
       // and if a secondary debug USB device (Slot 1) is connected, disconnect it and revert to main.
       this.stopActiveStreamsOn(this.console);
@@ -500,7 +571,369 @@ export class DebugView extends Component {
         void usbPool.revertDebugToMain();
       }
     });
+    this.syncHardwareModeDom();
     this.bindConsole(this.console);
+  }
+
+  private hwMode(): TimingHardwareMode {
+    return this.store?.timingHardwareMode ?? "slaprf";
+  }
+
+  private isSlapRFMode(): boolean {
+    return this.hwMode() === "slaprf";
+  }
+
+  private isRotorHazardMode(): boolean {
+    return isRotorHazardMode(this.hwMode());
+  }
+
+  private isRotorHazardUSBMode(): boolean {
+    return this.hwMode() === "rotorhazard_usb";
+  }
+
+  private isLapRFMode(): boolean {
+    return this.hwMode() === "laprf";
+  }
+
+  private activeSweepHz(): number {
+    return this.isRotorHazardMode() ? 10 : (this.status?.sweepHz ?? 50);
+  }
+
+  private signalYBounds(): {
+    min: number;
+    max: number;
+    minSpan: number;
+    floorPresetMin: number;
+    floorPresetMax: number;
+    unit: string;
+  } {
+    if (this.isRotorHazardMode()) {
+      return {
+        min: 0,
+        max: 255,
+        minSpan: 36,
+        floorPresetMin: 0,
+        floorPresetMax: 130,
+        unit: "RSSI",
+      };
+    }
+    return {
+      min: DBM_MIN,
+      max: DBM_MAX,
+      minSpan: 18,
+      floorPresetMin: -102,
+      floorPresetMax: -68,
+      unit: "dBm",
+    };
+  }
+
+  private getRhSnapshots(): RHClientDiagSnapshot[] {
+    return this.store ? sharedRHLink.snapshots(this.store) : [];
+  }
+
+  private activeRhSnapshot(): RHClientDiagSnapshot | null {
+    const snaps = this.getRhSnapshots();
+    if (snaps.length === 0) return null;
+    if (this.selectedRhTimerId !== null) {
+      const exact = snaps.find((s) => s.timerId === this.selectedRhTimerId);
+      if (exact) return exact;
+    }
+    const chosen = snaps.find((s) => s.connected) ?? snaps[0];
+    this.selectedRhTimerId = chosen.timerId;
+    return chosen;
+  }
+
+  private async syncRhDebugStream(active: boolean, timerIdOverride?: number): Promise<void> {
+    const tid = timerIdOverride !== undefined ? timerIdOverride : (this.activeRhSnapshot()?.timerId ?? 0);
+    if (this.api?.setRHDebugStream && (tid > 0 || !active)) {
+      await this.api.setRHDebugStream(tid, active).catch(() => undefined);
+    }
+    if (this.store?.simulatorRunning) {
+      await this.api?.pollStatusNow().catch(() => undefined);
+    } else {
+      await sharedRHLink.refreshStatus().catch(() => undefined);
+    }
+    this.ingestRotorHazardSample();
+  }
+
+  private resetSignalBuffersForTargetChange(): void {
+    this.live = null;
+    this.liveCount = 0;
+    this.signalRing.clear();
+    this.rhHealthHistory.clear();
+    this.signalEndN = null;
+    this.signalAutoY = true;
+    this.signalSmoothYMin = null;
+    this.signalSmoothYMax = null;
+    const yb = this.signalYBounds();
+    this.signalYMin = this.isRotorHazardMode() ? 0 : -100;
+    this.signalYMax = this.isRotorHazardMode() ? 140 : -78;
+    void yb;
+    this.barFillVal = [-127, -127, -127, -127, -127, -127, -127, -127];
+    this.barFillAt = [0, 0, 0, 0, 0, 0, 0, 0];
+    this.barPeakVal = [-127, -127, -127, -127, -127, -127, -127, -127];
+    this.barPeakAt = [0, 0, 0, 0, 0, 0, 0, 0];
+    this.rhNodeBaseline = [-128, -128, -128, -128, -128, -128, -128, -128];
+    this.rhLastHeartbeatsRx = -1;
+    this.rhLastSamplePushAt = 0;
+    this.rhLastHealthPushAt = 0;
+    this.rhStructuralDigest = "";
+    this.signalFindings = [];
+    this.signalFindingSeq = 0;
+    this.checks = [];
+    this.checksAt = null;
+    this.reportExtra = "";
+    this.dirtySignal = true;
+    this.dirtyNoiseTable = true;
+    this.dirtyHealth = true;
+  }
+
+  private syncHardwareModeDom(): void {
+    const mode = this.hwMode();
+    const isSlap = mode === "slaprf";
+    const isRHNet = mode === "rotorhazard";
+    const isRHUSB = mode === "rotorhazard_usb";
+    const isLapRF = mode === "laprf";
+
+    const setHidden = (anchor: string, hide: boolean) => {
+      const sec = this.el.querySelector<HTMLElement>(`[data-section-anchor="${anchor}"]`);
+      if (sec) sec.hidden = hide;
+    };
+    // Spectrum scan, firmware serial CLI, and USB firmware log are strictly SlapRF hardware capabilities.
+    setHidden("spectrum-scan", !isSlap);
+    setHidden("serial-console", !isSlap);
+    setHidden("live-log", !isSlap);
+    // In LapRF mode, hide RF diagnostic sections that apply to SlapRF / RotorHazard node telemetry.
+    setHidden("self-test", isLapRF);
+    setHidden("status-health", isLapRF);
+    setHidden("monitored-channels", isLapRF);
+    setHidden("signal-noise", isLapRF);
+
+    const setIntro = (anchor: string, titleHtml: string, bodyHtml: string) => {
+      const intro = this.el.querySelector<HTMLElement>(`[data-section-anchor="${anchor}"] > .settings-intro`);
+      if (!intro) return;
+      const next = `<h2>${titleHtml}</h2>${bodyHtml}`;
+      if (intro.innerHTML !== next) {
+        intro.innerHTML = next;
+      }
+    };
+
+    if (isRHUSB) {
+      setIntro(
+        "connection",
+        "Connection",
+        `<p>Select a RotorHazard USB serial node to inspect its binary serial link, receiver seats, serial RTT, and live 0–255 RSSI telemetry.</p>`
+      );
+      setIntro(
+        "self-test",
+        "Self-test",
+        `<p>Runs an end-to-end check on the selected RotorHazard USB node: serial port &amp; API handshake, seat count, RF frequency tuning, serial RTT, baseline headroom, and ~10 Hz RSSI poll stream.</p>`
+      );
+      setIntro(
+        "status-health",
+        "Status &amp; health",
+        `<p>Serial API level, baud rate, receiver seat assignments, gate state, serial RTT, and live telemetry counters.</p>`
+      );
+      setIntro(
+        "monitored-channels",
+        "Monitored channels",
+        `<p>Live 0–255 RSSI across the USB node's receiver seats with hardware Enter / Exit thresholds. Click a seat row to show or hide its trace.</p>`
+      );
+      setIntro(
+        "signal-noise",
+        "Signal over time &amp; channel noise",
+        `<p>Plots live ~10 Hz RotorHazard USB RSSI (0–255), crossing peaks, baseline noise, and hardware Enter / Exit thresholds per receiver seat.</p><p>The table below shows mean, spread, max, floor, and how often baseline noise reaches each seat's EnterAt threshold ("would trigger").</p>`
+      );
+    } else if (isRHNet) {
+      setIntro(
+        "connection",
+        "Connection",
+        `<p>Select a RotorHazard timer on the network to inspect its Socket.IO link, RX5808 receiver nodes, clock sync, and live RSSI telemetry.</p>`
+      );
+      setIntro(
+        "self-test",
+        "Self-test",
+        `<p>Runs an end-to-end check on the selected RotorHazard timer: Socket.IO link, admin authentication, server version &amp; node count, node RF tuning, clock sync, baseline headroom, and ~10 Hz heartbeat stream.</p>`
+      );
+      setIntro(
+        "status-health",
+        "Status &amp; health",
+        `<p>Server version, hostname, RX5808 receiver node assignments, authentication &amp; gate state, clock offset, and environmental sensors with a 5-minute trend.</p>`
+      );
+      setIntro(
+        "monitored-channels",
+        "Monitored channels",
+        `<p>Live 0–255 RSSI across the timer's RX5808 receiver nodes with hardware Enter / Exit thresholds. Click a node row to show or hide its trace.</p>`
+      );
+      setIntro(
+        "signal-noise",
+        "Signal over time &amp; channel noise",
+        `<p>Plots live ~10 Hz RotorHazard heartbeat RSSI (0–255), crossing peaks, baseline noise, and hardware Enter / Exit thresholds per receiver node.</p><p>The table below shows mean, spread, max, floor, and how often baseline noise reaches each node's EnterAt threshold ("would trigger").</p>`
+      );
+    } else if (isLapRF) {
+      setIntro(
+        "connection",
+        "Connection",
+        `<p>Select or connect a LapRF 8-Way timer over Ethernet TCP (<span class="mono">:5403</span>) or USB CDC. Manage hardware endpoints on the Network page.</p>`
+      );
+    } else {
+      setIntro(
+        "connection",
+        "Connection",
+        `<p>Inspects the main USB connection by default. Click <strong>Debug another USB</strong> to inspect a second USB device without disconnecting the main one.</p>`
+      );
+      setIntro(
+        "self-test",
+        "Self-test",
+        `<p>Runs a 10-second end-to-end check: console, identity, 5.8 GHz receiver, sweep timing, memory, last restart, course link, and engine feed. Copy the report when troubleshooting.</p>`
+      );
+      setIntro(
+        "status-health",
+        "Status &amp; health",
+        `<p>Identity, chip, uptime, last restart reason, free memory, sweep timing, and 5.8 GHz boot check. Updates every 2 seconds with a 5-minute trend.</p>`
+      );
+      setIntro(
+        "monitored-channels",
+        "Monitored channels",
+        `<p>The 8 pilot channels scanned each sweep. Click a channel to toggle it on or off (fewer active channels sweep faster). Click <strong>Stream</strong> for live 5.8 GHz signal bars.</p>`
+      );
+      setIntro(
+        "signal-noise",
+        "Signal over time &amp; channel noise",
+        `<p>Click <strong>Stream</strong> to plot live 50 Hz sweeps, crossing peaks, 5 GHz Wi-Fi bursts, noise floors, and pilot thresholds.</p><p>The table below shows mean, spread, max, floor, hits/s, and how often noise reaches a pilot's enter threshold ("would trigger": anything above 0% with no drone flying risks false passes).</p>`
+      );
+    }
+  }
+
+  private async tickNonSlapRFTelemetry(): Promise<void> {
+    if (!this.isRotorHazardMode()) return;
+    if (typeof document !== "undefined" && document.hidden) return;
+    if (this.rhPollInFlight) return;
+    this.rhPollInFlight = true;
+    try {
+      if (this.store?.simulatorRunning) {
+        await this.api?.pollStatusNow();
+      } else {
+        await sharedRHLink.refreshStatus();
+      }
+      this.ingestRotorHazardSample();
+    } finally {
+      this.rhPollInFlight = false;
+    }
+  }
+
+  private ingestRotorHazardSample(): void {
+    if (!this.isRotorHazardMode()) return;
+    const snaps = this.getRhSnapshots();
+    const snap = this.activeRhSnapshot();
+    const structKey = JSON.stringify({
+      list: snaps.map((s) => [s.timerId, s.label, s.endpoint, s.connected, s.authOk, s.nodeCount, s.serverVersion, s.gateArmed]),
+      sel: snap?.timerId ?? null,
+      freqs: snap?.nodeFreqsMhz ?? [],
+      enters: snap?.nodeEnterLevels ?? [],
+      exits: snap?.nodeExitLevels ?? [],
+      liveOn: this.rhLiveOn,
+      sim: Boolean(this.store?.simulatorRunning),
+    });
+    if (structKey !== this.rhStructuralDigest) {
+      this.rhStructuralDigest = structKey;
+      this.renderConnection();
+      this.renderSelfTest();
+      this.renderStatus();
+      this.renderLiveHead();
+      this.renderLive();
+      this.renderSignalControls();
+      this.renderNoiseTable();
+    }
+
+    if (!snap) return;
+
+    // Update fast-changing status text in place without replacing DOM nodes
+    const clockEl = this.el.querySelector<HTMLElement>("[data-rh-live-clock]");
+    if (clockEl) {
+      clockEl.textContent = snap.connected
+        ? `${snap.clockSynced ? "Synced" : "Syncing"} · ${snap.clockOffsetMs >= 0 ? "+" : ""}${snap.clockOffsetMs.toFixed(1)} ms`
+        : "—";
+    }
+    const telemEl = this.el.querySelector<HTMLElement>("[data-rh-live-telem]");
+    if (telemEl) {
+      telemEl.textContent = snap.connected
+        ? `${snap.heartbeatsRx} heartbeats · ${snap.passesRx} passes`
+        : "—";
+    }
+    const envEl = this.el.querySelector<HTMLElement>("[data-rh-live-env]");
+    if (envEl) {
+      envEl.textContent = snap.connected
+        ? snap.envSummary || (snap.cpuTempC && snap.cpuTempC > 0 ? `Pi CPU ${snap.cpuTempC.toFixed(1)} °C` : "No sensor reported")
+        : "—";
+    }
+
+    if (!snap.connected) return;
+
+    const now = performance.now();
+    const hbChanged = snap.heartbeatsRx !== this.rhLastHeartbeatsRx;
+    if (this.rhLiveOn && (hbChanged || now - this.rhLastSamplePushAt >= 150)) {
+      this.rhLastHeartbeatsRx = snap.heartbeatsRx;
+      this.rhLastSamplePushAt = now;
+      const nodeCount = snap.nodeCount === 4 ? 4 : 8;
+      const dbm = new Array<number>(8).fill(-128);
+      const floor = new Array<number>(8).fill(-128);
+      const hits = new Array<number>(8).fill(0);
+      for (let i = 0; i < nodeCount; i++) {
+        const f = snap.nodeFreqsMhz[i] ?? 0;
+        if (f <= 0) {
+          this.rhNodeBaseline[i] = -128;
+          continue;
+        }
+        const v = Math.max(0, Math.min(255, Math.round(snap.slotRssi[i] ?? 0)));
+        dbm[i] = v;
+        const crossing = Boolean(snap.crossingFlag[i]) || v >= (snap.nodeEnterLevels[i] ?? 90);
+        hits[i] = crossing ? 1 : 0;
+        const prevBase = this.rhNodeBaseline[i];
+        if (prevBase <= -127) {
+          this.rhNodeBaseline[i] = v;
+        } else if (v < prevBase) {
+          this.rhNodeBaseline[i] = prevBase + (v - prevBase) * 0.35;
+        } else if (!crossing) {
+          this.rhNodeBaseline[i] = prevBase + (v - prevBase) * 0.05;
+        }
+        floor[i] = Math.max(0, Math.min(255, Math.round(this.rhNodeBaseline[i])));
+      }
+      const sample: LiveSample = {
+        n: ++this.rhSampleSeq,
+        us: 100_000,
+        dbm,
+        pk: [...dbm],
+        floor,
+        hits,
+      };
+      this.live = sample;
+      this.liveCount++;
+      this.signalRing.push(sample, 10, 2);
+      this.recordRhFindingFromSample(snap, sample);
+      this.updateLive();
+      if (this.signalEndN === null && !this.signalDrag) {
+        this.dirtySignal = true;
+        this.dirtyNoiseTable = true;
+      }
+    }
+
+    if (now - this.rhLastHealthPushAt >= 2000 || this.rhHealthHistory.points.length === 0) {
+      this.rhLastHealthPushAt = now;
+      const nodeCount = snap.nodeCount === 4 ? 4 : 8;
+      let sumBase = 0;
+      let cntBase = 0;
+      for (let i = 0; i < nodeCount; i++) {
+        const f = snap.nodeFreqsMhz[i] ?? 0;
+        if (f <= 0) continue;
+        const base = this.rhNodeBaseline[i] > -127 ? this.rhNodeBaseline[i] : (snap.slotRssi[i] ?? 0);
+        sumBase += base;
+        cntBase++;
+      }
+      const meanBase = cntBase > 0 ? sumBase / cntBase : 0;
+      this.rhHealthHistory.push(Math.abs(snap.clockOffsetMs), meanBase, snap.passesRx, snap.heartbeatsRx, 10);
+      this.dirtyHealth = true;
+    }
   }
 
   private stopActiveStreamsOn(target: TimerConsole): void {
@@ -509,6 +942,7 @@ export class DebugView extends Component {
     if (this.liveOn) cmds.push("LIVE 0");
     if (this.scanLive) cmds.push("SCAN STOP");
     if (this.logOn) cmds.push("LOG 0");
+    if (!this.status?.emergencyMode) cmds.push("RF 1");
     if (cmds.length > 0) {
       void target.send(cmds.join("\n")).catch(() => undefined);
     }
@@ -603,7 +1037,7 @@ export class DebugView extends Component {
         this.signalRing.push(s, this.status?.sweepHz ?? 50, this.liveMode);
         this.recordSignalFindingFromSample(s);
         this.updateLive();
-        if (this.signalEndN === null) {
+        if (this.signalEndN === null && !this.signalDrag) {
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
         }
@@ -624,6 +1058,7 @@ export class DebugView extends Component {
         if (!s.live) {
           this.scanning = false;
           this.renderScan();
+          void this.syncRfState();
         } else {
           this.updateScanFindings();
         }
@@ -712,6 +1147,22 @@ export class DebugView extends Component {
     }
   }
 
+  /**
+   * Manage the 5.8 GHz receiver (RF 1 / RF 0) automatically based on active Debug view operations:
+   * ON when streaming monitored channels, running/streaming a spectrum scan, or running self-test;
+   * OFF (standby) when all 5.8 GHz debug activities are paused.
+   */
+  private async syncRfState(forceOn?: boolean): Promise<void> {
+    if (!this.console.connected || this.status?.emergencyMode) return;
+    const wantOn = forceOn ?? (this.liveOn || this.scanLive || this.scanning || this.busy === "selftest");
+    if (this.status && this.status.rf.enabled === wantOn) return;
+    await this.console.request(`RF ${wantOn ? 1 : 0}`, "ok", 2000).catch(() => undefined);
+    if (this.status) {
+      this.status.rf.enabled = wantOn;
+    }
+    this.renderStatus();
+  }
+
   /** Push the active 8-channel monitoring bitmask to the timer over USB so unchecked slots are skipped in hardware sweeps. */
   private syncChannelMaskToFirmware(): void {
     let mask = 0;
@@ -728,21 +1179,31 @@ export class DebugView extends Component {
   }
 
   private signalViewEndN(): number {
-    return this.signalEndN ?? this.signalRing.latestN();
+    if (this.signalEndN !== null) return this.signalEndN;
+    if (this.signalDrag) return this.signalDrag.startEndN;
+    return this.signalRing.latestN();
   }
 
   private clampSignalEndN(endN: number): number {
-    const latest = this.signalRing.latestN();
+    const latest =
+      this.signalEndN !== null && this.signalRefN > 0
+        ? this.signalRefN
+        : this.signalDrag
+          ? this.signalDrag.startEndN
+          : this.signalRing.latestN();
     const earliest = this.signalRing.earliestN();
-    const sweepHz = this.status?.sweepHz ?? 50;
-    const minEnd = Math.min(latest, earliest + this.signalWindowSec * sweepHz);
-    return Math.min(latest, Math.max(minEnd, endN));
+    const sweepHz = this.activeSweepHz();
+    const windowSweeps = this.signalWindowSec * sweepHz;
+    const minEnd = earliest;
+    const maxEnd = Math.max(latest, earliest + windowSweeps);
+    return Math.min(maxEnd, Math.max(minEnd, endN));
   }
 
   private pauseSignalAt(endN: number): void {
     const wasLive = this.signalEndN === null;
     if (wasLive) {
-      this.signalRefN = this.signalRing.latestN();
+      this.signalRefN = this.signalDrag ? this.signalDrag.startEndN : this.signalRing.latestN();
+      this.signalEndN = this.signalRefN;
     }
     this.signalEndN = this.clampSignalEndN(endN);
     if (wasLive) {
@@ -759,7 +1220,7 @@ export class DebugView extends Component {
     const fullStop =
       s && s.dbm.length
         ? s.start + s.step * (s.dbm.length - 1)
-        : Math.max(fullStart + rawStep, Math.min(5925, rawStop));
+        : Math.max(fullStart + rawStep, Math.min(5945, rawStop));
     const step = s && s.dbm.length ? s.step : rawStep;
     const vStart = this.scanZoomStartMHz ?? fullStart;
     const vStop = Math.max(vStart + step, this.scanZoomStopMHz ?? fullStop);
@@ -792,7 +1253,7 @@ export class DebugView extends Component {
     const fullStop =
       s && s.dbm.length
         ? s.start + s.step * (s.dbm.length - 1)
-        : Math.max(fullStart + rawStep, Math.min(5925, rawStop));
+        : Math.max(fullStart + rawStep, Math.min(5945, rawStop));
     const step = s && s.dbm.length ? s.step : rawStep;
     const fullSpan = Math.max(10, fullStop - fullStart);
     const curSpan = Math.max(10, startMHz1 - startMHz0);
@@ -801,8 +1262,8 @@ export class DebugView extends Component {
     const anchorMHz = startMHz0 + anchorFrac * curSpan;
     let f0 = anchorMHz - anchorFrac * nextSpan;
     let f1 = f0 + nextSpan;
-    const minF0 = fullStart - nextSpan * 0.8;
-    const maxF1 = fullStop + nextSpan * 0.8;
+    const minF0 = fullStart;
+    const maxF1 = fullStop;
     if (f0 < minF0) {
       f0 = minF0;
       f1 = f0 + nextSpan;
@@ -828,12 +1289,12 @@ export class DebugView extends Component {
     const rawStart = this.scanStartMHz;
     const rawStop = this.scanStopMHz;
     const fullStart = s && s.dbm.length ? s.start : Math.max(5180, Math.min(5900, rawStart));
-    const fullStop = s && s.dbm.length ? s.start + s.step * (s.dbm.length - 1) : Math.max(fullStart + 5, Math.min(5925, rawStop));
-    const span = Math.max(10, startMHz1 - startMHz0);
+    const fullStop = s && s.dbm.length ? s.start + s.step * (s.dbm.length - 1) : Math.max(fullStart + 5, Math.min(5945, rawStop));
+    const span = Math.max(10, Math.min(fullStop - fullStart, startMHz1 - startMHz0));
     let f0 = startMHz0 + deltaMHz;
     let f1 = f0 + span;
-    const minF0 = fullStart - span * 0.8;
-    const maxF1 = fullStop + span * 0.8;
+    const minF0 = fullStart;
+    const maxF1 = fullStop;
     if (f0 < minF0) {
       f0 = minF0;
       f1 = f0 + span;
@@ -861,18 +1322,20 @@ export class DebugView extends Component {
     factor: number,
     target: "signal" | "scan"
   ): void {
+    const bMin = target === "signal" ? this.signalYBounds().min : DBM_MIN;
+    const bMax = target === "signal" ? this.signalYBounds().max : DBM_MAX;
     const curSpan = Math.max(4, startMax - startMin);
-    const nextSpan = Math.max(4, Math.min(DBM_MAX - DBM_MIN, curSpan * factor));
+    const nextSpan = Math.max(4, Math.min(bMax - bMin, curSpan * factor));
     const anchorDbm = startMin + anchorFrac * curSpan;
     let nextMin = anchorDbm - anchorFrac * nextSpan;
     let nextMax = nextMin + nextSpan;
-    if (nextMin < DBM_MIN) {
-      nextMin = DBM_MIN;
-      nextMax = Math.min(DBM_MAX, DBM_MIN + nextSpan);
+    if (nextMin < bMin) {
+      nextMin = bMin;
+      nextMax = Math.min(bMax, bMin + nextSpan);
     }
-    if (nextMax > DBM_MAX) {
-      nextMax = DBM_MAX;
-      nextMin = Math.max(DBM_MIN, DBM_MAX - nextSpan);
+    if (nextMax > bMax) {
+      nextMax = bMax;
+      nextMin = Math.max(bMin, bMax - nextSpan);
     }
     if (target === "signal") {
       this.signalAutoY = false;
@@ -892,16 +1355,18 @@ export class DebugView extends Component {
   }
 
   private applyDbmPan(startMin: number, startMax: number, deltaDbm: number, target: "signal" | "scan"): void {
+    const bMin = target === "signal" ? this.signalYBounds().min : DBM_MIN;
+    const bMax = target === "signal" ? this.signalYBounds().max : DBM_MAX;
     const span = Math.max(4, startMax - startMin);
     let nextMin = startMin + deltaDbm;
     let nextMax = nextMin + span;
-    if (nextMin < DBM_MIN) {
-      nextMin = DBM_MIN;
-      nextMax = Math.min(DBM_MAX, DBM_MIN + span);
+    if (nextMin < bMin) {
+      nextMin = bMin;
+      nextMax = Math.min(bMax, bMin + span);
     }
-    if (nextMax > DBM_MAX) {
-      nextMax = DBM_MAX;
-      nextMin = Math.max(DBM_MIN, DBM_MAX - span);
+    if (nextMax > bMax) {
+      nextMax = bMax;
+      nextMin = Math.max(bMin, bMax - span);
     }
     if (target === "signal") {
       this.signalAutoY = false;
@@ -921,15 +1386,17 @@ export class DebugView extends Component {
   }
 
   private updateAutoSignalAxes(canvasWidth: number): void {
-    const sweepHz = this.status?.sweepHz ?? 50;
+    const isRH = this.isRotorHazardMode();
+    const sweepHz = this.activeSweepHz();
+    const yb = this.signalYBounds();
     const ptsAll = this.signalRing.points;
 
     if (this.signalAutoX) {
-      let effectiveRateHz = this.liveMode === 2 ? sweepHz : Math.max(1, Math.round(sweepHz / 5));
+      let effectiveRateHz = isRH ? 10 : this.liveMode === 2 ? sweepHz : Math.max(1, Math.round(sweepHz / 5));
       if (ptsAll.length >= 12) {
         const a = ptsAll[Math.max(0, ptsAll.length - 30)];
         const b = ptsAll[ptsAll.length - 1];
-        const dtSec = (b.wallMs - a.wallMs) / 1000;
+        const dtSec = (b.tMs - a.tMs) / 1000;
         const count = ptsAll.length - 1 - Math.max(0, ptsAll.length - 30);
         if (dtSec >= 0.15 && dtSec <= 5 && count >= 5) {
           effectiveRateHz = Math.max(4, Math.min(sweepHz, count / dtSec));
@@ -939,14 +1406,17 @@ export class DebugView extends Component {
       // Target ~6.5 px per sample so consecutive sweeps and crossings are clearly separated
       const targetSamples = Math.max(45, Math.min(160, Math.round(plotW / 6.5)));
       const rawSec = targetSamples / Math.max(4, effectiveRateHz);
-      const snappedSec = Math.max(1.5, Math.min(15, Math.round(rawSec * 2) / 2));
+      const snappedSec = Math.max(isRH ? 5 : 1.5, Math.min(15, Math.round(rawSec * 2) / 2));
       if (Math.abs(this.signalWindowSec - snappedSec) >= 0.4) {
         this.signalWindowSec = snappedSec;
       }
     }
 
     if (this.signalAutoY) {
-      const pts = this.signalRing.windowPoints(this.signalWindowSec, sweepHz, this.signalEndN);
+      const effectiveEndN = this.signalEndN ?? (this.signalDrag ? this.signalDrag.startEndN : null);
+      const effectiveCapN =
+        this.signalEndN !== null ? this.signalRefN : this.signalDrag ? this.signalDrag.startEndN : null;
+      const pts = this.signalRing.windowPoints(this.signalWindowSec, sweepHz, effectiveEndN, 0, effectiveCapN);
       if (pts.length > 0) {
         let minD = 1000;
         let maxD = -1000;
@@ -965,43 +1435,61 @@ export class DebugView extends Component {
                 if (fl < minD) minD = fl;
                 if (fl > maxD) maxD = fl;
               }
-              if (this.signalShowHitLine && fl + 10 > maxD) {
+              if (!isRH && this.signalShowHitLine && fl + 10 > maxD) {
                 maxD = fl + 10;
               }
             }
           }
         }
         if (this.signalShowThresholds && maxD > -1000) {
-          const freqs = this.status?.freqs ?? RACEBAND;
-          for (let ch = 0; ch < 8; ch++) {
-            if (!this.signalEnabledCh[ch]) continue;
-            const f = freqs[ch] ?? RACEBAND[ch];
-            const pilot = this.pilots.find((p) => p.enabled && p.frequencyMhz === f);
-            const thr = pilot ? pilot.enterThreshold : ch === 0 ? -58 : null;
-            if (thr !== null && maxD >= thr - 12 && thr > maxD) {
-              maxD = thr;
+          if (isRH) {
+            const snap = this.activeRhSnapshot();
+            if (snap) {
+              const nCount = snap.nodeCount === 4 ? 4 : 8;
+              for (let ch = 0; ch < nCount; ch++) {
+                if (!this.signalEnabledCh[ch]) continue;
+                if ((snap.nodeFreqsMhz[ch] ?? 0) <= 0) continue;
+                const enterAt = snap.nodeEnterLevels[ch] ?? 90;
+                const exitAt = snap.nodeExitLevels[ch] ?? 70;
+                if (enterAt + 8 > maxD) maxD = enterAt + 8;
+                if (exitAt - 6 < minD) minD = Math.max(0, exitAt - 6);
+              }
+            }
+          } else {
+            const freqs = this.status?.freqs ?? RACEBAND;
+            for (let ch = 0; ch < 8; ch++) {
+              if (!this.signalEnabledCh[ch]) continue;
+              const f = freqs[ch] ?? RACEBAND[ch];
+              const pilot = this.pilots.find((p) => p.enabled && p.frequencyMhz === f);
+              const thr = pilot ? pilot.enterThreshold : ch === 0 ? -58 : null;
+              if (thr !== null && maxD >= thr - 12 && thr > maxD) {
+                maxD = thr;
+              }
             }
           }
         }
         if (minD <= maxD) {
-          // Snap target bounds to 2 dB steps with padding so minor 1 dB noise jitter never moves the Y-axis
-          let targetMin = Math.max(DBM_MIN, Math.floor((minD - 4) / 2) * 2);
-          let targetMax = Math.min(DBM_MAX, Math.ceil((maxD + 5) / 2) * 2);
-          const minSpan = 18;
+          const padLow = isRH ? 8 : 4;
+          const padHigh = isRH ? 12 : 5;
+          const stepSnap = isRH ? 5 : 2;
+          let targetMin = Math.max(yb.min, Math.floor((minD - padLow) / stepSnap) * stepSnap);
+          let targetMax = Math.min(yb.max, Math.ceil((maxD + padHigh) / stepSnap) * stepSnap);
+          const minSpan = yb.minSpan;
           if (targetMax - targetMin < minSpan) {
             const extra = minSpan - (targetMax - targetMin);
-            targetMin = Math.max(DBM_MIN, targetMin - Math.floor(extra * 0.35));
-            targetMax = Math.min(DBM_MAX, targetMin + minSpan);
+            targetMin = Math.max(yb.min, targetMin - Math.floor(extra * 0.35));
+            targetMax = Math.min(yb.max, targetMin + minSpan);
           }
           if (this.signalSmoothYMin === null || this.signalSmoothYMax === null) {
             this.signalSmoothYMin = targetMin;
             this.signalSmoothYMax = targetMax;
           } else {
-            // Hysteresis deadband: keep Y-axis completely stationary unless signal exceeds comfort margins
             const curMin = this.signalSmoothYMin;
             const curMax = this.signalSmoothYMax;
-            const needMinMove = minD < curMin + 2 || minD > curMin + 9;
-            const needMaxMove = maxD > curMax - 2 || maxD < curMax - 10;
+            const marginLo = isRH ? 5 : 2;
+            const marginHi = isRH ? 18 : 9;
+            const needMinMove = minD < curMin + marginLo || minD > curMin + marginHi;
+            const needMaxMove = maxD > curMax - marginLo || maxD < curMax - marginHi;
             const effTargetMin = needMinMove ? targetMin : curMin;
             const effTargetMax = needMaxMove ? targetMax : curMax;
             const diffMin = effTargetMin - curMin;
@@ -1016,7 +1504,7 @@ export class DebugView extends Component {
             }
           }
           this.signalYMin = this.signalSmoothYMin;
-          this.signalYMax = Math.max(this.signalYMin + 12, this.signalSmoothYMax);
+          this.signalYMax = Math.max(this.signalYMin + (isRH ? 24 : 12), this.signalSmoothYMax);
         }
       }
     }
@@ -1359,9 +1847,10 @@ export class DebugView extends Component {
               const dHigh = this.signalYMin + (1 - (ya - T) / plotH) * span;
               const dLow = this.signalYMin + (1 - (yb - T) / plotH) * span;
               if (dHigh - dLow >= 4) {
+                const yb2 = this.signalYBounds();
                 this.signalAutoY = false;
-                this.signalYMin = Math.max(DBM_MIN, dLow);
-                this.signalYMax = Math.min(DBM_MAX, dHigh);
+                this.signalYMin = Math.max(yb2.min, dLow);
+                this.signalYMax = Math.min(yb2.max, dHigh);
                 this.signalSmoothYMin = this.signalYMin;
                 this.signalSmoothYMax = this.signalYMax;
               }
@@ -1472,7 +1961,7 @@ export class DebugView extends Component {
             this.signalAutoX = false;
             const factor = Math.exp(-dx / 150);
             const nextSec = Math.max(0.4, Math.min(120, this.signalDrag.startWindowSec * factor));
-            const sweepHz = this.status?.sweepHz ?? 50;
+            const sweepHz = this.activeSweepHz();
             const anchorN =
               this.signalDrag.startEndN - (1 - this.signalDrag.anchorFrac) * this.signalDrag.startWindowSec * sweepHz;
             this.signalWindowSec = nextSec;
@@ -1485,8 +1974,8 @@ export class DebugView extends Component {
             this.signalYZoomBox = { y0: this.signalDrag.startY, y1: y };
             this.dirtySignal = true;
           } else if (this.signalDrag.mode === "pan") {
-            if (Math.abs(dx) > 2) {
-              const sweepHz = this.status?.sweepHz ?? 50;
+            if (Math.abs(dx) >= 2 || this.signalEndN !== null) {
+              const sweepHz = this.activeSweepHz();
               const windowSweeps = this.signalWindowSec * sweepHz;
               const deltaN = (dx / plotW) * windowSweeps;
               this.pauseSignalAt(this.signalDrag.startEndN - deltaN);
@@ -1621,114 +2110,93 @@ export class DebugView extends Component {
         this.dirtyWaterfall = true;
       }
     });
-    this.el.addEventListener(
-      "wheel",
-      (e: WheelEvent) => {
-        const target = e.target as HTMLElement;
-        if (target.matches("[data-signal-canvas]")) {
-          e.preventDefault();
-          const r = target.getBoundingClientRect();
-          const x = e.clientX - r.left;
-          const y = e.clientY - r.top;
-          const factor = e.deltaY > 0 ? 1.18 : 0.84;
-          // Wheel on Y-axis (< 48px) or Shift+Wheel zooms the Y-axis (dBm) around cursor Y
-          if (x < 48 || e.shiftKey) {
-            const T = 12;
-            const plotH = Math.max(10, r.height - T - 26);
-            const yFrac = Math.max(0, Math.min(1, 1 - (y - T) / plotH));
-            this.applyDbmStretch(this.signalYMin, this.signalYMax, yFrac, factor, "signal");
-            this.renderSignalControls();
-          } else {
-            // Wheel on plot or X-axis zooms the time window (0.4 s .. 120 s) around cursor X
-            this.signalAutoX = false;
-            const L = 44;
-            const plotW = Math.max(10, r.width - L - 14);
-            const sweepHz = this.status?.sweepHz ?? 50;
-            const frac = Math.max(0, Math.min(1, (x - L) / plotW));
-            const curEndN = this.signalViewEndN();
-            const curSweeps = this.signalWindowSec * sweepHz;
-            const anchorN = curEndN - (1 - frac) * curSweeps;
-            const nextSec = Math.max(0.4, Math.min(120, this.signalWindowSec * factor));
-            this.signalWindowSec = nextSec;
-            if (this.signalEndN !== null) {
-              this.signalEndN = this.clampSignalEndN(anchorN + (1 - frac) * nextSec * sweepHz);
-            }
-            this.renderSignalControls();
-            this.dirtySignal = true;
-            this.dirtyNoiseTable = true;
-          }
-          this.saveDebugPrefs();
-          return;
-        }
-        if (target.matches("[data-spectrum-canvas]")) {
-          e.preventDefault();
-          const r = target.getBoundingClientRect();
-          const x = e.clientX - r.left;
-          const y = e.clientY - r.top;
-          const factor = e.deltaY > 0 ? 1.18 : 0.84;
-          if (x < 48 || e.shiftKey) {
-            const T = 12;
-            const plotH = Math.max(10, r.height - T - 26);
-            const yFrac = Math.max(0, Math.min(1, 1 - (y - T) / plotH));
-            this.applyDbmStretch(this.scanYMin, this.scanYMax, yFrac, factor, "scan");
-            this.renderScan();
-          } else {
-            const bounds = this.currentScanBounds();
-            if (bounds) {
-              const plotW = Math.max(10, r.width - 44 - 14);
-              const xFrac = Math.max(0, Math.min(1, (x - 44) / plotW));
-              this.applyFreqStretch(bounds.vStart, bounds.vStop, xFrac, factor);
-              this.renderScan();
-            }
-          }
-          this.saveDebugPrefs();
-          return;
-        }
-        if (!target.matches("[data-waterfall-canvas]")) return;
-        const r = target.getBoundingClientRect();
-        const x = e.clientX - r.left;
-        const factor = e.deltaY > 0 ? 1.18 : 0.84;
-        if (x < 48 || e.shiftKey) {
-          e.preventDefault();
-          this.spectrumAcc.setVisibleRows(this.spectrumAcc.visibleRows * factor);
-          this.renderScan();
-          this.saveDebugPrefs();
-          return;
-        }
-        if (this.spectrumAcc.maxScrollRow() <= 0) return;
-        e.preventDefault();
-        const step = Math.sign(e.deltaY) * Math.max(2, Math.round(Math.abs(e.deltaY) / 10));
-        this.spectrumAcc.setScrollRow(this.spectrumAcc.scrollRow + step);
-        this.updateScanFindings();
-        this.dirtyWaterfall = true;
-      },
-      { passive: false }
-    );
   }
 
   private renderFrame(): void {
+    const isRH = this.isRotorHazardMode();
+    const rhSnap = isRH ? this.activeRhSnapshot() : null;
+    const streamingNow = isRH
+      ? Boolean(this.rhLiveOn && rhSnap?.connected)
+      : Boolean(
+          this.liveOn &&
+            !this.scanLive &&
+            !this.status?.emergencyMode &&
+            this.status?.rf.enabled !== false
+        );
+
+    if (
+      streamingNow &&
+      this.signalEndN === null &&
+      !this.signalDrag &&
+      this.signalCardVisible &&
+      this.signalRing.points.length > 0
+    ) {
+      this.dirtySignal = true;
+    }
     if (this.dirtySignal) {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-signal-canvas]");
       if (c) {
         this.updateAutoSignalAxes(c.clientWidth || 700);
-        drawSignalOverTimeCanvas(c, this.signalRing, {
-          windowSec: this.signalWindowSec,
-          sweepHz: this.status?.sweepHz ?? 50,
-          endN: this.signalEndN,
-          refN: this.signalRefN,
-          yMinDbm: this.signalYMin,
-          yMaxDbm: this.signalYMax,
-          autoX: this.signalAutoX,
-          autoY: this.signalAutoY,
-          yZoomBox: this.signalYZoomBox,
-          freqs: this.status?.freqs ?? RACEBAND,
-          enabledChannels: this.signalEnabledCh,
-          showFloor: this.signalShowFloor,
-          showHitLine: this.signalShowHitLine,
-          showThresholds: this.signalShowThresholds,
-          pilots: this.pilots,
-          hover: this.signalHover,
-        });
+        const effectiveEndN = this.signalEndN ?? (this.signalDrag ? this.signalDrag.startEndN : null);
+        const effectiveRefN =
+          this.signalEndN !== null ? this.signalRefN : this.signalDrag ? this.signalDrag.startEndN : null;
+        if (isRH) {
+          const nCount = rhSnap?.nodeCount === 4 ? 4 : 8;
+          const rhFreqs = Array.from({ length: 8 }, (_, i) =>
+            i < nCount ? (rhSnap?.nodeFreqsMhz[i] ?? 0) : 0
+          );
+          const nodeThresholds: Array<{ label: string; enter: number; exit?: number }> = [];
+          for (let i = 0; i < nCount; i++) {
+            if (!this.signalEnabledCh[i]) continue;
+            const f = rhSnap?.nodeFreqsMhz[i] ?? 0;
+            if (f <= 0) continue;
+            nodeThresholds.push({
+              label: `N${i + 1}`,
+              enter: rhSnap?.nodeEnterLevels[i] ?? 90,
+              exit: rhSnap?.nodeExitLevels[i] ?? 70,
+            });
+          }
+          const enabledMask = this.signalEnabledCh.map((on, i) => on && i < nCount && rhFreqs[i] > 0);
+          drawSignalOverTimeCanvas(c, this.signalRing, {
+            windowSec: this.signalWindowSec,
+            sweepHz: 10,
+            endN: effectiveEndN,
+            refN: effectiveRefN,
+            yMinDbm: this.signalYMin,
+            yMaxDbm: this.signalYMax,
+            autoX: this.signalAutoX,
+            autoY: this.signalAutoY,
+            yZoomBox: this.signalYZoomBox,
+            freqs: rhFreqs,
+            enabledChannels: enabledMask,
+            showFloor: this.signalShowFloor,
+            showHitLine: false,
+            showThresholds: this.signalShowThresholds,
+            pilots: [],
+            nodeThresholds,
+            unitLabel: "RSSI",
+            hover: this.signalHover,
+          });
+        } else {
+          drawSignalOverTimeCanvas(c, this.signalRing, {
+            windowSec: this.signalWindowSec,
+            sweepHz: this.status?.sweepHz ?? 50,
+            endN: effectiveEndN,
+            refN: effectiveRefN,
+            yMinDbm: this.signalYMin,
+            yMaxDbm: this.signalYMax,
+            autoX: this.signalAutoX,
+            autoY: this.signalAutoY,
+            yZoomBox: this.signalYZoomBox,
+            freqs: this.status?.freqs ?? RACEBAND,
+            enabledChannels: this.signalEnabledCh,
+            showFloor: this.signalShowFloor,
+            showHitLine: this.signalShowHitLine,
+            showThresholds: this.signalShowThresholds,
+            pilots: this.pilots,
+            hover: this.signalHover,
+          });
+        }
         this.dirtySignal = false;
       }
     }
@@ -1740,7 +2208,7 @@ export class DebugView extends Component {
       this.lastNoiseTableRenderAt = now;
     }
 
-    if (this.dirtySpectrum) {
+    if (this.dirtySpectrum && this.isSlapRFMode()) {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-spectrum-canvas]");
       if (c) {
         this.updateAutoScanY();
@@ -1762,7 +2230,7 @@ export class DebugView extends Component {
       }
     }
 
-    if (this.dirtyWaterfall) {
+    if (this.dirtyWaterfall && this.isSlapRFMode()) {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-waterfall-canvas]");
       if (c) {
         drawWaterfallCanvas(
@@ -1783,7 +2251,11 @@ export class DebugView extends Component {
     if (this.dirtyHealth) {
       const grid = this.el.querySelector<HTMLElement>("[data-health-grid]");
       if (grid) {
-        drawHealthSparklines(grid, this.healthHistory, this.hasServer);
+        if (isRH) {
+          drawRHHealthSparklines(grid, this.rhHealthHistory);
+        } else {
+          drawHealthSparklines(grid, this.healthHistory, this.hasServer);
+        }
         this.dirtyHealth = false;
       }
     }
@@ -1876,16 +2348,6 @@ export class DebugView extends Component {
     this.error = null;
     try {
       switch (t.dataset.check) {
-        case "rf-enable": {
-          const on = t.checked;
-          if (!on && !confirm("Switch the 5.8 GHz receiver off? The timer stops timing until you switch it back on or restart it.")) {
-            t.checked = true;
-            return;
-          }
-          await this.console.request(`RF ${on ? 1 : 0}`, "ok", 2000);
-          await this.refreshStatus();
-          break;
-        }
         case "signal-floor":
           this.signalShowFloor = t.checked;
           this.dirtySignal = true;
@@ -1953,17 +2415,98 @@ export class DebugView extends Component {
         }
         case "disconnect-usb-slot": {
           const slot = Number(t.dataset.usbSlot);
-          if (slot === 1) {
-            await usbPool.revertDebugToMain();
+          const targetConsole = usbPool.slots[slot];
+          const isHub = targetConsole?.lastStatus
+            ? targetConsole.lastStatus.role === 1
+            : targetConsole?.lastConfig?.role === "hub";
+          if (targetConsole && !isHub) {
+            if (slot === 1) {
+              await usbPool.revertDebugToMain();
+            } else {
+              await targetConsole.disconnectCleanly();
+              if (usbPool.slots[1]?.connected) {
+                usbPool.setDebugSlot(1);
+              }
+            }
           }
           break;
         }
-        case "disconnect":
-          if (this.console.slotIndex === 1) {
-            await usbPool.revertDebugToMain();
+        case "disconnect": {
+          const isHub = this.console.lastStatus
+            ? this.console.lastStatus.role === 1
+            : this.console.lastConfig?.role === "hub";
+          if (!isHub) {
+            if (this.console.slotIndex === 1) {
+              await usbPool.revertDebugToMain();
+            } else {
+              await this.console.disconnectCleanly();
+              if (usbPool.slots[1]?.connected) {
+                usbPool.setDebugSlot(1);
+              }
+            }
           }
           break;
+        }
+        case "select-rh-timer": {
+          const tid = Number(t.dataset.timerId);
+          if (Number.isFinite(tid) && tid !== this.selectedRhTimerId) {
+            const prevTid = this.selectedRhTimerId;
+            this.selectedRhTimerId = tid;
+            this.resetSignalBuffersForTargetChange();
+            if (this.rhLiveOn) {
+              if (prevTid && prevTid > 0) {
+                await this.api?.setRHDebugStream(prevTid, false).catch(() => undefined);
+              }
+              await this.syncRhDebugStream(true, tid);
+            }
+            this.renderAll();
+            this.ingestRotorHazardSample();
+          }
+          break;
+        }
+        case "connect-rh-timer": {
+          const tid = Number(t.dataset.timerId);
+          if (this.store && this.api && this.store.simulatorRunning && Number.isFinite(tid)) {
+            if (this.isRotorHazardUSBMode()) {
+              await this.api.simRotorHazardAction({
+                action: "connect",
+                timerId: tid,
+              });
+            } else {
+              await this.api.simRotorHazardAction({
+                action: "connect",
+                timerId: tid,
+                adminUser: "admin",
+                adminPass: "rotorhazard",
+              });
+            }
+            this.selectedRhTimerId = tid;
+            this.rhLiveOn = true;
+            this.resetSignalBuffersForTargetChange();
+            await this.syncRhDebugStream(true, tid);
+          } else {
+            window.location.hash = "#/network";
+          }
+          break;
+        }
+        case "go-network-timers":
+          window.location.hash = "#/network";
+          break;
         case "live":
+          if (this.isRotorHazardMode()) {
+            this.rhLiveOn = !this.rhLiveOn;
+            if (this.rhLiveOn) {
+              this.signalEndN = null;
+            } else if (this.signalEndN === null && this.signalRing.points.length > 0) {
+              this.pauseSignalAt(this.signalRing.latestN());
+            }
+            await this.syncRhDebugStream(this.rhLiveOn);
+            this.renderLiveHead();
+            this.renderSignalControls();
+            this.dirtySignal = true;
+            this.dirtyNoiseTable = true;
+            break;
+          }
           if (this.scanLive || this.status?.scanLive) {
             this.scanToggleAt = Date.now();
             this.scanLive = false;
@@ -1971,6 +2514,7 @@ export class DebugView extends Component {
             await this.console.request("SCAN STOP", "ok", 2000).catch(() => undefined);
             this.liveOn = true;
             this.signalEndN = null;
+            await this.syncRfState(true);
             await this.console.send(`LIVE ${this.liveMode}`);
             this.renderScan();
             this.renderChannels();
@@ -1978,30 +2522,25 @@ export class DebugView extends Component {
             this.liveOn = !this.liveOn;
             if (this.liveOn) {
               this.signalEndN = null;
-            } else if (this.signalEndN === null && this.signalRing.points.length > 0) {
-              this.pauseSignalAt(this.signalRing.latestN());
+              await this.syncRfState(true);
+              await this.console.send(`LIVE ${this.liveMode}`);
+            } else {
+              if (this.signalEndN === null && this.signalRing.points.length > 0) {
+                this.pauseSignalAt(this.signalRing.latestN());
+              }
+              await this.console.send("LIVE 0");
+              await this.syncRfState();
             }
-            await this.console.send(this.liveOn ? `LIVE ${this.liveMode}` : "LIVE 0");
           }
           this.renderLiveHead();
           this.renderSignalControls();
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
           break;
-        case "rf": {
-          const on = !(this.status?.rf.enabled ?? true);
-          if (!on && !confirm("Switch the 5.8 GHz receiver off? The timer stops timing until you switch it back on or restart it.")) break;
-          await this.console.request(`RF ${on ? 1 : 0}`, "ok", 2000);
-          await this.refreshStatus();
-          this.renderLiveHead();
-          this.renderSignalControls();
-          this.renderScan();
-          break;
-        }
         case "channels-apply": {
           const freqs = [...this.el.querySelectorAll<HTMLInputElement>("[data-chan]")].map((i) => Math.round(Number(i.value)));
-          if (freqs.length !== 8 || freqs.some((f) => !(f >= 5180 && f <= 5917))) {
-            throw new Error("Each channel must be between 5180 and 5917 MHz.");
+          if (freqs.length !== 8 || freqs.some((f) => !(f >= 5180 && f <= 5945))) {
+            throw new Error("Each channel must be between 5180 and 5945 MHz.");
           }
           await this.console.request(`CHANNELS ${freqs.join(",")}`, "ok", 2000);
           this.channelsDirty = false;
@@ -2057,7 +2596,7 @@ export class DebugView extends Component {
           const w = Number(t.dataset.win);
           if (w > 0 && w <= 120) {
             this.signalAutoX = false;
-            const sweepHz = this.status?.sweepHz ?? 50;
+            const sweepHz = this.activeSweepHz();
             const centerN = this.signalViewEndN() - (this.signalWindowSec * sweepHz) / 2;
             this.signalWindowSec = w;
             if (this.signalEndN !== null) {
@@ -2070,6 +2609,28 @@ export class DebugView extends Component {
           break;
         }
         case "signal-freeze":
+          if (this.isRotorHazardMode()) {
+            const rhSnap = this.activeRhSnapshot();
+            if (!this.rhLiveOn && rhSnap?.connected) {
+              this.rhLiveOn = true;
+              this.signalEndN = null;
+              await this.syncRhDebugStream(true);
+              this.renderLiveHead();
+            } else if (this.signalEndN === null) {
+              this.rhLiveOn = false;
+              if (this.signalRing.points.length > 0) {
+                this.pauseSignalAt(this.signalRing.latestN());
+              }
+              await this.syncRhDebugStream(false);
+              this.renderLiveHead();
+            } else {
+              this.signalEndN = null;
+            }
+            this.renderSignalControls();
+            this.dirtySignal = true;
+            this.dirtyNoiseTable = true;
+            break;
+          }
           if (this.scanLive || this.status?.scanLive) {
             this.scanToggleAt = Date.now();
             this.scanLive = false;
@@ -2077,6 +2638,7 @@ export class DebugView extends Component {
             await this.console.request("SCAN STOP", "ok", 2000).catch(() => undefined);
             this.liveOn = true;
             this.signalEndN = null;
+            await this.syncRfState(true);
             await this.console.send(`LIVE ${this.liveMode}`);
             this.renderScan();
             this.renderLiveHead();
@@ -2084,6 +2646,7 @@ export class DebugView extends Component {
           } else if (!this.liveOn && this.console.connected) {
             this.liveOn = true;
             this.signalEndN = null;
+            await this.syncRfState(true);
             await this.console.send(`LIVE ${this.liveMode}`);
             this.renderLiveHead();
           } else if (this.signalEndN === null) {
@@ -2091,6 +2654,7 @@ export class DebugView extends Component {
             this.pauseSignalAt(this.signalRing.latestN());
             if (this.console.connected) {
               await this.console.send("LIVE 0");
+              await this.syncRfState();
             }
             this.renderLiveHead();
           } else {
@@ -2109,8 +2673,9 @@ export class DebugView extends Component {
           } else {
             this.signalAutoY = !this.signalAutoY;
             if (!this.signalAutoY) {
-              this.signalYMin = DBM_MIN;
-              this.signalYMax = DBM_MAX;
+              const yb = this.signalYBounds();
+              this.signalYMin = yb.min;
+              this.signalYMax = yb.max;
             } else {
               this.signalSmoothYMin = null;
               this.signalSmoothYMax = null;
@@ -2127,14 +2692,16 @@ export class DebugView extends Component {
           this.renderSignalControls();
           this.dirtySignal = true;
           break;
-        case "signal-full-y":
+        case "signal-full-y": {
           this.openAxisMenu = null;
+          const yb = this.signalYBounds();
           this.signalAutoY = false;
-          this.signalYMin = DBM_MIN;
-          this.signalYMax = DBM_MAX;
+          this.signalYMin = yb.min;
+          this.signalYMax = yb.max;
           this.renderSignalControls();
           this.dirtySignal = true;
           break;
+        }
         case "signal-reset-x":
           this.openAxisMenu = null;
           this.signalAutoX = true;
@@ -2142,14 +2709,16 @@ export class DebugView extends Component {
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
           break;
-        case "signal-zoom-floor":
+        case "signal-zoom-floor": {
           this.openAxisMenu = null;
+          const yb = this.signalYBounds();
           this.signalAutoY = false;
-          this.signalYMin = -102;
-          this.signalYMax = -68;
+          this.signalYMin = yb.floorPresetMin;
+          this.signalYMax = yb.floorPresetMax;
           this.renderSignalControls();
           this.dirtySignal = true;
           break;
+        }
         case "signal-clear":
           this.signalRing.clear();
           this.signalEndN = null;
@@ -2210,13 +2779,30 @@ export class DebugView extends Component {
           break;
         case "export-signal-csv":
           downloadTextFile(
-            buildFileStamp(this.status, "signal", "csv"),
-            exportSignalCsv(this.signalRing, this.status?.sweepHz ?? 50)
+            buildFileStamp(
+              this.isRotorHazardMode()
+                ? ({ label: this.activeRhSnapshot()?.label || "R1" } as TimerStatus)
+                : this.status,
+              "signal",
+              "csv"
+            ),
+            exportSignalCsv(this.signalRing, this.activeSweepHz())
           );
           break;
         case "export-signal-png": {
           const c = this.el.querySelector<HTMLCanvasElement>("[data-signal-canvas]");
-          if (c) downloadCanvasPng(c, buildFileStamp(this.status, "signal", "png"));
+          if (c) {
+            downloadCanvasPng(
+              c,
+              buildFileStamp(
+                this.isRotorHazardMode()
+                  ? ({ label: this.activeRhSnapshot()?.label || "R1" } as TimerStatus)
+                  : this.status,
+                "signal",
+                "png"
+              )
+            );
+          }
           break;
         }
         case "scan": {
@@ -2225,9 +2811,11 @@ export class DebugView extends Component {
           const step = this.scanStepMHz;
           this.scanning = true;
           this.renderScan();
+          await this.syncRfState(true);
           await this.console.request(`SCAN ${start} ${stop} ${step}`, "scan", 5000).catch((err: Error) => {
             this.scanning = false;
             this.renderScan();
+            void this.syncRfState();
             throw err;
           });
           break;
@@ -2242,7 +2830,13 @@ export class DebugView extends Component {
               this.liveOn = false;
               await this.console.send("LIVE 0").catch(() => undefined);
             }
+            await this.syncRfState();
           } else {
+            if (this.liveOn) {
+              this.liveOn = false;
+              await this.console.send("LIVE 0").catch(() => undefined);
+            }
+            await this.syncRfState(true);
             const start = this.scanStartMHz;
             const stop = this.scanStopMHz;
             const step = this.scanStepMHz;
@@ -2251,6 +2845,7 @@ export class DebugView extends Component {
             this.scanLive = true;
             if (this.status) this.status.scanLive = true;
           }
+          this.renderStatus();
           this.renderScan();
           this.renderLiveHead();
           this.renderSignalControls();
@@ -2321,7 +2916,7 @@ export class DebugView extends Component {
         case "scan-preset": {
           this.openAxisMenu = null;
           const start = Number(t.dataset.start) || 5180;
-          const stop = Number(t.dataset.stop) || 5917;
+          const stop = Number(t.dataset.stop) || 5945;
           const step = Number(t.dataset.step) || 5;
           this.scanStartMHz = start;
           this.scanStopMHz = stop;
@@ -2377,7 +2972,12 @@ export class DebugView extends Component {
           await this.sendSerialCommand("SLAPRF?");
           break;
         case "refresh-status":
-          await this.refreshStatus();
+          if (this.isRotorHazardMode()) {
+            await this.tickNonSlapRFTelemetry();
+            this.renderStatus();
+          } else {
+            await this.refreshStatus();
+          }
           break;
         case "select-net-spoke": {
           const slotNum = Number(t.dataset.spokeSlot);
@@ -2388,7 +2988,9 @@ export class DebugView extends Component {
           break;
         }
         case "selftest":
-          await this.runBusy("Self-test", () => this.runSelfTest());
+          await this.runBusy("Self-test", () =>
+            this.isRotorHazardMode() ? this.runRhSelfTest() : this.runSelfTest()
+          );
           break;
         case "copy-report":
           await this.copy(this.reportText(), t);
@@ -2446,14 +3048,15 @@ export class DebugView extends Component {
           this.renderNoiseTable();
           this.dirtySignal = true;
           break;
-        case "restore-signal-defaults":
+        case "restore-signal-defaults": {
+          const yb = this.signalYBounds();
           this.openAxisMenu = null;
           this.signalEndN = null;
           this.signalAutoX = true;
           this.signalWindowSec = 10;
           this.signalAutoY = true;
-          this.signalYMin = DBM_MIN;
-          this.signalYMax = DBM_MAX;
+          this.signalYMin = yb.min;
+          this.signalYMax = yb.max;
           this.signalSmoothYMin = null;
           this.signalSmoothYMax = null;
           this.signalShowFloor = true;
@@ -2468,6 +3071,7 @@ export class DebugView extends Component {
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
           break;
+        }
         case "restore-spectrum-defaults":
           this.openAxisMenu = null;
           this.scanShowMaxHold = true;
@@ -2480,12 +3084,12 @@ export class DebugView extends Component {
           this.scanYMax = DBM_MAX;
           this.spectrumAcc.setColorRange(-100, -40);
           this.scanStartMHz = 5180;
-          this.scanStopMHz = 5917;
+          this.scanStopMHz = 5945;
           this.scanStepMHz = 5;
           if (this.scanLive && this.console.connected) {
             this.scanToggleAt = Date.now();
             this.spectrumAcc.clearHoldAndAvg();
-            await this.console.request("SCAN LIVE 5180 5917 5", "ok", 2000).catch(() => undefined);
+            await this.console.request("SCAN LIVE 5180 5945 5", "ok", 2000).catch(() => undefined);
           }
           this.renderScan();
           break;
@@ -2538,15 +3142,24 @@ export class DebugView extends Component {
       if (typeof p.scanShowAvg === "boolean") this.scanShowAvg = p.scanShowAvg;
       if (typeof p.scanShowWifi === "boolean") this.scanShowWifi = p.scanShowWifi;
       if (typeof p.scanStartMHz === "number" && p.scanStartMHz >= 5180) this.scanStartMHz = p.scanStartMHz;
-      if (typeof p.scanStopMHz === "number" && p.scanStopMHz <= 5925) this.scanStopMHz = p.scanStopMHz;
+      if (typeof p.scanStopMHz === "number" && p.scanStopMHz <= 5945) {
+        this.scanStopMHz = p.scanStopMHz === 5917 || p.scanStopMHz === 5925 ? 5945 : p.scanStopMHz;
+      }
       if (typeof p.scanStepMHz === "number" && p.scanStepMHz >= 1) this.scanStepMHz = p.scanStepMHz;
       if (
         typeof p.scanZoomStartMHz === "number" &&
         typeof p.scanZoomStopMHz === "number" &&
         p.scanZoomStopMHz > p.scanZoomStartMHz
       ) {
-        this.scanZoomStartMHz = p.scanZoomStartMHz;
-        this.scanZoomStopMHz = p.scanZoomStopMHz;
+        const zSpan = p.scanZoomStopMHz - p.scanZoomStartMHz;
+        const fullSpan = this.scanStopMHz - this.scanStartMHz;
+        if (zSpan >= 725 || Math.abs(zSpan - fullSpan) <= 10) {
+          this.scanZoomStartMHz = null;
+          this.scanZoomStopMHz = null;
+        } else {
+          this.scanZoomStartMHz = Math.max(this.scanStartMHz, p.scanZoomStartMHz);
+          this.scanZoomStopMHz = Math.min(this.scanStopMHz, p.scanZoomStopMHz);
+        }
       } else if (p.scanZoomStartMHz === null || p.scanZoomStopMHz === null) {
         this.scanZoomStartMHz = null;
         this.scanZoomStopMHz = null;
@@ -2632,6 +3245,7 @@ export class DebugView extends Component {
     } else {
       this.liveOn = false;
       this.liveMode = 2;
+      await this.syncRfState();
     }
     if (this.logOn) await this.console.send("LOG 1");
     this.renderAll();
@@ -2721,122 +3335,126 @@ export class DebugView extends Component {
       await this.console.request("SCAN STOP", "ok", 2000).catch(() => undefined);
       this.renderScan();
     }
+    await this.syncRfState(true);
     const add = (name: string, result: CheckResult, detail: string) => {
       this.checks.push({ name, result, detail });
       this.renderSelfTest();
     };
 
-    // 1. Console
-    this.setProgress("Asking for status…");
-    let s: TimerStatus;
     try {
-      s = await this.console.request<TimerStatus>("STATUS?", "status", 3000);
-      add("Console", "pass", `firmware ${s.fw}, up ${fmtUptime(s.uptimeMs)}`);
-    } catch (err) {
-      add("Console", "fail", `${err instanceof Error ? err.message : err}. Is this a SlapRF timer, and is it running (not in download mode)?`);
-      return;
-    }
-
-    // 2. Identity
-    if (s.fp.toUpperCase() === UNPROVISIONED_FP)
-      add("Identity", "warn", `Firmware ${s.fw}, but not set up yet (default fingerprint). Use the Flasher page to give it an identity.`);
-    else add("Identity", "pass", `${s.label || "(unnamed)"} | ${s.role === 1 ? "Hub" : "Spoke"} | ${s.fw} | ${s.fp}`);
-
-    // 3. Receiver
-    if (!s.rf.ok) add("5.8 GHz receiver", "fail", "the receiver's boot check failed; restart the timer and look at the boot log");
-    else if (!s.rf.enabled) add("5.8 GHz receiver", "warn", "switched off from this page; switch it back on in Live readings");
-    else if (s.rf.floorDb < -100 || s.rf.floorDb > -80)
-      add("5.8 GHz receiver", "warn", `noise floor ${s.rf.floorDb.toFixed(1)} dBm is outside the usual -100..-80 dBm (antenna, or strong interference nearby)`);
-    else add("5.8 GHz receiver", "pass", `noise floor ${s.rf.floorDb.toFixed(1)} dBm, gain ${s.rf.gain}/${s.rf.gainMax}`);
-
-    // 4. Sweep timing
-    const budget = s.sweepBudgetUs || (s.sweepHz ? Math.round(1e6 / s.sweepHz) : 0);
-    if (!s.sweeps) add("Sweep timing", "fail", "no sweeps yet; the sweep task is not running");
-    else if (budget && s.sweepUsMax > budget)
-      add("Sweep timing", "warn", `slowest sweep ${(s.sweepUsMax / 1000).toFixed(2)} ms is over the ${(budget / 1000).toFixed(1)} ms budget (typical ${(s.sweepUs / 1000).toFixed(2)} ms)`);
-    else add("Sweep timing", "pass", `${s.sweepHz} Hz, ${(s.sweepUs / 1000).toFixed(2)} ms typical, ${(s.sweepUsMax / 1000).toFixed(2)} ms slowest of ${(budget / 1000).toFixed(1)} ms`);
-
-    // 5. Live stream
-    this.setProgress("Measuring the live stream…");
-    const wasLive = this.liveOn;
-    await this.console.send("LIVE 1");
-    await sleep(300);
-    const c0 = this.liveCount;
-    await sleep(2000);
-    const rate = (this.liveCount - c0) / 2;
-    await this.console.send(wasLive ? `LIVE ${this.liveMode}` : "LIVE 0");
-    add("Live readings", rate >= 6 ? "pass" : rate > 0 ? "warn" : "fail", `${rate.toFixed(1)} updates/s (expected about 10)`);
-
-    // 6. Spectrum scan
-    this.setProgress("Scanning the band…");
-    if (!s.rf.enabled) add("Spectrum scan", "skip", "receiver is switched off");
-    else {
-      const t0 = performance.now();
+      // 1. Console
+      this.setProgress("Asking for status…");
+      let s: TimerStatus;
       try {
-        const scan = await this.console.request<ScanResult>("SCAN 5180 5917 5", "scan", 4000);
-        const ms = Math.round(performance.now() - t0);
-        const expected = Math.floor((5917 - 5180) / 5) + 1;
-        add("Spectrum scan", scan.dbm.length === expected && ms < 3000 ? "pass" : "warn", `${scan.dbm.length}/${expected} points in ${(ms / 1000).toFixed(1)} s`);
+        s = await this.console.request<TimerStatus>("STATUS?", "status", 3000);
+        add("Console", "pass", `firmware ${s.fw}, up ${fmtUptime(s.uptimeMs)}`);
       } catch (err) {
-        add("Spectrum scan", "fail", err instanceof Error ? err.message : String(err));
+        add("Console", "fail", `${err instanceof Error ? err.message : err}. Is this a SlapRF timer, and is it running (not in download mode)?`);
+        return;
       }
-    }
 
-    // 7. Saved configuration
-    this.setProgress("Reading the saved configuration…");
-    try {
-      const c = await this.console.request<TimerReadout>("SLAPRF?", "config", 2000);
-      if (c.fingerprint.toUpperCase() !== s.fp.toUpperCase())
-        add("Saved configuration", "fail", `saved fingerprint ${c.fingerprint} doesn't match the running one ${s.fp}`);
-      else add("Saved configuration", "pass", `${c.role} "${c.timerLabel}", ${c.frequenciesMHz.length} channels`);
-    } catch (err) {
-      add("Saved configuration", "fail", `couldn't read it (${err instanceof Error ? err.message : err})`);
-    }
+      // 2. Identity
+      if (s.fp.toUpperCase() === UNPROVISIONED_FP)
+        add("Identity", "warn", `Firmware ${s.fw}, but not set up yet (default fingerprint). Use the Flasher page to give it an identity.`);
+      else add("Identity", "pass", `${s.label || "(unnamed)"} | ${s.role === 1 ? "Hub" : "Spoke"} | ${s.fw} | ${s.fp}`);
 
-    // 8. Memory
-    add(
-      "Memory",
-      s.heapMin > 20 * 1024 ? "pass" : "warn",
-      `${(s.heapFree / 1024).toFixed(0)} KB free, lowest ${(s.heapMin / 1024).toFixed(0)} KB${s.heapMin > 20 * 1024 ? "" : " (low: it may run out)"}`
-    );
+      // 3. Receiver
+      if (!s.rf.ok) add("5.8 GHz receiver", "fail", "the receiver's boot check failed; restart the timer and look at the boot log");
+      else if (s.rf.floorDb < -100 || s.rf.floorDb > -80)
+        add("5.8 GHz receiver", "warn", `noise floor ${s.rf.floorDb.toFixed(1)} dBm is outside the usual -100..-80 dBm (antenna, or strong interference nearby)`);
+      else add("5.8 GHz receiver", "pass", `noise floor ${s.rf.floorDb.toFixed(1)} dBm, gain ${s.rf.gain}/${s.rf.gainMax}`);
 
-    // 9. Last restart & emergency-mode guard
-    if (s.emergencyMode) {
+      // 4. Sweep timing
+      const budget = s.sweepBudgetUs || (s.sweepHz ? Math.round(1e6 / s.sweepHz) : 0);
+      if (!s.sweeps) add("Sweep timing", "fail", "no sweeps yet; the sweep task is not running");
+      else if (budget && s.sweepUsMax > budget)
+        add("Sweep timing", "warn", `slowest sweep ${(s.sweepUsMax / 1000).toFixed(2)} ms is over the ${(budget / 1000).toFixed(1)} ms budget (typical ${(s.sweepUs / 1000).toFixed(2)} ms)`);
+      else add("Sweep timing", "pass", `${s.sweepHz} Hz, ${(s.sweepUs / 1000).toFixed(2)} ms typical, ${(s.sweepUsMax / 1000).toFixed(2)} ms slowest of ${(budget / 1000).toFixed(1)} ms`);
+
+      // 5. Live stream
+      this.setProgress("Measuring the live stream…");
+      const wasLive = this.liveOn;
+      await this.console.send("LIVE 1");
+      await sleep(300);
+      const c0 = this.liveCount;
+      await sleep(2000);
+      const rate = (this.liveCount - c0) / 2;
+      await this.console.send(wasLive ? `LIVE ${this.liveMode}` : "LIVE 0");
+      add("Live readings", rate >= 6 ? "pass" : rate > 0 ? "warn" : "fail", `${rate.toFixed(1)} updates/s (expected about 10)`);
+
+      // 6. Spectrum scan
+      this.setProgress("Scanning the band…");
+      if (!s.rf.enabled) add("Spectrum scan", "skip", "receiver is switched off");
+      else {
+        const t0 = performance.now();
+        try {
+          const scan = await this.console.request<ScanResult>("SCAN 5180 5945 5", "scan", 4000);
+          const ms = Math.round(performance.now() - t0);
+          const expected = Math.floor((5945 - 5180) / 5) + 1;
+          add("Spectrum scan", scan.dbm.length === expected && ms < 3000 ? "pass" : "warn", `${scan.dbm.length}/${expected} points in ${(ms / 1000).toFixed(1)} s`);
+        } catch (err) {
+          add("Spectrum scan", "fail", err instanceof Error ? err.message : String(err));
+        }
+      }
+
+      // 7. Saved configuration
+      this.setProgress("Reading the saved configuration…");
+      try {
+        const c = await this.console.request<TimerReadout>("SLAPRF?", "config", 2000);
+        if (c.fingerprint.toUpperCase() !== s.fp.toUpperCase())
+          add("Saved configuration", "fail", `saved fingerprint ${c.fingerprint} doesn't match the running one ${s.fp}`);
+        else add("Saved configuration", "pass", `${c.role} "${c.timerLabel}", ${c.frequenciesMHz.length} channels`);
+      } catch (err) {
+        add("Saved configuration", "fail", `couldn't read it (${err instanceof Error ? err.message : err})`);
+      }
+
+      // 8. Memory
       add(
-        "Last restart",
-        "fail",
-        `EMERGENCY MODE after ${s.crashStreak ?? 3} consecutive ${s.reset} resets: radio & sweeps halted so USB stays up for rescue/reflashing`
+        "Memory",
+        s.heapMin > 20 * 1024 ? "pass" : "warn",
+        `${(s.heapFree / 1024).toFixed(0)} KB free, lowest ${(s.heapMin / 1024).toFixed(0)} KB${s.heapMin > 20 * 1024 ? "" : " (low: it may run out)"}`
       );
-      try {
-        const last = await this.console.request<BootLog>("LASTLOG?", "bootlog", 3000);
-        this.bootLog = last;
-        this.reportExtra = `\n--- previous boot log (${last.reset}) ---\n${last.text}`;
-        this.renderRestart();
-      } catch {
-        // report without it
-      }
-    } else if (BAD_RESETS.includes(s.reset)) {
-      add("Last restart", "warn", `${s.reset}, boot #${s.boots} (previous boot crashed or lost power; boot log attached)`);
-      try {
-        const last = await this.console.request<BootLog>("LASTLOG?", "bootlog", 3000);
-        this.bootLog = last;
-        this.reportExtra = `\n--- previous boot log (${last.reset}) ---\n${last.text}`;
-        this.renderRestart();
-      } catch {
-        // report without it
-      }
-    } else add("Last restart", "pass", `${s.reset}, boot #${s.boots}`);
 
-    // 10. Course link (2.4 GHz ESP-NOW)
-    if (s.role === 1) {
-      add("Course link", "pass", `Hub beaconing on channel ${s.channel}`);
-    } else {
-      add("Course link", s.slot >= 2 ? "pass" : "warn", s.slot >= 2 ? `joined the Hub, slot ${s.slot}, channel ${s.channel}` : "not joined to a Hub yet (is the Hub on and in range?)");
+      // 9. Last restart & emergency-mode guard
+      if (s.emergencyMode) {
+        add(
+          "Last restart",
+          "fail",
+          `EMERGENCY MODE after ${s.crashStreak ?? 3} consecutive ${s.reset} resets: radio & sweeps halted so USB stays up for rescue/reflashing`
+        );
+        try {
+          const last = await this.console.request<BootLog>("LASTLOG?", "bootlog", 3000);
+          this.bootLog = last;
+          this.reportExtra = `\n--- previous boot log (${last.reset}) ---\n${last.text}`;
+          this.renderRestart();
+        } catch {
+          // report without it
+        }
+      } else if (BAD_RESETS.includes(s.reset)) {
+        add("Last restart", "warn", `${s.reset}, boot #${s.boots} (previous boot crashed or lost power; boot log attached)`);
+        try {
+          const last = await this.console.request<BootLog>("LASTLOG?", "bootlog", 3000);
+          this.bootLog = last;
+          this.reportExtra = `\n--- previous boot log (${last.reset}) ---\n${last.text}`;
+          this.renderRestart();
+        } catch {
+          // report without it
+        }
+      } else add("Last restart", "pass", `${s.reset}, boot #${s.boots}`);
+
+      // 10. Course link (2.4 GHz ESP-NOW)
+      if (s.role === 1) {
+        add("Course link", "pass", `Hub beaconing on channel ${s.channel}`);
+      } else {
+        add("Course link", s.slot >= 2 ? "pass" : "warn", s.slot >= 2 ? `joined the Hub, slot ${s.slot}, channel ${s.channel}` : "not joined to a Hub yet (is the Hub on and in range?)");
+      }
+
+      // 11. Data reaching the in-browser timing engine
+      this.setProgress("Checking that its data reaches the timing engine…");
+      add(...(await this.checkNetworkPath(s)));
+    } finally {
+      await this.syncRfState(this.liveOn || this.scanLive || this.scanning);
     }
-
-    // 11. Data reaching the in-browser timing engine
-    this.setProgress("Checking that its data reaches the timing engine…");
-    add(...(await this.checkNetworkPath(s)));
   }
 
   private async checkNetworkPath(s: TimerStatus): Promise<[string, CheckResult, string]> {
@@ -2858,7 +3476,164 @@ export class DebugView extends Component {
     return [name, "fail", `online but no new frames in 2 s`];
   }
 
+  private async runRhSelfTest(): Promise<void> {
+    this.checks = [];
+    this.reportExtra = "";
+    this.checksAt = new Date();
+    const add = (name: string, result: CheckResult, detail: string) => {
+      this.checks.push({ name, result, detail });
+      this.renderSelfTest();
+    };
+
+    const isUSB = this.isRotorHazardUSBMode();
+    this.setProgress(isUSB ? "Checking RotorHazard USB serial link…" : "Checking RotorHazard Socket.IO link…");
+    await this.tickNonSlapRFTelemetry();
+    const snap0 = this.activeRhSnapshot();
+    if (!snap0 || !snap0.connected) {
+      add(
+        isUSB ? "USB serial link" : "Socket.IO link",
+        "fail",
+        snap0
+          ? `${snap0.label} (${snap0.portName || snap0.endpoint}) is offline. Click Connect timer or connect on the Network page.`
+          : "No RotorHazard timer connected. Click Connect timer to link a RotorHazard device."
+      );
+      return;
+    }
+
+    const nCount = snap0.nodeCount === 4 ? 4 : 8;
+    if (isUSB) {
+      add(
+        "USB serial link",
+        "pass",
+        `${snap0.label} connected on ${snap0.portName || snap0.endpoint} (${this.store?.simulatorRunning ? "Simulated USB serial pipe" : "Native USB serial"} · ${snap0.baudRate || 115200} baud)`
+      );
+      add(
+        "Protocol & seats",
+        "pass",
+        `RotorHazard Serial API ${snap0.apiLevel || 36} · ${nCount} receiver seats (direct read/write)`
+      );
+    } else {
+      add(
+        "Socket.IO link",
+        "pass",
+        `${snap0.label} connected at ${snap0.endpoint} (${snap0.transport === "sim" ? "Simulated RotorHazard server" : "Engine.IO v4 WebSocket"})`
+      );
+
+      add(
+        "Admin auth",
+        snap0.authOk ? "pass" : "warn",
+        snap0.authOk
+          ? "HTTP Basic Auth verified (read/write node frequencies & race stage control)"
+          : "Connected as Guest (read-only) · sign in with admin credentials on Network page to push frequencies"
+      );
+
+      add(
+        "Server & nodes",
+        "pass",
+        `RotorHazard ${snap0.serverVersion || "4.x"}${snap0.serverHostname ? ` (${snap0.serverHostname})` : ""} · ${nCount} RX5808 receiver nodes`
+      );
+    }
+
+    const tempDebugEnabled = !this.rhLiveOn && snap0.nodeFreqsMhz.slice(0, nCount).every((f) => !f || f <= 0);
+    if (tempDebugEnabled) {
+      await this.syncRhDebugStream(true, snap0.timerId);
+    }
+    try {
+      const snapTuned = this.activeRhSnapshot() ?? snap0;
+      let activeNodes = 0;
+      let badHysteresis = 0;
+      for (let i = 0; i < nCount; i++) {
+        const f = snapTuned.nodeFreqsMhz[i] ?? 0;
+        if (f > 0) {
+          activeNodes++;
+          const ent = snapTuned.nodeEnterLevels[i] ?? 90;
+          const ext = snapTuned.nodeExitLevels[i] ?? 70;
+          if (ent <= ext || ext <= 0) badHysteresis++;
+        }
+      }
+      if (activeNodes === 0) {
+        add("Node RF tuning", "warn", `0 of ${nCount} nodes have an active frequency (> 0 MHz)`);
+      } else if (badHysteresis > 0) {
+        add("Node RF tuning", "warn", `${badHysteresis} active node(s) have EnterAt ≤ ExitAt hysteresis`);
+      } else {
+        const e0 = snapTuned.nodeEnterLevels[0] ?? 90;
+        const x0 = snapTuned.nodeExitLevels[0] ?? 70;
+        add("Node RF tuning", "pass", `${activeNodes}/${nCount} nodes tuned · Enter/Exit hysteresis valid (e.g. ${e0}/${x0} RSSI)`);
+      }
+
+      add(
+        "Clock sync",
+        snapTuned.clockSynced ? "pass" : "warn",
+        snapTuned.clockSynced
+          ? `Synced · offset ${snapTuned.clockOffsetMs >= 0 ? "+" : ""}${snapTuned.clockOffsetMs.toFixed(1)} ms`
+          : "Clock sync pending"
+      );
+
+      this.setProgress("Measuring ~10 Hz heartbeat stream…");
+      const hb0 = snapTuned.heartbeatsRx;
+      const t0 = performance.now();
+      for (let k = 0; k < 6; k++) {
+        await sleep(200);
+        await this.tickNonSlapRFTelemetry();
+      }
+      const snap1 = this.activeRhSnapshot() ?? snapTuned;
+      const dtSec = Math.max(0.2, (performance.now() - t0) / 1000);
+      const hbRate = Math.max(0, (snap1.heartbeatsRx - hb0) / dtSec);
+      add(
+        "Heartbeat stream",
+        hbRate >= 4 ? "pass" : hbRate > 0 ? "warn" : "fail",
+        `${hbRate.toFixed(1)} heartbeats/s (${snap1.heartbeatsRx} total, ${snap1.passesRx} passes rx)`
+      );
+
+      let minHeadroom = 999;
+      let worstNode = 1;
+      for (let i = 0; i < nCount; i++) {
+        const f = snap1.nodeFreqsMhz[i] ?? 0;
+        if (f <= 0 || snap1.crossingFlag[i]) continue;
+        const ent = snap1.nodeEnterLevels[i] ?? 90;
+        const cur = snap1.slotRssi[i] ?? 0;
+        const hr = ent - cur;
+        if (hr < minHeadroom) {
+          minHeadroom = hr;
+          worstNode = i + 1;
+        }
+      }
+      if (minHeadroom === 999) {
+        add("Baseline headroom", "pass", "Active nodes currently crossing or idle");
+      } else if (minHeadroom < 12) {
+        add(
+          "Baseline headroom",
+          "warn",
+          `Node ${worstNode} baseline is within ${minHeadroom} RSSI of EnterAt (risk of false triggers)`
+        );
+      } else {
+        add(
+          "Baseline headroom",
+          "pass",
+          `≥ ${minHeadroom} RSSI headroom below EnterAt across non-crossing nodes`
+        );
+      }
+    } finally {
+      if (tempDebugEnabled && !this.rhLiveOn) {
+        await this.syncRhDebugStream(false, snap0.timerId);
+      }
+    }
+  }
+
   private reportText(): string {
+    if (this.isRotorHazardMode()) {
+      const snap = this.activeRhSnapshot();
+      const lines = [
+        `SlapRF · RotorHazard self-test · ${this.checksAt?.toISOString() ?? ""}`,
+        snap
+          ? `${snap.label} · ${snap.endpoint} · RotorHazard ${snap.serverVersion || "—"} · ${snap.nodeCount} nodes · ${snap.authOk ? "Auth OK" : "Guest"}`
+          : "",
+        snap?.envSummary ? `Environment: ${snap.envSummary}` : "",
+        "",
+        ...this.checks.map((c) => `[${c.result.toUpperCase().padEnd(4)}] ${c.name}: ${c.detail}`),
+      ].filter((l, i) => i === 3 || l.length > 0);
+      return lines.join("\n") + this.reportExtra + "\n";
+    }
     const s = this.status;
     const lines = [
       `SlapRF self-test · ${this.checksAt?.toISOString() ?? ""}`,
@@ -2878,6 +3653,7 @@ export class DebugView extends Component {
   }
 
   private renderAll(): void {
+    this.syncHardwareModeDom();
     this.renderConnection();
     this.renderSelfTest();
     this.renderStatus();
@@ -2887,9 +3663,11 @@ export class DebugView extends Component {
     this.renderChannels();
     this.renderSignalControls();
     this.renderNoiseTable();
-    this.renderScan();
-    this.renderSerialConsole();
-    this.renderLog();
+    if (this.isSlapRFMode()) {
+      this.renderScan();
+      this.renderSerialConsole();
+      this.renderLog();
+    }
     this.dirtySignal = true;
     this.dirtySpectrum = true;
     this.dirtyWaterfall = true;
@@ -2901,11 +3679,114 @@ export class DebugView extends Component {
     this.renderSelfTest();
     this.renderStatus();
     this.renderNetworkView();
-    this.renderSerialConsole();
+    if (this.isSlapRFMode()) {
+      this.renderSerialConsole();
+    }
   }
 
   private renderConnection(): void {
     const host = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
+    if (!host) return;
+    if (this.isRotorHazardMode()) {
+      const isUSB = this.isRotorHazardUSBMode();
+      const snaps = this.getRhSnapshots();
+      const activeSnap = this.activeRhSnapshot();
+      const anyConnected = snaps.some((s) => s.connected);
+      const liveLedColor = getAppTheme() === "light" ? "#3b82f6" : "#d4ff3a";
+      const chipsHtml = snaps
+        .map((s) => {
+          const isSel = activeSnap?.timerId === s.timerId;
+          const chipColor = !s.connected ? "#64748b" : s.authOk ? liveLedColor : "#facc15";
+          const epLbl = isUSB ? s.portName || s.endpoint : s.endpoint;
+          const meta = s.connected
+            ? isUSB
+              ? `${epLbl} · ${s.nodeCount}S · API ${s.apiLevel || 36}`
+              : `${epLbl} · ${s.nodeCount}N · ${s.authOk ? "Auth OK" : "Guest"}`
+            : `${epLbl} · Offline`;
+          const quickConnectBtn =
+            !s.connected && this.store?.simulatorRunning
+              ? `<button type="button" class="btn btn-xs btn-armed" data-action="connect-rh-timer" data-timer-id="${s.timerId}" title="Connect ${esc(s.label)}">Connect timer</button>`
+              : "";
+          return `
+            <div class="pilot-chip debug-usb-chip ${isSel ? "is-active" : ""}" style="--c:${chipColor}">
+              <button
+                type="button"
+                class="debug-usb-chip-select"
+                role="tab"
+                aria-selected="${isSel}"
+                data-action="select-rh-timer"
+                data-timer-id="${s.timerId}"
+                title="${esc(s.label)} (${esc(meta)})"
+              >
+                <span class="dot ${s.connected ? "is-live" : ""}"></span>
+                <span class="pilot-chip-name">${esc(s.label)}</span>
+                <span class="pilot-chip-time">${esc(meta)}</span>
+              </button>
+              ${quickConnectBtn}
+            </div>`;
+        })
+        .join("");
+
+      const actionLabel = anyConnected ? "Manage timers" : "Connect timer";
+      const errHtml = this.error ? `<div class="sim-error-note">${esc(this.error)}</div>` : "";
+      const btnTitle = isUSB
+        ? "Open Network page to connect RotorHazard USB serial nodes"
+        : "Open Network page to connect or sign in to RotorHazard timers";
+      host.innerHTML = `
+        <div class="picker-row debug-usb-picker-row">
+          <div class="pilot-picker debug-usb-picker" role="tablist" aria-label="Active timer connection">
+            ${chipsHtml}
+            <button
+              type="button"
+              class="pilot-chip debug-usb-add-chip"
+              data-action="go-network-timers"
+              title="${btnTitle}"
+            >
+              ${isUSB ? icons.plug(18) : icons.wifi(18)}
+              <span class="pilot-chip-name">${actionLabel}</span>
+            </button>
+          </div>
+        </div>
+        ${errHtml}`;
+      return;
+    }
+
+    if (this.isLapRFMode()) {
+      const snaps = this.store ? sharedLapRFLink.snapshots(this.store) : [];
+      const anyConnected = snaps.some((s) => s.connected);
+      const liveLedColor = getAppTheme() === "light" ? "#3b82f6" : "#d4ff3a";
+      const chipsHtml = snaps
+        .map((s, idx) => {
+          const chipColor = s.connected ? liveLedColor : "#64748b";
+          const meta = s.connected ? `${s.endpoint} · Online` : `${s.endpoint} · Offline`;
+          return `
+            <div class="pilot-chip debug-usb-chip ${idx === 0 ? "is-active" : ""}" style="--c:${chipColor}">
+              <span class="debug-usb-chip-select">
+                <span class="dot ${s.connected ? "is-live" : ""}"></span>
+                <span class="pilot-chip-name">${esc(s.label)}</span>
+                <span class="pilot-chip-time">${esc(meta)}</span>
+              </span>
+            </div>`;
+        })
+        .join("");
+      host.innerHTML = `
+        <div class="picker-row debug-usb-picker-row">
+          <div class="pilot-picker debug-usb-picker" role="tablist" aria-label="Active timer connection">
+            ${chipsHtml}
+            <button
+              type="button"
+              class="pilot-chip debug-usb-add-chip"
+              data-action="go-network-timers"
+              title="Open Network page to connect LapRF 8-Way timers"
+            >
+              ${icons.wifi(18)}
+              <span class="pilot-chip-name">${anyConnected ? "Manage timers" : "Connect timer"}</span>
+            </button>
+          </div>
+        </div>`;
+      return;
+    }
+
     patchUsbConnectionBar(host, {
       activeConsole: this.console,
       showAllPorts: this.showAllPorts,
@@ -2916,6 +3797,82 @@ export class DebugView extends Component {
   }
 
   private renderSelfTest(): void {
+    if (this.isRotorHazardMode()) {
+      const snap = this.activeRhSnapshot();
+      const on = Boolean(snap?.connected);
+      const running = this.busy === "Self-test";
+      const counts = { pass: 0, warn: 0, fail: 0, skip: 0 };
+      for (const c of this.checks) counts[c.result]++;
+      const ledClass = running
+        ? "is-warn"
+        : this.checks.length
+          ? counts.fail
+            ? "is-bad"
+            : counts.warn
+              ? "is-warn"
+              : "is-up"
+          : on
+            ? snap?.authOk
+              ? "is-up"
+              : "is-warn"
+            : "";
+      const summary = this.checks.length
+        ? running
+          ? esc(this.progress)
+          : counts.fail
+            ? `${counts.fail} problem${counts.fail > 1 ? "s" : ""} found`
+            : counts.warn
+              ? `Passed with ${counts.warn} warning${counts.warn > 1 ? "s" : ""}`
+              : `All ${this.checks.length} checks passed`
+        : running
+          ? esc(this.progress)
+          : on
+            ? `Ready · ${esc(snap!.label)} (${esc(snap!.endpoint)}) · ~1.5 s non-intrusive check`
+            : "Off · click Connect timer above";
+      const consoleLines = this.checks.length
+        ? esc(
+            this.checks
+              .map((c) => {
+                const tag =
+                  c.result === "pass"
+                    ? "[PASS]"
+                    : c.result === "warn"
+                      ? "[WARN]"
+                      : c.result === "fail"
+                        ? "[FAIL]"
+                        : "[SKIP]";
+                return `${tag}  ${c.name.padEnd(20, " ")}  ${c.detail}`;
+              })
+              .join("\n")
+          )
+        : esc(
+            running
+              ? this.progress || "Starting RotorHazard self-test..."
+              : on
+                ? this.isRotorHazardUSBMode()
+                  ? `# Click "Run self-test" to verify ${snap!.label} USB serial link (API ${snap!.apiLevel || 36}), receiver seat tuning, serial RTT, and ~10 Hz RSSI stream.`
+                  : `# Click "Run self-test" to verify ${snap!.label} Socket.IO link, HTTP Basic Auth, RX5808 node tuning, clock sync, and ~10 Hz heartbeat stream.`
+                : "# Connect a RotorHazard timer above or on the Network page to run the hardware self-test."
+          );
+      this.slot("selftest").innerHTML = `
+        <div class="debug-card-head debug-log-head">
+          <span class="debug-led-status">
+            <span class="status-dot ${ledClass}"></span>
+            <span class="debug-head-note">${summary}</span>
+          </span>
+          <div class="debug-connect-actions">
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-report" ${this.checks.length && !running ? "" : "disabled"} title="Copy self-test report" aria-label="Copy self-test report">${icons.copy(17)}</button>
+            <button type="button" class="btn btn-sm btn-armed" data-action="selftest" ${on && !this.busy ? "" : "disabled"}>
+              ${icons.bug(14)}<span>${running ? "Testing…" : "Run self-test"}</span>
+            </button>
+          </div>
+        </div>
+        <div class="table-scroll">
+          <pre class="debug-log debug-selftest-log mono">${consoleLines}</pre>
+        </div>`;
+      return;
+    }
+
     const on = this.console.connected;
     const running = this.busy === "Self-test";
     const emg = Boolean(on && this.status?.emergencyMode);
@@ -2991,6 +3948,143 @@ export class DebugView extends Component {
   }
 
   private renderStatus(): void {
+    if (this.isRotorHazardMode()) {
+      const isUSB = this.isRotorHazardUSBMode();
+      const snap = this.activeRhSnapshot();
+      const on = Boolean(snap?.connected);
+      const nCount = snap?.nodeCount === 4 ? 4 : 8;
+      const ledClass = on ? (snap!.authOk ? "is-up" : "is-warn") : "";
+      const gateNode = snap
+        ? (this.store?.nodes ?? []).find((g) => g.assignedTimerId === snap.timerId)
+        : undefined;
+      const gateName = gateNode
+        ? gateNode.name?.trim() || `Gate ${(gateNode.trackOrder ?? 0) + 1}`
+        : "Unassigned";
+
+      let activeNodeCount = 0;
+      const nodeChips: string[] = [];
+      for (let i = 0; i < nCount; i++) {
+        const f = snap?.nodeFreqsMhz[i] ?? 0;
+        if (f > 0) activeNodeCount++;
+        const band = f > 0 ? hardwareBandLabel(f) : "";
+        const onCh = Boolean(this.signalEnabledCh[i]) && f > 0;
+        nodeChips.push(
+          `<span class="debug-status-ch mono ${onCh ? "" : "is-muted"}" title="${isUSB ? "Seat" : "Node"} ${i + 1}: ${f > 0 ? formatHardwareFreq(f) : "Disabled"}"><strong>${isUSB ? "S" : "N"}${i + 1}</strong> ${f > 0 ? (band ? `${band} ${f}` : `${f}`) : "Off"}</span>`
+        );
+      }
+
+      const e0 = snap?.nodeEnterLevels[0] ?? 90;
+      const x0 = snap?.nodeExitLevels[0] ?? 70;
+      const epStr = snap ? (isUSB ? snap.portName || snap.endpoint : snap.endpoint) : "";
+      const headText =
+        on && snap
+          ? isUSB
+            ? `${esc(snap.label)} · ${esc(epStr)} · API ${snap.apiLevel || 36} (${snap.baudRate || 115200} baud) · ${nCount} seats · ${snap.gateArmed ? "Gate armed" : "Standby"}`
+            : `${esc(snap.label)} · ${esc(epStr)} · RotorHazard ${esc(snap.serverVersion || "4.x")} · ${nCount} nodes · ${snap.gateArmed ? "Gate armed" : "Standby"}`
+          : snap
+            ? `${esc(snap.label)} (${esc(epStr)}) · Offline`
+            : "Off · click Connect timer above";
+
+      const healthTitle = this.el.querySelector<HTMLElement>("[data-health-title]");
+      if (healthTitle) {
+        healthTitle.classList.toggle("is-active", on);
+      }
+
+      const protoBadge = !snap
+        ? "—"
+        : isUSB
+          ? `USB API ${snap.apiLevel || 36}`
+          : snap.transport === "sim"
+            ? "Sim RH"
+            : "Socket.IO";
+
+      this.slot("status").innerHTML = `
+        <div class="debug-status-topbar">
+          <span class="debug-led-status">
+            <span class="status-dot ${ledClass}"></span>
+            <span class="debug-head-note">${headText}</span>
+          </span>
+          <div class="debug-connect-actions">
+            <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="refresh-status" ${on && !this.busy ? "" : "disabled"} title="Refresh RotorHazard status" aria-label="Refresh status">
+              ${icons.reset(17)}
+            </button>
+          </div>
+        </div>
+        <div class="debug-status-panels">
+          <div class="debug-subbox">
+            <div class="debug-subbox-head">
+              <span class="debug-subbox-title ${on ? "is-active" : ""}">${icons.cpu(14)}<span>${isUSB ? "Timer &amp; USB link" : "Timer &amp; server"}</span></span>
+              <span class="badge mono">${protoBadge}</span>
+            </div>
+            <dl class="debug-kv-list">
+              <div class="debug-kv-row">
+                <dt>Timer</dt>
+                <dd>${snap ? `<strong>${esc(snap.label)}</strong> <span class="note">· ${esc(gateName)}</span>` : "—"}</dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>${isUSB ? "Serial port" : "Endpoint"}</dt>
+                <dd>${snap ? `<span class="mono">${esc(epStr)}</span>` : "—"}</dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>${isUSB ? "Serial API" : "Server version"}</dt>
+                <dd>${on && snap ? (isUSB ? `<span class="mono">API ${snap.apiLevel || 36} · ${snap.baudRate || 115200} baud</span>` : `<span class="mono">RotorHazard ${esc(snap.serverVersion || "4.x")}</span>`) : "—"}</dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>${isUSB ? "Firmware" : "Hostname"}</dt>
+                <dd>${on && snap ? `<span class="mono">${esc(isUSB ? snap.serverVersion || `API ${snap.apiLevel || 36}` : snap.serverHostname || "rotorhazard-pi")}</span>` : "—"}</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="debug-subbox">
+            <div class="debug-subbox-head">
+              <span class="debug-subbox-title ${on ? "is-active" : ""}">${icons.signal(14)}<span>${isUSB ? "Receiver seats" : "RX5808 receiver nodes"}</span></span>
+              ${!on ? `<span class="badge">—</span>` : snap?.gateArmed ? `<span class="badge badge-good">Armed</span>` : `<span class="badge">Standby</span>`}
+            </div>
+            <dl class="debug-kv-list">
+              <div class="debug-kv-row">
+                <dt>${isUSB ? "Active seats" : "Active nodes"}</dt>
+                <dd>${on ? `${activeNodeCount} of ${nCount} tuned <span class="note">· ~10 Hz ${isUSB ? "poll" : "heartbeat"}</span>` : "—"}</dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>Hysteresis</dt>
+                <dd>${on ? `<span class="mono">Enter ${e0} · Exit ${x0}</span> <span class="note">(0–255 RSSI)</span>` : "—"}</dd>
+              </div>
+              <div class="debug-kv-row is-channels-row">
+                <dt>${isUSB ? "Seats" : "Nodes"}</dt>
+                <dd class="debug-status-ch-grid">${nodeChips.join("")}</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div class="debug-subbox">
+            <div class="debug-subbox-head">
+              <span class="debug-subbox-title ${on ? "is-active" : ""}">${isUSB ? icons.plug(14) : icons.wifi(14)}<span>Link, clock &amp; sensors</span></span>
+              ${!on ? `<span class="badge">—</span>` : isUSB ? `<span class="badge badge-good">Direct USB</span>` : snap?.authOk ? `<span class="badge badge-good">Auth OK</span>` : `<span class="badge badge-warn">Guest</span>`}
+            </div>
+            <dl class="debug-kv-list">
+              <div class="debug-kv-row">
+                <dt>${isUSB ? "Serial RTT" : "Clock sync"}</dt>
+                <dd class="mono" data-rh-live-clock>${on && snap ? `${snap.clockSynced ? "Synced" : "Syncing"} · ${snap.clockOffsetMs >= 0 ? "+" : ""}${snap.clockOffsetMs.toFixed(1)} ms` : "—"}</dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>Telemetry rx</dt>
+                <dd class="mono" data-rh-live-telem>${on && snap ? `${snap.heartbeatsRx} ${isUSB ? "polls" : "heartbeats"} · ${snap.passesRx} passes` : "—"}</dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>Environment</dt>
+                <dd data-rh-live-env>${on && snap ? esc(snap.envSummary || (snap.cpuTempC && snap.cpuTempC > 0 ? `Pi CPU ${snap.cpuTempC.toFixed(1)} °C` : "No sensor reported")) : "—"}</dd>
+              </div>
+              <div class="debug-kv-row">
+                <dt>Access role</dt>
+                <dd>${on && snap ? (isUSB ? "Direct USB serial (read/write)" : snap.authOk ? "HTTP Basic Auth (admin)" : "Guest (read-only)") : "—"}</dd>
+              </div>
+            </dl>
+          </div>
+        </div>`;
+      return;
+    }
+
     const on = this.console.connected;
     const s = this.status;
     const budget = s ? s.sweepBudgetUs || (s.sweepHz ? Math.round(1e6 / s.sweepHz) : 0) : 0;
@@ -3026,10 +4120,10 @@ export class DebugView extends Component {
         ? `<span class="badge badge-bad">Emergency mode</span>`
         : !s.rf.ok
           ? `<span class="badge badge-bad">Boot check failed</span>`
-          : !s.rf.enabled
-            ? `<span class="badge badge-warn">Switched off</span>`
-            : s.scanLive
-              ? `<span class="badge badge-accent">Live scan</span>`
+          : s.scanLive
+            ? `<span class="badge badge-accent">Live scan</span>`
+            : !s.rf.enabled
+              ? `<span class="badge">Standby</span>`
               : `<span class="badge badge-good">OK</span>`;
 
     const freqs = s?.freqs ?? RACEBAND;
@@ -3099,9 +4193,11 @@ export class DebugView extends Component {
             <div class="debug-kv-row">
               <dt>Sweep timing</dt>
               <dd>${
-                s
-                  ? `${s.sweepHz} Hz · ${(s.sweepUs / 1000).toFixed(2)} ms <span class="note">(max <span class="${budget && s.sweepUsMax > budget ? "debug-tone-warn" : ""}">${(s.sweepUsMax / 1000).toFixed(2)} ms</span> / ${(budget / 1000).toFixed(1)} ms)</span>`
-                  : "—"
+                !s
+                  ? "—"
+                  : !s.rf.enabled
+                    ? `<span class="note">Standby · active while streaming or scanning</span>`
+                    : `${s.sweepHz} Hz · ${(s.sweepUs / 1000).toFixed(2)} ms <span class="note">(max <span class="${budget && s.sweepUsMax > budget ? "debug-tone-warn" : ""}">${(s.sweepUsMax / 1000).toFixed(2)} ms</span> / ${(budget / 1000).toFixed(1)} ms)</span>`
               }</dd>
             </div>
             <div class="debug-kv-row is-channels-row">
@@ -3471,17 +4567,19 @@ export class DebugView extends Component {
             : selectedChild.msAgo !== undefined && selectedChild.msAgo >= 2500
               ? `Last window frame from <strong>${esc(selectedChild.label)}</strong> arrived <strong>${(selectedChild.msAgo / 1000).toFixed(1)}s ago</strong> (${frames} total frames). Check that ${esc(selectedChild.label)} is powered on and running the same firmware (${esc(s.fw)}).`
               : "";
+        const isLight = getAppTheme() === "light";
         const barsHtml = freqs
           .map((f, idx) => {
             const band = racebandName(f) || `Ch${idx + 1}`;
-            const col = CHANNEL_COLORS[idx];
+            const col = channelColor(idx);
             const onCh = Boolean(this.signalEnabledCh[idx]);
             const val = dbmSource ? dbmSource[idx] : undefined;
             const valid = onCh && val !== undefined && val > -127 && val < 0;
             const widthPct = valid ? pct(val!) : 0;
+            const dotGlow = isLight ? "0 0 0 1px rgba(15, 23, 42, 0.2)" : `0 0 7px ${col}`;
             return `
               <div class="debug-net-inspector-bar-row ${onCh ? "" : "is-muted"}">
-                <span class="debug-bar-label mono"><span class="debug-ch-inline" style="${onCh ? `background:${col}` : `background:transparent;box-shadow:inset 0 0 0 1.5px ${col}`}"></span><strong>${band}</strong> ${f}</span>
+                <span class="debug-bar-label mono"><span class="debug-ch-inline" style="${onCh ? `background:${col};box-shadow:${dotGlow}` : `background:transparent;box-shadow:inset 0 0 0 1.5px ${col}`}"></span><strong>${band}</strong> ${f}</span>
                 <div class="debug-bar-track">
                   <span class="debug-bar-fill" style="width:${widthPct.toFixed(1)}%"></span>
                 </div>
@@ -3716,31 +4814,59 @@ export class DebugView extends Component {
   private renderLiveHead(): void {
     const liveHeadSlot = this.el.querySelector<HTMLElement>('[data-slot="live-head"]');
     if (!liveHeadSlot) return;
+    if (this.isRotorHazardMode()) {
+      const snap = this.activeRhSnapshot();
+      const on = Boolean(snap?.connected);
+      const streamDisabled = !on;
+      const streamActive = on && this.rhLiveOn;
+      const streamLabel = streamActive ? "Pause" : "Stream";
+      const streamTitle = !on
+        ? "Connect a RotorHazard timer to stream live RX5808 node RSSI"
+        : streamActive
+          ? "Streaming live RX5808 node RSSI · click to pause"
+          : "Paused · click to stream live RX5808 node RSSI";
+      const ledClass = streamActive ? "is-up" : "";
+      this.slot("live-head").innerHTML = `
+        <div class="debug-status-topbar">
+          <span class="debug-led-status">
+            <span class="status-dot ${ledClass}" data-live-led></span>
+            <span class="debug-head-note" data-live-note>${streamActive ? "Streaming · ~10 Hz Socket.IO heartbeat" : on ? "Paused · click Stream to monitor node RSSI" : "Offline · click Connect timer above"}</span>
+          </span>
+          <div class="debug-connect-actions">
+            <button type="button" class="btn btn-sm ${streamActive ? "btn-armed" : "btn-unarmed"}" data-action="live" ${streamDisabled ? "disabled" : ""} title="${streamTitle}">
+              ${streamActive ? icons.pause(14) : icons.play(14)}<span>${streamLabel}</span>
+            </button>
+          </div>
+        </div>`;
+      this.updateLive();
+      return;
+    }
+    if (this.isLapRFMode()) {
+      this.slot("live-head").innerHTML = "";
+      return;
+    }
     const on = this.console.connected;
     const emg = Boolean(on && this.status?.emergencyMode);
-    const rfOn = this.status?.rf.enabled ?? true;
     const inScanMode = Boolean(this.scanLive || this.status?.scanLive);
-    const streamDisabled = !on || !rfOn || emg;
+    const streamDisabled = !on || emg;
     const streamActive = !streamDisabled && !inScanMode && this.liveOn;
     const streamLabel = streamActive ? "Pause" : "Stream";
     const streamTitle = emg
       ? "Unavailable while the timer is in Emergency Mode"
-      : !rfOn
-        ? "Unavailable while the 5.8 GHz receiver is switched off"
-        : !on
-          ? "Connect a timer to stream live 5.8 GHz readings"
-          : streamActive
-            ? "Streaming live 5.8 GHz readings · click to pause"
-            : inScanMode
-              ? "Paused while Spectrum scan is streaming · click to pause Spectrum scan and stream 5.8 GHz channels"
-              : "Paused · click to stream live 5.8 GHz readings";
+      : !on
+        ? "Connect a timer to stream live 5.8 GHz readings"
+        : streamActive
+          ? "Streaming live 5.8 GHz readings · click to pause"
+          : inScanMode
+            ? "Paused while Spectrum scan is streaming · click to pause Spectrum scan and stream 5.8 GHz channels"
+            : "Paused · click to stream live 5.8 GHz readings";
     const ledClass = emg
       ? "is-emergency"
       : streamActive
         ? this.status?.role === 2
           ? "is-spoke"
           : "is-up"
-        : on && (inScanMode || !rfOn)
+        : on && inScanMode
           ? "is-warn"
           : "";
     this.slot("live-head").innerHTML = `
@@ -3750,9 +4876,6 @@ export class DebugView extends Component {
           <span class="debug-head-note" data-live-note>${emg ? "Emergency mode · 5.8 GHz receiver & sweeps halted" : on ? "Waiting for sweep stream…" : "Paused · click Connect in the top bar"}</span>
         </span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm ${rfOn ? "btn-armed" : "btn-unarmed"}" data-action="rf" ${on && this.status && !inScanMode && !emg ? "" : "disabled"} title="${emg ? "Exit emergency mode first to toggle the 5.8 GHz receiver" : inScanMode ? "Pause Spectrum scan first to toggle the 5.8 GHz receiver" : "Switch the hardware 5.8 GHz receiver on or off"}">
-            ${rfOn ? icons.signal(14) : icons.signalOff(14)}<span>${rfOn ? "Receiver on" : "Receiver off"}</span>
-          </button>
           <button type="button" class="btn btn-sm ${streamActive ? "btn-armed" : "btn-unarmed"}" data-action="live" ${streamDisabled ? "disabled" : ""} title="${streamTitle}">
             ${streamActive ? icons.pause(14) : icons.play(14)}<span>${streamLabel}</span>
           </button>
@@ -3765,8 +4888,58 @@ export class DebugView extends Component {
   private renderLive(): void {
     const liveSlot = this.el.querySelector<HTMLElement>('[data-slot="live"]');
     if (!liveSlot) return;
+    if (this.isRotorHazardMode()) {
+      const snap = this.activeRhSnapshot();
+      const on = Boolean(snap?.connected);
+      const nCount = snap?.nodeCount === 4 ? 4 : 8;
+      const activeCount = Array.from(
+        { length: nCount },
+        (_, idx) => Boolean(this.signalEnabledCh[idx]) && (snap?.nodeFreqsMhz[idx] ?? 0) > 0
+      ).filter(Boolean).length;
+      const rowsHtml: string[] = [];
+      const isLight = getAppTheme() === "light";
+      for (let i = 0; i < nCount; i++) {
+        const f = snap?.nodeFreqsMhz[i] ?? 0;
+        const band = f > 0 ? hardwareBandLabel(f) : "";
+        const freqLabel = f > 0 ? `${band ? `${band} ` : ""}${f}` : "";
+        const col = channelColor(i);
+        const onCh = this.signalEnabledCh[i];
+        const nodeLit = on && onCh && f > 0;
+        const dotGlow = isLight ? "0 0 0 1px rgba(15, 23, 42, 0.2)" : `0 0 7px ${col}`;
+        rowsHtml.push(`
+          <div class="debug-bar-row ${onCh && f > 0 ? "" : "is-muted"}" data-bar data-action="signal-ch" data-ch="${i}" role="button" tabindex="0" aria-pressed="${onCh}" title="Click to toggle Node ${i + 1}${f > 0 ? ` (${f} MHz)` : ""} monitoring on/off · double-click to solo">
+            <span class="debug-bar-label mono"><span class="debug-ch-inline" data-bar-dot style="${nodeLit ? `background:${col};box-shadow:${dotGlow}` : `background:transparent;box-shadow:inset 0 0 0 1.5px ${col}`}"></span><strong>N${i + 1}</strong> <span data-bar-freq>${esc(freqLabel)}</span></span>
+            <div class="debug-bar-track">
+              <span class="debug-bar-fill" style="width:0%"></span>
+              <span class="debug-bar-peak" style="left:0%;display:none"></span>
+            </div>
+            <span class="debug-bar-value mono">${!onCh ? "Off" : "— / 255"}</span>
+            <span class="debug-bar-hits mono" title="Hardware EnterAt / ExitAt RSSI thresholds and live gate crossing state">—</span>
+          </div>`);
+      }
+      this.slot("live").innerHTML = `
+        <div class="debug-subbar">
+          <span class="debug-chart-title">Node RSSI meter (${nCount} RX5808 receiver nodes)</span>
+          <span class="note debug-live-ch-hint" data-live-ch-note><span class="mono">${activeCount}/${nCount}</span> active · click row to toggle · double-click to solo</span>
+        </div>
+        <div class="debug-bars">
+          ${rowsHtml.join("")}
+        </div>
+        <div class="debug-scale mono"><span>0 RSSI</span><span>255 RSSI</span></div>
+        <div class="rules-foot">
+          <p class="note">Monitors RotorHazard RX5808 receiver nodes in real time (0–255 ADC RSSI) with per-node Enter / Exit hysteresis.</p>
+          <button class="btn btn-ghost btn-sm" type="button" data-action="restore-live-channels">Restore defaults</button>
+        </div>`;
+      this.updateLive();
+      return;
+    }
+    if (this.isLapRFMode()) {
+      this.slot("live").innerHTML = `<p class="note">Slot telemetry for LapRF 8-Way pucks is displayed on the <a href="#/network">Network</a> page.</p>`;
+      return;
+    }
     const freqs = this.status?.freqs ?? RACEBAND;
     const activeCount = this.signalEnabledCh.filter(Boolean).length;
+    const isLight = getAppTheme() === "light";
     this.slot("live").innerHTML = `
       <div class="debug-subbar">
         <span class="debug-chart-title">Channel RSSI meter (8 pilot slots)</span>
@@ -3776,11 +4949,12 @@ export class DebugView extends Component {
         ${freqs
           .map((f, i) => {
             const band = racebandName(f) || `Ch${i + 1}`;
-            const col = CHANNEL_COLORS[i];
+            const col = channelColor(i);
             const onCh = this.signalEnabledCh[i];
+            const dotGlow = isLight ? "0 0 0 1px rgba(15, 23, 42, 0.2)" : `0 0 7px ${col}`;
             return `
             <div class="debug-bar-row ${onCh ? "" : "is-muted"}" data-bar data-action="signal-ch" data-ch="${i}" role="button" tabindex="0" aria-pressed="${onCh}" title="Click to toggle ${band} (${f} MHz) monitoring on/off · double-click to solo">
-              <span class="debug-bar-label mono"><span class="debug-ch-inline" data-bar-dot style="${onCh ? `background:${col}` : `background:transparent;box-shadow:inset 0 0 0 1.5px ${col}`}"></span><strong>${band}</strong> ${f}</span>
+              <span class="debug-bar-label mono"><span class="debug-ch-inline" data-bar-dot style="${onCh ? `background:${col};box-shadow:${dotGlow}` : `background:transparent;box-shadow:inset 0 0 0 1.5px ${col}`}"></span><strong>${band}</strong> ${f}</span>
               <div class="debug-bar-track">
                 <span class="debug-bar-fill" style="width:0%"></span>
                 <span class="debug-bar-peak" style="left:0%;display:none"></span>
@@ -3800,6 +4974,105 @@ export class DebugView extends Component {
   }
 
   private updateLive(): void {
+    if (this.isRotorHazardMode()) {
+      const snap = this.activeRhSnapshot();
+      const on = Boolean(snap?.connected);
+      const nCount = snap?.nodeCount === 4 ? 4 : 8;
+      const note = this.el.querySelector<HTMLElement>("[data-live-note]");
+      const led = this.el.querySelector<HTMLElement>("[data-live-led]");
+      const chNote = this.el.querySelector<HTMLElement>("[data-live-ch-note]");
+      const activeCount = Array.from(
+        { length: nCount },
+        (_, idx) => Boolean(this.signalEnabledCh[idx]) && (snap?.nodeFreqsMhz[idx] ?? 0) > 0
+      ).filter(Boolean).length;
+      if (chNote) {
+        chNote.innerHTML = `<span class="mono">${activeCount}/${nCount}</span> active · click row to toggle · double-click to solo`;
+      }
+      if (led) {
+        const streaming = on && this.rhLiveOn;
+        led.classList.remove("is-emergency", "is-spoke", "is-warn");
+        led.classList.toggle("is-up", streaming);
+      }
+      if (note) {
+        if (!on) {
+          note.textContent = "Offline · click Connect timer above";
+        } else if (!this.rhLiveOn) {
+          note.textContent = "Paused · click Stream to monitor node RSSI";
+        } else if (this.live) {
+          note.textContent = `Streaming · ~10 Hz Socket.IO heartbeat · ${snap?.heartbeatsRx ?? 0} frames`;
+        } else {
+          note.textContent = "Streaming · waiting for heartbeat…";
+        }
+      }
+      const now = performance.now();
+      const pct = (x: number) => Math.max(0, Math.min(100, (x / 255) * 100));
+      const isLight = getAppTheme() === "light";
+      this.el.querySelectorAll<HTMLElement>("[data-bar]").forEach((row, i) => {
+        const onCh = Boolean(this.signalEnabledCh[i]);
+        const col = channelColor(i);
+        const f = snap?.nodeFreqsMhz[i] ?? 0;
+        const nodeLit = on && onCh && f > 0;
+        row.classList.toggle("is-muted", !onCh || f <= 0);
+        row.setAttribute("aria-pressed", String(onCh));
+        const dot = row.querySelector<HTMLElement>("[data-bar-dot]");
+        if (dot) {
+          dot.style.background = nodeLit ? col : "transparent";
+          dot.style.boxShadow = nodeLit ? (isLight ? "0 0 0 1px rgba(15, 23, 42, 0.2)" : `0 0 7px ${col}`) : `inset 0 0 0 1.5px ${col}`;
+        }
+        const freqSpan = row.querySelector<HTMLElement>("[data-bar-freq]");
+        if (freqSpan) {
+          const band = f > 0 ? hardwareBandLabel(f) : "";
+          const nextFreqLabel = f > 0 ? `${band ? `${band} ` : ""}${f}` : "";
+          if (freqSpan.textContent !== nextFreqLabel) freqSpan.textContent = nextFreqLabel;
+        }
+        const fill = row.querySelector<HTMLElement>(".debug-bar-fill")!;
+        const peak = row.querySelector<HTMLElement>(".debug-bar-peak")!;
+        const value = row.querySelector<HTMLElement>(".debug-bar-value")!;
+        const hits = row.querySelector<HTMLElement>(".debug-bar-hits")!;
+        const enterAt = snap?.nodeEnterLevels[i] ?? 90;
+        const exitAt = snap?.nodeExitLevels[i] ?? 70;
+        const crossing = Boolean(snap?.crossingFlag[i]);
+
+        if (!on || !onCh || f <= 0) {
+          this.barFillVal[i] = -128;
+          this.barFillAt[i] = 0;
+          this.barPeakVal[i] = -128;
+          this.barPeakAt[i] = 0;
+          fill.style.width = "0%";
+          peak.style.display = "none";
+          value.textContent = !onCh ? "Off" : "— / 255";
+          hits.textContent = f > 0 ? `E:${enterAt}/X:${exitAt}` : "—";
+          hits.classList.remove("is-active");
+          return;
+        }
+
+        const rawRssi = this.rhLiveOn && this.live ? (this.live.dbm[i] ?? -128) : (snap?.slotRssi[i] ?? 0);
+        const sampleRssi = rawRssi > -127 ? Math.max(0, Math.min(255, Math.round(rawRssi))) : 0;
+        const rising = sampleRssi >= this.barFillVal[i];
+        if (this.barFillVal[i] <= -127 || rising || now - this.barFillAt[i] >= 160) {
+          this.barFillVal[i] = sampleRssi;
+          if (rising || this.barFillAt[i] === 0) {
+            this.barFillAt[i] = now;
+          }
+        }
+        if (this.barPeakVal[i] <= -127 || sampleRssi >= this.barPeakVal[i] || now - this.barPeakAt[i] >= 1500) {
+          this.barPeakVal[i] = sampleRssi;
+          this.barPeakAt[i] = now;
+        }
+        const shownFill = Math.max(0, this.barFillVal[i]);
+        const heldPk = Math.max(0, this.barPeakVal[i]);
+        fill.style.width = `${pct(shownFill)}%`;
+        peak.style.display = "";
+        peak.style.left = `${pct(heldPk)}%`;
+        value.textContent = `${shownFill} / 255`;
+        const isTrig = crossing || shownFill >= enterAt;
+        hits.textContent = isTrig ? "CROSSING" : `E:${enterAt}/X:${exitAt}`;
+        hits.classList.remove("is-active");
+      });
+      return;
+    }
+    if (this.isLapRFMode()) return;
+
     const l = this.live;
     const note = this.el.querySelector<HTMLElement>("[data-live-note]");
     const led = this.el.querySelector<HTMLElement>("[data-live-led]");
@@ -3817,7 +5090,7 @@ export class DebugView extends Component {
       led.classList.toggle("is-emergency", emg);
       led.classList.toggle("is-up", streaming && this.status?.role !== 2);
       led.classList.toggle("is-spoke", streaming && this.status?.role === 2);
-      led.classList.toggle("is-warn", !emg && on && (inScanMode || !rfOn));
+      led.classList.toggle("is-warn", !emg && on && inScanMode);
     }
     if (note) {
       if (!on) {
@@ -3826,8 +5099,6 @@ export class DebugView extends Component {
         note.textContent = "Emergency mode · 5.8 GHz receiver & sweeps halted";
       } else if (inScanMode) {
         note.textContent = "Paused · Spectrum scan is streaming";
-      } else if (this.status && !this.status.rf.enabled) {
-        note.textContent = "Off · 5.8 GHz receiver is switched off";
       } else if (!this.liveOn) {
         note.textContent = "Paused · click Stream to view live 5.8 GHz readings";
       } else if (l) {
@@ -3839,15 +5110,16 @@ export class DebugView extends Component {
     }
     const now = performance.now();
     const pct = (x: number) => Math.max(0, Math.min(100, ((x - DBM_MIN) / (DBM_MAX - DBM_MIN)) * 100));
+    const isLight = getAppTheme() === "light";
     this.el.querySelectorAll<HTMLElement>("[data-bar]").forEach((row, i) => {
       const onCh = Boolean(this.signalEnabledCh[i]);
-      const col = CHANNEL_COLORS[i];
+      const col = channelColor(i);
       row.classList.toggle("is-muted", !onCh);
       row.setAttribute("aria-pressed", String(onCh));
       const dot = row.querySelector<HTMLElement>("[data-bar-dot]");
       if (dot) {
         dot.style.background = onCh ? col : "transparent";
-        dot.style.boxShadow = onCh ? "none" : `inset 0 0 0 1.5px ${col}`;
+        dot.style.boxShadow = onCh ? (isLight ? "0 0 0 1px rgba(15, 23, 42, 0.2)" : `0 0 7px ${col}`) : `inset 0 0 0 1.5px ${col}`;
       }
       const fill = row.querySelector<HTMLElement>(".debug-bar-fill")!;
       const peak = row.querySelector<HTMLElement>(".debug-bar-peak")!;
@@ -3937,29 +5209,7 @@ export class DebugView extends Component {
   }
 
   private renderSignalControls(): void {
-    const on = this.console.connected;
-    const rfOn = this.status?.rf.enabled ?? true;
-    const inScanMode = Boolean(this.scanLive || this.status?.scanLive);
-    const streamRunning = on && rfOn && this.liveOn && !inScanMode;
-    const freqs = this.status?.freqs ?? RACEBAND;
-    const hasPts = this.signalRing.points.length > 0;
-    const allOn = this.signalEnabledCh.every(Boolean);
-    const isLive = this.signalEndN === null;
-    const liveFollowOn = isLive && streamRunning;
-    const liveDisabled = (!on || !rfOn) && !hasPts;
-    const isYZoomed = this.signalYMin !== DBM_MIN || this.signalYMax !== DBM_MAX;
-    const liveLabel = liveFollowOn ? "Pause" : "Stream";
-    const liveTitle = !rfOn
-      ? "Unavailable while the 5.8 GHz receiver is switched off"
-      : !on
-        ? "Connect a timer to stream live 50 Hz sweeps"
-        : liveFollowOn
-          ? "Streaming 50 Hz sweeps · click to pause, or drag the chart to scroll back"
-          : inScanMode
-            ? "Paused while Spectrum scan is streaming · click to pause Spectrum scan and stream 50 Hz sweeps"
-            : "Paused · click to stream live 50 Hz sweeps";
     const presets = [1, 2, 5, 10, 30, 120] as const;
-    const isFloorY = !this.signalAutoY && Math.round(this.signalYMin) === -102 && Math.round(this.signalYMax) === -68;
     const xWinLabel =
       this.signalWindowSec === 120
         ? "2 min"
@@ -3972,15 +5222,180 @@ export class DebugView extends Component {
         : this.signalWindowSec < 10 && Math.abs(this.signalWindowSec - Math.round(this.signalWindowSec)) >= 0.05
           ? `${this.signalWindowSec.toFixed(1)}s`
           : `${Math.round(this.signalWindowSec)}s`;
-    const ySigShort = isFloorY ? "Floor" : !isYZoomed ? "Full" : `${Math.round(this.signalYMax - this.signalYMin)}dB`;
+
+    if (this.isRotorHazardMode()) {
+      const snap = this.activeRhSnapshot();
+      const on = Boolean(snap?.connected);
+      const streamRunning = on && this.rhLiveOn;
+      const nCount = snap?.nodeCount === 4 ? 4 : 8;
+      const hasPts = this.signalRing.points.length > 0;
+      const allOn = this.signalEnabledCh.slice(0, nCount).every(Boolean);
+      const isLive = this.signalEndN === null;
+      const liveFollowOn = isLive && streamRunning;
+      const liveDisabled = !on && !hasPts;
+      const isYZoomed = Math.round(this.signalYMin) !== 0 || Math.round(this.signalYMax) !== 255;
+      const isFloorY = !this.signalAutoY && Math.round(this.signalYMin) === 0 && Math.round(this.signalYMax) === 130;
+      const ySigShort = isFloorY ? "Base" : !isYZoomed ? "Full" : `${Math.round(this.signalYMax - this.signalYMin)}`;
+      const liveLabel = liveFollowOn ? "Pause" : "Stream";
+      const liveTitle = !on
+        ? "Connect a RotorHazard timer to stream node RSSI"
+        : liveFollowOn
+          ? "Streaming ~10 Hz Socket.IO heartbeats · click to pause, or drag the chart to scroll back"
+          : "Paused · click to stream live node RSSI";
+      const sigLedClass = liveFollowOn ? "is-up" : streamRunning && !isLive ? "is-warn" : "";
+      const sigStatusText = liveFollowOn
+        ? `Streaming · ~10 Hz Socket.IO heartbeat · ${snap?.heartbeatsRx ?? 0} frames`
+        : streamRunning && !isLive
+          ? "Paused · scrolled back"
+          : on
+            ? "Paused · click Stream to record node RSSI"
+            : "Offline · click Connect timer above";
+
+      const legendButtons: string[] = [];
+      for (let i = 0; i < nCount; i++) {
+        const f = snap?.nodeFreqsMhz[i] ?? 0;
+        const band = f > 0 ? hardwareBandLabel(f) : "";
+        const lbl = f > 0 ? `${band ? `${band} ` : ""}${f}` : "";
+        const chOn = this.signalEnabledCh[i];
+        const nodeLit = on && chOn && f > 0;
+        const col = channelColor(i);
+        legendButtons.push(
+          `<button type="button" class="chart-legend-item mono ${nodeLit ? "" : "is-hidden"}" data-action="signal-ch" data-ch="${i}" aria-pressed="${chOn}" title="${chOn ? `Click to hide Node ${i + 1}${lbl ? ` (${lbl})` : ""} · double-click to solo` : `Click to show Node ${i + 1}${lbl ? ` (${lbl})` : ""} · double-click to solo`}">
+            <i style="--c:${col}"></i>
+            <span><strong>N${i + 1}</strong>${lbl ? ` ${esc(lbl)}` : ""}</span>
+          </button>`
+        );
+      }
+
+      this.slot("signal-head").innerHTML = `
+        <div class="debug-status-topbar">
+          <span class="debug-led-status" title="${liveTitle}">
+            <span class="status-dot ${sigLedClass}"></span>
+            <span class="debug-head-note">${sigStatusText}</span>
+          </span>
+          <div class="debug-connect-actions">
+            <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
+            <button type="button" class="btn btn-sm ${liveFollowOn ? "btn-armed" : "btn-unarmed"}" data-action="signal-freeze" ${liveDisabled ? "disabled" : ""} title="${liveTitle}">
+              ${liveFollowOn ? icons.pause(14) : icons.play(14)}<span>${liveLabel}</span>
+            </button>
+          </div>
+        </div>`;
+      this.slot("signal-controls").innerHTML = `
+        <div class="debug-subbar">
+          <span class="debug-chart-title">Signal over time (0–255 RSSI × time)</span>
+          <div class="debug-connect-actions">
+            <div class="debug-overlay-checks" role="group" aria-label="Chart overlays">
+              <label class="check" title="Show per-node baseline noise floor (dotted)">
+                <input type="checkbox" data-check="signal-floor" ${this.signalShowFloor ? "checked" : ""}/>
+                <span>Baseline floor</span>
+              </label>
+              <label class="check" title="Show hardware EnterAt / ExitAt RSSI thresholds">
+                <input type="checkbox" data-check="signal-thr" ${this.signalShowThresholds ? "checked" : ""}/>
+                <span>Enter / Exit thresholds</span>
+              </label>
+            </div>
+          </div>
+        </div>`;
+      this.slot("signal-legend").innerHTML = `
+        <div class="chart-legend debug-signal-legend" role="group" aria-label="Node trace legend">
+          ${legendButtons.join("")}
+          <button type="button" class="chart-legend-item debug-legend-all" data-action="signal-ch-all" title="${allOn ? `Hide all ${nCount} node traces` : `Show all ${nCount} node traces`}">
+            <span>${allOn ? "Hide all" : "Show all"}</span>
+          </button>
+        </div>
+        <div class="debug-chart-foot">
+          <div class="debug-toolbar-left">
+            <div class="debug-axis-pill ${this.signalAutoX ? "is-armed" : "is-unarmed"}" data-axis-pill>
+              <button type="button" class="debug-axis-pill-main" data-action="${this.signalAutoX ? "toggle-axis-menu" : "signal-reset-x"}" data-menu="signal-x" title="${this.signalAutoX ? `Auto X-axis time window (${xWinLabel}) · click to choose a time window preset` : "Click to reset X-axis time window to Auto X"}">
+                ${icons.target(13)}<span>${this.signalAutoX ? "Auto X" : `<span class="debug-hint-desktop">X: ${xWinLabel}</span><span class="debug-hint-mobile">X: ${xWinShort}</span>`}</span>
+              </button>
+              <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="signal-x" aria-expanded="${this.openAxisMenu === "signal-x"}" title="Choose X-axis time window">
+                ${icons.chevronDown(12)}
+              </button>
+              ${
+                this.openAxisMenu === "signal-x"
+                  ? `<div class="debug-axis-menu" role="menu" aria-label="X-axis time window">
+                      <button type="button" class="debug-axis-menu-item ${this.signalAutoX ? "is-active" : ""}" data-action="signal-auto-x" data-force="1" role="menuitem">
+                        <span>Auto X</span><span class="note">${xWinLabel}</span>
+                      </button>
+                      <div class="debug-axis-menu-sep"></div>
+                      ${presets
+                        .map((w) => {
+                          const active = !this.signalAutoX && Math.abs(this.signalWindowSec - w) < 0.05;
+                          const label = w === 120 ? "2 min" : `${w} s`;
+                          return `<button type="button" class="debug-axis-menu-item ${active ? "is-active" : ""}" data-action="signal-window" data-win="${w}" role="menuitem"><span>${label}</span></button>`;
+                        })
+                        .join("")}
+                    </div>`
+                  : ""
+              }
+            </div>
+            <div class="debug-axis-pill ${this.signalAutoY ? "is-armed" : "is-unarmed"}" data-axis-pill>
+              <button type="button" class="debug-axis-pill-main" data-action="${this.signalAutoY ? "toggle-axis-menu" : "signal-reset-y"}" data-menu="signal-y" title="${this.signalAutoY ? "Auto Y-axis scaling is ON (fits visible node RSSI traces automatically). Click to choose a scale preset." : "Click to reset Y-axis range to Auto Y"}">
+                ${icons.target(13)}<span>${this.signalAutoY ? "Auto Y" : `<span class="debug-hint-desktop">Y: ${Math.round(this.signalYMin)}…${Math.round(this.signalYMax)} RSSI</span><span class="debug-hint-mobile">Y: ${ySigShort}</span>`}</span>
+              </button>
+              <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="signal-y" aria-expanded="${this.openAxisMenu === "signal-y"}" title="Choose Y-axis RSSI scale">
+                ${icons.chevronDown(12)}
+              </button>
+              ${
+                this.openAxisMenu === "signal-y"
+                  ? `<div class="debug-axis-menu" role="menu" aria-label="Y-axis RSSI scale">
+                      <button type="button" class="debug-axis-menu-item ${this.signalAutoY ? "is-active" : ""}" data-action="signal-auto-y" data-force="1" role="menuitem">
+                        <span>Auto Y</span><span class="note">Fit traces</span>
+                      </button>
+                      <div class="debug-axis-menu-sep"></div>
+                      <button type="button" class="debug-axis-menu-item ${isFloorY ? "is-active" : ""}" data-action="signal-zoom-floor" role="menuitem">
+                        <span>Baseline &amp; thresholds</span><span class="note">0…130 RSSI</span>
+                      </button>
+                      <button type="button" class="debug-axis-menu-item ${!this.signalAutoY && !isYZoomed ? "is-active" : ""}" data-action="signal-full-y" role="menuitem">
+                        <span>Full scale</span><span class="note">0…255 RSSI</span>
+                      </button>
+                    </div>`
+                  : ""
+              }
+            </div>
+          </div>
+          <span class="note debug-chart-hint"><span class="debug-hint-desktop">Drag chart to pan · Shift+drag box to zoom · drag axes to stretch</span><span class="debug-hint-mobile">Drag chart to pan · drag axes to stretch · double-tap to reset</span></span>
+          <div class="debug-connect-actions">
+            <div class="debug-btn-group" role="group" aria-label="Export signal chart">
+              <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-csv" ${hasPts ? "" : "disabled"} title="Download recorded node RSSI samples as CSV">CSV</button>
+              <button type="button" class="btn btn-sm btn-ghost" data-action="export-signal-png" ${hasPts ? "" : "disabled"} title="Save signal chart snapshot as PNG">PNG</button>
+            </div>
+          </div>
+        </div>`;
+      return;
+    }
+
+    const on = this.console.connected;
     const emg = Boolean(on && this.status?.emergencyMode);
+    const inScanMode = Boolean(this.scanLive || this.status?.scanLive);
+    const streamRunning = on && !emg && this.liveOn && !inScanMode;
+    const freqs = this.status?.freqs ?? RACEBAND;
+    const hasPts = this.signalRing.points.length > 0;
+    const allOn = this.signalEnabledCh.every(Boolean);
+    const isLive = this.signalEndN === null;
+    const liveFollowOn = isLive && streamRunning;
+    const liveDisabled = (!on || emg) && !hasPts;
+    const isYZoomed = this.signalYMin !== DBM_MIN || this.signalYMax !== DBM_MAX;
+    const liveLabel = liveFollowOn ? "Pause" : "Stream";
+    const liveTitle = emg
+      ? "Unavailable while the timer is in Emergency Mode"
+      : !on
+        ? "Connect a timer to stream live 50 Hz sweeps"
+        : liveFollowOn
+          ? "Streaming 50 Hz sweeps · click to pause, or drag the chart to scroll back"
+          : inScanMode
+            ? "Paused while Spectrum scan is streaming · click to pause Spectrum scan and stream 50 Hz sweeps"
+            : "Paused · click to stream live 50 Hz sweeps";
+    const isFloorY = !this.signalAutoY && Math.round(this.signalYMin) === -102 && Math.round(this.signalYMax) === -68;
+    const ySigShort = isFloorY ? "Floor" : !isYZoomed ? "Full" : `${Math.round(this.signalYMax - this.signalYMin)}dB`;
     const sigLedClass = emg
       ? "is-emergency"
       : liveFollowOn
         ? this.status?.role === 2
           ? "is-spoke"
           : "is-up"
-        : (streamRunning && !isLive) || (on && (inScanMode || !rfOn))
+        : (streamRunning && !isLive) || (on && inScanMode)
           ? "is-warn"
           : "";
     const sigStatusText = emg
@@ -3991,11 +5406,9 @@ export class DebugView extends Component {
           ? "Paused · scrolled back"
           : inScanMode
             ? "Paused · scan active"
-            : on && !rfOn
-              ? "Off · 5.8 GHz receiver is switched off"
-              : on
-                ? "Paused · click Stream to record 50 Hz sweeps"
-                : "Paused · click Connect in the top bar";
+            : on
+              ? "Paused · click Stream to record 50 Hz sweeps"
+              : "Paused · click Connect in the top bar";
     this.slot("signal-head").innerHTML = `
       <div class="debug-status-topbar">
         <span class="debug-led-status" title="${liveTitle}">
@@ -4003,9 +5416,6 @@ export class DebugView extends Component {
           <span class="debug-head-note">${sigStatusText}</span>
         </span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm ${rfOn ? "btn-armed" : "btn-unarmed"}" data-action="rf" ${on && this.status && !inScanMode && !emg ? "" : "disabled"} title="${emg ? "Exit emergency mode first to toggle the 5.8 GHz receiver" : inScanMode ? "Pause Spectrum scan first to toggle the 5.8 GHz receiver" : "Switch the hardware 5.8 GHz receiver on or off"}">
-            ${rfOn ? icons.signal(14) : icons.signalOff(14)}<span>${rfOn ? "Receiver on" : "Receiver off"}</span>
-          </button>
           <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
           <button type="button" class="btn btn-sm ${liveFollowOn ? "btn-armed" : "btn-unarmed"}" data-action="signal-freeze" ${liveDisabled ? "disabled" : ""} title="${liveTitle}">
             ${liveFollowOn ? icons.pause(14) : icons.play(14)}<span>${liveLabel}</span>
@@ -4038,7 +5448,7 @@ export class DebugView extends Component {
           .map((f, i) => {
             const rb = racebandName(f) || `Ch${i + 1}`;
             const chOn = this.signalEnabledCh[i];
-            const col = CHANNEL_COLORS[i];
+            const col = channelColor(i);
             return `<button type="button" class="chart-legend-item mono ${chOn ? "" : "is-hidden"}" data-action="signal-ch" data-ch="${i}" aria-pressed="${chOn}" title="${chOn ? `Click to hide ${rb} (${f} MHz) · double-click to solo` : `Click to show ${rb} (${f} MHz) · double-click to solo`}">
               <i style="--c:${col}"></i>
               <span><strong>${rb}</strong> ${f}</span>
@@ -4111,13 +5521,111 @@ export class DebugView extends Component {
       </div>`;
   }
 
+  private recordRhFindingFromSample(snap: RHClientDiagSnapshot, s: LiveSample): void {
+    const now = Date.now();
+    const nCount = snap.nodeCount === 4 ? 4 : 8;
+    for (let i = 0; i < nCount; i++) {
+      const f = snap.nodeFreqsMhz[i] ?? 0;
+      if (f <= 0) continue;
+      const v = s.dbm[i] ?? -128;
+      if (v <= -127) continue;
+      const col = channelColor(i);
+      const enterThr = snap.nodeEnterLevels[i] ?? 90;
+      const exitThr = snap.nodeExitLevels[i] ?? 70;
+      const floor = s.floor?.[i] !== undefined && s.floor[i] > -127 ? s.floor[i] : v;
+      const crossing = Boolean(snap.crossingFlag[i]) || v >= enterThr;
+      const sourceLabel = `N${i + 1} · ${formatHardwareFreq(f)}`;
+
+      if (crossing) {
+        const key = `rh-trig:${i}`;
+        const existing = this.signalFindings.find((e) => e.key === key && now - e.lastMs <= 4000);
+        if (existing) {
+          existing.lastMs = now;
+          existing.maxDbm = Math.max(existing.maxDbm, v);
+          existing.count++;
+          const durSec = (existing.lastMs - existing.firstMs) / 1000;
+          existing.detail = `Peak ${existing.maxDbm} RSSI crossed N${i + 1} EnterAt ${enterThr} (+${existing.maxDbm - enterThr} RSSI; ExitAt ${exitThr}) · ${existing.count} samples${durSec >= 0.2 ? ` over ${durSec.toFixed(1)} s` : ""}`;
+        } else {
+          this.signalFindings.unshift({
+            id: ++this.signalFindingSeq,
+            key,
+            firstMs: now,
+            lastMs: now,
+            timeLabel: fmtWallTimeMs(now),
+            tone: "badge-warn",
+            badge: "Crossing",
+            sourceLabel,
+            sourceColor: col,
+            channelIndex: i,
+            freqMHz: f,
+            maxDbm: v,
+            count: 1,
+            detail: `Peak ${v} RSSI crossed N${i + 1} EnterAt ${enterThr} (+${v - enterThr} RSSI; ExitAt ${exitThr})`,
+          });
+        }
+      } else if (v >= floor + 15) {
+        const key = `rh-burst:${i}`;
+        const existing = this.signalFindings.find((e) => e.key === key && now - e.lastMs <= 4000);
+        if (existing) {
+          existing.lastMs = now;
+          existing.maxDbm = Math.max(existing.maxDbm, v);
+          existing.count++;
+          const durSec = (existing.lastMs - existing.firstMs) / 1000;
+          existing.detail = `Spike to ${existing.maxDbm} RSSI (+${existing.maxDbm - floor} above ${floor} RSSI baseline, ${enterThr - existing.maxDbm} below EnterAt ${enterThr}) · ${existing.count} samples${durSec >= 0.2 ? ` over ${durSec.toFixed(1)} s` : ""}`;
+        } else {
+          this.signalFindings.unshift({
+            id: ++this.signalFindingSeq,
+            key,
+            firstMs: now,
+            lastMs: now,
+            timeLabel: fmtWallTimeMs(now),
+            tone: "badge-accent",
+            badge: "RF spike",
+            sourceLabel,
+            sourceColor: col,
+            channelIndex: i,
+            freqMHz: f,
+            maxDbm: v,
+            count: 1,
+            detail: `Spike to ${v} RSSI (+${v - floor} above ${floor} RSSI baseline, ${enterThr - v} below EnterAt ${enterThr}; below crossing threshold)`,
+          });
+        }
+      }
+    }
+
+    if (this.signalFindings.length === 0 && this.signalRing.points.length >= 15) {
+      const validFloors = (s.floor ?? []).slice(0, nCount).filter((fl) => fl > -127);
+      if (validFloors.length > 0) {
+        const minFl = Math.min(...validFloors);
+        const maxFl = Math.max(...validFloors);
+        this.signalFindings.unshift({
+          id: ++this.signalFindingSeq,
+          key: "rh-baseline",
+          firstMs: now,
+          lastMs: now,
+          timeLabel: fmtWallTimeMs(now),
+          tone: "badge-good",
+          badge: "Quiet",
+          sourceLabel: `${validFloors.length} active nodes`,
+          maxDbm: maxFl,
+          count: this.signalRing.points.length,
+          detail: `Baseline noise steady at ${minFl}…${maxFl} RSSI across active RX5808 nodes.`,
+        });
+      }
+    }
+
+    if (this.signalFindings.length > 100) {
+      this.signalFindings.length = 100;
+    }
+  }
+
   private recordSignalFindingFromSample(s: LiveSample): void {
     const now = Date.now();
     const freqs = this.status?.freqs ?? RACEBAND;
     for (let i = 0; i < 8; i++) {
       const f = freqs[i] ?? RACEBAND[i];
       const rb = racebandName(f) || `Ch${i + 1}`;
-      const col = CHANNEL_COLORS[i];
+      const col = channelColor(i);
       const pilot = this.pilots.find((p) => Math.abs(p.frequencyMHz - f) <= 2);
       const enterThr = pilot ? pilot.enterThreshold : -65;
       const pilotLabel = pilot?.callsign ? `${pilot.callsign} (${enterThr} dBm)` : `${enterThr} dBm`;
@@ -4421,15 +5929,117 @@ export class DebugView extends Component {
   }
 
   private renderNoiseTable(): void {
+    const slotEl = this.slot("noise-table");
+    if (this.isRotorHazardMode()) {
+      const snap = this.activeRhSnapshot();
+      const nCount = snap?.nodeCount === 4 ? 4 : 8;
+      const rhFreqs = new Array<number>(8).fill(0).map((_, i) => snap?.nodeFreqsMhz[i] ?? 0);
+      const perNodeEnter = new Array<number>(8).fill(90).map((_, i) => snap?.nodeEnterLevels[i] ?? 90);
+      const perNodeExit = new Array<number>(8).fill(70).map((_, i) => snap?.nodeExitLevels[i] ?? 70);
+      const nodeLabels = new Array<string>(8).fill("").map((_, i) => `N${i + 1}`);
+      const summary = this.signalRing.computeStats(
+        this.signalWindowSec,
+        rhFreqs,
+        [],
+        10,
+        this.signalEndN,
+        this.signalEndN !== null ? this.signalRefN : null,
+        {
+          perNodeEnter,
+          perNodeExit,
+          nodeLabels,
+          useMinAsFloor: true,
+        }
+      );
+      const anyChDisabled = this.signalEnabledCh.slice(0, nCount).some((on) => !on);
+
+      let findingsHost = slotEl.querySelector<HTMLElement>("[data-signal-findings-host]");
+      let noiseTbody = slotEl.querySelector<HTMLTableSectionElement>("[data-noise-tbody]");
+      if (!findingsHost || !noiseTbody || slotEl.dataset.noiseMode !== "rh") {
+        slotEl.dataset.noiseMode = "rh";
+        slotEl.innerHTML = `
+          <div class="debug-findings" data-signal-findings-host role="region" aria-label="Signal findings log"></div>
+          <div class="debug-subbox debug-noise-box">
+            <div class="debug-subbar">
+              <span class="debug-chart-title">Node noise &amp; threshold statistics</span>
+            </div>
+            <div class="debug-table-scroll table-scroll">
+              <table class="debug-runs debug-noise-table">
+                <thead>
+                  <tr>
+                    <th>Node / Freq</th>
+                    <th>Enter / Exit</th>
+                    <th>Mean</th>
+                    <th>Spread (SD)</th>
+                    <th>Max</th>
+                    <th>Floor (Min)</th>
+                    <th>Would trigger</th>
+                  </tr>
+                </thead>
+                <tbody data-noise-tbody></tbody>
+              </table>
+            </div>
+          </div>`;
+        findingsHost = slotEl.querySelector<HTMLElement>("[data-signal-findings-host]")!;
+        noiseTbody = slotEl.querySelector<HTMLTableSectionElement>("[data-noise-tbody]")!;
+      }
+
+      this.syncFindingsLogDom(
+        findingsHost,
+        this.signalFindings,
+        "clear-signal-findings",
+        "Waiting for ~10 Hz Socket.IO heartbeat samples. Node threshold crossings and RF spikes will be logged here with timestamps.",
+        anyChDisabled ? (e) => e.channelIndex !== undefined && Boolean(this.signalEnabledCh[e.channelIndex]) : undefined
+      );
+
+      const on = Boolean(snap?.connected);
+      const isLight = getAppTheme() === "light";
+      noiseTbody.innerHTML = summary.rows
+        .slice(0, nCount)
+        .map((r) => {
+          const col = channelColor(r.index);
+          const trigRisk = r.pctWouldTrigger > 0;
+          const chOn = this.signalEnabledCh[r.index];
+          const f = r.freqMHz;
+          const nodeLit = on && chOn && f > 0;
+          const dotGlow = isLight ? "0 0 0 1px rgba(15, 23, 42, 0.2)" : `0 0 6px ${col}`;
+          const band = f > 0 ? hardwareBandLabel(f) : "";
+          const freqStr = f > 0 ? `${band ? `${band} · ` : ""}${f} MHz` : "";
+          const hasMean = f > 0 && r.mean !== null;
+          const hasSd = f > 0 && r.sd !== null;
+          const hasMax = f > 0 && r.max !== null;
+          const hasFloor = f > 0 && r.floor !== null;
+          const hasSamples = f > 0 && r.samples > 0;
+          return `<tr class="${chOn ? "" : "is-muted"}">
+            <td class="mono"><span class="debug-ch-inline" style="${nodeLit ? `background:${col};box-shadow:${dotGlow}` : `background:transparent;box-shadow:inset 0 0 0 1.5px ${col};opacity:0.55`}"></span>${f > 0 ? `<strong>N${r.index + 1}</strong> · ${esc(freqStr)}` : `<span class="note">N${r.index + 1}</span>`}</td>
+            <td class="mono note">${f > 0 ? `${r.enterThreshold} / ${r.exitThreshold ?? 70} RSSI` : "—"}</td>
+            <td class="mono ${hasMean ? "" : "note"}">${hasMean ? `${r.mean!.toFixed(1)} RSSI` : "—"}</td>
+            <td class="mono ${hasSd ? (r.sd! > 8 ? "debug-tone-warn" : "") : "note"}">${hasSd ? `${r.sd!.toFixed(1)}` : "—"}</td>
+            <td class="mono ${hasMax ? "" : "note"}">${hasMax ? `${r.max} RSSI` : "—"}</td>
+            <td class="mono ${hasFloor ? "" : "note"}">${hasFloor ? `${r.floor} RSSI` : "—"}</td>
+            <td class="mono ${hasSamples && trigRisk ? "debug-tone-warn" : "note"}">${hasSamples ? `${r.pctWouldTrigger.toFixed(1)}% (${r.wouldTriggerPerSec.toFixed(1)}/s)` : "—"}</td>
+          </tr>`;
+        })
+        .join("");
+      return;
+    }
+
     const freqs = this.status?.freqs ?? RACEBAND;
     const sweepHz = this.status?.sweepHz ?? 50;
-    const summary = this.signalRing.computeStats(this.signalWindowSec, freqs, this.pilots, sweepHz, this.signalEndN);
+    const summary = this.signalRing.computeStats(
+      this.signalWindowSec,
+      freqs,
+      this.pilots,
+      sweepHz,
+      this.signalEndN,
+      this.signalEndN !== null ? this.signalRefN : null
+    );
     const anyChDisabled = this.signalEnabledCh.some((on) => !on);
-    const slotEl = this.slot("noise-table");
 
     let findingsHost = slotEl.querySelector<HTMLElement>("[data-signal-findings-host]");
     let noiseTbody = slotEl.querySelector<HTMLTableSectionElement>("[data-noise-tbody]");
-    if (!findingsHost || !noiseTbody) {
+    if (!findingsHost || !noiseTbody || slotEl.dataset.noiseMode !== "slaprf") {
+      slotEl.dataset.noiseMode = "slaprf";
       slotEl.innerHTML = `
         <div class="debug-findings" data-signal-findings-host role="region" aria-label="Signal findings log"></div>
         <div class="debug-subbox debug-noise-box">
@@ -4469,7 +6079,7 @@ export class DebugView extends Component {
 
     noiseTbody.innerHTML = summary.rows
       .map((r) => {
-        const col = CHANNEL_COLORS[r.index];
+        const col = channelColor(r.index);
         const trigRisk = r.pctWouldTrigger > 0;
         const chOn = this.signalEnabledCh[r.index];
         return `<tr class="${chOn ? "" : "is-muted"}">
@@ -4490,11 +6100,11 @@ export class DebugView extends Component {
   private renderScan(): void {
     const on = this.console.connected;
     const emg = Boolean(on && this.status?.emergencyMode);
-    const rfOn = (this.status?.rf.enabled ?? true) && !emg;
+    const rfOn = !emg;
     const hasScan = this.spectrumAcc.latest !== null;
-    const isFull5 = this.scanStartMHz === 5180 && this.scanStopMHz === 5917 && this.scanStepMHz === 5;
-    const isFast15 = this.scanStartMHz === 5180 && this.scanStopMHz === 5917 && this.scanStepMHz === 15;
-    const isRb5 = this.scanStartMHz === 5650 && this.scanStopMHz === 5925 && this.scanStepMHz === 5;
+    const isFull5 = this.scanStartMHz === 5180 && (this.scanStopMHz === 5945 || this.scanStopMHz === 5917) && this.scanStepMHz === 5;
+    const isFast15 = this.scanStartMHz === 5180 && (this.scanStopMHz === 5945 || this.scanStopMHz === 5917) && this.scanStepMHz === 15;
+    const isRb5 = (this.scanStartMHz === 5630 || this.scanStartMHz === 5650) && (this.scanStopMHz === 5945 || this.scanStopMHz === 5925) && this.scanStepMHz === 5;
     const bandLabel = isFast15 ? "Fast · 9 Hz" : isRb5 ? "Race · 8 Hz" : "Full · 3 Hz";
     const isFreqZoomed = this.scanZoomStartMHz !== null && this.scanZoomStopMHz !== null;
     const isScanYZoomed = this.scanYMin !== DBM_MIN || this.scanYMax !== DBM_MAX;
@@ -4502,7 +6112,8 @@ export class DebugView extends Component {
     const isWfRowsZoomed = this.spectrumAcc.visibleRows !== 80;
     const xScanShort = !isFreqZoomed
       ? "Auto X"
-      : Math.round(this.scanZoomStartMHz!) === 5650 && Math.round(this.scanZoomStopMHz!) === 5917
+      : (Math.round(this.scanZoomStartMHz!) === 5630 || Math.round(this.scanZoomStartMHz!) === 5650) &&
+          (Math.round(this.scanZoomStopMHz!) === 5945 || Math.round(this.scanZoomStopMHz!) === 5917)
         ? "X: Race"
         : Math.round(this.scanZoomStartMHz!) === 5180 && Math.round(this.scanZoomStopMHz!) === 5320
           ? "X: UNII1"
@@ -4577,8 +6188,8 @@ export class DebugView extends Component {
                         <span>Auto X</span><span class="note">Full scan</span>
                       </button>
                       <div class="debug-axis-menu-sep"></div>
-                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5650 && Math.round(this.scanZoomStopMHz!) === 5917 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5650" data-stop="5917" role="menuitem">
-                        <span>Raceband</span><span class="note">5650–5917 MHz</span>
+                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5630 && Math.round(this.scanZoomStopMHz!) === 5945 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5630" data-stop="5945" role="menuitem">
+                        <span>Raceband</span><span class="note">5630–5945 MHz</span>
                       </button>
                       <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5180 && Math.round(this.scanZoomStopMHz!) === 5320 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5180" data-stop="5320" role="menuitem">
                         <span>UNII-1</span><span class="note">5180–5320 MHz</span>
@@ -4612,7 +6223,7 @@ export class DebugView extends Component {
               }
             </div>
             <div class="debug-axis-pill ${isFull5 ? "is-armed" : "is-unarmed"}" data-axis-pill>
-              <button type="button" class="debug-axis-pill-main" data-action="${isFull5 ? "toggle-axis-menu" : "scan-preset"}" data-menu="scan-band" data-start="5180" data-stop="5917" data-step="5" title="${isFull5 ? `Band sweep preset (${this.scanStartMHz}–${this.scanStopMHz} MHz, ${this.scanStepMHz} MHz step) · click to choose a band sweep preset` : "Click to reset band sweep to Full · 3 Hz (5180–5917 MHz, 5 MHz step)"}">
+              <button type="button" class="debug-axis-pill-main" data-action="${isFull5 ? "toggle-axis-menu" : "scan-preset"}" data-menu="scan-band" data-start="5180" data-stop="5945" data-step="5" title="${isFull5 ? `Band sweep preset (${this.scanStartMHz}–${this.scanStopMHz} MHz, ${this.scanStepMHz} MHz step) · click to choose a band sweep preset` : "Click to reset band sweep to Full · 3 Hz (5180–5945 MHz, 5 MHz step)"}">
                 ${icons.sliders(13)}<span>${bandLabel}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-band" aria-expanded="${this.openAxisMenu === "scan-band"}" title="Choose band sweep preset">
@@ -4621,14 +6232,14 @@ export class DebugView extends Component {
               ${
                 this.openAxisMenu === "scan-band"
                   ? `<div class="debug-axis-menu" role="menu" aria-label="Band sweep range and speed">
-                      <button type="button" class="debug-axis-menu-item ${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="5" role="menuitem" title="Full 5.18–5.92 GHz band at 5 MHz step (148 points, ~3.1 passes/s)">
-                        <span>Full · 3 Hz</span><span class="note">5180–5917 · 5 MHz</span>
+                      <button type="button" class="debug-axis-menu-item ${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5945" data-step="5" role="menuitem" title="Full 5.18–5.95 GHz band at 5 MHz step (154 points, ~3.0 passes/s)">
+                        <span>Full · 3 Hz</span><span class="note">5180–5945 · 5 MHz</span>
                       </button>
-                      <button type="button" class="debug-axis-menu-item ${isFast15 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5917" data-step="15" role="menuitem" title="Full 5.18–5.92 GHz band at 15 MHz step (50 points, ~9 passes/s)">
-                        <span>Fast · 9 Hz</span><span class="note">5180–5917 · 15 MHz</span>
+                      <button type="button" class="debug-axis-menu-item ${isFast15 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5945" data-step="15" role="menuitem" title="Full 5.18–5.95 GHz band at 15 MHz step (52 points, ~9 passes/s)">
+                        <span>Fast · 9 Hz</span><span class="note">5180–5945 · 15 MHz</span>
                       </button>
-                      <button type="button" class="debug-axis-menu-item ${isRb5 ? "is-active" : ""}" data-action="scan-preset" data-start="5650" data-stop="5925" data-step="5" role="menuitem" title="Raceband R1–R8 + Wi-Fi UNII-3 at 5 MHz step (56 points, ~8 passes/s)">
-                        <span>Race · 8 Hz</span><span class="note">5650–5925 · 5 MHz</span>
+                      <button type="button" class="debug-axis-menu-item ${isRb5 ? "is-active" : ""}" data-action="scan-preset" data-start="5630" data-stop="5945" data-step="5" role="menuitem" title="Raceband R1–R8 + Wi-Fi UNII-3 at 5 MHz step (64 points, ~7.5 passes/s)">
+                        <span>Race · 8 Hz</span><span class="note">5630–5945 · 5 MHz</span>
                       </button>
                     </div>`
                   : ""
@@ -4684,8 +6295,8 @@ export class DebugView extends Component {
                         <span>Auto X</span><span class="note">Full scan</span>
                       </button>
                       <div class="debug-axis-menu-sep"></div>
-                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5650 && Math.round(this.scanZoomStopMHz!) === 5917 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5650" data-stop="5917" role="menuitem">
-                        <span>Raceband</span><span class="note">5650–5917 MHz</span>
+                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5630 && Math.round(this.scanZoomStopMHz!) === 5945 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5630" data-stop="5945" role="menuitem">
+                        <span>Raceband</span><span class="note">5630–5945 MHz</span>
                       </button>
                       <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5180 && Math.round(this.scanZoomStopMHz!) === 5320 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5180" data-stop="5320" role="menuitem">
                         <span>UNII-1</span><span class="note">5180–5320 MHz</span>
@@ -4770,6 +6381,16 @@ export class DebugView extends Component {
       } else {
         scanNote.textContent = "Paused";
       }
+    }
+
+    if (s) {
+      this.slot("scan")
+        .querySelectorAll<HTMLButtonElement>(
+          '[data-action="clear-hold"],[data-action="export-spectrum-csv"],[data-action="export-spectrum-png"],[data-action="export-scan-csv"],[data-action="export-waterfall-png"]'
+        )
+        .forEach((b) => {
+          if (b.disabled) b.disabled = false;
+        });
     }
 
     const el = this.el.querySelector<HTMLElement>("[data-scan-findings]");

@@ -1,0 +1,848 @@
+import { icons } from "../core/icons";
+import {
+  bindBracketDragAndDrop,
+  clampZoom,
+  createDefaultBracketEditorUiState,
+  formatShortSec,
+  formatStageLabel,
+  formatWirePillLabel,
+  getPresentStageIndices,
+  heatStateBadge,
+  isChaseHeatId,
+  isHandoffInRoundId,
+  isHandoffOutRoundId,
+  isHandoffPortalRound,
+  isHeatCompletedOrRunning,
+  isHeatUnstarted,
+  isPilotsInRoundId,
+  isRaceOngoing,
+  isRootStage,
+  ordinal,
+  raceLifecycleBadge,
+  renderBracketMarkup,
+  STAGE1_HANDOFF_OUT_ID,
+  STAGE1_PILOTS_IN_ID,
+  STAGE2_HANDOFF_IN_ID,
+  stageHandoffInId,
+  stageHandoffOutId,
+  stagePilotsInId,
+} from "../widgets/BracketDiagram";
+import {
+  CanvasSelectChangeDetail,
+  closeCanvasSelectPopover,
+  ensureCanvasSelectGlobalBinding,
+  renderCanvasSelect,
+} from "../widgets/CanvasSelect";
+import { openConfirmModal } from "../widgets/ConfirmModal";
+import { openConfirmPreemptModal } from "../widgets/ConfirmPreemptModal";
+import { DataSourceCard } from "../widgets/DataSourceCard";
+import {
+  formatStageConnectionLabel,
+  renderFormatMarkup,
+  suggestNewStageSpawnPosition,
+} from "../widgets/FormatDiagram";
+import { openHeatLapEditorModal } from "../widgets/HeatLapEditorModal";
+import {
+  mountTagPillEditor,
+  normalizeTagToken,
+  parseTagTokens,
+  renderTagPillBoxHtml,
+} from "../widgets/TagPillEditor";
+import { TimingRulesEditor } from "../widgets/TimingRulesEditor";
+import {
+  cleanConnectionInvalidReason,
+  notifyNewlyInvalidConnections,
+  notifyNewlyInvalidStageConnections,
+  showToast,
+} from "../widgets/Toast";
+import {
+  dismissWireDropMenu,
+  flashSpawnedCanvasNode,
+  openWireDropMenu,
+} from "../widgets/WireDropMenu";
+import {
+  describe,
+  expect,
+  flushMicrotasks,
+  fn,
+  it,
+  makeEventPilot,
+  makeFiltered,
+  makeGate,
+  makeHeat,
+  makeMockApiClient,
+  makeRaceState,
+  makeRound,
+  makeSeat,
+  makeStage,
+  makeStore,
+  mountHtml,
+} from "./harness";
+
+describe("widgets/ConfirmModal & ConfirmPreemptModal", () => {
+  it("renders neutral modal chrome (alertTriangle header + check confirm, never trash) and optional warningHtml", async () => {
+    let resolveConfirm!: () => void;
+    const onConfirm = fn(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveConfirm = resolve;
+        })
+    );
+
+    openConfirmModal({
+      title: "Delete Stage 2",
+      messageHtml: "Remove <strong>Stage 2</strong> and its heats?",
+      warningHtml: "All unconfirmed heats in Stage 2 will be discarded.",
+      confirmLabel: "Delete Stage",
+      danger: true,
+      onConfirm,
+    });
+
+    const backdrop = document.querySelector<HTMLElement>(".slaprf-modal-backdrop");
+    expect(backdrop).not.toBeNull();
+    expect(backdrop!.getAttribute("aria-label")).toBe("Delete Stage 2");
+
+    // Header icon uses alertTriangle (not trash), and confirm button uses check icon
+    const headIconHtml = backdrop!.querySelector(".slaprf-modal-icon")?.innerHTML ?? "";
+    expect(headIconHtml).toContain("m21.73 18-8-14");
+    expect(headIconHtml).not.toContain("M3 6h18"); // trash top bar path
+
+    const warnPane = backdrop!.querySelector<HTMLElement>(".slaprf-modal-warn");
+    expect(warnPane).not.toBeNull();
+    expect(warnPane!.textContent).toContain("All unconfirmed heats in Stage 2");
+
+    const confirmBtn = backdrop!.querySelector<HTMLButtonElement>("[data-modal-confirm]");
+    expect(confirmBtn).not.toBeNull();
+    expect(confirmBtn!.innerHTML).toContain("M20 6 9 17l-5-5"); // check icon path
+
+    // Clicking confirm disables button until async callback resolves, preventing double-submit
+    confirmBtn!.click();
+    confirmBtn!.click();
+    expect(onConfirm.calls).toHaveLength(1);
+    expect(confirmBtn!.disabled).toBe(true);
+    expect(document.querySelector(".slaprf-modal-backdrop")).not.toBeNull();
+
+    resolveConfirm();
+    await flushMicrotasks();
+    expect(document.querySelector(".slaprf-modal-backdrop")).toBeNull();
+  });
+
+  it("cancels ConfirmModal on Escape key or backdrop click without invoking onConfirm", () => {
+    const onConfirm = fn();
+    openConfirmModal({
+      title: "Scrap Race",
+      messageHtml: "Scrap this race?",
+      onConfirm,
+    });
+    expect(document.querySelector(".slaprf-modal-backdrop")).not.toBeNull();
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector(".slaprf-modal-backdrop")).toBeNull();
+    expect(onConfirm.calls).toHaveLength(0);
+
+    // Re-open and click backdrop directly
+    openConfirmModal({
+      title: "Scrap Race 2",
+      messageHtml: "Scrap again?",
+      onConfirm,
+    });
+    const backdrop = document.querySelector<HTMLElement>(".slaprf-modal-backdrop")!;
+    backdrop.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(document.querySelector(".slaprf-modal-backdrop")).toBeNull();
+    expect(onConfirm.calls).toHaveLength(0);
+  });
+
+  it("supports Enter to confirm and Escape / Cancel to dismiss ConfirmPreemptModal", () => {
+    const onConfirm = fn();
+    openConfirmPreemptModal({
+      title: "Pause Ongoing Race?",
+      bodyHtml: "Starting this practice session will pause <strong>Friday Night Brawl</strong>.",
+      okLabel: "Pause & Start Practice",
+      onConfirm,
+    });
+
+    const backdrop = document.querySelector<HTMLElement>(".slaprf-modal-backdrop");
+    expect(backdrop).not.toBeNull();
+    expect(backdrop!.textContent).toContain("Pause & Start Practice");
+
+    // Escape closes without confirming
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    expect(document.querySelector(".slaprf-modal-backdrop")).toBeNull();
+    expect(onConfirm.calls).toHaveLength(0);
+
+    // Re-open and press Enter -> confirms & closes
+    openConfirmPreemptModal({
+      title: "Pause Ongoing Race?",
+      bodyHtml: "Starting this practice session will pause race.",
+      onConfirm,
+    });
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(onConfirm.calls).toHaveLength(1);
+    expect(document.querySelector(".slaprf-modal-backdrop")).toBeNull();
+  });
+});
+
+describe("widgets/TagPillEditor", () => {
+  it("normalizes leading '#', collapses whitespace, caps length at 32 chars, and deduplicates case-insensitively", () => {
+    expect(normalizeTagToken("  ###Season   Finale  ")).toBe("Season Finale");
+    expect(normalizeTagToken("a".repeat(50))).toHaveLength(32);
+    expect(parseTagTokens(" #Outdoor , outdoor, 5-inch ,  #Whoop , 5-INCH ")).toEqual([
+      "Outdoor",
+      "5-inch",
+      "Whoop",
+    ]);
+  });
+
+  it("handles comma/Enter creation, two-step Backspace deletion, × removal, and Escape cancel", () => {
+    const onChange = fn<[string[]]>();
+    const onCommit = fn<[string[]]>();
+    const onCancel = fn();
+
+    const root = mountHtml(
+      renderTagPillBoxHtml({
+        boxId: "race-tags",
+        tags: ["Season 4"],
+        placeholder: "Add tags…",
+      })
+    );
+    const boxEl = root.querySelector<HTMLElement>("[data-tag-box='race-tags']")!;
+    const handle = mountTagPillEditor(boxEl, {
+      initialTags: ["Season 4"],
+      onChange,
+      onCommit,
+      onCancel,
+    });
+
+    const input = boxEl.querySelector<HTMLInputElement>("[data-tag-box-input]")!;
+    expect(handle.getTags()).toEqual(["Season 4"]);
+
+    // Type a tag followed by comma -> creates pill immediately
+    input.value = "#Finals,";
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(handle.getTags()).toEqual(["Season 4", "Finals"]);
+    expect(input.value).toBe("");
+
+    // ArrowLeft selects last pill (.is-selected), then Backspace deletes it
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+    expect(handle.getTags()).toEqual(["Season 4", "Finals"]);
+    expect(boxEl.querySelector("[data-tag-pill-idx='1']")?.classList.contains("is-selected")).toBe(true);
+
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true }));
+    expect(handle.getTags()).toEqual(["Season 4"]);
+
+    // Direct Backspace on empty input pops last pill immediately
+    expect(handle.addTag("Temp")).toBe(true);
+    expect(handle.getTags()).toEqual(["Season 4", "Temp"]);
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Backspace", bubbles: true }));
+    expect(handle.getTags()).toEqual(["Season 4"]);
+
+    // Add via programmatic handle + remove first pill via × button
+    expect(handle.addTag("Night Race")).toBe(true);
+    expect(handle.addTag("night race")).toBe(false); // case-insensitive dup rejected
+    boxEl.querySelector<HTMLButtonElement>("[data-tag-pill-remove='0']")!.click();
+    expect(handle.getTags()).toEqual(["Night Race"]);
+
+    // Pending text flushed & committed on Enter when input is empty or non-empty
+    input.value = "Championship";
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(handle.getTags()).toEqual(["Night Race", "Championship"]);
+    expect(input.value).toBe("");
+
+    // Pressing Enter again on empty input commits the tag list
+    input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    expect(onCommit.calls).toHaveLength(1);
+    expect(onCommit.calls[0][0]).toEqual(["Night Race", "Championship"]);
+  });
+});
+
+describe("widgets/CanvasSelect & WireDropMenu", () => {
+  it("opens CanvasSelect popover with search filter (>10 options) and emits canvas-select-change", () => {
+    ensureCanvasSelectGlobalBinding();
+    const options = Array.from({ length: 12 }, (_, idx) => ({
+      value: `opt-${idx + 1}`,
+      label: `Channel Option ${idx + 1}`,
+      group: idx < 6 ? "RaceBand" : "IMD6",
+    }));
+
+    const root = mountHtml(
+      renderCanvasSelect({
+        value: "opt-2",
+        label: "R2",
+        options,
+        mono: true,
+      })
+    );
+
+    const trigger = root.querySelector<HTMLButtonElement>("[data-cselect-trigger]")!;
+    let selectedVal = "";
+    root.addEventListener("canvas-select-change", (e) => {
+      selectedVal = (e as CustomEvent<CanvasSelectChangeDetail>).detail.value;
+    });
+
+    trigger.click();
+    const pop = document.querySelector<HTMLElement>("[data-cselect-popover]");
+    expect(pop).not.toBeNull();
+
+    // Search box is rendered when >10 options
+    const searchInput = pop!.querySelector<HTMLInputElement>("[data-cselect-search]")!;
+    expect(searchInput).not.toBeNull();
+    searchInput.value = "Option 11";
+    searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+
+    const visibleItems = pop!.querySelectorAll<HTMLButtonElement>("[data-cselect-option]");
+    expect(visibleItems).toHaveLength(1);
+    expect(visibleItems[0].dataset.cselectOption).toBe("opt-11");
+
+    visibleItems[0].click();
+    expect(selectedVal).toBe("opt-11");
+    expect(document.querySelector("[data-cselect-popover]")).toBeNull();
+    closeCanvasSelectPopover();
+  });
+
+  it("attaches contextual SVG tether in WireDropMenu, invokes onSelect, and cleans up on Escape", () => {
+    const root = mountHtml(`
+      <div data-rc-viewport style="position:relative;width:800px;height:500px">
+        <svg class="bkt-wires"></svg>
+        <button type="button" id="out-port"></button>
+      </div>
+    `);
+    const viewport = root.querySelector<HTMLElement>("[data-rc-viewport]")!;
+    const svg = root.querySelector<SVGSVGElement>("svg.bkt-wires")!;
+    const outPort = root.querySelector<HTMLElement>("#out-port")!;
+    const onSelect = fn<[string]>();
+
+    openWireDropMenu({
+      viewport,
+      svg,
+      outPort,
+      clientX: 300,
+      clientY: 220,
+      tetherPathD: "M 100 100 C 180 100, 220 220, 300 220",
+      options: [
+        { id: "winners_round", label: "Upper Round", iconHtml: icons.plus(14) },
+        { id: "finals", label: "Grand Finals", iconHtml: icons.trophy(14), disabled: true },
+      ],
+      onSelect,
+    });
+
+    expect(outPort.classList.contains("is-active")).toBe(true);
+    expect(svg.querySelector("path.is-context-tether")).not.toBeNull();
+    const menu = viewport.querySelector<HTMLElement>("[data-wire-drop-menu]");
+    expect(menu).not.toBeNull();
+
+    // Clicking disabled option does nothing
+    menu!.querySelector<HTMLButtonElement>("[data-wire-drop-opt='finals']")!.click();
+    expect(onSelect.calls).toHaveLength(0);
+    expect(viewport.querySelector("[data-wire-drop-menu]")).not.toBeNull();
+
+    // Clicking enabled option selects and removes tether + active class
+    menu!.querySelector<HTMLButtonElement>("[data-wire-drop-opt='winners_round']")!.click();
+    expect(onSelect.calls).toEqual([["winners_round"]]);
+    expect(viewport.querySelector("[data-wire-drop-menu]")).toBeNull();
+    expect(svg.querySelector("path.is-context-tether")).toBeNull();
+    expect(outPort.classList.contains("is-active")).toBe(false);
+
+    // Flash helper adds .rc-just-added
+    flashSpawnedCanvasNode(outPort);
+    expect(outPort.classList.contains("rc-just-added")).toBe(true);
+    dismissWireDropMenu();
+  });
+});
+
+describe("widgets/Toast & TimingRulesEditor", () => {
+  it("strips WASM/HTTP transport error prefixes, deduplicates identical toasts, and notifies newly invalid wires", () => {
+    expect(
+      cleanConnectionInvalidReason(
+        "Error: WASM POST /api/race/bracket-edit failed (400): Started round: cycle detected in stage graph"
+      )
+    ).toBe("Cycle detected in stage graph");
+    expect(cleanConnectionInvalidReason("HTTP 422: duplicate connection")).toBe(
+      "Duplicate connection"
+    );
+
+    showToast("WASM POST /api/test failed (400): seats full", "error", { title: "Invalid Link" });
+    showToast("WASM POST /api/test failed (400): seats full", "error", { title: "Invalid Link" });
+
+    const toasts = document.querySelectorAll<HTMLElement>(".slaprf-toast");
+    expect(toasts).toHaveLength(1);
+    expect(toasts[0].classList.contains("is-pulsing")).toBe(true);
+    expect(toasts[0].querySelector(".slaprf-toast-msg")?.textContent).toBe("Seats full");
+
+    // Newly invalid round & stage connections surface toasts only when newly broken or reason changes
+    const prevRoundConns = [
+      { id: "c1", stageIndex: 1, fromRoundId: "r1", toRoundId: "r2", mode: "top" as const, count: 2, invalid: true, invalidReason: "old reason" },
+    ];
+    const nextRace = makeRaceState({
+      connections: [
+        { id: "c1", stageIndex: 1, fromRoundId: "r1", toRoundId: "r2", mode: "top", count: 2, invalid: true, invalidReason: "old reason" },
+        { id: "c2", stageIndex: 1, fromRoundId: "r2", toRoundId: "r3", mode: "top", count: 2, invalid: true, invalidReason: "target seats exceeded" },
+      ],
+      stageConnections: [
+        { id: "sc1", fromStageId: "stage-1", toStageId: "stage-2", fromStageIndex: 1, toStageIndex: 2, mode: "top", count: 4, invalid: true, invalidReason: "stage capacity exceeded" },
+      ],
+    });
+
+    notifyNewlyInvalidConnections(prevRoundConns, nextRace);
+    notifyNewlyInvalidStageConnections([], nextRace);
+    const messages = Array.from(document.querySelectorAll(".slaprf-toast-msg")).map(
+      (el) => el.textContent
+    );
+    expect(messages).toContain("Target seats exceeded");
+    expect(messages).toContain("Stage capacity exceeded");
+  });
+
+  it("renders TimingRulesEditor live rejection counts with (i) info SVG icon and saves global + per-gate overrides", async () => {
+    const store = makeStore({
+      gates: [
+        makeGate(1, { name: "Start/Finish", ruleOverrides: { echoWindowSec: 4.5 } }),
+        makeGate(2, { name: "Split Tunnel" }),
+      ],
+      filtered: [
+        makeFiltered(1_000_000, 1, 1, "MIN_LAP"),
+        makeFiltered(2_000_000, 1, 2, "MIN_LAP"),
+        makeFiltered(3_000_000, 2, 1, "COOLDOWN"),
+      ],
+    });
+    const { api, calls } = makeMockApiClient(store);
+    const root = mountHtml(`<div id="rules-host"></div>`);
+    const editor = new TimingRulesEditor(root.querySelector("#rules-host")!, store, api);
+
+    try {
+      const minLapCountEl = root.querySelector<HTMLElement>("[data-count='MIN_LAP']")!;
+      expect(minLapCountEl.querySelector("svg")).not.toBeNull();
+      expect(minLapCountEl.textContent).toContain("2 min lap this session");
+
+      // Override note on global scope mentions Start/Finish 4.5 s
+      expect(root.textContent).toContain("Overridden at Start/Finish 4.5 s");
+
+      // Editing global minLapSec triggers api.updateRules
+      const minLapInput = root.querySelector<HTMLInputElement>("input[name='minLapSec']")!;
+      minLapInput.value = "6.5";
+      minLapInput.dispatchEvent(new Event("change", { bubbles: true }));
+      await flushMicrotasks();
+
+      const updateCall = calls.find((c) => c.method === "updateRules");
+      expect(updateCall).toBeDefined();
+      expect((updateCall!.args[0] as { minLapSec: number }).minLapSec).toBe(6.5);
+
+      // Switch scope to Gate 2 ("Split Tunnel") -> shows only Gate 2 COOLDOWN count ("1 cool-down here this session")
+      root.querySelector<HTMLButtonElement>("[data-scope='2']")!.click();
+      expect(root.querySelector("[data-count='MIN_LAP']")?.textContent).toBe("");
+      expect(root.querySelector("[data-count='COOLDOWN']")?.textContent).toContain(
+        "1 cool-down here this session"
+      );
+
+      // Toggle override on gateCooldownSec for Gate 2 -> calls setGateRules(2, { gateCooldownSec: 2 })
+      root.querySelector<HTMLButtonElement>("[data-override-toggle='gateCooldownSec']")!.click();
+      await flushMicrotasks();
+      const gateRuleCall = calls.find((c) => c.method === "setGateRules");
+      expect(gateRuleCall).toBeDefined();
+      expect(gateRuleCall!.args).toEqual([2, { gateCooldownSec: 2 }]);
+    } finally {
+      editor.destroy();
+    }
+  });
+});
+
+describe("widgets/BracketDiagram & FormatDiagram", () => {
+  it("computes status badges, emergency-stop ongoing guard, portal IDs, and connection pill labels accurately", () => {
+    expect(heatStateBadge("finished")).toEqual({ label: "Review", cls: "is-review" });
+    expect(heatStateBadge("paused")).toEqual({ label: "Paused", cls: "is-paused" });
+    expect(heatStateBadge("aborted")).toEqual({ label: "Stopped", cls: "is-stopped" });
+    expect(heatStateBadge("running", false)).toEqual({ label: "Racing", cls: "is-live" });
+    expect(heatStateBadge("running", true)).toEqual({ label: "Overtime", cls: "is-warn" });
+
+    expect(raceLifecycleBadge("draft")).toEqual({ label: "Setup", cls: "is-ready" });
+    expect(raceLifecycleBadge("active")).toEqual({ label: "Active", cls: "is-live" });
+    expect(raceLifecycleBadge("paused")).toEqual({ label: "Paused", cls: "is-paused" });
+
+    // Emergency-stopped race is NOT considered ongoing for preemption prompts
+    const activeRace = makeRaceState({ lifecycle: "active", emergencyStopped: false });
+    expect(isRaceOngoing(activeRace)).toBe(true);
+    expect(isRaceOngoing({ ...activeRace, emergencyStopped: true })).toBe(false);
+
+    expect(ordinal(1)).toBe("1st");
+    expect(ordinal(2)).toBe("2nd");
+    expect(ordinal(3)).toBe("3rd");
+    expect(ordinal(11)).toBe("11th");
+    expect(ordinal(22)).toBe("22nd");
+    expect(clampZoom(0.05)).toBe(0.22);
+    expect(clampZoom(4.5)).toBe(2);
+    expect(formatShortSec(0)).toBe("—");
+    expect(formatShortSec(12.345)).toBe("12.35s");
+    expect(formatStageLabel("points_mains")).toBe("Points / A-B-C Mains");
+    expect(isChaseHeatId("S2-CTA-3")).toBe(true);
+    expect(isHeatUnstarted("staged")).toBe(true);
+    expect(isHeatCompletedOrRunning({ state: "confirmed", note: "Auto-advance (bye)" })).toBe(false);
+    expect(isHeatCompletedOrRunning({ state: "confirmed" })).toBe(true);
+
+    expect(isHandoffOutRoundId(STAGE1_HANDOFF_OUT_ID)).toBe(true);
+    expect(isHandoffOutRoundId(stageHandoffOutId(3))).toBe(true);
+    expect(isHandoffInRoundId(STAGE2_HANDOFF_IN_ID)).toBe(true);
+    expect(isHandoffInRoundId(stageHandoffInId(3))).toBe(true);
+    expect(isPilotsInRoundId(STAGE1_PILOTS_IN_ID)).toBe(true);
+    expect(isPilotsInRoundId(stagePilotsInId(2))).toBe(true);
+    expect(isHandoffPortalRound("stage2-seeds-in")).toBe(true);
+
+    expect(
+      formatWirePillLabel({
+        id: "w1",
+        stageIndex: 1,
+        fromRoundId: STAGE1_PILOTS_IN_ID,
+        toRoundId: "r-1",
+        mode: "pilots_in",
+        count: 0,
+        distribution: "snake",
+      })
+    ).toBe("Pilots Roster · Snake");
+
+    expect(
+      formatStageConnectionLabel(
+        {
+          id: "sc-1",
+          fromStageId: "stage-1",
+          toStageId: "stage-2",
+          fromStageIndex: 1,
+          toStageIndex: 2,
+          mode: "seed_range",
+          count: 4,
+          seedStart: 5,
+          seedEnd: 8,
+        },
+        16
+      )
+    ).toContain("5");
+  });
+
+  it("places channel-change indicator (.bkt-ch-delta) AFTER .bkt-name so pilot colored dots stay aligned", () => {
+    const race = makeRaceState({
+      lifecycle: "active",
+      rounds: [makeRound("r-1", { stageIndex: 1, title: "Round 1" })],
+      heats: [
+        makeHeat("W1-H1", {
+          roundId: "r-1",
+          stageIndex: 1,
+          seats: [
+            makeSeat(0, 1, { callsign: "Maverick", channelChanged: true }),
+            makeSeat(1, 2, { callsign: "Iceman", channelChanged: false }),
+          ],
+        }),
+      ],
+    });
+    const ui = createDefaultBracketEditorUiState(() => {});
+    const root = mountHtml(
+      `<div data-rc-viewport>${renderBracketMarkup(race, {
+        activeHeatId: "W1-H1",
+        stageFilter: 1,
+        editable: true,
+        canvas: true,
+        editorUi: ui,
+      })}</div>`
+    );
+
+    const seats = root.querySelectorAll<HTMLElement>(".bkt-card .bkt-seat");
+    expect(seats.length).toBeGreaterThanOrEqual(2);
+
+    const changedSeat = seats[0];
+    const seatChildren = Array.from(changedSeat.children);
+    const dotIdx = seatChildren.findIndex((el) => el.classList.contains("dot"));
+    const nameWrapIdx = seatChildren.findIndex((el) => el.classList.contains("bkt-name-wrap"));
+    expect(dotIdx).toBeGreaterThanOrEqual(0);
+    expect(nameWrapIdx).toBe(dotIdx + 1);
+    // Ensure no channel-change badge appears before .dot
+    expect(
+      seatChildren
+        .slice(0, dotIdx + 1)
+        .some((el) => el.classList.contains("bkt-ch-delta") || el.classList.contains("bkt-ch-warn"))
+    ).toBe(false);
+
+    const nameWrap = changedSeat.querySelector<HTMLElement>(".bkt-name-wrap")!;
+    expect(nameWrap).not.toBeNull();
+    const children = Array.from(nameWrap.children);
+    expect(children[0]?.classList.contains("bkt-name")).toBe(true);
+    expect(children[1]?.classList.contains("bkt-ch-delta")).toBe(true);
+    expect(children[1]?.querySelector("svg")).not.toBeNull();
+  });
+
+  it("exposes Simulation speed (1x / 5x / 20x) inside DataSourceCard when simulation is active", () => {
+    const store = makeStore({ simulatorRunning: true });
+    const { api, calls } = makeMockApiClient(store);
+    const root = mountHtml(`<div id="ds-host"></div>`);
+    const card = new DataSourceCard(root.querySelector("#ds-host")!, store, api);
+
+    try {
+      const speedBtns = root.querySelectorAll<HTMLButtonElement>("[data-sim-speed]");
+      expect(speedBtns).toHaveLength(3);
+      root.querySelector<HTMLButtonElement>("[data-sim-speed='20']")!.click();
+      expect(calls.some((c) => c.method === "setSimSpeed" && c.args[0] === 20)).toBe(true);
+    } finally {
+      card.destroy();
+    }
+  });
+
+  it("locks panels and nodes in place while still allowing canvas panning and wheel zoom when locked", () => {
+    const race = makeRaceState({
+      lifecycle: "draft",
+      rounds: [makeRound("r-1", { stageIndex: 1 })],
+      heats: [makeHeat("W1-H1", { roundId: "r-1", stageIndex: 1 })],
+    });
+    const store = makeStore({ raceState: race });
+    const { api } = makeMockApiClient(store);
+    const ui = createDefaultBracketEditorUiState(() => {});
+    const onContextAdd = fn<[number, number, number, number, boolean]>();
+    const onPanelMoved = fn<[string, number, number]>();
+    ui.onBoardContextAddMenu = onContextAdd;
+    ui.onPanelMoved = onPanelMoved;
+    ui.nodesLocked = true;
+    ui.panX = 0;
+    ui.panY = 0;
+    ui.zoom = 1;
+
+    const root = mountHtml(
+      `<div class="races-canvas tool-pan is-nodes-locked" data-rc-viewport style="width:900px;height:600px">
+        <div data-rc-world>
+          <section class="rc-canvas-panel" data-canvas-panel="cockpit" data-pos-x="40" data-pos-y="50">
+            <header class="rc-panel-header" data-panel-drag-handle>Race Control</header>
+          </section>
+          ${renderBracketMarkup(race, {
+            activeHeatId: "W1-H1",
+            stageFilter: 1,
+            editable: true,
+            canvas: true,
+            editorUi: ui,
+          })}
+        </div>
+      </div>`
+    );
+    const unbind = bindBracketDragAndDrop(root, api, () => race, ui);
+
+    try {
+      const viewport = root.querySelector<HTMLElement>("[data-rc-viewport]")!;
+      const panelHandle = root.querySelector<HTMLElement>("[data-panel-drag-handle]")!;
+
+      // 1. While locked: dragging a panel header does NOT move the panel
+      panelHandle.dispatchEvent(
+        new PointerEvent("pointerdown", { button: 0, pointerId: 1, clientX: 80, clientY: 60, bubbles: true, cancelable: true })
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { pointerId: 1, clientX: 160, clientY: 120, bubbles: true })
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { pointerId: 1, clientX: 160, clientY: 120, bubbles: true })
+      );
+      expect(onPanelMoved.calls).toHaveLength(0);
+
+      // 2. While locked: dragging empty canvas background DOES pan the canvas!
+      viewport.dispatchEvent(
+        new PointerEvent("pointerdown", { button: 0, pointerId: 2, clientX: 400, clientY: 350, bubbles: true, cancelable: true })
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { pointerId: 2, clientX: 465, clientY: 395, bubbles: true })
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { pointerId: 2, clientX: 465, clientY: 395, bubbles: true })
+      );
+      expect(ui.panX).toBe(65);
+      expect(ui.panY).toBe(45);
+
+      // 3. While locked: wheel zoom works, while right-click context add menu stays suppressed
+      viewport.dispatchEvent(
+        new WheelEvent("wheel", { deltaY: -120, clientX: 250, clientY: 200, bubbles: true, cancelable: true })
+      );
+      expect(ui.zoom).toBeGreaterThan(1);
+
+      viewport.dispatchEvent(
+        new MouseEvent("contextmenu", { clientX: 300, clientY: 220, bubbles: true, cancelable: true })
+      );
+      expect(onContextAdd.calls).toHaveLength(0);
+
+      // 4. Unlock panels/nodes -> panel dragging and right-click context add menu now work
+      ui.nodesLocked = false;
+      panelHandle.dispatchEvent(
+        new PointerEvent("pointerdown", { button: 0, pointerId: 3, clientX: 80, clientY: 60, bubbles: true, cancelable: true })
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { pointerId: 3, clientX: 140, clientY: 110, bubbles: true })
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { pointerId: 3, clientX: 140, clientY: 110, bubbles: true })
+      );
+      expect(onPanelMoved.calls).toHaveLength(1);
+      expect(onPanelMoved.calls[0]?.[0]).toBe("cockpit");
+
+      viewport.dispatchEvent(
+        new MouseEvent("contextmenu", { clientX: 300, clientY: 220, bubbles: true, cancelable: true })
+      );
+      expect(onContextAdd.calls).toHaveLength(1);
+    } finally {
+      unbind();
+    }
+  });
+
+  it("renders multi-stage FormatDiagram cards, root-stage detection, and spawn coordinate suggestions", () => {
+    const race = makeRaceState({
+      lifecycle: "draft",
+      roster: [1, 2, 3, 4, 5, 6, 7, 8].map((i) => makeEventPilot(i)),
+      stages: [
+        makeStage(1, { id: "stage-1", title: "Qualifier", format: "qualifying", status: "active" }),
+        makeStage(2, { id: "stage-2", title: "Championship Finals", format: "double_elimination", status: "pending" }),
+      ],
+      stageConnections: [
+        {
+          id: "sc-1",
+          fromStageId: "stage-1",
+          toStageId: "stage-2",
+          fromStageIndex: 1,
+          toStageIndex: 2,
+          mode: "top",
+          count: 8,
+        },
+      ],
+    });
+    expect(isRootStage(race, 1)).toBe(true);
+    expect(isRootStage(race, 2)).toBe(false);
+    expect(getPresentStageIndices(race)).toEqual([1, 2]);
+
+    const ui = createDefaultBracketEditorUiState(() => {});
+    const spawn = suggestNewStageSpawnPosition(race, ui);
+    expect(spawn.x).toBeGreaterThan(500);
+
+    const html = renderFormatMarkup(race, { editable: true, editorUi: ui });
+    const root = mountHtml(html);
+    const stageCards = root.querySelectorAll("[data-stage-node]");
+    expect(stageCards).toHaveLength(2);
+    expect(root.textContent).toContain("Qualifier");
+    expect(root.textContent).toContain("Championship Finals");
+  });
+
+  it("preserves .lap-ed-table-wrap scrollTop across crossing edits and avoids rebuilding table DOM on live RSSI ticks", () => {
+    const startToneUs = 1_000_000;
+    const baseCrossings = Array.from({ length: 12 }, (_, idx) => ({
+      crossingId: 100 + idx,
+      timestampUs: startToneUs + (idx + 1) * 8_000_000,
+      peakRssiDbm: -46 - idx,
+      invalidated: false,
+      manual: idx === 11,
+    }));
+    const buildRace = (opts: { invThird?: boolean; traceSamples?: number }) => {
+      const crossings = baseCrossings.map((c, idx) =>
+        idx === 2 && opts.invThird ? { ...c, invalidated: true } : c
+      );
+      const rssiTrace = Array.from({ length: opts.traceSamples ?? 4 }, (_, i) => ({
+        t: i * 1000,
+        r: -65 + (i % 5),
+      }));
+      const heat = makeHeat("Q1-H1", {
+        id: "Q1-H1",
+        title: "Qualifying Heat 1",
+        state: "running",
+        targetLaps: 6,
+        startMode: "heads_up",
+        startToneUs,
+        elapsedSec: (opts.traceSamples ?? 4) * 1.0,
+        seats: [
+          makeSeat(0, 1, {
+            callsign: "ALPHA",
+            lapsCompleted: opts.invThird ? 6 : 7,
+            totalTimeSec: 56.0,
+            bestLapSec: 8.0,
+            holeshotSec: 8.0,
+            crossings,
+            rssiTrace,
+          }),
+          makeSeat(1, 2, {
+            callsign: "BRAVO",
+            lapsCompleted: 2,
+            totalTimeSec: 18.5,
+            bestLapSec: 8.5,
+            holeshotSec: 1.5,
+            crossings: baseCrossings.slice(0, 3),
+          }),
+        ],
+      });
+      return makeRaceState({
+        raceId: "race-scroll",
+        lifecycle: "active",
+        generated: true,
+        activeHeatId: "Q1-H1",
+        heats: [heat],
+      });
+    };
+
+    const r0 = buildRace({ invThird: false, traceSamples: 4 });
+    const store = makeStore({
+      nodes: [makeGate(1, { role: "START_FINISH" })],
+      raceState: r0,
+      eventState: { initialized: true, activeRaceId: "race-scroll", races: [r0] },
+    });
+    const { api } = makeMockApiClient(store);
+
+    openHeatLapEditorModal(store, api, "Q1-H1", 1, "race-scroll");
+    try {
+      const backdrop = document.querySelector<HTMLElement>(".slaprf-modal-backdrop")!;
+      expect(backdrop).not.toBeNull();
+      const firstTableWrap = backdrop.querySelector<HTMLElement>(".lap-ed-table-wrap")!;
+      expect(firstTableWrap).not.toBeNull();
+      firstTableWrap.scrollTop = 94;
+      const targetScroll = firstTableWrap.scrollTop;
+      expect(targetScroll).toBeGreaterThan(40);
+
+      // 1. Live RSSI sample arrives (without crossing/table changes):
+      // table DOM node is NOT replaced at all and scrollTop stays at targetScroll!
+      const rTrace = buildRace({ invThird: false, traceSamples: 9 });
+      store.hydrate({
+        serverTimestampUs: store.serverTimestampUs + 200_000,
+        timingHardwareMode: store.timingHardwareMode,
+        pilots: store.pilots,
+        gates: store.nodes,
+        timers: store.timers,
+        laps: store.laps,
+        crossings: store.crossings,
+        filtered: store.filtered,
+        summaries: store.summaries,
+        rules: store.rules,
+        simulatorRunning: store.simulatorRunning,
+        raceArmed: store.raceArmed,
+        liveTimeStatus: store.liveTimeStatus,
+        raceState: rTrace,
+        eventState: { initialized: true, activeRaceId: "race-scroll", races: [rTrace] },
+        practiceState: store.practiceState,
+      });
+      const afterTraceWrap = backdrop.querySelector<HTMLElement>(".lap-ed-table-wrap")!;
+      expect(afterTraceWrap).toBe(firstTableWrap);
+      expect(afterTraceWrap.scrollTop).toBe(targetScroll);
+
+      // 2. Crossing edit arrives (tableSig changes -> full modal re-render):
+      // scrollTop is preserved at targetScroll!
+      const rEdited = buildRace({ invThird: true, traceSamples: 9 });
+      store.hydrate({
+        serverTimestampUs: store.serverTimestampUs + 400_000,
+        timingHardwareMode: store.timingHardwareMode,
+        pilots: store.pilots,
+        gates: store.nodes,
+        timers: store.timers,
+        laps: store.laps,
+        crossings: store.crossings,
+        filtered: store.filtered,
+        summaries: store.summaries,
+        rules: store.rules,
+        simulatorRunning: store.simulatorRunning,
+        raceArmed: store.raceArmed,
+        liveTimeStatus: store.liveTimeStatus,
+        raceState: rEdited,
+        eventState: { initialized: true, activeRaceId: "race-scroll", races: [rEdited] },
+        practiceState: store.practiceState,
+      });
+      const afterEditWrap = backdrop.querySelector<HTMLElement>(".lap-ed-table-wrap")!;
+      expect(afterEditWrap.scrollTop).toBe(targetScroll);
+      expect(afterEditWrap.querySelectorAll("tr.is-invalid-row")).toHaveLength(1);
+
+      // 3. Switching to another pilot tab resets scrollTop to 0 cleanly
+      backdrop.querySelector<HTMLButtonElement>("[data-lap-ed-pilot='2']")!.click();
+      const switchedWrap = backdrop.querySelector<HTMLElement>(".lap-ed-table-wrap")!;
+      expect(switchedWrap.scrollTop).toBe(0);
+    } finally {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    }
+  });
+});

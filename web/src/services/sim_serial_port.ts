@@ -2,7 +2,8 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { AppStore } from "../state/store";
 import { DetectedTimer, SimTimerState } from "../types/models";
-import { LATEST_FIRMWARE_VERSION } from "./esp_flasher";
+import { capabilitiesSnapshot, resolveBackendUrl } from "./capabilities";
+import { LATEST_FIRMWARE_VERSION, parseSlaprfConfigBlock } from "./esp_flasher";
 import type { SerialPortLike, TimerPeerSpoke, TimerStatus } from "./timer_console";
 
 const RACEBAND_DEFAULT = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
@@ -34,16 +35,26 @@ interface SimTimerFirmwareState {
   lastSamplePerfMs: number;
 }
 
+type SimStoreWindow = Window & {
+  __slaprfSimSerialStore?: AppStore;
+  __slaprfOpenSimPorts?: Set<SimulatedSerialPort>;
+  __slaprfSimTimerAction?: ((payload: SimBoardMutationPayload) => Promise<void>) | null;
+};
+
 let boundStore: AppStore | null = null;
 const fwStateByTimerId = new Map<number, SimTimerFirmwareState>();
 let activeIdentifyFp: string | null = null;
-const openSimPorts = new Set<SimulatedSerialPort>();
+const openSimPorts: Set<SimulatedSerialPort> = (() => {
+  if (typeof window !== "undefined") {
+    const w = window as SimStoreWindow;
+    if (!w.__slaprfOpenSimPorts) {
+      w.__slaprfOpenSimPorts = new Set<SimulatedSerialPort>();
+    }
+    return w.__slaprfOpenSimPorts;
+  }
+  return new Set<SimulatedSerialPort>();
+})();
 let activePickerCancel: (() => void) | null = null;
-
-type SimStoreWindow = Window & {
-  __slaprfSimSerialStore?: AppStore;
-  __slaprfHMR?: { store?: AppStore };
-};
 
 function getBoundStore(): AppStore | null {
   if (boundStore) return boundStore;
@@ -51,10 +62,6 @@ function getBoundStore(): AppStore | null {
     const w = window as SimStoreWindow;
     if (w.__slaprfSimSerialStore) {
       boundStore = w.__slaprfSimSerialStore;
-      return boundStore;
-    }
-    if (w.__slaprfHMR?.store) {
-      boundStore = w.__slaprfHMR.store;
       return boundStore;
     }
   }
@@ -65,6 +72,38 @@ export function bindSimSerialStore(store: AppStore): void {
   boundStore = store;
   if (typeof window !== "undefined") {
     (window as SimStoreWindow).__slaprfSimSerialStore = store;
+  }
+}
+
+export interface SimBoardMutationPayload {
+  action: "erase" | "flash";
+  timerId: number;
+  role?: "hub" | "spoke";
+  label?: string;
+  fingerprint?: string;
+  firmwareVersion?: string;
+}
+
+let simTimerActionHandler: ((payload: SimBoardMutationPayload) => Promise<void>) | null = null;
+
+function getSimTimerActionHandler(): ((payload: SimBoardMutationPayload) => Promise<void>) | null {
+  if (simTimerActionHandler) return simTimerActionHandler;
+  if (typeof window !== "undefined") {
+    const w = window as SimStoreWindow;
+    if (w.__slaprfSimTimerAction) {
+      simTimerActionHandler = w.__slaprfSimTimerAction;
+      return simTimerActionHandler;
+    }
+  }
+  return null;
+}
+
+export function bindSimTimerActionHandler(
+  handler: (payload: SimBoardMutationPayload) => Promise<void>
+): void {
+  simTimerActionHandler = handler;
+  if (typeof window !== "undefined") {
+    (window as SimStoreWindow).__slaprfSimTimerAction = handler;
   }
 }
 
@@ -100,6 +139,95 @@ function macForTimer(timerId: number): string {
   return `48:CA:43:51:00:${b}`;
 }
 
+export interface BackendSerialPortHandle extends SerialPortLike {
+  readonly isBackendPort: true;
+  readonly portName: string;
+  readonly description?: string;
+}
+
+export function isBackendSerialPort(port: unknown): port is BackendSerialPortHandle {
+  return Boolean(
+    port &&
+      typeof port === "object" &&
+      (port as { isBackendPort?: boolean }).isBackendPort === true &&
+      typeof (port as { portName?: unknown }).portName === "string"
+  );
+}
+
+export function createBackendPortHandle(portName: string, description?: string): BackendSerialPortHandle {
+  return {
+    isBackendPort: true,
+    portName,
+    description,
+    readable: null,
+    writable: null,
+    open: async () => undefined,
+    close: async () => undefined,
+    setSignals: async () => undefined,
+    getInfo: () => ({ usbVendorId: 0x303a, usbProductId: 0x1001 }),
+  };
+}
+
+function ensureBackendSimUsbWs(): void {
+  // Both Native Go Backend Mode and WASM Demo Mode decode 50 Hz simulated Hub sweeps directly
+  // inside Go (`ingestRawHubStream`), avoiding continuous raw serial byte streaming on the UI thread.
+}
+
+function ensureSimHubUsbHookInstalled(): void {
+  // Handled directly inside Go via `notifySimHubUsbConnected`.
+}
+
+function syncDiagStateToWasm(
+  timerId: number,
+  rfEnabled: boolean,
+  emergencyMode: boolean,
+  scanLive: boolean,
+  chanMask: number
+): void {
+  if (window.slaprfWasm?.setSimTimerDiagState) {
+    window.slaprfWasm.setSimTimerDiagState(timerId, rfEnabled, emergencyMode, scanLive, chanMask);
+    return;
+  }
+  if (capabilitiesSnapshot().portable) {
+    void fetch(resolveBackendUrl("/api/sim/timer-diag"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ timerId, rfEnabled, emergencyMode, scanLive, chanMask }),
+    }).catch(() => undefined);
+  }
+}
+
+export async function notifySimHubUsbConnected(connected: boolean): Promise<void> {
+  if (window.slaprfWasm) {
+    window.slaprfWasm.setSimHubUsbConnected?.(connected);
+    return;
+  }
+  if (!capabilitiesSnapshot().portable) return;
+  await fetch(resolveBackendUrl("/api/sim/hub-usb"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ connected }),
+  }).catch(() => undefined);
+}
+
+function flushSimHubHellosToPort(port: SimulatedSerialPort): void {
+  const hellos = window.slaprfWasm?.flushSimHubHellos?.();
+  if (hellos && hellos.byteLength > 0) {
+    port.emitHubStreamBytes(hellos);
+    return;
+  }
+  if (capabilitiesSnapshot().portable && !window.slaprfWasm) {
+    void fetch(resolveBackendUrl("/api/sim/usb-hellos"), { method: "POST" })
+      .then((r) => (r.ok ? r.arrayBuffer() : null))
+      .then((buf) => {
+        if (buf && buf.byteLength > 0) {
+          port.emitHubStreamBytes(new Uint8Array(buf));
+        }
+      })
+      .catch(() => undefined);
+  }
+}
+
 function getOrCreateFwState(timerId: number): SimTimerFirmwareState {
   let st = fwStateByTimerId.get(timerId);
   if (!st) {
@@ -131,6 +259,7 @@ export interface SimTimerDescriptor {
   label: string;
   color: string;
   isHub: boolean;
+  unflashed: boolean;
   slot: number;
   firmwareVersion: string;
   fingerprint: string;
@@ -142,26 +271,28 @@ export interface SimTimerDescriptor {
 
 export function listSimulatedTimers(): SimTimerDescriptor[] {
   const store = getBoundStore();
-  if (!store) return [];
+  if (!store || store.timingHardwareMode !== "slaprf") return [];
   const simTimers: SimTimerState[] = store.simState?.timers ?? [];
   const detected: DetectedTimer[] = store.detectedTimers ?? [];
 
   if (simTimers.length > 0) {
     return simTimers.map((t) => {
-      const label = t.timerLabel?.trim() || (t.isHub ? "H1" : `T${Math.max(1, t.timerId - 1)}`);
+      const unflashed = Boolean(t.unflashed);
+      const label = unflashed ? "" : t.timerLabel?.trim() || (t.isHub ? "H1" : `T${Math.max(1, t.timerId - 1)}`);
       const det = detected.find((d) => d.timerId === t.timerId);
-      const fp = (t.fingerprint || det?.fingerprint || `53494D0${t.timerId}`).toUpperCase();
+      const fp = unflashed ? "" : (t.fingerprint || det?.fingerprint || `53494D0${t.timerId}`).toUpperCase();
       return {
         timerId: t.timerId,
         label,
         color: t.color || det?.color || "#d4ff3a",
-        isHub: t.isHub,
-        slot: t.isHub ? 1 : Math.max(2, t.timerId),
-        firmwareVersion: t.firmwareVersion || det?.firmwareVersion || LATEST_FIRMWARE_VERSION,
+        isHub: !unflashed && t.isHub,
+        unflashed,
+        slot: !unflashed && t.isHub ? 1 : Math.max(2, t.timerId),
+        firmwareVersion: unflashed ? "" : t.firmwareVersion || det?.firmwareVersion || LATEST_FIRMWARE_VERSION,
         fingerprint: fp,
         poweredOn: t.poweredOn,
-        online: t.online && t.poweredOn,
-        assignedGateName: t.assignedGateName || "",
+        online: !unflashed && t.online && t.poweredOn,
+        assignedGateName: unflashed ? "" : t.assignedGateName || "",
         noiseFloorDbm: t.noiseFloorDbm || det?.noiseFloorDbm || -92,
       };
     });
@@ -178,10 +309,11 @@ export function listSimulatedTimers(): SimTimerDescriptor[] {
       label,
       color: d.color || "#d4ff3a",
       isHub: d.isHub,
+      unflashed: false,
       slot: d.isHub ? 1 : Math.max(2, d.timerId),
       firmwareVersion: d.firmwareVersion || LATEST_FIRMWARE_VERSION,
       fingerprint: (d.fingerprint || `53494D0${d.timerId}`).toUpperCase(),
-      poweredOn: d.online,
+      poweredOn: true,
       online: d.online,
       assignedGateName,
       noiseFloorDbm: d.noiseFloorDbm || -92,
@@ -190,11 +322,7 @@ export function listSimulatedTimers(): SimTimerDescriptor[] {
 }
 
 function savedFrequenciesMHz(): number[] {
-  const pilots = getBoundStore()?.pilots ?? [];
-  return RACEBAND_DEFAULT.map((def, i) => {
-    const f = pilots[i]?.frequencyMhz ?? def;
-    return f >= 5180 && f <= 5917 ? f : def;
-  });
+  return RACEBAND_DEFAULT.slice();
 }
 
 function buildConfigBlockBytes(desc: SimTimerDescriptor, freqs: number[]): Uint8Array {
@@ -242,14 +370,24 @@ function sampleTimerChannelDbm(
   }
 
   let rawRssi: number[] | undefined;
-  if (store) {
-    const node = store.nodes.find((n) => (n.assignedTimerId ?? n.gateId) === desc.timerId);
-    if (node) {
-      const hist = store.historyFor(node.gateId);
-      if (hist.length > 0) {
-        rawRssi = hist[hist.length - 1].rssi;
-      } else if (Array.isArray(node.lastRssi) && node.lastRssi.length >= 8) {
-        rawRssi = node.lastRssi;
+  const liveWasmRssi = window.slaprfWasm?.getSimTimerRssi?.(desc.timerId);
+  if (Array.isArray(liveWasmRssi) && liveWasmRssi.some((v) => v < 0)) {
+    rawRssi = liveWasmRssi;
+  }
+  if (!rawRssi && store) {
+    const simTimer = store.simState?.timers?.find((t) => t.timerId === desc.timerId);
+    if (simTimer && Array.isArray(simTimer.lastRssi) && simTimer.lastRssi.some((v) => v < 0)) {
+      rawRssi = simTimer.lastRssi;
+    }
+    if (!rawRssi) {
+      const node = store.nodes.find((n) => (n.assignedTimerId ?? n.gateId) === desc.timerId);
+      if (node) {
+        const hist = store.historyFor(node.gateId);
+        if (hist.length > 0) {
+          rawRssi = hist[hist.length - 1].rssi;
+        } else if (Array.isArray(node.lastRssi) && node.lastRssi.length >= 8) {
+          rawRssi = node.lastRssi;
+        }
       }
     }
     if (!rawRssi) {
@@ -260,14 +398,20 @@ function sampleTimerChannelDbm(
         // Off-track collector Hub sits near the Start/Finish table: derive from Start node with slight attenuation
         const startNode = store.nodes[0];
         const hist = store.historyFor(startNode.gateId);
-        if (hist.length > 0) {
-          rawRssi = hist[hist.length - 1].rssi.map((v) => Math.max(baseFloor, v - 3.5 + (Math.random() - 0.5) * 1.6));
+        const srcRssi =
+          hist.length > 0
+            ? hist[hist.length - 1].rssi
+            : Array.isArray(startNode.lastRssi) && startNode.lastRssi.some((v) => v < 0)
+              ? startNode.lastRssi
+              : undefined;
+        if (srcRssi) {
+          rawRssi = srcRssi.map((v) => Math.max(baseFloor, v - 3.5 + (Math.random() - 0.5) * 1.6));
         }
       }
     }
   }
 
-  const savedFreqs = savedFrequenciesMHz();
+  const pilots = store?.pilots ?? [];
   const dbm: number[] = [];
   for (let i = 0; i < 8; i++) {
     const chEnabled = ((st.chanMask >> i) & 1) !== 0;
@@ -276,10 +420,12 @@ function sampleTimerChannelDbm(
       continue;
     }
     const wantFreq = freqs[i] ?? RACEBAND_DEFAULT[i];
-    const matchIdx = savedFreqs.findIndex((sf) => Math.abs(sf - wantFreq) <= 8);
+    const matchIdx = pilots.findIndex(
+      (p) => p.enabled && p.frequencyMhz > 0 && Math.abs(p.frequencyMhz - wantFreq) <= 8
+    );
     let val: number;
     if (rawRssi && matchIdx >= 0 && matchIdx < rawRssi.length && rawRssi[matchIdx] < 0) {
-      const detLoss = Math.abs(savedFreqs[matchIdx] - wantFreq) * 1.4;
+      const detLoss = Math.abs(pilots[matchIdx].frequencyMhz - wantFreq) * 1.4;
       val = Math.round(Math.max(floor[i] - 2, rawRssi[matchIdx] - detLoss));
     } else {
       val = Math.round(floor[i] + (Math.random() - 0.5) * 2.4);
@@ -287,19 +433,12 @@ function sampleTimerChannelDbm(
     val = Math.max(-120, Math.min(-15, val));
     dbm.push(val);
 
-    // Update peak and threshold crossing counter for LIVE stream
+    // Update peak and hit counter (> floor + 10 dB) since the last LIVE line, matching slaprf_diag.c
     if (val > st.pk[i]) {
       st.pk[i] = val;
-    } else {
-      st.pk[i] = Math.max(val, Math.round(st.pk[i] - 0.25));
     }
-    const pilotThr = store?.pilots[i]?.enterThresholdDbm ?? -58;
-    const exitThr = store?.pilots[i]?.exitThresholdDbm ?? pilotThr - 8;
-    if (!st.aboveThr[i] && val >= pilotThr) {
-      st.aboveThr[i] = true;
+    if (val > floor[i] + 10 && st.hits[i] < 255) {
       st.hits[i] = (st.hits[i] ?? 0) + 1;
-    } else if (st.aboveThr[i] && val <= exitThr) {
-      st.aboveThr[i] = false;
     }
   }
 
@@ -316,13 +455,13 @@ function synthesizeSpectrumScan(
   st: SimTimerFirmwareState,
   startMHz: number,
   stopMHz: number,
-  stepMHz: number
-): { t: "scan"; start: number; stop: number; step: number; dbm: number[] } {
+  stepMHz: number,
+  live = false,
+  passMs?: number
+): { t: "scan"; live?: boolean; passMs?: number; start: number; stop: number; step: number; dbm: number[] } {
   const baseFloor = desc.noiseFloorDbm || -92;
   const savedFreqs = savedFrequenciesMHz();
   const { dbm: chDbm } = sampleTimerChannelDbm(desc, st, savedFreqs);
-  const store = getBoundStore();
-  const pilots = store?.pilots ?? [];
 
   // Intermittent Wi-Fi OFDM activity on Ch 40 (5200 MHz) and Ch 149 (5745 MHz)
   const nowSec = performance.now() / 1000;
@@ -335,8 +474,6 @@ function synthesizeSpectrumScan(
 
     // Active FPV VTX signals (~16 MHz 3dB bandwidth, raised-cosine / Gaussian skirt)
     for (let i = 0; i < 8; i++) {
-      const p = pilots[i];
-      if (p && !p.enabled) continue;
       const centerFreq = savedFreqs[i] ?? RACEBAND_DEFAULT[i];
       const peakDbm = chDbm[i] ?? baseFloor;
       if (peakDbm <= baseFloor + 3) continue;
@@ -364,6 +501,7 @@ function synthesizeSpectrumScan(
 
   return {
     t: "scan",
+    ...(live ? { live: true, passMs: passMs ?? 180 } : {}),
     start: startMHz,
     stop: stopMHz,
     step: stepMHz,
@@ -409,7 +547,7 @@ export class SimulatedSerialPort implements SerialPortLike {
   private liveTimer = 0;
   private scanLive = false;
   private scanTimer = 0;
-  private scanRange = { start: 5180, stop: 5917, step: 5 };
+  private scanRange = { start: 5180, stop: 5945, step: 5 };
   private logOn = false;
   private logTimer = 0;
   private sweepTickTimer = 0;
@@ -417,6 +555,13 @@ export class SimulatedSerialPort implements SerialPortLike {
   private healthWatchTimer = 0;
   private dtr = false;
   private rts = false;
+  private slipInFrame = false;
+  private slipEscaped = false;
+  private slipBuf: number[] = [];
+  private flashOffset = 0;
+  private flashBlockSize = 1024;
+  private flashNumBlocks = 0;
+  private flashImageBuf: Uint8Array | null = null;
 
   constructor(timerId: number) {
     this.simulatedTimerId = timerId;
@@ -435,13 +580,18 @@ export class SimulatedSerialPort implements SerialPortLike {
     if (this.isOpen) return;
     const desc = this.descriptor();
     if (!desc || !desc.poweredOn) {
-      throw new Error(`Simulated timer T${this.simulatedTimerId} is powered off.`);
+      throw new Error(`Simulated board #${this.simulatedTimerId} is powered off.`);
     }
 
     this.isOpen = true;
     openSimPorts.add(this);
+    ensureSimHubUsbHookInstalled();
     const st = getOrCreateFwState(this.simulatedTimerId);
     st.lastSamplePerfMs = performance.now();
+    syncDiagStateToWasm(this.simulatedTimerId, st.rfEnabled, st.emergencyMode, this.scanLive, st.chanMask);
+    if (desc.isHub && !desc.unflashed && !st.emergencyMode) {
+      await notifySimHubUsbConnected(true);
+    }
 
     this.readable = new ReadableStream<Uint8Array>({
       start: (controller) => {
@@ -454,8 +604,41 @@ export class SimulatedSerialPort implements SerialPortLike {
 
     const dec = new TextDecoder();
     this.writable = new WritableStream<Uint8Array>({
-      write: (chunk) => {
+      write: async (chunk) => {
         if (!this.isOpen) return;
+        const hasSlip = chunk.includes(0xc0) || this.slipInFrame;
+        if (hasSlip) {
+          for (let i = 0; i < chunk.length; i++) {
+            const b = chunk[i];
+            if (b === 0xc0) {
+              if (this.slipInFrame && this.slipBuf.length >= 8) {
+                const pkt = new Uint8Array(this.slipBuf);
+                this.slipBuf = [];
+                this.slipInFrame = false;
+                this.slipEscaped = false;
+                if (pkt[0] === 0x00) {
+                  await this.handleRomBootloaderCommand(pkt);
+                }
+              } else {
+                this.slipInFrame = true;
+                this.slipEscaped = false;
+                this.slipBuf = [];
+              }
+            } else if (this.slipInFrame) {
+              if (this.slipEscaped) {
+                this.slipEscaped = false;
+                if (b === 0xdc) this.slipBuf.push(0xc0);
+                else if (b === 0xdd) this.slipBuf.push(0xdb);
+                else this.slipBuf.push(b);
+              } else if (b === 0xdb) {
+                this.slipEscaped = true;
+              } else {
+                this.slipBuf.push(b);
+              }
+            }
+          }
+          return;
+        }
         this.rxLineBuf += dec.decode(chunk, { stream: true });
         let nl: number;
         while ((nl = this.rxLineBuf.indexOf("\n")) >= 0) {
@@ -476,20 +659,35 @@ export class SimulatedSerialPort implements SerialPortLike {
         void this.close();
         return;
       }
+      if (d.unflashed) {
+        return;
+      }
+      ensureSimHubUsbHookInstalled();
       const fw = getOrCreateFwState(this.simulatedTimerId);
-      if (!fw.emergencyMode && fw.rfEnabled && !this.scanLive) {
-        fw.sweeps += 5; // 5 sweeps per 100 ms = 50 Hz
+      if (!fw.emergencyMode && fw.rfEnabled && !this.scanLive && this.liveMode === 0) {
+        fw.sweeps += 5; // 5 sweeps per 100 ms = 50 Hz when liveTimer is not already advancing sweeps
       }
       this.sweepTickCount++;
-      if (this.sweepTickCount % 10 === 0) {
+      const statusDivisor = !this.scanLive && this.liveMode === 0 ? 2 : 10;
+      if (this.sweepTickCount % statusDivisor === 0) {
         this.emitStatus();
       }
     }, 100);
 
-    // Emit initial status shortly after port open so `ensureRunningApp()` succeeds immediately
+    // Emit initial status shortly after port open so `ensureRunningApp()` succeeds immediately,
+    // or emit ROM blank-flash boot lines if this board is currently unflashed.
     window.setTimeout(() => {
-      if (this.isOpen) {
-        this.emitStatus();
+      if (!this.isOpen) return;
+      const d = this.descriptor();
+      if (!d || !d.poweredOn) return;
+      if (d.unflashed) {
+        this.emitUnflashedRomBoot();
+        return;
+      }
+      this.emitStatus();
+      const fw = getOrCreateFwState(this.simulatedTimerId);
+      if (d.isHub && !fw.emergencyMode) {
+        flushSimHubHellosToPort(this);
       }
     }, 25);
   }
@@ -498,6 +696,7 @@ export class SimulatedSerialPort implements SerialPortLike {
     if (!this.isOpen) return;
     this.isOpen = false;
     openSimPorts.delete(this);
+    ensureBackendSimUsbWs();
     window.clearInterval(this.liveTimer);
     window.clearInterval(this.scanTimer);
     window.clearInterval(this.logTimer);
@@ -524,6 +723,9 @@ export class SimulatedSerialPort implements SerialPortLike {
     if (signals.requestToSend !== undefined) this.rts = signals.requestToSend;
     // Detect hardware reset pulse (RTS high -> RTS low while DTR is low)
     if (prevRts && !this.rts && !this.dtr) {
+      if (this.flashImageBuf) {
+        await this.commitPendingFlashImage();
+      }
       this.performReboot("ESP_RST_POWERON", false);
     }
   }
@@ -535,6 +737,19 @@ export class SimulatedSerialPort implements SerialPortLike {
     } catch {
       // stream closed
     }
+  }
+
+  /**
+   * Emits raw `0x1E`-prefixed binary Hub packets (`0xC5 0x5A` HELLO and `0xC5 0x59` 4-sample
+   * sliding-window recording frames) out of the simulated Hub's USB serial port.
+   */
+  public emitHubStreamBytes(bytes: Uint8Array): void {
+    if (!this.isOpen) return;
+    const desc = this.descriptor();
+    if (!desc || !desc.isHub || !desc.poweredOn) return;
+    const st = getOrCreateFwState(this.simulatedTimerId);
+    if (st.emergencyMode) return;
+    this.emitBytes(bytes);
   }
 
   private emitLine(line: string): void {
@@ -555,13 +770,13 @@ export class SimulatedSerialPort implements SerialPortLike {
 
   private buildStatusObject(): TimerStatus | null {
     const desc = this.descriptor();
-    if (!desc) return null;
+    if (!desc || desc.unflashed) return null;
     const st = getOrCreateFwState(this.simulatedTimerId);
     const freqs = this.currentFreqs(st);
     const { dbm } = sampleTimerChannelDbm(desc, st, freqs);
     const allTimers = listSimulatedTimers();
-    const hubDesc = allTimers.find((t) => t.isHub);
-    const spokesDesc = allTimers.filter((t) => !t.isHub && t.poweredOn);
+    const hubDesc = allTimers.find((t) => t.isHub && !t.unflashed);
+    const spokesDesc = allTimers.filter((t) => !t.isHub && !t.unflashed && t.poweredOn);
 
     let spokes: TimerPeerSpoke[] | undefined;
     let hub: TimerStatus["hub"] | undefined;
@@ -681,13 +896,17 @@ export class SimulatedSerialPort implements SerialPortLike {
       st.sweeps += mode === 2 ? 1 : 5;
       const freqs = this.currentFreqs(st);
       const { dbm, floor } = sampleTimerChannelDbm(desc, st, freqs);
+      const pk = dbm.map((v, i) => (v <= -127 ? -127 : Math.max(v, st.pk[i] ?? v)));
+      const hits = st.hits.slice();
+      st.pk.fill(-127);
+      st.hits.fill(0);
       this.emitJson({
         t: "live",
         n: st.sweeps,
         us: st.rfEnabled ? 13400 + Math.round((Math.random() - 0.5) * 400) : 0,
         dbm,
-        pk: st.pk.slice(),
-        hits: st.hits.slice(),
+        pk,
+        hits,
         floor,
       });
     }, intervalMs);
@@ -696,21 +915,29 @@ export class SimulatedSerialPort implements SerialPortLike {
   private startScanLive(start: number, stop: number, step: number): void {
     this.scanRange = { start, stop, step };
     this.scanLive = true;
+    const st = getOrCreateFwState(this.simulatedTimerId);
+    syncDiagStateToWasm(this.simulatedTimerId, st.rfEnabled, st.emergencyMode, this.scanLive, st.chanMask);
     window.clearInterval(this.scanTimer);
+    const pointCount = Math.max(1, Math.floor((stop - start) / step) + 1);
+    const passMs = Math.max(110, Math.round(pointCount * 2.16));
     const emitOnce = () => {
       if (!this.isOpen || !this.scanLive) return;
       const desc = this.descriptor();
       if (!desc) return;
-      const st = getOrCreateFwState(this.simulatedTimerId);
-      if (!st.rfEnabled || st.emergencyMode) return;
-      this.emitJson(synthesizeSpectrumScan(desc, st, this.scanRange.start, this.scanRange.stop, this.scanRange.step));
+      const fw = getOrCreateFwState(this.simulatedTimerId);
+      if (!fw.rfEnabled || fw.emergencyMode) return;
+      this.emitJson(
+        synthesizeSpectrumScan(desc, fw, this.scanRange.start, this.scanRange.stop, this.scanRange.step, true, passMs)
+      );
     };
     window.setTimeout(emitOnce, 40);
-    this.scanTimer = window.setInterval(emitOnce, 180);
+    this.scanTimer = window.setInterval(emitOnce, passMs);
   }
 
   private stopScanLive(): void {
     this.scanLive = false;
+    const st = getOrCreateFwState(this.simulatedTimerId);
+    syncDiagStateToWasm(this.simulatedTimerId, st.rfEnabled, st.emergencyMode, this.scanLive, st.chanMask);
     window.clearInterval(this.scanTimer);
     this.scanTimer = 0;
   }
@@ -746,6 +973,134 @@ export class SimulatedSerialPort implements SerialPortLike {
     }, 950);
   }
 
+  private emitUnflashedRomBoot(): void {
+    this.emitLine("ESP-ROM:esp32c5-eco2-20250121");
+    this.emitLine("Build:Jan 21 2025");
+    this.emitLine("rst:0x1 (POWERON),boot:0xc (SPI_FAST_FLASH_BOOT)");
+    this.emitLine("invalid header: 0xffffffff");
+  }
+
+  private sendRomAck(op: number): void {
+    const ack = new Uint8Array([0xc0, 0x01, op & 0xff, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xc0]);
+    this.emitBytes(ack);
+  }
+
+  private async commitPendingFlashImage(): Promise<void> {
+    const img = this.flashImageBuf;
+    if (!img) return;
+    this.flashImageBuf = null;
+    this.flashNumBlocks = 0;
+    const parsed = parseSlaprfConfigBlock(img);
+    const handler = getSimTimerActionHandler();
+    if (parsed && handler) {
+      const st = getOrCreateFwState(this.simulatedTimerId);
+      st.boots = 1;
+      st.bootEpochMs = Date.now();
+      st.resetReason = "ESP_RST_POWERON";
+      st.emergencyMode = false;
+      st.rfEnabled = true;
+      st.freqsTemporary = false;
+      st.customFreqs = null;
+      syncDiagStateToWasm(this.simulatedTimerId, st.rfEnabled, st.emergencyMode, false, st.chanMask);
+      await handler({
+        action: "flash",
+        timerId: this.simulatedTimerId,
+        role: parsed.role,
+        label: parsed.timerLabel,
+        fingerprint: parsed.fingerprint,
+        firmwareVersion: parsed.firmwareVersion,
+      });
+      openSimPorts.forEach((p) => {
+        if (p !== this) {
+          p.emitStatus();
+          const d = p.descriptor();
+          if (d?.isHub && d.poweredOn) {
+            const hellos = window.slaprfWasm?.flushSimHubHellos?.();
+            if (hellos && hellos.byteLength > 0) {
+              p.emitBytes(hellos);
+            }
+          }
+        }
+      });
+    }
+  }
+
+  private async handleRomBootloaderCommand(pkt: Uint8Array): Promise<void> {
+    const op = pkt[1];
+    switch (op) {
+      case 0x08: // ESP_SYNC
+      case 0x09: // ESP_WRITE_REG
+      case 0x0d: // ESP_SPI_ATTACH
+      case 0x0b: // ESP_SPI_SET_PARAMS
+        this.sendRomAck(op);
+        return;
+
+      case 0x02: {
+        // ESP_FLASH_BEGIN: [size(4), numBlocks(4), blockSize(4), offset(4), encrypted(4)] at byte 8
+        if (pkt.length >= 24) {
+          const dv = new DataView(pkt.buffer, pkt.byteOffset, pkt.byteLength);
+          const totalSize = dv.getUint32(8, true);
+          const numBlocks = dv.getUint32(12, true);
+          const blockSize = dv.getUint32(16, true) || 1024;
+          const offset = dv.getUint32(20, true);
+          if (numBlocks === 0) {
+            // Erase region command from eraseXiaoC5OverWebSerial
+            await new Promise<void>((r) => window.setTimeout(r, 85));
+            const handler = getSimTimerActionHandler();
+            if (offset >= 0x110000 && handler) {
+              await handler({
+                action: "erase",
+                timerId: this.simulatedTimerId,
+              });
+            }
+            this.sendRomAck(op);
+            return;
+          }
+          this.flashOffset = offset;
+          this.flashBlockSize = blockSize;
+          this.flashNumBlocks = numBlocks;
+          this.flashImageBuf = new Uint8Array(offset + Math.max(totalSize, numBlocks * blockSize));
+          this.flashImageBuf.fill(0xff);
+          await new Promise<void>((r) => window.setTimeout(r, 60));
+        }
+        this.sendRomAck(op);
+        return;
+      }
+
+      case 0x03: {
+        // ESP_FLASH_DATA: [dataSize(4), seq(4), 0(4), 0(4)] at byte 8, data at byte 24
+        if (pkt.length >= 24 && this.flashImageBuf) {
+          const dv = new DataView(pkt.buffer, pkt.byteOffset, pkt.byteLength);
+          const seq = dv.getUint32(12, true);
+          const blockData = pkt.subarray(24);
+          const dstOff = this.flashOffset + seq * this.flashBlockSize;
+          if (dstOff + blockData.length <= this.flashImageBuf.length) {
+            this.flashImageBuf.set(blockData, dstOff);
+          }
+          if (seq % 10 === 0) {
+            await new Promise<void>((r) => window.setTimeout(r, 4));
+          }
+          if (this.flashNumBlocks > 0 && seq + 1 >= this.flashNumBlocks) {
+            await this.commitPendingFlashImage();
+          }
+        }
+        this.sendRomAck(op);
+        return;
+      }
+
+      case 0x04: {
+        // ESP_FLASH_END: parse SLAPRF02 block from written image and update simulated board state
+        await this.commitPendingFlashImage();
+        this.sendRomAck(op);
+        return;
+      }
+
+      default:
+        this.sendRomAck(op);
+        return;
+    }
+  }
+
   private performReboot(reason: string, enterEmergency?: boolean): void {
     const st = getOrCreateFwState(this.simulatedTimerId);
     this.setLiveMode(0);
@@ -758,20 +1113,33 @@ export class SimulatedSerialPort implements SerialPortLike {
     if (enterEmergency !== undefined) {
       st.emergencyMode = enterEmergency;
     }
+    syncDiagStateToWasm(this.simulatedTimerId, st.rfEnabled, st.emergencyMode, this.scanLive, st.chanMask);
     const desc = this.descriptor();
+    if (desc?.unflashed) {
+      this.emitUnflashedRomBoot();
+      return;
+    }
     if (desc) {
       for (const line of buildBootLogText(desc, st, this.currentFreqs(st)).split("\n")) {
         this.emitLine(line);
       }
     }
     window.setTimeout(() => {
-      if (this.isOpen) this.emitStatus();
+      if (this.isOpen) {
+        this.emitStatus();
+        if (desc && desc.isHub && desc.poweredOn && !st.emergencyMode) {
+          void notifySimHubUsbConnected(true);
+          flushSimHubHellosToPort(this);
+        } else if (desc && desc.isHub && st.emergencyMode) {
+          void notifySimHubUsbConnected(false);
+        }
+      }
     }, 60);
   }
 
   private handleCommand(rawCmd: string): void {
     const desc = this.descriptor();
-    if (!desc || !desc.poweredOn) return;
+    if (!desc || !desc.poweredOn || desc.unflashed) return;
     const st = getOrCreateFwState(this.simulatedTimerId);
     const cmd = rawCmd.trim();
     const upper = cmd.toUpperCase();
@@ -812,7 +1180,7 @@ export class SimulatedSerialPort implements SerialPortLike {
         .split(/\s+/)
         .map(Number);
       const start = parts[0] >= 5180 ? parts[0] : 5180;
-      const stop = parts[1] <= 5925 && parts[1] > start ? parts[1] : 5917;
+      const stop = parts[1] <= 5945 && parts[1] > start ? parts[1] : 5945;
       const step = parts[2] >= 1 ? parts[2] : 5;
       this.startScanLive(start, stop, step);
       this.emitJson({ t: "ok", cmd: "SCAN LIVE", start, stop, step });
@@ -826,7 +1194,7 @@ export class SimulatedSerialPort implements SerialPortLike {
         .split(/\s+/)
         .map(Number);
       const start = parts[0] >= 5180 ? parts[0] : 5180;
-      const stop = parts[1] <= 5925 && parts[1] > start ? parts[1] : 5917;
+      const stop = parts[1] <= 5945 && parts[1] > start ? parts[1] : 5945;
       const step = parts[2] >= 1 ? parts[2] : 5;
       window.setTimeout(() => {
         if (!this.isOpen) return;
@@ -840,6 +1208,7 @@ export class SimulatedSerialPort implements SerialPortLike {
     if (upper.startsWith("RF")) {
       const on = upper.slice(2).trim() !== "0";
       st.rfEnabled = on;
+      syncDiagStateToWasm(this.simulatedTimerId, st.rfEnabled, st.emergencyMode, this.scanLive, st.chanMask);
       this.emitJson({ t: "ok", cmd: "RF", enabled: on ? 1 : 0 });
       this.emitStatus();
       return;
@@ -859,6 +1228,7 @@ export class SimulatedSerialPort implements SerialPortLike {
       if (Number.isFinite(mask)) {
         st.chanMask = mask & 0xff;
       }
+      syncDiagStateToWasm(this.simulatedTimerId, st.rfEnabled, st.emergencyMode, this.scanLive, st.chanMask);
       this.emitJson({ t: "ok", cmd: "CHANNELS MASK", mask: st.chanMask });
       this.emitStatus();
       return;
@@ -867,17 +1237,32 @@ export class SimulatedSerialPort implements SerialPortLike {
     if (upper.startsWith("CHANNELS") || upper.startsWith("NETCHANNELS")) {
       const isNet = upper.startsWith("NETCHANNELS");
       const rest = cmd.slice(isNet ? 11 : 8).trim();
-      const nums = rest
+      const rawNums = rest
         .split(/[\s,]+/)
-        .map((x) => Math.round(Number(x)))
-        .filter((n) => n >= 5180 && n <= 5917);
+        .filter(Boolean)
+        .map((x) => Math.round(Number(x)));
+      if (isNet && rawNums.length === 8 && rawNums.every((n) => Number.isFinite(n))) {
+        const hasAnyActive = rawNums.some((n) => n >= 5180 && n <= 5945);
+        st.customFreqs = hasAnyActive
+          ? rawNums.map((n, i) => (n >= 5180 && n <= 5945 ? n : RACEBAND_DEFAULT[i]))
+          : null;
+        st.freqsTemporary = false;
+        this.emitJson({
+          t: "ok",
+          cmd: "NETCHANNELS",
+          freqs: st.customFreqs ?? savedFrequenciesMHz(),
+        });
+        this.emitStatus();
+        return;
+      }
+      const nums = rawNums.filter((n) => n >= 5180 && n <= 5945);
       if (nums.length === 8) {
         st.customFreqs = nums;
         st.freqsTemporary = !isNet;
         this.emitJson({ t: "ok", cmd: isNet ? "NETCHANNELS" : "CHANNELS", freqs: nums });
         this.emitStatus();
       } else {
-        this.emitJson({ t: "err", msg: "expected 8 frequencies in 5180..5917 MHz" });
+        this.emitJson({ t: "err", msg: "expected 8 frequencies in 5180..5945 MHz" });
       }
       return;
     }
@@ -966,78 +1351,277 @@ export class SimulatedSerialPort implements SerialPortLike {
   }
 }
 
+interface RealPortMeta {
+  label?: string;
+  fp?: string;
+  role?: "hub" | "spoke";
+}
+
+type SimStoreWindow = Window & {
+  __slaprfSimSerialStore?: AppStore;
+  __slaprfHMR?: { store?: AppStore };
+  __slaprfPortMeta?: WeakMap<object, RealPortMeta>;
+};
+
+function getPortMetaMap(): WeakMap<object, RealPortMeta> {
+  if (typeof window !== "undefined") {
+    const w = window as SimStoreWindow;
+    if (!w.__slaprfPortMeta) {
+      w.__slaprfPortMeta = new WeakMap<object, RealPortMeta>();
+    }
+    return w.__slaprfPortMeta;
+  }
+  return new WeakMap<object, RealPortMeta>();
+}
+
+export function recordSerialPortMeta(port: SerialPortLike | null | undefined, meta: RealPortMeta): void {
+  if (!port || typeof port !== "object" || isSimulatedSerialPort(port)) return;
+  const map = getPortMetaMap();
+  const prev = map.get(port) ?? {};
+  map.set(port, {
+    label: meta.label || prev.label,
+    fp: meta.fp || prev.fp,
+    role: meta.role || prev.role,
+  });
+}
+
 /**
- * Opens an in-app modal picker allowing the user to choose which simulated USB timer
- * (`H1`, `T1`, `T2`, `T3`, …) to connect over virtual USB-C in simulation mode.
+ * Retained as a clean no-op for backward compatibility; physical USB serial ports are enumerated
+ * and managed natively in Go (`go.bug.st/serial`) with zero browser WebSerial pairing state.
  */
-export function pickSimulatedUsbPort(excludeTimerIds: number[] = []): Promise<SimulatedSerialPort> {
+export async function forgetAllPairedPorts(): Promise<number> {
+  return 0;
+}
+
+const unpairedSimTimerIds = new Set<number>();
+
+export interface PickUsbPortOptions {
+  showAllPorts?: boolean;
+  excludePorts?: SerialPortLike[];
+  excludeTimerIds?: number[];
+}
+
+interface BackendPortEntry {
+  name: string;
+  description?: string;
+  isUSB?: boolean;
+  vid?: string;
+  pid?: string;
+  serialNumber?: string;
+  isEspressif?: boolean;
+}
+
+interface BackendPortsResponse {
+  ports?: BackendPortEntry[];
+  pool?: {
+    slots?: Array<{
+      slotIndex: number;
+      connected: boolean;
+      portName?: string;
+      lastStatus?: { label?: string; fp?: string };
+      lastConfig?: { timerLabel?: string; fingerprint?: string };
+    }>;
+  };
+}
+
+/**
+ * Opens the unified in-app serial port picker modal for both Simulation mode and Real hardware mode
+ * (powered natively by Go `/api/usb/ports` in Real mode — zero browser WebSerial).
+ */
+export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<SerialPortLike> {
   if (activePickerCancel) {
     activePickerCancel();
     activePickerCancel = null;
   }
   document.querySelectorAll(".confirm-modal-backdrop").forEach((el) => el.remove());
 
-  return new Promise<SimulatedSerialPort>((resolve, reject) => {
-    const timers = listSimulatedTimers();
+  const simMode = isSimulatedUsbMode();
+  let showAllRealPorts = Boolean(opts.showAllPorts);
+  const excludeTimerIds = new Set<number>(opts.excludeTimerIds ?? []);
+  const excludePortNames = new Set<string>();
+  for (const p of opts.excludePorts ?? []) {
+    if (isSimulatedSerialPort(p)) {
+      excludeTimerIds.add(p.simulatedTimerId);
+    } else if (isBackendSerialPort(p)) {
+      excludePortNames.add(p.portName.toUpperCase());
+    }
+  }
+
+  interface PortChoice {
+    id: string;
+    label: string;
+    createPort: () => SerialPortLike;
+    simTimerId?: number;
+  }
+
+  let choices: PortChoice[] = [];
+
+  const loadChoices = async (): Promise<PortChoice[]> => {
+    if (simMode) {
+      const timers = listSimulatedTimers().filter(
+        (t) => t.poweredOn && !excludeTimerIds.has(t.timerId) && !unpairedSimTimerIds.has(t.timerId)
+      );
+      return timers.map((t) => ({
+        id: `sim-${t.timerId}`,
+        label: t.unflashed
+          ? `USB JTAG/serial debug unit (Board #${t.timerId}) · Unflashed`
+          : `USB JTAG/serial debug unit (${t.fingerprint}) · ${t.label}`,
+        createPort: () => new SimulatedSerialPort(t.timerId),
+        simTimerId: t.timerId,
+      }));
+    }
+
+    if (!capabilitiesSnapshot().portable) {
+      return [];
+    }
+
+    try {
+      const res = await fetch(
+        resolveBackendUrl(`/api/usb/ports?all=${showAllRealPorts ? "1" : "0"}`),
+        { cache: "no-store" }
+      );
+      if (!res.ok) return [];
+      const data = (await res.json()) as BackendPortsResponse;
+      const ports = Array.isArray(data.ports) ? data.ports : [];
+      const poolSlots = Array.isArray(data.pool?.slots) ? data.pool!.slots! : [];
+      return ports
+        .filter((p) => p.name && !excludePortNames.has(p.name.toUpperCase()))
+        .map((p) => {
+          const activeSlot = poolSlots.find(
+            (s) => s.connected && s.portName && s.portName.toUpperCase() === p.name.toUpperCase()
+          );
+          const knownLabel = activeSlot?.lastStatus?.label || activeSlot?.lastConfig?.timerLabel || "";
+          const knownFp = activeSlot?.lastStatus?.fp || activeSlot?.lastConfig?.fingerprint || "";
+          const desc = p.description || (p.isEspressif ? "USB JTAG/serial debug unit" : "USB Serial Port");
+          const vidPid = p.vid && p.pid ? ` (${p.vid}:${p.pid})` : "";
+          const identitySuffix = knownLabel || knownFp
+            ? ` · ${[knownFp ? `(${knownFp})` : "", knownLabel].filter(Boolean).join(" ")}`
+            : "";
+          return {
+            id: `backend-${p.name}`,
+            label: `${p.name} · ${desc}${vidPid}${identitySuffix}`,
+            createPort: () => createBackendPortHandle(p.name, desc),
+          };
+        });
+    } catch {
+      return [];
+    }
+  };
+
+  choices = await loadChoices();
+
+  return new Promise<SerialPortLike>((resolve, reject) => {
+    let selectedId: string | null = choices[0]?.id ?? null;
+    let closed = false;
+
     const backdrop = document.createElement("div");
-    backdrop.className = "confirm-modal-backdrop";
-    backdrop.style.cssText =
-      "position:fixed;inset:0;z-index:9999;display:flex;align-items:center;justify-content:center;padding:16px;background:rgba(6,7,10,0.76);backdrop-filter:blur(8px)";
+    backdrop.className = "slaprf-modal-backdrop confirm-modal-backdrop";
 
-    const rowsHtml = timers
-      .map((t) => {
-        const alreadyUsed = excludeTimerIds.includes(t.timerId);
-        const disabled = !t.poweredOn || alreadyUsed;
-        const roleTag = t.isHub ? "Hub · Slot 1" : `Spoke · Slot ${t.slot}`;
-        const trackInfo = t.assignedGateName ? `Track ${esc(t.assignedGateName)}` : "Off track";
-        const rightBadge = alreadyUsed
-          ? `<span class="badge">Connected</span>`
-          : !t.poweredOn
-            ? `<span class="badge tone-warn">Powered off</span>`
-            : `<span class="btn btn-sm btn-armed" style="pointer-events:none">${icons.plug(13)}<span>Connect</span></span>`;
+    const renderRowsHtml = (): string => {
+      if (choices.length === 0) {
+        return `<div class="sim-usb-port-empty">${
+          simMode
+            ? "No powered simulated timers available"
+            : showAllRealPorts
+              ? "No serial ports detected on the SlapRF server"
+              : "No XIAO ESP32-C5 USB ports detected — plug in USB-C or click Show all ports"
+        }</div>`;
+      }
+      return choices
+        .map((c) => {
+          const isSel = c.id === selectedId;
+          const canForget = simMode && c.simTimerId !== undefined;
+          const deleteBtn = canForget
+            ? `<button
+                type="button"
+                class="sim-usb-port-delete"
+                data-unpair-port-id="${esc(c.id)}"
+                title="Hide device"
+                aria-label="Hide ${esc(c.label)}"
+              >
+                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <polyline points="3 6 5 6 21 6"></polyline>
+                  <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"></path>
+                  <path d="M10 11v6"></path>
+                  <path d="M14 11v6"></path>
+                  <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"></path>
+                </svg>
+              </button>`
+            : "";
+          return `
+            <div
+              role="option"
+              tabindex="0"
+              aria-selected="${isSel ? "true" : "false"}"
+              class="sim-usb-port-row ${isSel ? "is-selected" : ""}"
+              data-pick-port-id="${esc(c.id)}"
+            >
+              <span class="sim-usb-port-label">${esc(c.label)}</span>
+              ${deleteBtn}
+            </div>`;
+        })
+        .join("");
+    };
 
-        return `
-          <button
-            type="button"
-            class="sim-usb-picker-item ${disabled ? "is-disabled" : ""}"
-            data-pick-sim-timer="${t.timerId}"
-            ${disabled ? "disabled" : ""}
-            style="display:flex;align-items:center;justify-content:space-between;gap:12px;width:100%;padding:10px 12px;border-radius:8px;border:1px solid var(--border,#22252c);background:var(--surface-2,#15181d);color:var(--text,#ecedef);text-align:left;cursor:${disabled ? "not-allowed" : "pointer"};opacity:${disabled ? "0.55" : "1"};transition:border-color 0.15s,background 0.15s"
-          >
-            <div style="display:flex;align-items:center;gap:10px;min-width:0">
-              <span class="gate-color-swatch" style="--c:${esc(t.color)};cursor:default;flex-shrink:0"></span>
-              <div style="display:flex;flex-direction:column;gap:2px;min-width:0">
-                <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                  <strong class="mono" style="font-size:14px">${esc(t.label)}</strong>
-                  <span class="detected-role-pill">${esc(roleTag)}</span>
-                  <span class="badge mono">${esc(t.fingerprint)}</span>
-                </div>
-                <span class="note" style="font-size:12px">${esc(trackInfo)} · Firmware ${esc(t.firmwareVersion)}</span>
-              </div>
-            </div>
-            <div style="flex-shrink:0">${rightBadge}</div>
-          </button>`;
-      })
-      .join("");
+    const moreBtnLabel = () =>
+      simMode ? "More devices…" : showAllRealPorts ? "Refresh ports" : "Show all ports";
 
     backdrop.innerHTML = `
-      <div class="confirm-modal" role="dialog" aria-modal="true" aria-labelledby="sim-usb-picker-title" style="max-width:480px;width:92vw;padding:20px;border-radius:14px;border:1px solid var(--border-strong,#2d3139);background:var(--surface,#111317);color:var(--text,#ecedef);box-shadow:0 24px 64px rgba(0,0,0,0.75)">
-        <div class="confirm-modal-head" style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
-          <span class="confirm-modal-icon" style="width:32px;height:32px;display:grid;place-items:center;border-radius:8px;background:var(--surface-2,#15181d);border:1px solid var(--border-strong,#2d3139);color:var(--accent,#d4ff3a);flex-shrink:0">${icons.plug(18)}</span>
-          <h3 id="sim-usb-picker-title" style="font-size:15px;font-weight:650">Connect simulated USB timer</h3>
+      <div class="slaprf-modal card sim-usb-dialog" role="dialog" aria-modal="true" aria-labelledby="sim-usb-picker-title">
+        <div class="slaprf-modal-head">
+          <div class="slaprf-modal-title-row">
+            <span class="slaprf-modal-icon">${icons.plug(17)}</span>
+            <h3 id="sim-usb-picker-title">Select a serial port</h3>
+          </div>
+          <button type="button" class="btn btn-ghost btn-xs" data-modal="cancel" aria-label="Close">
+            ${icons.close(15)}
+          </button>
         </div>
-        <p class="confirm-modal-body" style="color:var(--text-2,#a3a8b3);font-size:12.5px;line-height:1.5;margin-bottom:14px">
-          Select a simulated XIAO ESP32-C5 timer to connect over virtual USB-C. You can power timers on or off in the Simulator tab.
-        </p>
-        <div style="display:flex;flex-direction:column;gap:8px;max-height:320px;overflow-y:auto;margin-bottom:16px">
-          ${rowsHtml || `<div class="empty-note">No simulated timers available. Add or reset timers in the Simulator tab.</div>`}
+        <div class="slaprf-modal-body">
+          <div class="sim-usb-port-list" role="listbox" aria-label="Available serial ports">
+            ${renderRowsHtml()}
+          </div>
         </div>
-        <div class="confirm-modal-actions" style="display:flex;align-items:center;justify-content:flex-end;gap:8px">
+        <div class="slaprf-modal-foot">
+          <button type="button" class="btn btn-ghost" data-modal="request-native" style="margin-right:auto">${icons.plus(15)}<span data-role="more-ports-label">${esc(moreBtnLabel())}</span></button>
           <button type="button" class="btn btn-ghost" data-modal="cancel">Cancel</button>
+          <button type="button" class="btn btn-armed" data-modal="connect" ${selectedId === null ? "disabled" : ""}>
+            ${icons.plug(15)}
+            <span>Connect</span>
+          </button>
         </div>
       </div>`;
 
+    const listEl = backdrop.querySelector<HTMLElement>(".sim-usb-port-list");
+    const connectBtn = backdrop.querySelector<HTMLButtonElement>('[data-modal="connect"]');
+    const moreLabelEl = backdrop.querySelector<HTMLElement>('[data-role="more-ports-label"]');
+
+    const syncButtons = () => {
+      if (connectBtn) connectBtn.disabled = selectedId === null;
+      if (moreLabelEl) moreLabelEl.textContent = moreBtnLabel();
+    };
+
+    const refreshListDom = () => {
+      if (closed || !listEl) return;
+      if (selectedId === null || !choices.some((c) => c.id === selectedId)) {
+        selectedId = choices[0]?.id ?? null;
+      }
+      listEl.innerHTML = renderRowsHtml();
+      syncButtons();
+    };
+
+    const updateSelection = (id: string) => {
+      selectedId = id;
+      backdrop.querySelectorAll<HTMLElement>("[data-pick-port-id]").forEach((el) => {
+        const active = el.dataset.pickPortId === id;
+        el.classList.toggle("is-selected", active);
+        el.setAttribute("aria-selected", active ? "true" : "false");
+      });
+      syncButtons();
+    };
+
     const cleanup = () => {
+      closed = true;
       if (activePickerCancel === cancel) {
         activePickerCancel = null;
       }
@@ -1051,10 +1635,20 @@ export function pickSimulatedUsbPort(excludeTimerIds: number[] = []): Promise<Si
     };
     activePickerCancel = cancel;
 
+    const confirmSelection = () => {
+      const chosen = choices.find((c) => c.id === selectedId);
+      if (!chosen) return;
+      cleanup();
+      resolve(chosen.createPort());
+    };
+
     const onKey = (ev: KeyboardEvent) => {
       if (ev.key === "Escape") {
         ev.preventDefault();
         cancel();
+      } else if (ev.key === "Enter" && selectedId !== null) {
+        ev.preventDefault();
+        confirmSelection();
       }
     };
 
@@ -1064,15 +1658,60 @@ export function pickSimulatedUsbPort(excludeTimerIds: number[] = []): Promise<Si
         cancel();
         return;
       }
-      const btn = target.closest<HTMLButtonElement>("[data-pick-sim-timer]");
-      if (btn && !btn.disabled) {
-        const timerId = Number(btn.dataset.pickSimTimer);
-        cleanup();
-        resolve(new SimulatedSerialPort(timerId));
+      if (target.closest('[data-modal="connect"]')) {
+        confirmSelection();
+        return;
+      }
+      const unpairBtnEl = target.closest<HTMLButtonElement>("[data-unpair-port-id]");
+      if (unpairBtnEl && unpairBtnEl.dataset.unpairPortId) {
+        ev.stopPropagation();
+        const targetId = unpairBtnEl.dataset.unpairPortId;
+        const chosen = choices.find((c) => c.id === targetId);
+        if (simMode && chosen?.simTimerId !== undefined) {
+          unpairedSimTimerIds.add(chosen.simTimerId);
+          void loadChoices().then((next) => {
+            if (closed) return;
+            choices = next;
+            refreshListDom();
+          });
+        }
+        return;
+      }
+      if (target.closest('[data-modal="request-native"]')) {
+        if (simMode) {
+          unpairedSimTimerIds.clear();
+        } else {
+          showAllRealPorts = true;
+        }
+        void loadChoices().then((next) => {
+          if (closed) return;
+          choices = next;
+          refreshListDom();
+        });
+        return;
+      }
+      const row = target.closest<HTMLElement>("[data-pick-port-id]");
+      if (row && row.dataset.pickPortId) {
+        updateSelection(row.dataset.pickPortId);
+      }
+    });
+
+    backdrop.addEventListener("dblclick", (ev) => {
+      const target = ev.target as HTMLElement;
+      if (target.closest("[data-unpair-port-id]")) return;
+      const row = target.closest<HTMLElement>("[data-pick-port-id]");
+      if (row && row.dataset.pickPortId) {
+        updateSelection(row.dataset.pickPortId);
+        confirmSelection();
       }
     });
 
     document.addEventListener("keydown", onKey, true);
     document.body.appendChild(backdrop);
+    syncButtons();
   });
+}
+
+export function pickSimulatedUsbPort(excludeTimerIds: number[] = []): Promise<SimulatedSerialPort> {
+  return pickUsbPort({ excludeTimerIds }) as Promise<SimulatedSerialPort>;
 }

@@ -1,0 +1,152 @@
+name: Publish PR E2E Report
+
+# Posts or updates a single sticky comment on Pull Requests (including external fork PRs)
+# once the read-only `Verify` workflow finishes, linking directly to the downloadable
+# interactive HTML report (`latest.html`), recorded `.webm` videos, and Playwright traces.
+
+on:
+  workflow_run:
+    workflows: ["Verify"]
+    types: [completed]
+
+permissions:
+  actions: read
+  pull-requests: write
+
+jobs:
+  comment-pr:
+    name: Post E2E Verification Report on PR
+    if: ${{ github.event.workflow_run.event == 'pull_request' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Download lightweight PR summary artifact
+        id: fetch-summary
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require("fs");
+            const { execFileSync } = require("child_process");
+
+            const runId = context.payload.workflow_run.id;
+            const headSha = context.payload.workflow_run.head_sha;
+            const conclusion = context.payload.workflow_run.conclusion;
+            const runUrl = context.payload.workflow_run.html_url;
+
+            const artifactsResp = await github.rest.actions.listWorkflowRunArtifacts({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              run_id: runId,
+            });
+            const summaryArt = artifactsResp.data.artifacts.find(
+              (a) => a.name === "slaprf-e2e-pr-summary" && !a.expired
+            );
+            const fullReportArt = artifactsResp.data.artifacts.find(
+              (a) => a.name === "slaprf-e2e-report" && !a.expired
+            );
+
+            fs.mkdirSync("/tmp/e2e-summary", { recursive: true });
+            if (summaryArt) {
+              const dl = await github.rest.actions.downloadArtifact({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                artifact_id: summaryArt.id,
+                archive_format: "zip",
+              });
+              fs.writeFileSync("/tmp/e2e-summary/summary.zip", Buffer.from(dl.data));
+              execFileSync("unzip", ["-o", "/tmp/e2e-summary/summary.zip", "-d", "/tmp/e2e-summary"]);
+            }
+
+            const readIfExists = (p) => (fs.existsSync(p) ? fs.readFileSync(p, "utf8") : "");
+            const metaRaw =
+              readIfExists("/tmp/e2e-summary/ci-meta.json") ||
+              readIfExists("/tmp/e2e-summary/test-results/ci-meta.json");
+            const summaryMd =
+              readIfExists("/tmp/e2e-summary/summary.md") ||
+              readIfExists("/tmp/e2e-summary/test-results/summary.md");
+
+            let ciMeta = {};
+            try {
+              ciMeta = metaRaw ? JSON.parse(metaRaw) : {};
+            } catch (_) {
+              ciMeta = {};
+            }
+
+            let prNumber =
+              (context.payload.workflow_run.pull_requests &&
+                context.payload.workflow_run.pull_requests[0] &&
+                context.payload.workflow_run.pull_requests[0].number) ||
+              Number(ciMeta.prNumber || 0);
+
+            if (!prNumber) {
+              core.info("No matching PR number found for workflow_run; skipping comment.");
+              return;
+            }
+
+            // Security check: verify that the target PR's current or head SHA matches workflow_run.head_sha
+            // so an untrusted fork artifact can never spoof a different PR number.
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: prNumber,
+            });
+            if (pr.head.sha !== headSha) {
+              core.info(
+                `PR #${prNumber} head SHA (${pr.head.sha}) moved past workflow_run SHA (${headSha}); skipping stale update.`
+              );
+              return;
+            }
+
+            const fallbackArtifactUrl = fullReportArt
+              ? `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${runId}/artifacts/${fullReportArt.id}`
+              : "";
+            const artifactUrl = ciMeta.artifactUrl || fallbackArtifactUrl;
+            const shortSha = headSha.slice(0, 7);
+
+            const marker = "<!-- slaprf-e2e-report -->";
+            const linksLines = [
+              `> **Commit:** \`${shortSha}\` · **Workflow Run:** [View Checks & Logs](${runUrl})`,
+            ];
+            if (artifactUrl) {
+              linksLines.push(
+                `> **📦 Interactive HTML Report + Videos + Traces:** **[Download \`slaprf-e2e-report.zip\`](${artifactUrl})** *(unzip & open \`latest.html\` to watch recordings, or drop any \`trace.zip\` onto [trace.playwright.dev](https://trace.playwright.dev))*`
+              );
+            }
+
+            const bodyParts = [marker];
+            if (summaryMd.trim()) {
+              bodyParts.push(summaryMd.trim());
+            } else {
+              const badge = conclusion === "success" ? "✅ PASSED" : `❌ ${String(conclusion || "COMPLETED").toUpperCase()}`;
+              bodyParts.push(`## SlapRF Verification — ${badge}\n\n*(E2E suite did not produce \`summary.md\` — check unit test / build steps in workflow logs.)*`);
+            }
+            bodyParts.push(linksLines.join("\n"));
+            const commentBody = bodyParts.join("\n\n");
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: prNumber,
+              per_page: 100,
+            });
+            const existing = comments.find(
+              (c) => c.user && c.user.type === "Bot" && c.body && c.body.includes(marker)
+            );
+
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body: commentBody,
+              });
+              core.info(`Updated sticky E2E report comment #${existing.id} on PR #${prNumber}.`);
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: prNumber,
+                body: commentBody,
+              });
+              core.info(`Created sticky E2E report comment on PR #${prNumber}.`);
+            }

@@ -58,6 +58,7 @@ export function getPiperVoice(uri: string): PiperVoiceDescriptor {
 export function prepareTextForPiper(raw: string): string {
   return raw
     .trim()
+    .replace(/\s*·\s*/g, ", ")
     .replace(/\b(\d+)\.00\b/g, "$1")
     .replace(/\b(\d+)\.([1-9])0\b/g, "$1.$2")
     .replace(/\b(\d+)\.0([1-9])\b/g, "$1 point zero $2")

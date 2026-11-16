@@ -2,41 +2,16 @@ import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import {
-  LIVETIME_PORT,
-  LIVETIME_RELAY_URL,
-  LiveTimeRelay,
-  sharedLiveTimeRelay,
-} from "../services/livetime_relay";
+  PORTABLE_RELEASES_URL,
+  capabilitiesSnapshot,
+  orderedPortableAssets,
+  subscribeCapabilities,
+} from "../services/capabilities";
+import { LIVETIME_PORT, LiveTimeRelay, sharedLiveTimeRelay } from "../services/livetime_relay";
 import { gateLabel } from "../state/selectors";
 import { AppStore } from "../state/store";
 
-const RELEASES_URL = "https://github.com/kaack/SlapRF/releases/latest";
-
-interface RelayAsset {
-  os: "windows" | "macos" | "linux";
-  label: string;
-  file: string;
-}
-
-/** Must match the asset names attached by .github/workflows/release.yml. */
-const RELAY_ASSETS: RelayAsset[] = [
-  { os: "windows", label: "Windows (x64)", file: "slaprf-relay-windows-amd64.exe" },
-  { os: "macos", label: "macOS (Apple silicon)", file: "slaprf-relay-macos-arm64" },
-  { os: "macos", label: "macOS (Intel)", file: "slaprf-relay-macos-amd64" },
-  { os: "linux", label: "Linux (x64)", file: "slaprf-relay-linux-amd64" },
-  { os: "linux", label: "Linux (ARM64)", file: "slaprf-relay-linux-arm64" },
-];
-
-function detectOs(): RelayAsset["os"] | null {
-  const nav = navigator as Navigator & { userAgentData?: { platform?: string } };
-  const p = `${nav.userAgentData?.platform ?? ""} ${navigator.platform ?? ""} ${navigator.userAgent}`.toLowerCase();
-  if (p.includes("win")) return "windows";
-  if (p.includes("mac")) return "macos";
-  if (p.includes("linux") && !p.includes("android")) return "linux";
-  return null;
-}
-
-/** LiveTime page: two-column layout with live relay/LiveTime status, relay helper downloads, and LiveTime setup. */
+/** LiveTime page: built-in LapRF TCP :5403 server status and connection endpoints in SlapRF Portable. */
 export class LiveTimeView extends Component {
   private readonly store: AppStore;
   private readonly relay: LiveTimeRelay;
@@ -46,121 +21,160 @@ export class LiveTimeView extends Component {
     this.store = store;
     this.relay = relay;
 
-    el.innerHTML = `
+    this.listen(el, "click", (e) => {
+      const target = e.target as HTMLElement;
+      const btn = target.closest<HTMLButtonElement>("button[data-action='relay-reconnect']");
+      if (btn) {
+        this.relay.reconnect();
+        return;
+      }
+      const copyBtn = target.closest<HTMLButtonElement>("button[data-copy]");
+      if (copyBtn) {
+        const text = copyBtn.dataset.copy ?? "";
+        void navigator.clipboard?.writeText(text);
+        const iconEl = copyBtn.querySelector<HTMLElement>("[data-copy-icon]");
+        copyBtn.classList.add("is-copied");
+        if (iconEl) iconEl.innerHTML = icons.check(13);
+        window.setTimeout(() => {
+          copyBtn.classList.remove("is-copied");
+          if (iconEl) iconEl.innerHTML = icons.copy(13);
+        }, 1400);
+      }
+    });
+
+    this.listen(el, "change", (e) => {
+      const input = (e.target as HTMLElement).closest<HTMLInputElement>("input[data-action='toggle-livetime']");
+      if (input) this.relay.setEnabled(input.checked);
+    });
+
+    this.onDispose(store.subscribe(["status", "config", "laps", "crossings"], () => this.render()));
+    this.onDispose(relay.subscribe(() => this.render()));
+    this.onDispose(subscribeCapabilities(() => this.render()));
+    const tick = window.setInterval(() => this.renderStatusOnly(), 1000);
+    this.onDispose(() => window.clearInterval(tick));
+    this.render();
+  }
+
+  private render(): void {
+    const caps = capabilitiesSnapshot();
+    if (!caps.portable) {
+      const downloads = orderedPortableAssets()
+        .map(
+          (a) =>
+            `<a class="btn btn-sm ${a.recommended ? "" : "btn-ghost"}" href="${PORTABLE_RELEASES_URL}/download/${a.file}" download title="${a.file}">${esc(a.label)}</a>`
+        )
+        .join("");
+
+      this.el.innerHTML = `
+        <div class="settings debug-page">
+          <section class="settings-section" data-section-anchor="portable">
+            <div class="settings-intro">
+              <h2>SlapRF Portable required</h2>
+              <p>Browsers cannot open a listening TCP server port directly. Run SlapRF Portable on this computer to expose the built-in LapRF TCP :${LIVETIME_PORT} emulator.</p>
+            </div>
+            <div class="card">
+              <div class="option-row">
+                <div>
+                  <div class="option-title">Download SlapRF Portable</div>
+                  <div class="option-sub">Single standalone executable with the web app, LiveTime TCP :${LIVETIME_PORT} emulator, LapRF Ethernet client, and MultiGP sync built in.</div>
+                  <div class="livetime-downloads" style="margin-top:12px;">
+                    ${downloads}
+                    <a class="link-inline" href="${PORTABLE_RELEASES_URL}" target="_blank" rel="noopener">All releases</a>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </section>
+        </div>`;
+      return;
+    }
+
+    const hostPills = ["127.0.0.1", ...caps.lanIPs]
+      .map(
+        (ip, idx) => `
+          <button type="button" class="livetime-copy-pill" data-copy="${esc(ip)}" title="Copy host ${esc(ip)}">
+            <span class="muted">${idx === 0 ? "Local" : "LAN"}</span>
+            <span>${esc(ip)}</span>
+            <span class="livetime-copy-icon" data-copy-icon>${icons.copy(13)}</span>
+          </button>`
+      )
+      .join("");
+
+    this.el.innerHTML = `
       <div class="settings debug-page">
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="status">
           <div class="settings-intro">
             <h2>Status</h2>
-            <p>Live link status between this browser, the local <code>slaprf-relay</code> helper, and MultiGP LiveTime.</p>
+            <p>Live link status between SlapRF Portable's built-in TCP :${LIVETIME_PORT} listener and external race management software.</p>
           </div>
           <div class="debug-status-layout" data-slot="status"></div>
         </section>
 
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="connection">
           <div class="settings-intro">
-            <h2>Relay helper</h2>
-            <p>Browsers cannot accept raw TCP connections directly. Run <code>slaprf-relay</code> on this computer to bridge LiveTime TCP port <code>${LIVETIME_PORT}</code> to this tab.</p>
+            <h2>Client setup</h2>
+            <p>Point MultiGP LiveTime, FPVTrackside, or RotorHazard (LapRF driver) to this computer's IP address and TCP port ${LIVETIME_PORT}.</p>
           </div>
           <div class="card">
             <div class="livetime">
-              <ol class="steps">
-                <li>
-                  <div class="step-body">
-                    <span>Download <code>slaprf-relay</code> (one file, no installer):</span>
-                    <span class="livetime-downloads">${this.downloads()}</span>
-                    <a class="link-inline" href="${RELEASES_URL}" target="_blank" rel="noopener">All downloads</a>
+              <div class="option-row" style="border-bottom:0;">
+                <div>
+                  <div class="option-title">Connection address</div>
+                  <div class="option-sub">Use 127.0.0.1 when running timing software on this same computer, or a LAN IP from another computer on the same network.</div>
+                  <div class="livetime-downloads" style="margin-top:10px;">
+                    ${hostPills}
+                    <button type="button" class="livetime-copy-pill" data-copy="${LIVETIME_PORT}" title="Copy port ${LIVETIME_PORT}">
+                      <span class="muted">Port</span>
+                      <span>${LIVETIME_PORT}</span>
+                      <span class="livetime-copy-icon" data-copy-icon>${icons.copy(13)}</span>
+                    </button>
                   </div>
-                </li>
-                <li>
-                  <div class="step-body">
-                    <span>Run it on this computer and keep its window open. Windows: <em>More info → Run anyway</em>; macOS: <em>right-click → Open</em>; Linux/macOS terminal: <code>chmod +x slaprf-relay-*</code>. Allow network access if the firewall asks.</span>
-                  </div>
-                </li>
-              </ol>
-              <p class="note">If Chrome asks to access devices on your local network, choose <strong>Allow</strong> so this page can reach the local relay.</p>
-            </div>
-          </div>
-        </section>
-
-        <section class="settings-section">
-          <div class="settings-intro">
-            <h2>LiveTime setup</h2>
-            <p>Add SlapRF in MultiGP LiveTime as an ImmersionRC LapRF 8-way timer. Loading a heat pushes pilot channels to every timer automatically.</p>
-          </div>
-          <div class="card">
-            <div class="livetime">
-              <ol class="steps">
-                <li>
-                  <div class="step-body">
-                    <span>In MultiGP LiveTime, add a timing device of type</span>
-                    <code>ImmersionRC LapRF (8-way)</code>.
-                  </div>
-                </li>
-                <li>
-                  <div class="step-body">
-                    <span>Set the address to</span>
-                    <code>127.0.0.1</code>
-                    <span>(if LiveTime runs on this computer) or this computer's LAN IP, and port</span>
-                    <code>${LIVETIME_PORT}</code>.
-                  </div>
-                </li>
-                <li>
-                  <div class="step-body">
-                    <span>Load a heat: pilot Raceband channels are pushed to every timer automatically, and LiveTime controls race arming.</span>
-                  </div>
-                </li>
-              </ol>
-              <p class="note">Keep this tab open while racing. Only the start timer reports lap passes to LiveTime; other timers on the track record section splits.</p>
+                </div>
+              </div>
             </div>
           </div>
         </section>
       </div>`;
 
-    this.listen(el, "click", (e) => {
-      const btn = (e.target as HTMLElement).closest<HTMLButtonElement>("button[data-action='relay-reconnect']");
-      if (btn) this.relay.reconnect();
-    });
-
-    this.onDispose(store.subscribe(["status", "config", "laps", "crossings"], () => this.renderStatus()));
-    this.onDispose(relay.subscribe(() => this.renderStatus()));
-    const tick = window.setInterval(() => this.renderStatus(), 1000);
-    this.onDispose(() => window.clearInterval(tick));
-    this.renderStatus();
+    this.renderStatusOnly();
   }
 
-  private downloads(): string {
-    const os = detectOs();
-    const ordered = [...RELAY_ASSETS].sort((a, b) => Number(b.os === os) - Number(a.os === os));
-    return ordered
-      .map(
-        (a) =>
-          `<a class="btn btn-sm ${a.os === os ? "btn-primary" : "btn-ghost"}" href="${RELEASES_URL}/download/${a.file}" download title="${a.file}">${a.label}</a>`
-      )
-      .join("");
-  }
+  private renderStatusOnly(): void {
+    const statusSlot = this.el.querySelector<HTMLElement>("[data-slot='status']");
+    if (!statusSlot) return;
 
-  private renderStatus(): void {
     const s = this.relay.snapshot;
     const lt = this.store.liveTime;
     const relayUp = s.relayState === "connected";
     const ltUp = relayUp && s.liveTimeState === "connected";
 
-    const topLed = ltUp ? "is-up" : relayUp || s.relayState === "connecting" ? "is-warn" : "is-bad";
-    const topText = ltUp
-      ? `LiveTime connected${s.peer ? ` (${esc(s.peer)})` : ""} · race ${lt.raceArmedByHost ? "armed" : "stopped"} by LiveTime`
-      : relayUp
-        ? `Relay connected · waiting for MultiGP LiveTime on TCP :${LIVETIME_PORT}`
-        : s.relayState === "connecting"
-          ? `Connecting to local relay at ${LIVETIME_RELAY_URL}…`
-          : s.lastError
-            ? esc(s.lastError)
-            : `Local relay not running · start slaprf-relay on this computer`;
+    const topLed = !s.enabled
+      ? ""
+      : ltUp
+        ? "is-up"
+        : relayUp || s.relayState === "connecting"
+          ? "is-warn"
+          : "is-bad";
 
-    const relayBadge = relayUp
-      ? `<span class="badge badge-good">Connected</span>`
-      : s.relayState === "connecting"
-        ? `<span class="badge badge-warn">Connecting</span>`
-        : `<span class="badge badge-bad">Not running</span>`;
+    const topText = !s.enabled
+      ? `LapRF TCP :${LIVETIME_PORT} emulator is off`
+      : ltUp
+        ? `LapRF client connected (${esc(s.peer || "peer")}) · race ${lt.raceArmedByHost ? "armed" : "stopped"} by host`
+        : relayUp
+          ? `Listening for LapRF client on TCP :${LIVETIME_PORT}`
+          : s.relayState === "connecting"
+            ? `Starting TCP :${LIVETIME_PORT} listener…`
+            : s.lastError
+              ? esc(s.lastError)
+              : `TCP :${LIVETIME_PORT} listener inactive`;
+
+    const relayBadge = !s.enabled
+      ? `<span class="badge">Disabled</span>`
+      : relayUp
+        ? `<span class="badge badge-good">Listening</span>`
+        : s.relayState === "connecting"
+          ? `<span class="badge badge-warn">Starting</span>`
+          : `<span class="badge badge-bad">Error</span>`;
 
     const ltBadge = ltUp
       ? `<span class="badge badge-good">Connected</span>`
@@ -177,79 +191,89 @@ export class LiveTimeView extends Component {
     const startTimerText = startNode ? gateLabel(this.store, startNode.gateId) : "None";
     const replaced = s.lastError.startsWith("Another SlapRF tab");
 
-    this.slot("status").innerHTML = `
+    statusSlot.innerHTML = `
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${topLed}"></span>
           <span class="debug-head-note">${topText}</span>
         </span>
         <div class="debug-connect-actions">
-          <span class="badge mono">TCP :${LIVETIME_PORT}</span>
-          <button type="button" class="btn btn-sm ${replaced ? "btn-armed" : "btn-ghost"}" data-action="relay-reconnect" title="Reconnect to local slaprf-relay">
-            ${icons.reset(14)}<span>${replaced ? "Use this tab" : "Reconnect"}</span>
-          </button>
+          <span class="badge">TCP :${LIVETIME_PORT}</span>
+          ${
+            s.enabled
+              ? `<button type="button" class="btn btn-sm btn-ghost" data-action="relay-reconnect" title="Restart TCP listener">
+                   ${icons.reset(14)}<span>${replaced ? "Use this tab" : "Reconnect"}</span>
+                 </button>`
+              : ""
+          }
+          <label class="switch" title="Enable LapRF TCP :${LIVETIME_PORT} emulator">
+            <input type="checkbox" data-action="toggle-livetime" ${s.enabled ? "checked" : ""} />
+            <span></span>
+          </label>
         </div>
       </div>
 
       <div class="debug-timer-detail-grid">
         <div class="debug-subbox">
           <div class="debug-subbox-head">
-            <span class="debug-subbox-title ${relayUp ? "is-active" : ""}">${icons.plug(14)}<span>Local relay (slaprf-relay)</span></span>
+            <span class="debug-subbox-title ${relayUp ? "is-active" : ""}">${icons.plug(14)}<span>Built-in TCP bridge</span></span>
             ${relayBadge}
           </div>
           <dl class="debug-kv-list">
             <div class="debug-kv-row">
               <dt>Status</dt>
               <dd>${
-                relayUp
-                  ? "Connected to browser"
-                  : s.relayState === "connecting"
-                    ? "Connecting…"
-                    : "Not reachable (start slaprf-relay below)"
+                !s.enabled
+                  ? "Disabled"
+                  : relayUp
+                    ? "Listening on local network"
+                    : s.relayState === "connecting"
+                      ? "Binding TCP port…"
+                      : esc(s.lastError || "Port unavailable")
               }</dd>
             </div>
             <div class="debug-kv-row">
-              <dt>Relay version</dt>
-              <dd class="mono">${s.relayVersion ? esc(s.relayVersion) : "—"}</dd>
+              <dt>Portable version</dt>
+              <dd>${s.relayVersion ? esc(s.relayVersion) : esc(capabilitiesSnapshot().version)}</dd>
             </div>
             <div class="debug-kv-row">
-              <dt>WebSocket</dt>
-              <dd class="mono">${LIVETIME_RELAY_URL}</dd>
+              <dt>TCP listener</dt>
+              <dd>${relayUp ? esc(s.listenAddr || `0.0.0.0:${LIVETIME_PORT}`) : "—"}</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Traffic</dt>
-              <dd class="mono">${s.bytesIn.toLocaleString()} B in · ${s.bytesOut.toLocaleString()} B out</dd>
+              <dd>${s.bytesIn.toLocaleString()} B in · ${s.bytesOut.toLocaleString()} B out</dd>
             </div>
           </dl>
         </div>
 
         <div class="debug-subbox">
           <div class="debug-subbox-head">
-            <span class="debug-subbox-title ${ltUp ? "is-active" : ""}">${icons.timer(14)}<span>MultiGP LiveTime</span></span>
+            <span class="debug-subbox-title ${ltUp ? "is-active" : ""}">${icons.timer(14)}<span>Connected client</span></span>
             ${ltBadge}
           </div>
           <dl class="debug-kv-list">
             <div class="debug-kv-row">
-              <dt>Client</dt>
-              <dd class="mono">${ltUp ? esc(s.peer || "Connected") : relayUp ? `Listening on TCP :${LIVETIME_PORT}` : "—"}</dd>
+              <dt>Peer</dt>
+              <dd>${ltUp ? esc(s.peer || "Connected") : relayUp ? "Waiting for client" : "Offline"}</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Race state</dt>
               <dd>${
                 ltUp
                   ? lt.raceArmedByHost
-                    ? `<span class="badge badge-good">Armed by LiveTime</span>`
-                    : `<span class="badge">Stopped by LiveTime</span>`
-                  : "—"
+                    ? `<span class="badge badge-good">Armed by host</span>`
+                    : `<span class="badge">Stopped by host</span>`
+                  : "Idle"
               }</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Passings sent</dt>
-              <dd><span class="mono">${lt.detectionsSent.toLocaleString()}</span> <span class="note">· start timer ${esc(startTimerText)}</span></dd>
+              <dd>${lt.detectionsSent.toLocaleString()} <span class="note">· start timer ${esc(startTimerText)}</span></dd>
             </div>
             <div class="debug-kv-row">
               <dt>Last RF setup sync</dt>
-              <dd class="mono">${esc(lastSync)}</dd>
+              <dd>${esc(lastSync)}</dd>
             </div>
           </dl>
         </div>

@@ -46,7 +46,13 @@ export class CanvasSurface {
   }
 
   private tick = (): void => {
-    if (this.width > 0 && this.height > 0) {
+    if (
+      !document.hidden &&
+      this.width > 0 &&
+      this.height > 0 &&
+      this.canvas.isConnected &&
+      this.canvas.offsetParent !== null
+    ) {
       this.ctx.clearRect(0, 0, this.width, this.height);
       this.draw(this.ctx, this.width, this.height);
     }

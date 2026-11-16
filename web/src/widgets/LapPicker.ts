@@ -164,22 +164,6 @@ export class LapPicker extends Component {
       this.syncLatestButton();
     });
 
-    // Translate mouse wheel over the chart into horizontal scroll when there are more than 50 laps.
-    this.listen(
-      el,
-      "wheel",
-      (e) => {
-        const scroller = this.el.querySelector<HTMLElement>(".lap-picker-scroll");
-        if (!scroller || scroller.scrollWidth <= scroller.clientWidth + 2) return;
-        const delta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-        if (delta === 0) return;
-        e.preventDefault();
-        scroller.scrollLeft += delta;
-        this.onScroll(scroller);
-      },
-      { passive: false }
-    );
-
     this.onDispose(store.subscribe(["laps", "selection", "config"], () => this.render()));
     const onResize = () => {
       const isMobile = window.innerWidth <= 680;

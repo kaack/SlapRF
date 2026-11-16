@@ -101,6 +101,7 @@ Ready-to-run helper scripts are included in the [`scripts/`](../scripts) folder 
 | **Start Dev Server** | `.\scripts\dev.ps1` | `./scripts/dev.sh` | Runs the dev-only server (`go run ./cmd/devserver`) on `http://localhost:8090`. |
 | **Full Build** | `.\scripts\build.ps1` | `./scripts/build.sh` | Builds the static site (`./_site`, what https://slaprf.app serves) and updates `./web/wasm/slaprf.wasm`. |
 | **Run Unit Tests** | `.\scripts\test.ps1` | `./scripts/test.sh` | Runs the complete Go unit test suite (`go test -v -ldflags="-s -w" ./...`). |
+| **Run E2E Verification Suite** | `.\scripts\test-e2e.ps1` | `./scripts/test-e2e.sh` | Runs all 84 Playwright E2E verification tests (in-browser WASM API + Component UI + Workflows) with video, trace, and screenshot recording (`test-results/latest.html`). |
 
 ---
 

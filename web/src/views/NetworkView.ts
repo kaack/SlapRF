@@ -1,7 +1,21 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
+import { getAppTheme, subscribeAppTheme } from "../core/theme";
 import { ApiClient } from "../services/api_client";
+import { capabilitiesSnapshot } from "../services/capabilities";
+import {
+  LapRFDiscoveredDevice,
+  sharedLapRFLink,
+} from "../services/laprf_hardware_link";
+import {
+  DEFAULT_RH_ADMIN_PASS,
+  DEFAULT_RH_ADMIN_USER,
+  DEFAULT_RH_PORT,
+  RHDiscoveredDevice,
+  RHUSBPortInfo,
+  sharedRHLink,
+} from "../services/rh_hardware_link";
 import {
   LiveSample,
   sharedTimerConsole,
@@ -9,10 +23,11 @@ import {
   TimerStatus,
   usbPool,
 } from "../services/timer_console";
+import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { DetectedTimer } from "../types/models";
+import { DetectedTimer, isRotorHazardMode } from "../types/models";
 import { patchUsbConnectionBar } from "../widgets/UsbConnectionBar";
-import { CHANNEL_COLORS, DBM_MAX, DBM_MIN, RACEBAND, racebandName } from "./debug/charts";
+import { channelColor, DBM_MAX, DBM_MIN, formatHardwareFreq, RACEBAND, racebandName } from "./debug/charts";
 
 const NETWORK_PREFS_KEY = "slaprf.ui.network_prefs.v1";
 
@@ -74,10 +89,56 @@ export class NetworkView extends Component {
   private signalEnabledCh: boolean[] = [true, true, true, true, true, true, true, true];
   private lastTopologyHtml = "";
   private lastTimerHtml = "";
+  private lastTimerStructKey = "";
+  private rafId = 0;
   private showAllPorts = false;
   private connError: string | null = null;
   /** Identify toggles sent but not yet confirmed by a status line (fingerprint -> wanted state). */
   private identifyPending = new Map<string, { on: boolean; atMs: number }>();
+
+  private laprfHost = "192.168.1.2";
+  private laprfPort = 5403;
+  private laprfBusy = false;
+  private laprfScanning = false;
+  private laprfScannedSubnet = "";
+  private laprfDiscovered: LapRFDiscoveredDevice[] = [];
+  private laprfError: string | null = null;
+  private lastLaprfConnSig = "";
+  private lastLaprfTimersStructSig = "";
+  private livePollTimer: number | null = null;
+  private livePollInFlight = false;
+  private livePollTick = 0;
+
+  private rhHost = "192.168.1.101";
+  private rhPort = DEFAULT_RH_PORT;
+  private rhUser = DEFAULT_RH_ADMIN_USER;
+  private rhPass = DEFAULT_RH_ADMIN_PASS;
+  private rhRevealPass = false;
+  private rhCredPrompt: {
+    scope: "manual" | "discovered" | "card";
+    key: string;
+    host: string;
+    port: number;
+    label: string;
+    timerId?: number;
+  } | null = null;
+  private rhCredsByEndpoint = new Map<string, { user: string; pass: string }>();
+  private rhBusy = false;
+  private rhScanning = false;
+  private rhScannedSubnet = "";
+  private rhDiscovered: RHDiscoveredDevice[] = [];
+  private rhError: string | null = null;
+  private lastRhConnSig = "";
+  private lastRhTimersStructSig = "";
+
+  private rhUsbPorts: RHUSBPortInfo[] = [];
+  private rhUsbSelectedPort = "";
+  private rhUsbBaudRate = 0;
+  private rhUsbShowAllPorts = false;
+  private rhUsbRefreshing = false;
+  private rhUsbLoadedOnce = false;
+  private lastRhUsbConnSig = "";
+  private lastRhUsbTimersStructSig = "";
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
     super(el);
@@ -91,29 +152,101 @@ export class NetworkView extends Component {
 
     el.innerHTML = `
       <div class="settings debug-page network-page">
-        <section class="settings-section">
-          <div class="settings-intro">
-            <h2>Connection</h2>
-            <p>Connect the Hub (or a Spoke) over USB-C to inspect the 2.4 GHz network and 5.8 GHz channel readings.</p>
-          </div>
-          <div class="debug-status-layout" data-slot="connection"></div>
-        </section>
+        <div data-slot="slaprf-sections" style="display:contents">
+          <section class="settings-section" data-section-anchor="connection">
+            <div class="settings-intro">
+              <h2>Connection</h2>
+              <p>Connect the Hub (or a Spoke) over USB-C to inspect the 2.4 GHz network and 5.8 GHz channel readings.</p>
+            </div>
+            <div class="debug-status-layout" data-slot="connection"></div>
+          </section>
 
-        <section class="settings-section">
-          <div class="settings-intro">
-            <h2>Topology</h2>
-            <p>Parent Hub (Slot 1) in the center with 6 Spoke slots (Slots 2–7) around it. Active ESP-NOW links are solid; open or inactive slots are dashed. Click any slot to inspect it below.</p>
-          </div>
-          <div class="debug-status-layout" data-slot="topology"></div>
-        </section>
+          <section class="settings-section" data-section-anchor="topology">
+            <div class="settings-intro">
+              <h2>Topology</h2>
+              <p>Parent Hub (Slot 1) in the center with 6 Spoke slots (Slots 2–7) around it. Active ESP-NOW links are solid; open or inactive slots are dashed. Click any slot to inspect it below.</p>
+            </div>
+            <div class="debug-status-layout" data-slot="topology"></div>
+          </section>
 
-        <section class="settings-section">
-          <div class="settings-intro">
-            <h2>Timer</h2>
-            <p>Identity, 2.4 GHz TDMA link stats, and live 5.8 GHz channel readings for the selected slot.</p>
-          </div>
-          <div class="debug-status-layout" data-slot="timer-detail"></div>
-        </section>
+          <section class="settings-section" data-section-anchor="timer">
+            <div class="settings-intro">
+              <h2>Timer</h2>
+              <p>Identity, 2.4 GHz TDMA link stats, and live 5.8 GHz channel readings for the selected slot.</p>
+            </div>
+            <div class="debug-status-layout" data-slot="timer-detail"></div>
+          </section>
+        </div>
+
+        <div data-slot="laprf-sections" style="display:none">
+          <section class="settings-section" data-section-anchor="connection">
+            <div class="settings-intro">
+              <h2>Manual connection</h2>
+              <p>Connect directly to a LapRF 8-Way timer by Ethernet IP (TCP :5403) or over a USB CDC serial link (115200 baud).</p>
+            </div>
+            <div class="debug-status-layout" data-slot="laprf-connection"></div>
+          </section>
+
+          <section class="settings-section" data-section-anchor="discover">
+            <div class="settings-intro">
+              <h2>Discover</h2>
+              <p>Scan the local network for powered-on LapRF 8-Way timers on TCP :5403.</p>
+            </div>
+            <div class="debug-status-layout" data-slot="laprf-discover"></div>
+          </section>
+
+          <section class="settings-section" data-section-anchor="timer">
+            <div class="settings-intro">
+              <h2>LapRF timers</h2>
+              <p>Live 8-slot RSSI readings (300–3500 scale), gate arming state, clock sync, and measured supply voltage for each LapRF 8-Way timer.</p>
+            </div>
+            <div class="debug-status-layout" data-slot="laprf-timers"></div>
+          </section>
+        </div>
+
+        <div data-slot="rh-sections" style="display:none">
+          <section class="settings-section" data-section-anchor="connection">
+            <div class="settings-intro">
+              <h2>Manual connection</h2>
+              <p>Enter a RotorHazard server's IP address and port to sign in with admin credentials and connect directly.</p>
+            </div>
+            <div class="debug-status-layout" data-slot="rh-connection"></div>
+          </section>
+
+          <section class="settings-section" data-section-anchor="discover">
+            <div class="settings-intro">
+              <h2>Discover</h2>
+              <p>Scan the local network for powered-on RotorHazard timing servers (HTTP/WebSocket :5000) and connect to discovered devices.</p>
+            </div>
+            <div class="debug-status-layout" data-slot="rh-discover"></div>
+          </section>
+
+          <section class="settings-section" data-section-anchor="timer">
+            <div class="settings-intro">
+              <h2>RotorHazard devices</h2>
+              <p>Live receiver node RSSI readings (0–255 scale), dual Enter/Exit hysteresis thresholds, gate arming state, and clock sync for each RotorHazard device.</p>
+            </div>
+            <div class="debug-status-layout" data-slot="rh-timers"></div>
+          </section>
+        </div>
+
+        <div data-slot="rh-usb-sections" style="display:none">
+          <section class="settings-section" data-section-anchor="connection">
+            <div class="settings-intro">
+              <h2>USB serial connection</h2>
+              <p>Connect RotorHazard USB serial nodes directly over USB-C / CDC (ESP32-C5, STM32, Arduino, or RP2040 binary serial protocol).</p>
+            </div>
+            <div class="debug-status-layout" data-slot="rh-usb-connection"></div>
+          </section>
+
+          <section class="settings-section" data-section-anchor="timer">
+            <div class="settings-intro">
+              <h2>RotorHazard USB devices</h2>
+              <p>Live multi-seat receiver RSSI readings (0–255 scale), dual Enter/Exit hysteresis thresholds, gate arming state, and serial RTT for each RotorHazard USB device.</p>
+            </div>
+            <div class="debug-status-layout" data-slot="rh-usb-timers"></div>
+          </section>
+        </div>
       </div>`;
 
     const unsubMain = this.console.subscribe({
@@ -124,7 +257,8 @@ export class NetworkView extends Component {
       onStatus: (s) => {
         this.status = this.activeStatus();
         if (s.chanMask !== undefined) {
-          const nextEnabled = Array.from({ length: 8 }, (_, i) => ((s.chanMask! >> i) & 1) !== 0);
+          const effectiveMask = s.chanMask > 0 ? s.chanMask : 0xff;
+          const nextEnabled = Array.from({ length: 8 }, (_, i) => ((effectiveMask >> i) & 1) !== 0);
           if (nextEnabled.join() !== this.signalEnabledCh.join()) {
             this.signalEnabledCh = nextEnabled;
           }
@@ -134,8 +268,11 @@ export class NetworkView extends Component {
       onLive: (l) => {
         this.live = l;
         if (this.selectedSlot === 1 || (this.status?.role === 2 && this.selectedSlot === this.status.slot)) {
-          this.renderAll();
+          this.scheduleLiveRefresh();
         }
+      },
+      onHubPackets: () => {
+        this.scheduleLiveRefresh();
       },
       onConfig: () => {
         this.renderAll();
@@ -146,6 +283,9 @@ export class NetworkView extends Component {
           this.live = null;
           this.userPickedSlot = false;
           this.selectedSlot = 1;
+          this.signalEnabledCh = [true, true, true, true, true, true, true, true];
+          this.spokeRateTracker.clear();
+          this.identifyPending.clear();
         }
         this.renderAll();
       },
@@ -157,12 +297,74 @@ export class NetworkView extends Component {
     });
 
     const unsubBridge = this.api.hubBridge.subscribe(() => {
-      this.renderAll();
+      this.scheduleLiveRefresh();
     });
 
-    const unsubStore = this.store.subscribe(["status", "config"], () => {
-      this.renderAll();
+    const unsubStore = this.store.subscribe(["status", "config", "telemetry"], () => {
+      this.scheduleLiveRefresh();
     });
+
+    const unsubLaprf = sharedLapRFLink.subscribe(() => {
+      this.scheduleLiveRefresh();
+    });
+
+    const unsubRh = sharedRHLink.subscribe(() => {
+      this.scheduleLiveRefresh();
+    });
+
+    this.livePollTimer = window.setInterval(() => {
+      if (document.hidden) return;
+      this.livePollTick++;
+      const hwMode = this.store.timingHardwareMode;
+      if (hwMode === "slaprf") {
+        if (this.store.simulatorRunning) {
+          this.scheduleLiveRefresh();
+        } else {
+          const s = this.activeStatus();
+          if (
+            s &&
+            s.role === 2 &&
+            !s.scanLive &&
+            !s.emergencyMode &&
+            this.livePollTick % 2 === 0 &&
+            !this.livePollInFlight
+          ) {
+            this.livePollInFlight = true;
+            void usbPool.mainConsole
+              .send("STATUS?")
+              .catch(() => undefined)
+              .finally(() => {
+                this.livePollInFlight = false;
+              });
+          }
+          this.scheduleLiveRefresh();
+        }
+        return;
+      }
+      if (hwMode === "laprf" || isRotorHazardMode(hwMode)) {
+        if (this.store.simulatorRunning) {
+          if (!this.livePollInFlight) {
+            this.livePollInFlight = true;
+            void this.api
+              .pollStatusNow()
+              .catch(() => undefined)
+              .finally(() => {
+                this.livePollInFlight = false;
+                this.scheduleLiveRefresh();
+              });
+          }
+        } else {
+          if (this.livePollTick % 2 === 0) {
+            if (hwMode === "laprf") {
+              void sharedLapRFLink.refreshStatus();
+            } else {
+              void sharedRHLink.refreshStatus();
+            }
+          }
+          this.scheduleLiveRefresh();
+        }
+      }
+    }, 55);
 
     this.listen(el, "pointerdown", (e) => {
       if ((e as PointerEvent).button !== 0) return;
@@ -176,19 +378,96 @@ export class NetworkView extends Component {
       this.selectTopologySlot(Number(t.dataset.slotNum));
     });
     this.listen(el, "click", (e) => void this.onClick(e));
-    this.listen(el, "change", (e) => {
+    this.listen(el, "input", (e) => {
       const t = e.target as HTMLInputElement;
+      if (t.dataset.field === "laprf-host") {
+        this.laprfHost = t.value;
+      } else if (t.dataset.field === "laprf-port") {
+        const p = Number(t.value);
+        if (Number.isFinite(p) && p > 0) this.laprfPort = p;
+      } else if (t.dataset.field === "rh-host") {
+        this.rhHost = t.value;
+      } else if (t.dataset.field === "rh-port") {
+        const p = Number(t.value);
+        if (Number.isFinite(p) && p > 0) this.rhPort = p;
+      } else if (t.dataset.field === "rh-cred-user") {
+        this.rhUser = t.value;
+      } else if (t.dataset.field === "rh-cred-pass") {
+        this.rhPass = t.value;
+      }
+    });
+    this.listen(el, "keydown", (e) => {
+      const ke = e as KeyboardEvent;
+      const t = ke.target as HTMLInputElement | null;
+      if (
+        ke.key === "Enter" &&
+        t &&
+        (t.dataset.field === "rh-cred-user" || t.dataset.field === "rh-cred-pass")
+      ) {
+        ke.preventDefault();
+        void this.submitRhCredPrompt();
+      } else if (
+        ke.key === "Escape" &&
+        this.rhCredPrompt &&
+        t &&
+        (t.dataset.field === "rh-cred-user" || t.dataset.field === "rh-cred-pass")
+      ) {
+        ke.preventDefault();
+        this.rhCredPrompt = null;
+        this.lastRhConnSig = "";
+        this.lastRhTimersStructSig = "";
+        this.renderAll();
+      }
+    });
+    this.listen(el, "change", (e) => {
+      const t = e.target as HTMLInputElement | HTMLSelectElement;
       if (t.matches("[data-all-ports]")) {
-        this.showAllPorts = t.checked;
+        this.showAllPorts = (t as HTMLInputElement).checked;
         this.savePrefs();
+      } else if (t.dataset.field === "rh-usb-port") {
+        this.rhUsbSelectedPort = t.value;
+        this.lastRhUsbConnSig = "";
+        this.renderAll();
+      } else if (t.dataset.field === "rh-usb-baud") {
+        const b = Number(t.value);
+        this.rhUsbBaudRate = Number.isFinite(b) && b > 0 ? b : 0;
+        this.lastRhUsbConnSig = "";
+        this.renderAll();
+      } else if (t.dataset.field === "rh-usb-all-ports") {
+        this.rhUsbShowAllPorts = (t as HTMLInputElement).checked;
+        void this.refreshRhUsbPorts();
       }
     });
 
+    const unsubTheme = subscribeAppTheme(() => {
+      this.lastTopologyHtml = "";
+      this.lastTimerHtml = "";
+      this.lastTimerStructKey = "";
+      this.lastLaprfConnSig = "";
+      this.lastLaprfTimersStructSig = "";
+      this.lastRhConnSig = "";
+      this.lastRhTimersStructSig = "";
+      this.lastRhUsbConnSig = "";
+      this.lastRhUsbTimersStructSig = "";
+      this.renderAll();
+    });
+
     this.onDispose(() => {
+      if (this.rafId !== 0) {
+        window.cancelAnimationFrame(this.rafId);
+        this.rafId = 0;
+      }
+      if (this.livePollTimer !== null) {
+        window.clearInterval(this.livePollTimer);
+        this.livePollTimer = null;
+      }
       unsubMain();
       unsubState();
       unsubBridge();
       unsubStore();
+      unsubLaprf();
+      unsubRh();
+      unsubTheme();
     });
 
     this.renderAll();
@@ -206,9 +485,6 @@ export class NetworkView extends Component {
       if (typeof p.showAllPorts === "boolean") {
         this.showAllPorts = p.showAllPorts;
       }
-      if (Array.isArray(p.signalEnabledCh) && p.signalEnabledCh.length === 8) {
-        this.signalEnabledCh = p.signalEnabledCh.map(Boolean);
-      }
     } catch {
       // ignore
     }
@@ -220,7 +496,6 @@ export class NetworkView extends Component {
         NETWORK_PREFS_KEY,
         JSON.stringify({
           showAllPorts: this.showAllPorts,
-          signalEnabledCh: this.signalEnabledCh,
         })
       );
     } catch {
@@ -234,6 +509,79 @@ export class NetworkView extends Component {
       return primary.lastStatus;
     }
     return null;
+  }
+
+  private scheduleLiveRefresh(): void {
+    if (this.rafId !== 0) return;
+    this.rafId = window.requestAnimationFrame(() => {
+      this.rafId = 0;
+      this.renderAll();
+    });
+  }
+
+  /**
+   * In Simulator mode (`store.simState.running`), maps pilot-slot-indexed RSSI from the 50 Hz
+   * WASM simulator onto the 8 monitored channel frequencies (`freqs`, e.g. R1..R8).
+   * Returns `undefined` in real-hardware mode so real timers use genuine hardware `dbm` frames.
+   */
+  private mapSimPilotRssiToFreqs(
+    timerId: number | undefined,
+    fallbackRssi: number[] | undefined,
+    baseFloorDbm: number | undefined,
+    freqs: number[]
+  ): number[] | undefined {
+    if (!this.store.simulatorRunning) return undefined;
+    const liveWasm = timerId !== undefined ? window.slaprfWasm?.getSimTimerRssi?.(timerId) : null;
+    const simTimer =
+      timerId !== undefined
+        ? this.store.simState?.timers?.find((t) => t.timerId === timerId)
+        : undefined;
+    const baseFloor = Math.round(baseFloorDbm || -92);
+    let rawRssi: number[] | undefined =
+      Array.isArray(liveWasm) && liveWasm.some((v) => v < 0)
+        ? liveWasm
+        : Array.isArray(simTimer?.lastRssi) && simTimer!.lastRssi.some((v) => v < 0)
+          ? simTimer!.lastRssi
+          : Array.isArray(fallbackRssi) && fallbackRssi.some((v) => v < 0)
+            ? fallbackRssi
+            : undefined;
+    if (!rawRssi && this.store.nodes.length > 0) {
+      // Off-track collector Hub sits near the Start/Finish table: derive live 50 Hz RSSI from Start gate
+      const startNode = this.store.nodes[0];
+      const hist = this.store.historyFor(startNode.gateId);
+      const srcRssi =
+        hist.length > 0
+          ? hist[hist.length - 1].rssi
+          : Array.isArray(startNode.lastRssi) && startNode.lastRssi.some((v) => v < 0)
+            ? startNode.lastRssi
+            : undefined;
+      if (srcRssi) {
+        rawRssi = srcRssi.map((v) => Math.max(baseFloor, v - 3.5 + (Math.random() - 0.5) * 1.6));
+      }
+    }
+
+    const pilots = this.store.pilots ?? [];
+    const out: number[] = [];
+    for (let i = 0; i < 8; i++) {
+      if (!this.signalEnabledCh[i]) {
+        out.push(-128);
+        continue;
+      }
+      const wantFreq = freqs[i] ?? RACEBAND[i];
+      const floorVal = baseFloor - (i % 2);
+      const matchIdx = pilots.findIndex(
+        (p) => p.enabled && p.frequencyMhz > 0 && Math.abs(p.frequencyMhz - wantFreq) <= 8
+      );
+      let val: number;
+      if (rawRssi && matchIdx >= 0 && matchIdx < rawRssi.length && rawRssi[matchIdx] < 0) {
+        const detLoss = Math.abs(pilots[matchIdx].frequencyMhz - wantFreq) * 1.4;
+        val = Math.round(Math.max(floorVal - 2, rawRssi[matchIdx] - detLoss));
+      } else {
+        val = Math.round(floorVal + (Math.random() - 0.5) * 2.0);
+      }
+      out.push(Math.max(-120, Math.min(-15, val)));
+    }
+    return out;
   }
 
   /** True/false = identify state of `fp` as reported by the USB-connected board; null = not reachable. */
@@ -345,6 +693,257 @@ export class NetworkView extends Component {
         this.renderAll();
         break;
       }
+      case "laprf-connect-eth": {
+        if (this.laprfBusy) break;
+        this.laprfBusy = true;
+        this.laprfError = null;
+        this.lastLaprfConnSig = "";
+        this.renderAll();
+        try {
+          await sharedLapRFLink.connectEthernet(
+            this.store,
+            this.api,
+            this.laprfHost,
+            this.laprfPort
+          );
+          if (this.laprfDiscovered.length > 0) {
+            const res = await sharedLapRFLink.discover(this.store, this.api).catch(() => null);
+            if (res) {
+              this.laprfScannedSubnet = res.subnet;
+              this.laprfDiscovered = res.devices;
+            }
+          }
+        } catch (err) {
+          this.laprfError = err instanceof Error ? err.message : String(err);
+        } finally {
+          this.laprfBusy = false;
+          this.lastLaprfConnSig = "";
+          this.lastLaprfTimersStructSig = "";
+          this.renderAll();
+        }
+        break;
+      }
+      case "laprf-connect-discovered": {
+        if (this.laprfBusy) break;
+        const host = t.dataset.host || "192.168.1.2";
+        const port = Number(t.dataset.port) || 5403;
+        const label = t.dataset.label || "";
+        this.laprfBusy = true;
+        this.laprfError = null;
+        this.lastLaprfConnSig = "";
+        this.renderAll();
+        try {
+          await sharedLapRFLink.connectEthernet(this.store, this.api, host, port, label);
+          const res = await sharedLapRFLink.discover(this.store, this.api).catch(() => null);
+          if (res) {
+            this.laprfScannedSubnet = res.subnet;
+            this.laprfDiscovered = res.devices;
+          }
+        } catch (err) {
+          this.laprfError = err instanceof Error ? err.message : String(err);
+        } finally {
+          this.laprfBusy = false;
+          this.lastLaprfConnSig = "";
+          this.lastLaprfTimersStructSig = "";
+          this.renderAll();
+        }
+        break;
+      }
+      case "laprf-scan-lan": {
+        if (this.laprfScanning) break;
+        this.laprfScanning = true;
+        this.laprfError = null;
+        this.lastLaprfConnSig = "";
+        this.renderAll();
+        try {
+          const res = await sharedLapRFLink.discover(this.store, this.api);
+          this.laprfScannedSubnet = res.subnet;
+          this.laprfDiscovered = res.devices;
+        } catch (err) {
+          this.laprfError = err instanceof Error ? err.message : String(err);
+        } finally {
+          this.laprfScanning = false;
+          this.lastLaprfConnSig = "";
+          this.renderAll();
+        }
+        break;
+      }
+      case "laprf-connect-usb": {
+        if (this.laprfBusy) break;
+        this.laprfBusy = true;
+        this.laprfError = null;
+        this.lastLaprfConnSig = "";
+        this.renderAll();
+        try {
+          await sharedLapRFLink.connectUsb(this.store, this.api);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          if (!/No port selected|aborted|cancelled|cancel/i.test(msg)) {
+            this.laprfError = msg;
+          }
+        } finally {
+          this.laprfBusy = false;
+          this.lastLaprfConnSig = "";
+          this.lastLaprfTimersStructSig = "";
+          this.renderAll();
+        }
+        break;
+      }
+      case "laprf-disconnect": {
+        const timerId = Number(t.dataset.timerId);
+        if (Number.isFinite(timerId)) {
+          this.laprfError = null;
+          await sharedLapRFLink.disconnect(this.store, this.api, timerId).catch(() => undefined);
+          if (this.laprfDiscovered.length > 0) {
+            const res = await sharedLapRFLink.discover(this.store, this.api).catch(() => null);
+            if (res) {
+              this.laprfScannedSubnet = res.subnet;
+              this.laprfDiscovered = res.devices;
+            }
+          }
+          this.lastLaprfConnSig = "";
+          this.lastLaprfTimersStructSig = "";
+          this.renderAll();
+        }
+        break;
+      }
+      case "rh-toggle-pass": {
+        this.rhRevealPass = !this.rhRevealPass;
+        const inp = this.el.querySelector<HTMLInputElement>('input[data-field="rh-cred-pass"]');
+        if (inp) {
+          inp.type = this.rhRevealPass ? "text" : "password";
+        }
+        const label = this.rhRevealPass ? "Hide admin password" : "Reveal admin password";
+        t.setAttribute("aria-label", label);
+        t.title = label;
+        t.innerHTML = this.rhRevealPass ? icons.eyeOff(15) : icons.eye(15);
+        this.lastRhConnSig = "";
+        this.lastRhTimersStructSig = "";
+        break;
+      }
+      case "rh-open-manual-creds": {
+        const host = this.rhHost.trim() || "192.168.1.101";
+        const port = this.rhPort || DEFAULT_RH_PORT;
+        this.openRhCredPrompt({
+          scope: "manual",
+          key: `manual:${host}:${port}`,
+          host,
+          port,
+          label: `${host}:${port}`,
+        });
+        break;
+      }
+      case "rh-open-device-creds": {
+        const host = t.dataset.host || "192.168.1.101";
+        const port = Number(t.dataset.port) || DEFAULT_RH_PORT;
+        const label = t.dataset.label || `${host}:${port}`;
+        const timerId = Number(t.dataset.timerId) || undefined;
+        const scope = t.dataset.credScope === "card" ? "card" : "discovered";
+        this.openRhCredPrompt({
+          scope,
+          key: `${scope}:${timerId ?? ""}:${host}:${port}`,
+          host,
+          port,
+          label,
+          timerId,
+        });
+        break;
+      }
+      case "rh-cred-cancel": {
+        this.rhCredPrompt = null;
+        this.rhError = null;
+        this.lastRhConnSig = "";
+        this.lastRhTimersStructSig = "";
+        this.renderAll();
+        break;
+      }
+      case "rh-cred-submit": {
+        await this.submitRhCredPrompt();
+        break;
+      }
+      case "rh-scan-lan": {
+        if (this.rhScanning) break;
+        this.rhScanning = true;
+        this.rhError = null;
+        this.lastRhConnSig = "";
+        this.renderAll();
+        try {
+          const res = await sharedRHLink.scanLan(this.store, this.api, this.rhPort);
+          this.rhScannedSubnet = res.subnet;
+          this.rhDiscovered = res.devices;
+        } catch (err) {
+          this.rhError = err instanceof Error ? err.message : String(err);
+        } finally {
+          this.rhScanning = false;
+          this.lastRhConnSig = "";
+          this.renderAll();
+        }
+        break;
+      }
+      case "rh-usb-refresh": {
+        await this.refreshRhUsbPorts();
+        break;
+      }
+      case "rh-usb-connect": {
+        if (this.rhBusy) break;
+        const portFromBtn = t.dataset.portName?.trim() || "";
+        const portToUse = portFromBtn || this.rhUsbSelectedPort.trim();
+        if (!portToUse) {
+          this.rhError = "Select a USB serial port to connect.";
+          this.lastRhUsbConnSig = "";
+          this.renderAll();
+          break;
+        }
+        this.rhBusy = true;
+        this.rhError = null;
+        this.lastRhUsbConnSig = "";
+        this.lastRhUsbTimersStructSig = "";
+        this.renderAll();
+        try {
+          await sharedRHLink.connectUSBDevice(this.store, this.api, {
+            portName: portToUse,
+            baudRate: this.rhUsbBaudRate || undefined,
+            preferredLabel: t.dataset.label || undefined,
+            preferredTimerId: Number(t.dataset.timerId) || undefined,
+          });
+          if (!this.store.simulatorRunning) {
+            await this.refreshRhUsbPorts();
+          }
+        } catch (err) {
+          this.rhError = err instanceof Error ? err.message : String(err);
+        } finally {
+          this.rhBusy = false;
+          this.lastRhUsbConnSig = "";
+          this.lastRhUsbTimersStructSig = "";
+          this.renderAll();
+        }
+        break;
+      }
+      case "rh-disconnect": {
+        const timerId = Number(t.dataset.timerId);
+        if (Number.isFinite(timerId)) {
+          this.rhError = null;
+          await sharedRHLink.disconnectDevice(this.store, this.api, timerId).catch(() => undefined);
+          if (this.rhDiscovered.length > 0 && this.store.timingHardwareMode === "rotorhazard") {
+            const res = await sharedRHLink
+              .scanLan(this.store, this.api, this.rhPort)
+              .catch(() => null);
+            if (res) {
+              this.rhScannedSubnet = res.subnet;
+              this.rhDiscovered = res.devices;
+            }
+          }
+          if (!this.store.simulatorRunning && this.store.timingHardwareMode === "rotorhazard_usb") {
+            await this.refreshRhUsbPorts();
+          }
+          this.lastRhConnSig = "";
+          this.lastRhTimersStructSig = "";
+          this.lastRhUsbConnSig = "";
+          this.lastRhUsbTimersStructSig = "";
+          this.renderAll();
+        }
+        break;
+      }
     }
   }
 
@@ -355,6 +954,8 @@ export class NetworkView extends Component {
     const s = this.activeStatus();
     const hubConsole = usbPool.hubConsole();
     const hubUsbStatus = s && s.role === 1 ? s : hubConsole?.connected ? hubConsole.lastStatus : null;
+    const activeHubConsole = hubConsole ?? sharedTimerConsole;
+    const freqs = s?.freqs?.length === 8 ? s.freqs : hubUsbStatus?.freqs?.length === 8 ? hubUsbStatus.freqs : RACEBAND;
     const detectedTimers: DetectedTimer[] = this.store.detectedTimers;
     const ch = hubUsbStatus?.channel || s?.channel || 1;
     const nowMs = performance.now();
@@ -368,20 +969,30 @@ export class NetworkView extends Component {
 
     let hub: TopologyHubInfo;
     if (hubUsbStatus && hubUsbStatus.role === 1) {
+      const rfActive = !hubUsbStatus.emergencyMode && hubUsbStatus.rf?.enabled !== false && !hubUsbStatus.scanLive;
+      const hubSlotLive = activeHubConsole.hubSlotLive.get(1);
+      const simDbm = rfActive
+        ? this.mapSimPilotRssiToFreqs(
+            hubServerTimer?.timerId ?? 1,
+            hubGate?.lastRssi ?? hubServerTimer?.lastRssi,
+            hubGate?.noiseFloorDbm ?? hubServerTimer?.noiseFloorDbm ?? hubUsbStatus.rf?.floorDb,
+            freqs
+          )
+        : [-128, -128, -128, -128, -128, -128, -128, -128];
       const liveDbm =
         s && s.role === 1 && this.live?.dbm?.length === 8
           ? this.live.dbm
-          : hubUsbStatus.dbm?.length === 8
-            ? hubUsbStatus.dbm
-            : sharedTimerConsole.hubLastDbm?.length === 8
-              ? sharedTimerConsole.hubLastDbm
-              : Array.isArray(hubGate?.lastRssi)
-                ? hubGate!.lastRssi!.slice(0, 8).map((v) => Math.round(v))
-                : Array.isArray(hubServerTimer?.lastRssi)
-                  ? hubServerTimer!.lastRssi!.slice(0, 8).map((v) => Math.round(v))
+          : simDbm?.length === 8
+            ? simDbm
+            : hubSlotLive?.dbm?.length === 8
+              ? hubSlotLive.dbm
+              : activeHubConsole.hubLastDbm?.length === 8
+                ? activeHubConsole.hubLastDbm
+                : hubUsbStatus.dbm?.length === 8
+                  ? hubUsbStatus.dbm
                   : undefined;
       const hubFrames = Math.max(
-        sharedTimerConsole.hubOwnFrames,
+        activeHubConsole.hubOwnFrames,
         hubGate?.framesRxCount ?? 0,
         hubServerTimer?.framesRxCount ?? 0
       );
@@ -410,6 +1021,14 @@ export class NetworkView extends Component {
       const parentFp = s.hub?.fp || "";
       const parentFw = s.hub?.fw || s.fw;
       const parentMac = s.hub?.mac || "—";
+      const liveEngineDbm = linked
+        ? this.mapSimPilotRssiToFreqs(
+            hubServerTimer?.timerId ?? 1,
+            hubGate?.lastRssi ?? hubServerTimer?.lastRssi,
+            hubGate?.noiseFloorDbm ?? hubServerTimer?.noiseFloorDbm,
+            freqs
+          )
+        : undefined;
       hub = {
         populated: linked,
         online: linked,
@@ -422,6 +1041,7 @@ export class NetworkView extends Component {
         emergencyMode: false,
         gateLabel: linked ? hubGateName : undefined,
         serverFrames: linked ? Math.max(hubGate?.framesRxCount ?? 0, hubServerTimer?.framesRxCount ?? 0) : 0,
+        dbm: liveEngineDbm,
         statusNote: linked ? `Sync beacon locked` : hasSlot ? "Beacon lost" : "Not connected",
       };
     } else {
@@ -447,15 +1067,29 @@ export class NetworkView extends Component {
         if (sp.slot >= 2 && sp.slot <= 7) {
           const rawFp = (sp.fp || "").toUpperCase();
           const isFallbackFp = !rawFp || rawFp.startsWith("53504B");
-          const frames = sp.frames ?? 0;
-          const msAgo = sp.msAgo !== undefined && sp.msAgo >= 0x80000000 ? 0 : sp.msAgo;
+          const matchedDt = !isFallbackFp
+            ? detectedTimers.find((t) => (t.fingerprint || "").toUpperCase() === rawFp)
+            : undefined;
+          const gate = matchedDt ? this.store.nodes.find((g) => g.assignedTimerId === matchedDt.timerId) : undefined;
+          const slotLive = activeHubConsole.hubSlotLive.get(sp.slot);
+          const frames = Math.max(
+            sp.frames ?? 0,
+            slotLive?.frames ?? 0,
+            gate?.framesRxCount ?? 0,
+            matchedDt?.framesRxCount ?? 0
+          );
+          const statusMsAgo = sp.msAgo !== undefined && sp.msAgo >= 0x80000000 ? 0 : sp.msAgo;
+          const msAgo =
+            slotLive && slotLive.lastFrameAtMs > 0
+              ? Math.max(0, Date.now() - slotLive.lastFrameAtMs)
+              : statusMsAgo;
           // Ignore synthetic slot placeholders that have never transmitted and Spokes that are no longer active
           if (isFallbackFp && frames === 0) continue;
           if (msAgo !== undefined && msAgo >= 5000) continue;
 
           const fp = !isFallbackFp && rawFp ? rawFp : `SLOT${sp.slot}`;
           const prevRate = this.spokeRateTracker.get(sp.slot);
-          let ratePktPerSec = prevRate?.ratePktPerSec ?? 0;
+          let ratePktPerSec = prevRate?.ratePktPerSec ?? 25;
           if (prevRate) {
             const dtSec = (nowMs - prevRate.atMs) / 1000;
             if (dtSec >= 0.25) {
@@ -463,15 +1097,22 @@ export class NetworkView extends Component {
               this.spokeRateTracker.set(sp.slot, { frames, atMs: nowMs, ratePktPerSec });
             }
           } else {
-            this.spokeRateTracker.set(sp.slot, { frames, atMs: nowMs, ratePktPerSec: 0 });
+            this.spokeRateTracker.set(sp.slot, { frames, atMs: nowMs, ratePktPerSec: frames > 0 ? 25 : 0 });
           }
           const activelyReceiving = frames > 0 && (msAgo === undefined || msAgo < 2500);
-          const matchedDt = !isFallbackFp
-            ? detectedTimers.find((t) => (t.fingerprint || "").toUpperCase() === rawFp)
-            : undefined;
-          const gate = matchedDt ? this.store.nodes.find((g) => g.assignedTimerId === matchedDt.timerId) : undefined;
           const gateName = gate ? formatTrackPos(gate) : undefined;
           const cleanSpLabel = isFallbackFp ? "" : sp.label;
+          const simSpokeDbm = activelyReceiving
+            ? this.mapSimPilotRssiToFreqs(
+                matchedDt?.timerId ?? sp.slot,
+                gate?.lastRssi ?? matchedDt?.lastRssi,
+                gate?.noiseFloorDbm ?? matchedDt?.noiseFloorDbm ?? slotLive?.floor,
+                freqs
+              )
+            : undefined;
+          const liveSpokeDbm =
+            simSpokeDbm ??
+            (activelyReceiving && slotLive?.dbm?.length === 8 ? slotLive.dbm : undefined);
           const sourceNote =
             frames === 0
               ? `Joined · 0 frames rx`
@@ -490,12 +1131,12 @@ export class NetworkView extends Component {
             mac: sp.mac,
             frames,
             msAgo,
-            seq: sp.seq,
-            dbm: sp.dbm,
+            seq: slotLive?.seq ?? sp.seq,
+            dbm: liveSpokeDbm ?? sp.dbm,
             ratePktPerSec,
             serverFrames: gate?.framesRxCount ?? matchedDt?.framesRxCount ?? 0,
             serverGateLabel: gateName,
-            serverRssi: Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined,
+            serverRssi: liveSpokeDbm,
             sourceNote,
           });
         }
@@ -518,6 +1159,15 @@ export class NetworkView extends Component {
       const gateName = gate ? formatTrackPos(gate) : undefined;
       const existingFromHub = spokes.get(slotNum);
       const isCurrentConsole = s === spStatus;
+      const rfActive = !spStatus.emergencyMode && spStatus.rf?.enabled !== false && !spStatus.scanLive;
+      const liveSpokeDbm = rfActive
+        ? this.mapSimPilotRssiToFreqs(
+            matchedDt?.timerId ?? slotNum,
+            gate?.lastRssi ?? matchedDt?.lastRssi,
+            gate?.noiseFloorDbm ?? matchedDt?.noiseFloorDbm ?? spStatus.rf?.floorDb,
+            freqs
+          )
+        : [-128, -128, -128, -128, -128, -128, -128, -128];
       spokes.set(slotNum, {
         slot: slotNum,
         populated: true,
@@ -531,17 +1181,19 @@ export class NetworkView extends Component {
         frames: existingFromHub?.frames ?? gate?.framesRxCount ?? matchedDt?.framesRxCount ?? 0,
         msAgo: existingFromHub?.msAgo,
         beaconMsAgo,
-        seq: existingFromHub?.seq,
+        seq: existingFromHub?.seq ?? spStatus.sweeps,
         dbm:
           isCurrentConsole && this.live?.dbm?.length === 8
             ? this.live.dbm
-            : spStatus.dbm?.length === 8
-              ? spStatus.dbm
-              : existingFromHub?.dbm,
+            : liveSpokeDbm?.length === 8
+              ? liveSpokeDbm
+              : spStatus.dbm?.length === 8
+                ? spStatus.dbm
+                : existingFromHub?.dbm,
         ratePktPerSec: existingFromHub?.ratePktPerSec ?? (linked ? 25 : 0),
         serverFrames: gate?.framesRxCount ?? matchedDt?.framesRxCount ?? 0,
         serverGateLabel: gateName,
-        serverRssi: Array.isArray(gate?.lastRssi) ? gate!.lastRssi!.slice(0, 8) : undefined,
+        serverRssi: liveSpokeDbm,
         sourceNote: spStatus.emergencyMode
           ? "Emergency mode · USB-C"
           : linked
@@ -603,6 +1255,32 @@ export class NetworkView extends Component {
   }
 
   private renderAll(): void {
+    const mode = this.store.timingHardwareMode;
+    const isLapRF = mode === "laprf";
+    const isRHNet = mode === "rotorhazard";
+    const isRHUSB = mode === "rotorhazard_usb";
+    const slaprfWrap = this.el.querySelector<HTMLElement>('[data-slot="slaprf-sections"]');
+    const laprfWrap = this.el.querySelector<HTMLElement>('[data-slot="laprf-sections"]');
+    const rhWrap = this.el.querySelector<HTMLElement>('[data-slot="rh-sections"]');
+    const rhUsbWrap = this.el.querySelector<HTMLElement>('[data-slot="rh-usb-sections"]');
+    if (slaprfWrap) slaprfWrap.style.display = !isLapRF && !isRHNet && !isRHUSB ? "contents" : "none";
+    if (laprfWrap) laprfWrap.style.display = isLapRF ? "contents" : "none";
+    if (rhWrap) rhWrap.style.display = isRHNet ? "contents" : "none";
+    if (rhUsbWrap) rhUsbWrap.style.display = isRHUSB ? "contents" : "none";
+
+    if (isLapRF) {
+      this.renderLapRFView();
+      return;
+    }
+    if (isRHNet) {
+      this.renderRotorHazardView();
+      return;
+    }
+    if (isRHUSB) {
+      this.renderRotorHazardUSBView();
+      return;
+    }
+
     const connHost = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
     patchUsbConnectionBar(connHost, {
       activeConsole: usbPool.mainConsole,
@@ -615,21 +1293,1212 @@ export class NetworkView extends Component {
     this.renderTimerSection(hub, spokes, sel);
   }
 
+  private renderLapRFView(): void {
+    const connHost = this.slot("laprf-connection");
+    const timersHost = this.slot("laprf-timers");
+    const snaps = sharedLapRFLink.snapshots(this.store);
+    const errText = this.laprfError || sharedLapRFLink.errorMessage || "";
+
+    const activeEl = document.activeElement as HTMLElement | null;
+    const focusedInsideConn = Boolean(
+      activeEl && connHost.contains(activeEl) && activeEl.tagName === "INPUT"
+    );
+
+    const connSig = JSON.stringify({
+      busy: this.laprfBusy,
+      scanning: this.laprfScanning,
+      subnet: this.laprfScannedSubnet,
+      err: errText,
+      discovered: this.laprfDiscovered,
+      connectedEndpoints: snaps.filter((s) => s.connected).map((s) => s.endpoint),
+    });
+
+    if (!focusedInsideConn && connSig !== this.lastLaprfConnSig) {
+      this.lastLaprfConnSig = connSig;
+      const connectedEndpoints = new Set(snaps.filter((s) => s.connected).map((s) => s.endpoint));
+      const discoveredHtml =
+        this.laprfDiscovered.length > 0
+          ? `<div style="padding:10px 14px;border-top:1px solid var(--border,rgba(255,255,255,0.08));display:flex;flex-direction:column;gap:8px">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span class="muted" style="font-size:12px">Discovered on ${esc(this.laprfScannedSubnet || "LAN")} (${this.laprfDiscovered.length})</span>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px">
+                ${this.laprfDiscovered
+                  .map((d) => {
+                    const ep = `${d.host}:${d.port || 5403}`;
+                    const isConn = Boolean(d.connected || connectedEndpoints.has(ep));
+                    const vStr = d.voltageMv && d.voltageMv > 0 ? ` · ${(d.voltageMv / 1000).toFixed(1)} V` : "";
+                    return `
+                      <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--border,rgba(255,255,255,0.1));border-radius:6px;background:rgba(255,255,255,0.02)">
+                        <span class="status-dot ${isConn ? "is-up" : ""}"></span>
+                        <span class="mono" style="font-size:12px"><strong>${esc(d.label || "LapRF")}</strong> · ${esc(ep)}${esc(vStr)}</span>
+                        ${
+                          isConn
+                            ? `<span class="badge mono">Connected</span>`
+                            : `<button class="btn btn-sm btn-ghost" type="button" data-action="laprf-connect-discovered" data-host="${esc(d.host)}" data-port="${d.port || 5403}" data-label="${esc(d.label || "")}" ${this.laprfBusy ? "disabled" : ""}>Connect</button>`
+                        }
+                      </div>`;
+                  })
+                  .join("")}
+              </div>
+            </div>`
+          : this.laprfScannedSubnet
+            ? `<div style="padding:10px 14px;border-top:1px solid var(--border,rgba(255,255,255,0.08))"><span class="note">No powered-on LapRF timers responded on ${esc(this.laprfScannedSubnet)} TCP :5403.</span></div>`
+            : "";
+
+      connHost.innerHTML = `
+        <div class="card card-flush">
+          <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between">
+            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
+              <label style="display:flex;flex-direction:column;gap:4px">
+                <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Ethernet IP</span>
+                <input
+                  class="input mono"
+                  type="text"
+                  value="${esc(this.laprfHost)}"
+                  data-field="laprf-host"
+                  placeholder="192.168.1.2"
+                  style="width:142px;padding:5px 9px;font-size:13px"
+                />
+              </label>
+              <label style="display:flex;flex-direction:column;gap:4px">
+                <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Port</span>
+                <input
+                  class="input mono"
+                  type="number"
+                  value="${this.laprfPort}"
+                  data-field="laprf-port"
+                  style="width:82px;padding:5px 8px;font-size:13px"
+                />
+              </label>
+              <button class="btn btn-ghost" type="button" data-action="laprf-connect-eth" ${this.laprfBusy ? "disabled" : ""}>
+                ${icons.wifi(14)}<span>${this.laprfBusy ? "Connecting…" : "Connect Ethernet"}</span>
+              </button>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px">
+              <button class="btn btn-ghost" type="button" data-action="laprf-connect-usb" ${this.laprfBusy ? "disabled" : ""}>
+                ${icons.plug(14)}<span>Connect USB</span>
+              </button>
+            </div>
+          </div>
+          ${errText ? `<div class="sim-error-note" style="margin:0 16px 12px">${esc(errText)}</div>` : ""}
+        </div>`;
+
+      const discoverHost = this.slot("laprf-discover");
+      if (discoverHost) {
+        discoverHost.innerHTML = `
+          <div class="card card-flush">
+            <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between">
+              <div style="display:flex;align-items:center;gap:10px">
+                <button class="btn btn-ghost" type="button" data-action="laprf-scan-lan" ${this.laprfScanning ? "disabled" : ""}>
+                  ${icons.target(14)}<span>${this.laprfScanning ? "Scanning…" : "Scan LAN"}</span>
+                </button>
+                <span class="note">Probes local subnet for LapRF 8-Way units on TCP :${this.laprfPort || 5403}</span>
+              </div>
+            </div>
+            ${discoveredHtml}
+          </div>`;
+      }
+    }
+
+    const gateByTimer = new Map<number, string>();
+    for (const g of this.store.nodes) {
+      if (g.assignedTimerId > 0) {
+        gateByTimer.set(
+          g.assignedTimerId,
+          `Track #${g.trackOrder + 1}${g.role === "START_FINISH" ? " (Start)" : ""}`
+        );
+      }
+    }
+
+    const structSig = JSON.stringify({
+      snaps: snaps.map((s) => ({
+        id: s.timerId,
+        label: s.label,
+        ep: s.endpoint,
+        tr: s.transport,
+        conn: s.connected,
+        gate: gateByTimer.get(s.timerId) || "",
+        freqs: s.slotFreqsMhz ?? [],
+        thresholds: s.slotThresholds ?? [],
+      })),
+    });
+
+    const pctRssi = (val: number) =>
+      Math.max(0, Math.min(100, ((val - 300) / (3400 - 300)) * 100));
+
+    if (structSig === this.lastLaprfTimersStructSig && snaps.length > 0) {
+      for (const snap of snaps) {
+        const card = timersHost.querySelector<HTMLElement>(`[data-laprf-card="${snap.timerId}"]`);
+        if (!card) continue;
+        const voltEl = card.querySelector<HTMLElement>('[data-laprf-kpi="voltage"]');
+        const voltText = snap.voltageMv > 0 ? `${(snap.voltageMv / 1000).toFixed(1)} V` : "—";
+        if (voltEl && voltEl.textContent !== voltText) voltEl.textContent = voltText;
+
+        const gateEl = card.querySelector<HTMLElement>('[data-laprf-kpi="gate-state"]');
+        const gateText = !snap.connected ? "Offline" : snap.gateArmed ? "Armed" : "Standby";
+        if (gateEl && gateEl.textContent !== gateText) gateEl.textContent = gateText;
+
+        const rtcEl = card.querySelector<HTMLElement>('[data-laprf-kpi="rtc"]');
+        const rtcText = !snap.connected
+          ? "—"
+          : snap.rtcSynced
+            ? `Synced (${snap.rtcOffsetMs >= 0 ? "+" : ""}${Math.round(snap.rtcOffsetMs)} ms)`
+            : "Syncing…";
+        if (rtcEl && rtcEl.textContent !== rtcText) rtcEl.textContent = rtcText;
+
+        for (let idx = 0; idx < 8; idx++) {
+          const freq = snap.slotFreqsMhz?.[idx] ?? 0;
+          const active = freq > 0;
+          const val = snap.slotRssi?.[idx] ?? 0;
+          const valid = Boolean(active && snap.connected && val > 0);
+          const widthStr = `${(valid ? pctRssi(val) : 0).toFixed(1)}%`;
+          const valStr = !active ? "" : valid ? `${Math.round(val)}` : "—";
+          const fillEl = card.querySelector<HTMLElement>(`[data-laprf-bar-fill="${idx}"]`);
+          if (fillEl && fillEl.style.width !== widthStr) fillEl.style.width = widthStr;
+          const valEl = card.querySelector<HTMLElement>(`[data-laprf-bar-val="${idx}"]`);
+          if (valEl) {
+            if (valEl.textContent !== valStr) valEl.textContent = valStr;
+            valEl.classList.toggle("mono", valid);
+          }
+        }
+      }
+      return;
+    }
+
+    this.lastLaprfTimersStructSig = structSig;
+
+    if (snaps.length === 0) {
+      timersHost.innerHTML = `
+        <div class="card empty-note" style="padding:18px">
+          No LapRF 8-Way timers connected yet. Enter the timer's IP above, click <strong>Scan LAN</strong>, or connect over USB.
+        </div>`;
+      return;
+    }
+
+    timersHost.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:14px">
+        ${snaps
+          .map((snap) => {
+            const color = timerColor(this.store, snap.timerId);
+            const assignedGate = gateByTimer.get(snap.timerId);
+            const voltText = snap.voltageMv > 0 ? `${(snap.voltageMv / 1000).toFixed(1)} V` : "—";
+            const gateText = !snap.connected ? "Offline" : snap.gateArmed ? "Armed" : "Standby";
+            const rtcText = !snap.connected
+              ? "—"
+              : snap.rtcSynced
+                ? `Synced (${snap.rtcOffsetMs >= 0 ? "+" : ""}${Math.round(snap.rtcOffsetMs)} ms)`
+                : "Syncing…";
+
+            const barsHtml = Array.from({ length: 8 }, (_, idx) => {
+              const freq = snap.slotFreqsMhz?.[idx] ?? 0;
+              const active = freq > 0;
+              const val = snap.slotRssi?.[idx] ?? 0;
+              const valid = Boolean(active && snap.connected && val > 0);
+              const widthPct = valid ? pctRssi(val) : 0;
+              const thresh = snap.slotThresholds?.[idx] || 800;
+              const threshPct = pctRssi(thresh);
+              const labelHtml = active
+                ? `<span class="debug-ch-inline" style="background:#94a3b8"></span><strong>Slot ${idx + 1}</strong> <span class="muted mono">${esc(formatHardwareFreq(freq))}</span>`
+                : `<span class="debug-ch-inline" style="background:transparent;box-shadow:inset 0 0 0 1.5px #64748b"></span><strong>Slot ${idx + 1}</strong> <span class="muted">Disabled</span>`;
+
+              return `
+                <div class="debug-net-inspector-bar-row net-node-bar-row ${active ? "" : "is-muted"}">
+                  <span class="net-node-bar-label">${labelHtml}</span>
+                  <div class="debug-bar-track" style="position:relative">
+                    <span class="debug-bar-fill" data-laprf-bar-fill="${idx}" style="width:${widthPct.toFixed(1)}%"></span>
+                    ${
+                      active
+                        ? `<span title="Threshold ${Math.round(thresh)}" style="position:absolute;top:-2px;bottom:-2px;left:${threshPct.toFixed(1)}%;width:2px;background:rgba(255,255,255,0.45);pointer-events:none"></span>`
+                        : ""
+                    }
+                  </div>
+                  <span class="net-node-bar-val ${valid ? "mono" : ""}" data-laprf-bar-val="${idx}">${!active ? "" : valid ? `${Math.round(val)}` : "—"}</span>
+                </div>`;
+            }).join("");
+
+            return `
+              <div class="card card-flush" data-laprf-card="${snap.timerId}">
+                <div class="net-device-card-head">
+                  <span class="debug-led-status">
+                    <span class="timer-color-dot ${snap.connected ? "is-live" : "is-off"}" style="--c:${esc(color)}" title="${snap.connected ? "Connected" : "Disconnected"}"></span>
+                    <span class="debug-head-note">
+                      <strong>${esc(snap.label)}</strong> · <span class="mono">${esc(snap.endpoint)}</span>
+                    </span>
+                  </span>
+                  <div class="debug-connect-actions">
+                    <span class="badge">${assignedGate ? esc(assignedGate) : "Unassigned"}</span>
+                    <button class="btn btn-sm btn-ghost" type="button" data-action="laprf-disconnect" data-timer-id="${snap.timerId}">
+                      Disconnect
+                    </button>
+                  </div>
+                </div>
+
+                <div class="debug-net-inspector-kpis net-device-card-kpis">
+                  <div class="debug-net-inspector-kpi">
+                    <span class="debug-net-inspector-kpi-label">Supply voltage</span>
+                    <strong class="debug-net-inspector-kpi-val mono" data-laprf-kpi="voltage">${voltText}</strong>
+                  </div>
+                  <div class="debug-net-inspector-kpi">
+                    <span class="debug-net-inspector-kpi-label">Gate state</span>
+                    <strong class="debug-net-inspector-kpi-val" data-laprf-kpi="gate-state">${gateText}</strong>
+                  </div>
+                  <div class="debug-net-inspector-kpi">
+                    <span class="debug-net-inspector-kpi-label">Clock sync</span>
+                    <strong class="debug-net-inspector-kpi-val mono" data-laprf-kpi="rtc">${rtcText}</strong>
+                  </div>
+                  <div class="debug-net-inspector-kpi">
+                    <span class="debug-net-inspector-kpi-label">Track position</span>
+                    <strong class="debug-net-inspector-kpi-val">${assignedGate ? esc(assignedGate) : `<span class="note">Off track</span>`}</strong>
+                  </div>
+                </div>
+
+                <div class="net-device-card-body">
+                  <div class="debug-subbox">
+                    <div class="debug-net-inspector-bars-wrap">
+                      <div class="debug-subbar">
+                        <span class="debug-chart-title">8-slot receiver RSSI (300–3500 scale)</span>
+                        <span class="note">Tick mark = slot crossing threshold</span>
+                      </div>
+                      <div class="debug-net-inspector-bars">${barsHtml}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>`;
+          })
+          .join("")}
+      </div>`;
+  }
+
+  private defaultRhCredsFor(host: string, port: number, timerId?: number): { user: string; pass: string } {
+    const ep = `${host}:${port || DEFAULT_RH_PORT}`;
+    const cached = this.rhCredsByEndpoint.get(ep);
+    if (cached) {
+      return { user: cached.user, pass: cached.pass };
+    }
+    if (this.store.simulatorRunning) {
+      const units = this.store.simState?.rotorhazardUnits ?? [];
+      const u = units.find(
+        (x) =>
+          (timerId && x.timerId === timerId) ||
+          (x.host === host && (x.port || DEFAULT_RH_PORT) === (port || DEFAULT_RH_PORT))
+      );
+      if (u) {
+        return {
+          user: u.adminUser ?? DEFAULT_RH_ADMIN_USER,
+          pass: u.adminPass ?? DEFAULT_RH_ADMIN_PASS,
+        };
+      }
+    }
+    const saved = sharedRHLink
+      .loadSavedTargets()
+      .find((t) => t.host === host && (t.port || DEFAULT_RH_PORT) === (port || DEFAULT_RH_PORT));
+    if (saved?.adminUser) {
+      return { user: saved.adminUser, pass: DEFAULT_RH_ADMIN_PASS };
+    }
+    return { user: DEFAULT_RH_ADMIN_USER, pass: DEFAULT_RH_ADMIN_PASS };
+  }
+
+  private openRhCredPrompt(target: {
+    scope: "manual" | "discovered" | "card";
+    key: string;
+    host: string;
+    port: number;
+    label: string;
+    timerId?: number;
+  }): void {
+    const creds = this.defaultRhCredsFor(target.host, target.port, target.timerId);
+    this.rhCredPrompt = target;
+    this.rhUser = creds.user;
+    this.rhPass = creds.pass;
+    this.rhRevealPass = false;
+    this.rhError = null;
+    this.lastRhConnSig = "";
+    this.lastRhTimersStructSig = "";
+    this.renderAll();
+    const passInp = this.el.querySelector<HTMLInputElement>('input[data-field="rh-cred-pass"]');
+    passInp?.focus();
+    passInp?.select();
+  }
+
+  private async submitRhCredPrompt(): Promise<void> {
+    if (this.rhBusy || !this.rhCredPrompt) return;
+    const target = this.rhCredPrompt;
+    const ep = `${target.host}:${target.port || DEFAULT_RH_PORT}`;
+    this.rhCredsByEndpoint.set(ep, { user: this.rhUser, pass: this.rhPass });
+    this.rhBusy = true;
+    this.rhError = null;
+    this.lastRhConnSig = "";
+    this.lastRhTimersStructSig = "";
+    this.renderAll();
+    try {
+      await sharedRHLink.connectDevice(this.store, this.api, {
+        host: target.host,
+        port: target.port,
+        adminUser: this.rhUser,
+        adminPass: this.rhPass,
+        preferredLabel: target.scope !== "manual" ? target.label : undefined,
+        preferredTimerId: target.timerId,
+      });
+      this.rhCredPrompt = null;
+      if (this.rhDiscovered.length > 0) {
+        const res = await sharedRHLink
+          .scanLan(this.store, this.api, target.port || this.rhPort)
+          .catch(() => null);
+        if (res) {
+          this.rhScannedSubnet = res.subnet;
+          this.rhDiscovered = res.devices;
+        }
+      }
+    } catch (err) {
+      this.rhError = err instanceof Error ? err.message : String(err);
+    } finally {
+      this.rhBusy = false;
+      this.lastRhConnSig = "";
+      this.lastRhTimersStructSig = "";
+      this.lastRhUsbConnSig = "";
+      this.lastRhUsbTimersStructSig = "";
+      this.renderAll();
+    }
+  }
+
+  private renderRhInlineCredsBar(titleText: string): string {
+    const eyeLabel = this.rhRevealPass ? "Hide admin password" : "Reveal admin password";
+    return `
+      <div data-rh-creds-prompt="1" style="padding:12px 16px;border-top:1px solid var(--border,rgba(255,255,255,0.08));background:rgba(255,255,255,0.02);display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between">
+        <div style="display:flex;flex-direction:column;gap:8px;flex:1 1 auto;min-width:260px">
+          <div style="display:flex;align-items:center;gap:6px;font-size:12px">
+            <strong>${esc(titleText)}</strong>
+            <span class="note">— each RotorHazard server uses its own admin credentials</span>
+          </div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
+            <label style="display:flex;flex-direction:column;gap:4px">
+              <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Admin Username</span>
+              <input
+                class="input mono"
+                type="text"
+                value="${esc(this.rhUser)}"
+                data-field="rh-cred-user"
+                placeholder="admin"
+                autocomplete="off"
+                spellcheck="false"
+                style="width:132px;padding:5px 9px;font-size:13px"
+              />
+            </label>
+            <label style="display:flex;flex-direction:column;gap:4px">
+              <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Admin Password</span>
+              <div class="flasher-pass-wrap" style="width:176px">
+                <input
+                  class="input flasher-pass-input mono"
+                  type="${this.rhRevealPass ? "text" : "password"}"
+                  value="${esc(this.rhPass)}"
+                  data-field="rh-cred-pass"
+                  placeholder="rotorhazard"
+                  autocomplete="off"
+                  spellcheck="false"
+                  style="padding:5px 30px 5px 9px;font-size:13px"
+                />
+                <button
+                  type="button"
+                  class="flasher-pass-toggle"
+                  data-action="rh-toggle-pass"
+                  aria-label="${eyeLabel}"
+                  title="${eyeLabel}"
+                >
+                  ${this.rhRevealPass ? icons.eyeOff(15) : icons.eye(15)}
+                </button>
+              </div>
+            </label>
+            <button class="btn btn-armed" type="button" data-action="rh-cred-submit" ${this.rhBusy ? "disabled" : ""}>
+              ${icons.wifi(14)}<span>${this.rhBusy ? "Connecting…" : "Sign in & Connect"}</span>
+            </button>
+            <button class="btn btn-ghost" type="button" data-action="rh-cred-cancel" ${this.rhBusy ? "disabled" : ""}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  private renderRotorHazardView(): void {
+    const connHost = this.slot("rh-connection");
+    const discoverHost = this.slot("rh-discover");
+    const timersHost = this.slot("rh-timers");
+    const snaps = sharedRHLink.snapshots(this.store);
+    const errText = this.rhError || sharedRHLink.errorMessage || "";
+    const canScanLan = this.store.simulatorRunning || capabilitiesSnapshot().portable;
+
+    const activeEl = document.activeElement as HTMLElement | null;
+    const focusedInsideConn = Boolean(
+      activeEl &&
+        (connHost.contains(activeEl) || (discoverHost && discoverHost.contains(activeEl))) &&
+        activeEl.tagName === "INPUT"
+    );
+    const focusedInsideTimers = Boolean(
+      activeEl && timersHost.contains(activeEl) && activeEl.tagName === "INPUT"
+    );
+
+    const connPrompt =
+      this.rhCredPrompt && this.rhCredPrompt.scope !== "card" ? this.rhCredPrompt : null;
+
+    const connSig = JSON.stringify({
+      busy: this.rhBusy,
+      scanning: this.rhScanning,
+      canScanLan,
+      prompt: connPrompt ? `${connPrompt.key}:${this.rhRevealPass ? 1 : 0}` : "",
+      subnet: this.rhScannedSubnet,
+      err: errText,
+      discovered: this.rhDiscovered,
+      connectedEndpoints: snaps.filter((s) => s.connected).map((s) => s.endpoint),
+    });
+
+    if (!focusedInsideConn && connSig !== this.lastRhConnSig) {
+      this.lastRhConnSig = connSig;
+      const connectedEndpoints = new Set(snaps.filter((s) => s.connected).map((s) => s.endpoint));
+      const discoveredHtml =
+        this.rhDiscovered.length > 0
+          ? `<div style="padding:10px 14px;border-top:1px solid var(--border,rgba(255,255,255,0.08));display:flex;flex-direction:column;gap:8px">
+              <div style="display:flex;justify-content:space-between;align-items:center">
+                <span class="muted" style="font-size:12px">Discovered RotorHazard devices on ${esc(this.rhScannedSubnet || "LAN")} (${this.rhDiscovered.length})</span>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px">
+                ${this.rhDiscovered
+                  .map((d, idx) => {
+                    const ep = `${d.host}:${d.port || DEFAULT_RH_PORT}`;
+                    const isConn = Boolean(d.connected || connectedEndpoints.has(ep));
+                    const nodesMeta = d.nodeCount ? ` · ${d.nodeCount} nodes` : "";
+                    const rawLbl = d.label?.trim() || "";
+                    const dLabel = rawLbl
+                      ? /^rh(\d+)$/i.test(rawLbl)
+                        ? `R${rawLbl.slice(2)}`
+                        : rawLbl
+                      : `R${idx + 1}`;
+                    const dColor = d.timerId ? timerColor(this.store, d.timerId) : channelColor(idx);
+                    const isPrompted = Boolean(
+                      connPrompt &&
+                        connPrompt.scope === "discovered" &&
+                        connPrompt.host === d.host &&
+                        connPrompt.port === (d.port || DEFAULT_RH_PORT)
+                    );
+                    return `
+                      <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid ${isPrompted ? "var(--accent)" : "var(--border,rgba(255,255,255,0.1))"};border-radius:6px;background:rgba(255,255,255,0.02)">
+                        <span class="timer-color-dot ${isConn ? "is-live" : "is-off"}" style="--c:${esc(dColor)}"></span>
+                        <span style="font-size:12px"><strong>${esc(dLabel)}</strong> · <span class="mono">${esc(ep)}</span>${esc(nodesMeta)}</span>
+                        ${
+                          isConn
+                            ? `<span class="badge">Connected</span>`
+                            : `<button class="btn btn-sm btn-ghost" type="button" data-action="rh-open-device-creds" data-cred-scope="discovered" data-host="${esc(d.host)}" data-port="${d.port || DEFAULT_RH_PORT}" data-label="${esc(dLabel)}" ${d.timerId ? `data-timer-id="${d.timerId}"` : ""} ${this.rhBusy ? "disabled" : ""}>Connect…</button>`
+                        }
+                      </div>`;
+                  })
+                  .join("")}
+              </div>
+            </div>`
+          : this.rhScannedSubnet
+            ? `<div style="padding:10px 14px;border-top:1px solid var(--border,rgba(255,255,255,0.08))"><span class="note">No powered-on RotorHazard devices responded on ${esc(this.rhScannedSubnet)} :${this.rhPort}.</span></div>`
+            : "";
+
+      const scanTitle = canScanLan
+        ? "Scan the local subnet for RotorHazard servers"
+        : "Automatic LAN scanning requires a SlapRF Server (or Simulation active). Enter the RotorHazard IP address under Manual connection.";
+
+      const manualPromptHtml =
+        connPrompt && connPrompt.scope === "manual"
+          ? this.renderRhInlineCredsBar(
+              `Credentials for ${connPrompt.host}:${connPrompt.port}`
+            )
+          : "";
+
+      const discoverPromptHtml =
+        connPrompt && connPrompt.scope === "discovered"
+          ? this.renderRhInlineCredsBar(
+              `Credentials for ${connPrompt.label} (${connPrompt.host}:${connPrompt.port})`
+            )
+          : "";
+
+      const errInDiscover = Boolean(connPrompt && connPrompt.scope === "discovered");
+
+      connHost.innerHTML = `
+        <div class="card card-flush">
+          <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between">
+            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
+              <label style="display:flex;flex-direction:column;gap:4px">
+                <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Host IP</span>
+                <input
+                  class="input mono"
+                  type="text"
+                  value="${esc(this.rhHost)}"
+                  data-field="rh-host"
+                  placeholder="192.168.1.101"
+                  style="width:142px;padding:5px 9px;font-size:13px"
+                />
+              </label>
+              <label style="display:flex;flex-direction:column;gap:4px">
+                <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Port</span>
+                <input
+                  class="input mono"
+                  type="number"
+                  value="${this.rhPort}"
+                  data-field="rh-port"
+                  style="width:82px;padding:5px 8px;font-size:13px"
+                />
+              </label>
+              <button class="btn btn-ghost" type="button" data-action="rh-open-manual-creds" ${this.rhBusy ? "disabled" : ""}>
+                ${icons.wifi(14)}<span>Connect…</span>
+              </button>
+            </div>
+            <span class="note">Enter a RotorHazard server IP and port to sign in with its admin credentials</span>
+          </div>
+          ${errText && !errInDiscover ? `<div class="sim-error-note" style="margin:0 16px 12px">${esc(errText)}</div>` : ""}
+          ${manualPromptHtml}
+        </div>`;
+
+      if (discoverHost) {
+        discoverHost.innerHTML = `
+          <div class="card card-flush">
+            <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between">
+              <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                <button class="btn btn-ghost" type="button" data-action="rh-scan-lan" ${this.rhScanning || !canScanLan ? "disabled" : ""} title="${esc(scanTitle)}">
+                  ${icons.target(14)}<span>${this.rhScanning ? "Scanning…" : "Scan LAN"}</span>
+                </button>
+                <span class="note">${
+                  canScanLan
+                    ? `Scans local subnet for RotorHazard timing servers on port ${this.rhPort || DEFAULT_RH_PORT}`
+                    : "Automatic LAN discovery requires SlapRF Server mode (or Simulation active)"
+                }</span>
+              </div>
+            </div>
+            ${errText && errInDiscover ? `<div class="sim-error-note" style="margin:0 16px 12px">${esc(errText)}</div>` : ""}
+            ${discoveredHtml}
+            ${discoverPromptHtml}
+          </div>`;
+      }
+    }
+
+    const gateByTimer = new Map<number, { gateId: number; label: string }>();
+    for (const g of this.store.nodes) {
+      if (g.assignedTimerId > 0) {
+        gateByTimer.set(g.assignedTimerId, {
+          gateId: g.gateId,
+          label: `Track #${g.trackOrder + 1}${g.role === "START_FINISH" ? " (Start)" : ""}`,
+        });
+      }
+    }
+
+    const pctRssi = (val: number) => Math.max(0, Math.min(100, (val / 255) * 100));
+    const cardPrompt =
+      this.rhCredPrompt && this.rhCredPrompt.scope === "card" ? this.rhCredPrompt : null;
+
+    const structSig = JSON.stringify({
+      cardPrompt: cardPrompt ? `${cardPrompt.key}:${this.rhRevealPass ? 1 : 0}:${this.rhBusy ? 1 : 0}` : "",
+      snaps: snaps.map((s) => {
+        const gMeta = gateByTimer.get(s.timerId);
+        return {
+          id: s.timerId,
+          label: s.label,
+          ep: s.endpoint,
+          conn: s.connected,
+          authOk: s.authOk,
+          authKnown: s.authKnown,
+          ver: s.serverVersion,
+          nodes: s.nodeCount,
+          gate: gMeta?.label || "",
+          freqs: s.nodeFreqsMhz ?? [],
+          enters: s.nodeEnterLevels ?? [],
+          exits: s.nodeExitLevels ?? [],
+        };
+      }),
+    });
+
+    if (!focusedInsideTimers && structSig === this.lastRhTimersStructSig && snaps.length > 0) {
+      for (const snap of snaps) {
+        const card = timersHost.querySelector<HTMLElement>(`[data-rh-card="${snap.timerId}"]`);
+        if (!card) continue;
+        const gateEl = card.querySelector<HTMLElement>('[data-rh-kpi="gate-state"]');
+        const gateText = !snap.connected ? "Offline" : snap.gateArmed ? "Armed" : "Standby";
+        if (gateEl && gateEl.textContent !== gateText) gateEl.textContent = gateText;
+
+        const clkEl = card.querySelector<HTMLElement>('[data-rh-kpi="clock"]');
+        const clkText = !snap.connected
+          ? "—"
+          : snap.clockSynced
+            ? `Synced (${Math.abs(snap.clockOffsetMs) < 0.5 ? "<1" : snap.clockOffsetMs.toFixed(1)} ms RTT)`
+            : "Syncing…";
+        if (clkEl && clkEl.textContent !== clkText) clkEl.textContent = clkText;
+
+        const nodeCount = Math.max(1, Math.min(8, snap.nodeCount || 8));
+        for (let idx = 0; idx < nodeCount; idx++) {
+          const freq = snap.nodeFreqsMhz?.[idx] ?? 0;
+          const active = freq > 0;
+          const val = snap.slotRssi?.[idx] ?? 0;
+          const crossing = Boolean(snap.crossingFlag?.[idx]);
+          const valid = Boolean(active && snap.connected && val > 0);
+          const widthStr = `${(valid ? pctRssi(val) : 0).toFixed(1)}%`;
+          const isCross = Boolean(active && snap.connected && crossing);
+          const valStr = !active
+            ? ""
+            : !snap.connected
+              ? "—"
+              : `${Math.round(val)}`;
+          const fillEl = card.querySelector<HTMLElement>(`[data-rh-bar-fill="${idx}"]`);
+          if (fillEl && fillEl.style.width !== widthStr) fillEl.style.width = widthStr;
+          const crossEl = card.querySelector<HTMLElement>(`[data-rh-bar-cross="${idx}"]`);
+          if (crossEl) {
+            const wantCross = isCross ? "CROSSING" : "";
+            if (crossEl.textContent !== wantCross) crossEl.textContent = wantCross;
+            crossEl.hidden = !isCross;
+          }
+          const valEl = card.querySelector<HTMLElement>(`[data-rh-bar-val="${idx}"]`);
+          if (valEl) {
+            if (valEl.textContent !== valStr) valEl.textContent = valStr;
+            valEl.classList.toggle("mono", Boolean(active && snap.connected));
+            valEl.classList.toggle("is-crossing", isCross);
+          }
+        }
+      }
+      return;
+    }
+
+    if (focusedInsideTimers) {
+      return;
+    }
+    this.lastRhTimersStructSig = structSig;
+
+    if (snaps.length === 0) {
+      timersHost.innerHTML = `
+        <div class="card empty-note" style="padding:18px">
+          No RotorHazard devices connected yet. Enter a RotorHazard server IP above and click <strong>Connect…</strong>, or click <strong>Scan LAN</strong>.
+        </div>`;
+      return;
+    }
+
+    timersHost.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:14px">
+        ${snaps
+          .map((snap) => {
+            const color = timerColor(this.store, snap.timerId);
+            const gMeta = gateByTimer.get(snap.timerId);
+            const assignedGate = gMeta?.label;
+            const nodeCount = Math.max(1, Math.min(8, snap.nodeCount || 8));
+            const rawSnapLbl = snap.label?.trim() || "";
+            const snapLabel = rawSnapLbl
+              ? /^rh(\d+)$/i.test(rawSnapLbl)
+                ? `R${rawSnapLbl.slice(2)}`
+                : rawSnapLbl
+              : `R${Math.max(1, snap.timerId - 1)}`;
+            const snapHost = snap.endpoint.split(":")[0] || "192.168.1.101";
+            const snapPort = Number(snap.endpoint.split(":")[1]) || DEFAULT_RH_PORT;
+            const authBadge = !snap.connected
+              ? `<span class="badge">Offline</span>`
+              : !snap.authKnown
+                ? `<span class="badge">Auth pending</span>`
+                : snap.authOk
+                  ? `<span class="badge badge-good">Auth OK</span>`
+                  : `<span class="badge badge-warn" title="Sign in with admin credentials to tune frequencies and arm gates">Guest (Read-only)</span>`;
+            const serverText = !snap.connected
+              ? "—"
+              : `${snap.serverVersion ? `v${snap.serverVersion}` : "Connected"}${snap.authKnown ? (snap.authOk ? " · Admin" : " · Guest") : ""}`;
+            const gateText = !snap.connected ? "Offline" : snap.gateArmed ? "Armed" : "Standby";
+            const clkText = !snap.connected
+              ? "—"
+              : snap.clockSynced
+                ? `Synced (${Math.abs(snap.clockOffsetMs) < 0.5 ? "<1" : snap.clockOffsetMs.toFixed(1)} ms RTT)`
+                : "Syncing…";
+
+            const isPromptOpenOnCard = Boolean(
+              cardPrompt &&
+                (cardPrompt.timerId === snap.timerId ||
+                  (cardPrompt.host === snapHost && cardPrompt.port === snapPort))
+            );
+            const cardCredsBar = isPromptOpenOnCard
+              ? this.renderRhInlineCredsBar(`Credentials for ${snapLabel} (${snap.endpoint})`)
+              : "";
+
+            const barsHtml = Array.from({ length: nodeCount }, (_, idx) => {
+              const freq = snap.nodeFreqsMhz?.[idx] ?? 0;
+              const active = freq > 0;
+              const val = snap.slotRssi?.[idx] ?? 0;
+              const crossing = Boolean(snap.crossingFlag?.[idx]);
+              const valid = Boolean(active && snap.connected && val > 0);
+              const widthPct = valid ? pctRssi(val) : 0;
+              const enterLvl = snap.nodeEnterLevels?.[idx] || 95;
+              const exitLvl = snap.nodeExitLevels?.[idx] || 70;
+              const enterPct = pctRssi(enterLvl);
+              const exitPct = pctRssi(exitLvl);
+              const labelHtml = active
+                ? `<span class="debug-ch-inline" style="background:#94a3b8"></span><strong>Node ${idx + 1}</strong> <span class="muted mono">${esc(formatHardwareFreq(freq))}</span>`
+                : `<span class="debug-ch-inline" style="background:transparent;box-shadow:inset 0 0 0 1.5px #64748b"></span><strong>Node ${idx + 1}</strong> <span class="muted">Disabled</span>`;
+              const isCross = Boolean(active && snap.connected && crossing);
+              const valStr = !active
+                ? ""
+                : !snap.connected
+                  ? "—"
+                  : `${Math.round(val)}`;
+              const isNumVal = Boolean(active && snap.connected);
+
+              return `
+                <div class="debug-net-inspector-bar-row net-node-bar-row ${active ? "" : "is-muted"}">
+                  <span class="net-node-bar-label">${labelHtml}</span>
+                  <div class="debug-bar-track" style="position:relative">
+                    <span class="debug-bar-fill" data-rh-bar-fill="${idx}" style="width:${widthPct.toFixed(1)}%"></span>
+                    ${
+                      active
+                        ? `<span title="Exit threshold ${Math.round(exitLvl)}" style="position:absolute;top:-2px;bottom:-2px;left:${exitPct.toFixed(1)}%;width:2px;background:rgba(250,204,21,0.65);pointer-events:none"></span>
+                           <span title="Enter threshold ${Math.round(enterLvl)}" style="position:absolute;top:-2px;bottom:-2px;left:${enterPct.toFixed(1)}%;width:2px;background:rgba(163,230,53,0.9);pointer-events:none"></span>
+                           <span class="net-node-crossing-tag mono" data-rh-bar-cross="${idx}" ${isCross ? "" : "hidden"}>${isCross ? "CROSSING" : ""}</span>`
+                        : ""
+                    }
+                  </div>
+                  <span class="net-node-bar-val ${isNumVal ? "mono" : ""} ${isCross ? "is-crossing" : ""}" data-rh-bar-val="${idx}">${valStr}</span>
+                </div>`;
+            }).join("");
+
+            return `
+              <div class="card card-flush" data-rh-card="${snap.timerId}">
+                <div class="net-device-card-head">
+                  <span class="debug-led-status">
+                    <span class="timer-color-dot ${snap.connected ? "is-live" : "is-off"}" style="--c:${esc(color)}" title="${snap.connected ? "Connected" : "Disconnected"}"></span>
+                    <span class="debug-head-note">
+                      <strong>${esc(snapLabel)}</strong> · <span class="mono">${esc(snap.endpoint)}</span>
+                    </span>
+                  </span>
+                  <div class="debug-connect-actions">
+                    ${authBadge}
+                    <span class="badge">${nodeCount} nodes</span>
+                    <span class="badge">${assignedGate ? esc(assignedGate) : "Unassigned"}</span>
+                    <button class="btn btn-sm btn-ghost" type="button" data-action="rh-open-device-creds" data-cred-scope="card" data-host="${esc(snapHost)}" data-port="${snapPort}" data-label="${esc(snapLabel)}" data-timer-id="${snap.timerId}" ${this.rhBusy ? "disabled" : ""}>
+                      ${!snap.connected ? "Reconnect…" : !snap.authOk ? "Sign in…" : "Credentials"}
+                    </button>
+                    ${
+                      snap.connected
+                        ? `<button class="btn btn-sm btn-ghost" type="button" data-action="rh-disconnect" data-timer-id="${snap.timerId}">
+                            Disconnect
+                          </button>`
+                        : ""
+                    }
+                  </div>
+                </div>
+                ${cardCredsBar}
+
+                <div class="debug-net-inspector-kpis net-device-card-kpis">
+                  <div class="debug-net-inspector-kpi">
+                    <span class="debug-net-inspector-kpi-label">Server &amp; Auth</span>
+                    <strong class="debug-net-inspector-kpi-val">${esc(serverText)}</strong>
+                  </div>
+                  <div class="debug-net-inspector-kpi">
+                    <span class="debug-net-inspector-kpi-label">Gate state</span>
+                    <strong class="debug-net-inspector-kpi-val" data-rh-kpi="gate-state">${gateText}</strong>
+                  </div>
+                  <div class="debug-net-inspector-kpi">
+                    <span class="debug-net-inspector-kpi-label">Clock sync</span>
+                    <strong class="debug-net-inspector-kpi-val mono" data-rh-kpi="clock">${clkText}</strong>
+                  </div>
+                  <div class="debug-net-inspector-kpi">
+                    <span class="debug-net-inspector-kpi-label">Track position</span>
+                    <strong class="debug-net-inspector-kpi-val">${assignedGate ? esc(assignedGate) : `<span class="note">Off track</span>`}</strong>
+                  </div>
+                </div>
+
+                <div class="net-device-card-body">
+                  <div class="debug-subbox">
+                    <div class="debug-net-inspector-bars-wrap">
+                      <div class="debug-subbar">
+                        <span class="debug-chart-title">${nodeCount}-node receiver RSSI (0–255 scale)</span>
+                        <span class="note">Yellow tick = Exit · Green tick = Enter</span>
+                      </div>
+                      <div class="debug-net-inspector-bars">${barsHtml}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>`;
+          })
+          .join("")}
+      </div>`;
+  }
+
+  private async refreshRhUsbPorts(): Promise<void> {
+    if (this.rhUsbRefreshing) return;
+    this.rhUsbRefreshing = true;
+    this.lastRhUsbConnSig = "";
+    this.renderAll();
+    try {
+      this.rhUsbPorts = await sharedRHLink.listUSBPorts(this.store, this.rhUsbShowAllPorts);
+      this.rhUsbLoadedOnce = true;
+    } catch (err) {
+      this.rhError = err instanceof Error ? err.message : String(err);
+    } finally {
+      this.rhUsbRefreshing = false;
+      this.lastRhUsbConnSig = "";
+      this.renderAll();
+    }
+  }
+
+  private renderRotorHazardUSBView(): void {
+    const connHost = this.slot("rh-usb-connection");
+    const timersHost = this.slot("rh-usb-timers");
+    const snaps = sharedRHLink.snapshots(this.store);
+    const errText = this.rhError || sharedRHLink.errorMessage || "";
+    const isSim = this.store.simulatorRunning;
+
+    if (!isSim && !this.rhUsbLoadedOnce && !this.rhUsbRefreshing && capabilitiesSnapshot().portable) {
+      this.rhUsbLoadedOnce = true;
+      void this.refreshRhUsbPorts();
+    }
+
+    const ports: RHUSBPortInfo[] = isSim
+      ? (this.store.simState?.rotorhazardUnits ?? [])
+          .filter((u) => u.poweredOn)
+          .map((u, idx) => {
+            const pName = u.portName?.trim() || `SIM-RH-USB${idx + 1}`;
+            const rawLbl = u.label?.trim() || "";
+            const normLbl = rawLbl
+              ? /^rh(\d+)$/i.test(rawLbl)
+                ? `R${rawLbl.slice(2)}`
+                : rawLbl
+              : `R${Math.max(1, u.timerId - 1)}`;
+            return {
+              name: pName,
+              isUsb: true,
+              product: `Simulated RotorHazard USB (${u.nodeCount === 4 ? 4 : 8} seats)`,
+              label: normLbl,
+              timerId: u.timerId,
+              nodeCount: u.nodeCount === 4 ? 4 : 8,
+              baudRate: u.baudRate || 115200,
+              apiLevel: u.apiLevel || 36,
+              connected: Boolean(u.poweredOn && u.connected),
+            };
+          })
+      : this.rhUsbPorts;
+
+    const connectedPortNames = new Set(
+      snaps.filter((s) => s.connected).map((s) => (s.portName || s.endpoint).toUpperCase())
+    );
+    const availablePorts = ports.filter((p) => !connectedPortNames.has(p.name.toUpperCase()));
+    if (
+      !this.rhUsbSelectedPort ||
+      !ports.some((p) => p.name === this.rhUsbSelectedPort) ||
+      (connectedPortNames.has(this.rhUsbSelectedPort.toUpperCase()) && availablePorts.length > 0)
+    ) {
+      this.rhUsbSelectedPort = availablePorts[0]?.name ?? ports[0]?.name ?? "";
+    }
+
+    const activeEl = document.activeElement as HTMLElement | null;
+    const focusedInsideConn = Boolean(
+      activeEl && connHost.contains(activeEl) && (activeEl.tagName === "SELECT" || activeEl.tagName === "INPUT")
+    );
+
+    const connSig = JSON.stringify({
+      sim: isSim,
+      busy: this.rhBusy,
+      refreshing: this.rhUsbRefreshing,
+      allPorts: this.rhUsbShowAllPorts,
+      selPort: this.rhUsbSelectedPort,
+      baud: this.rhUsbBaudRate,
+      err: errText,
+      ports: ports.map((p) => ({
+        n: p.name,
+        p: p.product,
+        l: p.label,
+        c: connectedPortNames.has(p.name.toUpperCase()),
+      })),
+    });
+
+    if (!focusedInsideConn && connSig !== this.lastRhUsbConnSig) {
+      this.lastRhUsbConnSig = connSig;
+      const selectedAlreadyConnected = Boolean(
+        this.rhUsbSelectedPort && connectedPortNames.has(this.rhUsbSelectedPort.toUpperCase())
+      );
+      const portOptionsHtml =
+        ports.length > 0
+          ? ports
+              .map((p) => {
+                const isConn = connectedPortNames.has(p.name.toUpperCase());
+                const desc = p.label
+                  ? `${p.name} · ${p.label} (${p.nodeCount ?? 8} seats)`
+                  : p.product
+                    ? `${p.name} · ${p.product}`
+                    : p.name;
+                return `<option value="${esc(p.name)}" ${p.name === this.rhUsbSelectedPort ? "selected" : ""}>${esc(desc)}${isConn ? " — Connected" : ""}</option>`;
+              })
+              .join("")
+          : `<option value="">${isSim ? "No powered-on simulated USB devices" : "No USB serial ports detected"}</option>`;
+
+      connHost.innerHTML = `
+        <div class="card card-flush">
+          <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between">
+            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
+              <label style="display:flex;flex-direction:column;gap:4px">
+                <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">USB Serial Port</span>
+                <select
+                  class="input mono"
+                  data-field="rh-usb-port"
+                  aria-label="RotorHazard USB serial port"
+                  style="min-width:230px;padding:5px 9px;font-size:13px"
+                  ${ports.length === 0 || this.rhBusy ? "disabled" : ""}
+                >
+                  ${portOptionsHtml}
+                </select>
+              </label>
+              <label style="display:flex;flex-direction:column;gap:4px">
+                <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Baud Rate</span>
+                <select
+                  class="input mono"
+                  data-field="rh-usb-baud"
+                  aria-label="RotorHazard USB baud rate"
+                  style="width:186px;padding:5px 8px;font-size:13px"
+                  ${this.rhBusy ? "disabled" : ""}
+                >
+                  <option value="0" ${this.rhUsbBaudRate === 0 ? "selected" : ""}>Auto (115200 / 921600)</option>
+                  <option value="115200" ${this.rhUsbBaudRate === 115200 ? "selected" : ""}>115200 baud</option>
+                  <option value="921600" ${this.rhUsbBaudRate === 921600 ? "selected" : ""}>921600 baud (STM32)</option>
+                </select>
+              </label>
+              <button
+                class="btn btn-armed"
+                type="button"
+                data-action="rh-usb-connect"
+                ${this.rhBusy || !this.rhUsbSelectedPort || selectedAlreadyConnected ? "disabled" : ""}
+              >
+                ${icons.plug(14)}<span>${this.rhBusy ? "Connecting…" : selectedAlreadyConnected ? "Connected" : "Connect USB"}</span>
+              </button>
+              <button
+                class="btn btn-ghost"
+                type="button"
+                data-action="rh-usb-refresh"
+                ${this.rhUsbRefreshing || this.rhBusy ? "disabled" : ""}
+                title="Refresh available USB serial ports"
+              >
+                ${icons.reset(14)}<span>${this.rhUsbRefreshing ? "Refreshing…" : "Refresh Ports"}</span>
+              </button>
+            </div>
+            ${
+              !isSim
+                ? `<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
+                    <input type="checkbox" data-field="rh-usb-all-ports" ${this.rhUsbShowAllPorts ? "checked" : ""} />
+                    <span class="note">Show all serial ports</span>
+                  </label>`
+                : `<span class="note">Direct binary serial link · no LAN IP or admin login required</span>`
+            }
+          </div>
+          ${errText ? `<div class="sim-error-note" style="margin:0 16px 12px">${esc(errText)}</div>` : ""}
+        </div>`;
+    }
+
+    const gateByTimer = new Map<number, { gateId: number; label: string }>();
+    for (const g of this.store.nodes) {
+      if (g.assignedTimerId > 0) {
+        gateByTimer.set(g.assignedTimerId, {
+          gateId: g.gateId,
+          label: `Track #${g.trackOrder + 1}${g.role === "START_FINISH" ? " (Start)" : ""}`,
+        });
+      }
+    }
+
+    const pctRssi = (val: number) => Math.max(0, Math.min(100, (val / 255) * 100));
+    const structSig = JSON.stringify({
+      snaps: snaps.map((s) => {
+        const gMeta = gateByTimer.get(s.timerId);
+        return {
+          id: s.timerId,
+          label: s.label,
+          ep: s.portName || s.endpoint,
+          baud: s.baudRate || 115200,
+          api: s.apiLevel || 36,
+          conn: s.connected,
+          ver: s.serverVersion,
+          nodes: s.nodeCount,
+          gate: gMeta?.label || "",
+          freqs: s.nodeFreqsMhz ?? [],
+          enters: s.nodeEnterLevels ?? [],
+          exits: s.nodeExitLevels ?? [],
+        };
+      }),
+    });
+
+    if (structSig === this.lastRhUsbTimersStructSig && snaps.length > 0) {
+      for (const snap of snaps) {
+        const card = timersHost.querySelector<HTMLElement>(`[data-rh-usb-card="${snap.timerId}"]`);
+        if (!card) continue;
+        const gateEl = card.querySelector<HTMLElement>('[data-rh-kpi="gate-state"]');
+        const gateText = !snap.connected ? "Offline" : snap.gateArmed ? "Armed" : "Standby";
+        if (gateEl && gateEl.textContent !== gateText) gateEl.textContent = gateText;
+
+        const clkEl = card.querySelector<HTMLElement>('[data-rh-kpi="clock"]');
+        const clkText = !snap.connected
+          ? "—"
+          : snap.clockSynced
+            ? `Synced (${Math.abs(snap.clockOffsetMs) < 0.5 ? "<1" : snap.clockOffsetMs.toFixed(1)} ms RTT)`
+            : "Syncing…";
+        if (clkEl && clkEl.textContent !== clkText) clkEl.textContent = clkText;
+
+        const nodeCount = Math.max(1, Math.min(8, snap.nodeCount || 8));
+        for (let idx = 0; idx < nodeCount; idx++) {
+          const freq = snap.nodeFreqsMhz?.[idx] ?? 0;
+          const active = freq > 0;
+          const val = snap.slotRssi?.[idx] ?? 0;
+          const crossing = Boolean(snap.crossingFlag?.[idx]);
+          const valid = Boolean(active && snap.connected && val > 0);
+          const widthStr = `${(valid ? pctRssi(val) : 0).toFixed(1)}%`;
+          const isCross = Boolean(active && snap.connected && crossing);
+          const valStr = !active ? "" : !snap.connected ? "—" : `${Math.round(val)}`;
+          const fillEl = card.querySelector<HTMLElement>(`[data-rh-bar-fill="${idx}"]`);
+          if (fillEl && fillEl.style.width !== widthStr) fillEl.style.width = widthStr;
+          const crossEl = card.querySelector<HTMLElement>(`[data-rh-bar-cross="${idx}"]`);
+          if (crossEl) {
+            const wantCross = isCross ? "CROSSING" : "";
+            if (crossEl.textContent !== wantCross) crossEl.textContent = wantCross;
+            crossEl.hidden = !isCross;
+          }
+          const valEl = card.querySelector<HTMLElement>(`[data-rh-bar-val="${idx}"]`);
+          if (valEl) {
+            if (valEl.textContent !== valStr) valEl.textContent = valStr;
+            valEl.classList.toggle("mono", Boolean(active && snap.connected));
+            valEl.classList.toggle("is-crossing", isCross);
+          }
+        }
+      }
+      return;
+    }
+
+    this.lastRhUsbTimersStructSig = structSig;
+
+    if (snaps.length === 0) {
+      timersHost.innerHTML = `
+        <div class="card empty-note" style="padding:18px">
+          No RotorHazard USB devices connected yet. Select a USB serial port above and click <strong>Connect USB</strong>.
+        </div>`;
+      return;
+    }
+
+    timersHost.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:14px">
+        ${snaps
+          .map((snap) => {
+            const color = timerColor(this.store, snap.timerId);
+            const gMeta = gateByTimer.get(snap.timerId);
+            const assignedGate = gMeta?.label;
+            const nodeCount = Math.max(1, Math.min(8, snap.nodeCount || 8));
+            const rawSnapLbl = snap.label?.trim() || "";
+            const snapLabel = rawSnapLbl
+              ? /^rh(\d+)$/i.test(rawSnapLbl)
+                ? `R${rawSnapLbl.slice(2)}`
+                : rawSnapLbl
+              : `R${Math.max(1, snap.timerId - 1)}`;
+            const portStr = snap.portName || snap.endpoint;
+            const apiLvl = snap.apiLevel || 36;
+            const baudRate = snap.baudRate || 115200;
+            const protoText = !snap.connected ? "—" : `API ${apiLvl} · ${baudRate} baud`;
+            const gateText = !snap.connected ? "Offline" : snap.gateArmed ? "Armed" : "Standby";
+            const clkText = !snap.connected
+              ? "—"
+              : snap.clockSynced
+                ? `Synced (${Math.abs(snap.clockOffsetMs) < 0.5 ? "<1" : snap.clockOffsetMs.toFixed(1)} ms RTT)`
+                : "Syncing…";
+
+            const barsHtml = Array.from({ length: nodeCount }, (_, idx) => {
+              const freq = snap.nodeFreqsMhz?.[idx] ?? 0;
+              const active = freq > 0;
+              const val = snap.slotRssi?.[idx] ?? 0;
+              const crossing = Boolean(snap.crossingFlag?.[idx]);
+              const valid = Boolean(active && snap.connected && val > 0);
+              const widthPct = valid ? pctRssi(val) : 0;
+              const enterLvl = snap.nodeEnterLevels?.[idx] || 95;
+              const exitLvl = snap.nodeExitLevels?.[idx] || 70;
+              const enterPct = pctRssi(enterLvl);
+              const exitPct = pctRssi(exitLvl);
+              const labelHtml = active
+                ? `<span class="debug-ch-inline" style="background:#94a3b8"></span><strong>Seat ${idx + 1}</strong> <span class="muted mono">${esc(formatHardwareFreq(freq))}</span>`
+                : `<span class="debug-ch-inline" style="background:transparent;box-shadow:inset 0 0 0 1.5px #64748b"></span><strong>Seat ${idx + 1}</strong> <span class="muted">Disabled</span>`;
+              const isCross = Boolean(active && snap.connected && crossing);
+              const valStr = !active ? "" : !snap.connected ? "—" : `${Math.round(val)}`;
+              const isNumVal = Boolean(active && snap.connected);
+
+              return `
+                <div class="debug-net-inspector-bar-row net-node-bar-row ${active ? "" : "is-muted"}">
+                  <span class="net-node-bar-label">${labelHtml}</span>
+                  <div class="debug-bar-track" style="position:relative">
+                    <span class="debug-bar-fill" data-rh-bar-fill="${idx}" style="width:${widthPct.toFixed(1)}%"></span>
+                    ${
+                      active
+                        ? `<span title="Exit threshold ${Math.round(exitLvl)}" style="position:absolute;top:-2px;bottom:-2px;left:${exitPct.toFixed(1)}%;width:2px;background:rgba(250,204,21,0.65);pointer-events:none"></span>
+                           <span title="Enter threshold ${Math.round(enterLvl)}" style="position:absolute;top:-2px;bottom:-2px;left:${enterPct.toFixed(1)}%;width:2px;background:rgba(163,230,53,0.9);pointer-events:none"></span>
+                           <span class="net-node-crossing-tag mono" data-rh-bar-cross="${idx}" ${isCross ? "" : "hidden"}>${isCross ? "CROSSING" : ""}</span>`
+                        : ""
+                    }
+                  </div>
+                  <span class="net-node-bar-val ${isNumVal ? "mono" : ""} ${isCross ? "is-crossing" : ""}" data-rh-bar-val="${idx}">${valStr}</span>
+                </div>`;
+            }).join("");
+
+            return `
+              <div class="card card-flush" data-rh-usb-card="${snap.timerId}">
+                <div class="net-device-card-head">
+                  <span class="debug-led-status">
+                    <span class="timer-color-dot ${snap.connected ? "is-live" : "is-off"}" style="--c:${esc(color)}" title="${snap.connected ? "Connected" : "Disconnected"}"></span>
+                    <span class="debug-head-note">
+                      <strong>${esc(snapLabel)}</strong> · <span class="mono">${esc(portStr)}</span>
+                    </span>
+                  </span>
+                  <div class="debug-connect-actions">
+                    ${snap.connected ? `<span class="badge badge-good mono">API ${apiLvl}</span>` : `<span class="badge">Offline</span>`}
+                    <span class="badge">${nodeCount} seats</span>
+                    <span class="badge">${assignedGate ? esc(assignedGate) : "Unassigned"}</span>
+                    ${
+                      snap.connected
+                        ? `<button class="btn btn-sm btn-ghost" type="button" data-action="rh-disconnect" data-timer-id="${snap.timerId}">
+                            Disconnect
+                          </button>`
+                        : `<button class="btn btn-sm btn-ghost" type="button" data-action="rh-usb-connect" data-port-name="${esc(portStr)}" data-label="${esc(snapLabel)}" data-timer-id="${snap.timerId}" ${this.rhBusy ? "disabled" : ""}>
+                            Connect USB
+                          </button>`
+                    }
+                  </div>
+                </div>
+
+                <div class="debug-net-inspector-kpis net-device-card-kpis">
+                  <div class="debug-net-inspector-kpi">
+                    <span class="debug-net-inspector-kpi-label">Serial protocol</span>
+                    <strong class="debug-net-inspector-kpi-val mono">${esc(protoText)}</strong>
+                  </div>
+                  <div class="debug-net-inspector-kpi">
+                    <span class="debug-net-inspector-kpi-label">Gate state</span>
+                    <strong class="debug-net-inspector-kpi-val" data-rh-kpi="gate-state">${gateText}</strong>
+                  </div>
+                  <div class="debug-net-inspector-kpi">
+                    <span class="debug-net-inspector-kpi-label">Serial RTT</span>
+                    <strong class="debug-net-inspector-kpi-val mono" data-rh-kpi="clock">${clkText}</strong>
+                  </div>
+                  <div class="debug-net-inspector-kpi">
+                    <span class="debug-net-inspector-kpi-label">Track position</span>
+                    <strong class="debug-net-inspector-kpi-val">${assignedGate ? esc(assignedGate) : `<span class="note">Off track</span>`}</strong>
+                  </div>
+                </div>
+
+                <div class="net-device-card-body">
+                  <div class="debug-subbox">
+                    <div class="debug-net-inspector-bars-wrap">
+                      <div class="debug-subbar">
+                        <span class="debug-chart-title">${nodeCount}-seat receiver RSSI (0–255 scale)</span>
+                        <span class="note">Yellow tick = Exit · Green tick = Enter</span>
+                      </div>
+                      <div class="debug-net-inspector-bars">${barsHtml}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>`;
+          })
+          .join("")}
+      </div>`;
+  }
+
   private renderSpokeNodeCard(sp: TopologySpokeInfo, isSelected: boolean): string {
     const slotNum = sp.slot;
     if (!sp.populated) {
       return `
-        <button type="button" class="debug-topo-node is-spoke is-empty is-inactive-link ${isSelected ? "is-selected" : ""}" data-action="select-topology-slot" data-slot-num="${slotNum}" aria-pressed="${isSelected}" title="TDMA Slot ${slotNum} (Open) · click to view slot details">
+        <button type="button" class="debug-topo-node is-spoke is-empty is-inactive-link ${isSelected ? "is-selected" : ""}" data-action="select-topology-slot" data-slot-num="${slotNum}" aria-pressed="${isSelected}" title="TDMA Slot ${slotNum} (Empty) · click to view slot details">
           <div class="debug-topo-node-head">
-            <span class="debug-topo-slot-tag mono">Slot ${slotNum}</span>
-            <span class="note">Open</span>
-          </div>
-          <div class="debug-topo-node-main">
-            <span class="status-dot"></span>
-            <span class="note">Unassigned</span>
-          </div>
-          <div class="debug-topo-node-foot">
-            <span class="note">Available Spoke slot</span>
+            <span class="debug-topo-slot-tag">Slot ${slotNum} · Spoke</span>
+            <span class="badge">Empty</span>
           </div>
         </button>`;
     }
@@ -651,7 +2520,7 @@ export class NetworkView extends Component {
     return `
       <button type="button" class="debug-topo-node is-spoke is-populated ${active ? "is-active-link" : "is-inactive-link"} ${isSelected ? "is-selected" : ""}" data-action="select-topology-slot" data-slot-num="${slotNum}" aria-pressed="${isSelected}" title="Click to inspect ${esc(sp.label)} (TDMA Slot ${slotNum})">
         <div class="debug-topo-node-head">
-          <span class="debug-topo-slot-tag mono">Slot ${slotNum}${sp.viaUsb ? " · USB" : ""}</span>
+          <span class="debug-topo-slot-tag">Slot ${slotNum} · Spoke${sp.viaUsb ? " · USB" : ""}</span>
           <span class="badge ${stateBadgeClass}">${stateBadgeText}</span>
         </div>
         <div class="debug-topo-node-main">
@@ -761,18 +2630,22 @@ export class NetworkView extends Component {
         <div class="debug-topo-col is-hub-center">
           <button type="button" class="debug-topo-node is-hub ${hub.populated ? "is-populated" : "is-empty"} ${hub.online ? "is-active-link" : "is-inactive-link"} ${hubSelected ? "is-selected" : ""}" data-action="select-topology-slot" data-slot-num="1" aria-pressed="${hubSelected}" title="Click to inspect Parent Hub (TDMA Slot 1)">
             <div class="debug-topo-node-head">
-              <span class="debug-net-role-tag is-hub">HUB · SLOT 1</span>
+              <span class="debug-topo-slot-tag">Slot 1 · Hub</span>
               <span class="badge ${hubBadgeClass}">${hubBadgeText}</span>
             </div>
-            <div class="debug-topo-node-main is-hub-main">
-              <span class="status-dot ${hubDotClass}"></span>
-              ${hub.populated && hub.label ? `<strong class="debug-topo-hub-name">${esc(hub.label)}</strong>` : `<span class="note">Unassigned</span>`}
-              ${hub.populated && hub.fp && hub.fp !== "—" ? `<span class="badge mono">${esc(hub.fp)}</span>` : ""}
-            </div>
-            <div class="debug-topo-hub-meta">
-              <span>${esc(hub.statusNote)}</span>
-              ${hub.populated ? `<span class="mono">2.4 GHz Ch ${hub.ch} · ${activeCount}/${tiedCount} active</span>` : `<span class="note">Available Hub slot</span>`}
-            </div>
+            ${
+              hub.populated
+                ? `<div class="debug-topo-node-main">
+                    <span class="status-dot ${hubDotClass}"></span>
+                    <strong class="debug-topo-node-label">${esc(hub.label)}</strong>
+                    ${hub.fp && hub.fp !== "—" ? `<span class="badge mono">${esc(hub.fp)}</span>` : ""}
+                  </div>
+                  <div class="debug-topo-node-foot">
+                    <span>${esc(hub.statusNote)}</span>
+                    <span class="mono">Ch ${hub.ch} · ${activeCount}/${tiedCount} active</span>
+                  </div>`
+                : ""
+            }
           </button>
         </div>
 
@@ -787,7 +2660,7 @@ export class NetworkView extends Component {
 
       <div class="debug-topology-legend">
         <span class="debug-topo-legend-item"><span class="debug-topo-legend-line is-solid"></span><span>Solid = ESP-NOW active</span></span>
-        <span class="debug-topo-legend-item"><span class="debug-topo-legend-line is-dashed"></span><span>Dashed = Inactive / open slot</span></span>
+        <span class="debug-topo-legend-item"><span class="debug-topo-legend-line is-dashed"></span><span>Dashed = Inactive / empty slot</span></span>
         <span class="note">Click the center Hub or any Spoke slot to inspect its details below.</span>
       </div>`;
 
@@ -802,18 +2675,18 @@ export class NetworkView extends Component {
     const barsHtml = freqs
       .map((f, idx) => {
         const band = racebandName(f) || `Ch${idx + 1}`;
-        const col = CHANNEL_COLORS[idx];
+        const col = channelColor(idx);
         const onCh = Boolean(this.signalEnabledCh[idx]);
         const val = dbmSource ? dbmSource[idx] : undefined;
         const valid = onCh && val !== undefined && val > -127 && val < 0;
         const widthPct = valid ? pct(val!) : 0;
         return `
-          <div class="debug-net-inspector-bar-row ${onCh ? "" : "is-muted"}">
+          <div class="debug-net-inspector-bar-row ${onCh ? "" : "is-muted"}" data-bar-row="${idx}">
             <span class="debug-bar-label mono"><span class="debug-ch-inline" style="${onCh ? `background:${col}` : `background:transparent;box-shadow:inset 0 0 0 1.5px ${col}`}"></span><strong>${band}</strong> ${f}</span>
             <div class="debug-bar-track">
-              <span class="debug-bar-fill" style="width:${widthPct.toFixed(1)}%"></span>
+              <span class="debug-bar-fill" data-bar-fill="${idx}" style="width:${widthPct.toFixed(1)}%"></span>
             </div>
-            <span class="debug-bar-value mono">${!onCh ? "Off" : valid ? `${val} dBm` : "—"}</span>
+            <span class="debug-bar-value mono" data-bar-val="${idx}">${!onCh ? "Off" : valid ? `${val} dBm` : "—"}</span>
           </div>`;
       })
       .join("");
@@ -822,15 +2695,71 @@ export class NetworkView extends Component {
       <div class="debug-net-inspector-bars-wrap">
         <div class="debug-subbar">
           <span class="debug-chart-title">${titleText}</span>
-          <span class="note mono">${sourceLabel}</span>
+          <span class="note mono" data-net-bar-source>${sourceLabel}</span>
         </div>
         <div class="debug-net-inspector-bars">${barsHtml}</div>
       </div>`;
   }
 
+  private patchTimerLiveValues(
+    host: HTMLElement,
+    opts: {
+      rateText: string;
+      framesText: string;
+      kpiFramesHtml: string;
+      lastFrameText: string;
+      seqText: string;
+      trackPosHtml: string;
+      kvTrackPosHtml?: string;
+      sourceLabel: string;
+      dbmSource: number[] | null | undefined;
+    }
+  ): boolean {
+    if (!host.querySelector('[data-bar-fill="0"]')) {
+      return false;
+    }
+    const pct = (x: number) => Math.max(0, Math.min(100, ((x - DBM_MIN) / (DBM_MAX - DBM_MIN)) * 100));
+    const topRate = host.querySelector<HTMLElement>("[data-net-top-rate]");
+    if (topRate && topRate.textContent !== opts.rateText) topRate.textContent = opts.rateText;
+    const topFrames = host.querySelector<HTMLElement>("[data-net-top-frames]");
+    if (topFrames && topFrames.textContent !== opts.framesText) topFrames.textContent = opts.framesText;
+
+    const kpiFrames = host.querySelector<HTMLElement>('[data-net-kpi="frames"]');
+    if (kpiFrames && kpiFrames.innerHTML !== opts.kpiFramesHtml) kpiFrames.innerHTML = opts.kpiFramesHtml;
+    const kpiLast = host.querySelector<HTMLElement>('[data-net-kpi="last-frame"]');
+    if (kpiLast && kpiLast.textContent !== opts.lastFrameText) kpiLast.textContent = opts.lastFrameText;
+    const kpiSeq = host.querySelector<HTMLElement>('[data-net-kpi="seq"]');
+    if (kpiSeq && kpiSeq.textContent !== opts.seqText) kpiSeq.textContent = opts.seqText;
+    const kpiPos = host.querySelector<HTMLElement>('[data-net-kpi="track-pos"]');
+    if (kpiPos && kpiPos.innerHTML !== opts.trackPosHtml) kpiPos.innerHTML = opts.trackPosHtml;
+
+    if (opts.kvTrackPosHtml !== undefined) {
+      const kvPos = host.querySelector<HTMLElement>('[data-net-kv="track-pos"]');
+      if (kvPos && kvPos.innerHTML !== opts.kvTrackPosHtml) kvPos.innerHTML = opts.kvTrackPosHtml;
+    }
+
+    const barSource = host.querySelector<HTMLElement>("[data-net-bar-source]");
+    if (barSource && barSource.textContent !== opts.sourceLabel) barSource.textContent = opts.sourceLabel;
+
+    for (let idx = 0; idx < 8; idx++) {
+      const onCh = Boolean(this.signalEnabledCh[idx]);
+      const val = opts.dbmSource ? opts.dbmSource[idx] : undefined;
+      const valid = onCh && val !== undefined && val > -127 && val < 0;
+      const widthStr = `${(valid ? pct(val!) : 0).toFixed(1)}%`;
+      const valStr = !onCh ? "Off" : valid ? `${val} dBm` : "—";
+
+      const fillEl = host.querySelector<HTMLElement>(`[data-bar-fill="${idx}"]`);
+      if (fillEl && fillEl.style.width !== widthStr) fillEl.style.width = widthStr;
+      const valEl = host.querySelector<HTMLElement>(`[data-bar-val="${idx}"]`);
+      if (valEl && valEl.textContent !== valStr) valEl.textContent = valStr;
+    }
+    return true;
+  }
+
   private renderTimerSection(hub: TopologyHubInfo, spokes: Map<number, TopologySpokeInfo>, selectedSlot: number): void {
     const s = this.activeStatus();
     const freqs = s?.freqs?.length === 8 ? s.freqs : RACEBAND;
+    const detailHost = this.slot("timer-detail");
 
     if (selectedSlot === 1) {
       if (!hub.populated) {
@@ -838,18 +2767,19 @@ export class NetworkView extends Component {
           <div class="debug-status-topbar">
             <span class="debug-led-status">
               <span class="status-dot"></span>
-              <span class="debug-head-note"><strong>TDMA Slot 1</strong> · Open parent Hub slot</span>
+              <span class="debug-head-note"><strong>TDMA Slot 1</strong> · Empty parent Hub slot</span>
             </span>
             <div class="debug-connect-actions">
-              <span class="badge">Slot 1 · Open</span>
+              <span class="badge">Slot 1 · Empty</span>
             </div>
           </div>
           <div class="debug-subbox">
-            <p class="note">No Hub timer is currently connected on TDMA Slot 1. Connect your Hub over USB-C (or enable the simulator) to coordinate the 2.4 GHz network.</p>
+            <p class="note">No Hub timer is currently connected on TDMA Slot 1. Connect your Hub over USB-C to coordinate the 2.4 GHz network.</p>
           </div>`;
+        this.lastTimerStructKey = "empty-1";
         if (emptyHubHtml !== this.lastTimerHtml) {
           this.lastTimerHtml = emptyHubHtml;
-          this.slot("timer-detail").innerHTML = emptyHubHtml;
+          detailHost.innerHTML = emptyHubHtml;
         }
         return;
       }
@@ -863,9 +2793,10 @@ export class NetworkView extends Component {
       const hubOwnRate = hub.online ? (s && s.role === 1 && s.sweepHz ? s.sweepHz / 2 : 50) : 0;
       const totalRate = totalSpokeRate + hubOwnRate;
 
+      const hubConsole = usbPool.hubConsole() ?? sharedTimerConsole;
       let minMsAgo: number | null =
-        sharedTimerConsole.hubLastFrameAtMs > 0
-          ? Math.max(0, Date.now() - sharedTimerConsole.hubLastFrameAtMs)
+        hubConsole.hubLastFrameAtMs > 0
+          ? Math.max(0, Date.now() - hubConsole.hubLastFrameAtMs)
           : null;
       let latestSpokeSeq: number | null = null;
       for (const sp of populatedSpokes) {
@@ -883,8 +2814,8 @@ export class NetworkView extends Component {
             ? "< 20 ms ago"
             : "No frames yet";
       const hubSweepSeq =
-        sharedTimerConsole.hubLastSeq !== undefined
-          ? `#${sharedTimerConsole.hubLastSeq}`
+        hubConsole.hubLastSeq !== undefined
+          ? `#${hubConsole.hubLastSeq}`
           : s && s.role === 1 && s.sweeps > 0
             ? `#${s.sweeps}`
             : this.live?.n !== undefined
@@ -896,10 +2827,57 @@ export class NetworkView extends Component {
                   : "—";
 
       const ledClass = hub.emergencyMode ? "is-emergency" : hub.online ? "is-up" : hub.populated ? "is-warn" : "";
+      const sourceLabel = hub.dbm ? (hub.viaUsb ? "Direct via USB-C" : "Engine telemetry") : "Waiting for 5.8 GHz sweep data";
+      const idBtnHtml = this.renderIdentifyButton(hub.fp, hub.online, hub.label);
+      const childSummaryHtml =
+        populatedSpokes.length > 0
+          ? `${activeSpokes.length}/${populatedSpokes.length} active (${populatedSpokes.map((c) => esc(c.label)).join(", ")})`
+          : "None tied yet";
+      const trackPosHtml = hub.gateLabel
+        ? `${esc(hub.gateLabel)} <span class="note mono">· ${hub.serverFrames ?? 0} samples</span>`
+        : `<span class="note">Off track</span>`;
+      const kvTrackPosHtml = hub.gateLabel
+        ? `${esc(hub.gateLabel)} <span class="note mono">· ${hub.serverFrames ?? 0} samples</span>`
+        : `<span class="note">Off track (collector-only mode)</span>`;
+      const structKey = [
+        "slot1",
+        getAppTheme(),
+        ledClass,
+        hub.label,
+        hub.statusNote,
+        hub.online ? "1" : "0",
+        hub.viaUsb ? "1" : "0",
+        hub.fp,
+        hub.fw,
+        hub.mac,
+        hub.ch,
+        childSummaryHtml,
+        idBtnHtml,
+        freqs.join(","),
+        this.signalEnabledCh.join(","),
+      ].join("|");
+
+      if (
+        structKey === this.lastTimerStructKey &&
+        this.patchTimerLiveValues(detailHost, {
+          rateText: `${totalRate.toFixed(1)} pkt/s`,
+          framesText: `${totalFrames} frames rx`,
+          kpiFramesHtml: `${totalFrames} <span class="note">(${totalRate.toFixed(1)} pkt/s)</span>`,
+          lastFrameText,
+          seqText: hubSweepSeq,
+          trackPosHtml,
+          kvTrackPosHtml,
+          sourceLabel,
+          dbmSource: hub.dbm,
+        })
+      ) {
+        return;
+      }
+
       const barsHtml = this.renderRssiBars(
         freqs,
         hub.dbm,
-        hub.dbm ? (hub.viaUsb ? "Direct via USB-C" : "Engine telemetry") : "Waiting for 5.8 GHz sweep data",
+        sourceLabel,
         `5.8 GHz channels at ${esc(hub.label)} (Hub · Slot 1)`
       );
 
@@ -910,29 +2888,29 @@ export class NetworkView extends Component {
             <span class="debug-head-note"><strong>${esc(hub.label)}</strong> · Parent Hub (TDMA Slot 1) · ${esc(hub.statusNote)}</span>
           </span>
           <div class="debug-connect-actions">
-            <span class="badge ${hub.online ? "badge-good" : "badge-warn"} mono">${totalRate.toFixed(1)} pkt/s</span>
-            <span class="badge mono">${totalFrames} frames rx</span>
+            <span class="badge ${hub.online ? "badge-good" : "badge-warn"} mono" data-net-top-rate>${totalRate.toFixed(1)} pkt/s</span>
+            <span class="badge mono" data-net-top-frames>${totalFrames} frames rx</span>
             ${hub.fp && hub.fp !== "—" ? `<span class="badge mono">${esc(hub.fp)}</span>` : ""}
-            ${this.renderIdentifyButton(hub.fp, hub.online, hub.label)}
+            ${idBtnHtml}
           </div>
         </div>
 
         <div class="debug-net-inspector-kpis">
           <div class="debug-net-inspector-kpi">
             <span class="debug-net-inspector-kpi-label">Frames received by Hub</span>
-            <strong class="debug-net-inspector-kpi-val mono">${totalFrames} <span class="note">(${totalRate.toFixed(1)} pkt/s)</span></strong>
+            <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="frames">${totalFrames} <span class="note">(${totalRate.toFixed(1)} pkt/s)</span></strong>
           </div>
           <div class="debug-net-inspector-kpi">
             <span class="debug-net-inspector-kpi-label">Last frame at Hub</span>
-            <strong class="debug-net-inspector-kpi-val mono">${lastFrameText}</strong>
+            <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="last-frame">${lastFrameText}</strong>
           </div>
           <div class="debug-net-inspector-kpi">
             <span class="debug-net-inspector-kpi-label">Latest sweep seq #</span>
-            <strong class="debug-net-inspector-kpi-val mono">${hubSweepSeq}</strong>
+            <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="seq">${hubSweepSeq}</strong>
           </div>
           <div class="debug-net-inspector-kpi">
             <span class="debug-net-inspector-kpi-label">Track position &amp; engine rx</span>
-            <strong class="debug-net-inspector-kpi-val">${hub.gateLabel ? `${esc(hub.gateLabel)} <span class="note mono">· ${hub.serverFrames ?? 0} samples</span>` : `<span class="note">Off track</span>`}</strong>
+            <strong class="debug-net-inspector-kpi-val" data-net-kpi="track-pos">${trackPosHtml}</strong>
           </div>
         </div>
 
@@ -960,11 +2938,11 @@ export class NetworkView extends Component {
               </div>
               <div class="debug-kv-row">
                 <dt>Child Spokes</dt>
-                <dd>${populatedSpokes.length > 0 ? `${activeSpokes.length}/${populatedSpokes.length} active (${populatedSpokes.map((c) => esc(c.label)).join(", ")})` : "None tied yet"}</dd>
+                <dd>${childSummaryHtml}</dd>
               </div>
               <div class="debug-kv-row">
                 <dt>Track position</dt>
-                <dd>${hub.gateLabel ? `${esc(hub.gateLabel)} <span class="note mono">· ${hub.serverFrames ?? 0} samples</span>` : `<span class="note">Off track (collector-only mode)</span>`}</dd>
+                <dd data-net-kv="track-pos">${kvTrackPosHtml}</dd>
               </div>
               <div class="debug-kv-row">
                 <dt>Firmware &amp; MAC</dt>
@@ -978,9 +2956,10 @@ export class NetworkView extends Component {
           </div>
         </div>`;
 
+      this.lastTimerStructKey = structKey;
       if (timerHtml !== this.lastTimerHtml) {
         this.lastTimerHtml = timerHtml;
-        this.slot("timer-detail").innerHTML = timerHtml;
+        detailHost.innerHTML = timerHtml;
       }
       return;
     }
@@ -991,18 +2970,19 @@ export class NetworkView extends Component {
         <div class="debug-status-topbar">
           <span class="debug-led-status">
             <span class="status-dot"></span>
-            <span class="debug-head-note"><strong>TDMA Slot ${selectedSlot}</strong> · Open child Spoke slot</span>
+            <span class="debug-head-note"><strong>TDMA Slot ${selectedSlot}</strong> · Empty child Spoke slot</span>
           </span>
           <div class="debug-connect-actions">
-            <span class="badge">Slot ${selectedSlot} · Open</span>
+            <span class="badge">Slot ${selectedSlot} · Empty</span>
           </div>
         </div>
         <div class="debug-subbox">
           <p class="note">No child Spoke timer is currently occupying TDMA Slot ${selectedSlot}. Power on a Spoke configured for this Hub or flash a timer in the Flasher tab to join the 2.4 GHz network.</p>
         </div>`;
+      this.lastTimerStructKey = `empty-${selectedSlot}`;
       if (emptyTimerHtml !== this.lastTimerHtml) {
         this.lastTimerHtml = emptyTimerHtml;
-        this.slot("timer-detail").innerHTML = emptyTimerHtml;
+        detailHost.innerHTML = emptyTimerHtml;
       }
       return;
     }
@@ -1018,11 +2998,60 @@ export class NetworkView extends Component {
         : sp.espNowActive && sp.serverRssi && sp.serverRssi.some((v) => v < 0)
           ? sp.serverRssi.map((v) => Math.round(v))
           : null;
+    const sourceLabel = dbmSource
+      ? sp.viaUsb
+        ? "Direct via USB-C"
+        : `Via Hub ${esc(hub.label)}`
+      : "Waiting for Spoke window frames…";
+    const lastFrameText = sp.viaUsb
+      ? sp.beaconMsAgo !== undefined
+        ? `${sp.beaconMsAgo} ms ago`
+        : "Waiting…"
+      : sp.msAgo !== undefined && frames > 0
+        ? `${sp.msAgo} ms ago`
+        : "No frames yet";
+    const seqText = sp.seq !== undefined && frames > 0 ? `#${sp.seq}` : "—";
+    const trackPosHtml = sp.serverGateLabel
+      ? `${esc(sp.serverGateLabel)} <span class="note mono">· ${sp.serverFrames ?? 0} samples</span>`
+      : `<span class="note">Off track</span>`;
+    const idBtnHtml = this.renderIdentifyButton(sp.fp, sp.espNowActive, sp.label);
+    const structKey = [
+      `slot${sp.slot}`,
+      getAppTheme(),
+      sp.espNowActive ? "1" : "0",
+      sp.viaUsb ? "1" : "0",
+      sp.label,
+      sp.fp,
+      sp.fw,
+      sp.mac ?? "",
+      hub.label,
+      hub.fp,
+      hub.ch,
+      idBtnHtml,
+      freqs.join(","),
+      this.signalEnabledCh.join(","),
+    ].join("|");
+
+    if (
+      structKey === this.lastTimerStructKey &&
+      this.patchTimerLiveValues(detailHost, {
+        rateText: `${rate.toFixed(1)} pkt/s`,
+        framesText: `${frames} frames rx`,
+        kpiFramesHtml: `${frames} <span class="note">(${rate.toFixed(1)} pkt/s)</span>`,
+        lastFrameText,
+        seqText,
+        trackPosHtml,
+        sourceLabel,
+        dbmSource,
+      })
+    ) {
+      return;
+    }
 
     const barsHtml = this.renderRssiBars(
       freqs,
       dbmSource,
-      dbmSource ? (sp.viaUsb ? "Direct via USB-C" : `Via Hub ${esc(hub.label)}`) : "Waiting for Spoke window frames…",
+      sourceLabel,
       `5.8 GHz channels received from ${esc(sp.label)} (Slot ${sp.slot})`
     );
 
@@ -1033,29 +3062,29 @@ export class NetworkView extends Component {
           <span class="debug-head-note"><strong>${esc(sp.label)}</strong> · Child Spoke (TDMA Slot ${sp.slot}) · ${sp.espNowActive ? `ESP-NOW active with ${esc(hub.label)}` : "ESP-NOW inactive"}</span>
         </span>
         <div class="debug-connect-actions">
-          <span class="badge ${sp.espNowActive ? "badge-good" : "badge-warn"} mono">${rate.toFixed(1)} pkt/s</span>
-          <span class="badge mono">${frames} frames rx</span>
+          <span class="badge ${sp.espNowActive ? "badge-good" : "badge-warn"} mono" data-net-top-rate>${rate.toFixed(1)} pkt/s</span>
+          <span class="badge mono" data-net-top-frames>${frames} frames rx</span>
           <span class="badge mono">${esc(sp.fp)}</span>
-          ${this.renderIdentifyButton(sp.fp, sp.espNowActive, sp.label)}
+          ${idBtnHtml}
         </div>
       </div>
 
       <div class="debug-net-inspector-kpis">
         <div class="debug-net-inspector-kpi">
           <span class="debug-net-inspector-kpi-label">Frames received by Hub</span>
-          <strong class="debug-net-inspector-kpi-val mono">${frames} <span class="note">(${rate.toFixed(1)} pkt/s)</span></strong>
+          <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="frames">${frames} <span class="note">(${rate.toFixed(1)} pkt/s)</span></strong>
         </div>
         <div class="debug-net-inspector-kpi">
           <span class="debug-net-inspector-kpi-label">${sp.viaUsb ? "Last Hub beacon" : "Last frame at Hub"}</span>
-          <strong class="debug-net-inspector-kpi-val mono">${sp.viaUsb ? (sp.beaconMsAgo !== undefined ? `${sp.beaconMsAgo} ms ago` : "Waiting…") : sp.msAgo !== undefined && frames > 0 ? `${sp.msAgo} ms ago` : "No frames yet"}</strong>
+          <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="last-frame">${lastFrameText}</strong>
         </div>
         <div class="debug-net-inspector-kpi">
           <span class="debug-net-inspector-kpi-label">Latest sweep seq #</span>
-          <strong class="debug-net-inspector-kpi-val mono">${sp.seq !== undefined && frames > 0 ? `#${sp.seq}` : "—"}</strong>
+          <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="seq">${seqText}</strong>
         </div>
         <div class="debug-net-inspector-kpi">
           <span class="debug-net-inspector-kpi-label">Track position &amp; engine rx</span>
-          <strong class="debug-net-inspector-kpi-val">${sp.serverGateLabel ? `${esc(sp.serverGateLabel)} <span class="note mono">· ${sp.serverFrames ?? 0} samples</span>` : `<span class="note">Off track</span>`}</strong>
+          <strong class="debug-net-inspector-kpi-val" data-net-kpi="track-pos">${trackPosHtml}</strong>
         </div>
       </div>
 
@@ -1097,9 +3126,10 @@ export class NetworkView extends Component {
         </div>
       </div>`;
 
+    this.lastTimerStructKey = structKey;
     if (timerHtml !== this.lastTimerHtml) {
       this.lastTimerHtml = timerHtml;
-      this.slot("timer-detail").innerHTML = timerHtml;
+      detailHost.innerHTML = timerHtml;
     }
   }
 }

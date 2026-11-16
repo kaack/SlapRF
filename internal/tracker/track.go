@@ -66,6 +66,7 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 
 	if role == "hub" {
 		id := e.provisionCollectorHubLocked(fingerprint, timerLabel, ver)
+		pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
 		pilots := append([]domain.PilotSlot(nil), e.pilots...)
 		gates := append([]domain.TrackGate(nil), e.gates...)
 		subs := append([]EventSubscriber(nil), e.subscribers...)
@@ -73,6 +74,7 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		for _, s := range subs {
 			s.OnConfigUpdated(pilots, gates)
 		}
+		e.dispatchTrackSnapshotUpdates(pSnap, rSnap, subs)
 		return id, nil
 	}
 	if req.FromHubHello && fingerprint != "" && e.deletedSpokeFp != nil && e.deletedSpokeFp[fingerprint] {
@@ -85,6 +87,17 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	if fingerprint != "" {
 		for id, d := range e.detected {
 			if d.Fingerprint == fingerprint {
+				if id == 1 && role != "hub" {
+					// Board was previously at Hub slot 1 and is now a Spoke: free slot 1
+					// so it gets allocated a proper Spoke slot (2..7) below.
+					delete(e.detected, 1)
+					for i := range e.gates {
+						if e.gates[i].AssignedTimerID == 1 {
+							e.gates[i].AssignedTimerID = 0
+						}
+					}
+					break
+				}
 				if timerLabel != "" {
 					d.TimerLabel = timerLabel
 				}
@@ -102,6 +115,7 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 						e.gates[i].FirmwareVersion = ver
 					}
 				}
+				pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
 				pilots := append([]domain.PilotSlot(nil), e.pilots...)
 				gates := append([]domain.TrackGate(nil), e.gates...)
 				subs := append([]EventSubscriber(nil), e.subscribers...)
@@ -109,6 +123,7 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 				for _, s := range subs {
 					s.OnConfigUpdated(pilots, gates)
 				}
+				e.dispatchTrackSnapshotUpdates(pSnap, rSnap, subs)
 				return id, nil
 			}
 		}
@@ -142,6 +157,55 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 			if _, exists := e.detected[id]; !exists {
 				assignedID = id
 				break
+			}
+		}
+		// If all 6 Spoke slots (2..7) are occupied, reuse an offline Spoke slot (preferring
+		// unassigned slots first) so reflashing or replacing hardware never fails with 400.
+		if assignedID == 0 {
+			for id := uint8(2); id <= maxTimers; id++ {
+				d := e.detected[id]
+				if d != nil && !d.IsHub && !d.Online {
+					assigned := false
+					for i := range e.gates {
+						if e.gates[i].AssignedTimerID == id {
+							assigned = true
+							break
+						}
+					}
+					if !assigned {
+						assignedID = id
+						delete(e.detected, id)
+						break
+					}
+				}
+			}
+		}
+		if assignedID == 0 {
+			for id := uint8(2); id <= maxTimers; id++ {
+				d := e.detected[id]
+				if d != nil && !d.IsHub && (!d.Online || d.LastSeenAt.IsZero() || time.Since(d.LastSeenAt) >= timerOfflineAfter) {
+					assignedID = id
+					delete(e.detected, id)
+					break
+				}
+			}
+		}
+		if assignedID == 0 && !req.FromHubHello {
+			// When flashing over USB, if all 6 Spoke slots were seen recently, evict the oldest Spoke slot.
+			var oldestID uint8
+			var oldestTime time.Time
+			for id := uint8(2); id <= maxTimers; id++ {
+				d := e.detected[id]
+				if d != nil && !d.IsHub {
+					if oldestID == 0 || d.LastSeenAt.Before(oldestTime) {
+						oldestID = id
+						oldestTime = d.LastSeenAt
+					}
+				}
+			}
+			if oldestID > 0 {
+				assignedID = oldestID
+				delete(e.detected, oldestID)
 			}
 		}
 		if assignedID == 0 {
@@ -202,6 +266,7 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 		d.LastSeenAt = now
 	}
 
+	pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
 	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
@@ -210,6 +275,7 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	for _, s := range subs {
 		s.OnConfigUpdated(pilots, gates)
 	}
+	e.dispatchTrackSnapshotUpdates(pSnap, rSnap, subs)
 	return assignedID, nil
 }
 
@@ -218,24 +284,38 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 // sweeps 5.8 GHz and times that gate (the browser tells the Hub over USB). It keeps timer ID 1
 // (or its existing ID if this board is already known).
 func (e *Engine) provisionCollectorHubLocked(fingerprint, label, ver string) uint8 {
-	var id uint8
-	for tid, d := range e.detected {
-		if fingerprint != "" && d.Fingerprint == fingerprint {
-			id = tid
-			break
-		}
-	}
-	if id == 0 {
-		for tid, d := range e.detected {
-			if d.IsHub {
-				id = tid
+	// Ensure the Hub always occupies slot 1 (and move any non-Hub accidentally in slot 1 to 2..7).
+	if d1, ok := e.detected[1]; ok && !d1.IsHub && (fingerprint == "" || d1.Fingerprint != fingerprint) {
+		var movedID uint8
+		for id := uint8(2); id <= maxTimers; id++ {
+			if _, exists := e.detected[id]; !exists {
+				movedID = id
 				break
 			}
 		}
+		if movedID != 0 {
+			d1.TimerID = movedID
+			e.detected[movedID] = d1
+			for i := range e.gates {
+				if e.gates[i].AssignedTimerID == 1 {
+					e.gates[i].AssignedTimerID = movedID
+				}
+			}
+		}
+		delete(e.detected, 1)
 	}
-	if id == 0 {
-		id = 1
+	// Remove any duplicate Hub entry at tid > 1 when provisioning Hub at slot 1.
+	for tid, d := range e.detected {
+		if tid != 1 && (d.IsHub || (fingerprint != "" && d.Fingerprint == fingerprint)) {
+			delete(e.detected, tid)
+			for i := range e.gates {
+				if e.gates[i].AssignedTimerID == tid {
+					e.gates[i].AssignedTimerID = 1
+				}
+			}
+		}
 	}
+	const id uint8 = 1
 	d, ok := e.detected[id]
 	if !ok {
 		d = &domain.DetectedTimer{
@@ -361,6 +441,7 @@ func (e *Engine) AddGate(name string, assignedTimerID uint8, trackOrder ...int) 
 
 	createdIdx := indexOfGate(e.gates, nextID)
 	created := e.gates[createdIdx]
+	pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
 	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
@@ -369,6 +450,7 @@ func (e *Engine) AddGate(name string, assignedTimerID uint8, trackOrder ...int) 
 	for _, s := range subs {
 		s.OnConfigUpdated(pilots, gates)
 	}
+	e.dispatchTrackSnapshotUpdates(pSnap, rSnap, subs)
 	return created, nil
 }
 
@@ -387,6 +469,7 @@ func (e *Engine) RemoveGate(gateID uint8) error {
 	e.ensureStartGateLocked()
 	e.progress = make(map[int]*pilotProgress)
 
+	pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
 	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
@@ -395,6 +478,7 @@ func (e *Engine) RemoveGate(gateID uint8) error {
 	for _, s := range subs {
 		s.OnConfigUpdated(pilots, gates)
 	}
+	e.dispatchTrackSnapshotUpdates(pSnap, rSnap, subs)
 	return nil
 }
 
@@ -425,6 +509,7 @@ func (e *Engine) SetTimerColor(timerID uint8, color string) error {
 			e.gates[i].Color = color
 		}
 	}
+	pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
 	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
@@ -433,6 +518,7 @@ func (e *Engine) SetTimerColor(timerID uint8, color string) error {
 	for _, s := range subs {
 		s.OnConfigUpdated(pilots, gates)
 	}
+	e.dispatchTrackSnapshotUpdates(pSnap, rSnap, subs)
 	return nil
 }
 
@@ -542,6 +628,7 @@ func (e *Engine) UpdateGate(u domain.GateUpdate) error {
 		e.progress = make(map[int]*pilotProgress)
 	}
 
+	pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
 	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
@@ -550,6 +637,7 @@ func (e *Engine) UpdateGate(u domain.GateUpdate) error {
 	for _, s := range subs {
 		s.OnConfigUpdated(pilots, gates)
 	}
+	e.dispatchTrackSnapshotUpdates(pSnap, rSnap, subs)
 	return nil
 }
 
@@ -631,11 +719,9 @@ func indexOfGate(gates []domain.TrackGate, id uint8) int {
 	return -1
 }
 
-// gateLabelLocked is how a timer on the track is named in events and section splits:
-// its custom Name if set, otherwise its flashed TimerLabel (e.g. "T1", "H1"), or
-// DefaultTimerLabel by hardware timer ID. Mirrors gateLabel() in web/src/state/selectors.ts.
-func (e *Engine) gateLabelLocked(gateID uint8) string {
-	ordered := e.orderedGatesLocked()
+// gateLabelFromGates formats how a gate is named in events, summaries, and section splits.
+// When `detected` is nil (frozen historical TrackSnapshot), labels are derived strictly from `ordered`.
+func gateLabelFromGates(ordered []domain.TrackGate, detected map[uint8]*domain.DetectedTimer, gateID uint8) string {
 	at := indexOfGate(ordered, gateID)
 	if at < 0 {
 		return fmt.Sprintf("T%d", gateID)
@@ -649,20 +735,140 @@ func (e *Engine) gateLabelLocked(gateID uint8) string {
 	}
 	tid := g.AssignedTimerID
 	if tid > 0 {
-		if d, ok := e.detected[tid]; ok {
-			if lbl := strings.TrimSpace(d.TimerLabel); lbl != "" {
-				return lbl
+		if detected != nil {
+			if d, ok := detected[tid]; ok {
+				if lbl := strings.TrimSpace(d.TimerLabel); lbl != "" {
+					return lbl
+				}
+				return domain.DefaultTimerLabel(tid, d.IsHub)
 			}
-			return domain.DefaultTimerLabel(tid, d.IsHub)
 		}
-		return domain.DefaultTimerLabel(tid, false)
+		return domain.DefaultTimerLabel(tid, tid == domain.SimHubTimerID)
 	}
 	return fmt.Sprintf("T%d", at+1)
 }
 
+func sectionLabelFromGates(ordered []domain.TrackGate, detected map[uint8]*domain.DetectedTimer, fromGateID, toGateID uint8) string {
+	return gateLabelFromGates(ordered, detected, fromGateID) + " → " + gateLabelFromGates(ordered, detected, toGateID)
+}
+
+// gateLabelLocked is how a timer on the track is named in events and section splits:
+// its custom Name if set, otherwise its flashed TimerLabel (e.g. "T1", "H1"), or
+// DefaultTimerLabel by hardware timer ID. Mirrors gateLabel() in web/src/state/selectors.ts.
+func (e *Engine) gateLabelLocked(gateID uint8) string {
+	return gateLabelFromGates(e.orderedGatesLocked(), e.detected, gateID)
+}
+
 // sectionLabelLocked names the stretch of track between two gates, e.g. "Gate 2 → Split-S".
 func (e *Engine) sectionLabelLocked(fromGateID, toGateID uint8) string {
-	return e.gateLabelLocked(fromGateID) + " → " + e.gateLabelLocked(toGateID)
+	return sectionLabelFromGates(e.orderedGatesLocked(), e.detected, fromGateID, toGateID)
+}
+
+// snapshotOrderedGatesLocked returns a self-contained deep copy of the current ordered track gates
+// enriched with their assigned timer's label, firmware version, and color so historical Practice
+// Sessions and completed Races preserve exact gate identities even if timers are later re-flashed,
+// recolored, unassigned, or deleted.
+func (e *Engine) snapshotOrderedGatesLocked() []domain.TrackGate {
+	ordered := e.orderedGatesLocked()
+	out := make([]domain.TrackGate, len(ordered))
+	for i, g := range ordered {
+		cp := g
+		cp.TrackOrder = i
+		if cp.AssignedTimerID > 0 {
+			if d, ok := e.detected[cp.AssignedTimerID]; ok && d != nil {
+				if strings.TrimSpace(d.TimerLabel) != "" {
+					cp.TimerLabel = strings.TrimSpace(d.TimerLabel)
+				}
+				if d.FirmwareVersion != "" {
+					cp.FirmwareVersion = d.FirmwareVersion
+				}
+				if strings.TrimSpace(d.Color) != "" {
+					cp.Color = strings.TrimSpace(d.Color)
+				}
+				cp.BatteryMv = d.BatteryMv
+				cp.BatteryPct = d.BatteryPct
+				cp.NoiseFloorDbm = d.NoiseFloorDbm
+			}
+			if strings.TrimSpace(cp.Color) == "" {
+				cp.Color = domain.DefaultTimerColor(cp.AssignedTimerID)
+			}
+			if strings.TrimSpace(cp.TimerLabel) == "" {
+				cp.TimerLabel = domain.DefaultTimerLabel(cp.AssignedTimerID, cp.AssignedTimerID == domain.SimHubTimerID)
+			}
+		}
+		out[i] = cp
+	}
+	return out
+}
+
+func isRaceTrackEditable(r *domain.RaceTournamentState) bool {
+	return r != nil &&
+		r.RaceID != "" &&
+		r.Lifecycle != domain.LifecycleCompleted &&
+		r.Lifecycle != domain.LifecycleScrapped &&
+		!r.IsComplete
+}
+
+// syncTrackToOpenSessionsAndRacesLocked propagates live track/timer edits to any currently active
+// PracticeSession (`s.Active == true`) and any open/uncompleted Race (`draft`, `active`, `paused`),
+// while leaving stopped PracticeSessions and completed/scrapped Races completely untouched.
+func (e *Engine) syncTrackToOpenSessionsAndRacesLocked() (*domain.PracticeManagerState, *domain.RaceTournamentState) {
+	snap := e.snapshotOrderedGatesLocked()
+
+	practiceTouched := false
+	if e.practiceState.Initialized || len(e.practiceState.Sessions) > 0 {
+		for i := range e.practiceState.Sessions {
+			s := &e.practiceState.Sessions[i]
+			if s.Active {
+				s.TrackSnapshot = append([]domain.TrackGate(nil), snap...)
+				s.Summaries = e.computePracticeSessionSummariesLocked(s)
+				practiceTouched = true
+			}
+		}
+	}
+
+	raceTouched := false
+	if isRaceTrackEditable(&e.raceState) {
+		e.raceState.TrackSnapshot = append([]domain.TrackGate(nil), snap...)
+		raceTouched = true
+	}
+	if e.eventState.Initialized || len(e.eventState.Races) > 0 {
+		for i := range e.eventState.Races {
+			r := &e.eventState.Races[i]
+			if isRaceTrackEditable(r) {
+				r.TrackSnapshot = append([]domain.TrackGate(nil), snap...)
+				raceTouched = true
+			}
+		}
+	}
+
+	var pOut *domain.PracticeManagerState
+	if practiceTouched {
+		cp := clonePracticeManagerState(e.practiceState)
+		pOut = &cp
+	}
+	var rOut *domain.RaceTournamentState
+	if raceTouched {
+		cp := cloneRaceState(e.raceState)
+		rOut = &cp
+	}
+	return pOut, rOut
+}
+
+func (e *Engine) dispatchTrackSnapshotUpdates(
+	pSnap *domain.PracticeManagerState,
+	rSnap *domain.RaceTournamentState,
+	subs []EventSubscriber,
+) {
+	if len(subs) == 0 {
+		return
+	}
+	if pSnap != nil {
+		e.notifyPracticeUpdated(*pSnap, subs)
+	}
+	if rSnap != nil {
+		e.notifyRaceUpdated(*rSnap, nil, subs)
+	}
 }
 
 // ClearPilotProgress resets in-progress lap/sector tracking for a single pilot (e.g. when a
@@ -703,6 +909,27 @@ func (e *Engine) SetDetectedTimerOnline(timerID uint8, online bool) {
 				e.gates[i].LastSeenAt = time.Time{}
 			}
 		}
+	}
+	pilots := append([]domain.PilotSlot(nil), e.pilots...)
+	gates := append([]domain.TrackGate(nil), e.gates...)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	for _, s := range subs {
+		s.OnConfigUpdated(pilots, gates)
+	}
+}
+
+// SetAllTimersOffline clears the online status of all detected timers and gates until live Hub frames arrive.
+func (e *Engine) SetAllTimersOffline() {
+	e.mu.Lock()
+	for _, d := range e.detected {
+		d.Online = false
+		d.LastSeenAt = time.Time{}
+	}
+	for i := range e.gates {
+		e.gates[i].Online = false
+		e.gates[i].LastSeenAt = time.Time{}
 	}
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
 	gates := append([]domain.TrackGate(nil), e.gates...)
@@ -765,6 +992,7 @@ func (e *Engine) DeleteDetectedTimer(timerID uint8) error {
 	e.ensureStartGateLocked()
 	e.initDetectorsLocked()
 	e.progress = make(map[int]*pilotProgress)
+	pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
 	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
@@ -773,6 +1001,143 @@ func (e *Engine) DeleteDetectedTimer(timerID uint8) error {
 	for _, s := range subs {
 		s.OnConfigUpdated(pilots, gates)
 	}
+	e.dispatchTrackSnapshotUpdates(pSnap, rSnap, subs)
+	return nil
+}
+
+// UnprovisionTimer removes a timer's flashed firmware identity from `e.detected` (e.g. when a
+// simulated board is erased back to factory-blank) and unassigns any gate bound to it without
+// deleting the gate from the course.
+func (e *Engine) UnprovisionTimer(timerID uint8) error {
+	if timerID == 0 || timerID > maxTimers {
+		return ErrInvalidTimerID
+	}
+	e.mu.Lock()
+	delete(e.detected, timerID)
+	for i := range e.gates {
+		if e.gates[i].AssignedTimerID == timerID {
+			e.gates[i].AssignedTimerID = 0
+			e.gates[i].TimerLabel = ""
+			e.gates[i].Online = false
+			e.gates[i].LastSeenAt = time.Time{}
+		}
+	}
+	e.initDetectorsLocked()
+	e.progress = make(map[int]*pilotProgress)
+	pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
+	pilots := append([]domain.PilotSlot(nil), e.pilots...)
+	gates := append([]domain.TrackGate(nil), e.gates...)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	for _, s := range subs {
+		s.OnConfigUpdated(pilots, gates)
+	}
+	e.dispatchTrackSnapshotUpdates(pSnap, rSnap, subs)
+	return nil
+}
+
+// FlashSimBoard programs or updates a simulated XIAO ESP32-C5 board (`timerID` 1..7) with the
+// given role, label, fingerprint, and firmware version.
+func (e *Engine) FlashSimBoard(timerID uint8, isHub bool, label, fingerprint, fwVersion, color string) error {
+	if timerID == 0 || timerID > maxTimers {
+		return ErrInvalidTimerID
+	}
+	label = strings.TrimSpace(label)
+	if utf8.RuneCountInString(label) > domain.MaxGateNameLen {
+		return ErrGateNameTooLong
+	}
+	fingerprint = strings.ToUpper(strings.TrimSpace(fingerprint))
+	if fwVersion == "" {
+		fwVersion = domain.LatestFirmwareVersion
+	}
+
+	e.mu.Lock()
+	if fingerprint != "" && e.deletedSpokeFp != nil {
+		delete(e.deletedSpokeFp, fingerprint)
+	}
+	d, ok := e.detected[timerID]
+	if !ok {
+		if color == "" {
+			color = domain.DefaultTimerColor(timerID)
+		}
+		d = &domain.DetectedTimer{
+			TimerID:       timerID,
+			Color:         color,
+			BatteryMv:     4120,
+			BatteryPct:    domain.ComputeBatteryPct(4120),
+			NoiseFloorDbm: -92.0,
+		}
+		e.detected[timerID] = d
+	} else if color != "" && d.Color == "" {
+		d.Color = color
+	}
+	if fingerprint == "" {
+		if d.Fingerprint != "" {
+			fingerprint = d.Fingerprint
+		} else {
+			fingerprint = fmt.Sprintf("53494D%02X", timerID)
+		}
+	}
+	if label == "" {
+		label = domain.DefaultTimerLabel(timerID, isHub)
+	}
+	d.IsHub = isHub
+	d.TimerLabel = label
+	d.Fingerprint = fingerprint
+	d.FirmwareVersion = fwVersion
+	if isHub {
+		d.BatteryMv = 4200
+		d.BatteryPct = 100
+		// A newly flashed Hub is an off-track USB collector dongle; unbind any gate it previously held as a Spoke.
+		for i := range e.gates {
+			if e.gates[i].AssignedTimerID == timerID {
+				e.gates[i].AssignedTimerID = 0
+				e.gates[i].TimerLabel = ""
+				e.gates[i].Online = false
+				e.gates[i].LastSeenAt = time.Time{}
+			}
+		}
+	} else {
+		alreadyOnGate := false
+		for i := range e.gates {
+			if e.gates[i].AssignedTimerID == timerID {
+				e.gates[i].TimerLabel = label
+				e.gates[i].FirmwareVersion = fwVersion
+				e.gates[i].Color = d.Color
+				alreadyOnGate = true
+			}
+		}
+		if !alreadyOnGate {
+			ordered := e.orderedGatesLocked()
+			for _, og := range ordered {
+				if og.AssignedTimerID == 0 {
+					idx := indexOfGate(e.gates, og.GateID)
+					if idx >= 0 {
+						e.gates[idx].AssignedTimerID = timerID
+						e.gates[idx].TimerLabel = label
+						e.gates[idx].FirmwareVersion = fwVersion
+						e.gates[idx].Color = d.Color
+						e.gates[idx].BatteryMv = d.BatteryMv
+						e.gates[idx].BatteryPct = d.BatteryPct
+						e.gates[idx].NoiseFloorDbm = d.NoiseFloorDbm
+						break
+					}
+				}
+			}
+		}
+	}
+	e.initDetectorsLocked()
+	pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
+	pilots := append([]domain.PilotSlot(nil), e.pilots...)
+	gates := append([]domain.TrackGate(nil), e.gates...)
+	subs := append([]EventSubscriber(nil), e.subscribers...)
+	e.mu.Unlock()
+
+	for _, s := range subs {
+		s.OnConfigUpdated(pilots, gates)
+	}
+	e.dispatchTrackSnapshotUpdates(pSnap, rSnap, subs)
 	return nil
 }
 
@@ -901,6 +1266,7 @@ func (e *Engine) AddSimulatedTimer(role string, label string) (uint8, error) {
 		}
 	}
 
+	pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
 	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
@@ -909,5 +1275,6 @@ func (e *Engine) AddSimulatedTimer(role string, label string) (uint8, error) {
 	for _, s := range subs {
 		s.OnConfigUpdated(pilots, gates)
 	}
+	e.dispatchTrackSnapshotUpdates(pSnap, rSnap, subs)
 	return nextID, nil
 }

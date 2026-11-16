@@ -2,8 +2,13 @@ import { StreamEnvelope, TimerTelemetryFrame } from "../types/models";
 import { BootState, enginePersistence } from "./engine_persistence";
 import { ApiTransport } from "./transport";
 
-interface SlaprfWasmBridge {
-  request(method: string, url: string, body?: string): { status: number; body: string };
+export interface SlaprfWasmBridge {
+  request(
+    method: string,
+    url: string,
+    body?: string,
+    headers?: Record<string, string>
+  ): { status: number; headers?: Record<string, string>; body: string };
   onStream(cb: ((envelopeJson: string) => void) | null): void;
   /** Binary telemetry batches (see `decodeTelemetryBatch`); when set, telemetry skips `onStream`. */
   onTelemetry?(cb: ((batch: Uint8Array) => void) | null): void;
@@ -13,10 +18,34 @@ interface SlaprfWasmBridge {
   ingestHubPackets?(packed: Uint8Array): number;
   onHubCommand?(cb: ((pkt: Uint8Array) => void) | null): void;
   pushHubChannels?(): void;
+  setSimHubUsbConnected?(connected: boolean): void;
+  onSimHubUsbBytes?(cb: ((raw: Uint8Array) => void) | null): void;
+  flushSimHubHellos?(): Uint8Array;
+  setSimTimerDiagState?(
+    timerId: number,
+    rfEnabled: boolean,
+    emergencyMode: boolean,
+    scanLive: boolean,
+    chanMask: number
+  ): void;
+  getSimTimerRssi?(timerId: number): number[] | null;
   exportSimState?(): string;
   restoreSimState?(jsonStr: string): boolean;
   exportRealState?(): string;
   restoreRealState?(jsonStr: string): boolean;
+  laprfClientOpen?(timerId: number, label: string): number;
+  laprfClientData?(timerId: number, chunk: Uint8Array): void;
+  laprfClientClose?(timerId: number): void;
+  laprfClientSyncAll?(): void;
+  onLaprfClientOut?(cb: ((timerId: number, chunk: Uint8Array) => void) | null): void;
+  laprfClientSnapshots?(): string;
+  rhClientOpen?(timerId: number, label: string): number;
+  rhClientConnected?(timerId: number): void;
+  rhClientFeed?(timerId: number, sioFrame: string): void;
+  rhClientClose?(timerId: number): void;
+  rhClientSyncAll?(): void;
+  onRhClientOut?(cb: ((timerId: number, sioFrame: string) => void) | null): void;
+  rhClientSnapshots?(): string;
 }
 
 declare global {
@@ -104,7 +133,7 @@ export class WasmSimTransport implements ApiTransport {
     if (!window.Go) {
       await new Promise<void>((resolve, reject) => {
         const script = document.createElement("script");
-        script.src = "./wasm/wasm_exec.js?v=228";
+        script.src = "./wasm/wasm_exec.js?v=301";
         script.onload = () => resolve();
         script.onerror = () => reject(new Error("Failed to load ./wasm/wasm_exec.js"));
         document.head.appendChild(script);
@@ -113,7 +142,7 @@ export class WasmSimTransport implements ApiTransport {
 
     window.__slaprfBootStatus?.("Downloading SlapRF 5.8 GHz timing engine…", 28);
     const go = new window.Go!();
-    const wasmUrl = "./wasm/slaprf.wasm?v=228";
+    const wasmUrl = "./wasm/slaprf.wasm?v=301";
 
     const response = await fetch(wasmUrl);
     if (!response.ok) {
@@ -152,8 +181,17 @@ export class WasmSimTransport implements ApiTransport {
     }
 
     window.__slaprfBootStatus?.("Compiling WebAssembly & pre-warming track simulator…", 82);
-    // Yield one frame so the browser paints the updated status before WebAssembly.instantiate
-    await new Promise((r) => requestAnimationFrame(r));
+    // Yield one frame so the browser paints the updated status before WebAssembly.instantiate,
+    // with an unthrottled MessageChannel fallback so backgrounded tabs (where rAF and setTimeout
+    // are throttled) never stall boot.
+    await Promise.race([
+      new Promise((r) => requestAnimationFrame(r)),
+      new Promise<void>((r) => {
+        const mc = new MessageChannel();
+        mc.port1.onmessage = () => r();
+        mc.port2.postMessage(0);
+      }),
+    ]);
 
     const instantiated = await WebAssembly.instantiate(wasmBuffer, go.importObject);
     const instance = instantiated.instance;
@@ -232,10 +270,23 @@ export class WasmSimTransport implements ApiTransport {
     if (res.status < 200 || res.status >= 300) {
       throw new Error(`WASM ${method} ${url} failed (${res.status}): ${res.body}`);
     }
-    if (method === "POST") {
+    if (method === "POST" && url !== "/api/race/tick") {
       enginePersistence.notePost();
     }
     return JSON.parse(res.body) as T;
+  }
+
+  public async requestText(method: "GET" | "POST", url: string, body?: unknown): Promise<string> {
+    const wasm = await this.ensureReady();
+    wasm.setRunning(this.simRunning);
+    const res = wasm.request(method, url, body !== undefined ? JSON.stringify(body) : "");
+    if (res.status < 200 || res.status >= 300) {
+      throw new Error(`WASM ${method} ${url} failed (${res.status}): ${res.body}`);
+    }
+    if (method === "POST" && url !== "/api/race/tick") {
+      enginePersistence.notePost();
+    }
+    return res.body;
   }
 
   public ingestHubPacket(bytes: Uint8Array): number {

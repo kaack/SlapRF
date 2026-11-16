@@ -1,3 +1,4 @@
+import { adaptColorForTheme } from "../core/theme";
 import { LapRecord } from "../types/models";
 import { AppStore } from "./store";
 
@@ -65,10 +66,10 @@ export const GATE_COLORS = TIMER_COLORS;
 export function timerColor(store: AppStore, hardwareTimerId: number): string {
   if (!hardwareTimerId || hardwareTimerId <= 0) return "#64748b";
   const detected = store.detectedTimers.find((d) => d.timerId === hardwareTimerId);
-  if (detected?.color?.trim()) return detected.color.trim();
+  if (detected?.color?.trim()) return adaptColorForTheme(detected.color.trim());
   const nodeWithTimer = store.nodes.find((p) => (p.assignedTimerId ?? p.gateId) === hardwareTimerId);
-  if (nodeWithTimer?.color?.trim()) return nodeWithTimer.color.trim();
-  return TIMER_COLORS[(hardwareTimerId - 1) % TIMER_COLORS.length];
+  if (nodeWithTimer?.color?.trim()) return adaptColorForTheme(nodeWithTimer.color.trim());
+  return adaptColorForTheme(TIMER_COLORS[(hardwareTimerId - 1) % TIMER_COLORS.length]);
 }
 
 /**
@@ -77,13 +78,18 @@ export function timerColor(store: AppStore, hardwareTimerId: number): string {
  */
 export function gateColor(store: AppStore, gateId: number): string {
   const position = store.nodes.findIndex((p) => p.gateId === gateId);
-  if (position < 0) return TIMER_COLORS[0];
+  if (position < 0) return adaptColorForTheme(TIMER_COLORS[0]);
   const p = store.nodes[position];
   const assignedId = p.assignedTimerId ?? 0;
+  if (store.isHistoricalTrack) {
+    if (p.color?.trim()) return adaptColorForTheme(p.color.trim());
+    if (assignedId > 0) return adaptColorForTheme(TIMER_COLORS[(assignedId - 1) % TIMER_COLORS.length]);
+    return "#64748b";
+  }
   if (assignedId > 0) {
     return timerColor(store, assignedId);
   }
-  return p.color?.trim() || "#64748b";
+  return p.color?.trim() ? adaptColorForTheme(p.color.trim()) : "#64748b";
 }
 
 /**
@@ -96,9 +102,17 @@ export function gateLabel(store: AppStore, gateId: number): string {
   if (position < 0) return `T${gateId}`;
   const p = store.nodes[position];
   const assignedId = p.assignedTimerId ?? 0;
-  const detected = assignedId > 0 ? store.detectedTimers.find((d) => d.timerId === assignedId) : undefined;
   const custom = p.name?.trim();
   if (custom) return custom;
+  if (store.isHistoricalTrack) {
+    const snapLbl = p.timerLabel?.trim();
+    if (snapLbl) return snapLbl;
+    if (assignedId > 0) {
+      return assignedId === 1 ? "H1" : `T${Math.max(1, assignedId - 1)}`;
+    }
+    return `T${position + 1}`;
+  }
+  const detected = assignedId > 0 ? store.detectedTimers.find((d) => d.timerId === assignedId) : undefined;
   const lbl = detected?.timerLabel?.trim() || p.timerLabel?.trim();
   if (lbl) return lbl;
   if (assignedId > 0) {
@@ -139,14 +153,143 @@ export function sectionShort(store: AppStore, fromGateId: number): string {
 }
 
 /**
+ * The LapRF crossing threshold (300..3500) a gate uses for a pilot: the gate's calibrated
+ * override if set, otherwise the pilot's own `laprfThreshold` (default 800).
+ */
+export function laprfThresholdAt(
+  store: AppStore,
+  gateId: number,
+  slotIndex: number
+): { dbm: number; calibrated: boolean } {
+  const pos = store.pilots.findIndex((p) => p.slotIndex === slotIndex);
+  const pilot = store.pilots[pos];
+  const override = store.node(gateId)?.laprfThresholds?.[pos] ?? 0;
+  if (override > 0) {
+    return { dbm: override, calibrated: true };
+  }
+  const base = pilot?.laprfThreshold && pilot.laprfThreshold > 0 ? pilot.laprfThreshold : 800;
+  return { dbm: base, calibrated: false };
+}
+
+/**
+ * Scales a SlapRF dBm enter threshold (-95..-20, default -58) onto RotorHazard's
+ * 0..255 RX5808 RSSI scale (default 95, 2.5 units per dB).
+ */
+export function dbmToRHEnter(dbm: number): number {
+  if (!Number.isFinite(dbm) || dbm === 0) return 95;
+  return Math.max(10, Math.min(250, Math.round(95 + (dbm + 58) * 2.5)));
+}
+
+/**
+ * Scales a SlapRF dBm exit threshold onto RotorHazard's 0..255 RSSI scale.
+ */
+export function dbmToRHExit(dbm: number, rhEnter: number): number {
+  const maxExit = Math.max(6, rhEnter - 4);
+  if (!Number.isFinite(dbm) || dbm === 0) return Math.max(6, Math.min(maxExit, rhEnter - 25));
+  return Math.max(6, Math.min(maxExit, Math.round(95 + (dbm + 58) * 2.5)));
+}
+
+/**
+ * The RotorHazard Enter / Exit hysteresis thresholds (10..250, gap >= 4) a gate uses for a pilot:
+ * the gate's calibrated override if set, otherwise the pilot's own `rhEnterThreshold` / `rhExitThreshold`
+ * (falling back to scaled dBm thresholds or defaults 95 / 70).
+ */
+export function rhThresholdAt(
+  store: AppStore,
+  gateId: number,
+  slotIndex: number
+): { enter: number; exit: number; enterCalibrated: boolean; exitCalibrated: boolean } {
+  const pos = store.pilots.findIndex((p) => p.slotIndex === slotIndex);
+  const pilot = store.pilots[pos];
+  const node = store.node(gateId);
+  const rawOverrideEnter = node?.rhEnterThresholds?.[pos] ?? 0;
+  const rawOverrideExit = node?.rhExitThresholds?.[pos] ?? 0;
+  const overrideEnter =
+    rawOverrideEnter > 0
+      ? rawOverrideEnter
+      : node?.enterThresholds?.[pos]
+        ? dbmToRHEnter(node.enterThresholds[pos])
+        : 0;
+  const baseEnter =
+    pilot?.rhEnterThreshold && pilot.rhEnterThreshold > 0
+      ? pilot.rhEnterThreshold
+      : dbmToRHEnter(pilot?.enterThreshold ?? -58);
+  const baseExit =
+    pilot?.rhExitThreshold && pilot.rhExitThreshold > 0
+      ? pilot.rhExitThreshold
+      : dbmToRHExit(pilot?.exitThreshold ?? -68, baseEnter);
+
+  const enter = Math.max(
+    10,
+    Math.min(250, Math.round(overrideEnter > 0 ? overrideEnter : baseEnter))
+  );
+  const overrideExit =
+    rawOverrideExit > 0
+      ? rawOverrideExit
+      : node?.exitThresholds?.[pos]
+        ? dbmToRHExit(node.exitThresholds[pos], enter)
+        : 0;
+  let exit: number;
+  if (overrideExit > 0) {
+    exit = Math.max(6, Math.min(enter - 4, Math.round(overrideExit)));
+  } else if (overrideEnter > 0) {
+    const gap = Math.max(4, Math.round(baseEnter - baseExit));
+    exit = Math.max(6, Math.min(enter - 4, enter - gap));
+  } else {
+    exit = Math.max(6, Math.min(enter - 4, Math.round(baseExit)));
+  }
+  return {
+    enter,
+    exit,
+    enterCalibrated: overrideEnter > 0,
+    exitCalibrated: overrideExit > 0,
+  };
+}
+
+/**
  * The enter threshold a gate uses for a pilot: the gate's calibrated value if one is set,
  * otherwise the pilot's own (mirrors thresholdsFor in internal/tracker/thresholds.go).
  */
 export function enterThresholdAt(store: AppStore, gateId: number, slotIndex: number): { dbm: number; calibrated: boolean } {
+  if (store.timingHardwareMode === "laprf") {
+    return laprfThresholdAt(store, gateId, slotIndex);
+  }
+  if (store.timingHardwareMode === "rotorhazard" || store.timingHardwareMode === "rotorhazard_usb") {
+    const rh = rhThresholdAt(store, gateId, slotIndex);
+    return { dbm: rh.enter, calibrated: rh.enterCalibrated };
+  }
   const pos = store.pilots.findIndex((p) => p.slotIndex === slotIndex);
   const pilot = store.pilots[pos];
   const override = store.node(gateId)?.enterThresholds?.[pos] ?? 0;
   return override !== 0 ? { dbm: override, calibrated: true } : { dbm: pilot?.enterThreshold ?? -58, calibrated: false };
+}
+
+/**
+ * The exit threshold a gate uses for a pilot: the gate's calibrated exit value if set,
+ * otherwise derived from the pilot's exit threshold / hysteresis gap clamped <= enter - 2 dB
+ * (mirrors thresholdsFor in internal/tracker/thresholds.go).
+ */
+export function exitThresholdAt(store: AppStore, gateId: number, slotIndex: number): { dbm: number; calibrated: boolean } {
+  if (store.timingHardwareMode === "rotorhazard" || store.timingHardwareMode === "rotorhazard_usb") {
+    const rh = rhThresholdAt(store, gateId, slotIndex);
+    return { dbm: rh.exit, calibrated: rh.exitCalibrated };
+  }
+  const pos = store.pilots.findIndex((p) => p.slotIndex === slotIndex);
+  const pilot = store.pilots[pos];
+  const enter = enterThresholdAt(store, gateId, slotIndex).dbm;
+  const node = store.node(gateId);
+  const overrideExit = node?.exitThresholds?.[pos] ?? 0;
+  if (overrideExit !== 0) {
+    return { dbm: Math.max(-105, Math.min(enter - 2, overrideExit)), calibrated: true };
+  }
+  const pilotEnter = pilot?.enterThreshold ?? -58;
+  const pilotExit = pilot?.exitThreshold ?? (pilotEnter - 10);
+  const overrideEnter = node?.enterThresholds?.[pos] ?? 0;
+  if (overrideEnter !== 0) {
+    const gap = Math.max(2, pilotEnter - pilotExit);
+    return { dbm: Math.max(-105, enter - gap), calibrated: false };
+  }
+  return { dbm: Math.max(-105, Math.min(enter - 2, pilotExit)), calibrated: false };
 }
 
 /** A pilot counts as flying if they've crossed a gate recently. */

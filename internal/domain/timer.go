@@ -14,6 +14,38 @@ const (
 	GateRoleSectorGate  GateRole = "SECTOR_GATE"
 )
 
+// TimingHardwareMode selects which timing hardware backend drives an engine:
+// "slaprf" (XIAO ESP32-C5 Hub + ESP-NOW Gates), "laprf" (LapRF 8-Way timers),
+// "rotorhazard" (RotorHazard network devices), or "rotorhazard_usb" (RotorHazard USB serial nodes).
+type TimingHardwareMode string
+
+const (
+	HardwareModeSlapRF         TimingHardwareMode = "slaprf"
+	HardwareModeLapRF          TimingHardwareMode = "laprf"
+	HardwareModeRotorHazard    TimingHardwareMode = "rotorhazard"
+	HardwareModeRotorHazardUSB TimingHardwareMode = "rotorhazard_usb"
+)
+
+// NormalizeTimingHardwareMode canonicalizes a hardware mode value, defaulting to "slaprf".
+func NormalizeTimingHardwareMode(m TimingHardwareMode) TimingHardwareMode {
+	switch m {
+	case HardwareModeLapRF:
+		return HardwareModeLapRF
+	case HardwareModeRotorHazard:
+		return HardwareModeRotorHazard
+	case HardwareModeRotorHazardUSB:
+		return HardwareModeRotorHazardUSB
+	default:
+		return HardwareModeSlapRF
+	}
+}
+
+// IsRotorHazardMode returns true for either RotorHazard (Network) or RotorHazard (USB) mode.
+func IsRotorHazardMode(m TimingHardwareMode) bool {
+	norm := NormalizeTimingHardwareMode(m)
+	return norm == HardwareModeRotorHazard || norm == HardwareModeRotorHazardUSB
+}
+
 // LatestFirmwareVersion is the current XIAO ESP32-C5 SDR timer firmware build (firmware/slaprf).
 const LatestFirmwareVersion = "v0.1.4"
 
@@ -71,10 +103,14 @@ type TrackGate struct {
 	BatteryPct      uint8                     `json:"batteryPct"`                // Calculated battery percentage (0..100%)
 	NoiseFloorDbm   float32                   `json:"noiseFloorDbm"`             // Ambient 5.8 GHz noise floor in dBm
 	LastRSSI        [MaxPilotPoolSize]float32 `json:"lastRssi"`                  // Latest 5.8 GHz RSSI values (dBm)
-	// EnterThresholds calibrates this gate per pilot slot (same order as LastRSSI). Each timer
-	// sees a different signal level (distance, antenna, obstacles), so a pilot's single
-	// threshold rarely suits every gate. 0 means "use the pilot's own threshold".
-	EnterThresholds [MaxPilotPoolSize]float32 `json:"enterThresholds"`
+	// EnterThresholds and ExitThresholds calibrate this gate per pilot slot (same order as LastRSSI).
+	// Each timer sees a different signal level (distance, antenna, obstacles), so a pilot's single
+	// threshold pair rarely suits every gate. 0 means "use the pilot's own threshold".
+	EnterThresholds   [MaxPilotPoolSize]float32 `json:"enterThresholds"`
+	ExitThresholds    [MaxPilotPoolSize]float32 `json:"exitThresholds"`
+	LapRFThresholds   [MaxPilotPoolSize]float32 `json:"laprfThresholds,omitempty"`
+	RHEnterThresholds [MaxPilotPoolSize]float32 `json:"rhEnterThresholds,omitempty"`
+	RHExitThresholds  [MaxPilotPoolSize]float32 `json:"rhExitThresholds,omitempty"`
 	// RuleOverrides are this gate's own timing-rule values; unset fields use the global rules.
 	RuleOverrides GateRuleOverrides `json:"ruleOverrides"`
 	Online        bool              `json:"online"`        // True if frames arrived within the last 2 seconds
@@ -103,7 +139,7 @@ const DefaultSimHubLabel = "H1"
 // DefaultTimerLabel returns the default short label for a physical timer:
 // "H1" for the Hub, or "T1".."T6" for Spokes (timer IDs 2..7).
 func DefaultTimerLabel(timerID uint8, isHub bool) string {
-	if isHub || timerID == SimHubTimerID {
+	if isHub {
 		return DefaultSimHubLabel
 	}
 	idx := int(timerID) - 1

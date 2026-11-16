@@ -269,7 +269,7 @@ static void hub_handle_join(const spoke_join_frame_t *j) {
         if (s_slot_fp[i] == j->fingerprint) { idx = i; break; }
     }
     for (int i = 0; idx < 0 && i < MAX_SPOKES; i++) {
-        if (s_slot_fp[i] == 0 || (s_slot_fp[i] & 0xFFFFFF00UL) == 0x53504B00UL) { idx = i; }
+        if (s_slot_fp[i] == 0 || (s_slot_fp[i] & 0xFFFFFF00UL) == 0x53504B00UL) { idx = i; break; }
     }
     if (idx < 0) {
         return; // Course is full

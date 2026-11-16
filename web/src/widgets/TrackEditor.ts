@@ -5,7 +5,7 @@ import { ApiClient } from "../services/api_client";
 import { usbPool } from "../services/timer_console";
 import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { DetectedTimer, TrackNode } from "../types/models";
+import { DetectedTimer, isRotorHazardMode, TrackNode } from "../types/models";
 import { renderSectionCapsuleIcon } from "./markup";
 
 /**
@@ -97,7 +97,14 @@ export class TrackEditor extends Component {
   }
 
   private isTimerActive(d?: DetectedTimer, node?: TrackNode): boolean {
-    if (this.store.simulatorRunning) {
+    if (
+      this.store.timingHardwareMode === "laprf" ||
+      isRotorHazardMode(this.store.timingHardwareMode) ||
+      d?.firmwareVersion === "LapRF" ||
+      node?.firmwareVersion === "LapRF" ||
+      d?.firmwareVersion === "RotorHazard" ||
+      node?.firmwareVersion === "RotorHazard"
+    ) {
       return Boolean(d ? d.online : node?.online);
     }
     const connected = usbPool.connectedConsoles();
@@ -157,7 +164,15 @@ export class TrackEditor extends Component {
     const list = detected ?? this.detectedTimers;
     const d = list.find((t) => t.timerId === timerId);
     const given = d?.timerLabel?.trim() || fallbackLabel?.trim();
-    if (given) return given.slice(0, 2);
+    if (given) {
+      if (/^rh(\d+)$/i.test(given)) {
+        return `R${given.slice(2)}`.slice(0, 2);
+      }
+      return given.slice(0, 2);
+    }
+    if (isRotorHazardMode(this.store.timingHardwareMode)) {
+      return `R${Math.max(1, timerId - 1)}`;
+    }
     return d?.isHub ? "H1" : `T${Math.max(1, timerId - 1)}`;
   }
 
@@ -233,7 +248,23 @@ export class TrackEditor extends Component {
     const tiedTimer = detected.find((d) => d.timerId === assignedId);
     const shortCode = this.formatTimerShortCode(assignedId, detected, node.timerLabel);
     const isHubGate = hasTimer && tiedTimer?.isHub === true;
-    const roleSub = hasTimer ? (isHubGate ? "HUB" : "SPK") : "EMPTY";
+    const isLapRF =
+      this.store.timingHardwareMode === "laprf" ||
+      tiedTimer?.firmwareVersion === "LapRF" ||
+      node.firmwareVersion === "LapRF";
+    const isRH =
+      isRotorHazardMode(this.store.timingHardwareMode) ||
+      tiedTimer?.firmwareVersion === "RotorHazard" ||
+      node.firmwareVersion === "RotorHazard";
+    const roleSub = hasTimer
+      ? isLapRF
+        ? "LPF"
+        : isRH
+          ? "RH"
+          : isHubGate
+            ? "HUB"
+            : "SPK"
+      : "EMPTY";
     const color = hasTimer ? timerColor(this.store, assignedId) : "#64748b";
 
     const lastNode = allNodes[(total - 1 + total) % total];
@@ -337,9 +368,30 @@ export class TrackEditor extends Component {
 
   private renderTrayTimer(d: DetectedTimer): string {
     const color = timerColor(this.store, d.timerId);
-    const roleLabel = d.isHub ? "Hub" : "Spoke";
+    const isLapRF = this.store.timingHardwareMode === "laprf" || d.firmwareVersion === "LapRF";
+    const isRH =
+      isRotorHazardMode(this.store.timingHardwareMode) || d.firmwareVersion === "RotorHazard";
+    const roleLabel = isLapRF
+      ? "LapRF 8-Way"
+      : isRH
+        ? "RotorHazard"
+        : d.isHub
+          ? "Hub"
+          : "Spoke";
     const timerName = this.formatTimerShortCode(d.timerId, [d], d.timerLabel);
     const isOnline = this.isTimerActive(d);
+    const powerReadout =
+      isOnline
+        ? isLapRF
+          ? d.batteryMv > 0
+            ? ` · ${(d.batteryMv / 1000).toFixed(1)} V`
+            : ""
+          : isRH
+            ? ""
+            : d.batteryPct > 0
+              ? ` · ${d.batteryPct}%`
+              : ""
+        : "";
     return `
       <div
         class="unassigned-timer-token ${isOnline ? "" : "is-offline"}"
@@ -354,7 +406,7 @@ export class TrackEditor extends Component {
           <span class="unassigned-timer-name mono">${esc(timerName)}</span>
           <span class="unassigned-timer-sub">
             <span class="gate-node-status-dot ${isOnline ? "is-online" : ""}"></span>
-            ${roleLabel}${isOnline && d.batteryPct > 0 ? ` · ${d.batteryPct}%` : ""}
+            ${roleLabel}${powerReadout}
           </span>
         </div>
         ${

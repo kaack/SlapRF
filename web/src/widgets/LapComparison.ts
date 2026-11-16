@@ -3,7 +3,7 @@ import { esc, fmtDelta, fmtTime } from "../core/format";
 import { decisiveSection, LapComparison as Comparison, resolveComparison, SectionDelta } from "../state/analysis";
 import { sectionLabel, sectionShort } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { renderEmpty, routeLabel } from "./markup";
+import { routeLabel } from "./markup";
 
 /** Changes smaller than this are noise at 50 Hz sampling. */
 const NEGLIGIBLE_SEC = 0.01;
@@ -25,7 +25,25 @@ export class LapComparison extends Component {
   private render(): void {
     const cmp = resolveComparison(this.store, this.store.selectedPilot);
     if (!cmp) {
-      this.el.innerHTML = renderEmpty("Fly at least two laps", "Then click a bar above to see where that lap gained or lost time.");
+      this.el.innerHTML = `
+      <div class="table-scroll">
+        <table class="table cmp-table">
+          <thead>
+            <tr>
+              <th>Section</th>
+              <th class="num">Selected lap</th>
+              <th class="num">Reference lap</th>
+              <th class="col-delta">Gained / lost</th>
+              <th class="num">Exit speed</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr class="table-empty-row">
+              <td colspan="5" class="muted" style="text-align:center;padding:20px 12px">No lap comparison data recorded yet — fly at least two laps to compare splits.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>`;
       return;
     }
     const maxAbs = Math.max(NEGLIGIBLE_SEC, ...cmp.sections.map((s) => Math.abs(s.delta)));

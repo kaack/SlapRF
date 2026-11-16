@@ -1,6 +1,7 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
+import { lookupBandChannelByFreqMHz } from "../core/vtx_channels";
 import { ApiClient } from "../services/api_client";
 import {
   FIRMWARE_SWEEP_HZ,
@@ -45,8 +46,7 @@ function savePortPref(val: boolean): void {
 }
 
 function racebandName(mhz: number): string {
-  const idx = RACEBAND.indexOf(mhz);
-  return idx >= 0 ? `R${idx + 1}` : "";
+  return lookupBandChannelByFreqMHz(mhz)?.shortCode ?? "";
 }
 
 function fmtUptime(ms: number): string {
@@ -71,7 +71,7 @@ class TimerReaderPanel extends Component {
   private progressText: string | null = null;
   private errorMsg: string | null = null;
   private showAllPorts = false;
-  private lastHtml = "";
+  private lastPanelsHtml = "";
 
   constructor(el: HTMLElement, api: ApiClient, onRead?: (readout: TimerReadout) => void) {
     super(el);
@@ -161,7 +161,7 @@ class TimerReaderPanel extends Component {
               ? "Connected over USB · click Read timer to inspect"
               : webSerialOk
                 ? "Off · connect a timer in Connection above to read its settings"
-                : "Direct USB reading requires Chrome, Edge, or Brave";
+                : "Connect a SlapRF Server to read physical USB timers";
 
     const rfBadge = !r
       ? `<span class="badge">—</span>`
@@ -204,19 +204,11 @@ class TimerReaderPanel extends Component {
           ? `Joined Hub · slot ${s.slot}`
           : "ESP-NOW LR → Hub";
 
-    const nextHtml = `
-      <div class="debug-status-topbar">
-        <span class="debug-led-status">
-          <span class="status-dot ${ledClass}"></span>
-          <span class="debug-head-note">${headText}</span>
-        </span>
-        <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm btn-armed" data-action="read-timer" ${this.busy || !webSerialOk || !isConnected ? "disabled" : ""}>
-            ${icons.reset(14)}<span>${this.busy ? "Reading…" : "Read timer"}</span>
-          </button>
-        </div>
-      </div>
-      <div class="debug-status-panels ${active ? "" : "is-unread"}">
+    const readDisabled = this.busy || !webSerialOk || !isConnected;
+    const readBtnLabel = this.busy ? "Reading…" : "Read timer";
+    const panelsClass = `debug-status-panels ${active ? "" : "is-unread"}`;
+
+    const panelsHtml = `
         <div class="debug-subbox">
           <div class="debug-subbox-head">
             <span class="debug-subbox-title ${active ? "is-active" : ""}">${icons.cpu(14)}<span>Identity &amp; hardware</span></span>
@@ -292,11 +284,53 @@ class TimerReaderPanel extends Component {
               <dd>${courseLinkText}</dd>
             </div>
           </dl>
+        </div>`;
+
+    const existingBtn = this.el.querySelector<HTMLButtonElement>("[data-action='read-timer']");
+    const existingPanels = this.el.querySelector<HTMLElement>("[data-reader-panels]");
+    if (existingBtn && existingPanels) {
+      const dotEl = this.el.querySelector<HTMLElement>("[data-reader-dot]");
+      const headEl = this.el.querySelector<HTMLElement>("[data-reader-head]");
+      const btnTextEl = existingBtn.querySelector<HTMLElement>("[data-reader-btn-text]");
+      if (dotEl) {
+        const nextDotClass = `status-dot ${ledClass}`.trim();
+        if (dotEl.className !== nextDotClass) dotEl.className = nextDotClass;
+      }
+      if (headEl && headEl.innerHTML !== headText) {
+        headEl.innerHTML = headText;
+      }
+      if (existingBtn.disabled !== readDisabled) {
+        existingBtn.disabled = readDisabled;
+      }
+      if (btnTextEl && btnTextEl.textContent !== readBtnLabel) {
+        btnTextEl.textContent = readBtnLabel;
+      }
+      const nextPanelsClass = panelsClass.trim();
+      if (existingPanels.className !== nextPanelsClass) {
+        existingPanels.className = nextPanelsClass;
+      }
+      if (panelsHtml !== this.lastPanelsHtml) {
+        this.lastPanelsHtml = panelsHtml;
+        existingPanels.innerHTML = panelsHtml;
+      }
+      return;
+    }
+
+    this.lastPanelsHtml = panelsHtml;
+    this.el.innerHTML = `
+      <div class="debug-status-topbar">
+        <span class="debug-led-status">
+          <span class="status-dot ${ledClass}" data-reader-dot="1"></span>
+          <span class="debug-head-note" data-reader-head="1">${headText}</span>
+        </span>
+        <div class="debug-connect-actions">
+          <button type="button" class="btn btn-sm btn-armed" data-action="read-timer" ${readDisabled ? "disabled" : ""}>
+            ${icons.reset(14)}<span data-reader-btn-text="1">${readBtnLabel}</span>
+          </button>
         </div>
+      </div>
+      <div class="${panelsClass.trim()}" data-reader-panels="1">${panelsHtml}
       </div>`;
-    if (nextHtml === this.lastHtml) return;
-    this.lastHtml = nextHtml;
-    this.el.innerHTML = nextHtml;
   }
 }
 
@@ -420,36 +454,64 @@ class TimerEraserPanel extends Component {
         : this.lastSuccessMsg
           ? `✓ ${esc(this.lastSuccessMsg)}`
           : isConnected
-            ? `Connected to ${esc(targetName)} · click Erase timer to wipe back to factory blank`
+            ? `Connected to ${esc(targetName)}<span class="flasher-eraser-hint-desktop"> · click Erase timer to wipe back to factory blank</span>`
             : webSerialOk
               ? "Off · connect a USB device in Connection above to erase"
-              : "Direct USB erasing requires Chrome, Edge, or Brave";
+              : "Connect a SlapRF Server to erase physical USB timers";
+
+    const eraseDisabled = this.busy || !webSerialOk || !isConnected;
+    const eraseBtnLabel = this.busy ? `Erasing… (${pct}%)` : "Erase timer";
+    const progressHtml =
+      this.busy || this.lastSuccessMsg
+        ? `<div class="flasher-progress ${this.busy ? "is-flashing" : "is-complete"}">
+            <div class="flasher-progress-top">
+              <span class="flasher-progress-status" data-eraser-status="1">${esc(this.progress?.detail || this.lastSuccessMsg || "")}</span>
+              <span class="mono flasher-progress-pct" data-eraser-pct="1">${pct}%</span>
+            </div>
+            <div class="meter flasher-meter">
+              <span class="meter-fill ${this.lastSuccessMsg && !this.busy ? "tone-good" : ""}" data-eraser-fill="1" style="width:${pct}%"></span>
+            </div>
+          </div>`
+        : "";
+
+    const existingBtn = this.el.querySelector<HTMLButtonElement>("[data-action='erase-timer']");
+    const existingProgSlot = this.el.querySelector<HTMLElement>("[data-eraser-progress-slot]");
+    if (existingBtn && existingProgSlot) {
+      const dotEl = this.el.querySelector<HTMLElement>("[data-eraser-dot]");
+      const headEl = this.el.querySelector<HTMLElement>("[data-eraser-head]");
+      const btnTextEl = existingBtn.querySelector<HTMLElement>("[data-eraser-btn-text]");
+      if (dotEl) {
+        const nextDotClass = `status-dot ${ledClass}`.trim();
+        if (dotEl.className !== nextDotClass) dotEl.className = nextDotClass;
+      }
+      if (headEl && headEl.innerHTML !== headText) {
+        headEl.innerHTML = headText;
+      }
+      if (existingBtn.disabled !== eraseDisabled) {
+        existingBtn.disabled = eraseDisabled;
+      }
+      if (btnTextEl && btnTextEl.textContent !== eraseBtnLabel) {
+        btnTextEl.textContent = eraseBtnLabel;
+      }
+      if (existingProgSlot.innerHTML !== progressHtml) {
+        existingProgSlot.innerHTML = progressHtml;
+      }
+      return;
+    }
 
     this.el.innerHTML = `
       <div class="debug-status-topbar">
         <span class="debug-led-status">
-          <span class="status-dot ${ledClass}"></span>
+          <span class="status-dot ${ledClass}" data-eraser-dot="1"></span>
           <span class="debug-head-note" data-eraser-head="1">${headText}</span>
         </span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm btn-bad" data-action="erase-timer" ${this.busy || !webSerialOk || !isConnected ? "disabled" : ""}>
-            ${icons.trash(14)}<span data-eraser-btn-text="1">${this.busy ? `Erasing… (${pct}%)` : "Erase timer"}</span>
+          <button type="button" class="btn btn-sm btn-bad" data-action="erase-timer" ${eraseDisabled ? "disabled" : ""}>
+            ${icons.trash(14)}<span data-eraser-btn-text="1">${eraseBtnLabel}</span>
           </button>
         </div>
       </div>
-      ${
-        this.busy || this.lastSuccessMsg
-          ? `<div class="flasher-progress ${this.busy ? "is-flashing" : "is-complete"}">
-              <div class="flasher-progress-top">
-                <span class="flasher-progress-status" data-eraser-status="1">${esc(this.progress?.detail || this.lastSuccessMsg || "")}</span>
-                <span class="mono flasher-progress-pct" data-eraser-pct="1">${pct}%</span>
-              </div>
-              <div class="meter flasher-meter">
-                <span class="meter-fill ${this.lastSuccessMsg && !this.busy ? "tone-good" : ""}" data-eraser-fill="1" style="width:${pct}%"></span>
-              </div>
-            </div>`
-          : ""
-      }`;
+      <div data-eraser-progress-slot="1">${progressHtml}</div>`;
   }
 }
 
@@ -463,7 +525,7 @@ export class FlasherView extends Component {
 
     el.innerHTML = `
       <div class="settings debug-page">
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="connection">
           <div class="settings-intro">
             <h2>Connection</h2>
             <p>Connect a XIAO ESP32-C5 over USB-C to read, flash, or wipe its firmware.</p>
@@ -471,7 +533,7 @@ export class FlasherView extends Component {
           <div class="debug-status-layout" data-slot="connection"></div>
         </section>
 
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="reader">
           <div class="settings-intro">
             <h2>Reader</h2>
             <p>Inspect the connected USB timer's flashed identity, 5.8 GHz receiver channels, and 2.4 GHz network status.</p>
@@ -479,7 +541,7 @@ export class FlasherView extends Component {
           <div class="debug-status-layout" data-slot="reader"></div>
         </section>
 
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="writer">
           <div class="settings-intro">
             <h2>Writer</h2>
             <p>Set the timer's role and name, then flash the connected XIAO ESP32-C5 directly from the browser.</p>
@@ -487,7 +549,7 @@ export class FlasherView extends Component {
           <div class="debug-status-layout" data-slot="flasher"></div>
         </section>
 
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="eraser">
           <div class="settings-intro">
             <h2>Eraser</h2>
             <p>Wipe the connected USB device back to a factory-blank chip.</p>

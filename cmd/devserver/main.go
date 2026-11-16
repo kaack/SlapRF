@@ -14,23 +14,31 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
-	"time"
 
 	"slaprf/internal/devbundle"
+	"slaprf/internal/portable"
 )
 
 func main() {
+	var pureBrowser bool
 	addr := flag.String("addr", "127.0.0.1:8090", "listen address")
 	webDir := flag.String("web", "./web", "path to the web/ directory")
 	openBrowser := flag.Bool("open", false, "open the app in the default browser")
+	portableMode := flag.Bool("portable", true, "enable SlapRF Portable /api/* bridges (set -portable=false or -browser to mimic static GitHub Pages)")
+	flag.BoolVar(&pureBrowser, "browser", false, "start in Pure Browser Mode (disables Go /api/* backend to mimic https://slaprf.app)")
+	flag.BoolVar(&pureBrowser, "pure-browser", false, "alias for -browser")
+	flag.BoolVar(&pureBrowser, "browser-only", false, "alias for -browser")
 	flag.Parse()
+	if pureBrowser {
+		*portableMode = false
+	}
 
 	absWeb, err := filepath.Abs(*webDir)
 	if err != nil {
@@ -39,6 +47,13 @@ func main() {
 	repoRoot := filepath.Dir(absWeb)
 
 	mux := http.NewServeMux()
+	if *portableMode {
+		pSrv := portable.NewServer(portable.Config{
+			Version: "dev",
+			Log:     log.New(os.Stdout, "", log.LstdFlags),
+		})
+		pSrv.RegisterAPIRoutes(mux)
+	}
 	mux.HandleFunc("/dist/app.js", func(w http.ResponseWriter, _ *http.Request) {
 		js, err := devbundle.BundleTypeScript(absWeb)
 		if err != nil {
@@ -67,56 +82,6 @@ func main() {
 		}
 		serveBytes(w, "application/wasm", b)
 	})
-	mux.HandleFunc("/__dev/events", func(w http.ResponseWriter, r *http.Request) {
-		flusher, ok := w.(http.Flusher)
-		if !ok {
-			http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-store")
-		w.Header().Set("Connection", "keep-alive")
-
-		lastCSS, lastTS := scanWebStamps(absWeb)
-		_, _ = fmt.Fprintf(w, "data: {\"css\":%d,\"ts\":%d}\n\n", lastCSS, lastTS)
-		flusher.Flush()
-
-		ticker := time.NewTicker(250 * time.Millisecond)
-		defer ticker.Stop()
-
-		var lastErrTS int64
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			case <-ticker.C:
-				css, ts := scanWebStamps(absWeb)
-				if css == lastCSS && ts == lastTS {
-					continue
-				}
-				if ts != lastTS {
-					if ts == lastErrTS {
-						// Still on the same broken TS edit; wait for the next save.
-						if css != lastCSS {
-							lastCSS = css
-							_, _ = fmt.Fprintf(w, "data: {\"css\":%d,\"ts\":%d}\n\n", lastCSS, lastTS)
-							flusher.Flush()
-						}
-						continue
-					}
-					if _, err := devbundle.BundleTypeScript(absWeb); err != nil {
-						lastErrTS = ts
-						log.Printf("[devserver] HMR skipped (TypeScript error): %v", err)
-						continue
-					}
-					lastTS = ts
-				}
-				lastCSS = css
-				_, _ = fmt.Fprintf(w, "data: {\"css\":%d,\"ts\":%d}\n\n", lastCSS, lastTS)
-				flusher.Flush()
-			}
-		}
-	})
 	files := http.FileServer(http.Dir(absWeb))
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -139,36 +104,6 @@ func serveBytes(w http.ResponseWriter, contentType string, b []byte) {
 	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(b)))
 	w.Header().Set("Cache-Control", "no-store")
 	_, _ = w.Write(b)
-}
-
-func scanWebStamps(absWeb string) (cssStamp int64, tsStamp int64) {
-	_ = filepath.WalkDir(filepath.Join(absWeb, "styles"), func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(path, ".css") {
-			if info, err := d.Info(); err == nil {
-				if t := info.ModTime().UnixNano(); t > cssStamp {
-					cssStamp = t
-				}
-			}
-		}
-		return nil
-	})
-	_ = filepath.WalkDir(filepath.Join(absWeb, "src"), func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return nil
-		}
-		if strings.HasSuffix(path, ".ts") {
-			if info, err := d.Info(); err == nil {
-				if t := info.ModTime().UnixNano(); t > tsStamp {
-					tsStamp = t
-				}
-			}
-		}
-		return nil
-	})
-	return cssStamp, tsStamp
 }
 
 func launchBrowser(url string) {

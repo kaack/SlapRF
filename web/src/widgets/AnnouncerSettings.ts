@@ -39,6 +39,12 @@ export class AnnouncerSettings extends Component {
       case "enabled":
         this.announcer.update({ enabled: (input as HTMLInputElement).checked });
         break;
+      case "qualifierLapCallouts":
+        this.announcer.update({ qualifierLapCallouts: (input as HTMLInputElement).checked });
+        break;
+      case "raceLapCallouts":
+        this.announcer.update({ raceLapCallouts: (input as HTMLInputElement).checked });
+        break;
       case "keepScreenAwake":
         this.announcer.update({ keepScreenAwake: (input as HTMLInputElement).checked });
         break;
@@ -51,16 +57,30 @@ export class AnnouncerSettings extends Component {
       case "volume":
         this.announcer.update({ volume: Number(input.value) });
         break;
-      case "testPhrase":
-        this.announcer.update({ testPhrase: input.value });
-        break;
     }
   };
 
   /** Live readout while dragging a slider (the setting itself is saved on release). */
   private handleInput = (e: Event): void => {
     const input = e.target as HTMLInputElement;
-    if (input.name === "testPhrase") return;
+    if (input.name === "testPhrase") {
+      this.announcer.update({ testPhrase: input.value });
+      input.classList.toggle("flasher-pass-input", Boolean(input.value));
+      const wrap = input.parentElement;
+      const existingReset = wrap?.querySelector<HTMLButtonElement>('[data-action="reset-phrase"]');
+      if (input.value && wrap && !existingReset) {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "flasher-pass-toggle rule-inline-btn is-active";
+        btn.dataset.action = "reset-phrase";
+        btn.title = "Reset sample phrase to default";
+        btn.innerHTML = icons.reset(14);
+        wrap.appendChild(btn);
+      } else if (!input.value && existingReset) {
+        existingReset.remove();
+      }
+      return;
+    }
     if (input.type === "range") {
       const min = Number(input.min || 0);
       const max = Number(input.max || 1);
@@ -89,12 +109,14 @@ export class AnnouncerSettings extends Component {
     } else if (target.closest("[data-action=cache-neural]")) {
       void this.announcer.piper.preloadVoice(this.announcer.activeVoiceURI()).catch(() => undefined);
     } else if (target.closest("[data-action=restore-defaults]")) {
+      (document.activeElement as HTMLElement | null)?.blur?.();
       this.announcer.resetVoiceDefaults();
     } else if (target.closest("[data-action=reset-rate]")) {
       this.announcer.update({ rate: 1.0 });
     } else if (target.closest("[data-action=reset-volume]")) {
       this.announcer.update({ volume: 1.0 });
     } else if (target.closest("[data-action=reset-phrase]")) {
+      (document.activeElement as HTMLElement | null)?.blur?.();
       this.announcer.update({ testPhrase: "" });
     }
   };
@@ -155,6 +177,26 @@ export class AnnouncerSettings extends Component {
             <div class="option-sub">Calls out pilot name and lap time at the start timer (e.g. “Vanover, 14.08”). Built-in Piper neural voices run offline in the browser.</div>
           </div>
           <label class="switch switch-lg"><input type="checkbox" name="enabled" ${p.enabled ? "checked" : ""} /><span></span></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="option-row">
+          <div>
+            <div class="option-title">Qualifier lap callouts</div>
+            <div class="option-sub">Speak pilot name and lap time during Qualifying and Open Qualifier heats (enabled by default; can also be toggled next to the Race Control clock).</div>
+          </div>
+          <label class="switch switch-lg"><input type="checkbox" name="qualifierLapCallouts" ${p.qualifierLapCallouts !== false ? "checked" : ""} /><span></span></label>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="option-row">
+          <div>
+            <div class="option-title">Race heat lap callouts</div>
+            <div class="option-sub">Speak pilot name and lap time during head-to-head bracket &amp; mains heats. When off, Start/Finish crossings play an instant gate-pass beep only while start horns, holeshot, and finish callouts stay active.</div>
+          </div>
+          <label class="switch switch-lg"><input type="checkbox" name="raceLapCallouts" ${p.raceLapCallouts ? "checked" : ""} /><span></span></label>
         </div>
       </div>
 

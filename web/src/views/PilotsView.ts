@@ -3,7 +3,7 @@ import { ApiClient } from "../services/api_client";
 import { AppStore } from "../state/store";
 import { PilotSlotsEditor } from "../widgets/PilotSlotsEditor";
 
-/** Pilots page: configure the eight timing slots and Raceband channels. */
+/** Global Pilots directory page. */
 export class PilotsView extends Component {
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
     super(el);
@@ -12,8 +12,8 @@ export class PilotsView extends Component {
       <div class="settings">
         <section class="settings-section">
           <div class="settings-intro">
-            <h2>Pilots &amp; channels</h2>
-            <p>Eight timing slots, matching LiveTime. Channels are overwritten whenever LiveTime loads a heat.</p>
+            <h2>Pilots</h2>
+            <p>Master directory of known pilots, phonetic callouts, default 5.8 GHz channels, and RF calibration thresholds (up to 32 pilots). Assign pilots to <a class="inline-link" href="#/live">Practice</a> sessions or <a class="inline-link" href="#/races">Races</a>.</p>
           </div>
           <div class="card card-flush" data-slot="pilots"></div>
         </section>

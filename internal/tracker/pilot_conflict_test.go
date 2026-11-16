@@ -2,6 +2,8 @@ package tracker
 
 import (
 	"testing"
+
+	"slaprf/internal/domain"
 )
 
 func TestUpdatePilotSlotChannelConflictBlanksChannel(t *testing.T) {
@@ -45,3 +47,108 @@ func TestUpdatePilotSlotChannelConflictBlanksChannel(t *testing.T) {
 		t.Fatalf("expected previous holder FAERRY to have channel blanked out to 0, got ch=%d freq=%d", pilots[0].Channel, pilots[0].FrequencyMHz)
 	}
 }
+
+func TestPilotPhoneticNamePersistenceAndLapRFSync(t *testing.T) {
+	eng := NewEngine()
+	pilots, _, _, _, _ := eng.StateSnapshot()
+	if pilots[0].PhoneticName != "" {
+		t.Fatalf("expected default PhoneticName to be empty, got %q", pilots[0].PhoneticName)
+	}
+
+	// Set phonetic name via UpdatePilotSlot (trimmed)
+	p0 := pilots[0]
+	p0.PhoneticName = "  Fairy  "
+	eng.UpdatePilotSlot(p0)
+
+	pilots, _, _, _, _ = eng.StateSnapshot()
+	if pilots[0].PhoneticName != "Fairy" {
+		t.Fatalf("expected PhoneticName %q, got %q", "Fairy", pilots[0].PhoneticName)
+	}
+
+	// External LapRF setup sync (without PhoneticName) preserves existing PhoneticName
+	eng.ApplyLapRFSetup(map[int]domain.PilotSlot{
+		1: {
+			SlotIndex:    1,
+			Enabled:      true,
+			Band:         domain.BandRaceband,
+			Channel:      2,
+			FrequencyMHz: 5695,
+		},
+	})
+	pilots, _, _, _, _ = eng.StateSnapshot()
+	if pilots[0].PhoneticName != "Fairy" || pilots[0].Channel != 2 {
+		t.Fatalf("expected PhoneticName preserved across ApplyLapRFSetup, got phonetic=%q ch=%d", pilots[0].PhoneticName, pilots[0].Channel)
+	}
+
+	// Clearing PhoneticName via UpdatePilotSlot sets it back to ""
+	p0 = pilots[0]
+	p0.PhoneticName = "   "
+	if err := eng.UpdatePilotSlot(p0); err != nil {
+		t.Fatalf("unexpected UpdatePilotSlot error: %v", err)
+	}
+	pilots, _, _, _, _ = eng.StateSnapshot()
+	if pilots[0].PhoneticName != "" {
+		t.Fatalf("expected cleared PhoneticName to be empty, got %q", pilots[0].PhoneticName)
+	}
+}
+
+func TestPilotCallsignUniqueness(t *testing.T) {
+	eng := NewEngine()
+
+	// 1. AddPilot rejects duplicate callsign case-insensitively
+	if err := eng.AddPilot("  faerry  ", ""); err == nil {
+		t.Fatalf("expected AddPilot to reject duplicate callsign 'faerry'")
+	}
+
+	// 2. AddPilot("") skips colliding "Pilot N" default names
+	pilots, _, _, _, _ := eng.StateSnapshot()
+	p1 := pilots[1]
+	p1.Callsign = "Pilot 11"
+	if err := eng.UpdatePilotSlot(p1); err != nil {
+		t.Fatalf("unexpected rename error: %v", err)
+	}
+	if err := eng.AddPilot("", ""); err != nil {
+		t.Fatalf("expected blank AddPilot to auto-pick next free Pilot N, got: %v", err)
+	}
+	pilots, _, _, _, _ = eng.StateSnapshot()
+	added := pilots[len(pilots)-1]
+	if added.Callsign != "Pilot 12" {
+		t.Fatalf("expected auto-picked callsign 'Pilot 12', got %q", added.Callsign)
+	}
+
+	// 3. UpdatePilotSlot rejects renaming onto another pilot's callsign, allows keeping own callsign with different casing
+	p0 := pilots[0]
+	p0.Callsign = "pilot 11"
+	if err := eng.UpdatePilotSlot(p0); err == nil {
+		t.Fatalf("expected UpdatePilotSlot to reject duplicate callsign 'pilot 11'")
+	}
+	p0.Callsign = "Faerry"
+	if err := eng.UpdatePilotSlot(p0); err != nil {
+		t.Fatalf("expected UpdatePilotSlot to allow casing change on same slot, got: %v", err)
+	}
+
+	// 4. EventAction("add_race_pilot") rejects duplicate callsign
+	if _, err := eng.EventAction(EventActionPayload{Action: "create_race", Name: "Walkup Test"}); err != nil {
+		t.Fatalf("create_race failed: %v", err)
+	}
+	if _, err := eng.EventAction(EventActionPayload{Action: "add_race_pilot", Callsign: "faerry"}); err == nil {
+		t.Fatalf("expected add_race_pilot to reject duplicate callsign 'faerry'")
+	}
+	if _, err := eng.EventAction(EventActionPayload{Action: "add_race_pilot", Callsign: "SkyRipper"}); err != nil {
+		t.Fatalf("expected unique walk-up pilot 'SkyRipper' to succeed, got: %v", err)
+	}
+
+	// 5. PracticeAction("add_session_pilot") rejects creating duplicate callsign
+	ps := eng.PracticeSnapshot()
+	if len(ps.Sessions) > 0 {
+		if _, err := eng.PracticeAction(PracticeActionPayload{
+			Action:    "add_session_pilot",
+			SessionID: ps.Sessions[0].SessionID,
+			Callsign:  "skyripper",
+		}); err == nil {
+			t.Fatalf("expected add_session_pilot to reject duplicate callsign 'skyripper'")
+		}
+	}
+}
+
+

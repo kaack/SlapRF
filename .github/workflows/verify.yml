@@ -1,0 +1,104 @@
+name: Verify
+
+# Runs the full Go & TypeScript unit test suites, verifies that the static SPA + WASM bundle and
+# single-file SlapRF Portable binary compile cleanly, and executes the full Playwright
+# E2E Verification Suite (in-browser WASM API + Component UI + E2E Workflows).
+# Called as a mandatory gate by release.yml and pages.yml before any binary or
+# GitHub Pages deployment is published.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Unit Tests, Build Sanity & E2E Suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: Run Go & TypeScript unit tests
+        run: bash ./scripts/test.sh
+
+      - name: Build static web + WASM site & verify Portable binary compiles
+        run: |
+          go run ./cmd/build-web -web ./web -out ./_site
+          cp -r ./_site/. ./cmd/slaprf/site/
+          mkdir -p ./dist
+          go run ./cmd/build-portable -skip-web -version ci-verify -out ./dist/slaprf-ci
+          test -s ./dist/slaprf-ci
+
+      - name: Cache Playwright runtime & Chromium
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/ms-playwright
+            ~/.cache/ms-playwright-go
+          key: ${{ runner.os }}-playwright-${{ hashFiles('go.sum') }}
+
+      - name: Install Playwright Chromium & OS dependencies
+        run: go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
+
+      - name: Run SlapRF E2E Verification Suite
+        run: bash ./scripts/test-e2e.sh --skip-build
+
+      - name: Upload E2E verification report, videos & traces
+        id: upload-report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: slaprf-e2e-report
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Publish artifact link to Job Summary & prepare PR comment metadata
+        if: always()
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number || 0 }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          ARTIFACT_URL: ${{ steps.upload-report.outputs.artifact-url }}
+        run: |
+          mkdir -p test-results
+          if [ -n "${ARTIFACT_URL}" ]; then
+            {
+              echo "### 📦 Interactive Report, Videos & Playwright Traces"
+              echo ""
+              echo "- **[Download \`slaprf-e2e-report.zip\`](${ARTIFACT_URL})** — extract and open \`latest.html\` in any browser to watch every recorded \`.webm\` video and inspect screenshots, or drag any test's \`trace.zip\` onto **[trace.playwright.dev](https://trace.playwright.dev)**."
+              echo ""
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+          jq -n \
+            --argjson prNumber "${PR_NUMBER:-0}" \
+            --arg headSha "${HEAD_SHA}" \
+            --arg runId "${GITHUB_RUN_ID}" \
+            --arg runUrl "${RUN_URL}" \
+            --arg artifactUrl "${ARTIFACT_URL}" \
+            '{prNumber: $prNumber, headSha: $headSha, runId: $runId, runUrl: $runUrl, artifactUrl: $artifactUrl}' \
+            > test-results/ci-meta.json
+
+      - name: Upload lightweight PR summary metadata
+        if: always() && github.event_name == 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: slaprf-e2e-pr-summary
+          path: |
+            test-results/summary.md
+            test-results/report.json
+            test-results/ci-meta.json
+          if-no-files-found: ignore
+          retention-days: 7

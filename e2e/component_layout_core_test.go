@@ -1,0 +1,496 @@
+//go:build e2e
+
+package e2e_test
+
+import (
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/playwright-community/playwright-go"
+)
+
+func TestComponent_BootLoaderProgressAndReadyTransition(t *testing.T) {
+	h := NewHarnessWithOptions(t, HarnessOptions{
+		FullBootAnimation: true,
+	})
+
+	if _, err := h.Page.Goto(h.BaseURL+"/#/live", playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateCommit,
+	}); err != nil {
+		t.Fatalf("Goto #/live: %v", err)
+	}
+
+	// Verify the radar boot loader starts visible before transitioning to .is-ready.
+	h.WaitUntil("boot loader element mounted", 5*time.Second, func() (bool, error) {
+		res, err := h.Page.Evaluate(`() => Boolean(document.getElementById("slaprf-boot-loader"))`)
+		if err != nil {
+			return false, nil
+		}
+		ok, _ := res.(bool)
+		return ok, nil
+	})
+	h.MilestoneScreenshot("boot-loader-active")
+
+	h.WaitUntil("boot loader completes and reveals #app", 15*time.Second, func() (bool, error) {
+		res, err := h.Page.Evaluate(`() => {
+			const loader = document.getElementById("slaprf-boot-loader");
+			const app = document.getElementById("app");
+			return Boolean(
+				loader &&
+				loader.classList.contains("is-ready") &&
+				app &&
+				!app.hidden &&
+				app.childElementCount > 0
+			);
+		}`)
+		if err != nil {
+			return false, nil
+		}
+		ok, _ := res.(bool)
+		return ok, nil
+	})
+	h.MilestoneScreenshot("boot-loader-ready")
+}
+
+func TestComponent_SidebarCollapseExpandAndPersistence(t *testing.T) {
+	h := NewHarness(t)
+	h.BootClean("#/live")
+
+	collapseBtn := h.Page.Locator(`aside button[data-action="collapse-sidebar"]`).First()
+	h.MustBeVisible(collapseBtn, "Sidebar collapse button")
+	if err := collapseBtn.Click(); err != nil {
+		t.Fatalf("click collapse-sidebar: %v", err)
+	}
+
+	expandBtn := h.Page.Locator(`header button[data-action="expand-sidebar"], .topbar button[data-action="expand-sidebar"], button[data-action="expand-sidebar"]`).First()
+	h.MustBeVisible(expandBtn, "TopBar expand-sidebar button when collapsed")
+	h.MilestoneScreenshot("sidebar-collapsed")
+
+	// Reload and confirm collapsed state persisted in localStorage.
+	h.ReloadAndWait()
+	h.MustBeVisible(expandBtn, "TopBar expand-sidebar button after reload")
+
+	if err := expandBtn.Click(); err != nil {
+		t.Fatalf("click expand-sidebar: %v", err)
+	}
+	h.MustBeVisible(collapseBtn, "Sidebar collapse button restored")
+	h.MilestoneScreenshot("sidebar-expanded")
+}
+
+func TestComponent_TopBarBreadcrumbsAndOverflowMenu(t *testing.T) {
+	h := NewHarness(t)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live/evening-lap-lab", nil)
+
+	crumb := h.Page.Locator(`[data-practice-breadcrumb]`).First()
+	h.MustContainText(crumb, "Evening Lap Lab")
+	h.MilestoneScreenshot("topbar-practice-breadcrumb")
+
+	// Click parent "Practice" breadcrumb link to return to Practice directory.
+	backLink := crumb.Locator(`a.topbar-crumb-item[href="#/live"]`).First()
+	h.MustBeVisible(backLink, "Practice breadcrumb parent link")
+	if err := backLink.Click(); err != nil {
+		t.Fatalf("click Practice parent breadcrumb: %v", err)
+	}
+	h.MustBeVisible(h.Page.Locator(`input[data-session-dir-search]`).First(), "Practice directory search")
+
+	// Switch to mobile viewport (640px) so TopBar hamburger overflow menu button is visible,
+	// open it, verify navigation items render, and dismiss cleanly with Escape!
+	if err := h.Page.SetViewportSize(640, 840); err != nil {
+		t.Fatalf("SetViewportSize(640, 840): %v", err)
+	}
+	menuBtn := h.Page.Locator(`button[data-action="menu"]`).First()
+	h.MustBeVisible(menuBtn, "Mobile TopBar overflow menu button")
+	if err := menuBtn.Click(); err != nil {
+		t.Fatalf("click menu button: %v", err)
+	}
+
+	navMenuLink := h.Page.Locator(`[data-nav-item="pilots"]`).First()
+	h.MustBeVisible(navMenuLink, "TopBar overflow menu Pilots item")
+	h.MilestoneScreenshot("topbar-overflow-menu-open")
+
+	if err := h.Page.Keyboard().Press("Escape"); err != nil {
+		t.Fatalf("press Escape: %v", err)
+	}
+	h.MustBeHidden(navMenuLink, "TopBar overflow menu closed on Escape")
+}
+
+func TestComponent_TopBarAnnouncerQuickMuteToggle(t *testing.T) {
+	h := NewHarness(t)
+	h.BootClean("#/live")
+
+	annBtn := h.Page.Locator(`button[data-action="announcer"]`).First()
+	h.MustBeVisible(annBtn, "TopBar announcer mute toggle")
+
+	readEnabled := func() bool {
+		v, err := h.Page.Evaluate(`() => {
+			try {
+				const raw = localStorage.getItem("gate-timer.announcer");
+				if (!raw) return false;
+				const parsed = JSON.parse(raw);
+				return Boolean(parsed.enabled);
+			} catch {
+				return false;
+			}
+		}`)
+		if err != nil {
+			t.Fatalf("read announcer storage: %v", err)
+		}
+		b, _ := v.(bool)
+		return b
+	}
+
+	initial := readEnabled()
+	if err := annBtn.Click(); err != nil {
+		t.Fatalf("click announcer toggle (1): %v", err)
+	}
+	h.WaitUntil("announcer enabled flipped", 5*time.Second, func() (bool, error) {
+		return readEnabled() != initial, nil
+	})
+	h.MilestoneScreenshot("topbar-announcer-toggled")
+
+	if err := annBtn.Click(); err != nil {
+		t.Fatalf("click announcer toggle (2): %v", err)
+	}
+	h.WaitUntil("announcer enabled restored", 5*time.Second, func() (bool, error) {
+		return readEnabled() == initial, nil
+	})
+}
+
+func TestComponent_CustomSelectOpenSelectEscapeAndOutsideClick(t *testing.T) {
+	h := NewHarness(t)
+	h.BootClean("#/pilots")
+
+	trigger := h.Page.Locator(`button.custom-select-trigger`).First()
+	h.MustBeVisible(trigger, "Upgraded CustomSelect trigger button")
+
+	popover := h.Page.Locator(`.custom-select-popover`).First()
+
+	// 1. Open and dismiss with Escape.
+	if err := trigger.Click(); err != nil {
+		t.Fatalf("open custom select (1): %v", err)
+	}
+	h.MustBeVisible(popover, "CustomSelect popover on click")
+	h.MilestoneScreenshot("custom-select-open")
+
+	if err := h.Page.Keyboard().Press("Escape"); err != nil {
+		t.Fatalf("press Escape: %v", err)
+	}
+	h.MustBeHidden(popover, "CustomSelect popover closed on Escape")
+
+	// 2. Open and dismiss via outside click.
+	if err := trigger.Click(); err != nil {
+		t.Fatalf("open custom select (2): %v", err)
+	}
+	h.MustBeVisible(popover, "CustomSelect popover reopened")
+	if err := h.Page.Locator(`h2`, playwright.PageLocatorOptions{HasText: "Pilots"}).First().Click(); err != nil {
+		t.Fatalf("outside click: %v", err)
+	}
+	h.MustBeHidden(popover, "CustomSelect popover closed on outside click")
+
+	// 3. Open and choose a different option; verify trigger label updates.
+	if err := trigger.Click(); err != nil {
+		t.Fatalf("open custom select (3): %v", err)
+	}
+	h.MustBeVisible(popover, "CustomSelect popover reopened for selection")
+
+	unselectedOpt := h.Page.Locator(`.custom-select-popover .custom-select-option:not(.is-selected):not([disabled])`).First()
+	h.MustBeVisible(unselectedOpt, "Unselected CustomSelect option")
+	optLabel, _ := unselectedOpt.Locator(`.custom-select-opt-text`).InnerText()
+	optLabel = strings.TrimSpace(optLabel)
+
+	if err := unselectedOpt.Click(); err != nil {
+		t.Fatalf("click unselected option: %v", err)
+	}
+	h.MustBeHidden(popover, "CustomSelect popover closed after picking option")
+	h.MustContainText(trigger, optLabel)
+	h.MilestoneScreenshot("custom-select-updated")
+}
+
+func TestComponent_SectionAnchorScrollSpyAndDeepLink(t *testing.T) {
+	h := NewHarness(t)
+	h.BootClean("#/setup/persistence")
+
+	// Deep link #/setup/persistence must scroll the Persistence section into view automatically.
+	h.WaitUntil("page scrolled down to #/setup/persistence section", 8*time.Second, func() (bool, error) {
+		res, err := h.Page.Evaluate(`() => window.scrollY > 120`)
+		if err != nil {
+			return false, nil
+		}
+		ok, _ := res.(bool)
+		return ok, nil
+	})
+	h.MilestoneScreenshot("section-anchor-deep-link-persistence")
+
+	// Simulate user scrolling back to top after initial deep-link settle window and verify scroll-spy clears /persistence.
+	h.WaitUntil("scroll-spy updates hash at top of Setup page", 8*time.Second, func() (bool, error) {
+		res, err := h.Page.Evaluate(`() => {
+			window.dispatchEvent(new WheelEvent("wheel", { deltaY: -400 }));
+			window.scrollTo({ top: 0, behavior: "auto" });
+			window.dispatchEvent(new Event("scroll"));
+			return window.location.hash;
+		}`)
+		if err != nil {
+			return false, nil
+		}
+		hash, _ := res.(string)
+		return hash == "#/setup" || hash == "#/setup/datasource", nil
+	})
+	h.MilestoneScreenshot("section-anchor-scroll-spy-top")
+}
+
+func TestComponent_SettingsIntroResponsiveCollapseSeeMoreLess(t *testing.T) {
+	h := NewHarnessWithOptions(t, HarnessOptions{
+		Viewport: &playwright.Size{Width: 960, Height: 800},
+	})
+	h.BootClean("#/setup")
+
+	firstIntro := h.Page.Locator(`.settings-intro`).First()
+	moreBtn := firstIntro.Locator(`.settings-intro-more`).First()
+	h.MustBeVisible(moreBtn, "Responsive (see more) toggle in narrow viewport")
+	h.MilestoneScreenshot("settings-intro-collapsed")
+
+	if err := moreBtn.Click(); err != nil {
+		t.Fatalf("click (see more): %v", err)
+	}
+	h.WaitUntil(".settings-intro.is-expanded set", 5*time.Second, func() (bool, error) {
+		res, err := firstIntro.Evaluate(`el => el.classList.contains("is-expanded")`, nil)
+		if err != nil {
+			return false, nil
+		}
+		ok, _ := res.(bool)
+		return ok, nil
+	})
+
+	lessBtn := firstIntro.Locator(`.settings-intro-less`).First()
+	h.MustBeVisible(lessBtn, "Responsive (see less) button when expanded")
+	h.MilestoneScreenshot("settings-intro-expanded")
+
+	if err := lessBtn.Click(); err != nil {
+		t.Fatalf("click (see less): %v", err)
+	}
+	h.WaitUntil(".settings-intro collapsed again", 5*time.Second, func() (bool, error) {
+		res, err := firstIntro.Evaluate(`el => !el.classList.contains("is-expanded")`, nil)
+		if err != nil {
+			return false, nil
+		}
+		ok, _ := res.(bool)
+		return ok, nil
+	})
+}
+
+func TestComponent_TableScrollShellOverflowArrowsAndScrollPreserve(t *testing.T) {
+	h := NewHarnessWithOptions(t, HarnessOptions{
+		Viewport: &playwright.Size{Width: 820, Height: 820},
+	})
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/pilots", nil)
+
+	shell := h.Page.Locator(`.table-scroll-shell.has-overflow`).First()
+	h.MustBeVisible(shell, "Horizontally overflowing .table-scroll-shell")
+
+	rightBtn := shell.Locator(`.table-edge-nav.is-right.is-visible`).First()
+	h.MustBeVisible(rightBtn, "Right table edge scroll arrow")
+	h.MilestoneScreenshot("table-scroll-right-arrow")
+
+	if err := rightBtn.Click(); err != nil {
+		t.Fatalf("click right scroll edge button: %v", err)
+	}
+
+	leftBtn := shell.Locator(`.table-edge-nav.is-left.is-visible`).First()
+	h.MustBeVisible(leftBtn, "Left table edge scroll arrow after scrolling right")
+	h.MilestoneScreenshot("table-scroll-left-arrow")
+
+	if err := leftBtn.Click(); err != nil {
+		t.Fatalf("click left scroll edge button: %v", err)
+	}
+	h.WaitUntil("table scrolled back toward left", 5*time.Second, func() (bool, error) {
+		res, err := shell.Locator(`.table-scroll-viewport`).First().Evaluate(`el => el.scrollLeft < 20`, nil)
+		if err != nil {
+			return false, nil
+		}
+		ok, _ := res.(bool)
+		return ok, nil
+	})
+}
+
+func TestComponent_MultiTabOwnershipConflictAndTakeover(t *testing.T) {
+	// Single-tab IndexedDB ownership conflict applies in Standalone Browser Demo Mode (StaticDemoMode: true).
+	// Native Go Backend Mode intentionally supports multi-tab simultaneous operation without conflict locks.
+	h := NewHarnessWithOptions(t, HarnessOptions{StaticDemoMode: true})
+	h.BootClean("#/live")
+
+	// Open a second tab in the same BrowserContext so BroadcastChannel / localStorage lock collides.
+	page2, err := h.Ctx.NewPage()
+	if err != nil {
+		t.Fatalf("NewPage (tab 2): %v", err)
+	}
+	h.AttachErrorGuards(page2)
+
+	if _, err := page2.Goto(h.BaseURL+"/#/live", playwright.PageGotoOptions{
+		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
+	}); err != nil {
+		t.Fatalf("tab 2 Goto: %v", err)
+	}
+
+	takeoverBtn2 := page2.Locator(`#slaprf-boot-takeover-btn`).First()
+	h.MustBeVisible(takeoverBtn2, "Tab 2 multi-tab conflict Use Here button")
+
+	// Click "Use Here" in Tab 2 and verify Tab 2 boots while Tab 1 enters conflict lock screen!
+	if err := takeoverBtn2.Click(); err != nil {
+		t.Fatalf("click Use Here on tab 2: %v", err)
+	}
+
+	h.WaitUntil("Tab 2 takes over and Tab 1 shows displaced lock screen", 15*time.Second, func() (bool, error) {
+		r2, err2 := page2.Evaluate(`() => {
+			const loader = document.getElementById("slaprf-boot-loader");
+			return Boolean(loader && loader.classList.contains("is-ready") && !loader.classList.contains("is-conflict"));
+		}`)
+		r1, err1 := h.Page.Evaluate(`() => {
+			const loader = document.getElementById("slaprf-boot-loader");
+			return Boolean(loader && loader.classList.contains("is-conflict"));
+		}`)
+		if err1 != nil || err2 != nil {
+			return false, nil
+		}
+		ok2, _ := r2.(bool)
+		ok1, _ := r1.(bool)
+		return ok2 && ok1, nil
+	})
+	h.MilestoneScreenshot("tab1-displaced-conflict-screen")
+	_ = page2.Close()
+}
+
+func TestComponent_AnnouncerWinnerHornAndCallout(t *testing.T) {
+	h := NewHarness(t)
+	if err := h.Ctx.AddInitScript(playwright.Script{
+		Content: playwright.String(`
+			window.__E2E_AUDIO_LOG = [];
+			if (window.speechSynthesis) {
+				window.speechSynthesis.speak = (utt) => {
+					window.__E2E_AUDIO_LOG.push({ kind: "speak", text: String(utt?.text || ""), t: Math.round(performance.now()) });
+					setTimeout(() => { try { utt?.onstart?.(new Event("start")); } catch {} }, 5);
+					setTimeout(() => { try { utt?.onend?.(new Event("end")); } catch {} }, 50);
+				};
+				window.speechSynthesis.cancel = () => {};
+			}
+			if (window.AudioContext) {
+				const origOsc = AudioContext.prototype.createOscillator;
+				AudioContext.prototype.createOscillator = function() {
+					const osc = origOsc.call(this);
+					const origStart = osc.start.bind(osc);
+					osc.start = function(...args) {
+						window.__E2E_AUDIO_LOG.push({ kind: "osc", type: osc.type, t: Math.round(performance.now()) });
+						return origStart(...args);
+					};
+					return osc;
+				};
+			}
+		`),
+	}); err != nil {
+		t.Fatalf("AddInitScript audio hooks: %v", err)
+	}
+
+	h.SeedSimStateAndStorage("", map[string]string{
+		"gate-timer.announcer": `{"enabled":true,"raceLapCallouts":true,"keepScreenAwake":true,"voiceURI":"system","rate":1,"volume":1,"testPhrase":""}`,
+	})
+	h.BootClean("#/races")
+
+	// Create a competitive Single Elimination race and navigate to Race Control.
+	_, err := h.Page.Evaluate(`async () => {
+		const r1 = await window.slaprfCurl({
+			method: "POST",
+			url: "/api/events/action",
+			body: { action: "create_race", name: "Winner Announcer Test" },
+			syncUi: true
+		});
+		const raceId = r1.json.raceState.raceId;
+		await window.slaprfCurl({
+			method: "POST",
+			url: "/api/events/action",
+			body: { action: "check_in_all", raceId },
+			syncUi: true
+		});
+		await window.slaprfCurl({
+			method: "POST",
+			url: "/api/race/bracket-edit",
+			body: { raceId, action: "apply_template", templateId: "single_elimination" },
+			syncUi: true
+		});
+		window.location.hash = "#/races/" + raceId + "/control";
+		return { raceId };
+	}`)
+	if err != nil {
+		t.Fatalf("open control view: %v", err)
+	}
+
+	startBtn := h.Page.Locator(`[data-ctrl="start"]`).First()
+	h.MustBeVisible(startBtn, "Start Heat button")
+	if err := startBtn.Click(); err != nil {
+		t.Fatalf("click Start Heat: %v", err)
+	}
+	time.Sleep(200 * time.Millisecond)
+	_, _ = h.Page.Evaluate(`() => {
+		const confirmBtn = document.querySelector('.slaprf-modal-foot .btn-armed');
+		if (confirmBtn) confirmBtn.click();
+	}`)
+
+	h.WaitUntil("heat running", 10*time.Second, func() (bool, error) {
+		res, err := h.Page.Evaluate(`async () => {
+			const st = await window.slaprfCurl({ method: "GET", url: "/api/status" });
+			return st.json?.raceState?.heats?.[0]?.state === "running";
+		}`)
+		if err != nil {
+			return false, nil
+		}
+		ok, _ := res.(bool)
+		return ok, nil
+	})
+
+	winnerCallsignRaw, err := h.Page.Evaluate(`async () => {
+		const st = await window.slaprfCurl({ method: "GET", url: "/api/status" });
+		const raceId = st.json.raceState.raceId;
+		const heat = st.json.raceState.heats[0];
+		const seated = heat.seats.filter(s => s.pilotSlotIndex > 0);
+		const p1 = seated[0];
+		const p2 = seated[1];
+		const targetLaps = Math.max(1, heat.targetLaps || 3);
+		for (let c = 0; c <= targetLaps; c++) {
+			await window.slaprfCurl({
+				method: "POST",
+				url: "/api/race/marshal",
+				body: { raceId, heatId: heat.id, pilotSlotIndex: p1.pilotSlotIndex, action: "add_crossing", offsetMs: 700 + c * 12000 },
+				syncUi: true
+			});
+		}
+		if (p2) {
+			for (let c = 0; c <= targetLaps; c++) {
+				await window.slaprfCurl({
+					method: "POST",
+					url: "/api/race/marshal",
+					body: { raceId, heatId: heat.id, pilotSlotIndex: p2.pilotSlotIndex, action: "add_crossing", offsetMs: 900 + c * 13500 },
+					syncUi: true
+				});
+			}
+		}
+		return p1.callsign;
+	}`)
+	if err != nil {
+		t.Fatalf("marshal crossings: %v", err)
+	}
+	winnerCallsign, _ := winnerCallsignRaw.(string)
+
+	h.WaitUntil("winner horn played followed by 1st-place winner callout", 5*time.Second, func() (bool, error) {
+		res, err := h.Page.Evaluate(`(callsign) => {
+			const log = window.__E2E_AUDIO_LOG || [];
+			const sawtoothCount = log.filter(e => e.kind === "osc" && e.type === "sawtooth").length;
+			const speak1st = log.find(e => e.kind === "speak" && e.text.toLowerCase().includes("finishes 1st") && e.text.toLowerCase().includes(callsign.toLowerCase()));
+			return sawtoothCount >= 6 && Boolean(speak1st);
+		}`, strings.TrimSpace(winnerCallsign))
+		if err != nil {
+			return false, nil
+		}
+		ok, _ := res.(bool)
+		return ok, nil
+	})
+	h.MilestoneScreenshot("winner-horn-and-1st-callout-verified")
+}

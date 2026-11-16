@@ -64,6 +64,10 @@ code {
   border: 3px solid var(--bg);
   border-radius: 10px;
 }
+::-webkit-scrollbar-corner,
+::-webkit-resizer {
+  background: transparent;
+}
 
 /* Utilities */
 .mono {

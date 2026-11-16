@@ -1,6 +1,6 @@
 import { CanvasSurface } from "../core/canvas";
 import { Component } from "../core/component";
-import { font, theme, withAlpha } from "../core/theme";
+import { adaptColorForTheme, font, theme, withAlpha } from "../core/theme";
 import { lapsFor, median } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { LapRecord, PilotSlot } from "../types/models";
@@ -222,21 +222,6 @@ export class ProgressionChart extends Component {
     this.listen(el, "pointerup", endDrag);
     this.listen(el, "pointercancel", endDrag);
 
-    this.listen(
-      el,
-      "wheel",
-      (e) => {
-        const winSec = this.windowSec();
-        if (this.maxTimeSec - this.minTimeSec <= winSec) return;
-        e.preventDefault();
-        const rawDelta = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-        if (rawDelta === 0) return;
-        const step = Math.sign(rawDelta) * Math.max(15, Math.round(winSec * 0.1));
-        this.setEndTimeSec(this.effectiveEndTimeSec() + step);
-      },
-      { passive: false }
-    );
-
     this.listen(el, "dblclick", () => {
       if (this.endTimeSec !== null) {
         this.endTimeSec = null;
@@ -263,7 +248,7 @@ export class ProgressionChart extends Component {
 
   public resetView(): void {
     this.endTimeSec = null;
-    this.surface.requestDraw();
+    this.refresh();
   }
 
   private effectiveEndTimeSec(): number {
@@ -490,11 +475,12 @@ export class ProgressionChart extends Component {
         }
       }
 
+      const pilotColor = adaptColorForTheme(s.pilot.color);
       ctx.save();
       ctx.beginPath();
       ctx.rect(padL - 2, padT - 4, plotW + 4, plotH + 8);
       ctx.clip();
-      ctx.strokeStyle = s.pilot.color;
+      ctx.strokeStyle = pilotColor;
       ctx.lineWidth = 2;
       ctx.lineCap = "round";
       ctx.lineJoin = "round";
@@ -517,7 +503,7 @@ export class ProgressionChart extends Component {
         }
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.clipped ? 2.2 : 3, 0, Math.PI * 2);
-        ctx.fillStyle = p.clipped ? withAlpha(s.pilot.color, 0.45) : s.pilot.color;
+        ctx.fillStyle = p.clipped ? withAlpha(pilotColor, 0.45) : pilotColor;
         ctx.fill();
       }
     }
@@ -539,14 +525,15 @@ export class ProgressionChart extends Component {
     hp: HoveredPoint
   ): void {
     // Highlighted ring + enlarged dot
+    const hpColor = adaptColorForTheme(hp.pilot.color);
     ctx.save();
-    ctx.strokeStyle = withAlpha(hp.pilot.color, 0.35);
+    ctx.strokeStyle = withAlpha(hpColor, 0.35);
     ctx.lineWidth = 5;
     ctx.beginPath();
     ctx.arc(hp.x, hp.y, 6, 0, Math.PI * 2);
     ctx.stroke();
 
-    ctx.fillStyle = hp.pilot.color;
+    ctx.fillStyle = hpColor;
     ctx.strokeStyle = theme.surface;
     ctx.lineWidth = 1.75;
     ctx.beginPath();
@@ -572,7 +559,7 @@ export class ProgressionChart extends Component {
     }
 
     ctx.fillStyle = withAlpha(theme.surface, 0.96);
-    ctx.strokeStyle = withAlpha(hp.pilot.color, 0.7);
+    ctx.strokeStyle = withAlpha(hpColor, 0.7);
     ctx.lineWidth = 1.25;
     ctx.beginPath();
     ctx.roundRect(bx, by, boxW, boxH, 7);
@@ -580,7 +567,7 @@ export class ProgressionChart extends Component {
     ctx.stroke();
 
     // Pilot color dot
-    ctx.fillStyle = hp.pilot.color;
+    ctx.fillStyle = hpColor;
     ctx.beginPath();
     ctx.arc(bx + 12, by + 15, 3.5, 0, Math.PI * 2);
     ctx.fill();

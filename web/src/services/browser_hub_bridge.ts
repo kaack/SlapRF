@@ -1,3 +1,6 @@
+import type { AppStore } from "../state/store";
+import { sharedLapRFLink } from "./laprf_hardware_link";
+import { sharedRHLink } from "./rh_hardware_link";
 import { usbPool } from "./timer_console";
 import { WasmSimTransport } from "./wasm_transport";
 
@@ -18,13 +21,13 @@ function containsHello(packed: Uint8Array): boolean {
 }
 
 /**
- * Connects the in-browser WebAssembly timing engine (`slaprf.wasm`) to the physical Hub — a
- * XIAO ESP32-C5 USB dongle — over USB-C via `sharedTimerConsole` (WebSerial). Hub packets arrive
- * as binary records and are fed into the engine; outbound channel-table frames from the engine
- * are written back to the Hub over the same serial link.
+ * Coordinates the USB-C Hub/Spoke connection indicator (TopBar LED & Network status) and, when
+ * running in Standalone Browser Demo Mode (`WasmSimTransport`), bridges simulated USB Hub packets
+ * into `slaprf.wasm`. When connected to a Native Go Backend (`wasm === null`), all Hub frame
+ * decoding and `NETCHANNELS` sync run natively in Go on the server.
  */
 export class BrowserHubBridge {
-  private readonly wasm: WasmSimTransport;
+  private readonly wasm: WasmSimTransport | null;
   private readonly listeners = new Set<() => void>();
   private active = false;
 
@@ -32,25 +35,24 @@ export class BrowserHubBridge {
   private lastStreamNotifyMs = 0;
   public onPacketIngested?: () => void;
 
-  constructor(wasm: WasmSimTransport) {
+  constructor(wasm: WasmSimTransport | null) {
     this.wasm = wasm;
 
-    // Forward outbound 19-byte channel table frames (0xC5 0x5E) from WASM to the Hub over USB-C
-    this.wasm.onHubCommand((pkt) => {
-      const hub = usbPool.hubConsole();
-      if (hub) {
-        hub.sendNetChannelsFromPacket(pkt);
-      }
-    });
+    if (this.wasm) {
+      // Forward outbound 19-byte channel table frames (0xC5 0x5E) from WASM to the simulated Hub
+      this.wasm.onHubCommand((pkt) => {
+        const hub = usbPool.hubConsole();
+        if (hub) {
+          hub.sendNetChannelsFromPacket(pkt);
+        }
+      });
+    }
 
-    // Forward inbound Hub/Spoke binary frames received over USB-C WebSerial into WASM: every frame
-    // of one USB read goes in with a single WASM call, synchronously (no throttling / coalescing
-    // of data). Only the slow-changing UI counters below are refreshed at most every 500 ms.
     for (const c of usbPool.slots) {
       c.subscribe({
         onHubPackets: (packed, count) => {
           this.usbFramesRx += count;
-          if (this.active) {
+          if (this.active && this.wasm) {
             this.wasm.ingestHubPackets(packed, count);
             if (this.onPacketIngested && containsHello(packed)) {
               this.onPacketIngested();
@@ -63,7 +65,10 @@ export class BrowserHubBridge {
           }
         },
         onConnect: () => {
-          window.setTimeout(() => this.wasm.pushHubChannels(), 350);
+          if (this.wasm) {
+            const wasmRef = this.wasm;
+            window.setTimeout(() => wasmRef.pushHubChannels(), 350);
+          }
           this.notify();
         },
         onDisconnect: () => {
@@ -75,14 +80,70 @@ export class BrowserHubBridge {
   }
 
   /**
-   * Computes the 5-state LED indicator summary used by the TopBar icon and Network page:
-   * - `neon`: Connected to a Hub (USB-C role 1)
-   * - `blue`: Connected to a Spoke (USB-C role 2)
-   * - `yellow`: Connecting or lost connection and trying to reconnect
-   * - `red`: All reconnect attempts failed (or Emergency Mode)
+   * Computes the LED indicator summary used by the TopBar icon and Network page,
+   * reflecting the active timing hardware mode (`slaprf`, `laprf`, or `rotorhazard`):
+   * - `neon`: Connected & ready (SlapRF Hub, LapRF 8-Way unit, or authenticated RotorHazard timer)
+   * - `blue`: Connected to a SlapRF Spoke (USB-C role 2)
+   * - `yellow`: Connecting / reconnecting, or RotorHazard connected as Guest (read-only)
+   * - `red`: Reconnect failed or SlapRF Emergency Mode
    * - `gray`: Disconnected
    */
-  public getLedSummary(): ConnectionLedSummary {
+  public getLedSummary(store?: AppStore): ConnectionLedSummary {
+    const hwMode = store?.timingHardwareMode ?? "slaprf";
+
+    if (store && (hwMode === "rotorhazard" || hwMode === "rotorhazard_usb")) {
+      const isUSB = hwMode === "rotorhazard_usb";
+      const modeName = isUSB ? "RotorHazard USB" : "RotorHazard";
+      const snaps = sharedRHLink.snapshots(store);
+      const connectedSnaps = snaps.filter((s) => s.connected);
+      const authedSnaps = connectedSnaps.filter((s) => s.authOk || isUSB);
+      if (authedSnaps.length > 0) {
+        const labels = authedSnaps.map((s) => s.label).join(", ");
+        return {
+          color: "neon",
+          shortLabel:
+            authedSnaps.length === 1
+              ? `${authedSnaps[0].label} · ${modeName}`
+              : `${authedSnaps.length} ${modeName}`,
+          detail: `${modeName} connected (${labels}) · click to open Network`,
+        };
+      }
+      if (connectedSnaps.length > 0) {
+        const labels = connectedSnaps.map((s) => s.label).join(", ");
+        return {
+          color: "yellow",
+          shortLabel: `${connectedSnaps[0].label} · Guest`,
+          detail: `RotorHazard connected as Guest (${labels}) — admin login required for control · click to open Network`,
+        };
+      }
+      return {
+        color: "gray",
+        shortLabel: "Disconnected",
+        detail: `No ${modeName} timer connected · click to open Network`,
+      };
+    }
+
+    if (store && hwMode === "laprf") {
+      const snaps = sharedLapRFLink.snapshots(store);
+      const connectedSnaps = snaps.filter((s) => s.connected);
+      if (connectedSnaps.length > 0) {
+        const labels = connectedSnaps.map((s) => s.label).join(", ");
+        return {
+          color: "neon",
+          shortLabel:
+            connectedSnaps.length === 1
+              ? `${connectedSnaps[0].label} · LapRF`
+              : `${connectedSnaps.length} LapRF`,
+          detail: `LapRF 8-Way connected (${labels}) · click to open Network`,
+        };
+      }
+      return {
+        color: "gray",
+        shortLabel: "Disconnected",
+        detail: "No LapRF 8-Way timer connected · click to open Network",
+      };
+    }
+
     const main = usbPool.mainConsole;
 
     if ((main.reconnecting || main.busyLabel) && !main.connected) {

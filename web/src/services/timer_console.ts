@@ -1,20 +1,25 @@
 /**
- * WebSerial client for a timer's USB debug console (firmware: components/slaprf_radio/slaprf_diag.c).
- *
- * The port carries three kinds of data: '@'-prefixed JSON reply lines, plain-text log lines
- * (after `LOG 1`), and the raw 160-byte SLAPRF02 block in answer to `SLAPRF?`.
+ * Client for a SlapRF timer's USB debug & telemetry console:
+ * - Real hardware mode (`caps.portable && !isSimulatedUsbMode()`): talks to the native Go USB
+ *   manager (`/api/usb/*` + `/api/ws/usb` over `go.bug.st/serial`, zero browser WebSerial).
+ * - Simulation mode (`isSimulatedUsbMode()`): talks to `SimulatedSerialPort` in-process.
  */
+import { capabilitiesSnapshot, resolveBackendUrl, resolveBackendWsUrl } from "./capabilities";
 import {
-  haltBlankEsp32C5BootLoop,
+  FlashProgress,
   LATEST_FIRMWARE_VERSION,
   parseSlaprfConfigBlock,
   TimerReadout,
 } from "./esp_flasher";
 import {
+  createBackendPortHandle,
+  isBackendSerialPort,
   isSimulatedSerialPort,
   isSimulatedUsbMode,
   listSimulatedTimers,
-  pickSimulatedUsbPort,
+  notifySimHubUsbConnected,
+  pickUsbPort,
+  recordSerialPortMeta,
   SimulatedSerialPort,
 } from "./sim_serial_port";
 
@@ -55,8 +60,18 @@ export interface KnownHardwareTimer {
 
 const KNOWN_TIMERS_STORAGE_KEY = "slaprf.hw.knownTimers";
 
+let backendKnownTimersCache: KnownHardwareTimer[] = [];
+
 export function getKnownHardwareTimers(): KnownHardwareTimer[] {
   const map = new Map<string, KnownHardwareTimer>();
+  for (const item of backendKnownTimersCache) {
+    if (item && typeof item.fp === "string") {
+      const fp = item.fp.toUpperCase();
+      if (fp && fp !== "00000001" && !fp.startsWith("SIM000") && !fp.startsWith("53504B")) {
+        map.set(fp, { ...item, fp });
+      }
+    }
+  }
   if (typeof window !== "undefined" && window.localStorage) {
     try {
       const raw = window.localStorage.getItem(KNOWN_TIMERS_STORAGE_KEY);
@@ -69,7 +84,9 @@ export function getKnownHardwareTimers(): KnownHardwareTimer[] {
               const fp = t.fp.toUpperCase();
               if (fp && fp !== "00000001" && !fp.startsWith("SIM000") && !fp.startsWith("53504B")) {
                 const prev = map.get(fp);
-                map.set(fp, { ...prev, ...t, fp });
+                if (!prev || (t.lastSeenMs ?? 0) >= (prev.lastSeenMs ?? 0)) {
+                  map.set(fp, { ...prev, ...t, fp });
+                }
               }
             }
           }
@@ -133,15 +150,18 @@ export function recordKnownHardwareTimer(entry: Partial<KnownHardwareTimer> & { 
   }
 }
 
-export function forgetKnownHardwareTimer(fp?: string, label?: string): void {
+export function forgetKnownHardwareTimer(fp?: string, _label?: string): void {
   const cleanFp = (fp || "").trim().toUpperCase();
-  const cleanLabel = (label || "").trim().toUpperCase();
-  if (!cleanFp && !cleanLabel) return;
-  const list = getKnownHardwareTimers().filter((t) => {
-    if (cleanFp && t.fp.toUpperCase() === cleanFp) return false;
-    if (!cleanFp && cleanLabel && (t.label || "").trim().toUpperCase() === cleanLabel) return false;
-    return true;
-  });
+  if (!cleanFp) return;
+  backendKnownTimersCache = backendKnownTimersCache.filter((t) => t.fp.toUpperCase() !== cleanFp);
+  if (capabilitiesSnapshot().portable) {
+    void fetch(resolveBackendUrl("/api/usb/known-forget"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fp: cleanFp }),
+    }).catch(() => undefined);
+  }
+  const list = getKnownHardwareTimers().filter((t) => t.fp.toUpperCase() !== cleanFp);
   if (typeof window !== "undefined" && window.localStorage) {
     try {
       window.localStorage.setItem(KNOWN_TIMERS_STORAGE_KEY, JSON.stringify(list));
@@ -289,13 +309,9 @@ export interface SerialPortLike {
   close(): Promise<void>;
   setSignals(signals: { dataTerminalReady?: boolean; requestToSend?: boolean }): Promise<void>;
   getInfo?(): { usbVendorId?: number; usbProductId?: number };
+  forget?(): Promise<void>;
   readonly readable: ReadableStream<Uint8Array> | null;
   readonly writable: WritableStream<Uint8Array> | null;
-}
-
-interface SerialLike {
-  requestPort(o?: unknown): Promise<SerialPortLike>;
-  getPorts(): Promise<SerialPortLike[]>;
 }
 
 interface Waiter {
@@ -305,7 +321,44 @@ interface Waiter {
   timer: number;
 }
 
-const ESPRESSIF_USB_VID = 0x303a;
+export interface BackendSlotSnapshot {
+  slotIndex: number;
+  connected: boolean;
+  portName?: string;
+  probing: boolean;
+  writing: boolean;
+  busyLabel?: string;
+  reconnecting: boolean;
+  reconnectAttempt: number;
+  maxReconnectAttempts: number;
+  reconnectFailed: boolean;
+  isOtherDevice: boolean;
+  lastError?: string;
+  lastStatus?: TimerStatus | null;
+  lastConfig?: TimerReadout | null;
+}
+
+export interface BackendPoolSnapshot {
+  slots: BackendSlotSnapshot[];
+  debugSlotIndex: number;
+  knownTimers?: KnownHardwareTimer[];
+}
+
+export interface BackendUsbEvent {
+  type: string;
+  slotIndex: number;
+  status?: TimerStatus;
+  config?: TimerReadout;
+  live?: LiveSample;
+  scan?: ScanResult;
+  bootLog?: BootLog;
+  line?: string;
+  msgType?: string;
+  error?: string;
+  progress?: FlashProgress;
+  pool?: BackendPoolSnapshot;
+}
+
 const CONFIG_MAGIC = new TextEncoder().encode("SLAPRF02");
 const CONFIG_LEN = 160;
 /** Start byte of a binary Hub packet record on the USB link (ASCII Record Separator). */
@@ -338,10 +391,6 @@ function indexOfSeq(buf: Uint8Array, needle: Uint8Array, from: number, startBefo
     return i;
   }
   return -1;
-}
-
-function serial(): SerialLike {
-  return (navigator as unknown as { serial: SerialLike }).serial;
 }
 
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
@@ -393,6 +442,7 @@ export class TimerConsole {
   private expectingRestart = false;
   private userDisconnecting = false;
   private sawRomBootloader = false;
+  private otherPortsSnapshot = new Set<SerialPortLike>();
 
   public readonly slotIndex: number;
   public lastStatus: TimerStatus | null = null;
@@ -403,6 +453,15 @@ export class TimerConsole {
   public hubLastFrameAtMs = 0;
   public hubLastSeq: number | undefined = undefined;
   public hubLastDbm: number[] | undefined = undefined;
+  public readonly hubSlotLive = new Map<
+    number,
+    { frames: number; lastFrameAtMs: number; seq: number; dbm: number[]; floor: number }
+  >();
+  public readonly hubSlotHello = new Map<
+    number,
+    { fp: string; label: string; role: number; sweepHz: number }
+  >();
+  private lastRealJsonStatusAtMs = 0;
   public busyLabel: string | null = null;
   public showAllPorts = true;
   public reconnecting = false;
@@ -462,7 +521,128 @@ export class TimerConsole {
   }
 
   public ownsPort(candidate: unknown): boolean {
-    return this.port !== null && this.port === candidate;
+    if (this.port === null) return false;
+    if (this.port === candidate) return true;
+    if (isSimulatedSerialPort(this.port) && isSimulatedSerialPort(candidate)) {
+      return this.port.simulatedTimerId === candidate.simulatedTimerId;
+    }
+    if (isBackendSerialPort(this.port) && isBackendSerialPort(candidate)) {
+      return this.port.portName.toUpperCase() === candidate.portName.toUpperCase();
+    }
+    return false;
+  }
+
+  public applyBackendSlotSnapshot(snap: BackendSlotSnapshot): void {
+    if (isSimulatedSerialPort(this.port)) return;
+    const prevConnected = this.connected;
+    const prevStatusSig = this.lastStatus ? `${this.lastStatus.fp}:${this.lastStatus.label}:${this.lastStatus.role}` : "";
+    if (snap.connected && snap.portName) {
+      if (!isBackendSerialPort(this.port) || this.port.portName !== snap.portName) {
+        this.port = createBackendPortHandle(snap.portName);
+      }
+    } else if (!snap.writing) {
+      this.port = null;
+    }
+    this.probing = Boolean(snap.probing);
+    this.writing = Boolean(snap.writing);
+    this.busyLabel = snap.busyLabel || null;
+    this.reconnecting = Boolean(snap.reconnecting);
+    this.reconnectAttempt = snap.reconnectAttempt || 0;
+    this.reconnectFailed = Boolean(snap.reconnectFailed);
+    this.lastError = snap.lastError || null;
+    this.lastStatus = snap.lastStatus ?? null;
+    this.lastConfig = snap.lastConfig ?? null;
+    if (this.lastStatus) {
+      this.lastStatusAtMs = Date.now();
+    }
+
+    const nextConnected = this.connected;
+    const nextStatusSig = this.lastStatus ? `${this.lastStatus.fp}:${this.lastStatus.label}:${this.lastStatus.role}` : "";
+    if (!prevConnected && nextConnected) {
+      this.subscribers.forEach((h) => h.onConnect?.());
+    } else if (prevConnected && !nextConnected) {
+      this.subscribers.forEach((h) => h.onDisconnect?.());
+    }
+    if (this.lastConfig) {
+      const cfg = this.lastConfig;
+      this.subscribers.forEach((h) => h.onConfig?.(cfg));
+    }
+    if (this.lastStatus && nextStatusSig !== prevStatusSig) {
+      const st = this.lastStatus;
+      this.subscribers.forEach((h) => h.onStatus?.(st));
+    }
+    this.notifyStateChange();
+  }
+
+  public handleBackendEvent(ev: BackendUsbEvent): void {
+    if (isSimulatedSerialPort(this.port)) return;
+    switch (ev.type) {
+      case "status":
+        if (ev.status) {
+          this.probing = false;
+          this.lastStatus = ev.status;
+          this.lastStatusAtMs = Date.now();
+          this.resolveWaiters("status", ev.status);
+          this.subscribers.forEach((h) => h.onStatus?.(ev.status!));
+          this.notifyStateChange();
+        }
+        break;
+      case "config":
+        if (ev.config) {
+          this.probing = false;
+          this.lastConfig = ev.config;
+          this.resolveWaiters("config", ev.config);
+          this.subscribers.forEach((h) => h.onConfig?.(ev.config!));
+          this.notifyStateChange();
+        }
+        break;
+      case "live":
+        if (ev.live) {
+          this.resolveWaiters("live", ev.live);
+          this.subscribers.forEach((h) => h.onLive?.(ev.live!));
+        }
+        break;
+      case "scan":
+        if (ev.scan) {
+          this.resolveWaiters("scan", ev.scan);
+          this.subscribers.forEach((h) => h.onScan?.(ev.scan!));
+        }
+        break;
+      case "bootlog":
+        if (ev.bootLog) {
+          this.resolveWaiters("bootlog", ev.bootLog);
+          this.subscribers.forEach((h) => h.onBootLog?.(ev.bootLog!));
+        }
+        break;
+      case "raw_reply":
+        if (ev.line) {
+          if (ev.msgType) {
+            try {
+              const parsed = JSON.parse(ev.line.startsWith("@") ? ev.line.slice(1) : ev.line);
+              this.resolveWaiters(ev.msgType, parsed);
+            } catch {
+              // ignore
+            }
+          }
+          this.subscribers.forEach((h) => h.onRawReply?.(ev.line!, ev.msgType));
+        }
+        break;
+      case "log":
+        if (ev.line) {
+          this.subscribers.forEach((h) => h.onLog?.(ev.line!));
+        }
+        break;
+      case "error":
+        if (ev.error) {
+          this.lastError = ev.error;
+          if (this.waiters.length) {
+            this.failWaiters(ev.error);
+          }
+          this.subscribers.forEach((h) => h.onError?.(ev.error!));
+          this.notifyStateChange();
+        }
+        break;
+    }
   }
 
   public async readSnapshot(): Promise<TimerReadout> {
@@ -488,8 +668,7 @@ export class TimerConsole {
   }
 
   public static supported(): boolean {
-    if (isSimulatedUsbMode()) return true;
-    return typeof navigator !== "undefined" && "serial" in navigator;
+    return isSimulatedUsbMode() || capabilitiesSnapshot().portable;
   }
 
   public async connect(showAllPorts = false): Promise<void> {
@@ -500,9 +679,11 @@ export class TimerConsole {
     this.reconnectFailed = false;
     this.lastError = null;
     this.notifyStateChange();
-    const port = isSimulatedUsbMode()
-      ? await pickSimulatedUsbPort()
-      : await serial().requestPort({ filters: [{ usbVendorId: ESPRESSIF_USB_VID }] });
+    const port = await pickUsbPort({ showAllPorts });
+    if (isBackendSerialPort(port)) {
+      await this.connectWithPort(port, showAllPorts);
+      return;
+    }
     await this.openPort(port);
     this.startStatusPolling();
     this.subscribers.forEach((h) => h.onConnect?.());
@@ -510,11 +691,14 @@ export class TimerConsole {
   }
 
   /**
-   * Opens an already-picked WebSerial port, probes `STATUS?` and `SLAPRF?`, and starts the status
-   * heartbeat. If the port does not run SlapRF firmware, it stays connected as `"Other"` so it can
-   * still be flashed or erased on the Flasher page.
+   * Opens an already-picked port (`SimulatedSerialPort` or Go `BackendSerialPortHandle`),
+   * probes `STATUS?` and `SLAPRF?`, and starts the status heartbeat.
    */
-  public async connectWithPort(port: SerialPortLike, showAllPorts = true): Promise<TimerStatus | null> {
+  public async connectWithPort(
+    port: SerialPortLike,
+    showAllPorts = true,
+    probeTimeoutMs = 2500
+  ): Promise<TimerStatus | null> {
     this.showAllPorts = showAllPorts;
     this.userDisconnecting = false;
     this.reconnecting = false;
@@ -524,17 +708,39 @@ export class TimerConsole {
     this.probing = true;
     this.notifyStateChange();
     try {
+      if (isBackendSerialPort(port)) {
+        const res = await fetch(resolveBackendUrl("/api/usb/connect"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slotIndex: this.slotIndex, portName: port.portName }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          slot?: BackendSlotSnapshot;
+          pool?: BackendPoolSnapshot;
+        };
+        if (data.pool) {
+          usbPool.applyBackendPoolSnapshot(data.pool);
+        }
+        if (!res.ok) {
+          throw new Error(data.error || `Failed to open ${port.portName}`);
+        }
+        if (data.slot) {
+          this.applyBackendSlotSnapshot(data.slot);
+        } else {
+          this.port = port;
+        }
+        void this.send("SLAPRF?").catch(() => undefined);
+        return this.lastStatus;
+      }
+
       await this.openPort(port);
       this.startStatusPolling();
       this.subscribers.forEach((h) => h.onConnect?.());
       this.notifyStateChange();
-      const s = await this.ensureRunningApp(1600);
+      const s = await this.ensureRunningApp(probeTimeoutMs);
       if (this.connected) {
-        if (!s && !this.lastConfig && this.port && this.writer) {
-          await haltBlankEsp32C5BootLoop(this.port, this.writer).catch(() => undefined);
-        } else {
-          void this.send("SLAPRF?").catch(() => undefined);
-        }
+        void this.send("SLAPRF?").catch(() => undefined);
       }
       return s;
     } finally {
@@ -544,23 +750,15 @@ export class TimerConsole {
   }
 
   /**
-   * Opens the USB port (via WebSerial port picker), probes `STATUS?` and `SLAPRF?`, and starts
-   * the 2-second status heartbeat so the connection stays active across all SPA routes.
+   * Opens the USB port via the in-app port picker, probes `STATUS?` and `SLAPRF?`, and starts
+   * the status heartbeat so the connection stays active across all SPA routes.
    */
   public async connectAndStart(showAllPorts = true): Promise<TimerStatus | null> {
     this.probing = true;
     this.notifyStateChange();
     try {
-      await this.connect(showAllPorts);
-      const s = await this.ensureRunningApp(1600);
-      if (this.connected) {
-        if (!s && !this.lastConfig && this.port && this.writer) {
-          await haltBlankEsp32C5BootLoop(this.port, this.writer).catch(() => undefined);
-        } else {
-          void this.send("SLAPRF?").catch(() => undefined);
-        }
-      }
-      return s;
+      const port = await pickUsbPort({ showAllPorts });
+      return await this.connectWithPort(port, showAllPorts, 2000);
     } finally {
       this.probing = false;
       this.notifyStateChange();
@@ -568,16 +766,22 @@ export class TimerConsole {
   }
 
   /**
-   * Releases the underlying `SerialPort` for flashing or erasing while keeping this slot active
+   * Releases the underlying port for flashing or erasing while keeping this slot active
    * (`connected === true`, `writing === true`) so its connection pill stays visible in the UI.
    */
   public async releasePortForWrite(): Promise<SerialPortLike | null> {
     const port = this.port;
     if (!port) return null;
+    this.otherPortsSnapshot = new Set();
     this.writing = true;
     this.expectingRestart = true;
     window.clearInterval(this.statusPollTimer);
     this.statusPollTimer = 0;
+    if (isBackendSerialPort(port)) {
+      this.failWaiters("Port busy for flash/erase");
+      this.notifyStateChange();
+      return port;
+    }
     if (this.lastStatus || this.lastConfig) {
       await withTimeout(this.send("LIVE 0\nSCAN STOP\nLOG 0"), 200).catch(() => undefined);
       await sleep(40);
@@ -589,42 +793,22 @@ export class TimerConsole {
   }
 
   /**
-   * Re-attaches this console slot to the board after `flashXiaoC5OverWebSerial` or
-   * `eraseXiaoC5OverWebSerial` resets and closes the raw port.
+   * Re-attaches this console slot to the board after flashing or erasing.
    */
-  public async reopenPortAfterFlash(fallbackPort?: unknown): Promise<void> {
+  public async reopenPortAfterFlash(fallbackPort?: unknown, _expectApp = true): Promise<void> {
     this.probing = true;
-    this.lastStatus = null;
-    this.lastConfig = null;
     this.notifyStateChange();
     try {
-      const deadline = Date.now() + 5000;
-      await sleep(600);
-      while (Date.now() < deadline) {
-        let candidate: SerialPortLike | undefined = undefined;
-        try {
-          const ports = await serial().getPorts();
-          candidate = ports.find((p) => {
-            if (usbPool.findOwnerOfPort(p)) return false;
-            const info = p.getInfo?.() ?? {};
-            return (
-              !this.portInfo ||
-              (info.usbVendorId === this.portInfo.usbVendorId && info.usbProductId === this.portInfo.usbProductId)
-            );
-          });
-        } catch {
-          // ignore
-        }
-        const target = candidate ?? (fallbackPort as SerialPortLike | undefined);
-        if (target) {
-          try {
-            await this.connectWithPort(target, this.showAllPorts);
-            return;
-          } catch {
-            // port still re-enumerating after hardware reset
-          }
-        }
-        await sleep(350);
+      if (isBackendSerialPort(fallbackPort)) {
+        await usbPool.syncFromBackend();
+        return;
+      }
+      this.lastStatus = null;
+      this.lastConfig = null;
+      if (isSimulatedSerialPort(fallbackPort)) {
+        await sleep(250);
+        await this.connectWithPort(fallbackPort, this.showAllPorts);
+        return;
       }
     } finally {
       this.writing = false;
@@ -643,6 +827,17 @@ export class TimerConsole {
     this.lastError = null;
     window.clearInterval(this.statusPollTimer);
     this.statusPollTimer = 0;
+    if (isSimulatedSerialPort(this.port)) {
+      const tid = this.port.simulatedTimerId;
+      const desc = listSimulatedTimers().find((t) => t.timerId === tid);
+      if (tid === 1 || desc?.isHub) {
+        await notifySimHubUsbConnected(false);
+      }
+    }
+    if (isBackendSerialPort(this.port)) {
+      await this.disconnect();
+      return;
+    }
     if (this.connected && (this.lastStatus || this.lastConfig)) {
       await withTimeout(this.send("LIVE 0\nSCAN STOP\nLOG 0"), 250).catch(() => undefined);
       await sleep(50);
@@ -689,6 +884,20 @@ export class TimerConsole {
     }
   }
 
+  private clearDeviceIdentity(): void {
+    this.lastStatus = null;
+    this.lastConfig = null;
+    this.lastStatusAtMs = 0;
+    this.lastRealJsonStatusAtMs = 0;
+    this.lastKnownSpokeSig = "";
+    this.hubOwnFrames = 0;
+    this.hubLastFrameAtMs = 0;
+    this.hubLastSeq = undefined;
+    this.hubLastDbm = undefined;
+    this.hubSlotLive.clear();
+    this.hubSlotHello.clear();
+  }
+
   private async openPort(port: SerialPortLike): Promise<void> {
     if (this.port && this.port !== port) {
       await this.closePort();
@@ -730,10 +939,7 @@ export class TimerConsole {
     this.bufEnd = 0;
     this.packLen = 0;
     this.packCount = 0;
-    this.hubOwnFrames = 0;
-    this.hubLastFrameAtMs = 0;
-    this.hubLastSeq = undefined;
-    this.hubLastDbm = undefined;
+    this.clearDeviceIdentity();
     this.writeQueue = Promise.resolve();
     this.writer = port.writable?.getWriter() ?? null;
     this.reader = port.readable?.getReader() ?? null;
@@ -743,15 +949,28 @@ export class TimerConsole {
   public async disconnect(): Promise<void> {
     window.clearInterval(this.statusPollTimer);
     this.statusPollTimer = 0;
+    if (isBackendSerialPort(this.port)) {
+      this.port = null;
+      await fetch(resolveBackendUrl("/api/usb/disconnect"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slotIndex: this.slotIndex }),
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((pool) => {
+          if (pool) usbPool.applyBackendPoolSnapshot(pool as BackendPoolSnapshot);
+        })
+        .catch(() => undefined);
+      this.probing = false;
+      this.clearDeviceIdentity();
+      this.failWaiters("Disconnected");
+      this.subscribers.forEach((h) => h.onDisconnect?.());
+      this.notifyStateChange();
+      return;
+    }
     await this.closePort();
     this.probing = false;
-    this.lastStatus = null;
-    this.lastConfig = null;
-    this.hubOwnFrames = 0;
-    this.hubLastFrameAtMs = 0;
-    this.hubLastSeq = undefined;
-    this.hubLastDbm = undefined;
-    this.lastKnownSpokeSig = "";
+    this.clearDeviceIdentity();
     this.failWaiters("Disconnected");
     this.subscribers.forEach((h) => h.onDisconnect?.());
     this.notifyStateChange();
@@ -759,20 +978,22 @@ export class TimerConsole {
 
   /**
    * Best-effort synchronous/immediate teardown for page reload (`beforeunload` / `pagehide`).
-   * Stops active firmware streams, cancels the reader, and closes the WebSerial port immediately
-   * so Chromium doesn't strand an active stream or leave the USB port wedged across a refresh.
+   * Note: Physical USB ports owned by the Go backend stay open continuously on the server!
    */
   public disconnectForUnload(): void {
     window.clearInterval(this.statusPollTimer);
     this.statusPollTimer = 0;
+    if (isBackendSerialPort(this.port)) {
+      this.failWaiters("Page unloading");
+      return;
+    }
     const port = this.port;
     const writer = this.writer;
     const reader = this.reader;
     this.port = null;
     this.writer = null;
     this.reader = null;
-    this.lastStatus = null;
-    this.lastConfig = null;
+    this.clearDeviceIdentity();
     this.failWaiters("Page unloading");
     if (!port) return;
     const stopBytes = new TextEncoder().encode("\nLIVE 0\nSCAN STOP\nLOG 0\n");
@@ -816,10 +1037,13 @@ export class TimerConsole {
     const port = this.port;
     const reader = this.reader;
     const writer = this.writer;
+    const pendingWrites = this.writeQueue;
     this.port = null;
     this.reader = null;
     this.writer = null;
     this.writeQueue = Promise.resolve();
+
+    await withTimeout(pendingWrites, 150).catch(() => undefined);
 
     if (reader) {
       try {
@@ -836,11 +1060,6 @@ export class TimerConsole {
 
     if (writer) {
       try {
-        await withTimeout(writer.abort(), 250);
-      } catch {
-        // ignore
-      }
-      try {
         writer.releaseLock();
       } catch {
         // ignore
@@ -848,7 +1067,11 @@ export class TimerConsole {
     }
 
     if (port) {
-      await this.disarmUsbJtagLatch(port);
+      try {
+        await withTimeout(port.setSignals({ dataTerminalReady: false, requestToSend: false }), 150);
+      } catch {
+        // ignore
+      }
       try {
         await withTimeout(port.close(), 400);
       } catch {
@@ -858,6 +1081,18 @@ export class TimerConsole {
   }
 
   public async send(command: string): Promise<void> {
+    if (isBackendSerialPort(this.port)) {
+      const res = await fetch(resolveBackendUrl("/api/usb/command"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slotIndex: this.slotIndex, command }),
+      });
+      if (!res.ok) {
+        const data = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error || "Not connected");
+      }
+      return;
+    }
     const writer = this.writer;
     if (!writer) throw new Error("Not connected");
     const bytes = new TextEncoder().encode(command + "\n");
@@ -895,6 +1130,31 @@ export class TimerConsole {
 
   /** Send `command` (optional) and resolve with the next message of `type` (`status`, `scan`, ...). */
   public request<T>(command: string | null, type: string, timeoutMs = 3000): Promise<T> {
+    if (isBackendSerialPort(this.port) && command) {
+      return fetch(resolveBackendUrl("/api/usb/command"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          slotIndex: this.slotIndex,
+          command,
+          expectType: type,
+          timeoutMs,
+        }),
+      }).then(async (res) => {
+        const data = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          reply?: T;
+          pool?: BackendPoolSnapshot;
+        };
+        if (data.pool) {
+          usbPool.applyBackendPoolSnapshot(data.pool);
+        }
+        if (!res.ok) {
+          throw new Error(data.error || `No ${type} reply within ${Math.round(timeoutMs / 1000)} s`);
+        }
+        return data.reply as T;
+      });
+    }
     return new Promise<T>((resolve, reject) => {
       const waiter: Waiter = {
         type,
@@ -918,71 +1178,50 @@ export class TimerConsole {
 
   /**
    * Probe `STATUS?` up to a few times after opening the port so that if the board was still
-   * finishing boot (or flushing any partial line in its UART RX buffer), we catch its first
-   * status reply cleanly without touching DTR/RTS lines.
+   * finishing boot, we catch its first status reply cleanly.
    */
-  public async ensureRunningApp(timeoutMs = 1600): Promise<TimerStatus | null> {
+  public async ensureRunningApp(timeoutMs = 2000): Promise<TimerStatus | null> {
     if (!this.port) return null;
+    if (isBackendSerialPort(this.port)) {
+      return this.lastStatus;
+    }
     const deadline = Date.now() + timeoutMs;
     let first = true;
     while (Date.now() < deadline && this.port && !this.sawRomBootloader) {
+      if (this.lastStatus) return this.lastStatus;
       try {
-        const cmd = first ? "\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?" : "\nSTATUS?";
+        const cmd = first ? "LIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?" : "STATUS?";
         first = false;
-        return await this.request<TimerStatus>(cmd, "status", 450);
+        return await this.request<TimerStatus>(cmd, "status", 650);
       } catch {
-        if (this.lastConfig) return this.lastStatus;
+        if (this.lastStatus || this.lastConfig) return this.lastStatus;
         if (this.sawRomBootloader) return null;
-        // retry after a short pause
       }
       await sleep(90);
     }
-    return null;
+    return this.lastStatus;
   }
 
   /**
-   * Restart the timer and reattach to it. The USB device re-enumerates on restart, so the old
-   * port goes away; reopen the same device (matched by USB VID/PID) without the port picker.
-   * Resolves with the first status after the restart.
+   * Restart the timer and reattach to it, resolving with the first status after the restart.
    */
   public async restartAndReconnect(timeoutMs = 15000, cmd: "REBOOT" | "EMERGENCY" = "REBOOT"): Promise<TimerStatus> {
-    const before = await this.request<TimerStatus>("STATUS?", "status", 2000).catch(() => null);
+    const before = await this.request<TimerStatus>("STATUS?", "status", 2000).catch(() => this.lastStatus);
     this.expectingRestart = true;
     try {
       await this.send(cmd).catch(() => undefined);
       const deadline = Date.now() + timeoutMs;
-      await sleep(600);
+      await sleep(isBackendSerialPort(this.port) ? 600 : 120);
       while (Date.now() < deadline) {
-        if (!this.port) {
-          const ports = await serial().getPorts();
-          const match = ports.find((p) => {
-            const info = p.getInfo?.() ?? {};
-            return (
-              !this.portInfo ||
-              (info.usbVendorId === this.portInfo.usbVendorId && info.usbProductId === this.portInfo.usbProductId)
-            );
-          });
-          if (match) {
-            try {
-              await this.openPort(match);
-              this.startStatusPolling();
-            } catch {
-              await sleep(400);
-              continue;
-            }
-          } else {
-            await sleep(300);
-            continue;
-          }
-        }
         try {
           const s = await this.request<TimerStatus>("STATUS?", "status", 1500);
-          // Same port may have stayed open; make sure this is really the new boot.
-          if (!before || s.boots > before.boots || s.uptimeMs < before.uptimeMs) return s;
+          if (s && (!before || s.boots > before.boots || s.uptimeMs < before.uptimeMs)) {
+            return s;
+          }
         } catch {
-          // still booting
+          // still rebooting / re-enumerating on Go USB manager
         }
-        await sleep(400);
+        await sleep(350);
       }
       throw new Error("The timer didn't come back after restarting. Unplug it for 5 seconds, plug it back in, and reconnect.");
     } finally {
@@ -1016,66 +1255,26 @@ export class TimerConsole {
       if (this.expectingRestart) {
         await this.closePort(); // Device is re-enumerating; restartAndReconnect() reopens it
       } else if (!this.userDisconnecting && !isSimulatedSerialPort(port)) {
+        window.clearInterval(this.statusPollTimer);
+        this.statusPollTimer = 0;
         await this.closePort();
-        void this.attemptAutoReconnect();
+        this.probing = false;
+        this.clearDeviceIdentity();
+        this.failWaiters("USB disconnected");
+        this.subscribers.forEach((h) => h.onDisconnect?.());
+        this.notifyStateChange();
+        void this.attemptAutoReconnect(port);
       } else {
         await this.disconnect();
       }
     }
   }
 
-  private async attemptAutoReconnect(): Promise<void> {
-    if (this.reconnecting || this.userDisconnecting) return;
-    this.reconnecting = true;
-    this.reconnectFailed = false;
-    this.reconnectAttempt = 0;
-    this.notifyStateChange();
-
-    for (let attempt = 1; attempt <= this.maxReconnectAttempts; attempt++) {
-      if (this.userDisconnecting || this.connected) {
-        this.reconnecting = false;
-        this.notifyStateChange();
-        return;
-      }
-      this.reconnectAttempt = attempt;
-      this.notifyStateChange();
-      await sleep(1200);
-      if (this.userDisconnecting || this.connected) {
-        this.reconnecting = false;
-        this.notifyStateChange();
-        return;
-      }
-      try {
-        const ports = await serial().getPorts();
-        const match = ports.find((p) => {
-          const info = p.getInfo?.() ?? {};
-          return (
-            !this.portInfo ||
-            (info.usbVendorId === this.portInfo.usbVendorId && info.usbProductId === this.portInfo.usbProductId)
-          );
-        });
-        if (match) {
-          await this.openPort(match);
-          this.reconnecting = false;
-          this.reconnectAttempt = 0;
-          this.reconnectFailed = false;
-          this.lastError = null;
-          this.startStatusPolling();
-          void this.ensureRunningApp().then(() => {
-            if (this.connected) void this.send("SLAPRF?").catch(() => undefined);
-          });
-          this.subscribers.forEach((h) => h.onConnect?.());
-          this.notifyStateChange();
-          return;
-        }
-      } catch {
-        // try next attempt
-      }
-    }
-
+  private async attemptAutoReconnect(_lostPort?: SerialPortLike): Promise<void> {
+    // Physical USB auto-reconnect runs natively inside Go's `usb.Manager`.
     this.reconnecting = false;
     this.reconnectFailed = true;
-    this.lastError = `Lost USB connection after ${this.maxReconnectAttempts} reconnect attempts.`;
+    this.lastError = "USB connection closed.";
     await this.disconnect();
   }
 
@@ -1118,6 +1317,11 @@ export class TimerConsole {
         if (parsed) {
           this.probing = false;
           this.lastConfig = parsed;
+          recordSerialPortMeta(this.port, {
+            label: parsed.timerLabel,
+            fp: parsed.fingerprint,
+            role: parsed.role,
+          });
           recordKnownTimerReadout(parsed);
           this.subscribers.forEach((h) => h.onConfig?.(parsed));
           this.resolveWaiters("config", parsed);
@@ -1171,15 +1375,27 @@ export class TimerConsole {
   }
 
   private queueHubPacket(src: Uint8Array, at: number, len: number): void {
-    if (len >= 16 && src[at] === 0xc5 && src[at + 2] === 1) {
+    if (len >= 16 && src[at] === 0xc5 && src[at + 2] >= 1 && src[at + 2] <= 7) {
+      const slot = src[at + 2];
       const kind = src[at + 1];
-      if (kind === 0x59) {
+      if (kind === 0x5a && len === 36) {
+        const role = src[at + 3];
+        const fpNum =
+          (src[at + 4] | (src[at + 5] << 8) | (src[at + 6] << 16) | (src[at + 7] << 24)) >>> 0;
+        const fp = fpNum.toString(16).toUpperCase().padStart(8, "0");
+        const sweepHz = src[at + 9] || 50;
+        let labelEnd = at + 10;
+        while (labelEnd < at + 34 && src[labelEnd] !== 0) labelEnd++;
+        const label = this.decoder.decode(src.subarray(at + 10, labelEnd)).trim() || (slot === 1 ? "H1" : `T${slot - 1}`);
+        this.hubSlotHello.set(slot, { fp, label, role, sweepHz });
+        this.synthesizeHubStatusIfNeeded();
+      } else if (kind === 0x59) {
         const sampleCount = src[at + 3];
         if (sampleCount >= 1 && len >= 7 + sampleCount * 9 + 1) {
-          this.hubOwnFrames++;
-          this.hubLastFrameAtMs = Date.now();
+          const now = Date.now();
+          const floor = (src[at + 6] << 24) >> 24;
           const newestOff = at + 7 + (sampleCount - 1) * 9;
-          this.hubLastSeq = src[newestOff];
+          const seq = src[newestOff];
           const dbm: number[] = [];
           for (let ch = 0; ch < 8; ch++) {
             let best = (src[newestOff + 1 + ch] << 24) >> 24;
@@ -1189,17 +1405,45 @@ export class TimerConsole {
             }
             dbm.push(best);
           }
-          this.hubLastDbm = dbm;
+          const prev = this.hubSlotLive.get(slot);
+          this.hubSlotLive.set(slot, {
+            frames: (prev?.frames ?? 0) + 1,
+            lastFrameAtMs: now,
+            seq,
+            dbm,
+            floor,
+          });
+          if (slot === 1) {
+            this.hubOwnFrames++;
+            this.hubLastFrameAtMs = now;
+            this.hubLastSeq = seq;
+            this.hubLastDbm = dbm;
+          }
+          this.synthesizeHubStatusIfNeeded();
         }
       } else if (kind === 0x58) {
-        this.hubOwnFrames++;
-        this.hubLastFrameAtMs = Date.now();
-        this.hubLastSeq = src[at + 3];
+        const now = Date.now();
+        const seq = src[at + 3];
+        const floor = (src[at + 6] << 24) >> 24;
         const dbm: number[] = [];
         for (let ch = 0; ch < 8; ch++) {
           dbm.push((src[at + 7 + ch] << 24) >> 24);
         }
-        this.hubLastDbm = dbm;
+        const prev = this.hubSlotLive.get(slot);
+        this.hubSlotLive.set(slot, {
+          frames: (prev?.frames ?? 0) + 1,
+          lastFrameAtMs: now,
+          seq,
+          dbm,
+          floor,
+        });
+        if (slot === 1) {
+          this.hubOwnFrames++;
+          this.hubLastFrameAtMs = now;
+          this.hubLastSeq = seq;
+          this.hubLastDbm = dbm;
+        }
+        this.synthesizeHubStatusIfNeeded();
       }
     }
     if (this.packLen + 1 + len > this.pack.length) {
@@ -1211,6 +1455,119 @@ export class TimerConsole {
     this.pack.set(src.subarray(at, at + len), this.packLen + 1);
     this.packLen += 1 + len;
     this.packCount++;
+  }
+
+  /**
+   * When a Hub is streaming binary frames (`0xC5 0x59` / `0xC5 0x5A`) at Priority 1 while its
+   * Priority 0 `STATUS?` task is delayed under heavy Spoke traffic, synthesize/refresh `lastStatus`
+   * directly from the binary Hub stream so the Hub is recognized immediately on connect.
+   */
+  private synthesizeHubStatusIfNeeded(): void {
+    const now = Date.now();
+    if (this.lastRealJsonStatusAtMs > 0 && now - this.lastRealJsonStatusAtMs < 2500) {
+      return;
+    }
+    if (this.hubOwnFrames === 0 && !this.hubSlotHello.has(1)) {
+      return;
+    }
+    if (this.lastStatus && now - this.lastStatusAtMs < 400 && !this.probing && this.waiters.length === 0) {
+      return;
+    }
+    const hello1 = this.hubSlotHello.get(1);
+    const live1 = this.hubSlotLive.get(1);
+    const fp = hello1?.fp || this.lastConfig?.fingerprint || this.lastStatus?.fp || "";
+    if (!fp) {
+      // Wait for STATUS?, SLAPRF?, or the Hub's 0xC5 0x5A HELLO frame so we never
+      // borrow a previously connected Hub's identity from localStorage.
+      return;
+    }
+    const knownTimers = getKnownHardwareTimers();
+    const knownHub = knownTimers.find((t) => t.role === "hub" && t.fp.toUpperCase() === fp.toUpperCase());
+    const label = hello1?.label || this.lastConfig?.timerLabel || this.lastStatus?.label || knownHub?.label || "H1";
+    const sweepHz = hello1?.sweepHz || this.lastStatus?.sweepHz || 100;
+    const spokes: TimerPeerSpoke[] = [];
+    for (let slot = 2; slot <= 7; slot++) {
+      const sh = this.hubSlotHello.get(slot);
+      const sl = this.hubSlotLive.get(slot);
+      if (!sh) continue;
+      const prevSpoke = this.lastStatus?.spokes?.find((sp) => sp.slot === slot);
+      const knownSpoke = knownTimers.find((t) => t.role === "spoke" && t.fp.toUpperCase() === sh.fp.toUpperCase());
+      spokes.push({
+        slot,
+        fp: sh.fp,
+        label: sh.label || knownSpoke?.label || `T${slot - 1}`,
+        fw: knownSpoke?.fw || prevSpoke?.fw || LATEST_FIRMWARE_VERSION,
+        mac: knownSpoke?.mac || prevSpoke?.mac,
+        msAgo: sl ? Math.max(0, now - sl.lastFrameAtMs) : (prevSpoke?.msAgo ?? 0),
+        frames: sl?.frames ?? prevSpoke?.frames ?? 0,
+        seq: sl?.seq ?? prevSpoke?.seq,
+        dbm: sl?.dbm ?? prevSpoke?.dbm,
+        floorDb: sl?.floor ?? prevSpoke?.floorDb,
+      });
+    }
+    const st: TimerStatus = {
+      fw: this.lastConfig?.firmwareVersion || this.lastStatus?.fw || knownHub?.fw || LATEST_FIRMWARE_VERSION,
+      role: 1,
+      fp,
+      label,
+      uptimeMs: this.lastStatus ? this.lastStatus.uptimeMs + (now - this.lastStatusAtMs) : 1000,
+      reset: this.lastStatus?.reset || "usb",
+      boots: this.lastStatus?.boots || 1,
+      emergencyMode: false,
+      crashStreak: 0,
+      heapFree: this.lastStatus?.heapFree || 56800,
+      heapMin: this.lastStatus?.heapMin || 56200,
+      sweepHz,
+      sweeps: this.hubOwnFrames * 4,
+      sweepUs: this.lastStatus?.sweepUs || (sweepHz >= 100 ? 6100 : 13400),
+      sweepUsMax: this.lastStatus?.sweepUsMax || (sweepHz >= 100 ? 6650 : 15800),
+      sweepBudgetUs: sweepHz >= 100 ? 7000 : 20000,
+      rf: {
+        ok: true,
+        enabled: true,
+        gain: 30,
+        gainMax: 80,
+        floorDb: live1?.floor ?? this.lastStatus?.rf.floorDb ?? -90.0,
+      },
+      chip: this.lastStatus?.chip || {
+        model: "ESP32-C5",
+        rev: "v1.0",
+        mac: knownHub?.mac || "",
+        flashMB: 8,
+      },
+      net: {
+        mode: "espnow-lr",
+        stations: spokes.length,
+      },
+      channel: 1,
+      slot: 1,
+      scanLive: false,
+      freqsTemporary: false,
+      chanMask: 255,
+      freqs: this.lastConfig?.frequenciesMHz || this.lastStatus?.freqs || [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917],
+      dbm: live1?.dbm ?? this.hubLastDbm ?? this.lastStatus?.dbm,
+      spokes,
+    };
+    const wasProbing = this.probing;
+    this.probing = false;
+    const labelChanged =
+      wasProbing ||
+      this.lastStatus?.label !== st.label ||
+      this.lastStatus?.fp !== st.fp ||
+      this.lastStatus?.role !== st.role;
+    this.lastStatus = st;
+    this.lastStatusAtMs = now;
+    recordSerialPortMeta(this.port, {
+      label: st.label,
+      fp: st.fp,
+      role: "hub",
+    });
+    recordKnownTimerStatus(st);
+    this.resolveWaiters("status", st);
+    this.subscribers.forEach((h) => h.onStatus?.(st));
+    if (labelChanged) {
+      this.notifyStateChange();
+    }
   }
 
   /**
@@ -1278,6 +1635,12 @@ export class TimerConsole {
             const spokesChanged = spokeSig !== this.lastKnownSpokeSig;
             this.lastStatus = st;
             this.lastStatusAtMs = Date.now();
+            this.lastRealJsonStatusAtMs = this.lastStatusAtMs;
+            recordSerialPortMeta(this.port, {
+              label: st.label,
+              fp: st.fp,
+              role: st.role === 1 ? "hub" : "spoke",
+            });
             if (labelChanged || spokesChanged) {
               this.lastKnownSpokeSig = spokeSig;
               recordKnownTimerStatus(st);
@@ -1329,7 +1692,6 @@ export class UsbConnectionPool {
   constructor(slots: [TimerConsole, TimerConsole, TimerConsole]) {
     this.slots = slots;
     this.rebindSlots();
-    this.initBlankPortStabilizer();
   }
 
   /**
@@ -1364,88 +1726,225 @@ export class UsbConnectionPool {
     }
   }
 
-  private readonly checkedBlankPorts = new WeakSet<object>();
-  private calmingBlankPorts = false;
+  private savedSimSlots: Array<{ slotIndex: 0 | 1; timerId: number }> = [];
+  private savedSimDebugSlot = 0;
+  private restoringSimPorts = false;
+  private backendUsbWs: WebSocket | null = null;
+  private backendUsbReconnectTimer: number | null = null;
+  private backendRealActive = false;
+  private readonly flashProgressListeners = new Set<(p: FlashProgress) => void>();
 
-  /**
-   * When an ESP32-C5 has factory-blank / erased SPI flash (`0xFF` at `0x2000`), its ROM bootloader
-   * loops on `invalid header: 0xffffffff` and hardware-resets USB every ~3.2 seconds, causing its
-   * COM port to appear and disappear in the WebSerial port picker. For any previously-authorized
-   * port in `navigator.serial.getPorts()` that is boot-looping, automatically enter ROM download
-   * mode and disable `LP_WDT` so its COM port stays stable.
-   */
-  private initBlankPortStabilizer(): void {
-    if (!TimerConsole.supported()) return;
-    const navSerial = serial() as SerialLike & { addEventListener?(type: string, fn: () => void): void };
-    const run = () => {
-      void this.calmBootLoopingBlankPorts();
+  public onFlashProgress(cb: (p: FlashProgress) => void): () => void {
+    this.flashProgressListeners.add(cb);
+    return () => {
+      this.flashProgressListeners.delete(cb);
     };
-    window.setTimeout(run, 150);
-    navSerial.addEventListener?.("connect", run);
   }
 
-  private async calmBootLoopingBlankPorts(): Promise<void> {
-    if (this.calmingBlankPorts) return;
-    if (this.slots.some((c) => c.writing || c.probing || c.reconnecting)) return;
-    this.calmingBlankPorts = true;
+  public applyBackendPoolSnapshot(pool: BackendPoolSnapshot): void {
+    if (Array.isArray(pool.knownTimers)) {
+      backendKnownTimersCache = pool.knownTimers;
+    }
+    if (typeof pool.debugSlotIndex === "number") {
+      this._debugSlotIndex = pool.debugSlotIndex === 1 ? 1 : 0;
+    }
+    if (Array.isArray(pool.slots)) {
+      for (const snap of pool.slots) {
+        const slot = this.slots[snap.slotIndex];
+        if (slot) {
+          slot.applyBackendSlotSnapshot(snap);
+        }
+      }
+    }
+    this.notify();
+  }
+
+  public async syncFromBackend(): Promise<void> {
+    if (!capabilitiesSnapshot().portable || isSimulatedUsbMode()) return;
     try {
-      const ports = await serial().getPorts();
-      for (const port of ports) {
-        if (this.checkedBlankPorts.has(port as unknown as object)) continue;
-        if (this.findOwnerOfPort(port)) continue;
-        if (port.readable || port.writable) continue;
-        const info = port.getInfo?.() ?? {};
-        if (info.usbVendorId && info.usbVendorId !== ESPRESSIF_USB_VID) {
-          this.checkedBlankPorts.add(port as unknown as object);
-          continue;
-        }
-        try {
-          await port.open({ baudRate: 115200, bufferSize: 4096 });
-          await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
-          await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
-          const reader = port.readable?.getReader();
-          const writer = port.writable?.getWriter();
-          let sawBootLoop = false;
-          if (reader) {
-            const deadline = Date.now() + 260;
-            const dec = new TextDecoder();
-            let acc = "";
-            while (Date.now() < deadline) {
-              const rem = Math.max(20, deadline - Date.now());
-              const chunk = await withTimeout(reader.read(), rem).catch(() => undefined);
-              if (!chunk || chunk.done || !chunk.value) break;
-              acc += dec.decode(chunk.value, { stream: true });
-              if (acc.includes("invalid header:") || acc.includes("waiting for download")) {
-                sawBootLoop = true;
-                break;
-              }
-              if (acc.includes("@{")) {
-                break;
-              }
-            }
-          }
-          if (sawBootLoop && writer) {
-            await haltBlankEsp32C5BootLoop(port, writer).catch(() => undefined);
-          }
-          try {
-            await withTimeout(reader?.cancel(), 120);
-          } catch {}
-          try {
-            reader?.releaseLock();
-          } catch {}
-          try {
-            writer?.releaseLock();
-          } catch {}
-          await withTimeout(port.close(), 250).catch(() => undefined);
-          this.checkedBlankPorts.add(port as unknown as object);
-        } catch {
-          // port busy or disconnected mid-check
-        }
+      const res = await fetch(resolveBackendUrl("/api/usb/status"), { cache: "no-store" });
+      if (res.ok) {
+        const pool = (await res.json()) as BackendPoolSnapshot;
+        this.applyBackendPoolSnapshot(pool);
       }
     } catch {
       // ignore
+    }
+  }
+
+  private ensureBackendUsbWs(): void {
+    if (!this.backendRealActive || !capabilitiesSnapshot().portable || typeof WebSocket === "undefined") {
+      return;
+    }
+    if (
+      this.backendUsbWs &&
+      (this.backendUsbWs.readyState === WebSocket.OPEN || this.backendUsbWs.readyState === WebSocket.CONNECTING)
+    ) {
+      return;
+    }
+    try {
+      const ws = new WebSocket(resolveBackendWsUrl("/api/ws/usb"));
+      this.backendUsbWs = ws;
+      ws.onmessage = (ev: MessageEvent) => {
+        if (ws !== this.backendUsbWs || typeof ev.data !== "string") return;
+        try {
+          const parsed = JSON.parse(ev.data) as BackendUsbEvent;
+          if (parsed.type === "pool_state" && parsed.pool) {
+            this.applyBackendPoolSnapshot(parsed.pool);
+            return;
+          }
+          if (parsed.type === "flash_progress" && parsed.progress) {
+            this.flashProgressListeners.forEach((fn) => fn(parsed.progress!));
+            return;
+          }
+          const slot = this.slots[parsed.slotIndex];
+          if (slot) {
+            slot.handleBackendEvent(parsed);
+          }
+        } catch {
+          // ignore malformed WS event
+        }
+      };
+      ws.onclose = () => {
+        if (ws !== this.backendUsbWs) return;
+        this.backendUsbWs = null;
+        if (this.backendRealActive && this.backendUsbReconnectTimer === null) {
+          this.backendUsbReconnectTimer = window.setTimeout(() => {
+            this.backendUsbReconnectTimer = null;
+            this.ensureBackendUsbWs();
+          }, 1000);
+        }
+      };
+      ws.onerror = () => {
+        // handled by onclose
+      };
+    } catch {
+      // ignore
+    }
+  }
+
+  private stopBackendUsbWs(): void {
+    if (this.backendUsbReconnectTimer !== null) {
+      window.clearTimeout(this.backendUsbReconnectTimer);
+      this.backendUsbReconnectTimer = null;
+    }
+    if (this.backendUsbWs) {
+      const s = this.backendUsbWs;
+      this.backendUsbWs = null;
+      try {
+        s.close();
+      } catch {
+        // ignore
+      }
+    }
+  }
+
+  public async attachBackendMode(simMode: boolean): Promise<void> {
+    if (!capabilitiesSnapshot().portable) {
+      this.backendRealActive = false;
+      this.stopBackendUsbWs();
+      return;
+    }
+    if (simMode) {
+      this.backendRealActive = false;
+      this.stopBackendUsbWs();
+      for (const c of this.slots) {
+        if (isBackendSerialPort(c.rawPort)) {
+          c.applyBackendSlotSnapshot({
+            slotIndex: c.slotIndex,
+            connected: false,
+            probing: false,
+            writing: false,
+            reconnecting: false,
+            reconnectAttempt: 0,
+            maxReconnectAttempts: 5,
+            reconnectFailed: false,
+            isOtherDevice: false,
+          });
+        }
+      }
+      return;
+    }
+    this.backendRealActive = true;
+    await this.disconnectSimulatedPorts();
+    await this.syncFromBackend();
+    this.ensureBackendUsbWs();
+  }
+
+  private persistActiveSimSlots(): void {
+    if (this.restoringSimPorts || !isSimulatedUsbMode()) return;
+    const activeSim: Array<{ slotIndex: 0 | 1; timerId: number }> = [];
+    for (const c of this.slots) {
+      if (c.connected && isSimulatedSerialPort(c.rawPort)) {
+        activeSim.push({
+          slotIndex: (c.slotIndex === 1 ? 1 : 0) as 0 | 1,
+          timerId: c.rawPort.simulatedTimerId,
+        });
+      }
+    }
+    this.savedSimSlots = activeSim;
+    this.savedSimDebugSlot = this._debugSlotIndex;
+    try {
+      window.localStorage.setItem(
+        "slaprf.sim.usb_slots.v1",
+        JSON.stringify({ slots: activeSim, debugSlot: this._debugSlotIndex })
+      );
+    } catch {
+      // ignore storage errors
+    }
+  }
+
+  public async restorePersistedSimPorts(): Promise<void> {
+    if (!isSimulatedUsbMode()) return;
+    try {
+      const raw = window.localStorage.getItem("slaprf.sim.usb_slots.v1");
+      if (raw) {
+        const parsed = JSON.parse(raw) as {
+          slots?: Array<{ slotIndex: 0 | 1; timerId: number }>;
+          debugSlot?: number;
+        };
+        if (Array.isArray(parsed.slots)) {
+          this.savedSimSlots = parsed.slots;
+        }
+        if (typeof parsed.debugSlot === "number") {
+          this.savedSimDebugSlot = parsed.debugSlot === 1 ? 1 : 0;
+        }
+      }
+    } catch {
+      // ignore storage errors
+    }
+    if (this.savedSimSlots.length === 0 && capabilitiesSnapshot().portable && !window.slaprfWasm) {
+      try {
+        const res = await fetch(resolveBackendUrl("/api/sim/hub-usb"), { cache: "no-store" });
+        if (res.ok) {
+          const data = (await res.json()) as { connected?: boolean };
+          if (data.connected) {
+            const hub = listSimulatedTimers().find((t) => t.isHub && t.poweredOn);
+            if (hub) {
+              this.savedSimSlots = [{ slotIndex: 0, timerId: hub.timerId }];
+            }
+          }
+        }
+      } catch {
+        // ignore
+      }
+    }
+    if (this.savedSimSlots.length === 0) return;
+    this.restoringSimPorts = true;
+    try {
+      const powered = new Set(listSimulatedTimers().filter((t) => t.poweredOn).map((t) => t.timerId));
+      for (const item of this.savedSimSlots) {
+        if (powered.has(item.timerId)) {
+          await this.connectSimulatedTimer(item.timerId, item.slotIndex).catch(() => undefined);
+        }
+      }
+      if (this.slots[this.savedSimDebugSlot]?.connected) {
+        this._debugSlotIndex = this.savedSimDebugSlot;
+      }
     } finally {
-      this.calmingBlankPorts = false;
+      this.restoringSimPorts = false;
+      this.persistActiveSimSlots();
+      this.notify();
     }
   }
 
@@ -1477,6 +1976,13 @@ export class UsbConnectionPool {
     const next = slotIndex === 1 ? 1 : 0;
     if (next !== this._debugSlotIndex) {
       this._debugSlotIndex = next;
+      if (capabilitiesSnapshot().portable && !isSimulatedUsbMode()) {
+        void fetch(resolveBackendUrl("/api/usb/debug-slot"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ slotIndex: next }),
+        }).catch(() => undefined);
+      }
       this.notify();
     }
   }
@@ -1525,25 +2031,7 @@ export class UsbConnectionPool {
     showAllPorts = false
   ): Promise<{ console: TimerConsole; status: TimerStatus | null; alreadyConnected: boolean }> {
     const main = this.slots[0];
-    if (isSimulatedUsbMode()) {
-      const port = await pickSimulatedUsbPort();
-      const existing = this.slots.find(
-        (c) => isSimulatedSerialPort(c.rawPort) && c.rawPort.simulatedTimerId === port.simulatedTimerId
-      );
-      if (existing) {
-        if (existing === main) {
-          return { console: main, status: main.lastStatus, alreadyConnected: true };
-        }
-        await existing.disconnectCleanly();
-      }
-      if (main.connected) {
-        await main.disconnectCleanly();
-      }
-      const status = await main.connectWithPort(port, showAllPorts);
-      return { console: main, status, alreadyConnected: false };
-    }
-    const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
-    const port = await serial().requestPort(filters ? { filters } : undefined);
+    const port = await pickUsbPort({ showAllPorts });
     const existing = this.findOwnerOfPort(port);
     if (existing) {
       if (existing === main) {
@@ -1644,32 +2132,8 @@ export class UsbConnectionPool {
       this._debugSlotIndex = 0;
       return await this.connectMain(showAllPorts);
     }
-    if (isSimulatedUsbMode()) {
-      const excludeIds: number[] = [];
-      if (isSimulatedSerialPort(main.rawPort)) {
-        excludeIds.push(main.rawPort.simulatedTimerId);
-      }
-      const port = await pickSimulatedUsbPort(excludeIds);
-      const swapSlot = this.slots[1];
-      if (swapSlot.connected || swapSlot.reconnecting) {
-        await swapSlot.disconnectCleanly();
-      }
-      swapSlot.setBusyLabel("Connecting");
-      this._debugSlotIndex = 1;
-      this.notify();
-      try {
-        const status = await swapSlot.connectWithPort(port, showAllPorts);
-        this._debugSlotIndex = swapSlot.connected ? 1 : 0;
-        this.notify();
-        return { console: swapSlot, status, alreadyConnected: false };
-      } catch (err) {
-        this._debugSlotIndex = 0;
-        this.notify();
-        throw err;
-      }
-    }
-    const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
-    const port = await serial().requestPort(filters ? { filters } : undefined);
+    const excludePorts = main.rawPort ? [main.rawPort] : [];
+    const port = await pickUsbPort({ showAllPorts, excludePorts });
     const existing = this.findOwnerOfPort(port);
     if (existing) {
       this.setDebugSlot(existing.slotIndex === 1 ? 1 : 0);
@@ -1720,13 +2184,16 @@ export class UsbConnectionPool {
    * to the ESP32-C5 ROM bootloader directly without popping up a second USB port picker, and
    * returns a `reopen` callback that re-attaches the main `TimerConsole` slot afterwards.
    */
-  public async takeActivePort(): Promise<{ port: SerialPortLike; reopen: () => Promise<void> } | null> {
+  public async takeActivePort(): Promise<{
+    port: SerialPortLike;
+    reopen: (opts?: { expectApp?: boolean }) => Promise<void>;
+  } | null> {
     const active = this.mainConsole;
     const port = await active.releasePortForWrite();
     if (!port) return null;
     return {
       port,
-      reopen: () => active.reopenPortAfterFlash(port),
+      reopen: (opts) => active.reopenPortAfterFlash(port, opts?.expectApp ?? true),
     };
   }
 
@@ -1734,6 +2201,50 @@ export class UsbConnectionPool {
     await Promise.all(
       this.slots.map((c) => (c.connected || c.reconnecting ? c.disconnectCleanly().catch(() => undefined) : Promise.resolve()))
     );
+  }
+
+  /**
+   * Called when switching from Real mode to Simulation mode:
+   * restores any previously connected simulated USB ports that are still powered on
+   * (Go's `usb.Manager` automatically suspends physical USB connections when `SetSimMode(true)` runs).
+   */
+  public async suspendRealAndRestoreSim(): Promise<void> {
+    if (this.savedSimSlots.length > 0 && isSimulatedUsbMode()) {
+      const powered = new Set(listSimulatedTimers().filter((t) => t.poweredOn).map((t) => t.timerId));
+      for (const item of this.savedSimSlots) {
+        if (powered.has(item.timerId)) {
+          await this.connectSimulatedTimer(item.timerId, item.slotIndex).catch(() => undefined);
+        }
+      }
+      if (this.slots[this.savedSimDebugSlot]?.connected) {
+        this._debugSlotIndex = this.savedSimDebugSlot;
+      }
+      this.notify();
+    } else if (isSimulatedUsbMode()) {
+      await this.restorePersistedSimPorts();
+    }
+  }
+
+  /**
+   * Called when switching from Simulation mode back to Real mode:
+   * saves any currently connected simulated USB ports, closes their local browser handles,
+   * and syncs physical USB slots from the Go backend (`usb.Manager` restores suspended ports).
+   */
+  public async suspendSimAndRestoreReal(): Promise<void> {
+    const activeSim: Array<{ slotIndex: 0 | 1; timerId: number }> = [];
+    for (const c of this.slots) {
+      if (c.connected && isSimulatedSerialPort(c.rawPort)) {
+        activeSim.push({
+          slotIndex: (c.slotIndex === 1 ? 1 : 0) as 0 | 1,
+          timerId: c.rawPort.simulatedTimerId,
+        });
+        c.disconnectForUnload();
+      }
+    }
+    this.savedSimSlots = activeSim;
+    this.savedSimDebugSlot = this._debugSlotIndex;
+    await this.syncFromBackend();
+    this.notify();
   }
 
   public disconnectAllForUnload(): void {
@@ -1769,6 +2280,7 @@ export class UsbConnectionPool {
   }
 
   private notify(): void {
+    this.persistActiveSimSlots();
     this.listeners.forEach((fn) => {
       try {
         fn();

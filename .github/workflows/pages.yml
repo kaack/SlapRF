@@ -16,12 +16,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  verify:
+    name: Verify build & E2E suite
+    uses: ./.github/workflows/verify.yml
+
   firmware:
     name: Build firmware
     uses: ./.github/workflows/firmware.yml
 
   build-github-page:
-    needs: firmware
+    needs: [verify, firmware]
     name: Build & Push SPA to github-page branch
     runs-on: ubuntu-latest
     steps:

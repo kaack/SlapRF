@@ -7,8 +7,8 @@ const HTML_ESCAPES: Record<string, string> = {
 };
 
 /** Escape user-controlled text (callsigns, gate names) before interpolating into HTML. */
-export function esc(value: string): string {
-  return value.replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
+export function esc(value: string | null | undefined): string {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => HTML_ESCAPES[c]);
 }
 
 /** Lap / split time in seconds, e.g. `13.482`. Returns an em dash when unset. */

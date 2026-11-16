@@ -26,6 +26,11 @@ export class PilotPanel extends Component {
 
     el.innerHTML = `
       <div class="stat-row" data-slot="stats"></div>
+      <section class="card card-flush" data-slot="laptimes"></section>
+      <section class="card card-flush">
+        <header class="card-head"><div class="settings-intro"><h2>Laps</h2><p>Completed laps, newest first, with section splits compared to personal best.</p></div></header>
+        <div data-slot="laps"></div>
+      </section>
       <section class="card card-flush">
         <div class="card-body">
           <header class="card-head"><div class="settings-intro"><h2>Signal at each timer</h2><p>Live 5.8 GHz signal at each timer. Select a timer to adjust its threshold. Red lines mark rejected passes (hover for reason).</p></div></header>
@@ -35,11 +40,6 @@ export class PilotPanel extends Component {
           <p class="note">Default chart view follows the live 5s stream with all timers visible.</p>
           <button class="btn btn-ghost btn-sm" type="button" data-action="restore-rssi-defaults">Restore defaults</button>
         </div>
-      </section>
-      <section class="card card-flush" data-slot="laptimes"></section>
-      <section class="card card-flush">
-        <header class="card-head"><div class="settings-intro"><h2>Laps</h2><p>Completed laps, newest first, with section splits compared to personal best.</p></div></header>
-        <div data-slot="laps"></div>
       </section>`;
 
     const rssiChart = this.adopt(new PilotRssiChart(this.slot("rssi"), store, api));

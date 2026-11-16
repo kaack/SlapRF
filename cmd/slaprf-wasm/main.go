@@ -1,15 +1,22 @@
 //go:build js && wasm
 
+// Command slaprf-wasm is the standalone Browser Demo Simulator runtime for `slaprf.app`
+// when no local or LAN SlapRF Go backend is connected.
+//
+// All physical hardware protocols (USB Serial, ESP32-C5 ROM bootloader flasher, LapRF 8-Way TCP,
+// RotorHazard Socket.IO, LiveTime :5403 TCP server, and bbolt storage) live exclusively in the
+// native Go server (`cmd/slaprf`). This WASM binary runs only the showcase `TrackSimulator` +
+// `simEngine` so visitors on `slaprf.app` can explore 100% of SlapRF's race formats and simulated
+// hardware modes with zero install before connecting to a real track server.
 package main
 
 import (
-	"encoding/binary"
 	"encoding/json"
-	"math"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall/js"
 	"time"
 
@@ -21,16 +28,14 @@ import (
 )
 
 type wasmStreamSubscriber struct {
-	mu       sync.RWMutex
-	allow    func() bool
-	callback js.Value
-	// telemetryCb, when set, receives telemetry as binary batches (encodeTelemetryBatch) instead
-	// of one JSON envelope per sample on `callback`.
+	mu          sync.RWMutex
+	engine      *tracker.Engine
+	callback    js.Value
 	telemetryCb js.Value
 
 	batchMu  sync.Mutex
-	batching int                          // >0 while inside an ingest call: telemetry is buffered
-	pending  []domain.TimerTelemetryFrame // buffered telemetry, flushed as one batch
+	batching int
+	pending  []domain.TimerTelemetryFrame
 	encBuf   []byte
 }
 
@@ -46,8 +51,6 @@ func (w *wasmStreamSubscriber) setTelemetryCallback(cb js.Value) {
 	w.mu.Unlock()
 }
 
-// beginBatch buffers telemetry until the matching endBatch, so one ingest call (all Hub frames of
-// a USB read) crosses the JS boundary once instead of once per sample.
 func (w *wasmStreamSubscriber) beginBatch() {
 	w.batchMu.Lock()
 	w.batching++
@@ -61,8 +64,6 @@ func (w *wasmStreamSubscriber) endBatch() {
 	w.flushTelemetry()
 }
 
-// flushTelemetry delivers buffered telemetry (also called before any other event, so the JS side
-// sees events in engine order).
 func (w *wasmStreamSubscriber) flushTelemetry() {
 	w.mu.RLock()
 	cb := w.telemetryCb
@@ -78,7 +79,16 @@ func (w *wasmStreamSubscriber) flushTelemetry() {
 		w.batchMu.Unlock()
 		return
 	}
-	w.encBuf = encodeTelemetryBatch(w.encBuf[:0], w.pending)
+	rssiCount := domain.MaxPilotSlots
+	if w.engine != nil {
+		if pc := w.engine.PilotCount(); pc > rssiCount {
+			rssiCount = pc
+		}
+	}
+	if rssiCount > domain.MaxPilotPoolSize {
+		rssiCount = domain.MaxPilotPoolSize
+	}
+	w.encBuf = api.EncodeTelemetryBatch(w.encBuf[:0], w.pending, rssiCount)
 	w.pending = w.pending[:0]
 	u8 := js.Global().Get("Uint8Array").New(len(w.encBuf))
 	js.CopyBytesToJS(u8, w.encBuf)
@@ -86,46 +96,7 @@ func (w *wasmStreamSubscriber) flushTelemetry() {
 	cb.Invoke(u8)
 }
 
-// encodeTelemetryBatch appends the binary telemetry batch decoded by `decodeTelemetryBatch` in
-// web/src/services/wasm_transport.ts (little-endian):
-// [1][rssiCount][count u16] then per frame
-// [timerId u8][0][batteryMv u16][seqNum u32][timestampUs f64][noiseFloorDbm f32][rssi f32 x rssiCount].
-func encodeTelemetryBatch(dst []byte, frames []domain.TimerTelemetryFrame) []byte {
-	const rssiCount = domain.MaxPilotPoolSize
-	const recLen = 20 + 4*rssiCount
-	n := len(frames)
-	if n > 0xFFFF {
-		n = 0xFFFF
-	}
-	need := 4 + n*recLen
-	if cap(dst) < need {
-		dst = make([]byte, 0, need*2)
-	}
-	b := dst[:need]
-	b[0] = 1
-	b[1] = rssiCount
-	binary.LittleEndian.PutUint16(b[2:4], uint16(n))
-	o := 4
-	for i := 0; i < n; i++ {
-		f := &frames[i]
-		b[o] = f.TimerID
-		b[o+1] = 0
-		binary.LittleEndian.PutUint16(b[o+2:], f.BatteryMv)
-		binary.LittleEndian.PutUint32(b[o+4:], f.SeqNum)
-		binary.LittleEndian.PutUint64(b[o+8:], math.Float64bits(float64(f.TimestampUs)))
-		binary.LittleEndian.PutUint32(b[o+16:], math.Float32bits(f.NoiseFloorDbm))
-		for k := 0; k < rssiCount; k++ {
-			binary.LittleEndian.PutUint32(b[o+20+4*k:], math.Float32bits(f.RSSI[k]))
-		}
-		o += recLen
-	}
-	return b
-}
-
-func (w *wasmStreamSubscriber) send(eventType string, payload interface{}) {
-	if w.allow != nil && !w.allow() {
-		return
-	}
+func (w *wasmStreamSubscriber) send(eventType string, payload any) {
 	w.flushTelemetry()
 	w.mu.RLock()
 	cb := w.callback
@@ -151,15 +122,12 @@ func (w *wasmStreamSubscriber) OnTelemetryFrame(frame domain.TimerTelemetryFrame
 		w.send("telemetry", frame)
 		return
 	}
-	if w.allow != nil && !w.allow() {
-		return
-	}
 	w.batchMu.Lock()
 	w.pending = append(w.pending, frame)
 	immediate := w.batching == 0
 	w.batchMu.Unlock()
 	if immediate {
-		w.flushTelemetry() // e.g. simulator ticks: deliver right away
+		w.flushTelemetry()
 	}
 }
 
@@ -172,17 +140,34 @@ func (w *wasmStreamSubscriber) OnDetectionFiltered(f domain.FilteredDetection) {
 }
 
 func (w *wasmStreamSubscriber) OnLapCompleted(lap domain.LapRecord, summaries []domain.PilotTrackSummary) {
-	w.send("lap", map[string]interface{}{
+	w.send("lap", map[string]any{
 		"lap":       lap,
 		"summaries": summaries,
 	})
 }
 
 func (w *wasmStreamSubscriber) OnConfigUpdated(pilots []domain.PilotSlot, gates []domain.TrackGate) {
-	w.send("config", map[string]interface{}{
+	var timers []domain.DetectedTimer
+	if w.engine != nil {
+		timers = w.engine.DetectedTimersSnapshot()
+	}
+	w.send("config", map[string]any{
 		"pilots": pilots,
 		"gates":  gates,
+		"timers": timers,
 	})
+}
+
+func (w *wasmStreamSubscriber) OnRaceUpdated(state domain.RaceTournamentState, eventState domain.EventManagerState, announcement *domain.RaceAnnouncement) {
+	w.send("race", map[string]any{
+		"raceState":    state,
+		"eventState":   eventState,
+		"announcement": announcement,
+	})
+}
+
+func (w *wasmStreamSubscriber) OnPracticeUpdated(state domain.PracticeManagerState) {
+	w.send("practice", state)
 }
 
 type persistedSimBundle struct {
@@ -190,9 +175,6 @@ type persistedSimBundle struct {
 	Options ingest.SimPersistedOptions   `json:"options"`
 }
 
-// bootStateString returns `globalThis.__slaprfBootState[field]` — the persisted engine state the
-// TypeScript app loads from IndexedDB (web/src/services/engine_persistence.ts) and hands over
-// before starting this runtime — or "" when absent. Persistence itself lives entirely in TS.
 func bootStateString(field string) string {
 	bs := js.Global().Get("__slaprfBootState")
 	if bs.Type() != js.TypeObject {
@@ -215,40 +197,82 @@ func loadSimFromBootState(simEngine *tracker.Engine, sim *ingest.TrackSimulator)
 		return false
 	}
 	if !ingest.SimStateCompatible(payload.Options) {
-		return false // Saved by an older sim model: start from the default course instead
+		return false
 	}
 	simEngine.RestoreState(payload.Engine, true)
 	sim.RestoreOptions(payload.Options)
 	return true
 }
 
-func loadRealFromBootState(realEngine *tracker.Engine) bool {
-	raw := bootStateString("real")
-	if raw == "" {
-		return false
+func ingestRawHubStream(rx *ingest.HubFrameDecoder, eng *tracker.Engine, raw []byte) {
+	nowUs := eng.NowUs()
+	pos := 0
+	for pos+2 <= len(raw) {
+		if raw[pos] != 0x1E {
+			pos++
+			continue
+		}
+		pktLen := int(raw[pos+1])
+		if pos+2+pktLen > len(raw) {
+			break
+		}
+		rx.IngestPacket(raw[pos+2:pos+2+pktLen], nowUs)
+		pos += 2 + pktLen
 	}
-	var state tracker.PersistedEngineState
-	if err := json.Unmarshal([]byte(raw), &state); err != nil {
-		return false
-	}
-	realEngine.RestoreState(state, false)
-	return true
 }
 
 func main() {
 	simEngine := tracker.NewEngine()
-	realEngine := tracker.NewRealEngine()
 	sim := ingest.NewTrackSimulator(simEngine)
-	if !loadSimFromBootState(simEngine, sim) {
-		sim.Prewarm(45 * time.Second)
-	}
-	_ = loadRealFromBootState(realEngine)
-	sim.Start()
+	simHubRx := ingest.NewHubFrameDecoder(simEngine)
+	simStreamSub := &wasmStreamSubscriber{engine: simEngine}
+	simEngine.Subscribe(simStreamSub)
+	sim.SetTelemetryBatchHooks(simStreamSub.beginBatch, simStreamSub.endBatch)
 
-	hubRx := ingest.NewHubFrameDecoder(realEngine)
+	var simHubUSBConnected atomic.Bool
+	var simHubUsbMu sync.RWMutex
+	var simHubUsbCb js.Value
+	sim.SetHubFrameSink(func(raw []byte) {
+		if len(raw) == 0 {
+			return
+		}
+		if simHubUSBConnected.Load() {
+			ingestRawHubStream(simHubRx, simEngine, raw)
+		}
+		simHubUsbMu.RLock()
+		cb := simHubUsbCb
+		simHubUsbMu.RUnlock()
+		if cb.IsUndefined() || cb.IsNull() {
+			return
+		}
+		u8 := js.Global().Get("Uint8Array").New(len(raw))
+		js.CopyBytesToJS(u8, raw)
+		cb.Invoke(u8)
+	})
+
+	sim.SetSlapRFModeSyncHook(func() {
+		simHubRx.Reset()
+		if simHubUSBConnected.Load() && sim.IsRunning() {
+			simStreamSub.beginBatch()
+			ingestRawHubStream(simHubRx, simEngine, sim.BuildHubHelloStream())
+			simStreamSub.endBatch()
+		} else {
+			simEngine.SetAllTimersOffline()
+		}
+	})
+
+	_ = loadSimFromBootState(simEngine, sim)
+	if simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF {
+		simEngine.SetAllTimersOffline()
+	} else {
+		sim.SyncHardwareMode()
+	}
+	sim.Start()
+	sim.SetRunning(true) // Standalone Browser Demo Mode always runs Simulator ON
+
 	var hubCmdMu sync.RWMutex
 	var hubCmdCb js.Value
-	hubRx.SetOutboundSender(func(pkt []byte) {
+	simHubRx.SetOutboundSender(func(pkt []byte) {
 		hubCmdMu.RLock()
 		cb := hubCmdCb
 		hubCmdMu.RUnlock()
@@ -260,25 +284,37 @@ func main() {
 		cb.Invoke(u8)
 	})
 
-	laprfSrv := laprf.NewServer(simEngine) // api.NewServer re-points it at the active engine
-	srv := api.NewServer(simEngine, sim, laprfSrv, realEngine)
+	laprfSrv := laprf.NewServer(simEngine)
+	srv := api.NewServer(simEngine, sim, laprfSrv, simEngine)
+	// Enforce Simulator ON even if /api/sim/toggle or /api/sim/mode is called inside Demo WASM
+	srv.SetHooks(api.ServerHooks{
+		OnModeChanged: func(running bool) {
+			if !running {
+				sim.SetRunning(true)
+			}
+		},
+	})
 	handler := srv.Handler()
 
-	simStreamSub := &wasmStreamSubscriber{allow: func() bool { return sim.IsRunning() }}
-	realStreamSub := &wasmStreamSubscriber{allow: func() bool { return !sim.IsRunning() }}
-	simEngine.Subscribe(simStreamSub)
-	realEngine.Subscribe(realStreamSub)
+	// Advance live heat countdowns and race timers natively inside WASM at 10 Hz so the UI
+	// never needs to poll POST /api/race/tick across the JS/JSON boundary.
+	go func() {
+		ticker := time.NewTicker(100 * time.Millisecond)
+		defer ticker.Stop()
+		for range ticker.C {
+			simEngine.TickRaceClock()
+		}
+	}()
 
 	apiObj := js.Global().Get("Object").New()
 
-	// request(method: string, url: string, bodyStr?: string) => { status: number, body: string }
 	apiObj.Set("request", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		method := http.MethodGet
-		if len(args) > 0 {
-			method = args[0].String()
+		if len(args) > 0 && args[0].Type() == js.TypeString && args[0].String() != "" {
+			method = strings.ToUpper(strings.TrimSpace(args[0].String()))
 		}
 		url := "/api/state"
-		if len(args) > 1 {
+		if len(args) > 1 && args[1].Type() == js.TypeString && args[1].String() != "" {
 			url = args[1].String()
 		}
 		var bodyReader *strings.Reader
@@ -292,48 +328,58 @@ func main() {
 		if bodyReader.Len() > 0 {
 			req.Header.Set("Content-Type", "application/json")
 		}
+		if len(args) > 3 && args[3].Type() == js.TypeObject && !args[3].IsNull() {
+			keys := js.Global().Get("Object").Call("keys", args[3])
+			for i := 0; i < keys.Length(); i++ {
+				k := keys.Index(i).String()
+				v := args[3].Get(k)
+				if v.Type() == js.TypeString {
+					req.Header.Set(k, v.String())
+				}
+			}
+		}
+
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 
+		hdrObj := js.Global().Get("Object").New()
+		for k, vals := range rec.Header() {
+			if len(vals) > 0 {
+				hdrObj.Set(strings.ToLower(k), strings.Join(vals, ", "))
+			}
+		}
+
 		res := js.Global().Get("Object").New()
 		res.Set("status", rec.Code)
+		res.Set("headers", hdrObj)
 		res.Set("body", rec.Body.String())
 		return res
 	}))
 
-	// onStream(callback: ((envelopeJson: string) => void) | null)
 	apiObj.Set("onStream", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		if len(args) > 0 {
 			simStreamSub.setCallback(args[0])
-			realStreamSub.setCallback(args[0])
 		} else {
 			simStreamSub.setCallback(js.Undefined())
-			realStreamSub.setCallback(js.Undefined())
 		}
 		return nil
 	}))
 
-	// onTelemetry(callback: ((batch: Uint8Array) => void) | null): binary telemetry batches
-	// (see encodeTelemetryBatch). While set, telemetry no longer goes through onStream.
 	apiObj.Set("onTelemetry", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		cb := js.Undefined()
 		if len(args) > 0 && args[0].Type() == js.TypeFunction {
 			cb = args[0]
 		}
 		simStreamSub.setTelemetryCallback(cb)
-		realStreamSub.setTelemetryCallback(cb)
 		return nil
 	}))
 
-	// setRunning(running: boolean)
-	apiObj.Set("setRunning", js.FuncOf(func(_ js.Value, args []js.Value) any {
-		if len(args) > 0 {
-			sim.SetRunning(args[0].Bool())
-		}
+	apiObj.Set("setRunning", js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		// Standalone Browser Demo Mode always keeps Simulator running
+		sim.SetRunning(true)
 		return nil
 	}))
 
-	// ingestHubPacket(bytes: Uint8Array) => number (frames decoded into realEngine)
 	apiObj.Set("ingestHubPacket", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		if len(args) == 0 || args[0].IsUndefined() || args[0].IsNull() {
 			return 0
@@ -344,14 +390,11 @@ func main() {
 		}
 		buf := make([]byte, length)
 		js.CopyBytesToGo(buf, args[0])
-		realStreamSub.beginBatch()
-		defer realStreamSub.endBatch()
-		return hubRx.IngestPacket(buf, realEngine.NowUs())
+		simStreamSub.beginBatch()
+		defer simStreamSub.endBatch()
+		return simHubRx.IngestPacket(buf, simEngine.NowUs())
 	}))
 
-	// ingestHubPackets(packed: Uint8Array) => number: every Hub frame of one USB read, packed as
-	// [len u8][frame bytes] records, in one call (one copy, one arrival timestamp, and one
-	// telemetry batch back to JS instead of per-frame boundary crossings).
 	var packBuf []byte
 	apiObj.Set("ingestHubPackets", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		if len(args) == 0 || args[0].IsUndefined() || args[0].IsNull() {
@@ -366,9 +409,9 @@ func main() {
 		}
 		buf := packBuf[:length]
 		js.CopyBytesToGo(buf, args[0])
-		nowUs := realEngine.NowUs()
-		realStreamSub.beginBatch()
-		defer realStreamSub.endBatch()
+		nowUs := simEngine.NowUs()
+		simStreamSub.beginBatch()
+		defer simStreamSub.endBatch()
 		total := 0
 		for o := 0; o < length; {
 			n := int(buf[o])
@@ -376,13 +419,12 @@ func main() {
 			if o+n > length {
 				break
 			}
-			total += hubRx.IngestPacket(buf[o:o+n], nowUs)
+			total += simHubRx.IngestPacket(buf[o:o+n], nowUs)
 			o += n
 		}
 		return total
 	}))
 
-	// onHubCommand(callback: ((pkt: Uint8Array) => void) | null)
 	apiObj.Set("onHubCommand", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		hubCmdMu.Lock()
 		if len(args) > 0 {
@@ -394,44 +436,87 @@ func main() {
 		return nil
 	}))
 
-	// pushHubChannels()
 	apiObj.Set("pushHubChannels", js.FuncOf(func(_ js.Value, _ []js.Value) any {
-		hubRx.PushActiveChannels()
+		simHubRx.PushActiveChannels()
 		return nil
 	}))
 
-	// exportRealState() => string (JSON of realEngine state)
+	apiObj.Set("setSimHubUsbConnected", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		connected := len(args) > 0 && args[0].Truthy()
+		simHubUSBConnected.Store(connected)
+		if !connected {
+			if simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF {
+				simEngine.SetAllTimersOffline()
+			}
+			return nil
+		}
+		if sim.IsRunning() && simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF {
+			simHubRx.Reset()
+			simStreamSub.beginBatch()
+			ingestRawHubStream(simHubRx, simEngine, sim.BuildHubHelloStream())
+			simStreamSub.endBatch()
+		}
+		return nil
+	}))
+
+	apiObj.Set("onSimHubUsbBytes", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		simHubUsbMu.Lock()
+		if len(args) > 0 && args[0].Type() == js.TypeFunction {
+			simHubUsbCb = args[0]
+		} else {
+			simHubUsbCb = js.Undefined()
+		}
+		simHubUsbMu.Unlock()
+		return nil
+	}))
+
+	apiObj.Set("flushSimHubHellos", js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		raw := sim.BuildHubHelloStream()
+		u8 := js.Global().Get("Uint8Array").New(len(raw))
+		if len(raw) > 0 {
+			js.CopyBytesToJS(u8, raw)
+		}
+		return u8
+	}))
+
+	apiObj.Set("setSimTimerDiagState", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		if len(args) < 5 {
+			return nil
+		}
+		sim.SetTimerDiagState(
+			uint8(args[0].Int()),
+			args[1].Bool(),
+			args[2].Bool(),
+			args[3].Bool(),
+			uint8(args[4].Int()),
+		)
+		return nil
+	}))
+
+	apiObj.Set("getSimTimerRssi", js.FuncOf(func(_ js.Value, args []js.Value) any {
+		if len(args) < 1 {
+			return js.Null()
+		}
+		rssi, ok := sim.TimerRSSI(uint8(args[0].Int()))
+		if !ok {
+			return js.Null()
+		}
+		arr := js.Global().Get("Array").New(len(rssi))
+		for i, v := range rssi {
+			arr.SetIndex(i, float64(v))
+		}
+		return arr
+	}))
+
 	apiObj.Set("exportRealState", js.FuncOf(func(_ js.Value, _ []js.Value) any {
-		b, err := json.Marshal(realEngine.ExportState())
-		if err != nil {
-			return ""
-		}
-		return string(b)
+		return ""
+	}))
+	apiObj.Set("restoreRealState", js.FuncOf(func(_ js.Value, _ []js.Value) any {
+		return false
 	}))
 
-	// restoreRealState(jsonStr: string) => boolean
-	apiObj.Set("restoreRealState", js.FuncOf(func(_ js.Value, args []js.Value) any {
-		if len(args) == 0 || args[0].Type() != js.TypeString {
-			return false
-		}
-		raw := args[0].String()
-		if raw == "" {
-			return false
-		}
-		var state tracker.PersistedEngineState
-		if err := json.Unmarshal([]byte(raw), &state); err != nil {
-			return false
-		}
-		realEngine.RestoreState(state, false)
-		return true
-	}))
-
-	// exportSimState() => string (JSON of simulated engine + simulator options)
 	apiObj.Set("exportSimState", js.FuncOf(func(_ js.Value, _ []js.Value) any {
-		payload := struct {
-			Engine  tracker.PersistedEngineState `json:"engine"`
-			Options ingest.SimPersistedOptions   `json:"options"`
-		}{
+		payload := persistedSimBundle{
 			Engine:  simEngine.ExportState(),
 			Options: sim.ExportOptions(),
 		}
@@ -442,7 +527,6 @@ func main() {
 		return string(b)
 	}))
 
-	// restoreSimState(jsonStr: string) => boolean
 	apiObj.Set("restoreSimState", js.FuncOf(func(_ js.Value, args []js.Value) any {
 		if len(args) == 0 || args[0].Type() != js.TypeString {
 			return false
@@ -451,10 +535,7 @@ func main() {
 		if raw == "" {
 			return false
 		}
-		var payload struct {
-			Engine  tracker.PersistedEngineState `json:"engine"`
-			Options ingest.SimPersistedOptions   `json:"options"`
-		}
+		var payload persistedSimBundle
 		if err := json.Unmarshal([]byte(raw), &payload); err != nil {
 			return false
 		}
@@ -463,10 +544,9 @@ func main() {
 		}
 		simEngine.RestoreState(payload.Engine, true)
 		sim.RestoreOptions(payload.Options)
+		sim.SetRunning(true)
 		return true
 	}))
-
-	registerLiveTimeAPI(apiObj, laprfSrv)
 
 	js.Global().Set("slaprfWasm", apiObj)
 	if cb := js.Global().Get("__slaprfWasmOnReady"); cb.Type() == js.TypeFunction {

@@ -68,3 +68,29 @@ func TestCrossingTimestampIsNearClosestApproach(t *testing.T) {
 		t.Fatalf("crossing timestamp off by %.1f ms", errMs)
 	}
 }
+
+func TestDualEntryExitHysteresisRejectsMidPassDip(t *testing.T) {
+	det := NewChannelDetector(1, 1)
+	const frameUs = 20_000
+	ts := uint64(1_000_000)
+
+	// Signal enters at -55 dBm, hits -30 dBm, dips to -48 dBm (antenna null, still > -55 enter & > -66 exit),
+	// rises to the true -26 dBm peak, then falls below the -66 dBm exit threshold.
+	profile := []float32{
+		-80, -76, -70, -62, -54, -46, -38, -31, -30, -35, -42, -48, -46, -36, -28, -26, -26, -26, -31, -40, -50, -60, -68, -74, -80,
+	}
+	var out []*CrossingCandidate
+	for _, rssi := range profile {
+		if c := det.ProcessSample(rssi, ts, -55, -66, 300_000); c != nil {
+			out = append(out, c)
+		}
+		ts += frameUs
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected 1 crossing across mid-pass dip, got %d", len(out))
+	}
+	if out[0].PeakRSSIDbm < -29 {
+		t.Fatalf("expected peak near true -26 dBm smoothed maximum, got %.1f dBm", out[0].PeakRSSIDbm)
+	}
+}
+

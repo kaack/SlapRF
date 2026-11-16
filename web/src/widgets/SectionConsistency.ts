@@ -54,17 +54,15 @@ export class SectionStats extends Component {
       </header>`;
 
     const { rows, ready, ranked } = loadConsistency(this.store);
-    if (ready.length === 0) {
-      this.el.innerHTML = head + renderEmpty("Not enough laps yet", `Appears after ${MIN_SAMPLES} laps through each section.`);
-      return;
-    }
-    const top = ranked[0].givenAway >= SIGNIFICANT_GAP_SEC ? ranked[0] : undefined;
+    const top = ready.length > 0 && ranked[0].givenAway >= SIGNIFICANT_GAP_SEC ? ranked[0] : undefined;
 
-    const bodyHtml = rows
-      .map((r) => {
-        const enough = r.samples >= MIN_SAMPLES;
-        const isTop = r === top;
-        return `
+    const bodyHtml =
+      rows.length > 0
+        ? rows
+            .map((r) => {
+              const enough = r.samples >= MIN_SAMPLES;
+              const isTop = r === top;
+              return `
                   <tr class="${isTop ? "is-top" : ""}">
                     <td>
                       <span class="stats-sec">
@@ -80,8 +78,11 @@ export class SectionStats extends Component {
                     <td class="num mono">${r.typicalExitMph.toFixed(0)} <span class="muted">/ ${r.bestExitMph.toFixed(0)} mph</span></td>
                     <td class="num mono muted">${enough ? r.samples : `${r.samples}/${MIN_SAMPLES}`}</td>
                   </tr>`;
-      })
-      .join("");
+            })
+            .join("")
+        : `<tr class="table-empty-row">
+             <td colspan="6" class="muted" style="text-align:center;padding:20px 12px">No section passes recorded yet — appears after ${MIN_SAMPLES} laps through each section.</td>
+           </tr>`;
 
     const existingBody = this.el.querySelector<HTMLElement>("table.stats-table tbody");
     if (existingBody) {

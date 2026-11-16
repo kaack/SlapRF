@@ -9,6 +9,8 @@
  * - Health sparklines (sweep duration vs budget, free heap, frames/s to laptop, live rate & drops)
  * - CSV and PNG export helpers
  */
+import { adaptColorForTheme, getAppTheme } from "../../core/theme";
+import { lookupBandChannelByFreqMHz } from "../../core/vtx_channels";
 import { LiveSample, ScanResult, TimerStatus } from "../../services/timer_console";
 
 export const RACEBAND = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
@@ -26,6 +28,11 @@ export const CHANNEL_COLORS = [
   "#ec4899", // Ch 7 - Pink
   "#84cc16", // Ch 8 - Lime
 ];
+
+/** Theme-adapted channel color for plots, meters, and legend dots. */
+export function channelColor(chIndex: number): string {
+  return adaptColorForTheme(CHANNEL_COLORS[((chIndex % CHANNEL_COLORS.length) + CHANNEL_COLORS.length) % CHANNEL_COLORS.length]);
+}
 
 /** 5 GHz Wi-Fi UNII bands overlapping 5180–5917 MHz (§5.5). */
 export interface WifiBandBlock {
@@ -57,6 +64,8 @@ export interface ThemeTokens {
   bg: string;
   surface: string;
   surface2: string;
+  chartSurface: string;
+  chartBorder: string;
   border: string;
   borderStrong: string;
   text: string;
@@ -72,15 +81,33 @@ export interface ThemeTokens {
 
 let cachedTokens: ThemeTokens | null = null;
 
+export function invalidateDebugChartThemeCache(): void {
+  cachedTokens = null;
+}
+
+function hexAlpha(hex: string, alpha: number): string {
+  const clean = hex.trim();
+  if (!clean.startsWith("#") || clean.length < 7) return clean;
+  const n = parseInt(clean.slice(1, 7), 16);
+  if (!Number.isFinite(n)) return clean;
+  return `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, ${alpha})`;
+}
+
 export function getThemeTokens(): ThemeTokens {
   if (cachedTokens) return cachedTokens;
   const s = getComputedStyle(document.documentElement);
   const v = (name: string, fallback: string) => s.getPropertyValue(name).trim() || fallback;
+  const rawChartSurface = v("--chart-surface", "");
+  const rawChartBorder = v("--chart-border", "");
+  const surface = v("--surface", "#111317");
+  const border = v("--border", "#22252c");
   cachedTokens = {
     bg: v("--bg", "#0b0c0f"),
-    surface: v("--surface", "#111317"),
+    surface,
     surface2: v("--surface-2", "#15181d"),
-    border: v("--border", "#22252c"),
+    chartSurface: rawChartSurface && rawChartSurface !== "transparent" ? rawChartSurface : surface,
+    chartBorder: rawChartBorder && rawChartBorder !== "transparent" ? rawChartBorder : border,
+    border,
     borderStrong: v("--border-strong", "#2d3139"),
     text: v("--text", "#ecedef"),
     text2: v("--text-2", "#a3a8b3"),
@@ -96,8 +123,17 @@ export function getThemeTokens(): ThemeTokens {
 }
 
 export function racebandName(f: number): string {
-  const i = RACEBAND.indexOf(f);
-  return i >= 0 ? `R${i + 1}` : "";
+  return lookupBandChannelByFreqMHz(f)?.shortCode ?? "";
+}
+
+export function hardwareBandLabel(f: number): string {
+  return lookupBandChannelByFreqMHz(f)?.shortCode ?? "";
+}
+
+export function formatHardwareFreq(f: number): string {
+  if (!f || f <= 0) return "Disabled";
+  const band = hardwareBandLabel(f);
+  return band ? `${band} · ${f} MHz` : `${f} MHz`;
 }
 
 /** Resize a canvas to match its CSS box and devicePixelRatio; returns 2D context in CSS pixels. */
@@ -142,6 +178,7 @@ export interface ChannelNoiseRow {
   bandLabel: string;
   pilotCallsign: string;
   enterThreshold: number;
+  exitThreshold?: number;
   samples: number;
   mean: number | null;
   sd: number | null;
@@ -167,15 +204,22 @@ export class SignalRingBuffer {
   public points: SignalPoint[] = [];
   public droppedLines = 0;
   private synthN = 0;
+  private playheadN = 0;
+  private lastPlayheadPerfMs = 0;
+  private lastPushPerfMs = 0;
 
   public clear(): void {
     this.points = [];
     this.droppedLines = 0;
     this.synthN = 0;
+    this.playheadN = 0;
+    this.lastPlayheadPerfMs = 0;
+    this.lastPushPerfMs = 0;
   }
 
   public push(sample: LiveSample, sweepHz = 50, liveMode: 1 | 2 = 2): void {
     const now = performance.now();
+    this.lastPushPerfMs = now;
     const prev = this.points.length ? this.points[this.points.length - 1] : null;
     const expectedStep = liveMode === 2 ? 1 : Math.max(1, Math.round(sweepHz / 10));
     let n: number;
@@ -192,6 +236,7 @@ export class SignalRingBuffer {
         // Timer rebooted and counter reset
         this.points = [];
         this.droppedLines = 0;
+        this.playheadN = 0;
       }
       this.synthN = n;
     } else {
@@ -220,16 +265,57 @@ export class SignalRingBuffer {
     return this.points.length ? this.points[this.points.length - 1].n : 0;
   }
 
+  /**
+   * Smooth 60/120 FPS floating-point sweep playhead.
+   * Advances continuously using `performance.now()` between 20 ms serial lines so the
+   * Signal-over-time chart glides at the display refresh rate instead of stepping by 1 sweep every 20 ms.
+   */
+  public smoothLatestN(sweepHz = 50): number {
+    const latest = this.latestN();
+    if (latest === 0 || !this.points.length) return 0;
+    const nowMs = performance.now();
+    if (this.playheadN > 0 && Math.abs(nowMs - this.lastPlayheadPerfMs) < 0.5) {
+      return this.playheadN;
+    }
+    if (this.lastPushPerfMs === 0 || nowMs - this.lastPushPerfMs > 350) {
+      this.playheadN = latest;
+      this.lastPlayheadPerfMs = nowMs;
+      return latest;
+    }
+    const dtSec = Math.max(0, Math.min(0.1, (nowMs - this.lastPlayheadPerfMs) / 1000));
+    this.lastPlayheadPerfMs = nowMs;
+    const dtSweeps = dtSec * sweepHz;
+    // Target ~1.5 sweeps behind `latest` so the unfinalized last spline segment `[latest-1, latest]`
+    // sits just outside the right clip edge and every visible curve segment has locked tangents.
+    const targetN = Math.max(this.earliestN(), latest - 1.5);
+    if (this.playheadN === 0 || Math.abs(targetN - this.playheadN) > sweepHz * 0.4) {
+      this.playheadN = targetN;
+      return this.playheadN;
+    }
+    const errorN = targetN - (this.playheadN + dtSweeps);
+    const maxCorrectionN = dtSweeps * 0.35;
+    const correctionN = Math.max(-maxCorrectionN, Math.min(maxCorrectionN, errorN * 0.06));
+    this.playheadN += dtSweeps + correctionN;
+    return this.playheadN;
+  }
+
   public earliestN(): number {
     return this.points.length ? this.points[0].n : 0;
   }
 
   /** Slice points within `[endN - windowSec * sweepHz, endN]` (or up to the latest point when `endN` is null). */
-  public windowPoints(windowSec: number, sweepHz = 50, endN: number | null = null, padSweeps = 0): SignalPoint[] {
+  public windowPoints(
+    windowSec: number,
+    sweepHz = 50,
+    endN: number | null = null,
+    padSweeps = 0,
+    maxCapN: number | null = null
+  ): SignalPoint[] {
     if (!this.points.length) return [];
     const targetEndN = endN ?? this.points[this.points.length - 1].n;
     const minN = targetEndN - windowSec * sweepHz - padSweeps;
-    const maxN = targetEndN + padSweeps;
+    const rawMaxN = targetEndN + padSweeps;
+    const maxN = maxCapN !== null && maxCapN > 0 ? Math.min(rawMaxN, maxCapN) : rawMaxN;
     // Binary search for minN
     let lo = 0;
     let hi = this.points.length - 1;
@@ -238,7 +324,7 @@ export class SignalRingBuffer {
       if (this.points[mid].n < minN) lo = mid + 1;
       else hi = mid;
     }
-    if (endN === null && padSweeps <= 0) {
+    if (endN === null && padSweeps <= 0 && maxCapN === null) {
       return this.points.slice(lo);
     }
     // Binary search for first point > maxN
@@ -260,18 +346,28 @@ export class SignalRingBuffer {
     freqs: number[],
     pilots: PilotThresholdInfo[],
     sweepHz = 50,
-    endN: number | null = null
+    endN: number | null = null,
+    maxCapN: number | null = null,
+    hwOpts?: {
+      perNodeEnter?: number[];
+      perNodeExit?: number[];
+      nodeLabels?: string[];
+      useMinAsFloor?: boolean;
+    }
   ): SignalStatsSummary {
-    const pts = this.windowPoints(windowSec, sweepHz, endN);
+    const pts = this.windowPoints(windowSec, sweepHz, endN, 0, endN !== null ? maxCapN : null);
     if (pts.length < 2) {
       const emptyRows: ChannelNoiseRow[] = freqs.map((f, i) => {
         const pilot = pilots.find((p) => p.enabled && p.frequencyMhz === f);
+        const enterThr = hwOpts?.perNodeEnter?.[i] ?? pilot?.enterThreshold ?? -58;
+        const exitThr = hwOpts?.perNodeExit?.[i];
         return {
           index: i,
           freqMHz: f,
-          bandLabel: racebandName(f),
-          pilotCallsign: pilot?.callsign ?? "",
-          enterThreshold: pilot?.enterThreshold ?? -58,
+          bandLabel: hardwareBandLabel(f) || racebandName(f),
+          pilotCallsign: hwOpts?.nodeLabels?.[i] ?? pilot?.callsign ?? "",
+          enterThreshold: enterThr,
+          exitThreshold: exitThr,
           samples: 0,
           mean: null,
           sd: null,
@@ -301,10 +397,12 @@ export class SignalRingBuffer {
 
     const rows: ChannelNoiseRow[] = freqs.map((f, i) => {
       const pilot = pilots.find((p) => p.enabled && p.frequencyMhz === f);
-      const enterThr = pilot?.enterThreshold ?? -58;
+      const enterThr = hwOpts?.perNodeEnter?.[i] ?? pilot?.enterThreshold ?? -58;
+      const exitThr = hwOpts?.perNodeExit?.[i];
       let sum = 0;
       let sumSq = 0;
       let max = -128;
+      let minVal = Infinity;
       let count = 0;
       let hitsSum = 0;
       let aboveFloor10 = 0;
@@ -322,18 +420,24 @@ export class SignalRingBuffer {
         sum += v;
         sumSq += v * v;
         if (v > max) max = v;
-        const effFloor = fl !== undefined && fl > -127 ? fl : -91;
+        if (v < minVal) minVal = v;
+        const effFloor = fl !== undefined && fl > -127 ? fl : hwOpts?.useMinAsFloor ? minVal : -91;
         if (v > effFloor + 10) aboveFloor10++;
         if (v >= enterThr) wouldTrigger++;
+      }
+
+      if (latestFloor === null && hwOpts?.useMinAsFloor && Number.isFinite(minVal)) {
+        latestFloor = minVal;
       }
 
       if (count === 0) {
         return {
           index: i,
           freqMHz: f,
-          bandLabel: racebandName(f),
-          pilotCallsign: pilot?.callsign ?? "",
+          bandLabel: hardwareBandLabel(f) || racebandName(f),
+          pilotCallsign: hwOpts?.nodeLabels?.[i] ?? pilot?.callsign ?? "",
           enterThreshold: enterThr,
+          exitThreshold: exitThr,
           samples: 0,
           mean: null,
           sd: null,
@@ -353,9 +457,10 @@ export class SignalRingBuffer {
       return {
         index: i,
         freqMHz: f,
-        bandLabel: racebandName(f),
-        pilotCallsign: pilot?.callsign ?? "",
+        bandLabel: hardwareBandLabel(f) || racebandName(f),
+        pilotCallsign: hwOpts?.nodeLabels?.[i] ?? pilot?.callsign ?? "",
         enterThreshold: enterThr,
+        exitThreshold: exitThr,
         samples: count,
         mean,
         sd,
@@ -394,6 +499,8 @@ export interface SignalChartOptions {
   showHitLine: boolean;
   showThresholds: boolean;
   pilots: PilotThresholdInfo[];
+  unitLabel?: string;
+  nodeThresholds?: Array<{ label: string; enter: number; exit?: number }>;
   hover: { x: number; y: number } | null;
 }
 
@@ -475,7 +582,10 @@ export function drawSignalOverTimeCanvas(
   const plotH = Math.max(10, H - T - B);
 
   ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = tokens.chartSurface;
+  ctx.fillRect(0, 0, W, H);
 
+  const unitLbl = opts.unitLabel || "dBm";
   const yMin = opts.yMinDbm ?? DBM_MIN;
   const yMax = Math.max(yMin + 4, opts.yMaxDbm ?? DBM_MAX);
   const ySpan = yMax - yMin;
@@ -487,8 +597,8 @@ export function drawSignalOverTimeCanvas(
     return yMin + (1 - (y - T) / plotH) * ySpan;
   };
 
-  // Horizontal grid lines (dBm) with adaptive step when Y-zoomed
-  const dStep = ySpan <= 12 ? 2 : ySpan <= 30 ? 5 : 10;
+  // Horizontal grid lines with adaptive step across both dBm (-100..-30) and RotorHazard RSSI (0..255)
+  const dStep = ySpan <= 12 ? 2 : ySpan <= 30 ? 5 : ySpan <= 90 ? 10 : ySpan <= 160 ? 25 : 50;
   ctx.font = `10px ${tokens.fontMono}`;
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
@@ -508,8 +618,9 @@ export function drawSignalOverTimeCanvas(
   // Vertical time grid lines (labelled relative to now or to when the view was paused, matching PilotRssiChart)
   const windowSweeps = Math.max(1, opts.windowSec * opts.sweepHz);
   const latestN = ring.latestN();
-  const viewEndN = opts.endN ?? latestN;
-  const refN = opts.endN === null || opts.endN === undefined ? latestN : (opts.refN ?? latestN);
+  const isLiveView = opts.endN === null || opts.endN === undefined;
+  const viewEndN = isLiveView ? ring.smoothLatestN(opts.sweepHz) : opts.endN!;
+  const refN = isLiveView ? viewEndN : (opts.refN ?? latestN);
   const startN = viewEndN - windowSweeps;
   const xOfN = (n: number) => L + ((n - startN) / windowSweeps) * plotW;
 
@@ -558,18 +669,23 @@ export function drawSignalOverTimeCanvas(
     }
   }
 
-  const pts = ring.windowPoints(opts.windowSec, opts.sweepHz, opts.endN ?? null, 3);
+  const capN = opts.endN !== null && opts.endN !== undefined ? refN : null;
+  const pts = ring.windowPoints(opts.windowSec, opts.sweepHz, opts.endN ?? null, 3, capN);
   const readoutEl = canvas.parentElement?.parentElement?.querySelector<HTMLElement>("[data-signal-readout]") ?? null;
   const setSignalReadout = (html: string) => {
     if (readoutEl && readoutEl.innerHTML !== html) readoutEl.innerHTML = html;
   };
   if (!pts.length) {
-    setSignalReadout(`<span class="note">Point at chart to inspect channel, dBm &amp; sweep age</span>`);
+    setSignalReadout(`<span class="note">Point at chart to inspect ${opts.nodeThresholds ? "node, RSSI &amp; sample age" : "channel, dBm &amp; sweep age"}</span>`);
     ctx.fillStyle = tokens.text3;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
     ctx.font = `12px ${tokens.fontSans}`;
-    ctx.fillText("Waiting for live sweep samples…", L + plotW / 2, T + plotH / 2);
+    ctx.fillText(
+      opts.nodeThresholds ? "Waiting for live RotorHazard heartbeat samples…" : "Waiting for live sweep samples…",
+      L + plotW / 2,
+      T + plotH / 2
+    );
     return;
   }
 
@@ -579,37 +695,89 @@ export function drawSignalOverTimeCanvas(
   ctx.rect(L, T, plotW, plotH);
   ctx.clip();
 
-  // Pilot enter threshold lines (when enabled and matched by frequency)
+  // Hardware node or pilot enter/exit threshold lines
   if (opts.showThresholds) {
     const drawnThresholds = new Set<string>();
-    opts.freqs.forEach((f, ch) => {
-      if (!opts.enabledChannels[ch]) return;
-      const pilot = opts.pilots.find((p) => p.enabled && p.frequencyMhz === f);
-      const thr = pilot ? pilot.enterThreshold : ch === 0 ? -58 : null;
-      if (thr === null) return;
-      const key = `${thr}:${pilot ? CHANNEL_COLORS[ch] : tokens.warn}`;
-      if (drawnThresholds.has(key)) return;
-      drawnThresholds.add(key);
+    if (opts.nodeThresholds && opts.nodeThresholds.length > 0) {
+      opts.nodeThresholds.forEach((nt, ch) => {
+        if (!opts.enabledChannels[ch] || !nt || nt.enter <= 0) return;
+        const col = channelColor(ch);
+        const enterKey = `enter:${nt.enter}`;
+        if (!drawnThresholds.has(enterKey)) {
+          drawnThresholds.add(enterKey);
+          const yEn = Math.round(yOf(nt.enter)) + 0.5;
+          ctx.strokeStyle = col;
+          ctx.globalAlpha = 0.58;
+          ctx.lineWidth = 1;
+          ctx.setLineDash([5, 4]);
+          ctx.beginPath();
+          ctx.moveTo(L, yEn);
+          ctx.lineTo(W - R, yEn);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.globalAlpha = 0.85;
+          ctx.fillStyle = col;
+          ctx.font = `9.5px ${tokens.fontMono}`;
+          ctx.textAlign = "left";
+          ctx.textBaseline = "bottom";
+          ctx.fillText(`${nt.label} enter ${Math.round(nt.enter)}`, L + 6, yEn - 2);
+          ctx.globalAlpha = 1;
+        }
+        if (nt.exit !== undefined && nt.exit > 0) {
+          const exitKey = `exit:${nt.exit}`;
+          if (!drawnThresholds.has(exitKey)) {
+            drawnThresholds.add(exitKey);
+            const yEx = Math.round(yOf(nt.exit)) + 0.5;
+            ctx.strokeStyle = tokens.warn;
+            ctx.globalAlpha = 0.42;
+            ctx.lineWidth = 1;
+            ctx.setLineDash([2, 4]);
+            ctx.beginPath();
+            ctx.moveTo(L, yEx);
+            ctx.lineTo(W - R, yEx);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.globalAlpha = 0.78;
+            ctx.fillStyle = tokens.warn;
+            ctx.font = `9.5px ${tokens.fontMono}`;
+            ctx.textAlign = "right";
+            ctx.textBaseline = "top";
+            ctx.fillText(`exit ${Math.round(nt.exit)}`, W - R - 6, yEx + 2);
+            ctx.globalAlpha = 1;
+          }
+        }
+      });
+    } else {
+      opts.freqs.forEach((f, ch) => {
+        if (!opts.enabledChannels[ch]) return;
+        const pilot = opts.pilots.find((p) => p.enabled && p.frequencyMhz === f);
+        const thr = pilot ? pilot.enterThreshold : ch === 0 ? -58 : null;
+        if (thr === null) return;
+        const chCol = channelColor(ch);
+        const key = `${thr}:${pilot ? chCol : tokens.warn}`;
+        if (drawnThresholds.has(key)) return;
+        drawnThresholds.add(key);
 
-      const y = Math.round(yOf(thr)) + 0.5;
-      ctx.strokeStyle = pilot ? CHANNEL_COLORS[ch] : tokens.warn;
-      ctx.globalAlpha = 0.55;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([5, 4]);
-      ctx.beginPath();
-      ctx.moveTo(L, y);
-      ctx.lineTo(W - R, y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-      ctx.globalAlpha = 0.85;
-      ctx.fillStyle = pilot ? CHANNEL_COLORS[ch] : tokens.warn;
-      ctx.font = `9.5px ${tokens.fontMono}`;
-      ctx.textAlign = "left";
-      ctx.textBaseline = "bottom";
-      const label = pilot ? `${pilot.callsign} enter ${thr} dBm` : `default enter ${thr} dBm`;
-      ctx.fillText(label, L + 6, y - 2);
-      ctx.globalAlpha = 1;
-    });
+        const y = Math.round(yOf(thr)) + 0.5;
+        ctx.strokeStyle = pilot ? chCol : tokens.warn;
+        ctx.globalAlpha = 0.55;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.moveTo(L, y);
+        ctx.lineTo(W - R, y);
+        ctx.stroke();
+        ctx.setLineDash([]);
+        ctx.globalAlpha = 0.85;
+        ctx.fillStyle = pilot ? chCol : tokens.warn;
+        ctx.font = `9.5px ${tokens.fontMono}`;
+        ctx.textAlign = "left";
+        ctx.textBaseline = "bottom";
+        const label = pilot ? `${pilot.callsign} enter ${thr} dBm` : `default enter ${thr} dBm`;
+        ctx.fillText(label, L + 6, y - 2);
+        ctx.globalAlpha = 1;
+      });
+    }
   }
 
   // Per-channel floor and floor+10dB hit lines (drawn for latest floor of enabled channels)
@@ -618,7 +786,7 @@ export function drawSignalOverTimeCanvas(
     if (!opts.enabledChannels[ch]) continue;
     const fl = lastPt.floor[ch];
     if (fl === undefined || fl <= -127) continue;
-    const col = CHANNEL_COLORS[ch];
+    const col = channelColor(ch);
     if (opts.showFloor) {
       const yFl = Math.round(yOf(fl)) + 0.5;
       ctx.strokeStyle = col;
@@ -653,7 +821,7 @@ export function drawSignalOverTimeCanvas(
 
   for (let ch = 0; ch < 8; ch++) {
     if (!opts.enabledChannels[ch]) continue;
-    const col = CHANNEL_COLORS[ch];
+    const col = channelColor(ch);
     ctx.strokeStyle = col;
     ctx.lineWidth = 1.75;
     ctx.beginPath();
@@ -687,7 +855,7 @@ export function drawSignalOverTimeCanvas(
   if (opts.yZoomBox) {
     const ya = Math.max(T, Math.min(T + plotH, Math.min(opts.yZoomBox.y0, opts.yZoomBox.y1)));
     const yb = Math.max(T, Math.min(T + plotH, Math.max(opts.yZoomBox.y0, opts.yZoomBox.y1)));
-    ctx.fillStyle = "rgba(212, 255, 58, 0.12)";
+    ctx.fillStyle = hexAlpha(tokens.accent, 0.12);
     ctx.fillRect(L, ya, plotW, Math.max(1, yb - ya));
     ctx.strokeStyle = tokens.accent;
     ctx.lineWidth = 1;
@@ -705,7 +873,7 @@ export function drawSignalOverTimeCanvas(
     ctx.font = `10.5px ${tokens.fontMono}`;
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
-    ctx.fillText(`Zoom Y: ${dLow} to ${dHigh} dBm`, L + 8, (ya + yb) / 2);
+    ctx.fillText(`Zoom Y: ${dLow} to ${dHigh} ${unitLbl}`, L + 8, (ya + yb) / 2);
   }
 
   ctx.restore();
@@ -750,28 +918,30 @@ export function drawSignalOverTimeCanvas(
     const ageSec = ((refN - best.n) / opts.sweepHz).toFixed(2);
     if (bestCh >= 0) {
       const by = Math.max(T + 3, Math.min(T + plotH - 3, yOf(best.dbm[bestCh])));
-      ctx.fillStyle = CHANNEL_COLORS[bestCh];
+      ctx.fillStyle = channelColor(bestCh);
       ctx.beginPath();
       ctx.arc(hx, by, 3.5, 0, Math.PI * 2);
       ctx.fill();
 
-      const f = opts.freqs[bestCh] ?? RACEBAND[bestCh];
-      const rb = racebandName(f) || `Ch${bestCh + 1}`;
-      const v = best.dbm[bestCh];
+      const f = opts.freqs[bestCh] ?? 0;
+      const rb = opts.nodeThresholds
+        ? `N${bestCh + 1}${hardwareBandLabel(f) ? ` (${hardwareBandLabel(f)})` : ""}`
+        : racebandName(f) || `Ch${bestCh + 1}`;
+      const v = Math.round(best.dbm[bestCh]);
       const fl = best.floor[bestCh];
       let chMax = v;
       for (let k = 0; k < pts.length; k++) {
         const kv = pts[k].dbm[bestCh];
-        if (kv !== undefined && kv > chMax) chMax = kv;
+        if (kv !== undefined && kv > chMax) chMax = Math.round(kv);
       }
       setSignalReadout(
-        `<span><strong>${rb}</strong> ${f}M · Cur <strong>${v}</strong> · Mx <strong>${chMax}</strong>${fl && fl > -127 ? ` · Fl ${fl}` : ""} dBm · -${ageSec}s</span>`
+        `<span><strong>${rb}</strong>${f > 0 ? ` ${f}M` : ""} · Cur <strong>${v}</strong> · Mx <strong>${chMax}</strong>${fl && fl > -127 ? ` · Fl ${Math.round(fl)}` : ""} ${unitLbl} · -${ageSec}s</span>`
       );
     } else {
-      setSignalReadout(`<span class="note">Point at chart to inspect channel, dBm &amp; sweep age</span>`);
+      setSignalReadout(`<span class="note">Point at chart to inspect ${opts.nodeThresholds ? "node, RSSI &amp; sample age" : "channel, dBm &amp; sweep age"}</span>`);
     }
   } else {
-    setSignalReadout(`<span class="note">Point at chart to inspect channel, dBm &amp; sweep age</span>`);
+    setSignalReadout(`<span class="note">Point at chart to inspect ${opts.nodeThresholds ? "node, RSSI &amp; sample age" : "channel, dBm &amp; sweep age"}</span>`);
   }
 }
 
@@ -903,10 +1073,18 @@ export class SpectrumAccumulator {
     c.width = bins;
     c.height = this.maxRows;
     const ctx = c.getContext("2d")!;
-    ctx.fillStyle = "#0b0c0f";
+    ctx.fillStyle = getAppTheme() === "light" ? "#eef2f7" : "#0b0c0f";
     ctx.fillRect(0, 0, c.width, c.height);
     this.offscreen = c;
     this.wfWidth = bins;
+  }
+
+  public repaintForTheme(): void {
+    if (this.latest && this.history.length > 0) {
+      this.repaintOffscreen();
+    } else if (this.offscreen && this.wfWidth > 0) {
+      this.resetOffscreen(this.wfWidth);
+    }
   }
 
   private repaintOffscreen(): void {
@@ -1049,19 +1227,25 @@ export function shortBandHint(freqMHz: number): string {
 export function dbmToRgb(dbm: number, minDbm = -100, maxDbm = -40): [number, number, number] {
   const span = Math.max(4, maxDbm - minDbm);
   const t = Math.max(0, Math.min(1, (dbm - minDbm) / span));
+  const isLight = getAppTheme() === "light";
   // 5-stop gradient:
-  // 0.00: #0b0c0f (11, 12, 15)
-  // 0.28: #172554 (23, 37, 84)
-  // 0.55: #0891b2 (8, 145, 178)
-  // 0.82: #d4ff3a (212, 255, 58)
-  // 1.00: #ffffff (255, 255, 255)
-  const stops: Array<[number, number, number, number]> = [
-    [0.0, 11, 12, 15],
-    [0.28, 23, 37, 84],
-    [0.55, 8, 145, 178],
-    [0.82, 212, 255, 58],
-    [1.0, 255, 255, 255],
-  ];
+  // Dark:  #0b0c0f -> #172554 -> #0891b2 -> #d4ff3a -> #ffffff
+  // Light: #eef2f7 -> #93c5fd -> #2563eb -> #7c3aed -> #c2410c
+  const stops: Array<[number, number, number, number]> = isLight
+    ? [
+        [0.0, 238, 242, 247],
+        [0.28, 147, 197, 253],
+        [0.55, 37, 99, 235],
+        [0.82, 124, 58, 237],
+        [1.0, 194, 65, 12],
+      ]
+    : [
+        [0.0, 11, 12, 15],
+        [0.28, 23, 37, 84],
+        [0.55, 8, 145, 178],
+        [0.82, 212, 255, 58],
+        [1.0, 255, 255, 255],
+      ];
   for (let i = 0; i < stops.length - 1; i++) {
     const [t0, r0, g0, b0] = stops[i];
     const [t1, r1, g1, b1] = stops[i + 1];
@@ -1074,7 +1258,7 @@ export function dbmToRgb(dbm: number, minDbm = -100, maxDbm = -40): [number, num
       ];
     }
   }
-  return [255, 255, 255];
+  return isLight ? [194, 65, 12] : [255, 255, 255];
 }
 
 /** Shared band overlay: Wi-Fi UNII shaded blocks + Raceband vertical dashed markers (§5.5). */
@@ -1088,7 +1272,8 @@ function drawBandOverlay(
   plotW: number,
   plotH: number,
   showWifi: boolean,
-  tokens: ThemeTokens
+  tokens: ThemeTokens,
+  darkBackdrop = false
 ): void {
   const span = Math.max(1, stopMHz - startMHz);
   const xOf = (f: number) => L + ((f - startMHz) / span) * plotW;
@@ -1112,7 +1297,13 @@ function drawBandOverlay(
       ctx.stroke();
 
       if (x1 - x0 > 46) {
-        ctx.fillStyle = b.warnsRaceband ? "rgba(251, 191, 36, 0.75)" : "rgba(163, 168, 179, 0.65)";
+        ctx.fillStyle = b.warnsRaceband
+          ? darkBackdrop
+            ? "rgba(251, 191, 36, 0.75)"
+            : hexAlpha(tokens.warn, 0.85)
+          : darkBackdrop
+            ? "rgba(163, 168, 179, 0.65)"
+            : hexAlpha(tokens.text2, 0.72);
         ctx.font = `9.5px ${tokens.fontMono}`;
         ctx.textAlign = "center";
         ctx.textBaseline = "bottom";
@@ -1129,7 +1320,7 @@ function drawBandOverlay(
     const f = RACEBAND[i];
     if (f < startMHz || f > stopMHz) continue;
     const x = Math.round(xOf(f)) + 0.5;
-    ctx.strokeStyle = "rgba(212, 255, 58, 0.25)";
+    ctx.strokeStyle = darkBackdrop ? "rgba(212, 255, 58, 0.25)" : hexAlpha(tokens.accent, 0.26);
     ctx.lineWidth = 1;
     ctx.setLineDash([3, 3]);
     ctx.beginPath();
@@ -1137,7 +1328,7 @@ function drawBandOverlay(
     ctx.lineTo(x, T + plotH);
     ctx.stroke();
     ctx.setLineDash([]);
-    ctx.fillStyle = "rgba(212, 255, 58, 0.78)";
+    ctx.fillStyle = darkBackdrop ? "rgba(212, 255, 58, 0.78)" : hexAlpha(tokens.accent, 0.85);
     ctx.fillText(`R${i + 1}`, x, T + 3);
   }
 }
@@ -1176,13 +1367,15 @@ function drawFreqZoomBox(
   W: number,
   plotW: number,
   plotH: number,
-  tokens: ThemeTokens
+  tokens: ThemeTokens,
+  darkBackdrop = false
 ): void {
   const xa = Math.max(L, Math.min(W - R, Math.min(zoomBox.x0, zoomBox.x1)));
   const xb = Math.max(L, Math.min(W - R, Math.max(zoomBox.x0, zoomBox.x1)));
-  ctx.fillStyle = "rgba(212, 255, 58, 0.14)";
+  const boxAccent = darkBackdrop ? "#d4ff3a" : tokens.accent;
+  ctx.fillStyle = darkBackdrop ? "rgba(212, 255, 58, 0.14)" : hexAlpha(tokens.accent, 0.14);
   ctx.fillRect(xa, T, Math.max(1, xb - xa), plotH);
-  ctx.strokeStyle = tokens.accent;
+  ctx.strokeStyle = boxAccent;
   ctx.lineWidth = 1;
   ctx.setLineDash([4, 3]);
   ctx.beginPath();
@@ -1199,11 +1392,11 @@ function drawFreqZoomBox(
   ctx.font = `10.5px ${tokens.fontMono}`;
   const tw = ctx.measureText(label).width + 12;
   const cx = Math.max(L + tw / 2 + 4, Math.min(W - R - tw / 2 - 4, (xa + xb) / 2));
-  ctx.fillStyle = "rgba(11, 12, 15, 0.88)";
+  ctx.fillStyle = darkBackdrop ? "rgba(11, 12, 15, 0.88)" : hexAlpha(tokens.surface, 0.94);
   ctx.fillRect(cx - tw / 2, T + 8, tw, 18);
-  ctx.strokeStyle = tokens.accent;
+  ctx.strokeStyle = boxAccent;
   ctx.strokeRect(cx - tw / 2 + 0.5, T + 8.5, tw - 1, 17);
-  ctx.fillStyle = tokens.accent;
+  ctx.fillStyle = boxAccent;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
   ctx.fillText(label, cx, T + 17);
@@ -1227,10 +1420,12 @@ export function drawSpectrumCanvas(
   const plotH = Math.max(10, H - T - B);
 
   ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = tokens.chartSurface;
+  ctx.fillRect(0, 0, W, H);
 
   const scanStart = hasData ? s!.start : (opts.fallbackStartMHz ?? 5180);
   const scanStep = hasData ? s!.step : 5;
-  const scanStop = hasData ? s!.start + s!.step * (s!.dbm.length - 1) : Math.max(scanStart + scanStep, opts.fallbackStopMHz ?? 5917);
+  const scanStop = hasData ? s!.start + s!.step * (s!.dbm.length - 1) : Math.max(scanStart + scanStep, opts.fallbackStopMHz ?? 5945);
   const vStart = opts.viewStartMHz ?? scanStart;
   const vStop = Math.max(vStart + scanStep, opts.viewStopMHz ?? scanStop);
   const span = Math.max(1, vStop - vStart);
@@ -1321,7 +1516,7 @@ export function drawSpectrumCanvas(
   const avgAll = acc.getAverage();
   const avg = opts.showAverage ? avgAll : null;
   if (avg && avg.length === s.dbm.length) {
-    ctx.strokeStyle = "#38bdf8";
+    ctx.strokeStyle = adaptColorForTheme("#38bdf8");
     ctx.globalAlpha = 0.8;
     ctx.lineWidth = 1.4;
     const avgPts = avg.map((v, i) => ({ x: xOf(s.start + i * s.step), y: yOf(v) }));
@@ -1374,7 +1569,7 @@ export function drawSpectrumCanvas(
 
         if (opts.showMaxHold && acc.maxHold && acc.maxHold[idx] !== undefined) {
           const mhy = Math.max(T + 3, Math.min(T + plotH - 3, yOf(acc.maxHold[idx])));
-          ctx.fillStyle = "rgba(212, 255, 58, 0.45)";
+          ctx.fillStyle = hexAlpha(tokens.accent, 0.45);
           ctx.beginPath();
           ctx.arc(hx, mhy, 3, 0, Math.PI * 2);
           ctx.fill();
@@ -1446,10 +1641,12 @@ export function drawWaterfallCanvas(
   const plotH = Math.max(10, H - T - B);
 
   ctx.clearRect(0, 0, W, H);
+  ctx.fillStyle = tokens.chartSurface;
+  ctx.fillRect(0, 0, W, H);
 
   const scanStart = hasData ? s!.start : (fallbackStartMHz ?? 5180);
   const scanStep = hasData ? s!.step : 5;
-  const scanStop = hasData ? s!.start + s!.step * (s!.dbm.length - 1) : Math.max(scanStart + scanStep, fallbackStopMHz ?? 5917);
+  const scanStop = hasData ? s!.start + s!.step * (s!.dbm.length - 1) : Math.max(scanStart + scanStep, fallbackStopMHz ?? 5945);
   const vStart = viewStartMHz ?? scanStart;
   const vStop = Math.max(vStart + scanStep, viewStopMHz ?? scanStop);
   const span = Math.max(1, vStop - vStart);
@@ -1457,12 +1654,13 @@ export function drawWaterfallCanvas(
 
   const visRows = acc.visibleRows;
   const startRow = Math.max(0, Math.min(acc.maxScrollRow(), acc.scrollRow));
+  const isLight = getAppTheme() === "light";
 
   ctx.save();
   ctx.beginPath();
   ctx.rect(L, T, plotW, plotH);
   ctx.clip();
-  ctx.fillStyle = "#0b0c0f";
+  ctx.fillStyle = isLight ? "#eef2f7" : "#0b0c0f";
   ctx.fillRect(L, T, plotW, plotH);
   const dataStartMHz = Math.max(vStart, scanStart);
   const dataStopMHz = Math.min(vStop, scanStop);
@@ -1475,16 +1673,18 @@ export function drawWaterfallCanvas(
     ctx.imageSmoothingEnabled = false;
     ctx.drawImage(off, bin0, startRow, bin1 - bin0, visRows, dstX0, T, Math.max(1, dstX1 - dstX0), plotH);
   }
-  drawBandOverlay(ctx, vStart, vStop, L, R, T, plotW, plotH, showWifiOverlay, tokens);
+  drawBandOverlay(ctx, vStart, vStop, L, R, T, plotW, plotH, showWifiOverlay, tokens, !isLight);
   if (zoomBox) {
-    drawFreqZoomBox(ctx, zoomBox, vStart, span, L, R, T, W, plotW, plotH, tokens);
+    drawFreqZoomBox(ctx, zoomBox, vStart, span, L, R, T, W, plotW, plotH, tokens, !isLight);
   }
   ctx.restore();
 
-  // Border around waterfall plot
-  ctx.strokeStyle = tokens.border;
-  ctx.lineWidth = 1;
-  ctx.strokeRect(L + 0.5, T + 0.5, plotW - 1, plotH - 1);
+  if (!isLight) {
+    // Border around waterfall plot in dark mode
+    ctx.strokeStyle = tokens.chartBorder;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(L + 0.5, T + 0.5, plotW - 1, plotH - 1);
+  }
 
   // Y-axis age ticks (reflecting current vertical scroll offset and row stretch)
   const passSec = hasData && s && s.passMs && s.passMs > 20 ? s.passMs / 1000 : 0.32;
@@ -1502,7 +1702,7 @@ export function drawWaterfallCanvas(
   // Vertical scrollbar track + thumb on the right margin when history exceeds 1 viewport
   const sbX = W - R + 5;
   const sbW = 6;
-  ctx.fillStyle = "rgba(255, 255, 255, 0.05)";
+  ctx.fillStyle = tokens.border;
   ctx.fillRect(sbX, T, sbW, plotH);
   if (acc.history.length > visRows) {
     const thumbFrac = Math.min(1, visRows / acc.history.length);
@@ -1510,7 +1710,7 @@ export function drawWaterfallCanvas(
     const maxScroll = Math.max(1, acc.maxScrollRow());
     const scrollFrac = startRow / maxScroll;
     const thumbY = T + Math.round((plotH - thumbH) * scrollFrac);
-    ctx.fillStyle = startRow > 0 ? "rgba(255, 255, 255, 0.26)" : "rgba(255, 255, 255, 0.16)";
+    ctx.fillStyle = startRow > 0 ? tokens.text2 : tokens.text3;
     ctx.fillRect(sbX, thumbY, sbW, thumbH);
   }
 
@@ -1544,7 +1744,7 @@ export function drawWaterfallCanvas(
     const fCursor = vStart + ((hover.x - L) / plotW) * span;
     const inSweep = fCursor >= scanStart - s.step * 0.5 && fCursor <= scanStop + s.step * 0.5;
     ctx.save();
-    ctx.strokeStyle = "rgba(255, 255, 255, 0.55)";
+    ctx.strokeStyle = isLight ? "rgba(15, 23, 42, 0.45)" : "rgba(255, 255, 255, 0.55)";
     ctx.lineWidth = 1;
     ctx.setLineDash([2, 2]);
     ctx.beginPath();
@@ -1726,7 +1926,7 @@ function drawSingleSparkCanvas(
   const plotW = Math.max(20, W - padX * 2);
 
   // Subtle baseline & mid guideline
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.045)";
+  ctx.strokeStyle = getThemeTokens().border;
   ctx.lineWidth = 1;
   ctx.beginPath();
   const midY = Math.round(plotTop + plotH / 2) + 0.5;
@@ -1822,6 +2022,18 @@ export function drawHealthSparklines(root: HTMLElement, health: HealthHistory, h
   }
   root.classList.toggle("is-three-cards", !hasServer);
 
+  const setCardTitle = (key: string, titleText: string) => {
+    const card = root.querySelector<HTMLElement>(`[data-health-card="${key}"]`);
+    const titleEl = card?.querySelector<HTMLElement>(".debug-health-title");
+    if (titleEl && titleEl.textContent !== titleText) {
+      titleEl.textContent = titleText;
+    }
+  };
+  setCardTitle("sweep", "Sweep duration");
+  setCardTitle("heap", "Free heap");
+  setCardTitle("udp", "Server frames rx");
+  setCardTitle("usb", "USB live stream");
+
   const updateCard = (
     key: "sweep" | "heap" | "udp" | "usb",
     latestText: string,
@@ -1866,7 +2078,7 @@ export function drawHealthSparklines(root: HTMLElement, health: HealthHistory, h
     4.0,
     Math.max(7.8, budgetMs + 0.5),
     tokens.accent,
-    "rgba(212, 255, 58, 0.14)",
+    hexAlpha(tokens.accent, 0.14),
     { value: budgetMs, color: tokens.warn }
   );
 
@@ -1881,7 +2093,7 @@ export function drawHealthSparklines(root: HTMLElement, health: HealthHistory, h
     16,
     80,
     tokens.good,
-    "rgba(52, 211, 153, 0.14)",
+    hexAlpha(tokens.good, 0.14),
     { value: 20, color: tokens.bad }
   );
 
@@ -1892,6 +2104,7 @@ export function drawHealthSparklines(root: HTMLElement, health: HealthHistory, h
     const fpsRange = validFps.length
       ? `${Math.min(...validFps).toFixed(0)}–${Math.max(...validFps).toFixed(0)} frames/s`
       : "Waiting for data…";
+    const udpCol = adaptColorForTheme("#38bdf8");
     updateCard(
       "udp",
       fps !== null ? `${fps.toFixed(0)} / s` : "—",
@@ -1900,14 +2113,15 @@ export function drawHealthSparklines(root: HTMLElement, health: HealthHistory, h
       fpsVals,
       0,
       55,
-      "#38bdf8",
-      "rgba(56, 189, 248, 0.14)"
+      udpCol,
+      hexAlpha(udpCol, 0.14)
     );
   }
 
   const dropsTotal = pts.reduce((acc, p) => acc + p.droppedDelta, 0);
   const usbVals = pts.map((p) => p.liveRateHz);
   const usbRange = pts.length ? `${dropsTotal} dropped` : "Waiting for data…";
+  const usbCol = adaptColorForTheme("#c084fc");
   updateCard(
     "usb",
     last ? `${last.liveRateHz.toFixed(0)} sweeps/s` : "—",
@@ -1916,8 +2130,169 @@ export function drawHealthSparklines(root: HTMLElement, health: HealthHistory, h
     usbVals,
     0,
     55,
-    "#c084fc",
-    "rgba(192, 132, 252, 0.14)"
+    usbCol,
+    hexAlpha(usbCol, 0.14)
+  );
+}
+
+export interface RHHealthPoint {
+  tMs: number;
+  clockRttMs: number;
+  meanNoiseRssi: number;
+  passesTotal: number;
+  heartbeatHz: number;
+}
+
+export class RHHealthHistory {
+  public points: RHHealthPoint[] = [];
+  private lastHeartbeatsRx: number | null = null;
+  private lastPerfMs = 0;
+
+  public clear(): void {
+    this.points = [];
+    this.lastHeartbeatsRx = null;
+    this.lastPerfMs = 0;
+  }
+
+  public push(clockRttMs: number, meanNoiseRssi: number, passesTotal: number, heartbeatsRx: number, fallbackHz: number): void {
+    const now = performance.now();
+    let hz = fallbackHz;
+    if (this.lastHeartbeatsRx !== null && this.lastPerfMs > 0 && heartbeatsRx >= this.lastHeartbeatsRx) {
+      const dtSec = (now - this.lastPerfMs) / 1000;
+      if (dtSec >= 0.25 && heartbeatsRx > this.lastHeartbeatsRx) {
+        hz = (heartbeatsRx - this.lastHeartbeatsRx) / dtSec;
+      }
+    }
+    this.lastHeartbeatsRx = heartbeatsRx;
+    this.lastPerfMs = now;
+    this.points.push({
+      tMs: now,
+      clockRttMs: Math.max(0, clockRttMs),
+      meanNoiseRssi: Math.max(0, Math.min(255, meanNoiseRssi)),
+      passesTotal: Math.max(0, passesTotal),
+      heartbeatHz: Math.max(0, Math.min(40, hz)),
+    });
+    const cutoff = now - 300_000;
+    while (this.points.length > 2 && this.points[0].tMs < cutoff) {
+      this.points.shift();
+    }
+  }
+}
+
+export function drawRHHealthSparklines(root: HTMLElement, rhHealth: RHHealthHistory): void {
+  const tokens = getThemeTokens();
+  const pts = rhHealth.points;
+  const last = pts.length ? pts[pts.length - 1] : null;
+
+  const udpCard = root.querySelector<HTMLElement>('[data-health-card="udp"]');
+  if (udpCard) {
+    udpCard.hidden = false;
+  }
+  root.classList.remove("is-three-cards");
+
+  const setCardTitle = (key: string, titleText: string) => {
+    const card = root.querySelector<HTMLElement>(`[data-health-card="${key}"]`);
+    const titleEl = card?.querySelector<HTMLElement>(".debug-health-title");
+    if (titleEl && titleEl.textContent !== titleText) {
+      titleEl.textContent = titleText;
+    }
+  };
+  setCardTitle("sweep", "Clock sync RTT");
+  setCardTitle("heap", "Baseline RSSI");
+  setCardTitle("udp", "Passes recorded");
+  setCardTitle("usb", "Heartbeat stream");
+
+  const updateCard = (
+    key: "sweep" | "heap" | "udp" | "usb",
+    latestText: string,
+    metaText: string,
+    isWarn: boolean,
+    values: Array<number | null>,
+    minV: number,
+    maxV: number,
+    color: string,
+    fillRgba: string,
+    threshold?: { value: number; color: string }
+  ) => {
+    const valEl = root.querySelector<HTMLElement>(`[data-health-val="${key}"]`);
+    if (valEl) {
+      valEl.textContent = latestText;
+      valEl.classList.toggle("debug-tone-warn", isWarn);
+    }
+    const metaEl = root.querySelector<HTMLElement>(`[data-health-meta="${key}"]`);
+    if (metaEl) {
+      metaEl.textContent = metaText;
+    }
+    const c = root.querySelector<HTMLCanvasElement>(`[data-spark-canvas="${key}"]`);
+    if (c) {
+      drawSingleSparkCanvas(c, values, minV, maxV, color, fillRgba, threshold);
+    }
+  };
+
+  const rttVals = pts.map((p) => p.clockRttMs);
+  const rttMeta = rttVals.length
+    ? `${Math.min(...rttVals).toFixed(1)}–${Math.max(...rttVals).toFixed(1)} ms · <25 ms target`
+    : "Waiting for clock sync…";
+  updateCard(
+    "sweep",
+    last ? `${last.clockRttMs < 0.5 ? "<0.5" : last.clockRttMs.toFixed(1)} ms` : "—",
+    rttMeta,
+    Boolean(last && last.clockRttMs > 25),
+    rttVals,
+    0,
+    Math.max(10, ...(rttVals.length ? rttVals : [10])),
+    tokens.accent,
+    hexAlpha(tokens.accent, 0.14),
+    { value: 25, color: tokens.warn }
+  );
+
+  const noiseVals = pts.map((p) => p.meanNoiseRssi);
+  const noiseMeta = noiseVals.length
+    ? `Range ${Math.round(Math.min(...noiseVals))}–${Math.round(Math.max(...noiseVals))} (0–255)`
+    : "Waiting for node samples…";
+  updateCard(
+    "heap",
+    last ? `${Math.round(last.meanNoiseRssi)} RSSI` : "—",
+    noiseMeta,
+    Boolean(last && last.meanNoiseRssi >= 85),
+    noiseVals,
+    0,
+    140,
+    tokens.good,
+    hexAlpha(tokens.good, 0.14),
+    { value: 95, color: tokens.warn }
+  );
+
+  const passVals = pts.map((p) => p.passesTotal);
+  const passDelta = passVals.length >= 2 ? passVals[passVals.length - 1] - passVals[0] : 0;
+  const rhPassCol = adaptColorForTheme("#38bdf8");
+  updateCard(
+    "udp",
+    last ? `${last.passesTotal} passes` : "—",
+    pts.length ? `+${passDelta} in 5m window` : "Waiting for passes…",
+    false,
+    passVals,
+    0,
+    Math.max(5, ...(passVals.length ? passVals : [5])),
+    rhPassCol,
+    hexAlpha(rhPassCol, 0.14)
+  );
+
+  const hzVals = pts.map((p) => p.heartbeatHz);
+  const hzMeta = hzVals.length
+    ? `${Math.min(...hzVals).toFixed(1)}–${Math.max(...hzVals).toFixed(1)} Hz (~10 Hz nominal)`
+    : "Waiting for heartbeats…";
+  const rhHzCol = adaptColorForTheme("#c084fc");
+  updateCard(
+    "usb",
+    last ? `${last.heartbeatHz.toFixed(1)} Hz` : "—",
+    hzMeta,
+    Boolean(last && last.heartbeatHz < 3.0),
+    hzVals,
+    0,
+    15,
+    rhHzCol,
+    hexAlpha(rhHzCol, 0.14)
   );
 }
 
@@ -2025,7 +2400,7 @@ function drawTooltipBox(
   bx = Math.max(minX + 2, Math.min(maxX - boxW - 2, bx));
   const by = Math.max(minY + 2, Math.min(maxY - boxH - 2, anchorY - boxH / 2));
 
-  ctx.fillStyle = "rgba(17, 19, 23, 0.94)";
+  ctx.fillStyle = hexAlpha(tokens.surface, 0.96);
   ctx.strokeStyle = tokens.borderStrong;
   ctx.lineWidth = 1;
   ctx.beginPath();

@@ -1,8 +1,8 @@
 name: Release
 
-# Publishes the compiled firmware image and the slaprf-relay LiveTime helper (cmd/slaprf-relay)
-# on version tags. The app itself is the static site deployed to https://slaprf.app by pages.yml.
-# The relay asset names are linked from web/src/widgets/LiveTimeCard.ts; keep them in sync.
+# Publishes the compiled ESP32-C5 firmware image and the cross-platform SlapRF Portable
+# single-file binaries (cmd/slaprf) on version tags. The hosted browser version is deployed
+# to https://slaprf.app by pages.yml.
 
 on:
   push:
@@ -14,48 +14,90 @@ permissions:
   contents: write
 
 jobs:
+  verify:
+    name: Verify build & E2E suite
+    uses: ./.github/workflows/verify.yml
+
   firmware:
     name: Build firmware
     uses: ./.github/workflows/firmware.yml
 
-  relay:
-    name: Build slaprf-relay (${{ matrix.asset }})
+  web_bundle:
+    needs: [verify, firmware]
+    name: Build embedded web bundle
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        include:
-          - { goos: windows, goarch: amd64, asset: slaprf-relay-windows-amd64.exe }
-          - { goos: darwin, goarch: arm64, asset: slaprf-relay-macos-arm64 }
-          - { goos: darwin, goarch: amd64, asset: slaprf-relay-macos-amd64 }
-          - { goos: linux, goarch: amd64, asset: slaprf-relay-linux-amd64 }
-          - { goos: linux, goarch: arm64, asset: slaprf-relay-linux-arm64 }
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Download compiled firmware image
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware
+          path: web/firmware
 
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file: "go.mod"
 
-      - name: Build
+      - name: Build static web + WASM site
+        run: |
+          go run ./cmd/build-web -web ./web -out ./_site
+
+      - name: Upload built web bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-site
+          path: _site
+          include-hidden-files: true
+          if-no-files-found: error
+
+  portable:
+    needs: [verify, web_bundle]
+    name: Build SlapRF Portable (${{ matrix.asset }})
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - { goos: windows, goarch: amd64, asset: slaprf-windows-amd64.exe }
+          - { goos: darwin, goarch: arm64, asset: slaprf-macos-arm64 }
+          - { goos: darwin, goarch: amd64, asset: slaprf-macos-amd64 }
+          - { goos: linux, goarch: amd64, asset: slaprf-linux-amd64 }
+          - { goos: linux, goarch: arm64, asset: slaprf-linux-arm64 }
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download built web bundle into cmd/slaprf/site
+        uses: actions/download-artifact@v4
+        with:
+          name: web-site
+          path: cmd/slaprf/site
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: Compile SlapRF Portable
         env:
           CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "dist/${{ matrix.asset }}" ./cmd/slaprf-relay
+          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "dist/${{ matrix.asset }}" ./cmd/slaprf
 
-      - name: Upload relay binary
+      - name: Upload Portable binary
         uses: actions/upload-artifact@v4
         with:
-          name: relay-${{ matrix.asset }}
+          name: portable-${{ matrix.asset }}
           path: dist/${{ matrix.asset }}
           if-no-files-found: error
 
   release:
-    needs: [firmware, relay]
+    needs: [verify, firmware, portable]
     name: Publish Release
     runs-on: ubuntu-latest
     steps:
@@ -68,10 +110,10 @@ jobs:
           name: firmware
           path: web/firmware
 
-      - name: Download slaprf-relay binaries
+      - name: Download SlapRF Portable binaries
         uses: actions/download-artifact@v4
         with:
-          pattern: relay-*
+          pattern: portable-*
           merge-multiple: true
           path: dist
 
@@ -81,5 +123,5 @@ jobs:
         with:
           files: |
             web/firmware/slaprf-xiao-c5.bin
-            dist/slaprf-relay-*
+            dist/slaprf-*
           generate_release_notes: true

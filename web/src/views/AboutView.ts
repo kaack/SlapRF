@@ -127,7 +127,7 @@ export class AboutView extends Component {
 
     this.el.innerHTML = `
       <div class="settings">
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="version">
           <div class="settings-intro">
             <h2>Version</h2>
             <p>App and timing-engine build identifiers for this SlapRF instance, plus warranty disclaimer.</p>
@@ -166,7 +166,7 @@ export class AboutView extends Component {
           </div>
         </section>
 
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="author">
           <div class="settings-intro">
             <h2>Author</h2>
             <p>Designed and developed for the 5.8 GHz FPV racing community.</p>
@@ -187,7 +187,48 @@ export class AboutView extends Component {
           </div>
         </section>
 
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="credits">
+          <div class="settings-intro">
+            <h2>Credits</h2>
+            <p>Open-source research and FPV timing projects that made SlapRF possible.</p>
+          </div>
+          <div class="settings-cards">
+            <div class="card">
+              <div class="option-row">
+                <div>
+                  <div class="option-title">ESP32-C5 5.8 GHz SDR Research — C5VRX, ESP-SDR &amp; Widscan58</div>
+                  <div class="option-sub">
+                    SlapRF’s ESP32-C5 radio capture would not exist without the pioneering work of
+                    <strong>C5VRX</strong> and the derived <strong>ESP-SDR</strong> projects, which uncovered the hidden debug path allowing an ESP32-C5 to capture raw I/Q samples from its own radio as a 5.8 GHz software-defined radio, as well as
+                    <a href="https://github.com/CapnBry/widscan58" target="_blank" rel="noopener noreferrer">Widscan58 by CapnBry</a>.
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="option-row">
+                <div>
+                  <div class="option-title">RotorHazard</div>
+                  <div class="option-sub">
+                    Protocol and client/server architecture references from the <strong>RotorHazard</strong> open-source FPV race timing project were consulted to support RotorHazard Network and USB compatibility.
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="card">
+              <div class="option-row">
+                <div>
+                  <div class="option-title">FPVSideTrack</div>
+                  <div class="option-sub">
+                    Consulted <strong>FPVSideTrack</strong> to understand how external timing software interacts with the LapRF protocol for SlapRF’s LapRF emulator and 8-Way compatibility.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="settings-section" data-section-anchor="donations">
           <div class="settings-intro">
             <h2>Donations</h2>
             <p>Support ongoing open hardware, firmware, and software development for SlapRF.</p>
@@ -207,7 +248,7 @@ export class AboutView extends Component {
           </div>
         </section>
 
-        <section class="settings-section">
+        <section class="settings-section" data-section-anchor="licenses">
           <div class="settings-intro">
             <h2>Licenses</h2>
             <p>SlapRF is dual-licensed under the GNU General Public License v3.0 and the Fair Source License v0.9.</p>

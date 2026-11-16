@@ -1,5 +1,6 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
+import { adaptColorForTheme } from "../core/theme";
 import { gateColor, lapsFor, sectionLabel, sectionShort } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { renderSectionCapsuleIcon } from "./markup";
@@ -250,7 +251,7 @@ export class LapTimesCard extends Component {
           .map((p) => {
             const hidden = this.hiddenSlots.has(p.slotIndex);
             return `<button type="button" class="chart-legend-item ${hidden ? "is-hidden" : ""}" data-legend-slot="${p.slotIndex}" aria-pressed="${!hidden}" title="${hidden ? `Click to show ${esc(p.callsign)} on chart` : `Click to hide ${esc(p.callsign)} from chart`}">
-              <i style="--c:${p.color}"></i>
+              <i style="--c:${adaptColorForTheme(p.color)}"></i>
               <span>${esc(p.callsign)}</span>
             </button>`;
           })

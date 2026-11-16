@@ -42,6 +42,9 @@ export abstract class Component {
     return node;
   }
 
+  public onActivate?(): void;
+  public onDeactivate?(): void;
+
   public destroy(): void {
     while (this.children.length > 0) {
       this.children.pop()!.destroy();

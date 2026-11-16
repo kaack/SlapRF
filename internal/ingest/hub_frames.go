@@ -95,6 +95,21 @@ func NewHubFrameDecoder(engine *tracker.Engine) *HubFrameDecoder {
 	return r
 }
 
+// Reset clears cached Hub TDMA slot-to-fingerprint bindings and sequence watermarks so a fresh
+// stream of HELLO frames re-anchors telemetry cleanly after a timing-hardware mode switch or reconnect.
+func (r *HubFrameDecoder) Reset() {
+	r.mu.Lock()
+	r.slots = make(map[uint8]slotInfo)
+	r.lastHello = make(map[uint8]helloInfo)
+	r.seenSeq = make(map[uint8]uint8)
+	r.hasSeq = make(map[uint8]bool)
+	r.lastTs = make(map[uint8]uint64)
+	r.lastArrival = make(map[uint8]uint64)
+	r.timelines = make(map[uint8]*tsTracker)
+	r.lastChanHex = ""
+	r.mu.Unlock()
+}
+
 // OnTelemetryFrame implements tracker.EventSubscriber.
 func (r *HubFrameDecoder) OnTelemetryFrame(domain.TimerTelemetryFrame) {}
 
@@ -234,6 +249,7 @@ func (r *HubFrameDecoder) registerHello(slot uint8, hello helloInfo) {
 	if err != nil || timerID == 0 {
 		return
 	}
+	r.engine.MarkTimerSeen(timerID)
 	interval := SampleIntervalUs
 	if hz := hello.sweepHz; hz > 0 {
 		interval = 1_000_000 / uint64(hz)

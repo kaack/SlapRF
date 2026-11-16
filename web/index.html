@@ -6,6 +6,21 @@
   <meta name="color-scheme" content="dark" />
   <title>SlapRF</title>
   <meta name="theme-color" content="#0b0c0f" />
+  <script>
+    (function () {
+      try {
+        var t = localStorage.getItem("slaprf.ui.theme.v1");
+        var mode = t === "light" ? "light" : "dark";
+        document.documentElement.dataset.theme = mode;
+        if (mode === "light") {
+          var cs = document.querySelector('meta[name="color-scheme"]');
+          if (cs) cs.setAttribute("content", "light");
+          var tc = document.querySelector('meta[name="theme-color"]');
+          if (tc) tc.setAttribute("content", "#f3f5f8");
+        }
+      } catch (e) {}
+    })();
+  </script>
   <!-- PWA: installable + offline (service worker registered by web/src/services/offline.ts). -->
   <link rel="manifest" href="./manifest.webmanifest" />
   <link rel="apple-touch-icon" href="./icons/icon.svg" />
@@ -20,7 +35,7 @@
       padding: 0;
       background: #0b0c0f;
       color: #f3f5f8;
-      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Inter, sans-serif;
+      font-family: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     }
     .slaprf-boot-loader {
       position: fixed;
@@ -122,6 +137,307 @@
       color: #b4bccb;
       min-height: 18px;
     }
+    .slaprf-boot-conflict {
+      display: none;
+      width: 100%;
+      max-width: 380px;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      padding: 16px 18px;
+      border-radius: 12px;
+      background: #14171d;
+      border: 1px solid #2b313d;
+      box-sizing: border-box;
+      text-align: center;
+    }
+    .slaprf-boot-conflict-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #f3f5f8;
+      line-height: 1.35;
+    }
+    .slaprf-boot-conflict-desc {
+      font-size: 12.5px;
+      color: #9ba3b4;
+      line-height: 1.45;
+    }
+    .slaprf-boot-takeover-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      height: 34px;
+      padding: 0 16px;
+      margin-top: 2px;
+      border-radius: 8px;
+      border: 1px solid #353c4a;
+      background: #202530;
+      color: #f3f5f8;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.14s ease, border-color 0.14s ease;
+    }
+    .slaprf-boot-takeover-btn:hover {
+      background: #282e3c;
+      border-color: #4a5366;
+    }
+    .slaprf-boot-conn-actions {
+      display: none;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      margin-top: 2px;
+    }
+    .slaprf-boot-reconnect-btn,
+    .slaprf-boot-settings-btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      height: 34px;
+      padding: 0 15px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.14s ease, border-color 0.14s ease, opacity 0.14s ease;
+    }
+    .slaprf-boot-reconnect-btn {
+      border: 1px solid #3c4556;
+      background: #222834;
+      color: #f3f5f8;
+    }
+    .slaprf-boot-reconnect-btn:hover:not(:disabled) {
+      background: #2b3242;
+      border-color: #525d73;
+    }
+    .slaprf-boot-reconnect-btn:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    .slaprf-boot-settings-btn {
+      border: 1px solid #2b313d;
+      background: transparent;
+      color: #c2cad8;
+    }
+    .slaprf-boot-settings-btn:hover {
+      background: #1b2029;
+      border-color: #3d4556;
+      color: #f3f5f8;
+    }
+    .slaprf-boot-loader.is-conflict .slaprf-boot-card {
+      max-width: 390px;
+    }
+    .slaprf-boot-loader.is-conflict .slaprf-boot-bar,
+    .slaprf-boot-loader.is-conflict .slaprf-boot-status {
+      display: none;
+    }
+    .slaprf-boot-loader.is-conflict .slaprf-boot-conflict {
+      display: flex;
+    }
+    .slaprf-boot-loader.is-connection-lost .slaprf-boot-takeover-btn {
+      display: none;
+    }
+    .slaprf-boot-loader.is-connection-lost .slaprf-boot-conn-actions {
+      display: flex;
+    }
+    .slaprf-boot-loader.is-conflict .slaprf-boot-ring,
+    .slaprf-boot-loader.is-conflict .slaprf-boot-sweep,
+    .slaprf-boot-loader.is-auth-required .slaprf-boot-ring,
+    .slaprf-boot-loader.is-auth-required .slaprf-boot-sweep {
+      animation-play-state: paused;
+      opacity: 0.35;
+    }
+    .slaprf-boot-auth {
+      display: none;
+      width: 100%;
+      max-width: 360px;
+      flex-direction: column;
+      align-items: stretch;
+      gap: 11px;
+      padding: 18px 20px;
+      border-radius: 12px;
+      background: #14171d;
+      border: 1px solid #2b313d;
+      box-sizing: border-box;
+      text-align: left;
+    }
+    .slaprf-boot-auth-title {
+      font-size: 14px;
+      font-weight: 600;
+      color: #f3f5f8;
+      text-align: center;
+    }
+    .slaprf-boot-auth-desc {
+      font-size: 12.5px;
+      color: #9ba3b4;
+      text-align: center;
+      margin-top: -4px;
+      margin-bottom: 2px;
+    }
+    .slaprf-boot-auth-field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+    .slaprf-boot-auth-label {
+      font-size: 11.5px;
+      font-weight: 500;
+      color: #9ba3b4;
+    }
+    .slaprf-boot-auth-input {
+      height: 35px;
+      padding: 0 11px;
+      border-radius: 8px;
+      border: 1px solid #2d3442;
+      background: #0d1015;
+      color: #f3f5f8;
+      font-family: inherit;
+      font-size: 13px;
+      outline: none;
+      transition: border-color 0.14s ease;
+    }
+    .slaprf-boot-auth-input:focus,
+    .slaprf-boot-auth-input:focus-visible {
+      outline: none;
+      border-color: #6b7280;
+    }
+    .slaprf-boot-auth-error {
+      display: none;
+      align-items: center;
+      justify-content: flex-start;
+      padding: 6px 10px;
+      border-radius: 7px;
+      border: 1px solid #3a4354;
+      background: #0f1319;
+      font-size: 12px;
+      color: #e2e8f0;
+      text-align: left;
+      line-height: 1.3;
+      box-sizing: border-box;
+    }
+    .slaprf-boot-auth-error.is-visible {
+      display: flex;
+    }
+    .slaprf-boot-auth-remember {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+      color: #9ba3b4;
+      cursor: pointer;
+      user-select: none;
+      margin-top: 2px;
+    }
+    .slaprf-boot-auth-remember input[type="checkbox"] {
+      position: relative;
+      -webkit-appearance: none;
+      appearance: none;
+      width: 16px;
+      height: 16px;
+      margin: 0;
+      border-radius: 4px;
+      border: 1px solid #3a4354;
+      background: #0d1015;
+      cursor: pointer;
+      flex-shrink: 0;
+      box-sizing: border-box;
+      transition: border-color 0.14s ease, background-color 0.14s ease;
+    }
+    .slaprf-boot-auth-remember input[type="checkbox"]:hover {
+      border-color: #6b7280;
+    }
+    .slaprf-boot-auth-remember input[type="checkbox"]:focus-visible {
+      outline: none;
+      border-color: #6b7280;
+    }
+    .slaprf-boot-auth-remember input[type="checkbox"]:checked {
+      border-color: #6b7280;
+      background: #272e3a;
+    }
+    .slaprf-boot-auth-remember input[type="checkbox"]:checked::after {
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 44%;
+      width: 4.5px;
+      height: 8px;
+      box-sizing: border-box;
+      border: solid #f3f5f8;
+      border-width: 0 1.8px 1.8px 0;
+      transform: translate(-50%, -50%) rotate(45deg);
+    }
+    .slaprf-boot-auth-footer {
+      display: none;
+      width: 100%;
+      max-width: 360px;
+      justify-content: space-between;
+      align-items: center;
+      margin-top: -6px;
+    }
+    .slaprf-boot-loader.is-auth-required .slaprf-boot-auth-footer {
+      display: flex;
+    }
+    .slaprf-boot-auth-theme,
+    .slaprf-boot-auth-demo-disable {
+      background: none;
+      border: none;
+      padding: 2px 4px;
+      font-family: inherit;
+      font-size: 11.5px;
+      color: #8b95a7;
+      cursor: pointer;
+      text-decoration: none;
+      transition: color 0.14s ease;
+    }
+    .slaprf-boot-auth-theme:hover,
+    .slaprf-boot-auth-demo-disable:hover {
+      color: #e2e8f0;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .slaprf-boot-auth-demo-disable[hidden] {
+      display: none;
+    }
+    .slaprf-boot-auth-submit {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      height: 36px;
+      padding: 0 16px;
+      margin-top: 3px;
+      border-radius: 8px;
+      border: 1px solid #d4ff3a;
+      background: #d4ff3a;
+      color: #0b0c0f;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.14s ease, filter 0.14s ease;
+    }
+    .slaprf-boot-auth-submit:hover:not(:disabled) {
+      filter: brightness(1.05);
+    }
+    .slaprf-boot-auth-submit:disabled {
+      opacity: 0.6;
+      cursor: default;
+    }
+    .slaprf-boot-loader.is-auth-required .slaprf-boot-card {
+      max-width: 370px;
+    }
+    .slaprf-boot-loader.is-auth-required .slaprf-boot-bar,
+    .slaprf-boot-loader.is-auth-required .slaprf-boot-status {
+      display: none;
+    }
+    .slaprf-boot-loader.is-auth-required .slaprf-boot-auth {
+      display: flex;
+    }
     @keyframes slaprfSpin {
       to { transform: rotate(360deg); }
     }
@@ -129,12 +445,131 @@
       0% { transform: scale(0.78); opacity: 0.85; }
       100% { transform: scale(1.38); opacity: 0; }
     }
+    html[data-theme="light"], html[data-theme="light"] body {
+      background: #f3f5f8;
+      color: #181d27;
+    }
+    html[data-theme="light"] .slaprf-boot-loader {
+      background:
+        radial-gradient(circle at 50% 44%, rgba(37, 99, 235, 0.09) 0%, rgba(56, 189, 248, 0.05) 36%, transparent 68%),
+        #f3f5f8;
+    }
+    html[data-theme="light"] .slaprf-boot-ring {
+      border-color: rgba(37, 99, 235, 0.26);
+    }
+    html[data-theme="light"] .slaprf-boot-sweep {
+      border-top-color: #2563eb;
+      border-right-color: rgba(37, 99, 235, 0.34);
+    }
+    html[data-theme="light"] .slaprf-boot-logo {
+      background: #ffffff;
+      border-color: #cbd2de;
+      color: #2563eb;
+      box-shadow: 0 10px 28px rgba(15, 23, 42, 0.09);
+    }
+    html[data-theme="light"] .slaprf-boot-title,
+    html[data-theme="light"] .slaprf-boot-conflict-title {
+      color: #181d27;
+    }
+    html[data-theme="light"] .slaprf-boot-sub,
+    html[data-theme="light"] .slaprf-boot-conflict-desc {
+      color: #4a5365;
+    }
+    html[data-theme="light"] .slaprf-boot-bar {
+      background: #e3e8f0;
+      border-color: #cbd2de;
+    }
+    html[data-theme="light"] .slaprf-boot-fill {
+      background: linear-gradient(90deg, #38bdf8, #2563eb);
+    }
+    html[data-theme="light"] .slaprf-boot-status {
+      color: #4a5365;
+    }
+    html[data-theme="light"] .slaprf-boot-conflict {
+      background: #ffffff;
+      border-color: #cbd2de;
+      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+    }
+    html[data-theme="light"] .slaprf-boot-takeover-btn,
+    html[data-theme="light"] .slaprf-boot-reconnect-btn {
+      border-color: #cbd2de;
+      background: #eef1f6;
+      color: #181d27;
+    }
+    html[data-theme="light"] .slaprf-boot-takeover-btn:hover,
+    html[data-theme="light"] .slaprf-boot-reconnect-btn:hover:not(:disabled) {
+      background: #e3e8f0;
+      border-color: #aeb8c8;
+    }
+    html[data-theme="light"] .slaprf-boot-settings-btn {
+      border-color: #dfe4ec;
+      color: #4a5365;
+    }
+    html[data-theme="light"] .slaprf-boot-settings-btn:hover {
+      background: #eef1f6;
+      border-color: #cbd2de;
+      color: #181d27;
+    }
+    html[data-theme="light"] .slaprf-boot-auth {
+      background: #ffffff;
+      border-color: #cbd2de;
+      box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+    }
+    html[data-theme="light"] .slaprf-boot-auth-title {
+      color: #181d27;
+    }
+    html[data-theme="light"] .slaprf-boot-auth-desc,
+    html[data-theme="light"] .slaprf-boot-auth-label {
+      color: #4a5365;
+    }
+    html[data-theme="light"] .slaprf-boot-auth-input {
+      background: #f8fafc;
+      border-color: #cbd2de;
+      color: #181d27;
+    }
+    html[data-theme="light"] .slaprf-boot-auth-input:focus,
+    html[data-theme="light"] .slaprf-boot-auth-input:focus-visible {
+      outline: none;
+      border-color: #6b7280;
+    }
+    html[data-theme="light"] .slaprf-boot-auth-remember input[type="checkbox"] {
+      border-color: #cbd2de;
+      background: #f8fafc;
+    }
+    html[data-theme="light"] .slaprf-boot-auth-remember input[type="checkbox"]:checked {
+      border-color: #4a5365;
+      background: #e2e8f0;
+    }
+    html[data-theme="light"] .slaprf-boot-auth-remember input[type="checkbox"]:checked::after {
+      border-color: #181d27;
+    }
+    html[data-theme="light"] .slaprf-boot-auth-error {
+      border-color: #cbd5e1;
+      background: #f8fafc;
+      color: #334155;
+    }
+    html[data-theme="light"] .slaprf-boot-auth-remember {
+      color: #4a5365;
+    }
+    html[data-theme="light"] .slaprf-boot-auth-theme,
+    html[data-theme="light"] .slaprf-boot-auth-demo-disable {
+      color: #64748b;
+    }
+    html[data-theme="light"] .slaprf-boot-auth-theme:hover,
+    html[data-theme="light"] .slaprf-boot-auth-demo-disable:hover {
+      color: #1e293b;
+    }
+    html[data-theme="light"] .slaprf-boot-auth-submit {
+      border-color: #2563eb;
+      background: #2563eb;
+      color: #ffffff;
+    }
   </style>
-  <link rel="stylesheet" href="./styles/tokens.css?v=234" />
-  <link rel="stylesheet" href="./styles/base.css?v=234" />
-  <link rel="stylesheet" href="./styles/layout.css?v=234" />
-  <link rel="stylesheet" href="./styles/components.css?v=234" />
-  <link rel="stylesheet" href="./styles/views.css?v=234" />
+  <link rel="stylesheet" href="./styles/tokens.css?v=351" />
+  <link rel="stylesheet" href="./styles/base.css?v=351" />
+  <link rel="stylesheet" href="./styles/layout.css?v=351" />
+  <link rel="stylesheet" href="./styles/components.css?v=351" />
+  <link rel="stylesheet" href="./styles/views.css?v=351" />
 </head>
 <body>
   <div id="slaprf-boot-loader" class="slaprf-boot-loader" role="status" aria-live="polite">
@@ -159,10 +594,55 @@
         <div id="slaprf-boot-fill" class="slaprf-boot-fill"></div>
       </div>
       <div id="slaprf-boot-status" class="slaprf-boot-status">Loading application bundle…</div>
+      <div id="slaprf-boot-conflict" class="slaprf-boot-conflict">
+        <div id="slaprf-boot-conflict-title" class="slaprf-boot-conflict-title">SlapRF is already open in another tab</div>
+        <div id="slaprf-boot-conflict-desc" class="slaprf-boot-conflict-desc">
+          Switch to your open SlapRF tab to continue, or continue in this tab — the other tab will switch to this screen.
+        </div>
+        <button id="slaprf-boot-takeover-btn" type="button" class="slaprf-boot-takeover-btn" data-boot-takeover>
+          Continue in This Tab
+        </button>
+        <div class="slaprf-boot-conn-actions" data-boot-conn-actions>
+          <button id="slaprf-boot-reconnect-btn" type="button" class="slaprf-boot-reconnect-btn" data-boot-reconnect>
+            Try Reconnecting
+          </button>
+          <button id="slaprf-boot-settings-btn" type="button" class="slaprf-boot-settings-btn" data-boot-go-settings>
+            Go to Settings
+          </button>
+        </div>
+      </div>
+      <form id="slaprf-boot-auth" class="slaprf-boot-auth" data-boot-auth-form novalidate>
+        <div class="slaprf-boot-auth-title">Authentication required</div>
+        <div id="slaprf-boot-auth-desc" class="slaprf-boot-auth-desc">Enter your username and password to sign in to SlapRF.</div>
+        <label class="slaprf-boot-auth-field">
+          <span class="slaprf-boot-auth-label">Username</span>
+          <input id="slaprf-boot-auth-user" type="text" class="slaprf-boot-auth-input" data-boot-auth-user autocomplete="username" required />
+        </label>
+        <label class="slaprf-boot-auth-field">
+          <span class="slaprf-boot-auth-label">Password</span>
+          <input id="slaprf-boot-auth-pass" type="password" class="slaprf-boot-auth-input" data-boot-auth-pass autocomplete="current-password" required />
+        </label>
+        <div id="slaprf-boot-auth-error" class="slaprf-boot-auth-error" data-boot-auth-error role="alert"></div>
+        <label class="slaprf-boot-auth-remember">
+          <input id="slaprf-boot-auth-remember" type="checkbox" data-boot-auth-remember checked />
+          <span>Remember me on this device</span>
+        </label>
+        <button id="slaprf-boot-auth-submit" type="submit" class="slaprf-boot-auth-submit" data-boot-auth-submit>
+          Sign In
+        </button>
+      </form>
+      <div id="slaprf-boot-auth-footer" class="slaprf-boot-auth-footer">
+        <button id="slaprf-boot-auth-theme" type="button" class="slaprf-boot-auth-theme" data-boot-auth-theme-toggle>
+          Light theme
+        </button>
+        <button id="slaprf-boot-auth-demo-disable" type="button" class="slaprf-boot-auth-demo-disable" data-boot-auth-demo-disable hidden>
+          Disable authentication (demo)
+        </button>
+      </div>
     </div>
   </div>
   <div id="app" class="app"></div>
   <!-- Bundled from web/src/main.ts by Go's native esbuild library (zero Node.js). -->
-  <script src="./dist/app.js?v=234"></script>
+  <script src="./dist/app.js?v=351"></script>
 </body>
 </html>

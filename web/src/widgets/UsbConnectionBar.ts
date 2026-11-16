@@ -1,5 +1,6 @@
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
+import { getAppTheme } from "../core/theme";
 import { TimerConsole, usbPool } from "../services/timer_console";
 
 export interface UsbConnectionBarOptions {
@@ -53,11 +54,13 @@ function renderChip(c: TimerConsole, active: boolean, canDisconnect = true): str
           : "Reading…";
   const chipColor = isOther
     ? "#f87171"
-    : s?.emergencyMode
+    : s?.emergencyMode || (!s && !cfg)
       ? "#facc15"
       : isSpoke
         ? "#38bdf8"
-        : "#d4ff3a";
+        : getAppTheme() === "light"
+          ? "#3b82f6"
+          : "#d4ff3a";
   const fp = s?.fp || cfg?.fingerprint || "";
   const fpNote = fp ? ` · ${fp}` : "";
   const closeBtn = canDisconnect
@@ -107,16 +110,18 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
 
   if (opts.allowSwap) {
     // Debug page:
-    // - Never allow disconnecting the main/Hub USB connection (Slot 0) from the Debug window (`canDisconnect = false`).
+    // - Protect only a Hub connection (`canDisconnect = false`); any non-Hub port (Spoke / Other) can be closed.
     // - Allow choosing a second USB connection (Slot 1) to debug on, shown alongside the main connection so the user
-    //   can switch between them or close the secondary debug USB connection (`canDisconnect = true`).
-    // - Once a secondary debug USB connection is active, hide the connect button until the user disconnects it.
+    //   can switch between them or close non-Hub connections.
+    // - Once both slots are occupied, hide the connect button until a slot is closed.
+    const isHubConsole = (c: TimerConsole): boolean =>
+      c.lastStatus ? c.lastStatus.role === 1 : c.lastConfig?.role === "hub";
     const chips: string[] = [];
     if (main.connected) {
-      chips.push(renderChip(main, opts.activeConsole === main, false));
+      chips.push(renderChip(main, opts.activeConsole === main, !isHubConsole(main)));
     }
     if (swapSlot.connected) {
-      chips.push(renderChip(swapSlot, opts.activeConsole === swapSlot, true));
+      chips.push(renderChip(swapSlot, opts.activeConsole === swapSlot, !isHubConsole(swapSlot)));
     }
     chipsHtml = chips.join("");
 
@@ -160,7 +165,7 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
 
   const bannerParts: string[] = [];
   if (!supported) {
-    bannerParts.push(`<div class="sim-error-note">USB connection needs Chrome, Edge or Brave (WebSerial).</div>`);
+    bannerParts.push(`<div class="sim-error-note">Connect a SlapRF Server to open physical USB serial ports.</div>`);
   }
   if (opts.error) {
     bannerParts.push(`<div class="sim-error-note">${esc(opts.error)}</div>`);

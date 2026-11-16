@@ -76,13 +76,21 @@ func (d *ChannelDetector) ProcessSample(
 
 	s := d.smoothedRSSI
 
+	effectiveExit := exitThresholdDbm
+	if effectiveExit == 0 || effectiveExit > enterThresholdDbm-2.0 {
+		effectiveExit = enterThresholdDbm - 2.0
+	}
+
 	// 2. Check gate entry.
 	if !d.inGate {
-		// Hysteresis: after a crossing, stay disarmed until the signal has fallen back below the
-		// entry threshold, so the tail of one pass can't look like a second pass. The timeout
-		// covers a quad that lingers near the gate (or a neighbouring gate keeping it loud).
+		// Dual-threshold hysteresis: after a crossing, stay disarmed until the signal drops to or
+		// below the exit threshold (or stays clearly below the entry threshold past a close-gate /
+		// lingering timeout), so the tail of one pass cannot re-trigger as a second pass.
 		if d.awaitingRearm {
-			if s >= enterThresholdDbm-4.0 && timestampUs-d.lastCrossingUs < rearmTimeoutUs {
+			rearmed := s <= effectiveExit ||
+				(s <= enterThresholdDbm-4.0 && timestampUs-d.lastCrossingUs >= 900_000) ||
+				(s < enterThresholdDbm && timestampUs-d.lastCrossingUs >= rearmTimeoutUs)
+			if !rearmed {
 				return nil
 			}
 			d.awaitingRearm = false
@@ -106,17 +114,17 @@ func (d *ChannelDetector) ProcessSample(
 		d.peakTimestampUs = timestampUs
 	}
 
-	// 4. Check gate exit (hysteresis nadir):
-	// Confirm the crossing as soon as the signal has fallen exitDropDb below its peak, or below the
-	// absolute exit threshold, whichever comes first. A purely absolute threshold fails when gates are
-	// close together (the drone never gets "quiet" between them) and delays LiveTime lap callouts.
-	const exitDropDb = 15.0
-	effectiveExit := d.peakRSSI - exitDropDb
-	if exitThresholdDbm > effectiveExit {
-		effectiveExit = exitThresholdDbm
+	// 4. Check gate exit (dual-threshold Schmitt hysteresis):
+	// Confirm the crossing when the signal drops to or below the configured exit threshold.
+	// If adjacent gates are very close together so inter-gate RSSI bottoms out between
+	// (enterThreshold - 4 dB) and exitThreshold, confirm once the drone has clearly exited
+	// the entry zone (>= 16 dB below peak and >= 700 ms past closest approach).
+	exited := s <= effectiveExit
+	if !exited && s <= enterThresholdDbm-4.0 && (d.peakRSSI-s) >= 16.0 && timestampUs >= d.peakTimestampUs+700_000 {
+		exited = true
 	}
 
-	if s <= effectiveExit {
+	if exited {
 		d.inGate = false
 		d.lastCrossingUs = d.peakTimestampUs
 		d.hasCrossed = true

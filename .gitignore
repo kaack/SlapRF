@@ -33,6 +33,11 @@ firmware/*/build-*/
 *.db-wal
 *.db-shm
 
-# Leftovers from the removed desktop server (cmd/slaprf)
+# Portable embedded site staging (populated by cmd/build-portable; .keep is tracked for go:embed)
+/cmd/slaprf/site/*
+!/cmd/slaprf/site/.keep
 slaprf.exe
 slaprf.db*
+
+# SlapRF E2E verification test artifacts (videos, traces, screenshots, HTML report)
+/test-results/

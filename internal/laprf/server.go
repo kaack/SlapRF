@@ -46,6 +46,7 @@ type Server struct {
 	detectionsSent   uint64
 	statusFramesSent uint64
 	lastRFSetupSync  time.Time
+	hostArmed        bool
 }
 
 // session is one LiveTime connection (one virtual LapRF device link).
@@ -73,6 +74,11 @@ func (f *engineCrossingForwarder) OnGateCrossing(ev domain.GateCrossingEvent) {
 		f.server.OnGateCrossing(ev)
 	}
 }
+func (f *engineCrossingForwarder) OnPassthroughCrossing(ev domain.GateCrossingEvent) {
+	if f.server.activeEngine() == f.engine {
+		f.server.OnGateCrossing(ev)
+	}
+}
 func (f *engineCrossingForwarder) OnLapCompleted(_ domain.LapRecord, _ []domain.PilotTrackSummary) {}
 func (f *engineCrossingForwarder) OnDetectionFiltered(_ domain.FilteredDetection)                  {}
 func (f *engineCrossingForwarder) OnConfigUpdated(_ []domain.PilotSlot, _ []domain.TrackGate)      {}
@@ -82,6 +88,7 @@ func NewServer(engine *tracker.Engine) *Server {
 	s := &Server{
 		subscribed: make(map[*tracker.Engine]bool),
 		sessions:   make(map[*session]struct{}),
+		hostArmed:  true,
 	}
 	s.SetEngine(engine)
 	return s
@@ -111,6 +118,7 @@ func (s *Server) Follow(resolve func() *tracker.Engine, engines ...*tracker.Engi
 	s.mu.Lock()
 	s.resolve = resolve
 	s.mu.Unlock()
+	tracker.SyncBootTimes(s.allEngines()...)
 }
 
 func (s *Server) subscribe(engine *tracker.Engine) {
@@ -124,6 +132,24 @@ func (s *Server) subscribe(engine *tracker.Engine) {
 	if !already {
 		engine.Subscribe(&engineCrossingForwarder{server: s, engine: engine})
 	}
+}
+
+func (s *Server) allEngines() []*tracker.Engine {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*tracker.Engine, 0, len(s.subscribed)+1)
+	seen := make(map[*tracker.Engine]bool, len(s.subscribed)+1)
+	if s.engine != nil {
+		out = append(out, s.engine)
+		seen[s.engine] = true
+	}
+	for e := range s.subscribed {
+		if e != nil && !seen[e] {
+			out = append(out, e)
+			seen[e] = true
+		}
+	}
+	return out
 }
 
 func (s *Server) activeEngine() *tracker.Engine {
@@ -140,7 +166,6 @@ func (s *Server) activeEngine() *tracker.Engine {
 
 // Status returns the current LiveTime bridge diagnostics.
 func (s *Server) Status() LiveTimeStatus {
-	eng := s.activeEngine()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return LiveTimeStatus{
@@ -148,7 +173,7 @@ func (s *Server) Status() LiveTimeStatus {
 		DetectionsSent:   s.detectionsSent,
 		StatusFramesSent: s.statusFramesSent,
 		LastRFSetupSync:  s.lastRFSetupSync,
-		RaceArmedByHost:  eng.IsRaceArmed(),
+		RaceArmedByHost:  s.hostArmed,
 	}
 }
 
@@ -227,121 +252,175 @@ func (s *Server) handleIncomingPacket(sess *session, pkt *Packet) {
 	eng := s.activeEngine()
 	switch pkt.Type {
 	case RecordTime:
-		// LiveTime RTC clock sync query: reply with our engine microsecond clock
+		// Host RTC clock sync query: align all engines to the same monotonic boot time and reply
+		// with microsecond clock quantized to whole milliseconds (*1000) so FPVTrackside's
+		// LapRFTiming.RequestRTCTime ("EndsWith(\"000\")") recognizes it as microsecond-scaled.
+		tracker.SyncBootTimes(s.allEngines()...)
 		reply := &Packet{Type: RecordTime}
-		reply.AppendUint64(0x02, eng.NowUs())
+		rtcUs := (eng.NowUs() / 1000) * 1000
+		if rtcUs == 0 {
+			rtcUs = 1000
+		}
+		reply.AppendUint64(0x02, rtcUs)
 		_ = sess.write(reply.Encode())
 
 	case RecordRFSetup:
-		// LiveTime reads or writes 8-slot pilot frequencies, bands, thresholds, and gains
+		// Host reads or writes 8-slot pilot frequencies, bands, thresholds, and gains
 		s.applyRFSetupFromLiveTime(pkt)
 		reply := s.buildRFSetupReplyPacket()
 		_ = sess.write(reply.Encode())
 
-	case RecordStateCtrl:
-		// LiveTime starts or stops race staging/timing (0x20 = 1 armed, 0 stopped)
+	case RecordStateCtrl, 0xDA08:
+		// Host starts or stops LapRF race staging/timing (0x20 = 1 armed, 0 stopped).
+		// SlapRF's own local timing toggle ("Timing on" vs "Timing off" passthrough mode) is
+		// controlled independently by the user in the SlapRF UI.
+		tracker.SyncBootTimes(s.allEngines()...)
 		for _, f := range pkt.Fields {
 			if f.Signature == 0x20 && len(f.Data) >= 1 {
 				armed := f.Data[0] != 0
-				eng.SetRaceArmed(armed)
-				log.Printf("[LapRF/LiveTime] Race state set by LiveTime: Armed=%v", armed)
+				s.mu.Lock()
+				s.hostArmed = armed
+				s.mu.Unlock()
+				log.Printf("[LapRF] Race state set by host: Armed=%v", armed)
 			}
 		}
+		// Immediately emit a status frame so synchronous clients (e.g. FPVTrackside LapRFTimingEthernet.Send)
+		// waiting for socket response bytes unblock immediately.
+		_ = sess.write(s.buildStatusPacket().Encode())
 
 	case RecordSettings:
 		reply := &Packet{Type: RecordSettings}
-		reply.AppendUint16(0x22, uint16(StatusInterval/time.Millisecond)) // status interval in ms
+		has26 := false
+		for _, f := range pkt.Fields {
+			if f.Signature == 0x26 && len(f.Data) >= 4 {
+				minLapMs := binary.LittleEndian.Uint32(f.Data)
+				reply.AppendUint32(0x26, minLapMs)
+				has26 = true
+			}
+		}
+		if !has26 {
+			reply.AppendUint16(0x22, uint16(StatusInterval/time.Millisecond)) // status interval in ms
+		}
 		_ = sess.write(reply.Encode())
+
+	case RecordRSSI:
+		_ = sess.write(s.buildStatusPacket().Encode())
 	}
 }
 
 func (s *Server) applyRFSetupFromLiveTime(pkt *Packet) {
-	eng := s.activeEngine()
-	pilots, _, _, _, _ := eng.StateSnapshot()
-	slotMap := make(map[int]domain.PilotSlot)
-	for _, p := range pilots {
-		slotMap[p.SlotIndex] = p
-	}
+	tracker.SyncBootTimes(s.allEngines()...)
+	for _, targetEng := range s.allEngines() {
+		pilots, _, _, _, _ := targetEng.StateSnapshot()
+		slotMap := make(map[int]domain.PilotSlot)
+		for _, p := range pilots {
+			slotMap[p.SlotIndex] = p
+		}
 
-	currentSlot := 0
-	modified := false
+		currentSlot := 0
+		modified := false
 
-	for _, f := range pkt.Fields {
-		switch f.Signature {
-		case 0x01: // Pilot Slot index (1..8)
-			if len(f.Data) >= 1 {
-				currentSlot = int(f.Data[0])
-			}
-		case 0x20: // Enabled (uint16 or uint8)
-			if currentSlot >= 1 && currentSlot <= domain.MaxPilotSlots && len(f.Data) >= 1 {
-				slot := slotMap[currentSlot]
-				slot.Enabled = f.Data[0] != 0
-				slotMap[currentSlot] = slot
-				modified = true
-			}
-		case 0x21: // Channel (1..8)
-			if currentSlot >= 1 && currentSlot <= domain.MaxPilotSlots && len(f.Data) >= 2 {
-				slot := slotMap[currentSlot]
-				slot.Channel = uint8(binary.LittleEndian.Uint16(f.Data))
-				slotMap[currentSlot] = slot
-				modified = true
-			}
-		case 0x22: // Band
-			if currentSlot >= 1 && currentSlot <= domain.MaxPilotSlots && len(f.Data) >= 2 {
-				slot := slotMap[currentSlot]
-				slot.Band = domain.Band(binary.LittleEndian.Uint16(f.Data))
-				slotMap[currentSlot] = slot
-				modified = true
-			}
-		case 0x23: // Threshold (float32 in LapRF scale ~400..3500, or dBm if negative)
-			if currentSlot >= 1 && currentSlot <= domain.MaxPilotSlots && len(f.Data) >= 4 {
-				val := math.Float32frombits(binary.LittleEndian.Uint32(f.Data))
-				slot := slotMap[currentSlot]
-				if val < 0 {
-					slot.EnterThreshold = val
-				} else {
-					// Map LapRF 400..3500 scale to -85..-25 dBm
-					slot.EnterThreshold = (val / 46.0) - 95.0
+		for _, f := range pkt.Fields {
+			switch f.Signature {
+			case 0x01: // Pilot Slot index (1..8)
+				if len(f.Data) >= 1 {
+					currentSlot = int(f.Data[0])
 				}
-				slot.ExitThreshold = slot.EnterThreshold - 10.0
-				slotMap[currentSlot] = slot
-				modified = true
-			}
-		case 0x24: // Gain / Attenuation (uint16)
-			if currentSlot >= 1 && currentSlot <= domain.MaxPilotSlots && len(f.Data) >= 2 {
-				slot := slotMap[currentSlot]
-				slot.AttenuationGain = binary.LittleEndian.Uint16(f.Data)
-				slotMap[currentSlot] = slot
-				modified = true
-			}
-		case 0x25: // Frequency in MHz (uint16)
-			if currentSlot >= 1 && currentSlot <= domain.MaxPilotSlots && len(f.Data) >= 2 {
-				freq := binary.LittleEndian.Uint16(f.Data)
-				if freq >= 5000 && freq <= 6000 {
+			case 0x20: // Enabled (uint16 or uint8)
+				if currentSlot >= 1 && currentSlot <= domain.MaxPilotSlots && len(f.Data) >= 1 {
 					slot := slotMap[currentSlot]
-					slot.FrequencyMHz = freq
+					slot.Enabled = f.Data[0] != 0
 					slotMap[currentSlot] = slot
 					modified = true
 				}
+			case 0x21: // Channel (1..8)
+				if currentSlot >= 1 && currentSlot <= domain.MaxPilotSlots && len(f.Data) >= 2 {
+					slot := slotMap[currentSlot]
+					slot.Channel = uint8(binary.LittleEndian.Uint16(f.Data))
+					slotMap[currentSlot] = slot
+					modified = true
+				}
+			case 0x22: // Band
+				if currentSlot >= 1 && currentSlot <= domain.MaxPilotSlots && len(f.Data) >= 2 {
+					slot := slotMap[currentSlot]
+					slot.Band = domain.Band(binary.LittleEndian.Uint16(f.Data))
+					slotMap[currentSlot] = slot
+					modified = true
+				}
+			case 0x23: // Threshold (float32 in LapRF scale ~500..3000 where 800 is standard 5", or dBm if negative)
+				if currentSlot >= 1 && currentSlot <= domain.MaxPilotSlots && len(f.Data) >= 4 {
+					val := math.Float32frombits(binary.LittleEndian.Uint32(f.Data))
+					slot := slotMap[currentSlot]
+					if val < 0 {
+						slot.EnterThreshold = val
+					} else {
+						// Map LapRF scale (800 = -58 dBm standard 5", 1220 = -47.5 dBm whoops)
+						enter := -58.0 + float64(val-800.0)/40.0
+						if enter < -64.0 {
+							enter = -64.0
+						} else if enter > -30.0 {
+							enter = -30.0
+						}
+						slot.EnterThreshold = float32(enter)
+					}
+					slot.ExitThreshold = slot.EnterThreshold - 10.0
+					slotMap[currentSlot] = slot
+					modified = true
+				}
+			case 0x24: // Gain / Attenuation (uint16)
+				if currentSlot >= 1 && currentSlot <= domain.MaxPilotSlots && len(f.Data) >= 2 {
+					slot := slotMap[currentSlot]
+					slot.AttenuationGain = binary.LittleEndian.Uint16(f.Data)
+					slotMap[currentSlot] = slot
+					modified = true
+				}
+			case 0x25: // Frequency in MHz (uint16)
+				if currentSlot >= 1 && currentSlot <= domain.MaxPilotSlots && len(f.Data) >= 2 {
+					freq := binary.LittleEndian.Uint16(f.Data)
+					slot := slotMap[currentSlot]
+					if freq == 0 {
+						slot.Enabled = false
+						slot.Channel = 0
+						slot.FrequencyMHz = 0
+						slotMap[currentSlot] = slot
+						modified = true
+					} else if freq >= 5000 && freq <= 6000 {
+						slot.FrequencyMHz = freq
+						if band, ch, ok := domain.LookupBandChannelByFreqMHz(freq); ok {
+							slot.Band = band
+							slot.Channel = ch
+						} else {
+							if slot.Band == 0 || slot.Band == domain.BandRaceband {
+								slot.Band = domain.BandFatshark
+							}
+							if slot.Channel == 0 {
+								slot.Channel = uint8(currentSlot)
+							}
+						}
+						slotMap[currentSlot] = slot
+						modified = true
+					}
+				}
 			}
 		}
-	}
 
-	if modified {
-		for idx := 1; idx <= domain.MaxPilotSlots; idx++ {
-			eng.UpdatePilotSlot(slotMap[idx])
+		if modified {
+			targetEng.ApplyLapRFSetup(slotMap)
 		}
-		s.mu.Lock()
-		s.lastRFSetupSync = time.Now()
-		s.mu.Unlock()
-		log.Printf("[LapRF/LiveTime] Synced 8-Slot Pilot RF Configuration from LiveTime")
 	}
+	s.mu.Lock()
+	s.lastRFSetupSync = time.Now()
+	s.mu.Unlock()
+	log.Printf("[LapRF/LiveTime] Synced 8-Slot Pilot RF Configuration from LiveTime")
 }
 
 func (s *Server) buildRFSetupReplyPacket() *Packet {
 	pilots, _, _, _, _ := s.activeEngine().StateSnapshot()
 	pkt := &Packet{Type: RecordRFSetup}
 	for _, p := range pilots {
+		if p.SlotIndex < 1 || p.SlotIndex > domain.MaxPilotSlots {
+			continue
+		}
 		pkt.AppendUint8(0x01, uint8(p.SlotIndex))
 		var en uint16
 		if p.Enabled {
@@ -350,8 +429,6 @@ func (s *Server) buildRFSetupReplyPacket() *Packet {
 		pkt.AppendUint16(0x20, en)
 		pkt.AppendUint16(0x21, uint16(p.Channel))
 		pkt.AppendUint16(0x22, uint16(p.Band))
-		laprfThresh := (p.EnterThreshold + 95.0) * 46.0
-		pkt.AppendFloat32(0x23, laprfThresh)
 		pkt.AppendUint16(0x24, p.AttenuationGain)
 		pkt.AppendUint16(0x25, p.FrequencyMHz)
 	}
@@ -373,20 +450,28 @@ func (s *Server) buildStatusPacket() *Packet {
 	}
 
 	pkt := &Packet{Type: RecordStatus}
-	pkt.AppendUint16(0x03, startGate.BatteryMv) // Battery voltage in mV
-	pkt.AppendUint16(0x01, 0)                   // Status flags
+	voltageMv := startGate.BatteryMv
+	if voltageMv < 11500 {
+		// Standard LapRF 8-way runs on 3S/12V; report 12.0V when powered over USB/1S so host voltage alarms stay green
+		voltageMv = 12000
+	}
+	pkt.AppendUint16(0x21, voltageMv) // Input voltage in mV (LapRFProtocol.cs signature 0x21)
+	s.mu.RLock()
+	hostArmed := s.hostArmed
+	s.mu.RUnlock()
 	var gateState uint8
-	if eng.IsRaceArmed() {
+	if hostArmed {
 		gateState = 1
 	}
-	pkt.AppendUint8(0x23, gateState)
-	pkt.AppendUint32(0x22, uint32(len(crossings)))
+	pkt.AppendUint8(0x23, gateState)                // Gate state (1 = armed, 0 = stopped)
+	pkt.AppendUint32(0x24, uint32(len(crossings)))  // Total passing records count
 
 	for i := 0; i < domain.MaxPilotSlots; i++ {
 		pkt.AppendUint8(0x01, uint8(i+1))
 		rssiHeight := float32(math.Max(300, float64(startGate.LastRSSI[i]+95.0)*46.0))
-		pkt.AppendFloat32(0x21, rssiHeight)
+		pkt.AppendFloat32(0x22, rssiHeight) // Instantaneous RSSI (LapRFProtocol.cs signature 0x22)
 	}
+	pkt.AppendUint16(0x03, 0) // Status flags
 	return pkt
 }
 
@@ -425,6 +510,12 @@ func (s *Server) OnGateCrossing(ev domain.GateCrossingEvent) {
 	if !ev.IsStartFinish {
 		return
 	}
+	s.mu.RLock()
+	armed := s.hostArmed
+	s.mu.RUnlock()
+	if !armed {
+		return
+	}
 	pkt := BuildDetectionPacket(
 		uint8(ev.SlotIndex),
 		ev.TimestampUs,
@@ -432,6 +523,10 @@ func (s *Server) OnGateCrossing(ev domain.GateCrossingEvent) {
 		ev.LapRFPeakHeight,
 	)
 	s.broadcastDetection(pkt.Encode())
+}
+
+func (s *Server) OnPassthroughCrossing(ev domain.GateCrossingEvent) {
+	s.OnGateCrossing(ev)
 }
 
 func (s *Server) OnLapCompleted(_ domain.LapRecord, _ []domain.PilotTrackSummary) {}

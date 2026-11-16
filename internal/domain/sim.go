@@ -41,6 +41,7 @@ type SimPilotState struct {
 	SlotIndex         int               `json:"slotIndex"`
 	Callsign          string            `json:"callsign"`
 	Color             string            `json:"color"`
+	Band              Band              `json:"band"`
 	Channel           uint8             `json:"channel"`
 	FrequencyMHz      uint16            `json:"frequencyMhz"`
 	Enabled           bool              `json:"enabled"`
@@ -60,26 +61,85 @@ type SimPilotState struct {
 
 // SimTimerState describes a simulated XIAO ESP32-C5 hardware timer in the Sim tab.
 type SimTimerState struct {
-	TimerID          uint8   `json:"timerId"`
-	TimerLabel       string  `json:"timerLabel"`
-	Color            string  `json:"color"`
-	IsHub            bool    `json:"isHub"`
-	FirmwareVersion  string  `json:"firmwareVersion"`
-	Fingerprint      string  `json:"fingerprint"`
-	PoweredOn        bool    `json:"poweredOn"`
-	Online           bool    `json:"online"`
-	AssignedGateName string  `json:"assignedGateName"`
-	BatteryMv        uint16  `json:"batteryMv"`
-	BatteryPct       uint8   `json:"batteryPct"`
-	NoiseFloorDbm    float32 `json:"noiseFloorDbm"`
+	TimerID          uint8                     `json:"timerId"`
+	TimerLabel       string                    `json:"timerLabel"`
+	Color            string                    `json:"color"`
+	IsHub            bool                      `json:"isHub"`
+	Unflashed        bool                      `json:"unflashed,omitempty"`
+	FirmwareVersion  string                    `json:"firmwareVersion"`
+	Fingerprint      string                    `json:"fingerprint"`
+	PoweredOn        bool                      `json:"poweredOn"`
+	Online           bool                      `json:"online"`
+	AssignedGateName string                    `json:"assignedGateName"`
+	BatteryMv        uint16                    `json:"batteryMv"`
+	BatteryPct       uint8                     `json:"batteryPct"`
+	NoiseFloorDbm    float32                   `json:"noiseFloorDbm"`
+	LastRSSI         [MaxPilotPoolSize]float32 `json:"lastRssi"`
+}
+
+// SimLapRFUnit describes a simulated ImmersionRC LapRF 8-Way timer puck in the Sim tab.
+type SimLapRFUnit struct {
+	TimerID          uint8                  `json:"timerId"`
+	Label            string                 `json:"label"`
+	Host             string                 `json:"host"`
+	Port             int                    `json:"port"`
+	Color            string                 `json:"color"`
+	PoweredOn        bool                   `json:"poweredOn"`
+	Connected        bool                   `json:"connected"`
+	Online           bool                   `json:"online"`
+	AssignedGateName string                 `json:"assignedGateName"`
+	VoltageMv        uint16                 `json:"voltageMv"`
+	GateArmed        bool                   `json:"gateArmed"`
+	RTCDeltaMs       float64                `json:"rtcDeltaMs"`
+	SlotRSSI         [MaxPilotSlots]float32 `json:"slotRssi"`
+	SlotFreqsMHz     [MaxPilotSlots]uint16  `json:"slotFreqsMhz,omitempty"`
+	SlotThresholds   [MaxPilotSlots]float32 `json:"slotThresholds,omitempty"`
+}
+
+// SimRotorHazardUnit describes a simulated RotorHazard timing device (Raspberry Pi server on :5000
+// in RotorHazard Network mode, or an 8-seat USB serial node in RotorHazard USB mode) in the Sim tab.
+type SimRotorHazardUnit struct {
+	TimerID          uint8                  `json:"timerId"`
+	Label            string                 `json:"label"`
+	Transport        string                 `json:"transport,omitempty"` // "network" | "usb"
+	PortName         string                 `json:"portName,omitempty"`  // e.g. "SIM-RH-USB1"
+	BaudRate         int                    `json:"baudRate,omitempty"`  // e.g. 115200 or 921600
+	APILevel         int                    `json:"apiLevel,omitempty"`  // e.g. 36
+	Host             string                 `json:"host"`
+	Port             int                    `json:"port"`
+	NodeCount        int                    `json:"nodeCount"`
+	AdminUser        string                 `json:"adminUser,omitempty"`
+	AdminPass        string                 `json:"adminPass,omitempty"`
+	ServerVersion    string                 `json:"serverVersion,omitempty"`
+	ServerHostname   string                 `json:"serverHostname,omitempty"`
+	Color            string                 `json:"color"`
+	PoweredOn        bool                   `json:"poweredOn"`
+	Connected        bool                   `json:"connected"`
+	Online           bool                   `json:"online"`
+	AuthOK           bool                   `json:"authOk"`
+	AssignedGateName string                 `json:"assignedGateName"`
+	GateArmed        bool                   `json:"gateArmed"`
+	ClockDeltaMs     float64                `json:"clockDeltaMs"`
+	HeartbeatsRx     uint64                 `json:"heartbeatsRx,omitempty"`
+	PassesRx         uint64                 `json:"passesRx,omitempty"`
+	SlotRSSI         [MaxPilotSlots]float32 `json:"slotRssi"`
+	CrossingFlag     [MaxPilotSlots]bool    `json:"crossingFlag,omitempty"`
+	NodeEnterLevels  [MaxPilotSlots]uint8   `json:"nodeEnterLevels,omitempty"`
+	NodeExitLevels   [MaxPilotSlots]uint8   `json:"nodeExitLevels,omitempty"`
+	NodeFreqsMHz     [MaxPilotSlots]uint16  `json:"nodeFreqsMhz,omitempty"`
+	CpuTempC         float32                `json:"cpuTempC,omitempty"`
+	EnvSummary       string                 `json:"envSummary,omitempty"`
 }
 
 // SimState is the full snapshot of the practice simulator exposed to the Sim tab.
 type SimState struct {
-	Running            bool            `json:"running"`
-	TrackWalkerActive  bool            `json:"trackWalkerActive"`
-	AutoPracticeEvents bool            `json:"autoPracticeEvents"`
-	TrackWalkerSecLeft float64         `json:"trackWalkerSecLeft"`
-	Pilots             []SimPilotState `json:"pilots"`
-	Timers             []SimTimerState `json:"timers"`
+	Running            bool                 `json:"running"`
+	SpeedMultiplier    int                  `json:"speedMultiplier"`
+	TrackWalkerActive  bool                 `json:"trackWalkerActive"`
+	AutoPracticeEvents bool                 `json:"autoPracticeEvents"`
+	TrackWalkerSecLeft float64              `json:"trackWalkerSecLeft"`
+	Pilots             []SimPilotState      `json:"pilots"`
+	Timers             []SimTimerState      `json:"timers"`
+	LapRFUnits         []SimLapRFUnit       `json:"laprfUnits,omitempty"`
+	RotorHazardUnits   []SimRotorHazardUnit `json:"rotorhazardUnits,omitempty"`
 }

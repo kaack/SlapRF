@@ -336,7 +336,9 @@ export class TimingRulesEditor extends Component {
     this.el.querySelectorAll<HTMLElement>("[data-count]").forEach((node) => {
       const reason = node.dataset.count as FilterReason;
       const n = counts.get(reason) ?? 0;
-      node.textContent = n ? `${n} ${FILTER_LABELS[reason].toLowerCase()}${where} this session` : "";
+      node.innerHTML = n
+        ? `${icons.info(13)}<span>${esc(`${n} ${FILTER_LABELS[reason].toLowerCase()}${where} this session`)}</span>`
+        : "";
     });
   }
 

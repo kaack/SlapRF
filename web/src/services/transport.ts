@@ -1,13 +1,20 @@
 import { StreamEnvelope } from "../types/models";
 
 /**
- * Transport interface abstracting the connection to the timing engine. The only implementation
- * is `WasmSimTransport`: all API calls and the 50 Hz telemetry stream are served in-browser by
- * the Go timing & physics engine compiled to WebAssembly (`slaprf.wasm`), for both the simulator
- * and the physical Hub (fed over USB-C WebSerial), so the app runs as a pure static site.
+ * Transport interface abstracting the connection to the SlapRF timing engine:
+ * - `BackendHttpTransport`: Native Go backend over HTTP REST + `/api/ws/stream` WebSocket
+ *   (used whenever running in Portable mode or connected remotely to a local/LAN Go server;
+ *   zero WebAssembly and zero IndexedDB).
+ * - `WasmSimTransport`: In-browser Demo Simulator backed by `slaprf.wasm` + `IndexedDB`
+ *   (used strictly for Standalone Browser Demo Mode on `slaprf.app` when no server is connected).
  */
 export interface ApiTransport {
   request<T = unknown>(method: "GET" | "POST", url: string, body?: unknown): Promise<T>;
+  requestText?(method: "GET" | "POST", url: string, body?: unknown): Promise<string>;
   connectStream(onEnvelope: (msg: StreamEnvelope) => void): void;
   disconnectStream(): void;
+  setSimRunning(running: boolean): Promise<void> | void;
+  pushHubChannels(): void;
+  exportSimStateJson(): Promise<string>;
+  importSimStateJson(jsonStr: string): Promise<boolean>;
 }

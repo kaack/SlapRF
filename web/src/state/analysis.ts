@@ -26,7 +26,8 @@ export function practiceStats(store: AppStore, pilot: PilotSlot): PracticeStats 
   const times = laps.map((l) => l.lapTimeSec);
   const recent = times.slice(-ROLLING_WINDOW);
   const previous = times.slice(-ROLLING_WINDOW * 2, -ROLLING_WINDOW);
-  const seen = secondsSinceSeen(store, pilot.slotIndex);
+  const sessionLive = store.isScopeLive;
+  const seen = sessionLive ? secondsSinceSeen(store, pilot.slotIndex) : Infinity;
   return {
     pilot,
     laps,
@@ -34,7 +35,7 @@ export function practiceStats(store: AppStore, pilot: PilotSlot): PracticeStats 
     bestLap: bestLapOf(laps),
     rollingAvg: mean(recent),
     trend: recent.length === ROLLING_WINDOW && previous.length === ROLLING_WINDOW ? mean(recent) - mean(previous) : NaN,
-    onTrack: seen <= ON_TRACK_WINDOW_SEC,
+    onTrack: sessionLive && seen <= ON_TRACK_WINDOW_SEC,
     secondsSinceSeen: seen,
   };
 }
@@ -279,6 +280,8 @@ export interface CurrentLap {
  * start / finish pass. Returns null if they haven't started a lap or stopped flying.
  */
 export function currentLap(store: AppStore, slotIndex: number): CurrentLap | null {
+  const sess = store.selectedPracticeSession;
+  if (sess && !sess.active) return null;
   const gates = store.nodes;
   const sfIdx = gates.findIndex((p) => p.role === "START_FINISH");
   if (sfIdx < 0) return null;

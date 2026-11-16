@@ -1,15 +1,14 @@
 /**
- * Browser-native Espressif ESP32-C5 WebSerial ROM Bootloader Flasher & Reader.
- *
- * Speaks the SLIP-framed Espressif ROM bootloader protocol directly over Chrome/Edge's
- * `navigator.serial` API to a Seeed Studio XIAO ESP32-C5 (USB VID `0x303A` / PID `0x1001`):
- *   - Read (`readXiaoC5OverWebSerial`): Queries the connected XIAO over USB for its chip ID
- *     and decodes its `SLAPRF02` configuration block (role, board fingerprint,
- *     and programmed 5.8 GHz channel table).
- *   - Write (`flashXiaoC5OverWebSerial`): Optionally reads the board's existing fingerprint so it
- *     can be kept, enters Download Mode via DTR/RTS, erases flash, streams 1 KB blocks
- *     (`ESP_FLASH_DATA`), and reboots into the new firmware.
+ * Espressif ESP32-C5 ROM Bootloader Flasher & Reader:
+ *   - Real hardware mode (`caps.portable && !isSimulatedUsbMode()`): delegates SLIP ROM bootloader
+ *     flashing, erasing, and config reading to the native Go backend (`/api/usb/flash`, `/api/usb/erase`,
+ *     `/api/usb/connect` over `go.bug.st/serial`, zero browser WebSerial).
+ *   - Simulation mode (`isSimulatedUsbMode()`): speaks the SLIP-framed Espressif ROM bootloader
+ *     protocol directly to `SimulatedSerialPort` so `#/flasher` works identically in Demo & Sim modes.
  */
+import { capabilitiesSnapshot, resolveBackendUrl } from "./capabilities";
+import { isBackendSerialPort, isSimulatedUsbMode, pickUsbPort } from "./sim_serial_port";
+import { BackendPoolSnapshot, usbPool } from "./timer_console";
 
 export interface FlashProgress {
   stage: "connecting" | "bootloader" | "reading" | "erasing" | "writing" | "rebooting" | "done";
@@ -60,11 +59,6 @@ export interface TimerReadout {
 
 export type ProgressCallback = (progress: FlashProgress) => void;
 
-interface SerialPortFilter {
-  usbVendorId?: number;
-  usbProductId?: number;
-}
-
 interface SerialPortSignals {
   dataTerminalReady?: boolean;
   requestToSend?: boolean;
@@ -77,14 +71,6 @@ interface SerialPortLike {
   readonly readable: ReadableStream<Uint8Array> | null;
   readonly writable: WritableStream<Uint8Array> | null;
 }
-
-interface NavigatorWithSerial {
-  serial?: {
-    requestPort(options?: { filters?: SerialPortFilter[] }): Promise<SerialPortLike>;
-  };
-}
-
-const ESPRESSIF_USB_VID = 0x303a;
 
 // Espressif ROM bootloader opcodes
 const ESP_FLASH_BEGIN = 0x02;
@@ -274,7 +260,7 @@ export async function buildOrPatchFirmwareBin(opts: {
   };
 }
 export function isWebSerialSupported(): boolean {
-  return typeof navigator !== "undefined" && Boolean((navigator as unknown as NavigatorWithSerial).serial);
+  return isSimulatedUsbMode() || capabilitiesSnapshot().portable;
 }
 
 /** Decode the 160-byte `SLAPRF02` configuration block from a firmware binary or flash dump. */
@@ -348,25 +334,52 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+/**
+ * Sets DTR and RTS reliably on Windows (`usbser.sys`), macOS, and Linux.
+ *
+ * Chromium on Windows calls `EscapeCommFunction(SETDTR/CLRDTR)` BEFORE `EscapeCommFunction(SETRTS/CLRRTS)`,
+ * while Windows `usbser.sys` only transmits USB `SET_CONTROL_LINE_STATE` packets on DTR calls (caching RTS
+ * changes until the next DTR call — see `esptool` `reset.py` `_setRTS`).
+ * Calling `{ requestToSend: rts }` first caches the new RTS bit in `usbser.sys`, and calling
+ * `{ dataTerminalReady: dtr, requestToSend: rts }` immediately after flushes the exact `(dtr, rts)` pair
+ * onto the USB wire in a single transfer.
+ */
+export async function setUsbSerialDtrRts(port: SerialPortLike, dtr: boolean, rts: boolean): Promise<void> {
+  await port.setSignals({ requestToSend: rts }).catch(() => undefined);
+  await port.setSignals({ dataTerminalReady: dtr, requestToSend: rts }).catch(() => undefined);
+}
+
+async function disarmUsbJtagPortLatch(port: SerialPortLike): Promise<void> {
+  await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
+  await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
+}
+
 async function enterUsbJtagBootloader(port: SerialPortLike): Promise<void> {
   // Matches esptool USBJTAGSerialReset for ESP32-C5 USB-Serial-JTAG (including the (1,1) transition)
-  await port.setSignals({ dataTerminalReady: false, requestToSend: false }); // Idle (0,0)
+  await setUsbSerialDtrRts(port, false, false); // Idle (0,0)
   await sleep(100);
-  await port.setSignals({ dataTerminalReady: true, requestToSend: false }); // Set IO0 (1,0)
+  await setUsbSerialDtrRts(port, true, false); // Set IO0 download latch (1,0)
   await sleep(100);
-  await port.setSignals({ dataTerminalReady: true, requestToSend: true }); // Step through (1,1) before (0,1)
-  await port.setSignals({ dataTerminalReady: false, requestToSend: true }); // Reset (0,1)
+  await setUsbSerialDtrRts(port, true, true); // Step through (1,1) before (0,1)
+  await setUsbSerialDtrRts(port, false, true); // Assert CHIP_RST while IO0=0 latched (0,1)
   await sleep(100);
-  await port.setSignals({ dataTerminalReady: false, requestToSend: false }); // Chip out of reset (0,0)
+  await setUsbSerialDtrRts(port, false, false); // Release CHIP_RST -> ROM download mode (0,0)
   await sleep(120);
 }
 
 async function hardResetBoard(port: SerialPortLike): Promise<void> {
-  // Matches esptool HardReset(uses_usb=True)
-  await port.setSignals({ dataTerminalReady: false, requestToSend: true });
-  await sleep(200);
-  await port.setSignals({ dataTerminalReady: false, requestToSend: false });
-  await sleep(200);
+  // ESP32-C5 USB-Serial-JTAG triggers CHIP_RST (USB_UART_HPSYS) on the (1,1) -> (0,1) edge (DTR 1 -> 0
+  // while RTS=1). Using setUsbSerialDtrRts pre-caches RTS=1 in Windows usbser.sys BEFORE raising DTR=1,
+  // stepping (0,0) -> (1,1) directly without ever emitting (1,0) (which would latch IO0=0 download mode),
+  // then pulses (0,1) to assert CHIP_RST with IO0=1 (SPI_FAST_FLASH_BOOT) and releases to (0,0).
+  await setUsbSerialDtrRts(port, false, false);
+  await sleep(50);
+  await setUsbSerialDtrRts(port, true, true);
+  await sleep(60);
+  await setUsbSerialDtrRts(port, false, true);
+  await sleep(120);
+  await setUsbSerialDtrRts(port, false, false);
+  await sleep(150);
 }
 
 /**
@@ -403,8 +416,7 @@ export async function haltBlankEsp32C5BootLoop(
   await sendReg(0x600b1c20, 0x50d83aa1); // LP_WDT_SWD_WPROTECT_REG = WKEY (unlock)
   await sendReg(0x600b1c1c, 1 << 18, 1 << 18); // LP_WDT_SWD_CONFIG_REG |= SWD_AUTO_FEED_EN
   await sendReg(0x600b1c20, 0x00000000); // LP_WDT_SWD_WPROTECT_REG = 0 (lock)
-  await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
-  await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
+  await disarmUsbJtagPortLatch(port);
 }
 
 async function readChunkWithTimeout(
@@ -498,7 +510,7 @@ export interface ConnectedPortOwner {
   ownsPort(candidate: unknown): boolean;
   readSnapshot(): Promise<TimerReadout>;
   disconnectCleanly(): Promise<void>;
-  takeActivePort?(): Promise<{ port: SerialPortLike; reopen: () => Promise<void> } | null>;
+  takeActivePort?(): Promise<{ port: SerialPortLike; reopen: (opts?: { expectApp?: boolean }) => Promise<void> } | null>;
 }
 
 /**
@@ -511,9 +523,8 @@ export async function readXiaoC5OverWebSerial(
   showAllPorts = false,
   existingOwner?: ConnectedPortOwner
 ): Promise<TimerReadout> {
-  const nav = navigator as unknown as NavigatorWithSerial;
-  if (!nav.serial) {
-    throw new Error("WebSerial is only available in Chrome, Edge, or Brave over localhost / HTTPS.");
+  if (!isWebSerialSupported()) {
+    throw new Error("Connect to a SlapRF Server to read physical USB hardware.");
   }
 
   onProgress({
@@ -522,8 +533,7 @@ export async function readXiaoC5OverWebSerial(
     detail: "Select the plugged-in XIAO ESP32-C5 USB port…",
   });
 
-  const filters = showAllPorts ? undefined : [{ usbVendorId: ESPRESSIF_USB_VID }];
-  const port = await nav.serial.requestPort(filters ? { filters } : undefined);
+  const port = await pickUsbPort({ showAllPorts });
 
   if (existingOwner && existingOwner.ownsPort(port)) {
     onProgress({
@@ -536,11 +546,27 @@ export async function readXiaoC5OverWebSerial(
     return info;
   }
 
+  if (isBackendSerialPort(port)) {
+    onProgress({
+      stage: "reading",
+      percent: 45,
+      detail: `Reading configuration from ${port.portName}…`,
+    });
+    const tempSlot = usbPool.slots[2];
+    await tempSlot.connectWithPort(port, showAllPorts, 1800);
+    try {
+      const info = await tempSlot.readSnapshot();
+      onProgress({ stage: "done", percent: 100, detail: "Read complete." });
+      return info;
+    } finally {
+      await tempSlot.disconnect().catch(() => undefined);
+    }
+  }
+
   await port.open({ baudRate: 115200, bufferSize: 16384 });
   // Step (1,1) -> (1,0) -> (0,0) so closing the port after reading never triggers USB-Serial-JTAG reset
-  await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
-  await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
-  const writer = port.writable?.getWriter();
+  await disarmUsbJtagPortLatch(port);
+  let writer = port.writable?.getWriter();
   let reader = port.readable?.getReader();
 
   if (!writer || !reader) {
@@ -631,11 +657,6 @@ export async function flashXiaoC5OverWebSerial(
   keepFingerprint = false,
   existingOwner?: ConnectedPortOwner
 ): Promise<TimerReadout | null> {
-  const nav = navigator as unknown as NavigatorWithSerial;
-  if (!nav.serial) {
-    throw new Error("WebSerial is only available in Chrome, Edge, or Brave over localhost / HTTPS.");
-  }
-
   onProgress({
     stage: "connecting",
     percent: 2,
@@ -648,6 +669,41 @@ export async function flashXiaoC5OverWebSerial(
   }
   const port = taken.port;
 
+  if (isBackendSerialPort(port)) {
+    const cfg = parseSlaprfConfigBlock(imageBytes);
+    const unsub = usbPool.onFlashProgress(onProgress);
+    try {
+      const res = await fetch(resolveBackendUrl("/api/usb/flash"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          portName: port.portName,
+          slotIndex: 0,
+          role: cfg?.role ?? "spoke",
+          timerLabel: cfg?.timerLabel || label,
+          fingerprint: cfg?.fingerprint || "",
+          keepFingerprint,
+          frequencies: cfg?.frequenciesMHz ?? [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917],
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        readout?: TimerReadout;
+        pool?: BackendPoolSnapshot;
+      };
+      if (data.pool) {
+        usbPool.applyBackendPoolSnapshot(data.pool);
+      }
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to flash ${port.portName}`);
+      }
+      return data.readout ?? cfg;
+    } finally {
+      unsub();
+      await taken.reopen({ expectApp: true }).catch(() => undefined);
+    }
+  }
+
   try {
     await port.open({ baudRate: 115200, bufferSize: 16384 });
   } catch {
@@ -656,9 +712,8 @@ export async function flashXiaoC5OverWebSerial(
     await port.open({ baudRate: 115200, bufferSize: 16384 });
   }
   // Step (1,1) -> (1,0) -> (0,0) so closing the port after reading never triggers USB-Serial-JTAG reset
-  await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
-  await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
-  const writer = port.writable?.getWriter();
+  await disarmUsbJtagPortLatch(port);
+  let writer = port.writable?.getWriter();
   let reader = port.readable?.getReader();
 
   if (!writer || !reader) {
@@ -784,25 +839,75 @@ export async function flashXiaoC5OverWebSerial(
       percent: 6,
       detail: "Entering ESP32-C5 ROM bootloader…",
     });
-    await enterUsbJtagBootloader(port);
-    slipQueue.length = 0;
 
     const syncPayload = new Uint8Array(36);
     syncPayload.set([0x07, 0x07, 0x12, 0x20], 0);
     syncPayload.fill(0x55, 4);
     const syncFrame = buildRomCommand(ESP_SYNC, syncPayload);
 
-    let synced = false;
-    for (let attempt = 0; attempt < 8; attempt++) {
-      await writer.write(syncFrame);
-      if (await waitForRomAck(ESP_SYNC, 150)) {
-        synced = true;
-        // Drain any extra sync replies queued by the ROM
-        await sleep(30);
-        slipQueue.length = 0;
-        break;
+    const reopenPortStreams = async (): Promise<void> => {
+      pumpActive = false;
+      try {
+        await reader?.cancel();
+      } catch {
+        // ignore
       }
+      try {
+        reader?.releaseLock();
+      } catch {
+        // ignore
+      }
+      try {
+        writer?.releaseLock();
+      } catch {
+        // ignore
+      }
+      await port.close().catch(() => undefined);
+      await sleep(420);
+      await port.open({ baudRate: 115200, bufferSize: 16384 });
+      await disarmUsbJtagPortLatch(port);
+      writer = port.writable?.getWriter();
+      reader = port.readable?.getReader();
+      if (reader) {
+        startSlipPump(reader);
+      }
+    };
+
+    const trySync = async (attempts: number, timeoutMs: number): Promise<boolean> => {
+      slipQueue.length = 0;
+      for (let attempt = 0; attempt < attempts; attempt++) {
+        try {
+          if (!writer) await reopenPortStreams();
+          await writer!.write(syncFrame);
+        } catch {
+          await reopenPortStreams().catch(() => undefined);
+          await writer?.write(syncFrame).catch(() => undefined);
+        }
+        if (await waitForRomAck(ESP_SYNC, timeoutMs)) {
+          await sleep(30);
+          slipQueue.length = 0;
+          return true;
+        }
+      }
+      return false;
+    };
+
+    // 1. Check if the chip is already in ROM download mode (e.g. blank chip or plugged in holding BOOT)
+    let synced = await trySync(2, 80);
+
+    // 2. Enter ROM download mode via hardware USB-Serial-JTAG DTR/RTS sequence (matches `esptool --no-stub`)
+    if (!synced) {
+      await enterUsbJtagBootloader(port);
+      await reopenPortStreams().catch(() => undefined);
+      synced = await trySync(8, 150);
     }
+    if (!synced) {
+      await sleep(500);
+      await enterUsbJtagBootloader(port);
+      await reopenPortStreams().catch(() => undefined);
+      synced = await trySync(6, 150);
+    }
+
     if (!synced) {
       throw new Error("Could not sync with ESP32-C5 ROM bootloader. Hold BOOT while plugging in USB and try again.");
     }
@@ -820,6 +925,7 @@ export async function flashXiaoC5OverWebSerial(
       await writer.write(buildRomCommand(ESP_WRITE_REG, regPayload));
       await waitForRomAck(ESP_WRITE_REG, 1000);
     };
+    await writeReg(0x600b1034, 0x00000000, 0x3 << 29); // LP_AON_SYS_CFG_REG: clear LP_AON_FORCE_DOWNLOAD_BOOT
     await writeReg(0x600b1c18, 0x50d83aa1); // LP_WDT_WPROTECT_REG = WKEY (unlock)
     await writeReg(0x600b1c00, 0x00000000); // LP_WDT_CONFIG0_REG = 0 (disable RWDT)
     await writeReg(0x600b1c18, 0x00000000); // LP_WDT_WPROTECT_REG = 0 (lock)
@@ -917,25 +1023,17 @@ export async function flashXiaoC5OverWebSerial(
       percent: 98,
       detail: "Verifying checksum & rebooting XIAO ESP32-C5…",
     });
-    // Re-enable LP_WDT (RTC watchdog) in flashboot mode before resetting so that if the ESP32-C5
-    // hits the known first-boot `select_rtc_slow_clk` glitch after a USB-Serial-JTAG RTS reset,
-    // LP_WDT automatically recovers and reboots the chip cleanly (LP_WDT_CONFIG0_REG is in the
-    // LP domain and otherwise stays disabled across an RTS reset).
+    // Keep LP_WDT disabled across the post-flash reset: triggering an LP_WDT (RTC watchdog) reset
+    // hits the Espressif USB-Serial/JTAG controller erratum that wedges the USB bulk endpoints
+    // ("Write timeout" / silent port) until the board is physically power-cycled.
     await writeReg(0x600b1c18, 0x50d83aa1); // LP_WDT_WPROTECT_REG = WKEY (unlock)
-    await writeReg(0x600b1c04, 200000); // LP_WDT_CONFIG1_REG = 200000 (~1.5s stage-0 timeout)
-    await writeReg(
-      0x600b1c00,
-      ((1 << 31) | (4 << 28) | (1 << 16) | (1 << 13) | (1 << 12) | (1 << 9) | 20) >>> 0
-    ); // LP_WDT_CONFIG0_REG: WDT_EN=1, STG0=4 (sys reset), FLASHBOOT_MOD_EN=1
-    await writeReg(0x600b1c14, (1 << 31) >>> 0); // LP_WDT_FEED_REG = WDT_FEED
+    await writeReg(0x600b1c00, 0x00000000); // LP_WDT_CONFIG0_REG = 0 (keep RWDT disabled)
     await writeReg(0x600b1c18, 0x00000000); // LP_WDT_WPROTECT_REG = 0 (lock)
 
-    // Send ESP_FLASH_END with uint32(1) (finalize flash without soft-jumping from ROM) so that
-    // `hardResetBoard(port)` performs a single clean hardware reset rather than racing a soft boot.
-    const endPayload = new Uint8Array(4);
-    new DataView(endPayload.buffer).setUint32(0, 1, true);
-    await writer.write(buildRomCommand(ESP_FLASH_END, endPayload));
-    await waitForRomAck(ESP_FLASH_END, 800).catch(() => false);
+    // Do NOT send ESP_FLASH_END (0x04) when flashing via the ROM bootloader (matches `esptool --no-stub`
+    // in `esptool/cmds.py`, which only calls `flash_finish` when `esp.IS_STUB` is true): each
+    // `ESP_FLASH_DATA` block is already synchronously committed before its ROM ACK, whereas ROM
+    // `ESP_FLASH_END` tears down SPI/USB state and wedges ESP32-C5 USB-Serial-JTAG on exit.
     await sleep(60);
     await hardResetBoard(port);
 
@@ -970,7 +1068,7 @@ export async function flashXiaoC5OverWebSerial(
       // ignore
     }
     if (taken) {
-      await taken.reopen().catch(() => undefined);
+      await taken.reopen({ expectApp: true }).catch(() => undefined);
     }
   }
 }
@@ -987,11 +1085,6 @@ export async function eraseXiaoC5OverWebSerial(
   showAllPorts = false,
   existingOwner?: ConnectedPortOwner
 ): Promise<void> {
-  const nav = navigator as unknown as NavigatorWithSerial;
-  if (!nav.serial) {
-    throw new Error("WebSerial is only available in Chrome, Edge, or Brave over localhost / HTTPS.");
-  }
-
   onProgress({
     stage: "connecting",
     percent: 4,
@@ -1004,6 +1097,34 @@ export async function eraseXiaoC5OverWebSerial(
   }
   const port = taken.port;
 
+  if (isBackendSerialPort(port)) {
+    const unsub = usbPool.onFlashProgress(onProgress);
+    try {
+      const res = await fetch(resolveBackendUrl("/api/usb/erase"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          portName: port.portName,
+          slotIndex: 0,
+        }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        pool?: BackendPoolSnapshot;
+      };
+      if (data.pool) {
+        usbPool.applyBackendPoolSnapshot(data.pool);
+      }
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to erase ${port.portName}`);
+      }
+      return;
+    } finally {
+      unsub();
+      await taken.reopen({ expectApp: false }).catch(() => undefined);
+    }
+  }
+
   try {
     await port.open({ baudRate: 115200, bufferSize: 16384 });
   } catch {
@@ -1012,10 +1133,9 @@ export async function eraseXiaoC5OverWebSerial(
     await port.open({ baudRate: 115200, bufferSize: 16384 });
   }
   // Step (1,1) -> (1,0) -> (0,0) so closing the port after reading never triggers USB-Serial-JTAG reset
-  await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
-  await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
-  const writer = port.writable?.getWriter();
-  const reader = port.readable?.getReader();
+  await disarmUsbJtagPortLatch(port);
+  let writer = port.writable?.getWriter();
+  let reader = port.readable?.getReader();
 
   if (!writer || !reader) {
     await port.close().catch(() => undefined);
@@ -1107,23 +1227,70 @@ export async function eraseXiaoC5OverWebSerial(
       percent: 10,
       detail: "Entering ESP32-C5 ROM bootloader…",
     });
-    await enterUsbJtagBootloader(port);
-    slipQueue.length = 0;
 
     const syncPayload = new Uint8Array(36);
     syncPayload.set([0x07, 0x07, 0x12, 0x20], 0);
     syncPayload.fill(0x55, 4);
     const syncFrame = buildRomCommand(ESP_SYNC, syncPayload);
 
-    let synced = false;
-    for (let attempt = 0; attempt < 8; attempt++) {
-      await writer.write(syncFrame);
-      if (await waitForRomAck(ESP_SYNC, 150)) {
-        synced = true;
-        await sleep(30);
-        slipQueue.length = 0;
-        break;
+    const reopenPortStreams = async (): Promise<void> => {
+      pumpActive = false;
+      try {
+        await reader?.cancel();
+      } catch {
+        // ignore
       }
+      try {
+        reader?.releaseLock();
+      } catch {
+        // ignore
+      }
+      try {
+        writer?.releaseLock();
+      } catch {
+        // ignore
+      }
+      await port.close().catch(() => undefined);
+      await sleep(420);
+      await port.open({ baudRate: 115200, bufferSize: 16384 });
+      await disarmUsbJtagPortLatch(port);
+      writer = port.writable?.getWriter();
+      reader = port.readable?.getReader();
+      if (reader) {
+        startSlipPump(reader);
+      }
+    };
+
+    const trySync = async (attempts: number, timeoutMs: number): Promise<boolean> => {
+      slipQueue.length = 0;
+      for (let attempt = 0; attempt < attempts; attempt++) {
+        try {
+          if (!writer) await reopenPortStreams();
+          await writer!.write(syncFrame);
+        } catch {
+          await reopenPortStreams().catch(() => undefined);
+          await writer?.write(syncFrame).catch(() => undefined);
+        }
+        if (await waitForRomAck(ESP_SYNC, timeoutMs)) {
+          await sleep(30);
+          slipQueue.length = 0;
+          return true;
+        }
+      }
+      return false;
+    };
+
+    let synced = await trySync(2, 80);
+    if (!synced) {
+      await enterUsbJtagBootloader(port);
+      await reopenPortStreams().catch(() => undefined);
+      synced = await trySync(8, 150);
+    }
+    if (!synced) {
+      await sleep(500);
+      await enterUsbJtagBootloader(port);
+      await reopenPortStreams().catch(() => undefined);
+      synced = await trySync(6, 150);
     }
     if (!synced) {
       throw new Error("Could not sync with ESP32-C5 ROM bootloader. Hold BOOT while plugging in USB and try again.");
@@ -1140,6 +1307,7 @@ export async function eraseXiaoC5OverWebSerial(
       await writer.write(buildRomCommand(ESP_WRITE_REG, regPayload));
       await waitForRomAck(ESP_WRITE_REG, 1000);
     };
+    await writeReg(0x600b1034, 0x00000000, 0x3 << 29); // LP_AON_SYS_CFG_REG: clear LP_AON_FORCE_DOWNLOAD_BOOT
     await writeReg(0x600b1c18, 0x50d83aa1);
     await writeReg(0x600b1c00, 0x00000000);
     await writeReg(0x600b1c18, 0x00000000);
@@ -1246,7 +1414,7 @@ export async function eraseXiaoC5OverWebSerial(
       // ignore
     }
     if (taken) {
-      await taken.reopen().catch(() => undefined);
+      await taken.reopen({ expectApp: false }).catch(() => undefined);
     }
   }
 }

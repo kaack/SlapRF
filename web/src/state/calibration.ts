@@ -18,7 +18,7 @@ const PASS_PROMINENCE = 0.5;
 const MIN_PASSES = 2;
 
 export type CalibrationResult =
-  | { ok: true; enterDbm: number; floorDbm: number; peakDbm: number; passes: number }
+  | { ok: true; enterDbm: number; exitDbm: number; floorDbm: number; peakDbm: number; passes: number }
   | { ok: false; reason: string };
 
 function percentile(sorted: number[], p: number): number {
@@ -75,5 +75,15 @@ export function suggestThreshold(frames: TimerTelemetryFrame[], slotPos: number)
   let enter = floor + THRESHOLD_FRACTION * (peak - floor);
   enter = Math.min(enter, weak - WEAK_PASS_MARGIN_DB);
   enter = Math.max(enter, floor + MIN_FLOOR_MARGIN_DB, noiseCeiling + NOISE_MARGIN_DB);
-  return { ok: true, enterDbm: Math.round(enter), floorDbm: Math.round(floor), peakDbm: Math.round(peak), passes: passes.length };
+  const enterDbm = Math.round(enter);
+  const rawExit = Math.round(floor + 0.25 * (peak - floor));
+  const exitDbm = Math.max(-105, Math.min(enterDbm - 6, Math.max(Math.round(floor) + 4, rawExit)));
+  return {
+    ok: true,
+    enterDbm,
+    exitDbm,
+    floorDbm: Math.round(floor),
+    peakDbm: Math.round(peak),
+    passes: passes.length,
+  };
 }

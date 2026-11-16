@@ -45,6 +45,8 @@ const INITIAL_RECONCILE_MS = 2_000;
 
 /** JSON shape of Go `tracker.PersistedEngineState` (fields are passed through untouched). */
 export interface PersistedEngineStateJson {
+  bootTimeUnixNano?: number;
+  savedAtUnixUs?: number;
   elapsedUs: number;
   raceArmed: boolean;
   rules: unknown;
@@ -55,11 +57,17 @@ export interface PersistedEngineStateJson {
   laps: unknown[] | null;
   crossings: unknown[] | null;
   filtered: unknown[] | null;
+  raceState?: unknown;
+  eventState?: unknown;
+  practiceSnap?: unknown;
+  practiceBackup?: unknown;
 }
 
 /** `kv` document holding everything of the real engine except the per-event records. */
 export interface RealConfigDoc {
   key: typeof KV_REAL_CONFIG;
+  bootTimeUnixNano?: number;
+  savedAtUnixUs?: number;
   elapsedUs: number;
   raceArmed: boolean;
   rules: unknown;
@@ -67,6 +75,10 @@ export interface RealConfigDoc {
   gates: unknown[] | null;
   timers: unknown[] | null;
   deletedSpokeFp?: string[] | null;
+  raceState?: unknown;
+  eventState?: unknown;
+  practiceSnap?: unknown;
+  practiceBackup?: unknown;
 }
 
 export interface SimStateDoc {
@@ -116,6 +128,8 @@ export function splitRealState(state: PersistedEngineStateJson): {
   return {
     config: {
       key: KV_REAL_CONFIG,
+      ...(isKeyNumber(state.bootTimeUnixNano) ? { bootTimeUnixNano: state.bootTimeUnixNano } : {}),
+      ...(isKeyNumber(state.savedAtUnixUs) ? { savedAtUnixUs: state.savedAtUnixUs } : {}),
       elapsedUs: isKeyNumber(state.elapsedUs) ? state.elapsedUs : 0,
       raceArmed: !!state.raceArmed,
       rules: state.rules ?? null,
@@ -123,6 +137,10 @@ export function splitRealState(state: PersistedEngineStateJson): {
       gates: state.gates ?? null,
       timers: state.timers ?? null,
       deletedSpokeFp: state.deletedSpokeFp ?? null,
+      ...(state.raceState !== undefined ? { raceState: state.raceState } : {}),
+      ...(state.eventState !== undefined ? { eventState: state.eventState } : {}),
+      ...(state.practiceSnap !== undefined ? { practiceSnap: state.practiceSnap } : {}),
+      ...(state.practiceBackup !== undefined ? { practiceBackup: state.practiceBackup } : {}),
     },
     laps: validRecords("laps", state.laps),
     crossings: validRecords("crossings", state.crossings),
@@ -151,6 +169,8 @@ export function assembleRealState(
   const f = validRecords("filtered", filtered).sort((a, b) => num(a.timestampUs) - num(b.timestampUs));
   if (!config && l.length === 0 && c.length === 0 && f.length === 0) return null;
   return {
+    ...(config && isKeyNumber(config.bootTimeUnixNano) ? { bootTimeUnixNano: config.bootTimeUnixNano } : {}),
+    ...(config && isKeyNumber(config.savedAtUnixUs) ? { savedAtUnixUs: config.savedAtUnixUs } : {}),
     elapsedUs: config ? num(config.elapsedUs) : 0,
     raceArmed: config ? !!config.raceArmed : true,
     rules: config?.rules ?? {},
@@ -158,6 +178,10 @@ export function assembleRealState(
     gates: config?.gates ?? null,
     timers: config?.timers ?? null,
     deletedSpokeFp: config?.deletedSpokeFp ?? null,
+    ...(config?.raceState !== undefined ? { raceState: config.raceState } : {}),
+    ...(config?.eventState !== undefined ? { eventState: config.eventState } : {}),
+    ...(config?.practiceSnap !== undefined ? { practiceSnap: config.practiceSnap } : {}),
+    ...(config?.practiceBackup !== undefined ? { practiceBackup: config.practiceBackup } : {}),
     laps: l,
     crossings: c,
     filtered: f,
@@ -223,6 +247,11 @@ function errText(err: unknown): string {
 }
 
 export class EnginePersistence {
+  private readonly tabId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
+  private tabChannel: BroadcastChannel | null = null;
+  private releaseWriterLock: (() => void) | null = null;
+  private onTabDisplaced: (() => void) | null = null;
+
   private db: SlaprfDb | null = null;
   private bridge: EngineExportBridge | null = null;
   private bootPromise: Promise<BootState> | null = null;
@@ -245,6 +274,170 @@ export class EnginePersistence {
   private simDirty = false;
   private readonly listeners = new Set<() => void>();
 
+  private ensureTabChannel(): BroadcastChannel | null {
+    if (this.tabChannel) return this.tabChannel;
+    if (typeof BroadcastChannel === "undefined") return null;
+    try {
+      const ch = new BroadcastChannel("slaprf-tab-owner-v1");
+      ch.addEventListener("message", (ev: MessageEvent) => {
+        const data = ev.data as { type?: string; requesterId?: string } | null;
+        if (!data || data.type !== "takeover-request" || data.requesterId === this.tabId) return;
+        if (this.writer || this.releaseWriterLock) {
+          const reqId = data.requesterId ?? "";
+          void this.yieldActiveOwnership().finally(() => {
+            try {
+              ch.postMessage({ type: "takeover-released", requesterId: reqId, fromTabId: this.tabId });
+            } catch {
+              /* ignore */
+            }
+          });
+        }
+      });
+      this.tabChannel = ch;
+      return ch;
+    } catch {
+      return null;
+    }
+  }
+
+  private tryAcquireLockNonBlocking(): Promise<boolean> {
+    const locks = (navigator as Navigator & { locks?: LockManagerLike }).locks;
+    if (!locks || typeof locks.request !== "function") return Promise.resolve(true);
+    return new Promise<boolean>((resolve) => {
+      locks
+        .request(WRITER_LOCK_NAME, { ifAvailable: true }, (lock) => {
+          if (!lock) {
+            resolve(false);
+            return undefined;
+          }
+          let released = false;
+          let releaseResolve!: () => void;
+          const holdPromise = new Promise<void>((res) => {
+            releaseResolve = res;
+          });
+          this.releaseWriterLock = () => {
+            if (released) return;
+            released = true;
+            this.releaseWriterLock = null;
+            releaseResolve();
+          };
+          resolve(true);
+          return holdPromise;
+        })
+        .catch((err: unknown) => {
+          console.warn("[storage] Web Locks unavailable, assuming single tab:", err);
+          resolve(true);
+        });
+    });
+  }
+
+  private acquireLockBlocking(): Promise<void> {
+    const locks = (navigator as Navigator & { locks?: LockManagerLike }).locks;
+    if (!locks || typeof locks.request !== "function") return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      locks
+        .request(WRITER_LOCK_NAME, (lock) => {
+          if (!lock) {
+            resolve();
+            return undefined;
+          }
+          let released = false;
+          let releaseResolve!: () => void;
+          const holdPromise = new Promise<void>((res) => {
+            releaseResolve = res;
+          });
+          this.releaseWriterLock = () => {
+            if (released) return;
+            released = true;
+            this.releaseWriterLock = null;
+            releaseResolve();
+          };
+          resolve();
+          return holdPromise;
+        })
+        .catch(() => resolve());
+    });
+  }
+
+  private async yieldActiveOwnership(): Promise<void> {
+    this.cancelTimers();
+    if (this.periodicTimer !== null) {
+      window.clearInterval(this.periodicTimer);
+      this.periodicTimer = null;
+    }
+    if (this.enabled && this.bridge) {
+      try {
+        await this.reconcile(true, true);
+      } catch {
+        /* ignore export/write failure on yield */
+      }
+    }
+    this.enabled = false;
+    this.writer = false;
+    this.mode = "read-only";
+    const rel = this.releaseWriterLock;
+    this.releaseWriterLock = null;
+    rel?.();
+    const displacedCb = this.onTabDisplaced;
+    this.onTabDisplaced = null;
+    this.emit();
+    displacedCb?.();
+  }
+
+  public async requestTakeoverBroadcast(): Promise<void> {
+    const ch = this.ensureTabChannel();
+    if (!ch) return;
+    await new Promise<void>((resolve) => {
+      let settled = false;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        ch.removeEventListener("message", onMsg);
+        window.clearTimeout(timer);
+        resolve();
+      };
+      const onMsg = (ev: MessageEvent) => {
+        const data = ev.data as { type?: string; requesterId?: string } | null;
+        if (data?.type === "takeover-released" && data.requesterId === this.tabId) {
+          finish();
+        }
+      };
+      const timer = window.setTimeout(finish, 800);
+      ch.addEventListener("message", onMsg);
+      try {
+        ch.postMessage({ type: "takeover-request", requesterId: this.tabId });
+      } catch {
+        finish();
+      }
+    });
+  }
+
+  /**
+   * Ensures only one browser tab shows and controls SlapRF at a time. If another tab is active,
+   * invokes `waitForUserTakeover` while keeping this tab on the boot screen; once the user clicks
+   * "Continue in This Tab" (or the other tab closes), acquires exclusive ownership.
+   */
+  public async ensureExclusiveTabOwnership(opts: {
+    waitForUserTakeover: (trySilentAcquire: () => Promise<boolean>) => Promise<"takeover" | "silent">;
+    onDisplaced: () => void;
+  }): Promise<void> {
+    this.ensureTabChannel();
+    const gotImmediate = await this.tryAcquireLockNonBlocking();
+    if (gotImmediate) {
+      this.writer = true;
+      this.onTabDisplaced = opts.onDisplaced;
+      return;
+    }
+
+    const outcome = await opts.waitForUserTakeover(() => this.tryAcquireLockNonBlocking());
+    if (outcome === "takeover") {
+      await this.requestTakeoverBroadcast();
+      await this.acquireLockBlocking();
+    }
+    this.writer = true;
+    this.onTabDisplaced = opts.onDisplaced;
+  }
+
   /** Opens IndexedDB, takes the writer lock (if free) and reads the persisted state. Never rejects. */
   public loadBootState(): Promise<BootState> {
     if (!this.bootPromise) this.bootPromise = this.doLoad();
@@ -253,12 +446,10 @@ export class EnginePersistence {
 
   private async doLoad(): Promise<BootState> {
     removeLegacyKeys();
+    this.ensureTabChannel();
     const empty: BootState = { real: null, sim: null };
     const [writer, opened] = await Promise.all([
-      acquireWriterLock(() => {
-        this.takeoverAvailable = true;
-        this.emit();
-      }),
+      this.writer ? Promise.resolve(true) : this.tryAcquireLockNonBlocking(),
       openDatabase().then(
         (db) => ({ db, err: null as unknown }),
         (err: unknown) => ({ db: null, err })
@@ -314,7 +505,6 @@ export class EnginePersistence {
     }
     if (!this.writer) {
       this.mode = "read-only";
-      showReadOnlyBanner(this);
       this.emit();
       return;
     }
@@ -359,7 +549,8 @@ export class EnginePersistence {
         if (hasValidKey("filtered", payload)) this.pendingFiltered.push({ ...(payload as Rec) });
         break;
       case "config":
-        // Pilot / track changes (also from hub identity packets): replace everything.
+      case "race":
+        // Pilot / track / race tournament changes: replace everything.
         this.scheduleStructural(STRUCTURAL_DEBOUNCE_MS);
         return;
       default:

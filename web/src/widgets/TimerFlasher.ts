@@ -1,6 +1,7 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
+import { subscribeAppTheme } from "../core/theme";
 import { ApiClient } from "../services/api_client";
 import {
   FlashProgress,
@@ -9,6 +10,7 @@ import {
   flashXiaoC5OverWebSerial,
   isWebSerialSupported,
 } from "../services/esp_flasher";
+import { isSimulatedSerialPort } from "../services/sim_serial_port";
 import { recordKnownTimerReadout, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
@@ -43,6 +45,7 @@ export class TimerFlasher extends Component {
   private lastSuccessMsg: string | null = null;
   private errorMsg: string | null = null;
   private showAllPorts = false;
+  private lastHtml = "";
 
   constructor(
     el: HTMLElement,
@@ -123,18 +126,13 @@ export class TimerFlasher extends Component {
       }
     });
 
-    this.listen(el, "input", (e) => {
-      const input = e.target as HTMLInputElement;
-      if (input.matches("[data-timer-label]")) {
-        if (input.value.length > 2) {
-          input.value = input.value.slice(0, 2);
-        }
-        this.timerLabel = input.value;
-      }
-    });
-
     this.listen(el, "change", (e) => {
       const target = e.target as HTMLInputElement | HTMLSelectElement;
+      if (target.matches("[data-timer-label]")) {
+        this.timerLabel = (target as HTMLSelectElement).value;
+        this.errorMsg = null;
+        return;
+      }
       if (target.matches("[data-erase-before-flash]")) {
         this.keepFingerprint = !(target as HTMLInputElement).checked;
         this.slideDir = "none";
@@ -149,6 +147,14 @@ export class TimerFlasher extends Component {
       }
     });
     this.onDispose(unsubPool);
+    this.onDispose(
+      subscribeAppTheme(() => {
+        if (!this.busy) {
+          this.slideDir = "none";
+          this.render();
+        }
+      })
+    );
 
     this.render();
   }
@@ -183,22 +189,20 @@ export class TimerFlasher extends Component {
     this.goToStep(target, targetIdx > curIdx ? "next" : "prev");
   }
 
+  private labelOptionsForRole(role: "hub" | "spoke" = this.role): string[] {
+    return role === "hub" ? ["H1"] : ["T1", "T2", "T3", "T4", "T5", "T6"];
+  }
+
+  private normalizeLabelForRole(raw: string, role: "hub" | "spoke" = this.role): string {
+    if (role === "hub") return "H1";
+    const clean = raw.trim().toUpperCase();
+    const opts = this.labelOptionsForRole("spoke");
+    if (opts.includes(clean)) return clean;
+    return this.suggestSpokeLabel();
+  }
+
   private validateIdentityStep(): boolean {
-    const clean = this.timerLabel.trim();
-    if (!clean) {
-      this.errorMsg = "Give this timer a 1–2 character name (e.g. H1, T1, T2) before continuing.";
-      this.slideDir = "none";
-      this.render();
-      this.el.querySelector<HTMLInputElement>("[data-timer-label]")?.focus();
-      return false;
-    }
-    if (clean.length > 2) {
-      this.errorMsg = "Timer name must be at most 2 characters (e.g. H1, T1, T2).";
-      this.slideDir = "none";
-      this.render();
-      this.el.querySelector<HTMLInputElement>("[data-timer-label]")?.focus();
-      return false;
-    }
+    this.timerLabel = this.normalizeLabelForRole(this.timerLabel, this.role);
     return true;
   }
 
@@ -227,16 +231,16 @@ export class TimerFlasher extends Component {
     return this.role === "hub" ? "Hub" : "Spoke";
   }
 
-  /** Next spoke name (T1, T2, …) not already used by a detected timer or one flashed this session. */
+  /** Next spoke name (T1–T6) not already used by a detected timer or one flashed this session. */
   private suggestSpokeLabel(): string {
     const taken = new Set<string>();
     for (const d of this.store.detectedTimers) {
-      if (d.timerLabel) taken.add(d.timerLabel.trim().toUpperCase());
+      if (!d.isHub && d.timerLabel) taken.add(d.timerLabel.trim().toUpperCase());
     }
     for (const key of this.flashedNodes) {
       if (key.startsWith("spoke:")) taken.add(key.slice(6));
     }
-    for (let n = 1; n <= 99; n++) {
+    for (let n = 1; n <= 6; n++) {
       if (!taken.has(`T${n}`)) return `T${n}`;
     }
     return "T1";
@@ -246,9 +250,7 @@ export class TimerFlasher extends Component {
     recordKnownTimerReadout(info);
     if (this.busy) return;
     this.role = info.role;
-    if (info.timerLabel) {
-      this.timerLabel = info.timerLabel.trim().slice(0, 2);
-    }
+    this.timerLabel = this.normalizeLabelForRole(info.timerLabel || "", info.role);
     this.slideDir = "none";
     this.render();
   }
@@ -292,7 +294,11 @@ export class TimerFlasher extends Component {
         recordKnownTimerReadout(written);
         this.onReadout?.(written);
       }
-      await this.api.provisionTimer(this.role, cleanLabel, written?.fingerprint ?? "");
+      if (this.store.simulatorRunning) {
+        await this.api.refresh();
+      } else {
+        await this.api.provisionTimer(this.role, cleanLabel, written?.fingerprint ?? "");
+      }
       this.flashedNodes.add(this.role === "hub" ? "hub" : `spoke:${cleanLabel.toUpperCase()}`);
       const fpNote = written?.fingerprintKept
         ? `kept its fingerprint ${written.fingerprint}`
@@ -512,37 +518,49 @@ export class TimerFlasher extends Component {
 
   private renderStepIdentity(): string {
     const isHub = this.role === "hub";
-    const idPlaceholder = isHub ? "e.g. H1" : "e.g. T1";
+    const options = this.labelOptionsForRole(this.role);
+    const currentLabel = this.normalizeLabelForRole(this.timerLabel, this.role);
+    this.timerLabel = currentLabel;
 
     return `
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
           <div class="flasher-wizard-head">
-            <h3 class="flasher-pane-title">Name this ${isHub ? "Hub" : "Spoke"}</h3>
+            <h3 class="flasher-pane-title">${isHub ? "Hub identity" : "Name this Spoke"}</h3>
             <span class="note flasher-step-count">Step 2 of 3</span>
           </div>
           <p>${
             isHub
-              ? "Short 1–2 character label (usually <strong>H1</strong>) shown across Track, Network, and Debug."
-              : "Short 1–2 character label (e.g. <strong>T1</strong>–<strong>T6</strong>) shown on the course."
+              ? "The Hub is always named <strong>H1</strong> across Track, Network, and Debug."
+              : "Pick a timer label (<strong>T1</strong>–<strong>T6</strong>) shown across Track, Network, and Debug."
           }</p>
         </div>
 
         <div class="flasher-wifi-inputs flasher-two-col">
           <div class="flasher-field">
             <label class="flasher-field-label">Timer name</label>
-            <input
-              class="input mono"
-              type="text"
-              placeholder="${idPlaceholder}"
-              value="${esc(this.timerLabel)}"
-              data-timer-label="1"
-              maxlength="2"
-              spellcheck="false"
-              autocomplete="off"
-              ${this.busy ? "disabled" : ""}
-            />
-            <span class="flasher-field-help">Editable · 1–2 characters (${isHub ? "e.g. H1" : "e.g. T1, T2, T3"}) stamped into flash.</span>
+            ${
+              isHub
+                ? `<div class="input input-readonly mono" aria-label="Timer name" aria-readonly="true">
+                    <span>H1</span>
+                    <span class="badge">Fixed</span>
+                  </div>
+                  <span class="flasher-field-help">Read-only · The course Hub is always H1.</span>`
+                : `<select
+                    class="input mono"
+                    data-timer-label="1"
+                    aria-label="Timer name"
+                    ${this.busy ? "disabled" : ""}
+                  >
+                    ${options
+                      .map(
+                        (opt) =>
+                          `<option value="${esc(opt)}" ${opt === currentLabel ? "selected" : ""}>${esc(opt)}</option>`
+                      )
+                      .join("")}
+                  </select>
+                  <span class="flasher-field-help">Pick T1–T6 for each Spoke timer on your course.</span>`
+            }
           </div>
 
           <div class="flasher-field">
@@ -667,7 +685,7 @@ export class TimerFlasher extends Component {
 
         ${
           !webSerialOk
-            ? `<p class="note">Direct USB reading and flashing requires Chrome, Edge, or Brave.</p>`
+            ? `<p class="note">Connect a SlapRF Server to read and flash physical USB-C timers.</p>`
             : ""
         }
 
@@ -728,7 +746,7 @@ export class TimerFlasher extends Component {
         break;
     }
 
-    this.el.innerHTML = `
+    const nextHtml = `
       <div class="flasher flasher-wizard">
         ${this.renderStepper()}
 
@@ -765,5 +783,8 @@ export class TimerFlasher extends Component {
             : ""
         }
       </div>`;
+    if (nextHtml === this.lastHtml && this.slideDir === "none") return;
+    this.lastHtml = nextHtml;
+    this.el.innerHTML = nextHtml;
   }
 }

@@ -244,7 +244,7 @@ void slaprf_rf58_leave(void) {
 }
 
 int8_t esp_sdr_measure_5g_channel_dbm(uint16_t center_freq_mhz) {
-    if (!s_ready || center_freq_mhz < 5180 || center_freq_mhz > 5917) {
+    if (!s_ready || center_freq_mhz < 5180 || center_freq_mhz > 5945) {
         return -95;
     }
     phy_set_rf_freq_offset(xtal_sel(), (uint32_t)(center_freq_mhz - LO_OFFSET_MHZ), freq_trim());

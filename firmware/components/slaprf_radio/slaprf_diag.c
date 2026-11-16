@@ -46,6 +46,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "soc/lp_aon_reg.h"
+#include "soc/lp_wdt_reg.h"
 
 #define CFG_LEN          160
 #define CFG_OFF_VERSION  8
@@ -59,7 +61,8 @@
 #define EMERGENCY_MAGIC  0x454D5247U // "EMRG" (explicit EMERGENCY command request)
 #define MAX_CRASH_STREAK 3           // Halt in USB emergency rescue mode after 3 consecutive panics/watchdogs
 #define RF_MIN_MHZ       5180
-#define RF_MAX_MHZ       5917
+#define RF_MAX_MHZ       5945
+#define SCAN_MAX_MHZ     5945
 #define HIT_MARGIN_DB    10 // A "hit" is a reading this far above the channel's typical noise
 #define FLOOR_UNSET      INT16_MIN
 #define XIAO_C5_LED_GPIO 27 // Seeed Studio XIAO ESP32-C5 yellow user LED (active-low: 0 = ON, 1 = OFF)
@@ -420,8 +423,13 @@ void slaprf_diag_set_net_channels(const uint16_t freqs[8]) {
             }
         }
     }
-    s_net_chan_mask = mask;
-    s_net_chan_valid = true;
+    if (mask == 0) {
+        s_net_chan_mask = 0xFF;
+        s_net_chan_valid = false;
+    } else {
+        s_net_chan_mask = mask;
+        s_net_chan_valid = true;
+    }
 }
 
 bool slaprf_diag_get_net_channels(uint16_t out_freqs[8]) {
@@ -873,6 +881,8 @@ void slaprf_diag_forward_hub_frame(const void *frame, uint32_t len) {
 }
 
 static void handle_command(char *line) {
+    while (*line == ' ') line++;
+    if (line[0] == '\0') return;
     s_last_cmd_us = esp_timer_get_time();
     s_host_attached = true;
     if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1) {
@@ -958,10 +968,10 @@ static void handle_command(char *line) {
         tx_line("@{\"t\":\"ok\",\"cmd\":\"scan\",\"live\":false}\n");
     } else if (strncmp(line, "SCAN", 4) == 0) {
         const bool live = strncmp(line + 4, " LIVE", 5) == 0;
-        unsigned a = RF_MIN_MHZ, b = RF_MAX_MHZ, s = 5;
+        unsigned a = RF_MIN_MHZ, b = SCAN_MAX_MHZ, s = 5;
         sscanf(line + (live ? 9 : 4), "%u %u %u", &a, &b, &s);
         if (a < RF_MIN_MHZ) a = RF_MIN_MHZ;
-        if (b > RF_MAX_MHZ) b = RF_MAX_MHZ;
+        if (b > SCAN_MAX_MHZ) b = SCAN_MAX_MHZ;
         if (s < 1) s = 1;
         if (b < a || (b - a) / s + 1 > SCAN_MAX_POINTS) {
             tx_line("@{\"t\":\"err\",\"msg\":\"scan range too large (max 200 points, 5180-5917 MHz)\"}\n");
@@ -1007,6 +1017,17 @@ static void handle_command(char *line) {
         s_reboot_pending = true;
         vTaskDelay(pdMS_TO_TICKS(50));
         esp_restart();
+    } else if (strcmp(line, "BOOTLOADER") == 0) {
+        s_live = 0;
+        s_scan_live = false;
+        s_rf_enabled = false;
+        s_hub_usb_stream = false;
+        s_ring.crash_streak = 0;
+        tx_line("@{\"t\":\"ok\",\"cmd\":\"bootloader\"}\n");
+        s_reboot_pending = true;
+        vTaskDelay(pdMS_TO_TICKS(40));
+        REG_SET_FIELD(LP_AON_SYS_CFG_REG, LP_AON_FORCE_DOWNLOAD_BOOT, 1);
+        esp_restart();
     } else if (line[0]) {
         tx_line("@{\"t\":\"err\",\"msg\":\"unknown command\"}\n");
     }
@@ -1016,20 +1037,24 @@ static void console_task(void *arg) {
     (void)arg;
     char line[96];
     size_t len = 0;
-    uint8_t ch;
+    uint8_t rx[64];
     for (;;) {
-        if (usb_serial_jtag_read_bytes(&ch, 1, portMAX_DELAY) != 1) {
+        const int n = usb_serial_jtag_read_bytes(rx, sizeof(rx), portMAX_DELAY);
+        if (n <= 0) {
             continue;
         }
-        if (ch == '\r') {
-            continue;
-        }
-        if (ch == '\n') {
-            line[len] = 0;
-            handle_command(line);
-            len = 0;
-        } else if (len < sizeof(line) - 1) {
-            line[len++] = (char)ch;
+        for (int i = 0; i < n; i++) {
+            const uint8_t ch = rx[i];
+            if (ch == '\r') {
+                continue;
+            }
+            if (ch == '\n') {
+                line[len] = 0;
+                handle_command(line);
+                len = 0;
+            } else if (len < sizeof(line) - 1) {
+                line[len++] = (char)ch;
+            }
         }
     }
 }
@@ -1039,7 +1064,7 @@ static void console_task(void *arg) {
 static void start_led_timer(void); // Health LED renderer, defined below
 static void send_status(void);
 
-/** Pushes a status line every second while a host is attached (priority 0: never delays timing). */
+/** Pushes a status line every second while a host is attached. */
 static void status_push_task(void *arg) {
     (void)arg;
     for (;;) {
@@ -1050,7 +1075,18 @@ static void status_push_task(void *arg) {
     }
 }
 
+static void disarm_lp_wdt(void) {
+    REG_SET_FIELD(LP_AON_SYS_CFG_REG, LP_AON_FORCE_DOWNLOAD_BOOT, 0);
+    // Keep LP_WDT (RTC watchdog) disabled: on ESP32-C5/C6, an LP_WDT RTC reset triggers a
+    // USB-Serial/JTAG controller erratum that wedges the USB bulk endpoints ("Write timeout")
+    // until a physical power-cycle (see Espressif esptool targets/esp32c6.py watchdog_reset).
+    REG_WRITE(LP_WDT_WPROTECT_REG, 0x50D83AA1U);
+    REG_WRITE(LP_WDT_CONFIG0_REG, 0U);
+    REG_WRITE(LP_WDT_WPROTECT_REG, 0U);
+}
+
 void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
+    disarm_lp_wdt();
     s_cfg = (const volatile uint8_t *)cfg;
     s_cfg_len = len;
     s_sweep_hz = sweep_hz ? sweep_hz : 50;
@@ -1075,10 +1111,10 @@ void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
         .rx_buffer_size = 512,
     };
     if (usb_serial_jtag_driver_install(&usb_cfg) == ESP_OK) {
-        // Priority 0 (below the main timing loop at 1): USB commands such as STATUS? run only in the
-        // idle time the loop already yields between sweeps, so they never delay sweeps or beacons.
-        xTaskCreate(console_task, "slaprf_diag", 4096, NULL, 0, NULL);
-        xTaskCreate(status_push_task, "slaprf_status", 4096, NULL, 0, NULL);
+        // Priority 2 (above app_main at priority 1, which busy-spins the final stretch of each tick):
+        // ensures USB commands such as STATUS? and SLAPRF? preempt the sweep loop immediately.
+        xTaskCreate(console_task, "slaprf_diag", 4096, NULL, 2, NULL);
+        xTaskCreate(status_push_task, "slaprf_status", 4096, NULL, 2, NULL);
     }
     if (s_crash_streak >= MAX_CRASH_STREAK) {
         s_booted_emergency_mode = true;

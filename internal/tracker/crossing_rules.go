@@ -132,6 +132,9 @@ func (e *Engine) applyCrossingLocked(pilot domain.PilotSlot, gate domain.TrackGa
 					PeakRSSIDbm: ev.PeakRSSIDbm,
 				}
 			} else {
+				if len(prog.currentSectors) == 0 && prog.lastGateID == gate.GateID {
+					prog.currentSectors = append(prog.currentSectors, e.recordSplitLocked(pilot, prog, gate, ev))
+				}
 				out.lap = e.buildLapLocked(pilot, prog, lapSec, ev.TimestampUs)
 			}
 		}
