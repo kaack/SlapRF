@@ -422,7 +422,7 @@ export const ROUTES: RouteMeta[] = [
     id: "about",
     label: "About",
     title: "About",
-    subtitle: "Version info, author, support, and dual-license terms",
+    subtitle: "Version info, author, GitHub repository, support, and dual-license terms",
     icon: () => icons.about(20),
   },
 ];
