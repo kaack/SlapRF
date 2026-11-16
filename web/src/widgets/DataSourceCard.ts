@@ -64,6 +64,7 @@ export class DataSourceCard extends Component {
   private serverInputUrl: string;
   private connecting = false;
   private discoveringLocal = false;
+  private localDiscoverySearched = false;
   private connectError = "";
   private mixedContentDirectUrl = "";
   private noticeReason: "none" | "real-hardware" = "none";
@@ -282,17 +283,16 @@ export class DataSourceCard extends Component {
   private async handleDiscoverLocalApp(): Promise<void> {
     if (this.connecting || this.discoveringLocal) return;
     this.discoveringLocal = true;
+    this.localDiscoverySearched = false;
     this.connectError = "";
     this.mixedContentDirectUrl = "";
     this.forceRender();
 
     const detectedUrl = await discoverLocalServer(2000);
     this.discoveringLocal = false;
+    this.localDiscoverySearched = true;
     if (detectedUrl) {
       this.serverInputUrl = detectedUrl;
-      this.connectError = "";
-    } else {
-      this.connectError = `No local SlapRF app detected at ${DEFAULT_LOCAL_SERVER_URL}. Make sure slaprf is running on this computer, or enter a LAN server address.`;
     }
     this.forceRender();
   }
@@ -335,7 +335,7 @@ export class DataSourceCard extends Component {
     const effectiveMode: "demo" | "server" = caps.portable ? "server" : this.selectedMode;
     const recents = getRecentBackendUrls();
 
-    const sig = `${sim ? "1" : "0"}|${sim ? simSpeed : 0}|${caps.portable ? 1 : 0}|${caps.remoteBackend ? 1 : 0}|${caps.backendBaseUrl}|${caps.hostname}|${caps.version}|${caps.localDetectedUrl ?? ""}|${caps.lanIPs.join(",")}|${effectiveMode}|${this.connecting ? 1 : 0}|${this.discoveringLocal ? 1 : 0}|${this.connectError}|${this.mixedContentDirectUrl}|${this.noticeReason}|${recents.join(",")}`;
+    const sig = `${sim ? "1" : "0"}|${sim ? simSpeed : 0}|${caps.portable ? 1 : 0}|${caps.remoteBackend ? 1 : 0}|${caps.backendBaseUrl}|${caps.hostname}|${caps.version}|${caps.localDetectedUrl ?? ""}|${caps.lanIPs.join(",")}|${effectiveMode}|${this.connecting ? 1 : 0}|${this.discoveringLocal ? 1 : 0}|${this.localDiscoverySearched ? 1 : 0}|${this.connectError}|${this.mixedContentDirectUrl}|${this.noticeReason}|${recents.join(",")}`;
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
@@ -365,6 +365,34 @@ export class DataSourceCard extends Component {
            </div>`
         : "";
 
+    const autoDiscoveryHtml = `
+      <div class="datasource-server-subsection" data-datasource-subsection="auto-discovery">
+        <div class="datasource-subsection-head">
+          <div>
+            <div class="option-title">Auto Discovery</div>
+            <div class="option-sub">Check this computer (<span class="mono">127.0.0.1:8090</span>) for a running SlapRF server.</div>
+          </div>
+          <button type="button" class="btn btn-ghost btn-sm" data-action="discover-local-app" ${this.connecting || this.discoveringLocal ? "disabled" : ""} title="Check 127.0.0.1:8090 for a local SlapRF server running on this computer">
+            ${icons.search(14)}<span>${this.discoveringLocal ? "Searching…" : "Discover Local Server"}</span>
+          </button>
+        </div>
+        ${
+          caps.localDetectedUrl
+            ? `<div class="datasource-detected-row" data-discovered-server-row>
+                 <div style="display:flex;align-items:center;gap:7px;min-width:0">
+                   <span class="status-dot is-up"></span>
+                   <span class="option-sub">Local SlapRF Server detected at <span class="mono">${esc(caps.localDetectedUrl)}</span></span>
+                 </div>
+                 <button type="button" class="btn btn-armed btn-sm" data-action="backend-connect-quick" data-url="${esc(caps.localDetectedUrl)}" ${this.connecting ? "disabled" : ""}>
+                   ${icons.plug(14)}<span>Connect</span>
+                 </button>
+               </div>`
+            : this.localDiscoverySearched && !this.discoveringLocal
+              ? `<div class="datasource-discovery-empty note" data-discovery-empty>No local SlapRF server detected at <span class="mono">${esc(DEFAULT_LOCAL_SERVER_URL)}</span>. Make sure <span class="mono">slaprf</span> is running on this computer, or use Manual Connection below.</div>`
+              : ""
+        }
+      </div>`;
+
     let serverDetailsHtml = "";
     if (caps.portable) {
       serverDetailsHtml = `
@@ -389,8 +417,9 @@ export class DataSourceCard extends Component {
           </div>
           ${
             caps.remoteBackend
-              ? `<div class="datasource-server-form">
-                   <label class="note" for="slaprf-backend-url-input">Server address</label>
+              ? `${autoDiscoveryHtml}
+                 <div class="datasource-server-subsection datasource-server-form" data-datasource-subsection="manual-connection">
+                   <label class="option-title" for="slaprf-backend-url-input" style="display:block">Manual Connection</label>
                    <div class="datasource-url-row">
                      <input
                        id="slaprf-backend-url-input"
@@ -403,9 +432,6 @@ export class DataSourceCard extends Component {
                        spellcheck="false"
                        ${this.connecting || this.discoveringLocal ? "disabled" : ""}
                      />
-                     <button type="button" class="btn btn-ghost" data-action="discover-local-app" ${this.connecting || this.discoveringLocal ? "disabled" : ""} title="Check 127.0.0.1:8090 for a local SlapRF app running on this computer">
-                       ${icons.search(15)}<span>${this.discoveringLocal ? "Searching…" : "Discover Local App"}</span>
-                     </button>
                      <button type="button" class="btn btn-unarmed" data-action="backend-connect-submit" ${this.connecting || this.discoveringLocal ? "disabled" : ""}>
                        ${icons.check(15)}<span>${this.connecting ? "Connecting…" : "Switch server"}</span>
                      </button>
@@ -426,21 +452,9 @@ export class DataSourceCard extends Component {
                  </div>`
               : ""
           }
-          ${
-            caps.localDetectedUrl
-              ? `<div class="datasource-detected-row">
-                   <div style="display:flex;align-items:center;gap:7px;min-width:0">
-                     <span class="status-dot is-up"></span>
-                     <span class="option-sub">Local SlapRF Server detected at <span class="mono">${esc(caps.localDetectedUrl)}</span></span>
-                   </div>
-                   <button type="button" class="btn btn-armed btn-sm" data-action="backend-connect-quick" data-url="${esc(caps.localDetectedUrl)}" ${this.connecting ? "disabled" : ""}>
-                     ${icons.plug(14)}<span>Connect Local Server</span>
-                   </button>
-                 </div>`
-              : ""
-          }
-          <div class="datasource-server-form">
-            <label class="option-title" for="slaprf-backend-url-input" style="display:block">Server address</label>
+          ${autoDiscoveryHtml}
+          <div class="datasource-server-subsection datasource-server-form" data-datasource-subsection="manual-connection">
+            <label class="option-title" for="slaprf-backend-url-input" style="display:block">Manual Connection</label>
             <div class="option-sub">
               Enter <span class="mono">127.0.0.1:8090</span> for a server on this computer, or <span class="mono">192.168.x.x:8090</span> for a trackside Raspberry Pi / LAN server started with <span class="mono">slaprf -lan</span>.
             </div>
@@ -456,9 +470,6 @@ export class DataSourceCard extends Component {
                 spellcheck="false"
                 ${this.connecting || this.discoveringLocal ? "disabled" : ""}
               />
-              <button type="button" class="btn btn-ghost" data-action="discover-local-app" ${this.connecting || this.discoveringLocal ? "disabled" : ""} title="Check 127.0.0.1:8090 for a local SlapRF app running on this computer">
-                ${icons.search(15)}<span>${this.discoveringLocal ? "Searching…" : "Discover Local App"}</span>
-              </button>
               <button type="button" class="btn btn-primary" data-action="backend-connect-submit" ${this.connecting || this.discoveringLocal ? "disabled" : ""}>
                 ${icons.check(15)}<span>${this.connecting ? "Connecting…" : "Connect"}</span>
               </button>

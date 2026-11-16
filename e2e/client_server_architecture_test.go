@@ -274,11 +274,14 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 	if err := serverModeBtn.Click(); err != nil {
 		t.Fatalf("click Server backend mode button in Demo Mode: %v", err)
 	}
-	serverForm := dsSec.Locator(`.datasource-server-form`).First()
-	h.MustBeVisible(serverForm, "Inline Datasource server form shown without modal")
-	discoverBtn := serverForm.Locator(`button[data-action="discover-local-app"]`).First()
-	h.MustBeVisible(discoverBtn, "On-demand Discover Local App button in Server address row")
-	h.MustContainText(discoverBtn, "Discover Local App", "Discover Local App button text")
+	autoDiscSec := dsSec.Locator(`[data-datasource-subsection="auto-discovery"]`).First()
+	h.MustBeVisible(autoDiscSec, "Auto Discovery subsection above Manual Connection")
+	discoverBtn := autoDiscSec.Locator(`button[data-action="discover-local-app"]`).First()
+	h.MustBeVisible(discoverBtn, "On-demand Discover Local Server button in Auto Discovery")
+	h.MustContainText(discoverBtn, "Discover Local Server", "Discover Local Server button text")
+
+	serverForm := dsSec.Locator(`[data-datasource-subsection="manual-connection"]`).First()
+	h.MustBeVisible(serverForm, "Inline Manual Connection subsection without modal")
 	h.MilestoneScreenshot("demo-mode-inline-datasource-server")
 
 	// 4. Spin up a live cross-origin Native Go SlapRF Server (`AllowLANOrigins: true`),
