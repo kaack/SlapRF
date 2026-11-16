@@ -854,7 +854,10 @@ function loadInitialRoute(): RouteId {
     // Ignore storage access errors
   }
   if (capabilitiesSnapshot().probed && capabilitiesSnapshot().demoMode) {
-    applyParsedSideEffects({ route: "live", live: { tab: "session" } });
+    applyParsedSideEffects({
+      route: "live",
+      live: { tab: "session", sessionId: "open-track-practice" },
+    });
     return "live";
   }
   applyParsedSideEffects({ route: "races", races: { tab: "directory" } });
@@ -870,7 +873,10 @@ export class Router {
   constructor() {
     activeRouterInstance = this;
     if (!location.hash || location.hash === "#" || location.hash === "#/") {
-      const initialHash = `#/${this.current}`;
+      const initialHash =
+        this.current === "live" && currentParsedHashState.live?.tab === "session"
+          ? buildPracticeHash("session", currentParsedHashState.live.sessionId)
+          : `#/${this.current}`;
       try {
         window.history.replaceState(
           null,

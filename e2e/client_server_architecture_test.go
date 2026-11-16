@@ -240,7 +240,7 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 			const races = Array.isArray(st.eventState?.races) ? st.eventState.races : [];
 			const allOnline = timers.length === 4 && timers.every((t) => Boolean(t.online));
 			const onPracticeSession = window.location.hash.startsWith("#/live/open-track-practice");
-			const hasStandings = Boolean(document.querySelector(".standings-table, [data-live-standings], .standings"));
+			const hasStandings = Boolean(document.querySelector("table.table-standings"));
 			const annOn = Boolean(annBtn && annBtn.classList.contains("btn-armed"));
 			return (
 				onPracticeSession &&
