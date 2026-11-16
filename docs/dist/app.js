@@ -1,4 +1,4 @@
-(()=>{var define_SLAPRF_ABOUT_INFO_default={frontendVersion:"0.1.0",releaseTag:"v0.0.4",commitHash:"649ec56e850579ae6ce0c77952779c0aae04bdce",branchName:"main",licenseSummary:`This work is dual-licensed under "GNU General Public License, version 3"
+(()=>{var define_SLAPRF_ABOUT_INFO_default={frontendVersion:"0.1.0",releaseTag:"v0.0.1",commitHash:"5dc1b173c9b6abb989e059b19803d93584e20e4d",branchName:"main",licenseSummary:`This work is dual-licensed under "GNU General Public License, version 3"
 and "Fair Source License, version 0.9"  (or any later version).
 
 You can choose between one of them if you use this work.`,licenseFairSource:`Fair Source License, version 0.9
