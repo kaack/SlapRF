@@ -1,3 +1,4 @@
+import { capabilitiesSnapshot } from "../services/capabilities";
 import { icons } from "./icons";
 
 export type RouteId =
@@ -851,6 +852,10 @@ function loadInitialRoute(): RouteId {
     }
   } catch {
     // Ignore storage access errors
+  }
+  if (capabilitiesSnapshot().probed && capabilitiesSnapshot().demoMode) {
+    applyParsedSideEffects({ route: "live", live: { tab: "session" } });
+    return "live";
   }
   applyParsedSideEffects({ route: "races", races: { tab: "directory" } });
   return "races";

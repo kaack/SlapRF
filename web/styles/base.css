@@ -89,6 +89,9 @@ code {
 .tone-accent {
   color: var(--accent);
 }
+.col-gap-fastest {
+  font-family: var(--font-sans);
+}
 .tone-good {
   color: var(--good);
 }

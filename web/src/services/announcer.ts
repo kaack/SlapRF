@@ -1,4 +1,5 @@
 import { setWakeLockEnabled } from "../core/wake_lock";
+import { capabilitiesSnapshot } from "../services/capabilities";
 import { AppStore } from "../state/store";
 import { GateCrossingEvent, LapRecord, RaceAnnouncement } from "../types/models";
 import {
@@ -122,6 +123,10 @@ export class Announcer {
   constructor(store: AppStore) {
     this.store = store;
     this.prefs = loadPrefs();
+    const caps = capabilitiesSnapshot();
+    if (caps.probed && caps.demoMode && !hasSavedPrefs()) {
+      this.prefs.enabled = true;
+    }
     setWakeLockEnabled(this.prefs.keepScreenAwake !== false);
     this.piper = new PiperNeuralTts(() => this.notify());
     if (this.prefs.enabled) {
@@ -1015,6 +1020,14 @@ function sanitizePrefs(raw: unknown): AnnouncerPrefs {
     testPhrase:
       typeof obj.testPhrase === "string" ? obj.testPhrase : DEFAULT_PREFS.testPhrase,
   };
+}
+
+function hasSavedPrefs(): boolean {
+  try {
+    return localStorage.getItem(STORAGE_KEY) !== null;
+  } catch {
+    return false;
+  }
 }
 
 function loadPrefs(): AnnouncerPrefs {

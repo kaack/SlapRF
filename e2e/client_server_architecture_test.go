@@ -186,7 +186,7 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 	h.AllowConsoleErrorSubstring("Failed to load resource")
 	h.AllowConsoleErrorSubstring("ERR_CONNECTION")
 
-	h.BootClean("#/pilots")
+	h.BootClean("#/")
 
 	// 1. Verify Standalone Browser Demo Mode boots slim slaprf.wasm, keeps Simulation ON,
 	//    and shows the sidebar Browser Demo disclaimer that navigates to Settings -> Datasource (never a modal).
@@ -228,9 +228,10 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 		t.Fatalf("restore desktop viewport: %v", err)
 	}
 
-	h.WaitUntil("Showcase demo dataset hydrated with Connected · H1", 8*time.Second, func() (bool, error) {
+	h.WaitUntil("Showcase demo dataset hydrated with Connected · H1, Practice All Pilots, and Announcer ON", 8*time.Second, func() (bool, error) {
 		res, evalErr := h.Page.Evaluate(`() => {
 			const usbBtn = document.querySelector('[data-action="usb-toggle"]')?.textContent || "";
+			const annBtn = document.querySelector('[data-action="announcer"]');
 			const raw = window.slaprfWasm?.request("GET", "/api/state", "")?.body || "{}";
 			const st = JSON.parse(raw);
 			const timers = Array.isArray(st.timers) ? st.timers : [];
@@ -238,7 +239,11 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 			const sessions = Array.isArray(st.practiceState?.sessions) ? st.practiceState.sessions : [];
 			const races = Array.isArray(st.eventState?.races) ? st.eventState.races : [];
 			const allOnline = timers.length === 4 && timers.every((t) => Boolean(t.online));
+			const onPractice = window.location.hash.startsWith("#/live");
+			const annOn = Boolean(annBtn && annBtn.classList.contains("btn-armed"));
 			return (
+				onPractice &&
+				annOn &&
 				usbBtn.includes("H1") &&
 				st.timingHardwareMode === "slaprf" &&
 				allOnline &&

@@ -147,7 +147,7 @@ export class LiveStandings extends Component {
       })
       .join("");
     const statusTitle = s.onTrack ? "On track" : s.laps.length ? `Idle · ${fmtAgo(s.secondsSinceSeen)}` : "Not flown";
-    const gap = s.bestLap > 0 && sessionBest > 0 ? (s.bestLap === sessionBest ? `<span class="tone-accent">fastest</span>` : fmtDelta(s.bestLap - sessionBest)) : "";
+    const gap = s.bestLap > 0 && sessionBest > 0 ? (s.bestLap === sessionBest ? `<span class="tone-accent col-gap-fastest">fastest</span>` : fmtDelta(s.bestLap - sessionBest)) : "";
 
     const pColor = adaptColorForTheme(pilot.color);
     return `

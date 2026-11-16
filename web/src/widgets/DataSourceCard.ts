@@ -1,6 +1,7 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
+import { buildPracticeHash, pushAppHash } from "../core/router";
 import { Announcer } from "../services/announcer";
 import { ApiClient } from "../services/api_client";
 import {
@@ -1015,15 +1016,19 @@ export class PersistenceSettings extends Component {
       openConfirmModal({
         title: "Restore Demo Data?",
         messageHtml:
-          "<p>Load sample Bay Area pilots, a 4-gate track, simulated timers, and an Open Practice session into the active workspace?</p>",
+          "<p>Load sample Bay Area pilots, a 3-gate track, simulated timers, practice sessions, and showcase races into the active workspace?</p>",
         warningHtml:
           "Any current pilots, track gates, practice sessions, or unsaved active data in the current workspace will be replaced with the demo dataset.",
         confirmLabel: "Restore Demo Data",
         onConfirm: async () => {
           await this.api.restoreDemoData();
-          this.announcer?.reloadPrefs();
+          this.store.setLiveFocus(null);
+          if (this.announcer) {
+            this.announcer.update({ enabled: true });
+          }
           sharedMultiGPService.reloadPrefs();
           this.refreshStorage(true);
+          pushAppHash(buildPracticeHash("session"));
         },
       });
     }
