@@ -1495,12 +1495,19 @@ export class DebugView extends Component {
             const diffMin = effTargetMin - curMin;
             const diffMax = effTargetMax - curMax;
             if (Math.abs(diffMin) > 0.05) {
-              const alphaMin = diffMin < 0 ? 0.35 : 0.08;
-              this.signalSmoothYMin = Math.abs(diffMin) < 0.25 ? effTargetMin : curMin + diffMin * alphaMin;
+              if (diffMin < 0) {
+                this.signalSmoothYMin = effTargetMin;
+              } else {
+                this.signalSmoothYMin = Math.abs(diffMin) < 0.25 ? effTargetMin : curMin + diffMin * 0.08;
+              }
             }
             if (Math.abs(diffMax) > 0.05) {
-              const alphaMax = diffMax > 0 ? 0.4 : 0.08;
-              this.signalSmoothYMax = Math.abs(diffMax) < 0.25 ? effTargetMax : curMax + diffMax * alphaMax;
+              if (diffMax > 0) {
+                // Expand upward immediately so rising RF peaks are never chopped off by smoothing lag
+                this.signalSmoothYMax = effTargetMax;
+              } else {
+                this.signalSmoothYMax = Math.abs(diffMax) < 0.25 ? effTargetMax : curMax + diffMax * 0.08;
+              }
             }
           }
           this.signalYMin = this.signalSmoothYMin;

@@ -15,7 +15,7 @@ import { LiveSample, ScanResult, TimerStatus } from "../../services/timer_consol
 
 export const RACEBAND = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
 export const DBM_MIN = -100;
-export const DBM_MAX = -30;
+export const DBM_MAX = -15;
 
 /** Distinct channel colors (matching the pilot slot palette in the main app). */
 export const CHANNEL_COLORS = [
