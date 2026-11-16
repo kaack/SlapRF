@@ -214,6 +214,16 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 	if err := h.Page.Locator(`button[data-action="close-pwa-popover"]`).First().Click(); err != nil {
 		t.Fatalf("close PWA install popover: %v", err)
 	}
+	menuBtn := h.Page.Locator(`.topbar-menu-btn[data-action="menu"]`).First()
+	h.MustBeVisible(menuBtn, "Mobile hamburger menu button")
+	if err := menuBtn.Click(); err != nil {
+		t.Fatalf("open mobile hamburger menu: %v", err)
+	}
+	h.MustBeVisible(h.Page.Locator(`.topbar-nav-popover`).First(), "Mobile nav popover opened")
+	if err := menuBtn.Click(); err != nil {
+		t.Fatalf("close mobile hamburger menu: %v", err)
+	}
+	h.MustBeHidden(h.Page.Locator(`.topbar-nav-popover`).First(), "Mobile nav popover closed")
 	if err := h.Page.SetViewportSize(1440, 900); err != nil {
 		t.Fatalf("restore desktop viewport: %v", err)
 	}

@@ -137,9 +137,7 @@ export class TopBar extends Component {
     if (this.menuOpen) {
       const menuWrap = this.el.querySelector(".topbar-menu-wrap");
       if (!t || !menuWrap?.contains(t)) {
-        this.menuOpen = false;
-        this.lastSig = "";
-        this.render();
+        this.setMenuOpen(false);
       }
     }
     if (this.scopeMenuOpen) {
@@ -172,12 +170,14 @@ export class TopBar extends Component {
 
   private handleKeyDown = (e: KeyboardEvent): void => {
     if (e.key === "Escape" && (this.menuOpen || this.scopeMenuOpen || this.crumbMenuOpen || this.pwaMenuOpen)) {
-      this.menuOpen = false;
-      this.scopeMenuOpen = false;
-      this.crumbMenuOpen = false;
-      this.pwaMenuOpen = false;
-      this.lastSig = "";
-      this.render();
+      this.setMenuOpen(false);
+      if (this.scopeMenuOpen || this.crumbMenuOpen || this.pwaMenuOpen) {
+        this.scopeMenuOpen = false;
+        this.crumbMenuOpen = false;
+        this.pwaMenuOpen = false;
+        this.lastSig = "";
+        this.render();
+      }
     }
   };
 
@@ -217,8 +217,7 @@ export class TopBar extends Component {
     const actionEl = target.closest<HTMLElement>("[data-action]");
     switch (actionEl?.dataset.action) {
       case "menu":
-        this.menuOpen = !this.menuOpen;
-        this.render();
+        this.setMenuOpen(!this.menuOpen);
         break;
       case "expand-sidebar":
         toggleSidebarCollapsed();
@@ -364,7 +363,7 @@ export class TopBar extends Component {
 
     const appTheme = getAppTheme();
     const pwaStandalone = isPwaStandalone();
-    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${ltEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.menuOpen ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${this.pwaMenuOpen ? 1 : 0}:${pwaStandalone ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
+    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${ltEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${this.pwaMenuOpen ? 1 : 0}:${pwaStandalone ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
@@ -613,43 +612,10 @@ export class TopBar extends Component {
             : ""
         }
         <div class="topbar-menu-wrap">
-          <button class="btn btn-ghost topbar-menu-btn ${this.menuOpen ? "is-open" : ""}" data-action="menu" type="button" aria-label="Open navigation menu" aria-expanded="${this.menuOpen ? "true" : "false"}">
-            ${this.menuOpen ? icons.close(20) : icons.menu(20)}
+          <button class="btn btn-ghost topbar-menu-btn ${this.menuOpen ? "is-open" : ""}" data-action="menu" type="button" aria-label="${this.menuOpen ? "Close navigation menu" : "Open navigation menu"}" aria-expanded="${this.menuOpen ? "true" : "false"}">
+            <span class="topbar-hamburger" aria-hidden="true"><span></span><span></span><span></span></span>
           </button>
-          ${
-            this.menuOpen
-              ? `<div class="topbar-nav-popover" role="menu" aria-label="Main navigation">
-                  <div class="brand">
-                    <div class="brand-mark">${icons.slaprf(25)}</div>
-                    <div class="brand-copy">
-                      <div class="brand-name">SlapRF</div>
-                    </div>
-                  </div>
-                  <nav class="nav">
-                    ${navItems}
-                    <div class="sidebar-theme-row" data-theme-toggler-row>
-                      <span class="sidebar-theme-label">Theme</span>
-                      <div class="sidebar-theme-toggler" role="group" aria-label="Color theme">
-                        <button type="button" class="sidebar-theme-btn ${appTheme === "dark" ? "is-active" : ""}" data-set-theme="dark" title="Dark theme" aria-label="Dark theme" aria-pressed="${appTheme === "dark" ? "true" : "false"}">
-                          ${icons.moon(15)}
-                        </button>
-                        <button type="button" class="sidebar-theme-btn ${appTheme === "light" ? "is-active" : ""}" data-set-theme="light" title="Light theme" aria-label="Light theme" aria-pressed="${appTheme === "light" ? "true" : "false"}">
-                          ${icons.sun(15)}
-                        </button>
-                      </div>
-                    </div>
-                  </nav>
-                  ${
-                    caps.demoMode && !lockedOut
-                      ? `<button type="button" class="sidebar-demo-disclaimer" data-action="go-datasource">
-                           <span class="sidebar-demo-disclaimer-title">Browser Demo</span>
-                           <span class="sidebar-demo-disclaimer-body">Simulated in your browser. Click to connect a SlapRF Server.</span>
-                         </button>`
-                      : ""
-                  }
-                </div>`
-              : ""
-          }
+          ${this.menuOpen ? this.buildNavPopoverHtml() : ""}
         </div>
         ${titleMarkup}
       </div>
@@ -854,5 +820,85 @@ export class TopBar extends Component {
         </div>
         <p class="topbar-pwa-popover-body">${esc(bodyText)}</p>
       </div>`;
+  }
+
+  private setMenuOpen(open: boolean): void {
+    if (this.menuOpen === open) return;
+    this.menuOpen = open;
+    const wrap = this.el.querySelector<HTMLElement>(".topbar-menu-wrap");
+    const btn = wrap?.querySelector<HTMLButtonElement>(".topbar-menu-btn");
+    if (!wrap || !btn) {
+      this.lastSig = "";
+      this.render();
+      return;
+    }
+    btn.classList.toggle("is-open", open);
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    btn.setAttribute("aria-label", open ? "Close navigation menu" : "Open navigation menu");
+    const existingPopover = wrap.querySelector(".topbar-nav-popover");
+    if (existingPopover) {
+      existingPopover.remove();
+    }
+    if (open) {
+      wrap.insertAdjacentHTML("beforeend", this.buildNavPopoverHtml());
+    }
+  }
+
+  private buildNavPopoverHtml(): string {
+    const meta = this.router.meta();
+    const { simulatorRunning: sim } = this.store;
+    const ltEnabled = sharedLiveTimeRelay.snapshot.enabled;
+    const caps = capabilitiesSnapshot();
+    const lockedOut = isServerDisconnectedLockout();
+    const appTheme = getAppTheme();
+    const isExternalTimer =
+      this.store.timingHardwareMode === "laprf" ||
+      this.store.timingHardwareMode === "rotorhazard" ||
+      this.store.timingHardwareMode === "rotorhazard_usb";
+    const effectiveSimForNav = lockedOut ? false : sim;
+    const navItems = ROUTES.filter(
+      (r) =>
+        (!r.simOnly || effectiveSimForNav) &&
+        (!r.liveTimeOnly || (ltEnabled && !isExternalTimer && !lockedOut)) &&
+        (r.id !== "flasher" || !isExternalTimer)
+    )
+      .map((r) => {
+        const active = r.id === meta.id;
+        const disabled = lockedOut && r.id !== "setup";
+        const itemHref = active ? `#/${r.id}` : getRememberedRouteHash(r.id);
+        return `<a class="nav-item ${active ? "is-active" : ""} ${disabled ? "is-disabled" : ""}" href="${esc(itemHref)}" data-nav-item="${r.id}" ${active ? 'aria-current="page"' : ""} ${disabled ? 'aria-disabled="true" tabindex="-1"' : ""}>${r.icon()}<span>${r.label}</span></a>`;
+      })
+      .join("");
+
+    return `<div class="topbar-nav-popover" role="menu" aria-label="Main navigation">
+      <div class="brand">
+        <div class="brand-mark">${icons.slaprf(25)}</div>
+        <div class="brand-copy">
+          <div class="brand-name">SlapRF</div>
+        </div>
+      </div>
+      <nav class="nav">
+        ${navItems}
+        <div class="sidebar-theme-row" data-theme-toggler-row>
+          <span class="sidebar-theme-label">Theme</span>
+          <div class="sidebar-theme-toggler" role="group" aria-label="Color theme">
+            <button type="button" class="sidebar-theme-btn ${appTheme === "dark" ? "is-active" : ""}" data-set-theme="dark" title="Dark theme" aria-label="Dark theme" aria-pressed="${appTheme === "dark" ? "true" : "false"}">
+              ${icons.moon(15)}
+            </button>
+            <button type="button" class="sidebar-theme-btn ${appTheme === "light" ? "is-active" : ""}" data-set-theme="light" title="Light theme" aria-label="Light theme" aria-pressed="${appTheme === "light" ? "true" : "false"}">
+              ${icons.sun(15)}
+            </button>
+          </div>
+        </div>
+      </nav>
+      ${
+        caps.demoMode && !lockedOut
+          ? `<button type="button" class="sidebar-demo-disclaimer" data-action="go-datasource">
+               <span class="sidebar-demo-disclaimer-title">Browser Demo</span>
+               <span class="sidebar-demo-disclaimer-body">Simulated in your browser. Click to connect a SlapRF Server.</span>
+             </button>`
+          : ""
+      }
+    </div>`;
   }
 }
