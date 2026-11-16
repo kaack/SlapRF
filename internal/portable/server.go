@@ -266,7 +266,11 @@ func NewServer(cfg Config) *Server {
 
 	reconcileRealHardwareLinks := func(simRunning bool) {
 		realMode := realEngine.TimingHardwareMode()
-		s.usbMgr.SetSimMode(simRunning || realMode != domain.HardwareModeSlapRF)
+		slaprfSuspended := simRunning || realMode != domain.HardwareModeSlapRF
+		if !slaprfSuspended {
+			realHubRx.Reset()
+		}
+		s.usbMgr.SetSimMode(slaprfSuspended)
 		s.laprfMgr.SetSimMode(simRunning || realMode != domain.HardwareModeLapRF)
 		s.rhMgr.Reconcile(simRunning)
 		s.liveTimeMgr.Reconcile()

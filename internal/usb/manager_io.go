@@ -92,7 +92,10 @@ func (m *Manager) Connect(slotIndex int, portName string) (SlotSnapshot, error) 
 	if slot.probing {
 		slot.probing = false
 	}
+	stAfter := slot.lastStatus
+	cfgAfter := slot.lastConfig
 	slot.mu.Unlock()
+	m.registerConnectedHubInEngine(stAfter, cfgAfter)
 	m.broadcastPoolState()
 	return m.Snapshot().Slots[slotIndex], nil
 }
@@ -172,17 +175,30 @@ func (m *Manager) persistUSBTargets() {
 func (m *Manager) probeInitialStatus(slot *usbSlot, timeout time.Duration) (map[string]any, error) {
 	deadline := time.Now().Add(timeout)
 	first := true
+	rebootedOnce := false
 	for time.Now().Before(deadline) {
 		slot.mu.Lock()
 		connected := slot.port != nil
+		port := slot.port
 		st := slot.lastStatus
 		rom := slot.sawRomBootloader
 		slot.mu.Unlock()
-		if !connected || rom {
+		if !connected {
 			return st, nil
 		}
 		if st != nil {
 			return st, nil
+		}
+		if rom && !rebootedOnce {
+			rebootedOnce = true
+			slot.mu.Lock()
+			slot.sawRomBootloader = false
+			slot.mu.Unlock()
+			firmware.RebootESP32C5IntoApp(port)
+			time.Sleep(850 * time.Millisecond)
+			deadline = time.Now().Add(1500 * time.Millisecond)
+			first = true
+			continue
 		}
 		cmd := "STATUS?"
 		if first {
@@ -201,6 +217,20 @@ func (m *Manager) probeInitialStatus(slot *usbSlot, timeout time.Duration) (map[
 		slot.mu.Unlock()
 		if hasAny {
 			return stNow, nil
+		}
+		if !rebootedOnce && time.Now().Add(200*time.Millisecond).After(deadline) {
+			// Board was completely silent across initial STATUS? probes (e.g., sitting idle in
+			// USB-Serial-JTAG ROM download mode after a reconnect or mode switch). Pulse a clean
+			// SPI flash reboot once and give it 1.5s to answer.
+			rebootedOnce = true
+			slot.mu.Lock()
+			slot.sawRomBootloader = false
+			slot.mu.Unlock()
+			firmware.RebootESP32C5IntoApp(port)
+			time.Sleep(850 * time.Millisecond)
+			deadline = time.Now().Add(1500 * time.Millisecond)
+			first = true
+			continue
 		}
 		time.Sleep(80 * time.Millisecond)
 	}
@@ -907,9 +937,49 @@ func (m *Manager) recordKnownConfig(cfg *firmware.TimerReadout) {
 		Channel:    1,
 		LastSeenMs: time.Now().UnixMilli(),
 	})
+	m.registerConnectedHubInEngine(nil, cfg)
+}
+
+func (m *Manager) registerConnectedHubInEngine(st map[string]any, cfg *firmware.TimerReadout) {
+	m.mu.RLock()
+	simRunning := m.simMode
+	m.mu.RUnlock()
+	if simRunning || m.cfg.Engine == nil {
+		return
+	}
+	if st != nil {
+		if roleNum, _ := asInt(st["role"]); roleNum == 1 {
+			fp, _ := st["fp"].(string)
+			label, _ := st["label"].(string)
+			if fp != "" {
+				if tid, err := m.cfg.Engine.RegisterTimerHello(fp, true, label); err == nil && tid != 0 {
+					m.cfg.Engine.MarkTimerSeen(tid)
+				}
+			}
+			if rawSpokes, ok := st["spokes"].([]any); ok {
+				for _, item := range rawSpokes {
+					if sp, ok := item.(map[string]any); ok {
+						spFp, _ := sp["fp"].(string)
+						spLabel, _ := sp["label"].(string)
+						if spFp != "" && !strings.HasPrefix(spFp, "53504B") && !m.cfg.Engine.IsDeletedSpokeFingerprint(spFp) {
+							if tid, err := m.cfg.Engine.RegisterTimerHello(spFp, false, spLabel); err == nil && tid != 0 {
+								m.cfg.Engine.MarkTimerSeen(tid)
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	if cfg != nil && cfg.Role == "hub" && cfg.Fingerprint != "" {
+		if tid, err := m.cfg.Engine.RegisterTimerHello(cfg.Fingerprint, true, cfg.TimerLabel); err == nil && tid != 0 {
+			m.cfg.Engine.MarkTimerSeen(tid)
+		}
+	}
 }
 
 func (m *Manager) recordKnownStatusMap(st map[string]any) {
+	m.registerConnectedHubInEngine(st, nil)
 	fp, _ := st["fp"].(string)
 	roleNum, _ := asInt(st["role"])
 	role := "spoke"

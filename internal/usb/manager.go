@@ -355,11 +355,16 @@ func (m *Manager) SetSimMode(simRunning bool) {
 		shouldRestore := slot.suspendedForSim && slot.portName != ""
 		pName := slot.portName
 		slot.suspendedForSim = false
+		isOpen := slot.port != nil
+		stNow := slot.lastStatus
+		cfgNow := slot.lastConfig
 		slot.mu.Unlock()
 		if shouldRestore {
 			go func(idx int, portName string) {
 				_, _ = m.Connect(idx, portName)
 			}(slot.index, pName)
+		} else if isOpen {
+			m.registerConnectedHubInEngine(stNow, cfgNow)
 		}
 	}
 }

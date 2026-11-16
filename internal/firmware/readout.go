@@ -52,6 +52,22 @@ func DisarmUSBJtagLatch(p SerialPort) {
 	SetUSBSerialDTRRTS(p, false, false)
 }
 
+// RebootESP32C5IntoApp toggles USB-Serial-JTAG DTR/RTS `(0,0) -> (1,1) -> (0,1) -> (0,0)`
+// so an ESP32-C5 trapped in ROM bootloader (`waiting for download`) resets into SPI flash app mode.
+func RebootESP32C5IntoApp(p SerialPort) {
+	if p == nil {
+		return
+	}
+	SetUSBSerialDTRRTS(p, false, false)
+	time.Sleep(40 * time.Millisecond)
+	SetUSBSerialDTRRTS(p, true, true)
+	time.Sleep(50 * time.Millisecond)
+	SetUSBSerialDTRRTS(p, false, true)
+	time.Sleep(100 * time.Millisecond)
+	SetUSBSerialDTRRTS(p, false, false)
+	time.Sleep(120 * time.Millisecond)
+}
+
 // ParseConfigReadout scans `raw` for a valid 160-byte `SLAPRF02` block and converts it to `TimerReadout`.
 func ParseConfigReadout(raw []byte) (*TimerReadout, bool) {
 	idx := bytes.Index(raw, []byte(ConfigMagic))
