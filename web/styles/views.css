@@ -13536,9 +13536,6 @@ button.bkt-wire-endpoint.is-reconnecting,
     gap: 10px;
     padding: 8px 12px;
   }
-  .practice-action-strip .track-scope-pill {
-    display: none;
-  }
 }
 .practice-pilot-add-wrap {
   position: relative;

@@ -1526,30 +1526,6 @@ export class LiveView extends Component {
 
       const ctrlEl = this.slot("session-controls");
       if (sess) {
-        const gCount = trackInfo.nodes.length;
-        const secLabel = gCount > 1 ? ` · S1–S${gCount}` : gCount === 1 ? " · S1" : "";
-        const gateNames = trackInfo.nodes
-          .map((g) => gateLabel(this.workspaceStore, g.gateId))
-          .join(" → ");
-        const trackBadgeHtml = trackInfo.historical
-          ? `<span
-              class="track-scope-pill is-locked"
-              data-practice-track-pill="locked"
-              title="Frozen track snapshot (${esc(gateNames)}). Subsequent edits on Track do not alter this completed session."
-            >
-              ${icons.lock(12)}
-              <span>Track snapshot · ${gCount} gate${gCount === 1 ? "" : "s"}${secLabel}</span>
-            </span>`
-          : `<a
-              href="#/track"
-              class="track-scope-pill is-live"
-              data-practice-track-pill="live"
-              title="Linked to live course (${esc(gateNames)}). Click to edit Track."
-            >
-              ${icons.gate(13)}
-              <span>Live track · ${gCount} gate${gCount === 1 ? "" : "s"}${secLabel}</span>
-            </a>`;
-
         const isActive = Boolean(sess.active && !sess.paused && this.store.raceArmed);
         const isPaused = Boolean(sess.paused || (sess.active && !this.store.raceArmed));
         const statusKey = isActive ? "active" : isPaused ? "paused" : "idle";
@@ -1595,7 +1571,6 @@ export class LiveView extends Component {
               data-practice-status="${statusKey}"
               title="${esc(statusTitle)}"
             ></span>
-            ${trackBadgeHtml}
             <span class="practice-strip-meta">${sess.pilots.length} pilot${sess.pilots.length === 1 ? "" : "s"} · ${sess.laps.length} lap${sess.laps.length === 1 ? "" : "s"}</span>
           </div>
           <div class="practice-strip-actions">
