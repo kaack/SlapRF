@@ -31,8 +31,8 @@ func DefaultListPorts() ([]PortInfo, error) {
 		pid := strings.ToUpper(strings.TrimSpace(d.PID))
 		isEsp := vid == EspressifVID
 		prod := strings.TrimSpace(d.Product)
-		if prod == "" && isEsp {
-			prod = "Seeed XIAO ESP32-C5"
+		if isEsp && (prod == "" || strings.HasPrefix(strings.ToLower(prod), "usb serial device")) {
+			prod = "Seeed XIAO ESP32-C5 (USB JTAG/serial)"
 		}
 		out = append(out, PortInfo{
 			Name:         d.Name,

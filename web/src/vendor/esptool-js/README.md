@@ -1,0 +1,1 @@
+Vendored from esptool-js 0.7.1 (https://github.com/espressif/esptool-js, Apache-2.0). File esptool.js is the upstream self-contained ESM bundle.js. Update by replacing esptool.js with a newer bundle.js.

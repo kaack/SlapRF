@@ -41,7 +41,7 @@ func (p *osSerialPort) SetReadTimeout(t time.Duration) error {
 func (p *osSerialPort) ResetInputBuffer() error  { return p.port.ResetInputBuffer() }
 func (p *osSerialPort) ResetOutputBuffer() error { return p.port.ResetOutputBuffer() }
 
-// DefaultSerialOpener opens an OS serial port via go.bug.st/serial.
+// DefaultSerialOpener opens an OS serial port via the cross-platform go.bug.st/serial library.
 func DefaultSerialOpener(portName string, baud int) (firmware.SerialPort, error) {
 	portName = strings.TrimSpace(portName)
 	if portName == "" {
@@ -51,10 +51,11 @@ func DefaultSerialOpener(portName string, baud int) (firmware.SerialPort, error)
 		baud = 115200
 	}
 	mode := &serial.Mode{
-		BaudRate: baud,
-		DataBits: 8,
-		Parity:   serial.NoParity,
-		StopBits: serial.OneStopBit,
+		BaudRate:          baud,
+		DataBits:          8,
+		Parity:            serial.NoParity,
+		StopBits:          serial.OneStopBit,
+		InitialStatusBits: &serial.ModemOutputBits{DTR: false, RTS: false},
 	}
 	p, err := serial.Open(portName, mode)
 	if err != nil {

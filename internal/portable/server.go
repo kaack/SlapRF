@@ -79,7 +79,6 @@ type Config struct {
 	Version         string
 	StaticFS        fs.FS  // Optional embedded WASM-free SPA filesystem
 	DBPath          string // Path to single-file bbolt DB; if empty, an isolated temp DB is used (cleaned on Close)
-	BaseFirmware    []byte // Embedded ESP32-C5 firmware binary for native Go USB flashing
 	AllowedOrigins  []string
 	AllowLANOrigins bool
 	MultiGPBaseURL  string // Defaults to DefaultMultiGPBaseURL
@@ -91,14 +90,14 @@ type Config struct {
 }
 
 // Server owns the complete native Go timing engines (`realEngine` + `simEngine`), `TrackSimulator`,
-// single-file `bbolt` storage (`slaprf.db`), native USB serial + ESP32-C5 flasher, native LapRF 8-Way
+// single-file `bbolt` storage (`slaprf.db`), native USB serial for SlapRF timers, native LapRF 8-Way
 // & RotorHazard hardware links, LiveTime :5403 TCP server, MultiGP proxy, and WebSocket event stream.
 type Server struct {
-	cfg          Config
-	httpClient   *http.Client
-	hostname     string
-	tempDBPath   string
-	store        *storage.BoltStore
+	cfg           Config
+	httpClient    *http.Client
+	hostname      string
+	tempDBPath    string
+	store         *storage.BoltStore
 	persistWorker *storage.PersistenceWorker
 
 	simEngine  *tracker.Engine
@@ -246,18 +245,13 @@ func NewServer(cfg Config) *Server {
 
 	s.stream = newStreamHub(simEngine, realEngine, sim.IsRunning)
 
-	baseFW := cfg.BaseFirmware
-	if len(baseFW) == 0 {
-		baseFW = firmware.SyntheticBase()
-	}
 	s.usbMgr = usb.NewManager(usb.ManagerConfig{
-		Engine:       realEngine,
-		HubRx:        realHubRx,
-		Store:        store,
-		BaseFirmware: baseFW,
-		OpenPort:     cfg.USBOpenPort,
-		ListPorts:    cfg.USBListPorts,
-		Logf:         s.logf,
+		Engine:    realEngine,
+		HubRx:     realHubRx,
+		Store:     store,
+		OpenPort:  cfg.USBOpenPort,
+		ListPorts: cfg.USBListPorts,
+		Logf:      s.logf,
 	})
 	markDirty := func() {
 		if s.persistWorker != nil {
@@ -455,9 +449,8 @@ func (s *Server) RegisterAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/usb/disconnect", s.handleUSBDisconnect)
 	mux.HandleFunc("/api/usb/debug-slot", s.handleUSBDebugSlot)
 	mux.HandleFunc("/api/usb/command", s.handleUSBCommand)
-	mux.HandleFunc("/api/usb/flash", s.handleUSBFlash)
-	mux.HandleFunc("/api/usb/erase", s.handleUSBErase)
 	mux.HandleFunc("/api/usb/known-forget", s.handleUSBKnownForget)
+	mux.HandleFunc("/api/hub/survey", s.handleHubSurvey)
 	mux.HandleFunc("/api/sim/hub-usb", s.handleSimHubUSB)
 	mux.HandleFunc("/api/ws/usb", s.handleUSBWS)
 

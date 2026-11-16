@@ -1316,14 +1316,6 @@ export class SimulatedSerialPort implements SerialPortLike {
       return;
     }
 
-    if (upper.startsWith("EMERGENCY")) {
-      const arg = upper.slice(9).trim();
-      const nextEm = arg === "0" ? false : arg === "1" ? true : !st.emergencyMode;
-      this.emitJson({ t: "ok", cmd: "EMERGENCY", emergencyMode: nextEm });
-      window.setTimeout(() => this.performReboot("ESP_RST_SW", nextEm), 50);
-      return;
-    }
-
     if (upper === "HELP" || upper === "?") {
       this.emitLine(
         [
@@ -1339,7 +1331,6 @@ export class SimulatedSerialPort implements SerialPortLike {
           "  IDENTIFY [fp] 0|1        Strobe timer LED to identify board on course",
           "  BOOTLOG? | LASTLOG?      Read current or previous boot log",
           "  LOG 0|1                  Stream ESP-IDF firmware log lines",
-          "  EMERGENCY 0|1            Toggle emergency rescue mode",
           "  REBOOT                   Software restart",
         ].join("\n")
       );
@@ -1403,7 +1394,9 @@ export interface PickUsbPortOptions {
 
 interface BackendPortEntry {
   name: string;
+  product?: string;
   description?: string;
+  isUsb?: boolean;
   isUSB?: boolean;
   vid?: string;
   pid?: string;
@@ -1436,7 +1429,7 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
   document.querySelectorAll(".confirm-modal-backdrop").forEach((el) => el.remove());
 
   const simMode = isSimulatedUsbMode();
-  let showAllRealPorts = Boolean(opts.showAllPorts);
+  const showAllRealPorts = Boolean(opts.showAllPorts);
   const excludeTimerIds = new Set<number>(opts.excludeTimerIds ?? []);
   const excludePortNames = new Set<string>();
   for (const p of opts.excludePorts ?? []) {
@@ -1492,7 +1485,12 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
           );
           const knownLabel = activeSlot?.lastStatus?.label || activeSlot?.lastConfig?.timerLabel || "";
           const knownFp = activeSlot?.lastStatus?.fp || activeSlot?.lastConfig?.fingerprint || "";
-          const desc = p.description || (p.isEspressif ? "USB JTAG/serial debug unit" : "USB Serial Port");
+          const rawProd = p.product || p.description || "";
+          const desc = p.isEspressif
+            ? rawProd && !/^usb serial device/i.test(rawProd)
+              ? rawProd
+              : "Seeed XIAO ESP32-C5 (USB JTAG/serial)"
+            : rawProd || "USB Serial Port";
           const vidPid = p.vid && p.pid ? ` (${p.vid}:${p.pid})` : "";
           const identitySuffix = knownLabel || knownFp
             ? ` · ${[knownFp ? `(${knownFp})` : "", knownLabel].filter(Boolean).join(" ")}`
@@ -1523,8 +1521,8 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
           simMode
             ? "No powered simulated timers available"
             : showAllRealPorts
-              ? "No serial ports detected on the SlapRF server"
-              : "No XIAO ESP32-C5 USB ports detected — plug in USB-C or click Show all ports"
+              ? "No USB serial ports detected on the SlapRF server"
+              : "No Seeed Studio XIAO ESP32-C5 USB ports detected — plug in USB-C and click Refresh"
         }</div>`;
       }
       return choices
@@ -1563,8 +1561,7 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
         .join("");
     };
 
-    const moreBtnLabel = () =>
-      simMode ? "More devices…" : showAllRealPorts ? "Refresh ports" : "Show all ports";
+    const moreBtnLabel = () => (simMode ? "More devices…" : "Refresh");
 
     backdrop.innerHTML = `
       <div class="slaprf-modal card sim-usb-dialog" role="dialog" aria-modal="true" aria-labelledby="sim-usb-picker-title">
@@ -1583,7 +1580,7 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
           </div>
         </div>
         <div class="slaprf-modal-foot">
-          <button type="button" class="btn btn-ghost" data-modal="request-native" style="margin-right:auto">${icons.plus(15)}<span data-role="more-ports-label">${esc(moreBtnLabel())}</span></button>
+          <button type="button" class="btn btn-ghost" data-modal="request-native" style="margin-right:auto">${simMode ? icons.plus(15) : icons.reset(15)}<span data-role="more-ports-label">${esc(moreBtnLabel())}</span></button>
           <button type="button" class="btn btn-ghost" data-modal="cancel">Cancel</button>
           <button type="button" class="btn btn-armed" data-modal="connect" ${selectedId === null ? "disabled" : ""}>
             ${icons.plug(15)}
@@ -1680,8 +1677,6 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
       if (target.closest('[data-modal="request-native"]')) {
         if (simMode) {
           unpairedSimTimerIds.clear();
-        } else {
-          showAllRealPorts = true;
         }
         void loadChoices().then((next) => {
           if (closed) return;

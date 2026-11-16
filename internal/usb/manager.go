@@ -45,8 +45,6 @@ type SlotSnapshot struct {
 	Connected       bool                   `json:"connected"`
 	PortName        string                 `json:"portName,omitempty"`
 	Probing         bool                   `json:"probing"`
-	Writing         bool                   `json:"writing"`
-	BusyLabel       string                 `json:"busyLabel,omitempty"`
 	Reconnecting    bool                   `json:"reconnecting"`
 	ReconnectTry    int                    `json:"reconnectAttempt"`
 	ReconnectFailed bool                   `json:"reconnectFailed"`
@@ -60,32 +58,29 @@ type PoolSnapshot struct {
 	DebugSlotIndex int                  `json:"debugSlotIndex"`
 	Slots          []SlotSnapshot       `json:"slots"`
 	KnownTimers    []KnownHardwareTimer `json:"knownTimers"`
-	FlashActive    bool                 `json:"flashActive"`
 }
 
 // USBEvent is pushed over `/api/ws/usb` to keep all connected UI tabs synchronized.
 type USBEvent struct {
-	Type          string                  `json:"type"` // pool_state | status | config | live | scan | bootlog | log | raw_reply | flash_progress | error
-	SlotIndex     int                     `json:"slotIndex"`
-	Pool          *PoolSnapshot           `json:"pool,omitempty"`
-	Status        map[string]any          `json:"status,omitempty"`
-	Config        *firmware.TimerReadout  `json:"config,omitempty"`
-	Payload       map[string]any          `json:"payload,omitempty"`
-	Line          string                  `json:"line,omitempty"`
-	MsgType       string                  `json:"msgType,omitempty"`
-	Error         string                  `json:"error,omitempty"`
-	FlashProgress *firmware.FlashProgress `json:"flashProgress,omitempty"`
+	Type      string                 `json:"type"` // pool_state | status | config | live | hub_live | scan | bootlog | log | raw_reply | error
+	SlotIndex int                    `json:"slotIndex"`
+	Pool      *PoolSnapshot          `json:"pool,omitempty"`
+	Status    map[string]any         `json:"status,omitempty"`
+	Config    *firmware.TimerReadout `json:"config,omitempty"`
+	Payload   map[string]any         `json:"payload,omitempty"`
+	Line      string                 `json:"line,omitempty"`
+	MsgType   string                 `json:"msgType,omitempty"`
+	Error     string                 `json:"error,omitempty"`
 }
 
 // ManagerConfig configures the native Go USB serial manager.
 type ManagerConfig struct {
-	Engine       *tracker.Engine
-	HubRx        *ingest.HubFrameDecoder
-	Store        *storage.BoltStore
-	BaseFirmware []byte
-	OpenPort     firmware.SerialOpener
-	ListPorts    PortLister
-	Logf         func(string, ...any)
+	Engine    *tracker.Engine
+	HubRx     *ingest.HubFrameDecoder
+	Store     *storage.BoltStore
+	OpenPort  firmware.SerialOpener
+	ListPorts PortLister
+	Logf      func(string, ...any)
 }
 
 type slotHello struct {
@@ -118,8 +113,6 @@ type usbSlot struct {
 	cancel               context.CancelFunc
 	doneCh               chan struct{}
 	probing              bool
-	writing              bool
-	busyLabel            string
 	reconnecting         bool
 	reconnectAttempt     int
 	reconnectFailed      bool
@@ -133,9 +126,11 @@ type usbSlot struct {
 
 	hubOwnFrames int
 	hubLastDbm   []int
-	hubHello     map[uint8]slotHello
-	hubLive      map[uint8]slotLive
-	waiters      []*replyWaiter
+	// Last time a throttled "hub_live" event (per-slot RSSI) was sent to browsers.
+	hubLiveEmitMs int64
+	hubHello      map[uint8]slotHello
+	hubLive       map[uint8]slotLive
+	waiters       []*replyWaiter
 }
 
 // Manager owns physical USB-C serial connections to SlapRF XIAO ESP32-C5 Hub & Spoke boards.
@@ -149,7 +144,6 @@ type Manager struct {
 	debugSlotIndex int
 	knownTimers    map[string]KnownHardwareTimer
 	simMode        bool
-	flashActive    bool
 	closed         bool
 
 	subMu  sync.RWMutex
@@ -289,22 +283,28 @@ func (m *Manager) broadcastPoolState() {
 }
 
 // ListPorts returns OS serial ports annotated with active slot usage.
+// By default (`showAll == false`), only Espressif USB boards (`VID=303A`, e.g. XIAO ESP32-C5)
+// are returned, excluding legacy motherboard UARTs (`COM1`) and non-Espressif serial devices.
+// When `showAll == true`, all USB serial adapters are returned while still excluding legacy
+// non-USB motherboard COM ports (`!IsUSB` with a non-USB product descriptor).
 func (m *Manager) ListPorts(showAll bool) ([]PortInfo, error) {
 	ports, err := m.listFn()
 	if err != nil {
 		return nil, err
 	}
-	if showAll {
-		return ports, nil
-	}
 	filtered := make([]PortInfo, 0, len(ports))
+	if showAll {
+		for _, p := range ports {
+			if p.IsEspressif || p.IsUSB {
+				filtered = append(filtered, p)
+			}
+		}
+		return filtered, nil
+	}
 	for _, p := range ports {
-		if p.IsEspressif || p.IsUSB {
+		if p.IsEspressif {
 			filtered = append(filtered, p)
 		}
-	}
-	if len(filtered) == 0 {
-		return ports, nil
 	}
 	return filtered, nil
 }
@@ -368,7 +368,6 @@ func (m *Manager) SetSimMode(simRunning bool) {
 func (m *Manager) Snapshot() PoolSnapshot {
 	m.mu.RLock()
 	dbg := m.debugSlotIndex
-	flashActive := m.flashActive
 	known := make([]KnownHardwareTimer, 0, len(m.knownTimers))
 	for _, kt := range m.knownTimers {
 		known = append(known, kt)
@@ -395,11 +394,9 @@ func (m *Manager) Snapshot() PoolSnapshot {
 		}
 		slots[i] = SlotSnapshot{
 			SlotIndex:       i,
-			Connected:       s.port != nil || s.writing,
+			Connected:       s.port != nil,
 			PortName:        s.portName,
 			Probing:         s.probing,
-			Writing:         s.writing,
-			BusyLabel:       s.busyLabel,
 			Reconnecting:    s.reconnecting,
 			ReconnectTry:    s.reconnectAttempt,
 			ReconnectFailed: s.reconnectFailed,
@@ -414,6 +411,5 @@ func (m *Manager) Snapshot() PoolSnapshot {
 		DebugSlotIndex: dbg,
 		Slots:          slots,
 		KnownTimers:    known,
-		FlashActive:    flashActive,
 	}
 }

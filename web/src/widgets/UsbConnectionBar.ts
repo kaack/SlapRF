@@ -69,9 +69,8 @@ function renderChip(c: TimerConsole, active: boolean, canDisconnect = true): str
         class="debug-usb-chip-close"
         data-action="disconnect-usb-slot"
         data-usb-slot="${c.slotIndex}"
-        ${isWriting ? "disabled" : ""}
-        title="Disconnect ${esc(label)}"
-        aria-label="Disconnect ${esc(label)}"
+        title="${isWriting ? `Cancel writing and disconnect ${esc(label)}` : `Disconnect ${esc(label)}`}"
+        aria-label="${isWriting ? `Cancel writing and disconnect ${esc(label)}` : `Disconnect ${esc(label)}`}"
       >${icons.close(13)}</button>`
     : "";
   return `

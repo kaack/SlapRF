@@ -69,7 +69,7 @@ SlapRF/
 │   ├── rotorhazard/     # RotorHazard USB serial & LAN HTTP/Socket.IO client
 │   ├── storage/         # Persistent transactional bbolt store (slaprf.db)
 │   ├── tracker/         # Multi-gate timing engine, 5-stage crossing guardrails, section split math, demo showcase
-│   └── usb/             # Native USB serial discovery, console transport, and ESP32-C5 ROM flasher
+│   └── usb/             # Native USB serial discovery and console transport (live timing only)
 ├── web/
 │   ├── embed.go         # Embeds index.html, styles/, src/, and firmware/
 │   ├── index.html       # SPA entry HTML & boot loader

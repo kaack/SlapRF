@@ -50,7 +50,6 @@ func (m *Manager) Connect(slotIndex int, portName string) (SlotSnapshot, error) 
 		m.broadcastPoolState()
 		return SlotSnapshot{}, err
 	}
-	firmware.DisarmUSBJtagLatch(port)
 	_ = port.SetReadTimeout(120 * time.Millisecond)
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -62,8 +61,6 @@ func (m *Manager) Connect(slotIndex int, portName string) (SlotSnapshot, error) 
 	slot.cancel = cancel
 	slot.doneCh = doneCh
 	slot.probing = true
-	slot.writing = false
-	slot.busyLabel = ""
 	slot.reconnecting = false
 	slot.reconnectAttempt = 0
 	slot.reconnectFailed = false
@@ -326,9 +323,12 @@ func (m *Manager) sendNetChannelsFrameToHub(pkt19 []byte) {
 		freq := binary.LittleEndian.Uint16(pkt19[2+i*2 : 4+i*2])
 		parts[i] = fmt.Sprintf("%d", freq)
 	}
-	cmd := "NETCHANNELS " + strings.Join(parts, ",")
+	m.SendToHub("NETCHANNELS " + strings.Join(parts, ","))
+}
 
-	// Send to any connected Hub slot (role == 1), defaulting to Slot 0 if role not yet reported.
+// SendToHub sends a console command to every connected Hub (role 1), or to Slot 0 if no slot has
+// reported its role yet. Returns false if no USB board is connected.
+func (m *Manager) SendToHub(cmd string) bool {
 	sent := false
 	for i := 0; i < MaxUSBConnections; i++ {
 		s := m.slots[i]
@@ -355,8 +355,10 @@ func (m *Manager) sendNetChannelsFrameToHub(pkt19 []byte) {
 		s0.mu.Unlock()
 		if isConn0 {
 			_ = m.SendCommand(0, cmd)
+			sent = true
 		}
 	}
+	return sent
 }
 
 const ingestHubChannelsLen = 19
@@ -441,7 +443,7 @@ func (m *Manager) runSlotLoops(ctx context.Context, slot *usbSlot, port firmware
 
 func (m *Manager) attemptAutoReconnect(slot *usbSlot, portName string) {
 	slot.mu.Lock()
-	if slot.reconnecting || slot.writing {
+	if slot.reconnecting {
 		slot.mu.Unlock()
 		return
 	}
@@ -464,7 +466,7 @@ func (m *Manager) attemptAutoReconnect(slot *usbSlot, portName string) {
 			return
 		}
 		slot.mu.Lock()
-		if slot.port != nil || slot.portName == "" || slot.writing {
+		if slot.port != nil || slot.portName == "" {
 			slot.reconnecting = false
 			slot.mu.Unlock()
 			m.broadcastPoolState()
@@ -475,6 +477,17 @@ func (m *Manager) attemptAutoReconnect(slot *usbSlot, portName string) {
 		m.broadcastPoolState()
 
 		time.Sleep(1200 * time.Millisecond)
+
+		slot.mu.Lock()
+		slotBusy := slot.port != nil || slot.portName == ""
+		slot.mu.Unlock()
+		if slotBusy {
+			slot.mu.Lock()
+			slot.reconnecting = false
+			slot.mu.Unlock()
+			m.broadcastPoolState()
+			return
+		}
 
 		if _, err := m.Connect(slot.index, portName); err == nil {
 			return
@@ -683,14 +696,43 @@ func (m *Manager) handleHubBinaryFrame(slot *usbSlot, frame []byte) {
 		}
 	}
 	synth := m.synthesizeHubStatusLocked(slot, nowMs)
+	var hubLive map[string]any
+	if (kind == 0x59 || kind == 0x58) && nowMs-slot.hubLiveEmitMs >= hubLiveEmitIntervalMs {
+		slot.hubLiveEmitMs = nowMs
+		hubLive = hubLivePayloadLocked(slot, nowMs)
+	}
 	slot.mu.Unlock()
 
+	if hubLive != nil {
+		m.emit(USBEvent{Type: "hub_live", SlotIndex: slot.index, Payload: hubLive})
+	}
 	if synth != nil {
 		m.recordKnownStatusMap(synth)
 		m.resolveWaiters(slot, "status", synth)
 		m.emit(USBEvent{Type: "status", SlotIndex: slot.index, Status: synth})
 		m.broadcastPoolState()
 	}
+}
+
+// hubLiveEmitIntervalMs throttles "hub_live" events to 20 Hz. The firmware's JSON STATUS line only
+// arrives about once per second, which made the Network page's RSSI bars look sluggish.
+const hubLiveEmitIntervalMs = 50
+
+// hubLivePayloadLocked returns the newest RSSI window of every TDMA slot the Hub forwarded.
+// Callers hold slot.mu.
+func hubLivePayloadLocked(slot *usbSlot, nowMs int64) map[string]any {
+	slots := make([]map[string]any, 0, len(slot.hubLive))
+	for tdma, l := range slot.hubLive {
+		slots = append(slots, map[string]any{
+			"slot":   tdma,
+			"dbm":    l.dbm,
+			"seq":    l.seq,
+			"frames": l.frames,
+			"floor":  l.floor,
+			"ageMs":  nowMs - l.lastFrameAtMs,
+		})
+	}
+	return map[string]any{"slots": slots, "hubOwnFrames": slot.hubOwnFrames}
 }
 
 func (m *Manager) synthesizeHubStatusLocked(slot *usbSlot, nowMs int64) map[string]any {
@@ -1058,199 +1100,6 @@ func (m *Manager) ForgetKnownTimer(fp string) {
 	m.mu.Unlock()
 	if m.cfg.Store != nil {
 		_ = m.cfg.Store.PutJSON(kvKnownTimersKey, list)
-	}
-	m.broadcastPoolState()
-}
-
-// FlashBoardRequest describes a native Go ESP32-C5 firmware flash request (`POST /api/usb/flash`).
-type FlashBoardRequest struct {
-	PortName        string    `json:"portName"`
-	SlotIndex       int       `json:"slotIndex"` // Optional slot currently holding PortName
-	Role            string    `json:"role"`      // "hub" | "spoke"
-	TimerLabel      string    `json:"timerLabel"`
-	Fingerprint     string    `json:"fingerprint,omitempty"`
-	KeepFingerprint bool      `json:"keepFingerprint"`
-	Frequencies     [8]uint16 `json:"frequencies,omitempty"`
-	WiFiSSID        string    `json:"wifiSsid,omitempty"`
-	WiFiPassword    string    `json:"wifiPassword,omitempty"`
-	CustomImage     []byte    `json:"-"`
-}
-
-// FlashBoard patches the embedded firmware image with the requested board identity and flashes it
-// over USB-Serial-JTAG SLIP ROM bootloader in Go, streaming progress over `/api/ws/usb`.
-func (m *Manager) FlashBoard(ctx context.Context, req FlashBoardRequest) (*firmware.TimerReadout, error) {
-	_ = ctx
-	portName := strings.TrimSpace(req.PortName)
-	ownerSlot := m.findOwnerSlotByPort(portName, req.SlotIndex)
-	if portName == "" && ownerSlot != nil {
-		ownerSlot.mu.Lock()
-		portName = ownerSlot.portName
-		ownerSlot.mu.Unlock()
-	}
-	if portName == "" {
-		return nil, errors.New("missing serial port name for flashing")
-	}
-
-	base := req.CustomImage
-	if len(base) == 0 {
-		base = m.cfg.BaseFirmware
-	}
-	if len(base) == 0 {
-		base = firmware.SyntheticBase()
-	}
-
-	roleByte := firmware.RoleHubTimer
-	if strings.EqualFold(req.Role, "spoke") {
-		roleByte = firmware.RoleSpokeTimer
-	}
-	fpVal := firmware.ParseFingerprint(req.Fingerprint)
-	tCfg := firmware.TimerConfig{
-		Role:         roleByte,
-		TimerLabel:   req.TimerLabel,
-		Fingerprint:  fpVal,
-		SlotFreqsMHz: req.Frequencies,
-		WifiSSID:     req.WiFiSSID,
-		WifiPass:     req.WiFiPassword,
-	}
-
-	if err := m.beginExclusiveFlash(ownerSlot, "Flashing"); err != nil {
-		return nil, err
-	}
-	defer m.endExclusiveFlash(ownerSlot, portName, true)
-
-	slotIdx := 0
-	if ownerSlot != nil {
-		slotIdx = ownerSlot.index
-	}
-
-	readout, flashErr := firmware.FlashXiaoC5(
-		portName,
-		m.openPort,
-		base,
-		tCfg,
-		req.KeepFingerprint,
-		func(p firmware.FlashProgress) {
-			pCopy := p
-			m.emit(USBEvent{
-				Type:          "flash_progress",
-				SlotIndex:     slotIdx,
-				FlashProgress: &pCopy,
-			})
-		},
-	)
-	if flashErr != nil {
-		return nil, flashErr
-	}
-	if readout != nil {
-		m.recordKnownConfig(readout)
-	}
-	return readout, nil
-}
-
-// EraseBoard erases the entire flash of an ESP32-C5 board via its USB-Serial-JTAG SLIP ROM bootloader.
-func (m *Manager) EraseBoard(ctx context.Context, portName string, slotIndex int) error {
-	_ = ctx
-	portName = strings.TrimSpace(portName)
-	ownerSlot := m.findOwnerSlotByPort(portName, slotIndex)
-	if portName == "" && ownerSlot != nil {
-		ownerSlot.mu.Lock()
-		portName = ownerSlot.portName
-		ownerSlot.mu.Unlock()
-	}
-	if portName == "" {
-		return errors.New("missing serial port name for erase")
-	}
-
-	if err := m.beginExclusiveFlash(ownerSlot, "Erasing"); err != nil {
-		return err
-	}
-	defer m.endExclusiveFlash(ownerSlot, portName, false)
-
-	slotIdx := 0
-	if ownerSlot != nil {
-		slotIdx = ownerSlot.index
-	}
-
-	return firmware.EraseXiaoC5(portName, m.openPort, func(p firmware.FlashProgress) {
-		pCopy := p
-		m.emit(USBEvent{
-			Type:          "flash_progress",
-			SlotIndex:     slotIdx,
-			FlashProgress: &pCopy,
-		})
-	})
-}
-
-func (m *Manager) findOwnerSlotByPort(portName string, fallbackSlot int) *usbSlot {
-	if portName != "" {
-		for i := 0; i < MaxUSBConnections; i++ {
-			s := m.slots[i]
-			s.mu.Lock()
-			match := strings.EqualFold(s.portName, portName) && s.port != nil
-			s.mu.Unlock()
-			if match {
-				return s
-			}
-		}
-	}
-	if fallbackSlot >= 0 && fallbackSlot < MaxUSBConnections {
-		s := m.slots[fallbackSlot]
-		s.mu.Lock()
-		hasPort := s.port != nil
-		s.mu.Unlock()
-		if hasPort {
-			return s
-		}
-	}
-	return nil
-}
-
-func (m *Manager) beginExclusiveFlash(ownerSlot *usbSlot, busy string) error {
-	m.mu.Lock()
-	if m.flashActive {
-		m.mu.Unlock()
-		return errors.New("another firmware operation is already in progress")
-	}
-	m.flashActive = true
-	m.mu.Unlock()
-
-	if ownerSlot != nil {
-		ownerSlot.mu.Lock()
-		ownerSlot.writing = true
-		ownerSlot.busyLabel = busy
-		ownerSlot.mu.Unlock()
-		_ = m.closeSlotInternal(ownerSlot, false)
-	}
-	m.broadcastPoolState()
-	return nil
-}
-
-func (m *Manager) endExclusiveFlash(ownerSlot *usbSlot, portName string, reopenAfter bool) {
-	m.mu.Lock()
-	m.flashActive = false
-	m.mu.Unlock()
-
-	if ownerSlot != nil {
-		ownerSlot.mu.Lock()
-		ownerSlot.writing = false
-		ownerSlot.busyLabel = ""
-		ownerSlot.mu.Unlock()
-		if reopenAfter && portName != "" {
-			// Wait briefly for the reset board to re-enumerate USB CDC, then reconnect.
-			for attempt := 0; attempt < 8; attempt++ {
-				time.Sleep(300 * time.Millisecond)
-				if _, err := m.Connect(ownerSlot.index, portName); err == nil {
-					return
-				}
-			}
-		} else if !reopenAfter {
-			ownerSlot.mu.Lock()
-			ownerSlot.portName = ""
-			ownerSlot.lastStatus = nil
-			ownerSlot.lastConfig = nil
-			ownerSlot.mu.Unlock()
-			m.persistUSBTargets()
-		}
 	}
 	m.broadcastPoolState()
 }

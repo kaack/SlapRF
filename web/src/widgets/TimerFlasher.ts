@@ -7,10 +7,17 @@ import {
   FlashProgress,
   LATEST_FIRMWARE_VERSION,
   TimerReadout,
+  cancelActiveFlash,
   flashXiaoC5OverWebSerial,
   isWebSerialSupported,
 } from "../services/esp_flasher";
-import { isSimulatedSerialPort } from "../services/sim_serial_port";
+import {
+  FLASHER_NEEDS_WEBSERIAL,
+  acquireEspSerialPort,
+  flashXiaoC5WithEsptool,
+  flasherUsesWebSerial,
+} from "../services/esptool_flasher";
+import { isSimulatedSerialPort, isSimulatedUsbMode } from "../services/sim_serial_port";
 import { recordKnownTimerReadout, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
@@ -60,6 +67,19 @@ export class TimerFlasher extends Component {
 
     this.listen(el, "click", (e) => {
       const t = e.target as HTMLElement;
+
+      if (t.closest("[data-cancel-flash]")) {
+        cancelActiveFlash();
+        if (!flasherUsesWebSerial()) {
+          void usbPool.mainConsole.disconnectCleanly().catch(() => undefined);
+        }
+        this.busy = false;
+        this.progress = null;
+        this.errorMsg = null;
+        this.slideDir = "none";
+        this.render();
+        return;
+      }
 
       if (this.busy) return;
 
@@ -261,6 +281,7 @@ export class TimerFlasher extends Component {
     }
     const cleanLabel = this.timerLabel.trim();
     const label = `${this.role === "hub" ? "Hub" : "Spoke"} "${cleanLabel}"`;
+    const useEsptool = flasherUsesWebSerial();
     this.busy = true;
     this.errorMsg = null;
     this.lastSuccessMsg = null;
@@ -268,27 +289,51 @@ export class TimerFlasher extends Component {
     this.progress = {
       stage: "connecting",
       percent: 1,
-      detail: `Building ${label} firmware image…`,
+      detail: useEsptool || !usbPool.mainConsole.connected
+        ? "Select the XIAO ESP32-C5 USB port to flash…"
+        : `Building ${label} firmware image…`,
     };
     this.render();
 
-    try {
-      const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel);
+    const onProgress = (p: FlashProgress) => {
+      this.progress = p;
+      this.slideDir = "none";
+      if (!this.updateProgressInPlace(cleanLabel)) {
+        this.render();
+      }
+    };
 
-      const written = await flashXiaoC5OverWebSerial(
-        bytes,
-        label,
-        (p) => {
-          this.progress = p;
-          this.slideDir = "none";
-          if (!this.updateProgressInPlace(cleanLabel)) {
-            this.render();
-          }
-        },
-        this.showAllPorts,
-        this.keepFingerprint,
-        usbPool
-      );
+    try {
+      let written: TimerReadout | null;
+      if (useEsptool) {
+        // Select the WebSerial port first, while the click still counts as a user gesture.
+        const port = await acquireEspSerialPort();
+        onProgress({ stage: "connecting", percent: 1, detail: `Building ${label} firmware image…` });
+        const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel);
+        written = await flashXiaoC5WithEsptool(
+          port,
+          bytes,
+          label,
+          onProgress,
+          this.keepFingerprint
+        );
+      } else {
+        if (!isSimulatedUsbMode()) throw new Error(FLASHER_NEEDS_WEBSERIAL);
+        // Simulation / Demo mode: flash the simulated board.
+        if (!usbPool.mainConsole.connected) {
+          await usbPool.connectMain(this.showAllPorts);
+          onProgress({ stage: "connecting", percent: 1, detail: `Building ${label} firmware image…` });
+        }
+        const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel);
+        written = await flashXiaoC5OverWebSerial(
+          bytes,
+          label,
+          onProgress,
+          this.showAllPorts,
+          this.keepFingerprint,
+          usbPool
+        );
+      }
 
       if (written) {
         recordKnownTimerReadout(written);
@@ -303,7 +348,14 @@ export class TimerFlasher extends Component {
       const fpNote = written?.fingerprintKept
         ? `kept its fingerprint ${written.fingerprint}`
         : `got new fingerprint ${written?.fingerprint ?? ""}`;
-      this.lastSuccessMsg = `${label} flashed (${fpNote}).`;
+      const verified = useEsptool ? (written as { verified?: TimerReadout | null } | null)?.verified : undefined;
+      const verifyNote =
+        verified === undefined
+          ? ""
+          : verified
+            ? ` Read back OK: ${verified.timerLabel || cleanLabel} · ${verified.role === "hub" ? "Hub" : "Spoke"} · ${verified.firmwareVersion}.`
+            : " The board did not answer the readback; unplug and replug it, then use Reader to check.";
+      this.lastSuccessMsg = `${label} flashed (${fpNote}).${verifyNote}`;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/No port selected|aborted|cancelled/i.test(msg)) {
@@ -450,6 +502,15 @@ export class TimerFlasher extends Component {
           </button>
         </div>
 
+        <div class="flasher-tips" role="note" aria-label="Tips for a reliable flash">
+          <div class="flasher-tips-head">${icons.info(14)}<span>Tips for a reliable flash</span></div>
+          <ul class="flasher-tips-list">
+            <li><strong>Use a good USB-C cable.</strong> A known, good-quality data cable (USB 3.x is best) works much better than a cheap or charge-only cable.</li>
+            <li><strong>Plug straight into the computer.</strong> Do not use a USB hub, dock, or extension cable while you flash.</li>
+            <li><strong>Flash one board at a time</strong> in Chrome, Edge, or Opera. If a board stops responding, unplug it (and its battery) for a few seconds, then try again.</li>
+          </ul>
+        </div>
+
         <div class="flasher-wizard-nav is-end">
           <button type="button" class="btn" data-wizard-next="1" ${this.busy ? "disabled" : ""}>
             <span>Next</span>
@@ -592,11 +653,14 @@ export class TimerFlasher extends Component {
     const linkSummary = isHub ? "USB-C → Computer" : "2.4 GHz ESP-NOW → Hub";
     const eraseBeforeFlash = !this.keepFingerprint;
     const activeConsole = usbPool.mainConsole;
-    const isConnected = activeConsole.connected;
+    const browser = flasherUsesWebSerial();
+    const isConnected = !browser && activeConsole.connected;
     const targetName = isConnected
-      ? activeConsole.isOtherDevice
-        ? "Other"
-        : activeConsole.lastStatus?.label || activeConsole.lastConfig?.timerLabel || "USB"
+      ? browser
+        ? ""
+        : activeConsole.isOtherDevice
+          ? "Other"
+          : activeConsole.lastStatus?.label || activeConsole.lastConfig?.timerLabel || "USB"
       : "";
 
     const pct = this.progress ? this.progress.percent : this.lastSuccessMsg ? 100 : 0;
@@ -606,7 +670,7 @@ export class TimerFlasher extends Component {
       ? `✓ ${this.lastSuccessMsg}`
       : isConnected
         ? `Ready to flash ${cleanLabel} to connected USB device (${targetName})`
-        : "Off · connect a USB device in Connection above to flash";
+        : `Ready to flash ${cleanLabel}. Plug in the board and click Flash ${cleanLabel} to USB.`;
 
     return `
       <div class="flasher-wizard-body">
@@ -618,7 +682,7 @@ export class TimerFlasher extends Component {
           <p>${
             isConnected
               ? `Connected to <strong>${esc(targetName)}</strong> over USB-C. Click <strong>Flash ${esc(cleanLabel)} to USB</strong> to write the firmware.`
-              : `Connect your <strong>Seeed Studio XIAO ESP32-C5</strong> in <strong>Connection</strong> above, then click <strong>Flash ${esc(cleanLabel)} to USB</strong>.`
+              : `Plug in your <strong>Seeed Studio XIAO ESP32-C5</strong> and click <strong>Flash ${esc(cleanLabel)} to USB</strong>. Your browser asks which USB port to use the first time. After flashing, the board is read back once to confirm it works.`
           }</p>
         </div>
 
@@ -667,7 +731,7 @@ export class TimerFlasher extends Component {
           </div>
           <div class="flasher-progress-foot">
             <span class="note">${
-              isConnected ? `Target USB connection: ${esc(targetName)}` : "Connect a USB port above or download the binary image"
+              isConnected ? `Target USB connection: ${esc(targetName)}` : "Flashing runs in your browser over USB, or download the .bin image"
             }</span>
             <div class="flasher-progress-foot-actions">
               <button
@@ -685,20 +749,30 @@ export class TimerFlasher extends Component {
 
         ${
           !webSerialOk
-            ? `<p class="note">Connect a SlapRF Server to read and flash physical USB-C timers.</p>`
+            ? `<p class="note">${FLASHER_NEEDS_WEBSERIAL}</p>`
             : ""
         }
 
         <div class="flasher-wizard-nav">
-          <button
-            type="button"
-            class="btn"
-            data-wizard-prev="1"
-            ${this.busy ? "disabled" : ""}
-          >
-            ${icons.chevronLeft(15)}
-            <span>Back</span>
-          </button>
+          ${
+            this.busy
+              ? `<button
+                  type="button"
+                  class="btn btn-bad"
+                  data-cancel-flash="1"
+                >
+                  ${icons.close(15)}
+                  <span>Cancel</span>
+                </button>`
+              : `<button
+                  type="button"
+                  class="btn"
+                  data-wizard-prev="1"
+                >
+                  ${icons.chevronLeft(15)}
+                  <span>Back</span>
+                </button>`
+          }
 
           ${
             this.lastSuccessMsg && !this.busy
@@ -714,7 +788,7 @@ export class TimerFlasher extends Component {
                   type="button"
                   class="btn flasher-btn-flash"
                   data-flash-usb="1"
-                  ${this.busy || !webSerialOk || !isConnected ? "disabled" : ""}
+                  ${this.busy || !webSerialOk ? "disabled" : ""}
                 >
                   <span class="flasher-zap-icon">${icons.zap(15)}</span>
                   <span>${this.busy ? `Flashing ${esc(cleanLabel)}… (${pct}%)` : `Flash ${esc(cleanLabel)} to USB`}</span>

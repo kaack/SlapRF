@@ -1,14 +1,12 @@
 /**
- * Espressif ESP32-C5 ROM Bootloader Flasher & Reader:
- *   - Real hardware mode (`caps.portable && !isSimulatedUsbMode()`): delegates SLIP ROM bootloader
- *     flashing, erasing, and config reading to the native Go backend (`/api/usb/flash`, `/api/usb/erase`,
- *     `/api/usb/connect` over `go.bug.st/serial`, zero browser WebSerial).
+ * Espressif ESP32-C5 firmware image helpers, config readback, and the simulation-mode flasher:
+ *   - Real hardware flashing and erasing use Espressif's esptool-js over WebSerial
+ *     (see `esptool_flasher.ts`), so they behave the same on every OS.
  *   - Simulation mode (`isSimulatedUsbMode()`): speaks the SLIP-framed Espressif ROM bootloader
  *     protocol directly to `SimulatedSerialPort` so `#/flasher` works identically in Demo & Sim modes.
+ *   - There is no server flasher. Browsers without WebSerial (Firefox, Safari) cannot flash.
  */
-import { capabilitiesSnapshot, resolveBackendUrl } from "./capabilities";
-import { isBackendSerialPort, isSimulatedUsbMode, pickUsbPort } from "./sim_serial_port";
-import { BackendPoolSnapshot, usbPool } from "./timer_console";
+import { isSimulatedUsbMode } from "./sim_serial_port";
 
 export interface FlashProgress {
   stage: "connecting" | "bootloader" | "reading" | "erasing" | "writing" | "rebooting" | "done";
@@ -90,7 +88,7 @@ const FLASH_BLOCK_SIZE = 1024; // ESP32C5ROM.FLASH_WRITE_SIZE = 0x400 (1024 byte
 const ESP_IMAGE_MAGIC = 0xe9;
 
 /** Current firmware build (firmware/slaprf). */
-export const LATEST_FIRMWARE_VERSION = "v0.1.4";
+export const LATEST_FIRMWARE_VERSION = "v0.1.5";
 
 /** The one compiled firmware image, built from firmware/slaprf and served next to the app. */
 export const FIRMWARE_IMAGE_URL = "./firmware/slaprf-xiao-c5.bin";
@@ -259,8 +257,9 @@ export async function buildOrPatchFirmwareBin(opts: {
     filename: `slaprf-xiao-c5-${slug}-${LATEST_FIRMWARE_VERSION}.bin`,
   };
 }
+/** True when the Flasher page can work: Simulation/Demo mode, or a browser with WebSerial. */
 export function isWebSerialSupported(): boolean {
-  return isSimulatedUsbMode() || capabilitiesSnapshot().portable;
+  return isSimulatedUsbMode() || (typeof navigator !== "undefined" && "serial" in navigator);
 }
 
 /** Decode the 160-byte `SLAPRF02` configuration block from a firmware binary or flash dump. */
@@ -439,7 +438,7 @@ async function readChunkWithTimeout(
   }
 }
 
-function parseStatusSnapshot(bytes: Uint8Array): TimerStatusSnapshot | undefined {
+export function parseStatusSnapshot(bytes: Uint8Array): TimerStatusSnapshot | undefined {
   const text = new TextDecoder().decode(bytes);
   for (const rawLine of text.split(/\r?\n/)) {
     const idx = rawLine.indexOf("@{");
@@ -456,56 +455,6 @@ function parseStatusSnapshot(bytes: Uint8Array): TimerStatusSnapshot | undefined
   return undefined;
 }
 
-async function collectSerialReply(
-  reader: ReadableStreamDefaultReader<Uint8Array>,
-  maxWaitMs: number,
-  retryWrite?: () => Promise<void>
-): Promise<Uint8Array> {
-  const chunks: Uint8Array[] = [];
-  let total = 0;
-  let timedOut = false;
-  const retryTimer = retryWrite
-    ? window.setTimeout(() => {
-        void retryWrite().catch(() => undefined);
-      }, Math.floor(maxWaitMs * 0.45))
-    : 0;
-  const timer = window.setTimeout(() => {
-    timedOut = true;
-    void reader.cancel().catch(() => undefined);
-  }, maxWaitMs);
-
-  try {
-    while (!timedOut) {
-      const { value, done } = await reader.read();
-      if (done || !value || value.length === 0) break;
-      chunks.push(value);
-      total += value.length;
-      const merged = new Uint8Array(total);
-      let off = 0;
-      for (const c of chunks) {
-        merged.set(c, off);
-        off += c.length;
-      }
-      if (findConfigBlock(merged) >= 0 && parseStatusSnapshot(merged)) {
-        return merged;
-      }
-    }
-  } catch {
-    // stream cancelled or closed on timeout
-  } finally {
-    if (retryTimer) window.clearTimeout(retryTimer);
-    window.clearTimeout(timer);
-  }
-
-  const out = new Uint8Array(total);
-  let off = 0;
-  for (const c of chunks) {
-    out.set(c, off);
-    off += c.length;
-  }
-  return out;
-}
-
 export interface ConnectedPortOwner {
   ownsPort(candidate: unknown): boolean;
   readSnapshot(): Promise<TimerReadout>;
@@ -513,142 +462,83 @@ export interface ConnectedPortOwner {
   takeActivePort?(): Promise<{ port: SerialPortLike; reopen: (opts?: { expectApp?: boolean }) => Promise<void> } | null>;
 }
 
+async function openWebSerialPortWithRetry(
+  port: SerialPortLike,
+  actionLabel: string,
+  onProgress: ProgressCallback
+): Promise<void> {
+  const maxAttempts = 3;
+  const deadline = Date.now() + 10000;
+  let lastErr: unknown = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await port.open({ baudRate: 115200, bufferSize: 16384 });
+      return;
+    } catch (err) {
+      lastErr = err;
+      await port.close().catch(() => undefined);
+      if (attempt < maxAttempts) {
+        const nextAttempt = attempt + 1;
+        onProgress({
+          stage: "connecting",
+          percent: 2 + attempt,
+          detail: `USB device is busy. Retrying (attempt ${nextAttempt} of ${maxAttempts})…`,
+        });
+        const rem = Math.max(0, deadline - Date.now());
+        await sleep(Math.min(1500, rem));
+        onProgress({
+          stage: "connecting",
+          percent: 2 + attempt,
+          detail: `${actionLabel} (attempt ${nextAttempt} of ${maxAttempts})…`,
+        });
+      } else {
+        while (Date.now() < deadline) {
+          const rem = Math.max(0, deadline - Date.now());
+          if (rem <= 0) break;
+          await sleep(Math.min(500, rem));
+          try {
+            await port.open({ baudRate: 115200, bufferSize: 16384 });
+            return;
+          } catch (retryErr) {
+            lastErr = retryErr;
+            await port.close().catch(() => undefined);
+          }
+        }
+      }
+    }
+  }
+  throw lastErr instanceof Error ? lastErr : new Error(String(lastErr ?? "Failed to open USB port."));
+}
+
 /**
- * Connects to a plugged-in XIAO ESP32-C5 over USB and reads its current configuration once,
- * closing the USB port immediately afterwards (unless the selected port is already held open
- * by `existingOwner`, in which case it reads over that existing connection and leaves it open).
+ * Simulation-mode flasher: speaks the Espressif ROM bootloader protocol to a `SimulatedSerialPort`
+ * so the Flasher page works the same in Demo and Simulation modes. Real boards are flashed with
+ * esptool-js over WebSerial (see `esptool_flasher.ts`).
+ *
+ * With `keepFingerprint`, the running firmware is asked for its config (`SLAPRF?`) before the
+ * board is erased; if it answers, its fingerprint is stamped into `imageBytes` so the app keeps
+ * treating it as the same timer. Otherwise the image's own (new) fingerprint is used.
  */
-export async function readXiaoC5OverWebSerial(
-  onProgress: ProgressCallback,
-  showAllPorts = false,
-  existingOwner?: ConnectedPortOwner
-): Promise<TimerReadout> {
-  if (!isWebSerialSupported()) {
-    throw new Error("Connect to a SlapRF Server to read physical USB hardware.");
-  }
+const extraFlashCancelers = new Set<() => void>();
 
-  onProgress({
-    stage: "connecting",
-    percent: 10,
-    detail: "Select the plugged-in XIAO ESP32-C5 USB port…",
-  });
+/** Registers a cancel hook (used by the esptool-js WebSerial flasher). Returns an unregister function. */
+export function registerFlashCanceler(fn: () => void): () => void {
+  extraFlashCancelers.add(fn);
+  return () => {
+    extraFlashCancelers.delete(fn);
+  };
+}
 
-  const port = await pickUsbPort({ showAllPorts });
-
-  if (existingOwner && existingOwner.ownsPort(port)) {
-    onProgress({
-      stage: "reading",
-      percent: 55,
-      detail: "Reading configuration from connected XIAO ESP32-C5…",
-    });
-    const info = await existingOwner.readSnapshot();
-    onProgress({ stage: "done", percent: 100, detail: "Read complete." });
-    return info;
-  }
-
-  if (isBackendSerialPort(port)) {
-    onProgress({
-      stage: "reading",
-      percent: 45,
-      detail: `Reading configuration from ${port.portName}…`,
-    });
-    const tempSlot = usbPool.slots[2];
-    await tempSlot.connectWithPort(port, showAllPorts, 1800);
+export function cancelActiveFlash(): void {
+  for (const fn of [...extraFlashCancelers]) {
     try {
-      const info = await tempSlot.readSnapshot();
-      onProgress({ stage: "done", percent: 100, detail: "Read complete." });
-      return info;
-    } finally {
-      await tempSlot.disconnect().catch(() => undefined);
-    }
-  }
-
-  await port.open({ baudRate: 115200, bufferSize: 16384 });
-  // Step (1,1) -> (1,0) -> (0,0) so closing the port after reading never triggers USB-Serial-JTAG reset
-  await disarmUsbJtagPortLatch(port);
-  let writer = port.writable?.getWriter();
-  let reader = port.readable?.getReader();
-
-  if (!writer || !reader) {
-    await port.close().catch(() => undefined);
-    throw new Error("Could not open USB serial streams on the selected port.");
-  }
-
-  try {
-    onProgress({
-      stage: "reading",
-      percent: 45,
-      detail: "Reading configuration from XIAO ESP32-C5…",
-    });
-
-    // Query running firmware over USB Serial ("STATUS?\nSLAPRF?\n") without touching bootloader lines.
-    const query = new TextEncoder().encode("\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?\n");
-    await writer.write(query);
-    const rx = await collectSerialReply(reader, 950, () => writer.write(query));
-
-    if (rx.length > 0) {
-      const parsed = parseSlaprfConfigBlock(rx);
-      const status = parseStatusSnapshot(rx);
-      if (parsed) {
-        onProgress({ stage: "done", percent: 100, detail: "Read complete." });
-        return {
-          ...parsed,
-          chip: status?.chip ? `${status.chip.model} (${status.chip.rev})` : parsed.chip,
-          timerLabel: status?.label || parsed.timerLabel,
-          firmwareVersion: status?.fw || parsed.firmwareVersion,
-          fingerprint: status?.fp || parsed.fingerprint,
-          frequenciesMHz: status?.freqs?.length ? status.freqs : parsed.frequenciesMHz,
-          status,
-        };
-      }
-      if (status) {
-        onProgress({ stage: "done", percent: 100, detail: "Read complete." });
-        return {
-          chip: status.chip
-            ? `${status.chip.model} (${status.chip.rev})`
-            : "Seeed XIAO ESP32-C5 (RISC-V 240 MHz)",
-          role: status.role === 1 ? "hub" : "spoke",
-          timerLabel: status.label || "",
-          frequenciesMHz: status.freqs,
-          firmwareVersion: status.fw,
-          fingerprint: status.fp,
-          status,
-        };
-      }
-    }
-
-    throw new Error("No SlapRF firmware detected on this board. Flash it above first.");
-  } finally {
-    try {
-      await reader?.cancel();
-    } catch {
-      // ignore
-    }
-    try {
-      reader?.releaseLock();
-    } catch {
-      // ignore
-    }
-    try {
-      writer.releaseLock();
-    } catch {
-      // ignore
-    }
-    try {
-      await port.close();
+      fn();
     } catch {
       // ignore
     }
   }
 }
 
-/**
- * Opens the browser's native USB port picker and flashes the XIAO ESP32-C5 firmware binary.
- *
- * With `keepFingerprint`, the running firmware is asked for its config (`SLAPRF?`) before the
- * board is erased; if it answers, its fingerprint is stamped into `imageBytes` so the app keeps
- * treating it as the same timer. Otherwise the image's own (new) fingerprint is used.
- */
 export async function flashXiaoC5OverWebSerial(
   imageBytes: Uint8Array,
   label: string,
@@ -665,52 +555,11 @@ export async function flashXiaoC5OverWebSerial(
 
   const taken = existingOwner?.takeActivePort ? await existingOwner.takeActivePort() : null;
   if (!taken) {
-    throw new Error("Connect a timer over USB in Connection above first.");
+    throw new Error("Connect a timer over USB first.");
   }
   const port = taken.port;
 
-  if (isBackendSerialPort(port)) {
-    const cfg = parseSlaprfConfigBlock(imageBytes);
-    const unsub = usbPool.onFlashProgress(onProgress);
-    try {
-      const res = await fetch(resolveBackendUrl("/api/usb/flash"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          portName: port.portName,
-          slotIndex: 0,
-          role: cfg?.role ?? "spoke",
-          timerLabel: cfg?.timerLabel || label,
-          fingerprint: cfg?.fingerprint || "",
-          keepFingerprint,
-          frequencies: cfg?.frequenciesMHz ?? [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917],
-        }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        error?: string;
-        readout?: TimerReadout;
-        pool?: BackendPoolSnapshot;
-      };
-      if (data.pool) {
-        usbPool.applyBackendPoolSnapshot(data.pool);
-      }
-      if (!res.ok) {
-        throw new Error(data.error || `Failed to flash ${port.portName}`);
-      }
-      return data.readout ?? cfg;
-    } finally {
-      unsub();
-      await taken.reopen({ expectApp: true }).catch(() => undefined);
-    }
-  }
-
-  try {
-    await port.open({ baudRate: 115200, bufferSize: 16384 });
-  } catch {
-    await sleep(120);
-    await port.close().catch(() => undefined);
-    await port.open({ baudRate: 115200, bufferSize: 16384 });
-  }
+  await openWebSerialPortWithRetry(port, `Opening USB port to flash as ${label}`, onProgress);
   // Step (1,1) -> (1,0) -> (0,0) so closing the port after reading never triggers USB-Serial-JTAG reset
   await disarmUsbJtagPortLatch(port);
   let writer = port.writable?.getWriter();
@@ -1093,45 +942,11 @@ export async function eraseXiaoC5OverWebSerial(
 
   const taken = existingOwner?.takeActivePort ? await existingOwner.takeActivePort() : null;
   if (!taken) {
-    throw new Error("Connect a timer over USB in Connection above first.");
+    throw new Error("Connect a timer over USB first.");
   }
   const port = taken.port;
 
-  if (isBackendSerialPort(port)) {
-    const unsub = usbPool.onFlashProgress(onProgress);
-    try {
-      const res = await fetch(resolveBackendUrl("/api/usb/erase"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          portName: port.portName,
-          slotIndex: 0,
-        }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        error?: string;
-        pool?: BackendPoolSnapshot;
-      };
-      if (data.pool) {
-        usbPool.applyBackendPoolSnapshot(data.pool);
-      }
-      if (!res.ok) {
-        throw new Error(data.error || `Failed to erase ${port.portName}`);
-      }
-      return;
-    } finally {
-      unsub();
-      await taken.reopen({ expectApp: false }).catch(() => undefined);
-    }
-  }
-
-  try {
-    await port.open({ baudRate: 115200, bufferSize: 16384 });
-  } catch {
-    await sleep(120);
-    await port.close().catch(() => undefined);
-    await port.open({ baudRate: 115200, bufferSize: 16384 });
-  }
+  await openWebSerialPortWithRetry(port, "Opening USB port to wipe", onProgress);
   // Step (1,1) -> (1,0) -> (0,0) so closing the port after reading never triggers USB-Serial-JTAG reset
   await disarmUsbJtagPortLatch(port);
   let writer = port.writable?.getWriter();

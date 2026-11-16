@@ -6,7 +6,7 @@
  */
 import { capabilitiesSnapshot, resolveBackendUrl, resolveBackendWsUrl } from "./capabilities";
 import {
-  FlashProgress,
+  cancelActiveFlash,
   LATEST_FIRMWARE_VERSION,
   parseSlaprfConfigBlock,
   TimerReadout,
@@ -298,6 +298,8 @@ export interface ConsoleHandlers {
    * that define it don't get `onHubPacket`. The buffer is a fresh copy owned by the callee.
    */
   onHubPackets?: (packed: Uint8Array, count: number) => void;
+  /** SlapRF Server mode: `hubSlotLive` was refreshed from a throttled (20 Hz) `hub_live` event. */
+  onHubLive?: () => void;
   onConfig?: (c: TimerReadout) => void;
   onError?: (msg: string) => void;
   onConnect?: () => void;
@@ -326,8 +328,6 @@ export interface BackendSlotSnapshot {
   connected: boolean;
   portName?: string;
   probing: boolean;
-  writing: boolean;
-  busyLabel?: string;
   reconnecting: boolean;
   reconnectAttempt: number;
   maxReconnectAttempts: number;
@@ -352,10 +352,10 @@ export interface BackendUsbEvent {
   live?: LiveSample;
   scan?: ScanResult;
   bootLog?: BootLog;
+  payload?: Record<string, unknown>;
   line?: string;
   msgType?: string;
   error?: string;
-  progress?: FlashProgress;
   pool?: BackendPoolSnapshot;
 }
 
@@ -463,7 +463,7 @@ export class TimerConsole {
   >();
   private lastRealJsonStatusAtMs = 0;
   public busyLabel: string | null = null;
-  public showAllPorts = true;
+  public showAllPorts = false;
   public reconnecting = false;
   public reconnectAttempt = 0;
   public readonly maxReconnectAttempts = 5;
@@ -540,12 +540,10 @@ export class TimerConsole {
       if (!isBackendSerialPort(this.port) || this.port.portName !== snap.portName) {
         this.port = createBackendPortHandle(snap.portName);
       }
-    } else if (!snap.writing) {
+    } else {
       this.port = null;
     }
     this.probing = Boolean(snap.probing);
-    this.writing = Boolean(snap.writing);
-    this.busyLabel = snap.busyLabel || null;
     this.reconnecting = Boolean(snap.reconnecting);
     this.reconnectAttempt = snap.reconnectAttempt || 0;
     this.reconnectFailed = Boolean(snap.reconnectFailed);
@@ -596,24 +594,55 @@ export class TimerConsole {
           this.notifyStateChange();
         }
         break;
-      case "live":
-        if (ev.live) {
-          this.resolveWaiters("live", ev.live);
-          this.subscribers.forEach((h) => h.onLive?.(ev.live!));
+      case "live": {
+        const liveMsg = ev.live ?? (ev.payload as unknown as LiveSample | undefined);
+        if (liveMsg) {
+          this.resolveWaiters("live", liveMsg);
+          this.subscribers.forEach((h) => h.onLive?.(liveMsg));
         }
         break;
-      case "scan":
-        if (ev.scan) {
-          this.resolveWaiters("scan", ev.scan);
-          this.subscribers.forEach((h) => h.onScan?.(ev.scan!));
+      }
+      case "hub_live": {
+        // The server owns the Hub's USB port and decodes its binary frames; this event carries the
+        // newest RSSI window per TDMA slot so live bars update at 20 Hz instead of 1 Hz STATUS.
+        const p = ev.payload as
+          | {
+              slots?: Array<{ slot: number; dbm: number[]; seq: number; frames: number; floor: number; ageMs: number }>;
+              hubOwnFrames?: number;
+            }
+          | undefined;
+        if (!p?.slots) break;
+        const now = Date.now();
+        for (const s of p.slots) {
+          if (!Array.isArray(s.dbm) || s.dbm.length !== 8) continue;
+          const at = now - Math.max(0, s.ageMs || 0);
+          this.hubSlotLive.set(s.slot, { frames: s.frames, lastFrameAtMs: at, seq: s.seq, dbm: s.dbm, floor: s.floor });
+          if (s.slot === 1) {
+            this.hubLastFrameAtMs = at;
+            this.hubLastSeq = s.seq;
+            this.hubLastDbm = s.dbm;
+          }
+        }
+        if (typeof p.hubOwnFrames === "number") this.hubOwnFrames = p.hubOwnFrames;
+        this.subscribers.forEach((h) => h.onHubLive?.());
+        break;
+      }
+      case "scan": {
+        const scanMsg = ev.scan ?? (ev.payload as unknown as ScanResult | undefined);
+        if (scanMsg) {
+          this.resolveWaiters("scan", scanMsg);
+          this.subscribers.forEach((h) => h.onScan?.(scanMsg));
         }
         break;
-      case "bootlog":
-        if (ev.bootLog) {
-          this.resolveWaiters("bootlog", ev.bootLog);
-          this.subscribers.forEach((h) => h.onBootLog?.(ev.bootLog!));
+      }
+      case "bootlog": {
+        const bootMsg = ev.bootLog ?? (ev.payload as unknown as BootLog | undefined);
+        if (bootMsg) {
+          this.resolveWaiters("bootlog", bootMsg);
+          this.subscribers.forEach((h) => h.onBootLog?.(bootMsg));
         }
         break;
+      }
       case "raw_reply":
         if (ev.line) {
           if (ev.msgType) {
@@ -696,7 +725,7 @@ export class TimerConsole {
    */
   public async connectWithPort(
     port: SerialPortLike,
-    showAllPorts = true,
+    showAllPorts = false,
     probeTimeoutMs = 2500
   ): Promise<TimerStatus | null> {
     this.showAllPorts = showAllPorts;
@@ -753,7 +782,7 @@ export class TimerConsole {
    * Opens the USB port via the in-app port picker, probes `STATUS?` and `SLAPRF?`, and starts
    * the status heartbeat so the connection stays active across all SPA routes.
    */
-  public async connectAndStart(showAllPorts = true): Promise<TimerStatus | null> {
+  public async connectAndStart(showAllPorts = false): Promise<TimerStatus | null> {
     this.probing = true;
     this.notifyStateChange();
     try {
@@ -820,7 +849,10 @@ export class TimerConsole {
 
   /** Stops any active debug streams on the timer and closes the USB port. */
   public async disconnectCleanly(): Promise<void> {
+    cancelActiveFlash();
     this.userDisconnecting = true;
+    this.writing = false;
+    this.busyLabel = null;
     this.reconnecting = false;
     this.reconnectAttempt = 0;
     this.reconnectFailed = false;
@@ -834,7 +866,7 @@ export class TimerConsole {
         await notifySimHubUsbConnected(false);
       }
     }
-    if (isBackendSerialPort(this.port)) {
+    if (isBackendSerialPort(this.port) || (capabilitiesSnapshot().portable && !isSimulatedUsbMode())) {
       await this.disconnect();
       return;
     }
@@ -947,9 +979,12 @@ export class TimerConsole {
   }
 
   public async disconnect(): Promise<void> {
+    cancelActiveFlash();
     window.clearInterval(this.statusPollTimer);
     this.statusPollTimer = 0;
-    if (isBackendSerialPort(this.port)) {
+    this.writing = false;
+    this.busyLabel = null;
+    if (isBackendSerialPort(this.port) || (capabilitiesSnapshot().portable && !isSimulatedUsbMode())) {
       this.port = null;
       await fetch(resolveBackendUrl("/api/usb/disconnect"), {
         method: "POST",
@@ -1205,7 +1240,7 @@ export class TimerConsole {
   /**
    * Restart the timer and reattach to it, resolving with the first status after the restart.
    */
-  public async restartAndReconnect(timeoutMs = 15000, cmd: "REBOOT" | "EMERGENCY" = "REBOOT"): Promise<TimerStatus> {
+  public async restartAndReconnect(timeoutMs = 15000, cmd: "REBOOT" = "REBOOT"): Promise<TimerStatus> {
     const before = await this.request<TimerStatus>("STATUS?", "status", 2000).catch(() => this.lastStatus);
     this.expectingRestart = true;
     try {
@@ -1732,14 +1767,6 @@ export class UsbConnectionPool {
   private backendUsbWs: WebSocket | null = null;
   private backendUsbReconnectTimer: number | null = null;
   private backendRealActive = false;
-  private readonly flashProgressListeners = new Set<(p: FlashProgress) => void>();
-
-  public onFlashProgress(cb: (p: FlashProgress) => void): () => void {
-    this.flashProgressListeners.add(cb);
-    return () => {
-      this.flashProgressListeners.delete(cb);
-    };
-  }
 
   public applyBackendPoolSnapshot(pool: BackendPoolSnapshot): void {
     if (Array.isArray(pool.knownTimers)) {
@@ -1791,10 +1818,6 @@ export class UsbConnectionPool {
           const parsed = JSON.parse(ev.data) as BackendUsbEvent;
           if (parsed.type === "pool_state" && parsed.pool) {
             this.applyBackendPoolSnapshot(parsed.pool);
-            return;
-          }
-          if (parsed.type === "flash_progress" && parsed.progress) {
-            this.flashProgressListeners.forEach((fn) => fn(parsed.progress!));
             return;
           }
           const slot = this.slots[parsed.slotIndex];
@@ -1854,7 +1877,6 @@ export class UsbConnectionPool {
             slotIndex: c.slotIndex,
             connected: false,
             probing: false,
-            writing: false,
             reconnecting: false,
             reconnectAttempt: 0,
             maxReconnectAttempts: 5,

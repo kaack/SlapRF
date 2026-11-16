@@ -3,9 +3,11 @@ package ingest
 import (
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"slaprf/internal/domain"
 	"slaprf/internal/firmware"
@@ -75,6 +77,66 @@ type HubFrameDecoder struct {
 	lastTs      map[uint8]uint64 // timerID -> last reconstructed sample TimestampUs
 	lastArrival map[uint8]uint64 // timerID -> arrival time (nowUs) of its last telemetry frame
 	timelines   map[uint8]*tsTracker
+
+	// Band survey (Network page "Measure all Raceband"): every timer sweeps R1..R8 instead of the
+	// pilots' channels. Its readings don't match the pilot slots, so the timing engine gets no
+	// signal (-127 dBm) while it runs. It ends when the lease runs out or a race heat starts.
+	survey        bool
+	surveyUntil   time.Time
+	surveyCheckAt time.Time
+}
+
+// RacebandMHz is the 8-channel Raceband table swept during a band survey.
+var RacebandMHz = [domain.MaxPilotSlots]uint16{5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917}
+
+// SurveyLease is how long a band survey runs without being renewed by the Network page.
+const SurveyLease = 15 * time.Second
+
+// ErrSurveyRaceActive is returned when a band survey is requested during a live race heat.
+var ErrSurveyRaceActive = errors.New("a race heat is running: the band survey would stop lap timing")
+
+// SetSurvey starts (or renews) or stops a band survey.
+func (r *HubFrameDecoder) SetSurvey(on bool) error {
+	if on && r.engine != nil && r.engine.IsLiveRaceHeatActive() {
+		return ErrSurveyRaceActive
+	}
+	r.mu.Lock()
+	was := r.survey
+	r.survey = on
+	if on {
+		r.surveyUntil = time.Now().Add(SurveyLease)
+	}
+	r.mu.Unlock()
+	if on && !was {
+		r.sendChannelsToHub(RacebandMHz, true)
+	} else if !on && was {
+		r.pushActiveChannelsToHub()
+	}
+	return nil
+}
+
+// SurveyActive reports whether a band survey is running.
+func (r *HubFrameDecoder) SurveyActive() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.survey
+}
+
+// checkSurveyExpiry ends the survey (at most every 250 ms) once its lease ran out or a race heat
+// started, so timing always falls back to the pilots' channels.
+func (r *HubFrameDecoder) checkSurveyExpiry() {
+	now := time.Now()
+	r.mu.Lock()
+	if !r.survey || now.Before(r.surveyCheckAt) {
+		r.mu.Unlock()
+		return
+	}
+	r.surveyCheckAt = now.Add(250 * time.Millisecond)
+	expired := now.After(r.surveyUntil)
+	r.mu.Unlock()
+	if expired || (r.engine != nil && r.engine.IsLiveRaceHeatActive()) {
+		_ = r.SetSurvey(false)
+	}
 }
 
 // NewHubFrameDecoder creates a Hub frame decoder feeding `engine`.
@@ -125,12 +187,19 @@ func (r *HubFrameDecoder) OnLapCompleted(domain.LapRecord, []domain.PilotTrackSu
 // OnConfigUpdated pushes the active pilot channel table to the Hub Timer whenever pilots are
 // enabled/disabled or their channels change.
 func (r *HubFrameDecoder) OnConfigUpdated(pilots []domain.PilotSlot, _ []domain.TrackGate) {
+	if r.SurveyActive() {
+		return // Sent when the survey ends
+	}
 	freqs, _ := tracker.ComputeActivePilotChannels(pilots)
 	r.sendChannelsToHub(freqs)
 }
 
 func (r *HubFrameDecoder) pushActiveChannelsToHub() {
 	if r.engine == nil {
+		return
+	}
+	if r.SurveyActive() {
+		r.sendChannelsToHub(RacebandMHz, true)
 		return
 	}
 	freqs, _ := r.engine.ActivePilotChannels()
@@ -172,6 +241,7 @@ func (r *HubFrameDecoder) sendChannelsToHub(freqs [domain.MaxPilotSlots]uint16, 
 // IngestPacket handles one binary Hub packet: Hello frames register the timer, telemetry frames are
 // decoded, deduplicated, and forwarded in chronological order to the timing engine.
 func (r *HubFrameDecoder) IngestPacket(raw []byte, nowUs uint64) int {
+	r.checkSurveyExpiry()
 	if len(raw) >= 2 && raw[0] == FrameMagic0 && raw[1] == FrameMagicHello {
 		r.handleHello(raw)
 		return 0
@@ -419,6 +489,7 @@ func (r *HubFrameDecoder) DecodePacket(raw []byte, nowUs uint64) []domain.TimerT
 			return nil
 		}
 		r.expireStaleSeqLocked(timerID, intervalUs, nowUs)
+		survey := r.survey
 
 		out := make([]domain.TimerTelemetryFrame, 0, sampleCount)
 		for idx := 0; idx < sampleCount; idx++ {
@@ -439,6 +510,9 @@ func (r *HubFrameDecoder) DecodePacket(raw []byte, nowUs uint64) []domain.TimerT
 				if pIdx := slotToPilot[ch]; pIdx >= 0 && pIdx < domain.MaxPilotPoolSize {
 					rssi[pIdx] = val
 				}
+			}
+			if survey {
+				silenceRSSI(&rssi)
 			}
 			sampleTs := r.sampleTimestampLocked(timerID, hadPrev, seq-prevSeq, sampleCount-1-idx, intervalUs, nowUs)
 			r.lastTs[timerID] = sampleTs
@@ -478,6 +552,7 @@ func (r *HubFrameDecoder) DecodePacket(raw []byte, nowUs uint64) []domain.TimerT
 		}
 		r.seenSeq[timerID] = seq
 		r.hasSeq[timerID] = true
+		survey := r.survey
 		r.mu.Unlock()
 
 		var rssi [domain.MaxPilotPoolSize]float32
@@ -487,6 +562,9 @@ func (r *HubFrameDecoder) DecodePacket(raw []byte, nowUs uint64) []domain.TimerT
 			if pIdx := slotToPilot[ch]; pIdx >= 0 && pIdx < domain.MaxPilotPoolSize {
 				rssi[pIdx] = val
 			}
+		}
+		if survey {
+			silenceRSSI(&rssi)
 		}
 		return []domain.TimerTelemetryFrame{{
 			TimerID:       timerID,
@@ -538,6 +616,13 @@ func EncodeHelloFrame(slot uint8, role uint8, fingerprint uint32, sweepHz uint8,
 	copy(pkt[10:34], []byte(label))
 	pkt[HelloFrameLen-1] = xorCRC(pkt[:HelloFrameLen-1])
 	return pkt
+}
+
+// silenceRSSI replaces survey readings (Raceband, not the pilots' channels) with no signal.
+func silenceRSSI(rssi *[domain.MaxPilotPoolSize]float32) {
+	for i := range rssi {
+		rssi[i] = -127
+	}
 }
 
 // EncodeChannelsFrame builds the 19-byte active pilot channel table frame (0xC5 0x5E) sent to

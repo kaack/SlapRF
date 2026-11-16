@@ -172,59 +172,6 @@ func (s *Server) handleUSBCommand(w http.ResponseWriter, r *http.Request) {
 	writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-func (s *Server) handleUSBFlash(w http.ResponseWriter, r *http.Request) {
-	if !s.isAllowedOrigin(r) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req usb.FlashBoardRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
-		return
-	}
-	readout, err := s.usbMgr.FlashBoard(r.Context(), req)
-	if err != nil {
-		writeJSONNoStore(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
-		return
-	}
-	writeJSONNoStore(w, http.StatusOK, map[string]any{
-		"ok":      true,
-		"readout": readout,
-		"pool":    s.usbMgr.Snapshot(),
-	})
-}
-
-func (s *Server) handleUSBErase(w http.ResponseWriter, r *http.Request) {
-	if !s.isAllowedOrigin(r) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		PortName  string `json:"portName"`
-		SlotIndex int    `json:"slotIndex"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
-		return
-	}
-	if err := s.usbMgr.EraseBoard(r.Context(), req.PortName, req.SlotIndex); err != nil {
-		writeJSONNoStore(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
-		return
-	}
-	writeJSONNoStore(w, http.StatusOK, map[string]any{
-		"ok":   true,
-		"pool": s.usbMgr.Snapshot(),
-	})
-}
-
 func (s *Server) handleUSBKnownForget(w http.ResponseWriter, r *http.Request) {
 	if !s.isAllowedOrigin(r) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
@@ -346,7 +293,7 @@ func (s *Server) handleUSBWS(w http.ResponseWriter, r *http.Request) {
 		select {
 		case evCh <- ev:
 		default:
-			if ev.Type == "pool_state" || ev.Type == "flash_progress" || ev.Type == "status" {
+			if ev.Type == "pool_state" || ev.Type == "status" {
 				select {
 				case <-evCh:
 				default:

@@ -243,6 +243,10 @@ func (s *Server) buildFullStateResponse() FullStateResponse {
 	eventState := eng.EventSnapshot()
 	practiceState := eng.PracticeSnapshot()
 	pilots, gates, laps, crossings, summaries := eng.StateSnapshot()
+	// Send [] (not null) when no track is set up, so clients can iterate without null checks.
+	if gates == nil {
+		gates = []domain.TrackGate{}
+	}
 	var simState *domain.SimState
 	var simMGP *multigp.SimPersistedState
 	if s.simulator.IsRunning() {
@@ -284,6 +288,9 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, _ *http.Request) {
 	eventState := eng.EventSnapshot()
 	practiceState := eng.PracticeSnapshot()
 	_, gates, _, _, _ := eng.StateSnapshot()
+	if gates == nil {
+		gates = []domain.TrackGate{}
+	}
 	var simState *domain.SimState
 	var simMGP *multigp.SimPersistedState
 	if s.simulator.IsRunning() {

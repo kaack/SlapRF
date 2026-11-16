@@ -1,7 +1,7 @@
 // Command slaprf is the zero-install native Go SlapRF Server & Portable Desktop application.
 //
 // It runs the complete timing engine, physics simulator, single-file bbolt database (slaprf.db),
-// native USB serial + ESP32-C5 flasher, LapRF 8-Way, RotorHazard, LiveTime :5403 server, and
+// native USB serial for SlapRF timers, LapRF 8-Way, RotorHazard, LiveTime :5403 server, and
 // MultiGP cloud sync natively in Go, serving the embedded WASM-free UI and accepting connections
 // from local or LAN browsers (including https://slaprf.app).
 package main
@@ -126,14 +126,12 @@ func main() {
 			}
 		}
 
-		baseFW, _ := fs.ReadFile(siteFS, "firmware/slaprf-xiao-c5.bin")
 		allowLAN := *lanFlag || strings.HasPrefix(boundAddr, "0.0.0.0:") || strings.HasPrefix(boundAddr, "[::]:")
 
 		pSrv = portable.NewServer(portable.Config{
 			Version:         version,
 			StaticFS:        siteFS,
 			DBPath:          dbPath,
-			BaseFirmware:    baseFW,
 			AllowedOrigins:  extraOrigins,
 			AllowLANOrigins: allowLAN,
 			MultiGPBaseURL:  *mgpBase,
@@ -157,7 +155,7 @@ func main() {
 			}
 		}
 		fmt.Printf("  Database:    %s (bbolt)\n", pSrv.DBPath())
-		fmt.Printf("  Hardware:    Native Go USB (SlapRF + ESP32-C5 Flasher), LapRF 8-Way, RotorHazard, LiveTime :5403, MultiGP\n")
+		fmt.Printf("  Hardware:    Native Go USB (SlapRF timers), LapRF 8-Way, RotorHazard, LiveTime :5403, MultiGP\n")
 		if *noAuth {
 			fmt.Printf("  Auth:        Disabled via -no-auth\n")
 		}

@@ -62,7 +62,7 @@ flowchart LR
     Server <-->|"HTTP + WebSocket"| Browser
 ```
 
-You flash and configure SlapRF XIAO ESP32-C5 boards directly from the **Flasher** page in the local app. No compiler, Arduino IDE, or command-line flashing tool is required.
+You flash and configure SlapRF XIAO ESP32-C5 boards directly from the **Flasher** page in the local app. No compiler, Arduino IDE, or command-line flashing tool is required. Flashing runs in the browser over WebSerial, so use Chrome, Edge, or Opera on a desktop computer.
 
 ## Parts List and Cost (DIY SlapRF Timers)
 
@@ -96,6 +96,26 @@ flowchart LR
 3. Open **Flasher** in the local SlapRF web interface. Flash one board as **Hub** and the remaining boards as **Spoke**.
 4. At the field, connect each Spoke timer to a LIPO to USB-C Adapter and a LiPo battery, and place one timer at each gate. Plug the Hub timer into your laptop over USB-C.
 5. Open **Track** and drag each timer onto the track map in the order pilots fly the course. Click the checkered flag icon on a gate to set Start / Finish.
+
+### Tips for Reliable Flashing
+
+- **Use a good USB-C data cable.** A known, good-quality cable (USB 3.x is best) works much better than a cheap or charge-only cable. The short field cable may not be good enough for flashing.
+- **Plug the board straight into the computer.** Do not use a USB hub, dock, or extension cable while you flash.
+- **Use Chrome, Edge, or Opera on a desktop computer.** Flashing uses WebSerial. Firefox and Safari do not support it.
+- **Flash one board at a time.** When the browser asks for a USB port, pick the **USB JTAG/serial** device of the board you want to flash.
+- **If a board stops responding,** unplug it for a few seconds (also disconnect its battery, if one is attached), plug it back in, and try again. The BOOT button is not needed for normal flashing.
+
+## Powering
+
+Do not power more than 3 Seeed Studio XIAO ESP32-C5 boards at the same time from the USB ports of one computer.
+
+Each XIAO ESP32-C5 draws about `90 mA` on average while it receives and sweeps. Each time it transmits on 2.4 GHz at `+20 dBm`, it draws short peaks of up to about `320 mA` (Espressif ESP32-C5 datasheet: 802.11b TX at 20 dBm = 320 mA peak, RX = 87 mA). A computer USB port supplies `500 mA` (USB 2.0) or `900 mA` (USB 3.x), and several ports often share one power rail. With 4 or more boards, the transmit peaks add up, the `5 V` supply sags, and a board can brown out and reboot again and again. The symptoms are:
+
+- The XIAO ESP32-C5 appears and disappears in the browser's USB port list or in the operating system.
+- The Spoke LED keeps blinking yellow (searching for the Hub) and the Spoke never joins.
+- Flashing stops part of the way through with a lost connection.
+
+To fix it, power the extra Spokes from a LiPo with a LIPO to USB-C Adapter, or from a good USB wall charger (`1 A` or more). Keep only the Hub, and the one XIAO ESP32-C5 you are flashing, on the computer.
 
 ## Run
 

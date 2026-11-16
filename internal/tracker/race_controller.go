@@ -1284,7 +1284,7 @@ func (e *Engine) raceControlActionActiveWithOptions(action string, heatID string
 			}
 		}
 		race.RecomputeHeat(h, e.raceState.Config.QualifyingMetric)
-	e.markHeatUnsyncedMGPLocked(h.ID)
+		e.markHeatUnsyncedMGPLocked(h.ID)
 		e.resetSessionLocked()
 
 		cdSec := e.raceState.Config.CountdownSec
@@ -1506,7 +1506,7 @@ func (e *Engine) raceControlActionActiveWithOptions(action string, heatID string
 			e.raceState.TrackSnapshot = e.snapshotOrderedGatesLocked()
 		}
 		race.RecomputeHeat(h, e.raceState.Config.QualifyingMetric)
-	e.markHeatUnsyncedMGPLocked(h.ID)
+		e.markHeatUnsyncedMGPLocked(h.ID)
 		h.State = domain.HeatConfirmed
 		if h.ExecutedAtMs == 0 {
 			h.ExecutedAtMs = time.Now().UnixMilli()
@@ -2136,6 +2136,13 @@ func (e *Engine) findLiveRunningHeatLocked() *domain.RaceHeat {
 
 func (e *Engine) hasLiveRunningHeatLocked() bool {
 	return e.findLiveRunningHeatLocked() != nil
+}
+
+// IsLiveRaceHeatActive reports whether a race heat is in countdown or running right now.
+func (e *Engine) IsLiveRaceHeatActive() bool {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.isLiveRaceHeatActiveLocked()
 }
 
 func (e *Engine) isLiveRaceHeatActiveLocked() bool {

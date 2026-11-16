@@ -13,7 +13,7 @@ For setting up your local development environment, running the live dev server, 
 - **[5. Binary Wire Formats (`0xC5 0x59` & `SLAPRF02`)](#5-binary-wire-formats-0xc5-0x59-sliding-window--slaprf02)**: Byte-by-byte layouts of the variable-length sliding-window frame, the Hello / Join / Assign / beacon frames, and the 160-byte flash config block.
 - **[6. DSP Pipeline & Parabolic Peak Interpolation](#6-dsp-pipeline--sub-frame-parabolic-peak-interpolation)**: Zero-phase EMA smoothing, hysteresis state machine, and `< 2 ms` sub-frame parabolic vertex fitting.
 - **[7. Multi-Gate Timing Rules & Section Analytics Engine](#7-multi-gate-timing-rules--section-analytics-engine)**: The 5-stage guardrail pipeline (cool-down, stale progress, min section, previous-gate echo, min/max lap) and bottleneck math.
-- **[8. Native USB Serial Driver & Firmware Flasher](#8-native-usb-serial-driver--firmware-flasher)**: Native USB-JTAG ROM bootloader flashing (`internal/usb`, `internal/firmware`) and `SLAPRF02` binary patching.
+- **[8. Native USB Serial Driver & Firmware Flasher](#8-native-usb-serial-driver--firmware-flasher)**: Native USB serial for live timing (`internal/usb`), browser-native esptool-js flashing over WebSerial, and `SLAPRF02` binary patching.
 - **[9. Multi-Hardware Drivers & MultiGP Integration](#9-multi-hardware-drivers--multigp-integration)**: RotorHazard (USB & Network), ImmersionRC LapRF 8-Way (`TCP :5403`), and MultiGP Chapter sync.
 - **[10. Client-Server Architecture vs. Browser Demo (`slaprf.app`)](#10-client-server-architecture-vs-browser-demo-slaprfapp)**: Native Go server (`cmd/slaprf` + `BackendHttpTransport`) for real timing vs. WebAssembly (`cmd/slaprf-wasm` + `WasmSimTransport`) for the `slaprf.app` interactive demo.
 
@@ -279,7 +279,12 @@ For each pilot and each track section $s \in \{S_1, \dots, S_k\}$:
 
 ## 8. Native USB Serial Driver & Firmware Flasher
 
-When running the standalone `slaprf` binary, USB serial communication and firmware flashing run natively on the host in [`internal/usb/`](../internal/usb/) and [`internal/firmware/image.go`](../internal/firmware/image.go), controlled from [`web/src/widgets/TimerFlasher.ts`](../web/src/widgets/TimerFlasher.ts) and [`web/src/services/timer_console.ts`](../web/src/services/timer_console.ts) (with an equivalent client-side patcher in [`web/src/services/esp_flasher.ts`](../web/src/services/esp_flasher.ts) for `.bin` downloads and simulated boards in Demo Mode):
+SlapRF splits USB work into two separate paths:
+
+- **Live timing** (Network, Debug, races): the standalone `slaprf` binary holds the USB serial connection natively on the host in [`internal/usb/`](../internal/usb/) with the cross-platform `go.bug.st/serial` package.
+- **Flashing** (Flasher page): runs fully in the browser with Espressif's [esptool-js](../web/src/vendor/esptool-js/) over WebSerial ([`web/src/services/esptool_flasher.ts`](../web/src/services/esptool_flasher.ts)). It works the same on every OS. It needs Chrome, Edge, or Opera on a desktop computer. Firefox and Safari have no WebSerial and cannot flash. The server has no flash endpoint.
+
+The flasher is stateless. Each Read, Flash, or Erase asks the browser for a USB port, does the job, reads the board back once to verify it, and closes the port. If the server holds the same board for live timing, the flasher releases it first and reconnects it after. Demo and Simulation modes use a simulated ROM bootloader in [`web/src/services/esp_flasher.ts`](../web/src/services/esp_flasher.ts).
 
 1. **Single Embedded Firmware Image (`slaprf-xiao-c5.bin`)**:
    - Every SlapRF timer, Hub or Spoke, runs the same firmware image built from [`firmware/slaprf/`](../firmware/slaprf/).
@@ -289,11 +294,12 @@ When running the standalone `slaprf` binary, USB serial communication and firmwa
 3. **Board Fingerprints (Keep / New)**:
    - Every board carries a random, non-zero 32-bit fingerprint used as its persistent timer identity across reboots and TDMA slot reassignments.
    - With **Keep** (default), the flasher queries the running firmware over USB (`SLAPRF?`) before erasing and preserves the board's existing fingerprint so track gate assignments remain intact.
-4. **Espressif USB-JTAG ROM Bootloader Flashing**:
-   - Toggles USB-JTAG `DTR` / `RTS` lines on the XIAO ESP32-C5 (`VID 0x303A`) to enter ROM Download Mode.
-   - Exchanges SLIP-framed (`0xC0 ... 0xC0`) ROM bootloader commands (`ESP_SYNC`, `ESP_SPI_ATTACH`, `ESP_FLASH_BEGIN`, `ESP_FLASH_DATA`, `ESP_FLASH_END`) to write the patched image from flash offset `0x0`, then hard-resets the board into the new firmware.
+4. **esptool-js Flashing over WebSerial**:
+   - esptool-js enters ROM download mode through the USB-JTAG `DTR` / `RTS` lines on the XIAO ESP32-C5 (`VID 0x303A`). No BOOT button is needed for normal upgrades.
+   - Right after chip detection, SlapRF disables the ESP32-C5 LP (RTC) watchdog and enables the super watchdog auto-feed. Without this, the watchdog resets the chip about 1 to 2 seconds into the ROM session and the board stops responding until it is power-cycled.
+   - The patched image is written with compression. Then SlapRF reboots the board into the app with the DTR/RTS sequence `(0,0) > (1,1) > (0,1) > (0,0)` and reads its identity back to verify the label and fingerprint.
 5. **Dual-Slot USB Console (`usbPool`)**:
-   - Maintains a primary USB slot (Slot 0) for the active Hub (`H1`) alongside an optional secondary Debug slot (Slot 1) so operators can inspect or flash a second USB board in **Debug** (`#/debug`) or **Flasher** (`#/flasher`) without disconnecting the Hub.
+   - Maintains a primary USB slot (Slot 0) for the active Hub (`H1`) alongside an optional secondary Debug slot (Slot 1) so operators can inspect a second USB board in **Debug** (`#/debug`) without disconnecting the Hub.
 
 ---
 

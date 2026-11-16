@@ -5,19 +5,26 @@ import { lookupBandChannelByFreqMHz } from "../core/vtx_channels";
 import { ApiClient } from "../services/api_client";
 import {
   FIRMWARE_SWEEP_HZ,
+  FlashProgress,
   LATEST_FIRMWARE_VERSION,
   TimerReadout,
+  cancelActiveFlash,
   eraseXiaoC5OverWebSerial,
-  isWebSerialSupported,
-  readXiaoC5OverWebSerial,
 } from "../services/esp_flasher";
-import { sharedTimerConsole, TimerConsole, TimerStatus, usbPool } from "../services/timer_console";
+import {
+  FLASHER_NEEDS_WEBSERIAL,
+  acquireEspSerialPort,
+  eraseXiaoC5WithEsptool,
+  flasherUsesWebSerial,
+  readXiaoC5WithWebSerial,
+} from "../services/esptool_flasher";
+import { isSimulatedUsbMode } from "../services/sim_serial_port";
+import { sharedTimerConsole, TimerStatus, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 import { TimerFlasher } from "../widgets/TimerFlasher";
-import { patchUsbConnectionBar } from "../widgets/UsbConnectionBar";
 
 const RACEBAND = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
-const FLASHER_PORTS_STORAGE_KEY = "slaprf.ui.flasher_ports.v1";
+const FLASHER_PORTS_STORAGE_KEY = "slaprf.ui.flasher_ports.v2";
 
 function loadPortPref(): boolean {
   try {
@@ -33,7 +40,8 @@ function loadPortPref(): boolean {
   } catch {
     // ignore
   }
-  return sharedTimerConsole.showAllPorts;
+  sharedTimerConsole.showAllPorts = false;
+  return false;
 }
 
 function savePortPref(val: boolean): void {
@@ -104,20 +112,42 @@ class TimerReaderPanel extends Component {
   }
 
   private async readFromUsb(): Promise<void> {
+    if (this.busy) return;
+    const browser = flasherUsesWebSerial();
     const activeConsole = usbPool.mainConsole;
-    if (this.busy || !activeConsole.connected) return;
     this.busy = true;
     this.errorMsg = null;
-    this.progressText = "Reading timer configuration over USB…";
+    this.progressText = !browser && activeConsole.connected
+      ? "Reading timer configuration over USB…"
+      : "Select the XIAO ESP32-C5 USB port to read…";
     this.render();
 
     try {
+      if (browser) {
+        // One-shot: pick the port, read the board, close the port.
+        const info = await readXiaoC5WithWebSerial();
+        if (!info) {
+          throw new Error("No SlapRF firmware answered on this board. Use Writer below to flash it.");
+        }
+        this.readout = info;
+        this.onRead?.(info);
+        return;
+      }
+      if (!isSimulatedUsbMode()) throw new Error(FLASHER_NEEDS_WEBSERIAL);
+      // Simulation / Demo mode: read the simulated board.
+      if (!activeConsole.connected) {
+        await usbPool.connectMain(this.showAllPorts);
+        this.progressText = "Reading timer configuration over USB…";
+        this.render();
+      }
       const info = await activeConsole.readSnapshot();
       this.readout = info;
       this.onRead?.(info);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      this.errorMsg = msg;
+      if (!/No port selected|aborted|cancelled|cancel/i.test(msg)) {
+        this.errorMsg = msg;
+      }
     } finally {
       this.busy = false;
       this.progressText = null;
@@ -126,10 +156,11 @@ class TimerReaderPanel extends Component {
   }
 
   private render(): void {
-    const webSerialOk = TimerConsole.supported();
+    const browser = flasherUsesWebSerial();
+    const webSerialOk = browser || isSimulatedUsbMode();
     const activeConsole = usbPool.mainConsole;
-    const isConnected = activeConsole.connected;
-    const isOther = activeConsole.isOtherDevice;
+    const isConnected = !browser && activeConsole.connected;
+    const isOther = !browser && activeConsole.isOtherDevice;
     const r = this.readout;
     const s = r?.status;
     const active = Boolean(r);
@@ -160,8 +191,8 @@ class TimerReaderPanel extends Component {
             : isConnected
               ? "Connected over USB · click Read timer to inspect"
               : webSerialOk
-                ? "Off · connect a timer in Connection above to read its settings"
-                : "Connect a SlapRF Server to read physical USB timers";
+                ? "Click Read timer to choose a USB board and read its identity"
+                : FLASHER_NEEDS_WEBSERIAL;
 
     const rfBadge = !r
       ? `<span class="badge">—</span>`
@@ -204,7 +235,7 @@ class TimerReaderPanel extends Component {
           ? `Joined Hub · slot ${s.slot}`
           : "ESP-NOW LR → Hub";
 
-    const readDisabled = this.busy || !webSerialOk || !isConnected;
+    const readDisabled = this.busy || !webSerialOk;
     const readBtnLabel = this.busy ? "Reading…" : "Read timer";
     const panelsClass = `debug-status-panels ${active ? "" : "is-unread"}`;
 
@@ -352,6 +383,17 @@ class TimerEraserPanel extends Component {
     this.listen(el, "click", (e) => {
       const t = e.target as HTMLElement;
       if (t.closest("[data-action='erase-timer']")) {
+        if (this.busy) {
+          cancelActiveFlash();
+          if (!flasherUsesWebSerial()) {
+            void usbPool.mainConsole.disconnectCleanly().catch(() => undefined);
+          }
+          this.busy = false;
+          this.progress = null;
+          this.errorMsg = null;
+          this.render();
+          return;
+        }
         void this.eraseFromUsb();
       }
     });
@@ -367,28 +409,39 @@ class TimerEraserPanel extends Component {
   }
 
   private async eraseFromUsb(): Promise<void> {
-    if (this.busy || !usbPool.mainConsole.connected) return;
+    if (this.busy) return;
+    const useEsptool = flasherUsesWebSerial();
     this.busy = true;
     this.errorMsg = null;
     this.lastSuccessMsg = null;
     this.progress = {
       stage: "connecting",
       percent: 1,
-      detail: "Opening connected USB port to wipe…",
+      detail: !useEsptool && usbPool.mainConsole.connected
+        ? "Opening connected USB port to wipe…"
+        : "Select the XIAO ESP32-C5 USB port to wipe…",
     };
     this.render();
 
+    const onProgress = (p: FlashProgress) => {
+      this.progress = p;
+      if (!this.updateProgressInPlace()) {
+        this.render();
+      }
+    };
+
     try {
-      await eraseXiaoC5OverWebSerial(
-        (p) => {
-          this.progress = p;
-          if (!this.updateProgressInPlace()) {
-            this.render();
-          }
-        },
-        this.showAllPorts,
-        usbPool
-      );
+      if (useEsptool) {
+        const port = await acquireEspSerialPort();
+        await eraseXiaoC5WithEsptool(port, onProgress);
+      } else {
+        if (!isSimulatedUsbMode()) throw new Error(FLASHER_NEEDS_WEBSERIAL);
+        // Simulation / Demo mode: wipe the simulated board.
+        if (!usbPool.mainConsole.connected) {
+          await usbPool.connectMain(this.showAllPorts);
+        }
+        await eraseXiaoC5OverWebSerial(onProgress, this.showAllPorts, usbPool);
+      }
 
       this.lastSuccessMsg = "Timer wiped: bootloader, partition table, NVS, and firmware erased to factory blank.";
     } catch (err) {
@@ -423,13 +476,17 @@ class TimerEraserPanel extends Component {
   }
 
   private render(): void {
-    const webSerialOk = TimerConsole.supported();
+    const browser = flasherUsesWebSerial();
+    const webSerialOk = browser || isSimulatedUsbMode();
     const activeConsole = usbPool.mainConsole;
-    const isConnected = activeConsole.connected;
+    const isConnected = !browser && activeConsole.connected;
+    const isOther = !browser && activeConsole.isOtherDevice;
     const targetName = isConnected
-      ? activeConsole.isOtherDevice
-        ? "Other"
-        : activeConsole.lastStatus?.label || activeConsole.lastConfig?.timerLabel || "USB"
+      ? browser
+        ? ""
+        : isOther
+          ? "Other"
+          : activeConsole.lastStatus?.label || activeConsole.lastConfig?.timerLabel || "USB"
       : "";
     const pct = this.progress
       ? Math.max(0, Math.min(100, Math.round(this.progress.percent)))
@@ -439,7 +496,7 @@ class TimerEraserPanel extends Component {
 
     const ledClass = this.busy
       ? "is-warn"
-      : this.errorMsg || activeConsole.isOtherDevice
+      : this.errorMsg || isOther
         ? "is-emergency"
         : this.lastSuccessMsg
           ? "is-up"
@@ -456,11 +513,11 @@ class TimerEraserPanel extends Component {
           : isConnected
             ? `Connected to ${esc(targetName)}<span class="flasher-eraser-hint-desktop"> · click Erase timer to wipe back to factory blank</span>`
             : webSerialOk
-              ? "Off · connect a USB device in Connection above to erase"
-              : "Connect a SlapRF Server to erase physical USB timers";
+              ? "Click Erase timer to choose a USB board and wipe it back to factory blank"
+              : FLASHER_NEEDS_WEBSERIAL;
 
-    const eraseDisabled = this.busy || !webSerialOk || !isConnected;
-    const eraseBtnLabel = this.busy ? `Erasing… (${pct}%)` : "Erase timer";
+    const eraseDisabled = !webSerialOk;
+    const eraseBtnLabel = this.busy ? `Cancel (${pct}%)` : "Erase timer";
     const progressHtml =
       this.busy || this.lastSuccessMsg
         ? `<div class="flasher-progress ${this.busy ? "is-flashing" : "is-complete"}">
@@ -515,28 +572,24 @@ class TimerEraserPanel extends Component {
   }
 }
 
-/** Flasher page: flash, read, or factory-reset Seeed XIAO ESP32-C5 timers over USB (WebSerial). */
-export class FlasherView extends Component {
-  private showAllPorts = loadPortPref();
-  private connError: string | null = null;
 
+/**
+ * Flasher page: read, flash, or wipe Seeed XIAO ESP32-C5 timers.
+ *
+ * There is no lasting connection here: each action picks the board's USB port in the browser
+ * (WebSerial), does its job, reads the board back once, and closes the port. Live timer connections
+ * belong to the SlapRF Server on the Network and Debug pages.
+ */
+export class FlasherView extends Component {
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
     super(el);
 
     el.innerHTML = `
       <div class="settings debug-page">
-        <section class="settings-section" data-section-anchor="connection">
-          <div class="settings-intro">
-            <h2>Connection</h2>
-            <p>Connect a XIAO ESP32-C5 over USB-C to read, flash, or wipe its firmware.</p>
-          </div>
-          <div class="debug-status-layout" data-slot="connection"></div>
-        </section>
-
         <section class="settings-section" data-section-anchor="reader">
           <div class="settings-intro">
             <h2>Reader</h2>
-            <p>Inspect the connected USB timer's flashed identity, 5.8 GHz receiver channels, and 2.4 GHz network status.</p>
+            <p>Plug in a XIAO ESP32-C5 and read its flashed identity, 5.8 GHz receiver channels, and 2.4 GHz network status.</p>
           </div>
           <div class="debug-status-layout" data-slot="reader"></div>
         </section>
@@ -544,7 +597,7 @@ export class FlasherView extends Component {
         <section class="settings-section" data-section-anchor="writer">
           <div class="settings-intro">
             <h2>Writer</h2>
-            <p>Set the timer's role and name, then flash the connected XIAO ESP32-C5 directly from the browser.</p>
+            <p>Set the timer's role and name, then flash a XIAO ESP32-C5 straight from your browser. The board is read back once to confirm the flash.</p>
           </div>
           <div class="debug-status-layout" data-slot="flasher"></div>
         </section>
@@ -552,7 +605,7 @@ export class FlasherView extends Component {
         <section class="settings-section" data-section-anchor="eraser">
           <div class="settings-intro">
             <h2>Eraser</h2>
-            <p>Wipe the connected USB device back to a factory-blank chip.</p>
+            <p>Wipe a XIAO ESP32-C5 back to a factory-blank chip.</p>
           </div>
           <div class="debug-status-layout" data-slot="eraser"></div>
         </section>
@@ -569,87 +622,5 @@ export class FlasherView extends Component {
     this.adopt(flasher);
     this.adopt(readerPanel);
     this.adopt(eraserPanel);
-
-    const readoutFromConsole = (c: TimerConsole): TimerReadout | null => {
-      if (!c.connected) return null;
-      const s = c.lastStatus;
-      const cfg = c.lastConfig;
-      if (!s && !cfg) return null;
-      const role: "hub" | "spoke" = s ? (s.role === 1 ? "hub" : "spoke") : cfg!.role;
-      return {
-        chip: s?.chip ? `${s.chip.model} ${s.chip.rev}` : "ESP32-C5",
-        firmwareVersion: s?.fw || cfg?.firmwareVersion || LATEST_FIRMWARE_VERSION,
-        role,
-        timerLabel: s?.label || cfg?.timerLabel || (role === "hub" ? "H1" : "T1"),
-        fingerprint: s?.fp || cfg?.fingerprint || "",
-        frequenciesMHz: s?.freqs?.length ? s.freqs : cfg?.frequenciesMHz?.length ? cfg.frequenciesMHz : RACEBAND,
-        status: s ?? undefined,
-      };
-    };
-
-    const syncSelectedConsole = (applyToFlasher = false) => {
-      patchUsbConnectionBar(this.slot("connection"), {
-        activeConsole: usbPool.mainConsole,
-        showAllPorts: this.showAllPorts,
-        error: this.connError,
-      });
-      const r = readoutFromConsole(usbPool.mainConsole);
-      if (r) {
-        readerPanel?.setReadout(r);
-        if (applyToFlasher) {
-          flasher.applyReadout(r);
-        }
-      } else if (!usbPool.mainConsole.connected || usbPool.mainConsole.isOtherDevice) {
-        readerPanel?.setReadout(null);
-      }
-    };
-
-    const unsubMain = usbPool.mainConsole.subscribe({
-      onStatus: () => syncSelectedConsole(false),
-      onConfig: () => syncSelectedConsole(false),
-    });
-    const unsubPool = usbPool.onChange(() => syncSelectedConsole(false));
-    this.onDispose(() => {
-      unsubMain();
-      unsubPool();
-    });
-
-    this.listen(this.slot("connection"), "change", (e) => {
-      const t = e.target as HTMLInputElement;
-      if (t.matches("[data-all-ports]")) {
-        this.showAllPorts = t.checked;
-        savePortPref(t.checked);
-      }
-    });
-
-    this.listen(this.slot("connection"), "click", (e) => {
-      const t = (e.target as HTMLElement).closest<HTMLElement>("[data-action]");
-      if (!t) return;
-      void (async () => {
-        switch (t.dataset.action) {
-          case "disconnect-usb-slot": {
-            this.connError = null;
-            await usbPool.mainConsole.disconnectCleanly();
-            break;
-          }
-          case "connect-add": {
-            this.connError = null;
-            try {
-              await usbPool.connectMain(this.showAllPorts);
-              syncSelectedConsole(true);
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              if (!/No port selected|aborted|cancelled|cancel/i.test(msg)) {
-                this.connError = msg;
-              }
-              syncSelectedConsole(false);
-            }
-            break;
-          }
-        }
-      })();
-    });
-
-    syncSelectedConsole(false);
   }
 }

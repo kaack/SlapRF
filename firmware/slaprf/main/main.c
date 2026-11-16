@@ -154,7 +154,7 @@ typedef struct {
 __attribute__((used, section(".rodata.slaprf_cfg")))
 static const volatile slaprf_flash_config_t g_flash_cfg = {
     .magic          = {'S', 'L', 'A', 'P', 'R', 'F', '0', '2'},
-    .version        = {0, 1, 4},
+    .version        = {0, 1, 5},
     .role           = ROLE_HUB_TIMER,
     .wifi_mode      = 0,
     .fingerprint    = 1,
@@ -233,8 +233,16 @@ static uint32_t pack_window(uint8_t *pkt, uint8_t slot) {
 /* ---- Hub ---------------------------------------------------------------------------------- */
 
 static uint32_t s_slot_fp[MAX_SPOKES]; // slot = index + 2
+static int64_t s_slot_heard_us[MAX_SPOKES]; // Last JOIN or window frame heard in each slot
 static hub_hello_frame_t s_hello[1 + MAX_SPOKES]; // [0] = Hub, [n] = slot n + 1; magic0 == 0 means unused
 #define HELLO_REPEAT_US 2000000 // Re-announce every timer so a laptop that (re)connects late learns them
+// A slot silent for this long can be handed to a different Spoke, and is no longer re-announced
+// to the laptop (so a powered-off or reflashed Spoke never blocks the course or shows as online).
+#define SLOT_STALE_US   10000000
+
+static bool hub_slot_stale(int idx, int64_t now) {
+    return s_slot_heard_us[idx] == 0 || now - s_slot_heard_us[idx] > SLOT_STALE_US;
+}
 
 static void hub_send_hello(uint8_t slot, uint8_t role, uint32_t fp, uint8_t sweep_hz, const char *label) {
     hub_hello_frame_t h;
@@ -255,15 +263,20 @@ static void hub_send_hello(uint8_t slot, uint8_t role, uint32_t fp, uint8_t swee
 
 /** Repeat every known HELLO (laptops that join or restart after boot still map slots). */
 static void hub_repeat_hellos(void) {
+    const int64_t now = slaprf_now_us();
     for (int i = 0; i < 1 + MAX_SPOKES; i++) {
+        if (i > 0 && hub_slot_stale(i - 1, now)) {
+            continue; // Spoke went quiet: stop announcing it
+        }
         if (s_hello[i].magic0 == FRAME_MAGIC_0) {
             slaprf_forward_to_laptop(&s_hello[i], sizeof(s_hello[i]));
         }
     }
 }
 
-/** Reuse a Spoke's slot if its fingerprint is known, else hand out the first free one. */
+/** Reuse a Spoke's slot if its fingerprint is known, else hand out the first free (or stale) one. */
 static void hub_handle_join(const spoke_join_frame_t *j) {
+    const int64_t now = slaprf_now_us();
     int idx = -1;
     for (int i = 0; i < MAX_SPOKES; i++) {
         if (s_slot_fp[i] == j->fingerprint) { idx = i; break; }
@@ -271,10 +284,14 @@ static void hub_handle_join(const spoke_join_frame_t *j) {
     for (int i = 0; idx < 0 && i < MAX_SPOKES; i++) {
         if (s_slot_fp[i] == 0 || (s_slot_fp[i] & 0xFFFFFF00UL) == 0x53504B00UL) { idx = i; break; }
     }
+    for (int i = 0; idx < 0 && i < MAX_SPOKES; i++) {
+        if (hub_slot_stale(i, now)) { idx = i; break; } // Previous owner has been silent > 10 s
+    }
     if (idx < 0) {
         return; // Course is full
     }
     s_slot_fp[idx] = j->fingerprint;
+    s_slot_heard_us[idx] = now;
     uint8_t slot = (uint8_t)(idx + 2);
 
     hub_assign_frame_t a = { FRAME_MAGIC_0, FRAME_MAGIC_ASSIGN, j->fingerprint, slot, 0 };
@@ -293,6 +310,9 @@ static void hub_handle_rx_frame(const uint8_t *buf, int n) {
         hub_handle_join((const spoke_join_frame_t *)buf);
     } else if (buf[1] == FRAME_MAGIC_WINDOW || buf[1] == FRAME_MAGIC_SINGLE) {
         const uint8_t slot = buf[2];
+        if (slot >= 2 && slot < 2 + MAX_SPOKES) {
+            s_slot_heard_us[slot - 2] = slaprf_now_us();
+        }
         if (slot >= 2 && slot < 2 + MAX_SPOKES && s_hello[slot - 1].magic0 != FRAME_MAGIC_0) {
             // Spoke was already running in this TDMA slot before the Hub booted:
             // announce a fallback HELLO so the laptop ingests its frames immediately,
@@ -396,18 +416,25 @@ static uint8_t spoke_join_hub(void) {
     spoke_join_frame_t j;
     spoke_fill_join(&j);
 
-    uint8_t buf[64];
+    // The receive queue also fills with every other Spoke's window frames (each Spoke broadcasts).
+    // Drop the backlog from the channel scan, then empty the whole queue on every check: reading
+    // one frame per check fell behind once 3 Spokes were streaming, the queue stayed full, and the
+    // Hub's ASSIGN reply was dropped, so a 4th Spoke could never join.
+    uint8_t buf[250];
+    while (espnow_poll(buf, sizeof(buf)) > 0) {
+    }
     for (;;) {
         espnow_send(&j, sizeof(j)); // Lands in one of the Hub's 2.4 GHz gaps sooner or later
         for (int wait = 0; wait < 50; wait++) { // ~250 ms per attempt
             slaprf_sleep_until_us(slaprf_now_us() + 5000);
             slaprf_diag_service();
-            int n = espnow_poll(buf, sizeof(buf));
-            if (n == (int)sizeof(hub_assign_frame_t) && buf[0] == FRAME_MAGIC_0 && buf[1] == FRAME_MAGIC_ASSIGN &&
-                compute_crc8(buf, (uint32_t)n - 1) == buf[n - 1]) {
-                const hub_assign_frame_t *a = (const hub_assign_frame_t *)buf;
-                if (a->fingerprint == g_flash_cfg.fingerprint && a->slot >= 2) {
-                    return a->slot;
+            for (int n = espnow_poll(buf, sizeof(buf)); n > 0; n = espnow_poll(buf, sizeof(buf))) {
+                if (n == (int)sizeof(hub_assign_frame_t) && buf[0] == FRAME_MAGIC_0 && buf[1] == FRAME_MAGIC_ASSIGN &&
+                    compute_crc8(buf, (uint32_t)n - 1) == buf[n - 1]) {
+                    const hub_assign_frame_t *a = (const hub_assign_frame_t *)buf;
+                    if (a->fingerprint == g_flash_cfg.fingerprint && a->slot >= 2) {
+                        return a->slot;
+                    }
                 }
             }
         }

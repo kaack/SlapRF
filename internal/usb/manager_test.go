@@ -163,10 +163,9 @@ func TestUSBManagerDemuxesHubFramesStatusAndPushesNetChannels(t *testing.T) {
 	fp.pushRx([]byte("@{\"t\":\"status\",\"fw\":\"0.4.0\",\"role\":1,\"fp\":\"CAFE1234\",\"label\":\"H1-USB\",\"slot\":1,\"channel\":1}\n"))
 
 	mgr := NewManager(ManagerConfig{
-		Engine:       eng,
-		HubRx:        hubRx,
-		Store:        store,
-		BaseFirmware: firmware.SyntheticBase(),
+		Engine: eng,
+		HubRx:  hubRx,
+		Store:  store,
 		OpenPort: func(portName string, baud int) (firmware.SerialPort, error) {
 			return fp, nil
 		},

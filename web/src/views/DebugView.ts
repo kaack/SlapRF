@@ -422,7 +422,6 @@ export class DebugView extends Component {
         if (!cur) return;
         const cmds = [
           "STATUS?",
-          "EMERGENCY ",
           "RF ",
           "LIVE ",
           "SCAN ",
@@ -1148,13 +1147,16 @@ export class DebugView extends Component {
   }
 
   /**
-   * Manage the 5.8 GHz receiver (RF 1 / RF 0) automatically based on active Debug view operations:
-   * ON when streaming monitored channels, running/streaming a spectrum scan, or running self-test;
-   * OFF (standby) when all 5.8 GHz debug activities are paused.
+   * Make sure the 5.8 GHz receiver is on (RF 1) for Debug view operations: streaming monitored
+   * channels, spectrum scans, and the self-test.
+   *
+   * It never switches the receiver off on its own. The receiver is the timer's lap detector: an
+   * automatic standby when the Debug page went idle left the Hub or Spoke deaf (no RSSI, no laps,
+   * flat bars on the Network page) until something sent RF 1 again.
    */
-  private async syncRfState(forceOn?: boolean): Promise<void> {
+  private async syncRfState(_forceOn?: boolean): Promise<void> {
     if (!this.console.connected || this.status?.emergencyMode) return;
-    const wantOn = forceOn ?? (this.liveOn || this.scanLive || this.scanning || this.busy === "selftest");
+    const wantOn = true;
     if (this.status && this.status.rf.enabled === wantOn) return;
     await this.console.request(`RF ${wantOn ? 1 : 0}`, "ok", 2000).catch(() => undefined);
     if (this.status) {
@@ -2279,7 +2281,8 @@ export class DebugView extends Component {
     const dt = (state.timers ?? []).find((t) => (t.fingerprint || "").toUpperCase() === want);
     if (!dt) return { found: false, online: false, framesRx: 0, simulatorActive: false };
     const seenMs = Date.parse(dt.lastSeenAt);
-    const gate = state.gates.find((g) => g.assignedTimerId === dt.timerId);
+    // `gates` is empty (older servers: null) until the timer is placed on the Track page.
+    const gate = (state.gates ?? []).find((g) => g.assignedTimerId === dt.timerId);
     return {
       found: true,
       timerId: dt.timerId,
@@ -2299,7 +2302,7 @@ export class DebugView extends Component {
       const data = {
         pilots: state.pilots as PilotThresholdInfo[],
         timers: state.timers,
-        gates: state.gates.map((g) => ({ ...g, timerLabel: g.timerLabel ?? "", online: Boolean(g.online) })),
+        gates: (state.gates ?? []).map((g) => ({ ...g, timerLabel: g.timerLabel ?? "", online: Boolean(g.online) })),
         simulatorActive: state.simulatorRunning,
       };
       this.serverSimActive = Boolean(data.simulatorActive);
@@ -3005,12 +3008,6 @@ export class DebugView extends Component {
         case "serial-help":
           await this.sendSerialCommand("HELP");
           break;
-        case "toggle-emergency":
-          await this.runBusy(this.status?.emergencyMode ? "Exiting emergency mode" : "Entering emergency mode", () =>
-            this.toggleEmergencyMode()
-          );
-          this.scrollSerialToBottom(true);
-          break;
         case "bootlog":
           await this.sendSerialCommand("BOOTLOG?");
           break;
@@ -3307,7 +3304,7 @@ export class DebugView extends Component {
   // ---------------------------------------------------------------- restarts
 
   /** Restart, reattach, re-enable the streams the user had on. Returns the first status. */
-  private async restart(cmd: "REBOOT" | "EMERGENCY" = "REBOOT"): Promise<TimerStatus> {
+  private async restart(cmd: "REBOOT" = "REBOOT"): Promise<TimerStatus> {
     window.clearInterval(this.statusTimer);
     this.live = null;
     this.scanLive = false; // The firmware forgets it on restart
@@ -3321,12 +3318,6 @@ export class DebugView extends Component {
       await this.console.disconnect();
       throw err;
     }
-  }
-
-  private async toggleEmergencyMode(): Promise<void> {
-    const enter = !this.status?.emergencyMode;
-    this.setProgress(enter ? "Entering emergency mode…" : "Exiting emergency mode…");
-    await this.sendSerialCommand(enter ? "EMERGENCY 1" : "EMERGENCY 0");
   }
 
   // ---------------------------------------------------------------- self-test
@@ -4568,7 +4559,7 @@ export class DebugView extends Component {
               ? selectedChild.serverRssi.map((v) => Math.round(v))
               : null;
         const diagWarn = !selectedChild.inHubStatus
-          ? `<strong>${esc(selectedChild.label)}</strong> has not sent a <span class="mono">JOIN</span> or window packet to <strong>${esc(s.label || "this Hub")}</strong> since the Hub booted. If ${esc(selectedChild.label)} was already powered on when the Hub was flashed or reset, power-cycle ${esc(selectedChild.label)} (or reflash both timers with the latest v0.1.4 build so Spokes auto-reannounce <span class="mono">JOIN</span>).`
+          ? `<strong>${esc(selectedChild.label)}</strong> has not sent a <span class="mono">JOIN</span> or window packet to <strong>${esc(s.label || "this Hub")}</strong> since the Hub booted. If ${esc(selectedChild.label)} was already powered on when the Hub was flashed or reset, power-cycle ${esc(selectedChild.label)} (or reflash both timers with the latest v0.1.5 build so Spokes auto-reannounce <span class="mono">JOIN</span>).`
           : frames === 0
             ? `<strong>${esc(selectedChild.label)}</strong> joined TDMA Slot ${selectedChild.slot}, but <strong>0 timing window frames</strong> have reached the Hub. Its 5.8 GHz sweep schedule may have drifted out of phase with the Hub's beacon; power-cycle or reflash ${esc(selectedChild.label)} to re-lock.`
             : selectedChild.msAgo !== undefined && selectedChild.msAgo >= 2500
@@ -6456,7 +6447,7 @@ export class DebugView extends Component {
   private serialPrompt(): string {
     if (!this.console.connected) return "slaprf>";
     const name = this.status?.label || this.status?.fp || "timer";
-    return this.status?.emergencyMode ? `slaprf@${name} (emergency)>` : `slaprf@${name}>`;
+    return `slaprf@${name}>`;
   }
 
   private scrollSerialToBottom(focusInput = false): void {
@@ -6491,7 +6482,7 @@ export class DebugView extends Component {
     }
     const note = this.el.querySelector<HTMLElement>("[data-serial-note]");
     if (note && this.console.connected && !this.busy) {
-      note.textContent = `${this.status?.emergencyMode ? "Emergency mode" : "Connected"} · ${this.serialLines.length} lines · type HELP for commands`;
+      note.textContent = `Connected · ${this.serialLines.length} lines · type HELP for commands`;
     }
     this.el.querySelector<HTMLButtonElement>('[data-action="copy-serial"]')?.removeAttribute("disabled");
     this.el.querySelector<HTMLButtonElement>('[data-action="serial-clear"]')?.removeAttribute("disabled");
@@ -6526,8 +6517,7 @@ export class DebugView extends Component {
     if (upper === "HELP" || upper === "HELP?" || upper === "?") {
       const helpLines = [
         "Commands:",
-        "  STATUS?              identity, uptime, reset reason, emergency mode, heap, RF, channels",
-        "  EMERGENCY [1|0]      enter (1) or exit (0) emergency rescue mode (radio off, ambulance LED)",
+        "  STATUS?              identity, uptime, reset reason, heap, RF, channels",
         "  RF [1|0]             switch 5.8 GHz receiver on (1) or off (0)",
         "  LIVE [0|1|2]         stream 5.8 GHz readings (0=off, 1=10 Hz, 2=50 Hz every sweep)",
         "  SCAN <a b s>         single spectrum sweep a..b MHz in s MHz steps (e.g. SCAN 5650 5917 5)",
@@ -6581,29 +6571,6 @@ export class DebugView extends Component {
         this.scrollSerialToBottom(true);
         return;
       }
-      if (upper.startsWith("EMERGENCY")) {
-        const enter = !upper.endsWith("0");
-        await this.console.request(cmd, "ok", 2000);
-        if (enter) {
-          this.liveOn = false;
-          this.scanLive = false;
-          this.status = await this.refreshStatus();
-        } else {
-          await sleep(150);
-          try {
-            this.status = await this.refreshStatus();
-            this.liveOn = true;
-            this.liveMode = this.signalCardVisible ? 2 : 1;
-            await this.console.send(`LIVE ${this.liveMode}`);
-          } catch {
-            this.status = await this.restart("REBOOT");
-          }
-        }
-        this.renderAll();
-        this.scrollSerialToBottom(true);
-        return;
-      }
-
       await this.console.send(cmd);
       if (
         upper.startsWith("RF ") ||
@@ -6633,19 +6600,14 @@ export class DebugView extends Component {
 
   private renderSerialConsole(): void {
     const on = this.console.connected;
-    const emg = Boolean(on && this.status?.emergencyMode);
     const busy = this.busy !== null;
-    const restartBusy =
-      this.busy === "Restarting" ||
-      this.busy === "Restart test" ||
-      this.busy === "Entering emergency mode" ||
-      this.busy === "Exiting emergency mode";
-    const ledClass = restartBusy ? "is-warn" : emg ? "is-emergency" : on ? "is-up" : "";
+    const restartBusy = this.busy === "Restarting" || this.busy === "Restart test";
+    const ledClass = restartBusy ? "is-warn" : on ? "is-up" : "";
     const statusText = restartBusy && this.progress
       ? this.progress
       : !on
         ? "Off · connect a timer first"
-        : `${emg ? "Emergency mode" : "Connected"} · ${this.serialLines.length} lines · type HELP for commands`;
+        : `Connected · ${this.serialLines.length} lines · type HELP for commands`;
     const introBanner = on
       ? "# SlapRF USB serial terminal · type HELP for commands, Up/Down for history, Tab to complete.\n"
       : "# Disconnected · connect a timer over USB to open an interactive serial session.\n";

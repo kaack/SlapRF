@@ -3,7 +3,7 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { getAppTheme, subscribeAppTheme } from "../core/theme";
 import { ApiClient } from "../services/api_client";
-import { capabilitiesSnapshot } from "../services/capabilities";
+import { capabilitiesSnapshot, resolveBackendUrl } from "../services/capabilities";
 import {
   LapRFDiscoveredDevice,
   sharedLapRFLink,
@@ -82,6 +82,7 @@ export class NetworkView extends Component {
   private readonly console: TimerConsole;
   private status: TimerStatus | null = null;
   private live: LiveSample | null = null;
+  private liveAtMs = 0;
   /** Selected TDMA slot in the topology (1 = Center Hub, 2..7 = Child Spokes). */
   private selectedSlot: number | null = null;
   private userPickedSlot = false;
@@ -95,6 +96,11 @@ export class NetworkView extends Component {
   private connError: string | null = null;
   /** Identify toggles sent but not yet confirmed by a status line (fingerprint -> wanted state). */
   private identifyPending = new Map<string, { on: boolean; atMs: number }>();
+  /** True while "All Raceband" band survey is active (Hub & Spokes sweep R1..R8). */
+  private surveyAllRaceband = false;
+  private surveyError: string | null = null;
+  private surveyLeaseTimer: number | null = null;
+  private didResetTempHubChannels = false;
 
   private laprfHost = "192.168.1.2";
   private laprfPort = 5403;
@@ -256,22 +262,30 @@ export class NetworkView extends Component {
       },
       onStatus: (s) => {
         this.status = this.activeStatus();
-        if (s.chanMask !== undefined) {
-          const effectiveMask = s.chanMask > 0 ? s.chanMask : 0xff;
-          const nextEnabled = Array.from({ length: 8 }, (_, i) => ((effectiveMask >> i) & 1) !== 0);
-          if (nextEnabled.join() !== this.signalEnabledCh.join()) {
-            this.signalEnabledCh = nextEnabled;
-          }
+        if (
+          s.role === 1 &&
+          s.freqsTemporary &&
+          !this.surveyAllRaceband &&
+          !this.didResetTempHubChannels &&
+          capabilitiesSnapshot().portable &&
+          !this.store.simulatorRunning
+        ) {
+          this.didResetTempHubChannels = true;
+          void usbPool.hubConsole()?.send("CHANNELS RESET").catch(() => undefined);
         }
         this.renderAll();
       },
       onLive: (l) => {
         this.live = l;
+        this.liveAtMs = Date.now();
         if (this.selectedSlot === 1 || (this.status?.role === 2 && this.selectedSlot === this.status.slot)) {
           this.scheduleLiveRefresh();
         }
       },
       onHubPackets: () => {
+        this.scheduleLiveRefresh();
+      },
+      onHubLive: () => {
         this.scheduleLiveRefresh();
       },
       onConfig: () => {
@@ -301,6 +315,10 @@ export class NetworkView extends Component {
     });
 
     const unsubStore = this.store.subscribe(["status", "config", "telemetry"], () => {
+      if (this.surveyAllRaceband && this.isLiveRaceHeatActive()) {
+        void this.setSurveyMode(false);
+        return;
+      }
       this.scheduleLiveRefresh();
     });
 
@@ -378,6 +396,7 @@ export class NetworkView extends Component {
       this.selectTopologySlot(Number(t.dataset.slotNum));
     });
     this.listen(el, "click", (e) => void this.onClick(e));
+    this.listen(el, "dblclick", (e) => this.onDblClick(e));
     this.listen(el, "input", (e) => {
       const t = e.target as HTMLInputElement;
       if (t.dataset.field === "laprf-host") {
@@ -398,6 +417,12 @@ export class NetworkView extends Component {
     });
     this.listen(el, "keydown", (e) => {
       const ke = e as KeyboardEvent;
+      const rowBtn = (ke.target as HTMLElement | null)?.closest<HTMLElement>('[data-action="net-signal-ch"]');
+      if (rowBtn && (ke.key === "Enter" || ke.key === " ")) {
+        ke.preventDefault();
+        this.toggleSignalCh(Number(rowBtn.dataset.ch));
+        return;
+      }
       const t = ke.target as HTMLInputElement | null;
       if (
         ke.key === "Enter" &&
@@ -452,7 +477,14 @@ export class NetworkView extends Component {
       this.renderAll();
     });
 
+    const onBeforeUnload = () => {
+      this.releaseSurveyOnLeave();
+    };
+    window.addEventListener("beforeunload", onBeforeUnload);
+
     this.onDispose(() => {
+      window.removeEventListener("beforeunload", onBeforeUnload);
+      this.releaseSurveyOnLeave();
       if (this.rafId !== 0) {
         window.cancelAnimationFrame(this.rafId);
         this.rafId = 0;
@@ -470,6 +502,7 @@ export class NetworkView extends Component {
       unsubTheme();
     });
 
+    void this.syncInitialSurveyState();
     this.renderAll();
   }
 
@@ -485,6 +518,9 @@ export class NetworkView extends Component {
       if (typeof p.showAllPorts === "boolean") {
         this.showAllPorts = p.showAllPorts;
       }
+      if (Array.isArray(p.signalEnabledCh) && p.signalEnabledCh.length === 8) {
+        this.signalEnabledCh = p.signalEnabledCh.map(Boolean);
+      }
     } catch {
       // ignore
     }
@@ -496,10 +532,232 @@ export class NetworkView extends Component {
         NETWORK_PREFS_KEY,
         JSON.stringify({
           showAllPorts: this.showAllPorts,
+          signalEnabledCh: this.signalEnabledCh,
         })
       );
     } catch {
       // ignore
+    }
+  }
+
+  /**
+   * The last `LIVE` sample, only while the stream is still running. The Debug page (or its
+   * self-test) turns `LIVE` on and off; a stale sample must not freeze the bars after it stops.
+   */
+  private freshLive(): LiveSample | null {
+    return this.live && Date.now() - this.liveAtMs < 1000 ? this.live : null;
+  }
+
+  private isLiveRaceHeatActive(): boolean {
+    const r = this.store.raceState;
+    if (
+      !r?.generated ||
+      r.emergencyStopped ||
+      r.lifecycle === "paused" ||
+      r.lifecycle === "completed" ||
+      r.lifecycle === "scrapped"
+    ) {
+      return false;
+    }
+    return Boolean(r.heats?.some((h) => h.state === "countdown" || h.state === "running"));
+  }
+
+  /**
+   * Mirrors `tracker.ComputeActivePilotChannels`: maps enabled pilots onto the 8 hardware slots
+   * (0 = disabled slot) and collects pilot callsigns per slot and per frequency.
+   */
+  private computeCourseChannelTable(): {
+    slotMhz: number[];
+    mhzPilots: Map<number, string[]>;
+  } {
+    const slotMhz = [0, 0, 0, 0, 0, 0, 0, 0];
+    const mhzPilots = new Map<number, string[]>();
+    const pilots = this.store.pilots ?? [];
+    for (const p of pilots) {
+      if (!p.enabled || p.frequencyMhz < 5180) continue;
+      const list = mhzPilots.get(p.frequencyMhz) ?? [];
+      if (p.callsign && !list.includes(p.callsign)) list.push(p.callsign);
+      mhzPilots.set(p.frequencyMhz, list);
+    }
+    for (let ch = 0; ch < 8; ch++) {
+      const p = pilots[ch];
+      if (p && p.enabled && p.frequencyMhz >= 5180) {
+        slotMhz[ch] = p.frequencyMhz;
+      }
+    }
+    for (let i = 8; i < pilots.length; i++) {
+      const p = pilots[i];
+      if (!p?.enabled || p.frequencyMhz < 5180) continue;
+      for (let ch = 0; ch < 8; ch++) {
+        if (slotMhz[ch] === 0) {
+          slotMhz[ch] = p.frequencyMhz;
+          break;
+        }
+      }
+    }
+    return { slotMhz, mhzPilots };
+  }
+
+  /** Visible channel rows for the RSSI inspector in Pilot-channels mode vs All-Raceband survey mode. */
+  private visibleBarSpecs(): Array<{ idx: number; mhz: number; pilot: string }> {
+    const { slotMhz, mhzPilots } = this.computeCourseChannelTable();
+    if (this.surveyAllRaceband) {
+      return RACEBAND.map((mhz, idx) => ({
+        idx,
+        mhz,
+        pilot: (mhzPilots.get(mhz) ?? []).join(", "),
+      }));
+    }
+    const out: Array<{ idx: number; mhz: number; pilot: string }> = [];
+    const seenMhz = new Set<number>();
+    for (let ch = 0; ch < 8; ch++) {
+      const mhz = slotMhz[ch];
+      if (mhz < 5180 || seenMhz.has(mhz)) continue;
+      seenMhz.add(mhz);
+      out.push({
+        idx: ch,
+        mhz,
+        pilot: (mhzPilots.get(mhz) ?? []).join(", "),
+      });
+    }
+    return out;
+  }
+
+  private toggleSignalCh(idx: number): void {
+    if (idx < 0 || idx >= 8) return;
+    this.signalEnabledCh[idx] = !this.signalEnabledCh[idx];
+    this.savePrefs();
+    this.renderAll();
+  }
+
+  private onDblClick(e: Event): void {
+    const btn = (e.target as HTMLElement | null)?.closest<HTMLElement>('[data-action="net-signal-ch"]');
+    if (!btn) return;
+    const idx = Number(btn.dataset.ch);
+    if (idx < 0 || idx >= 8) return;
+    const visible = this.visibleBarSpecs().map((b) => b.idx);
+    const enabledVisible = visible.filter((i) => this.signalEnabledCh[i]);
+    const isSolo = this.signalEnabledCh[idx] && enabledVisible.length === 1;
+    this.signalEnabledCh = this.signalEnabledCh.map((_, i) => (isSolo ? true : i === idx));
+    this.savePrefs();
+    this.renderAll();
+  }
+
+  private stopSurveyLeaseTimer(): void {
+    if (this.surveyLeaseTimer !== null) {
+      window.clearInterval(this.surveyLeaseTimer);
+      this.surveyLeaseTimer = null;
+    }
+  }
+
+  private startSurveyLeaseTimer(): void {
+    this.stopSurveyLeaseTimer();
+    this.surveyLeaseTimer = window.setInterval(() => {
+      if (!this.surveyAllRaceband) {
+        this.stopSurveyLeaseTimer();
+        return;
+      }
+      if (this.isLiveRaceHeatActive()) {
+        void this.setSurveyMode(false);
+        return;
+      }
+      if (capabilitiesSnapshot().portable && !this.store.simulatorRunning) {
+        void fetch(resolveBackendUrl("/api/hub/survey"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ on: true }),
+        })
+          .then(async (r) => {
+            if (!r.ok) {
+              this.surveyAllRaceband = false;
+              this.stopSurveyLeaseTimer();
+              this.renderAll();
+            }
+          })
+          .catch(() => undefined);
+      }
+    }, 5000);
+  }
+
+  private async syncInitialSurveyState(): Promise<void> {
+    if (!capabilitiesSnapshot().portable || this.store.simulatorRunning || this.store.timingHardwareMode !== "slaprf") {
+      return;
+    }
+    try {
+      const resp = await fetch(resolveBackendUrl("/api/hub/survey"));
+      if (!resp.ok) return;
+      const data = (await resp.json()) as { active?: boolean };
+      this.surveyAllRaceband = Boolean(data.active);
+      if (this.surveyAllRaceband) {
+        this.startSurveyLeaseTimer();
+      } else if (usbPool.hubConsole()?.lastStatus?.freqsTemporary && !this.didResetTempHubChannels) {
+        this.didResetTempHubChannels = true;
+        void usbPool.hubConsole()?.send("CHANNELS RESET").catch(() => undefined);
+      }
+      this.renderAll();
+    } catch {
+      // ignore
+    }
+  }
+
+  private async setSurveyMode(want: boolean): Promise<void> {
+    this.surveyError = null;
+    if (want && this.isLiveRaceHeatActive()) {
+      this.surveyError = "Cannot measure all Raceband while a race heat is running.";
+      this.renderAll();
+      return;
+    }
+    this.surveyAllRaceband = want;
+    if (want) {
+      this.startSurveyLeaseTimer();
+    } else {
+      this.stopSurveyLeaseTimer();
+    }
+    if (capabilitiesSnapshot().portable && !this.store.simulatorRunning) {
+      try {
+        const resp = await fetch(resolveBackendUrl("/api/hub/survey"), {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ on: want }),
+        });
+        if (!resp.ok) {
+          const body = (await resp.json().catch(() => ({}))) as { error?: string };
+          this.surveyAllRaceband = false;
+          this.stopSurveyLeaseTimer();
+          this.surveyError = body.error || "Could not switch channel survey mode.";
+        }
+      } catch {
+        this.surveyAllRaceband = false;
+        this.stopSurveyLeaseTimer();
+        this.surveyError = "Could not reach SlapRF Server.";
+      }
+    } else if (this.store.simulatorRunning) {
+      const hub = usbPool.hubConsole() ?? sharedTimerConsole;
+      if (hub.connected) {
+        const freqs = want ? RACEBAND : this.computeCourseChannelTable().slotMhz;
+        void hub.send(`NETCHANNELS ${freqs.join(",")}`).catch(() => undefined);
+      }
+    }
+    this.renderAll();
+  }
+
+  private releaseSurveyOnLeave(): void {
+    this.stopSurveyLeaseTimer();
+    if (!this.surveyAllRaceband) return;
+    this.surveyAllRaceband = false;
+    if (capabilitiesSnapshot().portable && !this.store.simulatorRunning) {
+      void fetch(resolveBackendUrl("/api/hub/survey"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ on: false }),
+        keepalive: true,
+      }).catch(() => undefined);
+    } else if (this.store.simulatorRunning) {
+      const hub = usbPool.hubConsole() ?? sharedTimerConsole;
+      if (hub.connected) {
+        const freqs = this.computeCourseChannelTable().slotMhz;
+        void hub.send(`NETCHANNELS ${freqs.join(",")}`).catch(() => undefined);
+      }
     }
   }
 
@@ -567,7 +825,11 @@ export class NetworkView extends Component {
         out.push(-128);
         continue;
       }
-      const wantFreq = freqs[i] ?? RACEBAND[i];
+      const wantFreq = freqs[i] ?? 0;
+      if (wantFreq < 5180) {
+        out.push(-128);
+        continue;
+      }
       const floorVal = baseFloor - (i % 2);
       const matchIdx = pilots.findIndex(
         (p) => p.enabled && p.frequencyMhz > 0 && Math.abs(p.frequencyMhz - wantFreq) <= 8
@@ -658,6 +920,16 @@ export class NetworkView extends Component {
       case "select-topology-slot":
         this.selectTopologySlot(Number(t.dataset.slotNum));
         break;
+      case "net-signal-ch":
+        this.toggleSignalCh(Number(t.dataset.ch));
+        break;
+      case "set-channel-scope": {
+        const wantSurvey = t.dataset.scope === "raceband";
+        if (wantSurvey !== this.surveyAllRaceband) {
+          await this.setSurveyMode(wantSurvey);
+        }
+        break;
+      }
       case "select-usb-slot": {
         const s = usbPool.mainConsole.lastStatus;
         if (s?.role === 1) {
@@ -955,7 +1227,7 @@ export class NetworkView extends Component {
     const hubConsole = usbPool.hubConsole();
     const hubUsbStatus = s && s.role === 1 ? s : hubConsole?.connected ? hubConsole.lastStatus : null;
     const activeHubConsole = hubConsole ?? sharedTimerConsole;
-    const freqs = s?.freqs?.length === 8 ? s.freqs : hubUsbStatus?.freqs?.length === 8 ? hubUsbStatus.freqs : RACEBAND;
+    const freqs = this.surveyAllRaceband ? [...RACEBAND] : this.computeCourseChannelTable().slotMhz;
     const detectedTimers: DetectedTimer[] = this.store.detectedTimers;
     const ch = hubUsbStatus?.channel || s?.channel || 1;
     const nowMs = performance.now();
@@ -980,8 +1252,8 @@ export class NetworkView extends Component {
           )
         : [-128, -128, -128, -128, -128, -128, -128, -128];
       const liveDbm =
-        s && s.role === 1 && this.live?.dbm?.length === 8
-          ? this.live.dbm
+        s && s.role === 1 && this.freshLive()?.dbm?.length === 8
+          ? this.freshLive()!.dbm
           : simDbm?.length === 8
             ? simDbm
             : hubSlotLive?.dbm?.length === 8
@@ -1183,8 +1455,8 @@ export class NetworkView extends Component {
         beaconMsAgo,
         seq: existingFromHub?.seq ?? spStatus.sweeps,
         dbm:
-          isCurrentConsole && this.live?.dbm?.length === 8
-            ? this.live.dbm
+          isCurrentConsole && this.freshLive()?.dbm?.length === 8
+            ? this.freshLive()!.dbm
             : liveSpokeDbm?.length === 8
               ? liveSpokeDbm
               : spStatus.dbm?.length === 8
@@ -2670,34 +2942,63 @@ export class NetworkView extends Component {
     }
   }
 
-  private renderRssiBars(freqs: number[], dbmSource: number[] | null | undefined, sourceLabel: string, titleText: string): string {
+  private renderRssiBars(dbmSource: number[] | null | undefined, sourceLabel: string, titleText: string): string {
     const pct = (x: number) => Math.max(0, Math.min(100, ((x - DBM_MIN) / (DBM_MAX - DBM_MIN)) * 100));
-    const barsHtml = freqs
-      .map((f, idx) => {
-        const band = racebandName(f) || `Ch${idx + 1}`;
-        const col = channelColor(idx);
-        const onCh = Boolean(this.signalEnabledCh[idx]);
-        const val = dbmSource ? dbmSource[idx] : undefined;
-        const valid = onCh && val !== undefined && val > -127 && val < 0;
-        const widthPct = valid ? pct(val!) : 0;
-        return `
-          <div class="debug-net-inspector-bar-row ${onCh ? "" : "is-muted"}" data-bar-row="${idx}">
-            <span class="debug-bar-label mono"><span class="debug-ch-inline" style="${onCh ? `background:${col}` : `background:transparent;box-shadow:inset 0 0 0 1.5px ${col}`}"></span><strong>${band}</strong> ${f}</span>
-            <div class="debug-bar-track">
-              <span class="debug-bar-fill" data-bar-fill="${idx}" style="width:${widthPct.toFixed(1)}%"></span>
-            </div>
-            <span class="debug-bar-value mono" data-bar-val="${idx}">${!onCh ? "Off" : valid ? `${val} dBm` : "—"}</span>
+    const specs = this.visibleBarSpecs();
+    const isLight = getAppTheme() === "light";
+    const activeCount = specs.filter((b) => this.signalEnabledCh[b.idx]).length;
+    const raceActive = this.isLiveRaceHeatActive();
+
+    const barsBodyHtml =
+      specs.length === 0
+        ? `<p class="note">No active pilot channels in the current session. Enable pilots on <strong>Pilots</strong> or switch to <strong>All Raceband</strong> above.</p>`
+        : `<div class="debug-net-inspector-bars">
+            ${specs
+              .map(({ idx, mhz, pilot }) => {
+                const band = racebandName(mhz) || formatHardwareFreq(mhz) || `Ch${idx + 1}`;
+                const col = channelColor(idx);
+                const onCh = Boolean(this.signalEnabledCh[idx]);
+                const dotGlow = isLight ? "0 0 0 1px rgba(15, 23, 42, 0.2)" : `0 0 7px ${col}`;
+                const val = dbmSource ? dbmSource[idx] : undefined;
+                const valid = onCh && val !== undefined && val > -127 && val < 0;
+                const widthPct = valid ? pct(val!) : 0;
+                const title = `Click to toggle ${band} (${mhz} MHz${pilot ? ` · ${pilot}` : ""}) monitoring on/off · double-click to solo`;
+                return `
+                  <div class="debug-net-inspector-bar-row is-interactive ${onCh ? "" : "is-muted"}" data-bar-row="${idx}" data-action="net-signal-ch" data-ch="${idx}" role="button" tabindex="0" aria-pressed="${onCh}" title="${esc(title)}">
+                    <span class="debug-bar-label net-ch-bar-label mono"><span class="debug-ch-inline" data-bar-dot style="${onCh ? `background:${col};box-shadow:${dotGlow}` : `background:transparent;box-shadow:inset 0 0 0 1.5px ${col}`}"></span><strong>${esc(band)}</strong> ${mhz}</span>
+                    <div class="debug-bar-track">
+                      <span class="debug-bar-fill" data-bar-fill="${idx}" style="width:${widthPct.toFixed(1)}%"></span>
+                    </div>
+                    <span class="debug-bar-value mono" data-bar-val="${idx}">${!onCh ? "Off" : valid ? `${val} dBm` : "—"}</span>
+                  </div>`;
+              })
+              .join("")}
           </div>`;
-      })
-      .join("");
+
+    const rightMetaHtml = this.surveyError
+      ? `<span class="note debug-tone-bad">${esc(this.surveyError)}</span>`
+      : this.surveyAllRaceband
+        ? `<span class="note">Lap detection paused · <span class="mono" data-net-bar-source>${esc(sourceLabel)}</span></span>`
+        : `<span class="note mono" data-net-bar-source>${esc(sourceLabel)}</span>`;
 
     return `
-      <div class="debug-net-inspector-bars-wrap">
-        <div class="debug-subbar">
-          <span class="debug-chart-title">${titleText}</span>
-          <span class="note mono" data-net-bar-source>${sourceLabel}</span>
+      <div class="debug-net-inspector-bars-wrap" data-net-bars>
+        <div class="debug-subbox-head debug-net-bars-head">
+          <span class="debug-subbox-title is-active">${icons.signal(14)}<span>${titleText}</span></span>
+          <div class="segmented debug-net-scope-seg" role="group" aria-label="Measured channels">
+            <button type="button" class="${!this.surveyAllRaceband ? "is-active" : ""}" data-action="set-channel-scope" data-scope="pilots" title="Measure only the active pilots' channels (default)">Pilot channels</button>
+            <button type="button" class="${this.surveyAllRaceband ? "is-active" : ""}" data-action="set-channel-scope" data-scope="raceband" ${raceActive && !this.surveyAllRaceband ? "disabled" : ""} title="${raceActive ? "Unavailable while a race heat is running" : "Temporarily measure all 8 Raceband channels (R1–R8) across Hub and Spokes"}">All Raceband</button>
+          </div>
         </div>
-        <div class="debug-net-inspector-bars">${barsHtml}</div>
+        <div class="debug-subbar debug-net-bars-subbar">
+          ${
+            specs.length > 0
+              ? `<span class="note debug-live-ch-hint" data-net-ch-note><span class="mono">${activeCount}/${specs.length}</span> active · click row to toggle · double-click to solo</span>`
+              : `<span class="note">0 active</span>`
+          }
+          ${rightMetaHtml}
+        </div>
+        ${barsBodyHtml}
       </div>`;
   }
 
@@ -2715,7 +3016,7 @@ export class NetworkView extends Component {
       dbmSource: number[] | null | undefined;
     }
   ): boolean {
-    if (!host.querySelector('[data-bar-fill="0"]')) {
+    if (!host.querySelector("[data-net-bars]")) {
       return false;
     }
     const pct = (x: number) => Math.max(0, Math.min(100, ((x - DBM_MIN) / (DBM_MAX - DBM_MIN)) * 100));
@@ -2742,15 +3043,16 @@ export class NetworkView extends Component {
     if (barSource && barSource.textContent !== opts.sourceLabel) barSource.textContent = opts.sourceLabel;
 
     for (let idx = 0; idx < 8; idx++) {
+      const fillEl = host.querySelector<HTMLElement>(`[data-bar-fill="${idx}"]`);
+      const valEl = host.querySelector<HTMLElement>(`[data-bar-val="${idx}"]`);
+      if (!fillEl && !valEl) continue;
       const onCh = Boolean(this.signalEnabledCh[idx]);
       const val = opts.dbmSource ? opts.dbmSource[idx] : undefined;
       const valid = onCh && val !== undefined && val > -127 && val < 0;
       const widthStr = `${(valid ? pct(val!) : 0).toFixed(1)}%`;
       const valStr = !onCh ? "Off" : valid ? `${val} dBm` : "—";
 
-      const fillEl = host.querySelector<HTMLElement>(`[data-bar-fill="${idx}"]`);
       if (fillEl && fillEl.style.width !== widthStr) fillEl.style.width = widthStr;
-      const valEl = host.querySelector<HTMLElement>(`[data-bar-val="${idx}"]`);
       if (valEl && valEl.textContent !== valStr) valEl.textContent = valStr;
     }
     return true;
@@ -2758,7 +3060,12 @@ export class NetworkView extends Component {
 
   private renderTimerSection(hub: TopologyHubInfo, spokes: Map<number, TopologySpokeInfo>, selectedSlot: number): void {
     const s = this.activeStatus();
-    const freqs = s?.freqs?.length === 8 ? s.freqs : RACEBAND;
+    const barSpecKey = [
+      this.surveyAllRaceband ? "rb" : "pilots",
+      this.isLiveRaceHeatActive() ? "race1" : "race0",
+      this.surveyError ?? "",
+      ...this.visibleBarSpecs().map((b) => `${b.idx}:${b.mhz}:${b.pilot}`),
+    ].join(";");
     const detailHost = this.slot("timer-detail");
 
     if (selectedSlot === 1) {
@@ -2818,8 +3125,8 @@ export class NetworkView extends Component {
           ? `#${hubConsole.hubLastSeq}`
           : s && s.role === 1 && s.sweeps > 0
             ? `#${s.sweeps}`
-            : this.live?.n !== undefined
-              ? `#${this.live.n}`
+            : this.freshLive()?.n !== undefined
+              ? `#${this.freshLive()!.n}`
               : hubOwnFrames > 0
                 ? `#${hubOwnFrames}`
                 : latestSpokeSeq !== null
@@ -2853,7 +3160,7 @@ export class NetworkView extends Component {
         hub.ch,
         childSummaryHtml,
         idBtnHtml,
-        freqs.join(","),
+        barSpecKey,
         this.signalEnabledCh.join(","),
       ].join("|");
 
@@ -2875,7 +3182,6 @@ export class NetworkView extends Component {
       }
 
       const barsHtml = this.renderRssiBars(
-        freqs,
         hub.dbm,
         sourceLabel,
         `5.8 GHz channels at ${esc(hub.label)} (Hub · Slot 1)`
@@ -3028,7 +3334,7 @@ export class NetworkView extends Component {
       hub.fp,
       hub.ch,
       idBtnHtml,
-      freqs.join(","),
+      barSpecKey,
       this.signalEnabledCh.join(","),
     ].join("|");
 
@@ -3049,7 +3355,6 @@ export class NetworkView extends Component {
     }
 
     const barsHtml = this.renderRssiBars(
-      freqs,
       dbmSource,
       sourceLabel,
       `5.8 GHz channels received from ${esc(sp.label)} (Slot ${sp.slot})`
