@@ -16,24 +16,9 @@ Preview SlapRF in your browser with no hardware or installation required:
 
 > **Note:** `slaprf.app` is an interactive **browser demo** preloaded with a simulated SlapRF Hub, 3 Spoke timers, sample practice sessions, and sample races. Because browser tab throttling and WebAssembly timing performance vary by device, **`slaprf.app` is for demonstration only**. To time real practices or run live races, [download and run the local SlapRF app](#run) on your computer.
 
-## Intended Use
+## How SlapRF System Works
 
-SlapRF is a complete timing application with two main workflows:
-
-1. **Practice Timer**: Run open or structured practice sessions with spoken lap callouts, live 5.8 GHz signal traces, per-pilot threshold calibration, consistency metrics, and multi-gate section split analytics (`S1`, `S2`, `S3`, ...).
-2. **Race Management**: Manage full race events from pilot check-in to podium. Features include a visual stage and bracket editor (Double Elimination, Single Elimination, Qualifying, Open Qualifier, Points Mains, Chase the Ace, or custom round graphs), live Race Control with automated horn and voice announcements, Marshal Review with recorded Start/Finish RSSI waveforms, and MultiGP Chapter race import and result upload.
-
-## Compatibility
-
-SlapRF supports DIY SlapRF timers and standard FPV timing hardware over USB or local network:
-
-| Timing Hardware | USB | Network (LAN) | Notes |
-| :--- | :---: | :---: | :--- |
-| **SlapRF** (XIAO ESP32-C5 Hub & Spoke) | ✅ | — | USB-C Hub dongle with wireless ESP-NOW Spoke timers (1–6 gates, section splits, built-in USB firmware flasher) |
-| **RotorHazard** | ✅ | ✅ | Direct USB serial nodes or LAN connection to a RotorHazard timing server (`HTTP` / `Socket.IO`) |
-| **ImmersionRC LapRF 8-Way** | — | ✅ | Ethernet LAN connection over the native LapRF binary protocol (`TCP :5403`) |
-
-## How SlapRF Hardware Works
+![SlapRF Hub and Spoke Setup](docs/slaprf-setup.jpg)
 
 A DIY **SlapRF** track uses one **Hub timer** and up to 6 **Spoke timers**:
 
@@ -63,6 +48,23 @@ flowchart LR
 ```
 
 You flash and configure SlapRF XIAO ESP32-C5 boards directly from the **Flasher** page in the local app. No compiler, Arduino IDE, or command-line flashing tool is required. Flashing runs in the browser over WebSerial, so use Chrome, Edge, or Opera on a desktop computer.
+
+## Intended Use
+
+SlapRF is a complete timing application with two main workflows:
+
+1. **Practice Timer**: Run open or structured practice sessions with spoken lap callouts, live 5.8 GHz signal traces, per-pilot threshold calibration, consistency metrics, and multi-gate section split analytics (`S1`, `S2`, `S3`, ...).
+2. **Race Management**: Manage full race events from pilot check-in to podium. Features include a visual stage and bracket editor (Double Elimination, Single Elimination, Qualifying, Open Qualifier, Points Mains, Chase the Ace, or custom round graphs), live Race Control with automated horn and voice announcements, Marshal Review with recorded Start/Finish RSSI waveforms, and MultiGP Chapter race import and result upload.
+
+## Compatibility
+
+SlapRF supports DIY SlapRF timers and standard FPV timing hardware over USB or local network:
+
+| Timing Hardware | USB | Network (LAN) | Notes |
+| :--- | :---: | :---: | :--- |
+| **SlapRF** (XIAO ESP32-C5 Hub & Spoke) | ✅ | — | USB-C Hub dongle with wireless ESP-NOW Spoke timers (1–6 gates, section splits, built-in USB firmware flasher) |
+| **RotorHazard** | ✅ | ✅ | Direct USB serial nodes or LAN connection to a RotorHazard timing server (`HTTP` / `Socket.IO`) |
+| **ImmersionRC LapRF 8-Way** | — | ✅ | Ethernet LAN connection over the native LapRF binary protocol (`TCP :5403`) |
 
 ## Parts List and Cost (DIY SlapRF Timers)
 
