@@ -92,6 +92,15 @@ void slaprf_rf58_enter(void);
  */
 int8_t esp_sdr_measure_5g_channel_dbm(uint16_t center_freq_mhz);
 
+/**
+ * Band power at `center_freq_mhz` (5180..5917 MHz) integrated linearly across `avg_captures` (1..4)
+ * back-to-back 1024-sample captures and encoded in 0.5 dB steps:
+ *   0       = receiver off / invalid frequency
+ *   1..255  = -127.5f + 0.5f * code (-127.0 .. 0.0 dBm)
+ * Only valid between slaprf_rf58_enter() and slaprf_rf58_leave().
+ */
+uint8_t esp_sdr_measure_5g_channel_half_dbm(uint16_t center_freq_mhz, int avg_captures);
+
 /** Return to the 2.4 GHz link channel and re-enable the transmitter. */
 void slaprf_rf58_leave(void);
 

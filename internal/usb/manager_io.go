@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"slaprf/internal/firmware"
+	"slaprf/internal/ingest"
 )
 
 // Connect opens `portName` on `slotIndex` (0..2), disarms the ESP32-C5 USB-Serial-JTAG latch,
@@ -530,6 +531,40 @@ func (m *Manager) attemptAutoReconnect(slot *usbSlot, portName string) {
 	slot.lastError = "Lost USB connection after 5 reconnect attempts."
 	slot.mu.Unlock()
 	m.broadcastPoolState()
+
+	// Continue watching quietly for the USB cable to be plugged back in unless the user disconnects
+	// or selects another port.
+	for {
+		time.Sleep(1500 * time.Millisecond)
+		m.mu.RLock()
+		closed := m.closed
+		sim := m.simMode
+		m.mu.RUnlock()
+		if closed || sim {
+			return
+		}
+		slot.mu.Lock()
+		stillWaiting := slot.port == nil && strings.EqualFold(slot.portName, portName) && portName != ""
+		slot.mu.Unlock()
+		if !stillWaiting {
+			return
+		}
+		if ports, err := m.listFn(); err == nil {
+			present := false
+			for _, p := range ports {
+				if strings.EqualFold(p.Name, portName) {
+					present = true
+					break
+				}
+			}
+			if !present {
+				continue
+			}
+		}
+		if _, err := m.Connect(slot.index, portName); err == nil {
+			return
+		}
+	}
 }
 
 func isValidHubFrame(frame []byte) bool {
@@ -674,17 +709,17 @@ func (m *Manager) handleHubBinaryFrame(slot *usbSlot, frame []byte) {
 		}
 		slot.hubHello[tdmaSlot] = slotHello{fp: fp, label: label, role: role, sweepHz: sweepHz}
 
-	case kind == 0x59:
+	case kind == ingest.FrameMagicWindow:
 		sampleCount := int(frame[3])
 		if sampleCount >= 1 && len(frame) >= 7+sampleCount*9+1 {
 			floor := int(int8(frame[6]))
 			newestOff := 7 + (sampleCount-1)*9
 			seq := frame[newestOff]
-			dbm := make([]int, 8)
+			dbm := make([]float64, 8)
 			for ch := 0; ch < 8; ch++ {
-				best := int(int8(frame[newestOff+1+ch]))
+				best := float64(ingest.DecodeHalfDbm(frame[newestOff+1+ch]))
 				for s := 0; s < sampleCount; s++ {
-					v := int(int8(frame[7+s*9+1+ch]))
+					v := float64(ingest.DecodeHalfDbm(frame[7+s*9+1+ch]))
 					if v > best {
 						best = v
 					}
@@ -705,12 +740,12 @@ func (m *Manager) handleHubBinaryFrame(slot *usbSlot, frame []byte) {
 			}
 		}
 
-	case kind == 0x58 && len(frame) >= 16:
+	case kind == ingest.FrameMagicSingle && len(frame) >= 16:
 		seq := frame[3]
 		floor := int(int8(frame[6]))
-		dbm := make([]int, 8)
+		dbm := make([]float64, 8)
 		for ch := 0; ch < 8; ch++ {
-			dbm[ch] = int(int8(frame[7+ch]))
+			dbm[ch] = float64(ingest.DecodeHalfDbm(frame[7+ch]))
 		}
 		prev := slot.hubLive[tdmaSlot]
 		slot.hubLive[tdmaSlot] = slotLive{
@@ -727,7 +762,7 @@ func (m *Manager) handleHubBinaryFrame(slot *usbSlot, frame []byte) {
 	}
 	synth := m.synthesizeHubStatusLocked(slot, nowMs)
 	var hubLive map[string]any
-	if (kind == 0x59 || kind == 0x58) && nowMs-slot.hubLiveEmitMs >= hubLiveEmitIntervalMs {
+	if (kind == ingest.FrameMagicWindow || kind == ingest.FrameMagicSingle) && nowMs-slot.hubLiveEmitMs >= hubLiveEmitIntervalMs {
 		slot.hubLiveEmitMs = nowMs
 		hubLive = hubLivePayloadLocked(slot, nowMs)
 	}

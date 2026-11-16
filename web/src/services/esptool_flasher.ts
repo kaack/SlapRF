@@ -218,10 +218,20 @@ function readoutFrom(bytes: Uint8Array): { readout: TimerReadout | null; complet
  * the port. Returns null when nothing usable answers (blank chip, other firmware, or bootloader).
  */
 export async function readIdentityOverWebSerial(port: WebSerialPort, waitMs = 1200): Promise<TimerReadout | null> {
-  try {
-    await port.open({ baudRate: 115200, bufferSize: 16384 });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
+  let openErr: unknown = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      await port.open({ baudRate: 115200, bufferSize: 16384 });
+      openErr = null;
+      break;
+    } catch (err) {
+      openErr = err;
+      await port.close().catch(() => undefined);
+      if (attempt < 2) await sleep(350);
+    }
+  }
+  if (openErr) {
+    const msg = openErr instanceof Error ? openErr.message : String(openErr);
     throw new Error(
       /already open|Failed to open/i.test(msg)
         ? "The USB port is in use by another app. Close other serial tools and try again."
@@ -239,12 +249,12 @@ export async function readIdentityOverWebSerial(port: WebSerialPort, waitMs = 12
     w.releaseLock();
   };
   try {
-    // Step (1,1) -> (1,0) -> (0,0) so opening/closing never resets the board.
-    await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
-    await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
-    await send();
+    // Step (1,1) -> (1,0) -> (0,0) with RTS cached first so opening/closing never resets the board.
+    await setLines(port, true, false);
+    await setLines(port, false, false);
     reader = port.readable?.getReader() ?? null;
     if (!reader) return null;
+    await send();
     const deadline = Date.now() + waitMs;
     let resent = false;
     while (Date.now() < deadline) {
@@ -278,15 +288,26 @@ export async function readIdentityOverWebSerial(port: WebSerialPort, waitMs = 12
   }
 }
 
-/** Reads the board's identity once, retrying while it boots. */
-async function readIdentityWithRetry(port: WebSerialPort, attempts: number): Promise<TimerReadout | null> {
+/** Reads the board's identity once, retrying while it boots (and optionally pulsing a clean app reboot if silent). */
+async function readIdentityWithRetry(
+  port: WebSerialPort,
+  attempts: number,
+  allowAppReboot = false
+): Promise<TimerReadout | null> {
   let last: unknown = null;
+  let rebooted = false;
   for (let i = 0; i < attempts; i++) {
     try {
-      const r = await readIdentityOverWebSerial(port);
+      const r = await readIdentityOverWebSerial(port, i === 0 ? 1200 : 1500);
       if (r) return r;
     } catch (err) {
       last = err;
+    }
+    if (allowAppReboot && !rebooted) {
+      rebooted = true;
+      await rebootIntoApp(port);
+      await sleep(1100);
+      continue;
     }
     if (i < attempts - 1) await sleep(800);
   }
@@ -302,7 +323,7 @@ export async function readXiaoC5WithWebSerial(): Promise<TimerReadout | null> {
   const port = await acquireEspSerialPort();
   const hold = await pauseServerConnection();
   try {
-    return await readIdentityWithRetry(port, 2);
+    return await readIdentityWithRetry(port, 2, true);
   } finally {
     void resumeServerConnection(hold);
   }
@@ -705,7 +726,7 @@ if (typeof window !== "undefined") {
       runAutomation(opts.index, async (port) => {
         const hold = await pauseServerConnection();
         try {
-          return await readIdentityWithRetry(port, 2);
+          return await readIdentityWithRetry(port, 2, true);
         } finally {
           void resumeServerConnection(hold);
         }

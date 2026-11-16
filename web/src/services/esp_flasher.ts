@@ -88,7 +88,7 @@ const FLASH_BLOCK_SIZE = 1024; // ESP32C5ROM.FLASH_WRITE_SIZE = 0x400 (1024 byte
 const ESP_IMAGE_MAGIC = 0xe9;
 
 /** Current firmware build (firmware/slaprf). */
-export const LATEST_FIRMWARE_VERSION = "v0.1.5";
+export const LATEST_FIRMWARE_VERSION = "v0.1.6";
 
 /** The one compiled firmware image, built from firmware/slaprf and served next to the app. */
 export const FIRMWARE_IMAGE_URL = "./firmware/slaprf-xiao-c5.bin";
@@ -349,8 +349,8 @@ export async function setUsbSerialDtrRts(port: SerialPortLike, dtr: boolean, rts
 }
 
 async function disarmUsbJtagPortLatch(port: SerialPortLike): Promise<void> {
-  await port.setSignals({ dataTerminalReady: true, requestToSend: false }).catch(() => undefined);
-  await port.setSignals({ dataTerminalReady: false, requestToSend: false }).catch(() => undefined);
+  await setUsbSerialDtrRts(port, true, false);
+  await setUsbSerialDtrRts(port, false, false);
 }
 
 async function enterUsbJtagBootloader(port: SerialPortLike): Promise<void> {

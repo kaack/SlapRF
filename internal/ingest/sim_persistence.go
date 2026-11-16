@@ -26,7 +26,7 @@ type SimPilotPersistedState struct {
 }
 
 // SimModelVersion identifies the simulated Hub/Spoke model stored in persisted sim state.
-// Version 3: simulated timers record 4-sample sliding windows (0xC5 0x59) and require Hub H1
+// Version 3: simulated timers record 4-sample sliding windows (0xC5 0x60) and require Hub H1
 // to be connected over USB before telemetry or laps enter the timing engine.
 // Saved state from another version is discarded (see SimStateCompatible).
 const SimModelVersion = 3

@@ -186,3 +186,25 @@ func TestSelectivePilotChannelTableAndUpperPoolMapping(t *testing.T) {
 		t.Fatalf("expected hardware slot 4 RSSI (-47 dBm) to map to Pilot 10 (idx 9), got %+v", decoded)
 	}
 }
+
+func TestDecodeWindowFrameHalfDbResolution(t *testing.T) {
+	eng := tracker.NewRealEngine()
+	rx := NewHubFrameDecoder(eng)
+	rx.IngestPacket(EncodeHelloFrame(2, 2, 0xABCD1234, 100, "T1"), 100_000)
+
+	var sample domain.TimerTelemetryFrame
+	sample.SeqNum = 42
+	sample.RSSI[0] = -89.5
+	sample.RSSI[1] = -42.5
+	sample.RSSI[2] = -127.0
+	sample.RSSI[3] = 0.0
+	pkt := EncodeWindowFrame(2, 4100, -91, []domain.TimerTelemetryFrame{sample})
+
+	frames := rx.DecodePacket(pkt, 120_000)
+	if len(frames) != 1 {
+		t.Fatalf("expected 1 decoded frame from 0x60 packet, got %d", len(frames))
+	}
+	if frames[0].RSSI[0] != -89.5 || frames[0].RSSI[1] != -42.5 || frames[0].RSSI[2] != -127.0 || frames[0].RSSI[3] != 0.0 {
+		t.Fatalf("unexpected 0.5 dB decoded values: %v", frames[0].RSSI[:4])
+	}
+}

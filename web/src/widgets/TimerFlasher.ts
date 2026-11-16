@@ -508,6 +508,7 @@ export class TimerFlasher extends Component {
             <li><strong>Use a good USB-C cable.</strong> A known, good-quality data cable (USB 3.x is best) works much better than a cheap or charge-only cable.</li>
             <li><strong>Plug straight into the computer.</strong> Do not use a USB hub, dock, or extension cable while you flash.</li>
             <li><strong>Flash one board at a time</strong> in Chrome, Edge, or Opera. If a board stops responding, unplug it (and its battery) for a few seconds, then try again.</li>
+            <li><strong>Keep the Hub and all Spokes on the same firmware version.</strong> When updating firmware, reflash both the Hub and every Spoke on the course.</li>
           </ul>
         </div>
 

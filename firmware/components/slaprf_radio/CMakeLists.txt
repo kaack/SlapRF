@@ -4,8 +4,9 @@ idf_component_register(
     REQUIRES esp_wifi esp_netif esp_event esp_timer nvs_flash lwip esp_driver_usb_serial_jtag esp_driver_gpio esp_driver_ledc heap esp_phy spi_flash
 )
 
-# Capture panic PC/cause into RTC memory (reported by the PANIC? USB command).
-target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_panic_handler")
+# Capture panic PC/cause into RTC memory (reported by the PANIC? USB command), and skip the
+# redundant 300 us spin after phy_wait_rfpll_cal_end solely during 5.8 GHz RX sweeps.
+target_link_libraries(${COMPONENT_LIB} INTERFACE "-Wl,--wrap=esp_panic_handler" "-Wl,--wrap=ets_delay_us")
 
 # Bench diagnostics: build with the 5.8 GHz capture engine stubbed out (env SLAPRF_RF58_DISABLED=1).
 if(DEFINED ENV{SLAPRF_RF58_DISABLED})

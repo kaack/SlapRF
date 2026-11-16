@@ -103,6 +103,7 @@ flowchart LR
 - **Plug the board straight into the computer.** Do not use a USB hub, dock, or extension cable while you flash.
 - **Use Chrome, Edge, or Opera on a desktop computer.** Flashing uses WebSerial. Firefox and Safari do not support it.
 - **Flash one board at a time.** When the browser asks for a USB port, pick the **USB JTAG/serial** device of the board you want to flash.
+- **Keep the Hub and all Spokes on the same firmware version.** When updating firmware, reflash both the Hub and every Spoke timer so their wire protocol matches.
 - **If a board stops responding,** unplug it for a few seconds (also disconnect its battery, if one is attached), plug it back in, and try again. The BOOT button is not needed for normal flashing.
 
 ## Powering

@@ -94,7 +94,7 @@ type slotLive struct {
 	frames        int
 	lastFrameAtMs int64
 	seq           uint8
-	dbm           []int
+	dbm           []float64
 	floor         int
 }
 
@@ -125,7 +125,7 @@ type usbSlot struct {
 	sawRomBootloader     bool
 
 	hubOwnFrames int
-	hubLastDbm   []int
+	hubLastDbm   []float64
 	// Last time a throttled "hub_live" event (per-slot RSSI) was sent to browsers.
 	hubLiveEmitMs int64
 	hubHello      map[uint8]slotHello

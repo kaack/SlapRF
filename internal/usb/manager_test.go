@@ -113,17 +113,18 @@ func buildHelloFrame(slot uint8, role uint8, fp uint32, label string) []byte {
 	return f
 }
 
-func buildSingleTelemetryFrame(slot uint8, seq uint8, rssi int8) []byte {
+func buildSingleTelemetryFrame(slot uint8, seq uint8, rssi float32) []byte {
 	f := make([]byte, 16)
 	f[0] = 0xC5
-	f[1] = 0x58
+	f[1] = ingest.FrameMagicSingle
 	f[2] = slot
 	f[3] = seq
 	binary.LittleEndian.PutUint16(f[4:6], 4980)
 	var floor int8 = -92
 	f[6] = byte(floor)
+	code := ingest.EncodeHalfDbm(rssi)
 	for ch := 0; ch < 8; ch++ {
-		f[7+ch] = byte(rssi)
+		f[7+ch] = code
 	}
 	var crc byte
 	for i := 0; i < 15; i++ {

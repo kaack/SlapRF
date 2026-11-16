@@ -740,7 +740,7 @@ export class SimulatedSerialPort implements SerialPortLike {
   }
 
   /**
-   * Emits raw `0x1E`-prefixed binary Hub packets (`0xC5 0x5A` HELLO and `0xC5 0x59` 4-sample
+   * Emits raw `0x1E`-prefixed binary Hub packets (`0xC5 0x5A` HELLO and `0xC5 0x60` 4-sample
    * sliding-window recording frames) out of the simulated Hub's USB serial port.
    */
   public emitHubStreamBytes(bytes: Uint8Array): void {

@@ -32,6 +32,7 @@
 
 #include "driver/gpio.h"
 #include "driver/usb_serial_jtag.h"
+#include "hal/usb_serial_jtag_ll.h"
 #include "esp_attr.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
@@ -231,7 +232,11 @@ static void tx_raw(const void *data, size_t len) {
     const uint8_t *p = (const uint8_t *)data;
     while (len > 0) {
         const size_t chunk = len > 128 ? 128 : len;
+        if (!usb_serial_jtag_ll_txfifo_writable()) {
+            usb_serial_jtag_ll_txfifo_flush();
+        }
         if (usb_serial_jtag_write_bytes(p, chunk, pdMS_TO_TICKS(120)) <= 0) {
+            usb_serial_jtag_ll_txfifo_flush();
             // Host not reading (port closed or browser refreshed): stop all background streams
             // immediately so the TX ringbuffer stops filling and the main loop never stalls.
             s_live = 0;
@@ -963,6 +968,10 @@ static void status_push_task(void *arg) {
     (void)arg;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(1000));
+        if (!usb_serial_jtag_ll_txfifo_writable()) {
+            // Flush any ROM boot bytes left in the 64-byte EP1 IN FIFO before USB enumeration completed.
+            usb_serial_jtag_ll_txfifo_flush();
+        }
         if (s_host_attached && !s_scan_live) {
             send_status();
         }
@@ -1005,6 +1014,7 @@ void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
         .rx_buffer_size = 512,
     };
     if (usb_serial_jtag_driver_install(&usb_cfg) == ESP_OK) {
+        usb_serial_jtag_ll_txfifo_flush();
         // Priority 2 (above app_main at priority 1, which busy-spins the final stretch of each tick):
         // ensures USB commands such as STATUS? and SLAPRF? preempt the sweep loop immediately.
         xTaskCreate(console_task, "slaprf_diag", 4096, NULL, 2, NULL);
@@ -1051,6 +1061,14 @@ void slaprf_diag_note_spoke_rx(uint8_t slot) {
     p->frames++;
 }
 
+static inline int8_t halfdb_code_to_dbm_i8(uint8_t code) {
+    if (code == 0U) return -127;
+    int v = -128 + ((int)code + 1) / 2;
+    if (v < -127) v = -127;
+    if (v > 0) v = 0;
+    return (int8_t)v;
+}
+
 void slaprf_diag_note_spoke_frame(const uint8_t *frame, uint32_t len) {
     if (frame == NULL || len < 4) return;
     const uint8_t slot = frame[2];
@@ -1061,7 +1079,7 @@ void slaprf_diag_note_spoke_frame(const uint8_t *frame, uint32_t len) {
     if (p->label[0] == '\0') {
         snprintf(p->label, sizeof(p->label), "T%u", (unsigned)(slot - 1));
     }
-    if (frame[1] == 0x59) { // FRAME_MAGIC_WINDOW
+    if (frame[1] == 0x60) { // FRAME_MAGIC_WINDOW (0.5 dB)
         const uint8_t sample_count = frame[3];
         if (sample_count >= 1 && len >= 7U + (uint32_t)sample_count * 9U + 1U) {
             p->batt_mv = (uint16_t)frame[4] | ((uint16_t)frame[5] << 8);
@@ -1069,21 +1087,21 @@ void slaprf_diag_note_spoke_frame(const uint8_t *frame, uint32_t len) {
             const uint32_t newest_off = 7U + (uint32_t)(sample_count - 1U) * 9U;
             p->last_seq = frame[newest_off];
             for (int ch = 0; ch < 8; ch++) {
-                int8_t best = (int8_t)frame[newest_off + 1U + (uint32_t)ch];
+                int8_t best = halfdb_code_to_dbm_i8(frame[newest_off + 1U + (uint32_t)ch]);
                 for (uint8_t s = 0; s < sample_count; s++) {
-                    const int8_t v = (int8_t)frame[7U + (uint32_t)s * 9U + 1U + (uint32_t)ch];
+                    const int8_t v = halfdb_code_to_dbm_i8(frame[7U + (uint32_t)s * 9U + 1U + (uint32_t)ch]);
                     if (v > best) best = v;
                 }
                 p->dbm[ch] = best;
             }
             p->has_dbm = true;
         }
-    } else if (frame[1] == 0x58 && len >= 16U) { // FRAME_MAGIC_SINGLE
+    } else if (frame[1] == 0x61 && len >= 16U) { // FRAME_MAGIC_SINGLE (0.5 dB)
         p->last_seq = frame[3];
         p->batt_mv = (uint16_t)frame[4] | ((uint16_t)frame[5] << 8);
         p->floor_dbm = (int8_t)frame[6];
         for (int ch = 0; ch < 8; ch++) {
-            p->dbm[ch] = (int8_t)frame[7 + ch];
+            p->dbm[ch] = halfdb_code_to_dbm_i8(frame[7 + ch]);
         }
         p->has_dbm = true;
     }

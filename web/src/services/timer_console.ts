@@ -909,6 +909,7 @@ export class TimerConsole {
    */
   private async disarmUsbJtagLatch(port: SerialPortLike): Promise<void> {
     try {
+      await withTimeout(port.setSignals({ requestToSend: false }), 150);
       await withTimeout(port.setSignals({ dataTerminalReady: true, requestToSend: false }), 150);
       await withTimeout(port.setSignals({ dataTerminalReady: false, requestToSend: false }), 150);
     } catch {
@@ -1424,7 +1425,8 @@ export class TimerConsole {
         const label = this.decoder.decode(src.subarray(at + 10, labelEnd)).trim() || (slot === 1 ? "H1" : `T${slot - 1}`);
         this.hubSlotHello.set(slot, { fp, label, role, sweepHz });
         this.synthesizeHubStatusIfNeeded();
-      } else if (kind === 0x59) {
+      } else if (kind === 0x60) {
+        const decodeVal = (b: number): number => (b === 0 ? -127 : -127.5 + 0.5 * b);
         const sampleCount = src[at + 3];
         if (sampleCount >= 1 && len >= 7 + sampleCount * 9 + 1) {
           const now = Date.now();
@@ -1433,9 +1435,9 @@ export class TimerConsole {
           const seq = src[newestOff];
           const dbm: number[] = [];
           for (let ch = 0; ch < 8; ch++) {
-            let best = (src[newestOff + 1 + ch] << 24) >> 24;
+            let best = decodeVal(src[newestOff + 1 + ch]);
             for (let s = 0; s < sampleCount; s++) {
-              const v = (src[at + 7 + s * 9 + 1 + ch] << 24) >> 24;
+              const v = decodeVal(src[at + 7 + s * 9 + 1 + ch]);
               if (v > best) best = v;
             }
             dbm.push(best);
@@ -1456,13 +1458,14 @@ export class TimerConsole {
           }
           this.synthesizeHubStatusIfNeeded();
         }
-      } else if (kind === 0x58) {
+      } else if (kind === 0x61) {
+        const decodeVal = (b: number): number => (b === 0 ? -127 : -127.5 + 0.5 * b);
         const now = Date.now();
         const seq = src[at + 3];
         const floor = (src[at + 6] << 24) >> 24;
         const dbm: number[] = [];
         for (let ch = 0; ch < 8; ch++) {
-          dbm.push((src[at + 7 + ch] << 24) >> 24);
+          dbm.push(decodeVal(src[at + 7 + ch]));
         }
         const prev = this.hubSlotLive.get(slot);
         this.hubSlotLive.set(slot, {
@@ -1493,7 +1496,7 @@ export class TimerConsole {
   }
 
   /**
-   * When a Hub is streaming binary frames (`0xC5 0x59` / `0xC5 0x5A`) at Priority 1 while its
+   * When a Hub is streaming binary frames (`0xC5 0x60` / `0xC5 0x5A`) at Priority 1 while its
    * Priority 0 `STATUS?` task is delayed under heavy Spoke traffic, synthesize/refresh `lastStatus`
    * directly from the binary Hub stream so the Hub is recognized immediately on connect.
    */

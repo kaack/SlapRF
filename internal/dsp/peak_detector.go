@@ -20,12 +20,48 @@ type samplePoint struct {
 	rssiDbm     float32
 }
 
+const (
+	// rearmTimeoutUs re-arms a detector whose signal never dropped back below the entry
+	// threshold after a crossing (quad lingering by the gate). Duplicate passes that slip
+	// through are then handled by the engine's gate cool-down rule.
+	rearmTimeoutUs = 2_500_000
+
+	// medianWindowUs bounds the spike-rejection running median window (4-5 samples @ 100 Hz,
+	// 2-3 samples @ 50 Hz), stripping multipath/sync spikes before EMA smoothing.
+	medianWindowUs  = 35_000
+	maxMedianPoints = 5
+
+	// liveEmaTauUs is the time constant of the dt-aware causal EMA after the median filter.
+	// At 100 Hz (dt = 10 ms), alpha ≈ 0.34, smoothing quantization/RF scatter while staying
+	// crisp enough to drop below exitThreshold on rapid back-to-back gate transitions.
+	liveEmaTauUs = 24_000.0
+
+	// zeroPhaseTauUs is the per-direction time constant of the forward-backward (filtfilt)
+	// smoother applied to the completed pass window when computing the exact crossing time.
+	zeroPhaseTauUs = 25_000.0
+
+	// maxGapResetUs resets filter history after a telemetry gap (> 250 ms) so stale readings
+	// never bleed across reconnects or channel changes.
+	maxGapResetUs = 250_000
+
+	// disabledCutoffDbm identifies muted / unmeasured channels (-127 dBm).
+	disabledCutoffDbm = -120.0
+
+	prePassRingCap = 8
+)
+
 // ChannelDetector tracks the real-time 5.8 GHz RSSI envelope for a single (GateID, PilotSlot) pair.
 type ChannelDetector struct {
 	gateID          uint8
 	slotIndex       int
 	smoothedRSSI    float32
 	initialized     bool
+	prevSampleTsUs  uint64
+	medRing         [maxMedianPoints]samplePoint
+	medCount        int
+	prePassRing     [prePassRingCap]samplePoint
+	prePassHead     int
+	prePassCount    int
 	inGate          bool
 	peakRSSI        float32
 	peakTimestampUs uint64
@@ -33,25 +69,22 @@ type ChannelDetector struct {
 	lastCrossingUs  uint64
 	hasCrossed      bool
 	awaitingRearm   bool
-	windowSamples   []samplePoint
+	windowSamples   []samplePoint // Smoothed envelope samples (for -6 dB beamwidth)
+	passMedSamples  []samplePoint // Delay-centered median samples (for zero-phase peak timing)
 }
-
-// rearmTimeoutUs re-arms a detector whose signal never dropped back below the entry
-// threshold after a crossing (quad lingering by the gate). Duplicate passes that slip
-// through are then handled by the engine's gate cool-down rule.
-const rearmTimeoutUs = 2_500_000
 
 // NewChannelDetector initializes a stateful RSSI peak detector for one gate timer and one pilot slot.
 func NewChannelDetector(gateID uint8, slotIndex int) *ChannelDetector {
 	return &ChannelDetector{
-		gateID:        gateID,
-		slotIndex:     slotIndex,
-		smoothedRSSI:  -92.0,
-		windowSamples: make([]samplePoint, 0, 64),
+		gateID:         gateID,
+		slotIndex:      slotIndex,
+		smoothedRSSI:   -92.0,
+		windowSamples:  make([]samplePoint, 0, 96),
+		passMedSamples: make([]samplePoint, 0, 96),
 	}
 }
 
-// SmoothedRSSI returns the current low-pass filtered RSSI in dBm.
+// SmoothedRSSI returns the current spike-rejected, low-pass filtered RSSI in dBm.
 func (d *ChannelDetector) SmoothedRSSI() float32 {
 	return d.smoothedRSSI
 }
@@ -65,6 +98,71 @@ func (d *ChannelDetector) RearmIfBelow(exitThresholdDbm float32) {
 	}
 }
 
+func (d *ChannelDetector) resetFilterState(rssi float32, tsUs uint64) {
+	d.smoothedRSSI = rssi
+	d.prevSampleTsUs = tsUs
+	d.medCount = 0
+	d.prePassCount = 0
+	d.prePassHead = 0
+	if rssi > disabledCutoffDbm {
+		d.medRing[0] = samplePoint{timestampUs: tsUs, rssiDbm: rssi}
+		d.medCount = 1
+	}
+}
+
+func (d *ChannelDetector) pushMedianSample(rawRSSI float32, tsUs uint64) (float32, uint64) {
+	// Evict samples older than medianWindowUs so the window spans <= 45 ms at any sweep rate.
+	keepFrom := 0
+	for keepFrom < d.medCount && tsUs > d.medRing[keepFrom].timestampUs &&
+		tsUs-d.medRing[keepFrom].timestampUs > medianWindowUs {
+		keepFrom++
+	}
+	if keepFrom > 0 {
+		copy(d.medRing[:], d.medRing[keepFrom:d.medCount])
+		d.medCount -= keepFrom
+	}
+	if d.medCount == maxMedianPoints {
+		copy(d.medRing[:], d.medRing[1:maxMedianPoints])
+		d.medCount = maxMedianPoints - 1
+	}
+	d.medRing[d.medCount] = samplePoint{timestampUs: tsUs, rssiDbm: rawRSSI}
+	d.medCount++
+
+	// Insertion sort a tiny stack copy (1..5 elements) to extract the exact median.
+	var vals [maxMedianPoints]float32
+	for i := 0; i < d.medCount; i++ {
+		v := d.medRing[i].rssiDbm
+		j := i
+		for j > 0 && vals[j-1] > v {
+			vals[j] = vals[j-1]
+			j--
+		}
+		vals[j] = v
+	}
+	var med float32
+	mid := d.medCount / 2
+	if d.medCount%2 == 1 {
+		med = vals[mid]
+	} else {
+		med = 0.5 * (vals[mid-1] + vals[mid])
+	}
+	// Tag the median with the midpoint of the active window so symmetric window delay is removed.
+	oldestTs := d.medRing[0].timestampUs
+	centerTs := oldestTs + (tsUs-oldestTs)/2
+	return med, centerTs
+}
+
+func (d *ChannelDetector) pushPrePassSample(pt samplePoint) {
+	if d.prePassCount < prePassRingCap {
+		idx := (d.prePassHead + d.prePassCount) % prePassRingCap
+		d.prePassRing[idx] = pt
+		d.prePassCount++
+		return
+	}
+	d.prePassRing[d.prePassHead] = pt
+	d.prePassHead = (d.prePassHead + 1) % prePassRingCap
+}
+
 // ProcessSample ingests a single RSSI sample (in dBm) at timestampUs and returns a CrossingCandidate
 // if a gate crossing peak was just confirmed by an exit nadir.
 func (d *ChannelDetector) ProcessSample(
@@ -74,16 +172,35 @@ func (d *ChannelDetector) ProcessSample(
 	exitThresholdDbm float32,
 	minLockoutUs uint64,
 ) *CrossingCandidate {
-	// 1. Exponential moving average low-pass filter (alpha = 0.38 balances multipath rejection & sharp peak response)
-	const alpha = 0.38
-	if !d.initialized {
-		d.smoothedRSSI = rawRSSIDbm
+	// Handle disabled / survey-muted channels (-127 dBm) immediately without filter lag.
+	if rawRSSIDbm <= disabledCutoffDbm {
+		d.resetFilterState(rawRSSIDbm, timestampUs)
 		d.initialized = true
+		return nil
+	}
+
+	// 1. Spike-rejecting 45 ms time-window median + dt-weighted EMA low-pass filter.
+	var medVal float32
+	var medCenterTs uint64
+	if !d.initialized || d.smoothedRSSI <= disabledCutoffDbm ||
+		timestampUs < d.prevSampleTsUs || timestampUs-d.prevSampleTsUs > maxGapResetUs {
+		d.initialized = true
+		d.resetFilterState(rawRSSIDbm, timestampUs)
+		medVal = rawRSSIDbm
+		medCenterTs = timestampUs
 	} else {
-		d.smoothedRSSI = alpha*rawRSSIDbm + (1.0-alpha)*d.smoothedRSSI
+		dtUs := timestampUs - d.prevSampleTsUs
+		d.prevSampleTsUs = timestampUs
+		medVal, medCenterTs = d.pushMedianSample(rawRSSIDbm, timestampUs)
+		if dtUs < 1_000 {
+			dtUs = 1_000
+		}
+		alpha := float32(1.0 - math.Exp(-float64(dtUs)/liveEmaTauUs))
+		d.smoothedRSSI += alpha * (medVal - d.smoothedRSSI)
 	}
 
 	s := d.smoothedRSSI
+	medPt := samplePoint{timestampUs: medCenterTs, rssiDbm: medVal}
 
 	effectiveExit := exitThresholdDbm
 	if effectiveExit == 0 || effectiveExit > enterThresholdDbm-2.0 {
@@ -97,30 +214,49 @@ func (d *ChannelDetector) ProcessSample(
 		// lingering timeout), so the tail of one pass cannot re-trigger as a second pass.
 		if d.awaitingRearm {
 			rearmed := s <= effectiveExit ||
-				(s <= enterThresholdDbm-4.0 && timestampUs-d.lastCrossingUs >= 900_000) ||
-				(s < enterThresholdDbm && timestampUs-d.lastCrossingUs >= rearmTimeoutUs)
+				(s <= enterThresholdDbm-4.0 && timestampUs >= d.lastCrossingUs+900_000) ||
+				(s < enterThresholdDbm && timestampUs >= d.lastCrossingUs+rearmTimeoutUs)
 			if !rearmed {
+				d.pushPrePassSample(medPt)
 				return nil
 			}
 			d.awaitingRearm = false
 		}
-		lockedOut := d.hasCrossed && timestampUs-d.lastCrossingUs <= minLockoutUs
+		lockedOut := d.hasCrossed && timestampUs <= d.lastCrossingUs+minLockoutUs
 		if s >= enterThresholdDbm && !lockedOut {
 			d.inGate = true
 			d.peakRSSI = s
-			d.peakTimestampUs = timestampUs
+			d.peakTimestampUs = medCenterTs
 			d.enterTimeUs = timestampUs
 			d.windowSamples = d.windowSamples[:0]
 			d.windowSamples = append(d.windowSamples, samplePoint{timestampUs: timestampUs, rssiDbm: s})
+
+			// Seed passMedSamples with recent pre-entry median samples so zero-phase forward-backward
+			// smoothing sees the full rising edge of fast passes.
+			d.passMedSamples = d.passMedSamples[:0]
+			for i := 0; i < d.prePassCount; i++ {
+				pt := d.prePassRing[(d.prePassHead+i)%prePassRingCap]
+				if medCenterTs >= pt.timestampUs && medCenterTs-pt.timestampUs <= maxGapResetUs {
+					d.passMedSamples = append(d.passMedSamples, pt)
+				}
+			}
+			d.passMedSamples = append(d.passMedSamples, medPt)
+			d.prePassCount = 0
+			d.prePassHead = 0
+		} else {
+			d.pushPrePassSample(medPt)
 		}
 		return nil
 	}
 
-	// 3. Inside gate proximity window: record sample & update peak
+	// 3. Inside gate proximity window: record sample & update peak.
 	d.windowSamples = append(d.windowSamples, samplePoint{timestampUs: timestampUs, rssiDbm: s})
+	if len(d.passMedSamples) == 0 || medPt.timestampUs >= d.passMedSamples[len(d.passMedSamples)-1].timestampUs {
+		d.passMedSamples = append(d.passMedSamples, medPt)
+	}
 	if s > d.peakRSSI {
 		d.peakRSSI = s
-		d.peakTimestampUs = timestampUs
+		d.peakTimestampUs = medCenterTs
 	}
 
 	// 4. Check gate exit (dual-threshold Schmitt hysteresis):
@@ -129,17 +265,20 @@ func (d *ChannelDetector) ProcessSample(
 	// (enterThreshold - 4 dB) and exitThreshold, confirm once the drone has clearly exited
 	// the entry zone (>= 16 dB below peak and >= 700 ms past closest approach).
 	exited := s <= effectiveExit
-	if !exited && s <= enterThresholdDbm-4.0 && (d.peakRSSI-s) >= 16.0 && timestampUs >= d.peakTimestampUs+700_000 {
+	if !exited && s <= enterThresholdDbm-4.0 && (d.peakRSSI-s) >= 16.0 && medCenterTs >= d.peakTimestampUs+700_000 {
 		exited = true
 	}
 
 	if exited {
 		d.inGate = false
-		d.lastCrossingUs = d.peakTimestampUs
+		refinedTimeUs, zeroPhasePeak := d.refineCrossingPeak()
+		if zeroPhasePeak > d.peakRSSI {
+			d.peakRSSI = zeroPhasePeak
+		}
+		d.lastCrossingUs = refinedTimeUs
 		d.hasCrossed = true
 		d.awaitingRearm = true
 
-		refinedTimeUs := d.interpolatePeakTimeUs()
 		beamwidthMs, speedMph := d.estimateBeamwidthAndSpeed()
 
 		// Convert dBm (-85..-20 dBm) to ImmersionRC LapRF peak height scale (approx 600..3600)
@@ -164,47 +303,110 @@ func (d *ChannelDetector) ProcessSample(
 	return nil
 }
 
-// interpolatePeakTimeUs performs 3-point parabolic interpolation around the discrete maximum sample
-// for sub-millisecond crossing precision.
-func (d *ChannelDetector) interpolatePeakTimeUs() uint64 {
-	n := len(d.windowSamples)
+// refineCrossingPeak runs a zero-phase forward-backward (filtfilt) pass over the buffered
+// median samples of the crossing and computes the squared-excess centroid across the top
+// 2.0 dB peak plateau. This eliminates both causal EMA lag (across all drone speeds and
+// race-start holeshots) and single-sample argmax shoulder jitter on broad or dipole-null passes.
+func (d *ChannelDetector) refineCrossingPeak() (uint64, float32) {
+	pts := d.passMedSamples
+	n := len(pts)
 	if n < 3 {
-		return d.peakTimestampUs
+		return d.peakTimestampUs, d.peakRSSI
 	}
-	maxIdx := -1
-	var maxVal float32 = -999
-	for i, pt := range d.windowSamples {
-		if pt.rssiDbm > maxVal {
-			maxVal = pt.rssiDbm
+
+	fwd := make([]float64, n)
+	fwd[0] = float64(pts[0].rssiDbm)
+	for i := 1; i < n; i++ {
+		dt := float64(pts[i].timestampUs - pts[i-1].timestampUs)
+		if dt < 1_000 {
+			dt = 1_000
+		} else if dt > 100_000 {
+			dt = 100_000
+		}
+		a := 1.0 - math.Exp(-dt/zeroPhaseTauUs)
+		fwd[i] = fwd[i-1] + a*(float64(pts[i].rssiDbm)-fwd[i-1])
+	}
+
+	zp := make([]float64, n)
+	zp[n-1] = fwd[n-1]
+	maxIdx := n - 1
+	maxVal := zp[n-1]
+	for i := n - 2; i >= 0; i-- {
+		dt := float64(pts[i+1].timestampUs - pts[i].timestampUs)
+		if dt < 1_000 {
+			dt = 1_000
+		} else if dt > 100_000 {
+			dt = 100_000
+		}
+		a := 1.0 - math.Exp(-dt/zeroPhaseTauUs)
+		zp[i] = zp[i+1] + a*(fwd[i]-zp[i+1])
+		if zp[i] > maxVal {
+			maxVal = zp[i]
 			maxIdx = i
 		}
 	}
-	if maxIdx <= 0 || maxIdx >= n-1 {
-		return d.peakTimestampUs
+
+	// Compute the squared-excess centroid across the top 2.0 dB plateau around maxIdx
+	// (bounded to ±600 ms around maxIdx so lingering near a gate cannot skew the peak).
+	const plateauCapDb = 2.0
+	const weightBaseDb = 2.2
+	const maxSpanFromPeakUs = 600_000
+
+	peakTs := pts[maxIdx].timestampUs
+	cutoff := maxVal - plateauCapDb
+	base := maxVal - weightBaseDb
+
+	tRef := float64(peakTs)
+	var sumW, sumWT float64
+	count := 0
+	for i := 0; i < n; i++ {
+		if zp[i] < cutoff {
+			continue
+		}
+		var dist uint64
+		if pts[i].timestampUs > peakTs {
+			dist = pts[i].timestampUs - peakTs
+		} else {
+			dist = peakTs - pts[i].timestampUs
+		}
+		if dist > maxSpanFromPeakUs {
+			continue
+		}
+		excess := zp[i] - base
+		w := excess * excess
+		sumW += w
+		sumWT += w * (float64(pts[i].timestampUs) - tRef)
+		count++
 	}
 
-	y0 := float64(d.windowSamples[maxIdx-1].rssiDbm)
-	y1 := float64(d.windowSamples[maxIdx].rssiDbm)
-	y2 := float64(d.windowSamples[maxIdx+1].rssiDbm)
+	// If only 1 discrete sample cleared the 2.0 dB cap (ultra-fast spike pass), fall back to
+	// 3-point parabolic interpolation around maxIdx on the zero-phase curve.
+	if count <= 1 && maxIdx > 0 && maxIdx < n-1 {
+		y0, y1, y2 := zp[maxIdx-1], zp[maxIdx], zp[maxIdx+1]
+		denom := 2.0 * (2.0*y1 - y0 - y2)
+		if math.Abs(denom) > 1e-5 {
+			delta := (y2 - y0) / denom
+			if delta < -0.5 {
+				delta = -0.5
+			} else if delta > 0.5 {
+				delta = 0.5
+			}
+			if delta >= 0 {
+				dt := float64(pts[maxIdx+1].timestampUs - pts[maxIdx].timestampUs)
+				return uint64(tRef + delta*dt), float32(maxVal)
+			}
+			dt := float64(pts[maxIdx].timestampUs - pts[maxIdx-1].timestampUs)
+			return uint64(tRef + delta*dt), float32(maxVal)
+		}
+	}
 
-	denom := 2.0 * (2.0*y1 - y0 - y2)
-	if math.Abs(denom) < 1e-5 {
-		return d.peakTimestampUs
+	if sumW > 0 {
+		refined := tRef + sumWT/sumW
+		if refined > 0 {
+			return uint64(math.Round(refined)), float32(maxVal)
+		}
 	}
-	delta := (y2 - y0) / denom // Fractional sample offset in [-0.5, +0.5]
-	if delta < -0.5 {
-		delta = -0.5
-	} else if delta > 0.5 {
-		delta = 0.5
-	}
-
-	t1 := float64(d.windowSamples[maxIdx].timestampUs)
-	if delta >= 0 {
-		dt := float64(d.windowSamples[maxIdx+1].timestampUs - d.windowSamples[maxIdx].timestampUs)
-		return uint64(t1 + delta*dt)
-	}
-	dt := float64(d.windowSamples[maxIdx].timestampUs - d.windowSamples[maxIdx-1].timestampUs)
-	return uint64(t1 + delta*dt)
+	return peakTs, float32(maxVal)
 }
 
 // estimateBeamwidthAndSpeed computes the -6 dB width of the RF pass curve and estimates airspeed in mph.

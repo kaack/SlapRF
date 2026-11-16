@@ -49,8 +49,9 @@ Without a compiled image, the flasher falls back to a placeholder image. It flas
 
 ## Wire protocol (keep in sync with the Go and TypeScript sides)
 
+- **Same firmware version across the fleet:** The Hub and all Spokes on a course must run the same firmware version (`WIRE_PROTO_VER = 2` is checked on Spoke `JOIN`; mismatched Spokes are rejected until reflashed).
 - `SLAPRF02` 160-byte config block: layout in `internal/firmware/image.go` and `web/src/services/esp_flasher.ts`.
-- ESP-NOW frames: window `0xC5 0x59` (up to 6 sweeps), Hello `0xC5 0x5A`, Join `0x5B`, Assign `0x5C`, Hub beacon `0x5D` (inside `slaprf_radio`). Laptop side in `internal/ingest/hub_frames.go`.
+- ESP-NOW & Hub USB frames: `0.5 dB` sliding window `0xC5 0x60` (up to 6 sweeps, `uint8_t` codes `0 = disabled/-127.0 dBm`, `1..255 = -127.5 + 0.5*code`), `0.5 dB` single sweep `0xC5 0x61`, Hello `0xC5 0x5A`, Join `0x5B`, Assign `0x5C`, Hub beacon `0x5D`, Active channel table `0xC5 0x5E` (inside `slaprf_radio`). Laptop side in `internal/ingest/hub_frames.go`.
 - USB: the running firmware answers `SLAPRF?\n` with its raw config block (so the flasher can keep a board's fingerprint when reflashing) and provides an interactive line-based diagnostic console (`STATUS?`, `LIVE 1/2/0`, `SCAN`, `SCAN LIVE`, `SCAN STOP`, `CHANNELS`, `CHANNELS MASK`, `CHANNELS RESET`, `RF 1/0`, `EMERGENCY 1/0`, `HUBGATE 1/0`, `LINKRATE`, `TXPOWER`, `LINKRESET`, `LOG 1/0`, `BOOTLOG?`, `LASTLOG?`, `REBOOT`, `HELP`) used by the WebApp's Network and Debug pages.
 
 ## 5.8 GHz sensing on the C5

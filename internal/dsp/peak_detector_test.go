@@ -63,9 +63,100 @@ func TestCrossingTimestampIsNearClosestApproach(t *testing.T) {
 	// Closest approach happens 60 m / 30 m/s = 2.0 s after the first sample (t0 = 1.0 s).
 	const expectedUs = 3_000_000
 	errMs := math.Abs(float64(crossings[0].TimestampUs)-expectedUs) / 1000
-	// EMA smoothing adds a small, consistent lag; it must stay well inside one 50 Hz frame budget x3.
-	if errMs > 60 {
-		t.Fatalf("crossing timestamp off by %.1f ms", errMs)
+	if errMs > 15 {
+		t.Fatalf("crossing timestamp off by %.2f ms (want <= 15 ms with zero-phase plateau refinement)", errMs)
+	}
+}
+
+func TestZeroLagAcrossSpeedsAt100Hz(t *testing.T) {
+	for _, speedMps := range []float64{12, 22, 32, 42} {
+		det := NewChannelDetector(1, 1)
+		const frameUs = 10_000 // 100 Hz hardware sweep rate
+		const centerUs = 6_000_000
+		var got *CrossingCandidate
+		for ts := uint64(1_000_000); ts <= 11_000_000; ts += frameUs {
+			dtSec := (float64(ts) - centerUs) / 1e6
+			x := speedMps * dtSec
+			d := math.Sqrt(x*x + 1.25*1.25)
+			rssi := float32(-24.5 - 23.5*math.Log10(d))
+			if c := det.ProcessSample(rssi, ts, -58, -68, 1_000_000); c != nil {
+				got = c
+			}
+		}
+		if got == nil {
+			t.Fatalf("%.0f m/s: expected crossing", speedMps)
+		}
+		errMs := math.Abs(float64(got.TimestampUs)-centerUs) / 1000.0
+		if errMs > 8.0 {
+			t.Errorf("%.0f m/s: crossing timestamp error %.2f ms exceeds 8 ms zero-phase budget", speedMps, errMs)
+		}
+	}
+}
+
+func TestMedianPreFilterRejectsSingleSweepSpikesAndSmoothsJitter(t *testing.T) {
+	det := NewChannelDetector(1, 1)
+	const frameUs = 10_000 // 100 Hz
+	ts := uint64(1_000_000)
+
+	// Feed 200 samples of stationary VTX at -75 dBm with ±1.5 dB alternating RF noise plus
+	// isolated single-sweep +35 dB interference spikes (to -40 dBm, well above -58 enter).
+	for i := 0; i < 200; i++ {
+		raw := float32(-75.0)
+		if i%2 == 0 {
+			raw += 1.5
+		} else {
+			raw -= 1.5
+		}
+		if i == 60 || i == 130 {
+			raw = -40.0 // Single-sweep spike
+		}
+		if c := det.ProcessSample(raw, ts, -58, -68, 500_000); c != nil {
+			t.Fatalf("unexpected false crossing on single-sweep spike at sample %d", i)
+		}
+		if i >= 20 {
+			if diff := math.Abs(float64(det.SmoothedRSSI() - (-75.0))); diff > 0.6 {
+				t.Fatalf("sample %d: smoothed RSSI %.2f dBm drifted %.2f dB from -75 dBm mean", i, det.SmoothedRSSI(), diff)
+			}
+		}
+		ts += frameUs
+	}
+}
+
+func TestPlateauCentroidCentersFlatTopAndDipoleNullPass(t *testing.T) {
+	det := NewChannelDetector(1, 1)
+	const frameUs = 10_000 // 100 Hz
+	const centerUs = 3_000_000
+	var got *CrossingCandidate
+
+	// Simulate a close gate fly-through centered at t = 3.000 s whose peak is saturated/flat
+	// across ±80 ms with a slight +0.8 dB multipath bump on the late shoulder (+70 ms) and a
+	// -1.0 dB overhead antenna null at t = 3.000 s. Single-sample argmax would snap +70 ms late;
+	// plateau centroid must stay centered near 3.000 s.
+	for ts := uint64(2_000_000); ts <= 4_000_000; ts += frameUs {
+		dtMs := (float64(ts) - centerUs) / 1000.0
+		rssi := -26.0 - 0.00035*dtMs*dtMs
+		if rssi > -28.0 {
+			rssi = -28.0 // Saturated flat top across ~±75 ms
+			if math.Abs(dtMs) < 20 {
+				rssi -= 1.0 // Overhead dipole null right at gate plane
+			}
+			if math.Abs(dtMs-65) < 15 {
+				rssi += 0.8 // Multipath ripple on trailing shoulder
+			}
+		}
+		if rssi < -90 {
+			rssi = -90
+		}
+		if c := det.ProcessSample(float32(rssi), ts, -55, -68, 500_000); c != nil {
+			got = c
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected crossing candidate")
+	}
+	errMs := math.Abs(float64(got.TimestampUs)-centerUs) / 1000.0
+	if errMs > 18.0 {
+		t.Fatalf("expected plateau centroid near center (err <= 18 ms), got err=%.1f ms", errMs)
 	}
 }
 
@@ -93,4 +184,3 @@ func TestDualEntryExitHysteresisRejectsMidPassDip(t *testing.T) {
 		t.Fatalf("expected peak near true -26 dBm smoothed maximum, got %.1f dBm", out[0].PeakRSSIDbm)
 	}
 }
-

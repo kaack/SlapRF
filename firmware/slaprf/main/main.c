@@ -65,12 +65,14 @@ _Static_assert(WINDOW_SAMPLES >= TX_EVERY_SWEEPS, "window must cover every sweep
 #define MAX_PILOT_SLOTS          8
 
 #define FRAME_MAGIC_0            0xC5
-#define FRAME_MAGIC_SINGLE       0x58 // Single sample frame (16 bytes)
-#define FRAME_MAGIC_WINDOW       0x59 // Sliding-window recorder frame (7 + n*9 + 1 bytes)
 #define FRAME_MAGIC_HELLO        0x5A // Hub -> laptop: slot <-> fingerprint announcement (36 bytes)
 #define FRAME_MAGIC_JOIN         0x5B // Spoke -> Hub: request a TDMA slot
 #define FRAME_MAGIC_ASSIGN       0x5C // Hub -> Spoke: slot assignment
 #define FRAME_MAGIC_IDENTIFY     0x5F // Hub -> Spoke: LED identify strobe on/off (refreshed while on)
+#define FRAME_MAGIC_WINDOW       0x60 // 0.5 dB sliding-window recorder frame (7 + n*9 + 1 bytes)
+#define FRAME_MAGIC_SINGLE       0x61 // 0.5 dB single-sample frame (16 bytes)
+
+#define WIRE_PROTO_VER           2U   // Hub and all Spokes must run matching firmware protocol version
 
 #define ROLE_HUB_TIMER           1
 #define ROLE_SPOKE_TIMER         2
@@ -98,7 +100,7 @@ typedef struct {
 
 typedef struct {
     uint8_t  seq_num;
-    int8_t   rssi_dbm[MAX_PILOT_SLOTS];
+    uint8_t  rssi_half_dbm[MAX_PILOT_SLOTS]; // 0 = disabled, 1..255 => -127.5 + 0.5 * code dBm
 } raw_rssi_sample_t;
 
 /** Sliding-window recorder frame. Only `sample_count` samples are sent, followed by crc8. */
@@ -154,7 +156,7 @@ typedef struct {
 __attribute__((used, section(".rodata.slaprf_cfg")))
 static const volatile slaprf_flash_config_t g_flash_cfg = {
     .magic          = {'S', 'L', 'A', 'P', 'R', 'F', '0', '2'},
-    .version        = {0, 1, 5},
+    .version        = {0, 1, 6},
     .role           = ROLE_HUB_TIMER,
     .wifi_mode      = 0,
     .fingerprint    = 1,
@@ -175,6 +177,14 @@ static raw_rssi_sample_t s_ring[WINDOW_SAMPLES];
 static uint8_t s_filled;
 static uint8_t s_seq;
 
+static inline int8_t half_code_to_dbm_i8(uint8_t code) {
+    if (code == 0U) return -127;
+    int v = -128 + ((int)code + 1) / 2;
+    if (v < -127) v = -127;
+    if (v > 0) v = 0;
+    return (int8_t)v;
+}
+
 /** One 8-channel 5.8 GHz sweep into the ring. The 2.4 GHz link is off for its duration. */
 static void sweep_once(void) {
     if (s_filled < WINDOW_SAMPLES) {
@@ -191,28 +201,33 @@ static void sweep_once(void) {
     const bool scanning = slaprf_diag_scan_live_step(SWEEP_BUDGET_US);
     const bool rf_on = !scanning && slaprf_diag_rf_enabled();
     uint16_t ch_mhz[MAX_PILOT_SLOTS];
-    bool any_ch = false;
+    int active_ch = 0;
     for (int i = 0; i < MAX_PILOT_SLOTS; i++) {
         ch_mhz[i] = rf_on ? slaprf_diag_channel_mhz(i, g_flash_cfg.slot_freqs_mhz[i]) : 0;
         if (ch_mhz[i] >= 5180) {
-            any_ch = true;
+            active_ch++;
         }
     }
-    if (any_ch) {
+    // Spend idle sweep margin on linear multi-capture averaging (1024..3072 I/Q samples per channel)
+    // while keeping worst-case 8-channel sweep duration well under SWEEP_BUDGET_US (7000 us).
+    const int avg_captures = active_ch <= 2 ? 3 : (active_ch <= 4 ? 2 : 1);
+    if (active_ch > 0) {
         slaprf_rf58_enter();
     }
+    int8_t diag_dbm[MAX_PILOT_SLOTS];
     for (int i = 0; i < MAX_PILOT_SLOTS; i++) {
-        int8_t raw = ch_mhz[i] >= 5180 ? esp_sdr_measure_5g_channel_dbm(ch_mhz[i]) : -127;
-        cur->rssi_dbm[i] = raw;
+        uint8_t half_code = ch_mhz[i] >= 5180 ? esp_sdr_measure_5g_channel_half_dbm(ch_mhz[i], avg_captures) : 0U;
+        cur->rssi_half_dbm[i] = half_code;
+        diag_dbm[i] = half_code_to_dbm_i8(half_code);
     }
-    if (any_ch) {
+    if (active_ch > 0) {
         slaprf_rf58_leave();
     }
     const int64_t took = slaprf_now_us() - t0;
     if (took > SWEEP_BUDGET_US) {
         ESP_LOGW(TAG, "sweep took %lld us (budget %d us)", (long long)took, SWEEP_BUDGET_US);
     }
-    slaprf_diag_sweep(cur->rssi_dbm, (uint32_t)took); // Debug page: STATUS? / LIVE
+    slaprf_diag_sweep(diag_dbm, (uint32_t)took); // Debug page: STATUS? / LIVE
 }
 
 /** Pack the current window into `pkt`; returns the frame length. */
@@ -223,7 +238,7 @@ static uint32_t pack_window(uint8_t *pkt, uint8_t slot) {
     w->slot = slot;
     w->sample_count = s_filled;
     w->battery_mv = xiao_c5_read_battery_mv();
-    w->noise_floor_dbm = -92;
+    w->noise_floor_dbm = -91;
     memcpy(w->samples, s_ring, sizeof(raw_rssi_sample_t) * s_filled);
     uint32_t len = 7 + (uint32_t)s_filled * sizeof(raw_rssi_sample_t);
     pkt[len] = compute_crc8(pkt, len);
@@ -276,6 +291,11 @@ static void hub_repeat_hellos(void) {
 
 /** Reuse a Spoke's slot if its fingerprint is known, else hand out the first free (or stale) one. */
 static void hub_handle_join(const spoke_join_frame_t *j) {
+    if (j->reserved0 != WIRE_PROTO_VER) {
+        ESP_LOGW(TAG, "Spoke %08lX (%s) has mismatched firmware proto %u (expected %u); reflash all timers",
+                 (unsigned long)j->fingerprint, j->timer_label, (unsigned)j->reserved0, (unsigned)WIRE_PROTO_VER);
+        return;
+    }
     const int64_t now = slaprf_now_us();
     int idx = -1;
     for (int i = 0; i < MAX_SPOKES; i++) {
@@ -375,7 +395,7 @@ static void hub_run(void) {
             slaprf_sleep_until_us(t_gap);
             if (k == 0) {
                 slaprf_broadcast_hub_sync_beacon(beacon_seq++); // Anchors every Spoke's schedule
-                slaprf_forward_to_laptop(pkt, pack_window(pkt, HUB_SLOT)); // Hub's own Slot 1 window frame
+                slaprf_forward_to_laptop(pkt, pack_window(pkt, HUB_SLOT)); // Hub's own Slot 1 0.5 dB window frame
                 uint32_t id_fp;
                 bool id_on;
                 if (slaprf_diag_identify_next_frame(&id_fp, &id_on)) {
@@ -407,6 +427,7 @@ static void spoke_fill_join(spoke_join_frame_t *j) {
     j->magic1 = FRAME_MAGIC_JOIN;
     j->fingerprint = g_flash_cfg.fingerprint;
     j->role = ROLE_SPOKE_TIMER;
+    j->reserved0 = WIRE_PROTO_VER;
     j->sweep_hz = SWEEP_HZ;
     memcpy(j->timer_label, (const void *)g_flash_cfg.timer_label, sizeof(j->timer_label));
     j->crc8 = compute_crc8((const uint8_t *)j, sizeof(*j) - 1);
@@ -432,7 +453,7 @@ static uint8_t spoke_join_hub(void) {
                 if (n == (int)sizeof(hub_assign_frame_t) && buf[0] == FRAME_MAGIC_0 && buf[1] == FRAME_MAGIC_ASSIGN &&
                     compute_crc8(buf, (uint32_t)n - 1) == buf[n - 1]) {
                     const hub_assign_frame_t *a = (const hub_assign_frame_t *)buf;
-                    if (a->fingerprint == g_flash_cfg.fingerprint && a->slot >= 2) {
+                    if (a->fingerprint == g_flash_cfg.fingerprint && a->slot >= 2 && a->slot < 2 + MAX_SPOKES) {
                         return a->slot;
                     }
                 }
@@ -528,7 +549,7 @@ static void spoke_run(void) {
                 if (rx_n == (int)sizeof(hub_assign_frame_t) && rx_buf[0] == FRAME_MAGIC_0 &&
                     rx_buf[1] == FRAME_MAGIC_ASSIGN && compute_crc8(rx_buf, (uint32_t)rx_n - 1) == rx_buf[rx_n - 1]) {
                     const hub_assign_frame_t *a = (const hub_assign_frame_t *)rx_buf;
-                    if (a->fingerprint == g_flash_cfg.fingerprint && a->slot >= 2 && a->slot != slot) {
+                    if (a->fingerprint == g_flash_cfg.fingerprint && a->slot >= 2 && a->slot < 2 + MAX_SPOKES && a->slot != slot) {
                         slot = a->slot;
                         slaprf_diag_set_slot(slot);
                         idx = (uint8_t)(slot - 2);

@@ -203,7 +203,7 @@ func TestSimulatedHubSweepsOnlyWhileOnAGate(t *testing.T) {
 
 // TestSimulatedHubUsbWindowPipelineRequiresUsbConnection verifies that when a Hub USB sink is
 // attached (matching the browser WASM + WebSerial pipeline), simulated timers record 4-sample
-// sliding-window frames (0xC5 0x59) and emit 0x1E-prefixed Hub USB packets, so no laps or online
+// sliding-window frames (0xC5 0x60) and emit 0x1E-prefixed Hub USB packets, so no laps or online
 // timers appear while USB is disconnected, and full timing resumes as soon as H1 is connected.
 func TestSimulatedHubUsbWindowPipelineRequiresUsbConnection(t *testing.T) {
 	engine := tracker.NewEngine()

@@ -16,10 +16,10 @@ import (
 
 const (
 	FrameMagic0        byte = 0xC5
-	FrameMagicSingle   byte = 0x58 // 16-byte single-sample frame
-	FrameMagicWindow   byte = 0x59 // Variable-length sliding-window recorder frame
 	FrameMagicHello    byte = 0x5A // 36-byte timer announcement (fingerprint, name, sweep rate)
 	FrameMagicChannels byte = 0x5E // 19-byte active pilot channel table (0 = disabled slot)
+	FrameMagicWindow   byte = 0x60 // Variable-length 0.5 dB sliding-window recorder frame
+	FrameMagicSingle   byte = 0x61 // 16-byte 0.5 dB single-sample frame
 
 	SingleFrameLen    int = 16
 	HelloFrameLen     int = 36
@@ -505,7 +505,7 @@ func (r *HubFrameDecoder) DecodePacket(raw []byte, nowUs uint64) []domain.TimerT
 
 			var rssi [domain.MaxPilotPoolSize]float32
 			for ch := 0; ch < domain.MaxPilotSlots; ch++ {
-				val := float32(int8(raw[off+1+ch]))
+				val := DecodeHalfDbm(raw[off+1+ch])
 				rssi[ch] = val
 				if pIdx := slotToPilot[ch]; pIdx >= 0 && pIdx < domain.MaxPilotPoolSize {
 					rssi[pIdx] = val
@@ -557,7 +557,7 @@ func (r *HubFrameDecoder) DecodePacket(raw []byte, nowUs uint64) []domain.TimerT
 
 		var rssi [domain.MaxPilotPoolSize]float32
 		for ch := 0; ch < domain.MaxPilotSlots; ch++ {
-			val := float32(int8(raw[7+ch]))
+			val := DecodeHalfDbm(raw[7+ch])
 			rssi[ch] = val
 			if pIdx := slotToPilot[ch]; pIdx >= 0 && pIdx < domain.MaxPilotPoolSize {
 				rssi[pIdx] = val
@@ -597,7 +597,7 @@ func EncodeWindowFrame(slot uint8, battMv uint16, noiseFloorDbm int8, samples []
 		off := windowHeaderLen + idx*RawSampleBytes
 		pkt[off] = uint8(samples[idx].SeqNum)
 		for ch := 0; ch < domain.MaxPilotSlots; ch++ {
-			pkt[off+1+ch] = byte(int8(samples[idx].RSSI[ch]))
+			pkt[off+1+ch] = EncodeHalfDbm(samples[idx].RSSI[ch])
 		}
 	}
 	pkt[len(pkt)-1] = xorCRC(pkt[:len(pkt)-1])
@@ -616,6 +616,31 @@ func EncodeHelloFrame(slot uint8, role uint8, fingerprint uint32, sweepHz uint8,
 	copy(pkt[10:34], []byte(label))
 	pkt[HelloFrameLen-1] = xorCRC(pkt[:HelloFrameLen-1])
 	return pkt
+}
+
+// DecodeHalfDbm converts a 0.5 dB sample byte (0 = disabled/-127.0 dBm, 1..255 = -127.0..0.0 dBm) to dBm.
+func DecodeHalfDbm(code byte) float32 {
+	if code == 0 {
+		return -127.0
+	}
+	return -127.5 + 0.5*float32(code)
+}
+
+// EncodeHalfDbm converts a dBm reading into a 0.5 dB sample byte (0 = disabled <= -127.0 dBm).
+func EncodeHalfDbm(dbm float32) byte {
+	if dbm <= -127.0 {
+		return 0
+	}
+	if dbm >= 0.0 {
+		return 255
+	}
+	c := int((dbm+127.5)*2.0 + 0.5)
+	if c < 1 {
+		c = 1
+	} else if c > 255 {
+		c = 255
+	}
+	return byte(c)
 }
 
 // silenceRSSI replaces survey readings (Raceband, not the pilots' channels) with no signal.

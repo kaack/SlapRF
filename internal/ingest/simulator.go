@@ -197,7 +197,7 @@ func (s *TrackSimulator) SetSpeedMultiplier(mult int) {
 }
 
 // SetHubFrameSink attaches a USB Hub packet sink. When set, simulated timers pack their 50 Hz
-// sweeps into 4-sample sliding-window frames (0xC5 0x59) + HELLO frames (0xC5 0x5A) and emit them
+// sweeps into 4-sample sliding-window frames (0xC5 0x60) + HELLO frames (0xC5 0x5A) and emit them
 // through the simulated Hub's USB stream instead of calling Engine.IngestTelemetryFrame directly.
 func (s *TrackSimulator) SetHubFrameSink(sink func([]byte)) {
 	s.mu.Lock()
