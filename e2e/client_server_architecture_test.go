@@ -239,10 +239,12 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 			const sessions = Array.isArray(st.practiceState?.sessions) ? st.practiceState.sessions : [];
 			const races = Array.isArray(st.eventState?.races) ? st.eventState.races : [];
 			const allOnline = timers.length === 4 && timers.every((t) => Boolean(t.online));
-			const onPractice = window.location.hash.startsWith("#/live");
+			const onPracticeSession = window.location.hash.startsWith("#/live/open-track-practice");
+			const hasStandings = Boolean(document.querySelector(".standings-table, [data-live-standings], .standings"));
 			const annOn = Boolean(annBtn && annBtn.classList.contains("btn-armed"));
 			return (
-				onPractice &&
+				onPracticeSession &&
+				hasStandings &&
 				annOn &&
 				usbBtn.includes("H1") &&
 				st.timingHardwareMode === "slaprf" &&
