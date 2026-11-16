@@ -200,15 +200,22 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 
 	// 1b. Verify unseeded first boot in Standalone Browser Demo Mode automatically loads the showcase
 	//     demo dataset (Connected · H1, 4 SlapRF timers = Hub + 3 Spokes on 3 gates, 3 practices, 4 races)
-	//     and renders the TopBar PWA install icon button.
+	//     and renders the TopBar PWA install icon button ONLY on mobile viewports.
 	pwaBtn := h.Page.Locator(`.topbar-actions button[data-action="install-pwa"]`).First()
-	h.MustBeVisible(pwaBtn, "TopBar PWA install icon button")
+	h.MustBeHidden(pwaBtn, "TopBar PWA install icon button hidden on desktop")
+	if err := h.Page.SetViewportSize(390, 844); err != nil {
+		t.Fatalf("resize to mobile viewport: %v", err)
+	}
+	h.MustBeVisible(pwaBtn, "TopBar PWA install icon button visible on mobile")
 	if err := pwaBtn.Click(); err != nil {
 		t.Fatalf("click TopBar PWA install button: %v", err)
 	}
 	h.MustBeVisible(h.Page.Locator(`[data-pwa-install-popover]`).First(), "PWA install guide popover")
 	if err := h.Page.Locator(`button[data-action="close-pwa-popover"]`).First().Click(); err != nil {
 		t.Fatalf("close PWA install popover: %v", err)
+	}
+	if err := h.Page.SetViewportSize(1440, 900); err != nil {
+		t.Fatalf("restore desktop viewport: %v", err)
 	}
 
 	h.WaitUntil("Showcase demo dataset hydrated with Connected · H1", 8*time.Second, func() (bool, error) {

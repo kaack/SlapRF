@@ -705,7 +705,7 @@ html[data-theme="light"] .sidebar-demo-disclaimer-title {
 }
 .topbar-pwa-wrap {
   position: relative;
-  display: inline-flex;
+  display: none;
   align-items: center;
 }
 .topbar-pwa-btn {
@@ -1119,6 +1119,9 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
   }
   .topbar-menu-wrap {
     display: block;
+  }
+  .topbar-pwa-wrap {
+    display: inline-flex;
   }
   .topbar,
   .outlet {
