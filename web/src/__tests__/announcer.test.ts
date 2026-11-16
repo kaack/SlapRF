@@ -227,7 +227,7 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
       // Pilot 2's older 15.1s lap was replaced in queue by their newer 14.05s lap!
       expect(rig.spokenTexts).toEqual(["Vanover, 14.25", "Heads Up, 14.05"]);
     } finally {
-      ann.update({ enabled: false });
+      ann.stop();
     }
   });
 
@@ -280,7 +280,7 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
       await new Promise((r) => window.setTimeout(r, 110));
       expect(rig.spokenTexts).toEqual(["Vanover, 12.95", "Holeshot Vanover"]);
     } finally {
-      ann.update({ enabled: false });
+      ann.stop();
     }
   });
 
@@ -320,7 +320,7 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
       store.ingestLap(makeLap(2, 1, 2, 12.18), []);
       expect(rig.spokenTexts).toEqual(["Vanover, 12.44"]);
     } finally {
-      ann.update({ enabled: false });
+      ann.stop();
     }
   });
 
@@ -353,7 +353,7 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
       store.ingestLap(makeLap(1, 1, 1, 11.88), []);
       expect(rig.spokenTexts).toEqual(["Vanover, 11.88"]);
     } finally {
-      ann.update({ enabled: false });
+      ann.stop();
     }
   });
 
@@ -419,7 +419,7 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
         "Emergency stop! Land immediately!"
       );
     } finally {
-      ann.update({ enabled: false });
+      ann.stop();
     }
   });
 
@@ -484,7 +484,7 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
       await new Promise((r) => window.setTimeout(r, 110));
       expect(rig.spokenTexts).toEqual(["Minchan, last lap", "Evan, 11.82, last lap"]);
     } finally {
-      ann.update({ enabled: false });
+      ann.stop();
     }
   });
 
@@ -530,7 +530,7 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
       expect(airhornCalls).toBe(1);
       expect(rig.spokenTexts).toContain("Heat complete");
     } finally {
-      ann.update({ enabled: false });
+      ann.stop();
     }
   });
 });

@@ -1,11 +1,13 @@
-name: Build GitHub Page on Release
+name: Build & Deploy GitHub Page
 
 on:
-  release:
-    types: [created, published]
   push:
+    branches:
+      - main
     tags:
       - "v*"
+  release:
+    types: [created, published]
   workflow_dispatch:
 
 permissions:
@@ -62,17 +64,8 @@ jobs:
           mkdir -p "$WORKTREE_DIR/docs"
           cp -r ./_site/. "$WORKTREE_DIR/docs/"
 
-          cat > "$WORKTREE_DIR/README.md" << 'EOF'
-          ## SlapRF (GitHub Page)
-
-          This branch just holds the static files for hosting the application as a GitHub page.
-          EOF
-
-          cat > "$WORKTREE_DIR/.gitignore" << 'EOF'
-          .idea
-          *.iml
-          .DS_Store
-          EOF
+          printf '## SlapRF (GitHub Page)\n\nThis branch holds the static files for hosting the application as a GitHub Page.\n' > "$WORKTREE_DIR/README.md"
+          printf '.idea\n*.iml\n.DS_Store\n' > "$WORKTREE_DIR/.gitignore"
 
           cd "$WORKTREE_DIR"
           git config user.name "github-actions[bot]"
@@ -81,7 +74,7 @@ jobs:
           if git diff --cached --quiet; then
             echo "No changes to commit on github-page branch."
           else
-            VERSION="${GITHUB_REF_NAME:-latest}"
+            VERSION="${GITHUB_REF_NAME:-main} (${GITHUB_SHA::7})"
             git commit -m "Build GitHub Page for ${VERSION}"
             git push origin github-page --force
           fi

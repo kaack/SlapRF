@@ -286,6 +286,14 @@ export class Announcer {
     return () => this.listeners.delete(fn);
   }
 
+  public stop(): void {
+    this.prefs.enabled = false;
+    window.clearTimeout(this.idleTimer);
+    this.idleTimer = 0;
+    this.clear();
+    this.holdUntil = 0;
+  }
+
   /** Restores the voice, speed, volume, and sample phrase to system defaults without changing the on/off toggle. */
   public resetVoiceDefaults(): void {
     this.update({
@@ -786,6 +794,8 @@ export class Announcer {
     this.utteranceToken++;
     window.clearTimeout(this.utteranceWatchdog);
     this.utteranceWatchdog = 0;
+    window.clearTimeout(this.holdTimer);
+    this.holdTimer = 0;
     this.piper.stop();
     if ("speechSynthesis" in window) {
       if (speechSynthesis.paused) {
