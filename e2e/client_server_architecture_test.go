@@ -198,6 +198,34 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 		t.Fatalf("expected window.slaprfWasm to be loaded in Standalone Browser Demo Mode")
 	}
 
+	// 1b. Verify unseeded first boot in Standalone Browser Demo Mode automatically loads the showcase
+	//     demo dataset (Connected · H1, 4 SlapRF timers = Hub + 3 Spokes on 3 gates, 3 practices, 4 races).
+	h.WaitUntil("Showcase demo dataset hydrated with Connected · H1", 8*time.Second, func() (bool, error) {
+		res, evalErr := h.Page.Evaluate(`() => {
+			const usbBtn = document.querySelector('[data-action="usb-toggle"]')?.textContent || "";
+			const raw = window.slaprfWasm?.request("GET", "/api/state", "")?.body || "{}";
+			const st = JSON.parse(raw);
+			const timers = Array.isArray(st.timers) ? st.timers : [];
+			const gates = Array.isArray(st.gates) ? st.gates : [];
+			const sessions = Array.isArray(st.practiceState?.sessions) ? st.practiceState.sessions : [];
+			const races = Array.isArray(st.eventState?.races) ? st.eventState.races : [];
+			const allOnline = timers.length === 4 && timers.every((t) => Boolean(t.online));
+			return (
+				usbBtn.includes("H1") &&
+				st.timingHardwareMode === "slaprf" &&
+				allOnline &&
+				gates.length === 3 &&
+				sessions.length === 3 &&
+				races.length === 4
+			);
+		}`)
+		if evalErr != nil {
+			return false, nil
+		}
+		ok, _ := res.(bool)
+		return ok, nil
+	})
+
 	demoDisclaimer := h.Page.Locator(`button[data-demo-disclaimer="1"], button.sidebar-demo-disclaimer`).First()
 	h.MustBeVisible(demoDisclaimer, "Sidebar Demo disclaimer")
 	h.MustContainText(demoDisclaimer, "Browser Demo", "Sidebar Demo disclaimer title")

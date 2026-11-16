@@ -256,13 +256,51 @@ func TestWipeApplicationDataAndRestoreDemoData(t *testing.T) {
 		t.Fatalf("expected default timing rules after wipe, got %+v", eng.Rules())
 	}
 
-	// RestoreDemoData repopulates Bay Area demo pilots, 4-gate track, timers, and Open Practice
+	// RestoreDemoData repopulates the showcase demo dataset:
+	// - Bay Area pilots (10 slots)
+	// - SlapRF hardware mode with 4 timers total (1 Hub H1 + 3 Spokes T1..T3 on a 3-gate course)
+	// - 3 Practice sessions (1 active live session + 2 completed sessions with multi-sector laps)
+	// - 4 Race tournaments (1 completed Championship, 1 paused 2-stage, 1 paused Open Qualifier, 1 draft Single Elim)
 	eng.RestoreDemoData()
-	pilots, gates, _, _, _ = eng.StateSnapshot()
+	pilots, gates, laps, _, _ = eng.StateSnapshot()
 	timers = eng.DetectedTimersSnapshot()
 	pm = eng.PracticeSnapshot()
-	if len(pilots) == 0 || len(gates) == 0 || len(timers) == 0 || len(pm.Sessions) == 0 {
-		t.Fatalf("expected demo data restored, got pilots=%d gates=%d timers=%d sessions=%d",
-			len(pilots), len(gates), len(timers), len(pm.Sessions))
+	ev = eng.EventSnapshot()
+	if eng.TimingHardwareMode() != domain.HardwareModeSlapRF {
+		t.Fatalf("expected slaprf hardware mode after RestoreDemoData, got %q", eng.TimingHardwareMode())
+	}
+	if len(pilots) != 10 {
+		t.Fatalf("expected 10 showcase pilots, got %d", len(pilots))
+	}
+	if len(gates) != 3 {
+		t.Fatalf("expected 3 showcase track gates, got %d", len(gates))
+	}
+	if len(timers) != 4 {
+		t.Fatalf("expected 4 showcase timers (Hub + 3 Spokes), got %d (%+v)", len(timers), timers)
+	}
+	hubCount := 0
+	for _, dt := range timers {
+		if dt.IsHub {
+			hubCount++
+		}
+	}
+	if hubCount != 1 {
+		t.Fatalf("expected 1 Hub + 3 Spokes, got hubCount=%d", hubCount)
+	}
+	if len(pm.Sessions) != 3 || pm.ActiveSessionID == "" || len(laps) == 0 {
+		t.Fatalf("expected 3 showcase practice sessions with active session & laps, got sessions=%d active=%q laps=%d",
+			len(pm.Sessions), pm.ActiveSessionID, len(laps))
+	}
+	if len(ev.Races) != 4 {
+		t.Fatalf("expected 4 showcase races, got %d", len(ev.Races))
+	}
+	foundCompletedChamp := false
+	for _, r := range ev.Races {
+		if r.Config.EventName == "Bay Area Championship" && r.Lifecycle == domain.LifecycleCompleted && r.ChampionSlotIndex > 0 {
+			foundCompletedChamp = true
+		}
+	}
+	if !foundCompletedChamp {
+		t.Fatalf("expected completed Bay Area Championship with crowned champion in showcase races")
 	}
 }

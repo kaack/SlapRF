@@ -543,23 +543,27 @@ export class ApiClient {
   }
 
   /**
-   * Populates the active engine with sample Bay Area pilots, a 4-gate track, simulated timers,
-   * and an initial Open Practice session for testing or demonstration.
+   * Populates the active engine with the showcase demo dataset (Bay Area pilots, 3-gate SlapRF
+   * track with Hub H1 + 3 Spoke timers, 3 practice sessions, and 4 tournaments).
    */
   public async restoreDemoData(): Promise<void> {
     this.store.clearActiveHistory();
     const state = await this.transport
       .request<FullStateResponse>("POST", "/api/storage/demo")
       .catch(() => null);
-    if (!this.backendMode) {
-      await enginePersistence.reconcile(true, true).catch((err) => {
-        console.error("[storage] demo restore persist failed:", err);
-      });
-    }
     if (state) {
       this.store.hydrate(state);
     } else {
       await this.refresh();
+    }
+    if (this.simMode && this.store.timingHardwareMode === "slaprf") {
+      await usbPool.connectDefaultSimHub();
+      await this.refresh();
+    }
+    if (!this.backendMode) {
+      await enginePersistence.reconcile(true, true).catch((err) => {
+        console.error("[storage] demo restore persist failed:", err);
+      });
     }
   }
 

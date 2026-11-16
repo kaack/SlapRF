@@ -1896,9 +1896,11 @@ export class UsbConnectionPool {
 
   public async restorePersistedSimPorts(): Promise<void> {
     if (!isSimulatedUsbMode()) return;
+    let hasStoredPref = false;
     try {
       const raw = window.localStorage.getItem("slaprf.sim.usb_slots.v1");
       if (raw) {
+        hasStoredPref = true;
         const parsed = JSON.parse(raw) as {
           slots?: Array<{ slotIndex: 0 | 1; timerId: number }>;
           debugSlot?: number;
@@ -1912,6 +1914,12 @@ export class UsbConnectionPool {
       }
     } catch {
       // ignore storage errors
+    }
+    if (!hasStoredPref && this.savedSimSlots.length === 0 && capabilitiesSnapshot().demoMode && Boolean(window.slaprfWasm)) {
+      const hub = listSimulatedTimers().find((t) => t.isHub && t.poweredOn);
+      if (hub) {
+        this.savedSimSlots = [{ slotIndex: 0, timerId: hub.timerId }];
+      }
     }
     if (this.savedSimSlots.length === 0 && capabilitiesSnapshot().portable && !window.slaprfWasm) {
       try {
@@ -2077,6 +2085,16 @@ export class UsbConnectionPool {
     }
     this.notify();
     return status;
+  }
+
+  /** Connects Slot 0 to the default powered simulated Hub (`H1`) when in simulated USB mode. */
+  public async connectDefaultSimHub(): Promise<void> {
+    if (!isSimulatedUsbMode()) return;
+    const hub = listSimulatedTimers().find((t) => t.isHub && t.poweredOn);
+    if (!hub) return;
+    await this.connectSimulatedTimer(hub.timerId, 0).catch(() => undefined);
+    this.persistActiveSimSlots();
+    this.notify();
   }
 
   /** Disconnects any slot currently connected to a `SimulatedSerialPort`. */

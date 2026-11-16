@@ -226,3 +226,66 @@ func DefaultTrackGates() []TrackGate {
 		},
 	}
 }
+
+// DemoTrackGates returns the 3-gate showcase track layout used by the browser demo and
+// "Restore Demo Data" action: 3 Spoke timers (timers 2..4, T1..T3) paired with off-track
+// Hub H1 (timer 1) for 4 SlapRF timers total.
+func DemoTrackGates() []TrackGate {
+	now := time.Now()
+	var defaultRssi [MaxPilotPoolSize]float32
+	for i := range defaultRssi {
+		defaultRssi[i] = -92
+	}
+
+	return []TrackGate{
+		{
+			GateID:          1,
+			AssignedTimerID: 2,
+			FirmwareVersion: LatestFirmwareVersion,
+			Color:           DefaultGateColors[0],
+			Role:            GateRoleStartFinish,
+			TrackOrder:      0,
+			MapX:            0.24,
+			MapY:            0.76,
+			BatteryMv:       4140,
+			BatteryPct:      ComputeBatteryPct(4140),
+			NoiseFloorDbm:   -92.0,
+			LastRSSI:        defaultRssi,
+			Online:          true,
+			LastSeenAt:      now,
+		},
+		{
+			GateID:          2,
+			AssignedTimerID: 3,
+			FirmwareVersion: LatestFirmwareVersion,
+			Color:           DefaultGateColors[1],
+			Role:            GateRoleSectorGate,
+			TrackOrder:      1,
+			MapX:            0.50,
+			MapY:            0.22,
+			BatteryMv:       4090,
+			BatteryPct:      ComputeBatteryPct(4090),
+			NoiseFloorDbm:   -92.4,
+			LastRSSI:        defaultRssi,
+			Online:          true,
+			LastSeenAt:      now,
+		},
+		{
+			GateID:          3,
+			AssignedTimerID: 4,
+			FirmwareVersion: LatestFirmwareVersion,
+			Color:           DefaultGateColors[2],
+			Role:            GateRoleSectorGate,
+			TrackOrder:      2,
+			MapX:            0.78,
+			MapY:            0.74,
+			BatteryMv:       4030,
+			BatteryPct:      ComputeBatteryPct(4030),
+			NoiseFloorDbm:   -91.9,
+			LastRSSI:        defaultRssi,
+			Online:          true,
+			LastSeenAt:      now,
+		},
+	}
+}
+

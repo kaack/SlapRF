@@ -261,14 +261,21 @@ func main() {
 		}
 	})
 
-	_ = loadSimFromBootState(simEngine, sim)
-	if simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF {
+	loadedBootState := loadSimFromBootState(simEngine, sim)
+	if !loadedBootState {
+		simHubUSBConnected.Store(true)
+		sim.RestoreDemoData()
+	} else if simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF {
 		simEngine.SetAllTimersOffline()
 	} else {
 		sim.SyncHardwareMode()
 	}
 	sim.Start()
 	sim.SetRunning(true) // Standalone Browser Demo Mode always runs Simulator ON
+	if !loadedBootState && simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF {
+		simHubRx.Reset()
+		ingestRawHubStream(simHubRx, simEngine, sim.BuildHubHelloStream())
+	}
 
 	var hubCmdMu sync.RWMutex
 	var hubCmdCb js.Value

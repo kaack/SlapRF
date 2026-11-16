@@ -604,47 +604,10 @@ func (e *Engine) ResetToFactoryDefaults(_ bool) {
 	e.notifyPracticeUpdated(practiceSnap, subs)
 }
 
-// RestoreDemoData populates the engine with sample Bay Area pilots, a 4-gate track,
-// simulated timers, and an initial Open Practice session.
+// RestoreDemoData populates the engine with the showcase demo dataset: Bay Area pilots,
+// a 3-gate SlapRF track (Hub H1 + 3 Spoke timers T1..T3), 3 practice sessions, and 4 races.
 func (e *Engine) RestoreDemoData() {
-	e.mu.Lock()
-	if e.bootTime.IsZero() {
-		e.bootTime = time.Now()
-	}
-	e.virtualOffsetUs.Store(0)
-	e.raceArmed = true
-	e.rules = domain.DefaultTimingRules()
-	e.detected = make(map[uint8]*domain.DetectedTimer)
-	e.deletedSpokeFp = nil
-	e.detectors = make(map[detKey]*dsp.ChannelDetector)
-	e.passingNumbers = make(map[uint8]uint32)
-	e.nextEventID = 0
-	e.nextLapID = 0
-	e.raceState = newDefaultRaceState()
-	e.eventState = domain.EventManagerState{}
-	e.practiceState = domain.PracticeManagerState{}
-	e.practiceSnap = domain.PracticeSnapshot{}
-
-	e.pilots = domain.DefaultPilotSlots()
-	e.gates = domain.DefaultTrackGates()
-	e.seedSimTimersLocked()
-
-	e.resetSessionLocked()
-	e.initDetectorsLocked()
-	e.ensureEventStateInitializedLocked()
-	e.ensurePracticeStateInitializedLocked()
-	raceSnap := cloneRaceState(e.raceState)
-	practiceSnap := clonePracticeManagerState(e.practiceState)
-	pilotsCopy := append([]domain.PilotSlot(nil), e.pilots...)
-	gatesCopy := append([]domain.TrackGate(nil), e.gates...)
-	subs := append([]EventSubscriber(nil), e.subscribers...)
-	e.mu.Unlock()
-
-	for _, s := range subs {
-		s.OnConfigUpdated(pilotsCopy, gatesCopy)
-	}
-	e.notifyRaceUpdated(raceSnap, nil, subs)
-	e.notifyPracticeUpdated(practiceSnap, subs)
+	e.RestoreState(showcaseDemoEngineState(), true)
 }
 
 // ResetPilotsToDefault restores the pilot slots to system defaults (`DefaultPilotSlots` in

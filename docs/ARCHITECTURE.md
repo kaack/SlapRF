@@ -1,21 +1,21 @@
 # SlapRF Low-Level Architecture & Protocol Reference
 
-This document details the hardware, RF link layer, binary wire protocols, digital signal processing (DSP), timing engine state machines, browser-native USB firmware patching, and in-browser WebAssembly architecture of **SlapRF**.
+This document details the client–server runtime architecture, hardware drivers, RF link layer, binary wire protocols, digital signal processing (DSP), multi-gate timing & tournament state machines, firmware image patching, and browser demo WebAssembly build of **SlapRF**.
 
 For setting up your local development environment, running the live dev server, compiling binaries/WASM, and running the test suite, see **[`docs/DEVELOPER.md`](DEVELOPER.md)**.
 
 ## Low-Level Reference Overview
 
-- **[1. System Overview & Design Principles](#1-system-overview--design-principles)** — Why Spokes are pure recording sensors with all DSP centralized on the laptop.
-- **[2. End-to-End Data Flow](#2-end-to-end-data-flow)** — Architecture diagram from 5.8 GHz VTX signals across the track to the Web SPA and MultiGP LiveTime.
+- **[1. System Overview & Design Principles](#1-system-overview--design-principles)** — Native local timing server, pure-sensor Spokes, and multi-hardware support.
+- **[2. End-to-End Data Flow](#2-end-to-end-data-flow)** — Architecture diagram from timing hardware across the track to the native `slaprf` server and browser clients.
 - **[3. XIAO ESP32-C5 5.8 GHz SDR & Time-Division Schedule](#3-xiao-esp32-c5-58-ghz-sdr--time-division-radio-schedule)** — Single-synthesizer 5.8 GHz / 2.4 GHz multiplexing and the 20 ms superframe schedule.
 - **[4. Ground-Interference Mitigation & 2.4 GHz Link Protocol](#4-ground-interference-mitigation--24-ghz-link-protocol)** — Two-ray grass path-loss physics, 6 Mbps OFDM ESP-NOW at `+20 dBm`, 900 µs TDMA slots, and 4-sample sliding-window recovery under 50% packet loss.
 - **[5. Binary Wire Formats (`0xC5 0x59` & `SLAPRF02`)](#5-binary-wire-formats-0xc5-0x59-sliding-window--slaprf02)** — Byte-by-byte layouts of the variable-length sliding-window frame, the Hello / Join / Assign / beacon frames, and the 160-byte flash config block.
 - **[6. DSP Pipeline & Parabolic Peak Interpolation](#6-dsp-pipeline--sub-frame-parabolic-peak-interpolation)** — Zero-phase EMA smoothing, hysteresis state machine, and `< 2 ms` sub-frame parabolic vertex fitting.
 - **[7. Multi-Gate Timing Rules & Section Analytics Engine](#7-multi-gate-timing-rules--section-analytics-engine)** — The 5-stage guardrail pipeline (cool-down, stale progress, min section, previous-gate echo, min/max lap) and bottleneck math.
-- **[8. Browser-Native WebSerial ROM Flasher & Firmware Image](#8-browser-native-webserial-rom-flasher--firmware-image)** — Client-side patching of the compiled `.bin` image, board fingerprints, and the SLIP ROM bootloader protocol.
-- **[9. ImmersionRC LapRF 8-Way Emulation (`TCP :5403`)](#9-immersionrc-laprf-8-way-emulation-tcp-5403)** — TCP `:5403` LiveTime bridge for official race scoring alongside SlapRF section splits.
-- **[10. Web SPA & In-Browser WebAssembly Engine](#10-web-spa--in-browser-webassembly-engine)** — `ApiTransport` and the `slaprf.wasm` in-browser timing engine.
+- **[8. Native USB Serial Driver & Firmware Flasher](#8-native-usb-serial-driver--firmware-flasher)** — Native USB-JTAG ROM bootloader flashing (`internal/usb`, `internal/firmware`) and `SLAPRF02` binary patching.
+- **[9. Multi-Hardware Drivers & MultiGP Integration](#9-multi-hardware-drivers--multigp-integration)** — RotorHazard (USB & Network), ImmersionRC LapRF 8-Way (`TCP :5403`), and MultiGP Chapter sync.
+- **[10. Client–Server Architecture vs. Browser Demo (`slaprf.app`)](#10-clientserver-architecture-vs-browser-demo-slaprfapp)** — Native Go server (`cmd/slaprf` + `BackendHttpTransport`) for real timing vs. WebAssembly (`cmd/slaprf-wasm` + `WasmSimTransport`) for the `slaprf.app` interactive demo.
 
 ---
 
@@ -30,8 +30,8 @@ SlapRF is built around four core engineering constraints:
    **Hub role**: the Hub is a USB collector dongle (timer ID 1, `isHub`). Neither the real nor the simulated engine ever puts it on a gate automatically (`internal/tracker/track.go`: `provisionCollectorHubLocked`, `ProvisionGate`, `AddSimulatedTimer`); Spokes take the gates and the first one becomes start/finish. If the user drags the Hub onto a gate (a normal gate assignment, `AssignedTimerID` = the Hub's timer ID), the Hub also sweeps 5.8 GHz and times that gate. The browser keeps the Hub in sync over USB (`web/src/services/hub_gate_sync.ts`): the Hub's STATUS JSON reports `"hubGate"`, and `HUBGATE 1` / `HUBGATE 0` turns its own sweep + slot-1 telemetry on/off. The flag is runtime-only (off after a Hub reboot), so the browser re-sends it whenever the reported value differs from the course (at most once per second). The simulator follows the same model: the simulated Hub (`H1`) only generates RSSI telemetry while it is on a gate.
 3. **Ground-Grazing & 2.4 GHz ELRS Immunity**:
    Gate timers typically sit flat on the grass beneath gates separated by 40–150 m while pilots transmit 250 mW – 1 W of 2.4 GHz ExpressLRS FHSS control packets nearby. SlapRF combines short **6 Mbps OFDM ESP-NOW frames at `+20 dBm`** in a beacon-synchronized TDMA schedule with a **4-sample sliding-window packet sent every 2 sweeps (`2×` overlap Forward Error Correction)** so even **50% packet loss** results in **0% lost 100 Hz telemetry samples** at the laptop.
-4. **Zero-Toolchain Deployment**:
-   The static site (built with a pure-Go TypeScript bundler, `esbuild`) ships a WebAssembly build of the entire Go timing/physics engine (`slaprf.wasm`), and a client-side `SLAPRF02` firmware binary patcher + WebSerial Espressif ROM bootloader client—requiring zero Node.js, zero Python `esptool`, and zero C toolchains.
+4. **Native Local Timing Server + Zero-Install Browser Demo**:
+   For real practices and races, **all hardware I/O, DSP peak detection, tournament bracket resolution, and database persistence run natively on the host computer** inside a single self-contained Go binary (`cmd/slaprf`, backed by `internal/portable` and `slaprf.db`). Browsers connect locally (`http://127.0.0.1:8090` or over LAN) as lightweight UI clients, eliminating browser tab throttling and WebSerial limitations. Meanwhile, the hosted site at **`https://slaprf.app`** compiles the simulation engine to WebAssembly (`cmd/slaprf-wasm`) strictly as an interactive **browser demo** so anyone can explore the full application with zero installation.
 
 ---
 
@@ -39,34 +39,39 @@ SlapRF is built around four core engineering constraints:
 
 ```mermaid
 flowchart TB
-    subgraph Field["FPV Race Track (Up to 6 XIAO ESP32-C5 Timers)"]
+    subgraph Field["FPV Race Track (Supported Timing Hardware)"]
         direction LR
-        VTX["8x 5.8 GHz Drone VTXs\n(Raceband R1–R8: 5658–5917 MHz)"]
-        Spokes["Spoke Timers T2–T6\n• 100 Hz 8-ch 5.8 GHz sweep\n• 4-sample ring buffer (40 ms)\n• Zero on-board DSP"]
-        Hub["Hub Timer T1 (USB collector dongle)\n• 50 Hz Sync Beacon (Ch 1)\n• ESP-NOW → USB serial bridge\n• Sweeps 5.8 GHz only when placed on a gate"]
+        VTX["Up to 8x 5.8 GHz Drone VTXs\n(Raceband, Fatshark, Boscam, IMD6)"]
+        Spokes["SlapRF Spoke Timers T1–T6\n• 100 Hz 8-ch 5.8 GHz sweep\n• 4-sample ring buffer (40 ms)\n• Zero on-board DSP"]
+        Hub["SlapRF Hub Timer H1 (USB-C dongle)\n• 50 Hz Sync Beacon (Ch 1)\n• ESP-NOW → USB serial bridge"]
+        OtherHW["External Timing Hardware\n• RotorHazard (USB serial or LAN :5000)\n• ImmersionRC LapRF 8-Way (LAN TCP :5403)"]
 
-        VTX -. "5.8 GHz RF\n(-95 to -20 dBm)" .-> Spokes
-        VTX -. "5.8 GHz RF\n(-95 to -20 dBm)" .-> Hub
-        Hub -- "50 Hz Sync Beacon\n(2.4 GHz ESP-NOW Broadcast)" --> Spokes
-        Spokes -- "Sliding Window (0xC5 0x59, 7 + n×9 + 1 B)\n2.4 GHz ESP-NOW 6 Mbps OFDM (+20 dBm, 900 µs TDMA)" --> Hub
+        VTX -. "5.8 GHz RF" .-> Spokes
+        VTX -. "5.8 GHz RF" .-> OtherHW
+        Hub -- "50 Hz Sync Beacon\n(2.4 GHz ESP-NOW)" --> Spokes
+        Spokes -- "Sliding Window (0xC5 0x59, 44 B)\n6 Mbps OFDM (+20 dBm, 900 µs TDMA)" --> Hub
     end
 
-    subgraph Laptop["Field Laptop (Browser WASM)"]
-        Ingest["Hub Frame Decoder (USB serial)\ninternal/ingest/hub_frames.go\n• CRC8 check & seq_num deduplication\n• Reconstructs gapless 100 Hz stream"]
-        DSP["8-Channel DSP Peak Detector\ninternal/dsp/peak_detector.go\n• EMA filter (α = 0.42)\n• Hysteresis state machine\n• 3-point parabolic peak fit (< 2 ms)"]
-        Rules["Multi-Gate Timing Engine\ninternal/tracker/crossing_rules.go\n1. Gate cool-down\n2. Stale progress reset\n3. Min section time\n4. Previous-gate echo filter\n5. Min/Max lap time"]
-        LapRF["LapRF 8-Way Emulator (:5403)\ninternal/laprf/protocol.go\n• SLIP-framed binary TCP\n• RF_SETUP (0xda01) & TOR (0xda09)"]
-        SPA["TypeScript Web SPA (slaprf.app)\n• Live RSSI Scope\n• Section Splits (S1–S4)\n• Offline TTS Announcer\n• WebSerial USB Flasher"]
+    subgraph Host["Field Laptop / Raspberry Pi (Local slaprf Binary)"]
+        Drivers["Hardware Ingestion Managers\n• internal/usb + internal/ingest/hub_frames.go\n• internal/rotorhazard (USB & Socket.IO/HTTP)\n• internal/laprf (TCP :5403 Client)"]
+        DSP["8-Channel DSP Peak Detector\ninternal/dsp/peak_detector.go\n• EMA filter (α = 0.42)\n• Hysteresis + 3-point parabolic fit (< 2 ms)"]
+        Engine["Timing, Practice & Tournament Engine\ninternal/tracker + internal/race\n• 5-stage crossing guardrails & section splits\n• Multi-stage brackets, heats, marshal review"]
+        DB["Embedded Transactional Store\ninternal/storage (bbolt slaprf.db)"]
+        HTTP["Embedded HTTP + WebSocket Server\ninternal/portable + internal/api (:8090)"]
 
-        Hub -- "USB serial (WebSerial)" --> Ingest
-        Ingest --> DSP
-        DSP --> Rules
-        Rules -- "Telemetry stream (in-process, WASM onStream)" --> SPA
-        Rules -- "Start Gate Passings" --> LapRF
+        Hub -- "USB-C Serial" --> Drivers
+        OtherHW -- "USB Serial / Ethernet LAN" --> Drivers
+        Drivers --> DSP --> Engine
+        Engine <--> DB
+        Engine <--> HTTP
     end
 
-    LiveTime["MultiGP LiveTime"]
-    LapRF <--> LiveTime
+    subgraph Clients["Browser UI Clients"]
+        SPA["TypeScript Web SPA\n• Laptop (127.0.0.1:8090) or LAN Phones/Tablets\n• Live RSSI Scope, Section Splits, Race Control\n• Offline Web Speech / Horn Announcer"]
+        Demo["Hosted Browser Demo (https://slaprf.app)\n• Runs slaprf.wasm TrackSimulator + IndexedDB\n• Demo / preview only (or connects to LAN server)"]
+    end
+
+    HTTP <-->|"REST /api/* + /api/ws/stream"| SPA
 ```
 
 ---
@@ -122,7 +127,7 @@ When timers are placed directly on the grass under gates ($h_t = h_r \approx 0.0
 | :--- | :--- | :--- |
 | **1. Frequency Selection** | Fixed **2.4 GHz Channel 1 (`2412 MHz`)** (`WIFI_CHANNEL = 1`) | Longest 2.4 GHz wavelength ($\lambda = 12.43\text{ cm}$), lowest dielectric absorption in moist grass, and furthest from upper-band Wi-Fi/Bluetooth congestion. |
 | **2. PA & PHY Rate** | **`+20.0 dBm` (`80` quarter-dBm)** + **6 Mbps OFDM ESP-NOW** (`LINK_TX_RATE "6m"`; Espressif LR frames are still received) | ~0.15 ms on air per frame, so each window fits a 900 µs TDMA slot and three Spokes share each ~3 ms gap. Link rate and TX power can only be changed from the USB serial console (`LINKRATE`, `TXPOWER`, `LINKRESET`); the values are saved in NVS. |
-| **3. USB Collector Hub** | The Hub forwards every frame to the laptop over **USB serial** (WebSerial) | No Wi-Fi hop to the laptop: the 2.4 GHz channel only carries the Hub beacon, Join / Assign frames, and Spoke windows. |
+| **3. USB Collector Hub** | The Hub forwards every frame to the laptop over **USB-C serial** (`internal/usb`) | No Wi-Fi hop to the laptop: the 2.4 GHz channel only carries the Hub beacon, Join / Assign frames, and Spoke windows. |
 | **4. 4-Sample Sliding-Window FEC** | Each Spoke sends **`[seq-3, seq-2, seq-1, seq]`** (`44 bytes`) once per 20 ms superframe, i.e. every 2 sweeps | Every 10 ms 5.8 GHz sweep is transmitted **twice** in consecutive windows 20 ms apart. **Even if 50% of windows are wiped out** by ground multipath or a pilot's 2.4 GHz ELRS hop, the very next window delivers the missing sweeps with zero gaps. |
 
 ### Sliding-Window Recovery Under 50% Packet Loss
@@ -272,59 +277,70 @@ For each pilot and each track section $s \in \{S_1, \dots, S_k\}$:
 
 ---
 
-## 8. Browser-Native WebSerial ROM Flasher & Firmware Image
+## 8. Native USB Serial Driver & Firmware Flasher
 
-Implemented in [`web/src/services/esp_flasher.ts`](../web/src/services/esp_flasher.ts) and [`web/src/widgets/TimerFlasher.ts`](../web/src/widgets/TimerFlasher.ts), the USB flasher operates **100% inside the browser** without requiring a Go backend:
+When running the standalone `slaprf` binary, USB serial communication and firmware flashing run natively on the host in [`internal/usb/`](../internal/usb/) and [`internal/firmware/image.go`](../internal/firmware/image.go), controlled from [`web/src/widgets/TimerFlasher.ts`](../web/src/widgets/TimerFlasher.ts) and [`web/src/services/timer_console.ts`](../web/src/services/timer_console.ts) (with an equivalent client-side patcher in [`web/src/services/esp_flasher.ts`](../web/src/services/esp_flasher.ts) for `.bin` downloads and simulated boards in Demo Mode):
 
-1. **Single Firmware Image & Static `.bin` Fetch (`buildOrPatchFirmwareBin`)**:
-   - There is one firmware image and nothing to choose: every timer, Hub or Spoke, is flashed with `slaprf-xiao-c5.bin`, built from [`firmware/slaprf/`](../firmware/slaprf/).
-   - CI ([`.github/workflows/firmware.yml`](../.github/workflows/firmware.yml)) or [`firmware/tools/build_local.ps1`](../firmware/tools/build_local.ps1) compiles it into a merged flash image at `web/firmware/slaprf-xiao-c5.bin` (committed). `cmd/build-web` copies it to `_site/firmware/` (or writes a placeholder image if it hasn't been built, see [`web/firmware/README.md`](../web/firmware/README.md)), and the service worker precaches it.
-2. **Client-Side `SLAPRF02` Patching of the Compiled Image**:
-   - When the user clicks **Flash to USB** or **Download .bin**, the browser fetches `FIRMWARE_IMAGE_URL` (`./firmware/slaprf-xiao-c5.bin`), locates the 160-byte `SLAPRF02` block, and stamps `role`, `fingerprint`, `timer_label`, and the active 8-channel `slot_freqs_mhz` (see [§5.2](#52-160-byte-slaprf02-flash-configuration-block)).
-   - It then repairs the ESP-IDF app image (at `0x10000` in a merged image, or `0x0` for a bare app): the segment XOR checksum (`seed 0xEF`) and, if enabled, the appended SHA-256 digest.
+1. **Single Embedded Firmware Image (`slaprf-xiao-c5.bin`)**:
+   - Every SlapRF timer, Hub or Spoke, runs the same firmware image built from [`firmware/slaprf/`](../firmware/slaprf/).
+   - CI ([`.github/workflows/firmware.yml`](../.github/workflows/firmware.yml)) compiles it into a merged flash image at `web/firmware/slaprf-xiao-c5.bin`, which is embedded directly into the portable `slaprf` binary by `cmd/build-portable` (`embed.FS`).
+2. **`SLAPRF02` Binary Patching (`internal/firmware.PatchImage`)**:
+   - Before flashing or downloading a `.bin`, SlapRF locates the 160-byte `SLAPRF02` configuration block inside the compiled image, stamps `role`, `fingerprint`, `timer_label`, and the active 8-channel `slot_freqs_mhz` (see [§5.2](#52-160-byte-slaprf02-flash-configuration-block)), and repairs the ESP-IDF segment XOR checksum (`seed 0xEF`) and appended SHA-256 digest.
 3. **Board Fingerprints (Keep / New)**:
-   - Every board carries a random, non-zero 32-bit fingerprint that the laptop uses as its stable timer identity (Spokes have no fixed slot; the Hub assigns one at join time).
-   - With **Keep** (default), the flasher queries the running firmware over USB (`SLAPRF?`) before erasing and re-stamps the board's existing fingerprint (`withFingerprint`), so the app keeps treating it as the same timer. With **New**, or if the board doesn't answer, a freshly generated fingerprint is used.
-4. **WebSerial Espressif ROM Bootloader Protocol (`navigator.serial`)**:
-   - Toggles USB-JTAG `DTR` / `RTS` lines to reset the XIAO ESP32-C5 (`VID 0x303A`) into ROM Download Mode.
-   - Exchanges SLIP-framed (`0xC0 ... 0xC0`) ROM bootloader commands: `ESP_SYNC (0x08)`, `ESP_SPI_ATTACH (0x0D)`, `ESP_FLASH_BEGIN (0x02)`, 1 KB `ESP_FLASH_DATA (0x03)` blocks written from flash offset `0x0`, and `ESP_FLASH_END (0x04)`, then hard-resets the board into the new firmware.
-5. **Build Detection & USB Console (`TimerConsole`)**:
-   - **Over USB**: `web/src/services/timer_console.ts` maintains the main USB connection (`usbPool.mainConsole`, Slot 0) shared across the TopBar, Network, Flasher, and Debug views, plus a secondary Debug-only slot (Slot 1) when inspecting another USB timer in the **Debug** (`#/debug`) view while keeping the Hub connected.
-   - **In Network (`#/network`) & Flasher (`#/flasher`)**: Displays each discovered timer's role, fingerprint, and firmware build alongside an update indicator when a newer firmware image is bundled.
+   - Every board carries a random, non-zero 32-bit fingerprint used as its persistent timer identity across reboots and TDMA slot reassignments.
+   - With **Keep** (default), the flasher queries the running firmware over USB (`SLAPRF?`) before erasing and preserves the board's existing fingerprint so track gate assignments remain intact.
+4. **Espressif USB-JTAG ROM Bootloader Flashing**:
+   - Toggles USB-JTAG `DTR` / `RTS` lines on the XIAO ESP32-C5 (`VID 0x303A`) to enter ROM Download Mode.
+   - Exchanges SLIP-framed (`0xC0 ... 0xC0`) ROM bootloader commands (`ESP_SYNC`, `ESP_SPI_ATTACH`, `ESP_FLASH_BEGIN`, `ESP_FLASH_DATA`, `ESP_FLASH_END`) to write the patched image from flash offset `0x0`, then hard-resets the board into the new firmware.
+5. **Dual-Slot USB Console (`usbPool`)**:
+   - Maintains a primary USB slot (Slot 0) for the active Hub (`H1`) alongside an optional secondary Debug slot (Slot 1) so operators can inspect or flash a second USB board in **Debug** (`#/debug`) or **Flasher** (`#/flasher`) without disconnecting the Hub.
 
 ---
 
-## 9. ImmersionRC LapRF 8-Way Emulation (`TCP :5403`)
+## 9. Multi-Hardware Drivers & MultiGP Integration
 
-Implemented in [`internal/laprf/protocol.go`](../internal/laprf/protocol.go) and [`internal/laprf/server.go`](../internal/laprf/server.go), SlapRF acts as a drop-in companion to **MultiGP LiveTime**:
+In addition to native DIY SlapRF USB timers, the local `slaprf` server includes first-class hardware managers so existing track infrastructure works with the exact same Practice, Race Editor, Race Control, and Analytics workflows:
 
-- **Framing**: SLIP-encoded (`0xC0` delimiters, `0xDB 0xDC` / `0xDB 0xDD` escaping) little-endian TLV packets with a 16-bit CRC-CCITT (`poly 0x1021`, reflected) in header bytes `[3..4]`.
-- **Inbound from LiveTime**:
-  - `laprf_type_rf_setup (0xDA01)`: Syncs enabled pilot slots, 5.8 GHz frequencies (`0x25`), attenuation gain (`0x24`), and enter thresholds (`0x26`) into the SlapRF timing engine.
-  - `laprf_type_state_ctrl (0xDA08)`: Arms or disarms race scoring (`0x20`).
-  - `laprf_type_time (0xDA07)`: Replies with the engine's monotonic microsecond RTC clock (`0x02`).
-- **Outbound to LiveTime**:
-  - `laprf_type_passing (0xDA09)`: Emitted whenever an accepted crossing occurs at the **Start / Finish** gate (`IsStartFinish == true`), delivering `PassingNumber (0x01)`, `RTC Time Us (0x02)`, `Decoder ID (0x03)`, `Pilot Slot 1..8 (0x04)`, `Peak Height (0x05)`, and `Flags (0x06)`.
-  - `laprf_type_status (0xDA0A)`: Periodic 1 Hz heartbeat reporting gate battery voltage (`0x01`) and per-slot background RSSI (`0x21`).
+- **RotorHazard — USB (`HardwareModeRotorHazardUSB`)**:
+  Implemented in [`internal/rotorhazard/`](../internal/rotorhazard/), connects directly to RotorHazard / RX5808 serial timing nodes over USB serial, syncing active pilot frequencies (`EnterAt` / `ExitAt` calibration thresholds) and streaming live RSSI and node passings into `internal/tracker`.
+- **RotorHazard — Network (`HardwareModeRotorHazard`)**:
+  Implemented in [`internal/rotorhazard/`](../internal/rotorhazard/), connects over LAN HTTP / Socket.IO (default port `:5000`) to one or more RotorHazard timing servers, mapping nodes to track gates and ingesting real-time RSSI and lap passings.
+- **ImmersionRC LapRF 8-Way — Network (`HardwareModeLapRF`, `TCP :5403`)**:
+  Implemented in [`internal/laprf/`](../internal/laprf/) (`protocol.go`, `client.go`, `manager.go`, `server.go`), connects over Ethernet TCP `:5403` to ImmersionRC LapRF 8-Way pucks using SLIP-framed little-endian TLV packets with 16-bit CRC-CCITT (`0xDA01` RF setup, `0xDA07` RTC clock sync, `0xDA08` state control, `0xDA09` passing records, `0xDA0A` status/RSSI heartbeats). The local server can also optionally expose a LapRF `:5403` TCP server endpoint for external integrations.
+- **MultiGP WebService Chapter Sync (`internal/multigp/`)**:
+  Allows chapter organizers to pull scheduled races, pilot rosters, and heat/channel assignments from MultiGP Chapter APIs and push confirmed race round/lap results back up.
 
 ---
 
-## 10. Web SPA & In-Browser WebAssembly Engine
+## 10. Client–Server Architecture vs. Browser Demo (`slaprf.app`)
 
-All app logic runs in the browser. Implemented in [`web/src/services/transport.ts`](../web/src/services/transport.ts), [`wasm_transport.ts`](../web/src/services/wasm_transport.ts), and [`browser_hub_bridge.ts`](../web/src/services/browser_hub_bridge.ts), the TypeScript frontend talks to a single `ApiTransport` (`WasmSimTransport`) for both modes:
+SlapRF separates **production timing** (local client–server binary) from the **hosted browser preview** (`https://slaprf.app`) behind a shared `ApiTransport` interface ([`web/src/services/transport.ts`](../web/src/services/transport.ts)):
 
 ```mermaid
-flowchart LR
-    UI["TypeScript SPA\n(LiveView, PilotView, SetupView, Announcer)"]
-    Client["ApiClient\nweb/src/services/api_client.ts"]
-    WASM["WasmSimTransport\n• Runs cmd/slaprf-wasm (slaprf.wasm)\n• internal/api router in-process\n• Isolated sim + real engines"]
-    Hub["BrowserHubBridge\n• Hub USB dongle over WebSerial"]
+flowchart TB
+    subgraph Prod["Recommended Production Mode — Local slaprf Binary"]
+        direction LR
+        UI1["Browser UI\n(http://127.0.0.1:8090 or LAN)"]
+        BHT["BackendHttpTransport\n• REST /api/*\n• WebSocket /api/ws/stream\n• Optional HTTP Basic Auth"]
+        GoSrv["cmd/slaprf (internal/portable)\n• Native Go Real + Sim Engines\n• Native USB / RotorHazard / LapRF I/O\n• Persistent bbolt DB (slaprf.db)"]
+        UI1 --> BHT <--> GoSrv
+    end
 
-    UI --> Client
-    Client --> WASM
-    Hub -- "Hub packets (Simulation Off)" --> WASM
+    subgraph BrowserDemo["Hosted Demo Mode — https://slaprf.app"]
+        direction LR
+        UI2["Browser UI\n(https://slaprf.app)"]
+        WST["WasmSimTransport\n• In-browser slaprf.wasm (cmd/slaprf-wasm)\n• TrackSimulator + Showcase Demo Store\n• IndexedDB state persistence"]
+        UI2 --> WST
+    end
+
+    UI2 -. "Optional: Settings → Datasource\nConnect to local/LAN slaprf server" .-> GoSrv
 ```
 
-- **Simulation Mode**: the built-in 50 Hz track simulator feeds the isolated simulation engine.
-- **Real-World Hardware Mode**: `BrowserHubBridge` feeds packets from the Hub (USB-C, WebSerial) into the isolated real-world engine.
-- Both run the exact same Go packages (`internal/domain`, `internal/dsp`, `internal/tracker`, `internal/ingest`, `internal/api`) compiled to WebAssembly (`GOOS=js GOARCH=wasm`), so the full dashboard and USB flasher run from the static site (https://slaprf.app). MultiGP LiveTime (LapRF TCP `:5403`) is reached through the small `slaprf-relay` helper (`cmd/slaprf-relay`), which copies bytes between LiveTime's TCP socket and a loopback WebSocket; the LapRF emulator itself runs in the WASM engine.
+1. **Local Server Mode (`cmd/slaprf` + `BackendHttpTransport`) — For Real Practices & Races**:
+   - Built by `go run ./cmd/build-portable` into a single zero-dependency executable (`slaprf` / `slaprf.exe`) that embeds the compiled frontend bundle (`_site`), firmware image, native timing/tournament engine, hardware managers (`SlapRF USB`, `RotorHazard USB`, `RotorHazard Network`, `LapRF 8-Way Network`), and an embedded transactional `bbolt` database (`slaprf.db`, [`internal/storage/`](../internal/storage/)).
+   - Runs timing, heat clocks, countdown horns, and hardware polling on native OS threads unaffected by browser tab visibility, power-saving throttling, or page reloads.
+   - Multiple devices on the local network (Race Director laptop, field marshal phone, spectator tablet) can connect simultaneously over `/api/ws/stream`, with optional HTTP Basic Authentication configurable in **Settings**.
+2. **Browser Demo Mode (`https://slaprf.app` + `WasmSimTransport`) — For Preview & Evaluation Only**:
+   - Deployed automatically to GitHub Pages (`.github/workflows/pages.yml`), running `cmd/slaprf-wasm` (`GOOS=js GOARCH=wasm`) inside the browser tab with `TrackSimulator` always enabled and persisted locally in IndexedDB (`web/src/services/engine_persistence.ts`).
+   - Boots out-of-the-box with a showcase demo dataset (`internal/tracker/demo_showcase.go`): **SlapRF** hardware mode with **4 online timers** (`H1` Hub connected over simulated USB + 3 Spoke timers `T1`–`T3` across a 3-gate course), **3 practice sessions** (including an active live session), and **4 race tournaments** across completed, paused, and draft lifecycles so visitors can immediately explore every feature without creating or flashing simulated boards from scratch.
+   - From **Settings -> Datasource**, a tab opened on `slaprf.app` (or locally with `slaprf -browser`) can also switch from Demo Mode to connect directly to a running `slaprf` server URL.

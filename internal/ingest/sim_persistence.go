@@ -2,7 +2,6 @@ package ingest
 
 import (
 	"sort"
-	"time"
 
 	"slaprf/internal/domain"
 	"slaprf/internal/multigp"
@@ -259,8 +258,9 @@ func (s *TrackSimulator) ResetToFactoryDefaults() {
 	s.mu.Unlock()
 }
 
-// RestoreDemoData populates the simulation engine and simulator runtime with the Bay Area demo
-// pilots, 4-gate track, simulated timers, and prewarmed practice laps.
+// RestoreDemoData populates the simulation engine and simulator runtime with the showcase demo
+// dataset: Bay Area pilots, 3-gate SlapRF track (Hub H1 + 3 Spoke timers T1..T3), 3 practice
+// sessions, and 4 tournaments.
 func (s *TrackSimulator) RestoreDemoData() {
 	s.engine.RestoreDemoData()
 	hwMode := s.engine.TimingHardwareMode()
@@ -275,13 +275,14 @@ func (s *TrackSimulator) RestoreDemoData() {
 	s.rhUnits = defaultSimRHUnitsForMode(hwMode)
 	s.mgpBackend = multigp.NewSimBackend()
 	s.hellosSent = false
+	syncHook := s.onSlapRFModeSync
 	hasUsbSink := s.hubFrameSink != nil
 	s.resetPilotsLocked()
 	s.mu.Unlock()
-	if hasUsbSink {
+	if syncHook != nil && hwMode == domain.HardwareModeSlapRF {
+		syncHook()
+	} else if hasUsbSink && hwMode == domain.HardwareModeSlapRF {
 		s.engine.SetAllTimersOffline()
-	} else {
-		s.Prewarm(45 * time.Second)
 	}
 }
 
