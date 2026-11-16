@@ -129,9 +129,6 @@ func runSuite(m *testing.M) int {
 	}
 
 	// 4. Launch Playwright + Chromium, auto-installing Chromium on first run if not yet cached.
-	if os.Getenv("PLAYWRIGHT_DOWNLOAD_HOST") == "" {
-		_ = os.Setenv("PLAYWRIGHT_DOWNLOAD_HOST", "https://cdn.playwright.dev/dbazure/download/playwright")
-	}
 	pw, err := playwright.Run()
 	if err != nil {
 		log.Printf("[e2e] Installing Playwright driver + Chromium runtime...")
