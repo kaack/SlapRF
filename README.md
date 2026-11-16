@@ -108,15 +108,13 @@ flowchart LR
 
 ## Powering
 
-Do not power more than 3 Seeed Studio XIAO ESP32-C5 boards at the same time from the USB ports of one computer.
+When timing a practice or race, **only the Hub timer (`H1`) needs to be connected to your computer**. All **Spoke timers (`T1`–`T6`)** communicate wirelessly with the Hub and should be powered separately from a LiPo battery (with a LiPo-to-USB-C adapter), a USB-C power bank, or a USB wall charger (`1 A` or more).
 
-Each XIAO ESP32-C5 draws about `90 mA` on average while it receives and sweeps. Each time it transmits on 2.4 GHz at `+20 dBm`, it draws short peaks of up to about `320 mA` (Espressif ESP32-C5 datasheet: 802.11b TX at 20 dBm = 320 mA peak, RX = 87 mA). A computer USB port supplies `500 mA` (USB 2.0) or `900 mA` (USB 3.x), and several ports often share one power rail. With 4 or more boards, the transmit peaks add up, the `5 V` supply sags, and a board can brown out and reboot again and again. The symptoms are:
+When flashing firmware, you may be tempted to plug multiple timers into your computer at the same time. **Avoid this and connect only one board at a time.** Each XIAO ESP32-C5 draws about `90 mA` on average while sweeping and short peaks up to `320 mA` when transmitting on 2.4 GHz at `+20 dBm` (Espressif ESP32-C5 datasheet: 802.11b TX at 20 dBm = 320 mA peak, RX = 87 mA). Because computer USB ports supply `500 mA` (USB 2.0) or `900 mA` (USB 3.x) and often share a single `5 V` power rail, having several boards plugged into the computer at once causes overlapping transmit peaks that sag the `5 V` supply and trigger brownout resets:
 
-- The XIAO ESP32-C5 appears and disappears in the browser's USB port list or in the operating system.
-- The Spoke LED keeps blinking yellow (searching for the Hub) and the Spoke never joins.
-- Flashing stops part of the way through with a lost connection.
-
-To fix it, power the extra Spokes from a LiPo with a LIPO to USB-C Adapter, or from a good USB wall charger (`1 A` or more). Keep only the Hub, and the one XIAO ESP32-C5 you are flashing, on the computer.
+- Boards appear and disappear in the browser's USB port list or operating system.
+- A Spoke LED stays blinking yellow (searching for the Hub) and never joins.
+- Flashing fails partway through with a lost connection.
 
 ## Run
 
