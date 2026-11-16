@@ -101,6 +101,18 @@ int8_t esp_sdr_measure_5g_channel_dbm(uint16_t center_freq_mhz);
  */
 uint8_t esp_sdr_measure_5g_channel_half_dbm(uint16_t center_freq_mhz, int avg_captures);
 
+/**
+ * Execute a complete 500 Hz multi-pass 5.8 GHz sweep across `ch_mhz[0..7]` within `budget_us`
+ * (including slaprf_rf58_enter() and slaprf_rf58_leave()), combining up to 5 independent hopped
+ * passes per channel via outlier-rejecting trimmed linear mean into `out_half_dbm[0..7]`.
+ * Returns the number of sub-passes completed (1..5, or 0 when no channels are active).
+ */
+int slaprf_rf58_sweep_channels_half_dbm(const uint16_t ch_mhz[8], uint8_t out_half_dbm[8],
+                                        int64_t sweep_start_us, uint32_t budget_us);
+
+/** Number of 5.8 GHz sub-passes completed in the most recent slaprf_rf58_sweep_channels_half_dbm() call. */
+int slaprf_rf58_last_sub_passes(void);
+
 /** Return to the 2.4 GHz link channel and re-enable the transmitter. */
 void slaprf_rf58_leave(void);
 

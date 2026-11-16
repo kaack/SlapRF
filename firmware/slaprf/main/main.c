@@ -156,7 +156,7 @@ typedef struct {
 __attribute__((used, section(".rodata.slaprf_cfg")))
 static const volatile slaprf_flash_config_t g_flash_cfg = {
     .magic          = {'S', 'L', 'A', 'P', 'R', 'F', '0', '2'},
-    .version        = {0, 1, 6},
+    .version        = {0, 1, 7},
     .role           = ROLE_HUB_TIMER,
     .wifi_mode      = 0,
     .fingerprint    = 1,
@@ -201,27 +201,13 @@ static void sweep_once(void) {
     const bool scanning = slaprf_diag_scan_live_step(SWEEP_BUDGET_US);
     const bool rf_on = !scanning && slaprf_diag_rf_enabled();
     uint16_t ch_mhz[MAX_PILOT_SLOTS];
-    int active_ch = 0;
     for (int i = 0; i < MAX_PILOT_SLOTS; i++) {
         ch_mhz[i] = rf_on ? slaprf_diag_channel_mhz(i, g_flash_cfg.slot_freqs_mhz[i]) : 0;
-        if (ch_mhz[i] >= 5180) {
-            active_ch++;
-        }
     }
-    // Spend idle sweep margin on linear multi-capture averaging (1024..3072 I/Q samples per channel)
-    // while keeping worst-case 8-channel sweep duration well under SWEEP_BUDGET_US (7000 us).
-    const int avg_captures = active_ch <= 2 ? 3 : (active_ch <= 4 ? 2 : 1);
-    if (active_ch > 0) {
-        slaprf_rf58_enter();
-    }
+    slaprf_rf58_sweep_channels_half_dbm(ch_mhz, cur->rssi_half_dbm, t0, SWEEP_BUDGET_US);
     int8_t diag_dbm[MAX_PILOT_SLOTS];
     for (int i = 0; i < MAX_PILOT_SLOTS; i++) {
-        uint8_t half_code = ch_mhz[i] >= 5180 ? esp_sdr_measure_5g_channel_half_dbm(ch_mhz[i], avg_captures) : 0U;
-        cur->rssi_half_dbm[i] = half_code;
-        diag_dbm[i] = half_code_to_dbm_i8(half_code);
-    }
-    if (active_ch > 0) {
-        slaprf_rf58_leave();
+        diag_dbm[i] = half_code_to_dbm_i8(cur->rssi_half_dbm[i]);
     }
     const int64_t took = slaprf_now_us() - t0;
     if (took > SWEEP_BUDGET_US) {

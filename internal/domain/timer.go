@@ -47,7 +47,7 @@ func IsRotorHazardMode(m TimingHardwareMode) bool {
 }
 
 // LatestFirmwareVersion is the current XIAO ESP32-C5 SDR timer firmware build (firmware/slaprf).
-const LatestFirmwareVersion = "v0.1.6"
+const LatestFirmwareVersion = "v0.1.7"
 
 // DetectedTimer represents a physical Seeed Studio XIAO ESP32-C5 board discovered over
 // the USB Hub (ESP-NOW) or flashed over USB, whether or not it is currently assigned to a gate.

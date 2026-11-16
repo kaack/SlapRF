@@ -2,7 +2,7 @@
 
 One ESP-IDF project for the Seeed XIAO ESP32-C5, with one tuned configuration. Every timer (Hub or Spoke) runs the same image; the role and per-board settings are patched in at flash time.
 
-The design: 100 Hz 8-channel 5.8 GHz sweeps, 4-sweep windows sent every 2 sweeps (every 20 ms, so every sample arrives twice) over 6 Mbps OFDM ESP-NOW at +20 dBm. The Hub is a USB collector dongle; when the app places it on a gate it also sweeps and streams its own readings after every sweep.
+The design: 500 Hz on-chip multi-pass 5.8 GHz sweeps (5 ping-pong passes per 10 ms tick combined via outlier-rejecting trimmed linear mean into 100 Hz 0.5 dB samples), 4-sweep windows sent every 2 sweeps (every 20 ms, so every sample arrives twice) over 6 Mbps OFDM ESP-NOW at +20 dBm. The Hub is a USB collector dongle; when the app places it on a gate it also sweeps and streams its own readings after every sweep.
 
 Link rate and TX power can be changed only from the USB serial console (`LINKRATE`, `TXPOWER`, `LINKRESET`); the values are saved in NVS and survive reflashing.
 

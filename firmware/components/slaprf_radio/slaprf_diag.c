@@ -456,6 +456,7 @@ static void send_status(void) {
     int gain = 0, gain_max = 0;
     float floor_db = 0;
     slaprf_rf58_info(&rf_ok, &gain, &gain_max, &floor_db);
+    const int sub_passes = slaprf_rf58_last_sub_passes();
 
     esp_chip_info_t chip;
     esp_chip_info(&chip);
@@ -478,7 +479,7 @@ static void send_status(void) {
                      "\"label\":\"%s\",\"uptimeMs\":%lld,\"reset\":\"%s\",\"boots\":%lu,"
                      "\"heapFree\":%lu,\"heapMin\":%lu,"
                      "\"sweepHz\":%u,\"sweeps\":%lu,\"sweepUs\":%lu,\"sweepUsMax\":%lu,\"sweepBudgetUs\":%lu,"
-                     "\"rf\":{\"ok\":%s,\"enabled\":%s,\"gain\":%d,\"gainMax\":%d,\"floorDb\":%.1f},"
+                     "\"rf\":{\"ok\":%s,\"enabled\":%s,\"gain\":%d,\"gainMax\":%d,\"floorDb\":%.1f,\"subPasses\":%d,\"rfHz\":%d},"
                      "\"chip\":{\"model\":\"%s\",\"rev\":\"v%d.%d\",\"mac\":\"%02X:%02X:%02X:%02X:%02X:%02X\",\"flashMB\":%lu},"
                      "\"net\":{\"mode\":\"%s\",\"stations\":%d},\"link\":{\"rssi\":%d,\"rate\":%u,\"fmt\":%u,\"beacons\":%lu,\"data\":%lu,\"tx\":\"%s\",\"txPowerDbm\":%.2f,\"saved\":%s},"
                      "\"channel\":%u,\"slot\":%u,\"scanLive\":%s,\"freqsTemporary\":%s,\"chanMask\":%u,\"freqs\":[",
@@ -490,7 +491,7 @@ static void send_status(void) {
                      (unsigned long)esp_get_minimum_free_heap_size(), s_sweep_hz, (unsigned long)s_sweeps,
                      (unsigned long)s_sweep_us_last, (unsigned long)s_sweep_us_max, (unsigned long)s_sweep_budget_us,
                      rf_ok ? "true" : "false",
-                     s_rf_enabled ? "true" : "false", gain, gain_max, floor_db,
+                     s_rf_enabled ? "true" : "false", gain, gain_max, floor_db, sub_passes, sub_passes * (int)s_sweep_hz,
                      chip.model == CHIP_ESP32C5 ? "ESP32-C5" : "ESP32", chip.revision / 100, chip.revision % 100,
                      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], (unsigned long)(s_flash_bytes / (1024 * 1024)),
                      mode_name, stas.num, (int)lk_rssi, (unsigned)lk_rate, (unsigned)lk_fmt, (unsigned long)lk_beacons,
