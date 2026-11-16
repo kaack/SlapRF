@@ -17,8 +17,10 @@ permissions:
 jobs:
   verify:
     name: Unit Tests, Build Sanity & E2E Suite
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
+    env:
+      PLAYWRIGHT_DOWNLOAD_HOST: https://cdn.playwright.dev/dbazure/download/playwright
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
