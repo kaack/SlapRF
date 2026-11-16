@@ -366,6 +366,13 @@ func TestComponent_AnnouncerWinnerHornAndCallout(t *testing.T) {
 		Content: playwright.String(`
 			window.__E2E_AUDIO_LOG = [];
 			if (window.speechSynthesis) {
+				window.speechSynthesis.getVoices = () => [{
+					voiceURI: "Google US English",
+					name: "Google US English",
+					lang: "en-US",
+					localService: true,
+					default: true
+				}];
 				window.speechSynthesis.speak = (utt) => {
 					window.__E2E_AUDIO_LOG.push({ kind: "speak", text: String(utt?.text || ""), t: Math.round(performance.now()) });
 					setTimeout(() => { try { utt?.onstart?.(new Event("start")); } catch {} }, 5);
