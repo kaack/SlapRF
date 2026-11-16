@@ -109,3 +109,13 @@ For real practices and races, run the standalone `slaprf` application locally on
 3. To allow Race Directors, spotters, or pilots on the same Wi-Fi/LAN to view or control the timer from phones and tablets, start it with `-addr 0.0.0.0:8090` (and optionally enable HTTP Basic Authentication under **Settings**).
 
 Developers building from source can run `go run ./cmd/build-portable` or `go run ./cmd/slaprf`; see [docs/DEVELOPER.md](docs/DEVELOPER.md) and [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## Related ESP32-C5 Projects & References
+
+Other open-source projects exploring 5.8 GHz SDR capture, spectrum scanning, video reception, and FPV timing on the ESP32-C5 chip:
+
+- [**C5VRX** (`Twotoz/C5VRX`)](https://github.com/Twotoz/C5VRX) — Pioneering experimental project turning an ESP32-C5 into a 5.8 GHz analog FPV video receiver.
+- [**ESP-SDR** (`ESPARGOS/esp-sdr`)](https://github.com/ESPARGOS/esp-sdr) — Software-defined radio (SDR) raw I/Q capture on the ESP32-C5 using the internal radio ADC test path.
+- [**FPVGate** (`LouisHitchcock/FPVGateC5MK`)](https://github.com/LouisHitchcock/FPVGateC5MK) — ESP32-C5 5.8 GHz FPV lap timing firmware and hardware radio internals reference.
+- [**Widscan58** (`CapnBry/widscan58`)](https://github.com/CapnBry/widscan58) — Wideband 5.8 GHz FPV spectrum scanner on the ESP32-C5 by CapnBry.
+

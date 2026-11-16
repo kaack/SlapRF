@@ -196,11 +196,13 @@ export class AboutView extends Component {
             <div class="card">
               <div class="option-row">
                 <div>
-                  <div class="option-title">ESP32-C5 5.8 GHz SDR Research — C5VRX, ESP-SDR &amp; Widscan58</div>
+                  <div class="option-title">ESP32-C5 5.8 GHz SDR Research — C5VRX &amp; ESP-SDR</div>
                   <div class="option-sub">
                     SlapRF’s ESP32-C5 radio capture would not exist without the pioneering work of
-                    <strong>C5VRX</strong> and the derived <strong>ESP-SDR</strong> projects, which uncovered the hidden debug path allowing an ESP32-C5 to capture raw I/Q samples from its own radio as a 5.8 GHz software-defined radio, as well as
-                    <a href="https://github.com/CapnBry/widscan58" target="_blank" rel="noopener noreferrer">Widscan58 by CapnBry</a>.
+                    <a href="https://github.com/Twotoz/C5VRX" target="_blank" rel="noopener noreferrer"><strong>C5VRX</strong></a>
+                    and the derived
+                    <a href="https://github.com/ESPARGOS/esp-sdr" target="_blank" rel="noopener noreferrer"><strong>ESP-SDR</strong></a>
+                    projects, which uncovered the hidden debug path allowing an ESP32-C5 to capture raw I/Q samples from its own radio as a 5.8 GHz software-defined radio.
                   </div>
                 </div>
               </div>
