@@ -540,6 +540,7 @@ export class ApiClient {
     } else {
       await this.refresh();
     }
+    this.store.setLiveFocus(null);
   }
 
   /**
@@ -556,6 +557,7 @@ export class ApiClient {
     } else {
       await this.refresh();
     }
+    this.store.setLiveFocus(null);
     if (this.simMode && this.store.timingHardwareMode === "slaprf") {
       await usbPool.connectDefaultSimHub();
       await this.refresh();

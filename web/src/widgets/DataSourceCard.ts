@@ -1,7 +1,7 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
-import { buildPracticeHash, pushAppHash } from "../core/router";
+import { buildPracticeHash } from "../core/router";
 import { Announcer } from "../services/announcer";
 import { ApiClient } from "../services/api_client";
 import {
@@ -1022,13 +1022,12 @@ export class PersistenceSettings extends Component {
         confirmLabel: "Restore Demo Data",
         onConfirm: async () => {
           await this.api.restoreDemoData();
-          this.store.setLiveFocus(null);
           if (this.announcer) {
             this.announcer.update({ enabled: true });
           }
           sharedMultiGPService.reloadPrefs();
           this.refreshStorage(true);
-          pushAppHash(buildPracticeHash("session"));
+          window.location.hash = buildPracticeHash("session", "open-track-practice");
         },
       });
     }

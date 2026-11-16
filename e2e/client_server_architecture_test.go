@@ -284,7 +284,48 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 		return (hash == "#/setup/datasource" || hash == "#/setup") && !hasModal && demoActive, nil
 	})
 
-	// 2. Verify all 3 timing systems (SlapRF, LapRF 8-Way, RotorHazard) work in Simulator Demo Mode!
+	// 2. Verify Wipe Application Data + Restore Demo Data navigates to active Practice session
+	//    with All Pilots viewed and Announcer turned ON.
+	if err := h.Page.Locator(`button[data-action="wipe-data"]`).First().Click(); err != nil {
+		t.Fatalf("click Wipe Data button: %v", err)
+	}
+	if err := h.Page.Locator(`button[data-modal-confirm]`).First().Click(); err != nil {
+		t.Fatalf("confirm Wipe Data modal: %v", err)
+	}
+	h.WaitUntil("App wiped to 0 pilots", 5*time.Second, func() (bool, error) {
+		raw, _ := h.Page.Evaluate(`() => window.slaprfWasm?.request("GET", "/api/state", "")?.body || "{}"`)
+		s, _ := raw.(string)
+		return strings.Contains(s, `"pilots":[]`), nil
+	})
+	if err := h.Page.Locator(`button[data-action="restore-demo-data"]`).First().Click(); err != nil {
+		t.Fatalf("click Restore Demo Data button: %v", err)
+	}
+	if err := h.Page.Locator(`button[data-modal-confirm]`).First().Click(); err != nil {
+		t.Fatalf("confirm Restore Demo Data modal: %v", err)
+	}
+	h.WaitUntil("Restore Demo Data navigates to Practice session with Announcer ON", 8*time.Second, func() (bool, error) {
+		res, evalErr := h.Page.Evaluate(`() => {
+			const annBtn = document.querySelector('[data-action="announcer"]');
+			const usbBtn = document.querySelector('[data-action="usb-toggle"]')?.textContent || "";
+			return (
+				window.location.hash.startsWith("#/live/open-track-practice") &&
+				Boolean(annBtn && annBtn.classList.contains("btn-armed")) &&
+				usbBtn.includes("H1")
+			);
+		}`)
+		if evalErr != nil {
+			return false, nil
+		}
+		ok, _ := res.(bool)
+		return ok, nil
+	})
+	// Return to Settings -> Datasource for hardware & server checks
+	if err := demoDisclaimer.Click(); err != nil {
+		t.Fatalf("return to Settings Datasource after Restore Demo Data: %v", err)
+	}
+	h.MustBeVisible(dsSec, "Settings Datasource section re-opened")
+
+	// 2b. Verify all 3 timing systems (SlapRF, LapRF 8-Way, RotorHazard) work in Simulator Demo Mode!
 	h.SelectCustomOption(`select[name="timing-hardware-mode"]`, "LapRF 8-Way")
 	h.MustContainText(h.Page.Locator(`[data-section-anchor="timing-devices"]`).First(), "Simulating LapRF 8-Way timers")
 	h.SelectCustomOption(`select[name="timing-hardware-mode"]`, "RotorHazard (Network)")
