@@ -168,6 +168,11 @@ export const icons = {
       `<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/><path d="M12 15V3"/>`,
       s
     ),
+  installPwa: (s?: number) =>
+    svg(
+      `<path d="M18 4h2a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M8 21h8"/><path d="M12 17v4"/><path d="M12 3v9.5"/><path d="m8.5 9 3.5 3.5L15.5 9"/>`,
+      s
+    ),
   upload: (s?: number) =>
     svg(
       `<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m17 8-5-5-5 5"/><path d="M12 3v12"/>`,

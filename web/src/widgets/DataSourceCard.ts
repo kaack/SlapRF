@@ -20,6 +20,7 @@ import {
   DatasourceServerIntent,
   DEFAULT_LOCAL_SERVER_URL,
   disconnectFromBackend,
+  discoverLocalServer,
   getDatasourceUiMode,
   getRecentBackendUrls,
   orderedPortableAssets,
@@ -62,6 +63,7 @@ export class DataSourceCard extends Component {
   private selectedMode: "demo" | "server";
   private serverInputUrl: string;
   private connecting = false;
+  private discoveringLocal = false;
   private connectError = "";
   private mixedContentDirectUrl = "";
   private noticeReason: "none" | "real-hardware" = "none";
@@ -249,6 +251,10 @@ export class DataSourceCard extends Component {
         void this.submitBackendUrl(inp ? inp.value : this.serverInputUrl);
         break;
       }
+      case "discover-local-app": {
+        void this.handleDiscoverLocalApp();
+        break;
+      }
       case "backend-connect-quick":
       case "connect-detected-local": {
         if (actionBtn.dataset.url) {
@@ -272,6 +278,24 @@ export class DataSourceCard extends Component {
         break;
     }
   };
+
+  private async handleDiscoverLocalApp(): Promise<void> {
+    if (this.connecting || this.discoveringLocal) return;
+    this.discoveringLocal = true;
+    this.connectError = "";
+    this.mixedContentDirectUrl = "";
+    this.forceRender();
+
+    const detectedUrl = await discoverLocalServer(2000);
+    this.discoveringLocal = false;
+    if (detectedUrl) {
+      this.serverInputUrl = detectedUrl;
+      this.connectError = "";
+    } else {
+      this.connectError = `No local SlapRF app detected at ${DEFAULT_LOCAL_SERVER_URL}. Make sure slaprf is running on this computer, or enter a LAN server address.`;
+    }
+    this.forceRender();
+  }
 
   private async submitBackendUrl(rawTarget: string): Promise<void> {
     if (this.connecting) return;
@@ -311,7 +335,7 @@ export class DataSourceCard extends Component {
     const effectiveMode: "demo" | "server" = caps.portable ? "server" : this.selectedMode;
     const recents = getRecentBackendUrls();
 
-    const sig = `${sim ? "1" : "0"}|${sim ? simSpeed : 0}|${caps.portable ? 1 : 0}|${caps.remoteBackend ? 1 : 0}|${caps.backendBaseUrl}|${caps.hostname}|${caps.version}|${caps.localDetectedUrl ?? ""}|${caps.lanIPs.join(",")}|${effectiveMode}|${this.connecting ? 1 : 0}|${this.connectError}|${this.mixedContentDirectUrl}|${this.noticeReason}|${recents.join(",")}`;
+    const sig = `${sim ? "1" : "0"}|${sim ? simSpeed : 0}|${caps.portable ? 1 : 0}|${caps.remoteBackend ? 1 : 0}|${caps.backendBaseUrl}|${caps.hostname}|${caps.version}|${caps.localDetectedUrl ?? ""}|${caps.lanIPs.join(",")}|${effectiveMode}|${this.connecting ? 1 : 0}|${this.discoveringLocal ? 1 : 0}|${this.connectError}|${this.mixedContentDirectUrl}|${this.noticeReason}|${recents.join(",")}`;
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
@@ -377,9 +401,12 @@ export class DataSourceCard extends Component {
                        value="${esc(this.serverInputUrl)}"
                        autocomplete="off"
                        spellcheck="false"
-                       ${this.connecting ? "disabled" : ""}
+                       ${this.connecting || this.discoveringLocal ? "disabled" : ""}
                      />
-                     <button type="button" class="btn btn-unarmed" data-action="backend-connect-submit" ${this.connecting ? "disabled" : ""}>
+                     <button type="button" class="btn btn-ghost" data-action="discover-local-app" ${this.connecting || this.discoveringLocal ? "disabled" : ""} title="Check 127.0.0.1:8090 for a local SlapRF app running on this computer">
+                       ${icons.search(15)}<span>${this.discoveringLocal ? "Searching…" : "Discover Local App"}</span>
+                     </button>
+                     <button type="button" class="btn btn-unarmed" data-action="backend-connect-submit" ${this.connecting || this.discoveringLocal ? "disabled" : ""}>
                        ${icons.check(15)}<span>${this.connecting ? "Connecting…" : "Switch server"}</span>
                      </button>
                    </div>
@@ -427,9 +454,12 @@ export class DataSourceCard extends Component {
                 value="${esc(this.serverInputUrl)}"
                 autocomplete="off"
                 spellcheck="false"
-                ${this.connecting ? "disabled" : ""}
+                ${this.connecting || this.discoveringLocal ? "disabled" : ""}
               />
-              <button type="button" class="btn btn-primary" data-action="backend-connect-submit" ${this.connecting ? "disabled" : ""}>
+              <button type="button" class="btn btn-ghost" data-action="discover-local-app" ${this.connecting || this.discoveringLocal ? "disabled" : ""} title="Check 127.0.0.1:8090 for a local SlapRF app running on this computer">
+                ${icons.search(15)}<span>${this.discoveringLocal ? "Searching…" : "Discover Local App"}</span>
+              </button>
+              <button type="button" class="btn btn-primary" data-action="backend-connect-submit" ${this.connecting || this.discoveringLocal ? "disabled" : ""}>
                 ${icons.check(15)}<span>${this.connecting ? "Connecting…" : "Connect"}</span>
               </button>
             </div>

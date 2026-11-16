@@ -509,6 +509,33 @@ export async function probeServerReachable(
 }
 
 /**
+ * On-demand check for a local `127.0.0.1:8090` SlapRF Server. Invoked only when the user
+ * explicitly requests local discovery from Settings -> Datasource -> Server so public origins
+ * (`https://slaprf.app`) never trigger Chrome's "Apps on device" permission prompt on initial load.
+ */
+export async function discoverLocalServer(timeoutMs = 2000): Promise<string | null> {
+  const detected = await fetchCapsAt(DEFAULT_LOCAL_SERVER_URL, timeoutMs);
+  if (detected) {
+    if (!currentCaps.portable && currentCaps.localDetectedUrl !== DEFAULT_LOCAL_SERVER_URL) {
+      currentCaps = {
+        ...currentCaps,
+        localDetectedUrl: DEFAULT_LOCAL_SERVER_URL,
+      };
+      notify();
+    }
+    return DEFAULT_LOCAL_SERVER_URL;
+  }
+  if (!currentCaps.portable && currentCaps.localDetectedUrl !== null) {
+    currentCaps = {
+      ...currentCaps,
+      localDetectedUrl: null,
+    };
+    notify();
+  }
+  return null;
+}
+
+/**
  * Transitions from an unreachable / lost SlapRF Server connection into the disconnected
  * `Server` Settings lockout without forcing a full-page browser reload (preventing browser
  * `ERR_CONNECTION_REFUSED` if the same-origin server went offline).
@@ -656,6 +683,9 @@ export async function probeCapabilities(): Promise<RuntimeCapabilities> {
   }
 
   // 3. Fall back to Standalone Browser Demo Mode (`slaprf.wasm` + `IndexedDB`, Simulation ON locked).
+  //    Do NOT probe `127.0.0.1:8090` automatically on initial load from a public origin (`slaprf.app`),
+  //    as that triggers Chrome's "Apps on device" / Local Network Access permission prompt before the
+  //    user ever asks to connect to a local server.
   currentCaps = {
     probed: true,
     portable: false,
@@ -675,20 +705,6 @@ export async function probeCapabilities(): Promise<RuntimeCapabilities> {
     localDetectedUrl: null,
   };
   notify();
-
-  // 4. Non-blocking background check for a local `127.0.0.1:8090` server so `slaprf.app` can offer
-  //    a 1-click "Local SlapRF Server detected — Connect" shortcut in the Connect Server modal / Setup!
-  if (typeof window !== "undefined" && !isLoopbackHostname(window.location.hostname)) {
-    void fetchCapsAt(DEFAULT_LOCAL_SERVER_URL, 1200).then((detected) => {
-      if (detected && !currentCaps.portable && currentCaps.localDetectedUrl !== DEFAULT_LOCAL_SERVER_URL) {
-        currentCaps = {
-          ...currentCaps,
-          localDetectedUrl: DEFAULT_LOCAL_SERVER_URL,
-        };
-        notify();
-      }
-    });
-  }
 
   return currentCaps;
 }

@@ -199,7 +199,18 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 	}
 
 	// 1b. Verify unseeded first boot in Standalone Browser Demo Mode automatically loads the showcase
-	//     demo dataset (Connected · H1, 4 SlapRF timers = Hub + 3 Spokes on 3 gates, 3 practices, 4 races).
+	//     demo dataset (Connected · H1, 4 SlapRF timers = Hub + 3 Spokes on 3 gates, 3 practices, 4 races)
+	//     and renders the TopBar PWA install icon button.
+	pwaBtn := h.Page.Locator(`.topbar-actions button[data-action="install-pwa"]`).First()
+	h.MustBeVisible(pwaBtn, "TopBar PWA install icon button")
+	if err := pwaBtn.Click(); err != nil {
+		t.Fatalf("click TopBar PWA install button: %v", err)
+	}
+	h.MustBeVisible(h.Page.Locator(`[data-pwa-install-popover]`).First(), "PWA install guide popover")
+	if err := h.Page.Locator(`button[data-action="close-pwa-popover"]`).First().Click(); err != nil {
+		t.Fatalf("close PWA install popover: %v", err)
+	}
+
 	h.WaitUntil("Showcase demo dataset hydrated with Connected · H1", 8*time.Second, func() (bool, error) {
 		res, evalErr := h.Page.Evaluate(`() => {
 			const usbBtn = document.querySelector('[data-action="usb-toggle"]')?.textContent || "";
@@ -265,6 +276,9 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 	}
 	serverForm := dsSec.Locator(`.datasource-server-form`).First()
 	h.MustBeVisible(serverForm, "Inline Datasource server form shown without modal")
+	discoverBtn := serverForm.Locator(`button[data-action="discover-local-app"]`).First()
+	h.MustBeVisible(discoverBtn, "On-demand Discover Local App button in Server address row")
+	h.MustContainText(discoverBtn, "Discover Local App", "Discover Local App button text")
 	h.MilestoneScreenshot("demo-mode-inline-datasource-server")
 
 	// 4. Spin up a live cross-origin Native Go SlapRF Server (`AllowLANOrigins: true`),

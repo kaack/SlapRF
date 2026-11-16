@@ -29,6 +29,92 @@ export interface OfflineStatus {
 const status: OfflineStatus = { swEnabled: false };
 let storagePromise: Promise<StorageStatus> | null = null;
 
+interface BeforeInstallPromptEvent extends Event {
+  prompt: () => Promise<void>;
+  userChoice: Promise<{ outcome: "accepted" | "dismissed"; platform: string }>;
+}
+
+let deferredInstallPrompt: BeforeInstallPromptEvent | null = null;
+let pwaInstalledSession = false;
+let pwaListenersInstalled = false;
+const pwaInstallListeners = new Set<() => void>();
+
+function notifyPwaInstallListeners(): void {
+  pwaInstallListeners.forEach((fn) => {
+    try {
+      fn();
+    } catch {
+      /* ignore */
+    }
+  });
+}
+
+function ensurePwaInstallListeners(): void {
+  if (pwaListenersInstalled || typeof window === "undefined") return;
+  pwaListenersInstalled = true;
+  window.addEventListener("beforeinstallprompt", (e: Event) => {
+    e.preventDefault();
+    deferredInstallPrompt = e as BeforeInstallPromptEvent;
+    notifyPwaInstallListeners();
+  });
+  window.addEventListener("appinstalled", () => {
+    deferredInstallPrompt = null;
+    pwaInstalledSession = true;
+    notifyPwaInstallListeners();
+  });
+  try {
+    const mql = window.matchMedia?.("(display-mode: standalone)");
+    mql?.addEventListener?.("change", () => notifyPwaInstallListeners());
+  } catch {
+    /* ignore */
+  }
+}
+
+ensurePwaInstallListeners();
+
+/** True when the app is already running as an installed standalone PWA. */
+export function isPwaStandalone(): boolean {
+  if (pwaInstalledSession) return true;
+  if (typeof window === "undefined") return false;
+  try {
+    if (window.matchMedia?.("(display-mode: standalone)")?.matches) return true;
+    if (window.matchMedia?.("(display-mode: fullscreen)")?.matches) return true;
+    if ((navigator as Navigator & { standalone?: boolean }).standalone === true) return true;
+  } catch {
+    /* ignore */
+  }
+  return false;
+}
+
+export function subscribePwaInstallState(fn: () => void): () => void {
+  ensurePwaInstallListeners();
+  pwaInstallListeners.add(fn);
+  return () => pwaInstallListeners.delete(fn);
+}
+
+/**
+ * Triggers the browser's native PWA install prompt if available (`"prompted"`),
+ * or returns `"manual"` when the browser requires manual installation (e.g. iOS Safari or menu install).
+ */
+export async function triggerPwaInstallPrompt(): Promise<"prompted" | "manual"> {
+  ensurePwaInstallListeners();
+  const promptEvent = deferredInstallPrompt;
+  if (!promptEvent) return "manual";
+  deferredInstallPrompt = null;
+  notifyPwaInstallListeners();
+  try {
+    await promptEvent.prompt();
+    const choice = await promptEvent.userChoice;
+    if (choice?.outcome === "accepted") {
+      pwaInstalledSession = true;
+    }
+  } catch {
+    /* ignore */
+  }
+  notifyPwaInstallListeners();
+  return "prompted";
+}
+
 /** Current offline/PWA status snapshot (storage fields fill in once `getStorageStatus` resolves). */
 export function getOfflineStatus(): OfflineStatus {
   return { ...status, storage: status.storage ? { ...status.storage } : undefined };

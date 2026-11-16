@@ -38,6 +38,11 @@ import {
 } from "../services/capabilities";
 import { sharedLapRFLink } from "../services/laprf_hardware_link";
 import { sharedLiveTimeRelay } from "../services/livetime_relay";
+import {
+  isPwaStandalone,
+  subscribePwaInstallState,
+  triggerPwaInstallPrompt,
+} from "../services/offline";
 import { sharedRHLink } from "../services/rh_hardware_link";
 import { TimerConsole, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
@@ -58,6 +63,7 @@ export class TopBar extends Component {
   private menuOpen = false;
   private scopeMenuOpen = false;
   private crumbMenuOpen = false;
+  private pwaMenuOpen = false;
   private activeCrumbItems: BreadcrumbEntry[] = [];
   private collapsedCrumbCount = 0;
   private lastObservedWidth = 0;
@@ -104,6 +110,7 @@ export class TopBar extends Component {
         this.menuOpen = false;
         this.scopeMenuOpen = false;
         this.crumbMenuOpen = false;
+        this.pwaMenuOpen = false;
         this.render();
       })
     );
@@ -115,6 +122,7 @@ export class TopBar extends Component {
     this.onDispose(sharedRHLink.subscribe(() => this.render()));
     this.onDispose(sharedLiveTimeRelay.subscribe(() => this.render()));
     this.onDispose(subscribeCapabilities(() => this.render()));
+    this.onDispose(subscribePwaInstallState(() => this.render()));
     this.onDispose(onRacesTopBarContextChange(() => this.render()));
     this.onDispose(onPracticeTopBarContextChange(() => this.render()));
     this.onDispose(onAnalyticsScopeChange(() => this.render()));
@@ -152,13 +160,22 @@ export class TopBar extends Component {
         this.render();
       }
     }
+    if (this.pwaMenuOpen) {
+      const pwaWrap = this.el.querySelector(".topbar-pwa-wrap");
+      if (!t || !pwaWrap?.contains(t)) {
+        this.pwaMenuOpen = false;
+        this.lastSig = "";
+        this.render();
+      }
+    }
   };
 
   private handleKeyDown = (e: KeyboardEvent): void => {
-    if (e.key === "Escape" && (this.menuOpen || this.scopeMenuOpen || this.crumbMenuOpen)) {
+    if (e.key === "Escape" && (this.menuOpen || this.scopeMenuOpen || this.crumbMenuOpen || this.pwaMenuOpen)) {
       this.menuOpen = false;
       this.scopeMenuOpen = false;
       this.crumbMenuOpen = false;
+      this.pwaMenuOpen = false;
       this.lastSig = "";
       this.render();
     }
@@ -286,6 +303,25 @@ export class TopBar extends Component {
       case "announcer":
         this.announcer.update({ enabled: !this.announcer.settings.enabled });
         break;
+      case "install-pwa":
+        void triggerPwaInstallPrompt().then((mode) => {
+          if (mode === "prompted") {
+            this.pwaMenuOpen = false;
+          } else {
+            this.pwaMenuOpen = !this.pwaMenuOpen;
+            this.menuOpen = false;
+            this.scopeMenuOpen = false;
+            this.crumbMenuOpen = false;
+          }
+          this.lastSig = "";
+          this.render();
+        });
+        break;
+      case "close-pwa-popover":
+        this.pwaMenuOpen = false;
+        this.lastSig = "";
+        this.render();
+        break;
       case "pack":
         void this.api.simulatePack();
         break;
@@ -327,7 +363,8 @@ export class TopBar extends Component {
         : "";
 
     const appTheme = getAppTheme();
-    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${ltEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.menuOpen ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
+    const pwaStandalone = isPwaStandalone();
+    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${ltEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.menuOpen ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${this.pwaMenuOpen ? 1 : 0}:${pwaStandalone ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
@@ -341,6 +378,23 @@ export class TopBar extends Component {
       }" aria-label="${sim ? "Switch to real-world hardware dataset" : "Switch to simulated track dataset"}">
         ${sim ? icons.zap(19) : icons.zapOff(19)}<span class="topbar-btn-label">${sim ? "Simulation on" : "Simulation off"}</span>
       </button>`;
+
+    const pwaBtn = pwaStandalone
+      ? ""
+      : `
+      <div class="topbar-pwa-wrap">
+        <button
+          type="button"
+          class="btn btn-ghost topbar-pwa-btn ${this.pwaMenuOpen ? "is-open" : ""}"
+          data-action="install-pwa"
+          title="Install SlapRF as an app"
+          aria-label="Install SlapRF as an app"
+          aria-expanded="${this.pwaMenuOpen ? "true" : "false"}"
+        >
+          ${icons.installPwa(19)}
+        </button>
+        ${this.pwaMenuOpen ? this.renderPwaInstallPopover() : ""}
+      </div>`;
 
     const usbSupported = TimerConsole.supported() && !lockedOut;
     const usbBtnText = usbOn
@@ -369,7 +423,7 @@ export class TopBar extends Component {
         <span class="topbar-conn-led-bulb" aria-hidden="true"></span>
       </button>`;
 
-    let actions = `${simBtn}`;
+    let actions = `${simBtn}${pwaBtn}`;
     if (meta.id === "sim" || meta.id === "live") {
       actions += `
         <button class="btn ${voiceOn ? "btn-armed" : "btn-ghost"}" data-action="announcer" title="${voiceOn ? "Mute" : "Enable"} lap-time callouts" aria-label="${voiceOn ? "Mute" : "Enable"} lap-time callouts">
@@ -781,6 +835,24 @@ export class TopBar extends Component {
           <div class="topbar-scope-group-label">${activeKind === "race" ? icons.checkered(13) : icons.flag(13)}<span>${activeKind === "race" ? "Race" : "Practice"}</span></div>
           ${activeKind === "race" ? raceRows : practiceRows}
         </div>
+      </div>`;
+  }
+
+  private renderPwaInstallPopover(): string {
+    const ua = typeof navigator !== "undefined" ? navigator.userAgent || "" : "";
+    const isIos = /iphone|ipad|ipod/i.test(ua);
+    const bodyText = isIos
+      ? "Tap the Share button in Safari, then choose “Add to Home Screen” to install SlapRF as a full-screen app."
+      : "Open your browser menu (⋮) and choose “Install app” or “Add to Home screen” (or use the install icon in the address bar).";
+    return `
+      <div class="topbar-pwa-popover" data-pwa-install-popover role="dialog" aria-label="Install SlapRF app">
+        <div class="topbar-pwa-popover-head">
+          <span class="topbar-pwa-popover-title">${icons.installPwa(16)}<span>Install SlapRF App</span></span>
+          <button type="button" class="btn btn-ghost btn-xs topbar-pwa-popover-close" data-action="close-pwa-popover" aria-label="Close">
+            ${icons.close(14)}
+          </button>
+        </div>
+        <p class="topbar-pwa-popover-body">${esc(bodyText)}</p>
       </div>`;
   }
 }
