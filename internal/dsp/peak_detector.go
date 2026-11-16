@@ -26,19 +26,27 @@ const (
 	// through are then handled by the engine's gate cool-down rule.
 	rearmTimeoutUs = 2_500_000
 
-	// medianWindowUs bounds the spike-rejection running median window (4-5 samples @ 100 Hz,
-	// 2-3 samples @ 50 Hz), stripping multipath/sync spikes before EMA smoothing.
-	medianWindowUs  = 35_000
-	maxMedianPoints = 5
+	// medianWindowUs bounds the interquartile trimmed-mean window (7-8 samples @ 100 Hz,
+	// 4 samples @ 50 Hz), stripping upward sync spikes and short multipath notches without
+	// shaving fast 60 ms race passes.
+	medianWindowUs  = 70_000
+	maxMedianPoints = 9
 
-	// liveEmaTauUs is the time constant of the dt-aware causal EMA after the median filter.
-	// At 100 Hz (dt = 10 ms), alpha ≈ 0.34, smoothing quantization/RF scatter while staying
-	// crisp enough to drop below exitThreshold on rapid back-to-back gate transitions.
-	liveEmaTauUs = 24_000.0
+	// 2-pole cascaded C1-smooth envelope time constants (three regimes):
+	// - Rising pass (> +2.5 dB): fast 14 ms + 14 ms attack preserves full peak height at 90+ mph.
+	// - Steady / noise floor (within ±2.5 dB): symmetric 45 ms + 35 ms gives zero rectification bias.
+	// - Multipath fade / falling (< -2.5 dB): smooth 85 ms + 40 ms glides across 70-150 ms Rayleigh
+	//   dropouts without downward sawteeth while still exiting cleanly after the pass.
+	attackTauUs       = 14_000.0
+	steadyTau1Us      = 45_000.0
+	steadyTau2Us      = 35_000.0
+	releaseTauUs      = 85_000.0
+	releasePole2TauUs = 40_000.0
+	asymmetryBandDb   = 2.5
 
 	// zeroPhaseTauUs is the per-direction time constant of the forward-backward (filtfilt)
 	// smoother applied to the completed pass window when computing the exact crossing time.
-	zeroPhaseTauUs = 25_000.0
+	zeroPhaseTauUs = 45_000.0
 
 	// maxGapResetUs resets filter history after a telemetry gap (> 250 ms) so stale readings
 	// never bleed across reconnects or channel changes.
@@ -54,6 +62,7 @@ const (
 type ChannelDetector struct {
 	gateID          uint8
 	slotIndex       int
+	stage1RSSI      float32
 	smoothedRSSI    float32
 	initialized     bool
 	prevSampleTsUs  uint64
@@ -78,6 +87,7 @@ func NewChannelDetector(gateID uint8, slotIndex int) *ChannelDetector {
 	return &ChannelDetector{
 		gateID:         gateID,
 		slotIndex:      slotIndex,
+		stage1RSSI:     -92.0,
 		smoothedRSSI:   -92.0,
 		windowSamples:  make([]samplePoint, 0, 96),
 		passMedSamples: make([]samplePoint, 0, 96),
@@ -87,6 +97,11 @@ func NewChannelDetector(gateID uint8, slotIndex int) *ChannelDetector {
 // SmoothedRSSI returns the current spike-rejected, low-pass filtered RSSI in dBm.
 func (d *ChannelDetector) SmoothedRSSI() float32 {
 	return d.smoothedRSSI
+}
+
+// HasCrossed reports whether this detector has confirmed at least one gate crossing.
+func (d *ChannelDetector) HasCrossed() bool {
+	return d.hasCrossed
 }
 
 // RearmIfBelow clears any stale in-gate or awaiting-rearm state when thresholds change while the
@@ -99,6 +114,7 @@ func (d *ChannelDetector) RearmIfBelow(exitThresholdDbm float32) {
 }
 
 func (d *ChannelDetector) resetFilterState(rssi float32, tsUs uint64) {
+	d.stage1RSSI = rssi
 	d.smoothedRSSI = rssi
 	d.prevSampleTsUs = tsUs
 	d.medCount = 0
@@ -111,7 +127,7 @@ func (d *ChannelDetector) resetFilterState(rssi float32, tsUs uint64) {
 }
 
 func (d *ChannelDetector) pushMedianSample(rawRSSI float32, tsUs uint64) (float32, uint64) {
-	// Evict samples older than medianWindowUs so the window spans <= 45 ms at any sweep rate.
+	// Evict samples older than medianWindowUs so the window spans <= 105 ms at any sweep rate.
 	keepFrom := 0
 	for keepFrom < d.medCount && tsUs > d.medRing[keepFrom].timestampUs &&
 		tsUs-d.medRing[keepFrom].timestampUs > medianWindowUs {
@@ -128,7 +144,9 @@ func (d *ChannelDetector) pushMedianSample(rawRSSI float32, tsUs uint64) (float3
 	d.medRing[d.medCount] = samplePoint{timestampUs: tsUs, rssiDbm: rawRSSI}
 	d.medCount++
 
-	// Insertion sort a tiny stack copy (1..5 elements) to extract the exact median.
+	// Insertion sort a tiny stack copy (1..11 elements) and compute the interquartile trimmed mean
+	// (averaging the middle ~50% of sorted samples). This completely rejects multi-sweep spikes and
+	// short multipath notches while eliminating discrete step jumps between order statistics.
 	var vals [maxMedianPoints]float32
 	for i := 0; i < d.medCount; i++ {
 		v := d.medRing[i].rssiDbm
@@ -140,13 +158,24 @@ func (d *ChannelDetector) pushMedianSample(rawRSSI float32, tsUs uint64) (float3
 		vals[j] = v
 	}
 	var med float32
-	mid := d.medCount / 2
-	if d.medCount%2 == 1 {
-		med = vals[mid]
+	if d.medCount >= 5 {
+		trim := d.medCount / 4
+		lo := trim
+		hi := d.medCount - trim
+		var sum float32
+		for i := lo; i < hi; i++ {
+			sum += vals[i]
+		}
+		med = sum / float32(hi-lo)
 	} else {
-		med = 0.5 * (vals[mid-1] + vals[mid])
+		mid := d.medCount / 2
+		if d.medCount%2 == 1 {
+			med = vals[mid]
+		} else {
+			med = 0.5 * (vals[mid-1] + vals[mid])
+		}
 	}
-	// Tag the median with the midpoint of the active window so symmetric window delay is removed.
+	// Tag the filtered value with the midpoint of the active window so symmetric window delay is removed.
 	oldestTs := d.medRing[0].timestampUs
 	centerTs := oldestTs + (tsUs-oldestTs)/2
 	return med, centerTs
@@ -195,8 +224,24 @@ func (d *ChannelDetector) ProcessSample(
 		if dtUs < 1_000 {
 			dtUs = 1_000
 		}
-		alpha := float32(1.0 - math.Exp(-float64(dtUs)/liveEmaTauUs))
-		d.smoothedRSSI += alpha * (medVal - d.smoothedRSSI)
+		diff1 := medVal - d.stage1RSSI
+		tau1 := steadyTau1Us
+		tau2 := steadyTau2Us
+		if diff1 > asymmetryBandDb {
+			tau1 = attackTauUs
+			tau2 = attackTauUs
+		} else if diff1 < -asymmetryBandDb {
+			tau1 = releaseTauUs
+			tau2 = releasePole2TauUs
+		}
+		alpha1 := float32(1.0 - math.Exp(-float64(dtUs)/tau1))
+		d.stage1RSSI += alpha1 * (medVal - d.stage1RSSI)
+
+		if d.stage1RSSI > d.smoothedRSSI+asymmetryBandDb {
+			tau2 = attackTauUs
+		}
+		alpha2 := float32(1.0 - math.Exp(-float64(dtUs)/tau2))
+		d.smoothedRSSI += alpha2 * (d.stage1RSSI - d.smoothedRSSI)
 	}
 
 	s := d.smoothedRSSI
@@ -214,7 +259,7 @@ func (d *ChannelDetector) ProcessSample(
 		// lingering timeout), so the tail of one pass cannot re-trigger as a second pass.
 		if d.awaitingRearm {
 			rearmed := s <= effectiveExit ||
-				(s <= enterThresholdDbm-4.0 && timestampUs >= d.lastCrossingUs+900_000) ||
+				(s <= enterThresholdDbm-3.0 && timestampUs >= d.lastCrossingUs+600_000) ||
 				(s < enterThresholdDbm && timestampUs >= d.lastCrossingUs+rearmTimeoutUs)
 			if !rearmed {
 				d.pushPrePassSample(medPt)
@@ -261,12 +306,20 @@ func (d *ChannelDetector) ProcessSample(
 
 	// 4. Check gate exit (dual-threshold Schmitt hysteresis):
 	// Confirm the crossing when the signal drops to or below the configured exit threshold.
-	// If adjacent gates are very close together so inter-gate RSSI bottoms out between
-	// (enterThreshold - 4 dB) and exitThreshold, confirm once the drone has clearly exited
-	// the entry zone (>= 16 dB below peak and >= 700 ms past closest approach).
+	// If indoor reflections or close adjacent gates keep the inter-pass valley slightly above
+	// exitThreshold, confirm once the drone has clearly exited the entry zone (>= 10 dB below
+	// pass peak, >= 3 dB below enterThreshold, and >= 500 ms past closest approach).
 	exited := s <= effectiveExit
-	if !exited && s <= enterThresholdDbm-4.0 && (d.peakRSSI-s) >= 16.0 && medCenterTs >= d.peakTimestampUs+700_000 {
+	if !exited && s <= enterThresholdDbm-3.0 && (d.peakRSSI-s) >= 10.0 && medCenterTs >= d.peakTimestampUs+500_000 {
 		exited = true
+	}
+	if !exited && timestampUs-d.enterTimeUs > 8_000_000 {
+		if d.peakRSSI >= enterThresholdDbm+3.0 && s <= enterThresholdDbm-2.0 && (d.peakRSSI-s) >= 6.0 {
+			exited = true
+		} else {
+			d.inGate = false
+			return nil
+		}
 	}
 
 	if exited {
@@ -293,11 +346,6 @@ func (d *ChannelDetector) ProcessSample(
 			BeamwidthMs:       beamwidthMs,
 			EstimatedSpeedMph: speedMph,
 		}
-	}
-
-	// Safety timeout if a pilot lands/disarms right inside a gate (>8 seconds in gate)
-	if timestampUs-d.enterTimeUs > 8_000_000 {
-		d.inGate = false
 	}
 
 	return nil

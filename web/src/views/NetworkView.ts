@@ -2969,7 +2969,7 @@ export class NetworkView extends Component {
                     <div class="debug-bar-track">
                       <span class="debug-bar-fill" data-bar-fill="${idx}" style="width:${widthPct.toFixed(1)}%"></span>
                     </div>
-                    <span class="debug-bar-value mono" data-bar-val="${idx}">${!onCh ? "Off" : valid ? `${val} dBm` : "—"}</span>
+                    <span class="debug-bar-value mono" data-bar-val="${idx}">${!onCh ? "Off" : valid ? `${val!.toFixed(1)} dBm` : "—"}</span>
                   </div>`;
               })
               .join("")}
@@ -3050,7 +3050,7 @@ export class NetworkView extends Component {
       const val = opts.dbmSource ? opts.dbmSource[idx] : undefined;
       const valid = onCh && val !== undefined && val > -127 && val < 0;
       const widthStr = `${(valid ? pct(val!) : 0).toFixed(1)}%`;
-      const valStr = !onCh ? "Off" : valid ? `${val} dBm` : "—";
+      const valStr = !onCh ? "Off" : valid ? `${val!.toFixed(1)} dBm` : "—";
 
       if (fillEl && fillEl.style.width !== widthStr) fillEl.style.width = widthStr;
       if (valEl && valEl.textContent !== valStr) valEl.textContent = valStr;

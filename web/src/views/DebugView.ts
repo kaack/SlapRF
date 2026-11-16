@@ -4581,7 +4581,7 @@ export class DebugView extends Component {
                 <div class="debug-bar-track">
                   <span class="debug-bar-fill" style="width:${widthPct.toFixed(1)}%"></span>
                 </div>
-                <span class="debug-bar-value mono">${!onCh ? "Off" : valid ? `${val} dBm` : "—"}</span>
+                <span class="debug-bar-value mono">${!onCh ? "Off" : valid ? `${val!.toFixed(1)} dBm` : "—"}</span>
               </div>`;
           })
           .join("");

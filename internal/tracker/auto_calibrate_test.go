@@ -184,3 +184,33 @@ func TestAutoCalibrateRejectsNonLapSignals(t *testing.T) {
 		t.Fatalf("expected single-sample glitches to be rejected")
 	}
 }
+
+func TestAutoCalibrateIndoorHighValleyWithPowerOffTail(t *testing.T) {
+	// Reproduces indoor / small-course flying where VTX-off dead air (-91 dBm) occupies >25% of the
+	// 90 s window, while active lap valleys sit at -75 dBm and peaks sit at -53..-57 dBm.
+	// Auto-calibration must anchor exitDbm above the -75 dBm inter-pass valleys (never dragging
+	// exitDbm down to -77 dBm where the detector can never exit the gate).
+	var samples []autoCalibSample
+	passCenters := []float64{25, 32, 39, 46, 53, 60, 67}
+	for ms := uint64(0); ms <= 87_000; ms += 50 {
+		sec := float64(ms) / 1000.0
+		var dbm float32
+		if sec < 20.0 || sec > 72.0 {
+			dbm = -91.0 // VTX powered off before/after pack (~40% of window!)
+		} else {
+			dbm = gaussianPass(ms*1000, -75.5, -54.5, passCenters, 0.95)
+		}
+		samples = append(samples, autoCalibSample{tsUs: ms * 1000, dbm: dbm})
+	}
+
+	enter, exit, _, ok := suggestAutoThresholdDbm(samples, 75_000_000)
+	if !ok {
+		t.Fatalf("expected suggestAutoThresholdDbm to succeed on 7 indoor passes")
+	}
+	if exit < -73 {
+		t.Fatalf("expected exitDbm >= -73 dBm (above -75.5 dBm inter-pass valleys despite -91 dBm power-off tail), got enter=%v exit=%v", enter, exit)
+	}
+	if enter > -58 || enter <= exit+4 {
+		t.Fatalf("expected enterDbm <= -58 dBm with >= 5 dB hysteresis above exitDbm, got enter=%v exit=%v", enter, exit)
+	}
+}

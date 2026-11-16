@@ -168,7 +168,7 @@ func TestDualEntryExitHysteresisRejectsMidPassDip(t *testing.T) {
 	// Signal enters at -55 dBm, hits -30 dBm, dips to -48 dBm (antenna null, still > -55 enter & > -66 exit),
 	// rises to the true -26 dBm peak, then falls below the -66 dBm exit threshold.
 	profile := []float32{
-		-80, -76, -70, -62, -54, -46, -38, -31, -30, -35, -42, -48, -46, -36, -28, -26, -26, -26, -31, -40, -50, -60, -68, -74, -80,
+		-80, -76, -70, -62, -54, -46, -38, -31, -30, -35, -42, -48, -46, -36, -28, -26, -26, -26, -31, -40, -50, -60, -68, -74, -80, -80, -80, -80, -80, -80, -80, -80,
 	}
 	var out []*CrossingCandidate
 	for _, rssi := range profile {
@@ -182,5 +182,37 @@ func TestDualEntryExitHysteresisRejectsMidPassDip(t *testing.T) {
 	}
 	if out[0].PeakRSSIDbm < -29 {
 		t.Fatalf("expected peak near true -26 dBm smoothed maximum, got %.1f dBm", out[0].PeakRSSIDbm)
+	}
+}
+
+func TestMultipathNotchPassProducesSmoothSingleCrossing(t *testing.T) {
+	det := NewChannelDetector(1, 1)
+	const frameUs = 10_000 // 100 Hz
+	var got []*CrossingCandidate
+	var minNearPeak float32 = 0
+
+	// Simulate an indoor pass centered at t = 4.0 s (-75 dBm valley -> -53 dBm peak -> -75 dBm valley)
+	// with repeated 70 ms -13 dB destructive Rayleigh multipath dropouts right across the crest.
+	for ts := uint64(1_000_000); ts <= 7_000_000; ts += frameUs {
+		dtSec := (float64(ts) - 4_000_000.0) / 1e6
+		env := -75.0 + 22.0*math.Exp(-0.5*(dtSec/0.65)*(dtSec/0.65))
+		// Inject 70 ms deep multipath dropouts at -220 ms, -40 ms, and +160 ms around peak
+		if (dtSec >= -0.25 && dtSec <= -0.18) || (dtSec >= -0.07 && dtSec <= 0.00) || (dtSec >= 0.13 && dtSec <= 0.20) {
+			env -= 13.0
+		}
+		if c := det.ProcessSample(float32(env), ts, -63, -70, 500_000); c != nil {
+			got = append(got, c)
+		}
+		if math.Abs(dtSec) <= 0.25 {
+			if minNearPeak == 0 || det.SmoothedRSSI() < minNearPeak {
+				minNearPeak = det.SmoothedRSSI()
+			}
+		}
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 clean crossing despite multipath dropouts, got %d", len(got))
+	}
+	if minNearPeak < -61.0 {
+		t.Fatalf("expected 2-pole trimmed-mean envelope to bridge 70 ms multipath dropouts (>= -61 dBm), got %.1f dBm", minNearPeak)
 	}
 }

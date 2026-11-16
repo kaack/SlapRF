@@ -42,6 +42,11 @@ func feedSimulatedLap(t *testing.T, e *Engine, slotIndex int, startSec float64) 
 			{100_000, -85},
 			{120_000, -85},
 			{140_000, -85},
+			{160_000, -85},
+			{180_000, -85},
+			{200_000, -85},
+			{220_000, -85},
+			{240_000, -85},
 		}
 		for _, s := range samples {
 			var frame domain.TimerTelemetryFrame

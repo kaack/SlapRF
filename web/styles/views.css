@@ -4781,6 +4781,7 @@ body.is-gate-dragging * {
 }
 .debug-bar-value {
   text-align: right;
+  font-variant-numeric: tabular-nums;
   color: var(--text);
   white-space: nowrap;
 }
@@ -5630,7 +5631,7 @@ body.is-gate-dragging * {
 }
 .debug-net-inspector-bar-row {
   display: grid;
-  grid-template-columns: 84px minmax(0, 1fr) 64px;
+  grid-template-columns: 84px minmax(0, 1fr) 76px;
   align-items: center;
   gap: 8px;
   font-size: 12px;
