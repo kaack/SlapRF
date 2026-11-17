@@ -5089,10 +5089,39 @@ func (e *Engine) recomputeGraphAndRebuildLocked(stageIdx int, startRoundID strin
 			if id == "" || sourceSeen[id] || domain.IsStagePortalRoundID(id) {
 				return
 			}
-			if _, ok := roundByID[id]; !ok {
+			srcR, ok := roundByID[id]
+			if !ok {
 				return
 			}
 			sourceSeen[id] = true
+			if len(inConns[id]) == 0 && srcR.SeedSource != "all_active_pilots" {
+				// Manually seated root round: preserve manual seats and per-seat VTX channels while
+				// refreshing ExpectedWinners and cascading to connected downstream rounds.
+				stgSet := e.stageSettingsLocked(srcR.StageIndex)
+				defAdv := stgSet.PilotsPerHeat / 2
+				if defAdv < 1 {
+					defAdv = 1
+				}
+				outAdv := race.OutgoingTopAdvance(e.raceState.Connections, id, defAdv)
+				if outAdv < 1 {
+					outAdv = defAdv
+				}
+				if srcR.StageFormat != domain.FormatQualifying && srcR.BracketLane != "finals" {
+					for hi := range e.raceState.Heats {
+						if e.raceState.Heats[hi].RoundID != id {
+							continue
+						}
+						ent := race.HeatEntrants(&e.raceState.Heats[hi])
+						if ent == 0 {
+							ent = len(e.raceState.Heats[hi].Seats)
+						}
+						e.raceState.Heats[hi].ExpectedWinners = race.EffectiveAdvance(outAdv, ent)
+						race.RecomputeHeat(&e.raceState.Heats[hi], stgSet.QualifyingMetric)
+					}
+				}
+				queue = append(queue, outConns[id]...)
+				return
+			}
 			queue = append(queue, id)
 		}
 		for _, rid := range append([]string{startRoundID}, newlyValid...) {
