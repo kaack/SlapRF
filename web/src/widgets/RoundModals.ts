@@ -172,7 +172,9 @@ export function openRoundCustomizeModal(opts: RoundCustomizeModalOptions): void 
       : round.stageFormat === "points_mains"
         ? "points_mains"
         : "single_elimination";
-  const curHeatCount = Math.max(1, round.targetHeats || heats.length || 1);
+  // Show the heat count actually planned (the engine may hold it below the requested target so every
+  // heat can still eliminate someone); fall back to the requested target for rounds with no heats yet.
+  const curHeatCount = Math.max(1, heats.length || round.targetHeats || 1);
 
   const otherFinalsInStage = (race?.rounds ?? []).find(
     (r) =>
@@ -1858,6 +1860,15 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
   const stageHeats = initRace.heats.filter((h) => h.stageIndex === stageIndex);
   const unstartedCount = stageHeats.filter((h) => isHeatUnstarted(h.state)).length;
   const startedCount = stageHeats.length - unstartedCount;
+  const startedQualRoundSet = new Set<string>();
+  for (const h of stageHeats) {
+    if (!isHeatUnstarted(h.state)) {
+      startedQualRoundSet.add(h.roundId || `col-${h.column || h.round || 1}`);
+    }
+  }
+  const minQualRounds = Math.max(1, startedQualRoundSet.size);
+  let curQualRounds = Math.max(minQualRounds, Math.min(12, stgSettings.qualifyingRounds || 2));
+  let curMaxPacks = Math.max(0, Math.min(50, stgSettings.maxPacksPerPilot ?? 0));
 
   const pphOptions: CanvasSelectOption[] = [2, 3, 4, 5, 6, 8].map((n) => ({
     value: String(n),
@@ -2022,10 +2033,17 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
 
       ${
         isOpenQualStage
-          ? `<div class="rc-setting-row">
+          ? `<div class="rc-setting-row is-top-aligned">
               <div class="rc-setting-info">
                 <span class="rc-setting-title">Max heats per pilot</span>
-                <span class="rc-setting-desc">Maximum heats each pilot may fly during the stage (0 = unlimited).</span>
+                <span class="rc-setting-desc">Maximum heats each pilot may fly during the Open Qualifier (0 = unlimited).</span>
+                <div class="races-preset-pills" style="margin-top:6px">
+                  <button type="button" class="races-filter-pill ${curMaxPacks === 0 ? "is-active" : ""}" data-stg-pack-preset="0">Unlimited</button>
+                  <button type="button" class="races-filter-pill ${curMaxPacks === 2 ? "is-active" : ""}" data-stg-pack-preset="2">2 heats</button>
+                  <button type="button" class="races-filter-pill ${curMaxPacks === 3 ? "is-active" : ""}" data-stg-pack-preset="3">3 heats</button>
+                  <button type="button" class="races-filter-pill ${curMaxPacks === 5 ? "is-active" : ""}" data-stg-pack-preset="5">5 heats</button>
+                  <button type="button" class="races-filter-pill ${curMaxPacks === 8 ? "is-active" : ""}" data-stg-pack-preset="8">8 heats</button>
+                </div>
               </div>
               <div class="rc-setting-control">
                 <input
@@ -2034,8 +2052,9 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
                   data-stg-max-packs
                   min="0"
                   max="50"
-                  value="${stgSettings.maxPacksPerPilot ?? 0}"
+                  value="${curMaxPacks}"
                 />
+                <span class="note" data-stg-max-packs-note style="display:block;margin-top:4px;text-align:right">${curMaxPacks === 0 ? "0 = Unlimited" : `Max ${curMaxPacks} heats/pilot`}</span>
               </div>
             </div>
             <div class="rc-setting-row">
@@ -2046,21 +2065,30 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
               <div class="rc-setting-control" data-stg-metric-wrap>${renderMetricSelect()}</div>
             </div>`
           : isQualStage
-            ? `<div class="rc-setting-row">
+            ? `<div class="rc-setting-row is-top-aligned">
                 <div class="rc-setting-info">
-                  <span class="rc-setting-title">Qualifying rounds</span>
-                  <span class="rc-setting-desc">Number of qualifying rounds generated for this stage.</span>
+                  <span class="rc-setting-title">Qualifying rounds (heats per pilot)</span>
+                  <span class="rc-setting-desc">Each pilot flies 1 heat per round. Changing the round count dynamically adds or trims rounds on the graph${startedQualRoundSet.size > 0 ? ` (minimum ${minQualRounds} already started)` : ""}.</span>
+                  <div class="races-preset-pills" style="margin-top:6px">
+                    ${[1, 2, 3, 4, 6]
+                      .filter((n) => n >= minQualRounds)
+                      .map(
+                        (n) =>
+                          `<button type="button" class="races-filter-pill ${curQualRounds === n ? "is-active" : ""}" data-stg-qual-round-preset="${n}">${n} ${n === 1 ? "round" : "rounds"}</button>`
+                      )
+                      .join("")}
+                  </div>
                 </div>
                 <div class="rc-setting-control">
                   <input
                     type="number"
                     class="input mono"
                     data-stg-qual-rounds
-                    min="1"
-                    max="10"
-                    value="${stgSettings.qualifyingRounds || 2}"
-                    ${stageObj.customized || startedCount > 0 ? "disabled" : ""}
+                    min="${minQualRounds}"
+                    max="12"
+                    value="${curQualRounds}"
                   />
+                  <span class="note" data-stg-qual-rounds-note style="display:block;margin-top:4px;text-align:right">${curQualRounds} ${curQualRounds === 1 ? "heat" : "heats"}/pilot</span>
                 </div>
               </div>
               <div class="rc-setting-row">
@@ -2210,9 +2238,65 @@ export function openStageSettingsModal(opts: StageSettingsModalOptions): void {
     }
   });
 
+  const syncQualAndPacksUi = () => {
+    const qualNoteEl = backdrop.querySelector<HTMLElement>("[data-stg-qual-rounds-note]");
+    if (qualNoteEl) {
+      qualNoteEl.textContent = `${curQualRounds} ${curQualRounds === 1 ? "heat" : "heats"}/pilot`;
+    }
+    backdrop.querySelectorAll<HTMLButtonElement>("[data-stg-qual-round-preset]").forEach((btn) => {
+      btn.classList.toggle("is-active", Number(btn.dataset.stgQualRoundPreset) === curQualRounds);
+    });
+    const noteEl = backdrop.querySelector<HTMLElement>("[data-stg-max-packs-note]");
+    if (noteEl) {
+      noteEl.textContent = curMaxPacks === 0 ? "0 = Unlimited" : `Max ${curMaxPacks} heats/pilot`;
+    }
+    backdrop.querySelectorAll<HTMLButtonElement>("[data-stg-pack-preset]").forEach((btn) => {
+      btn.classList.toggle("is-active", Number(btn.dataset.stgPackPreset) === curMaxPacks);
+    });
+  };
+
+  backdrop.addEventListener("input", (e) => {
+    const t = e.target as HTMLElement | null;
+    if (!t) return;
+    if (t.hasAttribute("data-stg-qual-rounds")) {
+      curQualRounds = Math.max(
+        minQualRounds,
+        Math.min(12, Number((t as HTMLInputElement).value) || curQualRounds)
+      );
+      syncQualAndPacksUi();
+    } else if (t.hasAttribute("data-stg-max-packs")) {
+      curMaxPacks = Math.max(
+        0,
+        Math.min(50, Number((t as HTMLInputElement).value ?? 0))
+      );
+      syncQualAndPacksUi();
+    }
+  });
+
   backdrop.addEventListener("click", (e) => {
     const t = e.target as HTMLElement | null;
     if (!t) return;
+
+    const qualPresetBtn = t.closest<HTMLButtonElement>("[data-stg-qual-round-preset]");
+    if (qualPresetBtn) {
+      curQualRounds = Math.max(
+        minQualRounds,
+        Math.min(12, Number(qualPresetBtn.dataset.stgQualRoundPreset ?? 2))
+      );
+      const qInp = backdrop.querySelector<HTMLInputElement>("[data-stg-qual-rounds]");
+      if (qInp) qInp.value = String(curQualRounds);
+      syncQualAndPacksUi();
+      return;
+    }
+
+    const presetBtn = t.closest<HTMLButtonElement>("[data-stg-pack-preset]");
+    if (presetBtn) {
+      curMaxPacks = Math.max(0, Math.min(50, Number(presetBtn.dataset.stgPackPreset ?? 0)));
+      const maxInp = backdrop.querySelector<HTMLInputElement>("[data-stg-max-packs]");
+      if (maxInp) maxInp.value = String(curMaxPacks);
+      syncQualAndPacksUi();
+      return;
+    }
 
     const saveBtn = t.closest<HTMLButtonElement>("[data-stg-save]");
     if (saveBtn && !saveBtn.disabled) {

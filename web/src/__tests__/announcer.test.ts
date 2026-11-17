@@ -1,4 +1,5 @@
 import { Announcer, lapCallout, spokenName } from "../services/announcer";
+import { usbPool, type TimerStatus } from "../services/timer_console";
 import {
   beforeEach,
   describe,
@@ -196,10 +197,14 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
     );
     const store = makeStore();
     const ann = new Announcer(store);
-    expect(ann.settings.enabled).toBe(false);
-    expect(ann.settings.rate).toBe(1.0);
-    expect(ann.settings.volume).toBe(1);
-    expect(ann.settings.voiceURI).toBe("Google US English");
+    try {
+      expect(ann.settings.enabled).toBe(false);
+      expect(ann.settings.rate).toBe(1.0);
+      expect(ann.settings.volume).toBe(1);
+      expect(ann.settings.voiceURI).toBe("Google US English");
+    } finally {
+      ann.stop();
+    }
   });
 
   it("deduplicates queued laps for the same pilot in practice so stale back-to-back laps are never spoken", async () => {
@@ -529,6 +534,182 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
       });
       expect(airhornCalls).toBe(1);
       expect(rig.spokenTexts).toContain("Heat complete");
+    } finally {
+      ann.stop();
+    }
+  });
+
+  it("announces 'Timing system connected' and 'Timing system disconnected' when announcer is enabled", async () => {
+    const rig = installFakeSpeechAndAudio();
+    const main = usbPool.mainConsole;
+    main.applyBackendSlotSnapshot({
+      slotIndex: 0,
+      connected: false,
+      probing: false,
+      reconnecting: false,
+      reconnectAttempt: 0,
+      maxReconnectAttempts: 5,
+      reconnectFailed: false,
+      isOtherDevice: false,
+    });
+
+    const store = makeStore({ timingHardwareMode: "slaprf" });
+    const ann = new Announcer(store);
+    try {
+      const hubStatus = {
+        fw: "0.1.7",
+        role: 1,
+        fp: "AA11BB22",
+        label: "H1",
+        emergencyMode: false,
+      } as unknown as TimerStatus;
+
+      main.applyBackendSlotSnapshot({
+        slotIndex: 0,
+        portName: "COM10",
+        connected: true,
+        probing: false,
+        reconnecting: false,
+        reconnectAttempt: 0,
+        maxReconnectAttempts: 5,
+        reconnectFailed: false,
+        isOtherDevice: false,
+        lastStatus: hubStatus,
+      });
+
+      await new Promise((r) => window.setTimeout(r, 120));
+      expect(rig.spokenTexts).toEqual(["Timing system connected"]);
+      rig.finishCurrentSpeech();
+      await new Promise((r) => window.setTimeout(r, 100));
+
+      main.applyBackendSlotSnapshot({
+        slotIndex: 0,
+        connected: false,
+        probing: false,
+        reconnecting: false,
+        reconnectAttempt: 0,
+        maxReconnectAttempts: 5,
+        reconnectFailed: false,
+        isOtherDevice: false,
+      });
+
+      await new Promise((r) => window.setTimeout(r, 120));
+      expect(rig.spokenTexts).toEqual(["Timing system connected", "Timing system disconnected"]);
+    } finally {
+      main.applyBackendSlotSnapshot({
+        slotIndex: 0,
+        connected: false,
+        probing: false,
+        reconnecting: false,
+        reconnectAttempt: 0,
+        maxReconnectAttempts: 5,
+        reconnectFailed: false,
+        isOtherDevice: false,
+      });
+      ann.stop();
+    }
+  });
+
+  it("tracks timing connection state silently while muted and announces subsequent transitions once enabled", async () => {
+    const rig = installFakeSpeechAndAudio();
+    window.localStorage.setItem(
+      "gate-timer.announcer",
+      JSON.stringify({
+        enabled: false,
+        raceLapCallouts: false,
+        keepScreenAwake: false,
+        voiceURI: "Google US English",
+        rate: 1.0,
+        volume: 0.8,
+      })
+    );
+
+    const store = makeStore({
+      timingHardwareMode: "laprf",
+      simulatorRunning: true,
+      simState: {
+        running: true,
+        speedMultiplier: 1,
+        pilots: [],
+        timers: [],
+        laprfUnits: [
+          {
+            timerId: 2,
+            label: "LapRF-1",
+            host: "192.168.1.50",
+            port: 5403,
+            poweredOn: true,
+            connected: false,
+            gateArmed: true,
+            voltageMv: 12100,
+            rtcDeltaMs: 0,
+            slotRssi: [0, 0, 0, 0, 0, 0, 0, 0],
+            slotFreqsMhz: [],
+            slotThresholds: [],
+          },
+        ],
+      } as never,
+    });
+    const ann = new Announcer(store);
+    try {
+      // Connect while announcer is OFF -> no speech, but internal state tracks connected=true
+      store.applyStatus({
+        gates: store.nodes,
+        timers: [],
+        timingHardwareMode: "laprf",
+        simulatorRunning: true,
+        raceArmed: true,
+        liveTimeStatus: store.liveTime,
+        simState: {
+          running: true,
+          speedMultiplier: 1,
+          pilots: [],
+          timers: [],
+          laprfUnits: [
+            {
+              timerId: 2,
+              label: "LapRF-1",
+              host: "192.168.1.50",
+              port: 5403,
+              poweredOn: true,
+              connected: true,
+              gateArmed: true,
+              voltageMv: 12100,
+              rtcDeltaMs: 0,
+              slotRssi: [0, 0, 0, 0, 0, 0, 0, 0],
+              slotFreqsMhz: [],
+              slotThresholds: [],
+            },
+          ],
+        } as never,
+      });
+      await new Promise((r) => window.setTimeout(r, 120));
+      expect(rig.spokenTexts).toEqual([]);
+
+      // Turn announcer ON -> says "Announcer on"
+      ann.update({ enabled: true });
+      expect(rig.spokenTexts).toEqual(["Announcer on"]);
+      rig.finishCurrentSpeech();
+      await new Promise((r) => window.setTimeout(r, 130));
+
+      // Disconnect while announcer is ON -> says "Timing system disconnected"
+      store.applyStatus({
+        gates: store.nodes,
+        timers: [],
+        timingHardwareMode: "laprf",
+        simulatorRunning: true,
+        raceArmed: true,
+        liveTimeStatus: store.liveTime,
+        simState: {
+          running: true,
+          speedMultiplier: 1,
+          pilots: [],
+          timers: [],
+          laprfUnits: [],
+        } as never,
+      });
+      await new Promise((r) => window.setTimeout(r, 120));
+      expect(rig.spokenTexts).toEqual(["Announcer on", "Timing system disconnected"]);
     } finally {
       ann.stop();
     }

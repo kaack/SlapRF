@@ -61,7 +61,16 @@ func (e *Engine) findOpenQualStageLocked(stageIdx int) (*domain.RaceStage, error
 		return nil, fmt.Errorf("stage %d not found", stageIdx)
 	}
 	if stg.Format != domain.FormatOpenQualifier {
-		return nil, fmt.Errorf("%s is not an Open Qualifier stage", stg.Title)
+		hasOQRound := false
+		for _, r := range e.raceState.Rounds {
+			if r.StageIndex == stg.Index && (r.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(r.ID)) {
+				hasOQRound = true
+				break
+			}
+		}
+		if !hasOQRound {
+			return nil, fmt.Errorf("%s is not an Open Qualifier stage", stg.Title)
+		}
 	}
 	return stg, nil
 }
@@ -157,6 +166,12 @@ func nextOpenQualPackSeq(heats []domain.RaceHeat, stageIdx int) (string, string,
 func (e *Engine) spawnOpenQualPackLocked(stg *domain.RaceStage, stgSettings domain.StageSettings) *domain.RaceHeat {
 	race.SyncRoundsMetadata(&e.raceState)
 	roundID := domain.OpenQualRoundID(stg.Index)
+	for _, r := range e.raceState.Rounds {
+		if r.StageIndex == stg.Index && (domain.IsOpenQualRoundID(r.ID) || r.StageFormat == domain.FormatOpenQualifier) {
+			roundID = r.ID
+			break
+		}
+	}
 	packID, packTitle, seq := nextOpenQualPackSeq(e.raceState.Heats, stg.Index)
 
 	seats := make([]domain.HeatSeat, stgSettings.PilotsPerHeat)

@@ -2661,6 +2661,7 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 				strings.TrimSpace(req.ToPort),
 			)
 		}
+		race.SyncRoundsMetadata(&e.raceState)
 		outPortalID := domain.StageHandoffOutID(targetStage)
 		if fmtType == domain.FormatQualifying && e.findRoundByIDLocked(outPortalID) != nil {
 			_ = e.connectRoundsLocked(newRndID, outPortalID, "qual_feed", 0, 0, 0, "")
@@ -4530,7 +4531,7 @@ func (e *Engine) reconnectRoundConnectionLocked(
 				if remainingValidIn == 0 && oldToR.SeedSource != "all_active_pilots" && e.ensureRoundUnstartedLocked(orig.ToRoundID) == nil {
 					oldToR.SeedSource = "empty"
 				}
-				e.recomputeGraphAndRebuildLocked(oldToR.StageIndex, orig.ToRoundID)
+				e.recomputeGraphAndRebuildLocked(oldToR.StageIndex, orig.ToRoundID, orig.FromRoundID)
 			}
 		} else if len(newlyValid) > 0 {
 			if oldToR := e.findRoundByIDLocked(orig.ToRoundID); oldToR != nil {
@@ -4557,7 +4558,7 @@ func (e *Engine) reconnectRoundConnectionLocked(
 			if inCount > 0 && allBottom && targetR.BracketLane == "winners" {
 				targetR.BracketLane = "losers"
 			}
-			e.recomputeGraphAndRebuildLocked(targetR.StageIndex, targetToID)
+			e.recomputeGraphAndRebuildLocked(targetR.StageIndex, targetToID, orig.FromRoundID)
 		}
 	} else {
 		if domain.IsStageHandoffOutID(orig.ToRoundID) {
@@ -4650,6 +4651,37 @@ func (e *Engine) updateRoundConnectionLocked(
 			e.raceState.Connections[idx].Count = advanceCount
 			e.raceState.Connections[idx].CustomCount = true
 		}
+		// Keep any non-custom companion drop/advance wire on the same source round complementary
+		// so changing Top N on a Winners round automatically adjusts its auto Redemption drop count.
+		updated := e.raceState.Connections[idx]
+		if updated.Count > 0 && (updated.Mode == "top_per_heat" || updated.Mode == "bottom_per_heat") {
+			pph := e.stageSettingsLocked(updated.StageIndex).PilotsPerHeat
+			if pph < 2 {
+				pph = 4
+			}
+			rem := pph - updated.Count
+			if rem < 1 {
+				rem = 1
+			}
+			if rem > pph-1 && pph > 1 {
+				rem = pph - 1
+			}
+			wantCompanion := "bottom_per_heat"
+			if updated.Mode == "bottom_per_heat" {
+				wantCompanion = "top_per_heat"
+			}
+			for oi := range e.raceState.Connections {
+				if oi == idx {
+					continue
+				}
+				oc := &e.raceState.Connections[oi]
+				if !oc.Invalid && oc.FromRoundID == fromID && oc.Mode == wantCompanion && !oc.CustomCount {
+					if e.ensureRoundUnstartedLocked(oc.ToRoundID) == nil {
+						oc.Count = rem
+					}
+				}
+			}
+		}
 	}
 	e.validateConnectionsLocked()
 	if toR := e.findRoundByIDLocked(toID); toR != nil {
@@ -4666,7 +4698,7 @@ func (e *Engine) updateRoundConnectionLocked(
 		if inCount > 0 && allBottom && toR.BracketLane == "winners" {
 			toR.BracketLane = "losers"
 		}
-		e.recomputeGraphAndRebuildLocked(toR.StageIndex, toID)
+		e.recomputeGraphAndRebuildLocked(toR.StageIndex, toID, fromID)
 	}
 	return nil
 }
@@ -4940,7 +4972,7 @@ func (e *Engine) recomputeGraphColumnsOnlyLocked(stageIdx int) {
 	race.SyncRoundsMetadata(&e.raceState)
 }
 
-func (e *Engine) recomputeGraphAndRebuildLocked(stageIdx int, startRoundID string) {
+func (e *Engine) recomputeGraphAndRebuildLocked(stageIdx int, startRoundID string, extraSourceIDs ...string) {
 	newlyValid := e.validateConnectionsLocked()
 	roundByID := make(map[string]*domain.RaceRound)
 	inConns := make(map[string][]domain.RoundConnection)
@@ -5048,6 +5080,30 @@ func (e *Engine) recomputeGraphAndRebuildLocked(stageIdx int, startRoundID strin
 	} else {
 		seen := make(map[string]bool)
 		queue := append([]string{startRoundID}, newlyValid...)
+
+		// Changing a wire also changes how many pilots the SOURCE round must hold per heat
+		// (a heat has to keep at least one pilot who does not advance), so the direct feeders of the
+		// rewired round, plus any source that just lost a wire, are re-planned before it.
+		sourceSeen := make(map[string]bool)
+		addSource := func(id string) {
+			if id == "" || sourceSeen[id] || domain.IsStagePortalRoundID(id) {
+				return
+			}
+			if _, ok := roundByID[id]; !ok {
+				return
+			}
+			sourceSeen[id] = true
+			queue = append(queue, id)
+		}
+		for _, rid := range append([]string{startRoundID}, newlyValid...) {
+			for _, ic := range inConns[rid] {
+				addSource(ic.FromRoundID)
+			}
+		}
+		for _, id := range extraSourceIDs {
+			addSource(id)
+		}
+
 		for len(queue) > 0 {
 			cur := queue[0]
 			queue = queue[1:]
@@ -5062,19 +5118,92 @@ func (e *Engine) recomputeGraphAndRebuildLocked(stageIdx int, startRoundID strin
 		}
 	}
 
-	sort.SliceStable(toRebuild, func(i, j int) bool {
-		ri := roundByID[toRebuild[i]]
-		rj := roundByID[toRebuild[j]]
-		if ri == nil || rj == nil {
-			return false
+	// Topological sort over `toRebuild` so any source round (such as Winners R1 feeding Redemption R1
+	// vertically in the same column) always rebuilds BEFORE the rounds it feeds.
+	inRebuild := make(map[string]bool, len(toRebuild))
+	for _, id := range toRebuild {
+		inRebuild[id] = true
+	}
+	laneRank := func(lane string) int {
+		switch lane {
+		case "qualifying":
+			return 0
+		case "winners":
+			return 1
+		case "losers":
+			return 2
+		case "mains":
+			return 3
+		case "finals":
+			return 4
+		default:
+			return 5
 		}
-		if ri.Column != rj.Column {
-			return ri.Column < rj.Column
+	}
+	lessRound := func(a, b string) bool {
+		ra, rb := roundByID[a], roundByID[b]
+		if ra == nil || rb == nil {
+			return a < b
 		}
-		return ri.Round < rj.Round
-	})
+		if ra.Column != rb.Column {
+			return ra.Column < rb.Column
+		}
+		la, lb := laneRank(ra.BracketLane), laneRank(rb.BracketLane)
+		if la != lb {
+			return la < lb
+		}
+		if ra.Round != rb.Round {
+			return ra.Round < rb.Round
+		}
+		return a < b
+	}
+	inDeg := make(map[string]int, len(toRebuild))
+	adjRebuild := make(map[string][]string, len(toRebuild))
+	for _, id := range toRebuild {
+		for _, ic := range inConns[id] {
+			if inRebuild[ic.FromRoundID] && ic.FromRoundID != id {
+				adjRebuild[ic.FromRoundID] = append(adjRebuild[ic.FromRoundID], id)
+				inDeg[id]++
+			}
+		}
+	}
+	var ready []string
+	for _, id := range toRebuild {
+		if inDeg[id] == 0 {
+			ready = append(ready, id)
+		}
+	}
+	sort.SliceStable(ready, func(i, j int) bool { return lessRound(ready[i], ready[j]) })
+	ordered := make([]string, 0, len(toRebuild))
+	placed := make(map[string]bool, len(toRebuild))
+	for len(ready) > 0 {
+		cur := ready[0]
+		ready = ready[1:]
+		if placed[cur] {
+			continue
+		}
+		placed[cur] = true
+		ordered = append(ordered, cur)
+		for _, nxt := range adjRebuild[cur] {
+			inDeg[nxt]--
+			if inDeg[nxt] == 0 && !placed[nxt] {
+				ready = append(ready, nxt)
+			}
+		}
+		sort.SliceStable(ready, func(i, j int) bool { return lessRound(ready[i], ready[j]) })
+	}
+	if len(ordered) < len(toRebuild) {
+		var rem []string
+		for _, id := range toRebuild {
+			if !placed[id] {
+				rem = append(rem, id)
+			}
+		}
+		sort.SliceStable(rem, func(i, j int) bool { return lessRound(rem[i], rem[j]) })
+		ordered = append(ordered, rem...)
+	}
 
-	for _, rid := range toRebuild {
+	for _, rid := range ordered {
 		e.rebuildSingleRoundLocked(rid)
 	}
 
@@ -5210,16 +5339,61 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 	if r == nil {
 		return
 	}
-	for _, h := range e.raceState.Heats {
-		if h.RoundID == roundID && !isUnstartedHeatState(h.State) {
-			return // Never clobber a round that already has started/confirmed heats
-		}
-	}
 
 	stgSettings := e.stageSettingsLocked(r.StageIndex)
 	maxPerHeat := stgSettings.PilotsPerHeat
 	if maxPerHeat < 2 {
 		maxPerHeat = 4
+	}
+
+	// Elimination-aware sizing: the Top-N leaving this round decides how many pilots every heat
+	// needs so that at least one pilot is always eliminated or dropped.
+	defAdv := maxPerHeat / 2
+	if defAdv < 1 {
+		defAdv = 1
+	}
+	outAdv := 0
+	if r.BracketLane != "finals" {
+		outAdv = race.OutgoingTopAdvance(e.raceState.Connections, roundID, defAdv)
+	}
+	effectiveOutAdv := outAdv
+	if effectiveOutAdv < 1 {
+		effectiveOutAdv = defAdv
+	}
+	syncRoundExpectedWinners := func() {
+		if r.StageFormat == domain.FormatQualifying || r.BracketLane == "finals" {
+			return
+		}
+		for i := range e.raceState.Heats {
+			if e.raceState.Heats[i].RoundID != roundID {
+				continue
+			}
+			ent := race.HeatEntrants(&e.raceState.Heats[i])
+			if ent == 0 {
+				ent = len(e.raceState.Heats[i].Seats)
+			}
+			e.raceState.Heats[i].ExpectedWinners = race.EffectiveAdvance(effectiveOutAdv, ent)
+			race.RecomputeHeat(&e.raceState.Heats[i], stgSettings.QualifyingMetric)
+		}
+	}
+
+	startedCount := 0
+	unstartedCount := 0
+	for _, h := range e.raceState.Heats {
+		if h.RoundID == roundID {
+			if isUnstartedHeatState(h.State) {
+				unstartedCount++
+			} else {
+				startedCount++
+			}
+		}
+	}
+	if startedCount > 0 {
+		// Never touch started/confirmed heats, but dynamically re-adjust any remaining uncompleted
+		// heats in this source round so every uncompleted heat still eliminates >= 1 pilot.
+		e.readjustUncompletedHeatsInPartialRoundLocked(roundID, r, outAdv, effectiveOutAdv, stgSettings)
+		syncRoundExpectedWinners()
+		return
 	}
 
 	var inConns []domain.RoundConnection
@@ -5254,13 +5428,14 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 						needed = 3
 					}
 				}
-			} else if r.TargetHeats > needed {
-				needed = r.TargetHeats
+			} else {
+				needed = race.PlanHeatCount(len(pilots), maxPerHeat, outAdv, r.TargetHeats)
 			}
 			if needed < 1 {
 				needed = 1
 			}
 			e.populateBalancedPilotRoundPreservingLocksLocked(roundID, r, nil, pilots, needed, stgSettings, nil)
+			syncRoundExpectedWinners()
 			return
 		}
 
@@ -5343,10 +5518,7 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 						otherPrior = append(otherPrior, *h)
 					}
 				}
-				needed := (len(srcPilots) + maxPerHeat - 1) / maxPerHeat
-				if r.TargetHeats > needed {
-					needed = r.TargetHeats
-				}
+				needed := race.PlanHeatCount(len(srcPilots), maxPerHeat, outAdv, r.TargetHeats)
 				if needed < 1 {
 					needed = 1
 				}
@@ -5419,17 +5591,27 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 			}
 		}
 
+		// Entrants per source heat (falls back to the seat count for still-empty placeholder heats)
+		// so an undersized heat can never advance everyone it holds.
+		entrantsOf := func(sh *domain.RaceHeat) int {
+			n := race.HeatEntrants(sh)
+			if n == 0 {
+				n = len(sh.Seats)
+			}
+			return n
+		}
+
 		switch conn.Mode {
 		case "top_per_heat":
 			for _, sh := range srcHeats {
 				if sh.StageFormat != domain.FormatQualifying {
-					sh.ExpectedWinners = cnt
+					sh.ExpectedWinners = race.EffectiveAdvance(cnt, entrantsOf(sh))
 					race.RecomputeHeat(sh, stgSettings.QualifyingMetric)
 				}
 			}
 			for rnk := 1; rnk <= cnt; rnk++ {
 				for _, sh := range srcHeats {
-					if rnk <= len(sh.Seats) {
+					if rnk <= len(sh.Seats) && (sh.StageFormat == domain.FormatQualifying || rnk <= race.EffectiveAdvance(cnt, entrantsOf(sh))) {
 						feeders = append(feeders, incomingFeeder{
 							feeder: domain.SeatFeeder{FromHeatID: sh.ID, FromRank: rnk},
 							label:  fmt.Sprintf("%s · %s", race.Ordinal(rnk), sh.ShortLabel),
@@ -5448,15 +5630,16 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 			}
 			for offset := 0; offset < cnt; offset++ {
 				for _, sh := range srcHeats {
-					startRank := topAdv + 1
+					entrants := entrantsOf(sh)
+					startRank := race.EffectiveAdvance(topAdv, entrants) + 1
 					if topAdv == 0 {
-						startRank = len(sh.Seats) - cnt + 1
+						startRank = entrants - cnt + 1
 						if startRank < 1 {
 							startRank = 1
 						}
 					}
 					rnk := startRank + offset
-					if rnk <= len(sh.Seats) {
+					if rnk <= entrants && rnk <= len(sh.Seats) {
 						feeders = append(feeders, incomingFeeder{
 							feeder: domain.SeatFeeder{FromHeatID: sh.ID, FromRank: rnk},
 							label:  fmt.Sprintf("%s · %s", race.Ordinal(rnk), sh.ShortLabel),
@@ -5578,10 +5761,7 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 		return
 	}
 
-	neededHeats := (len(feeders) + maxPerHeat - 1) / maxPerHeat
-	if r.TargetHeats > neededHeats {
-		neededHeats = r.TargetHeats
-	}
+	neededHeats := race.PlanHeatCount(len(feeders), maxPerHeat, outAdv, r.TargetHeats)
 	if neededHeats < 1 {
 		neededHeats = 1
 	}
@@ -5598,10 +5778,44 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 	numDst := len(targetHeats)
 	seatCursor := make([]int, numDst)
 	bracketOrder := snakeBracketHeatOrder(numDst)
+	seqChunk := maxPerHeat
+	if outAdv > 0 && numDst > 0 {
+		// Fill sequentially but evenly so the last heat is never left with too few pilots to eliminate anyone.
+		seqChunk = (len(feeders) + numDst - 1) / numDst
+		if seqChunk < 1 {
+			seqChunk = 1
+		}
+		if seqChunk > maxPerHeat {
+			seqChunk = maxPerHeat
+		}
+	}
+	minBalanced := len(feeders) / numDst
+	extra := len(feeders) % numDst
+	fullExtra := 0
+	canAcceptBalanced := func(hi int) bool {
+		if seatCursor[hi] >= len(targetHeats[hi].Seats) {
+			return false
+		}
+		if seatCursor[hi] < minBalanced {
+			return true
+		}
+		return seatCursor[hi] == minBalanced && fullExtra < extra
+	}
+	heatHasSrc := func(hi int, srcHeatID string) bool {
+		if srcHeatID == "" {
+			return false
+		}
+		for s := 0; s < seatCursor[hi] && s < len(targetHeats[hi].Seats); s++ {
+			if targetHeats[hi].Seats[s].Feeder != nil && targetHeats[hi].Seats[s].Feeder.FromHeatID == srcHeatID {
+				return true
+			}
+		}
+		return false
+	}
 	for idx, fd := range feeders {
 		var dstIdx int
 		if allStageSeeds && allSequential {
-			dstIdx = idx / maxPerHeat
+			dstIdx = idx / seqChunk
 			if dstIdx >= numDst {
 				dstIdx = numDst - 1
 			}
@@ -5616,9 +5830,36 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 		} else {
 			pass := idx / numDst
 			rem := idx % numDst
-			dstIdx = rem
+			pref := rem
 			if pass%2 == 1 {
-				dstIdx = numDst - 1 - rem
+				pref = numDst - 1 - rem
+			}
+			dstIdx = pref
+			if !canAcceptBalanced(pref) || (fd.feeder.FromHeatID != "" && heatHasSrc(pref, fd.feeder.FromHeatID)) {
+				best := -1
+				if fd.feeder.FromHeatID != "" {
+					for step := 0; step < numDst; step++ {
+						cand := (pref + step) % numDst
+						if canAcceptBalanced(cand) && !heatHasSrc(cand, fd.feeder.FromHeatID) {
+							if best < 0 || seatCursor[cand] < seatCursor[best] {
+								best = cand
+							}
+						}
+					}
+				}
+				if best < 0 {
+					for step := 0; step < numDst; step++ {
+						cand := (pref + step) % numDst
+						if canAcceptBalanced(cand) {
+							if best < 0 || seatCursor[cand] < seatCursor[best] {
+								best = cand
+							}
+						}
+					}
+				}
+				if best >= 0 {
+					dstIdx = best
+				}
 			}
 		}
 		th := targetHeats[dstIdx]
@@ -5639,10 +5880,267 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 			}
 		}
 		seatCursor[dstIdx]++
+		if seatCursor[dstIdx] == minBalanced+1 {
+			fullExtra++
+		}
 		fCopy := fd.feeder
 		th.Seats[si].Feeder = &fCopy
 		th.Seats[si].SourceLabel = fd.label
 		th.State = domain.HeatWaiting
+	}
+	syncRoundExpectedWinners()
+}
+
+// readjustUncompletedHeatsInPartialRoundLocked re-balances ONLY the still-unstarted heats of a round
+// that already has one or more started/confirmed heats when an outgoing advancement wire changes.
+func (e *Engine) readjustUncompletedHeatsInPartialRoundLocked(
+	roundID string,
+	r *domain.RaceRound,
+	outAdv int,
+	effectiveOutAdv int,
+	stgSettings domain.StageSettings,
+) {
+	if r == nil || r.BracketLane == "finals" || domain.IsOpenQualRoundID(roundID) || r.StageFormat == domain.FormatOpenQualifier {
+		return
+	}
+	maxPerHeat := stgSettings.PilotsPerHeat
+	if maxPerHeat < 2 {
+		maxPerHeat = 4
+	}
+
+	activeBySlot := make(map[int]domain.PilotSlot)
+	for _, ap := range e.activeEventPilotsForGenerationLocked() {
+		activeBySlot[ap.SlotIndex] = ap
+	}
+
+	startedCount := 0
+	alreadyRaced := make(map[int]bool)
+	var unstartedIndices []int
+	for i := range e.raceState.Heats {
+		h := &e.raceState.Heats[i]
+		if h.RoundID != roundID {
+			continue
+		}
+		if !isUnstartedHeatState(h.State) {
+			startedCount++
+			for _, s := range h.Seats {
+				if s.PilotSlotIndex > 0 {
+					alreadyRaced[s.PilotSlotIndex] = true
+				}
+			}
+		} else {
+			unstartedIndices = append(unstartedIndices, i)
+		}
+	}
+	if len(unstartedIndices) == 0 {
+		return
+	}
+
+	// Collect remaining unstarted pilots (in seed/seat order) or remaining feeders across unstarted heats.
+	var remPilots []domain.PilotSlot
+	var remSeeds []int
+	seenPilot := make(map[int]bool)
+	type savedFeeder struct {
+		feeder domain.SeatFeeder
+		label  string
+	}
+	var remFeeders []savedFeeder
+
+	for _, hi := range unstartedIndices {
+		h := &e.raceState.Heats[hi]
+		for _, s := range h.Seats {
+			if s.PilotSlotIndex > 0 && s.Feeder == nil {
+				if alreadyRaced[s.PilotSlotIndex] || seenPilot[s.PilotSlotIndex] {
+					continue
+				}
+				seenPilot[s.PilotSlotIndex] = true
+				p, ok := activeBySlot[s.PilotSlotIndex]
+				if !ok {
+					p = domain.PilotSlot{
+						SlotIndex:    s.PilotSlotIndex,
+						Callsign:     s.Callsign,
+						PhoneticName: s.PhoneticName,
+						Color:        s.Color,
+						Band:         s.Band,
+						Channel:      s.Channel,
+					}
+				}
+				remPilots = append(remPilots, p)
+				remSeeds = append(remSeeds, s.Seed)
+			} else if s.Feeder != nil && !s.Feeder.IsBye {
+				remFeeders = append(remFeeders, savedFeeder{feeder: *s.Feeder, label: s.SourceLabel})
+			}
+		}
+	}
+
+	remPref := 0
+	if r.TargetHeats > startedCount {
+		remPref = r.TargetHeats - startedCount
+	}
+
+	if len(remPilots) > 0 && len(remFeeders) == 0 {
+		desiredUnstarted := race.PlanHeatCount(len(remPilots), maxPerHeat, outAdv, remPref)
+		for len(unstartedIndices) < desiredUnstarted {
+			e.appendHeatToRoundOrColumnLocked(roundID, r.BracketLane, r.Round, r.Column)
+			unstartedIndices = append(unstartedIndices, len(e.raceState.Heats)-1)
+		}
+		if len(unstartedIndices) > desiredUnstarted {
+			excess := len(unstartedIndices) - desiredUnstarted
+			dropIdx := make(map[int]bool, excess)
+			for k := len(unstartedIndices) - 1; k >= 0 && excess > 0; k-- {
+				dropIdx[unstartedIndices[k]] = true
+				excess--
+			}
+			kept := make([]domain.RaceHeat, 0, len(e.raceState.Heats)-len(dropIdx))
+			for i, h := range e.raceState.Heats {
+				if !dropIdx[i] {
+					kept = append(kept, h)
+				}
+			}
+			e.raceState.Heats = kept
+		}
+
+		var unstartedPtrs []*domain.RaceHeat
+		totalRoundHeats := 0
+		for i := range e.raceState.Heats {
+			if e.raceState.Heats[i].RoundID == roundID {
+				totalRoundHeats++
+				if isUnstartedHeatState(e.raceState.Heats[i].State) {
+					syncUnstartedHeatSeatsToConfig(&e.raceState.Heats[i], maxPerHeat, stgSettings.SeatChannels)
+					unstartedPtrs = append(unstartedPtrs, &e.raceState.Heats[i])
+				}
+			}
+		}
+		if len(unstartedPtrs) == 0 {
+			return
+		}
+
+		numU := len(unstartedPtrs)
+		buckets := make([][]domain.PilotSlot, numU)
+		seedMap := make(map[int]int, len(remPilots))
+		for idx, p := range remPilots {
+			if remSeeds[idx] > 0 {
+				seedMap[p.SlotIndex] = remSeeds[idx]
+			} else {
+				seedMap[p.SlotIndex] = idx + 1
+			}
+			pass := idx / numU
+			rem := idx % numU
+			dst := rem
+			if pass%2 == 1 {
+				dst = numU - 1 - rem
+			}
+			buckets[dst] = append(buckets[dst], p)
+		}
+		lastCh := race.LastChannelByPilotConfirmed(e.raceState.Heats)
+		for bi, uh := range unstartedPtrs {
+			assignPilotsWithChannelContinuity(uh, buckets[bi], stgSettings.SeatChannels, lastCh)
+			for si := range uh.Seats {
+				slot := uh.Seats[si].PilotSlotIndex
+				if slot > 0 && seedMap[slot] > 0 {
+					uh.Seats[si].Seed = seedMap[slot]
+					uh.Seats[si].SourceLabel = fmt.Sprintf("Seed #%d", seedMap[slot])
+				}
+			}
+			if r.StageFormat != domain.FormatQualifying {
+				uh.ExpectedWinners = race.EffectiveAdvance(effectiveOutAdv, race.HeatEntrants(uh))
+			}
+			uh.State = domain.HeatReady
+			finalizeEditedHeatState(uh, stgSettings.QualifyingMetric)
+		}
+
+		idxInRound := 0
+		for i := range e.raceState.Heats {
+			if e.raceState.Heats[i].RoundID == roundID {
+				idxInRound++
+				if totalRoundHeats == 1 {
+					e.raceState.Heats[i].Title = r.Title
+				} else {
+					e.raceState.Heats[i].Title = fmt.Sprintf("%s · Heat %d", r.Title, idxInRound)
+				}
+			}
+		}
+		return
+	}
+
+	if len(remFeeders) > 0 && len(remPilots) == 0 {
+		desiredUnstarted := race.PlanHeatCount(len(remFeeders), maxPerHeat, outAdv, remPref)
+		for len(unstartedIndices) < desiredUnstarted {
+			e.appendHeatToRoundOrColumnLocked(roundID, r.BracketLane, r.Round, r.Column)
+			unstartedIndices = append(unstartedIndices, len(e.raceState.Heats)-1)
+		}
+		if len(unstartedIndices) > desiredUnstarted {
+			excess := len(unstartedIndices) - desiredUnstarted
+			dropIdx := make(map[int]bool, excess)
+			for k := len(unstartedIndices) - 1; k >= 0 && excess > 0; k-- {
+				dropIdx[unstartedIndices[k]] = true
+				excess--
+			}
+			kept := make([]domain.RaceHeat, 0, len(e.raceState.Heats)-len(dropIdx))
+			for i, h := range e.raceState.Heats {
+				if !dropIdx[i] {
+					kept = append(kept, h)
+				}
+			}
+			e.raceState.Heats = kept
+		}
+
+		var unstartedPtrs []*domain.RaceHeat
+		totalRoundHeats := 0
+		for i := range e.raceState.Heats {
+			if e.raceState.Heats[i].RoundID == roundID {
+				totalRoundHeats++
+				if isUnstartedHeatState(e.raceState.Heats[i].State) {
+					syncUnstartedHeatSeatsToConfig(&e.raceState.Heats[i], maxPerHeat, stgSettings.SeatChannels)
+					for si := range e.raceState.Heats[i].Seats {
+						e.raceState.Heats[i].Seats[si].ManualLock = false
+						e.raceState.Heats[i].Seats[si].Feeder = nil
+						clearSeatOccupant(&e.raceState.Heats[i].Seats[si], false)
+					}
+					unstartedPtrs = append(unstartedPtrs, &e.raceState.Heats[i])
+				}
+			}
+		}
+		if len(unstartedPtrs) == 0 {
+			return
+		}
+		numU := len(unstartedPtrs)
+		cursors := make([]int, numU)
+		for idx, sf := range remFeeders {
+			pass := idx / numU
+			rem := idx % numU
+			dst := rem
+			if pass%2 == 1 {
+				dst = numU - 1 - rem
+			}
+			if cursors[dst] >= len(unstartedPtrs[dst].Seats) {
+				for alt := 0; alt < numU; alt++ {
+					if cursors[alt] < len(unstartedPtrs[alt].Seats) {
+						dst = alt
+						break
+					}
+				}
+			}
+			if cursors[dst] < len(unstartedPtrs[dst].Seats) {
+				si := cursors[dst]
+				cursors[dst]++
+				fc := sf.feeder
+				unstartedPtrs[dst].Seats[si].Feeder = &fc
+				unstartedPtrs[dst].Seats[si].SourceLabel = sf.label
+				unstartedPtrs[dst].State = domain.HeatWaiting
+			}
+		}
+		idxInRound := 0
+		for i := range e.raceState.Heats {
+			if e.raceState.Heats[i].RoundID == roundID {
+				idxInRound++
+				if totalRoundHeats == 1 {
+					e.raceState.Heats[i].Title = r.Title
+				} else {
+					e.raceState.Heats[i].Title = fmt.Sprintf("%s · Heat %d", r.Title, idxInRound)
+				}
+			}
+		}
 	}
 }
 
@@ -6299,9 +6797,20 @@ func (e *Engine) refreshUnstartedPilotsInRoundsLocked() {
 	if !e.raceState.Generated {
 		return
 	}
+	race.EnsureStagesMetadata(&e.raceState)
 	race.SyncRoundsMetadata(&e.raceState)
+	qualReconciled := make(map[int]bool)
+	for _, stg := range e.raceState.Stages {
+		if stg.Format == domain.FormatQualifying && !stg.Customized {
+			e.reconcileQualifyingStageLocked(stg.Index)
+			qualReconciled[stg.Index] = true
+		}
+	}
 	stagesSeen := make(map[int]bool)
 	for _, r := range e.raceState.Rounds {
+		if qualReconciled[r.StageIndex] {
+			continue
+		}
 		if r.SeedSource != "all_active_pilots" || domain.IsStagePortalRoundID(r.ID) || domain.IsOpenQualRoundID(r.ID) {
 			continue
 		}

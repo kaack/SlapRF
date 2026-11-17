@@ -90,6 +90,7 @@ import {
 } from "../widgets/FormatDiagram";
 import {
   closeActiveRoundModal,
+  openOpenQualifierSettingsModal,
   openRaceSettingsModal,
   openStageSettingsModal,
   openTemplatesModal,
@@ -967,7 +968,7 @@ export class RacesView extends Component {
     this.tickTimer = window.setInterval(() => {
       if (!this.isViewActive) return;
       this.updateLiveClockDom();
-    }, 150);
+    }, 80);
 
     this.rssiTimer = window.setInterval(() => {
       if (!this.isViewActive) return;
@@ -2748,19 +2749,18 @@ export class RacesView extends Component {
     const barEl = this.el.querySelector<HTMLElement>("[data-race-progress-fill]");
     if (!clockEl) return;
 
+    const serverNowUs = this.store.liveServerTimestampUs;
+
     if (heat.state === "countdown") {
       const nomSec = Math.max(1, heat.countdownDurationSec || race.config.countdownSec || 5);
       let isArming = false;
       let liveRem = Math.max(0, Math.min(nomSec, Number(heat.countdownRemainingSec ?? nomSec)));
-      if (heat.countdownStartUs && heat.countdownStartUs > 0 && this.store.latestTimestampUs > 0) {
-        if (this.store.smoothLatestTimestampUs < heat.countdownStartUs) {
+      if (heat.countdownStartUs && heat.countdownStartUs > 0 && serverNowUs > 0) {
+        if (serverNowUs < heat.countdownStartUs) {
           isArming = true;
           liveRem = nomSec;
         } else {
-          const elapsedCd = Math.max(
-            0,
-            (this.store.smoothLatestTimestampUs - heat.countdownStartUs) / 1e6
-          );
+          const elapsedCd = Math.max(0, (serverNowUs - heat.countdownStartUs) / 1e6);
           liveRem = Math.max(0, nomSec - elapsedCd);
         }
       } else {
@@ -2805,11 +2805,8 @@ export class RacesView extends Component {
     if (heat.state === "running" && !race.emergencyStopped && race.lifecycle !== "paused") {
       const baseElapsed = Math.max(0, Number(heat.elapsedSec) || 0);
       let liveElapsed = baseElapsed;
-      if (heat.startToneUs && heat.startToneUs > 0 && this.store.latestTimestampUs >= heat.startToneUs) {
-        liveElapsed = Math.max(
-          baseElapsed,
-          (this.store.smoothLatestTimestampUs - heat.startToneUs) / 1e6
-        );
+      if (heat.startToneUs && heat.startToneUs > 0 && serverNowUs >= heat.startToneUs) {
+        liveElapsed = Math.max(baseElapsed, (serverNowUs - heat.startToneUs) / 1e6);
       } else if (this.store.lastRaceSyncPerfMs > 0) {
         const speedMult = this.store.simulatorRunning
           ? Math.max(1, this.store.simState?.speedMultiplier || 1)
@@ -5063,7 +5060,14 @@ export class RacesView extends Component {
       const stageIndex = Number(oqBtn.dataset.stageIdx) || this.getCurrentViewStage();
       const pilotSlotIndex = Number(oqBtn.dataset.pilotSlot) || 0;
       const heatId = oqBtn.dataset.heatId || undefined;
-      if (oqAct === "enqueue_all") {
+      if (oqAct === "open_settings") {
+        openOpenQualifierSettingsModal({
+          stageIndex,
+          getRace: () => this.currentRace,
+          api: this.api,
+          onError: this.reportErr,
+        });
+      } else if (oqAct === "enqueue_all") {
         void this.api
           .bracketEdit({ action: "open_qual_enqueue_all", stageIndex })
           .catch(this.reportErr);
@@ -7388,8 +7392,15 @@ export class RacesView extends Component {
     return `
       <div class="oq-flightline-box" data-open-qual-flightline="${viewStage}">
         <div class="oq-flightline-head">
-          <div class="oq-flightline-meta">
-            <span class="note">${esc(formatQualifyingMetricLabel(curMetric))} · ${maxPacks > 0 ? `Max ${maxPacks} heats/pilot` : "Unlimited heats"}</span>
+          <div class="oq-flightline-meta" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+            <span class="note">${esc(formatQualifyingMetricLabel(curMetric))}</span>
+            ${
+              !locked
+                ? `<button type="button" class="btn btn-ghost btn-xs" data-oq-act="open_settings" data-stage-idx="${viewStage}" title="Set maximum heats per pilot and Open Qualifier rules">
+                    ${icons.sliders(12)}<span>${maxPacks > 0 ? `Max ${maxPacks} heats/pilot` : "Max heats: Unlimited"}</span>
+                  </button>`
+                : `<span class="note">· ${maxPacks > 0 ? `Max ${maxPacks} heats/pilot` : "Unlimited heats"}</span>`
+            }
           </div>
           <div class="oq-flightline-btns">
             ${
@@ -8004,8 +8015,8 @@ export class RacesView extends Component {
       (Number(heat.countdownArmRemainingSec ?? 0) > 0 ||
         Boolean(
           heat.countdownStartUs &&
-            this.store.latestTimestampUs > 0 &&
-            this.store.latestTimestampUs < heat.countdownStartUs
+            this.store.liveServerTimestampUs > 0 &&
+            this.store.liveServerTimestampUs < heat.countdownStartUs
         ));
     const initialCountdownDisplaySec = initialIsArming
       ? maxCountdownSec

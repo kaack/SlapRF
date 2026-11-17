@@ -70,6 +70,14 @@ export class LapRFHardwareLink {
     };
   }
 
+  /** Subscribes to link state notifications without starting a background poll timer on its own. */
+  public onChange(fn: Listener): () => void {
+    this.listeners.add(fn);
+    return () => {
+      this.listeners.delete(fn);
+    };
+  }
+
   private ensurePolling(): void {
     if (this.pollTimer !== null || typeof window === "undefined") return;
     void this.refreshStatus();

@@ -1238,8 +1238,46 @@ export class AppStore {
     return Math.round(this._playheadUs);
   }
   private _lastRaceSyncPerfMs = 0;
+  private _serverClockBaseUs = 0;
+  private _serverClockPerfMs = 0;
+  private _lastReturnedServerTsUs = 0;
+
   public get lastRaceSyncPerfMs(): number {
     return this._lastRaceSyncPerfMs;
+  }
+
+  /**
+   * Monotonic server engine clock in microseconds (`eng.NowUs()`), extrapolated smoothly with
+   * `performance.now()` between HTTP/WebSocket syncs regardless of whether any timing hardware
+   * or telemetry stream is active.
+   */
+  public get liveServerTimestampUs(): number {
+    if (this._serverClockBaseUs <= 0) {
+      return 0;
+    }
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (this._serverClockPerfMs <= 0) {
+      return this._serverClockBaseUs;
+    }
+    const speedMult = this._simulatorRunning ? Math.max(1, this._simState?.speedMultiplier || 1) : 1;
+    const dtUs = Math.max(0, (nowMs - this._serverClockPerfMs) * 1000) * speedMult;
+    const rawUs = Math.round(this._serverClockBaseUs + dtUs);
+    // Hold monotonic against tiny (<500 ms) HTTP poll RTT jitter, while snapping immediately on large clock resets.
+    if (this._lastReturnedServerTsUs > 0 && Math.abs(rawUs - this._lastReturnedServerTsUs) <= 500_000) {
+      this._lastReturnedServerTsUs = Math.max(this._lastReturnedServerTsUs, rawUs);
+      return this._lastReturnedServerTsUs;
+    }
+    this._lastReturnedServerTsUs = rawUs;
+    return rawUs;
+  }
+
+  private anchorServerClock(serverTsUs: number | undefined, resetMonotonic = false): void {
+    if (!serverTsUs || serverTsUs <= 0) return;
+    this._serverClockBaseUs = serverTsUs;
+    this._serverClockPerfMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (resetMonotonic) {
+      this._lastReturnedServerTsUs = serverTsUs;
+    }
   }
   public get selectedPilot(): number {
     return this._selectedPilot;
@@ -1328,7 +1366,11 @@ export class AppStore {
       this._playheadUs = 0;
       this._latestTelemetryTimestampUs = 0;
       this._lastIngestPerfMs = 0;
+      this._serverClockBaseUs = 0;
+      this._serverClockPerfMs = 0;
+      this._lastReturnedServerTsUs = 0;
     }
+    this.anchorServerClock(state.serverTimestampUs, modeChanged);
 
     this.lastCrossingBySlot.clear();
     let maxTs = state.serverTimestampUs ?? 0;
@@ -1357,6 +1399,7 @@ export class AppStore {
     if (status.serverTimestampUs && status.serverTimestampUs > this._latestTimestampUs) {
       this._latestTimestampUs = status.serverTimestampUs;
     }
+    this.anchorServerClock(status.serverTimestampUs, false);
     if (status.timingHardwareMode) {
       const nextHw: TimingHardwareMode = normalizeTimingHardwareMode(status.timingHardwareMode);
       if (nextHw !== this._timingHardwareMode) {
@@ -1415,13 +1458,20 @@ export class AppStore {
   public ingestRace(
     raceState: RaceTournamentState,
     eventState?: EventManagerState | null,
-    announcement?: RaceAnnouncement | null
+    announcement?: RaceAnnouncement | null,
+    serverTimestampUs?: number
   ): void {
     this._raceState = normalizeRaceState(raceState);
     if (eventState) {
       this._eventState = normalizeEventState(eventState);
     }
     this._lastRaceSyncPerfMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    if (serverTimestampUs && serverTimestampUs > 0) {
+      if (serverTimestampUs > this._latestTimestampUs) {
+        this._latestTimestampUs = serverTimestampUs;
+      }
+      this.anchorServerClock(serverTimestampUs, false);
+    }
     this.emit("race");
     if (announcement) {
       this.raceAnnouncementListeners.forEach((fn) => fn(announcement));
@@ -1467,6 +1517,10 @@ export class AppStore {
     }
     const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
     this._lastIngestPerfMs = nowMs;
+    if (frame.timestampUs > this.liveServerTimestampUs) {
+      this._serverClockBaseUs = frame.timestampUs;
+      this._serverClockPerfMs = nowMs;
+    }
     // Up to ~700 samples/s on real hardware: format the "last seen" stamp at most every 100 ms.
     if (nowMs - this._lastSeenIsoAtMs >= 100) {
       this._lastSeenIsoAtMs = nowMs;

@@ -790,17 +790,29 @@ export class NetworkView extends Component {
   ): number[] | undefined {
     if (!this.store.simulatorRunning) return undefined;
     const liveWasm = timerId !== undefined ? window.slaprfWasm?.getSimTimerRssi?.(timerId) : null;
+    const assignedNode =
+      timerId !== undefined
+        ? this.store.nodes.find((n) => (n.assignedTimerId ?? n.gateId) === timerId)
+        : undefined;
+    const assignedHist = assignedNode ? this.store.historyFor(assignedNode.gateId) : [];
+    const liveNodeRssi =
+      assignedHist.length > 0
+        ? assignedHist[assignedHist.length - 1].rssi
+        : assignedNode && Array.isArray(assignedNode.lastRssi) && assignedNode.lastRssi.some((v) => v < 0)
+          ? assignedNode.lastRssi
+          : undefined;
     const simTimer =
       timerId !== undefined
         ? this.store.simState?.timers?.find((t) => t.timerId === timerId)
         : undefined;
     const baseFloor = Math.round(baseFloorDbm || -92);
+    // Prefer 50 Hz WebSocket node telemetry over 0.5 Hz (/api/status) simState.timers snapshots!
     let rawRssi: number[] | undefined =
       Array.isArray(liveWasm) && liveWasm.some((v) => v < 0)
         ? liveWasm
-        : Array.isArray(simTimer?.lastRssi) && simTimer!.lastRssi.some((v) => v < 0)
-          ? simTimer!.lastRssi
-          : Array.isArray(fallbackRssi) && fallbackRssi.some((v) => v < 0)
+        : Array.isArray(liveNodeRssi) && liveNodeRssi.some((v) => v < 0)
+          ? liveNodeRssi
+          : assignedNode && Array.isArray(fallbackRssi) && fallbackRssi.some((v) => v < 0)
             ? fallbackRssi
             : undefined;
     if (!rawRssi && this.store.nodes.length > 0) {
@@ -814,11 +826,20 @@ export class NetworkView extends Component {
             ? startNode.lastRssi
             : undefined;
       if (srcRssi) {
-        rawRssi = srcRssi.map((v) => Math.max(baseFloor, v - 3.5 + (Math.random() - 0.5) * 1.6));
+        rawRssi = srcRssi.map((v) => Math.max(baseFloor, v - 3.5 + (Math.random() - 0.5) * 1.0));
       }
+    }
+    if (!rawRssi) {
+      rawRssi =
+        Array.isArray(simTimer?.lastRssi) && simTimer!.lastRssi.some((v) => v < 0)
+          ? simTimer!.lastRssi
+          : Array.isArray(fallbackRssi) && fallbackRssi.some((v) => v < 0)
+            ? fallbackRssi
+            : undefined;
     }
 
     const pilots = this.store.pilots ?? [];
+    const roundHalf = (x: number) => Math.round(x * 2) / 2;
     const out: number[] = [];
     for (let i = 0; i < 8; i++) {
       if (!this.signalEnabledCh[i]) {
@@ -830,16 +851,17 @@ export class NetworkView extends Component {
         out.push(-128);
         continue;
       }
-      const floorVal = baseFloor - (i % 2);
+      const floorVal = baseFloor - (i % 2) * 0.5;
       const matchIdx = pilots.findIndex(
         (p) => p.enabled && p.frequencyMhz > 0 && Math.abs(p.frequencyMhz - wantFreq) <= 8
       );
       let val: number;
       if (rawRssi && matchIdx >= 0 && matchIdx < rawRssi.length && rawRssi[matchIdx] < 0) {
         const detLoss = Math.abs(pilots[matchIdx].frequencyMhz - wantFreq) * 1.4;
-        val = Math.round(Math.max(floorVal - 2, rawRssi[matchIdx] - detLoss));
+        const jitter = (Math.random() - 0.5) * 0.6;
+        val = roundHalf(Math.max(floorVal - 2, rawRssi[matchIdx] - detLoss + jitter));
       } else {
-        val = Math.round(floorVal + (Math.random() - 0.5) * 2.0);
+        val = roundHalf(floorVal + (Math.random() - 0.5) * 1.6);
       }
       out.push(Math.max(-120, Math.min(-15, val)));
     }

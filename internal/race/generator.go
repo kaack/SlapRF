@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"math/rand"
+	"sort"
 
 	"slaprf/internal/domain"
 )
@@ -154,6 +155,10 @@ func generateQualifyingHeats(
 	if len(seatChannels) < maxPerHeat {
 		seatChannels = domain.DefaultSeatChannels(maxPerHeat)
 	}
+	numRounds := cfg.QualifyingRounds
+	if numRounds < 1 {
+		numRounds = 1
+	}
 	heatsPerRound := (n + maxPerHeat - 1) / maxPerHeat
 	if heatsPerRound < 1 {
 		heatsPerRound = 1
@@ -171,7 +176,7 @@ func generateQualifyingHeats(
 		lastCh := make(map[int]uint8)
 		var heats []domain.RaceHeat
 		order := orderOffset
-		for round := 1; round <= cfg.QualifyingRounds; round++ {
+		for round := 1; round <= numRounds; round++ {
 			buckets := make([][]seededPilot, heatsPerRound)
 			for i, sp := range seeded {
 				bIdx := (i + (round - 1)) % heatsPerRound
@@ -234,7 +239,7 @@ func generateQualifyingHeats(
 	prevRoundStart := -1
 	prevRoundCount := 0
 
-	for round := 1; round <= cfg.QualifyingRounds; round++ {
+	for round := 1; round <= numRounds; round++ {
 		var srcPtrs []*domain.RaceHeat
 		if prevRoundStart >= 0 && prevRoundCount > 0 {
 			for k := 0; k < prevRoundCount; k++ {
@@ -527,23 +532,29 @@ func generateSingleElimination(
 		return []domain.RaceHeat{gf}, nil
 	}
 
-	// Power-of-2 number of Round 1 heats so each round halves cleanly down to 1 Final heat.
-	m := 1
-	for m*k < len(seeded) {
-		m *= 2
-	}
+	// Elimination-aware Round 1 sizing: pick heat count so every heat holds at least `adv + 1`
+	// pilots (eliminating at least 1 pilot per heat) whenever feasible.
+	m := PlanHeatCount(len(seeded), k, adv, 0)
 	buckets := snakeDistribute(seeded, m)
 
 	var heats []domain.RaceHeat
 	var edges []domain.BracketEdge
 	order := orderOffset
 
+	type seHeatInfo struct {
+		id       string
+		entrants int
+		advCount int
+	}
+	prevHeats := make([]seHeatInfo, m)
+
 	// Round 1
-	prevHeatIDs := make([]string, m)
 	for hIdx := 0; hIdx < m; hIdx++ {
 		order++
 		hid := fmt.Sprintf("W1-%d", hIdx+1)
-		prevHeatIDs[hIdx] = hid
+		sz := len(buckets[hIdx])
+		expWin := EffectiveAdvance(adv, sz)
+		prevHeats[hIdx] = seHeatInfo{id: hid, entrants: sz, advCount: expWin}
 		seats := buildKnownSeats(buckets[hIdx], cfg.SeatChannels, lastCh, func(sp seededPilot) string {
 			return fmt.Sprintf("Seed #%d", sp.seed)
 		})
@@ -566,7 +577,7 @@ func generateSingleElimination(
 			StartMode:       domain.StartModeHeadsUp,
 			TargetLaps:      cfg.TargetLaps,
 			TimeLimitSec:    cfg.TimeLimitSec,
-			ExpectedWinners: adv,
+			ExpectedWinners: expWin,
 			State:           domain.HeatReady,
 			Seats:           seats,
 		}
@@ -575,17 +586,69 @@ func generateSingleElimination(
 	}
 
 	roundNum := 1
-	for len(prevHeatIDs) > 1 {
+	for len(prevHeats) > 0 {
+		totalAdv := 0
+		maxAdv := 0
+		for _, ph := range prevHeats {
+			totalAdv += ph.advCount
+			if ph.advCount > maxAdv {
+				maxAdv = ph.advCount
+			}
+		}
+		if totalAdv == 0 {
+			break
+		}
+
 		roundNum++
-		nextCount := len(prevHeatIDs) / 2
-		nextIDs := make([]string, nextCount)
-		isFinal := nextCount == 1
+		isFinal := totalAdv <= k
+		nextCount := 1
+		if !isFinal {
+			nextCount = PlanHeatCount(totalAdv, k, adv, 0)
+		}
+
+		heatFeeders := make([][]domain.SeatFeeder, nextCount)
+		paired := len(prevHeats) == 2*nextCount
+		if paired {
+			for hIdx := 0; hIdx < nextCount; hIdx++ {
+				a := prevHeats[2*hIdx]
+				b := prevHeats[2*hIdx+1]
+				sumAB := a.advCount + b.advCount
+				if sumAB > k || (!isFinal && IsFeasibleElimPool(totalAdv, k, adv) && sumAB < adv+1) {
+					paired = false
+					break
+				}
+			}
+		}
+		if paired {
+			for hIdx := 0; hIdx < nextCount; hIdx++ {
+				srcA := prevHeats[2*hIdx]
+				srcB := prevHeats[2*hIdx+1]
+				for r := 1; r <= srcA.advCount; r++ {
+					heatFeeders[hIdx] = append(heatFeeders[hIdx], domain.SeatFeeder{FromHeatID: srcA.id, FromRank: r})
+				}
+				for r := 1; r <= srcB.advCount; r++ {
+					heatFeeders[hIdx] = append(heatFeeders[hIdx], domain.SeatFeeder{FromHeatID: srcB.id, FromRank: r})
+				}
+			}
+		} else {
+			var pool []domain.SeatFeeder
+			for r := 1; r <= maxAdv; r++ {
+				for _, ph := range prevHeats {
+					if r <= ph.advCount {
+						pool = append(pool, domain.SeatFeeder{FromHeatID: ph.id, FromRank: r})
+					}
+				}
+			}
+			heatFeeders = DistributeFeedersAcrossHeats(pool, nextCount, k)
+		}
+
+		nextHeats := make([]seHeatInfo, 0, nextCount)
 		for hIdx := 0; hIdx < nextCount; hIdx++ {
 			order++
-			srcA := prevHeatIDs[2*hIdx]
-			srcB := prevHeatIDs[2*hIdx+1]
+			feeders := heatFeeders[hIdx]
+			entrants := len(feeders)
+			expWin := EffectiveAdvance(adv, entrants)
 			var hid, title, lane string
-			expWin := adv
 			if isFinal {
 				lane = "finals"
 				expWin = 1
@@ -603,21 +666,11 @@ func generateSingleElimination(
 				if nextCount > 2 {
 					title = fmt.Sprintf("Round %d · Heat %d", roundNum, hIdx+1)
 				}
+				if nextCount == 1 {
+					title = fmt.Sprintf("Round %d", roundNum)
+				}
 			}
-			nextIDs[hIdx] = hid
-
-			var feeders []domain.SeatFeeder
-			advRanks := makeRange(1, adv)
-			for _, r := range advRanks {
-				feeders = append(feeders, domain.SeatFeeder{FromHeatID: srcA, FromRank: r})
-			}
-			for _, r := range advRanks {
-				feeders = append(feeders, domain.SeatFeeder{FromHeatID: srcB, FromRank: r})
-			}
-			edges = append(edges,
-				domain.BracketEdge{FromHeatID: srcA, ToHeatID: hid, Ranks: advRanks},
-				domain.BracketEdge{FromHeatID: srcB, ToHeatID: hid, Ranks: advRanks},
-			)
+			edges = appendGroupedBracketEdges(edges, feeders, hid, nil)
 			heats = append(heats, domain.RaceHeat{
 				ID:              hid,
 				StageIndex:      stageIdx,
@@ -636,16 +689,53 @@ func generateSingleElimination(
 				State:           domain.HeatWaiting,
 				Seats:           buildFeederSeats(feeders, cfg.SeatChannels),
 			})
+			if !isFinal {
+				nextHeats = append(nextHeats, seHeatInfo{id: hid, entrants: entrants, advCount: expWin})
+			}
 		}
-		prevHeatIDs = nextIDs
+		if isFinal {
+			break
+		}
+		prevHeats = nextHeats
 	}
 
 	return heats, edges
 }
 
-// generateDoubleElimination builds a standard MultiGP / FPVTrackside Double Elimination bracket
-// (8-pilot 6-heat, 16-pilot 14-heat, 32-pilot 30-heat, or compact <=4-pilot bracket) with
-// balanced snake seeding, automatic bye detection, and Single Final or Chase the Ace Finals.
+// appendGroupedBracketEdges collapses `feeders` by `FromHeatID` (in first-seen order) into BracketEdges.
+func appendGroupedBracketEdges(
+	edges []domain.BracketEdge,
+	feeders []domain.SeatFeeder,
+	toHeatID string,
+	dropByHeat map[string]bool,
+) []domain.BracketEdge {
+	var srcOrder []string
+	ranksBySrc := make(map[string][]int)
+	for _, fd := range feeders {
+		if fd.FromHeatID == "" || fd.IsBye {
+			continue
+		}
+		if _, seen := ranksBySrc[fd.FromHeatID]; !seen {
+			srcOrder = append(srcOrder, fd.FromHeatID)
+		}
+		ranksBySrc[fd.FromHeatID] = append(ranksBySrc[fd.FromHeatID], fd.FromRank)
+	}
+	for _, srcID := range srcOrder {
+		rks := ranksBySrc[srcID]
+		sort.Ints(rks)
+		edges = append(edges, domain.BracketEdge{
+			FromHeatID: srcID,
+			ToHeatID:   toHeatID,
+			Ranks:      rks,
+			IsDrop:     dropByHeat != nil && dropByHeat[srcID],
+		})
+	}
+	return edges
+}
+
+// generateDoubleElimination builds an elimination-aware, propagation-aware Double Elimination bracket
+// (preserving classic MultiGP 8-pilot 6-heat, 16-pilot 14-heat, and 32-pilot 30-heat layouts while
+// sizing non-power-of-2 rosters so every Winners and Redemption heat eliminates or drops at least 1 pilot).
 func generateDoubleElimination(
 	cfg domain.RaceSetupConfig,
 	seeded []seededPilot,
@@ -671,27 +761,31 @@ func generateDoubleElimination(
 		return generateCompactDoubleElim(cfg, seeded, stageIdx, orderOffset, lastCh)
 	}
 
-	// Standard bracket sizing: M = 2^m Round-1 Winners heats where M * k >= len(seeded), M >= 2.
-	m := 2
-	for m*k < len(seeded) {
-		m *= 2
+	type deHeatInfo struct {
+		id       string
+		entrants int
+		advCount int
 	}
+
+	m := PlanHeatCount(len(seeded), k, adv, 0)
 	buckets := snakeDistribute(seeded, m)
-	bucketSizes := make(map[string]int)
 
 	var heats []domain.RaceHeat
 	var edges []domain.BracketEdge
 	order := orderOffset
 	wCol := 1
-	lCol := 1
+	lCol := 0
+	wRoundNum := 1
+	lRoundNum := 0
 
 	// Winners Round 1 (m heats)
-	wPrev := make([]string, m)
+	wCurr := make([]deHeatInfo, m)
 	for hIdx := 0; hIdx < m; hIdx++ {
 		order++
 		hid := fmt.Sprintf("W1-%d", hIdx+1)
-		wPrev[hIdx] = hid
-		bucketSizes[hid] = len(buckets[hIdx])
+		sz := len(buckets[hIdx])
+		expWin := EffectiveAdvance(adv, sz)
+		wCurr[hIdx] = deHeatInfo{id: hid, entrants: sz, advCount: expWin}
 		seats := buildKnownSeats(buckets[hIdx], cfg.SeatChannels, lastCh, func(sp seededPilot) string {
 			return fmt.Sprintf("Seed #%d", sp.seed)
 		})
@@ -699,6 +793,10 @@ func generateDoubleElimination(
 			if s.PilotSlotIndex > 0 && s.Channel > 0 {
 				lastCh[s.PilotSlotIndex] = domain.EncodeBandChannel(s.Band, s.Channel)
 			}
+		}
+		title := fmt.Sprintf("Winners Round 1 · Heat %d", hIdx+1)
+		if m == 1 {
+			title = "Winners Final"
 		}
 		h := domain.RaceHeat{
 			ID:              hid,
@@ -709,12 +807,12 @@ func generateDoubleElimination(
 			Column:          wCol,
 			Order:           order,
 			BracketLane:     "winners",
-			Title:           fmt.Sprintf("Winners Round 1 · Heat %d", hIdx+1),
+			Title:           title,
 			ShortLabel:      hid,
 			StartMode:       domain.StartModeHeadsUp,
 			TargetLaps:      cfg.TargetLaps,
 			TimeLimitSec:    cfg.TimeLimitSec,
-			ExpectedWinners: adv,
+			ExpectedWinners: expWin,
 			State:           domain.HeatReady,
 			Seats:           seats,
 		}
@@ -722,75 +820,294 @@ func generateDoubleElimination(
 		heats = append(heats, h)
 	}
 
-	// Losers Round 1 (m/2 heats): fed by drops (ranks adv+1..k) from pairs of W1 heats, aligned directly below W1.
-	lRoundNum := 1
-	lPrev := make([]string, m/2)
-	for hIdx := 0; hIdx < m/2; hIdx++ {
-		order++
-		hid := fmt.Sprintf("L1-%d", hIdx+1)
-		lPrev[hIdx] = hid
-		srcA := wPrev[2*hIdx]
-		srcB := wPrev[2*hIdx+1]
-		feeders, ranksA := dropFeedersFromW1(srcA, bucketSizes[srcA], adv, k)
-		feedersB, ranksB := dropFeedersFromW1(srcB, bucketSizes[srcB], adv, k)
-		feeders = append(feeders, feedersB...)
-		if len(ranksA) > 0 {
-			edges = append(edges, domain.BracketEdge{FromHeatID: srcA, ToHeatID: hid, Ranks: ranksA, IsDrop: true})
+	var pendingDrops []deHeatInfo
+	pendingDrops = append(pendingDrops, wCurr...)
+	var lSurv []deHeatInfo
+
+	sumAdv := func(list []deHeatInfo) int {
+		tot := 0
+		for _, item := range list {
+			tot += item.advCount
 		}
-		if len(ranksB) > 0 {
-			edges = append(edges, domain.BracketEdge{FromHeatID: srcB, ToHeatID: hid, Ranks: ranksB, IsDrop: true})
+		return tot
+	}
+	lPoolCount := func() int {
+		tot := 0
+		for _, d := range pendingDrops {
+			if d.entrants > d.advCount {
+				tot += d.entrants - d.advCount
+			}
 		}
-		heats = append(heats, domain.RaceHeat{
-			ID:              hid,
-			StageIndex:      stageIdx,
-			StageName:       "Double Elimination",
-			StageFormat:     domain.FormatDoubleElimination,
-			Round:           1,
-			Column:          lCol,
-			Order:           order,
-			BracketLane:     "losers",
-			Title:           losersTitle(1, hIdx+1, m/2, false),
-			ShortLabel:      hid,
-			StartMode:       domain.StartModeHeadsUp,
-			TargetLaps:      cfg.TargetLaps,
-			TimeLimitSec:    cfg.TimeLimitSec,
-			ExpectedWinners: adv,
-			State:           domain.HeatWaiting,
-			Seats:           buildFeederSeats(feeders, cfg.SeatChannels),
-		})
+		for _, s := range lSurv {
+			tot += s.advCount
+		}
+		return tot
+	}
+	nextWinnersDropCount := func(wList []deHeatInfo) int {
+		wTot := sumAdv(wList)
+		if wTot <= adv {
+			return 0
+		}
+		nwh := PlanHeatCount(wTot, k, adv, 0)
+		base := wTot / nwh
+		rem := wTot % nwh
+		drops := 0
+		for i := 0; i < nwh; i++ {
+			sz := base
+			if i < rem {
+				sz++
+			}
+			drops += sz - EffectiveAdvance(adv, sz)
+		}
+		return drops
 	}
 
-	advRanks := makeRange(1, adv)
-	dropRanks := makeRange(adv+1, k)
-	wRoundNum := 1
+	runLosersRound := func(isWinnersDone bool) {
+		lTotal := lPoolCount()
+		if lTotal == 0 {
+			return
+		}
+		lRoundNum++
+		lCol++
+		if lCol < wCol {
+			lCol = wCol
+		}
+		numL := PlanHeatCount(lTotal, k, adv, 0)
+		isLosersFinal := isWinnersDone && numL == 1 && EffectiveAdvance(adv, lTotal) <= k-sumAdv(wCurr)
 
-	// Step through remaining Winners rounds + corresponding Losers major/minor rounds.
-	for len(wPrev) > 1 {
+		dropByHeat := make(map[string]bool, len(pendingDrops))
+		for _, d := range pendingDrops {
+			dropByHeat[d.id] = true
+		}
+
+		heatFeeders := make([][]domain.SeatFeeder, numL)
+		paired := false
+
+		// Preserve classic bracket pairings whenever exact 2:1 or cross-bracket 1:1 pairing is valid and balanced.
+		if len(lSurv) == 0 && len(pendingDrops) == 2*numL {
+			okPair := true
+			for hIdx := 0; hIdx < numL; hIdx++ {
+				a := pendingDrops[2*hIdx]
+				b := pendingDrops[2*hIdx+1]
+				cnt := (a.entrants - a.advCount) + (b.entrants - b.advCount)
+				if cnt > k || (IsFeasibleElimPool(lTotal, k, adv) && cnt < adv+1) {
+					okPair = false
+					break
+				}
+			}
+			if okPair {
+				paired = true
+				for hIdx := 0; hIdx < numL; hIdx++ {
+					a := pendingDrops[2*hIdx]
+					b := pendingDrops[2*hIdx+1]
+					for r := a.advCount + 1; r <= a.entrants; r++ {
+						heatFeeders[hIdx] = append(heatFeeders[hIdx], domain.SeatFeeder{FromHeatID: a.id, FromRank: r})
+					}
+					for r := b.advCount + 1; r <= b.entrants; r++ {
+						heatFeeders[hIdx] = append(heatFeeders[hIdx], domain.SeatFeeder{FromHeatID: b.id, FromRank: r})
+					}
+				}
+			}
+		} else if len(pendingDrops) == numL && len(lSurv) == numL {
+			okPair := true
+			for hIdx := 0; hIdx < numL; hIdx++ {
+				d := pendingDrops[numL-1-hIdx]
+				s := lSurv[hIdx]
+				cnt := (d.entrants - d.advCount) + s.advCount
+				if cnt > k || (IsFeasibleElimPool(lTotal, k, adv) && cnt < adv+1) {
+					okPair = false
+					break
+				}
+			}
+			if okPair {
+				paired = true
+				for hIdx := 0; hIdx < numL; hIdx++ {
+					d := pendingDrops[numL-1-hIdx]
+					s := lSurv[hIdx]
+					for r := d.advCount + 1; r <= d.entrants; r++ {
+						heatFeeders[hIdx] = append(heatFeeders[hIdx], domain.SeatFeeder{FromHeatID: d.id, FromRank: r})
+					}
+					for r := 1; r <= s.advCount; r++ {
+						heatFeeders[hIdx] = append(heatFeeders[hIdx], domain.SeatFeeder{FromHeatID: s.id, FromRank: r})
+					}
+				}
+			}
+		} else if len(pendingDrops) == 0 && len(lSurv) == 2*numL {
+			okPair := true
+			for hIdx := 0; hIdx < numL; hIdx++ {
+				cnt := lSurv[2*hIdx].advCount + lSurv[2*hIdx+1].advCount
+				if cnt > k || (IsFeasibleElimPool(lTotal, k, adv) && cnt < adv+1) {
+					okPair = false
+					break
+				}
+			}
+			if okPair {
+				paired = true
+				for hIdx := 0; hIdx < numL; hIdx++ {
+					a := lSurv[2*hIdx]
+					b := lSurv[2*hIdx+1]
+					for r := 1; r <= a.advCount; r++ {
+						heatFeeders[hIdx] = append(heatFeeders[hIdx], domain.SeatFeeder{FromHeatID: a.id, FromRank: r})
+					}
+					for r := 1; r <= b.advCount; r++ {
+						heatFeeders[hIdx] = append(heatFeeders[hIdx], domain.SeatFeeder{FromHeatID: b.id, FromRank: r})
+					}
+				}
+			}
+		}
+
+		if !paired {
+			var pool []domain.SeatFeeder
+			maxDropOffset := 0
+			for _, d := range pendingDrops {
+				if d.entrants-d.advCount > maxDropOffset {
+					maxDropOffset = d.entrants - d.advCount
+				}
+			}
+			for off := 1; off <= maxDropOffset; off++ {
+				for idx := len(pendingDrops) - 1; idx >= 0; idx-- {
+					d := pendingDrops[idx]
+					rnk := d.advCount + off
+					if rnk <= d.entrants {
+						pool = append(pool, domain.SeatFeeder{FromHeatID: d.id, FromRank: rnk})
+					}
+				}
+			}
+			maxSurvRank := 0
+			for _, s := range lSurv {
+				if s.advCount > maxSurvRank {
+					maxSurvRank = s.advCount
+				}
+			}
+			for r := 1; r <= maxSurvRank; r++ {
+				for _, s := range lSurv {
+					if r <= s.advCount {
+						pool = append(pool, domain.SeatFeeder{FromHeatID: s.id, FromRank: r})
+					}
+				}
+			}
+			heatFeeders = DistributeFeedersAcrossHeats(pool, numL, k)
+		}
+
+		newSurv := make([]deHeatInfo, 0, numL)
+		for hIdx := 0; hIdx < numL; hIdx++ {
+			order++
+			hid := fmt.Sprintf("L%d-%d", lRoundNum, hIdx+1)
+			feeders := heatFeeders[hIdx]
+			entrants := len(feeders)
+			expWin := EffectiveAdvance(adv, entrants)
+			edges = appendGroupedBracketEdges(edges, feeders, hid, dropByHeat)
+			heats = append(heats, domain.RaceHeat{
+				ID:              hid,
+				StageIndex:      stageIdx,
+				StageName:       "Double Elimination",
+				StageFormat:     domain.FormatDoubleElimination,
+				Round:           lRoundNum,
+				Column:          lCol,
+				Order:           order,
+				BracketLane:     "losers",
+				Title:           losersTitle(lRoundNum, hIdx+1, numL, isLosersFinal),
+				ShortLabel:      hid,
+				StartMode:       domain.StartModeHeadsUp,
+				TargetLaps:      cfg.TargetLaps,
+				TimeLimitSec:    cfg.TimeLimitSec,
+				ExpectedWinners: expWin,
+				State:           domain.HeatWaiting,
+				Seats:           buildFeederSeats(feeders, cfg.SeatChannels),
+			})
+			newSurv = append(newSurv, deHeatInfo{id: hid, entrants: entrants, advCount: expWin})
+		}
+		pendingDrops = nil
+		lSurv = newSurv
+	}
+
+	drainLosers := func() {
+		for guard := 0; guard < 16; guard++ {
+			wTot := sumAdv(wCurr)
+			lTot := lPoolCount()
+			if wTot <= adv {
+				maxFinalFromL := k - wTot
+				if maxFinalFromL < 1 {
+					maxFinalFromL = 1
+				}
+				if lTot <= maxFinalFromL || lTot <= 1 {
+					break
+				}
+				runLosersRound(true)
+			} else {
+				nextDrops := nextWinnersDropCount(wCurr)
+				if lTot <= nextDrops || !IsFeasibleElimPool(lTot, k, adv) {
+					break
+				}
+				runLosersRound(false)
+			}
+		}
+	}
+
+	// Consolidate W1 drops if feasible before W2 runs
+	drainLosers()
+
+	// Step through remaining Winners rounds + corresponding Losers rounds
+	for sumAdv(wCurr) > adv {
 		wCol++
 		wRoundNum++
-		wCount := len(wPrev) / 2
-		wCurr := make([]string, wCount)
-		isWinnersFinal := wCount == 1
+		wTotal := sumAdv(wCurr)
+		wCount := PlanHeatCount(wTotal, k, adv, 0)
+		isWinnersFinal := wCount == 1 && EffectiveAdvance(adv, wTotal) <= adv
+
+		heatFeeders := make([][]domain.SeatFeeder, wCount)
+		paired := len(wCurr) == 2*wCount
+		if paired {
+			for hIdx := 0; hIdx < wCount; hIdx++ {
+				cnt := wCurr[2*hIdx].advCount + wCurr[2*hIdx+1].advCount
+				if cnt > k || (IsFeasibleElimPool(wTotal, k, adv) && cnt < adv+1) {
+					paired = false
+					break
+				}
+			}
+		}
+		if paired {
+			for hIdx := 0; hIdx < wCount; hIdx++ {
+				a := wCurr[2*hIdx]
+				b := wCurr[2*hIdx+1]
+				for r := 1; r <= a.advCount; r++ {
+					heatFeeders[hIdx] = append(heatFeeders[hIdx], domain.SeatFeeder{FromHeatID: a.id, FromRank: r})
+				}
+				for r := 1; r <= b.advCount; r++ {
+					heatFeeders[hIdx] = append(heatFeeders[hIdx], domain.SeatFeeder{FromHeatID: b.id, FromRank: r})
+				}
+			}
+		} else {
+			maxR := 0
+			for _, wh := range wCurr {
+				if wh.advCount > maxR {
+					maxR = wh.advCount
+				}
+			}
+			var pool []domain.SeatFeeder
+			for r := 1; r <= maxR; r++ {
+				for _, wh := range wCurr {
+					if r <= wh.advCount {
+						pool = append(pool, domain.SeatFeeder{FromHeatID: wh.id, FromRank: r})
+					}
+				}
+			}
+			heatFeeders = DistributeFeedersAcrossHeats(pool, wCount, k)
+		}
+
+		wNext := make([]deHeatInfo, 0, wCount)
 		for hIdx := 0; hIdx < wCount; hIdx++ {
 			order++
 			hid := fmt.Sprintf("W%d-%d", wRoundNum, hIdx+1)
-			wCurr[hIdx] = hid
-			srcA := wPrev[2*hIdx]
-			srcB := wPrev[2*hIdx+1]
-			var feeders []domain.SeatFeeder
-			for _, r := range advRanks {
-				feeders = append(feeders, domain.SeatFeeder{FromHeatID: srcA, FromRank: r})
-			}
-			for _, r := range advRanks {
-				feeders = append(feeders, domain.SeatFeeder{FromHeatID: srcB, FromRank: r})
-			}
-			edges = append(edges,
-				domain.BracketEdge{FromHeatID: srcA, ToHeatID: hid, Ranks: advRanks},
-				domain.BracketEdge{FromHeatID: srcB, ToHeatID: hid, Ranks: advRanks},
-			)
+			feeders := heatFeeders[hIdx]
+			entrants := len(feeders)
+			expWin := EffectiveAdvance(adv, entrants)
+			edges = appendGroupedBracketEdges(edges, feeders, hid, nil)
 			title := fmt.Sprintf("Winners Round %d · Heat %d", wRoundNum, hIdx+1)
 			if isWinnersFinal {
 				title = "Winners Final"
+			} else if wCount == 1 {
+				title = fmt.Sprintf("Winners Round %d", wRoundNum)
 			}
 			heats = append(heats, domain.RaceHeat{
 				ID:              hid,
@@ -806,120 +1123,44 @@ func generateDoubleElimination(
 				StartMode:       domain.StartModeHeadsUp,
 				TargetLaps:      cfg.TargetLaps,
 				TimeLimitSec:    cfg.TimeLimitSec,
-				ExpectedWinners: adv,
+				ExpectedWinners: expWin,
 				State:           domain.HeatWaiting,
 				Seats:           buildFeederSeats(feeders, cfg.SeatChannels),
 			})
+			wNext = append(wNext, deHeatInfo{id: hid, entrants: entrants, advCount: expWin})
 		}
 
-		// Major Losers round: cross-pairs drops from wCurr (reversed) with survivors from lPrev!
-		lCol++
-		if lCol < wCol {
-			lCol = wCol
-		}
-		lRoundNum++
-		lMajor := make([]string, wCount)
-		isLosersFinal := isWinnersFinal && wCount == 1
-		for hIdx := 0; hIdx < wCount; hIdx++ {
-			order++
-			hid := fmt.Sprintf("L%d-%d", lRoundNum, hIdx+1)
-			lMajor[hIdx] = hid
-			dropSrc := wCurr[wCount-1-hIdx] // Cross-bracket to avoid immediate rematches!
-			survSrc := lPrev[hIdx]
-			var feeders []domain.SeatFeeder
-			for _, r := range dropRanks {
-				feeders = append(feeders, domain.SeatFeeder{FromHeatID: dropSrc, FromRank: r})
-			}
-			for _, r := range advRanks {
-				feeders = append(feeders, domain.SeatFeeder{FromHeatID: survSrc, FromRank: r})
-			}
-			edges = append(edges,
-				domain.BracketEdge{FromHeatID: dropSrc, ToHeatID: hid, Ranks: dropRanks, IsDrop: true},
-				domain.BracketEdge{FromHeatID: survSrc, ToHeatID: hid, Ranks: advRanks},
-			)
-			heats = append(heats, domain.RaceHeat{
-				ID:              hid,
-				StageIndex:      stageIdx,
-				StageName:       "Double Elimination",
-				StageFormat:     domain.FormatDoubleElimination,
-				Round:           lRoundNum,
-				Column:          lCol,
-				Order:           order,
-				BracketLane:     "losers",
-				Title:           losersTitle(lRoundNum, hIdx+1, wCount, isLosersFinal),
-				ShortLabel:      hid,
-				StartMode:       domain.StartModeHeadsUp,
-				TargetLaps:      cfg.TargetLaps,
-				TimeLimitSec:    cfg.TimeLimitSec,
-				ExpectedWinners: adv,
-				State:           domain.HeatWaiting,
-				Seats:           buildFeederSeats(feeders, cfg.SeatChannels),
-			})
-		}
-
-		// Minor Losers consolidation round if more than 1 Losers heat remains.
-		if len(lMajor) > 1 {
-			lCol++
-			lRoundNum++
-			lMinorCount := len(lMajor) / 2
-			lMinor := make([]string, lMinorCount)
-			for hIdx := 0; hIdx < lMinorCount; hIdx++ {
-				order++
-				hid := fmt.Sprintf("L%d-%d", lRoundNum, hIdx+1)
-				lMinor[hIdx] = hid
-				srcA := lMajor[2*hIdx]
-				srcB := lMajor[2*hIdx+1]
-				var feeders []domain.SeatFeeder
-				for _, r := range advRanks {
-					feeders = append(feeders, domain.SeatFeeder{FromHeatID: srcA, FromRank: r})
-				}
-				for _, r := range advRanks {
-					feeders = append(feeders, domain.SeatFeeder{FromHeatID: srcB, FromRank: r})
-				}
-				edges = append(edges,
-					domain.BracketEdge{FromHeatID: srcA, ToHeatID: hid, Ranks: advRanks},
-					domain.BracketEdge{FromHeatID: srcB, ToHeatID: hid, Ranks: advRanks},
-				)
-				heats = append(heats, domain.RaceHeat{
-					ID:              hid,
-					StageIndex:      stageIdx,
-					StageName:       "Double Elimination",
-					StageFormat:     domain.FormatDoubleElimination,
-					Round:           lRoundNum,
-					Column:          lCol,
-					Order:           order,
-					BracketLane:     "losers",
-					Title:           losersTitle(lRoundNum, hIdx+1, lMinorCount, false),
-					ShortLabel:      hid,
-					StartMode:       domain.StartModeHeadsUp,
-					TargetLaps:      cfg.TargetLaps,
-					TimeLimitSec:    cfg.TimeLimitSec,
-					ExpectedWinners: adv,
-					State:           domain.HeatWaiting,
-					Seats:           buildFeederSeats(feeders, cfg.SeatChannels),
-				})
-			}
-			lPrev = lMinor
-		} else {
-			lPrev = lMajor
-		}
-		wPrev = wCurr
+		wCurr = wNext
+		pendingDrops = append(pendingDrops, wCurr...)
+		drainLosers()
 	}
 
-	// Finals: Top `adv` from Winners Final (wPrev[0]) + Top `adv` from Losers Final (lPrev[0])
+	// Finals: advancing winners from `wCurr` + survivors from `lSurv` (plus any single remaining drop)
 	finalCol := lCol + 1
 	if wCol+1 > finalCol {
 		finalCol = wCol + 1
 	}
 	order++
-	wFinalID := wPrev[0]
-	lFinalID := lPrev[0]
 	var finalFeeders []domain.SeatFeeder
-	for _, r := range advRanks {
-		finalFeeders = append(finalFeeders, domain.SeatFeeder{FromHeatID: wFinalID, FromRank: r})
+	dropByHeat := make(map[string]bool, len(pendingDrops))
+	for _, wh := range wCurr {
+		for r := 1; r <= wh.advCount; r++ {
+			finalFeeders = append(finalFeeders, domain.SeatFeeder{FromHeatID: wh.id, FromRank: r})
+		}
 	}
-	for _, r := range advRanks {
-		finalFeeders = append(finalFeeders, domain.SeatFeeder{FromHeatID: lFinalID, FromRank: r})
+	for _, d := range pendingDrops {
+		dropByHeat[d.id] = true
+		for r := d.advCount + 1; r <= d.entrants; r++ {
+			finalFeeders = append(finalFeeders, domain.SeatFeeder{FromHeatID: d.id, FromRank: r})
+		}
+	}
+	for _, lh := range lSurv {
+		for r := 1; r <= lh.advCount; r++ {
+			finalFeeders = append(finalFeeders, domain.SeatFeeder{FromHeatID: lh.id, FromRank: r})
+		}
+	}
+	if len(finalFeeders) > k {
+		finalFeeders = finalFeeders[:k]
 	}
 
 	finalID := "GF-1"
@@ -928,10 +1169,7 @@ func generateDoubleElimination(
 		finalID = "CTA-1"
 		finalTitle = fmt.Sprintf("Chase the Ace · Heat 1 (First to %d Wins)", cfg.AceWinsRequired)
 	}
-	edges = append(edges,
-		domain.BracketEdge{FromHeatID: wFinalID, ToHeatID: finalID, Ranks: advRanks},
-		domain.BracketEdge{FromHeatID: lFinalID, ToHeatID: finalID, Ranks: advRanks},
-	)
+	edges = appendGroupedBracketEdges(edges, finalFeeders, finalID, dropByHeat)
 	heats = append(heats, domain.RaceHeat{
 		ID:              finalID,
 		StageIndex:      stageIdx,
@@ -1071,10 +1309,18 @@ func snakeDistribute(seeded []seededPilot, m int) [][]seededPilot {
 	return buckets
 }
 
-// bracketHeatSeedOrder returns the 0-based heat indices in standard tournament bracket placement order for power-of-2 `m`.
+// bracketHeatSeedOrder returns the 0-based heat indices in standard tournament bracket placement order for power-of-2 `m`,
+// or sequential 0..m-1 snake order when `m` is not a power of 2.
 func bracketHeatSeedOrder(m int) []int {
 	if m <= 1 {
 		return []int{0}
+	}
+	if (m & (m - 1)) != 0 {
+		out := make([]int, m)
+		for i := range out {
+			out[i] = i
+		}
+		return out
 	}
 	seeds := []int{1, 2}
 	for len(seeds) < m {
@@ -1108,9 +1354,12 @@ func dropFeedersFromW1(heatID string, pilotCount int, adv int, k int) ([]domain.
 }
 
 func buildFeederSeats(feeders []domain.SeatFeeder, seatChannels []uint8) []domain.HeatSeat {
-	seats := make([]domain.HeatSeat, len(feeders))
-	for i, f := range feeders {
-		fc := f
+	totalSeats := len(seatChannels)
+	if len(feeders) > totalSeats {
+		totalSeats = len(feeders)
+	}
+	seats := make([]domain.HeatSeat, totalSeats)
+	for i := 0; i < totalSeats; i++ {
 		band := domain.BandRaceband
 		ch := uint8(0)
 		freq := uint16(0)
@@ -1119,15 +1368,28 @@ func buildFeederSeats(feeders []domain.SeatFeeder, seatChannels []uint8) []domai
 				band, ch, freq = b, c, fr
 			}
 		}
-		seats[i] = domain.HeatSeat{
-			SeatIndex:    i + 1,
-			SourceLabel:  fmt.Sprintf("%s · %s", Ordinal(f.FromRank), f.FromHeatID),
-			Feeder:       &fc,
-			Band:         band,
-			Channel:      ch,
-			FrequencyMHz: freq,
-			Status:       domain.PilotHeatStaged,
-			Laps:         []domain.HeatLap{},
+		if i < len(feeders) {
+			fc := feeders[i]
+			seats[i] = domain.HeatSeat{
+				SeatIndex:    i + 1,
+				SourceLabel:  fmt.Sprintf("%s · %s", Ordinal(fc.FromRank), fc.FromHeatID),
+				Feeder:       &fc,
+				Band:         band,
+				Channel:      ch,
+				FrequencyMHz: freq,
+				Status:       domain.PilotHeatStaged,
+				Laps:         []domain.HeatLap{},
+			}
+		} else {
+			seats[i] = domain.HeatSeat{
+				SeatIndex:    i + 1,
+				SourceLabel:  "Open / BYE",
+				Band:         band,
+				Channel:      ch,
+				FrequencyMHz: freq,
+				Status:       domain.PilotHeatStaged,
+				Laps:         []domain.HeatLap{},
+			}
 		}
 	}
 	return seats

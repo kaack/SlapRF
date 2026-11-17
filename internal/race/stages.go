@@ -861,3 +861,194 @@ func PrefixStageHeats(heats []domain.RaceHeat, edges []domain.BracketEdge, prefi
 	}
 	return heats, edges
 }
+
+// IsAutoStageTitle reports whether `title` is a system-generated default stage title
+// (including numbered duplicates such as `"Qualifying 2"` or `"Open Qualifier 2"`)
+// that should automatically track dynamic stage-format classification.
+func IsAutoStageTitle(title string, stageIdx int) bool {
+	t := strings.TrimSpace(title)
+	if t == "" {
+		return true
+	}
+	autoBases := []string{
+		"Qualifying", "Qualifier", "Open Qualifier", "ZippyQ", "ZippyQ Qualifier",
+		"Single Elimination", "Double Elimination", "Points Mains", "Chase the Ace",
+		"Custom", "Custom Stage", "Stage",
+	}
+	for _, base := range autoBases {
+		if strings.EqualFold(t, base) {
+			return true
+		}
+		prefix := strings.ToLower(base) + " "
+		if strings.HasPrefix(strings.ToLower(t), prefix) {
+			rest := strings.TrimSpace(t[len(prefix):])
+			allDigits := len(rest) > 0
+			for _, ch := range rest {
+				if ch < '0' || ch > '9' {
+					allDigits = false
+					break
+				}
+			}
+			if allDigits {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func uniqueAutoStageTitle(stages []domain.RaceStage, selfIdx int, baseTitle string) string {
+	if strings.HasPrefix(baseTitle, "Custom Stage ") || strings.HasPrefix(baseTitle, "Stage ") {
+		return baseTitle
+	}
+	sameCount := 0
+	for _, other := range stages {
+		if other.Index >= selfIdx {
+			continue
+		}
+		if strings.EqualFold(other.Title, baseTitle) || strings.HasPrefix(strings.ToLower(other.Title), strings.ToLower(baseTitle)+" ") {
+			sameCount++
+		}
+	}
+	if sameCount > 0 {
+		return fmt.Sprintf("%s %d", baseTitle, sameCount+1)
+	}
+	return baseTitle
+}
+
+// ReconcileStagesFromRoundContents dynamically classifies each customized/custom stage's `Format`,
+// auto-generated `Title`, and round-count settings from the actual non-portal rounds currently inside it.
+func ReconcileStagesFromRoundContents(st *domain.RaceTournamentState, rounds []domain.RaceRound) {
+	if st == nil || len(st.Stages) == 0 {
+		return
+	}
+	changed := false
+	for si := range st.Stages {
+		s := &st.Stages[si]
+		if !s.Customized && s.Format != domain.FormatCustom {
+			continue
+		}
+
+		var stageRounds []domain.RaceRound
+		for _, r := range rounds {
+			if r.StageIndex == s.Index && !domain.IsStagePortalRoundID(r.ID) {
+				stageRounds = append(stageRounds, r)
+			}
+		}
+
+		hasIncomingStage := false
+		for _, sc := range st.StageConnections {
+			if !sc.Invalid && sc.ToStageIndex == s.Index {
+				hasIncomingStage = true
+				break
+			}
+		}
+
+		total := len(stageRounds)
+		inferredFmt := domain.FormatCustom
+		inferredTitle := DefaultStageTitle(domain.FormatCustom, s.Index)
+
+		if total > 0 {
+			zippyCount := 0
+			openQualCount := 0
+			qualCount := 0
+			pointsCount := 0
+			ctaCount := 0
+			winnersCount := 0
+			losersCount := 0
+			finalsCount := 0
+
+			for _, r := range stageRounds {
+				isOQ := r.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(r.ID)
+				isZippy := isOQ && (strings.Contains(strings.ToLower(r.Title), "zippyq") ||
+					(st.MGPLink != nil && st.MGPLink.IsZippyQ && s.Index == 1))
+				if isZippy {
+					zippyCount++
+					continue
+				}
+				if isOQ {
+					openQualCount++
+					continue
+				}
+				if r.StageFormat == domain.FormatQualifying {
+					qualCount++
+					continue
+				}
+				if r.StageFormat == domain.FormatPointsMains {
+					pointsCount++
+					continue
+				}
+				if r.StageFormat == domain.FormatChaseTheAce || (r.BracketLane == "finals" && r.FinalsFormat == domain.FinalsChaseTheAce) {
+					ctaCount++
+				}
+				switch r.BracketLane {
+				case "losers":
+					losersCount++
+				case "finals":
+					finalsCount++
+				default:
+					winnersCount++
+				}
+			}
+			bracketCount := winnersCount + losersCount + finalsCount
+
+			switch {
+			case !hasIncomingStage && zippyCount == total && (total == 1 || (st.MGPLink != nil && st.MGPLink.IsZippyQ && s.Index == 1)):
+				inferredFmt = domain.FormatOpenQualifier
+				inferredTitle = "ZippyQ Qualifier"
+			case !hasIncomingStage && openQualCount == 1 && total == 1:
+				inferredFmt = domain.FormatOpenQualifier
+				inferredTitle = "Open Qualifier"
+			case !hasIncomingStage && qualCount == total:
+				inferredFmt = domain.FormatQualifying
+				if strings.EqualFold(strings.TrimSpace(s.Title), "Qualifier") {
+					inferredTitle = "Qualifier"
+				} else {
+					inferredTitle = "Qualifying"
+				}
+				s.Settings.QualifyingRounds = total
+			case total == 1 && ctaCount == 1:
+				inferredFmt = domain.FormatChaseTheAce
+				inferredTitle = "Chase the Ace"
+			case pointsCount == total || (total == 1 && finalsCount == 1 && stageRounds[0].FinalsFormat == domain.FinalsPoints):
+				inferredFmt = domain.FormatPointsMains
+				inferredTitle = "Points Mains"
+				if pointsCount > 0 {
+					s.Settings.PointsRounds = pointsCount
+				}
+			case bracketCount == total && winnersCount >= 1 && losersCount >= 1:
+				inferredFmt = domain.FormatDoubleElimination
+				inferredTitle = "Double Elimination"
+			case bracketCount == total && losersCount == 0 && (winnersCount >= 1 || (total == 1 && finalsCount == 1)):
+				inferredFmt = domain.FormatSingleElimination
+				inferredTitle = "Single Elimination"
+			default:
+				inferredFmt = domain.FormatCustom
+				inferredTitle = DefaultStageTitle(domain.FormatCustom, s.Index)
+			}
+		}
+
+		if s.Format != inferredFmt {
+			s.Format = inferredFmt
+			changed = true
+		}
+		if IsAutoStageTitle(s.Title, s.Index) {
+			targetTitle := uniqueAutoStageTitle(st.Stages, s.Index, inferredTitle)
+			if s.Title != targetTitle {
+				s.Title = targetTitle
+				changed = true
+			}
+		}
+		if len(st.Stages) == 1 && s.Index == 1 {
+			if inferredFmt != domain.FormatCustom {
+				st.Config.MainFormat = inferredFmt
+			}
+			if inferredFmt == domain.FormatQualifying && s.Settings.QualifyingRounds > 0 {
+				st.Config.QualifyingRounds = s.Settings.QualifyingRounds
+			}
+		}
+	}
+	if changed {
+		EnsureStagesMetadata(st)
+	}
+}

@@ -36,6 +36,7 @@ import {
   openOpenQualifierSettingsModal,
   openRoundCustomizeModal,
   openStageHandoffModal,
+  openStageSettingsModal,
   openWireConnectionModal,
 } from "./RoundModals";
 import {
@@ -309,10 +310,11 @@ export function heatStateBadge(
 
 export function formatRaceClock(sec: number): string {
   if (!Number.isFinite(sec) || sec < 0) sec = 0;
-  const mins = Math.floor(sec / 60);
-  const rem = sec - mins * 60;
-  const whole = Math.floor(rem);
-  const tenths = Math.floor((rem - whole) * 10);
+  const totalTenths = Math.floor(sec * 10 + 1e-6);
+  const mins = Math.floor(totalTenths / 600);
+  const remTenths = totalTenths - mins * 600;
+  const whole = Math.floor(remTenths / 10);
+  const tenths = remTenths - whole * 10;
   return `${String(mins).padStart(2, "0")}:${String(whole).padStart(2, "0")}.${tenths}`;
 }
 
@@ -614,7 +616,7 @@ function estimateNodeHeight(
     return 276;
   }
   if (round && (isOpenQualRoundId(round) || round.stageFormat === "open_qualifier")) {
-    return 252;
+    return 292;
   }
   const hc = Math.max(1, heats.length);
   const perHeat = 50 + Math.max(2, seatsPerHeat) * 29;
@@ -678,17 +680,25 @@ export function roundNeedsDeleteConfirmation(
     const stgObj = (race.stages ?? []).find((s) => s.index === viewStage);
     const stgSettings = stgObj?.settings ?? race.config;
     const defPph = stgSettings.pilotsPerHeat || race.config.pilotsPerHeat || 4;
+    const isOpenQualRound =
+      isOpenQualRoundId(roundObj) || roundObj.stageFormat === "open_qualifier";
     const isQualRound =
       roundObj.stageFormat === "qualifying" || roundObj.bracketLane === "qualifying";
     const defLaps = isQualRound
       ? 0
-      : stgSettings.targetLaps || race.config.targetLaps || 3;
+      : isOpenQualRound
+        ? stgSettings.targetLaps ?? race.config.targetLaps ?? 0
+        : stgSettings.targetLaps || race.config.targetLaps || 3;
     const defTime = stgSettings.timeLimitSec || race.config.timeLimitSec || 120;
+    const hasCustomStartMode =
+      roundObj.startMode === "staggered" && !isQualRound && !isOpenQualRound;
     if (
       Boolean(roundObj.pilotsPerHeat && roundObj.pilotsPerHeat !== defPph) ||
-      Boolean(roundObj.targetLaps !== undefined && roundObj.targetLaps !== defLaps) ||
+      Boolean(
+        !isOpenQualRound && roundObj.targetLaps !== undefined && roundObj.targetLaps !== defLaps
+      ) ||
       Boolean(roundObj.timeLimitSec && roundObj.timeLimitSec !== defTime) ||
-      roundObj.startMode === "staggered" ||
+      hasCustomStartMode ||
       Boolean(roundObj.seatChannels && roundObj.seatChannels.length > 0)
     ) {
       return true;
@@ -1698,7 +1708,7 @@ function renderWireInvalidBanner(conn: RoundConnection): string {
     </div>`;
 }
 
-function renderWireRuleMenu(conn: RoundConnection): string {
+function renderWireRuleMenu(conn: RoundConnection, maxPerHeat = 3): string {
   const invalidBanner = renderWireInvalidBanner(conn);
 
   if (conn.mode === "pilots_in" || isPilotsInRoundId(conn.fromRoundId)) {
@@ -1810,7 +1820,11 @@ function renderWireRuleMenu(conn: RoundConnection): string {
       </div>`;
   }
 
-  const items = WIRE_PRESETS.map((opt) => {
+  const items = WIRE_PRESETS.filter(
+    (opt) =>
+      (opt.mode !== "top_per_heat" && opt.mode !== "bottom_per_heat") ||
+      opt.count <= maxPerHeat
+  ).map((opt) => {
     const isAllMode = opt.mode === "all_pilots" || opt.mode === "all_pilots_ranked";
     const active = conn.mode === opt.mode && (isAllMode || conn.count === opt.count);
     const itemIcon =
@@ -1929,7 +1943,7 @@ function renderWirePillsOverlay(
           >
             ${icons.close(13)}
           </button>
-          ${isMenuOpen ? renderWireRuleMenu(conn) : ""}
+          ${isMenuOpen ? renderWireRuleMenu(conn, Math.max(1, (race.stages?.find((s) => s.index === connStageIdx)?.settings?.pilotsPerHeat || race.config.pilotsPerHeat || 4) - 1)) : ""}
         </div>`;
     })
     .join("");
@@ -2188,8 +2202,23 @@ function renderNodeHamburgerMenu(
       ? `<div class="bkt-node-menu-sep"></div>${seedItem}`
       : "";
 
+  const qualStageItem =
+    round.stageFormat === "qualifying"
+      ? `<button
+          type="button"
+          class="bkt-node-menu-item"
+          data-bkt-action="open_qual_stage_settings"
+          data-stage-idx="${round.stageIndex || 1}"
+          data-round-id="${esc(round.id)}"
+        >
+          ${icons.sliders(14)}
+          <span>Qualifier Stage Settings…</span>
+        </button>`
+      : "";
+
   return `
     <div class="bkt-node-menu" role="menu" data-bkt-stop-select>
+      ${qualStageItem}
       <button
         type="button"
         class="bkt-node-menu-item"
@@ -2968,6 +2997,7 @@ function renderOpenQualRoundNode(
   const maxPacks = stgSettings.maxPacksPerPilot ?? race.config.maxPacksPerPilot ?? 0;
   const curMetric = stgSettings.qualifyingMetric || race.config.qualifyingMetric || "consecutive_3";
   const curTime = round.timeLimitSec || stgSettings.timeLimitSec || race.config.timeLimitSec || 120;
+  const allUnstarted = heats.every((h) => isHeatUnstarted(h.state));
   const confirmedCount = heats.filter((h) => h.state === "confirmed").length;
   const isSelected = canvasMode && !!ui?.selectedRoundIds.has(round.id);
   const isSourceActive = editableActive && ui?.connectingFromRoundId === round.id;
@@ -3069,6 +3099,7 @@ function renderOpenQualRoundNode(
       </button>`
     : "";
 
+  const isCustomMaxPacks = maxPacks > 0 && maxPacks !== 2 && maxPacks !== 3;
   const openQualMenu = isMenuOpen
     ? `<div class="bkt-node-menu" role="menu" data-bkt-stop-select>
         <button
@@ -3081,6 +3112,21 @@ function renderOpenQualRoundNode(
           ${icons.sliders(14)}
           <span>${isZippyQ ? "ZippyQ Settings…" : "Open Qualifier Settings…"}</span>
         </button>
+        <div class="bkt-node-menu-sep"></div>
+        <button
+          type="button"
+          class="bkt-node-menu-item"
+          data-bkt-action="delete_round"
+          data-round-id="${esc(round.id)}"
+          data-col="${round.column || 1}"
+          data-bkt-lane="${esc(round.bracketLane || "open_qual")}"
+          data-round-title="${esc(normTitle)}"
+          data-heat-count="${heats.length}"
+          ${allUnstarted ? "" : "disabled"}
+        >
+          ${icons.trash(14)}
+          <span>Delete Round</span>
+        </button>
       </div>`
     : "";
 
@@ -3092,6 +3138,19 @@ function renderOpenQualRoundNode(
               ? "Pilots check in and line up through <strong>MultiGP ZippyQ</strong>. Pull ZippyQ round heats on demand in <strong>Race Control</strong> or queue heats from the Flight Line."
               : "Pilots fly walk-up qualifying heats on demand in <strong>Race Control</strong>. Queue pilots from the Flight Line as they are ready; VTX channels assign Sticky Raceband slots with anti-back-to-back spacing."
           }</p>
+          ${
+            editableActive
+              ? `<div style="margin-top:10px;display:flex;flex-direction:column;gap:5px">
+                  <span class="note" style="font-weight:600;font-size:11.5px">Max heats per pilot</span>
+                  <div class="races-preset-pills" style="flex-wrap:nowrap">
+                    <button type="button" class="races-filter-pill ${maxPacks === 0 ? "is-active" : ""}" data-bkt-action="set_open_qual_max_packs" data-stage-idx="${stageIdx}" data-max-packs="0" aria-label="Unlimited heats per pilot" title="Unlimited heats per pilot">&infin;</button>
+                    <button type="button" class="races-filter-pill ${maxPacks === 2 ? "is-active" : ""}" data-bkt-action="set_open_qual_max_packs" data-stage-idx="${stageIdx}" data-max-packs="2">2</button>
+                    <button type="button" class="races-filter-pill ${maxPacks === 3 ? "is-active" : ""}" data-bkt-action="set_open_qual_max_packs" data-stage-idx="${stageIdx}" data-max-packs="3">3</button>
+                    <button type="button" class="races-filter-pill ${isCustomMaxPacks ? "is-active" : ""}" data-bkt-action="open_open_qual_settings" data-stage-idx="${stageIdx}" data-round-id="${esc(round.id)}">${isCustomMaxPacks ? `${maxPacks} · More` : "More"}</button>
+                  </div>
+                </div>`
+              : ""
+          }
         </div>`
       : `<div class="bkt-round-heats">
           ${heats
@@ -3134,6 +3193,21 @@ function renderOpenQualRoundNode(
               editableActive
                 ? `<button
                     type="button"
+                    class="bkt-node-delete-btn"
+                    data-bkt-action="delete_round"
+                    data-round-id="${esc(round.id)}"
+                    data-col="${round.column || 1}"
+                    data-bkt-lane="${esc(round.bracketLane || "open_qual")}"
+                    data-round-title="${esc(normTitle)}"
+                    data-heat-count="${heats.length}"
+                    ${allUnstarted ? "" : "disabled"}
+                    aria-label="Delete ${esc(normTitle)}"
+                    title="${allUnstarted ? `Delete ${esc(normTitle)}` : "Cannot delete a round with started heats"}"
+                  >
+                    ${icons.trash(13)}
+                  </button>
+                  <button
+                    type="button"
                     class="bkt-node-hamburger ${isMenuOpen ? "is-open" : ""}"
                     data-bkt-ui="toggle-node-menu"
                     data-round-id="${esc(round.id)}"
@@ -3149,7 +3223,7 @@ function renderOpenQualRoundNode(
         </div>
         <div class="bkt-round-meta-pills">
           <span class="bkt-meta-pill">${esc(formatQualifyingMetricLabel(curMetric))}</span>
-          <span class="bkt-meta-pill">${maxPacks > 0 ? `Max ${maxPacks} heats` : "Unlimited heats"}</span>
+          <span class="bkt-meta-pill">${maxPacks > 0 ? `Max ${maxPacks}/pilot` : "&infin; heats"}</span>
           <span class="bkt-meta-pill">${formatRaceClock(curTime).slice(0, 5)}</span>
         </div>
         ${openQualMenu}
@@ -3426,6 +3500,15 @@ function renderRoundNode(
         <div class="bkt-round-meta-pills">
           ${finalsRuleLabel ? `<span class="bkt-meta-pill">${icons.trophy(10)}<span>${esc(finalsRuleLabel)}</span></span>` : ""}
           <span class="bkt-meta-pill">${esc(fmtBadge)} · ${esc(lapsBadge)} · ${formatRaceClock(curTime).slice(0, 5)}</span>
+          ${
+            isTimed
+              ? (() => {
+                  const stgObj = race.stages?.find((s) => s.index === (round.stageIndex || 1));
+                  const qRnds = stgObj?.settings?.qualifyingRounds || race.config.qualifyingRounds || 2;
+                  return `<button type="button" class="bkt-meta-pill" data-bkt-action="open_qual_stage_settings" data-stage-idx="${round.stageIndex || 1}" data-round-id="${esc(round.id)}" data-bkt-stop-select title="Configure qualifying rounds (1 heat per pilot per round)">${icons.sliders(10)}<span>${qRnds} ${qRnds === 1 ? "round" : "rounds"} · 1 heat/pilot</span></button>`;
+                })()
+              : ""
+          }
           ${startMode === "staggered" && !isTimed ? `<span class="bkt-meta-pill">Staggered</span>` : ""}
           ${sourceChip}
         </div>
@@ -3673,29 +3756,6 @@ export function renderBracketMarkup(
     const zoom = ui?.zoom ?? 1;
     const hideGraph = !!opts.hideGraphNodes;
 
-    const curStageObj = race.stages?.find((s) => s.index === viewStage);
-    const stageHeading = curStageObj
-      ? `Stage ${curStageObj.index}: ${curStageObj.title}`
-      : `Stage ${viewStage}`;
-    const nonPortalRounds = stageRounds.filter((r) => !isHandoffPortalRound(r));
-    const hasPilotsPortal = stageRounds.some((r) => isPilotsInRoundId(r.id));
-    const emptyOverlay =
-      nonPortalRounds.length === 0 && editableActive && !opts.extraWorldHtml
-        ? `<div class="rc-empty-floater ${hasPilotsPortal ? "has-pilots-portal" : ""}" data-bkt-stop-select>
-            <div class="rc-empty-floater-icon">${icons.bracket(26)}</div>
-            <h3>“${esc(stageHeading)}” Rounds</h3>
-            <p class="note">Use the <strong>+</strong> menu in the bottom-right corner to add rounds inside this stage${hasPilotsPortal ? ", then drag a line from <strong>Checked-In Pilots</strong> into your starting round" : " and drag lines between them"} — or switch to <strong>Format</strong> to add stages or apply a tournament template.</p>
-            <div class="rc-empty-floater-btns">
-              <button type="button" class="btn btn-armed btn-sm" data-rc-add-node="seeded">
-                ${icons.plus(14)}<span>Add Starting Round</span>
-              </button>
-              <button type="button" class="btn btn-ghost btn-sm" data-race-tab="format">
-                ${icons.layers(14)}<span>Open Format</span>
-              </button>
-            </div>
-          </div>`
-        : "";
-
     const boundaryAttrs =
       controlBoundaryY > 0
         ? ` data-control-boundary-y="${controlBoundaryY}" data-stage-offset-y="${initialStageOffsetY}"`
@@ -3716,8 +3776,7 @@ export function renderBracketMarkup(
         <div class="bkt-wire-pills" data-bkt-wire-pills${hideGraph ? " hidden" : ""}>${wirePillsHtml}</div>
         ${opts.extraWorldHtml ?? ""}
       </div>
-      <div class="rc-marquee" data-rc-marquee hidden></div>
-      ${emptyOverlay}`;
+      <div class="rc-marquee" data-rc-marquee hidden></div>`;
   }
 
   const stageHeats = race.heats.filter((h) => h.stageIndex === viewStage);
@@ -4315,6 +4374,38 @@ export function handleBracketEditEvent(
       }
       return true;
     }
+    case "set_open_qual_max_packs": {
+      const stageIdx = Number(actionBtn.dataset.stageIdx) || resolveEventStage();
+      const maxPacks = Math.max(0, Math.min(50, Number(actionBtn.dataset.maxPacks ?? 0)));
+      const curRace = getRace();
+      const stgObj = curRace.stages?.find((s) => s.index === stageIdx);
+      const positions = collectStageRoundPositions(target, curRace, stageIdx, ui);
+      void api
+        .bracketEdit({
+          action: "update_stage_settings",
+          stageId: stgObj?.id || `stage-${stageIdx}`,
+          stageIndex: stageIdx,
+          maxPacksPerPilot: maxPacks,
+          applyToExisting: true,
+          positions,
+        })
+        .catch(reportErr);
+      return true;
+    }
+    case "open_qual_stage_settings": {
+      const stageIdx = Number(actionBtn.dataset.stageIdx) || resolveEventStage();
+      if (ui) {
+        ui.openNodeMenuId = "";
+        ui.rerender();
+      }
+      openStageSettingsModal({
+        stageIndex: stageIdx,
+        getRace,
+        api,
+        onError: reportErr,
+      });
+      return true;
+    }
     case "open_open_qual_settings": {
       const stageIdx = Number(actionBtn.dataset.stageIdx) || resolveEventStage();
       if (ui) {
@@ -4569,7 +4660,9 @@ export function handleBracketEditEvent(
       const column = Number(actionBtn.dataset.col) || 0;
       const bracketLane = actionBtn.dataset.bktLane ?? "";
       const roundTitle = actionBtn.dataset.roundTitle || `Round ${column}`;
-      const heatCount = Number(actionBtn.dataset.heatCount) || 1;
+      const rawHeatCount = actionBtn.dataset.heatCount;
+      const heatCount =
+        rawHeatCount !== undefined && rawHeatCount !== "" ? Number(rawHeatCount) : 1;
       const curRace = getRace();
       const viewStage = resolveEventStage();
       const positions = collectStageRoundPositions(target, curRace, viewStage, ui);
@@ -4590,9 +4683,13 @@ export function handleBracketEditEvent(
           .catch(reportErr);
         return true;
       }
+      const heatNote =
+        heatCount > 0
+          ? ` (${heatCount} unstarted heat${heatCount === 1 ? "" : "s"})`
+          : "";
       openConfirmModal({
         title: `Delete “${roundTitle}”?`,
-        messageHtml: `<p>Remove <strong>${esc(roundTitle)}</strong> (${heatCount} unstarted heat${heatCount === 1 ? "" : "s"}) from this race? Any lines connected to this round will be disconnected automatically.</p>`,
+        messageHtml: `<p>Remove <strong>${esc(roundTitle)}</strong>${heatNote} from this race? Any lines connected to this round will be disconnected automatically.</p>`,
         confirmLabel: "Delete Round",
         danger: true,
         onConfirm: () => {

@@ -433,6 +433,8 @@ async function bootstrap(): Promise<void> {
   const connLostOverlay = bindConnectionLostOverlay(api);
 
   await api.initialize();
+  await Promise.allSettled([sharedLapRFLink.refreshStatus(), sharedRHLink.refreshStatus()]);
+  announcer.armTimingConnectionAnnouncements();
   // LiveTime (via slaprf-relay) needs the WASM engine, which is ready now. Refresh the polled
   // LapRF counters immediately whenever the link changes (TopBar locks the arm button on it).
   sharedLiveTimeRelay.subscribe(() => void api.pollStatusNow().catch(() => undefined));

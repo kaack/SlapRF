@@ -1,7 +1,8 @@
 import { setWakeLockEnabled } from "../core/wake_lock";
-import { capabilitiesSnapshot } from "../services/capabilities";
+import { capabilitiesSnapshot, isServerDisconnectedLockout } from "../services/capabilities";
 import { AppStore } from "../state/store";
 import { GateCrossingEvent, LapRecord, RaceAnnouncement } from "../types/models";
+import { sharedLapRFLink } from "./laprf_hardware_link";
 import {
   DEFAULT_PIPER_VOICE_URI,
   getPiperVoice,
@@ -10,6 +11,8 @@ import {
   PiperNeuralTts,
   PiperVoiceDescriptor,
 } from "./piper_tts";
+import { sharedRHLink } from "./rh_hardware_link";
+import { usbPool } from "./timer_console";
 
 export interface AnnouncerPrefs {
   enabled: boolean;
@@ -113,6 +116,13 @@ export class Announcer {
   private lastQuipIdx = -1;
   private lastSimMode: boolean | null = null;
   private lastRaceArmed: boolean | null = null;
+  private timingConnArmed = false;
+  private lastTimingConnected: boolean | null = null;
+  private lastTimingHwMode: string | null = null;
+  private timingConnReseedUntilMs = 0;
+  private timingConnTimer = 0;
+  private unloading = false;
+  private readonly unsubscribers: Array<() => void> = [];
   /** Inaudible tone that keeps the audio output awake while the announcer is on. */
   private keepAwake: AudioContext | null = null;
   private airhornBuffer: AudioBuffer | null = null;
@@ -137,26 +147,74 @@ export class Announcer {
       }
       this.resetIdleTimer();
     }
+    if (store.hasHydrated) {
+      this.lastSimMode = store.simulatorRunning;
+      this.lastTimingHwMode = store.timingHardwareMode;
+      const initSt = this.evaluateTimingSystemState();
+      this.lastTimingConnected = initSt === "pending" ? null : initSt === "connected";
+      this.timingConnArmed = true;
+    }
+    if (typeof window !== "undefined") {
+      const onUnload = () => {
+        this.unloading = true;
+        window.clearTimeout(this.timingConnTimer);
+        this.timingConnTimer = 0;
+      };
+      window.addEventListener("pagehide", onUnload);
+      window.addEventListener("beforeunload", onUnload);
+      this.unsubscribers.push(() => {
+        window.removeEventListener("pagehide", onUnload);
+        window.removeEventListener("beforeunload", onUnload);
+      });
+    }
+    this.unsubscribers.push(usbPool.onChange(() => this.scheduleTimingConnCheck()));
+    this.unsubscribers.push(sharedLapRFLink.onChange(() => this.scheduleTimingConnCheck()));
+    this.unsubscribers.push(sharedRHLink.onChange(() => this.scheduleTimingConnCheck()));
+
     store.onLapRecorded((lap) => this.onLap(lap));
     store.onStartGateDetected((ev) => this.onStartPass(ev));
     store.onRaceAnnouncement((ann) => this.onRaceAnnouncement(ann));
-    store.subscribe(["config"], () => this.notify());
-    store.subscribe(["crossings"], () => {
-      this.quipSpokenInCurrentLull = false;
-      this.resetIdleTimer();
-    });
-    store.subscribe(["status"], () => {
-      const simChanged = this.lastSimMode !== null && this.lastSimMode !== this.store.simulatorRunning;
-      const armedChanged = this.lastRaceArmed !== null && this.lastRaceArmed !== this.store.raceArmed;
-      if (simChanged) {
-        this.clear();
-      }
-      this.lastSimMode = this.store.simulatorRunning;
-      this.lastRaceArmed = this.store.raceArmed;
-      if (simChanged || armedChanged) {
+    this.unsubscribers.push(
+      store.subscribe(["config"], () => {
+        const hwChanged =
+          this.lastTimingHwMode !== null && this.lastTimingHwMode !== this.store.timingHardwareMode;
+        this.lastTimingHwMode = this.store.timingHardwareMode;
+        if (hwChanged) {
+          this.silenceTimingConnForModeSwitch();
+        } else {
+          this.scheduleTimingConnCheck();
+        }
+        this.notify();
+      })
+    );
+    this.unsubscribers.push(
+      store.subscribe(["crossings"], () => {
+        this.quipSpokenInCurrentLull = false;
         this.resetIdleTimer();
-      }
-    });
+      })
+    );
+    this.unsubscribers.push(
+      store.subscribe(["status"], () => {
+        const simChanged = this.lastSimMode !== null && this.lastSimMode !== this.store.simulatorRunning;
+        const armedChanged = this.lastRaceArmed !== null && this.lastRaceArmed !== this.store.raceArmed;
+        const hwChanged =
+          this.lastTimingHwMode !== null && this.lastTimingHwMode !== this.store.timingHardwareMode;
+        if (simChanged) {
+          this.clear();
+        }
+        this.lastSimMode = this.store.simulatorRunning;
+        this.lastRaceArmed = this.store.raceArmed;
+        this.lastTimingHwMode = this.store.timingHardwareMode;
+        if (simChanged || hwChanged) {
+          this.silenceTimingConnForModeSwitch();
+        } else {
+          this.scheduleTimingConnCheck();
+        }
+        if (simChanged || armedChanged) {
+          this.resetIdleTimer();
+        }
+      })
+    );
     if ("speechSynthesis" in window) {
       speechSynthesis.addEventListener("voiceschanged", () => this.notify());
       // Prime speechSynthesis at boot: Chrome only starts fetching its network "Google ..."
@@ -295,8 +353,138 @@ export class Announcer {
     this.prefs.enabled = false;
     window.clearTimeout(this.idleTimer);
     this.idleTimer = 0;
+    window.clearTimeout(this.timingConnTimer);
+    this.timingConnTimer = 0;
+    this.timingConnArmed = false;
+    while (this.unsubscribers.length > 0) {
+      const unsub = this.unsubscribers.pop();
+      try {
+        unsub?.();
+      } catch {
+        // ignore unsubscribe errors
+      }
+    }
     this.clear();
     this.holdUntil = 0;
+  }
+
+  /**
+   * Seeds the baseline timing hardware connection state after initial app boot / port restore
+   * so already-connected hardware on page load does not trigger a spurious callout, while any
+   * subsequent connect or disconnect announces "Timing system connected" / "Timing system disconnected".
+   */
+  public armTimingConnectionAnnouncements(): void {
+    window.clearTimeout(this.timingConnTimer);
+    this.timingConnTimer = 0;
+    this.timingConnReseedUntilMs = 0;
+    this.lastSimMode = this.store.simulatorRunning;
+    this.lastTimingHwMode = this.store.timingHardwareMode;
+    const st = this.evaluateTimingSystemState();
+    this.lastTimingConnected = st === "pending" ? null : st === "connected";
+    this.timingConnArmed = true;
+    if (st === "pending") {
+      this.scheduleTimingConnCheck();
+    }
+  }
+
+  private evaluateTimingSystemState(): "connected" | "disconnected" | "pending" {
+    if (isServerDisconnectedLockout()) {
+      return "disconnected";
+    }
+    const hwMode = this.store.timingHardwareMode;
+    if (hwMode === "rotorhazard" || hwMode === "rotorhazard_usb") {
+      return sharedRHLink.snapshots(this.store).some((s) => s.connected)
+        ? "connected"
+        : "disconnected";
+    }
+    if (hwMode === "laprf") {
+      return sharedLapRFLink.snapshots(this.store).some((s) => s.connected)
+        ? "connected"
+        : "disconnected";
+    }
+    const hasReadySlaprf = usbPool.slots.some((c) => {
+      if (!c.connected || c.isOtherDevice || c.lastStatus?.emergencyMode) {
+        return false;
+      }
+      const s = c.lastStatus;
+      const cfg = c.lastConfig;
+      return Boolean(
+        s?.role === 1 || s?.role === 2 || cfg?.role === "hub" || cfg?.role === "spoke"
+      );
+    });
+    if (hasReadySlaprf) {
+      return "connected";
+    }
+    const hasProbingSlot = usbPool.slots.some(
+      (c) =>
+        c.connected &&
+        !c.isOtherDevice &&
+        !c.lastStatus?.emergencyMode &&
+        !c.lastStatus &&
+        !c.lastConfig
+    );
+    return hasProbingSlot ? "pending" : "disconnected";
+  }
+
+  private silenceTimingConnForModeSwitch(): void {
+    window.clearTimeout(this.timingConnTimer);
+    this.timingConnTimer = 0;
+    this.lastTimingConnected = null;
+    this.timingConnReseedUntilMs = Date.now() + 750;
+    if (this.timingConnArmed && !this.unloading) {
+      this.timingConnTimer = window.setTimeout(() => {
+        this.timingConnTimer = 0;
+        this.flushTimingConnCheck();
+      }, 760);
+    }
+  }
+
+  private scheduleTimingConnCheck(): void {
+    if (!this.timingConnArmed || this.unloading) return;
+    window.clearTimeout(this.timingConnTimer);
+    const now = Date.now();
+    const delayMs =
+      this.timingConnReseedUntilMs > now
+        ? Math.max(80, this.timingConnReseedUntilMs - now + 10)
+        : 80;
+    this.timingConnTimer = window.setTimeout(() => {
+      this.timingConnTimer = 0;
+      this.flushTimingConnCheck();
+    }, delayMs);
+  }
+
+  private flushTimingConnCheck(): void {
+    if (!this.timingConnArmed || this.unloading) return;
+    const now = Date.now();
+    if (this.timingConnReseedUntilMs > now) {
+      this.scheduleTimingConnCheck();
+      return;
+    }
+    const st = this.evaluateTimingSystemState();
+    if (st === "pending") {
+      this.timingConnTimer = window.setTimeout(() => {
+        this.timingConnTimer = 0;
+        this.flushTimingConnCheck();
+      }, 90);
+      return;
+    }
+    const cur = st === "connected";
+    if (this.lastTimingConnected === null) {
+      this.lastTimingConnected = cur;
+      return;
+    }
+    if (cur === this.lastTimingConnected) {
+      return;
+    }
+    this.lastTimingConnected = cur;
+    if (!this.prefs.enabled) {
+      return;
+    }
+    this.queue = this.queue.filter(
+      (item) =>
+        item.text !== "Timing system connected" && item.text !== "Timing system disconnected"
+    );
+    this.say(cur ? "Timing system connected" : "Timing system disconnected");
   }
 
   /** Restores the voice, speed, volume, and sample phrase to system defaults without changing the on/off toggle. */
@@ -319,6 +507,7 @@ export class Announcer {
       this.clear();
       this.sleepAudio();
     }
+    this.silenceTimingConnForModeSwitch();
     this.resetIdleTimer();
     this.notify();
   }

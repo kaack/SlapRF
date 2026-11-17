@@ -1353,6 +1353,78 @@ describe("views/LiveView, PilotView & TopBar Integration", () => {
     }
   });
 
+  it("counts down smoothly in Race Control when no timing hardware or telemetry stream is active", async () => {
+    const origPerfNow = performance.now.bind(performance);
+    let fakePerfMs = 50_000;
+    performance.now = () => fakePerfMs;
+
+    const countdownHeat = makeHeat("W1-1", {
+      order: 1,
+      state: "countdown",
+      countdownDurationSec: 5,
+      countdownRemainingSec: 5,
+      countdownStartUs: 10_000_000,
+      timeLimitSec: 120,
+      targetLaps: 3,
+    });
+    const race = makeRaceState({
+      raceId: "offline-clock-race",
+      mode: "race",
+      lifecycle: "active",
+      activeHeatId: "W1-1",
+      heats: [countdownHeat],
+    });
+
+    const store = makeStore({
+      simulatorRunning: false,
+      serverTimestampUs: 10_000_000,
+      pilots: [makePilot(1, { callsign: "Alpha" })],
+      gates: [],
+      timers: [],
+      raceState: race,
+      eventState: {
+        initialized: true,
+        activeRaceId: "offline-clock-race",
+        races: [race],
+      },
+    });
+    const { api } = makeMockApiClient(store);
+    window.history.replaceState(null, "", "/#/races/offline-clock-race/control");
+
+    const root = mountHtml(`<div id="offline-clock-host" style="width:1440px;height:900px"></div>`);
+    const view = new RacesView(root.querySelector("#offline-clock-host")!, store, api);
+    await flushMicrotasks();
+
+    try {
+      expect(root.querySelector<HTMLElement>("[data-race-clock]")?.textContent).toBe("00:05.0");
+
+      // Advance 1.6s of wall time with zero telemetry packets and zero /api/status polls
+      fakePerfMs += 1_600;
+      (view as unknown as { updateLiveClockDom: () => void }).updateLiveClockDom();
+      expect(root.querySelector<HTMLElement>("[data-race-clock]")?.textContent).toBe("00:03.4");
+
+      // Transition to running heat via WebSocket race push carrying serverTimestampUs
+      const runningHeat = {
+        ...countdownHeat,
+        state: "running" as const,
+        countdownRemainingSec: 0,
+        startToneUs: 13_500_000,
+        elapsedSec: 0,
+      };
+      store.ingestRace({ ...race, heats: [runningHeat] }, null, null, 13_500_000);
+      await flushMicrotasks();
+      expect(root.querySelector<HTMLElement>("[data-race-clock]")?.textContent).toBe("02:00.0");
+
+      // Advance 4.3s of wall time with zero telemetry packets -> counts down to 01:55.7
+      fakePerfMs += 4_300;
+      (view as unknown as { updateLiveClockDom: () => void }).updateLiveClockDom();
+      expect(root.querySelector<HTMLElement>("[data-race-clock]")?.textContent).toBe("01:55.7");
+    } finally {
+      performance.now = origPerfNow;
+      view.destroy();
+    }
+  });
+
   it("keeps Review & Flight Line rows stationary when laps/positions change and re-sorts via the header arrow before Pos", async () => {
     const hDone = makeHeat("Q1-1", {
       order: 1,

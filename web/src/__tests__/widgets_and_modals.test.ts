@@ -20,6 +20,7 @@ import {
   ordinal,
   raceLifecycleBadge,
   renderBracketMarkup,
+  roundNeedsDeleteConfirmation,
   STAGE1_HANDOFF_OUT_ID,
   STAGE1_PILOTS_IN_ID,
   STAGE2_HANDOFF_IN_ID,
@@ -844,5 +845,116 @@ describe("widgets/BracketDiagram & FormatDiagram", () => {
     } finally {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     }
+  });
+
+  it("renders delete button on ZippyQ and Open Qualifier round nodes and skips confirmation when unconnected and empty", () => {
+    const race = makeRaceState({
+      lifecycle: "draft",
+      generated: true,
+      activeStageIndex: 1,
+      roster: [1, 2, 3, 4].map((i) => makeEventPilot(i)),
+      stages: [
+        makeStage(1, { id: "stage-1", title: "ZippyQ Qualifier", format: "open_qualifier", status: "active" }),
+      ],
+      rounds: [
+        {
+          id: "stage1-open-qual",
+          stageIndex: 1,
+          round: 1,
+          column: 1,
+          bracketLane: "open_qual",
+          title: "ZippyQ Round 1",
+          stageFormat: "open_qualifier",
+          startMode: "staggered",
+          targetLaps: 0,
+          timeLimitSec: 120,
+          seedSource: "all_active_pilots",
+        },
+        {
+          id: "rnd-zippy-2",
+          stageIndex: 1,
+          round: 2,
+          column: 2,
+          bracketLane: "qualifying",
+          title: "ZippyQ Round 2",
+          stageFormat: "open_qualifier",
+          startMode: "staggered",
+          targetLaps: 0,
+          timeLimitSec: 120,
+          seedSource: "empty",
+        },
+      ],
+      heats: [],
+      connections: [],
+    });
+
+    const ui = createDefaultBracketEditorUiState(() => {});
+    const html = renderBracketMarkup(race, {
+      editable: true,
+      canvas: true,
+      stageFilter: 1,
+      editorUi: ui,
+    });
+    const root = mountHtml(html);
+
+    const zq1Btn = root.querySelector<HTMLButtonElement>(
+      "[data-round-node='stage1-open-qual'] .bkt-node-delete-btn[data-bkt-action='delete_round']"
+    );
+    const zq2Btn = root.querySelector<HTMLButtonElement>(
+      "[data-round-node='rnd-zippy-2'] .bkt-node-delete-btn[data-bkt-action='delete_round']"
+    );
+    expect(zq1Btn).not.toBeNull();
+    expect(zq2Btn).not.toBeNull();
+    expect(zq1Btn!.disabled).toBe(false);
+    expect(zq2Btn!.disabled).toBe(false);
+
+    // Quick-glance max heats pills render on a single row: ∞, 2, 3, More
+    const pills = Array.from(
+      root.querySelectorAll<HTMLButtonElement>("[data-round-node='stage1-open-qual'] .races-preset-pills button")
+    ).map((b) => b.textContent?.trim());
+    expect(pills).toEqual(["∞", "2", "3", "More"]);
+
+    // Unconnected empty ZippyQ rounds delete immediately; adding a connection prompts confirmation
+    expect(roundNeedsDeleteConfirmation(race, "rnd-zippy-2")).toBe(false);
+    expect(roundNeedsDeleteConfirmation(race, "stage1-open-qual")).toBe(false);
+    race.connections = [
+      {
+        id: "conn-zq1-zq2",
+        stageIndex: 1,
+        fromRoundId: "stage1-open-qual",
+        toRoundId: "rnd-zippy-2",
+        mode: "all_pilots",
+        count: 0,
+      },
+    ];
+    expect(roundNeedsDeleteConfirmation(race, "stage1-open-qual")).toBe(true);
+
+    // Deleting all rounds leaves a clean empty custom stage canvas without .rc-empty-floater
+    const emptyCustomRace = makeRaceState({
+      lifecycle: "draft",
+      generated: true,
+      activeStageIndex: 1,
+      roster: [1, 2, 3, 4].map((i) => makeEventPilot(i)),
+      stages: [
+        makeStage(1, { id: "stage-1", title: "Custom Stage 1", format: "custom", customized: true, status: "active" }),
+      ],
+      rounds: [],
+      heats: [],
+      connections: [],
+    });
+    const emptyCanvasRoot = mountHtml(
+      renderBracketMarkup(emptyCustomRace, {
+        editable: true,
+        canvas: true,
+        stageFilter: 1,
+        editorUi: ui,
+      })
+    );
+    expect(emptyCanvasRoot.querySelector(".rc-empty-floater")).toBeNull();
+    expect(emptyCanvasRoot.querySelector("[data-round-node='stage1-pilots-in']")).not.toBeNull();
+
+    const emptyFormatRoot = mountHtml(renderFormatMarkup(emptyCustomRace, { editable: true, editorUi: ui }));
+    expect(emptyFormatRoot.textContent).toContain("Custom Stage 1");
+    expect(emptyFormatRoot.textContent).toContain("Empty custom stage");
   });
 });

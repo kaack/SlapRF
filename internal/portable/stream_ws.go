@@ -140,10 +140,15 @@ func (f *engineStreamForwarder) OnConfigUpdated(pilots []domain.PilotSlot, gates
 }
 
 func (f *engineStreamForwarder) OnRaceUpdated(state domain.RaceTournamentState, eventState domain.EventManagerState, announcement *domain.RaceAnnouncement) {
+	var serverTsUs uint64
+	if f.engine != nil {
+		serverTsUs = f.engine.NowUs()
+	}
 	f.sendJSON("race", map[string]any{
-		"raceState":    state,
-		"eventState":   eventState,
-		"announcement": announcement,
+		"serverTimestampUs": serverTsUs,
+		"raceState":         state,
+		"eventState":        eventState,
+		"announcement":      announcement,
 	})
 }
 

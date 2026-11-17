@@ -353,8 +353,8 @@ func (c RaceSetupConfig) Normalized() RaceSetupConfig {
 	}
 	if c.QualifyingRounds < 1 {
 		c.QualifyingRounds = def.QualifyingRounds
-	} else if c.QualifyingRounds > 8 {
-		c.QualifyingRounds = 8
+	} else if c.QualifyingRounds > 12 {
+		c.QualifyingRounds = 12
 	}
 	switch c.QualifyingMetric {
 	case QualMetricConsecutive3, QualMetricConsecutive2, QualMetricBestLap, QualMetricLapsInTime, QualMetricPoints:
@@ -729,8 +729,8 @@ func (s StageSettings) Normalized(fallback RaceSetupConfig, format StageFormat) 
 	}
 	if s.QualifyingRounds < 1 {
 		s.QualifyingRounds = def.QualifyingRounds
-	} else if s.QualifyingRounds > 8 {
-		s.QualifyingRounds = 8
+	} else if s.QualifyingRounds > 12 {
+		s.QualifyingRounds = 12
 	}
 	if s.MaxPacksPerPilot < 0 {
 		s.MaxPacksPerPilot = 0

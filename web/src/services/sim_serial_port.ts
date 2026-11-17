@@ -375,37 +375,37 @@ function sampleTimerChannelDbm(
     rawRssi = liveWasmRssi;
   }
   if (!rawRssi && store) {
-    const simTimer = store.simState?.timers?.find((t) => t.timerId === desc.timerId);
-    if (simTimer && Array.isArray(simTimer.lastRssi) && simTimer.lastRssi.some((v) => v < 0)) {
-      rawRssi = simTimer.lastRssi;
+    const node = store.nodes.find((n) => (n.assignedTimerId ?? n.gateId) === desc.timerId);
+    if (node) {
+      const hist = store.historyFor(node.gateId);
+      if (hist.length > 0) {
+        rawRssi = hist[hist.length - 1].rssi;
+      } else if (Array.isArray(node.lastRssi) && node.lastRssi.some((v) => v < 0)) {
+        rawRssi = node.lastRssi;
+      }
     }
-    if (!rawRssi) {
-      const node = store.nodes.find((n) => (n.assignedTimerId ?? n.gateId) === desc.timerId);
-      if (node) {
-        const hist = store.historyFor(node.gateId);
-        if (hist.length > 0) {
-          rawRssi = hist[hist.length - 1].rssi;
-        } else if (Array.isArray(node.lastRssi) && node.lastRssi.length >= 8) {
-          rawRssi = node.lastRssi;
-        }
+    if (!rawRssi && store.nodes.length > 0) {
+      // Off-track collector Hub sits near the Start/Finish table: derive from 50 Hz Start node stream
+      const startNode = store.nodes[0];
+      const hist = store.historyFor(startNode.gateId);
+      const srcRssi =
+        hist.length > 0
+          ? hist[hist.length - 1].rssi
+          : Array.isArray(startNode.lastRssi) && startNode.lastRssi.some((v) => v < 0)
+            ? startNode.lastRssi
+            : undefined;
+      if (srcRssi) {
+        rawRssi = srcRssi.map((v) => Math.max(baseFloor, v - 3.5 + (Math.random() - 0.5) * 1.2));
       }
     }
     if (!rawRssi) {
-      const det = store.detectedTimers.find((d) => d.timerId === desc.timerId);
-      if (det && Array.isArray(det.lastRssi) && det.lastRssi.some((v) => v < 0)) {
-        rawRssi = det.lastRssi;
-      } else if (store.nodes.length > 0) {
-        // Off-track collector Hub sits near the Start/Finish table: derive from Start node with slight attenuation
-        const startNode = store.nodes[0];
-        const hist = store.historyFor(startNode.gateId);
-        const srcRssi =
-          hist.length > 0
-            ? hist[hist.length - 1].rssi
-            : Array.isArray(startNode.lastRssi) && startNode.lastRssi.some((v) => v < 0)
-              ? startNode.lastRssi
-              : undefined;
-        if (srcRssi) {
-          rawRssi = srcRssi.map((v) => Math.max(baseFloor, v - 3.5 + (Math.random() - 0.5) * 1.6));
+      const simTimer = store.simState?.timers?.find((t) => t.timerId === desc.timerId);
+      if (simTimer && Array.isArray(simTimer.lastRssi) && simTimer.lastRssi.some((v) => v < 0)) {
+        rawRssi = simTimer.lastRssi;
+      } else {
+        const det = store.detectedTimers.find((d) => d.timerId === desc.timerId);
+        if (det && Array.isArray(det.lastRssi) && det.lastRssi.some((v) => v < 0)) {
+          rawRssi = det.lastRssi;
         }
       }
     }

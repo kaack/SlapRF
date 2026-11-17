@@ -2313,7 +2313,6 @@ func SyncRoundsMetadata(st *domain.RaceTournamentState) {
 	// Emit Open Qualifier Flight-Line round & Stage Handoff Out / Handoff In portal nodes across all stages in `st.Stages`
 	for _, s := range st.Stages {
 		inConns := IncomingStageConnections(st, s.Index)
-		outConns := OutgoingStageConnections(st, s.Index)
 
 		// Open Qualifier stages always expose their Flight-Line round node even before Pack 1 is queued
 		if s.Format == domain.FormatOpenQualifier {
@@ -2325,7 +2324,7 @@ func SyncRoundsMetadata(st *domain.RaceTournamentState) {
 					break
 				}
 			}
-			if !seenID[oqID] && !hasOtherStageRound {
+			if !s.Customized && !seenID[oqID] && !hasOtherStageRound {
 				stgSettings := s.Settings.Normalized(st.Config, s.Format)
 				seedSrc := "all_active_pilots"
 				if len(inConns) > 0 {
@@ -2375,9 +2374,30 @@ func SyncRoundsMetadata(st *domain.RaceTournamentState) {
 				}
 			}
 		}
+	}
 
-		// Outgoing seeding portal for Qualifying / Open Qualifier stages that feed at least 1 downstream stage
-		if (s.Format == domain.FormatQualifying || s.Format == domain.FormatOpenQualifier) && len(outConns) > 0 {
+	ReconcileStagesFromRoundContents(st, out)
+	stageByIdx = make(map[int]*domain.RaceStage, len(st.Stages))
+	for i := range st.Stages {
+		stageByIdx[st.Stages[i].Index] = &st.Stages[i]
+	}
+
+	for _, s := range st.Stages {
+		inConns := IncomingStageConnections(st, s.Index)
+		outConns := OutgoingStageConnections(st, s.Index)
+		nonPortalCount := 0
+		finalsCount := 0
+		for _, r := range out {
+			if r.StageIndex == s.Index && !domain.IsStagePortalRoundID(r.ID) {
+				nonPortalCount++
+				if r.BracketLane == "finals" {
+					finalsCount++
+				}
+			}
+		}
+
+		// Outgoing seeding portal for Qualifying / Open Qualifier stages, or any non-empty customized stage without its own Finals round that feeds a downstream stage
+		if len(outConns) > 0 && (s.Format == domain.FormatQualifying || s.Format == domain.FormatOpenQualifier || ((s.Customized || s.Format == domain.FormatCustom) && nonPortalCount > 0 && finalsCount == 0)) {
 			outID := domain.StageHandoffOutID(s.Index)
 			maxCol := 1
 			for _, r := range out {
@@ -2847,10 +2867,10 @@ func deriveStageConnections(st *domain.RaceTournamentState, stageIdx int) []doma
 				openRounds = append(openRounds, r)
 			}
 		}
-		if len(openRounds) == 0 {
+		if len(openRounds) == 0 && !stg.Customized {
 			openRounds = append(openRounds, domain.RaceRound{ID: domain.OpenQualRoundID(stageIdx), Column: 1})
 		}
-		if hasInPortal {
+		if hasInPortal && len(openRounds) > 0 {
 			out = append(out, domain.RoundConnection{
 				ID:           fmt.Sprintf("conn-%s-%s-stage_seeds", inPortalID, openRounds[0].ID),
 				StageIndex:   stageIdx,

@@ -769,6 +769,10 @@ func (e *Engine) renameStageLocked(stageID string, stageIdx int, newTitle string
 }
 
 func (e *Engine) updateStageSettingsLocked(req BracketEditPayload) error {
+	if len(req.Positions) > 0 {
+		race.SyncRoundsMetadata(&e.raceState)
+		e.applyRoundPositionsLocked(req.Positions)
+	}
 	stg := e.findStageLocked(req.StageID, req.StageIndex)
 	if stg == nil {
 		return fmt.Errorf("stage not found")
@@ -842,9 +846,34 @@ func (e *Engine) updateStageSettingsLocked(req BracketEditPayload) error {
 		}
 	}
 
+	hasOpenQualRound := stg.Format == domain.FormatOpenQualifier
+	if !hasOpenQualRound {
+		for _, r := range e.raceState.Rounds {
+			if r.StageIndex == stg.Index && (r.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(r.ID)) {
+				hasOpenQualRound = true
+				break
+			}
+		}
+	}
+	if hasOpenQualRound && next.MaxPacksPerPilot > 0 && next.MaxPacksPerPilot != prev.MaxPacksPerPilot {
+		e.reconcileOpenQualifierMaxPacksLocked(stg.Index, next.MaxPacksPerPilot, next.QualifyingMetric)
+	}
+
+	pphChanged := prev.PilotsPerHeat != next.PilotsPerHeat
+	chChanged := !equalSeatChannels(prev.SeatChannels, next.SeatChannels)
+	lapsChanged := prev.TargetLaps != next.TargetLaps
+	timeChanged := prev.TimeLimitSec != next.TimeLimitSec
+
 	startedInStage := race.AnyRealHeatStartedInStage(&e.raceState, stg.Index)
-	if !startedInStage && !stg.Customized && stg.Format != domain.FormatCustom {
+	qualRoundsChanged := stg.Format == domain.FormatQualifying && prev.QualifyingRounds != next.QualifyingRounds
+
+	if !startedInStage && !stg.Customized && stg.Format != domain.FormatCustom && stg.Format != domain.FormatOpenQualifier {
 		e.rebuildSingleStageLocked(stg.Index)
+		return nil
+	}
+
+	if stg.Format == domain.FormatQualifying && (qualRoundsChanged || pphChanged || chChanged || lapsChanged || timeChanged) {
+		e.reconcileQualifyingStageLocked(stg.Index)
 		return nil
 	}
 
@@ -854,10 +883,6 @@ func (e *Engine) updateStageSettingsLocked(req BracketEditPayload) error {
 	}
 
 	// Propagate updated settings strictly to unstarted rounds & heats in `stg.Index` ONLY
-	pphChanged := prev.PilotsPerHeat != next.PilotsPerHeat
-	chChanged := !equalSeatChannels(prev.SeatChannels, next.SeatChannels)
-	lapsChanged := prev.TargetLaps != next.TargetLaps
-	timeChanged := prev.TimeLimitSec != next.TimeLimitSec
 
 	roundStartedCount := make(map[string]int)
 	for _, h := range e.raceState.Heats {
@@ -905,6 +930,569 @@ func (e *Engine) updateStageSettingsLocked(req BracketEditPayload) error {
 		race.SyncRoundsMetadata(&e.raceState)
 	}
 	return nil
+}
+
+// reconcileOpenQualifierMaxPacksLocked trims any unstarted queued seats in an Open Qualifier stage
+// that exceed a newly lowered `maxPacks` per-pilot limit and removes any unstarted heats left empty.
+func (e *Engine) reconcileOpenQualifierMaxPacksLocked(
+	stageIdx int,
+	maxPacks int,
+	qualMetric domain.QualifyingMetric,
+) {
+	if maxPacks < 1 {
+		return
+	}
+	seenPerPilot := make(map[int]int)
+	for i := range e.raceState.Heats {
+		h := &e.raceState.Heats[i]
+		isOpenQualHeat := h.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(h.RoundID)
+		if h.StageIndex != stageIdx || !isOpenQualHeat || h.State == domain.HeatAborted || isUnstartedHeatState(h.State) {
+			continue
+		}
+		for _, s := range h.Seats {
+			if s.PilotSlotIndex > 0 && s.Status != domain.PilotHeatDNS && s.Status != domain.PilotHeatDQ {
+				seenPerPilot[s.PilotSlotIndex]++
+			}
+		}
+	}
+
+	kept := make([]domain.RaceHeat, 0, len(e.raceState.Heats))
+	for i := range e.raceState.Heats {
+		h := e.raceState.Heats[i]
+		isOpenQualHeat := h.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(h.RoundID)
+		if h.StageIndex != stageIdx || !isOpenQualHeat || h.State == domain.HeatAborted || !isUnstartedHeatState(h.State) {
+			kept = append(kept, h)
+			continue
+		}
+		remaining := 0
+		for si := range h.Seats {
+			slot := h.Seats[si].PilotSlotIndex
+			if slot <= 0 || h.Seats[si].Status == domain.PilotHeatDNS || h.Seats[si].Status == domain.PilotHeatDQ {
+				continue
+			}
+			if seenPerPilot[slot] >= maxPacks {
+				clearSeatOccupant(&h.Seats[si], false)
+				h.Seats[si].Feeder = nil
+				h.Seats[si].ManualLock = false
+			} else {
+				seenPerPilot[slot]++
+				remaining++
+			}
+		}
+		if remaining > 0 {
+			finalizeEditedHeatState(&h, qualMetric)
+			kept = append(kept, h)
+		} else if h.ID == e.raceState.ActiveHeatID {
+			e.raceState.ActiveHeatID = ""
+		}
+	}
+	for i := range kept {
+		kept[i].Order = i + 1
+	}
+	e.raceState.Heats = kept
+	race.SyncRoundsMetadata(&e.raceState)
+}
+
+// reconcileQualifyingStageLocked dynamically reconciles the Round nodes, sequential connections, and
+// per-round heat counts of a Regular Qualifying stage (`FormatQualifying`) whenever `QualifyingRounds`,
+// `MaxPacksPerPilot`, `PilotsPerHeat`, or the active pilot roster changes, while leaving any already
+// started or confirmed heats untouched.
+func (e *Engine) reconcileQualifyingStageLocked(stageIdx int) {
+	race.EnsureStagesMetadata(&e.raceState)
+	savedWantRounds := 0
+	if stgPre := e.findStageByIndexLocked(stageIdx); stgPre != nil && stgPre.Format == domain.FormatQualifying {
+		savedWantRounds = stgPre.Settings.Normalized(e.raceState.Config, stgPre.Format).QualifyingRounds
+	}
+	race.SyncRoundsMetadata(&e.raceState)
+
+	stg := e.findStageByIndexLocked(stageIdx)
+	if stg == nil || stg.Format != domain.FormatQualifying {
+		return
+	}
+	if savedWantRounds > 0 {
+		stg.Settings.QualifyingRounds = savedWantRounds
+	}
+	settings := stg.Settings.Normalized(e.raceState.Config, stg.Format)
+	maxPerHeat := settings.PilotsPerHeat
+	if maxPerHeat < 2 {
+		maxPerHeat = 4
+	}
+	seatChannels := settings.SeatChannels
+	if len(seatChannels) < maxPerHeat {
+		seatChannels = domain.DefaultSeatChannels(maxPerHeat)
+	}
+
+	var qualRounds []domain.RaceRound
+	for _, r := range e.raceState.Rounds {
+		if r.StageIndex == stageIdx && r.StageFormat == domain.FormatQualifying && !domain.IsStagePortalRoundID(r.ID) && !domain.IsOpenQualRoundID(r.ID) {
+			qualRounds = append(qualRounds, r)
+		}
+	}
+	sort.SliceStable(qualRounds, func(i, j int) bool {
+		if qualRounds[i].Column != qualRounds[j].Column {
+			return qualRounds[i].Column < qualRounds[j].Column
+		}
+		if qualRounds[i].Round != qualRounds[j].Round {
+			return qualRounds[i].Round < qualRounds[j].Round
+		}
+		return qualRounds[i].ID < qualRounds[j].ID
+	})
+
+	roundStartedHeats := make(map[string]int)
+	for _, h := range e.raceState.Heats {
+		if h.StageIndex == stageIdx && !isUnstartedHeatState(h.State) {
+			roundStartedHeats[h.RoundID]++
+		}
+	}
+	minRounds := 0
+	for idx, r := range qualRounds {
+		if roundStartedHeats[r.ID] > 0 {
+			minRounds = idx + 1
+		}
+	}
+
+	wantRounds := settings.QualifyingRounds
+	if wantRounds < minRounds {
+		wantRounds = minRounds
+	}
+	if wantRounds < 1 {
+		wantRounds = 1
+	}
+	stg.Settings.QualifyingRounds = wantRounds
+	if len(e.raceState.Stages) == 1 && stageIdx == 1 {
+		e.raceState.Config.QualifyingRounds = wantRounds
+	}
+
+	outPortalID := domain.StageHandoffOutID(stageIdx)
+	inPortalID := domain.StageHandoffInID(stageIdx)
+	hasOutPortal := e.findRoundByIDLocked(outPortalID) != nil
+	hasInPortal := len(race.IncomingStageConnections(&e.raceState, stageIdx)) > 0 && e.findRoundByIDLocked(inPortalID) != nil
+
+	// 1. Trim excess unstarted rounds from the end if `wantRounds < len(qualRounds)`
+	if len(qualRounds) > wantRounds {
+		excess := len(qualRounds) - wantRounds
+		dropRoundID := make(map[string]bool, excess)
+		for k := len(qualRounds) - 1; k >= 0 && excess > 0; k-- {
+			rid := qualRounds[k].ID
+			if roundStartedHeats[rid] == 0 {
+				dropRoundID[rid] = true
+				excess--
+			}
+		}
+		if len(dropRoundID) > 0 {
+			keptRounds := make([]domain.RaceRound, 0, len(e.raceState.Rounds))
+			for _, r := range e.raceState.Rounds {
+				if !dropRoundID[r.ID] {
+					keptRounds = append(keptRounds, r)
+				}
+			}
+			e.raceState.Rounds = keptRounds
+
+			keptHeats := make([]domain.RaceHeat, 0, len(e.raceState.Heats))
+			for _, h := range e.raceState.Heats {
+				if !dropRoundID[h.RoundID] {
+					keptHeats = append(keptHeats, h)
+				} else if h.ID == e.raceState.ActiveHeatID {
+					e.raceState.ActiveHeatID = ""
+				}
+			}
+			e.raceState.Heats = keptHeats
+
+			keptConns := make([]domain.RoundConnection, 0, len(e.raceState.Connections))
+			for _, c := range e.raceState.Connections {
+				if !dropRoundID[c.FromRoundID] && !dropRoundID[c.ToRoundID] {
+					keptConns = append(keptConns, c)
+				}
+			}
+			e.raceState.Connections = keptConns
+
+			filtered := make([]domain.RaceRound, 0, len(qualRounds))
+			for _, r := range qualRounds {
+				if !dropRoundID[r.ID] {
+					filtered = append(filtered, r)
+				}
+			}
+			qualRounds = filtered
+		}
+	}
+
+	// 2. Append new Qualifying rounds if `len(qualRounds) < wantRounds`
+	usedRoundIDs := make(map[string]bool, len(e.raceState.Rounds))
+	for _, r := range e.raceState.Rounds {
+		usedRoundIDs[r.ID] = true
+	}
+	for len(qualRounds) < wantRounds {
+		rndNum := len(qualRounds) + 1
+		candID := fmt.Sprintf("s%d-c%d-qualifying", stageIdx, rndNum)
+		suffix := 2
+		for usedRoundIDs[candID] {
+			candID = fmt.Sprintf("s%d-c%d-qualifying-%d", stageIdx, rndNum, suffix)
+			suffix++
+		}
+		usedRoundIDs[candID] = true
+		seedSrc := ""
+		if rndNum == 1 && !hasInPortal {
+			seedSrc = "all_active_pilots"
+		}
+		nr := domain.RaceRound{
+			ID:           candID,
+			StageIndex:   stageIdx,
+			Round:        rndNum,
+			Column:       rndNum,
+			BracketLane:  "qualifying",
+			Title:        fmt.Sprintf("Qualifying R%d", rndNum),
+			StageFormat:  domain.FormatQualifying,
+			StartMode:    domain.StartModeStaggered,
+			TargetLaps:   settings.TargetLaps,
+			TimeLimitSec: settings.TimeLimitSec,
+			SeedSource:   seedSrc,
+		}
+		e.raceState.Rounds = append(e.raceState.Rounds, nr)
+		qualRounds = append(qualRounds, nr)
+	}
+
+	// 3. Normalize Round & Column numbering + round metadata on `qualRounds`
+	qualIDSet := make(map[string]int, len(qualRounds))
+	for idx := range qualRounds {
+		rid := qualRounds[idx].ID
+		qualIDSet[rid] = idx
+		rPtr := e.findRoundByIDLocked(rid)
+		if rPtr == nil {
+			continue
+		}
+		rPtr.Round = idx + 1
+		rPtr.Column = idx + 1
+		rPtr.BracketLane = "qualifying"
+		rPtr.StageFormat = domain.FormatQualifying
+		if roundStartedHeats[rid] == 0 {
+			rPtr.TargetLaps = settings.TargetLaps
+			rPtr.TimeLimitSec = settings.TimeLimitSec
+		}
+		if idx == 0 {
+			if !hasInPortal && rPtr.SeedSource != "empty" {
+				rPtr.SeedSource = "all_active_pilots"
+			}
+		} else {
+			rPtr.SeedSource = ""
+		}
+		qualRounds[idx] = *rPtr
+	}
+	if hasOutPortal {
+		if outPtr := e.findRoundByIDLocked(outPortalID); outPtr != nil {
+			outPtr.Column = len(qualRounds) + 1
+		}
+	}
+
+	// 4. Rebuild clean sequential connections across `qualRounds` (plus portals), preserving any custom non-qualifying round connections
+	keptConns := make([]domain.RoundConnection, 0, len(e.raceState.Connections)+len(qualRounds)+2)
+	for _, c := range e.raceState.Connections {
+		if c.StageIndex != stageIdx {
+			keptConns = append(keptConns, c)
+			continue
+		}
+		_, fromQual := qualIDSet[c.FromRoundID]
+		_, toQual := qualIDSet[c.ToRoundID]
+		if !fromQual && !toQual {
+			keptConns = append(keptConns, c)
+		}
+	}
+	if hasInPortal && len(qualRounds) > 0 {
+		keptConns = append(keptConns, domain.RoundConnection{
+			ID:           fmt.Sprintf("conn-%s-%s-stage_seeds", inPortalID, qualRounds[0].ID),
+			StageIndex:   stageIdx,
+			FromRoundID:  inPortalID,
+			ToRoundID:    qualRounds[0].ID,
+			FromPort:     "right",
+			ToPort:       "left",
+			Mode:         "stage_seeds",
+			SeedStart:    1,
+			SeedEnd:      0,
+			Distribution: "sequential",
+		})
+	}
+	for idx := 0; idx+1 < len(qualRounds); idx++ {
+		fromID := qualRounds[idx].ID
+		toID := qualRounds[idx+1].ID
+		keptConns = append(keptConns, domain.RoundConnection{
+			ID:          fmt.Sprintf("conn-%s-%s-all_pilots", fromID, toID),
+			StageIndex:  stageIdx,
+			FromRoundID: fromID,
+			ToRoundID:   toID,
+			FromPort:    "right",
+			ToPort:      "left",
+			Mode:        "all_pilots",
+		})
+	}
+	if hasOutPortal && len(qualRounds) > 0 {
+		lastID := qualRounds[len(qualRounds)-1].ID
+		keptConns = append(keptConns, domain.RoundConnection{
+			ID:          fmt.Sprintf("conn-%s-%s-qual_feed", lastID, outPortalID),
+			StageIndex:  stageIdx,
+			FromRoundID: lastID,
+			ToRoundID:   outPortalID,
+			FromPort:    "right",
+			ToPort:      "left",
+			Mode:        "qual_feed",
+			Count:       e.raceState.Config.Stage2MaxSeeds,
+		})
+	}
+	e.raceState.Connections = keptConns
+
+	// 5. Schedule 1 heat per active pilot per round across all unstarted heats/rounds
+	pilots := e.activeEventPilotsForGenerationLocked()
+	seedBySlot := make(map[int]int, len(pilots))
+	for i, p := range pilots {
+		seedBySlot[p.SlotIndex] = i + 1
+	}
+
+	for i := range e.raceState.Heats {
+		h := &e.raceState.Heats[i]
+		if h.StageIndex == stageIdx && !isUnstartedHeatState(h.State) {
+			if rIdx, ok := qualIDSet[h.RoundID]; ok {
+				h.Round = rIdx + 1
+				h.Column = rIdx + 1
+			}
+		}
+	}
+
+	var unstartedRoundIdxs []int
+	for idx, r := range qualRounds {
+		if roundStartedHeats[r.ID] == 0 {
+			unstartedRoundIdxs = append(unstartedRoundIdxs, idx)
+			continue
+		}
+		// Partially-started round: ensure remaining active pilots who have not raced in this round yet get 1 heat
+		racedInThisRound := make(map[int]bool)
+		var unstartedHeatIdxs []int
+		for hi := range e.raceState.Heats {
+			h := &e.raceState.Heats[hi]
+			if h.RoundID != r.ID {
+				continue
+			}
+			if !isUnstartedHeatState(h.State) {
+				for _, s := range h.Seats {
+					if s.PilotSlotIndex > 0 {
+						racedInThisRound[s.PilotSlotIndex] = true
+					}
+				}
+			} else {
+				unstartedHeatIdxs = append(unstartedHeatIdxs, hi)
+			}
+		}
+		if len(unstartedHeatIdxs) == 0 {
+			continue
+		}
+		var partialPilots []domain.PilotSlot
+		for _, p := range pilots {
+			if !racedInThisRound[p.SlotIndex] {
+				partialPilots = append(partialPilots, p)
+			}
+		}
+		dropHeat := make(map[int]bool)
+		if len(partialPilots) == 0 {
+			for _, hi := range unstartedHeatIdxs {
+				dropHeat[hi] = true
+			}
+		} else {
+			wantU := (len(partialPilots) + maxPerHeat - 1) / maxPerHeat
+			if wantU < 1 {
+				wantU = 1
+			}
+			for len(unstartedHeatIdxs) < wantU {
+				e.appendHeatToRoundOrColumnLocked(r.ID, "qualifying", r.Round, r.Column)
+				unstartedHeatIdxs = append(unstartedHeatIdxs, len(e.raceState.Heats)-1)
+			}
+			for k := len(unstartedHeatIdxs) - 1; k >= wantU; k-- {
+				dropHeat[unstartedHeatIdxs[k]] = true
+			}
+		}
+		if len(dropHeat) > 0 {
+			kept := make([]domain.RaceHeat, 0, len(e.raceState.Heats)-len(dropHeat))
+			for hi, h := range e.raceState.Heats {
+				if !dropHeat[hi] {
+					kept = append(kept, h)
+				}
+			}
+			e.raceState.Heats = kept
+		}
+		if len(partialPilots) > 0 {
+			var priorHeats []domain.RaceHeat
+			var targetPtrs []*domain.RaceHeat
+			for hi := range e.raceState.Heats {
+				h := &e.raceState.Heats[hi]
+				if h.StageIndex != stageIdx {
+					continue
+				}
+				if h.RoundID == r.ID && isUnstartedHeatState(h.State) {
+					syncUnstartedHeatSeatsToConfig(h, maxPerHeat, seatChannels)
+					h.TargetLaps = settings.TargetLaps
+					h.TimeLimitSec = settings.TimeLimitSec
+					targetPtrs = append(targetPtrs, h)
+				} else if !isUnstartedHeatState(h.State) || h.Column < r.Column {
+					priorHeats = append(priorHeats, *h)
+				}
+			}
+			grid := race.ScheduleBalancedQualifyingRound(nil, len(targetPtrs), seatChannels, priorHeats, partialPilots, r.Round)
+			populateQualifyingRoundHeatsFromGrid(targetPtrs, grid, seatChannels, seedBySlot, r.Round, hasInPortal, settings.QualifyingMetric)
+		}
+	}
+
+	// 6. Schedule all completely unstarted rounds (strictly 1 heat per active pilot per round)
+	if len(unstartedRoundIdxs) > 0 {
+		if hasInPortal && len(pilots) == 0 {
+			expectedSeeds := race.StageExpectedIncomingSeeds(&e.raceState, stageIdx, 4)
+			wantH := (expectedSeeds + maxPerHeat - 1) / maxPerHeat
+			if wantH < 1 {
+				wantH = 1
+			}
+			for _, rIdx := range unstartedRoundIdxs {
+				r := qualRounds[rIdx]
+				hCount := wantH
+				if r.TargetHeats > hCount {
+					hCount = r.TargetHeats
+				}
+				targetHeats := e.ensureRoundHeatCountLocked(r.ID, hCount)
+				for _, th := range targetHeats {
+					th.Round = r.Round
+					th.Column = r.Column
+					th.TargetLaps = settings.TargetLaps
+					th.TimeLimitSec = settings.TimeLimitSec
+					th.StartMode = domain.StartModeStaggered
+					th.State = domain.HeatWaiting
+				}
+			}
+		} else {
+			baseHeats := (len(pilots) + maxPerHeat - 1) / maxPerHeat
+			if baseHeats < 1 {
+				baseHeats = 1
+			}
+			for _, rIdx := range unstartedRoundIdxs {
+				r := qualRounds[rIdx]
+				wantH := baseHeats
+				if r.TargetHeats > wantH {
+					wantH = r.TargetHeats
+				}
+				targetHeats := e.ensureRoundHeatCountLocked(r.ID, wantH)
+
+				var srcPtrs []*domain.RaceHeat
+				var priorHeats []domain.RaceHeat
+				prevRoundID := ""
+				if rIdx > 0 {
+					prevRoundID = qualRounds[rIdx-1].ID
+				}
+				for hi := range e.raceState.Heats {
+					h := &e.raceState.Heats[hi]
+					if h.StageIndex != stageIdx || h.RoundID == r.ID {
+						continue
+					}
+					if prevRoundID != "" && h.RoundID == prevRoundID {
+						srcPtrs = append(srcPtrs, h)
+					}
+					if h.Column < r.Column {
+						priorHeats = append(priorHeats, *h)
+					}
+				}
+
+				grid := race.ScheduleBalancedQualifyingRound(
+					srcPtrs,
+					len(targetHeats),
+					seatChannels,
+					priorHeats,
+					pilots,
+					r.Round,
+				)
+				for hi, th := range targetHeats {
+					th.Round = r.Round
+					th.Column = r.Column
+					th.BracketLane = "qualifying"
+					th.StageFormat = domain.FormatQualifying
+					th.StartMode = domain.StartModeStaggered
+					th.TargetLaps = settings.TargetLaps
+					th.TimeLimitSec = settings.TimeLimitSec
+					th.ShortLabel = fmt.Sprintf("Q%d-%d", r.Round, hi+1)
+					if len(targetHeats) == 1 {
+						th.Title = r.Title
+					} else {
+						th.Title = fmt.Sprintf("%s · Heat %d", r.Title, hi+1)
+					}
+				}
+				populateQualifyingRoundHeatsFromGrid(targetHeats, grid, seatChannels, seedBySlot, r.Round, hasInPortal, settings.QualifyingMetric)
+			}
+		}
+	}
+
+	e.sortCustomHeatsAndOrderLocked(stageIdx)
+	race.RebuildEdgesFromFeeders(&e.raceState)
+	race.SyncRoundsMetadata(&e.raceState)
+}
+
+func populateQualifyingRoundHeatsFromGrid(
+	targetHeats []*domain.RaceHeat,
+	grid [][]race.BalancedSlotAssignment,
+	seatChannels []uint8,
+	seedBySlot map[int]int,
+	roundNum int,
+	hasInPortal bool,
+	qualMetric domain.QualifyingMetric,
+) {
+	for hi, th := range targetHeats {
+		for si := range th.Seats {
+			var seatCode uint8
+			if si < len(seatChannels) {
+				seatCode = seatChannels[si]
+			}
+			band, ch, freq, ok := domain.DecodeBandChannel(seatCode)
+			if !ok {
+				band = th.Seats[si].Band
+				if band == 0 {
+					band = domain.BandRaceband
+				}
+				ch = th.Seats[si].Channel
+				freq = domain.FrequencyForBandChannel(band, ch)
+			}
+			th.Seats[si].SeatIndex = si + 1
+			th.Seats[si].Band = band
+			th.Seats[si].Channel = ch
+			th.Seats[si].FrequencyMHz = freq
+			th.Seats[si].ManualLock = false
+			th.Seats[si].Feeder = nil
+
+			var cell race.BalancedSlotAssignment
+			if hi < len(grid) && si < len(grid[hi]) {
+				cell = grid[hi][si]
+			}
+			if cell.PilotSlotIndex > 0 {
+				seedNum := cell.Seed
+				if seedNum <= 0 {
+					seedNum = seedBySlot[cell.PilotSlotIndex]
+				}
+				srcLbl := fmt.Sprintf("Seed #%d", seedNum)
+				if roundNum > 1 {
+					srcLbl = fmt.Sprintf("Q%d Rotation", roundNum-1)
+				}
+				th.Seats[si].PilotSlotIndex = cell.PilotSlotIndex
+				th.Seats[si].Callsign = cell.Callsign
+				th.Seats[si].PhoneticName = cell.PhoneticName
+				th.Seats[si].Color = cell.Color
+				th.Seats[si].Seed = seedNum
+				th.Seats[si].SourceLabel = srcLbl
+				th.Seats[si].Status = domain.PilotHeatStaged
+				th.Seats[si].Crossings = nil
+				th.Seats[si].Laps = []domain.HeatLap{}
+				th.Seats[si].ManualPosition = 0
+				th.Seats[si].PenaltySec = 0
+			} else {
+				clearSeatOccupant(&th.Seats[si], false)
+				th.Seats[si].SourceLabel = "Open / BYE"
+			}
+		}
+		if hasInPortal {
+			th.State = domain.HeatWaiting
+		} else {
+			th.State = domain.HeatReady
+		}
+		finalizeEditedHeatState(th, qualMetric)
+	}
 }
 
 func (e *Engine) moveStagesLocked(req BracketEditPayload) {

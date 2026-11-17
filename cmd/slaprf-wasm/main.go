@@ -159,10 +159,15 @@ func (w *wasmStreamSubscriber) OnConfigUpdated(pilots []domain.PilotSlot, gates 
 }
 
 func (w *wasmStreamSubscriber) OnRaceUpdated(state domain.RaceTournamentState, eventState domain.EventManagerState, announcement *domain.RaceAnnouncement) {
+	var serverTsUs uint64
+	if w.engine != nil {
+		serverTsUs = w.engine.NowUs()
+	}
 	w.send("race", map[string]any{
-		"raceState":    state,
-		"eventState":   eventState,
-		"announcement": announcement,
+		"serverTimestampUs": serverTsUs,
+		"raceState":         state,
+		"eventState":        eventState,
+		"announcement":      announcement,
 	})
 }
 

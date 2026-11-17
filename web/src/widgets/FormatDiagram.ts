@@ -944,9 +944,16 @@ function renderStageCard(
   const timeSec = stgSettings.timeLimitSec || race.config.timeLimitSec || 120;
   const maxPacks = stgSettings.maxPacksPerPilot ?? race.config.maxPacksPerPilot ?? 0;
   const lapsText = isTimedStage && laps === 0 ? "Timed" : `${laps || 3} laps`;
+  const qRounds = stgSettings.qualifyingRounds || race.config.qualifyingRounds || 2;
   const metaSummaryText = isOpenQualStage
-    ? `${pph} seats · ${maxPacks > 0 ? `Max ${maxPacks} heats` : "Unlimited heats"} · ${formatRaceClock(timeSec).slice(0, 5)}`
-    : `${pph} seats · ${lapsText} · ${formatRaceClock(timeSec).slice(0, 5)}`;
+    ? `${pph} seats · ${maxPacks > 0 ? `Max ${maxPacks} heats/pilot` : "Unlimited heats"} · ${formatRaceClock(timeSec).slice(0, 5)}`
+    : stage.format === "qualifying"
+      ? `${pph} seats · ${qRounds} ${qRounds === 1 ? "round (1 heat/pilot)" : `rounds (${qRounds} heats/pilot)`} · ${formatRaceClock(timeSec).slice(0, 5)}`
+      : stage.format === "custom"
+        ? roundCount === 0
+          ? "Empty custom stage"
+          : `${roundCount} ${roundCount === 1 ? "round" : "rounds"} · ${pph} seats`
+        : `${pph} seats · ${lapsText} · ${formatRaceClock(timeSec).slice(0, 5)}`;
   const statusPill = renderStageStatusPill(stage);
   const acceptsStageInputs = !isTimedStage;
 

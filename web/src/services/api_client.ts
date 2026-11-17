@@ -72,6 +72,7 @@ interface ConfigPayload {
 }
 
 interface RacePayload {
+  serverTimestampUs?: number;
   raceState: RaceTournamentState;
   eventState?: EventManagerState | null;
   announcement?: RaceAnnouncement | null;
@@ -1252,7 +1253,7 @@ export class ApiClient {
         case "race": {
           const r = msg.payload as RacePayload;
           if (r && r.raceState) {
-            this.store.ingestRace(r.raceState, r.eventState ?? null, r.announcement);
+            this.store.ingestRace(r.raceState, r.eventState ?? null, r.announcement, r.serverTimestampUs);
           }
           break;
         }

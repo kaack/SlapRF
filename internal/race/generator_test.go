@@ -362,13 +362,31 @@ func TestDoubleElimRedemptionHeatWithDroppedPilotStaysReady(t *testing.T) {
 		roster := makeTestRoster(nPilots)
 		st := GenerateTournament(cfg, roster, 7)
 
-		// Confirm all Winners Round 1 heats so 3rd/4th-place pilots drop into Redemption Round 1 (L1-*)
-		for i := range st.Heats {
-			if st.Heats[i].BracketLane == "winners" && st.Heats[i].Round == 1 {
-				simulateConfirmBySeed(&st.Heats[i], cfg)
+		// Confirm the upstream Winners heats that feed Redemption Round 1 (W1, plus W2 when W1 drops < 3 pilots
+		// so Redemption Round 1 waits for W2's drop to form a >= 3-pilot elimination heat).
+		feedIDs := make(map[string]bool)
+		for _, h := range st.Heats {
+			if h.BracketLane == "losers" && h.Round == 1 {
+				for _, s := range h.Seats {
+					if s.Feeder != nil && s.Feeder.FromHeatID != "" {
+						feedIDs[s.Feeder.FromHeatID] = true
+					}
+				}
 			}
 		}
-		ResolveTournament(&st, roster)
+		for step := 0; step < 4; step++ {
+			progressed := false
+			for i := range st.Heats {
+				if feedIDs[st.Heats[i].ID] && st.Heats[i].State == domain.HeatReady {
+					simulateConfirmBySeed(&st.Heats[i], cfg)
+					progressed = true
+				}
+			}
+			ResolveTournament(&st, roster)
+			if !progressed {
+				break
+			}
+		}
 
 		foundPopulatedRedemption := false
 		for _, h := range st.Heats {
