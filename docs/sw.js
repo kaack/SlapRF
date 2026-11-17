@@ -28,11 +28,11 @@
 const PRECACHE = [
   {
     "url": "dist/app.js",
-    "rev": "50370a41f28cab35"
+    "rev": "0ff53735699fe7d6"
   },
   {
     "url": "firmware/slaprf-xiao-c5.bin",
-    "rev": "4187fe0a1a587061"
+    "rev": "e42b9b7490fbc956"
   },
   {
     "url": "icons/icon.svg",
@@ -40,7 +40,7 @@ const PRECACHE = [
   },
   {
     "url": "index.html",
-    "rev": "7c5b671f1b1e4fab"
+    "rev": "3640be929f81718f"
   },
   {
     "url": "manifest.webmanifest",
@@ -72,14 +72,14 @@ const PRECACHE = [
   },
   {
     "url": "wasm/slaprf.wasm",
-    "rev": "437286e8f0d8ea52"
+    "rev": "2e681a4812031e94"
   },
   {
     "url": "wasm/wasm_exec.js",
     "rev": "0c949f4996f9a896"
   }
 ];
-const VERSION = "74a354b432fc94e5";
+const VERSION = "5215ba0cd0698c35";
 
 const CACHE_PREFIX = "slaprf-precache-";
 const CACHE_NAME = CACHE_PREFIX + VERSION;
