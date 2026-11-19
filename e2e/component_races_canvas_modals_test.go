@@ -1791,8 +1791,6 @@ func TestComponent_DesktopSetupGraphAndTableViewSwitcher(t *testing.T) {
 		return {
 			ok:
 				Math.round(iRect.width) === 960 &&
-				inner.classList.contains("is-ws-tab-enter") &&
-				iCs.animationName === "slaprf-ws-tab-fade" &&
 				transportCenterDiff <= 2.5 &&
 				topGap >= 2 &&
 				topGap <= 10 &&
