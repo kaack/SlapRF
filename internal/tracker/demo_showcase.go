@@ -446,11 +446,11 @@ func buildShowcaseEngineStateJSON() []byte {
 		})
 	}
 
-	// 3. Paused 2-Stage Tournament: "Friday Night Qualifier & Mains" (Stage 1 Qualifying complete -> Stage 2 Double Elim Mains underway)
+	// 3. Paused Multi-Phase Tournament: "Friday Night Qualifier & Mains" (Qualifying complete -> Double Elim Mains underway on unified graph)
 	if rTwoStage, err := tmp.EventAction(EventActionPayload{
 		Action: "create_race",
 		Name:   "Friday Night Qualifier & Mains",
-		Tags:   []string{"2-Stage", "Mains"},
+		Tags:   []string{"Qual + Mains", "Club"},
 	}); err == nil {
 		checkInFirstN(rTwoStage.RaceID, 8)
 		_, _ = tmp.BracketEditAction(BracketEditPayload{
@@ -467,12 +467,12 @@ func buildShowcaseEngineStateJSON() []byte {
 			LifecycleAction: "start_race",
 			PreemptOngoing:  true,
 		})
-		// Confirm all Stage 1 Qualifying heats so Stage 2 Mains seeds automatically
+		// Confirm all Qualifying heats so Mains seeds automatically on the unified graph
 		for step := 0; step < 8; step++ {
 			snap := tmp.RaceSnapshot()
 			nextS1 := ""
 			for _, h := range snap.Heats {
-				if h.StageIndex == 1 && (h.State == domain.HeatStaged || h.State == domain.HeatReady) {
+				if h.StageFormat == domain.FormatQualifying && (h.State == domain.HeatStaged || h.State == domain.HeatReady) {
 					hasPilot := false
 					for _, s := range h.Seats {
 						if s.PilotSlotIndex > 0 {
@@ -495,10 +495,10 @@ func buildShowcaseEngineStateJSON() []byte {
 				break
 			}
 		}
-		// Confirm first Stage 2 Mains heat with a +5s marshal penalty on Seat 3
+		// Confirm first Mains heat with a +5s marshal penalty on Seat 3
 		snapMains := tmp.RaceSnapshot()
 		for _, h := range snapMains.Heats {
-			if h.StageIndex == 2 && (h.State == domain.HeatStaged || h.State == domain.HeatReady) {
+			if h.StageFormat != domain.FormatQualifying && (h.State == domain.HeatStaged || h.State == domain.HeatReady) {
 				if rec, ok := confirmShowcaseHeat(tmp, rTwoStage.RaceID, h.ID, 3, 5.0, 9); ok {
 					allRecordedHeats = append(allRecordedHeats, rec)
 				}
@@ -509,7 +509,7 @@ func buildShowcaseEngineStateJSON() []byte {
 			Action:          "race_lifecycle",
 			RaceID:          rTwoStage.RaceID,
 			LifecycleAction: "pause_race",
-			Reason:          "Stage 2 Mains in progress",
+			Reason:          "Mains bracket in progress",
 		})
 	}
 
@@ -627,6 +627,7 @@ func buildShowcaseEngineStateJSON() []byte {
 				}
 				for li := range seat.Laps {
 					lap := &seat.Laps[li]
+					lap.Manual = false
 					if lap.LapNumber <= 0 || lap.SplitTimeSec <= 0 {
 						continue
 					}
@@ -637,6 +638,7 @@ func buildShowcaseEngineStateJSON() []byte {
 						seat.Crossings[ci].Sectors = append([]domain.SectorSplit(nil), seat.Laps[ci].Sectors...)
 					}
 					seat.Crossings[ci].PeakRSSIDbm = -40.2
+					seat.Crossings[ci].Manual = false
 				}
 			}
 		}

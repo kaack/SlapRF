@@ -1,5 +1,5 @@
 import { Component } from "../core/component";
-import { esc, fmtTime } from "../core/format";
+import { esc, fmtDelta, fmtTime } from "../core/format";
 import { bestPossibleLap, SectionConsistency as ConsistencyRow, sectionConsistency } from "../state/analysis";
 import { bestLapOf, lapsFor, sectionLabel, sectionShort } from "../state/selectors";
 import { AppStore } from "../state/store";
@@ -49,7 +49,7 @@ export class SectionStats extends Component {
       <header class="card-head">
         <div class="settings-intro">
           <h2>Section stats</h2>
-          <p>Best and median time in each section across the session. <strong>Lost vs best</strong> shows how much time you typically lose compared to your best pass.</p>
+          <p>Best and median time in each section across the session. <strong>Delta</strong> shows how much time you typically lose compared to your best pass.</p>
         </div>
       </header>`;
 
@@ -62,6 +62,13 @@ export class SectionStats extends Component {
             .map((r) => {
               const enough = r.samples >= MIN_SAMPLES;
               const isTop = r === top;
+              const deltaTone = !enough
+                ? "muted"
+                : Math.abs(r.givenAway) < 0.0005
+                  ? "muted"
+                  : r.givenAway > 0
+                    ? "tone-bad"
+                    : "tone-good";
               return `
                   <tr class="${isTop ? "is-top" : ""}">
                     <td>
@@ -72,8 +79,8 @@ export class SectionStats extends Component {
                     </td>
                     <td class="num mono">${fmtTime(r.best)}</td>
                     <td class="num mono">${enough ? fmtTime(r.typical) : "—"}</td>
-                    <td class="num mono ${isTop ? "strong" : enough && r.givenAway >= SIGNIFICANT_GAP_SEC ? "" : "muted"}">
-                      ${enough ? `+${r.givenAway.toFixed(3)}s` : "—"}
+                    <td class="num mono ${deltaTone}${isTop ? " strong" : ""}">
+                      ${enough ? fmtDelta(r.givenAway) : "—"}
                     </td>
                     <td class="num mono">${r.typicalExitMph.toFixed(0)} <span class="muted">/ ${r.bestExitMph.toFixed(0)} mph</span></td>
                     <td class="num mono muted">${enough ? r.samples : `${r.samples}/${MIN_SAMPLES}`}</td>
@@ -99,7 +106,7 @@ export class SectionStats extends Component {
               <th>Section</th>
               <th class="num">Best</th>
               <th class="num">Typical</th>
-              <th class="num">Lost vs best</th>
+              <th class="num">Delta</th>
               <th class="num">Exit speed <small>typical / best</small></th>
               <th class="num">Passes</th>
             </tr>

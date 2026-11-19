@@ -164,7 +164,9 @@ export interface LapRecord {
   deltaToBest: number;
   sectors: SectorSplit[];
   completedAtUs: number;
+  completedAtMs?: number;
   isBestLap: boolean;
+  invalidated?: boolean;
 }
 
 export interface SectorBottleneckStat {
@@ -406,8 +408,10 @@ export interface SeatFeeder {
   fromHeatId?: string;
   fromRank?: number;
   fromRoundColumn?: number;
+  fromRoundId?: string;
   fromStandingsRank?: number;
   fromStageSeed?: number;
+  rankingMetric?: QualifyingMetric;
   isBye?: boolean;
 }
 
@@ -574,8 +578,11 @@ export interface RaceRound {
   finalsHeats?: number;
   targetLaps: number;
   timeLimitSec: number;
+  maxPacksPerPilot?: number;
+  qualifyingMetric?: QualifyingMetric;
   seedSource?: string;
   seedDistribution?: string;
+  randomSeed?: number;
   seedToPort?: "left" | "top" | "bottom" | string;
   linkSummary?: string;
   hasPos?: boolean;
@@ -606,6 +613,8 @@ export interface RoundConnection {
   seedStart?: number;
   seedEnd?: number;
   distribution?: "snake" | "sequential" | string;
+  rankingMetric?: QualifyingMetric;
+  seededEarly?: boolean;
   invalid?: boolean;
   invalidReason?: string;
 }
@@ -783,7 +792,8 @@ export interface PracticeActionPayload {
     | "add_session_pilot"
     | "remove_session_pilot"
     | "set_session_pilot_channel"
-    | "clear_session_laps";
+    | "clear_session_laps"
+    | "toggle_session_lap";
   sessionId?: string;
   name?: string;
   tags?: string[];
@@ -794,6 +804,7 @@ export interface PracticeActionPayload {
   band?: number;
   channel?: number;
   preemptOngoing?: boolean;
+  lapId?: number;
 }
 
 export interface EventManagerState {
@@ -859,6 +870,9 @@ export interface BracketEditPayload {
     | "update_stage_handoff"
     | "seed_stage2_early"
     | "unlock_stage2_seeding"
+    | "seed_connection_now"
+    | "reopen_connection_seed"
+    | "reshuffle_round"
     | "assign_seat_stage_seed"
     | "add_round"
     | "move_rounds"

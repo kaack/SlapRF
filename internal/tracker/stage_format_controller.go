@@ -52,8 +52,11 @@ func (e *Engine) markStageCustomizedLocked(stageIdx int) {
 }
 
 func (e *Engine) hasAnyCustomizedStageLocked() bool {
+	if e.raceState.TemplateID == "custom" {
+		return true
+	}
 	for _, s := range e.raceState.Stages {
-		if s.Customized || s.Format == domain.FormatCustom {
+		if s.Customized {
 			return true
 		}
 	}
@@ -865,7 +868,16 @@ func (e *Engine) updateStageSettingsLocked(req BracketEditPayload) error {
 	timeChanged := prev.TimeLimitSec != next.TimeLimitSec
 
 	startedInStage := race.AnyRealHeatStartedInStage(&e.raceState, stg.Index)
-	qualRoundsChanged := stg.Format == domain.FormatQualifying && prev.QualifyingRounds != next.QualifyingRounds
+	hasQualRoundsInStage := stg.Format == domain.FormatQualifying
+	if !hasQualRoundsInStage {
+		for _, r := range e.raceState.Rounds {
+			if r.StageIndex == stg.Index && r.StageFormat == domain.FormatQualifying && !domain.IsStagePortalRoundID(r.ID) {
+				hasQualRoundsInStage = true
+				break
+			}
+		}
+	}
+	qualRoundsChanged := hasQualRoundsInStage && req.QualifyingRounds > 0 && prev.QualifyingRounds != next.QualifyingRounds
 
 	if !startedInStage && !stg.Customized && stg.Format != domain.FormatCustom && stg.Format != domain.FormatOpenQualifier {
 		e.rebuildSingleStageLocked(stg.Index)
@@ -875,6 +887,12 @@ func (e *Engine) updateStageSettingsLocked(req BracketEditPayload) error {
 	if stg.Format == domain.FormatQualifying && (qualRoundsChanged || pphChanged || chChanged || lapsChanged || timeChanged) {
 		e.reconcileQualifyingStageLocked(stg.Index)
 		return nil
+	}
+	if qualRoundsChanged {
+		e.reconcileQualifyingStageLocked(stg.Index)
+		if !pphChanged && !chChanged && !lapsChanged && !timeChanged {
+			return nil
+		}
 	}
 
 	if !req.ApplyToExisting && startedInStage {
@@ -1000,19 +1018,31 @@ func (e *Engine) reconcileOpenQualifierMaxPacksLocked(
 func (e *Engine) reconcileQualifyingStageLocked(stageIdx int) {
 	race.EnsureStagesMetadata(&e.raceState)
 	savedWantRounds := 0
-	if stgPre := e.findStageByIndexLocked(stageIdx); stgPre != nil && stgPre.Format == domain.FormatQualifying {
-		savedWantRounds = stgPre.Settings.Normalized(e.raceState.Config, stgPre.Format).QualifyingRounds
+	if stgPre := e.findStageByIndexLocked(stageIdx); stgPre != nil {
+		savedWantRounds = stgPre.Settings.Normalized(e.raceState.Config, domain.FormatQualifying).QualifyingRounds
 	}
 	race.SyncRoundsMetadata(&e.raceState)
 
 	stg := e.findStageByIndexLocked(stageIdx)
-	if stg == nil || stg.Format != domain.FormatQualifying {
+	if stg == nil {
 		return
+	}
+	if stg.Format != domain.FormatQualifying {
+		hasQual := false
+		for _, r := range e.raceState.Rounds {
+			if r.StageIndex == stageIdx && r.StageFormat == domain.FormatQualifying && !domain.IsStagePortalRoundID(r.ID) {
+				hasQual = true
+				break
+			}
+		}
+		if !hasQual {
+			return
+		}
 	}
 	if savedWantRounds > 0 {
 		stg.Settings.QualifyingRounds = savedWantRounds
 	}
-	settings := stg.Settings.Normalized(e.raceState.Config, stg.Format)
+	settings := stg.Settings.Normalized(e.raceState.Config, domain.FormatQualifying)
 	maxPerHeat := settings.PilotsPerHeat
 	if maxPerHeat < 2 {
 		maxPerHeat = 4
@@ -1067,6 +1097,17 @@ func (e *Engine) reconcileQualifyingStageLocked(stageIdx int) {
 	inPortalID := domain.StageHandoffInID(stageIdx)
 	hasOutPortal := e.findRoundByIDLocked(outPortalID) != nil
 	hasInPortal := len(race.IncomingStageConnections(&e.raceState, stageIdx)) > 0 && e.findRoundByIDLocked(inPortalID) != nil
+
+	origQualSet := make(map[string]bool, len(qualRounds))
+	for _, qr := range qualRounds {
+		origQualSet[qr.ID] = true
+	}
+	var savedCutConns []domain.RoundConnection
+	for _, c := range e.raceState.Connections {
+		if c.StageIndex == stageIdx && origQualSet[c.FromRoundID] && !origQualSet[c.ToRoundID] && !domain.IsStagePortalRoundID(c.ToRoundID) {
+			savedCutConns = append(savedCutConns, c)
+		}
+	}
 
 	// 1. Trim excess unstarted rounds from the end if `wantRounds < len(qualRounds)`
 	if len(qualRounds) > wantRounds {
@@ -1235,6 +1276,27 @@ func (e *Engine) reconcileQualifyingStageLocked(stageIdx int) {
 			Mode:        "qual_feed",
 			Count:       e.raceState.Config.Stage2MaxSeeds,
 		})
+	}
+	if len(savedCutConns) > 0 && len(qualRounds) > 0 {
+		lastID := qualRounds[len(qualRounds)-1].ID
+		lastCol := qualRounds[len(qualRounds)-1].Column
+		for _, cc := range savedCutConns {
+			cc.FromRoundID = lastID
+			cc.ID = fmt.Sprintf("conn-%s-%s-%s", lastID, cc.ToRoundID, cc.Mode)
+			keptConns = append(keptConns, cc)
+		}
+		for hi := range e.raceState.Heats {
+			if e.raceState.Heats[hi].StageIndex != stageIdx || qualIDSet[e.raceState.Heats[hi].RoundID] > 0 || (len(qualRounds) > 0 && e.raceState.Heats[hi].RoundID == qualRounds[0].ID) {
+				continue
+			}
+			for si := range e.raceState.Heats[hi].Seats {
+				fd := e.raceState.Heats[hi].Seats[si].Feeder
+				if fd != nil && origQualSet[fd.FromRoundID] {
+					fd.FromRoundID = lastID
+					fd.FromRoundColumn = lastCol
+				}
+			}
+		}
 	}
 	e.raceState.Connections = keptConns
 
@@ -1421,9 +1483,13 @@ func (e *Engine) reconcileQualifyingStageLocked(stageIdx int) {
 		}
 	}
 
-	e.sortCustomHeatsAndOrderLocked(stageIdx)
-	race.RebuildEdgesFromFeeders(&e.raceState)
-	race.SyncRoundsMetadata(&e.raceState)
+	if len(savedCutConns) > 0 {
+		e.recomputeGraphColumnsOnlyLocked(stageIdx)
+	} else {
+		e.sortCustomHeatsAndOrderLocked(stageIdx)
+		race.RebuildEdgesFromFeeders(&e.raceState)
+		race.SyncRoundsMetadata(&e.raceState)
+	}
 }
 
 func populateQualifyingRoundHeatsFromGrid(

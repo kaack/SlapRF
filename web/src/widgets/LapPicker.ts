@@ -35,6 +35,8 @@ export class LapPicker extends Component {
   private chartGeom: {
     laps: LapRecord[];
     xPct: number[];
+    xLeftPct: number[];
+    xRightPct: number[];
     barTopPct: number[];
     labelled: Set<number>;
     edgeClass: (i: number) => string;
@@ -211,9 +213,11 @@ export class LapPicker extends Component {
       if (label) label.hidden = true;
       return;
     }
+    const edge = geom.edgeClass(idx);
     label.textContent = fmtTime(geom.laps[idx].lapTimeSec);
-    label.className = `bar-time is-hover ${geom.edgeClass(idx)}`;
-    label.style.left = `${geom.xPct[idx].toFixed(2)}%`;
+    label.className = `bar-time is-hover ${edge}`;
+    const leftPct = edge === "is-left" ? geom.xLeftPct[idx] : edge === "is-right" ? geom.xRightPct[idx] : geom.xPct[idx];
+    label.style.left = `${leftPct.toFixed(2)}%`;
     label.style.top = `${geom.barTopPct[idx].toFixed(2)}%`;
     label.hidden = false;
   }
@@ -315,7 +319,7 @@ export class LapPicker extends Component {
         </div>
         <div class="cmp-with">
           ${jumpLatest}
-          <span>Compare against</span>
+          <span class="cmp-with-label">Compare against</span>
           <div class="segmented">
             ${btn("best", "Personal best", refMode === "best" && !customActive)}
             ${btn("previous", "Previous lap", refMode === "previous" && !customActive)}
@@ -344,6 +348,8 @@ export class LapPicker extends Component {
     const MIN_BAR = 6;
     const yOf = (t: number) => Math.min(CHART_H - MIN_BAR, CHART_H - ((Math.min(t, hi) - lo) / span) * (CHART_H - 8));
     const xPct = (i: number) => ((i * slot + slot / 2) / svgW) * 100;
+    const xLeftPct = (i: number) => ((i * slot + (slot - barW) / 2) / svgW) * 100;
+    const xRightPct = (i: number) => ((i * slot + (slot + barW) / 2) / svgW) * 100;
 
     const bars = laps
       .map((l, i) => {
@@ -371,22 +377,56 @@ export class LapPicker extends Component {
     const dense = slot < 44;
     const edgeClass = (i: number) => (!dense ? "" : i === laps.length - 1 ? "is-right" : i === 0 ? "is-left" : "");
 
-    // Lap-time labels above the inspected and baseline bars. Neighbouring bars would put both
-    // labels in the same spot, so line them up above the taller bar and lift the baseline one.
+    // Lap-time labels for the inspected and baseline bars. When the two bars are right next to
+    // each other, place the left column's label to the left of its column and the right column's
+    // label to the right of its column (drawn over neighbouring ghost bars / 5L average line)
+    // so neither label shoots up or overlaps the other.
     const review = laps.find((l) => l.lapId === reviewId);
     const ref = laps.find((l) => l.lapId === refId);
-    const close = review && ref ? Math.abs(laps.indexOf(review) - laps.indexOf(ref)) * slot < 110 : false;
-    const taller = review && ref ? (review.lapTimeSec > ref.lapTimeSec ? review : ref) : undefined;
-    const timeLabel = (lap: LapRecord, cls: string, raised: boolean) => {
+    const reviewIdx = review ? laps.indexOf(review) : -1;
+    const refIdx = ref ? laps.indexOf(ref) : -1;
+    const close =
+      reviewIdx >= 0 &&
+      refIdx >= 0 &&
+      reviewIdx !== refIdx &&
+      (Math.abs(reviewIdx - refIdx) === 1 || Math.abs(reviewIdx - refIdx) * slot < 90);
+    const timeLabel = (lap: LapRecord, cls: string, otherIdx: number) => {
       const i = laps.indexOf(lap);
-      const anchor = close && taller ? taller : lap;
-      return `<span class="bar-time ${cls} ${edgeClass(i)} ${raised ? "is-raised" : ""}" style="left:${xPct(i).toFixed(2)}%;top:${((yOf(anchor.lapTimeSec) / CHART_H) * 100).toFixed(2)}%">${fmtTime(lap.lapTimeSec)}</span>`;
+      let posCls = edgeClass(i);
+      let left = posCls === "is-left" ? xLeftPct(i) : posCls === "is-right" ? xRightPct(i) : xPct(i);
+      let top = (yOf(lap.lapTimeSec) / CHART_H) * 100;
+      if (close && otherIdx >= 0) {
+        if (i < otherIdx) {
+          if (i > 0) {
+            posCls = "is-side-left";
+            left = xLeftPct(i);
+            top = (Math.min(CHART_H - 12, yOf(lap.lapTimeSec)) / CHART_H) * 100;
+          } else {
+            posCls = "is-left";
+            left = xLeftPct(0);
+          }
+        } else if (i > otherIdx) {
+          if (i < laps.length - 1) {
+            posCls = "is-side-right";
+            left = xRightPct(i);
+            top = (Math.min(CHART_H - 12, yOf(lap.lapTimeSec)) / CHART_H) * 100;
+          } else {
+            posCls = "is-right";
+            left = xRightPct(i);
+          }
+        }
+      }
+      return `<span class="bar-time ${cls} ${posCls}" style="left:${left.toFixed(2)}%;top:${top.toFixed(2)}%">${fmtTime(lap.lapTimeSec)}</span>`;
     };
-    const labels = (review ? timeLabel(review, "is-review", false) : "") + (ref ? timeLabel(ref, "is-ref", close) : "");
+    const labels =
+      (review ? timeLabel(review, "is-review", refIdx) : "") +
+      (ref ? timeLabel(ref, "is-ref", reviewIdx) : "");
 
     this.chartGeom = {
       laps,
       xPct: laps.map((_, i) => xPct(i)),
+      xLeftPct: laps.map((_, i) => xLeftPct(i)),
+      xRightPct: laps.map((_, i) => xRightPct(i)),
       barTopPct: laps.map((l) => (yOf(l.lapTimeSec) / CHART_H) * 100),
       labelled: new Set([reviewId, refId]),
       edgeClass,
@@ -402,7 +442,7 @@ export class LapPicker extends Component {
       <div class="lap-picker ${this.activeSlot === "ref" ? "is-picking" : ""}">
         <div class="lap-picker-scroll ${scrollable ? "is-scrollable" : ""}">
           <div class="lap-picker-track" style="width:${trackWidthPct.toFixed(2)}%">
-            <div class="lap-picker-plot ${close ? "has-stacked-labels" : ""}">
+            <div class="lap-picker-plot">
               <div class="lap-picker-bars">
                 <svg viewBox="0 0 ${svgW} ${CHART_H}" preserveAspectRatio="none" role="img" aria-label="Lap times this session">
                   ${bars}
@@ -417,10 +457,10 @@ export class LapPicker extends Component {
         </div>
       </div>
       <div class="lap-chart-legend">
-        <span><i class="lg-review"></i>Inspected lap</span>
-        <span><i class="lg-ref"></i>Baseline lap</span>
-        <span><i class="lg-best"></i>Personal best</span>
-        <span><i class="lg-line"></i>5-lap average</span>
+        <span><i class="lg-review"></i>Inspected</span>
+        <span><i class="lg-ref"></i>Baseline</span>
+        <span><i class="lg-best"></i>Best</span>
+        <span><i class="lg-line"></i>5L avg</span>
       </div>`;
   }
 }

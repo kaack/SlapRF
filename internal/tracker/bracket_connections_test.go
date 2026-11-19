@@ -517,13 +517,21 @@ func TestSingleFinalsRuleAndAllThreeFinalsWinnerFormats(t *testing.T) {
 	}
 	finalsID := st.Rounds[len(st.Rounds)-1].ID
 
-	// Attempting to add a SECOND Finals round in the same stage must fail!
-	if _, err := e.BracketEditAction(BracketEditPayload{
+	// Adding a SECOND Finals round on the same unified graph is now supported (e.g. A-Main Finals + B-Main Finals)!
+	st2, err := e.BracketEditAction(BracketEditPayload{
 		Action:      "add_round",
 		Title:       "Second Finals",
 		BracketLane: "finals",
-	}); err == nil {
-		t.Fatalf("expected error when adding a second Finals round in the same stage")
+	})
+	if err != nil {
+		t.Fatalf("expected adding a second Finals round to succeed, got: %v", err)
+	}
+	secondFinalsID := st2.Rounds[len(st2.Rounds)-1].ID
+	if _, err := e.BracketEditAction(BracketEditPayload{
+		Action:  "delete_round",
+		RoundID: secondFinalsID,
+	}); err != nil {
+		t.Fatalf("delete Second Finals failed: %v", err)
 	}
 
 	// Connecting WFinal (1 heat) -> Finals (4 seats) first infers Top 3, then adding LFinal (1 heat) -> Finals

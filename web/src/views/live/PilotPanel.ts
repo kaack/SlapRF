@@ -6,7 +6,7 @@ import { AppStore } from "../../state/store";
 import { LapTimesCard } from "../../widgets/LapTimesCard";
 import { renderStatTiles, StatTile } from "../../widgets/markup";
 import { PilotLaps } from "../../widgets/PilotLaps";
-import { PilotRssiChart } from "../../widgets/PilotRssiChart";
+import { SectionRecords } from "../../widgets/SectionRecords";
 
 /** The running lap clock in the KPI bar ticks this often. */
 const CLOCK_REFRESH_MS = 100;
@@ -25,35 +25,33 @@ export class PilotPanel extends Component {
     this.store = store;
 
     el.innerHTML = `
-      <div class="stat-row" data-slot="stats"></div>
-      <section class="card card-flush" data-slot="laptimes"></section>
-      <section class="card card-flush">
+      <div class="stat-row" data-slot="stats" data-practice-mobile-pane="overview"></div>
+      <section class="card card-flush practice-trends-card" data-slot="laptimes" data-practice-mobile-pane="trends"></section>
+      <section class="card card-flush practice-sections-card practice-desktop-sections-card" data-practice-mobile-pane="trends">
+        <header class="card-head"><div class="settings-intro"><h2>Section records</h2><p>Fastest time for each pilot in every section.</p></div></header>
+        <div data-slot="records"></div>
+      </section>
+      <section class="card card-flush practice-laps-card practice-desktop-laps-card">
         <header class="card-head"><div class="settings-intro"><h2>Laps</h2><p>Completed laps, newest first, with section splits compared to personal best.</p></div></header>
         <div data-slot="laps"></div>
-      </section>
-      <section class="card card-flush">
-        <div class="card-body">
-          <header class="card-head"><div class="settings-intro"><h2>Signal at each timer</h2><p>Live 5.8 GHz signal at each timer. Select a timer to adjust its threshold. Red lines mark rejected passes (hover for reason).</p></div></header>
-          <div data-slot="rssi"></div>
-        </div>
-        <div class="rules-foot">
-          <p class="note">Default chart view follows the live 5s stream with all timers visible.</p>
-          <button class="btn btn-ghost btn-sm" type="button" data-action="restore-rssi-defaults">Restore defaults</button>
-        </div>
       </section>`;
 
-    const rssiChart = this.adopt(new PilotRssiChart(this.slot("rssi"), store, api));
     this.adopt(new LapTimesCard(this.slot("laptimes"), store, { slotIndex: () => store.selectedPilot }));
-    this.adopt(new PilotLaps(this.slot("laps"), store));
-
-    this.listen(el, "click", (e) => {
-      const btn = (e.target as HTMLElement).closest<HTMLElement>('[data-action="restore-rssi-defaults"]');
-      if (!btn) return;
-      rssiChart.restoreDefaults();
-    });
+    this.adopt(new SectionRecords(this.slot("records"), store));
+    this.adopt(
+      new PilotLaps(this.slot("laps"), store, (lapId) => {
+        const sid = store.selectedPracticeSession?.sessionId;
+        void api.practiceAction({ action: "toggle_session_lap", sessionId: sid, lapId }).catch(() => {
+          // Ignore if no backend connected in standalone test
+        });
+      })
+    );
 
     const timer = window.setInterval(() => this.renderStats(), CLOCK_REFRESH_MS);
     this.onDispose(() => window.clearInterval(timer));
+    this.onDispose(
+      store.subscribe(["selection", "laps", "crossings", "practice"], () => this.renderStats())
+    );
     this.renderStats();
   }
 

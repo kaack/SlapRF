@@ -178,18 +178,20 @@ describe("views/RacesView — Directory, Per-Canvas Lock State & Race Control Hi
       expect(rows).toHaveLength(1);
       expect(rows[0].dataset.raceRow).toBe("race-3");
 
-      // Reset status to All, filter by tag "Indoor"
+      // Reset status to All, filter by tag "#Indoor" via search input
       root.querySelector<HTMLButtonElement>("[data-race-dir-status='all']")!.click();
-      root.querySelector<HTMLButtonElement>("[data-tag-filter='Indoor']")!.click();
+      const searchInput = root.querySelector<HTMLInputElement>("[data-race-dir-search]")!;
+      searchInput.value = "#Indoor";
+      searchInput.dispatchEvent(new Event("input", { bubbles: true }));
       rows = root.querySelectorAll<HTMLElement>("tbody tr[data-race-row]");
       expect(rows).toHaveLength(1);
       expect(rows[0].dataset.raceRow).toBe("race-2");
 
-      // Clear tag filter and filter via search input
-      root.querySelector<HTMLButtonElement>("[data-tag-filter='__all__']")!.click();
-      const searchInput = root.querySelector<HTMLInputElement>("[data-race-dir-search]")!;
-      searchInput.value = "nationals";
-      searchInput.dispatchEvent(new Event("input", { bubbles: true }));
+      // Clear filter via Clear button and filter by name via search input
+      root.querySelector<HTMLButtonElement>("[data-tag-filter='__reset_all__']")!.click();
+      const nextSearchInput = root.querySelector<HTMLInputElement>("[data-race-dir-search]")!;
+      nextSearchInput.value = "nationals";
+      nextSearchInput.dispatchEvent(new Event("input", { bubbles: true }));
       rows = root.querySelectorAll<HTMLElement>("tbody tr[data-race-row]");
       expect(rows).toHaveLength(1);
       expect(rows[0].dataset.raceRow).toBe("race-1");
@@ -198,7 +200,7 @@ describe("views/RacesView — Directory, Per-Canvas Lock State & Race Control Hi
     }
   });
 
-  it("maintains independent canvas lock states across Control (locked by default), Format, Stage 1, Stage 2, and Review", async () => {
+  it("renders Control and Review as standard responsive pages (no whiteboard) while keeping Configure canvas lock states independent", async () => {
     window.history.replaceState(null, "", "/#/races/friday-night-brawl/control");
     const race = buildTwoStageConfiguredRace();
     const store = makeStore({
@@ -215,15 +217,20 @@ describe("views/RacesView — Directory, Per-Canvas Lock State & Race Control Hi
     await flushMicrotasks();
 
     try {
-      // 1. Control canvas defaults to LOCKED, hiding the bottom-right '+' FAB menu
-      const lockBtnControl = root.querySelector<HTMLButtonElement>("[data-rc-ui='toggle-lock']")!;
-      expect(lockBtnControl).not.toBeNull();
-      expect(lockBtnControl.classList.contains("is-active")).toBe(true);
-      const fabControl = root.querySelector<HTMLElement>(".rc-fab-menu")!;
-      expect(fabControl).not.toBeNull();
-      expect(fabControl.hasAttribute("hidden")).toBe(true);
+      // 1. Control renders as a standard page (.races-page) without whiteboard lock or FAB speed-dial
+      const ctrlPage = root.querySelector<HTMLElement>("[data-rc-page='control']")!;
+      expect(ctrlPage).not.toBeNull();
+      expect(root.querySelector(".races-canvas")).toBeNull();
+      expect(root.querySelector("[data-rc-ui='toggle-lock']")).toBeNull();
+      expect(ctrlPage.dataset.mobileCtrlView).toBe("live");
 
-      // 2. Navigate to Format canvas -> defaults to UNLOCKED and shows '+' FAB menu
+      // Mobile Control section switcher updates active section to Standings
+      root.querySelector<HTMLButtonElement>("[data-mobile-ctrl-nav='standings']")!.click();
+      expect(
+        root.querySelector<HTMLElement>("[data-rc-page='control']")!.dataset.mobileCtrlView
+      ).toBe("standings");
+
+      // 2. Navigate to unified Configure canvas -> defaults to UNLOCKED and shows '+' FAB menu
       dispatchRacesTopBarCommand({ type: "set-tab", tab: "format" });
 
       const lockBtnFormat = root.querySelector<HTMLButtonElement>("[data-rc-ui='toggle-lock']")!;
@@ -232,38 +239,21 @@ describe("views/RacesView — Directory, Per-Canvas Lock State & Race Control Hi
       expect(fabFormat).not.toBeNull();
       expect(fabFormat.hasAttribute("hidden")).toBe(false);
 
-      // Lock Format canvas explicitly -> hides '+' FAB on Format
+      // Lock unified Configure canvas explicitly -> hides '+' FAB
       lockBtnFormat.click();
       expect(
         root.querySelector<HTMLButtonElement>("[data-rc-ui='toggle-lock']")!.classList.contains("is-active")
       ).toBe(true);
       expect(root.querySelector<HTMLElement>(".rc-fab-menu")!.hasAttribute("hidden")).toBe(true);
 
-      // 3. Switch to Stage 1 editor -> still UNLOCKED despite Format & Control being locked!
-      dispatchRacesTopBarCommand({ type: "set-tab", tab: "edit", stage: 1 });
-      expect(
-        root.querySelector<HTMLButtonElement>("[data-rc-ui='toggle-lock']")!.classList.contains("is-active")
-      ).toBe(false);
-      expect(root.querySelector<HTMLElement>(".rc-fab-menu")!.hasAttribute("hidden")).toBe(false);
-
-      // Lock Stage 1, then switch to Stage 2 -> Stage 2 has its own independent UNLOCKED state!
-      root.querySelector<HTMLButtonElement>("[data-rc-ui='toggle-lock']")!.click();
-      expect(
-        root.querySelector<HTMLButtonElement>("[data-rc-ui='toggle-lock']")!.classList.contains("is-active")
-      ).toBe(true);
-
-      dispatchRacesTopBarCommand({ type: "set-stage", stage: 2 });
-      expect(
-        root.querySelector<HTMLButtonElement>("[data-rc-ui='toggle-lock']")!.classList.contains("is-active")
-      ).toBe(false);
-
-      // 4. Switch to Review -> defaults to LOCKED just like Control!
+      // 3. Switch to Review -> also a standard page (.races-page) without whiteboard controls!
       dispatchRacesTopBarCommand({ type: "set-tab", tab: "review" });
-      expect(
-        root.querySelector<HTMLButtonElement>("[data-rc-ui='toggle-lock']")!.classList.contains("is-active")
-      ).toBe(true);
+      const revPage = root.querySelector<HTMLElement>("[data-rc-page='review']")!;
+      expect(revPage).not.toBeNull();
+      expect(root.querySelector(".races-canvas")).toBeNull();
+      expect(root.querySelector("[data-rc-ui='toggle-lock']")).toBeNull();
 
-      // 5. Switch back to Format -> remembers Format was LOCKED!
+      // 4. Switch back to Configure -> remembers Configure canvas was LOCKED!
       dispatchRacesTopBarCommand({ type: "set-tab", tab: "format" });
       expect(
         root.querySelector<HTMLButtonElement>("[data-rc-ui='toggle-lock']")!.classList.contains("is-active")
@@ -336,9 +326,9 @@ describe("views/RacesView — Directory, Per-Canvas Lock State & Race Control Hi
       );
       expect(transportBtns[0]?.classList.contains("race-btn-primary-slot")).toBe(true);
       expect(transportBtns[0]?.getAttribute("data-ctrl")).toBe("confirm");
-      expect(transportBtns[0]?.textContent?.trim()).toBe("Confirm Heat");
+      expect(transportBtns[0]?.querySelector(".rc-lbl-full")?.textContent?.trim()).toBe("Confirm Heat");
       expect(transportBtns[1]?.getAttribute("data-ctrl")).toBe("reset");
-      expect(transportBtns[1]?.textContent?.trim()).toBe("Re-run Heat");
+      expect(transportBtns[1]?.querySelector(".rc-lbl-full")?.textContent?.trim()).toBe("Re-run Heat");
 
       // Announcer Play button is visible when master announcer is enabled, and disappears when disabled
       expect(cockpit().querySelector("[data-announce-speak]")).not.toBeNull();
@@ -441,8 +431,6 @@ describe("views/RacesView — Directory, Per-Canvas Lock State & Race Control Hi
       );
       expect(readyBtns[0]?.getAttribute("data-ctrl")).toBe("start");
       expect(readyBtns[0]?.textContent?.trim()).toBe("Start Heat");
-      expect(readyBtns[1]?.getAttribute("data-ctrl")).toBe("select");
-      expect(readyBtns[1]?.textContent?.trim()).toBe("Stage Channels");
 
       const stagedRace = {
         ...readyRace,
@@ -457,25 +445,12 @@ describe("views/RacesView — Directory, Per-Canvas Lock State & Race Control Hi
       expect(stagedPill.textContent?.trim()).toBe("Staged");
       expect(stagedPill.classList.contains("is-staged")).toBe(true);
 
-      // Clicking the jump-to-editor arrow button focuses the heat in the Stage editor tab
+      // Clicking the jump-to-editor arrow button focuses the heat in the Configure editor tab
       const jumpBtn = cockpit().querySelector<HTMLButtonElement>("[data-race-act='focus-heat-graph']")!;
       expect(jumpBtn).not.toBeNull();
       jumpBtn.click();
       await flushMicrotasks();
       expect(window.location.hash).toBe("#/races/friday-night-brawl/format/stage-1");
-
-      // Switch to Format overview and open Stage 1's hamburger menu -> Complete Early & Seed is available there
-      dispatchRacesTopBarCommand({ type: "set-tab", tab: "format" });
-      await flushMicrotasks();
-      const stage1MenuBtn = root.querySelector<HTMLButtonElement>(
-        "[data-stage-index='1'] [data-fmt-ui='toggle-stage-menu']"
-      )!;
-      expect(stage1MenuBtn).not.toBeNull();
-      stage1MenuBtn.click();
-      const completeEarlyMenuBtn = root.querySelector<HTMLButtonElement>(
-        "[data-stage-index='1'] .bkt-node-menu [data-stage-ctrl='complete_stage_early']"
-      );
-      expect(completeEarlyMenuBtn).not.toBeNull();
     } finally {
       view.destroy();
       announcer.update({ enabled: false });
@@ -606,10 +581,10 @@ describe("views/RacesView — Directory, Per-Canvas Lock State & Race Control Hi
       )!;
       expect(alphaRow.className).toContain("status-incomplete");
       expect(alphaRow.classList.contains("status-dnf")).toBe(false);
-      expect(alphaRow.querySelector(".race-td-status")?.textContent?.trim()).toBe("Incomplete");
+      expect(alphaRow.querySelector(".race-td-status .rc-lbl-full")?.textContent?.trim()).toBe("Incomplete");
       const alphaChips = Array.from(alphaRow.querySelectorAll<HTMLButtonElement>(".race-lap-chip"));
       expect(alphaChips.filter((c) => c.classList.contains("is-invalid"))).toHaveLength(1);
-      expect(alphaChips.filter((c) => c.disabled)).toHaveLength(0);
+      expect(alphaChips.filter((c) => !c.disabled)).toHaveLength(3);
 
       // 3. Open Qualifier Flight Queue: pilots actively flying in a running heat show "Flying · OQ-1" and cannot be queued again
       const oqStage = makeStage(1, {
@@ -700,6 +675,11 @@ describe("views/LiveView, PilotView & TopBar Integration", () => {
 
     try {
       expect(root.textContent).toContain("Morning Warmup");
+      const openBtn = root.querySelector<HTMLButtonElement>("[data-practice-act='open-session']")!;
+      expect(openBtn).not.toBeNull();
+      openBtn.click();
+      await flushMicrotasks();
+
       const startBtn = root.querySelector<HTMLButtonElement>("[data-practice-act='start-session']")!;
       expect(startBtn).not.toBeNull();
 
@@ -1045,11 +1025,13 @@ describe("views/LiveView, PilotView & TopBar Integration", () => {
         lapEdModal.querySelectorAll<HTMLElement>(".lap-ed-table .is-best-consec-time")
       ).map((el) => el.textContent?.trim());
       expect(consecSplitTexts).toEqual(["11.20s", "11.10s", "11.30s"]);
-      // Clicking Cross Out inside the RSSI editor toggles the crossing
-      lapEdModal.querySelector<HTMLButtonElement>("[data-lap-ed-toggle='103']")!.click();
+      // Clicking Cross Out inside the RSSI editor stages the crossing toggle and Save commits it
+      document.querySelector<HTMLButtonElement>("[data-lap-ed-toggle='103']")!.click();
+      document.querySelector<HTMLButtonElement>("[data-lap-ed-save]")!.click();
+      await flushMicrotasks();
       await flushMicrotasks();
       expect(calls.some((c) => c.method === "raceMarshal" && (c.args[0] as { crossingId?: number }).crossingId === 103)).toBe(true);
-      lapEdModal.querySelector<HTMLButtonElement>("[data-lap-ed-close]")!.click();
+      document.querySelector<HTMLButtonElement>("[data-lap-ed-close]")!.click();
       expect(document.querySelector(".lap-editor-modal")).toBeNull();
 
       // 5. Clicking Re-run Heat opens a proper ConfirmModal (no inline confirm span inside cockpit)
@@ -1181,7 +1163,7 @@ describe("views/LiveView, PilotView & TopBar Integration", () => {
       const liveStatusTrigger = root.querySelector<HTMLButtonElement>(
         '[data-canvas-panel="heatline"] td.race-td-status .race-status-trigger'
       )!;
-      expect(liveStatusTrigger.textContent?.trim()).toBe("Racing");
+      expect(liveStatusTrigger.querySelector(".rc-lbl-full")?.textContent?.trim()).toBe("Racing");
       liveStatusTrigger.click();
       const liveStatusOpts = Array.from(
         root.querySelectorAll<HTMLButtonElement>(".is-status-popover .rc-pill-swapper-option")
@@ -1266,9 +1248,7 @@ describe("views/LiveView, PilotView & TopBar Integration", () => {
     try {
       const clockText = root.querySelector<HTMLElement>("[data-race-clock]")?.textContent ?? "";
       expect(/^00:03\.[78]$/.test(clockText)).toBe(true);
-      expect(root.querySelector<HTMLElement>("[data-race-clock-sub]")?.textContent).toContain(
-        "Countdown 5s → 0s · Random horn"
-      );
+      expect(root.querySelector<HTMLElement>("[data-race-clock-sub]")?.textContent).toBe("");
       expect(root.querySelector("[data-race-beep-pill]")).toBeNull();
 
       // Verify arming pause state holds clock at 00:05.0 ("Arming quads…") before countdown begins
@@ -1327,21 +1307,11 @@ describe("views/LiveView, PilotView & TopBar Integration", () => {
 
         getHornBtn().click();
         expect(announcer.isLapCalloutsActiveForStage(stageFmt)).toBe(false);
-        const queuedOrSpokenOff =
-          spokenTexts.some((t) => t === "Lap announcements off") ||
-          ((announcer as unknown as { queue: Array<{ text: string }> }).queue ?? []).some(
-            (q) => q.text === "Lap announcements off"
-          );
-        expect(queuedOrSpokenOff).toBe(true);
+        expect(document.body.textContent).toContain("Lap timing announcements off");
 
         getHornBtn().click();
         expect(announcer.isLapCalloutsActiveForStage(stageFmt)).toBe(true);
-        const queuedOrSpokenOn =
-          spokenTexts.some((t) => t === "Lap announcements on") ||
-          ((announcer as unknown as { queue: Array<{ text: string }> }).queue ?? []).some(
-            (q) => q.text === "Lap announcements on"
-          );
-        expect(queuedOrSpokenOn).toBe(true);
+        expect(document.body.textContent).toContain("Lap timing announcements on");
       } finally {
         if (window.speechSynthesis && origSpeak) {
           window.speechSynthesis.speak = origSpeak;
@@ -1860,8 +1830,8 @@ describe("views/LiveView, PilotView & TopBar Integration", () => {
       );
       const closedStageNotice = cockpit().querySelector<HTMLElement>("[data-race-cockpit-notice]");
       expect(closedStageNotice).not.toBeNull();
-      expect(closedStageNotice!.textContent).toContain("This stage is closed");
-      expect(closedStageNotice!.textContent).toContain("Reopen Stage");
+      expect(closedStageNotice!.textContent).toContain("This race is completed");
+      expect(closedStageNotice!.textContent).toContain("Reopen Race");
       expect(cockpit().querySelector("[data-stage-ctrl='reopen_stage_early']")).not.toBeNull();
     } finally {
       view.destroy();

@@ -838,9 +838,10 @@ describe("widgets/BracketDiagram & FormatDiagram", () => {
       expect(afterEditWrap.scrollTop).toBe(targetScroll);
       expect(afterEditWrap.querySelectorAll("tr.is-invalid-row")).toHaveLength(1);
 
-      // 3. Switching to another pilot tab resets scrollTop to 0 cleanly
-      backdrop.querySelector<HTMLButtonElement>("[data-lap-ed-pilot='2']")!.click();
-      const switchedWrap = backdrop.querySelector<HTMLElement>(".lap-ed-table-wrap")!;
+      // 3. Re-opening for another pilot resets scrollTop to 0 cleanly
+      openHeatLapEditorModal(store, api, "Q1-H1", 2, "race-scroll");
+      const switchedBackdrop = document.querySelector<HTMLElement>(".slaprf-modal-backdrop")!;
+      const switchedWrap = switchedBackdrop.querySelector<HTMLElement>(".lap-ed-table-wrap")!;
       expect(switchedWrap.scrollTop).toBe(0);
     } finally {
       window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));

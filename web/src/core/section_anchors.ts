@@ -74,8 +74,8 @@ export class SectionAnchorTracker {
 
     if (!isVerticalSectionRoute(route)) {
       this.pendingInitialAnchor = "";
-      this.suppressSpyUntil = performance.now() + 250;
-      window.scrollTo({ top: wasCached && savedScrollY ? savedScrollY : 0 });
+      this.suppressSpyUntil = performance.now() + 350;
+      window.scrollTo({ top: wasCached && savedScrollY ? savedScrollY : 0, behavior: "auto" });
       return;
     }
 
@@ -83,49 +83,29 @@ export class SectionAnchorTracker {
     const parsed = getCurrentParsedHash();
     const targetAnchor = parsed.route === route ? (parsed.sectionAnchor ?? "") : "";
 
-    if (!targetAnchor && wasCached && typeof savedScrollY === "number" && savedScrollY > 0) {
+    // When returning to an already-mounted cached route, restore its exact savedScrollY
+    // synchronously on frame 0 so the page is already at its final vertical scroll position
+    // while sliding in horizontally (no delayed 80/220/480ms anchor jumps).
+    if (wasCached && typeof savedScrollY === "number") {
       this.pendingInitialAnchor = "";
-      this.suppressSpyUntil = performance.now() + 320;
-      window.scrollTo({ top: savedScrollY });
-      requestAnimationFrame(() => {
-        if (!this.userHasScrolled && this.activeRoute === route) {
-          window.scrollTo({ top: savedScrollY });
-        }
-      });
+      this.suppressSpyUntil = performance.now() + 380;
+      window.scrollTo({ top: savedScrollY, behavior: "auto" });
       return;
     }
 
     this.pendingInitialAnchor = targetAnchor;
 
     if (!targetAnchor) {
-      this.suppressSpyUntil = performance.now() + 220;
-      window.scrollTo({ top: 0 });
+      this.suppressSpyUntil = performance.now() + 320;
+      window.scrollTo({ top: 0, behavior: "auto" });
       return;
     }
 
-    // Suppress scroll-spy overwrites while initial layout + jump-to-section settle
-    this.suppressSpyUntil = performance.now() + 900;
-    const attemptJump = (): void => {
-      if (this.userHasScrolled || this.activeRoute !== route) return;
-      this.ensureAutoAnchors();
-      if (this.scrollToAnchor(targetAnchor, false)) {
-        // Keep re-verifying briefly across async widget/canvas renders
-        this.suppressSpyUntil = Math.max(this.suppressSpyUntil, performance.now() + 450);
-      }
-    };
-
-    attemptJump();
-    requestAnimationFrame(() => attemptJump());
-    for (const delayMs of [80, 220, 480]) {
-      this.settleTimers.push(window.setTimeout(attemptJump, delayMs));
-    }
-    this.settleTimers.push(
-      window.setTimeout(() => {
-        if (!this.userHasScrolled) {
-          this.pendingInitialAnchor = "";
-        }
-      }, 950)
-    );
+    // First-time mount with an explicit #/<route>/<section> hash: jump immediately on frame 0
+    this.suppressSpyUntil = performance.now() + 500;
+    this.ensureAutoAnchors();
+    this.scrollToAnchor(targetAnchor, false);
+    this.pendingInitialAnchor = "";
   }
 
   public destroy(): void {
@@ -154,7 +134,11 @@ export class SectionAnchorTracker {
   };
 
   private activeViewRoot(): ParentNode {
-    return this.outletEl.querySelector<HTMLElement>(".view:not([hidden])") ?? this.outletEl;
+    return (
+      this.outletEl.querySelector<HTMLElement>(".view.is-active:not([hidden])") ??
+      this.outletEl.querySelector<HTMLElement>(".view:not([hidden])") ??
+      this.outletEl
+    );
   }
 
   private ensureAutoAnchors(): void {

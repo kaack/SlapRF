@@ -77,7 +77,9 @@ export function renderCanvasSelect(params: RenderCanvasSelectParams): string {
   const ariaAttr = `aria-label="${esc(params.ariaLabel || params.title || params.label)}"`;
   const disabledAttr = params.disabled ? "disabled" : "";
   const dotHtml = params.dotColor
-    ? `<span class="dot" style="--c:${esc(params.dotColor)}"></span>`
+    ? params.dotColor === "hollow"
+      ? `<span class="dot is-hollow"></span>`
+      : `<span class="dot" style="--c:${esc(params.dotColor)}"></span>`
     : "";
 
   return `<button type="button" class="${cls}" data-cselect-trigger data-cselect-value="${esc(params.value)}" data-cselect-options="${esc(JSON.stringify(params.options))}" ${params.dataAttrs ?? ""} ${titleAttr} ${ariaAttr} ${disabledAttr} aria-haspopup="listbox" aria-expanded="false">${dotHtml}<span class="rc-cselect-label">${esc(params.label)}</span><span class="rc-cselect-caret">${icons.chevronDown(11)}</span></button>`;
@@ -132,7 +134,11 @@ function renderOptionsListHtml(options: CanvasSelectOption[], selectedVal: strin
 
     const isSelected = selectedVal !== "" && opt.value === selectedVal;
     const isDisabled = !!opt.disabled;
-    const dotHtml = opt.dotColor ? `<span class="dot" style="--c:${esc(opt.dotColor)}"></span>` : "";
+    const dotHtml = opt.dotColor
+      ? opt.dotColor === "hollow"
+        ? `<span class="dot is-hollow"></span>`
+        : `<span class="dot" style="--c:${esc(opt.dotColor)}"></span>`
+      : "";
     const checkHtml = isSelected
       ? `<span class="rc-cselect-check">${icons.check(12)}</span>`
       : `<span class="rc-cselect-check-spacer"></span>`;

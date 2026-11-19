@@ -1,7 +1,7 @@
 import { Component } from "../core/component";
 import { esc, fmtAgo, fmtDelta, fmtTime } from "../core/format";
 import { adaptColorForTheme } from "../core/theme";
-import { formatBandChannelWithFreq } from "../core/vtx_channels";
+import { formatBandChannelShort, formatBandChannelWithFreq } from "../core/vtx_channels";
 import { practiceStats, PracticeStats } from "../state/analysis";
 import { currentSectorIndex, gateColor } from "../state/selectors";
 import { AppStore } from "../state/store";
@@ -120,9 +120,9 @@ export class LiveStandings extends Component {
             <tr>
               <th class="col-pos">#</th>
               <th>Pilot</th>
-              <th class="num">Laps</th>
-              <th class="num">Last</th>
-              <th class="num">Best</th>
+              <th class="num col-laps">Laps</th>
+              <th class="num col-last">Last</th>
+              <th class="num col-best">Best</th>
               <th class="num col-avg">Avg 5</th>
               <th class="num col-gap">Gap</th>
               <th class="col-spark">Recent laps</th>
@@ -150,6 +150,9 @@ export class LiveStandings extends Component {
     const gap = s.bestLap > 0 && sessionBest > 0 ? (s.bestLap === sessionBest ? `<span class="tone-accent col-gap-fastest">fastest</span>` : fmtDelta(s.bestLap - sessionBest)) : "";
 
     const pColor = adaptColorForTheme(pilot.color);
+    const fullCh = pilot.channel > 0 ? esc(formatBandChannelWithFreq(pilot.band, pilot.channel, pilot.frequencyMhz)) : `<span class="tone-warn">No channel assigned</span>`;
+    const shortCh = pilot.channel > 0 ? esc(formatBandChannelShort(pilot.band, pilot.channel)) : `<span class="tone-warn">No ch</span>`;
+    const shortSectorBadge = sector >= 0 ? `<span class="standings-mobile-sec">S${sector + 1}</span>` : "";
     return `
         <td class="col-pos"><span class="pos ${rank === 1 && s.bestLap > 0 ? "is-leader" : ""}">${rank}</span></td>
         <td>
@@ -159,13 +162,16 @@ export class LiveStandings extends Component {
               <div class="pilot-name">
                 <span>${esc(pilot.callsign)}</span>
               </div>
-              <div class="pilot-meta">${pilot.channel > 0 ? esc(formatBandChannelWithFreq(pilot.band, pilot.channel, pilot.frequencyMhz)) : `<span class="tone-warn">No channel assigned</span>`}</div>
+              <div class="pilot-meta">
+                <span class="pilot-meta-full">${fullCh}</span>
+                <span class="pilot-meta-short">${shortCh}${shortSectorBadge}</span>
+              </div>
             </div>
           </div>
         </td>
-        <td class="num mono">${s.laps.length}</td>
-        <td class="num mono">${fmtTime(s.lastLap)}</td>
-        <td class="num mono strong">${fmtTime(s.bestLap)}</td>
+        <td class="num mono col-laps">${s.laps.length}</td>
+        <td class="num mono col-last">${fmtTime(s.lastLap)}</td>
+        <td class="num mono strong col-best">${fmtTime(s.bestLap)}</td>
         <td class="num mono col-avg">${fmtTime(s.rollingAvg)}</td>
         <td class="num mono muted col-gap">${gap}</td>
         <td class="spark-cell col-spark" style="color:${pColor}">${renderSparkline(s.laps.slice(-SPARK_LAPS).map((l) => l.lapTimeSec), 96, 26)}</td>

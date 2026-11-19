@@ -117,7 +117,7 @@ describe("widgets/PilotSlotsEditor & TrackEditor — Global Pilots & Course Line
       expect(a1Payload.channel).toBe(1);
       expect(a1Payload.frequencyMhz).toBe(5865);
 
-      // When a race heat is actively running, RF channel banner warns that channels are locked
+      // Even when a race heat is actively running, global pilot directory default channels remain editable
       const liveRace = makeRaceState({
         mode: "race",
         lifecycle: "active",
@@ -125,7 +125,7 @@ describe("widgets/PilotSlotsEditor & TrackEditor — Global Pilots & Course Line
         heats: [makeHeat("W1-H1", { state: "running" })],
       });
       store.ingestRace(liveRace);
-      expect(root.textContent).toContain("active heat RF channels are locked");
+      expect(root.querySelector("select[name='channel']")).not.toBeNull();
     } finally {
       editor.destroy();
     }

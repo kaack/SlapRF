@@ -15,7 +15,15 @@ export type RouteId =
   | "debug"
   | "about";
 
-export type RacesViewTab = "format" | "edit" | "control" | "review" | "directory";
+export type RacesViewTab =
+  | "pilots"
+  | "format"
+  | "edit"
+  | "control"
+  | "review"
+  | "analytics"
+  | "multigp"
+  | "directory";
 export type PracticeViewTab = "directory" | "session";
 export type AnalyticsScopeKind = "practice" | "race";
 
@@ -25,6 +33,7 @@ export interface AnalyticsScope {
 }
 
 export interface AnalyticsTopBarContext {
+  mode?: "chooser" | "scope";
   scopeKind: AnalyticsScopeKind;
   scopeId: string;
   scopeName: string;
@@ -219,6 +228,7 @@ let currentAnalyticsScope: AnalyticsScope | null = loadInitialAnalyticsScope();
 const analyticsScopeListeners = new Set<(scope: AnalyticsScope | null) => void>();
 
 let currentAnalyticsTopBarContext: AnalyticsTopBarContext = {
+  mode: currentAnalyticsScope ? "scope" : "chooser",
   scopeKind: "practice",
   scopeId: "",
   scopeName: "Practice",
@@ -256,7 +266,9 @@ export function onAnalyticsScopeChange(fn: (scope: AnalyticsScope | null) => voi
 }
 
 export function setAnalyticsTopBarContext(next: AnalyticsTopBarContext): void {
+  const mode = next.mode ?? (next.scopeId ? "scope" : "chooser");
   if (
+    currentAnalyticsTopBarContext.mode === mode &&
     currentAnalyticsTopBarContext.scopeKind === next.scopeKind &&
     currentAnalyticsTopBarContext.scopeId === next.scopeId &&
     currentAnalyticsTopBarContext.scopeName === next.scopeName &&
@@ -264,7 +276,7 @@ export function setAnalyticsTopBarContext(next: AnalyticsTopBarContext): void {
   ) {
     return;
   }
-  currentAnalyticsTopBarContext = { ...next };
+  currentAnalyticsTopBarContext = { ...next, mode };
   analyticsTopBarListeners.forEach((fn) => fn());
 }
 
@@ -335,6 +347,7 @@ export interface RouteMeta {
   icon: () => string;
   simOnly?: boolean;
   liveTimeOnly?: boolean;
+  hiddenFromNav?: boolean;
 }
 
 /** One flat level: each section of the app is a single page. */
@@ -344,7 +357,7 @@ export const ROUTES: RouteMeta[] = [
     label: "Race",
     title: "Race",
     subtitle: "Create & tag races, customize rounds & brackets, and run Race Control",
-    icon: () => icons.checkered(20),
+    icon: () => icons.trophy(20),
   },
   {
     id: "live",
@@ -352,13 +365,6 @@ export const ROUTES: RouteMeta[] = [
     title: "Practice",
     subtitle: "Create & tag practice sessions, assign pilots, and review recorded laps & section splits",
     icon: () => icons.flag(20),
-  },
-  {
-    id: "pilot",
-    label: "Analytics",
-    title: "Analytics",
-    subtitle: "Pick laps and see where time was won and lost",
-    icon: () => icons.chart(20),
   },
   {
     id: "pilots",
@@ -373,6 +379,14 @@ export const ROUTES: RouteMeta[] = [
     title: "Track",
     subtitle: "Timer order, sections, and start timer",
     icon: () => icons.gate(20),
+  },
+  {
+    id: "pilot",
+    label: "Analytics",
+    title: "Analytics",
+    subtitle: "Pick laps and see where time was won and lost",
+    icon: () => icons.chart(20),
+    hiddenFromNav: true,
   },
   {
     id: "livetime",
@@ -445,6 +459,7 @@ const RESERVED_NAV_SLUGS = new Set([
   "format",
   "control",
   "review",
+  "analytics",
   "edit",
   "stage",
   "session",
@@ -530,13 +545,22 @@ export function parseHashState(hash: string): ParsedHashState | null {
       }
       return { route: "races", races: { tab: "format" } };
     }
+    if (p1 === "pilots") {
+      return { route: "races", races: { tab: "pilots" } };
+    }
     if (p1 === "control") {
       return { route: "races", races: { tab: "control" } };
     }
     if (p1 === "review") {
       return { route: "races", races: { tab: "review" } };
     }
-    if (p1 === "edit") {
+    if (p1 === "analytics") {
+      return { route: "races", races: { tab: "analytics" } };
+    }
+    if (p1 === "multigp") {
+      return { route: "races", races: { tab: "review" } };
+    }
+    if (p1 === "edit" || p1 === "setup" || p1 === "configure") {
       return { route: "races", races: { tab: "edit", stage: 1 } };
     }
     const legacyStage = parseStageToken(p1, p2);
@@ -556,13 +580,22 @@ export function parseHashState(hash: string): ParsedHashState | null {
       }
       return { route: "races", races: { tab: "format", raceKey } };
     }
+    if (p2 === "pilots") {
+      return { route: "races", races: { tab: "pilots", raceKey } };
+    }
     if (p2 === "control") {
       return { route: "races", races: { tab: "control", raceKey } };
     }
     if (p2 === "review") {
       return { route: "races", races: { tab: "review", raceKey } };
     }
-    if (p2 === "edit") {
+    if (p2 === "analytics") {
+      return { route: "races", races: { tab: "analytics", raceKey } };
+    }
+    if (p2 === "multigp") {
+      return { route: "races", races: { tab: "review", raceKey } };
+    }
+    if (p2 === "edit" || p2 === "setup" || p2 === "configure") {
       return { route: "races", races: { tab: "edit", raceKey, stage: 1 } };
     }
     const scopedStage = parseStageToken(p2, p3);
@@ -620,17 +653,29 @@ export function parseHashState(hash: string): ParsedHashState | null {
 export function buildRacesHash(tab: RacesViewTab, raceId?: string, stage?: number): string {
   if (tab === "directory" || !raceId) {
     if (tab === "directory") return "#/races";
+    if (tab === "pilots") return "#/races/pilots";
     if (tab === "control") return "#/races/control";
     if (tab === "review") return "#/races/review";
+    if (tab === "analytics") return "#/races/analytics";
+    if (tab === "multigp") return "#/races/multigp";
     if (tab === "edit") return `#/races/stage/${Math.max(1, stage || 1)}`;
     return "#/races/format";
   }
   const encRace = encodeURIComponent(raceId);
+  if (tab === "pilots") {
+    return `#/races/${encRace}/pilots`;
+  }
   if (tab === "control") {
     return `#/races/${encRace}/control`;
   }
   if (tab === "review") {
     return `#/races/${encRace}/review`;
+  }
+  if (tab === "analytics") {
+    return `#/races/${encRace}/analytics`;
+  }
+  if (tab === "multigp") {
+    return `#/races/${encRace}/multigp`;
   }
   if (tab === "edit") {
     return `#/races/${encRace}/format/stage-${Math.max(1, stage || 1)}`;
@@ -907,6 +952,7 @@ export class Router {
       }
 
       this.current = next;
+      notifyParsedSubRouteListeners(parsed, true);
       this.listeners.forEach((fn) => {
         try {
           fn(next);
@@ -914,7 +960,6 @@ export class Router {
           console.error("[Router] subscriber error:", err);
         }
       });
-      notifyParsedSubRouteListeners(parsed, true);
     };
 
     window.addEventListener("hashchange", handleLocationChange);
@@ -926,6 +971,9 @@ export class Router {
     const route = parsed?.route;
     if (route && route !== this.current) {
       this.current = route;
+      if (parsed) {
+        notifyParsedSubRouteListeners(parsed, true);
+      }
       this.listeners.forEach((fn) => {
         try {
           fn(route);
@@ -933,9 +981,6 @@ export class Router {
           console.error("[Router] subscriber error:", err);
         }
       });
-      if (parsed) {
-        notifyParsedSubRouteListeners(parsed, true);
-      }
     }
   }
 

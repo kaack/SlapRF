@@ -50,6 +50,43 @@ interface BackendStorageStatus {
   simLapsCount: number;
 }
 
+let cachedBackendStorageStatus: BackendStorageStatus | null = null;
+let cachedStorageStatus: StorageStatus | null = null;
+let cachedAuthConfig: {
+  enabled: boolean;
+  username: string;
+  hasPassword: boolean;
+  password?: string;
+} | null = null;
+
+export function preloadSettingsStatuses(): void {
+  const caps = capabilitiesSnapshot();
+  if (caps.portable) {
+    void fetch(resolveBackendUrl("/api/storage/status"), {
+      method: "GET",
+      headers: { Accept: "application/json" },
+      cache: "no-store",
+    })
+      .then(async (resp) => {
+        if (!resp.ok) return;
+        cachedBackendStorageStatus = (await resp.json()) as BackendStorageStatus;
+      })
+      .catch(() => undefined);
+    void fetchServerAuthConfig(caps.backendBaseUrl)
+      .then((cfg) => {
+        cachedAuthConfig = cfg;
+      })
+      .catch(() => undefined);
+  } else {
+    void getStorageStatus()
+      .then((s) => {
+        cachedStorageStatus = s;
+      })
+      .catch(() => undefined);
+    cachedAuthConfig = getDemoAuthConfig();
+  }
+}
+
 function fmtWhen(ms: number | null | undefined): string {
   if (!ms) return "never";
   const d = new Date(ms);
@@ -870,8 +907,8 @@ export class MultiGPSettingsCard extends Component {
 export class PersistenceSettings extends Component {
   private readonly api: ApiClient;
   private readonly announcer?: Announcer;
-  private storage: StorageStatus | null = null;
-  private backendStorage: BackendStorageStatus | null = null;
+  private storage: StorageStatus | null = cachedStorageStatus;
+  private backendStorage: BackendStorageStatus | null = cachedBackendStorageStatus;
   private storageFetchedAt = 0;
 
   constructor(el: HTMLElement, api: ApiClient, announcer?: Announcer) {
@@ -912,6 +949,7 @@ export class PersistenceSettings extends Component {
         .then(async (resp) => {
           if (!resp.ok) return;
           this.backendStorage = (await resp.json()) as BackendStorageStatus;
+          cachedBackendStorageStatus = this.backendStorage;
           this.renderStatus();
         })
         .catch(() => undefined);
@@ -920,6 +958,7 @@ export class PersistenceSettings extends Component {
 
     void getStorageStatus().then((s) => {
       this.storage = s;
+      cachedStorageStatus = s;
       this.renderStatus();
     });
   }
@@ -1135,6 +1174,13 @@ export class AuthenticationSettingsCard extends Component {
 
   constructor(el: HTMLElement) {
     super(el);
+    if (cachedAuthConfig) {
+      this.enabled = cachedAuthConfig.enabled;
+      this.savedEnabled = cachedAuthConfig.enabled;
+      this.username = cachedAuthConfig.username;
+      this.hasSavedPassword = cachedAuthConfig.hasPassword;
+      this.password = cachedAuthConfig.password || "";
+    }
     el.addEventListener("change", this.handleChange);
     el.addEventListener("input", this.handleInput);
     el.addEventListener("click", this.handleClick);
@@ -1148,6 +1194,7 @@ export class AuthenticationSettingsCard extends Component {
         void this.loadConfig();
       })
     );
+    this.render();
     void this.loadConfig();
   }
 
@@ -1156,6 +1203,7 @@ export class AuthenticationSettingsCard extends Component {
     if (caps.portable) {
       try {
         const cfg = await fetchServerAuthConfig(caps.backendBaseUrl);
+        cachedAuthConfig = cfg;
         this.enabled = cfg.enabled;
         this.savedEnabled = cfg.enabled;
         this.username = cfg.username;
@@ -1166,6 +1214,7 @@ export class AuthenticationSettingsCard extends Component {
       }
     } else {
       const cfg = getDemoAuthConfig();
+      cachedAuthConfig = cfg;
       this.enabled = cfg.enabled;
       this.savedEnabled = cfg.enabled;
       this.username = cfg.username;

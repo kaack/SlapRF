@@ -41,13 +41,22 @@ func setupEightPilotRaceEngine(t *testing.T, raceName string) *Engine {
 func TestMultiStageMigrationAndFiveStageCapAndDAGValidation(t *testing.T) {
 	e := setupEightPilotRaceEngine(t, "DAG Validation Open")
 
-	// 1. Apply 2-stage preset -> verify automatic Stages (2) + StageConnections (1) metadata
+	// 1. Apply round_robin + add Stage 2 -> verify 2-stage DAG metadata
 	st, err := e.BracketEditAction(BracketEditPayload{
 		Action:     "apply_template",
-		TemplateID: "qual_double_elim",
+		TemplateID: "round_robin",
 	})
 	if err != nil {
-		t.Fatalf("apply_template qual_double_elim failed: %v", err)
+		t.Fatalf("apply_template round_robin failed: %v", err)
+	}
+	st, err = e.BracketEditAction(BracketEditPayload{
+		Action:         "add_stage",
+		Title:          "Double Elimination",
+		StageFormat:    domain.FormatDoubleElimination,
+		FromStageIndex: 1,
+	})
+	if err != nil {
+		t.Fatalf("add_stage 2 failed: %v", err)
 	}
 	if len(st.Stages) != 2 || len(st.StageConnections) != 1 {
 		t.Fatalf("expected 2 stages and 1 stage connection, got stages=%d conns=%d", len(st.Stages), len(st.StageConnections))
@@ -89,7 +98,7 @@ func TestMultiStageMigrationAndFiveStageCapAndDAGValidation(t *testing.T) {
 	st, err = e.BracketEditAction(BracketEditPayload{
 		Action:      "connect_stages",
 		FromStageID: st.Stages[0].ID,
-		ToStageID:   st.Stages[2].ID,
+		ToStageID:   st.Stages[len(st.Stages)-1].ID,
 	})
 	if err != nil {
 		t.Fatalf("connect_stages 1->3 failed: %v", err)
@@ -509,7 +518,7 @@ func TestQualifierInputBlockAndManualSeatClearRestoreAndSeedToPort(t *testing.T)
 	st, err = e.BracketEditAction(BracketEditPayload{
 		Action:      "connect_stages",
 		FromStageID: st.Stages[0].ID,
-		ToStageID:   st.Stages[2].ID,
+		ToStageID:   st.Stages[len(st.Stages)-1].ID,
 	})
 	if err != nil {
 		t.Fatalf("connect_stages 1->3 failed: %v", err)
@@ -555,16 +564,16 @@ func TestQualifierInputBlockAndManualSeatClearRestoreAndSeedToPort(t *testing.T)
 		}
 	}
 
-	// 3. Manual seat override in Stage 2 feeder heat -> clear_seat restores incoming Seed #1 feeder!
+	// 3. Manual seat override in unified bracket feeder heat -> clear_seat restores incoming Qual Rank #1 feeder!
 	var s2HeatID string
 	for _, h := range st.Heats {
-		if h.StageIndex == 2 && len(h.Seats) > 0 && h.Seats[0].Feeder != nil && h.Seats[0].Feeder.FromStageSeed > 0 {
+		if h.StageIndex == 1 && len(h.Seats) > 0 && h.Seats[0].Feeder != nil && h.Seats[0].Feeder.FromStandingsRank > 0 && h.Seats[0].Feeder.FromRoundID != "" {
 			s2HeatID = h.ID
 			break
 		}
 	}
 	if s2HeatID == "" {
-		t.Fatalf("expected Stage 2 feeder heat")
+		t.Fatalf("expected unified bracket feeder heat")
 	}
 	st, err = e.BracketEditAction(BracketEditPayload{
 		Action:         "assign_pilot_seat",
@@ -573,7 +582,7 @@ func TestQualifierInputBlockAndManualSeatClearRestoreAndSeedToPort(t *testing.T)
 		PilotSlotIndex: st.Roster[0].SlotIndex,
 	})
 	if err != nil {
-		t.Fatalf("assign_seat on Stage 2 feeder seat failed: %v", err)
+		t.Fatalf("assign_seat on feeder seat failed: %v", err)
 	}
 	for _, h := range st.Heats {
 		if h.ID == s2HeatID {
@@ -588,12 +597,12 @@ func TestQualifierInputBlockAndManualSeatClearRestoreAndSeedToPort(t *testing.T)
 		SeatIndex: 1,
 	})
 	if err != nil {
-		t.Fatalf("clear_seat on Stage 2 feeder seat failed: %v", err)
+		t.Fatalf("clear_seat on feeder seat failed: %v", err)
 	}
 	for _, h := range st.Heats {
 		if h.ID == s2HeatID {
-			if h.Seats[0].ManualLock || h.Seats[0].PilotSlotIndex != 0 || h.Seats[0].Feeder == nil || h.Seats[0].Feeder.FromStageSeed == 0 {
-				t.Fatalf("expected clear_seat to undo ManualLock and restore Stage Seed feeder, got %+v", h.Seats[0])
+			if h.Seats[0].ManualLock || h.Seats[0].PilotSlotIndex != 0 || h.Seats[0].Feeder == nil || h.Seats[0].Feeder.FromStandingsRank == 0 || h.Seats[0].SourceLabel != "Seed #1" {
+				t.Fatalf("expected clear_seat to undo ManualLock and restore Seed #1 feeder, got %+v", h.Seats[0])
 			}
 		}
 	}

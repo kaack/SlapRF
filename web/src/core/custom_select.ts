@@ -1,4 +1,5 @@
 import { esc } from "./format";
+import { icons } from "./icons";
 
 let activePopover: HTMLElement | null = null;
 let activeSelect: HTMLSelectElement | null = null;
@@ -209,11 +210,30 @@ export function openCustomSelect(
 
   const popover = document.createElement("div");
   popover.className = "custom-select-popover";
+  popover.classList.toggle(
+    "is-pilot-select-popover",
+    selectEl.classList.contains("mre-seat-pilot-select")
+  );
   popover.setAttribute("role", "listbox");
 
   const renderOption = (opt: HTMLOptionElement, idx: number): string => {
     const isSelected = opt.selected || opt.value === selectEl.value;
     const isDisabled = opt.disabled;
+    const dotColor = opt.dataset.dot || "";
+    const subLabel = opt.dataset.sub || "";
+    const hasSwap = opt.dataset.swap === "1";
+    const swapTitle = opt.dataset.swapTitle || "Channel changed";
+    const dotHtml = dotColor
+      ? dotColor === "hollow"
+        ? `<span class="dot custom-select-dot is-hollow"></span>`
+        : `<span class="dot custom-select-dot" style="--c:${esc(dotColor)}"></span>`
+      : "";
+    const swapHtml = hasSwap
+      ? `<span class="custom-select-swap-ico" title="${esc(swapTitle)}">${icons.channelSwap(13)}</span>`
+      : "";
+    const subHtml = subLabel
+      ? `<span class="custom-select-opt-sub mono">${esc(subLabel)}</span>`
+      : "";
     return `
       <button
         type="button"
@@ -224,7 +244,7 @@ export function openCustomSelect(
         aria-selected="${isSelected}"
         ${isDisabled ? "disabled" : ""}
       >
-        <span class="custom-select-opt-text">${esc(opt.textContent ?? opt.label)}</span>
+        <span class="custom-select-opt-text">${dotHtml}<span class="custom-select-opt-main">${esc(opt.textContent ?? opt.label)}</span>${swapHtml}${subHtml}</span>
         <span class="custom-select-opt-check" aria-hidden="true">${isSelected ? "✓" : ""}</span>
       </button>`;
   };
@@ -359,8 +379,10 @@ function upgradeSelectElement(selectEl: HTMLSelectElement): void {
 
   const wrapper = document.createElement("div");
   wrapper.className = "custom-select-wrap";
-  if (selectEl.classList.contains("gate-timer-select")) {
-    wrapper.classList.add("gate-timer-select");
+  for (const layoutCls of ["gate-timer-select", "mre-seat-ch-select", "mre-seat-pilot-select"]) {
+    if (selectEl.classList.contains(layoutCls)) {
+      wrapper.classList.add(layoutCls);
+    }
   }
 
   const trigger = document.createElement("button");
@@ -391,11 +413,42 @@ function upgradeSelectElement(selectEl: HTMLSelectElement): void {
 
   const sync = () => {
     const selectedOpt = selectEl.selectedOptions[0] ?? selectEl.options[selectEl.selectedIndex];
-    labelSpan.textContent = selectedOpt ? (selectedOpt.textContent ?? selectedOpt.label) : "";
+    const txt = selectedOpt ? (selectedOpt.textContent ?? selectedOpt.label) : "";
+    const dotColor = selectedOpt?.dataset.dot || "";
+    const subLabel = selectedOpt?.dataset.sub || "";
+    const hasSwap = selectedOpt?.dataset.swap === "1";
+    const swapTitle = selectedOpt?.dataset.swapTitle || "Channel changed";
+    if (dotColor || subLabel || hasSwap) {
+      const dotHtml = dotColor
+        ? dotColor === "hollow"
+          ? `<span class="dot custom-select-dot is-hollow"></span>`
+          : `<span class="dot custom-select-dot" style="--c:${esc(dotColor)}"></span>`
+        : "";
+      const swapHtml = hasSwap
+        ? `<span class="custom-select-swap-ico" title="${esc(swapTitle)}">${icons.channelSwap(13)}</span>`
+        : "";
+      const subHtml = subLabel
+        ? `<span class="custom-select-sub mono">${esc(subLabel)}</span>`
+        : "";
+      const nextHtml = `${dotHtml}<span class="custom-select-main-text">${esc(txt)}</span>${swapHtml}${subHtml}`;
+      if (labelSpan.innerHTML !== nextHtml) {
+        labelSpan.innerHTML = nextHtml;
+      }
+      labelSpan.classList.add("has-rich-content");
+    } else {
+      if (labelSpan.classList.contains("has-rich-content") || labelSpan.textContent !== txt) {
+        labelSpan.textContent = txt;
+      }
+      labelSpan.classList.remove("has-rich-content");
+    }
     trigger.disabled = selectEl.disabled;
     trigger.title = selectEl.title || "";
     trigger.classList.toggle("mono", selectEl.classList.contains("mono"));
     trigger.classList.toggle("input-warn", selectEl.classList.contains("input-warn"));
+    trigger.classList.toggle("input-sm", selectEl.classList.contains("input-sm"));
+    trigger.classList.toggle("is-seed-placeholder", selectEl.classList.contains("is-seed-placeholder"));
+    trigger.classList.toggle("is-heat-placeholder", selectEl.classList.contains("is-heat-placeholder"));
+    trigger.classList.toggle("is-bye-placeholder", selectEl.classList.contains("is-bye-placeholder"));
     if (selectEl.getAttribute("aria-label")) {
       trigger.setAttribute("aria-label", selectEl.getAttribute("aria-label")!);
     }
@@ -413,7 +466,16 @@ function upgradeSelectElement(selectEl: HTMLSelectElement): void {
     childList: true,
     subtree: true,
     attributes: true,
-    attributeFilter: ["disabled", "class", "title", "value"],
+    attributeFilter: [
+      "disabled",
+      "class",
+      "title",
+      "value",
+      "data-dot",
+      "data-sub",
+      "data-swap",
+      "data-swap-title",
+    ],
   });
 
   const state = { wrapper, trigger, labelSpan, sync };
@@ -446,28 +508,143 @@ function reconcileOpenSelectAfterMutation(): void {
  * while keeping the hidden `<select>` in the DOM for `FormData` and `change` events.
  * Because the user taps a `<button>`, Android and iOS NEVER open their native system `<select>` modal.
  */
-export function installCustomSelects(): void {
-  let scanning = false;
-  const scan = (root: ParentNode = document) => {
-    if (scanning) return;
-    scanning = true;
-    try {
-      root.querySelectorAll<HTMLSelectElement>("select.input").forEach((sel) => {
-        upgradeSelectElement(sel);
-      });
-      reconcileOpenSelectAfterMutation();
-    } finally {
-      scanning = false;
+function installModalCloseAnimations(): void {
+  if (typeof document === "undefined" || typeof Element === "undefined") return;
+  let internalRemove = false;
+
+  // Intercept innerHTML setter on modal backdrops so only the very first mount
+  // animates `.slaprf-modal` / `.confirm-modal`, and any subsequent re-renders
+  // while the modal is open update in place without re-playing the entrance animation.
+  const elemProto = Element.prototype;
+  const htmlDesc =
+    Object.getOwnPropertyDescriptor(elemProto, "innerHTML") ??
+    Object.getOwnPropertyDescriptor(HTMLElement.prototype, "innerHTML");
+  if (htmlDesc && htmlDesc.set && htmlDesc.get) {
+    const origSet = htmlDesc.set;
+    const origGet = htmlDesc.get;
+    Object.defineProperty(elemProto, "innerHTML", {
+      configurable: true,
+      enumerable: htmlDesc.enumerable ?? true,
+      get() {
+        return origGet.call(this);
+      },
+      set(val: string) {
+        if (
+          this instanceof HTMLElement &&
+          (this.classList.contains("slaprf-modal-backdrop") ||
+            this.classList.contains("confirm-modal-backdrop"))
+        ) {
+          if (this.dataset.modalMountedOnce === "1") {
+            this.classList.add("is-entered");
+          } else {
+            this.dataset.modalMountedOnce = "1";
+          }
+        }
+        origSet.call(this, val);
+      },
+    });
+  }
+
+  const shouldAnimateClose = (node: unknown): node is HTMLElement => {
+    if (internalRemove) return false;
+    if (!(node instanceof HTMLElement)) return false;
+    if (!document.body || node.parentNode !== document.body) return false;
+    if (
+      !node.classList.contains("slaprf-modal-backdrop") &&
+      !node.classList.contains("confirm-modal-backdrop")
+    ) {
+      return false;
     }
+    if (node.classList.contains("is-closing")) return false;
+    // Skip animation if another modal is replacing it in the same frame or in headless unit tests
+    if (
+      typeof window !== "undefined" &&
+      ((window as { __SLAPRF_E2E_FAST_BOOT__?: boolean }).__SLAPRF_E2E_FAST_BOOT__ ||
+        document.getElementById("test-root") !== null)
+    ) {
+      return false;
+    }
+    return true;
   };
 
-  scan(document);
+  const animateModalOut = (el: HTMLElement): void => {
+    const ghost = el.cloneNode(true) as HTMLElement;
+    ghost.classList.add("is-closing");
+    ghost.setAttribute("aria-hidden", "true");
+    ghost.removeAttribute("role");
+    ghost.removeAttribute("aria-modal");
+    internalRemove = true;
+    try {
+      document.body.appendChild(ghost);
+    } finally {
+      internalRemove = false;
+    }
+    window.setTimeout(() => {
+      internalRemove = true;
+      try {
+        ghost.remove();
+      } finally {
+        internalRemove = false;
+      }
+    }, 195);
+  };
+
+  const origRemove = Element.prototype.remove;
+  Element.prototype.remove = function (this: Element) {
+    if (shouldAnimateClose(this)) {
+      animateModalOut(this);
+    }
+    return origRemove.call(this);
+  };
+
+  const origRemoveChild = Node.prototype.removeChild;
+  Node.prototype.removeChild = function <T extends Node>(this: Node, child: T): T {
+    if (shouldAnimateClose(child)) {
+      animateModalOut(child);
+    }
+    return origRemoveChild.call(this, child) as T;
+  };
+}
+
+let scanningSelects = false;
+
+export function scanCustomSelects(root: ParentNode = document): void {
+  if (scanningSelects) return;
+  scanningSelects = true;
+  try {
+    root.querySelectorAll<HTMLSelectElement>("select.input").forEach((sel) => {
+      upgradeSelectElement(sel);
+    });
+    document
+      .querySelectorAll<HTMLElement>(
+        ".slaprf-modal-backdrop:not(.is-closing):not(.is-entered), .confirm-modal-backdrop:not(.is-closing):not(.is-entered)"
+      )
+      .forEach((bd) => {
+        if (bd.dataset.enterQueued === "1") return;
+        bd.dataset.enterQueued = "1";
+        window.setTimeout(() => {
+          bd.classList.add("is-entered");
+        }, 270);
+      });
+    reconcileOpenSelectAfterMutation();
+  } finally {
+    scanningSelects = false;
+  }
+}
+
+export function installCustomSelects(): void {
+  installModalCloseAnimations();
+
+  scanCustomSelects(document);
 
   const mo = new MutationObserver((mutations) => {
-    if (scanning) return;
+    if (scanningSelects) return;
     let shouldScan = false;
     let hadRemovals = false;
     for (const m of mutations) {
+      if (m.target instanceof Element && m.target.closest(".custom-select-trigger")) {
+        continue;
+      }
       if (m.removedNodes.length > 0) {
         hadRemovals = true;
       }
@@ -485,7 +662,7 @@ export function installCustomSelects(): void {
       if (shouldScan) break;
     }
     if (shouldScan) {
-      scan(document);
+      scanCustomSelects(document);
     } else if (hadRemovals && activePopover) {
       reconcileOpenSelectAfterMutation();
     }

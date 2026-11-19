@@ -459,56 +459,63 @@ type HeatLap struct {
 
 // SeatFeeder describes how an unfilled seat will be populated automatically from an earlier heat or round standings.
 type SeatFeeder struct {
-	FromHeatID        string `json:"fromHeatId,omitempty"`
-	FromRank          int    `json:"fromRank,omitempty"`          // 1-based finishing rank in FromHeatID
-	FromRoundColumn   int    `json:"fromRoundColumn,omitempty"`   // If > 0 and FromHeatID == "", feeds from cumulative standings up through this column
-	FromStandingsRank int    `json:"fromStandingsRank,omitempty"` // 1-based overall rank in cumulative standings up through FromRoundColumn
-	FromStageSeed     int    `json:"fromStageSeed,omitempty"`     // 1-based Seed # from Stage 1 Qualifying (e.g. 1 => "Seed #1")
-	IsBye             bool   `json:"isBye,omitempty"`
+	FromHeatID        string           `json:"fromHeatId,omitempty"`
+	FromRank          int              `json:"fromRank,omitempty"`          // 1-based finishing rank in FromHeatID
+	FromRoundID       string           `json:"fromRoundId,omitempty"`       // Upstream round ID whose connected qualifier/points chain produces FromStandingsRank
+	FromRoundColumn   int              `json:"fromRoundColumn,omitempty"`   // If > 0 and FromHeatID == "", feeds from cumulative standings up through this column
+	FromStandingsRank int              `json:"fromStandingsRank,omitempty"` // 1-based overall rank in cumulative standings up through FromRoundID / FromRoundColumn
+	RankingMetric     QualifyingMetric `json:"rankingMetric,omitempty"`     // Optional metric override for FromStandingsRank
+	FromStageSeed     int              `json:"fromStageSeed,omitempty"`     // 1-based Seed # from Stage 1 Qualifying (legacy, migrated to FromRoundID)
+	IsBye             bool             `json:"isBye,omitempty"`
 }
 
 // RaceRound describes one logical/visual round node on the Round Graph.
 type RaceRound struct {
-	ID                  string       `json:"id"`
-	StageIndex          int          `json:"stageIndex"`
-	Round               int          `json:"round"`
-	Column              int          `json:"column"`
-	BracketLane         string       `json:"bracketLane"` // "qualifying" | "winners" | "losers" | "mains" | "finals" | "handoff_out" | "handoff_in"
-	Title               string       `json:"title"`
-	StageFormat         StageFormat  `json:"stageFormat"`
-	StartMode           StartMode    `json:"startMode,omitempty"`
-	TargetLaps          int          `json:"targetLaps"`
-	TimeLimitSec        int          `json:"timeLimitSec"`
-	TargetHeats         int          `json:"targetHeats,omitempty"`         // Explicit desired heat count on non-Finals rounds
-	FinalsFormat        FinalsFormat `json:"finalsFormat,omitempty"`        // For BracketLane=="finals": "single_final" | "chase_the_ace" | "points_final"
-	AceWinsRequired     int          `json:"aceWinsRequired,omitempty"`     // For "chase_the_ace" Finals (default 2)
-	WinnersAdvantageAce bool         `json:"winnersAdvantageAce,omitempty"` // For "chase_the_ace" Finals (+1 starting Ace for Winners #1)
-	FinalsHeats         int          `json:"finalsHeats,omitempty"`         // For "points_final" Finals (default 3)
-	SeedSource          string       `json:"seedSource,omitempty"`          // "all_active_pilots" | "empty"
-	SeedDistribution    string       `json:"seedDistribution,omitempty"`    // For "all_active_pilots": "roster" (default) | "snake" | "random"
-	SeedToPort          string       `json:"seedToPort,omitempty"`          // Input port on round for Checked-In Pilots wire: "left" (default) | "top" | "bottom"
-	LinkSummary         string       `json:"linkSummary,omitempty"`
-	HasPos              bool         `json:"hasPos,omitempty"`
-	PosX                float64      `json:"posX,omitempty"`
-	PosY                float64      `json:"posY,omitempty"`
+	ID                  string           `json:"id"`
+	StageIndex          int              `json:"stageIndex"`
+	Round               int              `json:"round"`
+	Column              int              `json:"column"`
+	BracketLane         string           `json:"bracketLane"` // "qualifying" | "winners" | "losers" | "mains" | "finals" | "handoff_out" | "handoff_in"
+	Title               string           `json:"title"`
+	StageFormat         StageFormat      `json:"stageFormat"`
+	StartMode           StartMode        `json:"startMode,omitempty"`
+	TargetLaps          int              `json:"targetLaps"`
+	TimeLimitSec        int              `json:"timeLimitSec"`
+	TargetHeats         int              `json:"targetHeats,omitempty"`         // Explicit desired heat count on non-Finals rounds
+	MaxPacksPerPilot    int              `json:"maxPacksPerPilot,omitempty"`    // For Open Qualifier / ZippyQ rounds (0 = unlimited)
+	QualifyingMetric    QualifyingMetric `json:"qualifyingMetric,omitempty"`    // For Qualifying / Open Qualifier rounds
+	FinalsFormat        FinalsFormat     `json:"finalsFormat,omitempty"`        // For BracketLane=="finals": "single_final" | "chase_the_ace" | "points_final"
+	AceWinsRequired     int              `json:"aceWinsRequired,omitempty"`     // For "chase_the_ace" Finals (default 2)
+	WinnersAdvantageAce bool             `json:"winnersAdvantageAce,omitempty"` // For "chase_the_ace" Finals (+1 starting Ace for Winners #1)
+	FinalsHeats         int              `json:"finalsHeats,omitempty"`         // For "points_final" Finals (default 3)
+	SeedSource          string           `json:"seedSource,omitempty"`          // "all_active_pilots" | "empty"
+	SeedDistribution    string           `json:"seedDistribution,omitempty"`    // For "all_active_pilots": "roster" (default) | "snake" | "sequential" | "random"
+	RandomSeed          int64            `json:"randomSeed,omitempty"`          // Deterministic shuffle seed updated on 1-tap Reshuffle
+	SeedToPort          string           `json:"seedToPort,omitempty"`          // Input port on round for Checked-In Pilots wire: "left" (default) | "top" | "bottom"
+	LinkSummary         string           `json:"linkSummary,omitempty"`
+	HasPos              bool             `json:"hasPos,omitempty"`
+	PosX                float64          `json:"posX,omitempty"`
+	PosY                float64          `json:"posY,omitempty"`
 }
 
 // RoundConnection represents a directed advancement wire between two Round nodes on the Round Graph.
 type RoundConnection struct {
-	ID            string `json:"id"`
-	StageIndex    int    `json:"stageIndex,omitempty"`
-	FromRoundID   string `json:"fromRoundId"`
-	ToRoundID     string `json:"toRoundId"`
-	FromPort      string `json:"fromPort,omitempty"`     // "right" | "bottom"
-	ToPort        string `json:"toPort,omitempty"`       // "left" | "top" | "bottom"
-	Mode          string `json:"mode"`                   // "top_per_heat" | "bottom_per_heat" | "standings_top" | "all_pilots" | "stage_seeds" | "qual_feed"
-	Count         int    `json:"count"`                 // e.g. 2 for Top 2 / Bottom 2 per heat, or 4 for Fastest 4
-	CustomCount   bool   `json:"customCount,omitempty"` // True when Count was explicitly chosen by the user rather than auto-inferred
-	SeedStart     int    `json:"seedStart,omitempty"`   // For "stage_seeds": 1-based start seed (default 1)
-	SeedEnd       int    `json:"seedEnd,omitempty"`     // For "stage_seeds": 1-based inclusive end seed (0 = all advancing seeds)
-	Distribution  string `json:"distribution,omitempty"` // For "stage_seeds": "snake" (Bracket Snake/Fold) | "sequential" (By Rank)
-	Invalid       bool   `json:"invalid,omitempty"`      // True when this wire forms a cycle or violates round/portal constraints
-	InvalidReason string `json:"invalidReason,omitempty"` // Human-readable explanation shown on click and in error toast
+	ID            string           `json:"id"`
+	StageIndex    int              `json:"stageIndex,omitempty"`
+	FromRoundID   string           `json:"fromRoundId"`
+	ToRoundID     string           `json:"toRoundId"`
+	FromPort      string           `json:"fromPort,omitempty"`      // "right" | "bottom"
+	ToPort        string           `json:"toPort,omitempty"`        // "left" | "top" | "bottom"
+	Mode          string           `json:"mode"`                    // "top_per_heat" | "bottom_per_heat" | "standings_top" | "all_pilots" | "all_pilots_ranked" | "stage_seeds" | "qual_feed"
+	Count         int              `json:"count"`                   // e.g. 2 for Top 2 / Bottom 2 per heat, or 8 for Top 8
+	CustomCount   bool             `json:"customCount,omitempty"`   // True when Count was explicitly chosen by the user rather than auto-inferred
+	SeedStart     int              `json:"seedStart,omitempty"`     // For "standings_top" / "stage_seeds": 1-based start rank (default 1)
+	SeedEnd       int              `json:"seedEnd,omitempty"`       // For "standings_top" / "stage_seeds": 1-based inclusive end rank (0 = all / Count)
+	Distribution  string           `json:"distribution,omitempty"`  // For "standings_top" / "stage_seeds": "snake" | "sequential"
+	RankingMetric QualifyingMetric `json:"rankingMetric,omitempty"` // For "standings_top": metric used to rank upstream qualifier chain
+	SeededEarly   bool             `json:"seededEarly,omitempty"`   // True when organizer triggered Seed Now to cut qualifying early
+	Invalid       bool             `json:"invalid,omitempty"`       // True when this wire forms a cycle or violates round/portal constraints
+	InvalidReason string           `json:"invalidReason,omitempty"` // Human-readable explanation shown on click and in error toast
 }
 
 // HeatRssiSample stores one downsampled Start/Finish gate RSSI point (~10 Hz, peak-preserving)

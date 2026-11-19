@@ -232,6 +232,7 @@ export interface MultiBandSelectOptionsParams {
   includeUnassigned?: boolean;
   unassignedLabel?: string;
   compact?: boolean;
+  subFreq?: boolean;
 }
 
 /**
@@ -259,10 +260,14 @@ export function renderMultiBandSelectOptionsHtml(params: MultiBandSelectOptionsP
       if (!spec.legalChannels.includes(ch) && !isSelected) {
         continue;
       }
-      const label = params.compact
-        ? `${spec.prefix}${ch} · ${mhz}`
-        : `${spec.prefix}${ch} · ${mhz} MHz`;
-      optsHtml += `<option value="${code}" ${isSelected ? "selected" : ""}>${esc(label)}</option>`;
+      if (params.subFreq) {
+        optsHtml += `<option value="${code}" data-sub="${mhz} MHz" ${isSelected ? "selected" : ""}>${esc(`${spec.prefix}${ch}`)}</option>`;
+      } else {
+        const label = params.compact
+          ? `${spec.prefix}${ch} · ${mhz}`
+          : `${spec.prefix}${ch} · ${mhz} MHz`;
+        optsHtml += `<option value="${code}" ${isSelected ? "selected" : ""}>${esc(label)}</option>`;
+      }
     }
     if (optsHtml) {
       html += `<optgroup label="${esc(spec.groupLabel)}">${optsHtml}</optgroup>`;

@@ -1,7 +1,13 @@
 import { Component } from "../core/component";
 import { icons } from "../core/icons";
 import {
+  getAnalyticsTopBarContext,
+  getPracticeTopBarContext,
+  getRacesTopBarContext,
   getRememberedRouteHash,
+  onAnalyticsTopBarContextChange,
+  onPracticeTopBarContextChange,
+  onRacesTopBarContextChange,
   onRememberedRouteHashChange,
   ROUTES,
   RouteId,
@@ -16,16 +22,26 @@ import {
   subscribeCapabilities,
 } from "../services/capabilities";
 import { sharedLiveTimeRelay } from "../services/livetime_relay";
+import { sharedMultiGPService } from "../services/multigp_service";
 import { AppStore } from "../state/store";
+
+const PRIMARY_MOBILE_ROUTES = new Set<RouteId>(["races", "live", "pilots", "track"]);
 
 export class Sidebar extends Component {
   private readonly store: AppStore;
   private readonly router: Router;
+  private moreDrawerOpen = false;
+  private moreDrawerClosing = false;
+  private moreDrawerCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  private moreDrawerDragStartY: number | null = null;
 
   constructor(el: HTMLElement, store: AppStore, router: Router) {
     super(el);
     this.store = store;
     this.router = router;
+
+    const visibleRoutes = ROUTES.filter((r) => !r.hiddenFromNav);
+    const secondaryRoutes = visibleRoutes.filter((r) => !PRIMARY_MOBILE_ROUTES.has(r.id));
 
     el.innerHTML = `
       <div class="brand" data-brand-root>
@@ -37,20 +53,75 @@ export class Sidebar extends Component {
           ${icons.sidebarToggle(16)}
         </button>
       </div>
-      <nav class="nav nav-flat">
-        ${ROUTES.map((r) => `<a class="nav-item" href="${getRememberedRouteHash(r.id)}" data-route="${r.id}" ${r.simOnly ? 'data-sim-only="1"' : ""}${r.liveTimeOnly ? 'data-livetime-only="1"' : ""}>${r.icon()}<span>${r.label}</span></a>`).join("")}
-        <div class="sidebar-theme-row" data-theme-toggler-row>
-          <span class="sidebar-theme-label">Theme</span>
-          <div class="sidebar-theme-toggler" role="group" aria-label="Color theme">
-            <button type="button" class="sidebar-theme-btn" data-set-theme="dark" title="Dark theme" aria-label="Dark theme" aria-pressed="true">
-              ${icons.moon(15)}
-            </button>
-            <button type="button" class="sidebar-theme-btn" data-set-theme="light" title="Light theme" aria-label="Light theme" aria-pressed="false">
-              ${icons.sun(15)}
+      <div class="sidebar-nav-shell">
+        <nav class="nav nav-flat" data-sidebar-nav>
+          ${visibleRoutes.map((r) => `<a class="nav-item ${PRIMARY_MOBILE_ROUTES.has(r.id) ? "is-mobile-primary" : "is-mobile-secondary"}" href="${getRememberedRouteHash(r.id)}" data-route="${r.id}" ${r.simOnly ? 'data-sim-only="1"' : ""}${r.liveTimeOnly ? 'data-livetime-only="1"' : ""}>${r.icon()}<span>${r.label}</span></a>`).join("")}
+          <button
+            type="button"
+            class="nav-item mobile-more-tab-btn"
+            data-action="toggle-mobile-more"
+            aria-expanded="false"
+            aria-label="More navigation"
+          >
+            ${icons.moreHorizontal(20)}
+            <span>More</span>
+          </button>
+          <div class="sidebar-theme-row" data-theme-toggler-row>
+            <span class="sidebar-theme-label">Theme</span>
+            <div class="sidebar-theme-toggler" role="group" aria-label="Color theme">
+              <button type="button" class="sidebar-theme-btn" data-set-theme="dark" title="Dark theme" aria-label="Dark theme" aria-pressed="true">
+                ${icons.moon(15)}
+              </button>
+              <button type="button" class="sidebar-theme-btn" data-set-theme="light" title="Light theme" aria-label="Light theme" aria-pressed="false">
+                ${icons.sun(15)}
+              </button>
+            </div>
+          </div>
+        </nav>
+      </div>
+      <div class="mobile-more-drawer-overlay" data-mobile-more-overlay hidden>
+        <div class="pilot-dir-mobile-drawer-backdrop" data-mobile-more-close="1"></div>
+        <div class="pilot-dir-mobile-editor mobile-more-drawer-sheet" role="dialog" aria-label="More navigation">
+          <div class="dir-mobile-drawer-top-bar">
+            <button
+              type="button"
+              class="pilot-dir-mobile-drawer-handle"
+              data-mobile-more-handle="1"
+              data-mobile-more-close="1"
+              aria-label="Drag down or tap to close"
+              title="Close"
+            >
+              <span class="pilot-dir-mobile-drawer-grip"></span>
             </button>
           </div>
+          <div class="mobile-more-grid">
+            ${secondaryRoutes
+              .map(
+                (r) => `
+              <a
+                class="mobile-more-tile"
+                href="${getRememberedRouteHash(r.id)}"
+                data-route="${r.id}"
+                ${r.simOnly ? 'data-sim-only="1"' : ""}${r.liveTimeOnly ? 'data-livetime-only="1"' : ""}
+              >
+                <span class="mobile-more-tile-icon">${r.icon()}</span>
+                <span class="mobile-more-tile-label">${r.label}</span>
+              </a>`
+              )
+              .join("")}
+          </div>
+          <div class="mobile-more-theme-bar">
+            <div class="sidebar-theme-toggler" role="group" aria-label="Color theme">
+              <button type="button" class="sidebar-theme-btn" data-set-theme="dark" title="Dark theme" aria-label="Dark theme" aria-pressed="true">
+                ${icons.moon(15)}<span>Dark</span>
+              </button>
+              <button type="button" class="sidebar-theme-btn" data-set-theme="light" title="Light theme" aria-label="Light theme" aria-pressed="false">
+                ${icons.sun(15)}<span>Light</span>
+              </button>
+            </div>
+          </div>
         </div>
-      </nav>
+      </div>
       <button type="button" class="sidebar-demo-disclaimer" data-demo-disclaimer="1" hidden aria-label="Browser Demo — open Datasource settings">
         <span class="sidebar-demo-disclaimer-title">Browser Demo</span>
         <span class="sidebar-demo-disclaimer-body" data-demo-disclaimer-body>Simulated in your browser. Connect a SlapRF Server in Datasource to time real hardware.</span>
@@ -59,9 +130,47 @@ export class Sidebar extends Component {
     const collapseBtn = el.querySelector<HTMLButtonElement>("[data-action=collapse-sidebar]");
     const onCollapseClick = () => toggleSidebarCollapsed();
     collapseBtn?.addEventListener("click", onCollapseClick);
+
+    const onDrawerPointerDown = (e: PointerEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!t || !t.closest("[data-mobile-more-handle]")) return;
+      if (e.button !== 0 && e.pointerType === "mouse") return;
+      this.moreDrawerDragStartY = e.clientY;
+    };
+    const onDrawerPointerMove = (e: PointerEvent) => {
+      if (this.moreDrawerDragStartY === null) return;
+      if (e.clientY - this.moreDrawerDragStartY >= 22) {
+        this.moreDrawerDragStartY = null;
+        this.closeMoreDrawer();
+      }
+    };
+    const onDrawerPointerUp = () => {
+      this.moreDrawerDragStartY = null;
+    };
+    el.addEventListener("pointerdown", onDrawerPointerDown);
+    el.addEventListener("pointermove", onDrawerPointerMove);
+    el.addEventListener("pointerup", onDrawerPointerUp);
+    el.addEventListener("pointercancel", onDrawerPointerUp);
+
     const onNavClick = (e: MouseEvent) => {
       if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       const target = e.target as HTMLElement | null;
+      if (target?.closest("[data-action=toggle-mobile-more]")) {
+        e.preventDefault();
+        e.stopPropagation();
+        if (this.moreDrawerOpen && !this.moreDrawerClosing) {
+          this.closeMoreDrawer();
+        } else {
+          this.openMoreDrawer();
+        }
+        return;
+      }
+      if (target?.closest("[data-mobile-more-close]")) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.closeMoreDrawer();
+        return;
+      }
       const themeBtn = target?.closest<HTMLButtonElement>("button[data-set-theme]");
       if (themeBtn) {
         e.preventDefault();
@@ -83,6 +192,7 @@ export class Sidebar extends Component {
       if (isServerDisconnectedLockout() && routeId !== "setup") {
         return;
       }
+      this.closeMoreDrawer(true);
       if (routeId) {
         this.router.navigateSection(routeId);
       }
@@ -90,18 +200,48 @@ export class Sidebar extends Component {
     el.addEventListener("click", onNavClick);
     this.onDispose(() => {
       collapseBtn?.removeEventListener("click", onCollapseClick);
+      el.removeEventListener("pointerdown", onDrawerPointerDown);
+      el.removeEventListener("pointermove", onDrawerPointerMove);
+      el.removeEventListener("pointerup", onDrawerPointerUp);
+      el.removeEventListener("pointercancel", onDrawerPointerUp);
       el.removeEventListener("click", onNavClick);
+      if (this.moreDrawerCloseTimer !== null) {
+        clearTimeout(this.moreDrawerCloseTimer);
+        this.moreDrawerCloseTimer = null;
+      }
     });
 
     this.highlight(router.route);
     this.syncRememberedHrefs();
     this.syncThemeToggler();
     this.onDispose(subscribeAppTheme(() => this.syncThemeToggler()));
-    this.onDispose(router.subscribe((route) => {
-      this.highlight(route);
-      this.syncRememberedHrefs();
-    }));
+    this.onDispose(
+      router.subscribe((route) => {
+        this.closeMoreDrawer(true);
+        this.highlight(route);
+        this.syncRememberedHrefs();
+        this.syncMobileSubPageState();
+      })
+    );
     this.onDispose(onRememberedRouteHashChange(() => this.syncRememberedHrefs()));
+    this.onDispose(
+      onRacesTopBarContextChange(() => {
+        this.closeMoreDrawer(true);
+        this.syncMobileSubPageState();
+      })
+    );
+    this.onDispose(
+      onPracticeTopBarContextChange(() => {
+        this.closeMoreDrawer(true);
+        this.syncMobileSubPageState();
+      })
+    );
+    this.onDispose(
+      onAnalyticsTopBarContextChange(() => {
+        this.closeMoreDrawer(true);
+        this.syncMobileSubPageState();
+      })
+    );
     this.onDispose(
       store.subscribe(["status", "config"], () => {
         this.syncConditionalNav();
@@ -118,6 +258,77 @@ export class Sidebar extends Component {
       })
     );
     this.syncConditionalNav();
+    this.syncMobileSubPageState();
+  }
+
+  private openMoreDrawer(): void {
+    if (this.moreDrawerCloseTimer !== null) {
+      clearTimeout(this.moreDrawerCloseTimer);
+      this.moreDrawerCloseTimer = null;
+    }
+    this.moreDrawerClosing = false;
+    this.moreDrawerOpen = true;
+    const overlay = this.el.querySelector<HTMLElement>("[data-mobile-more-overlay]");
+    const sheet = overlay?.querySelector<HTMLElement>(".mobile-more-drawer-sheet");
+    if (overlay) {
+      overlay.hidden = false;
+      overlay.classList.remove("is-closing");
+    }
+    if (sheet) {
+      sheet.classList.remove("is-entering");
+      void sheet.offsetWidth;
+      sheet.classList.add("is-entering");
+    }
+    const moreBtn = this.el.querySelector<HTMLButtonElement>('[data-action="toggle-mobile-more"]');
+    moreBtn?.setAttribute("aria-expanded", "true");
+    this.highlight(this.router.route);
+  }
+
+  private closeMoreDrawer(immediate = false): void {
+    if (!this.moreDrawerOpen && !this.moreDrawerClosing) return;
+    const overlay = this.el.querySelector<HTMLElement>("[data-mobile-more-overlay]");
+    const moreBtn = this.el.querySelector<HTMLButtonElement>('[data-action="toggle-mobile-more"]');
+    moreBtn?.setAttribute("aria-expanded", "false");
+    if (!overlay || immediate) {
+      if (this.moreDrawerCloseTimer !== null) {
+        clearTimeout(this.moreDrawerCloseTimer);
+        this.moreDrawerCloseTimer = null;
+      }
+      this.moreDrawerOpen = false;
+      this.moreDrawerClosing = false;
+      if (overlay) {
+        overlay.hidden = true;
+        overlay.classList.remove("is-closing");
+      }
+      this.highlight(this.router.route);
+      return;
+    }
+    if (this.moreDrawerClosing) return;
+    this.moreDrawerClosing = true;
+    this.moreDrawerOpen = false;
+    overlay.classList.add("is-closing");
+    this.highlight(this.router.route);
+    if (this.moreDrawerCloseTimer !== null) {
+      clearTimeout(this.moreDrawerCloseTimer);
+    }
+    this.moreDrawerCloseTimer = setTimeout(() => {
+      this.moreDrawerCloseTimer = null;
+      this.moreDrawerClosing = false;
+      overlay.hidden = true;
+      overlay.classList.remove("is-closing");
+    }, 200);
+  }
+
+  private syncMobileSubPageState(): void {
+    const route = this.router.route;
+    const rCtx = getRacesTopBarContext();
+    const pCtx = getPracticeTopBarContext();
+    const aCtx = getAnalyticsTopBarContext();
+    const isSubPage =
+      (route === "races" && rCtx.tab !== "directory") ||
+      (route === "live" && pCtx.tab === "session") ||
+      (route === "pilot" && aCtx.mode === "scope");
+    this.el.closest(".app")?.classList.toggle("is-mobile-subpage", isSubPage);
   }
 
   private syncConditionalNav(): void {
@@ -190,5 +401,18 @@ export class Sidebar extends Component {
       if (active) a.setAttribute("aria-current", "page");
       else a.removeAttribute("aria-current");
     });
+    const moreBtn = this.el.querySelector<HTMLButtonElement>('[data-action="toggle-mobile-more"]');
+    if (moreBtn) {
+      const isSecondaryRoute = !PRIMARY_MOBILE_ROUTES.has(route);
+      const secMeta = isSecondaryRoute ? ROUTES.find((r) => r.id === route) : undefined;
+      if (secMeta) {
+        moreBtn.innerHTML = `${secMeta.icon()}<span>${secMeta.label}</span>`;
+        moreBtn.setAttribute("aria-label", `${secMeta.label} — More navigation`);
+      } else {
+        moreBtn.innerHTML = `${icons.moreHorizontal(20)}<span>More</span>`;
+        moreBtn.setAttribute("aria-label", "More navigation");
+      }
+      moreBtn.classList.toggle("is-active", this.moreDrawerOpen || isSecondaryRoute);
+    }
   }
 }

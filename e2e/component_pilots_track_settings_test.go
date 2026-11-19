@@ -15,6 +15,22 @@ func TestComponent_PilotSlotsEditorSearchDuplicateGuardAndRemove(t *testing.T) {
 	addBtn := h.Page.Locator(`button[data-action="add-pilot"]`).First()
 	h.MustBeVisible(searchInput, "Pilots directory search/add input")
 
+	// Verify secondary import/export buttons sit at the bottom-left below .pilot-dir-box-shell on Desktop, matching Mobile.
+	bottomFooter := h.Page.Locator(`[data-pilot-mobile-io-slot]`).First()
+	h.MustBeVisible(bottomFooter, "Pilots bottom-left secondary action row on Desktop")
+	h.MustContainText(bottomFooter, "Import from MultiGP")
+	h.MustContainText(bottomFooter, "Import from CSV")
+	h.MustContainText(bottomFooter, "Export as CSV")
+	layoutOK, err := h.Page.Evaluate(`() => {
+		const box = document.querySelector(".pilot-dir-box-shell")?.getBoundingClientRect();
+		const foot = document.querySelector("[data-pilot-mobile-io-slot]")?.getBoundingClientRect();
+		const topIo = document.querySelector("[data-pilot-io-slot]");
+		return Boolean(box && foot && !topIo && foot.top >= box.bottom - 1 && Math.abs(foot.left - box.left) <= 4);
+	}`)
+	if err != nil || layoutOK != true {
+		t.Fatalf("expected [data-pilot-mobile-io-slot] to render below .pilot-dir-box-shell on bottom-left without top-right io buttons: err=%v layoutOK=%v", err, layoutOK)
+	}
+
 	// 1. Typing an existing callsign ("FAERRY") filters down to 1 row AND disables Add button!
 	if err := searchInput.Fill("FAERRY"); err != nil {
 		t.Fatalf("fill FAERRY: %v", err)

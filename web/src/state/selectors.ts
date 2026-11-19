@@ -3,6 +3,10 @@ import { LapRecord } from "../types/models";
 import { AppStore } from "./store";
 
 export function lapsFor(store: AppStore, slotIndex: number): LapRecord[] {
+  return store.laps.filter((l) => l.slotIndex === slotIndex && !l.invalidated);
+}
+
+export function allLapsFor(store: AppStore, slotIndex: number): LapRecord[] {
   return store.laps.filter((l) => l.slotIndex === slotIndex);
 }
 
@@ -13,6 +17,7 @@ export function bestLapOf(laps: LapRecord[]): number {
 export function fastestLap(store: AppStore): LapRecord | undefined {
   let fastest: LapRecord | undefined;
   for (const lap of store.laps) {
+    if (lap.invalidated) continue;
     if (!fastest || lap.lapTimeSec < fastest.lapTimeSec) fastest = lap;
   }
   return fastest;

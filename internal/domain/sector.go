@@ -26,15 +26,17 @@ type SectorSplit struct {
 // LapRecord represents a full lap (Start/Finish Gate -> Intermediate Gates -> Start/Finish Gate)
 // with all intermediate sector splits attached.
 type LapRecord struct {
-	LapID         uint64        `json:"lapId"`         // Unique lap ID
-	SlotIndex     int           `json:"slotIndex"`     // 1-based pilot slot
-	Callsign      string        `json:"callsign"`      // Pilot callsign
-	LapNumber     int           `json:"lapNumber"`     // 1-based lap number for this pilot
-	LapTimeSec    float64       `json:"lapTimeSec"`    // Total lap time in seconds (matches LiveTime official lap)
-	DeltaToBest   float64       `json:"deltaToBest"`   // Delta to pilot's personal best lap
-	Sectors       []SectorSplit `json:"sectors"`       // Individual gate-to-gate sector splits
-	CompletedAtUs uint64        `json:"completedAtUs"` // Microsecond timestamp at finish gate
-	IsBestLap     bool          `json:"isBestLap"`     // True if this was the pilot's personal best at completion
+	LapID         uint64        `json:"lapId"`                   // Unique lap ID
+	SlotIndex     int           `json:"slotIndex"`               // 1-based pilot slot
+	Callsign      string        `json:"callsign"`                // Pilot callsign
+	LapNumber     int           `json:"lapNumber"`               // 1-based lap number for this pilot
+	LapTimeSec    float64       `json:"lapTimeSec"`              // Total lap time in seconds (matches LiveTime official lap)
+	DeltaToBest   float64       `json:"deltaToBest"`             // Delta to pilot's personal best lap
+	Sectors       []SectorSplit `json:"sectors"`                 // Individual gate-to-gate sector splits
+	CompletedAtUs uint64        `json:"completedAtUs"`           // Microsecond timestamp at finish gate
+	CompletedAtMs int64         `json:"completedAtMs,omitempty"` // Wall-clock Unix milliseconds at finish gate
+	IsBestLap     bool          `json:"isBestLap"`               // True if this was the pilot's personal best at completion
+	Invalidated   bool          `json:"invalidated,omitempty"`   // True when crossed out / excluded from stats
 }
 
 // SectorBottleneckStat summarizes a pilot's history on one stretch of track (gate pair).

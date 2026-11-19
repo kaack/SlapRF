@@ -35,6 +35,10 @@ interface DerivedCrossingsSummary {
   rows: DerivedCrossingRow[];
   bestConsecSec: number | null;
   consecWindow: 2 | 3;
+  countedLaps: number;
+  bestLapSec: number | null;
+  holeshotSec: number | null;
+  totalTimeSec: number | null;
 }
 
 const DEFAULT_SVG_W = 850;
@@ -69,68 +73,89 @@ function clamp(v: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, v));
 }
 
+function extractRawCrossings(heat: RaceHeat, seat: HeatSeat): HeatCrossing[] {
+  if (seat.crossings && seat.crossings.length > 0) {
+    return seat.crossings;
+  }
+  const anchorUs = heat.startToneUs ?? 0;
+  let runningSec = 0;
+  return (seat.laps ?? []).map((l) => {
+    if (!l.invalidated && l.splitTimeSec > 0) {
+      runningSec += l.splitTimeSec;
+    }
+    const explicitTs = (l as { timestampUs?: number }).timestampUs;
+    const relSec =
+      l.raceElapsedSec && l.raceElapsedSec > 0
+        ? l.raceElapsedSec
+        : l.cumulativeSec && l.cumulativeSec > 0
+          ? l.cumulativeSec
+          : runningSec;
+    const tsUs =
+      typeof explicitTs === "number" && explicitTs > 0
+        ? explicitTs
+        : anchorUs + Math.round(relSec * 1_000_000);
+    return {
+      crossingId: l.crossingId,
+      timestampUs: tsUs,
+      invalidated: l.invalidated,
+      manual: l.manual,
+    };
+  });
+}
+
+function getAnchorUs(heat: RaceHeat, seat: HeatSeat, raw: HeatCrossing[]): number {
+  if (heat.startToneUs && heat.startToneUs > 0) {
+    return heat.startToneUs;
+  }
+  if (raw.length > 0) {
+    return raw[0].timestampUs > 800_000
+      ? raw[0].timestampUs - Math.round((seat.holeshotSec || 0.8) * 1_000_000)
+      : raw[0].timestampUs;
+  }
+  return 1_000_000_000;
+}
+
 function deriveCrossings(
   heat: RaceHeat,
   seat: HeatSeat,
-  race?: RaceTournamentState
+  race?: RaceTournamentState,
+  overrideCrossings?: HeatCrossing[] | null
 ): DerivedCrossingsSummary {
   const stage = (race?.stages ?? []).find((s) => s.index === heat.stageIndex);
   const qualMetric =
     stage?.settings?.qualifyingMetric || race?.config?.qualifyingMetric || "consecutive_3";
   const consecWindow: 2 | 3 = qualMetric === "consecutive_2" ? 2 : 3;
 
-  const raw: HeatCrossing[] =
-    seat.crossings && seat.crossings.length > 0
-      ? seat.crossings
-      : (() => {
-          const anchorUs = heat.startToneUs ?? 0;
-          let runningSec = 0;
-          return (seat.laps ?? []).map((l) => {
-            if (!l.invalidated && l.splitTimeSec > 0) {
-              runningSec += l.splitTimeSec;
-            }
-            const explicitTs = (l as { timestampUs?: number }).timestampUs;
-            const relSec =
-              l.raceElapsedSec && l.raceElapsedSec > 0
-                ? l.raceElapsedSec
-                : l.cumulativeSec && l.cumulativeSec > 0
-                  ? l.cumulativeSec
-                  : runningSec;
-            const tsUs =
-              typeof explicitTs === "number" && explicitTs > 0
-                ? explicitTs
-                : anchorUs + Math.round(relSec * 1_000_000);
-            return {
-              crossingId: l.crossingId,
-              timestampUs: tsUs,
-              invalidated: l.invalidated,
-              manual: l.manual,
-            };
-          });
-        })();
+  const raw: HeatCrossing[] = overrideCrossings ?? extractRawCrossings(heat, seat);
 
   if (raw.length === 0) {
-    return { rows: [], bestConsecSec: null, consecWindow };
+    return {
+      rows: [],
+      bestConsecSec: null,
+      consecWindow,
+      countedLaps: 0,
+      bestLapSec: null,
+      holeshotSec: null,
+      totalTimeSec: null,
+    };
   }
 
-  const anchorUs =
-    heat.startToneUs && heat.startToneUs > 0
-      ? heat.startToneUs
-      : raw[0].timestampUs > 800_000
-        ? raw[0].timestampUs - Math.round((seat.holeshotSec || 0.8) * 1_000_000)
-        : raw[0].timestampUs;
+  const anchorUs = getAnchorUs(heat, seat, raw);
 
   const rows: DerivedCrossingRow[] = [];
   let hasHoleshot = false;
   let prevValidMs = 0;
   let countedLaps = 0;
   let bestSplit = Infinity;
+  let holeshotSec: number | null = null;
+  let runningLapSumSec = 0;
 
-  for (const c of raw) {
+  for (let idx = 0; idx < raw.length; idx++) {
+    const c = raw[idx];
     const offsetMs = Math.round((c.timestampUs - anchorUs) / 1000);
     const peakDbm = c.peakRssiDbm && c.peakRssiDbm !== 0 ? Math.round(c.peakRssiDbm) : null;
 
-    if (c.invalidated) {
+    if (c.invalidated && idx > 0) {
       rows.push({
         crossing: c,
         offsetMs,
@@ -150,8 +175,9 @@ function deriveCrossings(
       hasHoleshot = true;
       prevValidMs = offsetMs;
       const hsSec = heat.startMode === "heads_up" ? Math.max(0, offsetMs / 1000) : 0;
+      holeshotSec = hsSec;
       rows.push({
-        crossing: c,
+        crossing: c.invalidated ? { ...c, invalidated: false } : c,
         offsetMs,
         label: "HS",
         isHoleshot: true,
@@ -171,6 +197,7 @@ function deriveCrossings(
     if (!isExtra) {
       prevValidMs = offsetMs;
       countedLaps++;
+      runningLapSumSec += splitSec;
       if (splitSec > 0 && splitSec < bestSplit) {
         bestSplit = splitSec;
       }
@@ -205,7 +232,7 @@ function deriveCrossings(
   const explicitDnf = seat.status === "dnf" && Boolean(seat.statusOverridden);
   const seatRunOverridden = seat.status === "dq" || seat.status === "dns" || explicitDnf;
 
-  if (!seatRunOverridden && bestSplit < Infinity) {
+  if (!seatRunOverridden && countedLaps > 1 && bestSplit < Infinity) {
     for (const r of rows) {
       if (!r.isHoleshot && !r.isExtra && !r.crossing.invalidated && r.splitSec !== null) {
         if (Math.abs(r.splitSec - bestSplit) < 0.0006) {
@@ -247,10 +274,25 @@ function deriveCrossings(
     }
   }
 
-  return { rows, bestConsecSec, consecWindow };
+  const totalTimeSec =
+    countedLaps > 0
+      ? (heat.startMode === "heads_up" ? (holeshotSec ?? 0) : 0) +
+        runningLapSumSec +
+        (seat.penaltySec ?? 0)
+      : null;
+
+  return {
+    rows,
+    bestConsecSec,
+    consecWindow,
+    countedLaps,
+    bestLapSec: bestSplit < Infinity ? bestSplit : null,
+    holeshotSec,
+    totalTimeSec,
+  };
 }
 
-function computeTimeDomainMs(
+function computeFullTimeDomainMs(
   heat: RaceHeat,
   trace: HeatRssiSample[],
   rows: DerivedCrossingRow[]
@@ -266,6 +308,48 @@ function computeTimeDomainMs(
     if (r.offsetMs + 2500 > maxMs) maxMs = r.offsetMs + 2500;
   }
   return { minMs, maxMs: Math.max(minMs + 5000, maxMs) };
+}
+
+function computeVisibleTimeDomainMs(
+  heat: RaceHeat,
+  trace: HeatRssiSample[],
+  rows: DerivedCrossingRow[],
+  plotW: number
+): { minMs: number; maxMs: number } {
+  const fullDom = computeFullTimeDomainMs(heat, trace, rows);
+  const maxVisibleLaps = Math.max(1, Math.floor(plotW / 190));
+
+  if (rows.length === 0) {
+    const targetSpan = maxVisibleLaps * 12_000;
+    if (fullDom.maxMs - fullDom.minMs > targetSpan) {
+      return { minMs: fullDom.minMs, maxMs: fullDom.minMs + Math.max(8000, targetSpan) };
+    }
+    return fullDom;
+  }
+
+  if (rows.length === 1) {
+    const t0 = rows[0].offsetMs;
+    const lo = Math.min(-1200, t0 - 2500);
+    const hi = Math.max(lo + 6000, t0 + 4000);
+    return { minMs: lo, maxMs: hi };
+  }
+
+  const endIdx = Math.min(
+    rows.length - 1,
+    rows[0].isHoleshot ? maxVisibleLaps : maxVisibleLaps - 1
+  );
+  if (endIdx >= rows.length - 1) {
+    return fullDom;
+  }
+
+  const startMs = Math.min(-1200, rows[0].offsetMs - 1500);
+  const endCrossingMs = rows[endIdx].offsetMs;
+  const rawSpan = Math.max(4000, endCrossingMs - startMs);
+  const rightPad = Math.max(1600, Math.round(rawSpan * 0.16));
+  return {
+    minMs: Math.round(startMs),
+    maxMs: Math.round(endCrossingMs + rightPad),
+  };
 }
 
 function fmtOffsetSec(ms: number): string {
@@ -288,9 +372,28 @@ export function openHeatLapEditorModal(
   const defaultSfGateId =
     store.nodes.find((n) => n.role === "START_FINISH")?.gateId ?? store.nodes[0]?.gateId ?? 1;
   let selectedGateId = defaultSfGateId;
+  let selectedCrossingId: number | null = null;
   let addMode = false;
   let customX: { minMs: number; maxMs: number } | null = null;
   let customY: { minDbm: number; maxDbm: number } | null = null;
+  let panAnimFrame = 0;
+  let draftCrossings: HeatCrossing[] | null = null;
+  const draftThresholdsByGate = new Map<
+    number,
+    { enterDb: number; exitDb: number; hwMode: TimingHardwareMode }
+  >();
+  let nextDraftCrossingId = -1;
+  let isSaving = false;
+
+  const hasUnsavedChanges = (): boolean =>
+    draftCrossings !== null || draftThresholdsByGate.size > 0;
+
+  const ensureDraftCrossings = (heat: RaceHeat, seat: HeatSeat): HeatCrossing[] => {
+    if (!draftCrossings) {
+      draftCrossings = extractRawCrossings(heat, seat).map((c) => ({ ...c }));
+    }
+    return draftCrossings;
+  };
 
   let dragState: {
     crossingId: number;
@@ -316,7 +419,7 @@ export function openHeatLapEditorModal(
   let hoverInfo: { offsetMs: number; dbm: number | null } | null = null;
 
   const backdrop = document.createElement("div");
-  backdrop.className = "slaprf-modal-backdrop";
+  backdrop.className = "slaprf-modal-backdrop lap-editor-backdrop";
   backdrop.setAttribute("role", "dialog");
   backdrop.setAttribute("aria-modal", "true");
   backdrop.setAttribute("aria-label", "Lap Timings & RSSI Gate Crossing Editor");
@@ -375,16 +478,18 @@ export function openHeatLapEditorModal(
     seat: HeatSeat
   ): { enterDb: number; exitDb: number; hwMode: TimingHardwareMode } => {
     const hwMode = getSeatHardwareMode(heat, seat);
+    const drafted = draftThresholdsByGate.get(selectedGateId);
     const hasNode = Boolean(store.node(selectedGateId));
     const sfId = store.nodes.find((n) => n.role === "START_FINISH")?.gateId ?? store.nodes[0]?.gateId ?? 1;
     if (hwMode === "laprf") {
-      let thr =
-        hasNode && store.timingHardwareMode === "laprf"
+      let thr = drafted
+        ? drafted.enterDb
+        : hasNode && store.timingHardwareMode === "laprf"
           ? laprfThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm
           : seat.enterRssiDbm && seat.enterRssiDbm > 260
             ? seat.enterRssiDbm
             : 800;
-      if (selectedGateId === sfId && !hasNode && seat.enterRssiDbm && seat.enterRssiDbm > 260) {
+      if (!drafted && selectedGateId === sfId && !hasNode && seat.enterRssiDbm && seat.enterRssiDbm > 260) {
         thr = seat.enterRssiDbm;
       }
       if (threshDrag) {
@@ -395,7 +500,10 @@ export function openHeatLapEditorModal(
     if (isRotorHazardMode(hwMode)) {
       let enterVal: number;
       let exitVal: number;
-      if (hasNode && isRotorHazardMode(store.timingHardwareMode)) {
+      if (drafted) {
+        enterVal = drafted.enterDb;
+        exitVal = drafted.exitDb;
+      } else if (hasNode && isRotorHazardMode(store.timingHardwareMode)) {
         const pair = rhThresholdAt(store, selectedGateId, seat.pilotSlotIndex);
         enterVal = pair.enter;
         exitVal = pair.exit;
@@ -420,17 +528,19 @@ export function openHeatLapEditorModal(
       }
       return { enterDb: Math.round(enterVal), exitDb: Math.round(exitVal), hwMode };
     }
-    let enterDb =
-      hasNode && store.timingHardwareMode === "slaprf"
+    let enterDb = drafted
+      ? drafted.enterDb
+      : hasNode && store.timingHardwareMode === "slaprf"
         ? enterThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm
         : seat.enterRssiDbm && seat.enterRssiDbm < 0
           ? seat.enterRssiDbm
           : -58;
-    if (selectedGateId === sfId && !hasNode && seat.enterRssiDbm && seat.enterRssiDbm < 0) {
+    if (!drafted && selectedGateId === sfId && !hasNode && seat.enterRssiDbm && seat.enterRssiDbm < 0) {
       enterDb = seat.enterRssiDbm;
     }
-    let exitDb =
-      hasNode && store.timingHardwareMode === "slaprf"
+    let exitDb = drafted
+      ? drafted.exitDb
+      : hasNode && store.timingHardwareMode === "slaprf"
         ? exitThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm
         : seat.exitRssiDbm && seat.exitRssiDbm < 0
           ? seat.exitRssiDbm
@@ -448,11 +558,115 @@ export function openHeatLapEditorModal(
   };
 
   let svgW = DEFAULT_SVG_W;
-  const getPlotW = (): number => Math.max(320, svgW - PAD_L - PAD_R);
+  const getPlotW = (): number => Math.max(200, svgW - PAD_L - PAD_R);
 
   let lastDomain = { minMs: -1500, maxMs: 20_000 };
   let lastYDomain = { minDbm: DBM_MIN, maxDbm: DBM_MAX };
   let lastSeatHwMode: TimingHardwareMode = "slaprf";
+
+  const cancelPanAnim = (): void => {
+    if (panAnimFrame) {
+      cancelAnimationFrame(panAnimFrame);
+      panAnimFrame = 0;
+    }
+  };
+
+  const syncSelectedRowDom = (): void => {
+    backdrop.querySelectorAll<HTMLElement>("[data-lap-ed-row]").forEach((tr) => {
+      const cid = Number(tr.dataset.lapEdRow || "0");
+      tr.classList.toggle("is-selected", selectedCrossingId !== null && cid === selectedCrossingId);
+    });
+  };
+
+  const scrollCrossingIntoView = (crossingId: number): void => {
+    const { race, heat, seat } = getHeatAndSeat();
+    if (!heat || !seat) return;
+    const { rows } = deriveCrossings(heat, seat, race, draftCrossings);
+    const idx = rows.findIndex((r) => r.crossing.crossingId === crossingId);
+    if (idx < 0) return;
+
+    selectedCrossingId = crossingId;
+    syncSelectedRowDom();
+
+    const endMs = rows[idx].offsetMs;
+    let startMs = Math.min(0, endMs - 1500);
+    if (idx > 0) {
+      let prevRow = rows[idx - 1];
+      for (let j = idx - 1; j >= 0; j--) {
+        if (!rows[j].crossing.invalidated) {
+          prevRow = rows[j];
+          break;
+        }
+      }
+      startMs = prevRow.offsetMs;
+    }
+
+    const lapSpan = Math.max(2500, endMs - startMs);
+    const plotW = getPlotW();
+    const maxVisibleLaps = Math.max(1, Math.floor(plotW / 190));
+    const trace = seat.rssiTrace ?? [];
+    const fullDom = computeFullTimeDomainMs(heat, trace, rows);
+
+    let targetDom: { minMs: number; maxMs: number };
+    if (maxVisibleLaps === 1) {
+      const pad = Math.max(1400, Math.round(lapSpan * 0.18));
+      targetDom = clampXDomain(startMs - pad, endMs + pad);
+    } else {
+      const defaultVis = computeVisibleTimeDomainMs(heat, trace, rows, plotW);
+      const defaultSpan = Math.max(lapSpan * 1.45, defaultVis.maxMs - defaultVis.minMs);
+      const curSpan = customX
+        ? Math.max(lapSpan * 1.35, lastDomain.maxMs - lastDomain.minMs)
+        : defaultSpan;
+      const midMs = (startMs + endMs) / 2;
+      let lo = midMs - curSpan / 2;
+      let hi = midMs + curSpan / 2;
+      if (curSpan <= fullDom.maxMs - fullDom.minMs) {
+        if (lo < fullDom.minMs) {
+          lo = fullDom.minMs;
+          hi = lo + curSpan;
+        } else if (hi > fullDom.maxMs) {
+          hi = fullDom.maxMs;
+          lo = hi - curSpan;
+        }
+      }
+      targetDom = clampXDomain(lo, hi);
+    }
+
+    cancelPanAnim();
+    const wrap = backdrop.querySelector<HTMLElement>("[data-lap-ed-svg-wrap]");
+    const isLiveBrowser = Boolean(wrap && wrap.clientWidth > 120);
+    const fromMin = lastDomain.minMs;
+    const fromMax = lastDomain.maxMs;
+    if (
+      !isLiveBrowser ||
+      typeof requestAnimationFrame === "undefined" ||
+      (Math.abs(targetDom.minMs - fromMin) < 40 && Math.abs(targetDom.maxMs - fromMax) < 40)
+    ) {
+      customX = targetDom;
+      refreshSvgOnly();
+      return;
+    }
+
+    const startTime = performance.now();
+    const duration = 200;
+    const step = (now: number): void => {
+      const t = clamp((now - startTime) / duration, 0, 1);
+      const ease = 1 - Math.pow(1 - t, 3);
+      customX = {
+        minMs: Math.round(fromMin + (targetDom.minMs - fromMin) * ease),
+        maxMs: Math.round(fromMax + (targetDom.maxMs - fromMax) * ease),
+      };
+      refreshSvgOnly();
+      if (t < 1) {
+        panAnimFrame = requestAnimationFrame(step);
+      } else {
+        panAnimFrame = 0;
+        customX = targetDom;
+        refreshSvgOnly();
+      }
+    };
+    panAnimFrame = requestAnimationFrame(step);
+  };
 
   const activeYDomain = (hwMode: TimingHardwareMode): { minDbm: number; maxDbm: number } =>
     customY ??
@@ -561,7 +775,7 @@ export function openHeatLapEditorModal(
       lastSeatHwMode = hwMode;
       customY = null;
     }
-    const autoDom = computeTimeDomainMs(heat, trace, rows);
+    const autoDom = computeVisibleTimeDomainMs(heat, trace, rows, plotW);
     lastDomain = customX ?? autoDom;
     lastYDomain = activeYDomain(hwMode);
     const spanMs = Math.max(1, lastDomain.maxMs - lastDomain.minMs);
@@ -731,6 +945,7 @@ export function openHeatLapEditorModal(
             : r.offsetMs;
         const rawX = msToX(effMs);
         const isDragging = Boolean(dragState && dragState.crossingId === r.crossing.crossingId);
+        const isSelected = selectedCrossingId !== null && r.crossing.crossingId === selectedCrossingId;
         if (!isDragging && (rawX < PAD_L - 2 || rawX > svgW - PAD_R + 2)) {
           return "";
         }
@@ -743,6 +958,7 @@ export function openHeatLapEditorModal(
           !inv && r.isBestLap ? "is-best" : "",
           !inv && r.isBestConsec ? "is-best-consec" : "",
           r.crossing.manual ? "is-manual" : "",
+          isSelected ? "is-selected" : "",
           isDragging ? "is-dragging" : "",
           locked ? "is-locked" : "",
         ]
@@ -844,6 +1060,8 @@ export function openHeatLapEditorModal(
       selectedPilotSlot,
       selectedGateId,
       addMode ? 1 : 0,
+      hasUnsavedChanges() ? 1 : 0,
+      isSaving ? 1 : 0,
       enterDb,
       exitDb,
       hwMode,
@@ -887,8 +1105,7 @@ export function openHeatLapEditorModal(
     const savedBodyScrollTop = !resetScroll && prevBody ? prevBody.scrollTop : 0;
 
     const locked = heat.state === "confirmed";
-    const occupied = heat.seats.filter((s) => s.pilotSlotIndex > 0);
-    const summary = deriveCrossings(heat, seat, race);
+    const summary = deriveCrossings(heat, seat, race, draftCrossings);
     const { rows, bestConsecSec, consecWindow } = summary;
     const sigs = computeSigs(heat, seat, summary);
     lastTableSig = sigs.tableSig;
@@ -906,27 +1123,12 @@ export function openHeatLapEditorModal(
             .join("")}</div>`
         : "";
 
-    const pilotTabsHtml = occupied
-      .map((s) => {
-        const active = s.pilotSlotIndex === seat.pilotSlotIndex;
-        const ch = s.channel > 0 ? bandChannelShort(s.band, s.channel) : "—";
-        const target = heat.targetLaps > 0 ? `${s.lapsCompleted}/${heat.targetLaps}` : `${s.lapsCompleted}`;
-        return `
-          <button type="button" class="lap-ed-pilot-tab ${active ? "is-active" : ""}" data-lap-ed-pilot="${s.pilotSlotIndex}">
-            <span class="dot" style="background:${esc(s.color || "#38bdf8")}"></span>
-            <span class="lap-ed-pilot-text">
-              <span class="lap-ed-pilot-name">${esc(s.callsign)}</span>
-              <span class="lap-ed-pilot-meta mono">${esc(ch)} · ${target}</span>
-            </span>
-          </button>`;
-      })
-      .join("");
-
+    const effLapsCompleted = draftCrossings !== null ? summary.countedLaps : seat.lapsCompleted;
     const lapsTargetStr =
-      heat.targetLaps > 0 ? `${seat.lapsCompleted}/${heat.targetLaps}` : `${seat.lapsCompleted}`;
-    const bestVal = seat.bestLapSec ?? 0;
-    const hsVal = seat.holeshotSec ?? 0;
-    const totalVal = seat.totalTimeSec ?? 0;
+      heat.targetLaps > 0 ? `${effLapsCompleted}/${heat.targetLaps}` : `${effLapsCompleted}`;
+    const bestVal = draftCrossings !== null ? (summary.bestLapSec ?? 0) : (seat.bestLapSec ?? 0);
+    const hsVal = draftCrossings !== null ? (summary.holeshotSec ?? 0) : (seat.holeshotSec ?? 0);
+    const totalVal = draftCrossings !== null ? (summary.totalTimeSec ?? 0) : (seat.totalTimeSec ?? 0);
     const penVal = seat.penaltySec ?? 0;
     const bestStr = bestVal > 0 ? `${bestVal.toFixed(2)}s` : "—";
     const bestConsecStr = bestConsecSec !== null && bestConsecSec > 0 ? `${bestConsecSec.toFixed(2)}s` : "—";
@@ -945,63 +1147,84 @@ export function openHeatLapEditorModal(
         : rows
             .map((r) => {
               const inv = Boolean(r.crossing.invalidated);
+              const isSelectedRow =
+                selectedCrossingId !== null && r.crossing.crossingId === selectedCrossingId;
               const splitCell = inv
                 ? `<span class="muted">Ignored</span>`
                 : r.isHoleshot
-                  ? `<span class="lap-ed-num mono muted">${r.splitSec !== null ? `${r.splitSec.toFixed(2)}s` : "0.00s"} · Holeshot</span>`
+                  ? `<span class="lap-ed-num mono muted">${r.splitSec !== null ? `${r.splitSec.toFixed(2)}s` : "0.00s"}</span>`
                   : r.splitSec !== null
-                    ? `<span class="lap-ed-num mono ${r.isBestConsec ? "is-best-consec-time" : ""}">${r.splitSec.toFixed(2)}s</span>${r.isBestLap ? ` <span class="lap-ed-badge is-best">Best</span>` : ""}${r.isExtra ? ` <span class="lap-ed-badge">After finish</span>` : ""}`
+                    ? `${r.isBestLap ? "🔥 " : ""}<span class="lap-ed-num mono ${r.isBestConsec ? "is-best-consec-time" : ""} ${r.isExtra ? "muted" : ""}" ${r.isExtra ? 'title="Extra pass recorded after target laps completed"' : ""}>${r.splitSec.toFixed(2)}s</span>`
                     : "—";
               const rssiCell =
                 r.peakDbm !== null
-                  ? `<span class="lap-ed-num mono">${r.peakDbm}${hwMode === "slaprf" ? " dBm" : ""}</span>`
+                  ? `<span class="lap-ed-num mono">${r.peakDbm}<span class="lap-ed-rssi-unit">${hwMode === "slaprf" ? " dBm" : ""}</span></span>`
                   : `<span class="muted">—</span>`;
               const srcCell = r.crossing.manual
-                ? `<span class="lap-ed-badge is-manual">Manual</span>`
-                : `<span class="muted">RF Gate</span>`;
+                ? `<span class="muted">Manual</span>`
+                : `<span class="muted">Timer</span>`;
               return `
-                <tr class="${inv ? "is-invalid-row" : ""}">
-                  <td class="lap-ed-num mono">${esc(r.label)}</td>
-                  <td class="lap-ed-num mono">${fmtOffsetSec(r.offsetMs)}</td>
-                  <td>${splitCell}</td>
-                  <td>${rssiCell}</td>
-                  <td>${srcCell}</td>
-                  <td style="text-align:right; white-space:nowrap;">
-                    <button type="button" class="btn btn-ghost btn-xs" data-lap-ed-toggle="${r.crossing.crossingId}" ${locked ? "disabled" : ""}>
-                      ${inv ? "Restore" : "Cross Out"}
-                    </button>
-                    <button type="button" class="btn btn-ghost btn-xs lap-ed-del-btn" data-lap-ed-delete="${r.crossing.crossingId}" ${locked ? "disabled" : ""} title="Delete crossing">
-                      ${icons.trash(13)}
-                    </button>
+                <tr class="lap-ed-row ${inv ? "is-invalid-row" : ""} ${r.isExtra ? "is-extra-row" : ""} ${isSelectedRow ? "is-selected" : ""}" data-lap-ed-row="${r.crossing.crossingId}">
+                  <td class="lap-ed-num mono lap-ed-col-pass" ${r.isExtra ? 'title="Extra pass recorded after target laps completed"' : ""}>${esc(r.label)}</td>
+                  <td class="lap-ed-num mono lap-ed-col-gate">${fmtOffsetSec(r.offsetMs)}</td>
+                  <td class="lap-ed-col-split">${splitCell}</td>
+                  <td class="lap-ed-col-rssi">${rssiCell}</td>
+                  <td class="lap-ed-col-src">${srcCell}</td>
+                  <td class="lap-ed-col-act">
+                    ${
+                      r.isHoleshot
+                        ? `<span class="muted">—</span>`
+                        : `<button type="button" class="btn btn-ghost lap-ed-act-btn" data-lap-ed-toggle="${r.crossing.crossingId}" ${locked ? "disabled" : ""} title="${inv ? "Restore crossing" : "Cross out crossing"}" aria-label="${inv ? "Restore crossing" : "Cross out crossing"}">
+                            ${inv ? icons.reset(16) : icons.ban(16)}
+                          </button>
+                          <button type="button" class="btn btn-ghost lap-ed-act-btn lap-ed-del-btn" data-lap-ed-delete="${r.crossing.crossingId}" ${locked ? "disabled" : ""} title="Delete crossing" aria-label="Delete crossing">
+                            ${icons.trash(16)}
+                          </button>`
+                    }
                   </td>
                 </tr>`;
             })
             .join("");
 
     const hasCustomView = Boolean(customX || customY);
+    const isDirty = hasUnsavedChanges();
+    const heatAcronym = (() => {
+      if (heat.shortLabel && heat.shortLabel.trim()) {
+        return heat.shortLabel.trim();
+      }
+      const m = heat.title.match(/^([A-Za-z]+)\s*(\d+)\s*[·\-:]+\s*Heat\s*(\d+)/i);
+      if (m) {
+        return `${m[1][0].toUpperCase()}${m[2]}-${m[3]}`;
+      }
+      return heat.id || heat.title;
+    })();
 
     backdrop.innerHTML = `
       <div class="slaprf-modal card rc-modal-xl lap-editor-modal" role="document">
         <div class="slaprf-modal-head">
           <div class="slaprf-modal-title-row">
-            <span class="slaprf-modal-icon">${icons.checkeredFlag(16)}</span>
-            <h3>${esc(heat.title)} · RSSI &amp; Lap Timings</h3>
+            <h3>
+              <span class="lap-ed-title-pilot">
+                <span class="dot" style="background:${esc(seat.color || "#38bdf8")}"></span>
+                <span>${esc(seat.callsign)}</span>
+              </span>
+              <span class="lap-ed-title-sep">-</span>
+              <span>${esc(heatAcronym)} Review</span>
+            </h3>
           </div>
-          <button type="button" class="btn btn-ghost btn-xs" data-lap-ed-close aria-label="Close">
+          <button type="button" class="btn btn-ghost btn-xs lap-ed-desktop-close-btn" data-lap-ed-close aria-label="Close">
             ${icons.close(15)}
           </button>
         </div>
         <div class="slaprf-modal-body lap-ed-body">
-          <div class="lap-ed-pilot-bar">${pilotTabsHtml}</div>
-
           <div class="lap-ed-metrics-strip">
-            <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">Channel</span><span class="lap-ed-metric-val mono">${esc(chLabel)} · ${seat.frequencyMhz || "—"} MHz</span></div>
+            <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">Channel</span><span class="lap-ed-metric-val mono">${esc(chLabel)}<span class="lap-ed-lbl-full"> · ${seat.frequencyMhz || "—"} MHz</span></span></div>
             <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">Laps</span><span class="lap-ed-metric-val mono">${lapsTargetStr}</span></div>
-            <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">Best ${consecWindow}-Lap</span><span class="lap-ed-metric-val mono">${bestConsecStr}</span></div>
+            <div class="lap-ed-metric"><span class="lap-ed-metric-lbl"><span class="lap-ed-lbl-full">Best ${consecWindow}-Lap</span><span class="lap-ed-lbl-short">Best ${consecWindow}C</span></span><span class="lap-ed-metric-val mono">${bestConsecStr}</span></div>
             <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">Best Lap</span><span class="lap-ed-metric-val mono">${bestStr}</span></div>
             <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">Holeshot</span><span class="lap-ed-metric-val mono">${hsStr}</span></div>
-            <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">Total Time</span><span class="lap-ed-metric-val mono">${totalStr}</span></div>
-            <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">${hwMode === "laprf" ? "Threshold" : "Enter / Exit"}</span><span class="lap-ed-metric-val mono">${hwMode === "laprf" ? `${enterDb}` : isRotorHazardMode(hwMode) ? `${enterDb} / ${exitDb}` : `${enterDb} / ${exitDb} dBm`}</span></div>
+            <div class="lap-ed-metric"><span class="lap-ed-metric-lbl"><span class="lap-ed-lbl-full">Total Time</span><span class="lap-ed-lbl-short">Total</span></span><span class="lap-ed-metric-val mono">${totalStr}</span></div>
+            <div class="lap-ed-metric is-thresh-metric"><span class="lap-ed-metric-lbl">${hwMode === "laprf" ? "Threshold" : "Enter / Exit"}</span><span class="lap-ed-metric-val mono">${hwMode === "laprf" ? `${enterDb}` : isRotorHazardMode(hwMode) ? `${enterDb} / ${exitDb}` : `${enterDb} / ${exitDb} dBm`}</span></div>
           </div>
 
           ${
@@ -1041,24 +1264,30 @@ export function openHeatLapEditorModal(
             <table class="table rc-compact-table lap-ed-table">
               <thead>
                 <tr>
-                  <th style="width:72px">Pass</th>
-                  <th style="width:104px">Gate Time</th>
-                  <th>Lap Split</th>
-                  <th style="width:104px">Peak RSSI</th>
-                  <th style="width:96px">Source</th>
-                  <th style="width:154px; text-align:right">Actions</th>
+                  <th class="lap-ed-col-pass">Pass</th>
+                  <th class="lap-ed-col-gate"><span class="lap-ed-lbl-full">Gate Time</span><span class="lap-ed-lbl-short">Gate</span></th>
+                  <th class="lap-ed-col-split"><span class="lap-ed-lbl-full">Lap Split</span><span class="lap-ed-lbl-short">Split</span></th>
+                  <th class="lap-ed-col-rssi"><span class="lap-ed-lbl-full">Peak RSSI</span><span class="lap-ed-lbl-short">RSSI</span></th>
+                  <th class="lap-ed-col-src">Source</th>
+                  <th class="lap-ed-col-act" aria-label="Actions"><span class="lap-ed-lbl-full">Actions</span></th>
                 </tr>
               </thead>
               <tbody>${tableRowsHtml}</tbody>
             </table>
           </div>
         </div>
-        <div class="slaprf-modal-foot">
-          <span class="lap-ed-foot-note">All split times and heat standings recalculate automatically.</span>
-          <button type="button" class="btn btn-armed" data-lap-ed-close>
-            ${icons.check(15)}<span>Done</span>
-          </button>
-        </div>
+        ${
+          !locked
+            ? `<div class="slaprf-modal-foot lap-ed-save-foot">
+                <button type="button" class="btn" data-lap-ed-discard ${isDirty && !isSaving ? "" : "disabled"}>
+                  ${icons.close(15)}<span>Discard Changes</span>
+                </button>
+                <button type="button" class="btn btn-armed" data-lap-ed-save ${isDirty && !isSaving ? "" : "disabled"}>
+                  ${icons.check(15)}<span>${isSaving ? "Saving…" : "Save Changes"}</span>
+                </button>
+              </div>`
+            : ""
+        }
       </div>
     `;
 
@@ -1080,7 +1309,7 @@ export function openHeatLapEditorModal(
     if (wrap.clientWidth > 120) {
       svgW = Math.round(wrap.clientWidth);
     }
-    const summary = deriveCrossings(heat, seat, race);
+    const summary = deriveCrossings(heat, seat, race, draftCrossings);
     lastTraceSig = computeSigs(heat, seat, summary).traceSig;
     wrap.innerHTML = renderGraphSvg(heat, seat, summary.rows);
     syncResetViewBtn();
@@ -1093,6 +1322,236 @@ export function openHeatLapEditorModal(
       await api.raceMarshal(effective);
     } catch (err) {
       showToast(err instanceof Error ? err.message : String(err), "error");
+    }
+  };
+
+  const stageAddCrossing = (offsetMs: number): void => {
+    const { heat, seat } = getHeatAndSeat();
+    if (!heat || !seat) return;
+    const draft = ensureDraftCrossings(heat, seat);
+    const anchorUs = getAnchorUs(heat, seat, draft.length > 0 ? draft : extractRawCrossings(heat, seat));
+    const peak = sampleTraceAtMs(seat.rssiTrace ?? [], offsetMs);
+    draft.push({
+      crossingId: nextDraftCrossingId--,
+      timestampUs: Math.max(1000, anchorUs + offsetMs * 1000),
+      peakRssiDbm: peak !== null ? peak : undefined,
+      manual: true,
+    });
+    draft.sort((a, b) => a.timestampUs - b.timestampUs);
+    renderModal(false);
+  };
+
+  const stageMoveCrossing = (crossingId: number, offsetMs: number): void => {
+    const { heat, seat } = getHeatAndSeat();
+    if (!heat || !seat) return;
+    const draft = ensureDraftCrossings(heat, seat);
+    const anchorUs = getAnchorUs(heat, seat, draft);
+    const target = draft.find((c) => c.crossingId === crossingId);
+    if (!target) return;
+    target.timestampUs = Math.max(1000, anchorUs + offsetMs * 1000);
+    const peak = sampleTraceAtMs(seat.rssiTrace ?? [], offsetMs);
+    if (peak !== null) {
+      target.peakRssiDbm = peak;
+    }
+    target.manual = true;
+    draft.sort((a, b) => a.timestampUs - b.timestampUs);
+    renderModal(false);
+  };
+
+  const stageToggleCrossing = (crossingId: number): void => {
+    const { heat, seat } = getHeatAndSeat();
+    if (!heat || !seat) return;
+    const draft = ensureDraftCrossings(heat, seat);
+    const idx = draft.findIndex((c) => c.crossingId === crossingId);
+    if (idx <= 0) return;
+    draft[idx].invalidated = !draft[idx].invalidated;
+    renderModal(false);
+  };
+
+  const stageDeleteCrossing = (crossingId: number): void => {
+    const { heat, seat } = getHeatAndSeat();
+    if (!heat || !seat) return;
+    const draft = ensureDraftCrossings(heat, seat);
+    const idx = draft.findIndex((c) => c.crossingId === crossingId);
+    if (idx <= 0) return;
+    draft.splice(idx, 1);
+    if (selectedCrossingId === crossingId) {
+      selectedCrossingId = null;
+    }
+    renderModal(false);
+  };
+
+  const stageAppendLap = (): void => {
+    const { heat, seat } = getHeatAndSeat();
+    if (!heat || !seat) return;
+    const draft = ensureDraftCrossings(heat, seat);
+    const anchorUs = getAnchorUs(heat, seat, draft);
+    if (draft.length === 0) {
+      const hsUs = anchorUs + 800_000;
+      draft.push(
+        {
+          crossingId: nextDraftCrossingId--,
+          timestampUs: hsUs,
+          manual: true,
+        },
+        {
+          crossingId: nextDraftCrossingId--,
+          timestampUs: hsUs + 12_000_000,
+          manual: true,
+        }
+      );
+    } else {
+      const lastUs = draft[draft.length - 1].timestampUs;
+      draft.push({
+        crossingId: nextDraftCrossingId--,
+        timestampUs: lastUs + 12_000_000,
+        manual: true,
+      });
+    }
+    renderModal(false);
+  };
+
+  const discardDraftChanges = (): void => {
+    draftCrossings = null;
+    draftThresholdsByGate.clear();
+    addMode = false;
+    renderModal(false);
+  };
+
+  const saveDraftChanges = async (): Promise<void> => {
+    if (isSaving || !hasUnsavedChanges()) return;
+    const { race, heat, seat } = getHeatAndSeat();
+    if (!heat || !seat) return;
+    isSaving = true;
+    renderModal(false);
+    try {
+      const origRaw = extractRawCrossings(heat, seat);
+      const anchorUs = getAnchorUs(heat, seat, origRaw);
+      const currentDraft = draftCrossings;
+      const currentThresh = Array.from(draftThresholdsByGate.entries());
+      draftCrossings = null;
+      draftThresholdsByGate.clear();
+
+      if (currentDraft !== null) {
+        const draftById = new Map<number, HeatCrossing>();
+        for (const c of currentDraft) {
+          draftById.set(c.crossingId, c);
+        }
+
+        // 1. Delete removed original crossings
+        for (const orig of origRaw) {
+          if (!draftById.has(orig.crossingId)) {
+            await runMarshal({
+              raceId: race?.raceId,
+              heatId: heat.id,
+              pilotSlotIndex: seat.pilotSlotIndex,
+              action: "delete_crossing",
+              crossingId: orig.crossingId,
+            });
+          }
+        }
+
+        // 2. Move or toggle existing original crossings
+        for (const orig of origRaw) {
+          const updated = draftById.get(orig.crossingId);
+          if (!updated) continue;
+          const origMs = Math.round((orig.timestampUs - anchorUs) / 1000);
+          const nextMs = Math.round((updated.timestampUs - anchorUs) / 1000);
+          if (origMs !== nextMs) {
+            await runMarshal({
+              raceId: race?.raceId,
+              heatId: heat.id,
+              pilotSlotIndex: seat.pilotSlotIndex,
+              action: "move_crossing",
+              crossingId: orig.crossingId,
+              offsetMs: nextMs,
+            });
+          }
+          if (Boolean(orig.invalidated) !== Boolean(updated.invalidated)) {
+            await runMarshal({
+              raceId: race?.raceId,
+              heatId: heat.id,
+              pilotSlotIndex: seat.pilotSlotIndex,
+              action: "toggle_lap",
+              crossingId: orig.crossingId,
+            });
+          }
+        }
+
+        // 3. Add newly created crossings
+        const origIds = new Set(origRaw.map((c) => c.crossingId));
+        for (const added of currentDraft) {
+          if (origIds.has(added.crossingId)) continue;
+          const nextMs = Math.round((added.timestampUs - anchorUs) / 1000);
+          await runMarshal({
+            raceId: race?.raceId,
+            heatId: heat.id,
+            pilotSlotIndex: seat.pilotSlotIndex,
+            action: "add_crossing",
+            offsetMs: nextMs,
+          });
+          if (added.invalidated) {
+            const latest = getHeatAndSeat();
+            const latestRaw =
+              latest.heat && latest.seat ? extractRawCrossings(latest.heat, latest.seat) : [];
+            const latestAnchor =
+              latest.heat && latest.seat ? getAnchorUs(latest.heat, latest.seat, latestRaw) : anchorUs;
+            const matched = latestRaw.find(
+              (c) =>
+                !origIds.has(c.crossingId) &&
+                Math.abs(Math.round((c.timestampUs - latestAnchor) / 1000) - nextMs) <= 5
+            );
+            if (matched) {
+              await runMarshal({
+                raceId: race?.raceId,
+                heatId: heat.id,
+                pilotSlotIndex: seat.pilotSlotIndex,
+                action: "toggle_lap",
+                crossingId: matched.crossingId,
+              });
+            }
+          }
+        }
+      }
+
+      // 4. Commit any staged threshold changes
+      for (const [gateId, thr] of currentThresh) {
+        if (!store.node(gateId)) continue;
+        if (thr.hwMode === "laprf") {
+          await api.setGateThresholds([
+            {
+              gateId,
+              slotIndex: seat.pilotSlotIndex,
+              enterDbm: 0,
+              laprfThreshold: clamp(thr.enterDb, 300, 3500),
+            },
+          ]);
+        } else if (isRotorHazardMode(thr.hwMode)) {
+          await api.setGateThresholds([
+            {
+              gateId,
+              slotIndex: seat.pilotSlotIndex,
+              enterDbm: 0,
+              rhEnterThreshold: thr.enterDb,
+              rhExitThreshold: thr.exitDb,
+            },
+          ]);
+        } else {
+          await api.setGateThresholds([
+            {
+              gateId,
+              slotIndex: seat.pilotSlotIndex,
+              enterDbm: thr.enterDb,
+              exitDbm: thr.exitDb,
+            },
+          ]);
+        }
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : String(err), "error");
+    } finally {
+      isSaving = false;
+      renderModal(false);
     }
   };
 
@@ -1181,24 +1640,35 @@ export function openHeatLapEditorModal(
       return;
     }
 
-    // 3. Crossing pin drag (when unlocked)
+    // 3. Crossing pin drag (when unlocked) or pin select
     const pin = target.closest<SVGGElement>("[data-crossing-pin]");
-    if (!locked && pin && !addMode) {
-      e.preventDefault();
+    if (pin && !addMode) {
+      cancelPanAnim();
       const cid = Number(pin.getAttribute("data-crossing-pin") || "0");
-      const { rows } = deriveCrossings(heat, seat, race);
-      const row = rows.find((r) => r.crossing.crossingId === cid);
-      if (!row) return;
-      dragState = {
-        crossingId: cid,
-        pointerId: e.pointerId,
-        currentOffsetMs: row.offsetMs,
-      };
-      hoverInfo = null;
-      try {
-        backdrop.setPointerCapture(e.pointerId);
-      } catch {
-        // Ignore capture failure
+      if (cid > 0) {
+        selectedCrossingId = cid;
+        syncSelectedRowDom();
+        const rowEl = backdrop.querySelector<HTMLElement>(`[data-lap-ed-row="${cid}"]`);
+        rowEl?.scrollIntoView?.({ block: "nearest" });
+      }
+      if (!locked) {
+        e.preventDefault();
+        const { rows } = deriveCrossings(heat, seat, race, draftCrossings);
+        const row = rows.find((r) => r.crossing.crossingId === cid);
+        if (!row) return;
+        dragState = {
+          crossingId: cid,
+          pointerId: e.pointerId,
+          currentOffsetMs: row.offsetMs,
+        };
+        hoverInfo = null;
+        try {
+          backdrop.setPointerCapture(e.pointerId);
+        } catch {
+          // Ignore capture failure
+        }
+        refreshSvgOnly();
+        return;
       }
       refreshSvgOnly();
       return;
@@ -1210,18 +1680,14 @@ export function openHeatLapEditorModal(
       const offsetMs = clientXToMs(svg, e.clientX);
       addMode = false;
       hoverInfo = null;
-      void runMarshal({
-        heatId: heat.id,
-        pilotSlotIndex: seat.pilotSlotIndex,
-        action: "add_crossing",
-        offsetMs,
-      });
+      stageAddCrossing(offsetMs);
       return;
     }
 
     // 5. Empty plot area drag -> Pan X & Y smoothly
     if (svgX >= PAD_L && svgX <= svgW - PAD_R && svgY >= PAD_T && svgY <= SVG_H - PAD_B) {
       e.preventDefault();
+      cancelPanAnim();
       viewDrag = {
         mode: "pan",
         pointerId: e.pointerId,
@@ -1295,19 +1761,28 @@ export function openHeatLapEditorModal(
     if (threshDrag) {
       const rawDbm = clientYToDbm(svg, e.clientY);
       const hwMode = getSeatHardwareMode(heat, seat);
+      const drafted = draftThresholdsByGate.get(selectedGateId);
       if (hwMode === "laprf") {
         threshDrag.currentDbm = clamp(rawDbm, 300, 3500);
       } else if (isRotorHazardMode(hwMode)) {
-        const savedEnter = enterThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm;
-        const savedExit = exitThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm;
+        const savedEnter = drafted
+          ? drafted.enterDb
+          : enterThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm;
+        const savedExit = drafted
+          ? drafted.exitDb
+          : exitThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm;
         if (threshDrag.kind === "enter") {
           threshDrag.currentDbm = clamp(rawDbm, Math.max(10, savedExit + 4), 250);
         } else {
           threshDrag.currentDbm = clamp(rawDbm, 6, savedEnter - 4);
         }
       } else {
-        const savedEnter = enterThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm;
-        const savedExit = exitThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm;
+        const savedEnter = drafted
+          ? drafted.enterDb
+          : enterThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm;
+        const savedExit = drafted
+          ? drafted.exitDb
+          : exitThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm;
         if (threshDrag.kind === "enter") {
           threshDrag.currentDbm = clamp(rawDbm, Math.max(DBM_ABS_MIN + 2, savedExit + 2), DBM_ABS_MAX);
         } else {
@@ -1363,61 +1838,44 @@ export function openHeatLapEditorModal(
       }
       const { heat, seat } = getHeatAndSeat();
       if (!heat || !seat || !store.node(selectedGateId)) return;
-      const hwMode = getSeatHardwareMode(heat, seat);
-      if (hwMode === "laprf") {
-        void api
-          .setGateThresholds([
-            {
-              gateId: selectedGateId,
-              slotIndex: seat.pilotSlotIndex,
-              enterDbm: 0,
-              laprfThreshold: clamp(finishedThresh.currentDbm, 300, 3500),
-            },
-          ])
-          .catch((err) => showToast(err instanceof Error ? err.message : String(err), "error"));
-        return;
-      }
-      if (isRotorHazardMode(hwMode)) {
-        const curEnter = enterThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm;
-        const curExit = exitThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm;
+      const cur = getGateThresholds(heat, seat);
+      if (cur.hwMode === "laprf") {
+        const thr = clamp(Math.round(finishedThresh.currentDbm), 300, 3500);
+        draftThresholdsByGate.set(selectedGateId, {
+          enterDb: thr,
+          exitDb: thr,
+          hwMode: "laprf",
+        });
+      } else if (isRotorHazardMode(cur.hwMode)) {
         const rhEnterThreshold =
           finishedThresh.kind === "enter"
-            ? clamp(Math.round(finishedThresh.currentDbm), Math.max(10, Math.round(curExit) + 4), 250)
-            : clamp(Math.round(curEnter), 10, 250);
+            ? clamp(Math.round(finishedThresh.currentDbm), Math.max(10, Math.round(cur.exitDb) + 4), 250)
+            : clamp(Math.round(cur.enterDb), 10, 250);
         const rhExitThreshold =
           finishedThresh.kind === "exit"
             ? clamp(Math.round(finishedThresh.currentDbm), 6, rhEnterThreshold - 4)
-            : clamp(Math.round(curExit), 6, rhEnterThreshold - 4);
-        void api
-          .setGateThresholds([
-            {
-              gateId: selectedGateId,
-              slotIndex: seat.pilotSlotIndex,
-              enterDbm: 0,
-              rhEnterThreshold,
-              rhExitThreshold,
-            },
-          ])
-          .catch((err) => showToast(err instanceof Error ? err.message : String(err), "error"));
-        return;
+            : clamp(Math.round(cur.exitDb), 6, rhEnterThreshold - 4);
+        draftThresholdsByGate.set(selectedGateId, {
+          enterDb: rhEnterThreshold,
+          exitDb: rhExitThreshold,
+          hwMode: cur.hwMode,
+        });
+      } else {
+        const enterDbm = Math.round(
+          finishedThresh.kind === "enter" ? finishedThresh.currentDbm : cur.enterDb
+        );
+        const exitDbm = Math.round(
+          finishedThresh.kind === "exit"
+            ? Math.min(enterDbm - 2, finishedThresh.currentDbm)
+            : Math.min(enterDbm - 2, cur.exitDb)
+        );
+        draftThresholdsByGate.set(selectedGateId, {
+          enterDb: enterDbm,
+          exitDb: exitDbm,
+          hwMode: "slaprf",
+        });
       }
-      const curEnter = enterThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm;
-      const curExit = exitThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm;
-      const enterDbm = finishedThresh.kind === "enter" ? finishedThresh.currentDbm : curEnter;
-      const exitDbm =
-        finishedThresh.kind === "exit"
-          ? Math.min(enterDbm - 2, finishedThresh.currentDbm)
-          : Math.min(enterDbm - 2, curExit);
-      void api
-        .setGateThresholds([
-          {
-            gateId: selectedGateId,
-            slotIndex: seat.pilotSlotIndex,
-            enterDbm,
-            exitDbm,
-          },
-        ])
-        .catch((err) => showToast(err instanceof Error ? err.message : String(err), "error"));
+      renderModal(false);
       return;
     }
 
@@ -1429,15 +1887,7 @@ export function openHeatLapEditorModal(
     } catch {
       // Ignore
     }
-    const { heat, seat } = getHeatAndSeat();
-    if (!heat || !seat) return;
-    void runMarshal({
-      heatId: heat.id,
-      pilotSlotIndex: seat.pilotSlotIndex,
-      action: "move_crossing",
-      crossingId: finished.crossingId,
-      offsetMs: finished.currentOffsetMs,
-    });
+    stageMoveCrossing(finished.crossingId, finished.currentOffsetMs);
   };
 
   const onWheel = (e: WheelEvent): void => {
@@ -1512,12 +1962,7 @@ export function openHeatLapEditorModal(
     }
     e.preventDefault();
     const offsetMs = clientXToMs(svg, e.clientX);
-    void runMarshal({
-      heatId: heat.id,
-      pilotSlotIndex: seat.pilotSlotIndex,
-      action: "add_crossing",
-      offsetMs,
-    });
+    stageAddCrossing(offsetMs);
   };
 
   const onClick = (e: MouseEvent): void => {
@@ -1527,8 +1972,19 @@ export function openHeatLapEditorModal(
       close();
       return;
     }
+    const discardBtn = target.closest<HTMLElement>("[data-lap-ed-discard]");
+    if (discardBtn) {
+      discardDraftChanges();
+      return;
+    }
+    const saveBtn = target.closest<HTMLElement>("[data-lap-ed-save]");
+    if (saveBtn) {
+      void saveDraftChanges();
+      return;
+    }
     const resetViewBtn = target.closest<HTMLElement>("[data-lap-ed-reset-view]");
     if (resetViewBtn) {
+      cancelPanAnim();
       customX = null;
       customY = null;
       refreshSvgOnly();
@@ -1541,16 +1997,6 @@ export function openHeatLapEditorModal(
         selectedGateId = nextGid;
         renderModal();
       }
-      return;
-    }
-    const pilotBtn = target.closest<HTMLElement>("[data-lap-ed-pilot]");
-    if (pilotBtn) {
-      selectedPilotSlot = Number(pilotBtn.dataset.lapEdPilot || "0");
-      addMode = false;
-      customX = null;
-      customY = null;
-      hoverInfo = null;
-      renderModal(true);
       return;
     }
     const addModeBtn = target.closest<HTMLElement>("[data-lap-ed-add-mode]");
@@ -1574,11 +2020,7 @@ export function openHeatLapEditorModal(
       const { heat, seat } = getHeatAndSeat();
       const locked = heat ? heat.state === "confirmed" : true;
       if (heat && seat && !locked) {
-        void runMarshal({
-          heatId: heat.id,
-          pilotSlotIndex: seat.pilotSlotIndex,
-          action: "add_lap",
-        });
+        stageAppendLap();
       }
       return;
     }
@@ -1586,13 +2028,8 @@ export function openHeatLapEditorModal(
     if (toggleBtn) {
       const { heat, seat } = getHeatAndSeat();
       const cid = Number(toggleBtn.dataset.lapEdToggle || "0");
-      if (heat && seat && cid > 0) {
-        void runMarshal({
-          heatId: heat.id,
-          pilotSlotIndex: seat.pilotSlotIndex,
-          action: "toggle_lap",
-          crossingId: cid,
-        });
+      if (heat && seat && cid !== 0) {
+        stageToggleCrossing(cid);
       }
       return;
     }
@@ -1600,13 +2037,16 @@ export function openHeatLapEditorModal(
     if (delBtn) {
       const { heat, seat } = getHeatAndSeat();
       const cid = Number(delBtn.dataset.lapEdDelete || "0");
-      if (heat && seat && cid > 0) {
-        void runMarshal({
-          heatId: heat.id,
-          pilotSlotIndex: seat.pilotSlotIndex,
-          action: "delete_crossing",
-          crossingId: cid,
-        });
+      if (heat && seat && cid !== 0) {
+        stageDeleteCrossing(cid);
+      }
+      return;
+    }
+    const rowEl = target.closest<HTMLElement>("[data-lap-ed-row]");
+    if (rowEl) {
+      const cid = Number(rowEl.dataset.lapEdRow || "0");
+      if (cid !== 0) {
+        scrollCrossingIntoView(cid);
       }
     }
   };
@@ -1623,6 +2063,23 @@ export function openHeatLapEditorModal(
     }
   };
 
+  const onTopBarBackCapture = (e: MouseEvent): void => {
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    const backBtn = target.closest<HTMLElement>(
+      ".topbar-back-btn, [data-action='races-back'], [data-action='practice-back']"
+    );
+    if (backBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      close();
+    }
+  };
+
+  const onHashChange = (): void => {
+    close();
+  };
+
   const unsub = store.subscribe(["race", "config"], () => {
     if (dragState || threshDrag || viewDrag) {
       return;
@@ -1632,7 +2089,7 @@ export function openHeatLapEditorModal(
       close();
       return;
     }
-    const summary = deriveCrossings(heat, seat, race);
+    const summary = deriveCrossings(heat, seat, race, draftCrossings);
     const nextSigs = computeSigs(heat, seat, summary);
     if (nextSigs.tableSig !== lastTableSig) {
       renderModal(false);
@@ -1642,12 +2099,29 @@ export function openHeatLapEditorModal(
   });
 
   let resizeObserver: ResizeObserver | null = null;
+  const topbarEl = document.querySelector<HTMLElement>(".topbar");
+  const appEl = document.querySelector<HTMLElement>(".app");
+  const hadSubpageBack = Boolean(topbarEl?.classList.contains("has-subpage-back"));
+  const hadMobileSubpage = Boolean(appEl?.classList.contains("is-mobile-subpage"));
+  topbarEl?.classList.remove("is-mobile-collapsed");
+  appEl?.classList.remove("is-mobile-topbar-collapsed");
+  topbarEl?.classList.add("has-subpage-back");
+  appEl?.classList.add("is-mobile-subpage");
 
   function close(): void {
+    cancelPanAnim();
     unsub();
     resizeObserver?.disconnect();
     resizeObserver = null;
+    if (!hadSubpageBack) {
+      topbarEl?.classList.remove("has-subpage-back");
+    }
+    if (!hadMobileSubpage) {
+      appEl?.classList.remove("is-mobile-subpage");
+    }
     window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("click", onTopBarBackCapture, true);
+    window.removeEventListener("hashchange", onHashChange);
     backdrop.removeEventListener("pointerdown", onPointerDown);
     backdrop.removeEventListener("pointermove", onPointerMove);
     backdrop.removeEventListener("pointerup", onPointerUp);
@@ -1672,6 +2146,8 @@ export function openHeatLapEditorModal(
   backdrop.addEventListener("dblclick", onDblClick);
   backdrop.addEventListener("click", onClick);
   window.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("click", onTopBarBackCapture, true);
+  window.addEventListener("hashchange", onHashChange);
   document.body.appendChild(backdrop);
   renderModal();
   const mountedWrap = backdrop.querySelector<HTMLElement>("[data-lap-ed-svg-wrap]");

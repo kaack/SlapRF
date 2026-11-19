@@ -10,11 +10,7 @@ export class PilotsView extends Component {
 
     el.innerHTML = `
       <div class="settings">
-        <section class="settings-section">
-          <div class="settings-intro">
-            <h2>Pilots</h2>
-            <p>Master directory of known pilots, phonetic callouts, default 5.8 GHz channels, and RF calibration thresholds (up to 32 pilots). Assign pilots to <a class="inline-link" href="#/live">Practice</a> sessions or <a class="inline-link" href="#/races">Races</a>.</p>
-          </div>
+        <section class="settings-section is-single-col">
           <div class="card card-flush" data-slot="pilots"></div>
         </section>
       </div>`;

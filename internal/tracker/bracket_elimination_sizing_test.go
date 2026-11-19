@@ -208,7 +208,7 @@ func TestDynamicQualifyingRoundsAndOpenQualifierMaxHeatsPerPilot(t *testing.T) {
 	countQualRounds := func(s domain.RaceTournamentState) int {
 		n := 0
 		for _, r := range s.Rounds {
-			if r.StageIndex == 1 && !domain.IsStagePortalRoundID(r.ID) {
+			if r.StageIndex == 1 && r.StageFormat == domain.FormatQualifying && !domain.IsStagePortalRoundID(r.ID) {
 				n++
 			}
 		}
@@ -217,10 +217,10 @@ func TestDynamicQualifyingRoundsAndOpenQualifierMaxHeatsPerPilot(t *testing.T) {
 	assertOneHeatPerPilotPerRound := func(s domain.RaceTournamentState, wantRounds int) {
 		t.Helper()
 		if got := countQualRounds(s); got != wantRounds {
-			t.Fatalf("expected %d Stage 1 qualifying rounds, got %d", wantRounds, got)
+			t.Fatalf("expected %d qualifying rounds, got %d", wantRounds, got)
 		}
 		for _, r := range s.Rounds {
-			if r.StageIndex != 1 || domain.IsStagePortalRoundID(r.ID) {
+			if r.StageIndex != 1 || r.StageFormat != domain.FormatQualifying || domain.IsStagePortalRoundID(r.ID) {
 				continue
 			}
 			perPilot := map[int]int{}
@@ -287,12 +287,12 @@ func TestDynamicQualifyingRoundsAndOpenQualifierMaxHeatsPerPilot(t *testing.T) {
 
 	hasQualFeed := false
 	for _, c := range st.Connections {
-		if c.StageIndex == 1 && c.Mode == "qual_feed" && !c.Invalid {
+		if c.StageIndex == 1 && c.Mode == "standings_top" && c.FromRoundID != "" && !c.Invalid {
 			hasQualFeed = true
 		}
 	}
 	if !hasQualFeed {
-		t.Fatalf("expected valid qual_feed wire into Stage 1 handoff portal after resizing rounds")
+		t.Fatalf("expected valid standings_top wire from final qualifying round into bracket after resizing rounds")
 	}
 
 	// 2. Open Qualifier: queue 3 rounds of packs with unlimited, then cap MaxPacksPerPilot = 2 -> trims excess queued seats!
@@ -445,7 +445,7 @@ func TestDynamicStageClassificationFromRoundContents(t *testing.T) {
 
 	st, err := e.BracketEditAction(BracketEditPayload{
 		Action:     "apply_template",
-		TemplateID: "qual_double_elim",
+		TemplateID: "round_robin",
 	})
 	if err != nil {
 		t.Fatalf("apply_template qual_double_elim failed: %v", err)

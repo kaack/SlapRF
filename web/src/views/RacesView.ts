@@ -1,6 +1,7 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
+import { fitScheduleLineups, scanTableScrollIndicators } from "../core/table_scroll";
 import { adaptColorForTheme } from "../core/theme";
 import {
   decodeBandChannel,
@@ -23,7 +24,11 @@ import {
   slugifyRaceName,
 } from "../core/router";
 import { ApiClient } from "../services/api_client";
-import { Announcer, isQualifierStageFormat } from "../services/announcer";
+import {
+  Announcer,
+  isQualifierStageFormat,
+  resolveHeatStageFormat,
+} from "../services/announcer";
 import { sharedMultiGPService } from "../services/multigp_service";
 import { AppStore } from "../state/store";
 import {
@@ -117,8 +122,31 @@ import {
   openWireDropMenu,
   WireDropOption,
 } from "../widgets/WireDropMenu";
+import {
+  closeActiveDesktopTableModal,
+  createDefaultDesktopRaceTableState,
+  DesktopRaceTableCallbacks,
+  DesktopRaceTableUiState,
+  handleDesktopRaceTableChange,
+  handleDesktopRaceTableClick,
+  renderDesktopRaceTableEditorHtml,
+  renderSetupRaceSubRibbonHtml,
+  syncDesktopTableAfterRender,
+} from "../widgets/DesktopRaceTableEditor";
+import {
+  closeActiveMobileEditorSheet,
+  createDefaultMobileRaceEditorState,
+  handleMobileRaceEditorChange,
+  handleMobileRaceEditorClick,
+  MobileRaceEditorCallbacks,
+  MobileRaceEditorUiState,
+  renderMobileRaceEditorHtml,
+  syncMobileCarouselAfterRender,
+} from "../widgets/MobileRaceEditor";
+import { PilotView } from "./PilotView";
 
-type WorkspaceTab = "format" | "edit" | "control" | "review";
+type WorkspaceTab = "pilots" | "format" | "edit" | "control" | "review" | "analytics" | "multigp";
+type DesktopSetupViewMode = "graph" | "table";
 type ControlPanelId =
   | "cockpit"
   | "heatline"
@@ -127,7 +155,7 @@ type ControlPanelId =
   | "standings"
   | "pilots"
   | "signals";
-type ReviewPanelId = "review_heat" | "review_list" | "review_mgp";
+type ReviewPanelId = "review_heat" | "review_list" | "review_mgp" | "mgp_overall" | "mgp_heats";
 type AnyCanvasPanelId = ControlPanelId | ReviewPanelId;
 type PilotsSubFilter = "all" | "unassigned" | "assigned" | "inactive";
 type FlightQueueFilter = "all" | "queued" | "flying" | "away";
@@ -151,8 +179,33 @@ interface StoredCanvasPanelsLayout {
   canvasLocks?: Record<string, boolean>;
 }
 
-const CANVAS_LAYOUT_STORAGE_KEY = "slaprf.rc.canvasPanels.v8";
+const CANVAS_LAYOUT_STORAGE_KEY = "slaprf.rc.canvasPanels.v13";
 const RACE_CAMERAS_STORAGE_KEY = "slaprf.rc.cameras.v2";
+const DESKTOP_SETUP_VIEW_STORAGE_KEY = "slaprf.rc.setupView.v1";
+
+function loadStoredDesktopSetupView(): DesktopSetupViewMode {
+  try {
+    if (
+      typeof window !== "undefined" &&
+      window.localStorage.getItem(DESKTOP_SETUP_VIEW_STORAGE_KEY) === "table"
+    ) {
+      return "table";
+    }
+  } catch {
+    // Ignore storage errors
+  }
+  return "graph";
+}
+
+function persistDesktopSetupView(mode: DesktopSetupViewMode): void {
+  try {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(DESKTOP_SETUP_VIEW_STORAGE_KEY, mode);
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 function compactRaceKey(s: string): string {
   return (s || "").toLowerCase().replace(/[^a-z0-9]/g, "");
@@ -326,7 +379,7 @@ function createDefaultControlPanels(): Record<ControlPanelId, ControlPanelLayout
     flightline: { visible: true, collapsed: false, x: 64, y: 734, zIndex: 13, userMoved: false },
     schedule: { visible: true, collapsed: false, x: 64, y: 734, zIndex: 13, userMoved: false },
     standings: { visible: true, collapsed: false, x: 64, y: 1116, zIndex: 12, userMoved: false },
-    pilots: { visible: false, collapsed: false, x: 666, y: 734, zIndex: 16, userMoved: false },
+    pilots: { visible: true, collapsed: false, x: 666, y: 734, zIndex: 16, userMoved: false },
     signals: { visible: true, collapsed: false, x: 64, y: 1498, zIndex: 11, userMoved: false },
   };
 }
@@ -336,6 +389,8 @@ function createDefaultReviewPanels(): Record<ReviewPanelId, ControlPanelLayout> 
     review_list: { visible: true, collapsed: false, x: 64, y: 72, zIndex: 15, userMoved: false },
     review_heat: { visible: true, collapsed: false, x: 64, y: 420, zIndex: 14, userMoved: false },
     review_mgp: { visible: true, collapsed: false, x: 64, y: 780, zIndex: 13, userMoved: false },
+    mgp_overall: { visible: true, collapsed: false, x: 64, y: 72, zIndex: 15, userMoved: false },
+    mgp_heats: { visible: true, collapsed: false, x: 64, y: 420, zIndex: 14, userMoved: false },
   };
 }
 
@@ -392,27 +447,40 @@ function loadStoredCanvasLayout(): StoredCanvasPanelsLayout {
       }
     }
     const controlPanels: Record<ControlPanelId, ControlPanelLayout> = {
-      cockpit: sanitizeStoredPanel(parsed.controlPanels?.cockpit, defControl.cockpit),
-      heatline: sanitizeStoredPanel(parsed.controlPanels?.heatline, defControl.heatline),
-      flightline: sanitizeStoredPanel(parsed.controlPanels?.flightline, defControl.flightline),
-      schedule: sanitizeStoredPanel(parsed.controlPanels?.schedule, defControl.schedule),
-      standings: sanitizeStoredPanel(parsed.controlPanels?.standings, defControl.standings),
-      pilots: sanitizeStoredPanel(parsed.controlPanels?.pilots, defControl.pilots),
-      signals: sanitizeStoredPanel(parsed.controlPanels?.signals, defControl.signals),
+      cockpit: { ...sanitizeStoredPanel(parsed.controlPanels?.cockpit, defControl.cockpit), visible: true, collapsed: false },
+      heatline: { ...sanitizeStoredPanel(parsed.controlPanels?.heatline, defControl.heatline), visible: true, collapsed: false },
+      flightline: { ...sanitizeStoredPanel(parsed.controlPanels?.flightline, defControl.flightline), visible: true, collapsed: false },
+      schedule: { ...sanitizeStoredPanel(parsed.controlPanels?.schedule, defControl.schedule), visible: true, collapsed: false },
+      standings: { ...sanitizeStoredPanel(parsed.controlPanels?.standings, defControl.standings), visible: true, collapsed: false },
+      pilots: { ...sanitizeStoredPanel(parsed.controlPanels?.pilots, defControl.pilots), visible: true, collapsed: false },
+      signals: { ...sanitizeStoredPanel(parsed.controlPanels?.signals, defControl.signals), visible: true, collapsed: false },
     };
     const reviewPanels: Record<ReviewPanelId, ControlPanelLayout> = {
-      review_heat: sanitizeStoredPanel(
-        parsed.reviewPanels?.review_heat,
-        defReview.review_heat
-      ),
-      review_list: sanitizeStoredPanel(
-        parsed.reviewPanels?.review_list,
-        defReview.review_list
-      ),
-      review_mgp: sanitizeStoredPanel(
-        parsed.reviewPanels?.review_mgp,
-        defReview.review_mgp
-      ),
+      review_heat: {
+        ...sanitizeStoredPanel(parsed.reviewPanels?.review_heat, defReview.review_heat),
+        visible: true,
+        collapsed: false,
+      },
+      review_list: {
+        ...sanitizeStoredPanel(parsed.reviewPanels?.review_list, defReview.review_list),
+        visible: true,
+        collapsed: false,
+      },
+      review_mgp: {
+        ...sanitizeStoredPanel(parsed.reviewPanels?.review_mgp, defReview.review_mgp),
+        visible: true,
+        collapsed: false,
+      },
+      mgp_overall: {
+        ...sanitizeStoredPanel(parsed.reviewPanels?.mgp_overall, defReview.mgp_overall),
+        visible: true,
+        collapsed: false,
+      },
+      mgp_heats: {
+        ...sanitizeStoredPanel(parsed.reviewPanels?.mgp_heats, defReview.mgp_heats),
+        visible: true,
+        collapsed: false,
+      },
     };
     const editPilotsPanel = sanitizeStoredPanel(parsed.editPilotsPanel, defEditPilots);
     compactPanelGroupZIndices(Object.values(controlPanels), 11);
@@ -448,78 +516,85 @@ const RACE_TEMPLATES: TemplateCardSpec[] = [
     id: "double_elimination",
     title: "Double Elimination",
     tag: "MultiGP Standard",
-    stagesHint: "1 Stage · Double Elimination Bracket",
-    desc: "Winners & Losers brackets into Finals. Two losses before elimination.",
+    stagesHint: "Double Elimination Bracket",
+    desc: "Winners & Redemption brackets into Finals. Two losses before elimination.",
   },
   {
     id: "qual_double_elim",
-    title: "Qualifying → Double Elim",
-    tag: "2-Stage",
-    stagesHint: "2 Stages · Qualifying → Double Elimination",
-    desc: "Timed qualifying rounds rank pilots first, then seed into Double Elimination.",
+    title: "Qualifying + Double Elim",
+    tag: "Qual + Bracket",
+    stagesHint: "Qualifying -> Double Elimination",
+    desc: "Timed qualifying rounds rank pilots first, then seed directly into Double Elimination.",
+  },
+  {
+    id: "qual_ladder_mains",
+    title: "Qualifying + Ladder Mains",
+    tag: "Bump-Up Mains",
+    stagesHint: "Qualifying -> C-Main -> B-Main -> A-Main",
+    desc: "RotorHazard-style bump-up ladder: lower mains race first and top finishers bump up into the next Main all the way to A-Main.",
   },
   {
     id: "single_elimination",
     title: "Single Elimination",
     tag: "Knockout",
-    stagesHint: "1 Stage · Direct Knockout Bracket",
+    stagesHint: "Direct Knockout Bracket",
     desc: "Direct head-to-head knockout bracket advancing top finishers each round.",
   },
   {
+    id: "qual_single_elim",
+    title: "Qualifying + Single Elim",
+    tag: "Qual + Knockout",
+    stagesHint: "Qualifying -> Single Elimination",
+    desc: "Qualifying rounds rank pilots by Best 3 Consecutive Laps, then seed into a Single Elimination knockout bracket.",
+  },
+  {
     id: "qual_mains",
-    title: "Qualifying → A/B/C Mains",
-    tag: "2-Stage Mains",
-    stagesHint: "2 Stages · Qualifying → A/B/C Mains",
-    desc: "Qualifying heats sort pilots into A, B, C Main divisions scored by points.",
+    title: "Qualifying + A/B/C Mains",
+    tag: "Division Mains",
+    stagesHint: "Qualifying -> A/B/C Mains",
+    desc: "Qualifying heats sort pilots into parallel A, B, and C Main divisions scored by points.",
   },
   {
     id: "chase_the_ace",
     title: "Chase the Ace",
     tag: "Finals",
-    stagesHint: "1 Stage · Chase the Ace Finals",
+    stagesHint: "Chase the Ace Finals",
     desc: "Repeat finals heats until one contender reaches required wins to claim 1st.",
+  },
+  {
+    id: "qual_chase_the_ace",
+    title: "Qualifying + Chase the Ace",
+    tag: "Qual + Finals",
+    stagesHint: "Qualifying -> Chase the Ace Finals",
+    desc: "Qualifying rounds seed the top contenders into a Chase the Ace Championship Finals round.",
   },
   {
     id: "open_qualifier",
     title: "Open Qualifier",
     tag: "Flight Queue",
-    stagesHint: "1 Stage · Open Flight-Line Queue",
+    stagesHint: "Open Flight-Line Queue",
     desc: "ZippyQ / Global Qualifier style: queue heats on demand with sticky VTX channels & Best 3 Consecutive Laps.",
   },
   {
     id: "round_robin",
     title: "Multi-Round Heats",
     tag: "Open Rounds",
-    stagesHint: "1 Stage · Multi-Round Rotation",
+    stagesHint: "Multi-Round Rotation",
     desc: "Balanced multi-round heats for all active pilots with sticky VTX channels & anti-back-to-back rotation.",
   },
   {
     id: "cpq_qualifier",
     title: "Qualifier",
     tag: "Qualifying",
-    stagesHint: "1 Stage · Qualifying Rounds",
+    stagesHint: "Qualifying Rounds",
     desc: "Pre-scheduled multi-round qualifying heats ranked by Fastest 3 Consecutive Laps.",
   },
   {
-    id: "qual_single_elim",
-    title: "Qualifying → Single Elim",
-    tag: "2-Stage Bracket",
-    stagesHint: "2 Stages · Qualifying → Single Elimination",
-    desc: "Qualifying rounds rank pilots by Best 3 Consecutive Laps, then seed into a Single Elimination knockout bracket.",
-  },
-  {
     id: "cpq_mains",
-    title: "Qualifier → A/B/C Mains",
-    tag: "2-Stage Mains",
-    stagesHint: "2 Stages · Qualifier → A/B/C Mains",
+    title: "Qualifier + A/B/C Mains",
+    tag: "Qual + Mains",
+    stagesHint: "Qualifier -> A/B/C Mains",
     desc: "Qualifying heats ranked by Fastest 3 Consecutive Laps sort pilots by pace into A, B, and C Main finals divisions.",
-  },
-  {
-    id: "qual_chase_the_ace",
-    title: "Qualifying → Chase the Ace",
-    tag: "2-Stage Finals",
-    stagesHint: "2 Stages · Qualifying → Chase the Ace Finals",
-    desc: "Qualifying rounds seed the top contenders into a Chase the Ace Championship Finals stage where finalists race until one pilot reaches required wins.",
   },
 ];
 
@@ -553,22 +628,21 @@ function isRaceConfigured(r: RaceTournamentState): boolean {
   );
 }
 
+function hasOpenQualifierRound(r: RaceTournamentState): boolean {
+  if (r.config?.mainFormat === "open_qualifier") return true;
+  if ((r.stages ?? []).some((s) => s.format === "open_qualifier")) return true;
+  if ((r.rounds ?? []).some((rd) => rd.stageFormat === "open_qualifier")) return true;
+  return (r.heats ?? []).some((h) => h.stageFormat === "open_qualifier");
+}
+
 function formatRaceSubtitle(r: RaceTournamentState): string {
   if (!isRaceConfigured(r)) return "Not configured yet";
-  if ((r.stages?.length ?? 0) > 2) {
-    return `${r.stages!.length}-Stage DAG · ${r.stages!.map((s) => s.title).join(" → ")}`;
-  }
   const tpl = RACE_TEMPLATES.find((t) => t.id === r.templateId);
   if (tpl) return tpl.title;
-  if (r.templateId === "custom") {
-    if ((r.stages?.length ?? 0) > 1) {
-      return `${r.stages!.length}-Stage · ${r.stages!.map((s) => s.title).join(" → ")}`;
-    }
+  if (r.templateId === "ladder_mains") return "Ladder Mains";
+  if (r.templateId === "custom" || r.config.mainFormat === "custom") {
     const roundCount = (r.rounds ?? []).filter((rd) => !isHandoffPortalRound(rd)).length;
-    return `Custom Graph · ${roundCount} round${roundCount === 1 ? "" : "s"}`;
-  }
-  if (r.totalStages > 1) {
-    return `2-Stage · Qual → ${formatStageLabel(r.config.mainFormat)}`;
+    return `Custom · ${roundCount} round${roundCount === 1 ? "" : "s"}`;
   }
   return formatStageLabel(r.config.mainFormat);
 }
@@ -585,9 +659,22 @@ export class RacesView extends Component {
   private untaggedOnly = false;
   private editingNameForRaceId = "";
   private editingTagsForRaceId = "";
+  private mobileSelectedRaceId = "";
+  private lastOpenedMobileRaceId = "";
+  private mobileRaceDrawerClosing = false;
+  private mobileRaceDrawerCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  private mobileRaceDrawerDragStartY: number | null = null;
   private pendingFocusRaceId = "";
 
-  private activeTab: WorkspaceTab = "format";
+  private activeTab: WorkspaceTab = "edit";
+  private desktopSetupView: DesktopSetupViewMode = loadStoredDesktopSetupView();
+  private prevRenderedSetupView: "" | DesktopSetupViewMode = "";
+  private readonly desktopTableUi: DesktopRaceTableUiState =
+    createDefaultDesktopRaceTableState();
+  private readonly mobileEditorUi: MobileRaceEditorUiState =
+    createDefaultMobileRaceEditorState();
+  private lastWasMobileViewport =
+    typeof window !== "undefined" ? window.innerWidth <= 860 : false;
   private attendanceExpanded = false;
   private showWalkUpForm = false;
   private walkUpCallsign = "";
@@ -635,9 +722,14 @@ export class RacesView extends Component {
   private reviewCamInitializedForRaceId = "";
   private formatCamInitializedForRaceId = "";
   private reviewSelectedHeatId = "";
+  private mobileControlView: "live" | "queue" | "schedule" | "standings" | "signals" = "live";
   private raceSignalsChart: PilotRssiChart | null = null;
   private raceSignalsChartEl: HTMLElement | null = null;
   private raceSignalsSlot: number | null = null;
+  private raceAnalyticsView: PilotView | null = null;
+  private raceAnalyticsEl: HTMLElement | null = null;
+  private dirOpenMenuRaceId = "";
+  private lastMobileLapsCrossingId = 0;
 
   private errorMsg = "";
   private lastSig = "";
@@ -669,15 +761,49 @@ export class RacesView extends Component {
     }
   }
 
+  private disposeRaceAnalyticsView(): void {
+    if (this.raceAnalyticsView) {
+      this.raceAnalyticsView.destroy();
+      this.raceAnalyticsView = null;
+    }
+    if (this.raceAnalyticsEl) {
+      this.raceAnalyticsEl.remove();
+      this.raceAnalyticsEl = null;
+    }
+  }
+
+  private syncRaceAnalyticsViewDom(): void {
+    if (this.showDirectory || this.activeTab !== "analytics") return;
+    const host = this.el.querySelector<HTMLElement>("[data-race-analytics-host]");
+    if (!host) return;
+    if (!this.raceAnalyticsView || !this.raceAnalyticsEl) {
+      this.raceAnalyticsEl = document.createElement("div");
+      this.raceAnalyticsEl.className = "view view-pilot rc-analytics-embedded";
+      this.raceAnalyticsView = new PilotView(
+        this.raceAnalyticsEl,
+        this.store,
+        () => ({ kind: "race", id: this.currentRace.raceId })
+      );
+    }
+    if (this.raceAnalyticsEl.parentElement !== host) {
+      host.appendChild(this.raceAnalyticsEl);
+    }
+    this.raceAnalyticsView.onActivate();
+  }
+
   public override onDeactivate(): void {
     this.isViewActive = false;
     this.dismissAutoPromptTemplateModal();
     closeActiveRoundModal();
+    closeActiveDesktopTableModal();
+    closeActiveMobileEditorSheet();
     closeActiveLapEditorModal();
     closeActivePilotLapsModal();
     closeActiveMultiGPModal();
     dismissWireDropMenu();
     this.disposeRaceSignalsChart();
+    this.disposeRaceAnalyticsView();
+    this.dirOpenMenuRaceId = "";
     this.fabOpen = false;
     this.fabSubmenu = "";
     this.formatMenuOpen = false;
@@ -701,12 +827,7 @@ export class RacesView extends Component {
       if (this.disposed || !this.isViewActive || this.showDirectory) return;
       if (this.activeTab === "format") {
         drawFormatWires(this.el, this.currentRace, this.bktUi);
-      } else if (this.activeTab === "review") {
-        this.syncDefaultReviewPanelsDom();
-      } else {
-        if (this.activeTab === "control") {
-          this.syncDefaultControlBottomRowDom();
-        }
+      } else if (this.activeTab === "edit") {
         drawBracketWires(this.el, this.currentRace, this.bktUi);
       }
     });
@@ -839,6 +960,9 @@ export class RacesView extends Component {
     el.addEventListener("focusout", this.handleFocusOut);
     el.addEventListener("input", this.handleInput);
     el.addEventListener("keydown", this.handleKeyDown);
+    el.addEventListener("pointermove", this.handleMobileRaceDrawerPointerMove);
+    el.addEventListener("pointerup", this.handleMobileRaceDrawerPointerUp);
+    el.addEventListener("pointercancel", this.handleMobileRaceDrawerPointerUp);
     window.addEventListener("keydown", this.handleGlobalKeyDown);
     window.addEventListener("resize", this.handleResize);
 
@@ -862,6 +986,7 @@ export class RacesView extends Component {
           this.syncWorkspaceHash(true);
           this.lastSig = "";
           this.render();
+          this.triggerDesktopWorkspaceFade(false);
         } else {
           this.switchWorkspaceTab(cmd.tab, true);
         }
@@ -888,11 +1013,14 @@ export class RacesView extends Component {
     this.onDispose(() => {
       this.dismissAutoPromptTemplateModal();
       closeActiveRoundModal();
+      closeActiveDesktopTableModal();
       closeActiveLapEditorModal();
       closeActivePilotLapsModal();
       closeActiveMultiGPModal();
       dismissWireDropMenu();
       this.disposeRaceSignalsChart();
+    this.disposeRaceAnalyticsView();
+    this.dirOpenMenuRaceId = "";
       this.setViewingRace("");
       el.removeEventListener("pointerdown", this.handlePointerDownDismiss);
       el.removeEventListener("click", this.handleClick);
@@ -901,6 +1029,13 @@ export class RacesView extends Component {
       el.removeEventListener("focusout", this.handleFocusOut);
       el.removeEventListener("input", this.handleInput);
       el.removeEventListener("keydown", this.handleKeyDown);
+      el.removeEventListener("pointermove", this.handleMobileRaceDrawerPointerMove);
+      el.removeEventListener("pointerup", this.handleMobileRaceDrawerPointerUp);
+      el.removeEventListener("pointercancel", this.handleMobileRaceDrawerPointerUp);
+      if (this.mobileRaceDrawerCloseTimer !== null) {
+        clearTimeout(this.mobileRaceDrawerCloseTimer);
+        this.mobileRaceDrawerCloseTimer = null;
+      }
       window.removeEventListener("keydown", this.handleGlobalKeyDown);
       window.removeEventListener("resize", this.handleResize);
       unsubRoute();
@@ -989,6 +1124,7 @@ export class RacesView extends Component {
     if (tab === "format") return "format";
     if (tab === "control") return "control";
     if (tab === "review") return "review";
+    if (tab === "multigp") return "multigp";
     const st = stage ?? this.getCurrentViewStage();
     return `stage:${st || 1}`;
   }
@@ -999,7 +1135,7 @@ export class RacesView extends Component {
     if (typeof explicit === "boolean") {
       return explicit;
     }
-    return tab === "control" || tab === "review";
+    return tab === "control" || tab === "review" || tab === "multigp";
   }
 
   private syncCanvasLockToUi(tab: WorkspaceTab = this.activeTab, stage?: number): void {
@@ -1038,9 +1174,70 @@ export class RacesView extends Component {
     return Boolean(prefs.verified && prefs.apiKey.trim());
   }
 
+  private isMobileViewport(): boolean {
+    return typeof window !== "undefined" && window.innerWidth <= 860;
+  }
+
+  private getDesktopTableCallbacks(): DesktopRaceTableCallbacks {
+    return {
+      getRace: () => this.currentRace,
+      getAllTags: () => this.store.allRaceTags,
+      api: this.api,
+      ui: this.desktopTableUi,
+      onOpenPilotsTab: () => this.switchWorkspaceTab("pilots"),
+      onOpenTemplates: () => this.openTemplatesDialog(),
+      onOpenControlQueue: () => {
+        this.mobileControlView = "queue";
+        this.switchWorkspaceTab("control");
+      },
+      onOpenReviewHeat: (heatId: string) => {
+        this.reviewSelectedHeatId = heatId;
+        this.switchWorkspaceTab("review");
+      },
+      onError: (msg: string) => this.reportErr(msg),
+      onUiMutated: () => {
+        this.lastSig = "";
+        this.render();
+      },
+    };
+  }
+
+  private getMobileEditorCallbacks(): MobileRaceEditorCallbacks {
+    return {
+      getRace: () => this.currentRace,
+      getAllTags: () => this.store.allRaceTags,
+      api: this.api,
+      ui: this.mobileEditorUi,
+      onOpenTemplates: () => this.openTemplatesDialog(),
+      onOpenPilotsTab: () => this.switchWorkspaceTab("pilots"),
+      onOpenQueueTab: () => {
+        this.mobileControlView = "queue";
+        this.switchWorkspaceTab("control");
+      },
+      onOpenReviewHeat: (heatId: string) => {
+        this.reviewSelectedHeatId = heatId;
+        this.switchWorkspaceTab("review");
+      },
+      onError: this.reportErr,
+      onUiMutated: () => {
+        this.lastSig = "";
+        this.render();
+      },
+    };
+  }
+
   private getPanelStateForActiveTab(panelId: string): ControlPanelLayout | null {
+    if (this.activeTab === "pilots") {
+      return panelId === "pilots" ? this.controlPanels.pilots : null;
+    }
     if (this.activeTab === "edit") {
       return panelId === "pilots" ? this.editPilotsPanel : null;
+    }
+    if (this.activeTab === "multigp") {
+      if (panelId === "mgp_overall" || panelId === "mgp_heats" || panelId === "review_mgp") {
+        return this.reviewPanels[panelId];
+      }
+      return null;
     }
     if (this.activeTab === "review") {
       if (panelId === "review_heat" || panelId === "review_list" || panelId === "review_mgp") {
@@ -1317,6 +1514,10 @@ export class RacesView extends Component {
     }
 
     this.syncWorkspaceHash(true);
+    if (!this.isMobileViewport() && typeof window !== "undefined" && window.scrollY !== 0) {
+      window.scrollTo(0, 0);
+    }
+
     this.lastSig = "";
     this.render();
 
@@ -1446,6 +1647,8 @@ export class RacesView extends Component {
       review_heat: { w: 1180, h: 340 },
       review_list: { w: 1180, h: 360 },
       review_mgp: { w: 1180, h: 340 },
+      mgp_overall: { w: 1180, h: 340 },
+      mgp_heats: { w: 1180, h: 340 },
     };
     const est = estSizes[panelId];
     const spot = this.findUnoccupiedCanvasSpot(est.w, est.h, preferredSpot);
@@ -1474,7 +1677,24 @@ export class RacesView extends Component {
   }
 
   private refreshFabMenuDom(): void {
-    if (this.showDirectory) return;
+    if (this.showDirectory) {
+      const fabEl = this.el.querySelector<HTMLElement>(".rc-fab-menu");
+      if (fabEl) {
+        fabEl.classList.toggle("is-open", this.fabOpen);
+        const drawer = fabEl.querySelector<HTMLElement>(".rc-fab-drawer");
+        if (drawer) {
+          drawer.setAttribute("aria-hidden", this.fabOpen ? "false" : "true");
+          if (this.fabOpen) drawer.removeAttribute("inert");
+          else drawer.setAttribute("inert", "");
+        }
+        const mainBtn = fabEl.querySelector<HTMLButtonElement>(".rc-fab-main");
+        if (mainBtn) {
+          mainBtn.setAttribute("aria-expanded", this.fabOpen ? "true" : "false");
+        }
+      }
+      this.syncLastSig();
+      return;
+    }
     const fabEl = this.el.querySelector<HTMLElement>(".rc-fab-menu");
     if (!fabEl) {
       this.syncLastSig();
@@ -1601,8 +1821,7 @@ export class RacesView extends Component {
     }
     const race = this.currentRace;
     const viewStage = this.getCurrentViewStage(race);
-    const curStage = resolveStagesList(race).find((s) => s.index === viewStage);
-    const isOpenQual = curStage?.format === "open_qualifier";
+    const isOpenQual = hasOpenQualifierRound(race);
 
     const isPanelUserMoved = (id: ControlPanelId): boolean => {
       const p = this.controlPanels[id];
@@ -1690,8 +1909,7 @@ export class RacesView extends Component {
 
     const race = this.currentRace;
     const viewStage = this.getCurrentViewStage(race);
-    const curStage = resolveStagesList(race).find((s) => s.index === viewStage);
-    const isOpenQual = curStage?.format === "open_qualifier";
+    const isOpenQual = hasOpenQualifierRound(race);
     const raceStageKey = `${race.raceId || "default"}:${viewStage}`;
     if (this.controlBoundaryRaceKey !== raceStageKey) {
       this.controlBoundaryRaceKey = raceStageKey;
@@ -1841,10 +2059,10 @@ export class RacesView extends Component {
       announcerEnabled &&
       (this.announcer ? this.announcer.isLapCalloutsActiveForStage(stageFmt) : isQualHeat);
     const lapCalloutsTitle = !announcerEnabled
-      ? "Enable Voice Announcer to toggle lap time announcements"
+      ? "Enable Voice Announcer to toggle lap timing announcements"
       : lapCalloutsOn
-        ? `Lap time announcements ON (${isQualHeat ? "Qualifier" : "Race"}) — click to mute lap callouts`
-        : `Lap time announcements OFF (${isQualHeat ? "Qualifier" : "Race"}) — click to announce pilot lap times`;
+        ? `Lap timing announcements on (${isQualHeat ? "Qualifier" : "Race"}) — click to turn off`
+        : `Lap timing announcements off (${isQualHeat ? "Qualifier" : "Race"}) — click to turn on`;
 
     btn.disabled = !announcerEnabled;
     btn.classList.toggle("is-active", lapCalloutsOn);
@@ -1856,30 +2074,106 @@ export class RacesView extends Component {
     return true;
   }
 
-  private resolveRaceSignalsSlot(race: RaceTournamentState): number | null {
+  private getRaceSignalsCandidates(
+    race: RaceTournamentState
+  ): Array<{ slotIndex: number; callsign: string; color: string; channelLabel?: string }> {
     const heat = this.getControlStageHeat(race);
-    const allSeated = (heat?.seats ?? []).filter((s) => s.pilotSlotIndex > 0);
-    if (allSeated.length === 0) {
+    const candidates: Array<{
+      slotIndex: number;
+      callsign: string;
+      color: string;
+      channelLabel?: string;
+    }> = [];
+    const seen = new Set<number>();
+
+    if (heat) {
+      for (const s of heat.seats) {
+        if (s.pilotSlotIndex > 0 && !seen.has(s.pilotSlotIndex)) {
+          seen.add(s.pilotSlotIndex);
+          candidates.push({
+            slotIndex: s.pilotSlotIndex,
+            callsign: s.callsign,
+            color: s.color || "#38bdf8",
+            channelLabel: formatBandChannelShort(s.band, s.channel),
+          });
+        }
+      }
+    }
+
+    const seatChannelBySlot = new Map<number, { band?: number; channel: number }>();
+    for (const h of race.heats ?? []) {
+      for (const s of h.seats ?? []) {
+        if (s.pilotSlotIndex > 0 && s.channel > 0 && !seatChannelBySlot.has(s.pilotSlotIndex)) {
+          seatChannelBySlot.set(s.pilotSlotIndex, { band: s.band, channel: s.channel });
+        }
+      }
+    }
+
+    for (const rp of race.roster ?? []) {
+      if (
+        rp.slotIndex > 0 &&
+        rp.checkedIn !== false &&
+        rp.attendance !== "dnc" &&
+        rp.attendance !== "forfeit" &&
+        !seen.has(rp.slotIndex)
+      ) {
+        const sp = this.store.pilot(rp.slotIndex);
+        if (sp) {
+          seen.add(rp.slotIndex);
+          const seatCh = seatChannelBySlot.get(rp.slotIndex);
+          candidates.push({
+            slotIndex: rp.slotIndex,
+            callsign: rp.callsign || sp.callsign,
+            color: rp.color || sp.color || "#38bdf8",
+            channelLabel: formatBandChannelShort(
+              rp.band ?? seatCh?.band ?? sp.band,
+              rp.channel || seatCh?.channel || sp.channel
+            ),
+          });
+        }
+      }
+    }
+
+    for (const sp of this.store.pilots) {
+      if (sp.enabled && sp.slotIndex > 0 && !seen.has(sp.slotIndex)) {
+        seen.add(sp.slotIndex);
+        candidates.push({
+          slotIndex: sp.slotIndex,
+          callsign: sp.callsign,
+          color: sp.color || "#38bdf8",
+          channelLabel: formatBandChannelShort(sp.band, sp.channel),
+        });
+      }
+    }
+
+    return candidates;
+  }
+
+  private resolveRaceSignalsSlot(race: RaceTournamentState): number | null {
+    const candidates = this.getRaceSignalsCandidates(race);
+    if (candidates.length === 0) {
       return null;
     }
     if (
       typeof this.raceSignalsSlot === "number" &&
-      allSeated.some((s) => s.pilotSlotIndex === this.raceSignalsSlot)
+      candidates.some((c) => c.slotIndex === this.raceSignalsSlot)
     ) {
       return this.raceSignalsSlot;
     }
-    this.raceSignalsSlot = allSeated[0].pilotSlotIndex;
+    this.raceSignalsSlot = candidates[0].slotIndex;
     return this.raceSignalsSlot;
   }
 
   private syncRaceSignalsChartDom(): void {
+    const isSignalsPaneVisible = this.mobileControlView === "signals";
     if (
       this.showDirectory ||
       this.activeTab !== "control" ||
-      !this.controlPanels.signals.visible ||
-      this.controlPanels.signals.collapsed
+      !isSignalsPaneVisible
     ) {
       this.disposeRaceSignalsChart();
+    this.disposeRaceAnalyticsView();
+    this.dirOpenMenuRaceId = "";
       return;
     }
     const race = this.currentRace;
@@ -1887,6 +2181,8 @@ export class RacesView extends Component {
     const host = this.el.querySelector<HTMLElement>("[data-race-signals-chart]");
     if (!host || slot === null) {
       this.disposeRaceSignalsChart();
+    this.disposeRaceAnalyticsView();
+    this.dirOpenMenuRaceId = "";
       return;
     }
     if (!this.raceSignalsChart || !this.raceSignalsChartEl) {
@@ -1922,7 +2218,10 @@ export class RacesView extends Component {
       case "review_list":
         return this.renderReviewListPanel(race);
       case "review_mgp":
-        return this.renderReviewMultiGPPanel(race);
+      case "mgp_overall":
+        return this.renderMultiGPOverallPanel(race);
+      case "mgp_heats":
+        return this.renderMultiGPHeatsPanel(race);
     }
   }
 
@@ -1940,42 +2239,98 @@ export class RacesView extends Component {
       if (key && el.scrollTop > 0) {
         map.set(`scroll:${key}`, el.scrollTop);
       }
+      if (key && el.scrollLeft > 0) {
+        map.set(`scroll-x:${key}`, el.scrollLeft);
+      }
     });
     const pilotsResults = root.querySelector<HTMLElement>("[data-rc-pilots-results]");
     if (pilotsResults && pilotsResults.scrollTop > 0) {
       map.set("pilots-results", pilotsResults.scrollTop);
     }
+    const topLeftTrack = root.querySelector<HTMLElement>("[data-rc-topleft-track]");
+    if (topLeftTrack && topLeftTrack.scrollLeft > 0) {
+      map.set("topleft-scroll-x", topLeftTrack.scrollLeft);
+    }
+    if (
+      typeof window !== "undefined" &&
+      window.scrollY > 0 &&
+      root.querySelector('[data-rc-page="configure"]')
+    ) {
+      map.set("window-scroll-y", window.scrollY);
+    }
     return map;
   }
 
   private restoreScrollPositions(root: ParentNode, saved: Map<string, number>): void {
-    if (saved.size === 0) return;
-    root.querySelectorAll<HTMLElement>(".rc-canvas-panel[data-canvas-panel]").forEach((panel) => {
-      const pid = panel.dataset.canvasPanel ?? "";
-      const top = saved.get(`panel:${pid}`);
-      if (pid && top !== undefined) {
-        const body = panel.querySelector<HTMLElement>(":scope > .rc-panel-body");
-        if (body) body.scrollTop = top;
+    const isMobileConfigure = Boolean(root.querySelector('[data-rc-page="configure"]'));
+    if (saved.size > 0) {
+      root.querySelectorAll<HTMLElement>(".rc-canvas-panel[data-canvas-panel]").forEach((panel) => {
+        const pid = panel.dataset.canvasPanel ?? "";
+        const top = saved.get(`panel:${pid}`);
+        if (pid && top !== undefined) {
+          const body = panel.querySelector<HTMLElement>(":scope > .rc-panel-body");
+          if (body) body.scrollTop = top;
+        }
+      });
+      root.querySelectorAll<HTMLElement>("[data-preserve-scroll]").forEach((el) => {
+        const key = el.dataset.preserveScroll ?? "";
+        const top = saved.get(`scroll:${key}`);
+        if (key && top !== undefined) {
+          el.scrollTop = top;
+        }
+        const left = saved.get(`scroll-x:${key}`);
+        if (key && left !== undefined) {
+          el.scrollLeft = left;
+        }
+      });
+      const pilotsTop = saved.get("pilots-results");
+      if (pilotsTop !== undefined) {
+        const pilotsResults = root.querySelector<HTMLElement>("[data-rc-pilots-results]");
+        if (pilotsResults) pilotsResults.scrollTop = pilotsTop;
       }
-    });
-    root.querySelectorAll<HTMLElement>("[data-preserve-scroll]").forEach((el) => {
-      const key = el.dataset.preserveScroll ?? "";
-      const top = saved.get(`scroll:${key}`);
-      if (key && top !== undefined) {
-        el.scrollTop = top;
+      const topLeftScrollX = saved.get("topleft-scroll-x");
+      if (topLeftScrollX !== undefined) {
+        const topLeftTrack = root.querySelector<HTMLElement>("[data-rc-topleft-track]");
+        if (topLeftTrack) topLeftTrack.scrollLeft = topLeftScrollX;
       }
-    });
-    const pilotsTop = saved.get("pilots-results");
-    if (pilotsTop !== undefined) {
-      const pilotsResults = root.querySelector<HTMLElement>("[data-rc-pilots-results]");
-      if (pilotsResults) pilotsResults.scrollTop = pilotsTop;
+      const winY = saved.get("window-scroll-y");
+      if (isMobileConfigure && winY !== undefined && typeof window !== "undefined") {
+        if (Math.abs(window.scrollY - winY) > 1) {
+          window.scrollTo(0, winY);
+        }
+      }
+    }
+    if (
+      !isMobileConfigure &&
+      this.isMobileViewport() &&
+      root.querySelector(".races-page") &&
+      typeof window !== "undefined" &&
+      window.scrollY !== 0
+    ) {
+      window.scrollTo(0, 0);
+    }
+    this.syncMobileLiveLapsScroll(root);
+  }
+
+  private syncMobileLiveLapsScroll(root: ParentNode = this.el): void {
+    const lapsScroll = root.querySelector<HTMLElement>("[data-mobile-laps-scroll]");
+    if (!lapsScroll) return;
+    const latestId = Number(lapsScroll.dataset.latestCrossing) || 0;
+    if (latestId !== this.lastMobileLapsCrossingId) {
+      this.lastMobileLapsCrossingId = latestId;
+      lapsScroll.scrollTop = 0;
     }
   }
 
   private refreshSinglePanelDom(panelId: AnyCanvasPanelId): void {
     if (this.showDirectory) return;
-    const world = this.el.querySelector<HTMLElement>("[data-rc-world]");
-    if (!world) {
+    if (panelId === "review_mgp") {
+      this.refreshSinglePanelDom("mgp_overall");
+      this.refreshSinglePanelDom("mgp_heats");
+      return;
+    }
+    const host = this.el.querySelector<HTMLElement>("[data-rc-page], [data-rc-world]");
+    if (!host) {
       this.lastSig = "";
       this.render();
       return;
@@ -1983,10 +2338,10 @@ export class RacesView extends Component {
     if (panelId === "signals") {
       this.raceSignalsChartEl?.remove();
     }
-    const savedScroll = this.captureScrollPositions(world);
+    const savedScroll = this.captureScrollPositions(host);
     const race = this.currentRace;
     const nextHtml = this.renderPanelById(race, panelId).trim();
-    const existing = world.querySelector<HTMLElement>(
+    const existing = host.querySelector<HTMLElement>(
       `.rc-canvas-panel[data-canvas-panel="${CSS.escape(panelId)}"]`
     );
 
@@ -1995,10 +2350,20 @@ export class RacesView extends Component {
     } else if (existing) {
       existing.outerHTML = nextHtml;
     } else {
-      world.insertAdjacentHTML("beforeend", nextHtml);
+      host.insertAdjacentHTML("beforeend", nextHtml);
     }
 
-    this.restoreScrollPositions(world, savedScroll);
+    if (panelId === "review_heat") {
+      const existingPicker = host.querySelector<HTMLElement>("[data-review-mobile-picker-card]");
+      const nextPickerHtml = this.renderReviewMobilePickerPanel(race).trim();
+      if (!nextPickerHtml) {
+        existingPicker?.remove();
+      } else if (existingPicker) {
+        existingPicker.outerHTML = nextPickerHtml;
+      }
+    }
+
+    this.restoreScrollPositions(host, savedScroll);
 
     const vp = this.el.querySelector<HTMLElement>("[data-rc-viewport]");
     if (vp) {
@@ -2010,16 +2375,6 @@ export class RacesView extends Component {
     }
 
     if (this.activeTab === "control") {
-      if (
-        panelId === "cockpit" ||
-        panelId === "heatline" ||
-        panelId === "flightline" ||
-        panelId === "schedule" ||
-        panelId === "standings" ||
-        panelId === "signals"
-      ) {
-        this.syncDefaultControlBottomRowDom();
-      }
       if (panelId === "cockpit") {
         this.updateLiveClockDom();
       }
@@ -2029,11 +2384,6 @@ export class RacesView extends Component {
       if (panelId === "signals") {
         this.syncRaceSignalsChartDom();
       }
-      if (this.showGraphOnControl) {
-        drawBracketWires(this.el, this.currentRace, this.bktUi);
-      }
-    } else if (this.activeTab === "review") {
-      this.syncDefaultReviewPanelsDom();
     }
     this.syncFabActiveStatesDom();
     this.syncLastSig();
@@ -2065,6 +2415,7 @@ export class RacesView extends Component {
   }
 
   private cameraSlotKey(tab: WorkspaceTab, stage: number): number {
+    if (tab === "multigp") return 400;
     if (tab === "review") return 300;
     if (tab === "format") return 200;
     if (tab === "control") return 100;
@@ -2072,7 +2423,14 @@ export class RacesView extends Component {
   }
 
   private saveCurrentCamera(): void {
-    if (this.showDirectory) return;
+    if (
+      this.showDirectory ||
+      this.activeTab === "control" ||
+      this.activeTab === "review" ||
+      this.activeTab === "multigp"
+    ) {
+      return;
+    }
     const raceId = this.currentRace.raceId;
     const st = this.getCurrentViewStage();
     this.bktUi.stageCameras[this.cameraSlotKey(this.activeTab, st)] = {
@@ -2189,9 +2547,7 @@ export class RacesView extends Component {
     this.syncDraftDefaultsFromRace();
 
     const curRace = this.currentRace;
-    const stages = resolveStagesList(curRace);
-    const nextTab: WorkspaceTab =
-      target.tab === "edit" && stages.length === 0 ? "format" : target.tab;
+    const nextTab: WorkspaceTab = target.tab === "format" ? "edit" : target.tab;
 
     if (target.stage && nextTab === "edit") {
       this.bracketStage = target.stage;
@@ -2230,6 +2586,10 @@ export class RacesView extends Component {
     }
 
     this.syncWorkspaceHash(pushHistory);
+    if (!this.isMobileViewport() && typeof window !== "undefined" && window.scrollY !== 0) {
+      window.scrollTo(0, 0);
+    }
+
     this.lastSig = "";
     this.render();
   }
@@ -2237,6 +2597,12 @@ export class RacesView extends Component {
   private handlePointerDownDismiss = (e: PointerEvent): void => {
     const target = e.target as Element | null;
     if (!target) return;
+    if (
+      (e.button === 0 || e.pointerType === "touch") &&
+      target.closest("[data-mobile-race-handle]")
+    ) {
+      this.mobileRaceDrawerDragStartY = e.clientY;
+    }
     if (e.button === 0 || e.pointerType === "touch") {
       const dragHandle = target.closest<HTMLButtonElement>(
         "[data-seat-drag-handle]:not(:disabled)"
@@ -2271,22 +2637,34 @@ export class RacesView extends Component {
       this.openMarshalMenuKey = "";
       this.refreshSinglePanelDom(this.activeTab === "review" ? "review_heat" : "heatline");
     }
+    if (this.dirOpenMenuRaceId && !target.closest(".dir-row-more-wrap")) {
+      this.dirOpenMenuRaceId = "";
+      this.refreshDirectoryResultsDom();
+    }
   };
 
   private refreshTopLeftBarDom(): void {
     const barEl = this.el.querySelector<HTMLElement>(".rc-topleft-bar");
     if (!barEl) return;
+    const prevTrack = barEl.querySelector<HTMLElement>("[data-rc-topleft-track]");
+    const prevScrollLeft = prevTrack ? prevTrack.scrollLeft : 0;
     const race = this.currentRace;
     const tmp = document.createElement("div");
     tmp.innerHTML = this.renderTopLeftCanvasBar(race, this.activeTab).trim();
     const nextEl = tmp.firstElementChild as HTMLElement | null;
     if (nextEl) {
       barEl.replaceWith(nextEl);
+      const nextTrack = nextEl.querySelector<HTMLElement>("[data-rc-topleft-track]");
+      if (nextTrack && prevScrollLeft > 0) {
+        nextTrack.scrollLeft = prevScrollLeft;
+      }
+      fitScheduleLineups(nextEl);
     }
     this.lastSig = this.computeSig(race, this.getActiveHeatForRace(race));
   }
 
-  private switchWorkspaceTab(nextTab: WorkspaceTab, pushHistory = true): void {
+  private switchWorkspaceTab(rawNextTab: WorkspaceTab, pushHistory = true): void {
+    const nextTab: WorkspaceTab = rawNextTab === "format" ? "edit" : rawNextTab;
     if (!this.showDirectory && this.activeTab === nextTab) {
       if (this.formatMenuOpen) {
         this.formatMenuOpen = false;
@@ -2299,6 +2677,8 @@ export class RacesView extends Component {
     }
     this.dismissAutoPromptTemplateModal();
     closeActiveRoundModal();
+    closeActiveDesktopTableModal();
+    closeActiveMobileEditorSheet();
     closeActiveLapEditorModal();
     closeActivePilotLapsModal();
     if (nextTab === "format" || nextTab === "edit") {
@@ -2325,23 +2705,44 @@ export class RacesView extends Component {
     this.bktUi.openNodeMenuId = "";
     this.bktUi.selectedRoundIds.clear();
 
+    const isCanvasTab = nextTab === "format" || nextTab === "edit";
     const curStage = this.getCurrentViewStage();
-    const saved = this.bktUi.stageCameras[this.cameraSlotKey(nextTab, curStage)];
+    const saved = isCanvasTab
+      ? this.bktUi.stageCameras[this.cameraSlotKey(nextTab, curStage)]
+      : undefined;
     if (saved?.initialized) {
       this.bktUi.panX = saved.panX;
       this.bktUi.panY = saved.panY;
       this.bktUi.zoom = saved.zoom;
     }
 
+    if (!this.isMobileViewport() && typeof window !== "undefined" && window.scrollY !== 0) {
+      window.scrollTo(0, 0);
+    }
+
     this.lastSig = "";
     this.render();
+    this.triggerDesktopWorkspaceFade(false);
 
-    if (!saved?.initialized) {
+    if (isCanvasTab && !saved?.initialized) {
       this.fitAndStoreCurrentCamera(nextTab, curStage);
     }
   }
 
+  private triggerDesktopWorkspaceFade(onlySetupBody = false): void {
+    const selector = onlySetupBody
+      ? ".dte-board-wrap, .races-canvas > :not([data-dte-race-summary])"
+      : ".races-page > :not(.races-page-topbar), .races-canvas";
+    const targets = this.el.querySelectorAll<HTMLElement>(selector);
+    targets.forEach((node) => {
+      node.classList.remove("is-ws-tab-enter");
+      void node.offsetWidth;
+      node.classList.add("is-ws-tab-enter");
+    });
+  }
+
   private fitAndStoreCurrentCamera(tab: WorkspaceTab, stage: number): void {
+    if (tab === "control" || tab === "review" || tab === "analytics") return;
     const key = this.cameraSlotKey(tab, stage);
     const applyFit = (): void => {
       const race = this.currentRace;
@@ -2349,13 +2750,6 @@ export class RacesView extends Component {
         drawFormatWires(this.el, race, this.bktUi);
         const vp = this.el.querySelector<HTMLElement>("[data-rc-viewport]");
         fitCanvasToFormatStages(vp, race, this.bktUi);
-      } else if (tab === "control") {
-        this.syncDefaultControlBottomRowDom();
-        drawBracketWires(this.el, race, this.bktUi);
-        fitCanvasToControlDashboard(this.el, this.bktUi);
-      } else if (tab === "review") {
-        this.syncDefaultReviewPanelsDom();
-        fitCanvasToControlDashboard(this.el, this.bktUi);
       } else {
         drawBracketWires(this.el, race, this.bktUi);
         const stageRounds = (race.rounds ?? []).filter(
@@ -2370,13 +2764,13 @@ export class RacesView extends Component {
           const pY = stgObj?.pilotsNodeHasPos ? (stgObj.pilotsNodePosY ?? 0) : 110;
           this.bktUi.zoom = 0.96;
           this.bktUi.panX = Math.round(38 - pX * this.bktUi.zoom);
-          this.bktUi.panY = Math.round(64 - pY * this.bktUi.zoom);
+          this.bktUi.panY = Math.round(86 - pY * this.bktUi.zoom);
           const vp = this.el.querySelector<HTMLElement>("[data-rc-viewport]");
           if (vp) applyCanvasCameraDom(vp, this.bktUi);
         } else if (this.editPilotsPanel.visible) {
           this.bktUi.zoom = 0.96;
           this.bktUi.panX = Math.round(38 - this.editPilotsPanel.x * this.bktUi.zoom);
-          this.bktUi.panY = Math.round(64 - this.editPilotsPanel.y * this.bktUi.zoom);
+          this.bktUi.panY = Math.round(86 - this.editPilotsPanel.y * this.bktUi.zoom);
           const vp = this.el.querySelector<HTMLElement>("[data-rc-viewport]");
           if (vp) applyCanvasCameraDom(vp, this.bktUi);
         } else {
@@ -2535,6 +2929,10 @@ export class RacesView extends Component {
       this.bktUi.zoom = savedCam.zoom;
     }
 
+    if (!this.isMobileViewport() && typeof window !== "undefined" && window.scrollY !== 0) {
+      window.scrollTo(0, 0);
+    }
+
     this.lastSig = "";
     this.render();
 
@@ -2549,10 +2947,19 @@ export class RacesView extends Component {
   }
 
   private handleResize = (): void => {
+    const nowMobile = this.isMobileViewport();
+    if (nowMobile !== this.lastWasMobileViewport) {
+      this.lastWasMobileViewport = nowMobile;
+      if (!this.showDirectory && this.activeTab === "edit") {
+        this.lastSig = "";
+        this.render();
+        return;
+      }
+    }
     if (!this.isViewActive || this.showDirectory) return;
-    if (this.activeTab === "format") {
-      drawFormatWires(this.el, this.currentRace, this.bktUi);
-    } else if (this.activeTab !== "review") {
+    if (this.activeTab === "edit" && !nowMobile) {
+      drawBracketWires(this.el, this.currentRace, this.bktUi);
+    } else if (this.activeTab === "control" && this.showGraphOnControl) {
       drawBracketWires(this.el, this.currentRace, this.bktUi);
     }
   };
@@ -2591,14 +2998,14 @@ export class RacesView extends Component {
     const roundsSig = (race.rounds ?? [])
       .map(
         (rd) =>
-          `${rd.id}:${rd.column}:${rd.bracketLane}:${rd.stageFormat}:${rd.finalsFormat ?? ""}:${rd.aceWinsRequired ?? 0}:${rd.winnersAdvantageAce ? 1 : 0}:${rd.finalsHeats ?? 0}:${rd.startMode ?? ""}:${rd.targetLaps}:${rd.timeLimitSec}:${rd.seedSource ?? ""}:${rd.seedDistribution ?? ""}:${rd.title}:${rd.linkSummary ?? ""}:${rd.hasPos ? `${(rd.posX ?? 0).toFixed(1)},${(rd.posY ?? 0).toFixed(1)}` : "auto"}`
+          `${rd.id}:${rd.column}:${rd.bracketLane}:${rd.stageFormat}:${rd.finalsFormat ?? ""}:${rd.aceWinsRequired ?? 0}:${rd.winnersAdvantageAce ? 1 : 0}:${rd.finalsHeats ?? 0}:${rd.startMode ?? ""}:${rd.targetLaps}:${rd.timeLimitSec}:${rd.maxPacksPerPilot ?? 0}:${rd.qualifyingMetric ?? ""}:${rd.seedSource ?? ""}:${rd.seedDistribution ?? ""}:${rd.randomSeed ?? 0}:${rd.title}:${rd.linkSummary ?? ""}:${rd.hasPos ? `${(rd.posX ?? 0).toFixed(1)},${(rd.posY ?? 0).toFixed(1)}` : "auto"}`
       )
       .join("|");
 
     const connsSig = (race.connections ?? [])
       .map(
         (c) =>
-          `${c.id}:${c.stageIndex}:${c.fromRoundId}->${c.toRoundId}:${c.mode}:${c.count}:${c.seedStart ?? 0}:${c.seedEnd ?? 0}:${c.distribution ?? ""}:${c.invalid ? 1 : 0}:${c.invalidReason ?? ""}`
+          `${c.id}:${c.stageIndex}:${c.fromRoundId}->${c.toRoundId}:${c.mode}:${c.count}:${c.seedStart ?? 0}:${c.seedEnd ?? 0}:${c.distribution ?? ""}:${c.rankingMetric ?? ""}:${c.seededEarly ? 1 : 0}:${c.invalid ? 1 : 0}:${c.invalidReason ?? ""}`
       )
       .join("|");
 
@@ -2623,7 +3030,7 @@ export class RacesView extends Component {
         const p = this.controlPanels[id];
         return `c_${id}:${p.visible ? 1 : 0}:${p.collapsed ? 1 : 0}`;
       }),
-      ...(["review_heat", "review_list", "review_mgp"] as const).map((id) => {
+      ...(["review_heat", "review_list", "review_mgp", "mgp_overall", "mgp_heats"] as const).map((id) => {
         const p = this.reviewPanels[id];
         return `r_${id}:${p.visible ? 1 : 0}:${p.collapsed ? 1 : 0}`;
       }),
@@ -2639,7 +3046,11 @@ export class RacesView extends Component {
       this.untaggedOnly ? 1 : 0,
       this.editingNameForRaceId,
       this.editingTagsForRaceId,
+      this.mobileSelectedRaceId,
       this.activeTab,
+      this.isMobileViewport() ? 1 : 0,
+      this.mobileEditorUi.activePageId,
+      this.mobileEditorUi.connectToPreviousOnAdd ? 1 : 0,
       this.reviewSelectedHeatId,
       this.raceSignalsSlot ?? 0,
       this.attendanceExpanded ? 1 : 0,
@@ -2656,6 +3067,9 @@ export class RacesView extends Component {
       this.formatMenuOpen ? 1 : 0,
       this.mobileStageMenuOpen ? 1 : 0,
       this.openMarshalMenuKey,
+      this.mobileControlView,
+      this.desktopSetupView,
+      this.isMultiGPVerified() ? 1 : 0,
       this.showGraphOnControl ? 1 : 0,
       panelsSig,
       this.errorMsg,
@@ -2695,6 +3109,7 @@ export class RacesView extends Component {
       race.activeHeatId,
       race.nextReadyHeatId,
       this.store.nodes.length,
+      this.dirOpenMenuRaceId,
       this.store.timingHardwareMode,
       this.store.simulatorRunning ? (this.store.simState?.speedMultiplier ?? 1) : 0,
       this.announcer?.settings.enabled ? 1 : 0,
@@ -2791,9 +3206,7 @@ export class RacesView extends Component {
       }
       clockEl.textContent = formatRaceClock(liveRem);
       clockEl.className = "race-clock mono is-countdown";
-      const nextSub = isArming
-        ? "Arming quads…"
-        : `Countdown ${nomSec}s → 0s · Random horn`;
+      const nextSub = isArming ? "Arming quads…" : "";
       if (subEl && subEl.textContent !== nextSub) subEl.textContent = nextSub;
       if (barEl) {
         barEl.style.width = "0%";
@@ -2861,14 +3274,15 @@ export class RacesView extends Component {
       if (slot <= 0) return;
       const val = sfNode.lastRssi[slot - 1];
       if (typeof val !== "number" || !Number.isFinite(val)) return;
-      const fill = row.querySelector<HTMLElement>(".race-rssi-fill");
-      const txt = row.querySelector<HTMLElement>(".race-rssi-val");
       const pct = isLapRF
         ? Math.max(4, Math.min(100, ((val - 300) / (3400 - 300)) * 100))
         : isRH
           ? Math.max(4, Math.min(100, ((val - 15) / (235 - 15)) * 100))
           : Math.max(4, Math.min(100, ((val - -96) / (-32 - -96)) * 100));
-      if (fill) fill.style.width = `${pct.toFixed(0)}%`;
+      row.querySelectorAll<HTMLElement>(".race-rssi-fill").forEach((fill) => {
+        fill.style.width = `${pct.toFixed(0)}%`;
+      });
+      const txt = row.querySelector<HTMLElement>(".race-rssi-val");
       if (txt) txt.textContent = isLapRF || isRH ? `${Math.round(val)}` : `${Math.round(val)} dBm`;
     });
   }
@@ -2898,11 +3312,13 @@ export class RacesView extends Component {
         this.api
           .eventAction({ action: "delete_race", raceId: rId })
           .then(() => {
+            const wasViewingDeleted = this.viewingRaceId === rId || !this.showDirectory;
             if (this.viewingRaceId === rId) {
               this.setViewingRace("");
             }
-            if (this.store.races.length === 0) {
+            if (wasViewingDeleted || this.store.races.length === 0) {
               this.showDirectory = true;
+              this.syncWorkspaceHash(true);
             }
             this.lastSig = "";
             this.render();
@@ -2965,13 +3381,13 @@ export class RacesView extends Component {
 
     if (hasLiveHeat) {
       this.reportErr(
-        `Finish or pause the live heat in ${stageTitle} before closing the stage.`
+        `Finish or pause the live heat before ending this race.`
       );
       return;
     }
     if (confirmedCount === 0) {
       this.reportErr(
-        `Confirm at least one heat in ${stageTitle} before closing the stage.`
+        `Confirm at least one heat before ending this race.`
       );
       return;
     }
@@ -3012,31 +3428,32 @@ export class RacesView extends Component {
       race.config.qualifyingMetric ||
       "consecutive_3";
 
-    let title = `Close ${stageTitle}?`;
+    const raceDisplayName = race.config.eventName || "this race";
+    let title = hasDownstream ? `Close ${stageTitle}?` : `End ${race.config.eventName || "Race"}?`;
     let messageHtml = "";
     let warningHtml: string | undefined;
-    let confirmLabel = hasDownstream ? "Close Stage & Seed Next" : "Close Stage & Finish Race";
+    let confirmLabel = hasDownstream ? "Close Stage & Seed Next" : "End Race";
 
     if (stageFmt === "open_qualifier") {
-      title = `Close Open Qualifier (${stageTitle})?`;
-      confirmLabel = hasDownstream ? "Close Qualifier & Seed Next" : "Close Qualifier & Finish Race";
+      title = hasDownstream ? `Close Open Qualifier (${stageTitle})?` : `End ${race.config.eventName || "Open Qualifier"}?`;
+      confirmLabel = hasDownstream ? "Close Qualifier & Seed Next" : "End Race";
       const outcomeHtml = hasDownstream
         ? `seed downstream stage${downstreamDescriptions.length === 1 ? "" : "s"} (${downstreamDescriptions.join(", ")}) and advance Race Control to the next stage.`
-        : `lock final Open Qualifier standings and mark <strong>${esc(race.config.eventName || "this race")}</strong> as <strong>Completed</strong>.`;
+        : `lock final Open Qualifier standings and mark <strong>${esc(raceDisplayName)}</strong> as <strong>Completed</strong>.`;
       messageHtml = `
-        <p>You are closing <strong>${esc(stageTitle)}</strong> with <strong>${confirmedCount} confirmed heat${confirmedCount === 1 ? "" : "s"}</strong> ranked by <strong>${esc(formatQualifyingMetricLabel(qualMetric))}</strong>.</p>
-        <p style="margin-top:8px">Closing this qualifier will stop walk-up queueing and ${outcomeHtml}</p>`;
+        <p>You are ending <strong>${esc(hasDownstream ? stageTitle : raceDisplayName)}</strong> with <strong>${confirmedCount} confirmed heat${confirmedCount === 1 ? "" : "s"}</strong> ranked by <strong>${esc(formatQualifyingMetricLabel(qualMetric))}</strong>.</p>
+        <p style="margin-top:8px">Ending this qualifier will stop walk-up queueing and ${outcomeHtml}</p>`;
       if (unconfirmedHeats.length > 0) {
         warningHtml = `<strong>${unconfirmedHeats.length} unflown / unconfirmed queued heat${unconfirmedHeats.length === 1 ? "" : "s"}</strong> in the Flight Queue will be discarded.`;
       }
     } else if (stageFmt === "qualifying") {
-      title = `Close Qualifier (${stageTitle})?`;
-      confirmLabel = hasDownstream ? "Close Qualifier & Seed Next" : "Close Qualifier & Finish Race";
+      title = hasDownstream ? `Close Qualifier (${stageTitle})?` : `End ${race.config.eventName || "Race"}?`;
+      confirmLabel = hasDownstream ? "Close Qualifier & Seed Next" : "End Race";
       const outcomeHtml = hasDownstream
         ? `seed downstream stage${downstreamDescriptions.length === 1 ? "" : "s"} (${downstreamDescriptions.join(", ")}) and advance Race Control.`
-        : `finalize qualifying standings and mark <strong>${esc(race.config.eventName || "this race")}</strong> as <strong>Completed</strong>.`;
+        : `finalize qualifying standings and mark <strong>${esc(raceDisplayName)}</strong> as <strong>Completed</strong>.`;
       messageHtml = `
-        <p>You are closing <strong>${esc(stageTitle)}</strong> (${confirmedCount} of ${stageHeats.length} qualifying heats confirmed, ranked by <strong>${esc(formatQualifyingMetricLabel(qualMetric))}</strong>).</p>
+        <p>You are ending <strong>${esc(hasDownstream ? stageTitle : raceDisplayName)}</strong> (${confirmedCount} of ${stageHeats.length} qualifying heats confirmed, ranked by <strong>${esc(formatQualifyingMetricLabel(qualMetric))}</strong>).</p>
         <p style="margin-top:8px">This will lock qualifying results and ${outcomeHtml}</p>`;
       if (unconfirmedHeats.length > 0) {
         warningHtml = `<strong>${unconfirmedHeats.length} remaining qualifying heat${unconfirmedHeats.length === 1 ? "" : "s"}</strong> have not been confirmed and will be skipped.`;
@@ -3046,12 +3463,12 @@ export class RacesView extends Component {
       const leaderCallsign = race.standings?.[0]?.callsign;
       const outcomeHtml = hasDownstream
         ? `lock ${esc(formatHuman)} standings, advance ${downstreamDescriptions.join(", ")}, and move Race Control to the next stage.`
-        : `finalize ${esc(formatHuman)} results${leaderCallsign ? ` (crowning <strong>${esc(leaderCallsign)}</strong> #1)` : ""} and mark <strong>${esc(race.config.eventName || "this race")}</strong> as <strong>Completed</strong>.`;
+        : `finalize results${leaderCallsign ? ` (crowning <strong>${esc(leaderCallsign)}</strong> #1)` : ""} and mark <strong>${esc(raceDisplayName)}</strong> as <strong>Completed</strong>.`;
       messageHtml = `
-        <p>You are closing <strong>${esc(stageTitle)}</strong> (${esc(formatHuman)} · ${confirmedCount} of ${stageHeats.length} heats confirmed).</p>
+        <p>You are ending <strong>${esc(hasDownstream ? stageTitle : raceDisplayName)}</strong> (${confirmedCount} of ${stageHeats.length} heats confirmed).</p>
         <p style="margin-top:8px">This will ${outcomeHtml}</p>`;
       if (unconfirmedHeats.length > 0) {
-        warningHtml = `Closing early will skip <strong>${unconfirmedHeats.length} unconfirmed ${esc(formatHuman.toLowerCase())} heat${unconfirmedHeats.length === 1 ? "" : "s"}</strong> and rank pilots from confirmed heats so far.`;
+        warningHtml = `Ending early will skip <strong>${unconfirmedHeats.length} unconfirmed heat${unconfirmedHeats.length === 1 ? "" : "s"}</strong> and rank pilots from confirmed heats so far.`;
       }
     }
 
@@ -3077,17 +3494,36 @@ export class RacesView extends Component {
     });
   }
 
-  private createRaceInline(): void {
+  private findExactRaceByName(name: string, allRaces = this.getEffectiveRaces()): RaceTournamentState | undefined {
+    const trimmed = name.trim().toLowerCase();
+    if (!trimmed || trimmed.startsWith("#")) return undefined;
+    return allRaces.find((r, idx) => (r.config.eventName || `Race ${idx + 1}`).trim().toLowerCase() === trimmed);
+  }
+
+  private createRaceInline(fromEnterKey = false): void {
     const allRaces = this.getEffectiveRaces();
-    let n = allRaces.length + 1;
-    const existingSlugs = new Set(
-      allRaces.map((r) => slugifyRaceName(r.config.eventName || "Race"))
-    );
-    while (existingSlugs.has(slugifyRaceName(`Race ${n}`))) {
-      n++;
+    const trimmedQuery = this.dirSearchQuery.trim();
+    if (fromEnterKey && (!trimmedQuery || trimmedQuery.startsWith("#"))) {
+      return;
     }
-    const name = `Race ${n}`;
+    const exactMatch = this.findExactRaceByName(trimmedQuery, allRaces);
+    if (exactMatch) {
+      return;
+    }
+    let name = !trimmedQuery.startsWith("#") ? trimmedQuery : "";
+    if (!name) {
+      let n = allRaces.length + 1;
+      const existingSlugs = new Set(
+        allRaces.map((r) => slugifyRaceName(r.config.eventName || "Race"))
+      );
+      while (existingSlugs.has(slugifyRaceName(`Race ${n}`))) {
+        n++;
+      }
+      name = `Race ${n}`;
+    }
     this.dirSearchQuery = "";
+    const searchEl = this.el.querySelector<HTMLInputElement>("[data-race-dir-search]");
+    if (searchEl) searchEl.value = "";
     this.dirStatusFilter = "all";
     this.selectedFilterTags.clear();
     this.untaggedOnly = false;
@@ -3245,7 +3681,66 @@ export class RacesView extends Component {
       .catch(this.reportErr);
   }
 
+  private dismissMobileRaceDrawer(): void {
+    if (!this.mobileSelectedRaceId || this.mobileRaceDrawerClosing) return;
+    const overlay = this.el.querySelector<HTMLElement>(".pilot-dir-mobile-drawer-overlay");
+    if (!overlay) {
+      this.mobileSelectedRaceId = "";
+      this.lastOpenedMobileRaceId = "";
+      this.lastSig = "";
+      this.render();
+      return;
+    }
+    this.mobileRaceDrawerClosing = true;
+    overlay.classList.add("is-closing");
+    this.el.querySelectorAll<HTMLElement>(".dir-mobile-chip.is-selected").forEach((chip) => {
+      chip.classList.remove("is-selected");
+      chip.setAttribute("aria-selected", "false");
+    });
+    if (this.mobileRaceDrawerCloseTimer !== null) {
+      clearTimeout(this.mobileRaceDrawerCloseTimer);
+    }
+    this.mobileRaceDrawerCloseTimer = setTimeout(() => {
+      this.mobileRaceDrawerCloseTimer = null;
+      if (!this.mobileRaceDrawerClosing) return;
+      this.mobileRaceDrawerClosing = false;
+      this.mobileSelectedRaceId = "";
+      this.lastOpenedMobileRaceId = "";
+      this.lastSig = "";
+      this.render();
+    }, 200);
+  }
+
+  private handleMobileRaceDrawerPointerMove = (e: PointerEvent): void => {
+    if (this.mobileRaceDrawerDragStartY === null) return;
+    const dy = e.clientY - this.mobileRaceDrawerDragStartY;
+    if (dy >= 22) {
+      this.mobileRaceDrawerDragStartY = null;
+      this.dismissMobileRaceDrawer();
+    }
+  };
+
+  private handleMobileRaceDrawerPointerUp = (): void => {
+    this.mobileRaceDrawerDragStartY = null;
+  };
+
   private mountActiveRaceTagEditor(autoFocus = true): void {
+    if (this.mobileSelectedRaceId) {
+      const drawerBox = this.el.querySelector<HTMLElement>(
+        `[data-tag-box="race-drawer-${CSS.escape(this.mobileSelectedRaceId)}"]`
+      );
+      if (drawerBox) {
+        const targetRace = this.getEffectiveRaces().find(
+          (r) => r.raceId === this.mobileSelectedRaceId
+        );
+        mountTagPillEditor(drawerBox, {
+          initialTags: targetRace?.tags ?? [],
+          placeholder: "Add tags (comma or Enter)…",
+          autoFocus: false,
+          onCommit: (nextTags) => this.commitRaceTagsList(this.mobileSelectedRaceId, nextTags),
+        });
+      }
+    }
     const rid = this.editingTagsForRaceId;
     if (!rid) return;
     const boxEl = this.el.querySelector<HTMLElement>(
@@ -3506,35 +4001,30 @@ export class RacesView extends Component {
       onApply: (tplId, params) => this.applyTemplateChoice(tplId, params),
       onSelectCustom: () => {
         const cur = this.currentRace;
-        const stages = resolveStagesList(cur);
-        if (!cur.generated && stages.length === 0) {
+        const roundCount = (cur.rounds ?? []).filter((r) => !isHandoffPortalRound(r)).length;
+        if (!cur.generated && roundCount === 0) {
           return;
         }
-        if (stages.length > 0) {
-          const startedHeats = cur.heats.filter((h) => !isHeatUnstarted(h.state)).length;
-          openConfirmModal({
-            title: `Reset “${cur.config.eventName || "Race"}” to Empty Custom Board?`,
-            messageHtml: `<p>Switching to <strong>Custom</strong> will clear the ${stages.length} existing stage${stages.length === 1 ? "" : "s"} so you can build from scratch (your pilot roster and tags are preserved).</p>`,
-            warningHtml:
-              startedHeats > 0
-                ? `<strong>Warning:</strong> ${startedHeats} started or confirmed heat${startedHeats === 1 ? " will" : "s will"} be cleared.`
-                : undefined,
-            confirmLabel: "Clear to Custom Board",
-            danger: true,
-            onConfirm: async () => {
-              const latest = resolveStagesList(this.currentRace);
-              for (const stg of [...latest].reverse()) {
-                await this.api.bracketEdit({
-                  action: "delete_stage",
-                  stageId: stg.id,
-                  stageIndex: stg.index,
-                });
-              }
-              this.bracketStage = 0;
-              this.switchWorkspaceTab("format");
-            },
-          });
-        }
+        const startedHeats = cur.heats.filter((h) => !isHeatUnstarted(h.state)).length;
+        openConfirmModal({
+          title: `Reset "${cur.config.eventName || "Race"}" to Empty Custom Setup?`,
+          messageHtml: `<p>Switching to <strong>Custom</strong> will clear the existing rounds so you can build from scratch (your pilot roster and tags are preserved).</p>`,
+          warningHtml:
+            startedHeats > 0
+              ? `<strong>Warning:</strong> ${startedHeats} started or confirmed heat${startedHeats === 1 ? " will" : "s will"} be cleared.`
+              : undefined,
+          confirmLabel: "Clear to Custom Setup",
+          danger: true,
+          onConfirm: () =>
+            this.api
+              .bracketEdit({ action: "apply_template", templateId: "custom" })
+              .then(() => {
+                this.bracketStage = 0;
+                this.mobileEditorUi.activePageId = "";
+                this.switchWorkspaceTab("edit");
+              })
+              .catch(this.reportErr),
+        });
       },
     });
     if (autoPrompted) {
@@ -3549,6 +4039,7 @@ export class RacesView extends Component {
       | "qualifying"
       | "open_qualifier"
       | "zippyq_qualifier"
+      | "points_mains"
       | "losers"
       | "finals"
       | "seeded",
@@ -3558,6 +4049,7 @@ export class RacesView extends Component {
     const viewStage = this.getCurrentViewStage(race);
     const viewport = this.el.querySelector<HTMLElement>("[data-rc-viewport]");
     const rect = viewport?.getBoundingClientRect();
+    const spawnKind = presetKind === "points_mains" ? "race" : presetKind;
     const suggestedSpawn =
       preferredSpot ??
       suggestNewRoundSpawnPosition(
@@ -3565,7 +4057,7 @@ export class RacesView extends Component {
         this.bktUi,
         rect?.width || 1280,
         rect?.height || 760,
-        presetKind,
+        spawnKind,
         viewStage
       );
     const spawn = this.findUnoccupiedCanvasSpot(RC_NODE_WIDTH, 240, suggestedSpawn);
@@ -3573,12 +4065,9 @@ export class RacesView extends Component {
     const stageRounds = (race.rounds ?? []).filter(
       (r) => r.stageIndex === viewStage && !isHandoffPortalRound(r)
     );
-    if (presetKind === "finals" && stageRounds.some((r) => r.bracketLane === "finals")) {
-      showToast("This stage already has a Championship Finals round.", "info");
-      return;
-    }
 
     const existingRoundCount = stageRounds.length;
+    const qualRoundCount = stageRounds.filter((r) => r.stageFormat === "qualifying").length;
     const loserCount = stageRounds.filter((r) => r.bracketLane === "losers").length;
     const hasIncomingStageLink =
       (race.stageConnections ?? []).some((sc) => sc.toStageIndex === viewStage && !sc.invalid) ||
@@ -3595,10 +4084,11 @@ export class RacesView extends Component {
 
     switch (presetKind) {
       case "qualifying":
-        title = existingRoundCount === 0 ? "Qualifying 1" : `Qualifying ${existingRoundCount + 1}`;
+        title = `Qualifying ${qualRoundCount + 1}`;
         bracketLane = "qualifying";
         stageFormat = "qualifying";
         targetLaps = 0;
+        if (existingRoundCount === 0) linkMode = "all_active_pilots";
         break;
       case "open_qualifier":
         title = "Open Qualifier";
@@ -3611,6 +4101,10 @@ export class RacesView extends Component {
         bracketLane = "open_qual";
         stageFormat = "open_qualifier";
         targetLaps = 0;
+        break;
+      case "points_mains":
+        bracketLane = "mains";
+        stageFormat = "points_mains";
         break;
       case "losers":
         title = loserCount === 0 ? "Redemption 1" : `Redemption ${loserCount + 1}`;
@@ -3767,6 +4261,10 @@ export class RacesView extends Component {
     this.reviewPanels = createDefaultReviewPanels();
     this.persistControlLayout();
     const curStage = this.getCurrentViewStage();
+    if (!this.isMobileViewport() && typeof window !== "undefined" && window.scrollY !== 0) {
+      window.scrollTo(0, 0);
+    }
+
     this.lastSig = "";
     this.render();
     this.fitAndStoreCurrentCamera("review", curStage);
@@ -3915,19 +4413,14 @@ export class RacesView extends Component {
       );
     } else if (mode === "edit") {
       if (!canEdit) return;
-      const stageHasFinals = (race.rounds ?? []).some(
-        (r) => r.stageIndex === viewStage && r.bracketLane === "finals"
-      );
       options.push(
         { id: "node:qualifying", label: "Qualifier", iconHtml: icons.timer(15) },
         { id: "node:open_qualifier", label: "Open Qualifier", iconHtml: icons.zap(15) },
-        { id: "node:zippyq_qualifier", label: "ZippyQ Qualifier", iconHtml: icons.zap(15) },
-        { id: "node:race", label: "Race Round", iconHtml: icons.plus(15) },
-        { id: "node:losers", label: "Redemption", iconHtml: icons.trendDown(15) }
+        { id: "node:zippyq_qualifier", label: "ZippyQ", iconHtml: icons.zap(15) },
+        { id: "node:race", label: "Race Round", iconHtml: icons.checkered(15) },
+        { id: "node:points_mains", label: "Points Round", iconHtml: icons.layers(15) },
+        { id: "node:finals", label: "Finals", iconHtml: icons.trophy(15) }
       );
-      if (!stageHasFinals) {
-        options.push({ id: "node:finals", label: "Finals", iconHtml: icons.trophy(15) });
-      }
       if (!isRootStage(race, viewStage) && !this.editPilotsPanel.visible) {
         options.push({
           id: "panel:pilots",
@@ -3962,8 +4455,7 @@ export class RacesView extends Component {
         return;
       }
     } else {
-      const curStageObj = resolveStagesList(race).find((s) => s.index === viewStage);
-      const isOpenQualStage = curStageObj?.format === "open_qualifier";
+      const isOpenQualStage = hasOpenQualifierRound(race);
       if (!this.controlPanels.cockpit.visible) {
         options.push({ id: "panel:cockpit", label: "Race Control", iconHtml: icons.checkered(15) });
       }
@@ -4028,6 +4520,7 @@ export class RacesView extends Component {
             | "qualifying"
             | "open_qualifier"
             | "zippyq_qualifier"
+            | "points_mains"
             | "losers"
             | "finals";
           this.addNodeToCanvas(kind, preferred);
@@ -4268,7 +4761,7 @@ export class RacesView extends Component {
       const val = t.value;
       window.setTimeout(() => {
         if (this.disposed) return;
-        if (this.editingNameForRaceId === nameRaceId) {
+        if (this.editingNameForRaceId === nameRaceId || this.mobileSelectedRaceId === nameRaceId) {
           this.commitRaceNameInline(nameRaceId, val);
         }
       }, 0);
@@ -4323,7 +4816,10 @@ export class RacesView extends Component {
       }
     }
     if (e.key !== "Enter") return;
-    if (t.dataset.raceNameInput) {
+    if (t.hasAttribute("data-race-dir-search")) {
+      e.preventDefault();
+      this.createRaceInline(true);
+    } else if (t.dataset.raceNameInput) {
       e.preventDefault();
       this.commitRaceNameInline(t.dataset.raceNameInput, t.value);
     } else if (
@@ -4342,6 +4838,14 @@ export class RacesView extends Component {
   };
 
   private handleChange = (e: Event): void => {
+    if (handleMobileRaceEditorChange(e, this.getMobileEditorCallbacks())) {
+      this.errorMsg = "";
+      return;
+    }
+    if (handleDesktopRaceTableChange(e, this.getDesktopTableCallbacks())) {
+      this.errorMsg = "";
+      return;
+    }
     if (
       handleBracketEditEvent(
         e,
@@ -4358,6 +4862,16 @@ export class RacesView extends Component {
     if (!t) return;
 
     if (t instanceof HTMLSelectElement) {
+      if (t.hasAttribute("data-review-heat-select")) {
+        const hid = t.value;
+        if (hid && this.reviewSelectedHeatId !== hid) {
+          this.reviewSelectedHeatId = hid;
+          this.openMarshalMenuKey = "";
+          this.refreshSinglePanelDom("review_heat");
+          this.refreshSinglePanelDom("review_list");
+        }
+        return;
+      }
       if (t.dataset.raceField === "draft-pph") {
         this.draftPilotsPerHeat = Math.max(2, Math.min(8, Number(t.value) || 4));
         return;
@@ -4520,7 +5034,40 @@ export class RacesView extends Component {
     });
   }
 
+  private scrollTabButtonIntoStrip(btn: HTMLElement | null | undefined): void {
+    if (!btn) return;
+    const track = btn.closest<HTMLElement>(".sched-lineup");
+    if (!track) return;
+    const maxScroll = track.scrollWidth - track.clientWidth;
+    if (maxScroll <= 0) return;
+    const trackRect = track.getBoundingClientRect();
+    const btnRect = btn.getBoundingClientRect();
+    const pad = 34;
+    let targetLeft = track.scrollLeft;
+    if (btnRect.left < trackRect.left + pad) {
+      targetLeft += btnRect.left - (trackRect.left + pad);
+    } else if (btnRect.right > trackRect.right - pad) {
+      targetLeft += btnRect.right - (trackRect.right - pad);
+    } else {
+      return;
+    }
+    targetLeft = Math.max(0, Math.min(maxScroll, targetLeft));
+    try {
+      track.scrollTo({ left: targetLeft, behavior: "smooth" });
+    } catch {
+      track.scrollLeft = targetLeft;
+    }
+  }
+
   private handleClick = (e: Event): void => {
+    if (handleMobileRaceEditorClick(e, this.el, this.getMobileEditorCallbacks())) {
+      this.errorMsg = "";
+      return;
+    }
+    if (handleDesktopRaceTableClick(e, this.el, this.getDesktopTableCallbacks())) {
+      this.errorMsg = "";
+      return;
+    }
     if (
       handleFormatEditEvent(
         e,
@@ -4569,6 +5116,7 @@ export class RacesView extends Component {
         | "qualifying"
         | "open_qualifier"
         | "zippyq_qualifier"
+        | "points_mains"
         | "losers"
         | "finals"
         | "seeded";
@@ -4583,12 +5131,38 @@ export class RacesView extends Component {
       return;
     }
 
+    const setupViewBtn = target.closest<HTMLButtonElement>("[data-setup-view]");
+    if (setupViewBtn) {
+      const nextView: DesktopSetupViewMode =
+        setupViewBtn.dataset.setupView === "table" ? "table" : "graph";
+      if (this.desktopSetupView !== nextView) {
+        if (this.desktopSetupView === "graph") {
+          this.saveCurrentCamera();
+        }
+        this.desktopSetupView = nextView;
+        persistDesktopSetupView(nextView);
+        this.lastSig = "";
+        this.render();
+        this.triggerDesktopWorkspaceFade(true);
+      }
+      return;
+    }
+
     const pilotsFilterBtn = target.closest<HTMLElement>("[data-pilots-filter]");
     if (pilotsFilterBtn) {
       const f = (pilotsFilterBtn.dataset.pilotsFilter || "all") as PilotsSubFilter;
       if (this.pilotsFilter !== f) {
         this.pilotsFilter = f;
-        this.refreshSinglePanelDom("pilots");
+        if (
+          this.activeTab === "edit" &&
+          !this.isMobileViewport() &&
+          this.desktopSetupView === "table"
+        ) {
+          this.lastSig = "";
+          this.render();
+        } else {
+          this.refreshSinglePanelDom("pilots");
+        }
       }
       return;
     }
@@ -4628,17 +5202,25 @@ export class RacesView extends Component {
 
     const panelCollapseBtn = target.closest<HTMLElement>("[data-rc-panel-collapse]");
     if (panelCollapseBtn) {
-      const pid = panelCollapseBtn.dataset.rcPanelCollapse ?? "";
-      const p = this.getPanelStateForActiveTab(pid);
-      if (p) {
-        p.collapsed = !p.collapsed;
-        if (!p.collapsed) {
-          p.zIndex = ++this.panelZCounter;
+      const innerHeaderCtrl =
+        panelCollapseBtn.tagName !== "BUTTON"
+          ? target.closest<HTMLElement>(
+              "button:not([data-rc-panel-collapse]), a, input, select, textarea, label, .segmented"
+            )
+          : null;
+      if (!innerHeaderCtrl || !panelCollapseBtn.contains(innerHeaderCtrl)) {
+        const pid = panelCollapseBtn.dataset.rcPanelCollapse ?? "";
+        const p = this.getPanelStateForActiveTab(pid);
+        if (p) {
+          p.collapsed = !p.collapsed;
+          if (!p.collapsed) {
+            p.zIndex = ++this.panelZCounter;
+          }
+          this.persistControlLayout();
+          this.refreshSinglePanelDom(pid as AnyCanvasPanelId);
         }
-        this.persistControlLayout();
-        this.refreshSinglePanelDom(pid as AnyCanvasPanelId);
+        return;
       }
-      return;
     }
 
     const rcUiBtn = target.closest<HTMLElement>("[data-rc-ui]");
@@ -4694,21 +5276,14 @@ export class RacesView extends Component {
             this.refreshFabMenuDom();
           }
           this.mobileStageMenuOpen = false;
-          if (!isRaceConfigured(this.currentRace) && this.currentRace.raceId) {
+          if (!isRaceConfigured(this.currentRace) && this.currentRace.raceId && !this.isMobileViewport()) {
             this.promptedTemplateRaceIds.delete(this.currentRace.raceId);
             if (this.activeTab === "format" || this.activeTab === "edit") {
               this.openTemplatesDialog();
               return;
             }
           }
-          if (this.activeTab === "control" || this.activeTab === "review") {
-            const stages = resolveStagesList(this.currentRace);
-            const targetTab: WorkspaceTab =
-              this.lastConfigureTab === "edit" && stages.length > 0 ? "edit" : "format";
-            this.switchWorkspaceTab(targetTab);
-          } else if (this.activeTab !== "format") {
-            this.switchWorkspaceTab("format");
-          }
+          this.switchWorkspaceTab("edit");
           return;
         }
         case "toggle-mobile-stage-menu": {
@@ -4857,6 +5432,8 @@ export class RacesView extends Component {
     if (lapCalloutsBtn && !lapCalloutsBtn.disabled) {
       const stageFmt = lapCalloutsBtn.dataset.toggleRaceLapCallouts || undefined;
       this.announcer?.toggleLapCalloutsForStage(stageFmt);
+      const nextOn = Boolean(this.announcer?.isLapCalloutsActiveForStage(stageFmt));
+      showToast(nextOn ? "Lap timing announcements on" : "Lap timing announcements off", "info");
       this.syncLastSig();
       return;
     }
@@ -4912,11 +5489,14 @@ export class RacesView extends Component {
       if (nextSel !== null && this.raceSignalsSlot !== nextSel) {
         this.raceSignalsSlot = nextSel;
         this.el.querySelectorAll<HTMLElement>("[data-race-sig-pilot]").forEach((btn) => {
-          btn.classList.toggle("is-active", btn.dataset.raceSigPilot === String(nextSel));
+          const active = btn.dataset.raceSigPilot === String(nextSel);
+          btn.classList.toggle("is-active", active);
+          btn.setAttribute("aria-selected", active ? "true" : "false");
         });
         this.raceSignalsChart?.setPilotSlotOverride(nextSel);
         this.syncLastSig();
       }
+      this.scrollTabButtonIntoStrip(sigPilotBtn);
       return;
     }
 
@@ -4949,18 +5529,83 @@ export class RacesView extends Component {
       if (hid && this.reviewSelectedHeatId !== hid) {
         this.reviewSelectedHeatId = hid;
         this.openMarshalMenuKey = "";
+      }
+      this.refreshSinglePanelDom("review_heat");
+      this.refreshSinglePanelDom("review_list");
+      return;
+    }
+
+    const reviewStepBtn = target.closest<HTMLButtonElement>("[data-review-step-heat]");
+    if (reviewStepBtn && !reviewStepBtn.disabled) {
+      const delta = Number(reviewStepBtn.dataset.reviewStepHeat) || 0;
+      const executed = this.getExecutedHeats(this.currentRace);
+      const curHeat = this.resolveReviewHeat(this.currentRace);
+      const curIdx = curHeat ? executed.findIndex((h) => h.id === curHeat.id) : -1;
+      const nextHeat = executed[curIdx + delta];
+      if (nextHeat && nextHeat.id !== this.reviewSelectedHeatId) {
+        this.reviewSelectedHeatId = nextHeat.id;
+        this.openMarshalMenuKey = "";
         this.refreshSinglePanelDom("review_heat");
         this.refreshSinglePanelDom("review_list");
+      }
+      return;
+    }
+
+    const mobileCtrlNavBtn = target.closest<HTMLButtonElement>("[data-mobile-ctrl-nav]");
+    if (mobileCtrlNavBtn && !mobileCtrlNavBtn.disabled) {
+      const nextView = mobileCtrlNavBtn.dataset.mobileCtrlNav as
+        | "live"
+        | "queue"
+        | "schedule"
+        | "standings"
+        | "signals";
+      if (!nextView) return;
+      this.mobileControlView = nextView;
+      if (this.activeTab !== "control") {
+        this.switchWorkspaceTab("control");
+        requestAnimationFrame(() => {
+          const activeBtn = this.el.querySelector<HTMLElement>(
+            `[data-mobile-ctrl-nav="${nextView}"]`
+          );
+          this.scrollTabButtonIntoStrip(activeBtn);
+        });
+        return;
+      }
+      const pageEl = this.el.querySelector<HTMLElement>('[data-rc-page="control"]');
+      if (pageEl) {
+        const prevView = pageEl.dataset.mobileCtrlView ?? "";
+        pageEl.dataset.mobileCtrlView = nextView;
+        this.el.querySelectorAll<HTMLElement>("[data-mobile-ctrl-nav]").forEach((btn) => {
+          const active = btn.dataset.mobileCtrlNav === nextView;
+          btn.classList.toggle("is-active", active);
+          btn.setAttribute("aria-selected", active ? "true" : "false");
+        });
+        this.scrollTabButtonIntoStrip(mobileCtrlNavBtn);
+        if (nextView === "signals") {
+          this.syncRaceSignalsChartDom();
+        }
+        fitScheduleLineups(this.el);
+        scanTableScrollIndicators(this.el);
+        if (prevView !== nextView) {
+          this.triggerDesktopWorkspaceFade(false);
+        }
+        this.syncLastSig();
       } else {
-        this.refreshSinglePanelDom("review_list");
-        this.refreshSinglePanelDom("review_heat");
+        this.lastSig = "";
+        this.render();
+        this.triggerDesktopWorkspaceFade(false);
       }
       return;
     }
 
     const tabBtn = target.closest<HTMLElement>("[data-race-tab]");
     if (tabBtn && !(tabBtn instanceof HTMLButtonElement && tabBtn.disabled)) {
-      this.switchWorkspaceTab(tabBtn.dataset.raceTab as WorkspaceTab);
+      const nextTab = tabBtn.dataset.raceTab as WorkspaceTab;
+      this.switchWorkspaceTab(nextTab);
+      requestAnimationFrame(() => {
+        const activeBtn = this.el.querySelector<HTMLElement>(`[data-race-tab="${nextTab}"]`);
+        this.scrollTabButtonIntoStrip(activeBtn);
+      });
       return;
     }
 
@@ -5096,8 +5741,35 @@ export class RacesView extends Component {
       return;
     }
 
+    const mobileSelectRaceBtn = target.closest<HTMLButtonElement>("[data-mobile-race-select]");
+    if (mobileSelectRaceBtn) {
+      e.stopPropagation();
+      const rid = mobileSelectRaceBtn.dataset.mobileRaceSelect ?? "";
+      if (rid) {
+        if (this.mobileRaceDrawerCloseTimer !== null) {
+          clearTimeout(this.mobileRaceDrawerCloseTimer);
+          this.mobileRaceDrawerCloseTimer = null;
+        }
+        if (this.mobileSelectedRaceId === rid && !this.mobileRaceDrawerClosing) {
+          this.dismissMobileRaceDrawer();
+        } else {
+          this.mobileRaceDrawerClosing = false;
+          this.mobileSelectedRaceId = rid;
+          this.lastSig = "";
+          this.render();
+        }
+      }
+      return;
+    }
+
+    if (target.closest("[data-mobile-race-close]")) {
+      this.dismissMobileRaceDrawer();
+      return;
+    }
+
     const actBtn = target.closest<HTMLElement>("[data-race-act]");
-    if (actBtn && !(actBtn instanceof HTMLButtonElement && actBtn.disabled)) {
+    if (actBtn) {
+      if (actBtn instanceof HTMLButtonElement && actBtn.disabled) return;
       const act = actBtn.dataset.raceAct;
       switch (act) {
         case "dismiss-err":
@@ -5119,9 +5791,12 @@ export class RacesView extends Component {
           return;
         case "create-race-inline":
         case "create-race":
+          this.fabOpen = false;
           this.createRaceInline();
           return;
         case "import-multigp":
+          this.fabOpen = false;
+          this.refreshFabMenuDom();
           if (!sharedMultiGPService.isAvailable(this.store)) return;
           openMultiGPImportModal(this.store, this.api, (created) => {
             if (created.raceId) {
@@ -5134,16 +5809,18 @@ export class RacesView extends Component {
         case "mgp-upload-heats":
           if (!this.isMultiGPVerified()) return;
           openMultiGPSyncModal(this.store, this.api, this.currentRace, "heats", () => {
-            if (!this.disposed && this.activeTab === "review") {
-              this.refreshSinglePanelDom("review_mgp");
+            if (!this.disposed) {
+              this.refreshSinglePanelDom("review_list");
+              this.refreshSinglePanelDom("standings");
             }
           });
           return;
         case "mgp-upload-overall":
           if (!this.isMultiGPVerified()) return;
           openMultiGPSyncModal(this.store, this.api, this.currentRace, "overall", () => {
-            if (!this.disposed && this.activeTab === "review") {
-              this.refreshSinglePanelDom("review_mgp");
+            if (!this.disposed) {
+              this.refreshSinglePanelDom("standings");
+              this.refreshSinglePanelDom("review_list");
             }
           });
           return;
@@ -5197,8 +5874,43 @@ export class RacesView extends Component {
         case "open-race-format":
         case "open-race-control": {
           const raceId = actBtn.dataset.raceId ?? "";
+          this.dirOpenMenuRaceId = "";
+          this.mobileSelectedRaceId = "";
+          this.lastOpenedMobileRaceId = "";
           const nextTab: WorkspaceTab = act === "open-race-format" ? "format" : "control";
           this.openRaceFromDirectory(raceId, nextTab, nextTab === "control");
+          return;
+        }
+        case "toggle-dir-race-menu": {
+          const raceId = actBtn.dataset.raceId ?? "";
+          if (!raceId) return;
+          this.dirOpenMenuRaceId = this.dirOpenMenuRaceId === raceId ? "" : raceId;
+          this.refreshDirectoryResultsDom();
+          return;
+        }
+        case "dir-open-race-settings": {
+          const raceId = actBtn.dataset.raceId ?? "";
+          if (!raceId) return;
+          this.dirOpenMenuRaceId = "";
+          this.refreshDirectoryResultsDom();
+          const openModal = (): void => {
+            openRaceSettingsModal({
+              getRace: () =>
+                this.getEffectiveRaces().find((r) => r.raceId === raceId) ?? this.currentRace,
+              getAllTags: () => this.store.allRaceTags,
+              api: this.api,
+              onError: (m) => this.reportErr(m),
+            });
+          };
+          if (this.currentRace.raceId !== raceId) {
+            this.setViewingRace(raceId);
+            void this.api
+              .eventAction({ action: "select_race", raceId })
+              .then(() => openModal())
+              .catch(this.reportErr);
+          } else {
+            openModal();
+          }
           return;
         }
         case "dir-toggle-race": {
@@ -5232,6 +5944,10 @@ export class RacesView extends Component {
         }
         case "delete-race": {
           const raceId = actBtn.dataset.raceId ?? this.currentRace.raceId ?? "";
+          if (this.dirOpenMenuRaceId) {
+            this.dirOpenMenuRaceId = "";
+            this.refreshDirectoryResultsDom();
+          }
           const found = this.getEffectiveRaces().find((r) => r.raceId === raceId);
           if (found) this.confirmDeleteRace(found);
           return;
@@ -5482,16 +6198,35 @@ export class RacesView extends Component {
           if (
             !selectHeatEl.hasAttribute("data-load-next-ready") &&
             targetHeat &&
-            (targetHeat.state === "confirmed" || targetHeat.state === "finished")
+            (targetHeat.state === "confirmed" ||
+              targetHeat.state === "finished" ||
+              targetHeat.state === "aborted")
           ) {
             this.reviewSelectedHeatId = heatId;
             this.switchWorkspaceTab("review");
             return;
           }
-          const ctrlStage = this.getControlStageIndex(race);
-          if (targetHeat && targetHeat.stageIndex === ctrlStage) {
-            void this.api.raceControl("select", heatId, race.raceId).catch(this.reportErr);
+          if (!targetHeat || targetHeat.state === "waiting") {
+            return;
           }
+          if (targetHeat.stageIndex >= 1) {
+            this.bracketStage = targetHeat.stageIndex;
+          }
+          this.mobileControlView = "live";
+          const pageEl = this.el.querySelector<HTMLElement>('[data-rc-page="control"]');
+          if (pageEl) {
+            const prevView = pageEl.dataset.mobileCtrlView ?? "";
+            pageEl.dataset.mobileCtrlView = "live";
+            this.el.querySelectorAll<HTMLElement>("[data-mobile-ctrl-nav]").forEach((btn) => {
+              const active = btn.dataset.mobileCtrlNav === "live";
+              btn.classList.toggle("is-active", active);
+              btn.setAttribute("aria-selected", active ? "true" : "false");
+            });
+            if (prevView !== "live") {
+              this.triggerDesktopWorkspaceFade(false);
+            }
+          }
+          void this.api.raceControl("select", heatId, race.raceId).catch(this.reportErr);
           return;
         }
         if (targetHeat && targetHeat.stageIndex >= 1) {
@@ -5504,6 +6239,9 @@ export class RacesView extends Component {
 
     const lapChip = target.closest<HTMLButtonElement>("[data-toggle-lap]");
     if (lapChip && !lapChip.disabled) {
+      if (window.matchMedia?.("(max-width: 640px)").matches) {
+        return;
+      }
       const heatId = lapChip.dataset.heatId ?? "";
       const slot = Number(lapChip.dataset.slotIndex);
       const crossingId = Number(lapChip.dataset.toggleLap);
@@ -5619,6 +6357,9 @@ export class RacesView extends Component {
         });
         return;
       }
+      if (action === "select") {
+        this.mobileControlView = "live";
+      }
       if (
         action === "select" &&
         targetHeat &&
@@ -5694,6 +6435,9 @@ export class RacesView extends Component {
       }
       this.pendingRouteTarget = null;
       this.showDirectory = false;
+      if (switchingRace && nextTab === "control") {
+        this.mobileControlView = "live";
+      }
       this.activeTab = nextTab;
       this.fabOpen = false;
       this.fabSubmenu = "";
@@ -5911,7 +6655,7 @@ export class RacesView extends Component {
         ? `<div class="races-dir-empty">
             <div class="race-empty-icon">${icons.checkered(28)}</div>
             <div class="races-dir-empty-title">No races yet</div>
-            <p class="note">Click <strong>+ Race</strong> below to add your first race row inline, then click <strong>Configure</strong> in Actions to build its tournament format.</p>
+            <p class="note">Click <strong>+ Race</strong> below to add your first race row inline, then click <strong>Setup</strong> in Actions to build its tournament format.</p>
           </div>`
         : filtered.length === 0
           ? `<div class="races-dir-empty">
@@ -5931,7 +6675,7 @@ export class RacesView extends Component {
                     <th class="races-col-tags">Tags</th>
                     <th class="races-col-date">Date</th>
                     <th class="races-col-status">Status</th>
-                    <th class="races-col-actions">Actions</th>
+                    <th class="races-col-actions" aria-label="Open"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -5944,8 +6688,6 @@ export class RacesView extends Component {
                         ? { label: "New", cls: "is-waiting" }
                         : raceLifecycleBadge(r.lifecycle);
                       const ongoing = configured && isRaceOngoing(r);
-                      const isDone =
-                        r.lifecycle === "completed" || r.lifecycle === "scrapped";
                       const confirmed = r.heats.filter((h) => h.state === "confirmed").length;
                       const activePilots = (r.roster ?? []).filter(
                         (p) => p.checkedIn && p.attendance === "active"
@@ -5963,16 +6705,6 @@ export class RacesView extends Component {
                       if (r.championCallsign) statusTipParts.push(`Champion: ${r.championCallsign}`);
                       if (r.statusReason) statusTipParts.push(r.statusReason);
                       const dispName = r.config.eventName || `Race ${idx + 1}`;
-                      const canToggleLifecycle = configured && !isDone;
-                      const toggleTitle = !configured
-                        ? "Configure tournament format first"
-                        : ongoing
-                          ? "Pause race"
-                          : r.lifecycle === "paused"
-                            ? "Resume race"
-                            : isDone
-                              ? "Race finalized — open Race Control to reopen"
-                              : "Start race";
 
                       return `
                         <tr class="${isCurrent && ongoing ? "is-current-race" : ""}" data-race-row="${esc(rid)}">
@@ -6012,47 +6744,46 @@ export class RacesView extends Component {
                               <div class="races-row-actions">
                                 <button
                                   type="button"
-                                  class="btn btn-icon btn-ghost dir-action-btn"
-                                  data-race-act="open-race-format"
+                                  class="btn btn-ghost btn-xs dir-open-btn"
+                                  data-race-act="${configured ? "open-race-control" : "open-race-format"}"
                                   data-race-id="${esc(rid)}"
-                                  title="Open race workspace"
-                                  aria-label="Open race workspace"
-                                >
-                                  ${icons.arrowRight(18)}
-                                </button>
-                                <button
-                                  type="button"
-                                  class="btn btn-icon dir-action-btn ${ongoing ? "btn-armed" : "btn-ghost"}"
-                                  data-race-act="open-race-control"
-                                  data-race-id="${esc(rid)}"
-                                  ${!configured ? "disabled" : ""}
-                                  title="${!configured ? "Configure tournament format first" : "Open Race Control"}"
-                                  aria-label="Open Race Control"
-                                >
-                                  ${icons.checkered(18)}
-                                </button>
-                                <button
-                                  type="button"
-                                  class="btn btn-icon dir-action-btn ${ongoing ? "btn-armed" : "btn-ghost"}"
-                                  data-race-act="dir-toggle-race"
-                                  data-race-id="${esc(rid)}"
-                                  ${canToggleLifecycle ? "" : "disabled"}
-                                  title="${esc(toggleTitle)}"
-                                  aria-label="${esc(toggleTitle)}"
-                                >
-                                  ${ongoing ? icons.pause(18) : icons.play(18)}
-                                </button>
-                                <button
-                                  type="button"
-                                  class="btn btn-icon btn-ghost dir-action-btn"
-                                  data-race-act="delete-race"
-                                  data-race-id="${esc(rid)}"
-                                  ${ongoing ? "disabled" : ""}
-                                  title="${ongoing ? "Pause or complete this race before deleting" : "Delete race"}"
-                                  aria-label="Delete race"
-                                >
-                                  ${icons.trash(18)}
-                                </button>
+                                  title="${configured ? "Open race workspace" : "Set up tournament format"}"
+                                  aria-label="${configured ? "Open race workspace" : "Set up tournament format"}"
+                                >${configured ? "Open" : "Setup"}</button>
+                                <div class="dir-row-more-wrap">
+                                  <button
+                                    type="button"
+                                    class="btn btn-ghost btn-xs dir-row-more-btn ${this.dirOpenMenuRaceId === rid ? "is-open" : ""}"
+                                    data-race-act="toggle-dir-race-menu"
+                                    data-race-id="${esc(rid)}"
+                                    title="Race options"
+                                    aria-label="Options for ${esc(dispName)}"
+                                    aria-haspopup="menu"
+                                    aria-expanded="${this.dirOpenMenuRaceId === rid ? "true" : "false"}"
+                                  >${icons.moreHorizontal(15)}</button>
+                                  ${
+                                    this.dirOpenMenuRaceId === rid
+                                      ? `<div class="dir-row-more-menu" role="menu" aria-label="Options for ${esc(dispName)}">
+                                           <button
+                                             type="button"
+                                             class="dir-row-more-item"
+                                             role="menuitem"
+                                             data-race-act="dir-open-race-settings"
+                                             data-race-id="${esc(rid)}"
+                                           ><span>Settings</span></button>
+                                           <button
+                                             type="button"
+                                             class="dir-row-more-item"
+                                             role="menuitem"
+                                             data-race-act="delete-race"
+                                             data-race-id="${esc(rid)}"
+                                             ${ongoing ? "disabled" : ""}
+                                             title="${ongoing ? "Pause or complete this race before deleting" : "Delete race"}"
+                                           ><span>Delete</span></button>
+                                         </div>`
+                                      : ""
+                                  }
+                                </div>
                               </div>
                             </div>
                           </td>
@@ -6061,14 +6792,55 @@ export class RacesView extends Component {
                     .join("")}
                 </tbody>
               </table>
-            </div>`;
+            </div>
+            <div class="dir-mobile-mosaic" role="listbox" aria-label="Races">
+              ${filtered
+                .map((r, idx) => {
+                  const rid = r.raceId ?? "";
+                  const configured = isRaceConfigured(r);
+                  const lc = !configured
+                    ? { label: "New", cls: "is-waiting" }
+                    : raceLifecycleBadge(r.lifecycle);
+                  const ongoing = configured && isRaceOngoing(r);
+                  const dispName = r.config.eventName || `Race ${idx + 1}`;
+                  const subtitle = formatRaceSubtitle(r);
+                  const isSelected = this.mobileSelectedRaceId === rid;
+                  return `
+                    <div
+                      role="option"
+                      tabindex="0"
+                      aria-selected="${isSelected ? "true" : "false"}"
+                      class="dir-mobile-chip ${isSelected ? "is-selected" : ""} ${ongoing ? "is-live" : ""}"
+                      data-race-act="${configured ? "open-race-control" : "open-race-format"}"
+                      data-race-id="${esc(rid)}"
+                    >
+                      <div class="dir-mobile-chip-top">
+                        <div class="dir-mobile-chip-badges">
+                          <span class="race-state-pill ${lc.cls}">${esc(lc.label)}</span>
+                          ${r.mgpLink ? `<span class="badge mono dir-mobile-chip-mgp">MGP</span>` : ""}
+                        </div>
+                        <button
+                          type="button"
+                          class="dir-mobile-chip-more-btn"
+                          data-mobile-race-select="${esc(rid)}"
+                          title="Race options"
+                          aria-label="Options for ${esc(dispName)}"
+                        >${icons.moreHorizontal(16)}</button>
+                      </div>
+                      <strong class="dir-mobile-chip-title">${esc(dispName)}</strong>
+                      <span class="dir-mobile-chip-sub">${esc(subtitle)}</span>
+                    </div>`;
+                })
+                .join("")}
+            </div>
+            ${this.renderMobileRaceDrawer(allRaces)}`;
 
     const footNote =
       allRaces.length === 0
         ? "No races created yet · Click + Race to add one inline."
         : hasAnyFilter
           ? `Showing ${filtered.length} of ${allRaces.length} race${allRaces.length === 1 ? "" : "s"}`
-          : `${allRaces.length} race${allRaces.length === 1 ? "" : "s"} · Click a name or tag cell to edit inline, or use Actions to configure or control.`;
+          : `${allRaces.length} race${allRaces.length === 1 ? "" : "s"} · Click a name or tag cell to edit inline, or click Open to configure or control.`;
 
     return {
       allRaces,
@@ -6083,6 +6855,116 @@ export class RacesView extends Component {
       tableOrEmptyMarkup,
       footNote,
     };
+  }
+
+  private renderMobileRaceDrawer(allRaces: RaceTournamentState[]): string {
+    if (!this.mobileSelectedRaceId) {
+      this.lastOpenedMobileRaceId = "";
+      return "";
+    }
+    const idx = allRaces.findIndex((r) => r.raceId === this.mobileSelectedRaceId);
+    const r = idx >= 0 ? allRaces[idx] : undefined;
+    if (!r || !r.raceId) {
+      this.lastOpenedMobileRaceId = "";
+      return "";
+    }
+    const rid = r.raceId;
+    const shouldAnimateEntry = this.lastOpenedMobileRaceId !== rid;
+    this.lastOpenedMobileRaceId = rid;
+
+    const configured = isRaceConfigured(r);
+    const lc = !configured
+      ? { label: "New", cls: "is-waiting" }
+      : raceLifecycleBadge(r.lifecycle);
+    const ongoing = configured && isRaceOngoing(r);
+    const confirmed = r.heats.filter((h) => h.state === "confirmed").length;
+    const activePilots = (r.roster ?? []).filter(
+      (p) => p.checkedIn && p.attendance === "active"
+    ).length;
+    const subtitle = formatRaceSubtitle(r);
+    const trackInfo = this.store.raceNodes(r);
+    const gateBit = `${trackInfo.nodes.length} gate${trackInfo.nodes.length === 1 ? "" : "s"}`;
+    const createdText = r.createdAt ? formatShortRaceDate(r.createdAt) : "—";
+    const progressNote =
+      !configured || r.heats.length === 0
+        ? `0 heats · ${activePilots} pilots`
+        : `${confirmed}/${r.heats.length} heats · ${activePilots} pilots`;
+    const dispName = r.config.eventName || `Race ${idx + 1}`;
+
+    return `
+      <div class="pilot-dir-mobile-drawer-overlay" role="dialog" aria-modal="true" aria-label="Edit ${esc(dispName)}">
+        <div class="pilot-dir-mobile-drawer-backdrop" data-mobile-race-close></div>
+        <div class="pilot-dir-mobile-editor ${shouldAnimateEntry ? "is-entering" : ""}" data-mobile-race-drawer>
+          <div class="dir-mobile-drawer-top-bar" data-mobile-race-handle>
+            <button
+              type="button"
+              class="pilot-dir-mobile-drawer-handle"
+              data-mobile-race-handle
+              data-mobile-race-close
+              aria-label="Dismiss race editor"
+              title="Pull down or tap to dismiss"
+            >
+              <span class="pilot-dir-mobile-drawer-grip" aria-hidden="true"></span>
+            </button>
+            <div class="dir-mobile-drawer-top-status">
+              ${r.mgpLink ? `<span class="badge mono">MGP #${r.mgpLink.raceId}</span>` : ""}
+              <span class="race-state-pill ${lc.cls}">${esc(lc.label)}</span>
+            </div>
+          </div>
+          <div class="pilot-dir-mobile-grid">
+            <label class="field">
+              <span>Race name</span>
+              <input
+                type="text"
+                class="input"
+                data-race-name-input="${esc(rid)}"
+                value="${esc(dispName)}"
+                placeholder="Race name"
+                maxlength="64"
+                autocomplete="off"
+              />
+            </label>
+            <div class="field">
+              <span>Tags</span>
+              ${renderTagPillBoxHtml({
+                boxId: `race-drawer-${rid}`,
+                tags: r.tags ?? [],
+                placeholder: "Add tags (comma or Enter)…",
+                compact: false,
+                ariaLabel: "Edit race tags",
+              })}
+            </div>
+            <div class="dir-mobile-drawer-meta-grid">
+              <div class="dir-mobile-drawer-meta-item">
+                <span class="note">Format</span>
+                <strong>${esc(subtitle)}</strong>
+              </div>
+              <div class="dir-mobile-drawer-meta-item">
+                <span class="note">Progress</span>
+                <strong>${esc(progressNote)}</strong>
+              </div>
+              <div class="dir-mobile-drawer-meta-item">
+                <span class="note">Track</span>
+                <strong>${esc(gateBit)}</strong>
+              </div>
+              <div class="dir-mobile-drawer-meta-item">
+                <span class="note">Created</span>
+                <strong>${esc(createdText)}</strong>
+              </div>
+            </div>
+          </div>
+          <div class="dir-mobile-drawer-actions is-single-action">
+            <button
+              type="button"
+              class="btn btn-ghost dir-mobile-drawer-btn"
+              data-race-act="delete-race"
+              data-race-id="${esc(rid)}"
+              ${ongoing ? "disabled" : ""}
+              title="${ongoing ? "Pause or complete this race before deleting" : "Delete race"}"
+            >${icons.trash(15)}<span>Delete</span></button>
+          </div>
+        </div>
+      </div>`;
   }
 
   private refreshDirectoryResultsDom(): void {
@@ -6102,6 +6984,17 @@ export class RacesView extends Component {
         ? `<button type="button" class="btn btn-ghost btn-xs" data-tag-filter="__reset_all__">Clear (${vm.filtered.length}/${vm.allRaces.length})</button>`
         : "";
     }
+    const trimmedSearch = this.dirSearchQuery.trim();
+    const exactMatch = this.findExactRaceByName(trimmedSearch, vm.allRaces);
+    const addBtn = this.el.querySelector<HTMLButtonElement>('[data-race-act="create-race-inline"]');
+    if (addBtn) {
+      addBtn.disabled = Boolean(exactMatch);
+      addBtn.title = exactMatch
+        ? `Race “${exactMatch.config.eventName || trimmedSearch}” already exists`
+        : trimmedSearch && !trimmedSearch.startsWith("#")
+          ? `Add race “${trimmedSearch}”`
+          : "Add Race";
+    }
     this.mountActiveRaceTagEditor(false);
     this.syncLastSig();
   }
@@ -6111,53 +7004,40 @@ export class RacesView extends Component {
     const {
       allRaces,
       filtered,
-      sortedTags,
-      untaggedCount,
       setupCount,
       activeCount,
       doneCount,
       hasAnyFilter,
-      isTagAllSelected,
       tableOrEmptyMarkup,
-      footNote,
     } = vm;
 
-    const tagsSubRow = `<div class="dir-filter-tags-row" role="toolbar" aria-label="Filter races by tag">
-      <button type="button" class="races-filter-pill ${isTagAllSelected ? "is-active" : ""}" data-tag-filter="__all__">
-        All tags (${allRaces.length})
-      </button>
-      ${sortedTags
-        .map(
-          ({ key, label, count }) => `
-          <button
-            type="button"
-            class="races-filter-pill ${this.selectedFilterTags.has(key) ? "is-active" : ""}"
-            data-tag-filter="${esc(label)}"
-            title="Toggle filter for #${esc(label)}"
-          >
-            ${icons.tag(12)}<span>#${esc(label)} (${count})</span>
-          </button>`
-        )
-        .join("")}
-      <button type="button" class="races-filter-pill ${this.untaggedOnly ? "is-active" : ""}" data-tag-filter="__untagged__">
-        Untagged (${untaggedCount})
-      </button>
-    </div>`;
+    const trimmedSearch = this.dirSearchQuery.trim();
+    const exactMatch = this.findExactRaceByName(trimmedSearch, allRaces);
+    const addDisabled = Boolean(exactMatch);
+    const addBtnTitle = exactMatch
+      ? `Race “${exactMatch.config.eventName || trimmedSearch}” already exists`
+      : trimmedSearch && !trimmedSearch.startsWith("#")
+        ? `Add race “${trimmedSearch}”`
+        : "Add Race";
 
+    const mgpAvail = sharedMultiGPService.isAvailable(this.store);
     const filterToolbarMarkup = `
       <div class="dir-filter-toolbar" data-race-dir-toolbar>
         <div class="dir-filter-main-row">
-          <div class="dir-filter-search-row">
-            ${icons.search(15)}
-            <input
-              type="search"
-              class="input input-sm dir-filter-search-input"
-              data-race-dir-search
-              placeholder="Filter races by name, format, or #tag…"
-              aria-label="Filter races"
-              value="${esc(this.dirSearchQuery)}"
-              autocomplete="off"
-            />
+          <div class="dir-filter-search-bar">
+            <div class="dir-filter-search-row">
+              ${icons.search(14)}
+              <input
+                type="search"
+                class="input dir-filter-search-input"
+                data-race-dir-search
+                placeholder="Search or add race..."
+                aria-label="Search or add race"
+                value="${esc(this.dirSearchQuery)}"
+                autocomplete="off"
+              />
+            </div>
+            <button type="button" class="btn btn-unarmed" data-race-act="create-race-inline" ${addDisabled ? "disabled" : ""} title="${esc(addBtnTitle)}" aria-label="Add Race">${icons.plus(14)}<span>Add</span></button>
           </div>
           <div class="dir-filter-right">
             <div class="segmented dir-filter-seg" role="tablist" aria-label="Filter races by status">
@@ -6181,31 +7061,22 @@ export class RacesView extends Component {
             }</span>
           </div>
         </div>
-        ${tagsSubRow}
       </div>`;
 
+    const bottomActionsMarkup = mgpAvail
+      ? `<div class="pilot-dir-mobile-footer" data-race-dir-bottom-actions>
+           <button type="button" class="btn btn-sm pilot-dir-mgp-btn" data-race-act="import-multigp" title="Import from MultiGP" aria-label="Import from MultiGP"><span>Import from MultiGP</span></button>
+         </div>`
+      : "";
+
     return `
-      <section class="settings-section">
-        <div class="settings-intro">
-          <h2>Race</h2>
-          <p>Organize heats, brackets, and championship finals. Click a race name or tag cell to edit inline, or use row actions to configure or control.</p>
-        </div>
-        <div class="card card-flush races-dir-card">
-          ${filterToolbarMarkup}
-          <div data-race-dir-results>${tableOrEmptyMarkup}</div>
-          ${
-            sharedMultiGPService.isAvailable(this.store)
-              ? `<div class="dir-actions-row" role="group" aria-label="Import races">
-                  <button class="btn btn-ghost btn-sm pilot-dir-mgp-btn" type="button" data-race-act="import-multigp">${icons.download(14)}<span>Download from MultiGP</span></button>
-                </div>`
-              : ""
-          }
-          <div class="rules-foot">
-            <p class="note" data-race-dir-foot-note>${esc(footNote)}</p>
-            <div class="rules-foot-actions">
-              <button class="btn btn-ghost btn-sm" type="button" data-race-act="create-race-inline">${icons.plus(14)}<span>Race</span></button>
-            </div>
+      <section class="settings-section is-single-col">
+        <div class="races-dir-stack">
+          <div class="card card-flush races-dir-card">
+            ${filterToolbarMarkup}
+            <div data-race-dir-results>${tableOrEmptyMarkup}</div>
           </div>
+          ${bottomActionsMarkup}
         </div>
       </section>`;
   }
@@ -6213,174 +7084,156 @@ export class RacesView extends Component {
   private renderTopLeftCanvasBar(
     race: RaceTournamentState,
     mode: WorkspaceTab,
-    forceInitialDrawerState?: "open" | "collapsed"
+    _forceInitialDrawerState?: "open" | "collapsed"
   ): string {
-    const viewStage = this.getCurrentViewStage(race);
-    const stages = resolveStagesList(race);
     const isConfigureMode = mode === "format" || mode === "edit";
-    const drawerOpen =
-      forceInitialDrawerState !== undefined
-        ? forceInitialDrawerState === "open"
-        : isConfigureMode;
-
-    const raceClosed =
-      race.lifecycle === "completed" ||
-      race.lifecycle === "scrapped" ||
-      Boolean(race.isComplete);
-
-    const stageDotCls = (stg: RaceStage): string => {
-      if (raceClosed || stg.status === "completed") {
-        return "";
-      }
-      return stg.status === "active"
-        ? "is-live"
-        : stg.status === "paused"
-          ? "is-paused"
-          : stg.dangling
-            ? "is-warn"
-            : stg.status === "ready"
-              ? "is-ready"
-              : "";
-    };
-
-    const stageTabsHtml = stages
-      .map((stg) => {
-        const dotCls = stageDotCls(stg);
-        const isStageActive = mode === "edit" && viewStage === stg.index;
-        return `
-          <button
-            type="button"
-            class="rc-topleft-subtab ${isStageActive ? "is-active" : ""}"
-            data-fmt-menu-stage="${stg.index}"
-            title="Stage ${stg.index}: ${esc(stg.title)}"
-          >
-            <span>Stage ${stg.index}</span>
-            ${dotCls ? `<span class="rc-stage-pill-dot ${dotCls}"></span>` : ""}
-          </button>`;
-      })
-      .join("");
-
-    const curStageObj = stages.find((s) => s.index === viewStage) ?? stages[0];
-    const curStageDot = mode === "edit" && curStageObj ? stageDotCls(curStageObj) : "";
-    const mobileCurrentLabel =
-      mode === "format"
-        ? "Format"
-        : curStageObj
-          ? `Stage ${curStageObj.index}`
-          : "Format";
-    const mobileSingleStageHtml = `<div class="rc-stage-dropdown-mobile">
-        <button
-          type="button"
-          class="rc-topleft-subtab rc-mobile-stage-trigger is-active ${this.mobileStageMenuOpen ? "is-open" : ""}"
-          data-rc-ui="toggle-mobile-stage-menu"
-          aria-haspopup="menu"
-          aria-expanded="${this.mobileStageMenuOpen ? "true" : "false"}"
-          title="Switch between Format and Stages"
-        >
-          <span>${mobileCurrentLabel}</span>
-          ${curStageDot ? `<span class="rc-stage-pill-dot ${curStageDot}"></span>` : ""}
-          <span class="rc-mobile-stage-caret-ico">${icons.chevronDown(12)}</span>
-        </button>
-      </div>`;
-
-    const mobileStagePopoverHtml =
-      isConfigureMode && this.mobileStageMenuOpen
-        ? `<div class="rc-mobile-stage-popover" role="menu" aria-label="Choose format or stage to configure">
-            <button
-              type="button"
-              class="rc-mobile-stage-option ${mode === "format" ? "is-selected" : ""}"
-              role="menuitem"
-              data-fmt-menu-pick="format"
-            >
-              <span class="rc-mobile-stage-opt-main">
-                <strong>Format</strong>
-                <span class="note">Stages &amp; connections</span>
-              </span>
-              <span class="rc-mobile-stage-opt-right">
-                ${mode === "format" ? icons.check(13) : ""}
-              </span>
-            </button>
-            ${stages
-              .map((stg) => {
-                const dotCls = stageDotCls(stg);
-                const selected = mode === "edit" && stg.index === viewStage;
-                return `<button
-                  type="button"
-                  class="rc-mobile-stage-option ${selected ? "is-selected" : ""}"
-                  role="menuitem"
-                  data-fmt-menu-stage="${stg.index}"
-                >
-                  <span class="rc-mobile-stage-opt-main">
-                    <strong>Stage ${stg.index}</strong>
-                    <span class="note">${esc(stg.title)}</span>
-                  </span>
-                  <span class="rc-mobile-stage-opt-right">
-                    ${dotCls ? `<span class="rc-stage-pill-dot ${dotCls}"></span>` : ""}
-                    ${selected ? icons.check(13) : ""}
-                  </span>
-                </button>`;
-              })
-              .join("")}
-          </div>`
-        : "";
+    const isOpenQual = hasOpenQualifierRound(race);
+    const activeMobileView =
+      this.mobileControlView === "queue" && !isOpenQual ? "live" : this.mobileControlView;
+    const configured = isRaceConfigured(race);
 
     return `
       <div class="rc-topleft-bar" data-rc-hud>
-        <div class="rc-topleft-seg" role="navigation" aria-label="Race Workspace">
-          <button
-            type="button"
-            class="rc-topleft-btn rc-mode-btn ${isConfigureMode ? "is-mode-active" : ""}"
-            data-rc-ui="mode-configure"
-            aria-expanded="${isConfigureMode ? "true" : "false"}"
-            title="${isConfigureMode ? "Open Format overview" : "Switch to Configure mode"}"
-          >
-            ${icons.settings(13)}<span>Configure</span>
-          </button>
+        <div class="sched-lineup-wrap rc-topleft-scroll-wrap">
+          <button type="button" class="sched-lineup-cue is-left" data-lineup-scroll="-1" aria-label="Scroll workspace tabs left" title="Scroll left" hidden>${icons.chevronLeft(13)}</button>
+          <div class="rc-topleft-seg sched-lineup" role="navigation" aria-label="Race Workspace" data-fit-lineup data-rc-topleft-track>
+            <button
+              type="button"
+              class="rc-topleft-btn rc-mode-btn ${mode === "pilots" ? "is-active" : ""}"
+              data-race-tab="pilots"
+              aria-selected="${mode === "pilots" ? "true" : "false"}"
+              title="Check in pilots, add walk-ups, and set attendance"
+            >
+              ${icons.pilot(13)}<span>Pilots</span>
+            </button>
 
-          <div
-            class="rc-configure-drawer ${drawerOpen ? "is-open" : "is-collapsed"}"
-            data-rc-configure-drawer
-            aria-hidden="${isConfigureMode ? "false" : "true"}"
-            ${isConfigureMode ? "" : "inert"}
-          >
-            <div class="rc-configure-drawer-clip">
-              <div class="rc-configure-drawer-inner">
-                <span class="rc-topleft-sep" aria-hidden="true"></span>
-                <button
-                  type="button"
-                  class="rc-topleft-subtab rc-fmt-tab-desktop ${mode === "format" ? "is-active" : ""}"
-                  data-fmt-menu-pick="format"
-                  title="Format overview (all stages &amp; connections)"
-                >
-                  <span>Format</span>
-                </button>
-                <div class="rc-stage-tabs-desktop">${stageTabsHtml}</div>
-                ${mobileSingleStageHtml}
-                <span class="rc-topleft-sep" aria-hidden="true"></span>
-              </div>
-            </div>
+            <button
+              type="button"
+              class="rc-topleft-btn rc-mode-btn ${isConfigureMode ? "is-active" : ""}"
+              data-race-tab="edit"
+              aria-selected="${isConfigureMode ? "true" : "false"}"
+              title="Set up rounds, seeding, and heats"
+            >
+              ${icons.settings(13)}<span>Setup</span>
+            </button>
+
+            <button
+              type="button"
+              class="rc-topleft-btn rc-mode-btn ${mode === "control" && activeMobileView === "live" ? "is-active" : ""}"
+              data-mobile-ctrl-nav="live"
+              aria-selected="${mode === "control" && activeMobileView === "live" ? "true" : "false"}"
+              ${!configured ? "disabled" : ""}
+              title="${!configured ? "Set up tournament format first" : "Marshal live heats &amp; flight line"}"
+            >
+              ${icons.marshal(13)}<span>Marshal</span>
+            </button>
+            ${
+              isOpenQual
+                ? `<button
+                     type="button"
+                     class="rc-topleft-btn rc-mode-btn ${mode === "control" && activeMobileView === "queue" ? "is-active" : ""}"
+                     data-mobile-ctrl-nav="queue"
+                     aria-selected="${mode === "control" && activeMobileView === "queue" ? "true" : "false"}"
+                     ${!configured ? "disabled" : ""}
+                     title="Open Qualifier flight queue"
+                   >
+                     ${icons.zap(13)}<span>Queue</span>
+                   </button>`
+                : ""
+            }
+            <button
+              type="button"
+              class="rc-topleft-btn rc-mode-btn ${mode === "control" && activeMobileView === "schedule" ? "is-active" : ""}"
+              data-mobile-ctrl-nav="schedule"
+              aria-selected="${mode === "control" && activeMobileView === "schedule" ? "true" : "false"}"
+              ${!configured ? "disabled" : ""}
+              title="Heats schedule"
+            >
+              ${icons.calendar(13)}<span>Schedule</span>
+            </button>
+            <button
+              type="button"
+              class="rc-topleft-btn rc-mode-btn ${mode === "control" && activeMobileView === "standings" ? "is-active" : ""}"
+              data-mobile-ctrl-nav="standings"
+              aria-selected="${mode === "control" && activeMobileView === "standings" ? "true" : "false"}"
+              ${!configured ? "disabled" : ""}
+              title="Race standings"
+            >
+              ${icons.trophy(13)}<span>Standings</span>
+            </button>
+            <button
+              type="button"
+              class="rc-topleft-btn rc-mode-btn ${mode === "control" && activeMobileView === "signals" ? "is-active" : ""}"
+              data-mobile-ctrl-nav="signals"
+              aria-selected="${mode === "control" && activeMobileView === "signals" ? "true" : "false"}"
+              ${!configured ? "disabled" : ""}
+              title="Live RSSI signals"
+            >
+              ${icons.signal(13)}<span>Signals</span>
+            </button>
+
+            <button
+              type="button"
+              class="rc-topleft-btn rc-mode-btn ${mode === "review" ? "is-active" : ""}"
+              data-race-tab="review"
+              ${!configured ? "disabled" : ""}
+              title="${!configured ? "Set up tournament format first" : "Review executed heats, inspect RSSI crossings, and adjust placements"}"
+            >
+              ${icons.reviewCheck(13)}<span>Review</span>
+            </button>
+
+            <button
+              type="button"
+              class="rc-topleft-btn rc-mode-btn ${mode === "analytics" ? "is-active" : ""}"
+              data-race-tab="analytics"
+              aria-selected="${mode === "analytics" ? "true" : "false"}"
+              ${!configured ? "disabled" : ""}
+              title="${!configured ? "Set up tournament format first" : "Inspect lap consistency, section splits, and recommendations"}"
+            >
+              ${icons.chart(13)}<span>Analytics</span>
+            </button>
           </div>
-
-          <button
-            type="button"
-            class="rc-topleft-btn rc-mode-btn ${mode === "control" ? "is-active" : ""}"
-            data-race-tab="control"
-            ${!isRaceConfigured(race) ? "disabled" : ""}
-            title="${!isRaceConfigured(race) ? "Configure tournament format first" : "Run live heats &amp; standings for the active stage"}"
-          >
-            ${icons.checkered(13)}<span>Control</span>
-          </button>
-          <button
-            type="button"
-            class="rc-topleft-btn rc-mode-btn ${mode === "review" ? "is-active" : ""}"
-            data-race-tab="review"
-            ${!isRaceConfigured(race) ? "disabled" : ""}
-            title="${!isRaceConfigured(race) ? "Configure tournament format first" : "Review executed heats, inspect RSSI crossings, and adjust placements"}"
-          >
-            ${icons.reviewCheck(13)}<span>Review</span>
-          </button>
-          ${mobileStagePopoverHtml}
+          <button type="button" class="sched-lineup-cue is-right" data-lineup-scroll="1" aria-label="Scroll workspace tabs right" title="More tabs" hidden>${icons.chevronRight(13)}</button>
         </div>
+      </div>`;
+  }
+
+  private renderRaceWorkspaceTopBar(
+    race: RaceTournamentState,
+    mode: WorkspaceTab,
+    rightHtml = ""
+  ): string {
+    return `
+      <div class="races-page-topbar" data-rc-hud>
+        <div class="rc-topbar-side is-left" aria-hidden="true"></div>
+        ${this.renderTopLeftCanvasBar(race, mode)}
+        <div class="rc-topbar-side is-right">${rightHtml}</div>
+      </div>`;
+  }
+
+  private renderDesktopSetupViewToggle(): string {
+    return `
+      <div
+        class="rc-setup-view-toggle"
+        role="group"
+        aria-label="Setup view mode"
+        data-setup-view-switcher
+        data-active-view="${this.desktopSetupView}"
+      >
+        <button
+          type="button"
+          class="rc-setup-view-btn ${this.desktopSetupView === "graph" ? "is-active" : ""}"
+          data-setup-view="graph"
+          aria-pressed="${this.desktopSetupView === "graph" ? "true" : "false"}"
+          title="Switch to Graph view"
+        >Graph</button>
+        <button
+          type="button"
+          class="rc-setup-view-btn ${this.desktopSetupView === "table" ? "is-active" : ""}"
+          data-setup-view="table"
+          aria-pressed="${this.desktopSetupView === "table" ? "true" : "false"}"
+          title="Switch to Table view"
+        >Table</button>
       </div>`;
   }
 
@@ -6525,7 +7378,7 @@ export class RacesView extends Component {
                 let seatActionHtml = "";
                 if (seatBadge) {
                   seatActionHtml = `<span class="rc-pilot-seat-badge mono" title="Seated in ${esc(seatBadge)}">${esc(seatBadge)}</span>`;
-                } else if (mode === "edit" && isActive && stageHasHeats) {
+                } else if ((mode === "edit" || mode === "pilots") && isActive && stageHasHeats) {
                   seatActionHtml = `<button type="button" class="btn btn-ghost btn-xs rc-pilot-seat-btn" data-bkt-action="auto_seat_pilot" data-pilot-slot="${pilot.slotIndex}" title="Auto-seat ${esc(pilot.callsign)} into next open seat">+ Seat</button>`;
                 } else if (isActive && !stageHasHeats) {
                   seatActionHtml = `<span class="rc-pilot-unseated-note note">Unseated</span>`;
@@ -6568,7 +7421,7 @@ export class RacesView extends Component {
                     ${canDrag ? `draggable="true" data-drag-pilot="${pilot.slotIndex}" title="Drag ${esc(pilot.callsign)} onto any unstarted heat seat"` : ""}
                   >
                     <div class="rc-pilot-row-main">
-                      ${canDrag ? `<span class="bkt-grip">${icons.grip(11)}</span>` : `<span class="rc-pilot-grip-spacer"></span>`}
+                      ${canDrag ? `<span class="bkt-grip">${icons.grip(11)}</span>` : mode === "edit" ? `<span class="rc-pilot-grip-spacer"></span>` : ""}
                       ${checkInSwitch}
                       <span class="dot" style="--c:${adaptColorForTheme(pilot.color)}"></span>
                       <strong class="rc-pilot-name">${esc(pilot.callsign)}</strong>
@@ -6590,7 +7443,9 @@ export class RacesView extends Component {
       return "";
     }
     const p = mode === "edit" ? this.editPilotsPanel : this.controlPanels.pilots;
-    if (!p.visible) return "";
+    if (mode === "edit" && !p.visible) return "";
+    const isPageCard = mode !== "edit";
+    const effectiveCollapsed = mode === "pilots" ? false : p.collapsed;
 
     const {
       roster,
@@ -6612,7 +7467,7 @@ export class RacesView extends Component {
         ? `Add pilot “${trimmedSearch}”`
         : "Search or type a unique callsign to add";
 
-    const bodyHtml = p.collapsed
+    const bodyHtml = effectiveCollapsed
       ? ""
       : `<div class="rc-panel-body rc-pilots-panel-body">
           <div class="rc-pilots-toolbar">
@@ -6662,6 +7517,33 @@ export class RacesView extends Component {
             ${this.renderPilotsPanelResults(race, mode)}
           </div>
         </div>`;
+
+    if (isPageCard) {
+      return `
+        <section
+          class="rc-canvas-panel rc-page-card is-pilots-panel ${effectiveCollapsed ? "is-collapsed" : ""}"
+          data-canvas-panel="pilots"
+          data-mobile-sec="pilots"
+        >
+          <header class="rc-panel-header">
+            <div class="rc-panel-title-wrap">
+              ${icons.pilot(14)}
+              <strong>Pilots Roster</strong>
+              <span class="badge mono bkt-pilots-count-pill">${activePilots.length} racing</span>
+            </div>
+            ${
+              mode === "pilots"
+                ? ""
+                : `<div class="rc-panel-actions">
+                    <button type="button" class="rc-panel-icon-btn rc-desktop-collapse-btn" data-rc-panel-collapse="pilots" title="${effectiveCollapsed ? "Expand section" : "Collapse section"}" aria-label="Toggle collapse">
+                      ${effectiveCollapsed ? icons.plus(13) : icons.minus(13)}
+                    </button>
+                  </div>`
+            }
+          </header>
+          ${bodyHtml}
+        </section>`;
+    }
 
     return `
       <section
@@ -6724,7 +7606,7 @@ export class RacesView extends Component {
               : ""
           }
           ${
-            mode === "format"
+            mode === "format" || mode === "edit"
               ? `<button
                   type="button"
                   class="rc-ctrl-icon-btn"
@@ -6883,21 +7765,20 @@ export class RacesView extends Component {
           btnHtml: `<button type="button" class="rc-fab-btn" data-rc-add-node="open_qualifier" title="Add Open Qualifier Round">${icons.zap(16)}</button>`,
         },
         {
-          labelHtml: `<span class="rc-fab-label">ZippyQ Qualifier</span>`,
+          labelHtml: `<span class="rc-fab-label">ZippyQ</span>`,
           btnHtml: `<button type="button" class="rc-fab-btn" data-rc-add-node="zippyq_qualifier" title="Add ZippyQ Qualifier Round">${icons.zap(16)}</button>`,
         },
         {
           labelHtml: `<span class="rc-fab-label">Race Round</span>`,
-          btnHtml: `<button type="button" class="rc-fab-btn" data-rc-add-node="race" title="Add Head-to-Head Race Round">${icons.plus(16)}</button>`,
+          btnHtml: `<button type="button" class="rc-fab-btn" data-rc-add-node="race" title="Add Head-to-Head Race Round">${icons.checkered(16)}</button>`,
         },
         {
-          labelHtml: `<span class="rc-fab-label">Redemption</span>`,
-          btnHtml: `<button type="button" class="rc-fab-btn" data-rc-add-node="losers" title="Add Redemption / Lower Bracket Round">${icons.trendDown(16)}</button>`,
+          labelHtml: `<span class="rc-fab-label">Points Round</span>`,
+          btnHtml: `<button type="button" class="rc-fab-btn" data-rc-add-node="points_mains" title="Add Points Round">${icons.layers(16)}</button>`,
         },
         {
-          labelHtml: `<span class="rc-fab-label">${stageHasFinals ? "Finals (1 per stage)" : "Finals"}</span>`,
-          btnHtml: `<button type="button" class="rc-fab-btn" data-rc-add-node="finals" ${stageHasFinals ? "disabled" : ""} title="${stageHasFinals ? "This stage already has a Championship Finals round" : "Add Championship Finals Round"}">${icons.trophy(16)}</button>`,
-          disabled: stageHasFinals,
+          labelHtml: `<span class="rc-fab-label">Finals</span>`,
+          btnHtml: `<button type="button" class="rc-fab-btn" data-rc-add-node="finals" title="Add Championship Finals Round">${icons.trophy(16)}</button>`,
         }
       );
       if (!isRootStage(race, viewStage) && !pilotsVisible) {
@@ -6936,8 +7817,7 @@ export class RacesView extends Component {
         rows.push(...missingReviewPanels);
       }
     } else {
-      const curStageObj = resolveStagesList(race).find((s) => s.index === viewStage);
-      const isOpenQualStage = curStageObj?.format === "open_qualifier";
+      const isOpenQualStage = hasOpenQualifierRound(race);
       const missingControlPanels: FabRowDef[] = [];
       if (!this.controlPanels.cockpit.visible) {
         missingControlPanels.push({
@@ -7042,17 +7922,18 @@ export class RacesView extends Component {
     const gy = ((this.bktUi.panY % gridStep) + gridStep) % gridStep;
 
     return `
+      ${this.renderRaceWorkspaceTopBar(race, "format")}
       <div
         class="races-canvas tool-${this.bktUi.tool} ${this.bktUi.nodesLocked ? "is-nodes-locked" : ""}"
         data-rc-viewport
         style="background-size:${gridStep}px ${gridStep}px;background-position:${gx}px ${gy}px"
       >
+        ${renderSetupRaceSubRibbonHtml(race, this.renderDesktopSetupViewToggle(), true)}
         ${renderFormatMarkup(race, {
           editable: true,
           editorUi: this.bktUi,
         })}
 
-        ${this.renderTopLeftCanvasBar(race, "format")}
         ${this.renderBoardControlsPill(race, "format")}
         ${this.renderSpeedDialFab(race, "format")}
       </div>`;
@@ -7067,11 +7948,13 @@ export class RacesView extends Component {
     const gy = ((this.bktUi.panY % gridStep) + gridStep) % gridStep;
 
     return `
+      ${this.renderRaceWorkspaceTopBar(race, "edit")}
       <div
         class="races-canvas tool-${this.bktUi.tool} ${this.bktUi.nodesLocked ? "is-nodes-locked" : ""} ${!rootStage && this.editPilotsPanel.visible ? "has-pilots-panel" : ""}"
         data-rc-viewport
         style="background-size:${gridStep}px ${gridStep}px;background-position:${gx}px ${gy}px"
       >
+        ${renderSetupRaceSubRibbonHtml(race, this.renderDesktopSetupViewToggle(), true)}
         ${renderBracketMarkup(race, {
           activeHeatId: this.getControlStageHeat(race, curStage)?.id ?? "",
           stageFilter: curStage,
@@ -7083,7 +7966,6 @@ export class RacesView extends Component {
           editorUi: this.bktUi,
         })}
 
-        ${this.renderTopLeftCanvasBar(race, "edit")}
         ${this.renderBoardControlsPill(race, "edit")}
         ${this.renderSpeedDialFab(race, "edit")}
       </div>`;
@@ -7391,7 +8273,7 @@ export class RacesView extends Component {
 
     return `
       <div class="oq-flightline-box" data-open-qual-flightline="${viewStage}">
-        <div class="oq-flightline-head">
+        <div class="oq-flightline-head rc-hide-mobile">
           <div class="oq-flightline-meta" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap">
             <span class="note">${esc(formatQualifyingMetricLabel(curMetric))}</span>
             ${
@@ -7452,59 +8334,40 @@ export class RacesView extends Component {
   }
 
   private renderControlFlightLinePanel(race: RaceTournamentState): string {
-    const p = this.controlPanels.flightline;
-    if (!p.visible) return "";
     const viewStage = this.getCurrentViewStage(race);
     const stages = resolveStagesList(race);
     const curStage = stages.find((s) => s.index === viewStage);
-    if (curStage?.format !== "open_qualifier") return "";
+    if (!hasOpenQualifierRound(race)) return "";
 
     const multiStage = stages.length > 1;
     const panelTitle = multiStage ? `S${viewStage} Flight Queue` : "Flight Queue";
 
     return `
       <section
-        class="rc-canvas-panel is-flightline-panel ${p.collapsed ? "is-collapsed" : ""}"
+        class="rc-canvas-panel rc-page-card is-flightline-panel"
         data-canvas-panel="flightline"
-        data-pos-x="${p.x}"
-        data-pos-y="${p.y}"
-        style="left:0;top:0;z-index:${p.zIndex};transform: translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0)"
+        data-mobile-ctrl-pane="queue"
       >
-        <header class="rc-panel-header" data-panel-drag-handle>
-          <div class="rc-panel-title-wrap">
-            <span class="rc-panel-grip">${icons.grip(13)}</span>
+        <header class="rc-panel-header">
+          <div class="rc-panel-title-wrap rc-hide-mobile">
             ${icons.zap(14)}
             <strong>${esc(panelTitle)}</strong>
           </div>
           <div class="rc-panel-actions">
-            ${
-              !p.collapsed
-                ? `<div class="segmented rc-panel-seg" role="group" aria-label="Filter flight queue">
-                    <button type="button" class="${this.flightQueueFilter === "all" ? "is-active" : ""}" data-oq-queue-filter="all">All</button>
-                    <button type="button" class="${this.flightQueueFilter === "queued" ? "is-active" : ""}" data-oq-queue-filter="queued">Queued</button>
-                    <button type="button" class="${this.flightQueueFilter === "flying" ? "is-active" : ""}" data-oq-queue-filter="flying">Flying</button>
-                    <button type="button" class="${this.flightQueueFilter === "away" ? "is-active" : ""}" data-oq-queue-filter="away">Away</button>
-                  </div>`
-                : ""
-            }
-            <button type="button" class="rc-panel-icon-btn" data-race-act="export-csv" data-stage-idx="${viewStage}" title="Download Open Qualifier CSV" aria-label="Export CSV">
+            <div class="segmented rc-panel-seg" role="group" aria-label="Filter flight queue">
+              <button type="button" class="${this.flightQueueFilter === "all" ? "is-active" : ""}" data-oq-queue-filter="all">All</button>
+              <button type="button" class="${this.flightQueueFilter === "queued" ? "is-active" : ""}" data-oq-queue-filter="queued">Queued</button>
+              <button type="button" class="${this.flightQueueFilter === "flying" ? "is-active" : ""}" data-oq-queue-filter="flying">Flying</button>
+              <button type="button" class="${this.flightQueueFilter === "away" ? "is-active" : ""}" data-oq-queue-filter="away">Away</button>
+            </div>
+            <button type="button" class="rc-panel-icon-btn rc-hide-mobile" data-race-act="export-csv" data-stage-idx="${viewStage}" title="Download Open Qualifier CSV" aria-label="Export CSV">
               ${icons.download(13)}
-            </button>
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-collapse="flightline" title="${p.collapsed ? "Expand panel" : "Collapse panel"}" aria-label="Toggle collapse">
-              ${p.collapsed ? icons.plus(13) : icons.minus(13)}
-            </button>
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-toggle="flightline" title="Hide panel (reopen from + › Panels)" aria-label="Hide panel">
-              ${icons.close(13)}
             </button>
           </div>
         </header>
-        ${
-          p.collapsed
-            ? ""
-            : `<div class="rc-panel-body is-flightline-body">
-                ${this.renderOpenQualFlightLine(race, viewStage, curStage)}
-              </div>`
-        }
+        <div class="rc-panel-body is-flightline-body">
+          ${this.renderOpenQualFlightLine(race, viewStage, curStage)}
+        </div>
       </section>`;
   }
 
@@ -7520,6 +8383,7 @@ export class RacesView extends Component {
     );
 
     let textHtml = "";
+    let mobileTextHtml = "";
     let spokenText = "";
 
     const pilotVoiceName = (s: HeatSeat): string => {
@@ -7534,12 +8398,9 @@ export class RacesView extends Component {
         ? this.store.activePracticeSession
         : null;
 
-    if (otherOngoingRace) {
-      textHtml = `<strong>${esc(otherOngoingRace.config.eventName || "Another race")}</strong> is currently ongoing — starting a heat here will prompt to pause it first.`;
-    } else if (activePractice) {
-      textHtml = `Practice <strong>${esc(activePractice.name || "Practice")}</strong> is active — starting a heat here will prompt to pause it first.`;
-    } else if (curStage?.dangling) {
+    if (curStage?.dangling) {
       textHtml = `<strong>Stage ${curStage.index} (${esc(curStage.title)})</strong> is disconnected — ${esc(curStage.danglingReason || "connect an upstream stage in Format before starting heats.")}`;
+      mobileTextHtml = `Stage ${curStage.index} is disconnected.`;
     } else if (curStage && !curStage.prerequisitesMet) {
       const firstUpIdx =
         (curStage.waitingOnStageIds ?? [])
@@ -7547,26 +8408,38 @@ export class RacesView extends Component {
           .find((idx): idx is number => typeof idx === "number" && idx >= 1) || 1;
       const waitNames = (curStage.waitingOnStageNames ?? []).join(", ") || `Stage ${firstUpIdx}`;
       textHtml = `Waiting on <strong>${esc(waitNames)}</strong> — complete upstream heats to populate Stage ${curStage.index} seeds.`;
+      mobileTextHtml = `Waiting on <strong>${esc(waitNames)}</strong>.`;
     } else if (curStage?.status === "paused") {
       textHtml = `<strong>Stage ${curStage.index} (${esc(curStage.title)})</strong> is paused — resume stage from <strong>Format</strong> when ready to run heats.`;
+      mobileTextHtml = `Stage ${curStage.index} is paused.`;
     } else if (curStage?.status === "completed" && lifecycle !== "completed" && lifecycle !== "scrapped" && !race.isComplete) {
       textHtml = `<strong>${esc(curStage.title || `Stage ${curStage.index}`)}</strong> is closed — standings locked.`;
+      mobileTextHtml = `Stage closed — standings locked.`;
     } else if (race.emergencyStopped) {
       textHtml = `<strong>Emergency Stop:</strong> Land immediately — switch to <strong>Active</strong> or <strong>Paused</strong> above when track is clear.`;
+      mobileTextHtml = `Announce emergency stop`;
       spokenText = "Emergency stop, land immediately.";
     } else if (lifecycle === "paused") {
       textHtml = `Race paused${race.statusReason ? ` (${esc(race.statusReason)})` : ""} — switch to <strong>Active</strong> above when ready to continue.`;
+      mobileTextHtml = `Announce race paused`;
       spokenText = "Race paused. Stand by.";
     } else if (lifecycle === "completed" || lifecycle === "scrapped" || race.isComplete) {
       textHtml =
         lifecycle === "scrapped"
           ? `Race stopped — click <strong>Reopen Race</strong> above to unlock.`
           : `All heats finalized${race.championCallsign ? ` · #1 <strong>${esc(race.championCallsign)}</strong>` : ""} — click <strong>Reopen Race</strong> above to make adjustments.`;
+      mobileTextHtml =
+        lifecycle === "scrapped"
+          ? `Race stopped.`
+          : race.championCallsign
+            ? `Announce tournament winner (${esc(race.championCallsign)})`
+            : `All heats finalized.`;
       if (lifecycle !== "scrapped" && race.championCallsign) {
         spokenText = `Tournament complete. First place, ${race.championCallsign}.`;
       }
     } else if (!heat) {
       textHtml = `No heats queued yet — configure stages or queue pilots from Flight Queue.`;
+      mobileTextHtml = `No heats queued yet.`;
     } else {
       const activeSeats = heat.seats.filter(
         (s) => s.pilotSlotIndex > 0 && s.status !== "dns" && s.status !== "dq"
@@ -7582,53 +8455,64 @@ export class RacesView extends Component {
           })
           .join(" · ");
         textHtml = `Announce VTX channel switch: ${switches}`;
+        mobileTextHtml = `Announce VTX channel switch`;
         spokenText = `Attention pilots. ${changedSeats
           .map((s) => `${pilotVoiceName(s)}, switch to ${formatSeatVoiceChannel(s.band, s.channel)}`)
           .join(". ")}.`;
       } else if (heat.state === "countdown") {
         textHtml = `Countdown active — announce pilots arm on assigned channels.`;
+        mobileTextHtml = `Announce pilots to arm quads`;
         spokenText = "Pilots, arm your quads.";
       } else if (heat.state === "running") {
         const allFinished =
           activeSeats.length > 0 && activeSeats.every((s) => s.status === "finished" || s.status === "dnf");
         if (heat.inOvertime) {
           textHtml = `Time expired (overtime) — announce pilots finish current lap, or click <strong>Finish Heat</strong>.`;
+          mobileTextHtml = `Announce overtime (finish lap &amp; land)`;
           spokenText = "Time expired, finish your lap and land.";
         } else if (allFinished) {
           textHtml = `All active pilots finished target laps — click <strong>Finish Heat</strong> to review &amp; confirm.`;
+          mobileTextHtml = `Announce all pilots finished`;
           spokenText = "All pilots finished, land and disarm.";
         } else {
           const lineList = activeSeats
-            .map((s) => `${esc(s.callsign)} (${esc(formatBandChannelShort(s.band, s.channel) || `R${s.channel}`)})`)
+            .map((s) => esc(s.callsign))
             .join(" · ");
           textHtml = `Live on track: ${lineList || "Monitoring RF channels"}`;
+          mobileTextHtml = activeSeats.length > 0 ? `Announce pilots on track` : `Monitoring RF channels`;
           if (activeSeats.length > 0) {
             spokenText = `Live on track: ${activeSeats
-              .map((s) => `${pilotVoiceName(s)} on ${formatSeatVoiceChannel(s.band, s.channel)}`)
+              .map((s) => pilotVoiceName(s))
               .join(", ")}.`;
           }
         }
       } else if (heat.state === "paused") {
         textHtml = `Heat paused — announce pilots hold or disarm; click <strong>Resume Heat</strong>, <strong>Finish Heat</strong>, or <strong>Re-run Heat</strong>.`;
+        mobileTextHtml = `Announce heat paused (hold or disarm)`;
         spokenText = "Heat paused. Pilots hold or disarm.";
       } else if (heat.state === "finished") {
         textHtml = `Heat finished — announce pilots land &amp; disarm, verify laps below, then click <strong>Confirm Heat</strong>.`;
+        mobileTextHtml = `Announce heat finished (land &amp; disarm)`;
         spokenText = "Heat finished, land and disarm.";
       } else if (heat.state === "confirmed") {
         const nextReadyId = this.getNextReadyStageHeatId(race, heat);
         if (nextReadyId) {
           const nextHeatObj = race.heats.find((h) => h.id === nextReadyId);
           textHtml = `Results confirmed — click <strong>Next Heat</strong>${nextHeatObj?.shortLabel ? ` (${esc(nextHeatObj.shortLabel)})` : ""} or select a heat in <strong>Heats Schedule</strong>.`;
+          mobileTextHtml = `Results confirmed · ready for ${esc(nextHeatObj?.shortLabel || "next heat")}`;
         } else if (curStage?.format === "open_qualifier") {
           textHtml = `Results confirmed — waiting for pilots to be queued in <strong>Flight Queue</strong>.`;
+          mobileTextHtml = `Results confirmed · queue pilots in Queue`;
         } else {
           const stageHeats = race.heats.filter(
             (h) => h.stageIndex === heat.stageIndex && h.state !== "aborted"
           );
           if (stageHeats.length > 0 && stageHeats.every((h) => h.state === "confirmed")) {
             textHtml = `Results confirmed — all heats in <strong>${esc(curStage?.title || `Stage ${heat.stageIndex}`)}</strong> are complete.`;
+            mobileTextHtml = `Results confirmed · stage complete`;
           } else {
             textHtml = `Results confirmed — select a heat in <strong>Heats Schedule</strong>.`;
+            mobileTextHtml = `Results confirmed · select heat in Schedule`;
           }
         }
       } else if (activeSeats.length > 0) {
@@ -7636,11 +8520,13 @@ export class RacesView extends Component {
           .map((s) => `<strong>${esc(s.callsign)}</strong> (${esc(formatBandChannelShort(s.band, s.channel) || `R${s.channel}`)})`)
           .join(" · ");
         textHtml = `Call to flight line: ${lineList}`;
+        mobileTextHtml = `Call pilots to flight line`;
         spokenText = `Flight line call for ${heat.title}. ${activeSeats
           .map((s) => `${pilotVoiceName(s)} on ${formatSeatVoiceChannel(s.band, s.channel)}`)
           .join(", ")}.`;
       } else {
         textHtml = `Waiting on upstream feeder heats to advance pilots into ${esc(heat.shortLabel || heat.title)}.`;
+        mobileTextHtml = `Waiting on upstream feeder heats`;
       }
     }
 
@@ -7660,7 +8546,7 @@ export class RacesView extends Component {
     return `
       <div class="race-controller-strip" data-race-controller-strip>
         ${speakBtnHtml}
-        <span class="race-controller-strip-text">${textHtml}</span>
+        <span class="race-controller-strip-text"><span class="rc-lbl-full">${textHtml}</span><span class="rc-lbl-short">${mobileTextHtml || textHtml}</span></span>
       </div>`;
   }
 
@@ -7694,10 +8580,10 @@ export class RacesView extends Component {
       );
       const closeDisabled = confirmedStageCount === 0 || hasLiveStageHeat;
       const closeStageTitle = hasLiveStageHeat
-        ? "Finish or pause the live heat before closing this stage"
+        ? "Finish or pause the live heat before ending this race"
         : confirmedStageCount === 0
-          ? "Confirm at least one heat in this stage before closing"
-          : `Close ${curStage?.title || `Stage ${stageIdx}`}`;
+          ? "Confirm at least one heat before ending this race"
+          : `End ${race.config.eventName || "race"}`;
       const canReopenStage = Boolean(
         stageAlreadyDone &&
           curStage?.completedEarly &&
@@ -7712,7 +8598,7 @@ export class RacesView extends Component {
             ${closeDisabled ? "disabled" : ""}
             title="${esc(closeStageTitle)}"
           >
-            ${icons.checkered(16)}<span>Close Stage</span>
+            <span>End Race</span>
           </button>`
         : canReopenStage
           ? `<button
@@ -7721,9 +8607,9 @@ export class RacesView extends Component {
               data-stage-ctrl="reopen_stage_early"
               data-stage-idx="${stageIdx}"
               data-stage-id="${esc(curStage?.id || "")}"
-              title="Reopen ${esc(curStage?.title || `Stage ${stageIdx}`)} to continue running heats"
+              title="Reopen ${esc(race.config.eventName || "race")} to continue running heats"
             >
-              ${icons.unlock(15)}<span>Reopen Stage</span>
+              ${icons.unlock(15)}<span>Reopen Race</span>
             </button>`
           : "";
       return `
@@ -7808,16 +8694,18 @@ export class RacesView extends Component {
     } else if (lifecycle === "scrapped") {
       noticeHtml = `This race is stopped — click <strong>Reopen Race</strong> above to continue running heats.`;
     } else if (lifecycle === "completed" || race.isComplete) {
-      noticeHtml = curStage?.completedEarly
-        ? `This stage is closed — click <strong>Reopen Race</strong> above to reopen the stage and continue running heats.`
-        : `This race is completed — click <strong>Reopen Race</strong> above to continue running heats or make adjustments.`;
+      if (curStage?.completedEarly) {
+        noticeHtml = `This race is completed — click <strong>Reopen Race</strong> above to reopen the race and continue running heats.`;
+      } else if (!race.championCallsign) {
+        noticeHtml = `This race is completed — click <strong>Reopen Race</strong> above to continue running heats or make adjustments.`;
+      }
     } else if (curStage?.status === "completed") {
       const canReopenStage = Boolean(
         curStage.completedEarly && !anyDownstreamStageStarted(race, curStage.index)
       );
       noticeHtml = canReopenStage
-        ? `This stage is closed — click <strong>Reopen Stage</strong> above to continue running heats.`
-        : `This stage is closed — reopen the stage in <strong>Format</strong> to continue running heats.`;
+        ? `This race is completed — click <strong>Reopen Race</strong> above to continue running heats.`
+        : `This race is completed — reopen the race in <strong>Setup</strong> to continue running heats.`;
     } else if (curStage?.dangling) {
       noticeHtml = `<strong>Stage ${curStage.index} (${esc(curStage.title)})</strong> is disconnected — ${esc(curStage.danglingReason || "connect an upstream stage in Format to continue running heats.")}`;
       toneCls = "is-warn";
@@ -7840,7 +8728,7 @@ export class RacesView extends Component {
       if (curStage?.format === "open_qualifier") {
         noticeHtml = `Please queue up pilots in <strong>Flight Queue</strong> to stage a heat.`;
       } else if (isRaceConfigured(race)) {
-        noticeHtml = `No heats are scheduled in this stage — click <strong>Configure</strong> to add rounds or heats.`;
+        noticeHtml = `No heats are scheduled in this stage - click <strong>Setup</strong> to add rounds or heats.`;
       }
     } else if (heat.state === "waiting") {
       noticeHtml = `This heat is waiting on upstream feeder heats to finish before pilots are seated.`;
@@ -7886,19 +8774,19 @@ export class RacesView extends Component {
               return flown >= maxPacks;
             });
           if (allMaxedOut) {
-            noticeHtml = `All active pilots have completed their maximum heats (${maxPacks}) — add more pilots or click <strong>Close Stage</strong> above to finish qualifying.`;
+            noticeHtml = `All active pilots have completed their maximum heats (${maxPacks}) — add more pilots or click <strong>End Race</strong> above to finish qualifying.`;
           } else {
-            noticeHtml = `Please queue up more pilots in <strong>Flight Queue</strong> to stage the next heat${confirmedStageCount > 0 ? `, or click <strong>Close Stage</strong> above when qualifying is done` : ""}.`;
+            noticeHtml = `Please queue up more pilots in <strong>Flight Queue</strong> to stage the next heat${confirmedStageCount > 0 ? `, or click <strong>End Race</strong> above when qualifying is done` : ""}.`;
           }
         } else {
           const reviewHeat = stageHeats.find((h) => h.state === "finished");
           const hasWaiting = stageHeats.some((h) => h.state === "waiting");
           if (reviewHeat) {
-            noticeHtml = `Confirm <strong>${esc(reviewHeat.shortLabel || reviewHeat.title)}</strong> in <strong>Heats Schedule</strong> to advance this stage.`;
+            noticeHtml = `Confirm <strong>${esc(reviewHeat.shortLabel || reviewHeat.title)}</strong> in <strong>Heats Schedule</strong> to advance this race.`;
           } else if (hasWaiting) {
-            noticeHtml = `Remaining heats in this stage are waiting on upstream feeder heats or pilot assignments.`;
+            noticeHtml = `Remaining heats are waiting on upstream feeder heats or pilot assignments.`;
           } else {
-            noticeHtml = `All heats in <strong>${esc(curStage?.title || `Stage ${heat.stageIndex}`)}</strong> are confirmed — click <strong>Close Stage</strong> above to finalize this stage.`;
+            noticeHtml = `All heats are confirmed — click <strong>End Race</strong> above to finalize this race.`;
           }
         }
       }
@@ -7921,7 +8809,6 @@ export class RacesView extends Component {
 
   private renderControlCockpitPanel(race: RaceTournamentState): string {
     const p = this.controlPanels.cockpit;
-    if (!p.visible) return "";
 
     const viewStage = this.getCurrentViewStage(race);
     const stages = resolveStagesList(race);
@@ -7954,10 +8841,10 @@ export class RacesView extends Component {
                     </div>
                   </div>`
                 : `<div class="race-empty-state" style="padding:24px 16px">
-                    <p style="margin:0 0 10px">No heats scheduled yet for <strong>${esc(curStage ? `Stage ${curStage.index}: ${curStage.title}` : race.config.eventName || "this race")}</strong>. Click <strong>Configure</strong> to set up stages, pick a tournament template, or drill into a stage to add rounds.</p>
+                    <p style="margin:0 0 10px">No heats scheduled yet for <strong>${esc(race.config.eventName || "this race")}</strong>. Click <strong>Setup</strong> to pick a tournament template or add rounds.</p>
                     <div style="display:flex;gap:8px;justify-content:center">
                       <button type="button" class="btn btn-armed btn-sm" data-race-tab="format">
-                        ${icons.settings(14)}<span>Configure</span>
+                        ${icons.settings(14)}<span>Setup</span>
                       </button>
                     </div>
                   </div>`
@@ -7971,28 +8858,18 @@ export class RacesView extends Component {
 
       return `
         <section
-          class="rc-canvas-panel is-cockpit-panel ${p.collapsed ? "is-collapsed" : ""}"
+          class="rc-canvas-panel rc-page-card is-cockpit-panel"
           data-canvas-panel="cockpit"
-          data-pos-x="${p.x}"
-          data-pos-y="${p.y}"
-          style="left:0;top:0;z-index:${p.zIndex};transform: translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0)"
+          data-mobile-ctrl-pane="live"
         >
-          <header class="rc-panel-header" data-panel-drag-handle>
-            <div class="rc-panel-title-wrap">
-              <span class="rc-panel-grip">${icons.grip(13)}</span>
+          <header class="rc-panel-header">
+            <div class="rc-panel-title-wrap rc-hide-mobile">
               ${icons.checkered(14)}
               <strong>Race Control</strong>
               <span class="badge">No heats</span>
             </div>
             <div class="rc-panel-actions">
               ${lifecycleHeaderHtml}
-              <span class="rc-panel-hdr-sep" aria-hidden="true"></span>
-              <button type="button" class="rc-panel-icon-btn" data-rc-panel-collapse="cockpit" title="${p.collapsed ? "Expand panel" : "Collapse panel"}" aria-label="Toggle collapse">
-                ${p.collapsed ? icons.plus(13) : icons.minus(13)}
-              </button>
-              <button type="button" class="rc-panel-icon-btn" data-rc-panel-toggle="cockpit" title="Hide panel (reopen from + › Panels)" aria-label="Hide panel">
-                ${icons.close(13)}
-              </button>
             </div>
           </header>
           ${emptyBodyHtml}
@@ -8041,7 +8918,7 @@ export class RacesView extends Component {
       heat.state === "countdown"
         ? initialIsArming
           ? "Arming quads…"
-          : `Countdown ${maxCountdownSec}s → 0s · Random horn`
+          : ""
         : race.emergencyStopped
           ? "Aborted · RF disarmed"
           : race.lifecycle === "paused"
@@ -8053,17 +8930,32 @@ export class RacesView extends Component {
       heat.state === "countdown" || heat.timeLimitSec <= 0
         ? 0
         : Math.max(0, Math.min(100, (heat.elapsedSec / heat.timeLimitSec) * 100));
-    const stageFmt = heat.stageFormat || curStage?.format || "";
+    const stageFmt = resolveHeatStageFormat(heat, race) || curStage?.format || "";
     const isQualHeat = isQualifierStageFormat(stageFmt);
     const announcerEnabled = this.announcer ? Boolean(this.announcer.settings.enabled) : true;
     const lapCalloutsOn =
       announcerEnabled &&
       (this.announcer ? this.announcer.isLapCalloutsActiveForStage(stageFmt) : isQualHeat);
     const lapCalloutsTitle = !announcerEnabled
-      ? "Enable Voice Announcer to toggle lap time announcements"
+      ? "Enable Voice Announcer to toggle lap timing announcements"
       : lapCalloutsOn
-        ? `Lap time announcements ON (${isQualHeat ? "Qualifier" : "Race"}) — click to mute lap callouts`
-        : `Lap time announcements OFF (${isQualHeat ? "Qualifier" : "Race"}) — click to announce pilot lap times`;
+        ? `Lap timing announcements on (${isQualHeat ? "Qualifier" : "Race"}) — click to turn off`
+        : `Lap timing announcements off (${isQualHeat ? "Qualifier" : "Race"}) — click to turn on`;
+
+    const rawHeatTitle = (heat.title || heat.shortLabel || "Heat").trim();
+    const parenMatch = rawHeatTitle.match(/\(([^)]+)\)\s*$/);
+    const parenRule = parenMatch ? parenMatch[1].trim() : "";
+    let mobileHeatTitle = rawHeatTitle.replace(/\s*\([^)]*\)\s*$/, "").trim();
+    if (mobileHeatTitle.length > 16) {
+      mobileHeatTitle = mobileHeatTitle
+        .replace(/\bChase\s+the\s+Ace\s+Finals\b/gi, "Finals")
+        .replace(/\bWinners\s+Round\s+(\d+)\b/gi, "Winners R$1")
+        .replace(/\bLosers\s+Round\s+(\d+)\b/gi, "Losers R$1")
+        .replace(/\bQualifier\s+Round\s+(\d+)\b/gi, "Qualifier R$1")
+        .replace(/\bRound\s+(\d+)\b/gi, "R$1")
+        .replace(/\bHeat\s+(\d+)\b/gi, "H$1")
+        .replace(/\s+—\s+/g, " · ");
+    }
 
     const bodyHtml = p.collapsed
       ? ""
@@ -8072,21 +8964,18 @@ export class RacesView extends Component {
             <div class="race-cockpit-top">
               <div class="race-cockpit-meta">
                 <div class="race-cockpit-eyebrow">
-                  <span>${stagePrefix}Heat ${heat.order} of ${race.heats.length} (${confirmedCount} confirmed)</span>
+                  <span class="rc-lbl-full">${stagePrefix}Heat ${heat.order} of ${race.heats.length} (${confirmedCount} confirmed)</span>
+                  <span class="rc-lbl-short">Heat ${heat.order} of ${race.heats.length}</span>
                 </div>
                 <div class="race-cockpit-title-row">
-                  <h2>${esc(heat.title)}</h2>
+                  <h2><span class="rc-lbl-full">${esc(heat.title)}</span><span class="rc-lbl-short">${esc(mobileHeatTitle)}</span></h2>
                   ${this.renderHeatGraphJumpBtn(heat, { iconSize: 14 })}
-                  <span class="race-state-pill ${effectiveBadge.cls}"><span>${esc(effectiveBadge.label)}</span></span>
+                  <span class="race-state-pill ${effectiveBadge.cls} rc-hide-mobile"><span>${esc(effectiveBadge.label)}</span></span>
                   ${heat.note ? `<span class="note">${esc(heat.note)}</span>` : ""}
                 </div>
                 <div class="race-cockpit-rules">
-                  <span>${heat.startMode === "staggered" ? "Staggered start" : "Horn start"}</span>
-                  <span>·</span>
-                  <span>${heat.targetLaps > 0 ? `${heat.targetLaps} laps` : "Unlimited laps"}</span>
-                  <span>·</span>
-                  <span>${formatRaceClock(heat.timeLimitSec)} limit</span>
-                  ${heat.expectedWinners > 0 ? `<span>·</span><span class="tone-good">Top ${heat.expectedWinners} advance</span>` : ""}
+                  <span class="rc-lbl-full">${heat.startMode === "staggered" ? "Staggered start" : "Horn start"} · ${heat.targetLaps > 0 ? `${heat.targetLaps} laps` : "Unlimited laps"} · ${formatRaceClock(heat.timeLimitSec)} limit${heat.expectedWinners > 0 ? ` · <span class="tone-good">Top ${heat.expectedWinners} advance</span>` : ""}</span>
+                  <span class="rc-lbl-short">${parenRule ? esc(parenRule) : heat.startMode === "staggered" ? "Staggered start" : "Horn start"}${heat.expectedWinners > 0 ? ` · <span class="tone-good">Top ${heat.expectedWinners} advance</span>` : ""}</span>
                 </div>
               </div>
 
@@ -8130,28 +9019,18 @@ export class RacesView extends Component {
 
     return `
       <section
-        class="rc-canvas-panel is-cockpit-panel ${p.collapsed ? "is-collapsed" : ""}"
+        class="rc-canvas-panel rc-page-card is-cockpit-panel"
         data-canvas-panel="cockpit"
-        data-pos-x="${p.x}"
-        data-pos-y="${p.y}"
-        style="left:0;top:0;z-index:${p.zIndex};transform: translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0)"
+        data-mobile-ctrl-pane="live"
       >
-        <header class="rc-panel-header" data-panel-drag-handle>
-          <div class="rc-panel-title-wrap">
-            <span class="rc-panel-grip">${icons.grip(13)}</span>
+        <header class="rc-panel-header">
+          <div class="rc-panel-title-wrap rc-hide-mobile">
             ${icons.checkered(14)}
             <strong>Race Control</strong>
             <span class="badge mono">${esc(heat.shortLabel)}</span>
           </div>
           <div class="rc-panel-actions">
             ${lifecycleHeaderHtml}
-            <span class="rc-panel-hdr-sep" aria-hidden="true"></span>
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-collapse="cockpit" title="${p.collapsed ? "Expand panel" : "Collapse panel"}" aria-label="Toggle collapse">
-              ${p.collapsed ? icons.plus(13) : icons.minus(13)}
-            </button>
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-toggle="cockpit" title="Hide panel (reopen from + › Panels)" aria-label="Hide panel">
-              ${icons.close(13)}
-            </button>
           </div>
         </header>
         ${bodyHtml}
@@ -8159,9 +9038,6 @@ export class RacesView extends Component {
   }
 
   private renderControlHeatLinePanel(race: RaceTournamentState): string {
-    const p = this.controlPanels.heatline;
-    if (!p.visible) return "";
-
     const viewStage = this.getCurrentViewStage(race);
     const heat = this.getControlStageHeat(race, viewStage);
     const hasOpenPopover = Boolean(this.openMarshalMenuKey);
@@ -8169,35 +9045,20 @@ export class RacesView extends Component {
     if (!heat) {
       return `
         <section
-          class="rc-canvas-panel is-heatline-panel ${p.collapsed ? "is-collapsed" : ""}"
+          class="rc-canvas-panel rc-page-card is-heatline-panel"
           data-canvas-panel="heatline"
-          data-pos-x="${p.x}"
-          data-pos-y="${p.y}"
-          style="left:0;top:0;z-index:${p.zIndex};transform: translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0)"
+          data-mobile-ctrl-pane="live"
         >
-          <header class="rc-panel-header" data-panel-drag-handle>
+          <header class="rc-panel-header">
             <div class="rc-panel-title-wrap">
-              <span class="rc-panel-grip">${icons.grip(13)}</span>
               ${icons.flag(14)}
               <strong>Flight Line</strong>
               <span class="race-state-pill is-waiting">No heats</span>
             </div>
-            <div class="rc-panel-actions">
-              <button type="button" class="rc-panel-icon-btn" data-rc-panel-collapse="heatline" title="${p.collapsed ? "Expand panel" : "Collapse panel"}" aria-label="Toggle collapse">
-                ${p.collapsed ? icons.plus(13) : icons.minus(13)}
-              </button>
-              <button type="button" class="rc-panel-icon-btn" data-rc-panel-toggle="heatline" title="Hide panel" aria-label="Hide panel">
-                ${icons.close(13)}
-              </button>
-            </div>
           </header>
-          ${
-            p.collapsed
-              ? ""
-              : `<div class="rc-panel-body is-heatline-body">
-                  <div class="race-empty-state" style="padding:20px 16px"><p style="margin:0">No active heat on the flight line yet.</p></div>
-                </div>`
-          }
+          <div class="rc-panel-body is-heatline-body">
+            <div class="race-empty-state" style="padding:20px 16px"><p style="margin:0">No active heat on the flight line yet.</p></div>
+          </div>
         </section>`;
     }
 
@@ -8207,44 +9068,130 @@ export class RacesView extends Component {
 
     return `
       <section
-        class="rc-canvas-panel is-heatline-panel ${p.collapsed ? "is-collapsed" : ""} ${hasOpenPopover ? "has-open-popover" : ""}"
+        class="rc-canvas-panel rc-page-card is-heatline-panel ${hasOpenPopover ? "has-open-popover" : ""}"
         data-canvas-panel="heatline"
-        data-pos-x="${p.x}"
-        data-pos-y="${p.y}"
-        style="left:0;top:0;z-index:${hasOpenPopover ? 500 : p.zIndex};transform: translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0)"
+        data-mobile-ctrl-pane="live"
       >
-        <header class="rc-panel-header" data-panel-drag-handle>
+        <header class="rc-panel-header rc-hide-mobile">
           <div class="rc-panel-title-wrap">
-            <span class="rc-panel-grip">${icons.grip(13)}</span>
             ${icons.flag(14)}
             <strong>Flight Line</strong>
             <span class="badge mono">${esc(heat.shortLabel)} · ${activeLineCount} pilot${activeLineCount === 1 ? "" : "s"}</span>
           </div>
           <div class="rc-panel-actions">
             ${this.renderHeatGraphJumpBtn(heat, { panelHeader: true, iconSize: 13 })}
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-collapse="heatline" title="${p.collapsed ? "Expand panel" : "Collapse panel"}" aria-label="Toggle collapse">
-              ${p.collapsed ? icons.plus(13) : icons.minus(13)}
-            </button>
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-toggle="heatline" title="Hide panel" aria-label="Hide panel">
-              ${icons.close(13)}
-            </button>
           </div>
         </header>
-        ${
-          p.collapsed
-            ? ""
-            : `<div class="rc-panel-body is-heatline-body">
-                <div class="race-heat-table-wrap">
-                  ${this.renderActiveHeatTable(heat)}
-                </div>
-              </div>`
-        }
+        <div class="rc-panel-body is-heatline-body">
+          <div class="race-heat-table-wrap">
+            ${this.renderActiveHeatTable(heat)}
+          </div>
+        </div>
+        ${this.renderMobileLiveLapsCard(heat)}
       </section>`;
   }
 
+  private renderMobileLiveLapsCard(heat: RaceHeat): string {
+    const entries: Array<{
+      seat: HeatSeat;
+      lap: HeatLap;
+      chShort: string;
+      isBestForPilot: boolean;
+    }> = [];
+
+    for (const s of heat.seats) {
+      if (s.pilotSlotIndex <= 0) continue;
+      const chShort = formatBandChannelShort(s.band, s.channel) || `R${s.channel}`;
+      const explicitDnf = s.status === "dnf" && Boolean(s.statusOverridden);
+      const seatOverridden = s.status === "dq" || s.status === "dns" || explicitDnf;
+      let bestCrossingId = -1;
+      let bestSec = Infinity;
+      for (const l of s.laps) {
+        if (
+          l.lapNumber >= 1 &&
+          !l.invalidated &&
+          !seatOverridden &&
+          l.splitTimeSec > 0 &&
+          l.splitTimeSec < bestSec
+        ) {
+          bestSec = l.splitTimeSec;
+          bestCrossingId = l.crossingId;
+        }
+      }
+      for (const l of s.laps) {
+        entries.push({
+          seat: s,
+          lap: l,
+          chShort,
+          isBestForPilot: l.crossingId === bestCrossingId && bestCrossingId !== -1,
+        });
+      }
+    }
+
+    entries.sort((a, b) => {
+      if (Math.abs(b.lap.raceElapsedSec - a.lap.raceElapsedSec) > 1e-4) {
+        return b.lap.raceElapsedSec - a.lap.raceElapsedSec;
+      }
+      return b.lap.crossingId - a.lap.crossingId;
+    });
+
+    const latestCrossingId = entries.length > 0 ? entries[0].lap.crossingId : 0;
+
+    const rowsHtml =
+      entries.length === 0
+        ? `<tr class="rc-mobile-laps-empty-row"><td colspan="4" class="note">No crossings yet — waiting for gate passes…</td></tr>`
+        : entries
+            .map(({ seat, lap, chShort, isBestForPilot }) => {
+              const isHoleshot = lap.lapNumber === 0;
+              const lapTag = isHoleshot ? "HS" : lap.lapNumber < 0 ? "INV" : `L${lap.lapNumber}`;
+              const explicitDnf = seat.status === "dnf" && Boolean(seat.statusOverridden);
+              const isInvalid =
+                (!isHoleshot && lap.invalidated) ||
+                seat.status === "dq" ||
+                seat.status === "dns" ||
+                explicitDnf;
+              return `
+                <tr class="rc-mobile-lap-row ${isInvalid ? "is-invalid" : ""} ${isBestForPilot ? "is-best" : ""}">
+                  <td class="rc-mlap-col-pilot">
+                    <div class="race-pilot-cell">
+                      <span class="dot" style="--c:${seat.color}"></span>
+                      <strong>${esc(seat.callsign)}</strong>
+                    </div>
+                  </td>
+                  <td class="rc-mlap-col-lap mono">
+                    <span class="rc-mlap-tag ${isHoleshot ? "is-hs" : ""}">${lapTag}</span>
+                  </td>
+                  <td class="rc-mlap-col-split mono">
+                    <span class="rc-mlap-split ${isInvalid ? "is-invalid" : ""} ${isBestForPilot ? "is-best" : ""}">${lap.splitTimeSec.toFixed(2)}s</span>
+                  </td>
+                  <td class="rc-mlap-col-clock mono note">${formatRaceClock(lap.raceElapsedSec)}</td>
+                </tr>`;
+            })
+            .join("");
+
+    const bodyHtml = `<div class="rc-mobile-laps-scroll" data-mobile-laps-scroll data-preserve-scroll="mobile-live-laps" data-latest-crossing="${latestCrossingId}">
+            <table class="table rc-compact-table rc-mobile-laps-table">
+              <thead>
+                <tr>
+                  <th class="rc-mlap-col-pilot">Pilot</th>
+                  <th class="rc-mlap-col-lap">Lap</th>
+                  <th class="rc-mlap-col-split">Time</th>
+                  <th class="rc-mlap-col-clock">Elapsed</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${rowsHtml}
+              </tbody>
+            </table>
+          </div>`;
+
+    return `
+      <div class="rc-mobile-live-laps-card" data-mobile-live-laps>
+        ${bodyHtml}
+      </div>`;
+  }
+
   private renderControlSchedulePanel(race: RaceTournamentState): string {
-    const p = this.controlPanels.schedule;
-    if (!p.visible) return "";
     const viewStage = this.getCurrentViewStage(race);
     const stages = resolveStagesList(race);
     const curStage = stages.find((s) => s.index === viewStage);
@@ -8260,22 +9207,19 @@ export class RacesView extends Component {
 
     return `
       <section
-        class="rc-canvas-panel is-schedule-panel ${p.collapsed ? "is-collapsed" : ""}"
+        class="rc-canvas-panel rc-page-card is-schedule-panel"
         data-canvas-panel="schedule"
-        data-pos-x="${p.x}"
-        data-pos-y="${p.y}"
-        style="left:0;top:0;z-index:${p.zIndex};transform: translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0)"
+        data-mobile-ctrl-pane="schedule"
       >
-        <header class="rc-panel-header" data-panel-drag-handle>
-          <div class="rc-panel-title-wrap">
-            <span class="rc-panel-grip">${icons.grip(13)}</span>
+        <header class="rc-panel-header">
+          <div class="rc-panel-title-wrap rc-hide-mobile">
             ${icons.calendar(14)}
             <strong>${esc(panelTitle)}</strong>
             <span class="note mono">${confirmedCount}/${scopedHeats.length}</span>
           </div>
           <div class="rc-panel-actions">
+            <span class="note mono rc-sched-mobile-count">${confirmedCount}/${scopedHeats.length}</span>
             ${
-              !p.collapsed &&
               (race.mgpLink?.isZippyQ || race.mgpLink?.importMode === "zippyq") &&
               sharedMultiGPService.isAvailable(this.store)
                 ? `<button
@@ -8290,152 +9234,150 @@ export class RacesView extends Component {
                   </button>`
                 : ""
             }
-            ${
-              !p.collapsed
-                ? `<div class="segmented rc-panel-seg">
-                    <button type="button" class="${this.scheduleFilter === "all" ? "is-active" : ""}" data-sched-filter="all">All</button>
-                    <button type="button" class="${this.scheduleFilter === "upcoming" ? "is-active" : ""}" data-sched-filter="upcoming">Upcoming</button>
-                    <button type="button" class="${this.scheduleFilter === "done" ? "is-active" : ""}" data-sched-filter="done">Confirmed</button>
-                  </div>`
-                : ""
-            }
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-collapse="schedule" title="${p.collapsed ? "Expand panel" : "Collapse panel"}" aria-label="Toggle collapse">
-              ${p.collapsed ? icons.plus(13) : icons.minus(13)}
-            </button>
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-toggle="schedule" title="Hide panel" aria-label="Hide panel">
-              ${icons.close(13)}
-            </button>
+            <div class="segmented rc-panel-seg">
+              <button type="button" class="${this.scheduleFilter === "all" ? "is-active" : ""}" data-sched-filter="all">All</button>
+              <button type="button" class="${this.scheduleFilter === "upcoming" ? "is-active" : ""}" data-sched-filter="upcoming">Upcoming</button>
+              <button type="button" class="${this.scheduleFilter === "done" ? "is-active" : ""}" data-sched-filter="done">Confirmed</button>
+            </div>
           </div>
         </header>
-        ${
-          p.collapsed
-            ? ""
-            : `<div class="rc-panel-body">
-                ${this.renderScheduleTable(race, activeHeatId, multiStage || isOpenQual ? viewStage : undefined)}
-              </div>`
-        }
+        <div class="rc-panel-body">
+          ${this.renderScheduleTable(race, activeHeatId, multiStage || isOpenQual ? viewStage : undefined)}
+        </div>
       </section>`;
   }
 
   private renderControlStandingsPanel(race: RaceTournamentState): string {
-    const p = this.controlPanels.standings;
-    if (!p.visible) return "";
     const hasQual = !!(race.qualStandings && race.qualStandings.length > 0);
+    const list: TournamentStanding[] =
+      this.standingsStage === "qualifying" && race.qualStandings
+        ? race.qualStandings
+        : race.standings;
+    const mgpVerified = this.isMultiGPVerified();
+    const canUploadOverall = !this.mgpUploadInFlight && (list?.length ?? 0) > 0;
 
     return `
       <section
-        class="rc-canvas-panel is-standings-panel ${p.collapsed ? "is-collapsed" : ""}"
+        class="rc-canvas-panel rc-page-card is-standings-panel"
         data-canvas-panel="standings"
-        data-pos-x="${p.x}"
-        data-pos-y="${p.y}"
-        style="left:0;top:0;z-index:${p.zIndex};transform: translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0)"
+        data-mobile-ctrl-pane="standings"
       >
-        <header class="rc-panel-header" data-panel-drag-handle>
-          <div class="rc-panel-title-wrap">
-            <span class="rc-panel-grip">${icons.grip(13)}</span>
-            ${icons.trophy(14)}
-            <strong>Overall Standings</strong>
-          </div>
-          <div class="rc-panel-actions">
+        <div class="rc-standings-card-box">
+          <header class="rc-panel-header${hasQual ? "" : " rc-hide-mobile"}">
+            <div class="rc-panel-title-wrap rc-hide-mobile">
+              ${icons.trophy(14)}
+              <strong>Overall Standings</strong>
+            </div>
             ${
-              !p.collapsed && hasQual
-                ? `<div class="segmented rc-panel-seg">
-                    <button type="button" class="${this.standingsStage === "main" ? "is-active" : ""}" data-std-stage="main">Overall</button>
-                    <button type="button" class="${this.standingsStage === "qualifying" ? "is-active" : ""}" data-std-stage="qualifying">Qualifying</button>
+              hasQual
+                ? `<div class="rc-panel-actions is-standings-actions">
+                    <div class="segmented rc-panel-seg">
+                      <button type="button" class="${this.standingsStage === "main" ? "is-active" : ""}" data-std-stage="main">Overall</button>
+                      <button type="button" class="${this.standingsStage === "qualifying" ? "is-active" : ""}" data-std-stage="qualifying">Qualifying</button>
+                    </div>
                   </div>`
                 : ""
             }
-            <button type="button" class="btn btn-ghost btn-xs rc-panel-csv-btn" data-race-act="export-csv" title="Download standings &amp; results CSV" aria-label="Download CSV">
-              ${icons.download(13)}<span>Download CSV</span>
-            </button>
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-collapse="standings" title="${p.collapsed ? "Expand panel" : "Collapse panel"}" aria-label="Toggle collapse">
-              ${p.collapsed ? icons.plus(13) : icons.minus(13)}
-            </button>
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-toggle="standings" title="Hide panel" aria-label="Hide panel">
-              ${icons.close(13)}
-            </button>
-          </div>
-        </header>
-        ${p.collapsed ? "" : `<div class="rc-panel-body">${this.renderStandingsTable(race)}</div>`}
+          </header>
+          <div class="rc-panel-body">${this.renderStandingsTable(race)}</div>
+        </div>
+        <footer class="rc-standings-footer pilot-dir-mobile-footer">
+          ${
+            mgpVerified
+              ? `<button
+                  type="button"
+                  class="btn btn-sm pilot-dir-mgp-btn rc-mgp-col-upload-btn"
+                  data-race-act="mgp-upload-overall"
+                  ${canUploadOverall ? "" : "disabled"}
+                  title="Export overall rankings to MultiGP"
+                >
+                  <span>Export to MultiGP</span>
+                </button>`
+              : ""
+          }
+          <button type="button" class="btn btn-sm pilot-dir-mgp-btn" data-race-act="export-csv" title="Export standings &amp; results as CSV" aria-label="Export as CSV">
+            <span>Export as CSV</span>
+          </button>
+        </footer>
       </section>`;
   }
 
   private renderControlSignalsPanel(race: RaceTournamentState): string {
-    const p = this.controlPanels.signals;
-    if (!p.visible) return "";
-
     const selectedSlot = this.resolveRaceSignalsSlot(race);
-    const heat = this.getControlStageHeat(race);
+    const candidates = this.getRaceSignalsCandidates(race);
 
-    const candidates: Array<{ slotIndex: number; callsign: string; color: string; channelLabel?: string }> = [];
-    const seen = new Set<number>();
-    if (heat) {
-      for (const s of heat.seats) {
-        if (s.pilotSlotIndex > 0 && !seen.has(s.pilotSlotIndex)) {
-          seen.add(s.pilotSlotIndex);
-          candidates.push({
-            slotIndex: s.pilotSlotIndex,
-            callsign: s.callsign,
-            color: s.color || "#38bdf8",
-            channelLabel: formatBandChannelShort(s.band, s.channel),
-          });
-        }
-      }
-    }
+    const mobilePilotPickerHtml =
+      candidates.length > 0
+        ? `<div class="picker-row rc-mobile-signals-picker-row">
+            <div class="pilot-picker-shell sched-lineup-wrap">
+              <button type="button" class="pilot-picker-cue sched-lineup-cue is-left" data-lineup-scroll="-1" aria-label="Scroll pilots left" title="More pilots left" hidden>${icons.chevronLeft(14)}</button>
+              <div class="pilot-picker sched-lineup" role="tablist" aria-label="Select pilot signal trace" data-fit-lineup>
+                ${candidates
+                  .map(
+                    (c) => `
+                  <button
+                    type="button"
+                    class="pilot-chip ${c.slotIndex === selectedSlot ? "is-active" : ""}"
+                    role="tab"
+                    aria-selected="${c.slotIndex === selectedSlot ? "true" : "false"}"
+                    data-race-sig-pilot="${c.slotIndex}"
+                    style="--c:${c.color}"
+                  >
+                    <span class="dot" style="--c:${c.color}"></span>
+                    <span class="pilot-chip-name">${esc(c.callsign)}</span>
+                    ${c.channelLabel ? `<span class="pilot-chip-time">${esc(c.channelLabel)}</span>` : ""}
+                  </button>`
+                  )
+                  .join("")}
+              </div>
+              <button type="button" class="pilot-picker-cue sched-lineup-cue is-right" data-lineup-scroll="1" aria-label="Scroll pilots right" title="More pilots right" hidden>${icons.chevronRight(14)}</button>
+            </div>
+          </div>`
+        : "";
 
     const pilotBarHtml =
       candidates.length > 0
-        ? `<div class="rc-signals-pilot-bar" role="tablist" aria-label="Select pilot signal trace">
-            ${candidates
-              .map(
-                (c) => `
-              <button
-                type="button"
-                class="races-filter-pill rc-sig-pilot-pill ${c.slotIndex === selectedSlot ? "is-active" : ""}"
-                data-race-sig-pilot="${c.slotIndex}"
-              >
-                <span class="dot" style="--c:${c.color}"></span>
-                <span>${esc(c.callsign)}</span>
-                ${c.channelLabel ? `<span class="mono note">${esc(c.channelLabel)}</span>` : ""}
-              </button>`
-              )
-              .join("")}
+        ? `<div class="sched-lineup-wrap rc-signals-pilot-wrap">
+            <button type="button" class="sched-lineup-cue is-left" data-lineup-scroll="-1" aria-label="Scroll pilots left" title="Scroll left" hidden>${icons.chevronLeft(13)}</button>
+            <div class="rc-signals-pilot-bar sched-lineup" role="tablist" aria-label="Select pilot signal trace" data-fit-lineup>
+              ${candidates
+                .map(
+                  (c) => `
+                <button
+                  type="button"
+                  class="races-filter-pill rc-sig-pilot-pill ${c.slotIndex === selectedSlot ? "is-active" : ""}"
+                  data-race-sig-pilot="${c.slotIndex}"
+                  style="--c:${c.color}"
+                >
+                  <span class="dot" style="--c:${c.color}"></span>
+                  <span>${esc(c.callsign)}</span>
+                  ${c.channelLabel ? `<span class="mono note">${esc(c.channelLabel)}</span>` : ""}
+                </button>`
+                )
+                .join("")}
+            </div>
+            <button type="button" class="sched-lineup-cue is-right" data-lineup-scroll="1" aria-label="Scroll pilots right" title="More pilots" hidden>${icons.chevronRight(13)}</button>
           </div>`
-        : `<div class="note" style="padding:4px 0">No pilots in the current heat.</div>`;
+        : `<div class="note" style="padding:4px 0">No active pilots.</div>`;
 
     return `
       <section
-        class="rc-canvas-panel is-signals-panel ${p.collapsed ? "is-collapsed" : ""}"
+        class="rc-canvas-panel rc-page-card is-signals-panel"
         data-canvas-panel="signals"
-        data-pos-x="${p.x}"
-        data-pos-y="${p.y}"
-        style="left:0;top:0;z-index:${p.zIndex};transform: translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0)"
+        data-mobile-ctrl-pane="signals"
       >
-        <header class="rc-panel-header" data-panel-drag-handle>
+        ${mobilePilotPickerHtml}
+        <header class="rc-panel-header rc-hide-mobile">
           <div class="rc-panel-title-wrap">
-            <span class="rc-panel-grip">${icons.grip(13)}</span>
             ${icons.signal(14)}
             <strong>Signal at each timer</strong>
-            ${heat ? `<span class="badge mono">${esc(heat.shortLabel)}</span>` : ""}
-            <span class="note">Live RSSI &amp; gate crossing thresholds</span>
-          </div>
-          <div class="rc-panel-actions">
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-collapse="signals" title="${p.collapsed ? "Expand panel" : "Collapse panel"}" aria-label="Toggle collapse">
-              ${p.collapsed ? icons.plus(13) : icons.minus(13)}
-            </button>
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-toggle="signals" title="Hide panel (reopen from + menu)" aria-label="Hide panel">
-              ${icons.close(13)}
-            </button>
+            <span class="note rc-hide-mobile">Live RSSI &amp; gate crossing thresholds</span>
           </div>
         </header>
-        ${
-          p.collapsed
-            ? ""
-            : `<div class="rc-panel-body is-signals-body">
-                ${pilotBarHtml}
-                ${candidates.length > 0 ? `<div class="rc-signals-chart-host" data-race-signals-chart></div>` : ""}
-              </div>`
-        }
+        <div class="rc-panel-body is-signals-body">
+          ${pilotBarHtml}
+          ${candidates.length > 0 ? `<div class="rc-signals-chart-host" data-race-signals-chart></div>` : ""}
+        </div>
       </section>`;
   }
 
@@ -8490,10 +9432,10 @@ export class RacesView extends Component {
       return "";
     }
     const isConfirmed = heat.state === "confirmed";
-    return `<div class="segmented rc-panel-seg" data-review-status-toggle role="group" aria-label="Heat review status">
+    return `<div class="rc-lifecycle-seg rc-review-seg" data-review-status-toggle role="group" aria-label="Heat review status">
       <button
         type="button"
-        class="${!isConfirmed ? "is-active" : ""}"
+        class="rc-lifecycle-btn is-opt-review ${!isConfirmed ? "is-active" : ""}"
         data-set-review-status="unlock"
         data-heat-id="${esc(heat.id)}"
         aria-pressed="${!isConfirmed ? "true" : "false"}"
@@ -8501,7 +9443,7 @@ export class RacesView extends Component {
       >Review</button>
       <button
         type="button"
-        class="${isConfirmed ? "is-active" : ""}"
+        class="rc-lifecycle-btn is-opt-confirmed ${isConfirmed ? "is-active" : ""}"
         data-set-review-status="confirm"
         data-heat-id="${esc(heat.id)}"
         aria-pressed="${isConfirmed ? "true" : "false"}"
@@ -8510,100 +9452,107 @@ export class RacesView extends Component {
     </div>`;
   }
 
-  private renderReviewHeatPanel(race: RaceTournamentState): string {
-    const p = this.reviewPanels.review_heat;
-    if (!p.visible) return "";
+  private renderReviewMobilePickerPanel(race: RaceTournamentState): string {
+    const heat = this.resolveReviewHeat(race);
+    const executed = this.getExecutedHeats(race);
+    if (!heat || executed.length === 0) return "";
+    const stages = resolveStagesList(race);
+    const multiStage = stages.length > 1;
+    const curExecIdx = executed.findIndex((h) => h.id === heat.id);
+    return `
+      <section class="rc-page-card rc-review-mobile-picker-card" data-review-mobile-picker-card>
+        <div class="rc-review-mobile-picker" role="group" aria-label="Select executed heat">
+          <button
+            type="button"
+            class="btn btn-ghost btn-xs rc-review-step-btn"
+            data-review-step-heat="-1"
+            ${curExecIdx <= 0 ? "disabled" : ""}
+            title="Newer executed heat"
+            aria-label="Newer executed heat"
+          >${icons.chevronLeft(14)}</button>
+          <select class="input input-sm rc-review-heat-select" data-review-heat-select aria-label="Executed heat">
+            ${executed
+              .map((eh) => {
+                const ehPrefix = multiStage ? `S${eh.stageIndex} · ` : "";
+                const ehBadge = heatStateBadge(eh.state, eh.inOvertime, eh.note);
+                return `<option value="${esc(eh.id)}" ${eh.id === heat.id ? "selected" : ""}>${esc(ehPrefix + eh.shortLabel)} · ${esc(eh.title)} (${esc(ehBadge.label)})</option>`;
+              })
+              .join("")}
+          </select>
+          <button
+            type="button"
+            class="btn btn-ghost btn-xs rc-review-step-btn"
+            data-review-step-heat="1"
+            ${curExecIdx < 0 || curExecIdx >= executed.length - 1 ? "disabled" : ""}
+            title="Older executed heat"
+            aria-label="Older executed heat"
+          >${icons.chevronRight(14)}</button>
+        </div>
+      </section>`;
+  }
 
+  private renderReviewHeatPanel(race: RaceTournamentState): string {
     const heat = this.resolveReviewHeat(race);
     const hasOpenPopover = Boolean(this.openMarshalMenuKey);
     const stages = resolveStagesList(race);
+    const multiStage = stages.length > 1;
 
     if (!heat) {
       return `
         <section
-          class="rc-canvas-panel is-review-heat-panel ${p.collapsed ? "is-collapsed" : ""}"
+          class="rc-canvas-panel rc-page-card is-review-heat-panel"
           data-canvas-panel="review_heat"
-          data-pos-x="${p.x}"
-          data-pos-y="${p.y}"
-          style="left:0;top:0;z-index:${p.zIndex};transform: translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0)"
         >
-          <header class="rc-panel-header" data-panel-drag-handle>
+          <header class="rc-panel-header">
             <div class="rc-panel-title-wrap">
-              <span class="rc-panel-grip">${icons.grip(13)}</span>
               ${icons.reviewCheck(14)}
               <strong>Heat Review</strong>
               <span class="race-state-pill is-waiting">No executed heats</span>
             </div>
-            <div class="rc-panel-actions">
-              <button type="button" class="rc-panel-icon-btn" data-rc-panel-collapse="review_heat" title="${p.collapsed ? "Expand panel" : "Collapse panel"}" aria-label="Toggle collapse">
-                ${p.collapsed ? icons.plus(13) : icons.minus(13)}
-              </button>
-              <button type="button" class="rc-panel-icon-btn" data-rc-panel-toggle="review_heat" title="Hide panel" aria-label="Hide panel">
-                ${icons.close(13)}
-              </button>
-            </div>
           </header>
-          ${
-            p.collapsed
-              ? ""
-              : `<div class="rc-panel-body is-heatline-body">
-                  <div class="race-empty-state" style="padding:24px 16px">
-                    <p style="margin:0 0 8px">No executed heats to review yet for <strong>${esc(race.config.eventName || "this race")}</strong>.</p>
-                    <p class="note" style="margin:0">Once heats run or finish in <strong>Control</strong>, select any heat here to inspect RSSI crossings, drop/add laps, or adjust placements.</p>
-                  </div>
-                </div>`
-          }
+          <div class="rc-panel-body is-heatline-body">
+            <div class="race-empty-state" style="padding:24px 16px">
+              <p style="margin:0 0 8px">No executed heats to review yet for <strong>${esc(race.config.eventName || "this race")}</strong>.</p>
+              <p class="note" style="margin:0">Once heats run or finish in <strong>Control</strong>, select any heat here to inspect RSSI crossings, drop/add laps, or adjust placements.</p>
+            </div>
+          </div>
         </section>`;
     }
 
     const stg = stages.find((s) => s.index === heat.stageIndex);
-    const stgPrefix = stages.length > 1 ? `Stage ${heat.stageIndex}${stg ? ` (${stg.title})` : ""} · ` : "";
+    const stgPrefix = multiStage ? `Stage ${heat.stageIndex}${stg ? ` (${stg.title})` : ""} · ` : "";
     const canSwitchStatus = this.canSwitchReviewStatus(heat, race);
     const statusBadge = heatStateBadge(heat.state, heat.inOvertime, heat.note);
 
     return `
       <section
-        class="rc-canvas-panel is-review-heat-panel ${p.collapsed ? "is-collapsed" : ""} ${hasOpenPopover ? "has-open-popover" : ""}"
+        class="rc-canvas-panel rc-page-card is-review-heat-panel ${hasOpenPopover ? "has-open-popover" : ""}"
         data-canvas-panel="review_heat"
-        data-pos-x="${p.x}"
-        data-pos-y="${p.y}"
-        style="left:0;top:0;z-index:${hasOpenPopover ? 500 : p.zIndex};transform: translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0)"
       >
-        <header class="rc-panel-header" data-panel-drag-handle>
+        <header class="rc-panel-header">
           <div class="rc-panel-title-wrap">
-            <span class="rc-panel-grip">${icons.grip(13)}</span>
             ${icons.reviewCheck(14)}
-            <strong>Heat Review</strong>
-            <span class="badge mono">${esc(heat.shortLabel)} · ${esc(stgPrefix + heat.title)}</span>
-            ${!canSwitchStatus || p.collapsed ? `<span class="race-state-pill ${statusBadge.cls}">${esc(statusBadge.label)}</span>` : ""}
-            ${canSwitchStatus && !p.collapsed && heat.state === "confirmed" ? `<span class="note">Switch to Review to edit laps</span>` : ""}
+            <strong class="rc-review-desktop-title">Heat Review</strong>
+            <strong class="rc-review-mobile-title mono">${esc(heat.shortLabel)}</strong>
+            <span class="badge mono rc-review-heat-badge"><span class="rc-lbl-full">${esc(heat.shortLabel)} · ${esc(stgPrefix + heat.title)}</span><span class="rc-lbl-short">${esc(heat.shortLabel)}</span></span>
+            ${!canSwitchStatus ? `<span class="race-state-pill ${statusBadge.cls}">${esc(statusBadge.label)}</span>` : ""}
+            ${canSwitchStatus && heat.state === "confirmed" ? `<span class="note rc-review-edit-hint">Switch to Review to edit laps</span>` : ""}
           </div>
           <div class="rc-panel-actions">
-            ${!p.collapsed ? this.renderReviewStatusToggle(heat, race) : ""}
+            ${this.renderReviewStatusToggle(heat, race)}
             ${this.renderHeatGraphJumpBtn(heat, { panelHeader: true, iconSize: 13 })}
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-collapse="review_heat" title="${p.collapsed ? "Expand panel" : "Collapse panel"}" aria-label="Toggle collapse">
-              ${p.collapsed ? icons.plus(13) : icons.minus(13)}
-            </button>
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-toggle="review_heat" title="Hide panel" aria-label="Hide panel">
-              ${icons.close(13)}
-            </button>
           </div>
         </header>
-        ${
-          p.collapsed
-            ? ""
-            : `<div class="rc-panel-body is-heatline-body">
-                <div class="race-heat-table-wrap">
-                  ${this.renderActiveHeatTable(heat, { staticRf: true })}
-                </div>
-              </div>`
-        }
+        <div class="rc-panel-body is-heatline-body">
+          <div class="race-heat-table-wrap">
+            ${this.renderActiveHeatTable(heat, { staticRf: true })}
+          </div>
+        </div>
       </section>`;
   }
 
   private renderReviewListPanel(race: RaceTournamentState): string {
     const p = this.reviewPanels.review_list;
-    if (!p.visible) return "";
 
     const executed = this.getExecutedHeats(race);
     const activeReviewHeat = this.resolveReviewHeat(race);
@@ -8613,15 +9562,15 @@ export class RacesView extends Component {
 
     const bodyInner =
       executed.length === 0
-        ? `<div class="race-empty-state"><p>No executed heats yet. Completed and finished heats appear here newest-first.</p></div>`
-        : `<div class="table-scroll" data-preserve-scroll="review-executed-list">
+        ? `<div class="race-empty-state"><p>No completed heats yet. Completed and finished heats appear here newest-first.</p></div>`
+        : `<div class="table-scroll" style="max-height:320px" data-preserve-scroll="review-executed-list">
             <table class="table rc-compact-table rc-executed-heats-table">
               <thead>
                 <tr>
                   <th class="rc-exec-time-col">Executed</th>
-                  <th>Heat</th>
-                  <th style="width:128px">Status</th>
-                  <th>Results &amp; Placements</th>
+                  <th class="rc-exec-heat-col">Heat</th>
+                  <th class="rc-exec-status-col">Status</th>
+                  <th class="rc-exec-results-col">Placements</th>
                 </tr>
               </thead>
               <tbody>
@@ -8630,6 +9579,18 @@ export class RacesView extends Component {
                     const isSel = h.id === selectedId;
                     const stgPrefix = multiStage ? `S${h.stageIndex} · ` : "";
                     const b = heatStateBadge(h.state, h.inOvertime, h.note);
+                    const shortExecStatus =
+                      b.label === "Review"
+                        ? "Rev."
+                        : b.label === "Confirmed"
+                          ? "Conf."
+                          : b.label === "Paused"
+                            ? "Psd."
+                            : b.label === "Stopped"
+                              ? "Stop"
+                              : b.label === "Overtime"
+                                ? "OT"
+                                : b.label;
                     const sortedSeats = [...h.seats]
                       .filter((s) => s.pilotSlotIndex > 0)
                       .sort((sa, sb) => {
@@ -8641,7 +9602,7 @@ export class RacesView extends Component {
                       });
                     const summaryChips = sortedSeats
                       .map((s) => {
-                        const posPrefix = s.position > 0 ? `#${s.position} ` : "";
+                        const posLabel = s.position > 0 ? `#${s.position}` : "";
                         const stSuffix =
                           s.status === "dns"
                             ? " (DNS)"
@@ -8652,22 +9613,22 @@ export class RacesView extends Component {
                                 : s.advances
                                   ? " ✓"
                                   : "";
-                        const chShort = formatBandChannelShort(s.band, s.channel) || `R${s.channel}`;
-                        return `<span class="sched-pilot-chip ${s.status === "dns" || s.status === "dq" ? "is-tbd" : ""}"><span class="dot" style="--c:${s.color}"></span><span class="sched-chip-text"><span class="sched-chip-ch mono">${esc(posPrefix)}${esc(chShort)}</span><span class="sched-chip-name">${esc(s.callsign)}${stSuffix}</span></span></span>`;
+                        return `<span class="sched-pilot-chip ${s.status === "dns" || s.status === "dq" ? "is-tbd" : ""}"><span class="dot" style="--c:${s.color}"></span><span class="sched-chip-text">${posLabel ? `<span class="sched-chip-ch mono">${esc(posLabel)}</span>` : ""}<span class="sched-chip-name">${esc(s.callsign)}${stSuffix}</span></span></span>`;
                       })
                       .join("");
                     return `
                       <tr class="${isSel ? "is-selected-row" : ""} rc-review-exec-row" data-review-select-heat="${esc(h.id)}">
-                        <td class="mono note rc-exec-time-col">${esc(this.formatExecutedHeatTime(h.executedAtMs))}</td>
-                        <td>
+                        <td class="mono note rc-exec-time-col"><span class="rc-exec-sel-strip" aria-hidden="true"></span>${esc(this.formatExecutedHeatTime(h.executedAtMs))}</td>
+                        <td class="rc-exec-heat-col">
                           <div class="rc-sched-heat-title-row">
                             <strong class="rc-sched-heat-label">${esc(stgPrefix + h.shortLabel)}</strong>
-                            ${this.renderHeatGraphJumpBtn(h, { iconSize: 12 })}
                           </div>
-                          <div class="note rc-sched-sub">${esc(h.title)}</div>
                         </td>
-                        <td><span class="race-state-pill ${b.cls}">${esc(b.label)}</span></td>
-                        <td><div class="sched-lineup">${summaryChips || `<span class="note">—</span>`}</div></td>
+                        <td class="rc-exec-status-col">
+                          <span class="race-state-pill ${b.cls} rc-exec-status-pill">${esc(b.label)}</span>
+                          <span class="rc-exec-status-icon ${h.state === "confirmed" ? "is-confirmed" : "is-review"}" title="${esc(b.label)}" aria-label="${esc(b.label)}">${h.state === "confirmed" ? icons.check(16) : icons.eye(16)}</span>
+                        </td>
+                        <td class="rc-exec-results-col"><div class="sched-lineup-wrap"><button type="button" class="sched-lineup-cue is-left" data-lineup-scroll="-1" aria-label="Scroll placements left" title="Scroll left" hidden>${icons.chevronLeft(12)}</button><div class="sched-lineup" data-fit-lineup>${summaryChips || `<span class="note">—</span>`}</div><button type="button" class="sched-lineup-cue is-right" data-lineup-scroll="1" aria-label="Scroll placements right" title="More placements" hidden>${icons.chevronRight(12)}</button></div></td>
                       </tr>`;
                   })
                   .join("")}
@@ -8677,33 +9638,36 @@ export class RacesView extends Component {
 
     return `
       <section
-        class="rc-canvas-panel is-review-list-panel ${p.collapsed ? "is-collapsed" : ""}"
+        class="rc-canvas-panel rc-page-card is-review-list-panel"
         data-canvas-panel="review_list"
-        data-pos-x="${p.x}"
-        data-pos-y="${p.y}"
-        style="left:0;top:0;z-index:${p.zIndex};transform: translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0)"
       >
-        <header class="rc-panel-header" data-panel-drag-handle>
+        <header class="rc-panel-header">
           <div class="rc-panel-title-wrap">
-            <span class="rc-panel-grip">${icons.grip(13)}</span>
             ${icons.calendar(14)}
-            <strong>Executed Heats</strong>
+            <strong>Completed Heats</strong>
             <span class="badge mono">${executed.length}</span>
-            <span class="note">Reverse chronological order</span>
+            <span class="note rc-hide-mobile">Reverse chronological order</span>
           </div>
           <div class="rc-panel-actions">
+            ${
+              this.isMultiGPVerified()
+                ? `<button
+                    type="button"
+                    class="btn btn-ghost btn-xs rc-panel-csv-btn rc-mgp-col-upload-btn"
+                    data-race-act="mgp-upload-heats"
+                    ${!this.mgpUploadInFlight && executed.length > 0 ? "" : "disabled"}
+                    title="Inspect and upload completed heat results (race/assignSlot) to MultiGP"
+                  >
+                    ${icons.upload(12)}<span>Upload MGP</span>
+                  </button>`
+                : ""
+            }
             <button type="button" class="rc-panel-icon-btn" data-race-act="export-csv" title="Export results CSV" aria-label="Export CSV">
               ${icons.download(13)}
             </button>
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-collapse="review_list" title="${p.collapsed ? "Expand panel" : "Collapse panel"}" aria-label="Toggle collapse">
-              ${p.collapsed ? icons.plus(13) : icons.minus(13)}
-            </button>
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-toggle="review_list" title="Hide panel" aria-label="Hide panel">
-              ${icons.close(13)}
-            </button>
           </div>
         </header>
-        ${p.collapsed ? "" : `<div class="rc-panel-body">${bodyInner}</div>`}
+        <div class="rc-panel-body">${bodyInner}</div>
       </section>`;
   }
 
@@ -8739,82 +9703,37 @@ export class RacesView extends Component {
         });
       } finally {
         this.mgpUploadInFlight = false;
-        if (!this.disposed && this.activeTab === "review") {
+        if (
+          !this.disposed &&
+          (this.activeTab === "multigp" || this.activeTab === "review")
+        ) {
           this.refreshSinglePanelDom("review_mgp");
         }
       }
     })();
   }
 
-  private renderReviewMultiGPPanel(race: RaceTournamentState): string {
+  private renderMultiGPOverallPanel(race: RaceTournamentState): string {
     if (!this.isMultiGPVerified()) return "";
-    const p = this.reviewPanels.review_mgp;
-    if (!p.visible) return "";
+    const p = this.reviewPanels.mgp_overall;
 
-    const prefs = sharedMultiGPService.prefsFor(this.store.simulatorRunning, this.store);
-    const link = race.mgpLink;
-    const isLinked = Boolean(link && link.raceId > 0);
-    const raceTitle = link?.raceName || race.config.eventName || "SlapRF Race";
-    const chapterLabel =
-      prefs.chapterName ||
-      link?.chapterName ||
-      (this.store.simulatorRunning ? "Simulated MultiGP Chapter" : "MultiGP Chapter");
-
-    const completedHeats = race.heats.filter(
-      (h) =>
-        (h.state === "finished" || h.state === "confirmed") &&
-        h.note !== "Auto-advance (bye)"
-    );
     const standings: TournamentStanding[] =
       race.standings && race.standings.length > 0
         ? race.standings
         : (race.qualStandings ?? []);
-
-    const unsyncedCount = link ? Object.keys(link.unsyncedHeats ?? {}).length : completedHeats.length;
     const canUploadOverall = !this.mgpUploadInFlight && standings.length > 0;
-    const canUploadHeats = !this.mgpUploadInFlight && completedHeats.length > 0;
-
-    const statusBannerHtml = isLinked
-      ? `<div class="rc-mgp-status-strip">
-           <div class="rc-mgp-status-left">
-             <span class="race-state-pill ${unsyncedCount > 0 ? "is-staged" : "is-done"}">${
-               unsyncedCount > 0 ? `${unsyncedCount} Pending Sync` : "Synced ✓"
-             }</span>
-             <span class="note">Linked to <strong>MultiGP #${link!.raceId}</strong> (${esc(raceTitle)}) · ${esc(chapterLabel)}</span>
-             ${
-               link!.lastSyncedAt
-                 ? `<span class="note">· Last synced ${esc(formatShortRaceDate(link!.lastSyncedAt))}</span>`
-                 : ""
-             }
-           </div>
-           ${
-             link!.isZippyQ
-               ? `<div class="rc-mgp-status-actions">
-                    <button type="button" class="btn btn-ghost btn-xs" data-race-act="mgp-pull-zippyq" ${this.zippyPullInFlight ? "disabled" : ""} title="Pull newly queued ZippyQ rounds from MultiGP #${link!.raceId}">
-                      ${icons.download(12)}<span>${this.zippyPullInFlight ? "Pulling…" : "Pull ZippyQ"}</span>
-                    </button>
-                  </div>`
-               : ""
-           }
-         </div>`
-      : `<div class="rc-mgp-status-strip">
-           <div class="rc-mgp-status-left">
-             <span class="race-state-pill is-ready">Ready to Upload</span>
-             <span class="note">Local race <strong>${esc(raceTitle)}</strong> · Will create race &amp; upload heats + overall standings to <strong>${esc(chapterLabel)}</strong></span>
-           </div>
-         </div>`;
 
     const standingsPreviewHtml =
       standings.length === 0
         ? `<div class="note" style="padding:12px">No overall standings recorded yet.</div>`
-        : `<div class="table-scroll" style="max-height:220px">
+        : `<div class="table-scroll" style="max-height:320px">
              <table class="table rc-compact-table rc-mgp-overall-table">
                <thead>
                  <tr>
                    <th class="rc-mgp-col-rank">Rank</th>
                    <th>Pilot</th>
                    <th class="rc-mgp-col-metric" style="width:96px">Best Lap</th>
-                   <th class="rc-mgp-col-metric" style="width:136px">Best 3 Consecutive</th>
+                   <th class="rc-mgp-col-metric" style="width:96px">Best 3C</th>
                  </tr>
                </thead>
                <tbody>
@@ -8838,10 +9757,50 @@ export class RacesView extends Component {
              </table>
            </div>`;
 
+    return `
+      <section
+        class="rc-canvas-panel rc-page-card is-mgp-overall-panel"
+        data-canvas-panel="mgp_overall"
+      >
+        <header class="rc-panel-header">
+          <div class="rc-panel-title-wrap">
+            ${icons.trophy(14)}
+            <strong>Overall Ranking</strong>
+            <span class="badge mono">${standings.length}</span>
+            <span class="badge rc-hide-mobile">captureOverallRaceResult</span>
+          </div>
+          <div class="rc-panel-actions">
+            <button
+              type="button"
+              class="btn btn-armed btn-xs rc-mgp-col-upload-btn"
+              data-race-act="mgp-upload-overall"
+              ${canUploadOverall ? "" : "disabled"}
+              title="Inspect and upload overall rankings (captureOverallRaceResult) to MultiGP"
+            >
+              ${icons.upload(12)}<span>Upload</span>
+            </button>
+          </div>
+        </header>
+        <div class="rc-panel-body">${standingsPreviewHtml}</div>
+      </section>`;
+  }
+
+  private renderMultiGPHeatsPanel(race: RaceTournamentState): string {
+    if (!this.isMultiGPVerified()) return "";
+    const p = this.reviewPanels.mgp_heats;
+    const link = race.mgpLink;
+
+    const completedHeats = race.heats.filter(
+      (h) =>
+        (h.state === "finished" || h.state === "confirmed") &&
+        h.note !== "Auto-advance (bye)"
+    );
+    const canUploadHeats = !this.mgpUploadInFlight && completedHeats.length > 0;
+
     const heatsPreviewHtml =
       completedHeats.length === 0
         ? `<div class="note" style="padding:12px">No completed heats to upload yet. Finish or confirm heats first.</div>`
-        : `<div class="table-scroll" style="max-height:220px">
+        : `<div class="table-scroll" style="max-height:320px">
              <table class="table rc-compact-table rc-mgp-heats-table">
                <thead>
                  <tr>
@@ -8855,25 +9814,24 @@ export class RacesView extends Component {
                    .map((h) => {
                      const syncedAt = link?.syncedHeatAt?.[h.id] ?? "";
                      const isDirty = Boolean(link?.unsyncedHeats?.[h.id]);
-                     const syncState =
-                       syncedAt && !isDirty
-                         ? `<span class="race-state-pill is-done">Synced ✓</span>`
-                         : `<span class="race-state-pill is-staged">Pending</span>`;
-                     const seatsSummary = h.seats
-                       .filter((s) => s.pilotSlotIndex > 0)
+                     const isSynced = Boolean(syncedAt && !isDirty);
+                     const syncState = isSynced
+                       ? `<span class="race-state-pill is-done rc-exec-status-pill">Synced ✓</span><span class="rc-exec-status-icon is-confirmed" title="Synced" aria-label="Synced">${icons.check(16)}</span>`
+                       : `<span class="race-state-pill is-staged rc-exec-status-pill">Pending</span><span class="rc-exec-status-icon is-review" title="Pending" aria-label="Pending">${icons.clock(16)}</span>`;
+                     const filledSeats = h.seats.filter((s) => s.pilotSlotIndex > 0);
+                     const seatsSummary = filledSeats
                        .map((s) => {
-                         const posStr = s.position > 0 ? `#${s.position} ` : "";
+                         const posLabel = s.position > 0 ? `#${s.position}` : "";
                          const timeStr =
                            s.totalTimeSec > 0 ? ` · ${s.totalTimeSec.toFixed(2)}s` : "";
-                         const chShort = formatBandChannelShort(s.band, s.channel) || `R${s.channel}`;
-                         return `<span class="sched-pilot-chip"><span class="dot" style="--c:${s.color}"></span><span class="sched-chip-text"><span class="sched-chip-ch">${esc(posStr)}${esc(chShort)}</span><span class="sched-chip-name">${esc(s.callsign)} (${s.lapsCompleted}L${esc(timeStr)})</span></span></span>`;
+                         return `<span class="sched-pilot-chip"><span class="dot" style="--c:${s.color}"></span><span class="sched-chip-text">${posLabel ? `<span class="sched-chip-ch">${esc(posLabel)}</span>` : ""}<span class="sched-chip-name">${esc(s.callsign)} (${s.lapsCompleted}L${esc(timeStr)})</span></span></span>`;
                        })
                        .join("");
                      return `
                        <tr>
                          <td class="rc-mgp-col-heat"><strong class="rc-sched-heat-label">${esc(h.shortLabel)}</strong></td>
                          <td class="rc-mgp-col-sync">${syncState}</td>
-                         <td><div class="sched-lineup">${seatsSummary || `<span class="note">—</span>`}</div></td>
+                         <td><div class="sched-lineup-wrap"><button type="button" class="sched-lineup-cue is-left" data-lineup-scroll="-1" aria-label="Scroll placements left" title="Scroll left" hidden>${icons.chevronLeft(12)}</button><div class="sched-lineup" data-fit-lineup>${seatsSummary || `<span class="note">—</span>`}</div><button type="button" class="sched-lineup-cue is-right" data-lineup-scroll="1" aria-label="Scroll placements right" title="More placements" hidden>${icons.chevronRight(12)}</button></div></td>
                        </tr>`;
                    })
                    .join("")}
@@ -8881,111 +9839,62 @@ export class RacesView extends Component {
              </table>
            </div>`;
 
-    const bodyHtml = p.collapsed
-      ? ""
-      : `<div class="rc-panel-body is-mgp-sync-body">
-           ${statusBannerHtml}
-           <div class="rc-mgp-sync-grid">
-             <div class="rc-mgp-sync-col">
-               <div class="rc-mgp-col-head">
-                 <div class="rc-mgp-col-head-title">
-                   <strong>Overall Ranking (${standings.length})</strong>
-                   <span class="badge">captureOverallRaceResult</span>
-                 </div>
-                 <button
-                   type="button"
-                   class="btn btn-armed btn-xs rc-mgp-col-upload-btn"
-                   data-race-act="mgp-upload-overall"
-                   ${canUploadOverall ? "" : "disabled"}
-                   title="Inspect and upload overall rankings (captureOverallRaceResult) to MultiGP"
-                 >
-                   ${icons.upload(12)}<span>Upload</span>
-                 </button>
-               </div>
-               ${standingsPreviewHtml}
-             </div>
-             <div class="rc-mgp-sync-col">
-               <div class="rc-mgp-col-head">
-                 <div class="rc-mgp-col-head-title">
-                   <strong>Completed Heats (${completedHeats.length})</strong>
-                   <span class="badge">race/assignSlot</span>
-                 </div>
-                 <button
-                   type="button"
-                   class="btn btn-armed btn-xs rc-mgp-col-upload-btn"
-                   data-race-act="mgp-upload-heats"
-                   ${canUploadHeats ? "" : "disabled"}
-                   title="Inspect and upload completed heat results (race/assignSlot) to MultiGP"
-                 >
-                   ${icons.upload(12)}<span>Upload</span>
-                 </button>
-               </div>
-               ${heatsPreviewHtml}
-             </div>
-           </div>
-         </div>`;
-
     return `
       <section
-        class="rc-canvas-panel is-review-mgp-panel ${p.collapsed ? "is-collapsed" : ""}"
-        data-canvas-panel="review_mgp"
-        data-pos-x="${p.x}"
-        data-pos-y="${p.y}"
-        style="left:0;top:0;z-index:${p.zIndex};transform: translate3d(${p.x.toFixed(1)}px, ${p.y.toFixed(1)}px, 0)"
+        class="rc-canvas-panel rc-page-card is-mgp-heats-panel"
+        data-canvas-panel="mgp_heats"
       >
-        <header class="rc-panel-header" data-panel-drag-handle>
+        <header class="rc-panel-header">
           <div class="rc-panel-title-wrap">
-            <span class="rc-panel-grip">${icons.grip(13)}</span>
-            ${icons.upload(14)}
-            <strong>MultiGP Sync</strong>
-            <span class="badge">${isLinked ? `MGP #${link!.raceId}` : "Local Race"}</span>
-            <span class="note">${esc(chapterLabel)}</span>
+            ${icons.calendar(14)}
+            <strong>Completed Heats</strong>
+            <span class="badge mono">${completedHeats.length}</span>
+            <span class="badge rc-hide-mobile">race/assignSlot</span>
           </div>
           <div class="rc-panel-actions">
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-collapse="review_mgp" title="${p.collapsed ? "Expand panel" : "Collapse panel"}" aria-label="Toggle collapse">
-              ${p.collapsed ? icons.plus(13) : icons.minus(13)}
-            </button>
-            <button type="button" class="rc-panel-icon-btn" data-rc-panel-toggle="review_mgp" title="Hide panel" aria-label="Hide panel">
-              ${icons.close(13)}
+            ${
+              link?.isZippyQ
+                ? `<button type="button" class="btn btn-ghost btn-xs" data-race-act="mgp-pull-zippyq" ${this.zippyPullInFlight ? "disabled" : ""} title="Pull newly queued ZippyQ rounds from MultiGP #${link.raceId}">
+                    ${icons.download(12)}<span>${this.zippyPullInFlight ? "Pulling…" : "Pull ZippyQ"}</span>
+                  </button>`
+                : ""
+            }
+            <button
+              type="button"
+              class="btn btn-armed btn-xs rc-mgp-col-upload-btn"
+              data-race-act="mgp-upload-heats"
+              ${canUploadHeats ? "" : "disabled"}
+              title="Inspect and upload completed heat results (race/assignSlot) to MultiGP"
+            >
+              ${icons.upload(12)}<span>Upload</span>
             </button>
           </div>
         </header>
-        ${bodyHtml}
+        <div class="rc-panel-body">${heatsPreviewHtml}</div>
       </section>`;
   }
 
   private renderCanvasReviewView(race: RaceTournamentState): string {
-    const gridStep = Math.max(8, 20 * this.bktUi.zoom);
-    const gx = ((this.bktUi.panX % gridStep) + gridStep) % gridStep;
-    const gy = ((this.bktUi.panY % gridStep) + gridStep) % gridStep;
-    const viewStage = this.getCurrentViewStage(race);
-    const panelsHtml = [
-      this.renderReviewListPanel(race),
-      this.renderReviewHeatPanel(race),
-      this.renderReviewMultiGPPanel(race),
-    ].join("");
-
     return `
-      <div
-        class="races-canvas tool-pan is-control-canvas is-review-canvas ${this.bktUi.nodesLocked ? "is-nodes-locked" : ""}"
-        data-rc-viewport
-        style="background-size:${gridStep}px ${gridStep}px;background-position:${gx}px ${gy}px"
-      >
-        ${renderBracketMarkup(race, {
-          activeHeatId: this.resolveReviewHeat(race)?.id ?? "",
-          stageFilter: viewStage,
-          interactive: false,
-          editable: false,
-          canvas: true,
-          hideGraphNodes: true,
-          extraWorldHtml: panelsHtml,
-          raceRoster: race.roster,
-          editorUi: this.bktUi,
-        })}
+      <div class="races-page is-review-page" data-rc-page="review">
+        ${this.renderRaceWorkspaceTopBar(race, "review")}
 
-        ${this.renderTopLeftCanvasBar(race, "review")}
-        ${this.renderBoardControlsPill(race, "review")}
-        ${this.renderSpeedDialFab(race, "review")}
+        <div class="races-page-stack">
+          ${this.renderReviewListPanel(race)}
+          ${this.renderReviewHeatPanel(race)}
+        </div>
+      </div>`;
+  }
+
+  private renderCanvasMultiGPView(race: RaceTournamentState): string {
+    return `
+      <div class="races-page is-multigp-page" data-rc-page="multigp">
+        ${this.renderRaceWorkspaceTopBar(race, "multigp")}
+
+        <div class="races-page-stack">
+          ${this.renderMultiGPOverallPanel(race)}
+          ${this.renderMultiGPHeatsPanel(race)}
+        </div>
       </div>`;
   }
 
@@ -9014,49 +9923,123 @@ export class RacesView extends Component {
       });
   }
 
-  private renderCanvasControlView(race: RaceTournamentState): string {
-    const gridStep = Math.max(8, 20 * this.bktUi.zoom);
-    const gx = ((this.bktUi.panX % gridStep) + gridStep) % gridStep;
-    const gy = ((this.bktUi.panY % gridStep) + gridStep) % gridStep;
+  private renderMobilePilotsView(race: RaceTournamentState): string {
+    return `
+      <div class="races-page is-pilots-page" data-rc-page="pilots">
+        ${this.renderRaceWorkspaceTopBar(race, "pilots")}
 
-    const viewStage = this.getCurrentViewStage(race);
-    const raceStageKey = `${race.raceId || "default"}:${viewStage}`;
-    if (this.controlBoundaryRaceKey !== raceStageKey) {
-      this.controlBoundaryRaceKey = raceStageKey;
-      this.controlBoundaryY = 0;
-    }
-    const activeHeatId = this.getControlStageHeat(race, viewStage)?.id ?? "";
-    const panelsHtml = [
-      this.renderControlCockpitPanel(race),
-      this.renderControlHeatLinePanel(race),
-      this.renderControlFlightLinePanel(race),
-      this.renderControlSchedulePanel(race),
-      this.renderControlStandingsPanel(race),
-      this.renderControlSignalsPanel(race),
-      this.renderPilotsCanvasPanel(race, "control"),
-    ].join("");
+        <div class="races-page-stack">
+          ${this.renderPilotsCanvasPanel(race, "pilots")}
+        </div>
+      </div>`;
+  }
+
+  private renderDesktopPilotsColumnBody(race: RaceTournamentState): string {
+    const {
+      roster,
+      unassignedPilots,
+      assignedPilots,
+      inactivePilots,
+    } = this.computePilotsPanelViewData(race);
+    const canAddPilots = race.lifecycle !== "completed" && race.lifecycle !== "scrapped";
+    const trimmedSearch = this.pilotsSearchQuery.trim();
+    const exactPanelMatch = this.findExistingPilotCallsign(trimmedSearch, race);
+    const addPanelDisabled = !trimmedSearch || !!exactPanelMatch;
+    const addPanelTitle = exactPanelMatch
+      ? `Pilot "${exactPanelMatch}" is already in roster`
+      : trimmedSearch
+        ? `Add pilot "${trimmedSearch}"`
+        : "Search or type a unique callsign to add";
 
     return `
-      <div
-        class="races-canvas tool-pan is-control-canvas ${this.bktUi.nodesLocked ? "is-nodes-locked" : ""}"
-        data-rc-viewport
-        style="background-size:${gridStep}px ${gridStep}px;background-position:${gx}px ${gy}px"
-      >
-        ${renderBracketMarkup(race, {
-          activeHeatId,
-          stageFilter: viewStage,
-          interactive: true,
-          editable: false,
-          canvas: true,
-          hideGraphNodes: true,
-          extraWorldHtml: panelsHtml,
-          raceRoster: race.roster,
-          editorUi: this.bktUi,
-        })}
+      <div class="rc-panel-body rc-pilots-panel-body dte-pilots-body">
+        <div class="rc-pilots-toolbar">
+          <div class="rc-pilots-search-bar">
+            <div class="rc-pilots-search-row">
+              ${icons.search(13)}
+              <input
+                type="search"
+                class="input input-sm rc-pilots-search-input"
+                data-race-field="pilots-search"
+                placeholder="Search or add pilot..."
+                aria-label="Search or add pilot"
+                value="${esc(this.pilotsSearchQuery)}"
+                autocomplete="off"
+              />
+            </div>
+            ${
+              canAddPilots
+                ? `<button
+                    type="button"
+                    class="btn btn-ghost btn-xs bkt-pilots-add-btn"
+                    data-race-act="submit-panel-walkup"
+                    ${addPanelDisabled ? "disabled" : ""}
+                    title="${esc(addPanelTitle)}"
+                  >
+                    ${icons.plus(12)}<span>Add</span>
+                  </button>`
+                : ""
+            }
+          </div>
+          <div class="segmented rc-pilots-filter-seg" role="tablist" aria-label="Filter race pilots">
+            <button type="button" class="${this.pilotsFilter === "all" ? "is-active" : ""}" data-pilots-filter="all">
+              All (${roster.length})
+            </button>
+            <button type="button" class="${this.pilotsFilter === "unassigned" ? "is-active" : ""}" data-pilots-filter="unassigned">
+              Free (${unassignedPilots.length})
+            </button>
+            <button type="button" class="${this.pilotsFilter === "assigned" ? "is-active" : ""}" data-pilots-filter="assigned">
+              Seated (${assignedPilots.length})
+            </button>
+            <button type="button" class="${this.pilotsFilter === "inactive" ? "is-active" : ""}" data-pilots-filter="inactive">
+              Out (${inactivePilots.length})
+            </button>
+          </div>
+        </div>
+        <div class="rc-pilots-results" data-rc-pilots-results>
+          ${this.renderPilotsPanelResults(race, "edit")}
+        </div>
+      </div>`;
+  }
 
-        ${this.renderTopLeftCanvasBar(race, "control")}
-        ${this.renderBoardControlsPill(race, "control")}
-        ${this.renderSpeedDialFab(race, "control")}
+  private renderDesktopTableConfigureView(race: RaceTournamentState): string {
+    return renderDesktopRaceTableEditorHtml(
+      race,
+      this.desktopTableUi,
+      this.renderTopLeftCanvasBar(race, "edit"),
+      this.renderDesktopSetupViewToggle()
+    );
+  }
+
+  private renderMobileConfigureView(race: RaceTournamentState): string {
+    return `
+      <div class="races-page is-configure-page" data-rc-page="configure">
+        ${this.renderRaceWorkspaceTopBar(race, "edit")}
+
+        <div class="races-page-stack is-mre-stack">
+          ${renderMobileRaceEditorHtml(race, this.mobileEditorUi)}
+        </div>
+      </div>`;
+  }
+
+  private renderCanvasControlView(race: RaceTournamentState): string {
+    const isOpenQual = hasOpenQualifierRound(race);
+    const activeMobileView =
+      this.mobileControlView === "queue" && !isOpenQual ? "live" : this.mobileControlView;
+
+    return `
+      <div class="races-page is-control-page" data-rc-page="control" data-mobile-ctrl-view="${activeMobileView}">
+        ${this.renderRaceWorkspaceTopBar(race, "control")}
+
+        ${this.renderControlCockpitPanel(race)}
+
+        <div class="races-page-stack">
+          ${this.renderControlHeatLinePanel(race)}
+          ${this.renderControlFlightLinePanel(race)}
+          ${this.renderControlSchedulePanel(race)}
+          ${this.renderControlStandingsPanel(race)}
+          ${this.renderControlSignalsPanel(race)}
+        </div>
       </div>`;
   }
 
@@ -9090,7 +10073,7 @@ export class RacesView extends Component {
     const appendRerunControl = (asPrimarySlot = false): void => {
       buttons.push(
         `<button type="button" class="btn ${asPrimarySlot ? "btn-armed race-btn-primary-slot" : "btn-ghost"}" data-ctrl="reset" data-heat-id="${hid}">
-          ${icons.reset(16)}<span>Re-run Heat</span>
+          ${icons.reset(16)}<span class="rc-lbl-full">Re-run Heat</span><span class="rc-lbl-short">Re-run</span>
         </button>`
       );
     };
@@ -9111,42 +10094,35 @@ export class RacesView extends Component {
           ${icons.play(16)}<span>Start Heat</span>
         </button>`
       );
-      if (heat.state === "ready") {
-        buttons.push(
-          `<button type="button" class="btn btn-ghost" data-ctrl="select" data-heat-id="${hid}" ${anyOtherLive || raceBlocked || stageClosed || stageDepBlocked || stagePaused ? "disabled" : ""}>
-            ${icons.sliders(16)}<span>Stage Channels</span>
-          </button>`
-        );
-      }
     } else if (heat.state === "countdown") {
       buttons.push(
         `<button type="button" class="btn btn-armed race-btn-primary-slot" disabled>
           ${icons.play(16)}<span>Starting...</span>
         </button>`,
-        `<button type="button" class="btn btn-ghost" data-ctrl="cancel" data-heat-id="${hid}">
+        `<button type="button" class="btn btn-ghost rc-hide-mobile" data-ctrl="cancel" data-heat-id="${hid}">
           ${icons.close(16)}<span>Cancel Countdown</span>
         </button>`
       );
     } else if (heat.state === "running") {
       buttons.push(
         `<button type="button" class="btn btn-armed race-btn-primary-slot" data-ctrl="stop" data-heat-id="${hid}">
-          ${icons.checkered(16)}<span>Finish Heat</span>
+          ${icons.checkered(16)}<span class="rc-lbl-full">Finish Heat</span><span class="rc-lbl-short">Finish</span>
         </button>`,
         `<button type="button" class="btn btn-ghost" data-ctrl="pause" data-heat-id="${hid}">
-          ${icons.pause(16)}<span>Pause Heat</span>
+          ${icons.pause(16)}<span class="rc-lbl-full">Pause Heat</span><span class="rc-lbl-short">Pause</span>
         </button>`
       );
     } else if (heat.state === "paused") {
       if (!stagePaused) {
         buttons.push(
           `<button type="button" class="btn btn-armed race-btn-primary-slot" data-ctrl="resume" data-heat-id="${hid}" ${raceBlocked || stageClosed || stageDepBlocked ? "disabled" : ""}>
-            ${icons.play(16)}<span>Resume Heat</span>
+            ${icons.play(16)}<span class="rc-lbl-full">Resume Heat</span><span class="rc-lbl-short">Resume</span>
           </button>`
         );
       }
       buttons.push(
         `<button type="button" class="btn ${stagePaused ? "btn-armed race-btn-primary-slot" : "btn-ghost"}" data-ctrl="stop" data-heat-id="${hid}">
-          ${icons.checkered(16)}<span>Finish Heat</span>
+          ${icons.checkered(16)}<span class="rc-lbl-full">Finish Heat</span><span class="rc-lbl-short">Finish</span>
         </button>`
       );
       if (!raceBlocked && !stageClosed) {
@@ -9155,7 +10131,7 @@ export class RacesView extends Component {
     } else if (heat.state === "finished") {
       buttons.push(
         `<button type="button" class="btn btn-armed race-btn-primary-slot" data-ctrl="confirm" data-heat-id="${hid}">
-          ${icons.check(16)}<span>Confirm Heat</span>
+          ${icons.check(16)}<span class="rc-lbl-full">Confirm Heat</span><span class="rc-lbl-short">Confirm</span>
         </button>`
       );
       if (!raceBlocked && !stageClosed) {
@@ -9204,7 +10180,7 @@ export class RacesView extends Component {
       if (confirmedStageCount > 0) {
         buttons.push(
           `<button type="button" class="btn btn-ghost" data-oq-act="complete_qualifier" data-stage-idx="${heat.stageIndex}" ${hasLiveStageHeat ? "disabled" : ""} title="${hasLiveStageHeat ? "Finish or pause the live heat before completing the qualifier" : "Finalize Open Qualifier results"}">
-            ${icons.check(16)}<span>Complete Qualifier</span>
+            ${icons.check(16)}<span class="rc-lbl-full">Complete Qualifier</span><span class="rc-lbl-short">End Qualifier</span>
           </button>`
         );
       }
@@ -9293,12 +10269,12 @@ export class RacesView extends Component {
               >${icons.arrowUpDown(13)}</button>
             </th>
             <th class="col-pos">Pos</th>
-            <th>Pilot</th>
+            <th class="col-pilot">Pilot</th>
             <th class="col-rf">${staticRf ? "Channel" : "Channel &amp; RF"}</th>
             <th class="col-laps">Laps</th>
             <th class="col-pen" title="Time penalty" aria-label="Penalty">${icons.hammer(19)}</th>
-            <th>Lap Timings <span class="th-sub">(click lap to drop)</span></th>
-            <th>Status</th>
+            <th class="col-timings"><span class="th-timings-full">Lap Timings <span class="th-sub">(click lap to drop)</span></span><span class="th-timings-flag">${staticRf ? "Best Lap" : "Signal"}</span></th>
+            <th class="col-status">Status</th>
           </tr>
         </thead>
         <tbody>${rows}</tbody>
@@ -9319,11 +10295,12 @@ export class RacesView extends Component {
         <tr class="is-empty-seat" data-seat-index="${s.seatIndex}">
           <td class="col-drag"></td>
           <td class="col-pos"><span class="pos">—</span></td>
-          <td><span class="note">${esc(placeholder)}</span></td>
+          <td class="col-pilot"><span class="note">${esc(placeholder)}</span></td>
           <td class="col-rf"><span class="badge mono">${esc(emptyRfLabel)}</span></td>
           <td class="col-laps"><span class="note mono">—</span></td>
           <td class="col-pen"><span class="note mono">—</span></td>
-          <td colspan="2"><span class="note">—</span></td>
+          <td class="race-td-timings"><span class="note">—</span></td>
+          <td class="race-td-status"><span class="note">—</span></td>
         </tr>`;
     }
 
@@ -9350,45 +10327,101 @@ export class RacesView extends Component {
       ? `<span class="race-ace-pips" title="Ace wins">${"★".repeat(Math.max(s.aceWinsAfter ?? 0, s.aceWinsBefore ?? 0)) || "0★"}</span>`
       : "";
 
-    let bestCrossingId = -1;
-    let bestLapSec = Infinity;
-    for (const l of s.laps) {
-      if (l.lapNumber >= 1 && !l.invalidated && l.splitTimeSec > 0 && l.splitTimeSec < bestLapSec) {
-        bestLapSec = l.splitTimeSec;
-        bestCrossingId = l.crossingId;
-      }
-    }
-
     const hid = esc(heat.id);
     const explicitDnf = s.status === "dnf" && Boolean(s.statusOverridden);
     const seatRunOverridden = s.status === "dq" || s.status === "dns" || explicitDnf;
     const canToggleChip = canMarshal && !seatRunOverridden;
     const canOpenLapEditor = heat.state !== "waiting";
+
+    let bestCrossingId = -1;
+    let bestLapIdx = -1;
+    let bestLapSec = Infinity;
+    let validLapCount = 0;
+    for (let i = 0; i < s.laps.length; i++) {
+      const l = s.laps[i];
+      if (l.lapNumber >= 1 && !l.invalidated && !seatRunOverridden && l.splitTimeSec > 0) {
+        validLapCount++;
+        if (l.splitTimeSec < bestLapSec) {
+          bestLapSec = l.splitTimeSec;
+          bestCrossingId = l.crossingId;
+          bestLapIdx = i;
+        }
+      }
+    }
+
+    let fallbackBestLapIdx = -1;
+    if (bestLapIdx === -1) {
+      let fallbackBestSec = Infinity;
+      for (let i = 0; i < s.laps.length; i++) {
+        const l = s.laps[i];
+        if (l.lapNumber >= 1 && l.splitTimeSec > 0 && l.splitTimeSec < fallbackBestSec) {
+          fallbackBestSec = l.splitTimeSec;
+          fallbackBestLapIdx = i;
+        }
+      }
+    }
+
     const hasMoreLaps = s.laps.length > 6;
-    const recentLaps = hasMoreLaps ? s.laps.slice(-6) : s.laps;
+    let recentLaps = hasMoreLaps ? s.laps.slice(-6) : s.laps;
+    const preserveLapIdx = bestLapIdx !== -1 ? bestLapIdx : fallbackBestLapIdx;
+    if (hasMoreLaps && preserveLapIdx !== -1 && preserveLapIdx < s.laps.length - 6) {
+      recentLaps = [s.laps[preserveLapIdx], ...s.laps.slice(-5)];
+    }
+
+    let featuredMobileIdx = -1;
+    if (bestLapIdx !== -1) {
+      featuredMobileIdx = recentLaps.indexOf(s.laps[bestLapIdx]);
+    } else if (fallbackBestLapIdx !== -1) {
+      featuredMobileIdx = recentLaps.indexOf(s.laps[fallbackBestLapIdx]);
+    }
+    if (featuredMobileIdx === -1 && recentLaps.length > 0) {
+      for (let i = recentLaps.length - 1; i >= 0; i--) {
+        if (!(recentLaps[i].lapNumber === 0 && i === 0)) {
+          featuredMobileIdx = i;
+          break;
+        }
+      }
+      if (featuredMobileIdx === -1) {
+        featuredMobileIdx = 0;
+      }
+    }
+
     const flagTitle = canMarshal
       ? `Open RSSI & lap timings editor for ${s.callsign} (${s.laps.length} ${s.laps.length === 1 ? "pass" : "passes"})`
       : `Inspect RSSI & lap timings for ${s.callsign} (${s.laps.length} ${s.laps.length === 1 ? "pass" : "passes"})`;
-    const flagBtnHtml = `<button type="button" class="race-lap-flag-btn" data-open-lap-editor="${s.pilotSlotIndex}" data-heat-id="${hid}" ${canOpenLapEditor ? "" : "disabled"} title="${esc(flagTitle)}" aria-label="${esc(flagTitle)}">${icons.checkeredFlag(16)}</button>`;
+    const flagBtnHtml = `<button type="button" class="race-lap-flag-btn" data-open-lap-editor="${s.pilotSlotIndex}" data-heat-id="${hid}" ${canOpenLapEditor ? "" : "disabled"} title="${esc(flagTitle)}" aria-label="${esc(flagTitle)}">${icons.signal(15)}</button>`;
+    const seatChShort = formatBandChannelShort(s.band, s.channel) || `R${s.channel}`;
+    const mobileRssiInlineHtml = staticRf
+      ? ""
+      : `<div class="race-mobile-rssi-inline"><span class="race-mobile-rssi-ch mono">${esc(seatChShort)}</span><div class="race-rssi-bar"><div class="race-rssi-fill" style="--c:${s.color}; width: 6%"></div></div></div>`;
 
     const lapTimingsInner =
       recentLaps.length > 0
         ? `<div class="race-lap-timings-grid">${recentLaps
-            .map((l) => {
-              const tag = l.lapNumber === 0 ? "HS" : l.lapNumber < 0 ? "INV" : `L${l.lapNumber}`;
-              const chipInvalid = l.invalidated || seatRunOverridden;
-              const isHotLap = !chipInvalid && l.crossingId === bestCrossingId;
-              const chipTitle = canToggleChip
-                ? l.invalidated
-                  ? "Click to restore lap"
-                  : "Click to drop / cross out lap"
-                : seatRunOverridden && canMarshal
-                  ? "Click Status column to change from DNS / Crashed Out / DQ and restore laps"
-                  : `${tag} ${l.splitTimeSec.toFixed(2)}s`;
-              return `<button type="button" class="race-lap-chip mono ${chipInvalid ? "is-invalid" : ""} ${l.manual ? "is-manual" : ""} ${isHotLap ? "is-hot-lap" : ""}" data-toggle-lap="${l.crossingId}" data-heat-id="${hid}" data-slot-index="${s.pilotSlotIndex}" ${canToggleChip ? "" : "disabled"} title="${esc(chipTitle)}">${isHotLap ? "🔥 " : ""}${tag} ${l.splitTimeSec.toFixed(2)}s</button>`;
+            .map((l, idx) => {
+              const isHoleshotChip = l.lapNumber === 0 && idx === 0;
+              const tag = isHoleshotChip ? "HS" : l.lapNumber < 0 ? "INV" : `L${l.lapNumber}`;
+              const chipInvalid = (!isHoleshotChip && l.invalidated) || seatRunOverridden;
+              const isHotLap =
+                !chipInvalid &&
+                validLapCount > 1 &&
+                bestCrossingId !== -1 &&
+                idx === featuredMobileIdx;
+              const isMobileFeatured = !isHotLap && idx === featuredMobileIdx;
+              const canToggleThisChip = canToggleChip && !isHoleshotChip;
+              const chipTitle = isHoleshotChip
+                ? `Holeshot ${l.splitTimeSec.toFixed(2)}s`
+                : canToggleThisChip
+                  ? l.invalidated
+                    ? "Click to restore lap"
+                    : "Click to drop / cross out lap"
+                  : seatRunOverridden && canMarshal
+                    ? "Click Status column to change from DNS / Crashed Out / DQ and restore laps"
+                    : `${tag} ${l.splitTimeSec.toFixed(2)}s`;
+              return `<button type="button" class="race-lap-chip mono ${isHoleshotChip ? "is-holeshot-chip" : ""} ${chipInvalid ? "is-invalid" : ""} ${l.manual ? "is-manual" : ""} ${isHotLap ? "is-hot-lap" : ""} ${isMobileFeatured ? "is-mobile-featured" : ""}" ${canToggleThisChip ? `data-toggle-lap="${l.crossingId}" data-heat-id="${hid}" data-slot-index="${s.pilotSlotIndex}"` : "disabled"} title="${esc(chipTitle)}">${isHotLap ? `<span class="race-lap-fire" aria-hidden="true">🔥 </span>` : ""}${tag} ${l.splitTimeSec.toFixed(2)}s</button>`;
             })
-            .join("")}</div>${flagBtnHtml}`
-        : `<span class="race-lap-empty-hint note">No passes yet</span>${flagBtnHtml}`;
+            .join("")}</div>${mobileRssiInlineHtml}${flagBtnHtml}`
+        : `<span class="race-lap-empty-hint note">No passes yet</span>${mobileRssiInlineHtml}${flagBtnHtml}`;
 
     const lapTargetText =
       heat.targetLaps > 0 ? `${s.lapsCompleted}/${heat.targetLaps}` : `${s.lapsCompleted}`;
@@ -9440,7 +10473,19 @@ export class RacesView extends Component {
                 : s.status === "racing"
                   ? "Racing"
                   : "Staged";
-    const statusBadge = `<span class="race-state-pill is-table-status-pill ${statusPillCls}">${statusLabel}</span>`;
+    const statusShortLabel =
+      s.status === "dq"
+        ? "DQ"
+        : s.status === "dns"
+          ? "DNS"
+          : explicitDnf || s.status === "dnf"
+            ? "DNF"
+            : s.status === "finished"
+              ? "FIN"
+              : s.status === "racing"
+                ? "AIR"
+                : "STG";
+    const statusBadge = `<span class="race-state-pill is-table-status-pill ${statusPillCls}"><span class="rc-lbl-full">${statusLabel}</span><span class="rc-lbl-short">${statusShortLabel}</span></span>`;
 
     const isUnstartedHeat = heat.state === "ready" || heat.state === "staged";
     const isActiveHeat =
@@ -9502,7 +10547,8 @@ export class RacesView extends Component {
             aria-expanded="${isMenuOpen ? "true" : "false"}"
             title="Click to swap pilot status (${normalStatusLabel} / Scratched / Crashed Out / Disqualified)"
           >
-            <span>${statusLabel}</span>
+            <span class="rc-lbl-full">${statusLabel}</span>
+            <span class="rc-lbl-short">${statusShortLabel}</span>
             <span class="race-status-caret">${icons.chevronDown(11)}</span>
           </button>
           ${statusPopoverHtml}
@@ -9558,7 +10604,7 @@ export class RacesView extends Component {
             ${posBadge}
           </div>
         </td>
-        <td>
+        <td class="col-pilot">
           <div class="race-pilot-cell">
             <span class="dot" style="--c:${s.color}"></span>
             <div class="race-pilot-name">
@@ -9756,6 +10802,9 @@ export class RacesView extends Component {
     if (filtered.length === 0) {
       return `<div class="race-empty-state"><p>No heats match this filter.</p></div>`;
     }
+    const hasLiveRunningHeat = race.heats.some(
+      (xh) => xh.state === "running" || xh.state === "countdown"
+    );
     return `
       <div class="table-scroll">
         <table class="table rc-compact-table rc-schedule-table">
@@ -9765,21 +10814,66 @@ export class RacesView extends Component {
               <th class="rc-sched-col-heat">Heat</th>
               <th class="rc-sched-col-jump" aria-label="Navigate to heat in stage graph"></th>
               <th class="rc-sched-col-status">Status</th>
-              <th>Lineup</th>
-              <th style="width:66px"></th>
+              <th class="rc-sched-col-lineup">Lineup</th>
+              <th class="rc-sched-col-action" style="width:66px"></th>
             </tr>
           </thead>
           <tbody>
             ${filtered
               .map((h) => {
                 const b = heatStateBadge(h.state, h.inOvertime, h.note);
-                const isCur = h.id === activeHeatId;
+                const isInspectable =
+                  h.state === "confirmed" ||
+                  h.state === "finished" ||
+                  h.state === "aborted";
+                const isStageable =
+                  h.state === "ready" ||
+                  h.state === "staged" ||
+                  h.state === "paused" ||
+                  h.state === "running" ||
+                  h.state === "countdown";
+                const isCur = h.id === activeHeatId && isStageable;
+                const actionBtnHtml = isInspectable
+                  ? `<button type="button" class="btn btn-ghost btn-xs" data-select-heat="${esc(h.id)}" title="Inspect ${esc(h.shortLabel)} in Review">Inspect</button>`
+                  : isCur
+                    ? `<button type="button" class="btn btn-armed btn-xs" data-select-heat="${esc(h.id)}" title="Open ${esc(h.shortLabel)} in Marshal">Active</button>`
+                    : isStageable
+                      ? `<button type="button" class="btn btn-ghost btn-xs" data-select-heat="${esc(h.id)}" ${hasLiveRunningHeat ? "disabled" : ""} title="${hasLiveRunningHeat ? "Pause or finish the running heat before staging another heat" : `Stage ${esc(h.shortLabel)} on the flight line`}">Stage</button>`
+                      : "";
+                const statusIconCls =
+                  h.state === "confirmed"
+                    ? "is-confirmed"
+                    : h.state === "finished"
+                      ? "is-review"
+                      : h.state === "running" || h.state === "countdown"
+                        ? "is-confirmed"
+                        : h.state === "paused" || h.state === "stopped"
+                          ? "is-paused"
+                          : "is-pending";
+                const statusIconSvg =
+                  h.state === "confirmed"
+                    ? icons.check(16)
+                    : h.state === "finished"
+                      ? icons.eye(16)
+                      : h.state === "running" || h.state === "countdown"
+                        ? icons.play(15)
+                        : h.state === "paused" || h.state === "stopped"
+                          ? icons.pause(15)
+                          : icons.clock(15);
                 const lineup = h.seats
                   .map((s) => {
                     const chShort = formatBandChannelShort(s.band, s.channel) || `R${s.channel}`;
+                    const hasSourcePlaceholder =
+                      s.pilotSlotIndex <= 0 &&
+                      !s.feeder?.isBye &&
+                      Boolean(
+                        s.sourceLabel &&
+                          s.sourceLabel !== "Open / BYE" &&
+                          s.sourceLabel !== "BYE"
+                      );
                     return s.pilotSlotIndex > 0
                       ? `<span class="sched-pilot-chip ${s.status === "dns" ? "is-tbd" : ""}"><span class="dot" style="--c:${s.color}"></span><span class="sched-chip-text"><span class="sched-chip-ch mono">${esc(chShort)}</span><span class="sched-chip-name">${esc(s.callsign)}${s.status === "dns" ? " (DNS)" : s.advances && h.state === "confirmed" ? " ✓" : ""}</span></span></span>`
-                      : `<span class="sched-pilot-chip is-tbd"><span class="sched-chip-text"><span class="sched-chip-ch mono">${esc(chShort)}</span><span class="sched-chip-name">${esc(s.feeder?.isBye ? "BYE" : s.sourceLabel || "TBD")}</span></span></span>`;
+                      : `<span class="sched-pilot-chip is-tbd">${hasSourcePlaceholder ? `<span class="dot is-hollow"></span>` : ""}<span class="sched-chip-text"><span class="sched-chip-ch mono">${esc(chShort)}</span><span class="sched-chip-name">${esc(s.feeder?.isBye ? "BYE" : s.sourceLabel || "TBD")}</span></span></span>`;
                   })
                   .join("");
                 return `
@@ -9791,12 +10885,13 @@ export class RacesView extends Component {
                     <td class="rc-sched-col-jump">
                       ${this.renderHeatGraphJumpBtn(h, { iconSize: 12 })}
                     </td>
-                    <td class="rc-sched-col-status"><span class="race-state-pill ${b.cls}">${esc(b.label)}</span></td>
-                    <td><div class="sched-lineup">${lineup}</div></td>
-                    <td style="text-align:right">
-                      <button type="button" class="btn ${isCur ? "btn-armed" : "btn-ghost"} btn-xs" data-select-heat="${esc(h.id)}">
-                        ${isCur ? "Active" : h.state === "ready" ? "Stage" : "Inspect"}
-                      </button>
+                    <td class="rc-sched-col-status">
+                      <span class="race-state-pill ${b.cls} rc-exec-status-pill">${esc(b.label)}</span>
+                      <span class="rc-exec-status-icon ${statusIconCls}" title="${esc(b.label)}" aria-label="${esc(b.label)}">${statusIconSvg}</span>
+                    </td>
+                    <td class="rc-sched-col-lineup"><div class="sched-lineup-wrap"><button type="button" class="sched-lineup-cue is-left" data-lineup-scroll="-1" aria-label="Scroll lineup left" title="Scroll left" hidden>${icons.chevronLeft(12)}</button><div class="sched-lineup" data-fit-lineup>${lineup}</div><button type="button" class="sched-lineup-cue is-right" data-lineup-scroll="1" aria-label="Scroll lineup right" title="More pilots" hidden>${icons.chevronRight(12)}</button></div></td>
+                    <td class="rc-sched-col-action" style="text-align:right">
+                      ${actionBtnHtml}
                     </td>
                   </tr>`;
               })
@@ -9814,43 +10909,119 @@ export class RacesView extends Component {
     if (!list || list.length === 0) {
       return `<div class="race-empty-state"><p>Standings will populate once heats are generated.</p></div>`;
     }
+
+    const resolveGroup = (
+      st: TournamentStanding
+    ): { key: string; label: string; tone: "good" | "info" | "warn" | "muted" } => {
+      const bs = (st.bracketStatus || "").trim();
+      if (
+        bs === "Champion" ||
+        bs.startsWith("Finals") ||
+        bs === "Grand Final" ||
+        /^\d+(st|nd|rd|th)$/.test(bs)
+      ) {
+        return { key: "finals", label: "Finals", tone: "good" };
+      }
+      if (bs.startsWith("Winners")) {
+        return { key: "winners", label: "Winners Bracket", tone: "good" };
+      }
+      if (bs.startsWith("Losers")) {
+        return { key: "losers", label: "Losers Bracket", tone: "warn" };
+      }
+      if (bs.startsWith("Eliminated")) {
+        return { key: "eliminated", label: "Eliminated", tone: "muted" };
+      }
+      if (bs.startsWith("Cut")) {
+        return { key: "cut", label: "Eliminated (Below Cutoff)", tone: "muted" };
+      }
+      if (bs.startsWith("Seed #")) {
+        return { key: "advancing", label: "Advancing", tone: "good" };
+      }
+      if (bs.endsWith("Main")) {
+        return {
+          key: `main:${bs}`,
+          label: bs,
+          tone: bs === "A Main" ? "good" : "info",
+        };
+      }
+      if (bs === "Qualifying" || bs === "Open Qualifier") {
+        return { key: "qualifying", label: bs, tone: "info" };
+      }
+      return { key: `other:${bs}`, label: bs || "Standings", tone: "info" };
+    };
+
+    const groups = list.map(resolveGroup);
+    const uniqueKeys = new Set(groups.map((g) => g.key));
+    const showGroupHeaders =
+      uniqueKeys.size > 1 ||
+      groups.some(
+        (g) =>
+          g.key === "finals" ||
+          g.key === "winners" ||
+          g.key === "losers" ||
+          g.key === "eliminated" ||
+          g.key === "cut" ||
+          g.key.startsWith("main:")
+      );
+
+    let lastGroupKey = "";
+    const rowsHtml: string[] = [];
+    for (let i = 0; i < list.length; i++) {
+      const st = list[i];
+      const grp = groups[i];
+      if (showGroupHeaders && grp.key !== lastGroupKey) {
+        lastGroupKey = grp.key;
+        let countInGroup = 0;
+        for (let j = i; j < groups.length && groups[j].key === grp.key; j++) {
+          countInGroup++;
+        }
+        rowsHtml.push(`
+          <tr class="rc-std-group-row tone-${grp.tone}">
+            <td colspan="7">
+              <div class="rc-std-group-bar">
+                <span class="rc-std-group-label">${esc(grp.label)}</span>
+                <span class="rc-std-group-count mono">${countInGroup}</span>
+              </div>
+            </td>
+          </tr>`);
+      }
+
+      const isChamp = st.bracketStatus === "Champion";
+      rowsHtml.push(`
+        <tr class="${grp.key === "eliminated" || grp.key === "cut" ? "is-std-eliminated" : ""}">
+          <td><span class="pos ${st.rank === 1 ? "is-leader" : ""}">${st.rank}</span></td>
+          <td>
+            <div class="race-pilot-cell">
+              <span class="dot" style="--c:${st.color}"></span>
+              <strong>${esc(st.callsign)}</strong>
+              ${isChamp ? `<span class="badge badge-good rc-std-champ-tag">Champion</span>` : ""}
+              <span class="note mono rc-hide-mobile">#${st.seed}</span>
+            </div>
+          </td>
+          <td class="mono rc-std-col-wh">${st.wins}${st.aceWins > 0 ? `(${st.aceWins}★)` : ""}/${st.heatsFlown}</td>
+          <td class="mono rc-std-col-secondary">${st.points}</td>
+          <td class="mono rc-std-col-secondary">${st.totalLaps}</td>
+          <td class="mono">${formatShortSec(st.bestLapSec)}</td>
+          <td class="mono">${formatShortSec(st.bestConsecutive3Sec)}</td>
+        </tr>`);
+    }
+
     return `
       <div class="table-scroll">
-        <table class="table rc-compact-table">
+        <table class="table rc-compact-table rc-standings-table">
           <thead>
             <tr>
               <th style="width:34px">#</th>
               <th>Pilot</th>
-              <th>Status</th>
-              <th title="Wins / Heats Flown">W/H</th>
-              <th>Pts</th>
-              <th>Laps</th>
+              <th class="rc-std-col-wh" title="Wins / Heats Flown">W/H</th>
+              <th class="rc-std-col-secondary">Pts</th>
+              <th class="rc-std-col-secondary">Laps</th>
               <th>Best</th>
               <th>3-Lap</th>
             </tr>
           </thead>
           <tbody>
-            ${list
-              .map(
-                (st) => `
-              <tr>
-                <td><span class="pos ${st.rank === 1 ? "is-leader" : ""}">${st.rank}</span></td>
-                <td>
-                  <div class="race-pilot-cell">
-                    <span class="dot" style="--c:${st.color}"></span>
-                    <strong>${esc(st.callsign)}</strong>
-                    <span class="note mono">#${st.seed}</span>
-                  </div>
-                </td>
-                <td><span class="badge ${st.bracketStatus === "Champion" || st.bracketStatus === "Winners" ? "badge-good" : ""}">${esc(st.bracketStatus)}</span></td>
-                <td class="mono">${st.wins}${st.aceWins > 0 ? `(${st.aceWins}★)` : ""}/${st.heatsFlown}</td>
-                <td class="mono">${st.points}</td>
-                <td class="mono">${st.totalLaps}</td>
-                <td class="mono">${formatShortSec(st.bestLapSec)}</td>
-                <td class="mono">${formatShortSec(st.bestConsecutive3Sec)}</td>
-              </tr>`
-              )
-              .join("")}
+            ${rowsHtml.join("")}
           </tbody>
         </table>
       </div>`;
@@ -9879,8 +11050,21 @@ export class RacesView extends Component {
     }
   }
 
+  private animateSetupViewToggleIfNeeded(
+    prevView: "" | DesktopSetupViewMode,
+    nextView: DesktopSetupViewMode,
+    sameRace: boolean
+  ): void {
+    if (!sameRace || !prevView || prevView === nextView) return;
+    const toggle = this.el.querySelector<HTMLElement>("[data-setup-view-switcher]");
+    if (!toggle) return;
+    toggle.dataset.activeView = prevView;
+    void toggle.offsetWidth;
+    toggle.dataset.activeView = nextView;
+  }
+
   private maybeAutoPromptTemplatePicker(race: RaceTournamentState, stagesList: RaceStage[]): void {
-    if (!this.isViewActive || this.showDirectory) return;
+    if (!this.isViewActive || this.showDirectory || this.isMobileViewport()) return;
     if (this.activeTab !== "format" && this.activeTab !== "edit") return;
     if (!race.raceId || race.generated) return;
     if (stagesList.length > 0 || (race.rounds?.length ?? 0) > 0 || race.heats.length > 0) return;
@@ -9906,6 +11090,7 @@ export class RacesView extends Component {
 
   private render(): void {
     this.raceSignalsChartEl?.remove();
+    this.raceAnalyticsEl?.remove();
     const race = this.currentRace;
     const allRaces = this.getEffectiveRaces();
     this.lastSig = this.computeSig(race, this.getActiveHeatForRace(race));
@@ -9913,11 +11098,20 @@ export class RacesView extends Component {
     if (this.showDirectory || allRaces.length === 0 || !race.raceId) {
       this.dismissAutoPromptTemplateModal();
       closeActiveRoundModal();
+      closeActiveDesktopTableModal();
       closeActiveLapEditorModal();
       closeActivePilotLapsModal();
       this.disposeRaceSignalsChart();
+      this.disposeRaceAnalyticsView();
       this.prevRenderedModeGroup = "";
       this.prevRenderedModeRaceId = "";
+      this.prevRenderedSetupView = "";
+      this.el.innerHTML = `
+        <div class="settings">
+          ${this.renderDirectoryView()}
+        </div>`;
+      this.mountActiveRaceTagEditor(true);
+      this.pendingFocusRaceId = "";
       setRacesTopBarContext({
         tab: "directory",
         raceId: "",
@@ -9926,26 +11120,25 @@ export class RacesView extends Component {
         totalStages: 1,
         stageTitle: "",
       });
-      this.el.innerHTML = `
-        <div class="settings">
-          ${this.renderDirectoryView()}
-        </div>`;
-      this.mountActiveRaceTagEditor(true);
-      this.pendingFocusRaceId = "";
       return;
     }
 
     if (this.activeTab !== "control") {
       this.disposeRaceSignalsChart();
     }
+    if (this.activeTab !== "analytics") {
+      this.disposeRaceAnalyticsView();
+    }
 
     const savedScroll = this.captureScrollPositions(this.el);
     const prevModeGroup = this.prevRenderedModeGroup;
+    const prevSetupView = this.prevRenderedSetupView;
     const sameModeRace = this.prevRenderedModeRaceId === race.raceId;
     const nextModeGroup: "configure" | "control" =
       this.activeTab === "format" || this.activeTab === "edit" ? "configure" : "control";
     this.prevRenderedModeGroup = nextModeGroup;
     this.prevRenderedModeRaceId = race.raceId;
+    this.prevRenderedSetupView = nextModeGroup === "configure" ? this.desktopSetupView : "";
     if (this.activeTab === "format" || this.activeTab === "edit") {
       this.lastConfigureTab = this.activeTab;
     }
@@ -9969,74 +11162,71 @@ export class RacesView extends Component {
       1,
       stagesList.length || race.totalStages || 1
     );
-    setRacesTopBarContext({
-      tab: this.activeTab,
-      raceId: race.raceId,
-      raceName: race.config.eventName || "Race",
-      activeStage: curViewStage,
-      totalStages: totalStagesCount,
-      stageTitle: curStageObj ? curStageObj.title || `Stage ${curStageObj.index}` : "",
-    });
+    const publishWorkspaceTopBar = (): void => {
+      setRacesTopBarContext({
+        tab: this.activeTab,
+        raceId: race.raceId,
+        raceName: race.config.eventName || "Race",
+        activeStage: curViewStage,
+        totalStages: totalStagesCount,
+        stageTitle: curStageObj ? curStageObj.title || `Stage ${curStageObj.index}` : "",
+      });
+    };
     if (!this.pendingRouteTarget && !this.resolvingRouteRaceId) {
       this.syncWorkspaceHash(false);
     }
 
-    if (this.activeTab === "review") {
-      const revKey = this.cameraSlotKey("review", curViewStage);
-      const savedRevCam = this.bktUi.stageCameras[revKey];
-      const needsRevFit = Boolean(
-        race.raceId &&
-          this.reviewCamInitializedForRaceId !== race.raceId &&
-          !savedRevCam?.initialized
-      );
-      if (race.raceId && this.reviewCamInitializedForRaceId !== race.raceId) {
-        this.reviewCamInitializedForRaceId = race.raceId;
-        if (savedRevCam?.initialized) {
-          this.bktUi.panX = savedRevCam.panX;
-          this.bktUi.panY = savedRevCam.panY;
-          this.bktUi.zoom = savedRevCam.zoom;
-        } else {
-          this.bktUi.panX = 64;
-          this.bktUi.panY = -8;
-          this.bktUi.zoom = 0.96;
-        }
-      }
+    if (this.activeTab === "multigp") {
+      this.activeTab = isRaceConfigured(race) ? "review" : "edit";
+    }
+    if (this.activeTab === "format") {
+      this.activeTab = "edit";
+    }
+    if (this.activeTab === "pilots") {
+      this.el.innerHTML = this.renderMobilePilotsView(race);
+      this.restoreScrollPositions(this.el, savedScroll);
+      publishWorkspaceTopBar();
+      return;
+    }
 
+    if (this.activeTab === "review") {
       this.el.innerHTML = this.renderCanvasReviewView(race);
       this.restoreScrollPositions(this.el, savedScroll);
       this.animateTopLeftDrawerIfNeeded(prevModeGroup, nextModeGroup, sameModeRace);
-      this.syncDefaultReviewPanelsDom();
+      publishWorkspaceTopBar();
+      return;
+    }
 
-      if (needsRevFit && this.el.clientWidth > 0) {
-        fitCanvasToControlDashboard(this.el, this.bktUi);
-        this.bktUi.stageCameras[revKey] = {
-          panX: this.bktUi.panX,
-          panY: this.bktUi.panY,
-          zoom: this.bktUi.zoom,
-          initialized: true,
-        };
-        if (this.currentRace.raceId) {
-          persistStoredRaceCameras(this.currentRace.raceId, this.bktUi.stageCameras);
-        }
-      }
+    if (this.activeTab === "analytics") {
+      this.el.innerHTML = `
+        <div class="races-page is-analytics-page" data-rc-page="analytics">
+          ${this.renderRaceWorkspaceTopBar(race, "analytics")}
+          <div class="races-page-stack" data-race-analytics-host></div>
+        </div>`;
+      this.syncRaceAnalyticsViewDom();
+      this.restoreScrollPositions(this.el, savedScroll);
+      publishWorkspaceTopBar();
+      return;
+    }
 
-      requestAnimationFrame(() => {
-        if (!this.disposed && !this.showDirectory && this.activeTab === "review") {
-          this.syncDefaultReviewPanelsDom();
-          if (needsRevFit) {
-            fitCanvasToControlDashboard(this.el, this.bktUi);
-            this.bktUi.stageCameras[revKey] = {
-              panX: this.bktUi.panX,
-              panY: this.bktUi.panY,
-              zoom: this.bktUi.zoom,
-              initialized: true,
-            };
-            if (this.currentRace.raceId) {
-              persistStoredRaceCameras(this.currentRace.raceId, this.bktUi.stageCameras);
-            }
-          }
-        }
-      });
+    if (this.activeTab === "edit" && this.isMobileViewport()) {
+      this.el.innerHTML = this.renderMobileConfigureView(race);
+      this.restoreScrollPositions(this.el, savedScroll);
+      syncMobileCarouselAfterRender(this.el, this.mobileEditorUi);
+      publishWorkspaceTopBar();
+      return;
+    }
+
+    if (
+      this.activeTab === "edit" &&
+      !this.isMobileViewport() &&
+      this.desktopSetupView === "table"
+    ) {
+      this.el.innerHTML = this.renderDesktopTableConfigureView(race);
+      this.restoreScrollPositions(this.el, savedScroll);
+      this.animateSetupViewToggleIfNeeded(prevSetupView, this.desktopSetupView, sameModeRace);
+      syncDesktopTableAfterRender(this.el, this.desktopTableUi);
+      publishWorkspaceTopBar();
       return;
     }
 
@@ -10065,6 +11255,7 @@ export class RacesView extends Component {
       this.restoreScrollPositions(this.el, savedScroll);
       this.animateTopLeftDrawerIfNeeded(prevModeGroup, nextModeGroup, sameModeRace);
       this.maybeAutoPromptTemplatePicker(race, stagesList);
+      publishWorkspaceTopBar();
 
       drawFormatWires(this.el, this.currentRace, this.bktUi);
       const applyFormatFit = (): void => {
@@ -10120,14 +11311,14 @@ export class RacesView extends Component {
             const pY = stgObj?.pilotsNodeHasPos ? (stgObj.pilotsNodePosY ?? 0) : 110;
             this.bktUi.zoom = 0.96;
             this.bktUi.panX = Math.round(38 - pX * this.bktUi.zoom);
-            this.bktUi.panY = Math.round(64 - pY * this.bktUi.zoom);
+            this.bktUi.panY = Math.round(86 - pY * this.bktUi.zoom);
           } else if (!rootStage && initRounds.length === 0 && this.editPilotsPanel.visible) {
             this.bktUi.zoom = 0.96;
             this.bktUi.panX = Math.round(38 - this.editPilotsPanel.x * this.bktUi.zoom);
-            this.bktUi.panY = Math.round(64 - this.editPilotsPanel.y * this.bktUi.zoom);
+            this.bktUi.panY = Math.round(86 - this.editPilotsPanel.y * this.bktUi.zoom);
           } else {
             this.bktUi.panX = 72;
-            this.bktUi.panY = 88;
+            this.bktUi.panY = 96;
             this.bktUi.zoom = 1;
           }
         }
@@ -10136,7 +11327,9 @@ export class RacesView extends Component {
       this.el.innerHTML = this.renderCanvasEditView(race);
       this.restoreScrollPositions(this.el, savedScroll);
       this.animateTopLeftDrawerIfNeeded(prevModeGroup, nextModeGroup, sameModeRace);
+      this.animateSetupViewToggleIfNeeded(prevSetupView, this.desktopSetupView, sameModeRace);
       this.maybeAutoPromptTemplatePicker(race, stagesList);
+      publishWorkspaceTopBar();
 
       drawBracketWires(this.el, this.currentRace, this.bktUi);
       const applyEditFit = (): void => {
@@ -10154,13 +11347,13 @@ export class RacesView extends Component {
           const pY = stgObj?.pilotsNodeHasPos ? (stgObj.pilotsNodePosY ?? 0) : 110;
           this.bktUi.zoom = 0.96;
           this.bktUi.panX = Math.round(38 - pX * this.bktUi.zoom);
-          this.bktUi.panY = Math.round(64 - pY * this.bktUi.zoom);
+          this.bktUi.panY = Math.round(86 - pY * this.bktUi.zoom);
           const vp = this.el.querySelector<HTMLElement>("[data-rc-viewport]");
           if (vp) applyCanvasCameraDom(vp, this.bktUi);
         } else if (this.editPilotsPanel.visible) {
           this.bktUi.zoom = 0.96;
           this.bktUi.panX = Math.round(38 - this.editPilotsPanel.x * this.bktUi.zoom);
-          this.bktUi.panY = Math.round(64 - this.editPilotsPanel.y * this.bktUi.zoom);
+          this.bktUi.panY = Math.round(86 - this.editPilotsPanel.y * this.bktUi.zoom);
           const vp = this.el.querySelector<HTMLElement>("[data-rc-viewport]");
           if (vp) applyCanvasCameraDom(vp, this.bktUi);
         }
@@ -10190,66 +11383,15 @@ export class RacesView extends Component {
       return;
     }
 
-    const ctrlKey = this.cameraSlotKey("control", curViewStage);
-    const savedCtrlCam = this.bktUi.stageCameras[ctrlKey];
-    const needsCtrlFit = Boolean(
-      race.raceId &&
-        this.controlCamInitializedForRaceId !== race.raceId &&
-        !savedCtrlCam?.initialized
-    );
-    if (race.raceId && this.controlCamInitializedForRaceId !== race.raceId) {
-      this.controlCamInitializedForRaceId = race.raceId;
-      if (savedCtrlCam?.initialized) {
-        this.bktUi.panX = savedCtrlCam.panX;
-        this.bktUi.panY = savedCtrlCam.panY;
-        this.bktUi.zoom = savedCtrlCam.zoom;
-      } else {
-        this.bktUi.panX = 64;
-        this.bktUi.panY = -14;
-        this.bktUi.zoom = 0.96;
-      }
-    }
-
     this.el.innerHTML = this.renderCanvasControlView(race);
     this.restoreScrollPositions(this.el, savedScroll);
     this.animateTopLeftDrawerIfNeeded(prevModeGroup, nextModeGroup, sameModeRace);
 
-    this.syncDefaultControlBottomRowDom();
     this.syncRaceSignalsChartDom();
+    fitScheduleLineups(this.el);
+    scanTableScrollIndicators(this.el);
     this.updateLiveClockDom();
     this.updateLiveRssiDom();
-    drawBracketWires(this.el, this.currentRace, this.bktUi);
-
-    if (needsCtrlFit && this.el.clientWidth > 0) {
-      fitCanvasToControlDashboard(this.el, this.bktUi);
-      this.bktUi.stageCameras[ctrlKey] = {
-        panX: this.bktUi.panX,
-        panY: this.bktUi.panY,
-        zoom: this.bktUi.zoom,
-        initialized: true,
-      };
-      if (this.currentRace.raceId) {
-        persistStoredRaceCameras(this.currentRace.raceId, this.bktUi.stageCameras);
-      }
-    }
-
-    requestAnimationFrame(() => {
-      if (!this.disposed && !this.showDirectory && this.activeTab === "control") {
-        this.syncDefaultControlBottomRowDom();
-        drawBracketWires(this.el, this.currentRace, this.bktUi);
-        if (needsCtrlFit) {
-          fitCanvasToControlDashboard(this.el, this.bktUi);
-          this.bktUi.stageCameras[ctrlKey] = {
-            panX: this.bktUi.panX,
-            panY: this.bktUi.panY,
-            zoom: this.bktUi.zoom,
-            initialized: true,
-          };
-          if (this.currentRace.raceId) {
-            persistStoredRaceCameras(this.currentRace.raceId, this.bktUi.stageCameras);
-          }
-        }
-      }
-    });
+    publishWorkspaceTopBar();
   }
 }

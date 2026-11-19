@@ -162,27 +162,31 @@ export function openRoundCustomizeModal(opts: RoundCustomizeModalOptions): void 
   let curLane =
     round.bracketLane === "main" || round.bracketLane === "mains"
       ? "winners"
-      : round.bracketLane || "winners";
+      : round.bracketLane === "open_qual"
+        ? "qualifying"
+        : round.bracketLane || "winners";
   let curStart: StartMode =
     round.startMode ??
-    (round.stageFormat === "qualifying" ? "staggered" : "heads_up");
+    (round.stageFormat === "qualifying" || round.stageFormat === "open_qualifier"
+      ? "staggered"
+      : "heads_up");
   let curFormat: StageFormat =
-    round.stageFormat === "qualifying"
-      ? "qualifying"
-      : round.stageFormat === "points_mains"
-        ? "points_mains"
-        : "single_elimination";
+    round.stageFormat === "open_qualifier"
+      ? "open_qualifier"
+      : round.stageFormat === "qualifying"
+        ? "qualifying"
+        : round.stageFormat === "points_mains"
+          ? "points_mains"
+          : "single_elimination";
+  let curQualMetric: QualifyingMetric =
+    round.qualifyingMetric || cfg?.qualifyingMetric || "consecutive_3";
+  const curMaxPacks = Math.max(
+    0,
+    round.maxPacksPerPilot !== undefined ? round.maxPacksPerPilot : (cfg?.maxPacksPerPilot ?? 0)
+  );
   // Show the heat count actually planned (the engine may hold it below the requested target so every
   // heat can still eliminate someone); fall back to the requested target for rounds with no heats yet.
   const curHeatCount = Math.max(1, heats.length || round.targetHeats || 1);
-
-  const otherFinalsInStage = (race?.rounds ?? []).find(
-    (r) =>
-      r.stageIndex === round.stageIndex &&
-      r.bracketLane === "finals" &&
-      r.id !== round.id &&
-      !isHandoffPortalRound(r)
-  );
 
   let curFinalsFormat: FinalsFormat =
     round.finalsFormat ||
@@ -209,19 +213,22 @@ export function openRoundCustomizeModal(opts: RoundCustomizeModalOptions): void 
     { value: "winners", label: "Race / Upper Bracket" },
     { value: "losers", label: "Redemption / Lower Bracket" },
     { value: "qualifying", label: "Qualifying" },
-    {
-      value: "finals",
-      label: otherFinalsInStage
-        ? `Finals (Used by ${otherFinalsInStage.title})`
-        : "Championship Finals (1 group)",
-      disabled: !!otherFinalsInStage,
-    },
+    { value: "finals", label: "Championship Finals" },
   ];
 
   const formatOptions: CanvasSelectOption[] = [
     { value: "single_elimination", label: "Head-to-Head Race" },
     { value: "qualifying", label: "Timed Qualifying" },
-    { value: "points_mains", label: "Points Mains" },
+    { value: "open_qualifier", label: "Open Qualifier (Flight Queue)" },
+    { value: "points_mains", label: "Points Round" },
+  ];
+
+  const qualMetricOptions: CanvasSelectOption[] = [
+    { value: "consecutive_3", label: "Fastest 3 Consecutive Laps" },
+    { value: "consecutive_2", label: "Fastest 2 Consecutive Laps" },
+    { value: "best_lap", label: "Fastest Single Lap" },
+    { value: "laps_in_time", label: "Most Laps in Time" },
+    { value: "points", label: "Qualifying Heat Points" },
   ];
 
   const startOptions: CanvasSelectOption[] = [
@@ -275,7 +282,19 @@ export function openRoundCustomizeModal(opts: RoundCustomizeModalOptions): void 
       title: "Championship Finals format",
     });
 
+  const renderQualMetricSelect = (): string =>
+    renderCanvasSelect({
+      value: curQualMetric,
+      label: qualMetricOptions.find((o) => o.value === curQualMetric)?.label ?? "Fastest 3 Consecutive Laps",
+      options: qualMetricOptions,
+      disabled: anyStarted,
+      dataAttrs: "data-round-qual-metric",
+      title: "Qualifying ranking metric",
+    });
+
   const isInitiallyFinals = curLane === "finals";
+  const isInitiallyQual = !isInitiallyFinals && (curFormat === "qualifying" || curFormat === "open_qualifier");
+  const isInitiallyOpenQual = !isInitiallyFinals && curFormat === "open_qualifier";
 
   const bodyHtml = `
     <div class="rc-settings-list">
@@ -312,7 +331,7 @@ export function openRoundCustomizeModal(opts: RoundCustomizeModalOptions): void 
         <div class="rc-setting-control" data-round-format-wrap>${renderFormatSelect()}</div>
       </div>
 
-      <div class="rc-setting-row" data-standard-only ${isInitiallyFinals ? "hidden" : ""}>
+      <div class="rc-setting-row" data-standard-only ${isInitiallyFinals || isInitiallyOpenQual ? "hidden" : ""}>
         <div class="rc-setting-info">
           <span class="rc-setting-title">Number of heats</span>
           <span class="rc-setting-desc">Total heats scheduled in this round.</span>
@@ -325,6 +344,32 @@ export function openRoundCustomizeModal(opts: RoundCustomizeModalOptions): void 
             min="${Math.max(1, startedCount)}"
             max="16"
             value="${curHeatCount}"
+          />
+        </div>
+      </div>
+
+      <div class="rc-setting-row" data-qual-metric-only ${isInitiallyQual ? "" : "hidden"}>
+        <div class="rc-setting-info">
+          <span class="rc-setting-title">Ranked by</span>
+          <span class="rc-setting-desc">Metric used to rank pilots across qualifying heats.</span>
+        </div>
+        <div class="rc-setting-control" data-round-qual-metric-wrap>${renderQualMetricSelect()}</div>
+      </div>
+
+      <div class="rc-setting-row" data-open-qual-only ${isInitiallyOpenQual ? "" : "hidden"}>
+        <div class="rc-setting-info">
+          <span class="rc-setting-title">Max packs per pilot</span>
+          <span class="rc-setting-desc">Limit queued flights per pilot (0 = unlimited).</span>
+        </div>
+        <div class="rc-setting-control">
+          <input
+            type="number"
+            class="input mono"
+            data-modal-field="maxPacksPerPilot"
+            min="0"
+            max="50"
+            value="${curMaxPacks}"
+            ${anyStarted ? "disabled" : ""}
           />
         </div>
       </div>
@@ -478,8 +523,20 @@ export function openRoundCustomizeModal(opts: RoundCustomizeModalOptions): void 
 
   const syncFinalsVisibility = (): void => {
     const isFinals = curLane === "finals";
+    const isOpenQual = !isFinals && curFormat === "open_qualifier";
+    const isQual = !isFinals && (curFormat === "qualifying" || curFormat === "open_qualifier");
     backdrop.querySelectorAll<HTMLElement>("[data-standard-only]").forEach((el) => {
-      el.hidden = isFinals;
+      if (el.querySelector('[data-modal-field="heatCount"]')) {
+        el.hidden = isFinals || isOpenQual;
+      } else {
+        el.hidden = isFinals;
+      }
+    });
+    backdrop.querySelectorAll<HTMLElement>("[data-qual-metric-only]").forEach((el) => {
+      el.hidden = !isQual;
+    });
+    backdrop.querySelectorAll<HTMLElement>("[data-open-qual-only]").forEach((el) => {
+      el.hidden = !isOpenQual;
     });
     backdrop.querySelectorAll<HTMLElement>("[data-finals-only]").forEach((el) => {
       el.hidden = !isFinals;
@@ -508,7 +565,7 @@ export function openRoundCustomizeModal(opts: RoundCustomizeModalOptions): void 
       curLane = val || "winners";
       laneWrap.innerHTML = renderLaneSelect();
       if (curLane === "qualifying") {
-        curFormat = "qualifying";
+        if (curFormat !== "open_qualifier") curFormat = "qualifying";
         curStart = "staggered";
         fmtWrap.innerHTML = renderFormatSelect();
         startWrap.innerHTML = renderStartSelect();
@@ -527,7 +584,9 @@ export function openRoundCustomizeModal(opts: RoundCustomizeModalOptions): void 
     if (trigger.hasAttribute("data-round-format")) {
       curFormat = (val || "single_elimination") as StageFormat;
       fmtWrap.innerHTML = renderFormatSelect();
-      if (curFormat === "qualifying") {
+      if (curFormat === "qualifying" || curFormat === "open_qualifier") {
+        curLane = "qualifying";
+        laneWrap.innerHTML = renderLaneSelect();
         curStart = "staggered";
         startWrap.innerHTML = renderStartSelect();
         if (lapsInp && Number(lapsInp.value) > 0) lapsInp.value = "0";
@@ -538,6 +597,14 @@ export function openRoundCustomizeModal(opts: RoundCustomizeModalOptions): void 
           lapsInp.value = String(cfg?.targetLaps || 3);
         }
       }
+      syncFinalsVisibility();
+      return;
+    }
+
+    if (trigger.hasAttribute("data-round-qual-metric")) {
+      curQualMetric = (val || "consecutive_3") as QualifyingMetric;
+      const qWrap = backdrop.querySelector<HTMLElement>("[data-round-qual-metric-wrap]");
+      if (qWrap) qWrap.innerHTML = renderQualMetricSelect();
       return;
     }
 
@@ -614,17 +681,32 @@ export function openRoundCustomizeModal(opts: RoundCustomizeModalOptions): void 
     const winnersAdvantageAce = !!winnersAdvChk?.checked;
     const finalsHeats = Math.max(2, Math.min(7, Number(finalsHeatsInp?.value) || 3));
 
+    const maxPacksVal = Math.max(
+      0,
+      Math.min(
+        50,
+        Number(
+          backdrop.querySelector<HTMLInputElement>('[data-modal-field="maxPacksPerPilot"]')?.value ??
+            curMaxPacks
+        )
+      )
+    );
+
     void api
       .bracketEdit({
         action: "update_round",
         roundId: round.id,
         title,
-        bracketLane,
+        bracketLane: stageFormat === "open_qualifier" ? "open_qual" : bracketLane,
         stageFormat,
         startMode,
         heatCount: isFinals ? (finalsFormat === "points_final" ? finalsHeats : 1) : heatCount,
         targetLaps,
         timeLimitSec,
+        ...(stageFormat === "qualifying" || stageFormat === "open_qualifier"
+          ? { qualifyingMetric: curQualMetric }
+          : {}),
+        ...(stageFormat === "open_qualifier" ? { maxPacksPerPilot: maxPacksVal } : {}),
         ...(isFinals
           ? {
               finalsFormat,
@@ -903,8 +985,10 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
     : `${toHeats.length} heat${toHeats.length === 1 ? "" : "s"} · ${pph} seats/heat`;
 
   const seedCap = Math.max(1, effectiveStageSeedCount(initRace, stageIdx, activePilotCount));
-  let curPilotsDist: "roster" | "snake" | "random" =
-    toRound.seedDistribution === "snake" || toRound.seedDistribution === "random"
+  let curPilotsDist: "roster" | "snake" | "sequential" | "random" =
+    toRound.seedDistribution === "snake" ||
+    toRound.seedDistribution === "sequential" ||
+    toRound.seedDistribution === "random"
       ? toRound.seedDistribution
       : "roster";
   let curSeedStart = realConn?.seedStart && realConn.seedStart > 0 ? realConn.seedStart : 1;
@@ -912,6 +996,14 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
     realConn?.seedEnd && realConn.seedEnd >= curSeedStart ? realConn.seedEnd : seedCap;
   let curSeedDist: "snake" | "sequential" =
     realConn?.distribution === "sequential" ? "sequential" : "snake";
+  let curStandingsMetric: QualifyingMetric =
+    realConn?.rankingMetric || fromRound?.qualifyingMetric || initRace.config.qualifyingMetric || "consecutive_3";
+  let curStandingsCut: "all" | "top_n" | "range" =
+    realConn?.seedStart && realConn.seedStart > 1
+      ? "range"
+      : (realConn?.seedEnd && realConn.seedEnd > 0) || (realConn?.count && realConn.count > 0)
+        ? "top_n"
+        : "all";
 
   const rawMode = (realConn?.mode || "top_per_heat") as RoundConnectionMode;
   let curMode:
@@ -930,14 +1022,43 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
   let curCount =
     realConn?.count && realConn.count > 0
       ? realConn.count
-      : curMode === "standings_top"
-        ? pph
-        : Math.min(2, maxPerHeat);
+      : realConn?.seedEnd && realConn.seedEnd > 0
+        ? realConn.seedEnd
+        : curMode === "standings_top"
+          ? Math.max(pph, activePilotCount || pph)
+          : Math.min(2, maxPerHeat);
+
+  // Check if upstream qualifier chain has >= 1 confirmed heat so Early Seeding (Seed Now / Reopen) is available
+  const isSourceQual =
+    fromRound?.stageFormat === "qualifying" ||
+    fromRound?.stageFormat === "open_qualifier" ||
+    fromRound?.bracketLane === "qualifying" ||
+    fromRound?.bracketLane === "open_qual";
+  const confirmedQualCount = isSourceQual
+    ? initRace.heats.filter(
+        (h) =>
+          (h.roundId === fromRoundId || h.stageFormat === "qualifying" || h.stageFormat === "open_qualifier") &&
+          h.state === "confirmed"
+      ).length
+    : 0;
+  const canSeedEarlyNow =
+    !!realConn &&
+    curMode === "standings_top" &&
+    isSourceQual &&
+    confirmedQualCount >= 1 &&
+    !realConn.seededEarly &&
+    !lockedTarget;
+  const canReopenEarlyNow =
+    !!realConn &&
+    curMode === "standings_top" &&
+    !!realConn.seededEarly &&
+    !lockedTarget;
 
   const pilotsDistOptions: CanvasSelectOption[] = [
     { value: "roster", label: "Roster Order" },
     { value: "snake", label: "Bracket Snake (Fold)" },
-    { value: "random", label: "Random Draw" },
+    { value: "sequential", label: "Grouped by Seed" },
+    { value: "random", label: "Random Balanced" },
   ];
 
   const seedDistOptions: CanvasSelectOption[] = [
@@ -945,10 +1066,24 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
     { value: "sequential", label: "Sequential by Rank" },
   ];
 
+  const standingsCutOptions: CanvasSelectOption[] = [
+    { value: "all", label: "All Qualified Pilots" },
+    { value: "top_n", label: "Top N Fastest" },
+    { value: "range", label: "Rank Range (#Start - #End)" },
+  ];
+
+  const standingsMetricOptions: CanvasSelectOption[] = [
+    { value: "consecutive_3", label: "Fastest 3 Consecutive Laps" },
+    { value: "consecutive_2", label: "Fastest 2 Consecutive Laps" },
+    { value: "best_lap", label: "Fastest Single Lap" },
+    { value: "laps_in_time", label: "Most Laps in Time" },
+    { value: "points", label: "Qualifying Heat Points" },
+  ];
+
   const roundModeOptions: CanvasSelectOption[] = [
     { value: "top_per_heat", label: "Top N per heat (Advance)" },
     { value: "bottom_per_heat", label: "Bottom N per heat (Redemption)" },
-    { value: "standings_top", label: "Top N overall fastest" },
+    { value: "standings_top", label: "Standings Cut (Qual / Points)" },
     { value: "all_pilots", label: "All pilots · Balanced (Sticky VTX)" },
     { value: "all_pilots_ranked", label: "All pilots · Ranked by standings" },
   ];
@@ -973,6 +1108,26 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
       title: "Heat seeding order",
     });
 
+  const renderStandingsCutSelect = (): string =>
+    renderCanvasSelect({
+      value: curStandingsCut,
+      label: standingsCutOptions.find((o) => o.value === curStandingsCut)?.label ?? "All Qualified Pilots",
+      options: standingsCutOptions,
+      disabled: lockedTarget,
+      dataAttrs: "data-wconn-standings-cut",
+      title: "Pilot cut slice",
+    });
+
+  const renderStandingsMetricSelect = (): string =>
+    renderCanvasSelect({
+      value: curStandingsMetric,
+      label: standingsMetricOptions.find((o) => o.value === curStandingsMetric)?.label ?? "Fastest 3 Consecutive Laps",
+      options: standingsMetricOptions,
+      disabled: lockedTarget,
+      dataAttrs: "data-wconn-standings-metric",
+      title: "Qualifying ranking metric",
+    });
+
   const renderRoundModeSelect = (): string =>
     renderCanvasSelect({
       value: curMode,
@@ -983,18 +1138,15 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
       title: "Advancement rule",
     });
 
-  const needsCount = (m: string): boolean =>
-    m === "top_per_heat" || m === "bottom_per_heat" || m === "standings_top";
+  const needsPerHeatCount = (m: string): boolean =>
+    m === "top_per_heat" || m === "bottom_per_heat";
 
-  const countTitleFor = (m: string): string =>
-    m === "standings_top" ? "Pilots to advance" : "Pilots per heat";
+  const countTitleFor = (_m: string): string => "Pilots per heat";
 
   const countDescFor = (m: string): string =>
-    m === "standings_top"
-      ? `Total fastest ranked pilots from ${sourceTitle} advancing into ${targetTitle}.`
-      : m === "bottom_per_heat"
-        ? `Bottom finishing positions per heat in ${sourceTitle} moving into ${targetTitle} (1–${maxPerHeat}).`
-        : `Top finishing positions per heat in ${sourceTitle} advancing into ${targetTitle} (1–${maxPerHeat}).`;
+    m === "bottom_per_heat"
+      ? `Bottom finishing positions per heat in ${sourceTitle} moving into ${targetTitle} (1-${maxPerHeat}).`
+      : `Top finishing positions per heat in ${sourceTitle} advancing into ${targetTitle} (1-${maxPerHeat}).`;
 
   let settingsRowsHtml = "";
   if (isPilotsWire) {
@@ -1005,6 +1157,17 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
           <span class="rc-setting-desc">How checked-in active pilots distribute across heats in ${esc(targetTitle)}.</span>
         </div>
         <div class="rc-setting-control" data-wconn-pilots-dist-wrap>${renderPilotsDistSelect()}</div>
+      </div>
+      <div class="rc-setting-row" data-wconn-reshuffle-row ${curPilotsDist === "random" && !lockedTarget ? "" : "hidden"}>
+        <div class="rc-setting-info">
+          <span class="rc-setting-title">Random draw seed</span>
+          <span class="rc-setting-desc">Re-draw balanced random heat assignments while keeping VTX channel separation.</span>
+        </div>
+        <div class="rc-setting-control is-end">
+          <button type="button" class="btn btn-ghost btn-sm" data-wconn-reshuffle>
+            ${icons.reset(13)}<span>Reshuffle</span>
+          </button>
+        </div>
       </div>`;
   } else if (isStageSeeds) {
     settingsRowsHtml = `
@@ -1064,6 +1227,7 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
         </div>
       </div>`;
   } else {
+    const isStandingsTop = curMode === "standings_top";
     settingsRowsHtml = `
       <div class="rc-setting-row">
         <div class="rc-setting-info">
@@ -1072,7 +1236,7 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
         </div>
         <div class="rc-setting-control" data-wconn-mode-wrap>${renderRoundModeSelect()}</div>
       </div>
-      <div class="rc-setting-row" data-wconn-count-row ${needsCount(curMode) ? "" : "hidden"}>
+      <div class="rc-setting-row" data-wconn-count-row ${needsPerHeatCount(curMode) ? "" : "hidden"}>
         <div class="rc-setting-info">
           <span class="rc-setting-title" data-wconn-count-title>${esc(countTitleFor(curMode))}</span>
           <span class="rc-setting-desc" data-wconn-count-desc>${esc(countDescFor(curMode))}</span>
@@ -1083,22 +1247,121 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
             class="input mono"
             data-wconn-count
             min="1"
-            max="${curMode === "standings_top" ? 64 : maxPerHeat}"
-            value="${Math.max(1, curMode === "standings_top" ? curCount : Math.min(maxPerHeat, curCount))}"
+            max="${maxPerHeat}"
+            value="${Math.max(1, Math.min(maxPerHeat, curCount))}"
             ${lockedTarget ? "disabled" : ""}
           />
         </div>
-      </div>`;
+      </div>
+      <div class="rc-setting-row" data-wconn-standings-only ${isStandingsTop ? "" : "hidden"}>
+        <div class="rc-setting-info">
+          <span class="rc-setting-title">Pilot cut</span>
+          <span class="rc-setting-desc">Advance all ranked pilots, Top N fastest, or a division slice (#Start - #End).</span>
+        </div>
+        <div class="rc-setting-control" data-wconn-standings-cut-wrap>${renderStandingsCutSelect()}</div>
+      </div>
+      <div class="rc-setting-row" data-wconn-topn-row ${isStandingsTop && curStandingsCut === "top_n" ? "" : "hidden"}>
+        <div class="rc-setting-info">
+          <span class="rc-setting-title">Pilots to advance</span>
+          <span class="rc-setting-desc">Top ranked pilots advancing into ${esc(targetTitle)}.</span>
+        </div>
+        <div class="rc-setting-control">
+          <input
+            type="number"
+            class="input mono"
+            data-wconn-top-n
+            min="1"
+            max="64"
+            value="${Math.max(1, curSeedEnd || curCount || pph)}"
+            ${lockedTarget ? "disabled" : ""}
+          />
+        </div>
+      </div>
+      <div class="rc-setting-row" data-wconn-range-row ${isStandingsTop && curStandingsCut === "range" ? "" : "hidden"}>
+        <div class="rc-setting-info">
+          <span class="rc-setting-title">Rank range</span>
+          <span class="rc-setting-desc">Inclusive rank slice advancing into ${esc(targetTitle)} (e.g. #5 to #8 for B-Main).</span>
+        </div>
+        <div class="rc-setting-control">
+          <div class="rc-range-pair">
+            <div class="rc-range-field">
+              <span class="rc-range-prefix">#</span>
+              <input
+                type="number"
+                class="input mono"
+                data-wconn-seed-start
+                min="1"
+                max="64"
+                value="${curSeedStart}"
+                aria-label="Start rank"
+                ${lockedTarget ? "disabled" : ""}
+              />
+            </div>
+            <span class="rc-range-sep">to</span>
+            <div class="rc-range-field">
+              <span class="rc-range-prefix">#</span>
+              <input
+                type="number"
+                class="input mono"
+                data-wconn-seed-end
+                min="1"
+                max="64"
+                value="${curSeedEnd}"
+                aria-label="End rank"
+                ${lockedTarget ? "disabled" : ""}
+              />
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="rc-setting-row" data-wconn-standings-only ${isStandingsTop ? "" : "hidden"}>
+        <div class="rc-setting-info">
+          <span class="rc-setting-title">Ranked by</span>
+          <span class="rc-setting-desc">Cumulative ranking metric across upstream heats.</span>
+        </div>
+        <div class="rc-setting-control" data-wconn-standings-metric-wrap>${renderStandingsMetricSelect()}</div>
+      </div>
+      <div class="rc-setting-row" data-wconn-standings-only ${isStandingsTop ? "" : "hidden"}>
+        <div class="rc-setting-info">
+          <span class="rc-setting-title">Heat seeding fold</span>
+          <span class="rc-setting-desc">Bracket Snake folds top &amp; bottom seeds across heats; Sequential groups adjacent ranks together.</span>
+        </div>
+        <div class="rc-setting-control" data-wconn-seed-dist-wrap>${renderSeedDistSelect()}</div>
+      </div>
+      ${
+        canSeedEarlyNow
+          ? `<div class="rc-setting-row">
+              <div class="rc-setting-info">
+                <span class="rc-setting-title">Early bracket seeding</span>
+                <span class="rc-setting-desc">${confirmedQualCount} qualifying heat${confirmedQualCount === 1 ? " is" : "s are"} confirmed. Lock current standings into ${esc(targetTitle)} now and skip remaining unflown qualifier heats.</span>
+              </div>
+              <div class="rc-setting-control is-end">
+                <button type="button" class="btn btn-armed btn-sm" data-wconn-seed-now>
+                  ${icons.zap(13)}<span>Seed Now</span>
+                </button>
+              </div>
+            </div>`
+          : canReopenEarlyNow
+            ? `<div class="rc-setting-row">
+                <div class="rc-setting-info">
+                  <span class="rc-setting-title">Seeded early</span>
+                  <span class="rc-setting-desc">${esc(targetTitle)} is seeded from provisional qualifying results. Reopen to resume qualifying before heats start.</span>
+                </div>
+                <div class="rc-setting-control is-end">
+                  <button type="button" class="btn btn-ghost btn-sm" data-wconn-reopen-seed>
+                    ${icons.unlock(13)}<span>Reopen Seeding</span>
+                  </button>
+                </div>
+              </div>`
+            : ""
+      }`;
   }
 
   const bodyHtml = `
     ${renderWireConnectionFlowBanner(sourceTitle, sourceMeta, targetTitle, targetMeta)}
     ${
       realConn?.invalid
-        ? `<div class="rc-conn-invalid-reason">
-            ${icons.siren(13)}
-            <span>${esc(realConn.invalidReason || "Invalid connection — adjust rule or reconnect wire.")}</span>
-          </div>`
+        ? `<div class="rc-conn-invalid-reason" role="status">${esc(realConn.invalidReason || "Invalid connection - adjust rule or reconnect wire.")}</div>`
         : ""
     }
     <div class="rc-settings-list">
@@ -1130,6 +1393,17 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
     footHtml
   );
 
+  const syncStandingsControlsDom = (): void => {
+    const isSt = curMode === "standings_top";
+    backdrop.querySelectorAll<HTMLElement>("[data-wconn-standings-only]").forEach((el) => {
+      el.hidden = !isSt;
+    });
+    const topNRow = backdrop.querySelector<HTMLElement>("[data-wconn-topn-row]");
+    const rangeRow = backdrop.querySelector<HTMLElement>("[data-wconn-range-row]");
+    if (topNRow) topNRow.hidden = !isSt || curStandingsCut !== "top_n";
+    if (rangeRow) rangeRow.hidden = !isSt || curStandingsCut !== "range";
+  };
+
   backdrop.addEventListener("canvas-select-change", (e) => {
     const t = e.target as HTMLElement | null;
     const trigger = t?.closest<HTMLElement>("[data-cselect-trigger]");
@@ -1137,12 +1411,13 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
     const val = (e as CustomEvent<CanvasSelectChangeDetail>).detail?.value ?? "";
 
     if (trigger.hasAttribute("data-wconn-pilots-dist")) {
-      curPilotsDist = (val === "snake" || val === "random" ? val : "roster") as
-        | "roster"
-        | "snake"
-        | "random";
+      curPilotsDist = (
+        val === "snake" || val === "sequential" || val === "random" ? val : "roster"
+      ) as "roster" | "snake" | "sequential" | "random";
       const wrap = backdrop.querySelector<HTMLElement>("[data-wconn-pilots-dist-wrap]");
       if (wrap) wrap.innerHTML = renderPilotsDistSelect();
+      const reshuffleRow = backdrop.querySelector<HTMLElement>("[data-wconn-reshuffle-row]");
+      if (reshuffleRow) reshuffleRow.hidden = curPilotsDist !== "random" || lockedTarget;
       return;
     }
 
@@ -1153,8 +1428,25 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
       return;
     }
 
+    if (trigger.hasAttribute("data-wconn-standings-cut")) {
+      curStandingsCut = (val === "top_n" || val === "range" ? val : "all") as
+        | "all"
+        | "top_n"
+        | "range";
+      const wrap = backdrop.querySelector<HTMLElement>("[data-wconn-standings-cut-wrap]");
+      if (wrap) wrap.innerHTML = renderStandingsCutSelect();
+      syncStandingsControlsDom();
+      return;
+    }
+
+    if (trigger.hasAttribute("data-wconn-standings-metric")) {
+      curStandingsMetric = (val || "consecutive_3") as QualifyingMetric;
+      const wrap = backdrop.querySelector<HTMLElement>("[data-wconn-standings-metric-wrap]");
+      if (wrap) wrap.innerHTML = renderStandingsMetricSelect();
+      return;
+    }
+
     if (trigger.hasAttribute("data-wconn-mode")) {
-      const prevMode = curMode;
       curMode = (
         val === "bottom_per_heat" ||
         val === "standings_top" ||
@@ -1171,25 +1463,82 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
       const titleEl = backdrop.querySelector<HTMLElement>("[data-wconn-count-title]");
       const descEl = backdrop.querySelector<HTMLElement>("[data-wconn-count-desc]");
 
-      if (countRow) countRow.hidden = !needsCount(curMode);
+      if (countRow) countRow.hidden = !needsPerHeatCount(curMode);
       if (titleEl) titleEl.textContent = countTitleFor(curMode);
       if (descEl) descEl.textContent = countDescFor(curMode);
       if (countInp) {
         const curVal = Number(countInp.value) || curCount;
-        if (curMode === "standings_top") {
-          countInp.max = "64";
-          countInp.value = String(prevMode !== "standings_top" && curVal <= 2 ? pph : Math.max(1, curVal));
-        } else {
-          countInp.max = String(maxPerHeat);
-          countInp.value = String(Math.max(1, Math.min(maxPerHeat, curVal || 2)));
-        }
+        countInp.max = String(maxPerHeat);
+        countInp.value = String(Math.max(1, Math.min(maxPerHeat, curVal || 2)));
       }
+      syncStandingsControlsDom();
     }
   });
 
   backdrop.addEventListener("click", (e) => {
     const t = e.target as HTMLElement | null;
     if (!t) return;
+
+    const reshuffleBtn = t.closest<HTMLButtonElement>("[data-wconn-reshuffle]");
+    if (reshuffleBtn && !reshuffleBtn.disabled) {
+      reshuffleBtn.disabled = true;
+      void api
+        .bracketEdit({
+          action: "update_connection",
+          connectionId,
+          fromRoundId,
+          toRoundId,
+          linkMode: "pilots_in",
+          distribution: "random",
+        })
+        .then(() =>
+          api.bracketEdit({
+            action: "reshuffle_round",
+            roundId: toRoundId,
+          })
+        )
+        .then(() => {
+          reshuffleBtn.disabled = false;
+        })
+        .catch((err) => {
+          reshuffleBtn.disabled = false;
+          reportError(err instanceof Error ? err.message : String(err));
+        });
+      return;
+    }
+
+    const seedNowBtn = t.closest<HTMLButtonElement>("[data-wconn-seed-now]");
+    if (seedNowBtn && !seedNowBtn.disabled && realConn) {
+      seedNowBtn.disabled = true;
+      void api
+        .bracketEdit({
+          action: "seed_connection_now",
+          connectionId: realConn.id,
+        })
+        .then(() => close())
+        .catch((err) => {
+          seedNowBtn.disabled = false;
+          reportError(err instanceof Error ? err.message : String(err));
+        });
+      return;
+    }
+
+    const reopenSeedBtn = t.closest<HTMLButtonElement>("[data-wconn-reopen-seed]");
+    if (reopenSeedBtn && !reopenSeedBtn.disabled && realConn) {
+      reopenSeedBtn.disabled = true;
+      void api
+        .bracketEdit({
+          action: "reopen_connection_seed",
+          connectionId: realConn.id,
+        })
+        .then(() => close())
+        .catch((err) => {
+          reopenSeedBtn.disabled = false;
+          reportError(err instanceof Error ? err.message : String(err));
+        });
+      return;
+    }
+
     const saveBtn = t.closest<HTMLButtonElement>("[data-wconn-save]");
     if (!saveBtn || saveBtn.disabled) return;
     saveBtn.disabled = true;
@@ -1229,12 +1578,53 @@ export function openWireConnectionModal(opts: WireConnectionModalOptions): void 
         seedEnd: sEnd,
         distribution: curSeedDist,
       });
+    } else if (curMode === "standings_top") {
+      let sStart = 0;
+      let sEnd = 0;
+      let adv = 0;
+      if (curStandingsCut === "top_n") {
+        const n = Math.max(
+          1,
+          Math.min(
+            64,
+            Number(backdrop.querySelector<HTMLInputElement>("[data-wconn-top-n]")?.value) || pph
+          )
+        );
+        sStart = 1;
+        sEnd = n;
+        adv = n;
+      } else if (curStandingsCut === "range") {
+        sStart = Math.max(
+          1,
+          Math.min(
+            64,
+            Number(backdrop.querySelector<HTMLInputElement>("[data-wconn-seed-start]")?.value) || 1
+          )
+        );
+        sEnd = Math.max(
+          sStart,
+          Math.min(
+            64,
+            Number(backdrop.querySelector<HTMLInputElement>("[data-wconn-seed-end]")?.value) || sStart
+          )
+        );
+        adv = sEnd - sStart + 1;
+      }
+      actionPromise = api.bracketEdit({
+        action: "update_connection",
+        connectionId,
+        linkMode: "standings_top",
+        advanceCount: adv,
+        seedStart: sStart,
+        seedEnd: sEnd,
+        distribution: curSeedDist,
+        qualifyingMetric: curStandingsMetric,
+      });
     } else {
       const rawCount =
         Number(backdrop.querySelector<HTMLInputElement>("[data-wconn-count]")?.value) || 2;
-      const maxAllowed = curMode === "standings_top" ? 64 : maxPerHeat;
-      const advanceCount = needsCount(curMode)
-        ? Math.max(1, Math.min(maxAllowed, rawCount))
+      const advanceCount = needsPerHeatCount(curMode)
+        ? Math.max(1, Math.min(maxPerHeat, rawCount))
         : 0;
       actionPromise = api.bracketEdit({
         action: "update_connection",
@@ -1318,23 +1708,6 @@ export function openRaceSettingsModal(opts: RaceSettingsModalOptions): void {
       title: "Pre-horn start countdown",
     });
 
-  const renderSuggestionsHtml = (tags: string[]): string => {
-    const knownTags = getAllTags ? getAllTags() : [];
-    const curKeys = new Set(tags.map((t) => t.toLowerCase()));
-    const suggestions = knownTags.filter((t) => !curKeys.has(t.toLowerCase()));
-    if (suggestions.length === 0) return "";
-    return `
-      <div class="races-quick-tags">
-        <span class="note">Suggestions:</span>
-        ${suggestions
-          .map(
-            (s) =>
-              `<button type="button" class="race-tag-suggest" data-modal-suggest-tag="${esc(s)}">+ ${esc(s)}</button>`
-          )
-          .join("")}
-      </div>`;
-  };
-
   const renderSeatChannelPills = (channels: number[]): string =>
     channels
       .map((ch, idx) =>
@@ -1393,7 +1766,6 @@ export function openRaceSettingsModal(opts: RaceSettingsModalOptions): void {
               placeholder: "Add tags (press comma or Enter)…",
               ariaLabel: "Race tags",
             })}
-            <div data-modal-tags-suggestions>${renderSuggestionsHtml(currentTags)}</div>
           </div>
         </div>
       </div>
@@ -1466,14 +1838,12 @@ export function openRaceSettingsModal(opts: RaceSettingsModalOptions): void {
   const countdownWrap = backdrop.querySelector<HTMLElement>("[data-modal-countdown-wrap]")!;
   const seatWrap = backdrop.querySelector<HTMLElement>("[data-modal-seat-pills]")!;
   const tagBoxEl = backdrop.querySelector<HTMLElement>('[data-tag-box="race-settings"]')!;
-  const suggestionsWrap = backdrop.querySelector<HTMLElement>("[data-modal-tags-suggestions]")!;
 
   const tagEditor = mountTagPillEditor(tagBoxEl, {
     initialTags: currentTags,
     placeholder: "Add tags (press comma or Enter)…",
     onChange: (next) => {
       currentTags = next;
-      suggestionsWrap.innerHTML = renderSuggestionsHtml(currentTags);
     },
   });
 
@@ -1520,15 +1890,6 @@ export function openRaceSettingsModal(opts: RaceSettingsModalOptions): void {
   backdrop.addEventListener("click", (e) => {
     const t = e.target as HTMLElement | null;
     if (!t) return;
-
-    const sugTagBtn = t.closest<HTMLElement>("[data-modal-suggest-tag]");
-    if (sugTagBtn) {
-      const tok = sugTagBtn.dataset.modalSuggestTag ?? "";
-      if (tok) {
-        tagEditor.addTag(tok);
-      }
-      return;
-    }
 
     const saveBtn = t.closest<HTMLButtonElement>("[data-modal-save-settings]");
     if (saveBtn && !saveBtn.disabled) {
@@ -1654,8 +2015,8 @@ export function openTemplatesModal(opts: TemplatesModalOptions): () => void {
     id: "custom",
     title: "Custom",
     tag: "Start from Scratch",
-    stagesHint: "Blank Format Board · Up to 5 Stages",
-    desc: "Start with an empty Format board with no preset template applied. Build and wire your own combination of qualifiers, brackets, mains, and finals from scratch.",
+    stagesHint: "Blank Round Graph · Full Custom Flow",
+    desc: "Start with an empty race setup with no preset template applied. Build and connect your own combination of qualifiers, race rounds, points rounds, and finals from scratch.",
   };
 
   const allChoices: TemplateOptionSpec[] = [
@@ -2463,10 +2824,7 @@ export function openStageConnectionModal(opts: StageConnectionModalOptions): voi
     ${renderWireConnectionFlowBanner(fromTitle, fromStageMeta, toTitle, toStageMeta)}
     ${
       conn.invalid
-        ? `<div class="rc-conn-invalid-reason">
-            ${icons.siren(13)}
-            <span>${esc(conn.invalidReason || "Invalid stage connection — reconnect or remove this wire.")}</span>
-          </div>`
+        ? `<div class="rc-conn-invalid-reason" role="status">${esc(conn.invalidReason || "Invalid stage connection - reconnect or remove this wire.")}</div>`
         : ""
     }
     <div class="rc-settings-list">

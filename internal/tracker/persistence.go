@@ -367,7 +367,7 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 
 	for _, l := range s.Laps {
 		cp := l
-		cp.Sectors = append([]domain.SectorSplit{}, l.Sectors...)
+		cp.Sectors = race.SanitizeLapSectors(append([]domain.SectorSplit{}, l.Sectors...), cp.LapTimeSec)
 		if len(cp.Sectors) == 0 && len(e.gates) == 1 && cp.LapTimeSec > 0 {
 			gID := e.gates[0].GateID
 			badge := domain.BadgeNormal
@@ -442,6 +442,7 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 		if rs.Mode != domain.ModeRace {
 			rs.Mode = domain.ModePractice
 		}
+		race.MigrateLegacyStagesToUnifiedGraph(&rs)
 		// If reloaded mid-countdown or mid-heat, pause cleanly so a race doesn't run unattended across a browser restart.
 		for i := range rs.Heats {
 			if rs.Heats[i].State == domain.HeatCountdown {
@@ -466,6 +467,7 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 		normalizeHeatsOnRestore := func(r *domain.RaceTournamentState) {
 			r.Config = r.Config.Normalized()
 			r.Tags = domain.NormalizeRaceTags(r.Tags)
+			race.MigrateLegacyStagesToUnifiedGraph(r)
 			for hi := range r.Heats {
 				if r.Heats[hi].State == domain.HeatCountdown {
 					r.Heats[hi].State = domain.HeatStaged
@@ -473,6 +475,22 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 				} else if r.Heats[hi].State == domain.HeatRunning {
 					r.Heats[hi].State = domain.HeatPaused
 					r.Heats[hi].PausedAtUs = nowUs
+				}
+				for si := range r.Heats[hi].Seats {
+					seat := &r.Heats[hi].Seats[si]
+					for li := range seat.Laps {
+						if seat.Laps[li].LapNumber < 1 || !(seat.Laps[li].SplitTimeSec > 0) {
+							continue
+						}
+						seat.Laps[li].Sectors = race.SanitizeLapSectors(seat.Laps[li].Sectors, seat.Laps[li].SplitTimeSec)
+						if seat.Laps[li].CrossingID > 0 {
+							for ci := range seat.Crossings {
+								if seat.Crossings[ci].CrossingID == seat.Laps[li].CrossingID {
+									seat.Crossings[ci].Sectors = seat.Laps[li].Sectors
+								}
+							}
+						}
+					}
 				}
 			}
 			if r.Generated {
@@ -535,6 +553,12 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 		ps := clonePracticeManagerState(*s.PracticeState)
 		for si := range ps.Sessions {
 			e.bumpSeqFromRestoredIDLocked(ps.Sessions[si].SessionID)
+			for li := range ps.Sessions[si].Laps {
+				ps.Sessions[si].Laps[li].Sectors = race.SanitizeLapSectors(
+					ps.Sessions[si].Laps[li].Sectors,
+					ps.Sessions[si].Laps[li].LapTimeSec,
+				)
+			}
 		}
 		ps.Initialized = true
 		e.practiceState = ps

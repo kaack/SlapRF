@@ -33,7 +33,7 @@ export function openMultiGPImportModal(
   }
 
   const backdrop = document.createElement("div");
-  backdrop.className = "slaprf-modal-backdrop";
+  backdrop.className = "slaprf-modal-backdrop mgp-page-backdrop mgp-import-backdrop";
   backdrop.setAttribute("role", "dialog");
   backdrop.setAttribute("aria-modal", "true");
   backdrop.setAttribute("aria-label", "Download race from MultiGP");
@@ -54,8 +54,25 @@ export function openMultiGPImportModal(
     curPrefs().apiKey ||
     (store.simulatorRunning ? store.simMultiGP?.apiKey || DEFAULT_SIM_MGP_API_KEY : "");
 
+  const topbarEl = document.querySelector<HTMLElement>(".topbar");
+  const appEl = document.querySelector<HTMLElement>(".app");
+  const hadSubpageBack = Boolean(topbarEl?.classList.contains("has-subpage-back"));
+  const hadMobileSubpage = Boolean(appEl?.classList.contains("is-mobile-subpage"));
+  topbarEl?.classList.remove("is-mobile-collapsed");
+  appEl?.classList.remove("is-mobile-topbar-collapsed");
+  topbarEl?.classList.add("has-subpage-back");
+  appEl?.classList.add("is-mobile-subpage");
+
   const cleanup = (): void => {
+    if (!hadSubpageBack) {
+      topbarEl?.classList.remove("has-subpage-back");
+    }
+    if (!hadMobileSubpage) {
+      appEl?.classList.remove("is-mobile-subpage");
+    }
     window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("click", onTopBarBackCapture, true);
+    window.removeEventListener("hashchange", onHashChange);
     if (backdrop.parentNode) {
       backdrop.parentNode.removeChild(backdrop);
     }
@@ -72,11 +89,29 @@ export function openMultiGPImportModal(
       cleanup();
     }
   };
+  const onTopBarBackCapture = (e: MouseEvent): void => {
+    const target = e.target as HTMLElement | null;
+    if (!target || importing) return;
+    const backBtn = target.closest<HTMLElement>(
+      ".topbar-back-btn, [data-action='races-back'], [data-action='practice-back']"
+    );
+    if (backBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      cleanup();
+    }
+  };
+  const onHashChange = (): void => {
+    if (!importing) {
+      cleanup();
+    }
+  };
   window.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("click", onTopBarBackCapture, true);
+  window.addEventListener("hashchange", onHashChange);
 
   const selectAndLoadDetail = async (id: string): Promise<void> => {
     selectedRaceId = id;
-    selectedDetail = null;
     loadingDetail = true;
     errorMsg = "";
     render();
@@ -216,9 +251,7 @@ export function openMultiGPImportModal(
           </div>`;
 
     let detailHtml = "";
-    if (loadingDetail) {
-      detailHtml = `<div class="note" style="padding:10px 4px">Loading race schedule &amp; pilot entries…</div>`;
-    } else if (selectedDetail) {
+    if (selectedDetail) {
       const d = selectedDetail;
       const roundCount = d.schedule?.rounds?.length ?? 0;
       const heatCount = (d.schedule?.rounds ?? []).reduce(
@@ -226,7 +259,7 @@ export function openMultiGPImportModal(
         0
       );
       detailHtml = `
-        <div class="card" style="padding:12px;display:flex;flex-direction:column;gap:10px">
+        <div class="card mgp-detail-card" style="padding:12px;display:flex;flex-direction:column;gap:10px;min-height:142px;box-sizing:border-box;${loadingDetail ? "opacity:0.65;transition:opacity 0.14s ease;" : ""}">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap">
             <div>
               <strong>#${d.id} · ${esc(d.name)}</strong>
@@ -266,7 +299,38 @@ export function openMultiGPImportModal(
               : ""
           }
         </div>`;
+    } else if (loadingDetail) {
+      detailHtml = `<div class="card mgp-detail-card" style="padding:12px;display:flex;align-items:center;justify-content:center;min-height:142px;box-sizing:border-box"><span class="note">Loading race schedule &amp; pilot entries…</span></div>`;
     }
+
+    const existingBody = backdrop.querySelector<HTMLElement>("[data-mgp-modal-body]");
+    const existingDetailSlot = backdrop.querySelector<HTMLElement>("[data-mgp-detail-slot]");
+    const existingImportBtn = backdrop.querySelector<HTMLButtonElement>("[data-mgp-do-import]");
+    const existingTableBody = backdrop.querySelector<HTMLElement>(".mgp-modal-body-table tbody");
+
+    if (
+      existingBody &&
+      existingDetailSlot &&
+      existingImportBtn &&
+      existingTableBody &&
+      !loadingList &&
+      races.length > 0 &&
+      hasKey &&
+      prefs.verified &&
+      !errorMsg
+    ) {
+      existingTableBody.querySelectorAll<HTMLElement>("tr[data-mgp-select-race]").forEach((tr) => {
+        tr.classList.toggle("is-selected-row", tr.dataset.mgpSelectRace === selectedRaceId);
+      });
+      existingDetailSlot.innerHTML = detailHtml;
+      existingImportBtn.disabled = !selectedDetail || importing || loadingDetail;
+      const span = existingImportBtn.querySelector("span");
+      if (span) span.textContent = importing ? "Downloading…" : "Download race";
+      return;
+    }
+
+    const prevTableWrap = backdrop.querySelector<HTMLElement>(".mgp-modal-table-body-wrap");
+    const prevScrollTop = prevTableWrap ? prevTableWrap.scrollTop : 0;
 
     backdrop.innerHTML = `
       <div class="slaprf-modal card rc-modal-lg" role="document">
@@ -275,17 +339,17 @@ export function openMultiGPImportModal(
             <span class="slaprf-modal-icon">${icons.download(17)}</span>
             <h3>Download from MultiGP</h3>
           </div>
-          <button type="button" class="btn btn-ghost btn-xs" data-mgp-modal-close aria-label="Close">
+          <button type="button" class="btn btn-ghost btn-xs mgp-desktop-close-btn" data-mgp-modal-close aria-label="Close">
             ${icons.close(15)}
           </button>
         </div>
-        <div class="slaprf-modal-body">
+        <div class="slaprf-modal-body" data-mgp-modal-body>
           ${keyBarHtml}
           ${errorMsg ? `<div class="slaprf-modal-warn" style="margin-bottom:10px">${esc(errorMsg)}</div>` : ""}
           ${listHtml}
-          ${detailHtml}
+          <div data-mgp-detail-slot>${detailHtml}</div>
         </div>
-        <div class="slaprf-modal-foot">
+        <div class="slaprf-modal-foot mgp-page-foot">
           <button type="button" class="btn btn-ghost" data-mgp-modal-close ${importing ? "disabled" : ""}>Cancel</button>
           <button type="button" class="btn btn-armed" data-mgp-do-import ${!selectedDetail || importing || loadingDetail ? "disabled" : ""}>
             ${icons.download(15)}
@@ -294,6 +358,11 @@ export function openMultiGPImportModal(
         </div>
       </div>
     `;
+
+    if (prevScrollTop > 0) {
+      const nextTableWrap = backdrop.querySelector<HTMLElement>(".mgp-modal-table-body-wrap");
+      if (nextTableWrap) nextTableWrap.scrollTop = prevScrollTop;
+    }
   };
 
   backdrop.addEventListener("input", (e) => {
@@ -437,15 +506,32 @@ export function openMultiGPErrorModal(opts: MultiGPErrorModalOptions): void {
   }
 
   const backdrop = document.createElement("div");
-  backdrop.className = "slaprf-modal-backdrop";
+  backdrop.className = "slaprf-modal-backdrop mgp-page-backdrop mgp-error-backdrop";
   backdrop.setAttribute("role", "dialog");
   backdrop.setAttribute("aria-modal", "true");
   backdrop.setAttribute("data-mgp-error-modal", "true");
   const titleText = opts.title || "MultiGP Upload Failed";
   backdrop.setAttribute("aria-label", titleText);
 
+  const topbarEl = document.querySelector<HTMLElement>(".topbar");
+  const appEl = document.querySelector<HTMLElement>(".app");
+  const hadSubpageBack = Boolean(topbarEl?.classList.contains("has-subpage-back"));
+  const hadMobileSubpage = Boolean(appEl?.classList.contains("is-mobile-subpage"));
+  topbarEl?.classList.remove("is-mobile-collapsed");
+  appEl?.classList.remove("is-mobile-topbar-collapsed");
+  topbarEl?.classList.add("has-subpage-back");
+  appEl?.classList.add("is-mobile-subpage");
+
   const cleanup = (): void => {
+    if (!hadSubpageBack) {
+      topbarEl?.classList.remove("has-subpage-back");
+    }
+    if (!hadMobileSubpage) {
+      appEl?.classList.remove("is-mobile-subpage");
+    }
     window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("click", onTopBarBackCapture, true);
+    window.removeEventListener("hashchange", onHashChange);
     if (backdrop.parentNode) {
       backdrop.parentNode.removeChild(backdrop);
     }
@@ -462,16 +548,33 @@ export function openMultiGPErrorModal(opts: MultiGPErrorModalOptions): void {
       cleanup();
     }
   };
+  const onTopBarBackCapture = (e: MouseEvent): void => {
+    const target = e.target as HTMLElement | null;
+    if (!target) return;
+    const backBtn = target.closest<HTMLElement>(
+      ".topbar-back-btn, [data-action='races-back'], [data-action='practice-back']"
+    );
+    if (backBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      cleanup();
+    }
+  };
+  const onHashChange = (): void => {
+    cleanup();
+  };
   window.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("click", onTopBarBackCapture, true);
+  window.addEventListener("hashchange", onHashChange);
 
   backdrop.innerHTML = `
-    <div class="slaprf-modal card" role="document" style="max-width:480px;width:92vw">
+    <div class="slaprf-modal card mgp-error-modal" role="document" style="max-width:480px;width:92vw">
       <div class="slaprf-modal-head">
         <div class="slaprf-modal-title-row">
           <span class="slaprf-modal-icon" style="color:var(--warn)">${icons.alert(18)}</span>
           <h3>${esc(titleText)}</h3>
         </div>
-        <button type="button" class="btn btn-ghost btn-xs" data-mgp-err-close aria-label="Close">
+        <button type="button" class="btn btn-ghost btn-xs mgp-desktop-close-btn" data-mgp-err-close aria-label="Close">
           ${icons.close(15)}
         </button>
       </div>
@@ -486,7 +589,7 @@ export function openMultiGPErrorModal(opts: MultiGPErrorModalOptions): void {
           All heats, laps, and standings remain safely saved locally in SlapRF. You can continue running or reviewing the race and retry uploading once the connection is restored.
         </p>
       </div>
-      <div class="slaprf-modal-foot">
+      <div class="slaprf-modal-foot mgp-page-foot">
         <button type="button" class="btn btn-ghost" data-mgp-err-close>Close</button>
         ${
           opts.onRetry
@@ -535,14 +638,20 @@ export function openMultiGPSyncModal(
     activeMultiGPModalCleanup();
   }
 
+  const uploadTitle =
+    scope === "overall" ? "Overall Rankings" : "Completed Heats";
   const backdrop = document.createElement("div");
-  backdrop.className = "slaprf-modal-backdrop";
+  backdrop.className = "slaprf-modal-backdrop mgp-page-backdrop mgp-sync-backdrop";
   backdrop.setAttribute("role", "dialog");
   backdrop.setAttribute("aria-modal", "true");
-  backdrop.setAttribute("aria-label", "Upload to MultiGP");
+  backdrop.setAttribute("aria-label", uploadTitle);
+
+  const isMobileViewport =
+    typeof window !== "undefined" &&
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(max-width: 860px)").matches;
 
   let loadingPlan = true;
-  let forceAll = false;
   let viewMode: "table" | "json" = "table";
   let uploading = false;
   let progressLabel = "";
@@ -553,14 +662,26 @@ export function openMultiGPSyncModal(
     race.standings && race.standings.length > 0
       ? race.standings
       : (race.qualStandings ?? []);
-  const hasCompletedHeats = (race.heats ?? []).some(
-    (h) =>
-      (h.state === "finished" || h.state === "confirmed") &&
-      h.note !== "Auto-advance (bye)"
-  );
+
+  const topbarEl = document.querySelector<HTMLElement>(".topbar");
+  const appEl = document.querySelector<HTMLElement>(".app");
+  const hadSubpageBack = Boolean(topbarEl?.classList.contains("has-subpage-back"));
+  const hadMobileSubpage = Boolean(appEl?.classList.contains("is-mobile-subpage"));
+  topbarEl?.classList.remove("is-mobile-collapsed");
+  appEl?.classList.remove("is-mobile-topbar-collapsed");
+  topbarEl?.classList.add("has-subpage-back");
+  appEl?.classList.add("is-mobile-subpage");
 
   const cleanup = (): void => {
+    if (!hadSubpageBack) {
+      topbarEl?.classList.remove("has-subpage-back");
+    }
+    if (!hadMobileSubpage) {
+      appEl?.classList.remove("is-mobile-subpage");
+    }
     window.removeEventListener("keydown", onKeyDown, true);
+    window.removeEventListener("click", onTopBarBackCapture, true);
+    window.removeEventListener("hashchange", onHashChange);
     if (backdrop.parentNode) {
       backdrop.parentNode.removeChild(backdrop);
     }
@@ -577,25 +698,33 @@ export function openMultiGPSyncModal(
       cleanup();
     }
   };
+  const onTopBarBackCapture = (e: MouseEvent): void => {
+    const target = e.target as HTMLElement | null;
+    if (!target || uploading) return;
+    const backBtn = target.closest<HTMLElement>(
+      ".topbar-back-btn, [data-action='races-back'], [data-action='practice-back']"
+    );
+    if (backBtn) {
+      e.preventDefault();
+      e.stopPropagation();
+      cleanup();
+    }
+  };
+  const onHashChange = (): void => {
+    if (!uploading) {
+      cleanup();
+    }
+  };
   window.addEventListener("keydown", onKeyDown, true);
+  window.addEventListener("click", onTopBarBackCapture, true);
+  window.addEventListener("hashchange", onHashChange);
 
-  const loadPlan = async (initial = false): Promise<void> => {
+  const loadPlan = async (): Promise<void> => {
     loadingPlan = true;
     errorMsg = "";
     render();
     try {
-      let nextPlan = await api.multiGPBuildSyncPlan(raceId, forceAll);
-      if (
-        initial &&
-        scope === "heats" &&
-        !forceAll &&
-        (nextPlan.operations?.length ?? 0) === 0 &&
-        hasCompletedHeats
-      ) {
-        forceAll = true;
-        nextPlan = await api.multiGPBuildSyncPlan(raceId, true);
-      }
-      plan = nextPlan;
+      plan = await api.multiGPBuildSyncPlan(raceId, true);
     } catch (err) {
       errorMsg = err instanceof Error ? err.message : String(err);
       plan = null;
@@ -622,11 +751,11 @@ export function openMultiGPSyncModal(
     const mgpLabel = mgpNumber > 0 ? `MultiGP #${mgpNumber}` : "MultiGP";
 
     const overallColGroupHtml = `<colgroup>
-      <col style="width:64px" />
-      <col />
-      <col style="width:116px" />
-      <col style="width:116px" />
-      <col style="width:148px" />
+      <col class="mgp-col-rank" style="width:64px" />
+      <col class="mgp-col-pilot" />
+      <col class="mgp-col-id" style="width:116px" />
+      <col class="mgp-col-best" style="width:116px" />
+      <col class="mgp-col-best3" style="width:148px" />
     </colgroup>`;
 
     const overallTableHtml =
@@ -639,11 +768,11 @@ export function openMultiGPSyncModal(
                   ${overallColGroupHtml}
                   <thead>
                     <tr>
-                      <th class="rc-mgp-col-rank">Rank</th>
-                      <th>Pilot</th>
-                      <th class="rc-mgp-col-metric">MultiGP ID</th>
-                      <th class="rc-mgp-col-metric">Best Lap</th>
-                      <th class="rc-mgp-col-metric">Best 3 Consecutive</th>
+                      <th class="rc-mgp-col-rank mgp-col-rank">Rank</th>
+                      <th class="mgp-col-pilot">Pilot</th>
+                      <th class="rc-mgp-col-metric mgp-col-id"><span class="mgp-lbl-full">MultiGP ID</span><span class="mgp-lbl-short">ID</span></th>
+                      <th class="rc-mgp-col-metric mgp-col-best"><span class="mgp-lbl-full">Best Lap</span><span class="mgp-lbl-short">Best</span></th>
+                      <th class="rc-mgp-col-metric mgp-col-best3"><span class="mgp-lbl-full">Best 3 Consecutive</span><span class="mgp-lbl-short">Best 3C</span></th>
                     </tr>
                   </thead>
                 </table>
@@ -672,16 +801,16 @@ export function openMultiGPSyncModal(
                             : "—";
                         return `
                           <tr>
-                            <td class="rc-mgp-col-rank"><strong>${entry.orderNumber}</strong></td>
-                            <td>
+                            <td class="rc-mgp-col-rank mgp-col-rank"><strong>${entry.orderNumber}</strong></td>
+                            <td class="mgp-col-pilot">
                               <span style="display:inline-flex;align-items:center;gap:6px">
                                 <span class="dot" style="--c:${color}"></span>
                                 <strong>${esc(entry.userName || `Pilot ${entry.pilotId}`)}</strong>
                               </span>
                             </td>
-                            <td class="rc-mgp-col-metric">${entry.pilotId}</td>
-                            <td class="rc-mgp-col-metric">${bestLap}</td>
-                            <td class="rc-mgp-col-metric">${best3}</td>
+                            <td class="rc-mgp-col-metric mgp-col-id">${entry.pilotId}</td>
+                            <td class="rc-mgp-col-metric mgp-col-best">${bestLap}</td>
+                            <td class="rc-mgp-col-metric mgp-col-best3">${best3}</td>
                           </tr>`;
                       })
                       .join("")}
@@ -692,22 +821,18 @@ export function openMultiGPSyncModal(
           </div>`;
 
     const heatsColGroupHtml = `<colgroup>
-      <col style="width:76px" />
-      <col style="width:68px" />
-      <col />
-      <col style="width:68px" />
-      <col style="width:104px" />
-      <col style="width:104px" />
-      <col style="width:144px" />
+      <col class="mgp-col-heat" style="width:76px" />
+      <col class="mgp-col-slot" style="width:68px" />
+      <col class="mgp-col-pilot" />
+      <col class="mgp-col-laps" style="width:68px" />
+      <col class="mgp-col-total" style="width:104px" />
+      <col class="mgp-col-best" style="width:104px" />
+      <col class="mgp-col-best3" style="width:144px" />
     </colgroup>`;
 
     const heatsTableHtml =
       ops.length === 0
-        ? `<div class="note" style="padding:12px 4px">No confirmed heat slot assignments pending upload.${
-            !forceAll
-              ? " Toggle “Reupload All” to upload all completed heats."
-              : ""
-          }</div>`
+        ? `<div class="note" style="padding:12px 4px">No confirmed heat slot assignments pending upload.</div>`
         : `<div class="table-scroll mgp-modal-table-scroll">
             <div class="mgp-modal-table-inner is-heats">
               <div class="mgp-modal-table-head-wrap">
@@ -715,13 +840,13 @@ export function openMultiGPSyncModal(
                   ${heatsColGroupHtml}
                   <thead>
                     <tr>
-                      <th class="rc-mgp-col-heat">Heat</th>
-                      <th class="rc-mgp-col-metric">Slot</th>
-                      <th>Pilot</th>
-                      <th class="rc-mgp-col-metric">Laps</th>
-                      <th class="rc-mgp-col-metric">Total Time</th>
-                      <th class="rc-mgp-col-metric">Best Lap</th>
-                      <th class="rc-mgp-col-metric">Best 3 Consecutive</th>
+                      <th class="rc-mgp-col-heat mgp-col-heat">Heat</th>
+                      <th class="rc-mgp-col-metric mgp-col-slot">Slot</th>
+                      <th class="mgp-col-pilot">Pilot</th>
+                      <th class="rc-mgp-col-metric mgp-col-laps">Laps</th>
+                      <th class="rc-mgp-col-metric mgp-col-total"><span class="mgp-lbl-full">Total Time</span><span class="mgp-lbl-short">Total</span></th>
+                      <th class="rc-mgp-col-metric mgp-col-best"><span class="mgp-lbl-full">Best Lap</span><span class="mgp-lbl-short">Best</span></th>
+                      <th class="rc-mgp-col-metric mgp-col-best3"><span class="mgp-lbl-full">Best 3 Consecutive</span><span class="mgp-lbl-short">Best 3C</span></th>
                     </tr>
                   </thead>
                 </table>
@@ -734,13 +859,13 @@ export function openMultiGPSyncModal(
                       .map(
                         (op) => `
                         <tr>
-                          <td class="rc-mgp-col-heat"><strong>R${op.cycle}·H${op.heat}</strong></td>
-                          <td class="rc-mgp-col-metric">S${op.slot}</td>
-                          <td><strong>${esc(op.callsign)}</strong></td>
-                          <td class="rc-mgp-col-metric">${op.data.totalLaps}</td>
-                          <td class="rc-mgp-col-metric">${op.data.totalTime > 0 ? `${op.data.totalTime.toFixed(2)}s` : "—"}</td>
-                          <td class="rc-mgp-col-metric">${op.data.fastestLapTime > 0 ? `${op.data.fastestLapTime.toFixed(2)}s` : "—"}</td>
-                          <td class="rc-mgp-col-metric">${op.data.fastest3ConsecutiveLapsTime > 0 ? `${op.data.fastest3ConsecutiveLapsTime.toFixed(2)}s` : "—"}</td>
+                          <td class="rc-mgp-col-heat mgp-col-heat"><strong>R${op.cycle}·H${op.heat}</strong></td>
+                          <td class="rc-mgp-col-metric mgp-col-slot">S${op.slot}</td>
+                          <td class="mgp-col-pilot"><strong>${esc(op.callsign)}</strong></td>
+                          <td class="rc-mgp-col-metric mgp-col-laps">${op.data.totalLaps}</td>
+                          <td class="rc-mgp-col-metric mgp-col-total">${op.data.totalTime > 0 ? `${op.data.totalTime.toFixed(2)}s` : "—"}</td>
+                          <td class="rc-mgp-col-metric mgp-col-best">${op.data.fastestLapTime > 0 ? `${op.data.fastestLapTime.toFixed(2)}s` : "—"}</td>
+                          <td class="rc-mgp-col-metric mgp-col-best3">${op.data.fastest3ConsecutiveLapsTime > 0 ? `${op.data.fastest3ConsecutiveLapsTime.toFixed(2)}s` : "—"}</td>
                         </tr>`
                       )
                       .join("")}
@@ -794,7 +919,7 @@ export function openMultiGPSyncModal(
         <div class="slaprf-modal-head">
           <div class="slaprf-modal-title-row">
             <span class="slaprf-modal-icon">${icons.upload(17)}</span>
-            <h3>Upload to MultiGP</h3>
+            <h3>${uploadTitle}</h3>
           </div>
           <div class="mgp-modal-head-controls">
             <div class="segmented rc-panel-seg mgp-view-mode-seg" role="group" aria-label="Payload view mode">
@@ -811,7 +936,7 @@ export function openMultiGPSyncModal(
                 aria-pressed="${viewMode === "json" ? "true" : "false"}"
               >JSON</button>
             </div>
-            <button type="button" class="btn btn-ghost btn-xs" data-mgp-sync-close aria-label="Close">
+            <button type="button" class="btn btn-ghost btn-xs mgp-desktop-close-btn" data-mgp-sync-close aria-label="Close">
               ${icons.close(15)}
             </button>
           </div>
@@ -823,14 +948,6 @@ export function openMultiGPSyncModal(
               <span class="mgp-modal-meta-sep">-</span>
               <span class="note">${esc(mgpLabel)}</span>
             </div>
-            ${
-              scope === "heats"
-                ? `<label class="mgp-force-all-toggle">
-                    <input type="checkbox" data-mgp-force-all ${forceAll ? "checked" : ""} ${uploading ? "disabled" : ""} />
-                    <span>Reupload All</span>
-                  </label>`
-                : ""
-            }
           </div>
 
           ${errorMsg ? `<div class="slaprf-modal-warn" style="margin-bottom:10px">${esc(errorMsg)}</div>` : ""}
@@ -847,7 +964,7 @@ export function openMultiGPSyncModal(
               : ""
           }
         </div>
-        <div class="slaprf-modal-foot">
+        <div class="slaprf-modal-foot mgp-page-foot">
           <button type="button" class="btn btn-ghost" data-mgp-sync-close ${uploading ? "disabled" : ""}>Cancel</button>
           <button type="button" class="btn btn-armed" data-mgp-do-sync ${canUpload ? "" : "disabled"}>
             ${icons.upload(15)}
@@ -857,14 +974,6 @@ export function openMultiGPSyncModal(
       </div>
     `;
   };
-
-  backdrop.addEventListener("change", (e) => {
-    const target = e.target as HTMLElement | null;
-    if (target instanceof HTMLInputElement && target.hasAttribute("data-mgp-force-all")) {
-      forceAll = target.checked;
-      void loadPlan(false);
-    }
-  });
 
   backdrop.addEventListener("click", (e) => {
     const target = e.target as HTMLElement | null;
@@ -925,5 +1034,5 @@ export function openMultiGPSyncModal(
   });
 
   document.body.appendChild(backdrop);
-  void loadPlan(true);
+  void loadPlan();
 }

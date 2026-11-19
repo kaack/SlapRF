@@ -6,6 +6,7 @@ import {
   pilotChannelSearchTokens,
 } from "../core/vtx_channels";
 import {
+  AnalyticsScope,
   AnalyticsScopeKind,
   buildAnalyticsHash,
   getAnalyticsScope,
@@ -23,6 +24,7 @@ import { PilotSlot } from "../types/models";
 import { LapComparison } from "../widgets/LapComparison";
 import { LapPicker } from "../widgets/LapPicker";
 import { renderEmpty, renderStatTiles } from "../widgets/markup";
+import { PilotPicker } from "../widgets/PilotPicker";
 import { PracticeRecommendation, SectionStats } from "../widgets/SectionConsistency";
 
 const ANALYTICS_PILLS_STORAGE_KEY = "slaprf.ui.analyticsPills.v1";
@@ -144,6 +146,7 @@ export class PilotView extends Component {
   private readonly rootStore: AppStore;
   private readonly scopedStore: AppStore;
   private readonly lapPicker: LapPicker;
+  private readonly fixedScopeGetter?: () => AnalyticsScope;
 
   private pillsByScope: Record<string, number[]> = loadPillsMap();
   private selectedByScope: Record<string, number> = loadSelectedPilotMap();
@@ -151,6 +154,7 @@ export class PilotView extends Component {
   private addMenuOpen = false;
   private pilotSearchQuery = "";
   private lastScopeKey = "";
+  private lastActivePilotSlot = 0;
   private lastHeaderSig = "";
   private lastChooserSig = "";
   private isViewActive = true;
@@ -171,9 +175,10 @@ export class PilotView extends Component {
     this.rootStore.notifySelectionChanged();
   }
 
-  constructor(el: HTMLElement, store: AppStore) {
+  constructor(el: HTMLElement, store: AppStore, fixedScopeGetter?: () => AnalyticsScope) {
     super(el);
     this.rootStore = store;
+    this.fixedScopeGetter = fixedScopeGetter;
 
     this.scopedStore = store.createScopedView({
       nodes: () => {
@@ -214,10 +219,6 @@ export class PilotView extends Component {
         <section class="card card-flush lap-metrics" data-section-anchor="lap-comparison">
           <div class="lap-metrics-picker" data-slot="laps"></div>
           <div class="lap-metrics-compare" data-slot="compare"></div>
-          <div class="rules-foot">
-            <p class="note">Default view inspects the latest lap against the pilot's personal best.</p>
-            <button class="btn btn-ghost btn-sm" type="button" data-action="restore-lap-defaults">Restore defaults</button>
-          </div>
         </section>
         <section class="card card-flush" data-slot="section-stats" data-section-anchor="section-splits"></section>
         <section class="card rec-card" data-slot="recommendation" data-section-anchor="recommendations"></section>
@@ -227,6 +228,19 @@ export class PilotView extends Component {
     this.adopt(new LapComparison(this.slot("compare"), this.scopedStore));
     this.adopt(new SectionStats(this.slot("section-stats"), this.scopedStore));
     this.adopt(new PracticeRecommendation(this.slot("recommendation"), this.scopedStore));
+    if (this.fixedScopeGetter) {
+      this.adopt(
+        new PilotPicker(this.slot("pills-bar"), this.scopedStore, {
+          includeAll: false,
+          value: () => this.activeSlotForCurrentScope(),
+          onSelect: (slot) => {
+            if (slot !== null) {
+              this.selectScopePilot(slot);
+            }
+          },
+        })
+      );
+    }
 
     this.listen(el, "click", this.handleClick);
     this.listen(el, "input", this.handleInput);
@@ -282,12 +296,33 @@ export class PilotView extends Component {
   }
 
   private currentScope(): ResolvedAnalyticsScope {
-    return this.rootStore.resolveAnalyticsScope(getAnalyticsScope());
+    const raw = this.fixedScopeGetter ? this.fixedScopeGetter() : getAnalyticsScope();
+    return this.rootStore.resolveAnalyticsScope(raw);
   }
 
   private curatedSlotsForScope(resolved: ResolvedAnalyticsScope): number[] {
     const key = scopeStorageKey(resolved);
     const pool = this.rootStore.analyticsPilotPool(resolved);
+    if (this.fixedScopeGetter) {
+      const combined: number[] = [];
+      const seen = new Set<number>();
+      for (const p of pool.inScope) {
+        if (!seen.has(p.slotIndex) && pool.bySlot.has(p.slotIndex)) {
+          seen.add(p.slotIndex);
+          combined.push(p.slotIndex);
+        }
+      }
+      const laps = this.rootStore.analyticsLapsForScope(resolved);
+      for (const l of laps) {
+        if (!seen.has(l.slotIndex) && pool.bySlot.has(l.slotIndex)) {
+          seen.add(l.slotIndex);
+          combined.push(l.slotIndex);
+        }
+      }
+      if (combined.length > 0) return combined;
+      const firstGlobal = pool.globalOther[0];
+      return firstGlobal ? [firstGlobal.slotIndex] : [];
+    }
     const saved = this.pillsByScope[key];
     if (saved !== undefined) {
       const seen = new Set<number>();
@@ -340,6 +375,16 @@ export class PilotView extends Component {
     const key = scopeStorageKey(resolved);
     const slots = this.curatedSlotsForScope(resolved);
     if (slots.length === 0) return 0;
+    if (this.fixedScopeGetter && resolved.kind === "practice") {
+      const liveFocus = this.rootStore.liveFocus;
+      if (liveFocus !== null && slots.includes(liveFocus)) {
+        if (this.selectedByScope[key] !== liveFocus) {
+          this.selectedByScope[key] = liveFocus;
+          saveSelectedPilotMap(this.selectedByScope);
+        }
+        return liveFocus;
+      }
+    }
     const saved = this.selectedByScope[key];
     if (saved && slots.includes(saved)) return saved;
     return slots[0];
@@ -350,9 +395,18 @@ export class PilotView extends Component {
     const key = scopeStorageKey(resolved);
     const slots = this.curatedSlotsForScope(resolved);
     if (!slots.includes(slotIndex)) return;
-    if (this.selectedByScope[key] === slotIndex) return;
+    const isPracticeEmbedded = Boolean(this.fixedScopeGetter && resolved.kind === "practice");
+    if (
+      this.selectedByScope[key] === slotIndex &&
+      (!isPracticeEmbedded || this.rootStore.liveFocus === slotIndex)
+    ) {
+      return;
+    }
     this.selectedByScope[key] = slotIndex;
     saveSelectedPilotMap(this.selectedByScope);
+    if (isPracticeEmbedded && this.rootStore.liveFocus !== slotIndex) {
+      this.rootStore.setLiveFocus(slotIndex);
+    }
     this.scopedStore.setComparison({ lapId: null, reference: "best" });
     this.lastHeaderSig = "";
     this.syncAll();
@@ -514,7 +568,8 @@ export class PilotView extends Component {
   };
 
   private syncAll(): void {
-    const rawScope = getAnalyticsScope();
+    const isEmbedded = Boolean(this.fixedScopeGetter);
+    const rawScope = this.fixedScopeGetter ? this.fixedScopeGetter() : getAnalyticsScope();
     const chooserEl = this.slot("analytics-chooser");
     const emptyScopeEl = this.slot("analytics-empty-scope");
     const pickerRowEl = this.slot("picker-row");
@@ -527,8 +582,17 @@ export class PilotView extends Component {
       pickerRowEl.style.display = "none";
       emptyPillsEl.style.display = "none";
       bodyEl.style.display = "none";
+      if (this.isViewActive && !isEmbedded) {
+        setAnalyticsTopBarContext({
+          mode: "chooser",
+          scopeKind: "practice",
+          scopeId: "",
+          scopeName: "",
+          scopeLive: false,
+        });
+      }
       this.renderChooser();
-      if (this.rootStore.hasHydrated && getCurrentParsedHash().route === "pilot") {
+      if (!isEmbedded && this.rootStore.hasHydrated && getCurrentParsedHash().route === "pilot") {
         if (location.hash !== "#/pilot") {
           replaceAppHash("#/pilot");
         }
@@ -545,14 +609,15 @@ export class PilotView extends Component {
       pickerRowEl.style.display = "none";
       emptyPillsEl.style.display = "none";
       bodyEl.style.display = "";
-      if (this.rootStore.hasHydrated && getCurrentParsedHash().route === "pilot") {
+      if (!isEmbedded && this.rootStore.hasHydrated && getCurrentParsedHash().route === "pilot") {
         const desired = buildAnalyticsHash({ kind: resolved.kind, id: "" });
         if (location.hash !== desired) {
           replaceAppHash(desired);
         }
       }
-      if (this.isViewActive) {
+      if (this.isViewActive && !isEmbedded) {
         setAnalyticsTopBarContext({
+          mode: "scope",
           scopeKind: resolved.kind,
           scopeId: "",
           scopeName: "",
@@ -571,7 +636,7 @@ export class PilotView extends Component {
 
     emptyScopeEl.style.display = "none";
     pickerRowEl.style.display = "";
-    if (canonicalScopeId) {
+    if (!isEmbedded && canonicalScopeId) {
       if (this.lastByKind[resolved.kind] !== canonicalScopeId) {
         this.lastByKind[resolved.kind] = canonicalScopeId;
         saveLastByKind(this.lastByKind);
@@ -596,8 +661,9 @@ export class PilotView extends Component {
         }
       }
     }
-    if (this.isViewActive) {
+    if (this.isViewActive && !isEmbedded) {
       setAnalyticsTopBarContext({
+        mode: "scope",
         scopeKind: resolved.kind,
         scopeId: resolved.id,
         scopeName: resolved.name,
@@ -608,7 +674,14 @@ export class PilotView extends Component {
     const nextKey = scopeStorageKey(resolved);
     const scopeChanged = this.lastScopeKey !== "" && this.lastScopeKey !== nextKey;
     this.lastScopeKey = nextKey;
-    if (scopeChanged) {
+    const activeSlot = this.activeSlotForCurrentScope();
+    const pilotChanged =
+      this.lastActivePilotSlot !== 0 && this.lastActivePilotSlot !== activeSlot;
+    this.lastActivePilotSlot = activeSlot;
+    if (scopeChanged || pilotChanged) {
+      this.scopedStore.setComparison({ lapId: null, reference: "best" });
+      this.lapPicker.restoreDefaults();
+      this.lastHeaderSig = "";
       this.rootStore.notifySelectionChanged();
     }
 
@@ -723,10 +796,11 @@ export class PilotView extends Component {
     if (sig !== this.lastHeaderSig) {
       this.lastHeaderSig = sig;
 
-      const pillsHtml = pillSummaries
-        .map(({ p, lapsCount, onTrack }) => {
-          const active = p.slotIndex === activeSlot;
-          return `
+      if (!this.fixedScopeGetter) {
+        const pillsHtml = pillSummaries
+          .map(({ p, lapsCount, onTrack }) => {
+            const active = p.slotIndex === activeSlot;
+            return `
             <div
               class="pilot-chip analytics-pilot-pill ${active ? "is-active" : ""} ${onTrack ? "is-live" : ""}"
               role="tab"
@@ -749,10 +823,10 @@ export class PilotView extends Component {
                 ${icons.close(12)}
               </button>
             </div>`;
-        })
-        .join("");
+          })
+          .join("");
 
-      this.slot("pills-bar").innerHTML = `
+        this.slot("pills-bar").innerHTML = `
         <div class="pilot-picker analytics-pills-list" role="tablist" aria-label="Analytics pilots">
           ${pillsHtml}
         </div>
@@ -789,6 +863,7 @@ export class PilotView extends Component {
               : ""
           }
         </div>`;
+      }
 
       this.slot("scope-meta").innerHTML = `
         <span

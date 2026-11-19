@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/rand"
 	"sort"
+	"strings"
 
 	"slaprf/internal/domain"
 )
@@ -49,6 +50,467 @@ func GenerateTournament(cfg domain.RaceSetupConfig, roster []domain.PilotSlot, r
 		st.Edges = edges
 	}
 
+	ResolveTournament(&st, roster)
+	if st.ActiveHeatID == "" && st.NextReadyHeatID != "" {
+		st.ActiveHeatID = st.NextReadyHeatID
+	}
+	return st
+}
+
+// GenerateUnifiedTournament builds a single-graph tournament (`StageIndex = 1`, `TotalStages = 1`)
+// for any SlapRF template, wiring multi-phase templates (`qual_double_elim`, `qual_single_elim`,
+// `qual_mains`, `cpq_mains`, `qual_chase_the_ace`, and RotorHazard-style `qual_ladder_mains` / `ladder_mains`)
+// onto one unified round graph with direct `RoundConnection` wires and zero cross-stage portals.
+func GenerateUnifiedTournament(
+	cfg domain.RaceSetupConfig,
+	roster []domain.PilotSlot,
+	templateID string,
+	rngSeed int64,
+) domain.RaceTournamentState {
+	cfg = cfg.Normalized()
+	tpl := templateID
+
+	// Even when < 2 pilots are checked in yet, synthesize placeholder roster slots for non-OQ templates
+	// so the full round graph and downstream placeholders (Q1 -> W1 -> R1 -> Finals) populate immediately!
+	genRoster := roster
+	synthesizedPlaceholders := false
+	if len(genRoster) < 2 && cfg.MainFormat != domain.FormatOpenQualifier && tpl != "open_qualifier" {
+		synthesizedPlaceholders = true
+		targetPlaceholderCnt := cfg.PilotsPerHeat * 2
+		if cfg.MainFormat == domain.FormatQualifying || cfg.MainFormat == domain.FormatChaseTheAce || tpl == "round_robin" || tpl == "chase_the_ace" {
+			targetPlaceholderCnt = cfg.PilotsPerHeat
+		}
+		if targetPlaceholderCnt < 4 {
+			targetPlaceholderCnt = 4
+		}
+		genRoster = make([]domain.PilotSlot, targetPlaceholderCnt)
+		copy(genRoster, roster)
+	}
+
+	stripSynthesizedRootSeats := func(st *domain.RaceTournamentState) {
+		if !synthesizedPlaceholders {
+			return
+		}
+		realSlots := make(map[int]bool, len(roster))
+		for _, rp := range roster {
+			if rp.SlotIndex > 0 {
+				realSlots[rp.SlotIndex] = true
+			}
+		}
+		for hi := range st.Heats {
+			h := &st.Heats[hi]
+			hasReal := false
+			hasDownstreamFeeder := false
+			for si := range h.Seats {
+				s := &h.Seats[si]
+				if s.Feeder != nil && s.Feeder.FromStageSeed > 0 && s.Feeder.FromRoundID == "" && s.Feeder.FromHeatID == "" && s.Feeder.FromRoundColumn == 0 {
+					// Root placeholder seat: show Seed #k without stage-seed BYE collapse
+					seedNum := s.Feeder.FromStageSeed
+					s.Feeder = nil
+					s.SourceLabel = fmt.Sprintf("Seed #%d", seedNum)
+				} else if s.Feeder != nil {
+					hasDownstreamFeeder = true
+				}
+				if s.PilotSlotIndex > 0 && !realSlots[s.PilotSlotIndex] {
+					s.PilotSlotIndex = 0
+					s.Callsign = ""
+					s.PhoneticName = ""
+					s.Color = ""
+					if s.Seed > 0 {
+						s.SourceLabel = fmt.Sprintf("Seed #%d", s.Seed)
+					}
+				}
+				if s.PilotSlotIndex > 0 {
+					hasReal = true
+				}
+			}
+			if !hasReal && !hasDownstreamFeeder {
+				h.State = domain.HeatWaiting
+			}
+		}
+	}
+
+	if tpl == "qual_ladder_mains" || tpl == "ladder_mains" {
+		st := generateLadderMainsTournament(cfg, genRoster, tpl == "qual_ladder_mains", tpl, rngSeed)
+		stripSynthesizedRootSeats(&st)
+		ResolveTournament(&st, roster)
+		return st
+	}
+
+	isTwoPhase := cfg.Structure == domain.StructureTwoStage ||
+		tpl == "qual_double_elim" ||
+		tpl == "qual_single_elim" ||
+		tpl == "qual_mains" ||
+		tpl == "cpq_mains" ||
+		tpl == "qual_chase_the_ace"
+
+	if isTwoPhase {
+		twoCfg := cfg
+		twoCfg.Structure = domain.StructureTwoStage
+		st := GenerateTournament(twoCfg, genRoster, rngSeed)
+		st.TemplateID = tpl
+		MigrateLegacyStagesToUnifiedGraph(&st)
+		st.TemplateID = tpl
+		stripSynthesizedRootSeats(&st)
+		ResolveTournament(&st, roster)
+		if st.ActiveHeatID == "" && st.NextReadyHeatID != "" {
+			st.ActiveHeatID = st.NextReadyHeatID
+		}
+		return st
+	}
+
+	cfg.Structure = domain.StructureSingleStage
+	st := GenerateTournament(cfg, genRoster, rngSeed)
+	st.TemplateID = tpl
+	stripSynthesizedRootSeats(&st)
+	if cfg.MainFormat == domain.FormatOpenQualifier && len(roster) < 2 {
+		st.Generated = true
+		EnsureStagesMetadata(&st)
+		SyncRoundsMetadata(&st)
+	} else if synthesizedPlaceholders {
+		EnsureStagesMetadata(&st)
+		SyncRoundsMetadata(&st)
+		ResolveTournament(&st, roster)
+	}
+	return st
+}
+
+func generateLadderMainsTournament(
+	cfg domain.RaceSetupConfig,
+	roster []domain.PilotSlot,
+	withQualifying bool,
+	templateID string,
+	rngSeed int64,
+) domain.RaceTournamentState {
+	cfg = cfg.Normalized()
+	cfg.Structure = domain.StructureSingleStage
+	st := domain.RaceTournamentState{
+		TemplateID:       templateID,
+		Lifecycle:        domain.LifecycleDraft,
+		Mode:             domain.ModeRace,
+		Config:           cfg,
+		Generated:        len(roster) >= 2,
+		ActiveStageIndex: 1,
+		TotalStages:      1,
+		Heats:            []domain.RaceHeat{},
+		Edges:            []domain.BracketEdge{},
+		Rounds:           []domain.RaceRound{},
+		Connections:      []domain.RoundConnection{},
+		Standings:        []domain.TournamentStanding{},
+	}
+	if len(roster) < 2 {
+		return st
+	}
+
+	seeded := buildInitialSeeding(roster, cfg.Seeding, rngSeed)
+	k := cfg.PilotsPerHeat
+	if k < 2 {
+		k = 4
+	}
+	seatChannels := cfg.SeatChannels
+	if len(seatChannels) < k {
+		seatChannels = domain.DefaultSeatChannels(k)
+	}
+
+	qRounds := 0
+	lastQualRoundID := ""
+	if withQualifying {
+		qRounds = cfg.QualifyingRounds
+		if qRounds < 1 {
+			qRounds = 2
+		}
+		qualHeats := generateQualifyingHeats(cfg, seeded, 1, 0)
+		for rNum := 1; rNum <= qRounds; rNum++ {
+			rid := fmt.Sprintf("s1-c%d-qualifying", rNum)
+			st.Rounds = append(st.Rounds, domain.RaceRound{
+				ID:               rid,
+				StageIndex:       1,
+				Round:            rNum,
+				Column:           rNum,
+				BracketLane:      "qualifying",
+				Title:            fmt.Sprintf("Qualifying R%d", rNum),
+				StageFormat:      domain.FormatQualifying,
+				StartMode:        domain.StartModeStaggered,
+				TargetLaps:       cfg.QualifyingTargetLaps,
+				TimeLimitSec:     cfg.QualifyingTimeLimitSec,
+				QualifyingMetric: cfg.QualifyingMetric,
+				SeedSource:       map[bool]string{true: "all_active_pilots"}[rNum == 1],
+			})
+			if rNum > 1 {
+				prevID := fmt.Sprintf("s1-c%d-qualifying", rNum-1)
+				st.Connections = append(st.Connections, domain.RoundConnection{
+					ID:          fmt.Sprintf("conn-%s-%s-all_pilots", prevID, rid),
+					StageIndex:  1,
+					FromRoundID: prevID,
+					ToRoundID:   rid,
+					FromPort:    "right",
+					ToPort:      "left",
+					Mode:        "all_pilots",
+				})
+			}
+			lastQualRoundID = rid
+		}
+		for i := range qualHeats {
+			qualHeats[i].RoundID = fmt.Sprintf("s1-c%d-qualifying", qualHeats[i].Round)
+		}
+		st.Heats = append(st.Heats, qualHeats...)
+	}
+
+	effN := len(seeded)
+	if cfg.Stage2MaxSeeds > 0 && cfg.Stage2MaxSeeds < effN {
+		effN = cfg.Stage2MaxSeeds
+	}
+	if effN < 2 {
+		effN = 2
+	}
+
+	adv := k / 2
+	if adv < 1 {
+		adv = 1
+	}
+	step := k - adv
+	if step < 1 {
+		step = 1
+	}
+
+	type ladderSlice struct {
+		sStart int
+		sEnd   int
+	}
+	numMains := 1
+	if effN > k {
+		numMains = 1 + (effN-k+step-1)/step
+		if numMains > 8 {
+			numMains = 8
+		}
+	}
+	slices := make([]ladderSlice, numMains)
+	if numMains == 1 {
+		slices[0] = ladderSlice{sStart: 1, sEnd: effN}
+	} else {
+		curRank := 1
+		for mIdx := 0; mIdx < numMains-1; mIdx++ {
+			sEnd := curRank + step - 1
+			if sEnd > effN {
+				sEnd = effN
+			}
+			slices[mIdx] = ladderSlice{sStart: curRank, sEnd: sEnd}
+			curRank = sEnd + 1
+		}
+		if curRank > effN {
+			curRank = effN
+		}
+		slices[numMains-1] = ladderSlice{sStart: curRank, sEnd: effN}
+	}
+
+	lastCh := make(map[int]uint8)
+	for _, sp := range seeded {
+		if code := domain.EncodeBandChannel(sp.slot.Band, sp.slot.Channel); code > 0 {
+			lastCh[sp.slot.SlotIndex] = code
+		}
+	}
+
+	order := len(st.Heats)
+	prevMainHeatID := ""
+	prevMainRoundID := ""
+	prevMainTitle := ""
+	prevMainAdv := 0
+
+	// Generate from lowest main (e.g. C-Main) up to A-Main so execution order & columns flow left-to-right!
+	for execIdx := 0; execIdx < numMains; execIdx++ {
+		mIdx := numMains - 1 - execIdx
+		letter := string(rune('A' + mIdx))
+		roundTitle := fmt.Sprintf("%s-Main", letter)
+		col := qRounds + 1 + execIdx
+		roundNum := qRounds + 1 + execIdx
+		lane := "winners"
+		if mIdx == 0 {
+			lane = "finals"
+		}
+		roundID := fmt.Sprintf("s1-c%d-%s-main", col, strings.ToLower(letter))
+		heatID := fmt.Sprintf("%s1-1", letter)
+		if mIdx == 0 && cfg.FinalsFormat == domain.FinalsChaseTheAce {
+			heatID = "CTA-1"
+		}
+
+		sl := slices[mIdx]
+		seedSliceCount := 0
+		if sl.sEnd >= sl.sStart {
+			seedSliceCount = sl.sEnd - sl.sStart + 1
+		}
+		bumpCount := 0
+		if execIdx > 0 {
+			bumpCount = prevMainAdv
+		}
+		totalEntrants := seedSliceCount + bumpCount
+		expWin := EffectiveAdvance(adv, totalEntrants)
+		if mIdx == 0 {
+			expWin = 1
+		}
+
+		var seats []domain.HeatSeat
+		if withQualifying {
+			var feeders []domain.SeatFeeder
+			var labels []string
+			for rnk := sl.sStart; rnk <= sl.sEnd; rnk++ {
+				feeders = append(feeders, domain.SeatFeeder{
+					FromRoundID:       lastQualRoundID,
+					FromRoundColumn:   qRounds,
+					FromStandingsRank: rnk,
+					RankingMetric:     cfg.QualifyingMetric,
+				})
+				labels = append(labels, fmt.Sprintf("Seed #%d", rnk))
+			}
+			for b := 1; b <= bumpCount; b++ {
+				feeders = append(feeders, domain.SeatFeeder{
+					FromHeatID: prevMainHeatID,
+					FromRank:   b,
+				})
+				labels = append(labels, fmt.Sprintf("%s · %s", Ordinal(b), prevMainTitle))
+			}
+			seats = buildFeederSeats(feeders, seatChannels)
+			for si := range labels {
+				if si < len(seats) {
+					seats[si].SourceLabel = labels[si]
+				}
+			}
+		} else {
+			var knownGroup []seededPilot
+			for rnk := sl.sStart; rnk <= sl.sEnd && rnk <= len(seeded); rnk++ {
+				knownGroup = append(knownGroup, seeded[rnk-1])
+			}
+			seats = buildKnownSeats(knownGroup, seatChannels, lastCh, func(sp seededPilot) string {
+				return fmt.Sprintf("Seed #%d", sp.seed)
+			})
+			for b := 1; b <= bumpCount; b++ {
+				si := len(knownGroup) + b - 1
+				if si < len(seats) {
+					fc := domain.SeatFeeder{FromHeatID: prevMainHeatID, FromRank: b}
+					seats[si].Feeder = &fc
+					seats[si].SourceLabel = fmt.Sprintf("%s · %s", Ordinal(b), prevMainTitle)
+				}
+			}
+		}
+
+		heatState := domain.HeatWaiting
+		if !withQualifying && execIdx == 0 {
+			heatState = domain.HeatReady
+		}
+		hTitle := roundTitle
+		stageFmt := domain.FormatSingleElimination
+		if mIdx == 0 && cfg.FinalsFormat == domain.FinalsChaseTheAce {
+			stageFmt = domain.FormatChaseTheAce
+			hTitle = fmt.Sprintf("%s · Heat 1 (First to %d Wins)", roundTitle, cfg.AceWinsRequired)
+		}
+
+		order++
+		h := domain.RaceHeat{
+			ID:              heatID,
+			RoundID:         roundID,
+			StageIndex:      1,
+			StageName:       roundTitle,
+			StageFormat:     stageFmt,
+			Round:           roundNum,
+			Column:          col,
+			Order:           order,
+			BracketLane:     lane,
+			Division:        letter,
+			Title:           hTitle,
+			ShortLabel:      heatID,
+			StartMode:       domain.StartModeHeadsUp,
+			TargetLaps:      cfg.TargetLaps,
+			TimeLimitSec:    cfg.TimeLimitSec,
+			ExpectedWinners: expWin,
+			State:           heatState,
+			Seats:           seats,
+		}
+		RecomputeHeat(&h, cfg.QualifyingMetric)
+		st.Heats = append(st.Heats, h)
+
+		rnd := domain.RaceRound{
+			ID:           roundID,
+			StageIndex:   1,
+			Round:        roundNum,
+			Column:       col,
+			BracketLane:  lane,
+			Title:        roundTitle,
+			StageFormat:  stageFmt,
+			StartMode:    domain.StartModeHeadsUp,
+			TargetLaps:   cfg.TargetLaps,
+			TimeLimitSec: cfg.TimeLimitSec,
+			TargetHeats:  1,
+		}
+		if !withQualifying {
+			rnd.SeedSource = "all_active_pilots"
+			rnd.SeedDistribution = "sequential"
+		}
+		if mIdx == 0 {
+			fFmt := cfg.FinalsFormat
+			if fFmt == "" {
+				fFmt = domain.FinalsSingle
+			}
+			rnd.FinalsFormat = fFmt
+			rnd.AceWinsRequired = cfg.AceWinsRequired
+			if rnd.AceWinsRequired < 2 {
+				rnd.AceWinsRequired = 2
+			}
+			rnd.WinnersAdvantageAce = cfg.WinnersAdvantageAce
+		}
+		st.Rounds = append(st.Rounds, rnd)
+
+		if withQualifying && lastQualRoundID != "" && seedSliceCount > 0 {
+			st.Connections = append(st.Connections, domain.RoundConnection{
+				ID:            fmt.Sprintf("conn-%s-%s-standings_top", lastQualRoundID, roundID),
+				StageIndex:    1,
+				FromRoundID:   lastQualRoundID,
+				ToRoundID:     roundID,
+				FromPort:      "right",
+				ToPort:        "left",
+				Mode:          "standings_top",
+				Count:         seedSliceCount,
+				CustomCount:   true,
+				SeedStart:     sl.sStart,
+				SeedEnd:       sl.sEnd,
+				Distribution:  "sequential",
+				RankingMetric: cfg.QualifyingMetric,
+			})
+		}
+		if execIdx > 0 && prevMainRoundID != "" && bumpCount > 0 {
+			st.Connections = append(st.Connections, domain.RoundConnection{
+				ID:          fmt.Sprintf("conn-%s-%s-top_per_heat", prevMainRoundID, roundID),
+				StageIndex:  1,
+				FromRoundID: prevMainRoundID,
+				ToRoundID:   roundID,
+				FromPort:    "right",
+				ToPort:      "left",
+				Mode:        "top_per_heat",
+				Count:       bumpCount,
+				CustomCount: true,
+			})
+		}
+
+		prevMainHeatID = heatID
+		prevMainRoundID = roundID
+		prevMainTitle = roundTitle
+		prevMainAdv = expWin
+	}
+
+	st.Stages = []domain.RaceStage{
+		{
+			ID:         "stage-1",
+			Index:      1,
+			Title:      "Ladder Mains",
+			Format:     domain.FormatCustom,
+			Customized: false,
+			Status:     domain.StageStatusActive,
+			Settings:   domain.DefaultStageSettingsFromConfig(cfg, domain.FormatSingleElimination),
+			HasPos:     true,
+			PosX:       120,
+			PosY:       180,
+		},
+	}
+
+	RebuildEdgesFromFeeders(&st)
 	ResolveTournament(&st, roster)
 	if st.ActiveHeatID == "" && st.NextReadyHeatID != "" {
 		st.ActiveHeatID = st.NextReadyHeatID

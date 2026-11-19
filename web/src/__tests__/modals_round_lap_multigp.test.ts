@@ -137,10 +137,10 @@ describe("widgets/RoundModals — Templates, Race Settings & Stage Settings", ()
     expect(heatsNote.querySelector("svg")).not.toBeNull();
     expect(heatsNote.textContent).toContain("1 unstarted");
 
-    // Click quick tag suggestion "+ Finals" AND type pending tag "Night" without pressing Enter
-    backdrop.querySelector<HTMLButtonElement>("[data-modal-suggest-tag='Finals']")!.click();
+    // Type custom tags "Finals, Night" in the tag input (no tag suggestions shown)
+    expect(backdrop.querySelector("[data-modal-suggest-tag]")).toBeNull();
     const tagInput = backdrop.querySelector<HTMLInputElement>("[data-tag-box-input]")!;
-    tagInput.value = "Night";
+    tagInput.value = "Finals, Night";
 
     // Swap Seat 1 channel from R1 -> R3 (already occupied by Seat 2) -> Seat 2 automatically swaps to R1!
     const seat0Trigger = backdrop.querySelector<HTMLButtonElement>("[data-modal-seat-idx='0']")!;
@@ -276,42 +276,42 @@ describe("widgets/HeatLapEditorModal — RSSI Trace, Crossing Pins & Marshal Act
     expect(backdrop.querySelector("[data-lap-ed-svg]")).not.toBeNull();
     expect(backdrop.textContent).toContain("Maverick");
 
-    // Toggle lap validity on crossing 101 -> dispatches raceMarshal toggle_lap
-    const toggleBtn = backdrop.querySelector<HTMLButtonElement>("[data-lap-ed-toggle='101']")!;
+    // Toggle lap validity on crossing 102 and append synthetic lap at end -> staged in draft, then Save dispatches raceMarshal
+    const toggleBtn = backdrop.querySelector<HTMLButtonElement>("[data-lap-ed-toggle='102']")!;
     expect(toggleBtn).not.toBeNull();
     toggleBtn.click();
+    backdrop.querySelector<HTMLButtonElement>("[data-lap-ed-add-end]")!.click();
+    backdrop.querySelector<HTMLButtonElement>("[data-lap-ed-save]")!.click();
+    await flushMicrotasks();
     await flushMicrotasks();
     expect(
       calls.some(
         (c) =>
           c.method === "raceMarshal" &&
           (c.args[0] as { action: string; crossingId: number }).action === "toggle_lap" &&
-          (c.args[0] as { crossingId: number }).crossingId === 101
+          (c.args[0] as { crossingId: number }).crossingId === 102
       )
     ).toBe(true);
-
-    // Append synthetic lap at end -> dispatches raceMarshal add_lap
-    backdrop.querySelector<HTMLButtonElement>("[data-lap-ed-add-end]")!.click();
-    await flushMicrotasks();
     expect(
       calls.some(
         (c) =>
           c.method === "raceMarshal" &&
-          (c.args[0] as { action: string }).action === "add_lap"
+          (c.args[0] as { action: string }).action === "add_crossing"
       )
     ).toBe(true);
 
-    // Switch to Pilot 2 (Iceman, LapRF >100 trace) -> renders cleanly without errors
-    backdrop.querySelector<HTMLButtonElement>("[data-lap-ed-pilot='2']")!.click();
-    expect(backdrop.querySelector("[data-lap-ed-svg]")).not.toBeNull();
+    // Open Pilot 2 (Iceman, LapRF >100 trace) -> renders cleanly without errors
+    openHeatLapEditorModal(store, api, "Q1-H1", 2, "race-lap-ed");
+    const backdrop2 = document.querySelector<HTMLElement>(".slaprf-modal-backdrop")!;
+    expect(backdrop2.querySelector("[data-lap-ed-svg]")).not.toBeNull();
 
     // Enter Add Crossing mode -> first Escape exits addMode without closing modal; second Escape closes modal!
-    backdrop.querySelector<HTMLButtonElement>("[data-lap-ed-add-mode]")!.click();
-    expect(backdrop.textContent).toContain("Click Graph to Drop");
+    backdrop2.querySelector<HTMLButtonElement>("[data-lap-ed-add-mode]")!.click();
+    expect(backdrop2.textContent).toContain("Click Graph to Drop");
 
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(document.querySelector(".slaprf-modal-backdrop")).not.toBeNull();
-    expect(backdrop.textContent).toContain("Add Crossing");
+    expect(backdrop2.textContent).toContain("Add Crossing");
 
     window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     expect(document.querySelector(".slaprf-modal-backdrop")).toBeNull();
@@ -407,7 +407,7 @@ describe("widgets/MultiGPRaceModals — Download & Results Sync Flows", () => {
 
     const backdrop = document.querySelector<HTMLElement>(".slaprf-modal-backdrop")!;
     expect(backdrop).not.toBeNull();
-    expect(backdrop.querySelector("h3")?.textContent).toBe("Upload to MultiGP");
+    expect(backdrop.querySelector("h3")?.textContent).toBe("Completed Heats");
     expect(backdrop.querySelector(".mgp-modal-meta-left")?.textContent?.replace(/\s+/g, " ").trim()).toBe(
       "Bay Area Championship - MultiGP #501"
     );

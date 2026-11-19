@@ -69,6 +69,7 @@ func ResolveTournamentWithAttendance(
 	}
 
 	EnsureStagesMetadata(st)
+	SyncRoundsMetadata(st)
 
 	stageByIdx := make(map[int]*domain.RaceStage, len(st.Stages))
 	for i := range st.Stages {
@@ -79,6 +80,7 @@ func ResolveTournamentWithAttendance(
 	heatByID := make(map[string]*domain.RaceHeat, len(st.Heats))
 	hasOutgoingFeeder := make(map[string]bool, len(st.Heats))
 	hasOutgoingCol := make(map[[2]int]bool)
+	hasOutgoingRound := make(map[string]bool)
 	heatsPerStage := make(map[int]int)
 	confirmedPerStage := make(map[int]int)
 	for i := range st.Heats {
@@ -94,6 +96,9 @@ func ResolveTournamentWithAttendance(
 				}
 				if s.Feeder.FromRoundColumn > 0 {
 					hasOutgoingCol[[2]int{st.Heats[i].StageIndex, s.Feeder.FromRoundColumn}] = true
+				}
+				if s.Feeder.FromRoundID != "" {
+					hasOutgoingRound[s.Feeder.FromRoundID] = true
 				}
 			}
 		}
@@ -197,16 +202,30 @@ func ResolveTournamentWithAttendance(
 					continue
 				}
 				hasFeeders := false
+				hasSeatedPilot := false
 				for _, s := range h.Seats {
 					if s.Feeder != nil {
 						hasFeeders = true
-						break
+					}
+					if s.PilotSlotIndex > 0 && s.Status != domain.PilotHeatDNS && s.Status != domain.PilotHeatDQ {
+						hasSeatedPilot = true
 					}
 				}
 				if !hasFeeders {
+					if h.State == domain.HeatWaiting && hasSeatedPilot && stageSeedsReady[sIdx] {
+						h.State = domain.HeatReady
+						changed = true
+					} else if (h.State == domain.HeatReady || h.State == domain.HeatStaged) && !hasSeatedPilot {
+						h.State = domain.HeatWaiting
+						changed = true
+					}
 					continue
 				}
-				if h.State == domain.HeatConfirmed && h.Note != "Auto-advance (bye)" {
+				if (h.State == domain.HeatConfirmed && h.Note != "Auto-advance (bye)") ||
+					h.State == domain.HeatFinished ||
+					h.State == domain.HeatRunning ||
+					h.State == domain.HeatPaused ||
+					h.State == domain.HeatCountdown {
 					continue
 				}
 
@@ -272,34 +291,24 @@ func ResolveTournamentWithAttendance(
 						}
 						continue
 					}
-					if s.Feeder.IsBye && s.Feeder.FromHeatID == "" && s.Feeder.FromRoundColumn == 0 {
+					if s.Feeder.IsBye && s.Feeder.FromHeatID == "" && s.Feeder.FromRoundColumn == 0 && s.Feeder.FromRoundID == "" {
 						if s.PilotSlotIndex != 0 {
 							clearFedSeat(s)
 							changed = true
 						}
 						continue
 					}
-					if s.Feeder.FromHeatID == "" && s.Feeder.FromRoundColumn > 0 && s.Feeder.FromStandingsRank > 0 {
-						hasAnyInCols := false
-						colsConfirmed := true
-						for _, uh := range st.Heats {
-							if uh.StageIndex == h.StageIndex && uh.Column <= s.Feeder.FromRoundColumn && uh.ID != h.ID {
-								hasAnyInCols = true
-								if uh.State != domain.HeatConfirmed {
-									colsConfirmed = false
-									break
-								}
-							}
-						}
-						if !hasAnyInCols || !colsConfirmed {
+					if s.Feeder.FromHeatID == "" && (s.Feeder.FromRoundID != "" || s.Feeder.FromRoundColumn > 0) && s.Feeder.FromStandingsRank > 0 {
+						if !IsStandingsFeederReady(st, h.RoundID, h.StageIndex, h.ID, *s.Feeder) {
 							allFeedersConfirmed = false
+							s.Feeder.IsBye = false
 							if s.PilotSlotIndex != 0 {
 								clearFedSeat(s)
 								changed = true
 							}
 							continue
 						}
-						ranked := ComputeStandingsUpToColumn(st, effectiveRoster, h.StageIndex, s.Feeder.FromRoundColumn)
+						ranked := ComputeStandingsForFeeder(st, effectiveRoster, h.StageIndex, *s.Feeder)
 						if s.Feeder.FromStandingsRank > len(ranked) {
 							s.Feeder.IsBye = true
 							if s.PilotSlotIndex != 0 {
@@ -311,7 +320,7 @@ func ResolveTournamentWithAttendance(
 						s.Feeder.IsBye = false
 						picked := ranked[s.Feeder.FromStandingsRank-1]
 						isAbsent := attendance != nil && attendance[picked.PilotSlotIndex].IsAbsent()
-						if s.PilotSlotIndex != picked.PilotSlotIndex {
+						if s.PilotSlotIndex != picked.PilotSlotIndex || s.Seed != picked.Rank {
 							s.PilotSlotIndex = picked.PilotSlotIndex
 							s.Callsign = picked.Callsign
 							s.PhoneticName = picked.PhoneticName
@@ -333,14 +342,33 @@ func ResolveTournamentWithAttendance(
 						continue
 					}
 					src := heatByID[s.Feeder.FromHeatID]
-					if src != nil && src.State != domain.HeatWaiting {
-						srcContenders := 0
-						for _, us := range src.Seats {
-							if us.PilotSlotIndex > 0 && us.Status != domain.PilotHeatDNS && us.Status != domain.PilotHeatDQ {
-								srcContenders++
+					if src != nil {
+						if src.State != domain.HeatWaiting {
+							srcContenders := 0
+							for _, us := range src.Seats {
+								if us.PilotSlotIndex > 0 && us.Status != domain.PilotHeatDNS && us.Status != domain.PilotHeatDQ {
+									srcContenders++
+								}
+							}
+							newBye := s.Feeder.FromRank > srcContenders
+							if s.Feeder.IsBye != newBye {
+								s.Feeder.IsBye = newBye
+								changed = true
+							}
+						} else {
+							maxPossible := 0
+							for _, us := range src.Seats {
+								if (us.PilotSlotIndex > 0 && us.Status != domain.PilotHeatDNS && us.Status != domain.PilotHeatDQ) ||
+									(us.PilotSlotIndex == 0 && us.Feeder != nil && !us.Feeder.IsBye) {
+									maxPossible++
+								}
+							}
+							newBye := maxPossible > 0 && s.Feeder.FromRank > maxPossible
+							if s.Feeder.IsBye != newBye {
+								s.Feeder.IsBye = newBye
+								changed = true
 							}
 						}
-						s.Feeder.IsBye = s.Feeder.FromRank > srcContenders
 					}
 					if src == nil || src.State != domain.HeatConfirmed {
 						allFeedersConfirmed = false
@@ -384,7 +412,7 @@ func ResolveTournamentWithAttendance(
 					reassignFedHeatChannels(h, stgSettings.SeatChannels, lastCh)
 					RecomputeHeat(h, stgSettings.QualifyingMetric)
 
-					isIntermediate := h.BracketLane != "finals" && (hasOutgoingFeeder[h.ID] || hasOutgoingCol[[2]int{h.StageIndex, h.Column}])
+					isIntermediate := h.BracketLane != "finals" && (hasOutgoingFeeder[h.ID] || hasOutgoingCol[[2]int{h.StageIndex, h.Column}] || hasOutgoingRound[h.RoundID])
 					if isIntermediate && filledPilots == 0 {
 						if h.State != domain.HeatConfirmed {
 							for si := range h.Seats {
@@ -484,16 +512,13 @@ func ResolveTournamentWithAttendance(
 			}
 		}
 
-		// Sync legacy 2-stage fields
-		if st.Stages[0].Format == domain.FormatQualifying || len(st.Stages) >= 2 {
-			st.QualStandings = append([]domain.TournamentStanding(nil), st.Stages[0].Standings...)
-		}
+		// Sync qualifying status & standings across both legacy 2-stage and unified single-graph tournaments
 		if len(st.Stages) >= 2 {
+			st.QualStandings = append([]domain.TournamentStanding(nil), st.Stages[0].Standings...)
 			st.QualifyingComplete = stageCompleted[1]
 			st.CanStartStage2 = confirmedPerStage[1] > 0 && !stageSeedsReady[2] && heatsPerStage[2] > 0
 		} else {
-			st.QualifyingComplete = false
-			st.CanStartStage2 = false
+			syncUnifiedQualifyingStatus(st, effectiveRoster)
 		}
 
 		// Overall race completion: all terminal stages completed and no non-terminal stage pending/running
@@ -541,7 +566,9 @@ func ResolveTournamentWithAttendance(
 	activeStg := stageByIdx[st.ActiveStageIndex]
 	if activeStg == nil || (activeStg.PrerequisitesMet && !activeStg.PausedByUser) {
 		for _, h := range st.Heats {
-			if h.StageIndex == st.ActiveStageIndex && (h.State == domain.HeatReady || h.State == domain.HeatStaged) {
+			if h.StageIndex == st.ActiveStageIndex &&
+				(h.State == domain.HeatReady || h.State == domain.HeatStaged) &&
+				!IsRoundSkippedByEarlySeed(st, h.RoundID) {
 				st.NextReadyHeatID = h.ID
 				break
 			}
@@ -554,7 +581,11 @@ func ResolveTournamentWithAttendance(
 		} else if curHeat.State == domain.HeatWaiting {
 			if curStg := stageByIdx[curHeat.StageIndex]; curStg != nil && !curStg.PrerequisitesMet {
 				st.ActiveHeatID = st.NextReadyHeatID
+			} else if len(st.Stages) <= 1 {
+				st.ActiveHeatID = st.NextReadyHeatID
 			}
+		} else if (curHeat.State == domain.HeatReady || curHeat.State == domain.HeatStaged) && IsRoundSkippedByEarlySeed(st, curHeat.RoundID) {
+			st.ActiveHeatID = st.NextReadyHeatID
 		}
 	}
 
@@ -836,32 +867,74 @@ func findStagePtr(st *domain.RaceTournamentState, stageIdx int) *domain.RaceStag
 	return nil
 }
 
-func stageFinalsRound(st *domain.RaceTournamentState, stageIdx int) *domain.RaceRound {
+func stageFinalsRounds(st *domain.RaceTournamentState, stageIdx int) []*domain.RaceRound {
+	var out []*domain.RaceRound
 	for i := range st.Rounds {
 		if st.Rounds[i].StageIndex == stageIdx && st.Rounds[i].BracketLane == "finals" {
-			return &st.Rounds[i]
+			out = append(out, &st.Rounds[i])
 		}
 	}
-	return nil
+	if len(out) > 1 {
+		primaryScore := func(r *domain.RaceRound) int {
+			tl := strings.ToLower(strings.TrimSpace(r.Title))
+			if strings.Contains(tl, "a-main") || strings.Contains(tl, "a main") || tl == "grand final" || tl == "finals" {
+				return 0
+			}
+			if strings.Contains(tl, "b-main") || strings.Contains(tl, "b main") {
+				return 2
+			}
+			return 1
+		}
+		sort.SliceStable(out, func(i, j int) bool {
+			pi, pj := primaryScore(out[i]), primaryScore(out[j])
+			if pi != pj {
+				return pi < pj
+			}
+			if out[i].HasPos && out[j].HasPos && out[i].PosY != out[j].PosY {
+				return out[i].PosY < out[j].PosY
+			}
+			if out[i].Column != out[j].Column {
+				return out[i].Column > out[j].Column
+			}
+			return out[i].Round < out[j].Round
+		})
+	}
+	return out
 }
 
-func resolveChaseTheAceForStage(
+func stageFinalsRound(st *domain.RaceTournamentState, stageIdx int) *domain.RaceRound {
+	list := stageFinalsRounds(st, stageIdx)
+	if len(list) == 0 {
+		return nil
+	}
+	return list[0]
+}
+
+func resolveSingleCTAFinals(
 	st *domain.RaceTournamentState,
 	stageIdx int,
+	finalsRnd *domain.RaceRound,
 	attendance map[int]domain.PilotAttendance,
 ) (bool, int, string) {
 	stg := findStagePtr(st, stageIdx)
-	finalsRnd := stageFinalsRound(st, stageIdx)
-	isCTAFinalsRound := finalsRnd != nil && (finalsRnd.FinalsFormat == domain.FinalsChaseTheAce || finalsRnd.StageFormat == domain.FormatChaseTheAce)
-	isCTAStage := stg != nil && stg.Format == domain.FormatChaseTheAce
+	isCTAStage := finalsRnd == nil && stg != nil && stg.Format == domain.FormatChaseTheAce
+
+	isMatch := func(h domain.RaceHeat) bool {
+		if h.StageIndex != stageIdx {
+			return false
+		}
+		if finalsRnd != nil {
+			return h.RoundID == finalsRnd.ID
+		}
+		if isCTAHeatID(h.ID) {
+			return true
+		}
+		return isCTAStage && h.BracketLane == "finals"
+	}
 
 	var ctaIndices []int
 	for i := range st.Heats {
-		h := &st.Heats[i]
-		if h.StageIndex != stageIdx {
-			continue
-		}
-		if isCTAHeatID(h.ID) || (isCTAFinalsRound && h.RoundID == finalsRnd.ID) || (isCTAStage && h.BracketLane == "finals") {
+		if isMatch(st.Heats[i]) {
 			ctaIndices = append(ctaIndices, i)
 		}
 	}
@@ -870,19 +943,6 @@ func resolveChaseTheAceForStage(
 	}
 
 	firstCTA := &st.Heats[ctaIndices[0]]
-	isMatch := func(h domain.RaceHeat) bool {
-		if h.StageIndex != stageIdx {
-			return false
-		}
-		if isCTAHeatID(h.ID) {
-			return true
-		}
-		if isCTAFinalsRound && h.RoundID == finalsRnd.ID {
-			return true
-		}
-		return isCTAStage && h.BracketLane == "finals"
-	}
-
 	if firstCTA.State == domain.HeatWaiting {
 		// Trim any extra CTA heats if CTA-1 reverted to waiting
 		if len(ctaIndices) > 1 {
@@ -1041,6 +1101,14 @@ func resolveChaseTheAceForStage(
 			}
 			prefix := ctaPrefixForHeat(firstCTA.ID, stageIdx)
 			nextID := fmt.Sprintf("%s-%d", prefix, nextNum)
+			usedIDs := make(map[string]bool, len(st.Heats))
+			for _, eh := range st.Heats {
+				usedIDs[eh.ID] = true
+			}
+			for usedIDs[nextID] {
+				nextNum++
+				nextID = fmt.Sprintf("%s-%d", prefix, nextNum)
+			}
 			nextHeat := domain.RaceHeat{
 				ID:              nextID,
 				RoundID:         firstCTA.RoundID,
@@ -1067,6 +1135,127 @@ func resolveChaseTheAceForStage(
 	return false, 0, ""
 }
 
+func resolveChaseTheAceForStage(
+	st *domain.RaceTournamentState,
+	stageIdx int,
+	attendance map[int]domain.PilotAttendance,
+) (bool, int, string) {
+	finalsList := stageFinalsRounds(st, stageIdx)
+	var ctaRounds []*domain.RaceRound
+	for _, fr := range finalsList {
+		if fr.FinalsFormat == domain.FinalsChaseTheAce || fr.StageFormat == domain.FormatChaseTheAce {
+			ctaRounds = append(ctaRounds, fr)
+		}
+	}
+	if len(ctaRounds) == 0 {
+		return resolveSingleCTAFinals(st, stageIdx, nil, attendance)
+	}
+	allDone := true
+	primaryChampSlot := 0
+	primaryChampName := ""
+	for idx, fr := range ctaRounds {
+		done, cSlot, cName := resolveSingleCTAFinals(st, stageIdx, fr, attendance)
+		if !done {
+			allDone = false
+		}
+		if idx == 0 && done {
+			primaryChampSlot = cSlot
+			primaryChampName = cName
+		}
+	}
+	return allDone && len(finalsList) == len(ctaRounds), primaryChampSlot, primaryChampName
+}
+
+func resolveSingleFinalsRoundWinner(finalsRnd *domain.RaceRound, finalsHeats []*domain.RaceHeat) (bool, int, string) {
+	if len(finalsHeats) == 0 {
+		return false, 0, ""
+	}
+	for _, fh := range finalsHeats {
+		if fh.State != domain.HeatConfirmed {
+			return false, 0, ""
+		}
+	}
+	if len(finalsHeats) == 1 && (finalsRnd == nil || finalsRnd.FinalsFormat != domain.FinalsPoints) {
+		winner := findPilotAtRank(finalsHeats[0], 1)
+		if winner != nil {
+			return true, winner.PilotSlotIndex, winner.Callsign
+		}
+		return true, 0, ""
+	}
+
+	type finalsScore struct {
+		slot       int
+		callsign   string
+		points     int
+		wins       int
+		laps       int
+		bestLapSec float64
+		lastPos    int
+	}
+	scores := make(map[int]*finalsScore)
+	for _, fh := range finalsHeats {
+		for _, s := range fh.Seats {
+			if s.PilotSlotIndex <= 0 || s.Status == domain.PilotHeatDNS || s.Status == domain.PilotHeatDQ {
+				continue
+			}
+			sc := scores[s.PilotSlotIndex]
+			if sc == nil {
+				sc = &finalsScore{slot: s.PilotSlotIndex, callsign: s.Callsign, lastPos: 99}
+				scores[s.PilotSlotIndex] = sc
+			}
+			sc.points += s.Points
+			sc.laps += s.LapsCompleted
+			if s.Position == 1 {
+				sc.wins++
+			}
+			if s.Position > 0 {
+				sc.lastPos = s.Position
+			}
+			if s.BestLapSec > 0 && (sc.bestLapSec == 0 || s.BestLapSec < sc.bestLapSec) {
+				sc.bestLapSec = s.BestLapSec
+			}
+		}
+	}
+	var best *finalsScore
+	for _, sc := range scores {
+		if best == nil {
+			best = sc
+			continue
+		}
+		if sc.points != best.points {
+			if sc.points > best.points {
+				best = sc
+			}
+			continue
+		}
+		if sc.wins != best.wins {
+			if sc.wins > best.wins {
+				best = sc
+			}
+			continue
+		}
+		if sc.laps != best.laps {
+			if sc.laps > best.laps {
+				best = sc
+			}
+			continue
+		}
+		if sc.bestLapSec > 0 && best.bestLapSec > 0 && sc.bestLapSec != best.bestLapSec {
+			if sc.bestLapSec < best.bestLapSec {
+				best = sc
+			}
+			continue
+		}
+		if sc.lastPos < best.lastPos {
+			best = sc
+		}
+	}
+	if best != nil {
+		return true, best.slot, best.callsign
+	}
+	return true, 0, ""
+}
+
 func resolveStageCompletionAndChampion(
 	st *domain.RaceTournamentState,
 	stageIdx int,
@@ -1078,42 +1267,143 @@ func resolveStageCompletionAndChampion(
 	if stg != nil && !stg.PrerequisitesMet {
 		return false, 0, ""
 	}
-	if ctaComplete {
-		return true, ctaChampSlot, ctaChampName
-	}
 
-	if stg != nil && stg.CompletedEarly {
+	if stg != nil && stg.CompletedEarly && len(OutgoingStageConnections(st, stageIdx)) > 0 {
 		for _, h := range st.Heats {
 			if h.StageIndex == stageIdx && h.State == domain.HeatConfirmed {
 				return true, 0, ""
 			}
 		}
 	}
-	if (stg != nil && stg.Format == domain.FormatOpenQualifier) || (stg == nil && st.Config.MainFormat == domain.FormatOpenQualifier) {
-		// Open Qualifier stays open all day so pilots can queue ad-hoc packs; it completes only when
-		// the organizer explicitly completes the stage (`CompletedEarly`) or completes the race.
+
+	// Check if stage is purely an Open Qualifier (no downstream non-open-qual rounds)
+	hasNonOQRound := false
+	hasUnclosedOQRound := false
+	for _, r := range st.Rounds {
+		if r.StageIndex != stageIdx || domain.IsStagePortalRoundID(r.ID) {
+			continue
+		}
+		isOQ := r.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(r.ID)
+		if !isOQ {
+			hasNonOQRound = true
+		} else if !IsRoundSkippedByEarlySeed(st, r.ID) && (stg == nil || !stg.CompletedEarly) && st.Lifecycle != domain.LifecycleCompleted {
+			hasUnclosedOQRound = true
+		}
+	}
+	if !hasNonOQRound && ((stg != nil && stg.Format == domain.FormatOpenQualifier) || (stg == nil && st.Config.MainFormat == domain.FormatOpenQualifier)) {
 		if (stg != nil && stg.CompletedEarly) || st.Lifecycle == domain.LifecycleCompleted {
 			return true, 0, ""
 		}
 		return false, 0, ""
 	}
-	if stg != nil && stg.Format == domain.FormatQualifying {
+	if hasUnclosedOQRound {
+		return false, 0, ""
+	}
+
+	if stg != nil && stg.Format == domain.FormatQualifying && !hasNonOQRound {
+		// Pure qualifying stage
 		feedHeats := stageFeedingHeats(st, stageIdx)
 		if len(feedHeats) == 0 {
 			return false, 0, ""
 		}
 		for _, fh := range feedHeats {
-			if fh.State != domain.HeatConfirmed {
+			if fh.State != domain.HeatConfirmed && !IsRoundSkippedByEarlySeed(st, fh.RoundID) {
 				return false, 0, ""
 			}
 		}
 		return true, 0, ""
 	}
 
-	finalsRnd := stageFinalsRound(st, stageIdx)
-	if finalsRnd != nil && (finalsRnd.FinalsFormat == domain.FinalsChaseTheAce || finalsRnd.StageFormat == domain.FormatChaseTheAce) {
-		return false, 0, ""
+	// Ensure all non-skipped heats in `stageIdx` are confirmed before declaring completion
+	hasAnyConfirmedOrActiveHeat := false
+	for _, h := range st.Heats {
+		if h.StageIndex != stageIdx {
+			continue
+		}
+		if IsRoundSkippedByEarlySeed(st, h.RoundID) && (h.State == domain.HeatWaiting || h.State == domain.HeatReady || h.State == domain.HeatStaged) {
+			continue
+		}
+		hasAnyConfirmedOrActiveHeat = true
+		if h.State != domain.HeatConfirmed {
+			return false, 0, ""
+		}
 	}
+
+	if ctaComplete {
+		return true, ctaChampSlot, ctaChampName
+	}
+
+	finalsList := stageFinalsRounds(st, stageIdx)
+	if len(finalsList) > 0 {
+		primaryChampSlot := 0
+		primaryChampName := ""
+		for idx, fr := range finalsList {
+			isCTA := fr.FinalsFormat == domain.FinalsChaseTheAce || fr.StageFormat == domain.FormatChaseTheAce
+			if isCTA {
+				// Validate CTA winner was decided for this Finals round
+				var ctaHeats []*domain.RaceHeat
+				for i := range st.Heats {
+					if st.Heats[i].StageIndex == stageIdx && st.Heats[i].RoundID == fr.ID {
+						ctaHeats = append(ctaHeats, &st.Heats[i])
+					}
+				}
+				if len(ctaHeats) == 0 {
+					return false, 0, ""
+				}
+				reqWins := fr.AceWinsRequired
+				if reqWins < 2 {
+					reqWins = st.Config.AceWinsRequired
+				}
+				if reqWins < 2 {
+					reqWins = 2
+				}
+				lastH := ctaHeats[len(ctaHeats)-1]
+				decidedSlot := 0
+				decidedName := ""
+				activeCnt := 0
+				var loneContender domain.HeatSeat
+				for _, s := range lastH.Seats {
+					if s.PilotSlotIndex > 0 && s.Status != domain.PilotHeatDQ && s.Status != domain.PilotHeatDNS {
+						activeCnt++
+						loneContender = s
+						if s.AceWinsAfter >= reqWins && decidedSlot == 0 {
+							decidedSlot = s.PilotSlotIndex
+							decidedName = s.Callsign
+						}
+					}
+				}
+				if decidedSlot == 0 && activeCnt == 1 {
+					decidedSlot = loneContender.PilotSlotIndex
+					decidedName = loneContender.Callsign
+				}
+				if decidedSlot == 0 && len(ctaHeats) < 12 {
+					return false, 0, ""
+				}
+				if idx == 0 {
+					primaryChampSlot = decidedSlot
+					primaryChampName = decidedName
+				}
+				continue
+			}
+
+			var rHeats []*domain.RaceHeat
+			for i := range st.Heats {
+				if st.Heats[i].StageIndex == stageIdx && st.Heats[i].RoundID == fr.ID {
+					rHeats = append(rHeats, &st.Heats[i])
+				}
+			}
+			done, cSlot, cName := resolveSingleFinalsRoundWinner(fr, rHeats)
+			if !done {
+				return false, 0, ""
+			}
+			if idx == 0 {
+				primaryChampSlot = cSlot
+				primaryChampName = cName
+			}
+		}
+		return true, primaryChampSlot, primaryChampName
+	}
+
 	if stg != nil && stg.Format == domain.FormatChaseTheAce {
 		return false, 0, ""
 	}
@@ -1123,119 +1413,19 @@ func resolveStageCompletionAndChampion(
 		}
 	}
 
-	// Collect all heats belonging to the stage's Championship Finals round (if one exists)
-	var finalsHeats []*domain.RaceHeat
+	// Legacy fallback for Grand Final heats without an explicit Finals Round struct
+	var legacyFinals []*domain.RaceHeat
 	for i := range st.Heats {
 		h := &st.Heats[i]
-		if h.StageIndex != stageIdx {
-			continue
-		}
-		if (finalsRnd != nil && h.RoundID == finalsRnd.ID) || h.BracketLane == "finals" || isGrandFinalHeatID(h.ID) {
-			finalsHeats = append(finalsHeats, h)
+		if h.StageIndex == stageIdx && (h.BracketLane == "finals" || isGrandFinalHeatID(h.ID)) {
+			legacyFinals = append(legacyFinals, h)
 		}
 	}
-
-	if len(finalsHeats) > 0 {
-		for _, fh := range finalsHeats {
-			if fh.State != domain.HeatConfirmed {
-				return false, 0, ""
-			}
-		}
-
-		if len(finalsHeats) == 1 && (finalsRnd == nil || finalsRnd.FinalsFormat != domain.FinalsPoints) {
-			winner := findPilotAtRank(finalsHeats[0], 1)
-			if winner != nil {
-				return true, winner.PilotSlotIndex, winner.Callsign
-			}
-			return true, 0, ""
-		}
-
-		// Multi-heat Points Finals series: score cumulative points across the Finals heats!
-		type finalsScore struct {
-			slot       int
-			callsign   string
-			points     int
-			wins       int
-			laps       int
-			bestLapSec float64
-			lastPos    int
-		}
-		scores := make(map[int]*finalsScore)
-		for _, fh := range finalsHeats {
-			for _, s := range fh.Seats {
-				if s.PilotSlotIndex <= 0 || s.Status == domain.PilotHeatDNS || s.Status == domain.PilotHeatDQ {
-					continue
-				}
-				sc := scores[s.PilotSlotIndex]
-				if sc == nil {
-					sc = &finalsScore{slot: s.PilotSlotIndex, callsign: s.Callsign, lastPos: 99}
-					scores[s.PilotSlotIndex] = sc
-				}
-				sc.points += s.Points
-				sc.laps += s.LapsCompleted
-				if s.Position == 1 {
-					sc.wins++
-				}
-				if s.Position > 0 {
-					sc.lastPos = s.Position
-				}
-				if s.BestLapSec > 0 && (sc.bestLapSec == 0 || s.BestLapSec < sc.bestLapSec) {
-					sc.bestLapSec = s.BestLapSec
-				}
-			}
-		}
-		var best *finalsScore
-		for _, sc := range scores {
-			if best == nil {
-				best = sc
-				continue
-			}
-			if sc.points != best.points {
-				if sc.points > best.points {
-					best = sc
-				}
-				continue
-			}
-			if sc.wins != best.wins {
-				if sc.wins > best.wins {
-					best = sc
-				}
-				continue
-			}
-			if sc.laps != best.laps {
-				if sc.laps > best.laps {
-					best = sc
-				}
-				continue
-			}
-			if sc.bestLapSec > 0 && best.bestLapSec > 0 && sc.bestLapSec != best.bestLapSec {
-				if sc.bestLapSec < best.bestLapSec {
-					best = sc
-				}
-				continue
-			}
-			if sc.lastPos < best.lastPos {
-				best = sc
-			}
-		}
-		if best != nil {
-			return true, best.slot, best.callsign
-		}
-		return true, 0, ""
+	if len(legacyFinals) > 0 {
+		return resolveSingleFinalsRoundWinner(nil, legacyFinals)
 	}
 
-	// Points Mains / Custom stage without Finals lane: complete when stage has >= 1 heat and all are confirmed
-	allDone := false
-	for _, h := range st.Heats {
-		if h.StageIndex == stageIdx {
-			allDone = true
-			if h.State != domain.HeatConfirmed {
-				allDone = false
-				break
-			}
-		}
-	}
-	return allDone, 0, ""
+	return hasAnyConfirmedOrActiveHeat, 0, ""
 }
 
 // AnyRealHeatStartedInStage reports whether any heat in `stageIdx` has actually started
@@ -1518,6 +1708,526 @@ func buildStageParticipantRoster(
 	return out
 }
 
+// QualifierChainRoundIDs walks upstream from `roundID` across valid `all_pilots` or same-phase
+// cumulative rounds (`FormatQualifying`, `FormatOpenQualifier`, `FormatPointsMains`), returning the
+// connected round IDs in topological column order (`Q1 -> Q2 -> ... -> Qr`).
+func QualifierChainRoundIDs(st *domain.RaceTournamentState, roundID string) []string {
+	if st == nil || roundID == "" {
+		return nil
+	}
+	roundByID := make(map[string]*domain.RaceRound, len(st.Rounds))
+	for i := range st.Rounds {
+		roundByID[st.Rounds[i].ID] = &st.Rounds[i]
+	}
+	targetR := roundByID[roundID]
+	if targetR == nil {
+		return []string{roundID}
+	}
+	isQualLike := func(r *domain.RaceRound) bool {
+		if r == nil {
+			return false
+		}
+		return r.StageFormat == domain.FormatQualifying || r.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(r.ID)
+	}
+	targetIsQual := isQualLike(targetR)
+	targetIsPoints := targetR.StageFormat == domain.FormatPointsMains
+
+	visited := map[string]bool{roundID: true}
+	queue := []string{roundID}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, c := range st.Connections {
+			if c.Invalid || c.ToRoundID != cur || c.FromRoundID == "" || visited[c.FromRoundID] {
+				continue
+			}
+			upR := roundByID[c.FromRoundID]
+			if upR == nil || domain.IsStagePortalRoundID(upR.ID) {
+				continue
+			}
+			sameChain := false
+			if c.Mode == "all_pilots" {
+				if (targetIsQual && isQualLike(upR)) || (targetIsPoints && upR.StageFormat == domain.FormatPointsMains) || (!targetIsQual && !targetIsPoints) {
+					sameChain = true
+				}
+			} else if targetIsQual && isQualLike(upR) {
+				sameChain = true
+			}
+			if sameChain {
+				visited[upR.ID] = true
+				queue = append(queue, upR.ID)
+			}
+		}
+	}
+
+	out := make([]string, 0, len(visited))
+	for id := range visited {
+		out = append(out, id)
+	}
+	sort.SliceStable(out, func(i, j int) bool {
+		ri, rj := roundByID[out[i]], roundByID[out[j]]
+		if ri == nil || rj == nil {
+			return out[i] < out[j]
+		}
+		if ri.Column != rj.Column {
+			return ri.Column < rj.Column
+		}
+		return ri.Round < rj.Round
+	})
+	return out
+}
+
+func isStandingsCutMode(mode string) bool {
+	return mode == "standings_top" || mode == "all_pilots_ranked"
+}
+
+// IsRoundSkippedByEarlySeed reports whether `roundID` belongs to an upstream qualifier chain whose
+// outgoing bracket/mains cut connection(s) have all been locked early via `Seed Now` (`SeededEarly`).
+// When true, any remaining unstarted heats in `roundID` are bypassed so Race Control advances straight
+// to the seeded downstream round (while `reopen_connection_seed` restores them if unstarted).
+func IsRoundSkippedByEarlySeed(st *domain.RaceTournamentState, roundID string) bool {
+	if st == nil || roundID == "" {
+		return false
+	}
+	roundByID := make(map[string]*domain.RaceRound, len(st.Rounds))
+	for i := range st.Rounds {
+		roundByID[st.Rounds[i].ID] = &st.Rounds[i]
+	}
+	r := roundByID[roundID]
+	if r == nil || domain.IsStagePortalRoundID(r.ID) {
+		return false
+	}
+	if r.StageFormat != domain.FormatQualifying && r.StageFormat != domain.FormatOpenQualifier && !domain.IsOpenQualRoundID(r.ID) {
+		return false
+	}
+
+	// Walk forward along `all_pilots` qualifier links to find the terminal qualifier round(s) of this chain
+	visited := map[string]bool{roundID: true}
+	queue := []string{roundID}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		for _, c := range st.Connections {
+			if c.Invalid || c.FromRoundID != cur || visited[c.ToRoundID] {
+				continue
+			}
+			dst := roundByID[c.ToRoundID]
+			if dst != nil && c.Mode == "all_pilots" && (dst.StageFormat == domain.FormatQualifying || dst.StageFormat == domain.FormatOpenQualifier) {
+				visited[dst.ID] = true
+				queue = append(queue, dst.ID)
+			}
+		}
+	}
+
+	var cutConns []domain.RoundConnection
+	for _, c := range st.Connections {
+		if !c.Invalid && visited[c.FromRoundID] && isStandingsCutMode(c.Mode) {
+			cutConns = append(cutConns, c)
+		}
+	}
+	if len(cutConns) == 0 {
+		return false
+	}
+	for _, cc := range cutConns {
+		if !cc.SeededEarly && !st.Stage2SeededEarly {
+			return false
+		}
+	}
+	// Ensure >= 1 heat in the upstream chain is actually confirmed
+	chainSet := make(map[string]bool)
+	for _, cc := range cutConns {
+		for _, cid := range QualifierChainRoundIDs(st, cc.FromRoundID) {
+			chainSet[cid] = true
+		}
+	}
+	for _, h := range st.Heats {
+		if chainSet[h.RoundID] && h.State == domain.HeatConfirmed {
+			return true
+		}
+	}
+	return false
+}
+
+// IsStandingsFeederReady reports whether an upstream qualifier/points standings feeder (`FromRoundID` or `FromRoundColumn`)
+// is ready to resolve concrete pilot placements into `dstRoundID`.
+func IsStandingsFeederReady(
+	st *domain.RaceTournamentState,
+	dstRoundID string,
+	stageIdx int,
+	excludeHeatID string,
+	f domain.SeatFeeder,
+) bool {
+	if st == nil {
+		return false
+	}
+	if f.FromRoundID != "" {
+		seededEarly := st.Stage2SeededEarly
+		for _, c := range st.Connections {
+			if !c.Invalid && c.FromRoundID == f.FromRoundID && (dstRoundID == "" || c.ToRoundID == dstRoundID) && c.SeededEarly {
+				seededEarly = true
+				break
+			}
+		}
+		if !seededEarly {
+			// Also check if all cut wires leaving FromRoundID were seeded early together
+			allFromEarly := false
+			for _, c := range st.Connections {
+				if !c.Invalid && c.FromRoundID == f.FromRoundID && isStandingsCutMode(c.Mode) {
+					allFromEarly = true
+					if !c.SeededEarly {
+						allFromEarly = false
+						break
+					}
+				}
+			}
+			if allFromEarly {
+				seededEarly = true
+			}
+		}
+
+		chainIDs := QualifierChainRoundIDs(st, f.FromRoundID)
+		chainSet := make(map[string]bool, len(chainIDs))
+		hasOQ := false
+		for _, cid := range chainIDs {
+			chainSet[cid] = true
+			for _, r := range st.Rounds {
+				if r.ID == cid && (r.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(r.ID)) {
+					hasOQ = true
+				}
+			}
+		}
+		total := 0
+		confirmed := 0
+		for _, uh := range st.Heats {
+			if chainSet[uh.RoundID] && uh.ID != excludeHeatID {
+				total++
+				if uh.State == domain.HeatConfirmed {
+					confirmed++
+				}
+			}
+		}
+		if seededEarly {
+			return confirmed >= 1
+		}
+		if hasOQ {
+			return st.Lifecycle == domain.LifecycleCompleted && confirmed >= 1
+		}
+		return total > 0 && confirmed == total
+	}
+
+	// Legacy column fallback when FromRoundID is empty
+	hasAnyInCols := false
+	confirmedCols := 0
+	colsConfirmed := true
+	for _, uh := range st.Heats {
+		if uh.StageIndex == stageIdx && uh.Column <= f.FromRoundColumn && uh.ID != excludeHeatID {
+			hasAnyInCols = true
+			if uh.State == domain.HeatConfirmed {
+				confirmedCols++
+			} else {
+				colsConfirmed = false
+			}
+		}
+	}
+	if st.Stage2SeededEarly && confirmedCols >= 1 {
+		return true
+	}
+	return hasAnyInCols && colsConfirmed
+}
+
+// ComputeStandingsForRoundChain ranks `roster` across all confirmed heats in the connected upstream
+// chain ending at `fromRoundID` (`QualifierChainRoundIDs`), using `metricOverride` (or the source round's metric).
+func ComputeStandingsForRoundChain(
+	st *domain.RaceTournamentState,
+	roster []domain.PilotSlot,
+	fromRoundID string,
+	metricOverride domain.QualifyingMetric,
+) []domain.TournamentStanding {
+	if st == nil {
+		return nil
+	}
+	chainIDs := QualifierChainRoundIDs(st, fromRoundID)
+	chainSet := make(map[string]bool, len(chainIDs))
+	for _, cid := range chainIDs {
+		chainSet[cid] = true
+	}
+
+	var srcRound *domain.RaceRound
+	for i := range st.Rounds {
+		if st.Rounds[i].ID == fromRoundID {
+			srcRound = &st.Rounds[i]
+			break
+		}
+	}
+
+	stats := make(map[int]*domain.TournamentStanding, len(roster))
+	for i, p := range roster {
+		stats[p.SlotIndex] = &domain.TournamentStanding{
+			PilotSlotIndex: p.SlotIndex,
+			Callsign:       p.Callsign,
+			PhoneticName:   p.PhoneticName,
+			Color:          p.Color,
+			Seed:           i + 1,
+			BracketStatus:  "Qualifying",
+		}
+	}
+
+	hasQualHeats := srcRound != nil && (srcRound.StageFormat == domain.FormatQualifying || srcRound.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(srcRound.ID))
+	for _, h := range st.Heats {
+		if !chainSet[h.RoundID] || (h.State != domain.HeatConfirmed && h.State != domain.HeatFinished) {
+			continue
+		}
+		if h.StageFormat == domain.FormatQualifying || h.StageFormat == domain.FormatOpenQualifier {
+			hasQualHeats = true
+		}
+		for _, s := range h.Seats {
+			row := stats[s.PilotSlotIndex]
+			if row == nil {
+				continue
+			}
+			if s.Seed > 0 {
+				row.Seed = s.Seed
+			}
+			if s.Status == domain.PilotHeatDQ || s.Status == domain.PilotHeatDNS {
+				continue
+			}
+			row.HeatsFlown++
+			row.TotalLaps += s.LapsCompleted
+			row.Points += s.Points
+			if s.Position == 1 {
+				row.Wins++
+			}
+			if s.BestLapSec > 0 && (row.BestLapSec == 0 || s.BestLapSec < row.BestLapSec) {
+				row.BestLapSec = s.BestLapSec
+			}
+			if s.BestConsecutive2Sec > 0 && (row.BestConsecutive2Sec == 0 || s.BestConsecutive2Sec < row.BestConsecutive2Sec) {
+				row.BestConsecutive2Sec = s.BestConsecutive2Sec
+			}
+			if s.BestConsecutive3Sec > 0 && (row.BestConsecutive3Sec == 0 || s.BestConsecutive3Sec < row.BestConsecutive3Sec) {
+				row.BestConsecutive3Sec = s.BestConsecutive3Sec
+			}
+		}
+	}
+
+	rows := make([]domain.TournamentStanding, 0, len(stats))
+	for _, r := range stats {
+		rows = append(rows, *r)
+	}
+	metric := st.Config.QualifyingMetric
+	if srcRound != nil && srcRound.QualifyingMetric != "" {
+		metric = srcRound.QualifyingMetric
+	}
+	if metricOverride != "" {
+		metric = metricOverride
+	}
+	sortQualifyingRows(rows, metric, hasQualHeats || metricOverride != "")
+	for i := range rows {
+		rows[i].Rank = i + 1
+	}
+	return rows
+}
+
+// ComputeStandingsForFeeder resolves ranked standings for a `SeatFeeder` (`FromRoundID` or legacy `FromRoundColumn`).
+func ComputeStandingsForFeeder(
+	st *domain.RaceTournamentState,
+	roster []domain.PilotSlot,
+	stageIdx int,
+	f domain.SeatFeeder,
+) []domain.TournamentStanding {
+	if f.FromRoundID != "" {
+		metric := f.RankingMetric
+		if metric == "" {
+			for _, c := range st.Connections {
+				if !c.Invalid && c.FromRoundID == f.FromRoundID && c.RankingMetric != "" {
+					metric = c.RankingMetric
+					break
+				}
+			}
+		}
+		return ComputeStandingsForRoundChain(st, roster, f.FromRoundID, metric)
+	}
+	return ComputeStandingsUpToColumn(st, roster, stageIdx, f.FromRoundColumn)
+}
+
+func sortQualifyingRows(rows []domain.TournamentStanding, metric domain.QualifyingMetric, useQualMetric bool) {
+	sort.SliceStable(rows, func(i, j int) bool {
+		a, b := rows[i], rows[j]
+		if useQualMetric {
+			switch metric {
+			case domain.QualMetricBestLap:
+				if (a.BestLapSec > 0) != (b.BestLapSec > 0) {
+					return a.BestLapSec > 0
+				}
+				if a.BestLapSec > 0 && a.BestLapSec != b.BestLapSec {
+					return a.BestLapSec < b.BestLapSec
+				}
+			case domain.QualMetricLapsInTime:
+				if a.TotalLaps != b.TotalLaps {
+					return a.TotalLaps > b.TotalLaps
+				}
+			case domain.QualMetricPoints:
+				if a.Points != b.Points {
+					return a.Points > b.Points
+				}
+				if a.Wins != b.Wins {
+					return a.Wins > b.Wins
+				}
+			case domain.QualMetricConsecutive2:
+				if (a.BestConsecutive2Sec > 0) != (b.BestConsecutive2Sec > 0) {
+					return a.BestConsecutive2Sec > 0
+				}
+				if a.BestConsecutive2Sec > 0 && a.BestConsecutive2Sec != b.BestConsecutive2Sec {
+					return a.BestConsecutive2Sec < b.BestConsecutive2Sec
+				}
+				if (a.BestLapSec > 0) != (b.BestLapSec > 0) {
+					return a.BestLapSec > 0
+				}
+				if a.BestLapSec > 0 && a.BestLapSec != b.BestLapSec {
+					return a.BestLapSec < b.BestLapSec
+				}
+			default:
+				if (a.BestConsecutive3Sec > 0) != (b.BestConsecutive3Sec > 0) {
+					return a.BestConsecutive3Sec > 0
+				}
+				if a.BestConsecutive3Sec > 0 && a.BestConsecutive3Sec != b.BestConsecutive3Sec {
+					return a.BestConsecutive3Sec < b.BestConsecutive3Sec
+				}
+				if (a.BestLapSec > 0) != (b.BestLapSec > 0) {
+					return a.BestLapSec > 0
+				}
+				if a.BestLapSec > 0 && a.BestLapSec != b.BestLapSec {
+					return a.BestLapSec < b.BestLapSec
+				}
+			}
+		} else {
+			if a.Points != b.Points {
+				return a.Points > b.Points
+			}
+			if a.Wins != b.Wins {
+				return a.Wins > b.Wins
+			}
+		}
+		if a.TotalLaps != b.TotalLaps {
+			return a.TotalLaps > b.TotalLaps
+		}
+		if (a.BestLapSec > 0) != (b.BestLapSec > 0) {
+			return a.BestLapSec > 0
+		}
+		if a.BestLapSec > 0 && a.BestLapSec != b.BestLapSec {
+			return a.BestLapSec < b.BestLapSec
+		}
+		return a.Seed < b.Seed
+	})
+}
+
+func rankAdvancesViaRoundCuts(rank int, cutConns []domain.RoundConnection) bool {
+	if len(cutConns) == 0 {
+		return true
+	}
+	for _, c := range cutConns {
+		sStart := c.SeedStart
+		if sStart < 1 {
+			sStart = 1
+		}
+		sEnd := c.SeedEnd
+		if sEnd <= 0 && c.Count > 0 && sStart == 1 {
+			sEnd = c.Count
+		}
+		if rank >= sStart && (sEnd <= 0 || rank <= sEnd) {
+			return true
+		}
+	}
+	return false
+}
+
+func syncUnifiedQualifyingStatus(st *domain.RaceTournamentState, roster []domain.PilotSlot) {
+	if st == nil {
+		return
+	}
+	roundByID := make(map[string]*domain.RaceRound, len(st.Rounds))
+	var qualRoundIDs []string
+	hasNonQual := false
+	for i := range st.Rounds {
+		r := &st.Rounds[i]
+		if domain.IsStagePortalRoundID(r.ID) {
+			continue
+		}
+		roundByID[r.ID] = r
+		if r.StageFormat == domain.FormatQualifying || r.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(r.ID) {
+			qualRoundIDs = append(qualRoundIDs, r.ID)
+		} else {
+			hasNonQual = true
+		}
+	}
+	if len(qualRoundIDs) == 0 {
+		st.QualifyingComplete = false
+		st.CanStartStage2 = false
+		return
+	}
+	var cutConns []domain.RoundConnection
+	var lastQualID string
+	maxQualCol := -1
+	for _, qid := range qualRoundIDs {
+		if r := roundByID[qid]; r != nil && r.Column >= maxQualCol {
+			maxQualCol = r.Column
+			lastQualID = qid
+		}
+		for _, c := range st.Connections {
+			if !c.Invalid && c.FromRoundID == qid && isStandingsCutMode(c.Mode) {
+				cutConns = append(cutConns, c)
+			}
+		}
+	}
+	if lastQualID != "" {
+		var metric domain.QualifyingMetric
+		if len(cutConns) > 0 && cutConns[0].RankingMetric != "" {
+			metric = cutConns[0].RankingMetric
+		}
+		qRows := ComputeStandingsForRoundChain(st, roster, lastQualID, metric)
+		for i := range qRows {
+			if len(cutConns) > 0 {
+				if rankAdvancesViaRoundCuts(i+1, cutConns) {
+					qRows[i].BracketStatus = fmt.Sprintf("Seed #%d", i+1)
+				} else {
+					qRows[i].BracketStatus = fmt.Sprintf("Cut (#%d)", i+1)
+				}
+			} else {
+				qRows[i].BracketStatus = fmt.Sprintf("Seed #%d", i+1)
+			}
+		}
+		st.QualStandings = qRows
+	}
+	if !hasNonQual || len(cutConns) == 0 {
+		if len(st.Stages) == 1 && (st.Stages[0].Format == domain.FormatQualifying || st.Stages[0].Format == domain.FormatOpenQualifier) {
+			st.QualStandings = append([]domain.TournamentStanding(nil), st.Stages[0].Standings...)
+		}
+		st.QualifyingComplete = false
+		st.CanStartStage2 = false
+		return
+	}
+
+	qualSet := make(map[string]bool, len(qualRoundIDs))
+	for _, qid := range qualRoundIDs {
+		qualSet[qid] = true
+	}
+	anyQualConfirmed := false
+	for _, h := range st.Heats {
+		if qualSet[h.RoundID] && h.State == domain.HeatConfirmed {
+			anyQualConfirmed = true
+			break
+		}
+	}
+	allCutsReady := true
+	for _, cc := range cutConns {
+		if !IsStandingsFeederReady(st, cc.ToRoundID, 1, "", domain.SeatFeeder{FromRoundID: cc.FromRoundID, FromStandingsRank: 1}) {
+			allCutsReady = false
+			break
+		}
+	}
+	st.QualifyingComplete = allCutsReady
+	st.CanStartStage2 = anyQualConfirmed && !allCutsReady
+}
+
 // ComputeStageStandingsWithMetric computes live standings for `stageIdx`, optionally ranking by an
 // explicit `metricOverride` when slicing seeds for a downstream StageConnection.
 func ComputeStageStandingsWithMetric(
@@ -1545,6 +2255,77 @@ func ComputeStageStandingsWithMetric(
 	}
 
 	participants := buildStageParticipantRoster(st, roster, stageIdx, incomingSeeds)
+
+	// Unified single-graph mixed Qualifying + Bracket/Mains detection
+	qualRoundSet := make(map[string]bool)
+	var lastQualRoundID string
+	maxQualCol := -1
+	hasNonQualRound := false
+	var cutConns []domain.RoundConnection
+	if len(st.Stages) <= 1 && stageIdx == 1 && metricOverride == "" {
+		for _, r := range st.Rounds {
+			if r.StageIndex != stageIdx || domain.IsStagePortalRoundID(r.ID) {
+				continue
+			}
+			if r.StageFormat == domain.FormatQualifying || r.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(r.ID) {
+				qualRoundSet[r.ID] = true
+				if r.Column >= maxQualCol {
+					maxQualCol = r.Column
+					lastQualRoundID = r.ID
+				}
+			} else {
+				hasNonQualRound = true
+			}
+		}
+		if len(qualRoundSet) > 0 && hasNonQualRound {
+			for _, c := range st.Connections {
+				if !c.Invalid && qualRoundSet[c.FromRoundID] && isStandingsCutMode(c.Mode) {
+					cutConns = append(cutConns, c)
+				}
+			}
+		}
+	}
+
+	isMixedUnified := len(qualRoundSet) > 0 && hasNonQualRound && lastQualRoundID != ""
+	var unifiedQualRows []domain.TournamentStanding
+	if isMixedUnified {
+		var cutMetric domain.QualifyingMetric
+		if len(cutConns) > 0 && cutConns[0].RankingMetric != "" {
+			cutMetric = cutConns[0].RankingMetric
+		}
+		unifiedQualRows = ComputeStandingsForRoundChain(st, participants, lastQualRoundID, cutMetric)
+		for i := range unifiedQualRows {
+			if len(cutConns) > 0 {
+				if rankAdvancesViaRoundCuts(i+1, cutConns) {
+					unifiedQualRows[i].BracketStatus = fmt.Sprintf("Seed #%d", i+1)
+				} else {
+					unifiedQualRows[i].BracketStatus = fmt.Sprintf("Cut (#%d)", i+1)
+				}
+			} else {
+				unifiedQualRows[i].BracketStatus = fmt.Sprintf("Seed #%d", i+1)
+			}
+		}
+		allCutsReady := len(cutConns) > 0
+		for _, cc := range cutConns {
+			if !IsStandingsFeederReady(st, cc.ToRoundID, stageIdx, "", domain.SeatFeeder{FromRoundID: cc.FromRoundID, FromStandingsRank: 1}) {
+				allCutsReady = false
+				break
+			}
+		}
+		anyPostQualStarted := false
+		for _, h := range st.Heats {
+			if h.StageIndex == stageIdx && !qualRoundSet[h.RoundID] &&
+				(h.State == domain.HeatCountdown || h.State == domain.HeatRunning || h.State == domain.HeatPaused || h.State == domain.HeatFinished ||
+					(h.State == domain.HeatConfirmed && h.Note != "Auto-advance (bye)")) {
+				anyPostQualStarted = true
+				break
+			}
+		}
+		// While Qualifying is still underway and no Mains/Bracket heat has started yet, display live Qualifying Standings!
+		if !allCutsReady && !anyPostQualStarted {
+			return unifiedQualRows
+		}
+	}
 
 	if format == domain.FormatQualifying || format == domain.FormatOpenQualifier || metricOverride != "" {
 		bracketStatusLbl := "Qualifying"
@@ -1613,59 +2394,7 @@ func ComputeStageStandingsWithMetric(
 		if metricOverride != "" {
 			metric = metricOverride
 		}
-		sort.SliceStable(rows, func(i, j int) bool {
-			a, b := rows[i], rows[j]
-			switch metric {
-			case domain.QualMetricBestLap:
-				if (a.BestLapSec > 0) != (b.BestLapSec > 0) {
-					return a.BestLapSec > 0
-				}
-				if a.BestLapSec > 0 && a.BestLapSec != b.BestLapSec {
-					return a.BestLapSec < b.BestLapSec
-				}
-			case domain.QualMetricLapsInTime:
-				if a.TotalLaps != b.TotalLaps {
-					return a.TotalLaps > b.TotalLaps
-				}
-			case domain.QualMetricPoints:
-				if a.Points != b.Points {
-					return a.Points > b.Points
-				}
-				if a.Wins != b.Wins {
-					return a.Wins > b.Wins
-				}
-			case domain.QualMetricConsecutive2:
-				if (a.BestConsecutive2Sec > 0) != (b.BestConsecutive2Sec > 0) {
-					return a.BestConsecutive2Sec > 0
-				}
-				if a.BestConsecutive2Sec > 0 && a.BestConsecutive2Sec != b.BestConsecutive2Sec {
-					return a.BestConsecutive2Sec < b.BestConsecutive2Sec
-				}
-				if (a.BestLapSec > 0) != (b.BestLapSec > 0) {
-					return a.BestLapSec > 0
-				}
-				if a.BestLapSec > 0 && a.BestLapSec != b.BestLapSec {
-					return a.BestLapSec < b.BestLapSec
-				}
-			default:
-				if (a.BestConsecutive3Sec > 0) != (b.BestConsecutive3Sec > 0) {
-					return a.BestConsecutive3Sec > 0
-				}
-				if a.BestConsecutive3Sec > 0 && a.BestConsecutive3Sec != b.BestConsecutive3Sec {
-					return a.BestConsecutive3Sec < b.BestConsecutive3Sec
-				}
-				if (a.BestLapSec > 0) != (b.BestLapSec > 0) {
-					return a.BestLapSec > 0
-				}
-				if a.BestLapSec > 0 && a.BestLapSec != b.BestLapSec {
-					return a.BestLapSec < b.BestLapSec
-				}
-			}
-			if a.TotalLaps != b.TotalLaps {
-				return a.TotalLaps > b.TotalLaps
-			}
-			return a.Seed < b.Seed
-		})
+		sortQualifyingRows(rows, metric, true)
 
 		outs := OutgoingStageConnections(st, stageIdx)
 		isLegacyTwoStage1 := len(st.Stages) == 0 && st.TotalStages == 2 && stageIdx == 1
@@ -1688,39 +2417,87 @@ func ComputeStageStandingsWithMetric(
 
 	type elimMeta struct {
 		row            domain.TournamentStanding
-		activeLane     string // "champion" | "finals" | "winners" | "losers" | "eliminated" | "mains"
+		activeLane     string // "champion" | "finals" | "winners" | "losers" | "eliminated" | "mains" | "cut_qual"
 		elimOrder      int    // heat Order where eliminated (higher = survived longer = better rank!)
 		elimHeatPos    int    // finishing position in elimination heat (lower = better!)
 		finalFinishPos int
+		inBracket      bool
+	}
+
+	qualSeedBySlot := make(map[int]domain.TournamentStanding, len(unifiedQualRows))
+	for _, qr := range unifiedQualRows {
+		qualSeedBySlot[qr.PilotSlotIndex] = qr
 	}
 
 	items := make(map[int]*elimMeta, len(participants))
 	for i, p := range participants {
+		initSeed := i + 1
+		var bestLap, bestC2, bestC3 float64
+		if qr, ok := qualSeedBySlot[p.SlotIndex]; ok && qr.Rank > 0 {
+			initSeed = qr.Rank
+			bestLap = qr.BestLapSec
+			bestC2 = qr.BestConsecutive2Sec
+			bestC3 = qr.BestConsecutive3Sec
+		}
 		items[p.SlotIndex] = &elimMeta{
 			row: domain.TournamentStanding{
-				PilotSlotIndex: p.SlotIndex,
-				Callsign:       p.Callsign,
-				PhoneticName:   p.PhoneticName,
-				Color:          p.Color,
-				Seed:           i + 1,
-				BracketStatus:  "Ready",
+				PilotSlotIndex:      p.SlotIndex,
+				Callsign:            p.Callsign,
+				PhoneticName:        p.PhoneticName,
+				Color:               p.Color,
+				Seed:                initSeed,
+				BestLapSec:          bestLap,
+				BestConsecutive2Sec: bestC2,
+				BestConsecutive3Sec: bestC3,
+				BracketStatus:       "Ready",
 			},
 			activeLane: "winners",
 		}
 	}
 
 	hasElimLanes := format == domain.FormatDoubleElimination || format == domain.FormatSingleElimination
-	if format == domain.FormatCustom {
+	hasLosersLane := format == domain.FormatDoubleElimination
+	hasPointsMains := format == domain.FormatPointsMains
+	hasCTALane := format == domain.FormatChaseTheAce
+	if format == domain.FormatCustom || isMixedUnified {
 		for _, h := range st.Heats {
-			if h.StageIndex == stageIdx && (h.BracketLane == "winners" || h.BracketLane == "losers" || h.BracketLane == "finals") {
+			if h.StageIndex != stageIdx || qualRoundSet[h.RoundID] {
+				continue
+			}
+			if h.BracketLane == "losers" {
+				hasLosersLane = true
 				hasElimLanes = true
-				break
+			} else if h.BracketLane == "winners" || h.BracketLane == "finals" {
+				hasElimLanes = true
+			} else if h.BracketLane == "mains" || h.StageFormat == domain.FormatPointsMains {
+				hasPointsMains = true
+			}
+			if h.StageFormat == domain.FormatChaseTheAce || isCTAHeatID(h.ID) {
+				hasCTALane = true
+			}
+		}
+		if hasPointsMains && !hasElimLanes {
+			format = domain.FormatPointsMains
+		} else if hasCTALane && !hasLosersLane && !hasPointsMains {
+			// Check if post-qualifying is purely Chase the Ace Finals
+			onlyFinals := true
+			for _, h := range st.Heats {
+				if h.StageIndex == stageIdx && !qualRoundSet[h.RoundID] && h.BracketLane != "finals" {
+					onlyFinals = false
+					break
+				}
+			}
+			if onlyFinals {
+				format = domain.FormatChaseTheAce
 			}
 		}
 	}
 
 	for _, h := range st.Heats {
 		if h.StageIndex != stageIdx {
+			continue
+		}
+		if isMixedUnified && qualRoundSet[h.RoundID] {
 			continue
 		}
 		for _, s := range h.Seats {
@@ -1731,7 +2508,8 @@ func ComputeStageStandingsWithMetric(
 			if em == nil {
 				continue
 			}
-			if s.Seed > 0 {
+			em.inBracket = true
+			if s.Seed > 0 && !isMixedUnified {
 				em.row.Seed = s.Seed
 			}
 			if h.State == domain.HeatConfirmed && h.Note != "Auto-advance (bye)" && s.Status != domain.PilotHeatDNS {
@@ -1743,6 +2521,9 @@ func ComputeStageStandingsWithMetric(
 				}
 				if s.BestLapSec > 0 && (em.row.BestLapSec == 0 || s.BestLapSec < em.row.BestLapSec) {
 					em.row.BestLapSec = s.BestLapSec
+				}
+				if s.BestConsecutive2Sec > 0 && (em.row.BestConsecutive2Sec == 0 || s.BestConsecutive2Sec < em.row.BestConsecutive2Sec) {
+					em.row.BestConsecutive2Sec = s.BestConsecutive2Sec
 				}
 				if s.BestConsecutive3Sec > 0 && (em.row.BestConsecutive3Sec == 0 || s.BestConsecutive3Sec < em.row.BestConsecutive3Sec) {
 					em.row.BestConsecutive3Sec = s.BestConsecutive3Sec
@@ -1764,7 +2545,7 @@ func ComputeStageStandingsWithMetric(
 						em.finalFinishPos = s.Position
 					} else if !s.Advances {
 						em.row.Losses++
-						if format == domain.FormatSingleElimination || h.BracketLane == "losers" {
+						if !hasLosersLane || h.BracketLane == "losers" {
 							em.activeLane = "eliminated"
 							em.elimOrder = h.Order
 							em.elimHeatPos = s.Position
@@ -1787,6 +2568,18 @@ func ComputeStageStandingsWithMetric(
 				em.activeLane = "mains"
 				if h.Division != "" {
 					em.row.BracketStatus = fmt.Sprintf("%s Main", h.Division)
+				}
+			}
+		}
+	}
+
+	if isMixedUnified {
+		for slot, em := range items {
+			if !em.inBracket {
+				em.activeLane = "cut_qual"
+				if qr, ok := qualSeedBySlot[slot]; ok {
+					em.row.HeatsFlown = qr.HeatsFlown
+					em.row.TotalLaps = qr.TotalLaps
 				}
 			}
 		}
@@ -1815,13 +2608,21 @@ func ComputeStageStandingsWithMetric(
 			return 3
 		case "mains":
 			return 4
-		default: // "eliminated"
+		case "eliminated":
 			return 5
+		default: // "cut_qual"
+			return 6
 		}
 	}
 
 	sort.SliceStable(list, func(i, j int) bool {
 		a, b := list[i], list[j]
+		if (a.activeLane == "cut_qual") != (b.activeLane == "cut_qual") {
+			return a.activeLane != "cut_qual"
+		}
+		if a.activeLane == "cut_qual" && b.activeLane == "cut_qual" {
+			return a.row.Seed < b.row.Seed
+		}
 		if format == domain.FormatPointsMains || (!hasElimLanes && format != domain.FormatChaseTheAce) {
 			if a.row.Points != b.row.Points {
 				return a.row.Points > b.row.Points
@@ -1873,6 +2674,17 @@ func ComputeStageStandingsWithMetric(
 		return a.row.Seed < b.row.Seed
 	})
 
+	primaryFinals := stageFinalsRound(st, stageIdx)
+	isCTAFinals := stgSettings.FinalsFormat == domain.FinalsChaseTheAce || format == domain.FormatChaseTheAce ||
+		(primaryFinals != nil && (primaryFinals.FinalsFormat == domain.FinalsChaseTheAce || primaryFinals.StageFormat == domain.FormatChaseTheAce))
+	aceReq := stgSettings.AceWinsRequired
+	if primaryFinals != nil && primaryFinals.AceWinsRequired >= 2 {
+		aceReq = primaryFinals.AceWinsRequired
+	}
+	if aceReq < 2 {
+		aceReq = 2
+	}
+
 	out := make([]domain.TournamentStanding, len(list))
 	for i, em := range list {
 		em.row.Rank = i + 1
@@ -1880,11 +2692,11 @@ func ComputeStageStandingsWithMetric(
 		case "champion":
 			em.row.BracketStatus = "Champion"
 		case "finals":
-			if stgSettings.FinalsFormat == domain.FinalsChaseTheAce || format == domain.FormatChaseTheAce {
+			if isCTAFinals {
 				if stageDone {
 					em.row.BracketStatus = Ordinal(i + 1)
 				} else {
-					em.row.BracketStatus = fmt.Sprintf("Finals (%d/%d Aces)", em.row.AceWins, stgSettings.AceWinsRequired)
+					em.row.BracketStatus = fmt.Sprintf("Finals (%d/%d Aces)", em.row.AceWins, aceReq)
 				}
 			} else if stageDone {
 				em.row.BracketStatus = Ordinal(i + 1)
@@ -1894,9 +2706,11 @@ func ComputeStageStandingsWithMetric(
 		case "winners":
 			em.row.BracketStatus = "Winners Bracket"
 		case "losers":
-			em.row.BracketStatus = "Losers Bracket"
+			em.row.BracketStatus = "Redemption"
 		case "eliminated":
 			em.row.BracketStatus = fmt.Sprintf("Eliminated (%s)", Ordinal(i+1))
+		case "cut_qual":
+			em.row.BracketStatus = fmt.Sprintf("Cut (#%d)", em.row.Seed)
 		case "mains":
 			if stageDone && i == 0 && em.row.HeatsFlown > 0 {
 				em.row.BracketStatus = "Champion"
@@ -1907,10 +2721,13 @@ func ComputeStageStandingsWithMetric(
 	return out
 }
 
-// ComputeQualifyingStandings ranks all event pilots based on Stage 1 Qualifying heats.
+// ComputeQualifyingStandings ranks all event pilots based on Stage 1 / Qualifying heats.
 func ComputeQualifyingStandings(st *domain.RaceTournamentState, roster []domain.PilotSlot) []domain.TournamentStanding {
 	if st == nil {
 		return nil
+	}
+	if len(st.QualStandings) > 0 {
+		return append([]domain.TournamentStanding(nil), st.QualStandings...)
 	}
 	stg := findStagePtr(st, 1)
 	done := st.QualifyingComplete || (stg != nil && stg.Status == domain.StageStatusCompleted)
@@ -1991,61 +2808,7 @@ func ComputeStandingsUpToColumn(
 	for _, r := range stats {
 		rows = append(rows, *r)
 	}
-	metric := st.Config.QualifyingMetric
-	sort.SliceStable(rows, func(i, j int) bool {
-		a, b := rows[i], rows[j]
-		if hasQualHeats {
-			switch metric {
-			case domain.QualMetricBestLap:
-				if (a.BestLapSec > 0) != (b.BestLapSec > 0) {
-					return a.BestLapSec > 0
-				}
-				if a.BestLapSec > 0 && a.BestLapSec != b.BestLapSec {
-					return a.BestLapSec < b.BestLapSec
-				}
-			case domain.QualMetricLapsInTime:
-				if a.TotalLaps != b.TotalLaps {
-					return a.TotalLaps > b.TotalLaps
-				}
-			case domain.QualMetricConsecutive2:
-				if (a.BestConsecutive2Sec > 0) != (b.BestConsecutive2Sec > 0) {
-					return a.BestConsecutive2Sec > 0
-				}
-				if a.BestConsecutive2Sec > 0 && a.BestConsecutive2Sec != b.BestConsecutive2Sec {
-					return a.BestConsecutive2Sec < b.BestConsecutive2Sec
-				}
-				if (a.BestLapSec > 0) != (b.BestLapSec > 0) {
-					return a.BestLapSec > 0
-				}
-				if a.BestLapSec > 0 && a.BestLapSec != b.BestLapSec {
-					return a.BestLapSec < b.BestLapSec
-				}
-			default:
-				if (a.BestConsecutive3Sec > 0) != (b.BestConsecutive3Sec > 0) {
-					return a.BestConsecutive3Sec > 0
-				}
-				if a.BestConsecutive3Sec > 0 && a.BestConsecutive3Sec != b.BestConsecutive3Sec {
-					return a.BestConsecutive3Sec < b.BestConsecutive3Sec
-				}
-			}
-		}
-		if a.Points != b.Points {
-			return a.Points > b.Points
-		}
-		if a.Wins != b.Wins {
-			return a.Wins > b.Wins
-		}
-		if a.TotalLaps != b.TotalLaps {
-			return a.TotalLaps > b.TotalLaps
-		}
-		if (a.BestLapSec > 0) != (b.BestLapSec > 0) {
-			return a.BestLapSec > 0
-		}
-		if a.BestLapSec > 0 && a.BestLapSec != b.BestLapSec {
-			return a.BestLapSec < b.BestLapSec
-		}
-		return a.Seed < b.Seed
-	})
+	sortQualifyingRows(rows, st.Config.QualifyingMetric, hasQualHeats)
 	for i := range rows {
 		rows[i].Rank = i + 1
 	}
@@ -2126,10 +2889,35 @@ func FormatConnectionBadge(c domain.RoundConnection) string {
 	case "bottom_per_heat":
 		return fmt.Sprintf("Bottom %d / heat", cnt)
 	case "standings_top":
-		return fmt.Sprintf("Fastest %d", cnt)
+		distSuffix := ""
+		if c.Distribution == "sequential" {
+			distSuffix = " · Sequential"
+		} else if c.Distribution == "snake" {
+			distSuffix = " · Snake"
+		}
+		sStart := c.SeedStart
+		if sStart < 1 {
+			sStart = 1
+		}
+		if c.SeedEnd > 0 && c.SeedEnd >= sStart {
+			if sStart == 1 {
+				return fmt.Sprintf("Top %d (#1-#%d)%s", c.SeedEnd, c.SeedEnd, distSuffix)
+			}
+			return fmt.Sprintf("Ranks #%d-#%d%s", sStart, c.SeedEnd, distSuffix)
+		}
+		if sStart > 1 {
+			return fmt.Sprintf("Ranks #%d+%s", sStart, distSuffix)
+		}
+		if c.Count > 0 {
+			return fmt.Sprintf("Top %d%s", c.Count, distSuffix)
+		}
+		return fmt.Sprintf("All Qualified%s", distSuffix)
 	case "pilots_in":
 		if c.Distribution == "snake" {
 			return "Checked-In Pilots · Snake"
+		}
+		if c.Distribution == "sequential" {
+			return "Checked-In Pilots · Grouped"
 		}
 		if c.Distribution == "random" {
 			return "Checked-In Pilots · Random"
@@ -2154,9 +2942,9 @@ func FormatConnectionBadge(c domain.RoundConnection) string {
 		}
 		if c.SeedEnd > 0 && c.SeedEnd >= start {
 			if start == 1 {
-				return fmt.Sprintf("Top %d Seeds (#1–#%d)%s", c.SeedEnd, c.SeedEnd, distSuffix)
+				return fmt.Sprintf("Top %d Seeds (#1-#%d)%s", c.SeedEnd, c.SeedEnd, distSuffix)
 			}
-			return fmt.Sprintf("Seeds #%d–#%d%s", start, c.SeedEnd, distSuffix)
+			return fmt.Sprintf("Seeds #%d-#%d%s", start, c.SeedEnd, distSuffix)
 		}
 		if start > 1 {
 			return fmt.Sprintf("Seeds #%d+%s", start, distSuffix)
@@ -2671,6 +3459,7 @@ func deriveStageConnections(st *domain.RaceTournamentState, stageIdx int) []doma
 	var order []connKey
 	seenKey := make(map[connKey]bool)
 	ranksPerHeat := make(map[connKey]map[string]map[int]bool)
+	minStdRank := make(map[connKey]int)
 	maxStdRank := make(map[connKey]int)
 	var seedConns []domain.RoundConnection
 
@@ -2768,15 +3557,31 @@ func deriveStageConnections(st *domain.RaceTournamentState, stageIdx int) []doma
 						ranksPerHeat[ck][srcH.ID] = make(map[int]bool)
 					}
 					ranksPerHeat[ck][srcH.ID][s.Feeder.FromRank] = true
-				} else if s.Feeder.FromRoundColumn > 0 {
-					srcID := colToRoundID[s.Feeder.FromRoundColumn]
+				} else if s.Feeder.FromRoundID != "" || s.Feeder.FromRoundColumn > 0 {
+					srcID := s.Feeder.FromRoundID
+					if srcID == "" && s.Feeder.FromRoundColumn > 0 {
+						srcID = colToRoundID[s.Feeder.FromRoundColumn]
+					}
 					if srcID == "" || srcID == r.ID {
 						continue
+					}
+					if r.StageFormat == domain.FormatPointsMains && r.Round > 1 {
+						if prevID := colToRoundID[r.Column-1]; prevID != "" && prevID != r.ID && prevID != srcID {
+							ck := connKey{fromID: prevID, toID: r.ID, mode: "all_pilots"}
+							if !seenKey[ck] {
+								seenKey[ck] = true
+								order = append(order, ck)
+							}
+							continue
+						}
 					}
 					ck := connKey{fromID: srcID, toID: r.ID, mode: "standings_top"}
 					if !seenKey[ck] {
 						seenKey[ck] = true
 						order = append(order, ck)
+					}
+					if minStdRank[ck] == 0 || s.Feeder.FromStandingsRank < minStdRank[ck] {
+						minStdRank[ck] = s.Feeder.FromStandingsRank
 					}
 					if s.Feeder.FromStandingsRank > maxStdRank[ck] {
 						maxStdRank[ck] = s.Feeder.FromStandingsRank
@@ -2790,11 +3595,29 @@ func deriveStageConnections(st *domain.RaceTournamentState, stageIdx int) []doma
 	out = append(out, seedConns...)
 	for _, ck := range order {
 		cnt := 2
+		sStart := 0
+		sEnd := 0
+		dist := ""
 		if ck.mode == "standings_top" {
-			cnt = maxStdRank[ck]
-			if cnt < 1 {
+			sStart = minStdRank[ck]
+			if sStart < 1 {
+				sStart = 1
+			}
+			sEnd = maxStdRank[ck]
+			if sEnd >= sStart {
+				cnt = sEnd - sStart + 1
+			} else if maxStdRank[ck] > 0 {
+				cnt = maxStdRank[ck]
+			} else {
 				cnt = 4
 			}
+			if roundLaneByID[ck.toID] == "mains" {
+				dist = "sequential"
+			} else {
+				dist = "snake"
+			}
+		} else if ck.mode == "all_pilots" {
+			cnt = 0
 		} else {
 			maxRanks := 0
 			for _, rkSet := range ranksPerHeat[ck] {
@@ -2815,52 +3638,63 @@ func deriveStageConnections(st *domain.RaceTournamentState, stageIdx int) []doma
 			toPort = "bottom"
 		}
 		out = append(out, domain.RoundConnection{
-			ID:          fmt.Sprintf("conn-%s-%s-%s", ck.fromID, ck.toID, ck.mode),
+			ID:           fmt.Sprintf("conn-%s-%s-%s", ck.fromID, ck.toID, ck.mode),
+			StageIndex:   stageIdx,
+			FromRoundID:  ck.fromID,
+			ToRoundID:    ck.toID,
+			FromPort:     fromPort,
+			ToPort:       toPort,
+			Mode:         ck.mode,
+			Count:        cnt,
+			SeedStart:    sStart,
+			SeedEnd:      sEnd,
+			Distribution: dist,
+		})
+	}
+	// Connect sequential Qualifying rounds (`Q1 -> Q2 -> ...`) with `all_pilots` wires even on unified graphs
+	var qualRounds []domain.RaceRound
+	for _, r := range st.Rounds {
+		if r.StageIndex == stageIdx && !domain.IsStagePortalRoundID(r.ID) && r.StageFormat == domain.FormatQualifying {
+			qualRounds = append(qualRounds, r)
+		}
+	}
+	if len(qualRounds) > 1 {
+		for idx := 0; idx+1 < len(qualRounds); idx++ {
+			cur := qualRounds[idx]
+			nxt := qualRounds[idx+1]
+			if nxt.Column > cur.Column {
+				ck := connKey{fromID: cur.ID, toID: nxt.ID, mode: "all_pilots"}
+				if !seenKey[ck] {
+					seenKey[ck] = true
+					out = append(out, domain.RoundConnection{
+						ID:          fmt.Sprintf("conn-%s-%s-all_pilots", cur.ID, nxt.ID),
+						StageIndex:  stageIdx,
+						FromRoundID: cur.ID,
+						ToRoundID:   nxt.ID,
+						FromPort:    "right",
+						ToPort:      "left",
+						Mode:        "all_pilots",
+						Count:       0,
+					})
+				}
+			}
+		}
+	}
+	if hasOutPortal && len(qualRounds) > 0 {
+		lastQ := qualRounds[len(qualRounds)-1]
+		out = append(out, domain.RoundConnection{
+			ID:          fmt.Sprintf("conn-%s-%s-qual_feed", lastQ.ID, outPortalID),
 			StageIndex:  stageIdx,
-			FromRoundID: ck.fromID,
-			ToRoundID:   ck.toID,
-			FromPort:    fromPort,
-			ToPort:      toPort,
-			Mode:        ck.mode,
-			Count:       cnt,
+			FromRoundID: lastQ.ID,
+			ToRoundID:   outPortalID,
+			FromPort:    "right",
+			ToPort:      "left",
+			Mode:        "qual_feed",
+			Count:       st.Config.Stage2MaxSeeds,
 		})
 	}
 	stg := findStagePtr(st, stageIdx)
-	isQualStage := (stg != nil && stg.Format == domain.FormatQualifying) || (stg == nil && st.Config.MainFormat == domain.FormatQualifying) || hasOutPortal
-	if isQualStage && (stg == nil || stg.Format == domain.FormatQualifying) {
-		var qualRounds []domain.RaceRound
-		for _, r := range st.Rounds {
-			if r.StageIndex == stageIdx && !domain.IsStagePortalRoundID(r.ID) {
-				qualRounds = append(qualRounds, r)
-			}
-		}
-		for idx, r := range qualRounds {
-			if idx+1 < len(qualRounds) && qualRounds[idx+1].Column > r.Column {
-				nxt := qualRounds[idx+1]
-				out = append(out, domain.RoundConnection{
-					ID:          fmt.Sprintf("conn-%s-%s-all_pilots", r.ID, nxt.ID),
-					StageIndex:  stageIdx,
-					FromRoundID: r.ID,
-					ToRoundID:   nxt.ID,
-					FromPort:    "right",
-					ToPort:      "left",
-					Mode:        "all_pilots",
-					Count:       0,
-				})
-			} else if hasOutPortal {
-				out = append(out, domain.RoundConnection{
-					ID:          fmt.Sprintf("conn-%s-%s-qual_feed", r.ID, outPortalID),
-					StageIndex:  stageIdx,
-					FromRoundID: r.ID,
-					ToRoundID:   outPortalID,
-					FromPort:    "right",
-					ToPort:      "left",
-					Mode:        "qual_feed",
-					Count:       st.Config.Stage2MaxSeeds,
-				})
-			}
-		}
-	} else if stg != nil && stg.Format == domain.FormatOpenQualifier {
+	if stg != nil && stg.Format == domain.FormatOpenQualifier {
 		var openRounds []domain.RaceRound
 		for _, r := range st.Rounds {
 			if r.StageIndex == stageIdx && !domain.IsStagePortalRoundID(r.ID) {

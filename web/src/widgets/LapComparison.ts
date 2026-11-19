@@ -31,9 +31,9 @@ export class LapComparison extends Component {
           <thead>
             <tr>
               <th>Section</th>
-              <th class="num">Selected lap</th>
-              <th class="num">Reference lap</th>
-              <th class="col-delta">Gained / lost</th>
+              <th class="num"><span class="cmp-th-lap"><i class="lg-review" aria-hidden="true"></i>Selected lap</span></th>
+              <th class="num"><span class="cmp-th-lap"><i class="lg-ref" aria-hidden="true"></i>Reference lap</span></th>
+              <th class="col-delta">Delta</th>
               <th class="num">Exit speed</th>
             </tr>
           </thead>
@@ -52,9 +52,9 @@ export class LapComparison extends Component {
           <thead>
             <tr>
               <th>Section</th>
-              <th class="num">Lap ${cmp.lap.lapNumber}</th>
-              <th class="num">Lap ${cmp.ref.lapNumber}</th>
-              <th class="col-delta">Gained / lost</th>
+              <th class="num"><span class="cmp-th-lap"><i class="lg-review" aria-hidden="true"></i>Lap ${cmp.lap.lapNumber}</span></th>
+              <th class="num"><span class="cmp-th-lap"><i class="lg-ref" aria-hidden="true"></i>Lap ${cmp.ref.lapNumber}</span></th>
+              <th class="col-delta">Delta</th>
               <th class="num">Exit speed</th>
             </tr>
           </thead>
@@ -166,6 +166,6 @@ export class LapComparison extends Component {
 }
 
 function toneOf(delta: number): string {
-  if (Math.abs(delta) < NEGLIGIBLE_SEC) return "muted";
+  if (Math.abs(delta) < 0.0005) return "muted";
   return delta > 0 ? "tone-bad" : "tone-good";
 }

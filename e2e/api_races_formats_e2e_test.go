@@ -337,13 +337,13 @@ func TestAPI_RaceE2E_TwoStageQualifyingToMainsSeedingAndAdvance(t *testing.T) {
 		"applyToExisting": true,
 	}, &st)
 
-	if st.RaceState.TotalStages != 2 {
-		t.Fatalf("expected 2 stages for qual_single_elim, got %d", st.RaceState.TotalStages)
+	if st.RaceState.TotalStages != 1 {
+		t.Fatalf("expected unified single-graph (TotalStages=1) for qual_single_elim, got %d", st.RaceState.TotalStages)
 	}
 
 	_, _ = h.Page.Evaluate(`(hash) => { window.location.hash = hash; }`, fmt.Sprintf("#/races/%s/control", slug))
 
-	// Score all Stage 1 Qualifying heats so `slots` in reverse order get fastest 3-consecutive lap times:
+	// Score all Qualifying heats so `slots` in reverse order get fastest 3-consecutive lap times:
 	// slots[5] fastest (3x 9.0s = 27.0s), slots[4] 2nd (3x 10.0s = 30.0s), slots[3] 3rd, slots[2] 4th,
 	// while slots[1] and slots[0] are 5th & 6th (eliminated by Stage2MaxSeeds=4!).
 	rankBySlot := make(map[int]int, len(slots))
@@ -352,17 +352,17 @@ func TestAPI_RaceE2E_TwoStageQualifyingToMainsSeedingAndAdvance(t *testing.T) {
 	}
 
 	for {
-		var nextStage1Heat string
+		var nextQualHeat string
 		for _, ht := range st.RaceState.Heats {
-			if ht.StageIndex == 1 && ht.State != domain.HeatConfirmed {
-				nextStage1Heat = ht.ID
+			if ht.StageFormat == domain.FormatQualifying && ht.State != domain.HeatConfirmed {
+				nextQualHeat = ht.ID
 				break
 			}
 		}
-		if nextStage1Heat == "" {
+		if nextQualHeat == "" {
 			break
 		}
-		ht := apiFindHeat(st, nextStage1Heat)
+		ht := apiFindHeat(st, nextQualHeat)
 		offsets := make(map[int][]int64)
 		for _, s := range ht.Seats {
 			if s.PilotSlotIndex <= 0 {
@@ -372,7 +372,7 @@ func TestAPI_RaceE2E_TwoStageQualifyingToMainsSeedingAndAdvance(t *testing.T) {
 			lapMs := int64(8000 + rk*1000)
 			offsets[s.PilotSlotIndex] = []int64{500, 500 + lapMs, 500 + 2*lapMs, 500 + 3*lapMs}
 		}
-		st = apiScoreAndConfirmHeat(h, nextStage1Heat, offsets)
+		st = apiScoreAndConfirmHeat(h, nextQualHeat, offsets)
 	}
 
 	// Verify Qualifying standings rank slots[5], slots[4], slots[3], slots[2] as Top 4!
@@ -385,26 +385,19 @@ func TestAPI_RaceE2E_TwoStageQualifyingToMainsSeedingAndAdvance(t *testing.T) {
 			st.RaceState.QualStandings[3].PilotSlotIndex, slots[2])
 	}
 
-	// Advance to Stage 2 via POST /api/race/advance-stage and verify only Top 4 seeds entered Stage 2!
-	h.APIPost("/api/race/advance-stage", map[string]any{}, &st)
-	_, _ = h.Page.Evaluate(`(hash) => { window.location.hash = hash; }`, fmt.Sprintf("#/races/%s/stage-2", slug))
-
-	if st.RaceState.ActiveStageIndex != 2 {
-		t.Fatalf("expected ActiveStageIndex=2 after /api/race/advance-stage, got %d", st.RaceState.ActiveStageIndex)
-	}
-
-	stage2Seated := make(map[int]bool)
+	// Verify only Top 4 qualifiers entered the downstream elimination heats on the unified graph!
+	bracketSeated := make(map[int]bool)
 	for _, ht := range st.RaceState.Heats {
-		if ht.StageIndex == 2 {
+		if ht.StageFormat != domain.FormatQualifying {
 			for _, s := range ht.Seats {
 				if s.PilotSlotIndex > 0 {
-					stage2Seated[s.PilotSlotIndex] = true
+					bracketSeated[s.PilotSlotIndex] = true
 				}
 			}
 		}
 	}
-	if len(stage2Seated) != 4 || stage2Seated[slots[0]] || stage2Seated[slots[1]] {
-		t.Fatalf("expected exactly Top 4 qualifiers in Stage 2 (excluding slots %d, %d), got %v", slots[0], slots[1], stage2Seated)
+	if len(bracketSeated) != 4 || bracketSeated[slots[0]] || bracketSeated[slots[1]] {
+		t.Fatalf("expected exactly Top 4 qualifiers in bracket (excluding slots %d, %d), got %v", slots[0], slots[1], bracketSeated)
 	}
 
 	// Score Stage 2 so top qualifier slots[5] wins the Championship!

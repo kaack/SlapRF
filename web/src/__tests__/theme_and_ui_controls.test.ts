@@ -80,7 +80,7 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
       const nav = sbEl.querySelector("nav.nav")!;
       const aboutLink = nav.querySelector<HTMLAnchorElement>('a[data-route="about"]')!;
       expect(aboutLink).not.toBeNull();
-      const themeRow = aboutLink.nextElementSibling as HTMLElement | null;
+      const themeRow = sbEl.querySelector<HTMLElement>(".sidebar-theme-row");
       expect(themeRow).not.toBeNull();
       expect(themeRow?.classList.contains("sidebar-theme-row")).toBe(true);
 
@@ -129,8 +129,8 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
     expect(chartSvg.includes("m19 9-5 5-4-4-3 3")).toBe(true);
 
     const pilotSvg = icons.pilot(16);
-    expect(pilotSvg.includes('circle cx="12" cy="8" r="4"')).toBe(true);
-    expect(pilotSvg.includes("M4 21c0-4 4-6 8-6s8 2 8 6")).toBe(true);
+    expect(pilotSvg.includes('circle cx="9" cy="7" r="4"')).toBe(true);
+    expect(pilotSvg.includes("M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2")).toBe(true);
 
     expect(icons.moon(15).includes("<svg")).toBe(true);
     expect(icons.sun(15).includes("<svg")).toBe(true);

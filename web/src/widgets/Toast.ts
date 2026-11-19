@@ -70,7 +70,7 @@ export function showToast(
     existing.el.classList.add("is-leaving");
     window.setTimeout(() => {
       existing.el.remove();
-    }, 180);
+    }, 230);
   };
 
   const dup = activeToasts.get(key);

@@ -1998,56 +1998,83 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 			cfg.MainFormat = domain.FormatOpenQualifier
 			cfg.QualifyingTargetLaps = 0
 			cfg.Stage2MaxSeeds = 0
+		case "qual_ladder_mains", "qualifying_ladder_mains":
+			tpl = "qual_ladder_mains"
+			cfg.Structure = domain.StructureSingleStage
+			cfg.MainFormat = domain.FormatSingleElimination
+		case "ladder_mains":
+			tpl = "ladder_mains"
+			cfg.Structure = domain.StructureSingleStage
+			cfg.MainFormat = domain.FormatSingleElimination
+			cfg.Stage2MaxSeeds = 0
+		case "custom":
+			cfg.Structure = domain.StructureSingleStage
+			cfg.Stage2MaxSeeds = 0
+			e.raceState.Config = cfg.Normalized()
+			e.raceState.TemplateID = "custom"
+			e.raceState.Generated = true
+			e.raceState.Lifecycle = domain.LifecycleDraft
+			e.raceState.StatusReason = ""
+			e.raceState.IsComplete = false
+			e.raceState.Stage2SeededEarly = false
+			e.raceState.ChampionSlotIndex = 0
+			e.raceState.ChampionCallsign = ""
+			e.raceState.ActiveStageIndex = 1
+			e.raceState.TotalStages = 1
+			e.raceState.Stages = []domain.RaceStage{
+				{
+					ID:         "stage-1",
+					Index:      1,
+					Title:      "Custom Race",
+					Format:     domain.FormatCustom,
+					Customized: true,
+					Status:     domain.StageStatusActive,
+					Settings:   domain.DefaultStageSettingsFromConfig(e.raceState.Config, domain.FormatCustom),
+					HasPos:     true,
+					PosX:       120,
+					PosY:       180,
+				},
+			}
+			e.raceState.StageConnections = nil
+			e.raceState.FormatInvalidReason = ""
+			e.raceState.Heats = []domain.RaceHeat{}
+			e.raceState.Edges = []domain.BracketEdge{}
+			e.raceState.Rounds = []domain.RaceRound{}
+			e.raceState.Connections = []domain.RoundConnection{}
+			e.raceState.ActiveHeatID = ""
+			e.raceState.NextReadyHeatID = ""
+			if lm := strings.TrimSpace(req.LinkMode); lm != "" && lm != "none" {
+				_ = e.appendCustomRoundLocked(1, "Round 1", "winners", domain.FormatSingleElimination, req.HeatCount, e.raceState.Config.TargetLaps, e.raceState.Config.TimeLimitSec, lm, "", 0, "", 2)
+			} else {
+				race.SyncRoundsMetadata(&e.raceState)
+			}
+			cfgChanged = true
+			e.resolveActiveTournamentLocked()
+			if e.raceState.Mode == domain.ModeRace {
+				e.stageOrDisarmActiveRaceLocked()
+			}
+			*cfgChangedOut = cfgChanged
+			return cloneRaceState(e.raceState), nil
 		default:
 			return cloneRaceState(e.raceState), fmt.Errorf("unknown template %q", tpl)
 		}
 		e.raceState.Config = cfg.Normalized()
 		e.raceState.TemplateID = tpl
-		// If this is a 2-stage race where Stage 1 Qualifying heats have already started/confirmed
-		// and the user is re-applying a 2-stage template, preserve all Stage 1 Qualifying heats
-		// & standings while rebuilding only Stage 2!
-		if cfg.Structure == domain.StructureTwoStage && e.raceState.TotalStages >= 2 && race.AnyRealHeatStartedInStage(&e.raceState, 1) {
-			var s1Heats []domain.RaceHeat
-			for _, h := range e.raceState.Heats {
-				if h.StageIndex == 1 {
-					s1Heats = append(s1Heats, h)
-				} else if h.ID == e.raceState.ActiveHeatID {
-					e.raceState.ActiveHeatID = ""
+		isMultiPhaseQualTpl := tpl == "qual_double_elim" || tpl == "qual_single_elim" || tpl == "qual_mains" ||
+			tpl == "cpq_mains" || tpl == "qual_chase_the_ace" || tpl == "qual_ladder_mains"
+		hasStartedQual := false
+		hasStartedNonQual := false
+		for _, h := range e.raceState.Heats {
+			if !isUnstartedHeatState(h.State) {
+				if h.StageFormat == domain.FormatQualifying {
+					hasStartedQual = true
+				} else {
+					hasStartedNonQual = true
 				}
 			}
-			var keptRounds []domain.RaceRound
-			for _, r := range e.raceState.Rounds {
-				if r.StageIndex == 1 || r.ID == domain.Stage2HandoffInID {
-					keptRounds = append(keptRounds, r)
-				}
-			}
-			var keptConns []domain.RoundConnection
-			for _, c := range e.raceState.Connections {
-				if c.StageIndex == 1 {
-					keptConns = append(keptConns, c)
-				}
-			}
-			pilots := e.activeEventPilotsForGenerationLocked()
-			seedCount := len(pilots)
-			if seedCount < 2 {
-				seedCount = len(e.raceState.Roster)
-			}
-			s2Heats, _ := race.GenerateStage2PlaceholderMainStage(e.raceState.Config, seedCount, len(s1Heats))
-			e.raceState.Heats = append(s1Heats, s2Heats...)
-			e.raceState.Rounds = keptRounds
-			e.raceState.Connections = keptConns
-			e.raceState.IsComplete = false
-			e.raceState.ChampionSlotIndex = 0
-			e.raceState.ChampionCallsign = ""
-			e.raceState.Stages = nil
-			e.raceState.StageConnections = nil
-			race.RebuildEdgesFromFeeders(&e.raceState)
-			race.SyncRoundsMetadata(&e.raceState)
-			if e.raceState.QualifyingComplete || e.raceState.Stage2SeededEarly {
-				roster, _ := e.activeEventRosterAndAttendanceLocked()
-				_ = race.GenerateStage2Mains(&e.raceState, roster)
-			}
-			e.resolveActiveTournamentLocked()
+		}
+		if isMultiPhaseQualTpl && hasStartedQual && !hasStartedNonQual {
+			e.retemplatePostQualifyingOnUnifiedGraphLocked(tpl)
 		} else {
 			e.raceState.Stage2SeededEarly = false
 			e.raceState.Stages = nil
@@ -2388,9 +2415,31 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 		}
 		cfgChanged = true
 
+	case "seed_connection_now":
+		if err := e.seedConnectionNowLocked(strings.TrimSpace(req.ConnectionID), strings.TrimSpace(req.FromRoundID), strings.TrimSpace(req.RoundID)); err != nil {
+			return cloneRaceState(e.raceState), err
+		}
+		cfgChanged = true
+
+	case "reopen_connection_seed":
+		if err := e.reopenConnectionSeedLocked(strings.TrimSpace(req.ConnectionID), strings.TrimSpace(req.FromRoundID), strings.TrimSpace(req.RoundID)); err != nil {
+			return cloneRaceState(e.raceState), err
+		}
+		cfgChanged = true
+
+	case "reshuffle_round":
+		if err := e.reshuffleRoundLocked(strings.TrimSpace(req.RoundID), strings.TrimSpace(req.Distribution)); err != nil {
+			return cloneRaceState(e.raceState), err
+		}
+		cfgChanged = true
+
 	case "seed_stage2_early":
 		if e.raceState.TotalStages < 2 {
-			return cloneRaceState(e.raceState), fmt.Errorf("this race does not have a Stage 2")
+			if err := e.seedConnectionNowLocked(strings.TrimSpace(req.ConnectionID), strings.TrimSpace(req.FromRoundID), strings.TrimSpace(req.RoundID)); err != nil {
+				return cloneRaceState(e.raceState), err
+			}
+			cfgChanged = true
+			break
 		}
 		hasConfirmedS1 := false
 		for _, h := range e.raceState.Heats {
@@ -2400,7 +2449,7 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 			}
 		}
 		if !hasConfirmedS1 {
-			return cloneRaceState(e.raceState), fmt.Errorf("confirm at least one Stage 1 Qualifying heat before seeding Stage 2 early")
+			return cloneRaceState(e.raceState), fmt.Errorf("confirm at least one Qualifying heat before seeding early")
 		}
 		e.raceState.Stage2SeededEarly = true
 		if stg1 := e.findStageByIndexLocked(1); stg1 != nil {
@@ -2409,8 +2458,15 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 		cfgChanged = true
 
 	case "unlock_stage2_seeding":
+		if e.raceState.TotalStages < 2 {
+			if err := e.reopenConnectionSeedLocked(strings.TrimSpace(req.ConnectionID), strings.TrimSpace(req.FromRoundID), strings.TrimSpace(req.RoundID)); err != nil {
+				return cloneRaceState(e.raceState), err
+			}
+			cfgChanged = true
+			break
+		}
 		if race.AnyRealHeatStartedInStage(&e.raceState, 2) {
-			return cloneRaceState(e.raceState), fmt.Errorf("cannot unlock Stage 2 seeding after a Stage 2 heat has started")
+			return cloneRaceState(e.raceState), fmt.Errorf("cannot unlock seeding after a downstream heat has started")
 		}
 		e.raceState.Stage2SeededEarly = false
 		if stg1 := e.findStageByIndexLocked(1); stg1 != nil {
@@ -2438,6 +2494,7 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 		h.State = domain.HeatWaiting
 		race.RebuildEdgesFromFeeders(&e.raceState)
 		finalizeEditedHeatState(h, e.raceState.Config.QualifyingMetric)
+		e.cascadeBalancedRoundsFromLocked(h.StageIndex, h.RoundID)
 		cfgChanged = true
 
 	case "add_round":
@@ -2475,9 +2532,6 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 			} else {
 				lane = "winners"
 			}
-		}
-		if lane == "finals" && e.findFinalsRoundInStageLocked(targetStage, "") != nil {
-			return cloneRaceState(e.raceState), fmt.Errorf("this stage already has a Finals round — edit the existing Finals round to configure Single Heat, Chase the Ace, or Points Series")
 		}
 		fmtType := req.StageFormat
 		if fmtType == "" || fmtType == domain.FormatCustom {
@@ -2611,6 +2665,15 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 			req.AdvanceCount,
 		)
 		if r := e.findRoundByIDLocked(newRndID); r != nil {
+			if req.QualifyingMetric != "" {
+				r.QualifyingMetric = req.QualifyingMetric
+			}
+			if req.MaxPacksPerPilot != nil && *req.MaxPacksPerPilot >= 0 {
+				r.MaxPacksPerPilot = *req.MaxPacksPerPilot
+			}
+			if dist := strings.TrimSpace(req.Distribution); dist == "random" || dist == "snake" || dist == "sequential" || dist == "roster" {
+				r.SeedDistribution = dist
+			}
 			if lane == "finals" {
 				fFmt := req.FinalsFormat
 				if fFmt == "" {
@@ -2635,8 +2698,13 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 					r.FinalsHeats = 3
 				}
 				e.rebuildSingleRoundLocked(newRndID)
-			} else if req.HeatCount > 0 {
-				r.TargetHeats = req.HeatCount
+			} else {
+				if req.HeatCount > 0 {
+					r.TargetHeats = req.HeatCount
+				}
+				if r.SeedSource == "all_active_pilots" && r.SeedDistribution != "" {
+					e.rebuildSingleRoundLocked(newRndID)
+				}
 			}
 			if req.HasPos {
 				r.HasPos = true
@@ -2649,7 +2717,7 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 			if wireMode == "empty" {
 				wireMode = ""
 			}
-			_ = e.connectRoundsLockedWithPorts(
+			_ = e.connectRoundsLockedFull(
 				explicitFromRndID,
 				newRndID,
 				wireMode,
@@ -2657,6 +2725,7 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 				req.SeedStart,
 				req.SeedEnd,
 				strings.TrimSpace(req.Distribution),
+				req.QualifyingMetric,
 				strings.TrimSpace(req.FromPort),
 				strings.TrimSpace(req.ToPort),
 			)
@@ -2801,7 +2870,7 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 	case "connect_rounds":
 		race.SyncRoundsMetadata(&e.raceState)
 		e.applyRoundPositionsLocked(req.Positions)
-		if err := e.connectRoundsLockedWithPorts(
+		if err := e.connectRoundsLockedFull(
 			strings.TrimSpace(req.FromRoundID),
 			strings.TrimSpace(req.ToRoundID),
 			strings.TrimSpace(req.LinkMode),
@@ -2809,6 +2878,7 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 			req.SeedStart,
 			req.SeedEnd,
 			strings.TrimSpace(req.Distribution),
+			req.QualifyingMetric,
 			strings.TrimSpace(req.FromPort),
 			strings.TrimSpace(req.ToPort),
 		); err != nil {
@@ -2817,7 +2887,7 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 		cfgChanged = true
 
 	case "update_connection":
-		if err := e.updateRoundConnectionLocked(
+		if err := e.updateRoundConnectionFullLocked(
 			strings.TrimSpace(req.ConnectionID),
 			strings.TrimSpace(req.FromRoundID),
 			strings.TrimSpace(req.ToRoundID),
@@ -2826,6 +2896,7 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 			req.SeedStart,
 			req.SeedEnd,
 			strings.TrimSpace(req.Distribution),
+			req.QualifyingMetric,
 		); err != nil {
 			return cloneRaceState(e.raceState), err
 		}
@@ -2859,9 +2930,10 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 		cfgChanged = true
 
 	case "set_round_seed":
-		if err := e.setRoundSeedSourceLocked(
+		if err := e.setRoundSeedSourceWithDistLocked(
 			strings.TrimSpace(req.RoundID),
 			strings.TrimSpace(req.LinkMode),
+			strings.TrimSpace(req.Distribution),
 		); err != nil {
 			return cloneRaceState(e.raceState), err
 		}
@@ -2891,9 +2963,6 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 		if targetR := e.findRoundByIDLocked(targetID); targetR != nil {
 			e.markStageCustomizedLocked(targetR.StageIndex)
 			if newLane == "finals" && targetR.BracketLane != "finals" {
-				if e.findFinalsRoundInStageLocked(targetR.StageIndex, targetID) != nil {
-					return cloneRaceState(e.raceState), fmt.Errorf("this stage already has a Finals round — only one Championship Finals round is allowed per stage")
-				}
 				becomingFinals = true
 			}
 		}
@@ -2925,6 +2994,18 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 				}
 				if req.TimeLimitSec >= 15 {
 					r.TimeLimitSec = req.TimeLimitSec
+				}
+				if req.QualifyingMetric != "" {
+					r.QualifyingMetric = req.QualifyingMetric
+				}
+				if req.MaxPacksPerPilot != nil && *req.MaxPacksPerPilot >= 0 {
+					r.MaxPacksPerPilot = *req.MaxPacksPerPilot
+				}
+				if dist := strings.TrimSpace(req.Distribution); dist == "random" || dist == "snake" || dist == "sequential" || dist == "roster" {
+					if r.SeedDistribution != dist {
+						r.SeedDistribution = dist
+						finalsRebuildNeeded = true
+					}
 				}
 				if req.StageFormat != "" {
 					r.StageFormat = req.StageFormat
@@ -3009,7 +3090,14 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 		}
 		if allRoundUnstarted && finalsRebuildNeeded {
 			e.rebalanceAutoConnectionsIntoLocked(targetID)
-			e.rebuildSingleRoundLocked(targetID)
+			if r := e.findRoundByIDLocked(targetID); r != nil {
+				e.recomputeGraphAndRebuildLocked(r.StageIndex, targetID)
+			}
+		} else if !heatCountChanged {
+			// Propagate title, format, lane, or metric updates down the entire DAG to Finals
+			if r := e.findRoundByIDLocked(targetID); r != nil {
+				e.cascadeBalancedRoundsFromLocked(r.StageIndex, targetID)
+			}
 		}
 		heatSeq := 0
 		for i := range e.raceState.Heats {
@@ -3049,7 +3137,7 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 			}
 		}
 		if strings.TrimSpace(req.LinkMode) == "all_active_pilots" || strings.TrimSpace(req.LinkMode) == "empty" {
-			_ = e.setRoundSeedSourceLocked(targetID, strings.TrimSpace(req.LinkMode))
+			_ = e.setRoundSeedSourceWithDistLocked(targetID, strings.TrimSpace(req.LinkMode), strings.TrimSpace(req.Distribution))
 		}
 		cfgChanged = true
 
@@ -3120,6 +3208,7 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 		}
 		race.RebuildEdgesFromFeeders(&e.raceState)
 		finalizeEditedHeatState(h, e.raceState.Config.QualifyingMetric)
+		e.cascadeBalancedRoundsFromLocked(h.StageIndex, h.RoundID)
 		cfgChanged = true
 
 	case "regenerate_upcoming":
@@ -3251,13 +3340,7 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 		if s.ManualLock {
 			s.ManualLock = false
 			if s.Feeder != nil {
-				if s.Feeder.FromHeatID != "" {
-					s.SourceLabel = fmt.Sprintf("%s · %s", race.Ordinal(s.Feeder.FromRank), s.Feeder.FromHeatID)
-				} else if s.Feeder.FromRoundColumn > 0 {
-					s.SourceLabel = fmt.Sprintf("Rank #%d · R%d", s.Feeder.FromStandingsRank, s.Feeder.FromRoundColumn)
-				} else if s.Feeder.FromStageSeed > 0 {
-					s.SourceLabel = fmt.Sprintf("Seed #%d", s.Feeder.FromStageSeed)
-				}
+				s.SourceLabel = e.feederSourceLabelLocked(s.Feeder)
 				clearSeatOccupant(s, false)
 			} else if roundAutoSeeded && e.ensureRoundUnstartedLocked(h.RoundID) == nil {
 				clearSeatOccupant(s, false)
@@ -3289,16 +3372,11 @@ func (e *Engine) bracketEditBodyLocked(req BracketEditPayload, cfgChangedOut *bo
 		s := &h.Seats[sIdx]
 		s.ManualLock = false
 		if s.Feeder != nil {
-			if s.Feeder.FromHeatID != "" {
-				s.SourceLabel = fmt.Sprintf("%s · %s", race.Ordinal(s.Feeder.FromRank), s.Feeder.FromHeatID)
-			} else if s.Feeder.FromRoundColumn > 0 {
-				s.SourceLabel = fmt.Sprintf("Rank #%d · R%d", s.Feeder.FromStandingsRank, s.Feeder.FromRoundColumn)
-			} else if s.Feeder.FromStageSeed > 0 {
-				s.SourceLabel = fmt.Sprintf("Seed #%d", s.Feeder.FromStageSeed)
-			}
+			s.SourceLabel = e.feederSourceLabelLocked(s.Feeder)
 			clearSeatOccupant(s, false)
 		}
 		finalizeEditedHeatState(h, e.raceState.Config.QualifyingMetric)
+		e.cascadeBalancedRoundsFromLocked(h.StageIndex, h.RoundID)
 		cfgChanged = true
 
 	case "set_seat_channel":
@@ -3629,6 +3707,12 @@ func (e *Engine) validateConnectionsLocked() []string {
 				c.InvalidReason = fmt.Sprintf("Seeds #%d+ exceed this stage's incoming cutoff (Top %d seeds). Increase the stage wire cutoff in Format or adjust this wire's seed range.", c.SeedStart, stageCap)
 				continue
 			}
+		} else if c.Mode == "standings_top" {
+			if c.SeedEnd > 0 && c.SeedStart > c.SeedEnd {
+				c.Invalid = true
+				c.InvalidReason = fmt.Sprintf("Invalid rank range: start rank (#%d) is greater than end rank (#%d).", c.SeedStart, c.SeedEnd)
+				continue
+			}
 		} else if c.Mode == "top_per_heat" || c.Mode == "bottom_per_heat" {
 			cnt := c.Count
 			if cnt < 1 {
@@ -3874,7 +3958,14 @@ func (e *Engine) connectionFeederCountLocked(c domain.RoundConnection, pph int) 
 		}
 		return sEnd - sStart + 1
 	case "standings_top":
+		if c.SeedStart >= 1 && c.SeedEnd >= c.SeedStart {
+			return c.SeedEnd - c.SeedStart + 1
+		}
 		if c.Count < 1 {
+			activeCnt := len(e.activeEventPilotsForGenerationLocked())
+			if activeCnt >= 2 {
+				return activeCnt
+			}
 			return pph
 		}
 		return c.Count
@@ -3967,11 +4058,10 @@ func (e *Engine) inferConnectionModeAndCountLocked(
 		if toR.BracketLane == "finals" {
 			return mode, pph, false
 		}
-		dstH := toR.TargetHeats
-		if dstH < 1 {
-			dstH = 1
+		if toR.TargetHeats > 0 {
+			return mode, toR.TargetHeats * pph, false
 		}
-		return mode, dstH * pph, false
+		return mode, 0, false
 	}
 
 	srcH := e.countRoundHeatsLocked(fromR.ID)
@@ -4161,13 +4251,449 @@ func (e *Engine) connectRoundsLocked(
 	advanceCount, seedStart, seedEnd int,
 	distribution string,
 ) error {
-	return e.connectRoundsLockedWithPorts(fromRoundID, toRoundID, linkMode, advanceCount, seedStart, seedEnd, distribution, "", "")
+	return e.connectRoundsLockedFull(fromRoundID, toRoundID, linkMode, advanceCount, seedStart, seedEnd, distribution, "", "", "")
 }
 
 func (e *Engine) connectRoundsLockedWithPorts(
 	fromRoundID, toRoundID, linkMode string,
 	advanceCount, seedStart, seedEnd int,
 	distribution, fromPort, toPort string,
+) error {
+	return e.connectRoundsLockedFull(fromRoundID, toRoundID, linkMode, advanceCount, seedStart, seedEnd, distribution, "", fromPort, toPort)
+}
+
+func isAutoDefaultRaceRoundTitle(title string) bool {
+	t := strings.TrimSpace(title)
+	if !strings.HasPrefix(t, "Round ") {
+		return false
+	}
+	rest := strings.TrimSpace(strings.TrimPrefix(t, "Round "))
+	if len(rest) == 0 {
+		return false
+	}
+	for _, ch := range rest {
+		if ch < '0' || ch > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isAutoRedemptionRoundTitle(title string) bool {
+	t := strings.TrimSpace(title)
+	for _, p := range []string{"Redemption R", "Redemption "} {
+		if strings.HasPrefix(t, p) {
+			rest := strings.TrimSpace(strings.TrimPrefix(t, p))
+			if len(rest) > 0 {
+				ok := true
+				for _, ch := range rest {
+					if ch < '0' || ch > '9' {
+						ok = false
+						break
+					}
+				}
+				if ok {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func (e *Engine) feederSourceLabelLocked(f *domain.SeatFeeder) string {
+	if f == nil {
+		return ""
+	}
+	if f.FromHeatID != "" {
+		return fmt.Sprintf("%s · %s", race.Ordinal(f.FromRank), f.FromHeatID)
+	}
+	if f.FromRoundID != "" {
+		if srcR := e.findRoundByIDLocked(f.FromRoundID); srcR != nil {
+			if srcR.StageFormat == domain.FormatQualifying || srcR.StageFormat == domain.FormatOpenQualifier || srcR.BracketLane == "qualifying" {
+				return fmt.Sprintf("Seed #%d", f.FromStandingsRank)
+			}
+			return fmt.Sprintf("Seed #%d · %s", f.FromStandingsRank, srcR.Title)
+		}
+		return fmt.Sprintf("Seed #%d", f.FromStandingsRank)
+	}
+	if f.FromRoundColumn > 0 {
+		return fmt.Sprintf("Seed #%d · R%d", f.FromStandingsRank, f.FromRoundColumn)
+	}
+	if f.FromStageSeed > 0 {
+		return fmt.Sprintf("Seed #%d", f.FromStageSeed)
+	}
+	return ""
+}
+
+// reconcileRedemptionLaneLocked automatically promotes a Race Round (`winners`) to `losers`
+// ("Redemption N") when it receives a `bottom_per_heat` drop wire (or only `losers` survivor wires),
+// and reverts `losers` back to `winners` ("Round N") if all incoming drop/redemption wires are removed.
+func (e *Engine) reconcileRedemptionLaneLocked(roundID string) {
+	r := e.findRoundByIDLocked(roundID)
+	if r == nil || domain.IsStagePortalRoundID(r.ID) {
+		return
+	}
+	if r.BracketLane != "winners" && r.BracketLane != "losers" {
+		return
+	}
+	if r.StageFormat == domain.FormatQualifying || r.StageFormat == domain.FormatOpenQualifier || r.StageFormat == domain.FormatPointsMains {
+		return
+	}
+	hasBottom := false
+	hasNonLosersTop := false
+	inCount := 0
+	for _, c := range e.raceState.Connections {
+		if c.Invalid || c.ToRoundID != roundID {
+			continue
+		}
+		inCount++
+		if c.Mode == "bottom_per_heat" {
+			hasBottom = true
+			continue
+		}
+		src := e.findRoundByIDLocked(c.FromRoundID)
+		if src == nil || src.BracketLane != "losers" {
+			hasNonLosersTop = true
+		}
+	}
+	shouldBeLosers := inCount > 0 && (hasBottom || !hasNonLosersTop)
+	if shouldBeLosers && r.BracketLane == "winners" {
+		r.BracketLane = "losers"
+		if isAutoDefaultRaceRoundTitle(r.Title) {
+			redCount := 0
+			for _, or := range e.raceState.Rounds {
+				if or.StageIndex == r.StageIndex && or.ID != r.ID && or.BracketLane == "losers" {
+					redCount++
+				}
+			}
+			r.Title = fmt.Sprintf("Redemption R%d", redCount+1)
+		}
+	} else if !shouldBeLosers && r.BracketLane == "losers" && isAutoRedemptionRoundTitle(r.Title) {
+		r.BracketLane = "winners"
+		r.Title = fmt.Sprintf("Round %d", r.Round)
+	}
+}
+
+func (e *Engine) retemplatePostQualifyingOnUnifiedGraphLocked(tpl string) {
+	race.MigrateLegacyStagesToUnifiedGraph(&e.raceState)
+	race.SyncRoundsMetadata(&e.raceState)
+
+	qualRoundSet := make(map[string]bool)
+	var keptRounds []domain.RaceRound
+	lastQualID := ""
+	maxQualCol := 0
+	for _, r := range e.raceState.Rounds {
+		if domain.IsStagePortalRoundID(r.ID) {
+			continue
+		}
+		if r.StageFormat == domain.FormatQualifying {
+			qualRoundSet[r.ID] = true
+			keptRounds = append(keptRounds, r)
+			if r.Column >= maxQualCol {
+				maxQualCol = r.Column
+				lastQualID = r.ID
+			}
+		}
+	}
+	var keptHeats []domain.RaceHeat
+	for _, h := range e.raceState.Heats {
+		if qualRoundSet[h.RoundID] || h.StageFormat == domain.FormatQualifying {
+			keptHeats = append(keptHeats, h)
+		} else if h.ID == e.raceState.ActiveHeatID {
+			e.raceState.ActiveHeatID = ""
+		}
+	}
+	var keptConns []domain.RoundConnection
+	for _, c := range e.raceState.Connections {
+		if qualRoundSet[c.FromRoundID] && qualRoundSet[c.ToRoundID] {
+			keptConns = append(keptConns, c)
+		}
+	}
+
+	genPilots := e.activeEventPilotsForGenerationLocked()
+	if len(genPilots) < 2 {
+		for _, ep := range e.raceState.Roster {
+			genPilots = append(genPilots, domain.PilotSlot{SlotIndex: ep.SlotIndex, Callsign: ep.Callsign, Color: ep.Color})
+		}
+	}
+	fresh := race.GenerateUnifiedTournament(e.raceState.Config, genPilots, tpl, time.Now().UnixNano())
+	freshQualSet := make(map[string]bool)
+	freshMaxQualCol := 0
+	for _, r := range fresh.Rounds {
+		if r.StageFormat == domain.FormatQualifying {
+			freshQualSet[r.ID] = true
+			if r.Column > freshMaxQualCol {
+				freshMaxQualCol = r.Column
+			}
+		}
+	}
+	colShift := maxQualCol - freshMaxQualCol
+	for _, r := range fresh.Rounds {
+		if freshQualSet[r.ID] || domain.IsStagePortalRoundID(r.ID) {
+			continue
+		}
+		r.Column += colShift
+		if r.Column <= maxQualCol {
+			r.Column = maxQualCol + 1
+		}
+		keptRounds = append(keptRounds, r)
+	}
+	for _, c := range fresh.Connections {
+		if freshQualSet[c.FromRoundID] && freshQualSet[c.ToRoundID] {
+			continue
+		}
+		if freshQualSet[c.FromRoundID] {
+			c.FromRoundID = lastQualID
+			c.ID = fmt.Sprintf("conn-%s-%s-%s", lastQualID, c.ToRoundID, c.Mode)
+			c.SeededEarly = e.raceState.Stage2SeededEarly
+		}
+		keptConns = append(keptConns, c)
+	}
+	for _, h := range fresh.Heats {
+		if freshQualSet[h.RoundID] || h.StageFormat == domain.FormatQualifying {
+			continue
+		}
+		h.Column += colShift
+		if h.Column <= maxQualCol {
+			h.Column = maxQualCol + 1
+		}
+		for si := range h.Seats {
+			if h.Seats[si].Feeder != nil && freshQualSet[h.Seats[si].Feeder.FromRoundID] {
+				h.Seats[si].Feeder.FromRoundID = lastQualID
+				h.Seats[si].Feeder.FromRoundColumn = maxQualCol
+			}
+		}
+		keptHeats = append(keptHeats, h)
+	}
+	for i := range keptHeats {
+		keptHeats[i].Order = i + 1
+	}
+
+	e.raceState.Rounds = keptRounds
+	e.raceState.Connections = keptConns
+	e.raceState.Heats = keptHeats
+	e.raceState.TotalStages = 1
+	e.raceState.ActiveStageIndex = 1
+	e.raceState.StageConnections = nil
+	e.raceState.IsComplete = false
+	e.raceState.ChampionSlotIndex = 0
+	e.raceState.ChampionCallsign = ""
+	if len(fresh.Stages) > 0 {
+		e.raceState.Stages = fresh.Stages
+	}
+	race.RebuildEdgesFromFeeders(&e.raceState)
+	race.SyncRoundsMetadata(&e.raceState)
+	e.resolveActiveTournamentLocked()
+}
+
+func (e *Engine) seedConnectionNowLocked(connID, fromRoundID, roundID string) error {
+	race.SyncRoundsMetadata(&e.raceState)
+	srcRoundID := fromRoundID
+	if srcRoundID == "" {
+		srcRoundID = roundID
+	}
+
+	var matched []int
+	for i := range e.raceState.Connections {
+		c := &e.raceState.Connections[i]
+		if c.Invalid || (c.Mode != "standings_top" && c.Mode != "all_pilots_ranked") {
+			continue
+		}
+		if connID != "" {
+			if c.ID == connID {
+				matched = append(matched, i)
+			}
+		} else if srcRoundID != "" {
+			if c.FromRoundID == srcRoundID {
+				matched = append(matched, i)
+			}
+		} else {
+			srcR := e.findRoundByIDLocked(c.FromRoundID)
+			if srcR != nil && (srcR.StageFormat == domain.FormatQualifying || srcR.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(srcR.ID)) {
+				matched = append(matched, i)
+			}
+		}
+	}
+	if len(matched) == 0 {
+		return fmt.Errorf("no qualifying progression connection found to seed early")
+	}
+
+	chainSet := make(map[string]bool)
+	for _, idx := range matched {
+		for _, cid := range race.QualifierChainRoundIDs(&e.raceState, e.raceState.Connections[idx].FromRoundID) {
+			chainSet[cid] = true
+		}
+	}
+
+	hasConfirmed := false
+	for _, h := range e.raceState.Heats {
+		if chainSet[h.RoundID] && h.State == domain.HeatConfirmed {
+			hasConfirmed = true
+			break
+		}
+	}
+	if !hasConfirmed {
+		return fmt.Errorf("confirm at least one qualifying heat before seeding downstream rounds")
+	}
+
+	// For Open Qualifier / ZippyQ rounds in the chain, discard unstarted queued walk-up packs
+	keptHeats := make([]domain.RaceHeat, 0, len(e.raceState.Heats))
+	for _, h := range e.raceState.Heats {
+		if chainSet[h.RoundID] && h.StageFormat == domain.FormatOpenQualifier && isUnstartedHeatState(h.State) {
+			if e.raceState.ActiveHeatID == h.ID {
+				e.raceState.ActiveHeatID = ""
+			}
+			continue
+		}
+		keptHeats = append(keptHeats, h)
+	}
+	e.raceState.Heats = keptHeats
+	for i := range e.raceState.Heats {
+		e.raceState.Heats[i].Order = i + 1
+	}
+
+	for _, idx := range matched {
+		e.raceState.Connections[idx].SeededEarly = true
+	}
+	// Resolve concrete standings into direct target rounds, then cascade down the entire DAG
+	// (sizing Open Qualifier "All" brackets to actual contenders and rotating concrete pilots across all_pilots chains).
+	for _, idx := range matched {
+		srcID := e.raceState.Connections[idx].FromRoundID
+		stgIdx := e.raceState.Connections[idx].StageIndex
+		if stgIdx < 1 {
+			stgIdx = 1
+		}
+		e.cascadeBalancedRoundsFromLocked(stgIdx, srcID)
+	}
+	e.resolveActiveTournamentLocked()
+	for _, idx := range matched {
+		dstID := e.raceState.Connections[idx].ToRoundID
+		stgIdx := e.raceState.Connections[idx].StageIndex
+		if stgIdx < 1 {
+			stgIdx = 1
+		}
+		e.cascadeBalancedRoundsFromLocked(stgIdx, dstID)
+	}
+	return nil
+}
+
+func (e *Engine) reopenConnectionSeedLocked(connID, fromRoundID, roundID string) error {
+	race.SyncRoundsMetadata(&e.raceState)
+	srcRoundID := fromRoundID
+	if srcRoundID == "" {
+		srcRoundID = roundID
+	}
+
+	var matched []int
+	for i := range e.raceState.Connections {
+		c := &e.raceState.Connections[i]
+		if !c.SeededEarly {
+			continue
+		}
+		if connID != "" && c.ID != connID {
+			continue
+		}
+		if connID == "" && srcRoundID != "" && c.FromRoundID != srcRoundID {
+			continue
+		}
+		matched = append(matched, i)
+	}
+	if len(matched) == 0 && !e.raceState.Stage2SeededEarly {
+		return nil
+	}
+
+	// Ensure no downstream round reachable from `matched` already has started/confirmed heats
+	adj := make(map[string][]string)
+	for _, c := range e.raceState.Connections {
+		if !c.Invalid {
+			adj[c.FromRoundID] = append(adj[c.FromRoundID], c.ToRoundID)
+		}
+	}
+	downstream := make(map[string]bool)
+	var queue []string
+	for _, idx := range matched {
+		queue = append(queue, e.raceState.Connections[idx].ToRoundID)
+	}
+	for len(queue) > 0 {
+		cur := queue[0]
+		queue = queue[1:]
+		if downstream[cur] {
+			continue
+		}
+		downstream[cur] = true
+		queue = append(queue, adj[cur]...)
+	}
+	for _, h := range e.raceState.Heats {
+		if downstream[h.RoundID] && !isUnstartedHeatState(h.State) && !(h.State == domain.HeatConfirmed && h.Note == "Auto-advance (bye)") {
+			return fmt.Errorf("cannot reopen qualifying seeding after %s has already started", h.ShortLabel)
+		}
+	}
+
+	for _, idx := range matched {
+		e.raceState.Connections[idx].SeededEarly = false
+	}
+	e.raceState.Stage2SeededEarly = false
+	for _, idx := range matched {
+		srcID := e.raceState.Connections[idx].FromRoundID
+		stgIdx := e.raceState.Connections[idx].StageIndex
+		if stgIdx < 1 {
+			stgIdx = 1
+		}
+		e.cascadeBalancedRoundsFromLocked(stgIdx, srcID)
+	}
+	return nil
+}
+
+func (e *Engine) reshuffleRoundLocked(roundID, distribution string) error {
+	race.SyncRoundsMetadata(&e.raceState)
+	targetID := roundID
+	if targetID == "" {
+		for _, r := range e.raceState.Rounds {
+			if !domain.IsStagePortalRoundID(r.ID) && r.SeedSource == "all_active_pilots" {
+				targetID = r.ID
+				break
+			}
+		}
+	}
+	r := e.findRoundByIDLocked(targetID)
+	if r == nil {
+		return fmt.Errorf("round not found")
+	}
+	if err := e.ensureRoundUnstartedLocked(r.ID); err != nil {
+		return err
+	}
+	e.raceState.TemplateID = "custom"
+	e.markStageCustomizedLocked(r.StageIndex)
+	r.SeedSource = "all_active_pilots"
+	if distribution == "snake" || distribution == "sequential" || distribution == "roster" || distribution == "random" {
+		r.SeedDistribution = distribution
+	} else {
+		r.SeedDistribution = "random"
+	}
+	e.nextRaceSeq++
+	r.RandomSeed = time.Now().UnixNano() + int64(e.nextRaceSeq)*7919
+	for hi := range e.raceState.Heats {
+		if e.raceState.Heats[hi].RoundID == r.ID && isUnstartedHeatState(e.raceState.Heats[hi].State) {
+			for si := range e.raceState.Heats[hi].Seats {
+				e.raceState.Heats[hi].Seats[si].ManualLock = false
+			}
+		}
+	}
+	e.rebuildSingleRoundLocked(r.ID)
+	e.cascadeBalancedRoundsFromLocked(r.StageIndex, r.ID)
+	e.sortCustomHeatsAndOrderLocked(r.StageIndex)
+	race.RebuildEdgesFromFeeders(&e.raceState)
+	race.SyncRoundsMetadata(&e.raceState)
+	return nil
+}
+
+func (e *Engine) connectRoundsLockedFull(
+	fromRoundID, toRoundID, linkMode string,
+	advanceCount, seedStart, seedEnd int,
+	distribution string,
+	rankingMetric domain.QualifyingMetric,
+	fromPort, toPort string,
 ) error {
 	race.SyncRoundsMetadata(&e.raceState)
 
@@ -4184,7 +4710,7 @@ func (e *Engine) connectRoundsLockedWithPorts(
 			return fmt.Errorf("cannot connect Checked-In Pilots across different stages")
 		}
 		if len(race.IncomingStageConnections(&e.raceState, pilotsStageIdx)) > 0 {
-			return fmt.Errorf("this stage receives pilots from an upstream stage — connect from Incoming Seeds instead")
+			return fmt.Errorf("this stage receives pilots from an upstream stage - connect from Incoming Seeds instead")
 		}
 		if err := e.ensureRoundUnstartedLocked(toR.ID); err != nil {
 			return err
@@ -4200,7 +4726,7 @@ func (e *Engine) connectRoundsLockedWithPorts(
 		e.raceState.Connections = kept
 		toR.SeedSource = "all_active_pilots"
 		toR.SeedToPort = normalizeConnToPort(toPort, toR)
-		if distribution == "roster" || distribution == "snake" || distribution == "random" {
+		if distribution == "roster" || distribution == "snake" || distribution == "sequential" || distribution == "random" {
 			toR.SeedDistribution = distribution
 		}
 		e.recomputeGraphAndRebuildLocked(toR.StageIndex, toR.ID)
@@ -4273,10 +4799,31 @@ func (e *Engine) connectRoundsLockedWithPorts(
 		Count:       advanceCount,
 		CustomCount: customCount,
 	}
-	if linkMode == "stage_seeds" {
-		newConn.SeedStart = seedStart
-		newConn.SeedEnd = seedEnd
-		newConn.Distribution = distribution
+	if linkMode == "stage_seeds" || linkMode == "standings_top" || linkMode == "all_pilots_ranked" {
+		if seedStart >= 1 {
+			newConn.SeedStart = seedStart
+		}
+		if seedEnd >= 1 {
+			newConn.SeedEnd = seedEnd
+			if newConn.SeedStart < 1 {
+				newConn.SeedStart = 1
+			}
+			if newConn.SeedEnd >= newConn.SeedStart {
+				newConn.Count = newConn.SeedEnd - newConn.SeedStart + 1
+				newConn.CustomCount = true
+			}
+		} else if linkMode == "stage_seeds" {
+			newConn.SeedStart = seedStart
+			newConn.SeedEnd = seedEnd
+		}
+		if distribution == "snake" || distribution == "sequential" {
+			newConn.Distribution = distribution
+		} else if linkMode == "stage_seeds" || linkMode == "standings_top" {
+			newConn.Distribution = defaultStageSeedDistribution(toR)
+		}
+		if rankingMetric != "" {
+			newConn.RankingMetric = rankingMetric
+		}
 	}
 	if !domain.IsStagePortalRoundID(toR.ID) && e.ensureRoundUnstartedLocked(toR.ID) != nil {
 		newConn.Invalid = true
@@ -4294,19 +4841,7 @@ func (e *Engine) connectRoundsLockedWithPorts(
 	addedConn := e.raceState.Connections[len(e.raceState.Connections)-1]
 	if !addedConn.Invalid {
 		toR.SeedSource = ""
-		inCount := 0
-		allBottom := true
-		for _, c := range e.raceState.Connections {
-			if !c.Invalid && c.ToRoundID == toR.ID {
-				inCount++
-				if c.Mode != "bottom_per_heat" {
-					allBottom = false
-				}
-			}
-		}
-		if inCount > 0 && allBottom && toR.BracketLane == "winners" {
-			toR.BracketLane = "losers"
-		}
+		e.reconcileRedemptionLaneLocked(toR.ID)
 		e.recomputeGraphAndRebuildLocked(toR.StageIndex, toR.ID)
 	} else {
 		race.SyncRoundsMetadata(&e.raceState)
@@ -4531,10 +5066,12 @@ func (e *Engine) reconnectRoundConnectionLocked(
 				if remainingValidIn == 0 && oldToR.SeedSource != "all_active_pilots" && e.ensureRoundUnstartedLocked(orig.ToRoundID) == nil {
 					oldToR.SeedSource = "empty"
 				}
+				e.reconcileRedemptionLaneLocked(orig.ToRoundID)
 				e.recomputeGraphAndRebuildLocked(oldToR.StageIndex, orig.ToRoundID, orig.FromRoundID)
 			}
 		} else if len(newlyValid) > 0 {
 			if oldToR := e.findRoundByIDLocked(orig.ToRoundID); oldToR != nil {
+				e.reconcileRedemptionLaneLocked(orig.ToRoundID)
 				e.recomputeGraphAndRebuildLocked(oldToR.StageIndex, "")
 			}
 		}
@@ -4545,19 +5082,7 @@ func (e *Engine) reconnectRoundConnectionLocked(
 			e.recomputeGraphColumnsOnlyLocked(toR.StageIndex)
 		} else if targetR := e.findRoundByIDLocked(targetToID); targetR != nil {
 			targetR.SeedSource = ""
-			inCount := 0
-			allBottom := true
-			for _, c := range e.raceState.Connections {
-				if !c.Invalid && c.ToRoundID == targetToID {
-					inCount++
-					if c.Mode != "bottom_per_heat" {
-						allBottom = false
-					}
-				}
-			}
-			if inCount > 0 && allBottom && targetR.BracketLane == "winners" {
-				targetR.BracketLane = "losers"
-			}
+			e.reconcileRedemptionLaneLocked(targetToID)
 			e.recomputeGraphAndRebuildLocked(targetR.StageIndex, targetToID, orig.FromRoundID)
 		}
 	} else {
@@ -4575,6 +5100,15 @@ func (e *Engine) updateRoundConnectionLocked(
 	advanceCount, seedStart, seedEnd int,
 	distribution string,
 ) error {
+	return e.updateRoundConnectionFullLocked(connID, fromRoundID, toRoundID, linkMode, advanceCount, seedStart, seedEnd, distribution, "")
+}
+
+func (e *Engine) updateRoundConnectionFullLocked(
+	connID, fromRoundID, toRoundID, linkMode string,
+	advanceCount, seedStart, seedEnd int,
+	distribution string,
+	rankingMetric domain.QualifyingMetric,
+) error {
 	race.SyncRoundsMetadata(&e.raceState)
 	if _, pToID, isPilotsConn := extractPilotsConnTargetID(connID); isPilotsConn || domain.IsStagePilotsInID(fromRoundID) {
 		targetID := toRoundID
@@ -4591,7 +5125,7 @@ func (e *Engine) updateRoundConnectionLocked(
 		e.raceState.TemplateID = "custom"
 		e.markStageCustomizedLocked(toR.StageIndex)
 		toR.SeedSource = "all_active_pilots"
-		if distribution == "roster" || distribution == "snake" || distribution == "random" {
+		if distribution == "roster" || distribution == "snake" || distribution == "sequential" || distribution == "random" {
 			toR.SeedDistribution = distribution
 		}
 		// Clear ManualLock on this round when organizer explicitly re-applies a Pilots wire seeding order
@@ -4647,7 +5181,31 @@ func (e *Engine) updateRoundConnectionLocked(
 		if linkMode != "" {
 			e.raceState.Connections[idx].Mode = linkMode
 		}
-		if advanceCount > 0 {
+		curMode := e.raceState.Connections[idx].Mode
+		if curMode == "standings_top" || curMode == "all_pilots_ranked" {
+			if seedStart >= 1 && seedEnd >= seedStart {
+				e.raceState.Connections[idx].SeedStart = seedStart
+				e.raceState.Connections[idx].SeedEnd = seedEnd
+				e.raceState.Connections[idx].Count = seedEnd - seedStart + 1
+				e.raceState.Connections[idx].CustomCount = true
+			} else if advanceCount > 0 {
+				e.raceState.Connections[idx].SeedStart = 0
+				e.raceState.Connections[idx].SeedEnd = 0
+				e.raceState.Connections[idx].Count = advanceCount
+				e.raceState.Connections[idx].CustomCount = true
+			} else if seedStart == 0 && seedEnd == 0 && advanceCount == 0 && linkMode == "standings_top" {
+				// All qualified pilots
+				e.raceState.Connections[idx].SeedStart = 0
+				e.raceState.Connections[idx].SeedEnd = 0
+				e.raceState.Connections[idx].Count = 0
+			}
+			if distribution == "snake" || distribution == "sequential" {
+				e.raceState.Connections[idx].Distribution = distribution
+			}
+			if rankingMetric != "" {
+				e.raceState.Connections[idx].RankingMetric = rankingMetric
+			}
+		} else if advanceCount > 0 {
 			e.raceState.Connections[idx].Count = advanceCount
 			e.raceState.Connections[idx].CustomCount = true
 		}
@@ -4685,19 +5243,7 @@ func (e *Engine) updateRoundConnectionLocked(
 	}
 	e.validateConnectionsLocked()
 	if toR := e.findRoundByIDLocked(toID); toR != nil {
-		allBottom := true
-		inCount := 0
-		for _, c := range e.raceState.Connections {
-			if !c.Invalid && c.ToRoundID == toID {
-				inCount++
-				if c.Mode != "bottom_per_heat" {
-					allBottom = false
-				}
-			}
-		}
-		if inCount > 0 && allBottom && toR.BracketLane == "winners" {
-			toR.BracketLane = "losers"
-		}
+		e.reconcileRedemptionLaneLocked(toID)
 		e.recomputeGraphAndRebuildLocked(toR.StageIndex, toID, fromID)
 	}
 	return nil
@@ -4778,6 +5324,7 @@ func (e *Engine) disconnectRoundsLocked(connID, fromRoundID, toRoundID string) e
 		if !wasInvalid && remainingIn == 0 && e.ensureRoundUnstartedLocked(toID) == nil {
 			toR.SeedSource = "empty"
 		}
+		e.reconcileRedemptionLaneLocked(toID)
 		if !wasInvalid || len(newlyValid) > 0 {
 			e.recomputeGraphAndRebuildLocked(toR.StageIndex, "")
 		} else {
@@ -4788,6 +5335,10 @@ func (e *Engine) disconnectRoundsLocked(connID, fromRoundID, toRoundID string) e
 }
 
 func (e *Engine) setRoundSeedSourceLocked(roundID, linkMode string) error {
+	return e.setRoundSeedSourceWithDistLocked(roundID, linkMode, "")
+}
+
+func (e *Engine) setRoundSeedSourceWithDistLocked(roundID, linkMode, distribution string) error {
 	race.SyncRoundsMetadata(&e.raceState)
 	r := e.findRoundByIDLocked(roundID)
 	if r == nil {
@@ -4807,9 +5358,13 @@ func (e *Engine) setRoundSeedSourceLocked(roundID, linkMode string) error {
 	e.raceState.Connections = kept
 	if linkMode == "all_active_pilots" {
 		r.SeedSource = "all_active_pilots"
+		if distribution == "random" || distribution == "snake" || distribution == "sequential" || distribution == "roster" {
+			r.SeedDistribution = distribution
+		}
 	} else {
 		r.SeedSource = "empty"
 	}
+	e.reconcileRedemptionLaneLocked(r.ID)
 	e.recomputeGraphAndRebuildLocked(r.StageIndex, r.ID)
 	return nil
 }
@@ -5233,6 +5788,9 @@ func (e *Engine) recomputeGraphAndRebuildLocked(stageIdx int, startRoundID strin
 	}
 
 	for _, rid := range ordered {
+		if e.ensureRoundUnstartedLocked(rid) == nil {
+			e.rebalanceAutoConnectionsIntoLocked(rid)
+		}
 		e.rebuildSingleRoundLocked(rid)
 	}
 
@@ -5444,7 +6002,11 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 			}
 			if r.SeedDistribution == "random" && len(pilots) > 1 {
 				shuffled := append([]domain.PilotSlot(nil), pilots...)
-				rng := rand.New(rand.NewSource(int64(r.StageIndex*1009 + r.Round*97 + len(shuffled))))
+				seedVal := r.RandomSeed
+				if seedVal == 0 {
+					seedVal = int64(r.StageIndex*1009 + r.Round*97 + len(shuffled))
+				}
+				rng := rand.New(rand.NewSource(seedVal))
 				rng.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
 				pilots = shuffled
 			}
@@ -5468,7 +6030,11 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 			return
 		}
 
-		// Empty / disconnected round -> clean empty heats (preserving TargetHeats / FinalsHeats)
+		// Empty / disconnected round -> clean heats preserving manually seated pilots & TargetHeats
+		activeBySlot := make(map[int]domain.PilotSlot)
+		for _, ap := range e.activeEventPilotsForGenerationLocked() {
+			activeBySlot[ap.SlotIndex] = ap
+		}
 		emptyHeats := r.TargetHeats
 		if r.BracketLane == "finals" {
 			if r.FinalsFormat == domain.FinalsPoints {
@@ -5486,17 +6052,27 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 		targetHeats := e.ensureRoundHeatCountLocked(roundID, emptyHeats)
 		for _, th := range targetHeats {
 			for si := range th.Seats {
-				if !th.Seats[si].ManualLock {
-					th.Seats[si].Feeder = nil
-					clearSeatOccupant(&th.Seats[si], false)
+				s := &th.Seats[si]
+				if s.PilotSlotIndex > 0 && s.ManualLock {
+					s.Feeder = nil
+					if ap, ok := activeBySlot[s.PilotSlotIndex]; ok {
+						s.Callsign = ap.Callsign
+						s.PhoneticName = ap.PhoneticName
+						s.Color = ap.Color
+					} else {
+						s.ManualLock = false
+						clearSeatOccupant(s, false)
+					}
 				} else {
-					th.Seats[si].Feeder = nil
-					th.Seats[si].ManualLock = false
+					s.Feeder = nil
+					s.ManualLock = false
+					clearSeatOccupant(s, false)
 				}
 			}
 			th.State = domain.HeatReady
 			finalizeEditedHeatState(th, stgSettings.QualifyingMetric)
 		}
+		syncRoundExpectedWinners()
 		return
 	}
 
@@ -5608,7 +6184,7 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 				srcHeats = append(srcHeats, &e.raceState.Heats[i])
 			}
 		}
-		if len(srcHeats) == 0 {
+		if len(srcHeats) == 0 && conn.Mode != "standings_top" && conn.Mode != "all_pilots_ranked" {
 			continue
 		}
 
@@ -5678,46 +6254,149 @@ func (e *Engine) rebuildSingleRoundLocked(roundID string) {
 			}
 
 		case "standings_top":
-			for rnk := 1; rnk <= cnt; rnk++ {
+			upCap := e.upstreamStandingsCapacityLocked(srcR, conn, maxPerHeat)
+			sStart := conn.SeedStart
+			if sStart < 1 {
+				sStart = 1
+			}
+			sEnd := conn.SeedEnd
+			if sEnd <= 0 {
+				if conn.Count >= 1 && sStart == 1 {
+					sEnd = conn.Count
+					if !conn.CustomCount && upCap > 0 && sEnd > upCap {
+						sEnd = upCap
+					}
+				} else {
+					sEnd = upCap
+				}
+			}
+			if sEnd > 64 {
+				sEnd = 64
+			}
+			if sEnd < sStart {
+				sEnd = sStart
+			}
+			seq := conn.Distribution == "sequential"
+			if len(inConns) == 1 {
+				allStageSeeds = true
+				allSequential = seq
+			}
+			isQualSrc := srcR.StageFormat == domain.FormatQualifying || srcR.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(srcR.ID)
+			srcLblTitle := srcR.Title
+			if srcLblTitle == "" {
+				srcLblTitle = fmt.Sprintf("R%d", srcR.Column)
+			}
+			for rnk := sStart; rnk <= sEnd; rnk++ {
+				lbl := fmt.Sprintf("Seed #%d · %s", rnk, srcLblTitle)
+				if isQualSrc && len(inConns) == 1 {
+					lbl = fmt.Sprintf("Seed #%d", rnk)
+				}
 				feeders = append(feeders, incomingFeeder{
-					feeder: domain.SeatFeeder{FromRoundColumn: srcR.Column, FromStandingsRank: rnk},
-					label:  fmt.Sprintf("Fastest #%d · R%d", rnk, srcR.Column),
+					feeder: domain.SeatFeeder{
+						FromRoundID:       srcR.ID,
+						FromRoundColumn:   srcR.Column,
+						FromStandingsRank: rnk,
+						RankingMetric:     conn.RankingMetric,
+					},
+					label:      lbl,
+					sequential: seq,
 				})
 			}
 
 		case "all_pilots":
-			for rnk := 1; rnk <= maxPerHeat; rnk++ {
-				for _, sh := range srcHeats {
-					if rnk <= len(sh.Seats) {
-						feeders = append(feeders, incomingFeeder{
-							feeder: domain.SeatFeeder{FromHeatID: sh.ID, FromRank: rnk},
-							label:  fmt.Sprintf("%s · %s", race.Ordinal(rnk), sh.ShortLabel),
-						})
+			// When `srcR` holds standings-seed placeholders (`Seed #1..#N`) and 0 concrete pilots yet
+			// (e.g. `Qualifying -> Mains R1 -> Mains R2 (all_pilots)`), rotate those exact `Seed #` feeders
+			// across `r` so `Mains R2..Rn` show `Seed #` placeholders immediately and resolve simultaneously!
+			var upstreamSeedFeeders []incomingFeeder
+			totalSrcNonByeFeeders := 0
+			hasConcreteInSrc := false
+			for _, sh := range srcHeats {
+				for _, s := range sh.Seats {
+					if s.PilotSlotIndex > 0 {
+						hasConcreteInSrc = true
+						break
+					}
+					if s.Feeder != nil && !s.Feeder.IsBye {
+						totalSrcNonByeFeeders++
+						if s.Feeder.FromStandingsRank > 0 || s.Feeder.FromStageSeed > 0 {
+							fCopy := *s.Feeder
+							lbl := s.SourceLabel
+							if lbl == "" {
+								lbl = e.feederSourceLabelLocked(&fCopy)
+							}
+							upstreamSeedFeeders = append(upstreamSeedFeeders, incomingFeeder{
+								feeder: fCopy,
+								label:  lbl,
+							})
+						}
+					}
+				}
+			}
+			if !hasConcreteInSrc && len(upstreamSeedFeeders) > 0 && len(upstreamSeedFeeders) == totalSrcNonByeFeeders {
+				sort.SliceStable(upstreamSeedFeeders, func(i, j int) bool {
+					ai := upstreamSeedFeeders[i].feeder.FromStandingsRank
+					if ai == 0 {
+						ai = upstreamSeedFeeders[i].feeder.FromStageSeed
+					}
+					aj := upstreamSeedFeeders[j].feeder.FromStandingsRank
+					if aj == 0 {
+						aj = upstreamSeedFeeders[j].feeder.FromStageSeed
+					}
+					return ai < aj
+				})
+				shift := r.Round - srcR.Round
+				if shift < 1 {
+					shift = r.Column - srcR.Column
+				}
+				if shift < 1 {
+					shift = 1
+				}
+				nSeeds := len(upstreamSeedFeeders)
+				for k := 0; k < nSeeds; k++ {
+					feeders = append(feeders, upstreamSeedFeeders[(k+shift)%nSeeds])
+				}
+				if len(inConns) == 1 {
+					allStageSeeds = true
+					allSequential = false
+				}
+			} else {
+				for rnk := 1; rnk <= maxPerHeat; rnk++ {
+					for _, sh := range srcHeats {
+						if rnk <= entrantsOf(sh) && rnk <= len(sh.Seats) {
+							feeders = append(feeders, incomingFeeder{
+								feeder: domain.SeatFeeder{FromHeatID: sh.ID, FromRank: rnk},
+								label:  fmt.Sprintf("%s · %s", race.Ordinal(rnk), sh.ShortLabel),
+							})
+						}
 					}
 				}
 			}
 
 		case "all_pilots_ranked":
-			totalRanked := 0
-			for _, sh := range srcHeats {
-				for _, s := range sh.Seats {
-					if s.PilotSlotIndex > 0 || (s.Feeder != nil && !s.Feeder.IsBye) {
-						totalRanked++
-					}
-				}
-			}
-			if totalRanked < 1 {
-				totalRanked = len(srcHeats) * maxPerHeat
-			}
+			totalRanked := e.upstreamStandingsCapacityLocked(srcR, conn, maxPerHeat)
 			seq := conn.Distribution != "snake"
-			if seq {
+			if len(inConns) == 1 {
 				allStageSeeds = true
-				allSequential = true
+				allSequential = seq
+			}
+			isQualSrc := srcR.StageFormat == domain.FormatQualifying || srcR.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(srcR.ID)
+			srcLblTitle := srcR.Title
+			if srcLblTitle == "" {
+				srcLblTitle = fmt.Sprintf("R%d", srcR.Column)
 			}
 			for rnk := 1; rnk <= totalRanked; rnk++ {
+				lbl := fmt.Sprintf("Seed #%d · %s", rnk, srcLblTitle)
+				if isQualSrc && len(inConns) == 1 {
+					lbl = fmt.Sprintf("Seed #%d", rnk)
+				}
 				feeders = append(feeders, incomingFeeder{
-					feeder:     domain.SeatFeeder{FromRoundColumn: srcR.Column, FromStandingsRank: rnk},
-					label:      fmt.Sprintf("Rank #%d · R%d", rnk, srcR.Column),
+					feeder: domain.SeatFeeder{
+						FromRoundID:       srcR.ID,
+						FromRoundColumn:   srcR.Column,
+						FromStandingsRank: rnk,
+						RankingMetric:     conn.RankingMetric,
+					},
+					label:      lbl,
 					sequential: seq,
 				})
 			}
@@ -6416,6 +7095,10 @@ func (e *Engine) regenerateUpcomingRoundsLocked() {
 		return
 	}
 	// If zero heats have started yet and race uses a standard template, regenerate cleanly!
+	if !hasAnyStartedHeatInState(&e.raceState) && e.raceState.TemplateID != "" && e.raceState.TemplateID != "custom" && len(e.raceState.Stages) <= 1 {
+		e.regenerateTournamentLocked()
+		return
+	}
 	if !hasAnyStartedHeatInState(&e.raceState) && e.raceState.TemplateID != "" && e.raceState.TemplateID != "custom" && len(e.raceState.Stages) <= 2 && !e.hasAnyCustomizedStageLocked() {
 		e.regenerateTournamentLocked()
 		return
@@ -6698,21 +7381,35 @@ func (e *Engine) populateBalancedPilotRoundPreservingLocksLocked(
 		return
 	}
 
-	if r.SeedDistribution == "snake" && len(priorHeats) == 0 && len(locks) == 0 {
+	if (r.SeedDistribution == "snake" || r.SeedDistribution == "sequential") && len(priorHeats) == 0 && len(locks) == 0 {
 		lastCh := race.LastChannelByPilot(e.raceState.Heats)
 		numDst := len(targetHeats)
 		buckets := make([][]domain.PilotSlot, numDst)
-		bOrder := snakeBracketHeatOrder(numDst)
-		for idx, p := range pilots {
-			pass := idx / numDst
-			rem := idx % numDst
-			var dstIdx int
-			if pass%2 == 0 {
-				dstIdx = bOrder[rem]
-			} else {
-				dstIdx = bOrder[numDst-1-rem]
+		if r.SeedDistribution == "sequential" {
+			chunk := (len(pilots) + numDst - 1) / numDst
+			if chunk < 1 {
+				chunk = 1
 			}
-			buckets[dstIdx] = append(buckets[dstIdx], p)
+			for idx, p := range pilots {
+				dstIdx := idx / chunk
+				if dstIdx >= numDst {
+					dstIdx = numDst - 1
+				}
+				buckets[dstIdx] = append(buckets[dstIdx], p)
+			}
+		} else {
+			bOrder := snakeBracketHeatOrder(numDst)
+			for idx, p := range pilots {
+				pass := idx / numDst
+				rem := idx % numDst
+				var dstIdx int
+				if pass%2 == 0 {
+					dstIdx = bOrder[rem]
+				} else {
+					dstIdx = bOrder[numDst-1-rem]
+				}
+				buckets[dstIdx] = append(buckets[dstIdx], p)
+			}
 		}
 		for bi, th := range targetHeats {
 			assignPilotsWithChannelContinuity(th, buckets[bi], stgSettings.SeatChannels, lastCh)
@@ -6820,8 +7517,97 @@ func (e *Engine) populateBalancedPilotRoundPreservingLocksLocked(
 	}
 }
 
-// refreshUnstartedPilotsInRoundsLocked refreshes any unstarted root rounds with `SeedSource == "all_active_pilots"`
-// (preserving `ManualLock` seats) and cascades Balanced Rotation updates to unstarted downstream `"all_pilots"` rounds.
+// upstreamStandingsCapacityLocked determines how many ranked entrants `srcR` can feed downstream
+// via `standings_top` or `all_pilots_ranked`, accounting for Open Qualifier early-seed contenders,
+// concrete seated pilots, or upstream `Feeder` placeholders (falling back to `maxPerHeat` on empty drafts).
+func (e *Engine) upstreamStandingsCapacityLocked(srcR *domain.RaceRound, conn domain.RoundConnection, maxPerHeat int) int {
+	if maxPerHeat < 2 {
+		maxPerHeat = 4
+	}
+	activeCnt := len(e.activeEventPilotsForGenerationLocked())
+	if srcR == nil {
+		if activeCnt >= 2 {
+			return activeCnt
+		}
+		return maxPerHeat
+	}
+
+	if srcR.StageFormat == domain.FormatOpenQualifier || domain.IsOpenQualRoundID(srcR.ID) {
+		if conn.SeededEarly || e.raceState.Stage2SeededEarly {
+			chainIDs := race.QualifierChainRoundIDs(&e.raceState, srcR.ID)
+			chainSet := make(map[string]bool, len(chainIDs))
+			for _, cid := range chainIDs {
+				chainSet[cid] = true
+			}
+			flew := make(map[int]bool)
+			for _, h := range e.raceState.Heats {
+				if chainSet[h.RoundID] && h.State == domain.HeatConfirmed {
+					for _, s := range h.Seats {
+						if s.PilotSlotIndex > 0 && s.Status != domain.PilotHeatDQ && s.Status != domain.PilotHeatDNS {
+							flew[s.PilotSlotIndex] = true
+						}
+					}
+				}
+			}
+			if len(flew) >= 2 {
+				return len(flew)
+			}
+		}
+		seen := make(map[int]bool)
+		for _, ap := range e.activeEventPilotsForGenerationLocked() {
+			seen[ap.SlotIndex] = true
+		}
+		for _, h := range e.raceState.Heats {
+			if h.RoundID == srcR.ID {
+				for _, s := range h.Seats {
+					if s.PilotSlotIndex > 0 && s.Status != domain.PilotHeatDQ && s.Status != domain.PilotHeatDNS {
+						seen[s.PilotSlotIndex] = true
+					}
+				}
+			}
+		}
+		if len(seen) >= 2 {
+			return len(seen)
+		}
+		return maxPerHeat
+	}
+
+	seenConcrete := make(map[int]bool)
+	feederCnt := 0
+	srcHeatCount := 0
+	for _, h := range e.raceState.Heats {
+		if h.RoundID != srcR.ID {
+			continue
+		}
+		srcHeatCount++
+		for _, s := range h.Seats {
+			if s.PilotSlotIndex > 0 {
+				if s.Status != domain.PilotHeatDQ && s.Status != domain.PilotHeatDNS {
+					seenConcrete[s.PilotSlotIndex] = true
+				}
+			} else if s.Feeder != nil && !s.Feeder.IsBye {
+				feederCnt++
+			}
+		}
+	}
+	total := len(seenConcrete) + feederCnt
+	if total >= 1 {
+		return total
+	}
+	if srcR.SeedSource == "all_active_pilots" && activeCnt >= 2 {
+		return activeCnt
+	}
+	if srcHeatCount > 0 {
+		return srcHeatCount * maxPerHeat
+	}
+	if activeCnt >= 2 {
+		return activeCnt
+	}
+	return maxPerHeat
+}
+
+// refreshUnstartedPilotsInRoundsLocked refreshes unstarted root rounds (`all_active_pilots` and `open_qualifier`)
+// and walks the ENTIRE downstream DAG all the way to Finals so every unstarted round dynamically resizes and updates placeholders.
 func (e *Engine) refreshUnstartedPilotsInRoundsLocked() {
 	if !e.raceState.Generated {
 		return
@@ -6837,10 +7623,15 @@ func (e *Engine) refreshUnstartedPilotsInRoundsLocked() {
 	}
 	stagesSeen := make(map[int]bool)
 	for _, r := range e.raceState.Rounds {
-		if qualReconciled[r.StageIndex] {
+		if qualReconciled[r.StageIndex] || domain.IsStagePortalRoundID(r.ID) {
 			continue
 		}
-		if r.SeedSource != "all_active_pilots" || domain.IsStagePortalRoundID(r.ID) || domain.IsOpenQualRoundID(r.ID) {
+		if domain.IsOpenQualRoundID(r.ID) || r.StageFormat == domain.FormatOpenQualifier {
+			e.cascadeBalancedRoundsFromLocked(r.StageIndex, r.ID)
+			stagesSeen[r.StageIndex] = true
+			continue
+		}
+		if r.SeedSource != "all_active_pilots" {
 			continue
 		}
 		if e.ensureRoundUnstartedLocked(r.ID) != nil {
@@ -6859,50 +7650,208 @@ func (e *Engine) refreshUnstartedPilotsInRoundsLocked() {
 	}
 }
 
-// cascadeBalancedRoundsFromLocked rebuilds any unstarted downstream `"all_pilots"` rounds reachable from `fromRoundID`.
+// cascadeBalancedRoundsFromLocked walks ALL valid outgoing connections down the DAG from `fromRoundID`
+// all the way to Finals in topological order, re-planning and populating placeholders/pilots on every
+// unstarted downstream round (preserving any manual seat locks on those rounds).
 func (e *Engine) cascadeBalancedRoundsFromLocked(stageIdx int, fromRoundID string) {
 	if fromRoundID == "" {
 		return
 	}
-	adj := make(map[string][]string)
-	for _, c := range e.raceState.Connections {
-		if !c.Invalid && c.StageIndex == stageIdx && c.Mode == "all_pilots" {
-			adj[c.FromRoundID] = append(adj[c.FromRoundID], c.ToRoundID)
+	roundByID := make(map[string]*domain.RaceRound, len(e.raceState.Rounds))
+	for i := range e.raceState.Rounds {
+		r := &e.raceState.Rounds[i]
+		if (stageIdx <= 0 || r.StageIndex == stageIdx) && !domain.IsStagePortalRoundID(r.ID) {
+			roundByID[r.ID] = r
 		}
+	}
+
+	// Also refresh ExpectedWinners on `fromRoundID` itself if it is unstarted
+	if srcR := roundByID[fromRoundID]; srcR != nil && srcR.StageFormat != domain.FormatQualifying && srcR.BracketLane != "finals" {
+		stgSet := e.stageSettingsLocked(srcR.StageIndex)
+		defAdv := stgSet.PilotsPerHeat / 2
+		if defAdv < 1 {
+			defAdv = 1
+		}
+		outAdv := race.OutgoingTopAdvance(e.raceState.Connections, fromRoundID, defAdv)
+		if outAdv < 1 {
+			outAdv = defAdv
+		}
+		for hi := range e.raceState.Heats {
+			if e.raceState.Heats[hi].RoundID == fromRoundID && isUnstartedHeatState(e.raceState.Heats[hi].State) {
+				ent := race.HeatEntrants(&e.raceState.Heats[hi])
+				if ent == 0 {
+					ent = len(e.raceState.Heats[hi].Seats)
+				}
+				e.raceState.Heats[hi].ExpectedWinners = race.EffectiveAdvance(outAdv, ent)
+				race.RecomputeHeat(&e.raceState.Heats[hi], stgSet.QualifyingMetric)
+			}
+		}
+	}
+
+	adj := make(map[string][]string)
+	inConns := make(map[string][]domain.RoundConnection)
+	for _, c := range e.raceState.Connections {
+		if c.Invalid || domain.IsStagePortalRoundID(c.FromRoundID) || domain.IsStagePortalRoundID(c.ToRoundID) {
+			continue
+		}
+		if stageIdx > 0 && c.StageIndex != stageIdx {
+			continue
+		}
+		adj[c.FromRoundID] = append(adj[c.FromRoundID], c.ToRoundID)
+		inConns[c.ToRoundID] = append(inConns[c.ToRoundID], c)
 	}
 	if len(adj[fromRoundID]) == 0 {
 		return
 	}
-	roundByID := make(map[string]*domain.RaceRound)
-	for i := range e.raceState.Rounds {
-		if e.raceState.Rounds[i].StageIndex == stageIdx {
-			roundByID[e.raceState.Rounds[i].ID] = &e.raceState.Rounds[i]
-		}
-	}
-	seen := make(map[string]bool)
-	var queue []string
-	queue = append(queue, adj[fromRoundID]...)
-	var order []string
+
+	reachable := make(map[string]bool)
+	queue := append([]string(nil), adj[fromRoundID]...)
 	for len(queue) > 0 {
 		cur := queue[0]
 		queue = queue[1:]
-		if seen[cur] {
+		if reachable[cur] || cur == fromRoundID {
 			continue
 		}
-		seen[cur] = true
-		order = append(order, cur)
+		if _, ok := roundByID[cur]; !ok {
+			continue
+		}
+		reachable[cur] = true
 		queue = append(queue, adj[cur]...)
 	}
-	sort.SliceStable(order, func(i, j int) bool {
-		ri, rj := roundByID[order[i]], roundByID[order[j]]
-		if ri == nil || rj == nil {
-			return false
-		}
-		return ri.Column < rj.Column
-	})
-	for _, rid := range order {
-		e.rebuildSingleRoundLocked(rid)
+	if len(reachable) == 0 {
+		return
 	}
+
+	inDeg := make(map[string]int, len(reachable))
+	subAdj := make(map[string][]string, len(reachable))
+	for id := range reachable {
+		for _, ic := range inConns[id] {
+			if reachable[ic.FromRoundID] && ic.FromRoundID != id {
+				subAdj[ic.FromRoundID] = append(subAdj[ic.FromRoundID], id)
+				inDeg[id]++
+			}
+		}
+	}
+	lessID := func(a, b string) bool {
+		ra, rb := roundByID[a], roundByID[b]
+		if ra == nil || rb == nil {
+			return a < b
+		}
+		if ra.Column != rb.Column {
+			return ra.Column < rb.Column
+		}
+		if ra.Round != rb.Round {
+			return ra.Round < rb.Round
+		}
+		return a < b
+	}
+	var ready []string
+	for id := range reachable {
+		if inDeg[id] == 0 {
+			ready = append(ready, id)
+		}
+	}
+	sort.SliceStable(ready, func(i, j int) bool { return lessID(ready[i], ready[j]) })
+
+	var ordered []string
+	placed := make(map[string]bool, len(reachable))
+	for len(ready) > 0 {
+		cur := ready[0]
+		ready = queuePop(ready)
+		if placed[cur] {
+			continue
+		}
+		placed[cur] = true
+		ordered = append(ordered, cur)
+		for _, nxt := range subAdj[cur] {
+			inDeg[nxt]--
+			if inDeg[nxt] == 0 && !placed[nxt] {
+				ready = append(ready, nxt)
+			}
+		}
+		sort.SliceStable(ready, func(i, j int) bool { return lessID(ready[i], ready[j]) })
+	}
+	for id := range reachable {
+		if !placed[id] {
+			ordered = append(ordered, id)
+		}
+	}
+
+	for _, rid := range ordered {
+		if e.ensureRoundUnstartedLocked(rid) != nil {
+			continue
+		}
+		// Preserve any explicit ManualLock seats on downstream rounds during automatic cascades
+		type lockedSeatSnap struct {
+			heatIdx int
+			seatIdx int
+			seat    domain.HeatSeat
+		}
+		var savedLocks []lockedSeatSnap
+		hIdx := 0
+		for _, h := range e.raceState.Heats {
+			if h.RoundID != rid {
+				continue
+			}
+			for si, s := range h.Seats {
+				if s.ManualLock && s.PilotSlotIndex > 0 {
+					savedLocks = append(savedLocks, lockedSeatSnap{heatIdx: hIdx, seatIdx: si, seat: s})
+				}
+			}
+			hIdx++
+		}
+
+		e.rebalanceAutoConnectionsIntoLocked(rid)
+		e.rebuildSingleRoundLocked(rid)
+
+		if len(savedLocks) > 0 {
+			var rebuiltHeats []*domain.RaceHeat
+			for i := range e.raceState.Heats {
+				if e.raceState.Heats[i].RoundID == rid {
+					rebuiltHeats = append(rebuiltHeats, &e.raceState.Heats[i])
+				}
+			}
+			lockedSlots := make(map[int]bool, len(savedLocks))
+			for _, lk := range savedLocks {
+				if lk.heatIdx < len(rebuiltHeats) && lk.seatIdx < len(rebuiltHeats[lk.heatIdx].Seats) {
+					lockedSlots[lk.seat.PilotSlotIndex] = true
+				}
+			}
+			if len(lockedSlots) > 0 {
+				for _, rh := range rebuiltHeats {
+					for si := range rh.Seats {
+						if !rh.Seats[si].ManualLock && lockedSlots[rh.Seats[si].PilotSlotIndex] {
+							clearSeatOccupant(&rh.Seats[si], false)
+						}
+					}
+				}
+				for _, lk := range savedLocks {
+					if lk.heatIdx < len(rebuiltHeats) && lk.seatIdx < len(rebuiltHeats[lk.heatIdx].Seats) {
+						dst := &rebuiltHeats[lk.heatIdx].Seats[lk.seatIdx]
+						keepFeeder := dst.Feeder
+						*dst = lk.seat
+						dst.Feeder = keepFeeder
+						dst.ManualLock = true
+					}
+				}
+			}
+		}
+	}
+
+	effStage := stageIdx
+	if effStage <= 0 {
+		effStage = 1
+	}
+	e.sortCustomHeatsAndOrderLocked(effStage)
+	race.RebuildEdgesFromFeeders(&e.raceState)
+	race.SyncRoundsMetadata(&e.raceState)
+}
+
+func queuePop(s []string) []string {
+	if len(s) <= 1 {
+		return nil
+	}
+	return s[1:]
 }
 
 func clearSeatOccupant(s *domain.HeatSeat, lockFeeder bool) {
@@ -7231,15 +8180,30 @@ func (e *Engine) appendHeatToRoundOrColumnLocked(roundID string, lane string, ro
 	prefix := fmt.Sprintf("R%d", round)
 	if lane == "finals" {
 		expWin = 1
+		otherFinalsOwnsBase := false
+		baseCode := "GF-1"
+		if finalsFmt == domain.FinalsChaseTheAce || stageFmt == domain.FormatChaseTheAce {
+			baseCode = "CTA-1"
+		}
+		for _, eh := range e.raceState.Heats {
+			if eh.ID == baseCode && eh.RoundID != roundID {
+				otherFinalsOwnsBase = true
+				break
+			}
+		}
 		if finalsFmt == domain.FinalsChaseTheAce || stageFmt == domain.FormatChaseTheAce {
 			if stageIdx >= 3 {
 				prefix = fmt.Sprintf("S%d-CTA", stageIdx)
+			} else if otherFinalsOwnsBase {
+				prefix = fmt.Sprintf("F%d-CTA", round)
 			} else {
 				prefix = "CTA"
 			}
 		} else {
 			if stageIdx >= 3 {
 				prefix = fmt.Sprintf("S%d-GF", stageIdx)
+			} else if otherFinalsOwnsBase {
+				prefix = fmt.Sprintf("F%d-GF", round)
 			} else {
 				prefix = "GF"
 			}
@@ -7380,7 +8344,23 @@ func (e *Engine) deleteUnstartedHeatLocked(heatID string) error {
 		return fmt.Errorf("at least one heat must remain (or switch to Custom to delete all heats)")
 	}
 	wasActive := e.raceState.ActiveHeatID == heatID
+	delRoundID := e.raceState.Heats[idx].RoundID
+	delStageIdx := e.raceState.Heats[idx].StageIndex
 	e.raceState.Heats = append(e.raceState.Heats[:idx], e.raceState.Heats[idx+1:]...)
+
+	if delRoundID != "" {
+		if r := e.findRoundByIDLocked(delRoundID); r != nil && r.BracketLane != "finals" && r.StageFormat != domain.FormatOpenQualifier {
+			remCnt := 0
+			for _, h := range e.raceState.Heats {
+				if h.RoundID == delRoundID {
+					remCnt++
+				}
+			}
+			if remCnt >= 1 {
+				r.TargetHeats = remCnt
+			}
+		}
+	}
 
 	for hi := range e.raceState.Heats {
 		e.raceState.Heats[hi].Order = hi + 1
@@ -7397,6 +8377,10 @@ func (e *Engine) deleteUnstartedHeatLocked(heatID string) error {
 	}
 	if wasActive {
 		e.raceState.ActiveHeatID = ""
+	}
+	if delRoundID != "" {
+		e.markStageCustomizedLocked(delStageIdx)
+		e.cascadeBalancedRoundsFromLocked(delStageIdx, delRoundID)
 	}
 	race.RebuildEdgesFromFeeders(&e.raceState)
 	race.SyncRoundsMetadata(&e.raceState)

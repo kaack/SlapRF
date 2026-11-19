@@ -135,11 +135,11 @@ func TestMultiGPControlledRaceCreateImportFlyAndUpload(t *testing.T) {
 		t.Fatalf("expected clean imported MultiGP eventName %q without (2) suffix, got %q", raceTitle, importedName)
 	}
 
-	// Switch to Control tab, start the heat at 20x speed, finish & confirm results!
-	controlTabBtn := h.Page.Locator(`button[data-race-tab="control"]`).First()
+	// Switch to Marshal tab, start the heat at 20x speed, finish & confirm results!
+	controlTabBtn := h.Page.Locator(`button[data-mobile-ctrl-nav="live"]`).First()
 	if vis, _ := controlTabBtn.IsVisible(); vis {
 		if err := controlTabBtn.Click(); err != nil {
-			t.Fatalf("click Control tab: %v", err)
+			t.Fatalf("click Marshal tab: %v", err)
 		}
 	}
 
@@ -341,10 +341,10 @@ func TestMultiGPZippyQCheckInPullAndRun(t *testing.T) {
 	}
 	h.MustBeHidden(h.Page.Locator(`.slaprf-modal-backdrop`), "Import MultiGP modal closed")
 
-	// Switch to Control view and verify the Pull ZippyQ button is present in the top bar.
-	controlTabBtn := h.Page.Locator(`button[data-race-tab="control"]`).First()
-	if vis, _ := controlTabBtn.IsVisible(); vis {
-		_ = controlTabBtn.Click()
+	// Switch to Schedule view and verify the Pull ZippyQ button is present in the Heats Schedule header.
+	schedTabBtn := h.Page.Locator(`button[data-mobile-ctrl-nav="schedule"]`).First()
+	if vis, _ := schedTabBtn.IsVisible(); vis {
+		_ = schedTabBtn.Click()
 	}
 
 	pullZippyBtn := h.Page.Locator(`button[data-race-act="mgp-pull-zippyq"]`).First()

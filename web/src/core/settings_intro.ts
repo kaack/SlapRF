@@ -72,8 +72,12 @@ function updateIntro(state: IntroState): void {
 
 function enhanceIntro(intro: HTMLElement, ro: ResizeObserver): void {
   if (managedIntros.has(intro)) {
-    managedIntros.get(intro)!.update();
-    return;
+    const existing = managedIntros.get(intro)!;
+    if (intro.contains(existing.snippetEl)) {
+      existing.update();
+      return;
+    }
+    managedIntros.delete(intro);
   }
 
   const ps = Array.from(intro.querySelectorAll<HTMLParagraphElement>(":scope > p"));
@@ -154,34 +158,43 @@ function enhanceIntro(intro: HTMLElement, ro: ResizeObserver): void {
 
   managedIntros.set(intro, state);
   ro.observe(intro);
+  state.update();
   requestAnimationFrame(() => state.update());
 }
 
-export function installSettingsIntroCollapse(): void {
-  const ro = new ResizeObserver((entries) => {
-    for (const entry of entries) {
-      const el = entry.target as HTMLElement;
-      const state = managedIntros.get(el);
-      if (state) state.update();
-    }
-  });
+let sharedIntroRo: ResizeObserver | null = null;
 
-  const scan = (root: ParentNode) => {
-    if (root instanceof HTMLElement && root.matches(".settings-intro")) {
-      enhanceIntro(root, ro);
-    }
-    root.querySelectorAll<HTMLElement>(".settings-intro").forEach((el) => {
-      enhanceIntro(el, ro);
+function ensureIntroResizeObserver(): ResizeObserver {
+  if (!sharedIntroRo) {
+    sharedIntroRo = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const el = entry.target as HTMLElement;
+        const state = managedIntros.get(el);
+        if (state) state.update();
+      }
     });
-  };
+  }
+  return sharedIntroRo;
+}
 
-  scan(document);
+export function scanSettingsIntroCollapse(root: ParentNode = document): void {
+  const ro = ensureIntroResizeObserver();
+  if (root instanceof HTMLElement && root.matches(".settings-intro")) {
+    enhanceIntro(root, ro);
+  }
+  root.querySelectorAll<HTMLElement>(".settings-intro").forEach((el) => {
+    enhanceIntro(el, ro);
+  });
+}
+
+export function installSettingsIntroCollapse(): void {
+  scanSettingsIntroCollapse(document);
 
   const mo = new MutationObserver((mutations) => {
     for (const m of mutations) {
       m.addedNodes.forEach((node) => {
         if (node instanceof HTMLElement) {
-          scan(node);
+          scanSettingsIntroCollapse(node);
         }
       });
     }

@@ -1,6 +1,7 @@
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
+import { scanSettingsIntroCollapse } from "../core/settings_intro";
 import { getAppTheme, subscribeAppTheme } from "../core/theme";
 import { ApiClient } from "../services/api_client";
 import { TimerReadout } from "../services/esp_flasher";
@@ -364,10 +365,6 @@ export class DebugView extends Component {
               </div>
               <div class="debug-chart-readout debug-single-readout" data-signal-readout></div>
               <div data-slot="signal-legend"></div>
-              <div class="rules-foot">
-                <p class="note">Default view uses Auto X and Auto Y scaling with all overlays and channels shown.</p>
-                <button class="btn btn-ghost btn-sm" type="button" data-action="restore-signal-defaults">Restore defaults</button>
-              </div>
             </div>
             <div class="debug-status-layout" data-slot="noise-table"></div>
           </div>
@@ -572,6 +569,7 @@ export class DebugView extends Component {
     });
     this.syncHardwareModeDom();
     this.bindConsole(this.console);
+    this.renderFrame();
   }
 
   private hwMode(): TimingHardwareMode {
@@ -801,6 +799,9 @@ export class DebugView extends Component {
         "Signal over time &amp; channel noise",
         `<p>Click <strong>Stream</strong> to plot live 50 Hz sweeps, crossing peaks, 5 GHz Wi-Fi bursts, noise floors, and pilot thresholds.</p><p>The table below shows mean, spread, max, floor, hits/s, and how often noise reaches a pilot's enter threshold ("would trigger": anything above 0% with no drone flying risks false passes).</p>`
       );
+    }
+    if (this.el.offsetWidth > 0) {
+      scanSettingsIntroCollapse(this.el);
     }
   }
 
@@ -4923,11 +4924,7 @@ export class DebugView extends Component {
         <div class="debug-bars">
           ${rowsHtml.join("")}
         </div>
-        <div class="debug-scale mono"><span>0 RSSI</span><span>255 RSSI</span></div>
-        <div class="rules-foot">
-          <p class="note">Monitors RotorHazard RX5808 receiver nodes in real time (0–255 ADC RSSI) with per-node Enter / Exit hysteresis.</p>
-          <button class="btn btn-ghost btn-sm" type="button" data-action="restore-live-channels">Restore defaults</button>
-        </div>`;
+        <div class="debug-scale mono"><span>0 RSSI</span><span>255 RSSI</span></div>`;
       this.updateLive();
       return;
     }
@@ -4963,11 +4960,7 @@ export class DebugView extends Component {
           })
           .join("")}
       </div>
-      <div class="debug-scale mono"><span>${DBM_MIN} dBm</span><span>${DBM_MAX} dBm</span></div>
-      <div class="rules-foot">
-        <p class="note">Default monitors all 8 pilot channels in every sweep.</p>
-        <button class="btn btn-ghost btn-sm" type="button" data-action="restore-live-channels">Restore defaults</button>
-      </div>`;
+      <div class="debug-scale mono"><span>${DBM_MIN} dBm</span><span>${DBM_MAX} dBm</span></div>`;
     this.updateLive();
   }
 
@@ -6252,10 +6245,6 @@ export class DebugView extends Component {
             </div>
           </div>
         </div>
-        <div class="rules-foot">
-          <p class="note">Default scan sweeps 5180–5917 MHz (5 MHz step) at Full Y with all overlays shown.</p>
-          <button class="btn btn-ghost btn-sm" type="button" data-action="restore-spectrum-defaults">Restore defaults</button>
-        </div>
       </div>
       <div class="debug-findings debug-scan-findings" data-scan-findings role="region" aria-label="Spectrum findings log"></div>
       <div class="debug-subbox debug-waterfall-section">
@@ -6338,10 +6327,6 @@ export class DebugView extends Component {
               <button type="button" class="btn btn-sm btn-ghost" data-action="export-waterfall-png" ${hasScan ? "" : "disabled"} title="Save waterfall spectrogram as PNG">PNG</button>
             </div>
           </div>
-        </div>
-        <div class="rules-foot">
-          <p class="note">Default waterfall shows the latest 80 passes across the full scanned band.</p>
-          <button class="btn btn-ghost btn-sm" type="button" data-action="restore-waterfall-defaults">Restore defaults</button>
         </div>
       </div>`;
     if (prevScanFindingsEl) {

@@ -9,6 +9,7 @@ import {
   dispatchPracticeTopBarCommand,
   dispatchRacesTopBarCommand,
   getAnalyticsScope,
+  getAnalyticsTopBarContext,
   getPracticeTopBarContext,
   getRacesTopBarContext,
   getRememberedRouteHash,
@@ -68,6 +69,11 @@ export class TopBar extends Component {
   private collapsedCrumbCount = 0;
   private lastObservedWidth = 0;
   private resizeObserver: ResizeObserver | null = null;
+  private mobileCollapsed = false;
+  private lastWasSubPage = false;
+  private lastRacesTab = "";
+  private readonly lastScrollTopByEl = new WeakMap<EventTarget, number>();
+  private readonly downScrollAnchorByEl = new WeakMap<EventTarget, number>();
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient, router: Router, announcer: Announcer) {
     super(el);
@@ -78,10 +84,12 @@ export class TopBar extends Component {
 
     el.addEventListener("click", this.handleClick);
     document.addEventListener("pointerdown", this.handleOutsidePointer, true);
+    window.addEventListener("scroll", this.handleGlobalScroll, { capture: true, passive: true });
     document.addEventListener("keydown", this.handleKeyDown);
     this.onDispose(() => {
       el.removeEventListener("click", this.handleClick);
       document.removeEventListener("pointerdown", this.handleOutsidePointer, true);
+      window.removeEventListener("scroll", this.handleGlobalScroll, true);
       document.removeEventListener("keydown", this.handleKeyDown);
     });
     if (typeof ResizeObserver !== "undefined") {
@@ -111,6 +119,9 @@ export class TopBar extends Component {
         this.scopeMenuOpen = false;
         this.crumbMenuOpen = false;
         this.pwaMenuOpen = false;
+        this.setMobileCollapsed(false);
+        this.lastScrollTopByEl.set(document, 0);
+        this.downScrollAnchorByEl.set(document, 0);
         this.render();
       })
     );
@@ -123,7 +134,18 @@ export class TopBar extends Component {
     this.onDispose(sharedLiveTimeRelay.subscribe(() => this.render()));
     this.onDispose(subscribeCapabilities(() => this.render()));
     this.onDispose(subscribePwaInstallState(() => this.render()));
-    this.onDispose(onRacesTopBarContextChange(() => this.render()));
+    this.onDispose(
+      onRacesTopBarContextChange(() => {
+        const curTab = getRacesTopBarContext().tab;
+        if (curTab !== this.lastRacesTab) {
+          this.lastRacesTab = curTab;
+          this.setMobileCollapsed(false);
+          this.lastScrollTopByEl.set(document, 0);
+          this.downScrollAnchorByEl.set(document, 0);
+        }
+        this.render();
+      })
+    );
     this.onDispose(onPracticeTopBarContextChange(() => this.render()));
     this.onDispose(onAnalyticsScopeChange(() => this.render()));
     this.onDispose(onAnalyticsTopBarContextChange(() => this.render()));
@@ -131,6 +153,63 @@ export class TopBar extends Component {
     this.onDispose(subscribeAppTheme(() => this.render()));
     this.render();
   }
+
+  private setMobileCollapsed(collapsed: boolean): void {
+    if (this.mobileCollapsed === collapsed) return;
+    this.mobileCollapsed = collapsed;
+    this.el.classList.toggle("is-mobile-collapsed", collapsed);
+    this.el.closest(".app")?.classList.toggle("is-mobile-topbar-collapsed", collapsed);
+  }
+
+  private handleGlobalScroll = (e: Event): void => {
+    const target = e.target;
+    if (!target) return;
+    if (this.router.route === "races" && getRacesTopBarContext().tab !== "directory") {
+      if (this.mobileCollapsed) {
+        this.setMobileCollapsed(false);
+      }
+      return;
+    }
+    let curTop = 0;
+    let keyTarget: EventTarget = target;
+    if (
+      target === window ||
+      target === document ||
+      target === document.documentElement ||
+      target === document.body
+    ) {
+      keyTarget = document;
+      curTop = window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+    } else if (target instanceof HTMLElement) {
+      if (
+        target.closest(
+          ".sidebar, .topbar, .custom-select-popover, .mgp-page-backdrop, .table-scroll, .rc-panel-body, .rc-mobile-laps-scroll, [data-mre-carousel], [data-mre-stepper], [data-rc-topleft-track], .races-page:not(.is-configure-page) .races-page-stack, .practice-mobile-analytics-wrap"
+        )
+      ) {
+        return;
+      }
+      curTop = target.scrollTop;
+    } else {
+      return;
+    }
+    const prevTop = this.lastScrollTopByEl.get(keyTarget) ?? 0;
+    this.lastScrollTopByEl.set(keyTarget, curTop);
+    if (curTop <= 16) {
+      this.downScrollAnchorByEl.set(keyTarget, curTop);
+      this.setMobileCollapsed(false);
+    } else if (curTop < prevTop - 8) {
+      this.downScrollAnchorByEl.set(keyTarget, curTop);
+      this.setMobileCollapsed(false);
+    } else if (curTop > prevTop) {
+      const anchor = this.downScrollAnchorByEl.get(keyTarget) ?? 0;
+      if (!this.downScrollAnchorByEl.has(keyTarget)) {
+        this.downScrollAnchorByEl.set(keyTarget, anchor);
+      }
+      if (curTop >= 68 && curTop - anchor >= 64) {
+        this.setMobileCollapsed(true);
+      }
+    }
+  };
 
   private handleOutsidePointer = (e: PointerEvent): void => {
     const t = e.target as Node | null;
@@ -216,6 +295,15 @@ export class TopBar extends Component {
 
     const actionEl = target.closest<HTMLElement>("[data-action]");
     switch (actionEl?.dataset.action) {
+      case "toggle-mobile-topbar":
+        e.preventDefault();
+        e.stopPropagation();
+        if (this.handleDragged) {
+          this.handleDragged = false;
+          return;
+        }
+        this.setMobileCollapsed(!this.mobileCollapsed);
+        return;
       case "menu":
         this.setMenuOpen(!this.menuOpen);
         break;
@@ -223,9 +311,11 @@ export class TopBar extends Component {
         toggleSidebarCollapsed();
         break;
       case "races-back":
+        e.preventDefault();
         dispatchRacesTopBarCommand({ type: "set-tab", tab: "directory" });
         break;
       case "practice-back":
+        e.preventDefault();
         dispatchPracticeTopBarCommand({ type: "set-tab", tab: "directory" });
         break;
       case "analytics-chooser":
@@ -354,8 +444,11 @@ export class TopBar extends Component {
     const inRaceWorkspace = meta.id === "races" && rCtx.tab !== "directory";
     const inPracticeWorkspace = meta.id === "live" && pCtx.tab === "session";
     const inAnalytics = meta.id === "pilot";
+    const aTopCtx = getAnalyticsTopBarContext();
     const rawAnalyticsScope = inAnalytics ? getAnalyticsScope() : null;
     const aScope = rawAnalyticsScope ? this.store.resolveAnalyticsScope(rawAnalyticsScope) : null;
+    const inAnalyticsScope = inAnalytics && (aTopCtx.mode === "scope" || Boolean(aScope));
+    const isSubPage = inRaceWorkspace || inPracticeWorkspace || inAnalyticsScope;
     const scopePopoverCounts =
       inAnalytics && this.scopeMenuOpen
         ? `${this.store.practiceSessions.map((s) => `${s.sessionId}:${s.name}:${s.active ? 1 : 0}:${s.laps.length}`).join("|")}::${this.store.races.map((r) => `${r.raceId ?? ""}:${r.config.eventName}:${r.lifecycle ?? ""}`).join("|")}`
@@ -363,7 +456,9 @@ export class TopBar extends Component {
 
     const appTheme = getAppTheme();
     const pwaStandalone = isPwaStandalone();
-    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${ltEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${this.pwaMenuOpen ? 1 : 0}:${pwaStandalone ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
+    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${ltEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${this.pwaMenuOpen ? 1 : 0}:${pwaStandalone ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aTopCtx.mode}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
+    this.el.classList.toggle("has-subpage-back", isSubPage);
+    this.el.closest(".app")?.classList.toggle("is-mobile-subpage", isSubPage);
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
@@ -442,6 +537,7 @@ export class TopBar extends Component {
     const effectiveSimForNav = lockedOut ? false : sim;
     const navItems = ROUTES.filter(
       (r) =>
+        !r.hiddenFromNav &&
         (!r.simOnly || effectiveSimForNav) &&
         (!r.liveTimeOnly || (ltEnabled && !isExternalTimer && !lockedOut)) &&
         (r.id !== "flasher" || !isExternalTimer)
@@ -467,52 +563,33 @@ export class TopBar extends Component {
     const raceStageHref = buildRacesHash("edit", raceSlug, stageNum);
     const raceControlHref = buildRacesHash("control", raceSlug);
     const raceReviewHref = buildRacesHash("review", raceSlug);
+    const raceMultiGPHref = buildRacesHash("multigp", raceSlug);
     const practiceDirHref = buildPracticeHash("directory");
     const practiceSessionHref = buildPracticeHash("session", practiceSlug);
 
-    const raceCrumbs: Array<{ label: string; href: string; title: string; iconHtml?: string }> = [
-      { label: "Race", href: racesDirHref, title: "All races" },
-      { label: raceLabel, href: raceFormatHref, title: `Open ${raceLabel}` },
+    const raceCrumbs: Array<{
+      label: string;
+      href: string;
+      title: string;
+      action?: string;
+      iconHtml?: string;
+    }> = [
+      { label: "Race", href: racesDirHref, title: "All races", action: "races-back" },
+      { label: raceLabel, href: raceStageHref, title: raceLabel },
     ];
-    if (rCtx.tab === "edit") {
-      raceCrumbs.push({
-        label: stageNumLabel,
-        href: raceStageHref,
-        title: `Configure ${stageFullTitle}`,
-        iconHtml: icons.settings(15),
-      });
-    } else if (rCtx.tab === "control") {
-      raceCrumbs.push({
-        label: stageNumLabel,
-        href: raceControlHref,
-        title: `Control ${stageFullTitle}`,
-        iconHtml: icons.checkered(15),
-      });
-    } else if (rCtx.tab === "review") {
-      raceCrumbs.push({
-        label: stageNumLabel,
-        href: raceReviewHref,
-        title: `Review ${stageFullTitle}`,
-        iconHtml: icons.reviewCheck(15),
-      });
-    } else {
-      raceCrumbs.push({
-        label: "Format",
-        href: raceFormatHref,
-        title: "Configure Format overview",
-        iconHtml: icons.settings(15),
-      });
-    }
 
     const toLinkEntries = (
-      crumbs: Array<{ label: string; href: string; title: string; iconHtml?: string }>
+      crumbs: Array<{ label: string; href: string; title: string; action?: string; iconHtml?: string }>
     ): BreadcrumbEntry[] =>
       crumbs.map((c, idx) => {
         const isLast = idx === crumbs.length - 1;
         return {
           menuLabel: c.label,
           menuHref: c.href,
-          inlineHtml: `<a class="topbar-crumb-item" href="${esc(c.href)}" ${isLast ? 'aria-current="page"' : ""} title="${esc(c.title)}">${c.iconHtml ?? ""}<span>${esc(c.label)}</span></a>`,
+          menuAction: c.action,
+          inlineHtml: isLast
+            ? `<span class="topbar-crumb-item" aria-current="page" title="${esc(c.title)}">${c.iconHtml ?? ""}<span>${esc(c.label)}</span></span>`
+            : `<a class="topbar-crumb-item" href="${esc(c.href)}" ${c.action ? `data-action="${esc(c.action)}"` : ""} title="${esc(c.title)}">${c.iconHtml ?? ""}<span>${esc(c.label)}</span></a>`,
         };
       });
 
@@ -526,7 +603,7 @@ export class TopBar extends Component {
       breadcrumbAria = "Race navigation";
     } else if (inPracticeWorkspace) {
       this.activeCrumbItems = toLinkEntries([
-        { label: "Practice", href: practiceDirHref, title: "All practice sessions" },
+        { label: "Practice", href: practiceDirHref, title: "All practice sessions", action: "practice-back" },
         {
           label: practiceSessionName,
           href: practiceSessionHref,
@@ -592,15 +669,44 @@ export class TopBar extends Component {
                   ? "LapRF 8-Way pucks over Ethernet (:5403) or USB CDC, clock sync, and live 8-slot RSSI"
                   : meta.subtitle;
 
+    const hideTopLevelSubtitle = meta.id === "races" || meta.id === "live";
     const titleMarkup =
       this.activeCrumbItems.length > 0
         ? `<nav class="${breadcrumbClass}" ${breadcrumbAttr} aria-label="${esc(breadcrumbAria)}">
-             ${this.buildBreadcrumbTrailHtml(this.activeCrumbItems, this.collapsedCrumbCount)}
+             ${this.buildBreadcrumbTrailHtml(this.activeCrumbItems)}
            </nav>`
-        : `<div class="topbar-title">
-             <h1>${meta.title}</h1>
-             <p>${pageSubtitle}</p>
-           </div>`;
+        : hideTopLevelSubtitle
+          ? `<div class="topbar-title is-no-subtitle">
+               <h1>${meta.title}</h1>
+             </div>`
+          : `<div class="topbar-title">
+               <h1>${meta.title}</h1>
+               <p>${pageSubtitle}</p>
+             </div>`;
+
+    const animateBackBtn = isSubPage && !this.lastWasSubPage;
+    this.lastWasSubPage = isSubPage;
+    const backBtnCls = `btn btn-ghost topbar-back-btn${animateBackBtn ? " is-entering" : ""}`;
+    const subpageBackMarkup = inRaceWorkspace
+      ? `<a class="${backBtnCls}" href="#/races" data-action="races-back" title="Back to Races" aria-label="Back to Races">
+           ${icons.chevronLeft(18)}<span>Back</span>
+         </a>`
+      : inPracticeWorkspace
+        ? `<a class="${backBtnCls}" href="#/live" data-action="practice-back" title="Back to Practices" aria-label="Back to Practices">
+             ${icons.chevronLeft(18)}<span>Back</span>
+           </a>`
+        : inAnalyticsScope
+          ? `<a class="${backBtnCls}" href="#/pilot" data-action="analytics-chooser" title="Back to Analytics" aria-label="Back to Analytics">
+               ${icons.chevronLeft(18)}<span>Back</span>
+             </a>`
+          : "";
+
+    const mobileTopBrandMarkup = !isSubPage
+      ? `<div class="topbar-mobile-brand" data-topbar-mobile-brand>
+           <div class="brand-mark">${icons.slaprf(22)}</div>
+           <div class="brand-name">SlapRF</div>
+         </div>`
+      : "";
 
     this.el.innerHTML = `
       <div class="topbar-left">
@@ -611,13 +717,15 @@ export class TopBar extends Component {
                </button>`
             : ""
         }
+        ${titleMarkup}
+        ${mobileTopBrandMarkup}
+        ${subpageBackMarkup}
         <div class="topbar-menu-wrap">
           <button class="btn btn-ghost topbar-menu-btn ${this.menuOpen ? "is-open" : ""}" data-action="menu" type="button" aria-label="${this.menuOpen ? "Close navigation menu" : "Open navigation menu"}" aria-expanded="${this.menuOpen ? "true" : "false"}">
             <span class="topbar-hamburger" aria-hidden="true"><span></span><span></span><span></span></span>
           </button>
           ${this.menuOpen ? this.buildNavPopoverHtml() : ""}
         </div>
-        ${titleMarkup}
       </div>
       <div class="topbar-actions ${inRaceWorkspace ? "is-race-workspace" : ""}">
         ${actions}
@@ -625,59 +733,22 @@ export class TopBar extends Component {
         ${ledIndicator}
       </div>`;
 
+    this.el.classList.toggle("is-mobile-collapsed", this.mobileCollapsed);
+    this.el.closest(".app")?.classList.toggle("is-mobile-topbar-collapsed", this.mobileCollapsed);
+    this.el.classList.toggle("has-subpage-back", isSubPage);
+    this.el.closest(".app")?.classList.toggle("is-mobile-subpage", isSubPage);
     this.fitActiveBreadcrumb();
   }
 
-  private buildBreadcrumbTrailHtml(items: BreadcrumbEntry[], collapsedCount: number): string {
-    const c = Math.max(0, Math.min(collapsedCount, Math.max(0, items.length - 1)));
-    const collapsed = items.slice(0, c);
-    const visible = items.slice(c);
-    const isLastOnly = visible.length <= 1;
-
-    const ellipsisHtml =
-      c > 0
-        ? `<div class="topbar-crumb-ellipsis-wrap">
-             <button
-               type="button"
-               class="topbar-crumb-ellipsis ${this.crumbMenuOpen ? "is-open" : ""}"
-               data-action="toggle-crumb-menu"
-               aria-haspopup="menu"
-               aria-expanded="${this.crumbMenuOpen ? "true" : "false"}"
-               aria-label="Open breadcrumb levels"
-               title="Jump to parent level"
-             >…</button>
-             ${
-               this.crumbMenuOpen
-                 ? `<div class="topbar-crumb-popover" role="menu" aria-label="Parent levels">
-                      ${collapsed
-                        .map(
-                          (anc, idx) => `
-                            <a
-                              class="topbar-crumb-menu-item"
-                              href="${esc(anc.menuHref)}"
-                              ${anc.menuAction ? `data-action="${esc(anc.menuAction)}"` : "data-crumb-menu-link"}
-                              role="menuitem"
-                              style="--crumb-depth:${idx}"
-                            >
-                              <span class="topbar-crumb-menu-indent" aria-hidden="true">${idx > 0 ? "↳" : ""}</span>
-                              <span class="topbar-crumb-menu-label">${esc(anc.menuLabel)}</span>
-                            </a>`
-                        )
-                        .join("")}
-                    </div>`
-                 : ""
-             }
-           </div>`
-        : "";
-
-    const visibleHtml = visible
+  private buildBreadcrumbTrailHtml(items: BreadcrumbEntry[]): string {
+    const visibleHtml = items
       .map(
         (item, idx) =>
-          `${idx > 0 ? `<span class="topbar-crumb-sep" aria-hidden="true">›</span>` : ""}${item.inlineHtml}`
+          `${idx > 0 ? `<span class="topbar-crumb-sep" aria-hidden="true">${icons.chevronRight(16)}</span>` : ""}${item.inlineHtml}`
       )
       .join("");
 
-    return `<div class="topbar-crumb-trail ${isLastOnly ? "is-last-only" : ""}">${ellipsisHtml}${visibleHtml}</div>`;
+    return `<div class="topbar-crumb-trail">${visibleHtml}</div>`;
   }
 
   private fitActiveBreadcrumb(): void {
@@ -686,31 +757,25 @@ export class TopBar extends Component {
     const navEl = this.el.querySelector<HTMLElement>("nav.topbar-breadcrumb");
     if (!navEl) return;
 
-    if (this.crumbMenuOpen || this.scopeMenuOpen) {
-      const clamped = Math.max(0, Math.min(this.collapsedCrumbCount, items.length - 1));
-      this.collapsedCrumbCount = clamped;
-      navEl.innerHTML = this.buildBreadcrumbTrailHtml(items, clamped);
-      return;
+    let trailEl = navEl.querySelector<HTMLElement>(".topbar-crumb-trail");
+    if (!trailEl) {
+      navEl.innerHTML = this.buildBreadcrumbTrailHtml(items);
+      trailEl = navEl.querySelector<HTMLElement>(".topbar-crumb-trail");
     }
+    if (!trailEl || items.length <= 1) return;
 
-    if (items.length <= 1) {
-      this.collapsedCrumbCount = 0;
-      navEl.innerHTML = this.buildBreadcrumbTrailHtml(items, 0);
-      return;
-    }
-
-    let collapsed = 0;
-    navEl.innerHTML = this.buildBreadcrumbTrailHtml(items, 0);
+    trailEl.classList.remove("is-root-only");
     const availW = navEl.clientWidth;
-    if (availW > 0) {
-      let trailEl = navEl.querySelector<HTMLElement>(".topbar-crumb-trail");
-      while (collapsed < items.length - 1 && trailEl && trailEl.scrollWidth > availW + 1) {
-        collapsed++;
-        navEl.innerHTML = this.buildBreadcrumbTrailHtml(items, collapsed);
-        trailEl = navEl.querySelector<HTMLElement>(".topbar-crumb-trail");
-      }
+    if (availW <= 0) return;
+
+    const firstItem = trailEl.querySelector<HTMLElement>(":scope > .topbar-crumb-item:first-child");
+    const sepEl = trailEl.querySelector<HTMLElement>(":scope > .topbar-crumb-sep");
+    const firstW = firstItem ? firstItem.offsetWidth : 0;
+    const sepW = sepEl ? sepEl.offsetWidth : 16;
+    const remainingForTitle = availW - (firstW + sepW + 12);
+    if (remainingForTitle < 28) {
+      trailEl.classList.add("is-root-only");
     }
-    this.collapsedCrumbCount = collapsed;
   }
 
   private renderAnalyticsScopePopover(activeKind: AnalyticsScopeKind, activeId: string): string {
@@ -858,6 +923,7 @@ export class TopBar extends Component {
     const effectiveSimForNav = lockedOut ? false : sim;
     const navItems = ROUTES.filter(
       (r) =>
+        !r.hiddenFromNav &&
         (!r.simOnly || effectiveSimForNav) &&
         (!r.liveTimeOnly || (ltEnabled && !isExternalTimer && !lockedOut)) &&
         (r.id !== "flasher" || !isExternalTimer)

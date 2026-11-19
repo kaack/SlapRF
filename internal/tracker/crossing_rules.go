@@ -3,6 +3,7 @@ package tracker
 import (
 	"fmt"
 	"math"
+	"time"
 
 	"slaprf/internal/domain"
 )
@@ -205,13 +206,18 @@ func (e *Engine) recordSplitLocked(pilot domain.PilotSlot, prog *pilotProgress, 
 	return split
 }
 
+func (e *Engine) wallClockMsForTimestampLocked(tsUs uint64) int64 {
+	nowUs := e.NowUs()
+	return time.Now().Add(-time.Duration(int64(nowUs)-int64(tsUs)) * time.Microsecond).UnixMilli()
+}
+
 func (e *Engine) buildLapLocked(pilot domain.PilotSlot, prog *pilotProgress, lapSec float64, completedAtUs uint64) *domain.LapRecord {
 	lapNum := 1
 	bestLap := 0.0
 	for _, l := range e.laps {
 		if l.SlotIndex == pilot.SlotIndex {
 			lapNum++
-			if bestLap == 0 || l.LapTimeSec < bestLap {
+			if !l.Invalidated && (bestLap == 0 || l.LapTimeSec < bestLap) {
 				bestLap = l.LapTimeSec
 			}
 		}
@@ -230,6 +236,7 @@ func (e *Engine) buildLapLocked(pilot domain.PilotSlot, prog *pilotProgress, lap
 		DeltaToBest:   delta,
 		Sectors:       append([]domain.SectorSplit{}, prog.currentSectors...),
 		CompletedAtUs: completedAtUs,
+		CompletedAtMs: e.wallClockMsForTimestampLocked(completedAtUs),
 		IsBestLap:     bestLap == 0 || lapSec < bestLap,
 	}
 }

@@ -869,6 +869,12 @@ func (h *Harness) ConnectSimHubH1() {
 func (h *Harness) StartActiveHeat() {
 	h.T.Helper()
 	startBtn := h.Page.Locator(`button[data-ctrl="start"]:not([disabled])`).First()
+	if vis, _ := startBtn.IsVisible(); !vis {
+		liveTabBtn := h.Page.Locator(`button[data-mobile-ctrl-nav="live"]`).First()
+		if lVis, _ := liveTabBtn.IsVisible(); lVis {
+			_ = liveTabBtn.Click()
+		}
+	}
 	h.MustBeVisible(startBtn, "Start Heat button")
 	if err := startBtn.Click(); err != nil {
 		h.T.Fatalf("click Start Heat: %v", err)

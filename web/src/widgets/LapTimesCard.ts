@@ -42,14 +42,6 @@ export class LapTimesCard extends Component {
         <div class="canvas-host canvas-host-lg" data-slot="chart"></div>
         <div class="chart-legend" data-slot="legend"></div>
         <div class="channel-legend" data-slot="views" role="tablist" aria-label="Show"></div>
-      </div>
-      <div class="rules-foot">
-        <p class="note">${
-          this.slotIndex === undefined
-            ? "Default view plots whole-lap times with all enabled pilots visible."
-            : "Default view plots whole-lap times across the latest session window."
-        }</p>
-        <button class="btn btn-ghost btn-sm" type="button" data-action="restore-defaults">Restore defaults</button>
       </div>`;
 
     this.chart = this.adopt(new ProgressionChart(this.slot("chart"), store, { slotIndex: this.slotIndex }));
@@ -206,7 +198,7 @@ export class LapTimesCard extends Component {
         `<button type="button" role="tab" data-view="lap" class="channel channel-all ${wholeActive ? "is-focus" : "is-dim"}" aria-selected="${wholeActive}" title="Show whole lap times">
           <span class="dot channel-all-dot"></span>
           <span class="channel-name">Whole lap</span>
-          <span class="channel-dbm mono">${sections.length} ${sections.length === 1 ? "section" : "sections"}</span>
+          <span class="channel-dbm mono">${sections.length} ${sections.length === 1 ? "sector" : "sectors"}</span>
         </button>` +
         sections
           .map(({ sectorIndex, from, to }) => {

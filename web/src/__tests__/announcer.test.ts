@@ -362,6 +362,64 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
     }
   });
 
+  it("suppresses spoken lap times when toggled off during a live Control race even when raceState.mode is 'practice' (coexistence regression test)", () => {
+    const rig = installFakeSpeechAndAudio();
+    const qualHeat = makeHeat("Q1-1", {
+      state: "running",
+      stageFormat: "qualifying",
+      seats: [makeSeat(0, 1, { status: "racing" })],
+    });
+    const raceHeat = makeHeat("W1-1", {
+      state: "waiting",
+      stageFormat: "single_elimination",
+      seats: [makeSeat(0, 1, { status: "racing" })],
+    });
+    // Real Go engine keeps raceState.mode = "practice" while races run alongside stopped practice sessions
+    const race = makeRaceState({
+      mode: "practice",
+      lifecycle: "active",
+      activeHeatId: "Q1-1",
+      heats: [qualHeat, raceHeat],
+    });
+    const store = makeStore({
+      operatingMode: "practice",
+      pilots: [makePilot(1, { callsign: "VANOVER" })],
+      practiceState: { initialized: true, activeSessionId: "", selectedSessionId: "", sessions: [] },
+      raceState: race,
+    });
+    const ann = new Announcer(store);
+
+    try {
+      // Turn off qualifier lap callouts -> MUST NOT announce lap time on Q1-1!
+      ann.update({ enabled: true, qualifierLapCallouts: false, raceLapCallouts: false });
+      rig.spokenTexts.length = 0;
+
+      store.ingestLap(makeLap(1, 1, 1, 11.42), []);
+      expect(rig.spokenTexts).toEqual([]);
+
+      // Switch to Race heat W1-1 with raceLapCallouts=false -> MUST NOT announce lap time!
+      const raceRunning = makeRaceState({
+        mode: "practice",
+        lifecycle: "active",
+        activeHeatId: "W1-1",
+        heats: [
+          { ...qualHeat, state: "confirmed" },
+          { ...raceHeat, state: "running" },
+        ],
+      });
+      store.ingestRace(raceRunning, null, null);
+      store.ingestLap(makeLap(2, 1, 1, 10.95), []);
+      expect(rig.spokenTexts).toEqual([]);
+
+      // Toggle raceLapCallouts ON -> now speaks lap time!
+      ann.update({ raceLapCallouts: true });
+      store.ingestLap(makeLap(3, 1, 2, 10.77), []);
+      expect(rig.spokenTexts).toEqual(["Vanover, 10.77"]);
+    } finally {
+      ann.stop();
+    }
+  });
+
   it("plays the celebratory dual-chord winner horn AND speaks '<Winner> finishes 1st' after the horn completes (regression test)", async () => {
     const rig = installFakeSpeechAndAudio();
     const finalsHeat = makeHeat("GF-1", {

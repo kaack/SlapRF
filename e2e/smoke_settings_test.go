@@ -53,7 +53,6 @@ func TestBootCleanStateAndSidebarNavigation(t *testing.T) {
 		mustHave string
 	}{
 		{id: "races", mustHave: `[data-race-act="create-race-inline"]`},
-		{id: "pilot", mustHave: `main`},
 		{id: "pilots", mustHave: `[data-pilot-dir-search]`},
 		{id: "track", mustHave: `[data-slot="track"]`},
 		{id: "sim", mustHave: `[data-slot="course"]`},

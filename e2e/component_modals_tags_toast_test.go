@@ -61,7 +61,7 @@ func TestComponent_TagPillEditorAddSelectNavigateRemoveCommitAndCancel(t *testin
 		t.Fatalf("press Enter to commit tags: %v", err)
 	}
 	h.MustBeHidden(tagBox, "TagPillEditor closed after Enter commit")
-	h.MustBeVisible(h.Page.Locator(`button[data-tag-filter="League"]`).First(), "New League tag filter pill in directory")
+	h.MustContainText(h.Page.Locator(`tr[data-session-row="session-1"]`).First(), "League")
 	stTags := h.APIState()
 	foundLeagueTag := false
 	for _, s := range stTags.PracticeState.Sessions {
@@ -90,7 +90,7 @@ func TestComponent_TagPillEditorAddSelectNavigateRemoveCommitAndCancel(t *testin
 		t.Fatalf("press Escape to cancel: %v", err)
 	}
 	h.MustBeHidden(tagBox, "TagPillEditor closed on Escape")
-	cntUnsaved, _ := h.Page.Locator(`button[data-tag-filter="UnsavedTag"]`).Count()
+	cntUnsaved, _ := h.Page.Locator(`tr[data-session-row="session-1"] .race-tag-pill`, playwright.PageLocatorOptions{HasText: "UnsavedTag"}).Count()
 	if cntUnsaved != 0 {
 		t.Fatalf("expected UnsavedTag not to be saved on Escape, got count %d", cntUnsaved)
 	}
@@ -100,12 +100,17 @@ func TestComponent_ConfirmModalCancelEscapeBackdropAndDangerConfirm(t *testing.T
 	h := NewHarness(t)
 	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live", nil)
 
+	menuBtn := h.Page.Locator(`button[data-practice-act="toggle-dir-session-menu"][data-session-id="session-2"]`).First()
+	h.MustBeVisible(menuBtn, "Warmup Pack actions menu button")
 	delBtn := h.Page.Locator(`button[data-practice-act="delete-session"][data-session-id="session-2"]`).First()
-	h.MustBeVisible(delBtn, "Delete Warmup Pack button")
 
 	backdrop := h.Page.Locator(`.slaprf-modal-backdrop`).First()
 
 	// 1. Open and cancel via Cancel button; verify lap loss warning is shown.
+	if err := menuBtn.Click(); err != nil {
+		t.Fatalf("open session-2 actions menu (1): %v", err)
+	}
+	h.MustBeVisible(delBtn, "Delete Warmup Pack button")
 	if err := delBtn.Click(); err != nil {
 		t.Fatalf("click delete-session (1): %v", err)
 	}
@@ -120,6 +125,9 @@ func TestComponent_ConfirmModalCancelEscapeBackdropAndDangerConfirm(t *testing.T
 	h.MustBeHidden(backdrop, "ConfirmModal closed after Cancel button")
 
 	// 2. Open and cancel via Escape key.
+	if err := menuBtn.Click(); err != nil {
+		t.Fatalf("open session-2 actions menu (2): %v", err)
+	}
 	if err := delBtn.Click(); err != nil {
 		t.Fatalf("click delete-session (2): %v", err)
 	}
@@ -130,6 +138,9 @@ func TestComponent_ConfirmModalCancelEscapeBackdropAndDangerConfirm(t *testing.T
 	h.MustBeHidden(backdrop, "ConfirmModal closed after Escape")
 
 	// 3. Open and confirm permanent deletion.
+	if err := menuBtn.Click(); err != nil {
+		t.Fatalf("open session-2 actions menu (3): %v", err)
+	}
 	if err := delBtn.Click(); err != nil {
 		t.Fatalf("click delete-session (3): %v", err)
 	}
@@ -138,17 +149,17 @@ func TestComponent_ConfirmModalCancelEscapeBackdropAndDangerConfirm(t *testing.T
 		t.Fatalf("click [data-modal-confirm]: %v", err)
 	}
 	h.MustBeHidden(backdrop, "ConfirmModal closed after Confirm")
-	h.MustBeHidden(delBtn, "Warmup Pack row deleted")
+	h.MustBeHidden(h.Page.Locator(`tr[data-session-row="session-2"]`).First(), "Warmup Pack row deleted")
 	h.MilestoneScreenshot("confirm-modal-deleted-row")
 }
 
 func TestComponent_ConfirmPreemptModalCancelAndConfirm(t *testing.T) {
 	h := NewHarness(t)
-	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live", nil)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live/warmup-pack", nil)
 
 	// session-1 ("Evening Lap Lab") is currently live; starting session-2 ("Warmup Pack") prompts preemption.
-	startWarmupBtn := h.Page.Locator(`button[data-practice-act="start-session"][data-session-id="session-2"], button[data-practice-act="resume-session"][data-session-id="session-2"]`).First()
-	h.MustBeVisible(startWarmupBtn, "Start button on stopped Warmup Pack")
+	startWarmupBtn := h.Page.Locator(`[data-practice-act="start-session"], [data-practice-act="resume-session"]`).First()
+	h.MustBeVisible(startWarmupBtn, "Start/Resume button on stopped Warmup Pack workspace")
 
 	backdrop := h.Page.Locator(`.slaprf-modal-backdrop`).First()
 
@@ -176,8 +187,8 @@ func TestComponent_ConfirmPreemptModalCancelAndConfirm(t *testing.T) {
 	}
 	h.MustBeHidden(backdrop, "ConfirmPreemptModal closed after OK")
 	h.MustBeVisible(
-		h.Page.Locator(`tr[data-session-row="session-2"] button.btn-armed`).First(),
-		"Warmup Pack now active with armed Pause button",
+		h.Page.Locator(`[data-practice-act="pause-session"]`).First(),
+		"Warmup Pack now active with Pause button",
 	)
 	h.MilestoneScreenshot("confirm-preempt-switched-session")
 }

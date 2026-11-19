@@ -29,6 +29,19 @@ export function isQualifierStageFormat(stageFormat?: string): boolean {
   return stageFormat === "qualifying" || stageFormat === "open_qualifier";
 }
 
+export function resolveHeatStageFormat(
+  heat: { stageFormat?: string; roundId?: string } | null | undefined,
+  race?: { rounds?: Array<{ id: string; stageFormat?: string }> } | null
+): string {
+  if (!heat) return "";
+  if (heat.stageFormat) return heat.stageFormat;
+  if (heat.roundId && race?.rounds) {
+    const rnd = race.rounds.find((r) => r.id === heat.roundId);
+    if (rnd?.stageFormat) return rnd.stageFormat;
+  }
+  return "";
+}
+
 const STORAGE_KEY = "gate-timer.announcer";
 const PREFERRED_DEFAULT_VOICE = "Google US English";
 const DEFAULT_PREFS: AnnouncerPrefs = {
@@ -316,9 +329,9 @@ export class Announcer {
     const wasRaceLapCallouts = this.prefs.raceLapCallouts;
     this.prefs = sanitizePrefs({ ...this.prefs, ...next });
     localStorage.setItem(STORAGE_KEY, JSON.stringify(this.prefs));
-    const liveHeat = this.getLiveRunningRaceHeat();
-    if (liveHeat) {
-      const isQual = isQualifierStageFormat(liveHeat.stageFormat);
+    const liveHit = this.getLiveRunningRaceHeatContext();
+    if (liveHit) {
+      const isQual = isQualifierStageFormat(resolveHeatStageFormat(liveHit.heat, liveHit.race));
       const turnedOff = isQual
         ? wasQualLapCallouts && !this.prefs.qualifierLapCallouts
         : wasRaceLapCallouts && !this.prefs.raceLapCallouts;
@@ -558,31 +571,52 @@ export class Announcer {
       this.update({ raceLapCallouts: nextOn });
     }
     this.wakeAudio();
-    this.say(nextOn ? "Lap announcements on" : "Lap announcements off", true);
+    this.say(nextOn ? "Lap timing announcements on" : "Lap timing announcements off", true);
   }
 
-  private getLiveRunningRaceHeat() {
-    if (
-      this.store.operatingMode === "practice" ||
-      this.store.raceState?.lifecycle === "paused" ||
-      Boolean(this.store.practiceState?.activeSessionId) ||
-      (typeof window !== "undefined" && window.location.hash.startsWith("#/live"))
-    ) {
+  private getLiveRunningRaceHeatContext() {
+    if (Boolean(this.store.practiceState?.activeSessionId)) {
       return null;
     }
-    const heat = this.store.activeRaceHeat;
-    if (heat && (heat.state === "countdown" || heat.state === "running")) {
-      return heat;
+    const rs = this.store.raceState;
+    if (
+      rs &&
+      rs.lifecycle !== "paused" &&
+      rs.lifecycle !== "completed" &&
+      rs.lifecycle !== "scrapped"
+    ) {
+      const heat = this.store.activeRaceHeat;
+      if (heat && (heat.state === "countdown" || heat.state === "running")) {
+        return { heat, race: rs };
+      }
+      const anyLive = rs.heats.find(
+        (h) => h.state === "countdown" || h.state === "running"
+      );
+      if (anyLive) {
+        return { heat: anyLive, race: rs };
+      }
     }
-    const anyLive = this.store.raceState.heats.find(
-      (h) => h.state === "countdown" || h.state === "running"
-    );
-    return anyLive ?? null;
+    const ongoing = this.store.ongoingRace;
+    if (
+      ongoing &&
+      ongoing.lifecycle !== "paused" &&
+      ongoing.lifecycle !== "completed" &&
+      ongoing.lifecycle !== "scrapped"
+    ) {
+      const ongoingHeat = ongoing.heats.find(
+        (h) => h.state === "countdown" || h.state === "running"
+      );
+      if (ongoingHeat) {
+        return { heat: ongoingHeat, race: ongoing };
+      }
+    }
+    return null;
   }
 
   private onLap(lap: LapRecord): void {
-    const liveHeat = this.getLiveRunningRaceHeat();
-    if (liveHeat) {
+    const liveHit = this.getLiveRunningRaceHeatContext();
+    if (liveHit) {
+      const { heat: liveHeat, race: liveRace } = liveHit;
       // During an active race heat, strictly handle crossings for pilots racing in that heat.
       const seat = liveHeat.seats.find(
         (s) => s.pilotSlotIndex === lap.slotIndex && s.status !== "dns" && s.status !== "dq"
@@ -590,7 +624,8 @@ export class Announcer {
       if (!seat) return;
       if (!this.prefs.enabled) return;
       this.playGatePassBeep(lap.slotIndex);
-      const allowLapCallout = isQualifierStageFormat(liveHeat.stageFormat)
+      const stageFmt = resolveHeatStageFormat(liveHeat, liveRace);
+      const allowLapCallout = isQualifierStageFormat(stageFmt)
         ? this.prefs.qualifierLapCallouts !== false
         : Boolean(this.prefs.raceLapCallouts);
       if (!allowLapCallout) return;
@@ -606,10 +641,10 @@ export class Announcer {
    * or play an instant gate-pass confirmation beep during a live race heat.
    */
   private onStartPass(ev: GateCrossingEvent): void {
-    const liveHeat = this.getLiveRunningRaceHeat();
-    if (liveHeat) {
+    const liveHit = this.getLiveRunningRaceHeatContext();
+    if (liveHit) {
       if (!this.prefs.enabled) return;
-      const inHeat = liveHeat.seats.some(
+      const inHeat = liveHit.heat.seats.some(
         (s) => s.pilotSlotIndex === ev.slotIndex && s.status !== "dns" && s.status !== "dq"
       );
       if (inHeat) {

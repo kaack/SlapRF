@@ -37,7 +37,7 @@ const LINE_HIT_PX = 5;
 const TAG_GUTTER = 84;
 const RSSI_CHART_STORAGE_KEY = "slaprf.ui.rssi_chart.v1";
 
-const PAD = { l: 46, r: 16 + TAG_GUTTER, t: 34, b: 26 };
+const PAD = { l: 46, r: 16 + TAG_GUTTER, t: 12, b: 26 };
 
 /** A pass the pilot made through a gate: timed, or set aside by the timing rules. */
 interface PassMarker {
@@ -227,9 +227,21 @@ export class PilotRssiChart extends Component {
     this.renderLegend();
   }
 
-  /** Right padding: room for the threshold tag only when one gate is shown in single-pilot mode. */
+  private get isMobileLayout(): boolean {
+    return (
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(max-width: 860px)").matches
+    );
+  }
+
+  private get padL(): number {
+    return this.isMobileLayout ? 26 : PAD.l;
+  }
+
+  /** Right padding: threshold tags now sit inside the right edge of the plot. */
   private get padR(): number {
-    return this.focus === null || this.isMultiPilotMode ? 16 : PAD.r;
+    return this.isMobileLayout ? 4 : 16;
   }
 
   /** The gates drawn on the chart: the focused one, or all of them. */
@@ -242,6 +254,7 @@ export class PilotRssiChart extends Component {
     this.store = store;
     this.api = api;
     this.loadChartPrefs();
+    el.classList.add("scope-root");
     el.innerHTML = `
       <div class="scope-toolbar">
         <div class="scope-transport" role="group" aria-label="Signal playback and pass navigation">
@@ -253,11 +266,13 @@ export class PilotRssiChart extends Component {
             <span class="scope-step-text-full">Next pass</span><span class="scope-step-text-short">Next</span>${icons.chevronRight(16)}
           </button>
         </div>
-        <span class="scope-hint" data-slot="hint"></span>
-        <div class="scope-axis-controls" data-slot="axis-controls" role="group" aria-label="X and Y axis scale controls"></div>
       </div>
       <div class="canvas-host canvas-host-md scope-canvas" data-slot="chart" tabindex="0"
            aria-label="Signal chart. Space pauses, arrow keys jump between passes."></div>
+      <div class="scope-bottom-bar">
+        <div class="scope-axis-controls" data-slot="axis-controls" role="group" aria-label="X and Y axis scale controls"></div>
+        <span class="scope-hint" data-slot="hint"></span>
+      </div>
       <div class="channel-legend" data-slot="legend"></div>
       <div class="scope-calib" data-slot="calib"></div>`;
 
@@ -383,7 +398,7 @@ export class PilotRssiChart extends Component {
       }
 
       const isTouch = e.pointerType === "touch";
-      const yAxisW = isTouch ? 54 : PAD.l;
+      const yAxisW = isTouch ? (this.isMobileLayout ? 36 : 54) : this.padL;
       const xAxisH = isTouch ? 34 : PAD.b;
 
       if (x < yAxisW) {
@@ -400,9 +415,9 @@ export class PilotRssiChart extends Component {
         return;
       }
 
-      if (y >= r.height - xAxisH && x >= PAD.l && x <= PAD.l + this.plot.w) {
+      if (y >= r.height - xAxisH && x >= this.padL && x <= this.padL + this.plot.w) {
         // Dragging on bottom X-axis stretches/shrinks the time window smoothly
-        const xFrac = Math.max(0, Math.min(1, (x - PAD.l) / Math.max(10, this.plot.w)));
+        const xFrac = Math.max(0, Math.min(1, (x - this.padL) / Math.max(10, this.plot.w)));
         this.drag = {
           mode: "xstretch",
           startX: x,
@@ -466,9 +481,9 @@ export class PilotRssiChart extends Component {
 
       if (!this.drag) {
         const overTag = this.tagAt(x, y) !== null;
-        const overYAxis = !overTag && x < PAD.l && y >= PAD.t && y <= r.height - PAD.b;
+        const overYAxis = !overTag && x < this.padL && y >= PAD.t && y <= r.height - PAD.b;
         const overXAxis =
-          !overTag && !overYAxis && y >= r.height - PAD.b && x >= PAD.l && x <= PAD.l + this.plot.w;
+          !overTag && !overYAxis && y >= r.height - PAD.b && x >= this.padL && x <= this.padL + this.plot.w;
         host.classList.toggle("is-over-tag", overTag);
         host.classList.toggle("is-over-yaxis", overYAxis);
         host.classList.toggle("is-over-axis", overXAxis);
@@ -956,7 +971,7 @@ export class PilotRssiChart extends Component {
         return { gateId: t.gateId, kind: t.kind };
       }
     }
-    if (x < PAD.l || x > PAD.l + this.plot.w) return null;
+    if (x < this.padL || x > this.padL + this.plot.w) return null;
     let best: TagBox | null = null;
     for (const t of this.tags) {
       if (Math.abs(y - t.lineY) <= LINE_HIT_PX && (!best || Math.abs(y - t.lineY) < Math.abs(y - best.lineY))) best = t;
@@ -1307,9 +1322,10 @@ export class PilotRssiChart extends Component {
       .filter((entry) => entry.slot >= 0);
     if (pilotEntries.length === 0) return;
 
-    const plotW = w - PAD.l - this.padR;
+    const padL = this.padL;
+    const plotW = w - padL - this.padR;
     const plotH = h - PAD.t - PAD.b;
-    this.plot = { x: PAD.l, w: plotW, h: plotH };
+    this.plot = { x: padL, w: plotW, h: plotH };
 
     if (this.endUs !== null) this.endUs = this.clampEnd(this.endUs);
     const end = this.viewEnd();
@@ -1322,7 +1338,7 @@ export class PilotRssiChart extends Component {
       pilotEntries.map((e) => e.slot)
     );
 
-    const xOf = (ts: number) => PAD.l + plotW * ((ts - start) / this.windowUs);
+    const xOf = (ts: number) => padL + plotW * ((ts - start) / this.windowUs);
     const yOf = (dbm: number) => this.yOf(dbm);
 
     this.drawGrid(ctx, w, h, start, end, ref, xOf, yOf);
@@ -1331,7 +1347,7 @@ export class PilotRssiChart extends Component {
       // Traces, decimated to roughly one point per pixel when zoomed out.
       ctx.save();
       ctx.beginPath();
-      ctx.rect(PAD.l, PAD.t - 4, plotW, plotH + 8);
+      ctx.rect(padL, PAD.t - 4, plotW, plotH + 8);
       ctx.clip();
       ctx.lineJoin = "round";
       ctx.lineWidth = 1.6;
@@ -1410,7 +1426,7 @@ export class PilotRssiChart extends Component {
             end - lastTs > 25_000 &&
             end - lastTs <= 300_000
           ) {
-            ctx.lineTo(Math.min(PAD.l + plotW, xOf(end)), lastY);
+            ctx.lineTo(Math.min(padL + plotW, xOf(end)), lastY);
           }
           ctx.stroke();
         }
@@ -1425,14 +1441,14 @@ export class PilotRssiChart extends Component {
       const yb = Math.max(PAD.t, Math.min(PAD.t + plotH, Math.max(this.yZoomBox.y0, this.yZoomBox.y1)));
       ctx.save();
       ctx.fillStyle = withAlpha(theme.accent, 0.12);
-      ctx.fillRect(PAD.l, ya, plotW, Math.max(1, yb - ya));
+      ctx.fillRect(padL, ya, plotW, Math.max(1, yb - ya));
       ctx.strokeStyle = theme.accent;
       ctx.lineWidth = 1;
       ctx.setLineDash([4, 3]);
       ctx.beginPath();
-      ctx.moveTo(PAD.l, ya + 0.5);
+      ctx.moveTo(padL, ya + 0.5);
       ctx.lineTo(w - this.padR, ya + 0.5);
-      ctx.moveTo(PAD.l, yb + 0.5);
+      ctx.moveTo(padL, yb + 0.5);
       ctx.lineTo(w - this.padR, yb + 0.5);
       ctx.stroke();
       ctx.setLineDash([]);
@@ -1441,7 +1457,7 @@ export class PilotRssiChart extends Component {
       ctx.fillStyle = theme.accent;
       ctx.font = font(600, 10.5, true);
       ctx.textAlign = "left";
-      ctx.fillText(`Zoom Y: ${dLow} to ${dHigh}${this.unitSuffix}`, PAD.l + 8, (ya + yb) / 2 + 3.5);
+      ctx.fillText(`Zoom Y: ${dLow} to ${dHigh}${this.unitSuffix}`, padL + 8, (ya + yb) / 2 + 3.5);
       ctx.restore();
     }
 
@@ -1471,11 +1487,11 @@ export class PilotRssiChart extends Component {
       ctx.restore();
       ctx.fillStyle = color;
       ctx.font = font(600, 10.5);
-      ctx.fillText(this.labelOf(p), x + 5, PAD.t - 18 + (rows.get(PilotRssiChart.keyOf(p)) ?? 0) * 12);
+      ctx.fillText(this.labelOf(p), x + 5, PAD.t + 11 + (rows.get(PilotRssiChart.keyOf(p)) ?? 0) * 12);
       if (this.hoverX !== null && Math.abs(this.hoverX - x) <= MARKER_HIT_PX) hovered = p;
     });
 
-    if (!this.tagDrag && !this.yZoomBox && this.hoverX !== null && this.hoverX >= PAD.l && this.hoverX <= PAD.l + plotW) {
+    if (!this.tagDrag && !this.yZoomBox && this.hoverX !== null && this.hoverX >= padL && this.hoverX <= padL + plotW) {
       this.drawCursor(ctx, h, plotH, this.hoverX, hovered);
     }
   }
@@ -1526,6 +1542,8 @@ export class PilotRssiChart extends Component {
     }
     const colW = Math.max(...items.map((i) => i.width), 40) + TAG_GAP;
 
+    const padL = this.padL;
+    const rightEdge = padL + plotW - 6;
     // Column layout: each tag takes the right-most column where it doesn't overlap another.
     const columns: Array<Array<{ top: number }>> = [];
     const placed: TagBox[] = [];
@@ -1537,7 +1555,7 @@ export class PilotRssiChart extends Component {
       placed.push({
         gateId: item.gateId,
         kind: item.kind,
-        x: w - 16 - item.width - col * colW,
+        x: rightEdge - item.width - col * colW,
         y: top,
         w: item.width,
         lineY: item.lineY,
@@ -1562,8 +1580,8 @@ export class PilotRssiChart extends Component {
       ctx.lineWidth = isActive ? 1.6 : 1.1;
       ctx.setLineDash(item.kind === "enter" ? [6, 4] : [3, 4]);
       ctx.beginPath();
-      ctx.moveTo(PAD.l, item.lineY);
-      ctx.lineTo(Math.max(PAD.l + plotW, box.x), item.lineY);
+      ctx.moveTo(padL, item.lineY);
+      ctx.lineTo(padL + plotW, item.lineY);
       ctx.stroke();
       ctx.restore();
       // Tag
@@ -1649,20 +1667,21 @@ export class PilotRssiChart extends Component {
           ? 2
           : ySpan <= 32
             ? 5
-            : ySpan <= 60
+            : ySpan <= 80
               ? 10
               : 15;
+    const padL = this.padL;
     for (let level = Math.ceil(this.yMin / dStep) * dStep; level <= this.yMax; level += dStep) {
       const y = Math.round(yOf(level)) + 0.5;
       if (y < PAD.t - 1 || y > h - PAD.b + 1) continue;
       ctx.strokeStyle = theme.grid;
       ctx.beginPath();
-      ctx.moveTo(PAD.l, y);
+      ctx.moveTo(padL, y);
       ctx.lineTo(w - this.padR, y);
       ctx.stroke();
       ctx.fillStyle = theme.text3;
       ctx.textAlign = "right";
-      ctx.fillText(`${level}`, PAD.l - 10, y + 3.5);
+      ctx.fillText(`${level}`, padL - (this.isMobileLayout ? 4 : 10), y + 3.5);
     }
 
     // Time ticks, labelled relative to now (or to when the view was paused).
@@ -1690,7 +1709,7 @@ export class PilotRssiChart extends Component {
     ctx.fillStyle = theme.text3;
     for (let t = ref - Math.floor((ref - start) / stepUs) * stepUs; t <= end + 1; t += stepUs) {
       const x = xOf(t);
-      if (x < PAD.l - 4 || x > w - this.padR + 4) continue;
+      if (x < padL - 4 || x > w - this.padR + 4) continue;
       const agoSec = Math.max(0, (ref - t) / 1e6);
       const lbl =
         agoSec < 0.02
@@ -1733,7 +1752,7 @@ export class PilotRssiChart extends Component {
     ctx.font = font(500, 11.5);
     const boxW = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 20;
     const boxH = 42;
-    const bx = Math.min(x + 10, PAD.l + this.plot.w - boxW);
+    const bx = Math.min(x + 10, this.padL + this.plot.w - boxW);
     const by = PAD.t + 8;
     ctx.fillStyle = withAlpha(theme.surface, 0.95);
     ctx.strokeStyle = hovered.counted ? theme.gridStrong : withAlpha(theme.bad, 0.6);

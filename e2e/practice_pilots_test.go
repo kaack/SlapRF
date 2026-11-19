@@ -193,21 +193,21 @@ func TestPracticeSessionFastSimLapsAndSectors(t *testing.T) {
 		t.Fatalf("query practiceState: %v", err)
 	}
 	if len(checkSess.PracticeState.Sessions) > 0 && len(checkSess.PracticeState.Sessions[0].Pilots) == 0 {
-		popBtn := h.Page.Locator(`button[data-practice-act="toggle-pilot-popover"]`).First()
-		h.MustBeVisible(popBtn, "Practice + Pilot popover button")
-		if err := popBtn.Click(); err != nil {
-			t.Fatalf("open practice pilot popover: %v", err)
+		pilotsTabBtn := h.Page.Locator(`button[data-practice-mobile-tab="pilots"]`).First()
+		h.MustBeVisible(pilotsTabBtn, "Practice Pilots tab button")
+		if err := pilotsTabBtn.Click(); err != nil {
+			t.Fatalf("click Practice Pilots tab: %v", err)
 		}
 		for i := 0; i < 3; i++ {
-			addPilotBtn := h.Page.Locator(`button[data-practice-act="add-session-pilot"]`).First()
-			if cnt, _ := addPilotBtn.Count(); cnt > 0 {
-				_ = addPilotBtn.Click()
+			offSwitch := h.Page.Locator(`.practice-mobile-pilots-card button[data-practice-act="toggle-session-pilot"]:not(.is-on)`).First()
+			if cnt, _ := offSwitch.Count(); cnt > 0 {
+				_ = offSwitch.Click()
 				time.Sleep(100 * time.Millisecond)
 			}
 		}
-		closePop := h.Page.Locator(`button[data-practice-act="close-pilot-popover"]`).First()
-		if cnt, _ := closePop.Count(); cnt > 0 {
-			_ = closePop.Click()
+		overviewTabBtn := h.Page.Locator(`button[data-practice-mobile-tab="overview"]`).First()
+		if err := overviewTabBtn.Click(); err != nil {
+			t.Fatalf("return to Practice Overview tab: %v", err)
 		}
 	}
 

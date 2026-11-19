@@ -96,7 +96,7 @@ func findPilotInFlightHeat(heats []domain.RaceHeat, slotIndex int) *domain.RaceH
 
 func countPilotPacksInStage(heats []domain.RaceHeat, stageIdx int, slotIndex int) (flownOrLive int, queuedUnstarted int) {
 	for _, h := range heats {
-		if h.StageIndex != stageIdx || h.State == domain.HeatAborted {
+		if h.StageIndex != stageIdx || h.State == domain.HeatAborted || h.StageFormat != domain.FormatOpenQualifier {
 			continue
 		}
 		for _, s := range h.Seats {
@@ -166,9 +166,12 @@ func nextOpenQualPackSeq(heats []domain.RaceHeat, stageIdx int) (string, string,
 func (e *Engine) spawnOpenQualPackLocked(stg *domain.RaceStage, stgSettings domain.StageSettings) *domain.RaceHeat {
 	race.SyncRoundsMetadata(&e.raceState)
 	roundID := domain.OpenQualRoundID(stg.Index)
-	for _, r := range e.raceState.Rounds {
+	var oqRound *domain.RaceRound
+	for i := range e.raceState.Rounds {
+		r := &e.raceState.Rounds[i]
 		if r.StageIndex == stg.Index && (domain.IsOpenQualRoundID(r.ID) || r.StageFormat == domain.FormatOpenQualifier) {
 			roundID = r.ID
+			oqRound = r
 			break
 		}
 	}
@@ -193,8 +196,32 @@ func (e *Engine) spawnOpenQualPackLocked(stg *domain.RaceStage, stgSettings doma
 		}
 	}
 
+	roundTitle := stg.Title
+	roundCol := 1
+	roundNum := 1
+	tLaps := stgSettings.TargetLaps
+	tLimit := stgSettings.TimeLimitSec
+	if oqRound != nil {
+		if strings.TrimSpace(oqRound.Title) != "" {
+			roundTitle = oqRound.Title
+		}
+		if oqRound.Column > 0 {
+			roundCol = oqRound.Column
+		}
+		if oqRound.Round > 0 {
+			roundNum = oqRound.Round
+		}
+		if oqRound.TargetLaps >= 0 {
+			tLaps = oqRound.TargetLaps
+		}
+		if oqRound.TimeLimitSec >= 15 {
+			tLimit = oqRound.TimeLimitSec
+		}
+	}
+
 	shortPrefix := "OQ"
-	if strings.Contains(strings.ToLower(stg.Title), "zippyq") ||
+	if strings.Contains(strings.ToLower(roundTitle), "zippyq") ||
+		strings.Contains(strings.ToLower(stg.Title), "zippyq") ||
 		(e.raceState.MGPLink != nil && e.raceState.MGPLink.IsZippyQ) {
 		shortPrefix = "ZQ"
 	}
@@ -203,28 +230,37 @@ func (e *Engine) spawnOpenQualPackLocked(stg *domain.RaceStage, stgSettings doma
 		ID:              packID,
 		RoundID:         roundID,
 		StageIndex:      stg.Index,
-		StageName:       stg.Title,
+		StageName:       roundTitle,
 		StageFormat:     domain.FormatOpenQualifier,
-		Round:           1,
-		Column:          1,
+		Round:           roundNum,
+		Column:          roundCol,
 		Order:           len(e.raceState.Heats) + 1,
 		BracketLane:     "open_qual",
-		Title:           fmt.Sprintf("%s · %s", stg.Title, packTitle),
+		Title:           fmt.Sprintf("%s · %s", roundTitle, packTitle),
 		ShortLabel:      fmt.Sprintf("%s-%d", shortPrefix, seq),
 		StartMode:       domain.StartModeStaggered,
-		TargetLaps:      stgSettings.TargetLaps,
-		TimeLimitSec:    stgSettings.TimeLimitSec,
+		TargetLaps:      tLaps,
+		TimeLimitSec:    tLimit,
 		ExpectedWinners: 0,
 		State:           domain.HeatReady,
 		Seats:           seats,
 	}
 
-	// Insert after the last heat in `stg.Index` (or at end if none exist yet) so multi-stage ordering stays clean
-	insertAt := len(e.raceState.Heats)
+	// Insert right after existing packs of `roundID` (and BEFORE any downstream non-OQ heats on the unified graph!)
+	insertAt := -1
 	for i := len(e.raceState.Heats) - 1; i >= 0; i-- {
-		if e.raceState.Heats[i].StageIndex <= stg.Index {
+		if e.raceState.Heats[i].RoundID == roundID || (e.raceState.Heats[i].StageIndex == stg.Index && e.raceState.Heats[i].StageFormat == domain.FormatOpenQualifier) {
 			insertAt = i + 1
 			break
+		}
+	}
+	if insertAt < 0 {
+		insertAt = len(e.raceState.Heats)
+		for i := 0; i < len(e.raceState.Heats); i++ {
+			if e.raceState.Heats[i].StageIndex > stg.Index || (e.raceState.Heats[i].StageIndex == stg.Index && e.raceState.Heats[i].Column > roundCol) {
+				insertAt = i
+				break
+			}
 		}
 	}
 	if insertAt == len(e.raceState.Heats) {
@@ -249,15 +285,27 @@ func (e *Engine) openQualEnqueuePilotLocked(slotIndex int, stageIdx int, forceIm
 	if err != nil {
 		return "", err
 	}
-	if stg.Status == domain.StageStatusCompleted || stg.CompletedEarly {
-		return "", fmt.Errorf("%s is already completed — reopen the stage to queue more heats", stg.Title)
+	var oqRound *domain.RaceRound
+	for i := range e.raceState.Rounds {
+		r := &e.raceState.Rounds[i]
+		if r.StageIndex == stg.Index && (domain.IsOpenQualRoundID(r.ID) || r.StageFormat == domain.FormatOpenQualifier) {
+			oqRound = r
+			break
+		}
+	}
+	if stg.Status == domain.StageStatusCompleted || stg.CompletedEarly || (oqRound != nil && race.IsRoundSkippedByEarlySeed(&e.raceState, oqRound.ID)) {
+		lbl := stg.Title
+		if oqRound != nil && oqRound.Title != "" {
+			lbl = oqRound.Title
+		}
+		return "", fmt.Errorf("%s is already locked for seeding - reopen seeding to queue more heats", lbl)
 	}
 	normalizeRaceRosterLocked(&e.raceState, e.pilots)
 	for _, existing := range e.raceState.Roster {
 		if existing.SlotIndex == slotIndex && existing.CheckedIn {
 			att := domain.NormalizeAttendance(existing.Attendance)
 			if att == domain.AttendanceDQ || att == domain.AttendanceDNC || att == domain.AttendanceAway {
-				return "", fmt.Errorf("%s is marked %s — clear their status in Pilots Roster before queueing", existing.Callsign, strings.ToUpper(string(att)))
+				return "", fmt.Errorf("%s is marked %s - clear their status in Pilots Roster before queueing", existing.Callsign, strings.ToUpper(string(att)))
 			}
 			break
 		}
@@ -267,23 +315,29 @@ func (e *Engine) openQualEnqueuePilotLocked(slotIndex int, stageIdx int, forceIm
 		return "", fmt.Errorf("pilot %d not found", slotIndex)
 	}
 	if liveHeat := findPilotInFlightHeat(e.raceState.Heats, slotIndex); liveHeat != nil {
-		return "", fmt.Errorf("%s is currently flying in %s — wait until the heat finishes before queueing again", ep.Callsign, liveHeat.ShortLabel)
+		return "", fmt.Errorf("%s is currently flying in %s - wait until the heat finishes before queueing again", ep.Callsign, liveHeat.ShortLabel)
 	}
 
 	stgSettings := stg.Settings.Normalized(e.raceState.Config, stg.Format)
+	maxPacks := stgSettings.MaxPacksPerPilot
+	if oqRound != nil && oqRound.MaxPacksPerPilot > 0 {
+		maxPacks = oqRound.MaxPacksPerPilot
+	} else if maxPacks == 0 && e.raceState.Config.MaxPacksPerPilot > 0 {
+		maxPacks = e.raceState.Config.MaxPacksPerPilot
+	}
 	flownOrLive, queued := countPilotPacksInStage(e.raceState.Heats, stg.Index, slotIndex)
 	totalCount := flownOrLive + queued
-	if stgSettings.MaxPacksPerPilot > 0 && totalCount >= stgSettings.MaxPacksPerPilot {
-		return "", fmt.Errorf("%s has reached the %d-heat limit (%d flown, %d queued)", ep.Callsign, stgSettings.MaxPacksPerPilot, flownOrLive, queued)
+	if maxPacks > 0 && totalCount >= maxPacks {
+		return "", fmt.Errorf("%s has reached the %d-heat limit (%d flown, %d queued)", ep.Callsign, maxPacks, flownOrLive, queued)
 	}
 
-	// Collect stage heats in running order: identify latest started/confirmed pack & unstarted queue
+	// Collect Open Qualifier heats in running order: identify latest started/confirmed pack & unstarted queue
 	var lastStartedPack *domain.RaceHeat
 	var unstartedIdxs []int
 	lastQueuedQueuePos := -1
 	for i := range e.raceState.Heats {
 		h := &e.raceState.Heats[i]
-		if h.StageIndex != stg.Index || h.State == domain.HeatAborted {
+		if h.StageIndex != stg.Index || h.State == domain.HeatAborted || h.StageFormat != domain.FormatOpenQualifier {
 			continue
 		}
 		if isUnstartedHeatState(h.State) {
@@ -416,6 +470,9 @@ func (e *Engine) openQualEnqueuePilotLocked(slotIndex int, stageIdx int, forceIm
 		chosenHeatID = seatPilotInto(newPack, targetSeat)
 	}
 
+	if chosenHeat := e.findHeatLocked(chosenHeatID); chosenHeat != nil && chosenHeat.RoundID != "" {
+		e.cascadeBalancedRoundsFromLocked(stg.Index, chosenHeat.RoundID)
+	}
 	e.resolveActiveTournamentLocked()
 	e.autoStageOpenQualIfIdleLocked(stg.Index)
 	return chosenHeatID, nil

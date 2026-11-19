@@ -1,7 +1,8 @@
 import { Component } from "../core/component";
 import { isCustomSelectOpenWithin } from "../core/custom_select";
-import { esc, fmtTime } from "../core/format";
+import { esc, fmtDelta, fmtTime } from "../core/format";
 import { icons } from "../core/icons";
+import { fitScheduleLineups } from "../core/table_scroll";
 import {
   BAND_RACEBAND,
   decodeBandChannel,
@@ -22,18 +23,23 @@ import {
   slugifyPracticeName,
 } from "../core/router";
 import { ApiClient } from "../services/api_client";
-import { gateLabel } from "../state/selectors";
+import { sectionKey } from "../state/analysis";
+import { allLapsFor, gateColor, gateLabel, lapsFor, sectionLabel, sectionShort } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { PracticeSession } from "../types/models";
 import { openConfirmModal } from "../widgets/ConfirmModal";
 import { openConfirmPreemptModal } from "../widgets/ConfirmPreemptModal";
+import { renderEmpty, renderSectionCapsuleIcon, SPLIT_CLASS } from "../widgets/markup";
 import { PilotPicker } from "../widgets/PilotPicker";
+import { PilotRssiChart } from "../widgets/PilotRssiChart";
 import { mountTagPillEditor, renderTagPillBoxHtml } from "../widgets/TagPillEditor";
 import { cleanConnectionInvalidReason, showToast } from "../widgets/Toast";
 import { AllPilotsPanel } from "./live/AllPilotsPanel";
 import { PilotPanel } from "./live/PilotPanel";
+import { PilotView } from "./PilotView";
 
 type SessionDirStatusFilter = "all" | "live" | "stopped" | "laps";
+type MobilePracticeTab = "pilots" | "overview" | "laps" | "trends" | "signals" | "analytics";
 
 function formatShortSessionDate(iso?: string): string {
   if (!iso) return "";
@@ -51,6 +57,7 @@ function fastestSessionLap(session: PracticeSession): { sec: number; callsign: s
   let bestSec = 0;
   let bestCallsign = "";
   for (const lap of session.laps ?? []) {
+    if (lap.invalidated) continue;
     if (lap.lapTimeSec > 0 && (bestSec === 0 || lap.lapTimeSec < bestSec)) {
       bestSec = lap.lapTimeSec;
       bestCallsign = lap.callsign;
@@ -82,12 +89,26 @@ export class LiveView extends Component {
   private untaggedOnly = false;
   private editingNameForSessionId = "";
   private editingTagsForSessionId = "";
+  private mobileSelectedSessionId = "";
+  private lastOpenedMobileSessionId = "";
+  private mobileSessionDrawerClosing = false;
+  private mobileSessionDrawerCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  private mobileSessionDrawerDragStartY: number | null = null;
+  private dirFabOpen = false;
+  private wsFabOpen = false;
   private pilotPopoverOpen = false;
+  private activePracticeSlotIndex = 1;
+  private pilotDrawerAnimatedOpen = false;
+  private pilotDrawerClosing = false;
+  private pilotDrawerCloseTimer: ReturnType<typeof setTimeout> | null = null;
   private isViewActive = true;
 
   public override onDeactivate(): void {
     this.isViewActive = false;
     this.pilotPopoverOpen = false;
+    this.pilotDrawerAnimatedOpen = false;
+    this.pilotDrawerClosing = false;
+    this.wsFabOpen = false;
   }
 
   public override onActivate(): void {
@@ -107,6 +128,20 @@ export class LiveView extends Component {
   private lastDirSig = "";
   private lastWorkspaceControlsSig = "";
   private lastPopoverSig = "";
+  private lastMobilePilotsSig = "";
+  private lastMobileSectorsSig = "";
+  private lastMobileSignalsSig = "";
+  private mobilePracticeTab: MobilePracticeTab = "overview";
+  private selectedMobileSectorKeys = new Set<string>();
+  private lastMobileSectorCourseSig = "";
+  private practiceSignalsSlot: number | null = null;
+  private lastFocusedPracticePilotSlot: number | null = null;
+  private trendsExplicitAll = false;
+  private practiceSignalsChart: PilotRssiChart | null = null;
+  private practiceSignalsChartEl: HTMLElement | null = null;
+  private practiceAnalyticsView: PilotView | null = null;
+  private practiceAnalyticsEl: HTMLElement | null = null;
+  private dirOpenMenuSessionId = "";
   private pendingRouteTarget: PracticeRouteTarget | null = null;
   private resolvingSessionId = "";
 
@@ -127,23 +162,69 @@ export class LiveView extends Component {
 
     el.innerHTML = `
       <div class="settings" data-slot="directory"></div>
-      <div class="view-stack" data-slot="workspace" style="display:none">
-        <div data-slot="workspace-banner"></div>
-        <div class="picker-row practice-picker-row">
-          <div class="practice-picker-left">
-            <div data-slot="picker"></div>
-            <div class="practice-pilot-add-wrap" data-slot="pilot-add"></div>
+      <div class="view-stack practice-workspace-page" data-slot="workspace" data-mobile-practice-view="overview" style="display:none">
+        <div class="races-page-topbar practice-page-topbar" data-slot="mobile-topbar">
+          <div class="rc-topbar-side is-left" aria-hidden="true"></div>
+          <div class="rc-topleft-bar" data-practice-topleft-bar>
+            <div class="sched-lineup-wrap rc-topleft-scroll-wrap">
+              <button type="button" class="sched-lineup-cue is-left" data-lineup-scroll="-1" aria-label="Scroll tabs left" title="Scroll left" hidden>${icons.chevronLeft(14)}</button>
+              <div class="rc-topleft-seg sched-lineup" role="tablist" aria-label="Practice workspace mode" data-fit-lineup>
+                <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="pilots">
+                  ${icons.pilot(15)}<span>Pilots</span>
+                </button>
+                <button type="button" role="tab" aria-selected="true" class="rc-topleft-btn rc-mode-btn is-active" data-practice-mobile-tab="overview">
+                  ${icons.flag(15)}<span>Overview</span>
+                </button>
+                <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="laps">
+                  ${icons.timer(15)}<span>Laps</span>
+                </button>
+                <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="trends">
+                  ${icons.chart(15)}<span>Trends</span>
+                </button>
+                <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="signals">
+                  ${icons.signal(15)}<span>Signals</span>
+                </button>
+                <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="analytics">
+                  ${icons.chart(15)}<span>Analytics</span>
+                </button>
+              </div>
+              <button type="button" class="sched-lineup-cue is-right" data-lineup-scroll="1" aria-label="Scroll tabs right" title="More tabs" hidden>${icons.chevronRight(14)}</button>
+            </div>
           </div>
+          <div class="rc-topbar-side is-right" aria-hidden="true"></div>
         </div>
-        <div class="practice-action-strip" data-slot="session-controls" role="region" aria-label="Practice session status and controls"></div>
-        <div class="view-stack" data-slot="panel"></div>
+        <div class="practice-workspace-stack">
+          <div data-slot="workspace-banner"></div>
+          <div class="picker-row practice-picker-row">
+            <div class="practice-picker-left">
+              <div data-slot="picker"></div>
+              <div class="practice-pilot-add-wrap" data-slot="pilot-add"></div>
+            </div>
+          </div>
+          <div class="practice-action-strip" data-slot="session-controls" data-practice-mobile-pane="overview" role="region" aria-label="Practice session status and controls"></div>
+          <div class="view-stack practice-panel-stack" data-slot="panel"></div>
+          <section class="card card-flush practice-mobile-pilots-card" data-slot="mobile-pilots" data-practice-mobile-pane="pilots"></section>
+          <div class="practice-mobile-sectors-wrap" data-slot="mobile-sectors" data-practice-mobile-pane="laps"></div>
+          <section class="rc-canvas-panel rc-page-card is-signals-panel practice-mobile-signals-panel" data-slot="mobile-signals" data-practice-mobile-pane="signals"></section>
+          <div class="practice-mobile-analytics-wrap" data-slot="mobile-analytics" data-practice-mobile-pane="analytics"></div>
+        </div>
       </div>`;
 
     this.adopt(
-      new PilotPicker(this.slot("picker"), store, {
+      new PilotPicker(this.slot("picker"), this.workspaceStore, {
         includeAll: true,
         value: () => store.liveFocus,
-        onSelect: (slot) => store.setLiveFocus(slot),
+        onSelect: (slot) => {
+          if (slot !== null) {
+            this.trendsExplicitAll = false;
+            this.lastFocusedPracticePilotSlot = slot;
+            this.practiceSignalsSlot = slot;
+            this.practiceSignalsChart?.setPilotSlotOverride(slot);
+          } else {
+            this.trendsExplicitAll = true;
+          }
+          store.setLiveFocus(slot);
+        },
       })
     );
 
@@ -152,26 +233,50 @@ export class LiveView extends Component {
     this.listen(el, "change", this.handleChange);
     this.listen(el, "keydown", this.handleKeyDown);
     this.listen(el, "focusout", this.handleFocusOut);
+    this.listen(el, "pointerdown", this.handleDrawerPointerDown);
+    this.listen(el, "pointermove", this.handleDrawerPointerMove);
+    this.listen(el, "pointerup", this.handleDrawerPointerUp);
+    this.listen(el, "pointercancel", this.handleDrawerPointerUp);
 
     const onDocPointerDown = (e: PointerEvent): void => {
-      if (!this.pilotPopoverOpen) return;
       const target = e.target as Node | null;
+      if (
+        this.dirOpenMenuSessionId &&
+        (!target || !(target instanceof Element && target.closest(".dir-row-more-wrap")))
+      ) {
+        this.dirOpenMenuSessionId = "";
+        this.lastDirSig = "";
+        this.renderDirectory();
+      }
+      if (
+        this.dirFabOpen &&
+        (!target || !(target instanceof Element && target.closest(".dir-fab-menu")))
+      ) {
+        this.dirFabOpen = false;
+        this.syncDirFabDom();
+      }
+      if (
+        this.wsFabOpen &&
+        (!target || !(target instanceof Element && target.closest("[data-practice-ws-fab]")))
+      ) {
+        this.wsFabOpen = false;
+        this.syncWsFabDom();
+      }
+      if (!this.pilotPopoverOpen) return;
       const wrap = this.slot("pilot-add");
       if (
         !target ||
         (!wrap.contains(target) &&
-          !(target instanceof Element && target.closest(".custom-select-popover")))
+          !(target instanceof Element && target.closest(".custom-select-popover")) &&
+          !(target instanceof Element && target.closest("[data-practice-act=open-pilot-drawer]")) &&
+          !(target instanceof Element && target.closest("[data-practice-act=toggle-pilot-popover]")))
       ) {
-        this.pilotPopoverOpen = false;
-        this.lastPopoverSig = "";
-        this.renderPilotAddSlot();
+        this.dismissPilotPopoverOrDrawer();
       }
     };
     const onDocKeyDown = (e: KeyboardEvent): void => {
       if (e.key === "Escape" && !e.defaultPrevented && this.pilotPopoverOpen) {
-        this.pilotPopoverOpen = false;
-        this.lastPopoverSig = "";
-        this.renderPilotAddSlot();
+        this.dismissPilotPopoverOrDrawer();
       }
     };
     document.addEventListener("pointerdown", onDocPointerDown, true);
@@ -179,6 +284,16 @@ export class LiveView extends Component {
     this.onDispose(() => {
       document.removeEventListener("pointerdown", onDocPointerDown, true);
       document.removeEventListener("keydown", onDocKeyDown);
+      if (this.mobileSessionDrawerCloseTimer !== null) {
+        clearTimeout(this.mobileSessionDrawerCloseTimer);
+        this.mobileSessionDrawerCloseTimer = null;
+      }
+      if (this.pilotDrawerCloseTimer !== null) {
+        clearTimeout(this.pilotDrawerCloseTimer);
+        this.pilotDrawerCloseTimer = null;
+      }
+      this.disposePracticeSignalsChart();
+      this.disposePracticeAnalyticsView();
       this.panel?.destroy();
       setPracticeTopBarContext({
         tab: "directory",
@@ -206,6 +321,12 @@ export class LiveView extends Component {
 
     this.onDispose(
       store.subscribe(["practice", "config", "laps", "crossings", "selection", "race", "status"], () => {
+        if (this.store.liveFocus !== null) {
+          this.trendsExplicitAll = false;
+          this.lastFocusedPracticePilotSlot = this.store.liveFocus;
+          this.practiceSignalsSlot = this.store.liveFocus;
+          this.practiceSignalsChart?.setPilotSlotOverride(this.store.liveFocus);
+        }
         if (!this.isViewActive) return;
         if (this.pendingRouteTarget) {
           this.resolvePendingRouteIfReady();
@@ -293,9 +414,22 @@ export class LiveView extends Component {
     if (next === "session" && !this.store.selectedPracticeSession) {
       return;
     }
+    const enteringSession = next === "session" && this.activeTab !== "session";
     this.activeTab = next;
     if (next === "directory") {
       this.pilotPopoverOpen = false;
+    } else if (enteringSession) {
+      this.mobilePracticeTab = "overview";
+      if (this.store.liveFocus !== null) {
+        this.store.setLiveFocus(null);
+      }
+      const wsEl = this.slot("workspace");
+      wsEl.dataset.mobilePracticeView = "overview";
+      wsEl.querySelectorAll<HTMLElement>("[data-practice-mobile-tab]").forEach((btn) => {
+        const active = btn.dataset.practiceMobileTab === "overview";
+        btn.classList.toggle("is-active", active);
+        btn.setAttribute("aria-selected", active ? "true" : "false");
+      });
     }
     this.errorMsg = "";
     this.lastDirSig = "";
@@ -344,20 +478,150 @@ export class LiveView extends Component {
   }
 
   private syncAll(pushHistory = false): void {
-    this.syncUrlAndTopBar(pushHistory);
     const dirEl = this.slot("directory");
     const wsEl = this.slot("workspace");
 
     if (this.activeTab === "directory") {
       dirEl.style.display = "";
       wsEl.style.display = "none";
+      this.disposePracticeSignalsChart();
+      this.disposePracticeAnalyticsView();
       this.renderDirectory();
     } else {
       dirEl.style.display = "none";
       wsEl.style.display = "";
+      wsEl.dataset.mobilePracticeView = this.mobilePracticeTab;
+      this.ensureSinglePilotFocusForMobileTab(this.mobilePracticeTab);
       this.renderWorkspaceChrome();
       this.showPanel();
+      this.renderMobilePilotsPanel();
+      this.renderMobileSectorsPanel();
+      this.renderMobileSignalsPanel();
+      this.renderMobileAnalyticsPanel();
+      fitScheduleLineups(wsEl);
     }
+    this.syncUrlAndTopBar(pushHistory);
+  }
+
+  private scrollTabButtonIntoStrip(btn: HTMLElement | null | undefined): void {
+    if (!btn) return;
+    const track = btn.closest<HTMLElement>(".sched-lineup");
+    if (!track) return;
+    const maxScroll = track.scrollWidth - track.clientWidth;
+    if (maxScroll <= 0) return;
+    const trackRect = track.getBoundingClientRect();
+    const btnRect = btn.getBoundingClientRect();
+    const pad = 34;
+    let targetLeft = track.scrollLeft;
+    if (btnRect.left < trackRect.left + pad) {
+      targetLeft += btnRect.left - (trackRect.left + pad);
+    } else if (btnRect.right > trackRect.right - pad) {
+      targetLeft += btnRect.right - (trackRect.right - pad);
+    } else {
+      return;
+    }
+    targetLeft = Math.max(0, Math.min(maxScroll, targetLeft));
+    try {
+      track.scrollTo({ left: targetLeft, behavior: "smooth" });
+    } catch {
+      track.scrollLeft = targetLeft;
+    }
+  }
+
+  private ensureSinglePilotFocusForMobileTab(tab: MobilePracticeTab): void {
+    if (this.store.liveFocus !== null) {
+      this.lastFocusedPracticePilotSlot = this.store.liveFocus;
+      this.practiceSignalsSlot = this.store.liveFocus;
+    }
+    if (tab === "overview") {
+      if (this.store.liveFocus !== null) {
+        this.store.setLiveFocus(null);
+      }
+      return;
+    }
+    if (
+      tab !== "laps" &&
+      tab !== "trends" &&
+      tab !== "signals" &&
+      tab !== "analytics"
+    ) {
+      return;
+    }
+    const enabled = this.workspaceStore.enabledPilots;
+    if (enabled.length === 0) return;
+    const cur = this.store.liveFocus;
+    if (cur === null || !enabled.some((p) => p.slotIndex === cur)) {
+      if (tab === "trends" && this.trendsExplicitAll) {
+        return;
+      }
+      const preferred =
+        this.lastFocusedPracticePilotSlot !== null &&
+        enabled.some((p) => p.slotIndex === this.lastFocusedPracticePilotSlot)
+          ? this.lastFocusedPracticePilotSlot
+          : this.practiceSignalsSlot !== null &&
+              enabled.some((p) => p.slotIndex === this.practiceSignalsSlot)
+            ? this.practiceSignalsSlot
+            : enabled[0].slotIndex;
+      this.lastFocusedPracticePilotSlot = preferred;
+      this.practiceSignalsSlot = preferred;
+      this.store.setLiveFocus(preferred);
+    }
+    if (this.store.liveFocus !== null) {
+      this.lastFocusedPracticePilotSlot = this.store.liveFocus;
+      this.practiceSignalsSlot = this.store.liveFocus;
+    }
+  }
+
+  private setMobilePracticeTab(
+    nextTab: MobilePracticeTab,
+    btnEl?: HTMLElement | null,
+    forceFade = false
+  ): void {
+    const prevTab = this.mobilePracticeTab;
+    this.mobilePracticeTab = nextTab;
+    const wsEl = this.slot("workspace");
+    wsEl.dataset.mobilePracticeView = nextTab;
+    wsEl.querySelectorAll<HTMLElement>("[data-practice-mobile-tab]").forEach((btn) => {
+      const active = btn.dataset.practiceMobileTab === nextTab;
+      btn.classList.toggle("is-active", active);
+      btn.setAttribute("aria-selected", active ? "true" : "false");
+    });
+    const activeBtn =
+      btnEl ?? wsEl.querySelector<HTMLElement>(`[data-practice-mobile-tab="${nextTab}"]`);
+    this.scrollTabButtonIntoStrip(activeBtn);
+    if (nextTab === "overview") {
+      if (this.store.liveFocus !== null) {
+        this.lastFocusedPracticePilotSlot = this.store.liveFocus;
+        this.practiceSignalsSlot = this.store.liveFocus;
+        this.store.setLiveFocus(null);
+      }
+    } else {
+      this.ensureSinglePilotFocusForMobileTab(nextTab);
+    }
+    if (nextTab === "pilots") {
+      this.renderMobilePilotsPanel();
+    }
+    if (nextTab === "laps") {
+      this.renderMobileSectorsPanel();
+    }
+    if (nextTab === "signals") {
+      this.renderMobileSignalsPanel(true);
+    }
+    if (nextTab === "analytics") {
+      this.renderMobileAnalyticsPanel(true);
+    }
+    if (forceFade || prevTab !== nextTab) {
+      const stackEl = wsEl.querySelector<HTMLElement>(".practice-workspace-stack");
+      if (stackEl) {
+        stackEl.classList.remove("is-ws-tab-enter");
+        void stackEl.offsetWidth;
+        stackEl.classList.add("is-ws-tab-enter");
+      }
+    }
+    fitScheduleLineups(wsEl);
+    window.requestAnimationFrame(() => {
+      window.dispatchEvent(new Event("resize"));
+    });
   }
 
   // ---- Event Handlers ------------------------------------------------------
@@ -382,6 +646,60 @@ export class LiveView extends Component {
   private handleClick = (e: Event): void => {
     const target = e.target as HTMLElement | null;
     if (!target) return;
+
+    const mobileTabBtn = target.closest<HTMLButtonElement>("[data-practice-mobile-tab]");
+    if (mobileTabBtn && !mobileTabBtn.disabled) {
+      const nextTab = mobileTabBtn.dataset.practiceMobileTab as MobilePracticeTab | undefined;
+      if (nextTab) {
+        this.setMobilePracticeTab(nextTab, mobileTabBtn);
+      }
+      return;
+    }
+
+    const sectorToggleBtn = target.closest<HTMLButtonElement>("[data-practice-sector-toggle]");
+    if (sectorToggleBtn && !sectorToggleBtn.disabled) {
+      const key = sectorToggleBtn.dataset.practiceSectorToggle ?? "";
+      if (key) {
+        if (this.selectedMobileSectorKeys.has(key)) {
+          this.selectedMobileSectorKeys.delete(key);
+        } else if (this.selectedMobileSectorKeys.size < 3) {
+          this.selectedMobileSectorKeys.add(key);
+        }
+        this.lastMobileSectorsSig = "";
+        this.renderMobileSectorsPanel();
+      }
+      return;
+    }
+
+    const lapToggleEl = target.closest<HTMLElement>("[data-practice-toggle-lap]");
+    if (lapToggleEl) {
+      const lapId = Number(lapToggleEl.dataset.practiceToggleLap ?? "0");
+      if (lapId > 0) {
+        this.store.togglePracticeLap(lapId);
+        const sid = this.store.selectedPracticeSession?.sessionId;
+        void this.api
+          .practiceAction({ action: "toggle_session_lap", sessionId: sid, lapId })
+          .catch(this.reportErr);
+      }
+      return;
+    }
+
+    const sigPilotBtn = target.closest<HTMLButtonElement>("[data-practice-sig-pilot]");
+    if (sigPilotBtn) {
+      const nextSlot = Number(sigPilotBtn.dataset.practiceSigPilot ?? "0");
+      if (nextSlot > 0 && this.practiceSignalsSlot !== nextSlot) {
+        this.practiceSignalsSlot = nextSlot;
+        this.el.querySelectorAll<HTMLElement>("[data-practice-sig-pilot]").forEach((btn) => {
+          btn.classList.toggle("is-active", btn.dataset.practiceSigPilot === String(nextSlot));
+        });
+        this.practiceSignalsChart?.setPilotSlotOverride(nextSlot);
+        if (this.store.liveFocus !== nextSlot) {
+          this.store.setLiveFocus(nextSlot);
+        }
+      }
+      this.scrollTabButtonIntoStrip(sigPilotBtn);
+      return;
+    }
 
     const statusBtn = target.closest<HTMLButtonElement>("[data-session-dir-status]");
     if (statusBtn) {
@@ -422,9 +740,35 @@ export class LiveView extends Component {
       return;
     }
 
-    const actBtn = target.closest<HTMLButtonElement>("[data-practice-act]");
+    const mobileSelectBtn = target.closest<HTMLButtonElement>("[data-mobile-session-select]");
+    if (mobileSelectBtn) {
+      e.stopPropagation();
+      const sid = mobileSelectBtn.dataset.mobileSessionSelect ?? "";
+      if (sid) {
+        if (this.mobileSessionDrawerCloseTimer !== null) {
+          clearTimeout(this.mobileSessionDrawerCloseTimer);
+          this.mobileSessionDrawerCloseTimer = null;
+        }
+        if (this.mobileSelectedSessionId === sid && !this.mobileSessionDrawerClosing) {
+          this.dismissMobileSessionDrawer();
+        } else {
+          this.mobileSessionDrawerClosing = false;
+          this.mobileSelectedSessionId = sid;
+          this.lastDirSig = "";
+          this.renderDirectory(true);
+        }
+      }
+      return;
+    }
+
+    if (target.closest("[data-mobile-session-close]")) {
+      this.dismissMobileSessionDrawer();
+      return;
+    }
+
+    const actBtn = target.closest<HTMLElement>("[data-practice-act]");
     if (actBtn) {
-      if (actBtn.disabled) return;
+      if (actBtn instanceof HTMLButtonElement && actBtn.disabled) return;
       const act = actBtn.dataset.practiceAct ?? "";
 
       switch (act) {
@@ -439,33 +783,59 @@ export class LiveView extends Component {
           const ongoing = this.store.ongoingRace;
           if (ongoing?.raceId) {
             this.setDismissedOngoingRaceId(ongoing.raceId);
-            this.lastDirSig = "";
-            this.renderDirectory(true);
+            const noteEl = this.el.querySelector<HTMLElement>("[data-practice-ongoing-race-note]");
+            if (noteEl) {
+              this.lastDirSig = this.computeDirSig(this.store.practiceSessions);
+              noteEl.classList.add("is-leaving");
+              window.setTimeout(() => {
+                noteEl.remove();
+              }, 230);
+            } else {
+              this.lastDirSig = "";
+              this.renderDirectory(true);
+            }
           }
           return;
         }
 
+        case "toggle-dir-fab":
+          this.dirFabOpen = !this.dirFabOpen;
+          this.syncDirFabDom();
+          return;
+
         case "create-session-inline": {
-          this.dirSearchQuery = "";
-          this.dirStatusFilter = "all";
-          this.selectedFilterTags.clear();
-          this.untaggedOnly = false;
-          this.editingNameForSessionId = "";
-          this.editingTagsForSessionId = "";
-          this.errorMsg = "";
-          void this.api
-            .practiceAction({ action: "create_session", dontSelect: true })
-            .then(() => {
-              this.lastDirSig = "";
-              this.renderDirectory(true);
-            })
-            .catch(this.reportErr);
+          this.createSessionInline(false);
           return;
         }
 
         case "open-session": {
           const sid = actBtn.dataset.sessionId ?? "";
+          this.dirOpenMenuSessionId = "";
+          this.mobileSelectedSessionId = "";
+          this.lastOpenedMobileSessionId = "";
           this.openPracticeSession(sid);
+          return;
+        }
+
+        case "toggle-dir-session-menu": {
+          const sid = actBtn.dataset.sessionId ?? "";
+          if (!sid) return;
+          this.dirOpenMenuSessionId = this.dirOpenMenuSessionId === sid ? "" : sid;
+          this.lastDirSig = "";
+          this.renderDirectory();
+          return;
+        }
+
+        case "dir-open-session-settings": {
+          const sid = actBtn.dataset.sessionId ?? "";
+          if (!sid) return;
+          this.dirOpenMenuSessionId = "";
+          this.lastDirSig = "";
+          this.renderDirectory();
+          const found = this.store.practiceSessions.find((s) => s.sessionId === sid);
+          if (found) {
+            this.openPracticeSessionSettingsModal(found);
+          }
           return;
         }
 
@@ -517,6 +887,11 @@ export class LiveView extends Component {
 
         case "delete-session": {
           const sid = actBtn.dataset.sessionId ?? "";
+          if (this.dirOpenMenuSessionId) {
+            this.dirOpenMenuSessionId = "";
+            this.lastDirSig = "";
+            this.renderDirectory();
+          }
           const found = this.store.practiceSessions.find((s) => s.sessionId === sid);
           if (!found) return;
           if (found.active) {
@@ -541,16 +916,58 @@ export class LiveView extends Component {
           return;
         }
 
-        case "toggle-pilot-popover":
-          this.pilotPopoverOpen = !this.pilotPopoverOpen;
+        case "toggle-ws-fab":
+          this.wsFabOpen = !this.wsFabOpen;
+          this.syncWsFabDom();
+          return;
+
+        case "open-pilot-drawer": {
+          this.wsFabOpen = false;
+          this.syncWsFabDom();
+          if (this.pilotDrawerCloseTimer !== null) {
+            clearTimeout(this.pilotDrawerCloseTimer);
+            this.pilotDrawerCloseTimer = null;
+          }
+          this.pilotDrawerClosing = false;
+          this.pilotPopoverOpen = true;
           this.lastPopoverSig = "";
           this.renderPilotAddSlot();
           return;
+        }
+
+        case "toggle-pilot-popover":
+          if (this.pilotPopoverOpen) {
+            this.dismissPilotPopoverOrDrawer();
+          } else {
+            if (this.pilotDrawerCloseTimer !== null) {
+              clearTimeout(this.pilotDrawerCloseTimer);
+              this.pilotDrawerCloseTimer = null;
+            }
+            this.pilotDrawerClosing = false;
+            this.pilotPopoverOpen = true;
+            this.lastPopoverSig = "";
+            this.renderPilotAddSlot();
+          }
+          return;
+
+        case "toggle-session-pilot": {
+          const sess = this.store.selectedPracticeSession;
+          const slotIndex = Number(actBtn.dataset.slotIndex);
+          if (!sess || !slotIndex) return;
+          const isInSession = sess.pilots.some((p) => p.slotIndex === slotIndex);
+          this.errorMsg = "";
+          void this.api
+            .practiceAction({
+              action: isInSession ? "remove_session_pilot" : "add_session_pilot",
+              sessionId: sess.sessionId,
+              slotIndex,
+            })
+            .catch(this.reportErr);
+          return;
+        }
 
         case "close-pilot-popover":
-          this.pilotPopoverOpen = false;
-          this.lastPopoverSig = "";
-          this.renderPilotAddSlot();
+          this.dismissPilotPopoverOrDrawer();
           return;
 
         case "add-session-pilot": {
@@ -588,6 +1005,11 @@ export class LiveView extends Component {
           return;
         }
       }
+      return;
+    }
+
+    if (target.closest("[data-practice-pilot-backdrop]")) {
+      this.dismissPilotPopoverOrDrawer();
       return;
     }
 
@@ -667,8 +1089,6 @@ export class LiveView extends Component {
     if (!popEl) return;
     const inp = popEl.querySelector<HTMLInputElement>("input[data-new-session-pilot-input]");
     const createBtn = popEl.querySelector<HTMLButtonElement>('[data-practice-act="create-and-add-pilot"]');
-    const sess = this.store.selectedPracticeSession;
-    const sessionFull = (sess?.pilots.length ?? 0) >= 8;
 
     const trimmed = (inp?.value ?? "").trim();
     const needle = trimmed.toLowerCase();
@@ -677,7 +1097,7 @@ export class LiveView extends Component {
       : undefined;
 
     popEl
-      .querySelectorAll<HTMLElement>("[data-session-pilot-row], [data-available-pilot-row]")
+      .querySelectorAll<HTMLElement>("[data-practice-pilot-row]")
       .forEach((row) => {
         const hay = row.dataset.pilotSearchHay ?? "";
         const callsign = row.dataset.pilotCallsign ?? "";
@@ -687,21 +1107,25 @@ export class LiveView extends Component {
       });
 
     if (createBtn) {
-      createBtn.disabled = sessionFull || !trimmed || !!exactGlobal;
-      createBtn.title = sessionFull
-        ? "Maximum 8 pilots per session"
-        : exactGlobal
-          ? `Pilot “${exactGlobal.callsign}” already exists`
-          : trimmed
-            ? `Create global pilot “${trimmed}” and add to this session`
-            : "Search or type a unique callsign to add";
+      createBtn.disabled = !trimmed || !!exactGlobal;
+      createBtn.title = exactGlobal
+        ? `Pilot “${exactGlobal.callsign}” already exists`
+        : trimmed
+          ? `Create global pilot “${trimmed}” and add to this session`
+          : "Search or type a unique callsign to add";
     }
   }
 
   private submitNewSessionPilot(): void {
     const sess = this.store.selectedPracticeSession;
     if (!sess) return;
-    const inp = this.el.querySelector<HTMLInputElement>("input[data-new-session-pilot-input]");
+    const popEl =
+      this.pilotPopoverOpen
+        ? this.el.querySelector<HTMLElement>("[data-slot='pilot-add'] .practice-pilot-popover")
+        : this.el.querySelector<HTMLElement>("[data-slot='mobile-pilots'] .practice-pilot-popover") ??
+          this.el.querySelector<HTMLElement>(".practice-pilot-popover");
+    const inp = popEl?.querySelector<HTMLInputElement>("input[data-new-session-pilot-input]") ??
+      this.el.querySelector<HTMLInputElement>("input[data-new-session-pilot-input]");
     const callsign = inp?.value.trim() ?? "";
     if (!callsign) {
       inp?.focus();
@@ -711,7 +1135,7 @@ export class LiveView extends Component {
       (p) => p.callsign.trim().toLowerCase() === callsign.toLowerCase()
     );
     if (dup) {
-      this.syncSessionPilotPopoverFilter(this.el.querySelector<HTMLElement>(".practice-pilot-popover"));
+      this.syncSessionPilotPopoverFilter(popEl ?? null);
       return;
     }
     this.errorMsg = "";
@@ -722,12 +1146,17 @@ export class LiveView extends Component {
         callsign,
       })
       .then(() => {
-        const freshInp = this.el.querySelector<HTMLInputElement>("input[data-new-session-pilot-input]");
+        const freshPop =
+          this.pilotPopoverOpen
+            ? this.el.querySelector<HTMLElement>("[data-slot='pilot-add'] .practice-pilot-popover")
+            : this.el.querySelector<HTMLElement>("[data-slot='mobile-pilots'] .practice-pilot-popover") ??
+              this.el.querySelector<HTMLElement>(".practice-pilot-popover");
+        const freshInp = freshPop?.querySelector<HTMLInputElement>("input[data-new-session-pilot-input]");
         if (freshInp) {
           freshInp.value = "";
           freshInp.focus();
         }
-        this.syncSessionPilotPopoverFilter(this.el.querySelector<HTMLElement>(".practice-pilot-popover"));
+        this.syncSessionPilotPopoverFilter(freshPop ?? null);
       })
       .catch(this.reportErr);
   }
@@ -846,10 +1275,128 @@ export class LiveView extends Component {
     }
   }
 
+  private dismissMobileSessionDrawer(): void {
+    if (!this.mobileSelectedSessionId || this.mobileSessionDrawerClosing) return;
+    const dirHost = this.slot("directory");
+    const overlay = dirHost.querySelector<HTMLElement>(".pilot-dir-mobile-drawer-overlay");
+    if (!overlay) {
+      this.mobileSelectedSessionId = "";
+      this.lastOpenedMobileSessionId = "";
+      this.lastDirSig = "";
+      this.renderDirectory(true);
+      return;
+    }
+    this.mobileSessionDrawerClosing = true;
+    overlay.classList.add("is-closing");
+    dirHost.querySelectorAll<HTMLElement>(".dir-mobile-chip.is-selected").forEach((chip) => {
+      chip.classList.remove("is-selected");
+      chip.setAttribute("aria-selected", "false");
+    });
+    if (this.mobileSessionDrawerCloseTimer !== null) {
+      clearTimeout(this.mobileSessionDrawerCloseTimer);
+    }
+    this.mobileSessionDrawerCloseTimer = setTimeout(() => {
+      this.mobileSessionDrawerCloseTimer = null;
+      if (!this.mobileSessionDrawerClosing) return;
+      this.mobileSessionDrawerClosing = false;
+      this.mobileSelectedSessionId = "";
+      this.lastOpenedMobileSessionId = "";
+      this.lastDirSig = "";
+      this.renderDirectory(true);
+    }, 200);
+  }
+
+  private dismissPilotPopoverOrDrawer(): void {
+    if (!this.pilotPopoverOpen || this.pilotDrawerClosing) return;
+    const wrap = this.slot("pilot-add");
+    const overlay = wrap.querySelector<HTMLElement>(".practice-pilot-drawer-overlay");
+    const isMobile = window.matchMedia(
+      "(max-width: 900px), (max-height: 540px) and (orientation: landscape) and (max-width: 1024px)"
+    ).matches;
+    if (!overlay || !isMobile) {
+      this.pilotPopoverOpen = false;
+      this.pilotDrawerAnimatedOpen = false;
+      this.lastPopoverSig = "";
+      this.renderPilotAddSlot();
+      return;
+    }
+    this.pilotDrawerClosing = true;
+    overlay.classList.add("is-closing");
+    if (this.pilotDrawerCloseTimer !== null) {
+      clearTimeout(this.pilotDrawerCloseTimer);
+    }
+    this.pilotDrawerCloseTimer = setTimeout(() => {
+      this.pilotDrawerCloseTimer = null;
+      if (!this.pilotDrawerClosing) return;
+      this.pilotDrawerClosing = false;
+      this.pilotPopoverOpen = false;
+      this.pilotDrawerAnimatedOpen = false;
+      this.lastPopoverSig = "";
+      this.renderPilotAddSlot();
+    }, 200);
+  }
+
+  private syncWsFabDom(): void {
+    const wsEl = this.slot("workspace");
+    const fabEl = wsEl.querySelector<HTMLElement>("[data-practice-ws-fab]");
+    if (!fabEl) return;
+    fabEl.classList.toggle("is-open", this.wsFabOpen);
+    const drawer = fabEl.querySelector<HTMLElement>("[data-practice-ws-fab-drawer]");
+    if (drawer) {
+      drawer.setAttribute("aria-hidden", this.wsFabOpen ? "false" : "true");
+      if (this.wsFabOpen) drawer.removeAttribute("inert");
+      else drawer.setAttribute("inert", "");
+    }
+    const mainBtn = fabEl.querySelector<HTMLButtonElement>('[data-practice-act="toggle-ws-fab"]');
+    if (mainBtn) {
+      mainBtn.setAttribute("aria-expanded", this.wsFabOpen ? "true" : "false");
+    }
+  }
+
+  private handleDrawerPointerDown = (e: PointerEvent): void => {
+    const t = e.target as HTMLElement | null;
+    if (!t || (!t.closest("[data-mobile-session-handle]") && !t.closest("[data-practice-pilot-handle]"))) return;
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    this.mobileSessionDrawerDragStartY = e.clientY;
+  };
+
+  private handleDrawerPointerMove = (e: PointerEvent): void => {
+    if (this.mobileSessionDrawerDragStartY === null) return;
+    const dy = e.clientY - this.mobileSessionDrawerDragStartY;
+    if (dy >= 22) {
+      this.mobileSessionDrawerDragStartY = null;
+      if (this.pilotPopoverOpen) {
+        this.dismissPilotPopoverOrDrawer();
+      } else {
+        this.dismissMobileSessionDrawer();
+      }
+    }
+  };
+
+  private handleDrawerPointerUp = (): void => {
+    this.mobileSessionDrawerDragStartY = null;
+  };
+
   private mountActiveSessionTagEditor(autoFocus = true): void {
+    const dirHost = this.slot("directory");
+    if (this.mobileSelectedSessionId) {
+      const drawerBox = dirHost.querySelector<HTMLElement>(
+        `[data-tag-box="session-drawer-${CSS.escape(this.mobileSelectedSessionId)}"]`
+      );
+      if (drawerBox) {
+        const found = this.store.practiceSessions.find(
+          (s) => s.sessionId === this.mobileSelectedSessionId
+        );
+        mountTagPillEditor(drawerBox, {
+          initialTags: found?.tags ?? [],
+          placeholder: "Add tags (comma or Enter)…",
+          autoFocus: false,
+          onCommit: (nextTags) => this.commitSessionTagsList(this.mobileSelectedSessionId, nextTags),
+        });
+      }
+    }
     const sid = this.editingTagsForSessionId;
     if (!sid) return;
-    const dirHost = this.slot("directory");
     const boxEl = dirHost.querySelector<HTMLElement>(
       `[data-tag-box="session-row-${CSS.escape(sid)}"]`
     );
@@ -913,9 +1460,9 @@ export class LiveView extends Component {
     if (t instanceof HTMLInputElement && t.hasAttribute("data-session-name-input")) {
       const sid = t.dataset.sessionNameInput ?? "";
       const val = t.value;
-      if (sid && this.editingNameForSessionId === sid) {
+      if (sid && (this.editingNameForSessionId === sid || this.mobileSelectedSessionId === sid)) {
         window.setTimeout(() => {
-          if (this.editingNameForSessionId === sid) {
+          if (this.editingNameForSessionId === sid || this.mobileSelectedSessionId === sid) {
             this.commitSessionNameInline(sid, val);
           }
         }, 0);
@@ -944,7 +1491,10 @@ export class LiveView extends Component {
     }
 
     if (t instanceof HTMLInputElement && t.hasAttribute("data-session-dir-search")) {
-      if (e.key === "Escape" && this.dirSearchQuery) {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        this.createSessionInline(true);
+      } else if (e.key === "Escape" && this.dirSearchQuery) {
         e.preventDefault();
         this.dirSearchQuery = "";
         t.value = "";
@@ -1080,6 +1630,9 @@ export class LiveView extends Component {
       this.untaggedOnly ? 1 : 0,
       this.editingNameForSessionId,
       this.editingTagsForSessionId,
+      this.mobileSelectedSessionId,
+      this.dirOpenMenuSessionId,
+      this.dirFabOpen ? 1 : 0,
       ongoingVisible && ongoing ? `${ongoing.raceId}:${ongoing.config.eventName}` : "",
       this.errorMsg,
     ].join("::");
@@ -1099,7 +1652,6 @@ export class LiveView extends Component {
     footNote: string;
   } {
     const allSessions = this.store.practiceSessions;
-    const ongoingRace = this.store.ongoingRace;
 
     const tagDisplayByKey = new Map<string, string>();
     const tagCounts = new Map<string, number>();
@@ -1198,7 +1750,7 @@ export class LiveView extends Component {
                     <th class="races-col-tags">Tags</th>
                     <th class="races-col-date">Date</th>
                     <th class="races-col-status">Status</th>
-                    <th class="races-col-actions">Actions</th>
+                    <th class="races-col-actions" aria-label="Open"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1219,16 +1771,6 @@ export class LiveView extends Component {
                       const statusLabel = s.active ? "Live" : s.paused ? "Paused" : "Idle";
                       const statusCls = s.active ? "is-live" : s.paused ? "is-paused" : "is-waiting";
                       const dispName = s.name || `Practice ${idx + 1}`;
-                      const toggleAct = s.active
-                        ? "pause-session"
-                        : s.paused
-                          ? "resume-session"
-                          : "start-session";
-                      const toggleLabel = s.active
-                        ? "Pause session"
-                        : s.paused
-                          ? "Resume session"
-                          : "Start session";
 
                       return `
                         <tr class="${s.active ? "is-current-race" : ""}" data-session-row="${esc(sid)}">
@@ -1264,41 +1806,46 @@ export class LiveView extends Component {
                               <div class="races-row-actions">
                                 <button
                                   type="button"
-                                  class="btn btn-icon btn-ghost dir-action-btn"
+                                  class="btn btn-ghost btn-xs dir-open-btn"
                                   data-practice-act="open-session"
                                   data-session-id="${esc(sid)}"
                                   title="Open session workspace"
                                   aria-label="Open session workspace"
-                                >
-                                  ${icons.arrowRight(18)}
-                                </button>
-                                <button
-                                  type="button"
-                                  class="btn btn-icon dir-action-btn ${s.active ? "btn-armed" : "btn-ghost"}"
-                                  data-practice-act="${toggleAct}"
-                                  data-session-id="${esc(sid)}"
-                                  title="${
-                                    s.active
-                                      ? "Pause live RF timing for this session"
-                                      : ongoingRace
-                                        ? `Race '${ongoingRace.config.eventName}' is ongoing — click to pause it and ${toggleLabel.toLowerCase()}`
-                                        : `${toggleLabel} on RF hardware`
-                                  }"
-                                  aria-label="${toggleLabel}"
-                                >
-                                  ${s.active ? icons.pause(18) : icons.play(18)}
-                                </button>
-                                <button
-                                  type="button"
-                                  class="btn btn-icon btn-ghost dir-action-btn"
-                                  data-practice-act="delete-session"
-                                  data-session-id="${esc(sid)}"
-                                  ${s.active ? "disabled" : ""}
-                                  title="${s.active ? "Pause this live session before deleting" : "Delete session"}"
-                                  aria-label="Delete session"
-                                >
-                                  ${icons.trash(18)}
-                                </button>
+                                >Open</button>
+                                <div class="dir-row-more-wrap">
+                                  <button
+                                    type="button"
+                                    class="btn btn-ghost btn-xs dir-row-more-btn ${this.dirOpenMenuSessionId === sid ? "is-open" : ""}"
+                                    data-practice-act="toggle-dir-session-menu"
+                                    data-session-id="${esc(sid)}"
+                                    title="Session options"
+                                    aria-label="Options for ${esc(dispName)}"
+                                    aria-haspopup="menu"
+                                    aria-expanded="${this.dirOpenMenuSessionId === sid ? "true" : "false"}"
+                                  >${icons.moreHorizontal(15)}</button>
+                                  ${
+                                    this.dirOpenMenuSessionId === sid
+                                      ? `<div class="dir-row-more-menu" role="menu" aria-label="Options for ${esc(dispName)}">
+                                           <button
+                                             type="button"
+                                             class="dir-row-more-item"
+                                             role="menuitem"
+                                             data-practice-act="dir-open-session-settings"
+                                             data-session-id="${esc(sid)}"
+                                           ><span>Settings</span></button>
+                                           <button
+                                             type="button"
+                                             class="dir-row-more-item"
+                                             role="menuitem"
+                                             data-practice-act="delete-session"
+                                             data-session-id="${esc(sid)}"
+                                             ${s.active ? "disabled" : ""}
+                                             title="${s.active ? "Pause this live session before deleting" : "Delete session"}"
+                                           ><span>Delete</span></button>
+                                         </div>`
+                                      : ""
+                                  }
+                                </div>
                               </div>
                             </div>
                           </td>
@@ -1307,14 +1854,53 @@ export class LiveView extends Component {
                     .join("")}
                 </tbody>
               </table>
-            </div>`;
+            </div>
+            <div class="dir-mobile-mosaic" role="listbox" aria-label="Practice sessions">
+              ${filtered
+                .map((s, idx) => {
+                  const sid = s.sessionId;
+                  const pilotCount = s.pilots.length;
+                  const lapCount = s.laps.length;
+                  const summaryShort = `${pilotCount}p · ${lapCount}L`;
+                  const statusLabel = s.active ? "Live" : s.paused ? "Paused" : "Idle";
+                  const statusCls = s.active ? "is-live" : s.paused ? "is-paused" : "is-waiting";
+                  const dispName = s.name || `Practice ${idx + 1}`;
+                  const isSelected = this.mobileSelectedSessionId === sid;
+                  return `
+                    <div
+                      role="option"
+                      tabindex="0"
+                      aria-selected="${isSelected ? "true" : "false"}"
+                      class="dir-mobile-chip ${isSelected ? "is-selected" : ""} ${s.active ? "is-live" : ""}"
+                      data-practice-act="open-session"
+                      data-session-id="${esc(sid)}"
+                    >
+                      <div class="dir-mobile-chip-top">
+                        <div class="dir-mobile-chip-badges">
+                          <span class="race-state-pill ${statusCls}">${statusLabel}</span>
+                        </div>
+                        <button
+                          type="button"
+                          class="dir-mobile-chip-more-btn"
+                          data-mobile-session-select="${esc(sid)}"
+                          title="Session options"
+                          aria-label="Options for ${esc(dispName)}"
+                        >${icons.moreHorizontal(16)}</button>
+                      </div>
+                      <strong class="dir-mobile-chip-title">${esc(dispName)}</strong>
+                      <span class="dir-mobile-chip-sub">${esc(summaryShort)}</span>
+                    </div>`;
+                })
+                .join("")}
+            </div>
+            ${this.renderMobileSessionDrawer(allSessions)}`;
 
     const footNote =
       allSessions.length === 0
         ? "No sessions created yet · Click + Session to add one inline."
         : hasAnyFilter
           ? `Showing ${filtered.length} of ${allSessions.length} session${allSessions.length === 1 ? "" : "s"}`
-          : `${allSessions.length} session${allSessions.length === 1 ? "" : "s"} · Click a name or tag cell to edit inline, or use Actions to open.`;
+          : `${allSessions.length} session${allSessions.length === 1 ? "" : "s"} · Click a name or tag cell to edit inline, or click Open to view.`;
 
     return {
       allSessions,
@@ -1329,6 +1915,153 @@ export class LiveView extends Component {
       tableOrEmptyMarkup,
       footNote,
     };
+  }
+
+  private renderMobileSessionDrawer(allSessions: PracticeSession[]): string {
+    if (!this.mobileSelectedSessionId) {
+      this.lastOpenedMobileSessionId = "";
+      return "";
+    }
+    const idx = allSessions.findIndex((s) => s.sessionId === this.mobileSelectedSessionId);
+    const s = idx >= 0 ? allSessions[idx] : undefined;
+    if (!s) {
+      this.lastOpenedMobileSessionId = "";
+      return "";
+    }
+    const sid = s.sessionId;
+    const shouldAnimateEntry = this.lastOpenedMobileSessionId !== sid;
+    this.lastOpenedMobileSessionId = sid;
+
+    const dispName = s.name || `Practice ${idx + 1}`;
+    const statusLabel = s.active ? "Live" : s.paused ? "Paused" : "Idle";
+    const statusCls = s.active ? "is-live" : s.paused ? "is-paused" : "is-waiting";
+    const pilotCount = s.pilots.length;
+    const lapCount = s.laps.length;
+    const summaryShort = `${pilotCount} pilot${pilotCount === 1 ? "" : "s"} · ${lapCount} lap${lapCount === 1 ? "" : "s"}`;
+    const best = fastestSessionLap(s);
+    const bestNote = best ? `${fmtTime(best.sec)}s (${best.callsign})` : "No laps yet";
+    const trackInfo = this.store.practiceSessionNodes(s);
+    const gateCount = trackInfo.nodes.length;
+    const createdText = formatShortSessionDate(s.createdAt) || "—";
+
+    return `
+      <div class="pilot-dir-mobile-drawer-overlay" role="dialog" aria-modal="true" aria-label="Edit ${esc(dispName)}">
+        <div class="pilot-dir-mobile-drawer-backdrop" data-mobile-session-close></div>
+        <div class="pilot-dir-mobile-editor ${shouldAnimateEntry ? "is-entering" : ""}" data-mobile-session-drawer>
+          <div class="dir-mobile-drawer-top-bar" data-mobile-session-handle>
+            <button
+              type="button"
+              class="pilot-dir-mobile-drawer-handle"
+              data-mobile-session-handle
+              data-mobile-session-close
+              aria-label="Dismiss session editor"
+              title="Pull down or tap to dismiss"
+            >
+              <span class="pilot-dir-mobile-drawer-grip" aria-hidden="true"></span>
+            </button>
+            <div class="dir-mobile-drawer-top-status">
+              <span class="race-state-pill ${statusCls}">${statusLabel}</span>
+            </div>
+          </div>
+          <div class="pilot-dir-mobile-grid">
+            <label class="field">
+              <span>Session name</span>
+              <input
+                type="text"
+                class="input"
+                data-session-name-input="${esc(sid)}"
+                value="${esc(dispName)}"
+                placeholder="Session name"
+                maxlength="64"
+                autocomplete="off"
+              />
+            </label>
+            <div class="field">
+              <span>Tags</span>
+              ${renderTagPillBoxHtml({
+                boxId: `session-drawer-${sid}`,
+                tags: s.tags ?? [],
+                placeholder: "Add tags (comma or Enter)…",
+                compact: false,
+                ariaLabel: "Edit session tags",
+              })}
+            </div>
+            <div class="dir-mobile-drawer-meta-grid">
+              <div class="dir-mobile-drawer-meta-item">
+                <span class="note">Summary</span>
+                <strong>${esc(summaryShort)}</strong>
+              </div>
+              <div class="dir-mobile-drawer-meta-item">
+                <span class="note">Best lap</span>
+                <strong>${esc(bestNote)}</strong>
+              </div>
+              <div class="dir-mobile-drawer-meta-item">
+                <span class="note">Track</span>
+                <strong>${gateCount} gate${gateCount === 1 ? "" : "s"}</strong>
+              </div>
+              <div class="dir-mobile-drawer-meta-item">
+                <span class="note">Created</span>
+                <strong>${esc(createdText)}</strong>
+              </div>
+            </div>
+          </div>
+          <div class="dir-mobile-drawer-actions is-single-action">
+            <button
+              type="button"
+              class="btn btn-ghost dir-mobile-drawer-btn"
+              data-practice-act="delete-session"
+              data-session-id="${esc(sid)}"
+              ${s.active ? "disabled" : ""}
+              title="${s.active ? "Pause this live session before deleting" : "Delete session"}"
+            >${icons.trash(15)}<span>Delete</span></button>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  private findExactSessionByName(
+    name: string,
+    allSessions = this.store.practiceSessions
+  ): PracticeSession | undefined {
+    const trimmed = name.trim().toLowerCase();
+    if (!trimmed || trimmed.startsWith("#")) return undefined;
+    return allSessions.find(
+      (s, idx) => (s.name || `Practice ${idx + 1}`).trim().toLowerCase() === trimmed
+    );
+  }
+
+  private createSessionInline(fromEnterKey = false): void {
+    const allSessions = this.store.practiceSessions;
+    const trimmedQuery = this.dirSearchQuery.trim();
+    if (fromEnterKey && (!trimmedQuery || trimmedQuery.startsWith("#"))) {
+      return;
+    }
+    const exactMatch = this.findExactSessionByName(trimmedQuery, allSessions);
+    if (exactMatch) {
+      return;
+    }
+    const customName = !trimmedQuery.startsWith("#") ? trimmedQuery : "";
+    this.dirFabOpen = false;
+    this.dirSearchQuery = "";
+    const searchEl = this.el.querySelector<HTMLInputElement>("[data-session-dir-search]");
+    if (searchEl) searchEl.value = "";
+    this.dirStatusFilter = "all";
+    this.selectedFilterTags.clear();
+    this.untaggedOnly = false;
+    this.editingNameForSessionId = "";
+    this.editingTagsForSessionId = "";
+    this.errorMsg = "";
+    void this.api
+      .practiceAction({
+        action: "create_session",
+        ...(customName ? { name: customName } : {}),
+        dontSelect: true,
+      })
+      .then(() => {
+        this.lastDirSig = "";
+        this.renderDirectory(true);
+      })
+      .catch(this.reportErr);
   }
 
   private refreshDirectoryResultsDom(): void {
@@ -1349,7 +2082,38 @@ export class LiveView extends Component {
         ? `<button type="button" class="btn btn-ghost btn-xs" data-tag-filter="__reset_all__">Clear (${vm.filtered.length}/${vm.allSessions.length})</button>`
         : "";
     }
+    const trimmedSearch = this.dirSearchQuery.trim();
+    const exactMatch = this.findExactSessionByName(trimmedSearch, vm.allSessions);
+    const addBtn = dirHost.querySelector<HTMLButtonElement>(
+      '[data-practice-act="create-session-inline"]'
+    );
+    if (addBtn) {
+      addBtn.disabled = Boolean(exactMatch);
+      addBtn.title = exactMatch
+        ? `Practice “${exactMatch.name || trimmedSearch}” already exists`
+        : trimmedSearch && !trimmedSearch.startsWith("#")
+          ? `Add practice “${trimmedSearch}”`
+          : "Add Practice";
+    }
     this.mountActiveSessionTagEditor(false);
+    this.lastDirSig = this.computeDirSig(this.store.practiceSessions);
+  }
+
+  private syncDirFabDom(): void {
+    const dirHost = this.slot("directory");
+    const fabEl = dirHost.querySelector<HTMLElement>(".dir-fab-menu");
+    if (!fabEl) return;
+    fabEl.classList.toggle("is-open", this.dirFabOpen);
+    const drawer = fabEl.querySelector<HTMLElement>(".rc-fab-drawer");
+    if (drawer) {
+      drawer.setAttribute("aria-hidden", this.dirFabOpen ? "false" : "true");
+      if (this.dirFabOpen) drawer.removeAttribute("inert");
+      else drawer.setAttribute("inert", "");
+    }
+    const mainBtn = fabEl.querySelector<HTMLButtonElement>(".rc-fab-main");
+    if (mainBtn) {
+      mainBtn.setAttribute("aria-expanded", this.dirFabOpen ? "true" : "false");
+    }
     this.lastDirSig = this.computeDirSig(this.store.practiceSessions);
   }
 
@@ -1378,53 +2142,39 @@ export class LiveView extends Component {
     const vm = this.computeSessionDirectoryViewModel();
     const {
       filtered,
-      sortedTags,
-      untaggedCount,
       liveCount,
       stoppedCount,
       withLapsCount,
       hasAnyFilter,
-      isTagAllSelected,
       tableOrEmptyMarkup,
-      footNote,
     } = vm;
 
-    const tagsSubRow = `<div class="dir-filter-tags-row" role="toolbar" aria-label="Filter practice sessions by tag">
-            <button type="button" class="races-filter-pill ${isTagAllSelected ? "is-active" : ""}" data-tag-filter="__all__">
-              All tags (${allSessions.length})
-            </button>
-            ${sortedTags
-              .map(
-                ({ key, label, count }) => `
-                <button
-                  type="button"
-                  class="races-filter-pill ${this.selectedFilterTags.has(key) ? "is-active" : ""}"
-                  data-tag-filter="${esc(label)}"
-                  title="Toggle filter for #${esc(label)}"
-                >
-                  ${icons.tag(12)}<span>#${esc(label)} (${count})</span>
-                </button>`
-              )
-              .join("")}
-            <button type="button" class="races-filter-pill ${this.untaggedOnly ? "is-active" : ""}" data-tag-filter="__untagged__">
-              Untagged (${untaggedCount})
-            </button>
-          </div>`;
+    const trimmedSearch = this.dirSearchQuery.trim();
+    const exactMatch = this.findExactSessionByName(trimmedSearch, allSessions);
+    const addDisabled = Boolean(exactMatch);
+    const addBtnTitle = exactMatch
+      ? `Practice “${exactMatch.name || trimmedSearch}” already exists`
+      : trimmedSearch && !trimmedSearch.startsWith("#")
+        ? `Add practice “${trimmedSearch}”`
+        : "Add Practice";
 
     const filterToolbarMarkup = `
       <div class="dir-filter-toolbar" data-session-dir-toolbar>
         <div class="dir-filter-main-row">
-          <div class="dir-filter-search-row">
-            ${icons.search(15)}
-            <input
-              type="search"
-              class="input input-sm dir-filter-search-input"
-              data-session-dir-search
-              placeholder="Filter sessions by name, pilot, or #tag…"
-              aria-label="Filter practice sessions"
-              value="${esc(this.dirSearchQuery)}"
-              autocomplete="off"
-            />
+          <div class="dir-filter-search-bar">
+            <div class="dir-filter-search-row">
+              ${icons.search(14)}
+              <input
+                type="search"
+                class="input dir-filter-search-input"
+                data-session-dir-search
+                placeholder="Search or add practice..."
+                aria-label="Search or add practice"
+                value="${esc(this.dirSearchQuery)}"
+                autocomplete="off"
+              />
+            </div>
+            <button type="button" class="btn btn-unarmed" data-practice-act="create-session-inline" ${addDisabled ? "disabled" : ""} title="${esc(addBtnTitle)}" aria-label="Add Practice">${icons.plus(14)}<span>Add</span></button>
           </div>
           <div class="dir-filter-right">
             <div class="segmented dir-filter-seg" role="tablist" aria-label="Filter practice sessions by status">
@@ -1448,7 +2198,6 @@ export class LiveView extends Component {
             }</span>
           </div>
         </div>
-        ${tagsSubRow}
       </div>`;
 
     const showOngoingNote =
@@ -1472,22 +2221,12 @@ export class LiveView extends Component {
       : "";
 
     dirHost.innerHTML = `
-      <section class="settings-section">
-        <div class="settings-intro">
-          <h2>Practice sessions</h2>
-          <p>Organize open practice, warmups, and tuning packs. Click any session row to open its timing workspace, or filter by name, pilot, status, and tags.</p>
-        </div>
+      <section class="settings-section is-single-col">
         <div class="settings-cards">
           ${ongoingNote}
           <div class="card card-flush races-dir-card">
             ${filterToolbarMarkup}
             <div data-session-dir-results>${tableOrEmptyMarkup}</div>
-            <div class="rules-foot">
-              <p class="note" data-session-dir-foot-note>${esc(footNote)}</p>
-              <div class="rules-foot-actions">
-                <button class="btn btn-ghost btn-sm" type="button" data-practice-act="create-session-inline">${icons.plus(14)}<span>Session</span></button>
-              </div>
-            </div>
           </div>
         </div>
       </section>`;
@@ -1564,6 +2303,7 @@ export class LiveView extends Component {
               ${isActive ? icons.pause(14) : icons.play(14)}<span>${toggleText}</span>
             </button>`;
 
+        const gateCount = trackInfo.nodes.length;
         ctrlEl.innerHTML = `
           <div class="practice-strip-info">
             <span
@@ -1571,7 +2311,7 @@ export class LiveView extends Component {
               data-practice-status="${statusKey}"
               title="${esc(statusTitle)}"
             ></span>
-            <span class="practice-strip-meta">${sess.pilots.length} pilot${sess.pilots.length === 1 ? "" : "s"} · ${sess.laps.length} lap${sess.laps.length === 1 ? "" : "s"}</span>
+            <span class="practice-strip-meta">${sess.pilots.length} pilot${sess.pilots.length === 1 ? "" : "s"} · ${sess.laps.length} lap${sess.laps.length === 1 ? "" : "s"} · ${gateCount} gate${gateCount === 1 ? "" : "s"}</span>
           </div>
           <div class="practice-strip-actions">
             ${toggleButtonHtml}
@@ -1582,6 +2322,150 @@ export class LiveView extends Component {
     }
 
     this.renderPilotAddSlot();
+  }
+
+  private buildSessionPilotsManagerMarkup(
+    sess: PracticeSession,
+    lapCountsBySlot: Map<number, number>,
+    inlineMobile = false
+  ): string {
+    const sessionPilotBySlot = new Map(sess.pilots.map((sp) => [sp.slotIndex, sp]));
+    return `
+      <div class="practice-pilot-popover${inlineMobile ? " is-inline-mobile-panel" : this.pilotDrawerAnimatedOpen ? "" : " is-entering"}" role="${inlineMobile ? "region" : "dialog"}" aria-label="Manage session pilots">
+        ${
+          inlineMobile
+            ? `<header class="rc-panel-header rc-hide-mobile">
+                <div class="rc-panel-title-wrap">
+                  ${icons.pilot(14)}
+                  <strong>Session Pilots</strong>
+                  <span class="badge mono bkt-pilots-count-pill">${sess.pilots.length} in session</span>
+                </div>
+              </header>`
+            : `<div class="dir-mobile-drawer-top-bar practice-pilot-drawer-top-bar">
+                <button
+                  type="button"
+                  class="pilot-dir-mobile-drawer-handle"
+                  data-practice-pilot-handle="1"
+                  data-practice-act="close-pilot-popover"
+                  aria-label="Drag down or tap to close"
+                  title="Close"
+                >
+                  <span class="pilot-dir-mobile-drawer-grip"></span>
+                </button>
+              </div>
+              <div class="practice-pop-head">
+                <div>
+                  <div class="practice-pop-title">Session pilots (${sess.pilots.length})</div>
+                  <div class="note">Search and toggle pilots in or out of this practice session.</div>
+                </div>
+                <button type="button" class="btn btn-xs btn-icon btn-ghost practice-pop-close-btn" data-practice-act="close-pilot-popover" aria-label="Close">
+                  ${icons.close(14)}
+                </button>
+              </div>`
+        }
+
+        <div class="rc-pilots-search-bar practice-pop-search-bar">
+          <div class="rc-pilots-search-row">
+            ${icons.search(13)}
+            <input
+              type="search"
+              class="input input-sm rc-pilots-search-input"
+              data-new-session-pilot-input
+              placeholder="Search pilots or type new callsign..."
+              maxlength="24"
+              autocomplete="off"
+              aria-label="Search or add pilot"
+            />
+          </div>
+          <button
+            type="button"
+            class="btn btn-ghost btn-xs bkt-pilots-add-btn"
+            data-practice-act="create-and-add-pilot"
+            disabled
+            title="Search or type a unique callsign to add"
+          >
+            ${icons.plus(12)}<span>Add</span>
+          </button>
+        </div>
+
+        <div class="practice-pop-section practice-pop-unified-section">
+          <div class="practice-pop-list practice-pop-unified-list">
+            ${
+              this.store.pilots.length === 0
+                ? `<div class="practice-pop-empty note">No pilots yet. Type a callsign above and click Add.</div>`
+                : this.store.pilots
+                    .map((gp) => {
+                      const sp = sessionPilotBySlot.get(gp.slotIndex);
+                      const isActiveInSession = Boolean(sp);
+                      const color = gp.color || sp?.color || "#38bdf8";
+                      const callsign = gp.callsign || sp?.callsign || `Pilot ${gp.slotIndex}`;
+                      const laps = lapCountsBySlot.get(gp.slotIndex) ?? 0;
+                      const callsignLower = callsign.trim().toLowerCase();
+                      const activeBand = sp ? sp.band : gp.band;
+                      const activeChannel = sp ? sp.channel : gp.channel;
+                      const activeFreq = sp ? sp.frequencyMhz : gp.frequencyMhz;
+                      const chSearch = pilotChannelSearchTokens(activeBand, activeChannel, activeFreq);
+                      const hay = `${callsign} ${gp.phoneticName ?? ""} ${chSearch} #${gp.slotIndex}`.toLowerCase();
+                      const chOpts = isActiveInSession && sp
+                        ? renderMultiBandSelectOptionsHtml({
+                            selectedBand: sp.band,
+                            selectedChannel: sp.channel,
+                            includeUnassigned: true,
+                            unassignedLabel: "No ch",
+                            compact: true,
+                          })
+                        : "";
+                      const inactiveChLabel = formatBandChannelShort(gp.band, gp.channel) || "No ch";
+                      return `
+                        <div
+                          class="practice-pop-row practice-toggle-row ${isActiveInSession ? "is-active-pilot" : ""}"
+                          data-practice-pilot-row="${gp.slotIndex}"
+                          data-pilot-callsign="${esc(callsignLower)}"
+                          data-pilot-search-hay="${esc(hay)}"
+                        >
+                          <div class="practice-pop-pilot-info">
+                            <span class="dot ${isActiveInSession && sess.active && !sess.paused && this.store.raceArmed ? "is-live" : "is-off"}" style="--c:${esc(color)}"></span>
+                            <span class="practice-pop-name">${esc(callsign)}</span>
+                            ${
+                              laps > 0
+                                ? `<span class="note mono">${laps} lap${laps === 1 ? "" : "s"}</span>`
+                                : !isActiveInSession
+                                  ? `<span class="note mono">${inactiveChLabel}</span>`
+                                  : ""
+                            }
+                          </div>
+                          <div class="practice-pop-row-actions">
+                            ${
+                              isActiveInSession
+                                ? `<select
+                                    class="input mono practice-pop-ch-select"
+                                    data-session-pilot-channel="${gp.slotIndex}"
+                                    aria-label="Channel for ${esc(callsign)}"
+                                  >
+                                    ${chOpts}
+                                  </select>`
+                                : ""
+                            }
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked="${isActiveInSession ? "true" : "false"}"
+                              class="practice-pilot-switch ${isActiveInSession ? "is-on" : ""}"
+                              data-practice-act="toggle-session-pilot"
+                              data-slot-index="${gp.slotIndex}"
+                              title="${isActiveInSession ? `Remove ${callsign} from session (retains laps)` : `Add ${callsign} to session`}"
+                              aria-label="${isActiveInSession ? `Remove ${callsign} from session` : `Add ${callsign} to session`}"
+                            >
+                              <span class="practice-pilot-switch-thumb"></span>
+                            </button>
+                          </div>
+                        </div>`;
+                    })
+                    .join("")
+            }
+          </div>
+        </div>
+      </div>`;
   }
 
   private renderPilotAddSlot(): void {
@@ -1626,146 +2510,18 @@ export class LiveView extends Component {
     if (fullSig === this.lastPopoverSig) return;
     this.lastPopoverSig = fullSig;
 
-    const assignedSet = new Set(sess.pilots.map((p) => p.slotIndex));
-    const availableGlobal = this.store.pilots.filter((p) => !assignedSet.has(p.slotIndex));
-    const sessionFull = sess.pilots.length >= 8;
-
     const popoverHtml = this.pilotPopoverOpen
-      ? `<div class="practice-pilot-popover" role="dialog" aria-label="Manage session pilots">
-          <div class="practice-pop-head">
-            <div>
-              <div class="practice-pop-title">Session pilots (${sess.pilots.length}/8)</div>
-              <div class="note">Removing a pilot keeps their recorded laps in this session.</div>
-            </div>
-            <button type="button" class="btn btn-xs btn-icon btn-ghost" data-practice-act="close-pilot-popover" aria-label="Close">
-              ${icons.close(14)}
-            </button>
-          </div>
-
-          <div class="rc-pilots-search-bar practice-pop-search-bar">
-            <div class="rc-pilots-search-row">
-              ${icons.search(13)}
-              <input
-                type="search"
-                class="input input-sm rc-pilots-search-input"
-                data-new-session-pilot-input
-                placeholder="Search or add pilot..."
-                maxlength="24"
-                autocomplete="off"
-                aria-label="Search or add pilot"
-              />
-            </div>
-            <button
-              type="button"
-              class="btn btn-ghost btn-xs bkt-pilots-add-btn"
-              data-practice-act="create-and-add-pilot"
-              disabled
-              title="${sessionFull ? "Maximum 8 pilots per session" : "Search or type a unique callsign to add"}"
-            >
-              ${icons.plus(12)}<span>Add</span>
-            </button>
-          </div>
-
-          <div class="practice-pop-section">
-            ${
-              sess.pilots.length === 0
-                ? `<div class="practice-pop-empty note">No pilots assigned yet. Add from global pilots below.</div>`
-                : `<div class="practice-pop-list">
-                    ${sess.pilots
-                      .map((sp) => {
-                        const base = this.store.pilot(sp.slotIndex);
-                        const color = base?.color || sp.color || "#38bdf8";
-                        const callsign = base?.callsign || sp.callsign;
-                        const laps = lapCountsBySlot.get(sp.slotIndex) ?? 0;
-                        const chOpts = renderMultiBandSelectOptionsHtml({
-                          selectedBand: sp.band,
-                          selectedChannel: sp.channel,
-                          includeUnassigned: true,
-                          unassignedLabel: "No ch",
-                          compact: true,
-                        });
-                        const callsignLower = callsign.trim().toLowerCase();
-                        const chSearch = pilotChannelSearchTokens(sp.band, sp.channel, sp.frequencyMhz);
-                        const hay = `${callsign} ${base?.phoneticName ?? ""} ${chSearch} #${sp.slotIndex}`.toLowerCase();
-                        return `
-                          <div class="practice-pop-row" data-session-pilot-row="${sp.slotIndex}" data-pilot-callsign="${esc(callsignLower)}" data-pilot-search-hay="${esc(hay)}">
-                            <div class="practice-pop-pilot-info">
-                              <span class="dot ${sess.active && !sess.paused && this.store.raceArmed ? "is-live" : "is-off"}" style="--c:${esc(color)}"></span>
-                              <span class="practice-pop-name">${esc(callsign)}</span>
-                              <span class="note mono">${laps} lap${laps === 1 ? "" : "s"}</span>
-                            </div>
-                            <div class="practice-pop-row-actions">
-                              <select
-                                class="input mono practice-pop-ch-select"
-                                data-session-pilot-channel="${sp.slotIndex}"
-                                aria-label="Channel for ${esc(callsign)}"
-                              >
-                                ${chOpts}
-                              </select>
-                              <button
-                                type="button"
-                                class="btn btn-xs btn-icon btn-ghost"
-                                data-practice-act="remove-session-pilot"
-                                data-slot-index="${sp.slotIndex}"
-                                title="Remove from session (retains recorded laps)"
-                                aria-label="Remove ${esc(callsign)} from session"
-                              >
-                                ${icons.close(13)}
-                              </button>
-                            </div>
-                          </div>`;
-                      })
-                      .join("")}
-                  </div>`
-            }
-          </div>
-
-          <div class="practice-pop-section">
-            <div class="practice-pop-subhead">
-              <span>Global pilot directory</span>
-              <a href="#/pilots" class="practice-pop-dir-link">Manage all ›</a>
-            </div>
-            ${
-              availableGlobal.length === 0
-                ? `<div class="practice-pop-empty note">All global pilots are already assigned to this session.</div>`
-                : `<div class="practice-pop-list practice-pop-available-list">
-                    ${availableGlobal
-                      .map((gp) => {
-                        const savedLaps = lapCountsBySlot.get(gp.slotIndex) ?? 0;
-                        const chLabel = formatBandChannelShort(gp.band, gp.channel) || "No ch";
-                        const callsignLower = gp.callsign.trim().toLowerCase();
-                        const chSearch = pilotChannelSearchTokens(gp.band, gp.channel, gp.frequencyMhz);
-                        const hay = `${gp.callsign} ${gp.phoneticName ?? ""} ${chSearch} #${gp.slotIndex}`.toLowerCase();
-                        return `
-                          <div class="practice-pop-row" data-available-pilot-row="${gp.slotIndex}" data-pilot-callsign="${esc(callsignLower)}" data-pilot-search-hay="${esc(hay)}">
-                            <div class="practice-pop-pilot-info">
-                              <span class="dot is-off" style="--c:${esc(gp.color || "#38bdf8")}"></span>
-                              <span class="practice-pop-name">${esc(gp.callsign)}</span>
-                              <span class="note mono">${chLabel}</span>
-                              ${
-                                savedLaps > 0
-                                  ? `<span class="practice-saved-laps-pill" title="Recorded laps preserved in this session">${savedLaps} lap${savedLaps === 1 ? "" : "s"} saved</span>`
-                                  : ""
-                              }
-                            </div>
-                            <button
-                              type="button"
-                              class="btn btn-ghost btn-xs"
-                              data-practice-act="add-session-pilot"
-                              data-slot-index="${gp.slotIndex}"
-                              ${sessionFull ? "disabled" : ""}
-                              title="${sessionFull ? "Maximum 8 pilots per session" : `Add ${gp.callsign} to session`}"
-                            >
-                              ${icons.plus(12)}<span>Add</span>
-                            </button>
-                          </div>`;
-                      })
-                      .join("")}
-                  </div>`
-            }
-          </div>
+      ? `<div class="practice-pilot-drawer-overlay">
+          <div class="pilot-dir-mobile-drawer-backdrop practice-pilot-drawer-backdrop" data-practice-pilot-backdrop="1"></div>
+          ${this.buildSessionPilotsManagerMarkup(sess, lapCountsBySlot, false)}
         </div>`
       : "";
+
+    const prevInp = wrap.querySelector<HTMLInputElement>("input[data-new-session-pilot-input]");
+    const prevSearchVal = prevInp?.value ?? "";
+    const hadInputFocus = Boolean(prevInp && document.activeElement === prevInp);
+    const prevList = wrap.querySelector<HTMLElement>(".practice-pop-unified-list");
+    const prevListScroll = prevList?.scrollTop ?? 0;
 
     wrap.innerHTML = `
       <button
@@ -1778,6 +2534,569 @@ export class LiveView extends Component {
         ${icons.plus(14)}<span>Add pilot</span>
       </button>
       ${popoverHtml}`;
+
+    this.pilotDrawerAnimatedOpen = this.pilotPopoverOpen;
+
+    if (this.pilotPopoverOpen) {
+      const nextPop = wrap.querySelector<HTMLElement>(".practice-pilot-popover");
+      const nextInp = wrap.querySelector<HTMLInputElement>("input[data-new-session-pilot-input]");
+      if (nextInp && prevSearchVal) {
+        nextInp.value = prevSearchVal;
+        this.syncSessionPilotPopoverFilter(nextPop);
+      }
+      if (nextInp && hadInputFocus) {
+        nextInp.focus();
+      }
+      const nextList = wrap.querySelector<HTMLElement>(".practice-pop-unified-list");
+      if (nextList && prevListScroll > 0) {
+        nextList.scrollTop = prevListScroll;
+      }
+    }
+  }
+
+  private renderMobilePilotsPanel(): void {
+    const host = this.slot("mobile-pilots");
+    const sess = this.store.selectedPracticeSession;
+    if (this.activeTab !== "session" || !sess) {
+      host.innerHTML = "";
+      this.lastMobilePilotsSig = "";
+      return;
+    }
+
+    const activeEl = document.activeElement;
+    if (
+      isCustomSelectOpenWithin(host) ||
+      (activeEl &&
+        host.contains(activeEl) &&
+        (activeEl instanceof HTMLInputElement || activeEl instanceof HTMLSelectElement))
+    ) {
+      const assignedKey = sess.pilots.map((p) => `${p.slotIndex}:${p.band ?? 1}:${p.channel}`).join(",");
+      const globalKey = this.store.pilots.map((p) => `${p.slotIndex}:${p.callsign}`).join(",");
+      const quickSig = `mobile-pilots:${sess.sessionId}:${assignedKey}:${globalKey}`;
+      if (quickSig === this.lastMobilePilotsSig) {
+        return;
+      }
+    }
+
+    const assignedKey = sess.pilots
+      .map((p) => `${p.slotIndex}:${p.callsign}:${p.band ?? 1}:${p.channel}`)
+      .join(",");
+    const globalKey = this.store.pilots
+      .map((p) => `${p.slotIndex}:${p.callsign}:${p.band ?? 1}:${p.channel}`)
+      .join(",");
+    const lapCountsBySlot = new Map<number, number>();
+    for (const lap of sess.laps) {
+      lapCountsBySlot.set(lap.slotIndex, (lapCountsBySlot.get(lap.slotIndex) ?? 0) + 1);
+    }
+    const lapsKey = Array.from(lapCountsBySlot.entries())
+      .map(([k, v]) => `${k}=${v}`)
+      .join(",");
+    const fullSig = `mobile-pilots:${sess.sessionId}:${assignedKey}:${globalKey}:${lapsKey}:${sess.active ? 1 : 0}:${sess.paused ? 1 : 0}:${this.store.raceArmed ? 1 : 0}`;
+    if (fullSig === this.lastMobilePilotsSig && host.querySelector(".practice-pilot-popover")) {
+      return;
+    }
+    this.lastMobilePilotsSig = fullSig;
+
+    const prevInp = host.querySelector<HTMLInputElement>("input[data-new-session-pilot-input]");
+    const prevSearchVal = prevInp?.value ?? "";
+    const hadInputFocus = Boolean(prevInp && document.activeElement === prevInp);
+    const prevList = host.querySelector<HTMLElement>(".practice-pop-unified-list");
+    const prevListScroll = prevList?.scrollTop ?? 0;
+
+    host.innerHTML = this.buildSessionPilotsManagerMarkup(sess, lapCountsBySlot, true);
+
+    const nextPop = host.querySelector<HTMLElement>(".practice-pilot-popover");
+    const nextInp = host.querySelector<HTMLInputElement>("input[data-new-session-pilot-input]");
+    if (nextInp && prevSearchVal) {
+      nextInp.value = prevSearchVal;
+      this.syncSessionPilotPopoverFilter(nextPop);
+    }
+    if (nextInp && hadInputFocus) {
+      nextInp.focus();
+    }
+    const nextList = host.querySelector<HTMLElement>(".practice-pop-unified-list");
+    if (nextList && prevListScroll > 0) {
+      nextList.scrollTop = prevListScroll;
+    }
+  }
+
+  private renderMobileSectorsPanel(): void {
+    const host = this.slot("mobile-sectors");
+    const sess = this.store.selectedPracticeSession;
+    if (this.activeTab !== "session" || !sess) {
+      host.innerHTML = "";
+      this.lastMobileSectorsSig = "";
+      return;
+    }
+
+    const gates = this.workspaceStore.nodes;
+    const cols = gates.map((p, i) => {
+      const to = gates[(i + 1) % gates.length].gateId;
+      return {
+        sectorIndex: i + 1,
+        from: p.gateId,
+        to,
+        key: sectionKey(p.gateId, to),
+      };
+    });
+
+    if (cols.length > 0) {
+      const courseSig = `${sess.sessionId}:${cols.map((c) => c.key).join(",")}`;
+      const validKeys = new Set(cols.map((c) => c.key));
+      for (const k of Array.from(this.selectedMobileSectorKeys)) {
+        if (!validKeys.has(k)) {
+          this.selectedMobileSectorKeys.delete(k);
+        }
+      }
+      if (courseSig !== this.lastMobileSectorCourseSig) {
+        this.lastMobileSectorCourseSig = courseSig;
+        this.selectedMobileSectorKeys.clear();
+        for (const c of cols.slice(0, 3)) {
+          this.selectedMobileSectorKeys.add(c.key);
+        }
+      }
+    }
+
+    const checkedCols = cols.filter((c) => this.selectedMobileSectorKeys.has(c.key)).slice(0, 3);
+    const enabled = this.workspaceStore.enabledPilots;
+    const focusSlot =
+      this.store.liveFocus !== null && enabled.some((p) => p.slotIndex === this.store.liveFocus)
+        ? this.store.liveFocus
+        : enabled[0]?.slotIndex ?? null;
+    const pilot = focusSlot !== null ? this.workspaceStore.pilot(focusSlot) : undefined;
+    const laps = pilot ? allLapsFor(this.workspaceStore, pilot.slotIndex) : [];
+
+    const lapsSig = laps
+      .slice(-20)
+      .map(
+        (l) =>
+          `${l.lapId}:${l.lapNumber}:${l.lapTimeSec}:${l.invalidated ? 1 : 0}:${l.isBestLap ? 1 : 0}:${l.deltaToBest}:${(l.sectors ?? []).map((s) => `${s.fromGateId}>${s.toGateId}=${s.splitSeconds}:${s.badge}`).join(",")}`
+      )
+      .join("|");
+    const gatesMetaSig = cols
+      .map(
+        (c) =>
+          `${c.key}:${gateColor(this.workspaceStore, c.from)}>${gateColor(this.workspaceStore, c.to)}:${sectionShort(this.workspaceStore, c.from)}:${sectionLabel(this.workspaceStore, c.from, c.to)}`
+      )
+      .join("|");
+    const checkedSig = checkedCols.map((c) => c.key).join(",");
+    const fullSig = `${sess.sessionId}:${pilot?.slotIndex ?? 0}:${pilot?.callsign ?? ""}:${checkedSig}:${gatesMetaSig}:${lapsSig}`;
+    if (fullSig === this.lastMobileSectorsSig && host.children.length > 0) {
+      return;
+    }
+    this.lastMobileSectorsSig = fullSig;
+
+    const prevTableScroll = host.querySelector<HTMLElement>(".table-scroll")?.scrollTop ?? 0;
+    const prevPickerScroll =
+      host.querySelector<HTMLElement>(".practice-sectors-picker-list")?.scrollTop ?? 0;
+
+    const tableMarkup =
+      laps.length === 0
+        ? renderEmpty(
+            "No laps yet",
+            pilot
+              ? `${pilot.callsign}'s laps appear here as they complete them.`
+              : "Select a pilot to view their laps."
+          )
+        : `<div class="table-scroll">
+            <table class="table table-compact practice-sectors-table">
+              <thead>
+                <tr>
+                  <th>Lap</th>
+                  ${checkedCols
+                    .map(
+                      (c) =>
+                        `<th class="num" title="${esc(sectionLabel(this.workspaceStore, c.from, c.to))}"><span class="th-pilot"><span class="dot" style="--c:${gateColor(this.workspaceStore, c.from)}"></span>${sectionShort(this.workspaceStore, c.from)}</span></th>`
+                    )
+                    .join("")}
+                  <th class="num">Lap time</th>
+                  <th class="num">vs best</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${[...laps]
+                  .reverse()
+                  .slice(0, 20)
+                  .map((lap) => {
+                    const isInvalid = Boolean(lap.invalidated);
+                    const byKey = new Map(
+                      (lap.sectors ?? []).map((s) => [sectionKey(s.fromGateId, s.toGateId), s])
+                    );
+                    const cells = checkedCols
+                      .map((c) => {
+                        const s = byKey.get(c.key);
+                        return s
+                          ? `<td class="num"><span class="split ${isInvalid ? "" : SPLIT_CLASS[s.badge]}">${s.splitSeconds.toFixed(3)}</span></td>`
+                          : `<td class="num muted" title="Timer missed">—</td>`;
+                      })
+                      .join("");
+                    const vs = isInvalid
+                      ? "—"
+                      : lap.isBestLap && lap.lapNumber > 1
+                        ? `<span class="badge badge-good">PB</span>`
+                        : lap.deltaToBest > 0
+                          ? fmtDelta(lap.deltaToBest)
+                          : "best";
+                    const toggleTitle = isInvalid
+                      ? `Restore Lap ${lap.lapNumber}`
+                      : `Scratch Lap ${lap.lapNumber} (exclude from stats)`;
+                    return `<tr class="${isInvalid ? "is-invalidated" : ""}" data-practice-toggle-lap="${lap.lapId}" title="${esc(toggleTitle)}">
+                      <td class="mono col-mobile-lap-num">
+                        <button
+                          type="button"
+                          role="checkbox"
+                          aria-checked="${isInvalid ? "false" : "true"}"
+                          class="lap-num-toggle"
+                          data-practice-toggle-lap="${lap.lapId}"
+                          title="${esc(toggleTitle)}"
+                          aria-label="${esc(toggleTitle)}"
+                        >${lap.lapNumber}</button>
+                      </td>
+                      ${cells}
+                      <td class="num mono strong ${!isInvalid && lap.isBestLap ? "tone-good" : ""}">${fmtTime(lap.lapTimeSec)}</td>
+                      <td class="num mono muted">${vs}</td>
+                    </tr>`;
+                  })
+                  .join("")}
+              </tbody>
+            </table>
+          </div>`;
+
+    const pickerMarkup =
+      cols.length === 0
+        ? `<div class="note" style="padding:12px">No gates configured for this session.</div>`
+        : `<div class="channel-legend practice-sectors-picker-list" role="group" aria-label="Select up to 3 sectors to display">
+            ${cols
+              .map((c) => {
+                const checked = this.selectedMobileSectorKeys.has(c.key);
+                const atMax = !checked && this.selectedMobileSectorKeys.size >= 3;
+                const route = sectionLabel(this.workspaceStore, c.from, c.to);
+                return `
+                  <button
+                    type="button"
+                    role="checkbox"
+                    aria-checked="${checked ? "true" : "false"}"
+                    class="channel practice-sector-check-row ${checked ? "is-checked" : "is-dim"}"
+                    data-practice-sector-toggle="${esc(c.key)}"
+                    ${atMax ? "disabled" : ""}
+                    title="${atMax ? "Select up to 3 sectors at a time" : esc(route)}"
+                  >
+                    <span class="practice-sector-checkbox ${checked ? "is-checked" : ""}" aria-hidden="true"></span>
+                    ${renderSectionCapsuleIcon(
+                      gateColor(this.workspaceStore, c.from),
+                      gateColor(this.workspaceStore, c.to)
+                    )}
+                    <span class="channel-name">${sectionShort(this.workspaceStore, c.from)}</span>
+                    <span class="channel-dbm mono">${esc(route)}</span>
+                  </button>`;
+              })
+              .join("")}
+          </div>`;
+
+    host.innerHTML = `
+      <section class="card card-flush practice-sectors-table-card">
+        ${tableMarkup}
+      </section>
+      ${pickerMarkup}`;
+
+    const nextTableScroll = host.querySelector<HTMLElement>(".table-scroll");
+    if (nextTableScroll && prevTableScroll > 0) {
+      nextTableScroll.scrollTop = prevTableScroll;
+    }
+    const nextPickerScroll = host.querySelector<HTMLElement>(".practice-sectors-picker-list");
+    if (nextPickerScroll && prevPickerScroll > 0) {
+      nextPickerScroll.scrollTop = prevPickerScroll;
+    }
+  }
+
+  private disposePracticeSignalsChart(): void {
+    if (this.practiceSignalsChart) {
+      this.practiceSignalsChart.destroy();
+      this.practiceSignalsChart = null;
+    }
+    if (this.practiceSignalsChartEl) {
+      this.practiceSignalsChartEl.remove();
+      this.practiceSignalsChartEl = null;
+    }
+    this.lastMobileSignalsSig = "";
+  }
+
+  private disposePracticeAnalyticsView(): void {
+    if (this.practiceAnalyticsView) {
+      this.practiceAnalyticsView.destroy();
+      this.practiceAnalyticsView = null;
+    }
+    if (this.practiceAnalyticsEl) {
+      this.practiceAnalyticsEl.remove();
+      this.practiceAnalyticsEl = null;
+    }
+  }
+
+  private renderMobileAnalyticsPanel(force = false): void {
+    const host = this.slot("mobile-analytics");
+    if (this.activeTab !== "session") {
+      this.disposePracticeAnalyticsView();
+      host.innerHTML = "";
+      return;
+    }
+    if (!this.practiceAnalyticsView || !this.practiceAnalyticsEl) {
+      this.practiceAnalyticsEl = document.createElement("div");
+      this.practiceAnalyticsEl.className = "view view-pilot rc-analytics-embedded";
+      this.practiceAnalyticsView = new PilotView(
+        this.practiceAnalyticsEl,
+        this.store,
+        () => ({
+          kind: "practice",
+          id: this.store.selectedPracticeSession?.sessionId ?? "",
+        })
+      );
+    }
+    if (this.practiceAnalyticsEl.parentElement !== host) {
+      host.appendChild(this.practiceAnalyticsEl);
+    }
+    if (force) {
+      this.practiceAnalyticsView.onActivate();
+    }
+  }
+
+  private openPracticeSessionSettingsModal(sess: PracticeSession): void {
+    document.querySelectorAll(".slaprf-modal-backdrop[data-practice-settings-modal]").forEach((el) => el.remove());
+    let currentTags = [...(sess.tags ?? [])];
+    const dispName = sess.name || "Practice Session";
+    const backdrop = document.createElement("div");
+    backdrop.className = "slaprf-modal-backdrop";
+    backdrop.setAttribute("data-practice-settings-modal", "1");
+    backdrop.innerHTML = `
+      <div class="slaprf-modal rc-modal-md" role="dialog" aria-modal="true" aria-label="Practice Settings">
+        <div class="slaprf-modal-head">
+          <div class="slaprf-modal-title-row">
+            ${icons.sliders(17)}
+            <h3>Practice Settings</h3>
+          </div>
+          <button type="button" class="slaprf-modal-close" data-modal-close aria-label="Close">
+            ${icons.close(15)}
+          </button>
+        </div>
+        <div class="slaprf-modal-body">
+          <div class="rc-modal-form">
+            <label class="field">
+              <span>Session Name</span>
+              <input
+                type="text"
+                class="input"
+                data-modal-session-name
+                value="${esc(dispName)}"
+                placeholder="Session name"
+                maxlength="64"
+                autocomplete="off"
+              />
+            </label>
+            <div class="field">
+              <span>Tags</span>
+              ${renderTagPillBoxHtml({
+                boxId: "practice-settings",
+                tags: currentTags,
+                placeholder: "Add tags (press comma or Enter)...",
+                compact: false,
+                ariaLabel: "Edit practice session tags",
+              })}
+            </div>
+          </div>
+        </div>
+        <div class="slaprf-modal-actions">
+          <button type="button" class="btn btn-ghost" data-modal-close>Cancel</button>
+          <button type="button" class="btn btn-armed" data-modal-save-practice-settings>Save Settings</button>
+        </div>
+      </div>`;
+    document.body.appendChild(backdrop);
+
+    const tagBoxEl = backdrop.querySelector<HTMLElement>('[data-tag-box="practice-settings"]')!;
+    const tagEditor = mountTagPillEditor(tagBoxEl, {
+      initialTags: currentTags,
+      placeholder: "Add tags (press comma or Enter)...",
+      onChange: (next) => {
+        currentTags = next;
+      },
+    });
+
+    const close = (): void => {
+      document.removeEventListener("keydown", onEsc);
+      backdrop.remove();
+    };
+    const onEsc = (e: KeyboardEvent): void => {
+      if (e.key === "Escape") close();
+    };
+    document.addEventListener("keydown", onEsc);
+
+    backdrop.addEventListener("click", (e) => {
+      const t = e.target as HTMLElement | null;
+      if (!t) return;
+      if (t === backdrop || t.closest("[data-modal-close]")) {
+        close();
+        return;
+      }
+      const saveBtn = t.closest<HTMLButtonElement>("[data-modal-save-practice-settings]");
+      if (saveBtn && !saveBtn.disabled) {
+        saveBtn.disabled = true;
+        tagEditor.flushPending();
+        currentTags = tagEditor.getTags();
+        const newName =
+          backdrop.querySelector<HTMLInputElement>("[data-modal-session-name]")?.value.trim() ||
+          dispName;
+        const prevTagsJoined = (sess.tags ?? []).join("\u0000");
+        const nextTagsJoined = currentTags.join("\u0000");
+        const renamePromise =
+          newName !== sess.name
+            ? this.api.practiceAction({
+                action: "rename_session",
+                sessionId: sess.sessionId,
+                name: newName,
+              })
+            : Promise.resolve();
+        const tagsPromise =
+          prevTagsJoined !== nextTagsJoined
+            ? this.api.practiceAction({
+                action: "set_session_tags",
+                sessionId: sess.sessionId,
+                tags: currentTags,
+              })
+            : Promise.resolve();
+        void renamePromise
+          .then(() => tagsPromise)
+          .then(() => close())
+          .catch((err) => {
+            saveBtn.disabled = false;
+            this.reportErr(err);
+          });
+      }
+    });
+  }
+
+  private getPracticeSignalsCandidates(): Array<{
+    slotIndex: number;
+    callsign: string;
+    color: string;
+    channelLabel: string;
+  }> {
+    const candidates: Array<{
+      slotIndex: number;
+      callsign: string;
+      color: string;
+      channelLabel: string;
+    }> = [];
+    const seen = new Set<number>();
+    const sess = this.store.selectedPracticeSession;
+    for (const sp of sess?.pilots ?? []) {
+      if (sp.slotIndex > 0 && !seen.has(sp.slotIndex)) {
+        seen.add(sp.slotIndex);
+        const gp = this.store.pilot(sp.slotIndex);
+        candidates.push({
+          slotIndex: sp.slotIndex,
+          callsign: sp.callsign || gp?.callsign || `Pilot ${sp.slotIndex}`,
+          color: sp.color || gp?.color || "#38bdf8",
+          channelLabel: formatBandChannelShort(sp.band ?? gp?.band, sp.channel || gp?.channel || 0),
+        });
+      }
+    }
+    for (const gp of this.store.enabledPilots) {
+      if (gp.slotIndex > 0 && !seen.has(gp.slotIndex)) {
+        seen.add(gp.slotIndex);
+        candidates.push({
+          slotIndex: gp.slotIndex,
+          callsign: gp.callsign,
+          color: gp.color || "#38bdf8",
+          channelLabel: formatBandChannelShort(gp.band, gp.channel),
+        });
+      }
+    }
+    return candidates;
+  }
+
+  private renderMobileSignalsPanel(force = false): void {
+    const host = this.slot("mobile-signals");
+    if (this.activeTab !== "session") {
+      this.disposePracticeSignalsChart();
+      host.innerHTML = "";
+      return;
+    }
+    const candidates = this.getPracticeSignalsCandidates();
+    if (candidates.length === 0) {
+      this.disposePracticeSignalsChart();
+      host.innerHTML = `<div class="rc-panel-body is-signals-body"><div class="note" style="padding:12px 4px">No pilots in this practice session yet.</div></div>`;
+      return;
+    }
+    const focusSlot = this.store.liveFocus;
+    if (
+      focusSlot !== null &&
+      candidates.some((c) => c.slotIndex === focusSlot)
+    ) {
+      this.practiceSignalsSlot = focusSlot;
+    } else if (
+      this.practiceSignalsSlot === null ||
+      !candidates.some((c) => c.slotIndex === this.practiceSignalsSlot)
+    ) {
+      this.practiceSignalsSlot = candidates[0].slotIndex;
+    }
+    const selectedSlot = this.practiceSignalsSlot;
+    const sig = `${selectedSlot}:${candidates.map((c) => `${c.slotIndex}:${c.callsign}:${c.color}:${c.channelLabel}`).join("|")}`;
+    if (!force && sig === this.lastMobileSignalsSig && host.querySelector("[data-practice-signals-chart]")) {
+      this.practiceSignalsChart?.setPilotSlotOverride(selectedSlot);
+      return;
+    }
+    this.lastMobileSignalsSig = sig;
+    this.practiceSignalsChartEl?.remove();
+
+    const pilotBarHtml = `
+      <div class="sched-lineup-wrap rc-signals-pilot-wrap">
+        <button type="button" class="sched-lineup-cue is-left" data-lineup-scroll="-1" aria-label="Scroll pilots left" title="Scroll left" hidden>${icons.chevronLeft(13)}</button>
+        <div class="rc-signals-pilot-bar sched-lineup" role="tablist" aria-label="Select pilot signal trace" data-fit-lineup>
+          ${candidates
+            .map(
+              (c) => `
+                <button
+                  type="button"
+                  class="races-filter-pill rc-sig-pilot-pill ${c.slotIndex === selectedSlot ? "is-active" : ""}"
+                  data-practice-sig-pilot="${c.slotIndex}"
+                  style="--c:${esc(c.color)}"
+                >
+                  <span class="dot" style="--c:${esc(c.color)}"></span>
+                  <span>${esc(c.callsign)}</span>
+                  ${c.channelLabel ? `<span class="mono note">${esc(c.channelLabel)}</span>` : ""}
+                </button>`
+            )
+            .join("")}
+        </div>
+        <button type="button" class="sched-lineup-cue is-right" data-lineup-scroll="1" aria-label="Scroll pilots right" title="More pilots" hidden>${icons.chevronRight(13)}</button>
+      </div>`;
+
+    host.innerHTML = `
+      <header class="rc-panel-header rc-hide-mobile">
+        <div class="rc-panel-title-wrap">
+          ${icons.signal(14)}
+          <strong>Signal at each timer</strong>
+          <span class="note rc-hide-mobile">Live RSSI &amp; gate crossing thresholds</span>
+        </div>
+      </header>
+      <div class="rc-panel-body is-signals-body">
+        ${pilotBarHtml}
+        <div class="rc-signals-chart-host" data-practice-signals-chart></div>
+      </div>`;
+
+    const chartHost = host.querySelector<HTMLElement>("[data-practice-signals-chart]");
+    if (chartHost) {
+      if (!this.practiceSignalsChart || !this.practiceSignalsChartEl) {
+        this.practiceSignalsChartEl = document.createElement("div");
+        this.practiceSignalsChartEl.className = "rc-signals-chart-inner";
+        this.practiceSignalsChart = new PilotRssiChart(
+          this.practiceSignalsChartEl,
+          this.workspaceStore,
+          this.api
+        );
+      }
+      chartHost.appendChild(this.practiceSignalsChartEl);
+      this.practiceSignalsChart.setPilotSlotOverride(selectedSlot);
+    }
+    fitScheduleLineups(host);
   }
 
   private showPanel(): void {
@@ -1789,9 +3108,19 @@ export class LiveView extends Component {
 
     this.panel?.destroy();
     const host = this.slot("panel");
+    const onSelectPilot = (slot: number) => {
+      if (this.mobilePracticeTab === "overview") {
+        this.mobilePracticeTab = "laps";
+        this.slot("workspace").dataset.mobilePracticeView = "laps";
+        this.store.setLiveFocus(slot);
+        this.setMobilePracticeTab("laps", null, true);
+      } else {
+        this.store.setLiveFocus(slot);
+      }
+    };
     this.panel =
       focus === null
-        ? new AllPilotsPanel(host, this.workspaceStore, this.api, (slot) => this.store.setLiveFocus(slot))
+        ? new AllPilotsPanel(host, this.workspaceStore, this.api, onSelectPilot)
         : new PilotPanel(host, this.workspaceStore, this.api);
   }
 }

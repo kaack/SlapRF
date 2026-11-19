@@ -21,6 +21,24 @@ const BUILD_INFO: AboutBuildInfo =
     ? __SLAPRF_ABOUT_INFO__
     : {};
 
+const fallbackTag = BUILD_INFO.releaseTag || "(devel)";
+const fallbackCommit = (BUILD_INFO.commitHash || "unknown").substring(0, 7);
+let cachedBackendVersion = `${fallbackTag}-${fallbackCommit}`;
+let backendVersionRequested = false;
+
+export function preloadAboutVersion(api: ApiClient): void {
+  if (backendVersionRequested) return;
+  backendVersionRequested = true;
+  void api
+    .getVersionInfo()
+    .then((info) => {
+      if (info && info.release_tag && info.commit_hash) {
+        cachedBackendVersion = `${info.release_tag}-${info.commit_hash.substring(0, 7)}`;
+      }
+    })
+    .catch(() => undefined);
+}
+
 const DEFAULT_LICENSE_SUMMARY = `This work is dual-licensed under "GNU General Public License, version 3"
 and "Fair Source License, version 0.9"  (or any later version).
 
@@ -80,9 +98,7 @@ export class AboutView extends Component {
     this.store = store;
     this.api = api;
 
-    const fallbackTag = BUILD_INFO.releaseTag || "(devel)";
-    const fallbackCommit = (BUILD_INFO.commitHash || "unknown").substring(0, 7);
-    this.backendVersion = `${fallbackTag}-${fallbackCommit}`;
+    this.backendVersion = cachedBackendVersion;
 
     this.listen(el, "click", (e) => {
       const target = e.target as HTMLElement;
@@ -110,6 +126,7 @@ export class AboutView extends Component {
       const info = await this.api.getVersionInfo();
       if (info && info.release_tag && info.commit_hash) {
         const nextVer = `${info.release_tag}-${info.commit_hash.substring(0, 7)}`;
+        cachedBackendVersion = nextVer;
         if (nextVer !== this.backendVersion) {
           this.backendVersion = nextVer;
           this.render();

@@ -231,6 +231,7 @@ export function sectionRecords(store: AppStore): SectionRecord[] {
   });
   const byKey = new Map(records.map((r) => [r.key, r]));
   for (const lap of store.laps) {
+    if (lap.invalidated) continue;
     for (const s of lap.sectors ?? []) {
       const r = byKey.get(sectionKey(s.fromGateId, s.toGateId));
       if (!r) continue;

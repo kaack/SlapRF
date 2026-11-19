@@ -195,8 +195,8 @@ func TestEditSecondRaceWhileFirstRaceIsActivelyRunning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("apply_template on Race B while Race A running failed: %v", err)
 	}
-	if len(bSnap.Stages) != 2 || !bSnap.Generated {
-		t.Fatalf("expected 2 stages on Race B after apply_template, got %d", len(bSnap.Stages))
+	if len(bSnap.Stages) != 1 || bSnap.TotalStages != 1 || !bSnap.Generated || len(bSnap.Rounds) < 4 {
+		t.Fatalf("expected unified single-graph tournament on Race B after apply_template, got stages=%d rounds=%d", len(bSnap.Stages), len(bSnap.Rounds))
 	}
 
 	// Verify Race A is STILL the active engine race, STILL running, and STILL armed!
@@ -220,7 +220,7 @@ func TestEditSecondRaceWhileFirstRaceIsActivelyRunning(t *testing.T) {
 		t.Fatalf("expected Race A heat %q to still be in HeatRunning state", runningHeatID)
 	}
 
-	// Verify EventSnapshot holds BOTH Race A (running) and Race B (2 stages)!
+	// Verify EventSnapshot holds BOTH Race A (running) and Race B (unified single-graph tournament)!
 	evAfter := e.EventSnapshot()
 	if evAfter.ActiveRaceID != raceA.RaceID {
 		t.Fatalf("expected EventSnapshot.ActiveRaceID == %q, got %q", raceA.RaceID, evAfter.ActiveRaceID)
@@ -231,7 +231,7 @@ func TestEditSecondRaceWhileFirstRaceIsActivelyRunning(t *testing.T) {
 			savedB = &evAfter.Races[i]
 		}
 	}
-	if savedB == nil || len(savedB.Stages) != 2 {
-		t.Fatalf("expected saved Race B in EventSnapshot with 2 stages, got %+v", savedB)
+	if savedB == nil || len(savedB.Stages) != 1 || len(savedB.Rounds) < 4 {
+		t.Fatalf("expected saved Race B in EventSnapshot with unified single-graph rounds, got %+v", savedB)
 	}
 }

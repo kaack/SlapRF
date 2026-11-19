@@ -1344,7 +1344,8 @@ export function fitCanvasToNodes(root: HTMLElement, ui: BracketEditorUiState): v
     if (y + h > maxY) maxY = y + h;
   }
 
-  const padTop = 58;
+  const hasSubRibbon = Boolean(rc.querySelector("[data-dte-race-summary]"));
+  const padTop = hasSubRibbon ? 86 : 58;
   const padBottom = 64;
   const padX = 52;
   const availW = Math.max(200, rcRect.width - padX * 2);
@@ -1618,6 +1619,9 @@ export function formatWirePillLabel(conn: RoundConnection): string {
     if (conn.distribution === "snake") {
       return "Pilots Roster · Snake";
     }
+    if (conn.distribution === "sequential") {
+      return "Pilots Roster · Grouped";
+    }
     if (conn.distribution === "random") {
       return "Pilots Roster · Random";
     }
@@ -1634,19 +1638,33 @@ export function formatWirePillLabel(conn: RoundConnection): string {
       return `All Seeds · ${dist}`;
     }
     if (sStart === 1 && sEnd > 0) {
-      return `Top ${sEnd} (#1–#${sEnd}) · ${dist}`;
+      return `Top ${sEnd} (#1-#${sEnd}) · ${dist}`;
     }
     if (sEnd > 0) {
-      return `Seeds #${sStart}–#${sEnd} · ${dist}`;
+      return `Seeds #${sStart}-#${sEnd} · ${dist}`;
     }
     return `Seeds #${sStart}+ · ${dist}`;
+  }
+  if (conn.mode === "standings_top") {
+    const dist = conn.distribution === "sequential" ? "Sequential" : "Snake";
+    const earlySuffix = conn.seededEarly ? " · Seeded" : "";
+    const sStart = Math.max(0, conn.seedStart || 0);
+    const sEnd = Math.max(0, conn.seedEnd || 0);
+    if (sStart > 1 && sEnd >= sStart) {
+      return `Ranks #${sStart}-#${sEnd} · ${dist}${earlySuffix}`;
+    }
+    if (sStart === 1 && sEnd > 0) {
+      return `Top ${sEnd} · ${dist}${earlySuffix}`;
+    }
+    if (conn.count && conn.count > 0) {
+      return `Top ${conn.count} · ${dist}${earlySuffix}`;
+    }
+    return `All Qualified · ${dist}${earlySuffix}`;
   }
   const n = Math.max(1, conn.count || 2);
   switch (conn.mode) {
     case "bottom_per_heat":
       return `Bottom ${n} / heat`;
-    case "standings_top":
-      return `Fastest ${n}`;
     case "all_pilots":
       return "All pilots · Balanced";
     case "all_pilots_ranked":
@@ -1697,13 +1715,12 @@ const STAGE_SEED_PRESETS: StageSeedPresetOption[] = [
 
 function renderWireInvalidBanner(conn: RoundConnection): string {
   if (!conn.invalid) return "";
+  const msg =
+    cleanConnectionInvalidReason(conn.invalidReason) ||
+    "Invalid connection - adjust rule or reconnect wire.";
   return `
     <div class="bkt-wire-invalid-banner" role="alert">
-      <div class="bkt-wire-invalid-title">
-        ${icons.siren(12)}
-        <span>Invalid Connection</span>
-      </div>
-      <div class="bkt-wire-invalid-reason">${esc(cleanConnectionInvalidReason(conn.invalidReason))}</div>
+      <div class="bkt-wire-invalid-reason">${esc(msg)}</div>
       <div class="bkt-wire-invalid-hint">Drag either endpoint to reconnect.</div>
     </div>`;
 }
@@ -1973,9 +1990,20 @@ function renderHeatCard(
     .map((s) => {
       const filled = s.pilotSlotIndex > 0;
       const isBye = !!s.feeder?.isBye && !filled;
-      const isSeedSlot = !filled && (s.feeder?.fromStageSeed ?? 0) > 0;
-      const seedSlotNum = isSeedSlot ? (s.feeder?.fromStageSeed ?? 0) : 0;
-      const seedSlotColor = seedSlotNum > 0 ? seedColorForNumber(seedSlotNum) : undefined;
+      const rawSeedNum =
+        (s.feeder?.fromStageSeed ?? 0) ||
+        (s.feeder?.fromStandingsRank ?? 0) ||
+        (!filled && !s.feeder && /^Seed #(\d+)$/.exec(s.sourceLabel || "")
+          ? Number(/^Seed #(\d+)$/.exec(s.sourceLabel || "")?.[1] || 0)
+          : 0);
+      const isSeedSlot = !filled && !isBye && rawSeedNum > 0;
+      const isHeatSlot =
+        !filled &&
+        !isBye &&
+        !isSeedSlot &&
+        (!!s.feeder?.fromHeatId ||
+          Boolean(s.sourceLabel && s.sourceLabel !== "Open / BYE" && s.sourceLabel !== "BYE"));
+      const hasPlaceholderDot = isSeedSlot || isHeatSlot;
       const statusBadge =
         s.status === "dq"
           ? `<span class="bkt-pos is-bad"><span class="bkt-pos-text">DQ</span><span class="bkt-pos-mark" aria-hidden="true"></span></span>`
@@ -2045,6 +2073,7 @@ function renderHeatCard(
             seatOptions.push({
               value: `heat:${eh.id}:${rnk}`,
               label: `${ordinal(rnk)} · ${eh.shortLabel || eh.id}`,
+              dotColor: "hollow",
               group: "Custom Seat Feeder",
             });
           }
@@ -2064,7 +2093,7 @@ function renderHeatCard(
           options: seatOptions,
           className: "bkt-assign-select",
           isSeed: isSeedSlot,
-          dotColor: seedSlotColor,
+          dotColor: hasPlaceholderDot ? "hollow" : undefined,
           title:
             "Pick a Qualifying Seed placeholder, assign a pilot, or leave connected to incoming round",
           dataAttrs: `data-bkt-seat-heat="${esc(heat.id)}" data-bkt-seat-idx="${s.seatIndex}"`,
@@ -2117,7 +2146,7 @@ function renderHeatCard(
               ? `<span class="dot" style="--c:${s.color}"></span>
                  <span class="bkt-name-wrap"><span class="bkt-name" title="${esc(s.callsign)}">${esc(s.callsign)}</span>${deltaBadge}</span>
                  ${aceStars}`
-              : `${seedSlotColor ? `<span class="dot" style="--c:${seedSlotColor}"></span>` : ""}<span class="bkt-placeholder ${isSeedSlot ? "is-seed-placeholder" : ""}">${esc(isBye ? "BYE" : s.sourceLabel || "TBD")}</span>`
+              : `${hasPlaceholderDot ? `<span class="dot is-hollow"></span>` : ""}<span class="bkt-placeholder ${isSeedSlot ? "is-seed-placeholder" : ""}">${esc(isBye ? "BYE" : s.sourceLabel || "TBD")}</span>`
           }
           ${roPinInd}
           ${statusBadge}
@@ -2148,17 +2177,66 @@ function renderHeatCard(
 }
 
 function renderNodeHamburgerMenu(
+  race: RaceTournamentState,
   round: RaceRound,
-  _heats: RaceHeat[],
+  heats: RaceHeat[],
   incomingCount: number,
   _outgoingCount: number,
-  allUnstarted: boolean
+  allUnstarted: boolean,
+  activePilots: EventPilot[]
 ): string {
   const isFinals = round.bracketLane === "finals";
   const isSeeded =
     incomingCount === 0 &&
     (round.seedSource === "all_active_pilots" ||
       (round.column === 1 && round.seedSource !== "empty"));
+
+  const pph = Math.max(2, race.config.pilotsPerHeat || 4);
+  const defAdv = Math.max(1, Math.floor(pph / 2));
+  let outAdv = 0;
+  if (!isFinals && round.stageFormat !== "qualifying" && round.stageFormat !== "open_qualifier") {
+    for (const c of race.connections ?? []) {
+      if (c.invalid || c.fromRoundId !== round.id || c.mode !== "top_per_heat") {
+        continue;
+      }
+      const cnt = c.count && c.count >= 1 ? c.count : defAdv;
+      if (cnt > outAdv) outAdv = cnt;
+    }
+  }
+  const isAutoFed = incomingCount > 0 || isSeeded;
+  let addHeatReason = "";
+  if (isAutoFed && outAdv >= 1) {
+    let startedCount = 0;
+    let unstartedEntrants = 0;
+    let totalEntrants = 0;
+    for (const h of heats) {
+      let hEntrants = 0;
+      for (const s of h.seats) {
+        if (s.pilotSlotIndex > 0 || (s.feeder && !s.feeder.isBye)) {
+          hEntrants++;
+        }
+      }
+      totalEntrants += hEntrants;
+      if (isHeatUnstarted(h.state)) {
+        unstartedEntrants += hEntrants;
+      } else {
+        startedCount++;
+      }
+    }
+    if (totalEntrants === 0 && isSeeded) {
+      totalEntrants = activePilots.length;
+      unstartedEntrants = activePilots.length;
+    }
+    const poolN = startedCount > 0 ? unstartedEntrants : totalEntrants;
+    if (poolN >= 2) {
+      const minHeats = Math.max(1, Math.ceil(poolN / pph));
+      const maxUnstartedHeats = Math.max(minHeats, Math.floor(poolN / (outAdv + 1)));
+      const maxTotalHeats = startedCount + maxUnstartedHeats;
+      if (heats.length >= maxTotalHeats) {
+        addHeatReason = `Cannot add another heat: advancing Top ${outAdv} per heat requires at least ${outAdv + 1} pilots per heat so at least 1 pilot is eliminated (${totalEntrants} pilots in this round, max ${maxTotalHeats} ${maxTotalHeats === 1 ? "heat" : "heats"}).`;
+      }
+    }
+  }
 
   const seedItem =
     incomingCount === 0 && allUnstarted
@@ -2176,18 +2254,21 @@ function renderNodeHamburgerMenu(
 
   const nonFinalsActions = !isFinals
     ? `<div class="bkt-node-menu-sep"></div>
-      <button
-        type="button"
-        class="bkt-node-menu-item"
-        data-bkt-action="add_heat"
-        data-round-id="${esc(round.id)}"
-        data-bkt-col="${round.column}"
-        data-bkt-lane="${esc(round.bracketLane)}"
-        data-bkt-round="${round.round}"
-      >
-        ${icons.plus(14)}
-        <span>Add Heat</span>
-      </button>
+      <div ${addHeatReason ? `title="${esc(addHeatReason)}"` : ""}>
+        <button
+          type="button"
+          class="bkt-node-menu-item"
+          data-bkt-action="add_heat"
+          data-round-id="${esc(round.id)}"
+          data-bkt-col="${round.column}"
+          data-bkt-lane="${esc(round.bracketLane)}"
+          data-bkt-round="${round.round}"
+          ${addHeatReason ? `disabled title="${esc(addHeatReason)}"` : ""}
+        >
+          ${icons.plus(14)}
+          <span>Add Heat</span>
+        </button>
+      </div>
       ${seedItem}
       <button
         type="button"
@@ -3512,7 +3593,7 @@ function renderRoundNode(
           ${startMode === "staggered" && !isTimed ? `<span class="bkt-meta-pill">Staggered</span>` : ""}
           ${sourceChip}
         </div>
-        ${isMenuOpen ? renderNodeHamburgerMenu(round, heats, incomingCount, outgoingCount, allUnstarted) : ""}
+        ${isMenuOpen ? renderNodeHamburgerMenu(race, round, heats, incomingCount, outgoingCount, allUnstarted, activePilots) : ""}
       </div>`
     : `<div class="bkt-round-head ${canvasMode ? "is-draggable-head" : "is-readonly"}" ${canvasMode ? `data-round-drag-handle="${esc(round.id)}" data-bkt-stop-select title="Drag card to move"` : ""}>
         <div class="bkt-round-head-top">
@@ -6616,65 +6697,76 @@ export function bindBracketDragAndDrop(
       });
   };
 
-type RoundWireDropKind = "qualifying" | "race" | "losers" | "finals";
+type RoundWireDropKind =
+  | "qualifying"
+  | "open_qualifier"
+  | "zippyq_qualifier"
+  | "race"
+  | "points_mains"
+  | "finals";
 
 function buildRoundWireDropOptions(
   fromRoundId: string,
   fromRound: RaceRound | undefined,
   portDir: OutputPortDir,
-  stageHasFinals: boolean
+  _stageHasFinals: boolean
 ): WireDropOption[] {
-  const finalsOpt: WireDropOption | null = stageHasFinals
-    ? null
-    : {
-        id: "finals",
-        label: "Finals",
-        iconHtml: icons.trophy(16),
-        title: "Connect to a new Championship Finals round",
-      };
+  const finalsOpt: WireDropOption = {
+    id: "finals",
+    label: "Finals",
+    iconHtml: icons.trophy(16),
+    title: "Connect to a Championship Finals round",
+  };
   const qualOpt: WireDropOption = {
     id: "qualifying",
     label: "Qualifier",
     iconHtml: icons.timer(16),
-    title: "Connect to a new Timed Qualifying round",
+    title: "Connect to a Timed Qualifying round",
+  };
+  const openQualOpt: WireDropOption = {
+    id: "open_qualifier",
+    label: "Open Qualifier",
+    iconHtml: icons.zap(16),
+    title: "Connect to an Open Qualifier (Flight Queue) round",
+  };
+  const zippyOpt: WireDropOption = {
+    id: "zippyq_qualifier",
+    label: "ZippyQ",
+    iconHtml: icons.zap(16),
+    title: "Connect to a ZippyQ Qualifier round",
   };
   const raceOpt: WireDropOption = {
     id: "race",
     label: "Race Round",
     iconHtml: icons.plus(16),
-    title: "Connect to a new Head-to-Head Race round",
+    title:
+      portDir === "bottom"
+        ? "Connect to a new Redemption / Race round"
+        : "Connect to a new Head-to-Head Race round",
   };
-  const losersOpt: WireDropOption = {
-    id: "losers",
-    label: "Redemption",
-    iconHtml: icons.trendDown(16),
-    title: "Connect to a new Redemption / Lower Bracket round",
+  const pointsOpt: WireDropOption = {
+    id: "points_mains",
+    label: "Points Round",
+    iconHtml: icons.layers(16),
+    title: "Connect to a Points-scored round",
   };
 
   if (isPilotsInRoundId(fromRoundId)) {
-    return [qualOpt, raceOpt, ...(finalsOpt ? [finalsOpt] : [])];
-  }
-  if (isHandoffInRoundId(fromRoundId)) {
-    return [raceOpt, losersOpt, qualOpt, ...(finalsOpt ? [finalsOpt] : [])];
+    return [qualOpt, openQualOpt, zippyOpt, raceOpt, pointsOpt, finalsOpt];
   }
   const isQual =
     fromRound?.bracketLane === "qualifying" ||
+    fromRound?.bracketLane === "open_qual" ||
     fromRound?.stageFormat === "qualifying" ||
     fromRound?.stageFormat === "open_qualifier" ||
     isOpenQualRoundId(fromRoundId);
   if (isQual) {
-    return [raceOpt, qualOpt, ...(finalsOpt ? [finalsOpt] : [])];
-  }
-  if (fromRound?.bracketLane === "losers") {
-    if (portDir === "bottom") {
-      return [losersOpt, raceOpt];
-    }
-    return [losersOpt, ...(finalsOpt ? [finalsOpt] : []), raceOpt];
+    return [qualOpt, raceOpt, pointsOpt, finalsOpt];
   }
   if (portDir === "bottom") {
-    return [losersOpt, raceOpt];
+    return [raceOpt, pointsOpt, finalsOpt];
   }
-  return [raceOpt, ...(finalsOpt ? [finalsOpt] : []), losersOpt];
+  return [raceOpt, pointsOpt, finalsOpt, qualOpt];
 }
 
   const startWireDrag = (e: PointerEvent, outPort: HTMLButtonElement): void => {
@@ -6920,12 +7012,21 @@ function buildRoundWireDropOptions(
                   stageFormat = "qualifying";
                   targetLaps = 0;
                   break;
-                case "losers":
-                  title = `Redemption ${loserCount + 1}`;
-                  bracketLane = "losers";
-                  if (!isPilotsInRoundId(fromRoundId) && !isHandoffInRoundId(fromRoundId) && portDir === "bottom") {
-                    linkMode = "bottom_per_heat";
-                  }
+                case "open_qualifier":
+                  title = "Open Qualifier";
+                  bracketLane = "open_qual";
+                  stageFormat = "open_qualifier";
+                  targetLaps = 0;
+                  break;
+                case "zippyq_qualifier":
+                  title = "ZippyQ Qualifier";
+                  bracketLane = "open_qual";
+                  stageFormat = "open_qualifier";
+                  targetLaps = 0;
+                  break;
+                case "points_mains":
+                  bracketLane = "mains";
+                  stageFormat = "points_mains";
                   break;
                 case "finals":
                   title = "Finals";

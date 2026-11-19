@@ -398,9 +398,15 @@ func (e *Engine) AddPilot(callsign string, phoneticName string) error {
 		} else {
 			e.rebuildAllUnstartedNonCustomStagesLocked()
 			e.resolveActiveTournamentLocked()
+		if e.syncNewlyResolvedAllPilotsChainsLocked() {
+			e.resolveActiveTournamentLocked()
+		}
 		}
 	} else if e.raceState.Generated {
 		e.resolveActiveTournamentLocked()
+		if e.syncNewlyResolvedAllPilotsChainsLocked() {
+			e.resolveActiveTournamentLocked()
+		}
 	} else {
 		e.syncActiveRaceToEventLocked()
 	}
@@ -458,9 +464,15 @@ func (e *Engine) RemovePilot(slotIndex int) error {
 		} else {
 			e.rebuildAllUnstartedNonCustomStagesLocked()
 			e.resolveActiveTournamentLocked()
+		if e.syncNewlyResolvedAllPilotsChainsLocked() {
+			e.resolveActiveTournamentLocked()
+		}
 		}
 	} else if e.raceState.Generated {
 		e.resolveActiveTournamentLocked()
+		if e.syncNewlyResolvedAllPilotsChainsLocked() {
+			e.resolveActiveTournamentLocked()
+		}
 	} else {
 		e.syncActiveRaceToEventLocked()
 	}
@@ -523,6 +535,9 @@ func (e *Engine) SetOperatingMode(mode domain.OperatingMode) domain.RaceTourname
 		e.raceState.Mode = domain.ModeRace
 		if e.raceState.Generated {
 			e.resolveActiveTournamentLocked()
+		if e.syncNewlyResolvedAllPilotsChainsLocked() {
+			e.resolveActiveTournamentLocked()
+		}
 		} else if e.raceState.RaceID != "" {
 			e.syncActiveRaceToEventLocked()
 		}
@@ -924,17 +939,15 @@ func (e *Engine) regenerateTournamentLocked() {
 	prevRoster := append([]domain.EventPilot(nil), e.raceState.Roster...)
 	cfg := e.raceState.Config.Normalized()
 	genPilots := e.activeEventPilotsForGenerationLocked()
-	st := race.GenerateTournament(cfg, genPilots, time.Now().UnixNano())
+	tplID := prevTemplateID
+	if tplID == "" || tplID == "custom" {
+		tplID = inferTemplateIDFromConfig(cfg)
+	}
+	st := race.GenerateUnifiedTournament(cfg, genPilots, tplID, time.Now().UnixNano())
 	st.RaceID = prevID
 	st.MGPLink = prevMGPLink
 	st.Tags = prevTags
-	if prevTemplateID != "" && prevTemplateID != "custom" {
-		st.TemplateID = prevTemplateID
-	} else {
-		st.TemplateID = inferTemplateIDFromConfig(cfg)
-	}
-	st.Stages = nil
-	st.StageConnections = nil
+	st.TemplateID = tplID
 	st.CreatedAt = prevCreated
 	st.TrackSnapshot = prevTrack
 	st.Roster = prevRoster
@@ -1016,13 +1029,29 @@ func (e *Engine) ConfigureAndGenerateRaceForID(
 			normalizeRaceRosterLocked(&e.raceState, e.pilots)
 			e.syncActiveRaceToEventLocked()
 		}
-		e.raceState.TemplateID = inferTemplateIDFromConfig(e.raceState.Config)
+		isMultiPhaseTpl := e.raceState.TemplateID == "qual_double_elim" ||
+			e.raceState.TemplateID == "qual_single_elim" ||
+			e.raceState.TemplateID == "qual_mains" ||
+			e.raceState.TemplateID == "cpq_mains" ||
+			e.raceState.TemplateID == "qual_chase_the_ace" ||
+			e.raceState.TemplateID == "qual_ladder_mains" ||
+			e.raceState.TemplateID == "ladder_mains"
+		if e.raceState.TemplateID == "" || e.raceState.TemplateID == "custom" || prevCfg.MainFormat != nextCfg.MainFormat || nextCfg.Structure == domain.StructureTwoStage {
+			if nextCfg.Structure == domain.StructureSingleStage && isMultiPhaseTpl && prevCfg.MainFormat == nextCfg.MainFormat {
+				// Preserve unified multi-phase or ladder template when Structure remains single_stage
+			} else {
+				e.raceState.TemplateID = inferTemplateIDFromConfig(e.raceState.Config)
+			}
+		}
 		e.regenerateTournamentLocked()
 	} else if e.raceState.Generated {
 		if applyToExisting {
 			e.applyConfigToUnstartedLocked(prevCfg, nextCfg)
 		}
 		e.resolveActiveTournamentLocked()
+		if e.syncNewlyResolvedAllPilotsChainsLocked() {
+			e.resolveActiveTournamentLocked()
+		}
 	} else if e.raceState.RaceID != "" {
 		e.syncActiveRaceToEventLocked()
 	}
@@ -1190,9 +1219,17 @@ func (e *Engine) raceControlActionActiveWithOptions(action string, heatID string
 			e.mu.Unlock()
 			return cloneRaceState(e.raceState), fmt.Errorf("pause or stop the active heat before switching heats")
 		}
-		if e.findHeatLocked(targetID) == nil {
+		targetHeat := e.findHeatLocked(targetID)
+		if targetHeat == nil {
 			e.mu.Unlock()
 			return cloneRaceState(e.raceState), fmt.Errorf("heat %q not found", targetID)
+		}
+		if targetHeat.State == domain.HeatWaiting {
+			e.mu.Unlock()
+			return cloneRaceState(e.raceState), fmt.Errorf("cannot stage %s while waiting on upstream heats", targetHeat.ShortLabel)
+		}
+		if targetHeat.StageIndex >= 1 && e.raceState.ActiveStageIndex != targetHeat.StageIndex {
+			e.raceState.ActiveStageIndex = targetHeat.StageIndex
 		}
 		e.stageHeatLocked(targetID, true)
 		cfgChanged = true
@@ -1320,6 +1357,7 @@ func (e *Engine) raceControlActionActiveWithOptions(action string, heatID string
 					h.Seats[i].Status = domain.PilotHeatRacing
 				}
 			}
+			e.resetSessionLocked()
 			e.raceArmed = true
 			ann = &domain.RaceAnnouncement{Kind: "start_horn", HeatID: h.ID}
 		}
@@ -1398,6 +1436,27 @@ func (e *Engine) raceControlActionActiveWithOptions(action string, heatID string
 			}
 			e.enterLiveRaceHeatLocked(h)
 			cfgChanged = true
+			shiftEngineProgressLocked := func(deltaUs uint64) {
+				if deltaUs == 0 {
+					return
+				}
+				for _, prog := range e.progress {
+					if prog == nil {
+						continue
+					}
+					if prog.lapStartUs > 0 {
+						prog.lapStartUs += deltaUs
+					}
+					if prog.lastGateTimeUs > 0 {
+						prog.lastGateTimeUs += deltaUs
+					}
+				}
+				for k, ts := range e.lastAcceptedUs {
+					if ts > 0 {
+						e.lastAcceptedUs[k] = ts + deltaUs
+					}
+				}
+			}
 			if h.PausedAtUs > 0 && nowUs > h.PausedAtUs {
 				pauseDelta := nowUs - h.PausedAtUs
 				h.AccumulatedPauseUs += pauseDelta
@@ -1410,6 +1469,7 @@ func (e *Engine) raceControlActionActiveWithOptions(action string, heatID string
 				if h.OvertimeStartedAtUs > 0 {
 					h.OvertimeStartedAtUs += pauseDelta
 				}
+				shiftEngineProgressLocked(pauseDelta)
 			} else if h.State == domain.HeatFinished {
 				// Resuming a finished heat shifts StartToneUs (and recorded crossings) so ElapsedSec picks up cleanly
 				prevElapsedUs := uint64(h.ElapsedSec * 1e6)
@@ -1422,6 +1482,7 @@ func (e *Engine) raceControlActionActiveWithOptions(action string, heatID string
 								h.Seats[i].Crossings[k].TimestampUs += delta
 							}
 						}
+						shiftEngineProgressLocked(delta)
 					}
 					h.StartToneUs = newStartToneUs
 				}
@@ -1489,6 +1550,9 @@ func (e *Engine) raceControlActionActiveWithOptions(action string, heatID string
 		e.resetSingleHeatToStagedLocked(h)
 		e.markHeatUnsyncedMGPLocked(h.ID)
 		e.resolveActiveTournamentLocked()
+		if e.syncNewlyResolvedAllPilotsChainsLocked() {
+			e.resolveActiveTournamentLocked()
+		}
 		if e.exitLiveRaceHeatLocked() {
 			cfgChanged = true
 		} else if e.raceState.Mode == domain.ModeRace {
@@ -1512,6 +1576,9 @@ func (e *Engine) raceControlActionActiveWithOptions(action string, heatID string
 			h.ExecutedAtMs = time.Now().UnixMilli()
 		}
 		e.resolveActiveTournamentLocked()
+		if e.syncNewlyResolvedAllPilotsChainsLocked() {
+			e.resolveActiveTournamentLocked()
+		}
 		if e.raceState.IsComplete && e.raceState.ChampionCallsign != "" {
 			ann = &domain.RaceAnnouncement{
 				Kind:      "champion",
@@ -1568,6 +1635,9 @@ func (e *Engine) raceControlActionActiveWithOptions(action string, heatID string
 			e.raceState.Stage2SeededEarly = false
 		}
 		e.resolveActiveTournamentLocked()
+		if e.syncNewlyResolvedAllPilotsChainsLocked() {
+			e.resolveActiveTournamentLocked()
+		}
 		if !preserveActiveHeat && !e.hasLiveRunningHeatLocked() {
 			if e.raceState.ActiveHeatID == "" || wasCompleted || (prevActiveHeat != nil && prevActiveHeat.State == domain.HeatConfirmed) {
 				e.raceState.ActiveHeatID = h.ID
@@ -1604,6 +1674,55 @@ func (e *Engine) raceControlActionActiveWithOptions(action string, heatID string
 	}
 	e.notifyRaceUpdated(snap, ann, subs)
 	return snap, nil
+}
+
+func (e *Engine) syncNewlyResolvedAllPilotsChainsLocked() bool {
+	mutated := false
+	for _, c := range e.raceState.Connections {
+		if c.Invalid || c.Mode != "all_pilots" {
+			continue
+		}
+		if e.ensureRoundUnstartedLocked(c.ToRoundID) != nil {
+			continue
+		}
+		srcHasConcrete := false
+		for _, sh := range e.raceState.Heats {
+			if sh.RoundID == c.FromRoundID {
+				for _, s := range sh.Seats {
+					if s.PilotSlotIndex > 0 {
+						srcHasConcrete = true
+						break
+					}
+				}
+			}
+			if srcHasConcrete {
+				break
+			}
+		}
+		dstHasFeeder := false
+		dstHasConcrete := false
+		for _, dh := range e.raceState.Heats {
+			if dh.RoundID == c.ToRoundID {
+				for _, s := range dh.Seats {
+					if s.Feeder != nil {
+						dstHasFeeder = true
+					}
+					if s.PilotSlotIndex > 0 {
+						dstHasConcrete = true
+					}
+				}
+			}
+		}
+		if (srcHasConcrete && dstHasFeeder) || (!srcHasConcrete && dstHasConcrete && !dstHasFeeder) {
+			stgIdx := c.StageIndex
+			if stgIdx < 1 {
+				stgIdx = 1
+			}
+			e.cascadeBalancedRoundsFromLocked(stgIdx, c.FromRoundID)
+			mutated = true
+		}
+	}
+	return mutated
 }
 
 // RaceMarshalPayload describes a marshal adjustment on a pilot in a heat.
@@ -1763,9 +1882,14 @@ func (e *Engine) MarshalPilotAction(req RaceMarshalPayload) (domain.RaceTourname
 		}
 
 	case "toggle_lap":
+		if len(seat.Crossings) == 0 && len(seat.Laps) > 0 {
+			race.RecomputeHeat(h, e.raceState.Config.QualifyingMetric)
+		}
 		for i := range seat.Crossings {
 			if seat.Crossings[i].CrossingID == req.CrossingID {
-				seat.Crossings[i].Invalidated = !seat.Crossings[i].Invalidated
+				if i > 0 {
+					seat.Crossings[i].Invalidated = !seat.Crossings[i].Invalidated
+				}
 				break
 			}
 		}

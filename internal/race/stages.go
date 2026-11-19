@@ -46,9 +46,9 @@ func FormatStageConnectionBadge(c domain.StageConnection) string {
 		}
 		if c.SeedEnd > 0 && c.SeedEnd >= start {
 			if start == 1 {
-				return fmt.Sprintf("Top %d (#1–#%d)", c.SeedEnd, c.SeedEnd)
+				return fmt.Sprintf("Top %d (#1-#%d)", c.SeedEnd, c.SeedEnd)
 			}
-			return fmt.Sprintf("Seeds #%d–#%d", start, c.SeedEnd)
+			return fmt.Sprintf("Seeds #%d-#%d", start, c.SeedEnd)
 		}
 		return fmt.Sprintf("Seeds #%d+", start)
 	default:
@@ -602,10 +602,10 @@ func ValidateStageDAG(st *domain.RaceTournamentState) {
 		s := &st.Stages[i]
 		if inDeg[s.ID] == 0 && outDeg[s.ID] == 0 {
 			s.Dangling = true
-			s.DanglingReason = fmt.Sprintf("%s is disconnected — connect it into the stage DAG or remove it.", s.Title)
+			s.DanglingReason = fmt.Sprintf("%s is disconnected - connect it into the stage DAG or remove it.", s.Title)
 		} else if !reachableUndir[s.ID] {
 			s.Dangling = true
-			s.DanglingReason = fmt.Sprintf("%s is disconnected from the main stage flow — connect all stages into one DAG.", s.Title)
+			s.DanglingReason = fmt.Sprintf("%s is disconnected from the main stage flow - connect all stages into one DAG.", s.Title)
 		}
 		if s.Dangling && st.FormatInvalidReason == "" {
 			st.FormatInvalidReason = s.DanglingReason
@@ -1051,4 +1051,452 @@ func ReconcileStagesFromRoundContents(st *domain.RaceTournamentState, rounds []d
 	if changed {
 		EnsureStagesMetadata(st)
 	}
+}
+
+// MigrateLegacyStagesToUnifiedGraph converts any multi-stage tournament (`TotalStages > 1`, `len(Stages) > 1`,
+// `StructureTwoStage`, or `FromStageSeed` portal wires) into the unified single-graph architecture
+// (`StageIndex = 1`, `TotalStages = 1`) with direct `RoundConnection` wires and non-overlapping
+// horizontal `Column` / `PosX` offsets while preserving all heats, laps, and standings.
+func MigrateLegacyStagesToUnifiedGraph(st *domain.RaceTournamentState) bool {
+	if st == nil {
+		return false
+	}
+	needs := len(st.Stages) > 1 || st.TotalStages > 1 || st.Config.Structure == domain.StructureTwoStage || len(st.StageConnections) > 0
+	if !needs {
+		for _, h := range st.Heats {
+			if h.StageIndex > 1 {
+				needs = true
+				break
+			}
+			for _, s := range h.Seats {
+				if s.Feeder != nil && s.Feeder.FromStageSeed > 0 {
+					needs = true
+					break
+				}
+			}
+			if needs {
+				break
+			}
+		}
+	}
+	if !needs {
+		for _, r := range st.Rounds {
+			if r.StageIndex > 1 || domain.IsStagePortalRoundID(r.ID) {
+				needs = true
+				break
+			}
+		}
+	}
+	if !needs {
+		return false
+	}
+
+	EnsureStagesMetadata(st)
+	SyncRoundsMetadata(st)
+
+	topo := TopologicalStageIndices(st)
+	if len(topo) == 0 {
+		topo = []int{1}
+	}
+
+	// Preserve original stage index of every non-portal round & heat before collapsing to StageIndex=1
+	origRoundStage := make(map[string]int, len(st.Rounds))
+	roundOrigCol := make(map[string]int, len(st.Rounds))
+	for _, r := range st.Rounds {
+		if !domain.IsStagePortalRoundID(r.ID) {
+			origRoundStage[r.ID] = r.StageIndex
+			roundOrigCol[r.ID] = r.Column
+		}
+	}
+	origHeatStage := make(map[string]int, len(st.Heats))
+	for _, h := range st.Heats {
+		origHeatStage[h.ID] = h.StageIndex
+	}
+
+	// Identify terminal non-portal round in each stage (preferring rounds wired into stageK-seeding-out)
+	stageTerminalID := make(map[int]string, len(topo))
+	for _, sIdx := range topo {
+		outPortalID := domain.StageHandoffOutID(sIdx)
+		var bestFedID string
+		bestFedCol := -1
+		for _, c := range st.Connections {
+			if !c.Invalid && c.ToRoundID == outPortalID && !domain.IsStagePortalRoundID(c.FromRoundID) {
+				if col := roundOrigCol[c.FromRoundID]; col >= bestFedCol {
+					bestFedCol = col
+					bestFedID = c.FromRoundID
+				}
+			}
+		}
+		if bestFedID != "" {
+			stageTerminalID[sIdx] = bestFedID
+			continue
+		}
+		var fallbackID string
+		bestCol := -1
+		for _, r := range st.Rounds {
+			if r.StageIndex == sIdx && !domain.IsStagePortalRoundID(r.ID) {
+				if r.BracketLane == "finals" || r.Column >= bestCol {
+					bestCol = r.Column
+					fallbackID = r.ID
+					if r.BracketLane == "finals" {
+						break
+					}
+				}
+			}
+		}
+		stageTerminalID[sIdx] = fallbackID
+	}
+
+	// Shift columns and PosX sequentially across topological stages so unified rounds never overlap
+	colOffset := 0
+	posXOffset := 0.0
+	hasAnyExplicitPos := false
+	for _, r := range st.Rounds {
+		if !domain.IsStagePortalRoundID(r.ID) && r.HasPos {
+			hasAnyExplicitPos = true
+			break
+		}
+	}
+
+	newRoundCol := make(map[string]int, len(st.Rounds))
+	for stageSeq, sIdx := range topo {
+		minCol := 0
+		maxCol := 0
+		minPosX := 0.0
+		maxPosX := 0.0
+		firstCol := true
+		firstPos := true
+		for _, r := range st.Rounds {
+			if origRoundStage[r.ID] != sIdx || domain.IsStagePortalRoundID(r.ID) {
+				continue
+			}
+			c := r.Column
+			if c < 1 {
+				c = 1
+			}
+			if firstCol || c < minCol {
+				minCol = c
+			}
+			if firstCol || c > maxCol {
+				maxCol = c
+			}
+			firstCol = false
+			if r.HasPos {
+				if firstPos || r.PosX < minPosX {
+					minPosX = r.PosX
+				}
+				if firstPos || r.PosX > maxPosX {
+					maxPosX = r.PosX
+				}
+				firstPos = false
+			}
+		}
+		if firstCol {
+			continue
+		}
+		shift := colOffset + 1 - minCol
+		stageMaxNewCol := colOffset + 1
+		for i := range st.Rounds {
+			r := &st.Rounds[i]
+			if origRoundStage[r.ID] != sIdx || domain.IsStagePortalRoundID(r.ID) {
+				continue
+			}
+			c := r.Column
+			if c < 1 {
+				c = 1
+			}
+			r.Column = c + shift
+			r.StageIndex = 1
+			newRoundCol[r.ID] = r.Column
+			if r.Column > stageMaxNewCol {
+				stageMaxNewCol = r.Column
+			}
+			if hasAnyExplicitPos && stageSeq > 0 {
+				if r.HasPos {
+					r.PosX = (r.PosX - minPosX) + posXOffset
+				} else {
+					r.HasPos = true
+					r.PosX = posXOffset + float64((r.Column-colOffset-1)*320)
+					r.PosY = 180
+				}
+			}
+		}
+		for i := range st.Heats {
+			h := &st.Heats[i]
+			if origHeatStage[h.ID] != sIdx {
+				continue
+			}
+			if rc, ok := newRoundCol[h.RoundID]; ok && rc > 0 {
+				h.Column = rc
+			} else {
+				c := h.Column
+				if c < 1 {
+					c = 1
+				}
+				h.Column = c + shift
+			}
+			h.StageIndex = 1
+		}
+		colOffset = stageMaxNewCol
+		if !firstPos {
+			span := maxPosX - minPosX
+			if span < 280 {
+				span = 280
+			}
+			posXOffset += span + 360
+		} else {
+			posXOffset += float64((maxCol-minCol+1)*340 + 120)
+		}
+	}
+
+	// Ensure unique Round IDs across merged stages (e.g. if OpenQual stage1-open-qual and stage2-open-qual existed, they are already distinct)
+	// Bridge StageConnections + stage_seeds wires into direct RoundConnections
+	var bridgedConns []domain.RoundConnection
+	seenBridgePair := make(map[[2]string]bool)
+
+	for _, sc := range st.StageConnections {
+		if sc.Invalid {
+			continue
+		}
+		srcID := stageTerminalID[sc.FromStageIndex]
+		if srcID == "" {
+			continue
+		}
+		srcCol := newRoundCol[srcID]
+		scOffset := 0
+		if sc.Mode == "seed_range" && sc.SeedStart > 1 {
+			scOffset = sc.SeedStart - 1
+		}
+		scMax := 0
+		if sc.Mode == "top_n" && sc.Count > 0 {
+			scMax = sc.Count
+		} else if sc.Mode == "seed_range" && sc.SeedEnd > 0 && sc.SeedEnd >= sc.SeedStart {
+			scMax = sc.SeedEnd - scOffset
+		} else if len(st.Stages) == 2 && sc.ToStageIndex == 2 && st.Config.Stage2MaxSeeds > 0 {
+			scMax = st.Config.Stage2MaxSeeds
+		}
+		fromStg := findStagePtr(st, sc.FromStageIndex)
+		seededEarly := st.Stage2SeededEarly || (fromStg != nil && fromStg.CompletedEarly)
+		metric := sc.RankingMetric
+		if metric == "" {
+			metric = st.Config.QualifyingMetric
+		}
+
+		inPortalID := domain.StageHandoffInID(sc.ToStageIndex)
+		matchedPortalWires := 0
+		for _, c := range st.Connections {
+			if c.Invalid || c.FromRoundID != inPortalID || domain.IsStagePortalRoundID(c.ToRoundID) {
+				continue
+			}
+			matchedPortalWires++
+			pair := [2]string{srcID, c.ToRoundID}
+			if seenBridgePair[pair] {
+				continue
+			}
+			seenBridgePair[pair] = true
+
+			wStart := c.SeedStart
+			if wStart < 1 {
+				wStart = 1
+			}
+			wEnd := c.SeedEnd
+			if wEnd <= 0 && scMax > 0 {
+				wEnd = scMax
+			} else if scMax > 0 && wEnd > scMax {
+				wEnd = scMax
+			}
+			absStart := scOffset + wStart
+			absEnd := 0
+			cnt := c.Count
+			if wEnd > 0 && wEnd >= wStart {
+				absEnd = scOffset + wEnd
+				cnt = absEnd - absStart + 1
+			} else if scMax > 0 {
+				absEnd = scOffset + scMax
+				cnt = scMax
+			}
+			dist := c.Distribution
+			if dist == "" {
+				dist = "snake"
+			}
+			bridgedConns = append(bridgedConns, domain.RoundConnection{
+				ID:            fmt.Sprintf("conn-%s-%s-standings_top", srcID, c.ToRoundID),
+				StageIndex:    1,
+				FromRoundID:   srcID,
+				ToRoundID:     c.ToRoundID,
+				FromPort:      "right",
+				ToPort:        "left",
+				Mode:          "standings_top",
+				Count:         cnt,
+				CustomCount:   absStart > 1 || absEnd > 0,
+				SeedStart:     absStart,
+				SeedEnd:       absEnd,
+				Distribution:  dist,
+				RankingMetric: metric,
+				SeededEarly:   seededEarly,
+			})
+		}
+
+		// If downstream stage had no explicit stage_seeds wire (e.g. empty Open Qualifier stage), connect to its first round if any
+		if matchedPortalWires == 0 {
+			for _, r := range st.Rounds {
+				if origRoundStage[r.ID] == sc.ToStageIndex && !domain.IsStagePortalRoundID(r.ID) {
+					pair := [2]string{srcID, r.ID}
+					if !seenBridgePair[pair] {
+						seenBridgePair[pair] = true
+						absStart := scOffset + 1
+						absEnd := 0
+						if scMax > 0 {
+							absEnd = scOffset + scMax
+						}
+						bridgedConns = append(bridgedConns, domain.RoundConnection{
+							ID:            fmt.Sprintf("conn-%s-%s-standings_top", srcID, r.ID),
+							StageIndex:    1,
+							FromRoundID:   srcID,
+							ToRoundID:     r.ID,
+							FromPort:      "right",
+							ToPort:        "left",
+							Mode:          "standings_top",
+							Count:         scMax,
+							CustomCount:   absStart > 1 || absEnd > 0,
+							SeedStart:     absStart,
+							SeedEnd:       absEnd,
+							Distribution:  "snake",
+							RankingMetric: metric,
+							SeededEarly:   seededEarly,
+						})
+					}
+					break
+				}
+			}
+		}
+
+		// Convert FromStageSeed feeders on heats originally in `sc.ToStageIndex` into direct FromRoundID standings feeders
+		for hi := range st.Heats {
+			if origHeatStage[st.Heats[hi].ID] != sc.ToStageIndex {
+				continue
+			}
+			for si := range st.Heats[hi].Seats {
+				s := &st.Heats[hi].Seats[si]
+				if s.Feeder != nil && s.Feeder.FromStageSeed > 0 {
+					absRank := scOffset + s.Feeder.FromStageSeed
+					s.Feeder.FromStageSeed = 0
+					s.Feeder.FromRoundID = srcID
+					s.Feeder.FromRoundColumn = srcCol
+					s.Feeder.FromStandingsRank = absRank
+					s.Feeder.RankingMetric = metric
+					if s.PilotSlotIndex == 0 || strings.HasPrefix(s.SourceLabel, "Seed #") || strings.HasPrefix(s.SourceLabel, "Qual Rank #") {
+						s.SourceLabel = fmt.Sprintf("Seed #%d", absRank)
+					}
+				}
+			}
+		}
+	}
+
+	// Fallback if any FromStageSeed remained without a StageConnection (e.g. root custom stage)
+	fallbackQualID := stageTerminalID[1]
+	fallbackQualCol := newRoundCol[fallbackQualID]
+	for hi := range st.Heats {
+		st.Heats[hi].StageIndex = 1
+		for si := range st.Heats[hi].Seats {
+			s := &st.Heats[hi].Seats[si]
+			if s.Feeder != nil && s.Feeder.FromStageSeed > 0 {
+				absRank := s.Feeder.FromStageSeed
+				s.Feeder.FromStageSeed = 0
+				if fallbackQualID != "" && fallbackQualID != st.Heats[hi].RoundID {
+					s.Feeder.FromRoundID = fallbackQualID
+					s.Feeder.FromRoundColumn = fallbackQualCol
+					s.Feeder.FromStandingsRank = absRank
+					if s.PilotSlotIndex == 0 || strings.HasPrefix(s.SourceLabel, "Seed #") || strings.HasPrefix(s.SourceLabel, "Qual Rank #") {
+						s.SourceLabel = fmt.Sprintf("Seed #%d", absRank)
+					}
+				} else {
+					s.Feeder = nil
+				}
+			}
+		}
+	}
+
+	// Strip portal rounds and portal connections
+	cleanRounds := make([]domain.RaceRound, 0, len(st.Rounds))
+	for _, r := range st.Rounds {
+		if domain.IsStagePortalRoundID(r.ID) {
+			continue
+		}
+		r.StageIndex = 1
+		cleanRounds = append(cleanRounds, r)
+	}
+	st.Rounds = cleanRounds
+
+	cleanConns := make([]domain.RoundConnection, 0, len(st.Connections)+len(bridgedConns))
+	for _, c := range st.Connections {
+		if domain.IsStagePortalRoundID(c.FromRoundID) || domain.IsStagePortalRoundID(c.ToRoundID) ||
+			c.Mode == "qual_feed" || c.Mode == "stage_seeds" {
+			continue
+		}
+		c.StageIndex = 1
+		cleanConns = append(cleanConns, c)
+	}
+	cleanConns = append(cleanConns, bridgedConns...)
+	st.Connections = cleanConns
+
+	// Sort heats in topological stage & order sequence and re-number Order 1..N
+	stagePosInTopo := make(map[int]int, len(topo))
+	for pos, sIdx := range topo {
+		stagePosInTopo[sIdx] = pos
+	}
+	sort.SliceStable(st.Heats, func(i, j int) bool {
+		pi := stagePosInTopo[origHeatStage[st.Heats[i].ID]]
+		pj := stagePosInTopo[origHeatStage[st.Heats[j].ID]]
+		if pi != pj {
+			return pi < pj
+		}
+		return st.Heats[i].Order < st.Heats[j].Order
+	})
+	for i := range st.Heats {
+		st.Heats[i].Order = i + 1
+	}
+
+	// Collapse metadata onto unified Stage 1
+	unifiedSettings := domain.DefaultStageSettingsFromConfig(st.Config, st.Config.MainFormat)
+	anyLegacyCustomized := st.TemplateID == "custom"
+	if len(st.Stages) > 0 {
+		for _, ls := range st.Stages {
+			if ls.Customized {
+				anyLegacyCustomized = true
+				break
+			}
+		}
+		// Preserve PilotsPerHeat / SeatChannels / QualifyingMetric from Stage 1 and TargetLaps / TimeLimitSec from terminal stage
+		sFirst := st.Stages[0].Settings.Normalized(st.Config, st.Stages[0].Format)
+		sLast := st.Stages[len(st.Stages)-1].Settings.Normalized(st.Config, st.Stages[len(st.Stages)-1].Format)
+		unifiedSettings = sLast
+		unifiedSettings.PilotsPerHeat = sFirst.PilotsPerHeat
+		unifiedSettings.SeatChannels = sFirst.SeatChannels
+		unifiedSettings.QualifyingMetric = sFirst.QualifyingMetric
+	}
+
+	st.Config.Structure = domain.StructureSingleStage
+	st.TotalStages = 1
+	st.ActiveStageIndex = 1
+	st.StageConnections = nil
+	st.FormatInvalidReason = ""
+	st.Stages = []domain.RaceStage{
+		{
+			ID:         "stage-1",
+			Index:      1,
+			Title:      DefaultStageTitle(st.Config.MainFormat, 1),
+			Format:     domain.FormatCustom,
+			Customized: anyLegacyCustomized,
+			Status:     domain.StageStatusActive,
+			Settings:   unifiedSettings,
+			HasPos:     true,
+			PosX:       120,
+			PosY:       180,
+		},
+	}
+
+	RebuildEdgesFromFeeders(st)
+	SyncRoundsMetadata(st)
+	return true
 }

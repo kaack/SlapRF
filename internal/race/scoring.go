@@ -69,7 +69,7 @@ func recomputeSeatLaps(seat *domain.HeatSeat, heat *domain.RaceHeat) {
 			synthesized = append(synthesized, domain.HeatCrossing{
 				CrossingID:  cid,
 				TimestampUs: curUs,
-				Invalidated: l.Invalidated,
+				Invalidated: l.Invalidated && l.LapNumber < 0,
 				Manual:      l.Manual,
 				Sectors:     append([]domain.SectorSplit(nil), l.Sectors...),
 			})
@@ -86,7 +86,11 @@ func recomputeSeatLaps(seat *domain.HeatSeat, heat *domain.RaceHeat) {
 	countedLaps := 0
 	var lastCountedElapsedSec float64
 
-	for _, c := range seat.Crossings {
+	for i, c := range seat.Crossings {
+		if i == 0 && c.Invalidated {
+			seat.Crossings[0].Invalidated = false
+			c.Invalidated = false
+		}
 		if c.Invalidated {
 			var invSplitSec float64
 			refUs := prevValidUs
@@ -160,13 +164,15 @@ func recomputeSeatLaps(seat *domain.HeatSeat, heat *domain.RaceHeat) {
 			seat.BestLapSec = splitSec
 		}
 
+		sanitizedSectors := SanitizeLapSectors(c.Sectors, splitSec)
+		seat.Crossings[i].Sectors = sanitizedSectors
 		laps = append(laps, domain.HeatLap{
 			CrossingID:     c.CrossingID,
 			LapNumber:      countedLaps,
 			SplitTimeSec:   splitSec,
 			RaceElapsedSec: elapsedSec,
 			Manual:         c.Manual,
-			Sectors:        c.Sectors,
+			Sectors:        sanitizedSectors,
 		})
 	}
 
@@ -510,3 +516,47 @@ func allInvalid(cs []domain.HeatCrossing) bool {
 func roundMillis(v float64) float64 {
 	return math.Round(v*1000) / 1000
 }
+
+// SanitizeLapSectors repairs sector splits on a completed lap when one sector absorbed a heat-pause
+// or pre-start gap while the lap's true split time (`lapTimeSec`) was measured between start/finish crossings.
+func SanitizeLapSectors(sectors []domain.SectorSplit, lapTimeSec float64) []domain.SectorSplit {
+	if len(sectors) == 0 || !(lapTimeSec > 0) {
+		return sectors
+	}
+	var sum float64
+	maxIdx := 0
+	for i, s := range sectors {
+		sum += s.SplitSeconds
+		if s.SplitSeconds > sectors[maxIdx].SplitSeconds {
+			maxIdx = i
+		}
+	}
+	if sum <= lapTimeSec+0.05 {
+		return sectors
+	}
+	out := append([]domain.SectorSplit(nil), sectors...)
+	if len(out) == 1 {
+		out[0].SplitSeconds = roundMillis(lapTimeSec)
+		return out
+	}
+	otherSum := sum - out[maxIdx].SplitSeconds
+	if otherSum > 0 && otherSum < lapTimeSec {
+		out[maxIdx].SplitSeconds = roundMillis(lapTimeSec - otherSum)
+		return out
+	}
+	if sum > 0 {
+		scale := lapTimeSec / sum
+		var running float64
+		for i := range out {
+			if i == len(out)-1 {
+				out[i].SplitSeconds = roundMillis(math.Max(0.001, lapTimeSec-running))
+			} else {
+				v := roundMillis(math.Max(0.001, out[i].SplitSeconds*scale))
+				out[i].SplitSeconds = v
+				running += v
+			}
+		}
+	}
+	return out
+}
+

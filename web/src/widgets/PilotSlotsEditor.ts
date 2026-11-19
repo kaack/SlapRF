@@ -55,7 +55,15 @@ export class PilotSlotsEditor extends Component {
   private currentPage = 1;
   private mgpImportInFlight = false;
   private mobileSelectedSlot: number | null = null;
+  private lastOpenedDrawerSlot: number | null = null;
+  private mobileDrawerClosing = false;
+  private customSelectOpenOnPointerDown = false;
+  private dirFabOpen = false;
+  private drawerCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  private drawerDragStartY: number | null = null;
   private lastRfLocked = false;
+  private unfilteredMobileHeightPx = 0;
+  private lastUnfilteredPilotCount = 0;
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
     super(el);
@@ -67,12 +75,26 @@ export class PilotSlotsEditor extends Component {
     el.addEventListener("input", this.handleInput);
     el.addEventListener("keydown", this.handleKeyDown);
     el.addEventListener("click", this.handleClick);
+    window.addEventListener("pointerdown", this.handlePrePointerDown, true);
+    el.addEventListener("pointerdown", this.handleDrawerPointerDown);
+    el.addEventListener("pointermove", this.handleDrawerPointerMove);
+    el.addEventListener("pointerup", this.handleDrawerPointerUp);
+    el.addEventListener("pointercancel", this.handleDrawerPointerUp);
     this.onDispose(() => {
+      window.removeEventListener("pointerdown", this.handlePrePointerDown, true);
       el.removeEventListener("submit", this.handleSubmit);
       el.removeEventListener("change", this.handleChange);
       el.removeEventListener("input", this.handleInput);
       el.removeEventListener("keydown", this.handleKeyDown);
       el.removeEventListener("click", this.handleClick);
+      el.removeEventListener("pointerdown", this.handleDrawerPointerDown);
+      el.removeEventListener("pointermove", this.handleDrawerPointerMove);
+      el.removeEventListener("pointerup", this.handleDrawerPointerUp);
+      el.removeEventListener("pointercancel", this.handleDrawerPointerUp);
+      if (this.drawerCloseTimer !== null) {
+        clearTimeout(this.drawerCloseTimer);
+        this.drawerCloseTimer = null;
+      }
     });
     this.onDispose(
       sharedMultiGPService.subscribe(() => {
@@ -236,8 +258,8 @@ export class PilotSlotsEditor extends Component {
     }
     const addBtn = this.el.querySelector<HTMLButtonElement>("[data-action=add-pilot]");
     if (addBtn) {
-      addBtn.disabled = true;
-      addBtn.title = "Search or type a unique callsign to add";
+      addBtn.disabled = false;
+      addBtn.title = "Add a new pilot";
     }
     const noteEl = this.el.querySelector<HTMLElement>("[data-roster-note]");
     if (noteEl) {
@@ -351,12 +373,12 @@ export class PilotSlotsEditor extends Component {
     const exactMatch = trimmedSearch
       ? pilots.find((p) => p.callsign.trim().toLowerCase() === trimmedSearch.toLowerCase())
       : undefined;
-    const addDisabled = !trimmedSearch || !!exactMatch;
+    const addDisabled = !!exactMatch;
     const addBtnTitle = exactMatch
       ? `Pilot “${exactMatch.callsign}” already exists`
       : trimmedSearch
         ? `Add pilot “${trimmedSearch}”`
-        : "Search or type a unique callsign to add";
+        : "Add a new pilot";
 
     const activePill = !trimmedSearch && st.activePillId
       ? st.recentPills.find((p) => p.id === st.activePillId)
@@ -433,7 +455,6 @@ export class PilotSlotsEditor extends Component {
 
     const mobileHtml = this.renderMobilePills(
       shown,
-      pagePilots,
       emptyFilterLabel,
       exactMatch
     );
@@ -448,32 +469,36 @@ export class PilotSlotsEditor extends Component {
     const noteText = this.formatFooterNote(pilots.length, shown.length, isFiltered, rfLocked);
 
     const mgpAvailable = sharedMultiGPService.isAvailable(this.store);
-    const existingMgpBtn = this.el.querySelector<HTMLButtonElement>("[data-action=import-mgp-pilots]");
+    const mobileIoActionsHtml = `
+      ${
+        mgpAvailable
+          ? `<button type="button" class="btn btn-sm pilot-dir-mgp-btn" data-action="import-mgp-pilots" ${this.mgpImportInFlight ? "disabled" : ""} title="Import pilots from MultiGP"><span>${this.mgpImportInFlight ? "Importing…" : "Import from MultiGP"}</span></button>`
+          : ""
+      }
+      <button type="button" class="btn btn-sm pilot-dir-mgp-btn" data-action="upload-pilots-csv" title="Import from CSV"><span>Import from CSV</span></button>
+      <button type="button" class="btn btn-sm pilot-dir-mgp-btn" data-action="download-pilots-csv" title="Export as CSV"><span>Export as CSV</span></button>`;
     const existingTable = this.el.querySelector<HTMLElement>(".slot-table");
     const existingMobileSlot = this.el.querySelector<HTMLElement>("[data-pilot-mobile-slot]");
     const existingMobileEditorSlot = this.el.querySelector<HTMLElement>("[data-pilot-mobile-editor-slot]");
-    const existingFoot = this.el.querySelector<HTMLElement>(".rules-foot");
     const existingPagerSlot = this.el.querySelector<HTMLElement>("[data-pilot-pagination-slot]");
     const existingRecentSlot = this.el.querySelector<HTMLElement>("[data-pilot-recent-slot]");
+    const existingMobileIoSlot = this.el.querySelector<HTMLElement>("[data-pilot-mobile-io-slot]");
     if (
       existingTable &&
       existingMobileSlot &&
       existingMobileEditorSlot &&
-      existingFoot &&
       existingPagerSlot &&
-      existingRecentSlot
+      existingRecentSlot &&
+      existingMobileIoSlot
     ) {
       existingTable.innerHTML = innerHtml;
-      existingMobileSlot.innerHTML = mobileHtml;
-      existingMobileEditorSlot.innerHTML = mobileEditorHtml;
+      this.syncMobilePillsWithLockedHeight(existingMobileSlot, mobileHtml, pilots, isFiltered);
+      if (!this.mobileDrawerClosing) {
+        existingMobileEditorSlot.innerHTML = mobileEditorHtml;
+      }
       existingPagerSlot.innerHTML = paginationHtml;
       existingRecentSlot.innerHTML = recentBarHtml;
-      if (existingMgpBtn) {
-        existingMgpBtn.hidden = !mgpAvailable;
-        existingMgpBtn.disabled = this.mgpImportInFlight;
-        const spanEl = existingMgpBtn.querySelector("span");
-        if (spanEl) spanEl.textContent = this.mgpImportInFlight ? "Downloading…" : "Download from MultiGP";
-      }
+      existingMobileIoSlot.innerHTML = mobileIoActionsHtml;
       const searchEl = this.el.querySelector<HTMLInputElement>("[data-pilot-dir-search]");
       if (searchEl && searchEl.value !== this.searchQuery) {
         searchEl.value = this.searchQuery;
@@ -483,74 +508,150 @@ export class PilotSlotsEditor extends Component {
         addBtn.disabled = addDisabled;
         addBtn.title = addBtnTitle;
       }
-      const noteEl = existingFoot.querySelector<HTMLElement>("[data-roster-note]");
-      if (noteEl) noteEl.textContent = noteText;
       return;
     }
 
     this.el.innerHTML = `
-      <div class="pilot-dir-toolbar">
-        <div class="pilot-dir-search-bar">
-          <div class="pilot-dir-search-wrap">
-            ${icons.search(14)}
-            <input
-              type="search"
-              class="input pilot-dir-search-input"
-              data-pilot-dir-search
-              placeholder="Search or add pilot..."
-              aria-label="Search or add pilot"
-              value="${esc(this.searchQuery)}"
-              autocomplete="off"
-            />
+      <div class="pilot-dir-box-shell">
+        <div class="pilot-dir-toolbar">
+          <div class="pilot-dir-search-bar">
+            <div class="pilot-dir-search-wrap">
+              ${icons.search(14)}
+              <input
+                type="search"
+                class="input pilot-dir-search-input"
+                data-pilot-dir-search
+                placeholder="Search or add pilot..."
+                aria-label="Search or add pilot"
+                value="${esc(this.searchQuery)}"
+                autocomplete="off"
+              />
+            </div>
+            <button class="btn btn-unarmed" type="button" data-action="add-pilot" ${addDisabled ? "disabled" : ""} title="${esc(addBtnTitle)}">${icons.plus(14)}<span>Add</span></button>
           </div>
-          <button class="btn btn-unarmed" type="button" data-action="add-pilot" ${addDisabled ? "disabled" : ""} title="${esc(addBtnTitle)}">${icons.plus(14)}<span>Add</span></button>
         </div>
-      </div>
-      <div data-pilot-recent-slot>${recentBarHtml}</div>
-      <div class="table-scroll">
-        <div class="slot-table has-remove">${innerHtml}
+        <div data-pilot-recent-slot>${recentBarHtml}</div>
+        <div class="table-scroll">
+          <div class="slot-table has-remove">${innerHtml}
+          </div>
         </div>
+        <div class="pilot-dir-mobile-view" data-pilot-mobile-slot>${mobileHtml}</div>
+        <div data-pilot-pagination-slot>${paginationHtml}</div>
       </div>
-      <div class="pilot-dir-mobile-view" data-pilot-mobile-slot>${mobileHtml}</div>
-      <div data-pilot-pagination-slot>${paginationHtml}</div>
+      <div class="pilot-dir-mobile-footer" data-pilot-mobile-io-slot>${mobileIoActionsHtml}</div>
       <div class="pilot-dir-mobile-editor-wrap" data-pilot-mobile-editor-slot>${mobileEditorHtml}</div>
-      <div class="dir-actions-row" role="group" aria-label="Import or export pilots">
-        <button
-          class="btn btn-ghost btn-sm pilot-dir-mgp-btn"
-          type="button"
-          data-action="import-mgp-pilots"
-          ${mgpAvailable ? "" : "hidden"}
-          ${this.mgpImportInFlight ? "disabled" : ""}
-          title="Download &amp; merge chapter pilots from MultiGP"
-          aria-label="Download pilots from MultiGP"
-        >${icons.download(14)}<span>${this.mgpImportInFlight ? "Downloading…" : "Download from MultiGP"}</span></button>
-        <button
-          class="btn btn-ghost btn-sm"
-          type="button"
-          data-action="download-pilots-csv"
-          title="Download pilots roster (CSV)"
-          aria-label="Download pilots roster as CSV"
-        >${icons.download(14)}<span>Download CSV</span></button>
-        <button
-          class="btn btn-ghost btn-sm"
-          type="button"
-          data-action="upload-pilots-csv"
-          title="Upload &amp; merge pilots roster (CSV)"
-          aria-label="Upload and merge pilots roster CSV"
-        >${icons.upload(14)}<span>Upload CSV</span></button>
-        <input type="file" accept=".csv,text/csv" data-pilot-csv-input hidden />
-      </div>
-      <div class="rules-foot">
-        <p class="note" data-roster-note>${esc(noteText)}</p>
-        <div class="rules-foot-actions">
-          <button class="btn btn-ghost btn-sm" type="button" data-action="restore-default-pilots">Restore defaults</button>
+      <input type="file" accept=".csv,text/csv" data-pilot-csv-input hidden />`;
+
+    const freshMobileSlot = this.el.querySelector<HTMLElement>("[data-pilot-mobile-slot]");
+    if (freshMobileSlot) {
+      this.syncMobilePillsWithLockedHeight(freshMobileSlot, mobileHtml, pilots, isFiltered);
+    }
+  }
+
+  private syncMobilePillsWithLockedHeight(
+    mobileSlot: HTMLElement,
+    mobileHtml: string,
+    allPilots: PilotSlot[],
+    isFiltered: boolean
+  ): void {
+    if (typeof window === "undefined" || window.innerWidth > 768) {
+      mobileSlot.style.minHeight = "";
+      mobileSlot.innerHTML = mobileHtml;
+      return;
+    }
+    if (!isFiltered || this.lastUnfilteredPilotCount !== allPilots.length || this.unfilteredMobileHeightPx <= 0) {
+      mobileSlot.style.minHeight = "";
+      mobileSlot.innerHTML = isFiltered ? this.renderMobilePills(allPilots, "", undefined) : mobileHtml;
+      const measured = Math.round(mobileSlot.getBoundingClientRect().height);
+      if (measured > 0) {
+        this.unfilteredMobileHeightPx = measured;
+        this.lastUnfilteredPilotCount = allPilots.length;
+      }
+      if (isFiltered) {
+        mobileSlot.innerHTML = mobileHtml;
+      }
+    } else {
+      mobileSlot.innerHTML = mobileHtml;
+    }
+
+    if (isFiltered && this.unfilteredMobileHeightPx > 0) {
+      mobileSlot.style.minHeight = `${this.unfilteredMobileHeightPx}px`;
+    } else {
+      mobileSlot.style.minHeight = "";
+    }
+  }
+
+  private renderDirectoryFab(mgpAvailable: boolean): string {
+    const rows: Array<{ labelHtml: string; btnHtml: string }> = [
+      {
+        labelHtml: `<button type="button" class="rc-fab-label is-action" data-action="fab-add-pilot">Add Pilot</button>`,
+        btnHtml: `<button type="button" class="rc-fab-btn" data-action="fab-add-pilot" title="Add Pilot" aria-label="Add Pilot">${icons.plus(16)}</button>`,
+      },
+      ...(mgpAvailable
+        ? [
+            {
+              labelHtml: `<button type="button" class="rc-fab-label is-action" data-action="import-mgp-pilots" ${this.mgpImportInFlight ? "disabled" : ""}>${this.mgpImportInFlight ? "Syncing…" : "Sync from MultiGP"}</button>`,
+              btnHtml: `<button type="button" class="rc-fab-btn" data-action="import-mgp-pilots" ${this.mgpImportInFlight ? "disabled" : ""} title="Sync from MultiGP" aria-label="Sync from MultiGP">${icons.download(16)}</button>`,
+            },
+          ]
+        : []),
+      {
+        labelHtml: `<button type="button" class="rc-fab-label is-action" data-action="download-pilots-csv">Download CSV</button>`,
+        btnHtml: `<button type="button" class="rc-fab-btn" data-action="download-pilots-csv" title="Download CSV" aria-label="Download CSV">${icons.download(16)}</button>`,
+      },
+      {
+        labelHtml: `<button type="button" class="rc-fab-label is-action" data-action="upload-pilots-csv">Upload CSV</button>`,
+        btnHtml: `<button type="button" class="rc-fab-btn" data-action="upload-pilots-csv" title="Upload CSV" aria-label="Upload CSV">${icons.upload(16)}</button>`,
+      },
+    ];
+    const total = rows.length;
+    const itemsHtml = rows
+      .map(
+        (r, idx) => `
+          <div class="rc-fab-row" style="--from-dial:${total - 1 - idx};--from-top:${idx}">
+            ${r.labelHtml}
+            ${r.btnHtml}
+          </div>`
+      )
+      .join("");
+
+    return `
+      <div class="rc-fab-menu dir-fab-menu ${this.dirFabOpen ? "is-open" : ""}">
+        <div class="rc-fab-drawer" aria-hidden="${this.dirFabOpen ? "false" : "true"}" ${this.dirFabOpen ? "" : "inert"}>
+          <div class="rc-fab-items">${itemsHtml}</div>
         </div>
+        <button
+          type="button"
+          class="rc-fab-main"
+          data-action="toggle-dir-fab"
+          aria-expanded="${this.dirFabOpen ? "true" : "false"}"
+          title="${this.dirFabOpen ? "Close actions menu" : "Pilot actions"}"
+          aria-label="Pilot actions"
+        >
+          <span class="rc-fab-icon rc-fab-icon-plus">${icons.plus(20)}</span>
+          <span class="rc-fab-icon rc-fab-icon-back">${icons.menuBack(19)}</span>
+        </button>
       </div>`;
+  }
+
+  private syncDirFabDom(): void {
+    const fabEl = this.el.querySelector<HTMLElement>(".dir-fab-menu");
+    if (!fabEl) return;
+    fabEl.classList.toggle("is-open", this.dirFabOpen);
+    const drawer = fabEl.querySelector<HTMLElement>(".rc-fab-drawer");
+    if (drawer) {
+      drawer.setAttribute("aria-hidden", this.dirFabOpen ? "false" : "true");
+      if (this.dirFabOpen) drawer.removeAttribute("inert");
+      else drawer.setAttribute("inert", "");
+    }
+    const mainBtn = fabEl.querySelector<HTMLButtonElement>(".rc-fab-main");
+    if (mainBtn) {
+      mainBtn.setAttribute("aria-expanded", this.dirFabOpen ? "true" : "false");
+    }
   }
 
   private renderMobilePills(
     shown: PilotSlot[],
-    pagePilots: PilotSlot[],
     emptyFilterLabel: string,
     exactMatch: PilotSlot | undefined
   ): string {
@@ -559,7 +660,7 @@ export class PilotSlotsEditor extends Component {
     }
     return `
       <div class="pilot-dir-mobile-pills" role="listbox" aria-label="Pilots">
-        ${pagePilots
+        ${shown
           .map((p) => {
             const isSelected = this.mobileSelectedSlot === p.slotIndex;
             const isExact = !!exactMatch && p.slotIndex === exactMatch.slotIndex;
@@ -586,9 +687,17 @@ export class PilotSlotsEditor extends Component {
     canRemove: boolean,
     rfLocked: boolean
   ): string {
-    if (this.mobileSelectedSlot === null) return "";
+    if (this.mobileSelectedSlot === null) {
+      this.lastOpenedDrawerSlot = null;
+      return "";
+    }
     const p = pilots.find((x) => x.slotIndex === this.mobileSelectedSlot);
-    if (!p) return "";
+    if (!p) {
+      this.lastOpenedDrawerSlot = null;
+      return "";
+    }
+    const shouldAnimateEntry = this.lastOpenedDrawerSlot !== p.slotIndex;
+    this.lastOpenedDrawerSlot = p.slotIndex;
 
     const isLapRF = this.store.timingHardwareMode === "laprf";
     const isRH = isRotorHazardMode(this.store.timingHardwareMode);
@@ -672,60 +781,62 @@ export class PilotSlotsEditor extends Component {
         </div>`;
 
     return `
-      <div class="pilot-dir-mobile-editor">
-        <div class="pilot-dir-mobile-editor-head">
-          <div class="pilot-dir-mobile-editor-title">
-            <span class="dot" style="--c:${esc(p.color)}"></span>
-            <strong>${esc(p.callsign)}</strong>
-            ${p.mgpPilotId ? `<span class="badge pilot-mgp-badge mono">MGP</span>` : ""}
-          </div>
-          <div class="pilot-dir-mobile-editor-head-actions">
+      <div class="pilot-dir-mobile-drawer-overlay" role="dialog" aria-modal="true" aria-label="Edit ${esc(p.callsign)}">
+        <div class="pilot-dir-mobile-drawer-backdrop" data-mobile-pilot-close></div>
+        <div class="pilot-dir-mobile-editor ${shouldAnimateEntry ? "is-entering" : ""}" data-mobile-pilot-drawer>
+          <div class="dir-mobile-drawer-top-bar" data-mobile-pilot-handle>
             <button
               type="button"
-              class="btn btn-ghost btn-xs"
+              class="pilot-dir-mobile-drawer-handle"
+              data-mobile-pilot-handle
+              data-mobile-pilot-close
+              aria-label="Dismiss pilot editor"
+              title="Pull down or tap to dismiss"
+            >
+              <span class="pilot-dir-mobile-drawer-grip" aria-hidden="true"></span>
+            </button>
+          </div>
+          <form class="pilot-dir-mobile-form" data-pilot="${p.slotIndex}">
+            <div class="pilot-dir-mobile-grid">
+              <label class="field">
+                <span>Pilot</span>
+                <div class="input-with-dot ${p.mgpPilotId ? "has-mgp" : ""}">
+                  <span class="dot" style="--c:${esc(p.color)}"></span>
+                  <input class="input" name="callsign" value="${esc(p.callsign)}" maxlength="32" autocomplete="off" />
+                  ${p.mgpPilotId ? `<span class="badge pilot-mgp-badge mono">MGP</span>` : ""}
+                </div>
+              </label>
+              <label class="field">
+                <span>Phonetic name</span>
+                <input class="input" name="phoneticName" value="${esc(p.phoneticName ?? "")}" maxlength="32" autocomplete="off" />
+              </label>
+              <div class="field">
+                <span>Default channel</span>
+                <select class="input" name="channel" ${rfLocked ? "disabled" : ""}>${options}</select>
+              </div>
+              <div class="pilot-dir-mobile-thresh-row">
+                <label class="field">
+                  <span>${col4Label}</span>
+                  ${col4Html}
+                </label>
+                <label class="field">
+                  <span>${col5Label}</span>
+                  ${col5Html}
+                </label>
+              </div>
+            </div>
+          </form>
+          <div class="dir-mobile-drawer-actions is-single-action">
+            <button
+              type="button"
+              class="btn btn-ghost dir-mobile-drawer-btn"
               data-remove-pilot="${p.slotIndex}"
               ${canRemove && !rfLocked ? "" : "disabled"}
-              title="${canRemove ? `Remove ${esc(p.callsign)}` : "At least 2 pilots are required"}"
-              aria-label="Remove ${esc(p.callsign)}"
-            >${icons.trash(13)}<span>Remove</span></button>
-            <button
-              type="button"
-              class="btn btn-ghost btn-xs"
-              data-mobile-pilot-close
-              aria-label="Close pilot editor"
-            >${icons.close(14)}</button>
+              title="${canRemove ? `Delete ${esc(p.callsign)}` : "At least 2 pilots are required"}"
+              aria-label="Delete ${esc(p.callsign)}"
+            >${icons.trash(15)}<span>Delete</span></button>
           </div>
         </div>
-        <form class="pilot-dir-mobile-form" data-pilot="${p.slotIndex}">
-          <div class="pilot-dir-mobile-grid">
-            <label class="field">
-              <span>Pilot</span>
-              <div class="input-with-dot ${p.mgpPilotId ? "has-mgp" : ""}">
-                <span class="dot" style="--c:${esc(p.color)}"></span>
-                <input class="input" name="callsign" value="${esc(p.callsign)}" maxlength="32" autocomplete="off" />
-                ${p.mgpPilotId ? `<span class="badge pilot-mgp-badge mono">MGP</span>` : ""}
-              </div>
-            </label>
-            <label class="field">
-              <span>Phonetic name</span>
-              <input class="input" name="phoneticName" value="${esc(p.phoneticName ?? "")}" maxlength="32" autocomplete="off" />
-            </label>
-            <label class="field">
-              <span>Default channel</span>
-              <select class="input" name="channel" ${rfLocked ? "disabled" : ""}>${options}</select>
-            </label>
-            <div class="pilot-dir-mobile-thresh-row">
-              <label class="field">
-                <span>${col4Label}</span>
-                ${col4Html}
-              </label>
-              <label class="field">
-                <span>${col5Label}</span>
-                ${col5Html}
-              </label>
-            </div>
-          </div>
-        </form>
       </div>`;
   }
 
@@ -875,20 +986,91 @@ export class PilotSlotsEditor extends Component {
     }
   };
 
+  private dismissMobileDrawer(): void {
+    if (this.mobileSelectedSlot === null || this.mobileDrawerClosing) return;
+    const overlay = this.el.querySelector<HTMLElement>(".pilot-dir-mobile-drawer-overlay");
+    if (!overlay) {
+      this.mobileSelectedSlot = null;
+      this.lastOpenedDrawerSlot = null;
+      this.render();
+      return;
+    }
+    this.mobileDrawerClosing = true;
+    overlay.classList.add("is-closing");
+    this.el.querySelectorAll<HTMLElement>(".pilot-dir-mobile-pill.is-selected").forEach((pill) => {
+      pill.classList.remove("is-selected");
+      pill.setAttribute("aria-selected", "false");
+    });
+    if (this.drawerCloseTimer !== null) {
+      clearTimeout(this.drawerCloseTimer);
+    }
+    this.drawerCloseTimer = setTimeout(() => {
+      this.drawerCloseTimer = null;
+      if (!this.mobileDrawerClosing) return;
+      this.mobileDrawerClosing = false;
+      this.mobileSelectedSlot = null;
+      this.lastOpenedDrawerSlot = null;
+      this.render();
+    }, 200);
+  }
+
+  private handlePrePointerDown = (e: PointerEvent): void => {
+    this.customSelectOpenOnPointerDown = isCustomSelectOpenWithin(this.el);
+    if (this.dirFabOpen) {
+      const t = e.target as HTMLElement | null;
+      if (!t || !t.closest(".dir-fab-menu")) {
+        this.dirFabOpen = false;
+        this.syncDirFabDom();
+      }
+    }
+  };
+
+  private handleDrawerPointerDown = (e: PointerEvent): void => {
+    const t = e.target as HTMLElement | null;
+    if (!t || !t.closest("[data-mobile-pilot-handle]") || t.closest("[data-remove-pilot]")) return;
+    if (e.button !== 0 && e.pointerType === "mouse") return;
+    this.drawerDragStartY = e.clientY;
+  };
+
+  private handleDrawerPointerMove = (e: PointerEvent): void => {
+    if (this.drawerDragStartY === null) return;
+    const dy = e.clientY - this.drawerDragStartY;
+    if (dy >= 22) {
+      this.drawerDragStartY = null;
+      this.dismissMobileDrawer();
+    }
+  };
+
+  private handleDrawerPointerUp = (): void => {
+    this.drawerDragStartY = null;
+  };
+
   private handleClick = (e: Event): void => {
     const target = e.target as HTMLElement;
     const mobileSelectBtn = target.closest<HTMLButtonElement>("[data-mobile-pilot-select]");
     if (mobileSelectBtn) {
       const slot = Number(mobileSelectBtn.dataset.mobilePilotSelect);
       if (Number.isFinite(slot) && slot > 0) {
-        this.mobileSelectedSlot = this.mobileSelectedSlot === slot ? null : slot;
-        this.render();
+        if (this.drawerCloseTimer !== null) {
+          clearTimeout(this.drawerCloseTimer);
+          this.drawerCloseTimer = null;
+        }
+        if (this.mobileSelectedSlot === slot && !this.mobileDrawerClosing) {
+          this.dismissMobileDrawer();
+        } else {
+          this.mobileDrawerClosing = false;
+          this.mobileSelectedSlot = slot;
+          this.render();
+        }
       }
       return;
     }
     if (target.closest("[data-mobile-pilot-close]")) {
-      this.mobileSelectedSlot = null;
-      this.render();
+      if (this.customSelectOpenOnPointerDown) {
+        this.customSelectOpenOnPointerDown = false;
+        return;
+      }
+      this.dismissMobileDrawer();
       return;
     }
     const recentSelectBtn = target.closest<HTMLButtonElement>("[data-recent-select]");
@@ -1043,12 +1225,54 @@ export class PilotSlotsEditor extends Component {
       }
       return;
     }
-    const addBtn = target.closest<HTMLButtonElement>("[data-action=add-pilot]");
+    if (target.closest("[data-action=toggle-dir-fab]")) {
+      this.dirFabOpen = !this.dirFabOpen;
+      this.syncDirFabDom();
+      return;
+    }
+    const addBtn = target.closest<HTMLButtonElement>("[data-action=add-pilot], [data-action=fab-add-pilot]");
     if (addBtn && !addBtn.disabled) {
-      this.submitSearchAddPilot(true);
+      this.dirFabOpen = false;
+      this.syncDirFabDom();
+      const trimmed = this.searchQuery.trim();
+      if (trimmed && !this.hasDuplicateCallsign(trimmed, -1)) {
+        this.submitSearchAddPilot(true);
+        return;
+      }
+      let idx = this.store.pilots.length + 1;
+      let nextName = `Pilot ${idx}`;
+      while (this.hasDuplicateCallsign(nextName, -1)) {
+        idx++;
+        nextName = `Pilot ${idx}`;
+      }
+      void this.api
+        .addPilot(nextName)
+        .then(() => {
+          const added = [...this.store.pilots]
+            .reverse()
+            .find((p) => p.callsign.trim().toLowerCase() === nextName.toLowerCase());
+          if (added) {
+            if (window.innerWidth <= 768) {
+              this.mobileSelectedSlot = added.slotIndex;
+            }
+            this.upsertRecentPill(
+              {
+                id: `pilot:${added.slotIndex}`,
+                kind: "pilot",
+                slotIndex: added.slotIndex,
+                fallbackCallsign: added.callsign,
+              },
+              true
+            );
+          }
+          this.render();
+        })
+        .catch((err) => showToast(err instanceof Error ? err.message : String(err), "error"));
       return;
     }
     if (target.closest("[data-action=import-mgp-pilots]")) {
+      this.dirFabOpen = false;
+      this.syncDirFabDom();
       if (this.mgpImportInFlight) return;
       this.mgpImportInFlight = true;
       this.render();
@@ -1075,6 +1299,8 @@ export class PilotSlotsEditor extends Component {
       return;
     }
     if (target.closest("[data-action=download-pilots-csv]")) {
+      this.dirFabOpen = false;
+      this.syncDirFabDom();
       void this.api
         .downloadPilotsRosterCsv()
         .then(() => showToast("Downloaded pilots roster CSV", "info"))
@@ -1082,6 +1308,8 @@ export class PilotSlotsEditor extends Component {
       return;
     }
     if (target.closest("[data-action=upload-pilots-csv]")) {
+      this.dirFabOpen = false;
+      this.syncDirFabDom();
       const fileInput = this.el.querySelector<HTMLInputElement>("[data-pilot-csv-input]");
       if (fileInput) {
         fileInput.value = "";
@@ -1151,6 +1379,9 @@ export class PilotSlotsEditor extends Component {
           .reverse()
           .find((p) => p.callsign.trim().toLowerCase() === trimmed.toLowerCase());
         if (added) {
+          if (window.innerWidth <= 768) {
+            this.mobileSelectedSlot = added.slotIndex;
+          }
           this.upsertRecentPill(
             {
               id: `pilot:${added.slotIndex}`,

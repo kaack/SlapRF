@@ -5,6 +5,7 @@ import (
 	"math"
 	"sort"
 	"strings"
+	"time"
 
 	"slaprf/internal/domain"
 	"slaprf/internal/dsp"
@@ -18,7 +19,7 @@ type PracticeEventSubscriber interface {
 
 // PracticeActionPayload represents a Practice Session CRUD, RF activation, or session pilot action.
 type PracticeActionPayload struct {
-	Action         string      `json:"action"` // "create_session" | "select_session" | "rename_session" | "set_session_tags" | "delete_session" | "start_session" | "resume_session" | "pause_session" | "stop_session" | "add_session_pilot" | "remove_session_pilot" | "set_session_pilot_channel" | "clear_session_laps"
+	Action         string      `json:"action"` // "create_session" | "select_session" | "rename_session" | "set_session_tags" | "delete_session" | "start_session" | "resume_session" | "pause_session" | "stop_session" | "add_session_pilot" | "remove_session_pilot" | "set_session_pilot_channel" | "clear_session_laps" | "toggle_session_lap"
 	SessionID      string      `json:"sessionId,omitempty"`
 	Name           string      `json:"name,omitempty"`
 	Tags           []string    `json:"tags,omitempty"`
@@ -29,6 +30,7 @@ type PracticeActionPayload struct {
 	PhoneticName   string      `json:"phoneticName,omitempty"`
 	Band           domain.Band `json:"band,omitempty"`
 	Channel        uint8       `json:"channel,omitempty"`
+	LapID          uint64      `json:"lapId,omitempty"`
 }
 
 func clonePracticeSession(s domain.PracticeSession) domain.PracticeSession {
@@ -221,6 +223,7 @@ func (e *Engine) ensurePracticeStateInitializedLocked() {
 		} else if len(s.TrackSnapshot) == 0 {
 			s.TrackSnapshot = e.snapshotOrderedGatesLocked()
 		}
+		e.recomputePracticeSessionLapsLocked(s)
 		s.Summaries = e.computePracticeSessionSummariesLocked(s)
 	}
 	e.disambiguateDuplicatePracticeNamesLocked()
@@ -305,6 +308,98 @@ func (e *Engine) disambiguateDuplicatePracticeNamesLocked() {
 	}
 }
 
+// recomputePracticeSessionLapsLocked ensures wall-clock CompletedAtMs timestamps exist on all laps
+// and recomputes personal bests, deltas, and sector split badges across valid (non-invalidated) laps.
+func (e *Engine) recomputePracticeSessionLapsLocked(sess *domain.PracticeSession) {
+	if sess == nil || len(sess.Laps) == 0 {
+		return
+	}
+	var baseTime time.Time
+	if sess.CreatedAt != "" {
+		if parsed, err := time.Parse(time.RFC3339, sess.CreatedAt); err == nil {
+			baseTime = parsed
+		}
+	}
+	var minUs uint64
+	for i, l := range sess.Laps {
+		if i == 0 || l.CompletedAtUs < minUs {
+			minUs = l.CompletedAtUs
+		}
+	}
+	bestBySlot := make(map[int]float64)
+	overallBestSec := make(map[string]float64)
+	pilotBestSec := make(map[string]float64)
+
+	for i := range sess.Laps {
+		l := &sess.Laps[i]
+		if l.CompletedAtMs <= 0 {
+			if !baseTime.IsZero() && l.CompletedAtUs >= minUs {
+				l.CompletedAtMs = baseTime.Add(time.Duration(l.CompletedAtUs-minUs)*time.Microsecond + 15*time.Second).UnixMilli()
+			} else {
+				l.CompletedAtMs = e.wallClockMsForTimestampLocked(l.CompletedAtUs)
+			}
+		}
+		if l.Invalidated || !(l.LapTimeSec > 0) {
+			continue
+		}
+		if cur, ok := bestBySlot[l.SlotIndex]; !ok || l.LapTimeSec < cur {
+			bestBySlot[l.SlotIndex] = l.LapTimeSec
+		}
+		for _, split := range l.Sectors {
+			if !(split.SplitSeconds > 0) {
+				continue
+			}
+			pKey := pairKey(split.FromGateID, split.ToGateID)
+			sKey := sectorKey(l.SlotIndex, pKey)
+			if cur, ok := overallBestSec[pKey]; !ok || split.SplitSeconds < cur {
+				overallBestSec[pKey] = split.SplitSeconds
+			}
+			if cur, ok := pilotBestSec[sKey]; !ok || split.SplitSeconds < cur {
+				pilotBestSec[sKey] = split.SplitSeconds
+			}
+		}
+	}
+
+	for i := range sess.Laps {
+		l := &sess.Laps[i]
+		if l.Invalidated {
+			l.IsBestLap = false
+			continue
+		}
+		bestLap := bestBySlot[l.SlotIndex]
+		if bestLap > 0 {
+			l.IsBestLap = math.Abs(l.LapTimeSec-bestLap) < 0.0005
+			if l.IsBestLap {
+				l.DeltaToBest = 0
+			} else {
+				l.DeltaToBest = round3(l.LapTimeSec - bestLap)
+			}
+		}
+		for si := range l.Sectors {
+			sp := &l.Sectors[si]
+			pKey := pairKey(sp.FromGateID, sp.ToGateID)
+			sKey := sectorKey(l.SlotIndex, pKey)
+			pBest := pilotBestSec[sKey]
+			oBest := overallBestSec[pKey]
+			if pBest > 0 {
+				sp.DeltaToBestSec = round3(sp.SplitSeconds - pBest)
+			} else {
+				sp.DeltaToBestSec = 0
+			}
+			switch {
+			case oBest > 0 && sp.SplitSeconds <= oBest+0.0005:
+				sp.Badge = domain.BadgeOverallBest
+			case pBest > 0 && sp.SplitSeconds <= pBest+0.0005:
+				sp.Badge = domain.BadgePersonalBest
+			case pBest > 0 && sp.SplitSeconds > pBest*1.10:
+				sp.Badge = domain.BadgeOffPace
+			default:
+				sp.Badge = domain.BadgeNormal
+			}
+		}
+	}
+}
+
 // computePracticeSessionSummariesLocked computes PilotTrackSummary rows strictly for the pilots
 // currently assigned in `sess.Pilots`, derived from `sess.Laps`.
 func (e *Engine) computePracticeSessionSummariesLocked(sess *domain.PracticeSession) []domain.PilotTrackSummary {
@@ -324,9 +419,12 @@ func (e *Engine) computePracticeSessionSummariesLocked(sess *domain.PracticeSess
 	}
 	numSectors := len(ordered)
 
-	// Index sector splits per (slotIndex, "from>to") from sess.Laps
+	// Index sector splits per (slotIndex, "from>to") from valid sess.Laps
 	secHist := make(map[string][]domain.SectorSplit)
 	for _, l := range sess.Laps {
+		if l.Invalidated {
+			continue
+		}
 		for _, split := range l.Sectors {
 			sKey := sectorKey(l.SlotIndex, pairKey(split.FromGateID, split.ToGateID))
 			secHist[sKey] = append(secHist[sKey], split)
@@ -338,6 +436,9 @@ func (e *Engine) computePracticeSessionSummariesLocked(sess *domain.PracticeSess
 		var lapsCompleted int
 		var lastLapSec, bestLapSec float64
 		for _, l := range sess.Laps {
+			if l.Invalidated {
+				continue
+			}
 			if l.SlotIndex == sp.SlotIndex {
 				lapsCompleted++
 				lastLapSec = l.LapTimeSec
@@ -542,40 +643,40 @@ func (e *Engine) syncPracticeSessionRFSlotsLocked(sess *domain.PracticeSession) 
 	for _, sp := range sess.Pilots {
 		bySlot[sp.SlotIndex] = sp
 	}
-	enabledCount := 0
-	usedCh := make(map[uint16]bool)
-	for i := range e.pilots {
-		if sp, ok := bySlot[e.pilots[i].SlotIndex]; ok && enabledCount < domain.MaxPilotSlots {
-			band := sp.Band
-			if band == 0 {
-				band = domain.BandRaceband
+		enabledCount := 0
+		usedCh := make(map[uint16]bool)
+		for i := range e.pilots {
+			if sp, ok := bySlot[e.pilots[i].SlotIndex]; ok {
+				band := sp.Band
+				if band == 0 {
+					band = domain.BandRaceband
+				}
+				ch := sp.Channel
+				freq := sp.FrequencyMHz
+				if ch == 0 {
+					freq = 0
+				} else if freq == 0 {
+					freq = domain.FrequencyForBandChannel(band, ch)
+				}
+				chKey := freq
+				if chKey == 0 && ch > 0 {
+					chKey = (uint16(band) << 8) | uint16(ch)
+				}
+				if ch > 0 && (usedCh[chKey] || enabledCount >= domain.MaxPilotSlots) {
+					ch = 0
+					freq = 0
+				} else if ch > 0 {
+					usedCh[chKey] = true
+					enabledCount++
+				}
+				e.pilots[i].Enabled = ch > 0
+				e.pilots[i].Band = band
+				e.pilots[i].Channel = ch
+				e.pilots[i].FrequencyMHz = freq
+			} else {
+				e.pilots[i].Enabled = false
 			}
-			ch := sp.Channel
-			freq := sp.FrequencyMHz
-			if ch == 0 {
-				freq = 0
-			} else if freq == 0 {
-				freq = domain.FrequencyForBandChannel(band, ch)
-			}
-			chKey := freq
-			if chKey == 0 && ch > 0 {
-				chKey = (uint16(band) << 8) | uint16(ch)
-			}
-			if ch > 0 && usedCh[chKey] {
-				ch = 0
-				freq = 0
-			} else if ch > 0 {
-				usedCh[chKey] = true
-			}
-			e.pilots[i].Enabled = true
-			e.pilots[i].Band = band
-			e.pilots[i].Channel = ch
-			e.pilots[i].FrequencyMHz = freq
-			enabledCount++
-		} else {
-			e.pilots[i].Enabled = false
 		}
-	}
 }
 
 // applyPracticeSessionToEngineLocked loads `sess`'s pilots and recorded laps/crossings into the
@@ -594,6 +695,9 @@ func (e *Engine) applyPracticeSessionToEngineLocked(sess *domain.PracticeSession
 	for _, lap := range e.laps {
 		if lap.LapID > e.nextLapID {
 			e.nextLapID = lap.LapID
+		}
+		if lap.Invalidated {
+			continue
 		}
 		for _, split := range lap.Sectors {
 			pKey := pairKey(split.FromGateID, split.ToGateID)
@@ -996,12 +1100,6 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 			}
 		}
 
-		if existingIdx < 0 && len(target.Pilots) >= domain.MaxPilotSlots {
-			snap := clonePracticeManagerState(e.practiceState)
-			e.mu.Unlock()
-			return snap, fmt.Errorf("at most %d pilots can be active in a practice session", domain.MaxPilotSlots)
-		}
-
 		var band domain.Band
 		var chosenCh uint8
 		var freq uint16
@@ -1178,6 +1276,54 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 		target.UpdatedAt = now
 		if target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked() {
 			e.resetSessionLocked()
+		}
+		target.Summaries = e.computePracticeSessionSummariesLocked(target)
+
+	case "toggle_session_lap":
+		target := e.findPracticeSessionLocked(resolveTargetID())
+		if target == nil {
+			snap := clonePracticeManagerState(e.practiceState)
+			e.mu.Unlock()
+			return snap, fmt.Errorf("practice session not found")
+		}
+		foundLap := false
+		for i := range target.Laps {
+			if target.Laps[i].LapID == req.LapID {
+				target.Laps[i].Invalidated = !target.Laps[i].Invalidated
+				foundLap = true
+				break
+			}
+		}
+		if !foundLap {
+			snap := clonePracticeManagerState(e.practiceState)
+			e.mu.Unlock()
+			return snap, fmt.Errorf("lap %d not found in session", req.LapID)
+		}
+		e.recomputePracticeSessionLapsLocked(target)
+		target.UpdatedAt = now
+		if target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked() {
+			e.laps = cloneLaps(target.Laps)
+			e.overallBestSec = make(map[string]float64)
+			e.pilotBestSec = make(map[string]float64)
+			e.sectorHistory = make(map[string][]domain.SectorSplit)
+			for _, lap := range e.laps {
+				if lap.Invalidated {
+					continue
+				}
+				for _, split := range lap.Sectors {
+					pKey := pairKey(split.FromGateID, split.ToGateID)
+					sKey := sectorKey(lap.SlotIndex, pKey)
+					e.sectorHistory[sKey] = append(e.sectorHistory[sKey], split)
+					if split.SplitSeconds > 0 {
+						if e.overallBestSec[pKey] == 0 || split.SplitSeconds < e.overallBestSec[pKey] {
+							e.overallBestSec[pKey] = split.SplitSeconds
+						}
+						if e.pilotBestSec[sKey] == 0 || split.SplitSeconds < e.pilotBestSec[sKey] {
+							e.pilotBestSec[sKey] = split.SplitSeconds
+						}
+					}
+				}
+			}
 		}
 		target.Summaries = e.computePracticeSessionSummariesLocked(target)
 

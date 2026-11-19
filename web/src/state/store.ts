@@ -477,9 +477,28 @@ export class AppStore {
   }
 
   private get isLiveRaceHeatRunning(): boolean {
+    if (Boolean(this._practiceState?.activeSessionId)) {
+      return false;
+    }
+    const rs = this._raceState;
+    if (
+      rs &&
+      rs.lifecycle !== "paused" &&
+      rs.lifecycle !== "completed" &&
+      rs.lifecycle !== "scrapped" &&
+      rs.heats?.some((h) => h.state === "countdown" || h.state === "running")
+    ) {
+      return true;
+    }
     return Boolean(
-      this._raceState?.mode === "race" &&
-        this._raceState?.heats?.some((h) => h.state === "countdown" || h.state === "running")
+      this._eventState.races.some(
+        (r) =>
+          r.generated &&
+          r.lifecycle !== "paused" &&
+          r.lifecycle !== "completed" &&
+          r.lifecycle !== "scrapped" &&
+          r.heats?.some((h) => h.state === "countdown" || h.state === "running")
+      )
     );
   }
 
@@ -714,12 +733,57 @@ export class AppStore {
 
   /** Returns all counted LapRecords for an Analytics scope (Practice Session or Race). */
   public analyticsLapsForScope(resolved: ResolvedAnalyticsScope): LapRecord[] {
+    const sanitizeLapSectors = (lap: LapRecord): LapRecord => {
+      const sectors = lap.sectors;
+      const lapTime = lap.lapTimeSec;
+      if (!Array.isArray(sectors) || sectors.length === 0 || !(lapTime > 0)) {
+        return lap;
+      }
+      let sum = 0;
+      let maxIdx = 0;
+      for (let i = 0; i < sectors.length; i++) {
+        const sec = sectors[i].splitSeconds;
+        sum += sec;
+        if (sec > sectors[maxIdx].splitSeconds) {
+          maxIdx = i;
+        }
+      }
+      if (sum <= lapTime + 0.05) {
+        return lap;
+      }
+      const nextSectors = sectors.map((s) => ({ ...s }));
+      if (nextSectors.length === 1) {
+        nextSectors[0].splitSeconds = Math.round(lapTime * 1000) / 1000;
+        return { ...lap, sectors: nextSectors };
+      }
+      const otherSum = sum - nextSectors[maxIdx].splitSeconds;
+      if (otherSum > 0 && otherSum < lapTime) {
+        nextSectors[maxIdx].splitSeconds = Math.round((lapTime - otherSum) * 1000) / 1000;
+        return { ...lap, sectors: nextSectors };
+      }
+      if (sum > 0) {
+        const scale = lapTime / sum;
+        let running = 0;
+        for (let i = 0; i < nextSectors.length; i++) {
+          if (i === nextSectors.length - 1) {
+            nextSectors[i].splitSeconds = Math.round(Math.max(0.001, lapTime - running) * 1000) / 1000;
+          } else {
+            const v = Math.round(Math.max(0.001, nextSectors[i].splitSeconds * scale) * 1000) / 1000;
+            nextSectors[i].splitSeconds = v;
+            running += v;
+          }
+        }
+      }
+      return { ...lap, sectors: nextSectors };
+    };
+
     if (resolved.kind === "practice") {
       const sess = resolved.session;
       if (!sess) {
         return [];
       }
-      return this.isSelectedSessionLiveStream(sess) ? this._laps : sess.laps;
+      const raw = this.isSelectedSessionLiveStream(sess) ? this._laps : sess.laps;
+      return raw.filter((l) => !l.invalidated).map(sanitizeLapSectors);
     }
 
     const race = resolved.race;
@@ -771,17 +835,19 @@ export class AppStore {
           usedIds.add(lapId);
           const best = bestBySlot.get(slot) ?? hl.splitTimeSec;
           const delta = Math.round((hl.splitTimeSec - best) * 1000) / 1000;
-          out.push({
-            lapId,
-            slotIndex: slot,
-            callsign,
-            lapNumber: lapNum,
-            lapTimeSec: hl.splitTimeSec,
-            deltaToBest: Math.max(0, delta),
-            sectors: Array.isArray(hl.sectors) ? hl.sectors : [],
-            completedAtUs: Math.round((hIdx * 10_000 + (hl.raceElapsedSec || lapNum)) * 1_000_000),
-            isBestLap: Math.abs(hl.splitTimeSec - best) < 0.0005,
-          });
+          out.push(
+            sanitizeLapSectors({
+              lapId,
+              slotIndex: slot,
+              callsign,
+              lapNumber: lapNum,
+              lapTimeSec: hl.splitTimeSec,
+              deltaToBest: Math.max(0, delta),
+              sectors: Array.isArray(hl.sectors) ? hl.sectors : [],
+              completedAtUs: Math.round((hIdx * 10_000 + (hl.raceElapsedSec || lapNum)) * 1_000_000),
+              isBestLap: Math.abs(hl.splitTimeSec - best) < 0.0005,
+            })
+          );
         }
       }
     });
@@ -950,6 +1016,9 @@ export class AppStore {
       },
       clearActiveHistory: {
         value: base.clearActiveHistory.bind(base),
+      },
+      togglePracticeLap: {
+        value: base.togglePracticeLap.bind(base),
       },
     };
     if (overrides.isScopeLive) {
@@ -1451,8 +1520,82 @@ export class AppStore {
 
   public ingestPractice(practiceState: PracticeManagerState): void {
     this._practiceState = normalizePracticeState(practiceState);
+    if (!this.isLiveRaceHeatRunning) {
+      const activeSess = this.activePracticeSession;
+      if (activeSess) {
+        this._laps = [...activeSess.laps];
+        this._summaries = [...activeSess.summaries];
+      }
+    }
     this.ensureValidSelection();
     this.emit("practice", "config", "laps", "crossings", "selection");
+  }
+
+  /** Optimistically toggles `invalidated` on a practice lap and recomputes personal bests and badges across valid laps. */
+  public togglePracticeLap(lapId: number): void {
+    const recomputeList = (list: LapRecord[]): void => {
+      const bestBySlot = new Map<number, number>();
+      const overallBestSec = new Map<string, number>();
+      const pilotBestSec = new Map<string, number>();
+
+      for (const l of list) {
+        if (l.lapId === lapId) {
+          l.invalidated = !l.invalidated;
+        }
+      }
+
+      for (const l of list) {
+        if (l.invalidated || !(l.lapTimeSec > 0)) continue;
+        const curBest = bestBySlot.get(l.slotIndex);
+        if (curBest === undefined || l.lapTimeSec < curBest) {
+          bestBySlot.set(l.slotIndex, l.lapTimeSec);
+        }
+        for (const s of l.sectors ?? []) {
+          if (!(s.splitSeconds > 0)) continue;
+          const pKey = `${s.fromGateId}>${s.toGateId}`;
+          const sKey = `${l.slotIndex}:${pKey}`;
+          const oCur = overallBestSec.get(pKey);
+          if (oCur === undefined || s.splitSeconds < oCur) overallBestSec.set(pKey, s.splitSeconds);
+          const pCur = pilotBestSec.get(sKey);
+          if (pCur === undefined || s.splitSeconds < pCur) pilotBestSec.set(sKey, s.splitSeconds);
+        }
+      }
+
+      for (const l of list) {
+        if (l.invalidated) {
+          l.isBestLap = false;
+          continue;
+        }
+        const bestLap = bestBySlot.get(l.slotIndex) ?? 0;
+        if (bestLap > 0) {
+          l.isBestLap = Math.abs(l.lapTimeSec - bestLap) < 0.0005;
+          l.deltaToBest = l.isBestLap ? 0 : Math.round((l.lapTimeSec - bestLap) * 1000) / 1000;
+        }
+        for (const s of l.sectors ?? []) {
+          const pKey = `${s.fromGateId}>${s.toGateId}`;
+          const sKey = `${l.slotIndex}:${pKey}`;
+          const pBest = pilotBestSec.get(sKey) ?? 0;
+          const oBest = overallBestSec.get(pKey) ?? 0;
+          s.deltaToBestSec = pBest > 0 ? Math.round((s.splitSeconds - pBest) * 1000) / 1000 : 0;
+          if (oBest > 0 && s.splitSeconds <= oBest + 0.0005) {
+            s.badge = "OVERALL_BEST";
+          } else if (pBest > 0 && s.splitSeconds <= pBest + 0.0005) {
+            s.badge = "PERSONAL_BEST";
+          } else if (pBest > 0 && s.splitSeconds > pBest * 1.1) {
+            s.badge = "OFF_PACE";
+          } else {
+            s.badge = "NORMAL";
+          }
+        }
+      }
+    };
+
+    recomputeList(this._laps);
+    const sess = this.selectedPracticeSession;
+    if (sess && sess.laps !== this._laps) {
+      recomputeList(sess.laps);
+    }
+    this.emit("laps", "practice");
   }
 
   public ingestRace(
@@ -1628,8 +1771,13 @@ export class AppStore {
 
   /** Switch the live view between all pilots (null) and following one pilot. */
   public setLiveFocus(slotIndex: number | null): void {
-    if (slotIndex !== null) this.selectPilot(slotIndex);
-    if (slotIndex === this._liveFocus) return;
+    const pilotChanged = slotIndex !== null && slotIndex !== this._selectedPilot;
+    const focusChanged = slotIndex !== this._liveFocus;
+    if (!pilotChanged && !focusChanged) return;
+    if (pilotChanged) {
+      this._selectedPilot = slotIndex;
+      this._comparison = { lapId: null, reference: "best" };
+    }
     this._liveFocus = slotIndex;
     this.saveUiPrefs();
     this.emit("selection");

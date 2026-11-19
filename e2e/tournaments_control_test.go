@@ -34,10 +34,13 @@ func TestTournamentSetupBracketGraphAndStageJumpLink(t *testing.T) {
 		State:   playwright.WaitForSelectorStateVisible,
 		Timeout: playwright.Float(1500),
 	}); waitErr != nil {
-		modeCfgBtn := h.Page.Locator(`button[data-rc-ui="mode-configure"]`).First()
-		h.MustBeVisible(modeCfgBtn, "Top-left Configure button")
-		if err := modeCfgBtn.Click(); err != nil {
-			t.Fatalf("click mode-configure to open template picker: %v", err)
+		expandCtrl := h.Page.Locator(`button[data-rc-ui="toggle-controls-expand"]`).First()
+		h.MustBeVisible(expandCtrl, "Expand board controls button")
+		_ = expandCtrl.Click()
+		openTplBtn := h.Page.Locator(`button[data-rc-ui="open-templates"]`).First()
+		h.MustBeVisible(openTplBtn, "Open templates button")
+		if err := openTplBtn.Click(); err != nil {
+			t.Fatalf("click open-templates to open template picker: %v", err)
 		}
 	}
 
@@ -53,40 +56,50 @@ func TestTournamentSetupBracketGraphAndStageJumpLink(t *testing.T) {
 	}
 	h.MustBeHidden(h.Page.Locator(`.slaprf-modal-backdrop`), "Template modal closed")
 
-	// Drill into Stage 1 graph (`edit` tab) and verify bracket round nodes + SVG connector wires render.
-	stage1Btn := h.Page.Locator(`button[data-fmt-menu-stage="1"]`).First()
-	h.MustBeVisible(stage1Btn, "Stage 1 workspace tab button")
-	if err := stage1Btn.Click(); err != nil {
-		t.Fatalf("click Stage 1 tab: %v", err)
-	}
-
-	h.WaitUntil("Double Elimination round nodes and SVG wires rendered on Stage 1 graph", 10*time.Second, func() (bool, error) {
+	// Verify unified Configure graph renders round nodes + SVG connector wires directly without any Stage 1 sub-tab!
+	h.WaitUntil("Double Elimination round nodes and SVG wires rendered on unified graph", 10*time.Second, func() (bool, error) {
 		nodeCnt, _ := h.Page.Locator(`[data-round-node]`).Count()
 		wireCnt, _ := h.Page.Locator(`svg.bkt-wires path`).Count()
 		return nodeCnt >= 4 && wireCnt >= 3, nil
 	})
 	h.MilestoneScreenshot("double-elim-stage-graph")
 
-	// Switch to Race Control (`control` tab) and verify the clean 4-row dashboard layout:
-	// cockpit, heatline, schedule, standings, and signals ("Signal at each timer") are visible,
-	// while the stage bracket graph is hidden on Control by default.
-	controlTabBtn := h.Page.Locator(`button[data-race-tab="control"]`).First()
-	h.MustBeVisible(controlTabBtn, "Control workspace tab")
-	if err := controlTabBtn.Click(); err != nil {
-		t.Fatalf("click Control tab: %v", err)
+	// Switch through the Desktop workspace pill tabs (Marshal, Schedule, Standings, Signals)
+	// and verify each tab shows its dedicated panel cleanly!
+	marshalTabBtn := h.Page.Locator(`button[data-mobile-ctrl-nav="live"]`).First()
+	h.MustBeVisible(marshalTabBtn, "Marshal workspace tab")
+	if err := marshalTabBtn.Click(); err != nil {
+		t.Fatalf("click Marshal tab: %v", err)
 	}
-
-	for _, panelID := range []string{"cockpit", "heatline", "schedule", "standings", "signals"} {
-		panelLoc := h.Page.Locator(fmt.Sprintf(`[data-canvas-panel=%q]`, panelID)).First()
-		h.MustBeVisible(panelLoc, "Race Control panel "+panelID)
+	for _, panelID := range []string{"cockpit", "heatline"} {
+		h.MustBeVisible(h.Page.Locator(fmt.Sprintf(`[data-canvas-panel=%q]`, panelID)).First(), "Marshal panel "+panelID)
 	}
+	h.MustBeHidden(h.Page.Locator(`[data-canvas-panel="schedule"]`).First(), "Schedule hidden on Marshal tab")
 
+	if err := h.Page.Locator(`button[data-mobile-ctrl-nav="schedule"]`).First().Click(); err != nil {
+		t.Fatalf("click Schedule tab: %v", err)
+	}
+	h.MustBeVisible(h.Page.Locator(`[data-canvas-panel="schedule"]`).First(), "Heats Schedule panel")
+
+	if err := h.Page.Locator(`button[data-mobile-ctrl-nav="standings"]`).First().Click(); err != nil {
+		t.Fatalf("click Standings tab: %v", err)
+	}
+	h.MustBeVisible(h.Page.Locator(`[data-canvas-panel="standings"]`).First(), "Overall Standings panel")
+
+	if err := h.Page.Locator(`button[data-mobile-ctrl-nav="signals"]`).First().Click(); err != nil {
+		t.Fatalf("click Signals tab: %v", err)
+	}
+	h.MustBeVisible(h.Page.Locator(`[data-canvas-panel="signals"]`).First(), "Signals panel")
 	signalsHeaderText, err := h.Page.Locator(`[data-canvas-panel="signals"]`).First().InnerText()
 	if err != nil {
 		t.Fatalf("read signals panel text: %v", err)
 	}
 	if !strings.Contains(signalsHeaderText, "Signal at each timer") {
 		t.Fatalf("expected signals panel to display 'Signal at each timer', got: %q", signalsHeaderText)
+	}
+
+	if err := marshalTabBtn.Click(); err != nil {
+		t.Fatalf("return to Marshal tab: %v", err)
 	}
 
 	// Verify stage graph nodes are hidden on the Control canvas by default.
@@ -116,7 +129,7 @@ func TestTournamentSetupBracketGraphAndStageJumpLink(t *testing.T) {
 		t.Fatalf("click focus-heat-graph icon button: %v", err)
 	}
 
-	h.MustBeVisible(h.Page.Locator(`button[data-fmt-menu-stage="1"].is-active`).First(), "Stage 1 tab active after graph jump")
+	h.MustBeVisible(h.Page.Locator(`button[data-race-tab="edit"].is-active`).First(), "Configure tab active after graph jump")
 
 	h.WaitUntil("target heat card panned inside [data-rc-viewport] bounds", 8*time.Second, func() (bool, error) {
 		inView, evalErr := h.Page.Evaluate(`(heatId) => {
@@ -251,11 +264,11 @@ func TestFullRaceControlExecutionAndChampion(t *testing.T) {
 		}
 	}
 
-	// Enter Race Control via UI tab and accelerate simulation to 20x speed.
-	controlTabBtn := h.Page.Locator(`button[data-race-tab="control"]`).First()
-	h.MustBeVisible(controlTabBtn, "Control tab button")
+	// Enter Marshal tab and accelerate simulation to 20x speed.
+	controlTabBtn := h.Page.Locator(`button[data-mobile-ctrl-nav="live"]`).First()
+	h.MustBeVisible(controlTabBtn, "Marshal tab button")
 	if err := controlTabBtn.Click(); err != nil {
-		t.Fatalf("click Control tab: %v", err)
+		t.Fatalf("click Marshal tab: %v", err)
 	}
 	if err := h.WasmPostJSON("/api/sim/speed", map[string]any{"speedMultiplier": 20}, nil); err != nil {
 		t.Fatalf("POST /api/sim/speed 20x: %v", err)
