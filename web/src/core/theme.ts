@@ -1,3 +1,5 @@
+import { getAndroidBridge } from "./android_bridge";
+
 export type AppTheme = "dark" | "light";
 
 export const APP_THEME_STORAGE_KEY = "slaprf.ui.theme.v1";
@@ -121,6 +123,7 @@ function applyThemeState(mode: AppTheme): void {
     const colorMeta = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
     if (colorMeta) colorMeta.content = mode === "light" ? "#f3f5f8" : "#0b0c0f";
   }
+  getAndroidBridge()?.setThemeMode(mode);
 }
 
 applyThemeState(currentAppTheme);

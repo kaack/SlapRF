@@ -1,5 +1,5 @@
 import { Component } from "../core/component";
-import { isCustomSelectOpenWithin } from "../core/custom_select";
+import { isCustomSelectOpenWithin, scanCustomSelects } from "../core/custom_select";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import {
@@ -76,6 +76,12 @@ export class PilotSlotsEditor extends Component {
     el.addEventListener("keydown", this.handleKeyDown);
     el.addEventListener("click", this.handleClick);
     window.addEventListener("pointerdown", this.handlePrePointerDown, true);
+    const onDrawerAnimEnd = (e: AnimationEvent) => {
+      if (e.animationName === "pilot-drawer-slide-up" && e.target instanceof HTMLElement) {
+        e.target.classList.remove("is-entering");
+      }
+    };
+    el.addEventListener("animationend", onDrawerAnimEnd);
     el.addEventListener("pointerdown", this.handleDrawerPointerDown);
     el.addEventListener("pointermove", this.handleDrawerPointerMove);
     el.addEventListener("pointerup", this.handleDrawerPointerUp);
@@ -87,6 +93,7 @@ export class PilotSlotsEditor extends Component {
       el.removeEventListener("input", this.handleInput);
       el.removeEventListener("keydown", this.handleKeyDown);
       el.removeEventListener("click", this.handleClick);
+      el.removeEventListener("animationend", onDrawerAnimEnd);
       el.removeEventListener("pointerdown", this.handleDrawerPointerDown);
       el.removeEventListener("pointermove", this.handleDrawerPointerMove);
       el.removeEventListener("pointerup", this.handleDrawerPointerUp);
@@ -494,7 +501,25 @@ export class PilotSlotsEditor extends Component {
       existingTable.innerHTML = innerHtml;
       this.syncMobilePillsWithLockedHeight(existingMobileSlot, mobileHtml, pilots, isFiltered);
       if (!this.mobileDrawerClosing) {
-        existingMobileEditorSlot.innerHTML = mobileEditorHtml;
+        const existingOverlay = existingMobileEditorSlot.querySelector<HTMLElement>(
+          ".pilot-dir-mobile-drawer-overlay"
+        );
+        if (
+          this.mobileSelectedSlot !== null &&
+          existingOverlay &&
+          existingOverlay.dataset.drawerSlot === String(this.mobileSelectedSlot)
+        ) {
+          this.patchOpenMobilePilotDrawer(
+            existingOverlay,
+            existingMobileEditorSlot,
+            pilots,
+            canRemove,
+            rfLocked
+          );
+        } else {
+          existingMobileEditorSlot.innerHTML = mobileEditorHtml;
+          scanCustomSelects(existingMobileEditorSlot);
+        }
       }
       existingPagerSlot.innerHTML = paginationHtml;
       existingRecentSlot.innerHTML = recentBarHtml;
@@ -559,7 +584,7 @@ export class PilotSlotsEditor extends Component {
       mobileSlot.innerHTML = mobileHtml;
       return;
     }
-    if (!isFiltered || this.lastUnfilteredPilotCount !== allPilots.length || this.unfilteredMobileHeightPx <= 0) {
+    if (!isFiltered || this.unfilteredMobileHeightPx <= 0) {
       mobileSlot.style.minHeight = "";
       mobileSlot.innerHTML = isFiltered ? this.renderMobilePills(allPilots, "", undefined) : mobileHtml;
       const measured = Math.round(mobileSlot.getBoundingClientRect().height);
@@ -781,7 +806,7 @@ export class PilotSlotsEditor extends Component {
         </div>`;
 
     return `
-      <div class="pilot-dir-mobile-drawer-overlay" role="dialog" aria-modal="true" aria-label="Edit ${esc(p.callsign)}">
+      <div class="pilot-dir-mobile-drawer-overlay" data-drawer-slot="${p.slotIndex}" role="dialog" aria-modal="true" aria-label="Edit ${esc(p.callsign)}">
         <div class="pilot-dir-mobile-drawer-backdrop" data-mobile-pilot-close></div>
         <div class="pilot-dir-mobile-editor ${shouldAnimateEntry ? "is-entering" : ""}" data-mobile-pilot-drawer>
           <div class="dir-mobile-drawer-top-bar" data-mobile-pilot-handle>
@@ -838,6 +863,143 @@ export class PilotSlotsEditor extends Component {
           </div>
         </div>
       </div>`;
+  }
+
+  private patchOpenMobilePilotDrawer(
+    overlay: HTMLElement,
+    slotHost: HTMLElement,
+    pilots: PilotSlot[],
+    canRemove: boolean,
+    rfLocked: boolean
+  ): void {
+    const p =
+      this.mobileSelectedSlot !== null
+        ? pilots.find((x) => x.slotIndex === this.mobileSelectedSlot)
+        : undefined;
+    if (!p) {
+      slotHost.innerHTML = "";
+      return;
+    }
+
+    overlay.setAttribute("aria-label", `Edit ${p.callsign}`);
+    const form = overlay.querySelector<HTMLFormElement>("form.pilot-dir-mobile-form");
+    if (form) {
+      const dot = form.querySelector<HTMLElement>(".input-with-dot > .dot");
+      if (dot) dot.style.setProperty("--c", p.color);
+      const callsignInp = form.querySelector<HTMLInputElement>('input[name="callsign"]');
+      if (callsignInp && document.activeElement !== callsignInp && callsignInp.value !== p.callsign) {
+        callsignInp.value = p.callsign;
+        callsignInp.defaultValue = p.callsign;
+      }
+      const phoneticInp = form.querySelector<HTMLInputElement>('input[name="phoneticName"]');
+      const nextPhonetic = p.phoneticName ?? "";
+      if (phoneticInp && document.activeElement !== phoneticInp && phoneticInp.value !== nextPhonetic) {
+        phoneticInp.value = nextPhonetic;
+        phoneticInp.defaultValue = nextPhonetic;
+      }
+      const chSelect = form.querySelector<HTMLSelectElement>('select[name="channel"]');
+      if (chSelect && !isCustomSelectOpenWithin(overlay)) {
+        const nextOpts = renderMultiBandSelectOptionsHtml({
+          selectedBand: p.band,
+          selectedChannel: p.channel,
+          includeUnassigned: true,
+          unassignedLabel: "No default",
+        });
+        chSelect.disabled = rfLocked;
+        chSelect.innerHTML = nextOpts;
+        scanCustomSelects(overlay);
+      }
+
+      const threshRow = form.querySelector<HTMLElement>(".pilot-dir-mobile-thresh-row");
+      if (threshRow && (!document.activeElement || !threshRow.contains(document.activeElement))) {
+        const isLapRF = this.store.timingHardwareMode === "laprf";
+        const isRH = isRotorHazardMode(this.store.timingHardwareMode);
+        const enterVal = Math.round(p.enterThreshold || DEFAULT_ENTER_THRESHOLD_DBM);
+        const exitVal = Math.round(
+          p.exitThreshold && p.exitThreshold < enterVal ? p.exitThreshold : enterVal - 10
+        );
+        const isCustomThreshold = enterVal !== DEFAULT_ENTER_THRESHOLD_DBM;
+        const isCustomExit = exitVal !== DEFAULT_EXIT_THRESHOLD_DBM;
+        const gainVal = Math.max(0, Math.min(63, Math.round(p.attenuationGain || DEFAULT_LAPRF_GAIN)));
+        const laprfThrVal = Math.max(
+          300,
+          Math.min(3500, Math.round(p.laprfThreshold || DEFAULT_LAPRF_THRESHOLD))
+        );
+        const isCustomGain = gainVal !== DEFAULT_LAPRF_GAIN;
+        const isCustomLapRFThr = laprfThrVal !== DEFAULT_LAPRF_THRESHOLD;
+        const rhEnterVal = Math.max(
+          10,
+          Math.min(250, Math.round(p.rhEnterThreshold || DEFAULT_RH_ENTER_THRESHOLD))
+        );
+        const rhExitVal = Math.max(
+          6,
+          Math.min(
+            rhEnterVal - 4,
+            Math.round(
+              p.rhExitThreshold && p.rhExitThreshold > 0 && p.rhExitThreshold < rhEnterVal
+                ? p.rhExitThreshold
+                : rhEnterVal - 25
+            )
+          )
+        );
+        const isCustomRhEnter = rhEnterVal !== DEFAULT_RH_ENTER_THRESHOLD;
+        const isCustomRhExit = rhExitVal !== DEFAULT_RH_EXIT_THRESHOLD;
+
+        const col4Label = isLapRF ? "Gain (0–63)" : isRH ? "Enter (10–250)" : "Enter threshold";
+        const col5Label = isLapRF ? "Threshold" : isRH ? "Exit (6–246)" : "Exit threshold";
+        const col4Html = isLapRF
+          ? `<div class="input-suffix ${isCustomGain ? "has-reset" : ""}">
+              <input class="input mono" type="number" name="attenuationGain" value="${gainVal}" min="0" max="63" step="1" />
+              <span>gain</span>
+              ${isCustomGain ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-laprf-gain="${p.slotIndex}" aria-label="Restore default LapRF gain">${icons.reset(13)}</button>` : ""}
+            </div>`
+          : isRH
+            ? `<div class="input-suffix ${isCustomRhEnter ? "has-reset" : ""}">
+              <input class="input mono" type="number" name="rhEnterThreshold" value="${rhEnterVal}" min="10" max="250" step="1" />
+              <span>RSSI</span>
+              ${isCustomRhEnter ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-rh-enter="${p.slotIndex}" aria-label="Restore default RotorHazard Enter threshold">${icons.reset(13)}</button>` : ""}
+            </div>`
+            : `<div class="input-suffix ${isCustomThreshold ? "has-reset" : ""}">
+              <input class="input mono" type="number" name="threshold" value="${enterVal}" min="-95" max="-20" step="1" />
+              <span>dBm</span>
+              ${isCustomThreshold ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-threshold="${p.slotIndex}" aria-label="Restore default enter threshold">${icons.reset(13)}</button>` : ""}
+            </div>`;
+        const col5Html = isLapRF
+          ? `<div class="input-suffix ${isCustomLapRFThr ? "has-reset" : ""}">
+              <input class="input mono" type="number" name="laprfThreshold" value="${laprfThrVal}" min="300" max="3500" step="10" />
+              <span>RSSI</span>
+              ${isCustomLapRFThr ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-laprf-threshold="${p.slotIndex}" aria-label="Restore default LapRF threshold">${icons.reset(13)}</button>` : ""}
+            </div>`
+          : isRH
+            ? `<div class="input-suffix ${isCustomRhExit ? "has-reset" : ""}">
+              <input class="input mono" type="number" name="rhExitThreshold" value="${rhExitVal}" min="6" max="246" step="1" />
+              <span>RSSI</span>
+              ${isCustomRhExit ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-rh-exit="${p.slotIndex}" aria-label="Restore default RotorHazard Exit threshold">${icons.reset(13)}</button>` : ""}
+            </div>`
+            : `<div class="input-suffix ${isCustomExit ? "has-reset" : ""}">
+              <input class="input mono" type="number" name="exitThreshold" value="${exitVal}" min="-105" max="-22" step="1" />
+              <span>dBm</span>
+              ${isCustomExit ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-exit-threshold="${p.slotIndex}" aria-label="Restore default exit threshold">${icons.reset(13)}</button>` : ""}
+            </div>`;
+
+        threshRow.innerHTML = `
+          <label class="field">
+            <span>${col4Label}</span>
+            ${col4Html}
+          </label>
+          <label class="field">
+            <span>${col5Label}</span>
+            ${col5Html}
+          </label>`;
+      }
+    }
+
+    const delBtn = overlay.querySelector<HTMLButtonElement>("[data-remove-pilot]");
+    if (delBtn) {
+      delBtn.disabled = !(canRemove && !rfLocked);
+      delBtn.title = canRemove ? `Delete ${p.callsign}` : "At least 2 pilots are required";
+      delBtn.setAttribute("aria-label", `Delete ${p.callsign}`);
+    }
   }
 
   private renderPilotRow(

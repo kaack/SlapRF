@@ -1,16 +1,15 @@
-//go:build windows || linux
+//go:build windows || (linux && !android)
 
 package usb
 
 import (
-	"sort"
 	"strings"
 
 	"go.bug.st/serial"
 	"go.bug.st/serial/enumerator"
 )
 
-// DefaultListPorts enumerates host serial ports with USB VID/PID metadata on Windows and Linux.
+// DefaultListPorts enumerates host serial ports with USB VID/PID metadata on Windows and desktop Linux.
 func DefaultListPorts() ([]PortInfo, error) {
 	details, err := enumerator.GetDetailedPortsList()
 	if err != nil {
@@ -31,8 +30,8 @@ func DefaultListPorts() ([]PortInfo, error) {
 		pid := strings.ToUpper(strings.TrimSpace(d.PID))
 		isEsp := vid == EspressifVID
 		prod := strings.TrimSpace(d.Product)
-		if isEsp && (prod == "" || strings.HasPrefix(strings.ToLower(prod), "usb serial device")) {
-			prod = "Seeed XIAO ESP32-C5 (USB JTAG/serial)"
+		if isEsp && (prod == "" || strings.HasPrefix(strings.ToLower(prod), "usb serial device") || strings.HasPrefix(strings.ToLower(prod), "usb jtag") || strings.Contains(strings.ToLower(prod), "seeed xiao") || strings.Contains(strings.ToLower(prod), "esp32-c5")) {
+			prod = "ESP32-C5"
 		}
 		out = append(out, PortInfo{
 			Name:         d.Name,
@@ -46,16 +45,4 @@ func DefaultListPorts() ([]PortInfo, error) {
 	}
 	sortPorts(out)
 	return out, nil
-}
-
-func sortPorts(ports []PortInfo) {
-	sort.Slice(ports, func(i, j int) bool {
-		if ports[i].IsEspressif != ports[j].IsEspressif {
-			return ports[i].IsEspressif
-		}
-		if ports[i].IsUSB != ports[j].IsUSB {
-			return ports[i].IsUSB
-		}
-		return ports[i].Name < ports[j].Name
-	})
 }

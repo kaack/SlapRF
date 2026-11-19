@@ -27,6 +27,12 @@ type pendingRHCrossing struct {
 	passNum   uint32
 }
 
+type simRHSweepEmitter struct {
+	freqMHz      float64
+	aboveFloor   float64
+	halfWidthMHz float64
+}
+
 type simRHUnitState struct {
 	domain.SimRotorHazardUnit
 	simNowUs          atomic.Uint64
@@ -37,6 +43,7 @@ type simRHUnitState struct {
 	usbSess           *rotorhazard.SerialSession
 	sessionAttached   bool
 	clockSyncTicks    uint32
+	sweepEmitters     []simRHSweepEmitter
 	pendingHeartbeats []pendingRHHeartbeat
 	pendingCrossings  []pendingRHCrossing
 }
@@ -135,6 +142,46 @@ func (u *simRHUnitState) initProtocolObjectsLocked() {
 				NoRxSettleDelay: true,
 				BootTimeout:     100,
 				ReadTimeout:     50,
+				SweepFeed: func(freqs []uint16) {
+					now := u.simNowUs.Load()
+					tSec := float64(now) / 1e6
+					for seat, freq := range freqs {
+						if seat >= u.NodeCount || u.usbNode == nil {
+							break
+						}
+						f := float64(freq)
+						ripple := math.Sin(f*0.17+tSec*3.1)*1.9 + math.Cos(f*0.09-tSec*1.7)*1.4
+						val := 23.0 + ripple
+						for _, em := range u.sweepEmitters {
+							df := f - em.freqMHz
+							hw := em.halfWidthMHz
+							if hw <= 1 {
+								hw = 8.5
+							}
+							contrib := em.aboveFloor * math.Exp(-(df*df)/(hw*hw))
+							if contrib > 0.5 {
+								val += contrib
+							}
+						}
+						// Intermittent 5 GHz Wi-Fi UNII-3 channel 149 (5745 MHz) & 157 (5785 MHz) activity
+						wifiPhase := math.Sin(tSec*4.3 + f*0.03)
+						if wifiPhase > 0.35 {
+							df149 := f - 5745.0
+							val += 46.0 * (wifiPhase - 0.35) * math.Exp(-(df149*df149)/(11.0*11.0))
+						}
+						wifiPhase2 := math.Cos(tSec*3.7 - f*0.02)
+						if wifiPhase2 > 0.55 {
+							df157 := f - 5785.0
+							val += 38.0 * (wifiPhase2 - 0.55) * math.Exp(-(df157*df157)/(11.0*11.0))
+						}
+						if val < 14 {
+							val = 14
+						} else if val > 248 {
+							val = 248
+						}
+						u.usbNode.FeedSeatRSSI(seat, float32(math.Round(val)), now)
+					}
+				},
 				Hooks: rotorhazard.ClientHooks{
 					NowUs: u.simNowUs.Load,
 					OnHeartbeat: func(ev rotorhazard.ClientHeartbeatEvent) {
@@ -432,6 +479,8 @@ func (s *TrackSimulator) snapshotRHUnitsLocked(gateByTimer map[uint8]string) []d
 				cp.NodeExitLevels = st.NodeExitLevels
 				cp.NodeFreqsMHz = st.NodeFreqsMHz
 				cp.EnvSummary = st.EnvSummary
+				cp.ScanLive = st.ScanLive
+				cp.LastScan = st.LastScan
 				if st.APILevel > 0 {
 					cp.APILevel = st.APILevel
 				}
@@ -1046,13 +1095,21 @@ func (s *TrackSimulator) stepRotorHazardLocked(
 			if hasSpecs {
 				u.usbClient.SyncNodesAndArm(cfg, isArmed)
 			}
-			// Sample 5.8 GHz RF physics on the simulated hardware node at 50 Hz;
-			// poll over the RotorHazard binary USB serial link at 10 Hz (`pollTick`).
-			for ch := 0; ch < u.NodeCount && ch < domain.MaxPilotSlots; ch++ {
-				u.usbNode.FeedSeatRSSI(ch, nodeRSSI[ch], nowUs)
-			}
-			if pollTick && u.usbSess != nil {
-				_ = u.usbSess.Step(context.Background(), emitHeartbeat)
+			u.sweepEmitters = s.buildRHUSBSweepEmittersLocked(pilots, gatePosMeters)
+			if u.usbClient.IsScanLive() {
+				scanTick := !s.prewarming && s.seqCounter%10 == 0
+				if scanTick && u.usbSess != nil {
+					_ = u.usbSess.Step(context.Background(), false)
+				}
+			} else {
+				// Sample 5.8 GHz RF physics on the simulated hardware node at 50 Hz;
+				// poll over the RotorHazard binary USB serial link at 10 Hz (`pollTick`).
+				for ch := 0; ch < u.NodeCount && ch < domain.MaxPilotSlots; ch++ {
+					u.usbNode.FeedSeatRSSI(ch, nodeRSSI[ch], nowUs)
+				}
+				if pollTick && u.usbSess != nil {
+					_ = u.usbSess.Step(context.Background(), emitHeartbeat)
+				}
 			}
 		} else {
 			if hasSpecs {
@@ -1076,4 +1133,207 @@ func (s *TrackSimulator) stepRotorHazardLocked(
 	}
 
 	return heartbeats, crossings
+}
+
+func (s *TrackSimulator) buildRHUSBSweepEmittersLocked(pilots []domain.PilotSlot, gatePosMeters float64) []simRHSweepEmitter {
+	var out []simRHSweepEmitter
+	for i := 0; i < len(pilots); i++ {
+		p := pilots[i]
+		if !p.Enabled || p.Channel == 0 {
+			continue
+		}
+		freq := p.FrequencyMHz
+		if freq == 0 {
+			freq = domain.FrequencyForBandChannel(p.Band, p.Channel)
+		}
+		if freq == 0 {
+			continue
+		}
+		above := 92.0
+		if i < len(s.pilotStates) {
+			ps := s.pilotStates[i]
+			vtxOn := ps.status == domain.SimStatusFlying ||
+				ps.status == domain.SimStatusAvoiding ||
+				ps.status == domain.SimStatusCrashedVtxOn ||
+				ps.status == domain.SimStatusTurtleRecovery
+			if !vtxOn {
+				continue
+			}
+			dx := math.Abs(ps.trackPosMeters - gatePosMeters)
+			if s.trackLengthMeters > 0 && dx > s.trackLengthMeters/2.0 {
+				dx = s.trackLengthMeters - dx
+			}
+			alt := ps.altitudeMeters
+			if alt < 0.8 {
+				alt = 0.8
+			}
+			dist3D := math.Sqrt(dx*dx + alt*alt)
+			sigDbm := -24.5 - 23.5*math.Log10(dist3D)
+			above = (sigDbm + 92.0) * 2.88
+		}
+		if above > 2.0 {
+			out = append(out, simRHSweepEmitter{
+				freqMHz:      float64(freq),
+				aboveFloor:   above,
+				halfWidthMHz: 8.5,
+			})
+		}
+	}
+	return out
+}
+
+func (s *TrackSimulator) findConnectedRHUSBUnitLocked(timerID uint8) (*simRHUnitState, error) {
+	s.ensureRHUnitsForModeLocked(s.engine.TimingHardwareMode())
+	if timerID > 0 {
+		for _, u := range s.rhUnits {
+			if u.TimerID == timerID && u.isUSB() {
+				if !u.PoweredOn || !u.Connected {
+					return nil, fmt.Errorf("simulated RotorHazard USB device %s is offline", u.Label)
+				}
+				return u, nil
+			}
+		}
+	}
+	for _, u := range s.rhUnits {
+		if u.isUSB() && u.PoweredOn && u.Connected {
+			return u, nil
+		}
+	}
+	return nil, errors.New("no connected simulated RotorHazard USB device")
+}
+
+// RunRHUSBScanOnce performs one synchronous 0..255 RSSI spectrum sweep on a simulated RotorHazard USB device
+// and restores its configured timing frequencies immediately afterwards.
+func (s *TrackSimulator) RunRHUSBScanOnce(timerID uint8, startMHz, stopMHz, stepMHz int) (domain.RHScanPass, error) {
+	pilots, gates, _, _, _ := s.engine.StateSnapshot()
+	nowUs := s.engine.NowUs()
+	isArmed := s.engine.IsRaceArmed()
+
+	s.mu.Lock()
+	u, err := s.findConnectedRHUSBUnitLocked(timerID)
+	if err != nil {
+		s.mu.Unlock()
+		return domain.RHScanPass{}, err
+	}
+	targetTid := u.TimerID
+	s.mu.Unlock()
+
+	specs := s.engine.ActiveRHNodeSpecs(targetTid)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	u, err = s.findConnectedRHUSBUnitLocked(targetTid)
+	if err != nil {
+		return domain.RHScanPass{}, err
+	}
+	u.syncLinkStateLocked(nowUs, "", "", false)
+	if u.usbSess == nil {
+		return domain.RHScanPass{}, errors.New("simulated RotorHazard USB serial session is not attached")
+	}
+
+	var cfg [domain.MaxPilotSlots]rotorhazard.NodeConfig
+	for i := 0; i < domain.MaxPilotSlots; i++ {
+		cfg[i] = rotorhazard.NodeConfig{
+			Enabled:      specs[i].Enabled && i < u.NodeCount,
+			Band:         specs[i].Band,
+			Channel:      specs[i].Channel,
+			FrequencyMHz: specs[i].FrequencyMHz,
+			EnterAtLevel: specs[i].EnterAtLevel,
+			ExitAtLevel:  specs[i].ExitAtLevel,
+		}
+	}
+	u.usbClient.SyncNodesAndArm(cfg, isArmed)
+
+	gatePosMeters := 0.0
+	if len(gates) > 0 && s.trackLengthMeters > 0 {
+		sectorLen := s.trackLengthMeters / float64(len(gates))
+		for idx := range gates {
+			if gates[idx].AssignedTimerID == u.TimerID {
+				gatePosMeters = float64(idx) * sectorLen
+				break
+			}
+		}
+	}
+	u.sweepEmitters = s.buildRHUSBSweepEmittersLocked(pilots, gatePosMeters)
+	pass, sErr := u.usbSess.SweepOnce(context.Background(), startMHz, stopMHz, stepMHz)
+	if sErr == nil && pass.PassMs < 95 {
+		pass.PassMs = 120
+	}
+	return pass, sErr
+}
+
+// SetRHUSBScanLive starts or stops continuous 0..255 RSSI spectrum sweeping on a simulated RotorHazard USB device.
+func (s *TrackSimulator) SetRHUSBScanLive(timerID uint8, active bool, startMHz, stopMHz, stepMHz int) error {
+	pilots, gates, _, _, _ := s.engine.StateSnapshot()
+	nowUs := s.engine.NowUs()
+	isArmed := s.engine.IsRaceArmed()
+
+	s.mu.Lock()
+	if !active && timerID == 0 {
+		for _, u := range s.rhUnits {
+			if u.isUSB() && u.usbClient != nil {
+				u.usbClient.SetScanLive(false, startMHz, stopMHz, stepMHz)
+			}
+		}
+		s.mu.Unlock()
+		s.SyncRHNodesNow()
+		return nil
+	}
+
+	u, err := s.findConnectedRHUSBUnitLocked(timerID)
+	if err != nil {
+		s.mu.Unlock()
+		if !active {
+			return nil
+		}
+		return err
+	}
+	targetTid := u.TimerID
+	s.mu.Unlock()
+
+	specs := s.engine.ActiveRHNodeSpecs(targetTid)
+
+	s.mu.Lock()
+	u, err = s.findConnectedRHUSBUnitLocked(targetTid)
+	if err != nil {
+		s.mu.Unlock()
+		if !active {
+			return nil
+		}
+		return err
+	}
+	u.syncLinkStateLocked(nowUs, "", "", false)
+	var cfg [domain.MaxPilotSlots]rotorhazard.NodeConfig
+	for i := 0; i < domain.MaxPilotSlots; i++ {
+		cfg[i] = rotorhazard.NodeConfig{
+			Enabled:      specs[i].Enabled && i < u.NodeCount,
+			Band:         specs[i].Band,
+			Channel:      specs[i].Channel,
+			FrequencyMHz: specs[i].FrequencyMHz,
+			EnterAtLevel: specs[i].EnterAtLevel,
+			ExitAtLevel:  specs[i].ExitAtLevel,
+		}
+	}
+	u.usbClient.SyncNodesAndArm(cfg, isArmed)
+	u.usbClient.SetScanLive(active, startMHz, stopMHz, stepMHz)
+	if active && u.usbSess != nil {
+		gatePosMeters := 0.0
+		if len(gates) > 0 && s.trackLengthMeters > 0 {
+			sectorLen := s.trackLengthMeters / float64(len(gates))
+			for idx := range gates {
+				if gates[idx].AssignedTimerID == u.TimerID {
+					gatePosMeters = float64(idx) * sectorLen
+					break
+				}
+			}
+		}
+		u.sweepEmitters = s.buildRHUSBSweepEmittersLocked(pilots, gatePosMeters)
+		_ = u.usbSess.Step(context.Background(), false)
+	}
+	s.mu.Unlock()
+
+	if !active {
+		s.SyncRHNodesNow()
+	}
+	return nil
 }

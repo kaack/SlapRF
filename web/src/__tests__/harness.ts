@@ -1214,6 +1214,39 @@ export function makeMockApiClient(store: AppStore): MockApiClientRecord {
     simRotorHazardAction: record("simRotorHazardAction"),
     simRotorHazardDiscover: record("simRotorHazardDiscover", { subnet: "192.168.1.0/24", devices: [] }),
     setRHDebugStream: record("setRHDebugStream"),
+    runRHUSBScan: (payload: {
+      timerId: number;
+      mode: "once" | "live" | "stop";
+      start: number;
+      stop: number;
+      step: number;
+    }) => {
+      calls.push({ method: "runRHUSBScan", args: [payload] });
+      const start = payload.start || 5180;
+      const stop = Math.min(5917, payload.stop || 5917);
+      const step = payload.step || 5;
+      const bins = Math.floor((stop - start) / step) + 1;
+      const values = Array.from({ length: bins }, (_, idx) => {
+        const f = start + idx * step;
+        return Math.abs(f - 5805) <= 5 ? 196 : 24;
+      });
+      return Promise.resolve({
+        ok: true,
+        scanLive: payload.mode === "live",
+        scan:
+          payload.mode === "once"
+            ? {
+                seq: 1,
+                start,
+                stop: start + (bins - 1) * step,
+                step,
+                passMs: 120,
+                live: false,
+                values,
+              }
+            : undefined,
+      });
+    },
     simMultiGPWebService: record("simMultiGPWebService", { status: true }),
     simMultiGPAdmin: record("simMultiGPAdmin"),
     multiGPImportRace: record("multiGPImportRace"),

@@ -1478,7 +1478,7 @@ body.is-gate-dragging * {
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
-  touch-action: pan-y;
+  touch-action: pan-x pan-y;
   scrollbar-width: none;
   -ms-overflow-style: none;
   gap: 8px;
@@ -1630,7 +1630,7 @@ body.is-gate-dragging * {
     overflow-y: hidden;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-x: contain;
-    touch-action: pan-y;
+    touch-action: pan-x pan-y;
     scrollbar-width: none;
     -ms-overflow-style: none;
     gap: 8px;
@@ -2635,7 +2635,8 @@ html[data-theme="light"] .bar-time {
   left: 0;
   right: auto;
 }
-.scope-canvas {
+.scope-canvas,
+.scope-canvas .surface-canvas {
   cursor: grab;
   touch-action: none;
   outline: none;
@@ -6385,6 +6386,208 @@ html[data-theme="light"] .bar-time {
   display: grid;
   grid-template-columns: minmax(270px, 1fr) minmax(0, 1.45fr);
   gap: 10px;
+}
+
+.net-topo-intro-mobile,
+.net-mobile-graph {
+  display: none;
+}
+
+.net-mobile-graph-stage {
+  position: relative;
+  width: 100%;
+  margin: 4px 0 2px;
+  user-select: none;
+}
+
+.net-mobile-graph-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: visible;
+  pointer-events: none;
+  z-index: 1;
+}
+
+.net-mnode {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  z-index: 2;
+  appearance: none;
+  font-family: var(--font-sans);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1.5px dashed var(--border-strong);
+  border-radius: var(--radius);
+  padding: 6px 10px;
+  min-width: 78px;
+  max-width: 104px;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  cursor: pointer;
+  touch-action: manipulation;
+  transition: border-color 0.14s ease, background-color 0.14s ease, box-shadow 0.14s ease;
+}
+
+.net-mnode.is-hub {
+  min-width: 86px;
+}
+
+.net-mnode.is-empty {
+  opacity: 0.82;
+}
+
+.net-mnode.is-active-link {
+  border-style: solid;
+  border-color: var(--border-strong);
+}
+
+.net-mnode.is-hub.is-active-link {
+  border-color: rgba(34, 197, 94, 0.48);
+}
+
+.net-mnode.is-spoke.is-active-link {
+  border-color: rgba(56, 189, 248, 0.48);
+}
+
+.net-mnode.is-selected {
+  background: var(--surface-3);
+  border-style: solid;
+  border-color: var(--text);
+  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.28);
+  opacity: 1;
+}
+
+.net-mnode.is-hub.is-active-link.is-selected {
+  border-color: #22c55e;
+}
+
+.net-mnode.is-spoke.is-active-link.is-selected {
+  border-color: #38bdf8;
+}
+
+.net-mnode-main {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  max-width: 100%;
+}
+
+.net-mnode-title {
+  font-size: 13px;
+  font-weight: 650;
+  line-height: 1.15;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.net-mnode-sub {
+  font-size: 10.5px;
+  line-height: 1.15;
+  color: var(--text-3);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.net-mnode.is-selected .net-mnode-sub {
+  color: var(--text-2);
+}
+
+.net-mobile-graph-foot {
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+  text-align: center;
+}
+
+html[data-theme="light"] .net-mnode.is-selected {
+  box-shadow: 0 2px 8px rgba(15, 23, 42, 0.1);
+}
+
+/* Fixed-width tabular numeric slots so live pkt/s, frame counts, and ms-ago labels never shift horizontally */
+.net-metric-pair {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.55ch;
+}
+
+.net-num-slot {
+  display: inline-block;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0;
+  flex-shrink: 0;
+}
+
+.net-num-slot.is-int3 {
+  width: 3.4ch;
+}
+
+.net-num-slot.is-rate {
+  width: 5.5ch;
+}
+
+.net-num-slot.is-frames {
+  width: 5.5ch;
+}
+
+.net-num-slot.is-ms {
+  width: 4.5ch;
+}
+
+.debug-net-inspector-kpi-val {
+  font-variant-numeric: tabular-nums;
+}
+
+.net-unit-mobile {
+  display: none;
+}
+
+@media (max-width: 860px) {
+  .net-topo-intro-desktop,
+  .debug-topology-board,
+  .debug-topology-legend,
+  .net-unit-desktop,
+  .net-top-fp-badge {
+    display: none !important;
+  }
+  .net-topo-intro-mobile {
+    display: block;
+  }
+  .net-unit-mobile {
+    display: inline;
+  }
+  .net-mobile-graph {
+    display: block;
+  }
+  .network-page .debug-status-topbar.is-net-timer-topbar {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 10px 12px;
+    max-width: 100%;
+    overflow: hidden;
+  }
+  .network-page .debug-status-topbar.is-net-timer-topbar > .debug-led-status {
+    flex: 1 1 100%;
+  }
+  .network-page .debug-status-topbar.is-net-timer-topbar > .debug-connect-actions {
+    flex: 1 1 100%;
+    margin-left: 0;
+    padding-left: 0;
+    box-shadow: none;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
 }
 
 @media (max-width: 1080px) {
@@ -14914,7 +15117,12 @@ html[data-theme="light"] .practice-pilot-switch.is-on .practice-pilot-switch-thu
     position: absolute;
     inset: 0;
     background: rgba(0, 0, 0, 0.48);
-    backdrop-filter: blur(2px);
+    -webkit-backdrop-filter: blur(2.5px);
+    backdrop-filter: blur(2.5px);
+    transform: translate3d(0, 0, 0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    will-change: opacity;
     transition: opacity 0.2s ease;
   }
   .practice-pilot-drawer-overlay.is-closing {
@@ -14939,6 +15147,10 @@ html[data-theme="light"] .practice-pilot-switch.is-on .practice-pilot-switch-thu
     background: var(--surface);
     box-shadow: 0 -10px 32px rgba(0, 0, 0, 0.52);
     overflow-y: auto;
+    transform: translate3d(0, 0, 0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    isolation: isolate;
   }
   .practice-pilot-popover.is-entering {
     animation: pilot-drawer-slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
@@ -15448,8 +15660,12 @@ button.rc-cselect-trigger.is-open .rc-cselect-caret {
     position: absolute;
     inset: 0;
     background: rgba(0, 0, 0, 0.48);
+    -webkit-backdrop-filter: blur(2.5px);
     backdrop-filter: blur(2.5px);
-    animation: pilot-drawer-backdrop-in 0.22s ease both;
+    transform: translate3d(0, 0, 0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    will-change: opacity;
     transition: opacity 0.2s ease;
   }
   .pilot-dir-mobile-drawer-overlay.is-closing {
@@ -15477,6 +15693,10 @@ button.rc-cselect-trigger.is-open .rc-cselect-caret {
     flex-direction: column;
     gap: 12px;
     overflow-y: auto;
+    transform: translate3d(0, 0, 0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    isolation: isolate;
   }
   .pilot-dir-mobile-editor.is-entering {
     animation: pilot-drawer-slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
@@ -17251,6 +17471,7 @@ html[data-theme="light"] .bkt-checkin-switch.is-on .bkt-checkin-thumb {
   display: block;
   cursor: grab;
   font-family: var(--font-sans);
+  touch-action: none;
 }
 .lap-ed-svg.is-panning {
   cursor: grabbing;
@@ -19653,7 +19874,7 @@ html[data-theme="light"] .races-page .rc-standings-card-box > .rc-panel-header {
   -ms-overflow-style: none;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior-x: contain;
-  touch-action: pan-y;
+  touch-action: pan-x pan-y;
 }
 .races-page .rc-schedule-table .rc-sched-col-lineup .sched-lineup.is-dragging,
 .races-page .rc-executed-heats-table .rc-exec-results-col .sched-lineup.is-dragging,
@@ -20048,7 +20269,7 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     -ms-overflow-style: none;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-x: contain;
-    touch-action: pan-y;
+    touch-action: pan-x pan-y;
   }
   .rc-topleft-bar > .rc-topleft-scroll-wrap > .rc-topleft-seg::-webkit-scrollbar {
     display: none;
@@ -20309,7 +20530,7 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     overflow-y: hidden !important;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-x: contain;
-    touch-action: pan-y;
+    touch-action: pan-x pan-y;
     scrollbar-width: none;
     -ms-overflow-style: none;
     gap: 8px;
@@ -20659,7 +20880,7 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     -ms-overflow-style: none;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-x: contain;
-    touch-action: pan-y;
+    touch-action: pan-x pan-y;
     gap: 7px;
     padding: 2px 0;
   }
@@ -22807,8 +23028,12 @@ html[data-theme="light"] .custom-select-popover.is-pilot-select-popover .custom-
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, 0.48);
+  -webkit-backdrop-filter: blur(2.5px);
   backdrop-filter: blur(2.5px);
-  animation: pilot-drawer-backdrop-in 0.22s ease both;
+  transform: translate3d(0, 0, 0);
+  -webkit-backface-visibility: hidden;
+  backface-visibility: hidden;
+  will-change: opacity;
   transition: opacity 0.2s ease;
 }
 
@@ -24900,4 +25125,129 @@ html[data-theme="light"] .custom-select-wrap:has(> .dte-seat-pilot-select) .cust
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
+}
+
+/* RotorHazard USB serial connection bar (#/network) */
+.rh-usb-conn-body {
+  padding: 14px 16px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: flex-end;
+  justify-content: space-between;
+  min-width: 0;
+}
+
+.rh-usb-conn-main {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.rh-usb-conn-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+  min-width: 0;
+}
+
+.rh-usb-conn-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.rh-usb-conn-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.rh-usb-conn-select {
+  padding: 5px 9px;
+  font-size: 13px;
+  box-sizing: border-box;
+  max-width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+
+.rh-usb-conn-field.is-port .rh-usb-conn-select {
+  width: 240px;
+}
+
+.rh-usb-conn-field.is-baud .rh-usb-conn-select {
+  width: 186px;
+  padding: 5px 8px;
+}
+
+.rh-usb-conn-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: flex-start;
+  min-width: 0;
+}
+
+.rh-usb-conn-foot {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.rh-usb-conn-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+@media (max-width: 860px) {
+  .rh-usb-conn-body {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .rh-usb-conn-main {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    width: 100%;
+  }
+
+  .rh-usb-conn-fields {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .rh-usb-conn-field {
+    width: 100%;
+  }
+
+  .rh-usb-conn-field.is-port .rh-usb-conn-select,
+  .rh-usb-conn-field.is-baud .rh-usb-conn-select {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .rh-usb-conn-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .rh-usb-conn-foot {
+    width: 100%;
+    justify-content: flex-start;
+  }
 }

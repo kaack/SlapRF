@@ -84,6 +84,7 @@ export class PilotPicker extends Component {
 
     this.listen(el, "pointerdown", (e: PointerEvent) => {
       if (e.button !== 0 && e.pointerType === "mouse") return;
+      if (e.pointerType === "touch") return;
       if ((e.target as HTMLElement).closest("[data-pilot-scroll]")) return;
       if (clearSuppressTimer) {
         window.clearTimeout(clearSuppressTimer);
@@ -199,7 +200,18 @@ export class PilotPicker extends Component {
       }
     };
     this.listen(el, "click", handleSelect);
-    this.listen(this.trackEl, "scroll", () => this.syncScrollCues());
+    let scrollCueRaf = 0;
+    this.trackEl.addEventListener(
+      "scroll",
+      () => {
+        if (scrollCueRaf) return;
+        scrollCueRaf = window.requestAnimationFrame(() => {
+          scrollCueRaf = 0;
+          this.syncScrollCues();
+        });
+      },
+      { passive: true }
+    );
     const onResize = () => this.syncScrollCues();
     window.addEventListener("resize", onResize);
     this.onDispose(() => window.removeEventListener("resize", onResize));

@@ -1,4 +1,7 @@
-import { Announcer, lapCallout, spokenName } from "../services/announcer";
+import { downloadBinaryFile, downloadTextFile } from "../core/android_bridge";
+import { Router } from "../core/router";
+import { Sidebar } from "../layout/Sidebar";
+import { ANDROID_SYSTEM_VOICE_URI, Announcer, lapCallout, spokenName } from "../services/announcer";
 import { usbPool, type TimerStatus } from "../services/timer_console";
 import {
   beforeEach,
@@ -12,6 +15,7 @@ import {
   makeRaceState,
   makeSeat,
   makeStore,
+  mountHtml,
   spyOn,
 } from "./harness";
 
@@ -770,6 +774,77 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
       expect(rig.spokenTexts).toEqual(["Announcer on", "Timing system disconnected"]);
     } finally {
       ann.stop();
+    }
+  });
+
+  it("routes speech, keep-screen-on, and file exports through SlapRFAndroid bridge when inside native Android WebView", () => {
+    window.localStorage.removeItem("gate-timer.announcer");
+    installFakeSpeechAndAudio();
+    const spokenAndroid: string[] = [];
+    let speaking = false;
+    let keepScreen = false;
+    let savedFile: { name: string; mime: string; b64: string } | null = null;
+    const win = window as unknown as { SlapRFAndroid?: unknown };
+    win.SlapRFAndroid = {
+      isAndroidApp: () => true,
+      speak: (text: string) => {
+        spokenAndroid.push(text);
+        speaking = true;
+      },
+      stopSpeech: () => {
+        speaking = false;
+      },
+      isSpeaking: () => speaking,
+      setKeepScreenOn: (on: boolean) => {
+        keepScreen = on;
+      },
+      setThemeMode: () => undefined,
+      getLanStatusJson: () => JSON.stringify({ enabled: false, port: 0, urls: [] }),
+      setLanEnabled: () => JSON.stringify({ enabled: true, port: 8090, urls: ["http://192.168.1.20:8090"] }),
+      saveBase64File: (name: string, mime: string, b64: string) => {
+        savedFile = { name, mime, b64 };
+      },
+    };
+
+    const store = makeStore({
+      operatingMode: "practice",
+      pilots: [makePilot(1, { callsign: "FAERRY" })],
+    });
+    const ann = new Announcer(store);
+    try {
+      expect(keepScreen).toBe(true);
+      ann.update({ keepScreenAwake: false });
+      expect(keepScreen).toBe(false);
+      expect(ann.activeVoiceURI()).toBe(ANDROID_SYSTEM_VOICE_URI);
+      expect(ann.voices().some((v) => v.voiceURI === ANDROID_SYSTEM_VOICE_URI)).toBe(true);
+
+      ann.update({ enabled: true });
+      expect(spokenAndroid).toEqual(["Announcer on"]);
+
+      downloadTextFile("backup.json", "application/json", '{"hello":"android"}');
+      expect(savedFile).not.toBeNull();
+      expect(savedFile!.name).toBe("backup.json");
+      expect(atob(savedFile!.b64)).toBe('{"hello":"android"}');
+
+      downloadBinaryFile("slaprf-H1.bin", "application/octet-stream", new Uint8Array([0xe9, 0x05, 0x02, 0x20]));
+      expect(savedFile!.name).toBe("slaprf-H1.bin");
+      expect(savedFile!.mime).toBe("application/octet-stream");
+      expect(atob(savedFile!.b64).charCodeAt(0)).toBe(0xe9);
+
+      // Sidebar keeps #/flasher visible inside the Android app so users can flash timers over USB-C OTG
+      const navRoot = mountHtml(`<aside></aside>`);
+      const router = new Router();
+      const sb = new Sidebar(navRoot.querySelector("aside")!, store, router);
+      try {
+        const flasherItems = navRoot.querySelectorAll<HTMLElement>('[data-route="flasher"]');
+        expect(flasherItems.length > 0).toBe(true);
+        expect(flasherItems[0].style.display).not.toBe("none");
+      } finally {
+        sb.destroy();
+      }
+    } finally {
+      ann.stop();
+      delete win.SlapRFAndroid;
     }
   });
 });

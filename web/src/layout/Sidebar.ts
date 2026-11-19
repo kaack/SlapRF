@@ -360,8 +360,9 @@ export class Sidebar extends Component {
     this.el.querySelectorAll<HTMLElement>("[data-livetime-only]").forEach((a) => {
       a.style.display = ltOn ? "" : "none";
     });
+    const hideFlasher = isExternalTimer;
     this.el.querySelectorAll<HTMLElement>('[data-route="flasher"]').forEach((a) => {
-      a.style.display = isExternalTimer ? "none" : "";
+      a.style.display = hideFlasher ? "none" : "";
     });
 
     this.el.querySelectorAll<HTMLAnchorElement>("a[data-route]").forEach((a) => {

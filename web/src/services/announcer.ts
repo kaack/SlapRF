@@ -1,3 +1,4 @@
+import { getAndroidBridge } from "../core/android_bridge";
 import { setWakeLockEnabled } from "../core/wake_lock";
 import { capabilitiesSnapshot, isServerDisconnectedLockout } from "../services/capabilities";
 import { AppStore } from "../state/store";
@@ -44,6 +45,14 @@ export function resolveHeatStageFormat(
 
 const STORAGE_KEY = "gate-timer.announcer";
 const PREFERRED_DEFAULT_VOICE = "Google US English";
+export const ANDROID_SYSTEM_VOICE_URI = "android:system";
+const ANDROID_SYSTEM_VOICE: SpeechSynthesisVoice = {
+  voiceURI: ANDROID_SYSTEM_VOICE_URI,
+  name: "Android System Voice",
+  lang: "en-US",
+  localService: true,
+  default: true,
+};
 const DEFAULT_PREFS: AnnouncerPrefs = {
   enabled: false,
   qualifierLapCallouts: true,
@@ -255,10 +264,12 @@ export class Announcer {
   }
 
   public voices(): SpeechSynthesisVoice[] {
-    if (!("speechSynthesis" in window)) return [];
+    const androidVoice = getAndroidBridge() ? [ANDROID_SYSTEM_VOICE] : [];
+    if (!("speechSynthesis" in window)) return androidVoice;
     const all = speechSynthesis.getVoices();
     const english = all.filter((v) => /^en(?:[-_]|$)/i.test(v.lang));
-    return english.length > 0 ? english : all;
+    const base = english.length > 0 ? english : all;
+    return androidVoice.length > 0 ? [...androidVoice, ...base] : base;
   }
 
   public piperVoices(): PiperVoiceDescriptor[] {
@@ -278,6 +289,16 @@ export class Announcer {
   public activeVoiceURI(): string {
     if (isPiperVoiceURI(this.prefs.voiceURI)) {
       return getPiperVoice(this.prefs.voiceURI).uri;
+    }
+    if (getAndroidBridge()) {
+      if (
+        !this.prefs.voiceURI ||
+        this.prefs.voiceURI === ANDROID_SYSTEM_VOICE_URI ||
+        this.prefs.voiceURI === "system" ||
+        this.prefs.voiceURI === PREFERRED_DEFAULT_VOICE
+      ) {
+        return ANDROID_SYSTEM_VOICE_URI;
+      }
     }
     const list = this.voices();
     if (this.prefs.voiceURI === "system" && list.length > 0) {
@@ -1026,6 +1047,13 @@ export class Announcer {
     window.clearTimeout(this.holdTimer);
     this.holdTimer = 0;
     this.piper.stop();
+    const androidBridge = getAndroidBridge();
+    if (androidBridge) {
+      androidBridge.stopSpeech();
+      if (hadBrowserUtterance) {
+        this.holdUntil = Date.now() + AFTER_CANCEL_MS;
+      }
+    }
     if ("speechSynthesis" in window) {
       if (speechSynthesis.paused) {
         speechSynthesis.resume();
@@ -1100,11 +1128,44 @@ export class Announcer {
   }
 
   private speakBrowserUtterance(text: string): void {
-    if (!("speechSynthesis" in window)) return;
     const cleaned = text
       .replace(/\s*·\s*/g, ", ")
       .replace(/\b(\d+)\.00\b/g, "$1")
       .replace(/\b(\d+)\.([1-9])0\b/g, "$1.$2");
+
+    const androidBridge = getAndroidBridge();
+    if (
+      androidBridge &&
+      (this.activeVoiceURI() === ANDROID_SYSTEM_VOICE_URI || !("speechSynthesis" in window))
+    ) {
+      const token = ++this.utteranceToken;
+      this.neuralSpeaking = true;
+      const startedAt = Date.now();
+      const maxDurationMs = Math.max(12_000, cleaned.length * 220);
+      androidBridge.speak(cleaned, this.prefs.rate, this.prefs.volume, false);
+
+      const pollDone = () => {
+        if (this.utteranceToken !== token) return;
+        const elapsed = Date.now() - startedAt;
+        // Give Android TTS ~180ms to transition into speaking state before checking isSpeaking().
+        if (elapsed >= 180 && (!androidBridge.isSpeaking() || elapsed >= maxDurationMs)) {
+          this.neuralSpeaking = false;
+          if (!this.prefs.enabled && this.queue.length === 0) {
+            this.sleepAudio();
+            return;
+          }
+          this.holdUntil = Math.max(this.holdUntil, Date.now() + BETWEEN_CALLOUTS_MS);
+          this.pump();
+          return;
+        }
+        this.utteranceWatchdog = window.setTimeout(pollDone, 100);
+      };
+      window.clearTimeout(this.utteranceWatchdog);
+      this.utteranceWatchdog = window.setTimeout(pollDone, 180);
+      return;
+    }
+
+    if (!("speechSynthesis" in window)) return;
     const utterance = new SpeechSynthesisUtterance(cleaned);
     // Keep a strong reference until onend/onerror so V8 GC never collects long multi-pilot utterances mid-speech!
     this.liveUtterances.add(utterance);

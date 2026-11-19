@@ -9,6 +9,8 @@
  * always fresh. (The un-built web/sw.js template is also inert by itself; see its header.)
  */
 
+import { isAndroidHostApp } from "../core/android_bridge";
+
 export interface StorageStatus {
   /** Whether the origin's storage is persistent (won't be evicted under storage pressure). */
   persisted: boolean;
@@ -72,9 +74,9 @@ function ensurePwaInstallListeners(): void {
 
 ensurePwaInstallListeners();
 
-/** True when the app is already running as an installed standalone PWA. */
+/** True when the app is already running as an installed standalone PWA or native Android shell. */
 export function isPwaStandalone(): boolean {
-  if (pwaInstalledSession) return true;
+  if (pwaInstalledSession || isAndroidHostApp()) return true;
   if (typeof window === "undefined") return false;
   try {
     if (window.matchMedia?.("(display-mode: standalone)")?.matches) return true;

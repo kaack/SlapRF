@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
 
+	"slaprf/internal/firmware"
 	"slaprf/internal/usb"
 )
 
@@ -353,4 +356,194 @@ func writeJSONNoStore(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
+}
+
+// handleUSBRawWS bridges an exclusive physical USB serial port (OS serial or Android USB Host)
+// over a raw binary + control WebSocket so esptool-js can read, flash, and erase XIAO ESP32-C5
+// timers natively on Android WebView and non-WebSerial browsers.
+func (s *Server) handleUSBRawWS(w http.ResponseWriter, r *http.Request) {
+	if !s.isAllowedOrigin(r) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
+	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
+	if err != nil {
+		return
+	}
+	ws.SetReadLimit(512 << 10)
+	defer func() { _ = ws.CloseNow() }()
+
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	var wsWriteMu sync.Mutex
+	sendText := func(v any) error {
+		b, mErr := json.Marshal(v)
+		if mErr != nil {
+			return mErr
+		}
+		wsWriteMu.Lock()
+		defer wsWriteMu.Unlock()
+		wCtx, wCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer wCancel()
+		return ws.Write(wCtx, websocket.MessageText, b)
+	}
+	sendBin := func(payload []byte) error {
+		wsWriteMu.Lock()
+		defer wsWriteMu.Unlock()
+		wCtx, wCancel := context.WithTimeout(ctx, 10*time.Second)
+		defer wCancel()
+		return ws.Write(wCtx, websocket.MessageBinary, payload)
+	}
+
+	portName := strings.TrimSpace(r.URL.Query().Get("port"))
+	baud := 115200
+	if bStr := strings.TrimSpace(r.URL.Query().Get("baud")); bStr != "" {
+		if bNum, pErr := strconv.Atoi(bStr); pErr == nil && bNum > 0 {
+			baud = bNum
+		}
+	}
+
+	port, info, openErr := s.usbMgr.OpenRawPort(portName, baud)
+	if openErr != nil {
+		_ = sendText(map[string]any{
+			"type":  "open",
+			"ok":    false,
+			"error": openErr.Error(),
+		})
+		_ = ws.Close(websocket.StatusNormalClosure, "open failed")
+		return
+	}
+
+	var closePortOnce sync.Once
+	closePort := func() {
+		closePortOnce.Do(func() {
+			_ = port.Close()
+		})
+	}
+	defer closePort()
+	_ = port.SetReadTimeout(40 * time.Millisecond)
+
+	vidNum := 0
+	if info.VID != "" {
+		if parsed, pErr := strconv.ParseInt(info.VID, 16, 32); pErr == nil {
+			vidNum = int(parsed)
+		}
+	}
+	if vidNum == 0 && info.IsEspressif {
+		vidNum = 0x303A
+	}
+	pidNum := 0
+	if info.PID != "" {
+		if parsed, pErr := strconv.ParseInt(info.PID, 16, 32); pErr == nil {
+			pidNum = int(parsed)
+		}
+	}
+	if pidNum == 0 && vidNum == 0x303A {
+		pidNum = 0x1001
+	}
+
+	if wErr := sendText(map[string]any{
+		"type":     "open",
+		"ok":       true,
+		"portName": info.Name,
+		"vid":      vidNum,
+		"pid":      pidNum,
+	}); wErr != nil {
+		return
+	}
+
+	var closingCleanly sync.Mutex
+	isClosing := false
+
+	go func() {
+		defer cancel()
+		buf := make([]byte, 8192)
+		for {
+			if ctx.Err() != nil {
+				return
+			}
+			n, rErr := port.Read(buf)
+			if n > 0 {
+				if wErr := sendBin(buf[:n]); wErr != nil {
+					return
+				}
+			}
+			if rErr != nil {
+				closingCleanly.Lock()
+				clean := isClosing
+				closingCleanly.Unlock()
+				if !clean {
+					_ = sendText(map[string]any{"type": "closed"})
+				}
+				return
+			}
+		}
+	}()
+
+	for {
+		msgType, msgBytes, rErr := ws.Read(ctx)
+		if rErr != nil {
+			return
+		}
+		if msgType == websocket.MessageBinary {
+			written := 0
+			for written < len(msgBytes) {
+				wn, wErr := port.Write(msgBytes[written:])
+				if wErr != nil {
+					_ = sendText(map[string]any{
+						"type":  "error",
+						"error": wErr.Error(),
+					})
+					return
+				}
+				if wn <= 0 {
+					break
+				}
+				written += wn
+			}
+			continue
+		}
+
+		var ctrl struct {
+			Type string `json:"type"`
+			ID   int    `json:"id"`
+			DTR  bool   `json:"dtr"`
+			RTS  bool   `json:"rts"`
+		}
+		if jErr := json.Unmarshal(msgBytes, &ctrl); jErr != nil {
+			continue
+		}
+		switch ctrl.Type {
+		case "signals":
+			var sigErr error
+			if atomicPort, ok := port.(firmware.AtomicDTRRTSSetter); ok {
+				sigErr = atomicPort.SetDTRRTS(ctrl.DTR, ctrl.RTS)
+			} else {
+				_ = port.SetRTS(ctrl.RTS)
+				sigErr = port.SetDTR(ctrl.DTR)
+			}
+			resp := map[string]any{
+				"type": "ack",
+				"id":   ctrl.ID,
+				"ok":   sigErr == nil,
+			}
+			if sigErr != nil {
+				resp["error"] = sigErr.Error()
+			}
+			_ = sendText(resp)
+		case "close":
+			closingCleanly.Lock()
+			isClosing = true
+			closingCleanly.Unlock()
+			closePort()
+			_ = sendText(map[string]any{
+				"type": "ack",
+				"id":   ctrl.ID,
+				"ok":   true,
+			})
+			_ = ws.Close(websocket.StatusNormalClosure, "closed")
+			return
+		}
+	}
 }

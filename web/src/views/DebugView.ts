@@ -1,3 +1,4 @@
+import { computeDirectionalPinch, computeWheelZoomFactors, PinchPoint } from "../core/chart_pinch";
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
@@ -163,6 +164,7 @@ export class DebugView extends Component {
   private rhLastHeartbeatsRx = -1;
   private rhLastSamplePushAt = 0;
   private rhLastHealthPushAt = 0;
+  private rhLastScanSeq = 0;
   private rhNodeBaseline: number[] = [-128, -128, -128, -128, -128, -128, -128, -128];
   private rhStructuralDigest = "";
   private rhPollTimer = 0;
@@ -266,6 +268,21 @@ export class DebugView extends Component {
     this.lastSyncedHwMode = store?.timingHardwareMode ?? "slaprf";
     this.console = usbPool.debugConsole;
     this.loadDebugPrefs();
+    if (this.isRotorHazardMode()) {
+      this.signalAutoY = true;
+      this.signalSmoothYMin = null;
+      this.signalSmoothYMax = null;
+      this.signalYMin = 0;
+      this.signalYMax = 140;
+    }
+    if (this.isRotorHazardUSBMode()) {
+      const sb = this.scanYBounds();
+      this.scanAutoY = true;
+      this.scanYMin = 0;
+      this.scanYMax = 120;
+      this.scanStopMHz = Math.min(sb.maxFreqMHz, this.scanStopMHz);
+      this.syncScanColorRange();
+    }
 
     el.innerHTML = `
       <div class="settings debug-page">
@@ -510,6 +527,11 @@ export class DebugView extends Component {
         if (isRotorHazardMode(this.lastSyncedHwMode)) {
           this.rhLiveOn = false;
           void this.api?.setRHDebugStream?.(0, false)?.catch(() => undefined);
+          if (this.lastSyncedHwMode === "rotorhazard_usb" && this.store) {
+            void sharedRHLink
+              .runUSBScan(this.store, this.api, { timerId: 0, mode: "stop", start: 5180, stop: 5917, step: 5 })
+              .catch(() => undefined);
+          }
         }
         this.lastSyncedHwMode = curMode;
         this.resetSignalBuffersForTargetChange();
@@ -554,11 +576,19 @@ export class DebugView extends Component {
       window.clearInterval(this.statusTimer);
       window.clearInterval(this.rhPollTimer);
       const wasRhActive = this.rhLiveOn || this.isRotorHazardMode();
+      const wasRhUsbScan = (this.scanLive || this.scanning) && this.isRotorHazardUSBMode();
       if (this.rhLiveOn) {
         this.rhLiveOn = false;
       }
       if (wasRhActive) {
         void this.api?.setRHDebugStream?.(0, false)?.catch(() => undefined);
+      }
+      if (wasRhUsbScan && this.store) {
+        this.scanLive = false;
+        this.scanning = false;
+        void sharedRHLink
+          .runUSBScan(this.store, this.api, { timerId: 0, mode: "stop", start: 5180, stop: 5917, step: 5 })
+          .catch(() => undefined);
       }
       // Leaving the Debug page must stop high-rate LIVE / SCAN / LOG streaming,
       // and if a secondary debug USB device (Slot 1) is connected, disconnect it and revert to main.
@@ -569,6 +599,9 @@ export class DebugView extends Component {
     });
     this.syncHardwareModeDom();
     this.bindConsole(this.console);
+    if (this.isRotorHazardMode()) {
+      void this.tickNonSlapRFTelemetry();
+    }
     this.renderFrame();
   }
 
@@ -594,6 +627,116 @@ export class DebugView extends Component {
 
   private activeSweepHz(): number {
     return this.isRotorHazardMode() ? 10 : (this.status?.sweepHz ?? 50);
+  }
+
+  private hasSpectrumScanSupport(): boolean {
+    return this.isSlapRFMode() || this.isRotorHazardUSBMode();
+  }
+
+  private scanYBounds(): {
+    min: number;
+    max: number;
+    minSpan: number;
+    defaultColorMin: number;
+    defaultColorMax: number;
+    unit: string;
+    maxFreqMHz: number;
+    rssiScale: boolean;
+  } {
+    if (this.isRotorHazardUSBMode()) {
+      return {
+        min: 0,
+        max: 255,
+        minSpan: 24,
+        defaultColorMin: 12,
+        defaultColorMax: 185,
+        unit: "RSSI",
+        maxFreqMHz: 5917,
+        rssiScale: true,
+      };
+    }
+    return {
+      min: DBM_MIN,
+      max: DBM_MAX,
+      minSpan: 16,
+      defaultColorMin: -100,
+      defaultColorMax: -40,
+      unit: "dBm",
+      maxFreqMHz: 5945,
+      rssiScale: false,
+    };
+  }
+
+  private syncScanColorRange(): void {
+    const sb = this.scanYBounds();
+    if (
+      (this.scanAutoY && !this.spectrumAcc.latest) ||
+      (!this.scanAutoY && Math.round(this.scanYMin) === sb.min && Math.round(this.scanYMax) === sb.max)
+    ) {
+      this.spectrumAcc.setColorRange(sb.defaultColorMin, sb.defaultColorMax, sb.rssiScale);
+      return;
+    }
+    if (sb.rssiScale) {
+      const lo = Math.max(0, Math.min(220, this.scanYMin + 4));
+      const hi = Math.max(lo + 16, Math.min(255, this.scanYMax));
+      this.spectrumAcc.setColorRange(lo, hi, true);
+    } else {
+      this.spectrumAcc.setColorRange(this.scanYMin, Math.min(-25, this.scanYMax), false);
+    }
+  }
+
+  private async runRhUsbScanCommand(
+    mode: "once" | "live" | "stop",
+    startMHz = this.scanStartMHz,
+    stopMHz = this.scanStopMHz,
+    stepMHz = this.scanStepMHz,
+    timerIdOverride?: number
+  ): Promise<void> {
+    if (!this.store) return;
+    const sb = this.scanYBounds();
+    const tid = timerIdOverride !== undefined ? timerIdOverride : (this.activeRhSnapshot()?.timerId ?? 0);
+    const start = Math.max(5180, Math.min(sb.maxFreqMHz - 5, Math.round(startMHz)));
+    const stop = Math.max(start + 5, Math.min(sb.maxFreqMHz, Math.round(stopMHz)));
+    const step = Math.max(1, Math.min(50, Math.round(stepMHz)));
+    const res = await sharedRHLink.runUSBScan(this.store, this.api, {
+      timerId: tid,
+      mode,
+      start,
+      stop,
+      step,
+    });
+    if (mode === "once" && res.scan && Array.isArray(res.scan.values)) {
+      this.rhLastScanSeq = res.scan.seq || 0;
+      this.ingestScanPassResult({
+        start: res.scan.start,
+        step: res.scan.step,
+        dbm: res.scan.values.map((v) => Math.round(v)),
+        passMs: res.scan.passMs,
+        live: false,
+      });
+    }
+  }
+
+  private ingestScanPassResult(s: ScanResult): void {
+    const gridChanged =
+      this.spectrumAcc.latest !== null &&
+      (this.spectrumAcc.latest.start !== s.start ||
+        this.spectrumAcc.latest.step !== s.step ||
+        this.spectrumAcc.latest.dbm.length !== s.dbm.length);
+    if (gridChanged) {
+      this.scanZoomStartMHz = null;
+      this.scanZoomStopMHz = null;
+    }
+    this.spectrumAcc.pushScan(s);
+    this.recordScanFindingFromPass(s);
+    if (!s.live) {
+      this.scanning = false;
+      this.renderScan();
+    } else {
+      this.updateScanFindings();
+    }
+    this.dirtySpectrum = true;
+    this.dirtyWaterfall = true;
   }
 
   private signalYBounds(): {
@@ -677,11 +820,31 @@ export class DebugView extends Component {
     this.rhStructuralDigest = "";
     this.signalFindings = [];
     this.signalFindingSeq = 0;
+    this.scanning = false;
+    this.scanLive = false;
+    this.rhLastScanSeq = 0;
+    this.spectrumAcc.clearAll();
+    this.scanFindings = [];
+    this.scanFindingSeq = 0;
+    const sb = this.scanYBounds();
+    this.scanAutoY = this.isRotorHazardUSBMode();
+    this.scanYMin = sb.min;
+    this.scanYMax = this.isRotorHazardUSBMode() ? 120 : sb.max;
+    this.scanZoomStartMHz = null;
+    this.scanZoomStopMHz = null;
+    if (this.isRotorHazardUSBMode() && this.scanStopMHz > 5917) {
+      this.scanStopMHz = 5917;
+    } else if (this.isSlapRFMode() && this.scanStopMHz === 5917) {
+      this.scanStopMHz = 5945;
+    }
+    this.syncScanColorRange();
     this.checks = [];
     this.checksAt = null;
     this.reportExtra = "";
     this.dirtySignal = true;
     this.dirtyNoiseTable = true;
+    this.dirtySpectrum = true;
+    this.dirtyWaterfall = true;
     this.dirtyHealth = true;
   }
 
@@ -696,8 +859,8 @@ export class DebugView extends Component {
       const sec = this.el.querySelector<HTMLElement>(`[data-section-anchor="${anchor}"]`);
       if (sec) sec.hidden = hide;
     };
-    // Spectrum scan, firmware serial CLI, and USB firmware log are strictly SlapRF hardware capabilities.
-    setHidden("spectrum-scan", !isSlap);
+    // Spectrum scan & waterfall work on both SlapRF timers and direct RotorHazard USB nodes (0-255 scale).
+    setHidden("spectrum-scan", !(isSlap || isRHUSB));
     setHidden("serial-console", !isSlap);
     setHidden("live-log", !isSlap);
     // In LapRF mode, hide RF diagnostic sections that apply to SlapRF / RotorHazard node telemetry.
@@ -719,27 +882,32 @@ export class DebugView extends Component {
       setIntro(
         "connection",
         "Connection",
-        `<p>Select a RotorHazard USB serial node to inspect its binary serial link, receiver seats, serial RTT, and live 0–255 RSSI telemetry.</p>`
+        `<p>Select a RotorHazard USB serial node to inspect its binary serial link, receiver nodes, serial RTT, and live 0-255 RSSI telemetry.</p>`
       );
       setIntro(
         "self-test",
         "Self-test",
-        `<p>Runs an end-to-end check on the selected RotorHazard USB node: serial port &amp; API handshake, seat count, RF frequency tuning, serial RTT, baseline headroom, and ~10 Hz RSSI poll stream.</p>`
+        `<p>Runs an end-to-end check on the selected RotorHazard USB device: serial port &amp; API handshake, node count, RF frequency tuning, serial RTT, baseline headroom, and ~10 Hz RSSI poll stream.</p>`
       );
       setIntro(
         "status-health",
         "Status &amp; health",
-        `<p>Serial API level, baud rate, receiver seat assignments, gate state, serial RTT, and live telemetry counters.</p>`
+        `<p>Serial API level, baud rate, receiver node assignments, gate state, serial RTT, and live telemetry counters.</p>`
       );
       setIntro(
         "monitored-channels",
         "Monitored channels",
-        `<p>Live 0–255 RSSI across the USB node's receiver seats with hardware Enter / Exit thresholds. Click a seat row to show or hide its trace.</p>`
+        `<p>Live 0-255 RSSI across the USB device's receiver nodes with hardware Enter / Exit thresholds. Click a node row to show or hide its trace.</p>`
       );
       setIntro(
         "signal-noise",
         "Signal over time &amp; channel noise",
-        `<p>Plots live ~10 Hz RotorHazard USB RSSI (0–255), crossing peaks, baseline noise, and hardware Enter / Exit thresholds per receiver seat.</p><p>The table below shows mean, spread, max, floor, and how often baseline noise reaches each seat's EnterAt threshold ("would trigger").</p>`
+        `<p>Plots live ~10 Hz RotorHazard USB RSSI (0-255), crossing peaks, baseline noise, and hardware Enter / Exit thresholds per receiver node.</p><p>The table below shows mean, spread, max, floor, and how often baseline noise reaches each node's EnterAt threshold ("would trigger").</p>`
+      );
+      setIntro(
+        "spectrum-scan",
+        "Spectrum scan &amp; waterfall",
+        `<p>Sweeps 5180-5917 MHz across the USB device's receiver nodes on a 0-255 RSSI scale to spot active VTXs or 5 GHz Wi-Fi interference (Raceband <strong>R3-R6 overlap Wi-Fi UNII-3</strong>, channels 149-165, 5735-5835 MHz).</p><p><strong>Scan once</strong> captures a single sweep and restores node frequencies. <strong>Stream</strong> sweeps continuously with live, average, and max-hold traces (pausing normal node polling while active).</p>`
       );
     } else if (isRHNet) {
       setIntro(
@@ -799,6 +967,11 @@ export class DebugView extends Component {
         "Signal over time &amp; channel noise",
         `<p>Click <strong>Stream</strong> to plot live 50 Hz sweeps, crossing peaks, 5 GHz Wi-Fi bursts, noise floors, and pilot thresholds.</p><p>The table below shows mean, spread, max, floor, hits/s, and how often noise reaches a pilot's enter threshold ("would trigger": anything above 0% with no drone flying risks false passes).</p>`
       );
+      setIntro(
+        "spectrum-scan",
+        "Spectrum scan &amp; waterfall",
+        `<p>Scans 5180-5917 MHz to spot rogue VTXs or 5 GHz Wi-Fi interference (Raceband <strong>R3-R6 overlap Wi-Fi UNII-3</strong>, channels 149-165, 5735-5835 MHz).</p><p><strong>Scan once</strong> captures a single sweep. <strong>Stream</strong> scans continuously with live, average, and max-hold traces (pausing the 8-channel stream while active).</p>`
+      );
     }
     if (this.el.offsetWidth > 0) {
       scanSettingsIntroCollapse(this.el);
@@ -824,8 +997,13 @@ export class DebugView extends Component {
 
   private ingestRotorHazardSample(): void {
     if (!this.isRotorHazardMode()) return;
+    const isUSB = this.isRotorHazardUSBMode();
     const snaps = this.getRhSnapshots();
     const snap = this.activeRhSnapshot();
+    if (isUSB && snap && !snap.connected && (this.scanLive || this.scanning)) {
+      this.scanLive = false;
+      this.scanning = false;
+    }
     const structKey = JSON.stringify({
       list: snaps.map((s) => [s.timerId, s.label, s.endpoint, s.connected, s.authOk, s.nodeCount, s.serverVersion, s.gateArmed]),
       sel: snap?.timerId ?? null,
@@ -833,6 +1011,7 @@ export class DebugView extends Component {
       enters: snap?.nodeEnterLevels ?? [],
       exits: snap?.nodeExitLevels ?? [],
       liveOn: this.rhLiveOn,
+      scanLive: isUSB ? this.scanLive : false,
       sim: Boolean(this.store?.simulatorRunning),
     });
     if (structKey !== this.rhStructuralDigest) {
@@ -844,6 +1023,9 @@ export class DebugView extends Component {
       this.renderLive();
       this.renderSignalControls();
       this.renderNoiseTable();
+      if (isUSB) {
+        this.renderScan();
+      }
     }
 
     if (!snap) return;
@@ -853,26 +1035,39 @@ export class DebugView extends Component {
     if (clockEl) {
       clockEl.textContent = snap.connected
         ? `${snap.clockSynced ? "Synced" : "Syncing"} · ${snap.clockOffsetMs >= 0 ? "+" : ""}${snap.clockOffsetMs.toFixed(1)} ms`
-        : "—";
+        : "-";
     }
     const telemEl = this.el.querySelector<HTMLElement>("[data-rh-live-telem]");
     if (telemEl) {
       telemEl.textContent = snap.connected
-        ? `${snap.heartbeatsRx} heartbeats · ${snap.passesRx} passes`
-        : "—";
+        ? `${snap.heartbeatsRx} ${isUSB ? "polls" : "heartbeats"} · ${snap.passesRx} passes`
+        : "-";
     }
     const envEl = this.el.querySelector<HTMLElement>("[data-rh-live-env]");
     if (envEl) {
       envEl.textContent = snap.connected
         ? snap.envSummary || (snap.cpuTempC && snap.cpuTempC > 0 ? `Pi CPU ${snap.cpuTempC.toFixed(1)} °C` : "No sensor reported")
-        : "—";
+        : "-";
     }
 
     if (!snap.connected) return;
 
+    if (isUSB && this.scanLive && snap.lastScan && Array.isArray(snap.lastScan.values)) {
+      if (snap.lastScan.seq !== this.rhLastScanSeq) {
+        this.rhLastScanSeq = snap.lastScan.seq;
+        this.ingestScanPassResult({
+          start: snap.lastScan.start,
+          step: snap.lastScan.step,
+          dbm: snap.lastScan.values.map((v) => Math.round(v)),
+          passMs: snap.lastScan.passMs,
+          live: true,
+        });
+      }
+    }
+
     const now = performance.now();
     const hbChanged = snap.heartbeatsRx !== this.rhLastHeartbeatsRx;
-    if (this.rhLiveOn && (hbChanged || now - this.rhLastSamplePushAt >= 150)) {
+    if (this.rhLiveOn && !this.scanLive && (hbChanged || now - this.rhLastSamplePushAt >= 150)) {
       this.rhLastHeartbeatsRx = snap.heartbeatsRx;
       this.rhLastSamplePushAt = now;
       const nodeCount = snap.nodeCount === 4 ? 4 : 8;
@@ -1044,26 +1239,10 @@ export class DebugView extends Component {
       },
       onScan: (s) => {
         if (s.live && !this.scanLive) return;
-        const gridChanged =
-          this.spectrumAcc.latest !== null &&
-          (this.spectrumAcc.latest.start !== s.start ||
-            this.spectrumAcc.latest.step !== s.step ||
-            this.spectrumAcc.latest.dbm.length !== s.dbm.length);
-        if (gridChanged) {
-          this.scanZoomStartMHz = null;
-          this.scanZoomStopMHz = null;
-        }
-        this.spectrumAcc.pushScan(s);
-        this.recordScanFindingFromPass(s);
+        this.ingestScanPassResult(s);
         if (!s.live) {
-          this.scanning = false;
-          this.renderScan();
           void this.syncRfState();
-        } else {
-          this.updateScanFindings();
         }
-        this.dirtySpectrum = true;
-        this.dirtyWaterfall = true;
       },
       onLog: (line) => this.appendLog(line),
       onRawReply: (line, msgType) => {
@@ -1216,6 +1395,7 @@ export class DebugView extends Component {
 
   private currentScanBounds(): { vStart: number; vStop: number } {
     const s = this.spectrumAcc.latest;
+    const maxStop = this.scanYBounds().maxFreqMHz;
     const rawStart = this.scanStartMHz;
     const rawStop = this.scanStopMHz;
     const rawStep = Math.max(1, this.scanStepMHz);
@@ -1223,7 +1403,7 @@ export class DebugView extends Component {
     const fullStop =
       s && s.dbm.length
         ? s.start + s.step * (s.dbm.length - 1)
-        : Math.max(fullStart + rawStep, Math.min(5945, rawStop));
+        : Math.max(fullStart + rawStep, Math.min(maxStop, rawStop));
     const step = s && s.dbm.length ? s.step : rawStep;
     const vStart = this.scanZoomStartMHz ?? fullStart;
     const vStop = Math.max(vStart + step, this.scanZoomStopMHz ?? fullStop);
@@ -1249,6 +1429,7 @@ export class DebugView extends Component {
 
   private applyFreqStretch(startMHz0: number, startMHz1: number, anchorFrac: number, factor: number): void {
     const s = this.spectrumAcc.latest;
+    const maxStop = this.scanYBounds().maxFreqMHz;
     const rawStart = this.scanStartMHz;
     const rawStop = this.scanStopMHz;
     const rawStep = Math.max(1, this.scanStepMHz);
@@ -1256,7 +1437,7 @@ export class DebugView extends Component {
     const fullStop =
       s && s.dbm.length
         ? s.start + s.step * (s.dbm.length - 1)
-        : Math.max(fullStart + rawStep, Math.min(5945, rawStop));
+        : Math.max(fullStart + rawStep, Math.min(maxStop, rawStop));
     const step = s && s.dbm.length ? s.step : rawStep;
     const fullSpan = Math.max(10, fullStop - fullStart);
     const curSpan = Math.max(10, startMHz1 - startMHz0);
@@ -1289,10 +1470,11 @@ export class DebugView extends Component {
 
   private applyFreqPan(startMHz0: number, startMHz1: number, deltaMHz: number): void {
     const s = this.spectrumAcc.latest;
+    const maxStop = this.scanYBounds().maxFreqMHz;
     const rawStart = this.scanStartMHz;
     const rawStop = this.scanStopMHz;
     const fullStart = s && s.dbm.length ? s.start : Math.max(5180, Math.min(5900, rawStart));
-    const fullStop = s && s.dbm.length ? s.start + s.step * (s.dbm.length - 1) : Math.max(fullStart + 5, Math.min(5945, rawStop));
+    const fullStop = s && s.dbm.length ? s.start + s.step * (s.dbm.length - 1) : Math.max(fullStart + 5, Math.min(maxStop, rawStop));
     const span = Math.max(10, Math.min(fullStop - fullStart, startMHz1 - startMHz0));
     let f0 = startMHz0 + deltaMHz;
     let f1 = f0 + span;
@@ -1325,10 +1507,12 @@ export class DebugView extends Component {
     factor: number,
     target: "signal" | "scan"
   ): void {
-    const bMin = target === "signal" ? this.signalYBounds().min : DBM_MIN;
-    const bMax = target === "signal" ? this.signalYBounds().max : DBM_MAX;
-    const curSpan = Math.max(4, startMax - startMin);
-    const nextSpan = Math.max(4, Math.min(bMax - bMin, curSpan * factor));
+    const sb = this.scanYBounds();
+    const bMin = target === "signal" ? this.signalYBounds().min : sb.min;
+    const bMax = target === "signal" ? this.signalYBounds().max : sb.max;
+    const minAllow = target === "signal" ? 4 : sb.rssiScale ? 12 : 4;
+    const curSpan = Math.max(minAllow, startMax - startMin);
+    const nextSpan = Math.max(minAllow, Math.min(bMax - bMin, curSpan * factor));
     const anchorDbm = startMin + anchorFrac * curSpan;
     let nextMin = anchorDbm - anchorFrac * nextSpan;
     let nextMax = nextMin + nextSpan;
@@ -1351,16 +1535,18 @@ export class DebugView extends Component {
       this.scanAutoY = false;
       this.scanYMin = nextMin;
       this.scanYMax = nextMax;
-      this.spectrumAcc.setColorRange(nextMin, Math.min(-25, nextMax));
+      this.syncScanColorRange();
       this.dirtySpectrum = true;
       this.dirtyWaterfall = true;
     }
   }
 
   private applyDbmPan(startMin: number, startMax: number, deltaDbm: number, target: "signal" | "scan"): void {
-    const bMin = target === "signal" ? this.signalYBounds().min : DBM_MIN;
-    const bMax = target === "signal" ? this.signalYBounds().max : DBM_MAX;
-    const span = Math.max(4, startMax - startMin);
+    const sb = this.scanYBounds();
+    const bMin = target === "signal" ? this.signalYBounds().min : sb.min;
+    const bMax = target === "signal" ? this.signalYBounds().max : sb.max;
+    const minAllow = target === "signal" ? 4 : sb.rssiScale ? 12 : 4;
+    const span = Math.max(minAllow, startMax - startMin);
     let nextMin = startMin + deltaDbm;
     let nextMax = nextMin + span;
     if (nextMin < bMin) {
@@ -1382,7 +1568,7 @@ export class DebugView extends Component {
       this.scanAutoY = false;
       this.scanYMin = nextMin;
       this.scanYMax = nextMax;
-      this.spectrumAcc.setColorRange(nextMin, Math.min(-25, nextMax));
+      this.syncScanColorRange();
       this.dirtySpectrum = true;
       this.dirtyWaterfall = true;
     }
@@ -1524,6 +1710,7 @@ export class DebugView extends Component {
     if (!this.scanAutoY) return;
     const s = this.spectrumAcc.latest;
     if (!s || !s.dbm.length) return;
+    const sb = this.scanYBounds();
     const scanStop = s.start + s.step * (s.dbm.length - 1);
     const vStart = this.scanZoomStartMHz ?? s.start;
     const vStop = this.scanZoomStopMHz ?? scanStop;
@@ -1539,14 +1726,23 @@ export class DebugView extends Component {
       if (hold && hold[i] > maxD) maxD = hold[i];
     }
     if (minD <= maxD) {
-      let targetMin = Math.max(DBM_MIN, minD - 4);
-      let targetMax = Math.min(DBM_MAX, maxD + 6);
-      if (targetMax - targetMin < 20) {
-        targetMax = Math.min(DBM_MAX, targetMin + 20);
+      const padLo = sb.rssiScale ? 8 : 4;
+      const padHi = sb.rssiScale ? 16 : 6;
+      const minSpan = sb.rssiScale ? 45 : 20;
+      let targetMin = Math.max(sb.min, minD - padLo);
+      let targetMax = Math.min(sb.max, maxD + padHi);
+      if (targetMax - targetMin < minSpan) {
+        targetMax = Math.min(sb.max, targetMin + minSpan);
       }
       this.scanYMin = targetMin;
       this.scanYMax = targetMax;
-      this.spectrumAcc.setColorRange(this.scanYMin, Math.min(-25, this.scanYMax + 6));
+      if (sb.rssiScale) {
+        const cMin = Math.max(0, Math.round(minD - 3));
+        const cMax = Math.max(cMin + 24, Math.min(255, Math.round(maxD + 16)));
+        this.spectrumAcc.setColorRange(cMin, cMax, true);
+      } else {
+        this.spectrumAcc.setColorRange(this.scanYMin, Math.min(-25, this.scanYMax + 6), false);
+      }
     }
   }
 
@@ -1573,57 +1769,201 @@ export class DebugView extends Component {
       }
     });
 
+    type DebugCanvasKind = "signal" | "spectrum" | "waterfall";
+    const resolveDebugCanvasKind = (el: Element | null): DebugCanvasKind | null => {
+      if (!el || !el.matches) return null;
+      if (el.matches("[data-signal-canvas]")) return "signal";
+      if (el.matches("[data-spectrum-canvas]")) return "spectrum";
+      if (el.matches("[data-waterfall-canvas]")) return "waterfall";
+      return null;
+    };
+
+    const resetDebugCanvasAxes = (kind: DebugCanvasKind) => {
+      if (kind === "signal") {
+        this.signalEndN = null;
+        this.signalAutoX = true;
+        this.signalAutoY = true;
+        this.signalSmoothYMin = null;
+        this.signalSmoothYMax = null;
+        this.renderSignalControls();
+        this.dirtySignal = true;
+        this.dirtyNoiseTable = true;
+      } else {
+        const sb = this.scanYBounds();
+        this.scanZoomStartMHz = null;
+        this.scanZoomStopMHz = null;
+        this.scanAutoY = false;
+        this.scanYMin = sb.min;
+        this.scanYMax = sb.max;
+        this.syncScanColorRange();
+        this.spectrumAcc.setVisibleRows(80);
+        this.renderScan();
+      }
+      this.saveDebugPrefs();
+    };
+
+    const onDebugWheel = (e: WheelEvent) => {
+      const target = e.target as HTMLElement | null;
+      const kind = resolveDebugCanvasKind(target);
+      if (!kind || !target) return;
+      const wf = computeWheelZoomFactors(e);
+      if (!wf) return;
+      e.preventDefault();
+
+      const r = target.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      const T = 12;
+      const L = 44;
+      const rightPad = kind === "waterfall" ? 18 : 14;
+      const plotW = Math.max(10, r.width - L - rightPad);
+      const plotH = Math.max(10, r.height - T - 26);
+      const xFrac = Math.max(0, Math.min(1, (x - L) / plotW));
+      const yFrac = Math.max(0, Math.min(1, 1 - (y - T) / plotH));
+
+      if (kind === "signal") {
+        if (wf.mode === "x" || wf.mode === "xy") {
+          const prevSec = this.signalWindowSec;
+          const prevEndN = this.signalViewEndN();
+          const nextSec = Math.max(0.4, Math.min(120, prevSec * wf.xSpanFactor));
+          this.signalAutoX = false;
+          this.signalWindowSec = nextSec;
+          if (this.signalEndN !== null) {
+            const sweepHz = this.activeSweepHz();
+            const anchorN = prevEndN - (1 - xFrac) * prevSec * sweepHz;
+            this.signalEndN = this.clampSignalEndN(anchorN + (1 - xFrac) * nextSec * sweepHz);
+          }
+          this.dirtySignal = true;
+          this.dirtyNoiseTable = true;
+        }
+        if (wf.mode === "y" || wf.mode === "xy") {
+          this.applyDbmStretch(this.signalYMin, this.signalYMax, yFrac, wf.ySpanFactor, "signal");
+        }
+        this.renderSignalControls();
+      } else if (kind === "spectrum") {
+        const bounds = this.currentScanBounds();
+        if (bounds && (wf.mode === "x" || wf.mode === "xy")) {
+          this.applyFreqStretch(bounds.vStart, bounds.vStop, xFrac, wf.xSpanFactor);
+        }
+        if (wf.mode === "y" || wf.mode === "xy") {
+          this.applyDbmStretch(this.scanYMin, this.scanYMax, yFrac, wf.ySpanFactor, "scan");
+        }
+        this.renderScan();
+      } else {
+        const bounds = this.currentScanBounds();
+        if (bounds && (wf.mode === "x" || wf.mode === "xy")) {
+          this.applyFreqStretch(bounds.vStart, bounds.vStop, xFrac, wf.xSpanFactor);
+        }
+        if (wf.mode === "y" || wf.mode === "xy") {
+          this.spectrumAcc.setVisibleRows(this.spectrumAcc.visibleRows * wf.ySpanFactor);
+          this.updateScanFindings();
+          this.dirtyWaterfall = true;
+        }
+        this.renderScan();
+      }
+      this.saveDebugPrefs();
+    };
+    this.el.addEventListener("wheel", onDebugWheel, { passive: false });
+    this.onDispose(() => this.el.removeEventListener("wheel", onDebugWheel));
+
     let lastTapTime = 0;
     let lastTapX = 0;
     let lastTapY = 0;
-    let lastTapKind = "";
+    let lastTapKind: DebugCanvasKind | "" = "";
+    let tapCandidate: {
+      pointerId: number;
+      kind: DebugCanvasKind;
+      startX: number;
+      startY: number;
+      startMs: number;
+      moved: boolean;
+    } | null = null;
+
+    const debugTouchPts = new Map<number, { kind: DebugCanvasKind; x: number; y: number; clientY: number }>();
+    let debugPinch: {
+      kind: DebugCanvasKind;
+      id1: number;
+      id2: number;
+      p1Start: PinchPoint;
+      p2Start: PinchPoint;
+      wasSignalLive: boolean;
+      startEndN: number;
+      startWindowSec: number;
+      startYMin: number;
+      startYMax: number;
+      startMHz0: number;
+      startMHz1: number;
+      startScrollRow: number;
+      startVisibleRows: number;
+      anchorXFrac: number;
+      anchorYFrac: number;
+    } | null = null;
 
     this.listen(this.el, "pointerdown", (e: PointerEvent) => {
       if (e.pointerType === "mouse" && e.button !== 0) return;
       const target = e.target as HTMLElement;
       const isTouch = e.pointerType === "touch";
-      if (
-        isTouch &&
-        target.matches("[data-signal-canvas], [data-spectrum-canvas], [data-waterfall-canvas]")
-      ) {
-        const kind = target.matches("[data-signal-canvas]")
-          ? "signal"
-          : target.matches("[data-spectrum-canvas]")
-            ? "spectrum"
-            : "waterfall";
-        const now = performance.now();
-        if (
-          lastTapKind === kind &&
-          now - lastTapTime < 320 &&
-          Math.hypot(e.clientX - lastTapX, e.clientY - lastTapY) < 28
-        ) {
+      const canvasKind = resolveDebugCanvasKind(target);
+
+      if (isTouch && canvasKind) {
+        try {
+          target.setPointerCapture(e.pointerId);
+        } catch {}
+        const r = target.getBoundingClientRect();
+        const lx = e.clientX - r.left;
+        const ly = e.clientY - r.top;
+        debugTouchPts.set(e.pointerId, { kind: canvasKind, x: lx, y: ly, clientY: e.clientY });
+
+        const sameKindPts = Array.from(debugTouchPts.entries()).filter(([, v]) => v.kind === canvasKind);
+        if (sameKindPts.length === 1) {
+          tapCandidate = {
+            pointerId: e.pointerId,
+            kind: canvasKind,
+            startX: e.clientX,
+            startY: e.clientY,
+            startMs: performance.now(),
+            moved: false,
+          };
+        } else {
+          tapCandidate = null;
           lastTapTime = 0;
-          if (kind === "signal") {
-            this.signalEndN = null;
-            this.signalAutoX = true;
-            this.signalAutoY = true;
-            this.signalSmoothYMin = null;
-            this.signalSmoothYMax = null;
-            this.renderSignalControls();
-            this.dirtySignal = true;
-            this.dirtyNoiseTable = true;
-          } else {
-            this.scanZoomStartMHz = null;
-            this.scanZoomStopMHz = null;
-            this.scanAutoY = false;
-            this.scanYMin = DBM_MIN;
-            this.scanYMax = DBM_MAX;
-            this.spectrumAcc.setColorRange(-100, -40);
-            this.spectrumAcc.setVisibleRows(80);
-            this.renderScan();
-          }
-          this.saveDebugPrefs();
+        }
+
+        if (sameKindPts.length >= 2) {
+          this.signalDrag = null;
+          this.signalYZoomBox = null;
+          this.specDragging = null;
+          this.wfDragging = null;
+          this.scanZoomBox = null;
+          const [[id1, pt1], [id2, pt2]] = sameKindPts;
+          const midX = (pt1.x + pt2.x) * 0.5;
+          const midY = (pt1.y + pt2.y) * 0.5;
+          const T = 12;
+          const L = 44;
+          const rightPad = canvasKind === "waterfall" ? 18 : 14;
+          const plotW = Math.max(10, r.width - L - rightPad);
+          const plotH = Math.max(10, r.height - T - 26);
+          const bounds = this.currentScanBounds();
+          debugPinch = {
+            kind: canvasKind,
+            id1,
+            id2,
+            p1Start: { x: pt1.x, y: pt1.y },
+            p2Start: { x: pt2.x, y: pt2.y },
+            wasSignalLive: this.signalEndN === null,
+            startEndN: this.signalViewEndN(),
+            startWindowSec: this.signalWindowSec,
+            startYMin: canvasKind === "signal" ? this.signalYMin : this.scanYMin,
+            startYMax: canvasKind === "signal" ? this.signalYMax : this.scanYMax,
+            startMHz0: bounds ? bounds.vStart : this.scanStartMHz,
+            startMHz1: bounds ? bounds.vStop : this.scanStopMHz,
+            startScrollRow: this.spectrumAcc.scrollRow,
+            startVisibleRows: this.spectrumAcc.visibleRows,
+            anchorXFrac: Math.max(0, Math.min(1, (midX - L) / plotW)),
+            anchorYFrac: Math.max(0, Math.min(1, 1 - (midY - T) / plotH)),
+          };
           return;
         }
-        lastTapTime = now;
-        lastTapX = e.clientX;
-        lastTapY = e.clientY;
-        lastTapKind = kind;
       }
 
       const yAxisW = isTouch ? 56 : 48;
@@ -1841,7 +2181,100 @@ export class DebugView extends Component {
       }
     });
 
-    const onPointerEnd = () => {
+    const onPointerEnd = (e: PointerEvent) => {
+      if (e.pointerType === "touch" && debugTouchPts.has(e.pointerId)) {
+        const endedEntry = debugTouchPts.get(e.pointerId)!;
+        const wasSingleCleanTap =
+          e.type === "pointerup" &&
+          debugPinch === null &&
+          debugTouchPts.size === 1 &&
+          tapCandidate !== null &&
+          tapCandidate.pointerId === e.pointerId &&
+          !tapCandidate.moved &&
+          performance.now() - tapCandidate.startMs < 300;
+        tapCandidate = null;
+        debugTouchPts.delete(e.pointerId);
+
+        if (wasSingleCleanTap) {
+          const now = performance.now();
+          if (
+            lastTapKind === endedEntry.kind &&
+            now - lastTapTime < 340 &&
+            Math.hypot(e.clientX - lastTapX, e.clientY - lastTapY) < 32
+          ) {
+            lastTapTime = 0;
+            this.signalDrag = null;
+            this.specDragging = null;
+            this.wfDragging = null;
+            resetDebugCanvasAxes(endedEntry.kind);
+            return;
+          }
+          lastTapTime = now;
+          lastTapX = e.clientX;
+          lastTapY = e.clientY;
+          lastTapKind = endedEntry.kind;
+        }
+
+        if (debugPinch !== null) {
+          const remSame = Array.from(debugTouchPts.values()).filter((v) => v.kind === debugPinch!.kind);
+          if (remSame.length < 2) {
+            const finishedKind = debugPinch.kind;
+            debugPinch = null;
+            if (finishedKind === "signal") {
+              this.renderSignalControls();
+              this.dirtySignal = true;
+            } else {
+              this.renderScan();
+            }
+            this.saveDebugPrefs();
+            if (remSame.length === 1) {
+              const rem = remSame[0];
+              if (finishedKind === "signal") {
+                this.signalDrag = {
+                  mode: "pan",
+                  startX: rem.x,
+                  startY: rem.y,
+                  startEndN: this.signalViewEndN(),
+                  startWindowSec: this.signalWindowSec,
+                  startYMin: this.signalYMin,
+                  startYMax: this.signalYMax,
+                  anchorFrac: 0.5,
+                };
+              } else if (finishedKind === "spectrum") {
+                const bounds = this.currentScanBounds();
+                if (bounds) {
+                  this.specDragging = {
+                    mode: "pan",
+                    startX: rem.x,
+                    startY: rem.y,
+                    startYMin: this.scanYMin,
+                    startYMax: this.scanYMax,
+                    startMHz0: bounds.vStart,
+                    startMHz1: bounds.vStop,
+                    anchorFrac: 0.5,
+                  };
+                }
+              } else {
+                const bounds = this.currentScanBounds();
+                if (bounds) {
+                  this.wfDragging = {
+                    mode: "pan",
+                    startX: rem.x,
+                    startY: rem.clientY,
+                    startScroll: this.spectrumAcc.scrollRow,
+                    startVisibleRows: this.spectrumAcc.visibleRows,
+                    startMHz0: bounds.vStart,
+                    startMHz1: bounds.vStop,
+                    anchorFrac: 0.5,
+                  };
+                }
+              }
+            }
+          }
+          return;
+        }
+      }
+
       const hadDrag = Boolean(this.signalDrag || this.specDragging || this.wfDragging);
       if (this.signalDrag) {
         if (this.signalDrag.mode === "ybox" && this.signalYZoomBox) {
@@ -1922,12 +2355,13 @@ export class DebugView extends Component {
         this.dirtyNoiseTable = true;
         this.saveDebugPrefs();
       } else if (target.matches("[data-spectrum-canvas], [data-waterfall-canvas]")) {
+        const sb = this.scanYBounds();
         this.scanZoomStartMHz = null;
         this.scanZoomStopMHz = null;
         this.scanAutoY = false;
-        this.scanYMin = DBM_MIN;
-        this.scanYMax = DBM_MAX;
-        this.spectrumAcc.setColorRange(-100, -40);
+        this.scanYMin = sb.min;
+        this.scanYMax = sb.max;
+        this.syncScanColorRange();
         this.spectrumAcc.setVisibleRows(80);
         this.renderScan();
         this.saveDebugPrefs();
@@ -1951,6 +2385,137 @@ export class DebugView extends Component {
     });
 
     this.listen(window as unknown as HTMLElement, "pointermove", (e: PointerEvent) => {
+      if (e.pointerType === "touch" && debugTouchPts.has(e.pointerId)) {
+        const entry = debugTouchPts.get(e.pointerId)!;
+        const canvasSelector =
+          entry.kind === "signal"
+            ? "[data-signal-canvas]"
+            : entry.kind === "spectrum"
+              ? "[data-spectrum-canvas]"
+              : "[data-waterfall-canvas]";
+        const canvasEl = this.el.querySelector<HTMLElement>(canvasSelector);
+        if (canvasEl) {
+          const r = canvasEl.getBoundingClientRect();
+          const lx = e.clientX - r.left;
+          const ly = e.clientY - r.top;
+          debugTouchPts.set(e.pointerId, { kind: entry.kind, x: lx, y: ly, clientY: e.clientY });
+          if (
+            tapCandidate &&
+            tapCandidate.pointerId === e.pointerId &&
+            Math.hypot(e.clientX - tapCandidate.startX, e.clientY - tapCandidate.startY) > 12
+          ) {
+            tapCandidate.moved = true;
+          }
+
+          if (debugPinch && debugPinch.kind === entry.kind) {
+            const p1 = debugTouchPts.get(debugPinch.id1);
+            const p2 = debugTouchPts.get(debugPinch.id2);
+            if (p1 && p2) {
+              const pinch = computeDirectionalPinch(
+                debugPinch.p1Start,
+                debugPinch.p2Start,
+                { x: p1.x, y: p1.y },
+                { x: p2.x, y: p2.y }
+              );
+              const T = 12;
+              const L = 44;
+              const rightPad = debugPinch.kind === "waterfall" ? 18 : 14;
+              const plotW = Math.max(10, r.width - L - rightPad);
+              const plotH = Math.max(10, r.height - T - 26);
+
+              if (debugPinch.kind === "signal") {
+                if (pinch.mode === "x" || pinch.mode === "xy") {
+                  this.signalAutoX = false;
+                  const nextSec = Math.max(
+                    0.4,
+                    Math.min(120, debugPinch.startWindowSec * pinch.xSpanFactor)
+                  );
+                  const sweepHz = this.activeSweepHz();
+                  this.signalWindowSec = nextSec;
+                  if (!debugPinch.wasSignalLive) {
+                    const liveXFrac = Math.max(0, Math.min(1, (pinch.midX - L) / plotW));
+                    const anchorN =
+                      debugPinch.startEndN -
+                      (1 - debugPinch.anchorXFrac) * debugPinch.startWindowSec * sweepHz;
+                    this.signalEndN = this.clampSignalEndN(anchorN + (1 - liveXFrac) * nextSec * sweepHz);
+                  } else if (Math.abs(pinch.midX - pinch.startMidX) > 18) {
+                    const deltaN = ((pinch.midX - pinch.startMidX) / plotW) * (nextSec * sweepHz);
+                    this.pauseSignalAt(debugPinch.startEndN - deltaN);
+                  }
+                  this.dirtySignal = true;
+                  this.dirtyNoiseTable = true;
+                }
+                if (pinch.mode === "y" || pinch.mode === "xy") {
+                  this.applyDbmStretch(
+                    debugPinch.startYMin,
+                    debugPinch.startYMax,
+                    debugPinch.anchorYFrac,
+                    pinch.ySpanFactor,
+                    "signal"
+                  );
+                  const dyMid = pinch.midY - pinch.startMidY;
+                  if (Math.abs(dyMid) > 2) {
+                    const curSpan = this.signalYMax - this.signalYMin;
+                    this.applyDbmPan(this.signalYMin, this.signalYMax, (dyMid / plotH) * curSpan, "signal");
+                  }
+                }
+              } else if (debugPinch.kind === "spectrum") {
+                if (pinch.mode === "x" || pinch.mode === "xy") {
+                  this.applyFreqStretch(
+                    debugPinch.startMHz0,
+                    debugPinch.startMHz1,
+                    debugPinch.anchorXFrac,
+                    pinch.xSpanFactor
+                  );
+                  const dxMid = pinch.midX - pinch.startMidX;
+                  if (Math.abs(dxMid) > 2) {
+                    const curBounds = this.currentScanBounds();
+                    if (curBounds) {
+                      const curSpan = curBounds.vStop - curBounds.vStart;
+                      this.applyFreqPan(curBounds.vStart, curBounds.vStop, -(dxMid / plotW) * curSpan);
+                    }
+                  }
+                }
+                if (pinch.mode === "y" || pinch.mode === "xy") {
+                  this.applyDbmStretch(
+                    debugPinch.startYMin,
+                    debugPinch.startYMax,
+                    debugPinch.anchorYFrac,
+                    pinch.ySpanFactor,
+                    "scan"
+                  );
+                  const dyMid = pinch.midY - pinch.startMidY;
+                  if (Math.abs(dyMid) > 2) {
+                    const curSpan = this.scanYMax - this.scanYMin;
+                    this.applyDbmPan(this.scanYMin, this.scanYMax, (dyMid / plotH) * curSpan, "scan");
+                  }
+                }
+              } else {
+                if (pinch.mode === "x" || pinch.mode === "xy") {
+                  this.applyFreqStretch(
+                    debugPinch.startMHz0,
+                    debugPinch.startMHz1,
+                    debugPinch.anchorXFrac,
+                    pinch.xSpanFactor
+                  );
+                }
+                if (pinch.mode === "y" || pinch.mode === "xy") {
+                  this.spectrumAcc.setVisibleRows(debugPinch.startVisibleRows * pinch.ySpanFactor);
+                  const dyMid = pinch.midY - pinch.startMidY;
+                  if (Math.abs(dyMid) > 2) {
+                    const pxPerRow = Math.max(1, (r.height - 30) / this.spectrumAcc.visibleRows);
+                    this.spectrumAcc.setScrollRow(debugPinch.startScrollRow - dyMid / pxPerRow);
+                  }
+                  this.updateScanFindings();
+                  this.dirtyWaterfall = true;
+                }
+              }
+            }
+            return;
+          }
+        }
+      }
+
       const target = e.target as HTMLElement | null;
       if (this.signalDrag) {
         const sig = this.el.querySelector<HTMLElement>("[data-signal-canvas]");
@@ -2218,10 +2783,20 @@ export class DebugView extends Component {
       this.lastNoiseTableRenderAt = now;
     }
 
-    if (this.dirtySpectrum && this.isSlapRFMode()) {
+    if (this.dirtySpectrum && this.hasSpectrumScanSupport()) {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-spectrum-canvas]");
       if (c) {
+        const sb = this.scanYBounds();
+        const prevColorMin = this.spectrumAcc.colorMinDbm;
+        const prevColorMax = this.spectrumAcc.colorMaxDbm;
         this.updateAutoScanY();
+        if (this.spectrumAcc.colorMinDbm !== prevColorMin || this.spectrumAcc.colorMaxDbm !== prevColorMax) {
+          this.dirtyWaterfall = true;
+          const wfMinEl = this.el.querySelector<HTMLElement>("[data-wf-color-min]");
+          const wfMaxEl = this.el.querySelector<HTMLElement>("[data-wf-color-max]");
+          if (wfMinEl) wfMinEl.textContent = `${this.spectrumAcc.colorMinDbm} ${sb.unit}`;
+          if (wfMaxEl) wfMaxEl.textContent = `${this.spectrumAcc.colorMaxDbm} ${sb.unit}`;
+        }
         drawSpectrumCanvas(c, this.spectrumAcc, {
           showMaxHold: this.scanShowMaxHold,
           showAverage: this.scanShowAvg,
@@ -2229,10 +2804,11 @@ export class DebugView extends Component {
           viewStartMHz: this.scanZoomStartMHz,
           viewStopMHz: this.scanZoomStopMHz,
           fallbackStartMHz: this.scanStartMHz,
-          fallbackStopMHz: this.scanStopMHz,
+          fallbackStopMHz: Math.min(sb.maxFreqMHz, this.scanStopMHz),
           yMinDbm: this.scanYMin,
           yMaxDbm: this.scanYMax,
           autoY: this.scanAutoY,
+          unitLabel: sb.unit,
           zoomBox: this.scanZoomBox,
           hover: this.scanHover,
         });
@@ -2240,9 +2816,10 @@ export class DebugView extends Component {
       }
     }
 
-    if (this.dirtyWaterfall && this.isSlapRFMode()) {
+    if (this.dirtyWaterfall && this.hasSpectrumScanSupport()) {
       const c = this.el.querySelector<HTMLCanvasElement>("[data-waterfall-canvas]");
       if (c) {
+        const sb = this.scanYBounds();
         drawWaterfallCanvas(
           c,
           this.spectrumAcc,
@@ -2252,7 +2829,8 @@ export class DebugView extends Component {
           this.scanZoomStopMHz,
           this.scanZoomBox,
           this.scanStartMHz,
-          this.scanStopMHz
+          Math.min(sb.maxFreqMHz, this.scanStopMHz),
+          sb.unit
         );
         this.dirtyWaterfall = false;
       }
@@ -2462,6 +3040,9 @@ export class DebugView extends Component {
           const tid = Number(t.dataset.timerId);
           if (Number.isFinite(tid) && tid !== this.selectedRhTimerId) {
             const prevTid = this.selectedRhTimerId;
+            if (this.scanLive && this.isRotorHazardUSBMode() && prevTid && prevTid > 0) {
+              await this.runRhUsbScanCommand("stop", this.scanStartMHz, this.scanStopMHz, this.scanStepMHz, prevTid).catch(() => undefined);
+            }
             this.selectedRhTimerId = tid;
             this.resetSignalBuffersForTargetChange();
             if (this.rhLiveOn) {
@@ -2505,13 +3086,22 @@ export class DebugView extends Component {
           break;
         case "live":
           if (this.isRotorHazardMode()) {
-            this.rhLiveOn = !this.rhLiveOn;
-            if (this.rhLiveOn) {
+            if (this.isRotorHazardUSBMode() && this.scanLive) {
+              this.scanLive = false;
+              await this.runRhUsbScanCommand("stop").catch(() => undefined);
+              this.rhLiveOn = true;
               this.signalEndN = null;
-            } else if (this.signalEndN === null && this.signalRing.points.length > 0) {
-              this.pauseSignalAt(this.signalRing.latestN());
+              await this.syncRhDebugStream(true);
+              this.renderScan();
+            } else {
+              this.rhLiveOn = !this.rhLiveOn;
+              if (this.rhLiveOn) {
+                this.signalEndN = null;
+              } else if (this.signalEndN === null && this.signalRing.points.length > 0) {
+                this.pauseSignalAt(this.signalRing.latestN());
+              }
+              await this.syncRhDebugStream(this.rhLiveOn);
             }
-            await this.syncRhDebugStream(this.rhLiveOn);
             this.renderLiveHead();
             this.renderSignalControls();
             this.dirtySignal = true;
@@ -2622,7 +3212,15 @@ export class DebugView extends Component {
         case "signal-freeze":
           if (this.isRotorHazardMode()) {
             const rhSnap = this.activeRhSnapshot();
-            if (!this.rhLiveOn && rhSnap?.connected) {
+            if (this.isRotorHazardUSBMode() && this.scanLive && rhSnap?.connected) {
+              this.scanLive = false;
+              await this.runRhUsbScanCommand("stop").catch(() => undefined);
+              this.rhLiveOn = true;
+              this.signalEndN = null;
+              await this.syncRhDebugStream(true);
+              this.renderScan();
+              this.renderLiveHead();
+            } else if (!this.rhLiveOn && rhSnap?.connected) {
               this.rhLiveOn = true;
               this.signalEndN = null;
               await this.syncRhDebugStream(true);
@@ -2817,11 +3415,20 @@ export class DebugView extends Component {
           break;
         }
         case "scan": {
+          const sb = this.scanYBounds();
           const start = this.scanStartMHz;
-          const stop = this.scanStopMHz;
+          const stop = Math.min(sb.maxFreqMHz, this.scanStopMHz);
           const step = this.scanStepMHz;
           this.scanning = true;
           this.renderScan();
+          if (this.isRotorHazardUSBMode()) {
+            await this.runRhUsbScanCommand("once", start, stop, step).catch((err: Error) => {
+              this.scanning = false;
+              this.renderScan();
+              throw err;
+            });
+            break;
+          }
           await this.syncRfState(true);
           await this.console.request(`SCAN ${start} ${stop} ${step}`, "scan", 5000).catch((err: Error) => {
             this.scanning = false;
@@ -2833,6 +3440,26 @@ export class DebugView extends Component {
         }
         case "scan-live": {
           this.scanToggleAt = Date.now();
+          if (this.isRotorHazardUSBMode()) {
+            const sb = this.scanYBounds();
+            const start = this.scanStartMHz;
+            const stop = Math.min(sb.maxFreqMHz, this.scanStopMHz);
+            const step = this.scanStepMHz;
+            if (this.scanLive) {
+              this.scanLive = false;
+              await this.runRhUsbScanCommand("stop", start, stop, step).catch(() => undefined);
+            } else {
+              this.rhLiveOn = false;
+              this.spectrumAcc.clearHoldAndAvg();
+              await this.runRhUsbScanCommand("live", start, stop, step);
+              this.scanLive = true;
+            }
+            this.renderStatus();
+            this.renderScan();
+            this.renderLiveHead();
+            this.renderSignalControls();
+            break;
+          }
           if (this.scanLive) {
             this.scanLive = false;
             if (this.status) this.status.scanLive = false;
@@ -2902,14 +3529,16 @@ export class DebugView extends Component {
           break;
         }
         case "scan-reset-y":
-        case "scan-full-y":
+        case "scan-full-y": {
+          const sb = this.scanYBounds();
           this.openAxisMenu = null;
           this.scanAutoY = false;
-          this.scanYMin = DBM_MIN;
-          this.scanYMax = DBM_MAX;
-          this.spectrumAcc.setColorRange(-100, -40);
+          this.scanYMin = sb.min;
+          this.scanYMax = sb.max;
+          this.syncScanColorRange();
           this.renderScan();
           break;
+        }
         case "scan-auto-y":
           this.openAxisMenu = null;
           if (t.dataset.force === "1") {
@@ -2917,27 +3546,33 @@ export class DebugView extends Component {
           } else {
             this.scanAutoY = !this.scanAutoY;
             if (!this.scanAutoY) {
-              this.scanYMin = DBM_MIN;
-              this.scanYMax = DBM_MAX;
-              this.spectrumAcc.setColorRange(-100, -40);
+              const sb = this.scanYBounds();
+              this.scanYMin = sb.min;
+              this.scanYMax = sb.max;
+              this.syncScanColorRange();
             }
           }
           this.renderScan();
           break;
         case "scan-preset": {
           this.openAxisMenu = null;
+          const sb = this.scanYBounds();
           const start = Number(t.dataset.start) || 5180;
-          const stop = Number(t.dataset.stop) || 5945;
+          const stop = Math.min(sb.maxFreqMHz, Number(t.dataset.stop) || sb.maxFreqMHz);
           const step = Number(t.dataset.step) || 5;
           this.scanStartMHz = start;
           this.scanStopMHz = stop;
           this.scanStepMHz = step;
           this.scanZoomStartMHz = null;
           this.scanZoomStopMHz = null;
-          if (this.scanLive && this.console.connected) {
+          if (this.scanLive) {
             this.scanToggleAt = Date.now();
             this.spectrumAcc.clearHoldAndAvg();
-            await this.console.request(`SCAN LIVE ${start} ${stop} ${step}`, "ok", 2000);
+            if (this.isRotorHazardUSBMode()) {
+              await this.runRhUsbScanCommand("live", start, stop, step);
+            } else if (this.console.connected) {
+              await this.console.request(`SCAN LIVE ${start} ${stop} ${step}`, "ok", 2000);
+            }
           }
           this.renderScan();
           break;
@@ -2955,19 +3590,59 @@ export class DebugView extends Component {
           this.renderScan();
           break;
         case "export-spectrum-csv":
-          downloadTextFile(buildFileStamp(this.status, "spectrum", "csv"), exportSpectrumCsv(this.spectrumAcc));
+          downloadTextFile(
+            buildFileStamp(
+              this.isRotorHazardMode()
+                ? ({ label: this.activeRhSnapshot()?.label || "R1" } as TimerStatus)
+                : this.status,
+              "spectrum",
+              "csv"
+            ),
+            exportSpectrumCsv(this.spectrumAcc, this.isRotorHazardUSBMode())
+          );
           break;
         case "export-scan-csv":
-          downloadTextFile(buildFileStamp(this.status, "waterfall", "csv"), exportScanHistoryCsv(this.spectrumAcc));
+          downloadTextFile(
+            buildFileStamp(
+              this.isRotorHazardMode()
+                ? ({ label: this.activeRhSnapshot()?.label || "R1" } as TimerStatus)
+                : this.status,
+              "waterfall",
+              "csv"
+            ),
+            exportScanHistoryCsv(this.spectrumAcc)
+          );
           break;
         case "export-spectrum-png": {
           const c = this.el.querySelector<HTMLCanvasElement>("[data-spectrum-canvas]");
-          if (c) downloadCanvasPng(c, buildFileStamp(this.status, "spectrum", "png"));
+          if (c) {
+            downloadCanvasPng(
+              c,
+              buildFileStamp(
+                this.isRotorHazardMode()
+                  ? ({ label: this.activeRhSnapshot()?.label || "R1" } as TimerStatus)
+                  : this.status,
+                "spectrum",
+                "png"
+              )
+            );
+          }
           break;
         }
         case "export-waterfall-png": {
           const c = this.el.querySelector<HTMLCanvasElement>("[data-waterfall-canvas]");
-          if (c) downloadCanvasPng(c, buildFileStamp(this.status, "waterfall", "png"));
+          if (c) {
+            downloadCanvasPng(
+              c,
+              buildFileStamp(
+                this.isRotorHazardMode()
+                  ? ({ label: this.activeRhSnapshot()?.label || "R1" } as TimerStatus)
+                  : this.status,
+                "waterfall",
+                "png"
+              )
+            );
+          }
           break;
         }
         case "log":
@@ -3077,27 +3752,33 @@ export class DebugView extends Component {
           this.dirtyNoiseTable = true;
           break;
         }
-        case "restore-spectrum-defaults":
+        case "restore-spectrum-defaults": {
+          const sb = this.scanYBounds();
           this.openAxisMenu = null;
           this.scanShowMaxHold = true;
           this.scanShowAvg = true;
           this.scanShowWifi = true;
           this.scanZoomStartMHz = null;
           this.scanZoomStopMHz = null;
-          this.scanAutoY = false;
-          this.scanYMin = DBM_MIN;
-          this.scanYMax = DBM_MAX;
-          this.spectrumAcc.setColorRange(-100, -40);
+          this.scanAutoY = this.isRotorHazardUSBMode();
+          this.scanYMin = sb.min;
+          this.scanYMax = this.isRotorHazardUSBMode() ? 120 : sb.max;
+          this.syncScanColorRange();
           this.scanStartMHz = 5180;
-          this.scanStopMHz = 5945;
+          this.scanStopMHz = sb.maxFreqMHz;
           this.scanStepMHz = 5;
-          if (this.scanLive && this.console.connected) {
+          if (this.scanLive) {
             this.scanToggleAt = Date.now();
             this.spectrumAcc.clearHoldAndAvg();
-            await this.console.request("SCAN LIVE 5180 5945 5", "ok", 2000).catch(() => undefined);
+            if (this.isRotorHazardUSBMode()) {
+              await this.runRhUsbScanCommand("live", 5180, sb.maxFreqMHz, 5).catch(() => undefined);
+            } else if (this.console.connected) {
+              await this.console.request("SCAN LIVE 5180 5945 5", "ok", 2000).catch(() => undefined);
+            }
           }
           this.renderScan();
           break;
+        }
         case "restore-waterfall-defaults":
           this.openAxisMenu = null;
           this.scanZoomStartMHz = null;
@@ -3202,6 +3883,7 @@ export class DebugView extends Component {
 
   private saveDebugPrefs(): void {
     try {
+      const isSlap = this.isSlapRFMode();
       window.localStorage.setItem(
         "slaprf.ui.debug_prefs.v1",
         JSON.stringify({
@@ -3210,8 +3892,8 @@ export class DebugView extends Component {
           signalWindowSec: this.signalWindowSec,
           signalAutoX: this.signalAutoX,
           signalAutoY: this.signalAutoY,
-          signalYMin: this.signalYMin,
-          signalYMax: this.signalYMax,
+          signalYMin: isSlap ? this.signalYMin : DBM_MIN,
+          signalYMax: isSlap ? this.signalYMax : DBM_MAX,
           signalShowFloor: this.signalShowFloor,
           signalShowHitLine: this.signalShowHitLine,
           signalShowThresholds: this.signalShowThresholds,
@@ -3219,13 +3901,13 @@ export class DebugView extends Component {
           scanShowAvg: this.scanShowAvg,
           scanShowWifi: this.scanShowWifi,
           scanStartMHz: this.scanStartMHz,
-          scanStopMHz: this.scanStopMHz,
+          scanStopMHz: isSlap ? this.scanStopMHz : 5945,
           scanStepMHz: this.scanStepMHz,
           scanZoomStartMHz: this.scanZoomStartMHz,
           scanZoomStopMHz: this.scanZoomStopMHz,
           scanAutoY: this.scanAutoY,
-          scanYMin: this.scanYMin,
-          scanYMax: this.scanYMax,
+          scanYMin: isSlap ? this.scanYMin : DBM_MIN,
+          scanYMax: isSlap ? this.scanYMax : DBM_MAX,
           wfVisibleRows: this.spectrumAcc.visibleRows,
           selectedNetworkSpokeSlot: this.selectedNetworkSpokeSlot,
           serialWrap: this.serialWrap,
@@ -3479,6 +4161,12 @@ export class DebugView extends Component {
     this.checks = [];
     this.reportExtra = "";
     this.checksAt = new Date();
+    if (this.scanLive && this.isRotorHazardUSBMode()) {
+      this.scanLive = false;
+      this.scanToggleAt = Date.now();
+      await this.runRhUsbScanCommand("stop").catch(() => undefined);
+      this.renderScan();
+    }
     const add = (name: string, result: CheckResult, detail: string) => {
       this.checks.push({ name, result, detail });
       this.renderSelfTest();
@@ -3507,9 +4195,9 @@ export class DebugView extends Component {
         `${snap0.label} connected on ${snap0.portName || snap0.endpoint} (${this.store?.simulatorRunning ? "Simulated USB serial pipe" : "Native USB serial"} · ${snap0.baudRate || 115200} baud)`
       );
       add(
-        "Protocol & seats",
+        "Protocol & nodes",
         "pass",
-        `RotorHazard Serial API ${snap0.apiLevel || 36} · ${nCount} receiver seats (direct read/write)`
+        `RotorHazard Serial API ${snap0.apiLevel || 36} · ${nCount} receiver nodes (direct read/write)`
       );
     } else {
       add(
@@ -3662,8 +4350,10 @@ export class DebugView extends Component {
     this.renderChannels();
     this.renderSignalControls();
     this.renderNoiseTable();
-    if (this.isSlapRFMode()) {
+    if (this.hasSpectrumScanSupport()) {
       this.renderScan();
+    }
+    if (this.isSlapRFMode()) {
       this.renderSerialConsole();
       this.renderLog();
     }
@@ -3699,7 +4389,7 @@ export class DebugView extends Component {
           const epLbl = isUSB ? s.portName || s.endpoint : s.endpoint;
           const meta = s.connected
             ? isUSB
-              ? `${epLbl} · ${s.nodeCount}S · API ${s.apiLevel || 36}`
+              ? `${epLbl} · ${s.nodeCount}N · API ${s.apiLevel || 36}`
               : `${epLbl} · ${s.nodeCount}N · ${s.authOk ? "Auth OK" : "Guest"}`
             : `${epLbl} · Offline`;
           const quickConnectBtn =
@@ -3849,7 +4539,7 @@ export class DebugView extends Component {
               ? this.progress || "Starting RotorHazard self-test..."
               : on
                 ? this.isRotorHazardUSBMode()
-                  ? `# Click "Run self-test" to verify ${snap!.label} USB serial link (API ${snap!.apiLevel || 36}), receiver seat tuning, serial RTT, and ~10 Hz RSSI stream.`
+                  ? `# Click "Run self-test" to verify ${snap!.label} USB serial link (API ${snap!.apiLevel || 36}), receiver node tuning, serial RTT, and ~10 Hz RSSI stream.`
                   : `# Click "Run self-test" to verify ${snap!.label} Socket.IO link, HTTP Basic Auth, RX5808 node tuning, clock sync, and ~10 Hz heartbeat stream.`
                 : "# Connect a RotorHazard timer above or on the Network page to run the hardware self-test."
           );
@@ -3968,7 +4658,7 @@ export class DebugView extends Component {
         const band = f > 0 ? hardwareBandLabel(f) : "";
         const onCh = Boolean(this.signalEnabledCh[i]) && f > 0;
         nodeChips.push(
-          `<span class="debug-status-ch mono ${onCh ? "" : "is-muted"}" title="${isUSB ? "Seat" : "Node"} ${i + 1}: ${f > 0 ? formatHardwareFreq(f) : "Disabled"}"><strong>${isUSB ? "S" : "N"}${i + 1}</strong> ${f > 0 ? (band ? `${band} ${f}` : `${f}`) : "Off"}</span>`
+          `<span class="debug-status-ch mono ${onCh ? "" : "is-muted"}" title="Node ${i + 1}: ${f > 0 ? formatHardwareFreq(f) : "Disabled"}"><strong>N${i + 1}</strong> ${f > 0 ? (band ? `${band} ${f}` : `${f}`) : "Off"}</span>`
         );
       }
 
@@ -3978,7 +4668,7 @@ export class DebugView extends Component {
       const headText =
         on && snap
           ? isUSB
-            ? `${esc(snap.label)} · ${esc(epStr)} · API ${snap.apiLevel || 36} (${snap.baudRate || 115200} baud) · ${nCount} seats · ${snap.gateArmed ? "Gate armed" : "Standby"}`
+            ? `${esc(snap.label)} · ${esc(epStr)} · API ${snap.apiLevel || 36} (${snap.baudRate || 115200} baud) · ${nCount} nodes · ${snap.gateArmed ? "Gate armed" : "Standby"}`
             : `${esc(snap.label)} · ${esc(epStr)} · RotorHazard ${esc(snap.serverVersion || "4.x")} · ${nCount} nodes · ${snap.gateArmed ? "Gate armed" : "Standby"}`
           : snap
             ? `${esc(snap.label)} (${esc(epStr)}) · Offline`
@@ -3990,7 +4680,7 @@ export class DebugView extends Component {
       }
 
       const protoBadge = !snap
-        ? "—"
+        ? "-"
         : isUSB
           ? `USB API ${snap.apiLevel || 36}`
           : snap.transport === "sim"
@@ -4018,39 +4708,39 @@ export class DebugView extends Component {
             <dl class="debug-kv-list">
               <div class="debug-kv-row">
                 <dt>Timer</dt>
-                <dd>${snap ? `<strong>${esc(snap.label)}</strong> <span class="note">· ${esc(gateName)}</span>` : "—"}</dd>
+                <dd>${snap ? `<strong>${esc(snap.label)}</strong> <span class="note">· ${esc(gateName)}</span>` : "-"}</dd>
               </div>
               <div class="debug-kv-row">
                 <dt>${isUSB ? "Serial port" : "Endpoint"}</dt>
-                <dd>${snap ? `<span class="mono">${esc(epStr)}</span>` : "—"}</dd>
+                <dd>${snap ? `<span class="mono">${esc(epStr)}</span>` : "-"}</dd>
               </div>
               <div class="debug-kv-row">
                 <dt>${isUSB ? "Serial API" : "Server version"}</dt>
-                <dd>${on && snap ? (isUSB ? `<span class="mono">API ${snap.apiLevel || 36} · ${snap.baudRate || 115200} baud</span>` : `<span class="mono">RotorHazard ${esc(snap.serverVersion || "4.x")}</span>`) : "—"}</dd>
+                <dd>${on && snap ? (isUSB ? `<span class="mono">API ${snap.apiLevel || 36} · ${snap.baudRate || 115200} baud</span>` : `<span class="mono">RotorHazard ${esc(snap.serverVersion || "4.x")}</span>`) : "-"}</dd>
               </div>
               <div class="debug-kv-row">
                 <dt>${isUSB ? "Firmware" : "Hostname"}</dt>
-                <dd>${on && snap ? `<span class="mono">${esc(isUSB ? snap.serverVersion || `API ${snap.apiLevel || 36}` : snap.serverHostname || "rotorhazard-pi")}</span>` : "—"}</dd>
+                <dd>${on && snap ? `<span class="mono">${esc(isUSB ? snap.serverVersion || `API ${snap.apiLevel || 36}` : snap.serverHostname || "rotorhazard-pi")}</span>` : "-"}</dd>
               </div>
             </dl>
           </div>
 
           <div class="debug-subbox">
             <div class="debug-subbox-head">
-              <span class="debug-subbox-title ${on ? "is-active" : ""}">${icons.signal(14)}<span>${isUSB ? "Receiver seats" : "RX5808 receiver nodes"}</span></span>
-              ${!on ? `<span class="badge">—</span>` : snap?.gateArmed ? `<span class="badge badge-good">Armed</span>` : `<span class="badge">Standby</span>`}
+              <span class="debug-subbox-title ${on ? "is-active" : ""}">${icons.signal(14)}<span>Receiver nodes</span></span>
+              ${!on ? `<span class="badge">-</span>` : snap?.gateArmed ? `<span class="badge badge-good">Armed</span>` : `<span class="badge">Standby</span>`}
             </div>
             <dl class="debug-kv-list">
               <div class="debug-kv-row">
-                <dt>${isUSB ? "Active seats" : "Active nodes"}</dt>
-                <dd>${on ? `${activeNodeCount} of ${nCount} tuned <span class="note">· ~10 Hz ${isUSB ? "poll" : "heartbeat"}</span>` : "—"}</dd>
+                <dt>Active nodes</dt>
+                <dd>${on ? `${activeNodeCount} of ${nCount} tuned <span class="note">· ~10 Hz ${isUSB ? "poll" : "heartbeat"}</span>` : "-"}</dd>
               </div>
               <div class="debug-kv-row">
                 <dt>Hysteresis</dt>
-                <dd>${on ? `<span class="mono">Enter ${e0} · Exit ${x0}</span> <span class="note">(0–255 RSSI)</span>` : "—"}</dd>
+                <dd>${on ? `<span class="mono">Enter ${e0} · Exit ${x0}</span> <span class="note">(0-255 RSSI)</span>` : "-"}</dd>
               </div>
               <div class="debug-kv-row is-channels-row">
-                <dt>${isUSB ? "Seats" : "Nodes"}</dt>
+                <dt>Nodes</dt>
                 <dd class="debug-status-ch-grid">${nodeChips.join("")}</dd>
               </div>
             </dl>
@@ -4814,22 +5504,27 @@ export class DebugView extends Component {
     const liveHeadSlot = this.el.querySelector<HTMLElement>('[data-slot="live-head"]');
     if (!liveHeadSlot) return;
     if (this.isRotorHazardMode()) {
+      const isUSB = this.isRotorHazardUSBMode();
       const snap = this.activeRhSnapshot();
       const on = Boolean(snap?.connected);
+      const inScanMode = isUSB && this.scanLive;
       const streamDisabled = !on;
-      const streamActive = on && this.rhLiveOn;
+      const streamActive = on && !inScanMode && this.rhLiveOn;
       const streamLabel = streamActive ? "Pause" : "Stream";
       const streamTitle = !on
-        ? "Connect a RotorHazard timer to stream live RX5808 node RSSI"
+        ? "Connect a RotorHazard timer to stream live node RSSI"
         : streamActive
-          ? "Streaming live RX5808 node RSSI · click to pause"
-          : "Paused · click to stream live RX5808 node RSSI";
-      const ledClass = streamActive ? "is-up" : "";
+          ? "Streaming live node RSSI · click to pause"
+          : inScanMode
+            ? "Paused while Spectrum scan is streaming · click to pause Spectrum scan and stream node RSSI"
+            : "Paused · click to stream live node RSSI";
+      const ledClass = streamActive ? "is-up" : on && inScanMode ? "is-warn" : "";
+      const linkStreamDesc = isUSB ? "~10 Hz USB serial poll" : "~10 Hz Socket.IO heartbeat";
       this.slot("live-head").innerHTML = `
         <div class="debug-status-topbar">
           <span class="debug-led-status">
             <span class="status-dot ${ledClass}" data-live-led></span>
-            <span class="debug-head-note" data-live-note>${streamActive ? "Streaming · ~10 Hz Socket.IO heartbeat" : on ? "Paused · click Stream to monitor node RSSI" : "Offline · click Connect timer above"}</span>
+            <span class="debug-head-note" data-live-note>${streamActive ? `Streaming · ${linkStreamDesc}` : inScanMode ? "Paused · Spectrum scan is streaming" : on ? "Paused · click Stream to monitor node RSSI" : "Offline · click Connect timer above"}</span>
           </span>
           <div class="debug-connect-actions">
             <button type="button" class="btn btn-sm ${streamActive ? "btn-armed" : "btn-unarmed"}" data-action="live" ${streamDisabled ? "disabled" : ""} title="${streamTitle}">
@@ -4980,19 +5675,24 @@ export class DebugView extends Component {
         chNote.innerHTML = `<span class="mono">${activeCount}/${nCount}</span> active · click row to toggle · double-click to solo`;
       }
       if (led) {
-        const streaming = on && this.rhLiveOn;
-        led.classList.remove("is-emergency", "is-spoke", "is-warn");
+        const inScanMode = this.isRotorHazardUSBMode() && this.scanLive;
+        const streaming = on && !inScanMode && this.rhLiveOn;
+        led.classList.remove("is-emergency", "is-spoke");
+        led.classList.toggle("is-warn", on && inScanMode);
         led.classList.toggle("is-up", streaming);
       }
       if (note) {
+        const isUSB = this.isRotorHazardUSBMode();
         if (!on) {
           note.textContent = "Offline · click Connect timer above";
+        } else if (isUSB && this.scanLive) {
+          note.textContent = "Paused · Spectrum scan is streaming";
         } else if (!this.rhLiveOn) {
           note.textContent = "Paused · click Stream to monitor node RSSI";
         } else if (this.live) {
-          note.textContent = `Streaming · ~10 Hz Socket.IO heartbeat · ${snap?.heartbeatsRx ?? 0} frames`;
+          note.textContent = `Streaming · ~10 Hz ${isUSB ? "USB serial poll" : "Socket.IO heartbeat"} · ${snap?.heartbeatsRx ?? 0} frames`;
         } else {
-          note.textContent = "Streaming · waiting for heartbeat…";
+          note.textContent = isUSB ? "Streaming · waiting for USB poll…" : "Streaming · waiting for heartbeat…";
         }
       }
       const now = performance.now();
@@ -5215,9 +5915,11 @@ export class DebugView extends Component {
           : `${Math.round(this.signalWindowSec)}s`;
 
     if (this.isRotorHazardMode()) {
+      const isUSB = this.isRotorHazardUSBMode();
       const snap = this.activeRhSnapshot();
       const on = Boolean(snap?.connected);
-      const streamRunning = on && this.rhLiveOn;
+      const inScanMode = isUSB && this.scanLive;
+      const streamRunning = on && !inScanMode && this.rhLiveOn;
       const nCount = snap?.nodeCount === 4 ? 4 : 8;
       const hasPts = this.signalRing.points.length > 0;
       const allOn = this.signalEnabledCh.slice(0, nCount).every(Boolean);
@@ -5228,19 +5930,25 @@ export class DebugView extends Component {
       const isFloorY = !this.signalAutoY && Math.round(this.signalYMin) === 0 && Math.round(this.signalYMax) === 130;
       const ySigShort = isFloorY ? "Base" : !isYZoomed ? "Full" : `${Math.round(this.signalYMax - this.signalYMin)}`;
       const liveLabel = liveFollowOn ? "Pause" : "Stream";
+      const linkDesc = isUSB ? "USB serial polls" : "Socket.IO heartbeats";
+      const linkSing = isUSB ? "USB serial poll" : "Socket.IO heartbeat";
       const liveTitle = !on
         ? "Connect a RotorHazard timer to stream node RSSI"
         : liveFollowOn
-          ? "Streaming ~10 Hz Socket.IO heartbeats · click to pause, or drag the chart to scroll back"
-          : "Paused · click to stream live node RSSI";
-      const sigLedClass = liveFollowOn ? "is-up" : streamRunning && !isLive ? "is-warn" : "";
+          ? `Streaming ~10 Hz ${linkDesc} · click to pause, or drag the chart to scroll back`
+          : inScanMode
+            ? "Paused while Spectrum scan is streaming · click to pause Spectrum scan and stream node RSSI"
+            : "Paused · click to stream live node RSSI";
+      const sigLedClass = liveFollowOn ? "is-up" : (streamRunning && !isLive) || (on && inScanMode) ? "is-warn" : "";
       const sigStatusText = liveFollowOn
-        ? `Streaming · ~10 Hz Socket.IO heartbeat · ${snap?.heartbeatsRx ?? 0} frames`
+        ? `Streaming · ~10 Hz ${linkSing} · ${snap?.heartbeatsRx ?? 0} frames`
         : streamRunning && !isLive
           ? "Paused · scrolled back"
-          : on
-            ? "Paused · click Stream to record node RSSI"
-            : "Offline · click Connect timer above";
+          : inScanMode
+            ? "Paused · scan active"
+            : on
+              ? "Paused · click Stream to record node RSSI"
+              : "Offline · click Connect timer above";
 
       const legendButtons: string[] = [];
       for (let i = 0; i < nCount; i++) {
@@ -5707,9 +6415,14 @@ export class DebugView extends Component {
 
   private recordScanFindingFromPass(s: ScanResult): void {
     const now = Date.now();
-    const peaks = this.spectrumAcc.topPeaks(5);
+    const isRssiScale = this.isRotorHazardUSBMode();
+    const unit = isRssiScale ? "RSSI" : "dBm";
+    const diffUnit = isRssiScale ? "RSSI" : "dB";
+    const minProm = isRssiScale ? 18 : 6;
+    const strongThr = isRssiScale ? 120 : -65;
+    const peaks = this.spectrumAcc.topPeaks(5, minProm);
     const sorted = [...s.dbm].sort((a, b) => a - b);
-    const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : -95;
+    const median = sorted.length ? sorted[Math.floor(sorted.length / 2)] : isRssiScale ? 24 : -95;
     const scanStop = s.start + s.step * Math.max(0, s.dbm.length - 1);
 
     if (peaks.length > 0) {
@@ -5722,10 +6435,10 @@ export class DebugView extends Component {
           existing.maxDbm = Math.max(existing.maxDbm, p.dbm);
           existing.count++;
           existing.freqMHz = p.freqMHz;
-          existing.tone = existing.maxDbm >= -65 ? "badge-warn" : "badge-accent";
-          existing.badge = existing.maxDbm >= -65 ? "Strong peak" : "RF peak";
+          existing.tone = existing.maxDbm >= strongThr ? "badge-warn" : "badge-accent";
+          existing.badge = existing.maxDbm >= strongThr ? "Strong peak" : "RF peak";
           existing.sourceLabel = `${p.freqMHz} MHz · ${p.bandHint}`;
-          existing.detail = `Peak ${existing.maxDbm} dBm (+${existing.maxDbm - median} dB above ${median} dBm median) · seen across ${existing.count} scan passes`;
+          existing.detail = `Peak ${Math.round(existing.maxDbm)} ${unit} (+${Math.round(existing.maxDbm - median)} ${diffUnit} above ${Math.round(median)} ${unit} median) · seen across ${existing.count} scan passes`;
         } else {
           this.scanFindings.unshift({
             id: ++this.scanFindingSeq,
@@ -5733,13 +6446,13 @@ export class DebugView extends Component {
             firstMs: now,
             lastMs: now,
             timeLabel: fmtWallTimeMs(now),
-            tone: p.dbm >= -65 ? "badge-warn" : "badge-accent",
-            badge: p.dbm >= -65 ? "Strong peak" : "RF peak",
+            tone: p.dbm >= strongThr ? "badge-warn" : "badge-accent",
+            badge: p.dbm >= strongThr ? "Strong peak" : "RF peak",
             sourceLabel: `${p.freqMHz} MHz · ${p.bandHint}`,
             freqMHz: p.freqMHz,
             maxDbm: p.dbm,
             count: 1,
-            detail: `Peak ${p.dbm} dBm (+${p.dbm - median} dB above ${median} dBm band median)`,
+            detail: `Peak ${Math.round(p.dbm)} ${unit} (+${Math.round(p.dbm - median)} ${diffUnit} above ${Math.round(median)} ${unit} band median)`,
           });
         }
       }
@@ -5748,7 +6461,7 @@ export class DebugView extends Component {
       if (existingQuiet) {
         existingQuiet.lastMs = now;
         existingQuiet.count++;
-        existingQuiet.detail = `No peaks ≥ 6 dB above the ${median} dBm band median (${s.dbm.length} points, ${existingQuiet.count} passes).`;
+        existingQuiet.detail = `No peaks ≥ ${minProm} ${diffUnit} above the ${Math.round(median)} ${unit} band median (${s.dbm.length} points, ${existingQuiet.count} passes).`;
       } else {
         this.scanFindings.unshift({
           id: ++this.scanFindingSeq,
@@ -5758,10 +6471,10 @@ export class DebugView extends Component {
           timeLabel: fmtWallTimeMs(now),
           tone: "badge-good",
           badge: "Quiet band",
-          sourceLabel: `${s.start}–${scanStop} MHz`,
+          sourceLabel: `${s.start}-${scanStop} MHz`,
           maxDbm: median,
           count: 1,
-          detail: `No peaks ≥ 6 dB above the ${median} dBm band median across ${s.dbm.length} points.`,
+          detail: `No peaks ≥ ${minProm} ${diffUnit} above the ${Math.round(median)} ${unit} band median across ${s.dbm.length} points.`,
         });
       }
     }
@@ -6089,16 +6802,22 @@ export class DebugView extends Component {
   }
 
   private renderScan(): void {
-    const on = this.console.connected;
-    const emg = Boolean(on && this.status?.emergencyMode);
-    const rfOn = !emg;
+    if (!this.hasSpectrumScanSupport()) return;
+    const isRHUSB = this.isRotorHazardUSBMode();
+    const sb = this.scanYBounds();
+    const rhSnap = isRHUSB ? this.activeRhSnapshot() : null;
+    const on = isRHUSB ? Boolean(rhSnap?.connected) : this.console.connected;
+    const emg = isRHUSB ? false : Boolean(on && this.status?.emergencyMode);
+    const rfOn = isRHUSB ? on : !emg;
     const hasScan = this.spectrumAcc.latest !== null;
+    const maxStop = sb.maxFreqMHz;
+    const effStop = Math.min(maxStop, this.scanStopMHz);
     const isFull5 = this.scanStartMHz === 5180 && (this.scanStopMHz === 5945 || this.scanStopMHz === 5917) && this.scanStepMHz === 5;
     const isFast15 = this.scanStartMHz === 5180 && (this.scanStopMHz === 5945 || this.scanStopMHz === 5917) && this.scanStepMHz === 15;
-    const isRb5 = (this.scanStartMHz === 5630 || this.scanStartMHz === 5650) && (this.scanStopMHz === 5945 || this.scanStopMHz === 5925) && this.scanStepMHz === 5;
+    const isRb5 = (this.scanStartMHz === 5630 || this.scanStartMHz === 5650) && (this.scanStopMHz === 5945 || this.scanStopMHz === 5925 || this.scanStopMHz === 5917) && this.scanStepMHz === 5;
     const bandLabel = isFast15 ? "Fast · 9 Hz" : isRb5 ? "Race · 8 Hz" : "Full · 3 Hz";
     const isFreqZoomed = this.scanZoomStartMHz !== null && this.scanZoomStopMHz !== null;
-    const isScanYZoomed = this.scanYMin !== DBM_MIN || this.scanYMax !== DBM_MAX;
+    const isScanYZoomed = Math.round(this.scanYMin) !== sb.min || Math.round(this.scanYMax) !== sb.max;
     const isScanFullY = !this.scanAutoY && !isScanYZoomed;
     const isWfRowsZoomed = this.spectrumAcc.visibleRows !== 80;
     const xScanShort = !isFreqZoomed
@@ -6110,34 +6829,39 @@ export class DebugView extends Component {
           ? "X: UNII1"
           : Math.round(this.scanZoomStartMHz!) === 5725 && Math.round(this.scanZoomStopMHz!) === 5850
             ? "X: UNII3"
-            : Math.abs(this.scanZoomStopMHz! - this.scanZoomStartMHz! - (this.scanStopMHz - this.scanStartMHz)) <= 2
+            : Math.abs(this.scanZoomStopMHz! - this.scanZoomStartMHz! - (effStop - this.scanStartMHz)) <= 2
               ? "X: Pan"
               : `X: ${Math.round(this.scanZoomStopMHz! - this.scanZoomStartMHz!)}M`;
-    const yScanShort = this.scanAutoY ? "Auto Y" : `Y: ${Math.round(this.scanYMax - this.scanYMin)}dB`;
+    const yScanShort = this.scanAutoY
+      ? "Auto Y"
+      : sb.rssiScale
+        ? `Y: ${Math.round(this.scanYMax - this.scanYMin)}`
+        : `Y: ${Math.round(this.scanYMax - this.scanYMin)}dB`;
     const canScanOnce = on && rfOn && !this.scanning && !this.scanLive;
     const canScanLive = on && rfOn && !this.scanning;
     const scanActive = this.scanLive || this.scanning;
     const prevScanFindingsEl = this.slot("scan").querySelector<HTMLElement>("[data-scan-findings]");
     const prevScanScrollTop = prevScanFindingsEl?.querySelector<HTMLElement>("[data-findings-scroll]")?.scrollTop ?? 0;
     const wfRowPresets = [40, 80, 160, 300] as const;
+    const idleNote = !on && isRHUSB ? "Offline · click Connect timer above" : "Paused";
     this.slot("scan").innerHTML = `
       <div class="debug-status-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${emg ? "is-emergency" : scanActive ? "is-up" : ""}" data-scan-led></span>
-          <span class="debug-head-note" data-scan-status-note>${emg ? "Emergency mode · radio halted" : this.scanLive ? "Streaming · live scan" : this.scanning ? "Scanning once…" : "Paused"}</span>
+          <span class="debug-head-note" data-scan-status-note>${emg ? "Emergency mode · radio halted" : this.scanLive ? "Streaming · live scan" : this.scanning ? "Scanning once…" : idleNote}</span>
         </span>
         <div class="debug-connect-actions">
-          <button type="button" class="btn btn-sm ${this.scanning ? "btn-armed" : "btn-unarmed"}" data-action="scan" ${canScanOnce ? "" : "disabled"} title="${this.scanLive ? "Unavailable while Spectrum scan is streaming" : !rfOn ? "Unavailable while the 5.8 GHz receiver is off" : "Sweep the band once and add a row to the waterfall"}">
+          <button type="button" class="btn btn-sm ${this.scanning ? "btn-armed" : "btn-unarmed"}" data-action="scan" ${canScanOnce ? "" : "disabled"} title="${this.scanLive ? "Unavailable while Spectrum scan is streaming" : !on ? "Connect a timer first to run Spectrum scan" : !rfOn ? "Unavailable while the 5.8 GHz receiver is off" : "Sweep the band once and add a row to the waterfall"}">
             ${icons.target(14)}<span>${this.scanning ? "Scanning…" : "Scan once"}</span>
           </button>
-          <button type="button" class="btn btn-sm ${this.scanLive ? "btn-armed" : "btn-unarmed"}" data-action="scan-live" ${canScanLive ? "" : "disabled"} title="${!rfOn ? "Unavailable while the 5.8 GHz receiver is off" : this.scanLive ? "Streaming continuous spectrum scan · click to pause" : "Paused · click to stream continuous spectrum scan (automatically pauses 8-channel stream)"}">
+          <button type="button" class="btn btn-sm ${this.scanLive ? "btn-armed" : "btn-unarmed"}" data-action="scan-live" ${canScanLive ? "" : "disabled"} title="${!on ? "Connect a timer first to stream Spectrum scan" : !rfOn ? "Unavailable while the 5.8 GHz receiver is off" : this.scanLive ? "Streaming continuous spectrum scan · click to pause" : "Paused · click to stream continuous spectrum scan (automatically pauses node stream)"}">
             ${this.scanLive ? icons.pause(14) : icons.play(14)}<span>${this.scanLive ? "Pause" : "Stream"}</span>
           </button>
         </div>
       </div>
       <div class="debug-subbox">
         <div class="debug-subbar">
-          <span class="debug-chart-title">Spectrum scan (dBm × frequency)</span>
+          <span class="debug-chart-title">Spectrum scan (${sb.rssiScale ? "0-255 RSSI" : "dBm"} × frequency)</span>
           <div class="debug-connect-actions">
             <div class="debug-overlay-checks" role="group" aria-label="Spectrum overlays">
               <label class="check">
@@ -6167,7 +6891,7 @@ export class DebugView extends Component {
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
               <button type="button" class="debug-axis-pill-main" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="scan-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range · click to choose a frequency band preset, or drag X-axis to zoom"}">
-                ${icons.target(13)}<span>${isFreqZoomed ? `<span class="debug-hint-desktop">X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz</span><span class="debug-hint-mobile">${xScanShort}</span>` : "Auto X"}</span>
+                ${icons.target(13)}<span>${isFreqZoomed ? `<span class="debug-hint-desktop">X: ${Math.round(this.scanZoomStartMHz!)}-${Math.round(this.scanZoomStopMHz!)} MHz</span><span class="debug-hint-mobile">${xScanShort}</span>` : "Auto X"}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-x" aria-expanded="${this.openAxisMenu === "scan-x"}" title="Choose frequency range">
                 ${icons.chevronDown(12)}
@@ -6179,31 +6903,31 @@ export class DebugView extends Component {
                         <span>Auto X</span><span class="note">Full scan</span>
                       </button>
                       <div class="debug-axis-menu-sep"></div>
-                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5630 && Math.round(this.scanZoomStopMHz!) === 5945 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5630" data-stop="5945" role="menuitem">
-                        <span>Raceband</span><span class="note">5630–5945 MHz</span>
+                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5630 && Math.round(this.scanZoomStopMHz!) === maxStop ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5630" data-stop="${maxStop}" role="menuitem">
+                        <span>Raceband</span><span class="note">5630-${maxStop} MHz</span>
                       </button>
                       <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5180 && Math.round(this.scanZoomStopMHz!) === 5320 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5180" data-stop="5320" role="menuitem">
-                        <span>UNII-1</span><span class="note">5180–5320 MHz</span>
+                        <span>UNII-1</span><span class="note">5180-5320 MHz</span>
                       </button>
                       <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5725 && Math.round(this.scanZoomStopMHz!) === 5850 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5725" data-stop="5850" role="menuitem">
-                        <span>UNII-3</span><span class="note">5725–5850 MHz</span>
+                        <span>UNII-3</span><span class="note">5725-5850 MHz</span>
                       </button>
                     </div>`
                   : ""
               }
             </div>
             <div class="debug-axis-pill ${isScanFullY ? "is-armed" : "is-unarmed"}" data-axis-pill>
-              <button type="button" class="debug-axis-pill-main" data-action="${isScanFullY ? "toggle-axis-menu" : "scan-full-y"}" data-menu="scan-y" title="${isScanFullY ? `Full Y-axis scale (${DBM_MIN}…${DBM_MAX} dBm) · click to choose a scale preset, or drag the Y-axis` : "Click to reset Y-axis range to Full Y"}">
-                ${icons.target(13)}<span>${isScanFullY ? "Full Y" : this.scanAutoY ? "Auto Y" : `<span class="debug-hint-desktop">Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} dBm</span><span class="debug-hint-mobile">${yScanShort}</span>`}</span>
+              <button type="button" class="debug-axis-pill-main" data-action="${isScanFullY ? "toggle-axis-menu" : "scan-full-y"}" data-menu="scan-y" title="${isScanFullY ? `Full Y-axis scale (${sb.min}…${sb.max} ${sb.unit}) · click to choose a scale preset, or drag the Y-axis` : "Click to reset Y-axis range to Full Y"}">
+                ${icons.target(13)}<span>${isScanFullY ? "Full Y" : this.scanAutoY ? "Auto Y" : `<span class="debug-hint-desktop">Y: ${Math.round(this.scanYMin)}…${Math.round(this.scanYMax)} ${sb.unit}</span><span class="debug-hint-mobile">${yScanShort}</span>`}</span>
               </button>
-              <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-y" aria-expanded="${this.openAxisMenu === "scan-y"}" title="Choose spectrum Y-axis dBm scale">
+              <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-y" aria-expanded="${this.openAxisMenu === "scan-y"}" title="Choose spectrum Y-axis ${sb.unit} scale">
                 ${icons.chevronDown(12)}
               </button>
               ${
                 this.openAxisMenu === "scan-y"
-                  ? `<div class="debug-axis-menu" role="menu" aria-label="Spectrum Y-axis dBm scale">
+                  ? `<div class="debug-axis-menu" role="menu" aria-label="Spectrum Y-axis ${sb.unit} scale">
                       <button type="button" class="debug-axis-menu-item ${isScanFullY ? "is-active" : ""}" data-action="scan-full-y" role="menuitem">
-                        <span>Full Y</span><span class="note">${DBM_MIN}…${DBM_MAX} dBm</span>
+                        <span>Full Y</span><span class="note">${sb.min}…${sb.max} ${sb.unit}</span>
                       </button>
                       <div class="debug-axis-menu-sep"></div>
                       <button type="button" class="debug-axis-menu-item ${this.scanAutoY ? "is-active" : ""}" data-action="scan-auto-y" data-force="1" role="menuitem">
@@ -6214,7 +6938,7 @@ export class DebugView extends Component {
               }
             </div>
             <div class="debug-axis-pill ${isFull5 ? "is-armed" : "is-unarmed"}" data-axis-pill>
-              <button type="button" class="debug-axis-pill-main" data-action="${isFull5 ? "toggle-axis-menu" : "scan-preset"}" data-menu="scan-band" data-start="5180" data-stop="5945" data-step="5" title="${isFull5 ? `Band sweep preset (${this.scanStartMHz}–${this.scanStopMHz} MHz, ${this.scanStepMHz} MHz step) · click to choose a band sweep preset` : "Click to reset band sweep to Full · 3 Hz (5180–5945 MHz, 5 MHz step)"}">
+              <button type="button" class="debug-axis-pill-main" data-action="${isFull5 ? "toggle-axis-menu" : "scan-preset"}" data-menu="scan-band" data-start="5180" data-stop="${maxStop}" data-step="5" title="${isFull5 ? `Band sweep preset (${this.scanStartMHz}-${effStop} MHz, ${this.scanStepMHz} MHz step) · click to choose a band sweep preset` : `Click to reset band sweep to Full · 3 Hz (5180-${maxStop} MHz, 5 MHz step)`}">
                 ${icons.sliders(13)}<span>${bandLabel}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="scan-band" aria-expanded="${this.openAxisMenu === "scan-band"}" title="Choose band sweep preset">
@@ -6223,14 +6947,14 @@ export class DebugView extends Component {
               ${
                 this.openAxisMenu === "scan-band"
                   ? `<div class="debug-axis-menu" role="menu" aria-label="Band sweep range and speed">
-                      <button type="button" class="debug-axis-menu-item ${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5945" data-step="5" role="menuitem" title="Full 5.18–5.95 GHz band at 5 MHz step (154 points, ~3.0 passes/s)">
-                        <span>Full · 3 Hz</span><span class="note">5180–5945 · 5 MHz</span>
+                      <button type="button" class="debug-axis-menu-item ${isFull5 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="${maxStop}" data-step="5" role="menuitem" title="Full 5.18-${(maxStop / 1000).toFixed(2)} GHz band at 5 MHz step">
+                        <span>Full · 3 Hz</span><span class="note">5180-${maxStop} · 5 MHz</span>
                       </button>
-                      <button type="button" class="debug-axis-menu-item ${isFast15 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="5945" data-step="15" role="menuitem" title="Full 5.18–5.95 GHz band at 15 MHz step (52 points, ~9 passes/s)">
-                        <span>Fast · 9 Hz</span><span class="note">5180–5945 · 15 MHz</span>
+                      <button type="button" class="debug-axis-menu-item ${isFast15 ? "is-active" : ""}" data-action="scan-preset" data-start="5180" data-stop="${maxStop}" data-step="15" role="menuitem" title="Full 5.18-${(maxStop / 1000).toFixed(2)} GHz band at 15 MHz step">
+                        <span>Fast · 9 Hz</span><span class="note">5180-${maxStop} · 15 MHz</span>
                       </button>
-                      <button type="button" class="debug-axis-menu-item ${isRb5 ? "is-active" : ""}" data-action="scan-preset" data-start="5630" data-stop="5945" data-step="5" role="menuitem" title="Raceband R1–R8 + Wi-Fi UNII-3 at 5 MHz step (64 points, ~7.5 passes/s)">
-                        <span>Race · 8 Hz</span><span class="note">5630–5945 · 5 MHz</span>
+                      <button type="button" class="debug-axis-menu-item ${isRb5 ? "is-active" : ""}" data-action="scan-preset" data-start="5630" data-stop="${maxStop}" data-step="5" role="menuitem" title="Raceband R1-R8 + Wi-Fi UNII-3 at 5 MHz step">
+                        <span>Race · 8 Hz</span><span class="note">5630-${maxStop} · 5 MHz</span>
                       </button>
                     </div>`
                   : ""
@@ -6256,9 +6980,9 @@ export class DebugView extends Component {
           <div class="debug-connect-actions">
             <button type="button" class="btn btn-sm btn-ghost" data-action="wf-jump-live" data-wf-jump-btn disabled>Jump to live</button>
             <div class="debug-waterfall-legend mono" title="Color scale follows Spectrum Y-axis range">
-              <span>${this.spectrumAcc.colorMinDbm} dBm</span>
+              <span data-wf-color-min>${this.spectrumAcc.colorMinDbm} ${sb.unit}</span>
               <span class="debug-wf-gradient"></span>
-              <span>${this.spectrumAcc.colorMaxDbm} dBm</span>
+              <span data-wf-color-max>${this.spectrumAcc.colorMaxDbm} ${sb.unit}</span>
             </div>
           </div>
         </div>
@@ -6270,7 +6994,7 @@ export class DebugView extends Component {
           <div class="debug-toolbar-left">
             <div class="debug-axis-pill ${!isFreqZoomed ? "is-armed" : "is-unarmed"}" data-axis-pill>
               <button type="button" class="debug-axis-pill-main" data-action="${!isFreqZoomed ? "toggle-axis-menu" : "scan-reset-zoom"}" data-menu="wf-x" title="${isFreqZoomed ? "Click to reset frequency zoom to Auto X" : "Full scanned frequency range · click to choose a frequency band preset, or drag X-axis to zoom"}">
-                ${icons.target(13)}<span>${isFreqZoomed ? `<span class="debug-hint-desktop">X: ${Math.round(this.scanZoomStartMHz!)}–${Math.round(this.scanZoomStopMHz!)} MHz</span><span class="debug-hint-mobile">${xScanShort}</span>` : "Auto X"}</span>
+                ${icons.target(13)}<span>${isFreqZoomed ? `<span class="debug-hint-desktop">X: ${Math.round(this.scanZoomStartMHz!)}-${Math.round(this.scanZoomStopMHz!)} MHz</span><span class="debug-hint-mobile">${xScanShort}</span>` : "Auto X"}</span>
               </button>
               <button type="button" class="debug-axis-pill-arrow" data-action="toggle-axis-menu" data-menu="wf-x" aria-expanded="${this.openAxisMenu === "wf-x"}" title="Choose frequency range">
                 ${icons.chevronDown(12)}
@@ -6282,14 +7006,14 @@ export class DebugView extends Component {
                         <span>Auto X</span><span class="note">Full scan</span>
                       </button>
                       <div class="debug-axis-menu-sep"></div>
-                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5630 && Math.round(this.scanZoomStopMHz!) === 5945 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5630" data-stop="5945" role="menuitem">
-                        <span>Raceband</span><span class="note">5630–5945 MHz</span>
+                      <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5630 && Math.round(this.scanZoomStopMHz!) === maxStop ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5630" data-stop="${maxStop}" role="menuitem">
+                        <span>Raceband</span><span class="note">5630-${maxStop} MHz</span>
                       </button>
                       <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5180 && Math.round(this.scanZoomStopMHz!) === 5320 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5180" data-stop="5320" role="menuitem">
-                        <span>UNII-1</span><span class="note">5180–5320 MHz</span>
+                        <span>UNII-1</span><span class="note">5180-5320 MHz</span>
                       </button>
                       <button type="button" class="debug-axis-menu-item ${isFreqZoomed && Math.round(this.scanZoomStartMHz!) === 5725 && Math.round(this.scanZoomStopMHz!) === 5850 ? "is-active" : ""}" data-action="scan-zoom-range" data-start="5725" data-stop="5850" role="menuitem">
-                        <span>UNII-3</span><span class="note">5725–5850 MHz</span>
+                        <span>UNII-3</span><span class="note">5725-5850 MHz</span>
                       </button>
                     </div>`
                   : ""
@@ -6343,8 +7067,10 @@ export class DebugView extends Component {
   }
 
   private updateScanFindings(): void {
+    const isRHUSB = this.isRotorHazardUSBMode();
     const s = this.spectrumAcc.latest;
-    const emg = Boolean(this.console.connected && this.status?.emergencyMode);
+    const rhOn = isRHUSB ? Boolean(this.activeRhSnapshot()?.connected) : false;
+    const emg = isRHUSB ? false : Boolean(this.console.connected && this.status?.emergencyMode);
     const scanLed = this.el.querySelector<HTMLElement>("[data-scan-led]");
     const scanNote = this.el.querySelector<HTMLElement>("[data-scan-status-note]");
     if (scanLed) {
@@ -6361,6 +7087,8 @@ export class DebugView extends Component {
         scanNote.textContent = "Scanning once…";
       } else if (s) {
         scanNote.textContent = `Paused · ${s.dbm.length} pts`;
+      } else if (isRHUSB && !rhOn) {
+        scanNote.textContent = "Offline · click Connect timer above";
       } else {
         scanNote.textContent = "Paused";
       }
@@ -6381,11 +7109,14 @@ export class DebugView extends Component {
       const z0 = this.scanZoomStartMHz;
       const z1 = this.scanZoomStopMHz;
       const isZoomed = z0 !== null && z1 !== null;
+      const emptyHint = isRHUSB
+        ? "Run Scan once or click Stream. Detected RF peaks (≥ 18 RSSI above band median) and 5 GHz Wi-Fi activity will be logged here with timestamps."
+        : "Run Scan once or click Stream. Detected RF peaks (≥ 6 dB above band median) and 5 GHz Wi-Fi activity will be logged here with timestamps.";
       this.syncFindingsLogDom(
         el,
         this.scanFindings,
         "clear-scan-findings",
-        "Run Scan once or click Stream. Detected RF peaks (≥ 6 dB above band median) and 5 GHz Wi-Fi activity will be logged here with timestamps.",
+        emptyHint,
         isZoomed ? (e) => e.freqMHz !== undefined && e.freqMHz >= z0! && e.freqMHz <= z1! : undefined
       );
     }

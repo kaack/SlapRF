@@ -216,6 +216,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/sim/mgp-admin", wrap(s.handleSimMultiGPAdmin))
 	mux.HandleFunc("/api/hardware/mode", wrap(s.handleHardwareMode))
 	mux.HandleFunc("/api/hardware/rh-debug-stream", s.handleRHDebugStream)
+	mux.HandleFunc("/api/hardware/rh-scan", s.handleRHScan)
 	mux.HandleFunc("/api/mgp-sync/import", wrap(s.handleMultiGPImportRace))
 	mux.HandleFunc("/api/mgp-sync/import-pilots", wrap(s.handleMultiGPImportPilots))
 	mux.HandleFunc("/api/mgp-sync/append-zippyq", wrap(s.handleMultiGPAppendZippyQ))

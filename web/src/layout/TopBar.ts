@@ -534,13 +534,14 @@ export class TopBar extends Component {
       this.store.timingHardwareMode === "laprf" ||
       this.store.timingHardwareMode === "rotorhazard" ||
       this.store.timingHardwareMode === "rotorhazard_usb";
+    const hideFlasher = isExternalTimer;
     const effectiveSimForNav = lockedOut ? false : sim;
     const navItems = ROUTES.filter(
       (r) =>
         !r.hiddenFromNav &&
         (!r.simOnly || effectiveSimForNav) &&
         (!r.liveTimeOnly || (ltEnabled && !isExternalTimer && !lockedOut)) &&
-        (r.id !== "flasher" || !isExternalTimer)
+        (r.id !== "flasher" || !hideFlasher)
     )
       .map((r) => {
         const active = r.id === meta.id;
@@ -656,13 +657,13 @@ export class TopBar extends Component {
 
     const pageSubtitle =
       meta.id === "debug" && hwMode === "rotorhazard_usb"
-        ? "RotorHazard USB diagnostics: binary serial self-test, RX5808 node health, live 0–255 RSSI monitor, and threshold noise"
+        ? "RotorHazard USB diagnostics: binary serial self-test, RX5808 node health, live 0-255 RSSI monitor, spectrum scan & waterfall"
         : meta.id === "debug" && hwMode === "rotorhazard"
-          ? "RotorHazard diagnostics: Socket.IO self-test, RX5808 node health, live 0–255 RSSI monitor, and threshold noise"
+          ? "RotorHazard diagnostics: Socket.IO self-test, RX5808 node health, live 0-255 RSSI monitor, and threshold noise"
           : meta.id === "debug" && hwMode === "laprf"
             ? "LapRF 8-Way diagnostics: TCP/USB link status, 8-slot RSSI telemetry, clock sync, and supply voltage"
             : meta.id === "network" && hwMode === "rotorhazard_usb"
-              ? "RotorHazard USB serial nodes, multi-seat RX5808 tuning, and live 0–255 node RSSI"
+              ? "RotorHazard USB serial nodes, multi-node RX5808 tuning, and live 0-255 node RSSI"
               : meta.id === "network" && hwMode === "rotorhazard"
                 ? "RotorHazard timing devices, per-device admin credentials, clock sync, and live 0–255 RX5808 node RSSI"
                 : meta.id === "network" && hwMode === "laprf"
@@ -920,13 +921,14 @@ export class TopBar extends Component {
       this.store.timingHardwareMode === "laprf" ||
       this.store.timingHardwareMode === "rotorhazard" ||
       this.store.timingHardwareMode === "rotorhazard_usb";
+    const hideFlasher = isExternalTimer;
     const effectiveSimForNav = lockedOut ? false : sim;
     const navItems = ROUTES.filter(
       (r) =>
         !r.hiddenFromNav &&
         (!r.simOnly || effectiveSimForNav) &&
         (!r.liveTimeOnly || (ltEnabled && !isExternalTimer && !lockedOut)) &&
-        (r.id !== "flasher" || !isExternalTimer)
+        (r.id !== "flasher" || !hideFlasher)
     )
       .map((r) => {
         const active = r.id === meta.id;

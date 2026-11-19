@@ -2073,7 +2073,30 @@ export class LiveView extends Component {
       return;
     }
     const vm = this.computeSessionDirectoryViewModel();
-    resultsEl.innerHTML = vm.tableOrEmptyMarkup;
+    const prevOverlay = resultsEl.querySelector<HTMLElement>(".pilot-dir-mobile-drawer-overlay");
+    if (prevOverlay && this.mobileSelectedSessionId && !this.mobileSessionDrawerClosing) {
+      const temp = document.createElement("div");
+      temp.innerHTML = vm.tableOrEmptyMarkup;
+      const nextOverlay = temp.querySelector<HTMLElement>(".pilot-dir-mobile-drawer-overlay");
+      const prevEditor = prevOverlay.querySelector<HTMLElement>(".pilot-dir-mobile-editor");
+      const nextEditor = nextOverlay?.querySelector<HTMLElement>(".pilot-dir-mobile-editor");
+      const prevMosaic = resultsEl.querySelector<HTMLElement>(".dir-mobile-mosaic");
+      const nextMosaic = temp.querySelector<HTMLElement>(".dir-mobile-mosaic");
+      const prevTable = resultsEl.querySelector<HTMLElement>(".table-scroll-shell, .table-scroll");
+      const nextTable = temp.querySelector<HTMLElement>(".table-scroll");
+      if (prevEditor && nextEditor && prevMosaic && nextMosaic) {
+        nextEditor.classList.remove("is-entering");
+        prevEditor.replaceWith(nextEditor);
+        prevMosaic.replaceWith(nextMosaic);
+        if (prevTable && nextTable) {
+          prevTable.replaceWith(nextTable);
+        }
+      } else {
+        resultsEl.innerHTML = vm.tableOrEmptyMarkup;
+      }
+    } else {
+      resultsEl.innerHTML = vm.tableOrEmptyMarkup;
+    }
     const footEl = dirHost.querySelector<HTMLElement>("[data-session-dir-foot-note]");
     if (footEl) footEl.textContent = vm.footNote;
     const clearWrap = dirHost.querySelector<HTMLElement>("[data-session-dir-clear-wrap]");
@@ -2523,17 +2546,29 @@ export class LiveView extends Component {
     const prevList = wrap.querySelector<HTMLElement>(".practice-pop-unified-list");
     const prevListScroll = prevList?.scrollTop ?? 0;
 
-    wrap.innerHTML = `
-      <button
-        type="button"
-        class="practice-add-pilot-btn ${this.pilotPopoverOpen ? "is-open" : ""}"
-        data-practice-act="toggle-pilot-popover"
-        aria-expanded="${this.pilotPopoverOpen ? "true" : "false"}"
-        title="Add or remove pilots for this practice session"
-      >
-        ${icons.plus(14)}<span>Add pilot</span>
-      </button>
-      ${popoverHtml}`;
+    const existingOverlay = wrap.querySelector<HTMLElement>(".practice-pilot-drawer-overlay");
+    if (this.pilotPopoverOpen && existingOverlay && !this.pilotDrawerClosing) {
+      const existingPop = existingOverlay.querySelector<HTMLElement>(".practice-pilot-popover");
+      const temp = document.createElement("div");
+      temp.innerHTML = this.buildSessionPilotsManagerMarkup(sess, lapCountsBySlot, false);
+      const freshPop = temp.querySelector<HTMLElement>(".practice-pilot-popover");
+      if (existingPop && freshPop) {
+        freshPop.classList.remove("is-entering");
+        existingPop.replaceWith(freshPop);
+      }
+    } else {
+      wrap.innerHTML = `
+        <button
+          type="button"
+          class="practice-add-pilot-btn ${this.pilotPopoverOpen ? "is-open" : ""}"
+          data-practice-act="toggle-pilot-popover"
+          aria-expanded="${this.pilotPopoverOpen ? "true" : "false"}"
+          title="Add or remove pilots for this practice session"
+        >
+          ${icons.plus(14)}<span>Add pilot</span>
+        </button>
+        ${popoverHtml}`;
+    }
 
     this.pilotDrawerAnimatedOpen = this.pilotPopoverOpen;
 

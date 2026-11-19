@@ -1,3 +1,9 @@
+import {
+  downloadTextFile,
+  getAndroidLanStatus,
+  isAndroidHostApp,
+  setAndroidLanEnabled,
+} from "../core/android_bridge";
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
@@ -228,6 +234,11 @@ export class DataSourceCard extends Component {
 
   private handleChange = (e: Event): void => {
     const target = e.target as HTMLInputElement;
+    if (target.name === "android-lan") {
+      setAndroidLanEnabled(target.checked);
+      this.forceRender();
+      return;
+    }
     if (target.name === "simulator") {
       const caps = capabilitiesSnapshot();
       if (!caps.portable) {
@@ -373,7 +384,9 @@ export class DataSourceCard extends Component {
     const effectiveMode: "demo" | "server" = caps.portable ? "server" : this.selectedMode;
     const recents = getRecentBackendUrls();
 
-    const sig = `${sim ? "1" : "0"}|${sim ? simSpeed : 0}|${caps.portable ? 1 : 0}|${caps.remoteBackend ? 1 : 0}|${caps.backendBaseUrl}|${caps.hostname}|${caps.version}|${caps.localDetectedUrl ?? ""}|${caps.lanIPs.join(",")}|${effectiveMode}|${this.connecting ? 1 : 0}|${this.discoveringLocal ? 1 : 0}|${this.localDiscoverySearched ? 1 : 0}|${this.connectError}|${this.mixedContentDirectUrl}|${this.noticeReason}|${recents.join(",")}`;
+    const androidApp = isAndroidHostApp();
+    const androidLan = androidApp ? getAndroidLanStatus() : null;
+    const sig = `${sim ? "1" : "0"}|${sim ? simSpeed : 0}|${caps.portable ? 1 : 0}|${caps.remoteBackend ? 1 : 0}|${caps.backendBaseUrl}|${caps.hostname}|${caps.version}|${caps.localDetectedUrl ?? ""}|${caps.lanIPs.join(",")}|${effectiveMode}|${this.connecting ? 1 : 0}|${this.discoveringLocal ? 1 : 0}|${this.localDiscoverySearched ? 1 : 0}|${this.connectError}|${this.mixedContentDirectUrl}|${this.noticeReason}|${recents.join(",")}|${androidLan ? `${androidLan.enabled ? 1 : 0}:${androidLan.port}:${androidLan.urls.join(",")}:${androidLan.error ?? ""}` : ""}`;
     if (sig === this.lastSig) return;
     this.lastSig = sig;
 
@@ -445,11 +458,15 @@ export class DataSourceCard extends Component {
                 ${esc(caps.backendBaseUrl || window.location.origin)} · v${esc(caps.version)} · bbolt (slaprf.db)
               </div>
               ${
-                caps.lanIPs.length > 0
+                !androidApp && caps.lanIPs.length > 0
                   ? `<div class="option-sub" style="margin-top:4px">LAN multi-display URLs: ${caps.lanIPs
                       .map((ip) => `<span class="mono">http://${esc(ip)}:8090</span>`)
                       .join(", ")}</div>`
-                  : ""
+                  : androidApp && androidLan?.enabled && androidLan.urls.length > 0
+                    ? `<div class="option-sub" style="margin-top:4px">LAN multi-display URLs: ${androidLan.urls
+                        .map((u) => `<span class="mono">${esc(u)}</span>`)
+                        .join(", ")}</div>`
+                    : ""
               }
             </div>
           </div>
@@ -616,8 +633,34 @@ export class DataSourceCard extends Component {
         </div>`
         : "";
 
+    const androidLanCardHtml =
+      androidApp && caps.portable && !caps.remoteBackend
+        ? `<div class="card" data-android-lan-card>
+          <div class="option-row">
+            <div>
+              <div class="option-title">Share server on Wi-Fi / Hotspot</div>
+              <div class="option-sub">Allow other phones, tablets, and laptops on the same Wi-Fi network or phone Hotspot to open live races, brackets, and standings.${
+                androidLan?.enabled
+                  ? androidLan.urls.length > 0
+                    ? ` Share URL: ${androidLan.urls.map((u) => `<span class="mono">${esc(u)}</span>`).join(", ")}`
+                    : ` Listening on port <span class="mono">:${androidLan.port || 8090}</span> (connect to Wi-Fi or turn on Hotspot).`
+                  : ""
+              }</div>
+              ${androidLan?.error ? `<div class="storage-status-error" style="margin-top:6px">${esc(androidLan.error)}</div>` : ""}
+            </div>
+            <div class="option-actions">
+              <label class="switch switch-lg">
+                <input type="checkbox" name="android-lan" data-android-lan-toggle ${androidLan?.enabled ? "checked" : ""} />
+                <span></span>
+              </label>
+            </div>
+          </div>
+        </div>`
+        : "";
+
     this.el.innerHTML = `
       ${serverCardHtml}
+      ${androidLanCardHtml}
       ${simActiveCardHtml}
       ${simSpeedCardHtml}`;
   }
@@ -1075,17 +1118,9 @@ export class PersistenceSettings extends Component {
   private async handleExport(): Promise<void> {
     const bundle = await this.api.exportApplicationData();
     const jsonStr = JSON.stringify(bundle, null, 2);
-    const blob = new Blob([jsonStr], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
     const stamp = new Date().toISOString().slice(0, 10);
     const filename = `slaprf-app-data-${stamp}.json`;
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    downloadTextFile(filename, "application/json", jsonStr);
     recordBackupNow();
     this.refreshStorage(true);
   }

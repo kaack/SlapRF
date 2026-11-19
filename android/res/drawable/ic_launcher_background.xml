@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Full-bleed dark slate base for Adaptive Icon parallax -->
+    <path
+        android:fillColor="#0D1017"
+        android:pathData="M0,0h108v108h-108z" />
+    <!-- Subtle raised metallic-slate bezel inside the 72dp (r=36dp) adaptive circle mask -->
+    <path
+        android:fillColor="#263042"
+        android:pathData="M54,54m-35,0a35,35 0 1,0 70,0a35,35 0 1,0 -70,0" />
+    <!-- Top-lit 3D specular rim highlight -->
+    <path
+        android:strokeColor="#41516D"
+        android:strokeWidth="1.6"
+        android:strokeLineCap="round"
+        android:pathData="M24.2,35.6A35,35 0 0,1 83.8,35.6" />
+    <!-- Recessed dark charcoal circular face -->
+    <path
+        android:fillColor="#10141D"
+        android:pathData="M54,54m-32.6,0a32.6,32.6 0 1,0 65.2,0a32.6,32.6 0 1,0 -65.2,0" />
+    <!-- Faint inner dial ring -->
+    <path
+        android:strokeColor="#1D2535"
+        android:strokeWidth="0.9"
+        android:pathData="M54,54m-31.4,0a31.4,31.4 0 1,0 62.8,0a31.4,31.4 0 1,0 -62.8,0" />
+</vector>

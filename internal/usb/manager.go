@@ -418,3 +418,60 @@ func (m *Manager) Snapshot() PoolSnapshot {
 		KnownTimers:    known,
 	}
 }
+
+// OpenRawPort opens an exclusive raw byte-stream handle to `portName` for the Flasher
+// (`/api/usb/raw-ws`), releasing any live `Manager` slot holding that port first.
+func (m *Manager) OpenRawPort(portName string, baud int) (firmware.SerialPort, PortInfo, error) {
+	portName = strings.TrimSpace(portName)
+	if portName == "" {
+		return nil, PortInfo{}, fmt.Errorf("missing USB port name")
+	}
+	if baud <= 0 {
+		baud = 115200
+	}
+
+	var resolvedInfo PortInfo
+	resolvedName := portName
+	if ports, err := m.ListPorts(true); err == nil {
+		var espPorts []PortInfo
+		foundExact := false
+		for _, pi := range ports {
+			if pi.IsEspressif {
+				espPorts = append(espPorts, pi)
+			}
+			if strings.EqualFold(pi.Name, portName) {
+				resolvedInfo = pi
+				resolvedName = pi.Name
+				foundExact = true
+			}
+		}
+		if !foundExact && (strings.EqualFold(portName, "auto:espressif") || strings.HasPrefix(portName, "/dev/bus/usb/")) && len(espPorts) == 1 {
+			resolvedInfo = espPorts[0]
+			resolvedName = espPorts[0].Name
+		}
+	}
+	if resolvedInfo.Name == "" {
+		resolvedInfo.Name = resolvedName
+	}
+
+	releasedAny := false
+	for _, slot := range m.slots {
+		slot.mu.Lock()
+		held := (slot.port != nil || slot.reconnecting) &&
+			(strings.EqualFold(slot.portName, portName) || strings.EqualFold(slot.portName, resolvedName))
+		slot.mu.Unlock()
+		if held {
+			_ = m.closeSlotInternal(slot, false)
+			releasedAny = true
+		}
+	}
+	if releasedAny {
+		m.broadcastPoolState()
+	}
+
+	p, err := m.openPort(resolvedName, baud)
+	if err != nil {
+		return nil, resolvedInfo, err
+	}
+	return p, resolvedInfo, nil
+}

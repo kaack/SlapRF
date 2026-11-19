@@ -126,7 +126,7 @@ function installLineupMomentumDrag(wrap: HTMLElement, lineup: HTMLElement): void
 
   wrap.addEventListener("pointerdown", (e: PointerEvent) => {
     if (e.button !== 0 && e.pointerType === "mouse") return;
-    if (e.pointerType === "touch" && lineup.hasAttribute("data-native-touch-scroll")) return;
+    if (e.pointerType === "touch") return;
     if ((e.target as HTMLElement | null)?.closest("[data-lineup-scroll]")) return;
     if (clearSuppressTimer) {
       window.clearTimeout(clearSuppressTimer);
@@ -242,7 +242,18 @@ export function fitScheduleLineups(root: ParentNode = document): void {
   lineups.forEach((l) => {
     if (!trackedLineups.has(l)) {
       trackedLineups.add(l);
-      l.addEventListener("scroll", () => updateSingleLineupMore(l), { passive: true });
+      let scrollRaf = 0;
+      l.addEventListener(
+        "scroll",
+        () => {
+          if (scrollRaf) return;
+          scrollRaf = window.requestAnimationFrame(() => {
+            scrollRaf = 0;
+            updateSingleLineupMore(l);
+          });
+        },
+        { passive: true }
+      );
       ro.observe(l);
       const wrap = l.closest<HTMLElement>(".sched-lineup-wrap");
       if (wrap) {

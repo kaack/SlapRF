@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Optically centered SlapRF gauge arc, needle, and dual 5.8 GHz RF waves -->
+    <group
+        android:translateX="29.0"
+        android:translateY="26.5"
+        android:scaleX="2.10"
+        android:scaleY="2.10">
+        <path
+            android:strokeColor="#EEF2F7"
+            android:strokeWidth="2.35"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round"
+            android:pathData="M18.21,16.30A8.2,8.2 0 1,1 13.30,5.79" />
+        <path
+            android:fillColor="#EEF2F7"
+            android:pathData="M10.5,13.5m-1.95,0a1.95,1.95 0 1,0 3.9,0a1.95,1.95 0 1,0 -3.9,0" />
+        <path
+            android:strokeColor="#EEF2F7"
+            android:strokeWidth="2.35"
+            android:strokeLineCap="round"
+            android:pathData="M10.5,13.5L15.2,9.8" />
+        <path
+            android:strokeColor="#D4FF3A"
+            android:strokeWidth="2.35"
+            android:strokeLineCap="round"
+            android:pathData="M15.77,7.22A8.2,8.2 0 0,1 18.70,13.50" />
+        <path
+            android:strokeColor="#D4FF3A"
+            android:strokeAlpha="0.78"
+            android:strokeWidth="2.35"
+            android:strokeLineCap="round"
+            android:pathData="M17.64,4.36A11.6,11.6 0 0,1 22.09,13.90" />
+    </group>
+</vector>

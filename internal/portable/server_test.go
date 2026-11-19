@@ -628,3 +628,117 @@ func TestServerBasicAuthenticationAndStorageWipe(t *testing.T) {
 	}
 	recResp.Body.Close()
 }
+
+type atomicTestSerialPort struct {
+	firmware.SerialPort
+	lastDTR   bool
+	lastRTS   bool
+	atomicHit int
+}
+
+func (a *atomicTestSerialPort) SetDTRRTS(dtr, rts bool) error {
+	a.lastDTR = dtr
+	a.lastRTS = rts
+	a.atomicHit++
+	return nil
+}
+
+func TestUSBRawWebSocketBridgeForMobileFlasher(t *testing.T) {
+	hostPort, devPort := rotorhazard.NewInMemorySerialPair()
+	wrappedPort := &atomicTestSerialPort{SerialPort: hostPort}
+
+	srv := portable.NewServer(portable.Config{
+		Version: "v0.0.6-android",
+		DBPath:  filepath.Join(t.TempDir(), "slaprf.db"),
+		USBListPorts: func() ([]usb.PortInfo, error) {
+			// Simulate Android re-enumerating /dev/bus/usb/001/002 -> /dev/bus/usb/001/003
+			return []usb.PortInfo{{
+				Name:        "/dev/bus/usb/001/003",
+				IsUSB:       true,
+				VID:         "303A",
+				PID:         "1001",
+				Product:     "Seeed XIAO ESP32-C5 (USB JTAG/serial)",
+				IsEspressif: true,
+			}}, nil
+		},
+		USBOpenPort: func(portName string, baud int) (firmware.SerialPort, error) {
+			if portName != "/dev/bus/usb/001/003" {
+				t.Fatalf("expected re-enumerated Espressif port /dev/bus/usb/001/003, got %q", portName)
+			}
+			return wrappedPort, nil
+		},
+	})
+	defer srv.Close()
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/usb/raw-ws?port=%2Fdev%2Fbus%2Fusb%2F001%2F002&baud=115200"
+	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
+		HTTPHeader: http.Header{"Origin": []string{ts.URL}},
+	})
+	if err != nil {
+		t.Fatalf("websocket dial /api/usb/raw-ws: %v", err)
+	}
+	defer func() { _ = ws.CloseNow() }()
+
+	// 1. Expect initial open handshake with resolved portName + Espressif VID/PID
+	mt, openBytes, err := ws.Read(ctx)
+	if err != nil || mt != websocket.MessageText {
+		t.Fatalf("read open handshake: mt=%v err=%v", mt, err)
+	}
+	var openMsg struct {
+		Type     string `json:"type"`
+		Ok       bool   `json:"ok"`
+		PortName string `json:"portName"`
+		VID      int    `json:"vid"`
+		PID      int    `json:"pid"`
+	}
+	if err := json.Unmarshal(openBytes, &openMsg); err != nil {
+		t.Fatalf("unmarshal openMsg: %v", err)
+	}
+	if openMsg.Type != "open" || !openMsg.Ok || openMsg.PortName != "/dev/bus/usb/001/003" || openMsg.VID != 0x303A || openMsg.PID != 0x1001 {
+		t.Fatalf("unexpected open handshake: %+v", openMsg)
+	}
+
+	// 2. Binary TX -> device & device -> Binary RX
+	if err := ws.Write(ctx, websocket.MessageBinary, []byte("\xc0\x00\x08\xc0")); err != nil {
+		t.Fatalf("ws write binary: %v", err)
+	}
+	rxOnDev := make([]byte, 16)
+	_ = devPort.SetReadTimeout(time.Second)
+	n, err := devPort.Read(rxOnDev)
+	if err != nil || string(rxOnDev[:n]) != "\xc0\x00\x08\xc0" {
+		t.Fatalf("device did not receive SLIP frame: n=%d err=%v", n, err)
+	}
+
+	_, _ = devPort.Write([]byte("\xc0\x01\x08\x00\xc0"))
+	mt, rxOnWS, err := ws.Read(ctx)
+	if err != nil || mt != websocket.MessageBinary || string(rxOnWS) != "\xc0\x01\x08\x00\xc0" {
+		t.Fatalf("ws did not receive SLIP reply: mt=%v data=%x err=%v", mt, rxOnWS, err)
+	}
+
+	// 3. Atomic DTR/RTS signal control + ack
+	if err := ws.Write(ctx, websocket.MessageText, []byte(`{"type":"signals","id":7,"dtr":true,"rts":false}`)); err != nil {
+		t.Fatalf("ws write signals: %v", err)
+	}
+	mt, ackBytes, err := ws.Read(ctx)
+	if err != nil || mt != websocket.MessageText || !strings.Contains(string(ackBytes), `"id":7`) {
+		t.Fatalf("expected ack for id=7, got mt=%v body=%s err=%v", mt, string(ackBytes), err)
+	}
+	if wrappedPort.atomicHit != 1 || !wrappedPort.lastDTR || wrappedPort.lastRTS {
+		t.Fatalf("expected AtomicDTRRTSSetter(true,false) hit once, got hits=%d dtr=%v rts=%v", wrappedPort.atomicHit, wrappedPort.lastDTR, wrappedPort.lastRTS)
+	}
+
+	// 4. Clean close + ack
+	if err := ws.Write(ctx, websocket.MessageText, []byte(`{"type":"close","id":8}`)); err != nil {
+		t.Fatalf("ws write close: %v", err)
+	}
+	mt, closeAck, err := ws.Read(ctx)
+	if err != nil || mt != websocket.MessageText || !strings.Contains(string(closeAck), `"id":8`) {
+		t.Fatalf("expected close ack id=8, got mt=%v body=%s err=%v", mt, string(closeAck), err)
+	}
+}

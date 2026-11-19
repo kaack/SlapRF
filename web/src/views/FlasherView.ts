@@ -16,6 +16,7 @@ import {
   acquireEspSerialPort,
   eraseXiaoC5WithEsptool,
   flasherUsesWebSerial,
+  hasBrowserWebSerial,
   readXiaoC5WithWebSerial,
 } from "../services/esptool_flasher";
 import { isSimulatedUsbMode } from "../services/sim_serial_port";
@@ -191,7 +192,9 @@ class TimerReaderPanel extends Component {
             : isConnected
               ? "Connected over USB · click Read timer to inspect"
               : webSerialOk
-                ? "Click Read timer to choose a USB board and read its identity"
+                ? hasBrowserWebSerial()
+                  ? "Click Read timer to choose a USB board and read its identity"
+                  : "Plug in a XIAO ESP32-C5 over USB-C and tap Read timer to inspect its identity"
                 : FLASHER_NEEDS_WEBSERIAL;
 
     const rfBadge = !r
@@ -513,7 +516,9 @@ class TimerEraserPanel extends Component {
           : isConnected
             ? `Connected to ${esc(targetName)}<span class="flasher-eraser-hint-desktop"> · click Erase timer to wipe back to factory blank</span>`
             : webSerialOk
-              ? "Click Erase timer to choose a USB board and wipe it back to factory blank"
+              ? hasBrowserWebSerial()
+                ? "Click Erase timer to choose a USB board and wipe it back to factory blank"
+                : "Plug in a XIAO ESP32-C5 over USB-C and tap Erase timer to wipe it back to factory blank"
               : FLASHER_NEEDS_WEBSERIAL;
 
     const eraseDisabled = !webSerialOk;
@@ -597,7 +602,7 @@ export class FlasherView extends Component {
         <section class="settings-section" data-section-anchor="writer">
           <div class="settings-intro">
             <h2>Writer</h2>
-            <p>Set the timer's role and name, then flash a XIAO ESP32-C5 straight from your browser. The board is read back once to confirm the flash.</p>
+            <p>Set the timer's role and name, then flash a XIAO ESP32-C5 straight over USB-C. The board is read back once to confirm the flash.</p>
           </div>
           <div class="debug-status-layout" data-slot="flasher"></div>
         </section>

@@ -258,7 +258,7 @@ func NewServer(cfg Config) *Server {
 			s.persistWorker.MarkDirty()
 		}
 	}
-	s.laprfMgr = newLapRFManager(realEngine, store, s.logf, markDirty)
+	s.laprfMgr = newLapRFManager(realEngine, store, cfg.USBOpenPort, s.logf, markDirty)
 	s.rhMgr = newRHManager(realEngine, store, cfg.USBOpenPort, s.logf, markDirty)
 	s.liveTimeMgr = newLiveTimeManager(cfg.Version, laprfSrv, store, func() bool {
 		return !sim.IsRunning() && realEngine.TimingHardwareMode() == domain.HardwareModeLapRF
@@ -457,6 +457,7 @@ func (s *Server) RegisterAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/hub/survey", s.handleHubSurvey)
 	mux.HandleFunc("/api/sim/hub-usb", s.handleSimHubUSB)
 	mux.HandleFunc("/api/ws/usb", s.handleUSBWS)
+	mux.HandleFunc("/api/usb/raw-ws", s.handleUSBRawWS)
 
 	// Native Go LapRF 8-Way hardware client & LAN discovery
 	mux.HandleFunc("/api/laprf/status", s.handleLapRFStatus)
@@ -470,6 +471,7 @@ func (s *Server) RegisterAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/rh/connect", s.handleRHConnect)
 	mux.HandleFunc("/api/rh/disconnect", s.handleRHDisconnect)
 	mux.HandleFunc("/api/rh/sync", s.handleRHSync)
+	mux.HandleFunc("/api/rh/scan", s.handleRHScan)
 	mux.HandleFunc("/api/rh-discover", s.handleRotorHazardDiscover)
 
 	// Native Go LiveTime :5403 TCP emulator
@@ -997,15 +999,25 @@ func ProbeRotorHazardHosts(ctx context.Context, hosts []string, port int, timeou
 // LanIPs returns this machine's non-loopback IPv4 addresses.
 func LanIPs() []string {
 	var out []string
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return []string{}
-	}
-	for _, a := range addrs {
-		if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && !ipn.IP.IsLinkLocalUnicast() {
-			if v4 := ipn.IP.To4(); v4 != nil {
-				out = append(out, v4.String())
+	if addrs, err := net.InterfaceAddrs(); err == nil {
+		for _, a := range addrs {
+			if ipn, ok := a.(*net.IPNet); ok && !ipn.IP.IsLoopback() && !ipn.IP.IsLinkLocalUnicast() {
+				if v4 := ipn.IP.To4(); v4 != nil {
+					out = append(out, v4.String())
+				}
 			}
+		}
+	}
+	// Fallback for Android 11+ where SELinux restricts netlink InterfaceAddrs():
+	// a connectionless UDP dial queries the kernel routing table without sending any packet.
+	if len(out) == 0 {
+		if c, err := net.Dial("udp4", "192.0.2.1:80"); err == nil {
+			if ua, ok := c.LocalAddr().(*net.UDPAddr); ok && ua.IP != nil && !ua.IP.IsLoopback() {
+				if v4 := ua.IP.To4(); v4 != nil {
+					out = append(out, v4.String())
+				}
+			}
+			_ = c.Close()
 		}
 	}
 	if out == nil {

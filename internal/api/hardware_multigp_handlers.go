@@ -25,6 +25,9 @@ func (s *Server) handleHardwareMode(w http.ResponseWriter, r *http.Request) {
 	}
 	isSim := s.simulator.IsRunning()
 	s.activeEngine().SetRHDebugStream(0, false)
+	if isSim {
+		_ = s.simulator.SetRHUSBScanLive(0, false, 0, 0, 0)
+	}
 	s.activeEngine().SetTimingHardwareMode(body.Mode, isSim)
 	if isSim {
 		s.simulator.SyncHardwareMode()
@@ -45,11 +48,61 @@ func (s *Server) handleRHDebugStream(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if body.Active && s.simulator.IsRunning() {
+		_ = s.simulator.SetRHUSBScanLive(body.TimerID, false, 0, 0, 0)
+	}
 	s.activeEngine().SetRHDebugStream(body.TimerID, body.Active)
 	if s.simulator.IsRunning() {
 		s.simulator.SyncRHNodesNow()
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleRHScan(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var body struct {
+		TimerID uint8  `json:"timerId"`
+		Mode    string `json:"mode"` // "once" | "live" | "stop"
+		Start   int    `json:"start"`
+		Stop    int    `json:"stop"`
+		Step    int    `json:"step"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if !s.simulator.IsRunning() {
+		http.Error(w, "simulator is not running (use /api/rh/scan for physical RotorHazard USB devices)", http.StatusBadRequest)
+		return
+	}
+	mode := strings.ToLower(strings.TrimSpace(body.Mode))
+	switch mode {
+	case "once":
+		pass, err := s.simulator.RunRHUSBScanOnce(body.TimerID, body.Start, body.Stop, body.Step)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "scan": pass})
+	case "live":
+		if err := s.simulator.SetRHUSBScanLive(body.TimerID, true, body.Start, body.Stop, body.Step); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		s.activeEngine().SetRHDebugStream(body.TimerID, false)
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "scanLive": true})
+	case "stop":
+		if err := s.simulator.SetRHUSBScanLive(body.TimerID, false, body.Start, body.Stop, body.Step); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "scanLive": false})
+	default:
+		http.Error(w, "invalid scan mode (expected once, live, or stop)", http.StatusBadRequest)
+	}
 }
 
 func (s *Server) handleSimLapRFAction(w http.ResponseWriter, r *http.Request) {

@@ -6975,7 +6975,30 @@ export class RacesView extends Component {
       return;
     }
     const vm = this.computeRaceDirectoryViewModel();
-    resultsEl.innerHTML = vm.tableOrEmptyMarkup;
+    const prevOverlay = resultsEl.querySelector<HTMLElement>(".pilot-dir-mobile-drawer-overlay");
+    if (prevOverlay && this.mobileSelectedRaceId && !this.mobileRaceDrawerClosing) {
+      const temp = document.createElement("div");
+      temp.innerHTML = vm.tableOrEmptyMarkup;
+      const nextOverlay = temp.querySelector<HTMLElement>(".pilot-dir-mobile-drawer-overlay");
+      const prevEditor = prevOverlay.querySelector<HTMLElement>(".pilot-dir-mobile-editor");
+      const nextEditor = nextOverlay?.querySelector<HTMLElement>(".pilot-dir-mobile-editor");
+      const prevMosaic = resultsEl.querySelector<HTMLElement>(".dir-mobile-mosaic");
+      const nextMosaic = temp.querySelector<HTMLElement>(".dir-mobile-mosaic");
+      const prevTable = resultsEl.querySelector<HTMLElement>(".table-scroll-shell, .table-scroll");
+      const nextTable = temp.querySelector<HTMLElement>(".table-scroll");
+      if (prevEditor && nextEditor && prevMosaic && nextMosaic) {
+        nextEditor.classList.remove("is-entering");
+        prevEditor.replaceWith(nextEditor);
+        prevMosaic.replaceWith(nextMosaic);
+        if (prevTable && nextTable) {
+          prevTable.replaceWith(nextTable);
+        }
+      } else {
+        resultsEl.innerHTML = vm.tableOrEmptyMarkup;
+      }
+    } else {
+      resultsEl.innerHTML = vm.tableOrEmptyMarkup;
+    }
     const footEl = this.el.querySelector<HTMLElement>("[data-race-dir-foot-note]");
     if (footEl) footEl.textContent = vm.footNote;
     const clearWrap = this.el.querySelector<HTMLElement>("[data-race-dir-clear-wrap]");

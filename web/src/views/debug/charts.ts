@@ -983,9 +983,13 @@ export class SpectrumAccumulator {
     this.setScrollRow(this.scrollRow);
   }
 
-  public setColorRange(minDbm: number, maxDbm: number): void {
-    const lo = Math.max(-115, Math.min(-35, Math.round(minDbm)));
-    const hi = Math.max(lo + 8, Math.min(-15, Math.round(maxDbm)));
+  public setColorRange(minDbm: number, maxDbm: number, rssiScale = false): void {
+    const lo = rssiScale
+      ? Math.max(0, Math.min(220, Math.round(minDbm)))
+      : Math.max(-115, Math.min(-35, Math.round(minDbm)));
+    const hi = rssiScale
+      ? Math.max(lo + 12, Math.min(255, Math.round(maxDbm)))
+      : Math.max(lo + 8, Math.min(-15, Math.round(maxDbm)));
     if (lo === this.colorMinDbm && hi === this.colorMaxDbm) return;
     this.colorMinDbm = lo;
     this.colorMaxDbm = hi;
@@ -1137,13 +1141,13 @@ export class SpectrumAccumulator {
     return this.offscreen;
   }
 
-  /** Top 5 local maxima at least 6 dB above the scan median (§5.4). */
-  public topPeaks(maxPeaks = 5): SpectrumPeak[] {
+  /** Top 5 local maxima at least `minProminence` units above the scan median (§5.4). */
+  public topPeaks(maxPeaks = 5, minProminence = 6): SpectrumPeak[] {
     const s = this.latest;
     if (!s || s.dbm.length < 3) return [];
     const sorted = [...s.dbm].sort((a, b) => a - b);
     const median = sorted[Math.floor(sorted.length / 2)];
-    const threshold = median + 6;
+    const threshold = median + minProminence;
 
     const candidates: Array<{ idx: number; dbm: number }> = [];
     for (let i = 0; i < s.dbm.length; i++) {
@@ -1279,14 +1283,21 @@ function drawBandOverlay(
   const xOf = (f: number) => L + ((f - startMHz) / span) * plotW;
 
   if (showWifi) {
+    const isMobilePortrait =
+      plotW < 440 ||
+      (typeof window !== "undefined" &&
+        typeof window.matchMedia === "function" &&
+        window.matchMedia("(max-width: 860px) and (orientation: portrait)").matches);
+
     for (const b of WIFI_BAND_BLOCKS) {
       const a = Math.max(startMHz, b.startMHz);
       const z = Math.min(stopMHz, b.stopMHz);
       if (z <= a) continue;
       const x0 = xOf(a);
       const x1 = xOf(z);
+      const bandW = x1 - x0;
       ctx.fillStyle = b.warnsRaceband ? "rgba(251, 191, 36, 0.07)" : "rgba(56, 189, 248, 0.06)";
-      ctx.fillRect(x0, T, x1 - x0, plotH);
+      ctx.fillRect(x0, T, bandW, plotH);
       ctx.strokeStyle = b.warnsRaceband ? "rgba(251, 191, 36, 0.22)" : "rgba(56, 189, 248, 0.18)";
       ctx.lineWidth = 1;
       ctx.beginPath();
@@ -1296,7 +1307,7 @@ function drawBandOverlay(
       ctx.lineTo(x1, T + plotH);
       ctx.stroke();
 
-      if (x1 - x0 > 46) {
+      if (bandW >= 32) {
         ctx.fillStyle = b.warnsRaceband
           ? darkBackdrop
             ? "rgba(251, 191, 36, 0.75)"
@@ -1307,7 +1318,12 @@ function drawBandOverlay(
         ctx.font = `9.5px ${tokens.fontMono}`;
         ctx.textAlign = "center";
         ctx.textBaseline = "bottom";
-        ctx.fillText(`${b.label} (${b.channels})`, (x0 + x1) / 2, T + plotH - 4);
+        const fullText = `${b.label} (${b.channels})`;
+        const labelText =
+          !isMobilePortrait && ctx.measureText(fullText).width <= bandW - 8 ? fullText : b.label;
+        if (ctx.measureText(labelText).width <= bandW + 4) {
+          ctx.fillText(labelText, (x0 + x1) / 2, T + plotH - 4);
+        }
       }
     }
   }
@@ -1344,6 +1360,7 @@ export interface SpectrumCanvasOptions {
   yMinDbm?: number;
   yMaxDbm?: number;
   autoY?: boolean;
+  unitLabel?: string;
   zoomBox?: { x0: number; x1: number } | null;
   hover: { x: number; y: number } | null;
 }
@@ -1432,11 +1449,12 @@ export function drawSpectrumCanvas(
   const yMin = opts.yMinDbm ?? DBM_MIN;
   const yMax = Math.max(yMin + 4, opts.yMaxDbm ?? DBM_MAX);
   const ySpan = yMax - yMin;
+  const unitLbl = opts.unitLabel ?? "dBm";
   const xOf = (f: number) => L + ((f - vStart) / span) * plotW;
   const yOf = (d: number) => T + (1 - (d - yMin) / ySpan) * plotH;
 
-  // Horizontal dBm grid with adaptive step when Y-zoomed
-  const dStep = ySpan <= 14 ? 2 : ySpan <= 32 ? 5 : 10;
+  // Horizontal amplitude grid with adaptive step when Y-zoomed or on 0-255 RSSI scale
+  const dStep = ySpan <= 14 ? 2 : ySpan <= 32 ? 5 : ySpan <= 95 ? 10 : ySpan <= 180 ? 25 : 50;
   ctx.font = `10px ${tokens.fontMono}`;
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
@@ -1488,7 +1506,7 @@ export function drawSpectrumCanvas(
   };
 
   if (!hasData || !s) {
-    setSpecReadout(`<span class="note">Point at chart to inspect frequency &amp; dBm</span>`);
+    setSpecReadout(`<span class="note">Point at chart to inspect frequency &amp; ${unitLbl}</span>`);
     ctx.restore();
     ctx.fillStyle = tokens.text3;
     ctx.textAlign = "center";
@@ -1582,28 +1600,28 @@ export function drawSpectrumCanvas(
         ctx.fill();
 
         const tag = shortBandHint(f);
-        const maxVal = acc.maxHold && acc.maxHold[idx] !== undefined ? acc.maxHold[idx] : s.dbm[idx];
+        const maxVal = acc.maxHold && acc.maxHold[idx] !== undefined ? Math.round(acc.maxHold[idx]) : Math.round(s.dbm[idx]);
         const avgVal = avgAll && avgAll[idx] !== undefined ? avgAll[idx] : null;
         setSpecReadout(
-          `<span><strong>${f}M</strong>${tag ? ` (${tag})` : ""} · Cur <strong>${s.dbm[idx]}</strong> · Mx <strong>${maxVal}</strong>${avgVal !== null ? ` · Av <strong>${Math.round(avgVal)}</strong>` : ""} dBm</span>`
+          `<span><strong>${f}M</strong>${tag ? ` (${tag})` : ""} · Cur <strong>${Math.round(s.dbm[idx])}</strong> · Mx <strong>${maxVal}</strong>${avgVal !== null ? ` · Av <strong>${Math.round(avgVal)}</strong>` : ""} ${unitLbl}</span>`
         );
       }
     } else {
       hoveredSpec = true;
-      setSpecReadout(`<span><strong>${Math.round(fCursor)}M</strong> · <span class="note">outside sweep (${scanStart}–${scanStop}M)</span></span>`);
+      setSpecReadout(`<span><strong>${Math.round(fCursor)}M</strong> · <span class="note">outside sweep (${scanStart}-${scanStop}M)</span></span>`);
     }
   }
   if (!hoveredSpec) {
     if (maxHoldPeakIdx >= 0) {
       const pf = s.start + maxHoldPeakIdx * s.step;
       const ptag = shortBandHint(pf);
-      const maxDbm = holdArr[maxHoldPeakIdx];
-      const curDbm = s.dbm[maxHoldPeakIdx];
+      const maxDbm = Math.round(holdArr[maxHoldPeakIdx]);
+      const curDbm = Math.round(s.dbm[maxHoldPeakIdx]);
       setSpecReadout(
-        `<span>Pk <strong>${pf}M</strong>${ptag ? ` (${ptag})` : ""} · Mx <strong>${maxDbm}</strong> · Cur <strong>${curDbm}</strong> dBm</span>`
+        `<span>Pk <strong>${pf}M</strong>${ptag ? ` (${ptag})` : ""} · Mx <strong>${maxDbm}</strong> · Cur <strong>${curDbm}</strong> ${unitLbl}</span>`
       );
     } else {
-      setSpecReadout(`<span class="note">Point at chart to inspect frequency &amp; dBm</span>`);
+      setSpecReadout(`<span class="note">Point at chart to inspect frequency &amp; ${unitLbl}</span>`);
     }
   }
 }
@@ -1626,7 +1644,8 @@ export function drawWaterfallCanvas(
   viewStopMHz?: number | null,
   zoomBox?: { x0: number; x1: number } | null,
   fallbackStartMHz?: number,
-  fallbackStopMHz?: number
+  fallbackStopMHz?: number,
+  unitLabel = "dBm"
 ): void {
   const s = acc.latest;
   const off = acc.getOffscreen();
@@ -1730,7 +1749,7 @@ export function drawWaterfallCanvas(
   };
 
   if (!hasData || !s) {
-    setWfReadout(`<span class="note">Point at waterfall to inspect frequency, dBm &amp; pass age</span>`);
+    setWfReadout(`<span class="note">Point at waterfall to inspect frequency, ${unitLabel} &amp; pass age</span>`);
     ctx.fillStyle = tokens.text3;
     ctx.textAlign = "center";
     ctx.textBaseline = "middle";
@@ -1739,7 +1758,7 @@ export function drawWaterfallCanvas(
     return;
   }
 
-  // Hover readout (MHz, dBm, age, pass index)
+  // Hover readout (MHz, dBm/RSSI, age, pass index)
   if (!zoomBox && hover && hover.x >= L && hover.x <= W - R && hover.y >= T && hover.y <= T + plotH) {
     const fCursor = vStart + ((hover.x - L) / plotW) * span;
     const inSweep = fCursor >= scanStart - s.step * 0.5 && fCursor <= scanStop + s.step * 0.5;
@@ -1767,13 +1786,13 @@ export function drawWaterfallCanvas(
       const age = (rowIdx * passSec).toFixed(1);
       const tag = shortBandHint(f);
       setWfReadout(
-        `<span><strong>${f}M</strong>${tag ? ` (${tag})` : ""} · <strong>${dbmVal !== null && dbmVal !== undefined ? `${dbmVal} dBm` : "—"}</strong> · -${age}s (-${rowIdx + 1}/${acc.history.length})</span>`
+        `<span><strong>${f}M</strong>${tag ? ` (${tag})` : ""} · <strong>${dbmVal !== null && dbmVal !== undefined ? `${Math.round(dbmVal)} ${unitLabel}` : "-"}</strong> · -${age}s (-${rowIdx + 1}/${acc.history.length})</span>`
       );
     } else {
-      setWfReadout(`<span><strong>${Math.round(fCursor)}M</strong> · <span class="note">outside sweep (${scanStart}–${scanStop}M)</span></span>`);
+      setWfReadout(`<span><strong>${Math.round(fCursor)}M</strong> · <span class="note">outside sweep (${scanStart}-${scanStop}M)</span></span>`);
     }
   } else {
-    setWfReadout(`<span class="note">Point at waterfall to inspect frequency, dBm &amp; pass age</span>`);
+    setWfReadout(`<span class="note">Point at waterfall to inspect frequency, ${unitLabel} &amp; pass age</span>`);
   }
 }
 
@@ -2342,15 +2361,18 @@ export function exportSignalCsv(ring: SignalRingBuffer, sweepHz = 50): string {
   return [header, ...lines].join("\n") + "\n";
 }
 
-export function exportSpectrumCsv(acc: SpectrumAccumulator): string {
+export function exportSpectrumCsv(acc: SpectrumAccumulator, isRssiScale = false): string {
   const s = acc.latest;
   if (!s || !s.dbm.length) return "";
-  const header = "freq_mhz,latest_dbm,avg_dbm,max_hold_dbm";
+  const header = isRssiScale
+    ? "freq_mhz,latest_rssi,avg_rssi,max_hold_rssi"
+    : "freq_mhz,latest_dbm,avg_dbm,max_hold_dbm";
+  const avgArr = acc.getAverage();
   const rows: string[] = [];
   for (let i = 0; i < s.dbm.length; i++) {
     const f = s.start + i * s.step;
     const latest = s.dbm[i];
-    const avg = acc.avgDbm && acc.avgDbm[i] !== undefined ? acc.avgDbm[i].toFixed(1) : "";
+    const avg = avgArr && avgArr[i] !== undefined ? avgArr[i].toFixed(1) : "";
     const hold = acc.maxHold && acc.maxHold[i] !== undefined ? String(acc.maxHold[i]) : "";
     rows.push(`${f},${latest},${avg},${hold}`);
   }

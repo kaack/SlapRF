@@ -623,22 +623,44 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(root.querySelector("#sim-usb [data-field='rh-host']")).toBeNull();
       expect(root.querySelector("#sim-usb [data-field='rh-pass']")).toBeNull();
 
-      // NetworkView renders USB serial port picker (defaulting to unconnected SIM-RH-USB2) and live 0..255 Seat bars
+      // NetworkView renders USB serial port picker (defaulting to unconnected SIM-RH-USB2) and live 0..255 Node bars matching RotorHazard Network
       const netEl = root.querySelector("#net-usb")!;
       const usbVisTxt = netEl.querySelector("[data-slot='rh-usb-sections']")!.textContent ?? "";
       expect(usbVisTxt).toContain("USB serial connection");
       expect(usbVisTxt).toContain("RotorHazard USB devices");
       expect(usbVisTxt).toContain("SIM-RH-USB1");
-      expect(usbVisTxt).toContain("Seat 1");
+      expect(usbVisTxt).toContain("Node 1");
+      expect(usbVisTxt).toContain("8 nodes");
+      expect(usbVisTxt).toContain("8-node receiver RSSI (0-255 scale)");
+      expect(usbVisTxt).not.toContain("Seat 1");
       expect(usbVisTxt).toContain("CROSSING");
       expect(usbVisTxt).not.toContain("Scan LAN");
       expect(usbVisTxt).not.toContain("Admin Password");
 
       const portSel = netEl.querySelector<HTMLSelectElement>("[data-field='rh-usb-port']")!;
       expect(portSel).not.toBeNull();
-      expect(portSel.value).toBe("SIM-RH-USB2");
+      expect(portSel.value).toBe("SIM-RH-USB1");
 
-      const connectUsbBtn = netEl.querySelector<HTMLButtonElement>("[data-action='rh-usb-connect']")!;
+      // When the selected USB port is already connected, the USB serial connection box renders an active Disconnect button
+      // and the device card below does not duplicate the Disconnect button.
+      const connHostEl = netEl.querySelector<HTMLElement>("[data-slot='rh-usb-connection']")!;
+      const disconnectUsbBtn = connHostEl.querySelector<HTMLButtonElement>("[data-action='rh-disconnect']")!;
+      expect(disconnectUsbBtn).not.toBeNull();
+      expect(disconnectUsbBtn.disabled).toBe(false);
+      expect(disconnectUsbBtn.textContent ?? "").toContain("Disconnect");
+      expect(connHostEl.querySelector("[data-action='rh-usb-connect']")).toBeNull();
+
+      const usbDeviceCard = netEl.querySelector<HTMLElement>("[data-rh-usb-card]")!;
+      expect(usbDeviceCard).not.toBeNull();
+      expect(usbDeviceCard.querySelector("[data-action='rh-disconnect']")).toBeNull();
+
+      // Switching the dropdown to an unconnected USB port turns the button back into Connect USB
+      portSel.value = "SIM-RH-USB2";
+      portSel.dispatchEvent(new Event("change", { bubbles: true }));
+      await flushMicrotasks();
+
+      const connectUsbBtn = connHostEl.querySelector<HTMLButtonElement>("[data-action='rh-usb-connect']")!;
+      expect(connectUsbBtn).not.toBeNull();
       expect(connectUsbBtn.disabled).toBe(false);
       connectUsbBtn.click();
       await flushMicrotasks();
@@ -656,14 +678,38 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(pilotsTxt).toContain("Enter (10–250)");
       expect(pilotsTxt).toContain("Exit (6–246)");
 
-      // DebugView runs USB serial self-test cleanly without Socket.IO / HTTP Basic Auth
+      // DebugView enables Spectrum scan & waterfall on 0-255 RSSI scale for RotorHazard (USB)
+      const specSection = root.querySelector<HTMLElement>(
+        "#dbg-usb [data-section-anchor='spectrum-scan']"
+      )!;
+      expect(specSection.hidden).toBe(false);
+      expect(specSection.textContent).toContain("Spectrum scan (0-255 RSSI × frequency)");
+      expect(specSection.textContent).toContain("Waterfall spectrogram (frequency × time)");
+      expect(specSection.textContent).toContain("12 RSSI");
+      expect(specSection.textContent).toContain("185 RSSI");
+
+      const scanOnceBtn = root.querySelector<HTMLButtonElement>("#dbg-usb [data-action='scan']")!;
+      expect(scanOnceBtn.disabled).toBe(false);
+      scanOnceBtn.click();
+      await flushMicrotasks();
+      expect(
+        calls.some(
+          (c) =>
+            c.method === "runRHUSBScan" &&
+            (c.args[0] as { mode?: string; stop?: number })?.mode === "once" &&
+            (c.args[0] as { mode?: string; stop?: number })?.stop === 5917
+        )
+      ).toBe(true);
+      expect(specSection.textContent).toContain("196 RSSI");
+
+      // DebugView runs USB serial self-test cleanly without Socket.IO / HTTP Basic Auth and uses Node wording
       const selfTestBtn = root.querySelector<HTMLButtonElement>("#dbg-usb [data-action='selftest']")!;
       expect(selfTestBtn.disabled).toBe(false);
       selfTestBtn.click();
       await flushMicrotasks();
       const selfTestTxt = root.querySelector("#dbg-usb [data-slot='selftest']")!.textContent ?? "";
       expect(selfTestTxt).toContain("USB serial link");
-      expect(selfTestTxt).toContain("Protocol & seats");
+      expect(selfTestTxt).toContain("Protocol & nodes");
       expect(selfTestTxt).not.toContain("HTTP Basic Auth");
     } finally {
       sb.destroy();

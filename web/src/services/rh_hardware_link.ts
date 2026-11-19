@@ -79,6 +79,16 @@ export interface RHClientDiagSnapshot {
   cpuTempC?: number;
   envSummary?: string;
   lastError?: string;
+  scanLive?: boolean;
+  lastScan?: {
+    seq: number;
+    start: number;
+    stop: number;
+    step: number;
+    passMs: number;
+    live: boolean;
+    values: number[];
+  };
 }
 
 export interface SavedRHTarget {
@@ -416,7 +426,7 @@ export class RotorHazardHardwareLink {
           return {
             name: portName,
             isUsb: true,
-            product: `Simulated RotorHazard USB (${u.nodeCount === 4 ? 4 : 8} seats)`,
+            product: `Simulated RotorHazard USB (${u.nodeCount === 4 ? 4 : 8} nodes)`,
             label: normLabel,
             timerId: u.timerId,
             nodeCount: u.nodeCount === 4 ? 4 : 8,
@@ -564,6 +574,78 @@ export class RotorHazardHardwareLink {
     this.notify();
   }
 
+  public async runUSBScan(
+    store: AppStore,
+    api: ApiClient | undefined,
+    opts: {
+      timerId: number;
+      mode: "once" | "live" | "stop";
+      start: number;
+      stop: number;
+      step: number;
+    }
+  ): Promise<{
+    ok: boolean;
+    scanLive?: boolean;
+    scan?: {
+      seq: number;
+      start: number;
+      stop: number;
+      step: number;
+      passMs: number;
+      live: boolean;
+      values: number[];
+    };
+  }> {
+    this.lastError = "";
+    if (store.simulatorRunning) {
+      if (!api) {
+        throw new Error("Missing API client for simulated RotorHazard USB scan.");
+      }
+      const res = await api.runRHUSBScan(opts);
+      await api.pollStatusNow().catch(() => undefined);
+      this.notify();
+      return res;
+    }
+
+    if (!capabilitiesSnapshot().portable) {
+      openBackendConnectModal("real-hardware");
+      throw new Error("Connect to a SlapRF Server to run spectrum scans on RotorHazard USB devices.");
+    }
+
+    const resp = await fetch(resolveBackendUrl("/api/rh/scan"), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify(opts),
+    });
+    const payload = (await resp.json().catch(() => ({}))) as {
+      ok?: boolean;
+      error?: string;
+      scanLive?: boolean;
+      scan?: {
+        seq: number;
+        start: number;
+        stop: number;
+        step: number;
+        passMs: number;
+        live: boolean;
+        values: number[];
+      };
+    };
+    await this.refreshStatus();
+    if (!resp.ok) {
+      const msg = payload.error || `RotorHazard USB spectrum scan failed (HTTP ${resp.status}).`;
+      this.lastError = msg;
+      this.notify();
+      throw new Error(msg);
+    }
+    return {
+      ok: true,
+      scanLive: payload.scanLive,
+      scan: payload.scan,
+    };
+  }
+
   public snapshots(store: AppStore): RHClientDiagSnapshot[] {
     const wantUSB = store.timingHardwareMode === "rotorhazard_usb";
     if (store.simulatorRunning) {
@@ -608,6 +690,8 @@ export class RotorHazardHardwareLink {
           nodeFreqsMhz: Array.isArray(u.nodeFreqsMhz) ? u.nodeFreqsMhz : [],
           cpuTempC: u.cpuTempC,
           envSummary: u.envSummary,
+          scanLive: Boolean(u.scanLive),
+          lastScan: u.lastScan,
         };
       });
     }

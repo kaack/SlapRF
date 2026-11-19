@@ -1,3 +1,5 @@
+import { getAndroidBridge } from "./android_bridge";
+
 interface WakeLockSentinelLike {
   released: boolean;
   release(): Promise<void>;
@@ -52,6 +54,7 @@ async function releaseWakeLock(): Promise<void> {
 /** Enables or disables the Screen Wake Lock at runtime. */
 export function setWakeLockEnabled(enabled: boolean): void {
   wakeLockEnabled = enabled;
+  getAndroidBridge()?.setKeepScreenOn(enabled);
   if (enabled) {
     void acquireWakeLock();
   } else {
@@ -73,6 +76,7 @@ export function installWakeLock(): void {
   if (listenersInstalled) return;
   listenersInstalled = true;
 
+  getAndroidBridge()?.setKeepScreenOn(wakeLockEnabled);
   void acquireWakeLock();
 
   document.addEventListener("visibilitychange", () => {

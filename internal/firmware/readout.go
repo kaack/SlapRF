@@ -33,10 +33,21 @@ type SerialPort interface {
 // SerialOpener opens a named OS serial port.
 type SerialOpener func(portName string, baud int) (SerialPort, error)
 
-// SetUSBSerialDTRRTS sets RTS before DTR so Windows `usbser.sys` caches RTS and flushes the exact
-// `(dtr, rts)` pair in one USB `SET_CONTROL_LINE_STATE` packet without transient download-latch glitches.
+// AtomicDTRRTSSetter is an optional extension implemented by USB serial ports (such as the
+// Android USB CDC-ACM shim) that can update DTR and RTS together in a single USB control transfer.
+type AtomicDTRRTSSetter interface {
+	SetDTRRTS(dtr, rts bool) error
+}
+
+// SetUSBSerialDTRRTS sets `(dtr, rts)` atomically when supported, or sets RTS before DTR so Windows
+// `usbser.sys` caches RTS and flushes the exact pair in one USB `SET_CONTROL_LINE_STATE` packet
+// without transient download-latch glitches.
 func SetUSBSerialDTRRTS(p SerialPort, dtr, rts bool) {
 	if p == nil {
+		return
+	}
+	if atomicPort, ok := p.(AtomicDTRRTSSetter); ok {
+		_ = atomicPort.SetDTRRTS(dtr, rts)
 		return
 	}
 	_ = p.SetRTS(rts)

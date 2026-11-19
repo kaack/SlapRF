@@ -1,4 +1,5 @@
 import { CanvasSurface } from "../core/canvas";
+import { computeDirectionalPinch, computeWheelZoomFactors, PinchPoint } from "../core/chart_pinch";
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
@@ -357,24 +358,64 @@ export class PilotRssiChart extends Component {
     let lastTapTime = 0;
     let lastTapX = 0;
     let lastTapY = 0;
+    let tapCandidate: {
+      pointerId: number;
+      startX: number;
+      startY: number;
+      startMs: number;
+      moved: boolean;
+    } | null = null;
+    const touchPts = new Map<number, PinchPoint>();
+    let pinchState: {
+      id1: number;
+      id2: number;
+      p1Start: PinchPoint;
+      p2Start: PinchPoint;
+      wasLive: boolean;
+      startEndUs: number;
+      startWindowUs: number;
+      startYMin: number;
+      startYMax: number;
+      anchorXFrac: number;
+      anchorYFrac: number;
+    } | null = null;
 
     this.listen(host, "dblclick", () => {
       this.resetAxesToAuto();
     });
 
+    const onWheel = (e: WheelEvent) => {
+      const wf = computeWheelZoomFactors(e);
+      if (!wf) return;
+      e.preventDefault();
+      const r = host.getBoundingClientRect();
+      const x = e.clientX - r.left;
+      const y = e.clientY - r.top;
+      const xFrac = Math.max(0, Math.min(1, (x - this.padL) / Math.max(10, this.plot.w)));
+      const yFrac = Math.max(0, Math.min(1, 1 - (y - PAD.t) / Math.max(10, this.plot.h)));
+
+      if (wf.mode === "x" || wf.mode === "xy") {
+        const prevWin = this.windowUs;
+        const prevEnd = this.viewEnd();
+        const nextWin = Math.max(MIN_WINDOW_US, Math.min(MAX_WINDOW_US, prevWin * wf.xSpanFactor));
+        this.autoX = false;
+        this.windowUs = nextWin;
+        if (this.endUs !== null) {
+          const anchorUs = prevEnd - (1 - xFrac) * prevWin;
+          this.endUs = this.clampEnd(anchorUs + (1 - xFrac) * nextWin);
+        }
+      }
+      if (wf.mode === "y" || wf.mode === "xy") {
+        this.applyDbmStretch(this.yMin, this.yMax, yFrac, wf.ySpanFactor);
+      }
+      this.saveChartPrefs();
+      this.renderControls();
+    };
+    host.addEventListener("wheel", onWheel, { passive: false });
+    this.onDispose(() => host.removeEventListener("wheel", onWheel));
+
     this.listen(host, "pointerdown", (e) => {
       if (e.pointerType === "mouse" && e.button !== 0) return;
-      if (e.pointerType === "touch") {
-        const now = performance.now();
-        if (now - lastTapTime < 320 && Math.hypot(e.clientX - lastTapX, e.clientY - lastTapY) < 28) {
-          lastTapTime = 0;
-          this.resetAxesToAuto();
-          return;
-        }
-        lastTapTime = now;
-        lastTapX = e.clientX;
-        lastTapY = e.clientY;
-      }
 
       try {
         host.setPointerCapture(e.pointerId);
@@ -384,6 +425,48 @@ export class PilotRssiChart extends Component {
       const r = host.getBoundingClientRect();
       const x = e.clientX - r.left;
       const y = e.clientY - r.top;
+
+      if (e.pointerType === "touch") {
+        touchPts.set(e.pointerId, { x, y });
+        if (touchPts.size === 1) {
+          tapCandidate = {
+            pointerId: e.pointerId,
+            startX: e.clientX,
+            startY: e.clientY,
+            startMs: performance.now(),
+            moved: false,
+          };
+        } else {
+          tapCandidate = null;
+          lastTapTime = 0;
+        }
+        if (touchPts.size >= 2) {
+          this.tagDrag = null;
+          this.drag = null;
+          this.yZoomBox = null;
+          this.hoverX = null;
+          this.hoverY = null;
+          const [[id1, pt1], [id2, pt2]] = Array.from(touchPts.entries());
+          const midX = (pt1.x + pt2.x) * 0.5;
+          const midY = (pt1.y + pt2.y) * 0.5;
+          pinchState = {
+            id1,
+            id2,
+            p1Start: { ...pt1 },
+            p2Start: { ...pt2 },
+            wasLive: this.endUs === null,
+            startEndUs: this.viewEnd(),
+            startWindowUs: this.windowUs,
+            startYMin: this.yMin,
+            startYMax: this.yMax,
+            anchorXFrac: Math.max(0, Math.min(1, (midX - this.padL) / Math.max(10, this.plot.w))),
+            anchorYFrac: Math.max(0, Math.min(1, 1 - (midY - PAD.t) / Math.max(10, this.plot.h))),
+          };
+          host.classList.add("is-dragging");
+          return;
+        }
+      }
+
       this.hoverX = x;
       this.hoverY = y;
 
@@ -454,6 +537,57 @@ export class PilotRssiChart extends Component {
       const r = host.getBoundingClientRect();
       const x = e.clientX - r.left;
       const y = e.clientY - r.top;
+
+      if (e.pointerType === "touch" && touchPts.has(e.pointerId)) {
+        touchPts.set(e.pointerId, { x, y });
+        if (
+          tapCandidate &&
+          tapCandidate.pointerId === e.pointerId &&
+          Math.hypot(e.clientX - tapCandidate.startX, e.clientY - tapCandidate.startY) > 12
+        ) {
+          tapCandidate.moved = true;
+        }
+        if (pinchState) {
+          const p1Now = touchPts.get(pinchState.id1);
+          const p2Now = touchPts.get(pinchState.id2);
+          if (p1Now && p2Now) {
+            const pinch = computeDirectionalPinch(pinchState.p1Start, pinchState.p2Start, p1Now, p2Now);
+            if (pinch.mode === "x" || pinch.mode === "xy") {
+              this.autoX = false;
+              const nextWin = Math.max(
+                MIN_WINDOW_US,
+                Math.min(MAX_WINDOW_US, pinchState.startWindowUs * pinch.xSpanFactor)
+              );
+              this.windowUs = nextWin;
+              if (!pinchState.wasLive) {
+                const liveXFrac = Math.max(0, Math.min(1, (pinch.midX - this.padL) / Math.max(10, this.plot.w)));
+                const anchorUs = pinchState.startEndUs - (1 - pinchState.anchorXFrac) * pinchState.startWindowUs;
+                this.endUs = this.clampEnd(anchorUs + (1 - liveXFrac) * nextWin);
+              } else if (Math.abs(pinch.midX - pinch.startMidX) > 18) {
+                const dxMid = pinch.midX - pinch.startMidX;
+                this.pauseAt(pinchState.startEndUs - (dxMid / Math.max(10, this.plot.w)) * nextWin);
+              }
+            }
+            if (pinch.mode === "y" || pinch.mode === "xy") {
+              this.applyDbmStretch(
+                pinchState.startYMin,
+                pinchState.startYMax,
+                pinchState.anchorYFrac,
+                pinch.ySpanFactor
+              );
+              const dyMid = pinch.midY - pinch.startMidY;
+              if (Math.abs(dyMid) > 2) {
+                const curSpan = this.yMax - this.yMin;
+                const deltaDbm = (dyMid / Math.max(10, this.plot.h)) * curSpan;
+                this.applyDbmPan(this.yMin, this.yMax, deltaDbm);
+              }
+            }
+            this.renderControls();
+          }
+          return;
+        }
+      }
+
       this.hoverX = x;
       this.hoverY = y;
 
@@ -531,7 +665,58 @@ export class PilotRssiChart extends Component {
       this.renderControls();
     });
 
-    const endDrag = () => {
+    const endDrag = (e: PointerEvent) => {
+      if (e.pointerType === "touch") {
+        const wasSingleCleanTap =
+          e.type === "pointerup" &&
+          pinchState === null &&
+          touchPts.size === 1 &&
+          tapCandidate !== null &&
+          tapCandidate.pointerId === e.pointerId &&
+          !tapCandidate.moved &&
+          performance.now() - tapCandidate.startMs < 300;
+        tapCandidate = null;
+        touchPts.delete(e.pointerId);
+
+        if (wasSingleCleanTap) {
+          const now = performance.now();
+          if (now - lastTapTime < 340 && Math.hypot(e.clientX - lastTapX, e.clientY - lastTapY) < 32) {
+            lastTapTime = 0;
+            this.drag = null;
+            this.tagDrag = null;
+            this.yZoomBox = null;
+            host.classList.remove("is-dragging", "is-over-axis", "is-over-yaxis");
+            this.resetAxesToAuto();
+            return;
+          }
+          lastTapTime = now;
+          lastTapX = e.clientX;
+          lastTapY = e.clientY;
+        }
+
+        if (pinchState !== null) {
+          if (touchPts.size < 2) {
+            pinchState = null;
+            this.saveChartPrefs();
+            this.renderControls();
+            if (touchPts.size === 1) {
+              const remPt = Array.from(touchPts.values())[0];
+              this.drag = {
+                mode: "pan",
+                startX: remPt.x,
+                startY: remPt.y,
+                startEndUs: this.viewEnd(),
+                startYMin: this.yMin,
+                startYMax: this.yMax,
+              };
+            } else {
+              host.classList.remove("is-dragging", "is-over-axis", "is-over-yaxis");
+            }
+          }
+          return;
+        }
+      }
+
       if (this.tagDrag) {
         const { gateId, kind, dbm } = this.tagDrag;
         this.tagDrag = null;

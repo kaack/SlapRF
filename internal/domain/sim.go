@@ -96,8 +96,19 @@ type SimLapRFUnit struct {
 	SlotThresholds   [MaxPilotSlots]float32 `json:"slotThresholds,omitempty"`
 }
 
+// RHScanPass holds one completed 0..255 RSSI spectrum sweep pass from a RotorHazard USB device.
+type RHScanPass struct {
+	Seq    uint64    `json:"seq"`
+	Start  int       `json:"start"`
+	Stop   int       `json:"stop"`
+	Step   int       `json:"step"`
+	PassMs int       `json:"passMs"`
+	Live   bool      `json:"live"`
+	Values []float32 `json:"values"`
+}
+
 // SimRotorHazardUnit describes a simulated RotorHazard timing device (Raspberry Pi server on :5000
-// in RotorHazard Network mode, or an 8-seat USB serial node in RotorHazard USB mode) in the Sim tab.
+// in RotorHazard Network mode, or an 8-node USB serial node in RotorHazard USB mode) in the Sim tab.
 type SimRotorHazardUnit struct {
 	TimerID          uint8                  `json:"timerId"`
 	Label            string                 `json:"label"`
@@ -129,6 +140,8 @@ type SimRotorHazardUnit struct {
 	NodeFreqsMHz     [MaxPilotSlots]uint16  `json:"nodeFreqsMhz,omitempty"`
 	CpuTempC         float32                `json:"cpuTempC,omitempty"`
 	EnvSummary       string                 `json:"envSummary,omitempty"`
+	ScanLive         bool                   `json:"scanLive,omitempty"`
+	LastScan         *RHScanPass            `json:"lastScan,omitempty"`
 }
 
 // SimState is the full snapshot of the practice simulator exposed to the Sim tab.

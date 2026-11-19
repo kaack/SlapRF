@@ -1100,6 +1100,29 @@ export class ApiClient {
     });
   }
 
+  /** Triggers a single or continuous 0-255 RSSI spectrum sweep on a simulated RotorHazard USB timer. */
+  public async runRHUSBScan(payload: {
+    timerId: number;
+    mode: "once" | "live" | "stop";
+    start: number;
+    stop: number;
+    step: number;
+  }): Promise<{
+    ok: boolean;
+    scanLive?: boolean;
+    scan?: {
+      seq: number;
+      start: number;
+      stop: number;
+      step: number;
+      passMs: number;
+      live: boolean;
+      values: number[];
+    };
+  }> {
+    return await this.transport.request("POST", "/api/hardware/rh-scan", payload);
+  }
+
   /** Discovers powered-on simulated RotorHazard devices on the virtual LAN or USB bus in Simulation Mode. */
   public async simRotorHazardDiscover(): Promise<{
     subnet: string;

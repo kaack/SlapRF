@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"slaprf/internal/domain"
+	"slaprf/internal/firmware"
 	"slaprf/internal/laprf"
 	"slaprf/internal/storage"
 	"slaprf/internal/tracker"
@@ -79,10 +80,11 @@ func (s *laprfEngineSub) OnConfigUpdated([]domain.PilotSlot, []domain.TrackGate)
 }
 
 type laprfManager struct {
-	engine  *tracker.Engine
-	store   *storage.BoltStore
-	logf    func(string, ...any)
-	onDirty func()
+	engine   *tracker.Engine
+	store    *storage.BoltStore
+	openPort firmware.SerialOpener
+	logf     func(string, ...any)
+	onDirty  func()
 
 	mu       sync.RWMutex
 	sessions map[uint8]*laprfManagedSession
@@ -91,10 +93,14 @@ type laprfManager struct {
 	stopOnce sync.Once
 }
 
-func newLapRFManager(engine *tracker.Engine, store *storage.BoltStore, logf func(string, ...any), onDirty func()) *laprfManager {
+func newLapRFManager(engine *tracker.Engine, store *storage.BoltStore, openPort firmware.SerialOpener, logf func(string, ...any), onDirty func()) *laprfManager {
+	if openPort == nil {
+		openPort = usb.DefaultSerialOpener
+	}
 	m := &laprfManager{
 		engine:   engine,
 		store:    store,
+		openPort: openPort,
 		logf:     logf,
 		onDirty:  onDirty,
 		sessions: make(map[uint8]*laprfManagedSession),
@@ -449,7 +455,7 @@ func (m *laprfManager) runTCPConnOnce(ctx context.Context, sess *laprfManagedSes
 }
 
 func (m *laprfManager) runUSBConnOnce(ctx context.Context, sess *laprfManagedSession, reportFirst func(error)) error {
-	port, err := usb.DefaultSerialOpener(sess.target.PortName, 115200)
+	port, err := m.openPort(sess.target.PortName, 115200)
 	if err != nil {
 		return err
 	}

@@ -1,3 +1,4 @@
+import { computeDirectionalPinch, computeWheelZoomFactors } from "../core/chart_pinch";
 import { icons } from "../core/icons";
 import { Router } from "../core/router";
 import {
@@ -18,6 +19,7 @@ import { ApiClient } from "../services/api_client";
 import { gateColor, TIMER_COLORS, timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { channelColor, dbmToRgb } from "../views/debug/charts";
+import { PilotRssiChart } from "../widgets/PilotRssiChart";
 import { describe, expect, it, mountHtml } from "./harness";
 
 describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control styling", () => {
@@ -435,6 +437,183 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
       expect(timerColor(store, 12)).toBe("#ffffff");
     } finally {
       setAppTheme("dark");
+    }
+  });
+
+  it("supports directional 2-finger pinch (horizontal X, vertical Y, diagonal X+Y) and modifier-wheel chart zoom", () => {
+    // 1. Pure math: horizontal spread -> X only
+    const horiz = computeDirectionalPinch(
+      { x: 100, y: 120 },
+      { x: 180, y: 126 },
+      { x: 60, y: 118 },
+      { x: 220, y: 128 }
+    );
+    expect(horiz.mode).toBe("x");
+    expect(horiz.xSpanFactor < 0.65).toBe(true);
+    expect(horiz.ySpanFactor).toBe(1);
+
+    // 2. Pure math: vertical spread -> Y only
+    const vert = computeDirectionalPinch(
+      { x: 150, y: 80 },
+      { x: 156, y: 160 },
+      { x: 148, y: 40 },
+      { x: 158, y: 200 }
+    );
+    expect(vert.mode).toBe("y");
+    expect(vert.xSpanFactor).toBe(1);
+    expect(vert.ySpanFactor < 0.65).toBe(true);
+
+    // 3. Pure math: diagonal spread -> simultaneous X + Y
+    const diag = computeDirectionalPinch(
+      { x: 120, y: 100 },
+      { x: 180, y: 160 },
+      { x: 80, y: 60 },
+      { x: 220, y: 200 }
+    );
+    expect(diag.mode).toBe("xy");
+    expect(diag.xSpanFactor < 0.65).toBe(true);
+    expect(diag.ySpanFactor < 0.65).toBe(true);
+
+    // 4. Close-finger pinch-out (< 16px initial gap) stays finite & smooth
+    const closeStart = computeDirectionalPinch(
+      { x: 145, y: 120 },
+      { x: 155, y: 122 },
+      { x: 95, y: 118 },
+      { x: 205, y: 124 }
+    );
+    expect(closeStart.mode).toBe("x");
+    expect(closeStart.xSpanFactor > 0.2 && closeStart.xSpanFactor < 0.4).toBe(true);
+
+    // 5. Modifier + wheel mapping for Chrome Desktop & DevTools Mobile testing
+    expect(
+      computeWheelZoomFactors({
+        deltaX: 0,
+        deltaY: -100,
+        ctrlKey: false,
+        metaKey: false,
+        shiftKey: false,
+        altKey: false,
+      })
+    ).toBeNull();
+    const shiftWheel = computeWheelZoomFactors({
+      deltaX: 0,
+      deltaY: -100,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: true,
+      altKey: false,
+    });
+    expect(shiftWheel?.mode).toBe("x");
+    expect((shiftWheel?.xSpanFactor ?? 1) < 1).toBe(true);
+    expect(shiftWheel?.ySpanFactor).toBe(1);
+
+    const altWheel = computeWheelZoomFactors({
+      deltaX: 0,
+      deltaY: -100,
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: false,
+      altKey: true,
+    });
+    expect(altWheel?.mode).toBe("y");
+    expect(altWheel?.xSpanFactor).toBe(1);
+    expect((altWheel?.ySpanFactor ?? 1) < 1).toBe(true);
+
+    const ctrlWheel = computeWheelZoomFactors({
+      deltaX: 0,
+      deltaY: -100,
+      ctrlKey: true,
+      metaKey: false,
+      shiftKey: false,
+      altKey: false,
+    });
+    expect(ctrlWheel?.mode).toBe("xy");
+    expect((ctrlWheel?.xSpanFactor ?? 1) < 1).toBe(true);
+    expect((ctrlWheel?.ySpanFactor ?? 1) < 1).toBe(true);
+
+    // 6. Live DOM & PointerEvent verification on PilotRssiChart
+    const RSSI_PREF_KEY = "slaprf.ui.rssi_chart.v1";
+    localStorage.removeItem(RSSI_PREF_KEY);
+    const root = mountHtml(`<div style="width: 420px; height: 320px;"></div>`);
+    const hostEl = root.firstElementChild as HTMLElement;
+    const store = new AppStore();
+    const api = new ApiClient(() => {});
+    const chart = new PilotRssiChart(hostEl, store, api);
+    try {
+      const scopeHost = hostEl.querySelector<HTMLElement>('[data-slot="chart"]')!;
+      const surfaceCanvas = scopeHost.querySelector<HTMLElement>(".surface-canvas")!;
+      // Critical mobile fix: canvas must NOT inherit touch-action: pan-y from .surface-canvas
+      expect(getComputedStyle(surfaceCanvas).touchAction).toBe("none");
+
+      const rect = scopeHost.getBoundingClientRect();
+      const fireTouch = (type: string, pointerId: number, localX: number, localY: number) => {
+        scopeHost.dispatchEvent(
+          new PointerEvent(type, {
+            bubbles: true,
+            cancelable: true,
+            pointerId,
+            pointerType: "touch",
+            clientX: rect.left + localX,
+            clientY: rect.top + localY,
+          })
+        );
+      };
+
+      // Horizontal 2-finger pinch (started only 16px apart so old code would have misfired double-tap!)
+      fireTouch("pointerdown", 1, 170, 110);
+      fireTouch("pointerdown", 2, 186, 112);
+      fireTouch("pointermove", 1, 100, 109);
+      fireTouch("pointermove", 2, 256, 113);
+      fireTouch("pointerup", 2, 256, 113);
+      fireTouch("pointerup", 1, 100, 109);
+
+      let saved = JSON.parse(localStorage.getItem(RSSI_PREF_KEY) || "{}");
+      expect(saved.autoX).toBe(false);
+      expect(saved.windowUs < 15_000_000).toBe(true);
+      expect(saved.autoY).toBe(true);
+
+      // Reset and run a vertical 2-finger pinch -> stretches Y only, keeps Auto X on
+      chart.restoreDefaults();
+      fireTouch("pointerdown", 3, 180, 70);
+      fireTouch("pointerdown", 4, 184, 130);
+      fireTouch("pointermove", 3, 179, 30);
+      fireTouch("pointermove", 4, 185, 175);
+      fireTouch("pointerup", 4, 185, 175);
+      fireTouch("pointerup", 3, 179, 30);
+
+      saved = JSON.parse(localStorage.getItem(RSSI_PREF_KEY) || "{}");
+      expect(saved.autoX).toBe(true);
+      expect(saved.autoY).toBe(false);
+
+      // Reset and run a diagonal 2-finger pinch -> stretches both X and Y simultaneously
+      chart.restoreDefaults();
+      fireTouch("pointerdown", 5, 140, 75);
+      fireTouch("pointerdown", 6, 200, 135);
+      fireTouch("pointermove", 5, 95, 35);
+      fireTouch("pointermove", 6, 245, 180);
+      fireTouch("pointerup", 6, 245, 180);
+      fireTouch("pointerup", 5, 95, 35);
+
+      saved = JSON.parse(localStorage.getItem(RSSI_PREF_KEY) || "{}");
+      expect(saved.autoX).toBe(false);
+      expect(saved.autoY).toBe(false);
+
+      // Verify .net-metric-pair inside .badge preserves a clean visual gap (>= 3px) and identical total width across 1..5 chars
+      const metricBox = mountHtml(`
+        <div>
+          <span class="badge badge-good mono" id="rate-small"><span class="net-metric-pair"><span class="net-num-slot is-rate" id="num-s">1.0</span> <span id="unit-s">pkt/s</span></span></span>
+          <span class="badge badge-good mono" id="rate-big"><span class="net-metric-pair"><span class="net-num-slot is-rate" id="num-b">325.4</span> <span id="unit-b">pkt/s</span></span></span>
+        </div>
+      `);
+      const numB = metricBox.querySelector<HTMLElement>("#num-b")!.getBoundingClientRect();
+      const unitB = metricBox.querySelector<HTMLElement>("#unit-b")!.getBoundingClientRect();
+      expect(unitB.left - numB.right >= 3).toBe(true);
+      const badgeSmallW = metricBox.querySelector<HTMLElement>("#rate-small")!.getBoundingClientRect().width;
+      const badgeBigW = metricBox.querySelector<HTMLElement>("#rate-big")!.getBoundingClientRect().width;
+      expect(Math.abs(badgeSmallW - badgeBigW) < 0.5).toBe(true);
+    } finally {
+      localStorage.removeItem(RSSI_PREF_KEY);
+      chart.destroy();
     }
   });
 });

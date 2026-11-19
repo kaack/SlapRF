@@ -9,8 +9,9 @@
  * The browser talks to the board over WebSerial, so this behaves the same on Windows, macOS, Linux,
  * and ChromeOS, with or without a local SlapRF Server.
  */
+import { esc } from "../core/format";
 import { ESPLoader, Transport } from "../vendor/esptool-js/esptool.js";
-import { capabilitiesSnapshot } from "./capabilities";
+import { capabilitiesSnapshot, resolveBackendUrl, resolveBackendWsUrl } from "./capabilities";
 import {
   FlashProgress,
   ProgressCallback,
@@ -26,6 +27,7 @@ import { createBackendPortHandle, isBackendSerialPort, isSimulatedUsbMode } from
 import { usbPool } from "./timer_console";
 
 const ESPRESSIF_USB_VID = 0x303a;
+const ESPRESSIF_USB_JTAG_PID = 0x1001;
 const ESP_IMAGE_MAGIC = 0xe9;
 
 interface WebSerialPortInfo {
@@ -53,19 +55,24 @@ function webSerial(): WebSerialApi | null {
   return s ?? null;
 }
 
-/** True when this browser can flash over WebSerial (Chrome, Edge, Opera, and other Chromium browsers). */
-export function canFlashWithEsptool(): boolean {
+/** True when this browser exposes native W3C WebSerial (`navigator.serial`). */
+export function hasBrowserWebSerial(): boolean {
   return webSerial() !== null;
 }
 
-/** True when the Flasher page talks to real boards straight from the browser over WebSerial. */
+/** True when esptool-js can talk to real USB boards (via browser WebSerial OR native Go/Android USB server). */
+export function canFlashWithEsptool(): boolean {
+  return webSerial() !== null || capabilitiesSnapshot().portable;
+}
+
+/** True when the Flasher page talks to real boards with esptool-js (not Simulator mode). */
 export function flasherUsesWebSerial(): boolean {
   return !isSimulatedUsbMode() && canFlashWithEsptool();
 }
 
-/** Shown when the browser has no WebSerial (Firefox, Safari). The flasher has no server fallback. */
+/** Shown when running standalone in a browser without WebSerial and without a local SlapRF Server. */
 export const FLASHER_NEEDS_WEBSERIAL =
-  "Flashing needs a browser with WebSerial: Chrome, Edge, or Opera on a desktop computer.";
+  "Flashing needs the SlapRF mobile/desktop app, or Chrome, Edge, or Opera on a desktop computer.";
 
 const sleep = (ms: number) => new Promise<void>((r) => window.setTimeout(r, ms));
 
@@ -78,17 +85,388 @@ function debugLog(line: string): void {
   if (esptoolLog.length > 400) esptoolLog.splice(0, esptoolLog.length - 400);
 }
 
+/* ---- Native Go / Android USB Host WebSerial-compatible bridge -------------------------------- */
+
+interface BackendUsbPortDescriptor {
+  name: string;
+  isUsb?: boolean;
+  vid?: string;
+  pid?: string;
+  serialNumber?: string;
+  product?: string;
+  isEspressif?: boolean;
+}
+
+/**
+ * Adapts the local SlapRF Go server's `/api/usb/raw-ws` byte pipe (Android USB Host API or OS serial)
+ * to the standard `WebSerialPort` interface expected by Espressif's `esptool-js`.
+ */
+export class BackendRawWebSerialPort implements WebSerialPort {
+  public portName: string;
+  public readable: ReadableStream<Uint8Array> | null = null;
+  public writable: WritableStream<Uint8Array> | null = null;
+
+  private vid: number;
+  private pid: number;
+  private dtr = false;
+  private rts = false;
+  private ws: WebSocket | null = null;
+  private nextCtrlId = 1;
+  private pendingAcks = new Map<number, { resolve: () => void; reject: (err: Error) => void }>();
+
+  constructor(desc: BackendUsbPortDescriptor) {
+    this.portName = desc.name;
+    const parsedVid = desc.vid ? Number.parseInt(desc.vid, 16) : 0;
+    const parsedPid = desc.pid ? Number.parseInt(desc.pid, 16) : 0;
+    this.vid = Number.isFinite(parsedVid) && parsedVid > 0 ? parsedVid : desc.isEspressif !== false ? ESPRESSIF_USB_VID : 0;
+    this.pid =
+      Number.isFinite(parsedPid) && parsedPid > 0
+        ? parsedPid
+        : this.vid === ESPRESSIF_USB_VID
+          ? ESPRESSIF_USB_JTAG_PID
+          : 0;
+  }
+
+  public getInfo(): WebSerialPortInfo {
+    return {
+      usbVendorId: this.vid || undefined,
+      usbProductId: this.pid || undefined,
+    };
+  }
+
+  public async open(options: { baudRate: number; bufferSize?: number }): Promise<void> {
+    if (this.ws) {
+      throw new Error("Serial port is already open.");
+    }
+    const baud = options?.baudRate > 0 ? options.baudRate : 115200;
+    const wsUrl = resolveBackendWsUrl(
+      `/api/usb/raw-ws?port=${encodeURIComponent(this.portName)}&baud=${encodeURIComponent(String(baud))}`
+    );
+
+    await new Promise<void>((resolveOpen, rejectOpen) => {
+      let opened = false;
+      let streamCtrl: ReadableStreamDefaultController<Uint8Array> | null = null;
+      let streamClosed = false;
+
+      const closeReadableCleanly = () => {
+        if (streamClosed || !streamCtrl) return;
+        streamClosed = true;
+        try {
+          streamCtrl.close();
+        } catch {
+          // already closed/canceled
+        }
+      };
+
+      const failAllPending = (reason: string) => {
+        const err = new Error(reason);
+        for (const [, waiter] of this.pendingAcks) {
+          waiter.reject(err);
+        }
+        this.pendingAcks.clear();
+      };
+
+      const sock = new WebSocket(wsUrl);
+      sock.binaryType = "arraybuffer";
+      this.ws = sock;
+
+      sock.onmessage = (ev: MessageEvent) => {
+        if (ev.data instanceof ArrayBuffer) {
+          if (!streamClosed && streamCtrl && ev.data.byteLength > 0) {
+            try {
+              streamCtrl.enqueue(new Uint8Array(ev.data));
+            } catch {
+              // reader may have been canceled before close()
+            }
+          }
+          return;
+        }
+        if (typeof ev.data !== "string") return;
+        let msg: {
+          type?: string;
+          ok?: boolean;
+          id?: number;
+          error?: string;
+          portName?: string;
+          vid?: number;
+          pid?: number;
+        };
+        try {
+          msg = JSON.parse(ev.data);
+        } catch {
+          return;
+        }
+
+        if (msg.type === "open") {
+          if (!msg.ok) {
+            this.ws = null;
+            try {
+              sock.close();
+            } catch {
+              // ignore
+            }
+            rejectOpen(new Error(msg.error || "Failed to open USB serial port."));
+            return;
+          }
+          if (msg.portName) this.portName = msg.portName;
+          if (typeof msg.vid === "number" && msg.vid > 0) this.vid = msg.vid;
+          if (typeof msg.pid === "number" && msg.pid > 0) this.pid = msg.pid;
+
+          this.dtr = false;
+          this.rts = false;
+          this.readable = new ReadableStream<Uint8Array>({
+            start(controller) {
+              streamCtrl = controller;
+            },
+            cancel() {
+              streamClosed = true;
+              streamCtrl = null;
+            },
+          });
+          this.writable = new WritableStream<Uint8Array>({
+            write: async (chunk) => {
+              if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                throw new Error("Serial data stream stopped: USB port closed.");
+              }
+              this.ws.send(chunk);
+              const deadline = Date.now() + 8000;
+              while (
+                this.ws &&
+                this.ws.readyState === WebSocket.OPEN &&
+                this.ws.bufferedAmount > 32768 &&
+                Date.now() < deadline
+              ) {
+                await sleep(4);
+              }
+            },
+          });
+          opened = true;
+          resolveOpen();
+          return;
+        }
+
+        if (msg.type === "ack" && typeof msg.id === "number") {
+          const waiter = this.pendingAcks.get(msg.id);
+          if (waiter) {
+            this.pendingAcks.delete(msg.id);
+            if (msg.ok === false) {
+              waiter.reject(new Error(msg.error || "USB control command failed."));
+            } else {
+              waiter.resolve();
+            }
+          }
+          return;
+        }
+
+        if (msg.type === "closed" || msg.type === "error") {
+          closeReadableCleanly();
+          failAllPending(msg.error || "USB port closed.");
+        }
+      };
+
+      sock.onerror = () => {
+        if (!opened) {
+          this.ws = null;
+          rejectOpen(new Error("Could not connect to USB bridge on SlapRF Server."));
+        }
+      };
+
+      sock.onclose = () => {
+        closeReadableCleanly();
+        failAllPending("USB connection closed.");
+        if (this.ws === sock) {
+          this.ws = null;
+        }
+        if (!opened) {
+          rejectOpen(new Error("USB connection closed before opening."));
+        }
+      };
+    });
+  }
+
+  public async setSignals(signals: { dataTerminalReady?: boolean; requestToSend?: boolean }): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) return;
+    if (typeof signals.dataTerminalReady === "boolean") {
+      this.dtr = signals.dataTerminalReady;
+    }
+    if (typeof signals.requestToSend === "boolean") {
+      this.rts = signals.requestToSend;
+    }
+    await this.sendControl({ type: "signals", dtr: this.dtr, rts: this.rts }, 2500);
+  }
+
+  public async close(): Promise<void> {
+    const sock = this.ws;
+    this.ws = null;
+    this.readable = null;
+    this.writable = null;
+    if (!sock) return;
+    if (sock.readyState === WebSocket.OPEN) {
+      await this.sendControlOnSocket(sock, { type: "close" }, 1500).catch(() => undefined);
+    }
+    try {
+      sock.close();
+    } catch {
+      // ignore
+    }
+  }
+
+  private sendControl(payload: Record<string, unknown>, timeoutMs: number): Promise<void> {
+    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+      return Promise.resolve();
+    }
+    return this.sendControlOnSocket(this.ws, payload, timeoutMs);
+  }
+
+  private sendControlOnSocket(
+    sock: WebSocket,
+    payload: Record<string, unknown>,
+    timeoutMs: number
+  ): Promise<void> {
+    const id = this.nextCtrlId++;
+    return new Promise<void>((resolve, reject) => {
+      const timer = window.setTimeout(() => {
+        this.pendingAcks.delete(id);
+        resolve();
+      }, timeoutMs);
+      this.pendingAcks.set(id, {
+        resolve: () => {
+          window.clearTimeout(timer);
+          resolve();
+        },
+        reject: (err) => {
+          window.clearTimeout(timer);
+          reject(err);
+        },
+      });
+      try {
+        sock.send(JSON.stringify({ ...payload, id }));
+      } catch (err) {
+        window.clearTimeout(timer);
+        this.pendingAcks.delete(id);
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+  }
+}
+
+export function isBackendRawWebSerialPort(port: unknown): port is BackendRawWebSerialPort {
+  return port instanceof BackendRawWebSerialPort;
+}
+
+async function fetchBackendUsbPorts(showAll: boolean): Promise<BackendUsbPortDescriptor[]> {
+  const url = resolveBackendUrl(showAll ? "/api/usb/ports?all=1" : "/api/usb/ports");
+  const resp = await fetch(url, { cache: "no-store" });
+  if (!resp.ok) {
+    throw new Error(`Could not list USB ports (HTTP ${resp.status}).`);
+  }
+  const data = (await resp.json()) as { ports?: BackendUsbPortDescriptor[] };
+  return Array.isArray(data.ports) ? data.ports : [];
+}
+
+function chooseBackendUsbPortModal(ports: BackendUsbPortDescriptor[]): Promise<BackendUsbPortDescriptor> {
+  return new Promise<BackendUsbPortDescriptor>((resolve, reject) => {
+    const backdrop = document.createElement("div");
+    backdrop.className = "modal-backdrop is-open";
+    backdrop.innerHTML = `
+      <div class="modal-card" role="dialog" aria-modal="true" aria-label="Choose USB timer port" style="max-width:440px;">
+        <div class="modal-head">
+          <h3>Select USB Timer</h3>
+          <button type="button" class="btn btn-sm btn-ghost" data-usb-pick-close="1" aria-label="Close">✕</button>
+        </div>
+        <div class="modal-body" style="display:flex;flex-direction:column;gap:8px;">
+          <p class="note" style="margin:0 0 4px;">Choose which connected USB device to use:</p>
+          ${ports
+            .map((p, idx) => {
+              const title = p.product || (p.isEspressif ? "Seeed XIAO ESP32-C5" : p.name);
+              const meta = [p.name, p.serialNumber ? `SN ${p.serialNumber}` : ""]
+                .filter(Boolean)
+                .join(" · ");
+              return `
+                <button
+                  type="button"
+                  class="btn"
+                  data-usb-pick-idx="${idx}"
+                  style="display:flex;flex-direction:column;align-items:flex-start;gap:2px;height:auto;padding:10px 12px;text-align:left;"
+                >
+                  <strong>${esc(title)}</strong>
+                  <span class="note mono" style="font-size:11.5px;">${esc(meta)}</span>
+                </button>`;
+            })
+            .join("")}
+        </div>
+        <div class="modal-foot">
+          <button type="button" class="btn btn-sm btn-ghost" data-usb-pick-close="1">Cancel</button>
+        </div>
+      </div>`;
+
+    const cleanup = () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      backdrop.remove();
+    };
+    const cancel = () => {
+      cleanup();
+      reject(new Error("No port selected"));
+    };
+    const onKeyDown = (ev: KeyboardEvent) => {
+      if (ev.key === "Escape") {
+        ev.preventDefault();
+        cancel();
+      }
+    };
+    backdrop.addEventListener("click", (ev) => {
+      const target = ev.target as HTMLElement | null;
+      if (!target) return;
+      if (target === backdrop || target.closest("[data-usb-pick-close]")) {
+        cancel();
+        return;
+      }
+      const btn = target.closest<HTMLElement>("[data-usb-pick-idx]");
+      if (btn) {
+        const idx = Number(btn.dataset.usbPickIdx);
+        const chosen = ports[idx];
+        if (chosen) {
+          cleanup();
+          resolve(chosen);
+        }
+      }
+    });
+    window.addEventListener("keydown", onKeyDown, true);
+    document.body.appendChild(backdrop);
+  });
+}
+
 /* ---- Port selection ------------------------------------------------------------------------- */
 
 /**
- * Returns the XIAO ESP32-C5 WebSerial port. Reuses the previously granted Espressif port when exactly
- * one is present; otherwise opens the browser's port chooser filtered to Espressif boards.
- * Call this directly from a click handler so the browser chooser is allowed to open.
+ * Returns the XIAO ESP32-C5 serial port:
+ * - In Chromium desktop browsers with WebSerial, uses `navigator.serial` directly.
+ * - In the Android app (or non-WebSerial browsers connected to a SlapRF Server), uses `/api/usb/raw-ws`:
+ *   auto-selects when a single XIAO ESP32-C5 is plugged in over USB-C, or opens a port picker if multiple
+ *   boards are attached.
  */
 export async function acquireEspSerialPort(): Promise<WebSerialPort> {
   const api = webSerial();
   if (!api) {
-    throw new Error("Flashing needs a Chromium browser (Chrome, Edge, or Opera) with WebSerial support.");
+    if (!capabilitiesSnapshot().portable) {
+      throw new Error(FLASHER_NEEDS_WEBSERIAL);
+    }
+    const espPorts = await fetchBackendUsbPorts(false);
+    if (espPorts.length === 1) {
+      return new BackendRawWebSerialPort(espPorts[0]);
+    }
+    if (espPorts.length > 1) {
+      const chosen = await chooseBackendUsbPortModal(espPorts);
+      return new BackendRawWebSerialPort(chosen);
+    }
+    const allUsbPorts = await fetchBackendUsbPorts(true);
+    if (allUsbPorts.length > 0) {
+      const chosen = allUsbPorts.length === 1 ? allUsbPorts[0] : await chooseBackendUsbPortModal(allUsbPorts);
+      return new BackendRawWebSerialPort(chosen);
+    }
+    throw new Error(
+      "No XIAO ESP32-C5 detected on USB. Plug the timer into your USB-C port (use a USB-C data/OTG cable if needed) and try again."
+    );
   }
   const granted = (await api.getPorts().catch(() => [] as WebSerialPort[])).filter(
     (p) => p.getInfo().usbVendorId === ESPRESSIF_USB_VID
@@ -409,6 +787,9 @@ async function openSession(
 
 function friendlyError(err: unknown): Error {
   const msg = err instanceof Error ? err.message : String(err);
+  if (/USB permission denied/i.test(msg)) {
+    return new Error("USB access was declined. Tap again and choose OK on the USB permission prompt.");
+  }
   if (/Failed to open serial port|already open|NetworkError|Access denied|in use by another app/i.test(msg)) {
     return new Error("The USB port is in use by another app. Close other serial tools and try again.");
   }
@@ -428,8 +809,12 @@ function flashRegion(image: Uint8Array): { data: Uint8Array; address: number } {
   return { data: image, address: 0 };
 }
 
-/** Sets DTR/RTS as one USB SET_CONTROL_LINE_STATE (RTS first, so Windows usbser.sys sends both together). */
+/** Sets DTR/RTS as one USB SET_CONTROL_LINE_STATE (RTS first on browser WebSerial so Windows usbser.sys sends both together). */
 async function setLines(port: WebSerialPort, dtr: boolean, rts: boolean): Promise<void> {
+  if (isBackendRawWebSerialPort(port)) {
+    await port.setSignals({ dataTerminalReady: dtr, requestToSend: rts }).catch(() => undefined);
+    return;
+  }
   await port.setSignals({ requestToSend: rts }).catch(() => undefined);
   await port.setSignals({ dataTerminalReady: dtr, requestToSend: rts }).catch(() => undefined);
 }
@@ -673,7 +1058,23 @@ interface EsptoolAutomationResult {
 
 async function grantedEspPort(index?: number): Promise<WebSerialPort> {
   const api = webSerial();
-  if (!api) throw new Error("WebSerial is not available in this browser.");
+  if (!api) {
+    if (!capabilitiesSnapshot().portable) {
+      throw new Error("WebSerial is not available in this browser.");
+    }
+    const ports = await fetchBackendUsbPorts(false);
+    if (ports.length === 0) {
+      throw new Error("No ESP32-C5 detected on USB.");
+    }
+    if (typeof index === "number") {
+      if (!ports[index]) throw new Error(`No ESP32-C5 port at index ${index} (have ${ports.length}).`);
+      return new BackendRawWebSerialPort(ports[index]);
+    }
+    if (ports.length > 1) {
+      throw new Error(`${ports.length} ESP32-C5 ports detected; pass { index } to choose one.`);
+    }
+    return new BackendRawWebSerialPort(ports[0]);
+  }
   const ports = (await api.getPorts()).filter((p) => p.getInfo().usbVendorId === ESPRESSIF_USB_VID);
   if (ports.length === 0) {
     throw new Error("No granted ESP32-C5 port. Click a Flasher button once and pick the board in Chrome's chooser.");

@@ -31,6 +31,32 @@ import { channelColor, DBM_MAX, DBM_MIN, formatHardwareFreq, RACEBAND, racebandN
 
 const NETWORK_PREFS_KEY = "slaprf.ui.network_prefs.v1";
 
+function fmtCompactFrameCount(n: number): string {
+  const v = Math.max(0, Math.round(n));
+  if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(2)}M`;
+  if (v >= 10_000) return `${(v / 1_000).toFixed(1)}k`;
+  return String(v);
+}
+
+function fmtRateBadgeHtml(rate: number): string {
+  const clamped = Math.min(999.9, Math.max(0, Number.isFinite(rate) ? rate : 0));
+  return `<span class="net-metric-pair"><span class="net-num-slot is-rate">${clamped.toFixed(1)}</span> <span>pkt/s</span></span>`;
+}
+
+function fmtFramesBadgeHtml(frames: number): string {
+  return `<span class="net-metric-pair"><span class="net-num-slot is-frames">${fmtCompactFrameCount(frames)}</span> <span class="net-unit-desktop">frames rx</span><span class="net-unit-mobile">fr rx</span></span>`;
+}
+
+function fmtKpiFramesHtml(frames: number, rate: number): string {
+  const clamped = Math.min(999.9, Math.max(0, Number.isFinite(rate) ? rate : 0));
+  return `<span class="net-metric-pair"><span class="net-num-slot is-frames">${fmtCompactFrameCount(frames)}</span> <span class="note">(<span class="net-metric-pair"><span class="net-num-slot is-rate">${clamped.toFixed(1)}</span> <span>pkt/s</span></span>)</span></span>`;
+}
+
+function fmtMsAgoHtml(ms: number): string {
+  const clamped = Math.min(9999, Math.max(0, Math.round(ms)));
+  return `<span class="net-metric-pair"><span class="net-num-slot is-ms">${clamped}</span> <span>ms ago</span></span>`;
+}
+
 interface TopologyHubInfo {
   populated: boolean;
   online: boolean;
@@ -89,6 +115,7 @@ export class NetworkView extends Component {
   private spokeRateTracker = new Map<number, { frames: number; atMs: number; ratePktPerSec: number }>();
   private signalEnabledCh: boolean[] = [true, true, true, true, true, true, true, true];
   private lastTopologyHtml = "";
+  private lastTopologyStructKey = "";
   private lastTimerHtml = "";
   private lastTimerStructKey = "";
   private rafId = 0;
@@ -170,7 +197,8 @@ export class NetworkView extends Component {
           <section class="settings-section" data-section-anchor="topology">
             <div class="settings-intro">
               <h2>Topology</h2>
-              <p>Parent Hub (Slot 1) in the center with 6 Spoke slots (Slots 2–7) around it. Active ESP-NOW links are solid; open or inactive slots are dashed. Click any slot to inspect it below.</p>
+              <p class="net-topo-intro-desktop">Parent Hub (Slot 1) in the center with 6 Spoke slots (Slots 2–7) around it. Active ESP-NOW links are solid; open or inactive slots are dashed. Click any slot to inspect it below.</p>
+              <p class="net-topo-intro-mobile">Hub (Slot 1) and connected Spokes over 2.4 GHz ESP-NOW. Tap the Hub or any Spoke node in the graph to inspect it below.</p>
             </div>
             <div class="debug-status-layout" data-slot="topology"></div>
           </section>
@@ -248,7 +276,7 @@ export class NetworkView extends Component {
           <section class="settings-section" data-section-anchor="timer">
             <div class="settings-intro">
               <h2>RotorHazard USB devices</h2>
-              <p>Live multi-seat receiver RSSI readings (0–255 scale), dual Enter/Exit hysteresis thresholds, gate arming state, and serial RTT for each RotorHazard USB device.</p>
+              <p>Live receiver node RSSI readings (0-255 scale), dual Enter/Exit hysteresis thresholds, gate arming state, and serial RTT for each RotorHazard USB device.</p>
             </div>
             <div class="debug-status-layout" data-slot="rh-usb-timers"></div>
           </section>
@@ -384,16 +412,67 @@ export class NetworkView extends Component {
       }
     }, 55);
 
+    let touchSlotTap: {
+      pointerId: number;
+      startX: number;
+      startY: number;
+      slotNum?: number;
+      identifyFp?: string;
+      identifyWant?: boolean;
+    } | null = null;
+
     this.listen(el, "pointerdown", (e) => {
-      if ((e as PointerEvent).button !== 0) return;
-      const idBtn = (e.target as HTMLElement).closest<HTMLButtonElement>('[data-action="toggle-identify"]');
+      const pe = e as PointerEvent;
+      if (pe.pointerType === "mouse" && pe.button !== 0) return;
+      const idBtn = (pe.target as HTMLElement).closest<HTMLButtonElement>('[data-action="toggle-identify"]');
+      const slotBtn = idBtn
+        ? null
+        : (pe.target as HTMLElement).closest<HTMLElement>('[data-action="select-topology-slot"]');
+      if (!idBtn && !slotBtn) return;
+
+      // On touch/pen screens, defer selection until pointerup so vertical scroll drags never accidentally select a slot.
+      if (pe.pointerType !== "mouse") {
+        touchSlotTap = {
+          pointerId: pe.pointerId,
+          startX: pe.clientX,
+          startY: pe.clientY,
+          slotNum: slotBtn ? Number(slotBtn.dataset.slotNum) : undefined,
+          identifyFp: idBtn && !idBtn.disabled ? idBtn.dataset.fp || "" : undefined,
+          identifyWant: idBtn && !idBtn.disabled ? idBtn.dataset.on !== "1" : undefined,
+        };
+        return;
+      }
+
       if (idBtn) {
         if (!idBtn.disabled) void this.toggleIdentify(idBtn.dataset.fp || "", idBtn.dataset.on !== "1");
         return;
       }
-      const t = (e.target as HTMLElement).closest<HTMLElement>('[data-action="select-topology-slot"]');
-      if (!t) return;
-      this.selectTopologySlot(Number(t.dataset.slotNum));
+      if (slotBtn) {
+        this.selectTopologySlot(Number(slotBtn.dataset.slotNum));
+      }
+    });
+    this.listen(el, "pointermove", (e) => {
+      const pe = e as PointerEvent;
+      if (touchSlotTap && pe.pointerId === touchSlotTap.pointerId) {
+        if (Math.hypot(pe.clientX - touchSlotTap.startX, pe.clientY - touchSlotTap.startY) > 10) {
+          touchSlotTap = null;
+        }
+      }
+    });
+    this.listen(el, "pointercancel", () => {
+      touchSlotTap = null;
+    });
+    this.listen(el, "pointerup", (e) => {
+      const pe = e as PointerEvent;
+      if (!touchSlotTap || pe.pointerId !== touchSlotTap.pointerId) return;
+      const pending = touchSlotTap;
+      touchSlotTap = null;
+      if (Math.hypot(pe.clientX - pending.startX, pe.clientY - pending.startY) > 10) return;
+      if (pending.identifyFp !== undefined && pending.identifyWant !== undefined) {
+        void this.toggleIdentify(pending.identifyFp, pending.identifyWant);
+      } else if (pending.slotNum !== undefined && Number.isFinite(pending.slotNum)) {
+        this.selectTopologySlot(pending.slotNum);
+      }
     });
     this.listen(el, "click", (e) => void this.onClick(e));
     this.listen(el, "dblclick", (e) => this.onDblClick(e));
@@ -466,6 +545,7 @@ export class NetworkView extends Component {
 
     const unsubTheme = subscribeAppTheme(() => {
       this.lastTopologyHtml = "";
+      this.lastTopologyStructKey = "";
       this.lastTimerHtml = "";
       this.lastTimerStructKey = "";
       this.lastLaprfConnSig = "";
@@ -1386,8 +1466,16 @@ export class NetworkView extends Component {
           let ratePktPerSec = prevRate?.ratePktPerSec ?? 25;
           if (prevRate) {
             const dtSec = (nowMs - prevRate.atMs) / 1000;
-            if (dtSec >= 0.25) {
-              ratePktPerSec = frames >= prevRate.frames ? (frames - prevRate.frames) / dtSec : 0;
+            if (frames > prevRate.frames && dtSec >= 0.75) {
+              const instRate = (frames - prevRate.frames) / dtSec;
+              ratePktPerSec = prevRate.ratePktPerSec > 0 ? prevRate.ratePktPerSec * 0.6 + instRate * 0.4 : instRate;
+              this.spokeRateTracker.set(sp.slot, { frames, atMs: nowMs, ratePktPerSec });
+            } else if (frames < prevRate.frames) {
+              ratePktPerSec = frames > 0 ? 25 : 0;
+              this.spokeRateTracker.set(sp.slot, { frames, atMs: nowMs, ratePktPerSec });
+            } else if (frames === prevRate.frames && dtSec >= 1.8) {
+              ratePktPerSec = prevRate.ratePktPerSec * 0.4;
+              if (ratePktPerSec < 0.5) ratePktPerSec = 0;
               this.spokeRateTracker.set(sp.slot, { frames, atMs: nowMs, ratePktPerSec });
             }
           } else {
@@ -1521,10 +1609,23 @@ export class NetworkView extends Component {
     return { hub, spokes };
   }
 
+  private isMobileTopologyViewport(): boolean {
+    return (
+      typeof window !== "undefined" &&
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(max-width: 860px)").matches
+    );
+  }
+
   private ensureSelectedSlot(hub: TopologyHubInfo, spokes: Map<number, TopologySpokeInfo>): number {
     const s = this.activeStatus();
+    const isMobile = this.isMobileTopologyViewport();
     if (this.userPickedSlot && this.selectedSlot !== null && this.selectedSlot >= 1 && this.selectedSlot <= 7) {
-      return this.selectedSlot;
+      // On mobile, empty spoke slots are hidden, so never stay stuck on an unpopulated spoke slot.
+      if (!isMobile || this.selectedSlot === 1 || spokes.get(this.selectedSlot)?.populated) {
+        return this.selectedSlot;
+      }
+      this.userPickedSlot = false;
     }
     if (this.selectedSlot !== null && this.selectedSlot >= 2 && this.selectedSlot <= 7) {
       const sp = spokes.get(this.selectedSlot);
@@ -2453,7 +2554,7 @@ export class NetworkView extends Component {
             return {
               name: pName,
               isUsb: true,
-              product: `Simulated RotorHazard USB (${u.nodeCount === 4 ? 4 : 8} seats)`,
+              product: `Simulated RotorHazard USB (${u.nodeCount === 4 ? 4 : 8} nodes)`,
               label: normLbl,
               timerId: u.timerId,
               nodeCount: u.nodeCount === 4 ? 4 : 8,
@@ -2467,13 +2568,14 @@ export class NetworkView extends Component {
     const connectedPortNames = new Set(
       snaps.filter((s) => s.connected).map((s) => (s.portName || s.endpoint).toUpperCase())
     );
-    const availablePorts = ports.filter((p) => !connectedPortNames.has(p.name.toUpperCase()));
-    if (
-      !this.rhUsbSelectedPort ||
-      !ports.some((p) => p.name === this.rhUsbSelectedPort) ||
-      (connectedPortNames.has(this.rhUsbSelectedPort.toUpperCase()) && availablePorts.length > 0)
-    ) {
-      this.rhUsbSelectedPort = availablePorts[0]?.name ?? ports[0]?.name ?? "";
+    const connectedByPortName = new Map(
+      snaps
+        .filter((s) => s.connected)
+        .map((s) => [(s.portName || s.endpoint).toUpperCase(), s] as const)
+    );
+    if (!this.rhUsbSelectedPort || !ports.some((p) => p.name === this.rhUsbSelectedPort)) {
+      const firstConnected = ports.find((p) => connectedPortNames.has(p.name.toUpperCase()));
+      this.rhUsbSelectedPort = firstConnected?.name ?? ports[0]?.name ?? "";
     }
 
     const activeEl = document.activeElement as HTMLElement | null;
@@ -2489,6 +2591,7 @@ export class NetworkView extends Component {
       selPort: this.rhUsbSelectedPort,
       baud: this.rhUsbBaudRate,
       err: errText,
+      connTimers: snaps.filter((s) => s.connected).map((s) => `${s.timerId}:${s.portName || s.endpoint}`),
       ports: ports.map((p) => ({
         n: p.name,
         p: p.product,
@@ -2499,80 +2602,115 @@ export class NetworkView extends Component {
 
     if (!focusedInsideConn && connSig !== this.lastRhUsbConnSig) {
       this.lastRhUsbConnSig = connSig;
-      const selectedAlreadyConnected = Boolean(
-        this.rhUsbSelectedPort && connectedPortNames.has(this.rhUsbSelectedPort.toUpperCase())
-      );
+      const selectedConnSnap = this.rhUsbSelectedPort
+        ? connectedByPortName.get(this.rhUsbSelectedPort.toUpperCase())
+        : undefined;
+      const selectedAlreadyConnected = Boolean(selectedConnSnap);
+      const formatCompactPortName = (name: string): string => {
+        const trimmed = name.trim();
+        const androidUsb = /^\/dev\/bus\/usb\/(\d+)\/(\d+)(#\d+)?$/i.exec(trimmed);
+        if (androidUsb) {
+          return `USB ${androidUsb[1]}/${androidUsb[2]}${androidUsb[3] ?? ""}`;
+        }
+        return trimmed.replace(/^\/dev\//, "");
+      };
+      const formatCompactProduct = (product?: string): string => {
+        const raw = (product ?? "").trim();
+        if (!raw) return "";
+        if (/esp32[-\s]?c5|seeed\s+xiao|usb\s+jtag/i.test(raw)) {
+          return "ESP32-C5";
+        }
+        return raw.replace(/\s*\([^)]*\)\s*/g, " ").trim();
+      };
       const portOptionsHtml =
         ports.length > 0
           ? ports
               .map((p) => {
                 const isConn = connectedPortNames.has(p.name.toUpperCase());
+                const shortName = formatCompactPortName(p.name);
+                const shortProd = formatCompactProduct(p.product);
                 const desc = p.label
-                  ? `${p.name} · ${p.label} (${p.nodeCount ?? 8} seats)`
-                  : p.product
-                    ? `${p.name} · ${p.product}`
-                    : p.name;
-                return `<option value="${esc(p.name)}" ${p.name === this.rhUsbSelectedPort ? "selected" : ""}>${esc(desc)}${isConn ? " — Connected" : ""}</option>`;
+                  ? `${shortName} · ${p.label} (${p.nodeCount ?? 8} nodes)`
+                  : shortProd
+                    ? `${shortName} · ${shortProd}`
+                    : shortName;
+                return `<option value="${esc(p.name)}" ${p.name === this.rhUsbSelectedPort ? "selected" : ""}>${esc(desc)}${isConn ? " (Connected)" : ""}</option>`;
               })
               .join("")
           : `<option value="">${isSim ? "No powered-on simulated USB devices" : "No USB serial ports detected"}</option>`;
 
       connHost.innerHTML = `
         <div class="card card-flush">
-          <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between">
-            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
-              <label style="display:flex;flex-direction:column;gap:4px">
-                <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">USB Serial Port</span>
-                <select
-                  class="input mono"
-                  data-field="rh-usb-port"
-                  aria-label="RotorHazard USB serial port"
-                  style="min-width:230px;padding:5px 9px;font-size:13px"
-                  ${ports.length === 0 || this.rhBusy ? "disabled" : ""}
+          <div class="rh-usb-conn-body">
+            <div class="rh-usb-conn-main">
+              <div class="rh-usb-conn-fields">
+                <label class="rh-usb-conn-field is-port">
+                  <span class="muted rh-usb-conn-label">USB Serial Port</span>
+                  <select
+                    class="input mono rh-usb-conn-select"
+                    data-field="rh-usb-port"
+                    aria-label="RotorHazard USB serial port"
+                    ${ports.length === 0 || this.rhBusy ? "disabled" : ""}
+                  >
+                    ${portOptionsHtml}
+                  </select>
+                </label>
+                <label class="rh-usb-conn-field is-baud">
+                  <span class="muted rh-usb-conn-label">Baud Rate</span>
+                  <select
+                    class="input mono rh-usb-conn-select"
+                    data-field="rh-usb-baud"
+                    aria-label="RotorHazard USB baud rate"
+                    ${this.rhBusy ? "disabled" : ""}
+                  >
+                    <option value="0" ${this.rhUsbBaudRate === 0 ? "selected" : ""}>Auto (115200 / 921600)</option>
+                    <option value="115200" ${this.rhUsbBaudRate === 115200 ? "selected" : ""}>115200 baud</option>
+                    <option value="921600" ${this.rhUsbBaudRate === 921600 ? "selected" : ""}>921600 baud (STM32)</option>
+                  </select>
+                </label>
+              </div>
+              <div class="rh-usb-conn-actions">
+                ${
+                  selectedAlreadyConnected && selectedConnSnap
+                    ? `<button
+                        class="btn btn-ghost"
+                        type="button"
+                        data-action="rh-disconnect"
+                        data-timer-id="${selectedConnSnap.timerId}"
+                        ${this.rhBusy ? "disabled" : ""}
+                      >
+                        ${icons.close(14)}<span>Disconnect</span>
+                      </button>`
+                    : `<button
+                        class="btn btn-armed"
+                        type="button"
+                        data-action="rh-usb-connect"
+                        ${this.rhBusy || !this.rhUsbSelectedPort ? "disabled" : ""}
+                      >
+                        ${icons.plug(14)}<span>${this.rhBusy ? "Connecting…" : "Connect USB"}</span>
+                      </button>`
+                }
+                <button
+                  class="btn btn-ghost"
+                  type="button"
+                  data-action="rh-usb-refresh"
+                  ${this.rhUsbRefreshing || this.rhBusy ? "disabled" : ""}
+                  title="Refresh available USB serial ports"
                 >
-                  ${portOptionsHtml}
-                </select>
-              </label>
-              <label style="display:flex;flex-direction:column;gap:4px">
-                <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Baud Rate</span>
-                <select
-                  class="input mono"
-                  data-field="rh-usb-baud"
-                  aria-label="RotorHazard USB baud rate"
-                  style="width:186px;padding:5px 8px;font-size:13px"
-                  ${this.rhBusy ? "disabled" : ""}
-                >
-                  <option value="0" ${this.rhUsbBaudRate === 0 ? "selected" : ""}>Auto (115200 / 921600)</option>
-                  <option value="115200" ${this.rhUsbBaudRate === 115200 ? "selected" : ""}>115200 baud</option>
-                  <option value="921600" ${this.rhUsbBaudRate === 921600 ? "selected" : ""}>921600 baud (STM32)</option>
-                </select>
-              </label>
-              <button
-                class="btn btn-armed"
-                type="button"
-                data-action="rh-usb-connect"
-                ${this.rhBusy || !this.rhUsbSelectedPort || selectedAlreadyConnected ? "disabled" : ""}
-              >
-                ${icons.plug(14)}<span>${this.rhBusy ? "Connecting…" : selectedAlreadyConnected ? "Connected" : "Connect USB"}</span>
-              </button>
-              <button
-                class="btn btn-ghost"
-                type="button"
-                data-action="rh-usb-refresh"
-                ${this.rhUsbRefreshing || this.rhBusy ? "disabled" : ""}
-                title="Refresh available USB serial ports"
-              >
-                ${icons.reset(14)}<span>${this.rhUsbRefreshing ? "Refreshing…" : "Refresh Ports"}</span>
-              </button>
+                  ${icons.reset(14)}<span>${this.rhUsbRefreshing ? "Refreshing…" : "Refresh Ports"}</span>
+                </button>
+              </div>
             </div>
-            ${
-              !isSim
-                ? `<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer">
-                    <input type="checkbox" data-field="rh-usb-all-ports" ${this.rhUsbShowAllPorts ? "checked" : ""} />
-                    <span class="note">Show all serial ports</span>
-                  </label>`
-                : `<span class="note">Direct binary serial link · no LAN IP or admin login required</span>`
-            }
+            <div class="rh-usb-conn-foot">
+              ${
+                !isSim
+                  ? `<label class="rh-usb-conn-toggle">
+                      <input type="checkbox" data-field="rh-usb-all-ports" ${this.rhUsbShowAllPorts ? "checked" : ""} />
+                      <span class="note">Show all serial ports</span>
+                    </label>`
+                  : `<span class="note">Direct binary serial link · no LAN IP or admin login required</span>`
+              }
+            </div>
           </div>
           ${errText ? `<div class="sim-error-note" style="margin:0 16px 12px">${esc(errText)}</div>` : ""}
         </div>`;
@@ -2701,10 +2839,10 @@ export class NetworkView extends Component {
               const enterPct = pctRssi(enterLvl);
               const exitPct = pctRssi(exitLvl);
               const labelHtml = active
-                ? `<span class="debug-ch-inline" style="background:#94a3b8"></span><strong>Seat ${idx + 1}</strong> <span class="muted mono">${esc(formatHardwareFreq(freq))}</span>`
-                : `<span class="debug-ch-inline" style="background:transparent;box-shadow:inset 0 0 0 1.5px #64748b"></span><strong>Seat ${idx + 1}</strong> <span class="muted">Disabled</span>`;
+                ? `<span class="debug-ch-inline" style="background:#94a3b8"></span><strong>Node ${idx + 1}</strong> <span class="muted mono">${esc(formatHardwareFreq(freq))}</span>`
+                : `<span class="debug-ch-inline" style="background:transparent;box-shadow:inset 0 0 0 1.5px #64748b"></span><strong>Node ${idx + 1}</strong> <span class="muted">Disabled</span>`;
               const isCross = Boolean(active && snap.connected && crossing);
-              const valStr = !active ? "" : !snap.connected ? "—" : `${Math.round(val)}`;
+              const valStr = !active ? "" : !snap.connected ? "-" : `${Math.round(val)}`;
               const isNumVal = Boolean(active && snap.connected);
 
               return `
@@ -2735,17 +2873,8 @@ export class NetworkView extends Component {
                   </span>
                   <div class="debug-connect-actions">
                     ${snap.connected ? `<span class="badge badge-good mono">API ${apiLvl}</span>` : `<span class="badge">Offline</span>`}
-                    <span class="badge">${nodeCount} seats</span>
+                    <span class="badge">${nodeCount} nodes</span>
                     <span class="badge">${assignedGate ? esc(assignedGate) : "Unassigned"}</span>
-                    ${
-                      snap.connected
-                        ? `<button class="btn btn-sm btn-ghost" type="button" data-action="rh-disconnect" data-timer-id="${snap.timerId}">
-                            Disconnect
-                          </button>`
-                        : `<button class="btn btn-sm btn-ghost" type="button" data-action="rh-usb-connect" data-port-name="${esc(portStr)}" data-label="${esc(snapLabel)}" data-timer-id="${snap.timerId}" ${this.rhBusy ? "disabled" : ""}>
-                            Connect USB
-                          </button>`
-                    }
                   </div>
                 </div>
 
@@ -2772,7 +2901,7 @@ export class NetworkView extends Component {
                   <div class="debug-subbox">
                     <div class="debug-net-inspector-bars-wrap">
                       <div class="debug-subbar">
-                        <span class="debug-chart-title">${nodeCount}-seat receiver RSSI (0–255 scale)</span>
+                        <span class="debug-chart-title">${nodeCount}-node receiver RSSI (0-255 scale)</span>
                         <span class="note">Yellow tick = Exit · Green tick = Enter</span>
                       </div>
                       <div class="debug-net-inspector-bars">${barsHtml}</div>
@@ -2956,12 +3085,233 @@ export class NetworkView extends Component {
         <span class="debug-topo-legend-item"><span class="debug-topo-legend-line is-solid"></span><span>Solid = ESP-NOW active</span></span>
         <span class="debug-topo-legend-item"><span class="debug-topo-legend-line is-dashed"></span><span>Dashed = Inactive / empty slot</span></span>
         <span class="note">Click the center Hub or any Spoke slot to inspect its details below.</span>
-      </div>`;
+      </div>
 
+      ${this.renderMobileTopologyGraph(hub, populatedSpokes, selectedSlot)}`;
+
+    const topoStructKey = [
+      topLed,
+      topText,
+      selectedSlot,
+      hub.populated ? "1" : "0",
+      hub.online ? "1" : "0",
+      hub.emergencyMode ? "1" : "0",
+      hub.viaUsb ? "1" : "0",
+      hub.label,
+      hub.fp,
+      hub.ch,
+      hub.statusNote,
+      ...[2, 3, 4, 5, 6, 7].map((n) => {
+        const sp = spokes.get(n)!;
+        return `${n}:${sp.populated ? 1 : 0}:${sp.espNowActive ? 1 : 0}:${sp.inHubStatus ? 1 : 0}:${sp.viaUsb ? 1 : 0}:${sp.label}:${sp.fp}:${sp.fw}:${sp.serverGateLabel ?? ""}`;
+      }),
+    ].join("|");
+
+    const topoHost = this.slot("topology");
+    if (topoStructKey === this.lastTopologyStructKey && topoHost.querySelector("[data-mobile-topology-graph]")) {
+      for (const sp of populatedSpokes) {
+        const rateEl = topoHost.querySelector<HTMLElement>(`[data-mnode-rate="${sp.slot}"]`);
+        if (rateEl) {
+          const nextNum = String(Math.min(999, Math.max(1, Math.round(sp.ratePktPerSec))));
+          if (rateEl.textContent !== nextNum) {
+            rateEl.textContent = nextNum;
+          }
+        }
+      }
+      return;
+    }
+
+    this.lastTopologyStructKey = topoStructKey;
     if (topologyHtml !== this.lastTopologyHtml) {
       this.lastTopologyHtml = topologyHtml;
-      this.slot("topology").innerHTML = topologyHtml;
+      topoHost.innerHTML = topologyHtml;
     }
+  }
+
+  /**
+   * Compact visual Hub-and-Spoke graph for mobile viewports (`<= 860px`):
+   * - Always shows the Hub (Slot 1), even when disconnected/empty.
+   * - Only shows connected/populated Spokes (`populated === true`), hiding empty slots so users
+   *   never see or accidentally select phantom empty slots on a phone screen.
+   */
+  private renderMobileTopologyGraph(
+    hub: TopologyHubInfo,
+    populatedSpokes: TopologySpokeInfo[],
+    selectedSlot: number
+  ): string {
+    const n = populatedSpokes.length;
+    const W = 320;
+    let H = 104;
+    let hubPt = { x: 160, y: 38 };
+    let spokePts: Array<{ x: number; y: number }> = [];
+    let curveDir: "horiz" | "vert" = "horiz";
+
+    if (n === 1) {
+      H = 92;
+      hubPt = { x: 86, y: 46 };
+      spokePts = [{ x: 234, y: 46 }];
+      curveDir = "horiz";
+    } else if (n === 2) {
+      H = 148;
+      hubPt = { x: 160, y: 34 };
+      spokePts = [
+        { x: 88, y: 114 },
+        { x: 232, y: 114 },
+      ];
+      curveDir = "vert";
+    } else if (n === 3) {
+      H = 154;
+      hubPt = { x: 160, y: 34 };
+      spokePts = [
+        { x: 54, y: 118 },
+        { x: 160, y: 118 },
+        { x: 266, y: 118 },
+      ];
+      curveDir = "vert";
+    } else if (n === 4) {
+      H = 166;
+      hubPt = { x: 160, y: 83 };
+      spokePts = [
+        { x: 52, y: 44 },
+        { x: 52, y: 122 },
+        { x: 268, y: 44 },
+        { x: 268, y: 122 },
+      ];
+      curveDir = "horiz";
+    } else if (n === 5) {
+      H = 212;
+      hubPt = { x: 160, y: 106 };
+      spokePts = [
+        { x: 52, y: 36 },
+        { x: 52, y: 106 },
+        { x: 52, y: 176 },
+        { x: 268, y: 66 },
+        { x: 268, y: 146 },
+      ];
+      curveDir = "horiz";
+    } else if (n >= 6) {
+      H = 212;
+      hubPt = { x: 160, y: 106 };
+      spokePts = [
+        { x: 52, y: 36 },
+        { x: 52, y: 106 },
+        { x: 52, y: 176 },
+        { x: 268, y: 36 },
+        { x: 268, y: 106 },
+        { x: 268, y: 176 },
+      ];
+      curveDir = "horiz";
+    }
+
+    const svgPathsHtml = populatedSpokes
+      .slice(0, 6)
+      .map((sp, idx) => {
+        const pt = spokePts[idx];
+        const cls = sp.espNowActive ? "is-active" : "is-populated";
+        const sel = selectedSlot === sp.slot ? "is-selected" : "";
+        let d: string;
+        if (n === 1) {
+          d = `M ${hubPt.x} ${hubPt.y} L ${pt.x} ${pt.y}`;
+        } else if (curveDir === "vert") {
+          const cy1 = hubPt.y + (pt.y - hubPt.y) * 0.54;
+          const cy2 = hubPt.y + (pt.y - hubPt.y) * 0.46;
+          d = `M ${hubPt.x} ${hubPt.y} C ${hubPt.x} ${cy1.toFixed(1)}, ${pt.x} ${cy2.toFixed(1)}, ${pt.x} ${pt.y}`;
+        } else {
+          const mx = (pt.x + hubPt.x) * 0.5;
+          d = `M ${pt.x} ${pt.y} C ${mx.toFixed(1)} ${pt.y}, ${mx.toFixed(1)} ${hubPt.y}, ${hubPt.x} ${hubPt.y}`;
+        }
+        const midX = (hubPt.x + pt.x) * 0.5;
+        const midY = (hubPt.y + pt.y) * 0.5;
+        return `
+          <path class="debug-topo-link ${cls} ${sel}" d="${d}" vector-effect="non-scaling-stroke" />
+          <circle class="debug-topo-joint ${cls} ${sel}" cx="${midX.toFixed(1)}" cy="${midY.toFixed(1)}" r="2.8" />`;
+      })
+      .join("");
+
+    const hubSelected = selectedSlot === 1;
+    const hubDotClass = hub.emergencyMode ? "is-emergency" : hub.online ? "is-up" : hub.populated ? "is-warn" : "";
+    const hubTitle = hub.populated && hub.label ? hub.label : "Hub";
+    const hubSub = hub.emergencyMode
+      ? "Emergency"
+      : hub.viaUsb
+        ? `USB · Ch ${hub.ch}`
+        : hub.online
+          ? `Ch ${hub.ch} · Sync`
+          : hub.populated
+            ? "Idle"
+            : "Empty";
+
+    const hubNodeHtml = `
+      <button
+        type="button"
+        class="net-mnode is-hub ${hub.populated ? "is-populated" : "is-empty"} ${hub.online ? "is-active-link" : "is-inactive-link"} ${hubSelected ? "is-selected" : ""}"
+        style="left:${((hubPt.x / W) * 100).toFixed(2)}%;top:${((hubPt.y / H) * 100).toFixed(2)}%"
+        data-action="select-topology-slot"
+        data-slot-num="1"
+        aria-pressed="${hubSelected}"
+        title="Inspect Hub (Slot 1)"
+      >
+        <span class="net-mnode-main">
+          <span class="status-dot ${hubDotClass}"></span>
+          <strong class="net-mnode-title">${esc(hubTitle)}</strong>
+        </span>
+        <span class="net-mnode-sub mono">${esc(hubSub)}</span>
+      </button>`;
+
+    const spokeNodesHtml = populatedSpokes
+      .slice(0, 6)
+      .map((sp, idx) => {
+        const pt = spokePts[idx];
+        const isSel = selectedSlot === sp.slot;
+        const active = sp.espNowActive;
+        const dotClass = active ? "is-spoke" : sp.inHubStatus ? "is-warn" : "";
+        const spTitle = sp.label || `S${sp.slot}`;
+        const spSubHtml = active
+          ? sp.viaUsb
+            ? "USB-C"
+            : `<span class="net-metric-pair"><span class="net-num-slot is-int3" data-mnode-rate="${sp.slot}">${Math.min(999, Math.max(1, Math.round(sp.ratePktPerSec)))}</span> <span>pkt/s</span></span>`
+          : sp.viaUsb
+            ? "USB-C"
+            : "Stale";
+        return `
+          <button
+            type="button"
+            class="net-mnode is-spoke is-populated ${active ? "is-active-link" : "is-inactive-link"} ${isSel ? "is-selected" : ""}"
+            style="left:${((pt.x / W) * 100).toFixed(2)}%;top:${((pt.y / H) * 100).toFixed(2)}%"
+            data-action="select-topology-slot"
+            data-slot-num="${sp.slot}"
+            aria-pressed="${isSel}"
+            title="Inspect ${esc(spTitle)} (Slot ${sp.slot})"
+          >
+            <span class="net-mnode-main">
+              <span class="status-dot ${dotClass}"></span>
+              <strong class="net-mnode-title">${esc(spTitle)}</strong>
+            </span>
+            <span class="net-mnode-sub mono">${spSubHtml}</span>
+          </button>`;
+      })
+      .join("");
+
+    const footNote =
+      n === 0
+        ? hub.online
+          ? "No Spokes linked yet · powered-on Spokes appear here automatically."
+          : "Connect Hub H1 over USB-C to view linked Spokes."
+        : "Tap Hub or any Spoke node to inspect it below.";
+
+    return `
+      <div class="net-mobile-graph" data-mobile-topology-graph>
+        <div class="net-mobile-graph-stage" style="height:${H}px">
+          <svg class="net-mobile-graph-svg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none" aria-hidden="true">
+            ${svgPathsHtml}
+          </svg>
+          ${hubNodeHtml}
+          ${spokeNodesHtml}
+        </div>
+        <div class="net-mobile-graph-foot">
+          <span class="note">${esc(footNote)}</span>
+        </div>
+      </div>`;
   }
 
   private renderRssiBars(dbmSource: number[] | null | undefined, sourceLabel: string, titleText: string): string {
@@ -3027,10 +3377,10 @@ export class NetworkView extends Component {
   private patchTimerLiveValues(
     host: HTMLElement,
     opts: {
-      rateText: string;
-      framesText: string;
+      rateHtml: string;
+      framesHtml: string;
       kpiFramesHtml: string;
-      lastFrameText: string;
+      lastFrameHtml: string;
       seqText: string;
       trackPosHtml: string;
       kvTrackPosHtml?: string;
@@ -3043,14 +3393,14 @@ export class NetworkView extends Component {
     }
     const pct = (x: number) => Math.max(0, Math.min(100, ((x - DBM_MIN) / (DBM_MAX - DBM_MIN)) * 100));
     const topRate = host.querySelector<HTMLElement>("[data-net-top-rate]");
-    if (topRate && topRate.textContent !== opts.rateText) topRate.textContent = opts.rateText;
+    if (topRate && topRate.innerHTML !== opts.rateHtml) topRate.innerHTML = opts.rateHtml;
     const topFrames = host.querySelector<HTMLElement>("[data-net-top-frames]");
-    if (topFrames && topFrames.textContent !== opts.framesText) topFrames.textContent = opts.framesText;
+    if (topFrames && topFrames.innerHTML !== opts.framesHtml) topFrames.innerHTML = opts.framesHtml;
 
     const kpiFrames = host.querySelector<HTMLElement>('[data-net-kpi="frames"]');
     if (kpiFrames && kpiFrames.innerHTML !== opts.kpiFramesHtml) kpiFrames.innerHTML = opts.kpiFramesHtml;
     const kpiLast = host.querySelector<HTMLElement>('[data-net-kpi="last-frame"]');
-    if (kpiLast && kpiLast.textContent !== opts.lastFrameText) kpiLast.textContent = opts.lastFrameText;
+    if (kpiLast && kpiLast.innerHTML !== opts.lastFrameHtml) kpiLast.innerHTML = opts.lastFrameHtml;
     const kpiSeq = host.querySelector<HTMLElement>('[data-net-kpi="seq"]');
     if (kpiSeq && kpiSeq.textContent !== opts.seqText) kpiSeq.textContent = opts.seqText;
     const kpiPos = host.querySelector<HTMLElement>('[data-net-kpi="track-pos"]');
@@ -3136,11 +3486,11 @@ export class NetworkView extends Component {
           if (latestSpokeSeq === null || sp.seq > latestSpokeSeq) latestSpokeSeq = sp.seq;
         }
       }
-      const lastFrameText =
+      const lastFrameHtml =
         minMsAgo !== null
-          ? `${minMsAgo} ms ago`
+          ? fmtMsAgoHtml(minMsAgo)
           : hub.online && (hubOwnFrames > 0 || (s && s.role === 1 && s.sweeps > 0))
-            ? "< 20 ms ago"
+            ? `<span class="net-metric-pair"><span class="net-num-slot is-ms">&lt;20</span> <span>ms ago</span></span>`
             : "No frames yet";
       const hubSweepSeq =
         hubConsole.hubLastSeq !== undefined
@@ -3186,13 +3536,17 @@ export class NetworkView extends Component {
         this.signalEnabledCh.join(","),
       ].join("|");
 
+      const hubRateHtml = fmtRateBadgeHtml(totalRate);
+      const hubFramesHtml = fmtFramesBadgeHtml(totalFrames);
+      const hubKpiFramesHtml = fmtKpiFramesHtml(totalFrames, totalRate);
+
       if (
         structKey === this.lastTimerStructKey &&
         this.patchTimerLiveValues(detailHost, {
-          rateText: `${totalRate.toFixed(1)} pkt/s`,
-          framesText: `${totalFrames} frames rx`,
-          kpiFramesHtml: `${totalFrames} <span class="note">(${totalRate.toFixed(1)} pkt/s)</span>`,
-          lastFrameText,
+          rateHtml: hubRateHtml,
+          framesHtml: hubFramesHtml,
+          kpiFramesHtml: hubKpiFramesHtml,
+          lastFrameHtml,
           seqText: hubSweepSeq,
           trackPosHtml,
           kvTrackPosHtml,
@@ -3210,15 +3564,15 @@ export class NetworkView extends Component {
       );
 
       const timerHtml = `
-        <div class="debug-status-topbar">
+        <div class="debug-status-topbar is-net-timer-topbar">
           <span class="debug-led-status">
             <span class="status-dot ${ledClass}"></span>
             <span class="debug-head-note"><strong>${esc(hub.label)}</strong> · Parent Hub (TDMA Slot 1) · ${esc(hub.statusNote)}</span>
           </span>
           <div class="debug-connect-actions">
-            <span class="badge ${hub.online ? "badge-good" : "badge-warn"} mono" data-net-top-rate>${totalRate.toFixed(1)} pkt/s</span>
-            <span class="badge mono" data-net-top-frames>${totalFrames} frames rx</span>
-            ${hub.fp && hub.fp !== "—" ? `<span class="badge mono">${esc(hub.fp)}</span>` : ""}
+            <span class="badge ${hub.online ? "badge-good" : "badge-warn"} mono" data-net-top-rate>${hubRateHtml}</span>
+            <span class="badge mono" data-net-top-frames>${hubFramesHtml}</span>
+            ${hub.fp && hub.fp !== "—" ? `<span class="badge mono net-top-fp-badge">${esc(hub.fp)}</span>` : ""}
             ${idBtnHtml}
           </div>
         </div>
@@ -3226,11 +3580,11 @@ export class NetworkView extends Component {
         <div class="debug-net-inspector-kpis">
           <div class="debug-net-inspector-kpi">
             <span class="debug-net-inspector-kpi-label">Frames received by Hub</span>
-            <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="frames">${totalFrames} <span class="note">(${totalRate.toFixed(1)} pkt/s)</span></strong>
+            <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="frames">${hubKpiFramesHtml}</strong>
           </div>
           <div class="debug-net-inspector-kpi">
             <span class="debug-net-inspector-kpi-label">Last frame at Hub</span>
-            <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="last-frame">${lastFrameText}</strong>
+            <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="last-frame">${lastFrameHtml}</strong>
           </div>
           <div class="debug-net-inspector-kpi">
             <span class="debug-net-inspector-kpi-label">Latest sweep seq #</span>
@@ -3331,12 +3685,12 @@ export class NetworkView extends Component {
         ? "Direct via USB-C"
         : `Via Hub ${esc(hub.label)}`
       : "Waiting for Spoke window frames…";
-    const lastFrameText = sp.viaUsb
+    const lastFrameHtml = sp.viaUsb
       ? sp.beaconMsAgo !== undefined
-        ? `${sp.beaconMsAgo} ms ago`
+        ? fmtMsAgoHtml(sp.beaconMsAgo)
         : "Waiting…"
       : sp.msAgo !== undefined && frames > 0
-        ? `${sp.msAgo} ms ago`
+        ? fmtMsAgoHtml(sp.msAgo)
         : "No frames yet";
     const seqText = sp.seq !== undefined && frames > 0 ? `#${sp.seq}` : "—";
     const trackPosHtml = sp.serverGateLabel
@@ -3360,13 +3714,17 @@ export class NetworkView extends Component {
       this.signalEnabledCh.join(","),
     ].join("|");
 
+    const spRateHtml = fmtRateBadgeHtml(rate);
+    const spFramesHtml = fmtFramesBadgeHtml(frames);
+    const spKpiFramesHtml = fmtKpiFramesHtml(frames, rate);
+
     if (
       structKey === this.lastTimerStructKey &&
       this.patchTimerLiveValues(detailHost, {
-        rateText: `${rate.toFixed(1)} pkt/s`,
-        framesText: `${frames} frames rx`,
-        kpiFramesHtml: `${frames} <span class="note">(${rate.toFixed(1)} pkt/s)</span>`,
-        lastFrameText,
+        rateHtml: spRateHtml,
+        framesHtml: spFramesHtml,
+        kpiFramesHtml: spKpiFramesHtml,
+        lastFrameHtml,
         seqText,
         trackPosHtml,
         sourceLabel,
@@ -3383,15 +3741,15 @@ export class NetworkView extends Component {
     );
 
     const timerHtml = `
-      <div class="debug-status-topbar">
+      <div class="debug-status-topbar is-net-timer-topbar">
         <span class="debug-led-status">
           <span class="status-dot ${sp.espNowActive ? "is-spoke" : "is-warn"}"></span>
           <span class="debug-head-note"><strong>${esc(sp.label)}</strong> · Child Spoke (TDMA Slot ${sp.slot}) · ${sp.espNowActive ? `ESP-NOW active with ${esc(hub.label)}` : "ESP-NOW inactive"}</span>
         </span>
         <div class="debug-connect-actions">
-          <span class="badge ${sp.espNowActive ? "badge-good" : "badge-warn"} mono" data-net-top-rate>${rate.toFixed(1)} pkt/s</span>
-          <span class="badge mono" data-net-top-frames>${frames} frames rx</span>
-          <span class="badge mono">${esc(sp.fp)}</span>
+          <span class="badge ${sp.espNowActive ? "badge-good" : "badge-warn"} mono" data-net-top-rate>${spRateHtml}</span>
+          <span class="badge mono" data-net-top-frames>${spFramesHtml}</span>
+          <span class="badge mono net-top-fp-badge">${esc(sp.fp)}</span>
           ${idBtnHtml}
         </div>
       </div>
@@ -3399,11 +3757,11 @@ export class NetworkView extends Component {
       <div class="debug-net-inspector-kpis">
         <div class="debug-net-inspector-kpi">
           <span class="debug-net-inspector-kpi-label">Frames received by Hub</span>
-          <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="frames">${frames} <span class="note">(${rate.toFixed(1)} pkt/s)</span></strong>
+          <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="frames">${spKpiFramesHtml}</strong>
         </div>
         <div class="debug-net-inspector-kpi">
           <span class="debug-net-inspector-kpi-label">${sp.viaUsb ? "Last Hub beacon" : "Last frame at Hub"}</span>
-          <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="last-frame">${lastFrameText}</strong>
+          <strong class="debug-net-inspector-kpi-val mono" data-net-kpi="last-frame">${lastFrameHtml}</strong>
         </div>
         <div class="debug-net-inspector-kpi">
           <span class="debug-net-inspector-kpi-label">Latest sweep seq #</span>

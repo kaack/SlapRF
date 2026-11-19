@@ -1,8 +1,10 @@
+import { downloadBinaryFile, isAndroidHostApp } from "../core/android_bridge";
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { subscribeAppTheme } from "../core/theme";
 import { ApiClient } from "../services/api_client";
+import { capabilitiesSnapshot } from "../services/capabilities";
 import {
   FlashProgress,
   LATEST_FIRMWARE_VERSION,
@@ -13,11 +15,14 @@ import {
 } from "../services/esp_flasher";
 import {
   FLASHER_NEEDS_WEBSERIAL,
+  WebSerialPort,
   acquireEspSerialPort,
   flashXiaoC5WithEsptool,
   flasherUsesWebSerial,
+  hasBrowserWebSerial,
+  isBackendRawWebSerialPort,
 } from "../services/esptool_flasher";
-import { isSimulatedSerialPort, isSimulatedUsbMode } from "../services/sim_serial_port";
+import { createBackendPortHandle, isSimulatedUsbMode } from "../services/sim_serial_port";
 import { recordKnownTimerReadout, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
@@ -305,13 +310,14 @@ export class TimerFlasher extends Component {
 
     try {
       let written: TimerReadout | null;
+      let flashedPort: WebSerialPort | null = null;
       if (useEsptool) {
-        // Select the WebSerial port first, while the click still counts as a user gesture.
-        const port = await acquireEspSerialPort();
+        // Select the USB port first, while the click still counts as a user gesture.
+        flashedPort = await acquireEspSerialPort();
         onProgress({ stage: "connecting", percent: 1, detail: `Building ${label} firmware image…` });
         const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel);
         written = await flashXiaoC5WithEsptool(
-          port,
+          flashedPort,
           bytes,
           label,
           onProgress,
@@ -345,6 +351,27 @@ export class TimerFlasher extends Component {
         await this.api.provisionTimer(this.role, cleanLabel, written?.fingerprint ?? "");
       }
       this.flashedNodes.add(this.role === "hub" ? "hub" : `spoke:${cleanLabel.toUpperCase()}`);
+
+      // When flashing Hub H1 on Android or a local SlapRF Server with no Hub connected yet,
+      // automatically bring the newly flashed Hub online so the user can jump straight to timing laps.
+      let autoConnectedHub = false;
+      if (
+        this.role === "hub" &&
+        !this.store.simulatorRunning &&
+        capabilitiesSnapshot().portable &&
+        flashedPort &&
+        isBackendRawWebSerialPort(flashedPort) &&
+        !usbPool.slots.some((s) => s.connected)
+      ) {
+        const slot0 = usbPool.slots[0];
+        if (slot0) {
+          await slot0
+            .connectWithPort(createBackendPortHandle(flashedPort.portName), false, 2400)
+            .catch(() => undefined);
+          autoConnectedHub = slot0.connected;
+        }
+      }
+
       const fpNote = written?.fingerprintKept
         ? `kept its fingerprint ${written.fingerprint}`
         : `got new fingerprint ${written?.fingerprint ?? ""}`;
@@ -355,7 +382,8 @@ export class TimerFlasher extends Component {
           : verified
             ? ` Read back OK: ${verified.timerLabel || cleanLabel} · ${verified.role === "hub" ? "Hub" : "Spoke"} · ${verified.firmwareVersion}.`
             : " The board did not answer the readback; unplug and replug it, then use Reader to check.";
-      this.lastSuccessMsg = `${label} flashed (${fpNote}).${verifyNote}`;
+      const readyNote = autoConnectedHub ? " Hub H1 is now connected over USB and ready to time laps." : "";
+      this.lastSuccessMsg = `${label} flashed (${fpNote}).${verifyNote}${readyNote}`;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/No port selected|aborted|cancelled/i.test(msg)) {
@@ -395,15 +423,7 @@ export class TimerFlasher extends Component {
     try {
       const cleanLabel = this.timerLabel.trim();
       const { bytes, filename } = await this.api.fetchFirmwareImage(this.role, cleanLabel);
-      const blob = new Blob([bytes], { type: "application/octet-stream" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      downloadBinaryFile(filename, "application/octet-stream", bytes);
     } catch (err) {
       this.errorMsg = err instanceof Error ? err.message : String(err);
       this.slideDir = "none";
@@ -445,6 +465,8 @@ export class TimerFlasher extends Component {
    */
   private renderStepNetwork(): string {
     const isHub = this.role === "hub";
+    const isAndroid = isAndroidHostApp();
+    const hostNoun = isAndroid ? "this phone" : "this computer";
     const hubFlashed = this.flashedNodes.has("hub");
     const flashedSpokes = [...this.flashedNodes].filter((k) => k.startsWith("spoke:")).length;
 
@@ -455,7 +477,7 @@ export class TimerFlasher extends Component {
             <h3 class="flasher-pane-title">What role will this timer play?</h3>
             <span class="note flasher-step-count">Step 1 of 3</span>
           </div>
-          <p>One <strong>Hub</strong> plugs into this computer over USB-C and collects passes from up to 6 <strong>Spokes</strong> on the course.</p>
+          <p>One <strong>Hub</strong> plugs into ${hostNoun} over USB-C and collects passes from up to 6 <strong>Spokes</strong> on the course.</p>
         </div>
 
         <div class="flasher-pictorial-grid" role="radiogroup" aria-label="Timer role">
@@ -475,7 +497,7 @@ export class TimerFlasher extends Component {
               ${this.renderPictorialRoleHub()}
             </div>
             <p class="flasher-pictorial-desc">
-              USB dongle plugged into this computer. Collects every Spoke's passes over long-range ESP-NOW and streams them over USB-C.
+              USB dongle plugged into ${hostNoun}. Collects every Spoke's passes over long-range ESP-NOW and streams them over USB-C.
             </p>
           </button>
 
@@ -505,9 +527,9 @@ export class TimerFlasher extends Component {
         <div class="flasher-tips" role="note" aria-label="Tips for a reliable flash">
           <div class="flasher-tips-head">${icons.info(14)}<span>Tips for a reliable flash</span></div>
           <ul class="flasher-tips-list">
-            <li><strong>Use a good USB-C cable.</strong> A known, good-quality data cable (USB 3.x is best) works much better than a cheap or charge-only cable.</li>
-            <li><strong>Plug straight into the computer.</strong> Do not use a USB hub, dock, or extension cable while you flash.</li>
-            <li><strong>Flash one board at a time</strong> in Chrome, Edge, or Opera. If a board stops responding, unplug it (and its battery) for a few seconds, then try again.</li>
+            <li><strong>Use a good USB-C data cable.</strong> A known, good-quality USB-C data cable works much better than a cheap or charge-only cable.</li>
+            <li><strong>${isAndroid ? "Plug straight into your phone's USB-C port." : "Plug straight into the computer."}</strong> Avoid unpowered USB hubs or extension cables while you flash.</li>
+            <li><strong>Flash one board at a time</strong>${hasBrowserWebSerial() ? " in Chrome, Edge, or Opera" : ""}. If a board stops responding, unplug it (and its battery) for a few seconds, then try again.</li>
             <li><strong>Keep the Hub and all Spokes on the same firmware version.</strong> When updating firmware, reflash both the Hub and every Spoke on the course.</li>
           </ul>
         </div>
@@ -650,8 +672,9 @@ export class TimerFlasher extends Component {
 
   private renderStepFlash(webSerialOk: boolean): string {
     const isHub = this.role === "hub";
+    const isAndroid = isAndroidHostApp();
     const cleanLabel = this.timerLabel.trim() || (isHub ? "H1" : this.suggestSpokeLabel());
-    const linkSummary = isHub ? "USB-C → Computer" : "2.4 GHz ESP-NOW → Hub";
+    const linkSummary = isHub ? (isAndroid ? "USB-C → Phone" : "USB-C → Computer") : "2.4 GHz ESP-NOW → Hub";
     const eraseBeforeFlash = !this.keepFingerprint;
     const activeConsole = usbPool.mainConsole;
     const browser = flasherUsesWebSerial();
@@ -671,7 +694,7 @@ export class TimerFlasher extends Component {
       ? `✓ ${this.lastSuccessMsg}`
       : isConnected
         ? `Ready to flash ${cleanLabel} to connected USB device (${targetName})`
-        : `Ready to flash ${cleanLabel}. Plug in the board and click Flash ${cleanLabel} to USB.`;
+        : `Ready to flash ${cleanLabel}. Plug in the board and tap Flash ${cleanLabel} to USB.`;
 
     return `
       <div class="flasher-wizard-body">
@@ -683,7 +706,9 @@ export class TimerFlasher extends Component {
           <p>${
             isConnected
               ? `Connected to <strong>${esc(targetName)}</strong> over USB-C. Click <strong>Flash ${esc(cleanLabel)} to USB</strong> to write the firmware.`
-              : `Plug in your <strong>Seeed Studio XIAO ESP32-C5</strong> and click <strong>Flash ${esc(cleanLabel)} to USB</strong>. Your browser asks which USB port to use the first time. After flashing, the board is read back once to confirm it works.`
+              : hasBrowserWebSerial()
+                ? `Plug in your <strong>Seeed Studio XIAO ESP32-C5</strong> and click <strong>Flash ${esc(cleanLabel)} to USB</strong>. Your browser asks which USB port to use the first time. After flashing, the board is read back once to confirm it works.`
+                : `Plug in your <strong>Seeed Studio XIAO ESP32-C5</strong> over USB-C and tap <strong>Flash ${esc(cleanLabel)} to USB</strong>. Approve the USB access prompt if asked. After flashing, the board is read back once to confirm it works.`
           }</p>
         </div>
 

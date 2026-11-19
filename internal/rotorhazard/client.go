@@ -79,6 +79,8 @@ type ClientStatusSnapshot struct {
 	NodeFreqsMHz    [domain.MaxPilotSlots]uint16  `json:"nodeFreqsMhz"`
 	CpuTempC        float32                       `json:"cpuTempC,omitempty"`
 	EnvSummary      string                        `json:"envSummary,omitempty"`
+	ScanLive        bool                          `json:"scanLive,omitempty"`
+	LastScan        *domain.RHScanPass            `json:"lastScan,omitempty"`
 }
 
 type clockSample struct {

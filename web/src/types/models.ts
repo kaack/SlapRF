@@ -286,6 +286,16 @@ export interface SimLapRFUnit {
   slotThresholds?: number[];
 }
 
+export interface RHScanPass {
+  seq: number;
+  start: number;
+  stop: number;
+  step: number;
+  passMs: number;
+  live: boolean;
+  values: number[];
+}
+
 export interface SimRotorHazardUnit {
   timerId: number;
   label: string;
@@ -317,6 +327,8 @@ export interface SimRotorHazardUnit {
   nodeFreqsMhz?: number[];
   cpuTempC?: number;
   envSummary?: string;
+  scanLive?: boolean;
+  lastScan?: RHScanPass;
 }
 
 export interface SimState {

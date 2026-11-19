@@ -1,9 +1,8 @@
-//go:build !windows && !linux
+//go:build !windows && !linux && !android
 
 package usb
 
 import (
-	"sort"
 	"strings"
 
 	"go.bug.st/serial"
@@ -57,14 +56,6 @@ func DefaultListPorts() ([]PortInfo, error) {
 			IsEspressif: isModem,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].IsEspressif != out[j].IsEspressif {
-			return out[i].IsEspressif
-		}
-		if out[i].IsUSB != out[j].IsUSB {
-			return out[i].IsUSB
-		}
-		return out[i].Name < out[j].Name
-	})
+	sortPorts(out)
 	return out, nil
 }

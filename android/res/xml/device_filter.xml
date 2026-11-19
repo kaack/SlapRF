@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Espressif Systems (Seeed Studio XIAO ESP32-C5 USB-Serial-JTAG, VID 0x303A = 12346) -->
+    <usb-device vendor-id="12346" />
+    <!-- Silicon Labs CP210x (RotorHazard / ESP32 UART bridges, VID 0x10C4 = 4292) -->
+    <usb-device vendor-id="4292" />
+    <!-- QinHeng CH340 / CH341 (RotorHazard / Arduino Nano nodes, VID 0x1A86 = 6790) -->
+    <usb-device vendor-id="6790" />
+    <!-- FTDI FT232 / FT231X (VID 0x0403 = 1027) -->
+    <usb-device vendor-id="1027" />
+    <!-- STMicroelectronics CDC-ACM (ImmersionRC LapRF 8-Way USB, VID 0x0483 = 1155) -->
+    <usb-device vendor-id="1155" />
+</resources>

@@ -1371,6 +1371,49 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     padding-top: 8px;
     padding-bottom: 84px;
     transition: none;
+    touch-action: pan-y;
+  }
+  .outlet.is-swipe-stage {
+    overflow-x: clip;
+  }
+  .view.is-swipe-active {
+    will-change: transform;
+  }
+  .view.is-swipe-peek,
+  .view.is-swipe-exiting {
+    position: absolute;
+    top: 8px;
+    left: 14px;
+    right: 14px;
+    will-change: transform;
+    pointer-events: none;
+    z-index: 2;
+  }
+  .view.is-view-enter-right {
+    animation: slaprf-mobile-view-enter-right 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  .view.is-view-enter-left {
+    animation: slaprf-mobile-view-enter-left 0.24s cubic-bezier(0.22, 1, 0.36, 1) both;
+  }
+  @keyframes slaprf-mobile-view-enter-right {
+    0% {
+      opacity: 0.55;
+      transform: translate3d(24%, 0, 0);
+    }
+    100% {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+    }
+  }
+  @keyframes slaprf-mobile-view-enter-left {
+    0% {
+      opacity: 0.55;
+      transform: translate3d(-24%, 0, 0);
+    }
+    100% {
+      opacity: 1;
+      transform: translate3d(0, 0, 0);
+    }
   }
   .app.is-mobile-subpage .outlet {
     padding-bottom: 24px;

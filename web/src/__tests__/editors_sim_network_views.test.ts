@@ -1,4 +1,4 @@
-import { Router } from "../core/router";
+import { pushAppHash, Router } from "../core/router";
 import { AppShell } from "../layout/AppShell";
 import { Sidebar } from "../layout/Sidebar";
 import { Announcer } from "../services/announcer";
@@ -247,6 +247,34 @@ describe("widgets/PilotSlotsEditor & TrackEditor — Global Pilots & Course Line
       // 6. Clear removes all Recent pills
       root.querySelector<HTMLButtonElement>("[data-action='clear-recent-pilots']")!.click();
       expect(root.querySelector(".pilot-dir-recent-bar")).toBeNull();
+
+      // 7. On mobile (<= 768px), opening the pilot drawer and editing fields preserves the exact
+      // .pilot-dir-mobile-drawer-overlay and .pilot-dir-mobile-drawer-backdrop DOM elements in place
+      // without ever destroying or recreating the blurred backdrop
+      const origW = window.innerWidth;
+      Object.defineProperty(window, "innerWidth", { value: 390, configurable: true, writable: true });
+      try {
+        const pill1 = root.querySelector<HTMLButtonElement>('[data-mobile-pilot-select="1"]')!;
+        expect(pill1).not.toBeNull();
+        pill1.click();
+
+        const overlayBefore = root.querySelector<HTMLElement>(".pilot-dir-mobile-drawer-overlay")!;
+        const backdropBefore = root.querySelector<HTMLElement>(".pilot-dir-mobile-drawer-backdrop")!;
+        expect(overlayBefore).not.toBeNull();
+        expect(backdropBefore).not.toBeNull();
+
+        const drawerPhonetic = overlayBefore.querySelector<HTMLInputElement>('input[name="phoneticName"]')!;
+        drawerPhonetic.value = "Alex V";
+        drawerPhonetic.dispatchEvent(new Event("change", { bubbles: true }));
+        await flushMicrotasks();
+
+        const overlayAfter = root.querySelector<HTMLElement>(".pilot-dir-mobile-drawer-overlay")!;
+        const backdropAfter = root.querySelector<HTMLElement>(".pilot-dir-mobile-drawer-backdrop")!;
+        expect(overlayAfter).toBe(overlayBefore);
+        expect(backdropAfter).toBe(backdropBefore);
+      } finally {
+        Object.defineProperty(window, "innerWidth", { value: origW, configurable: true, writable: true });
+      }
     } finally {
       editor.destroy();
     }
@@ -434,6 +462,41 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LiveTimeView, Abou
       expect(root.querySelector("#livetime")!.innerHTML.length).toBeGreaterThan(50);
       expect(root.querySelector("#about")!.textContent).toContain("SlapRF");
 
+      // Mobile Topology Graph always renders the Hub node even when disconnected, hides all empty Spokes,
+      // and ignores touch scroll drags (>10px) while honoring clean touch taps (<10px).
+      const mobileGraph = root.querySelector<HTMLElement>("#net [data-mobile-topology-graph]")!;
+      expect(mobileGraph).not.toBeNull();
+      expect(mobileGraph.querySelectorAll(".net-mnode.is-hub").length).toBe(1);
+      expect(mobileGraph.querySelectorAll(".net-mnode.is-spoke").length).toBe(0);
+
+      // Touch drag on desktop empty slot 7 (>10px vertical scroll) must NOT select slot 7
+      const emptySlot7 = root.querySelector<HTMLElement>(
+        '#net .debug-topology-board [data-action="select-topology-slot"][data-slot-num="7"]'
+      )!;
+      expect(emptySlot7.classList.contains("is-selected")).toBe(false);
+      emptySlot7.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, pointerId: 11, pointerType: "touch", clientX: 100, clientY: 120 })
+      );
+      emptySlot7.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, pointerId: 11, pointerType: "touch", clientX: 100, clientY: 165 })
+      );
+      emptySlot7.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, pointerId: 11, pointerType: "touch", clientX: 100, clientY: 165 })
+      );
+      expect(emptySlot7.classList.contains("is-selected")).toBe(false);
+
+      // Clean touch tap (<10px movement) selects cleanly
+      emptySlot7.dispatchEvent(
+        new PointerEvent("pointerdown", { bubbles: true, pointerId: 12, pointerType: "touch", clientX: 100, clientY: 120 })
+      );
+      emptySlot7.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, pointerId: 12, pointerType: "touch", clientX: 102, clientY: 122 })
+      );
+      const emptySlot7AfterTap = root.querySelector<HTMLElement>(
+        '#net .debug-topology-board [data-action="select-topology-slot"][data-slot-num="7"]'
+      )!;
+      expect(emptySlot7AfterTap.classList.contains("is-selected")).toBe(true);
+
       // Switch store into LapRF mode -> NetworkView & SimView re-render into LapRF hardware mode cleanly!
       store.hydrate({
         serverTimestampUs: 20_000_000,
@@ -484,6 +547,99 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LiveTimeView, Abou
       expect(root.querySelector("#debug")!.innerHTML.length).toBeGreaterThan(100);
       expect(root.querySelector("#sidebar")!.textContent).toContain("Practice");
       expect(root.querySelector("#shell")!.querySelector("main")).not.toBeNull();
+
+      // Regression guard: on mobile (<= 900px), pinching or panning charts on #/debug (or 2-finger pinching
+      // on primary tabs) must NEVER trigger AppShell swipe navigation back to #/flasher or #/about!
+      const origInnerWidth = window.innerWidth;
+      Object.defineProperty(window, "innerWidth", { value: 390, configurable: true, writable: true });
+      try {
+        pushAppHash("#/debug");
+        expect(router.route).toBe("debug");
+
+        const shellEl = root.querySelector<HTMLElement>("#shell")!;
+        const sigCanvas = shellEl.querySelector<HTMLElement>("[data-signal-canvas]")!;
+        expect(sigCanvas).not.toBeNull();
+
+        // 1-finger horizontal pan on Debug signal canvas (+120px right, which previously jumped to #/flasher)
+        sigCanvas.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 21, pointerType: "touch", clientX: 80, clientY: 140 })
+        );
+        sigCanvas.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 21, pointerType: "touch", clientX: 210, clientY: 142 })
+        );
+        expect(router.route).toBe("debug");
+
+        // 2-finger pinch on Debug spectrum canvas
+        const specCanvas = shellEl.querySelector<HTMLElement>("[data-spectrum-canvas]")!;
+        specCanvas.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 22, pointerType: "touch", clientX: 120, clientY: 150 })
+        );
+        specCanvas.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 23, pointerType: "touch", clientX: 190, clientY: 150 })
+        );
+        specCanvas.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 23, pointerType: "touch", clientX: 290, clientY: 150 })
+        );
+        specCanvas.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 22, pointerType: "touch", clientX: 40, clientY: 150 })
+        );
+        expect(router.route).toBe("debug");
+
+        // 2-finger pinch on a primary tab (#/races) also cancels tab-swipe navigation cleanly
+        pushAppHash("#/races");
+        expect(router.route).toBe("races");
+        const outletEl = shellEl.querySelector<HTMLElement>("main.outlet")!;
+        outletEl.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 31, pointerType: "touch", clientX: 100, clientY: 200 })
+        );
+        outletEl.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 32, pointerType: "touch", clientX: 180, clientY: 200 })
+        );
+        outletEl.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 31, pointerType: "touch", clientX: 260, clientY: 200 })
+        );
+        outletEl.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 32, pointerType: "touch", clientX: 40, clientY: 200 })
+        );
+        expect(router.route).toBe("races");
+
+        // 1-finger horizontal swipe across primary tabs even after LiveView (#/live) has mounted
+        // its inline .practice-pilot-popover.is-inline-mobile-panel in the DOM
+        pushAppHash("#/live");
+        expect(router.route).toBe("live");
+        outletEl.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 40, pointerType: "touch", clientX: 300, clientY: 200 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerId: 40, pointerType: "touch", clientX: 185, clientY: 202 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 40, pointerType: "touch", clientX: 175, clientY: 202 })
+        );
+        expect(router.route).toBe("races");
+
+        // 1-finger horizontal swipe left on a primary tab (#/pilots -> #/track) previews the incoming neighbor
+        // during pointermove and commits navigation on pointerup
+        pushAppHash("#/pilots");
+        expect(router.route).toBe("pilots");
+        outletEl.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 41, pointerType: "touch", clientX: 300, clientY: 200 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerId: 41, pointerType: "touch", clientX: 190, clientY: 202 })
+        );
+        const trackViewDuringDrag = outletEl.querySelector<HTMLElement>(".view-track");
+        expect(trackViewDuringDrag).not.toBeNull();
+        expect(trackViewDuringDrag!.classList.contains("is-swipe-peek")).toBe(true);
+        expect(trackViewDuringDrag!.style.transform).toContain("translate3d(");
+
+        window.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 41, pointerType: "touch", clientX: 180, clientY: 202 })
+        );
+        expect(router.route).toBe("track");
+      } finally {
+        Object.defineProperty(window, "innerWidth", { value: origInnerWidth, configurable: true, writable: true });
+      }
     } finally {
       debugView.destroy();
       sidebar.destroy();

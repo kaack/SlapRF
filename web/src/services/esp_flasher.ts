@@ -6,6 +6,7 @@
  *     protocol directly to `SimulatedSerialPort` so `#/flasher` works identically in Demo & Sim modes.
  *   - There is no server flasher. Browsers without WebSerial (Firefox, Safari) cannot flash.
  */
+import { capabilitiesSnapshot } from "./capabilities";
 import { isSimulatedUsbMode } from "./sim_serial_port";
 
 export interface FlashProgress {
@@ -257,9 +258,13 @@ export async function buildOrPatchFirmwareBin(opts: {
     filename: `slaprf-xiao-c5-${slug}-${LATEST_FIRMWARE_VERSION}.bin`,
   };
 }
-/** True when the Flasher page can work: Simulation/Demo mode, or a browser with WebSerial. */
+/** True when the Flasher page can work: Simulation/Demo mode, a native Go/Android USB server, or WebSerial. */
 export function isWebSerialSupported(): boolean {
-  return isSimulatedUsbMode() || (typeof navigator !== "undefined" && "serial" in navigator);
+  return (
+    isSimulatedUsbMode() ||
+    capabilitiesSnapshot().portable ||
+    (typeof navigator !== "undefined" && "serial" in navigator)
+  );
 }
 
 /** Decode the 160-byte `SLAPRF02` configuration block from a firmware binary or flash dump. */

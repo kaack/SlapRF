@@ -276,3 +276,112 @@ func TestSerialClientBaudFallback921600AndLegacyAPI28(t *testing.T) {
 		t.Fatal("timed out waiting for legacy API 28 pass")
 	}
 }
+
+func TestSerialClientSpectrumScanOnceAndLiveRestoresFrequencies(t *testing.T) {
+	var clockUs atomic.Uint64
+	clockUs.Store(1_000_000)
+
+	simNode := NewSimSerialNode(SimSerialNodeConfig{
+		SeatCount: 8,
+		APILevel:  36,
+		FwVersion: "FPVGateC5 1.2",
+		ProcType:  "ESP32-C5",
+		NowUs:     clockUs.Load,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	client := NewSerialClient(SerialClientConfig{
+		PortName:        "COM-C5MK",
+		BaudRate:        115200,
+		PollInterval:    12 * time.Millisecond,
+		BootTimeout:     100 * time.Millisecond,
+		ReadTimeout:     40 * time.Millisecond,
+		NoRxSettleDelay: true,
+		OpenPort: func(portName string, baud int) (SerialPort, error) {
+			hp, dp := NewInMemorySerialPair()
+			go func() { _ = simNode.Serve(dp) }()
+			return hp, nil
+		},
+		SweepFeed: func(freqs []uint16) {
+			now := clockUs.Add(2_000)
+			for seat, f := range freqs {
+				rssi := float32(22)
+				if f >= 5800 && f <= 5810 {
+					rssi = 198 // Active R5 VTX peak on 0..255 scale
+				}
+				simNode.FeedSeatRSSI(seat, rssi, now)
+			}
+		},
+		Hooks: ClientHooks{
+			NowUs: clockUs.Load,
+		},
+	})
+
+	readyCh := make(chan error, 1)
+	go func() {
+		_ = client.RunOnce(ctx, func(err error) { readyCh <- err })
+	}()
+	select {
+	case err := <-readyCh:
+		if err != nil {
+			t.Fatalf("expected handshake OK, got %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for handshake")
+	}
+
+	var nodes [domain.MaxPilotSlots]NodeConfig
+	nodes[0] = NodeConfig{Enabled: true, Band: domain.BandRaceband, Channel: 1, FrequencyMHz: 5658, EnterAtLevel: 95, ExitAtLevel: 70}
+	nodes[1] = NodeConfig{Enabled: true, Band: domain.BandRaceband, Channel: 2, FrequencyMHz: 5695, EnterAtLevel: 95, ExitAtLevel: 70}
+	client.SyncNodesAndArm(nodes, true)
+	time.Sleep(40 * time.Millisecond)
+
+	// 1. Run single sweep across 5630..5945 (clamped to 5917 MHz for C5MK compatibility)
+	scanCtx, scanCancel := context.WithTimeout(ctx, 2*time.Second)
+	defer scanCancel()
+	pass, err := client.RunScanOnce(scanCtx, 5630, 5945, 5)
+	if err != nil {
+		t.Fatalf("RunScanOnce failed: %v", err)
+	}
+	if pass.Start != 5630 || pass.Stop != 5915 || pass.Step != 5 {
+		t.Fatalf("unexpected normalized scan grid: start=%d stop=%d step=%d", pass.Start, pass.Stop, pass.Step)
+	}
+	r5Bin := (5805 - pass.Start) / pass.Step
+	if pass.Values[r5Bin] != 198 {
+		t.Fatalf("expected 198 RSSI peak at 5805 MHz bin, got %v", pass.Values[r5Bin])
+	}
+
+	// Verify node frequencies were immediately restored after ScanOnce
+	hwFreqs, _, _ := simNode.SeatSnapshot()
+	if hwFreqs[0] != 5658 || hwFreqs[1] != 5695 || hwFreqs[2] != 0 {
+		t.Fatalf("expected race frequencies [5658, 5695, 0...] restored after ScanOnce, got %v", hwFreqs)
+	}
+
+	// 2. Start continuous live scan, verify multiple passes stream, then stop and verify restoration
+	client.SetScanLive(true, 5630, 5917, 10)
+	deadline := time.Now().Add(1500 * time.Millisecond)
+	var liveSnap ClientStatusSnapshot
+	for time.Now().Before(deadline) {
+		liveSnap = client.Snapshot()
+		if liveSnap.ScanLive && liveSnap.LastScan != nil && liveSnap.LastScan.Seq >= 3 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if !liveSnap.ScanLive || liveSnap.LastScan == nil || liveSnap.LastScan.Seq < 3 {
+		t.Fatalf("expected live scan to stream >= 3 passes, got scanLive=%v lastScan=%+v", liveSnap.ScanLive, liveSnap.LastScan)
+	}
+
+	client.SetScanLive(false, 5630, 5917, 10)
+	time.Sleep(45 * time.Millisecond)
+	afterSnap := client.Snapshot()
+	if afterSnap.ScanLive || afterSnap.LastScan != nil {
+		t.Fatalf("expected ScanLive=false and LastScan=nil after stopping scan, got %+v", afterSnap)
+	}
+	hwFreqsAfter, _, _ := simNode.SeatSnapshot()
+	if hwFreqsAfter[0] != 5658 || hwFreqsAfter[1] != 5695 || hwFreqsAfter[2] != 0 {
+		t.Fatalf("expected race frequencies [5658, 5695, 0...] restored after stopping live scan, got %v", hwFreqsAfter)
+	}
+}

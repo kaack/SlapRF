@@ -1972,12 +1972,12 @@ export class SimView extends Component {
       }
       if (descEl) {
         const want =
-          "Virtual RotorHazard USB serial timing devices (binary serial API 36). Power devices on or off, plug in or unplug their USB cable, configure receiver seat count (4 or 8), add extra USB devices, or restore defaults.";
+          "Virtual RotorHazard USB serial timing devices (binary serial API 36). Power devices on or off, plug in or unplug their USB cable, configure receiver node count (4 or 8), add extra USB devices, or restore defaults.";
         if (descEl.textContent !== want) descEl.textContent = want;
       }
       if (footNoteEl) {
         const want =
-          "Select and connect virtual USB ports and inspect live multi-seat 0–255 RSSI bars on the Network tab.";
+          "Select and connect virtual USB ports and inspect live multi-node 0-255 RSSI bars on the Network tab.";
         if (footNoteEl.textContent !== want) footNoteEl.textContent = want;
       }
       const wantAddLbl = "+ Add RotorHazard USB device";
@@ -2039,10 +2039,10 @@ export class SimView extends Component {
                   data-field="rh-nodes"
                   data-timer-id="${u.timerId}"
                   style="width:88px;padding:4px 6px;font-size:12px"
-                  aria-label="Simulated RotorHazard USB receiver seat count"
+                  aria-label="Simulated RotorHazard USB receiver node count"
                 >
-                  <option value="4" ${nodeCount === 4 ? "selected" : ""}>4 seats</option>
-                  <option value="8" ${nodeCount === 8 ? "selected" : ""}>8 seats</option>
+                  <option value="4" ${nodeCount === 4 ? "selected" : ""}>4 nodes</option>
+                  <option value="8" ${nodeCount === 8 ? "selected" : ""}>8 nodes</option>
                 </select>
               </div>
 
@@ -2078,7 +2078,7 @@ export class SimView extends Component {
               <span>Device</span>
               <span>Power</span>
               <span>USB Port</span>
-              <span>Seats</span>
+              <span>Nodes</span>
               <span>Serial Protocol</span>
               <span>Track</span>
               <span class="num">Actions</span>

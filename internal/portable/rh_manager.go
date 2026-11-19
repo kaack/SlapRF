@@ -74,6 +74,8 @@ type RHDiagSnapshot struct {
 	CpuTempC        float32                       `json:"cpuTempC,omitempty"`
 	EnvSummary      string                        `json:"envSummary,omitempty"`
 	LastError       string                        `json:"lastError,omitempty"`
+	ScanLive        bool                          `json:"scanLive,omitempty"`
+	LastScan        *domain.RHScanPass            `json:"lastScan,omitempty"`
 }
 
 type rhManagedSession struct {
@@ -824,7 +826,68 @@ func (m *rhManager) snapshotOne(sess *rhManagedSession) RHDiagSnapshot {
 		CpuTempC:        st.CpuTempC,
 		EnvSummary:      st.EnvSummary,
 		LastError:       lastErr,
+		ScanLive:        st.ScanLive,
+		LastScan:        st.LastScan,
 	}
+}
+
+func (m *rhManager) findUSBSession(timerID uint8) (*rhManagedSession, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if timerID > 0 {
+		if s := m.sessions[timerID]; s != nil && s.isUSB() && s.usbClient != nil {
+			return s, nil
+		}
+	}
+	for _, s := range m.sessions {
+		if s.isUSB() && s.usbClient != nil && s.connected {
+			return s, nil
+		}
+	}
+	for _, s := range m.sessions {
+		if s.isUSB() && s.usbClient != nil {
+			return s, nil
+		}
+	}
+	return nil, errors.New("no RotorHazard USB device connected")
+}
+
+func (m *rhManager) RunScanOnce(ctx context.Context, timerID uint8, startMHz, stopMHz, stepMHz int) (domain.RHScanPass, error) {
+	sess, err := m.findUSBSession(timerID)
+	if err != nil {
+		return domain.RHScanPass{}, err
+	}
+	return sess.usbClient.RunScanOnce(ctx, startMHz, stopMHz, stepMHz)
+}
+
+func (m *rhManager) SetScanLive(timerID uint8, active bool, startMHz, stopMHz, stepMHz int) error {
+	if !active && timerID == 0 {
+		m.mu.RLock()
+		list := make([]*rhManagedSession, 0, len(m.sessions))
+		for _, s := range m.sessions {
+			if s.isUSB() && s.usbClient != nil {
+				list = append(list, s)
+			}
+		}
+		m.mu.RUnlock()
+		for _, s := range list {
+			s.usbClient.SetScanLive(false, startMHz, stopMHz, stepMHz)
+			m.syncOne(s)
+		}
+		return nil
+	}
+	sess, err := m.findUSBSession(timerID)
+	if err != nil {
+		if !active {
+			return nil
+		}
+		return err
+	}
+	sess.usbClient.SetScanLive(active, startMHz, stopMHz, stepMHz)
+	if !active {
+		m.syncOne(sess)
+	}
+	return nil
 }
 
 func (m *rhManager) Snapshots() []RHDiagSnapshot {
@@ -958,6 +1021,55 @@ func (s *Server) handleRHSync(w http.ResponseWriter, r *http.Request) {
 	}
 	s.rhMgr.SyncAll()
 	writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleRHScan(w http.ResponseWriter, r *http.Request) {
+	if !s.isAllowedOrigin(r) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	var req struct {
+		TimerID uint8  `json:"timerId"`
+		Mode    string `json:"mode"` // "once" | "live" | "stop"
+		Start   int    `json:"start"`
+		Stop    int    `json:"stop"`
+		Step    int    `json:"step"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
+		return
+	}
+	mode := strings.ToLower(strings.TrimSpace(req.Mode))
+	switch mode {
+	case "once":
+		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
+		defer cancel()
+		pass, err := s.rhMgr.RunScanOnce(ctx, req.TimerID, req.Start, req.Stop, req.Step)
+		if err != nil {
+			writeJSONNoStore(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true, "scan": pass})
+	case "live":
+		if err := s.rhMgr.SetScanLive(req.TimerID, true, req.Start, req.Stop, req.Step); err != nil {
+			writeJSONNoStore(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		s.realEngine.SetRHDebugStream(req.TimerID, false)
+		writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true, "scanLive": true})
+	case "stop":
+		if err := s.rhMgr.SetScanLive(req.TimerID, false, req.Start, req.Stop, req.Step); err != nil {
+			writeJSONNoStore(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
+			return
+		}
+		writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true, "scanLive": false})
+	default:
+		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid scan mode (expected once, live, or stop)"})
+	}
 }
 
 // Ensure net package referenced cleanly

@@ -3557,8 +3557,9 @@ export function syncMobileCarouselAfterRender(
     "scroll",
     () => {
       if (!carousel.dataset.mreProgTarget) {
-        carousel.classList.add("is-swiping");
-        syncVisiblePages();
+        if (!carousel.classList.contains("is-swiping")) {
+          carousel.classList.add("is-swiping");
+        }
         if (!isGestureHeld) {
           scheduleSwipeSettle(140);
         }

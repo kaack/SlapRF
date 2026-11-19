@@ -30,17 +30,67 @@ type SerialPortOpener func(portName string, baud int) (SerialPort, error)
 // 115200 (ESP32-C5 `FPVGateC5MK`, Arduino Nano, RP2040, USB-CDC) then 921600 (STM32 `S32_BPill`).
 var DefaultRHSerialBauds = []int{115200, 921600}
 
+const (
+	// RHMinScanFreqMHz and RHMaxScanFreqMHz bound RotorHazard USB spectrum sweeps to 5180..5917 MHz
+	// so every swept bin is accepted by both FPVGateC5MK (ESP32-C5) and standard RX5808 RH USB nodes.
+	RHMinScanFreqMHz = 5180
+	RHMaxScanFreqMHz = 5917
+)
+
+type serialScanOnceReq struct {
+	startMHz int
+	stopMHz  int
+	stepMHz  int
+	resCh    chan serialScanOnceResp
+}
+
+type serialScanOnceResp struct {
+	pass domain.RHScanPass
+	err  error
+}
+
+// NormalizeRHScanGrid clamps a requested sweep grid into 5180..5917 MHz with uniform step spacing.
+func NormalizeRHScanGrid(startMHz, stopMHz, stepMHz int) (normStart, normStop, normStep int) {
+	if stepMHz < 1 {
+		stepMHz = 5
+	} else if stepMHz > 50 {
+		stepMHz = 50
+	}
+	if startMHz < RHMinScanFreqMHz {
+		startMHz = RHMinScanFreqMHz
+	}
+	if startMHz > RHMaxScanFreqMHz-stepMHz {
+		startMHz = RHMaxScanFreqMHz - stepMHz
+	}
+	if stopMHz <= startMHz {
+		stopMHz = RHMaxScanFreqMHz
+	}
+	if stopMHz > RHMaxScanFreqMHz {
+		stopMHz = RHMaxScanFreqMHz
+	}
+	if stopMHz < startMHz+stepMHz {
+		stopMHz = startMHz + stepMHz
+		if stopMHz > RHMaxScanFreqMHz {
+			stopMHz = RHMaxScanFreqMHz
+			startMHz = stopMHz - stepMHz
+		}
+	}
+	return startMHz, stopMHz, stepMHz
+}
+
 // SerialClientConfig configures a RotorHazard binary serial master (`SerialClient`).
 type SerialClientConfig struct {
-	PortName        string
-	BaudRate        int // 0 = auto-negotiate (115200 -> 921600)
-	OpenPort        SerialPortOpener
-	Hooks           ClientHooks
-	PollInterval    time.Duration // Default: 80ms (~12.5 Hz, well inside 5s idle timeout)
-	BootTimeout     time.Duration // Default: 2200ms (absorbs USB DTR/RTS bootloader chill + banner)
-	ReadTimeout     time.Duration // Default: 150ms
-	RxSettleDelay   time.Duration // Default: 30ms before TEST_RX_REGISTER (0x04) on API >= 36
-	NoRxSettleDelay bool          // True for deterministic synchronous simulator loopback
+	PortName         string
+	BaudRate         int // 0 = auto-negotiate (115200 -> 921600)
+	OpenPort         SerialPortOpener
+	Hooks            ClientHooks
+	PollInterval     time.Duration // Default: 80ms (~12.5 Hz, well inside 5s idle timeout)
+	BootTimeout      time.Duration // Default: 2200ms (absorbs USB DTR/RTS bootloader chill + banner)
+	ReadTimeout      time.Duration // Default: 150ms
+	RxSettleDelay    time.Duration // Default: 30ms before TEST_RX_REGISTER (0x04) on API >= 36
+	SweepSettleDelay time.Duration // Default: 35ms per multi-node frequency batch during spectrum scan
+	NoRxSettleDelay  bool          // True for deterministic synchronous simulator loopback
+	SweepFeed        func(freqs []uint16)
 }
 
 // SerialSession represents an active handshaken RotorHazard serial connection that can be driven
@@ -88,6 +138,16 @@ type SerialClient struct {
 	passingCounter uint32
 	minRttUs       uint64
 
+	scanLive          bool
+	scanStartMHz      int
+	scanStopMHz       int
+	scanStepMHz       int
+	scanSeq           uint64
+	latestScan        *domain.RHScanPass
+	scanOncePending   *serialScanOnceReq
+	savedInitFreqs    [domain.MaxPilotSlots]uint16
+	needsInitFreqSync bool
+
 	wakeCh chan struct{}
 }
 
@@ -105,10 +165,16 @@ func NewSerialClient(cfg SerialClientConfig) *SerialClient {
 	if cfg.RxSettleDelay <= 0 && !cfg.NoRxSettleDelay {
 		cfg.RxSettleDelay = 30 * time.Millisecond
 	}
+	if cfg.SweepSettleDelay <= 0 && !cfg.NoRxSettleDelay {
+		cfg.SweepSettleDelay = 45 * time.Millisecond
+	}
 	c := &SerialClient{
 		cfg:          cfg,
 		nodeCount:    1,
 		desiredArmed: true,
+		scanStartMHz: RHMinScanFreqMHz,
+		scanStopMHz:  RHMaxScanFreqMHz,
+		scanStepMHz:  5,
 		wakeCh:       make(chan struct{}, 1),
 	}
 	c.resetTrackingLocked()
@@ -122,6 +188,91 @@ func (c *SerialClient) resetTrackingLocked() {
 		c.appliedEnter[i] = -1
 		c.appliedExit[i] = -1
 		c.lastLapID[i] = -1
+	}
+}
+
+func (c *SerialClient) invalidateAppliedFreqsLocked() {
+	for i := 0; i < domain.MaxPilotSlots; i++ {
+		c.appliedFreqs[i] = -1
+		c.lastLapID[i] = -1
+	}
+	if !c.hasDesired {
+		c.needsInitFreqSync = true
+	}
+}
+
+func (c *SerialClient) wake() {
+	select {
+	case c.wakeCh <- struct{}{}:
+	default:
+	}
+}
+
+// SetScanLive starts or stops continuous 0..255 RSSI spectrum sweeping across all receiver nodes.
+// When stopped, configured timing frequencies are restored on the next serial cycle.
+func (c *SerialClient) SetScanLive(active bool, startMHz, stopMHz, stepMHz int) {
+	c.mu.Lock()
+	if active {
+		s, e, st := NormalizeRHScanGrid(startMHz, stopMHz, stepMHz)
+		if !c.scanLive {
+			c.savedInitFreqs = c.reportedFreqs
+		}
+		c.scanStartMHz = s
+		c.scanStopMHz = e
+		c.scanStepMHz = st
+		c.scanLive = true
+	} else {
+		wasLive := c.scanLive
+		c.scanLive = false
+		c.latestScan = nil
+		if wasLive {
+			c.invalidateAppliedFreqsLocked()
+		}
+	}
+	c.mu.Unlock()
+	c.wake()
+}
+
+// IsScanLive reports whether continuous spectrum scan mode is active on this USB client.
+func (c *SerialClient) IsScanLive() bool {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.scanLive
+}
+
+// RunScanOnce queues a single full-band spectrum sweep on an asynchronous `RunOnce` session,
+// waits for completion, and restores configured node frequencies before returning.
+func (c *SerialClient) RunScanOnce(ctx context.Context, startMHz, stopMHz, stepMHz int) (domain.RHScanPass, error) {
+	s, e, st := NormalizeRHScanGrid(startMHz, stopMHz, stepMHz)
+	req := &serialScanOnceReq{
+		startMHz: s,
+		stopMHz:  e,
+		stepMHz:  st,
+		resCh:    make(chan serialScanOnceResp, 1),
+	}
+
+	c.mu.Lock()
+	if !c.connected {
+		c.mu.Unlock()
+		return domain.RHScanPass{}, fmt.Errorf("RotorHazard USB device is not connected")
+	}
+	if !c.scanLive {
+		c.savedInitFreqs = c.reportedFreqs
+	}
+	c.scanLive = false
+	c.latestScan = nil
+	if prev := c.scanOncePending; prev != nil {
+		prev.resCh <- serialScanOnceResp{err: fmt.Errorf("superseded by newer spectrum scan")}
+	}
+	c.scanOncePending = req
+	c.mu.Unlock()
+	c.wake()
+
+	select {
+	case <-ctx.Done():
+		return domain.RHScanPass{}, ctx.Err()
+	case resp := <-req.resCh:
+		return resp.pass, resp.err
 	}
 }
 
@@ -139,11 +290,11 @@ func (c *SerialClient) SyncNodesAndArm(nodes [domain.MaxPilotSlots]NodeConfig, a
 	c.desiredNodes = nodes
 	c.desiredArmed = armed
 	c.hasDesired = true
+	c.needsInitFreqSync = false
+	isScanning := c.scanLive || c.scanOncePending != nil
 	c.mu.Unlock()
-
-	select {
-	case c.wakeCh <- struct{}{}:
-	default:
+	if !isScanning {
+		c.wake()
 	}
 }
 
@@ -162,6 +313,14 @@ func (c *SerialClient) snapshotLocked() ClientStatusSnapshot {
 	raceStatus := RHRaceStatusReady
 	if c.desiredArmed {
 		raceStatus = RHRaceStatusRacing
+	}
+	var scanCopy *domain.RHScanPass
+	if c.latestScan != nil {
+		vals := make([]float32, len(c.latestScan.Values))
+		copy(vals, c.latestScan.Values)
+		cp := *c.latestScan
+		cp.Values = vals
+		scanCopy = &cp
 	}
 	return ClientStatusSnapshot{
 		Connected:       c.connected,
@@ -184,6 +343,8 @@ func (c *SerialClient) snapshotLocked() ClientStatusSnapshot {
 		NodeExitLevels:  c.reportedExit,
 		NodeFreqsMHz:    c.reportedFreqs,
 		EnvSummary:      c.envSummaryLocked(),
+		ScanLive:        c.scanLive,
+		LastScan:        scanCopy,
 	}
 }
 
@@ -208,6 +369,12 @@ func (c *SerialClient) markDisconnected() {
 	c.mu.Lock()
 	wasConn := c.connected
 	c.connected = false
+	c.scanLive = false
+	c.latestScan = nil
+	if pending := c.scanOncePending; pending != nil {
+		c.scanOncePending = nil
+		pending.resCh <- serialScanOnceResp{err: fmt.Errorf("RotorHazard USB device disconnected")}
+	}
 	c.resetTrackingLocked()
 	snap := c.snapshotLocked()
 	metaCb := c.cfg.Hooks.OnMeta
@@ -317,6 +484,10 @@ func (s *SerialSession) selectSeat(seat int) error {
 		s.curSeat = 0
 		return nil
 	}
+	if seat < 0 {
+		s.curSeat = -1
+		return nil
+	}
 	if s.curSeat == seat {
 		return nil
 	}
@@ -336,6 +507,28 @@ func (s *SerialSession) selectSeat(seat int) error {
 // Step executes one full RotorHazard USB register-sync + multi-seat poll cycle.
 func (s *SerialSession) Step(ctx context.Context, emitHeartbeat bool) error {
 	return s.client.stepOnce(ctx, s.port, s.nodeCount, s.apiLvl, s.selectSeat, emitHeartbeat)
+}
+
+// SweepOnce runs a single synchronous 0..255 RSSI spectrum sweep across `startMHz..stopMHz` on `s`
+// and restores configured node frequencies immediately afterwards.
+func (s *SerialSession) SweepOnce(ctx context.Context, startMHz, stopMHz, stepMHz int) (domain.RHScanPass, error) {
+	normStart, normStop, normStep := NormalizeRHScanGrid(startMHz, stopMHz, stepMHz)
+	s.client.mu.Lock()
+	if !s.client.scanLive {
+		s.client.savedInitFreqs = s.client.reportedFreqs
+	}
+	s.client.scanLive = false
+	s.client.latestScan = nil
+	s.client.mu.Unlock()
+
+	pass, err := s.client.executeSweepPass(ctx, s.port, s.nodeCount, s.apiLvl, s.selectSeat, normStart, normStop, normStep, false)
+	s.client.mu.Lock()
+	s.client.invalidateAppliedFreqsLocked()
+	s.client.mu.Unlock()
+	if rErr := s.client.restoreFrequenciesAfterScan(ctx, s.port, s.nodeCount, s.apiLvl, s.selectSeat); rErr != nil && err == nil {
+		err = rErr
+	}
+	return pass, err
 }
 
 // Close closes the underlying serial port and marks the client disconnected.
@@ -428,6 +621,16 @@ func (c *SerialClient) RunOnce(ctx context.Context, onReady func(error)) error {
 			consecutiveErrs = 0
 		}
 
+		if c.IsScanLive() {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-c.wakeCh:
+			case <-time.After(4 * time.Millisecond):
+			}
+			continue
+		}
+
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -435,6 +638,296 @@ func (c *SerialClient) RunOnce(ctx context.Context, onReady func(error)) error {
 		case <-ticker.C:
 		}
 	}
+}
+
+func (c *SerialClient) executeSweepPass(
+	ctx context.Context,
+	port SerialPort,
+	nodeCount int,
+	apiLvl int,
+	selectSeat func(seat int) error,
+	startMHz int,
+	stopMHz int,
+	stepMHz int,
+	isLive bool,
+) (domain.RHScanPass, error) {
+	if nodeCount < 1 {
+		nodeCount = 1
+	} else if nodeCount > domain.MaxPilotSlots {
+		nodeCount = domain.MaxPilotSlots
+	}
+	startMHz, stopMHz, stepMHz = NormalizeRHScanGrid(startMHz, stopMHz, stepMHz)
+	numBins := (stopMHz-startMHz)/stepMHz + 1
+	freqs := make([]uint16, numBins)
+	for i := 0; i < numBins; i++ {
+		freqs[i] = uint16(startMHz + i*stepMHz)
+	}
+
+	disabledFreq := SeatDisabledFreqMHz
+	if apiLvl < 24 {
+		disabledFreq = LegacyDisabledFreq
+	}
+
+	tStartUs := c.nowUs()
+	values := make([]float32, numBins)
+
+	var batchFreqs [domain.MaxPilotSlots]uint16
+	for base := 0; base < numBins; base += nodeCount {
+		if ctx.Err() != nil {
+			return domain.RHScanPass{}, ctx.Err()
+		}
+		// If a live scan was cancelled mid-pass, abort early so timing nodes restore right away.
+		if isLive && !c.IsScanLive() {
+			return domain.RHScanPass{}, nil
+		}
+
+		batchLen := numBins - base
+		if batchLen > nodeCount {
+			batchLen = nodeCount
+		}
+
+		// Program all `nodeCount` seats individually with readback confirmation so every seat is
+		// guaranteed tuned across USB-JTAG before waiting for the radio scan cycle to settle.
+		for seat := 0; seat < nodeCount; seat++ {
+			if ctx.Err() != nil {
+				return domain.RHScanPass{}, ctx.Err()
+			}
+			targetFreq := disabledFreq
+			if seat < batchLen {
+				targetFreq = avoidNewlineInFreqWrite(freqs[base+seat])
+			}
+			batchFreqs[seat] = targetFreq
+			if err := c.writeSweepSeatFreq(port, selectSeat, seat, targetFreq); err != nil {
+				return domain.RHScanPass{}, err
+			}
+		}
+
+		// Wait for the multi-node radio scan cycle to complete across all 8 seats.
+		// After all 8 seats are programmed, `seat 0` is sampled first and `seat (batchLen-1)` is
+		// sampled last in the scan cycle (`Core::scanCycle`). Polling `seat 0` until its reported
+		// RSSI exceeds 1 confirms the retuned scan cycle has begun delivering settled samples.
+		if !c.cfg.NoRxSettleDelay {
+			if c.cfg.SweepSettleDelay > 0 {
+				select {
+				case <-ctx.Done():
+					return domain.RHScanPass{}, ctx.Err()
+				case <-time.After(c.cfg.SweepSettleDelay):
+				}
+			}
+			for pollTry := 0; pollTry < 6; pollTry++ {
+				if err := selectSeat(0); err != nil {
+					return domain.RHScanPass{}, err
+				}
+				var r0 byte
+				if apiLvl >= 32 {
+					ps, err := c.readCommand(port, CmdReadLapPassStats, 8)
+					if err != nil {
+						return domain.RHScanPass{}, err
+					}
+					r0 = ps[3]
+				} else {
+					ls, err := c.readCommand(port, CmdReadLapStats, 16)
+					if err != nil {
+						return domain.RHScanPass{}, err
+					}
+					r0 = ls[3]
+				}
+				if r0 > 1 {
+					values[base] = float32(r0)
+					break
+				}
+				select {
+				case <-ctx.Done():
+					return domain.RHScanPass{}, ctx.Err()
+				case <-time.After(12 * time.Millisecond):
+				}
+			}
+		}
+		if c.cfg.SweepFeed != nil {
+			c.cfg.SweepFeed(batchFreqs[:nodeCount])
+		}
+
+		// Read seats `0..batchLen-1` (skipping seat 0 if already populated above).
+		for seat := 0; seat < batchLen; seat++ {
+			if seat == 0 && !c.cfg.NoRxSettleDelay && values[base] > 1 {
+				continue
+			}
+			if ctx.Err() != nil {
+				return domain.RHScanPass{}, ctx.Err()
+			}
+			if err := selectSeat(seat); err != nil {
+				return domain.RHScanPass{}, err
+			}
+			if apiLvl >= 32 {
+				ps, err := c.readCommand(port, CmdReadLapPassStats, 8)
+				if err != nil {
+					return domain.RHScanPass{}, err
+				}
+				values[base+seat] = float32(ps[3])
+				if !c.cfg.NoRxSettleDelay && values[base+seat] <= 1 {
+					select {
+					case <-ctx.Done():
+						return domain.RHScanPass{}, ctx.Err()
+					case <-time.After(14 * time.Millisecond):
+					}
+					if ps2, err2 := c.readCommand(port, CmdReadLapPassStats, 8); err2 == nil {
+						values[base+seat] = float32(ps2[3])
+					}
+				}
+			} else {
+				ls, err := c.readCommand(port, CmdReadLapStats, 16)
+				if err != nil {
+					return domain.RHScanPass{}, err
+				}
+				values[base+seat] = float32(ls[3])
+			}
+		}
+	}
+
+	tEndUs := c.nowUs()
+	_ = selectSeat(-1)
+	passMs := 1
+	if tEndUs > tStartUs {
+		passMs = int((tEndUs - tStartUs) / 1000)
+		if passMs < 1 {
+			passMs = 1
+		}
+	}
+	actualStop := startMHz + (numBins-1)*stepMHz
+
+	c.mu.Lock()
+	c.scanSeq++
+	seq := c.scanSeq
+	c.heartbeatsRx++
+	c.mu.Unlock()
+
+	return domain.RHScanPass{
+		Seq:    seq,
+		Start:  startMHz,
+		Stop:   actualStop,
+		Step:   stepMHz,
+		PassMs: passMs,
+		Live:   isLive,
+		Values: values,
+	}, nil
+}
+
+func (c *SerialClient) writeSweepSeatFreq(
+	port SerialPort,
+	selectSeat func(seat int) error,
+	seat int,
+	targetFreq uint16,
+) error {
+	var payload [2]byte
+	binary.BigEndian.PutUint16(payload[:], targetFreq)
+	for attempt := 0; attempt < 3; attempt++ {
+		if err := selectSeat(seat); err != nil {
+			return err
+		}
+		if err := c.writeCommand(port, CmdWriteFrequency, payload[:]); err != nil {
+			return err
+		}
+		rb, err := c.readCommand(port, CmdReadFrequency, 2)
+		if err != nil {
+			return err
+		}
+		if len(rb) == 2 && binary.BigEndian.Uint16(rb) == targetFreq {
+			return nil
+		}
+		_ = selectSeat(-1)
+	}
+	return nil
+}
+
+// avoidNewlineInFreqWrite nudges a sweep bin frequency by +1 MHz when its 2-byte big-endian
+// representation `[hi, lo]` or its RotorHazard checksum `byte(hi+lo)` equals `0x0A` (`\n`).
+// On FPVGateC5MK, the ~10 MHz band-power meter has a flat passband over +-1 MHz, and avoiding
+// `0x0A` prevents `usbByte()` from ever seeing a newline byte inside binary frequency sweeps.
+func avoidNewlineInFreqWrite(f uint16) uint16 {
+	for tries := 0; tries < 3; tries++ {
+		hi := byte(f >> 8)
+		lo := byte(f)
+		sum := hi + lo
+		if hi != 0x0A && lo != 0x0A && sum != 0x0A {
+			return f
+		}
+		if f < RHMaxScanFreqMHz {
+			f++
+		} else {
+			f--
+		}
+	}
+	return f
+}
+
+func (c *SerialClient) restoreFrequenciesAfterScan(
+	ctx context.Context,
+	port SerialPort,
+	nodeCount int,
+	apiLvl int,
+	selectSeat func(seat int) error,
+) error {
+	c.mu.Lock()
+	hasDesired := c.hasDesired
+	desiredNodes := c.desiredNodes
+	savedInit := c.savedInitFreqs
+	needsInit := c.needsInitFreqSync
+	c.needsInitFreqSync = false
+	c.mu.Unlock()
+
+	disabledFreq := SeatDisabledFreqMHz
+	if apiLvl < 24 {
+		disabledFreq = LegacyDisabledFreq
+	}
+
+	if hasDesired {
+		for seat := 0; seat < nodeCount; seat++ {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			want := desiredNodes[seat]
+			targetFreq := disabledFreq
+			isActiveChan := want.Enabled && want.FrequencyMHz > 0
+			if isActiveChan {
+				targetFreq = want.FrequencyMHz
+			}
+			if err := c.writeAndVerifyFreq(ctx, port, seat, apiLvl, targetFreq, isActiveChan, selectSeat); err != nil {
+				return err
+			}
+			c.mu.Lock()
+			c.appliedFreqs[seat] = int(targetFreq)
+			if isActiveChan {
+				c.reportedFreqs[seat] = targetFreq
+			} else {
+				c.reportedFreqs[seat] = 0
+			}
+			c.lastLapID[seat] = -1
+			c.mu.Unlock()
+		}
+		return nil
+	}
+
+	if needsInit {
+		for seat := 0; seat < nodeCount; seat++ {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			orig := savedInit[seat]
+			targetFreq := disabledFreq
+			isActiveChan := orig > 0 && orig != SeatDisabledFreqMHz
+			if isActiveChan {
+				targetFreq = orig
+			}
+			if err := c.writeAndVerifyFreq(ctx, port, seat, apiLvl, targetFreq, isActiveChan, selectSeat); err != nil {
+				return err
+			}
+			c.mu.Lock()
+			c.reportedFreqs[seat] = orig
+			c.lastLapID[seat] = -1
+			c.mu.Unlock()
+		}
+	}
+	return nil
 }
 
 func (c *SerialClient) stepOnce(
@@ -445,6 +938,52 @@ func (c *SerialClient) stepOnce(
 	selectSeat func(seat int) error,
 	emitHeartbeat bool,
 ) error {
+	c.mu.Lock()
+	onceReq := c.scanOncePending
+	c.scanOncePending = nil
+	scanLive := c.scanLive
+	scanStart := c.scanStartMHz
+	scanStop := c.scanStopMHz
+	scanStep := c.scanStepMHz
+	needsInitRestore := !scanLive && onceReq == nil && c.needsInitFreqSync
+	c.mu.Unlock()
+
+	if onceReq != nil {
+		pass, err := c.executeSweepPass(ctx, port, nodeCount, apiLvl, selectSeat, onceReq.startMHz, onceReq.stopMHz, onceReq.stepMHz, false)
+		c.mu.Lock()
+		c.invalidateAppliedFreqsLocked()
+		c.mu.Unlock()
+		if rErr := c.restoreFrequenciesAfterScan(ctx, port, nodeCount, apiLvl, selectSeat); rErr != nil && err == nil {
+			err = rErr
+		}
+		onceReq.resCh <- serialScanOnceResp{pass: pass, err: err}
+		return err
+	}
+
+	if scanLive {
+		c.mu.Lock()
+		c.invalidateAppliedFreqsLocked()
+		c.mu.Unlock()
+		pass, err := c.executeSweepPass(ctx, port, nodeCount, apiLvl, selectSeat, scanStart, scanStop, scanStep, true)
+		if err != nil {
+			return err
+		}
+		if len(pass.Values) > 0 {
+			c.mu.Lock()
+			if c.scanLive {
+				c.latestScan = &pass
+			}
+			c.mu.Unlock()
+		}
+		return nil
+	}
+
+	if needsInitRestore {
+		if err := c.restoreFrequenciesAfterScan(ctx, port, nodeCount, apiLvl, selectSeat); err != nil {
+			return err
+		}
+	}
+
 	c.mu.Lock()
 	hasDesired := c.hasDesired
 	desiredNodes := c.desiredNodes
@@ -817,6 +1356,34 @@ func (c *SerialClient) writeCommand(port SerialPort, cmd byte, payload []byte) e
 		}
 	}
 	return nil
+}
+
+func (c *SerialClient) readExactBytes(port SerialPort, total int) error {
+	_, err := c.readExactSlice(port, total)
+	return err
+}
+
+func (c *SerialClient) readExactSlice(port SerialPort, total int) ([]byte, error) {
+	buf := make([]byte, total)
+	off := 0
+	deadline := time.Now().Add(c.cfg.ReadTimeout * 4)
+	for off < total {
+		nr, err := port.Read(buf[off:])
+		if nr > 0 {
+			off += nr
+			continue
+		}
+		if err != nil {
+			if strings.Contains(strings.ToLower(err.Error()), "timeout") && time.Now().Before(deadline) {
+				continue
+			}
+			return nil, err
+		}
+		if time.Now().After(deadline) {
+			return nil, ErrSerialTimeout
+		}
+	}
+	return buf, nil
 }
 
 func (c *SerialClient) readCommand(port SerialPort, cmd byte, payloadLen int) ([]byte, error) {

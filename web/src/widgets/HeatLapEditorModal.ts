@@ -1,3 +1,4 @@
+import { computeDirectionalPinch, computeWheelZoomFactors, PinchPoint } from "../core/chart_pinch";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
@@ -1555,6 +1556,20 @@ export function openHeatLapEditorModal(
     }
   };
 
+  const touchPts = new Map<number, { px: PinchPoint; svgX: number; svgY: number }>();
+  let pinchState: {
+    id1: number;
+    id2: number;
+    p1Start: PinchPoint;
+    p2Start: PinchPoint;
+    startMinMs: number;
+    startMaxMs: number;
+    startMinDbm: number;
+    startMaxDbm: number;
+    anchorXFrac: number;
+    anchorYFrac: number;
+  } | null = null;
+
   const onPointerDown = (e: PointerEvent): void => {
     if (e.pointerType === "mouse" && e.button !== 0) return;
     const target = e.target as Element | null;
@@ -1567,6 +1582,45 @@ export function openHeatLapEditorModal(
 
     const plotW = getPlotW();
     const { svgX, svgY } = clientToSvgCoords(svg, e.clientX, e.clientY);
+
+    if (e.pointerType === "touch") {
+      const svgRect = svg.getBoundingClientRect();
+      touchPts.set(e.pointerId, {
+        px: { x: e.clientX - svgRect.left, y: e.clientY - svgRect.top },
+        svgX,
+        svgY,
+      });
+      try {
+        backdrop.setPointerCapture(e.pointerId);
+      } catch {
+        // Ignore capture failure
+      }
+      if (touchPts.size >= 2) {
+        e.preventDefault();
+        cancelPanAnim();
+        viewDrag = null;
+        threshDrag = null;
+        dragState = null;
+        hoverInfo = null;
+        const [[id1, pt1], [id2, pt2]] = Array.from(touchPts.entries());
+        const midSvgX = (pt1.svgX + pt2.svgX) * 0.5;
+        const midSvgY = (pt1.svgY + pt2.svgY) * 0.5;
+        pinchState = {
+          id1,
+          id2,
+          p1Start: { ...pt1.px },
+          p2Start: { ...pt2.px },
+          startMinMs: lastDomain.minMs,
+          startMaxMs: lastDomain.maxMs,
+          startMinDbm: lastYDomain.minDbm,
+          startMaxDbm: lastYDomain.maxDbm,
+          anchorXFrac: clamp((midSvgX - PAD_L) / plotW, 0, 1),
+          anchorYFrac: clamp(1 - (midSvgY - PAD_T) / PLOT_H, 0, 1),
+        };
+        refreshSvgOnly();
+        return;
+      }
+    }
 
     // 1. Axis scale drag (Y-axis on left, X-axis on bottom) — works even if heat is locked
     const axisEl = target.closest("[data-axis-drag]");
@@ -1714,6 +1768,43 @@ export function openHeatLapEditorModal(
     const { heat, seat } = getHeatAndSeat();
     if (!svg || !heat || !seat) return;
 
+    if (e.pointerType === "touch" && touchPts.has(e.pointerId)) {
+      const svgRect = svg.getBoundingClientRect();
+      const { svgX, svgY } = clientToSvgCoords(svg, e.clientX, e.clientY);
+      touchPts.set(e.pointerId, {
+        px: { x: e.clientX - svgRect.left, y: e.clientY - svgRect.top },
+        svgX,
+        svgY,
+      });
+      if (pinchState) {
+        const pt1 = touchPts.get(pinchState.id1);
+        const pt2 = touchPts.get(pinchState.id2);
+        if (pt1 && pt2) {
+          const plotW = getPlotW();
+          const pinch = computeDirectionalPinch(pinchState.p1Start, pinchState.p2Start, pt1.px, pt2.px);
+          if (pinch.mode === "x" || pinch.mode === "xy") {
+            const startSpanMs = pinchState.startMaxMs - pinchState.startMinMs;
+            const nextSpanMs = clamp(startSpanMs * pinch.xSpanFactor, MIN_X_SPAN_MS, MAX_X_SPAN_MS);
+            const anchorMs = pinchState.startMinMs + pinchState.anchorXFrac * startSpanMs;
+            const liveXFrac = clamp(((pt1.svgX + pt2.svgX) * 0.5 - PAD_L) / plotW, 0, 1);
+            const nextMinMs = anchorMs - liveXFrac * nextSpanMs;
+            customX = clampXDomain(nextMinMs, nextMinMs + nextSpanMs);
+          }
+          if (pinch.mode === "y" || pinch.mode === "xy") {
+            const startSpanDb = pinchState.startMaxDbm - pinchState.startMinDbm;
+            const { minSpan, maxSpan } = ySpanBounds(lastSeatHwMode);
+            const nextSpanDb = clamp(startSpanDb * pinch.ySpanFactor, minSpan, maxSpan);
+            const anchorDb = pinchState.startMinDbm + pinchState.anchorYFrac * startSpanDb;
+            const liveYFrac = clamp(1 - ((pt1.svgY + pt2.svgY) * 0.5 - PAD_T) / PLOT_H, 0, 1);
+            const nextMinDb = anchorDb - liveYFrac * nextSpanDb;
+            customY = clampYDomain(nextMinDb, nextMinDb + nextSpanDb);
+          }
+          refreshSvgOnly();
+        }
+        return;
+      }
+    }
+
     if (viewDrag) {
       const plotW = getPlotW();
       const { svgX, svgY } = clientToSvgCoords(svg, e.clientX, e.clientY);
@@ -1817,6 +1908,36 @@ export function openHeatLapEditorModal(
   };
 
   const onPointerUp = (e: PointerEvent): void => {
+    if (e.pointerType === "touch") {
+      touchPts.delete(e.pointerId);
+      if (pinchState !== null) {
+        try {
+          backdrop.releasePointerCapture(e.pointerId);
+        } catch {
+          // Ignore
+        }
+        if (touchPts.size < 2) {
+          pinchState = null;
+          if (touchPts.size === 1) {
+            const [[remId, remPt]] = Array.from(touchPts.entries());
+            viewDrag = {
+              mode: "pan",
+              pointerId: remId,
+              startSvgX: remPt.svgX,
+              startSvgY: remPt.svgY,
+              startMinMs: lastDomain.minMs,
+              startMaxMs: lastDomain.maxMs,
+              startMinDbm: lastYDomain.minDbm,
+              startMaxDbm: lastYDomain.maxDbm,
+              anchorFrac: 0.5,
+            };
+          }
+          refreshSvgOnly();
+        }
+        return;
+      }
+    }
+
     if (viewDrag) {
       viewDrag = null;
       try {
@@ -1899,8 +2020,32 @@ export function openHeatLapEditorModal(
     const plotW = getPlotW();
     const { svgX, svgY } = clientToSvgCoords(svg, e.clientX, e.clientY);
 
+    // Modifier wheel zoom (Ctrl/Meta = Diagonal X+Y, Shift = X-only, Alt = Y-only)
+    const modWf = computeWheelZoomFactors(e);
+    if (modWf) {
+      if (modWf.mode === "x" || modWf.mode === "xy") {
+        const spanMs = lastDomain.maxMs - lastDomain.minMs;
+        const xFrac = clamp((svgX - PAD_L) / plotW, 0, 1);
+        const anchorMs = lastDomain.minMs + xFrac * spanMs;
+        const nextSpan = clamp(spanMs * modWf.xSpanFactor, MIN_X_SPAN_MS, MAX_X_SPAN_MS);
+        const nextMin = anchorMs - xFrac * nextSpan;
+        customX = clampXDomain(nextMin, nextMin + nextSpan);
+      }
+      if (modWf.mode === "y" || modWf.mode === "xy") {
+        const spanDb = lastYDomain.maxDbm - lastYDomain.minDbm;
+        const yFrac = clamp(1 - (svgY - PAD_T) / PLOT_H, 0, 1);
+        const anchorDbm = lastYDomain.minDbm + yFrac * spanDb;
+        const { minSpan, maxSpan } = ySpanBounds(lastSeatHwMode);
+        const nextSpan = clamp(spanDb * modWf.ySpanFactor, minSpan, maxSpan);
+        const nextMin = anchorDbm - yFrac * nextSpan;
+        customY = clampYDomain(nextMin, nextMin + nextSpan);
+      }
+      refreshSvgOnly();
+      return;
+    }
+
     // Horizontal trackpad scroll -> pan X
-    if (Math.abs(e.deltaX) > Math.abs(e.deltaY) && !e.ctrlKey && !e.shiftKey) {
+    if (Math.abs(e.deltaX) > Math.abs(e.deltaY)) {
       const spanMs = lastDomain.maxMs - lastDomain.minMs;
       const deltaMs = (clamp(e.deltaX, -160, 160) / plotW) * spanMs;
       customX = clampXDomain(lastDomain.minMs + deltaMs, lastDomain.maxMs + deltaMs);
@@ -1910,8 +2055,8 @@ export function openHeatLapEditorModal(
 
     const factor = Math.exp(clamp(e.deltaY, -120, 120) * 0.0022);
 
-    // Shift+Wheel or wheeling directly over the left Y-axis -> zoom Y scale
-    if (e.shiftKey || svgX < PAD_L) {
+    // Wheeling directly over the left Y-axis -> zoom Y scale
+    if (svgX < PAD_L) {
       const spanDb = lastYDomain.maxDbm - lastYDomain.minDbm;
       const yFrac = clamp(1 - (svgY - PAD_T) / PLOT_H, 0, 1);
       const anchorDbm = lastYDomain.minDbm + yFrac * spanDb;

@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"slaprf/internal/domain"
 )
@@ -177,5 +178,66 @@ func TestPatchMergedImageRepairsChecksumAndSHA(t *testing.T) {
 	want := sha256.Sum256(out[appOff : pos+1])
 	if !bytes.Equal(out[pos+1:pos+33], want[:]) {
 		t.Fatal("appended SHA-256 not updated")
+	}
+}
+
+type fakeSplitSerialPort struct {
+	ops []string
+}
+
+func (f *fakeSplitSerialPort) Read([]byte) (int, error)          { return 0, nil }
+func (f *fakeSplitSerialPort) Write(b []byte) (int, error)       { return len(b), nil }
+func (f *fakeSplitSerialPort) Close() error                      { return nil }
+func (f *fakeSplitSerialPort) SetReadTimeout(time.Duration) error { return nil }
+func (f *fakeSplitSerialPort) SetDTR(v bool) error {
+	if v {
+		f.ops = append(f.ops, "DTR:1")
+	} else {
+		f.ops = append(f.ops, "DTR:0")
+	}
+	return nil
+}
+func (f *fakeSplitSerialPort) SetRTS(v bool) error {
+	if v {
+		f.ops = append(f.ops, "RTS:1")
+	} else {
+		f.ops = append(f.ops, "RTS:0")
+	}
+	return nil
+}
+
+type fakeAtomicSerialPort struct {
+	fakeSplitSerialPort
+	atomicOps []string
+}
+
+func (f *fakeAtomicSerialPort) SetDTRRTS(dtr, rts bool) error {
+	d, r := "0", "0"
+	if dtr {
+		d = "1"
+	}
+	if rts {
+		r = "1"
+	}
+	f.atomicOps = append(f.atomicOps, "ATOMIC:"+d+","+r)
+	return nil
+}
+
+func TestSetUSBSerialDTRRTSAtomicAndFallback(t *testing.T) {
+	split := &fakeSplitSerialPort{}
+	DisarmUSBJtagLatch(split)
+	wantSplit := "RTS:0,DTR:1,RTS:0,DTR:0"
+	if got := strings.Join(split.ops, ","); got != wantSplit {
+		t.Fatalf("split ops = %q, want %q", got, wantSplit)
+	}
+
+	atomicP := &fakeAtomicSerialPort{}
+	DisarmUSBJtagLatch(atomicP)
+	if len(atomicP.ops) != 0 {
+		t.Fatalf("expected zero split SetDTR/SetRTS calls when AtomicDTRRTSSetter is implemented, got %v", atomicP.ops)
+	}
+	wantAtomic := "ATOMIC:1,0,ATOMIC:0,0"
+	if got := strings.Join(atomicP.atomicOps, ","); got != wantAtomic {
+		t.Fatalf("atomic ops = %q, want %q", got, wantAtomic)
 	}
 }
