@@ -32,7 +32,7 @@ const PRECACHE = [
   },
   {
     "url": "firmware/slaprf-xiao-c5.bin",
-    "rev": "ffe9607ceb8bc7c0"
+    "rev": "ae54146430c6b039"
   },
   {
     "url": "icons/icon.svg",
@@ -40,7 +40,7 @@ const PRECACHE = [
   },
   {
     "url": "index.html",
-    "rev": "662a652270c3c5fd"
+    "rev": "3cc9236729a81df4"
   },
   {
     "url": "manifest.webmanifest",
@@ -52,11 +52,11 @@ const PRECACHE = [
   },
   {
     "url": "styles/base.css",
-    "rev": "904645e585effd7f"
+    "rev": "3dc95cc085da3906"
   },
   {
     "url": "styles/components.css",
-    "rev": "e288189a4d906749"
+    "rev": "c2e625be6045e98f"
   },
   {
     "url": "styles/layout.css",
@@ -64,22 +64,22 @@ const PRECACHE = [
   },
   {
     "url": "styles/tokens.css",
-    "rev": "53216252d0404d74"
+    "rev": "58c856642195148f"
   },
   {
     "url": "styles/views.css",
-    "rev": "19587760a93e6f1d"
+    "rev": "d4bc29aaad7e5f59"
   },
   {
     "url": "wasm/slaprf.wasm",
-    "rev": "fd0daccc7652e415"
+    "rev": "d1e412efb3825052"
   },
   {
     "url": "wasm/wasm_exec.js",
     "rev": "0c949f4996f9a896"
   }
 ];
-const VERSION = "524df1d038f84256";
+const VERSION = "cbb359c5e7b6aa50";
 
 const CACHE_PREFIX = "slaprf-precache-";
 const CACHE_NAME = CACHE_PREFIX + VERSION;
@@ -142,8 +142,12 @@ self.addEventListener("install", (event) => {
     self.skipWaiting();
     return;
   }
-  // Do NOT skipWaiting here: the page shows an "Update available" prompt and posts SKIP_WAITING.
-  event.waitUntil(precache());
+  event.waitUntil(
+    (async () => {
+      await precache();
+      await self.skipWaiting();
+    })(),
+  );
 });
 
 self.addEventListener("activate", (event) => {
