@@ -32,7 +32,7 @@ const PRECACHE = [
   },
   {
     "url": "firmware/slaprf-xiao-c5.bin",
-    "rev": "ae54146430c6b039"
+    "rev": "ffe9607ceb8bc7c0"
   },
   {
     "url": "icons/icon.svg",
@@ -40,7 +40,7 @@ const PRECACHE = [
   },
   {
     "url": "index.html",
-    "rev": "3cc9236729a81df4"
+    "rev": "662a652270c3c5fd"
   },
   {
     "url": "manifest.webmanifest",
@@ -52,11 +52,11 @@ const PRECACHE = [
   },
   {
     "url": "styles/base.css",
-    "rev": "3dc95cc085da3906"
+    "rev": "904645e585effd7f"
   },
   {
     "url": "styles/components.css",
-    "rev": "c2e625be6045e98f"
+    "rev": "e288189a4d906749"
   },
   {
     "url": "styles/layout.css",
@@ -64,7 +64,7 @@ const PRECACHE = [
   },
   {
     "url": "styles/tokens.css",
-    "rev": "58c856642195148f"
+    "rev": "53216252d0404d74"
   },
   {
     "url": "styles/views.css",
@@ -72,14 +72,14 @@ const PRECACHE = [
   },
   {
     "url": "wasm/slaprf.wasm",
-    "rev": "d1e412efb3825052"
+    "rev": "fd0daccc7652e415"
   },
   {
     "url": "wasm/wasm_exec.js",
     "rev": "0c949f4996f9a896"
   }
 ];
-const VERSION = "3a29d6a03da7edfa";
+const VERSION = "524df1d038f84256";
 
 const CACHE_PREFIX = "slaprf-precache-";
 const CACHE_NAME = CACHE_PREFIX + VERSION;
