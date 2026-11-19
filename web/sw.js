@@ -89,8 +89,12 @@ self.addEventListener("install", (event) => {
     self.skipWaiting();
     return;
   }
-  // Do NOT skipWaiting here: the page shows an "Update available" prompt and posts SKIP_WAITING.
-  event.waitUntil(precache());
+  event.waitUntil(
+    (async () => {
+      await precache();
+      await self.skipWaiting();
+    })(),
+  );
 });
 
 self.addEventListener("activate", (event) => {

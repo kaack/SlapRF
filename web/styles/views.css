@@ -2244,8 +2244,18 @@ html[data-theme="light"] .bar-time {
   padding: 28px 0;
   border-top: 1px solid var(--border);
 }
+.settings:has(> .settings-section.is-single-col) {
+  width: 100%;
+  max-width: 960px;
+  margin-left: auto;
+  margin-right: auto;
+}
 .settings-section.is-single-col {
   grid-template-columns: minmax(0, 1fr);
+  width: 100%;
+  max-width: 960px;
+  margin-left: auto;
+  margin-right: auto;
 }
 .settings-section:first-child {
   border-top: 0;
