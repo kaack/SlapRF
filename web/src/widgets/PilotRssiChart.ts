@@ -287,7 +287,10 @@ export class PilotRssiChart extends Component {
   }
 
   public setPilotSlotOverride(slotIndex: number | null): void {
-    if (this.pilotSlotOverride === slotIndex && !this.isMultiPilotMode) return;
+    if (this.pilotSlotOverride === slotIndex && !this.isMultiPilotMode) {
+      this.renderTuningDrawer();
+      return;
+    }
     this.pilotSlotOverride = slotIndex;
     if (slotIndex !== null) {
       this.multiPilotSlots = null;
@@ -314,7 +317,10 @@ export class PilotRssiChart extends Component {
         next !== null &&
         prev.length === next.length &&
         prev.every((v, idx) => v === next[idx]));
-    if (same) return;
+    if (same) {
+      this.renderTuningDrawer();
+      return;
+    }
     this.multiPilotSlots = next;
     if (next !== null) {
       this.pilotSlotOverride = null;

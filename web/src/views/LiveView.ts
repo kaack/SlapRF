@@ -3149,13 +3149,15 @@ export class LiveView extends Component {
       if (!this.practiceSignalsChart || !this.practiceSignalsChartEl) {
         this.practiceSignalsChartEl = document.createElement("div");
         this.practiceSignalsChartEl.className = "rc-signals-chart-inner";
+        chartHost.appendChild(this.practiceSignalsChartEl);
         this.practiceSignalsChart = new PilotRssiChart(
           this.practiceSignalsChartEl,
           this.workspaceStore,
           this.api
         );
+      } else {
+        chartHost.appendChild(this.practiceSignalsChartEl);
       }
-      chartHost.appendChild(this.practiceSignalsChartEl);
       this.practiceSignalsChart.setPilotSlotOverride(selectedSlot);
     }
     fitScheduleLineups(host);

@@ -2189,11 +2189,12 @@ export class RacesView extends Component {
     if (!this.raceSignalsChart || !this.raceSignalsChartEl) {
       this.raceSignalsChartEl = document.createElement("div");
       this.raceSignalsChartEl.className = "rc-signals-chart-inner";
+      host.innerHTML = "";
+      host.appendChild(this.raceSignalsChartEl);
       this.raceSignalsChart = new PilotRssiChart(this.raceSignalsChartEl, this.store, this.api, {
         contextMode: "race",
       });
-    }
-    if (this.raceSignalsChartEl.parentElement !== host) {
+    } else if (this.raceSignalsChartEl.parentElement !== host) {
       host.innerHTML = "";
       host.appendChild(this.raceSignalsChartEl);
     }
