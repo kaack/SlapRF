@@ -77,6 +77,15 @@ func (m *Manager) Connect(slotIndex int, portName string) (SlotSnapshot, error) 
 	slot.hubLastDbm = nil
 	slot.hubHello = make(map[uint8]slotHello)
 	slot.hubLive = make(map[uint8]slotLive)
+	slot.bleLiveMode = 0
+	slot.bleSeqInit = false
+	slot.bleLastSeq = 0
+	slot.bleStaleCount = 0
+	slot.bleSweepN = 0
+	slot.bleFloorQ4 = [8]int16{}
+	slot.bleFloorSet = [8]bool{}
+	slot.blePeak = [8]int{-127, -127, -127, -127, -127, -127, -127, -127}
+	slot.bleHits = [8]int{}
 	slot.mu.Unlock()
 
 	if slotIndex == 1 {
@@ -345,7 +354,7 @@ func (m *Manager) probeInitialStatus(slot *usbSlot, timeout time.Duration) (map[
 		cmd := "STATUS?"
 		if first {
 			if isBLE {
-				cmd = fmt.Sprintf("AUTH %s\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?", m.BLEHostKey())
+				cmd = fmt.Sprintf("AUTH %s\nBLESYNC 0\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?", m.BLEHostKey())
 			} else {
 				cmd = "LIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?"
 			}
@@ -399,10 +408,60 @@ func (m *Manager) SendCommand(slotIndex int, cmd string) error {
 	slot := m.slots[slotIndex]
 	slot.mu.Lock()
 	port := slot.port
+	pName := slot.portName
 	slot.mu.Unlock()
 	if port == nil {
 		return errors.New("USB port is not connected")
 	}
+
+	if IsBLEPortName(pName) {
+		// Over Bluetooth LE, every 100 Hz sweep is already delivered with 2x sliding-window
+		// redundancy inside compact 45-byte binary 0xC5 0x60 frames (~2.2 KB/s). Turning on ASCII
+		// JSON `LIVE 2` on the Hub would add ~24 KB/s of redundant text and saturate 15-30 ms BLE
+		// intervals, so we synthesize `live` events locally from 0xC5 0x60 frames with zero air overhead.
+		rawLines := strings.Split(strings.ReplaceAll(cmd, "\r\n", "\n"), "\n")
+		outLines := make([]string, 0, len(rawLines))
+		liveAckMode := -1
+		for _, ln := range rawLines {
+			trimmed := strings.TrimSpace(ln)
+			if trimmed == "" {
+				continue
+			}
+			upper := strings.ToUpper(trimmed)
+			if upper == "LIVE 0" || upper == "LIVE 1" || upper == "LIVE 2" {
+				mode := int(upper[len(upper)-1] - '0')
+				slot.mu.Lock()
+				slot.bleLiveMode = mode
+				slot.blePeak = [8]int{-127, -127, -127, -127, -127, -127, -127, -127}
+				slot.bleHits = [8]int{}
+				slot.mu.Unlock()
+				liveAckMode = mode
+				outLines = append(outLines, "LIVE 0")
+				continue
+			}
+			if strings.HasPrefix(upper, "SCAN ") && !strings.HasPrefix(upper, "SCAN STOP") {
+				slot.mu.Lock()
+				slot.bleLiveMode = 0
+				slot.mu.Unlock()
+			}
+			outLines = append(outLines, trimmed)
+		}
+		if liveAckMode >= 0 {
+			ack := map[string]any{"t": "ok", "cmd": "live", "on": liveAckMode > 0}
+			ackLine := fmt.Sprintf("@{\"t\":\"ok\",\"cmd\":\"live\",\"on\":%v}", liveAckMode > 0)
+			m.emit(USBEvent{Type: "raw_reply", SlotIndex: slot.index, Line: ackLine, MsgType: "ok"})
+			m.resolveWaiters(slot, "ok", ack)
+		}
+		if len(outLines) == 0 {
+			return nil
+		}
+		clean := strings.Join(outLines, "\n") + "\n"
+		slot.writeMu.Lock()
+		_, err := port.Write([]byte(clean))
+		slot.writeMu.Unlock()
+		return err
+	}
+
 	clean := strings.TrimRight(cmd, "\r\n") + "\n"
 	slot.writeMu.Lock()
 	_, err := port.Write([]byte(clean))
@@ -876,6 +935,8 @@ func (m *Manager) handleHubBinaryFrame(slot *usbSlot, frame []byte) {
 	kind := frame[1]
 	nowMs := time.Now().UnixMilli()
 
+	var bleLiveEvents []map[string]any
+
 	slot.mu.Lock()
 	switch {
 	case kind == 0x5A && len(frame) >= 36:
@@ -928,6 +989,9 @@ func (m *Manager) handleHubBinaryFrame(slot *usbSlot, frame []byte) {
 			if tdmaSlot == 1 {
 				slot.hubOwnFrames++
 				slot.hubLastDbm = dbm
+				if IsBLEPortName(slot.portName) {
+					bleLiveEvents = unwrapBLEWindowSamplesLocked(slot, frame, sampleCount)
+				}
 			}
 		}
 
@@ -962,6 +1026,9 @@ func (m *Manager) handleHubBinaryFrame(slot *usbSlot, frame []byte) {
 	if hubLive != nil {
 		m.emit(USBEvent{Type: "hub_live", SlotIndex: slot.index, Payload: hubLive})
 	}
+	for _, ev := range bleLiveEvents {
+		m.emit(USBEvent{Type: "live", SlotIndex: slot.index, Payload: ev})
+	}
 	if synth != nil {
 		m.recordKnownStatusMap(synth)
 		m.resolveWaiters(slot, "status", synth)
@@ -989,6 +1056,142 @@ func hubLivePayloadLocked(slot *usbSlot, nowMs int64) map[string]any {
 		})
 	}
 	return map[string]any{"slots": slots, "hubOwnFrames": slot.hubOwnFrames}
+}
+
+func halfCodeToIntDbm(code byte) int {
+	if code == 0 {
+		return -127
+	}
+	v := -128 + (int(code)+1)/2
+	if v < -127 {
+		v = -127
+	}
+	if v > 0 {
+		v = 0
+	}
+	return v
+}
+
+// unwrapBLEWindowSamplesLocked extracts new sequential 100 Hz sweeps from a 0xC5 0x60 window frame
+// on a Bluetooth Hub, updating the slow noise floor / peak / hit trackers and emitting zero-air-overhead
+// `live` events when `slot.bleLiveMode` is 1 (~10 Hz) or 2 (every sweep). Callers hold slot.mu.
+func unwrapBLEWindowSamplesLocked(slot *usbSlot, frame []byte, sampleCount int) []map[string]any {
+	const hitMarginDb = 10
+	sweepUs := 5500
+	if slot.lastStatus != nil {
+		if u, ok := asInt(slot.lastStatus["sweepUs"]); ok && u > 0 {
+			sweepUs = u
+		}
+	}
+
+	var out []map[string]any
+	anyNew := false
+	for s := 0; s < sampleCount; s++ {
+		off := 7 + s*9
+		seq := frame[off]
+		if !slot.bleSeqInit {
+			slot.bleSeqInit = true
+			slot.bleLastSeq = seq - 1
+		}
+		delta := uint8(seq - slot.bleLastSeq)
+		if delta == 0 || delta > 64 {
+			continue
+		}
+		anyNew = true
+		slot.bleLastSeq = seq
+		slot.bleSweepN += uint64(delta)
+
+		var curDbm [8]int
+		allBlank := true
+		for ch := 0; ch < 8; ch++ {
+			v := halfCodeToIntDbm(frame[off+1+ch])
+			curDbm[ch] = v
+			if v > -127 {
+				allBlank = false
+			}
+		}
+		// Skip transient radio-free placeholder sweeps where all 8 channels report 0 (-127 dBm)
+		// while RF is enabled, preventing momentary holes on DebugView bars and Signal-over-time.
+		rfEnabled := true
+		chanMask := 255
+		if slot.lastStatus != nil {
+			if rfMap, ok := slot.lastStatus["rf"].(map[string]any); ok {
+				if en, ok := rfMap["enabled"].(bool); ok {
+					rfEnabled = en
+				}
+			}
+			if cm, ok := asInt(slot.lastStatus["chanMask"]); ok {
+				chanMask = cm
+			}
+		}
+		if allBlank && rfEnabled && chanMask != 0 {
+			continue
+		}
+
+		for ch := 0; ch < 8; ch++ {
+			d := curDbm[ch]
+			if d <= -127 {
+				continue
+			}
+			if d > slot.blePeak[ch] {
+				slot.blePeak[ch] = d
+			}
+			vq4 := int16(d * 16)
+			if !slot.bleFloorSet[ch] {
+				slot.bleFloorQ4[ch] = vq4
+				slot.bleFloorSet[ch] = true
+			} else if vq4 < slot.bleFloorQ4[ch]+hitMarginDb*8 {
+				slot.bleFloorQ4[ch] += (vq4 - slot.bleFloorQ4[ch]) / 32
+			} else {
+				slot.bleFloorQ4[ch] += (vq4 - slot.bleFloorQ4[ch]) / 2048
+			}
+			if vq4 > slot.bleFloorQ4[ch]+hitMarginDb*16 && slot.bleHits[ch] < 255 {
+				slot.bleHits[ch]++
+			}
+		}
+
+		if slot.bleLiveMode == 0 {
+			continue
+		}
+		if slot.bleLiveMode == 1 && slot.bleSweepN%10 != 0 {
+			continue
+		}
+		dbmArr := make([]int, 8)
+		pkArr := make([]int, 8)
+		hitsArr := make([]int, 8)
+		flArr := make([]int, 8)
+		for ch := 0; ch < 8; ch++ {
+			dbmArr[ch] = curDbm[ch]
+			pkArr[ch] = slot.blePeak[ch]
+			hitsArr[ch] = slot.bleHits[ch]
+			if slot.bleFloorSet[ch] {
+				flArr[ch] = int(slot.bleFloorQ4[ch] / 16)
+			} else {
+				flArr[ch] = -127
+			}
+			slot.blePeak[ch] = -127
+			slot.bleHits[ch] = 0
+		}
+		out = append(out, map[string]any{
+			"t":     "live",
+			"n":     slot.bleSweepN,
+			"us":    sweepUs,
+			"dbm":   dbmArr,
+			"pk":    pkArr,
+			"hits":  hitsArr,
+			"floor": flArr,
+		})
+	}
+	if !anyNew {
+		slot.bleStaleCount++
+		if slot.bleStaleCount >= 4 {
+			slot.bleSeqInit = false
+			slot.bleStaleCount = 0
+		}
+	} else {
+		slot.bleStaleCount = 0
+	}
+	return out
 }
 
 func (m *Manager) synthesizeHubStatusLocked(slot *usbSlot, nowMs int64) map[string]any {

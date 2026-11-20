@@ -30,9 +30,12 @@ static const char *TAG = "slaprf_ble";
 #define PHASE_SAMPLES     48
 #define SYNC_EVAL_CALLS   5   // Evaluate the phase every 5 superframes (100 ms at 20 ms)
 
-/* Preferred connection intervals in 1.25 ms units: 10 ms, then 20 ms, then 30 ms. Every one is a
- * multiple of the 10 ms sweep period, so connection events can be parked in the gap between sweeps. */
-static const uint16_t k_itvl_pref[] = {8, 16, 24};
+/* Preferred connection intervals in 1.25 ms units: 10 ms, 20 ms, then 20..30 ms range (accepted
+ * by Android even when audio/video calls reject zero-width min==max parameter updates). */
+static const struct {
+    uint16_t min_itvl;
+    uint16_t max_itvl;
+} k_itvl_pref[] = {{8, 8}, {16, 16}, {16, 24}};
 
 /* 5d1a0001-5a7e-4c0b-9e5f-534c41505246 (little-endian byte order for NimBLE). */
 static const ble_uuid128_t s_svc_uuid = BLE_UUID128_INIT(0x46, 0x52, 0x50, 0x41, 0x4c, 0x53, 0x5f, 0x9e, 0x0b, 0x4c,
@@ -121,24 +124,14 @@ int __wrap_ble_transport_to_hs_evt_impl(void *buf) {
 }
 
 bool slaprf_ble_needs_radio_free(void) {
-    if (!slaprf_ble_connected() || !s_sync_enabled) {
+    if (!slaprf_ble_connected()) {
         return false;
     }
     if (!slaprf_ble_ready()) {
-        // Keep 2.4 GHz uninterrupted during GATT service discovery, MTU exchange, and CCCD subscribe.
-        return slaprf_ble_connected_us() < 2500000LL;
-    }
-    const int64_t now = esp_timer_get_time();
-    if (!s_sync_locked && now < s_reacquire_until_us) {
-        return true;
-    }
-    // Self-healing escape: if notifications are queued/sent but >180 ms passes without a single
-    // completed packet, our connection anchor drifted or updated onto the sweep window; briefly
-    // yield 2.4 GHz so fresh NOCP timestamps arrive and jump the schedule back into the gap.
-    const int64_t last_nocp = s_last_nocp_us;
-    if (last_nocp > 0 && now - last_nocp > 180000) {
-        reset_phase_window(450000);
-        return true;
+        // Keep 2.4 GHz uninterrupted only during initial GATT service discovery, MTU exchange, and
+        // CCCD subscribe (< 1.5 s). Once subscribed, never blank 5.8 GHz sweeps: every 10 ms period
+        // already leaves ~4.4 ms on 2.4 GHz for BLE packets and phase measurement.
+        return slaprf_ble_connected_us() < 1500000LL;
     }
     return false;
 }
@@ -181,13 +174,15 @@ int32_t slaprf_ble_sync_adjust_us(int64_t superframe_start_us, uint32_t sweep_in
     s_sync_calls = 0;
 
     const uint32_t itvl = s_itvl_us;
-    // Any multiple of 10 ms (10, 20, 30 ms) aligns every event; 15 ms aligns every 2nd event (30 ms).
-    const bool aligned_itvl = itvl != 0 && ((itvl % sweep_interval_us) == 0 || itvl == 15000U);
+    // Only phase-lock when the connection interval is an exact multiple of the 10 ms sweep period
+    // (10, 20, 30 ms). Non-multiples such as 15 ms alternate phase by +5 ms each event (antipodal
+    // mod 10 ms), so keeping a rock-steady 10 ms sweep grid without shifting avoids oscillation.
+    const bool aligned_itvl = itvl != 0 && (itvl % sweep_interval_us) == 0;
     if (s_conn == BLE_HS_CONN_HANDLE_NONE || !aligned_itvl || s_phase_n < 4) {
         if (s_conn == BLE_HS_CONN_HANDLE_NONE || !aligned_itvl) {
             s_phase_n = 0;
             s_sync_locked = false;
-            if (s_conn == BLE_HS_CONN_HANDLE_NONE) s_phase_us = -1;
+            if (s_conn == BLE_HS_CONN_HANDLE_NONE || !aligned_itvl) s_phase_us = -1;
         }
         return 0;
     }
@@ -219,26 +214,16 @@ int32_t slaprf_ble_sync_adjust_us(int64_t superframe_start_us, uint32_t sweep_in
     }
     // Positive error: the connection event ends later than the target, so start sweeps later.
     const int32_t err = wrap_signed(phase - (int32_t)target_phase_us, period);
-    if (err >= -450 && err <= 450) {
+    if (err >= -600 && err <= 600) {
         s_sync_locked = true;
         s_reacquire_until_us = 0;
-        return err / 3;
+        return err / 4;
     }
-    if (!s_sync_locked) {
-        // Unlocked: jump the entire phase offset in a single superframe so the very next cycle is
-        // parked cleanly inside the gap.
-        if (err >= -900 && err <= 900) {
-            s_sync_locked = true;
-            s_reacquire_until_us = 0;
-        }
-        return err;
-    }
-    // Already locked, small drift beyond 450 us: nudge smoothly without unlocking unless far off.
-    if (err > 1200 || err < -1200) {
-        s_sync_locked = false;
-        return err;
-    }
-    return err / 2;
+    s_sync_locked = false;
+    // Step smoothly (at most +-800 us per 100 ms) so sweep spacing stays uniform while converging.
+    if (err > 800) return 800;
+    if (err < -800) return -800;
+    return err;
 }
 
 void slaprf_ble_set_sync_enabled(bool on) {
@@ -344,8 +329,8 @@ static void advertise(void) {
 static void request_interval(uint16_t conn, uint8_t idx) {
     if (idx >= sizeof(k_itvl_pref) / sizeof(k_itvl_pref[0])) return;
     struct ble_gap_upd_params up = {
-        .itvl_min = k_itvl_pref[idx],
-        .itvl_max = k_itvl_pref[idx],
+        .itvl_min = k_itvl_pref[idx].min_itvl,
+        .itvl_max = k_itvl_pref[idx].max_itvl,
         .latency = 0,
         .supervision_timeout = 400, // 4 s
         .min_ce_len = 0,
@@ -355,7 +340,8 @@ static void request_interval(uint16_t conn, uint8_t idx) {
     s_itvl_req_us = esp_timer_get_time();
     const int rc = ble_gap_update_params(conn, &up);
     if (rc != 0) {
-        ESP_LOGW(TAG, "conn param update (%u x 1.25 ms) rc=%d", k_itvl_pref[idx], rc);
+        ESP_LOGW(TAG, "conn param update (%u..%u x 1.25 ms) rc=%d", k_itvl_pref[idx].min_itvl,
+                 k_itvl_pref[idx].max_itvl, rc);
     }
 }
 

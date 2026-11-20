@@ -144,6 +144,11 @@ static inline int8_t half_code_to_dbm_i8(uint8_t code) {
  * no reading) so the radio stays on 2.4 GHz, used while the Hub finds the BLE connection phase.
  */
 static void sweep_once(bool radio_free) {
+    if (radio_free) {
+        // Initial BLE GATT service discovery (< 1.5 s before TX CCCD subscribe): leave 2.4 GHz
+        // uninterrupted without pushing synthetic -127 dBm samples into the RSSI ring.
+        return;
+    }
     if (s_filled < WINDOW_SAMPLES) {
         s_filled++;
     } else {
@@ -153,8 +158,8 @@ static void sweep_once(bool radio_free) {
     cur->seq_num = s_seq++;
 
     const int64_t t0 = slaprf_now_us();
-    const bool scanning = !radio_free && slaprf_diag_scan_live_step(SWEEP_BUDGET_US);
-    const bool rf_on = !radio_free && !scanning && slaprf_diag_rf_enabled();
+    const bool scanning = slaprf_diag_scan_live_step(SWEEP_BUDGET_US);
+    const bool rf_on = !scanning && slaprf_diag_rf_enabled();
     uint16_t ch_mhz[MAX_PILOT_SLOTS];
     for (int i = 0; i < MAX_PILOT_SLOTS; i++) {
         ch_mhz[i] = rf_on ? slaprf_diag_channel_mhz(i, g_flash_cfg.slot_freqs_mhz[i]) : 0;
@@ -220,7 +225,7 @@ static void hub_ble_run(void) {
             const int64_t t_sweep = t_sf + (int64_t)k * SWEEP_INTERVAL_US;
             slaprf_sleep_until_us(t_sweep);
             sweep_once(radio_free);
-            if (k == 0) {
+            if (k == 0 && s_filled > 0) {
                 // Queued right after the sweep, so it goes out in this gap's connection event.
                 slaprf_forward_to_laptop(pkt, pack_window(pkt));
             }

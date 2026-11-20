@@ -138,6 +138,17 @@ type usbSlot struct {
 	hubHello      map[uint8]slotHello
 	hubLive       map[uint8]slotLive
 	waiters       []*replyWaiter
+
+	// BLE zero-overhead Debug LIVE synthesizer (unwraps 100 Hz sweeps from 0xC5 0x60 windows).
+	bleLiveMode   int
+	bleSeqInit    bool
+	bleLastSeq    uint8
+	bleStaleCount int
+	bleSweepN     uint64
+	bleFloorQ4    [8]int16
+	bleFloorSet   [8]bool
+	blePeak       [8]int
+	bleHits       [8]int
 }
 
 // Manager owns physical USB-C serial and Bluetooth LE Hub connections to SlapRF XIAO ESP32-C5 boards.

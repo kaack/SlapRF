@@ -285,9 +285,10 @@ export class SignalRingBuffer {
     const dtSec = Math.max(0, Math.min(0.1, (nowMs - this.lastPlayheadPerfMs) / 1000));
     this.lastPlayheadPerfMs = nowMs;
     const dtSweeps = dtSec * sweepHz;
-    // Target ~1.5 sweeps behind `latest` so the unfinalized last spline segment `[latest-1, latest]`
-    // sits just outside the right clip edge and every visible curve segment has locked tangents.
-    const targetN = Math.max(this.earliestN(), latest - 1.5);
+    // Target ~1.5 sweeps behind `latest` at 50 Hz (or ~4.5 sweeps = 45 ms at 100 Hz so 20-30 ms
+    // Bluetooth packet batches never outrun the latest received sweep between BLE connection events).
+    const lagSweeps = sweepHz >= 100 ? 4.5 : 1.5;
+    const targetN = Math.max(this.earliestN(), latest - lagSweeps);
     if (this.playheadN === 0 || Math.abs(targetN - this.playheadN) > sweepHz * 0.4) {
       this.playheadN = targetN;
       return this.playheadN;

@@ -773,3 +773,50 @@ func TestManagerSeparatesUSBAndBLETargetsAcrossReconcile(t *testing.T) {
 	}
 	_ = fmt.Sprint()
 }
+
+func TestBLEUnwrapWindowSamplesLive2ZeroGaps(t *testing.T) {
+	slot := &usbSlot{
+		portName:    "ble:BE7C0001",
+		bleLiveMode: 2,
+		blePeak:     [8]int{-127, -127, -127, -127, -127, -127, -127, -127},
+	}
+	makeWindow := func(seqs []uint8, code byte) []byte {
+		frame := make([]byte, 7+len(seqs)*9+1)
+		frame[0] = 0xC5
+		frame[1] = 0x60
+		frame[2] = 1
+		frame[3] = byte(len(seqs))
+		floorByte := int8(-92)
+		frame[6] = byte(floorByte)
+		for i, sq := range seqs {
+			off := 7 + i*9
+			frame[off] = sq
+			for ch := 0; ch < 8; ch++ {
+				frame[off+1+ch] = code
+			}
+		}
+		var crc byte
+		for i := 0; i < len(frame)-1; i++ {
+			crc ^= frame[i]
+		}
+		frame[len(frame)-1] = crc
+		return frame
+	}
+
+	// Overlapping 4-sample windows sent every 2 sweeps: [10,11,12,13] then [12,13,14,15].
+	ev1 := unwrapBLEWindowSamplesLocked(slot, makeWindow([]uint8{10, 11, 12, 13}, 70), 4)
+	ev2 := unwrapBLEWindowSamplesLocked(slot, makeWindow([]uint8{12, 13, 14, 15}, 72), 4)
+	// Transient all-zero radio-free sample [14,15,16,17] with code=0 must be filtered out without gaps.
+	evBlank := unwrapBLEWindowSamplesLocked(slot, makeWindow([]uint8{16, 17}, 0), 2)
+
+	if len(ev1) != 4 || len(ev2) != 2 || len(evBlank) != 0 {
+		t.Fatalf("expected 4 + 2 + 0 live events, got %d, %d, %d", len(ev1), len(ev2), len(evBlank))
+	}
+	all := append(ev1, ev2...)
+	for idx, ev := range all {
+		wantN := uint64(idx + 1)
+		if gotN, _ := ev["n"].(uint64); gotN != wantN {
+			t.Fatalf("event %d expected n=%d, got %v", idx, wantN, ev["n"])
+		}
+	}
+}
