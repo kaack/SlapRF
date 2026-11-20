@@ -22,6 +22,7 @@ import {
   flushMicrotasks,
   it,
   makeDetectedTimer,
+  makeFullState,
   makeGate,
   makeHeat,
   makeMockApiClient,
@@ -603,10 +604,10 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LiveTimeView, Abou
         );
         expect(router.route).toBe("races");
 
-        // 1-finger horizontal swipe across primary tabs even after LiveView (#/live) has mounted
+        // 1-finger horizontal swipe left across primary tabs (#/races -> #/live) even after LiveView (#/live) has mounted
         // its inline .practice-pilot-popover.is-inline-mobile-panel in the DOM
-        pushAppHash("#/live");
-        expect(router.route).toBe("live");
+        pushAppHash("#/races");
+        expect(router.route).toBe("races");
         outletEl.dispatchEvent(
           new PointerEvent("pointerdown", { bubbles: true, pointerId: 40, pointerType: "touch", clientX: 300, clientY: 200 })
         );
@@ -615,6 +616,18 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LiveTimeView, Abou
         );
         window.dispatchEvent(
           new PointerEvent("pointerup", { bubbles: true, pointerId: 40, pointerType: "touch", clientX: 175, clientY: 202 })
+        );
+        expect(router.route).toBe("live");
+
+        // Swiping right from Practice (#/live) returns back to Race (#/races)
+        outletEl.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 42, pointerType: "touch", clientX: 80, clientY: 200 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerId: 42, pointerType: "touch", clientX: 205, clientY: 202 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 42, pointerType: "touch", clientX: 215, clientY: 202 })
         );
         expect(router.route).toBe("races");
 
@@ -637,6 +650,64 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LiveTimeView, Abou
           new PointerEvent("pointerup", { bubbles: true, pointerId: 41, pointerType: "touch", clientX: 180, clientY: 202 })
         );
         expect(router.route).toBe("track");
+
+        // Swiping left from Track (#/track) continues into More items in menu order (Network -> Debug -> Settings -> About when Flasher is hidden and Simulator is off)
+        store.hydrate(makeFullState({ simulatorRunning: false, timingHardwareMode: "rotorhazard_usb" }));
+        outletEl.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 43, pointerType: "touch", clientX: 300, clientY: 200 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerId: 43, pointerType: "touch", clientX: 180, clientY: 202 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 43, pointerType: "touch", clientX: 170, clientY: 202 })
+        );
+        expect(router.route).toBe("network");
+
+        outletEl.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 44, pointerType: "touch", clientX: 300, clientY: 200 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerId: 44, pointerType: "touch", clientX: 180, clientY: 202 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 44, pointerType: "touch", clientX: 170, clientY: 202 })
+        );
+        expect(router.route).toBe("debug");
+
+        outletEl.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 45, pointerType: "touch", clientX: 300, clientY: 200 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerId: 45, pointerType: "touch", clientX: 180, clientY: 202 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 45, pointerType: "touch", clientX: 170, clientY: 202 })
+        );
+        expect(router.route).toBe("setup");
+
+        outletEl.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 46, pointerType: "touch", clientX: 300, clientY: 200 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerId: 46, pointerType: "touch", clientX: 180, clientY: 202 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 46, pointerType: "touch", clientX: 170, clientY: 202 })
+        );
+        expect(router.route).toBe("about");
+
+        // Swiping right from About (#/about) steps back to Settings (#/setup)
+        outletEl.dispatchEvent(
+          new PointerEvent("pointerdown", { bubbles: true, pointerId: 47, pointerType: "touch", clientX: 80, clientY: 200 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointermove", { bubbles: true, pointerId: 47, pointerType: "touch", clientX: 205, clientY: 202 })
+        );
+        window.dispatchEvent(
+          new PointerEvent("pointerup", { bubbles: true, pointerId: 47, pointerType: "touch", clientX: 215, clientY: 202 })
+        );
+        expect(router.route).toBe("setup");
       } finally {
         Object.defineProperty(window, "innerWidth", { value: origInnerWidth, configurable: true, writable: true });
       }

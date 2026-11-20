@@ -6882,17 +6882,17 @@ export class DebugView extends Component {
           <span class="debug-chart-title">Spectrum scan (${sb.rssiScale ? "0-255 RSSI" : "dBm"} × frequency)</span>
           <div class="debug-connect-actions">
             <div class="debug-overlay-checks" role="group" aria-label="Spectrum overlays">
-              <label class="check">
+              <label class="check" title="Show max-hold envelope">
                 <input type="checkbox" data-check="scan-hold" ${this.scanShowMaxHold ? "checked" : ""}/>
-                <span>Max hold</span>
+                <span><span class="debug-hint-desktop">Max hold</span><span class="debug-hint-mobile">Max</span></span>
               </label>
-              <label class="check">
+              <label class="check" title="Show running average trace">
                 <input type="checkbox" data-check="scan-avg" ${this.scanShowAvg ? "checked" : ""}/>
-                <span>Average</span>
+                <span><span class="debug-hint-desktop">Average</span><span class="debug-hint-mobile">Avg</span></span>
               </label>
-              <label class="check">
+              <label class="check" title="Show 5 GHz Wi-Fi UNII band overlay">
                 <input type="checkbox" data-check="scan-wifi" ${this.scanShowWifi ? "checked" : ""}/>
-                <span>5 GHz Wi-Fi bands</span>
+                <span><span class="debug-hint-desktop">5 GHz Wi-Fi bands</span><span class="debug-hint-mobile">5G Wi-Fi</span></span>
               </label>
               <span class="debug-overlay-sep" role="separator" aria-hidden="true"></span>
               <button type="button" class="debug-overlay-icon-btn" data-action="clear-hold" ${hasScan ? "" : "disabled"} aria-label="Reset max hold and running average" title="Reset max hold and running average">

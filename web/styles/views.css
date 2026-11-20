@@ -6625,6 +6625,21 @@ html[data-theme="light"] .net-mnode.is-selected {
   }
 }
 
+@media (max-width: 860px) {
+  .debug-hint-desktop {
+    display: none;
+  }
+  .debug-hint-mobile {
+    display: inline;
+  }
+  .debug-overlay-checks {
+    max-width: 100%;
+    box-sizing: border-box;
+    gap: 6px 10px;
+    padding: 3px 8px;
+  }
+}
+
 @media (max-width: 680px) {
   .debug-topo-col {
     grid-template-columns: minmax(0, 1fr);

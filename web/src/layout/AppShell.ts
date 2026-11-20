@@ -174,11 +174,26 @@ export class AppShell extends Component {
     this.show(router.route);
   }
 
-  private static readonly SWIPEABLE_PRIMARY_ROUTES: readonly RouteId[] = ["live", "races", "pilots", "track"];
-
-  private getSwipeablePrimaryMobileRoutes(): RouteId[] {
+  private getSwipeableMobileRoutes(): RouteId[] {
     if (isServerDisconnectedLockout()) return [];
-    return [...AppShell.SWIPEABLE_PRIMARY_ROUTES];
+    const simOn = this.store.simulatorRunning;
+    const isExternalTimer =
+      this.store.timingHardwareMode === "laprf" ||
+      this.store.timingHardwareMode === "rotorhazard" ||
+      this.store.timingHardwareMode === "rotorhazard_usb";
+    const caps = capabilitiesSnapshot();
+    const ltOn = caps.portable && !isExternalTimer && sharedLiveTimeRelay.snapshot.enabled;
+    const hideFlasher = isExternalTimer;
+
+    const out: RouteId[] = [];
+    for (const r of ROUTES) {
+      if (r.hiddenFromNav) continue;
+      if (r.simOnly && !simOn) continue;
+      if (r.liveTimeOnly && !ltOn) continue;
+      if (r.id === "flasher" && hideFlasher) continue;
+      out.push(r.id);
+    }
+    return out;
   }
 
   private isInSubPage(): boolean {
@@ -359,7 +374,8 @@ export class AppShell extends Component {
       if (window.innerWidth > 900) return;
       if (e.button !== 0 && e.pointerType === "mouse") return;
       const curRoute = this.activeRouteId ?? this.router.route;
-      if (!AppShell.SWIPEABLE_PRIMARY_ROUTES.includes(curRoute) || this.isInSubPage()) {
+      const available = this.getSwipeableMobileRoutes();
+      if (!available.includes(curRoute) || this.isInSubPage()) {
         ignoredSwipe = true;
         activePointerId = null;
         return;
@@ -429,7 +445,7 @@ export class AppShell extends Component {
       if (dragLock !== "x") return;
 
       const curRoute = this.activeRouteId ?? this.router.route;
-      const available = this.getSwipeablePrimaryMobileRoutes();
+      const available = this.getSwipeableMobileRoutes();
       const curIdx = available.indexOf(curRoute);
       if (curIdx < 0) {
         cleanupInteractiveDrag(true);
@@ -504,7 +520,7 @@ export class AppShell extends Component {
         return;
       }
       const curRoute = this.activeRouteId ?? this.router.route;
-      const available = this.getSwipeablePrimaryMobileRoutes();
+      const available = this.getSwipeableMobileRoutes();
       const curIdx = available.indexOf(curRoute);
       if (curIdx < 0) {
         if (wasDraggingX) cleanupInteractiveDrag(true);
