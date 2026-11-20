@@ -62,7 +62,7 @@ describe("services/storage_idb & engine_persistence — Real IndexedDB & State S
         timestampUs: 1000,
         gateId: 1,
         slotIndex: 2,
-        reason: "COOLDOWN",
+        reason: "SPIKE",
       })
     ).toBe(true);
     expect(
@@ -94,7 +94,7 @@ describe("services/storage_idb & engine_persistence — Real IndexedDB & State S
         { eventId: 100, timestampUs: 50_000 },
       ],
       filtered: [
-        { timestampUs: 80_000, gateId: 2, slotIndex: 1, reason: "ECHO" },
+        { timestampUs: 80_000, gateId: 2, slotIndex: 1, reason: "SPIKE" },
         { timestampUs: 20_000, gateId: 1, slotIndex: 1, reason: "MIN_LAP" },
       ],
       raceState: { raceId: "r-1" },
@@ -143,7 +143,7 @@ describe("services/storage_idb & engine_persistence — Real IndexedDB & State S
           { lapId: 2, completedAtUs: 25_000, lapTimeSec: 14.3 },
         ],
         crossings: [{ eventId: 7, timestampUs: 10_000 }],
-        filtered: [{ timestampUs: 12_000, gateId: 1, slotIndex: 1, reason: "COOLDOWN" }],
+        filtered: [{ timestampUs: 12_000, gateId: 1, slotIndex: 1, reason: "MIN_LAP" }],
       };
 
       await db.writeTx(realReplaceOps(state));

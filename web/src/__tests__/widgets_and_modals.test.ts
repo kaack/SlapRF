@@ -396,13 +396,13 @@ describe("widgets/Toast & TimingRulesEditor", () => {
   it("renders TimingRulesEditor live rejection counts with (i) info SVG icon and saves global + per-gate overrides", async () => {
     const store = makeStore({
       gates: [
-        makeGate(1, { name: "Start/Finish", ruleOverrides: { echoWindowSec: 4.5 } }),
+        makeGate(1, { name: "Start/Finish", ruleOverrides: { minLapSec: 4.5 } }),
         makeGate(2, { name: "Split Tunnel" }),
       ],
       filtered: [
         makeFiltered(1_000_000, 1, 1, "MIN_LAP"),
         makeFiltered(2_000_000, 1, 2, "MIN_LAP"),
-        makeFiltered(3_000_000, 2, 1, "COOLDOWN"),
+        makeFiltered(3_000_000, 2, 1, "SPIKE"),
       ],
     });
     const { api, calls } = makeMockApiClient(store);
@@ -427,25 +427,25 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(updateCall).toBeDefined();
       expect((updateCall!.args[0] as { minLapSec: number }).minLapSec).toBe(6.5);
 
-      // Switch scope to Gate 2 ("Split Tunnel") -> shows only Gate 2 COOLDOWN count ("1 cool-down here this session")
+      // Switch scope to Gate 2 ("Split Tunnel") -> shows only Gate 2 SPIKE count ("1 noise spike here this session")
       root.querySelector<HTMLButtonElement>("[data-scope='2']")!.click();
       expect(root.querySelector("[data-count='MIN_LAP']")?.textContent).toBe("");
-      expect(root.querySelector("[data-count='COOLDOWN']")?.textContent).toContain(
-        "1 cool-down here this session"
+      expect(root.querySelector("[data-count='SPIKE']")?.textContent).toContain(
+        "1 noise spike here this session"
       );
 
-      // Toggle override on gateCooldownSec for Gate 2 -> calls setGateRules(2, { gateCooldownSec: 2 })
-      root.querySelector<HTMLButtonElement>("[data-override-toggle='gateCooldownSec']")!.click();
+      // Toggle override on minCrossingSec for Gate 2 -> calls setGateRules(2, { minCrossingSec: 0.12 })
+      root.querySelector<HTMLButtonElement>("[data-override-toggle='minCrossingSec']")!.click();
       await flushMicrotasks();
       const gateRuleCall = calls.find((c) => c.method === "setGateRules");
       expect(gateRuleCall).toBeDefined();
-      expect(gateRuleCall!.args).toEqual([2, { gateCooldownSec: 2 }]);
+      expect(gateRuleCall!.args).toEqual([2, { minCrossingSec: 0.12 }]);
     } finally {
       editor.destroy();
     }
   });
 
-  it("opens Signals fine-tuning drawer per timer with 3-tier scope toggle, opt-in retroactive replay in Practice, and forward-only mode in Race", async () => {
+  it("opens Signals fine-tuning drawer per timer with 3-tier scope toggle, minLapSec, maxLapSec, minCrossingSec, and beepOnCross", async () => {
     const store = makeStore({
       gates: [
         makeGate(1, { name: "H1", role: "START_FINISH", ruleOverrides: { minLapSec: 8 } }),
@@ -469,52 +469,48 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(drawerEl.hidden).toBe(false);
       expect(drawerEl.textContent).toContain("Fine-tune H1");
 
-      // Retroactive toggle defaults to OFF (going forward only)
-      const retroBtn = drawerEl.querySelector<HTMLButtonElement>('[data-tune-act="toggle-retro"]')!;
-      expect(retroBtn.getAttribute("aria-checked")).toBe("false");
+      // Only the 3 clean numeric rules + Beep on crossing exist (no retroactive toggle or legacy rules)
+      expect(drawerEl.querySelector('[data-tune-act="toggle-retro"]')).toBeNull();
+      expect(drawerEl.querySelector('[data-tune-input="gateCooldownSec"]')).toBeNull();
+      expect(drawerEl.querySelector('[data-tune-input="minSectionSec"]')).toBeNull();
+      expect(drawerEl.querySelector('[data-tune-input="echoWindowSec"]')).toBeNull();
 
-      // Default scope is "Only <Pilot>" (Pilot 1 = FAERRY), inheriting minLapSec = 8 from H1 all-pilots
+      // Default scope is "Only <Pilot>", inheriting minLapSec = 8 from H1 all-pilots
       const minLapInput = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="minLapSec"]')!;
       expect(minLapInput.value).toBe("8");
       const maxLapInput = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="maxLapSec"]')!;
-      expect(maxLapInput).not.toBeNull();
+      expect(maxLapInput.value).toBe("120");
+      const minCrossingInput = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="minCrossingSec"]')!;
+      expect(minCrossingInput.value).toBe("0.12");
 
-      // Step minLapSec up (+0.5 -> 8.5) with retroactive OFF -> calls setPilotGateRules(..., false)
+      // Step minLapSec up (+0.5 -> 8.5) -> calls setPilotGateRules(1, 1, { minLapSec: 8.5 })
       drawerEl.querySelector<HTMLButtonElement>('[data-tune-step="1"][data-tune-key="minLapSec"]')!.click();
       await flushMicrotasks();
       const pilotCall1 = calls.find((c) => c.method === "setPilotGateRules");
       expect(pilotCall1).toBeDefined();
-      expect(pilotCall1!.args).toEqual([1, 1, { minLapSec: 8.5 }, false]);
+      expect(pilotCall1!.args).toEqual([1, 1, { minLapSec: 8.5 }]);
 
-      // Flip retroactive toggle ON -> immediately triggers recalculateBufferedPractice()
-      retroBtn.click();
-      await flushMicrotasks();
-      expect(
-        drawerEl.querySelector<HTMLButtonElement>('[data-tune-act="toggle-retro"]')!.getAttribute("aria-checked")
-      ).toBe("true");
-      expect(calls.some((c) => c.method === "recalculateBufferedPractice")).toBe(true);
-
-      // Switch scope to "All pilots" and edit maxLapSec -> calls setGateRules(1, ..., true)
+      // Switch scope to "All pilots" and edit minCrossingSec -> calls setGateRules(1, { minLapSec: 8, minCrossingSec: 0.18 })
       drawerEl.querySelector<HTMLButtonElement>('[data-tune-scope="gate"]')!.click();
-      const maxInputGate = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="maxLapSec"]')!;
-      maxInputGate.value = "90";
-      maxInputGate.dispatchEvent(new Event("change", { bubbles: true }));
+      const crossInputGate = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="minCrossingSec"]')!;
+      crossInputGate.value = "0.18";
+      crossInputGate.dispatchEvent(new Event("change", { bubbles: true }));
       await flushMicrotasks();
       const gateCall = calls.filter((c) => c.method === "setGateRules").pop();
       expect(gateCall).toBeDefined();
-      expect(gateCall!.args).toEqual([1, { minLapSec: 8, maxLapSec: 90 }, true]);
+      expect(gateCall!.args).toEqual([1, { minLapSec: 8, minCrossingSec: 0.18 }]);
 
-      // Toggle "Beep on crossing" ON in All pilots scope -> calls setGateRules with beepOnCross: true (retroactive=false)
+      // Toggle "Beep on crossing" ON in All pilots scope -> calls setGateRules with beepOnCross: true
       drawerEl.querySelector<HTMLButtonElement>('[data-tune-act="toggle-beep"]')!.click();
       await flushMicrotasks();
       const beepGateCall = calls.filter((c) => c.method === "setGateRules").pop();
       expect(beepGateCall).toBeDefined();
-      expect(beepGateCall!.args).toEqual([1, { minLapSec: 8, beepOnCross: true }, false]);
+      expect(beepGateCall!.args).toEqual([1, { minLapSec: 8, beepOnCross: true }]);
     } finally {
       chart.destroy();
     }
 
-    // Verify Race mode hides retroactive toggle and applies prospectively only
+    // Verify Race mode renders the same clean drawer
     const raceRoot = mountHtml(`<div style="width: 640px; height: 420px;"></div>`);
     const raceChart = new PilotRssiChart(raceRoot.firstElementChild as HTMLElement, store, api, {
       contextMode: "race",
@@ -523,8 +519,8 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       raceRoot.querySelector<HTMLButtonElement>('.channel-tune-btn[data-tune-gate="2"]')!.click();
       const raceDrawer = raceRoot.querySelector<HTMLElement>('[data-slot="tune-drawer"]')!;
       expect(raceDrawer.hidden).toBe(false);
-      expect(raceDrawer.querySelector('[data-tune-act="toggle-retro"]')).toBeNull();
-      expect(raceDrawer.textContent).toContain("Applies to upcoming passes only");
+      expect(raceDrawer.querySelector('[data-tune-input="minCrossingSec"]')).not.toBeNull();
+      expect(raceDrawer.querySelector('[data-tune-act="toggle-beep"]')).not.toBeNull();
     } finally {
       raceChart.destroy();
     }

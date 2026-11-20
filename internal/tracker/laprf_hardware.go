@@ -673,7 +673,6 @@ func (e *Engine) InjectExternalLapRFCrossing(
 		EstimatedSpeedMph: 58.0,
 	}
 
-	e.recordReplayExternalCrossingLocked(ev)
 	out := e.applyCrossingLocked(pilot, *gate, ev)
 	if out.rejected != nil {
 		filtered = append(filtered, e.storeFilteredLocked(*out.rejected))

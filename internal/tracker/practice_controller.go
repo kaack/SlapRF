@@ -182,6 +182,14 @@ func (e *Engine) ensurePracticeStateInitializedLocked() {
 		}
 		if s.Filtered == nil {
 			s.Filtered = []domain.FilteredDetection{}
+		} else {
+			validFiltered := s.Filtered[:0]
+			for _, f := range s.Filtered {
+				if f.Reason.IsValid() {
+					validFiltered = append(validFiltered, f)
+				}
+			}
+			s.Filtered = validFiltered
 		}
 		for pi := range s.Pilots {
 			if gp, ok := globalBySlot[s.Pilots[pi].SlotIndex]; ok {
@@ -1274,14 +1282,10 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 		target.Crossings = []domain.GateCrossingEvent{}
 		target.Filtered = []domain.FilteredDetection{}
 		target.UpdatedAt = now
-		e.clearReplayRecordingLocked(target.SessionID)
 		if target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked() {
 			e.resetSessionLocked()
 		}
 		target.Summaries = e.computePracticeSessionSummariesLocked(target)
-
-	case "recalculate_buffered":
-		e.replayBufferedPracticeLocked()
 
 	case "toggle_session_lap":
 		target := e.findPracticeSessionLocked(resolveTargetID())

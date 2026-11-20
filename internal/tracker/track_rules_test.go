@@ -1,68 +1,77 @@
 package tracker
 
 import (
+	"encoding/json"
 	"testing"
 
 	"slaprf/internal/domain"
 )
 
 func f64(v float64) *float64 { return &v }
+func bPtr(v bool) *bool      { return &v }
 
-// Every gate applies the minimum lap time as if it were the start gate.
+// Every gate applies the minimum lap time independently as if it were the start gate.
 func TestMinimumLapAppliesAtEveryGate(t *testing.T) {
 	r := newRig(t)
 	r.pass(1, 10)
 	r.pass(2, 13)
 	r.pass(3, 14.5)
-	// Back at G2 4.6 s after it last timed this pilot: past the 2 s cool-down and the 3 s
-	// echo window after G3, but nobody laps in 4.6 s.
+	// Back at G2 4.6 s after it last timed this pilot: under the 5 s minimum lap time.
 	r.expectFiltered(r.pass(2, 17.6), domain.FilterMinLap)
 }
 
 func TestGateOverrideOnlyAffectsThatGate(t *testing.T) {
 	r := newRig(t)
-	if _, err := r.e.SetGateRules(2, domain.GateRuleOverrides{GateCooldownSec: f64(6), MinLapSec: f64(6)}); err != nil {
+	if _, err := r.e.SetGateRules(2, domain.GateRuleOverrides{MinLapSec: f64(7), MinCrossingSec: f64(0.20)}); err != nil {
 		t.Fatal(err)
 	}
 	r.pass(1, 10)
-	r.pass(2, 13)
-	// 5 s later at G2: inside G2's own 6 s cool-down.
-	r.expectFiltered(r.pass(2, 18), domain.FilterCooldown)
+	// 150 ms pass at G2: rejected by G2's 200 ms minimum crossing time override.
+	r.expectFiltered(r.passWithHold(2, 12.5, 150, 3.5), domain.FilterSpike)
+	// 240 ms pass at G2: accepted.
+	r.expectAccepted(r.passWithHold(2, 13.0, 240, 4.5))
+	// 6 s later at G2: inside G2's own 7 s minimum lap time.
+	r.expectFiltered(r.pass(2, 19.0), domain.FilterMinLap)
 
-	// G3 still uses the global 2 s cool-down.
-	r.pass(3, 21)
-	r.expectFiltered(r.pass(3, 22), domain.FilterCooldown)
-	r.expectFiltered(r.pass(3, 24), domain.FilterMinLap) // 3 s: past cool-down, under min lap
+	// G3 still uses the global 5 s minimum lap time and 120 ms minimum crossing time.
+	r.expectAccepted(r.passWithHold(3, 21.0, 150, 3.5))
+	r.expectFiltered(r.pass(3, 24.0), domain.FilterMinLap)
+	r.expectAccepted(r.pass(3, 26.5))
 }
 
-func TestGateOverrideMinSectionUsesArrivingGate(t *testing.T) {
-	r := newRig(t)
-	// G2 sits right after a tight turn: nobody reaches it in under 2 s.
-	if _, err := r.e.SetGateRules(2, domain.GateRuleOverrides{MinSectionSec: f64(2)}); err != nil {
-		t.Fatal(err)
-	}
-	r.pass(1, 10)
-	r.expectFiltered(r.pass(2, 11.5), domain.FilterTooSoon)
-	r.expectAccepted(r.pass(2, 12.5))
-}
-
-func TestGateRuleOverridesAreClampedAndClearable(t *testing.T) {
+func TestGateRuleOverridesAreClampedLegacyMigratedAndClearable(t *testing.T) {
 	e := NewEngine()
-	got, err := e.SetGateRules(3, domain.GateRuleOverrides{EchoWindowSec: f64(99)})
+	got, err := e.SetGateRules(3, domain.GateRuleOverrides{MinCrossingSec: f64(99)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.EchoWindowSec == nil || *got.EchoWindowSec != 15 {
-		t.Fatalf("expected echo window clamped to 15, got %v", got.EchoWindowSec)
+	if got.MinCrossingSec == nil || *got.MinCrossingSec != 1.5 {
+		t.Fatalf("expected min crossing time clamped to 1.5, got %v", got.MinCrossingSec)
 	}
 	if _, err := e.SetGateRules(3, domain.GateRuleOverrides{}); err != nil {
 		t.Fatal(err)
 	}
-	if o := gateByID(t, e, 3).RuleOverrides; o.EchoWindowSec != nil {
+	if o := gateByID(t, e, 3).RuleOverrides; !o.IsEmpty() {
 		t.Fatal("overrides should be cleared")
 	}
 	if _, err := e.SetGateRules(42, domain.GateRuleOverrides{}); err != ErrUnknownGate {
 		t.Fatalf("expected ErrUnknownGate, got %v", err)
+	}
+
+	// Verify legacy `minPassHoldSec` JSON unmarshaling migrates cleanly to `MinCrossingSec`.
+	var legacyRules domain.TimingRules
+	if err := json.Unmarshal([]byte(`{"minLapSec":6,"maxLapSec":90,"minPassHoldSec":0.18}`), &legacyRules); err != nil {
+		t.Fatal(err)
+	}
+	if legacyRules.MinCrossingSec != 0.18 {
+		t.Fatalf("expected legacy minPassHoldSec 0.18 migrated to MinCrossingSec, got %v", legacyRules.MinCrossingSec)
+	}
+	var legacyOvr domain.GateRuleOverrides
+	if err := json.Unmarshal([]byte(`{"minPassHoldSec":0.22}`), &legacyOvr); err != nil {
+		t.Fatal(err)
+	}
+	if legacyOvr.MinCrossingSec == nil || *legacyOvr.MinCrossingSec != 0.22 {
+		t.Fatalf("expected legacy override minPassHoldSec 0.22 migrated to MinCrossingSec, got %v", legacyOvr.MinCrossingSec)
 	}
 }
 
@@ -119,34 +128,40 @@ func feedSingleGatePassAt(t *testing.T, e *Engine, timerID uint8, slotIndex int,
 	}
 }
 
-func TestThreeTierHierarchyAndOptInRetroactivePracticeReplay(t *testing.T) {
+func TestThreeTierHierarchyAppliesGoingForward(t *testing.T) {
 	e := NewEngine()
 	sfTimerID := e.gates[0].AssignedTimerID // Gate 1 (Start/Finish)
 
-	// Gate 1 timer-level override (Tier 2: all pilots at Gate 1 require minLapSec = 8.0, maxLapSec = 45.0).
+	// Gate 1 timer-level override (Tier 2: all pilots at Gate 1 require minLapSec = 8.0, maxLapSec = 45.0, beepOnCross = true).
 	if _, err := e.SetGateRules(1, domain.GateRuleOverrides{
-		MinLapSec: f64(8.0),
-		MaxLapSec: f64(45.0),
+		MinLapSec:   f64(8.0),
+		MaxLapSec:   f64(45.0),
+		BeepOnCross: bPtr(true),
 	}); err != nil {
 		t.Fatal(err)
 	}
-	// Pilot 2 per-pilot override at Gate 1 (Tier 3: Pilot 2 is faster and allowed 3.5 s laps).
+	// Pilot 2 per-pilot override at Gate 1 (Tier 3: Pilot 2 is faster and allowed 3.5 s laps, beepOnCross = false).
 	if _, err := e.SetPilotGateRules(1, 2, domain.GateRuleOverrides{
-		MinLapSec: f64(3.5),
+		MinLapSec:   f64(3.5),
+		BeepOnCross: bPtr(false),
 	}); err != nil {
 		t.Fatal(err)
 	}
 
-	// Both Pilot 1 and Pilot 2 pass Gate 1 with a 4.5 s lap interval (monotonically increasing timestamps).
+	g1 := gateByID(t, e, 1)
+	if !g1.RulesForPilot(e.Rules(), 1).BeepOnCross {
+		t.Fatal("expected Pilot 1 to inherit Gate 1 BeepOnCross = true")
+	}
+	if g1.RulesForPilot(e.Rules(), 2).BeepOnCross {
+		t.Fatal("expected Pilot 2 override BeepOnCross = false")
+	}
+
+	// Both Pilot 1 and Pilot 2 pass Gate 1 with a 4.5 s lap interval.
 	feedSingleGatePassAt(t, e, sfTimerID, 1, 10.0, -42)
 	feedSingleGatePassAt(t, e, sfTimerID, 2, 10.5, -42)
 	feedSingleGatePassAt(t, e, sfTimerID, 1, 14.5, -42) // Rejected for Pilot 1 (4.5s < 8.0s Gate 1 rule)
 	feedSingleGatePassAt(t, e, sfTimerID, 2, 15.0, -42) // Accepted for Pilot 2 (4.5s >= 3.5s Pilot 2 override)
 
-	ps := e.PracticeSnapshot()
-	if len(ps.Sessions) == 0 {
-		t.Fatal("expected active practice session")
-	}
 	countLaps := func(slot int) int {
 		n := 0
 		for _, l := range e.PracticeSnapshot().Sessions[0].Laps {
@@ -163,49 +178,17 @@ func TestThreeTierHierarchyAndOptInRetroactivePracticeReplay(t *testing.T) {
 		t.Fatalf("Pilot 2 should have 1 lap under per-pilot 3.5s override, got %d", got)
 	}
 
-	// Lower Pilot 1's minLapSec at Gate 1 to 4.0s WITHOUT retroactive replay (default going-forward mode).
+	// Lower Pilot 1's minLapSec at Gate 1 to 4.0s: applies going forward without rewriting past passes,
+	// and scores the next 4.5s lap cleanly.
 	if _, err := e.SetPilotGateRules(1, 1, domain.GateRuleOverrides{MinLapSec: f64(4.0)}); err != nil {
 		t.Fatal(err)
 	}
 	if got := countLaps(1); got != 0 {
-		t.Fatalf("going-forward mode must not rewrite already-recorded practice laps, got %d", got)
+		t.Fatalf("rule edits must not rewrite already-recorded laps, got %d", got)
 	}
-
-	// Now opt into retroactive replay: Pilot 1's buffered 4.5s pass at t = 14.5s becomes a counted lap!
-	if !e.RecalculateBufferedPractice() {
-		t.Fatal("expected RecalculateBufferedPractice to replay buffered frames")
-	}
-	if got := countLaps(1); got != 1 {
-		t.Fatalf("retroactive replay should recover Pilot 1's 4.5s lap, got %d", got)
-	}
-
-	// Also feed a weak -62 dBm pass at t = 20.0s (missed under default -58 dBm enter threshold),
-	// then lower Pilot 1's Gate 1 enter threshold to -66 dBm and replay retroactively.
-	feedSingleGatePassAt(t, e, sfTimerID, 1, 20.0, -62)
-	if got := countLaps(1); got != 1 {
-		t.Fatalf("weak -62 dBm pass should initially miss -58 dBm threshold, got %d laps", got)
-	}
-	if err := e.SetGateThresholds([]domain.GateThresholdUpdate{{
-		GateID:    1,
-		SlotIndex: 1,
-		EnterDbm:  -66,
-		ExitDbm:   -74,
-	}}); err != nil {
-		t.Fatal(err)
-	}
-	if got := countLaps(1); got != 1 {
-		t.Fatalf("SetGateThresholds without retroactive opt-in must leave recorded laps at 1, got %d", got)
-	}
-	e.RecalculateBufferedPractice()
+	feedSingleGatePassAt(t, e, sfTimerID, 1, 19.0, -42) // 9.0s since initial t=10.0s start -> counted!
+	feedSingleGatePassAt(t, e, sfTimerID, 1, 23.5, -42) // 4.5s since t=19.0s -> counted under new 4.0s rule!
 	if got := countLaps(1); got != 2 {
-		t.Fatalf("retroactive threshold replay should recover Pilot 1's second lap at 20.0s, got %d", got)
-	}
-
-	// Verify Race mode never allows retroactive replay to run.
-	e.mu.Lock()
-	e.raceState.Mode = domain.ModeRace
-	e.mu.Unlock()
-	if e.RecalculateBufferedPractice() {
-		t.Fatal("RecalculateBufferedPractice must be a no-op during Race mode")
+		t.Fatalf("expected Pilot 1 to score 2 upcoming laps after lowering minLapSec to 4.0s, got %d", got)
 	}
 }

@@ -6,7 +6,7 @@ import (
 	"slaprf/internal/domain"
 )
 
-// Default track: G1 start/finish → G2 → G3 → G4 → G1.
+// Default track: G1 start/finish -> G2 -> G3 -> G4 -> G1.
 
 type crossingRig struct {
 	t     *testing.T
@@ -22,6 +22,11 @@ func newRig(t *testing.T) *crossingRig {
 // pass feeds one detection at gate `gateID`, `atSec` seconds into the session.
 func (r *crossingRig) pass(gateID uint8, atSec float64) crossingOutcome {
 	r.t.Helper()
+	return r.passWithHold(gateID, atSec, 0, 0)
+}
+
+func (r *crossingRig) passWithHold(gateID uint8, atSec float64, holdMs float64, areaDbSec float64) crossingOutcome {
+	r.t.Helper()
 	r.e.mu.Lock()
 	defer r.e.mu.Unlock()
 	var gate domain.TrackGate
@@ -30,11 +35,19 @@ func (r *crossingRig) pass(gateID uint8, atSec float64) crossingOutcome {
 			gate = g
 		}
 	}
-	out := r.e.applyCrossingLocked(r.pilot, gate, domain.GateCrossingEvent{
+	ev := domain.GateCrossingEvent{
 		GateID:      gateID,
 		SlotIndex:   r.pilot.SlotIndex,
 		TimestampUs: uint64(atSec * 1e6),
-	})
+	}
+	if holdMs > 0 || areaDbSec > 0 {
+		ev.PeakRSSIDbm = -42
+		ev.HoldMs = holdMs
+		ev.AboveEnterMs = holdMs * 0.8
+		ev.PassAreaDbSec = areaDbSec
+		ev.BeamwidthMs = holdMs
+	}
+	out := r.e.applyCrossingLocked(r.pilot, gate, ev)
 	if out.lap != nil {
 		r.e.laps = append(r.e.laps, *out.lap)
 	}
@@ -71,47 +84,25 @@ func TestCleanLapIsRecordedWithEverySection(t *testing.T) {
 	}
 }
 
-func TestPreviousGateEchoIsIgnored(t *testing.T) {
+func TestTimersActIndependentlyWithoutCrossGateRejection(t *testing.T) {
 	r := newRig(t)
-	r.pass(1, 10)
-	r.pass(2, 13)
-	// G1 picks the quad up again as it leaves G2 (gates close together).
-	r.expectFiltered(r.pass(1, 14), domain.FilterEcho)
-	// Progress is unchanged: the lap continues normally.
-	r.expectAccepted(r.pass(3, 16))
+	r.expectAccepted(r.pass(1, 10.0))
+	// G2 only 0.2 s after G1: accepted because timers evaluate passes independently.
+	r.expectAccepted(r.pass(2, 10.2))
+	// G3 at 12.0 s, then G2 again at 16.0 s (>= 5 s after G2's 10.2 s pass): accepted cleanly.
+	r.expectAccepted(r.pass(3, 12.0))
+	r.expectAccepted(r.pass(2, 16.0))
+	// Same-gate minimum lap time still guards G2 independently against immediate repeat triggers.
+	r.expectFiltered(r.pass(2, 16.8), domain.FilterMinLap)
+	r.expectFiltered(r.pass(2, 19.0), domain.FilterMinLap)
 }
 
-func TestFlyingBackwardsThroughGateIsIgnored(t *testing.T) {
+func TestMinimumCrossingTimeRejectsShortSpikes(t *testing.T) {
 	r := newRig(t)
-	r.pass(1, 10)
-	r.pass(2, 13)
-	r.pass(3, 16)
-	// Pilot turns around and flies back through G2.
-	r.expectFiltered(r.pass(2, 17.5), domain.FilterEcho)
-}
-
-func TestEchoWindowExpires(t *testing.T) {
-	r := newRig(t)
-	r.pass(1, 10)
-	r.pass(2, 13)
-	r.pass(3, 16)
-	// Long after the window, the same gate pair is a genuine (if odd) pass.
-	r.expectAccepted(r.pass(2, 16+r.e.rules.EchoWindowSec+2))
-}
-
-func TestGateCooldownSuppressesBounce(t *testing.T) {
-	r := newRig(t)
-	r.pass(1, 10)
-	r.pass(2, 13)
-	// Quad wobbles in G2 — the gate fires again 0.8 s later.
-	r.expectFiltered(r.pass(2, 13.8), domain.FilterCooldown)
-}
-
-func TestImpossiblySoonSectionIsIgnored(t *testing.T) {
-	r := newRig(t)
-	r.pass(1, 10)
-	// G2 fires 0.2 s after G1 — faster than any quad can cover the section.
-	r.expectFiltered(r.pass(2, 10.2), domain.FilterTooSoon)
+	// Default MinCrossingSec is 0.12 s (120 ms): a 65 ms RF spike is rejected.
+	r.expectFiltered(r.passWithHold(1, 10.0, 65, 3.0), domain.FilterSpike)
+	// A genuine 220 ms pass with healthy dB*s area is accepted.
+	r.expectAccepted(r.passWithHold(1, 10.5, 220, 4.5))
 }
 
 func TestMinimumLapTime(t *testing.T) {
@@ -152,6 +143,6 @@ func TestMissedSectorGateStillCompletesLap(t *testing.T) {
 	r.pass(4, 20)
 	out := r.pass(1, 24)
 	if out.lap == nil || len(out.lap.Sectors) != 3 {
-		t.Fatalf("expected a lap with 3 sections (G2→G4 spans the miss), got %+v", out.lap)
+		t.Fatalf("expected a lap with 3 sections (G2->G4 spans the miss), got %+v", out.lap)
 	}
 }

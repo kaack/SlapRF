@@ -319,10 +319,7 @@ export function gateRulesAt(store: AppStore, gateId: number): TimingRules {
   return {
     minLapSec,
     maxLapSec: Math.max(rawMax, minLapSec + 5),
-    gateCooldownSec: o.gateCooldownSec ?? base.gateCooldownSec,
-    minSectionSec: o.minSectionSec ?? base.minSectionSec,
-    echoWindowSec: o.echoWindowSec ?? base.echoWindowSec,
-    minPassHoldSec: o.minPassHoldSec ?? base.minPassHoldSec,
+    minCrossingSec: o.minCrossingSec ?? base.minCrossingSec,
     beepOnCross: o.beepOnCross !== undefined ? o.beepOnCross : Boolean(base.beepOnCross),
   };
 }
@@ -336,10 +333,7 @@ export function pilotGateRulesAt(store: AppStore, gateId: number, slotIndex: num
   return {
     minLapSec,
     maxLapSec: Math.max(rawMax, minLapSec + 5),
-    gateCooldownSec: po.gateCooldownSec ?? gateEff.gateCooldownSec,
-    minSectionSec: po.minSectionSec ?? gateEff.minSectionSec,
-    echoWindowSec: po.echoWindowSec ?? gateEff.echoWindowSec,
-    minPassHoldSec: po.minPassHoldSec ?? gateEff.minPassHoldSec,
+    minCrossingSec: po.minCrossingSec ?? gateEff.minCrossingSec,
     beepOnCross: po.beepOnCross !== undefined ? po.beepOnCross : Boolean(gateEff.beepOnCross),
   };
 }

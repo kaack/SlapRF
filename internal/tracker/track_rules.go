@@ -3,8 +3,7 @@ package tracker
 import "slaprf/internal/domain"
 
 // SetGateRules replaces one gate's timing-rule overrides for all pilots (Tier 2: unset fields fall
-// back to the global rules) and returns what was applied. Applies going forward by default; call
-// RecalculateBufferedPractice() when the user opts into retroactive replay.
+// back to the global rules) and returns what was applied.
 func (e *Engine) SetGateRules(gateID uint8, overrides domain.GateRuleOverrides) (domain.GateRuleOverrides, error) {
 	overrides = overrides.Normalized()
 	e.mu.Lock()
@@ -38,8 +37,7 @@ func (e *Engine) SetGateRules(gateID uint8, overrides domain.GateRuleOverrides) 
 
 // SetPilotGateRules replaces one pilot's timing-rule overrides at one gate (Tier 3: overrides both
 // the gate-wide overrides and global rules; empty overrides clear the pilot-specific tier), using
-// copy-on-write on `PilotRuleOverrides`. Applies going forward by default; call
-// RecalculateBufferedPractice() when the user opts into retroactive replay.
+// copy-on-write on `PilotRuleOverrides`.
 func (e *Engine) SetPilotGateRules(gateID uint8, slotIndex int, overrides domain.GateRuleOverrides) (domain.GateRuleOverrides, error) {
 	overrides = overrides.Normalized()
 	e.mu.Lock()
@@ -90,24 +88,4 @@ func (e *Engine) SetPilotGateRules(gateID uint8, slotIndex int, overrides domain
 		s.OnConfigUpdated(pilots, gates)
 	}
 	return overrides, nil
-}
-
-// RecalculateBufferedPractice explicitly replays the rolling 15-minute Practice telemetry buffer
-// against the current 3-tier timing rules and gate thresholds, updating the active Practice
-// session's laps, splits, crossings, and filtered detections. No-op during Race mode.
-func (e *Engine) RecalculateBufferedPractice() bool {
-	e.mu.Lock()
-	replayed := e.replayBufferedPracticeLocked()
-	var practiceSnap domain.PracticeManagerState
-	var subs []EventSubscriber
-	if replayed && e.practiceState.ActiveSessionID != "" {
-		practiceSnap = clonePracticeManagerState(e.practiceState)
-		subs = append([]EventSubscriber(nil), e.subscribers...)
-	}
-	e.mu.Unlock()
-
-	if len(subs) > 0 {
-		e.notifyPracticeUpdated(practiceSnap, subs)
-	}
-	return replayed
 }

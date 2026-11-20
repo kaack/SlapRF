@@ -30,7 +30,7 @@ import {
 import { FILTER_LABELS } from "./markup";
 
 export interface PilotRssiChartOptions {
-  /** "practice" (default) supports opt-in retroactive replay; "race" applies prospectively only. */
+  /** "practice" (default) shows session lap/filtered counters; "race" shows active heat context. */
   contextMode?: "practice" | "race";
 }
 
@@ -45,11 +45,27 @@ interface TuneRuleSpec {
   reason: FilterReason;
 }
 
+const OVERRIDE_KEYS: ReadonlyArray<keyof GateRuleOverrides> = [
+  "minLapSec",
+  "maxLapSec",
+  "minCrossingSec",
+  "beepOnCross",
+];
+
+function countOverrides(ovr: GateRuleOverrides | undefined): number {
+  if (!ovr) return 0;
+  let n = 0;
+  for (const k of OVERRIDE_KEYS) {
+    if (ovr[k] !== undefined) n++;
+  }
+  return n;
+}
+
 const TUNE_RULES: TuneRuleSpec[] = [
   {
     key: "minLapSec",
-    label: "Min lap time",
-    help: "Shortest valid repeat time at this timer.",
+    label: "Minimum lap time",
+    help: "Shortest valid time before this timer can count a pilot again.",
     step: 0.5,
     min: 1,
     max: 120,
@@ -58,7 +74,7 @@ const TUNE_RULES: TuneRuleSpec[] = [
   },
   {
     key: "maxLapSec",
-    label: "Max lap time",
+    label: "Maximum lap time",
     help: "Discards laps longer than this (crashes or pack swaps).",
     step: 5,
     min: 10,
@@ -67,39 +83,9 @@ const TUNE_RULES: TuneRuleSpec[] = [
     reason: "LAP_TOO_LONG",
   },
   {
-    key: "gateCooldownSec",
-    label: "Timer cool-down",
-    help: "Ignores immediate repeat bounces after a pass.",
-    step: 0.1,
-    min: 0.2,
-    max: 15,
-    decimals: 1,
-    reason: "COOLDOWN",
-  },
-  {
-    key: "minSectionSec",
-    label: "Min section time",
-    help: "Fastest valid transit from the previous timer.",
-    step: 0.1,
-    min: 0.1,
-    max: 15,
-    decimals: 1,
-    reason: "TOO_SOON",
-  },
-  {
-    key: "echoWindowSec",
-    label: "Prev-timer echo",
-    help: "Ignores re-triggers at the timer just left (0 disables).",
-    step: 0.5,
-    min: 0,
-    max: 15,
-    decimals: 1,
-    reason: "ECHO",
-  },
-  {
-    key: "minPassHoldSec",
-    label: "Min pass hold",
-    help: "Minimum pass hold duration (s) to reject sharp RF/Wi-Fi spikes.",
+    key: "minCrossingSec",
+    label: "Minimum crossing time",
+    help: "Minimum signal hold duration across the gate to reject sharp RF or Wi-Fi spikes.",
     step: 0.02,
     min: 0.04,
     max: 1.5,
@@ -242,7 +228,6 @@ export class PilotRssiChart extends Component {
   private lastTuneDrawerHtml = "";
   private tuningGateId: number | null = null;
   private tuningScope: "pilot" | "gate" = "pilot";
-  private retroactiveApply = false;
   private readonly labelWidthCache = new Map<string, number>();
   private cachedLabelSig = "";
   private cachedLabelRows = new Map<string, number>();
@@ -359,10 +344,6 @@ export class PilotRssiChart extends Component {
     return this.focus === null ? this.store.nodes : this.store.nodes.filter((p) => p.gateId === this.focus);
   }
 
-  private get isRetroactiveEffective(): boolean {
-    return this.contextMode === "practice" && this.retroactiveApply && !this.store.isHistoricalTrack;
-  }
-
   constructor(el: HTMLElement, store: AppStore, api: ApiClient, options?: PilotRssiChartOptions) {
     super(el);
     this.store = store;
@@ -441,16 +422,6 @@ export class PilotRssiChart extends Component {
         this.renderCalib();
         this.renderLegend();
         this.renderTuningDrawer();
-        return;
-      }
-      if (btn.dataset.tuneAct === "toggle-retro") {
-        if (this.contextMode === "practice") {
-          this.retroactiveApply = !this.retroactiveApply;
-          this.renderTuningDrawer();
-          if (this.retroactiveApply) {
-            void this.api.recalculateBufferedPractice().catch(() => undefined);
-          }
-        }
         return;
       }
       if (btn.dataset.tuneAct === "clear-scope") {
@@ -1498,11 +1469,7 @@ export class PilotRssiChart extends Component {
       this.pending.set(u.gateId, { enter: en, exit: ex });
     });
     try {
-      if (this.isRetroactiveEffective) {
-        await this.api.setGateThresholds(updates, true);
-      } else {
-        await this.api.setGateThresholds(updates);
-      }
+      await this.api.setGateThresholds(updates);
       this.undo = before;
       this.calibMessage = message;
     } catch {
@@ -1676,10 +1643,7 @@ export class PilotRssiChart extends Component {
     const previous = this.undo;
     if (!previous) return;
     this.undo = null;
-    const req = this.isRetroactiveEffective
-      ? this.api.setGateThresholds(previous, true)
-      : this.api.setGateThresholds(previous);
-    await req.catch(() => undefined);
+    await this.api.setGateThresholds(previous).catch(() => undefined);
     this.undo = null;
     this.calibMessage = "Undone.";
     this.renderCalib();
@@ -1739,7 +1703,7 @@ export class PilotRssiChart extends Component {
           ts: f.timestampUs,
           gateId: f.gateId,
           counted: false,
-          title: `${p?.callsign ?? `P${f.slotIndex}`} · ${gateLabel(this.store, f.gateId)} (${FILTER_LABELS[f.reason]})`,
+          title: `${p?.callsign ?? `P${f.slotIndex}`} · ${gateLabel(this.store, f.gateId)} (${FILTER_LABELS[f.reason] ?? f.reason})`,
           detail: f.detail,
           color: p?.color,
           slotIndex: f.slotIndex,
@@ -1773,7 +1737,7 @@ export class PilotRssiChart extends Component {
         ts: f.timestampUs,
         gateId: f.gateId,
         counted: false,
-        title: `${gateLabel(this.store, f.gateId)} · not counted (${FILTER_LABELS[f.reason]})`,
+        title: `${gateLabel(this.store, f.gateId)} · not counted (${FILTER_LABELS[f.reason] ?? f.reason})`,
         detail: f.detail,
         slotIndex: f.slotIndex,
       });
@@ -2520,8 +2484,8 @@ export class PilotRssiChart extends Component {
       unitSuffix,
       this.store.nodes
         .map((p) => {
-          const gOvr = Object.keys(p.ruleOverrides ?? {}).length;
-          const pOvr = Object.keys(pilotGateOverridesAt(p, activeSlot)).length;
+          const gOvr = countOverrides(p.ruleOverrides);
+          const pOvr = countOverrides(pilotGateOverridesAt(p, activeSlot));
           return `${p.gateId}:${gateLabel(this.store, p.gateId)}:${this.colorOf(p.gateId)}:${gOvr}:${pOvr}`;
         })
         .join(","),
@@ -2561,8 +2525,8 @@ export class PilotRssiChart extends Component {
                 <span class="channel-dbm mono" data-gate-dbm="${p.gateId}">${this.isMultiPilotMode ? "peak " : ""}${dbm.toFixed(0)}${unitSuffix}</span>
               </button>`;
           }
-          const gOvrCount = Object.keys(p.ruleOverrides ?? {}).length;
-          const pOvrCount = Object.keys(pilotGateOverridesAt(p, activeSlot)).length;
+          const gOvrCount = countOverrides(p.ruleOverrides);
+          const pOvrCount = countOverrides(pilotGateOverridesAt(p, activeSlot));
           const hasOvr = gOvrCount + pOvrCount > 0;
           const isOpen = this.tuningGateId === p.gateId;
           return `
@@ -2645,11 +2609,10 @@ export class PilotRssiChart extends Component {
       ...this.currentScopeOverrides(this.tuningGateId, slotIndex),
       [key]: clamped,
     };
-    const retro = this.isRetroactiveEffective;
     if (this.tuningScope === "pilot") {
-      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides, retro).catch(() => undefined);
+      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides).catch(() => undefined);
     } else {
-      await this.api.setGateRules(this.tuningGateId, nextOverrides, retro).catch(() => undefined);
+      await this.api.setGateRules(this.tuningGateId, nextOverrides).catch(() => undefined);
     }
   }
 
@@ -2670,22 +2633,20 @@ export class PilotRssiChart extends Component {
       ...this.currentScopeOverrides(this.tuningGateId, slotIndex),
     };
     delete nextOverrides[key];
-    const retro = this.isRetroactiveEffective;
     if (this.tuningScope === "pilot") {
-      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides, retro).catch(() => undefined);
+      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides).catch(() => undefined);
     } else {
-      await this.api.setGateRules(this.tuningGateId, nextOverrides, retro).catch(() => undefined);
+      await this.api.setGateRules(this.tuningGateId, nextOverrides).catch(() => undefined);
     }
   }
 
   private async clearTuningScopeOverrides(): Promise<void> {
     if (this.tuningGateId === null || this.store.isHistoricalTrack) return;
     const slotIndex = this.activePilotSlot;
-    const retro = this.isRetroactiveEffective;
     if (this.tuningScope === "pilot") {
-      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, {}, retro).catch(() => undefined);
+      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, {}).catch(() => undefined);
     } else {
-      await this.api.setGateRules(this.tuningGateId, {}, retro).catch(() => undefined);
+      await this.api.setGateRules(this.tuningGateId, {}).catch(() => undefined);
     }
   }
 
@@ -2701,11 +2662,10 @@ export class PilotRssiChart extends Component {
       ...this.currentScopeOverrides(this.tuningGateId, slotIndex),
       beepOnCross: nextOn,
     };
-    // Beep setting never needs retroactive DSP replay.
     if (this.tuningScope === "pilot") {
-      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides, false).catch(() => undefined);
+      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides).catch(() => undefined);
     } else {
-      await this.api.setGateRules(this.tuningGateId, nextOverrides, false).catch(() => undefined);
+      await this.api.setGateRules(this.tuningGateId, nextOverrides).catch(() => undefined);
     }
   }
 
@@ -2717,9 +2677,9 @@ export class PilotRssiChart extends Component {
     };
     delete nextOverrides.beepOnCross;
     if (this.tuningScope === "pilot") {
-      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides, false).catch(() => undefined);
+      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides).catch(() => undefined);
     } else {
-      await this.api.setGateRules(this.tuningGateId, nextOverrides, false).catch(() => undefined);
+      await this.api.setGateRules(this.tuningGateId, nextOverrides).catch(() => undefined);
     }
   }
 
@@ -2758,8 +2718,8 @@ export class PilotRssiChart extends Component {
     const globalRules = this.store.rules;
     const gateOverrides = gate.ruleOverrides ?? {};
     const pilotOverrides = pilotGateOverridesAt(gate, pilot.slotIndex);
-    const gateOvrCount = Object.keys(gateOverrides).length;
-    const pilotOvrCount = Object.keys(pilotOverrides).length;
+    const gateOvrCount = countOverrides(gateOverrides);
+    const pilotOvrCount = countOverrides(pilotOverrides);
     const gateEff = gateRulesAt(this.store, gate.gateId);
     const pilotEff = pilotGateRulesAt(this.store, gate.gateId, pilot.slotIndex);
     const isPilotScope = this.tuningScope === "pilot";
@@ -2782,34 +2742,6 @@ export class PilotRssiChart extends Component {
       totalFilteredHere++;
       reasonCounts.set(f.reason, (reasonCounts.get(f.reason) ?? 0) + 1);
     }
-
-    const modeBarHtml =
-      this.contextMode === "practice"
-        ? `
-          <div class="scope-tune-mode-bar ${this.retroactiveApply ? "is-retro" : ""}">
-            <button
-              type="button"
-              role="switch"
-              aria-checked="${this.retroactiveApply}"
-              class="scope-tune-retro-toggle ${this.retroactiveApply ? "is-on" : ""}"
-              data-tune-act="toggle-retro"
-            >
-              <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
-              <span class="scope-tune-retro-copy">
-                <strong>Apply retroactively to buffered signal</strong>
-                <span class="note">${
-                  this.retroactiveApply
-                    ? "Live replay active: tuning rules or dragging threshold lines recalculates buffered laps and pass markers."
-                    : "Going forward only: changes apply to upcoming passes without modifying recorded session laps."
-                }</span>
-              </span>
-            </button>
-          </div>`
-        : `
-          <div class="scope-tune-mode-bar is-race-note">
-            ${icons.info(14)}
-            <span>Applies to upcoming passes only. Completed heat laps are reviewed in the Heat RSSI Editor.</span>
-          </div>`;
 
     const beepOwn = activeOverrides.beepOnCross;
     const beepOverridden = beepOwn !== undefined;
@@ -2854,7 +2786,7 @@ export class PilotRssiChart extends Component {
             type="button"
             role="switch"
             aria-checked="${beepEffOn}"
-            class="scope-tune-retro-toggle is-compact ${beepEffOn ? "is-on" : ""}"
+            class="scope-tune-switch is-compact ${beepEffOn ? "is-on" : ""}"
             data-tune-act="toggle-beep"
             aria-label="Beep on crossing"
           >
@@ -2975,7 +2907,6 @@ export class PilotRssiChart extends Component {
           </button>
         </div>
       </div>
-      ${modeBarHtml}
       <div class="scope-tune-grid">
         ${cardsHtml}
         ${beepCardHtml}

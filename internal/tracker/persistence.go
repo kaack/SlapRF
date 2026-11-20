@@ -436,7 +436,9 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 	}
 
 	for _, f := range s.Filtered {
-		e.filtered = append(e.filtered, f)
+		if f.Reason.IsValid() {
+			e.filtered = append(e.filtered, f)
+		}
 	}
 	if len(e.filtered) > maxStoredFiltered {
 		e.filtered = e.filtered[len(e.filtered)-maxStoredFiltered:]

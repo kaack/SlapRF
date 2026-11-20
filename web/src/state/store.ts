@@ -79,12 +79,27 @@ const UI_PREFS_STORAGE_KEY = "slaprf.ui.prefs.v1";
 const DEFAULT_RULES: TimingRules = {
   minLapSec: 5,
   maxLapSec: 120,
-  gateCooldownSec: 2,
-  minSectionSec: 0.5,
-  echoWindowSec: 3,
-  minPassHoldSec: 0.12,
+  minCrossingSec: 0.12,
   beepOnCross: false,
 };
+
+function normalizeTimingRules(raw?: Partial<TimingRules> & { minPassHoldSec?: number } | null): TimingRules {
+  if (!raw) return { ...DEFAULT_RULES };
+  const minLapSec = typeof raw.minLapSec === "number" && raw.minLapSec > 0 ? raw.minLapSec : DEFAULT_RULES.minLapSec;
+  const maxLapSec = typeof raw.maxLapSec === "number" && raw.maxLapSec > 0 ? raw.maxLapSec : DEFAULT_RULES.maxLapSec;
+  const rawCrossing =
+    typeof raw.minCrossingSec === "number" && raw.minCrossingSec > 0
+      ? raw.minCrossingSec
+      : typeof raw.minPassHoldSec === "number" && raw.minPassHoldSec > 0
+        ? raw.minPassHoldSec
+        : DEFAULT_RULES.minCrossingSec;
+  return {
+    minLapSec,
+    maxLapSec,
+    minCrossingSec: rawCrossing,
+    beepOnCross: Boolean(raw.beepOnCross),
+  };
+}
 
 const DEFAULT_RACE_STATE: RaceTournamentState = {
   mode: "practice",
@@ -1433,7 +1448,7 @@ export class AppStore {
     this._crossings = state.crossings ?? [];
     this._filtered = state.filtered ?? [];
     this._summaries = state.summaries ?? [];
-    this._rules = { ...DEFAULT_RULES, ...(state.rules ?? {}) };
+    this._rules = normalizeTimingRules(state.rules);
     this._timingHardwareMode = normalizeTimingHardwareMode(state.timingHardwareMode);
     sharedLiveTimeRelay.setSuppressed(this._timingHardwareMode === "laprf");
     this._simulatorRunning = state.simulatorRunning;
@@ -1660,7 +1675,7 @@ export class AppStore {
   }
 
   public applyRules(rules: TimingRules): void {
-    this._rules = { ...DEFAULT_RULES, ...rules };
+    this._rules = normalizeTimingRules(rules);
     this.emit("rules");
   }
 

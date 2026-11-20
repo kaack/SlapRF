@@ -2946,32 +2946,19 @@ html[data-theme="light"] .bar-time {
   padding: 0;
 }
 
-.scope-tune-mode-bar {
-  padding: 8px 14px;
-  border-bottom: 1px solid var(--border);
+.scope-tune-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 3px 8px 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
   background: var(--surface);
-}
-.scope-tune-mode-bar.is-retro {
-  background: var(--accent-soft, rgba(212, 255, 58, 0.07));
-}
-.scope-tune-mode-bar.is-race-note {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--text-2);
-}
-.scope-tune-retro-toggle {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
   color: inherit;
-  text-align: left;
   cursor: pointer;
+}
+.scope-tune-switch.is-on {
+  border-color: var(--accent-line);
 }
 .scope-tune-switch-track {
   position: relative;
@@ -2993,40 +2980,13 @@ html[data-theme="light"] .bar-time {
   background: var(--text-3);
   transition: transform 0.16s, background-color 0.16s;
 }
-.scope-tune-retro-toggle.is-on .scope-tune-switch-track {
+.scope-tune-switch.is-on .scope-tune-switch-track {
   border-color: var(--accent-line);
   background: var(--accent-soft, rgba(212, 255, 58, 0.22));
 }
-.scope-tune-retro-toggle.is-on .scope-tune-switch-thumb {
+.scope-tune-switch.is-on .scope-tune-switch-thumb {
   transform: translateX(15px);
   background: var(--accent);
-}
-.scope-tune-retro-copy {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-}
-.scope-tune-retro-copy strong {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: var(--text-1);
-}
-.scope-tune-retro-copy .note {
-  font-size: 11.5px;
-  line-height: 1.35;
-}
-
-.scope-tune-retro-toggle.is-compact {
-  width: auto;
-  gap: 7px;
-  padding: 3px 8px 3px 5px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-sm);
-  background: var(--surface);
-}
-.scope-tune-retro-toggle.is-compact.is-on {
-  border-color: var(--accent-line);
 }
 .scope-tune-switch-state {
   font-size: 11.5px;
@@ -3035,7 +2995,7 @@ html[data-theme="light"] .bar-time {
   text-align: center;
   color: var(--text-2);
 }
-.scope-tune-retro-toggle.is-on .scope-tune-switch-state {
+.scope-tune-switch.is-on .scope-tune-switch-state {
   color: var(--accent);
 }
 .rule-switch-wrap {
@@ -3043,9 +3003,6 @@ html[data-theme="light"] .bar-time {
   align-items: center;
   justify-content: flex-end;
   gap: 6px;
-}
-.scope-tune-card.is-beep-card {
-  grid-column: 1 / -1;
 }
 .scope-tune-grid {
   display: grid;
@@ -3196,7 +3153,6 @@ html[data-theme="light"] .bar-time {
   .scope-tune-head {
     padding: 9px 10px;
   }
-  .scope-tune-mode-bar,
   .scope-tune-card,
   .scope-tune-foot {
     padding-left: 10px;

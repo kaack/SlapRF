@@ -259,8 +259,8 @@ func buildDemoPracticeDataset(
 				GateID:      2,
 				SlotIndex:   p0.SlotIndex,
 				Callsign:    p0.Callsign,
-				Reason:      domain.FilterCooldown,
-				Detail:      "1.18s since last pass at Gate 2 (cooldown 2.0s)",
+				Reason:      domain.FilterMinLap,
+				Detail:      "Gate 2 again after 1.18s - quicker than min lap (5.0s)",
 				PeakRSSIDbm: -49.2,
 			},
 			{
@@ -268,8 +268,8 @@ func buildDemoPracticeDataset(
 				GateID:      3,
 				SlotIndex:   p1.SlotIndex,
 				Callsign:    p1.Callsign,
-				Reason:      domain.FilterEcho,
-				Detail:      "Re-detected previous Gate 2 within 1.75s echo window",
+				Reason:      domain.FilterSpike,
+				Detail:      "Sharp 45 ms spike at Gate 3 (min crossing 120 ms)",
 				PeakRSSIDbm: -51.6,
 			},
 		}

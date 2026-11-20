@@ -1063,10 +1063,8 @@ export function makeDefaultRules(overrides: Partial<TimingRules> = {}): TimingRu
   return {
     minLapSec: 5,
     maxLapSec: 120,
-    gateCooldownSec: 2,
-    minSectionSec: 0.5,
-    echoWindowSec: 3,
-    minPassHoldSec: 0.12,
+    minCrossingSec: 0.12,
+    beepOnCross: false,
     ...overrides,
   };
 }
@@ -1204,7 +1202,6 @@ export function makeMockApiClient(store: AppStore): MockApiClientRecord {
     setGateThresholds: record("setGateThresholds"),
     setGateRules: record("setGateRules"),
     setPilotGateRules: record("setPilotGateRules"),
-    recalculateBufferedPractice: record("recalculateBufferedPractice"),
     updateRules: record("updateRules"),
     getVersionInfo: record("getVersionInfo", {
       release_tag: "(test)",

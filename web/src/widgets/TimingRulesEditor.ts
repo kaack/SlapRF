@@ -24,8 +24,6 @@ interface RuleSpec {
   max: number;
   /** Filter reason this rule produces, to show how often it fired. */
   reason: FilterReason;
-  /** Whether a single gate can override it. */
-  perGate: boolean;
 }
 
 const RULES: RuleSpec[] = [
@@ -37,7 +35,6 @@ const RULES: RuleSpec[] = [
     min: 1,
     max: 120,
     reason: "MIN_LAP",
-    perGate: true,
   },
   {
     key: "maxLapSec",
@@ -47,65 +44,29 @@ const RULES: RuleSpec[] = [
     min: 10,
     max: 900,
     reason: "LAP_TOO_LONG",
-    perGate: true,
   },
   {
-    key: "gateCooldownSec",
-    label: "Timer cool-down (seconds)",
-    help: "Time a timer ignores a pilot right after counting them.",
-    step: 0.1,
-    min: 0.2,
-    max: 15,
-    reason: "COOLDOWN",
-    perGate: true,
-  },
-  {
-    key: "minSectionSec",
-    label: "Minimum section time (seconds)",
-    help: "Shortest valid transit time from the previous timer.",
-    step: 0.1,
-    min: 0.1,
-    max: 15,
-    reason: "TOO_SOON",
-    perGate: true,
-  },
-  {
-    key: "echoWindowSec",
-    label: "Previous-timer echo window (seconds)",
-    help: "Ignores repeat triggers at the timer a pilot just left (0 disables).",
-    step: 0.5,
-    min: 0,
-    max: 15,
-    reason: "ECHO",
-    perGate: true,
-  },
-  {
-    key: "minPassHoldSec",
-    label: "Minimum pass hold time (seconds)",
-    help: "Shortest pass hold duration and curve area required to reject sharp RF or Wi-Fi spikes.",
+    key: "minCrossingSec",
+    label: "Minimum crossing time (seconds)",
+    help: "Minimum signal hold duration required across the gate to reject sharp RF or Wi-Fi spikes.",
     step: 0.02,
     min: 0.04,
     max: 1.5,
     reason: "SPIKE",
-    perGate: true,
   },
 ];
 
 const DEFAULT_RULES: TimingRules = {
   minLapSec: 5,
   maxLapSec: 120,
-  gateCooldownSec: 2,
-  minSectionSec: 0.5,
-  echoWindowSec: 3,
-  minPassHoldSec: 0.12,
+  minCrossingSec: 0.12,
   beepOnCross: false,
 };
 const RULES_SCOPE_STORAGE_KEY = "slaprf.ui.rules_scope.v1";
 
 /**
- * Settings section for the detection guardrails. "All gates" edits the global rules; picking a
- * gate lets you override individual rules for just that gate (its position on the track may
- * need, say, a longer echo window). Every change auto-saves immediately.
+ * Settings section for the detection guardrails. "All timers" edits the global rules; picking a
+ * timer lets you override individual rules for just that timer. Every change auto-saves immediately.
  */
 export class TimingRulesEditor extends Component {
   private readonly store: AppStore;
@@ -256,7 +217,11 @@ export class TimingRulesEditor extends Component {
         <span class="channel-name">All timers</span>
       </button>`,
       ...this.store.nodes.map((p) => {
-        const n = Object.keys(this.overridesOf(p)).length;
+        const ovr = this.overridesOf(p);
+        let n = ovr.beepOnCross !== undefined ? 1 : 0;
+        for (const s of RULES) {
+          if (ovr[s.key] !== undefined) n++;
+        }
         const on = this.scope === p.gateId;
         const dim = this.scope !== null && !on;
         return `<button type="button" class="channel ${on ? "is-focus" : ""} ${dim ? "is-dim" : ""}" data-scope="${p.gateId}"
@@ -336,11 +301,11 @@ export class TimingRulesEditor extends Component {
             type="button"
             role="switch"
             aria-checked="${isOn}"
-            class="scope-tune-retro-toggle is-compact ${isOn ? "is-on" : ""}"
+            class="scope-tune-switch is-compact ${isOn ? "is-on" : ""}"
             data-beep-toggle
           >
             <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
-            <span class="mono">${isOn ? "ON" : "OFF"}</span>
+            <span class="mono scope-tune-switch-state">${isOn ? "ON" : "OFF"}</span>
           </button>
         </div>
       </div>`;
@@ -360,11 +325,11 @@ export class TimingRulesEditor extends Component {
             type="button"
             role="switch"
             aria-checked="${effOn}"
-            class="scope-tune-retro-toggle is-compact ${effOn ? "is-on" : ""}"
+            class="scope-tune-switch is-compact ${effOn ? "is-on" : ""}"
             data-beep-toggle
           >
             <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
-            <span class="mono">${effOn ? "ON" : "OFF"}</span>
+            <span class="mono scope-tune-switch-state">${effOn ? "ON" : "OFF"}</span>
           </button>
           ${
             hasOwn
@@ -377,20 +342,7 @@ export class TimingRulesEditor extends Component {
 
   /** A rule for one timer: click the inline pencil icon inside the input to edit/override, or reset icon to revert. */
   private renderGateRow(spec: RuleSpec, r: TimingRules, overrides: GateRuleOverrides): string {
-    if (!spec.perGate) {
-      return `
-        <div class="rule-row is-global-only">
-          <div class="rule-text">
-            <div class="rule-label">${spec.label}</div>
-            <div class="rule-help">Applies to the whole lap, so it's set under All timers.</div>
-            <div class="rule-meta"></div>
-          </div>
-          <div class="rule-input">
-            <input class="input mono" type="number" value="${r[spec.key]}" disabled />
-          </div>
-        </div>`;
-    }
-    const key = spec.key as GateRuleKey;
+    const key = spec.key;
     const own = overrides[key];
     const on = own !== undefined;
     const title = on
@@ -432,10 +384,9 @@ export class TimingRulesEditor extends Component {
     btn.innerHTML = on ? icons.reset(14) : icons.pencil(14);
   }
 
-  /** On the All gates view, list which gates override this rule. */
+  /** On the All timers view, list which timers override this rule. */
   private renderOverrideNote(spec: RuleSpec): string {
-    if (!spec.perGate) return "";
-    const key = spec.key as GateRuleKey;
+    const key = spec.key;
     const list = this.store.nodes
       .filter((p) => this.overridesOf(p)[key] !== undefined)
       .map((p) => `${esc(gateLabel(this.store, p.gateId))} ${this.overridesOf(p)[key]} s`);
@@ -452,8 +403,9 @@ export class TimingRulesEditor extends Component {
     this.el.querySelectorAll<HTMLElement>("[data-count]").forEach((node) => {
       const reason = node.dataset.count as FilterReason;
       const n = counts.get(reason) ?? 0;
+      const label = FILTER_LABELS[reason] ?? reason;
       node.innerHTML = n
-        ? `${icons.info(13)}<span>${esc(`${n} ${FILTER_LABELS[reason].toLowerCase()}${where} this session`)}</span>`
+        ? `${icons.info(13)}<span>${esc(`${n} ${label.toLowerCase()}${where} this session`)}</span>`
         : "";
     });
   }
@@ -462,7 +414,10 @@ export class TimingRulesEditor extends Component {
     const data = new FormData(form);
     if (this.scope === null) {
       const next = { ...this.store.rules };
-      for (const spec of RULES) next[spec.key] = Number(data.get(spec.key));
+      for (const spec of RULES) {
+        const raw = data.get(spec.key);
+        if (raw !== null && raw !== "") next[spec.key] = Number(raw);
+      }
       await this.api.updateRules(next);
       return;
     }
@@ -473,9 +428,8 @@ export class TimingRulesEditor extends Component {
       overrides.beepOnCross = prevOvr.beepOnCross;
     }
     for (const spec of RULES) {
-      if (!spec.perGate) continue;
       const v = data.get(spec.key);
-      if (v !== null && v !== "") overrides[spec.key as NumericGateRuleKey] = Number(v);
+      if (v !== null && v !== "") overrides[spec.key] = Number(v);
     }
     await this.api.setGateRules(this.scope, overrides);
   }

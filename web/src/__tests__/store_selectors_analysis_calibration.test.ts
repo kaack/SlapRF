@@ -149,7 +149,7 @@ describe("state/store — Hydration, Normalization, Topic Isolation & Scoped Vie
     expect(configFires).toBe(0);
 
     // Filtered detection increments crossings topic only
-    store.ingestFiltered(makeFiltered(newestUs + 600_000, 1, 2, "COOLDOWN"));
+    store.ingestFiltered(makeFiltered(newestUs + 600_000, 1, 2, "MIN_LAP"));
     expect(crossingsFires).toBe(2);
 
     // Lap ingestion fires laps topic + onLapRecorded

@@ -812,8 +812,7 @@ export interface PracticeActionPayload {
     | "remove_session_pilot"
     | "set_session_pilot_channel"
     | "clear_session_laps"
-    | "toggle_session_lap"
-    | "recalculate_buffered";
+    | "toggle_session_lap";
   sessionId?: string;
   name?: string;
   tags?: string[];
@@ -1241,21 +1240,12 @@ export interface StatusResponse {
 export interface TimingRules {
   minLapSec: number;
   maxLapSec: number;
-  gateCooldownSec: number;
-  minSectionSec: number;
-  echoWindowSec: number;
-  minPassHoldSec: number;
+  minCrossingSec: number;
   beepOnCross?: boolean;
 }
 
 /** Numeric detection/timing rules overridable per gate or per (gate, pilot). */
-export type NumericGateRuleKey =
-  | "minLapSec"
-  | "maxLapSec"
-  | "gateCooldownSec"
-  | "minSectionSec"
-  | "echoWindowSec"
-  | "minPassHoldSec";
+export type NumericGateRuleKey = "minLapSec" | "maxLapSec" | "minCrossingSec";
 
 /** Every detection/timing rule can be overridden per gate or per (gate, pilot). */
 export type GateRuleKey = NumericGateRuleKey;
@@ -1263,7 +1253,7 @@ export type GateRuleOverrides = Partial<Record<NumericGateRuleKey, number>> & {
   beepOnCross?: boolean;
 };
 
-export type FilterReason = "SPIKE" | "COOLDOWN" | "TOO_SOON" | "ECHO" | "MIN_LAP" | "LAP_TOO_LONG";
+export type FilterReason = "SPIKE" | "MIN_LAP" | "LAP_TOO_LONG";
 
 /** A detection the timing rules set aside (or a lap that was too long to count). */
 export interface FilteredDetection {

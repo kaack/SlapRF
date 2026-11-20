@@ -49,7 +49,6 @@ type ArmStateSubscriber interface {
 type pilotProgress struct {
 	lastGateID     uint8  // 0 = no accepted crossing in the current run
 	lastGateTimeUs uint64 // timestamp of that crossing
-	prevGateID     uint8  // gate accepted before lastGateID (for echo detection)
 	lapStartUs     uint64 // 0 = waiting for the first start/finish crossing
 	currentSectors []domain.SectorSplit
 }
@@ -101,10 +100,8 @@ type Engine struct {
 	savedRHUSBGates     []domain.TrackGate
 	savedRHUSBTimers    []domain.DetectedTimer
 	hasSavedRHUSBState  bool
-	rhDebugStreamTimers map[uint8]bool
-	replayRing          []bufferedTelemetryFrame
-	extCrossingRing     []bufferedExternalCrossing
-	subscribers         []EventSubscriber
+	rhDebugStreamTimers    map[uint8]bool
+	subscribers            []EventSubscriber
 }
 
 // NewEngine creates the simulation engine with the default course and pilot slots. It follows
@@ -333,7 +330,6 @@ func (e *Engine) Rules() domain.TimingRules {
 }
 
 // SetRules replaces the timing guardrails (values are clamped) and returns what was applied.
-// Applies going forward by default; call RecalculateBufferedPractice() when retroactive replay is requested.
 func (e *Engine) SetRules(r domain.TimingRules) domain.TimingRules {
 	r = r.Normalized()
 	e.mu.Lock()
@@ -615,7 +611,6 @@ func (e *Engine) ApplyLapRFSetup(slotMap map[int]domain.PilotSlot) {
 // ResetSession clears recorded laps, crossings, and sector statistics while preserving gate & pilot config.
 func (e *Engine) ResetSession() {
 	e.mu.Lock()
-	e.clearReplayRecordingLocked("")
 	e.resetSessionLocked()
 	var practiceSnap domain.PracticeManagerState
 	var subs []EventSubscriber
@@ -728,7 +723,6 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 		return
 	}
 	frame.TimerID = gate.GateID
-	e.recordReplayTelemetryLocked(gate.GateID, frame.TimestampUs, frame)
 	hwMode := domain.NormalizeTimingHardwareMode(e.timingHardwareMode)
 	isSlapRFMode := domain.IsSlapRFMode(hwMode)
 	var autoCalibChanged bool
@@ -798,7 +792,7 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 					continue
 				}
 				ckey := detectorKey(gate.GateID, pilot.SlotIndex)
-				if last, ok := e.lastAcceptedUs[ckey]; ok && seconds(last, ev.TimestampUs) < r.GateCooldownSec {
+				if last, ok := e.lastAcceptedUs[ckey]; ok && seconds(last, ev.TimestampUs) < r.MinLapSec {
 					continue
 				}
 				e.lastAcceptedUs[ckey] = ev.TimestampUs

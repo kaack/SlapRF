@@ -335,9 +335,6 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		applied := eng.SetRules(rules)
-		if r.URL.Query().Get("retroactive") == "1" {
-			eng.RecalculateBufferedPractice()
-		}
 		writeJSON(w, http.StatusOK, applied)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -408,9 +405,6 @@ func (s *Server) handleThresholds(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if r.URL.Query().Get("retroactive") == "1" {
-		eng.RecalculateBufferedPractice()
-	}
 	s.handleGetState(w, r)
 }
 
@@ -423,10 +417,9 @@ func (s *Server) handleGateRules(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var body struct {
-		GateID      uint8                    `json:"gateId"`
-		SlotIndex   int                      `json:"slotIndex,omitempty"`
-		Overrides   domain.GateRuleOverrides `json:"overrides"`
-		Retroactive bool                     `json:"retroactive,omitempty"`
+		GateID    uint8                    `json:"gateId"`
+		SlotIndex int                      `json:"slotIndex,omitempty"`
+		Overrides domain.GateRuleOverrides `json:"overrides"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -442,9 +435,6 @@ func (s *Server) handleGateRules(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
-	}
-	if body.Retroactive || r.URL.Query().Get("retroactive") == "1" {
-		eng.RecalculateBufferedPractice()
 	}
 	s.handleGetState(w, r)
 }
