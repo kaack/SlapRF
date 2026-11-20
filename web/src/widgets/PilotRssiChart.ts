@@ -217,6 +217,7 @@ export class PilotRssiChart extends Component {
   private readonly pending = new Map<number, { enter: number; exit: number }>();
   private tags: TagBox[] = [];
   private calibMessage = "";
+  private calibMessageShort = "";
   /** Gate shown on its own (with its editable threshold); null shows every gate. */
   private focus: number | null = null;
   /** Optional explicit pilot slot override (e.g. when embedded in Race Control). */
@@ -297,6 +298,7 @@ export class PilotRssiChart extends Component {
     }
     this.tags = [];
     this.calibMessage = "";
+    this.calibMessageShort = "";
     this.smoothYMin = null;
     this.smoothYMax = null;
     this.renderControls();
@@ -327,6 +329,7 @@ export class PilotRssiChart extends Component {
     }
     this.tags = [];
     this.calibMessage = "";
+    this.calibMessageShort = "";
     this.smoothYMin = null;
     this.smoothYMax = null;
     this.renderControls();
@@ -516,6 +519,7 @@ export class PilotRssiChart extends Component {
         if (gId !== null && this.focus !== gId) {
           this.focus = gId;
           this.calibMessage = "";
+          this.calibMessageShort = "";
           this.saveChartPrefs();
         }
         this.renderControls();
@@ -532,6 +536,7 @@ export class PilotRssiChart extends Component {
           this.tuningGateId = null;
         }
         this.calibMessage = "";
+        this.calibMessageShort = "";
         this.saveChartPrefs();
         this.renderControls();
         this.renderCalib();
@@ -1043,6 +1048,7 @@ export class PilotRssiChart extends Component {
     this.onDispose(
       store.subscribe(["selection"], () => {
         this.calibMessage = "";
+        this.calibMessageShort = "";
         this.smoothYMin = null;
         this.smoothYMax = null;
         this.renderControls();
@@ -1459,7 +1465,7 @@ export class PilotRssiChart extends Component {
     return best ? { gateId: best.gateId, kind: best.kind } : null;
   }
 
-  private async apply(updates: GateThresholdUpdate[], message: string): Promise<void> {
+  private async apply(updates: GateThresholdUpdate[], message: string, shortMessage?: string): Promise<void> {
     updates.forEach((u) => {
       if (this.isLapRF) {
         const rawT = u.laprfThreshold ?? u.enterDbm;
@@ -1488,8 +1494,10 @@ export class PilotRssiChart extends Component {
     try {
       await this.api.setGateThresholds(updates);
       this.calibMessage = message;
+      this.calibMessageShort = shortMessage ?? message;
     } catch {
       this.calibMessage = "Could not save thresholds.";
+      this.calibMessageShort = "Could not save thresholds.";
     } finally {
       updates.forEach((u) => this.pending.delete(u.gateId));
       this.renderCalib();
@@ -1605,6 +1613,7 @@ export class PilotRssiChart extends Component {
     }
     if (updates.length === 0) {
       this.calibMessage = `Cannot calibrate yet (${skipped[0] ?? "no signal"}). Let ${pilot.callsign} fly a few laps with this page open, then try again.`;
+      this.calibMessageShort = "Cannot calibrate yet · fly a few passes first";
       this.renderCalib();
       return;
     }
@@ -1612,7 +1621,8 @@ export class PilotRssiChart extends Component {
     const unit = isRH ? "RSSI" : "dBm";
     await this.apply(
       updates,
-      `Calibrated from the last ${minutes} min: ${done.join(" · ")} ${unit}.${skipped.length ? ` Skipped ${skipped.join(", ")}.` : ""}`
+      `Calibrated from the last ${minutes} min: ${done.join(" · ")} ${unit}.${skipped.length ? ` Skipped ${skipped.join(", ")}.` : ""}`,
+      `Calibrated: ${done.join(" · ")} ${unit}`
     );
   }
 
@@ -1624,9 +1634,14 @@ export class PilotRssiChart extends Component {
         this.focus === null
           ? `Every timer is back on ${who}'s own threshold (${this.pilotDefault()}).`
           : `${gateLabel(this.store, this.focus)} is back on ${who}'s own threshold (${this.pilotDefault()}).`;
+      const shortMsg =
+        this.focus === null
+          ? `Calibration cleared (${this.pilotDefault()})`
+          : `${gateLabel(this.store, this.focus)}: calibration cleared (${this.pilotDefault()})`;
       return this.apply(
         this.shownGates.map((p) => ({ gateId: p.gateId, slotIndex, enterDbm: 0, laprfThreshold: -1 })),
-        message
+        message,
+        shortMsg
       );
     }
     if (this.isRH) {
@@ -1634,6 +1649,10 @@ export class PilotRssiChart extends Component {
         this.focus === null
           ? `Every timer is back on ${who}'s own thresholds (${this.pilotDefault()}/${this.pilotExitDefault()}).`
           : `${gateLabel(this.store, this.focus)} is back on ${who}'s own thresholds (${this.pilotDefault()}/${this.pilotExitDefault()}).`;
+      const shortMsg =
+        this.focus === null
+          ? `Calibration cleared (${this.pilotDefault()}/${this.pilotExitDefault()})`
+          : `${gateLabel(this.store, this.focus)}: calibration cleared (${this.pilotDefault()}/${this.pilotExitDefault()})`;
       return this.apply(
         this.shownGates.map((p) => ({
           gateId: p.gateId,
@@ -1642,16 +1661,22 @@ export class PilotRssiChart extends Component {
           rhEnterThreshold: -1,
           rhExitThreshold: -1,
         })),
-        message
+        message,
+        shortMsg
       );
     }
     const message =
       this.focus === null
         ? `Every timer is back on ${who}'s own thresholds (${this.pilotDefault()}/${this.pilotExitDefault()} dBm).`
         : `${gateLabel(this.store, this.focus)} is back on ${who}'s own thresholds (${this.pilotDefault()}/${this.pilotExitDefault()} dBm).`;
+    const shortMsg =
+      this.focus === null
+        ? `Calibration cleared (${this.pilotDefault()}/${this.pilotExitDefault()} dBm)`
+        : `${gateLabel(this.store, this.focus)}: calibration cleared (${this.pilotDefault()}/${this.pilotExitDefault()} dBm)`;
     return this.apply(
       this.shownGates.map((p) => ({ gateId: p.gateId, slotIndex, enterDbm: 0, exitDbm: 0 })),
-      message
+      message,
+      shortMsg
     );
   }
 
@@ -2422,7 +2447,8 @@ export class PilotRssiChart extends Component {
       );
       const isTuneOpen = this.tuneDrawerOpen && this.tuningGateId === null;
       if (this.calibMessage) {
-        textHtml = esc(this.calibMessage);
+        const shortMsg = this.calibMessageShort || this.calibMessage;
+        textHtml = `<span class="scope-calib-text-full">${esc(this.calibMessage)}</span><span class="scope-calib-text-short">${esc(shortMsg)}</span>`;
       } else {
         const fullText = isLapRF
           ? "Select a timer above to view or drag its LapRF crossing threshold (300–3500)."
@@ -2449,11 +2475,12 @@ export class PilotRssiChart extends Component {
       const isCal = isLapRF ? t.calibrated : t.calibrated || ex.calibrated;
       const isTuneOpen = this.tuneDrawerOpen && this.tuningGateId === this.focus;
       if (this.calibMessage) {
-        textHtml = esc(this.calibMessage);
+        const shortMsg = this.calibMessageShort || this.calibMessage;
+        textHtml = `<span class="scope-calib-text-full">${esc(this.calibMessage)}</span><span class="scope-calib-text-short">${esc(shortMsg)}</span>`;
       } else {
         const baseText = isLapRF
-          ? `${name}: Threshold ${t.dbm.toFixed(0)} ${isCal ? "(calibrated)" : `(${pilot.callsign}'s default)`}`
-          : `${name}: Enter ${t.dbm.toFixed(0)} / Exit ${ex.dbm.toFixed(0)}${this.unitSuffix} ${isCal ? "(calibrated)" : `(${pilot.callsign}'s default)`}`;
+          ? `${name}: Threshold ${t.dbm.toFixed(0)} ${isCal ? "(calibrated)" : "(default)"}`
+          : `${name}: Enter ${t.dbm.toFixed(0)} / Exit ${ex.dbm.toFixed(0)}${this.unitSuffix} ${isCal ? "(calibrated)" : "(default)"}`;
         const dragHint = isLapRF ? " · drag line to adjust" : " · drag lines to adjust";
         textHtml = `${esc(baseText)}<span class="scope-calib-drag-hint">${esc(dragHint)}</span>`;
       }
