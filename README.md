@@ -25,14 +25,20 @@ A single-gate timer measures total lap time at the Start / Finish gate. When you
 
 ## How the SlapRF System Works
 
-![SlapRF Hub and Spoke Setup](docs/slaprf-setup.jpg)
-
 A DIY **SlapRF** track uses one **Hub timer (`H1`)** and up to 6 **Spoke timers (`T1` to `T6`)**:
 
 - **Hub timer (`H1`)**: Collects wireless readings from all Spoke timers over 2.4 GHz ESP-NOW and sends them to the SlapRF app on your phone or computer. You can run the Hub in **Bluetooth** mode or **USB** mode:
   - **Bluetooth Hub (wireless)**: Place the Hub at the Start / Finish gate on a battery. It times the Start / Finish gate directly and sends all track readings over Bluetooth to your phone or laptop at the pilot bench. No USB cable is needed during flight, which makes setup fast for regular practice.
   - **USB Hub (wired)**: Plug the Hub into your laptop or Android phone with a USB-C cable. USB gives the lowest latency when you want minimum delay. By default, a USB Hub stays at the bench as a receiver, or you can drag it onto a gate in the **Track** editor if your USB cable reaches that gate.
 - **Spoke timers (`T1` to `T6`)**: Placed at gates around the track. Each Spoke sweeps up to 8 active 5.8 GHz VTX frequencies across Raceband, Fatshark, Boscam, and IMD6 channels and sends its readings wirelessly to the Hub.
+
+### Wireless Bluetooth Hub Setup
+
+![SlapRF Bluetooth Hub Setup](docs/slaprf-setup-ble.jpg)
+
+### Wired USB Hub & Spoke Setup
+
+![SlapRF USB Hub and Spoke Setup](docs/slaprf-setup.jpg)
 
 ```mermaid
 flowchart LR
