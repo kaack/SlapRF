@@ -128,6 +128,7 @@ export class NetworkView extends Component {
   private surveyError: string | null = null;
   private surveyLeaseTimer: number | null = null;
   private didResetTempHubChannels = false;
+  private isViewActive = true;
 
   private laprfHost = "192.168.1.2";
   private laprfPort = 5403;
@@ -560,10 +561,18 @@ export class NetworkView extends Component {
     const onBeforeUnload = () => {
       this.releaseSurveyOnLeave();
     };
+    const onVisibilityChange = () => {
+      if (document.hidden && this.surveyAllRaceband) {
+        this.releaseSurveyOnLeave();
+        this.renderAll();
+      }
+    };
     window.addEventListener("beforeunload", onBeforeUnload);
+    document.addEventListener("visibilitychange", onVisibilityChange);
 
     this.onDispose(() => {
       window.removeEventListener("beforeunload", onBeforeUnload);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       this.releaseSurveyOnLeave();
       if (this.rafId !== 0) {
         window.cancelAnimationFrame(this.rafId);
@@ -584,6 +593,22 @@ export class NetworkView extends Component {
 
     void this.syncInitialSurveyState();
     this.renderAll();
+  }
+
+  public override onActivate(): void {
+    this.isViewActive = true;
+    void this.syncInitialSurveyState();
+    this.renderAll();
+  }
+
+  public override onDeactivate(): void {
+    this.isViewActive = false;
+    if (this.surveyAllRaceband) {
+      this.releaseSurveyOnLeave();
+      this.renderAll();
+    } else {
+      this.stopSurveyLeaseTimer();
+    }
   }
 
   private slot(name: string): HTMLElement {
@@ -737,8 +762,9 @@ export class NetworkView extends Component {
         this.stopSurveyLeaseTimer();
         return;
       }
-      if (this.isLiveRaceHeatActive()) {
-        void this.setSurveyMode(false);
+      if (!this.isViewActive || this.el.hidden || document.hidden || this.isLiveRaceHeatActive()) {
+        this.releaseSurveyOnLeave();
+        this.renderAll();
         return;
       }
       if (capabilitiesSnapshot().portable && !this.store.simulatorRunning) {

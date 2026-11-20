@@ -239,4 +239,54 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       await probeCapabilities();
     }
   });
+
+  it("releases All Raceband survey immediately when NetworkView is deactivated via route switch", async () => {
+    const origFetch = window.fetch;
+    const surveyPosts: Array<{ on?: boolean }> = [];
+    window.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.includes("/api/capabilities")) {
+        return new Response(
+          JSON.stringify({ portable: true, nativeEngine: true, nativeUsb: true }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      if (url.includes("/api/hub/survey")) {
+        if (init?.method === "POST" && typeof init.body === "string") {
+          surveyPosts.push(JSON.parse(init.body) as { on?: boolean });
+          return new Response(JSON.stringify({ active: surveyPosts[surveyPosts.length - 1]?.on ?? false }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        return new Response(JSON.stringify({ active: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      return origFetch(input, init);
+    }) as typeof window.fetch;
+
+    const store = makeStore({
+      simulatorRunning: false,
+      timingHardwareMode: "slaprf_ble",
+    });
+    const { api } = makeMockApiClient(store);
+    const root = mountHtml(`<div id="ble-net-survey-host"></div>`);
+    let netView: NetworkView | null = null;
+    try {
+      await probeCapabilities();
+      netView = new NetworkView(root.querySelector("#ble-net-survey-host")!, store, api);
+      await flushMicrotasks();
+      await new Promise((r) => window.setTimeout(r, 20));
+
+      netView.onDeactivate();
+      await flushMicrotasks();
+      expect(surveyPosts.some((p) => p.on === false)).toBe(true);
+    } finally {
+      netView?.destroy();
+      window.fetch = origFetch;
+      await probeCapabilities();
+    }
+  });
 });

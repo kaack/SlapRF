@@ -607,6 +607,41 @@ export class DebugView extends Component {
     this.renderFrame();
   }
 
+  public override onDeactivate(): void {
+    const hadActiveStream =
+      this.liveOn ||
+      this.scanLive ||
+      Boolean(this.status?.scanLive) ||
+      this.logOn ||
+      Boolean(this.status?.freqsTemporary) ||
+      this.status?.rf.enabled === false;
+    this.stopActiveStreamsOn(this.console);
+    if (this.liveOn || this.scanLive || this.logOn) {
+      this.liveOn = false;
+      this.scanLive = false;
+      this.logOn = false;
+      this.resumeLiveAfterReconnect = false;
+      this.resumeScanLiveAfterReconnect = false;
+    }
+    if (this.rhLiveOn) {
+      this.rhLiveOn = false;
+      void this.api?.setRHDebugStream?.(0, false)?.catch(() => undefined);
+    }
+    if ((this.scanLive || this.scanning) && this.isRotorHazardUSBMode() && this.store) {
+      this.scanLive = false;
+      this.scanning = false;
+      void sharedRHLink
+        .runUSBScan(this.store, this.api, { timerId: 0, mode: "stop", start: 5180, stop: 5945, step: 5 })
+        .catch(() => undefined);
+    }
+    if (usbPool.debugSlotIndex === 1 || usbPool.slots[1]?.connected) {
+      void usbPool.revertDebugToMain();
+    }
+    if (hadActiveStream) {
+      this.renderAll();
+    }
+  }
+
   private hwMode(): TimingHardwareMode {
     return this.store?.timingHardwareMode ?? "slaprf";
   }
@@ -1193,8 +1228,9 @@ export class DebugView extends Component {
     if (!target.connected) return;
     const cmds: string[] = [];
     if (this.liveOn) cmds.push("LIVE 0");
-    if (this.scanLive) cmds.push("SCAN STOP");
+    if (this.scanLive || this.status?.scanLive) cmds.push("SCAN STOP");
     if (this.logOn) cmds.push("LOG 0");
+    if (this.status?.freqsTemporary) cmds.push("CHANNELS RESET");
     if (!this.status?.emergencyMode) cmds.push("RF 1");
     if (cmds.length > 0) {
       void target.send(cmds.join("\n")).catch(() => undefined);

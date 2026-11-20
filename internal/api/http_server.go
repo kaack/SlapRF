@@ -74,6 +74,7 @@ type SimBackendState struct {
 type ServerHooks struct {
 	OnMutation      func()
 	OnModeChanged   func(simRunning bool)
+	OnTimingStarted func()
 	OnStorageReset  func()
 	OnStorageImport func()
 }
@@ -345,6 +346,9 @@ func (s *Server) handleToggleArm(w http.ResponseWriter, r *http.Request) {
 	}
 	eng := s.activeEngine()
 	eng.SetRaceArmed(!eng.IsRaceArmed())
+	if eng.IsRaceArmed() && s.hooks.OnTimingStarted != nil {
+		s.hooks.OnTimingStarted()
+	}
 	s.handleGetStatus(w, r)
 }
 
@@ -799,6 +803,9 @@ func (s *Server) handleResetSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.activeEngine().ResetSession()
+	if s.activeEngine().IsRaceArmed() && s.hooks.OnTimingStarted != nil {
+		s.hooks.OnTimingStarted()
+	}
 	s.handleGetState(w, r)
 }
 

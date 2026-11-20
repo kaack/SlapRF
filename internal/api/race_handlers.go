@@ -146,6 +146,9 @@ func (s *Server) handleRaceControl(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if (body.Action == "start" || body.Action == "resume" || body.Action == "restart") && s.hooks.OnTimingStarted != nil {
+		s.hooks.OnTimingStarted()
+	}
 	s.handleGetState(w, r)
 }
 
@@ -204,6 +207,9 @@ func (s *Server) handlePracticeAction(w http.ResponseWriter, r *http.Request) {
 	if _, err := s.activeEngine().PracticeAction(body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if (body.Action == "start_session" || body.Action == "resume_session" || body.Action == "clear_session_laps") && s.hooks.OnTimingStarted != nil {
+		s.hooks.OnTimingStarted()
 	}
 	s.handleGetState(w, r)
 }

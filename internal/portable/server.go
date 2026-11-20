@@ -288,6 +288,16 @@ func NewServer(cfg Config) *Server {
 			}
 			reconcileRealHardwareLinks(simRunning)
 		},
+		OnTimingStarted: func() {
+			if !sim.IsRunning() && domain.IsSlapRFMode(realEngine.TimingHardwareMode()) {
+				wasSurvey := s.realHubRx.SurveyActive()
+				_ = s.realHubRx.SetSurvey(false)
+				s.usbMgr.SendToHub("SCAN STOP\nCHANNELS RESET\nRF 1")
+				if !wasSurvey {
+					s.realHubRx.PushActiveChannels()
+				}
+			}
+		},
 		OnStorageReset: func() {
 			s.resetAuthConfig()
 			if s.persistWorker != nil {
