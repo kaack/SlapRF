@@ -2,11 +2,14 @@
 
 [![SlapRF](docs/slaprf-hero.png)](https://slaprf.app)
 
-SlapRF is a standalone FPV drone timing and race management application with multi-gate 5.8 GHz section split timing.
+SlapRF is a standalone FPV drone timing and race management project. In this repository, **SlapRF** refers to two parts that can be used together or separately:
 
-The name **SlapRF** comes from the DIY gate hardware: you assemble four off-the-shelf parts with no soldering, no custom PCBs, and no wiring harness. The SlapRF application runs natively on Windows, macOS, Linux, and Android, and also supports **RotorHazard** and **ImmersionRC LapRF 8-Way** timing systems.
+1. **SlapRF Timing Application**: The timing and race management software for Windows, macOS, Linux, and Android. You can run the SlapRF software by itself with existing **RotorHazard** or **ImmersionRC LapRF 8-Way** timing hardware, or pair it with DIY SlapRF gate timers.
+2. **SlapRF Gate Hardware**: The DIY 5.8 GHz gate timer build and firmware running on the Seeed Studio XIAO ESP32-C5. You assemble four off-the-shelf parts with no soldering, no custom PCBs, and no wiring harness.
 
-A single-gate timer measures total lap time at the Start / Finish gate. When you place additional timers at gates around the track, SlapRF also measures split times for each track section (`S1`, `S2`, `S3`, and so on) so pilots can see where they gained or lost time.
+The **SlapRF Timing Application** and **SlapRF Gate Hardware** are tuned and optimized to work together, especially for multi-gate tracks, and using them together is the recommended setup. Support for **RotorHazard** and **ImmersionRC LapRF 8-Way** is included so pilots and race directors who already own those systems can use the SlapRF software with their existing hardware.
+
+A single-gate timer measures total lap time at the Start / Finish gate. When you place additional SlapRF timers at gates around the track, SlapRF also measures split times for each track section (`S1`, `S2`, `S3`, and so on) so pilots can see where they gained or lost time.
 
 <p align="center">
   <a href="https://github.com/kaack/SlapRF/actions/workflows/release.yml"><img src="https://github.com/kaack/SlapRF/actions/workflows/release.yml/badge.svg" alt="Release" /></a>
@@ -70,11 +73,11 @@ SlapRF supports two main workflows:
 
 ## Compatibility
 
-SlapRF supports DIY SlapRF timers and standard FPV timing hardware over Bluetooth, USB, or local network:
+The **SlapRF Timing Application** and **SlapRF Gate Hardware** are designed and tuned together as the recommended setup, especially for wireless multi-gate section timing. The software also supports **RotorHazard** and **ImmersionRC LapRF 8-Way** for users who already own those timing systems:
 
 | Timing Hardware | Bluetooth | USB | Network (LAN) | Notes |
 | :--- | :---: | :---: | :---: | :--- |
-| **SlapRF** (XIAO ESP32-C5 Hub & Spoke) | Yes | Yes | No | Wireless Bluetooth Hub or wired USB-C Hub with wireless ESP-NOW Spoke timers (1 to 6 gates, section splits, built-in USB firmware flasher) |
+| **SlapRF Gate Hardware** (XIAO ESP32-C5 Hub & Spoke, Recommended) | Yes | Yes | No | Tuned for SlapRF. Wireless Bluetooth Hub or wired USB-C Hub with wireless ESP-NOW Spoke timers (1 to 6 gates, section splits, built-in USB firmware flasher) |
 | **RotorHazard** | No | Yes | Yes | Direct USB serial nodes or LAN connection to a RotorHazard timing server (`HTTP` / `Socket.IO`) |
 | **ImmersionRC LapRF 8-Way** | No | No | Yes | Ethernet LAN connection over the native LapRF binary protocol (`TCP :5403`) |
 
