@@ -2410,12 +2410,12 @@ export class PilotRssiChart extends Component {
           : isRH
             ? "Select a timer above to view or drag its RotorHazard Enter & Exit thresholds (0–255)."
             : "Timers auto-calibrate continuously from live lap passes · select a timer above to inspect or drag its thresholds.");
-      actions = `
-        <div class="scope-calib-actions">
-          ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(15)}<span>Undo</span></button>` : ""}
-          ${anyCalibrated ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at every timer">${icons.reset(15)}<span>Reset all</span></button>` : ""}
-          ${canAutoCalib ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Set each timer's thresholds from the last ${minutes} minutes of signal">${icons.target(16)}<span>Auto-calibrate all</span></button>` : ""}
-        </div>`;
+      const actionButtons = [
+        this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(16)}<span>Undo</span></button>` : "",
+        anyCalibrated ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at every timer">${icons.reset(16)}<span>Reset all</span></button>` : "",
+        canAutoCalib ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Set each timer's thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Auto-calibrate all</span></button>` : "",
+      ].filter(Boolean).join("");
+      actions = actionButtons ? `<div class="scope-calib-actions">${actionButtons}</div>` : "";
     } else {
       const name = gateLabel(this.store, this.focus);
       const t = enterThresholdAt(this.store, this.focus, pilot.slotIndex);
@@ -2427,12 +2427,13 @@ export class PilotRssiChart extends Component {
         (isLapRF
           ? `${name}: Threshold ${t.dbm.toFixed(0)} ${isCal ? "(calibrated)" : `(${pilot.callsign}'s default)`} · drag line to adjust`
           : `${name}: Enter ${t.dbm.toFixed(0)} / Exit ${ex.dbm.toFixed(0)}${this.unitSuffix} ${isCal ? "(calibrated)" : `(${pilot.callsign}'s default)`} · drag lines to adjust`);
+      const canTune = !this.isMultiPilotMode && !this.store.isHistoricalTrack;
       actions = `
         <div class="scope-calib-actions">
-          ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(15)}<span>Undo</span></button>` : ""}
-          ${isCal ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at ${esc(name)}">${icons.reset(15)}<span>Reset</span></button>` : ""}
-          ${canAutoCalib ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Set ${esc(name)}'s thresholds from the last ${minutes} minutes of signal">${icons.target(16)}<span>Auto-calibrate</span></button>` : ""}
-          <button class="btn btn-sm ${isTuneOpen ? "btn-armed" : "btn-ghost"}" type="button" data-tune-gate="${this.focus}" aria-expanded="${isTuneOpen}" title="Fine-tune detection rules for ${esc(name)}">${icons.sliders(15)}<span>Fine-tune</span></button>
+          ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(16)}<span>Undo</span></button>` : ""}
+          ${isCal ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at ${esc(name)}">${icons.reset(16)}<span>Reset</span></button>` : ""}
+          ${canAutoCalib ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Set ${esc(name)}'s thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Auto-calibrate</span></button>` : ""}
+          ${canTune ? `<button class="btn btn-sm btn-ghost scope-calib-tune-btn ${isTuneOpen ? "is-active" : ""}" type="button" data-tune-gate="${this.focus}" aria-expanded="${isTuneOpen}" title="Fine-tune detection rules for ${esc(name)}">${icons.sliders(17)}<span>Fine-tune</span></button>` : ""}
         </div>`;
     }
     const nextCalibHtml = `
@@ -2505,38 +2506,18 @@ export class PilotRssiChart extends Component {
           const hot = !this.isMultiPilotMode && dbm >= this.thresholdOf(p.gateId).dbm;
           const dim = this.focus !== null && this.focus !== p.gateId;
           const label = gateLabel(this.store, p.gateId);
-          if (!canTune) {
-            return `
-              <button type="button" class="channel ${hot ? "is-hot" : ""} ${dim ? "is-dim" : ""} ${this.focus === p.gateId ? "is-focus" : ""}"
-                      data-gate-chip="${p.gateId}"
-                      data-focus="${this.focus === p.gateId ? "all" : p.gateId}" title="${this.focus === p.gateId ? "Show all timers" : "Show only this timer"}">
-                <span class="dot" style="--c:${this.colorOf(p.gateId)}"></span>
-                <span class="channel-name">${esc(label)}</span>
-                <span class="channel-dbm mono" data-gate-dbm="${p.gateId}">${this.isMultiPilotMode ? "peak " : ""}${dbm.toFixed(0)}${unitSuffix}</span>
-              </button>`;
-          }
-          const gOvrCount = countOverrides(p.ruleOverrides);
-          const pOvrCount = countOverrides(pilotGateOverridesAt(p, activeSlot));
+          const gOvrCount = canTune ? countOverrides(p.ruleOverrides) : 0;
+          const pOvrCount = canTune ? countOverrides(pilotGateOverridesAt(p, activeSlot)) : 0;
           const hasOvr = gOvrCount + pOvrCount > 0;
-          const isOpen = this.tuningGateId === p.gateId;
           return `
-            <div class="channel-pill-wrap ${hot ? "is-hot" : ""} ${dim ? "is-dim" : ""} ${this.focus === p.gateId ? "is-focus" : ""} ${isOpen ? "is-tuning" : ""}">
-              <button type="button" class="channel channel-main ${hot ? "is-hot" : ""} ${dim ? "is-dim" : ""} ${this.focus === p.gateId ? "is-focus" : ""}"
-                      data-gate-chip="${p.gateId}"
-                      data-focus="${this.focus === p.gateId ? "all" : p.gateId}" title="${this.focus === p.gateId ? "Show all timers" : "Show only this timer"}">
-                <span class="dot" style="--c:${this.colorOf(p.gateId)}"></span>
-                <span class="channel-name">${esc(label)}</span>
-                <span class="channel-dbm mono" data-gate-dbm="${p.gateId}">${dbm.toFixed(0)}${unitSuffix}</span>
-              </button>
-              <button type="button" class="channel-tune-btn ${isOpen ? "is-active" : ""} ${hasOvr ? "has-override" : ""}"
-                      data-tune-gate="${p.gateId}"
-                      aria-expanded="${isOpen}"
-                      title="${isOpen ? `Close ${esc(label)} fine-tuning` : `Fine-tune ${esc(label)} detection settings`}"
-                      aria-label="${isOpen ? `Close ${esc(label)} fine-tuning` : `Fine-tune ${esc(label)} detection settings`}">
-                ${icons.sliders(13)}
-                ${hasOvr ? `<span class="channel-tune-dot" aria-hidden="true"></span>` : ""}
-              </button>
-            </div>`;
+            <button type="button" class="channel ${hot ? "is-hot" : ""} ${dim ? "is-dim" : ""} ${this.focus === p.gateId ? "is-focus" : ""}"
+                    data-gate-chip="${p.gateId}"
+                    data-focus="${this.focus === p.gateId ? "all" : p.gateId}" title="${this.focus === p.gateId ? "Show all timers" : "Show only this timer"}">
+              <span class="dot" style="--c:${this.colorOf(p.gateId)}"></span>
+              <span class="channel-name">${esc(label)}</span>
+              ${hasOvr ? `<span class="channel-custom-icon" aria-hidden="true">${icons.pencil(12)}</span>` : ""}
+              <span class="channel-dbm mono" data-gate-dbm="${p.gateId}">${this.isMultiPilotMode ? "peak " : ""}${dbm.toFixed(0)}${unitSuffix}</span>
+            </button>`;
         })
         .join("");
       legendEl.innerHTML = allChip + gateChips;
@@ -2558,7 +2539,6 @@ export class PilotRssiChart extends Component {
       const chipBtn = legendEl.querySelector<HTMLElement>(`[data-gate-chip="${p.gateId}"]`);
       if (chipBtn) {
         chipBtn.classList.toggle("is-hot", hot);
-        chipBtn.closest(".channel-pill-wrap")?.classList.toggle("is-hot", hot);
       }
       const valSpan = legendEl.querySelector<HTMLElement>(`[data-gate-dbm="${p.gateId}"]`);
       const nextText = `${this.isMultiPilotMode ? "peak " : ""}${dbm.toFixed(0)}${unitSuffix}`;
@@ -2696,6 +2676,7 @@ export class PilotRssiChart extends Component {
     }
 
     drawerEl.hidden = false;
+    this.syncMobileDrawerTop(drawerEl);
     const gateName = gateLabel(this.store, gate.gateId);
     const color = this.colorOf(gate.gateId);
     const roleTag = gate.role === "START_FINISH" ? "Start / Finish" : "Sector";
@@ -2851,7 +2832,7 @@ export class PilotRssiChart extends Component {
         ${cardsHtml}
         ${beepCardHtml}
       </div>
-      <div class="scope-tune-foot">
+      <div class="scope-tune-foot ${activeOvrCount === 0 ? "is-note-only" : ""}">
         <span class="note">Scroll or zoom the chart above to inspect pass markers while tuning.</span>
         ${
           activeOvrCount > 0
@@ -2863,6 +2844,17 @@ export class PilotRssiChart extends Component {
     if (nextHtml !== this.lastTuneDrawerHtml) {
       this.lastTuneDrawerHtml = nextHtml;
       drawerEl.innerHTML = nextHtml;
+    }
+  }
+
+  /** Anchors the mobile bottom drawer right below the graph's X/Y axis bar so the graph stays visible. */
+  private syncMobileDrawerTop(drawerEl: HTMLElement): void {
+    const bottomBar = this.el.querySelector<HTMLElement>(".scope-bottom-bar") ?? this.slot("chart");
+    const rect = bottomBar.getBoundingClientRect();
+    if (rect.bottom > 80) {
+      drawerEl.style.setProperty("--scope-graph-bottom", `${Math.ceil(rect.bottom + 6)}px`);
+    } else {
+      drawerEl.style.removeProperty("--scope-graph-bottom");
     }
   }
 }

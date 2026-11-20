@@ -2788,65 +2788,16 @@ html[data-theme="light"] .bar-time {
   border-color: var(--accent-line);
 }
 
-/* Signals timer pill with inline fine-tuning sliders button + docked drawer */
-.channel-pill-wrap {
-  display: flex;
-  align-items: stretch;
-  min-width: 0;
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
-  background: var(--surface-2);
-  transition: border-color 0.15s, opacity 0.15s;
-}
-.channel-pill-wrap.is-dim {
-  opacity: 0.52;
-}
-.channel-pill-wrap.is-hot,
-.channel-pill-wrap.is-focus,
-.channel-pill-wrap.is-tuning {
-  border-color: var(--accent-line);
-}
-.channel-pill-wrap > .channel.channel-main {
-  flex: 1 1 0;
-  min-width: 0;
-  border: 0;
-  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
-  background: transparent;
-  opacity: 1;
-}
-.channel-tune-btn {
-  position: relative;
-  flex: 0 0 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-left: 1px solid var(--border);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  transition: color 0.15s, background-color 0.15s;
-}
-.channel-tune-btn:hover {
-  color: var(--text-1);
-  background: var(--surface-3, rgba(255, 255, 255, 0.05));
-}
-.channel-tune-btn.is-active {
+/* Signals fine-tuning button & drawer */
+.scope-calib-tune-btn.is-active {
   color: #7dd3fc;
-  background: rgba(56, 189, 248, 0.12);
+  border-color: rgba(56, 189, 248, 0.42);
+  background: rgba(56, 189, 248, 0.14);
 }
-.channel-tune-btn.has-override {
-  color: var(--text-1);
-}
-.channel-tune-dot {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: #38bdf8;
+html[data-theme="light"] .scope-calib-tune-btn.is-active {
+  color: #0369a1;
+  border-color: rgba(2, 132, 199, 0.42);
+  background: rgba(2, 132, 199, 0.12);
 }
 
 .scope-tune-drawer {
@@ -3144,19 +3095,93 @@ html[data-theme="light"] .scope-tune-custom-icon {
   background: var(--surface-1, var(--surface));
 }
 @media (max-width: 860px) {
+  .scope-calib {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    padding: 10px 12px;
+  }
+  .scope-calib-text {
+    width: 100%;
+    font-size: 13px;
+    line-height: 1.35;
+    color: var(--text-2);
+  }
+  .scope-calib-actions {
+    width: 100%;
+    margin-left: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 8px;
+  }
+  .scope-calib-actions .btn {
+    height: 34px;
+    padding: 0 11px;
+    font-size: 12.5px;
+    gap: 6px;
+  }
+  .scope-calib-actions .btn svg {
+    width: 16px;
+    height: 16px;
+  }
+  .scope-tune-drawer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: var(--scope-graph-bottom, auto);
+    max-height: calc(100dvh - var(--scope-graph-bottom, 320px));
+    z-index: 950;
+    margin-top: 0;
+    display: flex;
+    flex-direction: column;
+    border-radius: 14px 14px 0 0;
+    border: 1px solid var(--border-strong);
+    border-bottom: 0;
+    background: var(--surface-1, var(--surface));
+    box-shadow: 0 -10px 30px rgba(0, 0, 0, 0.45);
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+    overflow-y: auto;
+  }
+  .scope-tune-role-tag,
+  .scope-tune-live-pill,
+  .scope-tune-card-help,
+  .scope-tune-hit-pill,
+  .scope-tune-foot .note,
+  .scope-tune-foot.is-note-only {
+    display: none !important;
+  }
   .scope-tune-grid {
     grid-template-columns: minmax(0, 1fr);
+    flex: 0 0 auto;
   }
   .rule-switch-wrap {
     justify-content: flex-start;
   }
   .scope-tune-head {
-    padding: 9px 10px;
+    padding: 9px 12px;
+    gap: 8px;
+    flex-wrap: nowrap;
   }
-  .scope-tune-card,
+  .scope-tune-title-group {
+    flex: 1 1 0;
+    min-width: 0;
+    flex-wrap: nowrap;
+  }
+  .scope-tune-title-group strong {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .scope-tune-card {
+    padding: 8px 12px;
+    min-height: 44px;
+  }
   .scope-tune-foot {
-    padding-left: 10px;
-    padding-right: 10px;
+    padding: 8px 12px;
+    justify-content: flex-end;
   }
   .scope-root > .scope-canvas {
     flex: 0 0 auto;

@@ -462,8 +462,9 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       const drawerEl = root.querySelector<HTMLElement>('[data-slot="tune-drawer"]')!;
       expect(drawerEl.hidden).toBe(true);
 
-      // Click the sliders icon inside timer 1 ("H1") row -> focuses H1 and opens the docked drawer
-      const tuneBtn1 = root.querySelector<HTMLButtonElement>('.channel-tune-btn[data-tune-gate="1"]')!;
+      // Select timer 1 ("H1") -> reveals the dedicated Fine-tune button in the calibration bar below the timers
+      root.querySelector<HTMLButtonElement>('[data-gate-chip="1"]')!.click();
+      const tuneBtn1 = root.querySelector<HTMLButtonElement>('.scope-calib-tune-btn[data-tune-gate="1"]')!;
       expect(tuneBtn1).not.toBeNull();
       tuneBtn1.click();
       expect(drawerEl.hidden).toBe(false);
@@ -523,7 +524,8 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       contextMode: "race",
     });
     try {
-      raceRoot.querySelector<HTMLButtonElement>('.channel-tune-btn[data-tune-gate="2"]')!.click();
+      raceRoot.querySelector<HTMLButtonElement>('[data-gate-chip="2"]')!.click();
+      raceRoot.querySelector<HTMLButtonElement>('.scope-calib-tune-btn[data-tune-gate="2"]')!.click();
       const raceDrawer = raceRoot.querySelector<HTMLElement>('[data-slot="tune-drawer"]')!;
       expect(raceDrawer.hidden).toBe(false);
       expect(raceDrawer.querySelector('[data-tune-input="minCrossingSec"]')).not.toBeNull();
