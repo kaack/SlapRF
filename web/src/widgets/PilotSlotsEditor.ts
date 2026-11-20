@@ -11,7 +11,7 @@ import {
 import { ApiClient } from "../services/api_client";
 import { sharedMultiGPService } from "../services/multigp_service";
 import { AppStore } from "../state/store";
-import { isRotorHazardMode, PilotSlot } from "../types/models";
+import { PilotSlot } from "../types/models";
 import { openMultiGPErrorModal } from "./MultiGPRaceModals";
 import { showToast } from "./Toast";
 
@@ -442,21 +442,9 @@ export class PilotSlotsEditor extends Component {
            </div>`
         : "";
 
-    const isLapRF = this.store.timingHardwareMode === "laprf";
-    const isRH = isRotorHazardMode(this.store.timingHardwareMode);
-    const col4Title = isLapRF
-      ? "Gain (0–63)"
-      : isRH
-        ? "Enter (10–250)"
-        : "Enter threshold";
-    const col5Title = isLapRF
-      ? "Threshold"
-      : isRH
-        ? "Exit (6–246)"
-        : "Exit threshold";
     const innerHtml = `
           <div class="slot-row has-remove slot-head">
-            <span>Pilot</span><span>Phonetic name</span><span>Default channel</span><span>${col4Title}</span><span>${col5Title}</span><span></span>
+            <span>Pilot</span><span>Phonetic name</span><span>Default channel</span><span></span>
           </div>
           ${rowsHtml}`;
 
@@ -724,86 +712,12 @@ export class PilotSlotsEditor extends Component {
     const shouldAnimateEntry = this.lastOpenedDrawerSlot !== p.slotIndex;
     this.lastOpenedDrawerSlot = p.slotIndex;
 
-    const isLapRF = this.store.timingHardwareMode === "laprf";
-    const isRH = isRotorHazardMode(this.store.timingHardwareMode);
-    const enterVal = Math.round(p.enterThreshold || DEFAULT_ENTER_THRESHOLD_DBM);
-    const exitVal = Math.round(
-      p.exitThreshold && p.exitThreshold < enterVal ? p.exitThreshold : enterVal - 10
-    );
-    const isCustomThreshold = enterVal !== DEFAULT_ENTER_THRESHOLD_DBM;
-    const isCustomExit = exitVal !== DEFAULT_EXIT_THRESHOLD_DBM;
-
-    const gainVal = Math.max(0, Math.min(63, Math.round(p.attenuationGain || DEFAULT_LAPRF_GAIN)));
-    const laprfThrVal = Math.max(
-      300,
-      Math.min(3500, Math.round(p.laprfThreshold || DEFAULT_LAPRF_THRESHOLD))
-    );
-    const isCustomGain = gainVal !== DEFAULT_LAPRF_GAIN;
-    const isCustomLapRFThr = laprfThrVal !== DEFAULT_LAPRF_THRESHOLD;
-
-    const rhEnterVal = Math.max(
-      10,
-      Math.min(250, Math.round(p.rhEnterThreshold || DEFAULT_RH_ENTER_THRESHOLD))
-    );
-    const rhExitVal = Math.max(
-      6,
-      Math.min(
-        rhEnterVal - 4,
-        Math.round(
-          p.rhExitThreshold && p.rhExitThreshold > 0 && p.rhExitThreshold < rhEnterVal
-            ? p.rhExitThreshold
-            : rhEnterVal - 25
-        )
-      )
-    );
-    const isCustomRhEnter = rhEnterVal !== DEFAULT_RH_ENTER_THRESHOLD;
-    const isCustomRhExit = rhExitVal !== DEFAULT_RH_EXIT_THRESHOLD;
-
     const options = renderMultiBandSelectOptionsHtml({
       selectedBand: p.band,
       selectedChannel: p.channel,
       includeUnassigned: true,
       unassignedLabel: "No default",
     });
-
-    const col4Label = isLapRF ? "Gain (0–63)" : isRH ? "Enter (10–250)" : "Enter threshold";
-    const col5Label = isLapRF ? "Threshold" : isRH ? "Exit (6–246)" : "Exit threshold";
-
-    const col4Html = isLapRF
-      ? `<div class="input-suffix ${isCustomGain ? "has-reset" : ""}">
-          <input class="input mono" type="number" name="attenuationGain" value="${gainVal}" min="0" max="63" step="1" />
-          <span>gain</span>
-          ${isCustomGain ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-laprf-gain="${p.slotIndex}" aria-label="Restore default LapRF gain">${icons.reset(13)}</button>` : ""}
-        </div>`
-      : isRH
-        ? `<div class="input-suffix ${isCustomRhEnter ? "has-reset" : ""}">
-          <input class="input mono" type="number" name="rhEnterThreshold" value="${rhEnterVal}" min="10" max="250" step="1" />
-          <span>RSSI</span>
-          ${isCustomRhEnter ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-rh-enter="${p.slotIndex}" aria-label="Restore default RotorHazard Enter threshold">${icons.reset(13)}</button>` : ""}
-        </div>`
-        : `<div class="input-suffix ${isCustomThreshold ? "has-reset" : ""}">
-          <input class="input mono" type="number" name="threshold" value="${enterVal}" min="-95" max="-20" step="1" />
-          <span>dBm</span>
-          ${isCustomThreshold ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-threshold="${p.slotIndex}" aria-label="Restore default enter threshold">${icons.reset(13)}</button>` : ""}
-        </div>`;
-
-    const col5Html = isLapRF
-      ? `<div class="input-suffix ${isCustomLapRFThr ? "has-reset" : ""}">
-          <input class="input mono" type="number" name="laprfThreshold" value="${laprfThrVal}" min="300" max="3500" step="10" />
-          <span>RSSI</span>
-          ${isCustomLapRFThr ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-laprf-threshold="${p.slotIndex}" aria-label="Restore default LapRF threshold">${icons.reset(13)}</button>` : ""}
-        </div>`
-      : isRH
-        ? `<div class="input-suffix ${isCustomRhExit ? "has-reset" : ""}">
-          <input class="input mono" type="number" name="rhExitThreshold" value="${rhExitVal}" min="6" max="246" step="1" />
-          <span>RSSI</span>
-          ${isCustomRhExit ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-rh-exit="${p.slotIndex}" aria-label="Restore default RotorHazard Exit threshold">${icons.reset(13)}</button>` : ""}
-        </div>`
-        : `<div class="input-suffix ${isCustomExit ? "has-reset" : ""}">
-          <input class="input mono" type="number" name="exitThreshold" value="${exitVal}" min="-105" max="-22" step="1" />
-          <span>dBm</span>
-          ${isCustomExit ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-exit-threshold="${p.slotIndex}" aria-label="Restore default exit threshold">${icons.reset(13)}</button>` : ""}
-        </div>`;
 
     return `
       <div class="pilot-dir-mobile-drawer-overlay" data-drawer-slot="${p.slotIndex}" role="dialog" aria-modal="true" aria-label="Edit ${esc(p.callsign)}">
@@ -838,16 +752,6 @@ export class PilotSlotsEditor extends Component {
               <div class="field">
                 <span>Default channel</span>
                 <select class="input" name="channel" ${rfLocked ? "disabled" : ""}>${options}</select>
-              </div>
-              <div class="pilot-dir-mobile-thresh-row">
-                <label class="field">
-                  <span>${col4Label}</span>
-                  ${col4Html}
-                </label>
-                <label class="field">
-                  <span>${col5Label}</span>
-                  ${col5Html}
-                </label>
               </div>
             </div>
           </form>
@@ -909,89 +813,6 @@ export class PilotSlotsEditor extends Component {
         chSelect.innerHTML = nextOpts;
         scanCustomSelects(overlay);
       }
-
-      const threshRow = form.querySelector<HTMLElement>(".pilot-dir-mobile-thresh-row");
-      if (threshRow && (!document.activeElement || !threshRow.contains(document.activeElement))) {
-        const isLapRF = this.store.timingHardwareMode === "laprf";
-        const isRH = isRotorHazardMode(this.store.timingHardwareMode);
-        const enterVal = Math.round(p.enterThreshold || DEFAULT_ENTER_THRESHOLD_DBM);
-        const exitVal = Math.round(
-          p.exitThreshold && p.exitThreshold < enterVal ? p.exitThreshold : enterVal - 10
-        );
-        const isCustomThreshold = enterVal !== DEFAULT_ENTER_THRESHOLD_DBM;
-        const isCustomExit = exitVal !== DEFAULT_EXIT_THRESHOLD_DBM;
-        const gainVal = Math.max(0, Math.min(63, Math.round(p.attenuationGain || DEFAULT_LAPRF_GAIN)));
-        const laprfThrVal = Math.max(
-          300,
-          Math.min(3500, Math.round(p.laprfThreshold || DEFAULT_LAPRF_THRESHOLD))
-        );
-        const isCustomGain = gainVal !== DEFAULT_LAPRF_GAIN;
-        const isCustomLapRFThr = laprfThrVal !== DEFAULT_LAPRF_THRESHOLD;
-        const rhEnterVal = Math.max(
-          10,
-          Math.min(250, Math.round(p.rhEnterThreshold || DEFAULT_RH_ENTER_THRESHOLD))
-        );
-        const rhExitVal = Math.max(
-          6,
-          Math.min(
-            rhEnterVal - 4,
-            Math.round(
-              p.rhExitThreshold && p.rhExitThreshold > 0 && p.rhExitThreshold < rhEnterVal
-                ? p.rhExitThreshold
-                : rhEnterVal - 25
-            )
-          )
-        );
-        const isCustomRhEnter = rhEnterVal !== DEFAULT_RH_ENTER_THRESHOLD;
-        const isCustomRhExit = rhExitVal !== DEFAULT_RH_EXIT_THRESHOLD;
-
-        const col4Label = isLapRF ? "Gain (0–63)" : isRH ? "Enter (10–250)" : "Enter threshold";
-        const col5Label = isLapRF ? "Threshold" : isRH ? "Exit (6–246)" : "Exit threshold";
-        const col4Html = isLapRF
-          ? `<div class="input-suffix ${isCustomGain ? "has-reset" : ""}">
-              <input class="input mono" type="number" name="attenuationGain" value="${gainVal}" min="0" max="63" step="1" />
-              <span>gain</span>
-              ${isCustomGain ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-laprf-gain="${p.slotIndex}" aria-label="Restore default LapRF gain">${icons.reset(13)}</button>` : ""}
-            </div>`
-          : isRH
-            ? `<div class="input-suffix ${isCustomRhEnter ? "has-reset" : ""}">
-              <input class="input mono" type="number" name="rhEnterThreshold" value="${rhEnterVal}" min="10" max="250" step="1" />
-              <span>RSSI</span>
-              ${isCustomRhEnter ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-rh-enter="${p.slotIndex}" aria-label="Restore default RotorHazard Enter threshold">${icons.reset(13)}</button>` : ""}
-            </div>`
-            : `<div class="input-suffix ${isCustomThreshold ? "has-reset" : ""}">
-              <input class="input mono" type="number" name="threshold" value="${enterVal}" min="-95" max="-20" step="1" />
-              <span>dBm</span>
-              ${isCustomThreshold ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-threshold="${p.slotIndex}" aria-label="Restore default enter threshold">${icons.reset(13)}</button>` : ""}
-            </div>`;
-        const col5Html = isLapRF
-          ? `<div class="input-suffix ${isCustomLapRFThr ? "has-reset" : ""}">
-              <input class="input mono" type="number" name="laprfThreshold" value="${laprfThrVal}" min="300" max="3500" step="10" />
-              <span>RSSI</span>
-              ${isCustomLapRFThr ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-laprf-threshold="${p.slotIndex}" aria-label="Restore default LapRF threshold">${icons.reset(13)}</button>` : ""}
-            </div>`
-          : isRH
-            ? `<div class="input-suffix ${isCustomRhExit ? "has-reset" : ""}">
-              <input class="input mono" type="number" name="rhExitThreshold" value="${rhExitVal}" min="6" max="246" step="1" />
-              <span>RSSI</span>
-              ${isCustomRhExit ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-rh-exit="${p.slotIndex}" aria-label="Restore default RotorHazard Exit threshold">${icons.reset(13)}</button>` : ""}
-            </div>`
-            : `<div class="input-suffix ${isCustomExit ? "has-reset" : ""}">
-              <input class="input mono" type="number" name="exitThreshold" value="${exitVal}" min="-105" max="-22" step="1" />
-              <span>dBm</span>
-              ${isCustomExit ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-exit-threshold="${p.slotIndex}" aria-label="Restore default exit threshold">${icons.reset(13)}</button>` : ""}
-            </div>`;
-
-        threshRow.innerHTML = `
-          <label class="field">
-            <span>${col4Label}</span>
-            ${col4Html}
-          </label>
-          <label class="field">
-            <span>${col5Label}</span>
-            ${col5Html}
-          </label>`;
-      }
     }
 
     const delBtn = overlay.querySelector<HTMLButtonElement>("[data-remove-pilot]");
@@ -1008,107 +829,12 @@ export class PilotSlotsEditor extends Component {
     rfLocked: boolean,
     isExactMatch = false
   ): string {
-    const isLapRF = this.store.timingHardwareMode === "laprf";
-    const isRH = isRotorHazardMode(this.store.timingHardwareMode);
-    const enterVal = Math.round(p.enterThreshold || DEFAULT_ENTER_THRESHOLD_DBM);
-    const exitVal = Math.round(
-      p.exitThreshold && p.exitThreshold < enterVal ? p.exitThreshold : enterVal - 10
-    );
-    const isCustomThreshold = enterVal !== DEFAULT_ENTER_THRESHOLD_DBM;
-    const isCustomExit = exitVal !== DEFAULT_EXIT_THRESHOLD_DBM;
-
-    const gainVal = Math.max(0, Math.min(63, Math.round(p.attenuationGain || DEFAULT_LAPRF_GAIN)));
-    const laprfThrVal = Math.max(
-      300,
-      Math.min(3500, Math.round(p.laprfThreshold || DEFAULT_LAPRF_THRESHOLD))
-    );
-    const isCustomGain = gainVal !== DEFAULT_LAPRF_GAIN;
-    const isCustomLapRFThr = laprfThrVal !== DEFAULT_LAPRF_THRESHOLD;
-
-    const rhEnterVal = Math.max(
-      10,
-      Math.min(250, Math.round(p.rhEnterThreshold || DEFAULT_RH_ENTER_THRESHOLD))
-    );
-    const rhExitVal = Math.max(
-      6,
-      Math.min(
-        rhEnterVal - 4,
-        Math.round(
-          p.rhExitThreshold && p.rhExitThreshold > 0 && p.rhExitThreshold < rhEnterVal
-            ? p.rhExitThreshold
-            : rhEnterVal - 25
-        )
-      )
-    );
-    const isCustomRhEnter = rhEnterVal !== DEFAULT_RH_ENTER_THRESHOLD;
-    const isCustomRhExit = rhExitVal !== DEFAULT_RH_EXIT_THRESHOLD;
-
     const options = renderMultiBandSelectOptionsHtml({
       selectedBand: p.band,
       selectedChannel: p.channel,
       includeUnassigned: true,
       unassignedLabel: "No default",
     });
-
-    const col4Html = isLapRF
-      ? `<div class="input-suffix ${isCustomGain ? "has-reset" : ""}">
-          <input class="input mono" type="number" name="attenuationGain" value="${gainVal}" min="0" max="63" step="1" title="LapRF receiver gain (0–63, default 59)" />
-          <span>gain</span>
-          ${
-            isCustomGain
-              ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-laprf-gain="${p.slotIndex}" title="Restore default LapRF gain (${DEFAULT_LAPRF_GAIN})" aria-label="Restore default LapRF gain">${icons.reset(13)}</button>`
-              : ""
-          }
-        </div>`
-      : isRH
-        ? `<div class="input-suffix ${isCustomRhEnter ? "has-reset" : ""}">
-          <input class="input mono" type="number" name="rhEnterThreshold" value="${rhEnterVal}" min="10" max="250" step="1" title="RotorHazard node EnterAt threshold (0–255 RSSI, default 95)" />
-          <span>RSSI</span>
-          ${
-            isCustomRhEnter
-              ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-rh-enter="${p.slotIndex}" title="Restore default RotorHazard Enter threshold (${DEFAULT_RH_ENTER_THRESHOLD})" aria-label="Restore default RotorHazard Enter threshold">${icons.reset(13)}</button>`
-              : ""
-          }
-        </div>`
-        : `<div class="input-suffix ${isCustomThreshold ? "has-reset" : ""}">
-          <input class="input mono" type="number" name="threshold" value="${enterVal}" min="-95" max="-20" step="1" title="Enter threshold (dBm)" />
-          <span>dBm</span>
-          ${
-            isCustomThreshold
-              ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-threshold="${p.slotIndex}" title="Restore default enter threshold (${DEFAULT_ENTER_THRESHOLD_DBM} dBm)" aria-label="Restore default enter threshold (${DEFAULT_ENTER_THRESHOLD_DBM} dBm)">${icons.reset(13)}</button>`
-              : ""
-          }
-        </div>`;
-
-    const col5Html = isLapRF
-      ? `<div class="input-suffix ${isCustomLapRFThr ? "has-reset" : ""}">
-          <input class="input mono" type="number" name="laprfThreshold" value="${laprfThrVal}" min="300" max="3500" step="10" title="LapRF crossing threshold (300–3500, default 800)" />
-          <span>RSSI</span>
-          ${
-            isCustomLapRFThr
-              ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-laprf-threshold="${p.slotIndex}" title="Restore default LapRF threshold (${DEFAULT_LAPRF_THRESHOLD})" aria-label="Restore default LapRF threshold">${icons.reset(13)}</button>`
-              : ""
-          }
-        </div>`
-      : isRH
-        ? `<div class="input-suffix ${isCustomRhExit ? "has-reset" : ""}">
-          <input class="input mono" type="number" name="rhExitThreshold" value="${rhExitVal}" min="6" max="246" step="1" title="RotorHazard node ExitAt threshold (must be at least 4 below Enter, default 70)" />
-          <span>RSSI</span>
-          ${
-            isCustomRhExit
-              ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-rh-exit="${p.slotIndex}" title="Restore default RotorHazard Exit threshold (${DEFAULT_RH_EXIT_THRESHOLD})" aria-label="Restore default RotorHazard Exit threshold">${icons.reset(13)}</button>`
-              : ""
-          }
-        </div>`
-        : `<div class="input-suffix ${isCustomExit ? "has-reset" : ""}">
-          <input class="input mono" type="number" name="exitThreshold" value="${exitVal}" min="-105" max="-22" step="1" title="Exit threshold (dBm, must be at least 2 dB below Enter)" />
-          <span>dBm</span>
-          ${
-            isCustomExit
-              ? `<button type="button" class="flasher-pass-toggle rule-inline-btn is-active" data-reset-exit-threshold="${p.slotIndex}" title="Restore default exit threshold (${DEFAULT_EXIT_THRESHOLD_DBM} dBm)" aria-label="Restore default exit threshold (${DEFAULT_EXIT_THRESHOLD_DBM} dBm)">${icons.reset(13)}</button>`
-              : ""
-          }
-        </div>`;
 
     return `
       <form class="slot-row has-remove ${isExactMatch ? "is-exact-match" : ""}" data-pilot="${p.slotIndex}">
@@ -1119,8 +845,6 @@ export class PilotSlotsEditor extends Component {
         </div>
         <input class="input" name="phoneticName" value="${esc(p.phoneticName ?? "")}" maxlength="32" autocomplete="off" />
         <select class="input" name="channel" ${rfLocked ? "disabled" : ""}>${options}</select>
-        ${col4Html}
-        ${col5Html}
         <div class="pilot-row-remove-cell">
           <button type="button" class="gate-remove-btn" data-remove-pilot="${p.slotIndex}" ${canRemove && !rfLocked ? "" : "disabled"} title="${canRemove ? `Remove ${esc(p.callsign)}` : "At least 2 pilots are required"}" aria-label="Remove ${esc(p.callsign)}">${icons.trash(14)}</button>
         </div>
@@ -1280,100 +1004,6 @@ export class PilotSlotsEditor extends Component {
       } else if (dir === "next" && this.currentPage < totalPages) {
         this.currentPage++;
         this.render();
-      }
-      return;
-    }
-    const resetThreshBtn = target.closest<HTMLButtonElement>("[data-reset-threshold]");
-    if (resetThreshBtn) {
-      const slotIndex = Number(resetThreshBtn.dataset.resetThreshold);
-      const current = this.store.pilot(slotIndex);
-      if (current) {
-        this.commitActiveSearchOnRowEdit(slotIndex);
-        const nextEnter = DEFAULT_ENTER_THRESHOLD_DBM;
-        const nextExit = Math.min(nextEnter - 2, current.exitThreshold || DEFAULT_EXIT_THRESHOLD_DBM);
-        void this.api
-          .updatePilotSlot({
-            ...current,
-            enterThreshold: nextEnter,
-            exitThreshold: nextExit,
-          })
-          .catch((err) => showToast(err instanceof Error ? err.message : String(err), "error"));
-      }
-      return;
-    }
-    const resetExitBtn = target.closest<HTMLButtonElement>("[data-reset-exit-threshold]");
-    if (resetExitBtn) {
-      const slotIndex = Number(resetExitBtn.dataset.resetExitThreshold);
-      const current = this.store.pilot(slotIndex);
-      if (current) {
-        this.commitActiveSearchOnRowEdit(slotIndex);
-        const curEnter = current.enterThreshold || DEFAULT_ENTER_THRESHOLD_DBM;
-        void this.api
-          .updatePilotSlot({
-            ...current,
-            enterThreshold: curEnter,
-            exitThreshold: Math.min(curEnter - 2, DEFAULT_EXIT_THRESHOLD_DBM),
-          })
-          .catch((err) => showToast(err instanceof Error ? err.message : String(err), "error"));
-      }
-      return;
-    }
-    const resetGainBtn = target.closest<HTMLButtonElement>("[data-reset-laprf-gain]");
-    if (resetGainBtn) {
-      const slotIndex = Number(resetGainBtn.dataset.resetLaprfGain);
-      const current = this.store.pilot(slotIndex);
-      if (current) {
-        this.commitActiveSearchOnRowEdit(slotIndex);
-        void this.api
-          .updatePilotSlot({ ...current, attenuationGain: DEFAULT_LAPRF_GAIN })
-          .catch((err) => showToast(err instanceof Error ? err.message : String(err), "error"));
-      }
-      return;
-    }
-    const resetLaprfThrBtn = target.closest<HTMLButtonElement>("[data-reset-laprf-threshold]");
-    if (resetLaprfThrBtn) {
-      const slotIndex = Number(resetLaprfThrBtn.dataset.resetLaprfThreshold);
-      const current = this.store.pilot(slotIndex);
-      if (current) {
-        this.commitActiveSearchOnRowEdit(slotIndex);
-        void this.api
-          .updatePilotSlot({ ...current, laprfThreshold: DEFAULT_LAPRF_THRESHOLD })
-          .catch((err) => showToast(err instanceof Error ? err.message : String(err), "error"));
-      }
-      return;
-    }
-    const resetRhEnterBtn = target.closest<HTMLButtonElement>("[data-reset-rh-enter]");
-    if (resetRhEnterBtn) {
-      const slotIndex = Number(resetRhEnterBtn.dataset.resetRhEnter);
-      const current = this.store.pilot(slotIndex);
-      if (current) {
-        this.commitActiveSearchOnRowEdit(slotIndex);
-        const nextEnter = DEFAULT_RH_ENTER_THRESHOLD;
-        const nextExit = Math.min(nextEnter - 4, current.rhExitThreshold || DEFAULT_RH_EXIT_THRESHOLD);
-        void this.api
-          .updatePilotSlot({
-            ...current,
-            rhEnterThreshold: nextEnter,
-            rhExitThreshold: nextExit,
-          })
-          .catch((err) => showToast(err instanceof Error ? err.message : String(err), "error"));
-      }
-      return;
-    }
-    const resetRhExitBtn = target.closest<HTMLButtonElement>("[data-reset-rh-exit]");
-    if (resetRhExitBtn) {
-      const slotIndex = Number(resetRhExitBtn.dataset.resetRhExit);
-      const current = this.store.pilot(slotIndex);
-      if (current) {
-        this.commitActiveSearchOnRowEdit(slotIndex);
-        const curEnter = current.rhEnterThreshold || DEFAULT_RH_ENTER_THRESHOLD;
-        void this.api
-          .updatePilotSlot({
-            ...current,
-            rhEnterThreshold: curEnter,
-            rhExitThreshold: Math.min(curEnter - 4, DEFAULT_RH_EXIT_THRESHOLD),
-          })
-          .catch((err) => showToast(err instanceof Error ? err.message : String(err), "error"));
       }
       return;
     }
@@ -1645,43 +1275,12 @@ export class PilotSlotsEditor extends Component {
 
     this.commitActiveSearchOnRowEdit(slotIndex);
 
-    const isLapRF = this.store.timingHardwareMode === "laprf";
-    const isRH = isRotorHazardMode(this.store.timingHardwareMode);
-    let threshold = current.enterThreshold || DEFAULT_ENTER_THRESHOLD_DBM;
-    let exitThreshold = current.exitThreshold || DEFAULT_EXIT_THRESHOLD_DBM;
-    let attenuationGain = current.attenuationGain || DEFAULT_LAPRF_GAIN;
-    let laprfThreshold = current.laprfThreshold || DEFAULT_LAPRF_THRESHOLD;
-    let rhEnterThreshold = current.rhEnterThreshold || DEFAULT_RH_ENTER_THRESHOLD;
-    let rhExitThreshold = current.rhExitThreshold || DEFAULT_RH_EXIT_THRESHOLD;
-
-    if (isLapRF) {
-      const rawGain = Number(data.get("attenuationGain"));
-      if (Number.isFinite(rawGain)) {
-        attenuationGain = Math.max(0, Math.min(63, Math.round(rawGain)));
-      }
-      const rawLaprfThr = Number(data.get("laprfThreshold"));
-      if (Number.isFinite(rawLaprfThr)) {
-        laprfThreshold = Math.max(300, Math.min(3500, Math.round(rawLaprfThr)));
-      }
-    } else if (isRH) {
-      const rawEn = Number(data.get("rhEnterThreshold"));
-      rhEnterThreshold = Number.isFinite(rawEn)
-        ? Math.max(10, Math.min(250, Math.round(rawEn)))
-        : DEFAULT_RH_ENTER_THRESHOLD;
-      const rawEx = Number(data.get("rhExitThreshold"));
-      rhExitThreshold = Number.isFinite(rawEx)
-        ? Math.max(6, Math.min(rhEnterThreshold - 4, Math.round(rawEx)))
-        : Math.max(6, rhEnterThreshold - 25);
-    } else {
-      const rawEnter = Number(data.get("threshold"));
-      threshold = Number.isFinite(rawEnter)
-        ? Math.max(-95, Math.min(-20, rawEnter))
-        : DEFAULT_ENTER_THRESHOLD_DBM;
-      const rawExit = Number(data.get("exitThreshold"));
-      exitThreshold = Number.isFinite(rawExit)
-        ? Math.max(-105, Math.min(threshold - 2, rawExit))
-        : Math.max(-105, threshold - 10);
-    }
+    const threshold = current.enterThreshold || DEFAULT_ENTER_THRESHOLD_DBM;
+    const exitThreshold = current.exitThreshold || DEFAULT_EXIT_THRESHOLD_DBM;
+    const attenuationGain = current.attenuationGain || DEFAULT_LAPRF_GAIN;
+    const laprfThreshold = current.laprfThreshold || DEFAULT_LAPRF_THRESHOLD;
+    const rhEnterThreshold = current.rhEnterThreshold || DEFAULT_RH_ENTER_THRESHOLD;
+    const rhExitThreshold = current.rhExitThreshold || DEFAULT_RH_EXIT_THRESHOLD;
     const rfLocked = this.isLiveHeatLockingChannels();
     const rawChannelCode = Number(data.get("channel"));
     const decoded = rfLocked ? null : decodeBandChannel(rawChannelCode);

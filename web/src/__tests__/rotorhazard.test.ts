@@ -241,9 +241,9 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(root.querySelector("#track-host")!.textContent).toContain("R1");
       expect(root.querySelector("#track-host")!.textContent).toContain("RH");
 
-      // PilotSlotsEditor renders Enter (10–250) and Exit (6–246) columns
-      expect(root.querySelector("#pilots-host")!.textContent).toContain("Enter (10–250)");
-      expect(root.querySelector("#pilots-host")!.textContent).toContain("Exit (6–246)");
+      // PilotSlotsEditor renders Pilot, Phonetic name, and Default channel columns (thresholds hidden)
+      expect(root.querySelector("#pilots-host")!.textContent).toContain("Default channel");
+      expect(root.querySelector("#pilots-host")!.textContent).not.toContain("Enter (10–250)");
     } finally {
       simView.destroy();
       netView.destroy();
@@ -678,10 +678,10 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
         )
       ).toBe(true);
 
-      // PilotSlotsEditor shows 0..255 Enter/Exit columns
+      // PilotSlotsEditor renders Pilot, Phonetic name, and Default channel columns (thresholds hidden)
       const pilotsTxt = root.querySelector("#pilots-usb")!.textContent ?? "";
-      expect(pilotsTxt).toContain("Enter (10–250)");
-      expect(pilotsTxt).toContain("Exit (6–246)");
+      expect(pilotsTxt).toContain("Default channel");
+      expect(pilotsTxt).not.toContain("Enter (10–250)");
 
       // DebugView enables Spectrum scan & waterfall on 0-255 RSSI scale for RotorHazard (USB)
       const specSection = root.querySelector<HTMLElement>(

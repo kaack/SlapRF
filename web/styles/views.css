@@ -7313,8 +7313,8 @@ html[data-theme="light"] .net-mnode.is-selected {
    Unified Pilot Roster Table
    ========================================================================= */
 .slot-row.has-remove {
-  grid-template-columns: minmax(145px, 1.25fr) minmax(120px, 1fr) minmax(155px, 1fr) 128px 128px 32px;
-  min-width: 740px;
+  grid-template-columns: minmax(160px, 1.3fr) minmax(140px, 1fr) minmax(170px, 1fr) 32px;
+  min-width: 520px;
 }
 .pilot-seed-badge {
   display: inline-grid;
