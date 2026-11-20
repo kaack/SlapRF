@@ -2828,12 +2828,14 @@ html[data-theme="light"] .scope-calib-tune-btn.is-active {
 }
 .scope-tune-head {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
   justify-content: space-between;
+  height: 46px;
   min-height: 46px;
+  max-height: 46px;
   gap: 10px 14px;
-  padding: 8px 12px;
+  padding: 0 12px;
   border-bottom: 1px solid var(--border-strong);
   background: color-mix(in srgb, var(--surface-3) 76%, var(--surface-2));
   box-sizing: border-box;
