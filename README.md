@@ -13,7 +13,6 @@ A single-gate timer measures total lap time at the Start / Finish gate. When you
   <a href="https://github.com/kaack/SlapRF/actions/workflows/pages.yml"><img src="https://github.com/kaack/SlapRF/actions/workflows/pages.yml/badge.svg" alt="Build &amp; Deploy GitHub Page" /></a>
   <a href="https://github.com/kaack/SlapRF/actions/workflows/firmware.yml"><img src="https://github.com/kaack/SlapRF/actions/workflows/firmware.yml/badge.svg" alt="Build XIAO ESP32-C5 Firmware" /></a>
   <a href="https://github.com/kaack/SlapRF/releases/latest"><img src="https://img.shields.io/github/v/release/kaack/SlapRF?label=release&amp;color=2ea44f" alt="Latest Release" /></a>
-  <a href="https://slaprf.app"><img src="https://img.shields.io/badge/demo-slaprf.app-38bdf8" alt="Live Demo" /></a>
   <a href="https://discord.gg/zNrV3auRss"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&amp;logoColor=white" alt="Discord" /></a>
 </p>
 

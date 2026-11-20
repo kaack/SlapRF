@@ -57,7 +57,9 @@ jobs:
       - name: Deploy static files to github-page branch
         run: |
           WORKTREE_DIR="$(mktemp -d)"
-          git fetch origin github-page || true
+          for i in 1 2 3; do
+            git fetch origin github-page && break || sleep 5
+          done
           if git show-ref --verify --quiet refs/remotes/origin/github-page; then
             git worktree add -B github-page "$WORKTREE_DIR" origin/github-page
           else
@@ -82,5 +84,7 @@ jobs:
           else
             VERSION="${GITHUB_REF_NAME:-main} (${GITHUB_SHA::7})"
             git commit -m "Build GitHub Page for ${VERSION}"
-            git push origin github-page --force
+            for i in 1 2 3; do
+              git push origin github-page --force && break || sleep 5
+            done
           fi
