@@ -355,9 +355,9 @@ func TestComponent_SettingsIntroResponsiveCollapseSeeMoreLess(t *testing.T) {
 
 func TestComponent_TableScrollShellOverflowArrowsAndScrollPreserve(t *testing.T) {
 	h := NewHarnessWithOptions(t, HarnessOptions{
-		Viewport: &playwright.Size{Width: 820, Height: 820},
+		Viewport: &playwright.Size{Width: 560, Height: 820},
 	})
-	h.BootWithSnapshot(SnapshotPracticePopulated, "#/pilots", nil)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/sim", nil)
 
 	shell := h.Page.Locator(`.table-scroll-shell.has-overflow`).First()
 	h.MustBeVisible(shell, "Horizontally overflowing .table-scroll-shell")
