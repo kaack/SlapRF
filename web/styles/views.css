@@ -2198,7 +2198,11 @@ html[data-theme="light"] .bar-time {
   align-items: center;
   white-space: nowrap;
   gap: 9px;
-  padding: 8px 12px;
+  height: 36px;
+  min-height: 36px;
+  max-height: 36px;
+  padding: 0 12px;
+  box-sizing: border-box;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
   background: var(--surface-2);
@@ -2750,8 +2754,15 @@ html[data-theme="light"] .bar-time {
 .channel-custom-icon {
   display: inline-flex;
   align-items: center;
-  color: var(--text-3);
-  margin-left: -2px;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+  color: #7dd3fc;
+  margin-left: -3px;
+}
+html[data-theme="light"] .channel-custom-icon {
+  color: #0369a1;
 }
 .rule-override {
   margin-top: 8px;

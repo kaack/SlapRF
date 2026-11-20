@@ -68,6 +68,19 @@ function countOverrides(ovr: GateRuleOverrides | undefined): number {
   return n;
 }
 
+function countGlobalOverrides(rules: TimingRules): number {
+  let n = 0;
+  for (const spec of TUNE_RULES) {
+    if (Math.abs(rules[spec.key] - DEFAULT_TUNE_RULES[spec.key]) > 1e-6) {
+      n++;
+    }
+  }
+  if (Boolean(rules.beepOnCross) !== Boolean(DEFAULT_TUNE_RULES.beepOnCross)) {
+    n++;
+  }
+  return n;
+}
+
 const TUNE_RULES: TuneRuleSpec[] = [
   {
     key: "minLapSec",
@@ -2536,12 +2549,14 @@ export class PilotRssiChart extends Component {
 
     const canTune = !this.isMultiPilotMode && !this.store.isHistoricalTrack;
     const activeSlot = this.activePilotSlot;
+    const globalOvrCount = canTune ? countGlobalOverrides(this.store.rules) : 0;
     const structSig = [
       this.focus ?? "all",
       this.tuningGateId ?? "closed",
       this.isMultiPilotMode ? "multi" : "single",
       canTune ? "tunable" : "readonly",
       unitSuffix,
+      `global:${globalOvrCount}`,
       this.store.nodes
         .map((p) => {
           const gOvr = countOverrides(p.ruleOverrides);
@@ -2559,6 +2574,7 @@ export class PilotRssiChart extends Component {
                 data-focus="all" title="Show all timers (${this.store.nodes.length})">
           <span class="dot channel-all-dot"></span>
           <span class="channel-name">All timers</span>
+          ${globalOvrCount > 0 ? `<span class="channel-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>` : ""}
           <span class="channel-dbm mono">${this.store.nodes.length} timers</span>
         </button>`;
       const gateChips = this.store.nodes
@@ -2584,7 +2600,7 @@ export class PilotRssiChart extends Component {
                     data-focus="${this.focus === p.gateId ? "all" : p.gateId}" title="${this.focus === p.gateId ? "Show all timers" : "Show only this timer"}">
               <span class="dot" style="--c:${this.colorOf(p.gateId)}"></span>
               <span class="channel-name">${esc(label)}</span>
-              ${hasOvr ? `<span class="channel-custom-icon" aria-hidden="true">${icons.pencil(12)}</span>` : ""}
+              ${hasOvr ? `<span class="channel-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>` : ""}
               <span class="channel-dbm mono" data-gate-dbm="${p.gateId}">${this.isMultiPilotMode ? "peak " : ""}${dbm.toFixed(0)}${unitSuffix}</span>
             </button>`;
         })
