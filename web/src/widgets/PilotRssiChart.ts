@@ -350,6 +350,10 @@ export class PilotRssiChart extends Component {
     return this.isMobileLayout ? 26 : PAD.l;
   }
 
+  private get padT(): number {
+    return this.isMobileLayout ? 6 : PAD.t;
+  }
+
   /** Right padding: threshold tags now sit inside the right edge of the plot. */
   private get padR(): number {
     return this.isMobileLayout ? 4 : 16;
@@ -368,22 +372,24 @@ export class PilotRssiChart extends Component {
     this.loadChartPrefs();
     el.classList.add("scope-root");
     el.innerHTML = `
-      <div class="scope-toolbar">
-        <div class="scope-transport" role="group" aria-label="Signal playback and pass navigation">
-          <button class="btn btn-sm btn-ghost scope-step-btn" type="button" data-act="prev" title="Previous pass (←)">
-            ${icons.chevronLeft(16)}<span class="scope-step-text-full">Prev pass</span><span class="scope-step-text-short">Prev</span>
-          </button>
-          <button class="btn btn-sm scope-live-btn" type="button" data-act="live"></button>
-          <button class="btn btn-sm btn-ghost scope-step-btn" type="button" data-act="next" title="Next pass (→)">
-            <span class="scope-step-text-full">Next pass</span><span class="scope-step-text-short">Next</span>${icons.chevronRight(16)}
-          </button>
+      <div class="scope-graph-box">
+        <div class="scope-toolbar">
+          <div class="scope-transport" role="group" aria-label="Signal playback and pass navigation">
+            <button class="btn btn-sm btn-ghost scope-step-btn" type="button" data-act="prev" title="Previous pass (←)">
+              ${icons.chevronLeft(16)}<span class="scope-step-text-full">Prev pass</span><span class="scope-step-text-short">Prev</span>
+            </button>
+            <button class="btn btn-sm scope-live-btn" type="button" data-act="live"></button>
+            <button class="btn btn-sm btn-ghost scope-step-btn" type="button" data-act="next" title="Next pass (→)">
+              <span class="scope-step-text-full">Next pass</span><span class="scope-step-text-short">Next</span>${icons.chevronRight(16)}
+            </button>
+          </div>
         </div>
-      </div>
-      <div class="canvas-host canvas-host-md scope-canvas" data-slot="chart" tabindex="0"
-           aria-label="Signal chart. Space pauses, arrow keys jump between passes."></div>
-      <div class="scope-bottom-bar">
-        <div class="scope-axis-controls" data-slot="axis-controls" role="group" aria-label="X and Y axis scale controls"></div>
-        <span class="scope-hint" data-slot="hint"></span>
+        <div class="canvas-host canvas-host-md scope-canvas" data-slot="chart" tabindex="0"
+             aria-label="Signal chart. Space pauses, arrow keys jump between passes."></div>
+        <div class="scope-bottom-bar">
+          <div class="scope-axis-controls" data-slot="axis-controls" role="group" aria-label="X and Y axis scale controls"></div>
+          <span class="scope-hint" data-slot="hint"></span>
+        </div>
       </div>
       <div class="channel-legend" data-slot="legend"></div>
       <div class="scope-calib" data-slot="calib"></div>
@@ -636,7 +642,7 @@ export class PilotRssiChart extends Component {
       const x = e.clientX - r.left;
       const y = e.clientY - r.top;
       const xFrac = Math.max(0, Math.min(1, (x - this.padL) / Math.max(10, this.plot.w)));
-      const yFrac = Math.max(0, Math.min(1, 1 - (y - PAD.t) / Math.max(10, this.plot.h)));
+      const yFrac = Math.max(0, Math.min(1, 1 - (y - this.padT) / Math.max(10, this.plot.h)));
 
       if (wf.mode === "x" || wf.mode === "xy") {
         const prevWin = this.windowUs;
@@ -709,7 +715,7 @@ export class PilotRssiChart extends Component {
             startYMin: this.yMin,
             startYMax: this.yMax,
             anchorXFrac: Math.max(0, Math.min(1, (midX - this.padL) / Math.max(10, this.plot.w))),
-            anchorYFrac: Math.max(0, Math.min(1, 1 - (midY - PAD.t) / Math.max(10, this.plot.h))),
+            anchorYFrac: Math.max(0, Math.min(1, 1 - (midY - this.padT) / Math.max(10, this.plot.h))),
           };
           host.classList.add("is-dragging");
           return;
@@ -735,7 +741,7 @@ export class PilotRssiChart extends Component {
 
       if (x < yAxisW) {
         // Dragging on left Y-axis stretches/shrinks the dBm scale smoothly
-        const yFrac = Math.max(0, Math.min(1, 1 - (y - PAD.t) / Math.max(10, this.plot.h)));
+        const yFrac = Math.max(0, Math.min(1, 1 - (y - this.padT) / Math.max(10, this.plot.h)));
         this.drag = {
           mode: "ystretch",
           startY: y,
@@ -897,7 +903,7 @@ export class PilotRssiChart extends Component {
 
       if (!this.drag) {
         const overTag = this.tagAt(x, y) !== null;
-        const overYAxis = !overTag && x < this.padL && y >= PAD.t && y <= r.height - PAD.b;
+        const overYAxis = !overTag && x < this.padL && y >= this.padT && y <= r.height - PAD.b;
         const overXAxis =
           !overTag && !overYAxis && y >= r.height - PAD.b && x >= this.padL && x <= this.padL + this.plot.w;
         host.classList.toggle("is-over-tag", overTag);
@@ -1008,8 +1014,8 @@ export class PilotRssiChart extends Component {
       }
       if (this.drag) {
         if (this.drag.mode === "ybox" && this.yZoomBox) {
-          const ya = Math.max(PAD.t, Math.min(PAD.t + this.plot.h, Math.min(this.yZoomBox.y0, this.yZoomBox.y1)));
-          const yb = Math.max(PAD.t, Math.min(PAD.t + this.plot.h, Math.max(this.yZoomBox.y0, this.yZoomBox.y1)));
+          const ya = Math.max(this.padT, Math.min(this.padT + this.plot.h, Math.min(this.yZoomBox.y0, this.yZoomBox.y1)));
+          const yb = Math.max(this.padT, Math.min(this.padT + this.plot.h, Math.max(this.yZoomBox.y0, this.yZoomBox.y1)));
           if (yb - ya >= 10) {
             const dHigh = this.dbmAt(ya);
             const dLow = this.dbmAt(yb);
@@ -1128,12 +1134,12 @@ export class PilotRssiChart extends Component {
 
   private yOf(dbm: number): number {
     const span = Math.max(4, this.yMax - this.yMin);
-    return PAD.t + this.plot.h * (1 - (dbm - this.yMin) / span);
+    return this.padT + this.plot.h * (1 - (dbm - this.yMin) / span);
   }
 
   private dbmAt(y: number): number {
     const span = Math.max(4, this.yMax - this.yMin);
-    const v = this.yMin + (1 - (y - PAD.t) / this.plot.h) * span;
+    const v = this.yMin + (1 - (y - this.padT) / this.plot.h) * span;
     return Math.max(this.absYMin, Math.min(this.absYMax, v));
   }
 
@@ -1248,7 +1254,7 @@ export class PilotRssiChart extends Component {
       ? Math.min(absHi, Math.ceil((maxD + 160) / 50) * 50)
       : isRH
         ? Math.min(absHi, Math.ceil((maxD + 16) / 5) * 5)
-        : Math.min(absHi, Math.ceil((maxD + 6) / 2) * 2);
+        : Math.min(absHi, Math.ceil((maxD + 3) / 2) * 2);
     const minSpan = isLapRF ? 700 : isRH ? 60 : 22;
     if (targetMax - targetMin < minSpan) {
       const extra = minSpan - (targetMax - targetMin);
@@ -1819,8 +1825,9 @@ export class PilotRssiChart extends Component {
     if (pilotEntries.length === 0) return;
 
     const padL = this.padL;
+    const padT = this.padT;
     const plotW = w - padL - this.padR;
-    const plotH = h - PAD.t - PAD.b;
+    const plotH = h - padT - PAD.b;
     this.plot = { x: padL, w: plotW, h: plotH };
 
     if (this.endUs !== null) this.endUs = this.clampEnd(this.endUs);
@@ -1843,7 +1850,7 @@ export class PilotRssiChart extends Component {
       // Traces, decimated to roughly one point per pixel when zoomed out.
       ctx.save();
       ctx.beginPath();
-      ctx.rect(padL, PAD.t - 4, plotW, plotH + 8);
+      ctx.rect(padL, padT - 4, plotW, plotH + 8);
       ctx.clip();
       ctx.lineJoin = "round";
       ctx.lineWidth = 1.6;
@@ -1862,7 +1869,7 @@ export class PilotRssiChart extends Component {
             : this.colorOf(gate.gateId);
           ctx.setLineDash([]);
           ctx.beginPath();
-          let lastY = PAD.t;
+          let lastY = padT;
           let lastTs = 0;
           if (step === 1) {
             for (let i = from; i <= to; i++) {
@@ -1933,8 +1940,8 @@ export class PilotRssiChart extends Component {
 
     // Shift+drag Y box-zoom overlay
     if (this.yZoomBox) {
-      const ya = Math.max(PAD.t, Math.min(PAD.t + plotH, Math.min(this.yZoomBox.y0, this.yZoomBox.y1)));
-      const yb = Math.max(PAD.t, Math.min(PAD.t + plotH, Math.max(this.yZoomBox.y0, this.yZoomBox.y1)));
+      const ya = Math.max(padT, Math.min(padT + plotH, Math.min(this.yZoomBox.y0, this.yZoomBox.y1)));
+      const yb = Math.max(padT, Math.min(padT + plotH, Math.max(this.yZoomBox.y0, this.yZoomBox.y1)));
       ctx.save();
       ctx.fillStyle = withAlpha(theme.accent, 0.12);
       ctx.fillRect(padL, ya, plotW, Math.max(1, yb - ya));
@@ -1977,13 +1984,13 @@ export class PilotRssiChart extends Component {
       ctx.lineWidth = p.counted ? 1 : 1.5;
       ctx.setLineDash(p.counted ? [2, 3] : [5, 3]);
       ctx.beginPath();
-      ctx.moveTo(x, PAD.t);
-      ctx.lineTo(x, PAD.t + plotH);
+      ctx.moveTo(x, padT);
+      ctx.lineTo(x, padT + plotH);
       ctx.stroke();
       ctx.restore();
       ctx.fillStyle = color;
       ctx.font = font(600, 10.5);
-      ctx.fillText(this.labelOf(p), x + 5, PAD.t + 11 + (rows.get(PilotRssiChart.keyOf(p)) ?? 0) * 12);
+      ctx.fillText(this.labelOf(p), x + 5, padT + 11 + (rows.get(PilotRssiChart.keyOf(p)) ?? 0) * 12);
       if (this.hoverX !== null && Math.abs(this.hoverX - x) <= MARKER_HIT_PX) hovered = p;
     });
 
@@ -1998,6 +2005,7 @@ export class PilotRssiChart extends Component {
    * use the pilot's own threshold; filled tags are calibrated for that gate.
    */
   private drawThresholds(ctx: CanvasRenderingContext2D, w: number, plotW: number, plotH: number): void {
+    const padT = this.padT;
     ctx.font = font(700, 10.5);
     const items: Array<{
       gateId: number;
@@ -2011,7 +2019,7 @@ export class PilotRssiChart extends Component {
     for (const p of this.shownGates) {
       const en = this.thresholdOf(p.gateId);
       const enText = this.isLapRF ? `Thresh ${en.dbm.toFixed(0)}` : `Enter ${en.dbm.toFixed(0)}`;
-      const enY = Math.max(PAD.t, Math.min(PAD.t + plotH, this.yOf(en.dbm)));
+      const enY = Math.max(padT, Math.min(padT + plotH, this.yOf(en.dbm)));
       items.push({
         gateId: p.gateId,
         kind: "enter",
@@ -2024,7 +2032,7 @@ export class PilotRssiChart extends Component {
       if (!this.isLapRF) {
         const ex = this.exitThresholdOf(p.gateId);
         const exText = `Exit ${ex.dbm.toFixed(0)}`;
-        const exY = Math.max(PAD.t, Math.min(PAD.t + plotH, this.yOf(ex.dbm)));
+        const exY = Math.max(padT, Math.min(padT + plotH, this.yOf(ex.dbm)));
         items.push({
           gateId: p.gateId,
           kind: "exit",
@@ -2189,9 +2197,10 @@ export class PilotRssiChart extends Component {
               ? 10
               : 15;
     const padL = this.padL;
+    const padT = this.padT;
     for (let level = Math.ceil(this.yMin / dStep) * dStep; level <= this.yMax; level += dStep) {
       const y = Math.round(yOf(level)) + 0.5;
-      if (y < PAD.t - 1 || y > h - PAD.b + 1) continue;
+      if (y < padT - 1 || y > h - PAD.b + 1) continue;
       ctx.strokeStyle = theme.grid;
       ctx.beginPath();
       ctx.moveTo(padL, y);
@@ -2255,11 +2264,12 @@ export class PilotRssiChart extends Component {
 
   /** Crosshair with the time under the cursor, plus details of a pass marker being hovered. */
   private drawCursor(ctx: CanvasRenderingContext2D, h: number, plotH: number, x: number, hovered: PassMarker | null): void {
+    const padT = this.padT;
     ctx.save();
     ctx.strokeStyle = withAlpha(theme.text, 0.25);
     ctx.beginPath();
-    ctx.moveTo(x + 0.5, PAD.t);
-    ctx.lineTo(x + 0.5, PAD.t + plotH);
+    ctx.moveTo(x + 0.5, padT);
+    ctx.lineTo(x + 0.5, padT + plotH);
     ctx.stroke();
     ctx.restore();
 
@@ -2280,7 +2290,7 @@ export class PilotRssiChart extends Component {
     const boxW = Math.max(...lines.map((l) => ctx.measureText(l).width)) + 20;
     const boxH = 42;
     const bx = Math.min(x + 10, this.padL + this.plot.w - boxW);
-    const by = PAD.t + 8;
+    const by = padT + 8;
     ctx.fillStyle = withAlpha(theme.surface, 0.95);
     ctx.strokeStyle = hovered.counted ? theme.gridStrong : withAlpha(theme.bad, 0.6);
     ctx.beginPath();
@@ -2968,12 +2978,15 @@ export class PilotRssiChart extends Component {
     }
   }
 
-  /** Anchors the mobile bottom drawer right below the graph's X/Y axis bar so the graph stays visible. */
+  /** Anchors the mobile bottom drawer right below the graph box so the graph stays visible. */
   private syncMobileDrawerTop(drawerEl: HTMLElement): void {
-    const bottomBar = this.el.querySelector<HTMLElement>(".scope-bottom-bar") ?? this.slot("chart");
-    const rect = bottomBar.getBoundingClientRect();
+    const graphBox =
+      this.el.querySelector<HTMLElement>(".scope-graph-box") ??
+      this.el.querySelector<HTMLElement>(".scope-bottom-bar") ??
+      this.slot("chart");
+    const rect = graphBox.getBoundingClientRect();
     if (rect.bottom > 80) {
-      drawerEl.style.setProperty("--scope-graph-bottom", `${Math.ceil(rect.bottom + 6)}px`);
+      drawerEl.style.setProperty("--scope-graph-bottom", `${Math.ceil(rect.bottom + 8)}px`);
     } else {
       drawerEl.style.removeProperty("--scope-graph-bottom");
     }

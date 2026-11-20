@@ -2575,6 +2575,9 @@ html[data-theme="light"] .bar-time {
 }
 
 /* Signal chart controls --------------------------------------------------- */
+.scope-graph-box {
+  display: contents;
+}
 .scope-toolbar {
   display: flex;
   align-items: center;
@@ -3122,6 +3125,50 @@ html[data-theme="light"] .scope-tune-custom-icon {
 @media (max-width: 860px) {
   .rc-signals-card-box {
     display: contents;
+  }
+  .scope-graph-box {
+    display: flex;
+    flex-direction: column;
+    padding: 6px 8px 10px;
+    border-radius: var(--radius-lg);
+    border: 1px solid var(--border-strong);
+    background: var(--surface);
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  }
+  html[data-theme="light"] .scope-graph-box {
+    background: var(--node-surface);
+    border-color: var(--node-border);
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+  }
+  .scope-graph-box > .scope-toolbar {
+    margin-top: 2px;
+    margin-bottom: -2px;
+  }
+  .scope-graph-box > .scope-bottom-bar {
+    margin-top: 6px;
+  }
+  .scope-transport {
+    padding: 2px;
+    gap: 2px;
+    border-radius: 8px;
+  }
+  .scope-transport .btn {
+    height: 24px;
+    min-height: 24px;
+    font-size: 11px;
+    border-radius: 6px;
+  }
+  .scope-transport .scope-step-btn {
+    padding: 0 6px;
+    gap: 2px;
+  }
+  .scope-transport .scope-live-btn {
+    padding: 0 8px;
+    gap: 4px;
+  }
+  .scope-transport .btn svg {
+    width: 13px;
+    height: 13px;
   }
   .scope-tune-drawer.is-mobile-closed {
     display: none !important;
@@ -21625,21 +21672,30 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     display: flex !important;
     flex-direction: column;
     overflow: hidden;
-    background: var(--surface);
-    border: 1px solid var(--border);
-    box-shadow: none;
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
   }
 
-  .practice-workspace-page .practice-mobile-signals-panel > .rc-panel-body.is-signals-body {
+  .practice-workspace-page .practice-mobile-signals-panel > .rc-panel-body.is-signals-body,
+  .practice-workspace-page .practice-mobile-signals-panel .rc-panel-body.is-signals-body {
     flex: 1 1 0;
     min-height: 0;
-    padding: 10px 8px;
+    padding: 0 !important;
     overflow-y: auto;
     overscroll-behavior-y: contain;
   }
 
-  .races-page .rc-canvas-panel.is-signals-panel > .rc-panel-body.is-signals-body {
-    padding: 10px 8px;
+  .races-page .rc-canvas-panel.is-signals-panel,
+  html[data-theme="light"] .races-page .rc-canvas-panel.is-signals-panel {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .races-page .rc-canvas-panel.is-signals-panel > .rc-panel-body.is-signals-body,
+  .races-page .rc-canvas-panel.is-signals-panel .rc-panel-body.is-signals-body {
+    padding: 0 !important;
   }
 
   .practice-workspace-page[data-mobile-practice-view="analytics"] .practice-mobile-analytics-wrap {
@@ -21820,16 +21876,9 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     flex-direction: column;
   }
 
-  .scope-root > .scope-toolbar {
-    margin-bottom: 6px;
-  }
-
-  .scope-root > .scope-bottom-bar {
-    margin-top: 8px;
-  }
-
   .scope-root > .channel-legend {
     margin-top: 10px;
+    gap: 6px;
   }
 
   .practice-workspace-page .stat-row {
@@ -24320,7 +24369,8 @@ html[data-theme="light"] .mre-sheet-check-toggle input[type="checkbox"]:checked:
     display: none !important;
   }
 
-  .practice-workspace-page[data-mobile-practice-view="signals"] .practice-mobile-signals-panel {
+  .practice-workspace-page[data-mobile-practice-view="signals"] .practice-mobile-signals-panel,
+  html[data-theme="light"] .practice-workspace-page[data-mobile-practice-view="signals"] .practice-mobile-signals-panel {
     position: relative;
     top: auto;
     left: auto;
@@ -24331,15 +24381,15 @@ html[data-theme="light"] .mre-sheet-check-toggle input[type="checkbox"]:checked:
     transform: none !important;
     display: flex !important;
     flex-direction: column;
-    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
-    background: var(--surface);
-    border: 1px solid var(--border-strong);
+    box-shadow: none !important;
+    background: transparent !important;
+    border: 0 !important;
   }
 
   .practice-workspace-page .practice-action-strip,
   .practice-workspace-page .practice-mobile-pilots-card,
   .practice-workspace-page .practice-standings-card,
-  .practice-workspace-page .practice-trends-card,
+  .practice-workspace-page .practice-trends-card .canvas-host-lg,
   .practice-workspace-page .practice-sections-card,
   .practice-workspace-page .practice-laps-card,
   .practice-workspace-page .stat-row {
@@ -24358,11 +24408,10 @@ html[data-theme="light"] .mre-sheet-check-toggle input[type="checkbox"]:checked:
     padding: 12px 20px;
   }
 
-  html[data-theme="light"] .practice-workspace-page[data-mobile-practice-view="signals"] .practice-mobile-signals-panel,
   html[data-theme="light"] .practice-workspace-page .practice-action-strip,
   html[data-theme="light"] .practice-workspace-page .practice-mobile-pilots-card,
   html[data-theme="light"] .practice-workspace-page .practice-standings-card,
-  html[data-theme="light"] .practice-workspace-page .practice-trends-card,
+  html[data-theme="light"] .practice-workspace-page .practice-trends-card .canvas-host-lg,
   html[data-theme="light"] .practice-workspace-page .practice-sections-card,
   html[data-theme="light"] .practice-workspace-page .practice-laps-card,
   html[data-theme="light"] .practice-workspace-page .stat-row {
