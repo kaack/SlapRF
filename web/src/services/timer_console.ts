@@ -580,6 +580,9 @@ export class TimerConsole {
     this.lastConfig = snap.lastConfig ?? null;
     if (this.lastStatus) {
       this.lastStatusAtMs = Date.now();
+      if (this.lastStatus.ble || this.lastStatus.chip?.mac) {
+        this.lastRealJsonStatusAtMs = this.lastStatusAtMs;
+      }
     }
 
     const nextConnected = this.connected;
@@ -608,6 +611,9 @@ export class TimerConsole {
           this.probing = false;
           this.lastStatus = ev.status;
           this.lastStatusAtMs = Date.now();
+          if (ev.status.ble || ev.status.chip?.mac) {
+            this.lastRealJsonStatusAtMs = this.lastStatusAtMs;
+          }
           this.resolveWaiters("status", ev.status);
           this.subscribers.forEach((h) => h.onStatus?.(ev.status!));
           this.notifyStateChange();
@@ -652,7 +658,9 @@ export class TimerConsole {
           }
         }
         if (typeof p.hubOwnFrames === "number") this.hubOwnFrames = p.hubOwnFrames;
-        this.synthesizeHubStatusIfNeeded();
+        if (!this.lastStatus) {
+          this.synthesizeHubStatusIfNeeded();
+        }
         this.subscribers.forEach((h) => h.onHubLive?.());
         break;
       }
@@ -1555,7 +1563,8 @@ export class TimerConsole {
     const knownTimers = getKnownHardwareTimers();
     const knownHub = knownTimers.find((t) => t.role === "hub" && t.fp.toUpperCase() === fp.toUpperCase());
     const label = hello1?.label || this.lastConfig?.timerLabel || this.lastStatus?.label || knownHub?.label || "H1";
-    const sweepHz = hello1?.sweepHz || this.lastStatus?.sweepHz || 100;
+    const isBleHub = Boolean(blePortFp || this.lastStatus?.image === "ble" || this.lastStatus?.ble);
+    const sweepHz = hello1?.sweepHz || this.lastStatus?.sweepHz || (isBleHub ? 50 : 100);
     const spokes: TimerPeerSpoke[] = [];
     for (let slot = 2; slot <= 7; slot++) {
       const sh = this.hubSlotHello.get(slot);
@@ -1590,15 +1599,15 @@ export class TimerConsole {
       heapMin: this.lastStatus?.heapMin || 56200,
       sweepHz,
       sweeps: this.hubOwnFrames * 4,
-      sweepUs: this.lastStatus?.sweepUs || (sweepHz >= 100 ? 6100 : 13400),
-      sweepUsMax: this.lastStatus?.sweepUsMax || (sweepHz >= 100 ? 6650 : 15800),
-      sweepBudgetUs: sweepHz >= 100 ? 7000 : 20000,
+      sweepUs: this.lastStatus?.sweepUs || (isBleHub ? 5400 : sweepHz >= 100 ? 6100 : 13400),
+      sweepUsMax: this.lastStatus?.sweepUsMax || (isBleHub ? 5900 : sweepHz >= 100 ? 6650 : 15800),
+      sweepBudgetUs: this.lastStatus?.sweepBudgetUs || (isBleHub ? 6000 : sweepHz >= 100 ? 7000 : 20000),
       rf: {
         ok: true,
         enabled: true,
-        gain: 30,
-        gainMax: 80,
-        floorDb: live1?.floor ?? this.lastStatus?.rf.floorDb ?? -90.0,
+        gain: this.lastStatus?.rf.gain ?? 30,
+        gainMax: this.lastStatus?.rf.gainMax ?? 80,
+        floorDb: this.lastStatus?.rf.floorDb ?? live1?.floor ?? -90.0,
       },
       chip: this.lastStatus?.chip || {
         model: "ESP32-C5",
@@ -1618,6 +1627,30 @@ export class TimerConsole {
       freqs: this.lastConfig?.frequenciesMHz || this.lastStatus?.freqs || [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917],
       dbm: live1?.dbm ?? this.hubLastDbm ?? this.lastStatus?.dbm,
       spokes,
+      ...(blePortFp || this.lastStatus?.image === "ble" || this.lastStatus?.ble
+        ? {
+            image: "ble",
+            transport: "ble",
+            ble: this.lastStatus?.ble ?? {
+              connected: true,
+              paired: true,
+              pairingMode: false,
+              intervalUs: 15000,
+              mtu: 247,
+              phy: 2,
+              rssi: 0,
+              txNotifies: 0,
+              txBytes: 0,
+              txDrops: 0,
+              rxWrites: 0,
+              nocp: 0,
+              connects: 1,
+              sync: true,
+              syncLocked: false,
+              phaseUs: -1,
+            },
+          }
+        : {}),
     };
     const wasProbing = this.probing;
     this.probing = false;

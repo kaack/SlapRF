@@ -1238,14 +1238,25 @@ func (m *Manager) synthesizeHubStatusLocked(slot *usbSlot, nowMs int64) map[stri
 	if label == "" {
 		label = "H1"
 	}
+	isBle := IsBLEPortName(slot.portName)
 	sweepHz := int(h1.sweepHz)
 	if sweepHz <= 0 {
-		sweepHz = 100
+		if isBle {
+			sweepHz = 50
+		} else {
+			sweepHz = 100
+		}
 	}
 	live1 := slot.hubLive[1]
-	floorDb := -90
-	if live1.frames > 0 {
-		floorDb = live1.floor
+	floorDb := -90.0
+	if slot.lastStatus != nil {
+		if rfMap, ok := slot.lastStatus["rf"].(map[string]any); ok {
+			if f, ok := rfMap["floorDb"].(float64); ok {
+				floorDb = f
+			}
+		}
+	} else if live1.frames > 0 {
+		floorDb = float64(live1.floor)
 	}
 	spokes := make([]map[string]any, 0)
 	for sIdx := uint8(2); sIdx <= 7; sIdx++ {
@@ -1276,6 +1287,14 @@ func (m *Manager) synthesizeHubStatusLocked(slot *usbSlot, nowMs int64) map[stri
 			freqs[i] = int(v)
 		}
 	}
+	sweepUs := 6100
+	sweepUsMax := 6650
+	sweepBudgetUs := 7000
+	if isBle {
+		sweepUs = 5400
+		sweepUsMax = 5900
+		sweepBudgetUs = 6000
+	}
 	st := map[string]any{
 		"t":              "status",
 		"fw":             latestFirmwareText,
@@ -1289,9 +1308,9 @@ func (m *Manager) synthesizeHubStatusLocked(slot *usbSlot, nowMs int64) map[stri
 		"heapMin":        56200,
 		"sweepHz":        sweepHz,
 		"sweeps":         slot.hubOwnFrames * 4,
-		"sweepUs":        6100,
-		"sweepUsMax":     6650,
-		"sweepBudgetUs":  7000,
+		"sweepUs":        sweepUs,
+		"sweepUsMax":     sweepUsMax,
+		"sweepBudgetUs":  sweepBudgetUs,
 		"rf":             map[string]any{"ok": true, "enabled": true, "gain": 30, "gainMax": 80, "floorDb": floorDb},
 		"chip":           map[string]any{"model": "ESP32-C5", "rev": "v1.0", "mac": "", "flashMB": 8},
 		"net":            map[string]any{"mode": "espnow-lr", "stations": len(spokes)},
@@ -1302,6 +1321,35 @@ func (m *Manager) synthesizeHubStatusLocked(slot *usbSlot, nowMs int64) map[stri
 		"freqs":          freqs,
 		"dbm":            slot.hubLastDbm,
 		"spokes":         spokes,
+	}
+	if IsBLEPortName(slot.portName) {
+		st["image"] = "ble"
+		st["transport"] = "ble"
+		if slot.lastStatus != nil {
+			if prevBle, ok := slot.lastStatus["ble"].(map[string]any); ok && prevBle != nil {
+				st["ble"] = prevBle
+			}
+		}
+		if _, hasBle := st["ble"]; !hasBle {
+			st["ble"] = map[string]any{
+				"connected":   true,
+				"paired":      true,
+				"pairingMode": false,
+				"intervalUs":  15000,
+				"mtu":         247,
+				"phy":         2,
+				"rssi":        0,
+				"txNotifies":  0,
+				"txBytes":     0,
+				"txDrops":     0,
+				"rxWrites":    0,
+				"nocp":        0,
+				"connects":    1,
+				"sync":        true,
+				"syncLocked":  false,
+				"phaseUs":     -1,
+			}
+		}
 	}
 	slot.probing = false
 	slot.lastStatus = st

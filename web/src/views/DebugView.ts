@@ -615,6 +615,10 @@ export class DebugView extends Component {
     return isSlapRFMode(this.hwMode());
   }
 
+  private isSlapRFBLEMode(): boolean {
+    return this.hwMode() === "slaprf_ble";
+  }
+
   private isRotorHazardMode(): boolean {
     return isRotorHazardMode(this.hwMode());
   }
@@ -5062,7 +5066,7 @@ export class DebugView extends Component {
 
         <div class="debug-subbox">
           <div class="debug-subbox-head">
-            <span class="debug-subbox-title ${active ? "is-active" : ""}">${icons.wifi(14)}<span>${s?.ble ? "System &amp; Bluetooth" : "System &amp; network"}</span></span>
+            <span class="debug-subbox-title ${active ? "is-active" : ""}">${icons.wifi(14)}<span>${s?.ble || this.isSlapRFBLEMode() || this.console.transportLabel === "Bluetooth" ? "System &amp; Bluetooth" : "System &amp; network"}</span></span>
             <span class="badge">${
               s?.ble
                 ? s.ble.pairingMode
@@ -5070,15 +5074,19 @@ export class DebugView extends Component {
                   : s.ble.paired === false
                     ? "Unpaired"
                     : "BLE Paired"
-                : s
-                  ? `Ch ${s.channel}`
-                  : "—"
+                : this.isSlapRFBLEMode() || this.console.transportLabel === "Bluetooth"
+                  ? on
+                    ? "BLE Paired"
+                    : "Bluetooth"
+                  : s
+                    ? `Ch ${s.channel}`
+                    : "-"
             }</span>
           </div>
           <dl class="debug-kv-list">
             <div class="debug-kv-row">
               <dt>Uptime</dt>
-              <dd>${s ? `${fmtUptime(s.uptimeMs)} <span class="note">· boot #${s.boots ?? "?"}</span>` : "—"}</dd>
+              <dd>${s ? `${fmtUptime(s.uptimeMs)} <span class="note">· boot #${s.boots ?? "?"}</span>` : "-"}</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Last restart</dt>
@@ -5089,39 +5097,44 @@ export class DebugView extends Component {
                     : badReset
                       ? `${esc(s.reset)} <span class="note">· see boot log</span>`
                       : esc(s.reset)
-                  : "—"
+                  : "-"
               }</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Memory free</dt>
-              <dd>${s ? `${(s.heapFree / 1024).toFixed(0)} KB <span class="note">· lowest ${(s.heapMin / 1024).toFixed(0)} KB</span>` : "—"}</dd>
+              <dd>${s ? `${(s.heapFree / 1024).toFixed(0)} KB <span class="note">· lowest ${(s.heapMin / 1024).toFixed(0)} KB</span>` : "-"}</dd>
             </div>
             ${
               s?.ble
                 ? `<div class="debug-kv-row" data-ble-link-row>
                      <dt>Bluetooth link</dt>
-                     <dd><span class="mono">${(s.ble.intervalUs / 1000).toFixed(2).replace(/\.00$/, "")} ms</span> · <span class="mono">${s.ble.rssi} dBm</span> <span class="note">· MTU ${s.ble.mtu}${s.ble.phy ? ` · ${s.ble.phy}M PHY` : ""}</span></dd>
+                     <dd><span class="mono">${(s.ble.intervalUs / 1000).toFixed(2).replace(/\.00$/, "")} ms</span>${s.ble.rssi ? ` · <span class="mono">${s.ble.rssi} dBm</span>` : ""} <span class="note">· MTU ${s.ble.mtu}${s.ble.phy ? ` · ${s.ble.phy}M PHY` : ""}</span></dd>
                    </div>
                    <div class="debug-kv-row" data-ble-sync-row>
-                     <dt>BLE sweep sync</dt>
-                     <dd>${s.ble.syncLocked ? "Locked" : s.ble.sync ? "Locking…" : "Off"} <span class="note">· phase ${s.ble.phaseUs} us · drops ${s.ble.txDrops}</span></dd>
+                     <dt>BLE radio window</dt>
+                     <dd>${s.ble.syncLocked ? `Phase locked <span class="note">· ${s.ble.phaseUs} us</span>` : "73% 2.4 GHz open"} <span class="note">· drops ${s.ble.txDrops}</span></dd>
                    </div>
                    <div class="debug-kv-row" data-ble-pair-row>
                      <dt>BLE pairing</dt>
                      <dd>${s.ble.pairingMode ? "Open pairing mode" : s.ble.paired === false ? "Unpaired" : "Paired to host"}</dd>
                    </div>`
-                : `<div class="debug-kv-row">
-                     <dt>Course link</dt>
-                     <dd>${
-                       s
-                         ? s.role === 1
-                           ? `Hub · Ch ${s.channel}`
-                           : s.slot >= 2
-                             ? `Joined Hub · slot ${s.slot}`
-                             : "Not joined to a Hub"
-                         : "—"
-                     }</dd>
-                   </div>`
+                : this.isSlapRFBLEMode() || this.console.transportLabel === "Bluetooth"
+                  ? `<div class="debug-kv-row" data-ble-link-row>
+                       <dt>Bluetooth link</dt>
+                       <dd>${on ? "Connected" : "Idle"}</dd>
+                     </div>`
+                  : `<div class="debug-kv-row">
+                       <dt>Course link</dt>
+                       <dd>${
+                         s
+                           ? s.role === 1
+                             ? `Hub · Ch ${s.channel}`
+                             : s.slot >= 2
+                               ? `Joined Hub · slot ${s.slot}`
+                               : "Not joined to a Hub"
+                           : "-"
+                       }</dd>
+                     </div>`
             }
           </dl>
         </div>

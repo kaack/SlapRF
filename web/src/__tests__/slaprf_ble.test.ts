@@ -141,8 +141,41 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       expect(statusText).toContain("System & Bluetooth");
       expect(statusText).toContain("10 ms");
       expect(statusText).toContain("-54 dBm");
-      expect(statusText).toContain("Locked");
+      expect(statusText).toContain("Phase locked");
       expect(statusText).toContain("Paired to host");
+
+      // Regression: 20 Hz hub_live frames must never overwrite real JSON status
+      // (which previously flipped System & Bluetooth -> System & network, /6.0 ms -> /20.0 ms, and floorDb -> -91.0).
+      usbPool.mainConsole.handleBackendEvent({
+        type: "status",
+        slotIndex: 0,
+        status: {
+          ...bleStatus,
+          sweepHz: 50,
+          sweepUs: 5420,
+          sweepUsMax: 9460,
+          sweepBudgetUs: 6000,
+          rf: { ok: true, enabled: true, gain: 32, gainMax: 80, floorDb: -61.2 },
+        },
+      });
+      await new Promise((r) => window.setTimeout(r, 450));
+      usbPool.mainConsole.handleBackendEvent({
+        type: "hub_live",
+        slotIndex: 0,
+        payload: {
+          slots: [{ slot: 1, dbm: [-90, -90, -90, -90, -90, -90, -90, -90], seq: 12, frames: 25, floor: -91, ageMs: 5 }],
+          hubOwnFrames: 25,
+        },
+      });
+      await flushMicrotasks();
+
+      const afterLiveText = dbgRoot.textContent || "";
+      expect(afterLiveText).toContain("System & Bluetooth");
+      expect(afterLiveText).toContain("BLE Paired");
+      expect(afterLiveText).toContain("-61.2 dBm");
+      expect(afterLiveText).toContain("/ 6.0 ms");
+      expect(afterLiveText).not.toContain("System & network");
+      expect(afterLiveText).not.toContain("/ 20.0 ms");
     } finally {
       usbPool.mainConsole.applyBackendSlotSnapshot({
         slotIndex: 0,
