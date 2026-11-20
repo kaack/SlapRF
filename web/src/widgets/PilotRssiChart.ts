@@ -2889,10 +2889,7 @@ export class PilotRssiChart extends Component {
               <span>All pilots</span>
               ${gateOvrCount > 0 ? `<span class="scope-tune-badge">${gateOvrCount}</span>` : ""}
             </button>
-          </div>
-          <button type="button" class="btn btn-sm btn-ghost scope-tune-close" data-tune-act="close" title="Close fine-tuning drawer" aria-label="Close fine-tuning drawer">
-            ${icons.close(15)}
-          </button>`;
+          </div>`;
 
     const nextHtml = `
       <div class="dir-mobile-drawer-top-bar scope-tune-mobile-handle-bar">

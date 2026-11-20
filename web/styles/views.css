@@ -2863,8 +2863,7 @@ html[data-theme="light"] .scope-tune-head {
   .is-signals-panel > .scope-tune-drawer {
     margin-top: 0;
   }
-  .scope-calib-tune-btn,
-  .scope-tune-close {
+  .scope-calib-tune-btn {
     display: none !important;
   }
 }
@@ -2943,11 +2942,6 @@ html[data-theme="light"] .scope-tune-badge {
   color: #0369a1;
   background: rgba(2, 132, 199, 0.1);
   border-color: rgba(2, 132, 199, 0.36);
-}
-.scope-tune-close {
-  width: 28px;
-  height: 28px;
-  padding: 0;
 }
 
 .scope-tune-switch {
