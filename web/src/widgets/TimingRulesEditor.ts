@@ -126,21 +126,20 @@ export class TimingRulesEditor extends Component {
           void this.api.updateRules({ ...this.store.rules, beepOnCross: nextBeep });
         } else {
           const curGate = this.store.node(this.scope);
-          const curOvr = this.overridesOf(curGate);
-          const curEff = curOvr.beepOnCross !== undefined ? curOvr.beepOnCross : Boolean(this.store.rules.beepOnCross);
+          const curOvr = { ...this.overridesOf(curGate) };
+          const globalBeep = Boolean(this.store.rules.beepOnCross);
+          const curEff = curOvr.beepOnCross !== undefined ? curOvr.beepOnCross : globalBeep;
           const nextBeep = !curEff;
           if (nextBeep) {
             playSyntheticCrossingBeep(this.store, this.scope);
           }
-          void this.api.setGateRules(this.scope, { ...curOvr, beepOnCross: nextBeep });
+          if (nextBeep === globalBeep) {
+            delete curOvr.beepOnCross;
+          } else {
+            curOvr.beepOnCross = nextBeep;
+          }
+          void this.api.setGateRules(this.scope, curOvr);
         }
-        return;
-      }
-      const beepResetBtn = target.closest<HTMLButtonElement>("[data-beep-reset]");
-      if (beepResetBtn && this.scope !== null) {
-        const nextOvr = { ...this.overridesOf(this.store.node(this.scope)) };
-        delete nextOvr.beepOnCross;
-        void this.api.setGateRules(this.scope, nextOvr);
         return;
       }
       const toggleBtn = target.closest<HTMLButtonElement>("[data-override-toggle]");
@@ -301,11 +300,11 @@ export class TimingRulesEditor extends Component {
             type="button"
             role="switch"
             aria-checked="${isOn}"
-            class="scope-tune-switch is-compact ${isOn ? "is-on" : ""}"
+            class="scope-tune-switch ${isOn ? "is-on" : ""}"
             data-beep-toggle
+            aria-label="Beep on crossing"
           >
             <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
-            <span class="mono scope-tune-switch-state">${isOn ? "ON" : "OFF"}</span>
           </button>
         </div>
       </div>`;
@@ -317,25 +316,20 @@ export class TimingRulesEditor extends Component {
     return `
       <div class="rule-row ${hasOwn ? "is-overridden" : ""}">
         <div class="rule-text">
-          <div class="rule-label">Beep on crossing</div>
-          <div class="rule-help">Plays an instant high-priority synthetic tone when a crossing is detected at this timer (${hasOwn ? `custom, global is ${r.beepOnCross ? "ON" : "OFF"}` : `inherits ${r.beepOnCross ? "ON" : "OFF"}`}).</div>
+          <div class="rule-label">Beep on crossing ${hasOwn ? `<span class="scope-tune-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>` : ""}</div>
+          <div class="rule-help">Plays an instant high-priority synthetic tone when a crossing is detected at this timer.</div>
         </div>
         <div class="rule-input rule-switch-wrap">
           <button
             type="button"
             role="switch"
             aria-checked="${effOn}"
-            class="scope-tune-switch is-compact ${effOn ? "is-on" : ""}"
+            class="scope-tune-switch ${effOn ? "is-on" : ""}"
             data-beep-toggle
+            aria-label="Beep on crossing"
           >
             <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
-            <span class="mono scope-tune-switch-state">${effOn ? "ON" : "OFF"}</span>
           </button>
-          ${
-            hasOwn
-              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-beep-reset title="Revert to All timers default (${r.beepOnCross ? "ON" : "OFF"})" aria-label="Revert Beep on crossing">${icons.reset(13)}</button>`
-              : ""
-          }
         </div>
       </div>`;
   }

@@ -474,6 +474,9 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(drawerEl.querySelector('[data-tune-input="gateCooldownSec"]')).toBeNull();
       expect(drawerEl.querySelector('[data-tune-input="minSectionSec"]')).toBeNull();
       expect(drawerEl.querySelector('[data-tune-input="echoWindowSec"]')).toBeNull();
+      expect(drawerEl.querySelector(".scope-tune-card-source")).toBeNull();
+      expect(drawerEl.querySelector('[data-tune-act="test-beep"]')).toBeNull();
+      expect(drawerEl.querySelector('[data-tune-act="reset-beep"]')).toBeNull();
 
       // Default scope is "Only <Pilot>", inheriting minLapSec = 8 from H1 all-pilots
       const minLapInput = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="minLapSec"]')!;
@@ -490,8 +493,10 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(pilotCall1).toBeDefined();
       expect(pilotCall1!.args).toEqual([1, 1, { minLapSec: 8.5 }]);
 
-      // Switch scope to "All pilots" and edit minCrossingSec -> calls setGateRules(1, { minLapSec: 8, minCrossingSec: 0.18 })
+      // Switch scope to "All pilots" -> minLapSec is overridden at H1, showing the pencil icon next to the title
       drawerEl.querySelector<HTMLButtonElement>('[data-tune-scope="gate"]')!.click();
+      const minLapCard = drawerEl.querySelector<HTMLElement>('[data-tune-card="minLapSec"]')!;
+      expect(minLapCard.querySelector(".scope-tune-custom-icon")).not.toBeNull();
       const crossInputGate = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="minCrossingSec"]')!;
       crossInputGate.value = "0.18";
       crossInputGate.dispatchEvent(new Event("change", { bubbles: true }));
@@ -501,7 +506,9 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(gateCall!.args).toEqual([1, { minLapSec: 8, minCrossingSec: 0.18 }]);
 
       // Toggle "Beep on crossing" ON in All pilots scope -> calls setGateRules with beepOnCross: true
-      drawerEl.querySelector<HTMLButtonElement>('[data-tune-act="toggle-beep"]')!.click();
+      const beepBtn = drawerEl.querySelector<HTMLButtonElement>('[data-tune-act="toggle-beep"]')!;
+      expect(beepBtn.textContent?.trim()).toBe("");
+      beepBtn.click();
       await flushMicrotasks();
       const beepGateCall = calls.filter((c) => c.method === "setGateRules").pop();
       expect(beepGateCall).toBeDefined();

@@ -432,16 +432,6 @@ export class PilotRssiChart extends Component {
         void this.toggleTuneBeep();
         return;
       }
-      if (btn.dataset.tuneAct === "reset-beep") {
-        void this.resetTuneBeep();
-        return;
-      }
-      if (btn.dataset.tuneAct === "test-beep") {
-        if (this.tuningGateId !== null) {
-          playSyntheticCrossingBeep(this.store, this.tuningGateId);
-        }
-        return;
-      }
       if (btn.dataset.tuneResetKey) {
         void this.resetSingleTuneRule(btn.dataset.tuneResetKey as GateRuleKey);
         return;
@@ -2660,22 +2650,16 @@ export class PilotRssiChart extends Component {
     }
     const nextOverrides: GateRuleOverrides = {
       ...this.currentScopeOverrides(this.tuningGateId, slotIndex),
-      beepOnCross: nextOn,
     };
-    if (this.tuningScope === "pilot") {
-      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides).catch(() => undefined);
+    const parentEff =
+      this.tuningScope === "pilot"
+        ? Boolean(gateRulesAt(this.store, this.tuningGateId).beepOnCross)
+        : Boolean(this.store.rules.beepOnCross);
+    if (nextOn === parentEff) {
+      delete nextOverrides.beepOnCross;
     } else {
-      await this.api.setGateRules(this.tuningGateId, nextOverrides).catch(() => undefined);
+      nextOverrides.beepOnCross = nextOn;
     }
-  }
-
-  private async resetTuneBeep(): Promise<void> {
-    if (this.tuningGateId === null || this.store.isHistoricalTrack) return;
-    const slotIndex = this.activePilotSlot;
-    const nextOverrides: GateRuleOverrides = {
-      ...this.currentScopeOverrides(this.tuningGateId, slotIndex),
-    };
-    delete nextOverrides.beepOnCross;
     if (this.tuningScope === "pilot") {
       await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides).catch(() => undefined);
     } else {
@@ -2715,7 +2699,6 @@ export class PilotRssiChart extends Component {
     const gateName = gateLabel(this.store, gate.gateId);
     const color = this.colorOf(gate.gateId);
     const roleTag = gate.role === "START_FINISH" ? "Start / Finish" : "Sector";
-    const globalRules = this.store.rules;
     const gateOverrides = gate.ruleOverrides ?? {};
     const pilotOverrides = pilotGateOverridesAt(gate, pilot.slotIndex);
     const gateOvrCount = countOverrides(gateOverrides);
@@ -2746,58 +2729,30 @@ export class PilotRssiChart extends Component {
     const beepOwn = activeOverrides.beepOnCross;
     const beepOverridden = beepOwn !== undefined;
     const beepEffOn = Boolean(effRules.beepOnCross);
-    let beepSourceNote: string;
-    if (isPilotScope) {
-      const parentOn = Boolean(gateEff.beepOnCross);
-      const fromGate = gateOverrides.beepOnCross !== undefined;
-      beepSourceNote = beepOverridden
-        ? `Custom for ${esc(pilot.callsign)} (inherits ${parentOn ? "ON" : "OFF"})`
-        : fromGate
-          ? `From ${esc(gateName)} all-pilots (${parentOn ? "ON" : "OFF"})`
-          : `Global default (${parentOn ? "ON" : "OFF"})`;
-    } else {
-      const globalOn = Boolean(globalRules.beepOnCross);
-      const pilotBeep = pilotOverrides.beepOnCross;
-      beepSourceNote = beepOverridden
-        ? `Custom for all pilots here (global ${globalOn ? "ON" : "OFF"})`
-        : `Global default (${globalOn ? "ON" : "OFF"})`;
-      if (pilotBeep !== undefined) {
-        beepSourceNote += ` · ${esc(pilot.callsign)} overrides to ${pilotBeep ? "ON" : "OFF"}`;
-      }
-    }
     const beepCardHtml = `
       <div class="scope-tune-card is-beep-card ${beepOverridden ? "is-overridden" : ""}" data-tune-card="beepOnCross">
         <div class="scope-tune-card-info">
           <div class="scope-tune-card-title-row">
             <span class="scope-tune-card-label">Beep on crossing</span>
+            ${
+              beepOverridden
+                ? `<span class="scope-tune-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>`
+                : ""
+            }
           </div>
           <div class="scope-tune-card-help">Instant synthetic WebAudio tone on detection (zero TTS delay, works in Practice and Races).</div>
-          <div class="scope-tune-card-source">${beepSourceNote}</div>
         </div>
         <div class="scope-tune-card-controls">
           <button
             type="button"
-            class="btn btn-sm btn-ghost scope-tune-reset-btn"
-            data-tune-act="test-beep"
-            title="Preview ${esc(gateName)} crossing tone"
-            aria-label="Preview ${esc(gateName)} crossing tone"
-          >${icons.speaker(13)}</button>
-          <button
-            type="button"
             role="switch"
             aria-checked="${beepEffOn}"
-            class="scope-tune-switch is-compact ${beepEffOn ? "is-on" : ""}"
+            class="scope-tune-switch ${beepEffOn ? "is-on" : ""}"
             data-tune-act="toggle-beep"
             aria-label="Beep on crossing"
           >
             <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
-            <span class="mono scope-tune-switch-state">${beepEffOn ? "ON" : "OFF"}</span>
           </button>
-          ${
-            beepOverridden
-              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-tune-act="reset-beep" title="Reset Beep on crossing to inherited value" aria-label="Reset Beep on crossing">${icons.reset(13)}</button>`
-              : `<span class="scope-tune-reset-spacer" aria-hidden="true"></span>`
-          }
         </div>
       </div>`;
 
@@ -2806,25 +2761,6 @@ export class PilotRssiChart extends Component {
       const isOverridden = ownVal !== undefined;
       const curVal = effRules[spec.key];
       const valStr = this.formatTuneVal(curVal, spec.decimals);
-      let sourceNote: string;
-      if (isPilotScope) {
-        const parentVal = this.formatTuneVal(gateEff[spec.key], spec.decimals);
-        const fromGate = gateOverrides[spec.key] !== undefined;
-        sourceNote = isOverridden
-          ? `Custom for ${esc(pilot.callsign)} (inherits ${parentVal}s)`
-          : fromGate
-            ? `From ${esc(gateName)} all-pilots (${parentVal}s)`
-            : `Global default (${parentVal}s)`;
-      } else {
-        const globalVal = this.formatTuneVal(globalRules[spec.key], spec.decimals);
-        const pilotSpecific = pilotOverrides[spec.key];
-        sourceNote = isOverridden
-          ? `Custom for all pilots here (global ${globalVal}s)`
-          : `Global default (${globalVal}s)`;
-        if (pilotSpecific !== undefined) {
-          sourceNote += ` · ${esc(pilot.callsign)} overrides to ${this.formatTuneVal(pilotSpecific, spec.decimals)}s`;
-        }
-      }
       const rCount = reasonCounts.get(spec.reason) ?? 0;
       return `
         <div class="scope-tune-card ${isOverridden ? "is-overridden" : ""}" data-tune-card="${spec.key}">
@@ -2832,13 +2768,17 @@ export class PilotRssiChart extends Component {
             <div class="scope-tune-card-title-row">
               <span class="scope-tune-card-label">${esc(spec.label)}</span>
               ${
+                isOverridden
+                  ? `<span class="scope-tune-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>`
+                  : ""
+              }
+              ${
                 rCount > 0
                   ? `<span class="scope-tune-hit-pill" title="${rCount} ${esc(FILTER_LABELS[spec.reason].toLowerCase())} filtered here">${rCount} ${esc(FILTER_LABELS[spec.reason].toLowerCase())}</span>`
                   : ""
               }
             </div>
             <div class="scope-tune-card-help">${esc(spec.help)}</div>
-            <div class="scope-tune-card-source">${sourceNote}</div>
           </div>
           <div class="scope-tune-card-controls">
             <div class="scope-tune-stepper">
@@ -2860,7 +2800,7 @@ export class PilotRssiChart extends Component {
             </div>
             ${
               isOverridden
-                ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-tune-reset-key="${spec.key}" title="Reset ${esc(spec.label)} to inherited value" aria-label="Reset ${esc(spec.label)}">${icons.reset(13)}</button>`
+                ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-tune-reset-key="${spec.key}" title="Restore default ${esc(spec.label)}" aria-label="Restore default ${esc(spec.label)}">${icons.reset(13)}</button>`
                 : `<span class="scope-tune-reset-spacer" aria-hidden="true"></span>`
             }
           </div>
