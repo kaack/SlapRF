@@ -139,6 +139,9 @@ export class PilotRssiChart extends Component {
   private lastHardwareMode: TimingHardwareMode = "slaprf";
   private autoYHoldUntilMs = 0;
   private lastLegendStructSig = "";
+  private readonly labelWidthCache = new Map<string, number>();
+  private cachedLabelSig = "";
+  private cachedLabelRows = new Map<string, number>();
 
   private get hwMode(): TimingHardwareMode {
     return this.store.timingHardwareMode;
@@ -842,8 +845,12 @@ export class PilotRssiChart extends Component {
   }
 
   private get earliest(): number {
-    const firsts = this.store.nodes.map((p) => this.store.historyFor(p.gateId)[0]?.timestampUs ?? Infinity);
-    const e = Math.min(...firsts);
+    let e = Infinity;
+    const nodes = this.store.nodes;
+    for (let i = 0; i < nodes.length; i++) {
+      const first = this.store.historyFor(nodes[i].gateId)[0];
+      if (first && first.timestampUs < e) e = first.timestampUs;
+    }
     return Number.isFinite(e) ? e : this.latest;
   }
 
@@ -1451,68 +1458,100 @@ export class PilotRssiChart extends Component {
     return gateColor(this.store, gateId);
   }
 
+  /** Binary-search first index in a chronological `{ timestampUs }` array with `timestampUs >= ts`. */
+  private static firstEventAtOrAfter<T extends { timestampUs: number }>(items: T[], ts: number): number {
+    let lo = 0;
+    let hi = items.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (items[mid].timestampUs < ts) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
   /** Selected pilot's (or all seated pilots') passes in [from, to], oldest first. */
-  private passes(from: number, to: number): PassMarker[] {
+  private passes(from: number, to: number, gateFilter: number | null = null): PassMarker[] {
+    const crossings = this.store.crossings;
+    const filtered = this.store.filtered;
+    const out: PassMarker[] = [];
+    const cStart = PilotRssiChart.firstEventAtOrAfter(crossings, from);
+    const fStart = PilotRssiChart.firstEventAtOrAfter(filtered, from);
+
     if (this.isMultiPilotMode && this.multiPilotSlots) {
       const slotSet = new Set(this.multiPilotSlots);
-      const timed: PassMarker[] = this.store.crossings
-        .filter((c) => slotSet.has(c.slotIndex) && c.timestampUs >= from && c.timestampUs <= to)
-        .map((c) => {
-          const p = this.store.pilot(c.slotIndex);
-          return {
-            ts: c.timestampUs,
-            gateId: c.gateId,
-            counted: true,
-            title: `${p?.callsign ?? c.callsign ?? `P${c.slotIndex}`} · ${gateLabel(this.store, c.gateId)}`,
-            detail: `Timed · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
-            color: p?.color,
-            slotIndex: c.slotIndex,
-          };
+      for (let i = cStart; i < crossings.length; i++) {
+        const c = crossings[i];
+        if (c.timestampUs > to) break;
+        if (gateFilter !== null && c.gateId !== gateFilter) continue;
+        if (!slotSet.has(c.slotIndex)) continue;
+        const p = this.store.pilot(c.slotIndex);
+        out.push({
+          ts: c.timestampUs,
+          gateId: c.gateId,
+          counted: true,
+          title: `${p?.callsign ?? c.callsign ?? `P${c.slotIndex}`} · ${gateLabel(this.store, c.gateId)}`,
+          detail: `Timed · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
+          color: p?.color,
+          slotIndex: c.slotIndex,
         });
-      const rejected: PassMarker[] = this.store.filtered
-        .filter((f) => slotSet.has(f.slotIndex) && f.timestampUs >= from && f.timestampUs <= to)
-        .map((f) => {
-          const p = this.store.pilot(f.slotIndex);
-          return {
-            ts: f.timestampUs,
-            gateId: f.gateId,
-            counted: false,
-            title: `${p?.callsign ?? `P${f.slotIndex}`} · ${gateLabel(this.store, f.gateId)} (${FILTER_LABELS[f.reason]})`,
-            detail: f.detail,
-            color: p?.color,
-            slotIndex: f.slotIndex,
-          };
+      }
+      for (let i = fStart; i < filtered.length; i++) {
+        const f = filtered[i];
+        if (f.timestampUs > to) break;
+        if (gateFilter !== null && f.gateId !== gateFilter) continue;
+        if (!slotSet.has(f.slotIndex)) continue;
+        const p = this.store.pilot(f.slotIndex);
+        out.push({
+          ts: f.timestampUs,
+          gateId: f.gateId,
+          counted: false,
+          title: `${p?.callsign ?? `P${f.slotIndex}`} · ${gateLabel(this.store, f.gateId)} (${FILTER_LABELS[f.reason]})`,
+          detail: f.detail,
+          color: p?.color,
+          slotIndex: f.slotIndex,
         });
-      return [...timed, ...rejected].sort((a, b) => a.ts - b.ts);
+      }
+      if (out.length > 1) out.sort((a, b) => a.ts - b.ts);
+      return out;
     }
+
     const slot = this.activePilotSlot;
-    const timed: PassMarker[] = this.store.crossings
-      .filter((c) => c.slotIndex === slot && c.timestampUs >= from && c.timestampUs <= to)
-      .map((c) => ({
+    for (let i = cStart; i < crossings.length; i++) {
+      const c = crossings[i];
+      if (c.timestampUs > to) break;
+      if (gateFilter !== null && c.gateId !== gateFilter) continue;
+      if (c.slotIndex !== slot) continue;
+      out.push({
         ts: c.timestampUs,
         gateId: c.gateId,
         counted: true,
         title: `${gateLabel(this.store, c.gateId)} · ${c.estimatedSpeedMph.toFixed(0)} mph`,
         detail: `Timed · peak ${c.peakRssiDbm.toFixed(0)}${this.unitSuffix}`,
         slotIndex: c.slotIndex,
-      }));
-    const rejected: PassMarker[] = this.store.filtered
-      .filter((f) => f.slotIndex === slot && f.timestampUs >= from && f.timestampUs <= to)
-      .map((f) => ({
+      });
+    }
+    for (let i = fStart; i < filtered.length; i++) {
+      const f = filtered[i];
+      if (f.timestampUs > to) break;
+      if (gateFilter !== null && f.gateId !== gateFilter) continue;
+      if (f.slotIndex !== slot) continue;
+      out.push({
         ts: f.timestampUs,
         gateId: f.gateId,
         counted: false,
         title: `${gateLabel(this.store, f.gateId)} · not counted (${FILTER_LABELS[f.reason]})`,
         detail: f.detail,
         slotIndex: f.slotIndex,
-      }));
-    return [...timed, ...rejected].sort((a, b) => a.ts - b.ts);
+      });
+    }
+    if (out.length > 1) out.sort((a, b) => a.ts - b.ts);
+    return out;
   }
 
   /** Passes filtered to the currently focused gate (or all gates when focus is null). */
   private focusedPasses(from: number, to: number): PassMarker[] {
-    const all = this.passes(from, to);
-    return this.focus === null ? all : all.filter((p) => p.gateId === this.focus);
+    return this.passes(from, to, this.focus);
   }
 
   /** Index of the first frame at or after ts (binary search; frames are in time order). */
@@ -1848,16 +1887,38 @@ export class PilotRssiChart extends Component {
    * first), not just the visible window, so a label keeps its row while it scrolls past —
    * otherwise labels jump between rows whenever an older pass leaves the view.
    */
-  private labelRows(ctx: CanvasRenderingContext2D, xOf: (ts: number) => number, end: number): Map<string, number> {
+  private labelRows(ctx: CanvasRenderingContext2D, _xOf: (ts: number) => number, _end: number): Map<string, number> {
+    const crossings = this.store.crossings;
+    const filtered = this.store.filtered;
+    const lastCid = crossings.length > 0 ? crossings[crossings.length - 1].eventId : 0;
+    const lastFts = filtered.length > 0 ? filtered[filtered.length - 1].timestampUs : 0;
+    const multiSig = this.isMultiPilotMode ? (this.multiPilotSlots ?? []).join(",") : "";
+    const sig = `${crossings.length}:${lastCid}:${filtered.length}:${lastFts}:${Math.round(this.windowUs)}:${Math.round(this.plot.w)}:${this.focus ?? "all"}:${this.activePilotSlot}:${multiSig}`;
+    if (sig === this.cachedLabelSig) {
+      return this.cachedLabelRows;
+    }
+
     const rows = new Map<string, number>();
     const rowEnd = [-Infinity, -Infinity];
-    for (const p of this.focusedPasses(this.earliest, end)) {
-      const x = xOf(p.ts) + 5;
-      const width = ctx.measureText(this.labelOf(p)).width;
+    const pxPerUs = Math.max(1e-9, this.plot.w / this.windowUs);
+    const allPasses = this.focusedPasses(0, Infinity);
+    let baseTs = allPasses.length > 0 ? allPasses[0].ts : 0;
+    for (let i = 0; i < allPasses.length; i++) {
+      const p = allPasses[i];
+      const lbl = this.labelOf(p);
+      let width = this.labelWidthCache.get(lbl);
+      if (width === undefined) {
+        width = ctx.measureText(lbl).width;
+        if (this.labelWidthCache.size > 512) this.labelWidthCache.clear();
+        this.labelWidthCache.set(lbl, width);
+      }
+      const x = (p.ts - baseTs) * pxPerUs;
       const row = x > rowEnd[0] + 6 ? 0 : x > rowEnd[1] + 6 ? 1 : 0;
       rowEnd[row] = x + width;
       rows.set(PilotRssiChart.keyOf(p), row);
     }
+    this.cachedLabelSig = sig;
+    this.cachedLabelRows = rows;
     return rows;
   }
 

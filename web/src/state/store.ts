@@ -330,6 +330,9 @@ export class AppStore {
   private _lastSeenIsoAtMs = -Infinity;
   private _playheadUs = 0;
   private _lastPlayheadPerfMs = 0;
+  private _streamAnchorBaseUs = 0;
+  private _streamAnchorPerfMs = 0;
+  private _ingestCount = 0;
   private _selectedPilot = 1;
   /** Live view focus: null shows every pilot, a slot index follows that pilot. */
   private _liveFocus: number | null = null;
@@ -1287,24 +1290,27 @@ export class AppStore {
     const wallDtUs = Math.max(0, Math.min(100_000, (nowMs - this._lastPlayheadPerfMs) * 1000));
     const dtUs = wallDtUs * speedMult;
     this._lastPlayheadPerfMs = nowMs;
-    // Target slightly behind the newest telemetry sample (~95 ms for 50 Hz SlapRF, ~135 ms for ~10 Hz
-    // LapRF / RotorHazard) so the playhead never outruns incoming bursts and every gate's trace
-    // interpolates smoothly across the right border without stretching a flat tail.
+    // Follow the minimum-latency stream clock line with ~195 ms lookback (> 145 ms 1 Hz BLE STATUS
+    // burst gap) so the playhead never outruns incoming batches and advances at near-constant VSync rate.
+    const streamClockUs =
+      this._streamAnchorPerfMs > 0
+        ? this._streamAnchorBaseUs + Math.max(0, (nowMs - this._streamAnchorPerfMs) * 1000) * speedMult
+        : latest;
     const baseLookbackUs =
       this._timingHardwareMode === "laprf" || isRotorHazardMode(this._timingHardwareMode)
-        ? 135_000
-        : 95_000;
-    const targetUs = Math.max(0, latest - baseLookbackUs * speedMult);
-    if (this._playheadUs === 0 || Math.abs(targetUs - this._playheadUs) > 450_000 * speedMult) {
-      this._playheadUs = targetUs;
+        ? 230_000
+        : 195_000;
+    const targetUs = Math.max(0, streamClockUs - baseLookbackUs * speedMult);
+    if (this._playheadUs === 0 || Math.abs(targetUs - this._playheadUs) > 700_000 * speedMult) {
+      this._playheadUs = Math.min(latest, targetUs);
       return Math.round(this._playheadUs);
     }
-    // Advance at the active engine clock rate (`dtUs`), plus a gentle proportional nudge (6% per frame,
-    // clamped to ±35% of `dtUs`) so the chart ALWAYS glides forward smoothly at 60–240 FPS.
+    // Advance at the active engine clock rate (`dtUs`), with a tiny +-2.5% PLL trim so zoomed-in
+    // 1-2 s signal windows scroll at steady VSync speed without 1 Hz batch velocity whips.
     const errorUs = targetUs - (this._playheadUs + dtUs);
-    const maxCorrectionUs = dtUs * 0.35;
-    const correctionUs = Math.max(-maxCorrectionUs, Math.min(maxCorrectionUs, errorUs * 0.06));
-    this._playheadUs += dtUs + correctionUs;
+    const maxCorrectionUs = dtUs * 0.025;
+    const correctionUs = Math.max(-maxCorrectionUs, Math.min(maxCorrectionUs, errorUs * 0.02));
+    this._playheadUs = Math.min(latest, this._playheadUs + dtUs + correctionUs);
     return Math.round(this._playheadUs);
   }
   private _lastRaceSyncPerfMs = 0;
@@ -1392,6 +1398,8 @@ export class AppStore {
   public clearActiveHistory(): void {
     this.activeHistory.clear();
     this._playheadUs = 0;
+    this._streamAnchorBaseUs = 0;
+    this._streamAnchorPerfMs = 0;
     this._latestTelemetryTimestampUs = 0;
     this._lastIngestPerfMs = 0;
   }
@@ -1434,6 +1442,8 @@ export class AppStore {
     if (modeChanged) {
       this._comparison = { lapId: null, reference: "best" };
       this._playheadUs = 0;
+      this._streamAnchorBaseUs = 0;
+      this._streamAnchorPerfMs = 0;
       this._latestTelemetryTimestampUs = 0;
       this._lastIngestPerfMs = 0;
       this._serverClockBaseUs = 0;
@@ -1649,7 +1659,8 @@ export class AppStore {
       hist.set(frame.timerId, buf);
     }
     buf.push(frame);
-    if (buf.length > HISTORY_SAMPLES + HISTORY_TRIM_SLACK || (buf.length & 1023) === 0) {
+    this._ingestCount = (this._ingestCount + 1) | 0;
+    if (buf.length > HISTORY_SAMPLES + HISTORY_TRIM_SLACK || (this._ingestCount & 1023) === 0) {
       this.trimHistory(buf);
     }
 
@@ -1661,6 +1672,25 @@ export class AppStore {
     }
     const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
     this._lastIngestPerfMs = nowMs;
+    const speedMult = this._simulatorRunning ? Math.max(1, this._simState?.speedMultiplier || 1) : 1;
+    if (this._streamAnchorPerfMs === 0) {
+      this._streamAnchorBaseUs = frame.timestampUs;
+      this._streamAnchorPerfMs = nowMs;
+    } else {
+      const elapsedUs = Math.max(0, (nowMs - this._streamAnchorPerfMs) * 1000) * speedMult;
+      const predictedUs = this._streamAnchorBaseUs + elapsedUs;
+      const diffUs = frame.timestampUs - predictedUs;
+      if (Math.abs(diffUs) > 600_000 * speedMult) {
+        this._streamAnchorBaseUs = frame.timestampUs;
+        this._streamAnchorPerfMs = nowMs;
+      } else if (diffUs > 0) {
+        this._streamAnchorBaseUs = predictedUs + diffUs * 0.25;
+        this._streamAnchorPerfMs = nowMs;
+      } else {
+        this._streamAnchorBaseUs = predictedUs + diffUs * 0.004;
+        this._streamAnchorPerfMs = nowMs;
+      }
+    }
     if (frame.timestampUs > this.liveServerTimestampUs) {
       this._serverClockBaseUs = frame.timestampUs;
       this._serverClockPerfMs = nowMs;

@@ -165,6 +165,63 @@ describe("state/store — Hydration, Normalization, Topic Isolation & Scoped Vie
     expect(announcements).toEqual(["countdown_start"]);
   });
 
+  it("keeps smoothLatestTimestampUs gliding at steady 120 FPS velocity without 1 Hz batch blips or overruns", () => {
+    const store = makeStore();
+    const origNow = performance.now.bind(performance);
+    let fakeNowMs = 1000.0;
+    performance.now = () => fakeNowMs;
+    try {
+      const startTsUs = 50_000_000;
+      let nextSeq = 1;
+      let queuedFrames: TimerTelemetryFrame[] = [];
+
+      // Simulate 3.0 seconds at 120 FPS (8.333 ms VSync steps) where 50 Hz hardware samples
+      // are held back for 145 ms around t = 1.0 s and t = 2.0 s (1 Hz BLE STATUS burst) and
+      // then delivered as a 7-frame burst.
+      let prevPlayhead = 0;
+      let nextSampleMs = 1000.0;
+      for (let step = 0; step < 360; step++) {
+        fakeNowMs = 1000.0 + step * (1000.0 / 120.0);
+        while (nextSampleMs <= fakeNowMs - 15.0) {
+          const sampleElapsedUs = Math.round((nextSampleMs - 1000.0) * 1000);
+          queuedFrames.push({
+            timerId: 1,
+            seqNum: nextSeq++,
+            timestampUs: startTsUs + sampleElapsedUs,
+            rssi: [-91, -92, -92, -92],
+            batteryMv: 4100,
+            noiseFloorDbm: -92,
+          });
+          nextSampleMs += 20.0;
+        }
+        const inBurstHold =
+          (fakeNowMs >= 1900.0 && fakeNowMs < 2045.0) ||
+          (fakeNowMs >= 2900.0 && fakeNowMs < 3045.0);
+        if (!inBurstHold && queuedFrames.length > 0) {
+          for (const fr of queuedFrames) {
+            store.ingestTelemetry(fr);
+          }
+          queuedFrames = [];
+        }
+
+        const ph = store.smoothLatestTimestampUs;
+        if (step >= 10) {
+          // Never overrun newest ingested telemetry sample
+          expect(ph).toBeLessThanOrEqual(store.latestTimestampUs);
+          if (prevPlayhead > 0) {
+            const dPhUs = ph - prevPlayhead;
+            // Expected 120 FPS step is 8333 us; +-2.5% PLL keeps every step inside [8100, 8560] us!
+            expect(dPhUs).toBeGreaterThanOrEqual(8100);
+            expect(dPhUs).toBeLessThanOrEqual(8560);
+          }
+        }
+        prevPlayhead = ph;
+      }
+    } finally {
+      performance.now = origNow;
+    }
+  });
+
   it("isolates historical Practice and completed Race analytics scopes & frozen trackSnapshots", () => {
     const snapNodes = [
       makeGate(10, { trackOrder: 0, role: "START_FINISH", name: "Old Start", color: "#fb923c" }),
