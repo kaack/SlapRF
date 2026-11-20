@@ -2770,20 +2770,6 @@ export class PilotRssiChart extends Component {
         : gateRulesAt(this.store, gate.gateId)
       : this.store.rules;
 
-    // Count laps and filtered detections in the current view/session for immediate visual feedback.
-    let lapCount = 0;
-    for (const l of this.store.laps) {
-      if (l.invalidated) continue;
-      if (isPilotScope && l.slotIndex !== pilot.slotIndex) continue;
-      lapCount++;
-    }
-    let totalFilteredHere = 0;
-    for (const f of this.store.filtered) {
-      if (gate && f.gateId !== gate.gateId) continue;
-      if (isPilotScope && f.slotIndex !== pilot.slotIndex) continue;
-      totalFilteredHere++;
-    }
-
     const beepOverridden = isGlobalScope
       ? Boolean(effRules.beepOnCross) !== Boolean(DEFAULT_TUNE_RULES.beepOnCross)
       : activeOverrides.beepOnCross !== undefined;
@@ -2910,11 +2896,6 @@ export class PilotRssiChart extends Component {
         <div class="scope-tune-title-group">
           ${headDotHtml}
           <strong>Fine-tune ${esc(gateName)}</strong>
-          ${
-            this.contextMode === "practice"
-              ? `<span class="scope-tune-live-pill mono" data-tune-live-summary>${lapCount} ${lapCount === 1 ? "lap" : "laps"} · ${totalFilteredHere} filtered</span>`
-              : ""
-          }
         </div>
         <div class="scope-tune-head-actions">
           ${headActionsHtml}
