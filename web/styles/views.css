@@ -2244,6 +2244,9 @@ html[data-theme="light"] .bar-time {
   padding: 28px 0;
   border-top: 1px solid var(--border);
 }
+.settings-section[hidden] {
+  display: none !important;
+}
 .settings:has(> .settings-section.is-single-col) {
   width: 100%;
   max-width: 960px;

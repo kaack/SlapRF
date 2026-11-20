@@ -862,7 +862,10 @@ export class DebugView extends Component {
 
     const setHidden = (anchor: string, hide: boolean) => {
       const sec = this.el.querySelector<HTMLElement>(`[data-section-anchor="${anchor}"]`);
-      if (sec) sec.hidden = hide;
+      if (sec) {
+        sec.hidden = hide;
+        sec.style.display = hide ? "none" : "";
+      }
     };
     // Spectrum scan & waterfall work on both SlapRF timers and direct RotorHazard USB nodes (0-255 scale).
     setHidden("spectrum-scan", !(isSlap || isRHUSB));

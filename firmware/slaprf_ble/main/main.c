@@ -225,9 +225,9 @@ static void hub_ble_run(void) {
                 slaprf_forward_to_laptop(pkt, pack_window(pkt));
             }
         }
-        if (slaprf_now_us() >= next_hello) {
+        if (slaprf_ble_take_hello_due() || slaprf_now_us() >= next_hello) {
             send_hello();
-            next_hello += HELLO_REPEAT_US;
+            next_hello = slaprf_now_us() + HELLO_REPEAT_US;
         }
         slaprf_diag_service(); // Debug-page spectrum scan, if one was requested
 

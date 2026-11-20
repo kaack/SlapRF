@@ -23,7 +23,7 @@
 
 static const char *TAG = "slaprf_ble";
 
-#define TX_BUFFER_BYTES   4096
+#define TX_BUFFER_BYTES   6144
 #define RX_BUFFER_BYTES   512
 #define MAX_NOTIFY_BYTES  244 // ATT MTU 247 - 3
 #define MIN_NOTIFY_BYTES  20  // Default ATT MTU 23 - 3
@@ -384,7 +384,8 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
 #if CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT
             ble_gap_set_prefered_le_phy(s_conn, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_2M_MASK, BLE_GAP_LE_PHY_CODED_ANY);
 #endif
-            request_interval(s_conn, 0);
+            s_itvl_try = 0;
+            s_itvl_req_us = 0;
         } else {
             advertise();
         }
@@ -408,6 +409,11 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
             s_subscribed = now;
             if (now) {
                 reset_phase_window(900000);
+                // Request our 10 ms-aligned interval AFTER GATT service discovery & CCCD subscribe
+                // complete so Android does not overwrite or ignore it during discovery.
+                if (s_itvl_us == 0 || (s_itvl_us % 10000U) != 0) {
+                    request_interval(s_conn, 0);
+                }
             }
             if (now != was && s_on_event) s_on_event(now);
         }
@@ -496,14 +502,35 @@ void slaprf_ble_set_paired_flag(bool paired) {
 }
 
 size_t slaprf_ble_write(const void *data, size_t len, uint32_t timeout_ms) {
-    if (!slaprf_ble_ready() || s_tx_sb == NULL || data == NULL || len == 0) {
+    if (!slaprf_ble_ready() || s_tx_sb == NULL || data == NULL || len == 0 || len > TX_BUFFER_BYTES) {
         return 0;
     }
+    const TickType_t deadline = xTaskGetTickCount() + pdMS_TO_TICKS(timeout_ms);
     if (xSemaphoreTake(s_tx_mutex, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) {
         s_tx_drops += (uint32_t)len;
         return 0;
     }
-    const size_t n = xStreamBufferSend(s_tx_sb, data, len, pdMS_TO_TICKS(timeout_ms));
+    // Never write a partial frame or partial JSON line into the stream buffer: wait (up to
+    // timeout_ms) for full room, or drop the entire record atomically so framing stays intact.
+    while (slaprf_ble_ready() && xStreamBufferSpacesAvailable(s_tx_sb) < len) {
+        if (timeout_ms == 0 || (int32_t)(deadline - xTaskGetTickCount()) <= 0) {
+            xSemaphoreGive(s_tx_mutex);
+            s_tx_drops += (uint32_t)len;
+            return 0;
+        }
+        xSemaphoreGive(s_tx_mutex);
+        vTaskDelay(pdMS_TO_TICKS(4));
+        const int32_t rem = (int32_t)(deadline - xTaskGetTickCount());
+        if (rem <= 0 || xSemaphoreTake(s_tx_mutex, (TickType_t)rem) != pdTRUE) {
+            s_tx_drops += (uint32_t)len;
+            return 0;
+        }
+    }
+    if (!slaprf_ble_ready()) {
+        xSemaphoreGive(s_tx_mutex);
+        return 0;
+    }
+    const size_t n = xStreamBufferSend(s_tx_sb, data, len, 0);
     xSemaphoreGive(s_tx_mutex);
     if (n < len) {
         s_tx_drops += (uint32_t)(len - n);
@@ -525,9 +552,9 @@ static void tx_task(void *arg) {
                 int8_t rssi = 0;
                 if (ble_gap_conn_rssi(conn, &rssi) == 0) s_rssi = rssi;
                 refresh_conn_desc(conn);
-                // Not a multiple of the 10 ms sweep period after 450 ms: ask for the next option (20 ms, then 30 ms).
+                // Not a multiple of the 10 ms sweep period after 700 ms post-subscribe: try 20 ms, then 30 ms.
                 const uint32_t itvl = s_itvl_us;
-                if (itvl != 0 && (itvl % 10000U) != 0 && now - s_itvl_req_us > 450000 &&
+                if (s_subscribed && itvl != 0 && (itvl % 10000U) != 0 && now - s_itvl_req_us > 700000 &&
                     s_itvl_try + 1 < (uint8_t)(sizeof(k_itvl_pref) / sizeof(k_itvl_pref[0]))) {
                     request_interval(conn, (uint8_t)(s_itvl_try + 1));
                 }
@@ -552,19 +579,29 @@ static void tx_task(void *arg) {
             // A burst (e.g. a status line written in pieces) may still be arriving this tick.
             n += xStreamBufferReceive(s_tx_sb, buf + n, cap - n, 0);
         }
-        struct os_mbuf *om = NULL;
-        while (slaprf_ble_ready() && (om = ble_hs_mbuf_from_flat(buf, (uint16_t)n)) == NULL) {
-            vTaskDelay(1); // Host buffers full: wait for the controller to drain
+        // Pace multi-packet bursts (such as ~980-byte STATUS? replies on a 20-30 ms connection
+        // interval) when NimBLE's ACL TX queue or MSYS_1 pool is temporarily full instead of
+        // dropping middle chunks of a JSON line.
+        bool sent = false;
+        for (int attempt = 0; attempt < 35 && slaprf_ble_ready(); attempt++) {
+            struct os_mbuf *om = ble_hs_mbuf_from_flat(buf, (uint16_t)n);
+            if (om == NULL) {
+                vTaskDelay(pdMS_TO_TICKS(4));
+                continue;
+            }
+            const int rc = ble_gatts_notify_custom(s_conn, s_tx_handle, om);
+            if (rc == 0) {
+                s_tx_notifies++;
+                s_tx_bytes += (uint32_t)n;
+                sent = true;
+                break;
+            }
+            if (rc != BLE_HS_ENOMEM && rc != BLE_HS_EBUSY) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(4));
         }
-        if (om == NULL) {
-            s_tx_drops += (uint32_t)n;
-            continue;
-        }
-        const int rc = ble_gatts_notify_custom(s_conn, s_tx_handle, om);
-        if (rc == 0) {
-            s_tx_notifies++;
-            s_tx_bytes += (uint32_t)n;
-        } else {
+        if (!sent) {
             s_tx_drops += (uint32_t)n;
         }
     }

@@ -107,11 +107,13 @@ static volatile uint8_t s_slot;
  * 3 seconds (or `BLEPAIR CLEAR` is sent). */
 typedef enum { LINK_BLE = 0, LINK_USB = 1 } link_t;
 static volatile link_t s_active = LINK_BLE;
+static volatile int s_reply_override = -1; // >= 0 inside run_command() so USB queries never steal s_active from BLE
 static volatile bool s_usb_ok;
 static SemaphoreHandle_t s_cmd_lock;
 static char s_paired_key[33];
 static volatile bool s_paired;
 static volatile bool s_ble_authed;
+static volatile bool s_hello_due;
 static volatile bool s_clear_pair_pending;
 static volatile int64_t s_reject_disconnect_at_us;
 static volatile uint16_t s_boot_hold_ticks;
@@ -301,9 +303,10 @@ static void tx_raw(const void *data, size_t len) {
     if (s_tx_lock == NULL || xSemaphoreTake(s_tx_lock, pdMS_TO_TICKS(150)) != pdTRUE) {
         return;
     }
-    if (s_active == LINK_BLE) {
-        // Blocking writes (command replies) wait for room in the BLE TX buffer, up to 250 ms.
-        if (slaprf_ble_write(data, len, 250) < len && !slaprf_ble_ready()) {
+    const link_t dst = s_reply_override >= 0 ? (link_t)s_reply_override : s_active;
+    if (dst == LINK_BLE) {
+        // Blocking writes (command replies and 1 Hz status) wait for room in the BLE TX buffer.
+        if (slaprf_ble_write(data, len, 350) < len && !slaprf_ble_ready()) {
             stop_streams();
         }
         xSemaphoreGive(s_tx_lock);
@@ -1081,6 +1084,7 @@ static void handle_ble_auth(const char *args) {
         if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1) {
             s_hub_usb_stream = true;
         }
+        s_hello_due = true;
         slaprf_ble_set_paired_flag(true);
         slaprf_ble_trigger_reacquire(600000);
         tx_line("@{\"t\":\"ok\",\"cmd\":\"auth\",\"paired\":true,\"claimed\":true}\n");
@@ -1095,6 +1099,7 @@ static void handle_ble_auth(const char *args) {
         if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1) {
             s_hub_usb_stream = true;
         }
+        s_hello_due = true;
         slaprf_ble_trigger_reacquire(600000);
         tx_line("@{\"t\":\"ok\",\"cmd\":\"auth\",\"paired\":true,\"claimed\":false}\n");
         return;
@@ -1117,7 +1122,9 @@ static void run_command(char *line, link_t from) {
     }
     if (from == LINK_BLE) {
         if (strncmp(line, "AUTH ", 5) == 0 || strcmp(line, "AUTH") == 0) {
+            s_reply_override = (int)LINK_BLE;
             handle_ble_auth(line + 4);
+            s_reply_override = -1;
             xSemaphoreGive(s_cmd_lock);
             return;
         }
@@ -1132,15 +1139,29 @@ static void run_command(char *line, link_t from) {
             return;
         }
     }
-    if (s_active != from) {
-        // A different host took over: stop the previous host's streams before switching.
-        s_live = 0;
-        s_scan_live = false;
-        s_log = false;
-        s_active = from;
+    // Keep async Hub frames and 1 Hz status streaming on BLE while an authenticated BLE host is
+    // connected; USB bench commands (e.g. SLAPRF? from the flasher or STATUS? on USB) still reply
+    // over USB via s_reply_override without stealing s_active from BLE.
+    if (from == LINK_BLE || !(slaprf_ble_ready() && s_ble_authed)) {
+        if (s_active != from) {
+            s_live = 0;
+            s_scan_live = false;
+            s_log = false;
+            s_active = from;
+        }
     }
+    s_reply_override = (int)from;
     handle_command(line);
+    s_reply_override = -1;
     xSemaphoreGive(s_cmd_lock);
+}
+
+bool slaprf_ble_take_hello_due(void) {
+    if (!s_hello_due) {
+        return false;
+    }
+    s_hello_due = false;
+    return true;
 }
 
 static void console_task(void *arg) {

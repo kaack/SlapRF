@@ -119,6 +119,37 @@ func (m *Manager) Connect(slotIndex int, portName string) (SlotSnapshot, error) 
 		return m.Snapshot().Slots[slotIndex], errors.New(rejMsg)
 	}
 
+	// A Bluetooth port (`ble:<FP>`) is always a Hub whose 8-hex fingerprint is known upfront from its
+	// advertisement. Ensure `lastStatus` is populated immediately even if the first full JSON status
+	// line is still in transit across BLE notifications.
+	if stAfter == nil {
+		if bleFP, ok := ParseBLEPortName(portName); ok {
+			m.mu.RLock()
+			known := m.knownTimers[bleFP]
+			m.mu.RUnlock()
+			slot.mu.Lock()
+			if slot.port != nil && slot.lastStatus == nil {
+				if _, hasH1 := slot.hubHello[1]; !hasH1 {
+					lbl := ""
+					if slot.lastConfig != nil {
+						lbl = slot.lastConfig.TimerLabel
+					}
+					if lbl == "" {
+						lbl = known.Label
+					}
+					if lbl == "" {
+						lbl = "H1"
+					}
+					slot.hubHello[1] = slotHello{fp: bleFP, label: lbl, role: 1, sweepHz: 100}
+				}
+				stAfter = m.synthesizeHubStatusLocked(slot, time.Now().UnixMilli())
+			} else {
+				stAfter = slot.lastStatus
+			}
+			slot.mu.Unlock()
+		}
+	}
+
 	m.registerConnectedHubInEngine(stAfter, cfgAfter)
 	m.broadcastPoolState()
 	return m.Snapshot().Slots[slotIndex], nil
@@ -977,6 +1008,11 @@ func (m *Manager) synthesizeHubStatusLocked(slot *usbSlot, nowMs int64) map[stri
 	}
 	if fp == "" && slot.lastStatus != nil {
 		fp, _ = slot.lastStatus["fp"].(string)
+	}
+	if fp == "" {
+		if bleFP, ok := ParseBLEPortName(slot.portName); ok {
+			fp = bleFP
+		}
 	}
 	if fp == "" {
 		return nil

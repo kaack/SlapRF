@@ -1342,6 +1342,8 @@ export class NetworkView extends Component {
     const hubGateName = hubGate ? formatTrackPos(hubGate) : undefined;
     const hubServerTimer = detectedTimers.find((t) => t.isHub || t.timerId === 1);
 
+    const isBleLink =
+      this.store.timingHardwareMode === "slaprf_ble" || activeHubConsole.transportLabel === "Bluetooth";
     let hub: TopologyHubInfo;
     if (hubUsbStatus && hubUsbStatus.role === 1) {
       const rfActive = !hubUsbStatus.emergencyMode && hubUsbStatus.rf?.enabled !== false && !hubUsbStatus.scanLive;
@@ -1374,17 +1376,65 @@ export class NetworkView extends Component {
       hub = {
         populated: true,
         online: !hubUsbStatus.emergencyMode,
-        label: hubUsbStatus.label || hubServerTimer?.timerLabel || "",
-        fp: hubUsbStatus.fp || "—",
-        fw: hubUsbStatus.fw || "—",
-        mac: hubUsbStatus.chip?.mac || "—",
+        label: hubUsbStatus.label || hubServerTimer?.timerLabel || "H1",
+        fp: hubUsbStatus.fp || "-",
+        fw: hubUsbStatus.fw || "-",
+        mac: hubUsbStatus.chip?.mac || "-",
         ch,
         viaUsb: true,
         emergencyMode: Boolean(hubUsbStatus.emergencyMode),
         gateLabel: hubGateName,
         serverFrames: hubFrames,
         dbm: liveDbm,
-        statusNote: hubUsbStatus.emergencyMode ? "Emergency mode" : `${activeHubConsole.transportLabel} · Beacon master`,
+        statusNote: hubUsbStatus.emergencyMode
+          ? "Emergency mode"
+          : isBleLink
+            ? "Bluetooth · Active"
+            : `${activeHubConsole.transportLabel} · Beacon master`,
+      };
+    } else if (
+      activeHubConsole.connected &&
+      (activeHubConsole.lastConfig?.role === "hub" || activeHubConsole.transportLabel === "Bluetooth")
+    ) {
+      // Connected Hub whose first JSON STATUS line is still arriving (e.g. Bluetooth Hub right after
+      // connect or while streaming binary 5.8 GHz windows): populate immediately from config / BLE port.
+      const cfg = activeHubConsole.lastConfig;
+      const rawPortName =
+        activeHubConsole.rawPort && "portName" in activeHubConsole.rawPort
+          ? String((activeHubConsole.rawPort as { portName?: string }).portName || "")
+          : "";
+      const bleFp = /^ble:[0-9a-f]{8}$/i.test(rawPortName) ? rawPortName.slice(4).toUpperCase() : "";
+      const fp = cfg?.fingerprint || bleFp || hubServerTimer?.fingerprint || "-";
+      const knownHub =
+        fp !== "-"
+          ? getKnownHardwareTimers().find((t) => t.role === "hub" && t.fp.toUpperCase() === fp.toUpperCase())
+          : undefined;
+      const hubSlotLive = activeHubConsole.hubSlotLive.get(1);
+      const liveDbm =
+        hubSlotLive?.dbm?.length === 8
+          ? hubSlotLive.dbm
+          : activeHubConsole.hubLastDbm?.length === 8
+            ? activeHubConsole.hubLastDbm
+            : undefined;
+      const hubFrames = Math.max(
+        activeHubConsole.hubOwnFrames,
+        hubGate?.framesRxCount ?? 0,
+        hubServerTimer?.framesRxCount ?? 0
+      );
+      hub = {
+        populated: true,
+        online: true,
+        label: cfg?.timerLabel || knownHub?.label || hubServerTimer?.timerLabel || "H1",
+        fp,
+        fw: cfg?.firmwareVersion || knownHub?.fw || hubServerTimer?.firmwareVersion || "-",
+        mac: knownHub?.mac || "-",
+        ch,
+        viaUsb: true,
+        emergencyMode: false,
+        gateLabel: hubGateName,
+        serverFrames: hubFrames,
+        dbm: liveDbm,
+        statusNote: isBleLink ? "Bluetooth · Active" : `${activeHubConsole.transportLabel} · Beacon master`,
       };
     } else if (s && s.role === 2) {
       const rawBeaconMsAgo = s.beaconMsAgo ?? s.hub?.beaconMsAgo;
@@ -1691,6 +1741,7 @@ export class NetworkView extends Component {
       const topoSec = slaprfWrap.querySelector<HTMLElement>('[data-section-anchor="topology"]');
       if (topoSec) {
         topoSec.hidden = isBleMode;
+        topoSec.style.display = isBleMode ? "none" : "";
       }
       const timerIntro = slaprfWrap.querySelector<HTMLElement>('[data-section-anchor="timer"] > .settings-intro');
       if (timerIntro) {
@@ -3054,10 +3105,21 @@ export class NetworkView extends Component {
       })
       .join("");
 
+    const isBleHub =
+      this.store.timingHardwareMode === "slaprf_ble" ||
+      (usbPool.hubConsole() ?? sharedTimerConsole).transportLabel === "Bluetooth";
     const hubSelected = selectedSlot === 1;
     const hubDotClass = hub.emergencyMode ? "is-emergency" : hub.online ? "is-up" : hub.populated ? "is-warn" : "";
     const hubBadgeClass = hub.online ? "badge-good" : hub.populated ? "badge-warn" : "";
-    const hubBadgeText = hub.viaUsb ? "USB-C · Active" : hub.online ? "Online" : hub.populated ? "Idle" : "Empty";
+    const hubBadgeText = hub.viaUsb
+      ? isBleHub
+        ? "Bluetooth · Active"
+        : "USB-C · Active"
+      : hub.online
+        ? "Online"
+        : hub.populated
+          ? "Idle"
+          : "Empty";
 
     const topologyHtml = `
       <div class="debug-status-topbar">
@@ -3258,13 +3320,18 @@ export class NetworkView extends Component {
       })
       .join("");
 
+    const isBleHub =
+      this.store.timingHardwareMode === "slaprf_ble" ||
+      (usbPool.hubConsole() ?? sharedTimerConsole).transportLabel === "Bluetooth";
     const hubSelected = selectedSlot === 1;
     const hubDotClass = hub.emergencyMode ? "is-emergency" : hub.online ? "is-up" : hub.populated ? "is-warn" : "";
     const hubTitle = hub.populated && hub.label ? hub.label : "Hub";
     const hubSub = hub.emergencyMode
       ? "Emergency"
       : hub.viaUsb
-        ? `USB · Ch ${hub.ch}`
+        ? isBleHub
+          ? "BLE · Active"
+          : `USB · Ch ${hub.ch}`
         : hub.online
           ? `Ch ${hub.ch} · Sync`
           : hub.populated
@@ -3603,14 +3670,16 @@ export class NetworkView extends Component {
       const barsHtml = this.renderRssiBars(
         hub.dbm,
         sourceLabel,
-        `5.8 GHz channels at ${esc(hub.label)} (Hub · Slot 1)`
+        isBleHub
+          ? `5.8 GHz channels at ${esc(hub.label)} (Bluetooth Hub)`
+          : `5.8 GHz channels at ${esc(hub.label)} (Hub · Slot 1)`
       );
 
       const timerHtml = `
         <div class="debug-status-topbar is-net-timer-topbar">
           <span class="debug-led-status">
             <span class="status-dot ${ledClass}"></span>
-            <span class="debug-head-note"><strong>${esc(hub.label)}</strong> · Parent Hub (TDMA Slot 1) · ${esc(hub.statusNote)}</span>
+            <span class="debug-head-note"><strong>${esc(hub.label)}</strong> · ${isBleHub ? "Bluetooth Hub" : "Parent Hub (TDMA Slot 1)"} · ${esc(hub.statusNote)}</span>
           </span>
           <div class="debug-connect-actions">
             <span class="badge ${hub.online ? "badge-good" : "badge-warn"} mono" data-net-top-rate>${hubRateHtml}</span>

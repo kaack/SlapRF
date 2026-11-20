@@ -154,7 +154,7 @@ open(out_path, 'wb').write(data)
     try {
         & $python -m esptool --chip esp32c5 -p $FlashPort -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_freq 80m --flash_size 4MB 0x2000 $bootBin 0x8000 $partBin 0x10000 $patchedBin
         if ($LASTEXITCODE -ne 0) { throw "esptool write_flash failed on $FlashPort" }
-        & $python -c "import serial, sys, time; s = serial.Serial(sys.argv[1], 115200); s.dtr = True; s.rts = True; time.sleep(0.03); s.dtr = True; s.rts = False; time.sleep(0.05); s.dtr = False; s.rts = False; s.close()" $FlashPort
+        & $python -c "import serial, sys, time; s = serial.Serial(sys.argv[1], 115200); s.dtr = False; s.rts = False; time.sleep(0.03); s.dtr = False; s.rts = True; time.sleep(0.06); s.dtr = False; s.rts = False; time.sleep(0.08); s.dtr = True; s.rts = False; time.sleep(0.05); s.dtr = False; s.rts = False; time.sleep(0.08); s.close()" $FlashPort
     } finally {
         Remove-Item -ErrorAction SilentlyContinue $patchedBin
     }

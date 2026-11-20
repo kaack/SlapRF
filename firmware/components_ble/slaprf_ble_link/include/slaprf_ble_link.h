@@ -98,6 +98,9 @@ int32_t slaprf_ble_sync_adjust_us(int64_t superframe_start_us, uint32_t sweep_in
  */
 void slaprf_ble_console_start_link(void);
 
+/** True once right after a BLE host authenticates so the Hub emits an immediate HELLO frame. */
+bool slaprf_ble_take_hello_due(void);
+
 #ifdef __cplusplus
 }
 #endif

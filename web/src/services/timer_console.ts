@@ -652,6 +652,7 @@ export class TimerConsole {
           }
         }
         if (typeof p.hubOwnFrames === "number") this.hubOwnFrames = p.hubOwnFrames;
+        this.synthesizeHubStatusIfNeeded();
         this.subscribers.forEach((h) => h.onHubLive?.());
         break;
       }
@@ -1541,7 +1542,11 @@ export class TimerConsole {
     }
     const hello1 = this.hubSlotHello.get(1);
     const live1 = this.hubSlotLive.get(1);
-    const fp = hello1?.fp || this.lastConfig?.fingerprint || this.lastStatus?.fp || "";
+    const blePortFp =
+      isBackendSerialPort(this.port) && /^ble:[0-9a-f]{8}$/i.test(this.port.portName)
+        ? this.port.portName.slice(4).toUpperCase()
+        : "";
+    const fp = hello1?.fp || this.lastConfig?.fingerprint || this.lastStatus?.fp || blePortFp;
     if (!fp) {
       // Wait for STATUS?, SLAPRF?, or the Hub's 0xC5 0x5A HELLO frame so we never
       // borrow a previously connected Hub's identity from localStorage.
@@ -2057,9 +2062,12 @@ export class UsbConnectionPool {
   }
 
   public hubConsole(): TimerConsole | null {
+    const isHub = (c: TimerConsole): boolean =>
+      c.connected &&
+      (c.lastStatus?.role === 1 || c.lastConfig?.role === "hub" || c.transportLabel === "Bluetooth");
     const main = this.slots[0];
-    if (main.connected && main.lastStatus?.role === 1) return main;
-    return this.slots.find((c) => c.connected && c.lastStatus?.role === 1) ?? null;
+    if (isHub(main)) return main;
+    return this.slots.find(isHub) ?? null;
   }
 
   public primaryConsole(): TimerConsole {
