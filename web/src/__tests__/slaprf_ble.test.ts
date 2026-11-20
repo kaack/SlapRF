@@ -1,12 +1,26 @@
+import { pushAppHash, Router } from "../core/router";
+import { TopBar } from "../layout/TopBar";
+import { Announcer } from "../services/announcer";
 import { probeCapabilities } from "../services/capabilities";
 import { bindSimSerialStore, pickUsbPort } from "../services/sim_serial_port";
 import { type TimerStatus, usbPool } from "../services/timer_console";
 import { isSlapRFMode, normalizeTimingHardwareMode } from "../types/models";
 import { DebugView } from "../views/DebugView";
+import { LiveView } from "../views/LiveView";
 import { NetworkView } from "../views/NetworkView";
 import { TimingDevicesCard } from "../widgets/DataSourceCard";
 import { renderUsbConnectionBarHtml } from "../widgets/UsbConnectionBar";
-import { describe, expect, flushMicrotasks, it, makeMockApiClient, makeStore, mountHtml } from "./harness";
+import {
+  describe,
+  expect,
+  flushMicrotasks,
+  it,
+  makeFullState,
+  makeMockApiClient,
+  makePracticeSession,
+  makeStore,
+  mountHtml,
+} from "./harness";
 
 describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
   it("normalizes slaprf_ble and identifies both SlapRF hardware modes", () => {
@@ -287,6 +301,97 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       netView?.destroy();
       window.fetch = origFetch;
       await probeCapabilities();
+    }
+  });
+
+  it("renders tinted standby menu strip + one-tap Start/Resume bar when Practice is not live, and LIVE pill when live", async () => {
+    window.history.replaceState(null, "", "/#/live");
+    const idleSess = makePracticeSession("prac-standby-1", {
+      name: "Evening Pack",
+      active: false,
+      paused: false,
+    });
+
+    const store = makeStore({
+      raceArmed: false,
+      practiceState: {
+        initialized: true,
+        activeSessionId: "",
+        selectedSessionId: "prac-standby-1",
+        sessions: [idleSess],
+      },
+    });
+    const { api } = makeMockApiClient(store);
+    const router = new Router();
+    const announcer = new Announcer(store);
+    const root = mountHtml(`
+      <div>
+        <header id="tb-standby-host" style="width:1280px"></header>
+        <div id="live-standby-host"></div>
+      </div>
+    `);
+    const topbar = new TopBar(root.querySelector("#tb-standby-host")!, store, api, router, announcer);
+    const liveView = new LiveView(root.querySelector("#live-standby-host")!, store, api);
+
+    try {
+      pushAppHash("#/live/evening-pack");
+      await flushMicrotasks();
+
+      // Switch to Signals tab: standby bar + tinted menu strip remain visible
+      root.querySelector<HTMLButtonElement>("[data-practice-mobile-tab='signals']")!.click();
+      await flushMicrotasks();
+
+      const strip = root.querySelector<HTMLElement>(".practice-page-topbar")!;
+      expect(strip.classList.contains("is-ws-standby")).toBe(true);
+      const standbyBar = root.querySelector<HTMLElement>("[data-ws-standby-bar='practice']")!;
+      expect(standbyBar).not.toBeNull();
+      expect(standbyBar.textContent || "").toContain("Not started");
+      expect(standbyBar.textContent || "").toContain("laps aren't recording");
+      expect(standbyBar.querySelector("[data-practice-act='start-session']")).not.toBeNull();
+      expect(root.querySelector("[data-ws-live-pill]")).toBeNull();
+
+      // Simulate Practice going live
+      store.hydrate(
+        makeFullState({
+          raceArmed: true,
+          practiceState: {
+            initialized: true,
+            activeSessionId: "prac-standby-1",
+            selectedSessionId: "prac-standby-1",
+            sessions: [{ ...idleSess, active: true, paused: false }],
+          },
+        })
+      );
+      await flushMicrotasks();
+
+      expect(strip.classList.contains("is-ws-live")).toBe(true);
+      expect(strip.classList.contains("is-ws-standby")).toBe(false);
+      expect(root.querySelector("[data-ws-standby-bar='practice']")).toBeNull();
+      expect(root.querySelector("[data-ws-live-pill]")?.textContent || "").toContain("LIVE");
+
+      // Simulate Practice paused -> standby bar returns with Resume CTA
+      store.hydrate(
+        makeFullState({
+          raceArmed: false,
+          practiceState: {
+            initialized: true,
+            activeSessionId: "",
+            selectedSessionId: "prac-standby-1",
+            sessions: [{ ...idleSess, active: false, paused: true }],
+          },
+        })
+      );
+      await flushMicrotasks();
+
+      expect(strip.classList.contains("is-ws-standby")).toBe(true);
+      const pausedBar = root.querySelector<HTMLElement>("[data-ws-standby-bar='practice']")!;
+      expect(pausedBar).not.toBeNull();
+      expect(pausedBar.textContent || "").toContain("Paused");
+      expect(pausedBar.querySelector("[data-practice-act='resume-session']")).not.toBeNull();
+      expect(root.querySelector("[data-ws-live-pill]")).toBeNull();
+    } finally {
+      liveView.destroy();
+      topbar.destroy();
     }
   });
 });

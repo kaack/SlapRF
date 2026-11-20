@@ -25324,3 +25324,222 @@ html[data-theme="light"] .custom-select-wrap:has(> .dte-seat-pilot-select) .cust
     justify-content: flex-start;
   }
 }
+
+/* ==========================================================================
+   Practice & Race Workspace Live vs Standby Menu Strip & One-Tap Standby Bar
+   ========================================================================== */
+.ws-standby-host:empty {
+  display: none !important;
+}
+
+.ws-standby-host,
+.races-page-topbar > .ws-standby-bar {
+  grid-column: 1 / -1;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.ws-standby-bar {
+  width: 100%;
+  min-height: 36px;
+  padding: 5px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  box-sizing: border-box;
+}
+
+.ws-standby-bar.is-warn {
+  background: color-mix(in srgb, var(--warn) 10%, var(--bg));
+  border-top: 1px solid color-mix(in srgb, var(--warn) 26%, var(--border));
+}
+
+html[data-theme="light"] .ws-standby-bar.is-warn {
+  background: color-mix(in srgb, #d97706 9%, var(--surface));
+  border-top-color: color-mix(in srgb, #d97706 28%, var(--border));
+}
+
+.ws-standby-bar.is-muted {
+  background: color-mix(in srgb, var(--surface-2) 82%, var(--bg));
+  border-top: 1px solid color-mix(in srgb, var(--border) 75%, transparent);
+}
+
+.ws-standby-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ws-standby-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  flex-shrink: 0;
+  color: var(--warn);
+  background: color-mix(in srgb, var(--warn) 16%, transparent);
+  border: 1px solid color-mix(in srgb, var(--warn) 38%, transparent);
+}
+
+html[data-theme="light"] .ws-standby-pill {
+  color: #b45309;
+  background: rgba(217, 119, 6, 0.13);
+  border-color: rgba(180, 83, 9, 0.34);
+}
+
+.ws-standby-bar.is-muted .ws-standby-pill {
+  color: var(--text-2);
+  background: var(--surface-3);
+  border-color: var(--border-strong);
+}
+
+.ws-standby-text {
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+
+.ws-standby-bar.is-muted .ws-standby-text {
+  color: var(--text-2);
+}
+
+.ws-standby-cta {
+  height: 26px !important;
+  min-height: 26px !important;
+  padding: 0 10px !important;
+  gap: 5px !important;
+  border-radius: 7px !important;
+  font-size: 12px !important;
+  font-weight: 650 !important;
+  white-space: nowrap;
+  flex-shrink: 0;
+  color: #fde68a !important;
+  background: rgba(245, 158, 11, 0.18) !important;
+  border: 1px solid rgba(251, 191, 36, 0.48) !important;
+}
+
+.ws-standby-cta:hover {
+  background: rgba(245, 158, 11, 0.28) !important;
+  border-color: rgba(251, 191, 36, 0.7) !important;
+}
+
+html[data-theme="light"] .ws-standby-cta {
+  color: #92400e !important;
+  background: rgba(245, 158, 11, 0.18) !important;
+  border-color: rgba(180, 83, 9, 0.42) !important;
+}
+
+html[data-theme="light"] .ws-standby-cta:hover {
+  background: rgba(245, 158, 11, 0.28) !important;
+  border-color: rgba(180, 83, 9, 0.62) !important;
+}
+
+.ws-standby-cta.is-subtle {
+  color: var(--text) !important;
+  background: var(--surface-3) !important;
+  border-color: var(--border-strong) !important;
+}
+
+@media (min-width: 861px) {
+  .races-page-topbar.is-ws-standby {
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--warn) 15%, var(--surface)) 0%,
+      color-mix(in srgb, var(--warn) 10%, var(--bg)) 100%
+    );
+    border-top-color: color-mix(in srgb, var(--warn) 36%, var(--border));
+    border-bottom-color: color-mix(in srgb, var(--warn) 46%, var(--border));
+  }
+
+  html[data-theme="light"] .races-page-topbar.is-ws-standby {
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, #f59e0b 15%, var(--surface)) 0%,
+      color-mix(in srgb, #f59e0b 10%, var(--bg)) 100%
+    );
+    border-top-color: color-mix(in srgb, #d97706 36%, var(--border));
+    border-bottom-color: color-mix(in srgb, #d97706 46%, var(--border));
+  }
+
+  .races-page-topbar.is-ws-standby .rc-topleft-bar > .rc-topleft-scroll-wrap > .sched-lineup-cue.is-left {
+    background: linear-gradient(90deg, color-mix(in srgb, var(--warn) 13%, var(--surface)) 60%, transparent 100%);
+  }
+
+  .races-page-topbar.is-ws-standby .rc-topleft-bar > .rc-topleft-scroll-wrap > .sched-lineup-cue.is-right {
+    background: linear-gradient(270deg, color-mix(in srgb, var(--warn) 13%, var(--surface)) 60%, transparent 100%);
+  }
+
+  .races-page-topbar.is-ws-completed {
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-3) 65%, var(--bg)) 0%,
+      color-mix(in srgb, var(--surface-2) 85%, var(--bg)) 100%
+    );
+  }
+}
+
+@media (max-width: 860px) {
+  .races-page-topbar {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+
+  .races-page-topbar.is-ws-standby .rc-topleft-bar > .rc-topleft-scroll-wrap {
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--warn) 16%, var(--surface)) 0%,
+      color-mix(in srgb, var(--warn) 11%, var(--bg)) 100%
+    );
+    border-top-color: color-mix(in srgb, var(--warn) 38%, var(--border));
+    border-bottom-color: color-mix(in srgb, var(--warn) 28%, var(--border));
+  }
+
+  html[data-theme="light"] .races-page-topbar.is-ws-standby .rc-topleft-bar > .rc-topleft-scroll-wrap {
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, #f59e0b 16%, var(--surface)) 0%,
+      color-mix(in srgb, #f59e0b 11%, var(--bg)) 100%
+    );
+    border-top-color: color-mix(in srgb, #d97706 38%, var(--border));
+    border-bottom-color: color-mix(in srgb, #d97706 30%, var(--border));
+  }
+
+  .races-page-topbar.is-ws-completed .rc-topleft-bar > .rc-topleft-scroll-wrap {
+    background: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--surface-3) 68%, var(--bg)) 0%,
+      color-mix(in srgb, var(--surface-2) 88%, var(--bg)) 100%
+    );
+  }
+
+  .ws-standby-bar {
+    justify-content: space-between;
+    padding: 5px 14px;
+    border-top: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+  }
+
+  .ws-standby-bar.is-warn {
+    border-top: 0;
+    border-bottom: 1px solid color-mix(in srgb, var(--warn) 42%, var(--border));
+  }
+
+  html[data-theme="light"] .ws-standby-bar.is-warn {
+    border-top: 0;
+    border-bottom-color: color-mix(in srgb, #d97706 40%, var(--border));
+  }
+}

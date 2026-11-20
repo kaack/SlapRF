@@ -457,7 +457,7 @@ export class TopBar extends Component {
 
     const appTheme = getAppTheme();
     const pwaStandalone = isPwaStandalone();
-    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${ltEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${this.pwaMenuOpen ? 1 : 0}:${pwaStandalone ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aTopCtx.mode}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
+    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${ltEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${this.pwaMenuOpen ? 1 : 0}:${pwaStandalone ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${rCtx.live ? 1 : 0}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aTopCtx.mode}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
     this.el.classList.toggle("has-subpage-back", isSubPage);
     this.el.closest(".app")?.classList.toggle("is-mobile-subpage", isSubPage);
     if (sig === this.lastSig) return;
@@ -576,19 +576,25 @@ export class TopBar extends Component {
     const practiceDirHref = buildPracticeHash("directory");
     const practiceSessionHref = buildPracticeHash("session", practiceSlug);
 
+    const wsIsLive = Boolean((inRaceWorkspace && rCtx.live) || (inPracticeWorkspace && pCtx.active));
+    const wsLivePillHtml = wsIsLive
+      ? `<span class="topbar-ws-live-pill" data-ws-live-pill title="Live RF timing active"><span class="topbar-ws-live-dot" aria-hidden="true"></span><span>LIVE</span></span>`
+      : "";
+
     const raceCrumbs: Array<{
       label: string;
       href: string;
       title: string;
       action?: string;
       iconHtml?: string;
+      suffixHtml?: string;
     }> = [
       { label: "Race", href: racesDirHref, title: "All races", action: "races-back" },
-      { label: raceLabel, href: raceStageHref, title: raceLabel },
+      { label: raceLabel, href: raceStageHref, title: raceLabel, suffixHtml: inRaceWorkspace ? wsLivePillHtml : "" },
     ];
 
     const toLinkEntries = (
-      crumbs: Array<{ label: string; href: string; title: string; action?: string; iconHtml?: string }>
+      crumbs: Array<{ label: string; href: string; title: string; action?: string; iconHtml?: string; suffixHtml?: string }>
     ): BreadcrumbEntry[] =>
       crumbs.map((c, idx) => {
         const isLast = idx === crumbs.length - 1;
@@ -597,8 +603,8 @@ export class TopBar extends Component {
           menuHref: c.href,
           menuAction: c.action,
           inlineHtml: isLast
-            ? `<span class="topbar-crumb-item" aria-current="page" title="${esc(c.title)}">${c.iconHtml ?? ""}<span>${esc(c.label)}</span></span>`
-            : `<a class="topbar-crumb-item" href="${esc(c.href)}" ${c.action ? `data-action="${esc(c.action)}"` : ""} title="${esc(c.title)}">${c.iconHtml ?? ""}<span>${esc(c.label)}</span></a>`,
+            ? `<span class="topbar-crumb-item" aria-current="page" title="${esc(c.title)}">${c.iconHtml ?? ""}<span>${esc(c.label)}</span>${c.suffixHtml ?? ""}</span>`
+            : `<a class="topbar-crumb-item" href="${esc(c.href)}" ${c.action ? `data-action="${esc(c.action)}"` : ""} title="${esc(c.title)}">${c.iconHtml ?? ""}<span>${esc(c.label)}</span>${c.suffixHtml ?? ""}</a>`,
         };
       });
 
@@ -617,6 +623,7 @@ export class TopBar extends Component {
           label: practiceSessionName,
           href: practiceSessionHref,
           title: practiceSessionName,
+          suffixHtml: wsLivePillHtml,
         },
       ]);
       breadcrumbAttr = "data-practice-breadcrumb";
@@ -721,6 +728,11 @@ export class TopBar extends Component {
          </div>`
       : "";
 
+    const mobileSubpageCtxMarkup =
+      (inRaceWorkspace || inPracticeWorkspace) && wsLivePillHtml
+        ? `<div class="topbar-mobile-subpage-ctx" data-topbar-mobile-live>${wsLivePillHtml}</div>`
+        : "";
+
     this.el.innerHTML = `
       <div class="topbar-left">
         ${
@@ -733,6 +745,7 @@ export class TopBar extends Component {
         ${titleMarkup}
         ${mobileTopBrandMarkup}
         ${subpageBackMarkup}
+        ${mobileSubpageCtxMarkup}
         <div class="topbar-menu-wrap">
           <button class="btn btn-ghost topbar-menu-btn ${this.menuOpen ? "is-open" : ""}" data-action="menu" type="button" aria-label="${this.menuOpen ? "Close navigation menu" : "Open navigation menu"}" aria-expanded="${this.menuOpen ? "true" : "false"}">
             <span class="topbar-hamburger" aria-hidden="true"><span></span><span></span><span></span></span>

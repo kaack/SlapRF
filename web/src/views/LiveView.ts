@@ -192,6 +192,7 @@ export class LiveView extends Component {
             </div>
           </div>
           <div class="rc-topbar-side is-right" aria-hidden="true"></div>
+          <div class="ws-standby-host" data-slot="standby-bar"></div>
         </div>
         <div class="practice-workspace-stack">
           <div data-slot="workspace-banner"></div>
@@ -455,7 +456,7 @@ export class LiveView extends Component {
         tab: this.activeTab,
         sessionId: sess?.sessionId ?? "",
         sessionName: sess?.name ?? "",
-        active: Boolean(sess?.active),
+        active: Boolean(sess?.active && !sess?.paused && this.store.raceArmed),
       });
     }
 
@@ -2286,6 +2287,8 @@ export class LiveView extends Component {
       const bannerEl = this.slot("workspace-banner");
       bannerEl.innerHTML = "";
 
+      const topbarEl = this.slot("mobile-topbar");
+      const standbyEl = this.slot("standby-bar");
       const ctrlEl = this.slot("session-controls");
       if (sess) {
         const isActive = Boolean(sess.active && !sess.paused && this.store.raceArmed);
@@ -2297,6 +2300,9 @@ export class LiveView extends Component {
           : isPaused
             ? "Practice session paused"
             : "Practice session idle";
+
+        topbarEl.classList.toggle("is-ws-live", isActive);
+        topbarEl.classList.toggle("is-ws-standby", !isActive);
 
         const toggleAction = isActive
           ? "pause-session"
@@ -2311,10 +2317,35 @@ export class LiveView extends Component {
         const toggleTitle = isActive
           ? "Pause live RF timing for this practice session"
           : ongoingRace
-            ? `Race '${ongoingRace.config.eventName}' is ongoing — click to pause it and ${isPaused ? "resume" : "start"} practice`
+            ? `Race '${ongoingRace.config.eventName}' is ongoing - click to pause it and ${isPaused ? "resume" : "start"} practice`
             : isPaused
               ? "Resume live RF timing for this practice session"
               : "Start live RF timing for this practice session";
+
+        if (isActive) {
+          standbyEl.innerHTML = "";
+        } else {
+          const pillText = isPaused ? "Paused" : "Not started";
+          const standbyMsg = isPaused
+            ? "Practice is paused - laps aren't recording"
+            : "Practice isn't started - laps aren't recording";
+          standbyEl.innerHTML = `
+            <div class="ws-standby-bar is-warn" data-ws-standby-bar="practice" role="status">
+              <div class="ws-standby-copy">
+                <span class="ws-standby-pill">${pillText}</span>
+                <span class="ws-standby-text">${standbyMsg}</span>
+              </div>
+              <button
+                type="button"
+                class="btn btn-xs ws-standby-cta"
+                data-practice-act="${toggleAction}"
+                data-session-id="${esc(sess.sessionId)}"
+                title="${esc(toggleTitle)}"
+              >
+                ${icons.play(12)}<span>${toggleText}</span>
+              </button>
+            </div>`;
+        }
 
         const toggleButtonHtml = `<button
               type="button"
@@ -2340,6 +2371,8 @@ export class LiveView extends Component {
             ${toggleButtonHtml}
           </div>`;
       } else {
+        topbarEl.classList.remove("is-ws-live", "is-ws-standby");
+        standbyEl.innerHTML = "";
         ctrlEl.innerHTML = "";
       }
     }

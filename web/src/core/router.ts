@@ -47,6 +47,7 @@ export interface RacesTopBarContext {
   activeStage: number;
   totalStages: number;
   stageTitle: string;
+  live?: boolean;
 }
 
 export interface PracticeTopBarContext {
@@ -167,7 +168,8 @@ export function setRacesTopBarContext(next: RacesTopBarContext): void {
     currentRacesContext.raceName === next.raceName &&
     currentRacesContext.activeStage === next.activeStage &&
     currentRacesContext.totalStages === next.totalStages &&
-    currentRacesContext.stageTitle === next.stageTitle
+    currentRacesContext.stageTitle === next.stageTitle &&
+    Boolean(currentRacesContext.live) === Boolean(next.live)
   ) {
     return;
   }
