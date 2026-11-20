@@ -216,8 +216,6 @@ export class PilotRssiChart extends Component {
   /** Values shown while a save is in flight, so the line doesn't jump back. */
   private readonly pending = new Map<number, { enter: number; exit: number }>();
   private tags: TagBox[] = [];
-  /** Previous thresholds, to undo the last calibration change. */
-  private undo: GateThresholdUpdate[] | null = null;
   private calibMessage = "";
   /** Gate shown on its own (with its editable threshold); null shows every gate. */
   private focus: number | null = null;
@@ -295,7 +293,6 @@ export class PilotRssiChart extends Component {
       this.multiPilotSlots = null;
     }
     this.tags = [];
-    this.undo = null;
     this.calibMessage = "";
     this.smoothYMin = null;
     this.smoothYMax = null;
@@ -323,7 +320,6 @@ export class PilotRssiChart extends Component {
       this.pilotSlotOverride = null;
     }
     this.tags = [];
-    this.undo = null;
     this.calibMessage = "";
     this.smoothYMin = null;
     this.smoothYMax = null;
@@ -575,7 +571,6 @@ export class PilotRssiChart extends Component {
         this.setWindow(Number(btn.dataset.window) * 1e6, false);
       } else if (btn.dataset.calib === "auto") void this.autoCalibrate();
       else if (btn.dataset.calib === "reset") void this.resetToDefault();
-      else if (btn.dataset.calib === "undo") void this.undoLast();
       else if (btn.dataset.act === "live") this.toggleLive();
       else if (btn.dataset.act) this.jump(btn.dataset.act === "prev" ? -1 : 1);
     });
@@ -1041,8 +1036,6 @@ export class PilotRssiChart extends Component {
     this.onDispose(() => window.clearInterval(timer));
     this.onDispose(
       store.subscribe(["selection"], () => {
-        // Undo belongs to the pilot it was made for.
-        this.undo = null;
         this.calibMessage = "";
         this.smoothYMin = null;
         this.smoothYMax = null;
@@ -1460,37 +1453,7 @@ export class PilotRssiChart extends Component {
     return best ? { gateId: best.gateId, kind: best.kind } : null;
   }
 
-  /** Raw stored overrides for this pilot (0 = pilot default), for undo. */
-  private currentOverrides(): GateThresholdUpdate[] {
-    const slotIndex = this.activePilotSlot;
-    const pos = this.store.pilots.findIndex((p) => p.slotIndex === slotIndex);
-    if (this.isLapRF) {
-      return this.store.nodes.map((p) => ({
-        gateId: p.gateId,
-        slotIndex,
-        enterDbm: 0,
-        laprfThreshold: p.laprfThresholds?.[pos] ?? 0,
-      }));
-    }
-    if (this.isRH) {
-      return this.store.nodes.map((p) => ({
-        gateId: p.gateId,
-        slotIndex,
-        enterDbm: 0,
-        rhEnterThreshold: p.rhEnterThresholds?.[pos] ?? 0,
-        rhExitThreshold: p.rhExitThresholds?.[pos] ?? 0,
-      }));
-    }
-    return this.store.nodes.map((p) => ({
-      gateId: p.gateId,
-      slotIndex,
-      enterDbm: p.enterThresholds?.[pos] ?? 0,
-      exitDbm: p.exitThresholds?.[pos] ?? 0,
-    }));
-  }
-
   private async apply(updates: GateThresholdUpdate[], message: string): Promise<void> {
-    const before = this.currentOverrides().filter((o) => updates.some((u) => u.gateId === o.gateId));
     updates.forEach((u) => {
       if (this.isLapRF) {
         const rawT = u.laprfThreshold ?? u.enterDbm;
@@ -1518,7 +1481,6 @@ export class PilotRssiChart extends Component {
     });
     try {
       await this.api.setGateThresholds(updates);
-      this.undo = before;
       this.calibMessage = message;
     } catch {
       this.calibMessage = "Could not save thresholds.";
@@ -1685,16 +1647,6 @@ export class PilotRssiChart extends Component {
       this.shownGates.map((p) => ({ gateId: p.gateId, slotIndex, enterDbm: 0, exitDbm: 0 })),
       message
     );
-  }
-
-  private async undoLast(): Promise<void> {
-    const previous = this.undo;
-    if (!previous) return;
-    this.undo = null;
-    await this.api.setGateThresholds(previous).catch(() => undefined);
-    this.undo = null;
-    this.calibMessage = "Undone.";
-    this.renderCalib();
   }
 
   // ---- data ------------------------------------------------------------------
@@ -2474,10 +2426,13 @@ export class PilotRssiChart extends Component {
         const shortText = "Select a timer above to inspect or adjust thresholds.";
         textHtml = `<span class="scope-calib-text-full">${esc(fullText)}</span><span class="scope-calib-text-short">${esc(shortText)}</span>`;
       }
+      const calibButton = anyCalibrated
+        ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Clear calibrated thresholds at every timer and restore ${esc(pilot.callsign)}'s default thresholds">${icons.reset(16)}<span>Clear calibration</span></button>`
+        : canAutoCalib
+          ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Calibrate each timer's thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Calibrate all</span></button>`
+          : "";
       const actionButtons = [
-        this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(16)}<span>Undo</span></button>` : "",
-        anyCalibrated ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at every timer">${icons.reset(16)}<span>Reset all</span></button>` : "",
-        canAutoCalib ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Calibrate each timer's thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Calibrate all</span></button>` : "",
+        calibButton,
         canTune ? `<button class="btn btn-sm btn-ghost scope-calib-tune-btn ${isTuneOpen ? "is-active" : ""}" type="button" data-tune-gate="all" aria-expanded="${isTuneOpen}" title="Fine-tune global detection rules for all timers">${icons.sliders(17)}<span>Fine-tune</span></button>` : "",
       ].filter(Boolean).join("");
       actions = actionButtons ? `<div class="scope-calib-actions">${actionButtons}</div>` : "";
@@ -2496,13 +2451,16 @@ export class PilotRssiChart extends Component {
         const dragHint = isLapRF ? " · drag line to adjust" : " · drag lines to adjust";
         textHtml = `${esc(baseText)}<span class="scope-calib-drag-hint">${esc(dragHint)}</span>`;
       }
-      actions = `
-        <div class="scope-calib-actions">
-          ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(16)}<span>Undo</span></button>` : ""}
-          ${isCal ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at ${esc(name)}">${icons.reset(16)}<span>Reset</span></button>` : ""}
-          ${canAutoCalib ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Calibrate ${esc(name)}'s thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Calibrate</span></button>` : ""}
-          ${canTune ? `<button class="btn btn-sm btn-ghost scope-calib-tune-btn ${isTuneOpen ? "is-active" : ""}" type="button" data-tune-gate="${this.focus}" aria-expanded="${isTuneOpen}" title="Fine-tune detection rules for ${esc(name)}">${icons.sliders(17)}<span>Fine-tune</span></button>` : ""}
-        </div>`;
+      const calibButton = isCal
+        ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Clear calibrated thresholds at ${esc(name)} and restore ${esc(pilot.callsign)}'s default thresholds">${icons.reset(16)}<span>Clear calibration</span></button>`
+        : canAutoCalib
+          ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Calibrate ${esc(name)}'s thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Calibrate</span></button>`
+          : "";
+      const actionButtons = [
+        calibButton,
+        canTune ? `<button class="btn btn-sm btn-ghost scope-calib-tune-btn ${isTuneOpen ? "is-active" : ""}" type="button" data-tune-gate="${this.focus}" aria-expanded="${isTuneOpen}" title="Fine-tune detection rules for ${esc(name)}">${icons.sliders(17)}<span>Fine-tune</span></button>` : "",
+      ].filter(Boolean).join("");
+      actions = actionButtons ? `<div class="scope-calib-actions">${actionButtons}</div>` : "";
     }
     const nextCalibHtml = `
       <span class="scope-calib-text">${textHtml}</span>
