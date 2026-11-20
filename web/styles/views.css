@@ -2681,6 +2681,9 @@ html[data-theme="light"] .bar-time {
   color: var(--text-3);
   line-height: 1.4;
 }
+.scope-calib-text-short {
+  display: none;
+}
 .channel-all-dot {
   background: conic-gradient(#d4ff3a, #38bdf8, #f472b6, #fb923c, #d4ff3a);
 }
@@ -3134,6 +3137,16 @@ html[data-theme="light"] .scope-tune-custom-icon {
     font-size: 13px;
     line-height: 1.35;
     color: var(--text-2);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .scope-calib-text-full,
+  .scope-calib-drag-hint {
+    display: none;
+  }
+  .scope-calib-text-short {
+    display: inline;
   }
   .scope-calib-actions {
     width: 100%;

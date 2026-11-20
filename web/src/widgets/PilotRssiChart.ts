@@ -235,6 +235,7 @@ export class PilotRssiChart extends Component {
   private lastTuneDrawerHtml = "";
   private readonly tuneDrawerEl: HTMLElement;
   private tuningGateId: number | null = null;
+  private tuneDrawerOpen = false;
   private tuningScope: "pilot" | "gate" = "pilot";
   private tuneDrawerClosing = false;
   private tuneDrawerCloseTimer: number | null = null;
@@ -442,7 +443,7 @@ export class PilotRssiChart extends Component {
 
     let drawerSwipeStartY: number | null = null;
     this.listen(this.tuneDrawerEl, "pointerdown", (e: PointerEvent) => {
-      if (!this.isMobileLayout || this.tuningGateId === null || this.tuneDrawerClosing) return;
+      if (!this.isMobileLayout || !this.tuneDrawerOpen || this.tuneDrawerClosing) return;
       const target = e.target as HTMLElement | null;
       if (!target || !target.closest(".scope-tune-mobile-handle-bar, .scope-tune-head")) return;
       if (target.closest("button:not(.pilot-dir-mobile-drawer-handle)")) return;
@@ -492,8 +493,9 @@ export class PilotRssiChart extends Component {
       );
       if (!btn) return;
       if (btn.dataset.tuneGate) {
-        const gId = Number(btn.dataset.tuneGate);
-        if (this.tuningGateId === gId && !this.tuneDrawerClosing) {
+        const rawGate = btn.dataset.tuneGate;
+        const gId = rawGate === "all" ? null : Number(rawGate);
+        if (this.tuneDrawerOpen && this.tuningGateId === gId && !this.tuneDrawerClosing) {
           this.dismissMobileTuneDrawer();
           return;
         }
@@ -503,8 +505,9 @@ export class PilotRssiChart extends Component {
         }
         this.tuneDrawerClosing = false;
         this.tuneDrawerEl.classList.remove("is-closing");
+        this.tuneDrawerOpen = true;
         this.tuningGateId = gId;
-        if (this.focus !== gId) {
+        if (gId !== null && this.focus !== gId) {
           this.focus = gId;
           this.calibMessage = "";
           this.saveChartPrefs();
@@ -517,10 +520,10 @@ export class PilotRssiChart extends Component {
       }
       if (btn.dataset.focus) {
         this.focus = btn.dataset.focus === "all" ? null : Number(btn.dataset.focus);
-        if (this.focus === null) {
-          this.tuningGateId = null;
-        } else if (this.tuningGateId !== null) {
+        if (this.tuneDrawerOpen) {
           this.tuningGateId = this.focus;
+        } else {
+          this.tuningGateId = null;
         }
         this.calibMessage = "";
         this.saveChartPrefs();
@@ -2445,7 +2448,8 @@ export class PilotRssiChart extends Component {
     const isRH = this.isRH;
     const canAutoCalib = !isLapRF && !isRH;
 
-    let text: string;
+    const canTune = !this.isMultiPilotMode && !this.store.isHistoricalTrack;
+    let textHtml: string;
     let actions: string;
     if (this.focus === null) {
       const anyCalibrated = this.store.nodes.some((p) =>
@@ -2454,17 +2458,23 @@ export class PilotRssiChart extends Component {
           : enterThresholdAt(this.store, p.gateId, pilot.slotIndex).calibrated ||
             exitThresholdAt(this.store, p.gateId, pilot.slotIndex).calibrated
       );
-      text =
-        this.calibMessage ||
-        (isLapRF
+      const isTuneOpen = this.tuneDrawerOpen && this.tuningGateId === null;
+      if (this.calibMessage) {
+        textHtml = esc(this.calibMessage);
+      } else {
+        const fullText = isLapRF
           ? "Select a timer above to view or drag its LapRF crossing threshold (300–3500)."
           : isRH
             ? "Select a timer above to view or drag its RotorHazard Enter & Exit thresholds (0–255)."
-            : "Timers auto-calibrate continuously from live lap passes · select a timer above to inspect or drag its thresholds.");
+            : "Timers auto-calibrate continuously from live lap passes · select a timer above to inspect or drag its thresholds.";
+        const shortText = "Select a timer above to inspect or adjust thresholds.";
+        textHtml = `<span class="scope-calib-text-full">${esc(fullText)}</span><span class="scope-calib-text-short">${esc(shortText)}</span>`;
+      }
       const actionButtons = [
         this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(16)}<span>Undo</span></button>` : "",
         anyCalibrated ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at every timer">${icons.reset(16)}<span>Reset all</span></button>` : "",
         canAutoCalib ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Calibrate each timer's thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Calibrate all</span></button>` : "",
+        canTune ? `<button class="btn btn-sm btn-ghost scope-calib-tune-btn ${isTuneOpen ? "is-active" : ""}" type="button" data-tune-gate="all" aria-expanded="${isTuneOpen}" title="Fine-tune global detection rules for all timers">${icons.sliders(17)}<span>Fine-tune</span></button>` : "",
       ].filter(Boolean).join("");
       actions = actionButtons ? `<div class="scope-calib-actions">${actionButtons}</div>` : "";
     } else {
@@ -2472,13 +2482,16 @@ export class PilotRssiChart extends Component {
       const t = enterThresholdAt(this.store, this.focus, pilot.slotIndex);
       const ex = exitThresholdAt(this.store, this.focus, pilot.slotIndex);
       const isCal = isLapRF ? t.calibrated : t.calibrated || ex.calibrated;
-      const isTuneOpen = this.tuningGateId === this.focus;
-      text =
-        this.calibMessage ||
-        (isLapRF
-          ? `${name}: Threshold ${t.dbm.toFixed(0)} ${isCal ? "(calibrated)" : `(${pilot.callsign}'s default)`} · drag line to adjust`
-          : `${name}: Enter ${t.dbm.toFixed(0)} / Exit ${ex.dbm.toFixed(0)}${this.unitSuffix} ${isCal ? "(calibrated)" : `(${pilot.callsign}'s default)`} · drag lines to adjust`);
-      const canTune = !this.isMultiPilotMode && !this.store.isHistoricalTrack;
+      const isTuneOpen = this.tuneDrawerOpen && this.tuningGateId === this.focus;
+      if (this.calibMessage) {
+        textHtml = esc(this.calibMessage);
+      } else {
+        const baseText = isLapRF
+          ? `${name}: Threshold ${t.dbm.toFixed(0)} ${isCal ? "(calibrated)" : `(${pilot.callsign}'s default)`}`
+          : `${name}: Enter ${t.dbm.toFixed(0)} / Exit ${ex.dbm.toFixed(0)}${this.unitSuffix} ${isCal ? "(calibrated)" : `(${pilot.callsign}'s default)`}`;
+        const dragHint = isLapRF ? " · drag line to adjust" : " · drag lines to adjust";
+        textHtml = `${esc(baseText)}<span class="scope-calib-drag-hint">${esc(dragHint)}</span>`;
+      }
       actions = `
         <div class="scope-calib-actions">
           ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(16)}<span>Undo</span></button>` : ""}
@@ -2488,7 +2501,7 @@ export class PilotRssiChart extends Component {
         </div>`;
     }
     const nextCalibHtml = `
-      <span class="scope-calib-text">${esc(text)}</span>
+      <span class="scope-calib-text">${textHtml}</span>
       ${actions}`;
     if (nextCalibHtml !== this.lastCalibHtml) {
       this.lastCalibHtml = nextCalibHtml;
@@ -2724,8 +2737,9 @@ export class PilotRssiChart extends Component {
   }
 
   private dismissMobileTuneDrawer(): void {
-    if (this.tuningGateId === null || this.tuneDrawerClosing) return;
+    if (!this.tuneDrawerOpen || this.tuneDrawerClosing) return;
     if (!this.isMobileLayout) {
+      this.tuneDrawerOpen = false;
       this.tuningGateId = null;
       this.renderCalib();
       this.renderLegend();
@@ -2742,6 +2756,7 @@ export class PilotRssiChart extends Component {
       if (!this.tuneDrawerClosing) return;
       this.tuneDrawerClosing = false;
       this.tuneDrawerEl.classList.remove("is-closing");
+      this.tuneDrawerOpen = false;
       this.tuningGateId = null;
       this.renderCalib();
       this.renderLegend();
@@ -2781,8 +2796,8 @@ export class PilotRssiChart extends Component {
     }
 
     drawerEl.hidden = false;
-    drawerEl.classList.toggle("is-mobile-closed", this.tuningGateId === null);
-    if (this.tuningGateId !== null) {
+    drawerEl.classList.toggle("is-mobile-closed", !this.tuneDrawerOpen);
+    if (this.tuneDrawerOpen) {
       this.syncMobileDrawerTop(drawerEl);
     }
 
