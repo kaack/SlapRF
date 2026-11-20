@@ -26,6 +26,9 @@ type TimingRules struct {
 	// MinPassHoldSec: minimum gate pass hold duration (and proportional dB*s curve area)
 	// required for an RF excursion to count as a real drone fly-by rather than a sharp noise spike.
 	MinPassHoldSec float64 `json:"minPassHoldSec"`
+	// BeepOnCross: play an immediate synthetic WebAudio tone when a crossing is accepted
+	// (useful for sector-gate debugging and eyes-free confirmation in Practice and Races).
+	BeepOnCross bool `json:"beepOnCross"`
 }
 
 // DefaultTimingRules suit a typical FPV practice or race track.
@@ -66,6 +69,7 @@ type GateRuleOverrides struct {
 	MinSectionSec   *float64 `json:"minSectionSec,omitempty"`
 	EchoWindowSec   *float64 `json:"echoWindowSec,omitempty"`
 	MinPassHoldSec  *float64 `json:"minPassHoldSec,omitempty"`
+	BeepOnCross     *bool    `json:"beepOnCross,omitempty"`
 }
 
 // IsEmpty reports whether every override field is nil.
@@ -75,7 +79,8 @@ func (o GateRuleOverrides) IsEmpty() bool {
 		o.GateCooldownSec == nil &&
 		o.MinSectionSec == nil &&
 		o.EchoWindowSec == nil &&
-		o.MinPassHoldSec == nil
+		o.MinPassHoldSec == nil &&
+		o.BeepOnCross == nil
 }
 
 // Normalized clamps each set override into the same range as the global rule.
@@ -87,6 +92,11 @@ func (o GateRuleOverrides) Normalized() GateRuleOverrides {
 		v := clampRule(*p, lo, hi)
 		return &v
 	}
+	var beepPtr *bool
+	if o.BeepOnCross != nil {
+		b := *o.BeepOnCross
+		beepPtr = &b
+	}
 	out := GateRuleOverrides{
 		MinLapSec:       clampPtr(o.MinLapSec, 1, 120),
 		MaxLapSec:       clampPtr(o.MaxLapSec, 6, 900),
@@ -94,6 +104,7 @@ func (o GateRuleOverrides) Normalized() GateRuleOverrides {
 		MinSectionSec:   clampPtr(o.MinSectionSec, 0.1, 15),
 		EchoWindowSec:   clampPtr(o.EchoWindowSec, 0, 15),
 		MinPassHoldSec:  clampPtr(o.MinPassHoldSec, 0.04, 1.5),
+		BeepOnCross:     beepPtr,
 	}
 	if out.MinLapSec != nil && out.MaxLapSec != nil && *out.MaxLapSec < *out.MinLapSec+5 {
 		v := clampRule(*out.MinLapSec+5, 6, 900)
@@ -128,6 +139,9 @@ func (r TimingRules) ForGate(o GateRuleOverrides) TimingRules {
 	}
 	if o.MinPassHoldSec != nil {
 		r.MinPassHoldSec = *o.MinPassHoldSec
+	}
+	if o.BeepOnCross != nil {
+		r.BeepOnCross = *o.BeepOnCross
 	}
 	return r
 }

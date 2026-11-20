@@ -3017,6 +3017,36 @@ html[data-theme="light"] .bar-time {
   line-height: 1.35;
 }
 
+.scope-tune-retro-toggle.is-compact {
+  width: auto;
+  gap: 7px;
+  padding: 3px 8px 3px 5px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+.scope-tune-retro-toggle.is-compact.is-on {
+  border-color: var(--accent-line);
+}
+.scope-tune-switch-state {
+  font-size: 11.5px;
+  font-weight: 600;
+  min-width: 24px;
+  text-align: center;
+  color: var(--text-2);
+}
+.scope-tune-retro-toggle.is-on .scope-tune-switch-state {
+  color: var(--accent);
+}
+.rule-switch-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.scope-tune-card.is-beep-card {
+  grid-column: 1 / -1;
+}
 .scope-tune-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -3159,6 +3189,9 @@ html[data-theme="light"] .bar-time {
 @media (max-width: 860px) {
   .scope-tune-grid {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .rule-switch-wrap {
+    justify-content: flex-start;
   }
   .scope-tune-head {
     padding: 9px 10px;

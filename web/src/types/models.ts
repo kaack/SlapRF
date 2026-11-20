@@ -1245,17 +1245,23 @@ export interface TimingRules {
   minSectionSec: number;
   echoWindowSec: number;
   minPassHoldSec: number;
+  beepOnCross?: boolean;
 }
 
-/** Every detection/timing rule can be overridden per gate or per (gate, pilot). */
-export type GateRuleKey =
+/** Numeric detection/timing rules overridable per gate or per (gate, pilot). */
+export type NumericGateRuleKey =
   | "minLapSec"
   | "maxLapSec"
   | "gateCooldownSec"
   | "minSectionSec"
   | "echoWindowSec"
   | "minPassHoldSec";
-export type GateRuleOverrides = Partial<Record<GateRuleKey, number>>;
+
+/** Every detection/timing rule can be overridden per gate or per (gate, pilot). */
+export type GateRuleKey = NumericGateRuleKey;
+export type GateRuleOverrides = Partial<Record<NumericGateRuleKey, number>> & {
+  beepOnCross?: boolean;
+};
 
 export type FilterReason = "SPIKE" | "COOLDOWN" | "TOO_SOON" | "ECHO" | "MIN_LAP" | "LAP_TOO_LONG";
 

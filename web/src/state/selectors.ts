@@ -323,6 +323,7 @@ export function gateRulesAt(store: AppStore, gateId: number): TimingRules {
     minSectionSec: o.minSectionSec ?? base.minSectionSec,
     echoWindowSec: o.echoWindowSec ?? base.echoWindowSec,
     minPassHoldSec: o.minPassHoldSec ?? base.minPassHoldSec,
+    beepOnCross: o.beepOnCross !== undefined ? o.beepOnCross : Boolean(base.beepOnCross),
   };
 }
 
@@ -339,5 +340,20 @@ export function pilotGateRulesAt(store: AppStore, gateId: number, slotIndex: num
     minSectionSec: po.minSectionSec ?? gateEff.minSectionSec,
     echoWindowSec: po.echoWindowSec ?? gateEff.echoWindowSec,
     minPassHoldSec: po.minPassHoldSec ?? gateEff.minPassHoldSec,
+    beepOnCross: po.beepOnCross !== undefined ? po.beepOnCross : Boolean(gateEff.beepOnCross),
   };
+}
+
+/** Reports whether any global, gate-wide, or per-pilot rule currently has `beepOnCross` enabled. */
+export function hasAnyBeepOnCrossConfigured(store: AppStore): boolean {
+  if (store.rules.beepOnCross) return true;
+  for (const n of store.nodes) {
+    if (n.ruleOverrides?.beepOnCross === true) return true;
+    if (n.pilotRuleOverrides) {
+      for (const po of Object.values(n.pilotRuleOverrides)) {
+        if (po?.beepOnCross === true) return true;
+      }
+    }
+  }
+  return false;
 }

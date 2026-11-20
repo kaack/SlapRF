@@ -5,6 +5,7 @@ import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { adaptColorForTheme, font, inkOnColor, theme, withAlpha } from "../core/theme";
 import { ApiClient } from "../services/api_client";
+import { playSyntheticCrossingBeep } from "../services/crossing_beep";
 import { suggestThreshold } from "../state/calibration";
 import {
   enterThresholdAt,
@@ -454,6 +455,20 @@ export class PilotRssiChart extends Component {
       }
       if (btn.dataset.tuneAct === "clear-scope") {
         void this.clearTuningScopeOverrides();
+        return;
+      }
+      if (btn.dataset.tuneAct === "toggle-beep") {
+        void this.toggleTuneBeep();
+        return;
+      }
+      if (btn.dataset.tuneAct === "reset-beep") {
+        void this.resetTuneBeep();
+        return;
+      }
+      if (btn.dataset.tuneAct === "test-beep") {
+        if (this.tuningGateId !== null) {
+          playSyntheticCrossingBeep(this.store, this.tuningGateId);
+        }
         return;
       }
       if (btn.dataset.tuneResetKey) {
@@ -2674,6 +2689,40 @@ export class PilotRssiChart extends Component {
     }
   }
 
+  private async toggleTuneBeep(): Promise<void> {
+    if (this.tuningGateId === null || this.store.isHistoricalTrack) return;
+    const slotIndex = this.activePilotSlot;
+    const eff = this.effectiveRulesForScope(this.tuningGateId, slotIndex);
+    const nextOn = !eff.beepOnCross;
+    if (nextOn) {
+      playSyntheticCrossingBeep(this.store, this.tuningGateId);
+    }
+    const nextOverrides: GateRuleOverrides = {
+      ...this.currentScopeOverrides(this.tuningGateId, slotIndex),
+      beepOnCross: nextOn,
+    };
+    // Beep setting never needs retroactive DSP replay.
+    if (this.tuningScope === "pilot") {
+      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides, false).catch(() => undefined);
+    } else {
+      await this.api.setGateRules(this.tuningGateId, nextOverrides, false).catch(() => undefined);
+    }
+  }
+
+  private async resetTuneBeep(): Promise<void> {
+    if (this.tuningGateId === null || this.store.isHistoricalTrack) return;
+    const slotIndex = this.activePilotSlot;
+    const nextOverrides: GateRuleOverrides = {
+      ...this.currentScopeOverrides(this.tuningGateId, slotIndex),
+    };
+    delete nextOverrides.beepOnCross;
+    if (this.tuningScope === "pilot") {
+      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides, false).catch(() => undefined);
+    } else {
+      await this.api.setGateRules(this.tuningGateId, nextOverrides, false).catch(() => undefined);
+    }
+  }
+
   /** Renders the docked inline per-timer / per-pilot detection fine-tuning drawer below the chart. */
   private renderTuningDrawer(): void {
     const drawerEl = this.slot("tune-drawer");
@@ -2761,6 +2810,64 @@ export class PilotRssiChart extends Component {
             ${icons.info(14)}
             <span>Applies to upcoming passes only. Completed heat laps are reviewed in the Heat RSSI Editor.</span>
           </div>`;
+
+    const beepOwn = activeOverrides.beepOnCross;
+    const beepOverridden = beepOwn !== undefined;
+    const beepEffOn = Boolean(effRules.beepOnCross);
+    let beepSourceNote: string;
+    if (isPilotScope) {
+      const parentOn = Boolean(gateEff.beepOnCross);
+      const fromGate = gateOverrides.beepOnCross !== undefined;
+      beepSourceNote = beepOverridden
+        ? `Custom for ${esc(pilot.callsign)} (inherits ${parentOn ? "ON" : "OFF"})`
+        : fromGate
+          ? `From ${esc(gateName)} all-pilots (${parentOn ? "ON" : "OFF"})`
+          : `Global default (${parentOn ? "ON" : "OFF"})`;
+    } else {
+      const globalOn = Boolean(globalRules.beepOnCross);
+      const pilotBeep = pilotOverrides.beepOnCross;
+      beepSourceNote = beepOverridden
+        ? `Custom for all pilots here (global ${globalOn ? "ON" : "OFF"})`
+        : `Global default (${globalOn ? "ON" : "OFF"})`;
+      if (pilotBeep !== undefined) {
+        beepSourceNote += ` · ${esc(pilot.callsign)} overrides to ${pilotBeep ? "ON" : "OFF"}`;
+      }
+    }
+    const beepCardHtml = `
+      <div class="scope-tune-card is-beep-card ${beepOverridden ? "is-overridden" : ""}" data-tune-card="beepOnCross">
+        <div class="scope-tune-card-info">
+          <div class="scope-tune-card-title-row">
+            <span class="scope-tune-card-label">Beep on crossing</span>
+          </div>
+          <div class="scope-tune-card-help">Instant synthetic WebAudio tone on detection (zero TTS delay, works in Practice and Races).</div>
+          <div class="scope-tune-card-source">${beepSourceNote}</div>
+        </div>
+        <div class="scope-tune-card-controls">
+          <button
+            type="button"
+            class="btn btn-sm btn-ghost scope-tune-reset-btn"
+            data-tune-act="test-beep"
+            title="Preview ${esc(gateName)} crossing tone"
+            aria-label="Preview ${esc(gateName)} crossing tone"
+          >${icons.speaker(13)}</button>
+          <button
+            type="button"
+            role="switch"
+            aria-checked="${beepEffOn}"
+            class="scope-tune-retro-toggle is-compact ${beepEffOn ? "is-on" : ""}"
+            data-tune-act="toggle-beep"
+            aria-label="Beep on crossing"
+          >
+            <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
+            <span class="mono scope-tune-switch-state">${beepEffOn ? "ON" : "OFF"}</span>
+          </button>
+          ${
+            beepOverridden
+              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-tune-act="reset-beep" title="Reset Beep on crossing to inherited value" aria-label="Reset Beep on crossing">${icons.reset(13)}</button>`
+              : `<span class="scope-tune-reset-spacer" aria-hidden="true"></span>`
+          }
+        </div>
+      </div>`;
 
     const cardsHtml = TUNE_RULES.map((spec) => {
       const ownVal = activeOverrides[spec.key];
@@ -2871,6 +2978,7 @@ export class PilotRssiChart extends Component {
       ${modeBarHtml}
       <div class="scope-tune-grid">
         ${cardsHtml}
+        ${beepCardHtml}
       </div>
       <div class="scope-tune-foot">
         <span class="note">Scroll or zoom the chart above to inspect pass markers while tuning.</span>

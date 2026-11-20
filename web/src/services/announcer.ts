@@ -1,8 +1,14 @@
 import { getAndroidBridge } from "../core/android_bridge";
 import { setWakeLockEnabled } from "../core/wake_lock";
 import { capabilitiesSnapshot, isServerDisconnectedLockout } from "../services/capabilities";
+import { hasAnyBeepOnCrossConfigured, pilotGateRulesAt } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { GateCrossingEvent, LapRecord, RaceAnnouncement } from "../types/models";
+import {
+  ensureCrossingBeepGestureUnlock,
+  playSyntheticCrossingBeep,
+  warmCrossingBeepAudio,
+} from "./crossing_beep";
 import { sharedLapRFLink } from "./laprf_hardware_link";
 import {
   DEFAULT_PIPER_VOICE_URI,
@@ -194,10 +200,15 @@ export class Announcer {
     this.unsubscribers.push(sharedRHLink.onChange(() => this.scheduleTimingConnCheck()));
 
     store.onLapRecorded((lap) => this.onLap(lap));
+    store.onGateCrossing((ev) => this.onCrossingBeep(ev));
     store.onStartGateDetected((ev) => this.onStartPass(ev));
     store.onRaceAnnouncement((ann) => this.onRaceAnnouncement(ann));
     this.unsubscribers.push(
-      store.subscribe(["config"], () => {
+      store.subscribe(["config", "rules"], () => {
+        if (hasAnyBeepOnCrossConfigured(this.store)) {
+          ensureCrossingBeepGestureUnlock();
+          warmCrossingBeepAudio();
+        }
         const hwChanged =
           this.lastTimingHwMode !== null && this.lastTimingHwMode !== this.store.timingHardwareMode;
         this.lastTimingHwMode = this.store.timingHardwareMode;
@@ -667,6 +678,25 @@ export class Announcer {
   }
 
   /**
+   * High-priority synthetic WebAudio crossing beep: plays immediately on the hardware audio thread
+   * whenever `beepOnCross` is enabled for `(gateId, slotIndex)` (global, timer, or per-pilot),
+   * independent of TTS speech synthesis or whether the Voice Announcer is enabled.
+   */
+  private onCrossingBeep(ev: GateCrossingEvent): void {
+    const eff = pilotGateRulesAt(this.store, ev.gateId, ev.slotIndex);
+    if (!eff.beepOnCross) return;
+    const liveHit = this.getLiveRunningRaceHeatContext();
+    if (liveHit) {
+      const inHeat = liveHit.heat.seats.some(
+        (s) => s.pilotSlotIndex === ev.slotIndex && s.status !== "dns" && s.status !== "dq"
+      );
+      if (!inHeat) return;
+    }
+    const vol = this.prefs.volume > 0 ? this.prefs.volume : 0.9;
+    playSyntheticCrossingBeep(this.store, ev.gateId, vol);
+  }
+
+  /**
    * When a pilot crosses the Start/Finish gate with no previous start pass to compare against
    * (initial holeshot or first pass after reset/timeout), call out just their name in practice,
    * or play an instant gate-pass confirmation beep during a live race heat.
@@ -675,6 +705,8 @@ export class Announcer {
     const liveHit = this.getLiveRunningRaceHeatContext();
     if (liveHit) {
       if (!this.prefs.enabled) return;
+      // Avoid double-beeping if `beepOnCross` already played the high-priority synthetic beep.
+      if (pilotGateRulesAt(this.store, ev.gateId, ev.slotIndex).beepOnCross) return;
       const inHeat = liveHit.heat.seats.some(
         (s) => s.pilotSlotIndex === ev.slotIndex && s.status !== "dns" && s.status !== "dq"
       );

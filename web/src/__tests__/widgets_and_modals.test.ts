@@ -503,6 +503,13 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       const gateCall = calls.filter((c) => c.method === "setGateRules").pop();
       expect(gateCall).toBeDefined();
       expect(gateCall!.args).toEqual([1, { minLapSec: 8, maxLapSec: 90 }, true]);
+
+      // Toggle "Beep on crossing" ON in All pilots scope -> calls setGateRules with beepOnCross: true (retroactive=false)
+      drawerEl.querySelector<HTMLButtonElement>('[data-tune-act="toggle-beep"]')!.click();
+      await flushMicrotasks();
+      const beepGateCall = calls.filter((c) => c.method === "setGateRules").pop();
+      expect(beepGateCall).toBeDefined();
+      expect(beepGateCall!.args).toEqual([1, { minLapSec: 8, beepOnCross: true }, false]);
     } finally {
       chart.destroy();
     }

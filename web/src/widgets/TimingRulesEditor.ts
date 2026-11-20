@@ -2,13 +2,21 @@ import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
+import { playSyntheticCrossingBeep } from "../services/crossing_beep";
 import { gateColor, gateLabel } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { FilterReason, GateRuleKey, GateRuleOverrides, TimingRules, TrackNode } from "../types/models";
+import {
+  FilterReason,
+  GateRuleKey,
+  GateRuleOverrides,
+  NumericGateRuleKey,
+  TimingRules,
+  TrackNode,
+} from "../types/models";
 import { FILTER_LABELS } from "./markup";
 
 interface RuleSpec {
-  key: keyof TimingRules;
+  key: NumericGateRuleKey;
   label: string;
   help: string;
   step: number;
@@ -90,6 +98,7 @@ const DEFAULT_RULES: TimingRules = {
   minSectionSec: 0.5,
   echoWindowSec: 3,
   minPassHoldSec: 0.12,
+  beepOnCross: false,
 };
 const RULES_SCOPE_STORAGE_KEY = "slaprf.ui.rules_scope.v1";
 
@@ -144,6 +153,33 @@ export class TimingRulesEditor extends Component {
         if (key in DEFAULT_RULES) {
           void this.api.updateRules({ ...this.store.rules, [key]: DEFAULT_RULES[key] });
         }
+        return;
+      }
+      const beepToggleBtn = target.closest<HTMLButtonElement>("[data-beep-toggle]");
+      if (beepToggleBtn) {
+        if (this.scope === null) {
+          const nextBeep = !this.store.rules.beepOnCross;
+          if (nextBeep && this.store.nodes[0]) {
+            playSyntheticCrossingBeep(this.store, this.store.nodes[0].gateId);
+          }
+          void this.api.updateRules({ ...this.store.rules, beepOnCross: nextBeep });
+        } else {
+          const curGate = this.store.node(this.scope);
+          const curOvr = this.overridesOf(curGate);
+          const curEff = curOvr.beepOnCross !== undefined ? curOvr.beepOnCross : Boolean(this.store.rules.beepOnCross);
+          const nextBeep = !curEff;
+          if (nextBeep) {
+            playSyntheticCrossingBeep(this.store, this.scope);
+          }
+          void this.api.setGateRules(this.scope, { ...curOvr, beepOnCross: nextBeep });
+        }
+        return;
+      }
+      const beepResetBtn = target.closest<HTMLButtonElement>("[data-beep-reset]");
+      if (beepResetBtn && this.scope !== null) {
+        const nextOvr = { ...this.overridesOf(this.store.node(this.scope)) };
+        delete nextOvr.beepOnCross;
+        void this.api.setGateRules(this.scope, nextOvr);
         return;
       }
       const toggleBtn = target.closest<HTMLButtonElement>("[data-override-toggle]");
@@ -258,6 +294,10 @@ export class TimingRulesEditor extends Component {
         </div>`;
     }).join("");
 
+    const beepRow = gate
+      ? this.renderGateBeepRow(r, overrides)
+      : this.renderGlobalBeepRow(r);
+
     const foot = gate
       ? `<p class="note">Edited rules apply only to ${esc(gateLabel(this.store, gate.gateId))}.</p>
          <button class="btn btn-ghost btn-sm" type="button" data-action="clear">Restore defaults</button>`
@@ -271,9 +311,68 @@ export class TimingRulesEditor extends Component {
       </div>
       <form class="rules">
         ${rows}
+        ${beepRow}
         <div class="rules-foot">${foot}</div>
       </form>`;
     this.renderCounts();
+  }
+
+  private renderGlobalBeepRow(r: TimingRules): string {
+    const isOn = Boolean(r.beepOnCross);
+    const overList = this.store.nodes
+      .filter((p) => this.overridesOf(p).beepOnCross !== undefined)
+      .map((p) => `${esc(gateLabel(this.store, p.gateId))} ${this.overridesOf(p).beepOnCross ? "ON" : "OFF"}`);
+    return `
+      <div class="rule-row ${isOn ? "is-overridden" : ""}">
+        <div class="rule-text">
+          <div class="rule-label">Beep on crossing</div>
+          <div class="rule-help">Plays an instant high-priority synthetic tone when a crossing is detected (works in Practice and Races, without TTS delay).</div>
+          <div class="rule-meta">
+            ${overList.length ? `<div class="rule-override-note">Overridden at ${overList.join(", ")}</div>` : ""}
+          </div>
+        </div>
+        <div class="rule-input rule-switch-wrap">
+          <button
+            type="button"
+            role="switch"
+            aria-checked="${isOn}"
+            class="scope-tune-retro-toggle is-compact ${isOn ? "is-on" : ""}"
+            data-beep-toggle
+          >
+            <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
+            <span class="mono">${isOn ? "ON" : "OFF"}</span>
+          </button>
+        </div>
+      </div>`;
+  }
+
+  private renderGateBeepRow(r: TimingRules, overrides: GateRuleOverrides): string {
+    const hasOwn = overrides.beepOnCross !== undefined;
+    const effOn = hasOwn ? Boolean(overrides.beepOnCross) : Boolean(r.beepOnCross);
+    return `
+      <div class="rule-row ${hasOwn ? "is-overridden" : ""}">
+        <div class="rule-text">
+          <div class="rule-label">Beep on crossing</div>
+          <div class="rule-help">Plays an instant high-priority synthetic tone when a crossing is detected at this timer (${hasOwn ? `custom, global is ${r.beepOnCross ? "ON" : "OFF"}` : `inherits ${r.beepOnCross ? "ON" : "OFF"}`}).</div>
+        </div>
+        <div class="rule-input rule-switch-wrap">
+          <button
+            type="button"
+            role="switch"
+            aria-checked="${effOn}"
+            class="scope-tune-retro-toggle is-compact ${effOn ? "is-on" : ""}"
+            data-beep-toggle
+          >
+            <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
+            <span class="mono">${effOn ? "ON" : "OFF"}</span>
+          </button>
+          ${
+            hasOwn
+              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-beep-reset title="Revert to All timers default (${r.beepOnCross ? "ON" : "OFF"})" aria-label="Revert Beep on crossing">${icons.reset(13)}</button>`
+              : ""
+          }
+        </div>
+      </div>`;
   }
 
   /** A rule for one timer: click the inline pencil icon inside the input to edit/override, or reset icon to revert. */
@@ -368,11 +467,15 @@ export class TimingRulesEditor extends Component {
       return;
     }
     // Only unlocked/edited rules become overrides (disabled inputs aren't in the form data).
+    const prevOvr = this.overridesOf(this.store.node(this.scope));
     const overrides: GateRuleOverrides = {};
+    if (prevOvr.beepOnCross !== undefined) {
+      overrides.beepOnCross = prevOvr.beepOnCross;
+    }
     for (const spec of RULES) {
       if (!spec.perGate) continue;
       const v = data.get(spec.key);
-      if (v !== null && v !== "") overrides[spec.key as GateRuleKey] = Number(v);
+      if (v !== null && v !== "") overrides[spec.key as NumericGateRuleKey] = Number(v);
     }
     await this.api.setGateRules(this.scope, overrides);
   }

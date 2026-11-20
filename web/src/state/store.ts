@@ -83,6 +83,7 @@ const DEFAULT_RULES: TimingRules = {
   minSectionSec: 0.5,
   echoWindowSec: 3,
   minPassHoldSec: 0.12,
+  beepOnCross: false,
 };
 
 const DEFAULT_RACE_STATE: RaceTournamentState = {
@@ -343,6 +344,7 @@ export class AppStore {
   private readonly lastCrossingBySlot = new Map<number, GateCrossingEvent>();
   private readonly listeners = new Map<Topic, Set<Listener>>();
   private readonly lapListeners = new Set<LapListener>();
+  private readonly crossingListeners = new Set<CrossingListener>();
   private readonly startGateListeners = new Set<CrossingListener>();
   private readonly raceAnnouncementListeners = new Set<RaceAnnouncementListener>();
 
@@ -425,6 +427,12 @@ export class AppStore {
   public onLapRecorded(fn: LapListener): () => void {
     this.lapListeners.add(fn);
     return () => this.lapListeners.delete(fn);
+  }
+
+  /** Fires immediately whenever any live gate crossing is accepted (Practice or Race). */
+  public onGateCrossing(fn: CrossingListener): () => void {
+    this.crossingListeners.add(fn);
+    return () => this.crossingListeners.delete(fn);
   }
 
   /**
@@ -999,6 +1007,9 @@ export class AppStore {
       },
       onLapRecorded: {
         value: base.onLapRecorded.bind(base),
+      },
+      onGateCrossing: {
+        value: base.onGateCrossing.bind(base),
       },
       onStartGateDetected: {
         value: base.onStartGateDetected.bind(base),
@@ -1750,6 +1761,7 @@ export class AppStore {
       this._latestTimestampUs = ev.timestampUs;
     }
     this.lastCrossingBySlot.set(ev.slotIndex, ev);
+    this.crossingListeners.forEach((fn) => fn(ev));
     this.emit("crossings");
     if (ev.startedLap) {
       this.startGateListeners.forEach((fn) => fn(ev));
