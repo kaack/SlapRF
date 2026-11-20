@@ -1,5 +1,5 @@
 import { CanvasSurface } from "../core/canvas";
-import { computeDirectionalPinch, computeWheelZoomFactors, PinchPoint } from "../core/chart_pinch";
+import { computeDirectionalPinch, computeWheelZoomFactors, PinchPoint, scrollOuterPageBy } from "../core/chart_pinch";
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
@@ -365,12 +365,17 @@ export class PilotRssiChart extends Component {
       startMs: number;
       moved: boolean;
     } | null = null;
-    const touchPts = new Map<number, PinchPoint>();
+    const touchPts = new Map<number, PinchPoint & { clientX: number; clientY: number }>();
     let pinchState: {
       id1: number;
       id2: number;
       p1Start: PinchPoint;
       p2Start: PinchPoint;
+      p1ClientStart: PinchPoint;
+      p2ClientStart: PinchPoint;
+      lastMidClientY: number;
+      pageScrollLocked: boolean;
+      pinchLocked: boolean;
       wasLive: boolean;
       startEndUs: number;
       startWindowUs: number;
@@ -427,7 +432,7 @@ export class PilotRssiChart extends Component {
       const y = e.clientY - r.top;
 
       if (e.pointerType === "touch") {
-        touchPts.set(e.pointerId, { x, y });
+        touchPts.set(e.pointerId, { x, y, clientX: e.clientX, clientY: e.clientY });
         if (touchPts.size === 1) {
           tapCandidate = {
             pointerId: e.pointerId,
@@ -452,8 +457,13 @@ export class PilotRssiChart extends Component {
           pinchState = {
             id1,
             id2,
-            p1Start: { ...pt1 },
-            p2Start: { ...pt2 },
+            p1Start: { x: pt1.x, y: pt1.y },
+            p2Start: { x: pt2.x, y: pt2.y },
+            p1ClientStart: { x: pt1.clientX, y: pt1.clientY },
+            p2ClientStart: { x: pt2.clientX, y: pt2.clientY },
+            lastMidClientY: (pt1.clientY + pt2.clientY) * 0.5,
+            pageScrollLocked: false,
+            pinchLocked: false,
             wasLive: this.endUs === null,
             startEndUs: this.viewEnd(),
             startWindowUs: this.windowUs,
@@ -539,7 +549,7 @@ export class PilotRssiChart extends Component {
       const y = e.clientY - r.top;
 
       if (e.pointerType === "touch" && touchPts.has(e.pointerId)) {
-        touchPts.set(e.pointerId, { x, y });
+        touchPts.set(e.pointerId, { x, y, clientX: e.clientX, clientY: e.clientY });
         if (
           tapCandidate &&
           tapCandidate.pointerId === e.pointerId &&
@@ -551,7 +561,40 @@ export class PilotRssiChart extends Component {
           const p1Now = touchPts.get(pinchState.id1);
           const p2Now = touchPts.get(pinchState.id2);
           if (p1Now && p2Now) {
+            const clientPinch = computeDirectionalPinch(
+              pinchState.p1ClientStart,
+              pinchState.p2ClientStart,
+              { x: p1Now.clientX, y: p1Now.clientY },
+              { x: p2Now.clientX, y: p2Now.clientY }
+            );
+            const curMidClientY = (p1Now.clientY + p2Now.clientY) * 0.5;
+            const dyClient = curMidClientY - pinchState.lastMidClientY;
+            pinchState.lastMidClientY = curMidClientY;
+            const d1y = p1Now.clientY - pinchState.p1ClientStart.y;
+            const d2y = p2Now.clientY - pinchState.p2ClientStart.y;
+            const bothMovedSameVert = (d1y > 4 && d2y > 4) || (d1y < -4 && d2y < -4);
+
+            if (
+              !pinchState.pinchLocked &&
+              (pinchState.pageScrollLocked || (clientPinch.mode === "page-scroll" && bothMovedSameVert))
+            ) {
+              pinchState.pageScrollLocked = true;
+              scrollOuterPageBy(-dyClient, host);
+              return;
+            }
+            const d0 = Math.hypot(
+              pinchState.p2ClientStart.x - pinchState.p1ClientStart.x,
+              pinchState.p2ClientStart.y - pinchState.p1ClientStart.y
+            );
+            const dNow = Math.hypot(p2Now.clientX - p1Now.clientX, p2Now.clientY - p1Now.clientY);
+            if (Math.abs(dNow - d0) >= 14) {
+              pinchState.pinchLocked = true;
+            }
+
             const pinch = computeDirectionalPinch(pinchState.p1Start, pinchState.p2Start, p1Now, p2Now);
+            if (pinch.mode === "page-scroll") {
+              return;
+            }
             if (pinch.mode === "x" || pinch.mode === "xy") {
               this.autoX = false;
               const nextWin = Math.max(
@@ -695,11 +738,12 @@ export class PilotRssiChart extends Component {
         }
 
         if (pinchState !== null) {
+          const wasPageScroll = pinchState.pageScrollLocked;
           if (touchPts.size < 2) {
             pinchState = null;
             this.saveChartPrefs();
             this.renderControls();
-            if (touchPts.size === 1) {
+            if (touchPts.size === 1 && !wasPageScroll) {
               const remPt = Array.from(touchPts.values())[0];
               this.drag = {
                 mode: "pan",

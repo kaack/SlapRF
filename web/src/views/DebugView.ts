@@ -1,4 +1,4 @@
-import { computeDirectionalPinch, computeWheelZoomFactors, PinchPoint } from "../core/chart_pinch";
+import { computeDirectionalPinch, computeWheelZoomFactors, PinchPoint, scrollOuterPageBy } from "../core/chart_pinch";
 import { Component } from "../core/component";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
@@ -1896,13 +1896,21 @@ export class DebugView extends Component {
       moved: boolean;
     } | null = null;
 
-    const debugTouchPts = new Map<number, { kind: DebugCanvasKind; x: number; y: number; clientY: number }>();
+    const debugTouchPts = new Map<
+      number,
+      { kind: DebugCanvasKind; x: number; y: number; clientX: number; clientY: number }
+    >();
     let debugPinch: {
       kind: DebugCanvasKind;
       id1: number;
       id2: number;
       p1Start: PinchPoint;
       p2Start: PinchPoint;
+      p1ClientStart: PinchPoint;
+      p2ClientStart: PinchPoint;
+      lastMidClientY: number;
+      pageScrollLocked: boolean;
+      pinchLocked: boolean;
       wasSignalLive: boolean;
       startEndN: number;
       startWindowSec: number;
@@ -1929,7 +1937,13 @@ export class DebugView extends Component {
         const r = target.getBoundingClientRect();
         const lx = e.clientX - r.left;
         const ly = e.clientY - r.top;
-        debugTouchPts.set(e.pointerId, { kind: canvasKind, x: lx, y: ly, clientY: e.clientY });
+        debugTouchPts.set(e.pointerId, {
+          kind: canvasKind,
+          x: lx,
+          y: ly,
+          clientX: e.clientX,
+          clientY: e.clientY,
+        });
 
         const sameKindPts = Array.from(debugTouchPts.entries()).filter(([, v]) => v.kind === canvasKind);
         if (sameKindPts.length === 1) {
@@ -1967,6 +1981,11 @@ export class DebugView extends Component {
             id2,
             p1Start: { x: pt1.x, y: pt1.y },
             p2Start: { x: pt2.x, y: pt2.y },
+            p1ClientStart: { x: pt1.clientX, y: pt1.clientY },
+            p2ClientStart: { x: pt2.clientX, y: pt2.clientY },
+            lastMidClientY: (pt1.clientY + pt2.clientY) * 0.5,
+            pageScrollLocked: false,
+            pinchLocked: false,
             wasSignalLive: this.signalEndN === null,
             startEndN: this.signalViewEndN(),
             startWindowSec: this.signalWindowSec,
@@ -2236,6 +2255,7 @@ export class DebugView extends Component {
           const remSame = Array.from(debugTouchPts.values()).filter((v) => v.kind === debugPinch!.kind);
           if (remSame.length < 2) {
             const finishedKind = debugPinch.kind;
+            const wasPageScroll = debugPinch.pageScrollLocked;
             debugPinch = null;
             if (finishedKind === "signal") {
               this.renderSignalControls();
@@ -2244,7 +2264,7 @@ export class DebugView extends Component {
               this.renderScan();
             }
             this.saveDebugPrefs();
-            if (remSame.length === 1) {
+            if (remSame.length === 1 && !wasPageScroll) {
               const rem = remSame[0];
               if (finishedKind === "signal") {
                 this.signalDrag = {
@@ -2415,7 +2435,13 @@ export class DebugView extends Component {
           const r = canvasEl.getBoundingClientRect();
           const lx = e.clientX - r.left;
           const ly = e.clientY - r.top;
-          debugTouchPts.set(e.pointerId, { kind: entry.kind, x: lx, y: ly, clientY: e.clientY });
+          debugTouchPts.set(e.pointerId, {
+            kind: entry.kind,
+            x: lx,
+            y: ly,
+            clientX: e.clientX,
+            clientY: e.clientY,
+          });
           if (
             tapCandidate &&
             tapCandidate.pointerId === e.pointerId &&
@@ -2428,12 +2454,45 @@ export class DebugView extends Component {
             const p1 = debugTouchPts.get(debugPinch.id1);
             const p2 = debugTouchPts.get(debugPinch.id2);
             if (p1 && p2) {
+              const clientPinch = computeDirectionalPinch(
+                debugPinch.p1ClientStart,
+                debugPinch.p2ClientStart,
+                { x: p1.clientX, y: p1.clientY },
+                { x: p2.clientX, y: p2.clientY }
+              );
+              const curMidClientY = (p1.clientY + p2.clientY) * 0.5;
+              const dyClient = curMidClientY - debugPinch.lastMidClientY;
+              debugPinch.lastMidClientY = curMidClientY;
+              const d1y = p1.clientY - debugPinch.p1ClientStart.y;
+              const d2y = p2.clientY - debugPinch.p2ClientStart.y;
+              const bothMovedSameVert = (d1y > 4 && d2y > 4) || (d1y < -4 && d2y < -4);
+
+              if (
+                !debugPinch.pinchLocked &&
+                (debugPinch.pageScrollLocked || (clientPinch.mode === "page-scroll" && bothMovedSameVert))
+              ) {
+                debugPinch.pageScrollLocked = true;
+                scrollOuterPageBy(-dyClient, canvasEl);
+                return;
+              }
+              const d0 = Math.hypot(
+                debugPinch.p2ClientStart.x - debugPinch.p1ClientStart.x,
+                debugPinch.p2ClientStart.y - debugPinch.p1ClientStart.y
+              );
+              const dNow = Math.hypot(p2.clientX - p1.clientX, p2.clientY - p1.clientY);
+              if (Math.abs(dNow - d0) >= 14) {
+                debugPinch.pinchLocked = true;
+              }
+
               const pinch = computeDirectionalPinch(
                 debugPinch.p1Start,
                 debugPinch.p2Start,
                 { x: p1.x, y: p1.y },
                 { x: p2.x, y: p2.y }
               );
+              if (pinch.mode === "page-scroll") {
+                return;
+              }
               const T = 12;
               const L = 32;
               const rightPad = debugPinch.kind === "waterfall" ? 14 : 4;
@@ -6887,7 +6946,7 @@ export class DebugView extends Component {
               </label>
               <label class="check" title="Show running average trace">
                 <input type="checkbox" data-check="scan-avg" ${this.scanShowAvg ? "checked" : ""}/>
-                <span><span class="debug-hint-desktop">Average</span><span class="debug-hint-mobile">Avg</span></span>
+                <span>Average</span>
               </label>
               <label class="check" title="Show 5 GHz Wi-Fi UNII band overlay">
                 <input type="checkbox" data-check="scan-wifi" ${this.scanShowWifi ? "checked" : ""}/>

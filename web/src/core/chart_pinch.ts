@@ -8,7 +8,7 @@ export interface PinchPoint {
   y: number;
 }
 
-export type PinchAxisMode = "x" | "y" | "xy";
+export type PinchAxisMode = "x" | "y" | "xy" | "page-scroll";
 
 export interface DirectionalPinchResult {
   mode: PinchAxisMode;
@@ -37,8 +37,8 @@ const VERTICAL_CONE_DEG = 66;
 const CROSS_AXIS_UNLOCK_PX = 24;
 
 /**
- * Computes directional X, Y, or simultaneous X+Y span multipliers from initial and current
- * 2-finger coordinates (in element-local CSS pixels).
+ * Computes directional X, Y, simultaneous X+Y span multipliers, or a 2-finger parallel vertical
+ * page-scroll gesture from initial and current 2-finger coordinates (in element-local CSS pixels).
  */
 export function computeDirectionalPinch(
   p1Start: PinchPoint,
@@ -60,6 +60,41 @@ export function computeDirectionalPinch(
   const effY = Math.max(dy0, dy);
   const deltaX = Math.abs(dx - dx0);
   const deltaY = Math.abs(dy - dy0);
+
+  // Detect parallel 2-finger vertical page scroll: both fingers move together in the same vertical
+  // direction while their separation stays nearly constant (no significant pinch spread/squeeze).
+  const d1y = p1Now.y - p1Start.y;
+  const d2y = p2Now.y - p2Start.y;
+  const d0 = Math.hypot(p2Start.x - p1Start.x, p2Start.y - p1Start.y);
+  const dNow = Math.hypot(p2Now.x - p1Now.x, p2Now.y - p1Now.y);
+  const distChange = Math.abs(dNow - d0);
+  const midMoveY = Math.abs(midY - startMidY);
+  const midMoveX = Math.abs(midX - startMidX);
+  const sameVerticalDir = (d1y > 2 && d2y > 2) || (d1y < -2 && d2y < -2);
+  const bothMovedOrUndecided =
+    (Math.abs(d1y) < 3 || Math.abs(d2y) < 3) &&
+    midMoveY < 18 &&
+    midMoveY > midMoveX &&
+    distChange < 12;
+  if (
+    bothMovedOrUndecided ||
+    (sameVerticalDir &&
+      midMoveY >= 6 &&
+      midMoveY > midMoveX * 1.15 &&
+      distChange < Math.max(18, midMoveY * 0.55) &&
+      deltaX < Math.max(18, midMoveY * 0.55) &&
+      deltaY < Math.max(18, midMoveY * 0.55))
+  ) {
+    return {
+      mode: "page-scroll",
+      xSpanFactor: 1,
+      ySpanFactor: 1,
+      startMidX,
+      startMidY,
+      midX,
+      midY,
+    };
+  }
 
   let mode: PinchAxisMode = "xy";
   if (effX + effY >= 8) {
@@ -141,3 +176,25 @@ export function computeWheelZoomFactors(e: {
   }
   return { mode: "xy", xSpanFactor: stepFactor, ySpanFactor: stepFactor };
 }
+
+/**
+ * Scrolls the active outer page container (or an open top-level modal dialog container) vertically
+ * during a 2-finger parallel page-scroll gesture, bypassing nested scrollable boxes and charts.
+ */
+export function scrollOuterPageBy(deltaY: number, originTarget?: EventTarget | null): void {
+  if (!Number.isFinite(deltaY) || Math.abs(deltaY) < 0.25) return;
+  const el = originTarget instanceof Element ? originTarget : null;
+  if (el) {
+    const modalContainer = el.closest<HTMLElement>(
+      ".lap-editor-card, .slaprf-modal-body, .modal-body, .slaprf-modal-backdrop, .modal-backdrop"
+    );
+    if (modalContainer && modalContainer.scrollHeight > modalContainer.clientHeight + 2) {
+      modalContainer.scrollTop += deltaY;
+      return;
+    }
+  }
+  if (typeof window !== "undefined" && typeof window.scrollBy === "function") {
+    window.scrollBy(0, deltaY);
+  }
+}
+

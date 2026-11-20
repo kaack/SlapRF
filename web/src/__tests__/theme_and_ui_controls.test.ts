@@ -474,6 +474,17 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
     expect(diag.xSpanFactor < 0.65).toBe(true);
     expect(diag.ySpanFactor < 0.65).toBe(true);
 
+    // 3b. Pure math: parallel 2-finger vertical movement -> page-scroll mode without zooming X or Y
+    const parallelDown = computeDirectionalPinch(
+      { x: 110, y: 120 },
+      { x: 190, y: 124 },
+      { x: 112, y: 80 },
+      { x: 191, y: 83 }
+    );
+    expect(parallelDown.mode).toBe("page-scroll");
+    expect(parallelDown.xSpanFactor).toBe(1);
+    expect(parallelDown.ySpanFactor).toBe(1);
+
     // 4. Close-finger pinch-out (< 16px initial gap) stays finite & smooth
     const closeStart = computeDirectionalPinch(
       { x: 145, y: 120 },
@@ -597,6 +608,21 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
       saved = JSON.parse(localStorage.getItem(RSSI_PREF_KEY) || "{}");
       expect(saved.autoX).toBe(false);
       expect(saved.autoY).toBe(false);
+
+      // Reset and run a parallel 2-finger vertical scroll over the chart -> scrolls outer page without altering chart autoX / autoY
+      chart.restoreDefaults();
+      fireTouch("pointerdown", 7, 130, 140);
+      fireTouch("pointerdown", 8, 210, 142);
+      fireTouch("pointermove", 7, 130, 128);
+      fireTouch("pointermove", 8, 210, 130);
+      fireTouch("pointermove", 7, 131, 90);
+      fireTouch("pointermove", 8, 211, 92);
+      fireTouch("pointerup", 8, 211, 92);
+      fireTouch("pointerup", 7, 131, 90);
+
+      saved = JSON.parse(localStorage.getItem(RSSI_PREF_KEY) || "{}");
+      expect(saved.autoX).toBe(true);
+      expect(saved.autoY).toBe(true);
 
       // Verify .net-metric-pair inside .badge preserves a clean visual gap (>= 3px) and identical total width across 1..5 chars
       const metricBox = mountHtml(`

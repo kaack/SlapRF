@@ -1,4 +1,4 @@
-import { computeDirectionalPinch, computeWheelZoomFactors, PinchPoint } from "../core/chart_pinch";
+import { computeDirectionalPinch, computeWheelZoomFactors, PinchPoint, scrollOuterPageBy } from "../core/chart_pinch";
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
@@ -1556,12 +1556,20 @@ export function openHeatLapEditorModal(
     }
   };
 
-  const touchPts = new Map<number, { px: PinchPoint; svgX: number; svgY: number }>();
+  const touchPts = new Map<
+    number,
+    { px: PinchPoint; client: PinchPoint; svgX: number; svgY: number }
+  >();
   let pinchState: {
     id1: number;
     id2: number;
     p1Start: PinchPoint;
     p2Start: PinchPoint;
+    p1ClientStart: PinchPoint;
+    p2ClientStart: PinchPoint;
+    lastMidClientY: number;
+    pageScrollLocked: boolean;
+    pinchLocked: boolean;
     startMinMs: number;
     startMaxMs: number;
     startMinDbm: number;
@@ -1587,6 +1595,7 @@ export function openHeatLapEditorModal(
       const svgRect = svg.getBoundingClientRect();
       touchPts.set(e.pointerId, {
         px: { x: e.clientX - svgRect.left, y: e.clientY - svgRect.top },
+        client: { x: e.clientX, y: e.clientY },
         svgX,
         svgY,
       });
@@ -1610,6 +1619,11 @@ export function openHeatLapEditorModal(
           id2,
           p1Start: { ...pt1.px },
           p2Start: { ...pt2.px },
+          p1ClientStart: { ...pt1.client },
+          p2ClientStart: { ...pt2.client },
+          lastMidClientY: (pt1.client.y + pt2.client.y) * 0.5,
+          pageScrollLocked: false,
+          pinchLocked: false,
           startMinMs: lastDomain.minMs,
           startMaxMs: lastDomain.maxMs,
           startMinDbm: lastYDomain.minDbm,
@@ -1773,6 +1787,7 @@ export function openHeatLapEditorModal(
       const { svgX, svgY } = clientToSvgCoords(svg, e.clientX, e.clientY);
       touchPts.set(e.pointerId, {
         px: { x: e.clientX - svgRect.left, y: e.clientY - svgRect.top },
+        client: { x: e.clientX, y: e.clientY },
         svgX,
         svgY,
       });
@@ -1780,8 +1795,41 @@ export function openHeatLapEditorModal(
         const pt1 = touchPts.get(pinchState.id1);
         const pt2 = touchPts.get(pinchState.id2);
         if (pt1 && pt2) {
+          const clientPinch = computeDirectionalPinch(
+            pinchState.p1ClientStart,
+            pinchState.p2ClientStart,
+            pt1.client,
+            pt2.client
+          );
+          const curMidClientY = (pt1.client.y + pt2.client.y) * 0.5;
+          const dyClient = curMidClientY - pinchState.lastMidClientY;
+          pinchState.lastMidClientY = curMidClientY;
+          const d1y = pt1.client.y - pinchState.p1ClientStart.y;
+          const d2y = pt2.client.y - pinchState.p2ClientStart.y;
+          const bothMovedSameVert = (d1y > 4 && d2y > 4) || (d1y < -4 && d2y < -4);
+
+          if (
+            !pinchState.pinchLocked &&
+            (pinchState.pageScrollLocked || (clientPinch.mode === "page-scroll" && bothMovedSameVert))
+          ) {
+            pinchState.pageScrollLocked = true;
+            scrollOuterPageBy(-dyClient, svg);
+            return;
+          }
+          const d0 = Math.hypot(
+            pinchState.p2ClientStart.x - pinchState.p1ClientStart.x,
+            pinchState.p2ClientStart.y - pinchState.p1ClientStart.y
+          );
+          const dNow = Math.hypot(pt2.client.x - pt1.client.x, pt2.client.y - pt1.client.y);
+          if (Math.abs(dNow - d0) >= 14) {
+            pinchState.pinchLocked = true;
+          }
+
           const plotW = getPlotW();
           const pinch = computeDirectionalPinch(pinchState.p1Start, pinchState.p2Start, pt1.px, pt2.px);
+          if (pinch.mode === "page-scroll") {
+            return;
+          }
           if (pinch.mode === "x" || pinch.mode === "xy") {
             const startSpanMs = pinchState.startMaxMs - pinchState.startMinMs;
             const nextSpanMs = clamp(startSpanMs * pinch.xSpanFactor, MIN_X_SPAN_MS, MAX_X_SPAN_MS);
@@ -1917,8 +1965,9 @@ export function openHeatLapEditorModal(
           // Ignore
         }
         if (touchPts.size < 2) {
+          const wasPageScroll = pinchState.pageScrollLocked;
           pinchState = null;
-          if (touchPts.size === 1) {
+          if (touchPts.size === 1 && !wasPageScroll) {
             const [[remId, remPt]] = Array.from(touchPts.entries());
             viewDrag = {
               mode: "pan",

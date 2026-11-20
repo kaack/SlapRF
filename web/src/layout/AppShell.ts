@@ -1,3 +1,4 @@
+import { computeDirectionalPinch, PinchPoint, scrollOuterPageBy } from "../core/chart_pinch";
 import { Component } from "../core/component";
 import { scanCustomSelects } from "../core/custom_select";
 import {
@@ -618,6 +619,107 @@ export class AppShell extends Component {
     window.addEventListener("pointermove", onWindowPointerMove, { capture: true, passive: true });
     window.addEventListener("pointerup", onWindowPointerUp, { capture: true, passive: true });
     window.addEventListener("pointercancel", onWindowPointerCancel, { capture: true, passive: true });
+
+    // Universal 2-finger vertical page scrolling over nested scrollable elements and non-RF interactive containers.
+    // RF charts (.debug-canvas, .scope-canvas, [data-lap-ed-svg]) handle their own 2-finger page-scroll vs pinch.
+    let twoFingerScrollState: {
+      p1Start: PinchPoint;
+      p2Start: PinchPoint;
+      lastMidClientY: number;
+      target: EventTarget | null;
+      lockedMode: "none" | "page-scroll" | "pinch";
+      delegatedToChart: boolean;
+    } | null = null;
+
+    const isRfChartHandlingOwnTwoFingerScroll = (el: EventTarget | null): boolean => {
+      const node = el instanceof Element ? el : null;
+      if (!node) return false;
+      return Boolean(
+        node.closest(
+          "[data-signal-canvas], [data-spectrum-canvas], [data-waterfall-canvas], .scope-canvas, [data-lap-ed-svg]"
+        )
+      );
+    };
+
+    const onWindowTouchStart = (e: TouchEvent) => {
+      if (e.touches.length === 2) {
+        const t0 = e.touches[0];
+        const t1 = e.touches[1];
+        twoFingerScrollState = {
+          p1Start: { x: t0.clientX, y: t0.clientY },
+          p2Start: { x: t1.clientX, y: t1.clientY },
+          lastMidClientY: (t0.clientY + t1.clientY) * 0.5,
+          target: e.target,
+          lockedMode: "none",
+          delegatedToChart:
+            isRfChartHandlingOwnTwoFingerScroll(t0.target) ||
+            isRfChartHandlingOwnTwoFingerScroll(t1.target) ||
+            isRfChartHandlingOwnTwoFingerScroll(e.target),
+        };
+      } else {
+        twoFingerScrollState = null;
+      }
+    };
+
+    const onWindowTouchMove = (e: TouchEvent) => {
+      if (e.touches.length !== 2 || !twoFingerScrollState) {
+        return;
+      }
+      if (twoFingerScrollState.delegatedToChart || twoFingerScrollState.lockedMode === "pinch") {
+        return;
+      }
+      const t0 = e.touches[0];
+      const t1 = e.touches[1];
+      const p1Now = { x: t0.clientX, y: t0.clientY };
+      const p2Now = { x: t1.clientX, y: t1.clientY };
+      const curMidY = (t0.clientY + t1.clientY) * 0.5;
+      const dyClient = curMidY - twoFingerScrollState.lastMidClientY;
+      twoFingerScrollState.lastMidClientY = curMidY;
+
+      if (twoFingerScrollState.lockedMode === "none") {
+        const pinch = computeDirectionalPinch(
+          twoFingerScrollState.p1Start,
+          twoFingerScrollState.p2Start,
+          p1Now,
+          p2Now
+        );
+        const d1y = p1Now.y - twoFingerScrollState.p1Start.y;
+        const d2y = p2Now.y - twoFingerScrollState.p2Start.y;
+        const bothMovedSameVert = (d1y > 4 && d2y > 4) || (d1y < -4 && d2y < -4);
+        if (pinch.mode === "page-scroll" && bothMovedSameVert) {
+          twoFingerScrollState.lockedMode = "page-scroll";
+        } else {
+          const d0 = Math.hypot(
+            twoFingerScrollState.p2Start.x - twoFingerScrollState.p1Start.x,
+            twoFingerScrollState.p2Start.y - twoFingerScrollState.p1Start.y
+          );
+          const dNow = Math.hypot(p2Now.x - p1Now.x, p2Now.y - p1Now.y);
+          if (Math.abs(dNow - d0) >= 14) {
+            twoFingerScrollState.lockedMode = "pinch";
+            return;
+          }
+        }
+      }
+
+      if (twoFingerScrollState.lockedMode === "page-scroll") {
+        if (e.cancelable) {
+          e.preventDefault();
+        }
+        scrollOuterPageBy(-dyClient, twoFingerScrollState.target);
+      }
+    };
+
+    const onWindowTouchEnd = (e: TouchEvent) => {
+      if (e.touches.length < 2) {
+        twoFingerScrollState = null;
+      }
+    };
+
+    window.addEventListener("touchstart", onWindowTouchStart, { capture: true, passive: true });
+    window.addEventListener("touchmove", onWindowTouchMove, { capture: true, passive: false });
+    window.addEventListener("touchend", onWindowTouchEnd, { capture: true, passive: true });
+    window.addEventListener("touchcancel", onWindowTouchEnd, { capture: true, passive: true });
+
     this.onDispose(() => {
       window.removeEventListener("pointerdown", onWindowPointerDown, true);
       outlet.removeEventListener("pointerdown", onOutletPointerDown);
@@ -625,6 +727,10 @@ export class AppShell extends Component {
       window.removeEventListener("pointermove", onWindowPointerMove, true);
       window.removeEventListener("pointerup", onWindowPointerUp, true);
       window.removeEventListener("pointercancel", onWindowPointerCancel, true);
+      window.removeEventListener("touchstart", onWindowTouchStart, true);
+      window.removeEventListener("touchmove", onWindowTouchMove, true);
+      window.removeEventListener("touchend", onWindowTouchEnd, true);
+      window.removeEventListener("touchcancel", onWindowTouchEnd, true);
     });
   }
 
