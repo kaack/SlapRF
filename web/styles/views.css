@@ -3043,7 +3043,7 @@ html[data-theme="light"] .scope-tune-custom-icon {
 .scope-tune-card-controls {
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 12px;
   flex: 0 0 auto;
 }
 .scope-tune-stepper {
@@ -3173,6 +3173,14 @@ html[data-theme="light"] .scope-tune-custom-icon {
     overflow-y: auto;
     box-sizing: border-box;
     animation: pilot-drawer-slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+  .scope-tune-drawer.is-closing {
+    pointer-events: none;
+    animation: pilot-drawer-slide-down 0.2s cubic-bezier(0.32, 0, 0.67, 0) forwards !important;
+  }
+  .scope-tune-mobile-handle-bar,
+  .scope-tune-head {
+    touch-action: none;
   }
   html[data-theme="light"] .scope-tune-drawer {
     background: #ffffff;

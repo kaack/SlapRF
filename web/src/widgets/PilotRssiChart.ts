@@ -236,6 +236,8 @@ export class PilotRssiChart extends Component {
   private readonly tuneDrawerEl: HTMLElement;
   private tuningGateId: number | null = null;
   private tuningScope: "pilot" | "gate" = "pilot";
+  private tuneDrawerClosing = false;
+  private tuneDrawerCloseTimer: number | null = null;
   private readonly labelWidthCache = new Map<string, number>();
   private cachedLabelSig = "";
   private cachedLabelRows = new Map<string, number>();
@@ -383,6 +385,10 @@ export class PilotRssiChart extends Component {
 
     this.tuneDrawerEl = this.slot("tune-drawer");
     this.onDispose(() => {
+      if (this.tuneDrawerCloseTimer !== null) {
+        window.clearTimeout(this.tuneDrawerCloseTimer);
+        this.tuneDrawerCloseTimer = null;
+      }
       if (this.tuneDrawerEl.parentElement && this.tuneDrawerEl.parentElement !== this.el) {
         this.tuneDrawerEl.remove();
       }
@@ -415,10 +421,7 @@ export class PilotRssiChart extends Component {
         return;
       }
       if (btn.dataset.tuneAct === "close") {
-        this.tuningGateId = null;
-        this.renderCalib();
-        this.renderLegend();
-        this.renderTuningDrawer();
+        this.dismissMobileTuneDrawer();
         return;
       }
       if (btn.dataset.tuneAct === "toggle-beep") {
@@ -439,33 +442,26 @@ export class PilotRssiChart extends Component {
 
     let drawerSwipeStartY: number | null = null;
     this.listen(this.tuneDrawerEl, "pointerdown", (e: PointerEvent) => {
-      if (!this.isMobileLayout || this.tuningGateId === null) return;
+      if (!this.isMobileLayout || this.tuningGateId === null || this.tuneDrawerClosing) return;
       const target = e.target as HTMLElement | null;
       if (!target || !target.closest(".scope-tune-mobile-handle-bar, .scope-tune-head")) return;
       if (target.closest("button:not(.pilot-dir-mobile-drawer-handle)")) return;
+      if (e.button !== 0 && e.pointerType === "mouse") return;
       drawerSwipeStartY = e.clientY;
     });
-    this.listen(this.tuneDrawerEl, "pointermove", (e: PointerEvent) => {
-      if (drawerSwipeStartY === null) return;
-      const dy = Math.max(0, e.clientY - drawerSwipeStartY);
-      if (dy > 4) {
-        this.tuneDrawerEl.style.transform = `translateY(${Math.round(dy)}px)`;
-      }
-    });
-    const endDrawerSwipe = (e: PointerEvent) => {
+    this.listen(window as unknown as HTMLElement, "pointermove", (e: PointerEvent) => {
       if (drawerSwipeStartY === null) return;
       const dy = e.clientY - drawerSwipeStartY;
-      drawerSwipeStartY = null;
-      this.tuneDrawerEl.style.removeProperty("transform");
-      if (dy > 52) {
-        this.tuningGateId = null;
-        this.renderCalib();
-        this.renderLegend();
-        this.renderTuningDrawer();
+      if (dy >= 22) {
+        drawerSwipeStartY = null;
+        this.dismissMobileTuneDrawer();
       }
+    });
+    const endDrawerSwipe = () => {
+      drawerSwipeStartY = null;
     };
-    this.listen(this.tuneDrawerEl, "pointerup", endDrawerSwipe);
-    this.listen(this.tuneDrawerEl, "pointercancel", endDrawerSwipe);
+    this.listen(window as unknown as HTMLElement, "pointerup", endDrawerSwipe);
+    this.listen(window as unknown as HTMLElement, "pointercancel", endDrawerSwipe);
 
     this.listen(this.tuneDrawerEl, "change", (e) => {
       const target = e.target;
@@ -497,15 +493,21 @@ export class PilotRssiChart extends Component {
       if (!btn) return;
       if (btn.dataset.tuneGate) {
         const gId = Number(btn.dataset.tuneGate);
-        if (this.tuningGateId === gId) {
-          this.tuningGateId = null;
-        } else {
-          this.tuningGateId = gId;
-          if (this.focus !== gId) {
-            this.focus = gId;
-            this.calibMessage = "";
-            this.saveChartPrefs();
-          }
+        if (this.tuningGateId === gId && !this.tuneDrawerClosing) {
+          this.dismissMobileTuneDrawer();
+          return;
+        }
+        if (this.tuneDrawerCloseTimer !== null) {
+          window.clearTimeout(this.tuneDrawerCloseTimer);
+          this.tuneDrawerCloseTimer = null;
+        }
+        this.tuneDrawerClosing = false;
+        this.tuneDrawerEl.classList.remove("is-closing");
+        this.tuningGateId = gId;
+        if (this.focus !== gId) {
+          this.focus = gId;
+          this.calibMessage = "";
+          this.saveChartPrefs();
         }
         this.renderControls();
         this.renderCalib();
@@ -2721,10 +2723,39 @@ export class PilotRssiChart extends Component {
     }
   }
 
+  private dismissMobileTuneDrawer(): void {
+    if (this.tuningGateId === null || this.tuneDrawerClosing) return;
+    if (!this.isMobileLayout) {
+      this.tuningGateId = null;
+      this.renderCalib();
+      this.renderLegend();
+      this.renderTuningDrawer();
+      return;
+    }
+    this.tuneDrawerClosing = true;
+    this.tuneDrawerEl.classList.add("is-closing");
+    if (this.tuneDrawerCloseTimer !== null) {
+      window.clearTimeout(this.tuneDrawerCloseTimer);
+    }
+    this.tuneDrawerCloseTimer = window.setTimeout(() => {
+      this.tuneDrawerCloseTimer = null;
+      if (!this.tuneDrawerClosing) return;
+      this.tuneDrawerClosing = false;
+      this.tuneDrawerEl.classList.remove("is-closing");
+      this.tuningGateId = null;
+      this.renderCalib();
+      this.renderLegend();
+      this.renderTuningDrawer();
+    }, 200);
+  }
+
   /** Renders the fine-tuning box (always visible below Signal at each timer on desktop; bottom drawer on mobile). */
   private renderTuningDrawer(): void {
     this.syncTuneDrawerPlacement();
     const drawerEl = this.tuneDrawerEl;
+    if (this.tuneDrawerClosing) {
+      return;
+    }
     if (this.isMultiPilotMode || this.store.isHistoricalTrack) {
       drawerEl.hidden = true;
       drawerEl.classList.add("is-mobile-closed");
