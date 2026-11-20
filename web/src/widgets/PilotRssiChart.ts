@@ -2802,16 +2802,19 @@ export class PilotRssiChart extends Component {
           <div class="scope-tune-card-help">Instant synthetic WebAudio tone on detection (zero TTS delay, works in Practice and Races).</div>
         </div>
         <div class="scope-tune-card-controls">
-          <button
-            type="button"
-            role="switch"
-            aria-checked="${beepEffOn}"
-            class="scope-tune-switch ${beepEffOn ? "is-on" : ""}"
-            data-tune-act="toggle-beep"
-            aria-label="Beep on crossing"
-          >
-            <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
-          </button>
+          <div class="scope-tune-switch-slot">
+            <button
+              type="button"
+              role="switch"
+              aria-checked="${beepEffOn}"
+              class="scope-tune-switch ${beepEffOn ? "is-on" : ""}"
+              data-tune-act="toggle-beep"
+              aria-label="Beep on crossing"
+            >
+              <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
+            </button>
+          </div>
+          <span class="scope-tune-reset-spacer" aria-hidden="true"></span>
         </div>
       </div>`;
 

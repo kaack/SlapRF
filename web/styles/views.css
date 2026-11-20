@@ -2944,6 +2944,13 @@ html[data-theme="light"] .scope-tune-badge {
   border-color: rgba(2, 132, 199, 0.36);
 }
 
+.scope-tune-switch-slot {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 112px;
+  flex: 0 0 112px;
+}
 .scope-tune-switch {
   display: inline-flex;
   align-items: center;
@@ -2961,7 +2968,7 @@ html[data-theme="light"] .scope-tune-badge {
   border-radius: 999px;
   border: 1px solid var(--border-strong);
   background: var(--surface);
-  transition: background-color 0.16s, border-color 0.16s;
+  transition: background-color 0.16s ease, border-color 0.16s ease;
 }
 .scope-tune-switch-thumb {
   position: absolute;
@@ -2971,22 +2978,22 @@ html[data-theme="light"] .scope-tune-badge {
   height: 16px;
   border-radius: 50%;
   background: var(--text-3);
-  transition: transform 0.16s, background-color 0.16s;
+  transition: transform 0.18s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.16s ease;
 }
 .scope-tune-switch.is-on .scope-tune-switch-track {
-  border-color: rgba(56, 189, 248, 0.45);
-  background: rgba(56, 189, 248, 0.22);
+  border-color: var(--border-strong);
+  background: #2b303a;
 }
 .scope-tune-switch.is-on .scope-tune-switch-thumb {
   transform: translateX(16px);
-  background: #38bdf8;
+  background: var(--text);
 }
 html[data-theme="light"] .scope-tune-switch.is-on .scope-tune-switch-track {
-  border-color: rgba(2, 132, 199, 0.45);
-  background: rgba(2, 132, 199, 0.18);
+  border-color: var(--border-strong);
+  background: #e4e9f1;
 }
 html[data-theme="light"] .scope-tune-switch.is-on .scope-tune-switch-thumb {
-  background: #0284c7;
+  background: var(--text-2);
 }
 .rule-switch-wrap {
   display: flex;
