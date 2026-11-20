@@ -442,7 +442,9 @@ export class RotorHazardHardwareLink {
       return [];
     }
 
-    const resp = await fetch(resolveBackendUrl(`/api/usb/ports${showAll ? "?all=1" : ""}`), {
+    const resp = await fetch(
+      resolveBackendUrl(`/api/usb/ports?transport=usb${showAll ? "&all=1" : ""}`),
+      {
       method: "GET",
       headers: { Accept: "application/json" },
       cache: "no-store",

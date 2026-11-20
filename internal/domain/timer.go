@@ -15,12 +15,14 @@ const (
 )
 
 // TimingHardwareMode selects which timing hardware backend drives an engine:
-// "slaprf" (XIAO ESP32-C5 Hub + ESP-NOW Gates), "laprf" (LapRF 8-Way timers),
-// "rotorhazard" (RotorHazard network devices), or "rotorhazard_usb" (RotorHazard USB serial nodes).
+// "slaprf" (XIAO ESP32-C5 Hub + ESP-NOW Gates over USB), "slaprf_ble" (XIAO ESP32-C5 Bluetooth Hub),
+// "laprf" (LapRF 8-Way timers), "rotorhazard" (RotorHazard network devices),
+// or "rotorhazard_usb" (RotorHazard USB serial nodes).
 type TimingHardwareMode string
 
 const (
 	HardwareModeSlapRF         TimingHardwareMode = "slaprf"
+	HardwareModeSlapRFBLE      TimingHardwareMode = "slaprf_ble"
 	HardwareModeLapRF          TimingHardwareMode = "laprf"
 	HardwareModeRotorHazard    TimingHardwareMode = "rotorhazard"
 	HardwareModeRotorHazardUSB TimingHardwareMode = "rotorhazard_usb"
@@ -29,6 +31,8 @@ const (
 // NormalizeTimingHardwareMode canonicalizes a hardware mode value, defaulting to "slaprf".
 func NormalizeTimingHardwareMode(m TimingHardwareMode) TimingHardwareMode {
 	switch m {
+	case HardwareModeSlapRFBLE:
+		return HardwareModeSlapRFBLE
 	case HardwareModeLapRF:
 		return HardwareModeLapRF
 	case HardwareModeRotorHazard:
@@ -38,6 +42,12 @@ func NormalizeTimingHardwareMode(m TimingHardwareMode) TimingHardwareMode {
 	default:
 		return HardwareModeSlapRF
 	}
+}
+
+// IsSlapRFMode returns true for either SlapRF (USB) or SlapRF (Bluetooth) mode.
+func IsSlapRFMode(m TimingHardwareMode) bool {
+	norm := NormalizeTimingHardwareMode(m)
+	return norm == HardwareModeSlapRF || norm == HardwareModeSlapRFBLE
 }
 
 // IsRotorHazardMode returns true for either RotorHazard (Network) or RotorHazard (USB) mode.

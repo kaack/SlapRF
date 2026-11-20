@@ -45,10 +45,22 @@ typedef struct {
  * `on_rx` runs in a dedicated low-priority task (never in the NimBLE host task), so it may block.
  */
 void slaprf_ble_link_start(const char *label, uint32_t fingerprint, uint8_t role, const uint8_t fw_version[3],
-                           slaprf_ble_rx_cb_t on_rx, slaprf_ble_event_cb_t on_event);
+                           bool paired, slaprf_ble_rx_cb_t on_rx, slaprf_ble_event_cb_t on_event);
+
+/** True while any BLE central is connected at the GAP layer (even before TX CCCD subscribe). */
+bool slaprf_ble_connected(void);
+
+/** Microseconds since the current BLE GAP connection started, or 0 when disconnected. */
+int64_t slaprf_ble_connected_us(void);
 
 /** True while a central is connected and has enabled TX notifications. */
 bool slaprf_ble_ready(void);
+
+/** Disconnect the currently connected BLE central, if any, and resume advertising. */
+void slaprf_ble_disconnect(void);
+
+/** Update the advertised paired/pairing-mode flag in scan-response manufacturer data. */
+void slaprf_ble_set_paired_flag(bool paired);
 
 /**
  * Queue bytes for the TX characteristic. Returns the number of bytes accepted (may be short when the
@@ -61,6 +73,9 @@ void slaprf_ble_get_stats(slaprf_ble_stats_t *out);
 
 /** Enable or disable the sweep phase lock (console BLESYNC 1/0). */
 void slaprf_ble_set_sync_enabled(bool on);
+
+/** Reset phase samples and hold 2.4 GHz open for up to `duration_us` until phase lock completes. */
+void slaprf_ble_trigger_reacquire(int64_t duration_us);
 
 /**
  * True while the main loop should leave the radio on 2.4 GHz (skip 5.8 GHz sweeps briefly,

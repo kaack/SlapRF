@@ -2,12 +2,14 @@ package usb
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
 	"sync"
 
+	"slaprf/internal/domain"
 	"slaprf/internal/firmware"
 	"slaprf/internal/ingest"
 	"slaprf/internal/storage"
@@ -21,7 +23,11 @@ const (
 	latestFirmwareText      = "0.4.0"
 
 	kvUSBTargetsKey  = "hw.usb_targets"
+	kvBLETargetsKey  = "hw.ble_targets"
+	kvBLEHostKey     = "hw.ble_host_key"
 	kvKnownTimersKey = "hw.known_timers"
+
+	defaultBLEAuthMismatchMsg = "Hub is paired to another device. Hold BOOT for 3 s on the Hub to pair with this device."
 )
 
 var configMagic = []byte("SLAPRF02")
@@ -116,6 +122,7 @@ type usbSlot struct {
 	reconnecting         bool
 	reconnectAttempt     int
 	reconnectFailed      bool
+	authRejected         bool
 	suspendedForSim      bool
 	lastError            string
 	lastStatus           map[string]any
@@ -133,25 +140,51 @@ type usbSlot struct {
 	waiters       []*replyWaiter
 }
 
-// Manager owns physical USB-C serial connections to SlapRF XIAO ESP32-C5 Hub & Spoke boards.
+// Manager owns physical USB-C serial and Bluetooth LE Hub connections to SlapRF XIAO ESP32-C5 boards.
 type Manager struct {
-	cfg      ManagerConfig
-	openPort firmware.SerialOpener
-	listFn   PortLister
+	cfg        ManagerConfig
+	openPort   firmware.SerialOpener
+	listFn     PortLister
+	bleHostKey string
 
-	mu             sync.RWMutex
-	slots          [MaxUSBConnections]*usbSlot
-	debugSlotIndex int
-	knownTimers    map[string]KnownHardwareTimer
-	simMode        bool
-	closed         bool
+	mu              sync.RWMutex
+	slots           [MaxUSBConnections]*usbSlot
+	debugSlotIndex  int
+	knownTimers     map[string]KnownHardwareTimer
+	savedUSBTargets [MaxUSBConnections]string
+	savedBLETargets [MaxUSBConnections]string
+	bleOnly         bool
+	activeMode      domain.TimingHardwareMode
+	simMode         bool
+	closed          bool
 
 	subMu  sync.RWMutex
 	nextID int
 	subs   map[int]func(USBEvent)
 }
 
-// NewManager creates a native Go USB serial manager wired to `realEngine` and `realHubRx`.
+func isValidBLEHostKey(s string) bool {
+	if len(s) != 32 {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if !((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F')) {
+			return false
+		}
+	}
+	return true
+}
+
+func generateBLEHostKey() string {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "534C41505246424C45484F53544B4559"
+	}
+	return fmt.Sprintf("%032X", buf[:])
+}
+
+// NewManager creates a native Go USB/BLE manager wired to `realEngine` and `realHubRx`.
 func NewManager(cfg ManagerConfig) *Manager {
 	opener := cfg.OpenPort
 	if opener == nil {
@@ -161,10 +194,25 @@ func NewManager(cfg ManagerConfig) *Manager {
 	if lister == nil {
 		lister = DefaultListPorts
 	}
+	var hostKey string
+	if cfg.Store != nil {
+		var rawKey string
+		if ok, err := cfg.Store.GetJSON(kvBLEHostKey, &rawKey); err == nil && ok {
+			hostKey = strings.ToUpper(strings.TrimSpace(rawKey))
+		}
+	}
+	if !isValidBLEHostKey(hostKey) {
+		hostKey = generateBLEHostKey()
+		if cfg.Store != nil {
+			_ = cfg.Store.PutJSON(kvBLEHostKey, hostKey)
+		}
+	}
+
 	m := &Manager{
 		cfg:         cfg,
 		openPort:    opener,
 		listFn:      lister,
+		bleHostKey:  hostKey,
 		knownTimers: make(map[string]KnownHardwareTimer),
 		subs:        make(map[int]func(USBEvent)),
 	}
@@ -186,11 +234,38 @@ func NewManager(cfg ManagerConfig) *Manager {
 				}
 			}
 		}
+		m.loadSavedTargetsFromStore(kvUSBTargetsKey, &m.savedUSBTargets, false)
+		m.loadSavedTargetsFromStore(kvBLETargetsKey, &m.savedBLETargets, true)
 	}
 	if cfg.HubRx != nil {
 		cfg.HubRx.SetOutboundSender(m.sendNetChannelsFrameToHub)
 	}
 	return m
+}
+
+func (m *Manager) loadSavedTargetsFromStore(key string, dst *[MaxUSBConnections]string, wantBLE bool) {
+	if m.cfg.Store == nil {
+		return
+	}
+	var saved map[string]string
+	if ok, err := m.cfg.Store.GetJSON(key, &saved); err != nil || !ok {
+		return
+	}
+	for k, portName := range saved {
+		portName = strings.TrimSpace(portName)
+		if portName == "" || IsBLEPortName(portName) != wantBLE {
+			continue
+		}
+		var idx int
+		if _, err := fmt.Sscanf(k, "%d", &idx); err == nil && idx >= 0 && idx < MaxUSBConnections {
+			dst[idx] = portName
+		}
+	}
+}
+
+// BLEHostKey returns this host's persistent 32-hex-character Bluetooth Hub authentication key.
+func (m *Manager) BLEHostKey() string {
+	return m.bleHostKey
 }
 
 func (m *Manager) logf(format string, args ...any) {
@@ -199,34 +274,75 @@ func (m *Manager) logf(format string, args ...any) {
 	}
 }
 
-// RestorePersistedConnections attempts to reopen previously connected physical USB ports when starting in Real mode.
-func (m *Manager) RestorePersistedConnections(simMode bool) {
+// SetTransportMode switches port filtering between SlapRF (USB) (`bleOnly == false`) and
+// SlapRF (Bluetooth) (`bleOnly == true`).
+func (m *Manager) SetTransportMode(bleOnly bool) {
 	m.mu.Lock()
-	m.simMode = simMode
+	m.bleOnly = bleOnly
+	sim := m.simMode
+	m.mu.Unlock()
+	SetBLEScanEnabled(!sim && bleOnly)
+}
+
+func (m *Manager) currentTargetModeLocked() domain.TimingHardwareMode {
+	if m.cfg.Engine != nil {
+		return domain.NormalizeTimingHardwareMode(m.cfg.Engine.TimingHardwareMode())
+	}
+	if m.bleOnly {
+		return domain.HardwareModeSlapRFBLE
+	}
+	return domain.HardwareModeSlapRF
+}
+
+// Reconcile synchronizes active physical USB (`hw.usb_targets`) or Bluetooth (`hw.ble_targets`)
+// connections whenever `simRunning` or `hwMode` changes, closing incompatible transport slots cleanly
+// and restoring persisted targets for the newly active SlapRF transport mode.
+func (m *Manager) Reconcile(simRunning bool, hwMode domain.TimingHardwareMode) {
+	hwMode = domain.NormalizeTimingHardwareMode(hwMode)
+	bleOnly := hwMode == domain.HardwareModeSlapRFBLE
+	wantActive := !simRunning && domain.IsSlapRFMode(hwMode)
+	SetBLEScanEnabled(!simRunning && bleOnly)
+
+	m.mu.Lock()
+	if m.closed {
+		m.mu.Unlock()
+		return
+	}
+	prevSim := m.simMode
+	prevMode := m.activeMode
+	m.simMode = simRunning
+	m.bleOnly = bleOnly
+	if !wantActive {
+		m.activeMode = ""
+		m.mu.Unlock()
+		if prevMode != "" || (!prevSim && simRunning) {
+			m.closeAllSlotsWithoutPersist()
+			m.broadcastPoolState()
+		}
+		return
+	}
+	if prevMode == hwMode && !prevSim {
+		m.mu.Unlock()
+		return
+	}
+	m.activeMode = hwMode
+	var targets [MaxUSBConnections]string
+	if bleOnly {
+		targets = m.savedBLETargets
+	} else {
+		targets = m.savedUSBTargets
+	}
 	m.mu.Unlock()
 
-	if m.cfg.Store == nil {
-		return
+	m.closeAllSlotsWithoutPersist()
+	if m.cfg.HubRx != nil {
+		m.cfg.HubRx.Reset()
 	}
-	var saved map[string]string
-	if ok, err := m.cfg.Store.GetJSON(kvUSBTargetsKey, &saved); err != nil || !ok || len(saved) == 0 {
-		return
-	}
-	for k, portName := range saved {
+	m.broadcastPoolState()
+
+	for idx, portName := range targets {
 		portName = strings.TrimSpace(portName)
 		if portName == "" {
-			continue
-		}
-		var idx int
-		if _, err := fmt.Sscanf(k, "%d", &idx); err != nil || idx < 0 || idx >= MaxUSBConnections {
-			continue
-		}
-		if simMode {
-			slot := m.slots[idx]
-			slot.mu.Lock()
-			slot.portName = portName
-			slot.suspendedForSim = true
-			slot.mu.Unlock()
 			continue
 		}
 		go func(slotIdx int, pName string) {
@@ -237,8 +353,23 @@ func (m *Manager) RestorePersistedConnections(simMode bool) {
 	}
 }
 
-// Close disconnects all open USB ports cleanly.
+func (m *Manager) closeAllSlotsWithoutPersist() {
+	for i := 0; i < MaxUSBConnections; i++ {
+		_ = m.closeSlotInternal(m.slots[i], true)
+	}
+}
+
+// RestorePersistedConnections attempts to reopen previously connected physical USB or BLE ports when starting in Real mode.
+func (m *Manager) RestorePersistedConnections(simMode bool) {
+	m.mu.RLock()
+	hwMode := m.currentTargetModeLocked()
+	m.mu.RUnlock()
+	m.Reconcile(simMode, hwMode)
+}
+
+// Close disconnects all open USB/BLE ports cleanly.
 func (m *Manager) Close() {
+	SetBLEScanEnabled(false)
 	m.mu.Lock()
 	m.closed = true
 	m.mu.Unlock()
@@ -282,27 +413,55 @@ func (m *Manager) broadcastPoolState() {
 	})
 }
 
-// ListPorts returns OS serial ports annotated with active slot usage.
-// By default (`showAll == false`), only Espressif USB boards (`VID=303A`, e.g. XIAO ESP32-C5)
-// are returned, excluding legacy motherboard UARTs (`COM1`) and non-Espressif serial devices.
-// When `showAll == true`, all USB serial adapters are returned while still excluding legacy
-// non-USB motherboard COM ports (`!IsUSB` with a non-USB product descriptor).
+// ListPorts returns ports matching the active SlapRF transport mode:
+// - When `bleOnly == true` (`SlapRF (Bluetooth)`), only discovered `ble:<FP>` Hub ports are returned.
+// - When `bleOnly == false` (`SlapRF (USB)`), only non-BLE serial ports are returned (Espressif USB
+//   boards by default, or all USB serial adapters when `showAll == true`).
 func (m *Manager) ListPorts(showAll bool) ([]PortInfo, error) {
+	m.mu.RLock()
+	bleOnly := m.bleOnly
+	m.mu.RUnlock()
+	if bleOnly {
+		return m.ListBLEPorts()
+	}
+	return m.ListUSBPorts(showAll)
+}
+
+// ListUSBPorts enumerates non-BLE OS/Android USB serial ports without triggering a BLE scan,
+// used by `SlapRF (USB)`, RotorHazard USB, and the Flasher (`?transport=usb`).
+func (m *Manager) ListUSBPorts(showAll bool) ([]PortInfo, error) {
+	bleSuppressDepth.Add(1)
 	ports, err := m.listFn()
+	bleSuppressDepth.Add(-1)
 	if err != nil {
 		return nil, err
 	}
 	filtered := make([]PortInfo, 0, len(ports))
 	if showAll {
 		for _, p := range ports {
-			if p.IsEspressif || p.IsUSB {
+			if !IsBLEPortName(p.Name) && (p.IsEspressif || p.IsUSB) {
 				filtered = append(filtered, p)
 			}
 		}
 		return filtered, nil
 	}
 	for _, p := range ports {
-		if p.IsEspressif {
+		if !IsBLEPortName(p.Name) && p.IsEspressif {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered, nil
+}
+
+// ListBLEPorts enumerates discovered SlapRF Bluetooth Hub ports (`ble:<FP>`).
+func (m *Manager) ListBLEPorts() ([]PortInfo, error) {
+	ports, err := m.listFn()
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]PortInfo, 0, len(ports))
+	for _, p := range ports {
+		if IsBLEPortName(p.Name) {
 			filtered = append(filtered, p)
 		}
 	}
@@ -323,50 +482,12 @@ func (m *Manager) SetDebugSlot(slotIndex int) {
 	}
 }
 
-// SetSimMode suspends open physical USB ports while Simulation is ON and restores them when Simulation turns OFF.
+// SetSimMode suspends open physical USB/BLE ports while Simulation is ON and restores them when Simulation turns OFF.
 func (m *Manager) SetSimMode(simRunning bool) {
-	m.mu.Lock()
-	prev := m.simMode
-	m.simMode = simRunning
-	m.mu.Unlock()
-	if prev == simRunning {
-		return
-	}
-	if simRunning {
-		for _, slot := range m.slots {
-			slot.mu.Lock()
-			wasOpen := slot.port != nil && slot.portName != ""
-			pName := slot.portName
-			slot.mu.Unlock()
-			if wasOpen {
-				_ = m.closeSlotInternal(slot, false)
-				slot.mu.Lock()
-				slot.portName = pName
-				slot.suspendedForSim = true
-				slot.mu.Unlock()
-			}
-		}
-		m.broadcastPoolState()
-		return
-	}
-
-	for _, slot := range m.slots {
-		slot.mu.Lock()
-		shouldRestore := slot.suspendedForSim && slot.portName != ""
-		pName := slot.portName
-		slot.suspendedForSim = false
-		isOpen := slot.port != nil
-		stNow := slot.lastStatus
-		cfgNow := slot.lastConfig
-		slot.mu.Unlock()
-		if shouldRestore {
-			go func(idx int, portName string) {
-				_, _ = m.Connect(idx, portName)
-			}(slot.index, pName)
-		} else if isOpen {
-			m.registerConnectedHubInEngine(stNow, cfgNow)
-		}
-	}
+	m.mu.RLock()
+	hwMode := m.currentTargetModeLocked()
+	m.mu.RUnlock()
+	m.Reconcile(simRunning, hwMode)
 }
 
 // Snapshot returns the current state of all 3 USB slots and persisted known timers.
@@ -432,7 +553,7 @@ func (m *Manager) OpenRawPort(portName string, baud int) (firmware.SerialPort, P
 
 	var resolvedInfo PortInfo
 	resolvedName := portName
-	if ports, err := m.ListPorts(true); err == nil {
+	if ports, err := m.ListUSBPorts(true); err == nil {
 		var espPorts []PortInfo
 		foundExact := false
 		for _, pi := range ports {

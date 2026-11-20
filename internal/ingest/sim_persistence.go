@@ -279,9 +279,9 @@ func (s *TrackSimulator) RestoreDemoData() {
 	hasUsbSink := s.hubFrameSink != nil
 	s.resetPilotsLocked()
 	s.mu.Unlock()
-	if syncHook != nil && hwMode == domain.HardwareModeSlapRF {
+	if syncHook != nil && domain.IsSlapRFMode(hwMode) {
 		syncHook()
-	} else if hasUsbSink && hwMode == domain.HardwareModeSlapRF {
+	} else if hasUsbSink && domain.IsSlapRFMode(hwMode) {
 		s.engine.SetAllTimersOffline()
 	}
 }

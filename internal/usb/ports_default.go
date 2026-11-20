@@ -4,9 +4,17 @@ package usb
 
 import "slaprf/internal/firmware"
 
-// DefaultListPorts enumerates host USB/OS serial ports plus any SlapRF Bluetooth hubs found by
-// a short background BLE scan (listed as `ble:<FP>`).
+// DefaultListPorts enumerates host USB/OS serial ports plus (when BLE scanning is enabled in
+// SlapRF Bluetooth mode) any SlapRF Bluetooth hubs found by a short background BLE scan (`ble:<FP>`).
 func DefaultListPorts() ([]PortInfo, error) {
+	if !BLEScanEnabled() {
+		ports, err := listUSBPorts()
+		if err != nil {
+			return nil, err
+		}
+		sortPorts(ports)
+		return ports, nil
+	}
 	return MergeBLEPorts(listUSBPorts, bleListPorts)()
 }
 

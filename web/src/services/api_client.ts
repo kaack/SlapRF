@@ -10,6 +10,7 @@ import {
   GateRuleOverrides,
   GateThresholdUpdate,
   GateUpdate,
+  isSlapRFMode,
   LapRecord,
   MultiGPRaceEntry,
   MultiGPRaceViewData,
@@ -560,7 +561,7 @@ export class ApiClient {
       await this.refresh();
     }
     this.store.setLiveFocus(null);
-    if (this.simMode && this.store.timingHardwareMode === "slaprf") {
+    if (this.simMode && isSlapRFMode(this.store.timingHardwareMode)) {
       await usbPool.connectDefaultSimHub();
       await this.refresh();
     }
@@ -1041,15 +1042,16 @@ export class ApiClient {
     return await this.transport.request<{ release_tag: string; commit_hash: string; branch_name: string }>("GET", "/api/version");
   }
 
-  /** Switches the active engine between SlapRF ("slaprf"), LapRF 8-Way ("laprf"), and RotorHazard ("rotorhazard"). */
+  /** Switches the active engine between SlapRF USB ("slaprf"), SlapRF Bluetooth ("slaprf_ble"), LapRF 8-Way ("laprf"), and RotorHazard ("rotorhazard" / "rotorhazard_usb"). */
   public async setTimingHardwareMode(mode: TimingHardwareMode): Promise<void> {
-    if (mode !== "slaprf") {
+    const prevMode = this.store.timingHardwareMode;
+    if (!isSlapRFMode(mode) || prevMode !== mode) {
       await usbPool.disconnectSimulatedPorts();
     }
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("POST", "/api/hardware/mode", { mode })
     );
-    if (mode === "slaprf") {
+    if (isSlapRFMode(mode)) {
       await usbPool.reconcileSimulatedPorts();
     }
     await this.persistBrowserEnginesIfDemo();

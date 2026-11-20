@@ -31,7 +31,7 @@ func (s *Server) handleHubSurvey(w http.ResponseWriter, r *http.Request) {
 			writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
 			return
 		}
-		if req.On && (s.sim.IsRunning() || s.realEngine.TimingHardwareMode() != domain.HardwareModeSlapRF) {
+		if req.On && (s.sim.IsRunning() || !domain.IsSlapRFMode(s.realEngine.TimingHardwareMode())) {
 			writeJSONNoStore(w, http.StatusConflict, map[string]any{"error": "the band survey needs SlapRF hardware (not the simulator)"})
 			return
 		}

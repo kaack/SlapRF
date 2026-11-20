@@ -1125,7 +1125,7 @@ func (s *TrackSimulator) Snapshot() domain.SimState {
 	}
 
 	simTimers := make([]domain.SimTimerState, 0, len(detected)+len(s.unflashedBoards))
-	if s.engine.TimingHardwareMode() == domain.HardwareModeSlapRF {
+	if domain.IsSlapRFMode(s.engine.TimingHardwareMode()) {
 		flashedIDs := make(map[uint8]bool, len(detected))
 		for _, d := range detected {
 			if d.FirmwareVersion == "RotorHazard" || d.FirmwareVersion == "LapRF" {

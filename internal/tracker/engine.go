@@ -85,10 +85,13 @@ type Engine struct {
 	practiceState  domain.PracticeManagerState
 	nextRaceSeq        uint64
 	practiceSnap       domain.PracticeSnapshot
-	timingHardwareMode domain.TimingHardwareMode
-	savedSlapRFGates   []domain.TrackGate
-	savedSlapRFTimers  []domain.DetectedTimer
-	savedLapRFGates    []domain.TrackGate
+	timingHardwareMode     domain.TimingHardwareMode
+	savedSlapRFGates       []domain.TrackGate
+	savedSlapRFTimers      []domain.DetectedTimer
+	savedSlapRFBLEGates    []domain.TrackGate
+	savedSlapRFBLETimers   []domain.DetectedTimer
+	hasSavedSlapRFBLEState bool
+	savedLapRFGates        []domain.TrackGate
 	savedLapRFTimers   []domain.DetectedTimer
 	hasSavedLapRFState bool
 	savedRHGates        []domain.TrackGate
@@ -720,7 +723,7 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 	}
 	frame.TimerID = gate.GateID
 	hwMode := domain.NormalizeTimingHardwareMode(e.timingHardwareMode)
-	isSlapRFMode := hwMode == domain.HardwareModeSlapRF
+	isSlapRFMode := domain.IsSlapRFMode(hwMode)
 	var autoCalibChanged bool
 	var autoCalibSFChanged bool
 

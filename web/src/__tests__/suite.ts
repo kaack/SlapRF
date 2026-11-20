@@ -12,6 +12,7 @@ import "./views_races_and_analytics.test";
 import "./flasher_hub_link.test";
 import "./editors_sim_network_views.test";
 import "./rotorhazard.test";
+import "./slaprf_ble.test";
 import "./capabilities_and_backend_transport.test";
 import "./theme_and_ui_controls.test";
 

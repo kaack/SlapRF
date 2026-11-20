@@ -86,13 +86,17 @@ public final class SlapRFBleShim {
         final BluetoothDevice device;
         final String name;
         final int role;
+        final boolean hasFlags;
+        final boolean paired;
         final long seenAtMs;
 
-        SeenHub(String fp, BluetoothDevice device, String name, int role, long seenAtMs) {
+        SeenHub(String fp, BluetoothDevice device, String name, int role, boolean hasFlags, boolean paired, long seenAtMs) {
             this.fp = fp;
             this.device = device;
             this.name = name;
             this.role = role;
+            this.hasFlags = hasFlags;
+            this.paired = paired;
             this.seenAtMs = seenAtMs;
         }
     }
@@ -432,7 +436,9 @@ public final class SlapRFBleShim {
         }
         byte[] md = rec.getManufacturerSpecificData(MANUFACTURER_ID);
         int role = md != null && md.length > 6 ? (md[6] & 0xFF) : 0;
-        seen.put(fp, new SeenHub(fp, r.getDevice(), name == null ? "" : name.trim(), role, SystemClock.uptimeMillis()));
+        boolean hasFlags = md != null && md.length >= 11;
+        boolean paired = hasFlags && (md[10] & 0x01) != 0;
+        seen.put(fp, new SeenHub(fp, r.getDevice(), name == null ? "" : name.trim(), role, hasFlags, paired, SystemClock.uptimeMillis()));
     }
 
     @SuppressLint("MissingPermission")
@@ -520,6 +526,21 @@ public final class SlapRFBleShim {
         return s;
     }
 
+    private static boolean hasFreshOrConnected() {
+        for (Session s : sessions.values()) {
+            if (!s.closed) {
+                return true;
+            }
+        }
+        long now = SystemClock.uptimeMillis();
+        for (SeenHub s : seen.values()) {
+            if (now - s.seenAtMs <= SEEN_TTL_MS) {
+                return true;
+            }
+        }
+        return false;
+    }
+
     /** Lists discovered SlapRF Bluetooth hubs as {@code ble:<FP>} ports (same JSON shape as USB). */
     public static String listPortsJson() {
         Context ctx = appContext;
@@ -530,12 +551,17 @@ public final class SlapRFBleShim {
             return "[]";
         }
         boolean first = lastScanStartMs == 0L;
+        boolean cold = !hasFreshOrConnected();
         long now = SystemClock.uptimeMillis();
         // Do not scan while a hub link is up: scanning steals radio time from 10 ms connection events.
-        if (sessions.isEmpty() && (first || now - lastScanStartMs > SCAN_REFRESH_MS)) {
-            if (startScan(ctx, SCAN_WINDOW_MS) && first) {
+        if (sessions.isEmpty()) {
+            boolean scanningNow = scanning;
+            if (first || cold || now - lastScanStartMs > SCAN_REFRESH_MS) {
+                scanningNow = startScan(ctx, SCAN_WINDOW_MS) || scanning;
+            }
+            if (cold && scanningNow) {
                 long until = SystemClock.uptimeMillis() + FIRST_LIST_WAIT_MS;
-                while (SystemClock.uptimeMillis() < until && seen.isEmpty()) {
+                while (SystemClock.uptimeMillis() < until && !hasFreshOrConnected()) {
                     SystemClock.sleep(100);
                 }
             }
@@ -555,11 +581,14 @@ public final class SlapRFBleShim {
                     continue;
                 }
                 String label = s.name == null || s.name.isEmpty() ? "SlapRF Hub" : s.name;
+                String product = (!isConnected && s.hasFlags && !s.paired)
+                        ? (label + " (Bluetooth \u00b7 Pairing mode)")
+                        : (label + " (Bluetooth)");
                 JSONObject obj = new JSONObject();
                 obj.put("name", PORT_PREFIX + s.fp);
                 obj.put("isUsb", false);
                 obj.put("serialNumber", s.fp);
-                obj.put("product", label + " (Bluetooth)");
+                obj.put("product", product);
                 obj.put("isEspressif", true);
                 obj.put("transport", "ble");
                 arr.put(obj);

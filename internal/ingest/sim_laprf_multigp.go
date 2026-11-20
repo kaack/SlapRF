@@ -145,7 +145,7 @@ func (s *TrackSimulator) SyncHardwareMode() {
 	}
 	s.mu.Unlock()
 
-	if mode == domain.HardwareModeSlapRF {
+	if domain.IsSlapRFMode(mode) {
 		if hook != nil {
 			hook()
 		}

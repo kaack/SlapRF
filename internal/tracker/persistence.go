@@ -23,9 +23,12 @@ type PersistedEngineState struct {
 	Pilots             []domain.PilotSlot          `json:"pilots"`
 	Gates              []domain.TrackGate          `json:"gates"`
 	Timers             []domain.DetectedTimer      `json:"timers"`
-	SavedSlapRFGates   []domain.TrackGate          `json:"savedSlapRFGates,omitempty"`
-	SavedSlapRFTimers  []domain.DetectedTimer      `json:"savedSlapRFTimers,omitempty"`
-	SavedLapRFGates    []domain.TrackGate          `json:"savedLapRFGates,omitempty"`
+	SavedSlapRFGates       []domain.TrackGate          `json:"savedSlapRFGates,omitempty"`
+	SavedSlapRFTimers      []domain.DetectedTimer      `json:"savedSlapRFTimers,omitempty"`
+	SavedSlapRFBLEGates    []domain.TrackGate          `json:"savedSlapRFBLEGates,omitempty"`
+	SavedSlapRFBLETimers   []domain.DetectedTimer      `json:"savedSlapRFBLETimers,omitempty"`
+	HasSavedSlapRFBLEState bool                        `json:"hasSavedSlapRFBLEState,omitempty"`
+	SavedLapRFGates        []domain.TrackGate          `json:"savedLapRFGates,omitempty"`
 	SavedLapRFTimers   []domain.DetectedTimer      `json:"savedLapRFTimers,omitempty"`
 	HasSavedLapRFState bool                        `json:"hasSavedLapRFState,omitempty"`
 	SavedRHGates       []domain.TrackGate          `json:"savedRHGates,omitempty"`
@@ -147,9 +150,12 @@ func (e *Engine) ExportState() PersistedEngineState {
 		Pilots:             pilots,
 		Gates:              gates,
 		Timers:             timers,
-		SavedSlapRFGates:   append([]domain.TrackGate(nil), e.savedSlapRFGates...),
-		SavedSlapRFTimers:  append([]domain.DetectedTimer(nil), e.savedSlapRFTimers...),
-		SavedLapRFGates:    append([]domain.TrackGate(nil), e.savedLapRFGates...),
+		SavedSlapRFGates:       append([]domain.TrackGate(nil), e.savedSlapRFGates...),
+		SavedSlapRFTimers:      append([]domain.DetectedTimer(nil), e.savedSlapRFTimers...),
+		SavedSlapRFBLEGates:    append([]domain.TrackGate(nil), e.savedSlapRFBLEGates...),
+		SavedSlapRFBLETimers:   append([]domain.DetectedTimer(nil), e.savedSlapRFBLETimers...),
+		HasSavedSlapRFBLEState: e.hasSavedSlapRFBLEState,
+		SavedLapRFGates:        append([]domain.TrackGate(nil), e.savedLapRFGates...),
 		SavedLapRFTimers:   append([]domain.DetectedTimer(nil), e.savedLapRFTimers...),
 		HasSavedLapRFState: e.hasSavedLapRFState,
 		SavedRHGates:       append([]domain.TrackGate(nil), e.savedRHGates...),
@@ -204,6 +210,9 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 	e.timingHardwareMode = domain.NormalizeTimingHardwareMode(s.TimingHardwareMode)
 	e.savedSlapRFGates = append([]domain.TrackGate(nil), s.SavedSlapRFGates...)
 	e.savedSlapRFTimers = append([]domain.DetectedTimer(nil), s.SavedSlapRFTimers...)
+	e.savedSlapRFBLEGates = append([]domain.TrackGate(nil), s.SavedSlapRFBLEGates...)
+	e.savedSlapRFBLETimers = append([]domain.DetectedTimer(nil), s.SavedSlapRFBLETimers...)
+	e.hasSavedSlapRFBLEState = s.HasSavedSlapRFBLEState
 	e.savedLapRFGates = append([]domain.TrackGate(nil), s.SavedLapRFGates...)
 	e.savedLapRFTimers = append([]domain.DetectedTimer(nil), s.SavedLapRFTimers...)
 	e.hasSavedLapRFState = s.HasSavedLapRFState
@@ -273,6 +282,9 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 
 	if markTimersOnline && len(e.detected) == 0 {
 		switch e.timingHardwareMode {
+		case domain.HardwareModeSlapRFBLE:
+			e.gates, e.detected = defaultSimSlapRFBLELayoutLocked(now)
+			s.Gates = nil
 		case domain.HardwareModeLapRF:
 			e.gates, e.detected = defaultSimLapRFLayoutLocked(now)
 			s.Gates = nil
@@ -287,7 +299,7 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 	}
 
 	// In real SlapRF hardware mode, ensure the Hub occupies slot 1 (and any non-Hub in slot 1 is moved to a free 2..7 slot).
-	if !markTimersOnline && e.timingHardwareMode == domain.HardwareModeSlapRF {
+	if !markTimersOnline && domain.IsSlapRFMode(e.timingHardwareMode) {
 		var hubEntry *domain.DetectedTimer
 		var hubOldID uint8
 		for id := uint8(maxTimers); id >= 1; id-- {
@@ -706,6 +718,8 @@ func (e *Engine) ResetTrackToDefault(isSim bool) {
 	e.mu.Lock()
 	if isSim {
 		switch domain.NormalizeTimingHardwareMode(e.timingHardwareMode) {
+		case domain.HardwareModeSlapRFBLE:
+			e.gates, e.detected = defaultSimSlapRFBLELayoutLocked(time.Now())
 		case domain.HardwareModeLapRF:
 			e.gates, e.detected = defaultSimLapRFLayoutLocked(time.Now())
 		case domain.HardwareModeRotorHazard, domain.HardwareModeRotorHazardUSB:
@@ -715,11 +729,12 @@ func (e *Engine) ResetTrackToDefault(isSim bool) {
 			e.seedSimTimersLocked()
 		}
 	} else {
-		// Real hardware: one gate per Spoke in timer-ID order (the first is start/finish). The
-		// Hub is a collector dongle and gets no gate (the user may drag it onto one later).
+		// Real hardware: one gate per Spoke in timer-ID order (the first is start/finish). In USB
+		// mode the Hub is a collector dongle and gets no gate by default; in Bluetooth Hub mode
+		// (`slaprf_ble`) the Hub itself is the single-gate timer.
 		ids := make([]int, 0, len(e.detected))
 		for id, d := range e.detected {
-			if d.IsHub {
+			if d.IsHub && domain.NormalizeTimingHardwareMode(e.timingHardwareMode) != domain.HardwareModeSlapRFBLE {
 				continue
 			}
 			ids = append(ids, int(id))

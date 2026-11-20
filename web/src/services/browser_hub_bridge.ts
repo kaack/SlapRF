@@ -145,10 +145,11 @@ export class BrowserHubBridge {
     }
 
     const main = usbPool.mainConsole;
+    const isBleMode = hwMode === "slaprf_ble";
 
     if ((main.reconnecting || main.busyLabel) && !main.connected) {
       const label = main.reconnecting
-        ? `Reconnecting USB (${main.reconnectAttempt}/${main.maxReconnectAttempts})…`
+        ? `Reconnecting ${isBleMode ? "Bluetooth" : "USB"} (${main.reconnectAttempt}/${main.maxReconnectAttempts})…`
         : `${main.busyLabel}…`;
       return {
         color: "yellow",
@@ -159,7 +160,7 @@ export class BrowserHubBridge {
     if (main.connected) {
       const s = main.lastStatus;
       const cfg = main.lastConfig;
-      const via = main.transportLabel;
+      const via = main.transportLabel === "Bluetooth" || isBleMode ? "Bluetooth" : main.transportLabel;
       if (s?.emergencyMode) {
         return {
           color: "red",
@@ -200,15 +201,17 @@ export class BrowserHubBridge {
     if (main.reconnectFailed) {
       return {
         color: "red",
-        shortLabel: "USB Failed",
-        detail: `${main.lastError || "USB reconnect failed"} · click to open Network`,
+        shortLabel: isBleMode ? "Bluetooth Failed" : "USB Failed",
+        detail: `${main.lastError || (isBleMode ? "Bluetooth Hub connection failed" : "USB reconnect failed")} · click to open Network`,
       };
     }
 
     return {
       color: "gray",
       shortLabel: "Disconnected",
-      detail: "No timer connected · click to open Network",
+      detail: isBleMode
+        ? "No SlapRF Bluetooth Hub connected · click to open Network"
+        : "No timer connected · click to open Network",
     };
   }
 

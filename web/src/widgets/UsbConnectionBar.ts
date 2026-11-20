@@ -6,6 +6,8 @@ import { TimerConsole, usbPool } from "../services/timer_console";
 export interface UsbConnectionBarOptions {
   activeConsole: TimerConsole;
   showAllPorts: boolean;
+  /** When true (`SlapRF (Bluetooth)` mode), labels controls for wireless Bluetooth Hub connections and omits USB-only options. */
+  bluetoothMode?: boolean;
   /** When true (Debug page only), allows swapping to a different USB device while keeping the main USB connection running. */
   allowSwap?: boolean;
   busyText?: string | null;
@@ -100,6 +102,7 @@ function renderChip(c: TimerConsole, active: boolean, canDisconnect = true): str
  */
 export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): string {
   const supported = TimerConsole.supported();
+  const bleMode = Boolean(opts.bluetoothMode);
   const main = usbPool.mainConsole;
   const swapSlot = usbPool.slots[1];
   const poolBusy = usbPool.slots.find((c) => c.busyLabel)?.busyLabel ?? null;
@@ -109,8 +112,8 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
   let chipsHtml = "";
   let actionBtnHtml = "";
 
-  if (opts.allowSwap) {
-    // Debug page:
+  if (opts.allowSwap && !bleMode) {
+    // Debug page (USB mode):
     // - Protect only a Hub connection (`canDisconnect = false`); any non-Hub port (Spoke / Other) can be closed.
     // - Allow choosing a second USB connection (Slot 1) to debug on, shown alongside the main connection so the user
     //   can switch between them or close non-Hub connections.
@@ -146,27 +149,33 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
         </button>`;
     }
   } else {
-    // Network & Flasher pages: strictly single main USB connection (Slot 0).
+    // Network page (and Bluetooth Hub mode on both Network & Debug): single primary connection (Slot 0).
     if (main.connected) {
       chipsHtml = renderChip(main, true, true);
     } else {
+      const connectText = bleMode ? "Connect Bluetooth" : "Connect USB";
+      const connectTitle = bleMode ? "Connect a SlapRF Bluetooth Hub" : "Connect a USB device";
       actionBtnHtml = `
         <button
           type="button"
           class="pilot-chip debug-usb-add-chip"
           data-action="connect-add"
           ${supported && !busy ? "" : "disabled"}
-          title="Connect a USB device"
+          title="${connectTitle}"
         >
-          ${icons.plug(20)}
-          <span class="pilot-chip-name">${busy ? `${esc(busyText)}…` : "Connect USB"}</span>
+          ${bleMode ? icons.wifi(20) : icons.plug(20)}
+          <span class="pilot-chip-name">${busy ? `${esc(busyText)}…` : connectText}</span>
         </button>`;
     }
   }
 
   const bannerParts: string[] = [];
   if (!supported) {
-    bannerParts.push(`<div class="sim-error-note">Connect a SlapRF Server to open physical USB serial ports.</div>`);
+    bannerParts.push(
+      bleMode
+        ? `<div class="sim-error-note">Connect a SlapRF Server or open the mobile app to connect a Bluetooth Hub.</div>`
+        : `<div class="sim-error-note">Connect a SlapRF Server to open physical USB serial ports.</div>`
+    );
   }
   if (opts.error) {
     bannerParts.push(`<div class="sim-error-note">${esc(opts.error)}</div>`);
@@ -174,7 +183,7 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
 
   return `
     <div class="picker-row debug-usb-picker-row">
-      <div class="pilot-picker debug-usb-picker" role="tablist" aria-label="Active USB connection">
+      <div class="pilot-picker debug-usb-picker" role="tablist" aria-label="${bleMode ? "Active Bluetooth connection" : "Active USB connection"}">
         ${chipsHtml}
         ${actionBtnHtml}
       </div>

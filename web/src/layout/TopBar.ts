@@ -47,6 +47,7 @@ import {
 import { sharedRHLink } from "../services/rh_hardware_link";
 import { TimerConsole, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
+import { isSlapRFMode } from "../types/models";
 
 interface BreadcrumbEntry {
   menuLabel: string;
@@ -490,6 +491,7 @@ export class TopBar extends Component {
         ${this.pwaMenuOpen ? this.renderPwaInstallPopover() : ""}
       </div>`;
 
+    const isBleMode = hwMode === "slaprf_ble";
     const usbSupported = TimerConsole.supported() && !lockedOut;
     const usbBtnText = usbOn
       ? activeLabel
@@ -497,15 +499,21 @@ export class TopBar extends Component {
         : "Connected"
       : usbBusy
         ? `${esc(usbBusy)}…`
-        : "Connect";
+        : isBleMode
+          ? "Connect Bluetooth"
+          : "Connect";
     const usbTitle = !usbSupported
-      ? "Connect a SlapRF Server to open USB serial ports"
+      ? isBleMode
+        ? "Connect a SlapRF Server or open the mobile app to connect a Bluetooth Hub"
+        : "Connect a SlapRF Server to open USB serial ports"
       : usbOn
-        ? `Connected over ${main.transportLabel === "Bluetooth" ? "Bluetooth" : "USB"}${activeLabel ? ` (${activeLabel}${usbFp ? ` · ${usbFp}` : ""})` : ""} · click to disconnect`
-        : "Connect a timer over USB-C";
+        ? `Connected over ${main.transportLabel === "Bluetooth" || isBleMode ? "Bluetooth" : "USB"}${activeLabel ? ` (${activeLabel}${usbFp ? ` · ${usbFp}` : ""})` : ""} · click to disconnect`
+        : isBleMode
+          ? "Connect a SlapRF Bluetooth Hub"
+          : "Connect a timer over USB-C";
 
     const usbBtn =
-      hwMode === "slaprf"
+      isSlapRFMode(hwMode)
         ? `
       <button type="button" class="btn ${usbOn ? "btn-armed" : "btn-ghost"}" data-action="usb-toggle" ${usbSupported && !usbBusy ? "" : "disabled"} title="${esc(usbTitle)}" aria-label="${esc(usbTitle)}">
         ${usbOn ? icons.plug(19) : icons.plugOff(19)}<span class="topbar-btn-label">${usbBtnText}</span>
@@ -662,13 +670,17 @@ export class TopBar extends Component {
           ? "RotorHazard diagnostics: Socket.IO self-test, RX5808 node health, live 0-255 RSSI monitor, and threshold noise"
           : meta.id === "debug" && hwMode === "laprf"
             ? "LapRF 8-Way diagnostics: TCP/USB link status, 8-slot RSSI telemetry, clock sync, and supply voltage"
-            : meta.id === "network" && hwMode === "rotorhazard_usb"
-              ? "RotorHazard USB serial nodes, multi-node RX5808 tuning, and live 0-255 node RSSI"
-              : meta.id === "network" && hwMode === "rotorhazard"
-                ? "RotorHazard timing devices, per-device admin credentials, clock sync, and live 0–255 RX5808 node RSSI"
-                : meta.id === "network" && hwMode === "laprf"
-                  ? "LapRF 8-Way pucks over Ethernet (:5403) or USB CDC, clock sync, and live 8-slot RSSI"
-                  : meta.subtitle;
+            : meta.id === "debug" && hwMode === "slaprf_ble"
+              ? "SlapRF Bluetooth Hub diagnostics: BLE link sync, pairing state, 5.8 GHz receiver health, live RSSI monitor & spectrum scan"
+              : meta.id === "network" && hwMode === "rotorhazard_usb"
+                ? "RotorHazard USB serial nodes, multi-node RX5808 tuning, and live 0-255 node RSSI"
+                : meta.id === "network" && hwMode === "rotorhazard"
+                  ? "RotorHazard timing devices, per-device admin credentials, clock sync, and live 0–255 RX5808 node RSSI"
+                  : meta.id === "network" && hwMode === "laprf"
+                    ? "LapRF 8-Way pucks over Ethernet (:5403) or USB CDC, clock sync, and live 8-slot RSSI"
+                    : meta.id === "network" && hwMode === "slaprf_ble"
+                      ? "SlapRF Bluetooth Hub wireless connection, pairing status, and live 8-channel 5.8 GHz RSSI"
+                      : meta.subtitle;
 
     const hideTopLevelSubtitle = meta.id === "races" || meta.id === "live";
     const titleMarkup =

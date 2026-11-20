@@ -32,10 +32,24 @@ may be split across notifications or several may share one notification.
 
 ## Advertising
 
-- Complete local name: `SlapRF <timer label>` (truncated to fit), e.g. `SlapRF H1`.
+- Complete local name: `SlapRF <timer label>` (truncated to 14 bytes max), e.g. `SlapRF H1`.
 - 128-bit service UUID above in the advertising data (filter on it when scanning).
-- Manufacturer specific data (scan response, 12 bytes): company ID `0xFFFF`, then
-  `'S' 'R' <fingerprint u32 LE> <role u8 (1 = Hub)> <fw major> <fw minor> <fw patch>`.
+- Manufacturer specific data (scan response, 13 bytes): company ID `0xFFFF`, then
+  `'S' 'R' <fingerprint u32 LE> <role u8 (1 = Hub)> <fw major> <fw minor> <fw patch> <flags u8>`,
+  where `flags & 0x01` is `1` when paired to a host and `0` when open in Pairing Mode.
+
+## Claim-on-Pair Authentication (`AUTH <host_key>`)
+
+- Each SlapRF host generates and persists a random 128-bit host key (`32` uppercase hex chars).
+- Immediately after enabling TX CCCD notifications, the host sends `AUTH <32-hex-chars>\n` before
+  any other commands.
+- When the Hub is in **Pairing Mode** (freshly flashed, after holding `BOOT` (`GPIO28`) for 3 s, or
+  after `BLEPAIR CLEAR`), the first valid `AUTH <key>` claims the Hub, saves `<key>` in NVS, and
+  replies `@{"t":"ok","cmd":"auth","paired":true,"claimed":true}`.
+- When already **Paired**, a matching `AUTH <key>` replies
+  `@{"t":"ok","cmd":"auth","paired":true,"claimed":false}` and starts streaming; a mismatched key
+  replies `@{"t":"err","code":"auth_mismatch","msg":"..."}` and terminates the BLE link.
+- Unauthenticated BLE connections that send other commands or remain silent for >2.5 s are dropped.
 
 ## Link parameters (requested by the hub, final values chosen by the central)
 

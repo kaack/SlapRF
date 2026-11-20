@@ -721,9 +721,13 @@ export class TimingDevicesCard extends Component {
             ? sim
               ? `Simulating LapRF 8-Way timers on the track. Configure virtual LapRF timers on <a href="#/sim" class="link-inline">Simulation</a> or inspect live 8-slot RSSI &amp; voltage on <a href="#/network" class="link-inline">Network</a>.`
               : `Timing laps with LapRF 8-Way hardware over Ethernet TCP :5403 or USB Serial. Connect your LapRF timer on the <a href="#/network" class="link-inline">Network</a> page.`
-            : sim
-              ? `Simulating SlapRF Hub &amp; Spoke gate timers. Manage simulated boards on <a href="#/sim" class="link-inline">Simulation</a>.`
-              : `Timing laps with SlapRF Hub &amp; Spoke gate timers over native USB-C serial.`;
+            : effectiveMode === "slaprf_ble"
+              ? sim
+                ? `Simulating a wireless SlapRF Bluetooth Hub (single gate, up to 8 simultaneous pilots). Manage simulated boards on <a href="#/sim" class="link-inline">Simulation</a> or inspect live 5.8 GHz RSSI on <a href="#/network" class="link-inline">Network</a>.`
+                : `Timing laps wirelessly with a SlapRF Bluetooth Hub (single gate, up to 8 simultaneous pilots). First connect claims the Hub; hold <code>BOOT</code> for 3 s on the Hub to pair a different phone or computer. Connect on <a href="#/network" class="link-inline">Network</a>.`
+              : sim
+                ? `Simulating SlapRF Hub &amp; Spoke gate timers. Manage simulated boards on <a href="#/sim" class="link-inline">Simulation</a>.`
+                : `Timing laps with SlapRF Hub &amp; Spoke gate timers over native USB-C serial.`;
 
     this.el.innerHTML = `
       <div class="card">
@@ -735,6 +739,7 @@ export class TimingDevicesCard extends Component {
           <div class="option-actions">
             <select name="timing-hardware-mode" class="input" style="min-width:220px" aria-label="Timing system">
               <option value="slaprf" ${effectiveMode === "slaprf" ? "selected" : ""}>SlapRF (USB)</option>
+              <option value="slaprf_ble" ${effectiveMode === "slaprf_ble" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select SlapRF (Bluetooth)"'}>SlapRF (Bluetooth)</option>
               <option value="laprf" ${effectiveMode === "laprf" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select LapRF 8-Way (Network)"'}>LapRF 8-Way (Network)</option>
               <option value="rotorhazard" ${effectiveMode === "rotorhazard" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select RotorHazard (Network)"'}>RotorHazard (Network)</option>
               <option value="rotorhazard_usb" ${effectiveMode === "rotorhazard_usb" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select RotorHazard (USB)"'}>RotorHazard (USB)</option>

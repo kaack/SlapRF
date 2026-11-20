@@ -337,8 +337,35 @@ func (e *Engine) provisionCollectorHubLocked(fingerprint, label, ver string) uin
 	if label != "" {
 		d.TimerLabel = label
 	}
+	now := time.Now()
 	d.Online = true
-	d.LastSeenAt = time.Now()
+	d.LastSeenAt = now
+	if domain.NormalizeTimingHardwareMode(e.timingHardwareMode) == domain.HardwareModeSlapRFBLE && len(e.gates) == 0 {
+		gateLabel := d.TimerLabel
+		if gateLabel == "" {
+			gateLabel = domain.DefaultSimHubLabel
+		}
+		e.gates = []domain.TrackGate{
+			{
+				GateID:          1,
+				AssignedTimerID: id,
+				TimerLabel:      gateLabel,
+				FirmwareVersion: d.FirmwareVersion,
+				Color:           d.Color,
+				Role:            domain.GateRoleStartFinish,
+				TrackOrder:      0,
+				MapX:            0.50,
+				MapY:            0.50,
+				BatteryMv:       d.BatteryMv,
+				BatteryPct:      d.BatteryPct,
+				NoiseFloorDbm:   d.NoiseFloorDbm,
+				LastRSSI:        d.LastRSSI,
+				Online:          true,
+				LastSeenAt:      now,
+			},
+		}
+		e.initDetectorsLocked()
+	}
 	return id
 }
 

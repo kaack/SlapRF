@@ -65,6 +65,7 @@ func (m *Manager) Connect(slotIndex int, portName string) (SlotSnapshot, error) 
 	slot.reconnecting = false
 	slot.reconnectAttempt = 0
 	slot.reconnectFailed = false
+	slot.authRejected = false
 	slot.suspendedForSim = false
 	slot.lastError = ""
 	slot.lastStatus = nil
@@ -81,21 +82,43 @@ func (m *Manager) Connect(slotIndex int, portName string) (SlotSnapshot, error) 
 	if slotIndex == 1 {
 		m.SetDebugSlot(1)
 	}
-	m.persistUSBTargets()
+	m.saveSlotTarget(slotIndex, portName)
 	m.broadcastPoolState()
 
 	go m.runSlotLoops(ctx, slot, port, portName, doneCh)
 
-	// Probe initial status/config (up to ~1.2s) without blocking forever if it's an unprogrammed board.
-	_, _ = m.probeInitialStatus(slot, 1200*time.Millisecond)
+	probeTimeout := 1200 * time.Millisecond
+	if IsBLEPortName(portName) {
+		probeTimeout = 1800 * time.Millisecond
+	}
+	// Probe initial status/config without blocking forever if it's an unprogrammed board.
+	_, _ = m.probeInitialStatus(slot, probeTimeout)
 
 	slot.mu.Lock()
+	authRej := slot.authRejected
+	rejMsg := slot.lastError
 	if slot.probing {
 		slot.probing = false
 	}
 	stAfter := slot.lastStatus
 	cfgAfter := slot.lastConfig
 	slot.mu.Unlock()
+
+	if authRej {
+		if rejMsg == "" {
+			rejMsg = defaultBLEAuthMismatchMsg
+		}
+		_ = m.closeSlotInternal(slot, true)
+		slot.mu.Lock()
+		slot.lastError = rejMsg
+		slot.reconnectFailed = true
+		slot.authRejected = true
+		slot.mu.Unlock()
+		m.removePersistedBLETarget(portName)
+		m.broadcastPoolState()
+		return m.Snapshot().Slots[slotIndex], errors.New(rejMsg)
+	}
+
 	m.registerConnectedHubInEngine(stAfter, cfgAfter)
 	m.broadcastPoolState()
 	return m.Snapshot().Slots[slotIndex], nil
@@ -107,11 +130,14 @@ func (m *Manager) Disconnect(slotIndex int) error {
 		return fmt.Errorf("invalid USB slot index %d", slotIndex)
 	}
 	slot := m.slots[slotIndex]
+	slot.mu.Lock()
+	prevPort := slot.portName
+	slot.mu.Unlock()
 	err := m.closeSlotInternal(slot, true)
 	if slotIndex == 1 {
 		m.SetDebugSlot(0)
 	}
-	m.persistUSBTargets()
+	m.clearSlotTarget(slotIndex, prevPort)
 	m.broadcastPoolState()
 	return err
 }
@@ -131,6 +157,7 @@ func (m *Manager) closeSlotInternal(slot *usbSlot, clearPortName bool) error {
 		slot.reconnecting = false
 		slot.reconnectAttempt = 0
 		slot.reconnectFailed = false
+		slot.authRejected = false
 		slot.lastStatus = nil
 		slot.lastConfig = nil
 	}
@@ -157,20 +184,93 @@ func (m *Manager) closeSlotInternal(slot *usbSlot, clearPortName bool) error {
 	return closeErr
 }
 
-func (m *Manager) persistUSBTargets() {
+func (m *Manager) saveSlotTarget(slotIndex int, portName string) {
+	portName = strings.TrimSpace(portName)
+	if slotIndex < 0 || slotIndex >= MaxUSBConnections || portName == "" {
+		return
+	}
+	isBLE := IsBLEPortName(portName)
+	m.mu.Lock()
+	if isBLE {
+		for i := 0; i < MaxUSBConnections; i++ {
+			if i != slotIndex && strings.EqualFold(m.savedBLETargets[i], portName) {
+				m.savedBLETargets[i] = ""
+			}
+		}
+		m.savedBLETargets[slotIndex] = portName
+	} else {
+		for i := 0; i < MaxUSBConnections; i++ {
+			if i != slotIndex && strings.EqualFold(m.savedUSBTargets[i], portName) {
+				m.savedUSBTargets[i] = ""
+			}
+		}
+		m.savedUSBTargets[slotIndex] = portName
+	}
+	m.persistTargetsLocked(isBLE)
+	m.mu.Unlock()
+}
+
+func (m *Manager) clearSlotTarget(slotIndex int, prevPort string) {
+	if slotIndex < 0 || slotIndex >= MaxUSBConnections {
+		return
+	}
+	m.mu.Lock()
+	if prevPort != "" {
+		isBLE := IsBLEPortName(prevPort)
+		if isBLE {
+			m.savedBLETargets[slotIndex] = ""
+		} else {
+			m.savedUSBTargets[slotIndex] = ""
+		}
+		m.persistTargetsLocked(isBLE)
+	} else {
+		if m.bleOnly {
+			m.savedBLETargets[slotIndex] = ""
+			m.persistTargetsLocked(true)
+		} else {
+			m.savedUSBTargets[slotIndex] = ""
+			m.persistTargetsLocked(false)
+		}
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) removePersistedBLETarget(portName string) {
+	portName = strings.TrimSpace(portName)
+	if portName == "" {
+		return
+	}
+	m.mu.Lock()
+	changed := false
+	for i := 0; i < MaxUSBConnections; i++ {
+		if strings.EqualFold(m.savedBLETargets[i], portName) {
+			m.savedBLETargets[i] = ""
+			changed = true
+		}
+	}
+	if changed {
+		m.persistTargetsLocked(true)
+	}
+	m.mu.Unlock()
+}
+
+func (m *Manager) persistTargetsLocked(isBLE bool) {
 	if m.cfg.Store == nil {
 		return
 	}
 	targets := make(map[string]string)
-	for i := 0; i < MaxUSBConnections; i++ {
-		s := m.slots[i]
-		s.mu.Lock()
-		if (s.port != nil || s.suspendedForSim) && s.portName != "" {
-			targets[fmt.Sprintf("%d", i)] = s.portName
-		}
-		s.mu.Unlock()
+	src := m.savedUSBTargets
+	key := kvUSBTargetsKey
+	if isBLE {
+		src = m.savedBLETargets
+		key = kvBLETargetsKey
 	}
-	_ = m.cfg.Store.PutJSON(kvUSBTargetsKey, targets)
+	for i := 0; i < MaxUSBConnections; i++ {
+		if p := strings.TrimSpace(src[i]); p != "" {
+			targets[fmt.Sprintf("%d", i)] = p
+		}
+	}
+	_ = m.cfg.Store.PutJSON(key, targets)
 }
 
 func (m *Manager) probeInitialStatus(slot *usbSlot, timeout time.Duration) (map[string]any, error) {
@@ -181,16 +281,26 @@ func (m *Manager) probeInitialStatus(slot *usbSlot, timeout time.Duration) (map[
 		slot.mu.Lock()
 		connected := slot.port != nil
 		port := slot.port
+		pName := slot.portName
 		st := slot.lastStatus
 		rom := slot.sawRomBootloader
+		authRej := slot.authRejected
+		rejErr := slot.lastError
 		slot.mu.Unlock()
+		if authRej {
+			if rejErr == "" {
+				rejErr = defaultBLEAuthMismatchMsg
+			}
+			return nil, errors.New(rejErr)
+		}
 		if !connected {
 			return st, nil
 		}
 		if st != nil {
 			return st, nil
 		}
-		if rom && !rebootedOnce {
+		isBLE := IsBLEPortName(pName)
+		if rom && !rebootedOnce && !isBLE {
 			rebootedOnce = true
 			slot.mu.Lock()
 			slot.sawRomBootloader = false
@@ -203,7 +313,11 @@ func (m *Manager) probeInitialStatus(slot *usbSlot, timeout time.Duration) (map[
 		}
 		cmd := "STATUS?"
 		if first {
-			cmd = "LIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?"
+			if isBLE {
+				cmd = fmt.Sprintf("AUTH %s\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?", m.BLEHostKey())
+			} else {
+				cmd = "LIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?"
+			}
 			first = false
 		}
 		res, err := m.RequestReply(slot.index, cmd, "status", 450*time.Millisecond)
@@ -213,13 +327,21 @@ func (m *Manager) probeInitialStatus(slot *usbSlot, timeout time.Duration) (map[
 			}
 		}
 		slot.mu.Lock()
+		authRejNow := slot.authRejected
+		rejErrNow := slot.lastError
 		hasAny := slot.lastStatus != nil || slot.lastConfig != nil
 		stNow := slot.lastStatus
 		slot.mu.Unlock()
+		if authRejNow {
+			if rejErrNow == "" {
+				rejErrNow = defaultBLEAuthMismatchMsg
+			}
+			return nil, errors.New(rejErrNow)
+		}
 		if hasAny {
 			return stNow, nil
 		}
-		if !rebootedOnce && time.Now().Add(200*time.Millisecond).After(deadline) {
+		if !isBLE && !rebootedOnce && time.Now().Add(200*time.Millisecond).After(deadline) {
 			// Board was completely silent across initial STATUS? probes (e.g., sitting idle in
 			// USB-Serial-JTAG ROM download mode after a reconnect or mode switch). Pulse a clean
 			// SPI flash reboot once and give it 1.5s to answer.
@@ -432,6 +554,13 @@ func (m *Manager) runSlotLoops(ctx context.Context, slot *usbSlot, port firmware
 		if n > 0 {
 			rxBuf = append(rxBuf, tmp[:n]...)
 			rxBuf = m.parseSlotBuffer(slot, rxBuf)
+			slot.mu.Lock()
+			authRej := slot.authRejected
+			slot.mu.Unlock()
+			if authRej {
+				unexpectedDrop = true
+				break
+			}
 		}
 		if err != nil {
 			if ctx.Err() != nil {
@@ -443,15 +572,20 @@ func (m *Manager) runSlotLoops(ctx context.Context, slot *usbSlot, port firmware
 				continue
 			}
 			if errors.Is(err, io.EOF) && n == 0 {
-				// On POSIX/Windows USB unplug often surfaces as EOF or device error.
+				// On POSIX/Windows USB unplug or BLE disconnect surfaces as EOF.
 				unexpectedDrop = true
 				break
 			}
 			unexpectedDrop = true
 			slot.mu.Lock()
-			slot.lastError = err.Error()
+			if !slot.authRejected {
+				slot.lastError = err.Error()
+			}
+			authRej := slot.authRejected
 			slot.mu.Unlock()
-			m.emit(USBEvent{Type: "error", SlotIndex: slot.index, Error: err.Error()})
+			if !authRej {
+				m.emit(USBEvent{Type: "error", SlotIndex: slot.index, Error: err.Error()})
+			}
 			break
 		}
 	}
@@ -459,13 +593,29 @@ func (m *Manager) runSlotLoops(ctx context.Context, slot *usbSlot, port firmware
 	if unexpectedDrop && ctx.Err() == nil {
 		_ = port.Close()
 		slot.mu.Lock()
+		authRej := slot.authRejected
+		rejMsg := slot.lastError
 		if slot.port == port {
 			slot.port = nil
 			slot.probing = false
 			slot.lastStatus = nil
 			slot.lastConfig = nil
+			if authRej {
+				slot.portName = ""
+				slot.reconnecting = false
+				slot.reconnectFailed = true
+			}
 		}
 		slot.mu.Unlock()
+		if authRej {
+			if rejMsg == "" {
+				rejMsg = defaultBLEAuthMismatchMsg
+			}
+			m.removePersistedBLETarget(portName)
+			m.failWaiters(slot, errors.New(rejMsg))
+			m.broadcastPoolState()
+			return
+		}
 		m.failWaiters(slot, errors.New("USB disconnected"))
 		m.broadcastPoolState()
 		go m.attemptAutoReconnect(slot, portName)
@@ -474,7 +624,7 @@ func (m *Manager) runSlotLoops(ctx context.Context, slot *usbSlot, port firmware
 
 func (m *Manager) attemptAutoReconnect(slot *usbSlot, portName string) {
 	slot.mu.Lock()
-	if slot.reconnecting {
+	if slot.reconnecting || slot.authRejected {
 		slot.mu.Unlock()
 		return
 	}
@@ -497,7 +647,7 @@ func (m *Manager) attemptAutoReconnect(slot *usbSlot, portName string) {
 			return
 		}
 		slot.mu.Lock()
-		if slot.port != nil || slot.portName == "" {
+		if slot.port != nil || slot.portName == "" || slot.authRejected {
 			slot.reconnecting = false
 			slot.mu.Unlock()
 			m.broadcastPoolState()
@@ -510,7 +660,7 @@ func (m *Manager) attemptAutoReconnect(slot *usbSlot, portName string) {
 		time.Sleep(1200 * time.Millisecond)
 
 		slot.mu.Lock()
-		slotBusy := slot.port != nil || slot.portName == ""
+		slotBusy := slot.port != nil || slot.portName == "" || slot.authRejected
 		slot.mu.Unlock()
 		if slotBusy {
 			slot.mu.Lock()
@@ -523,12 +673,22 @@ func (m *Manager) attemptAutoReconnect(slot *usbSlot, portName string) {
 		if _, err := m.Connect(slot.index, portName); err == nil {
 			return
 		}
+		slot.mu.Lock()
+		authRej := slot.authRejected
+		slot.mu.Unlock()
+		if authRej {
+			return
+		}
 	}
 
 	slot.mu.Lock()
 	slot.reconnecting = false
 	slot.reconnectFailed = true
-	slot.lastError = "Lost USB connection after 5 reconnect attempts."
+	if IsBLEPortName(portName) {
+		slot.lastError = "Lost Bluetooth Hub connection after 5 reconnect attempts."
+	} else {
+		slot.lastError = "Lost USB connection after 5 reconnect attempts."
+	}
 	slot.mu.Unlock()
 	m.broadcastPoolState()
 
@@ -917,7 +1077,26 @@ func (m *Manager) emitTextLine(slot *usbSlot, raw []byte) {
 			tStr, _ := msg["t"].(string)
 			m.emit(USBEvent{Type: "raw_reply", SlotIndex: slot.index, Line: jsonLine, MsgType: tStr})
 			if tStr == "err" {
+				codeStr, _ := msg["code"].(string)
 				errMsg, _ := msg["msg"].(string)
+				if codeStr == "auth_mismatch" || codeStr == "unpaired" {
+					if strings.TrimSpace(errMsg) == "" {
+						errMsg = defaultBLEAuthMismatchMsg
+					}
+					slot.mu.Lock()
+					pName := slot.portName
+					slot.authRejected = true
+					slot.probing = false
+					slot.reconnecting = false
+					slot.reconnectFailed = true
+					slot.lastError = errMsg
+					slot.mu.Unlock()
+					m.removePersistedBLETarget(pName)
+					m.emit(USBEvent{Type: "error", SlotIndex: slot.index, Error: errMsg})
+					m.failWaiters(slot, errors.New(errMsg))
+					m.broadcastPoolState()
+					return
+				}
 				if errMsg == "" {
 					errMsg = "command refused"
 				}

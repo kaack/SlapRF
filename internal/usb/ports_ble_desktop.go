@@ -214,19 +214,32 @@ func (h *bleDesktopHost) startScanLocked(window time.Duration) chan struct{} {
 }
 
 // stopScan stops a running scan and waits briefly for it to finish (connecting while scanning
-// is unreliable on several stacks).
-func (h *bleDesktopHost) stopScan() {
+// is unreliable on several stacks). Returns true when an active scan was stopped.
+func (h *bleDesktopHost) stopScan() bool {
 	h.mu.Lock()
 	scanning, done := h.scanning, h.scanDone
 	h.mu.Unlock()
 	if !scanning || done == nil {
-		return
+		return false
 	}
 	_ = h.adapter.StopScan()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
 	}
+	return true
+}
+
+func (h *bleDesktopHost) hasFreshOrConnectedLocked() bool {
+	if len(h.conns) > 0 {
+		return true
+	}
+	for _, s := range h.seen {
+		if time.Since(s.at) <= bleSeenTTL {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *bleDesktopHost) lookup(fp string) (bleSeenHub, bool) {
@@ -249,17 +262,32 @@ func bleListPorts() ([]PortInfo, error) {
 	}
 	h.mu.Lock()
 	first := h.lastScanStart.IsZero()
+	cold := !h.hasFreshOrConnectedLocked()
 	var waitCh chan struct{}
 	// Avoid scanning while a hub link is up or opening: scanning steals radio time from the
 	// 10 ms connection events that carry the RSSI stream.
-	if len(h.conns) == 0 && h.opening == 0 && (first || time.Since(h.lastScanStart) > bleScanRefreshEvery) {
-		waitCh = h.startScanLocked(bleScanWindow)
+	if len(h.conns) == 0 && h.opening == 0 {
+		if first || cold || time.Since(h.lastScanStart) > bleScanRefreshEvery {
+			waitCh = h.startScanLocked(bleScanWindow)
+		} else if h.scanning {
+			waitCh = h.scanDone
+		}
 	}
 	h.mu.Unlock()
-	if first && waitCh != nil {
-		select {
-		case <-waitCh:
-		case <-time.After(bleFirstListWait):
+	if cold && waitCh != nil {
+		deadline := time.Now().Add(bleFirstListWait)
+		for time.Now().Before(deadline) {
+			h.mu.Lock()
+			warm := h.hasFreshOrConnectedLocked()
+			h.mu.Unlock()
+			if warm {
+				break
+			}
+			select {
+			case <-waitCh:
+				deadline = time.Time{}
+			case <-time.After(100 * time.Millisecond):
+			}
 		}
 	}
 
@@ -275,7 +303,11 @@ func bleListPorts() ([]PortInfo, error) {
 		if !connectedFP[fp] && time.Since(s.at) > bleSeenTTL {
 			continue
 		}
-		out = append(out, BLEPortInfoFor(s.info, s.name))
+		info := s.info
+		if connectedFP[fp] {
+			info.Paired = true
+		}
+		out = append(out, BLEPortInfoFor(info, s.name))
 	}
 	return out, nil
 }
@@ -323,7 +355,11 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 			seen, found = h.lookup(fp)
 		}
 	}
-	h.stopScan()
+	if h.stopScan() {
+		// WinRT's advertisement watcher transitions asynchronously to Stopped; opening a GATT
+		// session in the same millisecond can return Unreachable (code 1) before radio handoff.
+		time.Sleep(150 * time.Millisecond)
+	}
 	if !found {
 		return nil, fmt.Errorf("Bluetooth hub %s not found (is it powered and advertising?)", fp)
 	}
@@ -331,20 +367,33 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 	// Do not force a connection interval or priority: the hub requests 10 ms (falling back to
 	// 20 or 30 ms) right after connect so its connection events line up with the 100 Hz sweep
 	// schedule; the host just accepts that update.
-	dev, err := h.adapter.Connect(seen.addr, bluetooth.ConnectionParams{
-		ConnectionTimeout: bluetooth.NewDuration(bleConnectTimeout),
-	})
+	var (
+		dev  bluetooth.Device
+		svcs []bluetooth.DeviceService
+		err  error
+	)
+	for attempt := 0; attempt < 3; attempt++ {
+		if attempt > 0 {
+			time.Sleep(300 * time.Millisecond)
+		}
+		dev, err = h.adapter.Connect(seen.addr, bluetooth.ConnectionParams{
+			ConnectionTimeout: bluetooth.NewDuration(bleConnectTimeout),
+		})
+		if err != nil {
+			continue
+		}
+		svcs, err = dev.DiscoverServices([]bluetooth.UUID{h.svcUUID})
+		if err == nil && len(svcs) > 0 {
+			break
+		}
+		_ = dev.Disconnect()
+	}
 	if err != nil {
-		return nil, fmt.Errorf("Bluetooth connect to %s failed: %w", fp, err)
+		return nil, fmt.Errorf("Bluetooth hub %s service discovery failed: %w", fp, err)
 	}
 	fail := func(stage string, err error) (firmware.SerialPort, error) {
 		_ = dev.Disconnect()
 		return nil, fmt.Errorf("Bluetooth hub %s %s: %w", fp, stage, err)
-	}
-
-	svcs, err := dev.DiscoverServices([]bluetooth.UUID{h.svcUUID})
-	if err != nil {
-		return fail("service discovery failed", err)
 	}
 	if len(svcs) == 0 {
 		return fail("service discovery failed", errors.New("SlapRF Hub service not found"))

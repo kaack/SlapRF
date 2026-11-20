@@ -270,14 +270,14 @@ func main() {
 	if !loadedBootState {
 		simHubUSBConnected.Store(true)
 		sim.RestoreDemoData()
-	} else if simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF {
+	} else if domain.IsSlapRFMode(simEngine.TimingHardwareMode()) {
 		simEngine.SetAllTimersOffline()
 	} else {
 		sim.SyncHardwareMode()
 	}
 	sim.Start()
 	sim.SetRunning(true) // Standalone Browser Demo Mode always runs Simulator ON
-	if !loadedBootState && simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF {
+	if !loadedBootState && domain.IsSlapRFMode(simEngine.TimingHardwareMode()) {
 		simHubRx.Reset()
 		ingestRawHubStream(simHubRx, simEngine, sim.BuildHubHelloStream())
 	}
@@ -457,12 +457,12 @@ func main() {
 		connected := len(args) > 0 && args[0].Truthy()
 		simHubUSBConnected.Store(connected)
 		if !connected {
-			if simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF {
+			if domain.IsSlapRFMode(simEngine.TimingHardwareMode()) {
 				simEngine.SetAllTimersOffline()
 			}
 			return nil
 		}
-		if sim.IsRunning() && simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF {
+		if sim.IsRunning() && domain.IsSlapRFMode(simEngine.TimingHardwareMode()) {
 			simHubRx.Reset()
 			simStreamSub.beginBatch()
 			ingestRawHubStream(simHubRx, simEngine, sim.BuildHubHelloStream())

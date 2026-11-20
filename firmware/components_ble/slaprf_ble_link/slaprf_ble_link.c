@@ -45,6 +45,7 @@ static const ble_uuid128_t s_tx_uuid = BLE_UUID128_INIT(0x46, 0x52, 0x50, 0x41, 
 static uint16_t s_tx_handle;
 static uint8_t s_own_addr_type;
 static volatile uint16_t s_conn = BLE_HS_CONN_HANDLE_NONE;
+static volatile int64_t s_conn_since_us;
 static volatile bool s_subscribed;
 static volatile uint16_t s_mtu = 23;
 static volatile uint8_t s_phy = 1;
@@ -60,7 +61,9 @@ static slaprf_ble_rx_cb_t s_on_rx;
 static slaprf_ble_event_cb_t s_on_event;
 
 static char s_name[30];
-static uint8_t s_mfg[12];
+static uint8_t s_mfg[13];
+static volatile bool s_adv_paired;
+static volatile bool s_synced;
 
 static volatile uint32_t s_tx_notifies, s_tx_bytes, s_tx_drops, s_rx_writes, s_connects;
 
@@ -118,8 +121,12 @@ int __wrap_ble_transport_to_hs_evt_impl(void *buf) {
 }
 
 bool slaprf_ble_needs_radio_free(void) {
-    if (!slaprf_ble_ready() || !s_sync_enabled) {
+    if (!slaprf_ble_connected() || !s_sync_enabled) {
         return false;
+    }
+    if (!slaprf_ble_ready()) {
+        // Keep 2.4 GHz uninterrupted during GATT service discovery, MTU exchange, and CCCD subscribe.
+        return slaprf_ble_connected_us() < 2500000LL;
     }
     const int64_t now = esp_timer_get_time();
     if (!s_sync_locked && now < s_reacquire_until_us) {
@@ -239,6 +246,10 @@ void slaprf_ble_set_sync_enabled(bool on) {
     if (!on) s_sync_locked = false;
 }
 
+void slaprf_ble_trigger_reacquire(int64_t duration_us) {
+    reset_phase_window(duration_us);
+}
+
 /* ---- GATT ------------------------------------------------------------------------------------- */
 
 static int chr_access(uint16_t conn_handle, uint16_t attr_handle, struct ble_gatt_access_ctxt *ctxt, void *arg) {
@@ -288,6 +299,21 @@ static const struct ble_gatt_svc_def s_svcs[] = {
 
 static int gap_event(struct ble_gap_event *event, void *arg);
 
+static void update_scan_rsp(void) {
+    s_mfg[12] = s_adv_paired ? 0x01U : 0x00U;
+    struct ble_hs_adv_fields rsp;
+    memset(&rsp, 0, sizeof(rsp));
+    rsp.name = (const uint8_t *)s_name;
+    rsp.name_len = (uint8_t)strlen(s_name);
+    rsp.name_is_complete = 1;
+    rsp.mfg_data = s_mfg;
+    rsp.mfg_data_len = sizeof(s_mfg);
+    int rc = ble_gap_adv_rsp_set_fields(&rsp);
+    if (rc != 0) {
+        ESP_LOGW(TAG, "scan rsp rc=%d", rc);
+    }
+}
+
 static void advertise(void) {
     struct ble_hs_adv_fields f;
     memset(&f, 0, sizeof(f));
@@ -301,18 +327,7 @@ static void advertise(void) {
         return;
     }
 
-    struct ble_hs_adv_fields rsp;
-    memset(&rsp, 0, sizeof(rsp));
-    rsp.name = (const uint8_t *)s_name;
-    rsp.name_len = (uint8_t)strlen(s_name);
-    rsp.name_is_complete = 1;
-    rsp.mfg_data = s_mfg;
-    rsp.mfg_data_len = sizeof(s_mfg);
-    rc = ble_gap_adv_rsp_set_fields(&rsp);
-    if (rc != 0) {
-        ESP_LOGW(TAG, "scan rsp rc=%d", rc);
-        return;
-    }
+    update_scan_rsp();
 
     struct ble_gap_adv_params p;
     memset(&p, 0, sizeof(p));
@@ -357,6 +372,7 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
     case BLE_GAP_EVENT_CONNECT:
         if (event->connect.status == 0) {
             s_conn = event->connect.conn_handle;
+            s_conn_since_us = esp_timer_get_time();
             s_subscribed = false;
             s_mtu = 23;
             s_phy = 1;
@@ -374,14 +390,14 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
         }
         return 0;
     case BLE_GAP_EVENT_DISCONNECT: {
-        const bool was = s_subscribed;
         s_conn = BLE_HS_CONN_HANDLE_NONE;
+        s_conn_since_us = 0;
         s_subscribed = false;
         s_itvl_us = 0;
         s_sync_locked = false;
         s_reacquire_until_us = 0;
         s_phase_us = -1;
-        if (was && s_on_event) s_on_event(false);
+        if (s_on_event) s_on_event(false);
         advertise();
         return 0;
     }
@@ -431,10 +447,12 @@ static void on_sync(void) {
         ESP_LOGE(TAG, "no BLE address (rc=%d)", rc);
         return;
     }
+    s_synced = true;
     advertise();
 }
 
 static void on_reset(int reason) {
+    s_synced = false;
     ESP_LOGW(TAG, "NimBLE host reset, reason=%d", reason);
 }
 
@@ -446,8 +464,35 @@ static void host_task(void *param) {
 
 /* ---- Byte-stream tasks ------------------------------------------------------------------------ */
 
+bool slaprf_ble_connected(void) {
+    return s_conn != BLE_HS_CONN_HANDLE_NONE;
+}
+
+int64_t slaprf_ble_connected_us(void) {
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE || s_conn_since_us <= 0) {
+        return 0;
+    }
+    const int64_t diff = esp_timer_get_time() - s_conn_since_us;
+    return diff > 0 ? diff : 0;
+}
+
 bool slaprf_ble_ready(void) {
     return s_conn != BLE_HS_CONN_HANDLE_NONE && s_subscribed;
+}
+
+void slaprf_ble_disconnect(void) {
+    const uint16_t conn = s_conn;
+    if (conn != BLE_HS_CONN_HANDLE_NONE) {
+        ble_gap_terminate(conn, BLE_ERR_REM_USER_CONN_TERM);
+    }
+}
+
+void slaprf_ble_set_paired_flag(bool paired) {
+    s_adv_paired = paired;
+    if (s_synced && s_conn == BLE_HS_CONN_HANDLE_NONE) {
+        ble_gap_adv_stop();
+        advertise();
+    }
 }
 
 size_t slaprf_ble_write(const void *data, size_t len, uint32_t timeout_ms) {
@@ -556,24 +601,25 @@ void slaprf_ble_get_stats(slaprf_ble_stats_t *out) {
 }
 
 void slaprf_ble_link_start(const char *label, uint32_t fingerprint, uint8_t role, const uint8_t fw_version[3],
-                           slaprf_ble_rx_cb_t on_rx, slaprf_ble_event_cb_t on_event) {
+                           bool paired, slaprf_ble_rx_cb_t on_rx, slaprf_ble_event_cb_t on_event) {
     s_on_rx = on_rx;
     s_on_event = on_event;
+    s_adv_paired = paired;
     s_tx_sb = xStreamBufferCreate(TX_BUFFER_BYTES, 1);
     s_rx_sb = xStreamBufferCreate(RX_BUFFER_BYTES, 1);
     s_tx_mutex = xSemaphoreCreateMutex();
 
-    // Scan-response name "SlapRF <label>" (at most 15 characters fit next to the manufacturer data).
+    // Scan-response name "SlapRF <label>" (at most 14 characters so 16 + 15 <= 31-byte scan response).
     char clean[16] = {0};
     int ci = 0;
-    for (int i = 0; label != NULL && label[i] && ci < 8; i++) {
+    for (int i = 0; label != NULL && label[i] && ci < 7; i++) {
         const char c = label[i];
         if (c >= 0x20 && c < 0x7F) clean[ci++] = c;
     }
     snprintf(s_name, sizeof(s_name), ci ? "SlapRF %s" : "SlapRF Hub", clean);
-    s_name[15] = 0;
+    s_name[14] = 0;
 
-    // Manufacturer data: 0xFFFF (no company ID), 'S' 'R', fingerprint LE, role, fw version.
+    // Manufacturer data: 0xFFFF (no company ID), 'S' 'R', fingerprint LE, role, fw version, flags.
     s_mfg[0] = 0xFF;
     s_mfg[1] = 0xFF;
     s_mfg[2] = 'S';
@@ -586,6 +632,7 @@ void slaprf_ble_link_start(const char *label, uint32_t fingerprint, uint8_t role
     s_mfg[9] = fw_version ? fw_version[0] : 0;
     s_mfg[10] = fw_version ? fw_version[1] : 0;
     s_mfg[11] = fw_version ? fw_version[2] : 0;
+    s_mfg[12] = paired ? 0x01U : 0x00U;
 
     if (nimble_port_init() != ESP_OK) {
         ESP_LOGE(TAG, "nimble_port_init failed");

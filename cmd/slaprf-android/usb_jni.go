@@ -29,9 +29,11 @@ const jniBufSize = 4096
 // discovered by SlapRFBleShim (le:<FP>). Bluetooth errors never hide USB ports.
 func jniListPorts() ([]usb.PortInfo, error) {
 	ports, err := jniListUSBPorts()
-	if ble, bleErr := jniListBLEPorts(); bleErr == nil && len(ble) > 0 {
-		ports = append(ports, ble...)
-		err = nil
+	if usb.BLEScanEnabled() {
+		if ble, bleErr := jniListBLEPorts(); bleErr == nil && len(ble) > 0 {
+			ports = append(ports, ble...)
+			err = nil
+		}
 	}
 	return ports, err
 }

@@ -35,6 +35,7 @@ import {
   EventPilot,
   HeatSeat,
   isRotorHazardMode,
+  isSlapRFMode,
   PilotAttendance,
   RaceHeat,
   RaceLifecycle,
@@ -10591,7 +10592,7 @@ export class RacesView extends Component {
           <div class="race-rf-top">
             <span class="badge mono">${esc(rfBadgeText)}</span>
             ${s.channelChanged ? `<span class="bkt-ch-delta" title="Switched from ${esc(prevShort)}">${icons.channelSwap(14)}</span>` : ""}
-            <span class="race-rssi-val mono note">${this.store.timingHardwareMode === "slaprf" ? "— dBm" : "—"}</span>
+            <span class="race-rssi-val mono note">${isSlapRFMode(this.store.timingHardwareMode) ? "— dBm" : "—"}</span>
           </div>
           <div class="race-rssi-bar"><div class="race-rssi-fill" style="--c:${s.color}; width: 6%"></div></div>
         </div>`;

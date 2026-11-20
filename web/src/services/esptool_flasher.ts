@@ -355,7 +355,9 @@ export function isBackendRawWebSerialPort(port: unknown): port is BackendRawWebS
 }
 
 async function fetchBackendUsbPorts(showAll: boolean): Promise<BackendUsbPortDescriptor[]> {
-  const url = resolveBackendUrl(showAll ? "/api/usb/ports?all=1" : "/api/usb/ports");
+  const url = resolveBackendUrl(
+    showAll ? "/api/usb/ports?transport=usb&all=1" : "/api/usb/ports?transport=usb"
+  );
   const resp = await fetch(url, { cache: "no-store" });
   if (!resp.ok) {
     throw new Error(`Could not list USB ports (HTTP ${resp.status}).`);

@@ -22,7 +22,7 @@ import {
   usbPool,
 } from "../services/timer_console";
 import { AppStore } from "../state/store";
-import { DetectedTimer, isRotorHazardMode, TimingHardwareMode } from "../types/models";
+import { DetectedTimer, isRotorHazardMode, isSlapRFMode, TimingHardwareMode } from "../types/models";
 import { patchUsbConnectionBar } from "../widgets/UsbConnectionBar";
 import {
   buildFileStamp,
@@ -610,7 +610,7 @@ export class DebugView extends Component {
   }
 
   private isSlapRFMode(): boolean {
-    return this.hwMode() === "slaprf";
+    return isSlapRFMode(this.hwMode());
   }
 
   private isRotorHazardMode(): boolean {
@@ -854,7 +854,8 @@ export class DebugView extends Component {
 
   private syncHardwareModeDom(): void {
     const mode = this.hwMode();
-    const isSlap = mode === "slaprf";
+    const isSlap = isSlapRFMode(mode);
+    const isSlapBLE = mode === "slaprf_ble";
     const isRHNet = mode === "rotorhazard";
     const isRHUSB = mode === "rotorhazard_usb";
     const isLapRF = mode === "laprf";
@@ -944,6 +945,37 @@ export class DebugView extends Component {
         "connection",
         "Connection",
         `<p>Select or connect a LapRF 8-Way timer over Ethernet TCP (<span class="mono">:5403</span>) or USB CDC. Manage hardware endpoints on the Network page.</p>`
+      );
+    } else if (isSlapBLE) {
+      setIntro(
+        "connection",
+        "Bluetooth Hub",
+        `<p>Connect a SlapRF Bluetooth Hub wirelessly over Bluetooth LE to inspect its GATT link, sweep phase lock, and live 5.8 GHz receiver telemetry.</p>`
+      );
+      setIntro(
+        "self-test",
+        "Self-test",
+        `<p>Runs a 10-second end-to-end check over Bluetooth: console, identity, 5.8 GHz receiver, sweep timing, memory, last restart, BLE link sync, and engine feed. Copy the report when troubleshooting.</p>`
+      );
+      setIntro(
+        "status-health",
+        "Status &amp; health",
+        `<p>Identity, Bluetooth LE link &amp; pairing state, uptime, last restart reason, free memory, sweep timing, and 5.8 GHz boot check. Updates every 2 seconds with a 5-minute trend.</p>`
+      );
+      setIntro(
+        "monitored-channels",
+        "Monitored channels",
+        `<p>The 8 pilot channels scanned each sweep by the Bluetooth Hub. Click a channel to toggle it on or off (fewer active channels sweep faster). Click <strong>Stream</strong> for live 5.8 GHz signal bars.</p>`
+      );
+      setIntro(
+        "signal-noise",
+        "Signal over time &amp; channel noise",
+        `<p>Click <strong>Stream</strong> to plot live 50 Hz sweeps over Bluetooth, crossing peaks, 5 GHz Wi-Fi bursts, noise floors, and pilot thresholds.</p><p>The table below shows mean, spread, max, floor, hits/s, and how often noise reaches a pilot's enter threshold ("would trigger": anything above 0% with no drone flying risks false passes).</p>`
+      );
+      setIntro(
+        "spectrum-scan",
+        "Spectrum scan &amp; waterfall",
+        `<p>Scans 5180-5917 MHz on the Bluetooth Hub to spot rogue VTXs or 5 GHz Wi-Fi interference (Raceband <strong>R3-R6 overlap Wi-Fi UNII-3</strong>, channels 149-165, 5735-5835 MHz).</p><p><strong>Scan once</strong> captures a single sweep. <strong>Stream</strong> scans continuously with live, average, and max-hold traces (pausing the 8-channel stream while active).</p>`
       );
     } else {
       setIntro(
@@ -3065,9 +3097,11 @@ export class DebugView extends Component {
     try {
       switch (t.dataset.action) {
         case "connect":
-        case "connect-add":
-          await usbPool.connectOrSwapDebug(this.showAllPorts);
+        case "connect-add": {
+          const isBle = this.hwMode() === "slaprf_ble";
+          await usbPool.connectOrSwapDebug(isBle ? false : this.showAllPorts);
           break;
+        }
         case "revert-usb-main":
           await usbPool.revertDebugToMain();
           break;
@@ -4221,7 +4255,7 @@ export class DebugView extends Component {
     if (!a) return [name, "skip", "timing engine state is not available"];
     if (!a.found) {
       const hint =
-        this.console.transportLabel === "Bluetooth"
+        this.console.transportLabel === "Bluetooth" || this.hwMode() === "slaprf_ble"
           ? "Is the Bluetooth Hub powered on and in range?"
           : s.role === 1
             ? "Is the Hub plugged into this laptop over USB-C?"
@@ -4557,9 +4591,11 @@ export class DebugView extends Component {
       return;
     }
 
+    const isBleMode = this.hwMode() === "slaprf_ble";
     patchUsbConnectionBar(host, {
       activeConsole: this.console,
-      showAllPorts: this.showAllPorts,
+      showAllPorts: isBleMode ? false : this.showAllPorts,
+      bluetoothMode: isBleMode,
       allowSwap: true,
       busyText: this.busy,
       error: this.error,
@@ -4697,7 +4733,9 @@ export class DebugView extends Component {
               ? "# Timer is in Emergency Mode (radio and 50 Hz sweeps halted for rescue/reflashing). Click \"Exit emergency mode\" before running RF self-tests."
               : on
                 ? "# Click \"Run self-test\" to verify console, identity, 5.8 GHz receiver, sweep timing, memory, and course link."
-                : "# Connect a timer over USB-C in the top bar to run the hardware self-test."
+                : this.hwMode() === "slaprf_ble"
+                  ? "# Connect a SlapRF Bluetooth Hub above or in the top bar to run the hardware self-test."
+                  : "# Connect a timer over USB-C in the top bar to run the hardware self-test."
         );
     this.slot("selftest").innerHTML = `
       <div class="debug-card-head debug-log-head">
@@ -4979,8 +5017,18 @@ export class DebugView extends Component {
 
         <div class="debug-subbox">
           <div class="debug-subbox-head">
-            <span class="debug-subbox-title ${active ? "is-active" : ""}">${icons.wifi(14)}<span>System &amp; network</span></span>
-            <span class="badge">${s ? `Ch ${s.channel}` : "—"}</span>
+            <span class="debug-subbox-title ${active ? "is-active" : ""}">${icons.wifi(14)}<span>${s?.ble ? "System &amp; Bluetooth" : "System &amp; network"}</span></span>
+            <span class="badge">${
+              s?.ble
+                ? s.ble.pairingMode
+                  ? "Pairing mode"
+                  : s.ble.paired === false
+                    ? "Unpaired"
+                    : "BLE Paired"
+                : s
+                  ? `Ch ${s.channel}`
+                  : "—"
+            }</span>
           </div>
           <dl class="debug-kv-list">
             <div class="debug-kv-row">
@@ -5003,18 +5051,33 @@ export class DebugView extends Component {
               <dt>Memory free</dt>
               <dd>${s ? `${(s.heapFree / 1024).toFixed(0)} KB <span class="note">· lowest ${(s.heapMin / 1024).toFixed(0)} KB</span>` : "—"}</dd>
             </div>
-            <div class="debug-kv-row">
-              <dt>Course link</dt>
-              <dd>${
-                s
-                  ? s.role === 1
-                    ? `Hub · Ch ${s.channel}`
-                    : s.slot >= 2
-                      ? `Joined Hub · slot ${s.slot}`
-                      : "Not joined to a Hub"
-                  : "—"
-              }</dd>
-            </div>
+            ${
+              s?.ble
+                ? `<div class="debug-kv-row" data-ble-link-row>
+                     <dt>Bluetooth link</dt>
+                     <dd><span class="mono">${(s.ble.intervalUs / 1000).toFixed(2).replace(/\.00$/, "")} ms</span> · <span class="mono">${s.ble.rssi} dBm</span> <span class="note">· MTU ${s.ble.mtu}${s.ble.phy ? ` · ${s.ble.phy}M PHY` : ""}</span></dd>
+                   </div>
+                   <div class="debug-kv-row" data-ble-sync-row>
+                     <dt>BLE sweep sync</dt>
+                     <dd>${s.ble.syncLocked ? "Locked" : s.ble.sync ? "Locking…" : "Off"} <span class="note">· phase ${s.ble.phaseUs} us · drops ${s.ble.txDrops}</span></dd>
+                   </div>
+                   <div class="debug-kv-row" data-ble-pair-row>
+                     <dt>BLE pairing</dt>
+                     <dd>${s.ble.pairingMode ? "Open pairing mode" : s.ble.paired === false ? "Unpaired" : "Paired to host"}</dd>
+                   </div>`
+                : `<div class="debug-kv-row">
+                     <dt>Course link</dt>
+                     <dd>${
+                       s
+                         ? s.role === 1
+                           ? `Hub · Ch ${s.channel}`
+                           : s.slot >= 2
+                             ? `Joined Hub · slot ${s.slot}`
+                             : "Not joined to a Hub"
+                         : "—"
+                     }</dd>
+                   </div>`
+            }
           </dl>
         </div>
       </div>`;

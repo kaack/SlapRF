@@ -54,24 +54,30 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "nvs.h"
+#include "nvs_flash.h"
 #include "soc/lp_aon_reg.h"
 #include "soc/lp_wdt_reg.h"
 
-#define CFG_LEN          160
-#define CFG_OFF_VERSION  8
-#define CFG_OFF_ROLE     11
-#define CFG_OFF_FP       14
-#define CFG_OFF_FREQS    18
-#define CFG_OFF_LABEL    107
-#define SCAN_MAX_POINTS  200
-#define LOG_RING_BYTES   3072
-#define LOG_RING_MAGIC   0x534C4F48U // "SLOH" (v2 with crash_streak)
-#define RF_MIN_MHZ       5180
-#define RF_MAX_MHZ       5945
-#define SCAN_MAX_MHZ     5945
-#define HIT_MARGIN_DB    10 // A "hit" is a reading this far above the channel's typical noise
-#define FLOOR_UNSET      INT16_MIN
-#define XIAO_C5_LED_GPIO 27 // Seeed Studio XIAO ESP32-C5 yellow user LED (active-low: 0 = ON, 1 = OFF)
+#define CFG_LEN           160
+#define CFG_OFF_VERSION   8
+#define CFG_OFF_ROLE      11
+#define CFG_OFF_FP        14
+#define CFG_OFF_FREQS     18
+#define CFG_OFF_LABEL     107
+#define SCAN_MAX_POINTS   200
+#define LOG_RING_BYTES    3072
+#define LOG_RING_MAGIC    0x534C4F48U // "SLOH" (v2 with crash_streak)
+#define RF_MIN_MHZ        5180
+#define RF_MAX_MHZ        5945
+#define SCAN_MAX_MHZ      5945
+#define HIT_MARGIN_DB     10 // A "hit" is a reading this far above the channel's typical noise
+#define FLOOR_UNSET       INT16_MIN
+#define XIAO_C5_LED_GPIO  27 // Seeed Studio XIAO ESP32-C5 yellow user LED (active-low: 0 = ON, 1 = OFF)
+#define XIAO_C5_BOOT_GPIO 28 // Seeed Studio XIAO ESP32-C5 BOOT tactile button (active-low: 0 = pressed)
+#define BLE_PAIR_NVS_NS   "slaprf_ble"
+#define BLE_PAIR_NVS_KEY  "host_key"
+#define BOOT_HOLD_TICKS   300 // 300 x 10 ms = 3.0 s hold on BOOT clears pairing and enters Pairing Mode
 
 static const volatile uint8_t *s_cfg;
 static size_t s_cfg_len;
@@ -94,13 +100,55 @@ static uint8_t s_tx_drops;
 static vprintf_like_t s_prev_vprintf;
 static volatile uint8_t s_slot;
 
-/* ---- Transports ---------------------------------------------------------------------------------
- * Replies and streams go to the transport that sent the most recent command. Bluetooth is the
- * default so a phone that connects and subscribes immediately gets everything. */
+/* ---- Transports & Claim-on-Pair BLE lock --------------------------------------------------------
+ * Replies and streams go to the transport that sent the most recent command. Over BLE, a host must
+ * authenticate with `AUTH <32-hex-key>` first: when unpaired (Pairing Mode), the first host claims
+ * the Hub and stores its key in NVS; when paired, only that host is accepted until BOOT is held for
+ * 3 seconds (or `BLEPAIR CLEAR` is sent). */
 typedef enum { LINK_BLE = 0, LINK_USB = 1 } link_t;
 static volatile link_t s_active = LINK_BLE;
 static volatile bool s_usb_ok;
 static SemaphoreHandle_t s_cmd_lock;
+static char s_paired_key[33];
+static volatile bool s_paired;
+static volatile bool s_ble_authed;
+static volatile bool s_clear_pair_pending;
+static volatile int64_t s_reject_disconnect_at_us;
+static volatile uint16_t s_boot_hold_ticks;
+static volatile int64_t s_pair_cleared_flash_until_us;
+
+static void pair_nvs_load(void) {
+    memset(s_paired_key, 0, sizeof(s_paired_key));
+    s_paired = false;
+    nvs_handle_t h;
+    if (nvs_open(BLE_PAIR_NVS_NS, NVS_READONLY, &h) == ESP_OK) {
+        size_t len = sizeof(s_paired_key);
+        if (nvs_get_str(h, BLE_PAIR_NVS_KEY, s_paired_key, &len) == ESP_OK && strlen(s_paired_key) == 32) {
+            s_paired = true;
+        } else {
+            memset(s_paired_key, 0, sizeof(s_paired_key));
+        }
+        nvs_close(h);
+    }
+}
+
+static void pair_nvs_save(const char *key32) {
+    nvs_handle_t h;
+    if (nvs_open(BLE_PAIR_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_str(h, BLE_PAIR_NVS_KEY, key32);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
+
+static void pair_nvs_clear(void) {
+    nvs_handle_t h;
+    if (nvs_open(BLE_PAIR_NVS_NS, NVS_READWRITE, &h) == ESP_OK) {
+        nvs_erase_key(h, BLE_PAIR_NVS_KEY);
+        nvs_commit(h);
+        nvs_close(h);
+    }
+}
 
 /* ---- Identify (find-my-timer LED strobe), toggled from the app ----------------------------
  * Own board (USB `IDENTIFY <own fp> 1|0`): strobes until switched off.
@@ -598,12 +646,14 @@ static void send_status(void) {
     }
     slaprf_ble_stats_t bs;
     slaprf_ble_get_stats(&bs);
-    if (n < (int)sizeof(out) - 320) {
+    if (n < (int)sizeof(out) - 360) {
         n += snprintf(out + n, sizeof(out) - n,
-                      ",\"image\":\"ble\",\"transport\":\"%s\",\"ble\":{\"connected\":%s,\"intervalUs\":%lu,\"mtu\":%u,"
-                      "\"phy\":%u,\"rssi\":%d,\"txNotifies\":%lu,\"txBytes\":%lu,\"txDrops\":%lu,\"rxWrites\":%lu,"
-                      "\"nocp\":%lu,\"connects\":%lu,\"sync\":%s,\"syncLocked\":%s,\"phaseUs\":%ld}",
+                      ",\"image\":\"ble\",\"transport\":\"%s\",\"ble\":{\"connected\":%s,\"paired\":%s,\"pairingMode\":%s,"
+                      "\"intervalUs\":%lu,\"mtu\":%u,\"phy\":%u,\"rssi\":%d,\"txNotifies\":%lu,\"txBytes\":%lu,"
+                      "\"txDrops\":%lu,\"rxWrites\":%lu,\"nocp\":%lu,\"connects\":%lu,"
+                      "\"sync\":%s,\"syncLocked\":%s,\"phaseUs\":%ld}",
                       s_active == LINK_BLE ? "ble" : "usb", bs.connected ? "true" : "false",
+                      s_paired ? "true" : "false", !s_paired ? "true" : "false",
                       (unsigned long)bs.interval_us, (unsigned)bs.mtu, (unsigned)bs.phy, (int)bs.rssi,
                       (unsigned long)bs.tx_notifies, (unsigned long)bs.tx_bytes, (unsigned long)bs.tx_drops,
                       (unsigned long)bs.rx_writes, (unsigned long)bs.nocp_events, (unsigned long)bs.connects,
@@ -932,6 +982,9 @@ static void handle_command(char *line) {
         const bool on = line[8] == '1';
         slaprf_ble_set_sync_enabled(on);
         tx_line(on ? "@{\"t\":\"ok\",\"cmd\":\"blesync\",\"on\":true}\n" : "@{\"t\":\"ok\",\"cmd\":\"blesync\",\"on\":false}\n");
+    } else if (strcmp(line, "BLEPAIR CLEAR") == 0) {
+        tx_line("@{\"t\":\"ok\",\"cmd\":\"blepair\",\"pairingMode\":true}\n");
+        s_clear_pair_pending = true;
     } else if (strncmp(line, "RF ", 3) == 0) {
         s_rf_enabled = line[3] == '1';
         tx_line(s_rf_enabled ? "@{\"t\":\"ok\",\"cmd\":\"rf\",\"on\":true}\n" : "@{\"t\":\"ok\",\"cmd\":\"rf\",\"on\":false}\n");
@@ -994,10 +1047,90 @@ static void handle_command(char *line) {
     }
 }
 
+static void handle_ble_auth(const char *args) {
+    while (*args == ' ') args++;
+    char tok[33];
+    int n = 0;
+    while (args[n] && args[n] != ' ' && n < 33) {
+        char c = args[n];
+        if (c >= 'a' && c <= 'f') c = (char)(c - 'a' + 'A');
+        if (!((c >= '0' && c <= '9') || (c >= 'A' && c <= 'F'))) {
+            n = -1;
+            break;
+        }
+        if (n < 32) tok[n] = c;
+        n++;
+    }
+    if (n != 32) {
+        const char *msg = "@{\"t\":\"err\",\"code\":\"auth_invalid\",\"msg\":\"AUTH needs a 32-character hex host key\"}\n";
+        slaprf_ble_write(msg, strlen(msg), 150);
+        s_reject_disconnect_at_us = esp_timer_get_time() + 120000LL;
+        return;
+    }
+    tok[32] = '\0';
+
+    if (!s_paired) {
+        // Pairing Mode: first host to connect claims this Hub.
+        pair_nvs_save(tok);
+        memcpy(s_paired_key, tok, sizeof(s_paired_key));
+        s_paired = true;
+        s_ble_authed = true;
+        s_reject_disconnect_at_us = 0;
+        s_active = LINK_BLE;
+        s_host_attached = true;
+        if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1) {
+            s_hub_usb_stream = true;
+        }
+        slaprf_ble_set_paired_flag(true);
+        slaprf_ble_trigger_reacquire(600000);
+        tx_line("@{\"t\":\"ok\",\"cmd\":\"auth\",\"paired\":true,\"claimed\":true}\n");
+        return;
+    }
+
+    if (strcmp(s_paired_key, tok) == 0) {
+        s_ble_authed = true;
+        s_reject_disconnect_at_us = 0;
+        s_active = LINK_BLE;
+        s_host_attached = true;
+        if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1) {
+            s_hub_usb_stream = true;
+        }
+        slaprf_ble_trigger_reacquire(600000);
+        tx_line("@{\"t\":\"ok\",\"cmd\":\"auth\",\"paired\":true,\"claimed\":false}\n");
+        return;
+    }
+
+    // Wrong host key: notify the caller why and drop the BLE connection shortly after.
+    s_ble_authed = false;
+    const char *msg =
+        "@{\"t\":\"err\",\"code\":\"auth_mismatch\",\"msg\":\"Hub is paired to another device. Hold BOOT for 3 s on the Hub to pair with this device.\"}\n";
+    slaprf_ble_write(msg, strlen(msg), 150);
+    s_reject_disconnect_at_us = esp_timer_get_time() + 120000LL;
+}
+
 /** Run one command line from `from`; replies and streams follow the transport that spoke last. */
 static void run_command(char *line, link_t from) {
+    while (*line == ' ') line++;
+    if (line[0] == '\0') return;
     if (s_cmd_lock == NULL || xSemaphoreTake(s_cmd_lock, portMAX_DELAY) != pdTRUE) {
         return;
+    }
+    if (from == LINK_BLE) {
+        if (strncmp(line, "AUTH ", 5) == 0 || strcmp(line, "AUTH") == 0) {
+            handle_ble_auth(line + 4);
+            xSemaphoreGive(s_cmd_lock);
+            return;
+        }
+        if (!s_ble_authed) {
+            if (s_reject_disconnect_at_us == 0) {
+                const char *msg =
+                    "@{\"t\":\"err\",\"code\":\"unpaired\",\"msg\":\"Hub requires Bluetooth pairing authentication. Hold BOOT for 3 s on the Hub to pair.\"}\n";
+                slaprf_ble_write(msg, strlen(msg), 150);
+                s_reject_disconnect_at_us = esp_timer_get_time() + 120000LL;
+            }
+            xSemaphoreGive(s_cmd_lock);
+            return;
+        }
     }
     if (s_active != from) {
         // A different host took over: stop the previous host's streams before switching.
@@ -1058,15 +1191,21 @@ static void ble_rx(const uint8_t *data, size_t n) {
 /** BLE central subscribed / went away. */
 static void ble_event(bool connected) {
     if (connected) {
-        // Start Hub frame streaming immediately upon TX CCCD subscription so 50 Hz notifications
-        // feed the BLE connection-event phase detector without waiting for the first command.
-        s_active = LINK_BLE;
-        s_host_attached = true;
-        if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1) {
-            s_hub_usb_stream = true;
+        // Wait for `AUTH <host_key>` before starting Hub frame or status streams.
+        s_reject_disconnect_at_us = 0;
+        if (s_ble_authed) {
+            s_active = LINK_BLE;
+            s_host_attached = true;
+            if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1) {
+                s_hub_usb_stream = true;
+            }
         }
-    } else if (s_active == LINK_BLE) {
-        stop_streams();
+    } else {
+        s_ble_authed = false;
+        s_reject_disconnect_at_us = 0;
+        if (s_active == LINK_BLE) {
+            stop_streams();
+        }
     }
 }
 
@@ -1075,17 +1214,54 @@ static void ble_event(bool connected) {
 static void start_led_timer(void); // Health LED renderer, defined below
 static void send_status(void);
 
-/** Pushes a status line every second while a host is attached. */
+/** 100 ms housekeeping + 1 Hz status push while an authenticated host is attached. */
 static void status_push_task(void *arg) {
     (void)arg;
+    uint8_t status_ticks = 0;
     for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(1000));
-        if (s_usb_ok && s_active == LINK_USB && !usb_serial_jtag_ll_txfifo_writable()) {
-            // Flush any ROM boot bytes left in the 64-byte EP1 IN FIFO before USB enumeration completed.
-            usb_serial_jtag_ll_txfifo_flush();
+        vTaskDelay(pdMS_TO_TICKS(100));
+        const int64_t now_us = esp_timer_get_time();
+
+        // Physical BOOT button held for 3 s (or `BLEPAIR CLEAR` command): erase saved host key,
+        // drop any active BLE connection, and advertise in Pairing Mode.
+        if (s_clear_pair_pending) {
+            s_clear_pair_pending = false;
+            pair_nvs_clear();
+            memset(s_paired_key, 0, sizeof(s_paired_key));
+            s_paired = false;
+            s_ble_authed = false;
+            s_reject_disconnect_at_us = 0;
+            if (s_active == LINK_BLE) {
+                stop_streams();
+            }
+            slaprf_ble_set_paired_flag(false);
+            if (slaprf_ble_connected()) {
+                slaprf_ble_disconnect();
+            }
         }
-        if (s_host_attached && !s_scan_live) {
-            send_status();
+
+        // Deferred disconnect after sending an `auth_mismatch` / `unpaired` error reply over BLE.
+        if (s_reject_disconnect_at_us > 0 && now_us >= s_reject_disconnect_at_us) {
+            s_reject_disconnect_at_us = 0;
+            if (slaprf_ble_connected() && !s_ble_authed) {
+                slaprf_ble_disconnect();
+            }
+        }
+
+        // Never let an unauthenticated central sit silently connected and block the legitimate owner.
+        if (slaprf_ble_connected() && !s_ble_authed && slaprf_ble_connected_us() > 2500000LL) {
+            slaprf_ble_disconnect();
+        }
+
+        if (++status_ticks >= 10) {
+            status_ticks = 0;
+            if (s_usb_ok && s_active == LINK_USB && !usb_serial_jtag_ll_txfifo_writable()) {
+                // Flush any ROM boot bytes left in the 64-byte EP1 IN FIFO before USB enumeration completed.
+                usb_serial_jtag_ll_txfifo_flush();
+            }
+            if (s_host_attached && !s_scan_live && (s_active == LINK_USB || s_ble_authed)) {
+                send_status();
+            }
         }
     }
 }
@@ -1120,6 +1296,17 @@ void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
     };
     gpio_config(&led_cfg);
     gpio_set_level(XIAO_C5_LED_GPIO, 1);
+
+    // BOOT button (GPIO28, active-low): hold for 3 s while powered on to clear Bluetooth pairing.
+    gpio_config_t boot_cfg = {
+        .pin_bit_mask = 1ULL << XIAO_C5_BOOT_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&boot_cfg);
+
     start_led_timer();
     s_cmd_lock = xSemaphoreCreateMutex();
     usb_serial_jtag_driver_config_t usb_cfg = {
@@ -1137,12 +1324,13 @@ void slaprf_diag_start(const volatile void *cfg, size_t len, uint8_t sweep_hz) {
 }
 
 void slaprf_ble_console_start_link(void) {
+    pair_nvs_load();
     char label[25] = {0};
     for (int i = 0; i < 24 && s_cfg[CFG_OFF_LABEL + i]; i++) {
         label[i] = (char)s_cfg[CFG_OFF_LABEL + i];
     }
     const uint8_t ver[3] = {s_cfg[CFG_OFF_VERSION], s_cfg[CFG_OFF_VERSION + 1], s_cfg[CFG_OFF_VERSION + 2]};
-    slaprf_ble_link_start(label, own_fingerprint(), s_cfg[CFG_OFF_ROLE], ver, ble_rx, ble_event);
+    slaprf_ble_link_start(label, own_fingerprint(), s_cfg[CFG_OFF_ROLE], ver, s_paired, ble_rx, ble_event);
 }
 
 void slaprf_start_config_query_service(const volatile void *cfg, size_t len) {
@@ -1245,9 +1433,34 @@ static esp_timer_handle_t s_led_timer;
 static void led_timer_cb(void *arg) {
     (void)arg;
     const uint8_t role = s_cfg ? s_cfg[CFG_OFF_ROLE] : 1;
-    const int64_t now_ms = esp_timer_get_time() / 1000;
+    const int64_t now_us = esp_timer_get_time();
+    const int64_t now_ms = now_us / 1000;
+
+    // Poll BOOT button (GPIO28, active-low) after the first second of uptime:
+    // holding for 3.0 s clears the saved pairing token and enters Pairing Mode.
+    bool boot_holding = false;
+    if (now_ms >= 1000 && gpio_get_level(XIAO_C5_BOOT_GPIO) == 0) {
+        if (s_boot_hold_ticks < 60000) {
+            s_boot_hold_ticks++;
+        }
+        if (s_boot_hold_ticks >= 30 && s_boot_hold_ticks < BOOT_HOLD_TICKS) {
+            boot_holding = true;
+        } else if (s_boot_hold_ticks == BOOT_HOLD_TICKS) {
+            s_clear_pair_pending = true;
+            s_pair_cleared_flash_until_us = now_us + 800000LL;
+        }
+    } else {
+        s_boot_hold_ticks = 0;
+    }
+
     bool led_on;
-    if (s_identify_local || esp_timer_get_time() < s_identify_until_us) {
+    if (now_us < s_pair_cleared_flash_until_us) {
+        // Rapid confirmation burst right when the 3-second BOOT hold enters Pairing Mode.
+        led_on = ((now_ms / 60) & 1LL) == 0;
+    } else if (boot_holding) {
+        // Solid ON while the user is holding BOOT toward the 3-second mark.
+        led_on = true;
+    } else if (s_identify_local || now_us < s_identify_until_us) {
         // Identify: 3 quick flashes, then dark (600 ms cycle). The pause sets it apart from the
         // continuous 10 Hz "5.8 GHz boot check bad" blink.
         const int64_t phase = now_ms % 600;
@@ -1258,9 +1471,15 @@ static void led_timer_cb(void *arg) {
         led_on = ((now_ms / 100) & 1LL) == 0;
     } else if (role != 1 && (s_slot < 2 || slaprf_ms_since_hub_beacon() > 2500)) {
         led_on = ((now_ms / 500) & 1LL) == 0;
-    } else if (role == 1 && s_active == LINK_BLE && !slaprf_ble_ready()) {
-        // Bluetooth Hub waiting for a phone / laptop: slow 1 Hz blink until one connects.
-        led_on = ((now_ms / 500) & 1LL) == 0;
+    } else if (role == 1 && !(slaprf_ble_ready() && s_ble_authed)) {
+        if (!s_paired) {
+            // Pairing Mode (unclaimed, ready to pair with any phone): double-blink every 1 s.
+            const int64_t phase = now_ms % 1000;
+            led_on = (phase < 80) || (phase >= 180 && phase < 260);
+        } else {
+            // Paired, waiting for its paired phone / laptop to connect: steady 1 Hz blink.
+            led_on = ((now_ms / 500) & 1LL) == 0;
+        }
     } else {
         const int64_t phase = now_ms % 2000;
         const int64_t blip = 70;

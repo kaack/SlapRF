@@ -1,7 +1,7 @@
 import { esc } from "../core/format";
 import { icons } from "../core/icons";
 import { AppStore } from "../state/store";
-import { DetectedTimer, SimTimerState } from "../types/models";
+import { DetectedTimer, isSlapRFMode, SimTimerState } from "../types/models";
 import { capabilitiesSnapshot, resolveBackendUrl } from "./capabilities";
 import { LATEST_FIRMWARE_VERSION, parseSlaprfConfigBlock } from "./esp_flasher";
 import type { SerialPortLike, TimerPeerSpoke, TimerStatus } from "./timer_console";
@@ -281,7 +281,7 @@ export interface SimTimerDescriptor {
 
 export function listSimulatedTimers(): SimTimerDescriptor[] {
   const store = getBoundStore();
-  if (!store || store.timingHardwareMode !== "slaprf") return [];
+  if (!store || !isSlapRFMode(store.timingHardwareMode)) return [];
   const simTimers: SimTimerState[] = store.simState?.timers ?? [];
   const detected: DetectedTimer[] = store.detectedTimers ?? [];
 
@@ -1400,6 +1400,7 @@ export interface PickUsbPortOptions {
   showAllPorts?: boolean;
   excludePorts?: SerialPortLike[];
   excludeTimerIds?: number[];
+  transport?: "usb" | "ble";
 }
 
 interface BackendPortEntry {
@@ -1439,7 +1440,11 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
   document.querySelectorAll(".confirm-modal-backdrop").forEach((el) => el.remove());
 
   const simMode = isSimulatedUsbMode();
-  const showAllRealPorts = Boolean(opts.showAllPorts);
+  const boundStore = getBoundStore();
+  const isBleMode = opts.transport
+    ? opts.transport === "ble"
+    : boundStore?.timingHardwareMode === "slaprf_ble";
+  const showAllRealPorts = isBleMode ? false : Boolean(opts.showAllPorts);
   const excludeTimerIds = new Set<number>(opts.excludeTimerIds ?? []);
   const excludePortNames = new Set<string>();
   for (const p of opts.excludePorts ?? []) {
@@ -1466,9 +1471,11 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
       );
       return timers.map((t) => ({
         id: `sim-${t.timerId}`,
-        label: t.unflashed
-          ? `USB JTAG/serial debug unit (Board #${t.timerId}) · Unflashed`
-          : `USB JTAG/serial debug unit (${t.fingerprint}) · ${t.label}`,
+        label: isBleMode
+          ? `SlapRF Bluetooth Hub (${t.fingerprint || "SIM"}) · ${t.label || "H1"}`
+          : t.unflashed
+            ? `USB JTAG/serial debug unit (Board #${t.timerId}) · Unflashed`
+            : `USB JTAG/serial debug unit (${t.fingerprint}) · ${t.label}`,
         createPort: () => new SimulatedSerialPort(t.timerId),
         simTimerId: t.timerId,
       }));
@@ -1479,10 +1486,12 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
     }
 
     try {
-      const res = await fetch(
-        resolveBackendUrl(`/api/usb/ports?all=${showAllRealPorts ? "1" : "0"}`),
-        { cache: "no-store" }
-      );
+      const endpoint = isBleMode
+        ? "/api/usb/ports?transport=ble"
+        : opts.transport === "usb"
+          ? `/api/usb/ports?transport=usb&all=${showAllRealPorts ? "1" : "0"}`
+          : `/api/usb/ports?all=${showAllRealPorts ? "1" : "0"}`;
+      const res = await fetch(resolveBackendUrl(endpoint), { cache: "no-store" });
       if (!res.ok) return [];
       const data = (await res.json()) as BackendPortsResponse;
       const ports = Array.isArray(data.ports) ? data.ports : [];
@@ -1496,13 +1505,16 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
           const knownLabel = activeSlot?.lastStatus?.label || activeSlot?.lastConfig?.timerLabel || "";
           const knownFp = activeSlot?.lastStatus?.fp || activeSlot?.lastConfig?.fingerprint || "";
           const rawProd = p.product || p.description || "";
-          const desc = p.isEspressif
-            ? rawProd && !/^usb serial device/i.test(rawProd)
-              ? rawProd
-              : "Seeed XIAO ESP32-C5 (USB JTAG/serial)"
-            : rawProd || "USB Serial Port";
+          const isBlePort = p.name.trim().toLowerCase().startsWith("ble:");
+          const desc = isBlePort
+            ? rawProd || "SlapRF Hub (Bluetooth)"
+            : p.isEspressif
+              ? rawProd && !/^usb serial device/i.test(rawProd)
+                ? rawProd
+                : "Seeed XIAO ESP32-C5 (USB JTAG/serial)"
+              : rawProd || "USB Serial Port";
           const vidPid = p.vid && p.pid ? ` (${p.vid}:${p.pid})` : "";
-          const identitySuffix = knownLabel || knownFp
+          const identitySuffix = !isBlePort && (knownLabel || knownFp)
             ? ` · ${[knownFp ? `(${knownFp})` : "", knownLabel].filter(Boolean).join(" ")}`
             : "";
           return {
@@ -1530,9 +1542,11 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
         return `<div class="sim-usb-port-empty">${
           simMode
             ? "No powered simulated timers available"
-            : showAllRealPorts
-              ? "No USB serial ports detected on the SlapRF server"
-              : "No Seeed Studio XIAO ESP32-C5 USB ports detected — plug in USB-C and click Refresh"
+            : isBleMode
+              ? "No SlapRF Bluetooth Hub found nearby. Make sure the Hub is powered on and not connected to another device (hold BOOT on the Hub for 3 s to enter pairing mode)."
+              : showAllRealPorts
+                ? "No USB serial ports detected on the SlapRF server"
+                : "No Seeed Studio XIAO ESP32-C5 USB ports detected - plug in USB-C and click Refresh"
         }</div>`;
       }
       return choices
@@ -1571,21 +1585,23 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
         .join("");
     };
 
-    const moreBtnLabel = () => (simMode ? "More devices…" : "Refresh");
+    const moreBtnLabel = () => (simMode ? "More devices…" : isBleMode ? "Scan again" : "Refresh");
+    const modalTitle = isBleMode ? "Connect Bluetooth Hub" : "Select a serial port";
+    const listAriaLabel = isBleMode ? "Available Bluetooth Hubs" : "Available serial ports";
 
     backdrop.innerHTML = `
       <div class="slaprf-modal card sim-usb-dialog" role="dialog" aria-modal="true" aria-labelledby="sim-usb-picker-title">
         <div class="slaprf-modal-head">
           <div class="slaprf-modal-title-row">
-            <span class="slaprf-modal-icon">${icons.plug(17)}</span>
-            <h3 id="sim-usb-picker-title">Select a serial port</h3>
+            <span class="slaprf-modal-icon">${isBleMode ? icons.wifi(17) : icons.plug(17)}</span>
+            <h3 id="sim-usb-picker-title">${esc(modalTitle)}</h3>
           </div>
           <button type="button" class="btn btn-ghost btn-xs" data-modal="cancel" aria-label="Close">
             ${icons.close(15)}
           </button>
         </div>
         <div class="slaprf-modal-body">
-          <div class="sim-usb-port-list" role="listbox" aria-label="Available serial ports">
+          <div class="sim-usb-port-list" role="listbox" aria-label="${esc(listAriaLabel)}">
             ${renderRowsHtml()}
           </div>
         </div>

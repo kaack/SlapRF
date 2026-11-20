@@ -25,7 +25,19 @@ func (s *Server) handleUSBPorts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	showAll := r.URL.Query().Get("all") == "1" || strings.EqualFold(r.URL.Query().Get("all"), "true")
-	ports, err := s.usbMgr.ListPorts(showAll)
+	transport := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("transport")))
+	var (
+		ports []usb.PortInfo
+		err   error
+	)
+	switch transport {
+	case "usb":
+		ports, err = s.usbMgr.ListUSBPorts(showAll)
+	case "ble":
+		ports, err = s.usbMgr.ListBLEPorts()
+	default:
+		ports, err = s.usbMgr.ListPorts(showAll)
+	}
 	if err != nil {
 		writeJSONNoStore(w, http.StatusOK, map[string]any{
 			"ports": []usb.PortInfo{},

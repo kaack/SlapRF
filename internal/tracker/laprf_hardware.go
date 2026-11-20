@@ -59,6 +59,49 @@ func normalizeLapRFTimerLabel(label string, timerID uint8) string {
 	return clean
 }
 
+func defaultSimSlapRFBLELayoutLocked(now time.Time) ([]domain.TrackGate, map[uint8]*domain.DetectedTimer) {
+	var rssi [domain.MaxPilotPoolSize]float32
+	for i := range rssi {
+		rssi[i] = -92
+	}
+	hub := &domain.DetectedTimer{
+		TimerID:         domain.SimHubTimerID,
+		TimerLabel:      domain.DefaultSimHubLabel,
+		Color:           domain.DefaultGateColors[0],
+		IsHub:           true,
+		FirmwareVersion: domain.LatestFirmwareVersion,
+		Fingerprint:     newFingerprintHex(),
+		BatteryMv:       4200,
+		BatteryPct:      100,
+		NoiseFloorDbm:   -92.0,
+		LastRSSI:        rssi,
+		Online:          true,
+		LastSeenAt:      now,
+	}
+	gates := []domain.TrackGate{
+		{
+			GateID:          1,
+			AssignedTimerID: domain.SimHubTimerID,
+			TimerLabel:      domain.DefaultSimHubLabel,
+			FirmwareVersion: domain.LatestFirmwareVersion,
+			Color:           domain.DefaultGateColors[0],
+			Role:            domain.GateRoleStartFinish,
+			TrackOrder:      0,
+			MapX:            0.50,
+			MapY:            0.50,
+			BatteryMv:       4200,
+			BatteryPct:      100,
+			NoiseFloorDbm:   -92.0,
+			LastRSSI:        rssi,
+			Online:          true,
+			LastSeenAt:      now,
+		},
+	}
+	return gates, map[uint8]*domain.DetectedTimer{
+		domain.SimHubTimerID: hub,
+	}
+}
+
 func defaultSimLapRFLayoutLocked(now time.Time) ([]domain.TrackGate, map[uint8]*domain.DetectedTimer) {
 	var rssi [domain.MaxPilotPoolSize]float32
 	for i := range rssi {
@@ -132,6 +175,9 @@ func (e *Engine) SetTimingHardwareMode(mode domain.TimingHardwareMode, isSim boo
 	if isSim {
 		e.savedSlapRFGates = nil
 		e.savedSlapRFTimers = nil
+		e.savedSlapRFBLEGates = nil
+		e.savedSlapRFBLETimers = nil
+		e.hasSavedSlapRFBLEState = false
 		e.savedLapRFGates = nil
 		e.savedLapRFTimers = nil
 		e.hasSavedLapRFState = false
@@ -144,6 +190,10 @@ func (e *Engine) SetTimingHardwareMode(mode domain.TimingHardwareMode, isSim boo
 		e.deletedSpokeFp = make(map[string]bool)
 	} else {
 		switch cur {
+		case domain.HardwareModeSlapRFBLE:
+			e.savedSlapRFBLEGates = append([]domain.TrackGate(nil), e.gates...)
+			e.savedSlapRFBLETimers = cloneTimersMapToSlice(e.detected)
+			e.hasSavedSlapRFBLEState = true
 		case domain.HardwareModeLapRF:
 			e.savedLapRFGates = append([]domain.TrackGate(nil), e.gates...)
 			e.savedLapRFTimers = cloneTimersMapToSlice(e.detected)
@@ -166,6 +216,8 @@ func (e *Engine) SetTimingHardwareMode(mode domain.TimingHardwareMode, isSim boo
 	now := time.Now()
 	if isSim {
 		switch next {
+		case domain.HardwareModeSlapRFBLE:
+			e.gates, e.detected = defaultSimSlapRFBLELayoutLocked(now)
 		case domain.HardwareModeLapRF:
 			e.gates, e.detected = defaultSimLapRFLayoutLocked(now)
 		case domain.HardwareModeRotorHazard, domain.HardwareModeRotorHazardUSB:
@@ -176,6 +228,14 @@ func (e *Engine) SetTimingHardwareMode(mode domain.TimingHardwareMode, isSim boo
 		}
 	} else {
 		switch next {
+		case domain.HardwareModeSlapRFBLE:
+			if e.hasSavedSlapRFBLEState {
+				e.gates = append([]domain.TrackGate(nil), e.savedSlapRFBLEGates...)
+				e.detected = restoreTimersSliceToMap(e.savedSlapRFBLETimers)
+			} else {
+				e.gates = []domain.TrackGate{}
+				e.detected = make(map[uint8]*domain.DetectedTimer)
+			}
 		case domain.HardwareModeLapRF:
 			if e.hasSavedLapRFState {
 				e.gates = append([]domain.TrackGate(nil), e.savedLapRFGates...)

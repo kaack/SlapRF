@@ -3,13 +3,18 @@ package usb
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
+	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"slaprf/internal/domain"
 	"slaprf/internal/firmware"
 	"slaprf/internal/ingest"
+	"slaprf/internal/storage"
 	"slaprf/internal/tracker"
 )
 
@@ -285,7 +290,7 @@ func TestBLEPortNameHelpers(t *testing.T) {
 func TestParseBLEManufacturerData(t *testing.T) {
 	data := []byte{'S', 'R', 0x01, 0x00, 0x7C, 0xBE, 1, 0, 0, 7}
 	info, ok := ParseBLEManufacturerData(0xFFFF, data)
-	if !ok || info.Fingerprint != 0xBE7C0001 || info.Role != 1 || info.FwPatch != 7 {
+	if !ok || info.Fingerprint != 0xBE7C0001 || info.Role != 1 || info.FwPatch != 7 || info.HasFlags || info.Paired {
 		t.Fatalf("got %+v, %v", info, ok)
 	}
 	if _, ok := ParseBLEManufacturerData(0x02E5, data); ok {
@@ -300,6 +305,27 @@ func TestParseBLEManufacturerData(t *testing.T) {
 	pi := BLEPortInfoFor(info, "SlapRF H1")
 	if pi.Name != "ble:BE7C0001" || pi.Product != "SlapRF H1 (Bluetooth)" || !pi.IsEspressif || pi.IsUSB || pi.Transport != "ble" {
 		t.Fatalf("unexpected PortInfo %+v", pi)
+	}
+
+	// Byte 10 flags: 0x00 = open Pairing Mode, 0x01 = Paired.
+	unpairedAdv := append(append([]byte(nil), data...), 0x00)
+	unpairedInfo, ok := ParseBLEManufacturerData(0xFFFF, unpairedAdv)
+	if !ok || !unpairedInfo.HasFlags || unpairedInfo.Paired {
+		t.Fatalf("expected HasFlags=true Paired=false, got %+v, %v", unpairedInfo, ok)
+	}
+	unpairedPort := BLEPortInfoFor(unpairedInfo, "SlapRF H1")
+	if unpairedPort.Product != "SlapRF H1 (Bluetooth · Pairing mode)" {
+		t.Fatalf("expected Pairing mode product label, got %q", unpairedPort.Product)
+	}
+
+	pairedAdv := append(append([]byte(nil), data...), 0x01)
+	pairedInfo, ok := ParseBLEManufacturerData(0xFFFF, pairedAdv)
+	if !ok || !pairedInfo.HasFlags || !pairedInfo.Paired {
+		t.Fatalf("expected HasFlags=true Paired=true, got %+v, %v", pairedInfo, ok)
+	}
+	pairedPort := BLEPortInfoFor(pairedInfo, "SlapRF H1")
+	if pairedPort.Product != "SlapRF H1 (Bluetooth)" {
+		t.Fatalf("expected Paired product label, got %q", pairedPort.Product)
 	}
 }
 
@@ -366,20 +392,52 @@ func TestMergeBLEPorts(t *testing.T) {
 	}
 }
 
-// The manager lists Bluetooth hubs in its default (Espressif only) port filter.
+// Manager filters ports strictly by transport mode (USB-only vs BLE-only), while ListUSBPorts
+// always lists USB ports for the Flasher without triggering BLE scans.
 func TestManagerListsBLEHubPorts(t *testing.T) {
+	var bleScanCalls int
 	m := NewManager(ManagerConfig{
-		ListPorts: MergeBLEPorts(
-			func() ([]PortInfo, error) { return []PortInfo{{Name: "COM1"}}, nil },
-			func() ([]PortInfo, error) {
-				return []PortInfo{BLEPortInfoFor(BLEAdvertInfo{Fingerprint: 1}, "")}, nil
-			},
-		),
+		ListPorts: func() ([]PortInfo, error) {
+			ports := []PortInfo{
+				{Name: "COM1"},
+				{Name: "COM9", IsUSB: true, VID: "303A", IsEspressif: true},
+			}
+			if BLEScanEnabled() {
+				bleScanCalls++
+				ports = append(ports, BLEPortInfoFor(BLEAdvertInfo{Fingerprint: 1, HasFlags: true, Paired: false}, "SlapRF H1"))
+			}
+			return ports, nil
+		},
 		OpenPort: func(string, int) (firmware.SerialPort, error) { return nil, errors.New("unused") },
 	})
-	ports, err := m.ListPorts(false)
-	if err != nil || len(ports) != 1 || ports[0].Name != "ble:00000001" {
-		t.Fatalf("got %+v, %v", ports, err)
+	defer m.Close()
+
+	// Default mode (SlapRF USB): BLE scan is disabled and only Espressif USB ports are returned.
+	usbPorts, err := m.ListPorts(false)
+	if err != nil || len(usbPorts) != 1 || usbPorts[0].Name != "COM9" {
+		t.Fatalf("expected only COM9 in USB mode, got %+v, %v", usbPorts, err)
+	}
+	if bleScanCalls != 0 {
+		t.Fatalf("expected 0 BLE scan calls in USB mode, got %d", bleScanCalls)
+	}
+
+	// Switching to SlapRF Bluetooth mode (`bleOnly == true`) enables BLE scanning and returns only `ble:` ports.
+	m.SetTransportMode(true)
+	blePorts, err := m.ListPorts(false)
+	if err != nil || len(blePorts) != 1 || blePorts[0].Name != "ble:00000001" {
+		t.Fatalf("expected only ble:00000001 in BLE mode, got %+v, %v", blePorts, err)
+	}
+	if bleScanCalls != 1 {
+		t.Fatalf("expected 1 BLE scan call in BLE mode, got %d", bleScanCalls)
+	}
+
+	// Flasher (`ListUSBPorts`) still sees COM9 in Bluetooth mode without triggering an extra BLE scan!
+	flashPorts, err := m.ListUSBPorts(false)
+	if err != nil || len(flashPorts) != 1 || flashPorts[0].Name != "COM9" {
+		t.Fatalf("expected Flasher ListUSBPorts to see COM9 in BLE mode, got %+v, %v", flashPorts, err)
+	}
+	if bleScanCalls != 1 {
+		t.Fatalf("expected ListUSBPorts not to trigger BLE scan, bleScanCalls=%d", bleScanCalls)
 	}
 }
 
@@ -469,13 +527,20 @@ func TestManagerConnectsOverBLEStreamPort(t *testing.T) {
 		t.Fatalf("expected status over BLE, got %+v", st)
 	}
 	foundStatus := false
-	for _, l := range tr.seenLines() {
+	lines := tr.seenLines()
+	if len(lines) == 0 || !strings.HasPrefix(lines[0], "AUTH ") || len(strings.TrimPrefix(lines[0], "AUTH ")) != 32 {
+		t.Fatalf("expected first line over BLE to be AUTH <32-hex>, got lines=%q", lines)
+	}
+	if lines[0] != "AUTH "+mgr.BLEHostKey() {
+		t.Fatalf("expected AUTH key %s, got %q", mgr.BLEHostKey(), lines[0])
+	}
+	for _, l := range lines {
 		if l == "STATUS?" {
 			foundStatus = true
 		}
 	}
 	if !foundStatus {
-		t.Fatalf("STATUS? not received by hub, lines=%q", tr.seenLines())
+		t.Fatalf("STATUS? not received by hub, lines=%q", lines)
 	}
 	tr.mu.Lock()
 	for i, w := range tr.writes {
@@ -495,4 +560,216 @@ func TestManagerConnectsOverBLEStreamPort(t *testing.T) {
 	if closed != 1 {
 		t.Fatalf("expected BLE transport closed once on Disconnect, got %d", closed)
 	}
+}
+
+type authRejectTransport struct {
+	fakeBLETransport
+	port   *BLEStreamPort
+	lineMu sync.Mutex
+	line   []byte
+}
+
+func (a *authRejectTransport) WriteWithoutResponse(p []byte) error {
+	if err := a.fakeBLETransport.WriteWithoutResponse(p); err != nil {
+		return err
+	}
+	a.lineMu.Lock()
+	defer a.lineMu.Unlock()
+	for _, c := range p {
+		if c != '\n' {
+			a.line = append(a.line, c)
+			continue
+		}
+		l := string(a.line)
+		a.line = nil
+		if strings.HasPrefix(l, "AUTH ") {
+			pRef := a.port
+			go func() {
+				pRef.Deliver([]byte(`@{"t":"err","code":"auth_mismatch","msg":"Hub is paired to another device. Hold BOOT for 3 s on the Hub to pair with this device."}` + "\n"))
+				time.Sleep(30 * time.Millisecond)
+				pRef.Disconnected(errors.New("remote terminated"))
+			}()
+		}
+	}
+	return nil
+}
+
+func TestBLEAuthMismatchStopsAutoReconnectAndClearsPersistedTarget(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "ble_auth.db")
+	store, err := storage.OpenBoltStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
+	}
+	defer store.Close()
+
+	var openCount int
+	var openMu sync.Mutex
+	mgr := NewManager(ManagerConfig{
+		Store: store,
+		OpenPort: func(name string, _ int) (firmware.SerialPort, error) {
+			openMu.Lock()
+			openCount++
+			openMu.Unlock()
+			tr := &authRejectTransport{fakeBLETransport: fakeBLETransport{maxWrite: 244}}
+			p := NewBLEStreamPort(tr)
+			tr.port = p
+			return p, nil
+		},
+		ListPorts: func() ([]PortInfo, error) {
+			return []PortInfo{BLEPortInfoFor(BLEAdvertInfo{Fingerprint: 0xDEADBEEF, HasFlags: true, Paired: true}, "SlapRF H1")}, nil
+		},
+	})
+	defer mgr.Close()
+	mgr.SetTransportMode(true)
+
+	// Verify 32-hex host key was generated and persisted to BoltStore.
+	var persistedKey string
+	if ok, gErr := store.GetJSON(kvBLEHostKey, &persistedKey); gErr != nil || !ok || persistedKey != mgr.BLEHostKey() || len(persistedKey) != 32 {
+		t.Fatalf("expected persisted 32-hex ble_host_key %q, got ok=%v key=%q err=%v", mgr.BLEHostKey(), ok, persistedKey, gErr)
+	}
+
+	var errEvents []string
+	var evMu sync.Mutex
+	mgr.Subscribe(func(ev USBEvent) {
+		if ev.Type == "error" {
+			evMu.Lock()
+			errEvents = append(errEvents, ev.Error)
+			evMu.Unlock()
+		}
+	})
+
+	snap, connErr := mgr.Connect(0, "ble:DEADBEEF")
+	if connErr == nil || !strings.Contains(connErr.Error(), "paired to another device") {
+		t.Fatalf("expected auth_mismatch error from Connect, got snap=%+v err=%v", snap, connErr)
+	}
+	if snap.Connected || snap.Reconnecting || !snap.ReconnectFailed || !strings.Contains(snap.LastError, "Hold BOOT for 3 s") {
+		t.Fatalf("unexpected slot state after auth_mismatch: %+v", snap)
+	}
+
+	// Wait past the 1.2s reconnect backoff window to confirm no auto-reconnect loop started!
+	time.Sleep(1400 * time.Millisecond)
+	openMu.Lock()
+	opens := openCount
+	openMu.Unlock()
+	if opens != 1 {
+		t.Fatalf("expected exactly 1 open attempt (no auto-reconnect on auth_mismatch), got %d", opens)
+	}
+
+	evMu.Lock()
+	gotErrEvents := len(errEvents)
+	evMu.Unlock()
+	if gotErrEvents == 0 {
+		t.Fatalf("expected error USBEvent emitted for auth_mismatch")
+	}
+
+	var savedBLE map[string]string
+	_, _ = store.GetJSON(kvBLETargetsKey, &savedBLE)
+	if len(savedBLE) != 0 {
+		t.Fatalf("expected rejected Hub removed from hw.ble_targets, got %+v", savedBLE)
+	}
+}
+
+func TestManagerSeparatesUSBAndBLETargetsAcrossReconcile(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "targets.db")
+	store, err := storage.OpenBoltStore(dbPath)
+	if err != nil {
+		t.Fatalf("OpenBoltStore: %v", err)
+	}
+	defer store.Close()
+
+	eng := tracker.NewRealEngine()
+	hubRx := ingest.NewHubFrameDecoder(eng)
+
+	usbPort := &fakeUSBPort{}
+	usbPort.pushRx([]byte("@{\"t\":\"status\",\"fw\":\"0.4.0\",\"role\":1,\"fp\":\"11112222\",\"label\":\"H1-USB\",\"slot\":1,\"channel\":1}\n"))
+
+	newBLEPort := func() firmware.SerialPort {
+		tr := &echoHubTransport{fakeBLETransport: fakeBLETransport{maxWrite: 244}}
+		p := NewBLEStreamPort(tr)
+		tr.port = p
+		return p
+	}
+
+	mgr := NewManager(ManagerConfig{
+		Engine: eng,
+		HubRx:  hubRx,
+		Store:  store,
+		OpenPort: func(name string, _ int) (firmware.SerialPort, error) {
+			if IsBLEPortName(name) {
+				return newBLEPort(), nil
+			}
+			usbPort.mu.Lock()
+			usbPort.closed = false
+			usbPort.rx.Reset()
+			usbPort.rx.WriteString("@{\"t\":\"status\",\"fw\":\"0.4.0\",\"role\":1,\"fp\":\"11112222\",\"label\":\"H1-USB\",\"slot\":1,\"channel\":1}\n")
+			usbPort.mu.Unlock()
+			return usbPort, nil
+		},
+		ListPorts: func() ([]PortInfo, error) {
+			return []PortInfo{
+				{Name: "COM7", IsUSB: true, VID: "303A", IsEspressif: true},
+				BLEPortInfoFor(BLEAdvertInfo{Fingerprint: 0xCAFE1234, Role: 1, HasFlags: true, Paired: true}, "SlapRF H1"),
+			}, nil
+		},
+	})
+	defer mgr.Close()
+
+	mgr.Reconcile(false, domain.HardwareModeSlapRF)
+	if _, err := mgr.Connect(0, "COM7"); err != nil {
+		t.Fatalf("Connect COM7: %v", err)
+	}
+
+	// Switch engine to SlapRF (Bluetooth): COM7 closes and slot 0 is free for BLE.
+	eng.SetTimingHardwareMode(domain.HardwareModeSlapRFBLE, false)
+	mgr.Reconcile(false, eng.TimingHardwareMode())
+	if mgr.Snapshot().Slots[0].Connected {
+		t.Fatalf("expected COM7 closed when switching to slaprf_ble")
+	}
+
+	if _, err := mgr.Connect(0, "ble:CAFE1234"); err != nil {
+		t.Fatalf("Connect ble:CAFE1234: %v", err)
+	}
+	// Single-gate Bluetooth Hub auto-provisions Gate 1 (Start/Finish) in slaprf_ble mode.
+	_, gates, _, _, _ := eng.StateSnapshot()
+	if len(gates) != 1 || gates[0].AssignedTimerID != 1 || gates[0].Role != domain.GateRoleStartFinish {
+		t.Fatalf("expected auto-bound Gate 1 on Hub in slaprf_ble mode, got %+v", gates)
+	}
+
+	var usbSaved, bleSaved map[string]string
+	_, _ = store.GetJSON(kvUSBTargetsKey, &usbSaved)
+	_, _ = store.GetJSON(kvBLETargetsKey, &bleSaved)
+	if usbSaved["0"] != "COM7" || bleSaved["0"] != "ble:CAFE1234" {
+		t.Fatalf("expected independent persistence usb=%+v ble=%+v", usbSaved, bleSaved)
+	}
+
+	// Switch back to SlapRF (USB): BLE closes and COM7 auto-restores!
+	eng.SetTimingHardwareMode(domain.HardwareModeSlapRF, false)
+	mgr.Reconcile(false, eng.TimingHardwareMode())
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s0 := mgr.Snapshot().Slots[0]
+		if s0.Connected && s0.PortName == "COM7" {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if s0 := mgr.Snapshot().Slots[0]; !s0.Connected || s0.PortName != "COM7" {
+		t.Fatalf("expected COM7 auto-restored when switching back to slaprf, got %+v", s0)
+	}
+
+	// Switch again to SlapRF (Bluetooth): COM7 closes and ble:CAFE1234 auto-restores!
+	eng.SetTimingHardwareMode(domain.HardwareModeSlapRFBLE, false)
+	mgr.Reconcile(false, eng.TimingHardwareMode())
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		s0 := mgr.Snapshot().Slots[0]
+		if s0.Connected && s0.PortName == "ble:CAFE1234" {
+			break
+		}
+		time.Sleep(15 * time.Millisecond)
+	}
+	if s0 := mgr.Snapshot().Slots[0]; !s0.Connected || s0.PortName != "ble:CAFE1234" {
+		t.Fatalf("expected ble:CAFE1234 auto-restored when switching to slaprf_ble, got %+v", s0)
+	}
+	_ = fmt.Sprint()
 }

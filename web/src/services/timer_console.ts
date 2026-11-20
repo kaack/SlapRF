@@ -219,6 +219,25 @@ export function recordKnownTimerReadout(r: TimerReadout): void {
   });
 }
 
+export interface TimerBleStatus {
+  connected: boolean;
+  intervalUs: number;
+  mtu: number;
+  phy: number;
+  rssi: number;
+  txNotifies: number;
+  txBytes: number;
+  txDrops: number;
+  rxWrites: number;
+  nocp: number;
+  connects: number;
+  sync: boolean;
+  syncLocked: boolean;
+  phaseUs: number;
+  paired?: boolean;
+  pairingMode?: boolean;
+}
+
 export interface TimerStatus {
   fw: string;
   role: number;
@@ -253,6 +272,9 @@ export interface TimerStatus {
   identify?: boolean;
   /** Hub only: fingerprint of the Spoke it is currently telling to identify. */
   identifyFp?: string;
+  image?: string;
+  transport?: string;
+  ble?: TimerBleStatus;
 }
 
 export interface LiveSample {

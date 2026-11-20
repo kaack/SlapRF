@@ -225,7 +225,7 @@ func NewServer(cfg Config) *Server {
 		initialSimMode = s.persistWorker.Hydrate()
 		s.persistWorker.Start()
 	}
-	if simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF {
+	if domain.IsSlapRFMode(simEngine.TimingHardwareMode()) {
 		simEngine.SetAllTimersOffline()
 	} else {
 		sim.SyncHardwareMode()
@@ -233,7 +233,7 @@ func NewServer(cfg Config) *Server {
 	tracker.SyncBootTimes(simEngine, realEngine)
 	sim.SetRunning(initialSimMode)
 	sim.Start()
-	if initialSimMode && simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF && s.simHubUSBConnected.Load() {
+	if initialSimMode && domain.IsSlapRFMode(simEngine.TimingHardwareMode()) && s.simHubUSBConnected.Load() {
 		simHubRx.Reset()
 		s.ingestRawHubStream(simHubRx, simEngine, sim.BuildHubHelloStream())
 	}
@@ -266,11 +266,7 @@ func NewServer(cfg Config) *Server {
 
 	reconcileRealHardwareLinks := func(simRunning bool) {
 		realMode := realEngine.TimingHardwareMode()
-		slaprfSuspended := simRunning || realMode != domain.HardwareModeSlapRF
-		if !slaprfSuspended {
-			realHubRx.Reset()
-		}
-		s.usbMgr.SetSimMode(slaprfSuspended)
+		s.usbMgr.Reconcile(simRunning, realMode)
 		s.laprfMgr.SetSimMode(simRunning || realMode != domain.HardwareModeLapRF)
 		s.rhMgr.Reconcile(simRunning)
 		s.liveTimeMgr.Reconcile()
@@ -308,7 +304,7 @@ func NewServer(cfg Config) *Server {
 	})
 
 	// Restore persisted hardware links & LiveTime listener
-	s.usbMgr.RestorePersistedConnections(initialSimMode || realEngine.TimingHardwareMode() != domain.HardwareModeSlapRF)
+	s.usbMgr.Reconcile(initialSimMode, realEngine.TimingHardwareMode())
 	s.laprfMgr.RestorePersistedTargets(initialSimMode || realEngine.TimingHardwareMode() != domain.HardwareModeLapRF)
 	s.rhMgr.RestorePersistedTargets(initialSimMode)
 	s.liveTimeMgr.Reconcile()
@@ -358,12 +354,12 @@ func (s *Server) setSimHubUSBConnected(connected bool) {
 		_ = s.store.PutJSON("sim.hub_usb_connected", connected)
 	}
 	if !connected {
-		if s.simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF {
+		if domain.IsSlapRFMode(s.simEngine.TimingHardwareMode()) {
 			s.simEngine.SetAllTimersOffline()
 		}
 		return
 	}
-	if s.sim.IsRunning() && s.simEngine.TimingHardwareMode() == domain.HardwareModeSlapRF {
+	if s.sim.IsRunning() && domain.IsSlapRFMode(s.simEngine.TimingHardwareMode()) {
 		s.simHubRx.Reset()
 		s.ingestRawHubStream(s.simHubRx, s.simEngine, s.sim.BuildHubHelloStream())
 	}

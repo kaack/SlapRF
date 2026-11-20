@@ -25,7 +25,7 @@ import {
 } from "../services/timer_console";
 import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { DetectedTimer, isRotorHazardMode } from "../types/models";
+import { DetectedTimer, isRotorHazardMode, isSlapRFMode } from "../types/models";
 import { patchUsbConnectionBar } from "../widgets/UsbConnectionBar";
 import { channelColor, DBM_MAX, DBM_MIN, formatHardwareFreq, RACEBAND, racebandName } from "./debug/charts";
 
@@ -362,7 +362,7 @@ export class NetworkView extends Component {
       if (document.hidden) return;
       this.livePollTick++;
       const hwMode = this.store.timingHardwareMode;
-      if (hwMode === "slaprf") {
+      if (isSlapRFMode(hwMode)) {
         if (this.store.simulatorRunning) {
           this.scheduleLiveRefresh();
         } else {
@@ -760,7 +760,7 @@ export class NetworkView extends Component {
   }
 
   private async syncInitialSurveyState(): Promise<void> {
-    if (!capabilitiesSnapshot().portable || this.store.simulatorRunning || this.store.timingHardwareMode !== "slaprf") {
+    if (!capabilitiesSnapshot().portable || this.store.simulatorRunning || !isSlapRFMode(this.store.timingHardwareMode)) {
       return;
     }
     try {
@@ -1051,7 +1051,8 @@ export class NetworkView extends Component {
       case "connect-add": {
         this.connError = null;
         try {
-          const c = await usbPool.connectMain(this.showAllPorts);
+          const isBle = this.store.timingHardwareMode === "slaprf_ble";
+          const c = await usbPool.connectMain(isBle ? false : this.showAllPorts);
           const s = c.status;
           if (s?.role === 1) {
             this.selectTopologySlot(1);
@@ -1651,6 +1652,7 @@ export class NetworkView extends Component {
 
   private renderAll(): void {
     const mode = this.store.timingHardwareMode;
+    const isBleMode = mode === "slaprf_ble";
     const isLapRF = mode === "laprf";
     const isRHNet = mode === "rotorhazard";
     const isRHUSB = mode === "rotorhazard_usb";
@@ -1676,15 +1678,43 @@ export class NetworkView extends Component {
       return;
     }
 
+    if (slaprfWrap) {
+      const connIntro = slaprfWrap.querySelector<HTMLElement>('[data-section-anchor="connection"] > .settings-intro');
+      if (connIntro) {
+        const wantConnHtml = isBleMode
+          ? `<h2>Bluetooth Hub</h2><p>Connect your SlapRF Bluetooth Hub wirelessly over Bluetooth LE to inspect pairing status, link sync, and live 8-channel 5.8 GHz readings.</p>`
+          : `<h2>Connection</h2><p>Connect the Hub (or a Spoke) over USB-C to inspect the 2.4 GHz network and 5.8 GHz channel readings.</p>`;
+        if (connIntro.innerHTML !== wantConnHtml) {
+          connIntro.innerHTML = wantConnHtml;
+        }
+      }
+      const topoSec = slaprfWrap.querySelector<HTMLElement>('[data-section-anchor="topology"]');
+      if (topoSec) {
+        topoSec.hidden = isBleMode;
+      }
+      const timerIntro = slaprfWrap.querySelector<HTMLElement>('[data-section-anchor="timer"] > .settings-intro');
+      if (timerIntro) {
+        const wantTimerHtml = isBleMode
+          ? `<h2>Bluetooth Hub telemetry</h2><p>Identity, Bluetooth LE link status, and live 5.8 GHz channel readings at the Hub.</p>`
+          : `<h2>Timer</h2><p>Identity, 2.4 GHz TDMA link stats, and live 5.8 GHz channel readings for the selected slot.</p>`;
+        if (timerIntro.innerHTML !== wantTimerHtml) {
+          timerIntro.innerHTML = wantTimerHtml;
+        }
+      }
+    }
+
     const connHost = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
     patchUsbConnectionBar(connHost, {
       activeConsole: usbPool.mainConsole,
-      showAllPorts: this.showAllPorts,
+      showAllPorts: isBleMode ? false : this.showAllPorts,
+      bluetoothMode: isBleMode,
       error: this.connError,
     });
     const { hub, spokes } = this.buildTopologyState();
-    const sel = this.ensureSelectedSlot(hub, spokes);
-    this.renderTopologySection(hub, spokes, sel);
+    const sel = isBleMode ? 1 : this.ensureSelectedSlot(hub, spokes);
+    if (!isBleMode) {
+      this.renderTopologySection(hub, spokes, sel);
+    }
     this.renderTimerSection(hub, spokes, sel);
   }
 
@@ -3442,20 +3472,25 @@ export class NetworkView extends Component {
 
     if (selectedSlot === 1) {
       if (!hub.populated) {
+        const isBleEmpty = this.store.timingHardwareMode === "slaprf_ble";
         const emptyHubHtml = `
           <div class="debug-status-topbar">
             <span class="debug-led-status">
               <span class="status-dot"></span>
-              <span class="debug-head-note"><strong>TDMA Slot 1</strong> · Empty parent Hub slot</span>
+              <span class="debug-head-note"><strong>${isBleEmpty ? "Bluetooth Hub" : "TDMA Slot 1"}</strong> · ${isBleEmpty ? "No Bluetooth Hub connected" : "Empty parent Hub slot"}</span>
             </span>
             <div class="debug-connect-actions">
-              <span class="badge">Slot 1 · Empty</span>
+              <span class="badge">${isBleEmpty ? "Bluetooth · Idle" : "Slot 1 · Empty"}</span>
             </div>
           </div>
           <div class="debug-subbox">
-            <p class="note">No Hub timer is currently connected on TDMA Slot 1. Connect your Hub over USB-C to coordinate the 2.4 GHz network.</p>
+            <p class="note">${
+              isBleEmpty
+                ? "No SlapRF Bluetooth Hub is currently connected. Click Connect Bluetooth above to connect wirelessly (hold BOOT on the Hub for 3 s to pair with a new device)."
+                : "No Hub timer is currently connected on TDMA Slot 1. Connect your Hub over USB-C to coordinate the 2.4 GHz network."
+            }</p>
           </div>`;
-        this.lastTimerStructKey = "empty-1";
+        this.lastTimerStructKey = isBleEmpty ? "empty-1-ble" : "empty-1";
         if (emptyHubHtml !== this.lastTimerHtml) {
           this.lastTimerHtml = emptyHubHtml;
           detailHost.innerHTML = emptyHubHtml;
@@ -3505,8 +3540,15 @@ export class NetworkView extends Component {
                   ? `#${latestSpokeSeq}`
                   : "—";
 
+      const isBleHub = this.store.timingHardwareMode === "slaprf_ble" || hubConsole.transportLabel === "Bluetooth";
       const ledClass = hub.emergencyMode ? "is-emergency" : hub.online ? "is-up" : hub.populated ? "is-warn" : "";
-      const sourceLabel = hub.dbm ? (hub.viaUsb ? "Direct via USB-C" : "Engine telemetry") : "Waiting for 5.8 GHz sweep data";
+      const sourceLabel = hub.dbm
+        ? hub.viaUsb
+          ? isBleHub
+            ? "Direct via Bluetooth"
+            : "Direct via USB-C"
+          : "Engine telemetry"
+        : "Waiting for 5.8 GHz sweep data";
       const idBtnHtml = this.renderIdentifyButton(hub.fp, hub.online, hub.label);
       const childSummaryHtml =
         populatedSpokes.length > 0
@@ -3521,6 +3563,7 @@ export class NetworkView extends Component {
       const structKey = [
         "slot1",
         getAppTheme(),
+        isBleHub ? "ble" : "usb",
         ledClass,
         hub.label,
         hub.statusNote,
@@ -3599,29 +3642,40 @@ export class NetworkView extends Component {
         <div class="debug-timer-detail-grid">
           <div class="debug-subbox">
             <div class="debug-subbox-head">
-              <span class="debug-subbox-title is-active">${icons.wifi(14)}<span>Identity &amp; 2.4 GHz coordination</span></span>
-              <span class="badge ${hub.online ? "badge-good" : ""}">${hub.viaUsb ? "USB-C Connected" : hub.online ? "Online" : "Offline"}</span>
+              <span class="debug-subbox-title is-active">${icons.wifi(14)}<span>${isBleHub ? "Identity &amp; Bluetooth link" : "Identity &amp; 2.4 GHz coordination"}</span></span>
+              <span class="badge ${hub.online ? "badge-good" : ""}">${hub.viaUsb ? (isBleHub ? "Bluetooth Connected" : "USB-C Connected") : hub.online ? "Online" : "Offline"}</span>
             </div>
             <div class="debug-net-node-banner is-hub">
               <div class="debug-net-node-main">
-                <span class="debug-net-role-tag is-hub">HUB · PARENT</span>
+                <span class="debug-net-role-tag is-hub">${isBleHub ? "HUB · BLUETOOTH" : "HUB · PARENT"}</span>
                 <strong class="debug-net-node-name">${esc(hub.label)}</strong>
               </div>
               <span class="badge mono">${esc(hub.fp)}</span>
             </div>
             <dl class="debug-kv-list">
-              <div class="debug-kv-row">
-                <dt>TDMA slot</dt>
-                <dd>Slot 1 <span class="note">· Beacon master &amp; USB collector</span></dd>
-              </div>
-              <div class="debug-kv-row">
-                <dt>2.4 GHz link</dt>
-                <dd>ESP-NOW (6 Mbps OFDM) <span class="note">· Ch ${hub.ch}</span></dd>
-              </div>
-              <div class="debug-kv-row">
-                <dt>Child Spokes</dt>
-                <dd>${childSummaryHtml}</dd>
-              </div>
+              ${
+                isBleHub
+                  ? `<div class="debug-kv-row">
+                       <dt>Transport</dt>
+                       <dd>Bluetooth LE <span class="note">· ${s?.ble ? `${(s.ble.intervalUs / 1000).toFixed(2).replace(/\.00$/, "")} ms · ${s.ble.rssi} dBm` : "Single-gate Hub"}</span></dd>
+                     </div>
+                     <div class="debug-kv-row">
+                       <dt>BLE pairing</dt>
+                       <dd>${s?.ble ? (s.ble.pairingMode ? "Open pairing mode" : s.ble.paired === false ? "Unpaired" : "Paired to this device") : "Paired"}</dd>
+                     </div>`
+                  : `<div class="debug-kv-row">
+                       <dt>TDMA slot</dt>
+                       <dd>Slot 1 <span class="note">· Beacon master &amp; USB collector</span></dd>
+                     </div>
+                     <div class="debug-kv-row">
+                       <dt>2.4 GHz link</dt>
+                       <dd>ESP-NOW (6 Mbps OFDM) <span class="note">· Ch ${hub.ch}</span></dd>
+                     </div>
+                     <div class="debug-kv-row">
+                       <dt>Child Spokes</dt>
+                       <dd>${childSummaryHtml}</dd>
+                     </div>`
+              }
               <div class="debug-kv-row">
                 <dt>Track position</dt>
                 <dd data-net-kv="track-pos">${kvTrackPosHtml}</dd>

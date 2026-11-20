@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"slaprf/internal/firmware"
@@ -38,6 +39,23 @@ const (
 
 // ErrBLEUnsupported is returned when the current build has no Bluetooth LE backend.
 var ErrBLEUnsupported = errors.New("Bluetooth hubs are not supported in this build")
+
+var (
+	bleScanEnabled   atomic.Bool
+	bleSuppressDepth atomic.Int32
+)
+
+// SetBLEScanEnabled controls whether host/Android port enumeration scans for SlapRF Bluetooth Hubs.
+// When false (e.g. in SlapRF USB, LapRF, or RotorHazard modes), DefaultListPorts and Android JNI
+// skip BLE scanning entirely so no background Bluetooth scan or permission prompt is triggered.
+func SetBLEScanEnabled(enabled bool) {
+	bleScanEnabled.Store(enabled)
+}
+
+// BLEScanEnabled reports whether BLE hub scanning is currently active for port enumeration.
+func BLEScanEnabled() bool {
+	return bleScanEnabled.Load() && bleSuppressDepth.Load() == 0
+}
 
 // IsBLEPortName reports whether `name` is a Bluetooth hub port path (`ble:...`).
 func IsBLEPortName(name string) bool {
@@ -74,6 +92,8 @@ type BLEAdvertInfo struct {
 	FwMajor     uint8
 	FwMinor     uint8
 	FwPatch     uint8
+	HasFlags    bool
+	Paired      bool
 }
 
 // FingerprintHex returns the fingerprint as 8 upper-case hex digits.
@@ -81,8 +101,8 @@ func (a BLEAdvertInfo) FingerprintHex() string {
 	return fmt.Sprintf("%08X", a.Fingerprint)
 }
 
-// ParseBLEManufacturerData decodes `'S' 'R' <fp u32 LE> <role> <maj> <min> <patch>` found after
-// the company ID in the hub's manufacturer specific data.
+// ParseBLEManufacturerData decodes `'S' 'R' <fp u32 LE> <role> <maj> <min> <patch> [<flags>]` found
+// after the company ID in the hub's manufacturer specific data.
 func ParseBLEManufacturerData(companyID uint16, data []byte) (BLEAdvertInfo, bool) {
 	if companyID != BLEManufacturerCompanyID || len(data) < 7 {
 		return BLEAdvertInfo{}, false
@@ -97,6 +117,10 @@ func ParseBLEManufacturerData(companyID uint16, data []byte) (BLEAdvertInfo, boo
 	if len(data) >= 10 {
 		info.FwMajor, info.FwMinor, info.FwPatch = data[7], data[8], data[9]
 	}
+	if len(data) >= 11 {
+		info.HasFlags = true
+		info.Paired = (data[10] & 0x01) != 0
+	}
 	return info, true
 }
 
@@ -106,11 +130,15 @@ func BLEPortInfoFor(info BLEAdvertInfo, localName string) PortInfo {
 	if label == "" {
 		label = "SlapRF Hub"
 	}
+	product := label + " (Bluetooth)"
+	if info.HasFlags && !info.Paired {
+		product = label + " (Bluetooth · Pairing mode)"
+	}
 	return PortInfo{
 		Name:         BLEPortName(info.Fingerprint),
 		IsUSB:        false,
 		SerialNumber: info.FingerprintHex(),
-		Product:      label + " (Bluetooth)",
+		Product:      product,
 		IsEspressif:  true,
 		Transport:    BLETransportName,
 	}

@@ -4,7 +4,7 @@ import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import { enterThresholdAt, exitThresholdAt, gateLabel, laprfThresholdAt, rhThresholdAt } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { HeatCrossing, HeatRssiSample, HeatSeat, isRotorHazardMode, RaceHeat, RaceTournamentState, TimingHardwareMode } from "../types/models";
+import { HeatCrossing, HeatRssiSample, HeatSeat, isRotorHazardMode, isSlapRFMode, RaceHeat, RaceTournamentState, TimingHardwareMode } from "../types/models";
 import { showToast } from "./Toast";
 
 const BAND_LETTER: Record<number, string> = { 0: "R", 1: "R", 2: "A", 3: "B", 4: "E", 5: "F", 6: "D" };
@@ -456,7 +456,7 @@ export function openHeatLapEditorModal(
     if (
       isRotorHazardMode(heat.hardwareMode) ||
       heat.hardwareMode === "laprf" ||
-      heat.hardwareMode === "slaprf"
+      (heat.hardwareMode && isSlapRFMode(heat.hardwareMode))
     ) {
       return heat.hardwareMode;
     }
@@ -531,7 +531,7 @@ export function openHeatLapEditorModal(
     }
     let enterDb = drafted
       ? drafted.enterDb
-      : hasNode && store.timingHardwareMode === "slaprf"
+      : hasNode && isSlapRFMode(store.timingHardwareMode)
         ? enterThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm
         : seat.enterRssiDbm && seat.enterRssiDbm < 0
           ? seat.enterRssiDbm
@@ -541,7 +541,7 @@ export function openHeatLapEditorModal(
     }
     let exitDb = drafted
       ? drafted.exitDb
-      : hasNode && store.timingHardwareMode === "slaprf"
+      : hasNode && isSlapRFMode(store.timingHardwareMode)
         ? exitThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm
         : seat.exitRssiDbm && seat.exitRssiDbm < 0
           ? seat.exitRssiDbm
@@ -852,6 +852,7 @@ export function openHeatLapEditorModal(
       !store.isHistoricalTrack &&
       Boolean(store.node(selectedGateId)) &&
       (store.timingHardwareMode === hwMode ||
+        (isSlapRFMode(store.timingHardwareMode) && isSlapRFMode(hwMode)) ||
         (isRotorHazardMode(store.timingHardwareMode) && isRotorHazardMode(hwMode)));
     const enterLbl =
       hwMode === "laprf"
@@ -987,7 +988,7 @@ export function openHeatLapEditorModal(
     let hoverHtml = "";
     if (hoverInfo && !dragState && !threshDrag && !viewDrag) {
       const hx = clamp(msToX(hoverInfo.offsetMs), PAD_L, svgW - PAD_R).toFixed(1);
-      const hLbl = `${fmtOffsetSec(hoverInfo.offsetMs)}${hoverInfo.dbm !== null ? ` · ${hoverInfo.dbm}${hwMode === "slaprf" ? " dBm" : ""}` : ""}${addMode ? " (Click to add)" : ""}`;
+      const hLbl = `${fmtOffsetSec(hoverInfo.offsetMs)}${hoverInfo.dbm !== null ? ` · ${hoverInfo.dbm}${isSlapRFMode(hwMode) ? " dBm" : ""}` : ""}${addMode ? " (Click to add)" : ""}`;
       hoverHtml = `
         <g class="lap-ed-hover-guide ${addMode ? "is-add" : ""}" pointer-events="none">
           <line x1="${hx}" y1="${PAD_T}" x2="${hx}" y2="${SVG_H - PAD_B}" class="lap-ed-hover-line" />
@@ -1159,7 +1160,7 @@ export function openHeatLapEditorModal(
                     : "—";
               const rssiCell =
                 r.peakDbm !== null
-                  ? `<span class="lap-ed-num mono">${r.peakDbm}<span class="lap-ed-rssi-unit">${hwMode === "slaprf" ? " dBm" : ""}</span></span>`
+                  ? `<span class="lap-ed-num mono">${r.peakDbm}<span class="lap-ed-rssi-unit">${isSlapRFMode(hwMode) ? " dBm" : ""}</span></span>`
                   : `<span class="muted">—</span>`;
               const srcCell = r.crossing.manual
                 ? `<span class="muted">Manual</span>`

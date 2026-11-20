@@ -318,7 +318,7 @@ export class LapRFHardwareLink {
       throw new Error(this.lastError);
     }
 
-    const selected = await pickUsbPort({ showAllPorts: true });
+    const selected = await pickUsbPort({ showAllPorts: true, transport: "usb" });
     if (!isBackendSerialPort(selected)) {
       throw new Error("Expected a native OS USB port from SlapRF Server.");
     }
