@@ -45,10 +45,7 @@ jobs:
           name: firmware
           path: web/firmware
 
-      # Optional Bluetooth Hub image (slaprf-xiao-c5-ble.bin). When it is missing the flasher
-      # shows the Bluetooth hub option disabled.
       - name: Download compiled Bluetooth Hub firmware image
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: firmware-ble

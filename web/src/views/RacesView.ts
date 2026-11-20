@@ -7279,11 +7279,13 @@ export class RacesView extends Component {
   private renderRaceWorkspaceTopBar(
     race: RaceTournamentState,
     mode: WorkspaceTab,
-    rightHtml = ""
+    rightHtml = "",
+    extraCls = ""
   ): string {
     const { barCls, standbyHtml } = this.renderRaceStandbyStripHtml(race);
+    const cls = ["races-page-topbar", extraCls, barCls].filter(Boolean).join(" ");
     return `
-      <div class="races-page-topbar ${barCls}" data-rc-hud>
+      <div class="${cls}" data-rc-hud>
         <div class="rc-topbar-side is-left" aria-hidden="true"></div>
         ${this.renderTopLeftCanvasBar(race, mode)}
         <div class="rc-topbar-side is-right">${rightHtml}</div>
@@ -10088,7 +10090,7 @@ export class RacesView extends Component {
     return renderDesktopRaceTableEditorHtml(
       race,
       this.desktopTableUi,
-      this.renderTopLeftCanvasBar(race, "edit"),
+      this.renderRaceWorkspaceTopBar(race, "edit", "", "dte-page-topbar"),
       this.renderDesktopSetupViewToggle()
     );
   }

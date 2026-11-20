@@ -204,19 +204,19 @@ func TestAPI_TrackGatesThresholdsPerGateRulesAndLegacyAliases(t *testing.T) {
 	}
 
 	// 4. Per-gate timing rule overrides via POST /api/track/rules and clearing with empty overrides.
-	minSec := 1.2
-	echoSec := 6.5
+	minLap := 7.5
+	minCross := 0.28
 	h.APIPost("/api/track/rules", map[string]any{
 		"gateId": addedGateID,
 		"overrides": domain.GateRuleOverrides{
-			MinSectionSec: &minSec,
-			EchoWindowSec: &echoSec,
+			MinLapSec:      &minLap,
+			MinCrossingSec: &minCross,
 		},
 	}, &st)
 	for _, g := range st.Gates {
 		if g.GateID == addedGateID {
-			if g.RuleOverrides.EchoWindowSec == nil || *g.RuleOverrides.EchoWindowSec != 6.5 {
-				t.Fatalf("expected EchoWindowSec=6.5 on gate %d, got %+v", addedGateID, g.RuleOverrides)
+			if g.RuleOverrides.MinCrossingSec == nil || *g.RuleOverrides.MinCrossingSec != 0.28 {
+				t.Fatalf("expected MinCrossingSec=0.28 on gate %d, got %+v", addedGateID, g.RuleOverrides)
 			}
 		}
 	}
@@ -243,20 +243,18 @@ func TestAPI_TimingRulesClampingAndArmToggle(t *testing.T) {
 
 	// 1. Default rules check.
 	def := h.APIRules()
-	if def.MinLapSec != 5 || def.MaxLapSec != 120 || def.GateCooldownSec != 2 {
+	if def.MinLapSec != 5 || def.MaxLapSec != 120 || def.MinCrossingSec != 0.12 {
 		t.Fatalf("unexpected default timing rules: %+v", def)
 	}
 
-	// 2. Post out-of-range values and verify server-side guardrail clamping inNormalized().
+	// 2. Post out-of-range values and verify server-side guardrail clamping in Normalized().
 	var clamped domain.TimingRules
 	h.APIPost("/api/rules", domain.TimingRules{
-		MinLapSec:       0.05, // clamps to 1.0
-		MaxLapSec:       2.0,  // clamps to MinLapSec + 5 = 6.0
-		GateCooldownSec: 99.0, // clamps to 15.0
-		MinSectionSec:   0.01, // clamps to 0.1
-		EchoWindowSec:   -4.0, // clamps to 0.0
+		MinLapSec:      0.05, // clamps to 1.0
+		MaxLapSec:      2.0,  // clamps to MinLapSec + 5 = 6.0
+		MinCrossingSec: 9.0,  // clamps to 1.5
 	}, &clamped)
-	if clamped.MinLapSec != 1.0 || clamped.MaxLapSec != 6.0 || clamped.GateCooldownSec != 15.0 || clamped.MinSectionSec != 0.1 || clamped.EchoWindowSec != 0.0 {
+	if clamped.MinLapSec != 1.0 || clamped.MaxLapSec != 6.0 || clamped.MinCrossingSec != 1.5 {
 		t.Fatalf("expected server-side clamped TimingRules, got %+v", clamped)
 	}
 

@@ -83,35 +83,24 @@ func TestComponent_PilotSlotsEditorSearchDuplicateGuardAndRemove(t *testing.T) {
 }
 
 func TestComponent_PilotSlotsEditorHardwareModeColumns(t *testing.T) {
-	// 1. Default SlapRF mode renders "Enter threshold" & "Exit threshold" columns.
+	// 1. Default SlapRF mode renders Pilot, Phonetic name, and Default channel columns (thresholds hidden).
 	h := NewHarness(t)
 	h.BootClean("#/pilots")
 
 	headRow := h.Page.Locator(`.slot-head`).First()
-	h.MustContainText(headRow, "Enter threshold")
-	h.MustContainText(headRow, "Exit threshold")
+	h.MustContainText(headRow, "Pilot")
+	h.MustContainText(headRow, "Phonetic name")
+	h.MustContainText(headRow, "Default channel")
 	h.MilestoneScreenshot("pilot-slots-slaprf-columns")
 
-	// 2. Pre-seeded LapRF mode renders "Gain (0–63)" & "Threshold" columns with AttenuationGain inputs.
+	// 2. Pre-seeded LapRF mode renders the same clean directory columns without threshold inputs.
 	h.BootWithSnapshot(SnapshotLapRFModeSeeded, "#/pilots", nil)
 	headRowLapRF := h.Page.Locator(`.slot-head`).First()
-	h.MustContainText(headRowLapRF, "Gain (0–63)")
-	h.MustContainText(headRowLapRF, "Threshold")
-
-	gainInput := h.Page.Locator(`form[data-pilot="1"] input[name="attenuationGain"]`).First()
-	h.MustBeVisible(gainInput, "Pilot 1 LapRF attenuationGain input")
-	if err := gainInput.Fill("45"); err != nil {
-		t.Fatalf("fill attenuationGain: %v", err)
-	}
-	if err := gainInput.Press("Enter"); err != nil {
-		t.Fatalf("press Enter on attenuationGain: %v", err)
-	}
-
-	resetGainBtn := h.Page.Locator(`button[data-reset-laprf-gain="1"]`).First()
-	h.MustBeVisible(resetGainBtn, "Inline reset button for modified LapRF gain")
+	h.MustContainText(headRowLapRF, "Pilot")
+	h.MustContainText(headRowLapRF, "Default channel")
 	stLapRF := h.APIState()
-	if string(stLapRF.TimingHardwareMode) != "laprf" || stLapRF.Pilots[0].AttenuationGain != 45 {
-		t.Fatalf("expected /api/state mode=laprf and pilot[0].AttenuationGain=45, got mode=%s gain=%d", stLapRF.TimingHardwareMode, stLapRF.Pilots[0].AttenuationGain)
+	if string(stLapRF.TimingHardwareMode) != "laprf" {
+		t.Fatalf("expected /api/state mode=laprf, got mode=%s", stLapRF.TimingHardwareMode)
 	}
 	h.MilestoneScreenshot("pilot-slots-laprf-columns")
 }
@@ -262,33 +251,33 @@ func TestComponent_TimingRulesEditorGlobalEditInlineResetAndPerGateOverride(t *t
 		return err == nil && (val == "5" || val == "5.0"), nil
 	})
 
-	// 2. Switch scope to Gate 2 and toggle per-gate override on echoWindowSec.
+	// 2. Switch scope to Gate 2 and toggle per-gate override on minCrossingSec.
 	gate2ScopeBtn := h.Page.Locator(`button[data-scope="2"]`).First()
 	h.MustBeVisible(gate2ScopeBtn, "Gate 2 scope tab in TimingRulesEditor")
 	if err := gate2ScopeBtn.Click(); err != nil {
 		t.Fatalf("click Gate 2 scope: %v", err)
 	}
 
-	overrideToggle := h.Page.Locator(`button[data-override-toggle="echoWindowSec"]`).First()
-	h.MustBeVisible(overrideToggle, "Gate 2 echoWindowSec override toggle")
+	overrideToggle := h.Page.Locator(`button[data-override-toggle="minCrossingSec"]`).First()
+	h.MustBeVisible(overrideToggle, "Gate 2 minCrossingSec override toggle")
 	if err := overrideToggle.Click(); err != nil {
-		t.Fatalf("click echoWindowSec override toggle: %v", err)
+		t.Fatalf("click minCrossingSec override toggle: %v", err)
 	}
 
-	echoInput := h.Page.Locator(`form.rules input[name="echoWindowSec"]`).First()
-	h.WaitUntil("echoWindowSec input enabled for Gate 2 override", 5*time.Second, func() (bool, error) {
-		dis, err := echoInput.IsDisabled()
+	crossInput := h.Page.Locator(`form.rules input[name="minCrossingSec"]`).First()
+	h.WaitUntil("minCrossingSec input enabled for Gate 2 override", 5*time.Second, func() (bool, error) {
+		dis, err := crossInput.IsDisabled()
 		return err == nil && !dis, nil
 	})
-	if err := echoInput.Fill("5.5"); err != nil {
-		t.Fatalf("fill echoWindowSec=5.5: %v", err)
+	if err := crossInput.Fill("0.25"); err != nil {
+		t.Fatalf("fill minCrossingSec=0.25: %v", err)
 	}
-	if err := echoInput.Press("Enter"); err != nil {
-		t.Fatalf("press Enter on echoWindowSec: %v", err)
+	if err := crossInput.Press("Enter"); err != nil {
+		t.Fatalf("press Enter on minCrossingSec: %v", err)
 	}
-	h.WaitUntil("/api/state Gate 2 rule override echoWindowSec=5.5 saved", 5*time.Second, func() (bool, error) {
+	h.WaitUntil("/api/state Gate 2 rule override minCrossingSec=0.25 saved", 5*time.Second, func() (bool, error) {
 		for _, g := range h.APIState().Gates {
-			if g.GateID == 2 && g.RuleOverrides.EchoWindowSec != nil && *g.RuleOverrides.EchoWindowSec == 5.5 {
+			if g.GateID == 2 && g.RuleOverrides.MinCrossingSec != nil && *g.RuleOverrides.MinCrossingSec == 0.25 {
 				return true, nil
 			}
 		}

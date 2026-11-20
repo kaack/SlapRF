@@ -379,8 +379,8 @@ func buildSyntheticPracticeDataset(pilots []domain.PilotSlot) ([]domain.LapRecor
 			GateID:      2,
 			SlotIndex:   2,
 			Callsign:    pilotBySlot[2].Callsign,
-			Reason:      domain.FilterCooldown,
-			Detail:      "1.15s since last pass at Gate 2 (cooldown 2.0s)",
+			Reason:      domain.FilterSpike,
+			Detail:      "0.05s crossing hold at Gate 2 (min crossing 0.12s)",
 			PeakRSSIDbm: -49.0,
 		},
 		{
@@ -388,8 +388,8 @@ func buildSyntheticPracticeDataset(pilots []domain.PilotSlot) ([]domain.LapRecor
 			GateID:      3,
 			SlotIndex:   3,
 			Callsign:    pilotBySlot[3].Callsign,
-			Reason:      domain.FilterEcho,
-			Detail:      "Re-detected previous Gate 2 within 1.80s echo window",
+			Reason:      domain.FilterSpike,
+			Detail:      "0.06s crossing hold at Gate 3 (min crossing 0.12s)",
 			PeakRSSIDbm: -51.4,
 		},
 		{
@@ -403,11 +403,11 @@ func buildSyntheticPracticeDataset(pilots []domain.PilotSlot) ([]domain.LapRecor
 		},
 		{
 			TimestampUs: baseUs + 28_900_000,
-			GateID:      2,
+			GateID:      1,
 			SlotIndex:   4,
 			Callsign:    pilotBySlot[4].Callsign,
-			Reason:      domain.FilterTooSoon,
-			Detail:      "0.24s from Start / Finish (min section 0.5s)",
+			Reason:      domain.FilterLapTooLong,
+			Detail:      "142.3s lap exceeded max lap 120s (new lap started)",
 			PeakRSSIDbm: -52.8,
 		},
 	}

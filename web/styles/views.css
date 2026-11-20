@@ -24040,6 +24040,7 @@ html[data-theme="light"] .mre-sheet-check-toggle input[type="checkbox"]:checked:
   /* Standardized 46px panel header height (matching Heats Schedule) across all Desktop tabs */
   .races-page .rc-canvas-panel.rc-page-card > .rc-panel-header,
   .races-page .rc-standings-card-box > .rc-panel-header,
+  .races-page .rc-signals-card-box > .rc-panel-header,
   .practice-workspace-page .rc-panel-header {
     height: 46px;
     min-height: 46px;

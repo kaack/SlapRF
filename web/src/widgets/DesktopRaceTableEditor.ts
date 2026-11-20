@@ -242,7 +242,7 @@ export function renderSetupRaceSubRibbonHtml(
 export function renderDesktopRaceTableEditorHtml(
   race: RaceTournamentState,
   ui: DesktopRaceTableUiState,
-  topLeftBarHtml: string,
+  topbarHtml: string,
   setupViewToggleHtml: string
 ): string {
   const rounds = getSortedMobileRounds(race);
@@ -250,13 +250,6 @@ export function renderDesktopRaceTableEditorHtml(
     race.lifecycle !== "completed" && race.lifecycle !== "scrapped";
   const roster = race.roster ?? [];
   const activePilots = roster.filter((p) => p.checkedIn && p.attendance === "active");
-
-  const topbarHtml = `
-    <div class="races-page-topbar dte-page-topbar" data-rc-hud>
-      <div class="rc-topbar-side is-left" aria-hidden="true"></div>
-      ${topLeftBarHtml}
-      <div class="rc-topbar-side is-right" aria-hidden="true"></div>
-    </div>`;
 
   const raceSummaryHtml = renderSetupRaceSubRibbonHtml(race, setupViewToggleHtml, false);
 
