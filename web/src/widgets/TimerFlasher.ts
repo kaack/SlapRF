@@ -625,7 +625,7 @@ export class TimerFlasher extends Component {
       : checking
         ? "Checking for the Bluetooth hub firmware image."
         : link === "ble"
-          ? "Wireless hub: connect from the SlapRF app over Bluetooth. Single gate for now."
+          ? "Wireless hub: connect from the SlapRF app over Bluetooth (solo 1-gate or with up to 6 Spokes)."
           : "Wired hub: plug the Hub into this device with a USB-C cable.";
     const bleDisabled = this.busy || this.bleImageAvailable !== true;
     return `

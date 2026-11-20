@@ -1,9 +1,8 @@
 idf_component_register(
-    SRCS "slaprf_ble_link.c" "slaprf_ble_console.c"
-         "../../components/slaprf_radio/slaprf_radio.c"
+    SRCS "slaprf_ble_link.c" "slaprf_ble_console.c" "slaprf_ble_espnow.c"
          "../../components/slaprf_radio/slaprf_rf58.c"
     INCLUDE_DIRS "include" "../../components/slaprf_radio/include"
-    REQUIRES esp_wifi esp_netif esp_event esp_timer nvs_flash lwip esp_driver_usb_serial_jtag esp_driver_gpio
+    REQUIRES esp_wifi esp_event esp_timer nvs_flash esp_driver_usb_serial_jtag esp_driver_gpio
              esp_driver_ledc heap esp_phy spi_flash bt
 )
 

@@ -723,8 +723,8 @@ export class TimingDevicesCard extends Component {
               : `Timing laps with LapRF 8-Way hardware over Ethernet TCP :5403 or USB Serial. Connect your LapRF timer on the <a href="#/network" class="link-inline">Network</a> page.`
             : effectiveMode === "slaprf_ble"
               ? sim
-                ? `Simulating a wireless SlapRF Bluetooth Hub (single gate, up to 8 simultaneous pilots). Manage simulated boards on <a href="#/sim" class="link-inline">Simulation</a> or inspect live 5.8 GHz RSSI on <a href="#/network" class="link-inline">Network</a>.`
-                : `Timing laps wirelessly with a SlapRF Bluetooth Hub (single gate, up to 8 simultaneous pilots). First connect claims the Hub; hold <code>BOOT</code> for 3 s on the Hub to pair a different phone or computer. Connect on <a href="#/network" class="link-inline">Network</a>.`
+                ? `Simulating a wireless SlapRF Bluetooth Hub (solo 1-gate or with up to 6 ESP-NOW Spokes, up to 8 simultaneous pilots). Manage simulated boards on <a href="#/sim" class="link-inline">Simulation</a> or inspect live 5.8 GHz RSSI on <a href="#/network" class="link-inline">Network</a>.`
+                : `Timing laps wirelessly with a SlapRF Bluetooth Hub (solo 1-gate or with up to 6 ESP-NOW Spokes, up to 8 simultaneous pilots). First connect claims the Hub; hold <code>BOOT</code> for 3 s on the Hub to pair a different phone or computer. Connect on <a href="#/network" class="link-inline">Network</a>.`
               : sim
                 ? `Simulating SlapRF Hub &amp; Spoke gate timers. Manage simulated boards on <a href="#/sim" class="link-inline">Simulation</a>.`
                 : `Timing laps with SlapRF Hub &amp; Spoke gate timers over native USB-C serial.`;

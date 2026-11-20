@@ -820,3 +820,177 @@ func TestBLEUnwrapWindowSamplesLive2ZeroGaps(t *testing.T) {
 		}
 	}
 }
+
+func TestBLEMultiGateHubAndSpokesTelemetryAndNetChannels(t *testing.T) {
+	eng := tracker.NewRealEngine()
+	eng.SetTimingHardwareMode(domain.HardwareModeSlapRFBLE, false)
+	if err := eng.UpdatePilotSlot(domain.PilotSlot{
+		SlotIndex: 1,
+		Callsign:  "OneEye",
+		Band:      domain.BandRaceband,
+		Channel:   8,
+		Enabled:   true,
+	}); err != nil {
+		t.Fatalf("UpdatePilotSlot: %v", err)
+	}
+	hubRx := ingest.NewHubFrameDecoder(eng)
+
+	var activeStream *BLEStreamPort
+	var activeTransport *echoHubTransport
+	var trMu sync.Mutex
+
+	mgr := NewManager(ManagerConfig{
+		Engine: eng,
+		HubRx:  hubRx,
+		OpenPort: func(_ string, _ int) (firmware.SerialPort, error) {
+			tr := &echoHubTransport{fakeBLETransport: fakeBLETransport{maxWrite: 244}}
+			p := NewBLEStreamPort(tr)
+			tr.port = p
+			trMu.Lock()
+			activeTransport = tr
+			activeStream = p
+			trMu.Unlock()
+			return p, nil
+		},
+	})
+	defer mgr.Close()
+	mgr.Reconcile(false, domain.HardwareModeSlapRFBLE)
+
+	if _, err := mgr.Connect(0, "ble:CAFE1234"); err != nil {
+		t.Fatalf("Connect ble:CAFE1234: %v", err)
+	}
+
+	// Verify NETCHANNELS was pushed immediately upon Connect so Spokes receive the active 8-pilot channel table.
+	trMu.Lock()
+	tr1 := activeTransport
+	stream1 := activeStream
+	trMu.Unlock()
+	tr1.mu.Lock()
+	var joinedWrites strings.Builder
+	for _, w := range tr1.writes {
+		joinedWrites.Write(w)
+	}
+	tr1.mu.Unlock()
+	if !strings.Contains(joinedWrites.String(), "NETCHANNELS 5917,5732,5806,0,0,0,0,0") {
+		t.Fatalf("expected immediate NETCHANNELS push on BLE Connect, writes=%q", joinedWrites.String())
+	}
+
+	makeHelloRec := func(slot, role, sweepHz byte, fp uint32, label string) []byte {
+		f := make([]byte, 36)
+		f[0] = 0xC5
+		f[1] = 0x5A
+		f[2] = slot
+		f[3] = role
+		f[4] = byte(fp)
+		f[5] = byte(fp >> 8)
+		f[6] = byte(fp >> 16)
+		f[7] = byte(fp >> 24)
+		f[9] = sweepHz
+		copy(f[10:34], label)
+		var crc byte
+		for i := 0; i < 35; i++ {
+			crc ^= f[i]
+		}
+		f[35] = crc
+		return append([]byte{0x1E, 36}, f...)
+	}
+	makeWinRec := func(slot, seq, ch0Code byte) []byte {
+		f := make([]byte, 7+9+1)
+		f[0] = 0xC5
+		f[1] = 0x60
+		f[2] = slot
+		f[3] = 1
+		nf := int8(-91)
+		f[6] = byte(nf)
+		f[7] = seq
+		f[8] = ch0Code
+		for ch := 1; ch < 8; ch++ {
+			f[8+ch] = 74 // -90.5 dBm
+		}
+		var crc byte
+		for i := 0; i < len(f)-1; i++ {
+			crc ^= f[i]
+		}
+		f[len(f)-1] = crc
+		return append([]byte{0x1E, byte(len(f))}, f...)
+	}
+
+	var hubLiveSlots map[int]bool
+	var liveMu sync.Mutex
+	mgr.Subscribe(func(ev USBEvent) {
+		if ev.Type == "hub_live" {
+			if rawSlots, ok := ev.Payload["slots"].([]map[string]any); ok {
+				liveMu.Lock()
+				if hubLiveSlots == nil {
+					hubLiveSlots = make(map[int]bool)
+				}
+				for _, s := range rawSlots {
+					if n, ok := asInt(s["slot"]); ok {
+						hubLiveSlots[n] = true
+					}
+				}
+				liveMu.Unlock()
+			}
+		}
+	})
+
+	// Coalesced BLE notification carrying Hub Slot 1 (50 Hz) + Spoke T1 Slot 2 (100 Hz) + Spoke T2 Slot 3 (100 Hz) HELLOs and windows.
+	var burst []byte
+	burst = append(burst, makeHelloRec(1, 1, 50, 0xCAFE1234, "H1")...)
+	burst = append(burst, makeHelloRec(2, 2, 100, 0xAA000001, "T1")...)
+	burst = append(burst, makeHelloRec(3, 2, 100, 0xAA000002, "T2")...)
+	burst = append(burst, makeWinRec(1, 1, 75)...)
+	burst = append(burst, makeWinRec(2, 10, 80)...)
+	burst = append(burst, makeWinRec(3, 20, 82)...)
+	stream1.Deliver(burst)
+
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		timers := eng.DetectedTimersSnapshot()
+		liveMu.Lock()
+		gotAllLive := hubLiveSlots[1] && hubLiveSlots[2] && hubLiveSlots[3]
+		liveMu.Unlock()
+		if len(timers) == 3 && gotAllLive {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	timers := eng.DetectedTimersSnapshot()
+	if len(timers) != 3 {
+		t.Fatalf("expected Hub H1 + 2 Spokes T1, T2 detected over BLE, got %d (%+v)", len(timers), timers)
+	}
+	liveMu.Lock()
+	gotAllLive := hubLiveSlots[1] && hubLiveSlots[2] && hubLiveSlots[3]
+	liveMu.Unlock()
+	if !gotAllLive {
+		t.Fatalf("expected hub_live payload to include slots 1, 2, and 3 over BLE, got %+v", hubLiveSlots)
+	}
+
+	// Add Spoke T1 (TimerID 2) as Sector Gate 2 alongside H1 (Gate 1 Start/Finish).
+	if _, err := eng.AddGate("Split 1", 2); err != nil {
+		t.Fatalf("AddGate for Spoke T1 in slaprf_ble mode: %v", err)
+	}
+	_, gates, _, _, _ := eng.StateSnapshot()
+	if len(gates) != 2 || gates[0].AssignedTimerID != 1 || gates[1].AssignedTimerID != 2 {
+		t.Fatalf("expected 2-gate BLE course [H1, T1], got %+v", gates)
+	}
+
+	// Simulate BLE Hub power-cycle + reconnect: NETCHANNELS must be force-pushed again even though pilot channels did not change!
+	_ = mgr.Disconnect(0)
+	if _, err := mgr.Connect(0, "ble:CAFE1234"); err != nil {
+		t.Fatalf("Reconnect ble:CAFE1234: %v", err)
+	}
+	trMu.Lock()
+	tr2 := activeTransport
+	trMu.Unlock()
+	tr2.mu.Lock()
+	var reconnWrites strings.Builder
+	for _, w := range tr2.writes {
+		reconnWrites.Write(w)
+	}
+	tr2.mu.Unlock()
+	if !strings.Contains(reconnWrites.String(), "NETCHANNELS 5917,5732,5806,0,0,0,0,0") {
+		t.Fatalf("expected forced NETCHANNELS push on BLE reconnect after Hub reboot, writes=%q", reconnWrites.String())
+	}
+}

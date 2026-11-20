@@ -160,6 +160,9 @@ func (m *Manager) Connect(slotIndex int, portName string) (SlotSnapshot, error) 
 	}
 
 	m.registerConnectedHubInEngine(stAfter, cfgAfter)
+	if m.cfg.HubRx != nil {
+		m.cfg.HubRx.PushActiveChannels()
+	}
 	m.broadcastPoolState()
 	return m.Snapshot().Slots[slotIndex], nil
 }
@@ -936,6 +939,7 @@ func (m *Manager) handleHubBinaryFrame(slot *usbSlot, frame []byte) {
 	nowMs := time.Now().UnixMilli()
 
 	var bleLiveEvents []map[string]any
+	newSlotSeen := false
 
 	slot.mu.Lock()
 	switch {
@@ -978,7 +982,10 @@ func (m *Manager) handleHubBinaryFrame(slot *usbSlot, frame []byte) {
 				}
 				dbm[ch] = best
 			}
-			prev := slot.hubLive[tdmaSlot]
+			prev, hadPrev := slot.hubLive[tdmaSlot]
+			if !hadPrev {
+				newSlotSeen = true
+			}
 			slot.hubLive[tdmaSlot] = slotLive{
 				frames:        prev.frames + 1,
 				lastFrameAtMs: nowMs,
@@ -1002,7 +1009,10 @@ func (m *Manager) handleHubBinaryFrame(slot *usbSlot, frame []byte) {
 		for ch := 0; ch < 8; ch++ {
 			dbm[ch] = float64(ingest.DecodeHalfDbm(frame[7+ch]))
 		}
-		prev := slot.hubLive[tdmaSlot]
+		prev, hadPrev := slot.hubLive[tdmaSlot]
+		if !hadPrev {
+			newSlotSeen = true
+		}
 		slot.hubLive[tdmaSlot] = slotLive{
 			frames:        prev.frames + 1,
 			lastFrameAtMs: nowMs,
@@ -1017,7 +1027,7 @@ func (m *Manager) handleHubBinaryFrame(slot *usbSlot, frame []byte) {
 	}
 	synth := m.synthesizeHubStatusLocked(slot, nowMs)
 	var hubLive map[string]any
-	if (kind == ingest.FrameMagicWindow || kind == ingest.FrameMagicSingle) && nowMs-slot.hubLiveEmitMs >= hubLiveEmitIntervalMs {
+	if (kind == ingest.FrameMagicWindow || kind == ingest.FrameMagicSingle) && (newSlotSeen || nowMs-slot.hubLiveEmitMs >= hubLiveEmitIntervalMs) {
 		slot.hubLiveEmitMs = nowMs
 		hubLive = hubLivePayloadLocked(slot, nowMs)
 	}
@@ -1047,7 +1057,7 @@ func hubLivePayloadLocked(slot *usbSlot, nowMs int64) map[string]any {
 	slots := make([]map[string]any, 0, len(slot.hubLive))
 	for tdma, l := range slot.hubLive {
 		slots = append(slots, map[string]any{
-			"slot":   tdma,
+			"slot":   int(tdma),
 			"dbm":    l.dbm,
 			"seq":    l.seq,
 			"frames": l.frames,
@@ -1690,6 +1700,8 @@ func asInt(v any) (int, bool) {
 	switch n := v.(type) {
 	case int:
 		return n, true
+	case uint8:
+		return int(n), true
 	case float64:
 		return int(n), true
 	case int64:

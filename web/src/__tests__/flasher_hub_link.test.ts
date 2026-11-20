@@ -215,7 +215,7 @@ describe("Flasher Hub connection: USB cable vs Bluetooth hub image", () => {
       expect(window.localStorage.getItem(HUB_LINK_STORAGE_KEY)).toBe("ble");
       expect(root.querySelector('#tf [data-hub-link="ble"]')!.classList.contains("is-active")).toBe(true);
       expect(root.querySelector("#tf [data-hub-link-help]")!.textContent).toContain(
-        "Wireless hub: connect from the SlapRF app over Bluetooth. Single gate for now."
+        "Wireless hub: connect from the SlapRF app over Bluetooth (solo 1-gate or with up to 6 Spokes)."
       );
       expect(flasher.selectedImageName).toBe("slaprf-xiao-c5-ble.bin");
 

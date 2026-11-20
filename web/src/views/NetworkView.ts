@@ -1519,7 +1519,7 @@ export class NetworkView extends Component {
           const rawFp = (sp.fp || "").toUpperCase();
           const isFallbackFp = !rawFp || rawFp.startsWith("53504B");
           const matchedDt = !isFallbackFp
-            ? detectedTimers.find((t) => (t.fingerprint || "").toUpperCase() === rawFp)
+            ? detectedTimers.find((t) => !t.isHub && (t.fingerprint || "").toUpperCase() === rawFp)
             : undefined;
           const gate = matchedDt ? this.store.nodes.find((g) => g.assignedTimerId === matchedDt.timerId) : undefined;
           const slotLive = activeHubConsole.hubSlotLive.get(sp.slot);
@@ -1712,6 +1712,10 @@ export class NetworkView extends Component {
       this.selectedSlot = s.slot;
       return this.selectedSlot;
     }
+    if (this.store.timingHardwareMode === "slaprf_ble" && hub.populated) {
+      this.selectedSlot = 1;
+      return 1;
+    }
     const firstActiveSpoke = [...spokes.values()].find((sp) => sp.espNowActive);
     if (firstActiveSpoke) {
       this.selectedSlot = firstActiveSpoke.slot;
@@ -1758,7 +1762,7 @@ export class NetworkView extends Component {
       const connIntro = slaprfWrap.querySelector<HTMLElement>('[data-section-anchor="connection"] > .settings-intro');
       if (connIntro) {
         const wantConnHtml = isBleMode
-          ? `<h2>Bluetooth Hub</h2><p>Connect your SlapRF Bluetooth Hub wirelessly over Bluetooth LE to inspect pairing status, link sync, and live 8-channel 5.8 GHz readings.</p>`
+          ? `<h2>Bluetooth Hub</h2><p>Connect your SlapRF Bluetooth Hub wirelessly over Bluetooth LE to inspect pairing status, 2.4 GHz ESP-NOW Spokes, and live 8-channel 5.8 GHz readings.</p>`
           : `<h2>Connection</h2><p>Connect the Hub (or a Spoke) over USB-C to inspect the 2.4 GHz network and 5.8 GHz channel readings.</p>`;
         if (connIntro.innerHTML !== wantConnHtml) {
           connIntro.innerHTML = wantConnHtml;
@@ -1766,13 +1770,13 @@ export class NetworkView extends Component {
       }
       const topoSec = slaprfWrap.querySelector<HTMLElement>('[data-section-anchor="topology"]');
       if (topoSec) {
-        topoSec.hidden = isBleMode;
-        topoSec.style.display = isBleMode ? "none" : "";
+        topoSec.hidden = false;
+        topoSec.style.display = "";
       }
       const timerIntro = slaprfWrap.querySelector<HTMLElement>('[data-section-anchor="timer"] > .settings-intro');
       if (timerIntro) {
         const wantTimerHtml = isBleMode
-          ? `<h2>Bluetooth Hub telemetry</h2><p>Identity, Bluetooth LE link status, and live 5.8 GHz channel readings at the Hub.</p>`
+          ? `<h2>Timer</h2><p>Identity, Bluetooth LE + 2.4 GHz ESP-NOW link stats, and live 5.8 GHz channel readings for the selected slot.</p>`
           : `<h2>Timer</h2><p>Identity, 2.4 GHz TDMA link stats, and live 5.8 GHz channel readings for the selected slot.</p>`;
         if (timerIntro.innerHTML !== wantTimerHtml) {
           timerIntro.innerHTML = wantTimerHtml;
@@ -1788,10 +1792,8 @@ export class NetworkView extends Component {
       error: this.connError,
     });
     const { hub, spokes } = this.buildTopologyState();
-    const sel = isBleMode ? 1 : this.ensureSelectedSlot(hub, spokes);
-    if (!isBleMode) {
-      this.renderTopologySection(hub, spokes, sel);
-    }
+    const sel = this.ensureSelectedSlot(hub, spokes);
+    this.renderTopologySection(hub, spokes, sel);
     this.renderTimerSection(hub, spokes, sel);
   }
 
@@ -3356,7 +3358,7 @@ export class NetworkView extends Component {
       ? "Emergency"
       : hub.viaUsb
         ? isBleHub
-          ? "BLE · Active"
+          ? `BLE · Ch ${hub.ch}`
           : `USB · Ch ${hub.ch}`
         : hub.online
           ? `Ch ${hub.ch} · Sync`
@@ -3419,7 +3421,9 @@ export class NetworkView extends Component {
       n === 0
         ? hub.online
           ? "No Spokes linked yet · powered-on Spokes appear here automatically."
-          : "Connect Hub H1 over USB-C to view linked Spokes."
+          : isBleHub
+            ? "Connect Hub H1 over Bluetooth to view linked Spokes."
+            : "Connect Hub H1 over USB-C to view linked Spokes."
         : "Tap Hub or any Spoke node to inspect it below.";
 
     return `
@@ -3591,16 +3595,22 @@ export class NetworkView extends Component {
         return;
       }
 
+      const hubConsole = usbPool.hubConsole() ?? sharedTimerConsole;
+      const isBleHub = this.store.timingHardwareMode === "slaprf_ble" || hubConsole.transportLabel === "Bluetooth";
       const populatedSpokes = [...spokes.values()].filter((sp) => sp.populated);
       const activeSpokes = populatedSpokes.filter((sp) => sp.espNowActive);
       const totalSpokeFrames = populatedSpokes.reduce((acc, sp) => acc + (sp.frames ?? 0), 0);
       const totalSpokeRate = populatedSpokes.reduce((acc, sp) => acc + (sp.ratePktPerSec ?? 0), 0);
       const hubOwnFrames = hub.serverFrames ?? 0;
       const totalFrames = totalSpokeFrames + hubOwnFrames;
-      const hubOwnRate = hub.online ? (s && s.role === 1 && s.sweepHz ? s.sweepHz / 2 : 50) : 0;
+      const hubOwnRate = hub.online
+        ? s && s.role === 1 && s.sweepHz
+          ? isBleHub
+            ? s.sweepHz
+            : s.sweepHz / 2
+          : 50
+        : 0;
       const totalRate = totalSpokeRate + hubOwnRate;
-
-      const hubConsole = usbPool.hubConsole() ?? sharedTimerConsole;
       let minMsAgo: number | null =
         hubConsole.hubLastFrameAtMs > 0
           ? Math.max(0, Date.now() - hubConsole.hubLastFrameAtMs)
@@ -3633,7 +3643,6 @@ export class NetworkView extends Component {
                   ? `#${latestSpokeSeq}`
                   : "—";
 
-      const isBleHub = this.store.timingHardwareMode === "slaprf_ble" || hubConsole.transportLabel === "Bluetooth";
       const ledClass = hub.emergencyMode ? "is-emergency" : hub.online ? "is-up" : hub.populated ? "is-warn" : "";
       const sourceLabel = hub.dbm
         ? hub.viaUsb
@@ -3752,11 +3761,19 @@ export class NetworkView extends Component {
                 isBleHub
                   ? `<div class="debug-kv-row">
                        <dt>Transport</dt>
-                       <dd>Bluetooth LE <span class="note">· ${s?.ble ? `${(s.ble.intervalUs / 1000).toFixed(2).replace(/\.00$/, "")} ms · ${s.ble.rssi} dBm` : "Single-gate Hub"}</span></dd>
+                       <dd>Bluetooth LE <span class="note">· ${s?.ble ? `${(s.ble.intervalUs / 1000).toFixed(2).replace(/\.00$/, "")} ms · ${s.ble.rssi} dBm` : "Slot 1 Hub"}</span></dd>
                      </div>
                      <div class="debug-kv-row">
                        <dt>BLE pairing</dt>
                        <dd>${s?.ble ? (s.ble.pairingMode ? "Open pairing mode" : s.ble.paired === false ? "Unpaired" : "Paired to this device") : "Paired"}</dd>
+                     </div>
+                     <div class="debug-kv-row">
+                       <dt>2.4 GHz link</dt>
+                       <dd>ESP-NOW (6 Mbps OFDM) <span class="note">· Ch ${hub.ch}</span></dd>
+                     </div>
+                     <div class="debug-kv-row">
+                       <dt>Child Spokes</dt>
+                       <dd>${childSummaryHtml}</dd>
                      </div>`
                   : `<div class="debug-kv-row">
                        <dt>TDMA slot</dt>

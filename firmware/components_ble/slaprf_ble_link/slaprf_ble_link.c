@@ -564,8 +564,15 @@ static void tx_task(void *arg) {
             continue;
         }
         if (n < cap) {
-            // A burst (e.g. a status line written in pieces) may still be arriving this tick.
-            n += xStreamBufferReceive(s_tx_sb, buf + n, cap - n, 0);
+            // Coalesce multi-gate TDMA bursts (up to 3 Spoke windows arrive ~0.9 ms apart) or
+            // chunked status lines into one <= 244-byte GATT notification to minimize HCI packets.
+            while (n < cap) {
+                const size_t got = xStreamBufferReceive(s_tx_sb, buf + n, cap - n, 0);
+                if (got == 0) {
+                    break;
+                }
+                n += got;
+            }
         }
         // Pace multi-packet bursts (such as ~980-byte STATUS? replies on a 20-30 ms connection
         // interval) when NimBLE's ACL TX queue or MSYS_1 pool is temporarily full instead of

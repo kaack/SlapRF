@@ -86,8 +86,100 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       expect(netRoot.textContent || "").toContain("Bluetooth Hub");
       expect(netRoot.textContent || "").toContain("Connect Bluetooth");
       const topoSec = netRoot.querySelector<HTMLElement>('[data-section-anchor="topology"]');
-      expect(topoSec?.hidden).toBe(true);
+      expect(topoSec?.hidden).toBe(false);
+
+      const multiGateBleStatus: TimerStatus = {
+        fw: "0.4.0",
+        role: 1,
+        fp: "BE7C0001",
+        label: "H1",
+        uptimeMs: 12000,
+        reset: "POWERON",
+        boots: 1,
+        heapFree: 19200,
+        heapMin: 16400,
+        sweepHz: 50,
+        sweeps: 600,
+        sweepUs: 5150,
+        sweepUsMax: 5680,
+        sweepBudgetUs: 6000,
+        rf: { ok: true, enabled: true, gain: 32, gainMax: 80, floorDb: -90.5 },
+        chip: { model: "ESP32-C5", rev: "v1.0", mac: "38:44:BE:BE:67:40", flashMB: 8 },
+        net: { mode: "sta", stations: 0 },
+        link: { rssi: -48, rate: 11, fmt: 1, beacons: 0, data: 480, tx: "6m", txPowerDbm: 20, saved: false },
+        channel: 1,
+        slot: 1,
+        freqsTemporary: false,
+        freqs: [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917],
+        dbm: [-89, -90, -88, -91, -90, -89, -90, -64],
+        spokes: [
+          {
+            slot: 2,
+            fp: "AA000001",
+            label: "T1",
+            msAgo: 12,
+            frames: 240,
+            seq: 88,
+            dbm: [-90, -90, -90, -90, -90, -90, -90, -72],
+          },
+        ],
+        image: "ble",
+        transport: "ble",
+        ble: {
+          connected: true,
+          intervalUs: 15000,
+          mtu: 247,
+          phy: 2,
+          rssi: -52,
+          txNotifies: 420,
+          txBytes: 28000,
+          txDrops: 0,
+          rxWrites: 5,
+          nocp: 420,
+          connects: 1,
+          sync: true,
+          syncLocked: false,
+          phaseUs: -1,
+          paired: true,
+          pairingMode: false,
+        },
+      };
+      usbPool.mainConsole.applyBackendSlotSnapshot({
+        slotIndex: 0,
+        connected: true,
+        portName: "ble:BE7C0001",
+        probing: false,
+        reconnecting: false,
+        reconnectAttempt: 0,
+        maxReconnectAttempts: 5,
+        reconnectFailed: false,
+        isOtherDevice: false,
+        lastStatus: multiGateBleStatus,
+      });
+      await flushMicrotasks();
+
+      const netText = netRoot.textContent || "";
+      expect(netText).toContain("ESP-NOW (6 Mbps OFDM)");
+      expect(netText).toContain("1/1 active (T1)");
+      expect(netText).toContain("1/6 Spokes Active");
+
+      const spokeSlotBtn = netRoot.querySelector<HTMLButtonElement>('[data-action="select-topology-slot"][data-slot-num="2"]');
+      expect(spokeSlotBtn).not.toBeNull();
+      spokeSlotBtn!.click();
+      await flushMicrotasks();
+      expect(netRoot.textContent || "").toContain("Child Spoke (TDMA Slot 2)");
     } finally {
+      usbPool.mainConsole.applyBackendSlotSnapshot({
+        slotIndex: 0,
+        connected: false,
+        probing: false,
+        reconnecting: false,
+        reconnectAttempt: 0,
+        maxReconnectAttempts: 5,
+        reconnectFailed: false,
+        isOtherDevice: false,
+        lastStatus: null,
+      });
       netView.destroy();
     }
 
