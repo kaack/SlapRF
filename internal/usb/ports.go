@@ -13,6 +13,8 @@ type PortInfo struct {
 	SerialNumber string `json:"serialNumber,omitempty"`
 	Product      string `json:"product,omitempty"`
 	IsEspressif  bool   `json:"isEspressif"`
+	// Transport is "ble" for Bluetooth hub ports (`ble:<FP>`); empty means a USB/OS serial port.
+	Transport string `json:"transport,omitempty"`
 }
 
 // PortLister enumerates available serial ports on the host OS.

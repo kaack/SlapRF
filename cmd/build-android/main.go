@@ -18,6 +18,8 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"slaprf/internal/firmware"
 )
 
 const (
@@ -109,6 +111,13 @@ func main() {
 		_ = os.RemoveAll(filepath.Join(siteDir, "wasm"))
 		_ = os.WriteFile(keepPath, keepBytes, 0o644)
 	}
+	// build-web copies every built firmware image (USB slaprf-xiao-c5.bin and, when present, the
+	// Bluetooth Hub slaprf-xiao-c5-ble.bin) into site/firmware, so both are embedded in the APK.
+	for _, name := range firmware.ImageNames() {
+		if _, err := os.Stat(filepath.Join(siteDir, "firmware", name)); err == nil {
+			log.Printf("[build-android] Embedded firmware image %s", name)
+		}
+	}
 
 	workDir, err := os.MkdirTemp("", "slaprf-android-build-*")
 	if err != nil {
@@ -188,7 +197,7 @@ func main() {
 	rJava := filepath.Join(genJavaDir, "app", "slaprf", "R.java")
 	cp := tc.androidJar + string(os.PathListSeparator) + usbJarAbs
 
-	log.Printf("[build-android] Compiling SlapRFHost.java & SlapRFUsbShim.java...")
+	log.Printf("[build-android] Compiling SlapRFHost.java, SlapRFUsbShim.java & SlapRFBleShim.java...")
 	runCmd(
 		tc.env(nil),
 		tc.javac,
@@ -198,6 +207,7 @@ func main() {
 		"-d", classesDir,
 		filepath.FromSlash("android/java/app/slaprf/SlapRFHost.java"),
 		filepath.FromSlash("android/java/app/slaprf/SlapRFUsbShim.java"),
+		filepath.FromSlash("android/java/app/slaprf/SlapRFBleShim.java"),
 		rJava,
 	)
 

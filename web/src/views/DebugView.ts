@@ -4220,7 +4220,12 @@ export class DebugView extends Component {
     const a = await get();
     if (!a) return [name, "skip", "timing engine state is not available"];
     if (!a.found) {
-      const hint = s.role === 1 ? "Is the Hub plugged into this laptop over USB-C?" : "Is the Hub on and plugged into this laptop over USB-C?";
+      const hint =
+        this.console.transportLabel === "Bluetooth"
+          ? "Is the Bluetooth Hub powered on and in range?"
+          : s.role === 1
+            ? "Is the Hub plugged into this laptop over USB-C?"
+            : "Is the Hub on and plugged into this laptop over USB-C?";
       return [name, "fail", `the timing engine hasn't heard from ${s.fp}. ${hint}`];
     }
     if (!a.online || (a.msSinceSeen ?? 0) > 3000)

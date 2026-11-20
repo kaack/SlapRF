@@ -77,6 +77,7 @@ public final class SlapRFHost extends Activity {
     private static final int REQ_OPEN_DOCUMENT = 4101;
     private static final int REQ_CREATE_DOCUMENT = 4102;
     private static final int REQ_POST_NOTIF = 4103;
+    private static final int REQ_BLE_PERMS = 4104;
 
     private static final int DARK_BG = 0xFF0B0C0F;
     private static final int LIGHT_BG = 0xFFF3F5F8;
@@ -159,6 +160,10 @@ public final class SlapRFHost extends Activity {
         activeActivity = this;
 
         SlapRFUsbShim.init(this);
+        SlapRFBleShim.init(this);
+        // Bluetooth runtime permissions are requested lazily, the first time the Go engine lists
+        // or opens a Bluetooth hub port (see SlapRFBleShim.ensurePermissions).
+        SlapRFBleShim.setPermissionRequester(SlapRFHost::requestBlePermissionsFromActiveActivity);
         ensureTtsInitialized(this);
         requestNotificationPermissionIfNeeded();
 
@@ -273,6 +278,22 @@ public final class SlapRFHost extends Activity {
                 requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQ_POST_NOTIF);
             }
         }
+    }
+
+    /** Called on the main thread by SlapRFBleShim when Bluetooth permissions are missing. */
+    static void requestBlePermissionsFromActiveActivity() {
+        SlapRFHost act = activeActivity;
+        if (act == null || act.isFinishing()) {
+            return;
+        }
+        act.requestBlePermissionsIfNeeded();
+    }
+
+    private void requestBlePermissionsIfNeeded() {
+        if (SlapRFBleShim.hasPermissions(this)) {
+            return;
+        }
+        requestPermissions(SlapRFBleShim.requiredPermissions(), REQ_BLE_PERMS);
     }
 
     private void configureSystemBarsAndInsets(boolean darkTheme) {
@@ -582,6 +603,7 @@ public final class SlapRFHost extends Activity {
         public void onCreate() {
             super.onCreate();
             SlapRFUsbShim.init(this);
+            SlapRFBleShim.init(this);
             ensureTtsInitialized(this);
             acquireLocks();
         }

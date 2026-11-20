@@ -1383,7 +1383,7 @@ export class NetworkView extends Component {
         gateLabel: hubGateName,
         serverFrames: hubFrames,
         dbm: liveDbm,
-        statusNote: hubUsbStatus.emergencyMode ? "Emergency mode" : "USB-C · Beacon master",
+        statusNote: hubUsbStatus.emergencyMode ? "Emergency mode" : `${activeHubConsole.transportLabel} · Beacon master`,
       };
     } else if (s && s.role === 2) {
       const rawBeaconMsAgo = s.beaconMsAgo ?? s.hub?.beaconMsAgo;
@@ -1577,12 +1577,12 @@ export class NetworkView extends Component {
         serverGateLabel: gateName,
         serverRssi: liveSpokeDbm,
         sourceNote: spStatus.emergencyMode
-          ? "Emergency mode · USB-C"
+          ? `Emergency mode · ${c.transportLabel}`
           : linked
-            ? `USB-C · Synced (${beaconMsAgo ?? 0} ms)`
+            ? `${c.transportLabel} · Synced (${beaconMsAgo ?? 0} ms)`
             : hasSlot
-              ? "USB-C · Beacon lost"
-              : "USB-C · Searching for Hub",
+              ? `${c.transportLabel} · Beacon lost`
+              : `${c.transportLabel} · Searching for Hub`,
       });
     }
 

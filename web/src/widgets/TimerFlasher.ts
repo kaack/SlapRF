@@ -7,11 +7,14 @@ import { ApiClient } from "../services/api_client";
 import { capabilitiesSnapshot } from "../services/capabilities";
 import {
   FlashProgress,
+  HubLink,
   LATEST_FIRMWARE_VERSION,
   TimerReadout,
   cancelActiveFlash,
+  firmwareImageNameFor,
   flashXiaoC5OverWebSerial,
   isWebSerialSupported,
+  probeBleFirmwareImage,
 } from "../services/esp_flasher";
 import {
   FLASHER_NEEDS_WEBSERIAL,
@@ -27,6 +30,25 @@ import { recordKnownTimerReadout, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
 type WizardStepId = "network" | "identity" | "flash";
+
+/** localStorage key for the last Hub connection choice ("usb" | "ble"). */
+export const HUB_LINK_STORAGE_KEY = "slaprf.flasher.hubLink";
+
+function loadStoredHubLink(): HubLink {
+  try {
+    return window.localStorage.getItem(HUB_LINK_STORAGE_KEY) === "ble" ? "ble" : "usb";
+  } catch {
+    return "usb";
+  }
+}
+
+function storeHubLink(link: HubLink): void {
+  try {
+    window.localStorage.setItem(HUB_LINK_STORAGE_KEY, link);
+  } catch {
+    // Storage unavailable (private mode); the choice just isn't remembered.
+  }
+}
 
 /**
  * Interactive Hub & Spoke network flasher wizard for Seeed Studio XIAO ESP32-C5 timers.
@@ -52,6 +74,10 @@ export class TimerFlasher extends Component {
   private timerLabel = "H1";
   /** Keep the board's existing fingerprint when reflashing (vs. mint a new one). */
   private keepFingerprint = true;
+  /** Hub connection choice (persisted). Spokes ignore it and always flash the USB image. */
+  private hubLink: HubLink = loadStoredHubLink();
+  /** Whether the Bluetooth Hub image is served (null while the probe is running). */
+  private bleImageAvailable: boolean | null = null;
   private busy = false;
   private progress: FlashProgress | null = null;
   private lastSuccessMsg: string | null = null;
@@ -101,6 +127,21 @@ export class TimerFlasher extends Component {
         if (nextRole !== this.role) {
           this.role = nextRole;
           this.timerLabel = nextRole === "hub" ? "H1" : this.suggestSpokeLabel();
+          this.errorMsg = null;
+          this.lastSuccessMsg = null;
+          this.slideDir = "none";
+          this.render();
+        }
+        return;
+      }
+
+      const pickHubLink = t.closest<HTMLButtonElement>("[data-hub-link]");
+      if (pickHubLink) {
+        if (pickHubLink.disabled) return;
+        const next: HubLink = pickHubLink.dataset.hubLink === "ble" ? "ble" : "usb";
+        if (next !== this.hubLink) {
+          this.hubLink = next;
+          storeHubLink(next);
           this.errorMsg = null;
           this.lastSuccessMsg = null;
           this.slideDir = "none";
@@ -172,6 +213,18 @@ export class TimerFlasher extends Component {
       }
     });
     this.onDispose(unsubPool);
+    let disposed = false;
+    this.onDispose(() => {
+      disposed = true;
+    });
+    void probeBleFirmwareImage().then((ok) => {
+      if (disposed) return;
+      this.bleImageAvailable = ok;
+      if (!this.busy) {
+        this.slideDir = "none";
+        this.render();
+      }
+    });
     this.onDispose(
       subscribeAppTheme(() => {
         if (!this.busy) {
@@ -256,6 +309,16 @@ export class TimerFlasher extends Component {
     return this.role === "hub" ? "Hub" : "Spoke";
   }
 
+  /** Hub link actually used for the next flash: Bluetooth only for a Hub when the BLE image exists. */
+  private get effectiveHubLink(): HubLink {
+    return this.role === "hub" && this.hubLink === "ble" && this.bleImageAvailable === true ? "ble" : "usb";
+  }
+
+  /** Firmware image file the next flash / download will use. */
+  public get selectedImageName(): string {
+    return firmwareImageNameFor(this.role, this.effectiveHubLink);
+  }
+
   /** Next spoke name (T1–T6) not already used by a detected timer or one flashed this session. */
   private suggestSpokeLabel(): string {
     const taken = new Set<string>();
@@ -285,7 +348,8 @@ export class TimerFlasher extends Component {
       return;
     }
     const cleanLabel = this.timerLabel.trim();
-    const label = `${this.role === "hub" ? "Hub" : "Spoke"} "${cleanLabel}"`;
+    const bleHub = this.role === "hub" && this.effectiveHubLink === "ble";
+    const label = `${this.role === "hub" ? (bleHub ? "Bluetooth Hub" : "Hub") : "Spoke"} "${cleanLabel}"`;
     const useEsptool = flasherUsesWebSerial();
     this.busy = true;
     this.errorMsg = null;
@@ -315,7 +379,7 @@ export class TimerFlasher extends Component {
         // Select the USB port first, while the click still counts as a user gesture.
         flashedPort = await acquireEspSerialPort();
         onProgress({ stage: "connecting", percent: 1, detail: `Building ${label} firmware image…` });
-        const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel);
+        const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel, undefined, this.effectiveHubLink);
         written = await flashXiaoC5WithEsptool(
           flashedPort,
           bytes,
@@ -330,7 +394,7 @@ export class TimerFlasher extends Component {
           await usbPool.connectMain(this.showAllPorts);
           onProgress({ stage: "connecting", percent: 1, detail: `Building ${label} firmware image…` });
         }
-        const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel);
+        const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel, undefined, this.effectiveHubLink);
         written = await flashXiaoC5OverWebSerial(
           bytes,
           label,
@@ -357,6 +421,7 @@ export class TimerFlasher extends Component {
       let autoConnectedHub = false;
       if (
         this.role === "hub" &&
+        !bleHub &&
         !this.store.simulatorRunning &&
         capabilitiesSnapshot().portable &&
         flashedPort &&
@@ -382,7 +447,11 @@ export class TimerFlasher extends Component {
           : verified
             ? ` Read back OK: ${verified.timerLabel || cleanLabel} · ${verified.role === "hub" ? "Hub" : "Spoke"} · ${verified.firmwareVersion}.`
             : " The board did not answer the readback; unplug and replug it, then use Reader to check.";
-      const readyNote = autoConnectedHub ? " Hub H1 is now connected over USB and ready to time laps." : "";
+      const readyNote = autoConnectedHub
+        ? " Hub H1 is now connected over USB and ready to time laps."
+        : bleHub
+          ? " Connect to it from the SlapRF app over Bluetooth."
+          : "";
       this.lastSuccessMsg = `${label} flashed (${fpNote}).${verifyNote}${readyNote}`;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -422,7 +491,7 @@ export class TimerFlasher extends Component {
     }
     try {
       const cleanLabel = this.timerLabel.trim();
-      const { bytes, filename } = await this.api.fetchFirmwareImage(this.role, cleanLabel);
+      const { bytes, filename } = await this.api.fetchFirmwareImage(this.role, cleanLabel, undefined, this.effectiveHubLink);
       downloadBinaryFile(filename, "application/octet-stream", bytes);
     } catch (err) {
       this.errorMsg = err instanceof Error ? err.message : String(err);
@@ -524,6 +593,8 @@ export class TimerFlasher extends Component {
           </button>
         </div>
 
+        ${isHub ? this.renderHubLinkChoice() : ""}
+
         <div class="flasher-tips" role="note" aria-label="Tips for a reliable flash">
           <div class="flasher-tips-head">${icons.info(14)}<span>Tips for a reliable flash</span></div>
           <ul class="flasher-tips-list">
@@ -541,6 +612,50 @@ export class TimerFlasher extends Component {
           </button>
         </div>
       </div>`;
+  }
+
+  /**
+   * Hub connection choice (Hub role only): USB cable (default image) or Bluetooth (BLE Hub image).
+   * The Bluetooth option is disabled with a note when slaprf-xiao-c5-ble.bin isn't served.
+   */
+  private renderHubLinkChoice(): string {
+    const bleMissing = this.bleImageAvailable === false;
+    const checking = this.bleImageAvailable === null;
+    const link = this.effectiveHubLink;
+    const helper = bleMissing
+      ? "Bluetooth hub firmware is not included in this build yet. Use the USB cable for now."
+      : checking
+        ? "Checking for the Bluetooth hub firmware image."
+        : link === "ble"
+          ? "Wireless hub: connect from the SlapRF app over Bluetooth. Single gate for now."
+          : "Wired hub: plug the Hub into this device with a USB-C cable.";
+    const bleDisabled = this.busy || this.bleImageAvailable !== true;
+    return `
+        <div class="flasher-hub-link" data-hub-link-choice="1">
+          <div class="flasher-hub-link-text">
+            <strong id="flasher-hub-link-label">Hub connection</strong>
+            <span data-hub-link-help="1">${esc(helper)}</span>
+          </div>
+          <div class="segmented" role="radiogroup" aria-labelledby="flasher-hub-link-label">
+            <button
+              type="button"
+              role="radio"
+              aria-checked="${link === "usb"}"
+              class="${link === "usb" ? "is-active" : ""}"
+              data-hub-link="usb"
+              ${this.busy ? "disabled" : ""}
+            >USB cable</button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked="${link === "ble"}"
+              class="${link === "ble" ? "is-active" : ""}"
+              data-hub-link="ble"
+              ${bleDisabled ? "disabled" : ""}
+              ${bleMissing ? 'title="Bluetooth hub firmware (slaprf-xiao-c5-ble.bin) is not available in this build"' : ""}
+            >Bluetooth</button>
+          </div>
+        </div>`;
   }
 
   /** Pictorial for the Hub role: Spokes ──▶ Hub ◀── Laptop (USB-C). */
@@ -653,7 +768,11 @@ export class TimerFlasher extends Component {
               <span>SlapRF ${LATEST_FIRMWARE_VERSION}</span>
               <span class="badge">Bundled</span>
             </div>
-            <span class="flasher-field-help">Read-only · Unified image for Seeed XIAO ESP32-C5.</span>
+            <span class="flasher-field-help">${
+              isHub && this.effectiveHubLink === "ble"
+                ? "Read-only · Bluetooth hub image for Seeed XIAO ESP32-C5."
+                : "Read-only · Unified image for Seeed XIAO ESP32-C5."
+            }</span>
           </div>
         </div>
 
@@ -674,7 +793,12 @@ export class TimerFlasher extends Component {
     const isHub = this.role === "hub";
     const isAndroid = isAndroidHostApp();
     const cleanLabel = this.timerLabel.trim() || (isHub ? "H1" : this.suggestSpokeLabel());
-    const linkSummary = isHub ? (isAndroid ? "USB-C → Phone" : "USB-C → Computer") : "2.4 GHz ESP-NOW → Hub";
+    const bleHub = isHub && this.effectiveHubLink === "ble";
+    const linkSummary = isHub
+      ? bleHub
+        ? isAndroid ? "Bluetooth → Phone" : "Bluetooth → App"
+        : isAndroid ? "USB-C → Phone" : "USB-C → Computer"
+      : "2.4 GHz ESP-NOW → Hub";
     const eraseBeforeFlash = !this.keepFingerprint;
     const activeConsole = usbPool.mainConsole;
     const browser = flasherUsesWebSerial();
@@ -723,7 +847,7 @@ export class TimerFlasher extends Component {
           </div>
           <div class="flasher-summary-cell">
             <span class="flasher-summary-label">Firmware</span>
-            <span class="flasher-summary-value mono">SlapRF ${LATEST_FIRMWARE_VERSION}</span>
+            <span class="flasher-summary-value mono">SlapRF ${LATEST_FIRMWARE_VERSION}${bleHub ? " · Bluetooth" : ""}</span>
           </div>
           <div class="flasher-summary-cell">
             <span class="flasher-summary-label">Link</span>

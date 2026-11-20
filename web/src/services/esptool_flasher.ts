@@ -1142,6 +1142,8 @@ if (typeof window !== "undefined") {
         /** Stamp this exact fingerprint (8 hex digits), e.g. to restore a half-flashed board. */
         fingerprint?: string;
         frequenciesMHz?: number[];
+        /** Hub only: "ble" flashes the Bluetooth Hub image (slaprf-xiao-c5-ble.bin). */
+        hubLink?: "usb" | "ble";
       } = {}
     ) =>
       runAutomation(opts.index, async (port, onProgress) => {
@@ -1150,6 +1152,7 @@ if (typeof window !== "undefined") {
         const built = await buildOrPatchFirmwareBin({
           role,
           timerLabel: label,
+          hubLink: role === "hub" && opts.hubLink === "ble" ? "ble" : "usb",
           fingerprint: /^[0-9a-f]{8}$/i.test(opts.fingerprint || "") ? opts.fingerprint!.toUpperCase() : generateFingerprint(),
           frequenciesMHz: opts.frequenciesMHz?.length
             ? opts.frequenciesMHz.slice(0, 8)

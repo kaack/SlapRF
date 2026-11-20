@@ -94,6 +94,60 @@ export const LATEST_FIRMWARE_VERSION = "v0.1.6";
 /** The one compiled firmware image, built from firmware/slaprf and served next to the app. */
 export const FIRMWARE_IMAGE_URL = "./firmware/slaprf-xiao-c5.bin";
 
+/** USB firmware image file name (mirrors Go `firmware.ImageName`). */
+export const FIRMWARE_IMAGE_NAME = "slaprf-xiao-c5.bin";
+
+/** Bluetooth Hub firmware image file name (mirrors Go `firmware.BLEImageName`, built from firmware/slaprf_ble). */
+export const FIRMWARE_BLE_IMAGE_NAME = "slaprf-xiao-c5-ble.bin";
+
+/** Bluetooth Hub firmware image URL. Optional: only present when firmware/slaprf_ble was built. */
+export const FIRMWARE_BLE_IMAGE_URL = `./firmware/${FIRMWARE_BLE_IMAGE_NAME}`;
+
+/** How a Hub talks to the host: the USB cable (default image) or Bluetooth LE (BLE image). */
+export type HubLink = "usb" | "ble";
+
+/** Firmware image file name for a role and Hub link (mirrors Go `firmware.ImageNameFor`). Spokes always get the USB image. */
+export function firmwareImageNameFor(role: "hub" | "spoke", hubLink: HubLink = "usb"): string {
+  return role === "hub" && hubLink === "ble" ? FIRMWARE_BLE_IMAGE_NAME : FIRMWARE_IMAGE_NAME;
+}
+
+/** Firmware image URL for a role and Hub link. */
+export function firmwareImageUrlFor(role: "hub" | "spoke", hubLink: HubLink = "usb"): string {
+  return firmwareImageNameFor(role, hubLink) === FIRMWARE_BLE_IMAGE_NAME ? FIRMWARE_BLE_IMAGE_URL : FIRMWARE_IMAGE_URL;
+}
+
+/** Error shown when the Bluetooth Hub image is requested but has not been built. */
+export const BLE_IMAGE_MISSING_MESSAGE =
+  "The Bluetooth hub firmware image (slaprf-xiao-c5-ble.bin) is not available in this build.";
+
+let bleImageProbe: Promise<boolean> | null = null;
+
+/**
+ * Resolves true when the Bluetooth Hub image is served next to the app. Uses a HEAD request
+ * (no 1 MB download) and treats a 404, an HTML fallback page, or a network error as missing.
+ * The result is cached for the page lifetime; pass `refresh` to probe again.
+ */
+export function probeBleFirmwareImage(refresh = false): Promise<boolean> {
+  if (bleImageProbe && !refresh) return bleImageProbe;
+  bleImageProbe = (async () => {
+    try {
+      if (typeof fetch !== "function") return false;
+      const res = await fetch(FIRMWARE_BLE_IMAGE_URL, { method: "HEAD", cache: "no-cache" });
+      if (!res.ok) return false;
+      const type = (res.headers.get("content-type") || "").toLowerCase();
+      return !type.includes("text/html");
+    } catch {
+      return false;
+    }
+  })();
+  return bleImageProbe;
+}
+
+/** Test hook: forget the cached Bluetooth image probe. */
+export function resetBleFirmwareImageProbe(): void {
+  bleImageProbe = null;
+}
+
 /** 5.8 GHz sweep rate compiled into the firmware (SWEEP_HZ in firmware/slaprf/main/main.c). */
 export const FIRMWARE_SWEEP_HZ = 100;
 
@@ -202,17 +256,23 @@ export async function withFingerprint(img: Uint8Array, fingerprintHex: string): 
 }
 
 /**
- * Fetches the compiled firmware image (`FIRMWARE_IMAGE_URL`, built by CI from `firmware/slaprf/`) —
- * or falls back to a placeholder image — and stamps the `SLAPRF02` block so USB flashing and `.bin`
+ * Fetches the compiled firmware image (`FIRMWARE_IMAGE_URL`, built by CI from `firmware/slaprf/`),
+ * or falls back to a placeholder image, and stamps the `SLAPRF02` block so USB flashing and `.bin`
  * downloads work with zero Go backend.
+ *
+ * With `hubLink: "ble"` (Hub only) the Bluetooth Hub image (`FIRMWARE_BLE_IMAGE_URL`, built from
+ * `firmware/slaprf_ble/`) is patched instead, with the role forced to Hub. There is no placeholder
+ * fallback for it: a missing image throws `BLE_IMAGE_MISSING_MESSAGE`.
  */
 export async function buildOrPatchFirmwareBin(opts: {
   role: "hub" | "spoke";
   timerLabel: string;
   fingerprint?: string;
   frequenciesMHz?: number[];
+  hubLink?: HubLink;
 }): Promise<{ bytes: Uint8Array; filename: string }> {
-  const roleCode = opts.role === "hub" ? 1 : 2;
+  const ble = opts.role === "hub" && opts.hubLink === "ble";
+  const roleCode = opts.role === "hub" || ble ? 1 : 2;
   const fingerprint = opts.fingerprint || generateFingerprint();
   const cleanLabel = opts.timerLabel.trim().slice(0, 24);
   const defaultFreqs = [5658, 5695, 5732, 5769, 5806, 5843, 5880, 5917];
@@ -223,15 +283,18 @@ export async function buildOrPatchFirmwareBin(opts: {
 
   let img: Uint8Array | null = null;
   try {
-    const res = await fetch(FIRMWARE_IMAGE_URL, { cache: "no-cache" });
+    const res = await fetch(firmwareImageUrlFor(opts.role, opts.hubLink), { cache: "no-cache" });
     if (res.ok) {
       const fetched = new Uint8Array(await res.arrayBuffer());
       if (findConfigBlock(fetched) >= 0) img = fetched;
     }
   } catch {
-    // Offline or not built; fall back to the placeholder image below.
+    // Offline or not built; fall back to the placeholder image below (USB image only).
   }
-  if (!img) img = syntheticBase();
+  if (!img) {
+    if (ble) throw new Error(BLE_IMAGE_MISSING_MESSAGE);
+    img = syntheticBase();
+  }
 
   const off = findConfigBlock(img);
   const enc = new TextEncoder();
@@ -255,7 +318,7 @@ export async function buildOrPatchFirmwareBin(opts: {
   const slug = cleanLabel ? cleanLabel.replace(/[^a-zA-Z0-9_-]+/g, "-") : opts.role;
   return {
     bytes: img,
-    filename: `slaprf-xiao-c5-${slug}-${LATEST_FIRMWARE_VERSION}.bin`,
+    filename: `slaprf-xiao-c5-${ble ? "ble-" : ""}${slug}-${LATEST_FIRMWARE_VERSION}.bin`,
   };
 }
 /** True when the Flasher page can work: Simulation/Demo mode, a native Go/Android USB server, or WebSerial. */

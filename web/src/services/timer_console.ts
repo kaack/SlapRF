@@ -19,6 +19,7 @@ import {
   listSimulatedTimers,
   notifySimHubUsbConnected,
   pickUsbPort,
+  portTransportLabel,
   recordSerialPortMeta,
   SimulatedSerialPort,
 } from "./sim_serial_port";
@@ -513,6 +514,11 @@ export class TimerConsole {
 
   public get rawPort(): SerialPortLike | null {
     return this.port;
+  }
+
+  /** "Bluetooth" when the open port is a SlapRF Bluetooth Hub link (`ble:<FP>`), otherwise "USB-C". */
+  public get transportLabel(): "Bluetooth" | "USB-C" {
+    return portTransportLabel(this.port);
   }
 
   /** True when a USB port is open and probing finished without finding SlapRF timer firmware. */

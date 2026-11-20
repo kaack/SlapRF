@@ -1,6 +1,7 @@
 name: Release
 
-# Publishes the compiled ESP32-C5 firmware image and the cross-platform SlapRF Portable
+# Publishes the compiled ESP32-C5 firmware images (USB `slaprf-xiao-c5.bin` and, when it built,
+# the Bluetooth Hub `slaprf-xiao-c5-ble.bin`) and the cross-platform SlapRF Portable
 # single-file binaries (cmd/slaprf) on version tags. The hosted browser version is deployed
 # to https://slaprf.app by pages.yml.
 
@@ -34,6 +35,13 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: firmware
+          path: web/firmware
+
+      - name: Download compiled Bluetooth Hub firmware image (optional)
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-ble
           path: web/firmware
 
       - name: Set up Go
@@ -161,6 +169,13 @@ jobs:
           name: firmware
           path: web/firmware
 
+      - name: Download compiled Bluetooth Hub firmware image (optional)
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          name: firmware-ble
+          path: web/firmware
+
       - name: Download SlapRF Portable binaries
         uses: actions/download-artifact@v4
         with:
@@ -174,5 +189,7 @@ jobs:
         with:
           files: |
             web/firmware/slaprf-xiao-c5.bin
+            web/firmware/slaprf-xiao-c5-ble.bin
             dist/slaprf-*
+          fail_on_unmatched_files: false
           generate_release_notes: true

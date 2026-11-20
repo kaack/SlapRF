@@ -63,6 +63,8 @@ function renderChip(c: TimerConsole, active: boolean, canDisconnect = true): str
           : "#d4ff3a";
   const fp = s?.fp || cfg?.fingerprint || "";
   const fpNote = fp ? ` · ${fp}` : "";
+  const viaBluetooth = c.transportLabel === "Bluetooth";
+  const roleMetaShown = viaBluetooth && !isWriting ? `${roleMeta} · Bluetooth` : roleMeta;
   const closeBtn = canDisconnect
     ? `<button
         type="button"
@@ -82,11 +84,11 @@ function renderChip(c: TimerConsole, active: boolean, canDisconnect = true): str
         aria-selected="${active}"
         data-action="select-usb-slot"
         data-usb-slot="${c.slotIndex}"
-        title="${esc(label)} (${esc(roleMeta)}${esc(fpNote)})"
+        title="${esc(label)} (${esc(roleMetaShown)}${esc(fpNote)})"
       >
         <span class="dot is-live"></span>
         <span class="pilot-chip-name">${esc(label)}</span>
-        <span class="pilot-chip-time">${esc(roleMeta)}</span>
+        <span class="pilot-chip-time">${esc(roleMetaShown)}</span>
       </button>
       ${closeBtn}
     </div>`;

@@ -25,7 +25,38 @@ import (
 
 const jniBufSize = 4096
 
+// jniListPorts lists Android USB serial ports (unchanged) followed by any SlapRF Bluetooth hubs
+// discovered by SlapRFBleShim (le:<FP>). Bluetooth errors never hide USB ports.
 func jniListPorts() ([]usb.PortInfo, error) {
+	ports, err := jniListUSBPorts()
+	if ble, bleErr := jniListBLEPorts(); bleErr == nil && len(ble) > 0 {
+		ports = append(ports, ble...)
+		err = nil
+	}
+	return ports, err
+}
+
+func jniListBLEPorts() ([]usb.PortInfo, error) {
+	if C.slaprf_ble_available() == 0 {
+		return nil, nil
+	}
+	cjson := C.slaprf_ble_list_ports_json()
+	if cjson == nil {
+		return nil, nil
+	}
+	defer C.free(unsafe.Pointer(cjson))
+	raw := strings.TrimSpace(C.GoString(cjson))
+	if raw == "" {
+		return nil, nil
+	}
+	var ports []usb.PortInfo
+	if err := json.Unmarshal([]byte(raw), &ports); err != nil {
+		return nil, fmt.Errorf("parse Android Bluetooth port list: %w", err)
+	}
+	return ports, nil
+}
+
+func jniListUSBPorts() ([]usb.PortInfo, error) {
 	cjson := C.slaprf_usb_list_ports_json()
 	if cjson == nil {
 		return nil, nil
@@ -50,6 +81,7 @@ func jniOpenPort(portName string, baud int) (firmware.SerialPort, error) {
 	if baud <= 0 {
 		baud = 115200
 	}
+	isBLE := usb.IsBLEPortName(portName)
 
 	rxBufRef := C.slaprf_jni_alloc_buf(jniBufSize)
 	if rxBufRef == 0 {
@@ -64,7 +96,12 @@ func jniOpenPort(portName string, baud int) (firmware.SerialPort, error) {
 	cname := C.CString(portName)
 	defer C.free(unsafe.Pointer(cname))
 	var cerr *C.char
-	handle := int(C.slaprf_usb_open_port(cname, C.int(baud), &cerr))
+	var handle int
+	if isBLE {
+		handle = int(C.slaprf_ble_open_port(cname, C.int(baud), &cerr))
+	} else {
+		handle = int(C.slaprf_usb_open_port(cname, C.int(baud), &cerr))
+	}
 	if cerr != nil {
 		defer C.free(unsafe.Pointer(cerr))
 	}
@@ -72,6 +109,9 @@ func jniOpenPort(portName string, baud int) (firmware.SerialPort, error) {
 		C.slaprf_jni_free_buf(rxBufRef)
 		C.slaprf_jni_free_buf(txBufRef)
 		msg := "failed to open Android USB device"
+		if isBLE {
+			msg = "failed to open Android Bluetooth hub"
+		}
 		if cerr != nil {
 			if s := strings.TrimSpace(C.GoString(cerr)); s != "" {
 				msg = s
@@ -81,6 +121,7 @@ func jniOpenPort(portName string, baud int) (firmware.SerialPort, error) {
 	}
 
 	p := &jniSerialPort{
+		ble:      isBLE,
 		handle:   handle,
 		rxBufRef: rxBufRef,
 		txBufRef: txBufRef,
@@ -90,6 +131,8 @@ func jniOpenPort(portName string, baud int) (firmware.SerialPort, error) {
 }
 
 type jniSerialPort struct {
+	// ble routes I/O to SlapRFBleShim (le:<FP> ports) instead of SlapRFUsbShim.
+	ble       bool
 	handle    int
 	rxBufRef  C.uintptr_t
 	txBufRef  C.uintptr_t
@@ -125,13 +168,18 @@ func (p *jniSerialPort) Read(b []byte) (int, error) {
 	if tmo <= 0 {
 		tmo = 120
 	}
-	n := int(C.slaprf_usb_read_port(
-		C.int(p.handle),
-		p.rxBufRef,
-		unsafe.Pointer(&b[0]),
-		C.int(maxLen),
-		C.int(tmo),
-	))
+	var n int
+	if p.ble {
+		n = int(C.slaprf_ble_read_port(C.int(p.handle), p.rxBufRef, unsafe.Pointer(&b[0]), C.int(maxLen), C.int(tmo)))
+	} else {
+		n = int(C.slaprf_usb_read_port(
+			C.int(p.handle),
+			p.rxBufRef,
+			unsafe.Pointer(&b[0]),
+			C.int(maxLen),
+			C.int(tmo),
+		))
+	}
 	if n > 0 {
 		return n, nil
 	}
@@ -161,13 +209,21 @@ func (p *jniSerialPort) Write(b []byte) (int, error) {
 		if len(chunk) > jniBufSize {
 			chunk = chunk[:jniBufSize]
 		}
-		w := int(C.slaprf_usb_write_port(
-			C.int(p.handle),
-			p.txBufRef,
-			unsafe.Pointer(&chunk[0]),
-			C.int(len(chunk)),
-		))
+		var w int
+		if p.ble {
+			w = int(C.slaprf_ble_write_port(C.int(p.handle), p.txBufRef, unsafe.Pointer(&chunk[0]), C.int(len(chunk))))
+		} else {
+			w = int(C.slaprf_usb_write_port(
+				C.int(p.handle),
+				p.txBufRef,
+				unsafe.Pointer(&chunk[0]),
+				C.int(len(chunk)),
+			))
+		}
 		if w <= 0 {
+			if p.ble {
+				return total, errors.New("Android Bluetooth write failed")
+			}
 			return total, errors.New("Android USB serial write failed")
 		}
 		total += w
@@ -204,6 +260,10 @@ func (p *jniSerialPort) applyLines(dtr, rts bool) error {
 	if p.closed.Load() {
 		return io.ErrClosedPipe
 	}
+	if p.ble {
+		// Bluetooth links have no modem control lines.
+		return nil
+	}
 	dInt, rInt := 0, 0
 	if dtr {
 		dInt = 1
@@ -232,7 +292,11 @@ func (p *jniSerialPort) Close() error {
 		p.closed.Store(true)
 		// Unblock any active Read() in Java first by closing the underlying port handle,
 		// then wait for ioMu before releasing global JNI byte[] buffers.
-		C.slaprf_usb_close_port(C.int(p.handle))
+		if p.ble {
+			C.slaprf_ble_close_port(C.int(p.handle))
+		} else {
+			C.slaprf_usb_close_port(C.int(p.handle))
+		}
 		p.ioMu.Lock()
 		C.slaprf_jni_free_buf(p.rxBufRef)
 		C.slaprf_jni_free_buf(p.txBufRef)

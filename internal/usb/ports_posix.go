@@ -8,8 +8,8 @@ import (
 	"go.bug.st/serial"
 )
 
-// DefaultListPorts enumerates serial ports in pure Go (CGO_ENABLED=0) on macOS and other POSIX systems.
-func DefaultListPorts() ([]PortInfo, error) {
+// listUSBPorts enumerates serial ports in pure Go (CGO_ENABLED=0) on macOS and other POSIX systems.
+func listUSBPorts() ([]PortInfo, error) {
 	names, err := serial.GetPortsList()
 	if err != nil {
 		return nil, err

@@ -53,6 +53,7 @@ import { enginePersistence, LAST_BACKUP_STORAGE_KEY, LEGACY_LOCALSTORAGE_KEYS } 
 import {
   buildOrPatchFirmwareBin,
   generateFingerprint,
+  HubLink,
   LATEST_FIRMWARE_VERSION,
 } from "./esp_flasher";
 import { bindSimSerialStore, bindSimTimerActionHandler, isSimulatedSerialPort } from "./sim_serial_port";
@@ -984,12 +985,14 @@ export class ApiClient {
   /**
    * Builds or patches a pre-configured XIAO ESP32-C5 firmware binary stamped with role, name,
    * board fingerprint & active channels, 100% client-side in the browser from the static
-   * `./firmware/slaprf-xiao-c5.bin` image.
+   * `./firmware/slaprf-xiao-c5.bin` image, or the Bluetooth Hub image
+   * `./firmware/slaprf-xiao-c5-ble.bin` when `hubLink` is "ble" (Hub only).
    */
   public async fetchFirmwareImage(
     role: "hub" | "spoke",
     timerLabel = "",
-    fingerprint = generateFingerprint()
+    fingerprint = generateFingerprint(),
+    hubLink: HubLink = "usb"
   ): Promise<{ bytes: Uint8Array; sha256: string; filename: string }> {
     const enabledFreqs = this.store.enabledPilots.map((p) => p.frequencyMhz).filter((f) => f > 0);
     const freqs =
@@ -1001,6 +1004,7 @@ export class ApiClient {
       timerLabel,
       fingerprint,
       frequenciesMHz: freqs,
+      hubLink,
     });
     return { bytes: built.bytes, sha256: "", filename: built.filename };
   }

@@ -159,6 +159,7 @@ export class BrowserHubBridge {
     if (main.connected) {
       const s = main.lastStatus;
       const cfg = main.lastConfig;
+      const via = main.transportLabel;
       if (s?.emergencyMode) {
         return {
           color: "red",
@@ -178,7 +179,7 @@ export class BrowserHubBridge {
         return {
           color: "neon",
           shortLabel: `${hubName} · Hub`,
-          detail: `Connected to Hub ${hubName} over USB-C · click to open Network`,
+          detail: `Connected to Hub ${hubName} over ${via} · click to open Network`,
         };
       }
       if (s?.role === 2 || cfg?.role === "spoke") {
@@ -186,13 +187,13 @@ export class BrowserHubBridge {
         return {
           color: "blue",
           shortLabel: `${spokeName} · Spoke`,
-          detail: `Connected to Spoke ${spokeName} (Slot ${s?.slot || "?"}) over USB-C · click to open Network`,
+          detail: `Connected to Spoke ${spokeName} (Slot ${s?.slot || "?"}) over ${via} · click to open Network`,
         };
       }
       return {
         color: "yellow",
         shortLabel: "Connecting…",
-        detail: "Reading timer identity over USB-C…",
+        detail: `Reading timer identity over ${via}…`,
       };
     }
 

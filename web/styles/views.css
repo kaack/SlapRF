@@ -3763,6 +3763,48 @@ html[data-theme="light"] .bar-time {
   color: var(--text-2);
 }
 
+/* Hub connection choice (USB cable / Bluetooth), shown only for the Hub role */
+.flasher-hub-link {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  padding: 10px 14px;
+  border-radius: var(--radius);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+}
+.flasher-hub-link-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--text-3);
+}
+.flasher-hub-link-text strong {
+  color: var(--text-2);
+  font-weight: 600;
+}
+
+@media (max-width: 900px) {
+  .flasher-hub-link {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .flasher-hub-link .segmented {
+    display: flex;
+    width: 100%;
+  }
+  .flasher-hub-link .segmented button {
+    flex: 1 1 0;
+    justify-content: center;
+    height: 36px;
+  }
+}
+
 .flasher-inspect-bar {
   display: flex;
   align-items: center;

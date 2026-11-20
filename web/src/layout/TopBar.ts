@@ -501,7 +501,7 @@ export class TopBar extends Component {
     const usbTitle = !usbSupported
       ? "Connect a SlapRF Server to open USB serial ports"
       : usbOn
-        ? `Connected over USB${activeLabel ? ` (${activeLabel}${usbFp ? ` · ${usbFp}` : ""})` : ""} · click to disconnect`
+        ? `Connected over ${main.transportLabel === "Bluetooth" ? "Bluetooth" : "USB"}${activeLabel ? ` (${activeLabel}${usbFp ? ` · ${usbFp}` : ""})` : ""} · click to disconnect`
         : "Connect a timer over USB-C";
 
     const usbBtn =

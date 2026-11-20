@@ -27,8 +27,8 @@ func (p *osSerialPort) SetReadTimeout(t time.Duration) error {
 func (p *osSerialPort) ResetInputBuffer() error  { return p.port.ResetInputBuffer() }
 func (p *osSerialPort) ResetOutputBuffer() error { return p.port.ResetOutputBuffer() }
 
-// DefaultSerialOpener opens an OS serial port via the cross-platform go.bug.st/serial library.
-func DefaultSerialOpener(portName string, baud int) (firmware.SerialPort, error) {
+// openUSBSerialPort opens an OS serial port via the cross-platform go.bug.st/serial library.
+func openUSBSerialPort(portName string, baud int) (firmware.SerialPort, error) {
 	portName = strings.TrimSpace(portName)
 	if portName == "" {
 		return nil, fmt.Errorf("missing serial port name")

@@ -54,6 +54,16 @@ func main() {
 		}
 		log.Printf("[build-web] Firmware: %s not built, using the placeholder image", firmware.ImageName)
 	}
+	// The Bluetooth Hub image (firmware/slaprf_ble) is optional: copy it when it has been built.
+	// Without it the flasher shows the Bluetooth hub option disabled (no placeholder is written,
+	// so a missing file is detectable by the browser).
+	bleSrc := filepath.Join(*webDir, "firmware", firmware.BLEImageName)
+	if _, err := os.Stat(bleSrc); err == nil {
+		mustCopyFile(bleSrc, filepath.Join(*outDir, "firmware", firmware.BLEImageName))
+		log.Printf("[build-web] Firmware: compiled %s", firmware.BLEImageName)
+	} else {
+		log.Printf("[build-web] Firmware: %s not built, the Bluetooth hub option will be disabled", firmware.BLEImageName)
+	}
 	// 1. Copy index.html (and 404.html for GitHub Pages SPA fallback) and styles/*.css
 	mustCopyFile(filepath.Join(*webDir, "index.html"), filepath.Join(*outDir, "index.html"))
 	mustCopyFile(filepath.Join(*webDir, "index.html"), filepath.Join(*outDir, "404.html"))

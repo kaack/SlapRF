@@ -154,6 +154,16 @@ export function isBackendSerialPort(port: unknown): port is BackendSerialPortHan
   );
 }
 
+/** True when a backend port path is a SlapRF Bluetooth Hub link (`ble:<FINGERPRINT>`). */
+export function isBluetoothPortName(name: string | null | undefined): boolean {
+  return typeof name === "string" && name.trim().toLowerCase().startsWith("ble:");
+}
+
+/** User-facing transport of a connected port: "Bluetooth" for `ble:` hub links, otherwise "USB-C". */
+export function portTransportLabel(port: unknown): "Bluetooth" | "USB-C" {
+  return isBackendSerialPort(port) && isBluetoothPortName(port.portName) ? "Bluetooth" : "USB-C";
+}
+
 export function createBackendPortHandle(portName: string, description?: string): BackendSerialPortHandle {
   return {
     isBackendPort: true,

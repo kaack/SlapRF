@@ -9,8 +9,8 @@ import (
 	"go.bug.st/serial/enumerator"
 )
 
-// DefaultListPorts enumerates host serial ports with USB VID/PID metadata on Windows and desktop Linux.
-func DefaultListPorts() ([]PortInfo, error) {
+// listUSBPorts enumerates host serial ports with USB VID/PID metadata on Windows and desktop Linux.
+func listUSBPorts() ([]PortInfo, error) {
 	details, err := enumerator.GetDetailedPortsList()
 	if err != nil {
 		names, fallbackErr := serial.GetPortsList()

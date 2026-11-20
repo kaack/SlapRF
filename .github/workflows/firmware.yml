@@ -1,7 +1,9 @@
 name: Build Firmware
 
 # Builds the firmware/slaprf ESP-IDF project for the Seeed XIAO ESP32-C5 and publishes the merged
-# flash image (bootloader + partition table + app) as `slaprf-xiao-c5.bin`.
+# flash image (bootloader + partition table + app) as `slaprf-xiao-c5.bin`. A separate job builds
+# the Bluetooth Hub project (firmware/slaprf_ble) into `slaprf-xiao-c5-ble.bin` (artifact
+# `firmware-ble`).
 # Called by the Pages and Release workflows so the web flasher and release ship real firmware;
 # also runs on its own whenever firmware sources change.
 
@@ -42,4 +44,35 @@ jobs:
         with:
           name: firmware
           path: firmware/slaprf/build/slaprf-xiao-c5.bin
+          if-no-files-found: error
+
+  # Bluetooth Hub image: firmware/slaprf_ble, same pinned ESP-IDF and the same merged layout
+  # (bootloader + partition table + app with the SLAPRF02 block), published as
+  # `slaprf-xiao-c5-ble.bin` in its own `firmware-ble` artifact. It is optional for callers:
+  # a failure here never blocks the USB image, the Pages deploy, or a release.
+  build-ble:
+    name: Build Bluetooth Hub firmware
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build with ESP-IDF
+        uses: espressif/esp-idf-ci-action@v1
+        with:
+          esp_idf_version: v5.5.1
+          target: esp32c5
+          path: firmware/slaprf_ble
+          command: idf.py build && cd build && python -m esptool --chip esp32c5 merge_bin -o slaprf-xiao-c5-ble.bin @flash_args
+
+      - name: Check config block is present
+        run: |
+          bin="firmware/slaprf_ble/build/slaprf-xiao-c5-ble.bin"
+          grep -qa SLAPRF02 "$bin" || { echo "SLAPRF02 config block missing from $bin"; exit 1; }
+          ls -l "$bin"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: firmware-ble
+          path: firmware/slaprf_ble/build/slaprf-xiao-c5-ble.bin
           if-no-files-found: error
