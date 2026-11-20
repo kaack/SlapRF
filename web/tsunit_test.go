@@ -165,13 +165,14 @@ func TestTypeScriptUnitSuite(t *testing.T) {
 	}
 
 	userDataDir := t.TempDir()
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
 	args := []string{
 		"--headless",
 		"--no-sandbox",
 		"--disable-gpu",
+		"--disable-dbus",
 		"--disable-dev-shm-usage",
 		"--no-first-run",
 		"--no-default-browser-check",
@@ -184,6 +185,7 @@ func TestTypeScriptUnitSuite(t *testing.T) {
 	}
 
 	cmd := exec.CommandContext(ctx, chromeBin, args...)
+	cmd.Env = append(os.Environ(), "DBUS_SESSION_BUS_ADDRESS=disabled:")
 	var stderrBuf bytes.Buffer
 	cmd.Stderr = &stderrBuf
 
