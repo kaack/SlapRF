@@ -34,7 +34,8 @@
 #define SWEEP_BUDGET_US          6000    // ~5.4 ms Hub 5.8 GHz sweep; leaves ~14.6 ms on 2.4 GHz
 #define SPOKE_BEACON_OFFSET_US   7000    // Spokes compute t_sf = beacon - 7000 us (their sweep budget)
 #define BLE_EVENT_END_US         13500   // Center of the [10.0..17.0 ms] Spoke-silent 2.4 GHz window
-#define SPOKE_MAX_POS_SHIFT_US   180     // Stay below Spoke BEACON_GRACE_US (250 us) when Spokes are active
+#define SPOKE_MAX_POS_SHIFT_US   180     // Stay below Spoke BEACON_GRACE_US (+250 us) when Spokes are active
+#define SPOKE_MAX_NEG_SHIFT_US  -350     // Stay after Spoke 6.3 ms 5.8 GHz sweep completion when Spokes are active
 
 /* ---- Schedule (derived) ------------------------------------------------------------------- */
 #define MAX_SPOKES               6
@@ -108,9 +109,8 @@ typedef struct {
     uint8_t  reserved0;                       // WIRE_PROTO_VER
     uint8_t  sweep_hz;                        // Spoke's SWEEP_HZ (100)
     char     timer_label[24];
-    uint8_t  reserved;
     uint8_t  crc8;
-} spoke_join_frame_t;                         // 35 bytes
+} spoke_join_frame_t;                         // 34 bytes (must match firmware/slaprf/main/main.c)
 
 typedef struct {
     uint8_t  magic0, magic1;                  // 0xC5 0x5C
@@ -138,6 +138,13 @@ typedef struct {
     uint8_t  crc8;
 } hub_hello_frame_t;                          // 36 bytes
 #pragma pack(pop)
+
+_Static_assert(sizeof(slaprf_flash_config_t) == 160, "SLAPRF02 config block must be 160 bytes");
+_Static_assert(sizeof(timer_window_frame_t) == 44, "4-sample window frame must be 44 bytes");
+_Static_assert(sizeof(spoke_join_frame_t) == 34, "spoke_join_frame_t must match 34-byte Spoke wire layout");
+_Static_assert(sizeof(hub_assign_frame_t) == 8, "hub_assign_frame_t must match 8-byte Spoke wire layout");
+_Static_assert(sizeof(hub_identify_frame_t) == 8, "hub_identify_frame_t must match 8-byte Spoke wire layout");
+_Static_assert(sizeof(hub_hello_frame_t) == 36, "hub_hello_frame_t must match 36-byte host wire layout");
 
 // Patched by internal/firmware/image.go (server) or esp_flasher.ts (browser) at flash time.
 __attribute__((used, section(".rodata.slaprf_cfg")))
@@ -407,8 +414,9 @@ static void hub_ble_run(void) {
         hub_listen_until(t_sf + SUPERFRAME_US - 400);
 
         int32_t shift = slaprf_ble_sync_adjust_us(t_sf, SWEEP_INTERVAL_US, BLE_EVENT_END_US);
-        if (shift > SPOKE_MAX_POS_SHIFT_US && hub_has_active_spokes(slaprf_now_us())) {
-            shift = SPOKE_MAX_POS_SHIFT_US;
+        if (hub_has_active_spokes(slaprf_now_us())) {
+            if (shift > SPOKE_MAX_POS_SHIFT_US) shift = SPOKE_MAX_POS_SHIFT_US;
+            if (shift < SPOKE_MAX_NEG_SHIFT_US) shift = SPOKE_MAX_NEG_SHIFT_US;
         }
         t_sf += SUPERFRAME_US + shift;
         if (slaprf_now_us() > t_sf + SWEEP_INTERVAL_US) {
