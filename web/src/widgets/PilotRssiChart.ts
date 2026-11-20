@@ -441,6 +441,36 @@ export class PilotRssiChart extends Component {
     };
     this.listen(this.tuneDrawerEl, "click", handleTuneClick);
 
+    let drawerSwipeStartY: number | null = null;
+    this.listen(this.tuneDrawerEl, "pointerdown", (e: PointerEvent) => {
+      if (!this.isMobileLayout || this.tuningGateId === null) return;
+      const target = e.target as HTMLElement | null;
+      if (!target || !target.closest(".scope-tune-mobile-handle-bar, .scope-tune-head")) return;
+      if (target.closest("button:not(.pilot-dir-mobile-drawer-handle)")) return;
+      drawerSwipeStartY = e.clientY;
+    });
+    this.listen(this.tuneDrawerEl, "pointermove", (e: PointerEvent) => {
+      if (drawerSwipeStartY === null) return;
+      const dy = Math.max(0, e.clientY - drawerSwipeStartY);
+      if (dy > 4) {
+        this.tuneDrawerEl.style.transform = `translateY(${Math.round(dy)}px)`;
+      }
+    });
+    const endDrawerSwipe = (e: PointerEvent) => {
+      if (drawerSwipeStartY === null) return;
+      const dy = e.clientY - drawerSwipeStartY;
+      drawerSwipeStartY = null;
+      this.tuneDrawerEl.style.removeProperty("transform");
+      if (dy > 52) {
+        this.tuningGateId = null;
+        this.renderCalib();
+        this.renderLegend();
+        this.renderTuningDrawer();
+      }
+    };
+    this.listen(this.tuneDrawerEl, "pointerup", endDrawerSwipe);
+    this.listen(this.tuneDrawerEl, "pointercancel", endDrawerSwipe);
+
     this.listen(this.tuneDrawerEl, "change", (e) => {
       const target = e.target;
       if (!(target instanceof HTMLInputElement)) return;
@@ -2436,7 +2466,7 @@ export class PilotRssiChart extends Component {
       const actionButtons = [
         this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(16)}<span>Undo</span></button>` : "",
         anyCalibrated ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at every timer">${icons.reset(16)}<span>Reset all</span></button>` : "",
-        canAutoCalib ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Set each timer's thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Auto-calibrate all</span></button>` : "",
+        canAutoCalib ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Calibrate each timer's thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Calibrate all</span></button>` : "",
       ].filter(Boolean).join("");
       actions = actionButtons ? `<div class="scope-calib-actions">${actionButtons}</div>` : "";
     } else {
@@ -2455,7 +2485,7 @@ export class PilotRssiChart extends Component {
         <div class="scope-calib-actions">
           ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(16)}<span>Undo</span></button>` : ""}
           ${isCal ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Use ${esc(pilot.callsign)}'s own threshold at ${esc(name)}">${icons.reset(16)}<span>Reset</span></button>` : ""}
-          ${canAutoCalib ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Set ${esc(name)}'s thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Auto-calibrate</span></button>` : ""}
+          ${canAutoCalib ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Calibrate ${esc(name)}'s thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Calibrate</span></button>` : ""}
           ${canTune ? `<button class="btn btn-sm btn-ghost scope-calib-tune-btn ${isTuneOpen ? "is-active" : ""}" type="button" data-tune-gate="${this.focus}" aria-expanded="${isTuneOpen}" title="Fine-tune detection rules for ${esc(name)}">${icons.sliders(17)}<span>Fine-tune</span></button>` : ""}
         </div>`;
     }
@@ -2747,11 +2777,6 @@ export class PilotRssiChart extends Component {
     const isGlobalScope = !gate;
     const gateName = gate ? gateLabel(this.store, gate.gateId) : "All timers";
     const color = gate ? this.colorOf(gate.gateId) : "";
-    const roleTag = gate
-      ? gate.role === "START_FINISH"
-        ? "Start / Finish"
-        : "Sector"
-      : "Global defaults";
     const gateOverrides = gate?.ruleOverrides ?? {};
     const pilotOverrides = gate ? pilotGateOverridesAt(gate, pilot.slotIndex) : {};
     const gateOvrCount = countOverrides(gateOverrides);
@@ -2788,13 +2813,11 @@ export class PilotRssiChart extends Component {
       if (isPilotScope && l.slotIndex !== pilot.slotIndex) continue;
       lapCount++;
     }
-    const reasonCounts = new Map<FilterReason, number>();
     let totalFilteredHere = 0;
     for (const f of this.store.filtered) {
       if (gate && f.gateId !== gate.gateId) continue;
       if (isPilotScope && f.slotIndex !== pilot.slotIndex) continue;
       totalFilteredHere++;
-      reasonCounts.set(f.reason, (reasonCounts.get(f.reason) ?? 0) + 1);
     }
 
     const beepOverridden = isGlobalScope
@@ -2834,7 +2857,6 @@ export class PilotRssiChart extends Component {
         : activeOverrides[spec.key] !== undefined;
       const curVal = effRules[spec.key];
       const valStr = this.formatTuneVal(curVal, spec.decimals);
-      const rCount = reasonCounts.get(spec.reason) ?? 0;
       return `
         <div class="scope-tune-card ${isOverridden ? "is-overridden" : ""}" data-tune-card="${spec.key}">
           <div class="scope-tune-card-info">
@@ -2843,11 +2865,6 @@ export class PilotRssiChart extends Component {
               ${
                 isOverridden
                   ? `<span class="scope-tune-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>`
-                  : ""
-              }
-              ${
-                rCount > 0
-                  ? `<span class="scope-tune-hit-pill" title="${rCount} ${esc(FILTER_LABELS[spec.reason].toLowerCase())} filtered here">${rCount} ${esc(FILTER_LABELS[spec.reason].toLowerCase())}</span>`
                   : ""
               }
             </div>
@@ -2918,11 +2935,21 @@ export class PilotRssiChart extends Component {
       : `Reset ${isPilotScope ? `${esc(pilot.callsign)} overrides` : `${esc(gateName)} overrides`}`;
 
     const nextHtml = `
+      <div class="dir-mobile-drawer-top-bar scope-tune-mobile-handle-bar">
+        <button
+          type="button"
+          class="pilot-dir-mobile-drawer-handle"
+          data-tune-act="close"
+          title="Close fine-tuning drawer"
+          aria-label="Close fine-tuning drawer"
+        >
+          <span class="pilot-dir-mobile-drawer-grip" aria-hidden="true"></span>
+        </button>
+      </div>
       <div class="scope-tune-head">
         <div class="scope-tune-title-group">
           ${headDotHtml}
           <strong>Fine-tune ${esc(gateName)}</strong>
-          <span class="scope-tune-role-tag">${esc(roleTag)}</span>
           ${
             this.contextMode === "practice"
               ? `<span class="scope-tune-live-pill mono" data-tune-live-summary>${lapCount} ${lapCount === 1 ? "lap" : "laps"} · ${totalFilteredHere} filtered</span>`
