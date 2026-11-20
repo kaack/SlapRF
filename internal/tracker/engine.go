@@ -788,6 +788,7 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 			if ev.IsStartFinish {
 				r := e.rules.ForGate(gate.RuleOverrides)
 				if reason := e.checkSpikeRejectionLocked(pilot, *gate, i, ev, r); reason != "" {
+					det.RollbackRejectedSpike()
 					continue
 				}
 				ckey := detectorKey(gate.GateID, pilot.SlotIndex)
@@ -804,6 +805,9 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 
 		out := e.applyCrossingLocked(pilot, *gate, ev)
 		if out.rejected != nil {
+			if out.rejected.Reason == domain.FilterSpike {
+				det.RollbackRejectedSpike()
+			}
 			filtered = append(filtered, e.storeFilteredLocked(*out.rejected))
 			continue
 		}

@@ -216,3 +216,72 @@ func TestMultipathNotchPassProducesSmoothSingleCrossing(t *testing.T) {
 		t.Fatalf("expected 2-pole trimmed-mean envelope to bridge 70 ms multipath dropouts (>= -61 dBm), got %.1f dBm", minNearPeak)
 	}
 }
+
+func TestBriefExitNadirAndRejectedSpikeNeverSwallowFollowingPass(t *testing.T) {
+	// Regression for live flight telemetry (enter = -67 dBm, exit = -73 dBm):
+	// A 50 ms -66.5 dBm pre-blip dips to -73.0 dBm for a single 20 ms sample, then the signal
+	// immediately climbs through a -65.5 dBm shoulder / -69.5 dBm notch into a real -52.5 dBm pass.
+	// Previously, setting awaitingRearm = true even when s <= effectiveExit required s <= -73.0 dBm
+	// a second time and swallowed the entire -52.5 dBm pass!
+	det := NewChannelDetector(1, 7)
+	const frameUs = 20_000 // 50 Hz BLE Hub
+	ts := uint64(10_000_000)
+
+	feed := func(rssi float32, count int) []*CrossingCandidate {
+		var out []*CrossingCandidate
+		for i := 0; i < count; i++ {
+			if c := det.ProcessSample(rssi, ts, -67, -73, 300_000); c != nil {
+				out = append(out, c)
+			}
+			ts += frameUs
+		}
+		return out
+	}
+
+	// Settle at -78 dBm, then create a brief -66 dBm blip that dips to -74 dBm just long enough to exit
+	// at s <= -73 dBm on a single sample before rebounding above -73 dBm.
+	_ = feed(-78, 15)
+	var blipOut []*CrossingCandidate
+	blipProfile := []float32{
+		-70, -64.5, -64.5, -64.5, -64.5, -65.0, -71, -77, -77, -77, -77, -77, -77, -77, -77,
+	}
+	for _, rssi := range blipProfile {
+		c := det.ProcessSample(rssi, ts, -67, -73, 300_000)
+		ts += frameUs
+		if c != nil {
+			blipOut = append(blipOut, c)
+			// Simulate engine rejecting this short blip as FilterSpike and rolling back lockout:
+			det.RollbackRejectedSpike()
+			break
+		}
+	}
+	if len(blipOut) != 1 {
+		t.Fatalf("expected 1 short blip candidate before the real pass, got %d", len(blipOut))
+	}
+
+	// Immediately rebound above -73 dBm (-71 -> -65.5 shoulder -> -69.5 notch, never touching <= -70 dBm!)
+	// and climb into the real -52.5 dBm gate pass over 2.8 seconds, then exit to -79 dBm.
+	var realPass []*CrossingCandidate
+	approachAndPass := []struct {
+		rssi  float32
+		steps int
+	}{
+		{-71.0, 5},  // rebounds right above -73 dBm exit
+		{-65.5, 12}, // pre-shoulder
+		{-69.5, 12}, // notch stays 0.5 dB above (enter - 3 dB = -70.0 dBm)!
+		{-61.0, 20}, // rising flank
+		{-52.5, 25}, // obvious -52.5 dBm gate pass apex
+		{-60.0, 15}, // falling flank
+		{-79.0, 25}, // clean exit to -79 dBm
+	}
+	for _, seg := range approachAndPass {
+		realPass = append(realPass, feed(seg.rssi, seg.steps)...)
+	}
+
+	if len(realPass) != 1 {
+		t.Fatalf("expected real -52.5 dBm pass to be detected cleanly, got %d candidates", len(realPass))
+	}
+	if realPass[0].PeakRSSIDbm < -54.0 {
+		t.Fatalf("expected real pass peak near -52.5 dBm, got %.1f dBm", realPass[0].PeakRSSIDbm)
+	}
+}

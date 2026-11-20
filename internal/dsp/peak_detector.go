@@ -74,15 +74,17 @@ type ChannelDetector struct {
 	prePassRing     [prePassRingCap]samplePoint
 	prePassHead     int
 	prePassCount    int
-	inGate          bool
-	peakRSSI        float32
-	peakTimestampUs uint64
-	enterTimeUs     uint64
-	lastCrossingUs  uint64
-	hasCrossed      bool
-	awaitingRearm   bool
-	windowSamples   []samplePoint // Smoothed envelope samples (for -6 dB beamwidth)
-	passMedSamples  []samplePoint // Delay-centered median samples (for zero-phase peak timing)
+	inGate             bool
+	peakRSSI           float32
+	peakTimestampUs    uint64
+	enterTimeUs        uint64
+	lastCrossingUs     uint64
+	prevLastCrossingUs uint64
+	hasCrossed         bool
+	prevHasCrossed     bool
+	awaitingRearm      bool
+	windowSamples      []samplePoint // Smoothed envelope samples (for -6 dB beamwidth)
+	passMedSamples     []samplePoint // Delay-centered median samples (for zero-phase peak timing)
 }
 
 // NewChannelDetector initializes a stateful RSSI peak detector for one gate timer and one pilot slot.
@@ -114,6 +116,15 @@ func (d *ChannelDetector) RearmIfBelow(exitThresholdDbm float32) {
 		d.inGate = false
 		d.awaitingRearm = false
 	}
+}
+
+// RollbackRejectedSpike restores the prior crossing lockout state and clears awaitingRearm when the
+// timing engine rejects the latest candidate as a non-pass RF/Wi-Fi spike, ensuring a rejected blip
+// never disarms or debounces a real gate pass immediately following it.
+func (d *ChannelDetector) RollbackRejectedSpike() {
+	d.lastCrossingUs = d.prevLastCrossingUs
+	d.hasCrossed = d.prevHasCrossed
+	d.awaitingRearm = false
 }
 
 func (d *ChannelDetector) resetFilterState(rssi float32, tsUs uint64) {
@@ -312,7 +323,8 @@ func (d *ChannelDetector) ProcessSample(
 	// If indoor reflections or close adjacent gates keep the inter-pass valley slightly above
 	// exitThreshold, confirm once the drone has clearly exited the entry zone (>= 10 dB below
 	// pass peak, >= 3 dB below enterThreshold, and >= 500 ms past closest approach).
-	exited := s <= effectiveExit
+	exitedBelowThreshold := s <= effectiveExit
+	exited := exitedBelowThreshold
 	if !exited && s <= enterThresholdDbm-3.0 && (d.peakRSSI-s) >= 10.0 && medCenterTs >= d.peakTimestampUs+500_000 {
 		exited = true
 	}
@@ -338,9 +350,13 @@ func (d *ChannelDetector) ProcessSample(
 		if zeroPhasePeak > d.peakRSSI {
 			d.peakRSSI = zeroPhasePeak
 		}
+		d.prevLastCrossingUs = d.lastCrossingUs
+		d.prevHasCrossed = d.hasCrossed
 		d.lastCrossingUs = refinedTimeUs
 		d.hasCrossed = true
-		d.awaitingRearm = true
+		// Only wait for a subsequent re-arm drop when exiting early above effectiveExit (high-valley
+		// fallback); when s <= effectiveExit already, Schmitt hysteresis is already satisfied.
+		d.awaitingRearm = !exitedBelowThreshold
 
 		beamwidthMs, speedMph := d.estimateBeamwidthAndSpeed()
 
