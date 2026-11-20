@@ -4533,8 +4533,8 @@ export class DebugView extends Component {
         : running
           ? esc(this.progress)
           : on
-            ? `Ready · ${esc(snap!.label)} (${esc(snap!.endpoint)}) · ~1.5 s non-intrusive check`
-            : "Off · click Connect timer above";
+            ? `<span class="debug-hint-desktop">Ready · ${esc(snap!.label)} (${esc(snap!.endpoint)}) · ~1.5 s non-intrusive check</span><span class="debug-hint-mobile">Ready · ${esc(snap!.label)} · ~1.5 s</span>`
+            : `<span class="debug-hint-desktop">Off · click Connect timer above</span><span class="debug-hint-mobile">Off · not connected</span>`;
       const consoleLines = this.checks.length
         ? esc(
             this.checks
@@ -4568,8 +4568,8 @@ export class DebugView extends Component {
           </span>
           <div class="debug-connect-actions">
             <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-report" ${this.checks.length && !running ? "" : "disabled"} title="Copy self-test report" aria-label="Copy self-test report">${icons.copy(17)}</button>
-            <button type="button" class="btn btn-sm btn-armed" data-action="selftest" ${on && !this.busy ? "" : "disabled"}>
-              ${icons.bug(14)}<span>${running ? "Testing…" : "Run self-test"}</span>
+            <button type="button" class="btn btn-sm btn-armed debug-selftest-run-btn" data-action="selftest" ${on && !this.busy ? "" : "disabled"} title="${running ? "Running self-test…" : "Run self-test"}" aria-label="${running ? "Running self-test…" : "Run self-test"}">
+              ${icons.bug(14)}<span class="debug-hint-desktop">${running ? "Testing…" : "Run self-test"}</span>
             </button>
           </div>
         </div>
@@ -4611,12 +4611,12 @@ export class DebugView extends Component {
       : running
         ? esc(this.progress)
         : emg
-          ? "Emergency mode active · exit emergency mode to run 5.8 GHz RF checks"
+          ? `<span class="debug-hint-desktop">Emergency mode active · exit emergency mode to run 5.8 GHz RF checks</span><span class="debug-hint-mobile">Emergency mode active</span>`
           : isOther
-            ? "Connected XIAO ESP32-C5 (Other) has no SlapRF firmware · open Flasher to write firmware"
+            ? `<span class="debug-hint-desktop">Connected XIAO ESP32-C5 (Other) has no SlapRF firmware · open Flasher to write firmware</span><span class="debug-hint-mobile">No SlapRF firmware · open Flasher</span>`
             : on
-              ? "Ready · takes about 10 s (pauses timing briefly during scan)"
-              : "Off · click Connect in the top bar";
+              ? `<span class="debug-hint-desktop">Ready · takes about 10 s (pauses timing briefly during scan)</span><span class="debug-hint-mobile">Ready · ~10 s check</span>`
+              : `<span class="debug-hint-desktop">Off · click Connect in the top bar</span><span class="debug-hint-mobile">Off · not connected</span>`;
     const consoleLines = this.checks.length
       ? esc(
           this.checks
@@ -4643,8 +4643,8 @@ export class DebugView extends Component {
         </span>
         <div class="debug-connect-actions">
           <button type="button" class="btn btn-sm btn-icon btn-ghost" data-action="copy-report" ${this.checks.length && !running ? "" : "disabled"} title="Copy self-test report" aria-label="Copy self-test report">${icons.copy(17)}</button>
-          <button type="button" class="btn btn-sm btn-armed" data-action="selftest" ${on && !this.busy ? "" : "disabled"}>
-            ${icons.bug(14)}<span>${running ? "Testing…" : "Run self-test"}</span>
+          <button type="button" class="btn btn-sm btn-armed debug-selftest-run-btn" data-action="selftest" ${on && !this.busy ? "" : "disabled"} title="${running ? "Running self-test…" : "Run self-test"}" aria-label="${running ? "Running self-test…" : "Run self-test"}">
+            ${icons.bug(14)}<span class="debug-hint-desktop">${running ? "Testing…" : "Run self-test"}</span>
           </button>
         </div>
       </div>
@@ -6891,7 +6891,7 @@ export class DebugView extends Component {
               </label>
               <label class="check" title="Show 5 GHz Wi-Fi UNII band overlay">
                 <input type="checkbox" data-check="scan-wifi" ${this.scanShowWifi ? "checked" : ""}/>
-                <span><span class="debug-hint-desktop">5 GHz Wi-Fi bands</span><span class="debug-hint-mobile">5G Wi-Fi</span></span>
+                <span><span class="debug-hint-desktop">5 GHz Wi-Fi bands</span><span class="debug-hint-mobile">5 GHz Wi-Fi</span></span>
               </label>
               <span class="debug-overlay-sep" role="separator" aria-hidden="true"></span>
               <button type="button" class="debug-overlay-icon-btn" data-action="clear-hold" ${hasScan ? "" : "disabled"} aria-label="Reset max hold and running average" title="Reset max hold and running average">
