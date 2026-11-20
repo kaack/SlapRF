@@ -13,6 +13,9 @@ type CrossingCandidate struct {
 	LapRFPeakHeight   float32
 	BeamwidthMs       float64
 	EstimatedSpeedMph float64
+	HoldMs            float64
+	AboveEnterMs      float64
+	PassAreaDbSec     float64
 }
 
 type samplePoint struct {
@@ -324,6 +327,13 @@ func (d *ChannelDetector) ProcessSample(
 
 	if exited {
 		d.inGate = false
+		holdMs, aboveEnterMs, areaDbSec := d.measurePassHoldAndArea(enterThresholdDbm, effectiveExit)
+		// Discard sub-45 ms micro-grazes (< 4 dB above enter in dBm mode) immediately without arming
+		// lockout so an ambient Wi-Fi/RF impulse never blocks an approaching drone right behind it.
+		if enterThresholdDbm < 0 && aboveEnterMs < 45.0 && d.peakRSSI < enterThresholdDbm+4.0 {
+			return nil
+		}
+
 		refinedTimeUs, zeroPhasePeak := d.refineCrossingPeak()
 		if zeroPhasePeak > d.peakRSSI {
 			d.peakRSSI = zeroPhasePeak
@@ -345,6 +355,9 @@ func (d *ChannelDetector) ProcessSample(
 			LapRFPeakHeight:   laprfHeight,
 			BeamwidthMs:       beamwidthMs,
 			EstimatedSpeedMph: speedMph,
+			HoldMs:            holdMs,
+			AboveEnterMs:      aboveEnterMs,
+			PassAreaDbSec:     areaDbSec,
 		}
 	}
 
@@ -491,4 +504,89 @@ func (d *ChannelDetector) estimateBeamwidthAndSpeed() (float64, float64) {
 		speedMph = 18.0
 	}
 	return math.Round(beamwidthMs*10) / 10, math.Round(speedMph*10) / 10
+}
+
+// measurePassHoldAndArea computes the pass envelope hold duration (in ms), linearly interpolated
+// time spent at or above enterThresholdDbm (in ms), and integrated area above effectiveExit (dB*s).
+func (d *ChannelDetector) measurePassHoldAndArea(enterThresholdDbm, effectiveExit float32) (holdMs, aboveEnterMs, areaDbSec float64) {
+	n := len(d.windowSamples)
+	if n < 2 {
+		return 0, 0, 0
+	}
+	firstActiveUs := d.windowSamples[0].timestampUs
+	lastActiveUs := d.windowSamples[n-1].timestampUs
+
+	// Include up to 150 ms of rising pre-entry samples above effectiveExit from passMedSamples
+	// so the rising and falling flanks above exitThreshold contribute symmetrically.
+	for i := 0; i < len(d.passMedSamples); i++ {
+		pt := d.passMedSamples[i]
+		if pt.timestampUs >= d.windowSamples[0].timestampUs {
+			break
+		}
+		if d.windowSamples[0].timestampUs-pt.timestampUs > 150_000 {
+			continue
+		}
+		if pt.rssiDbm > effectiveExit {
+			if pt.timestampUs < firstActiveUs {
+				firstActiveUs = pt.timestampUs
+			}
+			nextTs := d.windowSamples[0].timestampUs
+			nextVal := d.windowSamples[0].rssiDbm
+			if i+1 < len(d.passMedSamples) && d.passMedSamples[i+1].timestampUs <= d.windowSamples[0].timestampUs {
+				nextTs = d.passMedSamples[i+1].timestampUs
+				nextVal = d.passMedSamples[i+1].rssiDbm
+			}
+			if nextTs > pt.timestampUs {
+				dtSec := float64(nextTs-pt.timestampUs) / 1e6
+				if dtSec > 0.1 {
+					dtSec = 0.1
+				}
+				h0 := math.Max(0, float64(pt.rssiDbm-effectiveExit))
+				h1 := math.Max(0, float64(nextVal-effectiveExit))
+				areaDbSec += 0.5 * (h0 + h1) * dtSec
+			}
+		}
+	}
+
+	for i := 1; i < n; i++ {
+		p0 := d.windowSamples[i-1]
+		p1 := d.windowSamples[i]
+		if p1.timestampUs <= p0.timestampUs {
+			continue
+		}
+		dtUs := float64(p1.timestampUs - p0.timestampUs)
+		if dtUs > 120_000 {
+			dtUs = 120_000
+		}
+		dtMs := dtUs / 1000.0
+		dtSec := dtUs / 1e6
+
+		// Linearly interpolated time above enterThresholdDbm.
+		if p0.rssiDbm >= enterThresholdDbm && p1.rssiDbm >= enterThresholdDbm {
+			aboveEnterMs += dtMs
+		} else if p0.rssiDbm >= enterThresholdDbm && p1.rssiDbm < enterThresholdDbm {
+			span := float64(p0.rssiDbm - p1.rssiDbm)
+			if span > 1e-4 {
+				aboveEnterMs += dtMs * float64(p0.rssiDbm-enterThresholdDbm) / span
+			}
+		} else if p1.rssiDbm >= enterThresholdDbm && p0.rssiDbm < enterThresholdDbm {
+			span := float64(p1.rssiDbm - p0.rssiDbm)
+			if span > 1e-4 {
+				aboveEnterMs += dtMs * float64(p1.rssiDbm-enterThresholdDbm) / span
+			}
+		}
+
+		// Trapezoidal area above effectiveExit (dB*s).
+		h0 := math.Max(0, float64(p0.rssiDbm-effectiveExit))
+		h1 := math.Max(0, float64(p1.rssiDbm-effectiveExit))
+		areaDbSec += 0.5 * (h0 + h1) * dtSec
+	}
+
+	if lastActiveUs > firstActiveUs {
+		holdMs = float64(lastActiveUs-firstActiveUs) / 1000.0
+	}
+	if holdMs < aboveEnterMs {
+		holdMs = aboveEnterMs
+	}
+	return math.Round(holdMs*10) / 10, math.Round(aboveEnterMs*10) / 10, math.Round(areaDbSec*100) / 100
 }

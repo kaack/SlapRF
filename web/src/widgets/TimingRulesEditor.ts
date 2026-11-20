@@ -71,9 +71,26 @@ const RULES: RuleSpec[] = [
     reason: "ECHO",
     perGate: true,
   },
+  {
+    key: "minPassHoldSec",
+    label: "Minimum pass hold time (seconds)",
+    help: "Shortest pass hold duration and curve area required to reject sharp RF or Wi-Fi spikes.",
+    step: 0.02,
+    min: 0.04,
+    max: 1.5,
+    reason: "SPIKE",
+    perGate: true,
+  },
 ];
 
-const DEFAULT_RULES: TimingRules = { minLapSec: 5, maxLapSec: 120, gateCooldownSec: 2, minSectionSec: 0.5, echoWindowSec: 3 };
+const DEFAULT_RULES: TimingRules = {
+  minLapSec: 5,
+  maxLapSec: 120,
+  gateCooldownSec: 2,
+  minSectionSec: 0.5,
+  echoWindowSec: 3,
+  minPassHoldSec: 0.12,
+};
 const RULES_SCOPE_STORAGE_KEY = "slaprf.ui.rules_scope.v1";
 
 /**

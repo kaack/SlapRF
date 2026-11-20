@@ -1241,13 +1241,14 @@ export interface TimingRules {
   gateCooldownSec: number;
   minSectionSec: number;
   echoWindowSec: number;
+  minPassHoldSec: number;
 }
 
 /** The rules a single gate can override (max lap is about the whole lap, so it stays global). */
-export type GateRuleKey = "minLapSec" | "gateCooldownSec" | "minSectionSec" | "echoWindowSec";
+export type GateRuleKey = "minLapSec" | "gateCooldownSec" | "minSectionSec" | "echoWindowSec" | "minPassHoldSec";
 export type GateRuleOverrides = Partial<Record<GateRuleKey, number>>;
 
-export type FilterReason = "COOLDOWN" | "TOO_SOON" | "ECHO" | "MIN_LAP" | "LAP_TOO_LONG";
+export type FilterReason = "SPIKE" | "COOLDOWN" | "TOO_SOON" | "ECHO" | "MIN_LAP" | "LAP_TOO_LONG";
 
 /** A detection the timing rules set aside (or a lap that was too long to count). */
 export interface FilteredDetection {

@@ -102,11 +102,12 @@ export function suggestThreshold(frames: TimerTelemetryFrame[], slotPos: number)
   const isDbm = floor < 0;
 
   // Peaks: local maxima well above the local/global floor, at least PEAK_SEPARATION_US apart.
+  // In dBm mode, ignore < -70 dBm 5 GHz Wi-Fi / ambient RF spikes on empty channels.
   const peakItems: Array<{ ts: number; val: number; idx: number }> = [];
   let lastPeakTs = -Infinity;
   for (let i = 0; i < work.length; i++) {
     const v = work[i].rssi[slotPos];
-    if (v === undefined || v < floor + MIN_PEAK_RISE_DB) continue;
+    if (v === undefined || v < floor + MIN_PEAK_RISE_DB || (isDbm && v < -70)) continue;
     const ts = work[i].timestampUs;
     if (ts - lastPeakTs < PEAK_SEPARATION_US) continue;
     let isMax = true;
@@ -169,6 +170,9 @@ export function suggestThreshold(frames: TimerTelemetryFrame[], slotPos: number)
     activeFloor + (hasMeasuredValleys ? MIN_FLOOR_MARGIN_DB : 8),
     hasMeasuredValleys ? valleyHigh + 4.5 : noiseCeiling + NOISE_MARGIN_DB
   );
+  if (isDbm) {
+    enter = Math.max(enter, -79);
+  }
   const enterDbm = Math.round(enter);
   const rawExit = Math.round(activeFloor + 0.25 * (peak - activeFloor));
   const valleyClear = hasMeasuredValleys ? Math.ceil(valleyHigh) + 2 : Math.round(activeFloor) + 4;

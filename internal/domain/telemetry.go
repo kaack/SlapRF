@@ -24,7 +24,10 @@ type GateCrossingEvent struct {
 	TimestampUs       uint64  `json:"timestampUs"`          // Parabolic-interpolated peak timestamp in microseconds
 	PeakRSSIDbm       float32 `json:"peakRssiDbm"`          // Peak RSSI in dBm (-20..-65 dBm)
 	LapRFPeakHeight   float32 `json:"laprfPeakHeight"`      // Normalized LapRF peak height (600..3500 scale expected by LiveTime)
-	BeamwidthMs       float64 `json:"beamwidthMs"`          // Time spent within -6 dB of peak (inversely proportional to gate speed)
-	EstimatedSpeedMph float64 `json:"estimatedSpeedMph"`    // Estimated gate crossing speed derived from inverse-square RF curve width
-	PassingNumber     uint32  `json:"passingNumber"`        // Per-gate or global passing sequence number
+	BeamwidthMs       float64 `json:"beamwidthMs"`             // Time spent within -6 dB of peak (inversely proportional to gate speed)
+	EstimatedSpeedMph float64 `json:"estimatedSpeedMph"`       // Estimated gate crossing speed derived from inverse-square RF curve width
+	HoldMs            float64 `json:"holdMs,omitempty"`        // Total gate pass hold time (enter to exit) in milliseconds
+	AboveEnterMs      float64 `json:"aboveEnterMs,omitempty"`  // Duration signal remained at or above enterThreshold in milliseconds
+	PassAreaDbSec     float64 `json:"passAreaDbSec,omitempty"` // Integrated area under the pass curve above exitThreshold (dB*s)
+	PassingNumber     uint32  `json:"passingNumber"`           // Per-gate or global passing sequence number
 }

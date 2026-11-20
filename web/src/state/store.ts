@@ -82,6 +82,7 @@ const DEFAULT_RULES: TimingRules = {
   gateCooldownSec: 2,
   minSectionSec: 0.5,
   echoWindowSec: 3,
+  minPassHoldSec: 0.12,
 };
 
 const DEFAULT_RACE_STATE: RaceTournamentState = {
@@ -1413,7 +1414,7 @@ export class AppStore {
     this._crossings = state.crossings ?? [];
     this._filtered = state.filtered ?? [];
     this._summaries = state.summaries ?? [];
-    this._rules = state.rules ?? DEFAULT_RULES;
+    this._rules = { ...DEFAULT_RULES, ...(state.rules ?? {}) };
     this._timingHardwareMode = normalizeTimingHardwareMode(state.timingHardwareMode);
     sharedLiveTimeRelay.setSuppressed(this._timingHardwareMode === "laprf");
     this._simulatorRunning = state.simulatorRunning;
@@ -1636,7 +1637,7 @@ export class AppStore {
   }
 
   public applyRules(rules: TimingRules): void {
-    this._rules = rules;
+    this._rules = { ...DEFAULT_RULES, ...rules };
     this.emit("rules");
   }
 

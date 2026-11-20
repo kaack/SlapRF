@@ -558,4 +558,16 @@ describe("state/calibration — Automatic RSSI Pass & Hysteresis Threshold Sugge
       expect(res.exitDbm).toBeLessThanOrEqual(res.enterDbm - 5);
     }
   });
+
+  it("ignores < -70 dBm 5 GHz Wi-Fi blips on unoccupied channels during manual Auto-calibrate", () => {
+    const wifiBlips = buildTelemetryStream(250, -92, [
+      { index: 40, peakDbm: -73 },
+      { index: 120, peakDbm: -71 },
+      { index: 200, peakDbm: -75 },
+    ]);
+    expect(suggestThreshold(wifiBlips, 0)).toEqual({
+      ok: false,
+      reason: "no passes seen",
+    });
+  });
 });

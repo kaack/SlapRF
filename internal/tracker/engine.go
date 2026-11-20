@@ -66,6 +66,7 @@ type Engine struct {
 	detected       map[uint8]*domain.DetectedTimer // key: physical timerId (1..16)
 	detectors      map[detKey]*dsp.ChannelDetector // key: (gateId, slotIdx)
 	autoCalib      map[detKey]*autoCalibState      // key: (gateId, slotIdx) rolling pass-waveform calibration
+	passProfiles   map[detKey]*pilotPassProfile    // key: (gateId, slotIdx) learned pass width & area profile
 	progress       map[int]*pilotProgress          // key: 1-based slotIdx
 	lastAcceptedUs map[string]uint64               // key: "gateId:slotIdx" -> last accepted crossing
 	laps           []domain.LapRecord
@@ -663,6 +664,7 @@ func ComputeActivePilotChannels(pilots []domain.PilotSlot) ([domain.MaxPilotSlot
 
 func (e *Engine) resetSessionLocked() {
 	e.progress = make(map[int]*pilotProgress)
+	e.passProfiles = make(map[detKey]*pilotPassProfile)
 	e.lastAcceptedUs = make(map[string]uint64)
 	e.laps = make([]domain.LapRecord, 0, 256)
 	e.crossings = make([]domain.GateCrossingEvent, 0, maxStoredCrossings)
@@ -774,6 +776,9 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 			LapRFPeakHeight:   candidate.LapRFPeakHeight,
 			BeamwidthMs:       candidate.BeamwidthMs,
 			EstimatedSpeedMph: candidate.EstimatedSpeedMph,
+			HoldMs:            candidate.HoldMs,
+			AboveEnterMs:      candidate.AboveEnterMs,
+			PassAreaDbSec:     candidate.PassAreaDbSec,
 		}
 
 		if !e.raceArmed {
@@ -782,6 +787,9 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 			// hardware bridges (such as the LapRF emulator for FPVTrackside / MultiGP LiveTime).
 			if ev.IsStartFinish {
 				r := e.rules.ForGate(gate.RuleOverrides)
+				if reason := e.checkSpikeRejectionLocked(pilot, *gate, i, ev, r); reason != "" {
+					continue
+				}
 				ckey := detectorKey(gate.GateID, pilot.SlotIndex)
 				if last, ok := e.lastAcceptedUs[ckey]; ok && seconds(last, ev.TimestampUs) < r.GateCooldownSec {
 					continue

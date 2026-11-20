@@ -229,7 +229,7 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
       recentCrossings: [],
       recentFiltered: [],
       summaries: [],
-      rules: { minLapSec: 5, maxLapSec: 120, gateCooldownSec: 2, minSectionSec: 0.5, echoWindowSec: 3 },
+      rules: { minLapSec: 5, maxLapSec: 120, gateCooldownSec: 2, minSectionSec: 0.5, echoWindowSec: 3, minPassHoldSec: 0.12 },
       raceArmed: true,
       race: store.raceState,
     });

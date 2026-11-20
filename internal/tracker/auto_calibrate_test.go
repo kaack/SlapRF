@@ -355,3 +355,119 @@ func TestAutoCalibratePracticePauseResumePackSwap(t *testing.T) {
 		t.Fatalf("expected >= 4 laps scored after resuming practice with weaker pack, got %d", len(lapsAfter)-len(lapsBefore))
 	}
 }
+
+func TestEmptyChannelsReject5GHzWiFiSpikesAndHealStaleNoiseThresholds(t *testing.T) {
+	// Reproduces indoor 8-channel Bluetooth Hub setup:
+	// - Slot 1 (Pilot 1, 5769 MHz UNII-3 Wi-Fi) and Slot 3 (Pilot 3, 5806 MHz UNII-3 Wi-Fi) are
+	//   unoccupied on -92 dBm floor, pre-corrupted with stale -86 / -84 dBm thresholds, and hit by
+	//   repeated sharp 2-sample (40 ms) Wi-Fi bursts up to -65 .. -73 dBm (plus an explicit -50 dBm
+	//   sharp 40 ms burst that exceeds -58 dBm default).
+	// - Slot 6 (OneEye, 5917 MHz) flies genuine indoor passes (-55 dBm over -74 dBm, sigma = 0.80 s).
+	// Pilot 1 and Pilot 3 must heal to default thresholds, never auto-calibrate onto Wi-Fi blips,
+	// and produce ZERO accepted crossings or laps, while OneEye scores laps cleanly!
+	e := NewRealEngine()
+	timerID, err := e.ProvisionGate(ProvisionRequest{Role: "spoke", Label: "H1", Fingerprint: "BE7C0009"})
+	if err != nil {
+		t.Fatalf("ProvisionGate: %v", err)
+	}
+	gate, err := e.AddGate("Start", timerID, 0)
+	if err != nil {
+		t.Fatalf("AddGate: %v", err)
+	}
+
+	// Enable 6 pilots including Pilot 1 (idx 0), Pilot 3 (idx 2), and Pilot 6 (idx 5, 5917 MHz).
+	pilotsSnap, _, _, _, _ := e.StateSnapshot()
+	for i := 0; i < 6 && i < len(pilotsSnap); i++ {
+		p := pilotsSnap[i]
+		p.Enabled = true
+		p.Channel = uint8(i + 1)
+		freqs := []uint16{5769, 5732, 5806, 5695, 5658, 5917}
+		p.FrequencyMHz = freqs[i]
+		if i == 5 {
+			p.Callsign = "OneEye"
+		}
+		if err := e.UpdatePilotSlot(p); err != nil {
+			t.Fatalf("UpdatePilotSlot(%d): %v", i, err)
+		}
+	}
+
+	// Seed stale corrupted auto-calibrated thresholds (-86 / -84 dBm) on Pilot 1 and Pilot 3.
+	e.mu.Lock()
+	e.gates[0].EnterThresholds[0] = -86
+	e.gates[0].ExitThresholds[0] = -91
+	e.gates[0].EnterThresholds[2] = -84
+	e.gates[0].ExitThresholds[2] = -89
+	e.mu.Unlock()
+	_ = gate
+
+	const stepUs = 20_000
+	var realCenters []float64
+	for s := 5.0; s <= 47.0; s += 7.0 {
+		realCenters = append(realCenters, s)
+	}
+	wifiSpikeTimesSec := []float64{3.0, 9.5, 16.2, 23.8, 31.0, 39.4, 46.0}
+
+	for ts := uint64(1_000_000); ts <= 52_000_000; ts += stepUs {
+		sec := float64(ts) / 1e6
+		var rssi [domain.MaxPilotPoolSize]float32
+		for k := range rssi {
+			rssi[k] = -92.5
+		}
+		// Sharp 40 ms (2-sample) 5 GHz Wi-Fi bursts on Pilot 1 (-72 dBm, plus one -50 dBm spike at 23.8s)
+		// and Pilot 3 (-66 dBm).
+		for _, sp := range wifiSpikeTimesSec {
+			if sp == 23.8 && sec >= sp && sec < sp+0.060 {
+				rssi[0] = -48.0
+			} else if sec >= sp && sec < sp+0.040 {
+				rssi[0] = -72.0
+				rssi[2] = -66.0
+			}
+		}
+		// Genuine drone passes on OneEye (idx 5).
+		rssi[5] = gaussianPass(ts, -74.0, -55.0, realCenters, 0.80)
+
+		e.IngestTelemetryFrame(domain.TimerTelemetryFrame{
+			TimerID:       timerID,
+			TimestampUs:   ts,
+			RSSI:          rssi,
+			BatteryMv:     4100,
+			NoiseFloorDbm: -92.5,
+		})
+	}
+
+	pilotsOut, gatesOut, lapsOut, crossingsOut, _ := e.StateSnapshot()
+	filteredOut := e.FilteredSnapshot()
+	if gatesOut[0].EnterThresholds[0] != 0 || gatesOut[0].EnterThresholds[2] != 0 {
+		t.Fatalf("expected stale noise thresholds healed to 0 and Wi-Fi spikes ignored, got p1=%v p3=%v",
+			gatesOut[0].EnterThresholds[0], gatesOut[0].EnterThresholds[2])
+	}
+	p1Slot := pilotsOut[0].SlotIndex
+	p3Slot := pilotsOut[2].SlotIndex
+	oneEyeSlot := pilotsOut[5].SlotIndex
+
+	for _, c := range crossingsOut {
+		if c.SlotIndex == p1Slot || c.SlotIndex == p3Slot {
+			t.Fatalf("expected ZERO false crossings on empty Wi-Fi channels, got %+v", c)
+		}
+	}
+	var oneEyeLaps int
+	for _, l := range lapsOut {
+		if l.SlotIndex == oneEyeSlot {
+			oneEyeLaps++
+		} else {
+			t.Fatalf("expected ZERO false laps on empty Wi-Fi channels, got %+v", l)
+		}
+	}
+	if oneEyeLaps < 5 {
+		t.Fatalf("expected >= 5 real laps on OneEye, got %d", oneEyeLaps)
+	}
+	var spikeFiltered int
+	for _, f := range filteredOut {
+		if f.Reason == domain.FilterSpike {
+			spikeFiltered++
+		}
+	}
+	if spikeFiltered == 0 {
+		t.Fatalf("expected the -50 dBm 40 ms sharp burst on Pilot 1 to be caught as FilterSpike")
+	}
+}

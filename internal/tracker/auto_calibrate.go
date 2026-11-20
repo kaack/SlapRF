@@ -27,15 +27,19 @@ const (
 	autoCalibVtxOffDbm     float32 = -85.5      // Unplugged / pit-mode receiver floor threshold
 	autoCalibVtxWakeDbm    float32 = -81.5      // Powered VTX / approach threshold (4 dB hysteresis above VtxOff)
 
-	autoCalibMinBuckets    int     = 70        // ~3.5 s of 20 Hz history
-	autoCalibMinSpanUs     uint64  = 3_200_000 // >= 3.2 s wall-clock span
-	autoCalibMinPeakRiseDb float32 = 9.5       // Pass peak must rise >= 9.5 dB above local valley baseline (supports indoor 10-12 dB swings)
-	autoCalibLocalMaxSepUs uint64  = 400_000   // Multipath crests < 400 ms apart belong to the same pass
-	autoCalibLocalValleyUs uint64  = 8_000_000 // Measure adjacent approach/departure valleys within +-8 s of each peak
-	autoCalibMinPassSepUs  uint64  = 1_800_000 // Distinct lap fly-bys must be >= 1.8 s apart
-	autoCalibMinPassFwhmUs uint64  = 150_000   // Reject < 150 ms impulse glitches (< 3 buckets above half-prominence)
-	autoCalibMaxPassFwhmUs uint64  = 6_500_000 // Reject > 6.5 s parked/bench VTX plateaus
-	autoCalibDeadbandDb    float32 = 1.5       // Skip minor updates smaller than 1.5 dB during steady flying
+	autoCalibMinBuckets     int     = 70        // ~3.5 s of 20 Hz history
+	autoCalibMinSpanUs      uint64  = 3_200_000 // >= 3.2 s wall-clock span
+	autoCalibMinPeakRiseDb  float32 = 9.5       // Pass peak must rise >= 9.5 dB above local valley baseline (supports indoor 10-12 dB swings)
+	autoCalibMinAbsPeakDbm  float32 = -70.0     // Reject < -70 dBm 5 GHz Wi-Fi / ambient RF bursts on unused channels
+	autoCalibMinEnterDbm    float32 = -79.0     // Never auto-calibrate enterThreshold into receiver thermal / Wi-Fi noise
+	autoCalibLocalMaxSepUs  uint64  = 400_000   // Multipath crests < 400 ms apart belong to the same pass
+	autoCalibLocalValleyUs  uint64  = 8_000_000 // Measure adjacent approach/departure valleys within +-8 s of each peak
+	autoCalibMinPassSepUs   uint64  = 1_800_000 // Distinct lap fly-bys must be >= 1.8 s apart
+	autoCalibMinPassFwhmUs  uint64  = 260_000   // Reject < 260 ms sharp Wi-Fi / RF packet bursts smeared by EMA release
+	autoCalibMinPassSkirtUs uint64  = 420_000   // Genuine inverse-square approach + departure spans >= 420 ms above localBase + 3.5 dB
+	autoCalibMinPassAreaDbS float64 = 4.5       // Genuine gate pass integrates >= 4.5 dB*s above localBase
+	autoCalibMaxPassFwhmUs  uint64  = 6_500_000 // Reject > 6.5 s parked/bench VTX plateaus
+	autoCalibDeadbandDb     float32 = 1.5       // Skip minor updates smaller than 1.5 dB during steady flying
 )
 
 type autoCalibSample struct {
@@ -205,10 +209,27 @@ func (e *Engine) recordAutoCalibSampleLocked(
 		st.vtxOffSinceUs = 0
 	}
 
+	// Heal any stale noise-floor threshold (< -79 dBm, e.g. from 5 GHz Wi-Fi bursts on an empty
+	// channel) immediately before bucket downsampling returns early.
+	healedStale := false
+	if !st.manualPinned && gate.EnterThresholds[slotPos] != 0 && gate.EnterThresholds[slotPos] < autoCalibMinEnterDbm {
+		gate.EnterThresholds[slotPos] = 0
+		gate.ExitThresholds[slotPos] = 0
+		st.provisional = false
+		st.packRecovery = false
+		if det != nil {
+			det.RearmIfBelow(pilot.ExitThreshold)
+		}
+		healedStale = true
+	}
+
 	// Peak-preserving 50 ms (~20 Hz) bucket downsampling.
 	if n := len(st.samples); n > 0 && tsUs-st.samples[n-1].tsUs < autoCalibBucketUs {
 		if smoothedDbm > st.samples[n-1].dbm {
 			st.samples[n-1].dbm = smoothedDbm
+		}
+		if healedStale {
+			return true, gate.Role == domain.GateRoleStartFinish
 		}
 		return false, false
 	}
@@ -243,6 +264,9 @@ func (e *Engine) recordAutoCalibSampleLocked(
 		intervalUs = autoCalibMissedEveryUs
 	}
 	if st.lastEvalUs != 0 && tsUs >= st.lastEvalUs && tsUs-st.lastEvalUs < intervalUs {
+		if healedStale {
+			return true, gate.Role == domain.GateRoleStartFinish
+		}
 		return false, false
 	}
 	st.lastEvalUs = tsUs
@@ -280,6 +304,9 @@ func (e *Engine) recordAutoCalibSampleLocked(
 		if pendingExit && tsUs > intervalUs {
 			// A pass crest is currently exiting the gate; re-check in ~0.6 s once it returns to baseline.
 			st.lastEvalUs = tsUs - intervalUs + 600_000
+		}
+		if healedStale {
+			return true, gate.Role == domain.GateRoleStartFinish
 		}
 		return false, false
 	}
@@ -494,7 +521,10 @@ func suggestSinglePassProvisionalDbm(
 		return 0, 0, false
 	}
 	fwhmUs := samples[rightIdx].tsUs - samples[leftIdx].tsUs
-	if rightIdx-leftIdx < 4 || fwhmUs < autoCalibMinPassFwhmUs || fwhmUs > 5_000_000 {
+	if rightIdx-leftIdx < 5 || fwhmUs < autoCalibMinPassFwhmUs || fwhmUs > 5_000_000 {
+		return 0, 0, false
+	}
+	if !hasValidPassSkirtAndArea(samples, bestIdx, localBase) {
 		return 0, 0, false
 	}
 
@@ -523,6 +553,9 @@ func suggestSinglePassProvisionalDbm(
 	}
 	if activeFloor+6.0 > enter {
 		enter = activeFloor + 6.0
+	}
+	if enter < autoCalibMinEnterDbm {
+		enter = autoCalibMinEnterDbm
 	}
 	enterDbm = clampDbm(enter)
 	exitCand := enterDbm - 6.0
@@ -570,7 +603,7 @@ func suggestAutoThresholdDbm(samples []autoCalibSample, nowUs uint64) (enterDbm,
 	var peaks []autoCalibPeak
 	for i := 0; i < n; i++ {
 		v := samples[i].dbm
-		if v < floor+autoCalibMinPeakRiseDb {
+		if v < autoCalibMinAbsPeakDbm || v < floor+autoCalibMinPeakRiseDb {
 			continue
 		}
 		ts := samples[i].tsUs
@@ -644,7 +677,10 @@ func suggestAutoThresholdDbm(samples []autoCalibSample, nowUs uint64) (enterDbm,
 			continue
 		}
 		fwhmUs := samples[rightIdx].tsUs - samples[leftIdx].tsUs
-		if rightIdx-leftIdx < 4 || fwhmUs < autoCalibMinPassFwhmUs || fwhmUs > autoCalibMaxPassFwhmUs {
+		if rightIdx-leftIdx < 5 || fwhmUs < autoCalibMinPassFwhmUs || fwhmUs > autoCalibMaxPassFwhmUs {
+			continue
+		}
+		if !hasValidPassSkirtAndArea(samples, i, localBase) {
 			continue
 		}
 
@@ -751,6 +787,9 @@ func suggestAutoThresholdDbm(samples []autoCalibSample, nowUs uint64) (enterDbm,
 	if !hasMeasuredValleys && noiseCeiling+3.0 > enter {
 		enter = noiseCeiling + 3.0
 	}
+	if enter < autoCalibMinEnterDbm {
+		enter = autoCalibMinEnterDbm
+	}
 	enterDbm = clampDbm(float32(math.Round(float64(enter))))
 
 	rawExit := float32(math.Round(float64(activeFloor + 0.25*(peak-activeFloor))))
@@ -803,6 +842,39 @@ func measureInterPeakValleys(samples []autoCalibSample, peaks []autoCalibPeak) [
 		sort.Slice(valleys, func(i, j int) bool { return valleys[i] < valleys[j] })
 	}
 	return valleys
+}
+
+// hasValidPassSkirtAndArea distinguishes genuine inverse-square drone approach/departure curves
+// from abrupt 5 GHz Wi-Fi / RF packet bursts by requiring >= 420 ms above `localBase + 3.5 dB`
+// and >= 4.5 dB*s integrated area above `localBase`.
+func hasValidPassSkirtAndArea(samples []autoCalibSample, peakIdx int, localBase float32) bool {
+	n := len(samples)
+	skirtLvl := localBase + 3.5
+	sLeft := peakIdx
+	for sLeft > 0 && samples[sLeft-1].dbm >= skirtLvl && samples[peakIdx].tsUs-samples[sLeft-1].tsUs <= 4_500_000 {
+		sLeft--
+	}
+	sRight := peakIdx
+	for sRight+1 < n && samples[sRight+1].dbm >= skirtLvl && samples[sRight+1].tsUs-samples[peakIdx].tsUs <= 4_500_000 {
+		sRight++
+	}
+	if samples[sRight].tsUs <= samples[sLeft].tsUs || samples[sRight].tsUs-samples[sLeft].tsUs < autoCalibMinPassSkirtUs {
+		return false
+	}
+	var areaDbSec float64
+	for k := sLeft + 1; k <= sRight; k++ {
+		if samples[k].tsUs <= samples[k-1].tsUs {
+			continue
+		}
+		dtSec := float64(samples[k].tsUs-samples[k-1].tsUs) / 1e6
+		if dtSec > 0.25 {
+			dtSec = 0.25
+		}
+		h0 := math.Max(0, float64(samples[k-1].dbm-localBase))
+		h1 := math.Max(0, float64(samples[k].dbm-localBase))
+		areaDbSec += 0.5 * (h0 + h1) * dtSec
+	}
+	return areaDbSec >= autoCalibMinPassAreaDbS
 }
 
 func percentileF32(sorted []float32, p float64) float32 {

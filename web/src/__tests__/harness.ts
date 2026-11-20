@@ -1066,6 +1066,7 @@ export function makeDefaultRules(overrides: Partial<TimingRules> = {}): TimingRu
     gateCooldownSec: 2,
     minSectionSec: 0.5,
     echoWindowSec: 3,
+    minPassHoldSec: 0.12,
     ...overrides,
   };
 }

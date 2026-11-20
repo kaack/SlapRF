@@ -3,6 +3,7 @@ package tracker
 import (
 	"fmt"
 	"math"
+	"sort"
 	"time"
 
 	"slaprf/internal/domain"
@@ -63,6 +64,12 @@ func (e *Engine) applyCrossingLocked(pilot domain.PilotSlot, gate domain.TrackGa
 		}}
 	}
 
+	// 0. Waveform hold-time, area-under-curve, and learned pass-curve spike rejection.
+	slotPos := e.pilotPosLocked(pilot.SlotIndex)
+	if spikeDetail := e.checkSpikeRejectionLocked(pilot, gate, slotPos, ev, r); spikeDetail != "" {
+		return reject(domain.FilterSpike, "%s", spikeDetail)
+	}
+
 	// 1. Gate cool-down
 	ckey := detectorKey(gate.GateID, pilot.SlotIndex)
 	sinceSameGate := -1.0
@@ -113,6 +120,7 @@ func (e *Engine) applyCrossingLocked(pilot domain.PilotSlot, gate domain.TrackGa
 
 	// ---- accepted ----
 	e.lastAcceptedUs[ckey] = ev.TimestampUs
+	e.recordPassProfileLocked(pilot, gate, ev)
 	out := crossingOutcome{}
 
 	if prog.lapStartUs != 0 && prog.lastGateID != 0 && prog.lastGateID != gate.GateID {
@@ -149,6 +157,154 @@ func (e *Engine) applyCrossingLocked(pilot domain.PilotSlot, gate domain.TrackGa
 	prog.lastGateID = gate.GateID
 	prog.lastGateTimeUs = ev.TimestampUs
 	return out
+}
+
+const passProfileRingCap = 8
+
+type passCurveEntry struct {
+	beamwidthMs float64
+	areaDbSec   float64
+	peakDbm     float32
+}
+
+type pilotPassProfile struct {
+	freqMHz         uint16
+	assignedTimerID uint8
+	entries         [passProfileRingCap]passCurveEntry
+	head            int
+	count           int
+}
+
+func (e *Engine) pilotPosLocked(slotIndex int) int {
+	for i := range e.pilots {
+		if e.pilots[i].SlotIndex == slotIndex {
+			return i
+		}
+	}
+	return -1
+}
+
+// checkSpikeRejectionLocked validates live SlapRF dBm waveform candidates against:
+//  1. Minimum gate hold time (`r.MinPassHoldSec`),
+//  2. Minimum time above `enterThreshold` on weak grazing excursions,
+//  3. Minimum area-under-curve (`dB*s`) above `exitThreshold`, and
+//  4. The pilot's learned pass curve profile once >= 3 genuine passes have been observed.
+//
+// Synthetic test crossings and external hardware bridges (`HoldMs == 0 && PassAreaDbSec == 0`)
+// bypass waveform checks cleanly.
+func (e *Engine) checkSpikeRejectionLocked(
+	pilot domain.PilotSlot,
+	gate domain.TrackGate,
+	slotPos int,
+	ev domain.GateCrossingEvent,
+	r domain.TimingRules,
+) string {
+	if domain.IsRotorHazardMode(e.timingHardwareMode) || ev.PeakRSSIDbm >= 0 {
+		return ""
+	}
+	if ev.HoldMs <= 0 && ev.PassAreaDbSec <= 0 {
+		return ""
+	}
+
+	minHoldSec := r.MinPassHoldSec
+	if minHoldSec <= 0 {
+		minHoldSec = 0.12
+	}
+	minHoldMs := minHoldSec * 1000.0
+	if ev.HoldMs < minHoldMs {
+		return fmt.Sprintf("Sharp %.0f ms spike at %s (min hold %.0f ms)", ev.HoldMs, e.gateLabelLocked(gate.GateID), minHoldMs)
+	}
+
+	if slotPos >= 0 {
+		enterDbm, _ := thresholdsFor(&gate, slotPos, pilot)
+		if ev.PeakRSSIDbm < enterDbm+6.0 {
+			minAboveMs := math.Max(55.0, minHoldMs*0.45)
+			if ev.AboveEnterMs > 0 && ev.AboveEnterMs < minAboveMs {
+				return fmt.Sprintf("Brief %.0f ms blip near threshold at %s (%.1f dBm)", ev.AboveEnterMs, e.gateLabelLocked(gate.GateID), ev.PeakRSSIDbm)
+			}
+		}
+	}
+
+	minAreaDbSec := math.Max(1.0, minHoldSec*12.0)
+	if ev.PassAreaDbSec < minAreaDbSec {
+		return fmt.Sprintf("Weak %.1f dB*s spike area at %s (%.0f ms, min %.1f dB*s)", ev.PassAreaDbSec, e.gateLabelLocked(gate.GateID), ev.HoldMs, minAreaDbSec)
+	}
+
+	if e.passProfiles != nil {
+		prof := e.passProfiles[detKey{gate.GateID, pilot.SlotIndex}]
+		if prof != nil && prof.freqMHz == pilot.FrequencyMHz && prof.assignedTimerID == gate.AssignedTimerID && prof.count >= 3 {
+			medArea, medBw, medPeak := prof.medians()
+			if ev.PassAreaDbSec < 0.22*medArea &&
+				ev.BeamwidthMs < 0.35*medBw &&
+				ev.BeamwidthMs < 200.0 &&
+				ev.PeakRSSIDbm < medPeak-7.0 {
+				return fmt.Sprintf(
+					"Spike (%.1f dB*s, %.0f ms) does not match %s pass curve (%.1f dB*s, %.0f ms)",
+					ev.PassAreaDbSec,
+					ev.BeamwidthMs,
+					pilot.Callsign,
+					medArea,
+					medBw,
+				)
+			}
+		}
+	}
+	return ""
+}
+
+func (e *Engine) recordPassProfileLocked(pilot domain.PilotSlot, gate domain.TrackGate, ev domain.GateCrossingEvent) {
+	if domain.IsRotorHazardMode(e.timingHardwareMode) || ev.PeakRSSIDbm >= 0 || ev.PassAreaDbSec <= 0 {
+		return
+	}
+	if e.passProfiles == nil {
+		e.passProfiles = make(map[detKey]*pilotPassProfile)
+	}
+	key := detKey{gate.GateID, pilot.SlotIndex}
+	prof := e.passProfiles[key]
+	if prof == nil || prof.freqMHz != pilot.FrequencyMHz || prof.assignedTimerID != gate.AssignedTimerID {
+		prof = &pilotPassProfile{
+			freqMHz:         pilot.FrequencyMHz,
+			assignedTimerID: gate.AssignedTimerID,
+		}
+		e.passProfiles[key] = prof
+	}
+	entry := passCurveEntry{
+		beamwidthMs: ev.BeamwidthMs,
+		areaDbSec:   ev.PassAreaDbSec,
+		peakDbm:     ev.PeakRSSIDbm,
+	}
+	if prof.count < passProfileRingCap {
+		prof.entries[(prof.head+prof.count)%passProfileRingCap] = entry
+		prof.count++
+	} else {
+		prof.entries[prof.head] = entry
+		prof.head = (prof.head + 1) % passProfileRingCap
+	}
+}
+
+func (p *pilotPassProfile) medians() (areaDbSec, beamwidthMs float64, peakDbm float32) {
+	n := p.count
+	if n == 0 {
+		return 0, 0, 0
+	}
+	areas := make([]float64, n)
+	bws := make([]float64, n)
+	peaks := make([]float32, n)
+	for i := 0; i < n; i++ {
+		ent := p.entries[(p.head+i)%passProfileRingCap]
+		areas[i] = ent.areaDbSec
+		bws[i] = ent.beamwidthMs
+		peaks[i] = ent.peakDbm
+	}
+	sort.Float64s(areas)
+	sort.Float64s(bws)
+	sort.Slice(peaks, func(i, j int) bool { return peaks[i] < peaks[j] })
+	if n%2 == 1 {
+		mid := n / 2
+		return areas[mid], bws[mid], peaks[mid]
+	}
+	mid := n / 2
+	return 0.5 * (areas[mid-1] + areas[mid]), 0.5 * (bws[mid-1] + bws[mid]), 0.5 * (peaks[mid-1] + peaks[mid])
 }
 
 // isPreviousGateLocked reports whether `candidate` is the gate immediately before `current`

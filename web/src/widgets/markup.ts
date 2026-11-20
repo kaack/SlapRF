@@ -5,6 +5,7 @@ import { FilterReason, SectorBadge } from "../types/models";
 
 /** Short names for why the timing rules set a detection aside. */
 export const FILTER_LABELS: Record<FilterReason, string> = {
+  SPIKE: "Noise spike",
   COOLDOWN: "Cool-down",
   TOO_SOON: "Too soon",
   ECHO: "Echo",

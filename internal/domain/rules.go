@@ -5,7 +5,7 @@ import "math"
 // TimingRules are the guardrails applied to every RF detection before it becomes a gate
 // crossing. Video-RSSI timing sees real-world noise: a quad that crashes beside a gate, a
 // pilot who turns back through a gate, a neighbouring gate catching the signal as the quad
-// leaves. These rules decide which detections count.
+// leaves, or short 5 GHz Wi-Fi / RF spikes on unused channels. These rules decide which detections count.
 type TimingRules struct {
 	// MinLapSec: nobody laps faster than this, so a gate never times the same pilot twice
 	// within it. Every gate applies it as if it were the start gate; at the start / finish
@@ -23,9 +23,12 @@ type TimingRules struct {
 	// EchoWindowSec: a detection at the gate the pilot just came from, within this window,
 	// is treated as an echo (or the pilot flying backwards) and ignored. 0 disables.
 	EchoWindowSec float64 `json:"echoWindowSec"`
+	// MinPassHoldSec: minimum gate pass hold duration (and proportional dB*s curve area)
+	// required for an RF excursion to count as a real drone fly-by rather than a sharp noise spike.
+	MinPassHoldSec float64 `json:"minPassHoldSec"`
 }
 
-// DefaultTimingRules suit a typical 5" practice track with 10–40 s laps.
+// DefaultTimingRules suit a typical FPV practice or race track.
 func DefaultTimingRules() TimingRules {
 	return TimingRules{
 		MinLapSec:       5,
@@ -33,30 +36,35 @@ func DefaultTimingRules() TimingRules {
 		GateCooldownSec: 2,
 		MinSectionSec:   0.5,
 		EchoWindowSec:   3,
+		MinPassHoldSec:  0.12,
 	}
 }
 
-// Normalized clamps every rule into a sane range.
+// Normalized clamps every rule into a sane range (defaulting unset MinPassHoldSec to 0.12 s).
 func (r TimingRules) Normalized() TimingRules {
 	r.MinLapSec = clampRule(r.MinLapSec, 1, 120)
 	r.MaxLapSec = clampRule(r.MaxLapSec, r.MinLapSec+5, 900)
 	r.GateCooldownSec = clampRule(r.GateCooldownSec, 0.2, 15)
 	r.MinSectionSec = clampRule(r.MinSectionSec, 0.1, 15)
 	r.EchoWindowSec = clampRule(r.EchoWindowSec, 0, 15)
+	if r.MinPassHoldSec <= 0 {
+		r.MinPassHoldSec = 0.12
+	}
+	r.MinPassHoldSec = clampRule(r.MinPassHoldSec, 0.04, 1.5)
 	return r
 }
 
 func clampRule(v, lo, hi float64) float64 { return math.Max(lo, math.Min(hi, v)) }
 
-// GateRuleOverrides lets one gate use different values from the global rules — e.g. a gate
-// right after a tight turn-around needs a longer echo window, a gate beside the start
-// line a longer cool-down. nil fields use the global value. MaxLapSec isn't here: it's
-// about the whole lap, not where a gate sits.
+// GateRuleOverrides lets one gate use different values from the global rules, such as a gate
+// right after a tight turn-around needing a longer echo window or a noisy indoor gate needing
+// a longer pass hold time. nil fields use the global value.
 type GateRuleOverrides struct {
 	MinLapSec       *float64 `json:"minLapSec,omitempty"`
 	GateCooldownSec *float64 `json:"gateCooldownSec,omitempty"`
 	MinSectionSec   *float64 `json:"minSectionSec,omitempty"`
 	EchoWindowSec   *float64 `json:"echoWindowSec,omitempty"`
+	MinPassHoldSec  *float64 `json:"minPassHoldSec,omitempty"`
 }
 
 // Normalized clamps each set override into the same range as the global rule.
@@ -73,12 +81,16 @@ func (o GateRuleOverrides) Normalized() GateRuleOverrides {
 		GateCooldownSec: clampPtr(o.GateCooldownSec, 0.2, 15),
 		MinSectionSec:   clampPtr(o.MinSectionSec, 0.1, 15),
 		EchoWindowSec:   clampPtr(o.EchoWindowSec, 0, 15),
+		MinPassHoldSec:  clampPtr(o.MinPassHoldSec, 0.04, 1.5),
 	}
 }
 
 // ForGate returns the rules a gate actually applies: the global rules with that gate's
 // overrides on top.
 func (r TimingRules) ForGate(o GateRuleOverrides) TimingRules {
+	if r.MinPassHoldSec <= 0 {
+		r.MinPassHoldSec = 0.12
+	}
 	if o.MinLapSec != nil {
 		r.MinLapSec = *o.MinLapSec
 	}
@@ -91,6 +103,9 @@ func (r TimingRules) ForGate(o GateRuleOverrides) TimingRules {
 	if o.EchoWindowSec != nil {
 		r.EchoWindowSec = *o.EchoWindowSec
 	}
+	if o.MinPassHoldSec != nil {
+		r.MinPassHoldSec = *o.MinPassHoldSec
+	}
 	return r
 }
 
@@ -98,6 +113,7 @@ func (r TimingRules) ForGate(o GateRuleOverrides) TimingRules {
 type FilterReason string
 
 const (
+	FilterSpike      FilterReason = "SPIKE"        // Short RF / Wi-Fi spike lacking pass hold time or curve area
 	FilterCooldown   FilterReason = "COOLDOWN"     // Same gate, same pilot, inside the cool-down
 	FilterTooSoon    FilterReason = "TOO_SOON"     // Faster than physically possible from the last gate
 	FilterEcho       FilterReason = "ECHO"         // Previous gate re-detected, or flying backwards
