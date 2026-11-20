@@ -574,8 +574,8 @@ export function drawSignalOverTimeCanvas(
 ): void {
   const tokens = getThemeTokens();
   const { ctx, width: W, height: H } = prepareCanvas(canvas, 250);
-  const L = 44;
-  const R = 14;
+  const L = 32;
+  const R = 4;
   const T = 12;
   const B = 26;
   const plotW = Math.max(10, W - L - R);
@@ -612,7 +612,7 @@ export function drawSignalOverTimeCanvas(
     ctx.lineTo(W - R, y);
     ctx.stroke();
     ctx.fillStyle = tokens.text3;
-    ctx.fillText(`${d}`, L - 6, y);
+    ctx.fillText(`${d}`, L - 4, y);
   }
 
   // Vertical time grid lines (labelled relative to now or to when the view was paused, matching PilotRssiChart)
@@ -1482,8 +1482,8 @@ export function drawSpectrumCanvas(
   const hasData = Boolean(s && s.dbm.length);
   const tokens = getThemeTokens();
   const { ctx, width: W, height: H } = prepareCanvas(canvas, 230);
-  const L = 44;
-  const R = 14;
+  const L = 32;
+  const R = 4;
   const T = 12;
   const B = 26;
   const plotW = Math.max(10, W - L - R);
@@ -1521,7 +1521,7 @@ export function drawSpectrumCanvas(
     ctx.lineTo(W - R, y);
     ctx.stroke();
     ctx.fillStyle = tokens.text3;
-    ctx.fillText(`${d}`, L - 6, y);
+    ctx.fillText(`${d}`, L - 4, y);
   }
 
   // Adaptive frequency ticks
@@ -1724,8 +1724,8 @@ export function drawWaterfallCanvas(
   const hasData = Boolean(s && off && acc.history.length > 0 && s.dbm.length > 0);
   const tokens = getThemeTokens();
   const { ctx, width: W, height: H } = prepareCanvas(canvas, 220);
-  const L = 44;
-  const R = 18;
+  const L = 32;
+  const R = 14;
   const T = 6;
   const B = 24;
   const plotW = Math.max(10, W - L - R);
@@ -1786,12 +1786,12 @@ export function drawWaterfallCanvas(
   ctx.font = `10px ${tokens.fontMono}`;
   ctx.textAlign = "right";
   ctx.textBaseline = "middle";
-  ctx.fillText(startRow === 0 ? "now" : `-${topAgeSec.toFixed(1)}s`, L - 6, T + 6);
-  ctx.fillText(visRows <= 30 ? `-${midAgeSec.toFixed(1)}s` : `-${midAgeSec.toFixed(0)}s`, L - 6, T + plotH / 2);
-  ctx.fillText(visRows <= 30 ? `-${botAgeSec.toFixed(1)}s` : `-${botAgeSec.toFixed(0)}s`, L - 6, T + plotH - 6);
+  ctx.fillText(startRow === 0 ? "now" : `-${topAgeSec.toFixed(1)}s`, L - 4, T + 6);
+  ctx.fillText(visRows <= 30 ? `-${midAgeSec.toFixed(1)}s` : `-${midAgeSec.toFixed(0)}s`, L - 4, T + plotH / 2);
+  ctx.fillText(visRows <= 30 ? `-${botAgeSec.toFixed(1)}s` : `-${botAgeSec.toFixed(0)}s`, L - 4, T + plotH - 6);
 
   // Vertical scrollbar track + thumb on the right margin when history exceeds 1 viewport
-  const sbX = W - R + 5;
+  const sbX = W - R + 4;
   const sbW = 6;
   ctx.fillStyle = tokens.border;
   ctx.fillRect(sbX, T, sbW, plotH);

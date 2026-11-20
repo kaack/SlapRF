@@ -172,7 +172,7 @@ export class DebugView extends Component {
   private selectedNetworkSpokeSlot: number | null = null;
   private spokeRateTracker = new Map<number, { frames: number; atMs: number; ratePktPerSec: number }>();
 
-  private signalWindowSec = 2.5;
+  private signalWindowSec = 15;
   private signalAutoX = true;
   private signalAutoY = true;
   private signalSmoothYMin: number | null = null;
@@ -1608,11 +1608,10 @@ export class DebugView extends Component {
           effectiveRateHz = Math.max(4, Math.min(sweepHz, count / dtSec));
         }
       }
-      const plotW = Math.max(240, (canvasWidth || 700) - 58);
-      // Target ~6.5 px per sample so consecutive sweeps and crossings are clearly separated
-      const targetSamples = Math.max(45, Math.min(160, Math.round(plotW / 6.5)));
+      const plotW = Math.max(240, (canvasWidth || 700) - 36);
+      const targetSamples = Math.max(200, Math.min(900, Math.round(plotW * 1.15)));
       const rawSec = targetSamples / Math.max(4, effectiveRateHz);
-      const snappedSec = Math.max(isRH ? 5 : 1.5, Math.min(15, Math.round(rawSec * 2) / 2));
+      const snappedSec = Math.max(15, Math.min(30, Math.round(rawSec)));
       if (Math.abs(this.signalWindowSec - snappedSec) >= 0.4) {
         this.signalWindowSec = snappedSec;
       }
@@ -1832,8 +1831,8 @@ export class DebugView extends Component {
       const x = e.clientX - r.left;
       const y = e.clientY - r.top;
       const T = 12;
-      const L = 44;
-      const rightPad = kind === "waterfall" ? 18 : 14;
+      const L = 32;
+      const rightPad = kind === "waterfall" ? 14 : 4;
       const plotW = Math.max(10, r.width - L - rightPad);
       const plotH = Math.max(10, r.height - T - 26);
       const xFrac = Math.max(0, Math.min(1, (x - L) / plotW));
@@ -1957,8 +1956,8 @@ export class DebugView extends Component {
           const midX = (pt1.x + pt2.x) * 0.5;
           const midY = (pt1.y + pt2.y) * 0.5;
           const T = 12;
-          const L = 44;
-          const rightPad = canvasKind === "waterfall" ? 18 : 14;
+          const L = 32;
+          const rightPad = canvasKind === "waterfall" ? 14 : 4;
           const plotW = Math.max(10, r.width - L - rightPad);
           const plotH = Math.max(10, r.height - T - 26);
           const bounds = this.currentScanBounds();
@@ -1984,9 +1983,9 @@ export class DebugView extends Component {
         }
       }
 
-      const yAxisW = isTouch ? 56 : 48;
+      const yAxisW = isTouch ? 44 : 36;
       const xAxisH = isTouch ? 36 : 26;
-      const sbW = isTouch ? 36 : 28;
+      const sbW = isTouch ? 32 : 24;
 
       if (target.matches("[data-signal-canvas]")) {
         try {
@@ -1998,9 +1997,9 @@ export class DebugView extends Component {
         this.signalHover = { x, y };
         this.dirtySignal = true;
         const T = 12;
-        const L = 44;
+        const L = 32;
         const plotH = Math.max(10, r.height - T - 26);
-        const plotW = Math.max(10, r.width - L - 14);
+        const plotW = Math.max(10, r.width - L - 4);
         if (x < yAxisW) {
           // Dragging on left Y-axis stretches/shrinks the dBm scale smoothly
           const yFrac = Math.max(0, Math.min(1, 1 - (y - T) / plotH));
@@ -2062,9 +2061,9 @@ export class DebugView extends Component {
         this.scanHover = { x, y };
         this.dirtySpectrum = true;
         const T = 12;
-        const L = 44;
+        const L = 32;
         const plotH = Math.max(10, r.height - T - 26);
-        const plotW = Math.max(10, r.width - L - 14);
+        const plotW = Math.max(10, r.width - L - 4);
         const bounds = this.currentScanBounds();
         if (!bounds) return;
         if (x < yAxisW) {
@@ -2091,7 +2090,7 @@ export class DebugView extends Component {
             startMHz1: bounds.vStop,
             anchorFrac: xFrac,
           };
-        } else if (x >= L && x <= r.width - 14) {
+        } else if (x >= L && x <= r.width - 4) {
           if (e.shiftKey) {
             this.specDragging = {
               mode: "zoom",
@@ -2128,8 +2127,8 @@ export class DebugView extends Component {
         const y = e.clientY - r.top;
         this.waterfallHover = { x, y };
         this.dirtyWaterfall = true;
-        const L = 44;
-        const plotW = Math.max(10, r.width - L - 18);
+        const L = 32;
+        const plotW = Math.max(10, r.width - L - 14);
         const bounds = this.currentScanBounds();
         if (x < yAxisW) {
           // Dragging on Waterfall Y-axis stretches/shrinks vertical time scale (visibleRows)
@@ -2168,7 +2167,7 @@ export class DebugView extends Component {
             anchorFrac: 0,
           };
           scrubScrollbar(target, e.clientY);
-        } else if (x >= L && x < r.width - 18) {
+        } else if (x >= L && x < r.width - 14) {
           if (e.shiftKey) {
             this.wfDragging = {
               mode: "zoom",
@@ -2328,7 +2327,7 @@ export class DebugView extends Component {
         const c = this.el.querySelector<HTMLElement>("[data-spectrum-canvas]");
         if (c && this.specDragging.mode === "zoom" && this.scanZoomBox) {
           const r = c.getBoundingClientRect();
-          this.applyFreqZoomFromBox(this.scanZoomBox, Math.max(10, r.width - 44 - 14), 44);
+          this.applyFreqZoomFromBox(this.scanZoomBox, Math.max(10, r.width - 32 - 4), 32);
         } else {
           this.renderScan();
         }
@@ -2343,7 +2342,7 @@ export class DebugView extends Component {
           const c = this.el.querySelector<HTMLElement>("[data-waterfall-canvas]");
           if (c) {
             const r = c.getBoundingClientRect();
-            this.applyFreqZoomFromBox(this.scanZoomBox, Math.max(10, r.width - 44 - 18), 44);
+            this.applyFreqZoomFromBox(this.scanZoomBox, Math.max(10, r.width - 32 - 14), 32);
           }
         } else if (this.wfDragging.mode === "ystretch" || this.wfDragging.mode === "xstretch" || this.wfDragging.mode === "pan") {
           this.renderScan();
@@ -2436,8 +2435,8 @@ export class DebugView extends Component {
                 { x: p2.x, y: p2.y }
               );
               const T = 12;
-              const L = 44;
-              const rightPad = debugPinch.kind === "waterfall" ? 18 : 14;
+              const L = 32;
+              const rightPad = debugPinch.kind === "waterfall" ? 14 : 4;
               const plotW = Math.max(10, r.width - L - rightPad);
               const plotH = Math.max(10, r.height - T - 26);
 
@@ -2543,7 +2542,7 @@ export class DebugView extends Component {
           const y = e.clientY - r.top;
           const dx = x - this.signalDrag.startX;
           const dy = y - this.signalDrag.startY;
-          const plotW = Math.max(10, r.width - 44 - 14);
+          const plotW = Math.max(10, r.width - 32 - 4);
           const plotH = Math.max(10, r.height - 12 - 26);
           if (this.signalDrag.mode === "ystretch") {
             // Dragging UP stretches Y (zooms in to smaller dBm span); dragging DOWN shrinks back to full span
@@ -2592,7 +2591,7 @@ export class DebugView extends Component {
           const y = e.clientY - r.top;
           const dx = x - this.specDragging.startX;
           const dy = y - this.specDragging.startY;
-          const plotW = Math.max(10, r.width - 44 - 14);
+          const plotW = Math.max(10, r.width - 32 - 4);
           const plotH = Math.max(10, r.height - 12 - 26);
           if (this.specDragging.mode === "ystretch") {
             const factor = Math.exp(dy / 140);
@@ -2601,7 +2600,7 @@ export class DebugView extends Component {
             const factor = Math.exp(-dx / 150);
             this.applyFreqStretch(this.specDragging.startMHz0, this.specDragging.startMHz1, this.specDragging.anchorFrac, factor);
           } else if (this.specDragging.mode === "zoom") {
-            const clampedX = Math.max(44, Math.min(r.width - 14, x));
+            const clampedX = Math.max(32, Math.min(r.width - 4, x));
             this.scanZoomBox = { x0: this.specDragging.startX, x1: clampedX };
             this.dirtySpectrum = true;
           } else if (this.specDragging.mode === "pan") {
@@ -2626,7 +2625,7 @@ export class DebugView extends Component {
           const x = e.clientX - r.left;
           const dx = x - this.wfDragging.startX;
           const dy = e.clientY - this.wfDragging.startY;
-          const plotW = Math.max(10, r.width - 44 - 18);
+          const plotW = Math.max(10, r.width - 32 - 14);
           if (this.wfDragging.mode === "ystretch") {
             // Dragging UP stretches rows (fewer visible passes = taller rows); dragging DOWN compresses more passes
             const factor = Math.exp(dy / 140);
@@ -2639,7 +2638,7 @@ export class DebugView extends Component {
           } else if (this.wfDragging.mode === "scrollbar") {
             scrubScrollbar(wf, e.clientY);
           } else if (this.wfDragging.mode === "zoom") {
-            const clampedX = Math.max(44, Math.min(r.width - 18, x));
+            const clampedX = Math.max(32, Math.min(r.width - 14, x));
             this.scanZoomBox = { x0: this.wfDragging.startX, x1: clampedX };
             this.dirtyWaterfall = true;
             this.dirtySpectrum = true;
@@ -2668,9 +2667,9 @@ export class DebugView extends Component {
           (this.wfDragging && this.wfDragging.mode === "pan");
         if (isDraggingPlot) {
           target.style.cursor = "grabbing";
-        } else if (x < 48 || (target.matches("[data-waterfall-canvas]") && x >= r.width - 28)) {
+        } else if (x < 36 || (target.matches("[data-waterfall-canvas]") && x >= r.width - 24)) {
           target.style.cursor = "ns-resize";
-        } else if (y >= r.height - 26 && x >= 44) {
+        } else if (y >= r.height - 26 && x >= 32) {
           target.style.cursor = "ew-resize";
         } else if (e.shiftKey) {
           target.style.cursor = "crosshair";
@@ -3751,7 +3750,7 @@ export class DebugView extends Component {
           this.openAxisMenu = null;
           this.signalEndN = null;
           this.signalAutoX = true;
-          this.signalWindowSec = 10;
+          this.signalWindowSec = 15;
           this.signalAutoY = true;
           this.signalYMin = yb.min;
           this.signalYMax = yb.max;
@@ -5918,7 +5917,7 @@ export class DebugView extends Component {
   }
 
   private renderSignalControls(): void {
-    const presets = [1, 2, 5, 10, 30, 120] as const;
+    const presets = [1, 2, 5, 10, 15, 30, 120] as const;
     const xWinLabel =
       this.signalWindowSec === 120
         ? "2 min"
