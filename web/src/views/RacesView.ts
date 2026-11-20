@@ -7224,16 +7224,10 @@ export class RacesView extends Component {
 
   private isRaceActivelyTiming(race: RaceTournamentState): boolean {
     const lifecycle: RaceLifecycle = race.lifecycle ?? (race.isComplete ? "completed" : "draft");
-    if (
-      race.emergencyStopped ||
-      lifecycle === "paused" ||
-      lifecycle === "scrapped" ||
-      lifecycle === "completed" ||
-      race.isComplete
-    ) {
-      return false;
-    }
-    return race.heats.some((h) => h.state === "running" || h.state === "countdown");
+    const configured = isRaceConfigured(race);
+    const isEmergency = Boolean(race.emergencyStopped);
+    const isPaused = !isEmergency && lifecycle === "paused";
+    return !isEmergency && !isPaused && configured && isRaceOngoing(race);
   }
 
   private renderRaceStandbyStripHtml(
@@ -7243,35 +7237,28 @@ export class RacesView extends Component {
       return { barCls: "is-ws-live", standbyHtml: "" };
     }
     const lifecycle: RaceLifecycle = race.lifecycle ?? (race.isComplete ? "completed" : "draft");
-    const configured = isRaceConfigured(race);
+    const isEmergency = Boolean(race.emergencyStopped);
 
     let toneCls = "is-idle";
     let pillText = "Idle";
-    let msgText = "No heat running - laps aren't counting";
+    let msgText = "Race is idle - laps aren't counting";
 
-    if (lifecycle === "completed" || race.isComplete || lifecycle === "scrapped") {
-      const isScrapped = lifecycle === "scrapped";
-      toneCls = "is-idle";
-      pillText = isScrapped ? "Stopped" : "Completed";
-      msgText = isScrapped
-        ? "Race is stopped - laps aren't counting"
-        : "Race is completed - viewing results";
-    } else if (!configured) {
-      toneCls = "is-idle";
-      pillText = "Idle";
-      msgText = "Race is idle - laps aren't counting";
-    } else if (race.emergencyStopped || lifecycle === "paused") {
+    if (isEmergency) {
+      toneCls = "is-emergency";
+      pillText = "Emergency";
+      msgText = "Emergency stop is active - laps aren't counting";
+    } else if (lifecycle === "scrapped") {
+      toneCls = "is-emergency";
+      pillText = "Stopped";
+      msgText = "Race is stopped - laps aren't counting";
+    } else if (lifecycle === "paused") {
       toneCls = "is-paused";
       pillText = "Paused";
       msgText = "Race is paused - laps aren't counting";
-    } else {
-      const pausedHeat = race.heats.find((h) => h.state === "paused");
-      if (pausedHeat) {
-        const heatName = pausedHeat.shortLabel || pausedHeat.title || "Heat";
-        toneCls = "is-paused";
-        pillText = "Paused";
-        msgText = `${esc(heatName)} is paused - laps aren't counting`;
-      }
+    } else if (lifecycle === "completed" || race.isComplete) {
+      toneCls = "is-idle";
+      pillText = "Completed";
+      msgText = "Race is completed - viewing results";
     }
 
     return {
