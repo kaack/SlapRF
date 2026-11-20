@@ -30,12 +30,14 @@ static const char *TAG = "slaprf_ble";
 #define PHASE_SAMPLES     48
 #define SYNC_EVAL_CALLS   5   // Evaluate the phase every 5 superframes (100 ms at 20 ms)
 
-/* Preferred connection intervals in 1.25 ms units: 10 ms, 20 ms, then 20..30 ms range (accepted
- * by Android even when audio/video calls reject zero-width min==max parameter updates). */
+/* Preferred connection intervals in 1.25 ms units when central leaves us > 25 ms:
+ * 20 ms (matches 50 Hz sweep period), then 16..24 (20..30 ms range). Android requests
+ * CONNECTION_PRIORITY_HIGH (11.25..15 ms) from the central side, which fits inside the 14.6 ms
+ * 2.4 GHz window every 20 ms without needing peripheral parameter updates. */
 static const struct {
     uint16_t min_itvl;
     uint16_t max_itvl;
-} k_itvl_pref[] = {{8, 8}, {16, 16}, {16, 24}};
+} k_itvl_pref[] = {{16, 16}, {16, 24}};
 
 /* 5d1a0001-5a7e-4c0b-9e5f-534c41505246 (little-endian byte order for NimBLE). */
 static const ble_uuid128_t s_svc_uuid = BLE_UUID128_INIT(0x46, 0x52, 0x50, 0x41, 0x4c, 0x53, 0x5f, 0x9e, 0x0b, 0x4c,
@@ -395,9 +397,9 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
             s_subscribed = now;
             if (now) {
                 reset_phase_window(900000);
-                // Request our 10 ms-aligned interval AFTER GATT service discovery & CCCD subscribe
-                // complete so Android does not overwrite or ignore it during discovery.
-                if (s_itvl_us == 0 || (s_itvl_us % 10000U) != 0) {
+                // Only ask for 20 ms if the central gave us a slow (> 25 ms) interval; leave fast
+                // central intervals (such as Android CONNECTION_PRIORITY_HIGH 11.25-15 ms) untouched.
+                if (s_itvl_us == 0 || s_itvl_us > 25000U) {
                     request_interval(s_conn, 0);
                 }
             }
@@ -538,9 +540,9 @@ static void tx_task(void *arg) {
                 int8_t rssi = 0;
                 if (ble_gap_conn_rssi(conn, &rssi) == 0) s_rssi = rssi;
                 refresh_conn_desc(conn);
-                // Not a multiple of the 10 ms sweep period after 700 ms post-subscribe: try 20 ms, then 30 ms.
+                // Only request 20..30 ms if the central settled on a sluggish (> 25 ms) interval.
                 const uint32_t itvl = s_itvl_us;
-                if (s_subscribed && itvl != 0 && (itvl % 10000U) != 0 && now - s_itvl_req_us > 700000 &&
+                if (s_subscribed && itvl > 25000U && now - s_itvl_req_us > 900000 &&
                     s_itvl_try + 1 < (uint8_t)(sizeof(k_itvl_pref) / sizeof(k_itvl_pref[0]))) {
                     request_interval(conn, (uint8_t)(s_itvl_try + 1));
                 }

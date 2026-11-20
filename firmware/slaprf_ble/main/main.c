@@ -34,11 +34,11 @@
 #include "slaprf_radio.h"
 
 /* ---- Tuning ------------------------------------------------------------------------------ */
-#define SWEEP_HZ           100   // 8-channel 5.8 GHz sweeps per second
-#define WINDOW_SAMPLES     4     // Sweeps per window frame
-#define TX_EVERY_SWEEPS    2     // 4 / 2 = every sweep delivered twice
-#define SWEEP_BUDGET_US    6600  // Radio away from 2.4 GHz per sweep (5 passes take ~5.4 ms; leaves 3.4 ms gap)
-#define BLE_EVENT_END_US   8600  // Target end of a BLE connection event, centered in the [6.6..10.0 ms] gap
+#define SWEEP_HZ           50     // 8-channel 5.8 GHz sweeps/s (20 ms period; matches SlapRF Spokes)
+#define WINDOW_SAMPLES     4      // 4x sliding-window redundancy: every sweep transmitted 4 times
+#define TX_EVERY_SWEEPS    1      // 50 frames/s (one frame every 20 ms = ~2.2 KB/s over BLE)
+#define SWEEP_BUDGET_US    6000   // ~5.4 ms 5.8 GHz sweep (5 passes = 250 Hz); leaves ~14.6 ms (73%) on 2.4 GHz
+#define BLE_EVENT_END_US   13500  // Center of the [6.0..20.0 ms] 2.4 GHz open window
 
 /* ---- Schedule (derived) ------------------------------------------------------------------- */
 #define SWEEP_INTERVAL_US  (1000000UL / SWEEP_HZ)

@@ -149,7 +149,7 @@ func (m *Manager) Connect(slotIndex int, portName string) (SlotSnapshot, error) 
 					if lbl == "" {
 						lbl = "H1"
 					}
-					slot.hubHello[1] = slotHello{fp: bleFP, label: lbl, role: 1, sweepHz: 100}
+					slot.hubHello[1] = slotHello{fp: bleFP, label: lbl, role: 1, sweepHz: 50}
 				}
 				stAfter = m.synthesizeHubStatusLocked(slot, time.Now().UnixMilli())
 			} else {
@@ -354,7 +354,7 @@ func (m *Manager) probeInitialStatus(slot *usbSlot, timeout time.Duration) (map[
 		cmd := "STATUS?"
 		if first {
 			if isBLE {
-				cmd = fmt.Sprintf("AUTH %s\nBLESYNC 0\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?", m.BLEHostKey())
+				cmd = fmt.Sprintf("AUTH %s\nBLESYNC 1\nLIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?", m.BLEHostKey())
 			} else {
 				cmd = "LIVE 0\nSCAN STOP\nLOG 0\nSTATUS?\nSLAPRF?"
 			}
@@ -1078,10 +1078,21 @@ func halfCodeToIntDbm(code byte) int {
 func unwrapBLEWindowSamplesLocked(slot *usbSlot, frame []byte, sampleCount int) []map[string]any {
 	const hitMarginDb = 10
 	sweepUs := 5500
+	sweepHz := 50
+	if h1, ok := slot.hubHello[1]; ok && h1.sweepHz > 0 {
+		sweepHz = int(h1.sweepHz)
+	}
 	if slot.lastStatus != nil {
 		if u, ok := asInt(slot.lastStatus["sweepUs"]); ok && u > 0 {
 			sweepUs = u
 		}
+		if hz, ok := asInt(slot.lastStatus["sweepHz"]); ok && hz > 0 {
+			sweepHz = hz
+		}
+	}
+	live1Every := uint64(sweepHz / 10)
+	if live1Every < 1 {
+		live1Every = 1
 	}
 
 	var out []map[string]any
@@ -1153,7 +1164,7 @@ func unwrapBLEWindowSamplesLocked(slot *usbSlot, frame []byte, sampleCount int) 
 		if slot.bleLiveMode == 0 {
 			continue
 		}
-		if slot.bleLiveMode == 1 && slot.bleSweepN%10 != 0 {
+		if slot.bleLiveMode == 1 && slot.bleSweepN%live1Every != 0 {
 			continue
 		}
 		dbmArr := make([]int, 8)

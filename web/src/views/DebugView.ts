@@ -207,6 +207,8 @@ export class DebugView extends Component {
   private scanShowAvg = true;
   private scanShowWifi = true;
   private scanStartMHz = 5180;
+  private resumeLiveAfterReconnect = false;
+  private resumeScanLiveAfterReconnect = false;
   private scanStopMHz = 5945;
   private scanStepMHz = 5;
   private scanZoomStartMHz: number | null = null;
@@ -1336,6 +1338,13 @@ export class DebugView extends Component {
       },
       onDisconnect: () => {
         window.clearInterval(this.statusTimer);
+        if (this.console.reconnecting) {
+          this.resumeLiveAfterReconnect = this.liveOn;
+          this.resumeScanLiveAfterReconnect = this.scanLive;
+        } else {
+          this.resumeLiveAfterReconnect = false;
+          this.resumeScanLiveAfterReconnect = false;
+        }
         this.status = null;
         this.liveOn = false;
         this.logOn = false;
@@ -1980,8 +1989,9 @@ export class DebugView extends Component {
           clientY: e.clientY,
         });
 
-        const sameKindPts = Array.from(debugTouchPts.entries()).filter(([, v]) => v.kind === canvasKind);
-        if (sameKindPts.length === 1) {
+        const allTouchPts = Array.from(debugTouchPts.entries());
+        const sameKindPts = allTouchPts.filter(([, v]) => v.kind === canvasKind);
+        if (allTouchPts.length === 1) {
           tapCandidate = {
             pointerId: e.pointerId,
             kind: canvasKind,
@@ -1995,13 +2005,15 @@ export class DebugView extends Component {
           lastTapTime = 0;
         }
 
-        if (sameKindPts.length >= 2) {
+        if (allTouchPts.length >= 2) {
           this.signalDrag = null;
           this.signalYZoomBox = null;
           this.specDragging = null;
           this.wfDragging = null;
           this.scanZoomBox = null;
-          const [[id1, pt1], [id2, pt2]] = sameKindPts;
+          const pairPts = sameKindPts.length >= 2 ? sameKindPts : allTouchPts;
+          const crossCanvas = sameKindPts.length < 2;
+          const [[id1, pt1], [id2, pt2]] = pairPts;
           const midX = (pt1.x + pt2.x) * 0.5;
           const midY = (pt1.y + pt2.y) * 0.5;
           const T = 12;
@@ -2019,7 +2031,7 @@ export class DebugView extends Component {
             p1ClientStart: { x: pt1.clientX, y: pt1.clientY },
             p2ClientStart: { x: pt2.clientX, y: pt2.clientY },
             lastMidClientY: (pt1.clientY + pt2.clientY) * 0.5,
-            pageScrollLocked: false,
+            pageScrollLocked: crossCanvas,
             pinchLocked: false,
             wasSignalLive: this.signalEndN === null,
             startEndN: this.signalViewEndN(),
@@ -2288,7 +2300,7 @@ export class DebugView extends Component {
 
         if (debugPinch !== null) {
           const remSame = Array.from(debugTouchPts.values()).filter((v) => v.kind === debugPinch!.kind);
-          if (remSame.length < 2) {
+          if (debugTouchPts.size < 2) {
             const finishedKind = debugPinch.kind;
             const wasPageScroll = debugPinch.pageScrollLocked;
             debugPinch = null;
@@ -2485,7 +2497,7 @@ export class DebugView extends Component {
             tapCandidate.moved = true;
           }
 
-          if (debugPinch && debugPinch.kind === entry.kind) {
+          if (debugPinch) {
             const p1 = debugTouchPts.get(debugPinch.id1);
             const p2 = debugTouchPts.get(debugPinch.id2);
             if (p1 && p2) {
@@ -2687,12 +2699,17 @@ export class DebugView extends Component {
           const dy = y - this.specDragging.startY;
           const plotW = Math.max(10, r.width - 32 - 4);
           const plotH = Math.max(10, r.height - 12 - 26);
+          const touchGesture = e.pointerType === "touch";
           if (this.specDragging.mode === "ystretch") {
-            const factor = Math.exp(dy / 140);
-            this.applyDbmStretch(this.specDragging.startYMin, this.specDragging.startYMax, this.specDragging.anchorFrac, factor, "scan");
+            if (!touchGesture || (Math.abs(dy) >= 12 && Math.abs(dy) >= Math.abs(dx) * 1.15)) {
+              const factor = Math.exp(dy / 140);
+              this.applyDbmStretch(this.specDragging.startYMin, this.specDragging.startYMax, this.specDragging.anchorFrac, factor, "scan");
+            }
           } else if (this.specDragging.mode === "xstretch") {
-            const factor = Math.exp(-dx / 150);
-            this.applyFreqStretch(this.specDragging.startMHz0, this.specDragging.startMHz1, this.specDragging.anchorFrac, factor);
+            if (!touchGesture || (Math.abs(dx) >= 12 && Math.abs(dx) >= Math.abs(dy) * 1.15)) {
+              const factor = Math.exp(-dx / 150);
+              this.applyFreqStretch(this.specDragging.startMHz0, this.specDragging.startMHz1, this.specDragging.anchorFrac, factor);
+            }
           } else if (this.specDragging.mode === "zoom") {
             const clampedX = Math.max(32, Math.min(r.width - 4, x));
             this.scanZoomBox = { x0: this.specDragging.startX, x1: clampedX };
@@ -2720,15 +2737,20 @@ export class DebugView extends Component {
           const dx = x - this.wfDragging.startX;
           const dy = e.clientY - this.wfDragging.startY;
           const plotW = Math.max(10, r.width - 32 - 14);
+          const touchGesture = e.pointerType === "touch";
           if (this.wfDragging.mode === "ystretch") {
             // Dragging UP stretches rows (fewer visible passes = taller rows); dragging DOWN compresses more passes
-            const factor = Math.exp(dy / 140);
-            this.spectrumAcc.setVisibleRows(this.wfDragging.startVisibleRows * factor);
-            this.updateScanFindings();
-            this.dirtyWaterfall = true;
+            if (!touchGesture || (Math.abs(dy) >= 12 && Math.abs(dy) >= Math.abs(dx) * 1.15)) {
+              const factor = Math.exp(dy / 140);
+              this.spectrumAcc.setVisibleRows(this.wfDragging.startVisibleRows * factor);
+              this.updateScanFindings();
+              this.dirtyWaterfall = true;
+            }
           } else if (this.wfDragging.mode === "xstretch") {
-            const factor = Math.exp(-dx / 150);
-            this.applyFreqStretch(this.wfDragging.startMHz0, this.wfDragging.startMHz1, this.wfDragging.anchorFrac, factor);
+            if (!touchGesture || (Math.abs(dx) >= 12 && Math.abs(dx) >= Math.abs(dy) * 1.15)) {
+              const factor = Math.exp(-dx / 150);
+              this.applyFreqStretch(this.wfDragging.startMHz0, this.wfDragging.startMHz1, this.wfDragging.anchorFrac, factor);
+            }
           } else if (this.wfDragging.mode === "scrollbar") {
             scrubScrollbar(wf, e.clientY);
           } else if (this.wfDragging.mode === "zoom") {
@@ -4042,10 +4064,30 @@ export class DebugView extends Component {
     if (s?.emergencyMode) {
       this.liveOn = false;
       this.scanLive = false;
+      this.resumeLiveAfterReconnect = false;
+      this.resumeScanLiveAfterReconnect = false;
     } else {
+      const resumeScan = this.resumeScanLiveAfterReconnect;
+      const resumeLive = !resumeScan && this.resumeLiveAfterReconnect;
+      this.resumeLiveAfterReconnect = false;
+      this.resumeScanLiveAfterReconnect = false;
       this.liveOn = false;
-      this.liveMode = 2;
+      this.liveMode = this.signalCardVisible ? 2 : 1;
       await this.syncRfState();
+      if (resumeScan && this.console.connected) {
+        this.scanLive = true;
+        if (this.status) this.status.scanLive = true;
+        await this.console
+          .request(`SCAN LIVE ${this.scanStartMHz} ${this.scanStopMHz} ${this.scanStepMHz}`, "ok", 2000)
+          .catch(() => {
+            this.scanLive = false;
+          });
+      } else if (resumeLive && this.console.connected) {
+        this.liveOn = true;
+        await this.console.send(`LIVE ${this.liveMode}`).catch(() => {
+          this.liveOn = false;
+        });
+      }
     }
     if (this.logOn) await this.console.send("LOG 1");
     this.renderAll();

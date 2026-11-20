@@ -224,9 +224,12 @@ public final class SlapRFBleShim {
         @SuppressLint("MissingPermission")
         public void onConnectionStateChange(BluetoothGatt g, int status, int newState) {
             if (newState == BluetoothProfile.STATE_CONNECTED && status == BluetoothGatt.GATT_SUCCESS) {
-                // Deliberately no requestConnectionPriority(): HIGH forces an 11.25-15 ms interval
-                // that is not a multiple of the hub's 10 ms sweep period. The hub requests 10 ms
-                // (then 20 or 30 ms) itself via an L2CAP parameter update, which Android accepts.
+                // Request HIGH priority (11.25-15 ms) so packets stream smoothly inside the Hub's
+                // 14.6 ms 2.4 GHz window every 20 ms instead of relaxing to sluggish 45 ms bursts.
+                try {
+                    g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH);
+                } catch (Exception ignored) {
+                }
                 try {
                     g.setPreferredPhy(BluetoothDevice.PHY_LE_2M_MASK, BluetoothDevice.PHY_LE_2M_MASK, BluetoothDevice.PHY_OPTION_NO_PREFERRED);
                 } catch (Exception ignored) {
@@ -272,6 +275,12 @@ public final class SlapRFBleShim {
             if (status != BluetoothGatt.GATT_SUCCESS) {
                 fail("Bluetooth service discovery failed (status " + status + ")");
                 return;
+            }
+            // Android AOSP relaxes initial parameters to 45 ms (BALANCED) right when service
+            // discovery finishes; re-assert HIGH priority (11.25-15 ms) immediately here.
+            try {
+                g.requestConnectionPriority(BluetoothGatt.CONNECTION_PRIORITY_HIGH);
+            } catch (Exception ignored) {
             }
             BluetoothGattService svc = g.getService(SERVICE_UUID);
             if (svc == null) {

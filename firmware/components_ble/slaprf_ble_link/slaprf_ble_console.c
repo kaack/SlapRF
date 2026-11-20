@@ -1603,7 +1603,7 @@ void slaprf_diag_service(void) {
         }
         snprintf(live_out + n, sizeof(live_out) - n, "]}\n");
         s_ls_ready = false;
-        tx_line_nowait(live_out);
+        tx_line(live_out);
     }
     if (!s_scan_pending) {
         return;
