@@ -3130,16 +3130,18 @@ export class LiveView extends Component {
       </div>`;
 
     host.innerHTML = `
-      <header class="rc-panel-header rc-hide-mobile">
-        <div class="rc-panel-title-wrap">
-          ${icons.signal(14)}
-          <strong>Signal at each timer</strong>
-          <span class="note rc-hide-mobile">Live RSSI &amp; gate crossing thresholds</span>
+      <div class="rc-signals-card-box">
+        <header class="rc-panel-header rc-hide-mobile">
+          <div class="rc-panel-title-wrap">
+            ${icons.signal(14)}
+            <strong>Signal at each timer</strong>
+            <span class="note rc-hide-mobile">Live RSSI &amp; gate crossing thresholds</span>
+          </div>
+        </header>
+        <div class="rc-panel-body is-signals-body">
+          ${pilotBarHtml}
+          <div class="rc-signals-chart-host" data-practice-signals-chart></div>
         </div>
-      </header>
-      <div class="rc-panel-body is-signals-body">
-        ${pilotBarHtml}
-        <div class="rc-signals-chart-host" data-practice-signals-chart></div>
       </div>`;
 
     const chartHost = host.querySelector<HTMLElement>("[data-practice-signals-chart]");

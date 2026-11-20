@@ -9445,17 +9445,19 @@ export class RacesView extends Component {
         data-canvas-panel="signals"
         data-mobile-ctrl-pane="signals"
       >
-        ${mobilePilotPickerHtml}
-        <header class="rc-panel-header rc-hide-mobile">
-          <div class="rc-panel-title-wrap">
-            ${icons.signal(14)}
-            <strong>Signal at each timer</strong>
-            <span class="note rc-hide-mobile">Live RSSI &amp; gate crossing thresholds</span>
+        <div class="rc-signals-card-box">
+          ${mobilePilotPickerHtml}
+          <header class="rc-panel-header rc-hide-mobile">
+            <div class="rc-panel-title-wrap">
+              ${icons.signal(14)}
+              <strong>Signal at each timer</strong>
+              <span class="note rc-hide-mobile">Live RSSI &amp; gate crossing thresholds</span>
+            </div>
+          </header>
+          <div class="rc-panel-body is-signals-body">
+            ${pilotBarHtml}
+            ${candidates.length > 0 ? `<div class="rc-signals-chart-host" data-race-signals-chart></div>` : ""}
           </div>
-        </header>
-        <div class="rc-panel-body is-signals-body">
-          ${pilotBarHtml}
-          ${candidates.length > 0 ? `<div class="rc-signals-chart-host" data-race-signals-chart></div>` : ""}
         </div>
       </section>`;
   }

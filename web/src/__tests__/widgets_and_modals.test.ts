@@ -460,14 +460,19 @@ describe("widgets/Toast & TimingRulesEditor", () => {
 
     try {
       const drawerEl = root.querySelector<HTMLElement>('[data-slot="tune-drawer"]')!;
-      expect(drawerEl.hidden).toBe(true);
+      // On desktop, the Fine-tune box is always visible (starting on All timers until a timer is selected),
+      // while carrying .is-mobile-closed until the mobile Fine-tune button is clicked.
+      expect(drawerEl.hidden).toBe(false);
+      expect(drawerEl.classList.contains("is-mobile-closed")).toBe(true);
+      expect(drawerEl.textContent).toContain("Fine-tune All timers");
 
-      // Select timer 1 ("H1") -> reveals the dedicated Fine-tune button in the calibration bar below the timers
+      // Select timer 1 ("H1") -> Fine-tune box immediately updates to H1; clicking Fine-tune opens it for mobile too
       root.querySelector<HTMLButtonElement>('[data-gate-chip="1"]')!.click();
+      expect(drawerEl.textContent).toContain("Fine-tune H1");
       const tuneBtn1 = root.querySelector<HTMLButtonElement>('.scope-calib-tune-btn[data-tune-gate="1"]')!;
       expect(tuneBtn1).not.toBeNull();
       tuneBtn1.click();
-      expect(drawerEl.hidden).toBe(false);
+      expect(drawerEl.classList.contains("is-mobile-closed")).toBe(false);
       expect(drawerEl.textContent).toContain("Fine-tune H1");
 
       // Only the 3 clean numeric rules + Beep on crossing exist (no retroactive toggle or legacy rules)

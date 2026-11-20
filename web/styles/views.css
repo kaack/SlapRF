@@ -2800,11 +2800,27 @@ html[data-theme="light"] .scope-calib-tune-btn.is-active {
   background: rgba(2, 132, 199, 0.12);
 }
 
+.rc-signals-card-box {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-strong);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  overflow: hidden;
+}
+.rc-signals-card-box > .rc-panel-header {
+  background: color-mix(in srgb, var(--surface-3) 76%, var(--surface-2));
+  border-bottom: 1px solid var(--border-strong);
+}
+
 .scope-tune-drawer {
-  margin-top: 12px;
-  border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  background: var(--surface-2);
+  margin-top: 14px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
   overflow: hidden;
 }
 .scope-tune-drawer[hidden] {
@@ -2815,10 +2831,42 @@ html[data-theme="light"] .scope-calib-tune-btn.is-active {
   flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
+  min-height: 46px;
   gap: 10px 14px;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--border);
-  background: var(--surface-1, var(--surface));
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border-strong);
+  background: color-mix(in srgb, var(--surface-3) 76%, var(--surface-2));
+  box-sizing: border-box;
+}
+html[data-theme="light"] .rc-signals-card-box,
+html[data-theme="light"] .scope-tune-drawer {
+  background: var(--node-surface);
+  border-color: var(--node-border);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.08);
+}
+html[data-theme="light"] .rc-signals-card-box > .rc-panel-header,
+html[data-theme="light"] .scope-tune-head {
+  background: color-mix(in srgb, var(--surface-3) 82%, var(--surface-2));
+  border-bottom-color: var(--border-strong);
+}
+@media (min-width: 861px) {
+  .races-page .rc-canvas-panel.rc-page-card.is-signals-panel,
+  .practice-workspace-page[data-mobile-practice-view="signals"] .practice-mobile-signals-panel,
+  html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-signals-panel,
+  html[data-theme="light"] .practice-workspace-page[data-mobile-practice-view="signals"] .practice-mobile-signals-panel {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+    gap: 14px;
+  }
+  .is-signals-panel > .scope-tune-drawer {
+    margin-top: 0;
+  }
+  .scope-calib-tune-btn,
+  .scope-tune-close {
+    display: none !important;
+  }
 }
 .scope-tune-title-group {
   display: flex;
@@ -3095,6 +3143,12 @@ html[data-theme="light"] .scope-tune-custom-icon {
   background: var(--surface-1, var(--surface));
 }
 @media (max-width: 860px) {
+  .rc-signals-card-box {
+    display: contents;
+  }
+  .scope-tune-drawer.is-mobile-closed {
+    display: none !important;
+  }
   .scope-calib {
     flex-direction: column;
     align-items: stretch;

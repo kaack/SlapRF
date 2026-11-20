@@ -52,6 +52,13 @@ const OVERRIDE_KEYS: ReadonlyArray<keyof GateRuleOverrides> = [
   "beepOnCross",
 ];
 
+const DEFAULT_TUNE_RULES: TimingRules = {
+  minLapSec: 5,
+  maxLapSec: 120,
+  minCrossingSec: 0.12,
+  beepOnCross: false,
+};
+
 function countOverrides(ovr: GateRuleOverrides | undefined): number {
   if (!ovr) return 0;
   let n = 0;
@@ -226,6 +233,7 @@ export class PilotRssiChart extends Component {
   private lastAxisControlsHtml = "";
   private lastCalibHtml = "";
   private lastTuneDrawerHtml = "";
+  private readonly tuneDrawerEl: HTMLElement;
   private tuningGateId: number | null = null;
   private tuningScope: "pilot" | "gate" = "pilot";
   private readonly labelWidthCache = new Map<string, number>();
@@ -371,7 +379,14 @@ export class PilotRssiChart extends Component {
       </div>
       <div class="channel-legend" data-slot="legend"></div>
       <div class="scope-calib" data-slot="calib"></div>
-      <div class="scope-tune-drawer" data-slot="tune-drawer" hidden></div>`;
+      <div class="scope-tune-drawer is-mobile-closed" data-slot="tune-drawer"></div>`;
+
+    this.tuneDrawerEl = this.slot("tune-drawer");
+    this.onDispose(() => {
+      if (this.tuneDrawerEl.parentElement && this.tuneDrawerEl.parentElement !== this.el) {
+        this.tuneDrawerEl.remove();
+      }
+    });
 
     const host = this.slot("chart");
     const surface = new CanvasSurface(host, (ctx, w, h) => this.draw(ctx, w, h));
@@ -386,29 +401,11 @@ export class PilotRssiChart extends Component {
       this.renderControls();
     });
 
-    this.listen(el, "click", (e) => {
+    const handleTuneClick = (e: MouseEvent) => {
       const btn = (e.target as HTMLElement).closest<HTMLElement>(
-        "[data-act], [data-window], [data-axis-act], [data-calib], [data-focus], [data-tune-gate], [data-tune-scope], [data-tune-act], [data-tune-step], [data-tune-reset-key]"
+        "[data-tune-scope], [data-tune-act], [data-tune-step], [data-tune-reset-key]"
       );
       if (!btn) return;
-      if (btn.dataset.tuneGate) {
-        const gId = Number(btn.dataset.tuneGate);
-        if (this.tuningGateId === gId) {
-          this.tuningGateId = null;
-        } else {
-          this.tuningGateId = gId;
-          if (this.focus !== gId) {
-            this.focus = gId;
-            this.calibMessage = "";
-            this.saveChartPrefs();
-          }
-        }
-        this.renderControls();
-        this.renderCalib();
-        this.renderLegend();
-        this.renderTuningDrawer();
-        return;
-      }
       if (btn.dataset.tuneScope) {
         const nextScope = btn.dataset.tuneScope === "gate" ? "gate" : "pilot";
         if (this.tuningScope !== nextScope) {
@@ -440,6 +437,54 @@ export class PilotRssiChart extends Component {
         const deltaDir = Number(btn.dataset.tuneStep);
         const key = btn.dataset.tuneKey as GateRuleKey;
         void this.stepTuneRule(key, deltaDir);
+      }
+    };
+    this.listen(this.tuneDrawerEl, "click", handleTuneClick);
+
+    this.listen(this.tuneDrawerEl, "change", (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      const key = target.dataset.tuneInput as GateRuleKey | undefined;
+      if (!key) return;
+      const raw = Number(target.value);
+      if (!Number.isFinite(raw)) return;
+      void this.applyTuneRuleValue(key, raw);
+    });
+
+    this.listen(this.tuneDrawerEl, "keydown", (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLInputElement) || !target.dataset.tuneInput) return;
+      if (e.key === "Enter") {
+        e.preventDefault();
+        target.blur();
+      } else if (e.key === "Escape") {
+        target.value = target.defaultValue;
+        target.blur();
+      }
+    });
+
+    this.listen(el, "click", (e) => {
+      if (this.tuneDrawerEl.contains(e.target as Node)) return;
+      const btn = (e.target as HTMLElement).closest<HTMLElement>(
+        "[data-act], [data-window], [data-axis-act], [data-calib], [data-focus], [data-tune-gate]"
+      );
+      if (!btn) return;
+      if (btn.dataset.tuneGate) {
+        const gId = Number(btn.dataset.tuneGate);
+        if (this.tuningGateId === gId) {
+          this.tuningGateId = null;
+        } else {
+          this.tuningGateId = gId;
+          if (this.focus !== gId) {
+            this.focus = gId;
+            this.calibMessage = "";
+            this.saveChartPrefs();
+          }
+        }
+        this.renderControls();
+        this.renderCalib();
+        this.renderLegend();
+        this.renderTuningDrawer();
         return;
       }
       if (btn.dataset.focus) {
@@ -498,28 +543,6 @@ export class PilotRssiChart extends Component {
       else if (btn.dataset.calib === "undo") void this.undoLast();
       else if (btn.dataset.act === "live") this.toggleLive();
       else if (btn.dataset.act) this.jump(btn.dataset.act === "prev" ? -1 : 1);
-    });
-
-    this.listen(el, "change", (e) => {
-      const target = e.target;
-      if (!(target instanceof HTMLInputElement)) return;
-      const key = target.dataset.tuneInput as GateRuleKey | undefined;
-      if (!key) return;
-      const raw = Number(target.value);
-      if (!Number.isFinite(raw)) return;
-      void this.applyTuneRuleValue(key, raw);
-    });
-
-    this.listen(el, "keydown", (e) => {
-      const target = e.target;
-      if (!(target instanceof HTMLInputElement) || !target.dataset.tuneInput) return;
-      if (e.key === "Enter") {
-        e.preventDefault();
-        target.blur();
-      } else if (e.key === "Escape") {
-        target.value = target.defaultValue;
-        target.blur();
-      }
     });
 
     this.listen(host, "keydown", (e) => {
@@ -2554,6 +2577,10 @@ export class PilotRssiChart extends Component {
     return fixed.replace(/\.0+$/, "").replace(/(\.\d*?[1-9])0+$/, "$1");
   }
 
+  private get activeTuneGateId(): number | null {
+    return this.tuningGateId ?? this.focus;
+  }
+
   private currentScopeOverrides(gateId: number, slotIndex: number): GateRuleOverrides {
     const node = this.store.node(gateId);
     if (!node) return {};
@@ -2563,77 +2590,105 @@ export class PilotRssiChart extends Component {
     return { ...(node.ruleOverrides ?? {}) };
   }
 
-  private effectiveRulesForScope(gateId: number, slotIndex: number): TimingRules {
+  private effectiveRulesForScope(gateId: number | null, slotIndex: number): TimingRules {
+    if (gateId === null) {
+      return this.store.rules;
+    }
     return this.tuningScope === "pilot"
       ? pilotGateRulesAt(this.store, gateId, slotIndex)
       : gateRulesAt(this.store, gateId);
   }
 
   private async applyTuneRuleValue(key: GateRuleKey, rawVal: number): Promise<void> {
-    if (this.tuningGateId === null || this.store.isHistoricalTrack) return;
+    if (this.store.isHistoricalTrack) return;
     const spec = TUNE_RULES.find((s) => s.key === key);
     if (!spec) return;
     const clamped = Math.max(spec.min, Math.min(spec.max, Number(rawVal.toFixed(spec.decimals + 1))));
+    const targetGateId = this.activeTuneGateId;
+    if (targetGateId === null) {
+      await this.api.updateRules({ ...this.store.rules, [key]: clamped }).catch(() => undefined);
+      return;
+    }
     const slotIndex = this.activePilotSlot;
     const nextOverrides: GateRuleOverrides = {
-      ...this.currentScopeOverrides(this.tuningGateId, slotIndex),
+      ...this.currentScopeOverrides(targetGateId, slotIndex),
       [key]: clamped,
     };
     if (this.tuningScope === "pilot") {
-      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides).catch(() => undefined);
+      await this.api.setPilotGateRules(targetGateId, slotIndex, nextOverrides).catch(() => undefined);
     } else {
-      await this.api.setGateRules(this.tuningGateId, nextOverrides).catch(() => undefined);
+      await this.api.setGateRules(targetGateId, nextOverrides).catch(() => undefined);
     }
   }
 
   private async stepTuneRule(key: GateRuleKey, dir: number): Promise<void> {
-    if (this.tuningGateId === null || this.store.isHistoricalTrack) return;
+    if (this.store.isHistoricalTrack) return;
     const spec = TUNE_RULES.find((s) => s.key === key);
     if (!spec) return;
+    const targetGateId = this.activeTuneGateId;
     const slotIndex = this.activePilotSlot;
-    const eff = this.effectiveRulesForScope(this.tuningGateId, slotIndex);
+    const eff = this.effectiveRulesForScope(targetGateId, slotIndex);
     const next = eff[key] + dir * spec.step;
     await this.applyTuneRuleValue(key, next);
   }
 
   private async resetSingleTuneRule(key: GateRuleKey): Promise<void> {
-    if (this.tuningGateId === null || this.store.isHistoricalTrack) return;
+    if (this.store.isHistoricalTrack) return;
+    const targetGateId = this.activeTuneGateId;
+    if (targetGateId === null) {
+      await this.api.updateRules({ ...this.store.rules, [key]: DEFAULT_TUNE_RULES[key] }).catch(() => undefined);
+      return;
+    }
     const slotIndex = this.activePilotSlot;
     const nextOverrides: GateRuleOverrides = {
-      ...this.currentScopeOverrides(this.tuningGateId, slotIndex),
+      ...this.currentScopeOverrides(targetGateId, slotIndex),
     };
     delete nextOverrides[key];
     if (this.tuningScope === "pilot") {
-      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides).catch(() => undefined);
+      await this.api.setPilotGateRules(targetGateId, slotIndex, nextOverrides).catch(() => undefined);
     } else {
-      await this.api.setGateRules(this.tuningGateId, nextOverrides).catch(() => undefined);
+      await this.api.setGateRules(targetGateId, nextOverrides).catch(() => undefined);
     }
   }
 
   private async clearTuningScopeOverrides(): Promise<void> {
-    if (this.tuningGateId === null || this.store.isHistoricalTrack) return;
+    if (this.store.isHistoricalTrack) return;
+    const targetGateId = this.activeTuneGateId;
+    if (targetGateId === null) {
+      await this.api.updateRules({ ...DEFAULT_TUNE_RULES }).catch(() => undefined);
+      return;
+    }
     const slotIndex = this.activePilotSlot;
     if (this.tuningScope === "pilot") {
-      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, {}).catch(() => undefined);
+      await this.api.setPilotGateRules(targetGateId, slotIndex, {}).catch(() => undefined);
     } else {
-      await this.api.setGateRules(this.tuningGateId, {}).catch(() => undefined);
+      await this.api.setGateRules(targetGateId, {}).catch(() => undefined);
     }
   }
 
   private async toggleTuneBeep(): Promise<void> {
-    if (this.tuningGateId === null || this.store.isHistoricalTrack) return;
+    if (this.store.isHistoricalTrack) return;
+    const targetGateId = this.activeTuneGateId;
+    if (targetGateId === null) {
+      const nextOn = !this.store.rules.beepOnCross;
+      if (nextOn && this.store.nodes[0]) {
+        playSyntheticCrossingBeep(this.store, this.store.nodes[0].gateId);
+      }
+      await this.api.updateRules({ ...this.store.rules, beepOnCross: nextOn }).catch(() => undefined);
+      return;
+    }
     const slotIndex = this.activePilotSlot;
-    const eff = this.effectiveRulesForScope(this.tuningGateId, slotIndex);
+    const eff = this.effectiveRulesForScope(targetGateId, slotIndex);
     const nextOn = !eff.beepOnCross;
     if (nextOn) {
-      playSyntheticCrossingBeep(this.store, this.tuningGateId);
+      playSyntheticCrossingBeep(this.store, targetGateId);
     }
     const nextOverrides: GateRuleOverrides = {
-      ...this.currentScopeOverrides(this.tuningGateId, slotIndex),
+      ...this.currentScopeOverrides(targetGateId, slotIndex),
     };
     const parentEff =
       this.tuningScope === "pilot"
-        ? Boolean(gateRulesAt(this.store, this.tuningGateId).beepOnCross)
+        ? Boolean(gateRulesAt(this.store, targetGateId).beepOnCross)
         : Boolean(this.store.rules.beepOnCross);
     if (nextOn === parentEff) {
       delete nextOverrides.beepOnCross;
@@ -2641,21 +2696,27 @@ export class PilotRssiChart extends Component {
       nextOverrides.beepOnCross = nextOn;
     }
     if (this.tuningScope === "pilot") {
-      await this.api.setPilotGateRules(this.tuningGateId, slotIndex, nextOverrides).catch(() => undefined);
+      await this.api.setPilotGateRules(targetGateId, slotIndex, nextOverrides).catch(() => undefined);
     } else {
-      await this.api.setGateRules(this.tuningGateId, nextOverrides).catch(() => undefined);
+      await this.api.setGateRules(targetGateId, nextOverrides).catch(() => undefined);
     }
   }
 
-  /** Renders the docked inline per-timer / per-pilot detection fine-tuning drawer below the chart. */
+  /** Ensures the fine-tune card is mounted as a sibling box right below `.rc-signals-card-box` when inside a Signals panel. */
+  private syncTuneDrawerPlacement(): void {
+    const cardBox = this.el.closest<HTMLElement>(".rc-signals-card-box");
+    if (cardBox && cardBox.parentElement && this.tuneDrawerEl.parentElement !== cardBox.parentElement) {
+      cardBox.insertAdjacentElement("afterend", this.tuneDrawerEl);
+    }
+  }
+
+  /** Renders the fine-tuning box (always visible below Signal at each timer on desktop; bottom drawer on mobile). */
   private renderTuningDrawer(): void {
-    const drawerEl = this.slot("tune-drawer");
-    if (
-      this.tuningGateId === null ||
-      this.isMultiPilotMode ||
-      this.store.isHistoricalTrack
-    ) {
+    this.syncTuneDrawerPlacement();
+    const drawerEl = this.tuneDrawerEl;
+    if (this.isMultiPilotMode || this.store.isHistoricalTrack) {
       drawerEl.hidden = true;
+      drawerEl.classList.add("is-mobile-closed");
       if (this.lastTuneDrawerHtml !== "") {
         this.lastTuneDrawerHtml = "";
         drawerEl.innerHTML = "";
@@ -2668,28 +2729,57 @@ export class PilotRssiChart extends Component {
       return;
     }
 
-    const gate = this.store.node(this.tuningGateId);
     const pilot = this.store.pilot(this.activePilotSlot);
-    if (!gate || !pilot) {
+    const targetGateId = this.activeTuneGateId;
+    const gate = targetGateId !== null ? this.store.node(targetGateId) : undefined;
+    if (!pilot || (targetGateId !== null && !gate)) {
       drawerEl.hidden = true;
+      drawerEl.classList.add("is-mobile-closed");
       return;
     }
 
     drawerEl.hidden = false;
-    this.syncMobileDrawerTop(drawerEl);
-    const gateName = gateLabel(this.store, gate.gateId);
-    const color = this.colorOf(gate.gateId);
-    const roleTag = gate.role === "START_FINISH" ? "Start / Finish" : "Sector";
-    const gateOverrides = gate.ruleOverrides ?? {};
-    const pilotOverrides = pilotGateOverridesAt(gate, pilot.slotIndex);
+    drawerEl.classList.toggle("is-mobile-closed", this.tuningGateId === null);
+    if (this.tuningGateId !== null) {
+      this.syncMobileDrawerTop(drawerEl);
+    }
+
+    const isGlobalScope = !gate;
+    const gateName = gate ? gateLabel(this.store, gate.gateId) : "All timers";
+    const color = gate ? this.colorOf(gate.gateId) : "";
+    const roleTag = gate
+      ? gate.role === "START_FINISH"
+        ? "Start / Finish"
+        : "Sector"
+      : "Global defaults";
+    const gateOverrides = gate?.ruleOverrides ?? {};
+    const pilotOverrides = gate ? pilotGateOverridesAt(gate, pilot.slotIndex) : {};
     const gateOvrCount = countOverrides(gateOverrides);
     const pilotOvrCount = countOverrides(pilotOverrides);
-    const gateEff = gateRulesAt(this.store, gate.gateId);
-    const pilotEff = pilotGateRulesAt(this.store, gate.gateId, pilot.slotIndex);
-    const isPilotScope = this.tuningScope === "pilot";
+    const isPilotScope = !isGlobalScope && this.tuningScope === "pilot";
     const activeOverrides = isPilotScope ? pilotOverrides : gateOverrides;
-    const activeOvrCount = isPilotScope ? pilotOvrCount : gateOvrCount;
-    const effRules = isPilotScope ? pilotEff : gateEff;
+    const effRules = gate
+      ? isPilotScope
+        ? pilotGateRulesAt(this.store, gate.gateId, pilot.slotIndex)
+        : gateRulesAt(this.store, gate.gateId)
+      : this.store.rules;
+
+    let globalCustomCount = 0;
+    if (isGlobalScope) {
+      for (const spec of TUNE_RULES) {
+        if (Math.abs(effRules[spec.key] - DEFAULT_TUNE_RULES[spec.key]) > 1e-6) {
+          globalCustomCount++;
+        }
+      }
+      if (Boolean(effRules.beepOnCross) !== Boolean(DEFAULT_TUNE_RULES.beepOnCross)) {
+        globalCustomCount++;
+      }
+    }
+    const activeOvrCount = isGlobalScope
+      ? globalCustomCount
+      : isPilotScope
+        ? pilotOvrCount
+        : gateOvrCount;
 
     // Count laps and filtered detections in the current view/session for immediate visual feedback.
     let lapCount = 0;
@@ -2701,14 +2791,15 @@ export class PilotRssiChart extends Component {
     const reasonCounts = new Map<FilterReason, number>();
     let totalFilteredHere = 0;
     for (const f of this.store.filtered) {
-      if (f.gateId !== gate.gateId) continue;
+      if (gate && f.gateId !== gate.gateId) continue;
       if (isPilotScope && f.slotIndex !== pilot.slotIndex) continue;
       totalFilteredHere++;
       reasonCounts.set(f.reason, (reasonCounts.get(f.reason) ?? 0) + 1);
     }
 
-    const beepOwn = activeOverrides.beepOnCross;
-    const beepOverridden = beepOwn !== undefined;
+    const beepOverridden = isGlobalScope
+      ? Boolean(effRules.beepOnCross) !== Boolean(DEFAULT_TUNE_RULES.beepOnCross)
+      : activeOverrides.beepOnCross !== undefined;
     const beepEffOn = Boolean(effRules.beepOnCross);
     const beepCardHtml = `
       <div class="scope-tune-card is-beep-card ${beepOverridden ? "is-overridden" : ""}" data-tune-card="beepOnCross">
@@ -2738,8 +2829,9 @@ export class PilotRssiChart extends Component {
       </div>`;
 
     const cardsHtml = TUNE_RULES.map((spec) => {
-      const ownVal = activeOverrides[spec.key];
-      const isOverridden = ownVal !== undefined;
+      const isOverridden = isGlobalScope
+        ? Math.abs(effRules[spec.key] - DEFAULT_TUNE_RULES[spec.key]) > 1e-6
+        : activeOverrides[spec.key] !== undefined;
       const curVal = effRules[spec.key];
       const valStr = this.formatTuneVal(curVal, spec.decimals);
       const rCount = reasonCounts.get(spec.reason) ?? 0;
@@ -2788,19 +2880,13 @@ export class PilotRssiChart extends Component {
         </div>`;
     }).join("");
 
-    const nextHtml = `
-      <div class="scope-tune-head">
-        <div class="scope-tune-title-group">
-          <span class="dot" style="--c:${color}"></span>
-          <strong>Fine-tune ${esc(gateName)}</strong>
-          <span class="scope-tune-role-tag">${esc(roleTag)}</span>
-          ${
-            this.contextMode === "practice"
-              ? `<span class="scope-tune-live-pill mono" data-tune-live-summary>${lapCount} ${lapCount === 1 ? "lap" : "laps"} · ${totalFilteredHere} filtered</span>`
-              : ""
-          }
-        </div>
-        <div class="scope-tune-head-actions">
+    const headDotHtml = isGlobalScope
+      ? `<span class="dot channel-all-dot"></span>`
+      : `<span class="dot" style="--c:${color}"></span>`;
+
+    const headActionsHtml = isGlobalScope
+      ? `<span class="note rc-hide-mobile">Select a timer above to customize per-timer or per-pilot rules</span>`
+      : `
           <div class="scope-tune-seg" role="group" aria-label="Apply settings to">
             <button
               type="button"
@@ -2825,7 +2911,26 @@ export class PilotRssiChart extends Component {
           </div>
           <button type="button" class="btn btn-sm btn-ghost scope-tune-close" data-tune-act="close" title="Close fine-tuning drawer" aria-label="Close fine-tuning drawer">
             ${icons.close(15)}
-          </button>
+          </button>`;
+
+    const resetLabel = isGlobalScope
+      ? "Restore defaults"
+      : `Reset ${isPilotScope ? `${esc(pilot.callsign)} overrides` : `${esc(gateName)} overrides`}`;
+
+    const nextHtml = `
+      <div class="scope-tune-head">
+        <div class="scope-tune-title-group">
+          ${headDotHtml}
+          <strong>Fine-tune ${esc(gateName)}</strong>
+          <span class="scope-tune-role-tag">${esc(roleTag)}</span>
+          ${
+            this.contextMode === "practice"
+              ? `<span class="scope-tune-live-pill mono" data-tune-live-summary>${lapCount} ${lapCount === 1 ? "lap" : "laps"} · ${totalFilteredHere} filtered</span>`
+              : ""
+          }
+        </div>
+        <div class="scope-tune-head-actions">
+          ${headActionsHtml}
         </div>
       </div>
       <div class="scope-tune-grid">
@@ -2836,7 +2941,7 @@ export class PilotRssiChart extends Component {
         <span class="note">Scroll or zoom the chart above to inspect pass markers while tuning.</span>
         ${
           activeOvrCount > 0
-            ? `<button type="button" class="btn btn-sm btn-ghost" data-tune-act="clear-scope">${icons.reset(14)}<span>Reset ${isPilotScope ? `${esc(pilot.callsign)} overrides` : `${esc(gateName)} overrides`}</span></button>`
+            ? `<button type="button" class="btn btn-sm btn-ghost" data-tune-act="clear-scope">${icons.reset(14)}<span>${resetLabel}</span></button>`
             : ""
         }
       </div>`;
