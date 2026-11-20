@@ -133,12 +133,19 @@ export class TimingRulesEditor extends Component {
           if (nextBeep) {
             playSyntheticCrossingBeep(this.store, this.scope);
           }
-          if (nextBeep === globalBeep) {
-            delete curOvr.beepOnCross;
-          } else {
-            curOvr.beepOnCross = nextBeep;
-          }
+          curOvr.beepOnCross = nextBeep;
           void this.api.setGateRules(this.scope, curOvr);
+        }
+        return;
+      }
+      const beepResetBtn = target.closest<HTMLButtonElement>("[data-beep-reset]");
+      if (beepResetBtn) {
+        if (this.scope === null) {
+          void this.api.updateRules({ ...this.store.rules, beepOnCross: false });
+        } else {
+          const nextOvr = { ...this.overridesOf(this.store.node(this.scope)) };
+          delete nextOvr.beepOnCross;
+          void this.api.setGateRules(this.scope, nextOvr);
         }
         return;
       }
@@ -306,6 +313,11 @@ export class TimingRulesEditor extends Component {
           >
             <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
           </button>
+          ${
+            isOn
+              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-beep-reset title="Restore default (OFF)" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`
+              : `<span class="scope-tune-reset-spacer" aria-hidden="true"></span>`
+          }
         </div>
       </div>`;
   }
@@ -330,6 +342,11 @@ export class TimingRulesEditor extends Component {
           >
             <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
           </button>
+          ${
+            hasOwn
+              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-beep-reset title="Restore default Beep on crossing" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`
+              : `<span class="scope-tune-reset-spacer" aria-hidden="true"></span>`
+          }
         </div>
       </div>`;
   }

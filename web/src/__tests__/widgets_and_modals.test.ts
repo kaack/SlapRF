@@ -464,16 +464,16 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       // while carrying .is-mobile-closed until the mobile Fine-tune button is clicked.
       expect(drawerEl.hidden).toBe(false);
       expect(drawerEl.classList.contains("is-mobile-closed")).toBe(true);
-      expect(drawerEl.textContent).toContain("Fine-tune All timers");
+      expect(drawerEl.textContent).toContain("All timers · Fine-tune");
 
       // Select timer 1 ("H1") -> Fine-tune box immediately updates to H1; clicking Fine-tune opens it for mobile too
       root.querySelector<HTMLButtonElement>('[data-gate-chip="1"]')!.click();
-      expect(drawerEl.textContent).toContain("Fine-tune H1");
+      expect(drawerEl.textContent).toContain("H1 · Fine-tune");
       const tuneBtn1 = root.querySelector<HTMLButtonElement>('.scope-calib-tune-btn[data-tune-gate="1"]')!;
       expect(tuneBtn1).not.toBeNull();
       tuneBtn1.click();
       expect(drawerEl.classList.contains("is-mobile-closed")).toBe(false);
-      expect(drawerEl.textContent).toContain("Fine-tune H1");
+      expect(drawerEl.textContent).toContain("H1 · Fine-tune");
 
       // Only the 3 clean numeric rules + Beep on crossing exist (no retroactive toggle or legacy rules)
       expect(drawerEl.querySelector('[data-tune-act="toggle-retro"]')).toBeNull();

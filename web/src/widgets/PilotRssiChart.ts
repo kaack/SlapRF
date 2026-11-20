@@ -429,6 +429,10 @@ export class PilotRssiChart extends Component {
         void this.toggleTuneBeep();
         return;
       }
+      if (btn.dataset.tuneAct === "reset-beep") {
+        void this.resetTuneBeep();
+        return;
+      }
       if (btn.dataset.tuneResetKey) {
         void this.resetSingleTuneRule(btn.dataset.tuneResetKey as GateRuleKey);
         return;
@@ -2711,16 +2715,27 @@ export class PilotRssiChart extends Component {
     }
     const nextOverrides: GateRuleOverrides = {
       ...this.currentScopeOverrides(targetGateId, slotIndex),
+      beepOnCross: nextOn,
     };
-    const parentEff =
-      this.tuningScope === "pilot"
-        ? Boolean(gateRulesAt(this.store, targetGateId).beepOnCross)
-        : Boolean(this.store.rules.beepOnCross);
-    if (nextOn === parentEff) {
-      delete nextOverrides.beepOnCross;
+    if (this.tuningScope === "pilot") {
+      await this.api.setPilotGateRules(targetGateId, slotIndex, nextOverrides).catch(() => undefined);
     } else {
-      nextOverrides.beepOnCross = nextOn;
+      await this.api.setGateRules(targetGateId, nextOverrides).catch(() => undefined);
     }
+  }
+
+  private async resetTuneBeep(): Promise<void> {
+    if (this.store.isHistoricalTrack) return;
+    const targetGateId = this.activeTuneGateId;
+    if (targetGateId === null) {
+      await this.api.updateRules({ ...this.store.rules, beepOnCross: Boolean(DEFAULT_TUNE_RULES.beepOnCross) }).catch(() => undefined);
+      return;
+    }
+    const slotIndex = this.activePilotSlot;
+    const nextOverrides: GateRuleOverrides = {
+      ...this.currentScopeOverrides(targetGateId, slotIndex),
+    };
+    delete nextOverrides.beepOnCross;
     if (this.tuningScope === "pilot") {
       await this.api.setPilotGateRules(targetGateId, slotIndex, nextOverrides).catch(() => undefined);
     } else {
@@ -2846,7 +2861,11 @@ export class PilotRssiChart extends Component {
               <span class="scope-tune-switch-track"><span class="scope-tune-switch-thumb"></span></span>
             </button>
           </div>
-          <span class="scope-tune-reset-spacer" aria-hidden="true"></span>
+          ${
+            beepOverridden
+              ? `<button type="button" class="btn btn-sm btn-ghost scope-tune-reset-btn" data-tune-act="reset-beep" title="Restore default Beep on crossing" aria-label="Restore default Beep on crossing">${icons.reset(13)}</button>`
+              : `<span class="scope-tune-reset-spacer" aria-hidden="true"></span>`
+          }
         </div>
       </div>`;
 
@@ -2941,7 +2960,7 @@ export class PilotRssiChart extends Component {
       <div class="scope-tune-head">
         <div class="scope-tune-title-group">
           ${headDotHtml}
-          <strong>Fine-tune ${esc(gateName)}</strong>
+          <strong>${esc(gateName)} · Fine-tune</strong>
         </div>
         <div class="scope-tune-head-actions">
           ${headActionsHtml}
