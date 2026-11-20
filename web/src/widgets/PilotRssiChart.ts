@@ -421,10 +421,6 @@ export class PilotRssiChart extends Component {
         this.renderTuningDrawer();
         return;
       }
-      if (btn.dataset.tuneAct === "clear-scope") {
-        void this.clearTuningScopeOverrides();
-        return;
-      }
       if (btn.dataset.tuneAct === "toggle-beep") {
         void this.toggleTuneBeep();
         return;
@@ -2681,21 +2677,6 @@ export class PilotRssiChart extends Component {
     }
   }
 
-  private async clearTuningScopeOverrides(): Promise<void> {
-    if (this.store.isHistoricalTrack) return;
-    const targetGateId = this.activeTuneGateId;
-    if (targetGateId === null) {
-      await this.api.updateRules({ ...DEFAULT_TUNE_RULES }).catch(() => undefined);
-      return;
-    }
-    const slotIndex = this.activePilotSlot;
-    if (this.tuningScope === "pilot") {
-      await this.api.setPilotGateRules(targetGateId, slotIndex, {}).catch(() => undefined);
-    } else {
-      await this.api.setGateRules(targetGateId, {}).catch(() => undefined);
-    }
-  }
-
   private async toggleTuneBeep(): Promise<void> {
     if (this.store.isHistoricalTrack) return;
     const targetGateId = this.activeTuneGateId;
@@ -2788,23 +2769,6 @@ export class PilotRssiChart extends Component {
         ? pilotGateRulesAt(this.store, gate.gateId, pilot.slotIndex)
         : gateRulesAt(this.store, gate.gateId)
       : this.store.rules;
-
-    let globalCustomCount = 0;
-    if (isGlobalScope) {
-      for (const spec of TUNE_RULES) {
-        if (Math.abs(effRules[spec.key] - DEFAULT_TUNE_RULES[spec.key]) > 1e-6) {
-          globalCustomCount++;
-        }
-      }
-      if (Boolean(effRules.beepOnCross) !== Boolean(DEFAULT_TUNE_RULES.beepOnCross)) {
-        globalCustomCount++;
-      }
-    }
-    const activeOvrCount = isGlobalScope
-      ? globalCustomCount
-      : isPilotScope
-        ? pilotOvrCount
-        : gateOvrCount;
 
     // Count laps and filtered detections in the current view/session for immediate visual feedback.
     let lapCount = 0;
@@ -2930,10 +2894,6 @@ export class PilotRssiChart extends Component {
             ${icons.close(15)}
           </button>`;
 
-    const resetLabel = isGlobalScope
-      ? "Restore defaults"
-      : `Reset ${isPilotScope ? `${esc(pilot.callsign)} overrides` : `${esc(gateName)} overrides`}`;
-
     const nextHtml = `
       <div class="dir-mobile-drawer-top-bar scope-tune-mobile-handle-bar">
         <button
@@ -2963,14 +2923,6 @@ export class PilotRssiChart extends Component {
       <div class="scope-tune-grid">
         ${cardsHtml}
         ${beepCardHtml}
-      </div>
-      <div class="scope-tune-foot ${activeOvrCount === 0 ? "is-note-only" : ""}">
-        <span class="note">Scroll or zoom the chart above to inspect pass markers while tuning.</span>
-        ${
-          activeOvrCount > 0
-            ? `<button type="button" class="btn btn-sm btn-ghost" data-tune-act="clear-scope">${icons.reset(14)}<span>${resetLabel}</span></button>`
-            : ""
-        }
       </div>`;
 
     if (nextHtml !== this.lastTuneDrawerHtml) {

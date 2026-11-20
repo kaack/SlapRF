@@ -3023,18 +3023,24 @@ html[data-theme="light"] .scope-tune-switch.is-on .scope-tune-switch-thumb {
 }
 .scope-tune-card-title-row {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
+  min-height: 20px;
   gap: 6px;
 }
 .scope-tune-card-label {
   font-size: 12.5px;
   font-weight: 600;
+  line-height: 1.25;
   color: var(--text-1);
 }
 .scope-tune-custom-icon {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
   color: #7dd3fc;
 }
 html[data-theme="light"] .scope-tune-custom-icon {
@@ -3107,25 +3113,18 @@ html[data-theme="light"] .scope-tune-custom-icon {
   color: var(--text-3);
   pointer-events: none;
 }
-.scope-tune-reset-btn {
-  width: 26px;
-  height: 26px;
+.scope-tune-reset-btn.btn {
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
   padding: 0;
 }
 .scope-tune-reset-spacer {
-  width: 26px;
-  height: 26px;
-  flex: 0 0 26px;
-}
-.scope-tune-foot {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px 12px;
-  padding: 8px 14px;
-  border-top: 1px solid var(--border);
-  background: var(--surface-1, var(--surface));
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  flex: 0 0 28px;
 }
 @media (max-width: 860px) {
   .rc-signals-card-box {
@@ -3182,7 +3181,9 @@ html[data-theme="light"] .scope-tune-custom-icon {
     background: var(--surface);
     box-shadow: 0 -10px 32px rgba(0, 0, 0, 0.52);
     padding: 0 14px calc(16px + env(safe-area-inset-bottom, 0px));
+    overflow-x: hidden;
     overflow-y: auto;
+    box-sizing: border-box;
     animation: pilot-drawer-slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
   }
   html[data-theme="light"] .scope-tune-drawer {
@@ -3199,9 +3200,7 @@ html[data-theme="light"] .scope-tune-custom-icon {
     flex-shrink: 0;
   }
   .scope-tune-live-pill,
-  .scope-tune-card-help,
-  .scope-tune-foot .note,
-  .scope-tune-foot.is-note-only {
+  .scope-tune-card-help {
     display: none !important;
   }
   .scope-tune-grid {
@@ -3215,12 +3214,15 @@ html[data-theme="light"] .scope-tune-custom-icon {
     justify-content: flex-start;
   }
   .scope-tune-head {
-    min-height: 38px;
-    padding: 4px 0 10px;
+    height: 40px;
+    min-height: 40px;
+    max-height: 40px;
+    padding: 4px 0 8px;
     gap: 8px;
     flex-wrap: nowrap;
     background: transparent !important;
     border-bottom: 0;
+    box-sizing: border-box;
   }
   .scope-tune-title-group {
     flex: 1 1 0;
@@ -3234,14 +3236,11 @@ html[data-theme="light"] .scope-tune-custom-icon {
     text-overflow: ellipsis;
   }
   .scope-tune-card {
-    padding: 9px 12px;
-    min-height: 46px;
-  }
-  .scope-tune-foot {
-    padding: 10px 0 0;
-    border-top: 0;
-    background: transparent !important;
-    justify-content: flex-end;
+    height: 48px;
+    min-height: 48px;
+    max-height: 48px;
+    padding: 0 12px;
+    box-sizing: border-box;
   }
   .scope-root > .scope-canvas {
     flex: 0 0 auto;
