@@ -88,58 +88,71 @@ try {
 
 if ($FlashPort -ne "") {
     $appBin = Join-Path $buildDir "slaprf_ble.bin"
+    $bootBin = Join-Path $buildDir "bootloader\bootloader.bin"
+    $partBin = Join-Path $buildDir "partition_table\partition-table.bin"
     $patchedBin = Join-Path $buildDir "slaprf_ble-patched.bin"
-    Write-Host "=== Flashing firmware onto $FlashPort (preserving SLAPRF02 config) ===" -ForegroundColor Cyan
+    Write-Host "=== Flashing Bluetooth Hub firmware onto $FlashPort (preserving SLAPRF02 config) ===" -ForegroundColor Cyan
     & $python -c @"
 import serial, hashlib, struct, sys, time
 port, bin_path, out_path = sys.argv[1], sys.argv[2], sys.argv[3]
-s = serial.Serial(port, 115200, timeout=1.5)
-time.sleep(1.2)
-s.write(b'RF 0\n')
-time.sleep(0.1)
-s.reset_input_buffer()
-s.write(b'SLAPRF?\n')
-time.sleep(0.25)
-raw = s.read(512)
-s.close()
+raw = b''
+try:
+    s = serial.Serial(port, 115200, timeout=0.6, write_timeout=1.5)
+    # Disarm Windows usbser.sys (1,1) download-mode latch: (1,1) -> (1,0) -> (0,0)
+    s.rts = False
+    s.dtr = True
+    s.rts = False
+    time.sleep(0.05)
+    s.dtr = False
+    s.rts = False
+    time.sleep(0.2)
+    s.write(b'RF 0\n')
+    time.sleep(0.1)
+    s.reset_input_buffer()
+    s.write(b'SLAPRF?\n')
+    time.sleep(0.3)
+    raw = s.read(1024)
+    s.close()
+except Exception as e:
+    print(f'Note: pre-flash SLAPRF? read skipped ({e})')
 idx = raw.find(b'SLAPRF02')
 cfg = bytearray(raw[idx:idx+160]) if idx >= 0 and len(raw) >= idx + 160 else bytearray()
 data = bytearray(open(bin_path, 'rb').read())
-if len(cfg) == 160 and cfg[:8] == b'SLAPRF02':
-    off = data.find(b'SLAPRF02')
-    assert off > 0, 'SLAPRF02 not found in binary'
-    # Keep the newly built firmware version bytes [8..10], preserve board identity/settings [11..158]
-    cfg[8:11] = data[off+8:off+11]
-    cfg[12] = 0  # Reserved byte
-    cfg[11] = 1  # The Bluetooth image is always a Hub
-    if struct.unpack_from('<I', cfg, 14)[0] == 1 and not cfg[107]:
-        struct.pack_into('<I', cfg, 14, 0xBE7C0001)
-        cfg[107:109] = b'H1'
-    crc = 0
-    for b in cfg[:159]:
-        crc ^= b
-    cfg[159] = crc
-    data[off:off+160] = cfg
-    has_sha = data[23] == 1
-    body_end = len(data) - (32 if has_sha else 0)
-    pos, chk = 24, 0xEF
-    for _ in range(data[1]):
-        seg_len = struct.unpack_from('<I', data, pos + 4)[0]
-        pos += 8
-        for b in data[pos:pos+seg_len]:
-            chk ^= b
-        pos += seg_len
-    data[body_end - 1] = chk
-    if has_sha:
-        data[body_end:] = hashlib.sha256(data[:body_end]).digest()
-    print(f'Preserved SLAPRF02 config from {port} at offset {hex(off)}')
+off = data.find(b'SLAPRF02')
+assert off > 0, 'SLAPRF02 not found in binary'
+if len(cfg) != 160 or cfg[:8] != b'SLAPRF02':
+    cfg = bytearray(data[off:off+160])
+    print('Using default SLAPRF02 block (stamping Hub H1 / 0xBE7C0001)')
 else:
-    print('Warning: no existing SLAPRF02 config read from port; flashing default config')
+    cfg[8:11] = data[off+8:off+11]
+    print(f'Preserved SLAPRF02 config from {port} at offset {hex(off)}')
+cfg[11] = 1  # The Bluetooth image is always a Hub
+cfg[12] = 0  # Reserved byte
+if struct.unpack_from('<I', cfg, 14)[0] == 1 and not cfg[107]:
+    struct.pack_into('<I', cfg, 14, 0xBE7C0001)
+    cfg[107:109] = b'H1'
+crc = 0
+for b in cfg[:159]:
+    crc ^= b
+cfg[159] = crc
+data[off:off+160] = cfg
+has_sha = data[23] == 1
+body_end = len(data) - (32 if has_sha else 0)
+pos, chk = 24, 0xEF
+for _ in range(data[1]):
+    seg_len = struct.unpack_from('<I', data, pos + 4)[0]
+    pos += 8
+    for b in data[pos:pos+seg_len]:
+        chk ^= b
+    pos += seg_len
+data[body_end - 1] = chk
+if has_sha:
+    data[body_end:] = hashlib.sha256(data[:body_end]).digest()
 open(out_path, 'wb').write(data)
 "@ $FlashPort $appBin $patchedBin
     if ($LASTEXITCODE -ne 0) { throw "Failed to prepare patched image for $FlashPort" }
     try {
-        & $python -m esptool --chip esp32c5 -p $FlashPort -b 460800 --before default_reset --after hard_reset write_flash 0x10000 $patchedBin
+        & $python -m esptool --chip esp32c5 -p $FlashPort -b 460800 --before default_reset --after hard_reset write_flash --flash_mode dio --flash_freq 80m --flash_size 4MB 0x2000 $bootBin 0x8000 $partBin 0x10000 $patchedBin
         if ($LASTEXITCODE -ne 0) { throw "esptool write_flash failed on $FlashPort" }
     } finally {
         Remove-Item -ErrorAction SilentlyContinue $patchedBin

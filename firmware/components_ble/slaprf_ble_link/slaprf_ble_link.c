@@ -23,12 +23,12 @@
 
 static const char *TAG = "slaprf_ble";
 
-#define TX_BUFFER_BYTES   8192
-#define RX_BUFFER_BYTES   1024
+#define TX_BUFFER_BYTES   4096
+#define RX_BUFFER_BYTES   512
 #define MAX_NOTIFY_BYTES  244 // ATT MTU 247 - 3
 #define MIN_NOTIFY_BYTES  20  // Default ATT MTU 23 - 3
-#define PHASE_SAMPLES     96
-#define SYNC_EVAL_CALLS   25  // Evaluate the phase every 25 superframes (0.5 s at 20 ms)
+#define PHASE_SAMPLES     48
+#define SYNC_EVAL_CALLS   5   // Evaluate the phase every 5 superframes (100 ms at 20 ms)
 
 /* Preferred connection intervals in 1.25 ms units: 10 ms, then 20 ms, then 30 ms. Every one is a
  * multiple of the 10 ms sweep period, so connection events can be parked in the gap between sweeps. */
@@ -70,12 +70,29 @@ static portMUX_TYPE s_ph_mux = portMUX_INITIALIZER_UNLOCKED;
 static int64_t s_nocp_ring[32];
 static volatile uint8_t s_nocp_head, s_nocp_tail;
 static volatile uint32_t s_nocp_events;
+static volatile int64_t s_last_nocp_us;
+static volatile int64_t s_reacquire_until_us;
 static int32_t s_phase_buf[PHASE_SAMPLES];
 static int s_phase_n;
 static int s_sync_calls;
 static volatile bool s_sync_enabled = true;
 static volatile bool s_sync_locked;
 static volatile int32_t s_phase_us = -1;
+
+static void reset_phase_window(int64_t reacquire_for_us) {
+    const int64_t now = esp_timer_get_time();
+    portENTER_CRITICAL_SAFE(&s_ph_mux);
+    s_nocp_head = 0;
+    s_nocp_tail = 0;
+    s_last_nocp_us = now;
+    portEXIT_CRITICAL_SAFE(&s_ph_mux);
+    s_phase_n = 0;
+    s_sync_calls = 0;
+    s_sync_locked = false;
+    if (reacquire_for_us > 0) {
+        s_reacquire_until_us = now + reacquire_for_us;
+    }
+}
 
 /**
  * Every HCI event the controller hands to the NimBLE host passes through here (linker --wrap).
@@ -93,10 +110,30 @@ int __wrap_ble_transport_to_hs_evt_impl(void *buf) {
             s_nocp_ring[s_nocp_head] = now;
             s_nocp_head = next;
         }
+        s_last_nocp_us = now;
         s_nocp_events++;
         portEXIT_CRITICAL_SAFE(&s_ph_mux);
     }
     return __real_ble_transport_to_hs_evt_impl(buf);
+}
+
+bool slaprf_ble_needs_radio_free(void) {
+    if (!slaprf_ble_ready() || !s_sync_enabled) {
+        return false;
+    }
+    const int64_t now = esp_timer_get_time();
+    if (!s_sync_locked && now < s_reacquire_until_us) {
+        return true;
+    }
+    // Self-healing escape: if notifications are queued/sent but >180 ms passes without a single
+    // completed packet, our connection anchor drifted or updated onto the sweep window; briefly
+    // yield 2.4 GHz so fresh NOCP timestamps arrive and jump the schedule back into the gap.
+    const int64_t last_nocp = s_last_nocp_us;
+    if (last_nocp > 0 && now - last_nocp > 180000) {
+        reset_phase_window(450000);
+        return true;
+    }
+    return false;
 }
 
 static int32_t wrap_signed(int32_t v, int32_t period) {
@@ -137,11 +174,14 @@ int32_t slaprf_ble_sync_adjust_us(int64_t superframe_start_us, uint32_t sweep_in
     s_sync_calls = 0;
 
     const uint32_t itvl = s_itvl_us;
-    const bool aligned_itvl = itvl != 0 && (itvl % sweep_interval_us) == 0;
-    if (s_conn == BLE_HS_CONN_HANDLE_NONE || !aligned_itvl || s_phase_n < 6) {
-        s_phase_n = 0;
-        s_sync_locked = false;
-        if (s_conn == BLE_HS_CONN_HANDLE_NONE) s_phase_us = -1;
+    // Any multiple of 10 ms (10, 20, 30 ms) aligns every event; 15 ms aligns every 2nd event (30 ms).
+    const bool aligned_itvl = itvl != 0 && ((itvl % sweep_interval_us) == 0 || itvl == 15000U);
+    if (s_conn == BLE_HS_CONN_HANDLE_NONE || !aligned_itvl || s_phase_n < 4) {
+        if (s_conn == BLE_HS_CONN_HANDLE_NONE || !aligned_itvl) {
+            s_phase_n = 0;
+            s_sync_locked = false;
+            if (s_conn == BLE_HS_CONN_HANDLE_NONE) s_phase_us = -1;
+        }
         return 0;
     }
 
@@ -172,14 +212,26 @@ int32_t slaprf_ble_sync_adjust_us(int64_t superframe_start_us, uint32_t sweep_in
     }
     // Positive error: the connection event ends later than the target, so start sweeps later.
     const int32_t err = wrap_signed(phase - (int32_t)target_phase_us, period);
-    if (err >= -250 && err <= 250) {
+    if (err >= -450 && err <= 450) {
         s_sync_locked = true;
-        return err / 2;
+        s_reacquire_until_us = 0;
+        return err / 3;
     }
-    s_sync_locked = false;
-    if (err > 1500) return 1500;
-    if (err < -1500) return -1500;
-    return err;
+    if (!s_sync_locked) {
+        // Unlocked: jump the entire phase offset in a single superframe so the very next cycle is
+        // parked cleanly inside the gap.
+        if (err >= -900 && err <= 900) {
+            s_sync_locked = true;
+            s_reacquire_until_us = 0;
+        }
+        return err;
+    }
+    // Already locked, small drift beyond 450 us: nudge smoothly without unlocking unless far off.
+    if (err > 1200 || err < -1200) {
+        s_sync_locked = false;
+        return err;
+    }
+    return err / 2;
 }
 
 void slaprf_ble_set_sync_enabled(bool on) {
@@ -309,9 +361,8 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
             s_mtu = 23;
             s_phy = 1;
             s_connects++;
-            s_phase_n = 0;
-            s_sync_locked = false;
             s_phase_us = -1;
+            reset_phase_window(1200000);
             refresh_conn_desc(s_conn);
             ble_gap_set_data_len(s_conn, 251, 2120);
 #if CONFIG_BT_NIMBLE_50_FEATURE_SUPPORT
@@ -328,6 +379,7 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
         s_subscribed = false;
         s_itvl_us = 0;
         s_sync_locked = false;
+        s_reacquire_until_us = 0;
         s_phase_us = -1;
         if (was && s_on_event) s_on_event(false);
         advertise();
@@ -338,6 +390,9 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
             const bool now = event->subscribe.cur_notify != 0;
             const bool was = s_subscribed;
             s_subscribed = now;
+            if (now) {
+                reset_phase_window(900000);
+            }
             if (now != was && s_on_event) s_on_event(now);
         }
         return 0;
@@ -346,6 +401,13 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
         return 0;
     case BLE_GAP_EVENT_CONN_UPDATE:
         refresh_conn_desc(event->conn_update.conn_handle);
+        if (event->conn_update.status == 0) {
+            // Connection interval / anchor just moved: discard stale phase samples and re-lock immediately.
+            reset_phase_window(800000);
+        } else if (s_itvl_try + 1 < (uint8_t)(sizeof(k_itvl_pref) / sizeof(k_itvl_pref[0]))) {
+            // Central rejected this interval (e.g. Windows rejecting 10 ms): immediately ask for 20 ms.
+            request_interval(event->conn_update.conn_handle, (uint8_t)(s_itvl_try + 1));
+        }
         return 0;
     case BLE_GAP_EVENT_CONN_UPDATE_REQ:
         return 0; // Accept the central's parameters; the watchdog below asks again if they don't fit
@@ -412,15 +474,15 @@ static void tx_task(void *arg) {
     for (;;) {
         const int64_t now = esp_timer_get_time();
         if (now >= next_maint_us) {
-            next_maint_us = now + 500000;
+            next_maint_us = now + 250000;
             const uint16_t conn = s_conn;
             if (conn != BLE_HS_CONN_HANDLE_NONE) {
                 int8_t rssi = 0;
                 if (ble_gap_conn_rssi(conn, &rssi) == 0) s_rssi = rssi;
                 refresh_conn_desc(conn);
-                // Not a multiple of the 10 ms sweep period after 2 s: ask for the next option.
+                // Not a multiple of the 10 ms sweep period after 450 ms: ask for the next option (20 ms, then 30 ms).
                 const uint32_t itvl = s_itvl_us;
-                if (itvl != 0 && (itvl % 10000U) != 0 && now - s_itvl_req_us > 2000000 &&
+                if (itvl != 0 && (itvl % 10000U) != 0 && now - s_itvl_req_us > 450000 &&
                     s_itvl_try + 1 < (uint8_t)(sizeof(k_itvl_pref) / sizeof(k_itvl_pref[0]))) {
                     request_interval(conn, (uint8_t)(s_itvl_try + 1));
                 }

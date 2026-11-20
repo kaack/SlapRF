@@ -1057,7 +1057,15 @@ static void ble_rx(const uint8_t *data, size_t n) {
 
 /** BLE central subscribed / went away. */
 static void ble_event(bool connected) {
-    if (!connected && s_active == LINK_BLE) {
+    if (connected) {
+        // Start Hub frame streaming immediately upon TX CCCD subscription so 50 Hz notifications
+        // feed the BLE connection-event phase detector without waiting for the first command.
+        s_active = LINK_BLE;
+        s_host_attached = true;
+        if (s_cfg && s_cfg[CFG_OFF_ROLE] == 1) {
+            s_hub_usb_stream = true;
+        }
+    } else if (s_active == LINK_BLE) {
         stop_streams();
     }
 }

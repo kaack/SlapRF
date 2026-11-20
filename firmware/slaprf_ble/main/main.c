@@ -37,9 +37,8 @@
 #define SWEEP_HZ           100   // 8-channel 5.8 GHz sweeps per second
 #define WINDOW_SAMPLES     4     // Sweeps per window frame
 #define TX_EVERY_SWEEPS    2     // 4 / 2 = every sweep delivered twice
-#define SWEEP_BUDGET_US    7000  // Radio away from 2.4 GHz per sweep (same as the USB image)
-#define BLE_EVENT_END_US   9300  // Target end of a BLE connection event, measured from the sweep start
-#define ACQUIRE_MAX_US     1500000 // Longest the Hub pauses sweeps after a connect to find the event phase
+#define SWEEP_BUDGET_US    6600  // Radio away from 2.4 GHz per sweep (5 passes take ~5.4 ms; leaves 3.4 ms gap)
+#define BLE_EVENT_END_US   8600  // Target end of a BLE connection event, centered in the [6.6..10.0 ms] gap
 
 /* ---- Schedule (derived) ------------------------------------------------------------------- */
 #define SWEEP_INTERVAL_US  (1000000UL / SWEEP_HZ)
@@ -211,20 +210,11 @@ static void hub_ble_run(void) {
     uint8_t pkt[sizeof(timer_window_frame_t)];
     int64_t t_sf = slaprf_now_us() + 10000;
     int64_t next_hello = t_sf + HELLO_REPEAT_US;
-    bool was_ready = false;
-    int64_t acquire_until = 0;
 
     for (;;) {
-        // After a connect, keep the radio on 2.4 GHz until the connection-event phase is known, so
-        // the first events (connection setup, MTU / PHY / interval updates) never collide with sweeps.
-        const bool ready = slaprf_ble_ready();
-        if (ready && !was_ready) {
-            acquire_until = slaprf_now_us() + ACQUIRE_MAX_US;
-        }
-        was_ready = ready;
-        slaprf_ble_stats_t bs;
-        slaprf_ble_get_stats(&bs);
-        const bool radio_free = ready && slaprf_now_us() < acquire_until && !bs.sync_locked && bs.sync_enabled;
+        // Leave the radio on 2.4 GHz briefly (~100..250 ms) after connect or interval updates until
+        // the connection-event phase is measured and jumped into the inter-sweep gap.
+        const bool radio_free = slaprf_ble_needs_radio_free();
 
         for (int k = 0; k < TX_EVERY_SWEEPS; k++) {
             const int64_t t_sweep = t_sf + (int64_t)k * SWEEP_INTERVAL_US;
@@ -285,6 +275,11 @@ void app_main(void) {
     xiao_c5_select_ufl_antenna();
     wifi_idle_init();
     slaprf_ble_console_start_link();
+    // Starting BLE activates ESP-IDF software coexistence, which enables disconnected-STA modem
+    // sleep and gates off the Wi-Fi baseband clock that clocks the 5.8 GHz ADC dump engine. Hold a
+    // Wi-Fi force-wakeup lock so the baseband/ADC stays powered for 5.8 GHz captures while BLE uses
+    // the 2.4 GHz gap between sweeps.
+    ESP_ERROR_CHECK(esp_wifi_force_wakeup_acquire());
     if (!slaprf_rf58_init()) {
         ESP_LOGE(TAG, "5.8 GHz capture engine failed its boot check; readings will be the noise floor");
     }

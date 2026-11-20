@@ -63,6 +63,13 @@ void slaprf_ble_get_stats(slaprf_ble_stats_t *out);
 void slaprf_ble_set_sync_enabled(bool on);
 
 /**
+ * True while the main loop should leave the radio on 2.4 GHz (skip 5.8 GHz sweeps briefly,
+ * typically 100..250 ms) so initial connect, connection-interval updates, or any stalled anchor can
+ * measure clean BLE connection-event timestamps and jump into the inter-sweep gap.
+ */
+bool slaprf_ble_needs_radio_free(void);
+
+/**
  * Called by the main loop once per superframe with the start time of the first sweep of the
  * superframe that just finished. Returns the number of microseconds the next superframe should be
  * shifted (positive = later) to keep connection events in the gap. `sweep_interval_us` is the sweep
