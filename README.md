@@ -1,13 +1,5 @@
 # SlapRF
 
-[![Release](https://github.com/kaack/SlapRF/actions/workflows/release.yml/badge.svg)](https://github.com/kaack/SlapRF/actions/workflows/release.yml)
-[![Build & Deploy GitHub Page](https://github.com/kaack/SlapRF/actions/workflows/pages.yml/badge.svg)](https://github.com/kaack/SlapRF/actions/workflows/pages.yml)
-[![Build XIAO ESP32-C5 Firmware](https://github.com/kaack/SlapRF/actions/workflows/firmware.yml/badge.svg)](https://github.com/kaack/SlapRF/actions/workflows/firmware.yml)
-[![Go Report Card](https://goreportcard.com/badge/github.com/kaack/SlapRF)](https://goreportcard.com/report/github.com/kaack/SlapRF)
-[![Latest Release](https://img.shields.io/github/v/release/kaack/SlapRF?label=release&color=2ea44f)](https://github.com/kaack/SlapRF/releases/latest)
-[![Live Demo](https://img.shields.io/badge/demo-slaprf.app-38bdf8)](https://slaprf.app)
-[![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white)](https://discord.gg/zNrV3auRss)
-
 [![SlapRF](docs/slaprf-hero.png)](https://slaprf.app)
 
 SlapRF is a standalone FPV drone timing and race management application with multi-gate 5.8 GHz section split timing.
@@ -15,6 +7,15 @@ SlapRF is a standalone FPV drone timing and race management application with mul
 The name **SlapRF** comes from the DIY gate hardware: you assemble four off-the-shelf parts with no soldering, no custom PCBs, and no wiring harness. The SlapRF application runs natively on Windows, macOS, Linux, and Android, and also supports **RotorHazard** and **ImmersionRC LapRF 8-Way** timing systems.
 
 A single-gate timer measures total lap time at the Start / Finish gate. When you place additional timers at gates around the track, SlapRF also measures split times for each track section (`S1`, `S2`, `S3`, and so on) so pilots can see where they gained or lost time.
+
+<p align="center">
+  <a href="https://github.com/kaack/SlapRF/actions/workflows/release.yml"><img src="https://github.com/kaack/SlapRF/actions/workflows/release.yml/badge.svg" alt="Release" /></a>
+  <a href="https://github.com/kaack/SlapRF/actions/workflows/pages.yml"><img src="https://github.com/kaack/SlapRF/actions/workflows/pages.yml/badge.svg" alt="Build &amp; Deploy GitHub Page" /></a>
+  <a href="https://github.com/kaack/SlapRF/actions/workflows/firmware.yml"><img src="https://github.com/kaack/SlapRF/actions/workflows/firmware.yml/badge.svg" alt="Build XIAO ESP32-C5 Firmware" /></a>
+  <a href="https://github.com/kaack/SlapRF/releases/latest"><img src="https://img.shields.io/github/v/release/kaack/SlapRF?label=release&amp;color=2ea44f" alt="Latest Release" /></a>
+  <a href="https://slaprf.app"><img src="https://img.shields.io/badge/demo-slaprf.app-38bdf8" alt="Live Demo" /></a>
+  <a href="https://discord.gg/zNrV3auRss"><img src="https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&amp;logoColor=white" alt="Discord" /></a>
+</p>
 
 ## Demo & Community
 
