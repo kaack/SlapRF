@@ -697,7 +697,7 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
           (c) =>
             c.method === "runRHUSBScan" &&
             (c.args[0] as { mode?: string; stop?: number })?.mode === "once" &&
-            (c.args[0] as { mode?: string; stop?: number })?.stop === 5917
+            (c.args[0] as { mode?: string; stop?: number })?.stop === 5945
         )
       ).toBe(true);
       expect(specSection.textContent).toContain("196 RSSI");

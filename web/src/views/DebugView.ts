@@ -529,7 +529,7 @@ export class DebugView extends Component {
           void this.api?.setRHDebugStream?.(0, false)?.catch(() => undefined);
           if (this.lastSyncedHwMode === "rotorhazard_usb" && this.store) {
             void sharedRHLink
-              .runUSBScan(this.store, this.api, { timerId: 0, mode: "stop", start: 5180, stop: 5917, step: 5 })
+              .runUSBScan(this.store, this.api, { timerId: 0, mode: "stop", start: 5180, stop: 5945, step: 5 })
               .catch(() => undefined);
           }
         }
@@ -587,7 +587,7 @@ export class DebugView extends Component {
         this.scanLive = false;
         this.scanning = false;
         void sharedRHLink
-          .runUSBScan(this.store, this.api, { timerId: 0, mode: "stop", start: 5180, stop: 5917, step: 5 })
+          .runUSBScan(this.store, this.api, { timerId: 0, mode: "stop", start: 5180, stop: 5945, step: 5 })
           .catch(() => undefined);
       }
       // Leaving the Debug page must stop high-rate LIVE / SCAN / LOG streaming,
@@ -653,7 +653,7 @@ export class DebugView extends Component {
         defaultColorMin: 12,
         defaultColorMax: 185,
         unit: "RSSI",
-        maxFreqMHz: 5917,
+        maxFreqMHz: 5945,
         rssiScale: true,
       };
     }
@@ -838,10 +838,8 @@ export class DebugView extends Component {
     this.scanYMax = this.isRotorHazardUSBMode() ? 120 : sb.max;
     this.scanZoomStartMHz = null;
     this.scanZoomStopMHz = null;
-    if (this.isRotorHazardUSBMode() && this.scanStopMHz > 5917) {
-      this.scanStopMHz = 5917;
-    } else if (this.isSlapRFMode() && this.scanStopMHz === 5917) {
-      this.scanStopMHz = 5945;
+    if (this.scanStopMHz === 5917 || this.scanStopMHz === 5925 || this.scanStopMHz > sb.maxFreqMHz) {
+      this.scanStopMHz = sb.maxFreqMHz;
     }
     this.syncScanColorRange();
     this.checks = [];
@@ -913,7 +911,7 @@ export class DebugView extends Component {
       setIntro(
         "spectrum-scan",
         "Spectrum scan &amp; waterfall",
-        `<p>Sweeps 5180-5917 MHz across the USB device's receiver nodes on a 0-255 RSSI scale to spot active VTXs or 5 GHz Wi-Fi interference (Raceband <strong>R3-R6 overlap Wi-Fi UNII-3</strong>, channels 149-165, 5735-5835 MHz).</p><p><strong>Scan once</strong> captures a single sweep and restores node frequencies. <strong>Stream</strong> sweeps continuously with live, average, and max-hold traces (pausing normal node polling while active).</p>`
+        `<p>Sweeps 5180-5945 MHz across the USB device's receiver nodes on a 0-255 RSSI scale to spot active VTXs or 5 GHz Wi-Fi interference (Raceband <strong>R3-R6 overlap Wi-Fi UNII-3</strong>, channels 149-165, 5735-5835 MHz).</p><p><strong>Scan once</strong> captures a single sweep and restores node frequencies. <strong>Stream</strong> sweeps continuously with live, average, and max-hold traces (pausing normal node polling while active).</p>`
       );
     } else if (isRHNet) {
       setIntro(

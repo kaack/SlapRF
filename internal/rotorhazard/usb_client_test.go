@@ -338,14 +338,14 @@ func TestSerialClientSpectrumScanOnceAndLiveRestoresFrequencies(t *testing.T) {
 	client.SyncNodesAndArm(nodes, true)
 	time.Sleep(40 * time.Millisecond)
 
-	// 1. Run single sweep across 5630..5945 (clamped to 5917 MHz for C5MK compatibility)
+	// 1. Run single sweep across 5630..5945 (full chart range including R8 at 5917 MHz)
 	scanCtx, scanCancel := context.WithTimeout(ctx, 2*time.Second)
 	defer scanCancel()
 	pass, err := client.RunScanOnce(scanCtx, 5630, 5945, 5)
 	if err != nil {
 		t.Fatalf("RunScanOnce failed: %v", err)
 	}
-	if pass.Start != 5630 || pass.Stop != 5915 || pass.Step != 5 {
+	if pass.Start != 5630 || pass.Stop != 5945 || pass.Step != 5 {
 		t.Fatalf("unexpected normalized scan grid: start=%d stop=%d step=%d", pass.Start, pass.Stop, pass.Step)
 	}
 	r5Bin := (5805 - pass.Start) / pass.Step

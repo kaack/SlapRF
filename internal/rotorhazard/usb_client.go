@@ -31,10 +31,12 @@ type SerialPortOpener func(portName string, baud int) (SerialPort, error)
 var DefaultRHSerialBauds = []int{115200, 921600}
 
 const (
-	// RHMinScanFreqMHz and RHMaxScanFreqMHz bound RotorHazard USB spectrum sweeps to 5180..5917 MHz
-	// so every swept bin is accepted by both FPVGateC5MK (ESP32-C5) and standard RX5808 RH USB nodes.
-	RHMinScanFreqMHz = 5180
-	RHMaxScanFreqMHz = 5917
+	// RHMinScanFreqMHz and RHMaxScanFreqMHz bound RotorHazard USB spectrum sweeps across 5180..5945 MHz
+	// (matching the full 5.8 GHz chart range including Raceband R8 at 5917 MHz), while clamping individual
+	// hardware register writes to <= RHMaxHardwareFreqMHz (5917 MHz) for FPVGateC5MK compatibility.
+	RHMinScanFreqMHz     = 5180
+	RHMaxScanFreqMHz     = 5945
+	RHMaxHardwareFreqMHz = 5917
 )
 
 type serialScanOnceReq struct {
@@ -892,6 +894,9 @@ func (c *SerialClient) writeSweepSeatFreq(
 // On FPVGateC5MK, the ~10 MHz band-power meter has a flat passband over +-1 MHz, and avoiding
 // `0x0A` prevents `usbByte()` from ever seeing a newline byte inside binary frequency sweeps.
 func avoidNewlineInFreqWrite(f uint16) uint16 {
+	if f > RHMaxHardwareFreqMHz {
+		f = RHMaxHardwareFreqMHz
+	}
 	for tries := 0; tries < 3; tries++ {
 		hi := byte(f >> 8)
 		lo := byte(f)
@@ -899,7 +904,7 @@ func avoidNewlineInFreqWrite(f uint16) uint16 {
 		if hi != 0x0A && lo != 0x0A && sum != 0x0A {
 			return f
 		}
-		if f < RHMaxScanFreqMHz {
+		if f < RHMaxHardwareFreqMHz {
 			f++
 		} else {
 			f--
