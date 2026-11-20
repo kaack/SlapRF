@@ -335,6 +335,9 @@ func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		applied := eng.SetRules(rules)
+		if r.URL.Query().Get("retroactive") == "1" {
+			eng.RecalculateBufferedPractice()
+		}
 		writeJSON(w, http.StatusOK, applied)
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -400,31 +403,48 @@ func (s *Server) handleThresholds(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := s.activeEngine().SetGateThresholds(updates); err != nil {
+	eng := s.activeEngine()
+	if err := eng.SetGateThresholds(updates); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if r.URL.Query().Get("retroactive") == "1" {
+		eng.RecalculateBufferedPractice()
 	}
 	s.handleGetState(w, r)
 }
 
-// handleGateRules sets one gate's timing-rule overrides: {gateId, overrides: {...}}.
-// Omitted fields use the global rules; an empty overrides object clears them all.
+// handleGateRules sets one gate's timing-rule overrides across all pilots (`slotIndex == 0`) or
+// for one specific pilot at that gate (`slotIndex >= 1`): `{gateId, slotIndex?, overrides: {...}}`.
+// Omitted fields inherit from the parent tier; an empty overrides object clears that tier.
 func (s *Server) handleGateRules(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
 	var body struct {
-		GateID    uint8                    `json:"gateId"`
-		Overrides domain.GateRuleOverrides `json:"overrides"`
+		GateID      uint8                    `json:"gateId"`
+		SlotIndex   int                      `json:"slotIndex,omitempty"`
+		Overrides   domain.GateRuleOverrides `json:"overrides"`
+		Retroactive bool                     `json:"retroactive,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if _, err := s.activeEngine().SetGateRules(body.GateID, body.Overrides); err != nil {
+	eng := s.activeEngine()
+	var err error
+	if body.SlotIndex > 0 {
+		_, err = eng.SetPilotGateRules(body.GateID, body.SlotIndex, body.Overrides)
+	} else {
+		_, err = eng.SetGateRules(body.GateID, body.Overrides)
+	}
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	if body.Retroactive || r.URL.Query().Get("retroactive") == "1" {
+		eng.RecalculateBufferedPractice()
 	}
 	s.handleGetState(w, r)
 }

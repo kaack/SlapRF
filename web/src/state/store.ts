@@ -1535,6 +1535,8 @@ export class AppStore {
       const activeSess = this.activePracticeSession;
       if (activeSess) {
         this._laps = [...activeSess.laps];
+        this._crossings = [...activeSess.crossings];
+        this._filtered = [...activeSess.filtered];
         this._summaries = [...activeSess.summaries];
       }
     }

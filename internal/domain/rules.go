@@ -56,15 +56,26 @@ func (r TimingRules) Normalized() TimingRules {
 
 func clampRule(v, lo, hi float64) float64 { return math.Max(lo, math.Min(hi, v)) }
 
-// GateRuleOverrides lets one gate use different values from the global rules, such as a gate
-// right after a tight turn-around needing a longer echo window or a noisy indoor gate needing
-// a longer pass hold time. nil fields use the global value.
+// GateRuleOverrides lets one gate (or one pilot at one gate) use different values from the
+// global rules, such as a gate right after a tight turn-around needing a longer echo window or a
+// slower pilot needing a longer minimum/maximum lap time. nil fields inherit from the parent tier.
 type GateRuleOverrides struct {
 	MinLapSec       *float64 `json:"minLapSec,omitempty"`
+	MaxLapSec       *float64 `json:"maxLapSec,omitempty"`
 	GateCooldownSec *float64 `json:"gateCooldownSec,omitempty"`
 	MinSectionSec   *float64 `json:"minSectionSec,omitempty"`
 	EchoWindowSec   *float64 `json:"echoWindowSec,omitempty"`
 	MinPassHoldSec  *float64 `json:"minPassHoldSec,omitempty"`
+}
+
+// IsEmpty reports whether every override field is nil.
+func (o GateRuleOverrides) IsEmpty() bool {
+	return o.MinLapSec == nil &&
+		o.MaxLapSec == nil &&
+		o.GateCooldownSec == nil &&
+		o.MinSectionSec == nil &&
+		o.EchoWindowSec == nil &&
+		o.MinPassHoldSec == nil
 }
 
 // Normalized clamps each set override into the same range as the global rule.
@@ -76,13 +87,19 @@ func (o GateRuleOverrides) Normalized() GateRuleOverrides {
 		v := clampRule(*p, lo, hi)
 		return &v
 	}
-	return GateRuleOverrides{
+	out := GateRuleOverrides{
 		MinLapSec:       clampPtr(o.MinLapSec, 1, 120),
+		MaxLapSec:       clampPtr(o.MaxLapSec, 6, 900),
 		GateCooldownSec: clampPtr(o.GateCooldownSec, 0.2, 15),
 		MinSectionSec:   clampPtr(o.MinSectionSec, 0.1, 15),
 		EchoWindowSec:   clampPtr(o.EchoWindowSec, 0, 15),
 		MinPassHoldSec:  clampPtr(o.MinPassHoldSec, 0.04, 1.5),
 	}
+	if out.MinLapSec != nil && out.MaxLapSec != nil && *out.MaxLapSec < *out.MinLapSec+5 {
+		v := clampRule(*out.MinLapSec+5, 6, 900)
+		out.MaxLapSec = &v
+	}
+	return out
 }
 
 // ForGate returns the rules a gate actually applies: the global rules with that gate's
@@ -93,6 +110,12 @@ func (r TimingRules) ForGate(o GateRuleOverrides) TimingRules {
 	}
 	if o.MinLapSec != nil {
 		r.MinLapSec = *o.MinLapSec
+	}
+	if o.MaxLapSec != nil {
+		r.MaxLapSec = *o.MaxLapSec
+	}
+	if r.MaxLapSec < r.MinLapSec+5 {
+		r.MaxLapSec = clampRule(r.MinLapSec+5, 6, 900)
 	}
 	if o.GateCooldownSec != nil {
 		r.GateCooldownSec = *o.GateCooldownSec
@@ -107,6 +130,16 @@ func (r TimingRules) ForGate(o GateRuleOverrides) TimingRules {
 		r.MinPassHoldSec = *o.MinPassHoldSec
 	}
 	return r
+}
+
+// ForPilotGate resolves the 3-tier timing rules hierarchy:
+// Global TimingRules -> Gate overrides (all pilots at this gate) -> Pilot-at-Gate overrides.
+func (r TimingRules) ForPilotGate(gateOverrides GateRuleOverrides, pilotOverrides *GateRuleOverrides) TimingRules {
+	eff := r.ForGate(gateOverrides)
+	if pilotOverrides != nil {
+		eff = eff.ForGate(*pilotOverrides)
+	}
+	return eff
 }
 
 // FilterReason explains why a detection didn't become a crossing (or a lap didn't count).

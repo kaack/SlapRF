@@ -17,8 +17,8 @@ const timerOfflineAfter = 2 * time.Second
 
 const (
 	maxStoredLaps      = 5000 // A full practice day for 8 pilots
-	maxStoredCrossings = 300
-	maxStoredFiltered  = 300
+	maxStoredCrossings = 2000 // Covers full 15-minute (900 s) multi-gate Signals chart buffer
+	maxStoredFiltered  = 2000
 	// Detector-level debounce only; the user-facing gate cool-down is a TimingRule.
 	detectorDebounceUs = 300_000
 )
@@ -102,6 +102,8 @@ type Engine struct {
 	savedRHUSBTimers    []domain.DetectedTimer
 	hasSavedRHUSBState  bool
 	rhDebugStreamTimers map[uint8]bool
+	replayRing          []bufferedTelemetryFrame
+	extCrossingRing     []bufferedExternalCrossing
 	subscribers         []EventSubscriber
 }
 
@@ -331,6 +333,7 @@ func (e *Engine) Rules() domain.TimingRules {
 }
 
 // SetRules replaces the timing guardrails (values are clamped) and returns what was applied.
+// Applies going forward by default; call RecalculateBufferedPractice() when retroactive replay is requested.
 func (e *Engine) SetRules(r domain.TimingRules) domain.TimingRules {
 	r = r.Normalized()
 	e.mu.Lock()
@@ -612,6 +615,7 @@ func (e *Engine) ApplyLapRFSetup(slotMap map[int]domain.PilotSlot) {
 // ResetSession clears recorded laps, crossings, and sector statistics while preserving gate & pilot config.
 func (e *Engine) ResetSession() {
 	e.mu.Lock()
+	e.clearReplayRecordingLocked("")
 	e.resetSessionLocked()
 	var practiceSnap domain.PracticeManagerState
 	var subs []EventSubscriber
@@ -724,6 +728,7 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 		return
 	}
 	frame.TimerID = gate.GateID
+	e.recordReplayTelemetryLocked(gate.GateID, frame.TimestampUs, frame)
 	hwMode := domain.NormalizeTimingHardwareMode(e.timingHardwareMode)
 	isSlapRFMode := domain.IsSlapRFMode(hwMode)
 	var autoCalibChanged bool
@@ -787,7 +792,7 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 			// crossings in SlapRF, but still forward debounced Start/Finish gate crossings to external
 			// hardware bridges (such as the LapRF emulator for FPVTrackside / MultiGP LiveTime).
 			if ev.IsStartFinish {
-				r := e.rules.ForGate(gate.RuleOverrides)
+				r := gate.RulesForPilot(e.rules, pilot.SlotIndex)
 				if reason := e.checkSpikeRejectionLocked(pilot, *gate, i, ev, r); reason != "" {
 					det.RollbackRejectedSpike()
 					continue

@@ -50,7 +50,7 @@ func round3(v float64) float64 {
 // Accepted crossings advance the pilot's progress, record a section split and, at the
 // start/finish gate, complete the lap (unless it exceeded MaxLapSec).
 func (e *Engine) applyCrossingLocked(pilot domain.PilotSlot, gate domain.TrackGate, ev domain.GateCrossingEvent) crossingOutcome {
-	r := e.rules.ForGate(gate.RuleOverrides)
+	r := gate.RulesForPilot(e.rules, pilot.SlotIndex)
 	isSF := gate.Role == domain.GateRoleStartFinish
 	reject := func(reason domain.FilterReason, format string, args ...any) crossingOutcome {
 		return crossingOutcome{rejected: &domain.FilteredDetection{

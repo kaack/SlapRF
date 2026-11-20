@@ -88,8 +88,10 @@ export interface TrackNode {
   /** Per-pilot calibrated RotorHazard EnterAt / ExitAt thresholds at this node (10..250); 0 = pilot default. */
   rhEnterThresholds?: number[];
   rhExitThresholds?: number[];
-  /** This node's own timing-rule values; missing fields use the global rules. */
+  /** This node's own timing-rule values across all pilots; missing fields use the global rules. */
   ruleOverrides: GateRuleOverrides;
+  /** Per-pilot timing-rule overrides at this node (keyed by 1-based PilotSlot.slotIndex). */
+  pilotRuleOverrides?: Record<number, GateRuleOverrides>;
   online: boolean;
   lastSeenAt: string;
   framesRxCount: number;
@@ -810,7 +812,8 @@ export interface PracticeActionPayload {
     | "remove_session_pilot"
     | "set_session_pilot_channel"
     | "clear_session_laps"
-    | "toggle_session_lap";
+    | "toggle_session_lap"
+    | "recalculate_buffered";
   sessionId?: string;
   name?: string;
   tags?: string[];
@@ -1244,8 +1247,14 @@ export interface TimingRules {
   minPassHoldSec: number;
 }
 
-/** The rules a single gate can override (max lap is about the whole lap, so it stays global). */
-export type GateRuleKey = "minLapSec" | "gateCooldownSec" | "minSectionSec" | "echoWindowSec" | "minPassHoldSec";
+/** Every detection/timing rule can be overridden per gate or per (gate, pilot). */
+export type GateRuleKey =
+  | "minLapSec"
+  | "maxLapSec"
+  | "gateCooldownSec"
+  | "minSectionSec"
+  | "echoWindowSec"
+  | "minPassHoldSec";
 export type GateRuleOverrides = Partial<Record<GateRuleKey, number>>;
 
 export type FilterReason = "SPIKE" | "COOLDOWN" | "TOO_SOON" | "ECHO" | "MIN_LAP" | "LAP_TOO_LONG";

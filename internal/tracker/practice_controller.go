@@ -1274,10 +1274,14 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 		target.Crossings = []domain.GateCrossingEvent{}
 		target.Filtered = []domain.FilteredDetection{}
 		target.UpdatedAt = now
+		e.clearReplayRecordingLocked(target.SessionID)
 		if target.Active && e.practiceState.ActiveSessionID == target.SessionID && !e.isLiveRaceHeatActiveLocked() {
 			e.resetSessionLocked()
 		}
 		target.Summaries = e.computePracticeSessionSummariesLocked(target)
+
+	case "recalculate_buffered":
+		e.replayBufferedPracticeLocked()
 
 	case "toggle_session_lap":
 		target := e.findPracticeSessionLocked(resolveTargetID())

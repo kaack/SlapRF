@@ -43,6 +43,7 @@ import {
   suggestNewStageSpawnPosition,
 } from "../widgets/FormatDiagram";
 import { openHeatLapEditorModal } from "../widgets/HeatLapEditorModal";
+import { PilotRssiChart } from "../widgets/PilotRssiChart";
 import {
   mountTagPillEditor,
   normalizeTagToken,
@@ -441,6 +442,84 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(gateRuleCall!.args).toEqual([2, { gateCooldownSec: 2 }]);
     } finally {
       editor.destroy();
+    }
+  });
+
+  it("opens Signals fine-tuning drawer per timer with 3-tier scope toggle, opt-in retroactive replay in Practice, and forward-only mode in Race", async () => {
+    const store = makeStore({
+      gates: [
+        makeGate(1, { name: "H1", role: "START_FINISH", ruleOverrides: { minLapSec: 8 } }),
+        makeGate(2, { name: "T3", role: "SECTOR_GATE" }),
+      ],
+    });
+    const { api, calls } = makeMockApiClient(store);
+    const root = mountHtml(`<div style="width: 640px; height: 420px;"></div>`);
+    const chart = new PilotRssiChart(root.firstElementChild as HTMLElement, store, api, {
+      contextMode: "practice",
+    });
+
+    try {
+      const drawerEl = root.querySelector<HTMLElement>('[data-slot="tune-drawer"]')!;
+      expect(drawerEl.hidden).toBe(true);
+
+      // Click the sliders icon inside timer 1 ("H1") row -> focuses H1 and opens the docked drawer
+      const tuneBtn1 = root.querySelector<HTMLButtonElement>('.channel-tune-btn[data-tune-gate="1"]')!;
+      expect(tuneBtn1).not.toBeNull();
+      tuneBtn1.click();
+      expect(drawerEl.hidden).toBe(false);
+      expect(drawerEl.textContent).toContain("Fine-tune H1");
+
+      // Retroactive toggle defaults to OFF (going forward only)
+      const retroBtn = drawerEl.querySelector<HTMLButtonElement>('[data-tune-act="toggle-retro"]')!;
+      expect(retroBtn.getAttribute("aria-checked")).toBe("false");
+
+      // Default scope is "Only <Pilot>" (Pilot 1 = FAERRY), inheriting minLapSec = 8 from H1 all-pilots
+      const minLapInput = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="minLapSec"]')!;
+      expect(minLapInput.value).toBe("8");
+      const maxLapInput = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="maxLapSec"]')!;
+      expect(maxLapInput).not.toBeNull();
+
+      // Step minLapSec up (+0.5 -> 8.5) with retroactive OFF -> calls setPilotGateRules(..., false)
+      drawerEl.querySelector<HTMLButtonElement>('[data-tune-step="1"][data-tune-key="minLapSec"]')!.click();
+      await flushMicrotasks();
+      const pilotCall1 = calls.find((c) => c.method === "setPilotGateRules");
+      expect(pilotCall1).toBeDefined();
+      expect(pilotCall1!.args).toEqual([1, 1, { minLapSec: 8.5 }, false]);
+
+      // Flip retroactive toggle ON -> immediately triggers recalculateBufferedPractice()
+      retroBtn.click();
+      await flushMicrotasks();
+      expect(
+        drawerEl.querySelector<HTMLButtonElement>('[data-tune-act="toggle-retro"]')!.getAttribute("aria-checked")
+      ).toBe("true");
+      expect(calls.some((c) => c.method === "recalculateBufferedPractice")).toBe(true);
+
+      // Switch scope to "All pilots" and edit maxLapSec -> calls setGateRules(1, ..., true)
+      drawerEl.querySelector<HTMLButtonElement>('[data-tune-scope="gate"]')!.click();
+      const maxInputGate = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="maxLapSec"]')!;
+      maxInputGate.value = "90";
+      maxInputGate.dispatchEvent(new Event("change", { bubbles: true }));
+      await flushMicrotasks();
+      const gateCall = calls.filter((c) => c.method === "setGateRules").pop();
+      expect(gateCall).toBeDefined();
+      expect(gateCall!.args).toEqual([1, { minLapSec: 8, maxLapSec: 90 }, true]);
+    } finally {
+      chart.destroy();
+    }
+
+    // Verify Race mode hides retroactive toggle and applies prospectively only
+    const raceRoot = mountHtml(`<div style="width: 640px; height: 420px;"></div>`);
+    const raceChart = new PilotRssiChart(raceRoot.firstElementChild as HTMLElement, store, api, {
+      contextMode: "race",
+    });
+    try {
+      raceRoot.querySelector<HTMLButtonElement>('.channel-tune-btn[data-tune-gate="2"]')!.click();
+      const raceDrawer = raceRoot.querySelector<HTMLElement>('[data-slot="tune-drawer"]')!;
+      expect(raceDrawer.hidden).toBe(false);
+      expect(raceDrawer.querySelector('[data-tune-act="toggle-retro"]')).toBeNull();
+      expect(raceDrawer.textContent).toContain("Applies to upcoming passes only");
+    } finally {
+      raceChart.destroy();
     }
   });
 });

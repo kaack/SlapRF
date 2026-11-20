@@ -299,3 +299,45 @@ export function exitThresholdAt(store: AppStore, gateId: number, slotIndex: numb
 
 /** A pilot counts as flying if they've crossed a gate recently. */
 export const ON_TRACK_WINDOW_SEC = 20;
+
+/** Returns the per-pilot timing-rule overrides stored on `node` for `slotIndex` (if any). */
+export function pilotGateOverridesAt(node: TrackNode | undefined, slotIndex: number): GateRuleOverrides {
+  if (!node?.pilotRuleOverrides || slotIndex <= 0) return {};
+  return (
+    node.pilotRuleOverrides[slotIndex] ??
+    (node.pilotRuleOverrides as unknown as Record<string, GateRuleOverrides>)[String(slotIndex)] ??
+    {}
+  );
+}
+
+/** Resolves Tier 2 rules at `gateId`: Global rules + Gate-wide overrides (all pilots at this timer). */
+export function gateRulesAt(store: AppStore, gateId: number): TimingRules {
+  const base = store.rules;
+  const o = store.node(gateId)?.ruleOverrides ?? {};
+  const minLapSec = o.minLapSec ?? base.minLapSec;
+  const rawMax = o.maxLapSec ?? base.maxLapSec;
+  return {
+    minLapSec,
+    maxLapSec: Math.max(rawMax, minLapSec + 5),
+    gateCooldownSec: o.gateCooldownSec ?? base.gateCooldownSec,
+    minSectionSec: o.minSectionSec ?? base.minSectionSec,
+    echoWindowSec: o.echoWindowSec ?? base.echoWindowSec,
+    minPassHoldSec: o.minPassHoldSec ?? base.minPassHoldSec,
+  };
+}
+
+/** Resolves Tier 3 rules for `(gateId, slotIndex)`: Global -> Gate-wide -> Pilot-at-Gate overrides. */
+export function pilotGateRulesAt(store: AppStore, gateId: number, slotIndex: number): TimingRules {
+  const gateEff = gateRulesAt(store, gateId);
+  const po = pilotGateOverridesAt(store.node(gateId), slotIndex);
+  const minLapSec = po.minLapSec ?? gateEff.minLapSec;
+  const rawMax = po.maxLapSec ?? gateEff.maxLapSec;
+  return {
+    minLapSec,
+    maxLapSec: Math.max(rawMax, minLapSec + 5),
+    gateCooldownSec: po.gateCooldownSec ?? gateEff.gateCooldownSec,
+    minSectionSec: po.minSectionSec ?? gateEff.minSectionSec,
+    echoWindowSec: po.echoWindowSec ?? gateEff.echoWindowSec,
+    minPassHoldSec: po.minPassHoldSec ?? gateEff.minPassHoldSec,
+  };
+}

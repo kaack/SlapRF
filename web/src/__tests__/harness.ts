@@ -1203,6 +1203,8 @@ export function makeMockApiClient(store: AppStore): MockApiClientRecord {
     getRealEngineState: record("getRealEngineState", null),
     setGateThresholds: record("setGateThresholds"),
     setGateRules: record("setGateRules"),
+    setPilotGateRules: record("setPilotGateRules"),
+    recalculateBufferedPractice: record("recalculateBufferedPractice"),
     updateRules: record("updateRules"),
     getVersionInfo: record("getVersionInfo", {
       release_tag: "(test)",

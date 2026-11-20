@@ -39,7 +39,7 @@ const RULES: RuleSpec[] = [
     min: 10,
     max: 900,
     reason: "LAP_TOO_LONG",
-    perGate: false,
+    perGate: true,
   },
   {
     key: "gateCooldownSec",

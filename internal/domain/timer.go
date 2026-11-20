@@ -121,11 +121,26 @@ type TrackGate struct {
 	LapRFThresholds   [MaxPilotPoolSize]float32 `json:"laprfThresholds,omitempty"`
 	RHEnterThresholds [MaxPilotPoolSize]float32 `json:"rhEnterThresholds,omitempty"`
 	RHExitThresholds  [MaxPilotPoolSize]float32 `json:"rhExitThresholds,omitempty"`
-	// RuleOverrides are this gate's own timing-rule values; unset fields use the global rules.
+	// RuleOverrides are this gate's own timing-rule values across all pilots; unset fields use global rules.
 	RuleOverrides GateRuleOverrides `json:"ruleOverrides"`
+	// PilotRuleOverrides are per-pilot timing-rule overrides at this gate (keyed by 1-based PilotSlot.SlotIndex).
+	// Precedence: PilotRuleOverrides[slotIndex] -> RuleOverrides -> global TimingRules.
+	// Treated as immutable copy-on-write so TrackGate struct copies are safe across snapshots.
+	PilotRuleOverrides map[int]GateRuleOverrides `json:"pilotRuleOverrides,omitempty"`
 	Online        bool              `json:"online"`        // True if frames arrived within the last 2 seconds
 	LastSeenAt    time.Time         `json:"lastSeenAt"`    // Host timestamp of last frame
 	FramesRxCount uint64            `json:"framesRxCount"` // Total telemetry frames received from this timer
+}
+
+// RulesForPilot resolves the effective TimingRules for `slotIndex` at this gate:
+// Global `base` -> `g.RuleOverrides` (all pilots at this gate) -> `g.PilotRuleOverrides[slotIndex]`.
+func (g TrackGate) RulesForPilot(base TimingRules, slotIndex int) TimingRules {
+	if g.PilotRuleOverrides != nil {
+		if po, ok := g.PilotRuleOverrides[slotIndex]; ok {
+			return base.ForPilotGate(g.RuleOverrides, &po)
+		}
+	}
+	return base.ForGate(g.RuleOverrides)
 }
 
 // ComputeBatteryPct converts a 1S LiPo voltage in millivolts (3300..4200 mV) to 0..100%.

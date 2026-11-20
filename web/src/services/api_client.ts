@@ -1023,18 +1023,39 @@ export class ApiClient {
   }
 
   /** Per-gate, per-pilot enter thresholds (all applied, or none if any is invalid). */
-  public async setGateThresholds(updates: GateThresholdUpdate[]): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/thresholds", updates));
+  public async setGateThresholds(updates: GateThresholdUpdate[], retroactive = false): Promise<void> {
+    const url = retroactive ? "/api/thresholds?retroactive=1" : "/api/thresholds";
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", url, updates));
   }
 
-  /** One gate's timing-rule overrides; an empty object clears them. */
-  public async setGateRules(nodeId: number, overrides: GateRuleOverrides): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/gates/rules", { gateId: nodeId, overrides }));
+  /** One gate's timing-rule overrides across all pilots; an empty object clears them. */
+  public async setGateRules(nodeId: number, overrides: GateRuleOverrides, retroactive = false): Promise<void> {
+    const body = retroactive ? { gateId: nodeId, overrides, retroactive: true } : { gateId: nodeId, overrides };
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/gates/rules", body));
+  }
+
+  /** One pilot's timing-rule overrides at one gate (Tier 3); an empty object clears them. */
+  public async setPilotGateRules(
+    nodeId: number,
+    slotIndex: number,
+    overrides: GateRuleOverrides,
+    retroactive = false
+  ): Promise<void> {
+    const body = retroactive
+      ? { gateId: nodeId, slotIndex, overrides, retroactive: true }
+      : { gateId: nodeId, slotIndex, overrides };
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/gates/rules", body));
+  }
+
+  /** Explicitly recalculates buffered Practice laps/crossings/filtered against current thresholds and rules. */
+  public async recalculateBufferedPractice(): Promise<void> {
+    await this.practiceAction({ action: "recalculate_buffered" });
   }
 
   /** Saves timing guardrails; the server clamps values and returns what it applied. */
-  public async updateRules(rules: TimingRules): Promise<void> {
-    this.store.applyRules(await this.transport.request<TimingRules>("POST", "/api/rules", rules));
+  public async updateRules(rules: TimingRules, retroactive = false): Promise<void> {
+    const url = retroactive ? "/api/rules?retroactive=1" : "/api/rules";
+    this.store.applyRules(await this.transport.request<TimingRules>("POST", url, rules));
   }
 
   /** Retrieves the WASM engine's build version info (release tag, commit_hash, branch_name). */
