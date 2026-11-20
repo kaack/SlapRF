@@ -14,18 +14,28 @@ const (
 	autoCalibBucketUs       uint64 = 50_000
 	autoCalibWindowUs       uint64 = 90_000_000 // Rolling 90 s signal window
 	autoCalibMaxBuckets     int    = 1850
-	autoCalibInitialEveryUs uint64 = 1_200_000  // Uncalibrated / provisional gate: check every 1.2 s for fast initial lock
-	autoCalibSteadyEveryUs  uint64 = 30_000_000 // Calibrated gate: re-evaluate every 30 s per flying pilot
+	autoCalibInitialEveryUs uint64 = 1_200_000  // Uncalibrated / provisional / pack-recovery: check every 1.2 s
+	autoCalibMissedEveryUs  uint64 = 2_000_000  // No crossing in >= 10 s: check every 2.0 s for missed passes
+	autoCalibSteadyEveryUs  uint64 = 5_000_000  // Calibrated gate: re-evaluate every 5 s while flying
 	autoCalibFreshPassUs    uint64 = 35_000_000 // Require >= 1 valid pass in the last 35 s to re-calibrate
+	autoCalibMissedCrossUs  uint64 = 10_000_000 // Treat >= 10 s without a gate crossing as potentially missed passes
+
+	// Pack-swap / VTX power-cycle & stream-pause recovery thresholds.
+	autoCalibStreamGapUs   uint64  = 12_000_000 // >= 12 s timestamp jump (practice pause/resume or hub reconnect)
+	autoCalibVtxOffGapUs   uint64  = 15_000_000 // >= 15 s continuous bench noise floor without crossings = pack swap
+	autoCalibPreWakeKeepUs uint64  = 2_000_000  // Keep 2 s of pre-wakeup quiet baseline for immediate takeoff passes
+	autoCalibVtxOffDbm     float32 = -85.5      // Unplugged / pit-mode receiver floor threshold
+	autoCalibVtxWakeDbm    float32 = -81.5      // Powered VTX / approach threshold (4 dB hysteresis above VtxOff)
 
 	autoCalibMinBuckets    int     = 70        // ~3.5 s of 20 Hz history
 	autoCalibMinSpanUs     uint64  = 3_200_000 // >= 3.2 s wall-clock span
-	autoCalibMinPeakRiseDb float32 = 12.0      // Pass peak must rise >= 12 dB above noise floor
+	autoCalibMinPeakRiseDb float32 = 9.5       // Pass peak must rise >= 9.5 dB above local valley baseline (supports indoor 10-12 dB swings)
 	autoCalibLocalMaxSepUs uint64  = 400_000   // Multipath crests < 400 ms apart belong to the same pass
+	autoCalibLocalValleyUs uint64  = 8_000_000 // Measure adjacent approach/departure valleys within +-8 s of each peak
 	autoCalibMinPassSepUs  uint64  = 1_800_000 // Distinct lap fly-bys must be >= 1.8 s apart
 	autoCalibMinPassFwhmUs uint64  = 150_000   // Reject < 150 ms impulse glitches (< 3 buckets above half-prominence)
 	autoCalibMaxPassFwhmUs uint64  = 6_500_000 // Reject > 6.5 s parked/bench VTX plateaus
-	autoCalibDeadbandDb    float32 = 2.0       // Skip periodic 30 s updates smaller than 2 dB
+	autoCalibDeadbandDb    float32 = 1.5       // Skip minor updates smaller than 1.5 dB during steady flying
 )
 
 type autoCalibSample struct {
@@ -36,10 +46,14 @@ type autoCalibSample struct {
 type autoCalibState struct {
 	samples         []autoCalibSample
 	lastEvalUs      uint64
+	lastCrossingUs  uint64
+	vtxOffSinceUs   uint64
+	vtxWakeUs       uint64
 	freqMHz         uint16
 	assignedTimerID uint8
 	manualPinned    bool
 	provisional     bool
+	packRecovery    bool
 }
 
 type autoCalibPeak struct {
@@ -67,15 +81,19 @@ func (e *Engine) setAutoCalibManualPinLocked(gateID uint8, slotIndex int, pinned
 	}
 	st.manualPinned = pinned
 	st.provisional = false
+	st.packRecovery = false
 	if resetHistory {
 		st.samples = st.samples[:0]
 		st.lastEvalUs = 0
+		st.lastCrossingUs = 0
+		st.vtxOffSinceUs = 0
+		st.vtxWakeUs = 0
 	}
 }
 
 // recordAutoCalibSampleLocked records a smoothed SlapRF dBm sample for `(gate, pilot)` and runs
-// automatic threshold calibration when lap-like pass waveforms are present (every 2.5 s until
-// initially calibrated, then every 30 s while the pilot continues flying).
+// continuous threshold calibration when lap-like pass waveforms are present, adapting across
+// battery swaps, VTX power changes, and indoor/outdoor noise floors without manual intervention.
 // Returns `(changedConfig, changedStartFinish)`. Caller holds `e.mu` write lock.
 func (e *Engine) recordAutoCalibSampleLocked(
 	gate *domain.TrackGate,
@@ -84,6 +102,7 @@ func (e *Engine) recordAutoCalibSampleLocked(
 	det *dsp.ChannelDetector,
 	smoothedDbm float32,
 	tsUs uint64,
+	crossedNow bool,
 ) (changed bool, sfChanged bool) {
 	if gate == nil || slotPos < 0 || slotPos >= len(gate.EnterThresholds) {
 		return false, false
@@ -113,7 +132,11 @@ func (e *Engine) recordAutoCalibSampleLocked(
 	if st.freqMHz != pilot.FrequencyMHz || st.assignedTimerID != gate.AssignedTimerID {
 		st.samples = st.samples[:0]
 		st.lastEvalUs = 0
+		st.lastCrossingUs = 0
+		st.vtxOffSinceUs = 0
+		st.vtxWakeUs = 0
 		st.provisional = false
+		st.packRecovery = false
 		st.freqMHz = pilot.FrequencyMHz
 		st.assignedTimerID = gate.AssignedTimerID
 		if !st.manualPinned {
@@ -122,10 +145,64 @@ func (e *Engine) recordAutoCalibSampleLocked(
 		}
 	}
 
-	// Handle non-monotonic timestamps (e.g. simulator reset).
-	if n := len(st.samples); n > 0 && tsUs < st.samples[n-1].tsUs {
-		st.samples = st.samples[:0]
-		st.lastEvalUs = 0
+	// Handle non-monotonic timestamps (e.g. simulator reset) or long stream gaps (e.g. practice
+	// paused during a battery swap or BLE hub reconnected).
+	if n := len(st.samples); n > 0 {
+		prevTs := st.samples[n-1].tsUs
+		if tsUs < prevTs {
+			st.samples = st.samples[:0]
+			st.lastEvalUs = 0
+			st.lastCrossingUs = 0
+			st.vtxOffSinceUs = 0
+			st.vtxWakeUs = 0
+			st.provisional = false
+			st.packRecovery = false
+		} else if tsUs-prevTs >= autoCalibStreamGapUs {
+			st.samples = st.samples[:0]
+			st.lastEvalUs = 0
+			st.vtxOffSinceUs = 0
+			st.vtxWakeUs = tsUs
+			if !st.manualPinned && gate.EnterThresholds[slotPos] != 0 {
+				st.packRecovery = true
+			}
+		}
+	}
+
+	// Record crossings before 50 ms bucket downsampling returns early so no crossing is missed.
+	if crossedNow {
+		st.lastCrossingUs = tsUs
+	}
+
+	// Detect VTX power-off bench periods (>= 15 s at <= -85.5 dBm with no crossings) followed by
+	// VTX power-on (>= -81.5 dBm). Trimming pre-pack history keeps Pack 1's stronger peaks and
+	// long -92 dBm bench dead air from blinding Pack 2 recalibration.
+	if smoothedDbm <= autoCalibVtxOffDbm {
+		if st.vtxOffSinceUs == 0 {
+			st.vtxOffSinceUs = tsUs
+		}
+	} else if smoothedDbm >= autoCalibVtxWakeDbm {
+		if st.vtxOffSinceUs != 0 &&
+			tsUs >= st.vtxOffSinceUs+autoCalibVtxOffGapUs &&
+			(st.lastCrossingUs == 0 || tsUs >= st.lastCrossingUs+autoCalibVtxOffGapUs) {
+			var keepCutoff uint64
+			if tsUs > autoCalibPreWakeKeepUs {
+				keepCutoff = tsUs - autoCalibPreWakeKeepUs
+			}
+			drop := 0
+			for drop < len(st.samples) && st.samples[drop].tsUs < keepCutoff {
+				drop++
+			}
+			if drop > 0 {
+				copy(st.samples, st.samples[drop:])
+				st.samples = st.samples[:len(st.samples)-drop]
+			}
+			st.vtxWakeUs = tsUs
+			st.lastEvalUs = 0
+			if !st.manualPinned && gate.EnterThresholds[slotPos] != 0 {
+				st.packRecovery = true
+			}
+		}
+		st.vtxOffSinceUs = 0
 	}
 
 	// Peak-preserving 50 ms (~20 Hz) bucket downsampling.
@@ -157,40 +234,69 @@ func (e *Engine) recordAutoCalibSampleLocked(
 	}
 
 	uncalibrated := gate.EnterThresholds[slotPos] == 0
+	missedRecently := !uncalibrated && (st.lastCrossingUs == 0 || (tsUs > st.lastCrossingUs && tsUs-st.lastCrossingUs >= autoCalibMissedCrossUs))
+
 	intervalUs := autoCalibSteadyEveryUs
-	if uncalibrated || st.provisional {
+	if uncalibrated || st.provisional || st.packRecovery {
 		intervalUs = autoCalibInitialEveryUs
+	} else if missedRecently {
+		intervalUs = autoCalibMissedEveryUs
 	}
 	if st.lastEvalUs != 0 && tsUs >= st.lastEvalUs && tsUs-st.lastEvalUs < intervalUs {
 		return false, false
 	}
 	st.lastEvalUs = tsUs
 
-	enterDbm, exitDbm, pendingExit, ok := suggestAutoThresholdDbm(st.samples, tsUs)
+	singleGate := len(e.gates) == 1
+	curEnter := gate.EnterThresholds[slotPos]
+	curExit := gate.ExitThresholds[slotPos]
+
+	enterDbm, exitDbm, pendingExit, ok := suggestAutoThresholdForGate(
+		st.samples,
+		tsUs,
+		singleGate,
+		missedRecently || st.packRecovery,
+	)
 	fromSinglePass := false
-	// Single-pass provisional lock is only used on single-gate setups when the pilot's first pass
-	// was too weak to cross the default threshold (!det.HasCrossed()); multi-gate courses wait for
-	// >= 2 passes so neighbour-gate bleed-over bumps can never trigger a premature threshold shift.
-	if !ok && uncalibrated && len(e.gates) == 1 && (det == nil || !det.HasCrossed()) {
-		enterDbm, exitDbm, ok = suggestSinglePassProvisionalDbm(st.samples, tsUs, pilot.EnterThreshold)
-		fromSinglePass = ok
+
+	// Single-pass provisional lock is only used on single-gate setups (where neighbour-gate bleed
+	// cannot exist) when either:
+	// 1. The gate is uncalibrated and Pass #1 was too weak to cross the default threshold, OR
+	// 2. The pilot just returned from a battery swap (`st.packRecovery`) and Pass #1 peaked below
+	//    the previous pack's threshold without triggering a crossing.
+	if !ok && singleGate {
+		if uncalibrated && (det == nil || !det.HasCrossed()) {
+			enterDbm, exitDbm, ok = suggestSinglePassProvisionalDbm(st.samples, tsUs, pilot.EnterThreshold, false)
+			fromSinglePass = ok
+		} else if st.packRecovery && (st.lastCrossingUs == 0 || st.lastCrossingUs < st.vtxWakeUs) {
+			candEnter, candExit, candOk := suggestSinglePassProvisionalDbm(st.samples, tsUs, curEnter, true)
+			if candOk && candEnter < curEnter {
+				enterDbm, exitDbm, ok = candEnter, candExit, true
+				fromSinglePass = true
+			}
+		}
 	}
 	if !ok {
-		if pendingExit && (uncalibrated || st.provisional) && tsUs > intervalUs {
+		if pendingExit && tsUs > intervalUs {
 			// A pass crest is currently exiting the gate; re-check in ~0.6 s once it returns to baseline.
 			st.lastEvalUs = tsUs - intervalUs + 600_000
 		}
 		return false, false
 	}
 
-	wasProvisional := st.provisional
+	wasFastTrack := st.provisional || st.packRecovery
 	st.provisional = fromSinglePass
+	if !fromSinglePass {
+		st.packRecovery = false
+	}
 
-	curEnter := gate.EnterThresholds[slotPos]
-	curExit := gate.ExitThresholds[slotPos]
-	if !uncalibrated && !wasProvisional &&
-		float32(math.Abs(float64(enterDbm-curEnter))) < autoCalibDeadbandDb &&
-		float32(math.Abs(float64(exitDbm-curExit))) < autoCalibDeadbandDb {
+	deadband := autoCalibDeadbandDb
+	if missedRecently && enterDbm < curEnter {
+		deadband = 1.0
+	}
+	if !uncalibrated && !wasFastTrack &&
+		float32(math.Abs(float64(enterDbm-curEnter))) < deadband &&
+		float32(math.Abs(float64(exitDbm-curExit))) < deadband {
 		return false, false
 	}
 
@@ -202,10 +308,109 @@ func (e *Engine) recordAutoCalibSampleLocked(
 	return true, gate.Role == domain.GateRoleStartFinish
 }
 
-// suggestSinglePassProvisionalDbm locks in a provisional threshold right after the VERY FIRST
-// clean bell-curve gate pass completes on an uncalibrated gate (so Pass #2 already starts Lap 1
-// instead of missing the first 2 laps), and is refined automatically as soon as Pass #2 completes.
-func suggestSinglePassProvisionalDbm(samples []autoCalibSample, nowUs uint64, pilotDefaultEnter float32) (enterDbm, exitDbm float32, ok bool) {
+// suggestAutoThresholdForGate combines full-window stability with rapid regime-shift adaptation:
+//   - On single-gate tracks (no neighbour-gate bleed possible), if no crossing fired in >= 10 s or
+//     after a pack swap, a clean 18 s recent window (>= 2 missed passes) immediately re-locks; during
+//     steady flying, a 30 s recent window adapts whenever pass strength shifts by >= 3.5 dB.
+//   - On multi-gate tracks, upward shifts adapt within 30 s while downward shifts without a VTX
+//     power-off wait for the 90 s window so a pilot skipping a split gate cannot lower onto bleed.
+func suggestAutoThresholdForGate(
+	samples []autoCalibSample,
+	nowUs uint64,
+	singleGate bool,
+	fastRecovery bool,
+) (enterDbm, exitDbm float32, pendingExit bool, ok bool) {
+	var recentPending bool
+	if singleGate && fastRecovery {
+		if recent18 := tailAutoCalibSamples(samples, nowUs, 18_000_000); len(recent18) >= autoCalibMinBuckets {
+			if en, ex, pend, ok18 := suggestAutoThresholdDbm(recent18, nowUs); ok18 {
+				return en, ex, false, true
+			} else if pend {
+				recentPending = true
+			}
+		}
+	}
+
+	enFull, exFull, pendFull, okFull := suggestAutoThresholdDbm(samples, nowUs)
+
+	if recent30 := tailAutoCalibSamples(samples, nowUs, 30_000_000); len(recent30) >= autoCalibMinBuckets && len(recent30) < len(samples) {
+		if en30, ex30, pend30, ok30 := suggestAutoThresholdDbm(recent30, nowUs); ok30 {
+			if singleGate {
+				if !okFull || float32(math.Abs(float64(en30-enFull))) >= 3.5 {
+					return en30, ex30, false, true
+				}
+			} else if okFull && en30 >= enFull+3.5 {
+				return en30, ex30, false, true
+			}
+		} else if pend30 {
+			recentPending = true
+		}
+	}
+
+	return enFull, exFull, pendFull || recentPending, okFull
+}
+
+func tailAutoCalibSamples(samples []autoCalibSample, nowUs, spanUs uint64) []autoCalibSample {
+	if len(samples) == 0 || nowUs <= spanUs {
+		return samples
+	}
+	cutoff := nowUs - spanUs
+	idx := sort.Search(len(samples), func(i int) bool {
+		return samples[i].tsUs >= cutoff
+	})
+	return samples[idx:]
+}
+
+// trimLeadingVtxSilence slices off an early VTX-off silence stretch (>= 15 s continuously <= -85.5 dBm)
+// when followed by >= 3.2 s of active VTX telemetry reaching >= -81.5 dBm, keeping 2 s of pre-wakeup
+// floor so an immediate takeoff pass retains its left flank.
+func trimLeadingVtxSilence(samples []autoCalibSample) []autoCalibSample {
+	n := len(samples)
+	if n < autoCalibMinBuckets {
+		return samples
+	}
+	bestWakeIdx := -1
+	quietStartIdx := -1
+	for i := 0; i < n; i++ {
+		if samples[i].dbm <= autoCalibVtxOffDbm {
+			if quietStartIdx < 0 {
+				quietStartIdx = i
+			}
+		} else if samples[i].dbm >= autoCalibVtxWakeDbm {
+			if quietStartIdx >= 0 && samples[i].tsUs >= samples[quietStartIdx].tsUs+autoCalibVtxOffGapUs {
+				bestWakeIdx = i
+			}
+			quietStartIdx = -1
+		}
+	}
+	if bestWakeIdx <= 0 {
+		return samples
+	}
+	// Only trim if the post-wakeup tail has enough duration and active signal to evaluate.
+	var keepCutoff uint64
+	if samples[bestWakeIdx].tsUs > autoCalibPreWakeKeepUs {
+		keepCutoff = samples[bestWakeIdx].tsUs - autoCalibPreWakeKeepUs
+	}
+	startIdx := sort.Search(n, func(i int) bool {
+		return samples[i].tsUs >= keepCutoff
+	})
+	rem := samples[startIdx:]
+	if len(rem) < autoCalibMinBuckets || rem[len(rem)-1].tsUs < rem[0].tsUs+autoCalibMinSpanUs {
+		return samples
+	}
+	return rem
+}
+
+// suggestSinglePassProvisionalDbm locks in a provisional threshold right after a single clean
+// bell-curve gate pass completes on a single-gate setup (so the very next pass already counts
+// instead of missing 2 laps), and is refined automatically as soon as Pass #2 completes.
+func suggestSinglePassProvisionalDbm(
+	samples []autoCalibSample,
+	nowUs uint64,
+	refEnter float32,
+	allowLowerBelowRef bool,
+) (enterDbm, exitDbm float32, ok bool) {
+	samples = trimLeadingVtxSilence(samples)
 	n := len(samples)
 	if n < autoCalibMinBuckets {
 		return 0, 0, false
@@ -225,19 +430,52 @@ func suggestSinglePassProvisionalDbm(samples []autoCalibSample, nowUs uint64, pi
 
 	bestIdx := -1
 	var bestVal float32
-	// Require bestVal >= -64 dBm for single-pass provisional lock so distant neighbour-gate bleed
-	// (-70..-75 dBm when a pilot crosses another gate 25+ m away) never triggers a false provisional
-	// threshold; ultra-weak (< -64 dBm) setups still lock in cleanly on Pass #2 via suggestAutoThresholdDbm.
 	for i := 2; i < n-2; i++ {
-		if samples[i].dbm >= -64.0 && samples[i].dbm >= floor+14.0 && (bestIdx < 0 || samples[i].dbm > bestVal) {
+		if samples[i].dbm >= -68.0 && samples[i].dbm >= floor+autoCalibMinPeakRiseDb && (bestIdx < 0 || samples[i].dbm > bestVal) {
 			bestIdx = i
 			bestVal = samples[i].dbm
 		}
 	}
-	if bestIdx < 0 || nowUs > samples[bestIdx].tsUs && nowUs-samples[bestIdx].tsUs > autoCalibFreshPassUs {
+	if bestIdx < 0 || (nowUs > samples[bestIdx].tsUs && nowUs-samples[bestIdx].tsUs > autoCalibFreshPassUs) {
 		return 0, 0, false
 	}
-	halfLvl := floor + 0.5*(bestVal-floor)
+
+	// Measure local pre-pass and post-pass valleys so indoor VTX-on room baselines (-74 dBm) work
+	// identically even if pre-power-on samples sat at -92 dBm.
+	preMin := samples[0].dbm
+	for j := 0; j < bestIdx; j++ {
+		if samples[j].tsUs+autoCalibLocalValleyUs >= samples[bestIdx].tsUs && samples[j].dbm < preMin {
+			preMin = samples[j].dbm
+		} else if j == 0 {
+			preMin = samples[j].dbm
+		}
+	}
+	// Recompute preMin strictly inside [bestTs - 8s, bestTs).
+	hasPre := false
+	for j := bestIdx - 1; j >= 0 && samples[bestIdx].tsUs-samples[j].tsUs <= autoCalibLocalValleyUs; j-- {
+		if !hasPre || samples[j].dbm < preMin {
+			preMin = samples[j].dbm
+			hasPre = true
+		}
+	}
+	if !hasPre {
+		return 0, 0, false
+	}
+	postMin := samples[bestIdx+1].dbm
+	for j := bestIdx + 1; j < n && samples[j].tsUs-samples[bestIdx].tsUs <= autoCalibLocalValleyUs; j++ {
+		if samples[j].dbm < postMin {
+			postMin = samples[j].dbm
+		}
+	}
+	localBase := preMin
+	if postMin > localBase {
+		localBase = postMin
+	}
+	if bestVal-localBase < autoCalibMinPeakRiseDb {
+		return 0, 0, false
+	}
+
+	halfLvl := localBase + 0.5*(bestVal-localBase)
 	leftIdx := -1
 	for j := bestIdx - 1; j >= 0; j-- {
 		if samples[j].dbm <= halfLvl {
@@ -259,14 +497,15 @@ func suggestSinglePassProvisionalDbm(samples []autoCalibSample, nowUs uint64, pi
 	if rightIdx-leftIdx < 4 || fwhmUs < autoCalibMinPassFwhmUs || fwhmUs > 5_000_000 {
 		return 0, 0, false
 	}
-	// Require the post-pass tail to have settled back near the active baseline.
-	postMin := samples[rightIdx].dbm
+
+	// Require the post-pass tail after `rightIdx` to have settled near `localBase`.
+	tailMin := samples[rightIdx].dbm
 	for j := rightIdx; j < n; j++ {
-		if samples[j].dbm < postMin {
-			postMin = samples[j].dbm
+		if samples[j].dbm < tailMin {
+			tailMin = samples[j].dbm
 		}
 	}
-	if postMin > floor+0.35*(bestVal-floor) {
+	if tailMin > localBase+0.35*(bestVal-localBase) {
 		return 0, 0, false
 	}
 	activeFloor := postMin
@@ -277,25 +516,31 @@ func suggestSinglePassProvisionalDbm(samples []autoCalibSample, nowUs uint64, pi
 	if bestVal-5.0 < enter {
 		enter = bestVal - 5.0
 	}
-	// Never tighten above the pilot's default enter threshold from a single pass before line-to-line
-	// peak variance is observed across >= 2 passes.
-	if pilotDefaultEnter < 0 && pilotDefaultEnter < enter && pilotDefaultEnter >= activeFloor+7.0 {
-		enter = pilotDefaultEnter
+	// On initial uncalibrated lock, never tighten above the pilot's default enter threshold from a
+	// single pass before line-to-line peak variance is observed across >= 2 passes.
+	if !allowLowerBelowRef && refEnter < 0 && refEnter < enter && refEnter >= activeFloor+6.0 {
+		enter = refEnter
 	}
-	if activeFloor+7.0 > enter {
-		enter = activeFloor + 7.0
+	if activeFloor+6.0 > enter {
+		enter = activeFloor + 6.0
 	}
 	enterDbm = clampDbm(enter)
-	// Before >= 2 passes measure the true inter-pass valley, keep a crisp 6 dB hysteresis gap below
-	// enterDbm so the detector always exits promptly for Pass #2.
-	exitDbm = clampExitDbm(enterDbm-6.0, enterDbm)
+	exitCand := enterDbm - 6.0
+	if activeFloor > -85.0 && float32(math.Ceil(float64(activeFloor)))+2.0 > exitCand {
+		exitCand = float32(math.Ceil(float64(activeFloor))) + 2.0
+	}
+	if enterDbm-4.0 < exitCand {
+		exitCand = enterDbm - 4.0
+	}
+	exitDbm = clampExitDbm(exitCand, enterDbm)
 	return enterDbm, exitDbm, true
 }
 
 // suggestAutoThresholdDbm analyzes recent 20 Hz smoothed RSSI buckets for one (gate, pilot) and
 // returns `(enterDbm, exitDbm, passStillExiting, ok)` when the history contains genuine lap-like
-// gate pass waveforms (>= 2 distinct bell-curve excursions rising >= 12 dB above a quiet baseline).
+// gate pass waveforms (>= 2 distinct bell-curve excursions rising >= 12 dB above local valleys).
 func suggestAutoThresholdDbm(samples []autoCalibSample, nowUs uint64) (enterDbm, exitDbm float32, pendingExit bool, ok bool) {
+	samples = trimLeadingVtxSilence(samples)
 	n := len(samples)
 	if n < autoCalibMinBuckets {
 		return 0, 0, false, false
@@ -316,13 +561,12 @@ func suggestAutoThresholdDbm(samples []autoCalibSample, nowUs uint64) (enterDbm,
 	if floor > -55.0 {
 		return 0, 0, false, false
 	}
-	p75 := percentileF32(sorted, 0.75)
-	// Use p65 (rather than p90) for the baseline noise ceiling so frequent 5-7 s passes
-	// (where the top 25-35% of samples sit inside gate fly-bys) never push enterThreshold
-	// up into the tips of the pass peaks.
 	noiseCeiling := percentileF32(sorted, 0.65)
 
-	// 1. Find local maxima >= 12 dB above floor that form bounded bell-curve excursions.
+	// 1. Find local maxima rising >= 12 dB above their adjacent +-8 s approach/departure valleys
+	// that form bounded bell-curve excursions. Using local valleys rather than global p20 `floor`
+	// ensures indoor/tight-track passes (-59 dBm peaks over -74 dBm VTX-on room valleys) are still
+	// recognized cleanly even when part of the 90 s buffer contains -92 dBm VTX-off silence.
 	var peaks []autoCalibPeak
 	for i := 0; i < n; i++ {
 		v := samples[i].dbm
@@ -346,9 +590,36 @@ func suggestAutoThresholdDbm(samples []autoCalibSample, nowUs uint64) (enterDbm,
 			continue
 		}
 
-		// Verify bell-curve waveform shape: both sides must fall back to/below half-prominence
-		// within a realistic gate-pass FWHM (80 ms .. 6.5 s).
-		halfLvl := floor + 0.5*(v-floor)
+		// Measure local valleys within +-8 s around this peak candidate.
+		leftMin := v
+		for j := i - 1; j >= 0 && ts-samples[j].tsUs <= autoCalibLocalValleyUs; j-- {
+			if samples[j].dbm < leftMin {
+				leftMin = samples[j].dbm
+			}
+		}
+		if v-leftMin < autoCalibMinPeakRiseDb {
+			continue
+		}
+		rightMin := v
+		for j := i + 1; j < n && samples[j].tsUs-ts <= autoCalibLocalValleyUs; j++ {
+			if samples[j].dbm < rightMin {
+				rightMin = samples[j].dbm
+			}
+		}
+		if v-rightMin < autoCalibMinPeakRiseDb {
+			if nowUs >= ts && nowUs-ts <= 3_000_000 && samples[n-1].tsUs-ts <= 3_000_000 {
+				pendingExit = true
+			}
+			continue
+		}
+		localBase := leftMin
+		if rightMin > localBase {
+			localBase = rightMin
+		}
+
+		// Verify bell-curve waveform shape: both sides must fall back to/below local half-prominence
+		// within a realistic gate-pass FWHM (150 ms .. 6.5 s).
+		halfLvl := localBase + 0.5*(v-localBase)
 		leftIdx := -1
 		for j := i - 1; j >= 0; j-- {
 			if samples[j].dbm <= halfLvl {
@@ -357,7 +628,7 @@ func suggestAutoThresholdDbm(samples []autoCalibSample, nowUs uint64) (enterDbm,
 			}
 		}
 		if leftIdx < 0 {
-			continue // Signal started high at window edge (e.g. bench power-on), not a pass
+			continue
 		}
 		rightIdx := -1
 		for j := i + 1; j < n; j++ {
@@ -367,8 +638,7 @@ func suggestAutoThresholdDbm(samples []autoCalibSample, nowUs uint64) (enterDbm,
 			}
 		}
 		if rightIdx < 0 {
-			// Latest crest at the right edge of the window hasn't dropped back down yet.
-			if nowUs-ts <= 3_000_000 {
+			if nowUs >= ts && nowUs-ts <= 3_000_000 {
 				pendingExit = true
 			}
 			continue
@@ -399,13 +669,17 @@ func suggestAutoThresholdDbm(samples []autoCalibSample, nowUs uint64) (enterDbm,
 	sort.Slice(peakVals, func(i, j int) bool { return peakVals[i] < peakVals[j] })
 	strong := percentileF32(peakVals, 0.90)
 
-	// Duty-cycle check: real lap data stays near the floor for the majority of the lap.
-	if (p75 - floor) > 0.60*(strong-floor) {
-		return 0, 0, false, false
+	// Estimate active VTX-on valley baseline between candidate peaks so prominence filtering isn't
+	// skewed downward by -92 dBm VTX-off tails.
+	prelimValleys := measureInterPeakValleys(samples, peaks)
+	prelimFloor := floor
+	if len(prelimValleys) > 0 {
+		prelimFloor = medianSortedF32(prelimValleys)
 	}
 
-	// Keep genuine passes (at least 50% of strong prominence) and ignore weak neighbour-gate bumps.
-	minPassDbm := floor + 0.50*(strong-floor)
+	// Keep genuine passes (at least 45% of strong prominence above active baseline) and ignore weak
+	// neighbour-gate bleed bumps.
+	minPassDbm := prelimFloor + 0.45*(strong-prelimFloor)
 	passPeaks := make([]autoCalibPeak, 0, len(peaks))
 	passVals := make([]float32, 0, len(peaks))
 	var latestPassUs uint64
@@ -427,14 +701,86 @@ func suggestAutoThresholdDbm(samples []autoCalibSample, nowUs uint64) (enterDbm,
 	}
 
 	// Measure actual inter-pass valleys between consecutive passes (while the VTX is powered on).
-	// Without this, a 20-35 s VTX-off segment (-91 dBm) in the 90 s buffer drags the global p20
-	// `floor` down to -91 dBm even when indoor/small-track inter-pass valleys sit around -75 dBm,
-	// placing `exitDbm` below the valleys so the detector never exits the gate!
-	var interPassValleys []float32
+	// Without this, a VTX-off segment (-91 dBm) in the 90 s buffer drags global p20 `floor` down
+	// to -91 dBm even when indoor/small-track inter-pass valleys sit around -74 dBm, placing
+	// `exitDbm` below the valleys so the detector never exits the gate.
+	interPassValleys := measureInterPeakValleys(samples, passPeaks)
+	activeFloor := floor
+	valleyHigh := floor
+	hasMeasuredValleys := len(interPassValleys) > 0
+	if hasMeasuredValleys {
+		activeFloor = medianSortedF32(interPassValleys)
+		valleyHigh = percentileF32(interPassValleys, 0.75)
+	}
+
+	// Duty-cycle check over the active flying span `[firstPass..lastPass]`: the median sample across
+	// active laps must sit closer to the valley than to the pass crest (allows fast 5-6 s laps with
+	// 2.0 s indoor beamwidths while still rejecting high-duty-cycle bench plateaus).
+	firstUs := passPeaks[0].tsUs
+	lastUs := passPeaks[len(passPeaks)-1].tsUs
+	if lastUs > firstUs {
+		var activeSpanVals []float32
+		for i := 0; i < n; i++ {
+			if samples[i].tsUs >= firstUs && samples[i].tsUs <= lastUs {
+				activeSpanVals = append(activeSpanVals, samples[i].dbm)
+			}
+		}
+		if len(activeSpanVals) >= 10 {
+			sort.Slice(activeSpanVals, func(i, j int) bool { return activeSpanVals[i] < activeSpanVals[j] })
+			activeMedian := medianSortedF32(activeSpanVals)
+			if (activeMedian - activeFloor) > 0.65*(strong-activeFloor) {
+				return 0, 0, false, false
+			}
+		}
+	}
+
+	sort.Slice(passVals, func(i, j int) bool { return passVals[i] < passVals[j] })
+	peak := medianSortedF32(passVals)
+	weak := percentileF32(passVals, 0.25)
+
+	enter := activeFloor + 0.52*(peak-activeFloor)
+	if weak-3.5 < enter {
+		enter = weak - 3.5
+	}
+	if valleyHigh+4.5 > enter {
+		enter = valleyHigh + 4.5
+	}
+	if activeFloor+6.0 > enter {
+		enter = activeFloor + 6.0
+	}
+	if !hasMeasuredValleys && noiseCeiling+3.0 > enter {
+		enter = noiseCeiling + 3.0
+	}
+	enterDbm = clampDbm(float32(math.Round(float64(enter))))
+
+	rawExit := float32(math.Round(float64(activeFloor + 0.25*(peak-activeFloor))))
+	valleyClear := float32(math.Ceil(float64(valleyHigh))) + 2.0
+	minHyst := float32(5.0)
+	if hasMeasuredValleys {
+		minHyst = 4.0
+	} else {
+		valleyClear = float32(math.Round(float64(activeFloor))) + 4.0
+	}
+	exitCand := rawExit
+	if valleyClear > exitCand {
+		exitCand = valleyClear
+	}
+	if enterDbm-minHyst < exitCand {
+		exitCand = enterDbm - minHyst
+	}
+	exitDbm = clampExitDbm(exitCand, enterDbm)
+	return enterDbm, exitDbm, false, true
+}
+
+// measureInterPeakValleys returns sorted active VTX-on valley minima (> -85 dBm) between consecutive
+// peaks separated by <= 25 s.
+func measureInterPeakValleys(samples []autoCalibSample, peaks []autoCalibPeak) []float32 {
+	n := len(samples)
+	var valleys []float32
 	sampleIdx := 0
-	for k := 0; k < len(passPeaks)-1; k++ {
-		t0 := passPeaks[k].tsUs
-		t1 := passPeaks[k+1].tsUs
+	for k := 0; k < len(peaks)-1; k++ {
+		t0 := peaks[k].tsUs
+		t1 := peaks[k+1].tsUs
 		if t1 <= t0 || t1-t0 > 25_000_000 {
 			continue
 		}
@@ -450,52 +796,13 @@ func suggestAutoThresholdDbm(samples []autoCalibSample, nowUs uint64) (enterDbm,
 			}
 		}
 		if hasMin && vMin > -85.0 {
-			interPassValleys = append(interPassValleys, vMin)
+			valleys = append(valleys, vMin)
 		}
 	}
-
-	activeFloor := floor
-	valleyHigh := floor
-	hasMeasuredValleys := len(interPassValleys) > 0
-	if hasMeasuredValleys {
-		sort.Slice(interPassValleys, func(i, j int) bool { return interPassValleys[i] < interPassValleys[j] })
-		activeFloor = medianSortedF32(interPassValleys)
-		valleyHigh = percentileF32(interPassValleys, 0.75)
+	if len(valleys) > 1 {
+		sort.Slice(valleys, func(i, j int) bool { return valleys[i] < valleys[j] })
 	}
-
-	sort.Slice(passVals, func(i, j int) bool { return passVals[i] < passVals[j] })
-	peak := medianSortedF32(passVals)
-	weak := percentileF32(passVals, 0.25)
-
-	enter := activeFloor + 0.52*(peak-activeFloor)
-	if weak-3.5 < enter {
-		enter = weak - 3.5
-	}
-	if valleyHigh+5.0 > enter {
-		enter = valleyHigh + 5.0
-	}
-	if activeFloor+7.0 > enter {
-		enter = activeFloor + 7.0
-	}
-	if !hasMeasuredValleys && noiseCeiling+3.0 > enter {
-		enter = noiseCeiling + 3.0
-	}
-	enterDbm = clampDbm(float32(math.Round(float64(enter))))
-
-	rawExit := float32(math.Round(float64(activeFloor + 0.25*(peak-activeFloor))))
-	valleyClear := float32(math.Ceil(float64(valleyHigh))) + 2.0
-	if !hasMeasuredValleys {
-		valleyClear = float32(math.Round(float64(activeFloor))) + 4.0
-	}
-	exitCand := rawExit
-	if valleyClear > exitCand {
-		exitCand = valleyClear
-	}
-	if enterDbm-5.0 < exitCand {
-		exitCand = enterDbm - 5.0
-	}
-	exitDbm = clampExitDbm(exitCand, enterDbm)
-	return enterDbm, exitDbm, false, true
+	return valleys
 }
 
 func percentileF32(sorted []float32, p float64) float32 {

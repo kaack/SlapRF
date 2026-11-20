@@ -508,4 +508,54 @@ describe("state/calibration — Automatic RSSI Pass & Hysteresis Threshold Sugge
       expect(res.exitDbm).toBeGreaterThanOrEqual(res.floorDbm + 4);
     }
   });
+
+  it("retains 15 minutes (900s) in HISTORY_SECONDS and calibrates the most recent indoor pack even after minutes of post-flight silence", () => {
+    expect(HISTORY_SECONDS).toBe(900);
+
+    // Build a 10-minute stream sampled at 5 Hz (3000 frames) containing:
+    // - 0..60s: Pack 1 strong passes (-44 dBm over -72 dBm)
+    // - 60..240s: VTX-off bench gap (-92 dBm)
+    // - 240..300s: Pack 2 weaker indoor passes (-60 dBm over -74 dBm valleys every 8s)
+    // - 300..600s: 5 minutes of post-landing bench silence (-92 dBm) while pilot walks to phone
+    const frames: TimerTelemetryFrame[] = [];
+    const pack1Centers = [10, 18, 26, 34, 42, 50];
+    const pack2Centers = [248, 256, 264, 272, 280, 288];
+    let seq = 1;
+    for (let ms = 0; ms <= 600_000; ms += 200) {
+      const sec = ms / 1000;
+      let rssi = -92;
+      if (sec <= 60) {
+        rssi = -72;
+        for (const c of pack1Centers) {
+          const d = (sec - c) / 0.8;
+          rssi = Math.max(rssi, -72 + 28 * Math.exp(-0.5 * d * d));
+        }
+      } else if (sec >= 240 && sec <= 300) {
+        rssi = -74;
+        for (const c of pack2Centers) {
+          const d = (sec - c) / 0.85;
+          rssi = Math.max(rssi, -74 + 14 * Math.exp(-0.5 * d * d));
+        }
+      }
+      frames.push({
+        timerId: 1,
+        seqNum: seq++,
+        timestampUs: ms * 1000,
+        rssi: [rssi, -92, -92, -92],
+        batteryMv: 4100,
+        noiseFloorDbm: -92,
+      });
+    }
+
+    const res = suggestThreshold(frames, 0);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.passes).toBe(6);
+      expect(res.floorDbm).toBe(-74);
+      expect(res.enterDbm).toBeLessThanOrEqual(-64);
+      expect(res.enterDbm).toBeGreaterThanOrEqual(-70);
+      expect(res.exitDbm).toBeGreaterThanOrEqual(-72);
+      expect(res.exitDbm).toBeLessThanOrEqual(res.enterDbm - 5);
+    }
+  });
 });

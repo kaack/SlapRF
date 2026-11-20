@@ -23,10 +23,10 @@ const RH_Y_ABS_MIN = 0;
 const RH_Y_ABS_MAX = 260;
 const RH_DEFAULT_Y_MIN = 0;
 const RH_DEFAULT_Y_MAX = 255;
-const WINDOWS_SEC = [1, 2, 5, 10, 15, 30, 60, 120] as const;
+const WINDOWS_SEC = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900] as const;
 const DEFAULT_WINDOW_US = 15_000_000;
 const MIN_WINDOW_US = 400_000;
-const MAX_WINDOW_US = 120_000_000;
+const MAX_WINDOW_US = HISTORY_SECONDS * 1_000_000;
 const LEGEND_REFRESH_MS = 150;
 /** How close (px) the cursor must be to a pass marker to show its details. */
 const MARKER_HIT_PX = 7;
@@ -1932,7 +1932,11 @@ export class PilotRssiChart extends Component {
                     ? 5
                     : winSec <= 75
                       ? 10
-                      : 20;
+                      : winSec <= 160
+                        ? 20
+                        : winSec <= 400
+                          ? 60
+                          : 120;
     const stepUs = stepSec * 1e6;
     ctx.textAlign = "center";
     ctx.fillStyle = theme.text3;
@@ -1940,6 +1944,7 @@ export class PilotRssiChart extends Component {
       const x = xOf(t);
       if (x < padL - 4 || x > w - this.padR + 4) continue;
       const agoSec = Math.max(0, (ref - t) / 1e6);
+      const roundedAgo = Math.round(agoSec);
       const lbl =
         agoSec < 0.02
           ? this.endUs === null
@@ -1949,7 +1954,11 @@ export class PilotRssiChart extends Component {
             ? `−${agoSec.toFixed(2)}s`
             : stepSec < 1
               ? `−${agoSec.toFixed(1)}s`
-              : `−${Math.round(agoSec)}s`;
+              : stepSec >= 60 && roundedAgo % 60 === 0
+                ? `−${roundedAgo / 60}m`
+                : roundedAgo >= 120
+                  ? `−${Math.floor(roundedAgo / 60)}m${roundedAgo % 60}s`
+                  : `−${roundedAgo}s`;
       ctx.fillText(lbl, x, h - 8);
     }
     ctx.textAlign = "left";
@@ -2015,18 +2024,19 @@ export class PilotRssiChart extends Component {
     if (nextBtn) nextBtn.title = `Next pass at ${gateScope} (→)`;
 
     const winSec = this.windowUs / 1e6;
+    const roundedWin = Math.round(winSec);
     const xWinLabel =
-      Math.round(winSec) === 120
-        ? "2 min"
-        : winSec < 10 && Math.abs(winSec - Math.round(winSec)) >= 0.05
+      roundedWin >= 120 && roundedWin % 60 === 0
+        ? `${roundedWin / 60} min`
+        : winSec < 10 && Math.abs(winSec - roundedWin) >= 0.05
           ? `${winSec.toFixed(1)} s`
-          : `${Math.round(winSec)} s`;
+          : `${roundedWin} s`;
     const xWinShort =
-      Math.round(winSec) === 120
-        ? "2m"
-        : winSec < 10 && Math.abs(winSec - Math.round(winSec)) >= 0.05
+      roundedWin >= 120 && roundedWin % 60 === 0
+        ? `${roundedWin / 60}m`
+        : winSec < 10 && Math.abs(winSec - roundedWin) >= 0.05
           ? `${winSec.toFixed(1)}s`
-          : `${Math.round(winSec)}s`;
+          : `${roundedWin}s`;
 
     const isLapRF = this.isLapRF;
     const isRH = this.isRH;
@@ -2060,7 +2070,7 @@ export class PilotRssiChart extends Component {
                 <div class="debug-axis-menu-sep"></div>
                 ${WINDOWS_SEC.map((w) => {
                   const active = !this.autoX && Math.abs(winSec - w) < 0.05;
-                  const label = w === 120 ? "2 min" : `${w} s`;
+                  const label = w >= 120 ? `${w / 60} min` : `${w} s`;
                   return `<button type="button" class="debug-axis-menu-item ${active ? "is-active" : ""}" data-window="${w}" role="menuitem"><span>${label}</span></button>`;
                 }).join("")}
               </div>`
@@ -2132,7 +2142,7 @@ export class PilotRssiChart extends Component {
           ? "Select a timer above to view or drag its LapRF crossing threshold (300–3500)."
           : isRH
             ? "Select a timer above to view or drag its RotorHazard Enter & Exit thresholds (0–255)."
-            : "Timers auto-calibrate every 30 s from live lap passes · select a timer above to inspect or drag its thresholds.");
+            : "Timers auto-calibrate continuously from live lap passes · select a timer above to inspect or drag its thresholds.");
       actions = `
         <div class="scope-calib-actions">
           ${this.undo ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="undo">${icons.reset(15)}<span>Undo</span></button>` : ""}

@@ -214,3 +214,144 @@ func TestAutoCalibrateIndoorHighValleyWithPowerOffTail(t *testing.T) {
 		t.Fatalf("expected enterDbm <= -58 dBm with >= 5 dB hysteresis above exitDbm, got enter=%v exit=%v", enter, exit)
 	}
 }
+
+func TestAutoCalibratePackSwapWeakerSecondPackRecoversAutomatically(t *testing.T) {
+	// Reproduces real Bluetooth Hub flight telemetry:
+	// 1. Pack 1 (0..50 s): 7 laps peaking at -45 dBm over -72 dBm valleys -> calibrates Enter ~ -54 dBm.
+	// 2. Landing & battery swap (50..195 s = 145 s unplugged): receiver reads -92 dBm noise floor.
+	// 3. Pack 2 (195..258 s): takeoff pass at 196.5 s barely clears Pack 1's threshold (-53.5 dBm),
+	//    and subsequent 9 laps every 6.0 s peak at -59..-63 dBm over -74 dBm indoor valleys (2.0 s FWHM).
+	// Without manual Auto-calibrate, the engine must automatically re-lock thresholds and score Pack 2 laps!
+	e := NewRealEngine()
+	timerID, err := e.ProvisionGate(ProvisionRequest{Role: "spoke", Label: "H1", Fingerprint: "BE7C0001"})
+	if err != nil {
+		t.Fatalf("ProvisionGate: %v", err)
+	}
+	if _, err := e.AddGate("Start", timerID, 0); err != nil {
+		t.Fatalf("AddGate: %v", err)
+	}
+
+	var pack1Centers []float64
+	for s := 4.0; s <= 46.0; s += 6.5 {
+		pack1Centers = append(pack1Centers, s)
+	}
+	curUs := feedSyntheticWave(e, timerID, 1_000_000, 49_000_000, func(tsUs uint64) float32 {
+		return gaussianPass(tsUs, -72.0, -45.0, pack1Centers, 0.70)
+	})
+	_, gatesPack1, lapsPack1, _, _ := e.StateSnapshot()
+	pack1Enter := gatesPack1[0].EnterThresholds[0]
+	if pack1Enter == 0 || pack1Enter < -58 {
+		t.Fatalf("expected Pack 1 enter calibrated >= -58 dBm, got %v", pack1Enter)
+	}
+	if len(lapsPack1) < 5 {
+		t.Fatalf("expected >= 5 laps in Pack 1, got %d", len(lapsPack1))
+	}
+
+	// 145 seconds unplugged on the ground (-92 dBm).
+	curUs = feedSyntheticWave(e, timerID, curUs, 145_000_000, func(_ uint64) float32 {
+		return -92.0
+	})
+
+	// Pack 2: Pass #1 at 197.0 s hits -53.2 dBm (triggers startedLap against Pack 1 threshold),
+	// then 9 passes at 203, 209, 215, 221, 227, 233, 239, 245, 251 s peak at -60.5 dBm over -74 dBm!
+	var pack2WeakCenters []float64
+	for s := 203.0; s <= 251.0; s += 6.0 {
+		pack2WeakCenters = append(pack2WeakCenters, s)
+	}
+	_ = feedSyntheticWave(e, timerID, curUs, 62_000_000, func(tsUs uint64) float32 {
+		vTakeoff := gaussianPass(tsUs, -74.0, -53.2, []float64{197.0}, 0.85)
+		vLaps := gaussianPass(tsUs, -74.0, -60.5, pack2WeakCenters, 0.85)
+		if vTakeoff > vLaps {
+			return vTakeoff
+		}
+		return vLaps
+	})
+
+	_, gatesPack2, lapsAll, _, _ := e.StateSnapshot()
+	pack2Enter := gatesPack2[0].EnterThresholds[0]
+	pack2Exit := gatesPack2[0].ExitThresholds[0]
+	if pack2Enter >= -62 || pack2Enter <= -72 {
+		t.Fatalf("expected Pack 2 enter auto-lowered into [-71, -63] dBm, got enter=%v exit=%v (Pack 1 was %v)", pack2Enter, pack2Exit, pack1Enter)
+	}
+	if pack2Exit < -73 {
+		t.Fatalf("expected Pack 2 exit above -74 dBm indoor valleys (>= -73 dBm), got %v", pack2Exit)
+	}
+	pack2Laps := len(lapsAll) - len(lapsPack1)
+	if pack2Laps < 7 {
+		t.Fatalf("expected >= 7 automatically scored laps in Pack 2, got %d (total=%d, pack1=%d)", pack2Laps, len(lapsAll), len(lapsPack1))
+	}
+}
+
+func TestAutoCalibrateMidFlightSignalDropAdaptsWithoutPowerOff(t *testing.T) {
+	// Pilot flies strong passes (-44 dBm) for 40 s, then VTX thermal-throttles / wider line drops
+	// peaks to -60 dBm over -74 dBm indoor valleys without ever powering off.
+	e := NewRealEngine()
+	timerID, err := e.ProvisionGate(ProvisionRequest{Role: "spoke", Label: "H1", Fingerprint: "BE7C0002"})
+	if err != nil {
+		t.Fatalf("ProvisionGate: %v", err)
+	}
+	if _, err := e.AddGate("Start", timerID, 0); err != nil {
+		t.Fatalf("AddGate: %v", err)
+	}
+
+	var strongCenters []float64
+	for s := 4.0; s <= 40.0; s += 6.0 {
+		strongCenters = append(strongCenters, s)
+	}
+	curUs := feedSyntheticWave(e, timerID, 1_000_000, 43_000_000, func(tsUs uint64) float32 {
+		return gaussianPass(tsUs, -74.0, -44.0, strongCenters, 0.75)
+	})
+	_, _, lapsBefore, _, _ := e.StateSnapshot()
+
+	var weakCenters []float64
+	for s := 47.0; s <= 95.0; s += 6.0 {
+		weakCenters = append(weakCenters, s)
+	}
+	_ = feedSyntheticWave(e, timerID, curUs, 54_000_000, func(tsUs uint64) float32 {
+		return gaussianPass(tsUs, -74.0, -60.0, weakCenters, 0.85)
+	})
+	_, gatesAfter, lapsAfter, _, _ := e.StateSnapshot()
+	if gatesAfter[0].EnterThresholds[0] >= -61 {
+		t.Fatalf("expected mid-flight auto-calibration to lower enter below -61 dBm, got %v", gatesAfter[0].EnterThresholds[0])
+	}
+	if len(lapsAfter)-len(lapsBefore) < 5 {
+		t.Fatalf("expected >= 5 laps scored after mid-flight signal drop, got %d", len(lapsAfter)-len(lapsBefore))
+	}
+}
+
+func TestAutoCalibratePracticePauseResumePackSwap(t *testing.T) {
+	// Pilot pauses practice (`SetRaceArmed(false)`), swaps battery (+90 s timestamp jump), resumes,
+	// and immediately flies weaker passes (-62 dBm over -74 dBm valleys).
+	e := NewRealEngine()
+	timerID, err := e.ProvisionGate(ProvisionRequest{Role: "spoke", Label: "H1", Fingerprint: "BE7C0003"})
+	if err != nil {
+		t.Fatalf("ProvisionGate: %v", err)
+	}
+	if _, err := e.AddGate("Start", timerID, 0); err != nil {
+		t.Fatalf("AddGate: %v", err)
+	}
+
+	curUs := feedSyntheticWave(e, timerID, 1_000_000, 28_000_000, func(tsUs uint64) float32 {
+		return gaussianPass(tsUs, -74.0, -43.0, []float64{4.0, 10.5, 17.0, 23.5}, 0.75)
+	})
+	_, _, lapsBefore, _, _ := e.StateSnapshot()
+
+	e.SetRaceArmed(false)
+	curUs += 90_000_000 // 90 s paused battery swap
+	e.SetRaceArmed(true)
+
+	var resumedCenters []float64
+	for s := 122.0; s <= 158.0; s += 6.0 {
+		resumedCenters = append(resumedCenters, s)
+	}
+	_ = feedSyntheticWave(e, timerID, curUs, 42_000_000, func(tsUs uint64) float32 {
+		return gaussianPass(tsUs, -74.0, -62.0, resumedCenters, 0.85)
+	})
+	_, gatesAfter, lapsAfter, _, _ := e.StateSnapshot()
+	if gatesAfter[0].EnterThresholds[0] >= -63 {
+		t.Fatalf("expected post-resume single-pass/fast recovery below -63 dBm, got %v", gatesAfter[0].EnterThresholds[0])
+	}
+	if len(lapsAfter)-len(lapsBefore) < 4 {
+		t.Fatalf("expected >= 4 laps scored after resuming practice with weaker pack, got %d", len(lapsAfter)-len(lapsBefore))
+	}
+}

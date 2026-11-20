@@ -62,8 +62,8 @@ export interface ComparisonSelection {
   reference: ReferenceChoice;
 }
 
-/** Signal history kept per gate, so the RSSI chart can be paused and scrolled back. */
-export const HISTORY_SECONDS = 120;
+/** Signal history kept per gate (15 minutes in RAM), so the RSSI chart can be paused and scrolled back after landing. */
+export const HISTORY_SECONDS = 900;
 const HISTORY_US = HISTORY_SECONDS * 1_000_000;
 /** Timers sweep at up to 100 Hz; history is trimmed by time, this only bounds memory. */
 const HISTORY_SAMPLES = HISTORY_SECONDS * 100;
@@ -71,8 +71,8 @@ const HISTORY_SAMPLES = HISTORY_SECONDS * 100;
 const HISTORY_TRIM_SLACK = 500;
 
 /** Enough timed passes (and rejected ones) to cover the signal history. */
-const MAX_CROSSINGS = 1500;
-const MAX_FILTERED = 500;
+const MAX_CROSSINGS = 3000;
+const MAX_FILTERED = 1000;
 const MAX_LAPS = 5000;
 const UI_PREFS_STORAGE_KEY = "slaprf.ui.prefs.v1";
 
