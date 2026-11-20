@@ -345,9 +345,10 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       expect(strip.classList.contains("is-ws-standby")).toBe(true);
       const standbyBar = root.querySelector<HTMLElement>("[data-ws-standby-bar='practice']")!;
       expect(standbyBar).not.toBeNull();
-      expect(standbyBar.textContent || "").toContain("Not started");
-      expect(standbyBar.textContent || "").toContain("laps aren't recording");
-      expect(standbyBar.querySelector("[data-practice-act='start-session']")).not.toBeNull();
+      expect(standbyBar.classList.contains("is-idle")).toBe(true);
+      expect(standbyBar.textContent || "").toContain("Idle");
+      expect(standbyBar.textContent || "").toContain("laps aren't counting");
+      expect(standbyBar.querySelector("button")).toBeNull();
       expect(root.querySelector("[data-ws-live-pill]")).toBeNull();
 
       // Simulate Practice going live
@@ -369,7 +370,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       expect(root.querySelector("[data-ws-standby-bar='practice']")).toBeNull();
       expect(root.querySelector("[data-ws-live-pill]")?.textContent || "").toContain("LIVE");
 
-      // Simulate Practice paused -> standby bar returns with Resume CTA
+      // Simulate Practice paused -> purplish standby bar returns without action button
       store.hydrate(
         makeFullState({
           raceArmed: false,
@@ -386,8 +387,10 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       expect(strip.classList.contains("is-ws-standby")).toBe(true);
       const pausedBar = root.querySelector<HTMLElement>("[data-ws-standby-bar='practice']")!;
       expect(pausedBar).not.toBeNull();
+      expect(pausedBar.classList.contains("is-paused")).toBe(true);
       expect(pausedBar.textContent || "").toContain("Paused");
-      expect(pausedBar.querySelector("[data-practice-act='resume-session']")).not.toBeNull();
+      expect(pausedBar.textContent || "").toContain("laps aren't counting");
+      expect(pausedBar.querySelector("button")).toBeNull();
       expect(root.querySelector("[data-ws-live-pill]")).toBeNull();
     } finally {
       liveView.destroy();

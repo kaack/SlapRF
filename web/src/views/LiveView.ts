@@ -2325,25 +2325,17 @@ export class LiveView extends Component {
         if (isActive) {
           standbyEl.innerHTML = "";
         } else {
-          const pillText = isPaused ? "Paused" : "Not started";
+          const stripToneCls = isPaused ? "is-paused" : "is-idle";
+          const pillText = isPaused ? "Paused" : "Idle";
           const standbyMsg = isPaused
-            ? "Practice is paused - laps aren't recording"
-            : "Practice isn't started - laps aren't recording";
+            ? "Practice is paused - laps aren't counting"
+            : "Practice is idle - laps aren't counting";
           standbyEl.innerHTML = `
-            <div class="ws-standby-bar is-warn" data-ws-standby-bar="practice" role="status">
+            <div class="ws-standby-bar ${stripToneCls}" data-ws-standby-bar="practice" role="status">
               <div class="ws-standby-copy">
                 <span class="ws-standby-pill">${pillText}</span>
                 <span class="ws-standby-text">${standbyMsg}</span>
               </div>
-              <button
-                type="button"
-                class="btn btn-xs ws-standby-cta"
-                data-practice-act="${toggleAction}"
-                data-session-id="${esc(sess.sessionId)}"
-                title="${esc(toggleTitle)}"
-              >
-                ${icons.play(12)}<span>${toggleText}</span>
-              </button>
             </div>`;
         }
 

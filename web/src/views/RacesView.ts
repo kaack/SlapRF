@@ -7237,8 +7237,7 @@ export class RacesView extends Component {
   }
 
   private renderRaceStandbyStripHtml(
-    race: RaceTournamentState,
-    mode: WorkspaceTab
+    race: RaceTournamentState
   ): { barCls: string; standbyHtml: string } {
     if (this.isRaceActivelyTiming(race)) {
       return { barCls: "is-ws-live", standbyHtml: "" };
@@ -7246,117 +7245,43 @@ export class RacesView extends Component {
     const lifecycle: RaceLifecycle = race.lifecycle ?? (race.isComplete ? "completed" : "draft");
     const configured = isRaceConfigured(race);
 
+    let toneCls = "is-idle";
+    let pillText = "Idle";
+    let msgText = "No heat running - laps aren't counting";
+
     if (lifecycle === "completed" || race.isComplete || lifecycle === "scrapped") {
       const isScrapped = lifecycle === "scrapped";
-      const pillText = isScrapped ? "Stopped" : "Completed";
-      const msgText = isScrapped
-        ? "Race is stopped - timing is off"
+      toneCls = "is-idle";
+      pillText = isScrapped ? "Stopped" : "Completed";
+      msgText = isScrapped
+        ? "Race is stopped - laps aren't counting"
         : "Race is completed - viewing results";
-      const ctaHtml =
-        configured && mode !== "review"
-          ? `<button type="button" class="btn btn-xs ws-standby-cta is-subtle" data-race-tab="review"><span>Review</span></button>`
-          : "";
-      return {
-        barCls: "is-ws-completed",
-        standbyHtml: `
-          <div class="ws-standby-bar is-muted" data-ws-standby-bar="race" role="status">
-            <div class="ws-standby-copy">
-              <span class="ws-standby-pill">${pillText}</span>
-              <span class="ws-standby-text">${msgText}</span>
-            </div>
-            ${ctaHtml}
-          </div>`,
-      };
+    } else if (!configured) {
+      toneCls = "is-idle";
+      pillText = "Idle";
+      msgText = "Race is idle - laps aren't counting";
+    } else if (race.emergencyStopped || lifecycle === "paused") {
+      toneCls = "is-paused";
+      pillText = "Paused";
+      msgText = "Race is paused - laps aren't counting";
+    } else {
+      const pausedHeat = race.heats.find((h) => h.state === "paused");
+      if (pausedHeat) {
+        const heatName = pausedHeat.shortLabel || pausedHeat.title || "Heat";
+        toneCls = "is-paused";
+        pillText = "Paused";
+        msgText = `${esc(heatName)} is paused - laps aren't counting`;
+      }
     }
-
-    if (!configured) {
-      const ctaHtml =
-        mode !== "edit" && mode !== "format"
-          ? `<button type="button" class="btn btn-xs ws-standby-cta" data-race-tab="edit"><span>Setup</span></button>`
-          : "";
-      return {
-        barCls: "is-ws-standby",
-        standbyHtml: `
-          <div class="ws-standby-bar is-warn" data-ws-standby-bar="race" role="status">
-            <div class="ws-standby-copy">
-              <span class="ws-standby-pill">Not started</span>
-              <span class="ws-standby-text">Finish race setup to start heats</span>
-            </div>
-            ${ctaHtml}
-          </div>`,
-      };
-    }
-
-    if (race.emergencyStopped || lifecycle === "paused") {
-      const pillText = race.emergencyStopped ? "Emergency stop" : "Paused";
-      return {
-        barCls: "is-ws-standby",
-        standbyHtml: `
-          <div class="ws-standby-bar is-warn" data-ws-standby-bar="race" role="status">
-            <div class="ws-standby-copy">
-              <span class="ws-standby-pill">${pillText}</span>
-              <span class="ws-standby-text">Race is paused - laps aren't recording</span>
-            </div>
-            <button type="button" class="btn btn-xs ws-standby-cta" data-race-act="lifecycle-direct" data-lifecycle-act="resume_race">
-              ${icons.play(12)}<span>Resume Race</span>
-            </button>
-          </div>`,
-      };
-    }
-
-    const pausedHeat = race.heats.find((h) => h.state === "paused");
-    if (pausedHeat) {
-      const heatName = pausedHeat.shortLabel || pausedHeat.title || "Heat";
-      return {
-        barCls: "is-ws-standby",
-        standbyHtml: `
-          <div class="ws-standby-bar is-warn" data-ws-standby-bar="race" role="status">
-            <div class="ws-standby-copy">
-              <span class="ws-standby-pill">Heat paused</span>
-              <span class="ws-standby-text">${esc(heatName)} is paused - laps aren't recording</span>
-            </div>
-            <button type="button" class="btn btn-xs ws-standby-cta" data-ctrl="resume" data-heat-id="${esc(pausedHeat.id)}">
-              ${icons.play(12)}<span>Resume</span>
-            </button>
-          </div>`,
-      };
-    }
-
-    const viewStage = this.getCurrentViewStage(race);
-    const stages = resolveStagesList(race);
-    const curStage = stages.find((s) => s.index === viewStage);
-    const stageBlocked = Boolean(
-      curStage &&
-        (curStage.status === "completed" ||
-          curStage.status === "paused" ||
-          curStage.dangling ||
-          !curStage.prerequisitesMet)
-    );
-    const ctrlHeat = this.getControlStageHeat(race, viewStage);
-    const canStartCtrlHeat = Boolean(
-      ctrlHeat &&
-        (ctrlHeat.state === "ready" || ctrlHeat.state === "staged") &&
-        !stageBlocked &&
-        ctrlHeat.seats.some((s) => s.pilotSlotIndex > 0 && s.status !== "dq" && s.status !== "dns")
-    );
-    const ctaHtml =
-      canStartCtrlHeat && ctrlHeat
-        ? `<button type="button" class="btn btn-xs ws-standby-cta" data-ctrl="start" data-heat-id="${esc(ctrlHeat.id)}">
-            ${icons.play(12)}<span>Start ${esc(ctrlHeat.shortLabel || "Heat")}</span>
-          </button>`
-        : mode !== "control"
-          ? `<button type="button" class="btn btn-xs ws-standby-cta" data-race-tab="control"><span>Race Control</span></button>`
-          : "";
 
     return {
       barCls: "is-ws-standby",
       standbyHtml: `
-        <div class="ws-standby-bar is-warn" data-ws-standby-bar="race" role="status">
+        <div class="ws-standby-bar ${toneCls}" data-ws-standby-bar="race" role="status">
           <div class="ws-standby-copy">
-            <span class="ws-standby-pill">Standby</span>
-            <span class="ws-standby-text">No heat running - laps aren't recording</span>
+            <span class="ws-standby-pill">${pillText}</span>
+            <span class="ws-standby-text">${msgText}</span>
           </div>
-          ${ctaHtml}
         </div>`,
     };
   }
@@ -7366,7 +7291,7 @@ export class RacesView extends Component {
     mode: WorkspaceTab,
     rightHtml = ""
   ): string {
-    const { barCls, standbyHtml } = this.renderRaceStandbyStripHtml(race, mode);
+    const { barCls, standbyHtml } = this.renderRaceStandbyStripHtml(race);
     return `
       <div class="races-page-topbar ${barCls}" data-rc-hud>
         <div class="rc-topbar-side is-left" aria-hidden="true"></div>
