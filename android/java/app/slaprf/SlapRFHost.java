@@ -503,6 +503,27 @@ public final class SlapRFHost extends Activity {
         }
 
         @JavascriptInterface
+        public String getStringPref(String key) {
+            if (key == null || key.trim().isEmpty()) {
+                return "";
+            }
+            SharedPreferences sp = SlapRFHost.this.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE);
+            String v = sp.getString("web_" + key.trim(), "");
+            return v != null ? v : "";
+        }
+
+        @JavascriptInterface
+        public void setStringPref(String key, String value) {
+            if (key == null || key.trim().isEmpty()) {
+                return;
+            }
+            SlapRFHost.this.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                    .edit()
+                    .putString("web_" + key.trim(), value != null ? value : "")
+                    .apply();
+        }
+
+        @JavascriptInterface
         public void saveBase64File(String filename, String mimeType, String base64Data) {
             if (base64Data == null || base64Data.isEmpty()) {
                 return;

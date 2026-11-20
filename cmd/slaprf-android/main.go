@@ -163,7 +163,13 @@ func Java_app_slaprf_SlapRFHost_nativeStartServer(env *C.JNIEnv, clazz C.jclass,
 		dbPath = filepath.Join(filesDir, "slaprf.db")
 	}
 
-	ln, err := net.Listen("tcp4", "127.0.0.1:0")
+	var ln net.Listener
+	for _, candidate := range []string{"127.0.0.1:18090", "127.0.0.1:18091", "127.0.0.1:0"} {
+		ln, err = net.Listen("tcp4", candidate)
+		if err == nil {
+			break
+		}
+	}
 	if err != nil {
 		return jstringFromGoString(env, "")
 	}

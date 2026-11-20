@@ -349,7 +349,17 @@ export class Announcer {
     const wasQualLapCallouts = this.prefs.qualifierLapCallouts;
     const wasRaceLapCallouts = this.prefs.raceLapCallouts;
     this.prefs = sanitizePrefs({ ...this.prefs, ...next });
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(this.prefs));
+    const serialized = JSON.stringify(this.prefs);
+    try {
+      localStorage.setItem(STORAGE_KEY, serialized);
+    } catch {
+      // ignore storage errors
+    }
+    try {
+      getAndroidBridge()?.setStringPref?.(STORAGE_KEY, serialized);
+    } catch {
+      // ignore bridge errors
+    }
     const liveHit = this.getLiveRunningRaceHeatContext();
     if (liveHit) {
       const isQual = isQualifierStageFormat(resolveHeatStageFormat(liveHit.heat, liveHit.race));
@@ -1307,17 +1317,43 @@ function sanitizePrefs(raw: unknown): AnnouncerPrefs {
   };
 }
 
-function hasSavedPrefs(): boolean {
+function readRawAnnouncerPrefs(): string | null {
   try {
-    return localStorage.getItem(STORAGE_KEY) !== null;
+    const local = localStorage.getItem(STORAGE_KEY);
+    if (local !== null && local !== "") {
+      try {
+        getAndroidBridge()?.setStringPref?.(STORAGE_KEY, local);
+      } catch {
+        // ignore bridge sync error
+      }
+      return local;
+    }
   } catch {
-    return false;
+    // ignore storage errors
   }
+  try {
+    const nativeVal = getAndroidBridge()?.getStringPref?.(STORAGE_KEY);
+    if (nativeVal && nativeVal.trim() !== "") {
+      try {
+        localStorage.setItem(STORAGE_KEY, nativeVal);
+      } catch {
+        // ignore storage errors
+      }
+      return nativeVal;
+    }
+  } catch {
+    // ignore bridge errors
+  }
+  return null;
+}
+
+function hasSavedPrefs(): boolean {
+  return readRawAnnouncerPrefs() !== null;
 }
 
 function loadPrefs(): AnnouncerPrefs {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = readRawAnnouncerPrefs();
     return raw ? sanitizePrefs(JSON.parse(raw)) : { ...DEFAULT_PREFS };
   } catch {
     return { ...DEFAULT_PREFS };

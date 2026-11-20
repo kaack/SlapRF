@@ -22,6 +22,8 @@ export interface SlapRFAndroidBridge {
   getLanStatusJson(): string;
   setLanEnabled(enabled: boolean): string;
   saveBase64File(filename: string, mimeType: string, base64Data: string): void;
+  getStringPref?(key: string): string;
+  setStringPref?(key: string, value: string): void;
 }
 
 interface WindowWithAndroidBridge {
