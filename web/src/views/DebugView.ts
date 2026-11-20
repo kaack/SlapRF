@@ -558,7 +558,7 @@ export class DebugView extends Component {
     if (this.store) {
       this.rhPollTimer = window.setInterval(() => {
         void this.tickNonSlapRFTelemetry();
-      }, 120);
+      }, 45);
     }
 
     this.onDispose(() => {
@@ -626,7 +626,9 @@ export class DebugView extends Component {
   }
 
   private activeSweepHz(): number {
-    return this.isRotorHazardMode() ? 10 : (this.status?.sweepHz ?? 50);
+    if (this.isRotorHazardUSBMode()) return 25;
+    if (this.isRotorHazardMode()) return 10;
+    return this.status?.sweepHz ?? 50;
   }
 
   private hasSpectrumScanSupport(): boolean {
@@ -717,7 +719,7 @@ export class DebugView extends Component {
     }
   }
 
-  private ingestScanPassResult(s: ScanResult): void {
+  private ingestScanPassResult(s: ScanResult, partial = false): void {
     const gridChanged =
       this.spectrumAcc.latest !== null &&
       (this.spectrumAcc.latest.start !== s.start ||
@@ -727,13 +729,17 @@ export class DebugView extends Component {
       this.scanZoomStartMHz = null;
       this.scanZoomStopMHz = null;
     }
-    this.spectrumAcc.pushScan(s);
-    this.recordScanFindingFromPass(s);
-    if (!s.live) {
-      this.scanning = false;
-      this.renderScan();
+    if (partial) {
+      this.spectrumAcc.updatePartialScan(s);
     } else {
-      this.updateScanFindings();
+      this.spectrumAcc.pushScan(s);
+      this.recordScanFindingFromPass(s);
+      if (!s.live) {
+        this.scanning = false;
+        this.renderScan();
+      } else {
+        this.updateScanFindings();
+      }
     }
     this.dirtySpectrum = true;
     this.dirtyWaterfall = true;
@@ -1055,19 +1061,23 @@ export class DebugView extends Component {
     if (isUSB && this.scanLive && snap.lastScan && Array.isArray(snap.lastScan.values)) {
       if (snap.lastScan.seq !== this.rhLastScanSeq) {
         this.rhLastScanSeq = snap.lastScan.seq;
-        this.ingestScanPassResult({
-          start: snap.lastScan.start,
-          step: snap.lastScan.step,
-          dbm: snap.lastScan.values.map((v) => Math.round(v)),
-          passMs: snap.lastScan.passMs,
-          live: true,
-        });
+        this.ingestScanPassResult(
+          {
+            start: snap.lastScan.start,
+            step: snap.lastScan.step,
+            dbm: snap.lastScan.values.map((v) => Math.round(v)),
+            passMs: snap.lastScan.passMs,
+            live: true,
+          },
+          Boolean(snap.lastScan.partial)
+        );
       }
     }
 
     const now = performance.now();
     const hbChanged = snap.heartbeatsRx !== this.rhLastHeartbeatsRx;
-    if (this.rhLiveOn && !this.scanLive && (hbChanged || now - this.rhLastSamplePushAt >= 150)) {
+    const minSampleGapMs = isUSB ? 45 : 150;
+    if (this.rhLiveOn && !this.scanLive && (hbChanged || now - this.rhLastSamplePushAt >= minSampleGapMs)) {
       this.rhLastHeartbeatsRx = snap.heartbeatsRx;
       this.rhLastSamplePushAt = now;
       const nodeCount = snap.nodeCount === 4 ? 4 : 8;
@@ -1094,9 +1104,10 @@ export class DebugView extends Component {
         }
         floor[i] = Math.max(0, Math.min(255, Math.round(this.rhNodeBaseline[i])));
       }
+      const sweepHz = this.activeSweepHz();
       const sample: LiveSample = {
         n: ++this.rhSampleSeq,
-        us: 100_000,
+        us: Math.round(1_000_000 / sweepHz),
         dbm,
         pk: [...dbm],
         floor,
@@ -1104,9 +1115,17 @@ export class DebugView extends Component {
       };
       this.live = sample;
       this.liveCount++;
-      this.signalRing.push(sample, 10, 2);
+      this.signalRing.push(sample, sweepHz, 2);
       this.recordRhFindingFromSample(snap, sample);
       this.updateLive();
+      const sigNoteEl = this.el.querySelector<HTMLElement>("[data-signal-head-note]");
+      if (sigNoteEl && this.signalEndN === null) {
+        sigNoteEl.textContent = `Streaming · ~${sweepHz} Hz ${isUSB ? "USB serial poll" : "Socket.IO heartbeat"} · ${snap.heartbeatsRx} frames`;
+      }
+      const sigClearBtn = this.el.querySelector<HTMLButtonElement>("[data-signal-clear-btn]");
+      if (sigClearBtn && sigClearBtn.disabled) {
+        sigClearBtn.disabled = false;
+      }
       if (this.signalEndN === null && !this.signalDrag) {
         this.dirtySignal = true;
         this.dirtyNoiseTable = true;
@@ -1581,7 +1600,7 @@ export class DebugView extends Component {
     const ptsAll = this.signalRing.points;
 
     if (this.signalAutoX) {
-      let effectiveRateHz = isRH ? 10 : this.liveMode === 2 ? sweepHz : Math.max(1, Math.round(sweepHz / 5));
+      let effectiveRateHz = isRH ? sweepHz : this.liveMode === 2 ? sweepHz : Math.max(1, Math.round(sweepHz / 5));
       if (ptsAll.length >= 12) {
         const a = ptsAll[Math.max(0, ptsAll.length - 30)];
         const b = ptsAll[ptsAll.length - 1];
@@ -1721,9 +1740,10 @@ export class DebugView extends Component {
       const f = s.start + i * s.step;
       if (f < vStart || f > vStop) continue;
       const v = s.dbm[i];
+      if (sb.rssiScale && v <= 0) continue;
       if (v < minD) minD = v;
       if (v > maxD) maxD = v;
-      if (hold && hold[i] > maxD) maxD = hold[i];
+      if (hold && hold[i] > maxD && (!sb.rssiScale || hold[i] > 0)) maxD = hold[i];
     }
     if (minD <= maxD) {
       const padLo = sb.rssiScale ? 8 : 4;
@@ -2734,7 +2754,7 @@ export class DebugView extends Component {
           const enabledMask = this.signalEnabledCh.map((on, i) => on && i < nCount && rhFreqs[i] > 0);
           drawSignalOverTimeCanvas(c, this.signalRing, {
             windowSec: this.signalWindowSec,
-            sweepHz: 10,
+            sweepHz: this.activeSweepHz(),
             endN: effectiveEndN,
             refN: effectiveRefN,
             yMinDbm: this.signalYMin,
@@ -5690,7 +5710,7 @@ export class DebugView extends Component {
         } else if (!this.rhLiveOn) {
           note.textContent = "Paused · click Stream to monitor node RSSI";
         } else if (this.live) {
-          note.textContent = `Streaming · ~10 Hz ${isUSB ? "USB serial poll" : "Socket.IO heartbeat"} · ${snap?.heartbeatsRx ?? 0} frames`;
+          note.textContent = `Streaming · ~${this.activeSweepHz()} Hz ${isUSB ? "USB serial poll" : "Socket.IO heartbeat"} · ${snap?.heartbeatsRx ?? 0} frames`;
         } else {
           note.textContent = isUSB ? "Streaming · waiting for USB poll…" : "Streaming · waiting for heartbeat…";
         }
@@ -5970,10 +5990,10 @@ export class DebugView extends Component {
         <div class="debug-status-topbar">
           <span class="debug-led-status" title="${liveTitle}">
             <span class="status-dot ${sigLedClass}"></span>
-            <span class="debug-head-note">${sigStatusText}</span>
+            <span class="debug-head-note" data-signal-head-note>${sigStatusText}</span>
           </span>
           <div class="debug-connect-actions">
-            <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" ${hasPts ? "" : "disabled"}>Clear</button>
+            <button type="button" class="btn btn-sm btn-ghost" data-action="signal-clear" data-signal-clear-btn ${hasPts ? "" : "disabled"}>Clear</button>
             <button type="button" class="btn btn-sm ${liveFollowOn ? "btn-armed" : "btn-unarmed"}" data-action="signal-freeze" ${liveDisabled ? "disabled" : ""} title="${liveTitle}">
               ${liveFollowOn ? icons.pause(14) : icons.play(14)}<span>${liveLabel}</span>
             </button>

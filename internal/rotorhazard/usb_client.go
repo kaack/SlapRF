@@ -154,7 +154,7 @@ type SerialClient struct {
 // NewSerialClient constructs a RotorHazard binary serial master client.
 func NewSerialClient(cfg SerialClientConfig) *SerialClient {
 	if cfg.PollInterval <= 0 {
-		cfg.PollInterval = 80 * time.Millisecond
+		cfg.PollInterval = 40 * time.Millisecond
 	}
 	if cfg.BootTimeout <= 0 {
 		cfg.BootTimeout = 2200 * time.Millisecond
@@ -166,7 +166,7 @@ func NewSerialClient(cfg SerialClientConfig) *SerialClient {
 		cfg.RxSettleDelay = 30 * time.Millisecond
 	}
 	if cfg.SweepSettleDelay <= 0 && !cfg.NoRxSettleDelay {
-		cfg.SweepSettleDelay = 45 * time.Millisecond
+		cfg.SweepSettleDelay = 25 * time.Millisecond
 	}
 	c := &SerialClient{
 		cfg:          cfg,
@@ -669,7 +669,13 @@ func (c *SerialClient) executeSweepPass(
 	}
 
 	tStartUs := c.nowUs()
+	actualStop := startMHz + (numBins-1)*stepMHz
 	values := make([]float32, numBins)
+	c.mu.Lock()
+	if c.latestScan != nil && c.latestScan.Start == startMHz && c.latestScan.Stop == actualStop && c.latestScan.Step == stepMHz && len(c.latestScan.Values) == numBins {
+		copy(values, c.latestScan.Values)
+	}
+	c.mu.Unlock()
 
 	var batchFreqs [domain.MaxPilotSlots]uint16
 	for base := 0; base < numBins; base += nodeCount {
@@ -686,8 +692,8 @@ func (c *SerialClient) executeSweepPass(
 			batchLen = nodeCount
 		}
 
-		// Program all `nodeCount` seats individually with readback confirmation so every seat is
-		// guaranteed tuned across USB-JTAG before waiting for the radio scan cycle to settle.
+		// Program all `nodeCount` seats by sending `CmdWriteCurNodeIndex` + `CmdWriteFrequency` per seat,
+		// then verify the final seat's frequency once so all 8 frequency writes complete in ~12 ms.
 		for seat := 0; seat < nodeCount; seat++ {
 			if ctx.Err() != nil {
 				return domain.RHScanPass{}, ctx.Err()
@@ -697,15 +703,25 @@ func (c *SerialClient) executeSweepPass(
 				targetFreq = avoidNewlineInFreqWrite(freqs[base+seat])
 			}
 			batchFreqs[seat] = targetFreq
-			if err := c.writeSweepSeatFreq(port, selectSeat, seat, targetFreq); err != nil {
+			if err := c.writeCommand(port, CmdWriteCurNodeIndex, []byte{byte(seat)}); err != nil {
 				return domain.RHScanPass{}, err
 			}
+			var payload [2]byte
+			binary.BigEndian.PutUint16(payload[:], targetFreq)
+			if err := c.writeCommand(port, CmdWriteFrequency, payload[:]); err != nil {
+				return domain.RHScanPass{}, err
+			}
+		}
+		_ = selectSeat(-1)
+		if _, err := c.readCommand(port, CmdReadFrequency, 2); err != nil {
+			return domain.RHScanPass{}, err
 		}
 
 		// Wait for the multi-node radio scan cycle to complete across all 8 seats.
 		// After all 8 seats are programmed, `seat 0` is sampled first and `seat (batchLen-1)` is
 		// sampled last in the scan cycle (`Core::scanCycle`). Polling `seat 0` until its reported
 		// RSSI exceeds 1 confirms the retuned scan cycle has begun delivering settled samples.
+		var r0Ready byte
 		if !c.cfg.NoRxSettleDelay {
 			if c.cfg.SweepSettleDelay > 0 {
 				select {
@@ -715,7 +731,7 @@ func (c *SerialClient) executeSweepPass(
 				}
 			}
 			for pollTry := 0; pollTry < 6; pollTry++ {
-				if err := selectSeat(0); err != nil {
+				if err := c.writeCommand(port, CmdWriteCurNodeIndex, []byte{0}); err != nil {
 					return domain.RHScanPass{}, err
 				}
 				var r0 byte
@@ -733,13 +749,14 @@ func (c *SerialClient) executeSweepPass(
 					r0 = ls[3]
 				}
 				if r0 > 1 {
+					r0Ready = r0
 					values[base] = float32(r0)
 					break
 				}
 				select {
 				case <-ctx.Done():
 					return domain.RHScanPass{}, ctx.Err()
-				case <-time.After(12 * time.Millisecond):
+				case <-time.After(10 * time.Millisecond):
 				}
 			}
 		}
@@ -749,13 +766,13 @@ func (c *SerialClient) executeSweepPass(
 
 		// Read seats `0..batchLen-1` (skipping seat 0 if already populated above).
 		for seat := 0; seat < batchLen; seat++ {
-			if seat == 0 && !c.cfg.NoRxSettleDelay && values[base] > 1 {
+			if seat == 0 && !c.cfg.NoRxSettleDelay && r0Ready > 1 {
 				continue
 			}
 			if ctx.Err() != nil {
 				return domain.RHScanPass{}, ctx.Err()
 			}
-			if err := selectSeat(seat); err != nil {
+			if err := c.writeCommand(port, CmdWriteCurNodeIndex, []byte{byte(seat)}); err != nil {
 				return domain.RHScanPass{}, err
 			}
 			if apiLvl >= 32 {
@@ -768,7 +785,7 @@ func (c *SerialClient) executeSweepPass(
 					select {
 					case <-ctx.Done():
 						return domain.RHScanPass{}, ctx.Err()
-					case <-time.After(14 * time.Millisecond):
+					case <-time.After(12 * time.Millisecond):
 					}
 					if ps2, err2 := c.readCommand(port, CmdReadLapPassStats, 8); err2 == nil {
 						values[base+seat] = float32(ps2[3])
@@ -782,6 +799,37 @@ func (c *SerialClient) executeSweepPass(
 				values[base+seat] = float32(ls[3])
 			}
 		}
+		_ = selectSeat(-1)
+
+		// During a live continuous scan, publish an in-progress partial snapshot after every
+		// 8-seat batch so the Spectrum chart sweeps progressively across the band at ~15-20 Hz.
+		if isLive && base+nodeCount < numBins {
+			tCurUs := c.nowUs()
+			curMs := 1
+			if tCurUs > tStartUs {
+				curMs = int((tCurUs - tStartUs) / 1000)
+				if curMs < 1 {
+					curMs = 1
+				}
+			}
+			c.mu.Lock()
+			if c.scanLive {
+				c.scanSeq++
+				partVals := make([]float32, numBins)
+				copy(partVals, values)
+				c.latestScan = &domain.RHScanPass{
+					Seq:     c.scanSeq,
+					Start:   startMHz,
+					Stop:    actualStop,
+					Step:    stepMHz,
+					PassMs:  curMs,
+					Live:    true,
+					Partial: true,
+					Values:  partVals,
+				}
+			}
+			c.mu.Unlock()
+		}
 	}
 
 	tEndUs := c.nowUs()
@@ -793,7 +841,6 @@ func (c *SerialClient) executeSweepPass(
 			passMs = 1
 		}
 	}
-	actualStop := startMHz + (numBins-1)*stepMHz
 
 	c.mu.Lock()
 	c.scanSeq++
@@ -802,13 +849,14 @@ func (c *SerialClient) executeSweepPass(
 	c.mu.Unlock()
 
 	return domain.RHScanPass{
-		Seq:    seq,
-		Start:  startMHz,
-		Stop:   actualStop,
-		Step:   stepMHz,
-		PassMs: passMs,
-		Live:   isLive,
-		Values: values,
+		Seq:     seq,
+		Start:   startMHz,
+		Stop:    actualStop,
+		Step:    stepMHz,
+		PassMs:  passMs,
+		Live:    isLive,
+		Partial: false,
+		Values:  values,
 	}, nil
 }
 
@@ -1080,8 +1128,10 @@ func (c *SerialClient) stepOnce(
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if err := selectSeat(seat); err != nil {
-			return err
+		if nodeCount > 1 {
+			if err := c.writeCommand(port, CmdWriteCurNodeIndex, []byte{byte(seat)}); err != nil {
+				return err
+			}
 		}
 
 		var combined [16]byte
@@ -1121,6 +1171,7 @@ func (c *SerialClient) stepOnce(
 			passes = c.processSeatStats(seat, combined, tReqUs, tRespUs, passes, &hbRSSI, &hbFlags, &hbFreqs)
 		}
 	}
+	_ = selectSeat(-1)
 
 	c.mu.Lock()
 	c.slotRSSI = hbRSSI

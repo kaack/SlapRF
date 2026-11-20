@@ -96,15 +96,16 @@ type SimLapRFUnit struct {
 	SlotThresholds   [MaxPilotSlots]float32 `json:"slotThresholds,omitempty"`
 }
 
-// RHScanPass holds one completed 0..255 RSSI spectrum sweep pass from a RotorHazard USB device.
+// RHScanPass holds one completed (or in-progress live) 0..255 RSSI spectrum sweep pass from a RotorHazard USB device.
 type RHScanPass struct {
-	Seq    uint64    `json:"seq"`
-	Start  int       `json:"start"`
-	Stop   int       `json:"stop"`
-	Step   int       `json:"step"`
-	PassMs int       `json:"passMs"`
-	Live   bool      `json:"live"`
-	Values []float32 `json:"values"`
+	Seq     uint64    `json:"seq"`
+	Start   int       `json:"start"`
+	Stop    int       `json:"stop"`
+	Step    int       `json:"step"`
+	PassMs  int       `json:"passMs"`
+	Live    bool      `json:"live"`
+	Partial bool      `json:"partial,omitempty"`
+	Values  []float32 `json:"values"`
 }
 
 // SimRotorHazardUnit describes a simulated RotorHazard timing device (Raspberry Pi server on :5000

@@ -1067,6 +1067,59 @@ export class SpectrumAccumulator {
     }
   }
 
+  public updatePartialScan(s: ScanResult): void {
+    const n = s.dbm.length;
+    if (!n) return;
+    const sameGrid =
+      this.latest !== null &&
+      this.latest.start === s.start &&
+      this.latest.step === s.step &&
+      this.latest.dbm.length === n;
+
+    if (!sameGrid || !this.maxHold || !this.avgSum || this.history.length === 0) {
+      this.pushScan(s);
+      return;
+    }
+
+    for (let i = 0; i < n; i++) {
+      const v = s.dbm[i];
+      if (v > 0 && v > this.maxHold[i]) {
+        this.maxHold[i] = v;
+      }
+    }
+    this.latest = s;
+    const topIdx = this.history.length - 1;
+    this.history[topIdx] = {
+      tsIso: new Date().toISOString(),
+      passMs: s.passMs ?? 0,
+      start: s.start,
+      step: s.step,
+      dbm: [...s.dbm],
+    };
+    this.paintTopWaterfallRow(s.dbm);
+  }
+
+  private paintTopWaterfallRow(dbm: number[]): void {
+    const bins = dbm.length;
+    if (!this.offscreen || this.wfWidth !== bins) {
+      this.resetOffscreen(bins);
+    }
+    const c = this.offscreen!;
+    const ctx = c.getContext("2d")!;
+    const rowImg = ctx.createImageData(bins, 1);
+    const data = rowImg.data;
+    for (let i = 0; i < bins; i++) {
+      const v = dbm[i];
+      const [r, g, b] = v > 0 ? dbmToRgb(v, this.colorMinDbm, this.colorMaxDbm) : dbmToRgb(this.colorMinDbm, this.colorMinDbm, this.colorMaxDbm);
+      const o = i * 4;
+      data[o] = r;
+      data[o + 1] = g;
+      data[o + 2] = b;
+      data[o + 3] = 255;
+    }
+    ctx.putImageData(rowImg, 0, 0);
+  }
+
   public getAverage(): number[] | null {
     if (!this.avgSum || this.avgCount < 1) return null;
     return this.avgSum.map((sum) => sum / this.avgCount);
@@ -1519,14 +1572,22 @@ export function drawSpectrumCanvas(
   // Max-hold trace (B-spline smoothed)
   ctx.lineCap = "round";
   ctx.lineJoin = "round";
+  const isRssiScale = unitLbl === "RSSI";
   if (opts.showMaxHold && acc.maxHold && acc.maxHold.length === s.dbm.length) {
     ctx.strokeStyle = tokens.accent;
     ctx.globalAlpha = 0.34;
     ctx.lineWidth = 1.2;
-    const holdPts = acc.maxHold.map((v, i) => ({ x: xOf(s.start + i * s.step), y: yOf(v) }));
-    ctx.beginPath();
-    traceBSpline(ctx, holdPts, true);
-    ctx.stroke();
+    const holdPts: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i < acc.maxHold.length; i++) {
+      const v = acc.maxHold[i];
+      if (isRssiScale && v <= 0) continue;
+      holdPts.push({ x: xOf(s.start + i * s.step), y: yOf(v) });
+    }
+    if (holdPts.length > 0) {
+      ctx.beginPath();
+      traceBSpline(ctx, holdPts, true);
+      ctx.stroke();
+    }
     ctx.globalAlpha = 1;
   }
 
@@ -1537,10 +1598,17 @@ export function drawSpectrumCanvas(
     ctx.strokeStyle = adaptColorForTheme("#38bdf8");
     ctx.globalAlpha = 0.8;
     ctx.lineWidth = 1.4;
-    const avgPts = avg.map((v, i) => ({ x: xOf(s.start + i * s.step), y: yOf(v) }));
-    ctx.beginPath();
-    traceBSpline(ctx, avgPts, true);
-    ctx.stroke();
+    const avgPts: Array<{ x: number; y: number }> = [];
+    for (let i = 0; i < avg.length; i++) {
+      const v = avg[i];
+      if (isRssiScale && v <= 0) continue;
+      avgPts.push({ x: xOf(s.start + i * s.step), y: yOf(v) });
+    }
+    if (avgPts.length > 0) {
+      ctx.beginPath();
+      traceBSpline(ctx, avgPts, true);
+      ctx.stroke();
+    }
     ctx.globalAlpha = 1;
   }
 
@@ -1551,15 +1619,19 @@ export function drawSpectrumCanvas(
   const holdArr = acc.maxHold && acc.maxHold.length === s.dbm.length ? acc.maxHold : s.dbm;
   const livePts: Array<{ x: number; y: number }> = [];
   for (let i = 0; i < s.dbm.length; i++) {
+    const v = s.dbm[i];
+    if (isRssiScale && v <= 0) continue;
     const f = s.start + i * s.step;
     if (f >= vStart && f <= vStop && (maxHoldPeakIdx < 0 || holdArr[i] > holdArr[maxHoldPeakIdx])) {
       maxHoldPeakIdx = i;
     }
-    livePts.push({ x: xOf(f), y: yOf(s.dbm[i]) });
+    livePts.push({ x: xOf(f), y: yOf(v) });
   }
-  ctx.beginPath();
-  traceBSpline(ctx, livePts, true);
-  ctx.stroke();
+  if (livePts.length > 0) {
+    ctx.beginPath();
+    traceBSpline(ctx, livePts, true);
+    ctx.stroke();
+  }
 
   ctx.restore();
 

@@ -87,6 +87,7 @@ export interface RHClientDiagSnapshot {
     step: number;
     passMs: number;
     live: boolean;
+    partial?: boolean;
     values: number[];
   };
 }
