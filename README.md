@@ -1,5 +1,13 @@
 # SlapRF
 
+[![Release](https://github.com/kaack/SlapRF/actions/workflows/release.yml/badge.svg)](https://github.com/kaack/SlapRF/actions/workflows/release.yml)
+[![Build & Deploy GitHub Page](https://github.com/kaack/SlapRF/actions/workflows/pages.yml/badge.svg)](https://github.com/kaack/SlapRF/actions/workflows/pages.yml)
+[![Build XIAO ESP32-C5 Firmware](https://github.com/kaack/SlapRF/actions/workflows/firmware.yml/badge.svg)](https://github.com/kaack/SlapRF/actions/workflows/firmware.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/kaack/SlapRF)](https://goreportcard.com/report/github.com/kaack/SlapRF)
+[![Latest Release](https://img.shields.io/github/v/release/kaack/SlapRF?label=release&color=2ea44f)](https://github.com/kaack/SlapRF/releases/latest)
+[![Live Demo](https://img.shields.io/badge/demo-slaprf.app-38bdf8)](https://slaprf.app)
+[![Discord](https://img.shields.io/badge/Discord-Join%20Community-5865F2?logo=discord&logoColor=white)](https://discord.gg/zNrV3auRss)
+
 [![SlapRF](docs/slaprf-hero.png)](https://slaprf.app)
 
 SlapRF is a standalone FPV drone timing and race management application with multi-gate 5.8 GHz section split timing.
@@ -8,11 +16,10 @@ The name **SlapRF** comes from the DIY gate hardware: you assemble four off-the-
 
 A single-gate timer measures total lap time at the Start / Finish gate. When you place additional timers at gates around the track, SlapRF also measures split times for each track section (`S1`, `S2`, `S3`, and so on) so pilots can see where they gained or lost time.
 
-## Demo
+## Demo & Community
 
-Preview SlapRF in your browser with no hardware or installation required:
-
-👉 **[Open the Interactive Demo (`slaprf.app`)](https://slaprf.app)**
+- 👉 **[Open the Interactive Demo (`slaprf.app`)](https://slaprf.app)**: Preview SlapRF in your browser with no hardware or installation required.
+- 💬 **[Join the SlapRF Discord Server (`discord.gg/zNrV3auRss`)](https://discord.gg/zNrV3auRss)**: Ask questions, share your XIAO ESP32-C5 gate timer builds, get help with calibration, and follow new releases.
 
 > **Note:** `slaprf.app` is an interactive **browser demo** preloaded with a simulated SlapRF Hub, 3 Spoke timers, sample practice sessions, and sample races. Because browser tab throttling and WebAssembly timing performance vary by device, **`slaprf.app` is for demonstration only**. To time real practices or run live races, [download and run the SlapRF app](#run) on your computer or Android phone.
 
