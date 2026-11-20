@@ -779,6 +779,7 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 			HoldMs:            candidate.HoldMs,
 			AboveEnterMs:      candidate.AboveEnterMs,
 			PassAreaDbSec:     candidate.PassAreaDbSec,
+			IsStepBurst:       candidate.IsStepBurst,
 		}
 
 		if !e.raceArmed {

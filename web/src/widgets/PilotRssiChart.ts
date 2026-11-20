@@ -139,6 +139,8 @@ export class PilotRssiChart extends Component {
   private lastHardwareMode: TimingHardwareMode = "slaprf";
   private autoYHoldUntilMs = 0;
   private lastLegendStructSig = "";
+  private lastAxisControlsHtml = "";
+  private lastCalibHtml = "";
   private readonly labelWidthCache = new Map<string, number>();
   private cachedLabelSig = "";
   private cachedLabelRows = new Map<string, number>();
@@ -2072,11 +2074,18 @@ export class PilotRssiChart extends Component {
   private renderControls(): void {
     const live = this.endUs === null;
     const btn = this.el.querySelector<HTMLButtonElement>('[data-act="live"]')!;
-    btn.className = `btn btn-sm scope-live-btn ${live ? "btn-armed" : "btn-ghost"}`;
-    btn.title = live ? "Following live signal stream · click to pause (Space)" : "Stream paused · click to resume live stream (Space)";
-    btn.setAttribute("aria-label", btn.title);
-    btn.setAttribute("aria-pressed", String(live));
-    btn.innerHTML = `<span class="status-dot ${live ? "is-up" : ""}"></span><span>Live</span>`;
+    const wantLiveClass = `btn btn-sm scope-live-btn ${live ? "btn-armed" : "btn-ghost"}`;
+    const wantLiveTitle = live
+      ? "Following live signal stream · click to pause (Space)"
+      : "Stream paused · click to resume live stream (Space)";
+    const wantLiveHtml = `<span class="status-dot ${live ? "is-up" : ""}"></span><span>Live</span>`;
+    if (btn.className !== wantLiveClass) btn.className = wantLiveClass;
+    if (btn.title !== wantLiveTitle) {
+      btn.title = wantLiveTitle;
+      btn.setAttribute("aria-label", wantLiveTitle);
+    }
+    if (btn.getAttribute("aria-pressed") !== String(live)) btn.setAttribute("aria-pressed", String(live));
+    if (btn.innerHTML !== wantLiveHtml) btn.innerHTML = wantLiveHtml;
 
     const gateScope = this.focus === null ? "all timers" : gateLabel(this.store, this.focus);
     const prevBtn = this.el.querySelector<HTMLButtonElement>('[data-act="prev"]');
@@ -2114,7 +2123,7 @@ export class PilotRssiChart extends Component {
         ? "Full"
         : `${Math.round(this.yMax - this.yMin)}${isLapRF || isRH ? "" : "dB"}`;
 
-    this.slot("axis-controls").innerHTML = `
+    const nextAxisHtml = `
       <div class="debug-axis-pill ${this.autoX ? "is-armed" : "is-unarmed"}" data-axis-pill>
         <button type="button" class="debug-axis-pill-main" data-axis-act="${this.autoX ? "toggle-menu" : "auto-x"}" data-menu="rssi-x" title="${this.autoX ? `Auto X-axis time window (${xWinLabel}) · click to choose a time window preset, or drag X-axis to stretch` : "Click to reset X-axis time window to Auto X (15 s)"}">
           ${icons.target(13)}<span>${this.autoX ? "Auto X" : `<span class="debug-hint-desktop">X: ${xWinLabel}</span><span class="debug-hint-mobile">X: ${xWinShort}</span>`}</span>
@@ -2162,25 +2171,37 @@ export class PilotRssiChart extends Component {
             : ""
         }
       </div>`;
+    if (nextAxisHtml !== this.lastAxisControlsHtml) {
+      this.lastAxisControlsHtml = nextAxisHtml;
+      this.slot("axis-controls").innerHTML = nextAxisHtml;
+    }
 
-    this.slot("hint").textContent = live
+    const nextHint = live
       ? "Live · drag chart to pan · Shift+drag box to zoom · drag axes to stretch"
       : "Paused · drag chart to pan · Shift+drag box to zoom · drag axes to stretch";
+    const hintEl = this.slot("hint");
+    if (hintEl.textContent !== nextHint) hintEl.textContent = nextHint;
   }
 
   /** The calibration row: what the tags mean, Auto-calibrate, Reset, and the last result with Undo. */
   private renderCalib(): void {
     if (this.isMultiPilotMode) {
       const count = (this.multiPilotSlots ?? []).length;
-      this.slot("calib").innerHTML = `
-        <span class="scope-calib-text">Showing all ${count} seated pilots simultaneously — select an individual pilot above to tune thresholds.</span>`;
+      const multiHtml = `<span class="scope-calib-text">Showing all ${count} seated pilots simultaneously - select an individual pilot above to tune thresholds.</span>`;
+      if (multiHtml !== this.lastCalibHtml) {
+        this.lastCalibHtml = multiHtml;
+        this.slot("calib").innerHTML = multiHtml;
+      }
       return;
     }
     const pilot = this.store.pilot(this.activePilotSlot);
     if (!pilot) return;
     if (this.store.isHistoricalTrack) {
-      this.slot("calib").innerHTML = `
-        <span class="scope-calib-text">Historical track snapshot (read-only) — thresholds reflect recorded session gates.</span>`;
+      const histHtml = `<span class="scope-calib-text">Historical track snapshot (read-only) - thresholds reflect recorded session gates.</span>`;
+      if (histHtml !== this.lastCalibHtml) {
+        this.lastCalibHtml = histHtml;
+        this.slot("calib").innerHTML = histHtml;
+      }
       return;
     }
     const minutes = Math.round(HISTORY_SECONDS / 60);
@@ -2227,9 +2248,13 @@ export class PilotRssiChart extends Component {
           ${canAutoCalib ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Set ${esc(name)}'s thresholds from the last ${minutes} minutes of signal">${icons.target(16)}<span>Auto-calibrate</span></button>` : ""}
         </div>`;
     }
-    this.slot("calib").innerHTML = `
+    const nextCalibHtml = `
       <span class="scope-calib-text">${esc(text)}</span>
       ${actions}`;
+    if (nextCalibHtml !== this.lastCalibHtml) {
+      this.lastCalibHtml = nextCalibHtml;
+      this.slot("calib").innerHTML = nextCalibHtml;
+    }
   }
 
   /** Each timer's reading at the cursor (or at the right edge of the view), plus the "All timers" option. */

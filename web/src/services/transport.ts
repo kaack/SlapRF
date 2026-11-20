@@ -13,6 +13,7 @@ export interface ApiTransport {
   requestText?(method: "GET" | "POST", url: string, body?: unknown): Promise<string>;
   connectStream(onEnvelope: (msg: StreamEnvelope) => void): void;
   disconnectStream(): void;
+  isStreamConnected?(): boolean;
   setSimRunning(running: boolean): Promise<void> | void;
   pushHubChannels(): void;
   exportSimStateJson(): Promise<string>;

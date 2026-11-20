@@ -45,6 +45,10 @@ export class BackendHttpTransport implements ApiTransport {
     return this.paused;
   }
 
+  public isStreamConnected(): boolean {
+    return Boolean(this.ws && this.ws.readyState === WebSocket.OPEN);
+  }
+
   private verifyServerReachable(): void {
     if (this.paused || this.checkingReachability) return;
     this.checkingReachability = true;

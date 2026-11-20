@@ -27,12 +27,12 @@ type FullStateResponse struct {
 	Rules              domain.TimingRules          `json:"rules"`
 	SimulatorRun       bool                        `json:"simulatorRunning"`
 	SimState           *domain.SimState            `json:"simState,omitempty"`
-	SimMultiGP         *multigp.SimPersistedState  `json:"simMultiGP,omitempty"`
-	RaceArmed          bool                        `json:"raceArmed"`
-	LiveTimeStatus     laprf.LiveTimeStatus        `json:"liveTimeStatus"`
-	RaceState          domain.RaceTournamentState   `json:"raceState"`
-	EventState         domain.EventManagerState     `json:"eventState"`
-	PracticeState      domain.PracticeManagerState  `json:"practiceState"`
+	SimMultiGP         *multigp.SimPersistedState    `json:"simMultiGP,omitempty"`
+	RaceArmed          bool                          `json:"raceArmed"`
+	LiveTimeStatus     laprf.LiveTimeStatus          `json:"liveTimeStatus"`
+	RaceState          domain.RaceTournamentState    `json:"raceState"`
+	EventState         domain.EventManagerState      `json:"eventState"`
+	PracticeState      domain.PracticeManagerState   `json:"practiceState"`
 	ImportSummary      *domain.PilotCSVImportSummary `json:"importSummary,omitempty"`
 }
 
@@ -46,11 +46,11 @@ type StatusResponse struct {
 	SimulatorRun       bool                        `json:"simulatorRunning"`
 	SimState           *domain.SimState            `json:"simState,omitempty"`
 	SimMultiGP         *multigp.SimPersistedState  `json:"simMultiGP,omitempty"`
-	RaceArmed          bool                        `json:"raceArmed"`
-	LiveTimeStatus     laprf.LiveTimeStatus        `json:"liveTimeStatus"`
-	RaceState          domain.RaceTournamentState   `json:"raceState"`
-	EventState         domain.EventManagerState     `json:"eventState"`
-	PracticeState      domain.PracticeManagerState  `json:"practiceState"`
+	RaceArmed          bool                          `json:"raceArmed"`
+	LiveTimeStatus     laprf.LiveTimeStatus          `json:"liveTimeStatus"`
+	RaceState          *domain.RaceTournamentState   `json:"raceState,omitempty"`
+	EventState         *domain.EventManagerState     `json:"eventState,omitempty"`
+	PracticeState      *domain.PracticeManagerState  `json:"practiceState,omitempty"`
 	ImportSummary      *domain.PilotCSVImportSummary `json:"importSummary,omitempty"`
 }
 
@@ -284,11 +284,9 @@ func (s *Server) handleGetState(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
-func (s *Server) handleGetStatus(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	eng := s.activeEngine()
-	raceState := eng.RaceSnapshot()
-	eventState := eng.EventSnapshot()
-	practiceState := eng.PracticeSnapshot()
+	lite := r != nil && r.URL != nil && r.URL.Query().Get("lite") == "1"
 	_, gates, _, _, _ := eng.StateSnapshot()
 	if gates == nil {
 		gates = []domain.TrackGate{}
@@ -301,7 +299,7 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, _ *http.Request) {
 		mgpExp := s.simulator.MultiGPBackend().ExportState()
 		simMGP = &mgpExp
 	}
-	writeJSON(w, http.StatusOK, StatusResponse{
+	resp := StatusResponse{
 		ServerTimestampUs:  eng.NowUs(),
 		TimingHardwareMode: eng.TimingHardwareMode(),
 		Gates:              gates,
@@ -311,10 +309,16 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, _ *http.Request) {
 		SimMultiGP:         simMGP,
 		RaceArmed:          eng.IsRaceArmed(),
 		LiveTimeStatus:     s.laprfServer.Status(),
-		RaceState:          raceState,
-		EventState:         eventState,
-		PracticeState:      practiceState,
-	})
+	}
+	if !lite {
+		raceState := eng.RaceSnapshot()
+		eventState := eng.EventSnapshot()
+		practiceState := eng.PracticeSnapshot()
+		resp.RaceState = &raceState
+		resp.EventState = &eventState
+		resp.PracticeState = &practiceState
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleRules reads (GET) or replaces (POST) the timing guardrails. Values are clamped

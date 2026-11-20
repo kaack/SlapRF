@@ -471,3 +471,93 @@ func TestEmptyChannelsReject5GHzWiFiSpikesAndHealStaleNoiseThresholds(t *testing
 		t.Fatalf("expected the -50 dBm 40 ms sharp burst on Pilot 1 to be caught as FilterSpike")
 	}
 }
+
+func TestSustainedWifiStepBurstAndRepeatedHubHelloProduceZeroFalseLapsOrBroadcastSpam(t *testing.T) {
+	e := NewRealEngine()
+	e.SetTimingHardwareMode(domain.HardwareModeSlapRFBLE, false)
+	hubID, err := e.RegisterTimerHello("BE7C0001", true, "H1")
+	if err != nil || hubID != 1 {
+		t.Fatalf("RegisterTimerHello: id=%d err=%v", hubID, err)
+	}
+	if err := e.UpdatePilotSlot(domain.PilotSlot{SlotIndex: 1, Callsign: "Pilot 1", Band: domain.BandRaceband, Channel: 4, Enabled: true}); err != nil {
+		t.Fatalf("UpdatePilotSlot: %v", err)
+	}
+	// Seed a stale Wi-Fi threshold (-81/-86 dBm) on Pilot 1 to verify immediate auto-healing to 0.
+	e.mu.Lock()
+	e.gates[0].EnterThresholds[0] = -81
+	e.gates[0].ExitThresholds[0] = -86
+	e.mu.Unlock()
+
+	configUpdates := 0
+	practiceUpdates := 0
+	e.Subscribe(&countingSubscriber{
+		onConfig:   func() { configUpdates++ },
+		onPractice: func() { practiceUpdates++ },
+	})
+
+	// Simulate 30 seconds of 50 Hz telemetry on Pilot 1 (5769 MHz UNII-3 Ch 153) with NO VTX on (-92.8 dBm),
+	// punctuated by both 60 ms -57 dBm Wi-Fi bursts AND a 1.0 s rectangular -60.8 dBm Wi-Fi download TXOP,
+	// plus 1 Hz RegisterTimerHello("BE7C0001", true, "H1") status heartbeats.
+	const stepUs = 20_000
+	for ts := uint64(1_000_000); ts <= 31_000_000; ts += stepUs {
+		if ts%1_000_000 == 0 {
+			_, _ = e.RegisterTimerHello("BE7C0001", true, "H1")
+		}
+		sec := float64(ts) / 1e6
+		v := float32(-92.8)
+		// 60 ms sharp Wi-Fi packet bursts every 5.2 s
+		for _, bt := range []float64{5.0, 10.3, 21.5, 27.0} {
+			if sec >= bt && sec <= bt+0.06 {
+				v = -57.0
+			}
+		}
+		// 1.0 s rectangular Wi-Fi download TXOP at t = 15.0..16.0 s (-92.8 -> -60.8 -> -92.8 dBm)
+		if sec >= 15.0 && sec <= 16.0 {
+			v = -60.8
+		}
+		var rssi [domain.MaxPilotPoolSize]float32
+		for k := range rssi {
+			rssi[k] = -93.0
+		}
+		rssi[0] = v
+		e.IngestTelemetryFrame(domain.TimerTelemetryFrame{
+			TimerID:       hubID,
+			TimestampUs:   ts,
+			RSSI:          rssi,
+			BatteryMv:     4100,
+			NoiseFloorDbm: -92.5,
+		})
+	}
+
+	_, gatesOut, lapsOut, crossingsOut, _ := e.StateSnapshot()
+	if gatesOut[0].EnterThresholds[0] != 0 {
+		t.Fatalf("expected stale -71 dBm Pilot 1 threshold healed to 0 and Wi-Fi TXOP ignored, got %v", gatesOut[0].EnterThresholds[0])
+	}
+	if len(crossingsOut) != 0 || len(lapsOut) != 0 {
+		t.Fatalf("expected 0 false crossings/laps from 60 ms + 1.0 s Wi-Fi bursts, got crossings=%d laps=%d", len(crossingsOut), len(lapsOut))
+	}
+	// Only the 1 initial stale-threshold heal should emit config/practice updates; the 30 1-Hz RegisterTimerHello calls must emit 0!
+	if configUpdates > 1 || practiceUpdates > 1 {
+		t.Fatalf("expected <= 1 config/practice broadcast across 30 1-Hz Hub status heartbeats, got config=%d practice=%d", configUpdates, practiceUpdates)
+	}
+}
+
+type countingSubscriber struct {
+	onConfig   func()
+	onPractice func()
+}
+
+func (c *countingSubscriber) OnTelemetryFrame(domain.TimerTelemetryFrame)              {}
+func (c *countingSubscriber) OnGateCrossing(domain.GateCrossingEvent)                  {}
+func (c *countingSubscriber) OnDetectionFiltered(domain.FilteredDetection)             {}
+func (c *countingSubscriber) OnLapCompleted(domain.LapRecord, []domain.PilotTrackSummary) {}
+func (c *countingSubscriber) OnConfigUpdated([]domain.PilotSlot, []domain.TrackGate) {
+	if c.onConfig != nil {
+		c.onConfig()
+	}
+}
+func (c *countingSubscriber) OnPracticeUpdated(domain.PracticeManagerState) {
+	if c.onPractice != nil {
+		c.onPractice()
+	}
+}

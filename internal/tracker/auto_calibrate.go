@@ -31,12 +31,13 @@ const (
 	autoCalibMinSpanUs      uint64  = 3_200_000 // >= 3.2 s wall-clock span
 	autoCalibMinPeakRiseDb  float32 = 9.5       // Pass peak must rise >= 9.5 dB above local valley baseline (supports indoor 10-12 dB swings)
 	autoCalibMinAbsPeakDbm  float32 = -70.0     // Reject < -70 dBm 5 GHz Wi-Fi / ambient RF bursts on unused channels
-	autoCalibMinEnterDbm    float32 = -79.0     // Never auto-calibrate enterThreshold into receiver thermal / Wi-Fi noise
+	autoCalibMinEnterDbm    float32 = -78.0     // Never auto-calibrate enterThreshold into receiver thermal / Wi-Fi noise
 	autoCalibLocalMaxSepUs  uint64  = 400_000   // Multipath crests < 400 ms apart belong to the same pass
 	autoCalibLocalValleyUs  uint64  = 8_000_000 // Measure adjacent approach/departure valleys within +-8 s of each peak
 	autoCalibMinPassSepUs   uint64  = 1_800_000 // Distinct lap fly-bys must be >= 1.8 s apart
-	autoCalibMinPassFwhmUs  uint64  = 260_000   // Reject < 260 ms sharp Wi-Fi / RF packet bursts smeared by EMA release
-	autoCalibMinPassSkirtUs uint64  = 420_000   // Genuine inverse-square approach + departure spans >= 420 ms above localBase + 3.5 dB
+	autoCalibMinPassFwhmUs  uint64  = 280_000   // Reject < 280 ms sharp Wi-Fi / RF packet bursts smeared by EMA release
+	autoCalibMinPassSkirtUs uint64  = 440_000   // Genuine inverse-square approach + departure spans >= 440 ms above localBase + 3.5 dB
+	autoCalibMinFlankUs     uint64  = 180_000   // Both rising approach and falling departure must span >= 180 ms (rejects step-on Wi-Fi packets)
 	autoCalibMinPassAreaDbS float64 = 4.5       // Genuine gate pass integrates >= 4.5 dB*s above localBase
 	autoCalibMaxPassFwhmUs  uint64  = 6_500_000 // Reject > 6.5 s parked/bench VTX plateaus
 	autoCalibDeadbandDb     float32 = 1.5       // Skip minor updates smaller than 1.5 dB during steady flying
@@ -859,6 +860,11 @@ func hasValidPassSkirtAndArea(samples []autoCalibSample, peakIdx int, localBase 
 		sRight++
 	}
 	if samples[sRight].tsUs <= samples[sLeft].tsUs || samples[sRight].tsUs-samples[sLeft].tsUs < autoCalibMinPassSkirtUs {
+		return false
+	}
+	riseUs := samples[peakIdx].tsUs - samples[sLeft].tsUs
+	fallUs := samples[sRight].tsUs - samples[peakIdx].tsUs
+	if riseUs < autoCalibMinFlankUs || fallUs < autoCalibMinFlankUs {
 		return false
 	}
 	var areaDbSec float64

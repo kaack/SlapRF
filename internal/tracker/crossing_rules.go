@@ -202,6 +202,9 @@ func (e *Engine) checkSpikeRejectionLocked(
 	if domain.IsRotorHazardMode(e.timingHardwareMode) || ev.PeakRSSIDbm >= 0 {
 		return ""
 	}
+	if ev.IsStepBurst {
+		return fmt.Sprintf("Wi-Fi / RF packet burst at %s (%.1f dBm)", e.gateLabelLocked(gate.GateID), ev.PeakRSSIDbm)
+	}
 	if ev.HoldMs <= 0 && ev.PassAreaDbSec <= 0 {
 		return ""
 	}

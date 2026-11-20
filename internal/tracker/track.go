@@ -65,6 +65,26 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 	}
 
 	if role == "hub" {
+		if req.FromHubHello {
+			d1, ok1 := e.detected[1]
+			hasDupHub := false
+			for tid, d := range e.detected {
+				if tid != 1 && (d.IsHub || (fingerprint != "" && d.Fingerprint == fingerprint)) {
+					hasDupHub = true
+					break
+				}
+			}
+			needsBleAutoGate := domain.NormalizeTimingHardwareMode(e.timingHardwareMode) == domain.HardwareModeSlapRFBLE && len(e.gates) == 0
+			if ok1 && d1.IsHub && !hasDupHub && !needsBleAutoGate &&
+				(fingerprint == "" || d1.Fingerprint == fingerprint) &&
+				(timerLabel == "" || d1.TimerLabel == timerLabel) &&
+				d1.FirmwareVersion == ver {
+				d1.Online = true
+				d1.LastSeenAt = time.Now()
+				e.mu.Unlock()
+				return 1, nil
+			}
+		}
 		id := e.provisionCollectorHubLocked(fingerprint, timerLabel, ver)
 		pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
 		pilots := append([]domain.PilotSlot(nil), e.pilots...)
@@ -97,6 +117,14 @@ func (e *Engine) ProvisionGate(req ProvisionRequest) (uint8, error) {
 						}
 					}
 					break
+				}
+				if req.FromHubHello && !d.IsHub &&
+					(timerLabel == "" || d.TimerLabel == timerLabel) &&
+					d.FirmwareVersion == ver {
+					d.Online = true
+					d.LastSeenAt = time.Now()
+					e.mu.Unlock()
+					return id, nil
 				}
 				if timerLabel != "" {
 					d.TimerLabel = timerLabel

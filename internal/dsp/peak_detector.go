@@ -16,6 +16,7 @@ type CrossingCandidate struct {
 	HoldMs            float64
 	AboveEnterMs      float64
 	PassAreaDbSec     float64
+	IsStepBurst       bool
 }
 
 type samplePoint struct {
@@ -359,6 +360,7 @@ func (d *ChannelDetector) ProcessSample(
 		d.awaitingRearm = !exitedBelowThreshold
 
 		beamwidthMs, speedMph := d.estimateBeamwidthAndSpeed()
+		isStepBurst := enterThresholdDbm < 0 && d.isRectangularStepBurst()
 
 		// Convert dBm (-85..-20 dBm) to ImmersionRC LapRF peak height scale (approx 600..3600)
 		laprfHeight := float32(math.Max(400, math.Min(3900, float64(d.peakRSSI+95.0)*46.0)))
@@ -374,6 +376,7 @@ func (d *ChannelDetector) ProcessSample(
 			HoldMs:            holdMs,
 			AboveEnterMs:      aboveEnterMs,
 			PassAreaDbSec:     areaDbSec,
+			IsStepBurst:       isStepBurst,
 		}
 	}
 
@@ -522,51 +525,31 @@ func (d *ChannelDetector) estimateBeamwidthAndSpeed() (float64, float64) {
 	return math.Round(beamwidthMs*10) / 10, math.Round(speedMph*10) / 10
 }
 
-// measurePassHoldAndArea computes the pass envelope hold duration (in ms), linearly interpolated
-// time spent at or above enterThresholdDbm (in ms), and integrated area above effectiveExit (dB*s).
+// measurePassHoldAndArea computes the pass hold duration (in ms), linearly interpolated time spent
+// at or above enterThresholdDbm (in ms), and integrated area above effectiveExit (dB*s).
+//
+// It evaluates `d.passMedSamples` (the symmetric interquartile-trimmed median curve) when >= 3
+// samples are available rather than `d.windowSamples` (`smoothedRSSI`), because `smoothedRSSI`
+// uses an asymmetric 85 ms + 40 ms slow release to bridge indoor multipath fades. Measuring hold
+// and area on `smoothedRSSI` artificially stretches a 40 ms 5 GHz Wi-Fi packet burst into a
+// ~260 ms decay tail; `passMedSamples` preserves true physical duration for both indoor and
+// high-speed outdoor passes while exposing short RF packet bursts at their true 40-80 ms width.
 func (d *ChannelDetector) measurePassHoldAndArea(enterThresholdDbm, effectiveExit float32) (holdMs, aboveEnterMs, areaDbSec float64) {
-	n := len(d.windowSamples)
+	pts := d.passMedSamples
+	if len(pts) < 3 {
+		pts = d.windowSamples
+	}
+	n := len(pts)
 	if n < 2 {
 		return 0, 0, 0
 	}
-	firstActiveUs := d.windowSamples[0].timestampUs
-	lastActiveUs := d.windowSamples[n-1].timestampUs
 
-	// Include up to 150 ms of rising pre-entry samples above effectiveExit from passMedSamples
-	// so the rising and falling flanks above exitThreshold contribute symmetrically.
-	for i := 0; i < len(d.passMedSamples); i++ {
-		pt := d.passMedSamples[i]
-		if pt.timestampUs >= d.windowSamples[0].timestampUs {
-			break
-		}
-		if d.windowSamples[0].timestampUs-pt.timestampUs > 150_000 {
-			continue
-		}
-		if pt.rssiDbm > effectiveExit {
-			if pt.timestampUs < firstActiveUs {
-				firstActiveUs = pt.timestampUs
-			}
-			nextTs := d.windowSamples[0].timestampUs
-			nextVal := d.windowSamples[0].rssiDbm
-			if i+1 < len(d.passMedSamples) && d.passMedSamples[i+1].timestampUs <= d.windowSamples[0].timestampUs {
-				nextTs = d.passMedSamples[i+1].timestampUs
-				nextVal = d.passMedSamples[i+1].rssiDbm
-			}
-			if nextTs > pt.timestampUs {
-				dtSec := float64(nextTs-pt.timestampUs) / 1e6
-				if dtSec > 0.1 {
-					dtSec = 0.1
-				}
-				h0 := math.Max(0, float64(pt.rssiDbm-effectiveExit))
-				h1 := math.Max(0, float64(nextVal-effectiveExit))
-				areaDbSec += 0.5 * (h0 + h1) * dtSec
-			}
-		}
-	}
+	var firstExitUs, lastExitUs uint64
+	hasExitSpan := false
 
 	for i := 1; i < n; i++ {
-		p0 := d.windowSamples[i-1]
-		p1 := d.windowSamples[i]
+		p0 := pts[i-1]
+		p1 := pts[i]
 		if p1.timestampUs <= p0.timestampUs {
 			continue
 		}
@@ -576,6 +559,38 @@ func (d *ChannelDetector) measurePassHoldAndArea(enterThresholdDbm, effectiveExi
 		}
 		dtMs := dtUs / 1000.0
 		dtSec := dtUs / 1e6
+
+		// Track first rising crossing and last falling crossing of effectiveExit.
+		if p0.rssiDbm >= effectiveExit || p1.rssiDbm >= effectiveExit {
+			segStartUs := p0.timestampUs
+			if p0.rssiDbm < effectiveExit && p1.rssiDbm >= effectiveExit {
+				span := float64(p1.rssiDbm - p0.rssiDbm)
+				if span > 1e-4 {
+					frac := float64(effectiveExit-p0.rssiDbm) / span
+					segStartUs = p0.timestampUs + uint64(dtUs*frac)
+				}
+			}
+			segEndUs := p1.timestampUs
+			if p0.rssiDbm >= effectiveExit && p1.rssiDbm < effectiveExit {
+				span := float64(p0.rssiDbm - p1.rssiDbm)
+				if span > 1e-4 {
+					frac := float64(p0.rssiDbm-effectiveExit) / span
+					segEndUs = p0.timestampUs + uint64(dtUs*frac)
+				}
+			}
+			if !hasExitSpan {
+				firstExitUs = segStartUs
+				lastExitUs = segEndUs
+				hasExitSpan = true
+			} else {
+				if segStartUs < firstExitUs {
+					firstExitUs = segStartUs
+				}
+				if segEndUs > lastExitUs {
+					lastExitUs = segEndUs
+				}
+			}
+		}
 
 		// Linearly interpolated time above enterThresholdDbm.
 		if p0.rssiDbm >= enterThresholdDbm && p1.rssiDbm >= enterThresholdDbm {
@@ -598,11 +613,67 @@ func (d *ChannelDetector) measurePassHoldAndArea(enterThresholdDbm, effectiveExi
 		areaDbSec += 0.5 * (h0 + h1) * dtSec
 	}
 
-	if lastActiveUs > firstActiveUs {
-		holdMs = float64(lastActiveUs-firstActiveUs) / 1000.0
+	if hasExitSpan && lastExitUs > firstExitUs {
+		holdMs = float64(lastExitUs-firstExitUs) / 1000.0
 	}
 	if holdMs < aboveEnterMs {
 		holdMs = aboveEnterMs
 	}
 	return math.Round(holdMs*10) / 10, math.Round(aboveEnterMs*10) / 10, math.Round(areaDbSec*100) / 100
+}
+
+// isRectangularStepBurst detects a 5 GHz Wi-Fi TXOP / digital packet burst on an unused FPV
+// channel: the channel sits at dead thermal receiver noise (<= -87.5 dBm, no VTX carrier) right up
+// to the burst, steps up >= 20 dB in <= 80 ms (> 250 mph impossible inverse-square approach), and
+// steps back down >= 18 dB to thermal noise on exit without a physical departure skirt.
+func (d *ChannelDetector) isRectangularStepBurst() bool {
+	pts := d.passMedSamples
+	n := len(pts)
+	if n < 6 {
+		return false
+	}
+	// Require fine hardware sample cadence (<= 30 ms spacing = 50/100 Hz) in the pre-entry samples
+	// and >= 3 consecutive thermal-noise samples <= -87.5 dBm before the rising step.
+	quietCount := 0
+	lastQuietIdx := -1
+	for i := 0; i < n && i < 8; i++ {
+		if i > 0 && pts[i].timestampUs-pts[i-1].timestampUs > 35_000 {
+			return false
+		}
+		if pts[i].rssiDbm <= -87.5 {
+			quietCount++
+			lastQuietIdx = i
+		} else {
+			break
+		}
+	}
+	if quietCount < 2 || lastQuietIdx < 1 {
+		return false
+	}
+	baseDbm := pts[lastQuietIdx].rssiDbm
+	// Find first sample reaching >= baseDbm + 20 dB (step-on transmitter key-up).
+	stepUpIdx := -1
+	for i := lastQuietIdx + 1; i < n; i++ {
+		if pts[i].rssiDbm >= baseDbm+20.0 {
+			stepUpIdx = i
+			break
+		}
+	}
+	if stepUpIdx < 0 || pts[stepUpIdx].timestampUs-pts[lastQuietIdx].timestampUs > 85_000 {
+		return false
+	}
+	// Check abrupt step-off at the end of the burst (back down <= -85.0 dBm within <= 100 ms of a high sample).
+	endDbm := pts[n-1].rssiDbm
+	if endDbm > -85.0 {
+		return false
+	}
+	for i := n - 2; i >= stepUpIdx; i-- {
+		if pts[n-1].timestampUs-pts[i].timestampUs > 105_000 {
+			break
+		}
+		if pts[i].rssiDbm >= endDbm+18.0 {
+			return true
+		}
+	}
+	return false
 }

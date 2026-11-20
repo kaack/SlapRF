@@ -29,5 +29,6 @@ type GateCrossingEvent struct {
 	HoldMs            float64 `json:"holdMs,omitempty"`        // Total gate pass hold time (enter to exit) in milliseconds
 	AboveEnterMs      float64 `json:"aboveEnterMs,omitempty"`  // Duration signal remained at or above enterThreshold in milliseconds
 	PassAreaDbSec     float64 `json:"passAreaDbSec,omitempty"` // Integrated area under the pass curve above exitThreshold (dB*s)
+	IsStepBurst       bool    `json:"isStepBurst,omitempty"`   // True when burst rose/fell instantaneously out of thermal noise (Wi-Fi packet TXOP)
 	PassingNumber     uint32  `json:"passingNumber"`           // Per-gate or global passing sequence number
 }
