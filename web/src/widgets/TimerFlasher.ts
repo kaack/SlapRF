@@ -240,7 +240,7 @@ export class TimerFlasher extends Component {
   private get orderedSteps(): Array<{ id: WizardStepId; title: string; short: string }> {
     return [
       { id: "network", title: "Select role", short: "Role" },
-      { id: "identity", title: "Name timer", short: "Name" },
+      { id: "identity", title: "Configure timer", short: "Configure" },
       { id: "flash", title: "Flash timer", short: "Flash" },
     ];
   }
@@ -593,8 +593,6 @@ export class TimerFlasher extends Component {
           </button>
         </div>
 
-        ${isHub ? this.renderHubLinkChoice() : ""}
-
         <div class="flasher-tips" role="note" aria-label="Tips for a reliable flash">
           <div class="flasher-tips-head">${icons.info(14)}<span>Tips for a reliable flash</span></div>
           <ul class="flasher-tips-list">
@@ -725,13 +723,13 @@ export class TimerFlasher extends Component {
       <div class="flasher-wizard-body">
         <div class="flasher-wizard-intro">
           <div class="flasher-wizard-head">
-            <h3 class="flasher-pane-title">${isHub ? "Hub identity" : "Name this Spoke"}</h3>
+            <h3 class="flasher-pane-title">${isHub ? "Configure Hub" : "Configure Spoke"}</h3>
             <span class="note flasher-step-count">Step 2 of 3</span>
           </div>
           <p>${
             isHub
-              ? "The Hub is always named <strong>H1</strong> across Track, Network, and Debug."
-              : "Pick a timer label (<strong>T1</strong>–<strong>T6</strong>) shown across Track, Network, and Debug."
+              ? "The Hub is always named <strong>H1</strong>. Choose whether this Hub will connect over a USB cable or Bluetooth."
+              : "Pick a timer label (<strong>T1</strong>-<strong>T6</strong>) shown across Track, Network, and Debug."
           }</p>
         </div>
 
@@ -758,7 +756,7 @@ export class TimerFlasher extends Component {
                       )
                       .join("")}
                   </select>
-                  <span class="flasher-field-help">Pick T1–T6 for each Spoke timer on your course.</span>`
+                  <span class="flasher-field-help">Pick T1-T6 for each Spoke timer on your course.</span>`
             }
           </div>
 
@@ -768,13 +766,11 @@ export class TimerFlasher extends Component {
               <span>SlapRF ${LATEST_FIRMWARE_VERSION}</span>
               <span class="badge">Bundled</span>
             </div>
-            <span class="flasher-field-help">${
-              isHub && this.effectiveHubLink === "ble"
-                ? "Read-only · Bluetooth hub image for Seeed XIAO ESP32-C5."
-                : "Read-only · Unified image for Seeed XIAO ESP32-C5."
-            }</span>
+            <span class="flasher-field-help">Read-only · Official firmware for Seeed XIAO ESP32-C5.</span>
           </div>
         </div>
+
+        ${isHub ? this.renderHubLinkChoice() : ""}
 
         <div class="flasher-wizard-nav">
           <button type="button" class="btn" data-wizard-prev="1" ${this.busy ? "disabled" : ""}>
@@ -847,7 +843,7 @@ export class TimerFlasher extends Component {
           </div>
           <div class="flasher-summary-cell">
             <span class="flasher-summary-label">Firmware</span>
-            <span class="flasher-summary-value mono">SlapRF ${LATEST_FIRMWARE_VERSION}${bleHub ? " · Bluetooth" : ""}</span>
+            <span class="flasher-summary-value mono">SlapRF ${LATEST_FIRMWARE_VERSION}</span>
           </div>
           <div class="flasher-summary-cell">
             <span class="flasher-summary-label">Link</span>
