@@ -32,13 +32,13 @@ A DIY **SlapRF** track uses one **Hub timer (`H1`)** and up to 6 **Spoke timers 
   - **USB Hub (wired)**: Plug the Hub into your laptop or Android phone with a USB-C cable. USB gives the lowest latency when you want minimum delay. By default, a USB Hub stays at the bench as a receiver, or you can drag it onto a gate in the **Track** editor if your USB cable reaches that gate.
 - **Spoke timers (`T1` to `T6`)**: Placed at gates around the track. Each Spoke sweeps up to 8 active 5.8 GHz VTX frequencies across Raceband, Fatshark, Boscam, and IMD6 channels and sends its readings wirelessly to the Hub.
 
-### Wireless Bluetooth Hub Setup
+### Bluetooth Mode
 
-![SlapRF Bluetooth Hub Setup](docs/slaprf-setup-ble.jpg)
+![SlapRF Bluetooth Mode](docs/slaprf-setup-ble.jpg)
 
-### Wired USB Hub & Spoke Setup
+### USB Mode
 
-![SlapRF USB Hub and Spoke Setup](docs/slaprf-setup.jpg)
+![SlapRF USB Mode](docs/slaprf-setup.jpg)
 
 ```mermaid
 flowchart LR
