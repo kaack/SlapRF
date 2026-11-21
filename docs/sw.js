@@ -20,7 +20,7 @@
  *               navigations → network-first (with timeout), falling back to cached index.html
  *               (this also serves SPA deep links offline).
  *               precached same-origin GETs → cache-first (query string such as `?v=228` ignored).
- *               anything else (e.g. /api/*) → not intercepted.
+ *               anything else (e.g. /v1/*) -> not intercepted.
  */
 "use strict";
 
@@ -28,15 +28,15 @@
 const PRECACHE = [
   {
     "url": "dist/app.js",
-    "rev": "766cc2157735a67c"
+    "rev": "fd9eca6fcede4089"
   },
   {
     "url": "firmware/slaprf-xiao-c5-ble.bin",
-    "rev": "6f6a2a4ce88042cf"
+    "rev": "fd7ac46a67496dfe"
   },
   {
     "url": "firmware/slaprf-xiao-c5.bin",
-    "rev": "4e7e32aeb794ba22"
+    "rev": "b28cec1079ab6b12"
   },
   {
     "url": "icons/icon.svg",
@@ -72,18 +72,18 @@ const PRECACHE = [
   },
   {
     "url": "styles/views.css",
-    "rev": "ec10a8581be105a6"
+    "rev": "b02078faf96897b5"
   },
   {
     "url": "wasm/slaprf.wasm",
-    "rev": "f66b594388d6b2f1"
+    "rev": "dc03bba91cd831ea"
   },
   {
     "url": "wasm/wasm_exec.js",
     "rev": "0c949f4996f9a896"
   }
 ];
-const VERSION = "52618142a8508a19";
+const VERSION = "770fe20c6ddf2801";
 
 const CACHE_PREFIX = "slaprf-precache-";
 const CACHE_NAME = CACHE_PREFIX + VERSION;
@@ -216,6 +216,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   if (url.pathname === "/docs" || url.pathname.startsWith("/docs/")) return;
+  if (url.pathname === "/v1" || url.pathname.startsWith("/v1/")) return;
 
   if (request.mode === "navigate") {
     event.respondWith(handleNavigation(request));

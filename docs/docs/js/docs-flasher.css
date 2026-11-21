@@ -5801,39 +5801,39 @@ body.is-gate-dragging * {
 .slot-row.is-disabled .input-suffix {
   opacity: 0.45;
 }
-.livetime {
+.laprf-emulator {
   display: flex;
   flex-direction: column;
   gap: 18px;
 }
-.livetime-body {
+.laprf-emulator-body {
   display: flex;
   flex-direction: column;
   gap: 18px;
   padding-top: 16px;
   border-top: 1px solid var(--border);
 }
-.livetime-status {
+.laprf-emulator-status {
   display: flex;
   align-items: center;
   gap: 12px;
 }
-.livetime-status-title {
+.laprf-emulator-status-title {
   font-weight: 600;
 }
-.livetime-status-sub {
+.laprf-emulator-status-sub {
   color: var(--text-3);
   font-size: 12px;
 }
-.livetime-status.is-up .status-dot {
+.laprf-emulator-status.is-up .status-dot {
   background: var(--good);
   box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.15);
 }
-.livetime-status-text {
+.laprf-emulator-status-text {
   flex: 1;
   min-width: 0;
 }
-.livetime-downloads {
+.laprf-emulator-downloads {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
@@ -5879,7 +5879,7 @@ body.is-gate-dragging * {
   align-items: flex-start;
   gap: 2px;
 }
-.livetime-copy-pill {
+.laprf-emulator-copy-pill {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -5894,23 +5894,23 @@ body.is-gate-dragging * {
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s, color 0.15s;
 }
-.livetime-copy-pill:hover {
+.laprf-emulator-copy-pill:hover {
   background: var(--surface-3);
   border-color: var(--text-3);
 }
-.livetime-copy-pill .livetime-copy-icon {
+.laprf-emulator-copy-pill .laprf-emulator-copy-icon {
   display: inline-flex;
   align-items: center;
   color: var(--text-3);
   transition: color 0.15s;
 }
-.livetime-copy-pill:hover .livetime-copy-icon {
+.laprf-emulator-copy-pill:hover .laprf-emulator-copy-icon {
   color: var(--text-2);
 }
-.livetime-copy-pill.is-copied {
+.laprf-emulator-copy-pill.is-copied {
   border-color: rgba(52, 211, 153, 0.45);
 }
-.livetime-copy-pill.is-copied .livetime-copy-icon {
+.laprf-emulator-copy-pill.is-copied .laprf-emulator-copy-icon {
   color: var(--good);
 }
 .note {
@@ -5932,7 +5932,7 @@ body.is-gate-dragging * {
   margin-top: 2px;
   max-width: 640px;
 }
-.option-sub.livetime-enabled-note {
+.option-sub.laprf-emulator-enabled-note {
   margin-top: 8px;
   color: var(--text-2);
 }
@@ -25010,6 +25010,7 @@ tr.is-selected-row .sched-lineup-cue.is-right {
     flex-direction: column;
   }
 
+  .app.is-mobile-subpage .view-practice:has(.practice-workspace-page:not([style*="display: none"]):not([style*="display:none"])),
   .app.is-mobile-subpage .view-live:has(.practice-workspace-page:not([style*="display: none"]):not([style*="display:none"])) {
     flex: 1 1 0;
     min-height: 0;
