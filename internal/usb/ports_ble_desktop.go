@@ -43,6 +43,7 @@ type bleDesktopConn struct {
 	fp   string
 	dev  bluetooth.Device
 	rx   bluetooth.DeviceCharacteristic
+	tx   bluetooth.DeviceCharacteristic
 	port *BLEStreamPort
 
 	mu      sync.Mutex
@@ -82,6 +83,10 @@ func (c *bleDesktopConn) Close() error {
 	c.closed = true
 	c.mu.Unlock()
 	bleHost.unregister(c)
+	if runtime.GOOS == "linux" {
+		// Release the BlueZ D-Bus PropertiesChanged signal channel and goroutine started by EnableNotifications.
+		_ = c.tx.EnableNotifications(nil)
+	}
 	return c.dev.Disconnect()
 }
 
@@ -94,6 +99,7 @@ type bleDesktopHost struct {
 	seen          map[string]bleSeenHub // key: fingerprint hex
 	scanning      bool
 	scanDone      chan struct{}
+	stopScanFn    func()
 	lastScanStart time.Time
 	opening       int
 	conns         map[string]*bleDesktopConn // key: address string
@@ -102,9 +108,8 @@ type bleDesktopHost struct {
 }
 
 var bleHost = &bleDesktopHost{
-	adapter: bluetooth.DefaultAdapter,
-	seen:    make(map[string]bleSeenHub),
-	conns:   make(map[string]*bleDesktopConn),
+	seen:  make(map[string]bleSeenHub),
+	conns: make(map[string]*bleDesktopConn),
 }
 
 func bleDisabledByEnv() bool {
@@ -129,10 +134,12 @@ func (h *bleDesktopHost) ensureEnabled() error {
 	}
 	h.rxUUID, _ = bluetooth.ParseUUID(BLERxCharUUID)
 	h.txUUID, _ = bluetooth.ParseUUID(BLETxCharUUID)
-	if err = h.adapter.Enable(); err != nil {
+	adapter := selectBLEAdapter()
+	if err = adapter.Enable(); err != nil {
 		h.enableErr = fmt.Errorf("Bluetooth adapter unavailable: %w", err)
 		return h.enableErr
 	}
+	h.adapter = adapter
 	h.adapter.SetConnectionStateHandler(h.onConnectionState)
 	h.enabled = true
 	h.enableErr = nil
@@ -201,12 +208,20 @@ func (h *bleDesktopHost) startScanLocked(window time.Duration) chan struct{} {
 	done := make(chan struct{})
 	h.scanDone = done
 	h.lastScanStart = time.Now()
-	stopTimer := time.AfterFunc(window, func() { _ = h.adapter.StopScan() })
+	var stopOnce sync.Once
+	stopFn := func() {
+		stopOnce.Do(func() {
+			_ = h.adapter.StopScan()
+		})
+	}
+	h.stopScanFn = stopFn
+	stopTimer := time.AfterFunc(window, stopFn)
 	go func() {
 		_ = h.adapter.Scan(h.onScanResult)
 		stopTimer.Stop()
 		h.mu.Lock()
 		h.scanning = false
+		h.stopScanFn = nil
 		h.mu.Unlock()
 		close(done)
 	}()
@@ -217,12 +232,14 @@ func (h *bleDesktopHost) startScanLocked(window time.Duration) chan struct{} {
 // is unreliable on several stacks). Returns true when an active scan was stopped.
 func (h *bleDesktopHost) stopScan() bool {
 	h.mu.Lock()
-	scanning, done := h.scanning, h.scanDone
+	scanning, done, stopFn := h.scanning, h.scanDone, h.stopScanFn
 	h.mu.Unlock()
 	if !scanning || done == nil {
 		return false
 	}
-	_ = h.adapter.StopScan()
+	if stopFn != nil {
+		stopFn()
+	}
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -415,7 +432,7 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 		return fail("characteristic discovery failed", errors.New("RX/TX characteristics missing"))
 	}
 
-	conn := &bleDesktopConn{fp: fp, dev: dev, rx: *rx}
+	conn := &bleDesktopConn{fp: fp, dev: dev, rx: *rx, tx: *tx}
 	port := NewBLEStreamPort(conn)
 	conn.port = port
 	h.mu.Lock()
@@ -423,7 +440,7 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 	h.mu.Unlock()
 
 	// Notifications must be live before the first command (STATUS?) is written.
-	if err := tx.EnableNotifications(func(buf []byte) { port.Deliver(buf) }); err != nil {
+	if err := conn.tx.EnableNotifications(func(buf []byte) { port.Deliver(buf) }); err != nil {
 		h.unregister(conn)
 		return fail("enabling notifications failed", err)
 	}
