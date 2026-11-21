@@ -12,11 +12,11 @@ Quick diagnostics and fixes for USB flashing, wireless connectivity, power suppl
 If the XIAO ESP32-C5 does not appear in the browser serial port chooser:
 
 1. Swap to a known USB-C data cable (many bundled cables are charge-only with no data wires).
-2. Plug directly into a computer USB port rather than an unpowered hub or dock, using desktop Chrome, Edge, or Opera.
+2. Plug directly into your Android phone (using the SlapRF app) or a computer USB port rather than an unpowered hub or dock (use desktop Chrome, Edge, or Opera if flashing from a web browser).
 3. On Linux, confirm your user is in the `dialout` or `uucp` group so `/dev/ttyACM0` can be opened.
 4. If a board is unresponsive, hold the tiny `BOOT` button (`B`, bottom-right of the XIAO) while plugging in USB-C, release `BOOT`, and click **Flash to USB**:
 
-![Seeed Studio XIAO ESP32-C5 BOOT Button Location](/images/xiao-c5-boot.jpg)
+{{< themed-image light="/images/xiao-c5-boot.jpg" dark="/images/xiao-c5-boot-dark.jpg" alt="Seeed Studio XIAO ESP32-C5 BOOT Button Location" >}}
 
 ### Interrupted Flash
 
@@ -40,7 +40,7 @@ If a Spoke (`T1`-`T6`) blinks slowly at `1 Hz` and stays offline in **Network**:
 2. Re-flash the Hub and all Spokes from the same SlapRF release so their ESP-NOW packet versions match.
 3. Check that the snap-on U.FL antenna is firmly seated on both boards and that no two Spokes share the same slot ID (`T1`-`T6`):
 
-![Seeed Studio XIAO ESP32-C5 U.FL Antenna Socket](/images/xiao-c5-antenna.jpg)
+{{< themed-image light="/images/xiao-c5-antenna.jpg" dark="/images/xiao-c5-antenna-dark.jpg" alt="XIAO ESP32-C5 U.FL Antenna Socket" >}}
 
 ### Power Bank Shutoff
 

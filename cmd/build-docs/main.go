@@ -86,6 +86,20 @@ func main() {
 		if *skipFirmware {
 			_ = os.RemoveAll(filepath.Join(absOut, "firmware"))
 		}
+		for _, unwanted := range []string{
+			"site.webmanifest",
+			"favicon.ico",
+			"favicon-16x16.png",
+			"favicon-32x32.png",
+			"apple-touch-icon.png",
+			"android-chrome-192x192.png",
+			"android-chrome-512x512.png",
+			filepath.Join("images", "logo.svg"),
+		} {
+			_ = os.Remove(filepath.Join(absOut, unwanted))
+		}
+		_ = os.Remove(filepath.Join(absOut, "categories"))
+		_ = os.Remove(filepath.Join(absOut, "tags"))
 		log.Printf("[build-docs] Built Hugo docs into %s", absOut)
 	}
 }

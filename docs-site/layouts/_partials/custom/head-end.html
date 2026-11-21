@@ -5,15 +5,16 @@
   href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@600;700&display=swap"
   rel="stylesheet"
 />
-<link rel="icon" type="image/svg+xml" href="{{ "favicon.svg" | relURL }}" />
+{{- with resources.Get "js/theme-switch.js" -}}
+  {{- $themeJs := . | fingerprint -}}
+  <script defer src="{{ $themeJs.RelPermalink }}" integrity="{{ $themeJs.Data.Integrity }}"></script>
+{{- end -}}
+{{- if .HasShortcode "web-flasher" -}}
 <meta
   data-slaprf-flasher-config="1"
   data-firmware-base="{{ $fwBase }}"
   data-css-url="{{ "js/docs-flasher.css" | relURL }}?v={{ now.Unix }}"
 />
 {{ partial "custom/flasher-modal-template.html" . }}
-{{- with resources.Get "js/theme-switch.js" -}}
-  {{- $themeJs := . | fingerprint -}}
-  <script defer src="{{ $themeJs.RelPermalink }}" integrity="{{ $themeJs.Data.Integrity }}"></script>
-{{- end -}}
 <script src="{{ "js/docs-flasher.js" | relURL }}?v={{ now.Unix }}" defer></script>
+{{- end -}}

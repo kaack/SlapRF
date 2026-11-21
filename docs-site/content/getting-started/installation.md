@@ -19,7 +19,7 @@ Download the latest native SlapRF release from [GitHub Releases](https://github.
   3. Open **SlapRF**. The app runs the Go timing engine locally on your device with offline storage, spoken callouts, Bluetooth LE, and USB OTG serial support.
 
   > [!TIP]
-  > Android browsers and WebViews do not support WebSerial firmware flashing. Flash your XIAO ESP32-C5 boards once from Chrome, Edge, or Opera on a desktop computer, then connect to them from Android over Bluetooth or USB-C.
+  > You can flash XIAO ESP32-C5 boards directly from your Android phone or tablet using the built-in **Flasher** screen in the SlapRF app over a USB-C data cable.
   {{< /tab >}}
   {{< tab name="Windows" >}}
   ### Windows

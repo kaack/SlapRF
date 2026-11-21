@@ -36,7 +36,7 @@ Download the latest self-contained build for Android (`ARM64`), Windows (`x86_64
 
 ## SlapRF Gate Hardware (DIY XIAO ESP32-C5)
 
-Assemble battery-powered 5.8 GHz gate timers from off-the-shelf components with zero soldering or custom PCBs, and flash boards straight from Chrome, Edge, or Opera over USB-C.
+Assemble battery-powered 5.8 GHz gate timers from off-the-shelf components with zero soldering or custom PCBs, and flash boards straight from the SlapRF app (Android or desktop) or from Chrome, Edge, or Opera over USB-C.
 
 - **[Parts, Assembly & 3D-Printed Cases ->](https://slaprf.app/docs/hardware/parts-and-assembly/)**: Bill of materials, board pinout callouts, recommended MakerWorld enclosures, and gate placement.
 - **[Browser Firmware Flasher ->](https://slaprf.app/docs/hardware/flashing/)**: Flash Bluetooth Hub, USB Hub, and Spoke (`T1`-`T6`) firmware directly from the docs page.

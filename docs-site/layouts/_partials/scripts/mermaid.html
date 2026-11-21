@@ -1,17 +1,4 @@
-{{- $mermaidBase := "https://cdn.jsdelivr.net/npm/mermaid@latest/dist" -}}
-{{- $minSuffix := cond hugo.IsProduction ".min" "" -}}
-{{- $jsPath := printf "mermaid%s.js" $minSuffix -}}
-{{- $mermaidJsUrl := urls.JoinPath $mermaidBase $jsPath -}}
-{{- with try (resources.GetRemote $mermaidJsUrl) -}}
-  {{- with .Err -}}
-    {{- errorf "Could not retrieve Mermaid js file from %s. Reason: %s." $mermaidJsUrl . -}}
-  {{- else with .Value -}}
-    {{- with resources.Copy (printf "js/mermaid%s.js" $minSuffix) . -}}
-      {{- $mermaidJs := . | fingerprint -}}
-      <script defer src="{{ $mermaidJs.RelPermalink }}" integrity="{{ $mermaidJs.Data.Integrity }}" crossorigin="anonymous"></script>
-    {{- end -}}
-  {{- end -}}
-{{- end -}}
+<script defer src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js" crossorigin="anonymous"></script>
 
 <template id="doc-mermaid-expand-btn-template">
   <button type="button" class="doc-mermaid-expand-btn" aria-label="Expand diagram" title="Expand diagram">

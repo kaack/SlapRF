@@ -7,7 +7,7 @@ Every Seeed Studio XIAO ESP32-C5 board drives its onboard yellow user LED (`GPIO
 
 Each card below pairs a real-time yellow LED simulation on the left with a millisecond square-wave timing strip underneath.
 
-![Seeed Studio XIAO ESP32-C5 Status LED Location](/images/xiao-c5-led.jpg)
+{{< themed-image light="/images/xiao-c5-led.jpg" dark="/images/xiao-c5-led-dark.jpg" alt="Seeed Studio XIAO ESP32-C5 Status LED Location" >}}
 
 ## Normal Operation
 
@@ -73,7 +73,7 @@ On a Spoke (`T1`-`T6`), the board is searching for a Hub over 2.4 GHz ESP-NOW. O
 To pair a claimed Bluetooth Hub with a different phone or laptop, hold the `BOOT` button (`GPIO28`) while powered. The yellow LED stays solid ON while held, flashes a rapid `800 ms` burst at `3.0 s` when the saved host key is cleared, and enters Pairing Mode.
 {{< /led-pattern >}}
 
-![Seeed Studio XIAO ESP32-C5 BOOT Button Location](/images/xiao-c5-boot.jpg)
+{{< themed-image light="/images/xiao-c5-boot.jpg" dark="/images/xiao-c5-boot-dark.jpg" alt="Seeed Studio XIAO ESP32-C5 BOOT Button Location" >}}
 
 ## Diagnostics & Faults
 

@@ -3,23 +3,23 @@ title: Flashing Firmware
 weight: 2
 ---
 
-Configure and flash Hub (`H1`) and Spoke (`T1` through `T6`) firmware onto Seeed Studio XIAO ESP32-C5 boards directly from your desktop browser over WebSerial. No ESP-IDF toolchain, Python install, or serial driver is needed.
+Configure and flash Hub (`H1`) and Spoke (`T1` through `T6`) firmware onto Seeed Studio XIAO ESP32-C5 boards directly from your desktop browser below, or from the built-in **Flasher** screen inside the SlapRF Android and desktop apps over USB-C. No ESP-IDF toolchain, Python install, or serial driver is needed.
 
 ## Browser Flasher
 
-Connect your XIAO ESP32-C5 with a USB-C data cable in Chrome, Edge, or Opera and open the firmware wizard to flash a Bluetooth Hub, USB Hub, or Spoke timer (`T1`-`T6`).
+Connect your XIAO ESP32-C5 with a USB-C data cable in Chrome, Edge, or Opera to flash directly from this page, or flash from the **Flasher** screen inside the SlapRF Android or desktop app:
 
 {{< web-flasher >}}
 
 > [!WARNING]
-> Connect only one XIAO ESP32-C5 board to your computer at a time while flashing. During 2.4 GHz radio calibration bursts, each ESP32-C5 draws up to `320 mA`, and plugging multiple boards into shared laptop ports can cause `5 V` sag and interrupted writes.
+> Connect only one XIAO ESP32-C5 board at a time while flashing. During 2.4 GHz radio calibration bursts, each ESP32-C5 draws up to `320 mA`, and plugging multiple boards into shared USB ports can cause `5 V` sag and interrupted writes.
 
 ## Before Flashing
 
 | Requirement | Details |
 | :--- | :--- |
-| Desktop Browser | Google Chrome, Microsoft Edge, or Opera on Windows, macOS, or Linux. |
-| USB-C Data Cable | Plug directly into a computer port (avoid charge-only cables and unpowered hubs). |
+| Supported Host | Built-in **Flasher** in the SlapRF Android or desktop app (over USB-C / OTG), or desktop Chrome, Edge, or Opera for the browser flasher above. |
+| USB-C Data Cable | Plug directly into your phone or computer port (avoid charge-only cables and unpowered hubs). |
 | Matching Versions | When updating SlapRF firmware, re-flash both the Hub (`H1`) and all Spokes (`T1`-`T6`) so their ESP-NOW protocol matches. |
 
 ## Flashing Steps

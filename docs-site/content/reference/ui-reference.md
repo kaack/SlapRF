@@ -14,7 +14,7 @@ Reference guide to the screens, live signal scope controls, and crossing detecti
 | Pilots | Pilot directory with callsigns, phonetic TTS spellings, and default 5.8 GHz channels (`Raceband`, `Fatshark`, `Boscam`, `IMD6`). |
 | Track | Visual course loop editor for ordering active gate timers (`H1`, `T1`-`T6`) and marking the Start / Finish gate. |
 | Network | Connection manager and live packet-rate monitor for SlapRF Bluetooth Hub, SlapRF USB Hub, RotorHazard, and LapRF 8-Way. |
-| Flasher | Desktop WebSerial wizard for flashing Hub and Spoke firmware, inspecting board configuration, or factory-erasing boards. |
+| Flasher | Built-in wizard (on Android and desktop) for flashing Hub and Spoke firmware, inspecting board configuration, or factory-erasing boards over USB-C. |
 | Simulator | Multi-pilot 5.8 GHz physics track simulator for testing track layouts, threshold behavior, and race brackets without hardware. |
 | Settings | Hardware backend selector, Announcer voice & horn levels, MultiGP API key, HTTP Basic Auth, theme toggle, and `.json` database backup/restore. |
 

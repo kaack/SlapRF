@@ -471,6 +471,11 @@ async function bootstrap(): Promise<void> {
 }
 
 const start = () => {
+  if (window.location.pathname === "/docs") {
+    installOffline();
+    window.location.replace(`/docs/${window.location.search}${window.location.hash}`);
+    return;
+  }
   initAppTheme();
   installOffline();
   bootstrap().catch((err) => {

@@ -501,6 +501,10 @@ func (s *Server) Handler() http.Handler {
 			_, _ = io.WriteString(w, "// SlapRF Portable: service worker disabled (assets served locally from binary)\nself.addEventListener('install', () => self.skipWaiting());\nself.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));\n")
 		})
 		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/docs" {
+				http.Redirect(w, r, "/docs/", http.StatusMovedPermanently)
+				return
+			}
 			w.Header().Set("Cache-Control", "no-cache")
 			cleanPath := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 			if cleanPath == "" {
@@ -538,6 +542,10 @@ func NewStaticBrowserHandler(siteFS fs.FS) http.Handler {
 	mux.HandleFunc("/api", http.NotFound)
 	mux.HandleFunc("/api/", http.NotFound)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/docs" {
+			http.Redirect(w, r, "/docs/", http.StatusMovedPermanently)
+			return
+		}
 		w.Header().Set("Cache-Control", "no-cache")
 		cleanPath := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 		if cleanPath == "" {

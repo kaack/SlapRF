@@ -28,7 +28,7 @@ One Seeed Studio XIAO ESP32-C5 draws under `100 mA` at `5 V` (`0.5 W`), so a com
 
 Use this callout diagram to locate the USB-C port, yellow status LED (`L`), U.FL antenna connector, `BOOT` button (`B`), and `RESET` button (`R`) on the XIAO ESP32-C5:
 
-![Seeed Studio XIAO ESP32-C5 Board Layout](/images/xiao-c5-board-guide.jpg)
+{{< themed-image light="/images/xiao-c5-board-guide.jpg" dark="/images/xiao-c5-board-guide-dark.jpg" alt="Seeed Studio XIAO ESP32-C5 Board Layout" >}}
 
 ## Hardware Assembly
 
@@ -57,14 +57,14 @@ flowchart LR
 
 Align the included dual-band (`2.4 / 5 GHz`) U.FL antenna plug flat over the gold receptacle on the XIAO ESP32-C5 and press straight down until it clicks into place.
 
-![XIAO ESP32-C5 U.FL Antenna Socket](/images/xiao-c5-antenna.jpg)
+{{< themed-image light="/images/xiao-c5-antenna.jpg" dark="/images/xiao-c5-antenna-dark.jpg" alt="XIAO ESP32-C5 U.FL Antenna Socket" >}}
 
 > [!WARNING]
 > Always snap on the U.FL antenna before applying power. Operating without the antenna severely reduces both 5.8 GHz VTX sensitivity and 2.4 GHz wireless range.
 
 ### Flash Firmware
 
-Connect one XIAO ESP32-C5 at a time to a desktop computer over USB-C and flash its role using the [Flashing Firmware](flashing) page. Mark each board (`H1`, `T1`, `T2`, `T3`) with tape or a paint pen so placement at the field takes seconds.
+Connect one XIAO ESP32-C5 at a time over USB-C to your phone (in the SlapRF Android app) or computer and flash its role using the in-app **Flasher** or the [Flashing Firmware](flashing) page. Mark each board (`H1`, `T1`, `T2`, `T3`) with tape or a paint pen so placement at the field takes seconds.
 
 ### Connect Power
 
