@@ -68,7 +68,7 @@ let cachedAuthConfig: {
 export function preloadSettingsStatuses(): void {
   const caps = capabilitiesSnapshot();
   if (caps.portable) {
-    void fetch(resolveBackendUrl("/api/storage/status"), {
+    void fetch(resolveBackendUrl("/v1/storage/status"), {
       method: "GET",
       headers: { Accept: "application/json" },
       cache: "no-store",
@@ -887,7 +887,7 @@ export class MultiGPSettingsCard extends Component {
     const badgeText =
       prefs.verified && prefs.chapterName
         ? `Connected to <strong>${esc(prefs.chapterName)}</strong>${prefs.chapterId ? ` <span class="mono">(#${prefs.chapterId})</span>` : ""}`
-        : `Enter your Chapter WebService API key (Chapter Settings → RaceSync / LiveTime API Key) and click Verify.`;
+        : `Enter your Chapter WebService API key (Chapter Settings → RaceSync API Key) and click Verify.`;
 
     const eyeLabel = this.revealKey ? "Hide API key" : "Reveal API key";
 
@@ -982,14 +982,14 @@ export class PersistenceSettings extends Component {
     this.refreshStorage(true);
   }
 
-  /** Re-reads storage status from either the Go `bbolt` server (`GET /api/storage/status`) or browser IndexedDB. */
+  /** Re-reads storage status from either the Go `bbolt` server (`GET /v1/storage/status`) or browser IndexedDB. */
   private refreshStorage(force: boolean): void {
     this.renderStatus();
     if (!force && performance.now() - this.storageFetchedAt < 4000) return;
     this.storageFetchedAt = performance.now();
 
     if (capabilitiesSnapshot().portable) {
-      void fetch(resolveBackendUrl("/api/storage/status"), {
+      void fetch(resolveBackendUrl("/v1/storage/status"), {
         method: "GET",
         headers: { Accept: "application/json" },
         cache: "no-store",

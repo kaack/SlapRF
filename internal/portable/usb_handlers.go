@@ -71,10 +71,6 @@ func (s *Server) handleUSBConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
 	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var req struct {
 		SlotIndex int    `json:"slotIndex"`
 		PortName  string `json:"portName"`
@@ -82,6 +78,14 @@ func (s *Server) handleUSBConnect(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
 		return
+	}
+	if rawSlot := strings.TrimSpace(r.PathValue("slotIndex")); rawSlot != "" {
+		parsed, err := strconv.Atoi(rawSlot)
+		if err != nil || parsed < 0 || parsed >= usb.MaxUSBConnections {
+			writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid USB slotIndex"})
+			return
+		}
+		req.SlotIndex = parsed
 	}
 	snap, err := s.usbMgr.Connect(req.SlotIndex, req.PortName)
 	if err != nil {
@@ -94,13 +98,33 @@ func (s *Server) handleUSBConnect(w http.ResponseWriter, r *http.Request) {
 	if s.persistWorker != nil {
 		s.persistWorker.MarkDirty()
 	}
-	writeJSONNoStore(w, http.StatusOK, map[string]any{
+	status := http.StatusOK
+	if r.Method == http.MethodPost {
+		w.Header().Set("Location", "/v1/usb/connections/"+strconv.Itoa(req.SlotIndex))
+		status = http.StatusCreated
+	}
+	writeJSONNoStore(w, status, map[string]any{
 		"slot": snap,
 		"pool": s.usbMgr.Snapshot(),
 	})
 }
 
-func (s *Server) handleUSBDisconnect(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUSBDisconnectSlot(w http.ResponseWriter, r *http.Request) {
+	if !s.isAllowedOrigin(r) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
+	rawSlot := strings.TrimSpace(r.PathValue("slotIndex"))
+	slotIndex, err := strconv.Atoi(rawSlot)
+	if err != nil || slotIndex < 0 || slotIndex >= usb.MaxUSBConnections {
+		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid USB slotIndex"})
+		return
+	}
+	_ = s.usbMgr.Disconnect(slotIndex)
+	writeJSONNoStore(w, http.StatusOK, s.usbMgr.Snapshot())
+}
+
+func (s *Server) handleUSBDisconnectAll(w http.ResponseWriter, r *http.Request) {
 	if !s.isAllowedOrigin(r) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
@@ -109,17 +133,8 @@ func (s *Server) handleUSBDisconnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	var req struct {
-		SlotIndex int  `json:"slotIndex"`
-		All       bool `json:"all"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&req)
-	if req.All {
-		for i := 0; i < usb.MaxUSBConnections; i++ {
-			_ = s.usbMgr.Disconnect(i)
-		}
-	} else {
-		_ = s.usbMgr.Disconnect(req.SlotIndex)
+	for i := 0; i < usb.MaxUSBConnections; i++ {
+		_ = s.usbMgr.Disconnect(i)
 	}
 	writeJSONNoStore(w, http.StatusOK, s.usbMgr.Snapshot())
 }
@@ -129,7 +144,15 @@ func (s *Server) handleUSBDebugSlot(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
 	}
-	if r.Method != http.MethodPost {
+	if r.Method == http.MethodGet {
+		snap := s.usbMgr.Snapshot()
+		writeJSONNoStore(w, http.StatusOK, map[string]any{
+			"slotIndex": snap.DebugSlotIndex,
+			"pool":      snap,
+		})
+		return
+	}
+	if r.Method != http.MethodPut {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -192,18 +215,12 @@ func (s *Server) handleUSBKnownForget(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
 	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	fp := strings.TrimSpace(r.PathValue("fp"))
+	if fp == "" {
+		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "missing timer fingerprint"})
 		return
 	}
-	var req struct {
-		FP string `json:"fp"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
-		return
-	}
-	s.usbMgr.ForgetKnownTimer(req.FP)
+	s.usbMgr.ForgetKnownTimer(fp)
 	writeJSONNoStore(w, http.StatusOK, s.usbMgr.Snapshot())
 }
 
@@ -219,7 +236,7 @@ func (s *Server) handleSimHubUSB(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodPut {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}

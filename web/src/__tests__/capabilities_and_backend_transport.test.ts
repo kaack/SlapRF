@@ -34,18 +34,18 @@ describe("services/capabilities — URL Normalization, Mixed-Content Guards & Ba
     expect(normalizeBackendUrl("192.168.1.50")).toBe("http://192.168.1.50:8090");
     expect(normalizeBackendUrl("raspberrypi.local")).toBe("http://raspberrypi.local:8090");
     expect(normalizeBackendUrl("http://192.168.1.50:9000/")).toBe("http://192.168.1.50:9000");
-    expect(normalizeBackendUrl("ws://127.0.0.1:8090/api/ws/stream")).toBe("http://127.0.0.1:8090");
+    expect(normalizeBackendUrl("ws://127.0.0.1:8090/v1/ws/stream")).toBe("http://127.0.0.1:8090");
     expect(normalizeBackendUrl("")).toBe("");
 
-    expect(resolveBackendUrl("/api/state", "")).toBe("/api/state");
-    expect(resolveBackendUrl("/api/state", "http://192.168.1.50:8090")).toBe(
-      "http://192.168.1.50:8090/api/state"
+    expect(resolveBackendUrl("/v1/state", "")).toBe("/v1/state");
+    expect(resolveBackendUrl("/v1/state", "http://192.168.1.50:8090")).toBe(
+      "http://192.168.1.50:8090/v1/state"
     );
-    expect(resolveBackendWsUrl("/api/ws/stream", "http://192.168.1.50:8090")).toBe(
-      "ws://192.168.1.50:8090/api/ws/stream"
+    expect(resolveBackendWsUrl("/v1/ws/stream", "http://192.168.1.50:8090")).toBe(
+      "ws://192.168.1.50:8090/v1/ws/stream"
     );
-    expect(resolveBackendWsUrl("/api/ws/stream", "https://track.example.com")).toBe(
-      "wss://track.example.com/api/ws/stream"
+    expect(resolveBackendWsUrl("/v1/ws/stream", "https://track.example.com")).toBe(
+      "wss://track.example.com/v1/ws/stream"
     );
   });
 
@@ -70,7 +70,7 @@ describe("services/capabilities — URL Normalization, Mixed-Content Guards & Ba
       window.localStorage.removeItem(BACKEND_URL_STORAGE_KEY);
       fetchSpy.mockImplementation(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "/api/capabilities") {
+        if (url === "/v1/capabilities") {
           return new Response(
             JSON.stringify({
               portable: true,
@@ -102,7 +102,7 @@ describe("services/capabilities — URL Normalization, Mixed-Content Guards & Ba
       window.localStorage.setItem(BACKEND_URL_STORAGE_KEY, "http://192.168.1.77:8090");
       fetchSpy.mockImplementation(async (input: RequestInfo | URL) => {
         const url = String(input);
-        if (url === "http://192.168.1.77:8090/api/capabilities") {
+        if (url === "http://192.168.1.77:8090/v1/capabilities") {
           return new Response(
             JSON.stringify({
               portable: true,
@@ -147,10 +147,10 @@ describe("services/capabilities — URL Normalization, Mixed-Content Guards & Ba
 });
 
 describe("services/backend_transport & BackendConnectModal — Wire Telemetry & Modal UI", () => {
-  it("decodes binary telemetry batches from /api/ws/stream and routes BackendHttpTransport URLs", () => {
+  it("decodes binary telemetry batches from /v1/ws/stream and routes BackendHttpTransport URLs", () => {
     const transport = new BackendHttpTransport("http://192.168.1.50:8090/");
-    expect(transport.urlFor("/api/state")).toBe("http://192.168.1.50:8090/api/state");
-    expect(transport.wsUrlFor("/api/ws/stream")).toBe("ws://192.168.1.50:8090/api/ws/stream");
+    expect(transport.urlFor("/v1/state")).toBe("http://192.168.1.50:8090/v1/state");
+    expect(transport.wsUrlFor("/v1/ws/stream")).toBe("ws://192.168.1.50:8090/v1/ws/stream");
 
     // 4-byte header [version=1, rssiCount=8, count=1 (u16)] + 52-byte record
     const buf = new ArrayBuffer(4 + 20 + 32);

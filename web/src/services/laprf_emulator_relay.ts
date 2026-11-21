@@ -1,24 +1,24 @@
 /**
- * Native Go TCP `:5403` LapRF server emulator controller (`internal/portable/livetime_manager.go`).
+ * Native Go TCP `:5403` LapRF 8-Way server emulator controller (`internal/portable/laprf_emulator_manager.go`).
  *
  * When connected to a SlapRF Server (`caps.portable === true`), TCP `:5403` runs 100% natively
- * inside the Go binary (`laprf.Server`), persisted in `slaprf.db` (`BoltStore`), so external race
- * software (MultiGP LiveTime, FPVTrackside) stays connected even if all browser tabs are closed.
+ * inside the Go binary (`laprf.Server`), persisted in `slaprf.db` (`BoltStore`), so external
+ * LapRF-compatible race timing clients stay connected even if all browser tabs are closed.
  */
 
 import { capabilitiesSnapshot, resolveBackendUrl, subscribeCapabilities } from "./capabilities";
 
-const ENABLED_STORAGE_KEY = "slaprf.ui.livetime_enabled.v1";
-export const LIVETIME_PORT = 5403;
+const ENABLED_STORAGE_KEY = "slaprf.ui.laprf_emulator_enabled.v1";
+export const LAPRF_EMULATOR_PORT = 5403;
 
 export type RelayState = "off" | "connecting" | "connected" | "unreachable";
-export type LiveTimeLinkState = "waiting" | "connected";
+export type LapRFEmulatorClientState = "waiting" | "connected";
 
-export interface LiveTimeRelaySnapshot {
+export interface LapRFEmulatorSnapshot {
   enabled: boolean;
   suppressed: boolean;
   relayState: RelayState;
-  liveTimeState: LiveTimeLinkState;
+  clientState: LapRFEmulatorClientState;
   peer: string;
   listenAddr: string;
   relayVersion: string;
@@ -27,13 +27,13 @@ export interface LiveTimeRelaySnapshot {
   lastError: string;
 }
 
-export function emulatorWsUrl(port: number = LIVETIME_PORT): string {
-  return resolveBackendUrl(`/api/livetime/status?port=${port}`);
+export function emulatorWsUrl(port: number = LAPRF_EMULATOR_PORT): string {
+  return resolveBackendUrl(`/v1/laprf-emulator?port=${port}`);
 }
 
-type Listener = (s: LiveTimeRelaySnapshot) => void;
+type Listener = (s: LapRFEmulatorSnapshot) => void;
 
-export class LiveTimeRelay {
+export class LapRFEmulatorRelay {
   private enabled = false;
   private suppressed = false;
   private started = false;
@@ -43,7 +43,7 @@ export class LiveTimeRelay {
   private readonly listeners = new Set<Listener>();
 
   private relayState: RelayState = "off";
-  private liveTimeState: LiveTimeLinkState = "waiting";
+  private clientState: LapRFEmulatorClientState = "waiting";
   private peer = "";
   private listenAddr = "";
   private relayVersion = "";
@@ -63,12 +63,12 @@ export class LiveTimeRelay {
     });
   }
 
-  public get snapshot(): LiveTimeRelaySnapshot {
+  public get snapshot(): LapRFEmulatorSnapshot {
     return {
       enabled: this.enabled,
       suppressed: this.suppressed,
       relayState: this.relayState,
-      liveTimeState: this.liveTimeState,
+      clientState: this.clientState,
       peer: this.peer,
       listenAddr: this.listenAddr,
       relayVersion: this.relayVersion,
@@ -127,7 +127,7 @@ export class LiveTimeRelay {
     if (!this.started || !caps.portable || !caps.laprfEmulator) {
       this.stopPolling();
       this.relayState = "off";
-      this.liveTimeState = "waiting";
+      this.clientState = "waiting";
       this.peer = "";
       this.listenAddr = "";
       if (!this.enabled || this.suppressed || !caps.portable) {
@@ -158,18 +158,18 @@ export class LiveTimeRelay {
   private async pushConfig(enabled: boolean): Promise<void> {
     if (!capabilitiesSnapshot().portable) return;
     try {
-      const resp = await fetch(resolveBackendUrl("/api/livetime/config"), {
-        method: "POST",
+      const resp = await fetch(resolveBackendUrl("/v1/laprf-emulator"), {
+        method: "PUT",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
-        body: JSON.stringify({ enabled, port: LIVETIME_PORT }),
+        body: JSON.stringify({ enabled, port: LAPRF_EMULATOR_PORT }),
       });
       if (!resp.ok) {
         this.relayState = "unreachable";
-        this.lastError = `Failed to configure TCP :${LIVETIME_PORT} (${resp.status})`;
+        this.lastError = `Failed to configure TCP :${LAPRF_EMULATOR_PORT} (${resp.status})`;
         this.emit();
         return;
       }
-      const data = (await resp.json()) as Partial<LiveTimeRelaySnapshot>;
+      const data = (await resp.json()) as Partial<LapRFEmulatorSnapshot>;
       this.applySnapshot(data);
     } catch (err) {
       this.relayState = "unreachable";
@@ -182,15 +182,15 @@ export class LiveTimeRelay {
     if (!capabilitiesSnapshot().portable || this.pollInFlight) return;
     this.pollInFlight = true;
     try {
-      const resp = await fetch(resolveBackendUrl("/api/livetime/status"), {
+      const resp = await fetch(resolveBackendUrl("/v1/laprf-emulator"), {
         method: "GET",
         headers: { Accept: "application/json" },
         cache: "no-store",
       });
       if (!resp.ok) return;
-      const data = (await resp.json()) as Partial<LiveTimeRelaySnapshot>;
+      const data = (await resp.json()) as Partial<LapRFEmulatorSnapshot>;
 
-      // First sync: if browser preference had LiveTime enabled before server stored it, apply it
+      // First sync: if browser preference had LapRF emulator enabled before server stored it, apply it
       if (!this.initialSynced) {
         this.initialSynced = true;
         if (this.enabled && data.enabled === false) {
@@ -208,7 +208,7 @@ export class LiveTimeRelay {
     }
   }
 
-  private applySnapshot(data: Partial<LiveTimeRelaySnapshot>): void {
+  private applySnapshot(data: Partial<LapRFEmulatorSnapshot>): void {
     const prev = JSON.stringify(this.snapshot);
     if (typeof data.enabled === "boolean") {
       this.enabled = data.enabled;
@@ -229,8 +229,8 @@ export class LiveTimeRelay {
     ) {
       this.relayState = data.relayState;
     }
-    if (data.liveTimeState === "waiting" || data.liveTimeState === "connected") {
-      this.liveTimeState = data.liveTimeState;
+    if (data.clientState === "waiting" || data.clientState === "connected") {
+      this.clientState = data.clientState;
     }
     this.peer = data.peer ?? "";
     this.listenAddr = data.listenAddr ?? "";
@@ -250,22 +250,22 @@ export class LiveTimeRelay {
       try {
         fn(snap);
       } catch (err) {
-        console.error("[LiveTimeRelay] listener error:", err);
+        console.error("[LapRFEmulatorRelay] listener error:", err);
       }
     });
   }
 }
 
 const relayWin = (typeof window !== "undefined" ? window : undefined) as
-  | (Window & { __slaprfLiveTimeRelay?: LiveTimeRelay })
+  | (Window & { __slaprfLapRFEmulatorRelay?: LapRFEmulatorRelay })
   | undefined;
 
-export const sharedLiveTimeRelay: LiveTimeRelay = (() => {
-  if (relayWin?.__slaprfLiveTimeRelay) {
-    Object.setPrototypeOf(relayWin.__slaprfLiveTimeRelay, LiveTimeRelay.prototype);
-    return relayWin.__slaprfLiveTimeRelay;
+export const sharedLapRFEmulatorRelay: LapRFEmulatorRelay = (() => {
+  if (relayWin?.__slaprfLapRFEmulatorRelay) {
+    Object.setPrototypeOf(relayWin.__slaprfLapRFEmulatorRelay, LapRFEmulatorRelay.prototype);
+    return relayWin.__slaprfLapRFEmulatorRelay;
   }
-  const inst = new LiveTimeRelay();
-  if (relayWin) relayWin.__slaprfLiveTimeRelay = inst;
+  const inst = new LapRFEmulatorRelay();
+  if (relayWin) relayWin.__slaprfLapRFEmulatorRelay = inst;
   return inst;
 })();

@@ -59,14 +59,14 @@ type SlotSnapshot struct {
 	LastConfig      *firmware.TimerReadout `json:"lastConfig,omitempty"`
 }
 
-// PoolSnapshot is returned by `GET /api/usb/status` and broadcast on `pool_state` events.
+// PoolSnapshot is returned by `GET /v1/usb/connections` and broadcast on `pool_state` events.
 type PoolSnapshot struct {
 	DebugSlotIndex int                  `json:"debugSlotIndex"`
 	Slots          []SlotSnapshot       `json:"slots"`
 	KnownTimers    []KnownHardwareTimer `json:"knownTimers"`
 }
 
-// USBEvent is pushed over `/api/ws/usb` to keep all connected UI tabs synchronized.
+// USBEvent is pushed over `/v1/ws/usb` to keep all connected UI tabs synchronized.
 type USBEvent struct {
 	Type      string                 `json:"type"` // pool_state | status | config | live | hub_live | scan | bootlog | log | raw_reply | error
 	SlotIndex int                    `json:"slotIndex"`
@@ -389,7 +389,7 @@ func (m *Manager) Close() {
 	}
 }
 
-// Subscribe registers an event callback for `/api/ws/usb` streaming.
+// Subscribe registers an event callback for `/v1/ws/usb` streaming.
 func (m *Manager) Subscribe(fn func(USBEvent)) func() {
 	m.subMu.Lock()
 	m.nextID++
@@ -552,7 +552,7 @@ func (m *Manager) Snapshot() PoolSnapshot {
 }
 
 // OpenRawPort opens an exclusive raw byte-stream handle to `portName` for the Flasher
-// (`/api/usb/raw-ws`), releasing any live `Manager` slot holding that port first.
+// (`/v1/ws/usb-raw`), releasing any live `Manager` slot holding that port first.
 func (m *Manager) OpenRawPort(portName string, baud int) (firmware.SerialPort, PortInfo, error) {
 	portName = strings.TrimSpace(portName)
 	if portName == "" {

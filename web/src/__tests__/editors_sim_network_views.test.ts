@@ -10,7 +10,7 @@ import {
 import { AboutView } from "../views/AboutView";
 import { DebugView } from "../views/DebugView";
 import { FlasherView } from "../views/FlasherView";
-import { LiveTimeView } from "../views/LiveTimeView";
+import { LapRFEmulatorView } from "../views/LapRFEmulatorView";
 import { NetworkView } from "../views/NetworkView";
 import { SetupView } from "../views/SetupView";
 import { SimView } from "../views/SimView";
@@ -157,7 +157,7 @@ describe("widgets/PilotSlotsEditor & TrackEditor — Global Pilots & Course Line
         rules: store.rules,
         simulatorRunning: false,
         raceArmed: false,
-        liveTimeStatus: store.liveTimeStatus,
+        laprfEmulatorStatus: store.laprfEmulator,
         raceState: store.raceState,
       });
     };
@@ -175,7 +175,7 @@ describe("widgets/PilotSlotsEditor & TrackEditor — Global Pilots & Course Line
         rules: store.rules,
         simulatorRunning: false,
         raceArmed: false,
-        liveTimeStatus: store.liveTimeStatus,
+        laprfEmulatorStatus: store.laprfEmulator,
         raceState: store.raceState,
       });
     };
@@ -423,8 +423,8 @@ describe("services/sim_serial_port — Simulated ESP32-C5 USB Serial & SLIP Boot
   });
 });
 
-describe("views/SimView, NetworkView, SetupView, FlasherView, LiveTimeView, AboutView, DebugView & AppShell", () => {
-  it("mounts SimView, NetworkView, SetupView, FlasherView, LiveTimeView, and AboutView cleanly and handles mode updates", () => {
+describe("views/SimView, NetworkView, SetupView, FlasherView, LapRFEmulatorView, AboutView, DebugView & AppShell", () => {
+  it("mounts SimView, NetworkView, SetupView, FlasherView, LapRFEmulatorView, and AboutView cleanly and handles mode updates", () => {
     const store = makeStore({
       simulatorRunning: true,
       timingHardwareMode: "slaprf",
@@ -444,7 +444,7 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LiveTimeView, Abou
       <div id="net"></div>
       <div id="setup"></div>
       <div id="flasher"></div>
-      <div id="livetime"></div>
+      <div id="laprf-emulator"></div>
       <div id="about"></div>
     `);
 
@@ -452,7 +452,7 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LiveTimeView, Abou
     const netView = new NetworkView(root.querySelector("#net")!, store, api);
     const setupView = new SetupView(root.querySelector("#setup")!, store, api, announcer);
     const flasherView = new FlasherView(root.querySelector("#flasher")!, store, api);
-    const liveTimeView = new LiveTimeView(root.querySelector("#livetime")!, store);
+    const laprfEmulatorView = new LapRFEmulatorView(root.querySelector("#laprf-emulator")!, store);
     const aboutView = new AboutView(root.querySelector("#about")!, store, api);
 
     try {
@@ -460,7 +460,7 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LiveTimeView, Abou
       expect(root.querySelector("#net")!.innerHTML.length).toBeGreaterThan(100);
       expect(root.querySelector("#setup")!.innerHTML.length).toBeGreaterThan(100);
       expect(root.querySelector("#flasher")!.innerHTML.length).toBeGreaterThan(100);
-      expect(root.querySelector("#livetime")!.innerHTML.length).toBeGreaterThan(50);
+      expect(root.querySelector("#laprf-emulator")!.innerHTML.length).toBeGreaterThan(50);
       expect(root.querySelector("#about")!.textContent).toContain("SlapRF");
 
       // Mobile Topology Graph always renders the Hub node even when disconnected, hides all empty Spokes,
@@ -512,7 +512,7 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LiveTimeView, Abou
         rules: store.rules,
         simulatorRunning: true,
         raceArmed: true,
-        liveTimeStatus: store.liveTimeStatus,
+        laprfEmulatorStatus: store.laprfEmulator,
         raceState: store.raceState,
       });
       expect(root.querySelector("#net")!.textContent).toContain("LapRF");
@@ -521,7 +521,7 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LiveTimeView, Abou
       netView.destroy();
       setupView.destroy();
       flasherView.destroy();
-      liveTimeView.destroy();
+      laprfEmulatorView.destroy();
       aboutView.destroy();
       announcer.update({ enabled: false });
     }
@@ -604,7 +604,7 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LiveTimeView, Abou
         );
         expect(router.route).toBe("races");
 
-        // 1-finger horizontal swipe left across primary tabs (#/races -> #/live) even after LiveView (#/live) has mounted
+        // 1-finger horizontal swipe left across primary tabs (#/races -> #/practice) even after PracticeView (#/practice) has mounted
         // its inline .practice-pilot-popover.is-inline-mobile-panel in the DOM
         pushAppHash("#/races");
         expect(router.route).toBe("races");
@@ -617,7 +617,7 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LiveTimeView, Abou
         window.dispatchEvent(
           new PointerEvent("pointerup", { bubbles: true, pointerId: 40, pointerType: "touch", clientX: 175, clientY: 202 })
         );
-        expect(router.route).toBe("live");
+        expect(router.route).toBe("practice");
 
         // Swiping right from Practice (#/live) returns back to Race (#/races)
         outletEl.dispatchEvent(

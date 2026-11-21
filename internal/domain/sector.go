@@ -30,7 +30,7 @@ type LapRecord struct {
 	SlotIndex     int           `json:"slotIndex"`               // 1-based pilot slot
 	Callsign      string        `json:"callsign"`                // Pilot callsign
 	LapNumber     int           `json:"lapNumber"`               // 1-based lap number for this pilot
-	LapTimeSec    float64       `json:"lapTimeSec"`              // Total lap time in seconds (matches LiveTime official lap)
+	LapTimeSec    float64       `json:"lapTimeSec"`              // Total lap time in seconds
 	DeltaToBest   float64       `json:"deltaToBest"`             // Delta to pilot's personal best lap
 	Sectors       []SectorSplit `json:"sectors"`                 // Individual gate-to-gate sector splits
 	CompletedAtUs uint64        `json:"completedAtUs"`           // Microsecond timestamp at finish gate

@@ -82,7 +82,7 @@ func TestClientServer_NativeBackendZeroWasmBboltMultiTabAndServerRestart(t *test
 		return ok, nil
 	})
 
-	// Add a new pilot ("NovaServerFPV") in Tab 1 and verify Tab 2 receives the update live over /api/ws/stream!
+	// Add a new pilot ("NovaServerFPV") in Tab 1 and verify Tab 2 receives the update live over /v1/ws/stream!
 	searchInput1 := h.Page.Locator(`input[data-pilot-dir-search]`).First()
 	h.MustBeVisible(searchInput1, "Tab 1 pilot search/add input")
 	if err := searchInput1.Fill("NovaServerFPV"); err != nil {
@@ -93,7 +93,7 @@ func TestClientServer_NativeBackendZeroWasmBboltMultiTabAndServerRestart(t *test
 	}
 
 	pageSummary2 := page2.Locator(`.pilot-dir-page-summary`).First()
-	h.WaitUntil("Tab 2 updates live to 11 pilots via /api/ws/stream", 8*time.Second, func() (bool, error) {
+	h.WaitUntil("Tab 2 updates live to 11 pilots via /v1/ws/stream", 8*time.Second, func() (bool, error) {
 		txt, txtErr := pageSummary2.InnerText()
 		if txtErr != nil {
 			return false, nil
@@ -166,7 +166,7 @@ func TestClientServer_NativeBackendZeroWasmBboltMultiTabAndServerRestart(t *test
 		res, evalErr := pageRestarted.Evaluate(`async () => {
 			const simBtn = document.querySelector('button[data-action="sim"]');
 			const simOff = Boolean(simBtn && (simBtn.textContent || "").includes("Simulation off"));
-			const r = await fetch("/api/state");
+			const r = await fetch("/v1/state");
 			if (!r.ok) return false;
 			const st = await r.json();
 			const hasPilot = Array.isArray(st.pilots) && st.pilots.some((p) => p.callsign === "TracksideReal");
@@ -215,14 +215,14 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 		res, evalErr := h.Page.Evaluate(`() => {
 			const usbBtn = document.querySelector('[data-action="usb-toggle"]')?.textContent || "";
 			const annBtn = document.querySelector('[data-action="announcer"]');
-			const raw = window.slaprfWasm?.request("GET", "/api/state", "")?.body || "{}";
+			const raw = window.slaprfWasm?.request("GET", "/v1/state", "")?.body || "{}";
 			const st = JSON.parse(raw);
 			const timers = Array.isArray(st.timers) ? st.timers : [];
 			const gates = Array.isArray(st.gates) ? st.gates : [];
 			const sessions = Array.isArray(st.practiceState?.sessions) ? st.practiceState.sessions : [];
 			const races = Array.isArray(st.eventState?.races) ? st.eventState.races : [];
 			const allOnline = timers.length === 4 && timers.every((t) => Boolean(t.online));
-			const onPracticeSession = window.location.hash.startsWith("#/live/open-track-practice");
+			const onPracticeSession = window.location.hash.startsWith("#/practice/open-track-practice");
 			const hasStandings = Boolean(document.querySelector("table.table-standings"));
 			const annOn = Boolean(annBtn && annBtn.classList.contains("btn-armed"));
 			return (
@@ -278,7 +278,7 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 		t.Fatalf("confirm Wipe Data modal: %v", err)
 	}
 	h.WaitUntil("App wiped to 0 pilots", 5*time.Second, func() (bool, error) {
-		raw, _ := h.Page.Evaluate(`() => window.slaprfWasm?.request("GET", "/api/state", "")?.body || "{}"`)
+		raw, _ := h.Page.Evaluate(`() => window.slaprfWasm?.request("GET", "/v1/state", "")?.body || "{}"`)
 		s, _ := raw.(string)
 		return strings.Contains(s, `"pilots":[]`), nil
 	})
@@ -293,7 +293,7 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 			const annBtn = document.querySelector('[data-action="announcer"]');
 			const usbBtn = document.querySelector('[data-action="usb-toggle"]')?.textContent || "";
 			return (
-				window.location.hash.startsWith("#/live/open-track-practice") &&
+				window.location.hash.startsWith("#/practice/open-track-practice") &&
 				Boolean(annBtn && annBtn.classList.contains("btn-armed")) &&
 				usbBtn.includes("H1")
 			);

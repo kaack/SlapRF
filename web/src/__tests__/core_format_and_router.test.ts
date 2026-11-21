@@ -206,14 +206,24 @@ describe("core/router — URL slugs & hash parsing", () => {
   });
 
   it("parses practice, analytics scope, and section-anchor hashes and round-trips builders", () => {
-    expect(parseHashState("#/live")).toEqual({ route: "live", live: { tab: "directory" } });
-    expect(parseHashState("#/live/session")).toEqual({ route: "live", live: { tab: "session" } });
-    expect(parseHashState("#/live/session/warmup-1")).toEqual({
-      route: "live",
+    expect(parseHashState("#/practice")).toEqual({
+      route: "practice",
+      practice: { tab: "directory" },
+      live: { tab: "directory" },
+    });
+    expect(parseHashState("#/practice/session")).toEqual({
+      route: "practice",
+      practice: { tab: "session" },
+      live: { tab: "session" },
+    });
+    expect(parseHashState("#/practice/session/warmup-1")).toEqual({
+      route: "practice",
+      practice: { tab: "session", sessionId: "warmup-1" },
       live: { tab: "session", sessionId: "warmup-1" },
     });
-    expect(parseHashState("#/live/pack-3")).toEqual({
-      route: "live",
+    expect(parseHashState("#/practice/pack-3")).toEqual({
+      route: "practice",
+      practice: { tab: "session", sessionId: "pack-3" },
       live: { tab: "session", sessionId: "pack-3" },
     });
 
@@ -245,9 +255,10 @@ describe("core/router — URL slugs & hash parsing", () => {
     });
 
     const pracHash = buildPracticeHash("session", "morning-pack");
-    expect(pracHash).toBe("#/live/morning-pack");
+    expect(pracHash).toBe("#/practice/morning-pack");
     expect(parseHashState(pracHash)).toEqual({
-      route: "live",
+      route: "practice",
+      practice: { tab: "session", sessionId: "morning-pack" },
       live: { tab: "session", sessionId: "morning-pack" },
     });
 

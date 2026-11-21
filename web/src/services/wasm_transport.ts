@@ -1,6 +1,21 @@
 import { StreamEnvelope, TimerTelemetryFrame } from "../types/models";
 import { BootState, enginePersistence } from "./engine_persistence";
-import { ApiTransport } from "./transport";
+import { ApiTransport, HttpMethod } from "./transport";
+
+export function unwrapApiErrorMessage(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("{") && trimmed.endsWith("}")) {
+    try {
+      const parsed = JSON.parse(trimmed) as { error?: unknown };
+      if (typeof parsed.error === "string" && parsed.error.trim().length > 0) {
+        return parsed.error.trim();
+      }
+    } catch {
+      // Keep raw body text
+    }
+  }
+  return trimmed;
+}
 
 export interface SlaprfWasmBridge {
   request(
@@ -201,7 +216,7 @@ export class WasmSimTransport implements ApiTransport {
     });
 
     // The Go runtime restores both engines from this before starting the simulator, so the very
-    // first /api/state already contains the saved data (no empty-state flash, no prewarm waste).
+    // first /v1/state already contains the saved data (no empty-state flash, no prewarm waste).
     window.__slaprfBootStatus?.("Hydrating track state…", 90);
     window.__slaprfBootState = await bootStatePromise;
 
@@ -263,27 +278,27 @@ export class WasmSimTransport implements ApiTransport {
     });
   }
 
-  public async request<T = unknown>(method: "GET" | "POST", url: string, body?: unknown): Promise<T> {
+  public async request<T = unknown>(method: HttpMethod, url: string, body?: unknown): Promise<T> {
     const wasm = await this.ensureReady();
     wasm.setRunning(this.simRunning);
-    const res = wasm.request(method, url, body !== undefined ? JSON.stringify(body) : "");
+    const res = wasm.request(method, url, body !== undefined && method !== "GET" ? JSON.stringify(body) : "");
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(`WASM ${method} ${url} failed (${res.status}): ${res.body}`);
+      throw new Error(`WASM ${method} ${url} failed (${res.status}): ${unwrapApiErrorMessage(res.body)}`);
     }
-    if (method === "POST" && url !== "/api/race/tick") {
+    if (method !== "GET") {
       enginePersistence.notePost();
     }
-    return JSON.parse(res.body) as T;
+    return (res.body ? JSON.parse(res.body) : {}) as T;
   }
 
-  public async requestText(method: "GET" | "POST", url: string, body?: unknown): Promise<string> {
+  public async requestText(method: HttpMethod, url: string, body?: unknown): Promise<string> {
     const wasm = await this.ensureReady();
     wasm.setRunning(this.simRunning);
-    const res = wasm.request(method, url, body !== undefined ? JSON.stringify(body) : "");
+    const res = wasm.request(method, url, body !== undefined && method !== "GET" ? JSON.stringify(body) : "");
     if (res.status < 200 || res.status >= 300) {
-      throw new Error(`WASM ${method} ${url} failed (${res.status}): ${res.body}`);
+      throw new Error(`WASM ${method} ${url} failed (${res.status}): ${unwrapApiErrorMessage(res.body)}`);
     }
-    if (method === "POST" && url !== "/api/race/tick") {
+    if (method !== "GET") {
       enginePersistence.notePost();
     }
     return res.body;

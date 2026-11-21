@@ -2,8 +2,8 @@
  * LapRF 8-Way hardware & simulated connection manager.
  *
  * - Real Mode (SlapRF Server): delegates Ethernet TCP `:5403` and native USB CDC (`115200` baud)
- *   connections and `/24` LAN discovery directly to the native Go `laprfManager` (`/api/laprf/*`
- *   and `/api/laprf-discover`) — zero browser WebSerial or byte-relay.
+ *   connections and `/24` LAN discovery directly to the native Go `laprfManager` (`/v1/laprf/*`),
+ *   with zero browser WebSerial or byte-relay.
  * - Simulation Mode (both Standalone Browser Demo & SlapRF Server): delegates LAN discovery and
  *   connect/disconnect to the simulated LapRF 8-Way units managed by `TrackSimulator`.
  */
@@ -90,7 +90,7 @@ export class LapRFHardwareLink {
     if (!capabilitiesSnapshot().portable || this.pollInFlight) return;
     this.pollInFlight = true;
     try {
-      const resp = await fetch(resolveBackendUrl("/api/laprf/status"), {
+      const resp = await fetch(resolveBackendUrl("/v1/laprf/sessions"), {
         method: "GET",
         headers: { Accept: "application/json" },
         cache: "no-store",
@@ -201,7 +201,7 @@ export class LapRFHardwareLink {
       throw new Error("Connect to a SlapRF Server to scan LAN for LapRF 8-Way hardware.");
     }
     await this.refreshStatus();
-    const resp = await fetch(resolveBackendUrl("/api/laprf-discover"), {
+    const resp = await fetch(resolveBackendUrl("/v1/laprf/devices"), {
       method: "GET",
       headers: { Accept: "application/json" },
     });
@@ -262,7 +262,7 @@ export class LapRFHardwareLink {
     }
 
     const assignedLabel = label.trim() || `LapRF (${cleanHost})`;
-    const resp = await fetch(resolveBackendUrl("/api/laprf/connect"), {
+    const resp = await fetch(resolveBackendUrl("/v1/laprf/sessions"), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
@@ -323,7 +323,7 @@ export class LapRFHardwareLink {
       throw new Error("Expected a native OS USB port from SlapRF Server.");
     }
 
-    const resp = await fetch(resolveBackendUrl("/api/laprf/connect"), {
+    const resp = await fetch(resolveBackendUrl("/v1/laprf/sessions"), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
@@ -356,10 +356,8 @@ export class LapRFHardwareLink {
     }
     this.removeSavedTarget(timerId);
     if (capabilitiesSnapshot().portable) {
-      await fetch(resolveBackendUrl("/api/laprf/disconnect"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ timerId }),
+      await fetch(resolveBackendUrl(`/v1/laprf/sessions/${encodeURIComponent(String(timerId))}`), {
+        method: "DELETE",
       }).catch(() => undefined);
       await this.refreshStatus();
     }

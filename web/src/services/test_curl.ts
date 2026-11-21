@@ -44,10 +44,19 @@ const MAX_CURL_HISTORY = 200;
 function isPortableHostRoute(url: string): boolean {
   const pathOnly = url.split("?")[0] || "";
   return (
-    pathOnly === "/api/capabilities" ||
-    pathOnly === "/api/laprf-discover" ||
-    pathOnly.startsWith("/api/mgp/") ||
-    pathOnly === "/api/mgp"
+    pathOnly === "/v1/capabilities" ||
+    pathOnly === "/v1/auth/sessions" ||
+    pathOnly === "/v1/auth/config" ||
+    pathOnly === "/v1/storage/status" ||
+    pathOnly === "/v1/storage:recordBackup" ||
+    pathOnly === "/v1/laprf-emulator" ||
+    pathOnly.startsWith("/v1/laprf/") ||
+    pathOnly === "/v1/laprf:sync" ||
+    (pathOnly.startsWith("/v1/rh/") && !pathOnly.endsWith("/debug-stream")) ||
+    pathOnly === "/v1/rh:sync" ||
+    pathOnly.startsWith("/v1/usb/") ||
+    pathOnly === "/v1/usb:command" ||
+    pathOnly.startsWith("/v1/race/multigp/proxy/")
   );
 }
 
@@ -127,7 +136,7 @@ function tryParseJson(raw: string): unknown | null {
 /**
  * Installs `window.slaprfCurl` so Playwright / CDP tests (and interactive DevTools debugging) can
  * issue direct HTTP/curl calls against the live in-browser Go WASM engine (`window.slaprfWasm`)
- * as well as Portable host routes (`/api/capabilities`, `/api/mgp/*`, `/api/laprf-discover`).
+ * as well as Portable host routes (`/v1/capabilities`, `/v1/race/multigp/proxy/*`, `/v1/laprf/devices`).
  */
 export function installSlaprfCurlBridge(api: ApiClient): void {
   if (!window.slaprfCurlHistory) {
@@ -142,7 +151,7 @@ export function installSlaprfCurlBridge(api: ApiClient): void {
     const headers: Record<string, string> = { ...(req.headers ?? {}) };
     const { rawBody, hasBody } = encodeRequestBody(req.body, headers);
     const method = (req.method || (hasBody ? "POST" : "GET")).toUpperCase().trim();
-    const url = req.url.trim() || "/api/state";
+    const url = req.url.trim() || "/v1/state";
 
     const caps = capabilitiesSnapshot();
     let target: "wasm" | "host";

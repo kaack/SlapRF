@@ -13,17 +13,17 @@ import (
 	"slaprf/internal/tracker"
 )
 
-// StatusInterval is the period of the STATUS (0xDA0A) heartbeat sent to every LiveTime session.
-const StatusInterval = 100 * time.Millisecond // 10 Hz, as expected by LiveTime
+// StatusInterval is the period of the STATUS (0xDA0A) heartbeat sent to every LapRF emulator session.
+const StatusInterval = 100 * time.Millisecond // 10 Hz, as expected by LapRF clients
 
 // writeTimeout bounds every write to a session so one stalled peer can never block the engine.
 const writeTimeout = 250 * time.Millisecond
 
-// LiveTimeStatus is the diagnostic snapshot of the LapRF emulation (MultiGP LiveTime link).
+// EmulatorStatus is the diagnostic snapshot of the LapRF 8-Way TCP :5403 emulation.
 //
 // Whether the integration is enabled is a browser UI preference (the relay connection), not
 // engine state, so it is intentionally not part of this struct.
-type LiveTimeStatus struct {
+type EmulatorStatus struct {
 	ConnectedClients int       `json:"connectedClients"`
 	DetectionsSent   uint64    `json:"detectionsSent"`
 	StatusFramesSent uint64    `json:"statusFramesSent"`
@@ -31,12 +31,10 @@ type LiveTimeStatus struct {
 	RaceArmedByHost  bool      `json:"raceArmedByHost"`
 }
 
-// Server emulates an ImmersionRC LapRF 8-Way Event Timer for MultiGP LiveTime.
+// Server emulates an ImmersionRC LapRF 8-Way Event Timer for external LapRF clients.
 //
-// It does not own a network listener: each LiveTime connection is handed to ServeConn as an
-// arbitrary byte stream. In the browser that stream is a net.Pipe bridged to the slaprf-relay
-// WebSocket (cmd/slaprf-relay copies LiveTime's TCP :5403 bytes 1:1); in tests it is a net.Pipe
-// or a TCP socket.
+// It does not own a network listener: each client connection is handed to ServeConn as an
+// arbitrary byte stream.
 type Server struct {
 	mu               sync.RWMutex
 	engine           *tracker.Engine
@@ -49,7 +47,7 @@ type Server struct {
 	hostArmed        bool
 }
 
-// session is one LiveTime connection (one virtual LapRF device link).
+// session is one LapRF client connection (one virtual LapRF device link).
 type session struct {
 	conn    net.Conn
 	writeMu sync.Mutex
@@ -94,7 +92,7 @@ func NewServer(engine *tracker.Engine) *Server {
 	return s
 }
 
-// SetEngine pins the timing engine (simulated vs real-world) that backs the LiveTime link.
+// SetEngine pins the timing engine (simulated vs real-world) that backs the LapRF emulator link.
 // It clears any resolver installed by Follow.
 func (s *Server) SetEngine(engine *tracker.Engine) {
 	if engine == nil {
@@ -164,11 +162,11 @@ func (s *Server) activeEngine() *tracker.Engine {
 	return eng
 }
 
-// Status returns the current LiveTime bridge diagnostics.
-func (s *Server) Status() LiveTimeStatus {
+// Status returns the current LapRF emulator diagnostics.
+func (s *Server) Status() EmulatorStatus {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return LiveTimeStatus{
+	return EmulatorStatus{
 		ConnectedClients: len(s.sessions),
 		DetectionsSent:   s.detectionsSent,
 		StatusFramesSent: s.statusFramesSent,
@@ -178,7 +176,7 @@ func (s *Server) Status() LiveTimeStatus {
 }
 
 // ServeConn runs one LapRF protocol session over conn (any full-duplex byte stream: a TCP
-// socket, or a net.Pipe bridged to the browser's relay WebSocket). It answers LiveTime's
+// socket, or a net.Pipe). It answers the client's
 // requests (RF setup 0xDA01, time sync 0xDA02, state control 0xDA08, settings 0xDA07), streams
 // the 10 Hz STATUS heartbeat, and forwards start/finish detections until conn is closed or a
 // read fails. ServeConn blocks; it always closes conn before returning.
@@ -187,7 +185,7 @@ func (s *Server) ServeConn(conn net.Conn) {
 	s.mu.Lock()
 	s.sessions[sess] = struct{}{}
 	s.mu.Unlock()
-	log.Printf("[LapRF/LiveTime] Session opened (%s)", conn.RemoteAddr())
+	log.Printf("[LapRF Emulator] Session opened (%s)", conn.RemoteAddr())
 
 	done := make(chan struct{})
 	go s.heartbeat(sess, done)
@@ -198,7 +196,7 @@ func (s *Server) ServeConn(conn net.Conn) {
 		delete(s.sessions, sess)
 		s.mu.Unlock()
 		_ = conn.Close()
-		log.Printf("[LapRF/LiveTime] Session closed (%s)", conn.RemoteAddr())
+		log.Printf("[LapRF Emulator] Session closed (%s)", conn.RemoteAddr())
 	}()
 
 	buf := make([]byte, 4096)
@@ -224,7 +222,7 @@ func (s *Server) ServeConn(conn net.Conn) {
 		}
 		if err != nil {
 			if err != io.EOF && err != io.ErrClosedPipe {
-				log.Printf("[LapRF/LiveTime] Read error: %v", err)
+				log.Printf("[LapRF Emulator] Read error: %v", err)
 			}
 			return
 		}
@@ -266,7 +264,7 @@ func (s *Server) handleIncomingPacket(sess *session, pkt *Packet) {
 
 	case RecordRFSetup:
 		// Host reads or writes 8-slot pilot frequencies, bands, thresholds, and gains
-		s.applyRFSetupFromLiveTime(pkt)
+		s.applyRFSetupFromHost(pkt)
 		reply := s.buildRFSetupReplyPacket()
 		_ = sess.write(reply.Encode())
 
@@ -308,7 +306,7 @@ func (s *Server) handleIncomingPacket(sess *session, pkt *Packet) {
 	}
 }
 
-func (s *Server) applyRFSetupFromLiveTime(pkt *Packet) {
+func (s *Server) applyRFSetupFromHost(pkt *Packet) {
 	tracker.SyncBootTimes(s.allEngines()...)
 	for _, targetEng := range s.allEngines() {
 		pilots, _, _, _, _ := targetEng.StateSnapshot()
@@ -411,7 +409,7 @@ func (s *Server) applyRFSetupFromLiveTime(pkt *Packet) {
 	s.mu.Lock()
 	s.lastRFSetupSync = time.Now()
 	s.mu.Unlock()
-	log.Printf("[LapRF/LiveTime] Synced 8-Slot Pilot RF Configuration from LiveTime")
+	log.Printf("[LapRF Emulator] Synced 8-Slot Pilot RF Configuration from client")
 }
 
 func (s *Server) buildRFSetupReplyPacket() *Packet {
@@ -505,7 +503,7 @@ func (s *Server) broadcastDetection(wire []byte) {
 func (s *Server) OnTelemetryFrame(_ domain.TimerTelemetryFrame) {}
 
 func (s *Server) OnGateCrossing(ev domain.GateCrossingEvent) {
-	// Only crossings at the Start/Finish Gate Timer are sent to MultiGP LiveTime!
+	// Only crossings at the Start/Finish Gate Timer are sent to the LapRF emulator client!
 	// Intermediate sector gate crossings are handled by our companion Sector Dashboard.
 	if !ev.IsStartFinish {
 		return
@@ -531,7 +529,7 @@ func (s *Server) OnPassthroughCrossing(ev domain.GateCrossingEvent) {
 
 func (s *Server) OnLapCompleted(_ domain.LapRecord, _ []domain.PilotTrackSummary) {}
 
-// Filtered detections are never reported to LiveTime — only accepted start/finish crossings.
+// Filtered detections are never reported to LapRF clients; only accepted start/finish crossings.
 func (s *Server) OnDetectionFiltered(_ domain.FilteredDetection) {}
 
 func (s *Server) OnConfigUpdated(_ []domain.PilotSlot, _ []domain.TrackGate) {}

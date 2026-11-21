@@ -15,7 +15,7 @@ import {
   PersistenceSettings,
   TimingDevicesCard,
 } from "../widgets/DataSourceCard";
-import { LiveTimeCard } from "../widgets/LiveTimeCard";
+import { LapRFEmulatorCard } from "../widgets/LapRFEmulatorCard";
 import { TimingRulesEditor } from "../widgets/TimingRulesEditor";
 
 /** Settings page: label/description on the left, controls on the right. */
@@ -70,10 +70,10 @@ export class SetupView extends Component {
 
         <section class="settings-section" data-section-anchor="laprf-emulator" data-slot="emulator-section">
           <div class="settings-intro">
-            <h2>LapRF emulator</h2>
-            <p>Hosts a local TCP :5403 LapRF server in SlapRF Portable so external software like MultiGP LiveTime and FPVTrackside can receive passes from SlapRF hardware.</p>
+            <h2>LapRF 8-Way emulator</h2>
+            <p>Hosts a local TCP :5403 LapRF 8-Way server so external LapRF-compatible timing clients can receive passes from SlapRF hardware.</p>
           </div>
-          <div class="card" data-slot="livetime"></div>
+          <div class="card" data-slot="laprf-emulator"></div>
         </section>
 
         <section class="settings-section" data-section-anchor="authentication">
@@ -98,7 +98,7 @@ export class SetupView extends Component {
     this.adopt(new MultiGPSettingsCard(this.slot("multigp"), store, api));
     this.adopt(new TimingRulesEditor(this.slot("rules"), store, api));
     this.adopt(new AnnouncerSettings(this.slot("announcer"), announcer));
-    this.adopt(new LiveTimeCard(this.slot("livetime"), store));
+    this.adopt(new LapRFEmulatorCard(this.slot("laprf-emulator"), store));
     this.adopt(new AuthenticationSettingsCard(this.slot("authentication")));
     this.adopt(new PersistenceSettings(this.slot("persistence"), api, announcer));
 

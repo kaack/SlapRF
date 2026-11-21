@@ -17,7 +17,7 @@ func TestMultiGPControlledRaceCreateImportFlyAndUpload(t *testing.T) {
 	h.ConnectSimHubH1()
 
 	// Enable 20x simulation speed so heats complete in ~2 seconds.
-	h.APIPost("/api/sim/speed", map[string]any{"speedMultiplier": 20}, nil)
+	h.APIPatch("/v1/sim", map[string]any{"speedMultiplier": 20}, nil)
 
 	// Create a new simulated MultiGP Controlled race ("Wednesday Short Shootout") in the MultiGP Chapter pane.
 	const raceTitle = "Wednesday Short Shootout"
@@ -42,7 +42,7 @@ func TestMultiGPControlledRaceCreateImportFlyAndUpload(t *testing.T) {
 				Name string `json:"name"`
 			} `json:"races"`
 		}
-		if err := h.WasmGetJSON("/api/sim/mgp-admin", &mgpSt); err != nil {
+		if err := h.WasmGetJSON("/v1/sim/mgp-admin", &mgpSt); err != nil {
 			return false, nil
 		}
 		for _, r := range mgpSt.Races {
@@ -122,7 +122,7 @@ func TestMultiGPControlledRaceCreateImportFlyAndUpload(t *testing.T) {
 				} `json:"mgpLink"`
 			} `json:"raceState"`
 		}
-		if err := h.WasmGetJSON("/api/state", &st); err != nil {
+		if err := h.WasmGetJSON("/v1/state", &st); err != nil {
 			return false, nil
 		}
 		if st.RaceState.MGPLink != nil && st.RaceState.MGPLink.RaceID == mgpRaceID {
@@ -159,7 +159,7 @@ func TestMultiGPControlledRaceCreateImportFlyAndUpload(t *testing.T) {
 				} `json:"heats"`
 			} `json:"raceState"`
 		}
-		if err := h.WasmGetJSON("/api/state", &st); err != nil {
+		if err := h.WasmGetJSON("/v1/state", &st); err != nil {
 			return false, nil
 		}
 		if len(st.RaceState.Heats) == 0 {
@@ -263,9 +263,9 @@ func TestMultiGPZippyQCheckInPullAndRun(t *testing.T) {
 	h.ConnectSimHubH1()
 
 	// Set 20x simulation speed.
-	h.APIPost("/api/sim/speed", map[string]any{"speedMultiplier": 20}, nil)
+	h.APIPatch("/v1/sim", map[string]any{"speedMultiplier": 20}, nil)
 
-	// Locate the built-in ZippyQ chapter race dynamically from /api/sim/mgp-admin and expand it.
+	// Locate the built-in ZippyQ chapter race dynamically from /v1/sim/mgp-admin and expand it.
 	var zippyRaceID int
 	h.WaitUntil("built-in ZippyQ race present in simMultiGP", 10*time.Second, func() (bool, error) {
 		var mgpSt struct {
@@ -275,7 +275,7 @@ func TestMultiGPZippyQCheckInPullAndRun(t *testing.T) {
 				DisableSlotAutoPopulation int    `json:"disableSlotAutoPopulation"`
 			} `json:"races"`
 		}
-		if err := h.WasmGetJSON("/api/sim/mgp-admin", &mgpSt); err != nil {
+		if err := h.WasmGetJSON("/v1/sim/mgp-admin", &mgpSt); err != nil {
 			return false, nil
 		}
 		for _, r := range mgpSt.Races {
@@ -357,17 +357,17 @@ func TestMultiGPZippyQCheckInPullAndRun(t *testing.T) {
 			} `json:"heats"`
 		} `json:"raceState"`
 	}
-	if err := h.WasmGetJSON("/api/state", &beforePull); err != nil {
+	if err := h.WasmGetJSON("/v1/state", &beforePull); err != nil {
 		t.Fatalf("get state before Pull ZippyQ: %v", err)
 	}
 	initialHeatCount := len(beforePull.RaceState.Heats)
 
 	// Queue an additional ZippyQ round on simulated MultiGP and pull it live via "Pull ZippyQ"!
-	if err := h.WasmPostJSON("/api/sim/mgp-admin", map[string]any{
+	if err := h.WasmPostJSON("/v1/sim/mgp-admin:action", map[string]any{
 		"action": "queue-zippyq",
 		"raceId": zippyRaceID,
 	}, nil); err != nil {
-		t.Fatalf("queue-zippyq via /api/sim/mgp-admin: %v", err)
+		t.Fatalf("queue-zippyq via /v1/sim/mgp-admin:action: %v", err)
 	}
 
 	if err := pullZippyBtn.Click(); err != nil {
@@ -382,7 +382,7 @@ func TestMultiGPZippyQCheckInPullAndRun(t *testing.T) {
 				} `json:"heats"`
 			} `json:"raceState"`
 		}
-		if err := h.WasmGetJSON("/api/state", &afterPull); err != nil {
+		if err := h.WasmGetJSON("/v1/state", &afterPull); err != nil {
 			return false, nil
 		}
 		return len(afterPull.RaceState.Heats) > initialHeatCount, nil
@@ -406,7 +406,7 @@ func TestMultiGPZippyQCheckInPullAndRun(t *testing.T) {
 				} `json:"heats"`
 			} `json:"raceState"`
 		}
-		if err := h.WasmGetJSON("/api/state", &st); err != nil {
+		if err := h.WasmGetJSON("/v1/state", &st); err != nil {
 			return false, nil
 		}
 		if len(st.RaceState.Heats) == 0 {

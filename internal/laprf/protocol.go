@@ -226,7 +226,7 @@ func ComputeCRC16(data []byte) uint16 {
 	return reflectBits(rem, 16)
 }
 
-// BuildDetectionPacket creates a 0xDA09 passing record for LapRF clients (FPVTrackside, MultiGP LiveTime, etc.).
+// BuildDetectionPacket creates a 0xDA09 passing record for LapRF 8-Way clients.
 // Note: Only the 4 canonical fields (0x01, 0x21, 0x22, 0x02) may be emitted, and 0x02 (RTC_TIME)
 // MUST be last because LapRFProtocol.cs does not skip unknown field signatures and enqueues the
 // PassingRecord immediately upon decoding field 0x02.

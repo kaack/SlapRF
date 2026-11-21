@@ -1084,7 +1084,7 @@ export function makeFullState(overrides: Partial<FullStateResponse> = {}): FullS
     rules: makeDefaultRules(),
     simulatorRunning: true,
     raceArmed: true,
-    liveTimeStatus: {
+    laprfEmulatorStatus: {
       connectedClients: 0,
       detectionsSent: 0,
       statusFramesSent: 0,
@@ -1120,7 +1120,7 @@ export interface MockApiClientRecord {
 
 /**
  * Builds a lightweight fake `ApiClient` that records every method call without touching WASM,
- * allowing views & widgets (`RacesView`, `LiveView`, `TopBar`, `TimingRulesEditor`, `BracketDiagram`)
+ * allowing views & widgets (`RacesView`, `PracticeView`, `TopBar`, `TimingRulesEditor`, `BracketDiagram`)
  * to mount and dispatch user interactions deterministically in <1ms.
  */
 export function makeMockApiClient(store: AppStore): MockApiClientRecord {

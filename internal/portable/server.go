@@ -43,7 +43,7 @@ const (
 	wsReadLimit     = 1 << 20
 )
 
-// CapabilitiesResponse is returned by GET /api/capabilities on a native SlapRF Go backend.
+// CapabilitiesResponse is returned by GET /v1/capabilities on a native SlapRF Go backend.
 type CapabilitiesResponse struct {
 	Portable            bool     `json:"portable"`
 	Version             string   `json:"version"`
@@ -91,7 +91,7 @@ type Config struct {
 
 // Server owns the complete native Go timing engines (`realEngine` + `simEngine`), `TrackSimulator`,
 // single-file `bbolt` storage (`slaprf.db`), native USB serial for SlapRF timers, native LapRF 8-Way
-// & RotorHazard hardware links, LiveTime :5403 TCP server, MultiGP proxy, and WebSocket event stream.
+// & RotorHazard hardware links, LapRF 8-Way :5403 TCP emulator, MultiGP proxy, and WebSocket event stream.
 type Server struct {
 	cfg           Config
 	httpClient    *http.Client
@@ -109,10 +109,10 @@ type Server struct {
 	apiSrv     *api.Server
 	stream     *streamHub
 
-	usbMgr      *usb.Manager
-	laprfMgr    *laprfManager
-	rhMgr       *rhManager
-	liveTimeMgr *liveTimeManager
+	usbMgr           *usb.Manager
+	laprfMgr         *laprfManager
+	rhMgr            *rhManager
+	laprfEmulatorMgr *laprfEmulatorManager
 
 	simHubUSBConnected atomic.Bool
 	simHubSubMu        sync.RWMutex
@@ -260,7 +260,7 @@ func NewServer(cfg Config) *Server {
 	}
 	s.laprfMgr = newLapRFManager(realEngine, store, cfg.USBOpenPort, s.logf, markDirty)
 	s.rhMgr = newRHManager(realEngine, store, cfg.USBOpenPort, s.logf, markDirty)
-	s.liveTimeMgr = newLiveTimeManager(cfg.Version, laprfSrv, store, func() bool {
+	s.laprfEmulatorMgr = newLapRFEmulatorManager(cfg.Version, laprfSrv, store, func() bool {
 		return !sim.IsRunning() && realEngine.TimingHardwareMode() == domain.HardwareModeLapRF
 	}, s.logf)
 
@@ -269,7 +269,7 @@ func NewServer(cfg Config) *Server {
 		s.usbMgr.Reconcile(simRunning, realMode)
 		s.laprfMgr.SetSimMode(simRunning || realMode != domain.HardwareModeLapRF)
 		s.rhMgr.Reconcile(simRunning)
-		s.liveTimeMgr.Reconcile()
+		s.laprfEmulatorMgr.Reconcile()
 	}
 
 	apiSrv.SetHooks(api.ServerHooks{
@@ -313,11 +313,11 @@ func NewServer(cfg Config) *Server {
 		},
 	})
 
-	// Restore persisted hardware links & LiveTime listener
+	// Restore persisted hardware links & LapRF emulator listener
 	s.usbMgr.Reconcile(initialSimMode, realEngine.TimingHardwareMode())
 	s.laprfMgr.RestorePersistedTargets(initialSimMode || realEngine.TimingHardwareMode() != domain.HardwareModeLapRF)
 	s.rhMgr.RestorePersistedTargets(initialSimMode)
-	s.liveTimeMgr.Reconcile()
+	s.laprfEmulatorMgr.Reconcile()
 
 	// Background 100 ms race/heat clock ticker so countdowns, timed heats, and Open Qualifier clocks
 	// advance continuously on the Go server even when all browser tabs are closed.
@@ -414,8 +414,8 @@ func (s *Server) Close() {
 	if s.sim != nil {
 		s.sim.SetRunning(false)
 	}
-	if s.liveTimeMgr != nil {
-		s.liveTimeMgr.close()
+	if s.laprfEmulatorMgr != nil {
+		s.laprfEmulatorMgr.close()
 	}
 	if s.laprfMgr != nil {
 		s.laprfMgr.close()
@@ -437,110 +437,129 @@ func (s *Server) Close() {
 	}
 }
 
-// RegisterAPIRoutes attaches all native Go `/api/*` endpoints onto mux.
+// RegisterAPIRoutes attaches all native Go `/v1/*` endpoints onto mux.
 func (s *Server) RegisterAPIRoutes(mux *http.ServeMux) {
-	// Core engine, simulator, race, practice, pilot, gate, and backup routes
+	// Core engine, simulator, race sessions, practice sessions, pilots, gates, and storage routes
 	s.apiSrv.RegisterRoutes(mux)
 
 	// Server capabilities, authentication & bbolt storage status
-	mux.HandleFunc("/api/capabilities", s.handleCapabilities)
-	mux.HandleFunc("/api/auth/login", s.handleAuthLogin)
-	mux.HandleFunc("/api/auth/config", s.handleAuthConfig)
-	mux.HandleFunc("/api/storage/status", s.handleStorageStatus)
-	mux.HandleFunc("/api/storage/backup-recorded", s.handleStorageBackupRecorded)
+	mux.HandleFunc("GET /v1/capabilities", s.handleCapabilities)
+	mux.HandleFunc("POST /v1/auth/sessions", s.handleAuthLogin)
+	mux.HandleFunc("GET /v1/auth/config", s.handleAuthConfig)
+	mux.HandleFunc("PUT /v1/auth/config", s.handleAuthConfig)
+	mux.HandleFunc("GET /v1/storage/status", s.handleStorageStatus)
+	mux.HandleFunc("POST /v1/storage:recordBackup", s.handleStorageBackupRecorded)
 
 	// Real-time event + binary telemetry WebSocket stream
-	mux.HandleFunc("/api/ws/stream", s.handleStreamWS)
+	mux.HandleFunc("GET /v1/ws/stream", s.handleStreamWS)
 
 	// Native Go USB serial & ESP32-C5 ROM bootloader flasher
-	mux.HandleFunc("/api/usb/ports", s.handleUSBPorts)
-	mux.HandleFunc("/api/usb/status", s.handleUSBStatus)
-	mux.HandleFunc("/api/usb/connect", s.handleUSBConnect)
-	mux.HandleFunc("/api/usb/disconnect", s.handleUSBDisconnect)
-	mux.HandleFunc("/api/usb/debug-slot", s.handleUSBDebugSlot)
-	mux.HandleFunc("/api/usb/command", s.handleUSBCommand)
-	mux.HandleFunc("/api/usb/known-forget", s.handleUSBKnownForget)
-	mux.HandleFunc("/api/hub/survey", s.handleHubSurvey)
-	mux.HandleFunc("/api/sim/hub-usb", s.handleSimHubUSB)
-	mux.HandleFunc("/api/ws/usb", s.handleUSBWS)
-	mux.HandleFunc("/api/usb/raw-ws", s.handleUSBRawWS)
+	mux.HandleFunc("GET /v1/usb/ports", s.handleUSBPorts)
+	mux.HandleFunc("GET /v1/usb/connections", s.handleUSBStatus)
+	mux.HandleFunc("POST /v1/usb/connections", s.handleUSBConnect)
+	mux.HandleFunc("POST /v1/usb/connections:disconnectAll", s.handleUSBDisconnectAll)
+	mux.HandleFunc("PUT /v1/usb/connections/{slotIndex}", s.handleUSBConnect)
+	mux.HandleFunc("DELETE /v1/usb/connections/{slotIndex}", s.handleUSBDisconnectSlot)
+	mux.HandleFunc("GET /v1/usb/debug-slot", s.handleUSBDebugSlot)
+	mux.HandleFunc("PUT /v1/usb/debug-slot", s.handleUSBDebugSlot)
+	mux.HandleFunc("POST /v1/usb:command", s.handleUSBCommand)
+	mux.HandleFunc("DELETE /v1/usb/known-timers/{fp}", s.handleUSBKnownForget)
+	mux.HandleFunc("GET /v1/usb/survey", s.handleHubSurvey)
+	mux.HandleFunc("PUT /v1/usb/survey", s.handleHubSurvey)
+	mux.HandleFunc("GET /v1/sim/hub-usb", s.handleSimHubUSB)
+	mux.HandleFunc("PUT /v1/sim/hub-usb", s.handleSimHubUSB)
+	mux.HandleFunc("GET /v1/ws/usb", s.handleUSBWS)
+	mux.HandleFunc("GET /v1/ws/usb-raw", s.handleUSBRawWS)
 
 	// Native Go LapRF 8-Way hardware client & LAN discovery
-	mux.HandleFunc("/api/laprf/status", s.handleLapRFStatus)
-	mux.HandleFunc("/api/laprf/connect", s.handleLapRFConnect)
-	mux.HandleFunc("/api/laprf/disconnect", s.handleLapRFDisconnect)
-	mux.HandleFunc("/api/laprf/sync", s.handleLapRFSync)
-	mux.HandleFunc("/api/laprf-discover", s.handleLapRFDiscover)
+	mux.HandleFunc("GET /v1/laprf/devices", s.handleLapRFDiscover)
+	mux.HandleFunc("GET /v1/laprf/sessions", s.handleLapRFStatus)
+	mux.HandleFunc("POST /v1/laprf/sessions", s.handleLapRFConnect)
+	mux.HandleFunc("DELETE /v1/laprf/sessions/{timerId}", s.handleLapRFDisconnect)
+	mux.HandleFunc("POST /v1/laprf:sync", s.handleLapRFSync)
 
 	// Native Go RotorHazard hardware client & LAN discovery
-	mux.HandleFunc("/api/rh/status", s.handleRHStatus)
-	mux.HandleFunc("/api/rh/connect", s.handleRHConnect)
-	mux.HandleFunc("/api/rh/disconnect", s.handleRHDisconnect)
-	mux.HandleFunc("/api/rh/sync", s.handleRHSync)
-	mux.HandleFunc("/api/rh/scan", s.handleRHScan)
-	mux.HandleFunc("/api/rh-discover", s.handleRotorHazardDiscover)
+	mux.HandleFunc("GET /v1/rh/devices", s.handleRotorHazardDiscover)
+	mux.HandleFunc("GET /v1/rh/sessions", s.handleRHStatus)
+	mux.HandleFunc("POST /v1/rh/sessions", s.handleRHConnect)
+	mux.HandleFunc("POST /v1/rh/sessions/{timerId}", s.handleRHSessionAction)
+	mux.HandleFunc("DELETE /v1/rh/sessions/{timerId}", s.handleRHDisconnect)
+	mux.HandleFunc("POST /v1/rh:sync", s.handleRHSync)
 
-	// Native Go LiveTime :5403 TCP emulator
-	mux.HandleFunc("/api/livetime/status", s.handleLiveTimeStatus)
-	mux.HandleFunc("/api/livetime/config", s.handleLiveTimeConfig)
+	// Native Go LapRF :5403 TCP emulator
+	mux.HandleFunc("GET /v1/laprf-emulator", s.handleLapRFEmulatorStatus)
+	mux.HandleFunc("PUT /v1/laprf-emulator", s.handleLapRFEmulatorConfig)
+	mux.HandleFunc("PATCH /v1/laprf-emulator", s.handleLapRFEmulatorConfig)
 
 	// Official MultiGP WebService proxy
-	mux.HandleFunc("/api/mgp/", s.handleMultiGPProxy)
+	mux.HandleFunc("POST /v1/race/multigp/proxy/{subPath...}", s.handleMultiGPProxy)
+	mux.HandleFunc("PUT /v1/race/multigp/proxy/{subPath...}", s.handleMultiGPProxy)
 }
 
-// Handler returns a complete http.Handler with CORS/Private-Network-Access support, `/api/*`, and embedded SPA.
+// Handler returns a complete http.Handler with CORS/Private-Network-Access support, `/v1/*`, and embedded SPA.
 func (s *Server) Handler() http.Handler {
-	mux := http.NewServeMux()
-	s.RegisterAPIRoutes(mux)
+	apiMux := http.NewServeMux()
+	s.RegisterAPIRoutes(apiMux)
 
-	if s.cfg.StaticFS != nil {
-		fileServer := http.FileServer(http.FS(s.cfg.StaticFS))
-		mux.HandleFunc("/sw.js", func(w http.ResponseWriter, _ *http.Request) {
-			w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
-			w.Header().Set("Cache-Control", "no-store")
-			_, _ = io.WriteString(w, "// SlapRF Portable: service worker disabled (assets served locally from binary)\nself.addEventListener('install', () => self.skipWaiting());\nself.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));\n")
-		})
-		mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path == "/docs" {
-				http.Redirect(w, r, "/docs/", http.StatusMovedPermanently)
-				return
-			}
-			w.Header().Set("Cache-Control", "no-cache")
-			cleanPath := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
-			if cleanPath == "" {
-				cleanPath = "index.html"
-			}
-			// Native Go Server Mode never serves WASM to the browser.
-			if cleanPath == "wasm" || strings.HasPrefix(cleanPath, "wasm/") {
-				http.NotFound(w, r)
-				return
-			}
-			if _, err := fs.Stat(s.cfg.StaticFS, cleanPath); err != nil {
-				if cleanPath != "docs" && !strings.HasPrefix(cleanPath, "docs/") && !strings.Contains(path.Base(cleanPath), ".") {
-					if indexBytes, readErr := fs.ReadFile(s.cfg.StaticFS, "index.html"); readErr == nil {
-						w.Header().Set("Content-Type", "text/html; charset=utf-8")
-						_, _ = w.Write(indexBytes)
-						return
-					}
+	if s.cfg.StaticFS == nil {
+		return s.withCORSAndPNA(apiMux)
+	}
+
+	staticMux := http.NewServeMux()
+	fileServer := http.FileServer(http.FS(s.cfg.StaticFS))
+	staticMux.HandleFunc("/sw.js", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-store")
+		_, _ = io.WriteString(w, "// SlapRF Portable: service worker disabled (assets served locally from binary)\nself.addEventListener('install', () => self.skipWaiting());\nself.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));\n")
+	})
+	staticMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/docs" {
+			http.Redirect(w, r, "/docs/", http.StatusMovedPermanently)
+			return
+		}
+		w.Header().Set("Cache-Control", "no-cache")
+		cleanPath := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
+		if cleanPath == "" {
+			cleanPath = "index.html"
+		}
+		// Native Go Server Mode never serves WASM or legacy unversioned /api paths to the browser.
+		if cleanPath == "wasm" || strings.HasPrefix(cleanPath, "wasm/") || cleanPath == "api" || strings.HasPrefix(cleanPath, "api/") {
+			http.NotFound(w, r)
+			return
+		}
+		if _, err := fs.Stat(s.cfg.StaticFS, cleanPath); err != nil {
+			if cleanPath != "docs" && !strings.HasPrefix(cleanPath, "docs/") && !strings.Contains(path.Base(cleanPath), ".") {
+				if indexBytes, readErr := fs.ReadFile(s.cfg.StaticFS, "index.html"); readErr == nil {
+					w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					_, _ = w.Write(indexBytes)
+					return
 				}
 			}
-			fileServer.ServeHTTP(w, r)
-		})
-	}
-	return s.withCORSAndPNA(mux)
+		}
+		fileServer.ServeHTTP(w, r)
+	})
+
+	combined := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if isVersionedAPIPath(r.URL.Path) {
+			apiMux.ServeHTTP(w, r)
+			return
+		}
+		staticMux.ServeHTTP(w, r)
+	})
+	return s.withCORSAndPNA(combined)
 }
 
 // NewStaticBrowserHandler returns a pure static HTTP handler that mimics https://slaprf.app
 // (Standalone Browser Demo Mode: serves index.html, dist/app.js, wasm/slaprf.wasm, wasm/wasm_exec.js,
-// styles, icons, and sounds with zero Go `/api/*` backend routes and zero `slaprf.db`).
+// styles, icons, and sounds with zero Go `/v1/*` backend routes and zero `slaprf.db`).
 func NewStaticBrowserHandler(siteFS fs.FS) http.Handler {
 	mux := http.NewServeMux()
 	if siteFS == nil {
 		return mux
 	}
 	fileServer := http.FileServer(http.FS(siteFS))
-	mux.HandleFunc("/api", http.NotFound)
-	mux.HandleFunc("/api/", http.NotFound)
+	mux.HandleFunc("/v1", http.NotFound)
+	mux.HandleFunc("/v1/", http.NotFound)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/docs" {
 			http.Redirect(w, r, "/docs/", http.StatusMovedPermanently)
@@ -633,7 +652,7 @@ func (s *Server) handleStorageBackupRecorded(w http.ResponseWriter, r *http.Requ
 	writeJSONNoStore(w, http.StatusOK, s.store.Status())
 }
 
-// --- MultiGP Reverse Proxy (/api/mgp/*) ---
+// --- MultiGP Reverse Proxy (/v1/race/multigp/proxy/*) ---
 
 func isSafeMultiGPPath(sub string) bool {
 	if sub == "" || strings.Contains(sub, "..") || strings.HasPrefix(sub, "/") {
@@ -661,7 +680,10 @@ func (s *Server) handleMultiGPProxy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	sub := strings.TrimPrefix(r.URL.Path, "/api/mgp/")
+	sub := r.PathValue("subPath")
+	if sub == "" {
+		sub = strings.TrimPrefix(r.URL.Path, "/v1/race/multigp/proxy/")
+	}
 	sub = strings.Trim(sub, "/")
 	if !isSafeMultiGPPath(sub) {
 		http.Error(w, "invalid MultiGP endpoint path", http.StatusBadRequest)
@@ -709,7 +731,7 @@ func (s *Server) handleMultiGPProxy(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(respBytes)
 }
 
-// --- LAN Target Validation & Discovery (/api/laprf-discover & /api/rh-discover) ---
+// --- LAN Target Validation & Discovery (/v1/laprf/devices & /v1/rh/devices) ---
 
 func isAllowedLapRFTargetIP(ip net.IP, allowLoopback bool) bool {
 	if ip == nil || ip.IsUnspecified() || ip.IsMulticast() {
@@ -788,7 +810,7 @@ func (s *Server) handleLapRFDiscover(w http.ResponseWriter, r *http.Request) {
 		}
 	} else {
 		selfIPs := make(map[string]bool)
-		emulPort := s.liveTimeMgr.listeningPort()
+		emulPort := s.laprfEmulatorMgr.listeningPort()
 		for _, ipStr := range LanIPs() {
 			if emulPort == port {
 				selfIPs[ipStr] = true
@@ -896,7 +918,7 @@ func (s *Server) handleRotorHazardDiscover(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
 	}
-	if r.Method != http.MethodGet && r.Method != http.MethodPost {
+	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}

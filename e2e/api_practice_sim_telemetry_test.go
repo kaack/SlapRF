@@ -3,6 +3,7 @@
 package e2e_test
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -11,15 +12,17 @@ import (
 
 func TestAPI_PracticeSessionLifecyclePilotsTagsAndClearLaps(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/live")
+	h.BootClean("#/practice")
 
-	// 1. Create a new Practice session via POST /api/practice/action ("create_session").
+	// 1. Create a new Practice session via POST /v1/practice/sessions (returns 201 Created).
 	var st api.FullStateResponse
-	h.APIPost("/api/practice/action", map[string]any{
-		"action": "create_session",
-		"name":   "API Tuning Session",
-		"tags":   []string{"5-inch", "Tune"},
+	createRes := h.APIPost("/v1/practice/sessions", map[string]any{
+		"name": "API Tuning Session",
+		"tags": []string{"5-inch", "Tune"},
 	}, &st)
+	if createRes.Status != 201 {
+		t.Fatalf("expected 201 Created from POST /v1/practice/sessions, got %d", createRes.Status)
+	}
 
 	var targetSessionID string
 	for _, s := range st.PracticeState.Sessions {
@@ -31,25 +34,21 @@ func TestAPI_PracticeSessionLifecyclePilotsTagsAndClearLaps(t *testing.T) {
 		t.Fatalf("expected created session 'API Tuning Session' in PracticeState.Sessions")
 	}
 
-	// 2. Rename session and update tags via API.
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":    "rename_session",
-		"sessionId": targetSessionID,
-		"name":      "PID Filter Dial-In",
-	}, &st)
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":    "set_session_tags",
-		"sessionId": targetSessionID,
-		"tags":      []string{"RaceDay", "6S"},
+	// 2. Rename session and update tags via PATCH /v1/practice/sessions/{sessionId}.
+	sessPath := fmt.Sprintf("/v1/practice/sessions/%s", targetSessionID)
+	h.APIPatch(sessPath, map[string]any{
+		"name": "PID Filter Dial-In",
+		"tags": []string{"RaceDay", "6S"},
 	}, &st)
 
-	// 3. Manage session pilots: add new inline pilot ("SkyWalker"), change channel, remove pilot.
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":       "add_session_pilot",
-		"sessionId":    targetSessionID,
+	// 3. Manage session pilots: add new inline pilot ("SkyWalker") via POST .../pilots, change channel via PUT .../pilots/{slot}, remove via DELETE.
+	addPilotRes := h.APIPost(sessPath+"/pilots", map[string]any{
 		"callsign":     "SkyWalker",
 		"phoneticName": "Sky Walker",
 	}, &st)
+	if addPilotRes.Status != 201 {
+		t.Fatalf("expected 201 Created from POST %s/pilots, got %d", sessPath, addPilotRes.Status)
+	}
 
 	var skySlot int
 	for _, p := range st.Pilots {
@@ -61,48 +60,31 @@ func TestAPI_PracticeSessionLifecyclePilotsTagsAndClearLaps(t *testing.T) {
 		t.Fatalf("expected inline session pilot SkyWalker added to global Pilots pool")
 	}
 
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":    "set_session_pilot_channel",
-		"sessionId": targetSessionID,
-		"slotIndex": skySlot,
-		"band":      1,
-		"channel":   8,
+	h.APIPut(fmt.Sprintf("%s/pilots/%d", sessPath, skySlot), map[string]any{
+		"band":    1,
+		"channel": 8,
 	}, &st)
 
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":    "remove_session_pilot",
-		"sessionId": targetSessionID,
-		"slotIndex": skySlot,
-	}, &st)
+	h.APIDelete(fmt.Sprintf("%s/pilots/%d", sessPath, skySlot), &st)
 	h.MilestoneScreenshot("api-practice-session-pilots-and-tags")
 
-	// 4. Exercise start -> pause -> resume -> stop -> delete lifecycle via API.
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":         "start_session",
-		"sessionId":      targetSessionID,
+	// 4. Exercise :start -> :pause -> :resume -> :stop -> DELETE lifecycle via API.
+	h.APIPost(sessPath+":start", map[string]any{
 		"preemptOngoing": true,
 	}, &st)
 	if st.PracticeState.ActiveSessionID != targetSessionID {
-		t.Fatalf("expected ActiveSessionID=%s after start_session, got %s", targetSessionID, st.PracticeState.ActiveSessionID)
+		t.Fatalf("expected ActiveSessionID=%s after :start, got %s", targetSessionID, st.PracticeState.ActiveSessionID)
 	}
 
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":    "pause_session",
-		"sessionId": targetSessionID,
-	}, &st)
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":         "resume_session",
-		"sessionId":      targetSessionID,
+	// Deleting a live practice session must fail with 409 Conflict!
+	h.APIExpectStatus("DELETE", sessPath, nil, 409)
+
+	h.APIPost(sessPath+":pause", map[string]any{}, &st)
+	h.APIPost(sessPath+":resume", map[string]any{
 		"preemptOngoing": true,
 	}, &st)
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":    "stop_session",
-		"sessionId": targetSessionID,
-	}, &st)
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":    "delete_session",
-		"sessionId": targetSessionID,
-	}, &st)
+	h.APIPost(sessPath+":stop", map[string]any{}, &st)
+	h.APIDelete(sessPath, &st)
 
 	for _, s := range st.PracticeState.Sessions {
 		if s.SessionID == targetSessionID {
@@ -113,24 +95,22 @@ func TestAPI_PracticeSessionLifecyclePilotsTagsAndClearLaps(t *testing.T) {
 
 func TestAPI_PracticeLiveSimulatorLapsCrossingsSummariesAndReset(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/live")
+	h.BootClean("#/practice")
 	h.ConnectSimHubH1()
 
 	// Start active Practice session, set 20x simulator speed, and trigger pack burst via API!
 	var st api.FullStateResponse
 	initSt := h.APIState()
 	sessionID := initSt.PracticeState.Sessions[0].SessionID
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":         "start_session",
-		"sessionId":      sessionID,
+	h.APIPost(fmt.Sprintf("/v1/practice/sessions/%s:start", sessionID), map[string]any{
 		"preemptOngoing": true,
 	}, &st)
-	h.APIPost("/api/sim/speed", map[string]any{"speedMultiplier": 20}, &st)
-	h.APIPost("/api/sim/pack-burst", map[string]any{}, &st)
-	h.APIPost("/api/sim/pilot-action", map[string]any{"slotIndex": 1, "action": "fly"}, &st)
+	h.APIPatch("/v1/sim", map[string]any{"speedMultiplier": 20}, &st)
+	h.APIPost("/v1/sim:packBurst", map[string]any{}, &st)
+	h.APIPost("/v1/sim/pilots/1:action", map[string]any{"action": "fly"}, &st)
 
-	// Poll GET /api/state until real DSP-detected crossings, multi-sector laps, and summaries populate!
-	h.WaitUntil("WASM /api/state records >= 3 completed multi-sector laps and summaries", 20*time.Second, func() (bool, error) {
+	// Poll GET /v1/state until real DSP-detected crossings, multi-sector laps, and summaries populate!
+	h.WaitUntil("engine /v1/state records >= 3 completed multi-sector laps and summaries", 20*time.Second, func() (bool, error) {
 		cur := h.APIState()
 		if len(cur.Laps) < 3 || len(cur.Crossings) < 8 || len(cur.Summaries) == 0 {
 			return false, nil
@@ -145,18 +125,15 @@ func TestAPI_PracticeLiveSimulatorLapsCrossingsSummariesAndReset(t *testing.T) {
 	})
 	h.MilestoneScreenshot("api-practice-fast-sim-laps-scored")
 
-	// Exercise clear_session_laps and POST /api/session/reset, verifying 0 laps in /api/state.
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":    "clear_session_laps",
-		"sessionId": sessionID,
-	}, &st)
+	// Exercise :clearLaps and POST /v1/practice:reset, verifying 0 laps in /v1/state.
+	h.APIPost(fmt.Sprintf("/v1/practice/sessions/%s:clearLaps", sessionID), map[string]any{}, &st)
 	if len(st.Laps) != 0 {
-		t.Fatalf("expected 0 laps after clear_session_laps, got %d", len(st.Laps))
+		t.Fatalf("expected 0 laps after :clearLaps, got %d", len(st.Laps))
 	}
 
-	h.APIPost("/api/session/reset", map[string]any{}, &st)
+	h.APIPost("/v1/practice:reset", map[string]any{}, &st)
 	if len(st.Laps) != 0 || len(st.Crossings) != 0 {
-		t.Fatalf("expected 0 laps and crossings after /api/session/reset")
+		t.Fatalf("expected 0 laps and crossings after /v1/practice:reset")
 	}
 }
 
@@ -165,16 +142,15 @@ func TestAPI_WasmRealtimeStreamEnvelopesAndTrackWalker(t *testing.T) {
 	h.BootClean("#/track")
 	h.ConnectSimHubH1()
 
-	// Exercise Track Walker mode via POST /api/sim/track-walker (active=true -> crossings along gates -> active=false).
+	// Exercise Track Walker mode via PATCH /v1/sim {"trackWalker": true}.
 	var st api.FullStateResponse
-	h.APIPost("/api/sim/speed", map[string]any{"speedMultiplier": 20}, &st)
-	h.APIPost("/api/sim/track-walker", map[string]any{"active": true}, &st)
+	h.APIPatch("/v1/sim", map[string]any{"speedMultiplier": 20, "trackWalker": true}, &st)
 	if st.SimState == nil || !st.SimState.TrackWalkerActive {
-		t.Fatalf("expected SimState.TrackWalkerActive=true after /api/sim/track-walker")
+		t.Fatalf("expected SimState.TrackWalkerActive=true after PATCH /v1/sim")
 	}
 
-	// Verify live 50 Hz binary telemetry frames are actively updating the UI store from WASM!
-	h.WaitUntil("live telemetry frames updating gate RSSI in WASM/store", 10*time.Second, func() (bool, error) {
+	// Verify live 50 Hz binary telemetry frames are actively updating the UI store!
+	h.WaitUntil("live telemetry frames updating gate RSSI", 10*time.Second, func() (bool, error) {
 		stNow := h.APIStatus()
 		onlineCount := 0
 		for _, tm := range stNow.Timers {
@@ -186,7 +162,7 @@ func TestAPI_WasmRealtimeStreamEnvelopesAndTrackWalker(t *testing.T) {
 	})
 	h.MilestoneScreenshot("api-track-walker-and-live-telemetry")
 
-	h.APIPost("/api/sim/track-walker", map[string]any{"active": false}, &st)
+	h.APIPatch("/v1/sim", map[string]any{"trackWalker": false}, &st)
 	if st.SimState.TrackWalkerActive {
 		t.Fatalf("expected SimState.TrackWalkerActive=false after disabling")
 	}
@@ -194,14 +170,12 @@ func TestAPI_WasmRealtimeStreamEnvelopesAndTrackWalker(t *testing.T) {
 
 func TestAPI_PracticeAndRaceMutualPreemptionGuards(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/live")
+	h.BootClean("#/practice")
 
-	// 1. Start Practice session 1.
+	// 1. Start Practice session 1 via :start.
 	var st api.FullStateResponse
 	pID := h.APIState().PracticeState.Sessions[0].SessionID
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":         "start_session",
-		"sessionId":      pID,
+	h.APIPost(fmt.Sprintf("/v1/practice/sessions/%s:start", pID), map[string]any{
 		"preemptOngoing": true,
 	}, &st)
 	if st.PracticeState.ActiveSessionID != pID {
@@ -209,19 +183,16 @@ func TestAPI_PracticeAndRaceMutualPreemptionGuards(t *testing.T) {
 	}
 
 	// 2. Create & configure a Single Elimination race and start Heat 1 -> Practice auto-pauses!
-	h.APIPost("/api/events/action", map[string]any{
-		"action": "create_race",
-		"name":   "Preemption Cup",
+	h.APIPost("/v1/race/sessions", map[string]any{
+		"name": "Preemption Cup",
 	}, &st)
 	raceID := st.RaceState.RaceID
-	h.APIPost("/api/race/bracket-edit", map[string]any{
+	h.APIPost(fmt.Sprintf("/v1/race/sessions/%s/bracket:edit", raceID), map[string]any{
 		"action":     "apply_template",
-		"raceId":     raceID,
 		"templateId": "single_elimination",
 		"targetLaps": 2,
 	}, &st)
-	h.APIPost("/api/race/control", map[string]any{
-		"raceId":         raceID,
+	h.APIPost(fmt.Sprintf("/v1/race/sessions/%s/heats/current:control", raceID), map[string]any{
 		"action":         "start",
 		"preemptOngoing": true,
 	}, &st)
@@ -229,20 +200,16 @@ func TestAPI_PracticeAndRaceMutualPreemptionGuards(t *testing.T) {
 		t.Fatalf("expected starting Race heat to pause active Practice session, got ActiveSessionID=%q", st.PracticeState.ActiveSessionID)
 	}
 
-	// 3. Attempting to resume Practice WITHOUT preemptOngoing while Race is active must return HTTP 400!
-	resBlocked := h.APIExpectStatus("POST", "/api/practice/action", map[string]any{
-		"action":         "resume_session",
-		"sessionId":      pID,
+	// 3. Attempting to resume Practice WITHOUT preemptOngoing while Race is active must return HTTP 409 Conflict!
+	resBlocked := h.APIExpectStatus("POST", fmt.Sprintf("/v1/practice/sessions/%s:resume", pID), map[string]any{
 		"preemptOngoing": false,
-	}, 400)
+	}, 409)
 	if resBlocked.Body == "" {
-		t.Fatalf("expected descriptive conflict error message on 400")
+		t.Fatalf("expected descriptive conflict error message on 409")
 	}
 
 	// 4. Resuming Practice WITH preemptOngoing=true cleanly pauses the ongoing Race and activates Practice!
-	h.APIPost("/api/practice/action", map[string]any{
-		"action":         "resume_session",
-		"sessionId":      pID,
+	h.APIPost(fmt.Sprintf("/v1/practice/sessions/%s:resume", pID), map[string]any{
 		"preemptOngoing": true,
 	}, &st)
 	if st.PracticeState.ActiveSessionID != pID {

@@ -107,22 +107,22 @@ func TestComponent_DebugViewSelfTestLiveSignalAndSpectrumScan(t *testing.T) {
 	h.MilestoneScreenshot("debug-spectrum-and-axis-preset")
 }
 
-func TestComponent_LiveTimeViewStatusHostCopyPillsAndToggle(t *testing.T) {
+func TestComponent_LapRFEmulatorViewStatusHostCopyPillsAndToggle(t *testing.T) {
 	h := NewHarness(t)
 	h.BootClean("#/setup/laprf-emulator")
 
-	// Enable the LapRF TCP :5403 emulator from Setup -> sidebar reveals #/livetime link!
-	ltSwitchLabel := h.Page.Locator(`[data-slot="livetime"] label.switch`).First()
-	h.MustBeVisible(ltSwitchLabel, "Setup LapRF emulator switch")
-	if err := ltSwitchLabel.Click(); err != nil {
+	// Enable the LapRF TCP :5403 emulator from Setup -> sidebar reveals #/laprf-emulator link!
+	emulSwitchLabel := h.Page.Locator(`[data-slot="laprf-emulator"] label.switch`).First()
+	h.MustBeVisible(emulSwitchLabel, "Setup LapRF emulator switch")
+	if err := emulSwitchLabel.Click(); err != nil {
 		t.Fatalf("enable LapRF emulator switch: %v", err)
 	}
 
-	h.NavigateSidebar("livetime")
+	h.NavigateSidebar("laprf-emulator")
 
 	// Verify host 127.0.0.1 and port 5403 copy pills work with clipboard permissions.
-	copyHostBtn := h.Page.Locator(`button.livetime-copy-pill[data-copy="127.0.0.1"]`).First()
-	copyPortBtn := h.Page.Locator(`button.livetime-copy-pill[data-copy="5403"]`).First()
+	copyHostBtn := h.Page.Locator(`button.laprf-emulator-copy-pill[data-copy="127.0.0.1"]`).First()
+	copyPortBtn := h.Page.Locator(`button.laprf-emulator-copy-pill[data-copy="5403"]`).First()
 	h.MustBeVisible(copyHostBtn, "Copy 127.0.0.1 pill")
 	h.MustBeVisible(copyPortBtn, "Copy 5403 port pill")
 
@@ -134,15 +134,15 @@ func TestComponent_LiveTimeViewStatusHostCopyPillsAndToggle(t *testing.T) {
 		s, _ := res.(string)
 		return err == nil && s == "5403", nil
 	})
-	h.MilestoneScreenshot("livetime-view-active-and-copied")
+	h.MilestoneScreenshot("laprf-emulator-view-active-and-copied")
 
-	// Toggle off from LiveTimeView switch (use JS click on input so 1s statusSlot refresh cannot race pointer hit-testing).
+	// Toggle off from LapRFEmulatorView switch (use JS click on input so 1s statusSlot refresh cannot race pointer hit-testing).
 	if _, err := h.Page.Evaluate(`() => {
-		const inp = document.querySelector('input[data-action="toggle-livetime"]');
-		if (!inp) throw new Error('toggle-livetime input not found');
+		const inp = document.querySelector('input[data-action="toggle-laprf-emulator"]');
+		if (!inp) throw new Error('toggle-laprf-emulator input not found');
 		inp.click();
 	}`); err != nil {
-		t.Fatalf("disable LiveTime relay switch: %v", err)
+		t.Fatalf("disable LapRF emulator relay switch: %v", err)
 	}
 	h.MustContainText(h.Page.Locator(`[data-slot="status"]`).First(), "Disabled")
 }

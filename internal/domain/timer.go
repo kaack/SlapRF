@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// GateRole defines whether a XIAO ESP32-C5 gate timer is the official MultiGP Start/Finish gate
-// (which emits detections to LiveTime) or an intermediate sector checkpoint.
+// GateRole defines whether a XIAO ESP32-C5 gate timer is the Start/Finish gate
+// (which emits detections to the LapRF 8-Way emulator) or an intermediate sector checkpoint.
 type GateRole string
 
 const (

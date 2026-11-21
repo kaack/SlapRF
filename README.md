@@ -48,7 +48,7 @@ Assemble battery-powered 5.8 GHz gate timers from off-the-shelf components with 
 - **[Multi-Gate Section Splits ->](https://slaprf.app/docs/journeys/multi-gate-splits/)**: Place wireless Spoke timers around the course to measure `S1`, `S2`, and `S3` section splits and consistency.
 - **[Running a Race Event ->](https://slaprf.app/docs/journeys/race-events/)**: Stage brackets, automated horns, Marshal Review recorded RSSI waveforms, and MultiGP Chapter sync.
 - **[RotorHazard & ImmersionRC LapRF 8-Way ->](https://slaprf.app/docs/journeys/external-timers/)**: Connect the SlapRF app to existing RotorHazard servers/nodes or LapRF 8-Way Ethernet pucks.
-- **[App & UI Reference ->](https://slaprf.app/docs/reference/ui-reference/)** · **[Troubleshooting ->](https://slaprf.app/docs/reference/troubleshooting/)**
+- **[App & UI Reference ->](https://slaprf.app/docs/reference/ui-reference/)** · **[API Reference (OpenAPI & AsyncAPI) ->](https://slaprf.app/docs/reference/api-reference/)** · **[Troubleshooting ->](https://slaprf.app/docs/reference/troubleshooting/)**
 
 ## Developer Docs & Related Projects
 

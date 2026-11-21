@@ -97,7 +97,7 @@ export interface TrackNode {
   framesRxCount: number;
 }
 
-/** Calibrates one track node for one pilot (`POST /api/thresholds`). enterDbm 0 = back to the pilot's default. */
+/** Calibrates one track node for one pilot (`PUT /v1/track/thresholds`). enterDbm 0 = back to the pilot's default. */
 export interface GateThresholdUpdate {
   gateId: number;
   slotIndex: number;
@@ -111,7 +111,7 @@ export interface GateThresholdUpdate {
 }
 
 /**
- * Edit to one track node (`POST /api/track/update`). An empty name means "Gate N" by position.
+ * Edit to one track node (`PUT /v1/track/gates/{gateId}`). An empty name means "Gate N" by position.
  * trackOrder (0-based) moves the node; omit it to leave the node where it is.
  * assignedTimerId binds a physical detected timer (1..16) or 0 to unassign.
  */
@@ -203,8 +203,8 @@ export interface PilotTrackSummary {
   sectorStats: SectorBottleneckStat[];
 }
 
-/** LapRF emulator counters from the WASM engine (enabled/relay state lives in services/livetime_relay.ts). */
-export interface LiveTimeStatus {
+/** LapRF 8-Way emulator counters from the timing engine (enabled/relay state lives in services/laprf_emulator_relay.ts). */
+export interface LapRFEmulatorStatus {
   connectedClients: number;
   detectionsSent: number;
   statusFramesSent: number;
@@ -1213,14 +1213,14 @@ export interface FullStateResponse {
   simState?: SimState;
   simMultiGP?: SimMultiGPState;
   raceArmed: boolean;
-  liveTimeStatus: LiveTimeStatus;
+  laprfEmulatorStatus: LapRFEmulatorStatus;
   raceState?: RaceTournamentState;
   eventState?: EventManagerState;
   practiceState?: PracticeManagerState;
   importSummary?: PilotCSVImportSummary;
 }
 
-/** Lightweight periodic status poll (`GET /api/status`). */
+/** Lightweight periodic status poll (`GET /v1/status`). */
 export interface StatusResponse {
   serverTimestampUs?: number;
   timingHardwareMode?: TimingHardwareMode;
@@ -1230,7 +1230,7 @@ export interface StatusResponse {
   simState?: SimState;
   simMultiGP?: SimMultiGPState;
   raceArmed: boolean;
-  liveTimeStatus: LiveTimeStatus;
+  laprfEmulatorStatus: LapRFEmulatorStatus;
   raceState?: RaceTournamentState;
   eventState?: EventManagerState;
   practiceState?: PracticeManagerState;

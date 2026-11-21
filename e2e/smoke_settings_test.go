@@ -14,17 +14,17 @@ import (
 
 func TestBootCleanStateAndSidebarNavigation(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/live")
+	h.BootClean("#/practice")
 
-	// 1. Verify Portable /api/capabilities endpoint responds 200 OK with expected bridges enabled.
-	resp, err := http.Get(h.BaseURL + "/api/capabilities")
+	// 1. Verify Portable /v1/capabilities endpoint responds 200 OK with expected bridges enabled.
+	resp, err := http.Get(h.BaseURL + "/v1/capabilities")
 	if err != nil {
-		t.Fatalf("GET /api/capabilities failed: %v", err)
+		t.Fatalf("GET /v1/capabilities failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("GET /api/capabilities status = %d, want 200; body=%s", resp.StatusCode, string(body))
+		t.Fatalf("GET /v1/capabilities status = %d, want 200; body=%s", resp.StatusCode, string(body))
 	}
 	var caps struct {
 		Portable      bool `json:"portable"`
@@ -33,7 +33,7 @@ func TestBootCleanStateAndSidebarNavigation(t *testing.T) {
 		MultigpProxy  bool `json:"multigpProxy"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&caps); err != nil {
-		t.Fatalf("decode /api/capabilities: %v", err)
+		t.Fatalf("decode /v1/capabilities: %v", err)
 	}
 	if !caps.Portable || !caps.LaprfEmulator || !caps.LaprfClient || !caps.MultigpProxy {
 		t.Fatalf("unexpected capabilities payload: %+v", caps)
@@ -59,7 +59,7 @@ func TestBootCleanStateAndSidebarNavigation(t *testing.T) {
 		{id: "network", mustHave: `main`},
 		{id: "setup", mustHave: `[data-section-anchor="datasource"]`},
 		{id: "about", mustHave: `main`},
-		{id: "live", mustHave: `[data-practice-act="create-session-inline"]`},
+		{id: "practice", mustHave: `[data-practice-act="create-session-inline"]`},
 	}
 
 	for _, rt := range routes {

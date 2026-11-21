@@ -21,11 +21,11 @@ import {
   openDatasourceSettings,
   subscribeCapabilities,
 } from "../services/capabilities";
-import { sharedLiveTimeRelay } from "../services/livetime_relay";
+import { sharedLapRFEmulatorRelay } from "../services/laprf_emulator_relay";
 import { sharedMultiGPService } from "../services/multigp_service";
 import { AppStore } from "../state/store";
 
-const PRIMARY_MOBILE_ROUTES = new Set<RouteId>(["races", "live", "pilots", "track"]);
+const PRIMARY_MOBILE_ROUTES = new Set<RouteId>(["races", "practice", "pilots", "track"]);
 
 export class Sidebar extends Component {
   private readonly store: AppStore;
@@ -55,7 +55,7 @@ export class Sidebar extends Component {
       </div>
       <div class="sidebar-nav-shell">
         <nav class="nav nav-flat" data-sidebar-nav>
-          ${visibleRoutes.map((r) => `<a class="nav-item ${PRIMARY_MOBILE_ROUTES.has(r.id) ? "is-mobile-primary" : "is-mobile-secondary"}" href="${getRememberedRouteHash(r.id)}" data-route="${r.id}" ${r.simOnly ? 'data-sim-only="1"' : ""}${r.liveTimeOnly ? 'data-livetime-only="1"' : ""}>${r.icon()}<span>${r.label}</span></a>`).join("")}
+          ${visibleRoutes.map((r) => `<a class="nav-item ${PRIMARY_MOBILE_ROUTES.has(r.id) ? "is-mobile-primary" : "is-mobile-secondary"}" href="${getRememberedRouteHash(r.id)}" data-route="${r.id}" ${r.simOnly ? 'data-sim-only="1"' : ""}${r.laprfEmulatorOnly ? 'data-laprf-emulator-only="1"' : ""}>${r.icon()}<span>${r.label}</span></a>`).join("")}
           <button
             type="button"
             class="nav-item mobile-more-tab-btn"
@@ -102,7 +102,7 @@ export class Sidebar extends Component {
                 class="mobile-more-tile"
                 href="${getRememberedRouteHash(r.id)}"
                 data-route="${r.id}"
-                ${r.simOnly ? 'data-sim-only="1"' : ""}${r.liveTimeOnly ? 'data-livetime-only="1"' : ""}
+                ${r.simOnly ? 'data-sim-only="1"' : ""}${r.laprfEmulatorOnly ? 'data-laprf-emulator-only="1"' : ""}
               >
                 <span class="mobile-more-tile-icon">${r.icon()}</span>
                 <span class="mobile-more-tile-label">${r.label}</span>
@@ -248,7 +248,7 @@ export class Sidebar extends Component {
       })
     );
     this.onDispose(
-      sharedLiveTimeRelay.subscribe(() => {
+      sharedLapRFEmulatorRelay.subscribe(() => {
         this.syncConditionalNav();
       })
     );
@@ -326,7 +326,7 @@ export class Sidebar extends Component {
     const aCtx = getAnalyticsTopBarContext();
     const isSubPage =
       (route === "races" && rCtx.tab !== "directory") ||
-      (route === "live" && pCtx.tab === "session") ||
+      (route === "practice" && pCtx.tab === "session") ||
       (route === "pilot" && aCtx.mode === "scope");
     this.el.closest(".app")?.classList.toggle("is-mobile-subpage", isSubPage);
   }
@@ -356,9 +356,9 @@ export class Sidebar extends Component {
     this.el.querySelectorAll<HTMLElement>("[data-sim-only]").forEach((a) => {
       a.style.display = simOn ? "" : "none";
     });
-    const ltOn = isPortable && !isExternalTimer && sharedLiveTimeRelay.snapshot.enabled;
-    this.el.querySelectorAll<HTMLElement>("[data-livetime-only]").forEach((a) => {
-      a.style.display = ltOn ? "" : "none";
+    const emulOn = isPortable && !isExternalTimer && sharedLapRFEmulatorRelay.snapshot.enabled;
+    this.el.querySelectorAll<HTMLElement>("[data-laprf-emulator-only]").forEach((a) => {
+      a.style.display = emulOn ? "" : "none";
     });
     const hideFlasher = isExternalTimer;
     this.el.querySelectorAll<HTMLElement>('[data-route="flasher"]').forEach((a) => {

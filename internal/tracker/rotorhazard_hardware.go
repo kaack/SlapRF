@@ -543,7 +543,7 @@ func (e *Engine) InjectExternalRHCrossing(
 		return
 	}
 
-	// Store native 0..255 peak RSSI on HeatCrossing/GateCrossingEvent while mapping LapRFPeakHeight for LiveTime bridges
+	// Store native 0..255 peak RSSI on HeatCrossing/GateCrossingEvent while mapping LapRFPeakHeight for LapRF emulator bridges
 	laprfEq := float32(math.Min(3200.0, math.Max(400.0, 320.0+float64(peakRSSI)*10.5)))
 	ev := domain.GateCrossingEvent{
 		GateID:            gate.GateID,

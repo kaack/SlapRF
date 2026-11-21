@@ -54,7 +54,7 @@ func TestSimBackendWebServiceLifecycle(t *testing.T) {
 
 	call := func(subPath, query string, body any) *httptest.ResponseRecorder {
 		raw, _ := json.Marshal(body)
-		url := "/api/sim/mgp/" + subPath
+		url := "/v1/sim/mgp/" + subPath
 		if query != "" {
 			url += "?" + query
 		}

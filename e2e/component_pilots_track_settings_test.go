@@ -57,10 +57,10 @@ func TestComponent_PilotSlotsEditorSearchDuplicateGuardAndRemove(t *testing.T) {
 		st := h.APIState()
 		return len(st.Pilots) == 11 && st.Pilots[10].Callsign == "NightHawk", nil
 	})
-	// Verify via live in-browser WASM API (`GET /api/state`) that NightHawk was persisted on slot 11.
+	// Verify via live API (`GET /v1/state`) that NightHawk was persisted on slot 11.
 	stAdded := h.APIState()
 	if len(stAdded.Pilots) != 11 || stAdded.Pilots[10].Callsign != "NightHawk" {
-		t.Fatalf("expected /api/state to report 11 pilots with NightHawk on slot 11, got len=%d", len(stAdded.Pilots))
+		t.Fatalf("expected /v1/state to report 11 pilots with NightHawk on slot 11, got len=%d", len(stAdded.Pilots))
 	}
 
 	// 3. Navigate to page 2 (or filter by NightHawk) and remove newly added pilot slot 11 via [data-remove-pilot="11"].
@@ -77,7 +77,7 @@ func TestComponent_PilotSlotsEditorSearchDuplicateGuardAndRemove(t *testing.T) {
 		return len(h.APIState().Pilots) == 10, nil
 	})
 	if got := len(h.APIState().Pilots); got != 10 {
-		t.Fatalf("expected /api/state pilot count=10 after UI removal, got %d", got)
+		t.Fatalf("expected /v1/state pilot count=10 after UI removal, got %d", got)
 	}
 	h.MilestoneScreenshot("pilot-slots-removed")
 }
@@ -100,7 +100,7 @@ func TestComponent_PilotSlotsEditorHardwareModeColumns(t *testing.T) {
 	h.MustContainText(headRowLapRF, "Default channel")
 	stLapRF := h.APIState()
 	if string(stLapRF.TimingHardwareMode) != "laprf" {
-		t.Fatalf("expected /api/state mode=laprf, got mode=%s", stLapRF.TimingHardwareMode)
+		t.Fatalf("expected /v1/state mode=laprf, got mode=%s", stLapRF.TimingHardwareMode)
 	}
 	h.MilestoneScreenshot("pilot-slots-laprf-columns")
 }
@@ -136,7 +136,7 @@ func TestComponent_TrackEditorMakeStartFlagCycle(t *testing.T) {
 	})
 	stTrack := h.APIState()
 	if len(stTrack.Gates) != 4 || string(stTrack.Gates[1].Role) != "START_FINISH" {
-		t.Fatalf("expected /api/state Gates[1].Role=START_FINISH, got %+v", stTrack.Gates)
+		t.Fatalf("expected /v1/state Gates[1].Role=START_FINISH, got %+v", stTrack.Gates)
 	}
 	h.MilestoneScreenshot("track-editor-cycled-start-gate")
 }
@@ -191,7 +191,7 @@ func TestComponent_TrackEditorDragGateOffToUnassignedAndBack(t *testing.T) {
 		return gErr == nil && cnt == 3, nil
 	})
 	if got := len(h.APIState().Gates); got != 3 {
-		t.Fatalf("expected /api/state to report 3 gates after unassign drop, got %d", got)
+		t.Fatalf("expected /v1/state to report 3 gates after unassign drop, got %d", got)
 	}
 	h.MilestoneScreenshot("track-editor-unassigned-gate")
 
@@ -275,7 +275,7 @@ func TestComponent_TimingRulesEditorGlobalEditInlineResetAndPerGateOverride(t *t
 	if err := crossInput.Press("Enter"); err != nil {
 		t.Fatalf("press Enter on minCrossingSec: %v", err)
 	}
-	h.WaitUntil("/api/state Gate 2 rule override minCrossingSec=0.25 saved", 5*time.Second, func() (bool, error) {
+	h.WaitUntil("/v1/state Gate 2 rule override minCrossingSec=0.25 saved", 5*time.Second, func() (bool, error) {
 		for _, g := range h.APIState().Gates {
 			if g.GateID == 2 && g.RuleOverrides.MinCrossingSec != nil && *g.RuleOverrides.MinCrossingSec == 0.25 {
 				return true, nil
@@ -284,7 +284,7 @@ func TestComponent_TimingRulesEditorGlobalEditInlineResetAndPerGateOverride(t *t
 		return false, nil
 	})
 	if r := h.APIRules(); r.MinLapSec != 5.0 {
-		t.Fatalf("expected global /api/rules MinLapSec=5.0 after reset, got %v", r.MinLapSec)
+		t.Fatalf("expected global /v1/timing/rules MinLapSec=5.0 after reset, got %v", r.MinLapSec)
 	}
 	h.MilestoneScreenshot("timing-rules-gate2-override")
 }

@@ -71,7 +71,7 @@ func TestComponent_RacesDirectoryFiltersTagsAndRename(t *testing.T) {
 		}
 	}
 	if !foundShootout {
-		t.Fatalf("expected /api/state EventState.Races to include renamed Sunday Shootout")
+		t.Fatalf("expected /v1/state EventState.Races to include renamed Sunday Shootout")
 	}
 
 	// 5. Verify "+ Add" sits immediately to the right of "Search or add race..." at 32px height,
@@ -667,17 +667,14 @@ func TestComponent_MultiGPModalsImportPreviewAndSyncDialog(t *testing.T) {
 		t.Fatalf("click Upload to MultiGP: %v", err)
 	}
 	h.MustBeHidden(syncModal, "MultiGPSyncModal closed after successful upload")
-	// Verify via /api/mgp-sync/plan on the WASM API that pending uploads dropped to 0!
+	// Verify via GET /v1/race/sessions/{raceId}/multigp/sync-plan that pending uploads dropped to 0!
 	var syncPlan struct {
 		HeatUploads []any `json:"heatUploads"`
 	}
 	stAfterSync := h.APIState()
-	h.APIPost("/api/mgp-sync/plan", map[string]any{
-		"raceId":   stAfterSync.RaceState.RaceID,
-		"forceAll": false,
-	}, &syncPlan)
+	h.APIGet("/v1/race/sessions/"+stAfterSync.RaceState.RaceID+"/multigp/sync-plan", &syncPlan)
 	if len(syncPlan.HeatUploads) != 0 {
-		t.Fatalf("expected 0 unsynced heatUploads in /api/mgp-sync/plan after UI sync, got %d", len(syncPlan.HeatUploads))
+		t.Fatalf("expected 0 unsynced heatUploads in /multigp/sync-plan after UI sync, got %d", len(syncPlan.HeatUploads))
 	}
 }
 

@@ -3,12 +3,12 @@
  *
  * - Real Mode (SlapRF Server):
  *   Delegates HTTP Basic Auth + Engine.IO v4 / Socket.IO v4 sessions (`:5000`) and `/24` LAN
- *   discovery directly to the native Go `rhManager` (`/api/rh/*` and `/api/rh-discover`) —
+ *   discovery directly to the native Go `rhManager` (`/v1/rh/*`), with
  *   zero browser mixed-content barriers and zero browser frame relay.
  *
  * - Simulation Mode (both Standalone Browser Demo & SlapRF Server):
  *   Delegates LAN discovery and multi-device connect/disconnect to `TrackSimulator`
- *   (`/api/sim/rh-discover` and `/api/sim/rh-action`), where each virtual RotorHazard device runs
+ *   (`/v1/sim/rh/*`), where each virtual RotorHazard device runs
  *   `rotorhazard.SimServer` <-> `Client`.
  */
 
@@ -196,7 +196,7 @@ export class RotorHazardHardwareLink {
     if (!capabilitiesSnapshot().portable || this.pollInFlight) return;
     this.pollInFlight = true;
     try {
-      const resp = await fetch(resolveBackendUrl("/api/rh/status"), {
+      const resp = await fetch(resolveBackendUrl("/v1/rh/sessions"), {
         method: "GET",
         headers: { Accept: "application/json" },
         cache: "no-store",
@@ -300,7 +300,7 @@ export class RotorHazardHardwareLink {
 
     await this.refreshStatus();
     const resp = await fetch(
-      resolveBackendUrl(`/api/rh-discover?port=${encodeURIComponent(String(port || DEFAULT_RH_PORT))}`),
+      resolveBackendUrl(`/v1/rh/devices?port=${encodeURIComponent(String(port || DEFAULT_RH_PORT))}`),
       {
         method: "GET",
         headers: { Accept: "application/json" },
@@ -373,7 +373,7 @@ export class RotorHazardHardwareLink {
       throw new Error(this.lastError);
     }
 
-    const resp = await fetch(resolveBackendUrl("/api/rh/connect"), {
+    const resp = await fetch(resolveBackendUrl("/v1/rh/sessions"), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
@@ -443,7 +443,7 @@ export class RotorHazardHardwareLink {
     }
 
     const resp = await fetch(
-      resolveBackendUrl(`/api/usb/ports?transport=usb${showAll ? "&all=1" : ""}`),
+      resolveBackendUrl(`/v1/usb/ports?transport=usb${showAll ? "&all=1" : ""}`),
       {
       method: "GET",
       headers: { Accept: "application/json" },
@@ -512,7 +512,7 @@ export class RotorHazardHardwareLink {
       throw new Error(this.lastError);
     }
 
-    const resp = await fetch(resolveBackendUrl("/api/rh/connect"), {
+    const resp = await fetch(resolveBackendUrl("/v1/rh/sessions"), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
@@ -566,10 +566,8 @@ export class RotorHazardHardwareLink {
 
     this.removeSavedTarget(timerId);
     if (capabilitiesSnapshot().portable) {
-      await fetch(resolveBackendUrl("/api/rh/disconnect"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ timerId }),
+      await fetch(resolveBackendUrl(`/v1/rh/sessions/${encodeURIComponent(String(timerId))}`), {
+        method: "DELETE",
       }).catch(() => undefined);
       await this.refreshStatus();
     }
@@ -616,11 +614,19 @@ export class RotorHazardHardwareLink {
       throw new Error("Connect to a SlapRF Server to run spectrum scans on RotorHazard USB devices.");
     }
 
-    const resp = await fetch(resolveBackendUrl("/api/rh/scan"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify(opts),
-    });
+    const resp = await fetch(
+      resolveBackendUrl(`/v1/rh/sessions/${encodeURIComponent(String(opts.timerId))}:scan`),
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({
+          mode: opts.mode,
+          start: opts.start,
+          stop: opts.stop,
+          step: opts.step,
+        }),
+      }
+    );
     const payload = (await resp.json().catch(() => ({}))) as {
       ok?: boolean;
       error?: string;

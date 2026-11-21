@@ -5,8 +5,8 @@ import {
   resolveBackendUrl,
   resolveBackendWsUrl,
 } from "./capabilities";
-import { ApiTransport } from "./transport";
-import { decodeTelemetryBatch } from "./wasm_transport";
+import { ApiTransport, HttpMethod } from "./transport";
+import { decodeTelemetryBatch, unwrapApiErrorMessage } from "./wasm_transport";
 
 const STREAM_RECONNECT_MIN_MS = 500;
 const STREAM_RECONNECT_MAX_MS = 3000;
@@ -74,7 +74,7 @@ export class BackendHttpTransport implements ApiTransport {
     return resolveBackendWsUrl(path, this.baseUrl);
   }
 
-  public async request<T = unknown>(method: "GET" | "POST", url: string, body?: unknown): Promise<T> {
+  public async request<T = unknown>(method: HttpMethod, url: string, body?: unknown): Promise<T> {
     if (this.paused) {
       throw new Error("Backend transport is paused (disconnected).");
     }
@@ -100,13 +100,13 @@ export class BackendHttpTransport implements ApiTransport {
     }
     const text = await resp.text();
     if (!resp.ok) {
-      throw new Error(`HTTP ${method} ${url} failed (${resp.status}): ${text}`);
+      throw new Error(`HTTP ${method} ${url} failed (${resp.status}): ${unwrapApiErrorMessage(text)}`);
     }
     clearBackendConnectionLost();
     return (text ? JSON.parse(text) : {}) as T;
   }
 
-  public async requestText(method: "GET" | "POST", url: string, body?: unknown): Promise<string> {
+  public async requestText(method: HttpMethod, url: string, body?: unknown): Promise<string> {
     if (this.paused) {
       throw new Error("Backend transport is paused (disconnected).");
     }
@@ -130,14 +130,14 @@ export class BackendHttpTransport implements ApiTransport {
     }
     const text = await resp.text();
     if (!resp.ok) {
-      throw new Error(`HTTP ${method} ${url} failed (${resp.status}): ${text}`);
+      throw new Error(`HTTP ${method} ${url} failed (${resp.status}): ${unwrapApiErrorMessage(text)}`);
     }
     clearBackendConnectionLost();
     return text;
   }
 
   public async setSimRunning(running: boolean): Promise<void> {
-    await this.request<FullStateResponse>("POST", "/api/sim/mode", { running });
+    await this.request<FullStateResponse>("PATCH", "/v1/sim", { running });
   }
 
   public pushHubChannels(): void {
@@ -181,7 +181,7 @@ export class BackendHttpTransport implements ApiTransport {
 
     let ws: WebSocket;
     try {
-      ws = new WebSocket(this.wsUrlFor("/api/ws/stream"));
+      ws = new WebSocket(this.wsUrlFor("/v1/ws/stream"));
     } catch {
       this.scheduleReconnect();
       return;
@@ -248,12 +248,12 @@ export class BackendHttpTransport implements ApiTransport {
   }
 
   public async exportSimStateJson(): Promise<string> {
-    return await this.requestText("GET", "/api/storage/sim-export");
+    return await this.requestText("GET", "/v1/storage/sim");
   }
 
   public async importSimStateJson(jsonStr: string): Promise<boolean> {
     const parsed = JSON.parse(jsonStr) as unknown;
-    const res = await this.request<{ ok?: boolean }>("POST", "/api/storage/sim-import", parsed);
+    const res = await this.request<{ ok?: boolean }>("PUT", "/v1/storage/sim", parsed);
     return Boolean(res?.ok ?? true);
   }
 }

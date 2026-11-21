@@ -11,8 +11,8 @@ import (
 
 // handleHubSurvey reports or changes the band survey (Network page "Measure all Raceband").
 //
-//	GET  /api/hub/survey               -> current state and the channel table timers sweep
-//	POST /api/hub/survey {"on": bool}  -> start (or renew the 15 s lease) / stop
+//	GET /v1/usb/survey              -> current state and the channel table timers sweep
+//	PUT /v1/usb/survey {"on": bool} -> start (or renew the 15 s lease) / stop
 //
 // While a survey runs, every SlapRF timer sweeps Raceband R1..R8 and lap detection gets no signal.
 // It is refused during a live race heat and ends on its own when a heat starts or the lease runs out.
@@ -23,7 +23,7 @@ func (s *Server) handleHubSurvey(w http.ResponseWriter, r *http.Request) {
 	}
 	switch r.Method {
 	case http.MethodGet:
-	case http.MethodPost:
+	case http.MethodPut:
 		var req struct {
 			On bool `json:"on"`
 		}

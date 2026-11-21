@@ -9,6 +9,12 @@
   {{- $themeJs := . | fingerprint -}}
   <script defer src="{{ $themeJs.RelPermalink }}" integrity="{{ $themeJs.Data.Integrity }}"></script>
 {{- end -}}
+{{- if .HasShortcode "api-spec-viewer" -}}
+  {{- with resources.Get "js/api-spec-viewer.js" -}}
+    {{- $apiViewerJs := . | fingerprint -}}
+    <script defer src="{{ $apiViewerJs.RelPermalink }}" integrity="{{ $apiViewerJs.Data.Integrity }}"></script>
+  {{- end -}}
+{{- end -}}
 {{- if .HasShortcode "web-flasher" -}}
 <meta
   data-slaprf-flasher-config="1"

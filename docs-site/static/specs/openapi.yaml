@@ -1,0 +1,6200 @@
+openapi: 3.1.0
+info:
+  title: SlapRF Timing & Race Management REST API
+  version: 1.0.0
+  summary: Versioned HTTP REST API (`/v1`) exposed by SlapRF Portable and the SlapRF Android LAN host.
+  description: |
+    SlapRF exposes a resource-oriented JSON REST API under `/v1` on `http://127.0.0.1:8090` (or `http://<host-ip>:8090` when started with `-lan`) for querying and managing live track telemetry, pilot directories, practice sessions, race tournament sessions, hardware transports, and database backups.
+
+    ### REST Design Principles
+    - **Resource CRUD & HTTP Status Codes**:
+      - `GET`: Read collections, items, or singletons (`200 OK`, `404 Not Found`).
+      - `POST` on collections: Create resources (`201 Created` with `Location` header, `409 Conflict`).
+      - `PUT`: Idempotent full replacement of an item or singleton (`200 OK`, `404 Not Found`, `409 Conflict`).
+      - `PATCH`: Partial attribute update of an item or singleton (`200 OK`, `404 Not Found`, `409 Conflict`).
+      - `DELETE`: Remove an item from a collection (`200 OK`, `404 Not Found`, `409 Conflict`).
+      - Unsupported HTTP methods return `405 Method Not Allowed` with an `Allow` header.
+    - **Singletons & `:action` Custom Methods (AIP-136 / AIP-156)**:
+      - Singletons (`/v1/storage`, `/v1/track`, `/v1/timing/rules`, `/v1/timing/arm`, `/v1/timing/mode`, `/v1/hardware/mode`, `/v1/sim`, `/v1/laprf-emulator`, `/v1/auth/config`) always exist and never accept `DELETE`.
+      - Imperative operations use `POST ...:<action>` (for example, `/v1/storage:reset`, `/v1/track:reset`, `/v1/practice/sessions/{sessionId}:start`, and `/v1/race/sessions/{sessionId}:pause`).
+  license:
+    name: MIT
+    url: https://github.com/kaack/SlapRF
+servers:
+  - url: http://localhost:8090
+    description: Local SlapRF Portable server (default)
+  - url: http://{host}:{port}
+    description: LAN SlapRF server (started with -lan)
+    variables:
+      host:
+        default: 192.168.1.50
+      port:
+        default: "8090"
+tags:
+  - name: System & State
+    description: |
+      Core bootstrap, feature discovery, authentication, and live engine snapshot endpoints.
+      - **Bootstrap & Polling**: Use `GET /v1/state` on initial client load to hydrate full state, and `GET /v1/status?lite=1` for lightweight heartbeats when WebSocket streaming is unavailable.
+      - **Security**: `GET /v1/capabilities` is always accessible unauthenticated and reports `authRequired` and `authenticated` flags; manage HTTP Basic Auth via `/v1/auth/config` and verify credentials via `POST /v1/auth/sessions`.
+
+  - name: Timing Singletons
+    description: |
+      Singleton resources controlling the active timing engine's detection filters and mode.
+      - **Hysteresis & Lap Filters (`/v1/timing/rules`)**: Configure `minCrossingMs`, `minLapSeconds`, `maxLapSeconds`, `confirmationWindowMs`, and holeshot rules.
+      - **Arming & Mode (`/v1/timing/arm`, `/v1/timing/mode`)**: Arm or disarm global lap recording and switch between `practice` and `race` operating modes.
+
+  - name: Pilots
+    description: |
+      Global 16-slot pilot roster shared across practice sessions and tournament brackets.
+      - **CRUD & Unique Constraints**: Create pilots with `POST /v1/pilots` (`201 Created` + `Location` header) and update callsign, phonetic TTS name, VTX band/channel, or per-pilot thresholds via `PUT /v1/pilots/{slotIndex}`.
+      - **Bulk Import & Export**: Merge pilots from CSV or MultiGP entries via `POST /v1/pilots:import` and export the roster via `GET /v1/pilots/export.csv`.
+
+  - name: Track & Timers
+    description: |
+      Course layout (`START_FINISH` and `SECTOR_GATE` checkpoints), detected receiver hardware bindings, and per-gate / per-pilot rule overrides.
+      - **Gates (`/v1/track/gates`)**: Add, reorder, or delete course gates and bind each gate to a `timerId`, `enterThreshold`, and `exitThreshold`.
+      - **Granular Rule Overrides**: Override global timing filters for an entire gate (`/v1/track/gates/{gateId}/rules`) or for a specific pilot at a specific gate (`/v1/track/gates/{gateId}/pilots/{slotIndex}/rules`).
+
+  - name: Practice Sessions
+    description: |
+      Multi-session open practice management with independent pilot channel assignments and lap history.
+      - **Session Addressing**: Pass an explicit `sessionId` or the literal alias `current` to target the currently selected practice session.
+      - **Lifecycle Actions**: Transition sessions with `:start`, `:pause`, `:resume`, `:stop`, and `:clearLaps`, and validate or invalidate individual laps via `PATCH .../laps/{lapId}` or `POST .../laps/{lapId}:toggle`.
+
+  - name: Race Sessions
+    description: |
+      Full tournament race control covering qualifying rounds, double-elimination / multi-stage DAG brackets, Open Qualifier (ZippyQ), marshal overrides, and MultiGP RaceSync integration.
+      - **Lifecycle & Heat Control**: Drive session state (`:start`, `:pause`, `:resume`, `:stop`, `:complete`, `:scrap`, `:reopen`), stage progression (`stages/{stageRef}:control`, `:advance`), and live heat horns/clocks (`heats/{heatId}:control`).
+      - **Marshal & MultiGP Sync**: Apply lap toggles, time penalties, or seat reorders via `pilots/{slotIndex}:marshal`, import MultiGP chapters via `sessions:importMultiGP`, and push results through `/v1/race/multigp/proxy/{subPath}`.
+
+  - name: Hardware & LapRF Emulator
+    description: |
+      Physical timing hardware transports and the built-in ImmersionRC LapRF 8-Way TCP `:5403` protocol emulator.
+      - **SlapRF USB & BLE (`/v1/usb/*`)**: Enumerate serial/BLE ports, connect Hub `H1` or standalone timers, run `5.8 GHz` Raceband spectrum surveys (`/v1/usb/survey`), and send raw console commands (`/v1/usb:command`).
+      - **External Hardware & Relay (`/v1/laprf/*`, `/v1/rh/*`, `/v1/laprf-emulator`)**: Discover and connect to LapRF 8-Way pucks or RotorHazard servers/USB nodes on the LAN, or expose SlapRF crossings to third-party race software on TCP `:5403`.
+
+  - name: Simulator
+    description: |
+      Full-fidelity physics, RF RSSI, hardware, and MultiGP RaceSync simulation engine for offline testing, demos, and marshal training.
+      - **Flight & Pit Simulation (`/v1/sim`, `/v1/sim/pilots/{slotIndex}:action`)**: Control simulator speed, track-walker marshals, synchronized 6S pack bursts (`:packBurst`), and individual pilot events (`crash`, `recover`, `pit`, `break`, `refill-launch`).
+      - **Virtual Hardware & MultiGP (`/v1/sim/timers`, `/v1/sim/laprf/*`, `/v1/sim/rh/*`, `/v1/sim/mgp*`)**: Hot-plug virtual Hub USB cables, flash/erase simulated ESP32-C5 boards, scan simulated spectrum sweeps, and test full MultiGP WebService `v1.0.4` workflows offline.
+
+  - name: Storage
+    description: |
+      Database inspection, JSON backup/restore, and showcase dataset management for both real-hardware and simulator workspaces.
+      - **Real & Simulator Snapshots**: Export or restore real-hardware state via `/v1/storage` and simulator state via `/v1/storage/sim`.
+      - **Maintenance Actions**: Check `bbolt` file size and record counts via `GET /v1/storage/status`, seed the showcase event via `POST /v1/storage:restoreDemo`, or wipe back to clean defaults via `POST /v1/storage:reset`.
+
+paths:
+  /v1/version:
+    get:
+      tags: [System & State]
+      summary: Get server version and build commit
+      operationId: getVersion
+      responses:
+        "200":
+          description: Version metadata
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionResponse"
+
+  /v1/capabilities:
+    get:
+      tags: [System & State]
+      summary: Get runtime capabilities and authentication status
+      operationId: getCapabilities
+      responses:
+        "200":
+          description: Server runtime capabilities
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CapabilitiesResponse"
+
+  /v1/state:
+    get:
+      tags: [System & State]
+      summary: Get complete timing, practice, race, pilot, and track state snapshot
+      operationId: getState
+      security:
+        - basicAuth: []
+        - {}
+      responses:
+        "200":
+          description: Full state snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  /v1/status:
+    get:
+      tags: [System & State]
+      summary: Get lightweight hardware, gate, and active session status
+      operationId: getStatus
+      parameters:
+        - name: lite
+          in: query
+          required: false
+          description: Pass `1` to omit full `raceState`, `eventState`, and `practiceState` payloads.
+          schema:
+            type: string
+            enum: ["0", "1"]
+      responses:
+        "200":
+          description: Status snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+
+  /v1/auth/sessions:
+    post:
+      tags: [System & State]
+      summary: Verify HTTP Basic Auth credentials
+      operationId: createAuthSession
+      security:
+        - basicAuth: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                username:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "201":
+          description: Credentials verified
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /v1/auth/sessions/current
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "401":
+          description: Invalid password or PIN
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid password or pin"
+
+  /v1/auth/config:
+    get:
+      tags: [System & State]
+      summary: Read Basic Auth configuration singleton
+      operationId: getAuthConfig
+      security:
+        - basicAuth: []
+      responses:
+        "200":
+          description: Auth configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthConfigResponse"
+
+    put:
+      tags: [System & State]
+      summary: Replace HTTP Basic Auth configuration singleton
+      operationId: putAuthConfig
+      security:
+        - basicAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/AuthConfigRequest"
+      responses:
+        "200":
+          description: Updated auth configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthConfigResponse"
+        "400":
+          description: Invalid authentication configuration payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "password must be at least 4 characters when enabled"
+
+  /v1/timing/rules:
+    get:
+      tags: [Timing Singletons]
+      summary: Read global timing detection rules singleton
+      operationId: getTimingRules
+      responses:
+        "200":
+          description: Current global timing rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimingRules"
+
+    put:
+      tags: [Timing Singletons]
+      summary: Replace global timing detection rules singleton
+      operationId: putTimingRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TimingRules"
+      responses:
+        "200":
+          description: Clamped and applied global timing rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimingRules"
+        "400":
+          description: Invalid timing rules payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "minLapTimeMs must be non-negative"
+
+  /v1/timing/arm:
+    get:
+      tags: [Timing Singletons]
+      summary: Read global lap-recording armed state singleton
+      operationId: getTimingArm
+      responses:
+        "200":
+          description: Armed state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [armed]
+                properties:
+                  armed:
+                    type: boolean
+
+    put:
+      tags: [Timing Singletons]
+      summary: Set global lap-recording armed state singleton
+      operationId: putTimingArm
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [armed]
+              properties:
+                armed:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated status snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/StatusResponse"
+        "400":
+          description: Invalid arming payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "expected boolean armed field"
+
+  /v1/timing/mode:
+    get:
+      tags: [Timing Singletons]
+      summary: Read active operating mode singleton (`practice` or `race`)
+      operationId: getOperatingMode
+      responses:
+        "200":
+          description: Operating mode
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mode]
+                properties:
+                  mode:
+                    type: string
+                    enum: [practice, race]
+
+    put:
+      tags: [Timing Singletons]
+      summary: Switch operating mode singleton between `practice` and `race`
+      operationId: putOperatingMode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  type: string
+                  enum: [practice, race]
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid operating mode (must be practice or race)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "mode must be 'practice' or 'race'"
+
+  /v1/pilots:
+    get:
+      tags: [Pilots]
+      summary: List all pilots in the global directory
+      operationId: listPilots
+      responses:
+        "200":
+          description: Pilot list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/PilotSlot"
+
+    post:
+      tags: [Pilots]
+      summary: Create a pilot in the global directory
+      operationId: createPilot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                callsign:
+                  type: string
+                  example: "VORTEX"
+                phoneticName:
+                  type: string
+                  example: "vor-teks"
+      responses:
+        "201":
+          description: Created pilot and updated full state
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /v1/pilots/11
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid pilot configuration (callsign, band, channel, or thresholds)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "callsign cannot be empty"
+        "409":
+          description: Duplicate callsign or pilot roster capacity reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "duplicate callsign or capacity conflict"
+
+  /v1/pilots/{slotIndex}:
+    parameters:
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    get:
+      tags: [Pilots]
+      summary: Get a single pilot by slotIndex
+      operationId: getPilot
+      responses:
+        "200":
+          description: Pilot resource
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/PilotSlot"
+        "404":
+          description: Pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "pilot slot not found"
+
+    put:
+      tags: [Pilots]
+      summary: Replace a pilot slot configuration
+      operationId: putPilot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PilotSlot"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid pilot configuration (callsign, band, channel, or thresholds)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "callsign cannot be empty"
+        "404":
+          description: Pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "pilot slot not found"
+        "409":
+          description: Duplicate callsign or VTX frequency conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "duplicate callsign or frequency conflict"
+
+    delete:
+      tags: [Pilots]
+      summary: Remove a pilot from the directory
+      operationId: deletePilot
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "pilot slot not found"
+
+  "/v1/pilots:reset":
+    post:
+      tags: [Pilots]
+      summary: Reset the pilot directory to defaults
+      operationId: resetPilots
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  "/v1/pilots:import":
+    post:
+      tags: [Pilots]
+      summary: Bulk-merge pilots from CSV text or MultiGP entries
+      operationId: importPilots
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                csv:
+                  type: string
+                pilots:
+                  type: array
+                  items:
+                    type: object
+                    additionalProperties: true
+      responses:
+        "200":
+          description: Updated full state with import summary
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Malformed CSV or JSON pilot import payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid CSV header or frequency value"
+
+  /v1/pilots/export.csv:
+    get:
+      tags: [Pilots]
+      summary: Export the pilot directory as CSV
+      operationId: exportPilotsCsv
+      responses:
+        "200":
+          description: CSV file download
+          content:
+            text/csv:
+              schema:
+                type: string
+
+  /v1/track:
+    get:
+      tags: [Track & Timers]
+      summary: Read course track singleton (gates and timers)
+      operationId: getTrack
+      responses:
+        "200":
+          description: Track gates and detected timers
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  gates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TrackGate"
+                  timers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DetectedTimer"
+
+  "/v1/track:reset":
+    post:
+      tags: [Track & Timers]
+      summary: Reset course track topology to preset or default layout
+      operationId: resetTrack
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                preset:
+                  type: string
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  /v1/track/thresholds:
+    put:
+      tags: [Track & Timers]
+      summary: Apply batch per-gate, per-pilot enter/exit RSSI thresholds
+      operationId: putTrackThresholds
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/GateThresholdUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid track threshold parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "enterThreshold must be greater than exitThreshold"
+
+  /v1/track/gates:
+    get:
+      tags: [Track & Timers]
+      summary: List all course gates
+      operationId: listTrackGates
+      responses:
+        "200":
+          description: Gate list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrackGate"
+
+    post:
+      tags: [Track & Timers]
+      summary: Create a gate node on the course track
+      operationId: createTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: "Split 1"
+                assignedTimerId:
+                  type: integer
+                  example: 2
+                trackOrder:
+                  type: integer
+                  example: 1
+      responses:
+        "201":
+          description: Created gate and updated full state
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /v1/track/gates/5
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate configuration or threshold parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid gate type or threshold range"
+
+  /v1/track/gates/{gateId}:
+    parameters:
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    get:
+      tags: [Track & Timers]
+      summary: Get a single track gate
+      operationId: getTrackGate
+      responses:
+        "200":
+          description: Track gate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrackGate"
+        "404":
+          description: Gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "gate not found"
+
+    put:
+      tags: [Track & Timers]
+      summary: Replace a track gate (name, role, order, or assigned timer)
+      operationId: putTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate configuration or threshold parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid gate type or threshold range"
+        "404":
+          description: Gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "gate not found"
+
+    patch:
+      tags: [Track & Timers]
+      summary: Partially update a track gate
+      operationId: patchTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate configuration or threshold parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid gate type or threshold range"
+        "404":
+          description: Gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "gate not found"
+
+    delete:
+      tags: [Track & Timers]
+      summary: Remove a gate from the track
+      operationId: deleteTrackGate
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "gate not found"
+
+  /v1/track/gates/{gateId}/rules:
+    parameters:
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Track & Timers]
+      summary: Read per-gate timing rule overrides singleton
+      operationId: getGateRules
+      responses:
+        "200":
+          description: Per-gate rule overrides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GateRuleOverrides"
+        "404":
+          description: Gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "gate not found"
+
+    put:
+      tags: [Track & Timers]
+      summary: Replace per-gate timing rule overrides singleton
+      operationId: putGateRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateRuleOverrides"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate rule override parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "confirmationWindowMs must be positive"
+        "404":
+          description: Gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "gate not found"
+
+  "/v1/track/gates/{gateId}/rules:reset":
+    parameters:
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Track & Timers]
+      summary: Reset per-gate timing rule overrides back to global rules
+      operationId: resetGateRules
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "gate not found"
+
+  /v1/track/gates/{gateId}/pilots/{slotIndex}/rules:
+    parameters:
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Track & Timers]
+      summary: Read Tier-3 per-pilot-at-gate rule overrides singleton
+      operationId: getPilotGateRules
+      responses:
+        "200":
+          description: Pilot-at-gate rule overrides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GateRuleOverrides"
+        "404":
+          description: Gate or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "gate or pilot slot not found"
+
+    put:
+      tags: [Track & Timers]
+      summary: Replace Tier-3 per-pilot-at-gate rule overrides singleton
+      operationId: putPilotGateRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateRuleOverrides"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate rule override parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "confirmationWindowMs must be positive"
+        "404":
+          description: Gate or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "gate or pilot slot not found"
+
+  "/v1/track/gates/{gateId}/pilots/{slotIndex}/rules:reset":
+    parameters:
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Track & Timers]
+      summary: Reset Tier-3 per-pilot-at-gate timing rule overrides
+      operationId: resetPilotGateRules
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Gate or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "gate or pilot slot not found"
+
+  /v1/timers:
+    get:
+      tags: [Track & Timers]
+      summary: List detected hardware timers
+      operationId: listTimers
+      responses:
+        "200":
+          description: Detected timers
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/DetectedTimer"
+
+    post:
+      tags: [Track & Timers]
+      summary: Provision a newly flashed hardware timer
+      operationId: createTimer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [role, timerLabel]
+              properties:
+                role:
+                  type: string
+                  enum: [hub, spoke]
+                timerLabel:
+                  type: string
+                  example: "H1"
+                fingerprint:
+                  type: string
+                  example: "A1B2C3D4"
+      responses:
+        "201":
+          description: Provisioned timer and updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid timer parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid timer transport or address"
+        "409":
+          description: Timer ID already registered
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "timer already exists"
+
+  /v1/timers/{timerId}:
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Track & Timers]
+      summary: Get a detected timer by timerId
+      operationId: getTimer
+      responses:
+        "200":
+          description: Detected timer
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DetectedTimer"
+        "404":
+          description: Timer not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "timer not found"
+
+    patch:
+      tags: [Track & Timers]
+      summary: Update display color for a detected timer
+      operationId: patchTimer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [color]
+              properties:
+                color:
+                  type: string
+                  example: "#34d399"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid timer parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid timer transport or address"
+        "404":
+          description: Timer not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "timer not found"
+
+    delete:
+      tags: [Track & Timers]
+      summary: Delete an offline detected timer entry
+      operationId: deleteTimer
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Timer not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "timer not found"
+
+  "/v1/practice:reset":
+    post:
+      tags: [Practice Sessions]
+      summary: Clear laps and crossings in the active practice session
+      operationId: resetActivePractice
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  /v1/practice/sessions:
+    get:
+      tags: [Practice Sessions]
+      summary: List all practice sessions
+      operationId: listPracticeSessions
+      responses:
+        "200":
+          description: Practice sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+
+    post:
+      tags: [Practice Sessions]
+      summary: Create a practice session
+      operationId: createPracticeSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+                dontSelect:
+                  type: boolean
+      responses:
+        "201":
+          description: Created practice session and updated full state
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid practice session parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid practice session configuration"
+        "409":
+          description: Practice session ID or slug conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session already exists"
+
+  /v1/practice/sessions/{sessionId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        description: Practice session ID (or `current` alias).
+        schema:
+          type: string
+    get:
+      tags: [Practice Sessions]
+      summary: Get a practice session
+      operationId: getPracticeSession
+      responses:
+        "200":
+          description: Practice session
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session not found"
+
+    patch:
+      tags: [Practice Sessions]
+      summary: Update practice session attributes (name, tags, selected)
+      operationId: patchPracticeSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+                selected:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid practice session parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid practice session configuration"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session not found"
+
+    delete:
+      tags: [Practice Sessions]
+      summary: Delete a practice session
+      operationId: deletePracticeSession
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session not found"
+
+  "/v1/practice/sessions/{sessionId}:start":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Practice Sessions]
+      summary: Start a practice session
+      operationId: startPracticeSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                preemptOngoing:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session not found"
+        "409":
+          description: Practice session cannot be started in its current state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session is already active or completed"
+
+  "/v1/practice/sessions/{sessionId}:resume":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Practice Sessions]
+      summary: Resume a paused practice session
+      operationId: resumePracticeSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                preemptOngoing:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session not found"
+        "409":
+          description: Practice session is not currently paused
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session is not paused"
+
+  "/v1/practice/sessions/{sessionId}:pause":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Practice Sessions]
+      summary: Pause an active practice session
+      operationId: pausePracticeSession
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session not found"
+        "409":
+          description: Practice session is not currently running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session is not running"
+
+  "/v1/practice/sessions/{sessionId}:stop":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Practice Sessions]
+      summary: Complete / stop a practice session
+      operationId: stopPracticeSession
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session not found"
+
+  "/v1/practice/sessions/{sessionId}:clearLaps":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Practice Sessions]
+      summary: Clear all recorded laps in a practice session
+      operationId: clearPracticeSessionLaps
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session not found"
+
+  /v1/practice/sessions/{sessionId}/pilots:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Practice Sessions]
+      summary: List pilots assigned to a practice session
+      operationId: listPracticeSessionPilots
+      responses:
+        "200":
+          description: Session pilot assignments
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session not found"
+
+    post:
+      tags: [Practice Sessions]
+      summary: Assign or create a pilot in a practice session
+      operationId: addPracticeSessionPilot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                slotIndex:
+                  type: integer
+                callsign:
+                  type: string
+                phoneticName:
+                  type: string
+                band:
+                  type: integer
+                channel:
+                  type: integer
+      responses:
+        "201":
+          description: Assigned pilot and updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid practice pilot assignment payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "slotIndex must be between 1 and 16"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session not found"
+        "409":
+          description: Pilot or VTX frequency already enrolled in practice session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "pilot already enrolled in practice session"
+
+  /v1/practice/sessions/{sessionId}/pilots/{slotIndex}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    put:
+      tags: [Practice Sessions]
+      summary: Set band/channel for a pilot in a practice session
+      operationId: putPracticeSessionPilot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                band:
+                  type: integer
+                channel:
+                  type: integer
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid practice pilot assignment payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "slotIndex must be between 1 and 16"
+        "404":
+          description: Practice session or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session or pilot slot not found"
+
+    patch:
+      tags: [Practice Sessions]
+      summary: Partially update band or channel for a pilot in a practice session
+      operationId: patchPracticeSessionPilot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                band:
+                  type: integer
+                  example: 1
+                channel:
+                  type: integer
+                  example: 3
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid practice pilot assignment payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "slotIndex must be between 1 and 16"
+        "404":
+          description: Practice session or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session or pilot slot not found"
+
+    delete:
+      tags: [Practice Sessions]
+      summary: Remove a pilot from a practice session
+      operationId: deletePracticeSessionPilot
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session or pilot slot not found"
+
+  /v1/practice/sessions/{sessionId}/laps:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Practice Sessions]
+      summary: List recorded laps in a practice session
+      operationId: listPracticeSessionLaps
+      responses:
+        "200":
+          description: Practice laps
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/LapRecord"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session not found"
+
+  /v1/practice/sessions/{sessionId}/laps/{lapId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: lapId
+        in: path
+        required: true
+        schema:
+          type: integer
+    patch:
+      tags: [Practice Sessions]
+      summary: Set invalidated state on a recorded practice lap
+      operationId: patchPracticeSessionLap
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [invalidated]
+              properties:
+                invalidated:
+                  type: boolean
+                  example: true
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Missing or invalid invalidated boolean field
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "request body must specify boolean field 'invalidated'"
+        "404":
+          description: Practice session or lap record not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session or lap not found"
+
+  "/v1/practice/sessions/{sessionId}/laps/{lapId}:toggle":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: lapId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Practice Sessions]
+      summary: Toggle validity of a recorded practice lap
+      operationId: togglePracticeSessionLap
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session or lap record not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "practice session or lap not found"
+
+  /v1/race/sessions:
+    get:
+      tags: [Race Sessions]
+      summary: List all race tournament sessions
+      operationId: listRaceSessions
+      responses:
+        "200":
+          description: Race sessions
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+
+    post:
+      tags: [Race Sessions]
+      summary: Create a race tournament session
+      operationId: createRaceSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+                copyConfig:
+                  type: boolean
+                dontSelect:
+                  type: boolean
+      responses:
+        "201":
+          description: Created race session and updated full state
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid race session parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "name cannot be empty"
+        "409":
+          description: Race session ID or slug conflict
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session already exists"
+
+  "/v1/race/sessions:importMultiGP":
+    post:
+      tags: [Race Sessions]
+      summary: Import a MultiGP race schedule, ZippyQ, or bracket into SlapRF
+      operationId: importMultiGPRaceSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "201":
+          description: Imported race session and updated full state
+          headers:
+            Location:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid MultiGP RaceSync import payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "missing chapter or race configuration in MultiGP payload"
+
+  /v1/race/sessions/{sessionId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        description: Race session ID (or `current` alias).
+        schema:
+          type: string
+    get:
+      tags: [Race Sessions]
+      summary: Get a race session
+      operationId: getRaceSession
+      responses:
+        "200":
+          description: Race session
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+
+    patch:
+      tags: [Race Sessions]
+      summary: Update race session attributes (name, tags, selected)
+      operationId: patchRaceSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                tags:
+                  type: array
+                  items:
+                    type: string
+                selected:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid race session parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "name cannot be empty"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+
+    delete:
+      tags: [Race Sessions]
+      summary: Delete a race session
+      operationId: deleteRaceSession
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+
+  "/v1/race/sessions/{sessionId}:start":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Activate a race session
+      operationId: startRaceSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RaceLifecycleRequest"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+        "409":
+          description: Race session cannot be started in its current state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session cannot be started from current state"
+
+  "/v1/race/sessions/{sessionId}:pause":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Pause an active race session
+      operationId: pauseRaceSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RaceLifecycleRequest"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+        "409":
+          description: Race session is not currently active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session is not active"
+
+  "/v1/race/sessions/{sessionId}:resume":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Resume a paused race session
+      operationId: resumeRaceSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RaceLifecycleRequest"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+        "409":
+          description: Race session is not currently paused
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session is not paused"
+
+  "/v1/race/sessions/{sessionId}:complete":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Mark a race session complete
+      operationId: completeRaceSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RaceLifecycleRequest"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+        "409":
+          description: Race session cannot be completed in its current state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session is already completed"
+
+  "/v1/race/sessions/{sessionId}:stop":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Trigger an emergency stop on an active race session
+      operationId: stopRaceSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RaceLifecycleRequest"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+        "409":
+          description: Race session cannot be stopped in its current state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session is not active"
+
+  "/v1/race/sessions/{sessionId}:scrap":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Scrap (discard) a race session without counting standings
+      operationId: scrapRaceSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RaceLifecycleRequest"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+        "409":
+          description: Race session is already scrapped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session is already scrapped"
+
+  "/v1/race/sessions/{sessionId}:reopen":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Reopen a completed or scrapped race session
+      operationId: reopenRaceSession
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RaceLifecycleRequest"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+        "409":
+          description: Race session is not completed or scrapped
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session is already open"
+
+  /v1/race/sessions/{sessionId}/config:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Race Sessions]
+      summary: Read tournament setup config singleton for a race session
+      operationId: getRaceSessionConfig
+      responses:
+        "200":
+          description: Race setup config
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+
+    put:
+      tags: [Race Sessions]
+      summary: Configure tournament format and optionally generate rounds/heats
+      operationId: putRaceSessionConfig
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [config]
+              properties:
+                config:
+                  type: object
+                  additionalProperties: true
+                generate:
+                  type: boolean
+                applyToExisting:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid race format or stage configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "qualifyingRounds must be at least 1"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+
+  /v1/race/sessions/{sessionId}/pilots:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Race Sessions]
+      summary: List roster pilots in a race session
+      operationId: listRaceSessionPilots
+      responses:
+        "200":
+          description: Race roster
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  additionalProperties: true
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+
+    post:
+      tags: [Race Sessions]
+      summary: Add a pilot to the race session roster
+      operationId: addRaceSessionPilot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                slotIndex:
+                  type: integer
+                callsign:
+                  type: string
+                phoneticName:
+                  type: string
+      responses:
+        "201":
+          description: Added pilot and updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid race pilot enrollment or update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid slotIndex or seed number"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+        "409":
+          description: Pilot already enrolled in race session
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "pilot already enrolled in race session"
+
+  "/v1/race/sessions/{sessionId}/pilots:checkInAll":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Check in all pilots in the race session roster
+      operationId: checkInAllRaceSessionPilots
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+
+  /v1/race/sessions/{sessionId}/pilots/{slotIndex}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    patch:
+      tags: [Race Sessions]
+      summary: Update per-race pilot check-in, attendance, or note
+      operationId: patchRaceSessionPilot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                checkedIn:
+                  type: boolean
+                attendance:
+                  type: string
+                pilotNote:
+                  type: string
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid race pilot enrollment or update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid slotIndex or seed number"
+        "404":
+          description: Race session or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session or pilot slot not found"
+
+  "/v1/race/sessions/{sessionId}/stages/{stageRef}:control":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: stageRef
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Control stage lifecycle (`activate_stage`, `pause_stage`, `resume_stage`, `complete_stage_early`, `reopen_stage_early`)
+      operationId: controlRaceStage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [stageAction]
+              properties:
+                stageAction:
+                  type: string
+                stageId:
+                  type: string
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid control action or parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "unsupported control action"
+        "404":
+          description: Race session or stage not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session or stage not found"
+        "409":
+          description: Stage transition not allowed in current stage state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "stage transition not allowed in current state"
+
+  "/v1/race/sessions/{sessionId}/stages/{stageRef}:advance":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: stageRef
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Advance a multi-stage race session into the next tournament stage
+      operationId: advanceRaceStage
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session or stage not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session or stage not found"
+        "409":
+          description: Current stage has unfinished heats and cannot advance yet
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "cannot advance stage while heats remain incomplete"
+
+  "/v1/race/sessions/{sessionId}/bracket:edit":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Mutate rounds, heats, seats, channels, stage DAG connections, or Open Qualifier flight line
+      operationId: editRaceBracket
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid bracket edit operation
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "target heat cannot accept additional pilots"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+        "409":
+          description: Bracket cannot be modified because target heat is locked or active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "cannot edit locked or active heat"
+
+  "/v1/race/sessions/{sessionId}/heats/{heatId}:control":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: heatId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Control heat execution (`start`, `pause`, `resume`, `stop`, `cancel`, `emergency_stop`, `reset`, `confirm`, `unlock`, `select`, `next_heat`)
+      operationId: controlRaceHeat
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RaceControlRequest"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid control action or parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "unsupported control action"
+        "404":
+          description: Race session or heat not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session or heat not found"
+        "409":
+          description: Heat transition invalid for current state or another heat is already active
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "another heat is already active"
+
+  "/v1/race/sessions/{sessionId}/heats/{heatId}/pilots/{slotIndex}:marshal":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: heatId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Race Sessions]
+      summary: Apply live or post-heat marshal rulings (manual laps, waveform crossings, penalties, DQ/DNF/DNS)
+      operationId: marshalRaceHeatPilot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RaceMarshalPayload"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid marshal action payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "unsupported marshal action"
+        "404":
+          description: Race session, heat, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session, heat, or pilot slot not found"
+
+  /v1/race/sessions/{sessionId}/standings.csv:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: stageIndex
+        in: query
+        required: false
+        schema:
+          type: integer
+    get:
+      tags: [Race Sessions]
+      summary: Export tournament or stage standings as CSV
+      operationId: exportRaceSessionStandingsCsv
+      responses:
+        "200":
+          description: CSV race results download
+          content:
+            text/csv:
+              schema:
+                type: string
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+
+  /v1/race/standings.csv:
+    get:
+      tags: [Race Sessions]
+      summary: Export CSV standings for the currently selected race session
+      operationId: exportActiveRaceStandingsCsv
+      responses:
+        "200":
+          description: CSV race standings export
+          content:
+            text/csv:
+              schema:
+                type: string
+
+  /v1/race/clock:
+    get:
+      tags: [Race Sessions]
+      summary: Read active heat countdown and race clock snapshot
+      operationId: getRaceClock
+      responses:
+        "200":
+          description: Active race tournament state
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  "/v1/race/sessions/{sessionId}/multigp:appendZippyQ":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Append newly pulled MultiGP ZippyQ rounds to a linked SlapRF race
+      operationId: multiGPAppendZippyQ
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Updated race state and added heat count
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid ZippyQ round parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "roundCount must be at least 1"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+
+  /v1/race/sessions/{sessionId}/multigp/sync-plan:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: forceAll
+        in: query
+        required: false
+        schema:
+          type: string
+          enum: ["0", "1"]
+    get:
+      tags: [Race Sessions]
+      summary: Build a MultiGP result push sync plan for a linked SlapRF race
+      operationId: multiGPGetSyncPlan
+      responses:
+        "200":
+          description: MultiGP sync plan
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+
+  /v1/race/sessions/{sessionId}/multigp/sync-state:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags: [Race Sessions]
+      summary: Update synced heat IDs and overall standings sync state on a linked SlapRF race
+      operationId: multiGPPutSyncState
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid MultiGP sync state payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid sync state format"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "race session not found"
+
+  /v1/race/multigp/proxy/{subPath}:
+    parameters:
+      - name: subPath
+        in: path
+        required: true
+        description: MultiGP WebService path (e.g. `chapter/findChapterFromApiKey`, `race/listForChapter`, `race/view`, `race/assignSlot`, `race/captureOverallRaceResult`).
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Proxy a POST request to the live MultiGP RaceSync WebService API
+      operationId: postMultiGPProxy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [apiKey]
+              properties:
+                apiKey:
+                  type: string
+                  example: "mgp-live-chapter-key"
+                data:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200":
+          description: Upstream MultiGP WebService JSON response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: boolean
+                    example: true
+                  statusDescription:
+                    type: string
+                    example: "Success"
+        "400":
+          description: Invalid MultiGP proxy path or malformed JSON body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid MultiGP endpoint path"
+    put:
+      tags: [Race Sessions]
+      summary: Proxy a PUT request to the live MultiGP RaceSync WebService API
+      operationId: putMultiGPProxy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [apiKey]
+              properties:
+                apiKey:
+                  type: string
+                  example: "mgp-live-chapter-key"
+                data:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200":
+          description: Upstream MultiGP WebService JSON response
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: boolean
+                    example: true
+        "400":
+          description: Invalid MultiGP proxy path or malformed JSON body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid MultiGP endpoint path"
+
+  /v1/hardware/mode:
+    get:
+      tags: [Hardware & LapRF Emulator]
+      summary: Read active timing hardware backend singleton
+      operationId: getHardwareMode
+      responses:
+        "200":
+          description: Hardware mode
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [mode]
+                properties:
+                  mode:
+                    $ref: "#/components/schemas/TimingHardwareMode"
+
+    put:
+      tags: [Hardware & LapRF Emulator]
+      summary: Switch active timing hardware backend (`slaprf`, `slaprf_ble`, `rotorhazard`, `rotorhazard_usb`, `laprf`)
+      operationId: putHardwareMode
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  $ref: "#/components/schemas/TimingHardwareMode"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid timing hardware mode
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "timingHardwareMode must be 'slaprf', 'laprf_8way', or 'rotorhazard'"
+
+  /v1/usb/ports:
+    get:
+      tags: [Hardware & LapRF Emulator]
+      summary: List available local USB serial and Bluetooth ports
+      operationId: listUsbPorts
+      parameters:
+        - name: transport
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [usb, ble]
+        - name: all
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["0", "1"]
+      responses:
+        "200":
+          description: Discovered serial ports
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ports:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+
+  /v1/usb/connections:
+    get:
+      tags: [Hardware & LapRF Emulator]
+      summary: Get USB connection pool snapshot (Hub status and peer Spoke telemetry)
+      operationId: getUsbConnections
+      responses:
+        "200":
+          description: USB connection pool
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+    post:
+      tags: [Hardware & LapRF Emulator]
+      summary: Connect a physical USB serial or Bluetooth port to a console slot
+      operationId: connectUsbSlot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [portName]
+              properties:
+                slotIndex:
+                  type: integer
+                  example: 0
+                portName:
+                  type: string
+                  example: "COM5"
+      responses:
+        "201":
+          description: Connected USB slot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid USB serial or BLE port parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "port name is required"
+
+  /v1/usb/connections/{slotIndex}:
+    parameters:
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 1
+    put:
+      tags: [Hardware & LapRF Emulator]
+      summary: Connect or replace USB console slot
+      operationId: putUsbConnectionSlot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [portName]
+              properties:
+                portName:
+                  type: string
+      responses:
+        "200":
+          description: Connected USB slot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid USB serial or BLE port parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "port name is required"
+        "404":
+          description: USB connection slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "usb connection slot not found"
+
+    delete:
+      tags: [Hardware & LapRF Emulator]
+      summary: Disconnect a USB console slot
+      operationId: deleteUsbConnectionSlot
+      responses:
+        "200":
+          description: Updated USB pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "404":
+          description: USB connection slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "usb connection slot not found"
+
+  "/v1/usb/connections:disconnectAll":
+    post:
+      tags: [Hardware & LapRF Emulator]
+      summary: Disconnect all active USB console slots
+      operationId: disconnectAllUsbConnections
+      responses:
+        "200":
+          description: Updated USB pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/usb/debug-slot:
+    get:
+      tags: [Hardware & LapRF Emulator]
+      summary: Read active USB console diagnostic slot index singleton
+      operationId: getUsbDebugSlot
+      responses:
+        "200":
+          description: Active debug slot index and USB pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  slotIndex:
+                    type: integer
+                    example: 0
+                  pool:
+                    type: object
+                    additionalProperties: true
+    put:
+      tags: [Hardware & LapRF Emulator]
+      summary: Select which USB console slot streams live diagnostic serial lines
+      operationId: putUsbDebugSlot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [slotIndex]
+              properties:
+                slotIndex:
+                  type: integer
+                  example: 0
+      responses:
+        "200":
+          description: Updated USB connection pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid USB slot index payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid JSON body"
+
+  /v1/usb/known-timers/{fp}:
+    parameters:
+      - name: fp
+        in: path
+        required: true
+        description: Hardware timer MAC/EFUSE fingerprint (e.g. `A4CF128890B1`).
+        schema:
+          type: string
+    delete:
+      tags: [Hardware & LapRF Emulator]
+      summary: Forget a saved hardware timer fingerprint from the USB auto-reconnect table
+      operationId: deleteKnownUsbTimer
+      responses:
+        "200":
+          description: Updated USB connection pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  "/v1/usb:command":
+    post:
+      tags: [Hardware & LapRF Emulator]
+      summary: Send a command to a connected SlapRF USB timer
+      operationId: sendUsbCommand
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [command]
+              properties:
+                slotIndex:
+                  type: integer
+                command:
+                  type: string
+                expectType:
+                  type: string
+                timeoutMs:
+                  type: integer
+      responses:
+        "200":
+          description: Command acknowledged or reply received
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid USB command string
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "command cannot be empty"
+
+  /v1/usb/survey:
+    get:
+      tags: [Hardware & LapRF Emulator]
+      summary: Read full-Raceband 5.8 GHz spectrum survey singleton
+      operationId: getUsbSurvey
+      responses:
+        "200":
+          description: Survey state
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+    put:
+      tags: [Hardware & LapRF Emulator]
+      summary: Set full-Raceband 5.8 GHz spectrum survey mode on the Hub
+      operationId: putUsbSurvey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [on]
+              properties:
+                on:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated survey state
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid frequency survey parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid survey band or interval"
+        "409":
+          description: No connected USB receiver nodes available to run survey
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "no connected usb nodes available for survey"
+
+  /v1/laprf/devices:
+    get:
+      tags: [Hardware & LapRF Emulator]
+      summary: Scan the local LAN for ImmersionRC LapRF 8-Way timers on TCP :5403
+      operationId: discoverLapRFDevices
+      responses:
+        "200":
+          description: Discovered LapRF 8-Way devices
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/laprf/sessions:
+    get:
+      tags: [Hardware & LapRF Emulator]
+      summary: List connected external ImmersionRC LapRF 8-Way client sessions
+      operationId: listLapRFSessions
+      responses:
+        "200":
+          description: External LapRF 8-Way client sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+    post:
+      tags: [Hardware & LapRF Emulator]
+      summary: Connect to an external ImmersionRC LapRF 8-Way timer (Ethernet TCP or USB)
+      operationId: createLapRFSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "201":
+          description: Connected LapRF session
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid LapRF host or TCP port
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid host:port address"
+
+  /v1/laprf/sessions/{timerId}:
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    delete:
+      tags: [Hardware & LapRF Emulator]
+      summary: Disconnect an external LapRF 8-Way session
+      operationId: deleteLapRFSession
+      responses:
+        "200":
+          description: Disconnected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "404":
+          description: LapRF session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "laprf session not found"
+
+  "/v1/laprf:sync":
+    post:
+      tags: [Hardware & LapRF Emulator]
+      summary: Push active pilot frequencies and settings to all connected LapRF 8-Way sessions
+      operationId: syncLapRFSessions
+      responses:
+        "200":
+          description: Synced
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /v1/rh/devices:
+    get:
+      tags: [Hardware & LapRF Emulator]
+      summary: Scan the local LAN for RotorHazard servers on port 5000
+      operationId: discoverRotorHazardDevices
+      responses:
+        "200":
+          description: Discovered RotorHazard devices
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/rh/sessions:
+    get:
+      tags: [Hardware & LapRF Emulator]
+      summary: List connected external RotorHazard client sessions
+      operationId: listRotorHazardSessions
+      responses:
+        "200":
+          description: External RotorHazard client sessions
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+    post:
+      tags: [Hardware & LapRF Emulator]
+      summary: Connect to an external RotorHazard device (Socket.IO or USB serial)
+      operationId: createRotorHazardSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "201":
+          description: Connected RotorHazard session
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid RotorHazard connection or scan parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid RotorHazard host or port"
+
+  /v1/rh/sessions/{timerId}:
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    delete:
+      tags: [Hardware & LapRF Emulator]
+      summary: Disconnect a RotorHazard session
+      operationId: deleteRotorHazardSession
+      responses:
+        "200":
+          description: Disconnected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "404":
+          description: RotorHazard session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "rotorhazard session not found"
+
+  "/v1/rh/sessions/{timerId}:scan":
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Hardware & LapRF Emulator]
+      summary: Trigger a spectrum scan (`once`, `live`, or `stop`) on a RotorHazard USB node
+      operationId: scanRotorHazardSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  type: string
+                  enum: [once, live, stop]
+                start:
+                  type: integer
+                stop:
+                  type: integer
+                step:
+                  type: integer
+      responses:
+        "200":
+          description: Scan result
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid RotorHazard connection or scan parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid RotorHazard host or port"
+        "404":
+          description: RotorHazard session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "rotorhazard session not found"
+
+  /v1/rh/sessions/{timerId}/debug-stream:
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    put:
+      tags: [Hardware & LapRF Emulator]
+      summary: Enable or disable high-rate RSSI debug streaming on a RotorHazard session
+      operationId: putRotorHazardDebugStream
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [active]
+              properties:
+                active:
+                  type: boolean
+                  example: true
+      responses:
+        "200":
+          description: Debug stream state updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          description: Invalid timerId or request payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid timerId"
+
+  "/v1/rh:sync":
+    post:
+      tags: [Hardware & LapRF Emulator]
+      summary: Push active pilot node frequencies and arm state to all connected RotorHazard sessions
+      operationId: syncRotorHazardSessions
+      responses:
+        "200":
+          description: Synced
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+
+  /v1/laprf-emulator:
+    get:
+      tags: [Hardware & LapRF Emulator]
+      summary: Read built-in LapRF 8-Way TCP :5403 emulator singleton status
+      operationId: getLapRFEmulator
+      responses:
+        "200":
+          description: LapRF 8-Way emulator status
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  enabled:
+                    type: boolean
+                  suppressed:
+                    type: boolean
+                  relayState:
+                    type: string
+                    enum: [off, connecting, connected, unreachable]
+                  clientState:
+                    type: string
+                    enum: [waiting, connected]
+                  peer:
+                    type: string
+                  listenAddr:
+                    type: string
+                  relayVersion:
+                    type: string
+                  bytesIn:
+                    type: integer
+                  bytesOut:
+                    type: integer
+                  lastError:
+                    type: string
+
+    put:
+      tags: [Hardware & LapRF Emulator]
+      summary: Configure the built-in LapRF 8-Way TCP :5403 emulator singleton
+      operationId: putLapRFEmulator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                port:
+                  type: integer
+                  example: 5403
+                bind:
+                  type: string
+                  enum: ["", "loopback"]
+      responses:
+        "200":
+          description: Updated LapRF 8-Way emulator status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid LapRF emulator configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid emulator port or gate assignment"
+
+    patch:
+      tags: [Hardware & LapRF Emulator]
+      summary: Partially update the built-in LapRF 8-Way TCP :5403 emulator singleton
+      operationId: patchLapRFEmulator
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                enabled:
+                  type: boolean
+                port:
+                  type: integer
+                bind:
+                  type: string
+      responses:
+        "200":
+          description: Updated LapRF 8-Way emulator status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid LapRF emulator configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid emulator port or gate assignment"
+
+  /v1/sim:
+    get:
+      tags: [Simulator]
+      summary: Read simulator singleton state (running flag, simulated pilots, timers, LapRF, and RotorHazard units)
+      operationId: getSim
+      responses:
+        "200":
+          description: Live simulator snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [running, simState]
+                properties:
+                  running:
+                    type: boolean
+                    example: true
+                  simState:
+                    $ref: "#/components/schemas/SimState"
+
+    patch:
+      tags: [Simulator]
+      summary: Update simulator singleton settings (`running`, `speedMultiplier`, `trackWalker`)
+      operationId: patchSim
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                running:
+                  type: boolean
+                  example: true
+                speedMultiplier:
+                  type: integer
+                  example: 1
+                trackWalker:
+                  type: boolean
+                  example: false
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid simulator settings payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid simulator parameters"
+
+  "/v1/sim:packBurst":
+    post:
+      tags: [Simulator]
+      summary: Trigger a synchronized 6S pack launch burst across simulated pilots
+      operationId: triggerSimPackBurst
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  "/v1/sim/pilots/{slotIndex}:action":
+    parameters:
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 16
+    post:
+      tags: [Simulator]
+      summary: Trigger a flight or pit action on a simulated pilot (`crash`, `recover`, `walk-recover`, `pit`, `pause`, `break`, `launch`, `resume`, `refill-launch`)
+      operationId: triggerSimPilotAction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum:
+                    - crash
+                    - recover
+                    - walk-recover
+                    - pit
+                    - pause
+                    - break
+                    - launch
+                    - resume
+                    - refill-launch
+                  example: crash
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid slotIndex or simulated pilot action payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid slotIndex"
+
+  /v1/sim/hub-usb:
+    get:
+      tags: [Simulator]
+      summary: Read simulated Hub H1 virtual USB cable connection state
+      operationId: getSimHubUsb
+      responses:
+        "200":
+          description: Virtual Hub USB cable connection state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [connected]
+                properties:
+                  connected:
+                    type: boolean
+                    example: true
+    put:
+      tags: [Simulator]
+      summary: Plug or unplug the simulated Hub H1 virtual USB cable
+      operationId: putSimHubUsb
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [connected]
+              properties:
+                connected:
+                  type: boolean
+                  example: true
+      responses:
+        "200":
+          description: Updated virtual Hub USB cable connection state
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [connected]
+                properties:
+                  connected:
+                    type: boolean
+                    example: true
+        "400":
+          description: Malformed JSON body
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid JSON body"
+
+  /v1/sim/usb-hellos:
+    get:
+      tags: [Simulator]
+      summary: Read raw binary `0x1E`-framed `HELLO` stream for simulated Hub `H1` and active Spokes
+      operationId: getSimUsbHellos
+      responses:
+        "200":
+          description: Raw `0x1E`-framed binary `HELLO` packets
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+
+  /v1/sim/timers:
+    post:
+      tags: [Simulator]
+      summary: Add a simulated XIAO ESP32-C5 SlapRF timer node (Hub or Spoke)
+      operationId: createSimTimer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  type: string
+                  enum: [hub, spoke, unflashed]
+                  example: spoke
+                label:
+                  type: string
+                  example: "T3"
+      responses:
+        "201":
+          description: Created simulated timer and updated full state
+          headers:
+            Location:
+              description: URI of the created simulated timer
+              schema:
+                type: string
+                example: "/v1/sim/timers/4"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "409":
+          description: Maximum simulated timer capacity reached
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "maximum simulated timer count reached"
+
+  "/v1/sim/timers:reset":
+    post:
+      tags: [Simulator]
+      summary: Reset simulated SlapRF Hub/Spoke timers and course gates to defaults
+      operationId: resetSimTimers
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  /v1/sim/timers/{timerId}:
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 255
+    patch:
+      tags: [Simulator]
+      summary: Update RF diagnostic flags (`rfEnabled`, `emergencyMode`, `scanLive`, `chanMask`) on a simulated timer
+      operationId: patchSimTimer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                rfEnabled:
+                  type: boolean
+                  example: true
+                emergencyMode:
+                  type: boolean
+                  example: false
+                scanLive:
+                  type: boolean
+                  example: false
+                chanMask:
+                  type: integer
+                  example: 255
+      responses:
+        "200":
+          description: Diagnostic state updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          description: Missing or invalid diagnostic fields
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "PATCH /v1/sim/timers/{timerId} expects diagnostic fields; use POST /v1/sim/timers/{timerId}:action for imperative board actions"
+    delete:
+      tags: [Simulator]
+      summary: Delete a simulated XIAO ESP32-C5 timer node
+      operationId: deleteSimTimer
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Simulated timer not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "simulated timer not found"
+
+  "/v1/sim/timers/{timerId}:action":
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Simulator]
+      summary: Execute a board lifecycle action (`toggle-power`, `erase`, `flash`) on a simulated SlapRF timer
+      operationId: runSimTimerAction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [action]
+              properties:
+                action:
+                  type: string
+                  enum: [toggle-power, erase, flash]
+                  example: flash
+                role:
+                  type: string
+                  example: "spoke"
+                label:
+                  type: string
+                  example: "T2"
+                fingerprint:
+                  type: string
+                  example: "SIM-ESP32C5-02"
+                firmwareVersion:
+                  type: string
+                  example: "v0.1.6"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Unknown or invalid simulated timer action
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "unknown simulated timer action"
+        "404":
+          description: Simulated timer not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "simulated timer not found"
+
+  "/v1/sim/timers/{timerId}:togglePower":
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Simulator]
+      summary: Toggle simulated power on or off for a simulated SlapRF timer
+      operationId: toggleSimTimerPower
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  "/v1/sim/timers/{timerId}:erase":
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Simulator]
+      summary: Erase simulated flash on a simulated XIAO ESP32-C5 board back to unflashed ROM state
+      operationId: eraseSimTimer
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Simulated timer not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "simulated timer not found"
+
+  "/v1/sim/timers/{timerId}:flash":
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Simulator]
+      summary: Flash simulated SlapRF firmware onto a simulated XIAO ESP32-C5 board
+      operationId: flashSimTimer
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                role:
+                  type: string
+                  example: "spoke"
+                label:
+                  type: string
+                  example: "T2"
+                fingerprint:
+                  type: string
+                  example: "SIM-ESP32C5-02"
+                firmwareVersion:
+                  type: string
+                  example: "v0.1.6"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Simulated timer not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "simulated timer not found"
+
+  /v1/sim/timers/{timerId}/rssi:
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Simulator]
+      summary: Read live per-slot simulated RSSI values (dBm) for a simulated SlapRF timer
+      operationId: getSimTimerRssi
+      responses:
+        "200":
+          description: Per-slot simulated RSSI array
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  rssi:
+                    type: array
+                    items:
+                      type: number
+                      example: -54.2
+
+  /v1/sim/laprf/devices:
+    get:
+      tags: [Simulator]
+      summary: Discover simulated ImmersionRC LapRF 8-Way pucks on the virtual LAN (`192.168.1.0/24`)
+      operationId: discoverSimLapRFDevices
+      responses:
+        "200":
+          description: Discovered simulated LapRF devices
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subnet:
+                    type: string
+                    example: "192.168.1.0/24 (Simulated LAN)"
+                  devices:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        host:
+                          type: string
+                          example: "192.168.1.2"
+                        port:
+                          type: integer
+                          example: 5403
+                        label:
+                          type: string
+                          example: "L1"
+                        timerId:
+                          type: integer
+                          example: 2
+                        connected:
+                          type: boolean
+                          example: true
+                        voltageMv:
+                          type: integer
+                          example: 12200
+
+  /v1/sim/laprf/units:
+    post:
+      tags: [Simulator]
+      summary: Add or connect a simulated ImmersionRC LapRF 8-Way unit
+      operationId: createSimLapRFUnit
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimLapRFActionRequest"
+      responses:
+        "201":
+          description: Added or connected simulated LapRF unit and updated full state
+          headers:
+            Location:
+              description: Simulated LapRF units collection URI
+              schema:
+                type: string
+                example: "/v1/sim/laprf/units"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid simulated LapRF unit parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid host address"
+
+  "/v1/sim/laprf/units:reset":
+    post:
+      tags: [Simulator]
+      summary: Reset simulated ImmersionRC LapRF 8-Way units back to defaults
+      operationId: resetSimLapRFUnits
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  /v1/sim/laprf/units/{timerId}:
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    patch:
+      tags: [Simulator]
+      summary: Update label, host, TCP port, or supply voltage on a simulated LapRF 8-Way unit
+      operationId: patchSimLapRFUnit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimLapRFActionRequest"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid LapRF unit update parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid port number"
+        "404":
+          description: Simulated LapRF unit not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "simulated LapRF unit not found"
+    delete:
+      tags: [Simulator]
+      summary: Remove a simulated LapRF 8-Way unit
+      operationId: deleteSimLapRFUnit
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Simulated LapRF unit not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "simulated LapRF unit not found"
+
+  "/v1/sim/laprf/units/{timerId}:action":
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Simulator]
+      summary: Execute a control action (`toggle-power`, `toggle-connect`, `connect-host`, `disconnect`, `update`, `delete`) on a simulated LapRF unit
+      operationId: runSimLapRFUnitAction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimLapRFActionRequest"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid simulated LapRF action
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "unknown simulated LapRF action"
+        "404":
+          description: Simulated LapRF unit not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "simulated LapRF unit not found"
+
+  /v1/sim/rh/devices:
+    get:
+      tags: [Simulator]
+      summary: Discover simulated RotorHazard network servers and USB serial nodes
+      operationId: discoverSimRotorHazardDevices
+      responses:
+        "200":
+          description: Discovered simulated RotorHazard devices
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  subnet:
+                    type: string
+                    example: "192.168.1.0/24 (Simulated LAN)"
+                  devices:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        transport:
+                          type: string
+                          example: "network"
+                        host:
+                          type: string
+                          example: "192.168.1.10"
+                        port:
+                          type: integer
+                          example: 5000
+                        label:
+                          type: string
+                          example: "R1"
+                        timerId:
+                          type: integer
+                          example: 2
+                        connected:
+                          type: boolean
+                          example: true
+                        nodeCount:
+                          type: integer
+                          example: 8
+                        serverVersion:
+                          type: string
+                          example: "4.1.0"
+                        verified:
+                          type: boolean
+                          example: true
+
+  /v1/sim/rh/units:
+    post:
+      tags: [Simulator]
+      summary: Add or connect a simulated RotorHazard network server or USB serial node
+      operationId: createSimRotorHazardUnit
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimRotorHazardActionRequest"
+      responses:
+        "201":
+          description: Added or connected simulated RotorHazard unit and updated full state
+          headers:
+            Location:
+              description: Simulated RotorHazard units collection URI
+              schema:
+                type: string
+                example: "/v1/sim/rh/units"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid simulated RotorHazard unit parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid RotorHazard host or port"
+
+  "/v1/sim/rh/units:reset":
+    post:
+      tags: [Simulator]
+      summary: Reset simulated RotorHazard units back to defaults
+      operationId: resetSimRotorHazardUnits
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  /v1/sim/rh/units/{timerId}:
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    patch:
+      tags: [Simulator]
+      summary: Update configuration on a simulated RotorHazard unit
+      operationId: patchSimRotorHazardUnit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimRotorHazardActionRequest"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid RotorHazard unit parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid nodeCount"
+        "404":
+          description: Simulated RotorHazard unit not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "simulated RotorHazard unit not found"
+    delete:
+      tags: [Simulator]
+      summary: Remove a simulated RotorHazard unit
+      operationId: deleteSimRotorHazardUnit
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Simulated RotorHazard unit not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "simulated RotorHazard unit not found"
+
+  "/v1/sim/rh/units/{timerId}:action":
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Simulator]
+      summary: Execute a control action (`toggle-power`, `toggle-connect`, `connect-host`, `connect-port`, `disconnect`, `update`, `delete`) on a simulated RotorHazard unit
+      operationId: runSimRotorHazardUnitAction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimRotorHazardActionRequest"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid simulated RotorHazard action
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "unknown simulated RotorHazard action"
+        "404":
+          description: Simulated RotorHazard unit not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "simulated RotorHazard unit not found"
+
+  "/v1/sim/rh/units/{timerId}:scan":
+    parameters:
+      - name: timerId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Simulator]
+      summary: Run or toggle a simulated 5.8 GHz spectrum sweep (`once`, `live`, `stop`) on a simulated RotorHazard USB node
+      operationId: scanSimRotorHazardUnit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [mode]
+              properties:
+                mode:
+                  type: string
+                  enum: [once, live, stop]
+                  example: once
+                start:
+                  type: integer
+                  example: 5645
+                stop:
+                  type: integer
+                  example: 5945
+                step:
+                  type: integer
+                  example: 2
+      responses:
+        "200":
+          description: Spectrum scan pass or live scan state
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:
+                    type: boolean
+                    example: true
+                  scanLive:
+                    type: boolean
+                    example: false
+                  scan:
+                    $ref: "#/components/schemas/RHScanPass"
+        "400":
+          description: Invalid scan mode or frequency range
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid scan mode (expected once, live, or stop)"
+        "404":
+          description: Simulated RotorHazard unit not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "simulated RotorHazard unit not found"
+        "409":
+          description: Simulator is not currently running
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "simulator is not running"
+
+  /v1/sim/mgp-admin:
+    get:
+      tags: [Simulator]
+      summary: Export in-memory simulated MultiGP chapter, API key, pilot pool, and scheduled races
+      operationId: getSimMultiGPAdmin
+      responses:
+        "200":
+          description: Simulated MultiGP chapter state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimMultiGPState"
+
+  "/v1/sim/mgp-admin:action":
+    post:
+      tags: [Simulator]
+      summary: Mutate the simulated MultiGP chapter, API key, pilot pool, races, ZippyQ rounds, heats, or seats
+      operationId: runSimMultiGPAdminAction
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SimMultiGPAdminAction"
+      responses:
+        "200":
+          description: Updated simulated MultiGP chapter state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SimMultiGPState"
+        "400":
+          description: Invalid MultiGP admin action or parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "pilot callsign is required"
+
+  /v1/sim/mgp/{subPath}:
+    parameters:
+      - name: subPath
+        in: path
+        required: true
+        description: Simulated MultiGP WebService v1.0.4 path (`chapter/findChapterFromApiKey`, `race/listForChapter`, `pilot/listForChapter`, `race/view`, `race/getAdditionalRounds`, `race/assignSlot`, `race/captureOverallRaceResult`).
+        schema:
+          type: string
+    post:
+      tags: [Simulator]
+      summary: Invoke an in-memory simulated MultiGP WebService v1.0.4 POST endpoint
+      operationId: postSimMultiGPWebService
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [apiKey]
+              properties:
+                apiKey:
+                  type: string
+                  example: "MGP-SIM-BAYAREA-2026"
+                data:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200":
+          description: Simulated MultiGP WebService response envelope
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: boolean
+                    example: true
+                  chapterId:
+                    type: integer
+                    example: 1042
+                  chapterName:
+                    type: string
+                    example: "Bay Area FPV"
+        "400":
+          description: Invalid JSON request body
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: boolean
+                    example: false
+                  statusDescription:
+                    type: string
+                    example: "Invalid JSON request body"
+        "401":
+          description: Invalid simulated MultiGP Chapter API key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: boolean
+                    example: false
+                  statusDescription:
+                    type: string
+                    example: "Invalid MultiGP Chapter API key"
+    put:
+      tags: [Simulator]
+      summary: Invoke an in-memory simulated MultiGP WebService v1.0.4 PUT endpoint
+      operationId: putSimMultiGPWebService
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [apiKey]
+              properties:
+                apiKey:
+                  type: string
+                  example: "MGP-SIM-BAYAREA-2026"
+                data:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "200":
+          description: Simulated MultiGP WebService response envelope
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: boolean
+                    example: true
+        "400":
+          description: Invalid JSON request body
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: boolean
+                    example: false
+                  statusDescription:
+                    type: string
+                    example: "Invalid JSON request body"
+        "401":
+          description: Invalid simulated MultiGP Chapter API key
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: boolean
+                    example: false
+                  statusDescription:
+                    type: string
+                    example: "Invalid MultiGP Chapter API key"
+
+  /v1/storage/status:
+    get:
+      tags: [Storage]
+      summary: Read bbolt database file size, record counts, and last backup timestamp
+      operationId: getStorageStatus
+      responses:
+        "200":
+          description: Storage status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/storage:
+    get:
+      tags: [Storage]
+      summary: Export the complete persisted real-hardware database singleton as JSON
+      operationId: getStorage
+      responses:
+        "200":
+          description: Full persisted engine backup JSON
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+    put:
+      tags: [Storage]
+      summary: Restore real-hardware database singleton state from a JSON backup
+      operationId: putStorage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Restored full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid storage snapshot payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "malformed storage snapshot JSON"
+
+  "/v1/storage:reset":
+    post:
+      tags: [Storage]
+      summary: Wipe database storage back to clean defaults
+      operationId: resetStorage
+      responses:
+        "200":
+          description: Reset full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  "/v1/storage:restoreDemo":
+    post:
+      tags: [Storage]
+      summary: Populate active engine with the showcase demo dataset
+      operationId: restoreDemoStorage
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+
+  "/v1/storage:recordBackup":
+    post:
+      tags: [Storage]
+      summary: Record the latest backup export timestamp on the server
+      operationId: recordStorageBackup
+      responses:
+        "200":
+          description: Updated storage status
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/storage/sim:
+    get:
+      tags: [Storage]
+      summary: Export persisted simulator state singleton as JSON
+      operationId: getSimStorage
+      responses:
+        "200":
+          description: Persisted simulator state JSON
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+    put:
+      tags: [Storage]
+      summary: Restore persisted simulator state singleton from JSON
+      operationId: putSimStorage
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: Restored simulator state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OkResponse"
+        "400":
+          description: Invalid simulator parameters
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "invalid simulator pilot speed or noise level"
+
+components:
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+      description: Optional HTTP Basic Auth when enabled in Settings -> Security.
+
+  responses:
+    BadRequestError:
+      description: Malformed JSON body, invalid parameter, or failed validation rule.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "invalid request payload"
+    UnauthorizedError:
+      description: Missing or invalid HTTP Basic Auth credentials when server authentication is enabled.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "authentication required"
+    NotFoundError:
+      description: Requested resource item does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "resource not found"
+    ConflictError:
+      description: Resource state conflict (duplicate name/callsign, active session/heat lock, or minimum capacity rule).
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+          example:
+            error: "conflict with current resource state"
+
+  schemas:
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable error message explaining why the request was rejected.
+          example: "pilot callsign \"VORTEX\" already exists"
+
+    OkResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+          example: true
+
+    VersionResponse:
+      type: object
+      properties:
+        release_tag:
+          type: string
+          example: "v0.1.6"
+        commit_hash:
+          type: string
+          example: "24ebcc1"
+        branch_name:
+          type: string
+          example: "main"
+
+    CapabilitiesResponse:
+      type: object
+      properties:
+        portable:
+          type: boolean
+          example: true
+        version:
+          type: string
+          example: "v0.1.6"
+        hostname:
+          type: string
+          example: "race-director-pc"
+        storageBackend:
+          type: string
+          example: "bbolt"
+        nativeEngine:
+          type: boolean
+          example: true
+        nativeUsb:
+          type: boolean
+          example: true
+        laprfEmulator:
+          type: boolean
+          example: true
+        laprfClient:
+          type: boolean
+          example: true
+        rotorhazardDiscover:
+          type: boolean
+          example: true
+        multigpProxy:
+          type: boolean
+          example: true
+        authRequired:
+          type: boolean
+          example: false
+        authenticated:
+          type: boolean
+          example: true
+        lanIPs:
+          type: array
+          items:
+            type: string
+            example: "192.168.1.50"
+
+    AuthConfigResponse:
+      type: object
+      properties:
+        enabled:
+          type: boolean
+          example: false
+        username:
+          type: string
+          example: "admin"
+        hasPassword:
+          type: boolean
+          example: false
+
+    AuthConfigRequest:
+      type: object
+      required: [enabled]
+      properties:
+        enabled:
+          type: boolean
+          example: true
+        username:
+          type: string
+          example: "admin"
+        password:
+          type: string
+          example: "race-control-2026"
+
+    TimingHardwareMode:
+      type: string
+      enum: [slaprf, slaprf_ble, rotorhazard, rotorhazard_usb, laprf]
+      example: slaprf
+
+    TimerRole:
+      type: string
+      enum: [START_FINISH, SECTOR_GATE]
+      example: START_FINISH
+
+    SectorBadge:
+      type: string
+      enum: [OVERALL_BEST, PERSONAL_BEST, NORMAL, OFF_PACE]
+      example: PERSONAL_BEST
+
+    PilotSlot:
+      type: object
+      required: [slotIndex, callsign, enabled, band, channel, frequencyMhz]
+      properties:
+        slotIndex:
+          type: integer
+          minimum: 1
+          maximum: 64
+          example: 1
+        callsign:
+          type: string
+          example: "VORTEX"
+        phoneticName:
+          type: string
+          example: "vor-teks"
+        enabled:
+          type: boolean
+          example: true
+        band:
+          type: integer
+          description: "1 = Raceband (R1-R8)"
+          example: 1
+        channel:
+          type: integer
+          minimum: 0
+          maximum: 8
+          example: 1
+        frequencyMhz:
+          type: integer
+          example: 5658
+        enterThreshold:
+          type: number
+          example: -58
+        exitThreshold:
+          type: number
+          example: -68
+        color:
+          type: string
+          example: "#d4ff3a"
+        mgpPilotId:
+          type: integer
+          example: 48210
+        mgpUserName:
+          type: string
+          example: "VortexFPV"
+
+    DetectedTimer:
+      type: object
+      required: [timerId, timerLabel, isHub, online]
+      properties:
+        timerId:
+          type: integer
+          example: 1
+        timerLabel:
+          type: string
+          example: "H1"
+        color:
+          type: string
+          example: "#d4ff3a"
+        isHub:
+          type: boolean
+          example: true
+        firmwareVersion:
+          type: string
+          example: "v0.1.6"
+        fingerprint:
+          type: string
+          example: "A1B2C3D4"
+        batteryMv:
+          type: integer
+          example: 4150
+        batteryPct:
+          type: integer
+          example: 94
+        noiseFloorDbm:
+          type: number
+          example: -94.5
+        lastRssi:
+          type: array
+          items:
+            type: number
+            example: -92.0
+        framesRxCount:
+          type: integer
+          example: 14820
+        online:
+          type: boolean
+          example: true
+        lastSeenAt:
+          type: string
+          example: "2026-11-20T21:15:00Z"
+
+    TrackGate:
+      type: object
+      required: [gateId, assignedTimerId, name, role, trackOrder, online]
+      properties:
+        gateId:
+          type: integer
+          example: 1
+        assignedTimerId:
+          type: integer
+          example: 1
+        timerLabel:
+          type: string
+          example: "H1"
+        firmwareVersion:
+          type: string
+          example: "v0.1.6"
+        name:
+          type: string
+          example: "Start / Finish"
+        color:
+          type: string
+          example: "#d4ff3a"
+        role:
+          $ref: "#/components/schemas/TimerRole"
+        trackOrder:
+          type: integer
+          example: 0
+        batteryMv:
+          type: integer
+          example: 4150
+        batteryPct:
+          type: integer
+          example: 94
+        noiseFloorDbm:
+          type: number
+          example: -94.5
+        lastRssi:
+          type: array
+          items:
+            type: number
+            example: -92.0
+        enterThresholds:
+          type: array
+          items:
+            type: number
+            example: -58.0
+        exitThresholds:
+          type: array
+          items:
+            type: number
+            example: -68.0
+        ruleOverrides:
+          $ref: "#/components/schemas/GateRuleOverrides"
+        online:
+          type: boolean
+          example: true
+        framesRxCount:
+          type: integer
+          example: 14820
+
+    GateUpdate:
+      type: object
+      properties:
+        gateId:
+          type: integer
+          example: 2
+        name:
+          type: string
+          example: "Split 1"
+        color:
+          type: string
+          example: "#38bdf8"
+        role:
+          $ref: "#/components/schemas/TimerRole"
+        trackOrder:
+          type: integer
+          example: 1
+        assignedTimerId:
+          type: integer
+          example: 2
+
+    GateThresholdUpdate:
+      type: object
+      required: [gateId, slotIndex, enterDbm]
+      properties:
+        gateId:
+          type: integer
+          example: 1
+        slotIndex:
+          type: integer
+          example: 1
+        enterDbm:
+          type: number
+          example: -56.0
+        exitDbm:
+          type: number
+          example: -66.0
+        auto:
+          type: boolean
+          example: false
+
+    TimingRules:
+      type: object
+      properties:
+        minLapSec:
+          type: number
+          example: 5.0
+        maxLapSec:
+          type: number
+          example: 120.0
+        minCrossingSec:
+          type: number
+          example: 0.12
+        beepOnCross:
+          type: boolean
+          example: false
+
+    GateRuleOverrides:
+      type: object
+      properties:
+        minLapSec:
+          type: number
+          example: 5.0
+        maxLapSec:
+          type: number
+          example: 120.0
+        minCrossingSec:
+          type: number
+          example: 0.12
+        beepOnCross:
+          type: boolean
+          example: true
+
+    GateCrossingEvent:
+      type: object
+      required: [eventId, gateId, gateName, isStartFinish, slotIndex, callsign, frequencyMhz, timestampUs, peakRssiDbm]
+      properties:
+        eventId:
+          type: integer
+          example: 104
+        gateId:
+          type: integer
+          example: 1
+        gateName:
+          type: string
+          example: "Start / Finish"
+        isStartFinish:
+          type: boolean
+          example: true
+        startedLap:
+          type: boolean
+          example: false
+        slotIndex:
+          type: integer
+          example: 1
+        callsign:
+          type: string
+          example: "VORTEX"
+        frequencyMhz:
+          type: integer
+          example: 5658
+        timestampUs:
+          type: integer
+          example: 48219400
+        peakRssiDbm:
+          type: number
+          example: -46.5
+        beamwidthMs:
+          type: number
+          example: 310
+        estimatedSpeedMph:
+          type: number
+          example: 41.2
+        passingNumber:
+          type: integer
+          example: 12
+
+    FilteredDetection:
+      type: object
+      properties:
+        timestampUs:
+          type: integer
+          example: 49102000
+        gateId:
+          type: integer
+          example: 1
+        slotIndex:
+          type: integer
+          example: 1
+        callsign:
+          type: string
+          example: "VORTEX"
+        reason:
+          type: string
+          enum: [SPIKE, MIN_LAP, LAP_TOO_LONG]
+          example: MIN_LAP
+        detail:
+          type: string
+          example: "2.14s < 5.00s min lap"
+        peakRssiDbm:
+          type: number
+          example: -51.0
+
+    SectorSplit:
+      type: object
+      properties:
+        sectorIndex:
+          type: integer
+          example: 1
+        fromGateId:
+          type: integer
+          example: 1
+        toGateId:
+          type: integer
+          example: 2
+        label:
+          type: string
+          example: "S1"
+        splitSeconds:
+          type: number
+          example: 4.612
+        deltaToBestSec:
+          type: number
+          example: -0.104
+        exitSpeedMph:
+          type: number
+          example: 42.5
+        badge:
+          $ref: "#/components/schemas/SectorBadge"
+
+    LapRecord:
+      type: object
+      required: [lapId, slotIndex, callsign, lapNumber, lapTimeSec, completedAtUs, isBestLap]
+      properties:
+        lapId:
+          type: integer
+          example: 29
+        slotIndex:
+          type: integer
+          example: 1
+        callsign:
+          type: string
+          example: "VORTEX"
+        lapNumber:
+          type: integer
+          example: 3
+        lapTimeSec:
+          type: number
+          example: 14.284
+        deltaToBest:
+          type: number
+          example: -0.312
+        sectors:
+          type: array
+          items:
+            $ref: "#/components/schemas/SectorSplit"
+        completedAtUs:
+          type: integer
+          example: 48219400
+        isBestLap:
+          type: boolean
+          example: true
+        invalidated:
+          type: boolean
+          example: false
+
+    RaceLifecycleRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+          example: "Weather delay"
+        preemptOngoing:
+          type: boolean
+          example: true
+
+    RaceControlRequest:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum: [start, pause, resume, stop, cancel, emergency_stop, reset, confirm, unlock, select, next_heat]
+          example: start
+        preemptOngoing:
+          type: boolean
+          example: true
+
+    RaceMarshalPayload:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum:
+            - toggle_dnf
+            - toggle_dq
+            - toggle_dns
+            - add_lap
+            - toggle_lap
+            - add_crossing
+            - move_crossing
+            - delete_crossing
+            - move_up
+            - move_down
+            - reorder_seats
+            - set_penalty
+            - clear_override
+          example: toggle_lap
+        crossingId:
+          type: integer
+          example: 104
+        offsetMs:
+          type: integer
+          example: -150
+        penaltySec:
+          type: number
+          example: 2.0
+        orderedSlotIndices:
+          type: array
+          items:
+            type: integer
+            example: 1
+
+    StatusResponse:
+      type: object
+      required: [serverTimestampUs, timingHardwareMode, gates, timers, simulatorRunning, raceArmed]
+      properties:
+        serverTimestampUs:
+          type: integer
+          example: 1732165200000000
+        timingHardwareMode:
+          $ref: "#/components/schemas/TimingHardwareMode"
+        gates:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrackGate"
+        timers:
+          type: array
+          items:
+            $ref: "#/components/schemas/DetectedTimer"
+        simulatorRunning:
+          type: boolean
+          example: false
+        raceArmed:
+          type: boolean
+          example: true
+        raceState:
+          type: object
+          additionalProperties: true
+          example:
+            tournamentId: "race-1"
+            name: "Main Event"
+            status: "active"
+        eventState:
+          type: object
+          additionalProperties: true
+          example:
+            selectedRaceId: "race-1"
+        practiceState:
+          type: object
+          additionalProperties: true
+          example:
+            selectedSessionId: "prac-1"
+
+    FullStateResponse:
+      type: object
+      required: [serverTimestampUs, timingHardwareMode, pilots, gates, timers, laps, crossings, rules, simulatorRunning, raceArmed]
+      properties:
+        serverTimestampUs:
+          type: integer
+          example: 1732165200000000
+        timingHardwareMode:
+          $ref: "#/components/schemas/TimingHardwareMode"
+        pilots:
+          type: array
+          items:
+            $ref: "#/components/schemas/PilotSlot"
+        gates:
+          type: array
+          items:
+            $ref: "#/components/schemas/TrackGate"
+        timers:
+          type: array
+          items:
+            $ref: "#/components/schemas/DetectedTimer"
+        laps:
+          type: array
+          items:
+            $ref: "#/components/schemas/LapRecord"
+        crossings:
+          type: array
+          items:
+            $ref: "#/components/schemas/GateCrossingEvent"
+        filtered:
+          type: array
+          items:
+            $ref: "#/components/schemas/FilteredDetection"
+        summaries:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+            example:
+              slotIndex: 1
+              callsign: "VORTEX"
+              totalLaps: 3
+              bestLapSec: 14.284
+              lastLapSec: 14.284
+        rules:
+          $ref: "#/components/schemas/TimingRules"
+        simulatorRunning:
+          type: boolean
+          example: false
+        raceArmed:
+          type: boolean
+          example: true
+        raceState:
+          type: object
+          additionalProperties: true
+          example:
+            tournamentId: "race-1"
+            name: "Main Event"
+            status: "active"
+        eventState:
+          type: object
+          additionalProperties: true
+          example:
+            selectedRaceId: "race-1"
+        practiceState:
+          type: object
+          additionalProperties: true
+          example:
+            selectedSessionId: "prac-1"
+
+    SimBatteryPack:
+      type: object
+      required: [packIndex, pct, volts, state]
+      properties:
+        packIndex:
+          type: integer
+          example: 1
+        pct:
+          type: integer
+          example: 84
+        volts:
+          type: number
+          example: 24.1
+        state:
+          type: string
+          enum: [IN_QUAD, READY, CHARGING]
+          example: IN_QUAD
+
+    SimPilotState:
+      type: object
+      required: [slotIndex, callsign, band, channel, frequencyMhz, enabled, status, batteryPct, batteryVolts]
+      properties:
+        slotIndex:
+          type: integer
+          example: 1
+        callsign:
+          type: string
+          example: "VORTEX"
+        color:
+          type: string
+          example: "#38bdf8"
+        band:
+          type: integer
+          example: 1
+        channel:
+          type: integer
+          example: 1
+        frequencyMhz:
+          type: integer
+          example: 5658
+        enabled:
+          type: boolean
+          example: true
+        status:
+          type: string
+          enum:
+            - FLYING
+            - AVOIDING
+            - LANDING
+            - CRASHED_VTX_ON
+            - TURTLE_RECOVERY
+            - TURTLE_FAILED
+            - CRASHED_WAITING_RECOVERY
+            - WALKING_RECOVERY
+            - PIT_SWAP
+            - LAUNCH_HOLD
+            - CHARGING_WAIT
+            - PILOT_BREAK
+            - PAUSED
+          example: FLYING
+        batteryPct:
+          type: integer
+          example: 84
+        batteryVolts:
+          type: number
+          example: 24.1
+        packs:
+          type: array
+          items:
+            $ref: "#/components/schemas/SimBatteryPack"
+        trackProgress:
+          type: number
+          example: 0.42
+        speedMph:
+          type: number
+          example: 43.8
+        altitudeMeters:
+          type: number
+          example: 1.4
+        vtxActive:
+          type: boolean
+          example: true
+        nearestGateLabel:
+          type: string
+          example: "Start / Finish"
+        stateRemainingSec:
+          type: number
+          example: 0
+        crashesCount:
+          type: integer
+          example: 0
+        packsFlown:
+          type: integer
+          example: 2
+
+    SimTimerState:
+      type: object
+      required: [timerId, timerLabel, isHub, poweredOn, online]
+      properties:
+        timerId:
+          type: integer
+          example: 1
+        timerLabel:
+          type: string
+          example: "H1"
+        color:
+          type: string
+          example: "#d4ff3a"
+        isHub:
+          type: boolean
+          example: true
+        unflashed:
+          type: boolean
+          example: false
+        firmwareVersion:
+          type: string
+          example: "v0.1.6"
+        fingerprint:
+          type: string
+          example: "SIM-ESP32C5-01"
+        poweredOn:
+          type: boolean
+          example: true
+        online:
+          type: boolean
+          example: true
+        assignedGateName:
+          type: string
+          example: "Start / Finish"
+        batteryMv:
+          type: integer
+          example: 4980
+        batteryPct:
+          type: integer
+          example: 100
+        noiseFloorDbm:
+          type: number
+          example: -94.5
+
+    SimLapRFUnit:
+      type: object
+      required: [timerId, label, host, port, poweredOn, connected, online]
+      properties:
+        timerId:
+          type: integer
+          example: 2
+        label:
+          type: string
+          example: "L1"
+        host:
+          type: string
+          example: "192.168.1.2"
+        port:
+          type: integer
+          example: 5403
+        poweredOn:
+          type: boolean
+          example: true
+        connected:
+          type: boolean
+          example: true
+        online:
+          type: boolean
+          example: true
+        assignedGateName:
+          type: string
+          example: "Start / Finish"
+        voltageMv:
+          type: integer
+          example: 12200
+        gateArmed:
+          type: boolean
+          example: true
+
+    RHScanPass:
+      type: object
+      required: [seq, start, stop, step, passMs, live, values]
+      properties:
+        seq:
+          type: integer
+          example: 12
+        start:
+          type: integer
+          example: 5645
+        stop:
+          type: integer
+          example: 5945
+        step:
+          type: integer
+          example: 2
+        passMs:
+          type: integer
+          example: 185
+        live:
+          type: boolean
+          example: false
+        values:
+          type: array
+          items:
+            type: number
+            example: 42.0
+
+    SimRotorHazardUnit:
+      type: object
+      required: [timerId, label, host, port, nodeCount, poweredOn, connected, online]
+      properties:
+        timerId:
+          type: integer
+          example: 2
+        label:
+          type: string
+          example: "R1"
+        transport:
+          type: string
+          enum: [network, usb]
+          example: network
+        portName:
+          type: string
+          example: "SIM-RH-USB1"
+        baudRate:
+          type: integer
+          example: 115200
+        apiLevel:
+          type: integer
+          example: 36
+        host:
+          type: string
+          example: "192.168.1.10"
+        port:
+          type: integer
+          example: 5000
+        nodeCount:
+          type: integer
+          example: 8
+        serverVersion:
+          type: string
+          example: "4.1.0"
+        poweredOn:
+          type: boolean
+          example: true
+        connected:
+          type: boolean
+          example: true
+        online:
+          type: boolean
+          example: true
+        gateArmed:
+          type: boolean
+          example: true
+
+    SimState:
+      type: object
+      required: [running, speedMultiplier, trackWalkerActive, pilots, timers]
+      properties:
+        running:
+          type: boolean
+          example: true
+        speedMultiplier:
+          type: integer
+          example: 1
+        trackWalkerActive:
+          type: boolean
+          example: false
+        autoPracticeEvents:
+          type: boolean
+          example: true
+        trackWalkerSecLeft:
+          type: number
+          example: 0
+        pilots:
+          type: array
+          items:
+            $ref: "#/components/schemas/SimPilotState"
+        timers:
+          type: array
+          items:
+            $ref: "#/components/schemas/SimTimerState"
+        laprfUnits:
+          type: array
+          items:
+            $ref: "#/components/schemas/SimLapRFUnit"
+        rotorhazardUnits:
+          type: array
+          items:
+            $ref: "#/components/schemas/SimRotorHazardUnit"
+
+    SimLapRFActionRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [toggle-power, toggle-connect, connect-host, disconnect, update, add, delete, reset]
+          example: toggle-connect
+        timerId:
+          type: integer
+          example: 2
+        label:
+          type: string
+          example: "L1"
+        host:
+          type: string
+          example: "192.168.1.2"
+        port:
+          type: integer
+          example: 5403
+        voltageMv:
+          type: integer
+          example: 12200
+
+    SimRotorHazardActionRequest:
+      type: object
+      properties:
+        action:
+          type: string
+          enum: [toggle-power, toggle-connect, connect-host, connect-port, disconnect, update, add, delete, reset]
+          example: toggle-connect
+        timerId:
+          type: integer
+          example: 2
+        label:
+          type: string
+          example: "R1"
+        transport:
+          type: string
+          enum: [network, usb]
+          example: network
+        portName:
+          type: string
+          example: "SIM-RH-USB1"
+        baudRate:
+          type: integer
+          example: 115200
+        host:
+          type: string
+          example: "192.168.1.10"
+        port:
+          type: integer
+          example: 5000
+        nodeCount:
+          type: integer
+          example: 8
+        adminUser:
+          type: string
+          example: "admin"
+        adminPass:
+          type: string
+          example: "rotorhazard"
+
+    SimMultiGPState:
+      type: object
+      required: [chapterId, chapterName, apiKey, nextRaceId, pilotPool, races]
+      properties:
+        chapterId:
+          type: integer
+          example: 1042
+        chapterName:
+          type: string
+          example: "Bay Area FPV"
+        apiKey:
+          type: string
+          example: "MGP-SIM-BAYAREA-2026"
+        nextRaceId:
+          type: integer
+          example: 504
+        pilotPool:
+          type: array
+          items:
+            type: object
+            properties:
+              pilotId:
+                type: integer
+                example: 1001
+              userName:
+                type: string
+                example: "FAERRY"
+              band:
+                type: string
+                example: "R"
+              channel:
+                type: string
+                example: "1"
+              frequency:
+                type: integer
+                example: 5658
+        races:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: integer
+                example: 501
+              name:
+                type: string
+                example: "Friday Night Spec Race"
+              chapterId:
+                type: integer
+                example: 1042
+              chapterName:
+                type: string
+                example: "Bay Area FPV"
+              scoringFormat:
+                type: integer
+                example: 2
+              cycleCount:
+                type: integer
+                example: 3
+
+    SimMultiGPAdminAction:
+      type: object
+      required: [action]
+      properties:
+        action:
+          type: string
+          enum:
+            - reset
+            - set-chapter
+            - regen-key
+            - add-race
+            - delete-race
+            - set-scoring
+            - set-mode
+            - set-auto-zippyq
+            - sim-zippyq-checkin
+            - sim-zippyq-lineup
+            - queue-zippyq
+            - toggle-pilot
+            - set-all-pilots
+            - add-pool-pilot
+            - rebuild-schedule
+            - add-round
+            - delete-round
+            - add-heat
+            - delete-heat
+            - add-seat
+            - delete-seat
+            - set-seat-channel
+            - assign-seat
+            - move-seat
+          example: add-race
+        chapterName:
+          type: string
+          example: "Bay Area FPV"
+        raceId:
+          type: integer
+          example: 501
+        name:
+          type: string
+          example: "Sunday Invitational"
+        isZippyQ:
+          type: boolean
+          example: false
+        enabled:
+          type: boolean
+          example: true
+        scoringFormat:
+          type: integer
+          example: 2
+        roundCount:
+          type: integer
+          example: 3
+        pilotId:
+          type: integer
+          example: 1001
+        roundNumber:
+          type: integer
+          example: 1
+        heatNumber:
+          type: integer
+          example: 1
+        seatIndex:
+          type: integer
+          example: 0
+        slot:
+          type: integer
+          example: 1

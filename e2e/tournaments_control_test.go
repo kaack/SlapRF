@@ -195,16 +195,13 @@ func TestFullRaceControlExecutionAndChampion(t *testing.T) {
 			} `json:"roster"`
 		} `json:"raceState"`
 	}
-	if err := h.WasmGetJSON("/api/state", &stBefore); err != nil {
+	if err := h.WasmGetJSON("/v1/state", &stBefore); err != nil {
 		t.Fatalf("get initial raceState: %v", err)
 	}
 	for idx, rp := range stBefore.RaceState.Roster {
 		wantChecked := idx < 4
 		if rp.CheckedIn != wantChecked {
-			if err := h.WasmPostJSON("/api/events/action", map[string]any{
-				"action":     "update_attendance",
-				"raceId":     stBefore.RaceState.RaceID,
-				"slotIndex":  rp.SlotIndex,
+			if err := h.WasmMethodJSON("PATCH", fmt.Sprintf("/v1/race/sessions/%s/pilots/%d", stBefore.RaceState.RaceID, rp.SlotIndex), map[string]any{
 				"checkedIn":  wantChecked,
 				"attendance": map[bool]string{true: "active", false: "absent"}[wantChecked],
 			}, nil); err != nil {
@@ -214,8 +211,7 @@ func TestFullRaceControlExecutionAndChampion(t *testing.T) {
 	}
 
 	// Set short 1s countdown, 2 target laps, and single_final so 1 Finals heat crowns the Champion.
-	if err := h.WasmPostJSON("/api/race/setup", map[string]any{
-		"raceId": stBefore.RaceState.RaceID,
+	if err := h.WasmMethodJSON("PUT", fmt.Sprintf("/v1/race/sessions/%s/config", stBefore.RaceState.RaceID), map[string]any{
 		"config": map[string]any{
 			"eventName":     "Championship Sprint",
 			"pilotsPerHeat": 4,
@@ -227,11 +223,11 @@ func TestFullRaceControlExecutionAndChampion(t *testing.T) {
 		"generate":        false,
 		"applyToExisting": true,
 	}, nil); err != nil {
-		t.Fatalf("POST /api/race/setup: %v", err)
+		t.Fatalf("PUT /v1/race/sessions/{id}/config: %v", err)
 	}
-	if err := h.WasmPostJSON("/api/race/bracket-edit", map[string]any{
+	bracketEditPath := fmt.Sprintf("/v1/race/sessions/%s/bracket:edit", stBefore.RaceState.RaceID)
+	if err := h.WasmPostJSON(bracketEditPath, map[string]any{
 		"action":        "apply_template",
-		"raceId":        stBefore.RaceState.RaceID,
 		"templateId":    "single_elimination",
 		"pilotsPerHeat": 4,
 		"targetLaps":    2,
@@ -249,12 +245,11 @@ func TestFullRaceControlExecutionAndChampion(t *testing.T) {
 			} `json:"rounds"`
 		} `json:"raceState"`
 	}
-	if err := h.WasmGetJSON("/api/state", &roundCheck); err == nil {
+	if err := h.WasmGetJSON("/v1/state", &roundCheck); err == nil {
 		for _, rnd := range roundCheck.RaceState.Rounds {
 			if rnd.BracketLane == "finals" {
-				_ = h.WasmPostJSON("/api/race/bracket-edit", map[string]any{
+				_ = h.WasmPostJSON(bracketEditPath, map[string]any{
 					"action":       "update_round",
-					"raceId":       stBefore.RaceState.RaceID,
 					"roundId":      rnd.ID,
 					"finalsFormat": "single_final",
 					"targetLaps":   2,
@@ -270,8 +265,8 @@ func TestFullRaceControlExecutionAndChampion(t *testing.T) {
 	if err := controlTabBtn.Click(); err != nil {
 		t.Fatalf("click Marshal tab: %v", err)
 	}
-	if err := h.WasmPostJSON("/api/sim/speed", map[string]any{"speedMultiplier": 20}, nil); err != nil {
-		t.Fatalf("POST /api/sim/speed 20x: %v", err)
+	if err := h.WasmMethodJSON("PATCH", "/v1/sim", map[string]any{"speedMultiplier": 20}, nil); err != nil {
+		t.Fatalf("PATCH /v1/sim 20x: %v", err)
 	}
 
 	// Start the Finals heat (confirming Pause Active Session if Open Practice was running on boot).
@@ -294,7 +289,7 @@ func TestFullRaceControlExecutionAndChampion(t *testing.T) {
 				} `json:"heats"`
 			} `json:"raceState"`
 		}
-		if err := h.WasmGetJSON("/api/state", &st); err != nil {
+		if err := h.WasmGetJSON("/v1/state", &st); err != nil {
 			return false, nil
 		}
 		if len(st.RaceState.Heats) == 0 {
@@ -358,7 +353,7 @@ func TestFullRaceControlExecutionAndChampion(t *testing.T) {
 				ChampionCallsign string `json:"championCallsign"`
 			} `json:"raceState"`
 		}
-		if err := h.WasmGetJSON("/api/state", &st); err != nil {
+		if err := h.WasmGetJSON("/v1/state", &st); err != nil {
 			return false, nil
 		}
 		if st.RaceState.IsComplete && st.RaceState.ChampionCallsign != "" {

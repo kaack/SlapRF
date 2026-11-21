@@ -19,7 +19,7 @@
  * Boot: `loadBootState()` runs in parallel with the wasm download, assembles the
  * `tracker.PersistedEngineState` JSON from the stores and hands it to the Go runtime through
  * `window.__slaprfBootState` (read once in cmd/slaprf-wasm main before the simulator starts), so
- * the first `/api/state` the UI fetches already contains the restored data.
+ * the first `/v1/state` the UI fetches already contains the restored data.
  */
 
 import { isDevHost } from "./offline";

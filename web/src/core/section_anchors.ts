@@ -16,7 +16,7 @@ function slugifyHeading(text: string): string {
 }
 
 function isVerticalSectionRoute(route: RouteId): boolean {
-  return route !== "races" && route !== "live";
+  return route !== "races" && route !== "practice";
 }
 
 function routeSafeId(route: RouteId, anchor: string): string {
@@ -31,7 +31,7 @@ function routeSafeId(route: RouteId, anchor: string): string {
 export class SectionAnchorTracker {
   private readonly outletEl: HTMLElement;
   private readonly store: AppStore;
-  private activeRoute: RouteId = "live";
+  private activeRoute: RouteId = "practice";
   private suppressSpyUntil = 0;
   private pendingInitialAnchor = "";
   private userHasScrolled = false;

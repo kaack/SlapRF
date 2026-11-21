@@ -721,7 +721,7 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
         timingHardwareMode: "laprf",
         simulatorRunning: true,
         raceArmed: true,
-        liveTimeStatus: store.liveTime,
+        laprfEmulatorStatus: store.laprfEmulator,
         simState: {
           running: true,
           speedMultiplier: 1,
@@ -761,7 +761,7 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
         timingHardwareMode: "laprf",
         simulatorRunning: true,
         raceArmed: true,
-        liveTimeStatus: store.liveTime,
+        laprfEmulatorStatus: store.laprfEmulator,
         simState: {
           running: true,
           speedMultiplier: 1,

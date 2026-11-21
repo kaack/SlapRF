@@ -132,7 +132,8 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 	cfg := s.authCfg
 	s.authMu.RUnlock()
 
-	writeJSONNoStore(w, http.StatusOK, map[string]any{
+	w.Header().Set("Location", "/v1/auth/sessions/current")
+	writeJSONNoStore(w, http.StatusCreated, map[string]any{
 		"ok":       true,
 		"enabled":  cfg.Enabled,
 		"username": cfg.Username,
@@ -157,7 +158,7 @@ func (s *Server) handleAuthConfig(w http.ResponseWriter, r *http.Request) {
 			"hasPassword": cfg.PasswordSHA256 != "",
 		})
 
-	case http.MethodPost:
+	case http.MethodPut:
 		var req struct {
 			Enabled  bool   `json:"enabled"`
 			Username string `json:"username"`

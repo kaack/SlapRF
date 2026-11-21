@@ -49,6 +49,6 @@ Confirm all 8 receiver slots report online status and pack voltage. SlapRF pushe
 
 {{% /steps %}}
 
-## LiveTime Output
+## LapRF 8-Way Emulator
 
-When running on Windows, macOS, or Linux, SlapRF can also expose a local LapRF `:5403` TCP emulator so external broadcast overlays or LiveTime clients can ingest live gate crossings from SlapRF in real time.
+When running on Windows, macOS, or Linux, SlapRF can also expose a local ImmersionRC LapRF 8-Way `:5403` TCP emulator so any external LapRF-compatible timing client or broadcast overlay can ingest live gate crossings from SlapRF in real time.

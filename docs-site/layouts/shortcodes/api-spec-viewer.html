@@ -1,0 +1,14 @@
+{{- $specType := .Get "type" | default "openapi" -}}
+{{- $openapiURL := "specs/openapi.yaml" | relURL -}}
+{{- $asyncapiURL := "specs/asyncapi.yaml" | relURL -}}
+{{- $specURL := cond (eq $specType "asyncapi") $asyncapiURL $openapiURL -}}
+<div
+  class="doc-api-standalone-page not-prose"
+  data-api-standalone-page="1"
+  data-api-spec-type="{{ $specType }}"
+  data-spec-url="{{ $specURL }}"
+>
+  <div class="doc-api-standalone-mount" data-api-spec-mount="1">
+    <div class="doc-api-spec-loading">Loading {{ upper $specType }} specification...</div>
+  </div>
+</div>

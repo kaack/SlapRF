@@ -7,16 +7,20 @@ import {
   orderedPortableAssets,
   subscribeCapabilities,
 } from "../services/capabilities";
-import { LIVETIME_PORT, LiveTimeRelay, sharedLiveTimeRelay } from "../services/livetime_relay";
+import {
+  LAPRF_EMULATOR_PORT,
+  LapRFEmulatorRelay,
+  sharedLapRFEmulatorRelay,
+} from "../services/laprf_emulator_relay";
 import { gateLabel } from "../state/selectors";
 import { AppStore } from "../state/store";
 
-/** LiveTime page: built-in LapRF TCP :5403 server status and connection endpoints in SlapRF Portable. */
-export class LiveTimeView extends Component {
+/** LapRF Emulator page: built-in LapRF 8-Way TCP :5403 server status and connection endpoints. */
+export class LapRFEmulatorView extends Component {
   private readonly store: AppStore;
-  private readonly relay: LiveTimeRelay;
+  private readonly relay: LapRFEmulatorRelay;
 
-  constructor(el: HTMLElement, store: AppStore, relay: LiveTimeRelay = sharedLiveTimeRelay) {
+  constructor(el: HTMLElement, store: AppStore, relay: LapRFEmulatorRelay = sharedLapRFEmulatorRelay) {
     super(el);
     this.store = store;
     this.relay = relay;
@@ -43,7 +47,7 @@ export class LiveTimeView extends Component {
     });
 
     this.listen(el, "change", (e) => {
-      const input = (e.target as HTMLElement).closest<HTMLInputElement>("input[data-action='toggle-livetime']");
+      const input = (e.target as HTMLElement).closest<HTMLInputElement>("input[data-action='toggle-laprf-emulator']");
       if (input) this.relay.setEnabled(input.checked);
     });
 
@@ -70,14 +74,14 @@ export class LiveTimeView extends Component {
           <section class="settings-section" data-section-anchor="portable">
             <div class="settings-intro">
               <h2>SlapRF Portable required</h2>
-              <p>Browsers cannot open a listening TCP server port directly. Run SlapRF Portable on this computer to expose the built-in LapRF TCP :${LIVETIME_PORT} emulator.</p>
+              <p>Browsers cannot open a listening TCP server port directly. Run SlapRF Portable on this computer to expose the built-in LapRF TCP :${LAPRF_EMULATOR_PORT} emulator.</p>
             </div>
             <div class="card">
               <div class="option-row">
                 <div>
-                  <div class="option-title">Download SlapRF Portable</div>
-                  <div class="option-sub">Single standalone executable with the web app, LiveTime TCP :${LIVETIME_PORT} emulator, LapRF Ethernet client, and MultiGP sync built in.</div>
-                  <div class="livetime-downloads" style="margin-top:12px;">
+                  <div class="option-title">Download SlapRF Server</div>
+                  <div class="option-sub">Single standalone executable with the web app, LapRF 8-Way TCP :${LAPRF_EMULATOR_PORT} emulator, LapRF Ethernet client, and MultiGP sync built in.</div>
+                  <div class="laprf-emulator-downloads" style="margin-top:12px;">
                     ${downloads}
                     <a class="link-inline" href="${PORTABLE_RELEASES_URL}" target="_blank" rel="noopener">All releases</a>
                   </div>
@@ -92,10 +96,10 @@ export class LiveTimeView extends Component {
     const hostPills = ["127.0.0.1", ...caps.lanIPs]
       .map(
         (ip, idx) => `
-          <button type="button" class="livetime-copy-pill" data-copy="${esc(ip)}" title="Copy host ${esc(ip)}">
+          <button type="button" class="laprf-emulator-copy-pill" data-copy="${esc(ip)}" title="Copy host ${esc(ip)}">
             <span class="muted">${idx === 0 ? "Local" : "LAN"}</span>
             <span>${esc(ip)}</span>
-            <span class="livetime-copy-icon" data-copy-icon>${icons.copy(13)}</span>
+            <span class="laprf-emulator-copy-icon" data-copy-icon>${icons.copy(13)}</span>
           </button>`
       )
       .join("");
@@ -105,7 +109,7 @@ export class LiveTimeView extends Component {
         <section class="settings-section" data-section-anchor="status">
           <div class="settings-intro">
             <h2>Status</h2>
-            <p>Live link status between SlapRF Portable's built-in TCP :${LIVETIME_PORT} listener and external race management software.</p>
+            <p>Live link status between SlapRF's built-in LapRF 8-Way TCP :${LAPRF_EMULATOR_PORT} listener and external race timing clients.</p>
           </div>
           <div class="debug-status-layout" data-slot="status"></div>
         </section>
@@ -113,20 +117,20 @@ export class LiveTimeView extends Component {
         <section class="settings-section" data-section-anchor="connection">
           <div class="settings-intro">
             <h2>Client setup</h2>
-            <p>Point MultiGP LiveTime, FPVTrackside, or RotorHazard (LapRF driver) to this computer's IP address and TCP port ${LIVETIME_PORT}.</p>
+            <p>Point any LapRF 8-Way compatible timing client to this computer's IP address and TCP port ${LAPRF_EMULATOR_PORT}.</p>
           </div>
           <div class="card">
-            <div class="livetime">
+            <div class="laprf-emulator">
               <div class="option-row" style="border-bottom:0;">
                 <div>
                   <div class="option-title">Connection address</div>
                   <div class="option-sub">Use 127.0.0.1 when running timing software on this same computer, or a LAN IP from another computer on the same network.</div>
-                  <div class="livetime-downloads" style="margin-top:10px;">
+                  <div class="laprf-emulator-downloads" style="margin-top:10px;">
                     ${hostPills}
-                    <button type="button" class="livetime-copy-pill" data-copy="${LIVETIME_PORT}" title="Copy port ${LIVETIME_PORT}">
+                    <button type="button" class="laprf-emulator-copy-pill" data-copy="${LAPRF_EMULATOR_PORT}" title="Copy port ${LAPRF_EMULATOR_PORT}">
                       <span class="muted">Port</span>
-                      <span>${LIVETIME_PORT}</span>
-                      <span class="livetime-copy-icon" data-copy-icon>${icons.copy(13)}</span>
+                      <span>${LAPRF_EMULATOR_PORT}</span>
+                      <span class="laprf-emulator-copy-icon" data-copy-icon>${icons.copy(13)}</span>
                     </button>
                   </div>
                 </div>
@@ -144,29 +148,29 @@ export class LiveTimeView extends Component {
     if (!statusSlot) return;
 
     const s = this.relay.snapshot;
-    const lt = this.store.liveTime;
+    const emul = this.store.laprfEmulator;
     const relayUp = s.relayState === "connected";
-    const ltUp = relayUp && s.liveTimeState === "connected";
+    const clientUp = relayUp && s.clientState === "connected";
 
     const topLed = !s.enabled
       ? ""
-      : ltUp
+      : clientUp
         ? "is-up"
         : relayUp || s.relayState === "connecting"
           ? "is-warn"
           : "is-bad";
 
     const topText = !s.enabled
-      ? `LapRF TCP :${LIVETIME_PORT} emulator is off`
-      : ltUp
-        ? `LapRF client connected (${esc(s.peer || "peer")}) · race ${lt.raceArmedByHost ? "armed" : "stopped"} by host`
+      ? `LapRF TCP :${LAPRF_EMULATOR_PORT} emulator is off`
+      : clientUp
+        ? `LapRF client connected (${esc(s.peer || "peer")}) · race ${emul.raceArmedByHost ? "armed" : "stopped"} by host`
         : relayUp
-          ? `Listening for LapRF client on TCP :${LIVETIME_PORT}`
+          ? `Listening for LapRF client on TCP :${LAPRF_EMULATOR_PORT}`
           : s.relayState === "connecting"
-            ? `Starting TCP :${LIVETIME_PORT} listener…`
+            ? `Starting TCP :${LAPRF_EMULATOR_PORT} listener…`
             : s.lastError
               ? esc(s.lastError)
-              : `TCP :${LIVETIME_PORT} listener inactive`;
+              : `TCP :${LAPRF_EMULATOR_PORT} listener inactive`;
 
     const relayBadge = !s.enabled
       ? `<span class="badge">Disabled</span>`
@@ -176,15 +180,15 @@ export class LiveTimeView extends Component {
           ? `<span class="badge badge-warn">Starting</span>`
           : `<span class="badge badge-bad">Error</span>`;
 
-    const ltBadge = ltUp
+    const clientBadge = clientUp
       ? `<span class="badge badge-good">Connected</span>`
       : relayUp
         ? `<span class="badge badge-warn">Waiting</span>`
         : `<span class="badge">Offline</span>`;
 
     const lastSync =
-      lt.lastRfSetupSync && !lt.lastRfSetupSync.startsWith("0001")
-        ? new Date(lt.lastRfSetupSync).toLocaleTimeString()
+      emul.lastRfSetupSync && !emul.lastRfSetupSync.startsWith("0001")
+        ? new Date(emul.lastRfSetupSync).toLocaleTimeString()
         : "Never";
 
     const startNode = this.store.nodes.find((n) => n.role === "START_FINISH") ?? this.store.nodes[0];
@@ -198,7 +202,7 @@ export class LiveTimeView extends Component {
           <span class="debug-head-note">${topText}</span>
         </span>
         <div class="debug-connect-actions">
-          <span class="badge">TCP :${LIVETIME_PORT}</span>
+          <span class="badge">TCP :${LAPRF_EMULATOR_PORT}</span>
           ${
             s.enabled
               ? `<button type="button" class="btn btn-sm btn-ghost" data-action="relay-reconnect" title="Restart TCP listener">
@@ -206,8 +210,8 @@ export class LiveTimeView extends Component {
                  </button>`
               : ""
           }
-          <label class="switch" title="Enable LapRF TCP :${LIVETIME_PORT} emulator">
-            <input type="checkbox" data-action="toggle-livetime" ${s.enabled ? "checked" : ""} />
+          <label class="switch" title="Enable LapRF TCP :${LAPRF_EMULATOR_PORT} emulator">
+            <input type="checkbox" data-action="toggle-laprf-emulator" ${s.enabled ? "checked" : ""} />
             <span></span>
           </label>
         </div>
@@ -238,7 +242,7 @@ export class LiveTimeView extends Component {
             </div>
             <div class="debug-kv-row">
               <dt>TCP listener</dt>
-              <dd>${relayUp ? esc(s.listenAddr || `0.0.0.0:${LIVETIME_PORT}`) : "—"}</dd>
+              <dd>${relayUp ? esc(s.listenAddr || `0.0.0.0:${LAPRF_EMULATOR_PORT}`) : "—"}</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Traffic</dt>
@@ -249,19 +253,19 @@ export class LiveTimeView extends Component {
 
         <div class="debug-subbox">
           <div class="debug-subbox-head">
-            <span class="debug-subbox-title ${ltUp ? "is-active" : ""}">${icons.timer(14)}<span>Connected client</span></span>
-            ${ltBadge}
+            <span class="debug-subbox-title ${clientUp ? "is-active" : ""}">${icons.timer(14)}<span>Connected client</span></span>
+            ${clientBadge}
           </div>
           <dl class="debug-kv-list">
             <div class="debug-kv-row">
               <dt>Peer</dt>
-              <dd>${ltUp ? esc(s.peer || "Connected") : relayUp ? "Waiting for client" : "Offline"}</dd>
+              <dd>${clientUp ? esc(s.peer || "Connected") : relayUp ? "Waiting for client" : "Offline"}</dd>
             </div>
             <div class="debug-kv-row">
               <dt>Race state</dt>
               <dd>${
-                ltUp
-                  ? lt.raceArmedByHost
+                clientUp
+                  ? emul.raceArmedByHost
                     ? `<span class="badge badge-good">Armed by host</span>`
                     : `<span class="badge">Stopped by host</span>`
                   : "Idle"
@@ -269,7 +273,7 @@ export class LiveTimeView extends Component {
             </div>
             <div class="debug-kv-row">
               <dt>Passings sent</dt>
-              <dd>${lt.detectionsSent.toLocaleString()} <span class="note">· start timer ${esc(startTimerText)}</span></dd>
+              <dd>${emul.detectionsSent.toLocaleString()} <span class="note">· start timer ${esc(startTimerText)}</span></dd>
             </div>
             <div class="debug-kv-row">
               <dt>Last RF setup sync</dt>

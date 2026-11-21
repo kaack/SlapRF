@@ -2,9 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 
 	"slaprf/internal/domain"
 	"slaprf/internal/ingest"
@@ -13,57 +16,55 @@ import (
 	"slaprf/internal/tracker"
 )
 
-// FullStateResponse is returned by `GET /api/state` on initial SPA load.
+// FullStateResponse is returned by `GET /v1/state` on initial SPA load and state mutations.
 type FullStateResponse struct {
-	ServerTimestampUs  uint64                      `json:"serverTimestampUs"`
-	TimingHardwareMode domain.TimingHardwareMode   `json:"timingHardwareMode"`
-	Pilots             []domain.PilotSlot          `json:"pilots"`
-	Gates              []domain.TrackGate          `json:"gates"`
-	Timers             []domain.DetectedTimer      `json:"timers"`
-	Laps               []domain.LapRecord          `json:"laps"`
-	Crossings          []domain.GateCrossingEvent  `json:"crossings"`
-	Filtered           []domain.FilteredDetection  `json:"filtered"`
-	Summaries          []domain.PilotTrackSummary  `json:"summaries"`
-	Rules              domain.TimingRules          `json:"rules"`
-	SimulatorRun       bool                        `json:"simulatorRunning"`
-	SimState           *domain.SimState            `json:"simState,omitempty"`
-	SimMultiGP         *multigp.SimPersistedState    `json:"simMultiGP,omitempty"`
-	RaceArmed          bool                          `json:"raceArmed"`
-	LiveTimeStatus     laprf.LiveTimeStatus          `json:"liveTimeStatus"`
-	RaceState          domain.RaceTournamentState    `json:"raceState"`
-	EventState         domain.EventManagerState      `json:"eventState"`
-	PracticeState      domain.PracticeManagerState   `json:"practiceState"`
-	ImportSummary      *domain.PilotCSVImportSummary `json:"importSummary,omitempty"`
+	ServerTimestampUs   uint64                        `json:"serverTimestampUs"`
+	TimingHardwareMode  domain.TimingHardwareMode     `json:"timingHardwareMode"`
+	Pilots              []domain.PilotSlot            `json:"pilots"`
+	Gates               []domain.TrackGate            `json:"gates"`
+	Timers              []domain.DetectedTimer        `json:"timers"`
+	Laps                []domain.LapRecord            `json:"laps"`
+	Crossings           []domain.GateCrossingEvent    `json:"crossings"`
+	Filtered            []domain.FilteredDetection    `json:"filtered"`
+	Summaries           []domain.PilotTrackSummary    `json:"summaries"`
+	Rules               domain.TimingRules            `json:"rules"`
+	SimulatorRun        bool                          `json:"simulatorRunning"`
+	SimState            *domain.SimState              `json:"simState,omitempty"`
+	SimMultiGP          *multigp.SimPersistedState    `json:"simMultiGP,omitempty"`
+	RaceArmed           bool                          `json:"raceArmed"`
+	LaprfEmulatorStatus laprf.EmulatorStatus          `json:"laprfEmulatorStatus"`
+	RaceState           domain.RaceTournamentState    `json:"raceState"`
+	EventState          domain.EventManagerState      `json:"eventState"`
+	PracticeState       domain.PracticeManagerState   `json:"practiceState"`
+	ImportSummary       *domain.PilotCSVImportSummary `json:"importSummary,omitempty"`
 }
 
 // StatusResponse is the lightweight payload polled by the SPA every few seconds
-// (gate battery / link health, LiveTime connection, timing armed state).
+// (gate battery / link health, LapRF emulator connection, timing armed state).
 type StatusResponse struct {
-	ServerTimestampUs  uint64                      `json:"serverTimestampUs"`
-	TimingHardwareMode domain.TimingHardwareMode   `json:"timingHardwareMode"`
-	Gates              []domain.TrackGate          `json:"gates"`
-	Timers             []domain.DetectedTimer      `json:"timers"`
-	SimulatorRun       bool                        `json:"simulatorRunning"`
-	SimState           *domain.SimState            `json:"simState,omitempty"`
-	SimMultiGP         *multigp.SimPersistedState  `json:"simMultiGP,omitempty"`
-	RaceArmed          bool                          `json:"raceArmed"`
-	LiveTimeStatus     laprf.LiveTimeStatus          `json:"liveTimeStatus"`
-	RaceState          *domain.RaceTournamentState   `json:"raceState,omitempty"`
-	EventState         *domain.EventManagerState     `json:"eventState,omitempty"`
-	PracticeState      *domain.PracticeManagerState  `json:"practiceState,omitempty"`
-	ImportSummary      *domain.PilotCSVImportSummary `json:"importSummary,omitempty"`
+	ServerTimestampUs   uint64                        `json:"serverTimestampUs"`
+	TimingHardwareMode  domain.TimingHardwareMode     `json:"timingHardwareMode"`
+	Gates               []domain.TrackGate            `json:"gates"`
+	Timers              []domain.DetectedTimer        `json:"timers"`
+	SimulatorRun        bool                          `json:"simulatorRunning"`
+	SimState            *domain.SimState              `json:"simState,omitempty"`
+	SimMultiGP          *multigp.SimPersistedState    `json:"simMultiGP,omitempty"`
+	RaceArmed           bool                          `json:"raceArmed"`
+	LaprfEmulatorStatus laprf.EmulatorStatus          `json:"laprfEmulatorStatus"`
+	RaceState           *domain.RaceTournamentState   `json:"raceState,omitempty"`
+	EventState          *domain.EventManagerState     `json:"eventState,omitempty"`
+	PracticeState       *domain.PracticeManagerState  `json:"practiceState,omitempty"`
+	ImportSummary       *domain.PilotCSVImportSummary `json:"importSummary,omitempty"`
 }
 
-// RealBackendState is the real-world engine snapshot exchanged by `GET /api/storage/export`
-// and `POST /api/storage/import` (the "real" section of the app's JSON export file).
-// Older exports may carry a `liveTimeEnabled` flag; it is ignored on import because the
-// LiveTime toggle is now a browser UI preference (see web/src/services/livetime_relay.ts).
+// RealBackendState is the real-world engine snapshot exchanged by `GET /v1/storage`
+// and `PUT /v1/storage` (the "real" section of the app's JSON export file).
 type RealBackendState struct {
 	Engine tracker.PersistedEngineState `json:"engine"`
 }
 
 // SimBackendState is the simulated engine + simulator options snapshot exchanged by
-// `GET /api/storage/sim-export` and `POST /api/storage/sim-import`.
+// `GET /v1/storage/sim` and `PUT /v1/storage/sim`.
 type SimBackendState struct {
 	Engine  tracker.PersistedEngineState `json:"engine"`
 	Options ingest.SimPersistedOptions   `json:"options"`
@@ -80,9 +81,9 @@ type ServerHooks struct {
 }
 
 // StreamEnvelope wraps a typed real-time message sent to the TypeScript SPA
-// (delivered in-process by the WASM bridge's `onStream` callback or over `/api/ws/stream`).
+// (delivered in-process by the WASM bridge's `onStream` callback or over `/v1/ws/stream`).
 type StreamEnvelope struct {
-	Type    string      `json:"type"` // "telemetry" | "crossing" | "filtered" | "lap" | "config"
+	Type    string      `json:"type"` // "telemetry" | "crossing" | "filtered" | "lap" | "config" | "race" | "practice"
 	Payload interface{} `json:"payload"`
 }
 
@@ -119,8 +120,8 @@ func NewServer(
 		simulator:   simulator,
 		laprfServer: laprfServer,
 	}
-	// The LapRF (LiveTime) emulation always serves whichever engine is active, whether the
-	// simulator is toggled via /api/sim/toggle or directly (WASM bridge `setRunning`).
+	// The LapRF 8-Way emulation always serves whichever engine is active, whether the
+	// simulator is updated via PATCH /v1/sim or directly (WASM bridge `setRunning`).
 	laprfServer.Follow(s.activeEngine, simEngine, realEngine)
 	return s
 }
@@ -147,13 +148,45 @@ func (s *Server) RealEngine() *tracker.Engine {
 	return s.realEngine
 }
 
-// RegisterRoutes attaches all core `/api/*` routes onto `mux`, wrapping non-GET mutations so
-// registered `ServerHooks` are notified cleanly.
+type statusCaptureWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusCaptureWriter) WriteHeader(code int) {
+	if w.status == 0 {
+		w.status = code
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *statusCaptureWriter) Write(b []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+// RegisterRoutes attaches all core `/v1/*` resource routes onto `mux`, wrapping mutating handlers
+// so registered `ServerHooks` are notified after successful mutations.
+//
+// Design conventions:
+//   - Singleton resources (`/v1/storage`, `/v1/track`, `/v1/sim`, `/v1/timing/rules`, `/v1/timing/arm`,
+//     `/v1/timing/mode`, `/v1/hardware/mode`) always exist and are never `DELETE`d; state replacement
+//     uses `PUT` / `PATCH`, while imperative operations use AIP-136 `:action` custom methods (`POST /v1/storage:reset`).
+//   - Collection resources (`/v1/pilots`, `/v1/track/gates`, `/v1/timers`, `/v1/practice/sessions`,
+//     `/v1/race/sessions`) use `GET` (list), `POST` (`201 Created` + `Location`), `GET /{id}`,
+//     `PUT`/`PATCH /{id}`, `DELETE /{id}`, and `:action` for imperative state transitions.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	wrap := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
-			h(w, r)
-			if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions && r.URL.Path != "/api/race/tick" {
+			rec := &statusCaptureWriter{ResponseWriter: w}
+			h(rec, r)
+			code := rec.status
+			if code == 0 {
+				code = http.StatusOK
+			}
+			if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Method != http.MethodOptions && code >= 200 && code < 300 {
 				if s.hooks.OnMutation != nil {
 					s.hooks.OnMutation()
 				}
@@ -161,78 +194,140 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		}
 	}
 
-	mux.HandleFunc("/api/version", s.handleGetVersion)
-	mux.HandleFunc("/api/state", s.handleGetState)
-	mux.HandleFunc("/api/status", s.handleGetStatus)
-	mux.HandleFunc("/api/rules", wrap(s.handleRules))
-	mux.HandleFunc("/api/timing/toggle-arm", wrap(s.handleToggleArm))
-	mux.HandleFunc("/api/pilots/update", wrap(s.handleUpdatePilot))
-	mux.HandleFunc("/api/pilots/add", wrap(s.handleAddPilot))
-	mux.HandleFunc("/api/pilots/remove", wrap(s.handleRemovePilot))
-	mux.HandleFunc("/api/pilots/reset", wrap(s.handleResetPilots))
-	mux.HandleFunc("/api/pilots/export.csv", s.handleExportPilotsCSV)
-	mux.HandleFunc("/api/pilots/import", wrap(s.handleImportPilotsCSV))
-	mux.HandleFunc("/api/race/mode", wrap(s.handleRaceMode))
-	mux.HandleFunc("/api/race/setup", wrap(s.handleRaceSetup))
-	mux.HandleFunc("/api/race/advance-stage", wrap(s.handleRaceAdvanceStage))
-	mux.HandleFunc("/api/race/control", wrap(s.handleRaceControl))
-	mux.HandleFunc("/api/race/marshal", wrap(s.handleRaceMarshal))
-	mux.HandleFunc("/api/race/bracket-edit", wrap(s.handleRaceBracketEdit))
-	mux.HandleFunc("/api/race/tick", s.handleRaceTick)
-	mux.HandleFunc("/api/race/export.csv", s.handleExportRaceResultsCSV)
-	mux.HandleFunc("/api/races/export.csv", s.handleExportRaceResultsCSV)
-	mux.HandleFunc("/api/events/action", wrap(s.handleEventAction))
-	mux.HandleFunc("/api/practice/action", wrap(s.handlePracticeAction))
-	mux.HandleFunc("/api/track/update", wrap(s.handleUpdateGate))
-	mux.HandleFunc("/api/track/add", wrap(s.handleAddGate))
-	mux.HandleFunc("/api/track/remove", wrap(s.handleRemoveGate))
-	mux.HandleFunc("/api/track/rules", wrap(s.handleGateRules))
-	mux.HandleFunc("/api/track/reset", wrap(s.handleResetTrack))
-	mux.HandleFunc("/api/timers/provision", wrap(s.handleProvisionGate))
-	mux.HandleFunc("/api/timers/color", wrap(s.handleUpdateTimerColor))
-	mux.HandleFunc("/api/timers/delete", wrap(s.handleDeleteTimer))
+	// Read-only System Singletons & Snapshots
+	mux.HandleFunc("GET /v1/version", s.handleGetVersion)
+	mux.HandleFunc("GET /v1/state", s.handleGetState)
+	mux.HandleFunc("GET /v1/status", s.handleGetStatus)
 
-	// Legacy aliases
-	mux.HandleFunc("/api/gates/update", wrap(s.handleUpdateGate))
-	mux.HandleFunc("/api/gates/add", wrap(s.handleAddGate))
-	mux.HandleFunc("/api/gates/remove", wrap(s.handleRemoveGate))
-	mux.HandleFunc("/api/gates/provision", wrap(s.handleProvisionGate))
-	mux.HandleFunc("/api/thresholds", wrap(s.handleThresholds))
-	mux.HandleFunc("/api/gates/rules", wrap(s.handleGateRules))
-	mux.HandleFunc("/api/sim/toggle", wrap(s.handleToggleSim))
-	mux.HandleFunc("/api/sim/mode", wrap(s.handleSetSimMode))
-	mux.HandleFunc("/api/sim/speed", wrap(s.handleSimSpeed))
-	mux.HandleFunc("/api/sim/pack-burst", wrap(s.handlePackBurst))
-	mux.HandleFunc("/api/sim/pilot-action", wrap(s.handleSimPilotAction))
-	mux.HandleFunc("/api/sim/track-walker", wrap(s.handleSimTrackWalker))
-	mux.HandleFunc("/api/sim/timer-action", wrap(s.handleSimTimerAction))
-	mux.HandleFunc("/api/sim/timer-diag", s.handleSimTimerDiag)
-	mux.HandleFunc("/api/sim/timer-rssi", s.handleSimTimerRSSI)
-	mux.HandleFunc("/api/sim/usb-hellos", s.handleSimUSBHellos)
-	mux.HandleFunc("/api/sim/laprf-action", wrap(s.handleSimLapRFAction))
-	mux.HandleFunc("/api/sim/laprf-discover", s.handleSimLapRFDiscover)
-	mux.HandleFunc("/api/sim/rh-action", wrap(s.handleSimRHAction))
-	mux.HandleFunc("/api/sim/rh-discover", s.handleSimRHDiscover)
-	mux.HandleFunc("/api/sim/mgp/", wrap(s.handleSimMultiGPWebService))
-	mux.HandleFunc("/api/sim/mgp-admin", wrap(s.handleSimMultiGPAdmin))
-	mux.HandleFunc("/api/hardware/mode", wrap(s.handleHardwareMode))
-	mux.HandleFunc("/api/hardware/rh-debug-stream", s.handleRHDebugStream)
-	mux.HandleFunc("/api/hardware/rh-scan", s.handleRHScan)
-	mux.HandleFunc("/api/mgp-sync/import", wrap(s.handleMultiGPImportRace))
-	mux.HandleFunc("/api/mgp-sync/import-pilots", wrap(s.handleMultiGPImportPilots))
-	mux.HandleFunc("/api/mgp-sync/append-zippyq", wrap(s.handleMultiGPAppendZippyQ))
-	mux.HandleFunc("/api/mgp-sync/plan", s.handleMultiGPSyncPlan)
-	mux.HandleFunc("/api/mgp-sync/mark-synced", wrap(s.handleMultiGPMarkSynced))
-	mux.HandleFunc("/api/session/reset", wrap(s.handleResetSession))
-	mux.HandleFunc("/api/storage/reset", s.handleResetStorage)
-	mux.HandleFunc("/api/storage/demo", s.handleRestoreDemoData)
-	mux.HandleFunc("/api/storage/export", s.handleExportStorage)
-	mux.HandleFunc("/api/storage/import", s.handleImportStorage)
-	mux.HandleFunc("/api/storage/sim-export", s.handleExportSimStorage)
-	mux.HandleFunc("/api/storage/sim-import", s.handleImportSimStorage)
+	// Timing Singletons (`rules`, `arm`, `mode`)
+	mux.HandleFunc("GET /v1/timing/rules", s.handleGetRules)
+	mux.HandleFunc("PUT /v1/timing/rules", wrap(s.handlePutRules))
+	mux.HandleFunc("GET /v1/timing/arm", s.handleGetArm)
+	mux.HandleFunc("PUT /v1/timing/arm", wrap(s.handlePutArm))
+	mux.HandleFunc("GET /v1/timing/mode", s.handleGetOperatingMode)
+	mux.HandleFunc("PUT /v1/timing/mode", wrap(s.handlePutOperatingMode))
+
+	// Pilots Collection, Items & Custom Operations (`:reset`, `:import`)
+	mux.HandleFunc("GET /v1/pilots", s.handleGetPilots)
+	mux.HandleFunc("POST /v1/pilots", wrap(s.handleCreatePilot))
+	mux.HandleFunc("POST /v1/pilots:reset", wrap(s.handleResetPilots))
+	mux.HandleFunc("POST /v1/pilots:import", wrap(s.handleImportPilots))
+	mux.HandleFunc("GET /v1/pilots/export.csv", s.handleExportPilotsCSV)
+	mux.HandleFunc("GET /v1/pilots/{slotIndex}", s.handleGetPilot)
+	mux.HandleFunc("PUT /v1/pilots/{slotIndex}", wrap(s.handleUpdatePilot))
+	mux.HandleFunc("DELETE /v1/pilots/{slotIndex}", wrap(s.handleDeletePilot))
+
+	// Track Singleton, Gates Collection & Timers Collection
+	mux.HandleFunc("GET /v1/track", s.handleGetTrack)
+	mux.HandleFunc("POST /v1/track:reset", wrap(s.handleResetTrack))
+	mux.HandleFunc("PUT /v1/track/thresholds", wrap(s.handlePutThresholds))
+	mux.HandleFunc("GET /v1/track/gates", s.handleGetGates)
+	mux.HandleFunc("POST /v1/track/gates", wrap(s.handleCreateGate))
+	mux.HandleFunc("GET /v1/track/gates/{gateId}", s.handleGetGate)
+	mux.HandleFunc("PUT /v1/track/gates/{gateId}", wrap(s.handleUpdateGate))
+	mux.HandleFunc("PATCH /v1/track/gates/{gateId}", wrap(s.handleUpdateGate))
+	mux.HandleFunc("DELETE /v1/track/gates/{gateId}", wrap(s.handleDeleteGate))
+	mux.HandleFunc("GET /v1/track/gates/{gateId}/rules", s.handleGetGateRules)
+	mux.HandleFunc("PUT /v1/track/gates/{gateId}/rules", wrap(s.handlePutGateRules))
+	mux.HandleFunc("POST /v1/track/gates/{gateId}/rules:reset", wrap(s.handleResetGateRules))
+	mux.HandleFunc("GET /v1/track/gates/{gateId}/pilots/{slotIndex}/rules", s.handleGetPilotGateRules)
+	mux.HandleFunc("PUT /v1/track/gates/{gateId}/pilots/{slotIndex}/rules", wrap(s.handlePutPilotGateRules))
+	mux.HandleFunc("POST /v1/track/gates/{gateId}/pilots/{slotIndex}/rules:reset", wrap(s.handleResetPilotGateRules))
+
+	mux.HandleFunc("GET /v1/timers", s.handleGetTimers)
+	mux.HandleFunc("POST /v1/timers", wrap(s.handleCreateTimer))
+	mux.HandleFunc("GET /v1/timers/{timerId}", s.handleGetTimer)
+	mux.HandleFunc("PATCH /v1/timers/{timerId}", wrap(s.handlePatchTimer))
+	mux.HandleFunc("DELETE /v1/timers/{timerId}", wrap(s.handleDeleteTimer))
+
+	// Practice Sessions Resource Hierarchy (`/v1/practice/sessions`)
+	mux.HandleFunc("POST /v1/practice:reset", wrap(s.handleResetActivePracticeLaps))
+	mux.HandleFunc("GET /v1/practice/sessions", s.handleGetPracticeSessions)
+	mux.HandleFunc("POST /v1/practice/sessions", wrap(s.handleCreatePracticeSession))
+	mux.HandleFunc("GET /v1/practice/sessions/{sessionId}", s.handleGetPracticeSession)
+	mux.HandleFunc("PATCH /v1/practice/sessions/{sessionId}", wrap(s.handlePatchPracticeSession))
+	mux.HandleFunc("DELETE /v1/practice/sessions/{sessionId}", wrap(s.handleDeletePracticeSession))
+	mux.HandleFunc("POST /v1/practice/sessions/{sessionId}", wrap(s.handlePracticeSessionCustomAction))
+	mux.HandleFunc("GET /v1/practice/sessions/{sessionId}/pilots", s.handleGetPracticeSessionPilots)
+	mux.HandleFunc("POST /v1/practice/sessions/{sessionId}/pilots", wrap(s.handleAddPracticeSessionPilot))
+	mux.HandleFunc("PUT /v1/practice/sessions/{sessionId}/pilots/{slotIndex}", wrap(s.handleUpdatePracticeSessionPilot))
+	mux.HandleFunc("PATCH /v1/practice/sessions/{sessionId}/pilots/{slotIndex}", wrap(s.handleUpdatePracticeSessionPilot))
+	mux.HandleFunc("DELETE /v1/practice/sessions/{sessionId}/pilots/{slotIndex}", wrap(s.handleDeletePracticeSessionPilot))
+	mux.HandleFunc("GET /v1/practice/sessions/{sessionId}/laps", s.handleGetPracticeSessionLaps)
+	mux.HandleFunc("PATCH /v1/practice/sessions/{sessionId}/laps/{lapId}", wrap(s.handlePatchPracticeSessionLap))
+	mux.HandleFunc("POST /v1/practice/sessions/{sessionId}/laps/{lapId}", wrap(s.handlePracticeSessionLapCustomAction))
+
+	// Race Sessions Resource Hierarchy (`/v1/race/sessions` - symmetric with `/v1/practice/sessions`)
+	mux.HandleFunc("GET /v1/race/sessions", s.handleGetRaceSessions)
+	mux.HandleFunc("POST /v1/race/sessions", wrap(s.handleCreateRaceSession))
+	mux.HandleFunc("POST /v1/race/sessions:importMultiGP", wrap(s.handleMultiGPImportRace))
+	mux.HandleFunc("GET /v1/race/sessions/{sessionId}", s.handleGetRaceSession)
+	mux.HandleFunc("PATCH /v1/race/sessions/{sessionId}", wrap(s.handlePatchRaceSession))
+	mux.HandleFunc("DELETE /v1/race/sessions/{sessionId}", wrap(s.handleDeleteRaceSession))
+	mux.HandleFunc("POST /v1/race/sessions/{sessionId}", wrap(s.handleRaceSessionCustomAction))
+	mux.HandleFunc("GET /v1/race/sessions/{sessionId}/config", s.handleGetRaceSessionConfig)
+	mux.HandleFunc("PUT /v1/race/sessions/{sessionId}/config", wrap(s.handlePutRaceSessionConfig))
+	mux.HandleFunc("GET /v1/race/sessions/{sessionId}/pilots", s.handleGetRaceSessionPilots)
+	mux.HandleFunc("POST /v1/race/sessions/{sessionId}/pilots", wrap(s.handleAddRaceSessionPilot))
+	mux.HandleFunc("POST /v1/race/sessions/{sessionId}/pilots:checkInAll", wrap(s.handleCheckInAllRaceSessionPilots))
+	mux.HandleFunc("PATCH /v1/race/sessions/{sessionId}/pilots/{slotIndex}", wrap(s.handlePatchRaceSessionPilot))
+	mux.HandleFunc("POST /v1/race/sessions/{sessionId}/stages/{stageRef}", wrap(s.handleRaceSessionStageCustomAction))
+	mux.HandleFunc("POST /v1/race/sessions/{sessionId}/bracket:edit", wrap(s.handleEditRaceSessionBracket))
+	mux.HandleFunc("POST /v1/race/sessions/{sessionId}/heats/{heatId}", wrap(s.handleRaceSessionHeatCustomAction))
+	mux.HandleFunc("POST /v1/race/sessions/{sessionId}/heats/{heatId}/pilots/{slotIndex}", wrap(s.handleRaceSessionHeatPilotCustomAction))
+	mux.HandleFunc("GET /v1/race/sessions/{sessionId}/standings.csv", s.handleExportRaceSessionStandingsCSV)
+	mux.HandleFunc("GET /v1/race/standings.csv", s.handleExportRaceResultsCSV)
+	mux.HandleFunc("GET /v1/race/clock", s.handleGetRaceClock)
+
+	// Race MultiGP Sync Resources
+	mux.HandleFunc("POST /v1/race/sessions/{sessionId}/multigp:appendZippyQ", wrap(s.handleMultiGPAppendZippyQ))
+	mux.HandleFunc("GET /v1/race/sessions/{sessionId}/multigp/sync-plan", s.handleMultiGPSyncPlan)
+	mux.HandleFunc("PUT /v1/race/sessions/{sessionId}/multigp/sync-state", wrap(s.handleMultiGPMarkSynced))
+
+	// Hardware Mode Singleton & RotorHazard Debug Stream Singleton
+	mux.HandleFunc("GET /v1/hardware/mode", s.handleGetHardwareMode)
+	mux.HandleFunc("PUT /v1/hardware/mode", wrap(s.handlePutHardwareMode))
+	mux.HandleFunc("PUT /v1/rh/sessions/{timerId}/debug-stream", s.handlePutRHDebugStream)
+
+	// Simulator Singleton & Sub-resources (`/v1/sim`)
+	mux.HandleFunc("GET /v1/sim", s.handleGetSim)
+	mux.HandleFunc("PATCH /v1/sim", wrap(s.handlePatchSim))
+	mux.HandleFunc("POST /v1/sim:packBurst", wrap(s.handleSimPackBurst))
+	mux.HandleFunc("POST /v1/sim/pilots/{slotIndex}", wrap(s.handleSimPilotCustomAction))
+	mux.HandleFunc("POST /v1/sim/timers", wrap(s.handleCreateSimTimer))
+	mux.HandleFunc("POST /v1/sim/timers:reset", wrap(s.handleResetSimTimers))
+	mux.HandleFunc("PATCH /v1/sim/timers/{timerId}", wrap(s.handlePatchSimTimer))
+	mux.HandleFunc("POST /v1/sim/timers/{timerId}", wrap(s.handleSimTimerCustomAction))
+	mux.HandleFunc("DELETE /v1/sim/timers/{timerId}", wrap(s.handleDeleteSimTimer))
+	mux.HandleFunc("GET /v1/sim/timers/{timerId}/rssi", s.handleGetSimTimerRSSI)
+	mux.HandleFunc("GET /v1/sim/usb-hellos", s.handleSimUSBHellos)
+	mux.HandleFunc("GET /v1/sim/laprf/devices", s.handleSimLapRFDiscover)
+	mux.HandleFunc("POST /v1/sim/laprf/units", wrap(s.handleCreateSimLapRFUnit))
+	mux.HandleFunc("POST /v1/sim/laprf/units:reset", wrap(s.handleResetSimLapRFUnits))
+	mux.HandleFunc("PATCH /v1/sim/laprf/units/{timerId}", wrap(s.handlePatchSimLapRFUnit))
+	mux.HandleFunc("POST /v1/sim/laprf/units/{timerId}", wrap(s.handleSimLapRFUnitCustomAction))
+	mux.HandleFunc("DELETE /v1/sim/laprf/units/{timerId}", wrap(s.handleDeleteSimLapRFUnit))
+	mux.HandleFunc("GET /v1/sim/rh/devices", s.handleSimRHDiscover)
+	mux.HandleFunc("POST /v1/sim/rh/units", wrap(s.handleCreateSimRHUnit))
+	mux.HandleFunc("POST /v1/sim/rh/units:reset", wrap(s.handleResetSimRHUnits))
+	mux.HandleFunc("PATCH /v1/sim/rh/units/{timerId}", wrap(s.handlePatchSimRHUnit))
+	mux.HandleFunc("POST /v1/sim/rh/units/{timerId}", wrap(s.handleSimRHUnitCustomAction))
+	mux.HandleFunc("DELETE /v1/sim/rh/units/{timerId}", wrap(s.handleDeleteSimRHUnit))
+	mux.HandleFunc("GET /v1/sim/mgp-admin", s.handleGetSimMultiGPAdmin)
+	mux.HandleFunc("POST /v1/sim/mgp-admin:action", wrap(s.handleSimMultiGPAdminAction))
+	mux.HandleFunc("POST /v1/sim/mgp/{subPath...}", wrap(s.handleSimMultiGPWebService))
+	mux.HandleFunc("PUT /v1/sim/mgp/{subPath...}", wrap(s.handleSimMultiGPWebService))
+
+	// Storage Singletons (`/v1/storage` & `/v1/storage/sim`) + Custom Operations (`:reset`, `:restoreDemo`)
+	mux.HandleFunc("GET /v1/storage", s.handleExportStorage)
+	mux.HandleFunc("PUT /v1/storage", s.handleImportStorage)
+	mux.HandleFunc("POST /v1/storage:reset", s.handleResetStorage)
+	mux.HandleFunc("POST /v1/storage:restoreDemo", s.handleRestoreDemoData)
+	mux.HandleFunc("GET /v1/storage/sim", s.handleExportSimStorage)
+	mux.HandleFunc("PUT /v1/storage/sim", s.handleImportSimStorage)
 }
 
-// Handler builds the HTTP multiplexer for the application's `/api/*` routes.
+// Handler builds the HTTP multiplexer for the application's `/v1/*` routes.
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.RegisterRoutes(mux)
@@ -245,7 +340,6 @@ func (s *Server) buildFullStateResponse() FullStateResponse {
 	eventState := eng.EventSnapshot()
 	practiceState := eng.PracticeSnapshot()
 	pilots, gates, laps, crossings, summaries := eng.StateSnapshot()
-	// Send [] (not null) when no track is set up, so clients can iterate without null checks.
 	if gates == nil {
 		gates = []domain.TrackGate{}
 	}
@@ -259,24 +353,24 @@ func (s *Server) buildFullStateResponse() FullStateResponse {
 		simMGP = &mgpExp
 	}
 	return FullStateResponse{
-		ServerTimestampUs:  eng.NowUs(),
-		TimingHardwareMode: eng.TimingHardwareMode(),
-		Pilots:             pilots,
-		Gates:              gates,
-		Timers:             eng.DetectedTimersSnapshot(),
-		Laps:               laps,
-		Crossings:          crossings,
-		Filtered:           eng.FilteredSnapshot(),
-		Summaries:          summaries,
-		Rules:              eng.Rules(),
-		SimulatorRun:       s.simulator.IsRunning(),
-		SimState:           simState,
-		SimMultiGP:         simMGP,
-		RaceArmed:          eng.IsRaceArmed(),
-		LiveTimeStatus:     s.laprfServer.Status(),
-		RaceState:          raceState,
-		EventState:         eventState,
-		PracticeState:      practiceState,
+		ServerTimestampUs:   eng.NowUs(),
+		TimingHardwareMode:  eng.TimingHardwareMode(),
+		Pilots:              pilots,
+		Gates:               gates,
+		Timers:              eng.DetectedTimersSnapshot(),
+		Laps:                laps,
+		Crossings:           crossings,
+		Filtered:            eng.FilteredSnapshot(),
+		Summaries:           summaries,
+		Rules:               eng.Rules(),
+		SimulatorRun:        s.simulator.IsRunning(),
+		SimState:            simState,
+		SimMultiGP:          simMGP,
+		RaceArmed:           eng.IsRaceArmed(),
+		LaprfEmulatorStatus: s.laprfServer.Status(),
+		RaceState:           raceState,
+		EventState:          eventState,
+		PracticeState:       practiceState,
 	}
 }
 
@@ -284,9 +378,8 @@ func (s *Server) handleGetState(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
-func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
+func (s *Server) buildStatusResponse(lite bool) StatusResponse {
 	eng := s.activeEngine()
-	lite := r != nil && r.URL != nil && r.URL.Query().Get("lite") == "1"
 	_, gates, _, _, _ := eng.StateSnapshot()
 	if gates == nil {
 		gates = []domain.TrackGate{}
@@ -300,15 +393,15 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		simMGP = &mgpExp
 	}
 	resp := StatusResponse{
-		ServerTimestampUs:  eng.NowUs(),
-		TimingHardwareMode: eng.TimingHardwareMode(),
-		Gates:              gates,
-		Timers:             eng.DetectedTimersSnapshot(),
-		SimulatorRun:       s.simulator.IsRunning(),
-		SimState:           simState,
-		SimMultiGP:         simMGP,
-		RaceArmed:          eng.IsRaceArmed(),
-		LiveTimeStatus:     s.laprfServer.Status(),
+		ServerTimestampUs:   eng.NowUs(),
+		TimingHardwareMode:  eng.TimingHardwareMode(),
+		Gates:               gates,
+		Timers:              eng.DetectedTimersSnapshot(),
+		SimulatorRun:        s.simulator.IsRunning(),
+		SimState:            simState,
+		SimMultiGP:          simMGP,
+		RaceArmed:           eng.IsRaceArmed(),
+		LaprfEmulatorStatus: s.laprfServer.Status(),
 	}
 	if !lite {
 		raceState := eng.RaceSnapshot()
@@ -318,467 +411,88 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 		resp.EventState = &eventState
 		resp.PracticeState = &practiceState
 	}
-	writeJSON(w, http.StatusOK, resp)
+	return resp
 }
 
-// handleRules reads (GET) or replaces (POST) the timing guardrails. Values are clamped
-// server-side; the applied rules are returned.
-func (s *Server) handleRules(w http.ResponseWriter, r *http.Request) {
-	eng := s.activeEngine()
-	switch r.Method {
-	case http.MethodGet:
-		writeJSON(w, http.StatusOK, eng.Rules())
-	case http.MethodPost:
-		var rules domain.TimingRules
-		if err := json.NewDecoder(r.Body).Decode(&rules); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		applied := eng.SetRules(rules)
-		writeJSON(w, http.StatusOK, applied)
-	default:
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
+	lite := r != nil && r.URL != nil && r.URL.Query().Get("lite") == "1"
+	writeJSON(w, http.StatusOK, s.buildStatusResponse(lite))
+}
+
+// --- Timing Singletons (`/v1/timing/rules`, `/v1/timing/arm`, `/v1/timing/mode`) ---
+
+func (s *Server) handleGetRules(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, s.activeEngine().Rules())
+}
+
+func (s *Server) handlePutRules(w http.ResponseWriter, r *http.Request) {
+	var rules domain.TimingRules
+	if err := decodeJSONBody(r, &rules); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
 	}
+	applied := s.activeEngine().SetRules(rules)
+	writeJSON(w, http.StatusOK, applied)
 }
 
-// handleToggleArm pauses / resumes local lap recording in SlapRF (while LapRF passthrough
-// continues forwarding gate crossings whenever a LapRF host is connected and armed).
-func (s *Server) handleToggleArm(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+func (s *Server) handleGetArm(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]bool{"armed": s.activeEngine().IsRaceArmed()})
+}
+
+func (s *Server) handlePutArm(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Armed *bool `json:"armed"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil || body.Armed == nil {
+		writeErrorJSON(w, http.StatusBadRequest, "request body must specify boolean field 'armed'")
 		return
 	}
 	eng := s.activeEngine()
-	eng.SetRaceArmed(!eng.IsRaceArmed())
-	if eng.IsRaceArmed() && s.hooks.OnTimingStarted != nil {
+	wasArmed := eng.IsRaceArmed()
+	eng.SetRaceArmed(*body.Armed)
+	if !wasArmed && *body.Armed && s.hooks.OnTimingStarted != nil {
 		s.hooks.OnTimingStarted()
 	}
-	s.handleGetStatus(w, r)
+	writeJSON(w, http.StatusOK, s.buildStatusResponse(false))
 }
 
-func (s *Server) handleUpdatePilot(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var slot domain.PilotSlot
-	if err := json.NewDecoder(r.Body).Decode(&slot); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if slot.Channel == 0 {
-		slot.FrequencyMHz = 0
-	} else {
-		if slot.Band == 0 {
-			slot.Band = domain.BandRaceband
-		}
-		if freq := domain.FrequencyForBandChannel(slot.Band, slot.Channel); freq > 0 {
-			slot.FrequencyMHz = freq
-		}
-	}
-	if slot.ExitThreshold == 0 {
-		slot.ExitThreshold = slot.EnterThreshold - 10.0
-	} else if slot.ExitThreshold > slot.EnterThreshold-domain.MinHysteresisGapDb {
-		slot.ExitThreshold = slot.EnterThreshold - domain.MinHysteresisGapDb
-	}
-	if err := s.activeEngine().UpdatePilotSlot(slot); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.handleGetState(w, r)
+func (s *Server) handleGetOperatingMode(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]domain.OperatingMode{"mode": s.activeEngine().OperatingMode()})
 }
 
-// handleThresholds calibrates gates per pilot: a list of {gateId, slotIndex, enterDbm}
-// (enterDbm 0 = back to the pilot's own threshold). Applied all-or-nothing.
-func (s *Server) handleThresholds(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+func (s *Server) handlePutOperatingMode(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Mode domain.OperatingMode `json:"mode"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	var updates []domain.GateThresholdUpdate
-	if err := json.NewDecoder(r.Body).Decode(&updates); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if body.Mode != domain.ModePractice && body.Mode != domain.ModeRace {
+		writeErrorJSON(w, http.StatusBadRequest, "mode must be 'practice' or 'race'")
 		return
 	}
+	s.activeEngine().SetOperatingMode(body.Mode)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+// --- Track Singleton, Gates Collection & Timers Collection ---
+
+func (s *Server) handleGetTrack(w http.ResponseWriter, _ *http.Request) {
 	eng := s.activeEngine()
-	if err := eng.SetGateThresholds(updates); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
+	_, gates, _, _, _ := eng.StateSnapshot()
+	if gates == nil {
+		gates = []domain.TrackGate{}
 	}
-	s.handleGetState(w, r)
-}
-
-// handleGateRules sets one gate's timing-rule overrides across all pilots (`slotIndex == 0`) or
-// for one specific pilot at that gate (`slotIndex >= 1`): `{gateId, slotIndex?, overrides: {...}}`.
-// Omitted fields inherit from the parent tier; an empty overrides object clears that tier.
-func (s *Server) handleGateRules(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		GateID    uint8                    `json:"gateId"`
-		SlotIndex int                      `json:"slotIndex,omitempty"`
-		Overrides domain.GateRuleOverrides `json:"overrides"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	eng := s.activeEngine()
-	var err error
-	if body.SlotIndex > 0 {
-		_, err = eng.SetPilotGateRules(body.GateID, body.SlotIndex, body.Overrides)
-	} else {
-		_, err = eng.SetGateRules(body.GateID, body.Overrides)
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.handleGetState(w, r)
-}
-
-func (s *Server) handleUpdateGate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var upd domain.GateUpdate
-	if err := json.NewDecoder(r.Body).Decode(&upd); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := s.activeEngine().UpdateGate(upd); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.handleGetState(w, r)
-}
-
-func (s *Server) handleUpdateTimerColor(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		TimerID uint8  `json:"timerId"`
-		Color   string `json:"color"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := s.activeEngine().SetTimerColor(body.TimerID, body.Color); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.handleGetState(w, r)
-}
-
-func (s *Server) handleDeleteTimer(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		TimerID uint8 `json:"timerId"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	var err error
-	if s.simulator.IsRunning() {
-		err = s.simulator.DeleteTimer(body.TimerID)
-	} else {
-		err = s.realEngine.DeleteDetectedTimer(body.TimerID)
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.handleGetState(w, r)
-}
-
-func (s *Server) handleAddGate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		Name            string `json:"name"`
-		AssignedTimerID uint8  `json:"assignedTimerId"`
-		TrackOrder      *int   `json:"trackOrder,omitempty"`
-	}
-	_ = json.NewDecoder(r.Body).Decode(&body)
-	var err error
-	eng := s.activeEngine()
-	if body.TrackOrder != nil {
-		_, err = eng.AddGate(body.Name, body.AssignedTimerID, *body.TrackOrder)
-	} else {
-		_, err = eng.AddGate(body.Name, body.AssignedTimerID)
-	}
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.handleGetState(w, r)
-}
-
-func (s *Server) handleRemoveGate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		GateID uint8 `json:"gateId"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if err := s.activeEngine().RemoveGate(body.GateID); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.handleGetState(w, r)
-}
-
-// handleProvisionGate registers a newly flashed gate timer (or updates its flashed TimerLabel)
-// in the real-world engine (and active engine if different) so its ID/name shows up immediately.
-func (s *Server) handleProvisionGate(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		Role        string `json:"role"`
-		TimerLabel  string `json:"timerLabel"`
-		Fingerprint string `json:"fingerprint,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	req := tracker.ProvisionRequest{
-		Role:        body.Role,
-		Label:       body.TimerLabel,
-		Fingerprint: body.Fingerprint,
-	}
-	if _, err := s.activeEngine().ProvisionGate(req); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.handleGetState(w, r)
-}
-
-func (s *Server) handleToggleSim(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	next := !s.simulator.IsRunning()
-	s.simulator.SetRunning(next)
-	if s.hooks.OnModeChanged != nil {
-		s.hooks.OnModeChanged(next)
-	}
-	s.handleGetState(w, r)
-}
-
-func (s *Server) handleSetSimMode(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		Running bool `json:"running"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	if s.simulator.IsRunning() != body.Running {
-		s.simulator.SetRunning(body.Running)
-		if s.hooks.OnModeChanged != nil {
-			s.hooks.OnModeChanged(body.Running)
-		}
-	}
-	s.handleGetState(w, r)
-}
-
-func (s *Server) handleSimTimerDiag(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		TimerID       uint8 `json:"timerId"`
-		RFEnabled     bool  `json:"rfEnabled"`
-		EmergencyMode bool  `json:"emergencyMode"`
-		ScanLive      bool  `json:"scanLive"`
-		ChanMask      uint8 `json:"chanMask"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.simulator.SetTimerDiagState(body.TimerID, body.RFEnabled, body.EmergencyMode, body.ScanLive, body.ChanMask)
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
-func (s *Server) handleSimTimerRSSI(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	tid, _ := strconv.Atoi(r.URL.Query().Get("timerId"))
-	if tid <= 0 {
-		writeJSON(w, http.StatusOK, map[string]any{"rssi": nil})
-		return
-	}
-	rssi, ok := s.simulator.TimerRSSI(uint8(tid))
-	if !ok {
-		writeJSON(w, http.StatusOK, map[string]any{"rssi": nil})
-		return
-	}
-	out := make([]float32, len(rssi))
-	copy(out, rssi[:])
-	writeJSON(w, http.StatusOK, map[string]any{"rssi": out})
-}
-
-func (s *Server) handleSimUSBHellos(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost && r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	raw := s.simulator.BuildHubHelloStream()
-	w.Header().Set("Content-Type", "application/octet-stream")
-	w.WriteHeader(http.StatusOK)
-	if len(raw) > 0 {
-		_, _ = w.Write(raw)
-	}
-}
-
-func (s *Server) handlePackBurst(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	s.simulator.TriggerPackBurst()
-	s.handleGetState(w, r)
-}
-
-func (s *Server) handleSimPilotAction(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		SlotIndex int    `json:"slotIndex"`
-		Action    string `json:"action"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.simulator.TriggerPilotAction(body.SlotIndex, body.Action)
-	s.handleGetState(w, r)
-}
-
-func (s *Server) handleSimTrackWalker(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		Active bool `json:"active"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.simulator.SetTrackWalker(body.Active)
-	s.handleGetState(w, r)
-}
-
-func (s *Server) handleSimSpeed(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		SpeedMultiplier int `json:"speedMultiplier"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	s.simulator.SetSpeedMultiplier(body.SpeedMultiplier)
-	s.handleGetState(w, r)
-}
-
-func (s *Server) handleSimTimerAction(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var body struct {
-		Action          string `json:"action"` // "toggle-power", "delete", "add", "reset-timers", "erase", "flash"
-		TimerID         uint8  `json:"timerId,omitempty"`
-		Role            string `json:"role,omitempty"`
-		Label           string `json:"label,omitempty"`
-		Fingerprint     string `json:"fingerprint,omitempty"`
-		FirmwareVersion string `json:"firmwareVersion,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	switch body.Action {
-	case "toggle-power":
-		s.simulator.ToggleTimerPower(body.TimerID)
-	case "delete":
-		if err := s.simulator.DeleteTimer(body.TimerID); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	case "add":
-		if _, err := s.simulator.AddTimer(body.Role, body.Label); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	case "erase":
-		if err := s.simulator.EraseBoard(body.TimerID); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	case "flash":
-		if err := s.simulator.FlashBoard(body.TimerID, body.Role, body.Label, body.Fingerprint, body.FirmwareVersion); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-	case "reset-timers":
-		s.simulator.ResetTimersAndTrackToDefault()
-	default:
-		http.Error(w, "unknown timer action", http.StatusBadRequest)
-		return
-	}
-	s.handleGetState(w, r)
-}
-
-func (s *Server) handleResetPilots(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	s.activeEngine().ResetPilotsToDefault(s.simulator.IsRunning())
-	s.handleGetState(w, r)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"gates":  gates,
+		"timers": eng.DetectedTimersSnapshot(),
+	})
 }
 
 func (s *Server) handleResetTrack(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if err := decodeOptionalJSONBody(r, &struct{}{}); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if s.simulator.IsRunning() {
@@ -786,46 +500,351 @@ func (s *Server) handleResetTrack(w http.ResponseWriter, r *http.Request) {
 	} else {
 		s.realEngine.ResetTrackToDefault(false)
 	}
-	s.handleGetState(w, r)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
-func (s *Server) handleExportRaceResultsCSV(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+func (s *Server) handlePutThresholds(w http.ResponseWriter, r *http.Request) {
+	var updates []domain.GateThresholdUpdate
+	if err := decodeJSONBody(r, &updates); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	raceID := r.URL.Query().Get("raceId")
-	stageIdx := 0
-	if rawStage := r.URL.Query().Get("stageIndex"); rawStage != "" {
-		if parsed, err := strconv.Atoi(rawStage); err == nil && parsed >= 1 {
-			stageIdx = parsed
+	if err := s.activeEngine().SetGateThresholds(updates); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+func (s *Server) handleGetGates(w http.ResponseWriter, _ *http.Request) {
+	_, gates, _, _, _ := s.activeEngine().StateSnapshot()
+	if gates == nil {
+		gates = []domain.TrackGate{}
+	}
+	writeJSON(w, http.StatusOK, gates)
+}
+
+func (s *Server) handleGetGate(w http.ResponseWriter, r *http.Request) {
+	gateID, ok := parseUint8PathValue(w, r, "gateId")
+	if !ok {
+		return
+	}
+	_, gates, _, _, _ := s.activeEngine().StateSnapshot()
+	for _, g := range gates {
+		if g.GateID == gateID {
+			writeJSON(w, http.StatusOK, g)
+			return
 		}
 	}
-	filename, csvBody, err := s.activeEngine().ExportRaceResultsCSV(raceID, stageIdx)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
-	_, _ = w.Write([]byte(csvBody))
+	writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("gate %d not found", gateID))
 }
 
-func (s *Server) handleResetSession(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+func (s *Server) handleCreateGate(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Name            string `json:"name"`
+		AssignedTimerID uint8  `json:"assignedTimerId"`
+		TrackOrder      *int   `json:"trackOrder,omitempty"`
+	}
+	if err := decodeOptionalJSONBody(r, &body); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	s.activeEngine().ResetSession()
-	if s.activeEngine().IsRaceArmed() && s.hooks.OnTimingStarted != nil {
-		s.hooks.OnTimingStarted()
+	eng := s.activeEngine()
+	var (
+		created domain.TrackGate
+		err     error
+	)
+	if body.TrackOrder != nil {
+		created, err = eng.AddGate(body.Name, body.AssignedTimerID, *body.TrackOrder)
+	} else {
+		created, err = eng.AddGate(body.Name, body.AssignedTimerID)
 	}
-	s.handleGetState(w, r)
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	w.Header().Set("Location", fmt.Sprintf("/v1/track/gates/%d", created.GateID))
+	writeJSON(w, http.StatusCreated, s.buildFullStateResponse())
 }
+
+func (s *Server) handleUpdateGate(w http.ResponseWriter, r *http.Request) {
+	gateID, ok := parseUint8PathValue(w, r, "gateId")
+	if !ok {
+		return
+	}
+	var upd domain.GateUpdate
+	if err := decodeJSONBody(r, &upd); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	upd.GateID = gateID
+	if err := s.activeEngine().UpdateGate(upd); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+func (s *Server) handleDeleteGate(w http.ResponseWriter, r *http.Request) {
+	gateID, ok := parseUint8PathValue(w, r, "gateId")
+	if !ok {
+		return
+	}
+	if err := s.activeEngine().RemoveGate(gateID); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+func decodeGateRuleOverrides(r *http.Request) (domain.GateRuleOverrides, error) {
+	rawBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		return domain.GateRuleOverrides{}, err
+	}
+	var probe map[string]json.RawMessage
+	if err := json.Unmarshal(rawBytes, &probe); err != nil {
+		return domain.GateRuleOverrides{}, err
+	}
+	if nested, hasNested := probe["overrides"]; hasNested {
+		var ov domain.GateRuleOverrides
+		if err := json.Unmarshal(nested, &ov); err != nil {
+			return domain.GateRuleOverrides{}, err
+		}
+		return ov, nil
+	}
+	var ov domain.GateRuleOverrides
+	if err := json.Unmarshal(rawBytes, &ov); err != nil {
+		return domain.GateRuleOverrides{}, err
+	}
+	return ov, nil
+}
+
+func (s *Server) handleGetGateRules(w http.ResponseWriter, r *http.Request) {
+	gateID, ok := parseUint8PathValue(w, r, "gateId")
+	if !ok {
+		return
+	}
+	_, gates, _, _, _ := s.activeEngine().StateSnapshot()
+	for _, g := range gates {
+		if g.GateID == gateID {
+			writeJSON(w, http.StatusOK, g.RuleOverrides)
+			return
+		}
+	}
+	writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("gate %d not found", gateID))
+}
+
+func (s *Server) handlePutGateRules(w http.ResponseWriter, r *http.Request) {
+	gateID, ok := parseUint8PathValue(w, r, "gateId")
+	if !ok {
+		return
+	}
+	overrides, err := decodeGateRuleOverrides(r)
+	if err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := s.activeEngine().SetGateRules(gateID, overrides); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+func (s *Server) handleResetGateRules(w http.ResponseWriter, r *http.Request) {
+	gateID, ok := parseUint8PathValue(w, r, "gateId")
+	if !ok {
+		return
+	}
+	if err := decodeOptionalJSONBody(r, &struct{}{}); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := s.activeEngine().SetGateRules(gateID, domain.GateRuleOverrides{}); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+func (s *Server) handleGetPilotGateRules(w http.ResponseWriter, r *http.Request) {
+	gateID, ok := parseUint8PathValue(w, r, "gateId")
+	if !ok {
+		return
+	}
+	slotIndex, ok := parsePositiveIntPathValue(w, r, "slotIndex")
+	if !ok {
+		return
+	}
+	pilots, gates, _, _, _ := s.activeEngine().StateSnapshot()
+	pilotPos := -1
+	for i, p := range pilots {
+		if p.SlotIndex == slotIndex {
+			pilotPos = i
+			break
+		}
+	}
+	if pilotPos < 0 || pilotPos >= domain.MaxPilotPoolSize {
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("pilot slot %d not found", slotIndex))
+		return
+	}
+	for _, g := range gates {
+		if g.GateID == gateID {
+			writeJSON(w, http.StatusOK, g.PilotRuleOverrides[pilotPos])
+			return
+		}
+	}
+	writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("gate %d not found", gateID))
+}
+
+func (s *Server) handlePutPilotGateRules(w http.ResponseWriter, r *http.Request) {
+	gateID, ok := parseUint8PathValue(w, r, "gateId")
+	if !ok {
+		return
+	}
+	slotIndex, ok := parsePositiveIntPathValue(w, r, "slotIndex")
+	if !ok {
+		return
+	}
+	overrides, err := decodeGateRuleOverrides(r)
+	if err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := s.activeEngine().SetPilotGateRules(gateID, slotIndex, overrides); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+func (s *Server) handleResetPilotGateRules(w http.ResponseWriter, r *http.Request) {
+	gateID, ok := parseUint8PathValue(w, r, "gateId")
+	if !ok {
+		return
+	}
+	slotIndex, ok := parsePositiveIntPathValue(w, r, "slotIndex")
+	if !ok {
+		return
+	}
+	if err := decodeOptionalJSONBody(r, &struct{}{}); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if _, err := s.activeEngine().SetPilotGateRules(gateID, slotIndex, domain.GateRuleOverrides{}); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+func (s *Server) handleGetTimers(w http.ResponseWriter, _ *http.Request) {
+	timers := s.activeEngine().DetectedTimersSnapshot()
+	if timers == nil {
+		timers = []domain.DetectedTimer{}
+	}
+	writeJSON(w, http.StatusOK, timers)
+}
+
+func (s *Server) handleGetTimer(w http.ResponseWriter, r *http.Request) {
+	timerID, ok := parseUint8PathValue(w, r, "timerId")
+	if !ok {
+		return
+	}
+	for _, t := range s.activeEngine().DetectedTimersSnapshot() {
+		if t.TimerID == timerID {
+			writeJSON(w, http.StatusOK, t)
+			return
+		}
+	}
+	writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("timer %d not found", timerID))
+}
+
+func (s *Server) handleCreateTimer(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Role        string `json:"role"`
+		TimerLabel  string `json:"timerLabel"`
+		Fingerprint string `json:"fingerprint,omitempty"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	id, err := s.activeEngine().ProvisionGate(tracker.ProvisionRequest{
+		Role:        body.Role,
+		Label:       body.TimerLabel,
+		Fingerprint: body.Fingerprint,
+	})
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	w.Header().Set("Location", fmt.Sprintf("/v1/timers/%d", id))
+	writeJSON(w, http.StatusCreated, s.buildFullStateResponse())
+}
+
+func (s *Server) handlePatchTimer(w http.ResponseWriter, r *http.Request) {
+	timerID, ok := parseUint8PathValue(w, r, "timerId")
+	if !ok {
+		return
+	}
+	var body struct {
+		Color string `json:"color"`
+	}
+	if err := decodeJSONBody(r, &body); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if err := s.activeEngine().SetTimerColor(timerID, body.Color); err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+func (s *Server) handleDeleteTimer(w http.ResponseWriter, r *http.Request) {
+	timerID, ok := parseUint8PathValue(w, r, "timerId")
+	if !ok {
+		return
+	}
+	exists := false
+	for _, t := range s.activeEngine().DetectedTimersSnapshot() {
+		if t.TimerID == timerID {
+			exists = true
+			break
+		}
+	}
+	if !exists && s.simulator.IsRunning() {
+		for _, st := range s.simulator.Snapshot().Timers {
+			if st.TimerID == timerID {
+				exists = true
+				break
+			}
+		}
+	}
+	if !exists {
+		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("timer %d not found", timerID))
+		return
+	}
+	var err error
+	if s.simulator.IsRunning() {
+		err = s.simulator.DeleteTimer(timerID)
+	} else {
+		err = s.realEngine.DeleteDetectedTimer(timerID)
+	}
+	if err != nil {
+		writeEngineError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+// --- Storage Singletons & Custom Operations (`/v1/storage`, `/v1/storage:reset`, `/v1/storage:restoreDemo`) ---
 
 func (s *Server) handleResetStorage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if err := decodeOptionalJSONBody(r, &struct{}{}); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	wasRunning := s.simulator.IsRunning()
@@ -838,12 +857,12 @@ func (s *Server) handleResetStorage(w http.ResponseWriter, r *http.Request) {
 	if s.hooks.OnStorageReset != nil {
 		s.hooks.OnStorageReset()
 	}
-	s.handleGetState(w, r)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
 func (s *Server) handleRestoreDemoData(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if err := decodeOptionalJSONBody(r, &struct{}{}); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if s.activeEngine() == s.simEngine {
@@ -857,27 +876,19 @@ func (s *Server) handleRestoreDemoData(w http.ResponseWriter, r *http.Request) {
 	if s.hooks.OnStorageImport != nil {
 		s.hooks.OnStorageImport()
 	}
-	s.handleGetState(w, r)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
-func (s *Server) handleExportStorage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func (s *Server) handleExportStorage(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, RealBackendState{
 		Engine: s.realEngine.ExportState(),
 	})
 }
 
 func (s *Server) handleImportStorage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var state RealBackendState
-	if err := json.NewDecoder(r.Body).Decode(&state); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if err := decodeJSONBody(r, &state); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	s.realEngine.RestoreState(state.Engine, false)
@@ -885,14 +896,10 @@ func (s *Server) handleImportStorage(w http.ResponseWriter, r *http.Request) {
 	if s.hooks.OnStorageImport != nil {
 		s.hooks.OnStorageImport()
 	}
-	s.handleGetState(w, r)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
-func (s *Server) handleExportSimStorage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
+func (s *Server) handleExportSimStorage(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, SimBackendState{
 		Engine:  s.simEngine.ExportState(),
 		Options: s.simulator.ExportOptions(),
@@ -900,13 +907,9 @@ func (s *Server) handleExportSimStorage(w http.ResponseWriter, r *http.Request) 
 }
 
 func (s *Server) handleImportSimStorage(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
 	var state SimBackendState
-	if err := json.NewDecoder(r.Body).Decode(&state); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+	if err := decodeJSONBody(r, &state); err != nil {
+		writeErrorJSON(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if ingest.SimStateCompatible(state.Options) {
@@ -919,11 +922,163 @@ func (s *Server) handleImportSimStorage(w http.ResponseWriter, r *http.Request) 
 	if s.hooks.OnStorageImport != nil {
 		s.hooks.OnStorageImport()
 	}
-	s.handleGetState(w, r)
+	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
+}
+
+// --- Shared HTTP / AIP-136 `:action` / Error Helpers ---
+
+func decodeJSONBody(r *http.Request, dst any) error {
+	if r == nil || r.Body == nil {
+		return errors.New("request body is required")
+	}
+	dec := json.NewDecoder(io.LimitReader(r.Body, 8<<20))
+	return dec.Decode(dst)
+}
+
+func decodeOptionalJSONBody(r *http.Request, dst any) error {
+	if r == nil || r.Body == nil {
+		return nil
+	}
+	raw, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
+	if err != nil {
+		return err
+	}
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return nil
+	}
+	return json.Unmarshal(raw, dst)
+}
+
+// rejectColonInPathValue rejects accidental `:action` suffixes on GET/PUT/PATCH/DELETE item routes,
+// returning `405 Method Not Allowed` with `Allow: POST` when `raw` carries a `:verb` suffix.
+func rejectColonInPathValue(w http.ResponseWriter, raw string) bool {
+	if idx := strings.IndexByte(raw, ':'); idx >= 0 {
+		if strings.TrimSpace(raw[idx+1:]) != "" {
+			w.Header().Set("Allow", "POST")
+			writeErrorJSON(w, http.StatusMethodNotAllowed, "custom ':action' methods require HTTP POST")
+		} else {
+			writeErrorJSON(w, http.StatusBadRequest, "empty custom method after ':'")
+		}
+		return false
+	}
+	return true
+}
+
+// cutCustomActionPathValue splits `{param}:{action}` for `POST` custom methods on item resources.
+// If no `:` is present, it responds with `405 Method Not Allowed` (setting `Allow` to `itemAllowMethods`
+// when non-empty) because `POST` on an item URL without `:action` is not valid REST CRUD.
+func cutCustomActionPathValue(w http.ResponseWriter, r *http.Request, param string, itemAllowMethods string) (string, string, bool) {
+	raw := strings.TrimSpace(r.PathValue(param))
+	id, action, hasColon := strings.Cut(raw, ":")
+	if !hasColon {
+		if itemAllowMethods != "" {
+			w.Header().Set("Allow", itemAllowMethods)
+		}
+		writeErrorJSON(w, http.StatusMethodNotAllowed, "POST on an item resource requires a ':action' custom method")
+		return "", "", false
+	}
+	id = strings.TrimSpace(id)
+	action = strings.TrimSpace(action)
+	if id == "" || action == "" {
+		writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid custom method target %q", raw))
+		return "", "", false
+	}
+	return id, action, true
+}
+
+func parsePositiveIntString(w http.ResponseWriter, label string, raw string) (int, bool) {
+	val, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || val <= 0 {
+		writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid %s %q", label, raw))
+		return 0, false
+	}
+	return val, true
+}
+
+func parseUint8String(w http.ResponseWriter, label string, raw string) (uint8, bool) {
+	val, err := strconv.Atoi(strings.TrimSpace(raw))
+	if err != nil || val <= 0 || val > 255 {
+		writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid %s %q", label, raw))
+		return 0, false
+	}
+	return uint8(val), true
+}
+
+func parsePositiveIntPathValue(w http.ResponseWriter, r *http.Request, name string) (int, bool) {
+	raw := strings.TrimSpace(r.PathValue(name))
+	if !rejectColonInPathValue(w, raw) {
+		return 0, false
+	}
+	return parsePositiveIntString(w, name, raw)
+}
+
+func parseUint8PathValue(w http.ResponseWriter, r *http.Request, name string) (uint8, bool) {
+	raw := strings.TrimSpace(r.PathValue(name))
+	if !rejectColonInPathValue(w, raw) {
+		return 0, false
+	}
+	return parseUint8String(w, name, raw)
+}
+
+func parseUint64PathValue(w http.ResponseWriter, r *http.Request, name string) (uint64, bool) {
+	raw := strings.TrimSpace(r.PathValue(name))
+	if !rejectColonInPathValue(w, raw) {
+		return 0, false
+	}
+	val, err := strconv.ParseUint(raw, 10, 64)
+	if err != nil || val == 0 {
+		writeErrorJSON(w, http.StatusBadRequest, fmt.Sprintf("invalid %s %q", name, raw))
+		return 0, false
+	}
+	return val, true
+}
+
+func statusForEngineError(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+	if errors.Is(err, tracker.ErrUnknownGate) {
+		return http.StatusNotFound
+	}
+	if errors.Is(err, tracker.ErrMinOneGate) || errors.Is(err, tracker.ErrHubExists) {
+		return http.StatusConflict
+	}
+	lower := strings.ToLower(err.Error())
+	if strings.Contains(lower, "not found") ||
+		strings.HasPrefix(lower, "unknown gate") ||
+		strings.Contains(lower, "is not in this session") ||
+		strings.Contains(lower, "is not in heat") {
+		return http.StatusNotFound
+	}
+	if strings.Contains(lower, "already exists") ||
+		strings.Contains(lower, "already in use") ||
+		strings.Contains(lower, "already has counted heats") ||
+		strings.Contains(lower, "at least 2 pilots") ||
+		strings.Contains(lower, "at least one gate") ||
+		strings.Contains(lower, "cannot delete") ||
+		strings.Contains(lower, "started round") ||
+		strings.Contains(lower, "is ongoing") ||
+		strings.Contains(lower, "is active") ||
+		strings.Contains(lower, "confirm preemption") ||
+		strings.Contains(lower, "pause it first") ||
+		strings.Contains(lower, "pause or complete") ||
+		strings.Contains(lower, "unlock confirmed heat") ||
+		strings.Contains(lower, "-heat limit") {
+		return http.StatusConflict
+	}
+	return http.StatusBadRequest
+}
+
+func writeEngineError(w http.ResponseWriter, err error) {
+	writeErrorJSON(w, statusForEngineError(err), err.Error())
+}
+
+func writeErrorJSON(w http.ResponseWriter, status int, msg string) {
+	writeJSON(w, status, map[string]string{"error": strings.TrimSpace(msg)})
 }
 
 func writeJSON(w http.ResponseWriter, status int, payload interface{}) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
 }

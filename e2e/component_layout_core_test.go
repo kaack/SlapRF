@@ -15,10 +15,10 @@ func TestComponent_BootLoaderProgressAndReadyTransition(t *testing.T) {
 		FullBootAnimation: true,
 	})
 
-	if _, err := h.Page.Goto(h.BaseURL+"/#/live", playwright.PageGotoOptions{
+	if _, err := h.Page.Goto(h.BaseURL+"/#/practice", playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateCommit,
 	}); err != nil {
-		t.Fatalf("Goto #/live: %v", err)
+		t.Fatalf("Goto #/practice: %v", err)
 	}
 
 	// Verify the radar boot loader starts visible before transitioning to .is-ready.
@@ -55,7 +55,7 @@ func TestComponent_BootLoaderProgressAndReadyTransition(t *testing.T) {
 
 func TestComponent_SidebarCollapseExpandAndPersistence(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/live")
+	h.BootClean("#/practice")
 
 	collapseBtn := h.Page.Locator(`aside button[data-action="collapse-sidebar"]`).First()
 	h.MustBeVisible(collapseBtn, "Sidebar collapse button")
@@ -80,7 +80,7 @@ func TestComponent_SidebarCollapseExpandAndPersistence(t *testing.T) {
 
 func TestComponent_TopBarBreadcrumbsAndOverflowMenu(t *testing.T) {
 	h := NewHarness(t)
-	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live/evening-lap-lab", nil)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice/evening-lap-lab", nil)
 
 	crumb := h.Page.Locator(`[data-practice-breadcrumb]`).First()
 	h.MustContainText(crumb, "Evening Lap Lab")
@@ -95,10 +95,10 @@ func TestComponent_TopBarBreadcrumbsAndOverflowMenu(t *testing.T) {
 	h.MustBeVisible(h.Page.Locator(`[data-slot="mobile-analytics"] .analytics-picker-row`).First(), "Embedded Practice Analytics picker row")
 
 	// Click parent "Practice" breadcrumb link to return to Practice directory, verifying pixel-locked "Practice" position and 15px size.
-	backLink := crumb.Locator(`a.topbar-crumb-item[href="#/live"]`).First()
+	backLink := crumb.Locator(`a.topbar-crumb-item[href="#/practice"]`).First()
 	h.MustBeVisible(backLink, "Practice breadcrumb parent link")
 	inPracCheck, err := h.Page.Evaluate(`() => {
-		const crumbSpan = document.querySelector('[data-practice-breadcrumb] a.topbar-crumb-item[href="#/live"] span');
+		const crumbSpan = document.querySelector('[data-practice-breadcrumb] a.topbar-crumb-item[href="#/practice"] span');
 		const actions = document.querySelector('.topbar-actions');
 		if (!crumbSpan || !actions) return { ok: false, reason: "missing crumbSpan or actions" };
 		const cr = crumbSpan.getBoundingClientRect();
@@ -191,7 +191,7 @@ func TestComponent_TopBarBreadcrumbsAndOverflowMenu(t *testing.T) {
 
 func TestComponent_TopBarAnnouncerQuickMuteToggle(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/live")
+	h.BootClean("#/practice")
 
 	annBtn := h.Page.Locator(`button[data-action="announcer"]`).First()
 	h.MustBeVisible(annBtn, "TopBar announcer mute toggle")
@@ -391,7 +391,7 @@ func TestComponent_MultiTabOwnershipConflictAndTakeover(t *testing.T) {
 	// Single-tab IndexedDB ownership conflict applies in Standalone Browser Demo Mode (StaticDemoMode: true).
 	// Native Go Backend Mode intentionally supports multi-tab simultaneous operation without conflict locks.
 	h := NewHarnessWithOptions(t, HarnessOptions{StaticDemoMode: true})
-	h.BootClean("#/live")
+	h.BootClean("#/practice")
 
 	// Open a second tab in the same BrowserContext so BroadcastChannel / localStorage lock collides.
 	page2, err := h.Ctx.NewPage()
@@ -400,7 +400,7 @@ func TestComponent_MultiTabOwnershipConflictAndTakeover(t *testing.T) {
 	}
 	h.AttachErrorGuards(page2)
 
-	if _, err := page2.Goto(h.BaseURL+"/#/live", playwright.PageGotoOptions{
+	if _, err := page2.Goto(h.BaseURL+"/#/practice", playwright.PageGotoOptions{
 		WaitUntil: playwright.WaitUntilStateDomcontentloaded,
 	}); err != nil {
 		t.Fatalf("tab 2 Goto: %v", err)
@@ -480,21 +480,21 @@ func TestComponent_AnnouncerWinnerHornAndCallout(t *testing.T) {
 	_, err := h.Page.Evaluate(`async () => {
 		const r1 = await window.slaprfCurl({
 			method: "POST",
-			url: "/api/events/action",
-			body: { action: "create_race", name: "Winner Announcer Test" },
+			url: "/v1/race/sessions",
+			body: { name: "Winner Announcer Test" },
 			syncUi: true
 		});
 		const raceId = r1.json.raceState.raceId;
 		await window.slaprfCurl({
 			method: "POST",
-			url: "/api/events/action",
-			body: { action: "check_in_all", raceId },
+			url: "/v1/race/sessions/" + encodeURIComponent(raceId) + "/pilots:checkInAll",
+			body: {},
 			syncUi: true
 		});
 		await window.slaprfCurl({
 			method: "POST",
-			url: "/api/race/bracket-edit",
-			body: { raceId, action: "apply_template", templateId: "single_elimination" },
+			url: "/v1/race/sessions/" + encodeURIComponent(raceId) + "/bracket:edit",
+			body: { action: "apply_template", templateId: "single_elimination" },
 			syncUi: true
 		});
 		window.location.hash = "#/races/" + raceId + "/control";
@@ -517,7 +517,7 @@ func TestComponent_AnnouncerWinnerHornAndCallout(t *testing.T) {
 
 	h.WaitUntil("heat running", 10*time.Second, func() (bool, error) {
 		res, err := h.Page.Evaluate(`async () => {
-			const st = await window.slaprfCurl({ method: "GET", url: "/api/status" });
+			const st = await window.slaprfCurl({ method: "GET", url: "/v1/status" });
 			return st.json?.raceState?.heats?.[0]?.state === "running";
 		}`)
 		if err != nil {
@@ -528,7 +528,7 @@ func TestComponent_AnnouncerWinnerHornAndCallout(t *testing.T) {
 	})
 
 	winnerCallsignRaw, err := h.Page.Evaluate(`async () => {
-		const st = await window.slaprfCurl({ method: "GET", url: "/api/status" });
+		const st = await window.slaprfCurl({ method: "GET", url: "/v1/status" });
 		const raceId = st.json.raceState.raceId;
 		const heat = st.json.raceState.heats[0];
 		const seated = heat.seats.filter(s => s.pilotSlotIndex > 0);
@@ -538,8 +538,8 @@ func TestComponent_AnnouncerWinnerHornAndCallout(t *testing.T) {
 		for (let c = 0; c <= targetLaps; c++) {
 			await window.slaprfCurl({
 				method: "POST",
-				url: "/api/race/marshal",
-				body: { raceId, heatId: heat.id, pilotSlotIndex: p1.pilotSlotIndex, action: "add_crossing", offsetMs: 700 + c * 12000 },
+				url: "/v1/race/sessions/" + encodeURIComponent(raceId) + "/heats/" + encodeURIComponent(heat.id) + "/pilots/" + p1.pilotSlotIndex + ":marshal",
+				body: { action: "add_crossing", offsetMs: 700 + c * 12000 },
 				syncUi: true
 			});
 		}
@@ -547,8 +547,8 @@ func TestComponent_AnnouncerWinnerHornAndCallout(t *testing.T) {
 			for (let c = 0; c <= targetLaps; c++) {
 				await window.slaprfCurl({
 					method: "POST",
-					url: "/api/race/marshal",
-					body: { raceId, heatId: heat.id, pilotSlotIndex: p2.pilotSlotIndex, action: "add_crossing", offsetMs: 900 + c * 13500 },
+					url: "/v1/race/sessions/" + encodeURIComponent(raceId) + "/heats/" + encodeURIComponent(heat.id) + "/pilots/" + p2.pilotSlotIndex + ":marshal",
+					body: { action: "add_crossing", offsetMs: 900 + c * 13500 },
 					syncUi: true
 				});
 			}
@@ -609,34 +609,28 @@ func TestComponent_AnnouncerControlLapCalloutsToggleRespected(t *testing.T) {
 	// Enable simulation, create a Qualifying race, navigate to Control, and toggle lap callouts OFF via the cockpit button.
 	_, err := h.Page.Evaluate(`async () => {
 		await window.slaprfCurl({
-			method: "POST",
-			url: "/api/sim/mode",
-			body: { running: true },
-			syncUi: true
-		});
-		await window.slaprfCurl({
-			method: "POST",
-			url: "/api/sim/speed",
-			body: { speedMultiplier: 8 },
+			method: "PATCH",
+			url: "/v1/sim",
+			body: { running: true, speedMultiplier: 8 },
 			syncUi: true
 		});
 		const r1 = await window.slaprfCurl({
 			method: "POST",
-			url: "/api/events/action",
-			body: { action: "create_race", name: "Muted Lap Callout Cup" },
+			url: "/v1/race/sessions",
+			body: { name: "Muted Lap Callout Cup" },
 			syncUi: true
 		});
 		const raceId = r1.json.raceState.raceId;
 		await window.slaprfCurl({
 			method: "POST",
-			url: "/api/events/action",
-			body: { action: "check_in_all", raceId },
+			url: "/v1/race/sessions/" + encodeURIComponent(raceId) + "/pilots:checkInAll",
+			body: {},
 			syncUi: true
 		});
 		await window.slaprfCurl({
 			method: "POST",
-			url: "/api/race/bracket-edit",
-			body: { raceId, action: "apply_template", templateId: "qual_ladder_mains" },
+			url: "/v1/race/sessions/" + encodeURIComponent(raceId) + "/bracket:edit",
+			body: { action: "apply_template", templateId: "qual_ladder_mains" },
 			syncUi: true
 		});
 		window.location.hash = "#/races/" + raceId + "/control";
@@ -672,7 +666,7 @@ func TestComponent_AnnouncerControlLapCalloutsToggleRespected(t *testing.T) {
 
 	h.WaitUntil("Q1-1 enters running state", 10*time.Second, func() (bool, error) {
 		res, err := h.Page.Evaluate(`async () => {
-			const st = await window.slaprfCurl({ method: "GET", url: "/api/status" });
+			const st = await window.slaprfCurl({ method: "GET", url: "/v1/status" });
 			return st.json?.raceState?.heats?.[0]?.state === "running";
 		}`)
 		if err != nil {
@@ -685,7 +679,7 @@ func TestComponent_AnnouncerControlLapCalloutsToggleRespected(t *testing.T) {
 	// Clear countdown speech, run a simulated pack burst while lap callouts are OFF, and verify laps complete silently!
 	_, err = h.Page.Evaluate(`async () => {
 		window.__E2E_SPEAK_LOG = [];
-		await window.slaprfCurl({ method: "POST", url: "/api/sim/pack-burst", body: {}, syncUi: true });
+		await window.slaprfCurl({ method: "POST", url: "/v1/sim:packBurst", body: {}, syncUi: true });
 	}`)
 	if err != nil {
 		t.Fatalf("pack-burst while muted: %v", err)
@@ -693,7 +687,7 @@ func TestComponent_AnnouncerControlLapCalloutsToggleRespected(t *testing.T) {
 
 	h.WaitUntil("at least 2 simulated laps completed in Q1-1", 5*time.Second, func() (bool, error) {
 		res, err := h.Page.Evaluate(`async () => {
-			const st = await window.slaprfCurl({ method: "GET", url: "/api/status" });
+			const st = await window.slaprfCurl({ method: "GET", url: "/v1/status" });
 			const h0 = st.json?.raceState?.heats?.[0];
 			if (!h0) return false;
 			const totalLaps = (h0.seats || []).reduce((sum, s) => sum + (s.lapsCompleted || 0), 0);
@@ -731,7 +725,7 @@ func TestComponent_AnnouncerControlLapCalloutsToggleRespected(t *testing.T) {
 	})
 	_, err = h.Page.Evaluate(`async () => {
 		window.__E2E_SPEAK_LOG = [];
-		await window.slaprfCurl({ method: "POST", url: "/api/sim/pack-burst", body: {}, syncUi: true });
+		await window.slaprfCurl({ method: "POST", url: "/v1/sim:packBurst", body: {}, syncUi: true });
 	}`)
 	if err != nil {
 		t.Fatalf("pack-burst while unmuted: %v", err)

@@ -768,8 +768,8 @@ export class NetworkView extends Component {
         return;
       }
       if (capabilitiesSnapshot().portable && !this.store.simulatorRunning) {
-        void fetch(resolveBackendUrl("/api/hub/survey"), {
-          method: "POST",
+        void fetch(resolveBackendUrl("/v1/usb/survey"), {
+          method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ on: true }),
         })
@@ -790,7 +790,7 @@ export class NetworkView extends Component {
       return;
     }
     try {
-      const resp = await fetch(resolveBackendUrl("/api/hub/survey"));
+      const resp = await fetch(resolveBackendUrl("/v1/usb/survey"));
       if (!resp.ok) return;
       const data = (await resp.json()) as { active?: boolean };
       this.surveyAllRaceband = Boolean(data.active);
@@ -821,8 +821,8 @@ export class NetworkView extends Component {
     }
     if (capabilitiesSnapshot().portable && !this.store.simulatorRunning) {
       try {
-        const resp = await fetch(resolveBackendUrl("/api/hub/survey"), {
-          method: "POST",
+        const resp = await fetch(resolveBackendUrl("/v1/usb/survey"), {
+          method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ on: want }),
         });
@@ -852,8 +852,8 @@ export class NetworkView extends Component {
     if (!this.surveyAllRaceband) return;
     this.surveyAllRaceband = false;
     if (capabilitiesSnapshot().portable && !this.store.simulatorRunning) {
-      void fetch(resolveBackendUrl("/api/hub/survey"), {
-        method: "POST",
+      void fetch(resolveBackendUrl("/v1/usb/survey"), {
+        method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ on: false }),
         keepalive: true,
@@ -912,7 +912,7 @@ export class NetworkView extends Component {
         ? this.store.simState?.timers?.find((t) => t.timerId === timerId)
         : undefined;
     const baseFloor = Math.round(baseFloorDbm || -92);
-    // Prefer 50 Hz WebSocket node telemetry over 0.5 Hz (/api/status) simState.timers snapshots!
+    // Prefer 50 Hz WebSocket node telemetry over 0.5 Hz (/v1/status) simState.timers snapshots!
     let rawRssi: number[] | undefined =
       Array.isArray(liveWasm) && liveWasm.some((v) => v < 0)
         ? liveWasm

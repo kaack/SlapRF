@@ -16,27 +16,27 @@ import (
 	"slaprf/internal/storage"
 )
 
-const kvLiveTimeConfigKey = "hw.livetime_config"
+const kvLapRFEmulatorConfigKey = "hw.laprf_emulator_config"
 
-// LiveTimeConfig persists the native Go TCP :5403 LapRF server emulator settings in `BoltStore`.
-type LiveTimeConfig struct {
+// LapRFEmulatorConfig persists the native Go TCP :5403 LapRF server emulator settings in `BoltStore`.
+type LapRFEmulatorConfig struct {
 	Enabled bool   `json:"enabled"`
 	Port    int    `json:"port"`
 	Bind    string `json:"bind,omitempty"` // "" (all interfaces) | "loopback"
 }
 
-// LiveTimeSnapshot matches `LiveTimeRelaySnapshot` in `web/src/services/livetime_relay.ts`.
-type LiveTimeSnapshot struct {
-	Enabled       bool   `json:"enabled"`
-	Suppressed    bool   `json:"suppressed"`
-	RelayState    string `json:"relayState"`    // "off" | "connected" | "unreachable"
-	LiveTimeState string `json:"liveTimeState"` // "waiting" | "connected"
-	Peer          string `json:"peer"`
-	ListenAddr    string `json:"listenAddr"`
-	RelayVersion  string `json:"relayVersion"`
-	BytesIn       uint64 `json:"bytesIn"`
-	BytesOut      uint64 `json:"bytesOut"`
-	LastError     string `json:"lastError"`
+// LapRFEmulatorSnapshot matches `LapRFEmulatorSnapshot` in `web/src/services/laprf_emulator_relay.ts`.
+type LapRFEmulatorSnapshot struct {
+	Enabled      bool   `json:"enabled"`
+	Suppressed   bool   `json:"suppressed"`
+	RelayState   string `json:"relayState"`   // "off" | "connected" | "unreachable"
+	ClientState  string `json:"clientState"`  // "waiting" | "connected"
+	Peer         string `json:"peer"`
+	ListenAddr   string `json:"listenAddr"`
+	RelayVersion string `json:"relayVersion"`
+	BytesIn      uint64 `json:"bytesIn"`
+	BytesOut     uint64 `json:"bytesOut"`
+	LastError    string `json:"lastError"`
 }
 
 type meteredConn struct {
@@ -61,7 +61,7 @@ func (c *meteredConn) Write(b []byte) (int, error) {
 	return n, err
 }
 
-type liveTimeManager struct {
+type laprfEmulatorManager struct {
 	version      string
 	laprfSrv     *laprf.Server
 	store        *storage.BoltStore
@@ -69,7 +69,7 @@ type liveTimeManager struct {
 	logf         func(string, ...any)
 
 	mu         sync.Mutex
-	cfg        LiveTimeConfig
+	cfg        LapRFEmulatorConfig
 	ln         net.Listener
 	listenPort int
 	listenAddr string
@@ -81,21 +81,21 @@ type liveTimeManager struct {
 	bytesOut   atomic.Uint64
 }
 
-func newLiveTimeManager(version string, laprfSrv *laprf.Server, store *storage.BoltStore, isSuppressed func() bool, logf func(string, ...any)) *liveTimeManager {
-	m := &liveTimeManager{
+func newLapRFEmulatorManager(version string, laprfSrv *laprf.Server, store *storage.BoltStore, isSuppressed func() bool, logf func(string, ...any)) *laprfEmulatorManager {
+	m := &laprfEmulatorManager{
 		version:      version,
 		laprfSrv:     laprfSrv,
 		store:        store,
 		isSuppressed: isSuppressed,
 		logf:         logf,
-		cfg: LiveTimeConfig{
+		cfg: LapRFEmulatorConfig{
 			Enabled: false,
 			Port:    DefaultLapRFPort,
 		},
 	}
 	if store != nil {
-		var saved LiveTimeConfig
-		if ok, err := store.GetJSON(kvLiveTimeConfigKey, &saved); err == nil && ok {
+		var saved LapRFEmulatorConfig
+		if ok, err := store.GetJSON(kvLapRFEmulatorConfigKey, &saved); err == nil && ok {
 			if saved.Port <= 0 {
 				saved.Port = DefaultLapRFPort
 			}
@@ -105,13 +105,13 @@ func newLiveTimeManager(version string, laprfSrv *laprf.Server, store *storage.B
 	return m
 }
 
-func (m *liveTimeManager) Reconcile() {
+func (m *laprfEmulatorManager) Reconcile() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.reconcileLocked()
 }
 
-func (m *liveTimeManager) SetConfig(cfg LiveTimeConfig) LiveTimeSnapshot {
+func (m *laprfEmulatorManager) SetConfig(cfg LapRFEmulatorConfig) LapRFEmulatorSnapshot {
 	if cfg.Port < 0 || cfg.Port > 65535 {
 		cfg.Port = DefaultLapRFPort
 	}
@@ -119,7 +119,7 @@ func (m *liveTimeManager) SetConfig(cfg LiveTimeConfig) LiveTimeSnapshot {
 	portChanged := m.cfg.Port != cfg.Port || m.cfg.Bind != cfg.Bind
 	m.cfg = cfg
 	if m.store != nil {
-		_ = m.store.PutJSON(kvLiveTimeConfigKey, cfg)
+		_ = m.store.PutJSON(kvLapRFEmulatorConfigKey, cfg)
 	}
 	if portChanged && m.ln != nil {
 		m.stopListenerLocked()
@@ -130,7 +130,7 @@ func (m *liveTimeManager) SetConfig(cfg LiveTimeConfig) LiveTimeSnapshot {
 	return snap
 }
 
-func (m *liveTimeManager) listeningPort() int {
+func (m *laprfEmulatorManager) listeningPort() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if m.ln != nil {
@@ -139,13 +139,13 @@ func (m *liveTimeManager) listeningPort() int {
 	return 0
 }
 
-func (m *liveTimeManager) close() {
+func (m *laprfEmulatorManager) close() {
 	m.mu.Lock()
 	m.stopListenerLocked()
 	m.mu.Unlock()
 }
 
-func (m *liveTimeManager) stopListenerLocked() {
+func (m *laprfEmulatorManager) stopListenerLocked() {
 	if m.cancel != nil {
 		m.cancel()
 		m.cancel = nil
@@ -163,7 +163,7 @@ func (m *liveTimeManager) stopListenerLocked() {
 	m.listenAddr = ""
 }
 
-func (m *liveTimeManager) reconcileLocked() {
+func (m *laprfEmulatorManager) reconcileLocked() {
 	suppressed := m.isSuppressed != nil && m.isSuppressed()
 	shouldListen := m.cfg.Enabled && !suppressed
 	if !shouldListen {
@@ -201,12 +201,12 @@ func (m *liveTimeManager) reconcileLocked() {
 	m.listenAddr = ln.Addr().String()
 	m.cancel = cancel
 	m.lastErr = ""
-	m.logf("[LiveTime Emulator] Native Go TCP listener bound on %s", m.listenAddr)
+	m.logf("[LapRF Emulator] Native Go TCP listener bound on %s", m.listenAddr)
 
 	go m.acceptLoop(ctx, ln)
 }
 
-func (m *liveTimeManager) acceptLoop(ctx context.Context, ln net.Listener) {
+func (m *laprfEmulatorManager) acceptLoop(ctx context.Context, ln net.Listener) {
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
@@ -246,13 +246,13 @@ func (m *liveTimeManager) acceptLoop(ctx context.Context, ln net.Listener) {
 	}
 }
 
-func (m *liveTimeManager) Snapshot() LiveTimeSnapshot {
+func (m *laprfEmulatorManager) Snapshot() LapRFEmulatorSnapshot {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.snapshotLocked()
 }
 
-func (m *liveTimeManager) snapshotLocked() LiveTimeSnapshot {
+func (m *laprfEmulatorManager) snapshotLocked() LapRFEmulatorSnapshot {
 	suppressed := m.isSuppressed != nil && m.isSuppressed()
 	relayState := "off"
 	if m.cfg.Enabled && !suppressed {
@@ -262,27 +262,27 @@ func (m *liveTimeManager) snapshotLocked() LiveTimeSnapshot {
 			relayState = "unreachable"
 		}
 	}
-	ltState := "waiting"
+	clientState := "waiting"
 	if m.activeConn != nil && m.peer != "" {
-		ltState = "connected"
+		clientState = "connected"
 	}
-	return LiveTimeSnapshot{
-		Enabled:       m.cfg.Enabled,
-		Suppressed:    suppressed,
-		RelayState:    relayState,
-		LiveTimeState: ltState,
-		Peer:          m.peer,
-		ListenAddr:    m.listenAddr,
-		RelayVersion:  m.version,
-		BytesIn:       m.bytesIn.Load(),
-		BytesOut:      m.bytesOut.Load(),
-		LastError:     m.lastErr,
+	return LapRFEmulatorSnapshot{
+		Enabled:      m.cfg.Enabled,
+		Suppressed:   suppressed,
+		RelayState:   relayState,
+		ClientState:  clientState,
+		Peer:         m.peer,
+		ListenAddr:   m.listenAddr,
+		RelayVersion: m.version,
+		BytesIn:      m.bytesIn.Load(),
+		BytesOut:     m.bytesOut.Load(),
+		LastError:    m.lastErr,
 	}
 }
 
 // --- HTTP Handlers ---
 
-func (s *Server) handleLiveTimeStatus(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleLapRFEmulatorStatus(w http.ResponseWriter, r *http.Request) {
 	if !s.isAllowedOrigin(r) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
@@ -291,16 +291,16 @@ func (s *Server) handleLiveTimeStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	s.liveTimeMgr.Reconcile()
-	writeJSONNoStore(w, http.StatusOK, s.liveTimeMgr.Snapshot())
+	s.laprfEmulatorMgr.Reconcile()
+	writeJSONNoStore(w, http.StatusOK, s.laprfEmulatorMgr.Snapshot())
 }
 
-func (s *Server) handleLiveTimeConfig(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleLapRFEmulatorConfig(w http.ResponseWriter, r *http.Request) {
 	if !s.isAllowedOrigin(r) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
 	}
-	if r.Method != http.MethodPost {
+	if r.Method != http.MethodPut && r.Method != http.MethodPatch {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
@@ -313,9 +313,9 @@ func (s *Server) handleLiveTimeConfig(w http.ResponseWriter, r *http.Request) {
 		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
 		return
 	}
-	s.liveTimeMgr.mu.Lock()
-	next := s.liveTimeMgr.cfg
-	s.liveTimeMgr.mu.Unlock()
+	s.laprfEmulatorMgr.mu.Lock()
+	next := s.laprfEmulatorMgr.cfg
+	s.laprfEmulatorMgr.mu.Unlock()
 	if req.Enabled != nil {
 		next.Enabled = *req.Enabled
 	}
@@ -325,6 +325,6 @@ func (s *Server) handleLiveTimeConfig(w http.ResponseWriter, r *http.Request) {
 	if req.Bind != nil {
 		next.Bind = *req.Bind
 	}
-	snap := s.liveTimeMgr.SetConfig(next)
+	snap := s.laprfEmulatorMgr.SetConfig(next)
 	writeJSONNoStore(w, http.StatusOK, snap)
 }

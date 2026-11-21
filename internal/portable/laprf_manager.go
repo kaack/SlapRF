@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -606,7 +607,8 @@ func (s *Server) handleLapRFConnect(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	writeJSONNoStore(w, http.StatusOK, map[string]any{"session": snap})
+	w.Header().Set("Location", fmt.Sprintf("/v1/laprf/sessions/%d", snap.TimerID))
+	writeJSONNoStore(w, http.StatusCreated, map[string]any{"session": snap})
 }
 
 func (s *Server) handleLapRFDisconnect(w http.ResponseWriter, r *http.Request) {
@@ -614,18 +616,13 @@ func (s *Server) handleLapRFDisconnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
 	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	rawID := strings.TrimSpace(r.PathValue("timerId"))
+	tid, err := strconv.Atoi(rawID)
+	if err != nil || tid <= 0 || tid > 255 {
+		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid timerId"})
 		return
 	}
-	var req struct {
-		TimerID uint8 `json:"timerId"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TimerID == 0 {
-		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "missing timerId"})
-		return
-	}
-	s.laprfMgr.Disconnect(req.TimerID)
+	s.laprfMgr.Disconnect(uint8(tid))
 	writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true})
 }
 

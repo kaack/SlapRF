@@ -900,7 +900,7 @@ func buildSnapshotMultiGPSeeded() (SimSnapshotBundle, error) {
 	recView := httptest.NewRecorder()
 	handler.ServeHTTP(recView, httptest.NewRequest(
 		http.MethodPost,
-		"/api/sim/mgp/race/view?id=501",
+		"/v1/sim/mgp/race/view?id=501",
 		bytes.NewBufferString(fmt.Sprintf(`{"apiKey":%q}`, multigp.DefaultSimAPIKey)),
 	))
 	if recView.Code != http.StatusOK {
@@ -919,9 +919,9 @@ func buildSnapshotMultiGPSeeded() (SimSnapshotBundle, error) {
 		"importMode": "schedule",
 	})
 	recImp := httptest.NewRecorder()
-	handler.ServeHTTP(recImp, httptest.NewRequest(http.MethodPost, "/api/mgp-sync/import", bytes.NewReader(impPayload)))
-	if recImp.Code != http.StatusOK {
-		return SimSnapshotBundle{}, fmt.Errorf("mgp-sync/import failed: %d %s", recImp.Code, recImp.Body.String())
+	handler.ServeHTTP(recImp, httptest.NewRequest(http.MethodPost, "/v1/race/sessions:importMultiGP", bytes.NewReader(impPayload)))
+	if recImp.Code != http.StatusCreated {
+		return SimSnapshotBundle{}, fmt.Errorf("race/sessions:importMultiGP failed: %d %s", recImp.Code, recImp.Body.String())
 	}
 
 	var impResp struct {
@@ -957,8 +957,8 @@ func buildSnapshotLapRFModeSeeded() (SimSnapshotBundle, error) {
 
 	recMode := httptest.NewRecorder()
 	handler.ServeHTTP(recMode, httptest.NewRequest(
-		http.MethodPost,
-		"/api/hardware/mode",
+		http.MethodPut,
+		"/v1/hardware/mode",
 		bytes.NewBufferString(`{"mode":"laprf"}`),
 	))
 	if recMode.Code != http.StatusOK {

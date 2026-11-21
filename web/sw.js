@@ -20,7 +20,7 @@
  *               navigations → network-first (with timeout), falling back to cached index.html
  *               (this also serves SPA deep links offline).
  *               precached same-origin GETs → cache-first (query string such as `?v=228` ignored).
- *               anything else (e.g. /api/*) → not intercepted.
+ *               anything else (e.g. /v1/*) -> not intercepted.
  */
 "use strict";
 
@@ -159,6 +159,7 @@ self.addEventListener("fetch", (event) => {
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
   if (url.pathname === "/docs" || url.pathname.startsWith("/docs/")) return;
+  if (url.pathname === "/v1" || url.pathname.startsWith("/v1/")) return;
 
   if (request.mode === "navigate") {
     event.respondWith(handleNavigation(request));

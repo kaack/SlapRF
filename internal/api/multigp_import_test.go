@@ -24,16 +24,16 @@ func TestMultiGPImportAndLapRFSimE2E(t *testing.T) {
 	srv := NewServer(engine, sim, laprfSrv)
 	handler := srv.Handler()
 
-	// 1. Switch to LapRF mode in simulation
+	// 1. Switch to LapRF mode in simulation via PUT /v1/hardware/mode
 	recMode := httptest.NewRecorder()
-	handler.ServeHTTP(recMode, httptest.NewRequest(http.MethodPost, "/api/hardware/mode", bytes.NewBufferString(`{"mode":"laprf"}`)))
+	handler.ServeHTTP(recMode, httptest.NewRequest(http.MethodPut, "/v1/hardware/mode", bytes.NewBufferString(`{"mode":"laprf"}`)))
 	if recMode.Code != http.StatusOK {
-		t.Fatalf("hardware mode failed: %d %s", recMode.Code, recMode.Body.String())
+		t.Fatalf("PUT /v1/hardware/mode failed: %d %s", recMode.Code, recMode.Body.String())
 	}
 
 	// 2. Fetch race #501 from simulated MultiGP WebService
 	recView := httptest.NewRecorder()
-	handler.ServeHTTP(recView, httptest.NewRequest(http.MethodPost, "/api/sim/mgp/race/view?id=501", bytes.NewBufferString(`{"apiKey":"MGP-SIM-BAYAREA-2026"}`)))
+	handler.ServeHTTP(recView, httptest.NewRequest(http.MethodPost, "/v1/sim/mgp/race/view?id=501", bytes.NewBufferString(`{"apiKey":"MGP-SIM-BAYAREA-2026"}`)))
 	if recView.Code != http.StatusOK {
 		t.Fatalf("sim mgp race/view failed: %d %s", recView.Code, recView.Body.String())
 	}
@@ -45,7 +45,7 @@ func TestMultiGPImportAndLapRFSimE2E(t *testing.T) {
 		t.Fatalf("failed to decode race/view: %v", err)
 	}
 
-	// 3. Import race #501 in zippyq, bracket, and finally schedule mode
+	// 3. Import race #501 in zippyq, bracket, and finally schedule mode via POST /v1/race/sessions:importMultiGP (201 Created)
 	var lastCreatedRaceID string
 	var lastHeatID string
 	for _, mode := range []string{"zippyq", "bracket", "schedule"} {
@@ -55,9 +55,9 @@ func TestMultiGPImportAndLapRFSimE2E(t *testing.T) {
 			"templateId": "double_elimination",
 		})
 		recImp := httptest.NewRecorder()
-		handler.ServeHTTP(recImp, httptest.NewRequest(http.MethodPost, "/api/mgp-sync/import", bytes.NewReader(payload)))
-		if recImp.Code != http.StatusOK {
-			t.Fatalf("import-race (%s) failed: %d %s", mode, recImp.Code, recImp.Body.String())
+		handler.ServeHTTP(recImp, httptest.NewRequest(http.MethodPost, "/v1/race/sessions:importMultiGP", bytes.NewReader(payload)))
+		if recImp.Code != http.StatusCreated {
+			t.Fatalf("POST /v1/race/sessions:importMultiGP (%s) failed: %d %s", mode, recImp.Code, recImp.Body.String())
 		}
 		var impResp struct {
 			CreatedRace struct {
@@ -76,37 +76,36 @@ func TestMultiGPImportAndLapRFSimE2E(t *testing.T) {
 		if impResp.CreatedRace.MGPLink == nil || impResp.CreatedRace.MGPLink.RaceID != 501 {
 			t.Fatalf("expected mgpLink.raceId=501 for mode=%s, got %+v", mode, impResp.CreatedRace.MGPLink)
 		}
+		if loc := recImp.Header().Get("Location"); loc != "/v1/race/sessions/"+impResp.CreatedRace.RaceID {
+			t.Fatalf("expected Location header /v1/race/sessions/%s, got %q", impResp.CreatedRace.RaceID, loc)
+		}
 		lastCreatedRaceID = impResp.CreatedRace.RaceID
 		if len(impResp.CreatedRace.Heats) > 0 {
 			lastHeatID = impResp.CreatedRace.Heats[0].ID
 		}
 	}
 
-	// 4. Start heat, stop & confirm heat, then build sync plan & push to simulated MultiGP
+	// 4. Start heat, stop & confirm heat via POST .../heats/{id}:control, then fetch sync plan & push to simulated MultiGP
 	for _, act := range []string{"start", "stop", "confirm"} {
 		ctrlPayload, _ := json.Marshal(map[string]any{
 			"action": act,
-			"heatId": lastHeatID,
-			"raceId": lastCreatedRaceID,
 		})
 		recCtrl := httptest.NewRecorder()
-		handler.ServeHTTP(recCtrl, httptest.NewRequest(http.MethodPost, "/api/race/control", bytes.NewReader(ctrlPayload)))
+		heatURL := fmt.Sprintf("/v1/race/sessions/%s/heats/%s:control", lastCreatedRaceID, lastHeatID)
+		handler.ServeHTTP(recCtrl, httptest.NewRequest(http.MethodPost, heatURL, bytes.NewReader(ctrlPayload)))
 		if recCtrl.Code != http.StatusOK {
-			t.Fatalf("race control %s failed: %d %s", act, recCtrl.Code, recCtrl.Body.String())
+			t.Fatalf("POST %s (%s) failed: %d %s", heatURL, act, recCtrl.Code, recCtrl.Body.String())
 		}
 		if act == "start" {
 			time.Sleep(80 * time.Millisecond)
 		}
 	}
 
-	planPayload, _ := json.Marshal(map[string]any{
-		"raceId":   lastCreatedRaceID,
-		"forceAll": true,
-	})
 	recPlan := httptest.NewRecorder()
-	handler.ServeHTTP(recPlan, httptest.NewRequest(http.MethodPost, "/api/mgp-sync/plan", bytes.NewReader(planPayload)))
+	planURL := fmt.Sprintf("/v1/race/sessions/%s/multigp/sync-plan?forceAll=1", lastCreatedRaceID)
+	handler.ServeHTTP(recPlan, httptest.NewRequest(http.MethodGet, planURL, nil))
 	if recPlan.Code != http.StatusOK {
-		t.Fatalf("mgp-sync/plan failed: %d %s", recPlan.Code, recPlan.Body.String())
+		t.Fatalf("GET %s failed: %d %s", planURL, recPlan.Code, recPlan.Body.String())
 	}
 	var plan tracker.MultiGPSyncPlan
 	if err := json.Unmarshal(recPlan.Body.Bytes(), &plan); err != nil {
@@ -122,7 +121,7 @@ func TestMultiGPImportAndLapRFSimE2E(t *testing.T) {
 			"data":   op.Data,
 		})
 		recAssign := httptest.NewRecorder()
-		url := fmt.Sprintf("/api/sim/mgp/race/assignSlot?id=%d&cycle=%d&heat=%d&slot=%d", plan.MGPRaceID, op.Cycle, op.Heat, op.Slot)
+		url := fmt.Sprintf("/v1/sim/mgp/race/assignSlot?id=%d&cycle=%d&heat=%d&slot=%d", plan.MGPRaceID, op.Cycle, op.Heat, op.Slot)
 		handler.ServeHTTP(recAssign, httptest.NewRequest(http.MethodPost, url, bytes.NewReader(assignBody)))
 		if recAssign.Code != http.StatusOK {
 			t.Fatalf("assignSlot failed: %d %s", recAssign.Code, recAssign.Body.String())
@@ -130,13 +129,13 @@ func TestMultiGPImportAndLapRFSimE2E(t *testing.T) {
 	}
 
 	markBody, _ := json.Marshal(map[string]any{
-		"raceId":        lastCreatedRaceID,
 		"syncedHeatIds": []string{lastHeatID},
 		"overallSynced": false,
 	})
 	recMark := httptest.NewRecorder()
-	handler.ServeHTTP(recMark, httptest.NewRequest(http.MethodPost, "/api/mgp-sync/mark-synced", bytes.NewReader(markBody)))
+	syncStateURL := fmt.Sprintf("/v1/race/sessions/%s/multigp/sync-state", lastCreatedRaceID)
+	handler.ServeHTTP(recMark, httptest.NewRequest(http.MethodPut, syncStateURL, bytes.NewReader(markBody)))
 	if recMark.Code != http.StatusOK {
-		t.Fatalf("mark-synced failed: %d %s", recMark.Code, recMark.Body.String())
+		t.Fatalf("PUT %s failed: %d %s", syncStateURL, recMark.Code, recMark.Body.String())
 	}
 }

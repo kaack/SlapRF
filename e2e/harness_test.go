@@ -61,7 +61,7 @@ type testRunRecord struct {
 type HarnessOptions struct {
 	Viewport          *playwright.Size
 	FullBootAnimation bool
-	StaticDemoMode    bool // Serves static _site (with slaprf.wasm + IndexedDB, no /api/* Go backend)
+	StaticDemoMode    bool // Serves static _site (with slaprf.wasm + IndexedDB, no /v1/* Go backend)
 }
 
 func TestMain(m *testing.M) {
@@ -555,7 +555,7 @@ func (h *Harness) gotoWithLoopbackRetry(target string) {
 	h.T.Fatalf("Page.Goto(%s) failed after retries: %v", target, lastErr)
 }
 
-// BootClean navigates to the given hash route (e.g. "#/live", "#/sim", "#/races") in a known
+// BootClean navigates to the given hash route (e.g. "#/practice", "#/sim", "#/races") in a known
 // clean state and waits until both the timing transport (`window.slaprfCurl`) and the boot screen
 // (`#slaprf-boot-loader.is-ready`) have finished hydrating.
 func (h *Harness) BootClean(hash string) {
@@ -622,7 +622,7 @@ func applyDarkDefaultBackground(p playwright.Page) {
 	})
 }
 
-// SeedSimStateAndStorage pre-populates SlapRF's simulator state (into bbolt via `/api/storage/sim-import`
+// SeedSimStateAndStorage pre-populates SlapRF's simulator state (into bbolt via `PUT /v1/storage/sim`
 // in Native Go Backend Mode, or IndexedDB in StaticDemoMode) and optional `localStorage` keys BEFORE
 // `index.html` runs.
 func (h *Harness) SeedSimStateAndStorage(rawSimStateJSON string, localStorageKV map[string]string) {
@@ -630,20 +630,30 @@ func (h *Harness) SeedSimStateAndStorage(rawSimStateJSON string, localStorageKV 
 
 	if !h.StaticDemo {
 		if strings.TrimSpace(rawSimStateJSON) != "" {
-			resp, err := http.Post(h.BaseURL+"/api/storage/sim-import", "application/json", strings.NewReader(rawSimStateJSON))
+			req, reqErr := http.NewRequest(http.MethodPut, h.BaseURL+"/v1/storage/sim", strings.NewReader(rawSimStateJSON))
+			if reqErr != nil {
+				h.T.Fatalf("build PUT /v1/storage/sim failed: %v", reqErr)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				h.T.Fatalf("POST /api/storage/sim-import failed: %v", err)
+				h.T.Fatalf("PUT /v1/storage/sim failed: %v", err)
 			}
 			body, _ := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
 			if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-				h.T.Fatalf("POST /api/storage/sim-import HTTP %d: %s", resp.StatusCode, string(body))
+				h.T.Fatalf("PUT /v1/storage/sim HTTP %d: %s", resp.StatusCode, string(body))
 			}
 		}
 		if localStorageKV != nil && localStorageKV["slaprf.ui.sim_mode.v1"] == "false" {
-			resp, err := http.Post(h.BaseURL+"/api/sim/mode", "application/json", strings.NewReader(`{"running":false}`))
+			req, reqErr := http.NewRequest(http.MethodPatch, h.BaseURL+"/v1/sim", strings.NewReader(`{"running":false}`))
+			if reqErr != nil {
+				h.T.Fatalf("build PATCH /v1/sim failed: %v", reqErr)
+			}
+			req.Header.Set("Content-Type", "application/json")
+			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
-				h.T.Fatalf("POST /api/sim/mode failed: %v", err)
+				h.T.Fatalf("PATCH /v1/sim failed: %v", err)
 			}
 			_ = resp.Body.Close()
 		}
@@ -851,7 +861,7 @@ func (h *Harness) ConnectSimHubH1() {
 				Online bool  `json:"online"`
 			} `json:"gates"`
 		}
-		if err := h.WasmGetJSON("/api/state", &st); err != nil {
+		if err := h.WasmGetJSON("/v1/state", &st); err != nil {
 			return false, nil
 		}
 		onlineCount := 0
@@ -1042,7 +1052,7 @@ func (h *Harness) Curl(req CurlRequest) CurlResponse {
 	return resp
 }
 
-// CurlSpec tests the string shorthand overload `window.slaprfCurl("POST /api/...", body)` in JS.
+// CurlSpec tests the string shorthand overload `window.slaprfCurl("POST /v1/...", body)` in JS.
 func (h *Harness) CurlSpec(spec string, body any) CurlResponse {
 	h.T.Helper()
 	payloadBytes, err := json.Marshal(map[string]any{
@@ -1100,6 +1110,39 @@ func (h *Harness) APIPost(url string, body any, dst any) CurlResponse {
 	return res
 }
 
+// APIMethod performs an HTTP request (`method`) via `window.slaprfCurl`, asserts 2xx, and decodes JSON into `dst`.
+func (h *Harness) APIMethod(method, url string, body any, dst any) CurlResponse {
+	h.T.Helper()
+	res := h.Curl(CurlRequest{Method: method, URL: url, Body: body})
+	if res.Status < 200 || res.Status >= 300 {
+		h.T.Fatalf("%s %s failed with HTTP %d: %s", method, url, res.Status, res.Body)
+	}
+	if dst != nil && strings.TrimSpace(res.Body) != "" {
+		if err := json.Unmarshal([]byte(res.Body), dst); err != nil {
+			h.T.Fatalf("%s %s json.Unmarshal failed: %v (body: %s)", method, url, err, res.Body)
+		}
+	}
+	return res
+}
+
+// APIPut performs a `PUT` via `window.slaprfCurl`, asserts 2xx, and decodes JSON into `dst`.
+func (h *Harness) APIPut(url string, body any, dst any) CurlResponse {
+	h.T.Helper()
+	return h.APIMethod("PUT", url, body, dst)
+}
+
+// APIPatch performs a `PATCH` via `window.slaprfCurl`, asserts 2xx, and decodes JSON into `dst`.
+func (h *Harness) APIPatch(url string, body any, dst any) CurlResponse {
+	h.T.Helper()
+	return h.APIMethod("PATCH", url, body, dst)
+}
+
+// APIDelete performs a `DELETE` via `window.slaprfCurl`, asserts 2xx, and decodes JSON into `dst`.
+func (h *Harness) APIDelete(url string, dst any) CurlResponse {
+	h.T.Helper()
+	return h.APIMethod("DELETE", url, nil, dst)
+}
+
 // APIExpectStatus invokes `window.slaprfCurl` and asserts that the HTTP status matches `wantStatus`.
 func (h *Harness) APIExpectStatus(method, url string, body any, wantStatus int) CurlResponse {
 	h.T.Helper()
@@ -1113,28 +1156,28 @@ func (h *Harness) APIExpectStatus(method, url string, body any, wantStatus int) 
 	return res
 }
 
-// APIState fetches the authoritative `FullStateResponse` (`GET /api/state`) directly from the live
-// in-browser WASM timing engine via `window.slaprfCurl`.
+// APIState fetches the authoritative `FullStateResponse` (`GET /v1/state`) directly from the live
+// timing engine via `window.slaprfCurl`.
 func (h *Harness) APIState() api.FullStateResponse {
 	h.T.Helper()
 	var st api.FullStateResponse
-	h.APIGet("/api/state", &st)
+	h.APIGet("/v1/state", &st)
 	return st
 }
 
-// APIStatus fetches `StatusResponse` (`GET /api/status`) directly from the live in-browser WASM engine.
+// APIStatus fetches `StatusResponse` (`GET /v1/status`) directly from the live timing engine.
 func (h *Harness) APIStatus() api.StatusResponse {
 	h.T.Helper()
 	var st api.StatusResponse
-	h.APIGet("/api/status", &st)
+	h.APIGet("/v1/status", &st)
 	return st
 }
 
-// APIRules fetches `TimingRules` (`GET /api/rules`) directly from the live in-browser WASM engine.
+// APIRules fetches `TimingRules` (`GET /v1/timing/rules`) directly from the live timing engine.
 func (h *Harness) APIRules() domain.TimingRules {
 	h.T.Helper()
 	var rules domain.TimingRules
-	h.APIGet("/api/rules", &rules)
+	h.APIGet("/v1/timing/rules", &rules)
 	return rules
 }
 
@@ -1184,8 +1227,8 @@ func (h *Harness) WasmGetJSON(path string, dst any) error {
 	return json.Unmarshal([]byte(raw), dst)
 }
 
-// WasmPostJSON posts JSON to the in-browser Go WASM engine and optionally decodes the response.
-func (h *Harness) WasmPostJSON(path string, payload any, dst any) error {
+// WasmMethodJSON sends an HTTP request (`method`) to the live timing engine and optionally decodes JSON.
+func (h *Harness) WasmMethodJSON(method, path string, payload any, dst any) error {
 	var bodyStr string
 	if payload != nil {
 		b, err := json.Marshal(payload)
@@ -1194,17 +1237,22 @@ func (h *Harness) WasmPostJSON(path string, payload any, dst any) error {
 		}
 		bodyStr = string(b)
 	}
-	status, raw, err := h.WasmRequest("POST", path, bodyStr)
+	status, raw, err := h.WasmRequest(method, path, bodyStr)
 	if err != nil {
 		return err
 	}
 	if status < 200 || status >= 300 {
-		return fmt.Errorf("POST %s returned %d: %s", path, status, raw)
+		return fmt.Errorf("%s %s returned %d: %s", method, path, status, raw)
 	}
 	if dst != nil && strings.TrimSpace(raw) != "" {
 		return json.Unmarshal([]byte(raw), dst)
 	}
 	return nil
+}
+
+// WasmPostJSON posts JSON to the live timing engine and optionally decodes the response.
+func (h *Harness) WasmPostJSON(path string, payload any, dst any) error {
+	return h.WasmMethodJSON("POST", path, payload, dst)
 }
 
 func writeSuiteHTMLReports(totalDuration time.Duration) error {

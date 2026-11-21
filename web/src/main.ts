@@ -29,7 +29,7 @@ import {
 } from "./services/capabilities";
 import { enginePersistence } from "./services/engine_persistence";
 import { sharedLapRFLink } from "./services/laprf_hardware_link";
-import { sharedLiveTimeRelay } from "./services/livetime_relay";
+import { sharedLapRFEmulatorRelay } from "./services/laprf_emulator_relay";
 import { installOffline } from "./services/offline";
 import { sharedRHLink } from "./services/rh_hardware_link";
 import { installSlaprfCurlBridge } from "./services/test_curl";
@@ -435,12 +435,11 @@ async function bootstrap(): Promise<void> {
   await api.initialize();
   await Promise.allSettled([sharedLapRFLink.refreshStatus(), sharedRHLink.refreshStatus()]);
   announcer.armTimingConnectionAnnouncements();
-  // LiveTime (via slaprf-relay) needs the WASM engine, which is ready now. Refresh the polled
-  // LapRF counters immediately whenever the link changes (TopBar locks the arm button on it).
-  sharedLiveTimeRelay.subscribe(() => void api.pollStatusNow().catch(() => undefined));
+  // Refresh the polled LapRF emulator counters immediately whenever the link changes.
+  sharedLapRFEmulatorRelay.subscribe(() => void api.pollStatusNow().catch(() => undefined));
   sharedLapRFLink.subscribe(() => void api.pollStatusNow().catch(() => undefined));
   sharedRHLink.subscribe(() => void api.pollStatusNow().catch(() => undefined));
-  sharedLiveTimeRelay.start();
+  sharedLapRFEmulatorRelay.start();
 
   const initialLost = connectionLostSnapshot();
   if (initialLost.lost) {

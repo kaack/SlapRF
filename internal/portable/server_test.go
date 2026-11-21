@@ -24,6 +24,33 @@ import (
 	"slaprf/internal/usb"
 )
 
+func doJSONReq(t *testing.T, method string, fullURL string, origin string, body any) *http.Response {
+	t.Helper()
+	var buf bytes.Buffer
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			t.Fatalf("marshal %s %s: %v", method, fullURL, err)
+		}
+		buf.Write(b)
+	}
+	req, err := http.NewRequest(method, fullURL, &buf)
+	if err != nil {
+		t.Fatalf("new request %s %s: %v", method, fullURL, err)
+	}
+	if origin != "" {
+		req.Header.Set("Origin", origin)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("%s %s: %v", method, fullURL, err)
+	}
+	return resp
+}
+
 func TestCapabilitiesCORSAndRemoteSlapRFOrigin(t *testing.T) {
 	srv := portable.NewServer(portable.Config{
 		Version: "v2.0.0-native",
@@ -37,12 +64,7 @@ func TestCapabilitiesCORSAndRemoteSlapRFOrigin(t *testing.T) {
 	defer ts.Close()
 
 	// 1. Valid same-origin request
-	req, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/capabilities", nil)
-	req.Header.Set("Origin", ts.URL)
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatalf("GET /api/capabilities failed: %v", err)
-	}
+	resp := doJSONReq(t, http.MethodGet, ts.URL+"/v1/capabilities", ts.URL, nil)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("expected 200, got %d", resp.StatusCode)
@@ -56,7 +78,7 @@ func TestCapabilitiesCORSAndRemoteSlapRFOrigin(t *testing.T) {
 	}
 
 	// 2. Official hosted UI (https://slaprf.app) Private Network Access preflight + GET allowed
-	preReq, _ := http.NewRequest(http.MethodOptions, ts.URL+"/api/capabilities", nil)
+	preReq, _ := http.NewRequest(http.MethodOptions, ts.URL+"/v1/capabilities", nil)
 	preReq.Header.Set("Origin", "https://slaprf.app")
 	preReq.Header.Set("Access-Control-Request-Method", "GET")
 	preReq.Header.Set("Access-Control-Request-Private-Network", "true")
@@ -76,15 +98,24 @@ func TestCapabilitiesCORSAndRemoteSlapRFOrigin(t *testing.T) {
 	}
 
 	// 3. Untrusted external origin rejected with 403
-	badReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/capabilities", nil)
-	badReq.Header.Set("Origin", "https://evil.example.com")
-	badResp, err := http.DefaultClient.Do(badReq)
-	if err != nil {
-		t.Fatalf("cross-origin request err: %v", err)
-	}
+	badResp := doJSONReq(t, http.MethodGet, ts.URL+"/v1/capabilities", "https://evil.example.com", nil)
 	badResp.Body.Close()
 	if badResp.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected 403 for untrusted origin, got %d", badResp.StatusCode)
+	}
+
+	// 4. Unsupported method on /v1/capabilities returns 405 Method Not Allowed (never index.html)
+	methodResp := doJSONReq(t, http.MethodPost, ts.URL+"/v1/capabilities", ts.URL, map[string]any{})
+	methodResp.Body.Close()
+	if methodResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 for POST /v1/capabilities, got %d", methodResp.StatusCode)
+	}
+
+	// 5. Unknown /v1/nonexistent path returns 404 Not Found (never index.html)
+	missingResp := doJSONReq(t, http.MethodGet, ts.URL+"/v1/nonexistent", ts.URL, nil)
+	missingResp.Body.Close()
+	if missingResp.StatusCode != http.StatusNotFound {
+		t.Fatalf("expected 404 for GET /v1/nonexistent, got %d", missingResp.StatusCode)
 	}
 }
 
@@ -117,9 +148,9 @@ func TestMultiGPProxy(t *testing.T) {
 	defer ts.Close()
 
 	body := bytes.NewBufferString(`{"apiKey":"MGP-TEST-KEY"}`)
-	resp, err := http.Post(ts.URL+"/api/mgp/race/assignSlot?id=99&cycle=1&heat=2&slot=3", "application/json", body)
+	resp, err := http.Post(ts.URL+"/v1/race/multigp/proxy/race/assignSlot?id=99&cycle=1&heat=2&slot=3", "application/json", body)
 	if err != nil {
-		t.Fatalf("POST /api/mgp failed: %v", err)
+		t.Fatalf("POST /v1/race/multigp/proxy failed: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
@@ -129,7 +160,7 @@ func TestMultiGPProxy(t *testing.T) {
 		t.Fatalf("unexpected upstream forwarding: path=%q query=%q key=%q", seenPath, seenQuery, seenAPIKey)
 	}
 
-	travResp, err := http.Post(ts.URL+"/api/mgp/race/../../admin", "application/json", bytes.NewBufferString(`{}`))
+	travResp, err := http.Post(ts.URL+"/v1/race/multigp/proxy/race/../../admin", "application/json", bytes.NewBufferString(`{}`))
 	if err != nil {
 		t.Fatalf("traversal POST failed: %v", err)
 	}
@@ -151,32 +182,35 @@ func TestNativeStreamWebSocketAndBboltRestartPersistence(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
 	defer cancel()
 
-	wsURL := "ws" + strings.TrimPrefix(ts1.URL, "http") + "/api/ws/stream"
+	wsURL := "ws" + strings.TrimPrefix(ts1.URL, "http") + "/v1/ws/stream"
 	ws, _, err := websocket.Dial(ctx, wsURL, nil)
 	if err != nil {
-		t.Fatalf("dial /api/ws/stream: %v", err)
+		t.Fatalf("dial /v1/ws/stream: %v", err)
 	}
 
 	// Enable Simulation mode + plug virtual H1 USB on the Go server and add Pilot in Sim mode
-	modeResp, err := http.Post(ts1.URL+"/api/sim/mode", "application/json", bytes.NewBufferString(`{"running":true}`))
-	if err != nil || modeResp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /api/sim/mode failed: %v", err)
+	modeResp := doJSONReq(t, http.MethodPatch, ts1.URL+"/v1/sim", "", map[string]any{"running": true})
+	if modeResp.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH /v1/sim failed: %d", modeResp.StatusCode)
 	}
 	modeResp.Body.Close()
 
-	hubResp, err := http.Post(ts1.URL+"/api/sim/hub-usb", "application/json", bytes.NewBufferString(`{"connected":true}`))
-	if err != nil || hubResp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /api/sim/hub-usb failed: %v", err)
+	hubResp := doJSONReq(t, http.MethodPut, ts1.URL+"/v1/sim/hub-usb", "", map[string]any{"connected": true})
+	if hubResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /v1/sim/hub-usb failed: %d", hubResp.StatusCode)
 	}
 	hubResp.Body.Close()
 
-	addResp, err := http.Post(ts1.URL+"/api/pilots/add", "application/json", bytes.NewBufferString(`{"callsign":"BOLT_PILOT","phoneticName":"Bolt Pilot"}`))
-	if err != nil || addResp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /api/pilots/add failed: %v", err)
+	addResp := doJSONReq(t, http.MethodPost, ts1.URL+"/v1/pilots", "", map[string]any{
+		"callsign":     "BOLT_PILOT",
+		"phoneticName": "Bolt Pilot",
+	})
+	if addResp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST /v1/pilots expected 201 Created, got %d", addResp.StatusCode)
 	}
 	addResp.Body.Close()
 
-	// Expect binary telemetry batch (version byte 0x01) over /api/ws/stream from native Go simulator
+	// Expect binary telemetry batch (version byte 0x01) over /v1/ws/stream from native Go simulator
 	sawBinaryTelemetry := false
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
@@ -184,7 +218,7 @@ func TestNativeStreamWebSocketAndBboltRestartPersistence(t *testing.T) {
 		typ, data, rErr := ws.Read(rCtx)
 		rCancel()
 		if rErr != nil {
-			t.Fatalf("read /api/ws/stream: %v", rErr)
+			t.Fatalf("read /v1/ws/stream: %v", rErr)
 		}
 		if typ == websocket.MessageBinary && len(data) > 4 && data[0] == 1 {
 			sawBinaryTelemetry = true
@@ -192,12 +226,12 @@ func TestNativeStreamWebSocketAndBboltRestartPersistence(t *testing.T) {
 		}
 	}
 	if !sawBinaryTelemetry {
-		t.Fatalf("expected binary telemetry batch from native Go simulator over /api/ws/stream")
+		t.Fatalf("expected binary telemetry batch from native Go simulator over /v1/ws/stream")
 	}
 
 	_ = ws.CloseNow()
 	ts1.Close()
-	srv1.Close() // Flushes bbolt cleanly
+	srv1.Close()
 
 	// Boot a brand-new server instance against the same single-file slaprf.db
 	srv2 := portable.NewServer(portable.Config{
@@ -208,16 +242,14 @@ func TestNativeStreamWebSocketAndBboltRestartPersistence(t *testing.T) {
 	ts2 := httptest.NewServer(srv2.Handler())
 	defer ts2.Close()
 
-	stResp, err := http.Get(ts2.URL + "/api/state")
+	stResp, err := http.Get(ts2.URL + "/v1/state")
 	if err != nil {
-		t.Fatalf("GET /api/state on restarted server: %v", err)
+		t.Fatalf("GET /v1/state on restarted server: %v", err)
 	}
 	defer stResp.Body.Close()
-	bodyBytes, _ := json.Marshal(map[string]any{})
-	_ = bodyBytes
 	var rawState map[string]any
 	if err := json.NewDecoder(stResp.Body).Decode(&rawState); err != nil {
-		t.Fatalf("decode /api/state: %v", err)
+		t.Fatalf("decode /v1/state: %v", err)
 	}
 	if simRun, _ := rawState["simulatorRunning"].(bool); !simRun {
 		t.Fatalf("expected simulatorRunning=true hydrated from bbolt, got %v", rawState["simulatorRunning"])
@@ -228,8 +260,7 @@ func TestNativeStreamWebSocketAndBboltRestartPersistence(t *testing.T) {
 	}
 }
 
-func TestNativeLiveTimeListenerAndLapRFClientConnect(t *testing.T) {
-	// 1. Spin up a mock physical LapRF 8-Way puck on loopback
+func TestNativeLapRFEmulatorListenerAndLapRFClientConnect(t *testing.T) {
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatalf("listen mock puck: %v", err)
@@ -253,36 +284,40 @@ func TestNativeLiveTimeListenerAndLapRFClientConnect(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	// 2. Enable native Go LiveTime TCP listener (port 0 loopback) and talk LapRF directly to it
-	ltResp, err := http.Post(ts.URL+"/api/livetime/config", "application/json", bytes.NewBufferString(`{"enabled":true,"port":0,"bind":"loopback"}`))
-	if err != nil || ltResp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /api/livetime/config failed: %v", err)
+	// 2. Enable native Go LapRF emulator TCP listener via PUT /v1/laprf-emulator
+	emulResp := doJSONReq(t, http.MethodPut, ts.URL+"/v1/laprf-emulator", "", map[string]any{
+		"enabled": true,
+		"port":    0,
+		"bind":    "loopback",
+	})
+	if emulResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /v1/laprf-emulator failed: %d", emulResp.StatusCode)
 	}
-	var ltSnap portable.LiveTimeSnapshot
-	_ = json.NewDecoder(ltResp.Body).Decode(&ltSnap)
-	ltResp.Body.Close()
-	if ltSnap.RelayState != "connected" || ltSnap.ListenAddr == "" {
-		t.Fatalf("expected native LiveTime listener connected, got %+v", ltSnap)
+	var emulSnap portable.LapRFEmulatorSnapshot
+	_ = json.NewDecoder(emulResp.Body).Decode(&emulSnap)
+	emulResp.Body.Close()
+	if emulSnap.RelayState != "connected" || emulSnap.ListenAddr == "" {
+		t.Fatalf("expected native LapRF emulator listener connected, got %+v", emulSnap)
 	}
 
-	ltConn, err := net.Dial("tcp", ltSnap.ListenAddr)
+	emulConn, err := net.Dial("tcp", emulSnap.ListenAddr)
 	if err != nil {
-		t.Fatalf("dial native LiveTime listener %s: %v", ltSnap.ListenAddr, err)
+		t.Fatalf("dial native LapRF emulator listener %s: %v", emulSnap.ListenAddr, err)
 	}
-	defer ltConn.Close()
+	defer emulConn.Close()
 	reqFrame := (&laprf.Packet{Type: laprf.RecordTime}).Encode()
-	_, _ = ltConn.Write(reqFrame)
+	_, _ = emulConn.Write(reqFrame)
 	buf := make([]byte, 256)
-	_ = ltConn.SetReadDeadline(time.Now().Add(2 * time.Second))
-	n, err := ltConn.Read(buf)
+	_ = emulConn.SetReadDeadline(time.Now().Add(2 * time.Second))
+	n, err := emulConn.Read(buf)
 	if err != nil || n == 0 {
-		t.Fatalf("expected LapRF frame from native LiveTime server, err=%v", err)
+		t.Fatalf("expected LapRF frame from native LapRF emulator server, err=%v", err)
 	}
 
-	// 3. Discover mock LapRF 8-Way puck via /api/laprf-discover
-	discResp, err := http.Get(ts.URL + "/api/laprf-discover?hosts=127.0.0.1&port=" + strconv.Itoa(puckPort))
+	// 3. Discover mock LapRF 8-Way puck via GET /v1/laprf/devices
+	discResp, err := http.Get(ts.URL + "/v1/laprf/devices?hosts=127.0.0.1&port=" + strconv.Itoa(puckPort))
 	if err != nil {
-		t.Fatalf("GET /api/laprf-discover: %v", err)
+		t.Fatalf("GET /v1/laprf/devices: %v", err)
 	}
 	var discPayload struct {
 		Devices []portable.DiscoveredLapRFDevice `json:"devices"`
@@ -293,27 +328,24 @@ func TestNativeLiveTimeListenerAndLapRFClientConnect(t *testing.T) {
 		t.Fatalf("expected 1 verified LapRF device, got %+v", discPayload.Devices)
 	}
 
-	// 4. Switch realEngine to LapRF 8-Way mode and connect natively in Go via /api/laprf/connect
-	tsResp, _ := http.Post(ts.URL+"/api/hardware/mode", "application/json", bytes.NewBufferString(`{"mode":"laprf"}`))
-	if tsResp != nil {
-		tsResp.Body.Close()
-	}
-	connBody, _ := json.Marshal(map[string]any{
+	// 4. Switch realEngine to LapRF 8-Way mode and connect natively via POST /v1/laprf/sessions (201 Created)
+	modeResp := doJSONReq(t, http.MethodPut, ts.URL+"/v1/hardware/mode", "", map[string]any{"mode": "laprf"})
+	modeResp.Body.Close()
+
+	cResp := doJSONReq(t, http.MethodPost, ts.URL+"/v1/laprf/sessions", "", map[string]any{
 		"host":  "127.0.0.1",
 		"port":  puckPort,
 		"label": "Start Puck",
 	})
-	cResp, err := http.Post(ts.URL+"/api/laprf/connect", "application/json", bytes.NewReader(connBody))
-	if err != nil || cResp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /api/laprf/connect failed: status=%v err=%v", cResp, err)
+	if cResp.StatusCode != http.StatusCreated {
+		t.Fatalf("POST /v1/laprf/sessions expected 201 Created, got %d", cResp.StatusCode)
 	}
 	cResp.Body.Close()
 
-	// Wait briefly for dual-probe RTC sync + status heartbeat
 	time.Sleep(250 * time.Millisecond)
-	stResp, err := http.Get(ts.URL + "/api/laprf/status")
+	stResp, err := http.Get(ts.URL + "/v1/laprf/sessions")
 	if err != nil {
-		t.Fatalf("GET /api/laprf/status: %v", err)
+		t.Fatalf("GET /v1/laprf/sessions: %v", err)
 	}
 	var stPayload struct {
 		Sessions []portable.LapRFDiagSnapshot `json:"sessions"`
@@ -325,12 +357,9 @@ func TestNativeLiveTimeListenerAndLapRFClientConnect(t *testing.T) {
 	}
 
 	// 5. Public internet IP blocked by SSRF guard
-	badResp, err := http.Post(ts.URL+"/api/laprf/connect", "application/json", bytes.NewBufferString(`{"host":"8.8.8.8","port":5403}`))
-	if err != nil {
-		t.Fatalf("POST /api/laprf/connect 8.8.8.8 err: %v", err)
-	}
+	badResp := doJSONReq(t, http.MethodPost, ts.URL+"/v1/laprf/sessions", "", map[string]any{"host": "8.8.8.8", "port": 5403})
 	badResp.Body.Close()
-	if badResp.StatusCode == http.StatusOK {
+	if badResp.StatusCode == http.StatusCreated || badResp.StatusCode == http.StatusOK {
 		t.Fatalf("expected SSRF block for 8.8.8.8")
 	}
 }
@@ -342,7 +371,7 @@ func TestStaticBrowserModeVsNativeServerModeWasmIsolation(t *testing.T) {
 		"wasm/slaprf.wasm": &fstest.MapFile{Data: []byte{0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00}},
 	}
 
-	// 1. Native Go Server Mode: /api/capabilities returns 200, while /wasm/slaprf.wasm returns 404.
+	// 1. Native Go Server Mode: /v1/capabilities returns 200, while /wasm/slaprf.wasm returns 404.
 	srv := portable.NewServer(portable.Config{
 		Version:  "v2.5.0-server",
 		StaticFS: site,
@@ -351,9 +380,9 @@ func TestStaticBrowserModeVsNativeServerModeWasmIsolation(t *testing.T) {
 	nativeTS := httptest.NewServer(srv.Handler())
 	defer nativeTS.Close()
 
-	capResp, err := http.Get(nativeTS.URL + "/api/capabilities")
+	capResp, err := http.Get(nativeTS.URL + "/v1/capabilities")
 	if err != nil || capResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 on /api/capabilities in Server Mode, err=%v", err)
+		t.Fatalf("expected 200 on /v1/capabilities in Server Mode, err=%v", err)
 	}
 	capResp.Body.Close()
 
@@ -366,17 +395,17 @@ func TestStaticBrowserModeVsNativeServerModeWasmIsolation(t *testing.T) {
 		t.Fatalf("expected 404 for /wasm/slaprf.wasm in Server Mode, got %d", wasmBlockedResp.StatusCode)
 	}
 
-	// 2. Pure Browser Mode (-browser): /api/capabilities returns 404, while /wasm/slaprf.wasm returns 200 application/wasm.
+	// 2. Pure Browser Mode (-browser): /v1/capabilities returns 404, while /wasm/slaprf.wasm returns 200 application/wasm.
 	browserTS := httptest.NewServer(portable.NewStaticBrowserHandler(site))
 	defer browserTS.Close()
 
-	noCapResp, err := http.Get(browserTS.URL + "/api/capabilities")
+	noCapResp, err := http.Get(browserTS.URL + "/v1/capabilities")
 	if err != nil {
-		t.Fatalf("GET /api/capabilities in Pure Browser Mode: %v", err)
+		t.Fatalf("GET /v1/capabilities in Pure Browser Mode: %v", err)
 	}
 	noCapResp.Body.Close()
 	if noCapResp.StatusCode != http.StatusNotFound {
-		t.Fatalf("expected 404 for /api/capabilities in Pure Browser Mode, got %d", noCapResp.StatusCode)
+		t.Fatalf("expected 404 for /v1/capabilities in Pure Browser Mode, got %d", noCapResp.StatusCode)
 	}
 
 	wasmOKResp, err := http.Get(browserTS.URL + "/wasm/slaprf.wasm")
@@ -427,47 +456,34 @@ func TestRotorHazardUSBManagerEndToEnd(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	// Switch to Real Hardware mode and select RotorHazard (USB)
-	postReq := func(path string, body any) *http.Response {
-		b, _ := json.Marshal(body)
-		req, _ := http.NewRequest(http.MethodPost, ts.URL+path, bytes.NewReader(b))
-		req.Header.Set("Origin", ts.URL)
-		req.Header.Set("Content-Type", "application/json")
-		resp, err := http.DefaultClient.Do(req)
-		if err != nil {
-			t.Fatalf("POST %s: %v", path, err)
-		}
-		return resp
-	}
-
-	r1 := postReq("/api/sim/toggle", map[string]any{"running": false})
+	r1 := doJSONReq(t, http.MethodPatch, ts.URL+"/v1/sim", ts.URL, map[string]any{"running": false})
 	r1.Body.Close()
 
-	r2 := postReq("/api/hardware/mode", map[string]any{"mode": "rotorhazard_usb"})
+	r2 := doJSONReq(t, http.MethodPut, ts.URL+"/v1/hardware/mode", ts.URL, map[string]any{"mode": "rotorhazard_usb"})
 	r2.Body.Close()
 
-	// Connect COM42 as RotorHazard USB device
-	connResp := postReq("/api/rh/connect", map[string]any{
+	// Connect COM42 as RotorHazard USB device via POST /v1/rh/sessions (201 Created)
+	connResp := doJSONReq(t, http.MethodPost, ts.URL+"/v1/rh/sessions", ts.URL, map[string]any{
 		"transport": "usb",
 		"portName":  "COM42",
 		"label":     "R1",
 	})
 	defer connResp.Body.Close()
-	if connResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 on /api/rh/connect USB, got %d", connResp.StatusCode)
+	if connResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 Created on POST /v1/rh/sessions USB, got %d", connResp.StatusCode)
 	}
 	var connPayload struct {
 		Session portable.RHDiagSnapshot `json:"session"`
 	}
 	if err := json.NewDecoder(connResp.Body).Decode(&connPayload); err != nil {
-		t.Fatalf("decode /api/rh/connect: %v", err)
+		t.Fatalf("decode /v1/rh/sessions: %v", err)
 	}
 	if connPayload.Session.Transport != "usb" || !connPayload.Session.Connected || connPayload.Session.APILevel != 36 || connPayload.Session.NodeCount != 8 {
 		t.Fatalf("unexpected RH USB session snapshot: %+v", connPayload.Session)
 	}
 
-	// Open a Practice session so pilot channels tune onto the USB node, then verify seat 0 frequency
-	r3 := postReq("/api/practice/start", map[string]any{"name": "USB Practice"})
+	// Activate practice session via POST /v1/practice/sessions/current:start so pilot channels tune onto the USB node
+	r3 := doJSONReq(t, http.MethodPost, ts.URL+"/v1/practice/sessions/current:start", ts.URL, map[string]any{})
 	r3.Body.Close()
 
 	deadline := time.Now().Add(2 * time.Second)
@@ -497,10 +513,10 @@ func TestServerBasicAuthenticationAndStorageWipe(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	// 1. Default: auth disabled, /api/capabilities reports authRequired=false, /api/state returns 200.
-	capResp, err := http.Get(ts.URL + "/api/capabilities")
+	// 1. Default: auth disabled, /v1/capabilities reports authRequired=false, /v1/state returns 200.
+	capResp, err := http.Get(ts.URL + "/v1/capabilities")
 	if err != nil || capResp.StatusCode != http.StatusOK {
-		t.Fatalf("GET /api/capabilities failed: %v", err)
+		t.Fatalf("GET /v1/capabilities failed: %v", err)
 	}
 	var caps portable.CapabilitiesResponse
 	_ = json.NewDecoder(capResp.Body).Decode(&caps)
@@ -509,28 +525,28 @@ func TestServerBasicAuthenticationAndStorageWipe(t *testing.T) {
 		t.Fatalf("expected default AuthRequired=false, Authenticated=true, got %+v", caps)
 	}
 
-	stResp, err := http.Get(ts.URL + "/api/state")
+	stResp, err := http.Get(ts.URL + "/v1/state")
 	if err != nil || stResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 on /api/state when auth disabled, got %v err=%v", stResp, err)
+		t.Fatalf("expected 200 on /v1/state when auth disabled, got %v err=%v", stResp, err)
 	}
 	stResp.Body.Close()
 
-	// 2. Enable Basic Auth via POST /api/auth/config
-	cfgBody, _ := json.Marshal(map[string]any{
+	// 2. Enable Basic Auth via PUT /v1/auth/config
+	cfgBody := map[string]any{
 		"enabled":  true,
 		"username": "admin",
 		"password": "secret-password",
-	})
-	cfgResp, err := http.Post(ts.URL+"/api/auth/config", "application/json", bytes.NewReader(cfgBody))
-	if err != nil || cfgResp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /api/auth/config failed: status=%v err=%v", cfgResp, err)
+	}
+	cfgResp := doJSONReq(t, http.MethodPut, ts.URL+"/v1/auth/config", "", cfgBody)
+	if cfgResp.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /v1/auth/config failed: status=%d", cfgResp.StatusCode)
 	}
 	cfgResp.Body.Close()
 
-	// 3. Unauthenticated /api/capabilities reports authRequired=true, authenticated=false
-	capResp2, err := http.Get(ts.URL + "/api/capabilities")
+	// 3. Unauthenticated /v1/capabilities reports authRequired=true, authenticated=false
+	capResp2, err := http.Get(ts.URL + "/v1/capabilities")
 	if err != nil || capResp2.StatusCode != http.StatusOK {
-		t.Fatalf("GET /api/capabilities after enabling auth failed: %v", err)
+		t.Fatalf("GET /v1/capabilities after enabling auth failed: %v", err)
 	}
 	var caps2 portable.CapabilitiesResponse
 	_ = json.NewDecoder(capResp2.Body).Decode(&caps2)
@@ -539,62 +555,69 @@ func TestServerBasicAuthenticationAndStorageWipe(t *testing.T) {
 		t.Fatalf("expected AuthRequired=true, Authenticated=false when unauthenticated, got %+v", caps2)
 	}
 
-	// 4. Unauthenticated /api/state is blocked at server level with 401
-	unauthResp, err := http.Get(ts.URL + "/api/state")
+	// 4. Unauthenticated /v1/state is blocked at server level with 401
+	unauthResp, err := http.Get(ts.URL + "/v1/state")
 	if err != nil {
-		t.Fatalf("GET /api/state unauthenticated err: %v", err)
+		t.Fatalf("GET /v1/state unauthenticated err: %v", err)
 	}
 	unauthResp.Body.Close()
 	if unauthResp.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("expected 401 on unauthenticated /api/state, got %d", unauthResp.StatusCode)
+		t.Fatalf("expected 401 on unauthenticated /v1/state, got %d", unauthResp.StatusCode)
 	}
 
-	// 5. Wrong credentials to POST /api/auth/login return 401
-	badLogin, _ := json.Marshal(map[string]any{"username": "admin", "password": "wrong"})
-	badLoginResp, err := http.Post(ts.URL+"/api/auth/login", "application/json", bytes.NewReader(badLogin))
-	if err != nil {
-		t.Fatalf("POST /api/auth/login bad err: %v", err)
-	}
+	// 5. Wrong credentials to POST /v1/auth/sessions return 401
+	badLoginResp := doJSONReq(t, http.MethodPost, ts.URL+"/v1/auth/sessions", "", map[string]any{
+		"username": "admin",
+		"password": "wrong",
+	})
 	badLoginResp.Body.Close()
 	if badLoginResp.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("expected 401 for bad login, got %d", badLoginResp.StatusCode)
 	}
 
-	// 6. Valid credentials to POST /api/auth/login return 200
-	goodLogin, _ := json.Marshal(map[string]any{"username": "admin", "password": "secret-password"})
-	goodLoginResp, err := http.Post(ts.URL+"/api/auth/login", "application/json", bytes.NewReader(goodLogin))
-	if err != nil {
-		t.Fatalf("POST /api/auth/login good err: %v", err)
-	}
+	// 6. Valid credentials to POST /v1/auth/sessions return 201 Created
+	goodLoginResp := doJSONReq(t, http.MethodPost, ts.URL+"/v1/auth/sessions", "", map[string]any{
+		"username": "admin",
+		"password": "secret-password",
+	})
 	goodLoginResp.Body.Close()
-	if goodLoginResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 for valid login, got %d", goodLoginResp.StatusCode)
+	if goodLoginResp.StatusCode != http.StatusCreated {
+		t.Fatalf("expected 201 Created for valid login, got %d", goodLoginResp.StatusCode)
 	}
 
-	// 7. Authenticated request with Basic Auth header succeeds on /api/state
-	authReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/api/state", nil)
+	// 7. Authenticated request with Basic Auth header succeeds on /v1/state
+	authReq, _ := http.NewRequest(http.MethodGet, ts.URL+"/v1/state", nil)
 	authReq.SetBasicAuth("admin", "secret-password")
 	authStResp, err := http.DefaultClient.Do(authReq)
 	if err != nil {
-		t.Fatalf("authenticated GET /api/state err: %v", err)
+		t.Fatalf("authenticated GET /v1/state err: %v", err)
 	}
 	authStResp.Body.Close()
 	if authStResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 for Basic Auth GET /api/state, got %d", authStResp.StatusCode)
+		t.Fatalf("expected 200 for Basic Auth GET /v1/state, got %d", authStResp.StatusCode)
 	}
 
-	// 8. Wipe application data resets Basic Auth back to disabled
-	resetReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/storage/reset", bytes.NewBufferString(`{}`))
+	// 8. Wipe application data via POST /v1/storage:reset resets Basic Auth back to disabled (DELETE /v1/storage is 405)
+	delStoreReq, _ := http.NewRequest(http.MethodDelete, ts.URL+"/v1/storage", nil)
+	delStoreReq.SetBasicAuth("admin", "secret-password")
+	delStoreResp, err := http.DefaultClient.Do(delStoreReq)
+	if err != nil || delStoreResp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 on DELETE /v1/storage singleton, got %v err=%v", delStoreResp, err)
+	}
+	delStoreResp.Body.Close()
+
+	resetReq, _ := http.NewRequest(http.MethodPost, ts.URL+"/v1/storage:reset", bytes.NewBufferString(`{}`))
+	resetReq.Header.Set("Content-Type", "application/json")
 	resetReq.SetBasicAuth("admin", "secret-password")
 	resetResp, err := http.DefaultClient.Do(resetReq)
 	if err != nil || resetResp.StatusCode != http.StatusOK {
-		t.Fatalf("POST /api/storage/reset failed: %v", err)
+		t.Fatalf("POST /v1/storage:reset failed: %v", err)
 	}
 	resetResp.Body.Close()
 
-	stAfterWipe, err := http.Get(ts.URL + "/api/state")
+	stAfterWipe, err := http.Get(ts.URL + "/v1/state")
 	if err != nil || stAfterWipe.StatusCode != http.StatusOK {
-		t.Fatalf("expected unauthenticated /api/state to return 200 after storage wipe, got %v err=%v", stAfterWipe, err)
+		t.Fatalf("expected unauthenticated /v1/state to return 200 after storage wipe, got %v err=%v", stAfterWipe, err)
 	}
 	stAfterWipe.Body.Close()
 
@@ -605,9 +628,9 @@ func TestServerBasicAuthenticationAndStorageWipe(t *testing.T) {
 		DBPath:  dbFile,
 	})
 	tsLocked := httptest.NewServer(srvLocked.Handler())
-	cfgResp2, err := http.Post(tsLocked.URL+"/api/auth/config", "application/json", bytes.NewReader(cfgBody))
-	if err != nil || cfgResp2.StatusCode != http.StatusOK {
-		t.Fatalf("POST /api/auth/config on persistent DB failed: %v", err)
+	cfgResp2 := doJSONReq(t, http.MethodPut, tsLocked.URL+"/v1/auth/config", "", cfgBody)
+	if cfgResp2.StatusCode != http.StatusOK {
+		t.Fatalf("PUT /v1/auth/config on persistent DB failed: %d", cfgResp2.StatusCode)
 	}
 	cfgResp2.Body.Close()
 	tsLocked.Close()
@@ -622,9 +645,9 @@ func TestServerBasicAuthenticationAndStorageWipe(t *testing.T) {
 	tsRecovered := httptest.NewServer(srvRecovered.Handler())
 	defer tsRecovered.Close()
 
-	recResp, err := http.Get(tsRecovered.URL + "/api/state")
+	recResp, err := http.Get(tsRecovered.URL + "/v1/state")
 	if err != nil || recResp.StatusCode != http.StatusOK {
-		t.Fatalf("expected 200 on /api/state after DisableAuth (-no-auth) startup, got %v err=%v", recResp, err)
+		t.Fatalf("expected 200 on /v1/state after DisableAuth (-no-auth) startup, got %v err=%v", recResp, err)
 	}
 	recResp.Body.Close()
 }
@@ -651,7 +674,6 @@ func TestUSBRawWebSocketBridgeForMobileFlasher(t *testing.T) {
 		Version: "v0.0.6-android",
 		DBPath:  filepath.Join(t.TempDir(), "slaprf.db"),
 		USBListPorts: func() ([]usb.PortInfo, error) {
-			// Simulate Android re-enumerating /dev/bus/usb/001/002 -> /dev/bus/usb/001/003
 			return []usb.PortInfo{{
 				Name:        "/dev/bus/usb/001/003",
 				IsUSB:       true,
@@ -676,16 +698,15 @@ func TestUSBRawWebSocketBridgeForMobileFlasher(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/api/usb/raw-ws?port=%2Fdev%2Fbus%2Fusb%2F001%2F002&baud=115200"
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/v1/ws/usb-raw?port=%2Fdev%2Fbus%2Fusb%2F001%2F002&baud=115200"
 	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader: http.Header{"Origin": []string{ts.URL}},
 	})
 	if err != nil {
-		t.Fatalf("websocket dial /api/usb/raw-ws: %v", err)
+		t.Fatalf("websocket dial /v1/ws/usb-raw: %v", err)
 	}
 	defer func() { _ = ws.CloseNow() }()
 
-	// 1. Expect initial open handshake with resolved portName + Espressif VID/PID
 	mt, openBytes, err := ws.Read(ctx)
 	if err != nil || mt != websocket.MessageText {
 		t.Fatalf("read open handshake: mt=%v err=%v", mt, err)
@@ -704,7 +725,6 @@ func TestUSBRawWebSocketBridgeForMobileFlasher(t *testing.T) {
 		t.Fatalf("unexpected open handshake: %+v", openMsg)
 	}
 
-	// 2. Binary TX -> device & device -> Binary RX
 	if err := ws.Write(ctx, websocket.MessageBinary, []byte("\xc0\x00\x08\xc0")); err != nil {
 		t.Fatalf("ws write binary: %v", err)
 	}
@@ -721,7 +741,6 @@ func TestUSBRawWebSocketBridgeForMobileFlasher(t *testing.T) {
 		t.Fatalf("ws did not receive SLIP reply: mt=%v data=%x err=%v", mt, rxOnWS, err)
 	}
 
-	// 3. Atomic DTR/RTS signal control + ack
 	if err := ws.Write(ctx, websocket.MessageText, []byte(`{"type":"signals","id":7,"dtr":true,"rts":false}`)); err != nil {
 		t.Fatalf("ws write signals: %v", err)
 	}
@@ -733,7 +752,6 @@ func TestUSBRawWebSocketBridgeForMobileFlasher(t *testing.T) {
 		t.Fatalf("expected AtomicDTRRTSSetter(true,false) hit once, got hits=%d dtr=%v rts=%v", wrappedPort.atomicHit, wrappedPort.lastDTR, wrappedPort.lastRTS)
 	}
 
-	// 4. Clean close + ack
 	if err := ws.Write(ctx, websocket.MessageText, []byte(`{"type":"close","id":8}`)); err != nil {
 		t.Fatalf("ws write close: %v", err)
 	}

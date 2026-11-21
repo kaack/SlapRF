@@ -13,23 +13,25 @@ import (
 	"slaprf/internal/domain"
 )
 
-// apiPrepareRaceWithCheckedInPilots creates a fresh race, checks in exactly `pilotCount` pilots
-// (marking the rest absent), navigates the live browser view to the race so `video.webm` captures
-// every bracket/control mutation on screen, and returns the created race's ID and slug.
+// apiPrepareRaceWithCheckedInPilots creates a fresh race via POST /v1/race/sessions (201 Created),
+// checks in `pilotCount` pilots via PATCH /v1/race/sessions/{raceId}/pilots/{slotIndex},
+// navigates the live browser view to the race, and returns the created race's ID and slug.
 func apiPrepareRaceWithCheckedInPilots(h *Harness, name string, pilotCount int, subTab string) (string, string, []int) {
 	h.T.Helper()
 
 	var st api.FullStateResponse
-	h.APIPost("/api/events/action", map[string]any{
-		"action": "create_race",
-		"name":   name,
-		"tags":   []string{"API-E2E", "Automated"},
+	createRes := h.APIPost("/v1/race/sessions", map[string]any{
+		"name": name,
+		"tags": []string{"API-E2E", "Automated"},
 	}, &st)
+	if createRes.Status != 201 {
+		h.T.Fatalf("expected 201 Created from POST /v1/race/sessions, got %d", createRes.Status)
+	}
 
 	raceID := st.RaceState.RaceID
 	slug := domain.SlugifyRaceName(st.RaceState.Config.EventName)
 	if raceID == "" || slug == "" {
-		h.T.Fatalf("create_race did not return raceId/slug: %+v", st.RaceState)
+		h.T.Fatalf("POST /v1/race/sessions did not return raceId/slug: %+v", st.RaceState)
 	}
 
 	var checkedSlots []int
@@ -41,10 +43,7 @@ func apiPrepareRaceWithCheckedInPilots(h *Harness, name string, pilotCount int, 
 			att = domain.AttendanceActive
 			checkedSlots = append(checkedSlots, p.SlotIndex)
 		}
-		h.APIPost("/api/events/action", map[string]any{
-			"action":     "update_attendance",
-			"raceId":     raceID,
-			"slotIndex":  p.SlotIndex,
+		h.APIPatch(fmt.Sprintf("/v1/race/sessions/%s/pilots/%d", raceID, p.SlotIndex), map[string]any{
 			"checkedIn":  checked,
 			"attendance": att,
 		}, &st)
@@ -69,18 +68,17 @@ func apiFindHeat(st api.FullStateResponse, heatID string) *domain.RaceHeat {
 }
 
 // apiScoreAndConfirmHeat deterministically starts `heatID`, stops it immediately, injects exact
-// millisecond gate crossings (`offsetsByPilotSlot`), and confirms the heat via WASM HTTP API.
+// millisecond gate crossings (`offsetsByPilotSlot`), and confirms the heat via REST v1 `:control` & `:marshal`.
 func apiScoreAndConfirmHeat(h *Harness, heatID string, offsetsByPilotSlot map[int][]int64) api.FullStateResponse {
 	h.T.Helper()
 	var st api.FullStateResponse
-	h.APIPost("/api/race/control", map[string]any{
+	heatCtrlPath := fmt.Sprintf("/v1/race/sessions/current/heats/%s:control", heatID)
+	h.APIPost(heatCtrlPath, map[string]any{
 		"action":         "start",
-		"heatId":         heatID,
 		"preemptOngoing": true,
 	}, &st)
-	h.APIPost("/api/race/control", map[string]any{
+	h.APIPost(heatCtrlPath, map[string]any{
 		"action": "stop",
-		"heatId": heatID,
 	}, &st)
 
 	ht := apiFindHeat(st, heatID)
@@ -93,7 +91,6 @@ func apiScoreAndConfirmHeat(h *Harness, heatID string, offsetsByPilotSlot map[in
 		}
 		offsets, ok := offsetsByPilotSlot[seat.PilotSlotIndex]
 		if !ok {
-			// Default deterministic finishing times ordered by seat index when caller doesn't specify per-slot overrides.
 			baseLapMs := int64(11000 + seat.SeatIndex*1200)
 			lapsNeeded := ht.TargetLaps
 			if lapsNeeded <= 0 {
@@ -107,20 +104,18 @@ func apiScoreAndConfirmHeat(h *Harness, heatID string, offsetsByPilotSlot map[in
 				offsets = append(offsets, cur)
 			}
 		}
+		marshalPath := fmt.Sprintf("/v1/race/sessions/current/heats/%s/pilots/%d:marshal", heatID, seat.PilotSlotIndex)
 		for _, off := range offsets {
 			offVal := off
-			h.APIPost("/api/race/marshal", map[string]any{
-				"heatId":         heatID,
-				"pilotSlotIndex": seat.PilotSlotIndex,
-				"action":         "add_crossing",
-				"offsetMs":       offVal,
+			h.APIPost(marshalPath, map[string]any{
+				"action":   "add_crossing",
+				"offsetMs": offVal,
 			}, &st)
 		}
 	}
 
-	h.APIPost("/api/race/control", map[string]any{
+	h.APIPost(heatCtrlPath, map[string]any{
 		"action": "confirm",
-		"heatId": heatID,
 	}, &st)
 	return st
 }
@@ -131,20 +126,19 @@ func TestAPI_RaceE2E_SingleEliminationFullBracketAndCSVExport(t *testing.T) {
 	h.BootClean("#/races")
 	h.ConnectSimHubH1()
 
-	// Set 20x simulator speed via WASM API so real RF crossings complete 2-lap heats in ~3.5s.
+	// Set 20x simulator speed via PATCH /v1/sim so real RF crossings complete 2-lap heats in ~3.5s.
 	var st api.FullStateResponse
-	h.APIPost("/api/sim/speed", map[string]any{
+	h.APIPatch("/v1/sim", map[string]any{
 		"speedMultiplier": 20,
 	}, &st)
 	if st.SimState == nil || st.SimState.SpeedMultiplier != 20 {
 		t.Fatalf("expected speedMultiplier=20, got %+v", st.SimState)
 	}
 
-	// Create 4-pilot Single Elimination race (1 Finals heat with 4 pilots or 2x2 Semi -> Final).
+	// Create 4-pilot Single Elimination race (2x2 Semi -> Final).
 	raceID, slug, _ := apiPrepareRaceWithCheckedInPilots(h, "API Single Elim Live RF", 4, "stage-1")
 
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":     raceID,
+	h.APIPost(fmt.Sprintf("/v1/race/sessions/%s/bracket:edit", raceID), map[string]any{
 		"action":     "apply_template",
 		"templateId": "single_elimination",
 	}, &st)
@@ -153,8 +147,7 @@ func TestAPI_RaceE2E_SingleEliminationFullBracketAndCSVExport(t *testing.T) {
 	cfg.TargetLaps = 2
 	cfg.CountdownSec = 1
 	cfg.FinalsFormat = domain.FinalsSingle
-	h.APIPost("/api/race/setup", map[string]any{
-		"raceId":          raceID,
+	h.APIPut(fmt.Sprintf("/v1/race/sessions/%s/config", raceID), map[string]any{
 		"config":          cfg,
 		"generate":        true,
 		"applyToExisting": true,
@@ -176,15 +169,14 @@ func TestAPI_RaceE2E_SingleEliminationFullBracketAndCSVExport(t *testing.T) {
 			t.Fatalf("no active/ready heat at step %d while race incomplete", step)
 		}
 
-		h.APIPost("/api/race/control", map[string]any{
+		h.APIPost(fmt.Sprintf("/v1/race/sessions/%s/heats/%s:control", raceID, heatID), map[string]any{
 			"action":         "start",
-			"heatId":         heatID,
 			"preemptOngoing": true,
 		}, &st)
 
 		h.WaitUntil("RF simulator completes 2-lap heat "+heatID, 20*time.Second, func() (bool, error) {
 			var tick domain.RaceTournamentState
-			h.APIGet("/api/race/tick", &tick)
+			h.APIGet("/v1/race/clock", &tick)
 			for _, ht := range tick.Heats {
 				if ht.ID == heatID && ht.State == domain.HeatFinished {
 					return true, nil
@@ -193,9 +185,8 @@ func TestAPI_RaceE2E_SingleEliminationFullBracketAndCSVExport(t *testing.T) {
 			return false, nil
 		})
 
-		h.APIPost("/api/race/control", map[string]any{
+		h.APIPost(fmt.Sprintf("/v1/race/sessions/%s/heats/%s:control", raceID, heatID), map[string]any{
 			"action": "confirm",
-			"heatId": heatID,
 		}, &st)
 	}
 
@@ -203,10 +194,10 @@ func TestAPI_RaceE2E_SingleEliminationFullBracketAndCSVExport(t *testing.T) {
 		t.Fatalf("expected tournament complete with ChampionCallsign, got complete=%v champion=%q", st.RaceState.IsComplete, st.RaceState.ChampionCallsign)
 	}
 
-	// Verify GET /api/race/export.csv returns valid text/csv headers + champion & lap metrics!
-	csvRes := h.CurlSpec(fmt.Sprintf("GET /api/race/export.csv?raceId=%s", raceID), nil)
+	// Verify GET /v1/race/sessions/{raceId}/standings.csv returns valid text/csv headers + champion & lap metrics!
+	csvRes := h.CurlSpec(fmt.Sprintf("GET /v1/race/sessions/%s/standings.csv", raceID), nil)
 	if !csvRes.OK || csvRes.Status != 200 {
-		t.Fatalf("GET /api/race/export.csv failed: %+v", csvRes)
+		t.Fatalf("GET /v1/race/sessions/%s/standings.csv failed: %+v", raceID, csvRes)
 	}
 	if !strings.Contains(csvRes.Headers["content-type"], "text/csv") {
 		t.Fatalf("expected text/csv content-type, got %q", csvRes.Headers["content-type"])
@@ -229,8 +220,7 @@ func TestAPI_RaceE2E_DoubleEliminationWinnersRedemptionAndChaseTheAceFinals(t *t
 	raceID, slug, _ := apiPrepareRaceWithCheckedInPilots(h, "API Double Elim Chase The Ace", 4, "stage-1")
 
 	var st api.FullStateResponse
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":     raceID,
+	h.APIPost(fmt.Sprintf("/v1/race/sessions/%s/bracket:edit", raceID), map[string]any{
 		"action":     "apply_template",
 		"templateId": "double_elimination",
 	}, &st)
@@ -241,8 +231,7 @@ func TestAPI_RaceE2E_DoubleEliminationWinnersRedemptionAndChaseTheAceFinals(t *t
 	cfg.FinalsFormat = domain.FinalsChaseTheAce
 	cfg.AceWinsRequired = 2
 	cfg.WinnersAdvantageAce = false
-	h.APIPost("/api/race/setup", map[string]any{
-		"raceId":          raceID,
+	h.APIPut(fmt.Sprintf("/v1/race/sessions/%s/config", raceID), map[string]any{
 		"config":          cfg,
 		"generate":        true,
 		"applyToExisting": true,
@@ -255,8 +244,6 @@ func TestAPI_RaceE2E_DoubleEliminationWinnersRedemptionAndChaseTheAceFinals(t *t
 
 	_, _ = h.Page.Evaluate(`(hash) => { window.location.hash = hash; }`, fmt.Sprintf("#/races/%s/control", slug))
 
-	// Score preliminary heats if any exist before Finals, then in Chase-the-Ace Finals:
-	// have Pilot A win Finals Heat 1, Pilot B win Finals Heat 2 (spawning Finals Heat 3!), and Pilot B win Finals Heat 3 to claim the Ace!
 	var aceWinnerSlot int
 	for guard := 0; guard < 12 && !st.RaceState.IsComplete; guard++ {
 		heatID := st.RaceState.ActiveHeatID
@@ -271,7 +258,6 @@ func TestAPI_RaceE2E_DoubleEliminationWinnersRedemptionAndChaseTheAceFinals(t *t
 			t.Fatalf("heat %s not found", heatID)
 		}
 
-		// Collect active pilot slots in this heat.
 		var slots []int
 		for _, s := range ht.Seats {
 			if s.PilotSlotIndex > 0 {
@@ -281,12 +267,10 @@ func TestAPI_RaceE2E_DoubleEliminationWinnersRedemptionAndChaseTheAceFinals(t *t
 		offsets := make(map[int][]int64, len(slots))
 		isFinals := ht.BracketLane == "finals" || strings.Contains(strings.ToLower(ht.Title), "final")
 		if isFinals && len(slots) >= 2 {
-			// Alternate winner between Finals Heat 1 (slots[0]) and subsequent Finals heats (slots[1])
-			// so Chase-the-Ace (2 wins required) MUST dynamically spawn an extra Finals heat!
 			winnerIdx := 1
 			if aceWinnerSlot == 0 {
 				winnerIdx = 0
-				aceWinnerSlot = slots[1] // slots[1] will win the next two Finals heats!
+				aceWinnerSlot = slots[1]
 			}
 			for i, sl := range slots {
 				rank := i + 2
@@ -317,8 +301,7 @@ func TestAPI_RaceE2E_TwoStageQualifyingToMainsSeedingAndAdvance(t *testing.T) {
 	raceID, slug, slots := apiPrepareRaceWithCheckedInPilots(h, "API Two Stage Qual To Mains", 6, "stage-1")
 
 	var st api.FullStateResponse
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":     raceID,
+	h.APIPost(fmt.Sprintf("/v1/race/sessions/%s/bracket:edit", raceID), map[string]any{
 		"action":     "apply_template",
 		"templateId": "qual_single_elim",
 	}, &st)
@@ -330,8 +313,7 @@ func TestAPI_RaceE2E_TwoStageQualifyingToMainsSeedingAndAdvance(t *testing.T) {
 	cfg.PilotsPerHeat = 4
 	cfg.TargetLaps = 2
 	cfg.FinalsFormat = domain.FinalsSingle
-	h.APIPost("/api/race/setup", map[string]any{
-		"raceId":          raceID,
+	h.APIPut(fmt.Sprintf("/v1/race/sessions/%s/config", raceID), map[string]any{
 		"config":          cfg,
 		"generate":        true,
 		"applyToExisting": true,
@@ -343,12 +325,9 @@ func TestAPI_RaceE2E_TwoStageQualifyingToMainsSeedingAndAdvance(t *testing.T) {
 
 	_, _ = h.Page.Evaluate(`(hash) => { window.location.hash = hash; }`, fmt.Sprintf("#/races/%s/control", slug))
 
-	// Score all Qualifying heats so `slots` in reverse order get fastest 3-consecutive lap times:
-	// slots[5] fastest (3x 9.0s = 27.0s), slots[4] 2nd (3x 10.0s = 30.0s), slots[3] 3rd, slots[2] 4th,
-	// while slots[1] and slots[0] are 5th & 6th (eliminated by Stage2MaxSeeds=4!).
 	rankBySlot := make(map[int]int, len(slots))
 	for i, sl := range slots {
-		rankBySlot[sl] = len(slots) - i // slots[5]->1, slots[4]->2, slots[3]->3, slots[2]->4, slots[1]->5, slots[0]->6
+		rankBySlot[sl] = len(slots) - i
 	}
 
 	for {
@@ -375,7 +354,6 @@ func TestAPI_RaceE2E_TwoStageQualifyingToMainsSeedingAndAdvance(t *testing.T) {
 		st = apiScoreAndConfirmHeat(h, nextQualHeat, offsets)
 	}
 
-	// Verify Qualifying standings rank slots[5], slots[4], slots[3], slots[2] as Top 4!
 	if len(st.RaceState.QualStandings) < 6 {
 		t.Fatalf("expected 6 pilots in QualStandings, got %d", len(st.RaceState.QualStandings))
 	}
@@ -385,7 +363,6 @@ func TestAPI_RaceE2E_TwoStageQualifyingToMainsSeedingAndAdvance(t *testing.T) {
 			st.RaceState.QualStandings[3].PilotSlotIndex, slots[2])
 	}
 
-	// Verify only Top 4 qualifiers entered the downstream elimination heats on the unified graph!
 	bracketSeated := make(map[int]bool)
 	for _, ht := range st.RaceState.Heats {
 		if ht.StageFormat != domain.FormatQualifying {
@@ -400,7 +377,6 @@ func TestAPI_RaceE2E_TwoStageQualifyingToMainsSeedingAndAdvance(t *testing.T) {
 		t.Fatalf("expected exactly Top 4 qualifiers in bracket (excluding slots %d, %d), got %v", slots[0], slots[1], bracketSeated)
 	}
 
-	// Score Stage 2 so top qualifier slots[5] wins the Championship!
 	_, _ = h.Page.Evaluate(`(hash) => { window.location.hash = hash; }`, fmt.Sprintf("#/races/%s/control", slug))
 	for !st.RaceState.IsComplete {
 		heatID := st.RaceState.ActiveHeatID
@@ -433,8 +409,7 @@ func TestAPI_RaceE2E_PointsMainsCumulativeStandings(t *testing.T) {
 	raceID, slug, slots := apiPrepareRaceWithCheckedInPilots(h, "API Points Mains 3 Rounds", 4, "stage-1")
 
 	var st api.FullStateResponse
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":     raceID,
+	h.APIPost(fmt.Sprintf("/v1/race/sessions/%s/bracket:edit", raceID), map[string]any{
 		"action":     "apply_template",
 		"templateId": "points_mains",
 	}, &st)
@@ -443,8 +418,7 @@ func TestAPI_RaceE2E_PointsMainsCumulativeStandings(t *testing.T) {
 	cfg.PointsRounds = 3
 	cfg.PilotsPerHeat = 4
 	cfg.TargetLaps = 2
-	h.APIPost("/api/race/setup", map[string]any{
-		"raceId":          raceID,
+	h.APIPut(fmt.Sprintf("/v1/race/sessions/%s/config", raceID), map[string]any{
 		"config":          cfg,
 		"generate":        true,
 		"applyToExisting": true,
@@ -456,10 +430,6 @@ func TestAPI_RaceE2E_PointsMainsCumulativeStandings(t *testing.T) {
 
 	_, _ = h.Page.Evaluate(`(hash) => { window.location.hash = hash; }`, fmt.Sprintf("#/races/%s/control", slug))
 
-	// Round 1: slots[0] 1st, slots[1] 2nd, slots[2] 3rd, slots[3] 4th
-	// Round 2: slots[1] 1st, slots[0] 2nd, slots[2] 3rd, slots[3] 4th
-	// Round 3: slots[1] 1st, slots[2] 2nd, slots[0] 3rd, slots[3] 4th
-	// -> slots[1] wins overall cumulative points!
 	orders := [][]int{
 		{slots[0], slots[1], slots[2], slots[3]},
 		{slots[1], slots[0], slots[2], slots[3]},
@@ -493,8 +463,8 @@ func TestAPI_RaceE2E_RoundRobinQualifyingMetricsRecompute(t *testing.T) {
 	raceID, slug, slots := apiPrepareRaceWithCheckedInPilots(h, "API Qualifying Metrics Matrix", 3, "stage-1")
 
 	var st api.FullStateResponse
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":     raceID,
+	bracketPath := fmt.Sprintf("/v1/race/sessions/%s/bracket:edit", raceID)
+	h.APIPost(bracketPath, map[string]any{
 		"action":     "apply_template",
 		"templateId": "round_robin",
 	}, &st)
@@ -503,8 +473,7 @@ func TestAPI_RaceE2E_RoundRobinQualifyingMetricsRecompute(t *testing.T) {
 	cfg.QualifyingRounds = 2
 	cfg.PilotsPerHeat = 4
 	cfg.QualifyingMetric = domain.QualMetricBestLap
-	h.APIPost("/api/race/setup", map[string]any{
-		"raceId":          raceID,
+	h.APIPut(fmt.Sprintf("/v1/race/sessions/%s/config", raceID), map[string]any{
 		"config":          cfg,
 		"generate":        true,
 		"applyToExisting": true,
@@ -513,10 +482,6 @@ func TestAPI_RaceE2E_RoundRobinQualifyingMetricsRecompute(t *testing.T) {
 	_, _ = h.Page.Evaluate(`(hash) => { window.location.hash = hash; }`, fmt.Sprintf("#/races/%s/control", slug))
 
 	heatID := st.RaceState.Heats[0].ID
-	// Craft asymmetric lap profiles across 3 pilots so DIFFERENT metrics crown DIFFERENT #1 leaders!
-	// Pilot A (slots[0]): 1 blazing single lap (7.0s), then slow laps (20.0s, 20.0s) -> BestLap=7.0s (#1 in best_lap!), Consec2=27.0s, Consec3=47.0s (3 laps in 47.5s)
-	// Pilot B (slots[1]): 2 fast consecutive laps (9.0s, 9.0s), then 18.0s -> BestLap=9.0s, Consec2=18.0s (#1 in consecutive_2!), Consec3=36.0s (3 laps in 36.5s)
-	// Pilot C (slots[2]): 4 steady 10.0s laps -> BestLap=10.0s, Consec2=20.0s, Consec3=30.0s (#1 in consecutive_3 AND #1 in laps_in_time with 4 laps!)
 	offsets := map[int][]int64{
 		slots[0]: {500, 7500, 27500, 47500},
 		slots[1]: {500, 9500, 18500, 36500},
@@ -525,8 +490,7 @@ func TestAPI_RaceE2E_RoundRobinQualifyingMetricsRecompute(t *testing.T) {
 	st = apiScoreAndConfirmHeat(h, heatID, offsets)
 
 	checkLeader := func(metric domain.QualifyingMetric, expectedSlot int) {
-		h.APIPost("/api/race/bracket-edit", map[string]any{
-			"raceId":           raceID,
+		h.APIPost(bracketPath, map[string]any{
 			"action":           "update_stage_settings",
 			"stageIndex":       1,
 			"qualifyingMetric": metric,
@@ -558,15 +522,14 @@ func TestAPI_RaceE2E_OpenQualifierFlightLineAndPackLimit(t *testing.T) {
 	_, _ = h.Page.Evaluate(`(hash) => { window.location.hash = hash; }`, fmt.Sprintf("#/races/%s/control", slug))
 
 	var st api.FullStateResponse
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":     raceID,
+	bracketPath := fmt.Sprintf("/v1/race/sessions/%s/bracket:edit", raceID)
+	h.APIPost(bracketPath, map[string]any{
 		"action":     "apply_template",
 		"templateId": "open_qualifier",
 	}, &st)
 
 	maxPacks := 2
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":           raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":           "update_stage_settings",
 		"stageIndex":       1,
 		"maxPacksPerPilot": maxPacks,
@@ -574,14 +537,12 @@ func TestAPI_RaceE2E_OpenQualifierFlightLineAndPackLimit(t *testing.T) {
 	}, &st)
 
 	// 1. Enqueue slots[0] and slots[1], then dequeue slots[1] and verify seat cleared.
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":         raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":         "open_qual_enqueue",
 		"stageIndex":     1,
 		"pilotSlotIndex": slots[0],
 	}, &st)
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":         raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":         "open_qual_enqueue",
 		"stageIndex":     1,
 		"pilotSlotIndex": slots[1],
@@ -590,8 +551,7 @@ func TestAPI_RaceE2E_OpenQualifierFlightLineAndPackLimit(t *testing.T) {
 		t.Fatalf("expected 1 spawned Open Qualifier pack for 2 pilots @ 2/heat, got %d", len(st.RaceState.Heats))
 	}
 
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":         raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":         "open_qual_dequeue",
 		"stageIndex":     1,
 		"heatId":         st.RaceState.Heats[0].ID,
@@ -599,8 +559,7 @@ func TestAPI_RaceE2E_OpenQualifierFlightLineAndPackLimit(t *testing.T) {
 	}, &st)
 
 	// 2. Enqueue all eligible pilots (`open_qual_enqueue_all`) -> fills OQ-1 and spawns OQ-2 for 4 pilots @ 2/heat!
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":     raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":     "open_qual_enqueue_all",
 		"stageIndex": 1,
 	}, &st)
@@ -610,13 +569,11 @@ func TestAPI_RaceE2E_OpenQualifierFlightLineAndPackLimit(t *testing.T) {
 
 	// Score Pack 1 (slots[0] gets pack #1) and enqueue + score Pack 2 for slots[0] (hits MaxPacksPerPilot=2!).
 	st = apiScoreAndConfirmHeat(h, st.RaceState.Heats[0].ID, nil)
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":         raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":         "open_qual_enqueue",
 		"stageIndex":     1,
 		"pilotSlotIndex": slots[0],
 	}, &st)
-	// Find the unstarted heat containing slots[0] and score it.
 	var secondPackID string
 	for _, ht := range st.RaceState.Heats {
 		if ht.State != domain.HeatConfirmed {
@@ -632,13 +589,12 @@ func TestAPI_RaceE2E_OpenQualifierFlightLineAndPackLimit(t *testing.T) {
 	}
 	st = apiScoreAndConfirmHeat(h, secondPackID, nil)
 
-	// 3. Attempting a 3rd pack for slots[0] MUST return 400 Bad Request due to MaxPacksPerPilot=2!
-	capRes := h.APIExpectStatus("POST", "/api/race/bracket-edit", map[string]any{
-		"raceId":         raceID,
+	// 3. Attempting a 3rd pack for slots[0] MUST return 409 Conflict due to MaxPacksPerPilot=2!
+	capRes := h.APIExpectStatus("POST", bracketPath, map[string]any{
 		"action":         "open_qual_enqueue",
 		"stageIndex":     1,
 		"pilotSlotIndex": slots[0],
-	}, 400)
+	}, 409)
 	if !strings.Contains(strings.ToLower(capRes.Body), "pack") && !strings.Contains(strings.ToLower(capRes.Body), "limit") && !strings.Contains(strings.ToLower(capRes.Body), "max") {
 		t.Fatalf("expected pack limit error message on 3rd enqueue, got %q", capRes.Body)
 	}
@@ -652,16 +608,15 @@ func TestAPI_RaceE2E_CustomMultiStageDAGAndBracketGraphEditing(t *testing.T) {
 	h.BootClean("#/races")
 
 	raceID, slug, slots := apiPrepareRaceWithCheckedInPilots(h, "API Custom DAG Builder", 4, "format")
+	bracketPath := fmt.Sprintf("/v1/race/sessions/%s/bracket:edit", raceID)
 
 	// 1. Start blank Custom stage (`start_custom`), add a 2nd stage (`add_stage`), rename & wire stages (`connect_stages`).
 	var st api.FullStateResponse
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":   raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":   "start_custom",
 		"linkMode": "none",
 	}, &st)
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":      raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":      "add_stage",
 		"stageFormat": domain.FormatSingleElimination,
 		"title":       "Grand Finals Stage",
@@ -672,14 +627,12 @@ func TestAPI_RaceE2E_CustomMultiStageDAGAndBracketGraphEditing(t *testing.T) {
 
 	stg1ID := st.RaceState.Stages[0].ID
 	stg2ID := st.RaceState.Stages[1].ID
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":  raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":  "rename_stage",
 		"stageId": stg1ID,
 		"title":   "Custom Seeding Stage",
 	}, &st)
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":      raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":      "connect_stages",
 		"fromStageId": stg1ID,
 		"toStageId":   stg2ID,
@@ -690,12 +643,10 @@ func TestAPI_RaceE2E_CustomMultiStageDAGAndBracketGraphEditing(t *testing.T) {
 		t.Fatalf("expected 1 StageConnection between Stage 1 and Stage 2, got %d", len(st.RaceState.StageConnections))
 	}
 
-	// 2. Switch to Stage 1 round graph, add custom rounds, wire portals (`stage1-pilots-in` -> R1 -> `stage1-seeding-out`),
-	// add/delete a heat, assign manual seat pilot & custom Raceband channel!
+	// 2. Switch to Stage 1 round graph, add custom rounds, add/delete a heat, assign manual seat pilot & custom Raceband channel!
 	_, _ = h.Page.Evaluate(`(hash) => { window.location.hash = hash; }`, fmt.Sprintf("#/races/%s/stage-1", slug))
 
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":     raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":     "add_round",
 		"stageIndex": 1,
 		"title":      "Custom Opening Round",
@@ -714,10 +665,8 @@ func TestAPI_RaceE2E_CustomMultiStageDAGAndBracketGraphEditing(t *testing.T) {
 		t.Fatalf("expected custom round created in Stage 1")
 	}
 
-	// Add a second heat to the round, then delete it to verify `add_heat` + `delete_heat`.
 	beforeHeats := len(st.RaceState.Heats)
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":  raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":  "add_heat",
 		"roundId": customRoundID,
 	}, &st)
@@ -734,37 +683,30 @@ func TestAPI_RaceE2E_CustomMultiStageDAGAndBracketGraphEditing(t *testing.T) {
 			}
 		}
 	}
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId": raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action": "delete_heat",
 		"heatId": addedHeatID,
 	}, &st)
 
-	// Assign 2 pilots manually into `keptHeatID`, set Seat 1 channel to R7 (5880 MHz),
-	// add a Stage 1 Finals round, and wire `customRoundID` -> `customFinalsID` via `connect_rounds`!
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":         raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":         "assign_pilot_seat",
 		"heatId":         keptHeatID,
 		"seatIndex":      1,
 		"pilotSlotIndex": slots[0],
 	}, &st)
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":         raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":         "assign_pilot_seat",
 		"heatId":         keptHeatID,
 		"seatIndex":      2,
 		"pilotSlotIndex": slots[1],
 	}, &st)
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":    raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":    "set_seat_channel",
 		"heatId":    keptHeatID,
 		"seatIndex": 1,
 		"channel":   7,
 	}, &st)
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":       raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":       "add_round",
 		"stageIndex":   1,
 		"title":        "Stage 1 Final",
@@ -783,8 +725,7 @@ func TestAPI_RaceE2E_CustomMultiStageDAGAndBracketGraphEditing(t *testing.T) {
 	if customFinalsID == "" {
 		t.Fatalf("expected Stage 1 Final round created in Stage 1")
 	}
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":       raceID,
+	h.APIPost(bracketPath, map[string]any{
 		"action":       "connect_rounds",
 		"stageIndex":   1,
 		"fromRoundId":  customRoundID,
@@ -798,7 +739,7 @@ func TestAPI_RaceE2E_CustomMultiStageDAGAndBracketGraphEditing(t *testing.T) {
 		t.Fatalf("expected custom heat Seat 1 on R7 with slot %d, got %+v", slots[0], ht)
 	}
 
-	// Score custom Stage 1 rounds -> advance to Stage 2 -> crown overall tournament champion!
+	// Score custom Stage 1 rounds -> advance to Stage 2 via POST .../stages/2:control -> crown overall tournament champion!
 	_, _ = h.Page.Evaluate(`(hash) => { window.location.hash = hash; }`, fmt.Sprintf("#/races/%s/control", slug))
 	st = apiScoreAndConfirmHeat(h, keptHeatID, nil)
 	for {
@@ -814,10 +755,7 @@ func TestAPI_RaceE2E_CustomMultiStageDAGAndBracketGraphEditing(t *testing.T) {
 		}
 		st = apiScoreAndConfirmHeat(h, s1Next, nil)
 	}
-	h.APIPost("/api/events/action", map[string]any{
-		"action":      "stage_control",
-		"raceId":      raceID,
-		"stageIndex":  2,
+	h.APIPost(fmt.Sprintf("/v1/race/sessions/%s/stages/2:control", raceID), map[string]any{
 		"stageAction": "activate_stage",
 	}, &st)
 	_, _ = h.Page.Evaluate(`(hash) => { window.location.hash = hash; }`, fmt.Sprintf("#/races/%s/control", slug))
@@ -844,8 +782,7 @@ func TestAPI_RaceMarshalLiveAndPostHeatCrossingsPenaltiesAndLifecycle(t *testing
 	_, _ = h.Page.Evaluate(`(hash) => { window.location.hash = hash; }`, fmt.Sprintf("#/races/%s/control", slug))
 
 	var st api.FullStateResponse
-	h.APIPost("/api/race/bracket-edit", map[string]any{
-		"raceId":     raceID,
+	h.APIPost(fmt.Sprintf("/v1/race/sessions/%s/bracket:edit", raceID), map[string]any{
 		"action":     "apply_template",
 		"templateId": "single_elimination",
 	}, &st)
@@ -853,50 +790,49 @@ func TestAPI_RaceMarshalLiveAndPostHeatCrossingsPenaltiesAndLifecycle(t *testing
 	cfg.PilotsPerHeat = 4
 	cfg.TargetLaps = 2
 	cfg.CountdownSec = 5
-	h.APIPost("/api/race/setup", map[string]any{
-		"raceId":          raceID,
+	h.APIPut(fmt.Sprintf("/v1/race/sessions/%s/config", raceID), map[string]any{
 		"config":          cfg,
 		"generate":        true,
 		"applyToExisting": true,
 	}, &st)
 
 	heatID := st.RaceState.Heats[0].ID
+	heatCtrlPath := fmt.Sprintf("/v1/race/sessions/%s/heats/%s:control", raceID, heatID)
+	marshalFor := func(slot int) string {
+		return fmt.Sprintf("/v1/race/sessions/%s/heats/%s/pilots/%d:marshal", raceID, heatID, slot)
+	}
 
 	// 1. Test `start` (countdown) -> `cancel` -> `start` -> `emergency_stop` (aborted) -> `reset` (staged).
-	h.APIPost("/api/race/control", map[string]any{"action": "start", "heatId": heatID, "preemptOngoing": true}, &st)
+	h.APIPost(heatCtrlPath, map[string]any{"action": "start", "preemptOngoing": true}, &st)
 	if apiFindHeat(st, heatID).State != domain.HeatCountdown {
 		t.Fatalf("expected HeatCountdown after start with CountdownSec=5, got %s", apiFindHeat(st, heatID).State)
 	}
-	h.APIPost("/api/race/control", map[string]any{"action": "cancel", "heatId": heatID}, &st)
+	h.APIPost(heatCtrlPath, map[string]any{"action": "cancel"}, &st)
 	if apiFindHeat(st, heatID).State != domain.HeatStaged {
 		t.Fatalf("expected HeatStaged after cancel, got %s", apiFindHeat(st, heatID).State)
 	}
 
-	h.APIPost("/api/race/control", map[string]any{"action": "start", "heatId": heatID, "preemptOngoing": true}, &st)
-	h.APIPost("/api/race/control", map[string]any{"action": "emergency_stop", "heatId": heatID}, &st)
+	h.APIPost(heatCtrlPath, map[string]any{"action": "start", "preemptOngoing": true}, &st)
+	h.APIPost(heatCtrlPath, map[string]any{"action": "emergency_stop"}, &st)
 	if apiFindHeat(st, heatID).State != domain.HeatAborted {
 		t.Fatalf("expected HeatAborted after emergency_stop, got %s", apiFindHeat(st, heatID).State)
 	}
-	h.APIPost("/api/race/control", map[string]any{"action": "reset", "heatId": heatID}, &st)
+	h.APIPost(heatCtrlPath, map[string]any{"action": "reset"}, &st)
 	if apiFindHeat(st, heatID).State != domain.HeatStaged {
 		t.Fatalf("expected HeatStaged after reset, got %s", apiFindHeat(st, heatID).State)
 	}
 
 	// 2. Finish heat and test marshal crossing edits: `add_lap`, `add_crossing`, `move_crossing`, `toggle_lap`, `delete_crossing`.
-	h.APIPost("/api/race/control", map[string]any{"action": "start", "heatId": heatID, "preemptOngoing": true}, &st)
-	h.APIPost("/api/race/control", map[string]any{"action": "stop", "heatId": heatID}, &st)
+	h.APIPost(heatCtrlPath, map[string]any{"action": "start", "preemptOngoing": true}, &st)
+	h.APIPost(heatCtrlPath, map[string]any{"action": "stop"}, &st)
 
-	// Pilot 0: add 2 manual laps via `add_lap` (creates holeshot + Lap 1, then Lap 2).
-	h.APIPost("/api/race/marshal", map[string]any{"heatId": heatID, "pilotSlotIndex": slots[0], "action": "add_lap"}, &st)
-	h.APIPost("/api/race/marshal", map[string]any{"heatId": heatID, "pilotSlotIndex": slots[0], "action": "add_lap"}, &st)
+	h.APIPost(marshalFor(slots[0]), map[string]any{"action": "add_lap"}, &st)
+	h.APIPost(marshalFor(slots[0]), map[string]any{"action": "add_lap"}, &st)
 
-	// Pilot 1: add 3 crossings via `add_crossing` + 1 extra crossing that we move, invalidate, and delete.
 	for _, off := range []int64{500, 11500, 22500, 35000} {
-		h.APIPost("/api/race/marshal", map[string]any{
-			"heatId":         heatID,
-			"pilotSlotIndex": slots[1],
-			"action":         "add_crossing",
-			"offsetMs":       off,
+		h.APIPost(marshalFor(slots[1]), map[string]any{
+			"action":   "add_crossing",
+			"offsetMs": off,
 		}, &st)
 	}
 	ht := apiFindHeat(st, heatID)
@@ -909,84 +845,69 @@ func TestAPI_RaceMarshalLiveAndPostHeatCrossingsPenaltiesAndLifecycle(t *testing
 	if extraCid == 0 {
 		t.Fatalf("expected 4th crossing ID for Pilot 1")
 	}
-	h.APIPost("/api/race/marshal", map[string]any{
-		"heatId":         heatID,
-		"pilotSlotIndex": slots[1],
-		"action":         "move_crossing",
-		"crossingId":     extraCid,
-		"offsetMs":       int64(33000),
+	h.APIPost(marshalFor(slots[1]), map[string]any{
+		"action":     "move_crossing",
+		"crossingId": extraCid,
+		"offsetMs":   int64(33000),
 	}, &st)
-	h.APIPost("/api/race/marshal", map[string]any{
-		"heatId":         heatID,
-		"pilotSlotIndex": slots[1],
-		"action":         "toggle_lap",
-		"crossingId":     extraCid,
+	h.APIPost(marshalFor(slots[1]), map[string]any{
+		"action":     "toggle_lap",
+		"crossingId": extraCid,
 	}, &st)
-	h.APIPost("/api/race/marshal", map[string]any{
-		"heatId":         heatID,
-		"pilotSlotIndex": slots[1],
-		"action":         "delete_crossing",
-		"crossingId":     extraCid,
+	h.APIPost(marshalFor(slots[1]), map[string]any{
+		"action":     "delete_crossing",
+		"crossingId": extraCid,
 	}, &st)
 
-	// 3. Test `set_penalty`, `move_down` / `move_up`, `clear_override`, and mutually-exclusive `toggle_dnf` / `toggle_dq` / `toggle_dns`.
-	h.APIPost("/api/race/marshal", map[string]any{
-		"heatId":         heatID,
-		"pilotSlotIndex": slots[0],
-		"action":         "set_penalty",
-		"penaltySec":     2.5,
+	// 3. Test `set_penalty`, `move_down`, `clear_override`, and mutually-exclusive `toggle_dnf` / `toggle_dq` / `toggle_dns`.
+	h.APIPost(marshalFor(slots[0]), map[string]any{
+		"action":     "set_penalty",
+		"penaltySec": 2.5,
 	}, &st)
-	h.APIPost("/api/race/marshal", map[string]any{
-		"heatId":         heatID,
-		"pilotSlotIndex": slots[1],
-		"action":         "move_down",
+	h.APIPost(marshalFor(slots[1]), map[string]any{
+		"action": "move_down",
 	}, &st)
-	h.APIPost("/api/race/marshal", map[string]any{
-		"heatId":         heatID,
-		"pilotSlotIndex": slots[0],
-		"action":         "clear_override",
+	h.APIPost(marshalFor(slots[0]), map[string]any{
+		"action": "clear_override",
 	}, &st)
 
-	h.APIPost("/api/race/marshal", map[string]any{"heatId": heatID, "pilotSlotIndex": slots[2], "action": "toggle_dnf"}, &st)
-	h.APIPost("/api/race/marshal", map[string]any{"heatId": heatID, "pilotSlotIndex": slots[3], "action": "toggle_dq"}, &st)
-	h.APIPost("/api/race/marshal", map[string]any{"heatId": heatID, "pilotSlotIndex": slots[3], "action": "toggle_dns"}, &st)
+	h.APIPost(marshalFor(slots[2]), map[string]any{"action": "toggle_dnf"}, &st)
+	h.APIPost(marshalFor(slots[3]), map[string]any{"action": "toggle_dq"}, &st)
+	h.APIPost(marshalFor(slots[3]), map[string]any{"action": "toggle_dns"}, &st)
 
-	// 4. Confirm -> verify `reset` is rejected while confirmed (400) -> `unlock` -> re-`confirm`!
-	h.APIPost("/api/race/control", map[string]any{"action": "confirm", "heatId": heatID}, &st)
-	h.APIExpectStatus("POST", "/api/race/control", map[string]any{"action": "reset", "heatId": heatID}, 400)
+	// 4. Confirm -> verify `reset` is rejected while confirmed (409 Conflict) -> `unlock` -> re-`confirm`!
+	h.APIPost(heatCtrlPath, map[string]any{"action": "confirm"}, &st)
+	h.APIExpectStatus("POST", heatCtrlPath, map[string]any{"action": "reset"}, 409)
 
-	h.APIPost("/api/race/control", map[string]any{"action": "unlock", "heatId": heatID}, &st)
+	h.APIPost(heatCtrlPath, map[string]any{"action": "unlock"}, &st)
 	if apiFindHeat(st, heatID).State != domain.HeatFinished {
 		t.Fatalf("expected HeatFinished after unlock, got %s", apiFindHeat(st, heatID).State)
 	}
-	h.APIPost("/api/race/control", map[string]any{"action": "confirm", "heatId": heatID}, &st)
+	h.APIPost(heatCtrlPath, map[string]any{"action": "confirm"}, &st)
 
-	// 5. Exercise full `race_lifecycle` state machine (`reopen_race` -> `pause_race` -> `resume_race` -> `scrap_race` -> `reopen_race` -> `complete_race`).
+	// 5. Exercise full race session `:verb` lifecycle state machine (`:reopen` -> `:pause` -> `:resume` -> `:scrap` -> `:reopen` -> `:complete`).
 	for _, lc := range []struct {
-		action string
-		want   domain.RaceLifecycle
+		verb string
+		want domain.RaceLifecycle
 	}{
-		{"reopen_race", domain.LifecycleActive},
-		{"pause_race", domain.LifecyclePaused},
-		{"resume_race", domain.LifecycleActive},
-		{"scrap_race", domain.LifecycleScrapped},
-		{"reopen_race", domain.LifecycleActive},
-		{"complete_race", domain.LifecycleCompleted},
+		{"reopen", domain.LifecycleActive},
+		{"pause", domain.LifecyclePaused},
+		{"resume", domain.LifecycleActive},
+		{"scrap", domain.LifecycleScrapped},
+		{"reopen", domain.LifecycleActive},
+		{"complete", domain.LifecycleCompleted},
 	} {
 		var raw json.RawMessage
-		res := h.APIPost("/api/events/action", map[string]any{
-			"action":          "race_lifecycle",
-			"raceId":          raceID,
-			"lifecycleAction": lc.action,
-			"reason":          "API E2E test transition: " + lc.action,
-			"preemptOngoing":  true,
+		res := h.APIPost(fmt.Sprintf("/v1/race/sessions/%s:%s", raceID, lc.verb), map[string]any{
+			"reason":         "API E2E test transition: " + lc.verb,
+			"preemptOngoing": true,
 		}, &raw)
 		if !res.OK {
-			t.Fatalf("lifecycleAction %s failed: %s", lc.action, res.Body)
+			t.Fatalf("lifecycle :%s failed: %s", lc.verb, res.Body)
 		}
 		_ = json.Unmarshal(raw, &st)
 		if st.RaceState.Lifecycle != lc.want {
-			t.Fatalf("after %s: expected lifecycle %s, got %s", lc.action, lc.want, st.RaceState.Lifecycle)
+			t.Fatalf("after :%s: expected lifecycle %s, got %s", lc.verb, lc.want, st.RaceState.Lifecycle)
 		}
 	}
 

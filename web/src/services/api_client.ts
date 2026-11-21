@@ -86,7 +86,7 @@ const SIM_MODE_STORAGE_KEY = "slaprf.ui.sim_mode.v1";
 /**
  * REST + real-time stream client:
  * - Native Go Backend mode (`caps.portable === true`): Thin UI client talking to the local or LAN
- *   `slaprf` Go binary over HTTP REST + `/api/ws/stream` (`BackendHttpTransport`). Zero WASM and
+ *   `slaprf` Go binary over HTTP REST (`/v1/*`) + `/v1/ws/stream` (`BackendHttpTransport`). Zero WASM and
  *   zero browser IndexedDB are used; all timing engines, `bbolt` storage, and hardware links run in Go.
  * - Standalone Browser Demo mode (`caps.demoMode === true`): Runs strictly in Simulation Mode
  *   using `WasmSimTransport` (`slaprf.wasm` + `IndexedDB`) to showcase all simulated capabilities.
@@ -279,7 +279,7 @@ export class ApiClient {
   }
 
   public async refresh(): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("GET", "/api/state"));
+    this.store.hydrate(await this.transport.request<FullStateResponse>("GET", "/v1/state"));
   }
 
   /**
@@ -359,7 +359,7 @@ export class ApiClient {
       return;
     }
     if (
-      (url.startsWith("/api/sim/toggle") || url.startsWith("/api/sim/mode")) &&
+      (url === "/v1/sim" || url.startsWith("/v1/sim?")) &&
       parsedJson &&
       typeof parsedJson === "object" &&
       typeof (parsedJson as { simulatorRunning?: unknown }).simulatorRunning === "boolean"
@@ -422,11 +422,15 @@ export class ApiClient {
   }
 
   public async toggleArmed(): Promise<void> {
-    this.store.applyStatus(await this.transport.request<StatusResponse>("POST", "/api/timing/toggle-arm"));
+    this.store.applyStatus(
+      await this.transport.request<StatusResponse>("PUT", "/v1/timing/arm", {
+        armed: !this.store.raceArmed,
+      })
+    );
   }
 
   public async simulatePack(): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/sim/pack-burst"));
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/v1/sim:packBurst", {}));
   }
 
   public async simPilotAction(
@@ -443,19 +447,19 @@ export class ApiClient {
       | "resume"
   ): Promise<void> {
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/sim/pilot-action", { slotIndex, action })
+      await this.transport.request<FullStateResponse>("POST", `/v1/sim/pilots/${slotIndex}:action`, { action })
     );
   }
 
   public async setTrackWalker(active: boolean): Promise<void> {
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/sim/track-walker", { active })
+      await this.transport.request<FullStateResponse>("PATCH", "/v1/sim", { trackWalker: active })
     );
   }
 
   public async setSimSpeed(speedMultiplier: number): Promise<void> {
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/sim/speed", { speedMultiplier })
+      await this.transport.request<FullStateResponse>("PATCH", "/v1/sim", { speedMultiplier })
     );
     await this.persistBrowserEnginesIfDemo();
   }
@@ -468,9 +472,32 @@ export class ApiClient {
     fingerprint?: string;
     firmwareVersion?: string;
   }): Promise<void> {
-    this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/sim/timer-action", payload)
-    );
+    let state: FullStateResponse;
+    switch (payload.action) {
+      case "add":
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/timers", {
+          role: payload.role,
+          label: payload.label,
+        });
+        break;
+      case "reset-timers":
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/timers:reset", {});
+        break;
+      case "delete":
+        state = await this.transport.request<FullStateResponse>(
+          "DELETE",
+          `/v1/sim/timers/${payload.timerId ?? 0}`
+        );
+        break;
+      default:
+        state = await this.transport.request<FullStateResponse>(
+          "POST",
+          `/v1/sim/timers/${payload.timerId ?? 0}:action`,
+          payload
+        );
+        break;
+    }
+    this.store.hydrate(state);
     await usbPool.reconcileSimulatedPorts();
   }
 
@@ -479,17 +506,17 @@ export class ApiClient {
   }
 
   public async resetSession(): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/session/reset"));
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/v1/practice:reset", {}));
     await this.persistBrowserEnginesIfDemo();
   }
 
   public async resetPilotsToDefault(): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/pilots/reset"));
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/v1/pilots:reset", {}));
     this.transport.pushHubChannels();
   }
 
   public async resetTrackToDefault(): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/track/reset"));
+    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/v1/track:reset", {}));
   }
 
   public async resetStoredData(): Promise<void> {
@@ -530,7 +557,7 @@ export class ApiClient {
     this.store.resetUiPrefs();
 
     const state = await this.transport
-      .request<FullStateResponse>("POST", "/api/storage/reset")
+      .request<FullStateResponse>("POST", "/v1/storage:reset", {})
       .catch(() => null);
     if (!this.backendMode) {
       // Clear IndexedDB and store the engines' fresh defaults in one transaction.
@@ -553,7 +580,7 @@ export class ApiClient {
   public async restoreDemoData(): Promise<void> {
     this.store.clearActiveHistory();
     const state = await this.transport
-      .request<FullStateResponse>("POST", "/api/storage/demo")
+      .request<FullStateResponse>("POST", "/v1/storage:restoreDemo", {})
       .catch(() => null);
     if (state) {
       this.store.hydrate(state);
@@ -589,13 +616,13 @@ export class ApiClient {
 
     let realData: unknown = null;
     try {
-      realData = await this.transport.request<unknown>("GET", "/api/storage/export");
+      realData = await this.transport.request<unknown>("GET", "/v1/storage");
     } catch {
       // ignore
     }
 
     if (this.backendMode) {
-      await this.transport.request("POST", "/api/storage/backup-recorded", {}).catch(() => undefined);
+      await this.transport.request("POST", "/v1/storage:recordBackup", {}).catch(() => undefined);
     }
 
     const clientPrefs: Record<string, unknown> = {};
@@ -679,7 +706,7 @@ export class ApiClient {
     }
 
     if (bundle.real && typeof bundle.real === "object") {
-      await this.transport.request("POST", "/api/storage/import", bundle.real).catch(() => undefined);
+      await this.transport.request("PUT", "/v1/storage", bundle.real).catch(() => undefined);
     }
 
     await this.persistBrowserEnginesIfDemo();
@@ -712,13 +739,15 @@ export class ApiClient {
   }
 
   public async updatePilotSlot(slot: PilotSlot): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/pilots/update", slot));
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>("PUT", `/v1/pilots/${slot.slotIndex}`, slot)
+    );
     this.transport.pushHubChannels();
   }
 
   public async addPilot(callsign = "", phoneticName = ""): Promise<void> {
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/pilots/add", {
+      await this.transport.request<FullStateResponse>("POST", "/v1/pilots", {
         callsign,
         phoneticName,
       })
@@ -728,13 +757,13 @@ export class ApiClient {
 
   public async removePilot(slotIndex: number): Promise<void> {
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/pilots/remove", { slotIndex })
+      await this.transport.request<FullStateResponse>("DELETE", `/v1/pilots/${slotIndex}`)
     );
     this.transport.pushHubChannels();
   }
 
   public async downloadPilotsRosterCsv(fallbackName = "slaprf-pilots.csv"): Promise<string> {
-    const url = "/api/pilots/export.csv";
+    const url = "/v1/pilots/export.csv";
     const csvText = this.transport.requestText
       ? await this.transport.requestText("GET", url)
       : await fetch(url).then(async (r) => {
@@ -760,7 +789,7 @@ export class ApiClient {
   }
 
   public async importPilotsRosterCsv(csv: string): Promise<PilotCSVImportSummary> {
-    const res = await this.transport.request<FullStateResponse>("POST", "/api/pilots/import", { csv });
+    const res = await this.transport.request<FullStateResponse>("POST", "/v1/pilots:import", { csv });
     this.store.hydrate(res);
     this.transport.pushHubChannels();
     return (
@@ -773,8 +802,21 @@ export class ApiClient {
   }
 
   public async setOperatingMode(mode: OperatingMode): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/race/mode", { mode }));
+    this.store.hydrate(await this.transport.request<FullStateResponse>("PUT", "/v1/timing/mode", { mode }));
     this.transport.pushHubChannels();
+  }
+
+  private resolveTargetRaceSessionId(explicitRaceId?: string): string {
+    return (explicitRaceId || this.viewingRaceId || this.store.raceState.raceId || "current").trim() || "current";
+  }
+
+  private resolveTargetPracticeSessionId(explicitSessionId?: string): string {
+    return (
+      explicitSessionId ||
+      this.store.practiceState.selectedSessionId ||
+      this.store.practiceState.activeSessionId ||
+      "current"
+    ).trim() || "current";
   }
 
   public async configureRace(
@@ -784,9 +826,9 @@ export class ApiClient {
     raceId?: string
   ): Promise<void> {
     const targetRaceId = (raceId || this.viewingRaceId || "").trim();
+    const sid = encodeURIComponent(targetRaceId || "current");
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/race/setup", {
-        ...(targetRaceId ? { raceId: targetRaceId } : {}),
+      await this.transport.request<FullStateResponse>("PUT", `/v1/race/sessions/${sid}/config`, {
         config,
         generate,
         applyToExisting,
@@ -796,7 +838,10 @@ export class ApiClient {
   }
 
   public async advanceRaceStage2(): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/race/advance-stage", {}));
+    const sid = encodeURIComponent(this.resolveTargetRaceSessionId());
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>("POST", `/v1/race/sessions/${sid}/stages/current:advance`, {})
+    );
     this.transport.pushHubChannels();
   }
 
@@ -807,11 +852,11 @@ export class ApiClient {
     preemptOngoing = false
   ): Promise<void> {
     const targetRaceId = (raceId || this.viewingRaceId || "").trim();
+    const sid = encodeURIComponent(targetRaceId || "current");
+    const hid = encodeURIComponent(heatId.trim() || "current");
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/race/control", {
-        ...(targetRaceId ? { raceId: targetRaceId } : {}),
+      await this.transport.request<FullStateResponse>("POST", `/v1/race/sessions/${sid}/heats/${hid}:control`, {
         action,
-        heatId,
         ...(preemptOngoing ? { preemptOngoing: true } : {}),
       })
     );
@@ -820,31 +865,123 @@ export class ApiClient {
 
   public async raceMarshal(payload: RaceMarshalPayload): Promise<void> {
     const targetRaceId = (payload.raceId || this.viewingRaceId || "").trim();
-    const effectivePayload =
-      targetRaceId && !payload.raceId ? { ...payload, raceId: targetRaceId } : payload;
+    const sid = encodeURIComponent(targetRaceId || "current");
+    const hid = encodeURIComponent((payload.heatId || "").trim() || "current");
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/race/marshal", effectivePayload)
+      await this.transport.request<FullStateResponse>(
+        "POST",
+        `/v1/race/sessions/${sid}/heats/${hid}/pilots/${payload.pilotSlotIndex}:marshal`,
+        payload
+      )
     );
     this.transport.pushHubChannels();
   }
 
   public async eventAction(payload: EventActionPayload): Promise<void> {
-    const perRaceScoped =
-      payload.action === "update_attendance" ||
-      payload.action === "check_in_all" ||
-      payload.action === "add_event_pilot" ||
-      payload.action === "add_race_pilot" ||
-      payload.action === "race_lifecycle" ||
-      payload.action === "stage_control" ||
-      payload.action === "set_race_tags" ||
-      payload.action === "rename_race";
-    const effectivePayload =
-      perRaceScoped && !payload.raceId && this.viewingRaceId
-        ? { ...payload, raceId: this.viewingRaceId }
-        : payload;
-    this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/events/action", effectivePayload)
-    );
+    const targetRaceId = (payload.raceId || this.viewingRaceId || "").trim();
+    const sid = encodeURIComponent(targetRaceId || "current");
+    let state: FullStateResponse;
+
+    switch (payload.action) {
+      case "create_race":
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/race/sessions", {
+          name: payload.name,
+          tags: payload.tags,
+          copyConfig: payload.copyConfig,
+          dontSelect: payload.dontSelect,
+        });
+        break;
+      case "delete_race":
+        state = await this.transport.request<FullStateResponse>(
+          "DELETE",
+          `/v1/race/sessions/${encodeURIComponent((payload.raceId || "").trim() || "current")}`
+        );
+        break;
+      case "select_race":
+        state = await this.transport.request<FullStateResponse>(
+          "PATCH",
+          `/v1/race/sessions/${encodeURIComponent((payload.raceId || "").trim() || "current")}`,
+          { selected: true }
+        );
+        break;
+      case "rename_race":
+        state = await this.transport.request<FullStateResponse>("PATCH", `/v1/race/sessions/${sid}`, {
+          name: payload.name ?? "",
+        });
+        break;
+      case "set_race_tags":
+        state = await this.transport.request<FullStateResponse>("PATCH", `/v1/race/sessions/${sid}`, {
+          tags: payload.tags ?? [],
+        });
+        break;
+      case "race_lifecycle": {
+        const verbMap: Record<string, string> = {
+          start_race: "start",
+          pause_race: "pause",
+          resume_race: "resume",
+          stop_race: "stop",
+          emergency_stop: "stop",
+          complete_race: "complete",
+          scrap_race: "scrap",
+          reopen_race: "reopen",
+        };
+        const verb = verbMap[payload.lifecycleAction || ""] || (payload.lifecycleAction || "start").replace(/_race$/, "");
+        state = await this.transport.request<FullStateResponse>("POST", `/v1/race/sessions/${sid}:${verb}`, {
+          reason: payload.reason,
+          preemptOngoing: payload.preemptOngoing,
+        });
+        break;
+      }
+      case "add_event_pilot":
+      case "add_race_pilot":
+        state = await this.transport.request<FullStateResponse>(
+          "POST",
+          `/v1/race/sessions/${sid}/pilots`,
+          {
+            slotIndex: payload.slotIndex,
+            callsign: payload.callsign,
+            phoneticName: payload.phoneticName,
+          }
+        );
+        break;
+      case "check_in_all":
+        state = await this.transport.request<FullStateResponse>(
+          "POST",
+          `/v1/race/sessions/${sid}/pilots:checkInAll`,
+          {}
+        );
+        break;
+      case "update_attendance":
+        state = await this.transport.request<FullStateResponse>(
+          "PATCH",
+          `/v1/race/sessions/${sid}/pilots/${payload.slotIndex ?? 0}`,
+          {
+            checkedIn: payload.checkedIn,
+            attendance: payload.attendance,
+            pilotNote: payload.pilotNote,
+          }
+        );
+        break;
+      case "stage_control": {
+        const stageRef =
+          payload.stageIndex && payload.stageIndex > 0
+            ? String(payload.stageIndex)
+            : (payload.stageId || "current").trim() || "current";
+        state = await this.transport.request<FullStateResponse>(
+          "POST",
+          `/v1/race/sessions/${sid}/stages/${encodeURIComponent(stageRef)}:control`,
+          {
+            stageAction: payload.stageAction,
+            stageId: payload.stageId,
+          }
+        );
+        break;
+      }
+      default:
+        throw new Error(`Unsupported race session action: ${String(payload.action)}`);
+    }
+
+    this.store.hydrate(state);
     this.transport.pushHubChannels();
   }
 
@@ -864,16 +1001,116 @@ export class ApiClient {
   }
 
   public async practiceAction(payload: PracticeActionPayload): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/practice/action", payload));
+    const sid = encodeURIComponent(this.resolveTargetPracticeSessionId(payload.sessionId));
+    let state: FullStateResponse;
+
+    switch (payload.action) {
+      case "create_session":
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/practice/sessions", {
+          name: payload.name,
+          tags: payload.tags,
+          dontSelect: payload.dontSelect,
+        });
+        break;
+      case "delete_session":
+        state = await this.transport.request<FullStateResponse>(
+          "DELETE",
+          `/v1/practice/sessions/${encodeURIComponent((payload.sessionId || "").trim() || "current")}`
+        );
+        break;
+      case "select_session":
+        state = await this.transport.request<FullStateResponse>(
+          "PATCH",
+          `/v1/practice/sessions/${encodeURIComponent((payload.sessionId || "").trim() || "current")}`,
+          { selected: true }
+        );
+        break;
+      case "rename_session":
+        state = await this.transport.request<FullStateResponse>("PATCH", `/v1/practice/sessions/${sid}`, {
+          name: payload.name ?? "",
+        });
+        break;
+      case "set_session_tags":
+        state = await this.transport.request<FullStateResponse>("PATCH", `/v1/practice/sessions/${sid}`, {
+          tags: payload.tags ?? [],
+        });
+        break;
+      case "start_session":
+        state = await this.transport.request<FullStateResponse>("POST", `/v1/practice/sessions/${sid}:start`, {
+          preemptOngoing: payload.preemptOngoing,
+        });
+        break;
+      case "resume_session":
+        state = await this.transport.request<FullStateResponse>("POST", `/v1/practice/sessions/${sid}:resume`, {
+          preemptOngoing: payload.preemptOngoing,
+        });
+        break;
+      case "pause_session":
+        state = await this.transport.request<FullStateResponse>("POST", `/v1/practice/sessions/${sid}:pause`, {});
+        break;
+      case "stop_session":
+        state = await this.transport.request<FullStateResponse>("POST", `/v1/practice/sessions/${sid}:stop`, {});
+        break;
+      case "add_session_pilot":
+        state = await this.transport.request<FullStateResponse>(
+          "POST",
+          `/v1/practice/sessions/${sid}/pilots`,
+          {
+            slotIndex: payload.slotIndex,
+            callsign: payload.callsign,
+            phoneticName: payload.phoneticName,
+            band: payload.band,
+            channel: payload.channel,
+          }
+        );
+        break;
+      case "set_session_pilot_channel":
+        state = await this.transport.request<FullStateResponse>(
+          "PUT",
+          `/v1/practice/sessions/${sid}/pilots/${payload.slotIndex ?? 0}`,
+          {
+            band: payload.band,
+            channel: payload.channel ?? 0,
+          }
+        );
+        break;
+      case "remove_session_pilot":
+        state = await this.transport.request<FullStateResponse>(
+          "DELETE",
+          `/v1/practice/sessions/${sid}/pilots/${payload.slotIndex ?? 0}`
+        );
+        break;
+      case "clear_session_laps":
+        state = await this.transport.request<FullStateResponse>(
+          "POST",
+          `/v1/practice/sessions/${sid}:clearLaps`,
+          {}
+        );
+        break;
+      case "toggle_session_lap":
+        state = await this.transport.request<FullStateResponse>(
+          "POST",
+          `/v1/practice/sessions/${sid}/laps/${payload.lapId ?? 0}:toggle`,
+          {}
+        );
+        break;
+      default:
+        throw new Error(`Unsupported practice session action: ${String(payload.action)}`);
+    }
+
+    this.store.hydrate(state);
     this.transport.pushHubChannels();
   }
 
   public async bracketEdit(payload: BracketEditPayload): Promise<RaceTournamentState> {
     const targetRaceId = (payload.raceId || this.viewingRaceId || "").trim();
-    const effectivePayload =
-      targetRaceId && !payload.raceId ? { ...payload, raceId: targetRaceId } : payload;
+    const sid = encodeURIComponent(targetRaceId || "current");
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/race/bracket-edit", effectivePayload)
+      await this.transport.request<FullStateResponse>(
+        "POST",
+        `/v1/race/sessions/${sid}/bracket:edit`,
+        payload
+      )
     );
     this.transport.pushHubChannels();
     return this.resolveRaceFromStore(targetRaceId);
@@ -885,10 +1122,13 @@ export class ApiClient {
     fallbackName = "slaprf-qualifier-results.csv"
   ): Promise<string> {
     const params = new URLSearchParams();
-    if (raceId) params.set("raceId", raceId);
     if (stageIndex > 0) params.set("stageIndex", String(stageIndex));
     const qs = params.toString();
-    const url = `/api/races/export.csv${qs ? `?${qs}` : ""}`;
+    const cleanRaceId = raceId.trim();
+    const basePath = cleanRaceId
+      ? `/v1/race/sessions/${encodeURIComponent(cleanRaceId)}/standings.csv`
+      : "/v1/race/standings.csv";
+    const url = `${basePath}${qs ? `?${qs}` : ""}`;
     const csvText = this.transport.requestText
       ? await this.transport.requestText("GET", url)
       : await fetch(url).then(async (r) => {
@@ -914,12 +1154,14 @@ export class ApiClient {
   }
 
   public async tickRaceClock(): Promise<void> {
-    const snap = await this.transport.request<RaceTournamentState>("POST", "/api/race/tick", {});
+    const snap = await this.transport.request<RaceTournamentState>("GET", "/v1/race/clock");
     this.store.ingestRace(snap, null, null);
   }
 
   public async updateTrackNode(update: GateUpdate): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/track/update", update));
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>("PUT", `/v1/track/gates/${update.gateId}`, update)
+    );
   }
 
   public async updateGate(update: GateUpdate): Promise<void> {
@@ -928,7 +1170,7 @@ export class ApiClient {
 
   public async addTrackNode(name = "", assignedTimerId = 0, trackOrder?: number): Promise<void> {
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/track/add", {
+      await this.transport.request<FullStateResponse>("POST", "/v1/track/gates", {
         name,
         assignedTimerId,
         ...(trackOrder !== undefined ? { trackOrder } : {}),
@@ -941,7 +1183,7 @@ export class ApiClient {
   }
 
   public async removeTrackNode(nodeId: number): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/track/remove", { gateId: nodeId }));
+    this.store.hydrate(await this.transport.request<FullStateResponse>("DELETE", `/v1/track/gates/${nodeId}`));
   }
 
   public async removeGate(nodeId: number): Promise<void> {
@@ -950,7 +1192,7 @@ export class ApiClient {
 
   public async updateTimerColor(timerId: number, color: string): Promise<void> {
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/timers/color", { timerId, color })
+      await this.transport.request<FullStateResponse>("PATCH", `/v1/timers/${timerId}`, { color })
     );
   }
 
@@ -963,7 +1205,7 @@ export class ApiClient {
       }
     }
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/timers/delete", { timerId })
+      await this.transport.request<FullStateResponse>("DELETE", `/v1/timers/${timerId}`)
     );
     await this.persistBrowserEnginesIfDemo();
   }
@@ -975,7 +1217,7 @@ export class ApiClient {
     fingerprint = ""
   ): Promise<void> {
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/timers/provision", {
+      await this.transport.request<FullStateResponse>("POST", "/v1/timers", {
         role,
         timerLabel,
         fingerprint,
@@ -1016,7 +1258,7 @@ export class ApiClient {
    */
   public async getRealEngineState(): Promise<FullStateResponse | null> {
     try {
-      return await this.transport.request<FullStateResponse>("GET", "/api/state");
+      return await this.transport.request<FullStateResponse>("GET", "/v1/state");
     } catch {
       return null;
     }
@@ -1024,14 +1266,16 @@ export class ApiClient {
 
   /** Per-gate, per-pilot enter thresholds (all applied, or none if any is invalid). */
   public async setGateThresholds(updates: GateThresholdUpdate[]): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/api/thresholds", updates));
+    this.store.hydrate(await this.transport.request<FullStateResponse>("PUT", "/v1/track/thresholds", updates));
   }
 
   /** One gate's timing-rule overrides across all pilots; an empty object clears them. */
   public async setGateRules(nodeId: number, overrides: GateRuleOverrides): Promise<void> {
-    this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/gates/rules", { gateId: nodeId, overrides })
-    );
+    const state =
+      Object.keys(overrides).length === 0
+        ? await this.transport.request<FullStateResponse>("POST", `/v1/track/gates/${nodeId}/rules:reset`, {})
+        : await this.transport.request<FullStateResponse>("PUT", `/v1/track/gates/${nodeId}/rules`, overrides);
+    this.store.hydrate(state);
   }
 
   /** One pilot's timing-rule overrides at one gate (Tier 3); an empty object clears them. */
@@ -1040,23 +1284,29 @@ export class ApiClient {
     slotIndex: number,
     overrides: GateRuleOverrides
   ): Promise<void> {
-    this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/gates/rules", {
-        gateId: nodeId,
-        slotIndex,
-        overrides,
-      })
-    );
+    const state =
+      Object.keys(overrides).length === 0
+        ? await this.transport.request<FullStateResponse>(
+            "POST",
+            `/v1/track/gates/${nodeId}/pilots/${slotIndex}/rules:reset`,
+            {}
+          )
+        : await this.transport.request<FullStateResponse>(
+            "PUT",
+            `/v1/track/gates/${nodeId}/pilots/${slotIndex}/rules`,
+            overrides
+          );
+    this.store.hydrate(state);
   }
 
   /** Saves timing guardrails; the server clamps values and returns what it applied. */
   public async updateRules(rules: TimingRules): Promise<void> {
-    this.store.applyRules(await this.transport.request<TimingRules>("POST", "/api/rules", rules));
+    this.store.applyRules(await this.transport.request<TimingRules>("PUT", "/v1/timing/rules", rules));
   }
 
   /** Retrieves the WASM engine's build version info (release tag, commit_hash, branch_name). */
   public async getVersionInfo(): Promise<{ release_tag: string; commit_hash: string; branch_name: string }> {
-    return await this.transport.request<{ release_tag: string; commit_hash: string; branch_name: string }>("GET", "/api/version");
+    return await this.transport.request<{ release_tag: string; commit_hash: string; branch_name: string }>("GET", "/v1/version");
   }
 
   /** Switches the active engine between SlapRF USB ("slaprf"), SlapRF Bluetooth ("slaprf_ble"), LapRF 8-Way ("laprf"), and RotorHazard ("rotorhazard" / "rotorhazard_usb"). */
@@ -1066,7 +1316,7 @@ export class ApiClient {
       await usbPool.disconnectSimulatedPorts();
     }
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/hardware/mode", { mode })
+      await this.transport.request<FullStateResponse>("PUT", "/v1/hardware/mode", { mode })
     );
     if (isSlapRFMode(mode)) {
       await usbPool.reconcileSimulatedPorts();
@@ -1083,9 +1333,37 @@ export class ApiClient {
     port?: number;
     voltageMv?: number;
   }): Promise<void> {
-    this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/sim/laprf-action", payload)
-    );
+    let state: FullStateResponse;
+    switch (payload.action) {
+      case "add":
+      case "connect-host":
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/laprf/units", payload);
+        break;
+      case "reset":
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/laprf/units:reset", {});
+        break;
+      case "delete":
+        state = await this.transport.request<FullStateResponse>(
+          "DELETE",
+          `/v1/sim/laprf/units/${payload.timerId ?? 0}`
+        );
+        break;
+      case "update":
+        state = await this.transport.request<FullStateResponse>(
+          "PATCH",
+          `/v1/sim/laprf/units/${payload.timerId ?? 0}`,
+          payload
+        );
+        break;
+      default:
+        state = await this.transport.request<FullStateResponse>(
+          "POST",
+          `/v1/sim/laprf/units/${payload.timerId ?? 0}:action`,
+          payload
+        );
+        break;
+    }
+    this.store.hydrate(state);
   }
 
   /** Discovers powered-on simulated LapRF 8-Way timers on the virtual LAN in Simulation Mode. */
@@ -1093,7 +1371,7 @@ export class ApiClient {
     subnet: string;
     devices: Array<{ host: string; port: number; label: string; timerId: number; connected: boolean; voltageMv: number }>;
   }> {
-    return await this.transport.request("GET", "/api/sim/laprf-discover");
+    return await this.transport.request("GET", "/v1/sim/laprf/devices");
   }
 
   /** Mutates simulated RotorHazard timing devices in Simulation Mode. */
@@ -1110,15 +1388,43 @@ export class ApiClient {
     adminUser?: string;
     adminPass?: string;
   }): Promise<void> {
-    this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/sim/rh-action", payload)
-    );
+    let state: FullStateResponse;
+    switch (payload.action) {
+      case "add":
+      case "connect-host":
+      case "connect-port":
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/rh/units", payload);
+        break;
+      case "reset":
+        state = await this.transport.request<FullStateResponse>("POST", "/v1/sim/rh/units:reset", {});
+        break;
+      case "delete":
+        state = await this.transport.request<FullStateResponse>(
+          "DELETE",
+          `/v1/sim/rh/units/${payload.timerId ?? 0}`
+        );
+        break;
+      case "update":
+        state = await this.transport.request<FullStateResponse>(
+          "PATCH",
+          `/v1/sim/rh/units/${payload.timerId ?? 0}`,
+          payload
+        );
+        break;
+      default:
+        state = await this.transport.request<FullStateResponse>(
+          "POST",
+          `/v1/sim/rh/units/${payload.timerId ?? 0}:action`,
+          payload
+        );
+        break;
+    }
+    this.store.hydrate(state);
   }
 
   /** Enables or disables idle RF node streaming on a RotorHazard timer from `#/debug`. */
   public async setRHDebugStream(timerId: number, active: boolean): Promise<void> {
-    await this.transport.request<{ ok: boolean }>("POST", "/api/hardware/rh-debug-stream", {
-      timerId,
+    await this.transport.request<{ ok: boolean }>("PUT", `/v1/rh/sessions/${timerId}/debug-stream`, {
       active,
     });
   }
@@ -1143,7 +1449,12 @@ export class ApiClient {
       values: number[];
     };
   }> {
-    return await this.transport.request("POST", "/api/hardware/rh-scan", payload);
+    return await this.transport.request("POST", `/v1/sim/rh/units/${payload.timerId}:scan`, {
+      mode: payload.mode,
+      start: payload.start,
+      stop: payload.stop,
+      step: payload.step,
+    });
   }
 
   /** Discovers powered-on simulated RotorHazard devices on the virtual LAN or USB bus in Simulation Mode. */
@@ -1163,19 +1474,19 @@ export class ApiClient {
       connected: boolean;
     }>;
   }> {
-    return await this.transport.request("GET", "/api/sim/rh-discover");
+    return await this.transport.request("GET", "/v1/sim/rh/devices");
   }
 
   /** Calls a MultiGP WebService v1.0.4 endpoint against the in-memory Simulated MultiGP server. */
   public async simMultiGPWebService<T = unknown>(subPath: string, body: unknown): Promise<T> {
-    return await this.transport.request<T>("POST", `/api/sim/mgp/${subPath}`, body);
+    return await this.transport.request<T>("POST", `/v1/sim/mgp/${subPath}`, body);
   }
 
   /** Reads or mutates the Simulated MultiGP chapter, API key, races, and ZippyQ queue (`#/sim`). */
   public async simMultiGPAdmin(payload?: SimMultiGPAdminAction): Promise<SimMultiGPState> {
     const next = payload
-      ? await this.transport.request<SimMultiGPState>("POST", "/api/sim/mgp-admin", payload)
-      : await this.transport.request<SimMultiGPState>("GET", "/api/sim/mgp-admin");
+      ? await this.transport.request<SimMultiGPState>("POST", "/v1/sim/mgp-admin:action", payload)
+      : await this.transport.request<SimMultiGPState>("GET", "/v1/sim/mgp-admin");
     await this.pollStatus();
     await this.persistBrowserEnginesIfDemo();
     return next;
@@ -1190,7 +1501,7 @@ export class ApiClient {
     const res = await this.transport.request<{
       createdRace: RaceTournamentState;
       state: FullStateResponse;
-    }>("POST", "/api/mgp-sync/import", { race, importMode, templateId });
+    }>("POST", "/v1/race/sessions:importMultiGP", { race, importMode, templateId });
     this.store.hydrate(res.state);
     await this.persistBrowserEnginesIfDemo();
     return res.createdRace;
@@ -1201,11 +1512,12 @@ export class ApiClient {
     raceId: string,
     rounds: MultiGPScheduleRound[]
   ): Promise<{ addedHeats: number; raceState: RaceTournamentState }> {
+    const sid = encodeURIComponent(raceId.trim() || "current");
     const res = await this.transport.request<{
       addedHeats: number;
       raceState: RaceTournamentState;
       eventState: EventManagerState;
-    }>("POST", "/api/mgp-sync/append-zippyq", { raceId, rounds });
+    }>("POST", `/v1/race/sessions/${sid}/multigp:appendZippyQ`, { rounds });
     this.store.ingestRace(res.raceState, res.eventState, null);
     await this.persistBrowserEnginesIfDemo();
     return { addedHeats: res.addedHeats, raceState: res.raceState };
@@ -1213,10 +1525,12 @@ export class ApiClient {
 
   /** Builds a MultiGP `assignSlot` + `captureOverallRaceResult` sync plan for a linked SlapRF race. */
   public async multiGPBuildSyncPlan(raceId: string, forceAll = false): Promise<MultiGPSyncPlan> {
-    return await this.transport.request<MultiGPSyncPlan>("POST", "/api/mgp-sync/plan", {
-      raceId,
-      forceAll,
-    });
+    const sid = encodeURIComponent(raceId.trim() || "current");
+    const qs = forceAll ? "?forceAll=1" : "";
+    return await this.transport.request<MultiGPSyncPlan>(
+      "GET",
+      `/v1/race/sessions/${sid}/multigp/sync-plan${qs}`
+    );
   }
 
   /** Marks pushed heats (and optionally overall standings) as synced on a linked or newly uploaded SlapRF race. */
@@ -1231,20 +1545,24 @@ export class ApiClient {
       chapterName?: string;
     }
   ): Promise<void> {
+    const sid = encodeURIComponent(raceId.trim() || "current");
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/api/mgp-sync/mark-synced", {
-        raceId,
-        syncedHeatIds,
-        overallSynced,
-        ...(linkMeta ?? {}),
-      })
+      await this.transport.request<FullStateResponse>(
+        "PUT",
+        `/v1/race/sessions/${sid}/multigp/sync-state`,
+        {
+          syncedHeatIds,
+          overallSynced,
+          ...(linkMeta ?? {}),
+        }
+      )
     );
     await this.persistBrowserEnginesIfDemo();
   }
 
   /** Merges chapter pilots from MultiGP into the global SlapRF pilot directory without deleting any existing pilots. */
   public async multiGPImportPilots(pilots: MultiGPRaceEntry[]): Promise<PilotCSVImportSummary> {
-    const resp = await this.transport.request<FullStateResponse>("POST", "/api/mgp-sync/import-pilots", {
+    const resp = await this.transport.request<FullStateResponse>("POST", "/v1/pilots:import", {
       pilots,
     });
     this.store.hydrate(resp);
@@ -1257,10 +1575,10 @@ export class ApiClient {
     if (isServerDisconnectedLockout()) return;
     try {
       // While the real-time WebSocket stream is open on the native Go backend, practice/race/lap
-      // deltas are already pushed immediately over `/api/ws/stream`, so poll `/api/status?lite=1`
+      // deltas are already pushed immediately over `/v1/ws/stream`, so poll `/v1/status?lite=1`
       // (~1 KB instead of re-downloading and re-normalizing hundreds of KB of lap history every 2 s).
       const statusUrl =
-        this.backendMode && this.transport.isStreamConnected?.() ? "/api/status?lite=1" : "/api/status";
+        this.backendMode && this.transport.isStreamConnected?.() ? "/v1/status?lite=1" : "/v1/status";
       const status = await this.transport.request<StatusResponse>("GET", statusUrl);
       this.store.applyStatus(status);
       if (this.backendMode && status.simulatorRunning !== this.simMode) {

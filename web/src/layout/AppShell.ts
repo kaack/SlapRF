@@ -27,10 +27,10 @@ import {
   registerBackendConnectModalOpener,
   subscribeCapabilities,
 } from "../services/capabilities";
-import { sharedLiveTimeRelay } from "../services/livetime_relay";
+import { sharedLapRFEmulatorRelay } from "../services/laprf_emulator_relay";
 import { AppStore } from "../state/store";
-import { LiveView } from "../views/LiveView";
-import { LiveTimeView } from "../views/LiveTimeView";
+import { PracticeView } from "../views/PracticeView";
+import { LapRFEmulatorView } from "../views/LapRFEmulatorView";
 import { PilotView } from "../views/PilotView";
 import { PilotsView } from "../views/PilotsView";
 import { RacesView } from "../views/RacesView";
@@ -121,7 +121,7 @@ export class AppShell extends Component {
         const nextTab = getPracticeTopBarContext().tab;
         if (nextTab === this.lastPracticeTab) return;
         this.lastPracticeTab = nextTab;
-        if (this.activeRouteId === "live") {
+        if (this.activeRouteId === "practice") {
           this.animateActiveView(nextTab === "directory" ? "subpage-out" : "subpage-in");
         }
       })
@@ -151,8 +151,8 @@ export class AppShell extends Component {
       })
     );
     this.onDispose(
-      sharedLiveTimeRelay.subscribe(() => {
-        if (!sharedLiveTimeRelay.snapshot.enabled && this.router.route === "livetime") {
+      sharedLapRFEmulatorRelay.subscribe(() => {
+        if (!sharedLapRFEmulatorRelay.snapshot.enabled && this.router.route === "laprf-emulator") {
           this.router.navigateSection("setup");
         }
       })
@@ -183,14 +183,14 @@ export class AppShell extends Component {
       this.store.timingHardwareMode === "rotorhazard" ||
       this.store.timingHardwareMode === "rotorhazard_usb";
     const caps = capabilitiesSnapshot();
-    const ltOn = caps.portable && !isExternalTimer && sharedLiveTimeRelay.snapshot.enabled;
+    const emulOn = caps.portable && !isExternalTimer && sharedLapRFEmulatorRelay.snapshot.enabled;
     const hideFlasher = isExternalTimer;
 
     const out: RouteId[] = [];
     for (const r of ROUTES) {
       if (r.hiddenFromNav) continue;
       if (r.simOnly && !simOn) continue;
-      if (r.liveTimeOnly && !ltOn) continue;
+      if (r.laprfEmulatorOnly && !emulOn) continue;
       if (r.id === "flasher" && hideFlasher) continue;
       out.push(r.id);
     }
@@ -204,7 +204,7 @@ export class AppShell extends Component {
     const aCtx = getAnalyticsTopBarContext();
     return (
       (route === "races" && rCtx.tab !== "directory") ||
-      (route === "live" && pCtx.tab === "session") ||
+      (route === "practice" && pCtx.tab === "session") ||
       (route === "pilot" && aCtx.mode === "scope")
     );
   }
@@ -783,7 +783,7 @@ export class AppShell extends Component {
       this.router.navigateSection("races");
       return;
     }
-    if (route === "livetime" && !sharedLiveTimeRelay.snapshot.enabled) {
+    if (route === "laprf-emulator" && !sharedLapRFEmulatorRelay.snapshot.enabled) {
       this.router.navigateSection("setup");
       return;
     }
@@ -902,8 +902,8 @@ export class AppShell extends Component {
 
   private createView(route: RouteId, host: HTMLElement): Component {
     switch (route) {
-      case "live":
-        return new LiveView(host, this.store, this.api);
+      case "practice":
+        return new PracticeView(host, this.store, this.api);
       case "races":
         return new RacesView(host, this.store, this.api, this.announcer);
       case "pilot":
@@ -912,8 +912,8 @@ export class AppShell extends Component {
         return new PilotsView(host, this.store, this.api);
       case "track":
         return new TrackView(host, this.store, this.api);
-      case "livetime":
-        return new LiveTimeView(host, this.store);
+      case "laprf-emulator":
+        return new LapRFEmulatorView(host, this.store);
       case "sim":
         return new SimView(host, this.store, this.api);
       case "network":

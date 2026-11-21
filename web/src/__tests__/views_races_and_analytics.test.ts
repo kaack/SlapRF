@@ -1,7 +1,7 @@
 import { dispatchRacesTopBarCommand, Router, setAnalyticsScope } from "../core/router";
 import { TopBar } from "../layout/TopBar";
 import { Announcer } from "../services/announcer";
-import { LiveView } from "../views/LiveView";
+import { PracticeView } from "../views/PracticeView";
 import { focusAnalyticsPilotForScope, PilotView } from "../views/PilotView";
 import {
   computeBinPackedControlLayout,
@@ -642,9 +642,9 @@ describe("views/RacesView — Directory, Per-Canvas Lock State & Race Control Hi
   });
 });
 
-describe("views/LiveView, PilotView & TopBar Integration", () => {
-  it("prompts to pause an ongoing race when starting a Practice session in LiveView, then dispatches practiceAction on confirm", async () => {
-    window.history.replaceState(null, "", "/#/live");
+describe("views/PracticeView, PilotView & TopBar Integration", () => {
+  it("prompts to pause an ongoing race when starting a Practice session in PracticeView, then dispatches practiceAction on confirm", async () => {
+    window.history.replaceState(null, "", "/#/practice");
     const activeRace = buildTwoStageConfiguredRace({
       raceId: "race-live",
       lifecycle: "active",
@@ -671,7 +671,7 @@ describe("views/LiveView, PilotView & TopBar Integration", () => {
     });
     const { api, calls } = makeMockApiClient(store);
     const root = mountHtml(`<div id="live-host"></div>`);
-    const view = new LiveView(root.querySelector("#live-host")!, store, api);
+    const view = new PracticeView(root.querySelector("#live-host")!, store, api);
 
     try {
       expect(root.textContent).toContain("Morning Warmup");
@@ -1368,7 +1368,7 @@ describe("views/LiveView, PilotView & TopBar Integration", () => {
     try {
       expect(root.querySelector<HTMLElement>("[data-race-clock]")?.textContent).toBe("00:05.0");
 
-      // Advance 1.6s of wall time with zero telemetry packets and zero /api/status polls
+      // Advance 1.6s of wall time with zero telemetry packets and zero /v1/status polls
       fakePerfMs += 1_600;
       (view as unknown as { updateLiveClockDom: () => void }).updateLiveClockDom();
       expect(root.querySelector<HTMLElement>("[data-race-clock]")?.textContent).toBe("00:03.4");
@@ -1853,7 +1853,7 @@ function storeSnapshotFrom(store: ReturnType<typeof makeStore>) {
     rules: store.rules,
     simulatorRunning: store.simulatorRunning,
     raceArmed: store.raceArmed,
-    liveTimeStatus: store.liveTimeStatus,
+    laprfEmulatorStatus: store.laprfEmulator,
     raceState: store.raceState,
     eventState: store.eventState,
     practiceState: store.practiceState,

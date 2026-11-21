@@ -12,7 +12,7 @@ import {
   FullStateResponse,
   GateCrossingEvent,
   LapRecord,
-  LiveTimeStatus,
+  LapRFEmulatorStatus,
   OperatingMode,
   PilotSlot,
   PilotTrackSummary,
@@ -31,7 +31,7 @@ import {
   TimingRules,
   TrackNode,
 } from "../types/models";
-import { sharedLiveTimeRelay } from "../services/livetime_relay";
+import { sharedLapRFEmulatorRelay } from "../services/laprf_emulator_relay";
 
 /**
  * Change topics. Components subscribe only to what they render so that, for
@@ -332,7 +332,7 @@ export class AppStore {
   private _raceState: RaceTournamentState = DEFAULT_RACE_STATE;
   private _eventState: EventManagerState = DEFAULT_EVENT_STATE;
   private _practiceState: PracticeManagerState = DEFAULT_PRACTICE_STATE;
-  private _liveTime: LiveTimeStatus = {
+  private _laprfEmulator: LapRFEmulatorStatus = {
     connectedClients: 0,
     detectionsSent: 0,
     statusFramesSent: 0,
@@ -1285,8 +1285,8 @@ export class AppStore {
     const id = this._raceState?.activeHeatId || this._raceState?.nextReadyHeatId;
     return heats.find((h) => h.id === id) ?? heats[0];
   }
-  public get liveTime(): LiveTimeStatus {
-    return this._liveTime;
+  public get laprfEmulator(): LapRFEmulatorStatus {
+    return this._laprfEmulator;
   }
   /** Most recent engine timestamp seen on the telemetry stream. */
   public get latestTimestampUs(): number {
@@ -1450,12 +1450,12 @@ export class AppStore {
     this._summaries = state.summaries ?? [];
     this._rules = normalizeTimingRules(state.rules);
     this._timingHardwareMode = normalizeTimingHardwareMode(state.timingHardwareMode);
-    sharedLiveTimeRelay.setSuppressed(this._timingHardwareMode === "laprf");
+    sharedLapRFEmulatorRelay.setSuppressed(this._timingHardwareMode === "laprf");
     this._simulatorRunning = state.simulatorRunning;
     this._simState = state.simState ?? null;
     this._simMultiGP = state.simMultiGP ?? null;
     this._raceArmed = state.raceArmed;
-    this._liveTime = state.liveTimeStatus;
+    this._laprfEmulator = state.laprfEmulatorStatus;
     if (state.raceState) {
       this._raceState = normalizeRaceState(state.raceState);
     }
@@ -1510,7 +1510,7 @@ export class AppStore {
       const nextHw: TimingHardwareMode = normalizeTimingHardwareMode(status.timingHardwareMode);
       if (nextHw !== this._timingHardwareMode) {
         this._timingHardwareMode = nextHw;
-        sharedLiveTimeRelay.setSuppressed(nextHw === "laprf");
+        sharedLapRFEmulatorRelay.setSuppressed(nextHw === "laprf");
       }
     }
     this._simulatorRunning = status.simulatorRunning;
@@ -1525,7 +1525,7 @@ export class AppStore {
       this._simMultiGP = null;
     }
     this._raceArmed = status.raceArmed;
-    this._liveTime = status.liveTimeStatus;
+    this._laprfEmulator = status.laprfEmulatorStatus;
     const hadRace = status.raceState !== undefined || status.eventState !== undefined;
     const hadPractice = status.practiceState !== undefined;
     if (status.raceState) {

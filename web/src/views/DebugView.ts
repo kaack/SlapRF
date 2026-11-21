@@ -5321,7 +5321,7 @@ export class DebugView extends Component {
         }
       }
 
-      // 2. Real timers from the in-browser real-world engine (/api/state via WASM)
+      // 2. Real timers from the in-browser real-world engine (/v1/state via WASM)
       for (const dt of realServerTimers) {
         if (!dt.isHub && dt.timerId >= 2 && dt.timerId <= 7) {
           const fp = (dt.fingerprint || "").toUpperCase();

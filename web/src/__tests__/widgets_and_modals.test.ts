@@ -355,15 +355,15 @@ describe("widgets/Toast & TimingRulesEditor", () => {
   it("strips WASM/HTTP transport error prefixes, deduplicates identical toasts, and notifies newly invalid wires", () => {
     expect(
       cleanConnectionInvalidReason(
-        "Error: WASM POST /api/race/bracket-edit failed (400): Started round: cycle detected in stage graph"
+        "Error: WASM POST /v1/race/sessions/current/bracket:edit failed (400): Started round: cycle detected in stage graph"
       )
     ).toBe("Cycle detected in stage graph");
     expect(cleanConnectionInvalidReason("HTTP 422: duplicate connection")).toBe(
       "Duplicate connection"
     );
 
-    showToast("WASM POST /api/test failed (400): seats full", "error", { title: "Invalid Link" });
-    showToast("WASM POST /api/test failed (400): seats full", "error", { title: "Invalid Link" });
+    showToast("WASM POST /v1/test failed (400): seats full", "error", { title: "Invalid Link" });
+    showToast("WASM POST /v1/test failed (400): seats full", "error", { title: "Invalid Link" });
 
     const toasts = document.querySelectorAll<HTMLElement>(".slaprf-toast");
     expect(toasts).toHaveLength(1);
@@ -900,7 +900,7 @@ describe("widgets/BracketDiagram & FormatDiagram", () => {
         rules: store.rules,
         simulatorRunning: store.simulatorRunning,
         raceArmed: store.raceArmed,
-        liveTimeStatus: store.liveTimeStatus,
+        laprfEmulatorStatus: store.laprfEmulator,
         raceState: rTrace,
         eventState: { initialized: true, activeRaceId: "race-scroll", races: [rTrace] },
         practiceState: store.practiceState,
@@ -925,7 +925,7 @@ describe("widgets/BracketDiagram & FormatDiagram", () => {
         rules: store.rules,
         simulatorRunning: store.simulatorRunning,
         raceArmed: store.raceArmed,
-        liveTimeStatus: store.liveTimeStatus,
+        laprfEmulatorStatus: store.laprfEmulator,
         raceState: rEdited,
         eventState: { initialized: true, activeRaceId: "race-scroll", races: [rEdited] },
         practiceState: store.practiceState,

@@ -2,10 +2,10 @@
  * MultiGP WebService (`v1.0.4`) client for SlapRF.
  *
  * - When `store.simulatorRunning === true` (both Hosted Browser & SlapRF Portable):
- *   routes all MultiGP WebService calls to the in-memory `SimBackend` (`/api/sim/mgp/*`),
+ *   routes all MultiGP WebService calls to the in-memory `SimBackend` (`/v1/sim/mgp/*`),
  *   keeping simulated credentials isolated from real chapter credentials.
  * - When `store.simulatorRunning === false` in SlapRF Portable:
- *   routes calls through the local Go reverse proxy (`/api/mgp/*`) to
+ *   routes calls through the local Go reverse proxy (`/v1/race/multigp/proxy/*`) to
  *   `https://www.multigp.com/mgp/multigpwebservice/*`.
  */
 
@@ -245,7 +245,7 @@ export class MultiGPService {
       openBackendConnectModal("real-hardware");
       throw new Error("Connect to a SlapRF Server to sync with live MultiGP chapters (or enable Simulation active).");
     }
-    const resp = await fetch(resolveBackendUrl(`/api/mgp/${subPath}`), {
+    const resp = await fetch(resolveBackendUrl(`/v1/race/multigp/proxy/${subPath}`), {
       method: "POST",
       headers: {
         "Content-Type": "application/json",

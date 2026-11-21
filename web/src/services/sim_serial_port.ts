@@ -210,10 +210,10 @@ function syncDiagStateToWasm(
     return;
   }
   if (capabilitiesSnapshot().portable) {
-    void fetch(resolveBackendUrl("/api/sim/timer-diag"), {
-      method: "POST",
+    void fetch(resolveBackendUrl(`/v1/sim/timers/${encodeURIComponent(String(timerId))}`), {
+      method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ timerId, rfEnabled, emergencyMode, scanLive, chanMask }),
+      body: JSON.stringify({ rfEnabled, emergencyMode, scanLive, chanMask }),
     }).catch(() => undefined);
   }
 }
@@ -224,8 +224,8 @@ export async function notifySimHubUsbConnected(connected: boolean): Promise<void
     return;
   }
   if (!capabilitiesSnapshot().portable) return;
-  await fetch(resolveBackendUrl("/api/sim/hub-usb"), {
-    method: "POST",
+  await fetch(resolveBackendUrl("/v1/sim/hub-usb"), {
+    method: "PUT",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ connected }),
   }).catch(() => undefined);
@@ -238,7 +238,7 @@ function flushSimHubHellosToPort(port: SimulatedSerialPort): void {
     return;
   }
   if (capabilitiesSnapshot().portable && !window.slaprfWasm) {
-    void fetch(resolveBackendUrl("/api/sim/usb-hellos"), { method: "POST" })
+    void fetch(resolveBackendUrl("/v1/sim/usb-hellos"), { method: "GET" })
       .then((r) => (r.ok ? r.arrayBuffer() : null))
       .then((buf) => {
         if (buf && buf.byteLength > 0) {
@@ -1441,7 +1441,7 @@ interface BackendPortsResponse {
 
 /**
  * Opens the unified in-app serial port picker modal for both Simulation mode and Real hardware mode
- * (powered natively by Go `/api/usb/ports` in Real mode — zero browser WebSerial).
+ * (powered natively by Go `/v1/usb/ports` in Real mode, with zero browser WebSerial).
  */
 export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<SerialPortLike> {
   if (activePickerCancel) {
@@ -1498,10 +1498,10 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
 
     try {
       const endpoint = isBleMode
-        ? "/api/usb/ports?transport=ble"
+        ? "/v1/usb/ports?transport=ble"
         : opts.transport === "usb"
-          ? `/api/usb/ports?transport=usb&all=${showAllRealPorts ? "1" : "0"}`
-          : `/api/usb/ports?all=${showAllRealPorts ? "1" : "0"}`;
+          ? `/v1/usb/ports?transport=usb&all=${showAllRealPorts ? "1" : "0"}`
+          : `/v1/usb/ports?all=${showAllRealPorts ? "1" : "0"}`;
       const res = await fetch(resolveBackendUrl(endpoint), { cache: "no-store" });
       if (!res.ok) return [];
       const data = (await res.json()) as BackendPortsResponse;

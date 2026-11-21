@@ -1,6 +1,6 @@
 ---
 title: Troubleshooting
-weight: 2
+weight: 3
 ---
 
 Quick diagnostics and fixes for USB flashing, wireless connectivity, power supplies, and gate detection.

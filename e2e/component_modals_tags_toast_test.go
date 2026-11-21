@@ -13,7 +13,7 @@ import (
 
 func TestComponent_TagPillEditorAddSelectNavigateRemoveCommitAndCancel(t *testing.T) {
 	h := NewHarness(t)
-	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live", nil)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice", nil)
 
 	editBtn := h.Page.Locator(`button[data-practice-act="edit-session-tags"][data-session-id="session-1"]`).First()
 	h.MustBeVisible(editBtn, "Edit session tags button on Evening Lap Lab")
@@ -74,7 +74,7 @@ func TestComponent_TagPillEditorAddSelectNavigateRemoveCommitAndCancel(t *testin
 		}
 	}
 	if !foundLeagueTag {
-		t.Fatalf("expected /api/state session-1 tags to contain League after TagPillEditor commit")
+		t.Fatalf("expected /v1/state session-1 tags to contain League after TagPillEditor commit")
 	}
 	h.MilestoneScreenshot("tag-pill-editor-committed")
 
@@ -98,7 +98,7 @@ func TestComponent_TagPillEditorAddSelectNavigateRemoveCommitAndCancel(t *testin
 
 func TestComponent_ConfirmModalCancelEscapeBackdropAndDangerConfirm(t *testing.T) {
 	h := NewHarness(t)
-	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live", nil)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice", nil)
 
 	menuBtn := h.Page.Locator(`button[data-practice-act="toggle-dir-session-menu"][data-session-id="session-2"]`).First()
 	h.MustBeVisible(menuBtn, "Warmup Pack actions menu button")
@@ -284,14 +284,14 @@ func TestComponent_CanvasSelectPopoverSearchAndSelection(t *testing.T) {
 		}
 	}
 	if !foundHarvardInAPI {
-		t.Fatalf("expected /api/state EventState heat %s seat %s to have Callsign=Harvard", heatID, seatIdx)
+		t.Fatalf("expected /v1/state EventState heat %s seat %s to have Callsign=Harvard", heatID, seatIdx)
 	}
 	h.MilestoneScreenshot("canvas-select-harvard-assigned")
 }
 
 func TestComponent_UsbPortPickerDialogSelectAndCancel(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/live")
+	h.BootClean("#/practice")
 
 	usbBtn := h.Page.Locator(`button[data-action="usb-toggle"]`).First()
 	h.MustBeVisible(usbBtn, "TopBar USB Connect button")

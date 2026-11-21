@@ -67,7 +67,7 @@ function fastestSessionLap(session: PracticeSession): { sec: number; callsign: s
 }
 
 /**
- * Practice view (`#/live` directory & `#/live/session` active session workspace):
+ * Practice view (`#/practice` directory & `#/practice/<session>` active session workspace):
  * 1. Directory view: 2-column `.settings-section` matching `Races`, with inline `+ Session`
  *    row creation, inline session name & comma-separated tag editing, tag filter pills,
  *    `Live` / `Stopped` status badges, and Open / Start-Stop / Delete icon actions.
@@ -75,7 +75,7 @@ function fastestSessionLap(session: PracticeSession): { sec: number; callsign: s
  *    `+ Add pilot` popover right in `.picker-row`, `Start / Stop` session control, and
  *    live standings / lap progression / section splits / per-pilot RSSI stream.
  */
-export class LiveView extends Component {
+export class PracticeView extends Component {
   private readonly store: AppStore;
   private readonly workspaceStore: AppStore;
   private readonly api: ApiClient;
@@ -151,7 +151,8 @@ export class LiveView extends Component {
     this.workspaceStore = store.forPracticeWorkspace();
     this.api = api;
 
-    this.pendingRouteTarget = getCurrentParsedHash().live ?? { tab: "directory" };
+    const curHash = getCurrentParsedHash();
+    this.pendingRouteTarget = curHash.practice ?? curHash.live ?? { tab: "directory" };
     this.activeTab = "directory";
     try {
       this.dismissedOngoingRaceId =
@@ -460,7 +461,7 @@ export class LiveView extends Component {
       });
     }
 
-    if (getCurrentParsedHash().route !== "live") return;
+    if (getCurrentParsedHash().route !== "practice") return;
     if (!this.store.hasHydrated && this.pendingRouteTarget) return;
     const sessSlug = sess
       ? slugifyPracticeName(sess.name || "Practice Session")

@@ -10,7 +10,7 @@ import (
 
 func TestComponent_PracticeDirectorySearchStatusAndTagFilters(t *testing.T) {
 	h := NewHarness(t)
-	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live", nil)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice", nil)
 
 	// Baseline: 3 sessions ("Evening Lap Lab", "Warmup Pack", "Hover Check")
 	h.WaitUntil("3 practice session rows rendered", 5*time.Second, func() (bool, error) {
@@ -98,7 +98,7 @@ func TestComponent_PracticeDirectorySearchStatusAndTagFilters(t *testing.T) {
 
 func TestComponent_PracticeDirectoryInlineRename(t *testing.T) {
 	h := NewHarness(t)
-	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live", nil)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice", nil)
 
 	renameBtn := h.Page.Locator(`button[data-practice-act="edit-session-name"][data-session-id="session-2"]`).First()
 	h.MustBeVisible(renameBtn, "Edit session name button for Warmup Pack")
@@ -137,14 +137,14 @@ func TestComponent_PracticeDirectoryInlineRename(t *testing.T) {
 		}
 	}
 	if !foundSession2 {
-		t.Fatalf("expected /api/state PracticeState session-2 renamed to Morning Tuning")
+		t.Fatalf("expected /v1/state PracticeState session-2 renamed to Morning Tuning")
 	}
 	h.MilestoneScreenshot("practice-dir-inline-renamed")
 }
 
 func TestComponent_PilotPickerChipsAllTabAndSelection(t *testing.T) {
 	h := NewHarness(t)
-	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live/evening-lap-lab", nil)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice/evening-lap-lab", nil)
 
 	// Switch to Trends tab on the unified Practice ribbon (shows All + Pilot chips, LapTimesCard, and SectionRecords).
 	trendsTab := h.Page.Locator(`button[data-practice-mobile-tab="trends"]`).First()
@@ -188,7 +188,7 @@ func TestComponent_PilotPickerChipsAllTabAndSelection(t *testing.T) {
 
 func TestComponent_PracticePilotAssignmentPopover(t *testing.T) {
 	h := NewHarness(t)
-	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live/evening-lap-lab", nil)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice/evening-lap-lab", nil)
 
 	pilotsTab := h.Page.Locator(`button[data-practice-mobile-tab="pilots"]`).First()
 	h.MustBeVisible(pilotsTab, "Practice Pilots ribbon tab")
@@ -239,7 +239,7 @@ func TestComponent_PracticePilotAssignmentPopover(t *testing.T) {
 				}
 			}
 			if !hasRed5 || hasBigRamon {
-				t.Fatalf("expected /api/state session-1 pilots to include Red5 (5) and exclude BigRamon (4), got %+v", s.Pilots)
+				t.Fatalf("expected /v1/state session-1 pilots to include Red5 (5) and exclude BigRamon (4), got %+v", s.Pilots)
 			}
 		}
 	}
@@ -254,7 +254,7 @@ func TestComponent_PracticePilotAssignmentPopover(t *testing.T) {
 
 func TestComponent_LiveStandingsRankingGapsSparklinesAndRowClick(t *testing.T) {
 	h := NewHarness(t)
-	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live/evening-lap-lab", nil)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice/evening-lap-lab", nil)
 
 	table := h.Page.Locator(`table.table-standings`).First()
 	h.MustBeVisible(table, "LiveStandings leaderboard table")
@@ -332,7 +332,7 @@ func TestComponent_LiveStandingsRankingGapsSparklinesAndRowClick(t *testing.T) {
 
 func TestComponent_SectionRecordsMatrixPurpleRecordAndDeltas(t *testing.T) {
 	h := NewHarness(t)
-	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live/evening-lap-lab", nil)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice/evening-lap-lab", nil)
 
 	if err := h.Page.Locator(`button[data-practice-mobile-tab="trends"]`).First().Click(); err != nil {
 		t.Fatalf("click Trends tab: %v", err)
@@ -361,7 +361,7 @@ func TestComponent_SectionRecordsMatrixPurpleRecordAndDeltas(t *testing.T) {
 
 func TestComponent_LapTimesCardSectionTabsLegendFilterAndRestore(t *testing.T) {
 	h := NewHarness(t)
-	h.BootWithSnapshot(SnapshotPracticePopulated, "#/live/evening-lap-lab", nil)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice/evening-lap-lab", nil)
 
 	if err := h.Page.Locator(`button[data-practice-mobile-tab="trends"]`).First().Click(); err != nil {
 		t.Fatalf("click Trends tab: %v", err)

@@ -6,7 +6,7 @@ import { bindSimSerialStore, pickUsbPort } from "../services/sim_serial_port";
 import { type TimerStatus, usbPool } from "../services/timer_console";
 import { isSlapRFMode, normalizeTimingHardwareMode } from "../types/models";
 import { DebugView } from "../views/DebugView";
-import { LiveView } from "../views/LiveView";
+import { PracticeView } from "../views/PracticeView";
 import { NetworkView } from "../views/NetworkView";
 import { TimingDevicesCard } from "../widgets/DataSourceCard";
 import { renderUsbConnectionBarHtml } from "../widgets/UsbConnectionBar";
@@ -304,13 +304,13 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
     window.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
       seenUrls.push(url);
-      if (url.includes("/api/capabilities")) {
+      if (url.includes("/v1/capabilities")) {
         return new Response(
           JSON.stringify({ portable: true, nativeEngine: true, nativeUsb: true }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
-      if (url.includes("/api/usb/ports")) {
+      if (url.includes("/v1/usb/ports")) {
         return new Response(JSON.stringify({ ports: [] }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -336,7 +336,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       expect(modal.textContent || "").toContain("Connect Bluetooth Hub");
       expect(modal.textContent || "").toContain("No SlapRF Bluetooth Hub found nearby");
       expect(modal.textContent || "").toContain("Scan again");
-      expect(seenUrls.some((u) => u.includes("/api/usb/ports?transport=ble"))).toBe(true);
+      expect(seenUrls.some((u) => u.includes("/v1/usb/ports?transport=ble"))).toBe(true);
 
       modal.querySelector<HTMLButtonElement>('[data-modal="cancel"]')!.click();
       await pickPromise.catch(() => undefined);
@@ -351,14 +351,14 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
     const surveyPosts: Array<{ on?: boolean }> = [];
     window.fetch = (async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
       const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-      if (url.includes("/api/capabilities")) {
+      if (url.includes("/v1/capabilities")) {
         return new Response(
           JSON.stringify({ portable: true, nativeEngine: true, nativeUsb: true }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
-      if (url.includes("/api/hub/survey")) {
-        if (init?.method === "POST" && typeof init.body === "string") {
+      if (url.includes("/v1/usb/survey")) {
+        if ((init?.method === "PUT" || init?.method === "POST") && typeof init.body === "string") {
           surveyPosts.push(JSON.parse(init.body) as { on?: boolean });
           return new Response(JSON.stringify({ active: surveyPosts[surveyPosts.length - 1]?.on ?? false }), {
             status: 200,
@@ -397,7 +397,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
   });
 
   it("renders tinted standby menu strip + one-tap Start/Resume bar when Practice is not live, and LIVE pill when live", async () => {
-    window.history.replaceState(null, "", "/#/live");
+    window.history.replaceState(null, "", "/#/practice");
     const idleSess = makePracticeSession("prac-standby-1", {
       name: "Evening Pack",
       active: false,
@@ -423,10 +423,10 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       </div>
     `);
     const topbar = new TopBar(root.querySelector("#tb-standby-host")!, store, api, router, announcer);
-    const liveView = new LiveView(root.querySelector("#live-standby-host")!, store, api);
+    const practiceView = new PracticeView(root.querySelector("#live-standby-host")!, store, api);
 
     try {
-      pushAppHash("#/live/evening-pack");
+      pushAppHash("#/practice/evening-pack");
       await flushMicrotasks();
 
       // Switch to Signals tab: standby bar + tinted menu strip remain visible
@@ -485,7 +485,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       expect(pausedBar.querySelector("button")).toBeNull();
       expect(root.querySelector("[data-ws-live-pill]")).toBeNull();
     } finally {
-      liveView.destroy();
+      practiceView.destroy();
       topbar.destroy();
     }
   });

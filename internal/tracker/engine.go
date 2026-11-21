@@ -186,7 +186,7 @@ func (e *Engine) seedSimTimersLocked() {
 }
 
 // NewRealEngine creates a clean real-world timing engine with no simulated timers,
-// no pre-populated fake gates, and clean pilot slots ready for hardware or LiveTime.
+// no pre-populated fake gates, and clean pilot slots ready for hardware or external LapRF clients.
 func NewRealEngine() *Engine {
 	e := &Engine{
 		bootTime:       time.Now(),
@@ -291,7 +291,7 @@ func SyncBootTimes(engines ...*Engine) {
 	}
 }
 
-// SetRaceArmed enables or pauses lap/crossing detection (synced with LiveTime STATE_CTRL 0xda08).
+// SetRaceArmed enables or pauses lap/crossing detection (synced with LapRF STATE_CTRL 0xda08).
 func (e *Engine) SetRaceArmed(armed bool) {
 	e.mu.Lock()
 	changed := e.raceArmed != armed
@@ -370,7 +370,7 @@ func (e *Engine) nextDefaultPilotNameLocked(startNum int) string {
 	}
 }
 
-// UpdatePilotSlot updates a pilot slot's frequency, threshold, gain, or enabled state (e.g., from LiveTime 0xda01).
+// UpdatePilotSlot updates a pilot slot's frequency, threshold, gain, or enabled state (e.g., from LapRF RF_SETUP 0xda01).
 // It enforces case-insensitive callsign uniqueness, enforces that at most 8 pilots (`domain.MaxPilotSlots`) can be enabled
 // at once, and never auto-assigns a channel: if two enabled pilots would share the same channel, the conflicting channel is
 // blanked (`Channel = 0`, `FrequencyMHz = 0`) so the race organizer explicitly chooses the channel.
@@ -555,8 +555,7 @@ func (e *Engine) UpdatePilotSlot(updated domain.PilotSlot) error {
 }
 
 // ApplyLapRFSetup atomically applies an 8-slot RF configuration pushed by an external LapRF client
-// (such as FPVTrackside or MultiGP LiveTime) without intermediate slot-to-slot channel collisions,
-// and notifies all subscribers once.
+// without intermediate slot-to-slot channel collisions, and notifies all subscribers once.
 func (e *Engine) ApplyLapRFSetup(slotMap map[int]domain.PilotSlot) {
 	e.mu.Lock()
 	enabledCount := 0
@@ -784,7 +783,7 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 		if !e.raceArmed {
 			// Pure passthrough mode ("Timing off" in SlapRF): do not record local practice laps or
 			// crossings in SlapRF, but still forward debounced Start/Finish gate crossings to external
-			// hardware bridges (such as the LapRF emulator for FPVTrackside / MultiGP LiveTime).
+			// hardware bridges (such as the LapRF 8-Way emulator).
 			if ev.IsStartFinish {
 				r := gate.RulesForPilot(e.rules, pilot.SlotIndex)
 				if reason := e.checkSpikeRejectionLocked(pilot, *gate, i, ev, r); reason != "" {

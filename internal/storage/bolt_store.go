@@ -57,10 +57,10 @@ const (
 	KeySimOptions    = "sim.options"
 	KeyUSBTargets    = "hw.usb_targets"
 	KeyKnownTimers   = "hw.known_timers"
-	KeyLapRFTargets  = "hw.laprf_targets"
-	KeyRHTargets     = "hw.rh_targets"
-	KeyLiveTimeCfg   = "hw.livetime_config"
-	KeyMultiGPConfig = "hw.multigp_config"
+	KeyLapRFTargets     = "hw.laprf_targets"
+	KeyRHTargets        = "hw.rh_targets"
+	KeyLapRFEmulatorCfg = "hw.laprf_emulator_config"
+	KeyMultiGPConfig    = "hw.multigp_config"
 )
 
 // MetaRecord tracks metadata inside the `kv` bucket.
@@ -71,7 +71,7 @@ type MetaRecord struct {
 	LastBackupAtMs int64 `json:"lastBackupAtMs,omitempty"`
 }
 
-// Status describes the live `bbolt` database state returned by `GET /api/storage/status`.
+// Status describes the live `bbolt` database state returned by `GET /v1/storage/status`.
 type Status struct {
 	Backend        string `json:"backend"`
 	DBPath         string `json:"dbPath"`

@@ -14,7 +14,7 @@ import (
 	"slaprf/internal/tracker"
 )
 
-// pipeClient is the "LiveTime" end of a net.Pipe whose other end is served by Server.ServeConn.
+// pipeClient is the client end of a net.Pipe whose other end is served by Server.ServeConn.
 type pipeClient struct {
 	t      *testing.T
 	conn   net.Conn
@@ -458,7 +458,7 @@ func TestLapRFPassthroughWhenLocalTimingOff(t *testing.T) {
 	srv := NewServer(eng)
 	c := startSession(t, srv)
 
-	// Enable Slot 1 (R1 5658 MHz) via LiveTime RF_SETUP just like a real LapRF client session.
+	// Enable Slot 1 (R1 5658 MHz) via RF_SETUP just like a real LapRF client session.
 	rfReq := &Packet{Type: RecordRFSetup}
 	rfReq.AppendUint8(0x01, 1)
 	rfReq.AppendUint16(0x20, 1)

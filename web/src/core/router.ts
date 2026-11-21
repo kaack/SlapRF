@@ -2,12 +2,12 @@ import { capabilitiesSnapshot } from "../services/capabilities";
 import { icons } from "./icons";
 
 export type RouteId =
-  | "live"
+  | "practice"
   | "races"
   | "pilot"
   | "pilots"
   | "track"
-  | "livetime"
+  | "laprf-emulator"
   | "sim"
   | "network"
   | "setup"
@@ -71,6 +71,7 @@ export interface PracticeRouteTarget {
 export interface ParsedHashState {
   route: RouteId;
   races?: RacesRouteTarget;
+  practice?: PracticeRouteTarget;
   live?: PracticeRouteTarget;
   analytics?: AnalyticsScope | null;
   sectionAnchor?: string;
@@ -348,7 +349,7 @@ export interface RouteMeta {
   subtitle: string;
   icon: () => string;
   simOnly?: boolean;
-  liveTimeOnly?: boolean;
+  laprfEmulatorOnly?: boolean;
   hiddenFromNav?: boolean;
 }
 
@@ -362,7 +363,7 @@ export const ROUTES: RouteMeta[] = [
     icon: () => icons.trophy(20),
   },
   {
-    id: "live",
+    id: "practice",
     label: "Practice",
     title: "Practice",
     subtitle: "Create & tag practice sessions, assign pilots, and review recorded laps & section splits",
@@ -391,12 +392,12 @@ export const ROUTES: RouteMeta[] = [
     hiddenFromNav: true,
   },
   {
-    id: "livetime",
+    id: "laprf-emulator",
     label: "LapRF",
     title: "LapRF Emulator",
-    subtitle: "LapRF emulation for FPVTrackside, MultiGP LiveTime, and external race managers",
+    subtitle: "Emulate an ImmersionRC LapRF 8-Way timer over TCP :5403 for external race timing clients",
     icon: () => icons.timer(20),
-    liveTimeOnly: true,
+    laprfEmulatorOnly: true,
   },
   {
     id: "sim",
@@ -607,19 +608,23 @@ export function parseHashState(hash: string): ParsedHashState | null {
     return { route: "races", races: { tab: "format", raceKey } };
   }
 
-  if (id === "live") {
+  if (id === "practice" || id === "practices" || id === "live") {
     const p1 = safeDecode(parts[1]);
     if (!p1 || p1 === "directory") {
-      return { route: "live", live: { tab: "directory" } };
+      const target: PracticeRouteTarget = { tab: "directory" };
+      return { route: "practice", practice: target, live: target };
     }
     if (p1 === "session") {
       const sid = safeDecode(parts[2]);
+      const target: PracticeRouteTarget = sid ? { tab: "session", sessionId: sid } : { tab: "session" };
       return {
-        route: "live",
-        live: sid ? { tab: "session", sessionId: sid } : { tab: "session" },
+        route: "practice",
+        practice: target,
+        live: target,
       };
     }
-    return { route: "live", live: { tab: "session", sessionId: p1 } };
+    const target: PracticeRouteTarget = { tab: "session", sessionId: p1 };
+    return { route: "practice", practice: target, live: target };
   }
 
   if (id === "pilot" || id === "analytics") {
@@ -686,9 +691,9 @@ export function buildRacesHash(tab: RacesViewTab, raceId?: string, stage?: numbe
 }
 
 export function buildPracticeHash(tab: PracticeViewTab, sessionId?: string): string {
-  if (tab === "directory") return "#/live";
-  if (sessionId) return `#/live/${encodeURIComponent(sessionId)}`;
-  return "#/live/session";
+  if (tab === "directory") return "#/practice";
+  if (sessionId) return `#/practice/${encodeURIComponent(sessionId)}`;
+  return "#/practice/session";
 }
 
 export function buildAnalyticsHash(scope?: AnalyticsScope | null, sectionAnchor?: string): string {
@@ -787,8 +792,9 @@ function persistLocationStorage(route: RouteId, hash: string): void {
 function notifyParsedSubRouteListeners(parsed: ParsedHashState, crossRoute = false): void {
   if (parsed.route === "races" && parsed.races) {
     racesRouteListeners.forEach((fn) => fn(parsed.races!));
-  } else if (parsed.route === "live" && parsed.live) {
-    practiceRouteListeners.forEach((fn) => fn(parsed.live!));
+  } else if (parsed.route === "practice" && (parsed.practice || parsed.live)) {
+    const target = (parsed.practice ?? parsed.live)!;
+    practiceRouteListeners.forEach((fn) => fn(target));
   } else if (!crossRoute) {
     sectionAnchorListeners.forEach((fn) => fn(parsed.sectionAnchor ?? "", parsed.route));
   }
@@ -847,8 +853,8 @@ function applyParsedSideEffects(parsed: ParsedHashState): void {
     pendingRacesTab = parsed.races.tab;
     pendingRacesStage = parsed.races.stage ?? null;
   }
-  if (parsed.live) {
-    pendingPracticeTab = parsed.live.tab;
+  if (parsed.practice || parsed.live) {
+    pendingPracticeTab = (parsed.practice ?? parsed.live)!.tab;
   }
   if (parsed.analytics !== undefined) {
     setAnalyticsScope(parsed.analytics);
@@ -892,6 +898,10 @@ function loadInitialRoute(): RouteId {
       applyParsedSideEffects({ route: "races", races: { tab: "control" } });
       return "races";
     }
+    if (saved === "live") {
+      applyParsedSideEffects({ route: "practice", practice: { tab: "directory" }, live: { tab: "directory" } });
+      return "practice";
+    }
     if (saved && ROUTES.some((r) => r.id === saved)) {
       const route = saved as RouteId;
       applyParsedSideEffects({ route });
@@ -901,17 +911,19 @@ function loadInitialRoute(): RouteId {
     // Ignore storage access errors
   }
   if (capabilitiesSnapshot().probed && capabilitiesSnapshot().demoMode) {
+    const target: PracticeRouteTarget = { tab: "session", sessionId: "open-track-practice" };
     applyParsedSideEffects({
-      route: "live",
-      live: { tab: "session", sessionId: "open-track-practice" },
+      route: "practice",
+      practice: target,
+      live: target,
     });
-    return "live";
+    return "practice";
   }
   applyParsedSideEffects({ route: "races", races: { tab: "directory" } });
   return "races";
 }
 
-/** Hash-based router (`#/live`, `#/races/<id>/format`, `#/setup/<section>`, ...) with full Back/Forward support. */
+/** Hash-based router (`#/practice`, `#/races/<id>/format`, `#/setup/<section>`, ...) with full Back/Forward support. */
 export class Router {
   private current: RouteId = loadInitialRoute();
   private lastHandledHash: string = location.hash;
@@ -920,9 +932,10 @@ export class Router {
   constructor() {
     activeRouterInstance = this;
     if (!location.hash || location.hash === "#" || location.hash === "#/") {
+      const pracTarget = currentParsedHashState.practice ?? currentParsedHashState.live;
       const initialHash =
-        this.current === "live" && currentParsedHashState.live?.tab === "session"
-          ? buildPracticeHash("session", currentParsedHashState.live.sessionId)
+        this.current === "practice" && pracTarget?.tab === "session"
+          ? buildPracticeHash("session", pracTarget.sessionId)
           : `#/${this.current}`;
       try {
         window.history.replaceState(
@@ -1019,7 +1032,7 @@ export class Router {
       dispatchRacesTopBarCommand({ type: "set-tab", tab: "directory" });
       return;
     }
-    if (id === "live") {
+    if (id === "practice") {
       dispatchPracticeTopBarCommand({ type: "set-tab", tab: "directory" });
       return;
     }

@@ -8,7 +8,7 @@
  *      or LAN / Raspberry Pi (`192.168.x.x:8090`) SlapRF Go server (`remoteBackend === true`).
  *    - Zero WebAssembly (`slaprf.wasm`) is loaded and zero browser `IndexedDB` is used; all engines,
  *      `bbolt` (`slaprf.db`) persistence, native USB serial, ESP32-C5 flashing, LapRF 8-Way,
- *      RotorHazard, LiveTime :5403, and MultiGP run natively in Go.
+ *      RotorHazard, LapRF Emulator :5403, and MultiGP run natively in Go.
  * 2. Standalone Browser Demo Mode (`caps.portable === false`, `caps.demoMode === true`):
  *    - Runs on `https://slaprf.app` when no Go server is connected.
  *    - Runs strictly in Demo Simulator Mode (`Simulation ON`) using `slaprf.wasm` + `IndexedDB`,
@@ -315,7 +315,7 @@ export function isMixedContentRemoteBlocked(pageProtocol: string, backendBaseUrl
   }
 }
 
-/** Resolves an `/api/...` path against the active Go backend (`""` same-origin or remote base URL). */
+/** Resolves a `/v1/...` path against the active Go backend (`""` same-origin or remote base URL). */
 export function resolveBackendUrl(path: string, explicitBase?: string): string {
   if (/^https?:\/\//i.test(path)) return path;
   const base = (explicitBase ?? currentCaps.backendBaseUrl).replace(/\/+$/, "");
@@ -323,7 +323,7 @@ export function resolveBackendUrl(path: string, explicitBase?: string): string {
   return base ? `${base}${cleanPath}` : cleanPath;
 }
 
-/** Resolves a WebSocket `/api/ws/...` path (`ws://` or `wss://`) against the active Go backend. */
+/** Resolves a WebSocket `/v1/ws/...` path (`ws://` or `wss://`) against the active Go backend. */
 export function resolveBackendWsUrl(path: string, explicitBase?: string): string {
   if (/^wss?:\/\//i.test(path)) return appendAuthParamToWsUrl(path);
   const cleanPath = path.startsWith("/") ? path : `/${path}`;
@@ -434,7 +434,7 @@ function buildBackendCaps(
 async function fetchCapsAt(baseUrl: string, timeoutMs = 1500): Promise<RuntimeCapabilities | null> {
   const ctrl = typeof AbortController !== "undefined" ? new AbortController() : null;
   const timer = ctrl && typeof window !== "undefined" ? window.setTimeout(() => ctrl.abort(), timeoutMs) : null;
-  const target = baseUrl ? `${baseUrl.replace(/\/+$/, "")}/api/capabilities` : "/api/capabilities";
+  const target = baseUrl ? `${baseUrl.replace(/\/+$/, "")}/v1/capabilities` : "/v1/capabilities";
   try {
     const resp = await fetch(target, {
       method: "GET",
@@ -596,8 +596,8 @@ export async function connectToBackend(
     const timer =
       ctrl && typeof window !== "undefined" ? window.setTimeout(() => ctrl.abort(), 1500) : null;
     try {
-      await fetch(`${res.normalizedUrl}/api/sim/mode`, {
-        method: "POST",
+      await fetch(`${res.normalizedUrl}/v1/sim`, {
+        method: "PATCH",
         headers: { "Content-Type": "application/json", Accept: "application/json" },
         body: JSON.stringify({ running: false }),
         signal: ctrl?.signal,

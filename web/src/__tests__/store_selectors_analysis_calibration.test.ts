@@ -366,7 +366,7 @@ describe("state/selectors — Timers, Gates, Hysteresis Thresholds & LapRF Mode"
       gates: store.nodes,
       simulatorRunning: true,
       raceArmed: true,
-      liveTimeStatus: store.liveTime,
+      laprfEmulatorStatus: store.laprfEmulator,
     });
     expect(enterThresholdAt(store, 1, 1)).toEqual({ dbm: 1250, calibrated: true });
     expect(enterThresholdAt(store, 1, 2)).toEqual({ dbm: 800, calibrated: false });

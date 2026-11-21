@@ -103,7 +103,7 @@ interface BackendUsbPortDescriptor {
 }
 
 /**
- * Adapts the local SlapRF Go server's `/api/usb/raw-ws` byte pipe (Android USB Host API or OS serial)
+ * Adapts the local SlapRF Go server's `/v1/ws/usb-raw` byte pipe (Android USB Host API or OS serial)
  * to the standard `WebSerialPort` interface expected by Espressif's `esptool-js`.
  */
 export class BackendRawWebSerialPort implements WebSerialPort {
@@ -145,7 +145,7 @@ export class BackendRawWebSerialPort implements WebSerialPort {
     }
     const baud = options?.baudRate > 0 ? options.baudRate : 115200;
     const wsUrl = resolveBackendWsUrl(
-      `/api/usb/raw-ws?port=${encodeURIComponent(this.portName)}&baud=${encodeURIComponent(String(baud))}`
+      `/v1/ws/usb-raw?port=${encodeURIComponent(this.portName)}&baud=${encodeURIComponent(String(baud))}`
     );
 
     await new Promise<void>((resolveOpen, rejectOpen) => {
@@ -361,7 +361,7 @@ export function isBackendRawWebSerialPort(port: unknown): port is BackendRawWebS
 
 async function fetchBackendUsbPorts(showAll: boolean): Promise<BackendUsbPortDescriptor[]> {
   const url = resolveBackendUrl(
-    showAll ? "/api/usb/ports?transport=usb&all=1" : "/api/usb/ports?transport=usb"
+    showAll ? "/v1/usb/ports?transport=usb&all=1" : "/v1/usb/ports?transport=usb"
   );
   const resp = await fetch(url, { cache: "no-store" });
   if (!resp.ok) {
@@ -448,7 +448,7 @@ function chooseBackendUsbPortModal(ports: BackendUsbPortDescriptor[]): Promise<B
 /**
  * Returns the XIAO ESP32-C5 serial port:
  * - In Chromium desktop browsers with WebSerial, uses `navigator.serial` directly.
- * - In the Android app (or non-WebSerial browsers connected to a SlapRF Server), uses `/api/usb/raw-ws`:
+ * - In the Android app (or non-WebSerial browsers connected to a SlapRF Server), uses `/v1/ws/usb-raw`:
  *   auto-selects when a single XIAO ESP32-C5 is plugged in over USB-C, or opens a port picker if multiple
  *   boards are attached.
  */

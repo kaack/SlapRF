@@ -980,7 +980,8 @@ func (s *Server) handleRHConnect(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	writeJSONNoStore(w, http.StatusOK, map[string]any{"session": snap})
+	w.Header().Set("Location", fmt.Sprintf("/v1/rh/sessions/%d", snap.TimerID))
+	writeJSONNoStore(w, http.StatusCreated, map[string]any{"session": snap})
 }
 
 func (s *Server) handleRHDisconnect(w http.ResponseWriter, r *http.Request) {
@@ -988,25 +989,18 @@ func (s *Server) handleRHDisconnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
 	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	rawID := strings.TrimSpace(r.PathValue("timerId"))
+	if strings.Contains(rawID, ":") {
+		w.Header().Set("Allow", "POST")
+		writeJSONNoStore(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
-	var req struct {
-		TimerID uint8 `json:"timerId"`
+	tid, err := strconv.Atoi(rawID)
+	if err != nil || tid <= 0 || tid > 255 {
+		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid timerId"})
+		return
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.TimerID == 0 {
-		if q := r.URL.Query().Get("timerId"); q != "" {
-			if n, pErr := strconv.Atoi(q); pErr == nil && n > 0 {
-				req.TimerID = uint8(n)
-			}
-		}
-		if req.TimerID == 0 {
-			writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "missing timerId"})
-			return
-		}
-	}
-	s.rhMgr.Disconnect(req.TimerID)
+	s.rhMgr.Disconnect(uint8(tid))
 	writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true})
 }
 
@@ -1023,46 +1017,58 @@ func (s *Server) handleRHSync(w http.ResponseWriter, r *http.Request) {
 	writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-func (s *Server) handleRHScan(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleRHSessionAction(w http.ResponseWriter, r *http.Request) {
 	if !s.isAllowedOrigin(r) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
 	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	rawVal := strings.TrimSpace(r.PathValue("timerId"))
+	idStr, action, hasColon := strings.Cut(rawVal, ":")
+	if !hasColon {
+		w.Header().Set("Allow", "DELETE")
+		writeJSONNoStore(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+	if action != "scan" {
+		writeJSONNoStore(w, http.StatusNotFound, map[string]any{"error": "unknown custom action"})
+		return
+	}
+	tid, err := strconv.Atoi(strings.TrimSpace(idStr))
+	if err != nil || tid <= 0 || tid > 255 {
+		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid timerId"})
 		return
 	}
 	var req struct {
-		TimerID uint8  `json:"timerId"`
-		Mode    string `json:"mode"` // "once" | "live" | "stop"
-		Start   int    `json:"start"`
-		Stop    int    `json:"stop"`
-		Step    int    `json:"step"`
+		Mode  string `json:"mode"` // "once" | "live" | "stop"
+		Start int    `json:"start"`
+		Stop  int    `json:"stop"`
+		Step  int    `json:"step"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
 		return
 	}
+	timerID := uint8(tid)
 	mode := strings.ToLower(strings.TrimSpace(req.Mode))
 	switch mode {
 	case "once":
 		ctx, cancel := context.WithTimeout(r.Context(), 12*time.Second)
 		defer cancel()
-		pass, err := s.rhMgr.RunScanOnce(ctx, req.TimerID, req.Start, req.Stop, req.Step)
+		pass, err := s.rhMgr.RunScanOnce(ctx, timerID, req.Start, req.Stop, req.Step)
 		if err != nil {
 			writeJSONNoStore(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 			return
 		}
 		writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true, "scan": pass})
 	case "live":
-		if err := s.rhMgr.SetScanLive(req.TimerID, true, req.Start, req.Stop, req.Step); err != nil {
+		if err := s.rhMgr.SetScanLive(timerID, true, req.Start, req.Stop, req.Step); err != nil {
 			writeJSONNoStore(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 			return
 		}
-		s.realEngine.SetRHDebugStream(req.TimerID, false)
+		s.realEngine.SetRHDebugStream(timerID, false)
 		writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true, "scanLive": true})
 	case "stop":
-		if err := s.rhMgr.SetScanLive(req.TimerID, false, req.Start, req.Stop, req.Step); err != nil {
+		if err := s.rhMgr.SetScanLive(timerID, false, req.Start, req.Stop, req.Step); err != nil {
 			writeJSONNoStore(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 			return
 		}

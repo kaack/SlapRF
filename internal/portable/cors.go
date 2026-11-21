@@ -51,12 +51,16 @@ func (s *Server) isAllowedOrigin(r *http.Request) bool {
 	return false
 }
 
+func isVersionedAPIPath(p string) bool {
+	return p == "/v1" || strings.HasPrefix(p, "/v1/")
+}
+
 func (s *Server) withCORSAndPNA(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := strings.TrimSpace(r.Header.Get("Origin"))
 		if origin != "" {
 			if !s.isAllowedOrigin(r) {
-				if strings.HasPrefix(r.URL.Path, "/api/") {
+				if isVersionedAPIPath(r.URL.Path) {
 					http.Error(w, "forbidden origin", http.StatusForbidden)
 					return
 				}
@@ -65,6 +69,7 @@ func (s *Server) withCORSAndPNA(next http.Handler) http.Handler {
 				w.Header().Set("Vary", "Origin")
 				w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 				w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization, X-Requested-With")
+				w.Header().Set("Access-Control-Expose-Headers", "Location")
 				if strings.EqualFold(r.Header.Get("Access-Control-Request-Private-Network"), "true") {
 					w.Header().Set("Access-Control-Allow-Private-Network", "true")
 				}
@@ -75,9 +80,9 @@ func (s *Server) withCORSAndPNA(next http.Handler) http.Handler {
 			w.WriteHeader(http.StatusNoContent)
 			return
 		}
-		if strings.HasPrefix(r.URL.Path, "/api/") &&
-			r.URL.Path != "/api/capabilities" &&
-			r.URL.Path != "/api/auth/login" {
+		if isVersionedAPIPath(r.URL.Path) &&
+			r.URL.Path != "/v1/capabilities" &&
+			r.URL.Path != "/v1/auth/sessions" {
 			if !s.isRequestAuthenticated(r) {
 				writeJSONNoStore(w, http.StatusUnauthorized, map[string]any{
 					"error": "authentication required",

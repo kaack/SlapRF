@@ -2,7 +2,7 @@ package domain
 
 import "fmt"
 
-// MaxPilotSlots matches the 8-pilot active heat limit of MultiGP LiveTime and ImmersionRC LapRF 8-Way.
+// MaxPilotSlots matches the 8-pilot active heat limit of 8-channel 5.8 GHz race timing hardware.
 const MaxPilotSlots = 8
 
 // MaxPilotPoolSize sizes fixed per-gate telemetry/calibration arrays (the global pilot roster itself has no upper limit).

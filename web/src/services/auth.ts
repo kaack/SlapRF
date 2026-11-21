@@ -2,7 +2,7 @@
  * Basic Authentication manager for SlapRF.
  *
  * - Native Go Server Mode (`caps.portable === true`):
- *   Authentication is enforced at the Go HTTP server level (`/api/*` and `/api/ws/*`)
+ *   Authentication is enforced at the Go HTTP server level (`/v1/*` and `/v1/ws/*`)
  *   against credentials stored in `slaprf.db` (`auth.config`).
  * - Standalone Browser Demo Mode (`caps.portable === false`):
  *   Authentication is stored in `localStorage` (`slaprf.auth.demo.v1`) and enforced
@@ -147,10 +147,10 @@ export function appendAuthParamToWsUrl(wsUrl: string): string {
 
 function isApiTargetUrl(rawUrl: string): boolean {
   if (!rawUrl) return false;
-  if (rawUrl.startsWith("/api/") || rawUrl === "/api") return true;
+  if (rawUrl.startsWith("/v1/") || rawUrl === "/v1") return true;
   try {
     const u = new URL(rawUrl, typeof window !== "undefined" ? window.location.origin : "http://127.0.0.1:8090");
-    return u.pathname.startsWith("/api/") || u.pathname === "/api";
+    return u.pathname.startsWith("/v1/") || u.pathname === "/v1";
   } catch {
     return false;
   }
@@ -277,10 +277,10 @@ export function verifyDemoAuthLogin(username: string, password: string): boolean
   return false;
 }
 
-// --- Native Go Server Mode Basic Auth (/api/auth/*) ---
+// --- Native Go Server Mode Basic Auth (/v1/auth/*) ---
 
 export async function fetchServerAuthConfig(baseUrl = ""): Promise<AuthConfigStatus> {
-  const target = baseUrl ? `${baseUrl.replace(/\/+$/, "")}/api/auth/config` : "/api/auth/config";
+  const target = baseUrl ? `${baseUrl.replace(/\/+$/, "")}/v1/auth/config` : "/v1/auth/config";
   const resp = await fetch(target, {
     method: "GET",
     cache: "no-store",
@@ -302,9 +302,9 @@ export async function saveServerAuthConfig(
   req: { enabled: boolean; username: string; password?: string },
   baseUrl = ""
 ): Promise<{ ok: boolean; status: AuthConfigStatus; error?: string }> {
-  const target = baseUrl ? `${baseUrl.replace(/\/+$/, "")}/api/auth/config` : "/api/auth/config";
+  const target = baseUrl ? `${baseUrl.replace(/\/+$/, "")}/v1/auth/config` : "/v1/auth/config";
   const resp = await fetch(target, {
-    method: "POST",
+    method: "PUT",
     cache: "no-store",
     headers: {
       Accept: "application/json",
@@ -349,7 +349,7 @@ export async function loginServerAuth(
 ): Promise<{ ok: boolean; error?: string }> {
   const cleanUser = username.trim();
   const token = encodeBasicToken(cleanUser, password);
-  const target = baseUrl ? `${baseUrl.replace(/\/+$/, "")}/api/auth/login` : "/api/auth/login";
+  const target = baseUrl ? `${baseUrl.replace(/\/+$/, "")}/v1/auth/sessions` : "/v1/auth/sessions";
   try {
     const resp = await fetch(target, {
       method: "POST",
@@ -384,7 +384,7 @@ export async function loginServerAuthWithToken(
 ): Promise<{ ok: boolean; error?: string }> {
   const cleanToken = token.trim();
   if (!cleanToken) return { ok: false, error: "Invalid credentials." };
-  const target = baseUrl ? `${baseUrl.replace(/\/+$/, "")}/api/auth/login` : "/api/auth/login";
+  const target = baseUrl ? `${baseUrl.replace(/\/+$/, "")}/v1/auth/sessions` : "/v1/auth/sessions";
   try {
     const resp = await fetch(target, {
       method: "POST",

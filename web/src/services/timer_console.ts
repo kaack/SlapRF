@@ -1,7 +1,7 @@
 /**
  * Client for a SlapRF timer's USB debug & telemetry console:
  * - Real hardware mode (`caps.portable && !isSimulatedUsbMode()`): talks to the native Go USB
- *   manager (`/api/usb/*` + `/api/ws/usb` over `go.bug.st/serial`, zero browser WebSerial).
+ *   manager (`/v1/usb/*` + `/v1/ws/usb` over `go.bug.st/serial`, zero browser WebSerial).
  * - Simulation mode (`isSimulatedUsbMode()`): talks to `SimulatedSerialPort` in-process.
  */
 import { capabilitiesSnapshot, resolveBackendUrl, resolveBackendWsUrl } from "./capabilities";
@@ -156,10 +156,8 @@ export function forgetKnownHardwareTimer(fp?: string, _label?: string): void {
   if (!cleanFp) return;
   backendKnownTimersCache = backendKnownTimersCache.filter((t) => t.fp.toUpperCase() !== cleanFp);
   if (capabilitiesSnapshot().portable) {
-    void fetch(resolveBackendUrl("/api/usb/known-forget"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ fp: cleanFp }),
+    void fetch(resolveBackendUrl(`/v1/usb/known-timers/${encodeURIComponent(cleanFp)}`), {
+      method: "DELETE",
     }).catch(() => undefined);
   }
   const list = getKnownHardwareTimers().filter((t) => t.fp.toUpperCase() !== cleanFp);
@@ -775,8 +773,8 @@ export class TimerConsole {
     this.notifyStateChange();
     try {
       if (isBackendSerialPort(port)) {
-        const res = await fetch(resolveBackendUrl("/api/usb/connect"), {
-          method: "POST",
+        const res = await fetch(resolveBackendUrl(`/v1/usb/connections/${this.slotIndex}`), {
+          method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ slotIndex: this.slotIndex, portName: port.portName }),
         });
@@ -1024,10 +1022,8 @@ export class TimerConsole {
     this.busyLabel = null;
     if (isBackendSerialPort(this.port) || (capabilitiesSnapshot().portable && !isSimulatedUsbMode())) {
       this.port = null;
-      await fetch(resolveBackendUrl("/api/usb/disconnect"), {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ slotIndex: this.slotIndex }),
+      await fetch(resolveBackendUrl(`/v1/usb/connections/${this.slotIndex}`), {
+        method: "DELETE",
       })
         .then((r) => (r.ok ? r.json() : null))
         .then((pool) => {
@@ -1155,7 +1151,7 @@ export class TimerConsole {
 
   public async send(command: string): Promise<void> {
     if (isBackendSerialPort(this.port)) {
-      const res = await fetch(resolveBackendUrl("/api/usb/command"), {
+      const res = await fetch(resolveBackendUrl("/v1/usb:command"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slotIndex: this.slotIndex, command }),
@@ -1204,7 +1200,7 @@ export class TimerConsole {
   /** Send `command` (optional) and resolve with the next message of `type` (`status`, `scan`, ...). */
   public request<T>(command: string | null, type: string, timeoutMs = 3000): Promise<T> {
     if (isBackendSerialPort(this.port) && command) {
-      return fetch(resolveBackendUrl("/api/usb/command"), {
+      return fetch(resolveBackendUrl("/v1/usb:command"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1858,7 +1854,7 @@ export class UsbConnectionPool {
   public async syncFromBackend(): Promise<void> {
     if (!capabilitiesSnapshot().portable || isSimulatedUsbMode()) return;
     try {
-      const res = await fetch(resolveBackendUrl("/api/usb/status"), { cache: "no-store" });
+      const res = await fetch(resolveBackendUrl("/v1/usb/connections"), { cache: "no-store" });
       if (res.ok) {
         const pool = (await res.json()) as BackendPoolSnapshot;
         this.applyBackendPoolSnapshot(pool);
@@ -1879,7 +1875,7 @@ export class UsbConnectionPool {
       return;
     }
     try {
-      const ws = new WebSocket(resolveBackendWsUrl("/api/ws/usb"));
+      const ws = new WebSocket(resolveBackendWsUrl("/v1/ws/usb"));
       this.backendUsbWs = ws;
       ws.onmessage = (ev: MessageEvent) => {
         if (ws !== this.backendUsbWs || typeof ev.data !== "string") return;
@@ -2014,7 +2010,7 @@ export class UsbConnectionPool {
     }
     if (this.savedSimSlots.length === 0 && capabilitiesSnapshot().portable && !window.slaprfWasm) {
       try {
-        const res = await fetch(resolveBackendUrl("/api/sim/hub-usb"), { cache: "no-store" });
+        const res = await fetch(resolveBackendUrl("/v1/sim/hub-usb"), { cache: "no-store" });
         if (res.ok) {
           const data = (await res.json()) as { connected?: boolean };
           if (data.connected) {
@@ -2076,8 +2072,8 @@ export class UsbConnectionPool {
     if (next !== this._debugSlotIndex) {
       this._debugSlotIndex = next;
       if (capabilitiesSnapshot().portable && !isSimulatedUsbMode()) {
-        void fetch(resolveBackendUrl("/api/usb/debug-slot"), {
-          method: "POST",
+        void fetch(resolveBackendUrl("/v1/usb/debug-slot"), {
+          method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ slotIndex: next }),
         }).catch(() => undefined);

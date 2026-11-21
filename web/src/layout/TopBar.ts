@@ -38,7 +38,7 @@ import {
   subscribeCapabilities,
 } from "../services/capabilities";
 import { sharedLapRFLink } from "../services/laprf_hardware_link";
-import { sharedLiveTimeRelay } from "../services/livetime_relay";
+import { sharedLapRFEmulatorRelay } from "../services/laprf_emulator_relay";
 import {
   isPwaStandalone,
   subscribePwaInstallState,
@@ -132,7 +132,7 @@ export class TopBar extends Component {
     this.onDispose(api.hubBridge.subscribe(() => this.render()));
     this.onDispose(sharedLapRFLink.subscribe(() => this.render()));
     this.onDispose(sharedRHLink.subscribe(() => this.render()));
-    this.onDispose(sharedLiveTimeRelay.subscribe(() => this.render()));
+    this.onDispose(sharedLapRFEmulatorRelay.subscribe(() => this.render()));
     this.onDispose(subscribeCapabilities(() => this.render()));
     this.onDispose(subscribePwaInstallState(() => this.render()));
     this.onDispose(
@@ -420,9 +420,9 @@ export class TopBar extends Component {
 
   private render(): void {
     const meta = this.router.meta();
-    const { liveTime, simulatorRunning: sim } = this.store;
-    const ltConnected = liveTime.connectedClients > 0;
-    const ltEnabled = sharedLiveTimeRelay.snapshot.enabled;
+    const { laprfEmulator, simulatorRunning: sim } = this.store;
+    const emulConnected = laprfEmulator.connectedClients > 0;
+    const emulEnabled = sharedLapRFEmulatorRelay.snapshot.enabled;
     const voiceOn = this.announcer.settings.enabled;
     const main = usbPool.mainConsole;
     const usbOn = main.connected;
@@ -443,7 +443,7 @@ export class TopBar extends Component {
     const rCtx = getRacesTopBarContext();
     const pCtx = getPracticeTopBarContext();
     const inRaceWorkspace = meta.id === "races" && rCtx.tab !== "directory";
-    const inPracticeWorkspace = meta.id === "live" && pCtx.tab === "session";
+    const inPracticeWorkspace = meta.id === "practice" && pCtx.tab === "session";
     const inAnalytics = meta.id === "pilot";
     const aTopCtx = getAnalyticsTopBarContext();
     const rawAnalyticsScope = inAnalytics ? getAnalyticsScope() : null;
@@ -457,7 +457,7 @@ export class TopBar extends Component {
 
     const appTheme = getAppTheme();
     const pwaStandalone = isPwaStandalone();
-    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${ltEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${ltConnected ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${this.pwaMenuOpen ? 1 : 0}:${pwaStandalone ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${rCtx.live ? 1 : 0}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aTopCtx.mode}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
+    const sig = `${meta.id}:${appTheme}:${hwMode}:${sim ? 1 : 0}:${caps.demoMode ? 1 : 0}:${caps.portable ? 1 : 0}:${lockedOut ? 1 : 0}:${caps.remoteBackend ? 1 : 0}:${caps.backendBaseUrl}:${caps.localDetectedUrl ?? ""}:${emulEnabled ? 1 : 0}:${voiceOn ? 1 : 0}:${emulConnected ? 1 : 0}:${this.scopeMenuOpen ? 1 : 0}:${this.crumbMenuOpen ? 1 : 0}:${this.pwaMenuOpen ? 1 : 0}:${pwaStandalone ? 1 : 0}:${usbOn ? 1 : 0}:${activeLabel}:${usbFp}:${usbBusy}:${led.color}:${led.shortLabel}:${led.detail}:${sbCollapsed ? 1 : 0}:${rCtx.tab}:${rCtx.raceId ?? ""}:${rCtx.raceName}:${rCtx.activeStage}:${rCtx.totalStages}:${rCtx.stageTitle}:${rCtx.live ? 1 : 0}:${pCtx.tab}:${pCtx.sessionId ?? ""}:${pCtx.sessionName}:${pCtx.active ? 1 : 0}:${aTopCtx.mode}:${aScope ? `${aScope.kind}:${aScope.id}:${aScope.name}:${aScope.live ? 1 : 0}` : ""}:${scopePopoverCounts}`;
     this.el.classList.toggle("has-subpage-back", isSubPage);
     this.el.closest(".app")?.classList.toggle("is-mobile-subpage", isSubPage);
     if (sig === this.lastSig) return;
@@ -526,7 +526,7 @@ export class TopBar extends Component {
       </button>`;
 
     let actions = `${simBtn}${pwaBtn}`;
-    if (meta.id === "sim" || meta.id === "live") {
+    if (meta.id === "sim" || meta.id === "practice") {
       actions += `
         <button class="btn ${voiceOn ? "btn-armed" : "btn-ghost"}" data-action="announcer" title="${voiceOn ? "Mute" : "Enable"} lap-time callouts" aria-label="${voiceOn ? "Mute" : "Enable"} lap-time callouts">
           ${voiceOn ? icons.speaker(19) : icons.speakerOff(19)}<span class="topbar-btn-label">Announcer</span>
@@ -548,7 +548,7 @@ export class TopBar extends Component {
       (r) =>
         !r.hiddenFromNav &&
         (!r.simOnly || effectiveSimForNav) &&
-        (!r.liveTimeOnly || (ltEnabled && !isExternalTimer && !lockedOut)) &&
+        (!r.laprfEmulatorOnly || (emulEnabled && !isExternalTimer && !lockedOut)) &&
         (r.id !== "flasher" || !hideFlasher)
     )
       .map((r) => {
@@ -689,7 +689,7 @@ export class TopBar extends Component {
                       ? "SlapRF Bluetooth Hub wireless connection, pairing status, and live 8-channel 5.8 GHz RSSI"
                       : meta.subtitle;
 
-    const hideTopLevelSubtitle = meta.id === "races" || meta.id === "live";
+    const hideTopLevelSubtitle = meta.id === "races" || meta.id === "practice";
     const titleMarkup =
       this.activeCrumbItems.length > 0
         ? `<nav class="${breadcrumbClass}" ${breadcrumbAttr} aria-label="${esc(breadcrumbAria)}">
@@ -712,7 +712,7 @@ export class TopBar extends Component {
            ${icons.chevronLeft(18)}<span>Back</span>
          </a>`
       : inPracticeWorkspace
-        ? `<a class="${backBtnCls}" href="#/live" data-action="practice-back" title="Back to Practices" aria-label="Back to Practices">
+        ? `<a class="${backBtnCls}" href="#/practice" data-action="practice-back" title="Back to Practices" aria-label="Back to Practices">
              ${icons.chevronLeft(18)}<span>Back</span>
            </a>`
         : inAnalyticsScope
@@ -938,7 +938,7 @@ export class TopBar extends Component {
   private buildNavPopoverHtml(): string {
     const meta = this.router.meta();
     const { simulatorRunning: sim } = this.store;
-    const ltEnabled = sharedLiveTimeRelay.snapshot.enabled;
+    const emulEnabled = sharedLapRFEmulatorRelay.snapshot.enabled;
     const caps = capabilitiesSnapshot();
     const lockedOut = isServerDisconnectedLockout();
     const appTheme = getAppTheme();
@@ -952,7 +952,7 @@ export class TopBar extends Component {
       (r) =>
         !r.hiddenFromNav &&
         (!r.simOnly || effectiveSimForNav) &&
-        (!r.liveTimeOnly || (ltEnabled && !isExternalTimer && !lockedOut)) &&
+        (!r.laprfEmulatorOnly || (emulEnabled && !isExternalTimer && !lockedOut)) &&
         (r.id !== "flasher" || !hideFlasher)
     )
       .map((r) => {

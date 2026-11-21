@@ -390,19 +390,19 @@ describe("services/multigp_service, laprf_hardware_link & test_curl", () => {
 
     try {
       // 1. Shorthand string + JSON payload -> WASM target + syncAfterDirectWasmCall
-      const res1 = await window.slaprfCurl!("POST /api/race/control", { action: "stage" });
+      const res1 = await window.slaprfCurl!("POST /v1/race/sessions/current/heats/current:control", { action: "stage" });
       expect(res1.ok).toBe(true);
       expect(res1.target).toBe("wasm");
-      expect(res1.json).toEqual({ ok: true, echoedUrl: "/api/race/control" });
+      expect(res1.json).toEqual({ ok: true, echoedUrl: "/v1/race/sessions/current/heats/current:control" });
       expect(wasmReqs[0]).toEqual({
         method: "POST",
-        url: "/api/race/control",
+        url: "/v1/race/sessions/current/heats/current:control",
         body: JSON.stringify({ action: "stage" }),
       });
       expect(calls.some((c) => c.method === "syncAfterDirectWasmCall")).toBe(true);
 
-      // 2. Host-only route `/api/capabilities` automatically targets `host` via fetch()
-      const res2 = await window.slaprfCurl!("/api/capabilities");
+      // 2. Host-only route `/v1/capabilities` automatically targets `host` via fetch()
+      const res2 = await window.slaprfCurl!("/v1/capabilities");
       expect(res2.target).toBe("host");
       expect(res2.json).toEqual({ portable: true });
       expect(fetchSpy.calls).toHaveLength(1);

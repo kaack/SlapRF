@@ -4,7 +4,7 @@
 // when no local or LAN SlapRF Go backend is connected.
 //
 // All physical hardware protocols (USB Serial, ESP32-C5 ROM bootloader flasher, LapRF 8-Way TCP,
-// RotorHazard Socket.IO, LiveTime :5403 TCP server, and bbolt storage) live exclusively in the
+// RotorHazard Socket.IO, LapRF 8-Way :5403 TCP emulator, and bbolt storage) live exclusively in the
 // native Go server (`cmd/slaprf`). This WASM binary runs only the showcase `TrackSimulator` +
 // `simEngine` so visitors on `slaprf.app` can explore 100% of SlapRF's race formats and simulated
 // hardware modes with zero install before connecting to a real track server.
@@ -298,7 +298,7 @@ func main() {
 
 	laprfSrv := laprf.NewServer(simEngine)
 	srv := api.NewServer(simEngine, sim, laprfSrv, simEngine)
-	// Enforce Simulator ON even if /api/sim/toggle or /api/sim/mode is called inside Demo WASM
+	// Enforce Simulator ON even if PATCH /v1/sim is called inside Demo WASM
 	srv.SetHooks(api.ServerHooks{
 		OnModeChanged: func(running bool) {
 			if !running {
@@ -309,7 +309,7 @@ func main() {
 	handler := srv.Handler()
 
 	// Advance live heat countdowns and race timers natively inside WASM at 10 Hz so the UI
-	// never needs to poll POST /api/race/tick across the JS/JSON boundary.
+	// never needs to poll GET /v1/race/clock across the JS/JSON boundary.
 	go func() {
 		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
@@ -325,7 +325,7 @@ func main() {
 		if len(args) > 0 && args[0].Type() == js.TypeString && args[0].String() != "" {
 			method = strings.ToUpper(strings.TrimSpace(args[0].String()))
 		}
-		url := "/api/state"
+		url := "/v1/state"
 		if len(args) > 1 && args[1].Type() == js.TypeString && args[1].String() != "" {
 			url = args[1].String()
 		}

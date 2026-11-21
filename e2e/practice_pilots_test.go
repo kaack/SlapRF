@@ -44,7 +44,7 @@ func TestPilotsDirectoryAddEditAndPersist(t *testing.T) {
 				Callsign  string `json:"callsign"`
 			} `json:"pilots"`
 		}
-		if err := h.WasmGetJSON("/api/state", &st); err != nil {
+		if err := h.WasmGetJSON("/v1/state", &st); err != nil {
 			return false, nil
 		}
 		for _, p := range st.Pilots {
@@ -75,7 +75,7 @@ func TestPilotsDirectoryAddEditAndPersist(t *testing.T) {
 				PhoneticName string `json:"phoneticName"`
 			} `json:"pilots"`
 		}
-		if err := h.WasmGetJSON("/api/state", &st); err != nil {
+		if err := h.WasmGetJSON("/v1/state", &st); err != nil {
 			return false, nil
 		}
 		found := false
@@ -89,7 +89,7 @@ func TestPilotsDirectoryAddEditAndPersist(t *testing.T) {
 			return false, nil
 		}
 		if !h.StaticDemo {
-			resp, err := http.Get(h.BaseURL + "/api/storage/sim-export")
+			resp, err := http.Get(h.BaseURL + "/v1/storage/sim")
 			if err != nil {
 				return false, nil
 			}
@@ -151,7 +151,7 @@ func TestPracticeSessionFastSimLapsAndSectors(t *testing.T) {
 	h.ConnectSimHubH1()
 
 	// Set simulator speed to 20x and ensure pilots are airborne on the course.
-	h.APIPost("/api/sim/speed", map[string]any{"speedMultiplier": 20}, nil)
+	h.APIPatch("/v1/sim", map[string]any{"speedMultiplier": 20}, nil)
 
 	launchAllBtn := h.Page.Locator(`button[data-action="launch-all"]`).First()
 	if cnt, _ := launchAllBtn.Count(); cnt > 0 {
@@ -160,8 +160,8 @@ func TestPracticeSessionFastSimLapsAndSectors(t *testing.T) {
 		}
 	}
 
-	// Switch to Practice (#/live) via Sidebar.
-	h.NavigateSidebar("live")
+	// Switch to Practice (#/practice) via Sidebar.
+	h.NavigateSidebar("practice")
 
 	// Create a practice session if none exist, then open it if currently in directory view.
 	createInlineBtn := h.Page.Locator(`button[data-practice-act="create-session-inline"]`).First()
@@ -189,7 +189,7 @@ func TestPracticeSessionFastSimLapsAndSectors(t *testing.T) {
 			} `json:"sessions"`
 		} `json:"practiceState"`
 	}
-	if err := h.WasmGetJSON("/api/state", &checkSess); err != nil {
+	if err := h.WasmGetJSON("/v1/state", &checkSess); err != nil {
 		t.Fatalf("query practiceState: %v", err)
 	}
 	if len(checkSess.PracticeState.Sessions) > 0 && len(checkSess.PracticeState.Sessions[0].Pilots) == 0 {
@@ -221,7 +221,7 @@ func TestPracticeSessionFastSimLapsAndSectors(t *testing.T) {
 
 	// Confirm active LED indicator appears and pilots are flying.
 	h.MustBeVisible(h.Page.Locator(`[data-practice-status="active"]`).First(), "Active practice timing status LED")
-	_ = h.WasmPostJSON("/api/sim/pack-burst", map[string]any{}, nil)
+	_ = h.WasmPostJSON("/v1/sim:packBurst", map[string]any{}, nil)
 
 	// At 20x simulation speed, full 4-gate laps with S1..S4 sector splits complete in ~1-3 seconds.
 	h.WaitUntil("at least 3 full practice laps with 4 sector splits recorded", 15*time.Second, func() (bool, error) {
@@ -239,7 +239,7 @@ func TestPracticeSessionFastSimLapsAndSectors(t *testing.T) {
 				} `json:"sessions"`
 			} `json:"practiceState"`
 		}
-		if err := h.WasmGetJSON("/api/state", &st); err != nil {
+		if err := h.WasmGetJSON("/v1/state", &st); err != nil {
 			return false, nil
 		}
 		validFullLaps := 0
