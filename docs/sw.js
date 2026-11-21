@@ -1,4 +1,4 @@
-/* SlapRF service worker — offline app shell + PWA support.
+/* SlapRF service worker - offline app shell cache (standalone PWA install is disabled).
  *
  * This file is a TEMPLATE. `go run ./cmd/build-web` writes the deployable copy to `_site/sw.js`,
  * substituting the two placeholders below with the content-hashed precache manifest and a version
@@ -28,15 +28,15 @@
 const PRECACHE = [
   {
     "url": "dist/app.js",
-    "rev": "04b6ea37998aaa9b"
+    "rev": "b0c903c737dd83bd"
   },
   {
     "url": "firmware/slaprf-xiao-c5-ble.bin",
-    "rev": "86ae80b1031a42b9"
+    "rev": "1818c38edcf06aa0"
   },
   {
     "url": "firmware/slaprf-xiao-c5.bin",
-    "rev": "e2ccf2a7f26ce7e1"
+    "rev": "eb5c6fac88ed7cf8"
   },
   {
     "url": "icons/icon.svg",
@@ -44,11 +44,11 @@ const PRECACHE = [
   },
   {
     "url": "index.html",
-    "rev": "2e6c4022ca0a4c5f"
+    "rev": "4ea4c4d51451bd09"
   },
   {
     "url": "manifest.webmanifest",
-    "rev": "b64eab8d8073c63d"
+    "rev": "630aa77bc6c3b0f6"
   },
   {
     "url": "sounds/airhorn.wav",
@@ -64,7 +64,7 @@ const PRECACHE = [
   },
   {
     "url": "styles/layout.css",
-    "rev": "e6bc85fddb7207c9"
+    "rev": "d1abb0e188a34145"
   },
   {
     "url": "styles/tokens.css",
@@ -76,14 +76,14 @@ const PRECACHE = [
   },
   {
     "url": "wasm/slaprf.wasm",
-    "rev": "58088c6592b232d7"
+    "rev": "da165c87a035f9af"
   },
   {
     "url": "wasm/wasm_exec.js",
     "rev": "0c949f4996f9a896"
   }
 ];
-const VERSION = "83d43d12a291bc34";
+const VERSION = "7c6ad3f46f1b9249";
 
 const CACHE_PREFIX = "slaprf-precache-";
 const CACHE_NAME = CACHE_PREFIX + VERSION;
