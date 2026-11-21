@@ -155,8 +155,8 @@ func main() {
 	// 7. Write .nojekyll so GitHub Pages serves all files unaltered
 	_ = os.WriteFile(filepath.Join(*outDir, ".nojekyll"), []byte{}, 0o644)
 	_ = os.WriteFile(filepath.Join(*outDir, "CNAME"), []byte("slaprf.app\n"), 0o644)
-	// 7. PWA: web app manifest + icons + sounds, then the service worker (last, so its content-hashed
-	// precache manifest covers every file written above).
+	// 7. Offline shell assets: web manifest (display:browser), icons, sounds, then the service worker
+	// (last, so its content-hashed precache manifest covers every file written above).
 	mustCopyFile(filepath.Join(*webDir, "manifest.webmanifest"), filepath.Join(*outDir, "manifest.webmanifest"))
 	if err := os.MkdirAll(filepath.Join(*outDir, "icons"), 0o755); err != nil {
 		log.Fatalf("failed to create %s/icons: %v", *outDir, err)

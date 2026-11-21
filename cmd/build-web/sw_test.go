@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -81,5 +82,38 @@ func TestRenderServiceWorkerTemplate(t *testing.T) {
 	}
 	if !strings.Contains(s, `"url": "index.html"`) || !strings.Contains(s, `"v123"`) {
 		t.Fatalf("rendered sw.js missing manifest/version:\n%s", s[:400])
+	}
+}
+
+func TestManifestAndIndexDisableStandalonePwaInstall(t *testing.T) {
+	manifestRaw, err := os.ReadFile(filepath.Join("..", "..", "web", "manifest.webmanifest"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(manifestRaw, &manifest); err != nil {
+		t.Fatalf("invalid manifest.webmanifest JSON: %v", err)
+	}
+	if got, _ := manifest["display"].(string); got != "browser" {
+		t.Fatalf("manifest display = %q, want %q so browsers do not offer standalone PWA install", got, "browser")
+	}
+	if _, hasIcons := manifest["icons"]; hasIcons {
+		t.Fatal("manifest.webmanifest must not declare standalone app icons")
+	}
+
+	indexRaw, err := os.ReadFile(filepath.Join("..", "..", "web", "index.html"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	indexHTML := string(indexRaw)
+	for _, forbidden := range []string{
+		"mobile-web-app-capable",
+		"apple-mobile-web-app-capable",
+		"apple-mobile-web-app-title",
+		"apple-touch-icon",
+	} {
+		if strings.Contains(indexHTML, forbidden) {
+			t.Fatalf("web/index.html still contains standalone PWA tag %q", forbidden)
+		}
 	}
 }

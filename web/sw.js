@@ -1,4 +1,4 @@
-/* SlapRF service worker — offline app shell + PWA support.
+/* SlapRF service worker - offline app shell cache (standalone PWA install is disabled).
  *
  * This file is a TEMPLATE. `go run ./cmd/build-web` writes the deployable copy to `_site/sw.js`,
  * substituting the two placeholders below with the content-hashed precache manifest and a version

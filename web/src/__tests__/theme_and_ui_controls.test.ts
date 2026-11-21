@@ -16,6 +16,7 @@ import { Sidebar } from "../layout/Sidebar";
 import { TopBar } from "../layout/TopBar";
 import { Announcer } from "../services/announcer";
 import { ApiClient } from "../services/api_client";
+import * as offlineModule from "../services/offline";
 import { gateColor, TIMER_COLORS, timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
 import { channelColor, dbmToRgb } from "../views/debug/charts";
@@ -118,11 +119,27 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
       mobDarkBtn!.click();
       expect(getAppTheme()).toBe("dark");
       expect(darkBtn.classList.contains("is-active")).toBe(true);
+
+      // TopBar never renders a PWA install button or popover
+      expect(tbEl.querySelector('[data-action="install-pwa"]')).toBeNull();
+      expect(tbEl.querySelector(".topbar-pwa-wrap")).toBeNull();
+      expect(tbEl.querySelector("[data-pwa-install-popover]")).toBeNull();
     } finally {
       sidebar.destroy();
       topbar.destroy();
       setAppTheme("dark");
     }
+  });
+
+  it("suppresses beforeinstallprompt events and exposes no PWA install prompt helpers", () => {
+    expect("triggerPwaInstallPrompt" in offlineModule).toBe(false);
+    expect("subscribePwaInstallState" in offlineModule).toBe(false);
+    expect("isPwaStandalone" in offlineModule).toBe(false);
+    expect("installPwa" in icons).toBe(false);
+
+    const ev = new Event("beforeinstallprompt", { cancelable: true });
+    window.dispatchEvent(ev);
+    expect(ev.defaultPrevented).toBe(true);
   });
 
   it("updates only icons.chart for Analytics while preserving icons.pilot and adding moon/sun", () => {
