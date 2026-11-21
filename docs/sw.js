@@ -28,15 +28,15 @@
 const PRECACHE = [
   {
     "url": "dist/app.js",
-    "rev": "ff2e457c6c799ef2"
+    "rev": "89f665c9a341378a"
   },
   {
     "url": "firmware/slaprf-xiao-c5-ble.bin",
-    "rev": "6900a179b510d1ad"
+    "rev": "b2747f5080fa9a22"
   },
   {
     "url": "firmware/slaprf-xiao-c5.bin",
-    "rev": "1de05c1b6435ce31"
+    "rev": "b185e4155eae6060"
   },
   {
     "url": "icons/icon.svg",
@@ -72,18 +72,18 @@ const PRECACHE = [
   },
   {
     "url": "styles/views.css",
-    "rev": "40ea935a97220a5e"
+    "rev": "ec10a8581be105a6"
   },
   {
     "url": "wasm/slaprf.wasm",
-    "rev": "57e2be9dbbf52bb6"
+    "rev": "706d3e425c797a8f"
   },
   {
     "url": "wasm/wasm_exec.js",
     "rev": "0c949f4996f9a896"
   }
 ];
-const VERSION = "1ee56f99b4fc388a";
+const VERSION = "3b9be52645503c5f";
 
 const CACHE_PREFIX = "slaprf-precache-";
 const CACHE_NAME = CACHE_PREFIX + VERSION;
@@ -215,6 +215,7 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  if (url.pathname === "/docs" || url.pathname.startsWith("/docs/")) return;
 
   if (request.mode === "navigate") {
     event.respondWith(handleNavigation(request));
