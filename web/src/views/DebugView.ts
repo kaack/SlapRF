@@ -246,6 +246,8 @@ export class DebugView extends Component {
   private dirtyWaterfall = true;
   private dirtyHealth = true;
   private lastNoiseTableRenderAt = 0;
+  private lastServerHealthPollAt = 0;
+  private viewActive = true;
   private rafId = 0;
   private observer: IntersectionObserver | null = null;
 
@@ -509,6 +511,10 @@ export class DebugView extends Component {
     window.addEventListener("resize", onResize);
 
     const tick = () => {
+      if (!this.viewActive) {
+        this.rafId = 0;
+        return;
+      }
       this.renderFrame();
       this.rafId = window.requestAnimationFrame(tick);
     };
@@ -607,7 +613,34 @@ export class DebugView extends Component {
     this.renderFrame();
   }
 
+  public override onActivate(): void {
+    this.viewActive = true;
+    this.dirtySignal = true;
+    this.dirtyNoiseTable = true;
+    this.dirtySpectrum = true;
+    this.dirtyWaterfall = true;
+    this.dirtyHealth = true;
+    this.renderAll();
+    if (this.rafId === 0) {
+      const tick = () => {
+        if (!this.viewActive) {
+          this.rafId = 0;
+          return;
+        }
+        this.renderFrame();
+        this.rafId = window.requestAnimationFrame(tick);
+      };
+      this.rafId = window.requestAnimationFrame(tick);
+    }
+  }
+
   public override onDeactivate(): void {
+    this.viewActive = false;
+    if (this.rafId !== 0) {
+      window.cancelAnimationFrame(this.rafId);
+      this.rafId = 0;
+    }
+    window.clearInterval(this.statusTimer);
     const hadActiveStream =
       this.liveOn ||
       this.scanLive ||
@@ -1059,7 +1092,7 @@ export class DebugView extends Component {
   }
 
   private async tickNonSlapRFTelemetry(): Promise<void> {
-    if (!this.isRotorHazardMode()) return;
+    if (!this.viewActive || !this.isRotorHazardMode()) return;
     if (typeof document !== "undefined" && document.hidden) return;
     if (this.rhPollInFlight) return;
     this.rhPollInFlight = true;
@@ -1302,6 +1335,9 @@ export class DebugView extends Component {
           this.scanLive = s.scanLive;
           scanChanged = true;
         }
+        if (!this.viewActive) {
+          return;
+        }
         this.renderConnection();
         this.renderStatus();
         this.renderNetworkView();
@@ -1318,7 +1354,11 @@ export class DebugView extends Component {
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
         }
-        void this.pollServerHealth(s);
+        const nowPerf = performance.now();
+        if (this.lastServerHealthPollAt === 0 || nowPerf - this.lastServerHealthPollAt >= 1900) {
+          this.lastServerHealthPollAt = nowPerf;
+          void this.pollServerHealth(s);
+        }
       },
       onLive: (s) => {
         this.live = s;
@@ -1675,30 +1715,15 @@ export class DebugView extends Component {
     }
   }
 
-  private updateAutoSignalAxes(canvasWidth: number): void {
+  private updateAutoSignalAxes(_canvasWidth: number): void {
     const isRH = this.isRotorHazardMode();
     const sweepHz = this.activeSweepHz();
     const yb = this.signalYBounds();
-    const ptsAll = this.signalRing.points;
 
     if (this.signalAutoX) {
-      let effectiveRateHz = isRH ? sweepHz : this.liveMode === 2 ? sweepHz : Math.max(1, Math.round(sweepHz / 5));
-      if (ptsAll.length >= 12) {
-        const a = ptsAll[Math.max(0, ptsAll.length - 30)];
-        const b = ptsAll[ptsAll.length - 1];
-        const dtSec = (b.tMs - a.tMs) / 1000;
-        const count = ptsAll.length - 1 - Math.max(0, ptsAll.length - 30);
-        if (dtSec >= 0.15 && dtSec <= 5 && count >= 5) {
-          effectiveRateHz = Math.max(4, Math.min(sweepHz, count / dtSec));
-        }
-      }
-      const plotW = Math.max(240, (canvasWidth || 700) - 36);
-      const targetSamples = Math.max(200, Math.min(900, Math.round(plotW * 1.15)));
-      const rawSec = targetSamples / Math.max(4, effectiveRateHz);
-      const snappedSec = Math.max(15, Math.min(30, Math.round(rawSec)));
-      if (Math.abs(this.signalWindowSec - snappedSec) >= 0.4) {
-        this.signalWindowSec = snappedSec;
-      }
+      // Keep Auto X at a deterministic 15 s window (matching PilotRssiChart) rather than
+      // recomputing from recent sample arrival intervals, which jitter and make the X-axis jump.
+      this.signalWindowSec = 15;
     }
 
     if (this.signalAutoY) {
@@ -1883,6 +1908,7 @@ export class DebugView extends Component {
       if (kind === "signal") {
         this.signalEndN = null;
         this.signalAutoX = true;
+        this.signalWindowSec = 15;
         this.signalAutoY = true;
         this.signalSmoothYMin = null;
         this.signalSmoothYMax = null;
@@ -2471,6 +2497,7 @@ export class DebugView extends Component {
       if (target.matches("[data-signal-canvas]")) {
         this.signalEndN = null;
         this.signalAutoX = true;
+        this.signalWindowSec = 15;
         this.signalAutoY = true;
         this.signalSmoothYMin = null;
         this.signalSmoothYMax = null;
@@ -3023,13 +3050,28 @@ export class DebugView extends Component {
   }
 
   /**
-   * Real-world engine view of one timer (by board fingerprint) from the in-browser WASM engine,
-   * or null when it isn't available (simulator active, or no ApiClient).
+   * Engine view of one timer (by board fingerprint) from the live store (or fallback API state),
+   * or null when no engine state is available.
    */
   private async engineTimerInfo(fp: string): Promise<DebugTimerInfo | null> {
+    const want = fp.toUpperCase();
+    if (this.store && this.store.hasHydrated) {
+      const dt = (this.store.detectedTimers ?? []).find((t) => (t.fingerprint || "").toUpperCase() === want);
+      if (!dt) return { found: false, online: false, framesRx: 0, simulatorActive: this.store.simulatorRunning };
+      const seenMs = Date.parse(dt.lastSeenAt);
+      const gate = (this.store.nodes ?? []).find((g) => g.assignedTimerId === dt.timerId);
+      return {
+        found: true,
+        timerId: dt.timerId,
+        label: dt.timerLabel,
+        online: dt.online,
+        msSinceSeen: Number.isFinite(seenMs) && seenMs > 0 ? Math.max(0, Date.now() - seenMs) : undefined,
+        framesRx: gate?.framesRxCount ?? dt.framesRxCount ?? 0,
+        simulatorActive: this.store.simulatorRunning,
+      };
+    }
     const state = await this.api?.getRealEngineState();
     if (!state) return null;
-    const want = fp.toUpperCase();
     const dt = (state.timers ?? []).find((t) => (t.fingerprint || "").toUpperCase() === want);
     if (!dt) return { found: false, online: false, framesRx: 0, simulatorActive: false };
     const seenMs = Date.parse(dt.lastSeenAt);
@@ -3048,15 +3090,43 @@ export class DebugView extends Component {
 
   private async fetchPilotThresholds(): Promise<void> {
     try {
-      // Real-world engine state from the in-browser WASM engine (null while the simulator runs).
-      const state = await this.api?.getRealEngineState();
-      if (!state) return;
-      const data = {
-        pilots: state.pilots as PilotThresholdInfo[],
-        timers: state.timers,
-        gates: (state.gates ?? []).map((g) => ({ ...g, timerLabel: g.timerLabel ?? "", online: Boolean(g.online) })),
-        simulatorActive: state.simulatorRunning,
+      let data: {
+        pilots: PilotThresholdInfo[];
+        timers: DetectedTimer[];
+        gates: Array<{
+          gateId: number;
+          assignedTimerId: number;
+          timerLabel: string;
+          name: string;
+          role: string;
+          trackOrder: number;
+          online: boolean;
+          framesRxCount?: number;
+          lastRssi?: number[];
+        }>;
+        simulatorActive: boolean;
       };
+      if (this.store && this.store.hasHydrated) {
+        data = {
+          pilots: this.store.pilots as PilotThresholdInfo[],
+          timers: this.store.detectedTimers ?? [],
+          gates: (this.store.nodes ?? []).map((g) => ({
+            ...g,
+            timerLabel: g.timerLabel ?? "",
+            online: Boolean(g.online),
+          })),
+          simulatorActive: this.store.simulatorRunning,
+        };
+      } else {
+        const state = await this.api?.getRealEngineState();
+        if (!state) return;
+        data = {
+          pilots: state.pilots as PilotThresholdInfo[],
+          timers: state.timers,
+          gates: (state.gates ?? []).map((g) => ({ ...g, timerLabel: g.timerLabel ?? "", online: Boolean(g.online) })),
+          simulatorActive: state.simulatorRunning,
+        };
+      }
       this.serverSimActive = Boolean(data.simulatorActive);
       if (Array.isArray(data.gates)) {
         this.serverGates = data.gates;
@@ -3093,6 +3163,7 @@ export class DebugView extends Component {
   }
 
   private async pollServerHealth(s: TimerStatus): Promise<void> {
+    if (!this.viewActive) return;
     let framesRx: number | null = null;
     const info = await this.engineTimerInfo(s.fp);
     if (info) {
@@ -3363,6 +3434,9 @@ export class DebugView extends Component {
           } else {
             this.signalAutoX = !this.signalAutoX;
           }
+          if (this.signalAutoX) {
+            this.signalWindowSec = 15;
+          }
           this.renderSignalControls();
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
@@ -3489,6 +3563,7 @@ export class DebugView extends Component {
         case "signal-reset-x":
           this.openAxisMenu = null;
           this.signalAutoX = true;
+          this.signalWindowSec = 15;
           this.renderSignalControls();
           this.dirtySignal = true;
           this.dirtyNoiseTable = true;
@@ -3984,6 +4059,9 @@ export class DebugView extends Component {
         this.signalWindowSec = p.signalWindowSec;
       }
       if (typeof p.signalAutoX === "boolean") this.signalAutoX = p.signalAutoX;
+      if (this.signalAutoX) {
+        this.signalWindowSec = 15;
+      }
       if (typeof p.signalAutoY === "boolean") this.signalAutoY = p.signalAutoY;
       if (
         !this.signalAutoY &&

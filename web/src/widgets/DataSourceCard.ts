@@ -1108,9 +1108,10 @@ export class PersistenceSettings extends Component {
           "Any current pilots, track gates, practice sessions, or unsaved active data in the current workspace will be replaced with the demo dataset.",
         confirmLabel: "Restore Demo Data",
         onConfirm: async () => {
+          this.announcer?.wakeAudio();
           await this.api.restoreDemoData();
           if (this.announcer) {
-            this.announcer.update({ enabled: true });
+            this.announcer.update({ enabled: true, qualifierLapCallouts: true });
           }
           sharedMultiGPService.reloadPrefs();
           this.refreshStorage(true);

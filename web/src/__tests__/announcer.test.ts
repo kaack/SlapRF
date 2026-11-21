@@ -23,6 +23,7 @@ interface FakeAudioRig {
   oscillatorsStarted: number[];
   spokenTexts: string[];
   cancelCalls: number;
+  rejectWithNotAllowed: boolean;
   finishCurrentSpeech: () => void;
 }
 
@@ -31,6 +32,7 @@ function installFakeSpeechAndAudio(): FakeAudioRig {
     oscillatorsStarted: [],
     spokenTexts: [],
     cancelCalls: 0,
+    rejectWithNotAllowed: false,
     finishCurrentSpeech: () => {},
   };
 
@@ -153,6 +155,10 @@ function installFakeSpeechAndAudio(): FakeAudioRig {
     spyOn(window.speechSynthesis, "speak").mockImplementation((u: unknown) => {
       const utt = u as SpeechSynthesisUtterance;
       activeUtterance = utt;
+      if (rig.rejectWithNotAllowed) {
+        utt.onerror?.({ error: "not-allowed" } as unknown as SpeechSynthesisErrorEvent);
+        return;
+      }
       rig.spokenTexts.push(utt.text);
     });
   }
@@ -841,10 +847,51 @@ describe("services/announcer — Phonetic Names, Lap Formatting, Queue Dedup & W
         expect(flasherItems[0].style.display).not.toBe("none");
       } finally {
         sb.destroy();
+        router.clearListeners();
       }
     } finally {
       ann.stop();
       delete win.SlapRFAndroid;
+    }
+  });
+
+  it("recovers from browser autoplay not-allowed errors on first click or single Announcer button press", () => {
+    const rig = installFakeSpeechAndAudio();
+    rig.rejectWithNotAllowed = true;
+
+    const store = makeStore({
+      operatingMode: "practice",
+      pilots: [makePilot(1, { callsign: "FAERRY" })],
+    });
+    const ann = new Announcer(store);
+    try {
+      // Simulate a lap crossing while browser autoplay blocks speechSynthesis.speak with not-allowed
+      store.ingestLap(makeLap(1, 1, 1, 12.45), []);
+      expect(rig.spokenTexts).toEqual([]);
+
+      // First user click anywhere on the page unlocks audio and replays the blocked lap callout
+      rig.rejectWithNotAllowed = false;
+      window.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      expect(rig.spokenTexts).toEqual(["Faerry, 12.45"]);
+    } finally {
+      ann.stop();
+    }
+
+    const ann3 = new Announcer(store);
+    try {
+      // If a callout is blocked by autoplay and the user clicks the Announcer toggle button,
+      // a single click wakes it ("Announcer on") instead of turning it off
+      rig.spokenTexts.length = 0;
+      rig.rejectWithNotAllowed = true;
+      store.ingestLap(makeLap(2, 1, 2, 12.11), []);
+      expect(rig.spokenTexts).toEqual([]);
+
+      rig.rejectWithNotAllowed = false;
+      ann3.toggleEnabledFromGesture();
+      expect(ann3.settings.enabled).toBe(true);
+      expect(rig.spokenTexts).toEqual(["Announcer on"]);
+    } finally {
+      ann3.stop();
     }
   });
 });

@@ -708,6 +708,33 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LapRFEmulatorView,
           new PointerEvent("pointerup", { bubbles: true, pointerId: 47, pointerType: "touch", clientX: 215, clientY: 202 })
         );
         expect(router.route).toBe("setup");
+
+        // Regression guard: DebugView Auto X keeps a steady 15s window without jumping on sample arrival jitter,
+        // and onDeactivate() halts background view work until onActivate() resumes it.
+        const dbgAny = debugView as unknown as {
+          signalAutoX: boolean;
+          signalWindowSec: number;
+          viewActive: boolean;
+          signalRing: { points: Array<{ n: number; us: number; tMs: number; dbm: number[]; floor: number[]; hits: number[] }> };
+          updateAutoSignalAxes: (w: number) => void;
+        };
+        dbgAny.signalAutoX = true;
+        dbgAny.signalWindowSec = 15;
+        dbgAny.signalRing.points = Array.from({ length: 40 }, (_, idx) => ({
+          n: idx + 1,
+          us: 13400,
+          tMs: 1000 + idx * (idx % 2 === 0 ? 22.5 : 19.1),
+          dbm: [-90, -90, -90, -90, -90, -90, -90, -90],
+          floor: [-92, -92, -92, -92, -92, -92, -92, -92],
+          hits: [0, 0, 0, 0, 0, 0, 0, 0],
+        }));
+        dbgAny.updateAutoSignalAxes(1115);
+        expect(dbgAny.signalWindowSec).toBe(15);
+
+        debugView.onDeactivate();
+        expect(dbgAny.viewActive).toBe(false);
+        debugView.onActivate();
+        expect(dbgAny.viewActive).toBe(true);
       } finally {
         Object.defineProperty(window, "innerWidth", { value: origInnerWidth, configurable: true, writable: true });
       }

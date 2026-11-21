@@ -801,7 +801,20 @@ function notifyParsedSubRouteListeners(parsed: ParsedHashState, crossRoute = fal
 }
 
 let activeRouterInstance: Router | null = null;
+const allRouterInstances = new Set<Router>();
 let currentParsedHashState: ParsedHashState = { route: "races", races: { tab: "directory" } };
+
+export function resetRouterStateForTest(): void {
+  for (const inst of Array.from(allRouterInstances)) {
+    inst.destroyWindowListeners();
+  }
+  allRouterInstances.clear();
+  activeRouterInstance = null;
+  currentParsedHashState = { route: "races", races: { tab: "directory" } };
+  pendingRacesTab = null;
+  pendingRacesStage = null;
+  pendingPracticeTab = null;
+}
 
 export function getCurrentParsedHash(): ParsedHashState {
   return parseHashState(location.hash) ?? currentParsedHashState;
@@ -821,10 +834,13 @@ export function pushAppHash(hash: string): void {
   if (location.hash === normalized) return;
   try {
     window.history.pushState(null, "", `${location.pathname}${location.search}${normalized}`);
-    activeRouterInstance?.markHashHandled(normalized, parsed ?? undefined);
   } catch {
+    // Ignore history errors before falling back to location.hash
+  }
+  if (location.hash !== normalized) {
     location.hash = normalized;
   }
+  activeRouterInstance?.markHashHandled(normalized, parsed ?? undefined, true);
 }
 
 /**
@@ -841,10 +857,13 @@ export function replaceAppHash(hash: string): void {
   if (location.hash === normalized) return;
   try {
     window.history.replaceState(null, "", `${location.pathname}${location.search}${normalized}`);
-    activeRouterInstance?.markHashHandled(normalized, parsed ?? undefined);
   } catch {
-    // Ignore history errors
+    // Ignore history errors before falling back to location.hash
   }
+  if (location.hash !== normalized) {
+    location.hash = normalized;
+  }
+  activeRouterInstance?.markHashHandled(normalized, parsed ?? undefined, false);
 }
 
 function applyParsedSideEffects(parsed: ParsedHashState): void {
@@ -928,8 +947,13 @@ export class Router {
   private current: RouteId = loadInitialRoute();
   private lastHandledHash: string = location.hash;
   private readonly listeners = new Set<(route: RouteId) => void>();
+  private readonly handleLocationChange: () => void;
 
   constructor() {
+    for (const inst of Array.from(allRouterInstances)) {
+      inst.destroyWindowListeners();
+    }
+    allRouterInstances.add(this);
     activeRouterInstance = this;
     if (!location.hash || location.hash === "#" || location.hash === "#/") {
       const pracTarget = currentParsedHashState.practice ?? currentParsedHashState.live;
@@ -950,7 +974,7 @@ export class Router {
     }
     persistLocationStorage(this.current, location.hash);
 
-    const handleLocationChange = (): void => {
+    this.handleLocationChange = (): void => {
       const rawHash = location.hash;
       if (rawHash === this.lastHandledHash) return;
       this.lastHandledHash = rawHash;
@@ -977,11 +1001,24 @@ export class Router {
       });
     };
 
-    window.addEventListener("hashchange", handleLocationChange);
-    window.addEventListener("popstate", handleLocationChange);
+    window.addEventListener("hashchange", this.handleLocationChange);
+    window.addEventListener("popstate", this.handleLocationChange);
   }
 
-  public markHashHandled(hash: string, parsed?: ParsedHashState): void {
+  public destroyWindowListeners(): void {
+    window.removeEventListener("hashchange", this.handleLocationChange);
+    window.removeEventListener("popstate", this.handleLocationChange);
+    allRouterInstances.delete(this);
+    if (activeRouterInstance === this) {
+      activeRouterInstance = null;
+    }
+  }
+
+  public markHashHandled(
+    hash: string,
+    parsed?: ParsedHashState,
+    notifySameRoute = false
+  ): void {
     this.lastHandledHash = hash;
     const route = parsed?.route;
     if (route && route !== this.current) {
@@ -996,11 +1033,14 @@ export class Router {
           console.error("[Router] subscriber error:", err);
         }
       });
+    } else if (notifySameRoute && parsed) {
+      notifyParsedSubRouteListeners(parsed);
     }
   }
 
   public clearListeners(): void {
     this.listeners.clear();
+    this.destroyWindowListeners();
   }
 
   public get route(): RouteId {

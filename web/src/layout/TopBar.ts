@@ -391,7 +391,7 @@ export class TopBar extends Component {
         this.router.navigate("network");
         break;
       case "announcer":
-        this.announcer.update({ enabled: !this.announcer.settings.enabled });
+        this.announcer.toggleEnabledFromGesture();
         break;
       case "install-pwa":
         void triggerPwaInstallPrompt().then((mode) => {

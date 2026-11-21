@@ -1,4 +1,8 @@
-import { setPracticeTopBarContext, setRacesTopBarContext } from "../core/router";
+import {
+  resetRouterStateForTest,
+  setPracticeTopBarContext,
+  setRacesTopBarContext,
+} from "../core/router";
 import { ApiClient } from "../services/api_client";
 import { AppStore } from "../state/store";
 import { closeActiveLapEditorModal } from "../widgets/HeatLapEditorModal";
@@ -561,10 +565,11 @@ function resetTestEnvironment(): void {
     // Ignore
   }
   try {
-    window.history.replaceState(null, "", "/#/");
-  } catch {
     location.hash = "#/";
+  } catch {
+    // Ignore
   }
+  resetRouterStateForTest();
   setRacesTopBarContext({
     tab: "directory",
     raceId: "",

@@ -156,7 +156,12 @@ export class Announcer {
   private airhornBuffer: AudioBuffer | null = null;
   private airhornLoading: Promise<AudioBuffer | null> | null = null;
   private gestureUnlockBound = false;
+  private unbindGestureUnlock: (() => void) | null = null;
   private utteranceWatchdog = 0;
+  private voicePollTimer = 0;
+  private currentStarted = false;
+  private blockedByAutoplay = false;
+  private lastUnspokenEntry: { text: string; queuedAt: number; slotIndex?: number; maxAgeMs?: number } | null = null;
 
   constructor(store: AppStore) {
     this.store = store;
@@ -167,11 +172,19 @@ export class Announcer {
     }
     setWakeLockEnabled(this.prefs.keepScreenAwake !== false);
     this.piper = new PiperNeuralTts(() => this.notify());
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      try {
+        if (speechSynthesis.speaking || speechSynthesis.pending) {
+          speechSynthesis.cancel();
+        }
+      } catch {
+        // ignore startup cancel errors
+      }
+    }
     if (this.prefs.enabled) {
       this.bindGestureAudioUnlock();
-      const activeURI = this.activeVoiceURI();
-      if (isPiperVoiceURI(activeURI)) {
-        void this.piper.preloadVoice(activeURI).catch(() => undefined);
+      if (isPiperVoiceURI(this.prefs.voiceURI)) {
+        void this.piper.preloadVoice(this.activeVoiceURI()).catch(() => undefined);
       }
       this.resetIdleTimer();
     }
@@ -249,20 +262,39 @@ export class Announcer {
       })
     );
     if ("speechSynthesis" in window) {
-      speechSynthesis.addEventListener("voiceschanged", () => this.notify());
+      const checkVoicesReady = () => {
+        if (this.prefs.enabled) {
+          const activeURI = this.activeVoiceURI();
+          if (isPiperVoiceURI(activeURI)) {
+            void this.piper.preloadVoice(activeURI).catch(() => undefined);
+          }
+        }
+        this.notify();
+      };
+      speechSynthesis.addEventListener("voiceschanged", checkVoicesReady);
       // Prime speechSynthesis at boot: Chrome only starts fetching its network "Google ..."
       // voices after the first getVoices() call, and may populate local OS voices first before
       // adding remote Google voices a moment later.
-      speechSynthesis.getVoices();
-      let polls = 0;
-      const pollId = window.setInterval(() => {
-        polls++;
-        const list = speechSynthesis.getVoices();
-        if (list.some((v) => !v.localService) || polls >= 10) {
-          window.clearInterval(pollId);
-          this.notify();
-        }
-      }, 300);
+      const initialList = speechSynthesis.getVoices();
+      const hasTargetVoice = (list: SpeechSynthesisVoice[]) =>
+        list.some(
+          (v) =>
+            !v.localService ||
+            v.voiceURI === this.prefs.voiceURI ||
+            v.name.toLowerCase() === (this.prefs.voiceURI || PREFERRED_DEFAULT_VOICE).toLowerCase()
+        );
+      if (!hasTargetVoice(initialList)) {
+        let polls = 0;
+        this.voicePollTimer = window.setInterval(() => {
+          polls++;
+          const list = speechSynthesis.getVoices();
+          if (hasTargetVoice(list) || polls >= 10) {
+            window.clearInterval(this.voicePollTimer);
+            this.voicePollTimer = 0;
+            checkVoicesReady();
+          }
+        }, 300);
+      }
     }
   }
 
@@ -354,9 +386,28 @@ export class Announcer {
     );
   }
 
+  /**
+   * Toggles the master announcer from a TopBar button click. If the announcer was auto-enabled on
+   * page load in Demo mode and browser autoplay blocked speech (`error: "not-allowed"`) before any
+   * user gesture occurred, the first click wakes and announces `"Announcer on"` instead of muting.
+   */
+  public toggleEnabledFromGesture(): void {
+    if (this.prefs.enabled && this.blockedByAutoplay) {
+      this.blockedByAutoplay = false;
+      this.update({ enabled: true });
+      this.wakeAudio();
+      this.say("Announcer on", true);
+      return;
+    }
+    this.update({ enabled: !this.prefs.enabled });
+  }
+
   /** Enabling must happen from a click the first time (browser autoplay policy). */
   public update(next: Partial<AnnouncerPrefs>): void {
     const wasEnabled = this.prefs.enabled;
+    if (next.enabled !== undefined) {
+      this.blockedByAutoplay = false;
+    }
     const wasQualLapCallouts = this.prefs.qualifierLapCallouts;
     const wasRaceLapCallouts = this.prefs.raceLapCallouts;
     this.prefs = sanitizePrefs({ ...this.prefs, ...next });
@@ -393,6 +444,7 @@ export class Announcer {
       this.say("Announcer on", true);
     }
     if (wasEnabled && !this.prefs.enabled) {
+      this.unbindGestureUnlock?.();
       this.say("Announcer off", true, true);
     }
     this.resetIdleTimer();
@@ -406,6 +458,9 @@ export class Announcer {
 
   public stop(): void {
     this.prefs.enabled = false;
+    this.unbindGestureUnlock?.();
+    window.clearInterval(this.voicePollTimer);
+    this.voicePollTimer = 0;
     window.clearTimeout(this.idleTimer);
     this.idleTimer = 0;
     window.clearTimeout(this.timingConnTimer);
@@ -1081,6 +1136,8 @@ export class Announcer {
     this.queue = [];
     const hadBrowserUtterance = this.current !== null;
     this.current = null;
+    this.currentStarted = false;
+    this.lastUnspokenEntry = null;
     this.liveUtterances.clear();
     this.neuralSpeaking = false;
     this.utteranceToken++;
@@ -1126,9 +1183,20 @@ export class Announcer {
 
     if (isPiperVoiceURI(activeURI) && this.keepAwake) {
       if (this.keepAwake.state === "suspended") {
-        void this.keepAwake.resume().catch(() => undefined);
+        void this.keepAwake
+          .resume()
+          .then(() => {
+            if (this.prefs.enabled) this.pump();
+          })
+          .catch(() => undefined);
       }
-      if (this.keepAwake.state === "running") {
+      const piperReady = this.piper.isVoiceLoaded(activeURI);
+      if (!piperReady) {
+        void this.piper.preloadVoice(activeURI).catch(() => undefined);
+      }
+      const canFallbackToBrowserVoice =
+        !piperReady && "speechSynthesis" in window && this.voices().length > 0;
+      if (this.keepAwake.state === "running" && !canFallbackToBrowserVoice) {
         const token = ++this.utteranceToken;
         this.neuralSpeaking = true;
         const finishNeural = () => {
@@ -1157,7 +1225,7 @@ export class Announcer {
             if (this.utteranceToken !== token) return;
             this.neuralSpeaking = false;
             if (Date.now() - next!.queuedAt <= maxAgeMs) {
-              this.speakBrowserUtterance(next!.text);
+              this.speakBrowserUtterance(next!.text, next!);
             } else {
               this.pump();
             }
@@ -1166,10 +1234,23 @@ export class Announcer {
       }
     }
 
-    this.speakBrowserUtterance(next.text);
+    this.speakBrowserUtterance(next.text, next);
   }
 
-  private speakBrowserUtterance(text: string): void {
+  private isNativeSpeechSpeak(): boolean {
+    if (typeof window === "undefined" || !("speechSynthesis" in window)) return false;
+    if (typeof speechSynthesis.speak !== "function") return false;
+    try {
+      return Function.prototype.toString.call(speechSynthesis.speak).includes("[native code]");
+    } catch {
+      return false;
+    }
+  }
+
+  private speakBrowserUtterance(
+    text: string,
+    entry?: { text: string; queuedAt: number; slotIndex?: number; maxAgeMs?: number }
+  ): void {
     const cleaned = text
       .replace(/\s*·\s*/g, ", ")
       .replace(/\b(\d+)\.00\b/g, "$1")
@@ -1225,34 +1306,82 @@ export class Announcer {
     utterance.rate = this.prefs.rate;
     utterance.volume = this.prefs.volume;
 
-    const done = () => {
+    const done = (didSpeak = true) => {
       this.liveUtterances.delete(utterance);
       if (this.current !== utterance) return; // superseded by clear()
       window.clearTimeout(this.utteranceWatchdog);
       this.utteranceWatchdog = 0;
       this.current = null;
+      this.currentStarted = false;
       if (!this.prefs.enabled && this.queue.length === 0) {
         this.sleepAudio();
         return;
       }
-      // Back-to-back callouts (a pack crossing together) also clip on some Windows voices
-      // when started the instant the previous one ends; a short breath avoids it.
-      this.holdUntil = Math.max(this.holdUntil, Date.now() + BETWEEN_CALLOUTS_MS);
+      if (didSpeak) {
+        // Back-to-back callouts (a pack crossing together) also clip on some Windows voices
+        // when started the instant the previous one ends; a short breath avoids it.
+        this.holdUntil = Math.max(this.holdUntil, Date.now() + BETWEEN_CALLOUTS_MS);
+      }
       this.pump();
     };
-    utterance.onend = done;
-    utterance.onerror = done;
-    this.current = utterance;
-    window.clearTimeout(this.utteranceWatchdog);
-    const watchdogMs = Math.max(24_000, cleaned.length * 240);
-    this.utteranceWatchdog = window.setTimeout(() => {
+
+    const fullWatchdogMs = Math.max(24_000, cleaned.length * 240);
+    const onWatchdog = () => {
       if (this.current === utterance) {
-        if ("speechSynthesis" in window) {
-          speechSynthesis.cancel();
+        const spoke = this.currentStarted;
+        if (!spoke && entry) {
+          const maxAge = entry.maxAgeMs ?? STALE_AFTER_MS;
+          if (Date.now() - entry.queuedAt <= maxAge) {
+            this.lastUnspokenEntry = entry;
+          }
         }
-        done();
+        if (!spoke && this.prefs.enabled) {
+          this.bindGestureAudioUnlock();
+        }
+        if ("speechSynthesis" in window) {
+          try {
+            speechSynthesis.cancel();
+          } catch {
+            // ignore cancel error
+          }
+        }
+        done(spoke);
       }
-    }, watchdogMs);
+    };
+
+    utterance.onstart = () => {
+      if (this.current !== utterance) return;
+      this.currentStarted = true;
+      this.blockedByAutoplay = false;
+      this.lastUnspokenEntry = null;
+      window.clearTimeout(this.utteranceWatchdog);
+      this.utteranceWatchdog = window.setTimeout(onWatchdog, fullWatchdogMs);
+    };
+    utterance.onend = () => done(true);
+    utterance.onerror = (ev) => {
+      const spoke = this.currentStarted;
+      const errCode = (ev as { error?: string })?.error;
+      if (!spoke || errCode === "not-allowed" || errCode === "audio-busy") {
+        if (errCode === "not-allowed") {
+          this.blockedByAutoplay = true;
+        }
+        if (entry) {
+          const maxAge = entry.maxAgeMs ?? STALE_AFTER_MS;
+          if (Date.now() - entry.queuedAt <= maxAge) {
+            this.lastUnspokenEntry = entry;
+          }
+        }
+        if (this.prefs.enabled) {
+          this.bindGestureAudioUnlock();
+        }
+      }
+      done(spoke);
+    };
+    this.current = utterance;
+    this.currentStarted = false;
+    window.clearTimeout(this.utteranceWatchdog);
+    const initialWatchdogMs = this.isNativeSpeechSpeak() ? 1500 : fullWatchdogMs;
+    this.utteranceWatchdog = window.setTimeout(onWatchdog, initialWatchdogMs);
     if (speechSynthesis.paused) {
       speechSynthesis.resume();
     }
@@ -1269,7 +1398,7 @@ export class Announcer {
    * two of silence and take a few hundred ms to wake — long enough to eat the start of
    * "Vanover". Must be called from a user gesture the first time.
    */
-  private wakeAudio(): void {
+  public wakeAudio(): void {
     const Ctx = window.AudioContext ?? (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
     if (!Ctx) return;
     if (!this.keepAwake) {
@@ -1291,22 +1420,89 @@ export class Announcer {
   }
 
   /**
-   * When the announcer is restored as enabled across a page reload, browsers may start
-   * `AudioContext` in a `"suspended"` state until the first pointer/key gesture on the page.
-   * Bind a one-shot listener so any click, tap, or keypress immediately unlocks audio output.
+   * When the announcer is restored as enabled across a page reload (or starts enabled in Demo mode),
+   * browsers block `AudioContext` and `speechSynthesis.speak()` (`error: "not-allowed"`) until the
+   * first user activation gesture (`click`, `pointerup`, `touchend`, `keydown`).
+   * Bind a listener so the first gesture unlocks both `AudioContext` and `speechSynthesis` and
+   * immediately speaks any pending callout.
    */
   private bindGestureAudioUnlock(): void {
     if (this.gestureUnlockBound || typeof window === "undefined") return;
     this.gestureUnlockBound = true;
-    const unlock = () => {
-      window.removeEventListener("pointerdown", unlock, true);
-      window.removeEventListener("keydown", unlock, true);
-      this.gestureUnlockBound = false;
+    const onPointerDown = () => {
       if (this.prefs.enabled) {
         this.wakeAudio();
       }
     };
-    window.addEventListener("pointerdown", unlock, true);
+    const cleanupListeners = () => {
+      window.removeEventListener("pointerdown", onPointerDown, true);
+      window.removeEventListener("pointerup", unlock, true);
+      window.removeEventListener("click", unlock, true);
+      window.removeEventListener("touchend", unlock, true);
+      window.removeEventListener("keydown", unlock, true);
+      this.gestureUnlockBound = false;
+      this.unbindGestureUnlock = null;
+    };
+    const unlock = (ev?: Event) => {
+      const targetEl = ev && ev.target instanceof Element ? ev.target : null;
+      if (this.blockedByAutoplay && targetEl?.closest?.('[data-action="announcer"]')) {
+        return;
+      }
+      cleanupListeners();
+      this.blockedByAutoplay = false;
+      if (!this.prefs.enabled) return;
+      this.wakeAudio();
+
+      if (this.current && !this.currentStarted && this.isNativeSpeechSpeak()) {
+        window.clearTimeout(this.utteranceWatchdog);
+        this.utteranceWatchdog = 0;
+        this.liveUtterances.delete(this.current);
+        this.current = null;
+        this.currentStarted = false;
+        this.holdUntil = 0;
+        try {
+          speechSynthesis.cancel();
+        } catch {
+          // ignore cancel errors
+        }
+      }
+
+      if (this.lastUnspokenEntry) {
+        const entry = this.lastUnspokenEntry;
+        this.lastUnspokenEntry = null;
+        const maxAge = entry.maxAgeMs ?? STALE_AFTER_MS;
+        if (Date.now() - entry.queuedAt <= maxAge) {
+          if (entry.slotIndex !== undefined) {
+            this.queue = this.queue.filter((q) => q.slotIndex !== entry.slotIndex);
+          }
+          if (!this.queue.some((q) => q.text === entry.text)) {
+            this.queue.unshift(entry);
+          }
+        }
+      }
+
+      if (this.queue.length > 0 && !this.current && !this.neuralSpeaking) {
+        this.holdUntil = 0;
+        this.pump();
+      } else if ("speechSynthesis" in window && !this.current && this.isNativeSpeechSpeak()) {
+        try {
+          if (speechSynthesis.paused) {
+            speechSynthesis.resume();
+          }
+          const prime = new SpeechSynthesisUtterance(" ");
+          prime.volume = 0;
+          prime.rate = 1.6;
+          speechSynthesis.speak(prime);
+        } catch {
+          // ignore prime errors
+        }
+      }
+    };
+    this.unbindGestureUnlock = cleanupListeners;
+    window.addEventListener("pointerdown", onPointerDown, true);
+    window.addEventListener("pointerup", unlock, true);
+    window.addEventListener("click", unlock, true);
+    window.addEventListener("touchend", unlock, true);
     window.addEventListener("keydown", unlock, true);
   }
 }

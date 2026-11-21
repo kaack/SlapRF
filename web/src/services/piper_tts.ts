@@ -277,6 +277,7 @@ export class PiperNeuralTts {
   private runtimePromise: Promise<void> | null = null;
 
   private readonly voiceSessions = new Map<string, Promise<LoadedVoiceSession>>();
+  private readonly loadedVoices = new Set<string>();
   private readonly cachedVoices = new Set<string>();
   private readonly downloadProgress = new Map<string, number>();
   private readonly audioCache = new Map<string, AudioBuffer>();
@@ -292,6 +293,11 @@ export class PiperNeuralTts {
   public isVoiceCached(uri: string): boolean {
     const desc = getPiperVoice(uri);
     return this.cachedVoices.has(desc.voiceId);
+  }
+
+  public isVoiceLoaded(uri: string): boolean {
+    const desc = getPiperVoice(uri);
+    return this.loadedVoices.has(desc.voiceId);
   }
 
   public getDownloadProgress(uri: string): number | null {
@@ -672,6 +678,7 @@ export class PiperNeuralTts {
 
       this.downloadProgress.delete(desc.voiceId);
       this.cachedVoices.add(desc.voiceId);
+      this.loadedVoices.add(desc.voiceId);
       this.onStatusChange();
 
       return {
@@ -687,6 +694,7 @@ export class PiperNeuralTts {
 
     this.downloadProgress.delete(desc.voiceId);
     this.cachedVoices.add(desc.voiceId);
+    this.loadedVoices.add(desc.voiceId);
     this.onStatusChange();
 
     return {

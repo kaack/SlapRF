@@ -348,6 +348,10 @@ export class WasmSimTransport implements ApiTransport {
     window.slaprfWasm?.pushHubChannels?.();
   }
 
+  public isStreamConnected(): boolean {
+    return Boolean(this.streamCallback && window.slaprfWasm);
+  }
+
   public connectStream(onEnvelope: (msg: StreamEnvelope) => void): void {
     this.streamCallback = onEnvelope;
     void this.ensureReady().then((wasm) => {

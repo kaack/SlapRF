@@ -1875,7 +1875,9 @@ export class PilotRssiChart extends Component {
         const from = Math.max(0, PilotRssiChart.firstAtOrAfter(frames, start) - 1);
         const to = Math.min(frames.length - 1, PilotRssiChart.firstAtOrAfter(frames, capEnd));
         if (to - from < 1) return;
-        const step = Math.max(1, Math.floor((to - from) / plotW));
+        const samplePeriodUs = this.isRH && !this.hwMode.endsWith("_usb") ? 100_000 : 20_000;
+        const estSamples = this.windowUs / samplePeriodUs;
+        const step = Math.max(1, Math.floor(estSamples / Math.max(1, plotW)));
         for (const entry of pilotEntries) {
           ctx.strokeStyle = this.isMultiPilotMode
             ? adaptColorForTheme(entry.pilot.color || this.colorOf(gate.gateId))
@@ -1894,16 +1896,17 @@ export class PilotRssiChart extends Component {
               lastTs = frames[i].timestampUs;
             }
           } else {
-            // Anchor decimation buckets to immutable `seqNum` (rather than mutable array index `i`,
-            // which shifts on `trimHistory`) and preserve each bucket's peak RSSI so gate crossings
-            // never shimmer or alias while scrolling zoomed-out windows.
+            // Anchor decimation buckets to immutable `timestampUs` (rather than 8-bit wrapping `seqNum`
+            // or mutable array index `i`, which shifts on `trimHistory`) and preserve each bucket's
+            // peak RSSI so gate crossings never shimmer or alias while scrolling zoomed-out windows.
+            const bucketUs = step * samplePeriodUs;
             let started = false;
             let curBucket = -1;
             let peakVal = -Infinity;
             let peakTs = 0;
             for (let i = from; i <= to; i++) {
               const fr = frames[i];
-              const b = Math.floor((fr.seqNum || i) / step);
+              const b = Math.floor(fr.timestampUs / bucketUs);
               const val = fr.rssi[entry.slot] ?? this.yMin;
               if (b !== curBucket) {
                 if (curBucket >= 0) {

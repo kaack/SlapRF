@@ -1574,11 +1574,10 @@ export class ApiClient {
   private async pollStatus(): Promise<void> {
     if (isServerDisconnectedLockout()) return;
     try {
-      // While the real-time WebSocket stream is open on the native Go backend, practice/race/lap
-      // deltas are already pushed immediately over `/v1/ws/stream`, so poll `/v1/status?lite=1`
-      // (~1 KB instead of re-downloading and re-normalizing hundreds of KB of lap history every 2 s).
-      const statusUrl =
-        this.backendMode && this.transport.isStreamConnected?.() ? "/v1/status?lite=1" : "/v1/status";
+      // While the real-time stream is open (WebSocket on native Go server or onStream in WASM),
+      // practice/race/lap deltas are already pushed immediately, so poll `/v1/status?lite=1`
+      // (~1 KB instead of re-serializing and re-normalizing hundreds of KB of lap history every 2 s).
+      const statusUrl = this.transport.isStreamConnected?.() ? "/v1/status?lite=1" : "/v1/status";
       const status = await this.transport.request<StatusResponse>("GET", statusUrl);
       this.store.applyStatus(status);
       if (this.backendMode && status.simulatorRunning !== this.simMode) {

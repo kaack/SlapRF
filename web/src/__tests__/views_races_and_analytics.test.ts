@@ -1514,7 +1514,7 @@ describe("views/PracticeView, PilotView & TopBar Integration", () => {
         },
       })
     );
-    window.history.replaceState(null, "", "/#/races/friday-night/control");
+    location.hash = "#/races/friday-night/control";
 
     const gfRound = makeRound("gf-r1", {
       stageIndex: 2,
@@ -1635,7 +1635,7 @@ describe("views/PracticeView, PilotView & TopBar Integration", () => {
   });
 
   it("renders Race Control status notice box above bottom bar when progression is blocked or paused, and keeps confirmed strip accurate", async () => {
-    window.history.replaceState(null, "", "/#/races/oq-notice-test/control");
+    location.hash = "#/races/oq-notice-test/control";
     const makeOqRace = (overrides?: Partial<ReturnType<typeof buildTwoStageConfiguredRace>>) =>
       buildTwoStageConfiguredRace({
         raceId: "oq-notice-1",
