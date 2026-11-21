@@ -86,6 +86,15 @@ Required for `firmware/tools/console_check.py`, `noise_stats.py`, `serial_captur
 python -m pip install pyserial esptool
 ```
 
+### Linux USB Serial & Bluetooth LE Prerequisites
+- **USB Serial (`/dev/ttyACM*`)**: Add your user to `dialout` (Debian/Ubuntu/Raspberry Pi OS) or `uucp` (Arch), and install a `uaccess` udev rule for immediate plug-and-play access to XIAO ESP32-C5 (`303a:1001`) without logging out:
+  ```bash
+  sudo usermod -aG dialout "$USER"
+  echo 'SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", MODE="0660", GROUP="dialout", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/99-slaprf-esp32c5.rules
+  sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=tty --attr-match=idVendor=303a --attr-match=idProduct=1001
+  ```
+- **Bluetooth LE (BlueZ over D-Bus)**: Verify a powered adapter exists (`bluetoothctl list` and `bluetoothctl show` -> `Powered: yes`). SlapRF automatically discovers powered BlueZ adapters including `hci1`+; set `SLAPRF_BLE_ADAPTER=hci1` to pin a specific controller on multi-adapter hosts.
+
 ### ESP-IDF `v5.5.1` (`esp32c5` Target)
 Required only when compiling C firmware locally (otherwise download CI artifacts via `gh run download`):
 

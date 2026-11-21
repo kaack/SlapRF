@@ -86,6 +86,8 @@ Structured replies begin with `@{...}` JSON on a single line (so firmware log li
 
 ### Bluetooth LE Bench Testing Notes (macOS & Linux)
 - **Claim-on-Pair `AUTH` Lock**: On BLE Hub firmware (`slaprf-xiao-c5-ble.bin`), the first command over GATT RX must be `AUTH <32-hex-key>\n` (handled automatically by `usb.Manager`). Unauthenticated GATT peers are disconnected. Send `BLEPAIR CLEAR` over USB (or hold **BOOT** for 3 seconds) before pairing with a different host DB.
+- **Linux BlueZ Non-`hci0` Adapters**: `tinygo.org/x/bluetooth`'s `DefaultAdapter` hardcodes `hci0`, so `internal/usb/ble_adapter_linux.go` enumerates `org.bluez.Adapter1` over D-Bus (preferring the first `Powered: true` adapter in natural `hciN` order, with sysfs fallback). Set `SLAPRF_BLE_ADAPTER=hci1` to override adapter selection. Inspect controllers with `bluetoothctl list` and `busctl tree org.bluez`.
+- **Linux API Bench Order**: `PUT /v1/hardware/mode` updates whichever engine is currently active (Simulator vs Real). When driving a fresh server over REST for real hardware tests, stop the simulator (`PATCH /v1/sim` `{"running":false}`) **before** calling `PUT /v1/hardware/mode` `{"mode":"slaprf_ble"}` so `SetBLEScanEnabled(true)` activates on the real engine.
 - **macOS SSH TCC Caveat**: Running a BLE scan directly inside a headless `sshd` session checks TCC permissions against `sshd-keygen-wrapper` (`bluetooth is not authorized for this app`). On macOS, launch `slaprf` from a GUI user context (`Terminal.app` or via `open -n` on a signed `.app` bundle with `NSBluetoothAlwaysUsageDescription`) so macOS displays the Bluetooth permission prompt.
 
 ---

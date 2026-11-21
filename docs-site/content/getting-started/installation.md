@@ -58,10 +58,16 @@ Download the latest native SlapRF release from [GitHub Releases](https://github.
      chmod +x ./slaprf-linux-*
      ./slaprf-linux-amd64
      ```
-  3. For USB Hub serial access on Linux, ensure your user belongs to the serial group (`dialout` on Debian / Ubuntu / Raspberry Pi OS, or `uucp` on Arch), then log out and back in once:
+  3. For USB Hub serial access on Linux, add your user to the serial group (`dialout` on Debian / Ubuntu / Raspberry Pi OS, or `uucp` on Arch), then log out and back in once:
      ```bash
      sudo usermod -aG dialout $USER
      ```
+  4. Optional: add a `udev` rule for immediate `/dev/ttyACM*` access on XIAO ESP32-C5 (`303a:1001`) without logging out:
+     ```bash
+     echo 'SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", MODE="0660", GROUP="dialout", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/99-slaprf-esp32c5.rules
+     sudo udevadm control --reload-rules && sudo udevadm trigger
+     ```
+  5. For Bluetooth Hub access on Linux, confirm BlueZ is powered on (`bluetoothctl show` reports `Powered: yes`). If your computer has multiple Bluetooth adapters, SlapRF selects the first powered adapter automatically, or you can set `SLAPRF_BLE_ADAPTER=hci1` to pick one.
   {{< /tab >}}
 {{< /tabs >}}
 
