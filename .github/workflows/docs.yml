@@ -1,0 +1,68 @@
+name: Deploy Docs Only
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "docs-site/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: "docs-page"
+  cancel-in-progress: true
+
+jobs:
+  deploy-docs:
+    name: Build & Push Docs to github-page branch
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: "go.mod"
+
+      - name: Set up Hugo Extended
+        uses: peaceiris/actions-hugo@v3
+        with:
+          hugo-version: "0.170.1"
+          extended: true
+
+      - name: Build static Hugo documentation
+        run: go run ./cmd/build-docs -web ./web -docs ./docs-site -out ./_site/docs -base-url /docs/ -skip-firmware
+
+      - name: Deploy docs to github-page branch
+        run: |
+          WORKTREE_DIR="$(mktemp -d)"
+          for i in 1 2 3; do
+            git fetch origin github-page && break || sleep 5
+          done
+          if ! git show-ref --verify --quiet refs/remotes/origin/github-page; then
+            echo "github-page branch does not exist yet; run Build & Deploy GitHub Page first."
+            exit 1
+          fi
+          git worktree add -B github-page "$WORKTREE_DIR" origin/github-page
+
+          rm -rf "$WORKTREE_DIR/docs/docs"
+          mkdir -p "$WORKTREE_DIR/docs/docs"
+          cp -r ./_site/docs/. "$WORKTREE_DIR/docs/docs/"
+
+          cd "$WORKTREE_DIR"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No changes to commit on github-page branch."
+          else
+            VERSION="${GITHUB_REF_NAME:-main} (${GITHUB_SHA::7})"
+            git commit -m "Deploy Docs for ${VERSION}"
+            for i in 1 2 3; do
+              git push origin github-page --force && break || sleep 5
+            done
+          fi
