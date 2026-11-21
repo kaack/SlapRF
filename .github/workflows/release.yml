@@ -167,6 +167,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Download compiled firmware image
         uses: actions/download-artifact@v4
@@ -187,13 +189,48 @@ jobs:
           merge-multiple: true
           path: dist
 
+      - name: Prepare release notes
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          TAG="${GITHUB_REF_NAME}"
+          NOTES_SRC="docs/releases/${TAG}.md"
+          NOTES_OUT="/tmp/release-notes.md"
+          PREV_TAG="$(git tag --sort=-v:refname | grep -Fx -A1 "${TAG}" | tail -n 1)"
+          if [ "${PREV_TAG}" = "${TAG}" ]; then
+            PREV_TAG=""
+          fi
+
+          if [ -s "${NOTES_SRC}" ]; then
+            cp "${NOTES_SRC}" "${NOTES_OUT}"
+          else
+            {
+              echo "## Changes in ${TAG}"
+              echo ""
+              if [ -n "${PREV_TAG}" ]; then
+                git log "${PREV_TAG}..${TAG}" --no-merges --pretty=format:"- %s (\`%h\`)" | grep -v "\[skip ci\]" || true
+              else
+                git log -n 20 "${TAG}" --no-merges --pretty=format:"- %s (\`%h\`)" | grep -v "\[skip ci\]" || true
+              fi
+              echo ""
+            } > "${NOTES_OUT}"
+          fi
+
+          if [ -n "${PREV_TAG}" ] && ! grep -q "compare/${PREV_TAG}...${TAG}" "${NOTES_OUT}"; then
+            {
+              echo ""
+              echo "**Full Changelog**: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${PREV_TAG}...${TAG}"
+            } >> "${NOTES_OUT}"
+          fi
+          cat "${NOTES_OUT}"
+
       - name: Publish GitHub Release
         if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
+          body_path: /tmp/release-notes.md
+          generate_release_notes: false
           files: |
             web/firmware/slaprf-xiao-c5.bin
             web/firmware/slaprf-xiao-c5-ble.bin
             dist/slaprf-*
           fail_on_unmatched_files: true
-          generate_release_notes: true
