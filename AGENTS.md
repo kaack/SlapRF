@@ -27,15 +27,20 @@ SlapRF shares a single Go timing engine and TypeScript web UI across desktop, mo
    - `cmd/build-web` runs `os.RemoveAll("./_site")`. Never start a static file server with `./_site` as its current working directory on Windows; serve from the repo root (for example `python -m http.server 8099 --bind 127.0.0.1 -d ./_site`).
 4. **Evidence-First UI Debugging**:
    - When diagnosing live browser UI, canvas, WebSerial, or WASM bugs, inspect runtime state over Chrome DevTools Protocol (`live-chrome-cdp` skill) before guessing from static code, and verify the fix in the live browser.
+5. **Git Checkpointing, Conventional Commits & Rebase Hygiene**:
+   - Commit locally early and often at logical, tested milestones using **Conventional Commits** (`feat(scope): ...`, `fix(scope): ...`, `docs: ...`, `ci: ...`, `test: ...`, `chore: ...`) so work-in-progress is never lost, even when holding `git push` for user preview.
+   - Stage explicit file paths (never blind `git add -A`), and rebase/autosquash noisy unpushed fixup commits onto `origin/main` before pushing (`git-and-github-hygiene` skill).
 
 ## On-Demand AI SDLC Skills (`.agents/skills/`)
 
-Activate the relevant skill below whenever a task involves environment setup, building/testing, browser debugging, Android deployment, firmware, hardware bench debugging, or CI/releases:
+Activate the relevant skill below whenever a task involves environment setup, building/testing, browser debugging, screenshots, Android deployment, firmware, hardware bench debugging, Git hygiene, or CI/releases:
 
 - `dev-setup` (`.agents/skills/dev-setup/SKILL.md`): Install and verify Go, Hugo Extended, Playwright Chromium, `gh`, Python `pyserial`/`esptool`, Android SDK/NDK/JDK 17, and ESP-IDF `v5.5.1`.
 - `build-and-test` (`.agents/skills/build-and-test/SKILL.md`): Run `devserver`, build web/docs/portable/Android targets, and execute Go, frontend, and Playwright E2E test suites.
 - `live-chrome-cdp` (`.agents/skills/live-chrome-cdp/SKILL.md`): Attach to the user's visible Chrome session over CDP to inspect DOM, canvas, store, and WASM state in real time.
+- `doc-screenshots` (`.agents/skills/doc-screenshots/SKILL.md`): Generate crisp `2x` Retina matched Dark and Light screenshots for `README.md` and `docs-site/` via `capture_retina.go`.
 - `android-wifi-deploy` (`.agents/skills/android-wifi-deploy/SKILL.md`): Build the signed Android APK, pair/connect wireless `adb` over Wi-Fi, install/launch `app.slaprf`, stream `logcat`, and attach CDP to the Android WebView.
 - `esp32c5-firmware-build` (`.agents/skills/esp32c5-firmware-build/SKILL.md`): Compile `slaprf-xiao-c5.bin` (USB/Spoke) and `slaprf-xiao-c5-ble.bin` (Bluetooth Hub) locally with ESP-IDF `v5.5.1` or fetch CI build artifacts.
 - `usb-timer-debug-and-flash` (`.agents/skills/usb-timer-debug-and-flash/SKILL.md`): Discover XIAO ESP32-C5 USB ports, avoid port locks and `usbser.sys` boot-latch pitfalls, flash/patch `SLAPRF02` images, and run live USB console/RF diagnostics.
+- `git-and-github-hygiene` (`.agents/skills/git-and-github-hygiene/SKILL.md`): Conventional Commits conventions, frequent local checkpoint commits, staging discipline, and rebasing/autosquashing before pushing.
 - `ci-and-release` (`.agents/skills/ci-and-release/SKILL.md`): Trigger and monitor GitHub Actions workflows (`verify`, `docs`, `pages`, `firmware`, `release`) and publish `vX.Y.Z` releases.
