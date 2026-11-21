@@ -7,6 +7,15 @@
 />
 {{- with resources.Get "js/theme-switch.js" -}}
   {{- $themeJs := . | fingerprint -}}
+  <script>
+    try {
+      var m = localStorage.getItem("color-theme");
+      document.documentElement.dataset.docThemeMode =
+        m === "light" || m === "dark" ? m : "system";
+    } catch (_) {
+      document.documentElement.dataset.docThemeMode = "system";
+    }
+  </script>
   <script defer src="{{ $themeJs.RelPermalink }}" integrity="{{ $themeJs.Data.Integrity }}"></script>
 {{- end -}}
 {{- if .HasShortcode "api-spec-viewer" -}}

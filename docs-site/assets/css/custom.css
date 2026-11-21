@@ -1585,7 +1585,7 @@ html.dark .doc-flasher-launch-btn:hover {
 }
 
 /* =========================================================
-   12. Side-Swipe Light / Dark Theme Switcher
+   12. Three-State Theme Switcher (Light / Default / Dark)
    ========================================================= */
 .doc-theme-switch {
   display: inline-flex;
@@ -1593,20 +1593,17 @@ html.dark .doc-flasher-launch-btn:hover {
   justify-content: center;
   padding: 0;
   margin: 0;
-  background: transparent;
-  border: none;
-  cursor: pointer;
   flex-shrink: 0;
 }
 
 .doc-theme-switch-track {
   position: relative;
-  display: inline-flex;
+  display: inline-grid;
+  grid-template-columns: repeat(3, 24px);
   align-items: center;
-  justify-content: space-between;
-  width: 52px;
+  width: 78px;
   height: 28px;
-  padding: 0 6px;
+  padding: 2px;
   border-radius: 999px;
   background-color: var(--doc-surface-2);
   border: 1px solid var(--doc-border);
@@ -1622,33 +1619,35 @@ html.dark .doc-theme-switch-track {
   border-color: #29303d;
 }
 
-.doc-theme-switch-icon {
+.doc-theme-switch-btn {
   position: relative;
   z-index: 2;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 16px;
-  height: 16px;
+  width: 24px;
+  height: 22px;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  border-radius: 999px;
+  color: var(--doc-text-muted);
+  opacity: 0.6;
+  cursor: pointer;
   transition: color 0.2s ease, opacity 0.2s ease;
 }
 
-.doc-theme-switch-icon.is-sun {
+.doc-theme-switch-btn:hover {
+  opacity: 0.95;
+}
+
+.doc-theme-switch-btn[aria-checked="true"] {
   color: #2563eb;
   opacity: 1;
 }
 
-.doc-theme-switch-icon.is-moon {
-  color: var(--doc-text-muted);
-  opacity: 0.65;
-}
-
-html.dark .doc-theme-switch-icon.is-sun {
-  color: var(--doc-text-muted);
-  opacity: 0.55;
-}
-
-html.dark .doc-theme-switch-icon.is-moon {
+html.dark .doc-theme-switch-btn[aria-checked="true"] {
   color: #d4ff3a;
   opacity: 1;
 }
@@ -1658,21 +1657,32 @@ html.dark .doc-theme-switch-icon.is-moon {
   top: 2px;
   left: 2px;
   z-index: 1;
-  width: 22px;
+  width: 24px;
   height: 22px;
   border-radius: 999px;
   background-color: #ffffff;
   border: 1px solid rgba(15, 23, 42, 0.08);
   box-shadow: 0 1px 3px rgba(15, 23, 42, 0.14);
-  transform: translateX(0);
+  transform: translateX(24px);
   transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.2s ease, border-color 0.2s ease;
+}
+
+html[data-doc-theme-mode="light"] .doc-theme-switch-thumb {
+  transform: translateX(0);
+}
+
+html[data-doc-theme-mode="system"] .doc-theme-switch-thumb {
+  transform: translateX(24px);
+}
+
+html[data-doc-theme-mode="dark"] .doc-theme-switch-thumb {
+  transform: translateX(48px);
 }
 
 html.dark .doc-theme-switch-thumb {
   background-color: #252b37;
   border-color: rgba(255, 255, 255, 0.1);
   box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
-  transform: translateX(24px);
 }
 
 /* =========================================================

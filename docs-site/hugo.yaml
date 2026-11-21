@@ -79,7 +79,7 @@ params:
     width: wide
 
   theme:
-    default: dark
+    default: system
     displayToggle: false
 
   footer:
