@@ -47,7 +47,7 @@ Download the latest native SlapRF release from [GitHub Releases](https://github.
      chmod +x ./slaprf
      ./slaprf
      ```
-  3. SlapRF starts on `http://127.0.0.1:8090` and opens your browser. Use Chrome, Edge, or Opera if you plan to flash firmware or connect over Web Bluetooth.
+  3. SlapRF starts on `http://127.0.0.1:8090` and opens your browser. When connecting to a SlapRF Bluetooth Hub for the first time, allow Bluetooth access for your terminal application if macOS prompts you. Use Chrome, Edge, or Opera when flashing firmware over USB in **Flasher**.
   {{< /tab >}}
   {{< tab name="Linux / Pi" >}}
   ### Linux & Raspberry Pi

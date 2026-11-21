@@ -69,15 +69,15 @@ jobs:
   portable:
     needs: [verify, web_bundle]
     name: Build SlapRF Portable (${{ matrix.asset }})
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.runner }}
     strategy:
       matrix:
         include:
-          - { goos: windows, goarch: amd64, asset: slaprf-windows-amd64.exe }
-          - { goos: darwin, goarch: arm64, asset: slaprf-macos-arm64 }
-          - { goos: darwin, goarch: amd64, asset: slaprf-macos-amd64 }
-          - { goos: linux, goarch: amd64, asset: slaprf-linux-amd64 }
-          - { goos: linux, goarch: arm64, asset: slaprf-linux-arm64 }
+          - { runner: ubuntu-latest, goos: windows, goarch: amd64, asset: slaprf-windows-amd64.exe }
+          - { runner: macos-latest, goos: darwin, goarch: arm64, asset: slaprf-macos-arm64 }
+          - { runner: macos-latest, goos: darwin, goarch: amd64, asset: slaprf-macos-amd64 }
+          - { runner: ubuntu-latest, goos: linux, goarch: amd64, asset: slaprf-linux-amd64 }
+          - { runner: ubuntu-latest, goos: linux, goarch: arm64, asset: slaprf-linux-arm64 }
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -94,13 +94,15 @@ jobs:
           go-version-file: "go.mod"
 
       - name: Compile SlapRF Portable
-        env:
-          CGO_ENABLED: "0"
-          GOOS: ${{ matrix.goos }}
-          GOARCH: ${{ matrix.goarch }}
         run: |
           mkdir -p dist
-          go build -trimpath -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" -o "dist/${{ matrix.asset }}" ./cmd/slaprf
+          go run ./cmd/build-portable -skip-web -goos "${{ matrix.goos }}" -goarch "${{ matrix.goarch }}" -version "${GITHUB_REF_NAME}" -out "dist/${{ matrix.asset }}"
+
+      - name: Verify CoreBluetooth & embedded Info.plist on macOS
+        if: matrix.goos == 'darwin'
+        run: |
+          otool -L "dist/${{ matrix.asset }}" | grep -q "CoreBluetooth.framework"
+          otool -P "dist/${{ matrix.asset }}" | grep -q "NSBluetoothAlwaysUsageDescription"
 
       - name: Upload Portable binary
         uses: actions/upload-artifact@v4

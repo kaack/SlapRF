@@ -62,11 +62,46 @@ func main() {
 	log.Printf("[build-portable] Compiling %s (%s/%s, version=%s)...", *outBin, *goos, *goarch, *ver)
 	ldflags := "-s -w -X main.version=" + *ver
 	buildCmd := exec.Command("go", "build", "-trimpath", "-ldflags", ldflags, "-o", *outBin, "./cmd/slaprf")
-	buildCmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS="+*goos, "GOARCH="+*goarch)
+	env := append(os.Environ(), "GOOS="+*goos, "GOARCH="+*goarch)
+	nativeDarwinCgo := *goos == "darwin" && runtime.GOOS == "darwin"
+	if nativeDarwinCgo {
+		plistAbs, err := filepath.Abs(filepath.Join("cmd", "slaprf", "macos-info.plist"))
+		if err != nil {
+			log.Fatalf("[build-portable] resolve macos-info.plist: %v", err)
+		}
+		if _, err := os.Stat(plistAbs); err != nil {
+			log.Fatalf("[build-portable] missing %s: %v", plistAbs, err)
+		}
+		env = append(
+			env,
+			"CGO_ENABLED=1",
+			"MACOSX_DEPLOYMENT_TARGET=13.0",
+			"CGO_LDFLAGS=-Wl,-sectcreate,__TEXT,__info_plist,"+plistAbs,
+		)
+		if *goarch == "amd64" && runtime.GOARCH == "arm64" {
+			env = append(env, "CC=clang -arch x86_64")
+		} else if *goarch == "arm64" && runtime.GOARCH == "amd64" {
+			env = append(env, "CC=clang -arch arm64")
+		}
+	} else {
+		if *goos == "darwin" {
+			log.Printf("[build-portable] NOTE: cross-compiling darwin from %s uses CGO_ENABLED=0 (CoreBluetooth BLE requires building on macOS)", runtime.GOOS)
+		}
+		env = append(env, "CGO_ENABLED=0")
+	}
+	buildCmd.Env = env
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
 	if err := buildCmd.Run(); err != nil {
 		log.Fatalf("[build-portable] go build ./cmd/slaprf failed: %v", err)
+	}
+	if nativeDarwinCgo {
+		signCmd := exec.Command("codesign", "-s", "-", "--force", *outBin)
+		signCmd.Stdout = os.Stdout
+		signCmd.Stderr = os.Stderr
+		if err := signCmd.Run(); err != nil {
+			log.Fatalf("[build-portable] codesign %s failed: %v", *outBin, err)
+		}
 	}
 
 	if info, err := os.Stat(*outBin); err == nil {
