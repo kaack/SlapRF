@@ -121,6 +121,37 @@ func BundleTypeScript(webRootDir string) ([]byte, error) {
 	return result.OutputFiles[0].Contents, nil
 }
 
+// BundleDocsFlasher compiles `src/docs_flasher.ts` inside `webRootDir` into a standalone IIFE JS bundle
+// for the embedded WebSerial flasher inside the documentation site.
+func BundleDocsFlasher(webRootDir string) ([]byte, error) {
+	absRoot, err := filepath.Abs(webRootDir)
+	if err != nil {
+		absRoot = webRootDir
+	}
+	if realRoot, err := filepath.EvalSymlinks(absRoot); err == nil {
+		absRoot = realRoot
+	}
+	entryPoint := filepath.Join(absRoot, "src", "docs_flasher.ts")
+	result := api.Build(api.BuildOptions{
+		AbsWorkingDir:     absRoot,
+		EntryPoints:       []string{entryPoint},
+		Bundle:            true,
+		Write:             false,
+		Target:            api.ES2022,
+		Format:            api.FormatIIFE,
+		MinifyWhitespace:  true,
+		MinifyIdentifiers: false,
+		MinifySyntax:      true,
+	})
+	if len(result.Errors) > 0 {
+		return nil, fmt.Errorf("%s", result.Errors[0].Text)
+	}
+	if len(result.OutputFiles) == 0 {
+		return nil, fmt.Errorf("esbuild produced no output files")
+	}
+	return result.OutputFiles[0].Contents, nil
+}
+
 var (
 	wasmMu        sync.Mutex
 	wasmExecCache []byte

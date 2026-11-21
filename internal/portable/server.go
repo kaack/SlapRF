@@ -512,7 +512,7 @@ func (s *Server) Handler() http.Handler {
 				return
 			}
 			if _, err := fs.Stat(s.cfg.StaticFS, cleanPath); err != nil {
-				if !strings.Contains(path.Base(cleanPath), ".") {
+				if cleanPath != "docs" && !strings.HasPrefix(cleanPath, "docs/") && !strings.Contains(path.Base(cleanPath), ".") {
 					if indexBytes, readErr := fs.ReadFile(s.cfg.StaticFS, "index.html"); readErr == nil {
 						w.Header().Set("Content-Type", "text/html; charset=utf-8")
 						_, _ = w.Write(indexBytes)
@@ -547,7 +547,7 @@ func NewStaticBrowserHandler(siteFS fs.FS) http.Handler {
 			w.Header().Set("Content-Type", "application/wasm")
 		}
 		if _, err := fs.Stat(siteFS, cleanPath); err != nil {
-			if !strings.Contains(path.Base(cleanPath), ".") {
+			if cleanPath != "docs" && !strings.HasPrefix(cleanPath, "docs/") && !strings.Contains(path.Base(cleanPath), ".") {
 				if indexBytes, readErr := fs.ReadFile(siteFS, "index.html"); readErr == nil {
 					w.Header().Set("Content-Type", "text/html; charset=utf-8")
 					_, _ = w.Write(indexBytes)

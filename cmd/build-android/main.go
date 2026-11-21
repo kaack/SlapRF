@@ -107,7 +107,7 @@ func main() {
 		if len(keepBytes) == 0 {
 			keepBytes = []byte("# Placeholder so //go:embed all:site in cmd/slaprf-android compiles on a clean checkout before cmd/build-android runs.\n")
 		}
-		runCmd(tc.env(nil), "go", "run", "./cmd/build-web", "-web", "./web", "-out", siteDir, "-skip-wasm")
+		runCmd(tc.env(nil), "go", "run", "./cmd/build-web", "-web", "./web", "-out", siteDir, "-skip-wasm", "-skip-docs")
 		_ = os.RemoveAll(filepath.Join(siteDir, "wasm"))
 		_ = os.WriteFile(keepPath, keepBytes, 0o644)
 	}

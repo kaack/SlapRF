@@ -1,0 +1,1657 @@
+@layer theme {
+  :root {
+    --hx-default-font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    --hx-default-mono-font-family: "JetBrains Mono", ui-monospace, "SF Mono", "Cascadia Mono", Consolas, monospace;
+    --primary-hue: 221deg;
+    --primary-saturation: 83%;
+    --primary-lightness: 53%;
+  }
+}
+
+:root {
+  --doc-bg: #f8fafc;
+  --doc-surface: #ffffff;
+  --doc-surface-2: #f1f5f9;
+  --doc-surface-hover: #f8fafc;
+  --doc-border: #e2e8f0;
+  --doc-border-subtle: #edf2f7;
+  --doc-border-strong: #cbd5e1;
+  --doc-text: #1e293b;
+  --doc-text-strong: #0f172a;
+  --doc-text-muted: #64748b;
+  --doc-accent: #2563eb;
+  --doc-accent-soft: rgba(37, 99, 235, 0.09);
+  --doc-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --doc-shadow-md: 0 8px 24px rgba(15, 23, 42, 0.06);
+}
+
+html.dark {
+  --doc-bg: #0b0c0f;
+  --doc-surface: #111317;
+  --doc-surface-2: #161920;
+  --doc-surface-hover: #181c24;
+  --doc-border: #22262f;
+  --doc-border-subtle: #1b1f27;
+  --doc-border-strong: #2f3542;
+  --doc-text: #d1d7e2;
+  --doc-text-strong: #f3f5f8;
+  --doc-text-muted: #8b95a5;
+  --doc-accent: #d4ff3a;
+  --doc-accent-soft: rgba(212, 255, 58, 0.1);
+  --doc-shadow-sm: none;
+  --doc-shadow-md: 0 12px 28px rgba(0, 0, 0, 0.45);
+}
+
+html {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  scrollbar-gutter: stable;
+}
+
+article > main#content,
+article > main#content > .content {
+  width: 100%;
+}
+
+body {
+  background-color: var(--doc-bg) !important;
+  color: var(--doc-text) !important;
+}
+
+/* =========================================================
+   1. Navbar & Search Pill
+   ========================================================= */
+.hextra-nav-container-blur {
+  background-color: rgba(248, 250, 252, 0.86) !important;
+  backdrop-filter: blur(14px) saturate(1.4) !important;
+  box-shadow: 0 1px 0 var(--doc-border) !important;
+}
+
+html.dark .hextra-nav-container-blur {
+  background-color: rgba(11, 12, 15, 0.86) !important;
+  box-shadow: 0 1px 0 var(--doc-border) !important;
+}
+
+.hextra-nav-container nav > a > span {
+  font-family: "Plus Jakarta Sans", "Inter", sans-serif;
+  font-weight: 700 !important;
+  font-size: 1.02rem;
+  letter-spacing: -0.02em;
+  color: var(--doc-text-strong);
+}
+
+.hextra-search-trigger {
+  border-radius: 9px !important;
+  background-color: var(--doc-surface) !important;
+  border: 1px solid var(--doc-border) !important;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease !important;
+}
+
+.hextra-search-trigger:hover {
+  border-color: var(--doc-border-strong) !important;
+}
+
+/* =========================================================
+   2. Sidebar & Right TOC (Single-Line Pill Navigation)
+   ========================================================= */
+@media (min-width: 768px) {
+  .hextra-sidebar-container {
+    width: 17rem !important;
+    border-right: 1px solid var(--doc-border-subtle);
+  }
+}
+
+@media (min-width: 1280px) {
+  .hextra-toc {
+    width: 17rem !important;
+    flex-shrink: 0;
+  }
+}
+
+.hextra-sidebar-container a {
+  border-radius: 8px !important;
+  font-size: 0.86rem !important;
+  font-weight: 500;
+  white-space: nowrap !important;
+  transition: background-color 0.14s ease, color 0.14s ease !important;
+}
+
+.hextra-sidebar-container a > span {
+  white-space: nowrap !important;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.hextra-sidebar-active-item {
+  background-color: var(--doc-accent-soft) !important;
+  color: var(--doc-accent) !important;
+  font-weight: 600 !important;
+}
+
+.hextra-sidebar-item[data-active="true"] > .hextra-sidebar-collapsible-button,
+.hextra-sidebar-item[data-active="true"] > .hextra-sidebar-collapsible-button:hover {
+  color: var(--doc-accent) !important;
+}
+
+.hextra-toc ul,
+.hextra-toc div {
+  border-color: var(--doc-border-subtle) !important;
+}
+
+.hextra-toc p {
+  font-family: "Plus Jakarta Sans", "Inter", sans-serif;
+  font-size: 0.72rem !important;
+  font-weight: 700 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--doc-text-muted) !important;
+}
+
+.hextra-toc a {
+  display: block !important;
+  font-size: 0.8125rem !important;
+  line-height: 1.5 !important;
+  white-space: nowrap !important;
+  overflow: hidden !important;
+  text-overflow: ellipsis !important;
+}
+
+/* =========================================================
+   3. Editorial Typography & Balanced Section Hierarchy
+   ========================================================= */
+.content h1,
+.content h2,
+.content h3,
+.content h4 {
+  font-family: "Plus Jakarta Sans", "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  color: var(--doc-text-strong) !important;
+  border-bottom: none !important;
+}
+
+article main > div + .content {
+  margin-top: 1.15rem !important;
+}
+
+.content > div:first-child {
+  margin-bottom: 0.45rem !important;
+}
+
+.content h1 {
+  font-size: 1.45rem !important;
+  line-height: 1.28 !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.022em !important;
+  margin-top: 0 !important;
+  margin-bottom: 0 !important;
+}
+
+/* Calm lead summary below H1 wrapper */
+.content > div:first-child + p,
+.content > h1 + p {
+  font-size: 0.95rem !important;
+  line-height: 1.62 !important;
+  color: var(--doc-text-muted) !important;
+  margin-top: 0.25rem !important;
+  margin-bottom: 1.4rem !important;
+  padding-bottom: 1.15rem !important;
+  border-bottom: 1px solid var(--doc-border-subtle);
+}
+
+.content h2 {
+  font-size: 1.125rem !important;
+  line-height: 1.38 !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.018em !important;
+  margin-top: 2rem !important;
+  margin-bottom: 0.6rem !important;
+  padding-top: 1.25rem !important;
+  padding-bottom: 0 !important;
+  border-top: 1px solid var(--doc-border-subtle) !important;
+}
+
+.content > div:first-child + p + h2,
+.content > h1 + p + h2 {
+  margin-top: 0.15rem !important;
+  padding-top: 0 !important;
+  border-top: none !important;
+}
+
+.content h3 {
+  font-size: 0.96rem !important;
+  line-height: 1.42 !important;
+  font-weight: 600 !important;
+  letter-spacing: -0.01em !important;
+  margin-top: 1.35rem !important;
+  margin-bottom: 0.35rem !important;
+}
+
+.content p,
+.content li {
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif;
+  font-size: 0.925rem;
+  line-height: 1.66;
+  letter-spacing: -0.004em;
+  color: var(--doc-text);
+}
+
+.content > p:not(:first-of-type),
+.content .hextra-steps p {
+  margin-top: 0.75rem !important;
+}
+
+.content ul,
+.content ol {
+  margin-top: 0.6rem !important;
+  margin-bottom: 0.95rem !important;
+}
+
+.content li {
+  margin-top: 0.28rem !important;
+  margin-bottom: 0.28rem !important;
+}
+
+.content strong {
+  font-weight: 600;
+  color: var(--doc-text-strong);
+}
+
+.content .hextra-steps {
+  border-color: rgba(37, 99, 235, 0.28) !important;
+}
+
+html.dark .content .hextra-steps {
+  border-color: rgba(96, 165, 250, 0.28) !important;
+}
+
+.content .hextra-steps h3 {
+  font-size: 0.96rem !important;
+  font-weight: 600 !important;
+  margin-top: 1.35rem !important;
+  margin-bottom: 0.35rem !important;
+}
+
+.content .hextra-steps h3::before {
+  background-color: #e0ebff !important;
+  color: #2563eb !important;
+  border: 4px solid var(--doc-bg) !important;
+  box-shadow: inset 0 0 0 1px rgba(37, 99, 235, 0.28);
+  font-family: "Inter", sans-serif !important;
+  font-size: 0.8rem !important;
+  font-weight: 700 !important;
+  line-height: 25px !important;
+  margin-top: -3px !important;
+}
+
+html.dark .content .hextra-steps h3::before {
+  background-color: #152542 !important;
+  color: #60a5fa !important;
+  border: 4px solid var(--doc-bg) !important;
+  box-shadow: inset 0 0 0 1px rgba(96, 165, 250, 0.36);
+}
+
+.content a:not(.hextra-card):not(.doc-pager-card) {
+  color: #2563eb;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+html.dark .content a:not(.hextra-card):not(.doc-pager-card) {
+  color: #60a5fa;
+}
+
+/* Clean inline code pills */
+.content code:not(pre code) {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.84em;
+  font-weight: 500;
+  padding: 0.16em 0.44em;
+  border-radius: 6px;
+  background-color: var(--doc-surface-2);
+  border: 1px solid var(--doc-border);
+  color: var(--doc-text-strong);
+}
+
+/* =========================================================
+   3b. Terminal-Styled CLI Command Blocks (.hextra-code-block)
+   ========================================================= */
+.hextra-code-block {
+  position: relative !important;
+  margin: 0.9rem 0 1.25rem !important;
+  border-radius: 12px !important;
+  overflow: hidden !important;
+  background-color: #ffffff !important;
+  border: 1px solid #d5dde8 !important;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.05) !important;
+}
+
+html.dark .hextra-code-block {
+  background-color: #0b0e14 !important;
+  border-color: #252c3a !important;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.4) !important;
+}
+
+.hextra-code-block::before {
+  content: "Console";
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding: 0 44px 0 66px;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #64748b;
+  background-color: #eef2f7;
+  border-bottom: 1px solid #dce4ef;
+  background-image:
+    radial-gradient(circle, #ff5f56 4.5px, transparent 5px),
+    radial-gradient(circle, #ffbd2e 4.5px, transparent 5px),
+    radial-gradient(circle, #27c93f 4.5px, transparent 5px);
+  background-size: 12px 12px, 12px 12px, 12px 12px;
+  background-position: 14px center, 30px center, 46px center;
+  background-repeat: no-repeat;
+  user-select: none;
+}
+
+.hextra-code-block:has(code[data-lang="powershell"])::before,
+.hextra-code-block:has(code[data-lang="pwsh"])::before {
+  content: "PowerShell";
+}
+
+html.dark .hextra-code-block::before {
+  color: #7d899c;
+  background-color: #131720;
+  border-bottom-color: #222936;
+}
+
+.hextra-code-block .highlight,
+.hextra-code-block pre,
+.hextra-code-block pre.chroma {
+  margin: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background-color: transparent !important;
+  color: #0f172a !important;
+  font-family: "JetBrains Mono", ui-monospace, monospace !important;
+  font-size: 0.82rem !important;
+  line-height: 1.68 !important;
+}
+
+html.dark .hextra-code-block .highlight,
+html.dark .hextra-code-block pre,
+html.dark .hextra-code-block pre.chroma {
+  color: #e6edf3 !important;
+}
+
+.hextra-code-block pre {
+  padding: 0.9rem 1.15rem !important;
+  overflow-x: auto !important;
+}
+
+.hextra-code-block pre code {
+  background: transparent !important;
+  border: none !important;
+  padding: 0 !important;
+  color: inherit !important;
+  font-family: "JetBrains Mono", ui-monospace, monospace !important;
+  font-size: 0.82rem !important;
+}
+
+/* Non-selectable shell prompt on CLI lines */
+.hextra-code-block code[data-lang="bash"] .line > .cl::before,
+.hextra-code-block code[data-lang="sh"] .line > .cl::before,
+.hextra-code-block code[data-lang="shell"] .line > .cl::before {
+  content: "$ ";
+  color: #2563eb;
+  font-weight: 600;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html.dark .hextra-code-block code[data-lang="bash"] .line > .cl::before,
+html.dark .hextra-code-block code[data-lang="sh"] .line > .cl::before,
+html.dark .hextra-code-block code[data-lang="shell"] .line > .cl::before {
+  color: #d4ff3a;
+}
+
+.hextra-code-block code[data-lang="powershell"] .line > .cl::before,
+.hextra-code-block code[data-lang="pwsh"] .line > .cl::before {
+  content: "PS> ";
+  color: #2563eb;
+  font-weight: 600;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+html.dark .hextra-code-block code[data-lang="powershell"] .line > .cl::before,
+html.dark .hextra-code-block code[data-lang="pwsh"] .line > .cl::before {
+  color: #38bdf8;
+}
+
+/* Light-theme terminal Chroma token palette */
+.hextra-code-block .chroma .cl { color: #0f172a !important; }
+.hextra-code-block .chroma .nb { color: #0284c7 !important; }
+.hextra-code-block .chroma .nv,
+.hextra-code-block .chroma .vc,
+.hextra-code-block .chroma .vg,
+.hextra-code-block .chroma .vi { color: #c2410c !important; }
+.hextra-code-block .chroma .o,
+.hextra-code-block .chroma .ow { color: #2563eb !important; }
+.hextra-code-block .chroma .s,
+.hextra-code-block .chroma .s1,
+.hextra-code-block .chroma .s2 { color: #059669 !important; }
+.hextra-code-block .chroma .c,
+.hextra-code-block .chroma .c1,
+.hextra-code-block .chroma .ch { color: #64748b !important; }
+
+/* Dark-theme terminal Chroma token palette */
+html.dark .hextra-code-block .chroma .cl { color: #e6edf3 !important; }
+html.dark .hextra-code-block .chroma .nb { color: #79c0ff !important; }
+html.dark .hextra-code-block .chroma .nv,
+html.dark .hextra-code-block .chroma .vc,
+html.dark .hextra-code-block .chroma .vg,
+html.dark .hextra-code-block .chroma .vi { color: #ffa657 !important; }
+html.dark .hextra-code-block .chroma .o,
+html.dark .hextra-code-block .chroma .ow { color: #ff7b72 !important; }
+html.dark .hextra-code-block .chroma .s,
+html.dark .hextra-code-block .chroma .s1,
+html.dark .hextra-code-block .chroma .s2 { color: #a5d6ff !important; }
+html.dark .hextra-code-block .chroma .c,
+html.dark .hextra-code-block .chroma .c1,
+html.dark .hextra-code-block .chroma .ch { color: #8b949e !important; }
+
+/* Tuck copy button cleanly into the terminal top bar */
+.hextra-code-block .hextra-code-copy-btn-container {
+  top: 3px !important;
+  right: 6px !important;
+  margin: 0 !important;
+  opacity: 0.85 !important;
+}
+
+.hextra-code-block:hover .hextra-code-copy-btn-container {
+  opacity: 1 !important;
+}
+
+.hextra-code-block .hextra-code-copy-btn {
+  padding: 4px 6px !important;
+  border-radius: 6px !important;
+  background-color: #ffffff !important;
+  border: 1px solid #cbd5e1 !important;
+  color: #475569 !important;
+}
+
+.hextra-code-block .hextra-code-copy-btn:hover {
+  background-color: #e2e8f0 !important;
+  border-color: #94a3b8 !important;
+  color: #0f172a !important;
+}
+
+html.dark .hextra-code-block .hextra-code-copy-btn {
+  background-color: rgba(255, 255, 255, 0.05) !important;
+  border: 1px solid rgba(255, 255, 255, 0.1) !important;
+  color: #94a3b8 !important;
+}
+
+html.dark .hextra-code-block .hextra-code-copy-btn:hover {
+  background-color: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+  color: #f8fafc !important;
+}
+
+/* Framed rounded illustrations */
+.content img {
+  border-radius: 12px;
+  border: 1px solid var(--doc-border);
+  box-shadow: var(--doc-shadow-sm);
+}
+
+html:not(.dark) .content img.doc-theme-img-dark {
+  display: none !important;
+}
+
+html.dark .content img.doc-theme-img-light {
+  display: none !important;
+}
+
+/* =========================================================
+   4. Modern UI Data Tables (Crisp Typography & Non-Wrapping Keys/Links)
+   ========================================================= */
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) {
+  display: table !important;
+  width: 100% !important;
+  margin: 1.35rem 0 !important;
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  border: 1px solid var(--doc-border) !important;
+  border-radius: 12px !important;
+  overflow: hidden !important;
+  background-color: var(--doc-surface) !important;
+  box-shadow: var(--doc-shadow-sm) !important;
+  font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif !important;
+  font-size: 0.825rem !important;
+  font-variant-numeric: tabular-nums;
+}
+
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) thead {
+  background-color: var(--doc-surface-2) !important;
+}
+
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) tr {
+  background-color: transparent !important;
+  border: none !important;
+  transition: background-color 0.12s ease;
+}
+
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) tbody tr:hover {
+  background-color: var(--doc-surface-hover) !important;
+}
+
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) th {
+  border: none !important;
+  border-bottom: 1px solid var(--doc-border) !important;
+  padding: 0.58rem 0.95rem !important;
+  font-family: "Inter", sans-serif !important;
+  font-size: 0.69rem !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.055em !important;
+  white-space: nowrap !important;
+  color: var(--doc-text-muted) !important;
+  background-color: var(--doc-surface-2) !important;
+}
+
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td {
+  border: none !important;
+  border-bottom: 1px solid var(--doc-border-subtle) !important;
+  padding: 0.68rem 0.95rem !important;
+  vertical-align: top !important;
+  color: #334155 !important;
+  font-size: 0.825rem !important;
+  line-height: 1.5 !important;
+  letter-spacing: -0.004em;
+}
+
+html.dark .content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td {
+  color: #b8c2d2 !important;
+}
+
+/* Primary key column: crisp semibold ink, single-line non-wrapping */
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td:first-child {
+  font-weight: 600 !important;
+  color: var(--doc-text-strong) !important;
+  white-space: nowrap !important;
+}
+
+/* Centered icon/status columns */
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) th[style*="center"],
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td[style*="center"],
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) th[align="center"],
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td[align="center"] {
+  text-align: center !important;
+  vertical-align: middle !important;
+}
+
+/* Right-aligned cost / numeric columns: crisp non-wrapping mono numerals */
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) th[style*="right"],
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td[style*="right"],
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) th[align="right"],
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td[align="right"] {
+  text-align: right !important;
+  white-space: nowrap !important;
+  font-family: "JetBrains Mono", ui-monospace, monospace !important;
+}
+
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td[style*="right"],
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td[align="right"] {
+  font-size: 0.79rem !important;
+  font-weight: 500 !important;
+  color: var(--doc-text-strong) !important;
+}
+
+/* Code tokens inside tables never split across lines */
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td code {
+  font-size: 0.775rem !important;
+  padding: 0.12em 0.42em !important;
+  white-space: nowrap !important;
+}
+
+/* Links inside tables: modern non-wrapping pill chips, one link per line */
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td a {
+  display: inline-flex !important;
+  align-items: center;
+  gap: 0.22rem;
+  white-space: nowrap !important;
+  font-size: 0.785rem !important;
+  font-weight: 500 !important;
+  line-height: 1.35 !important;
+  text-decoration: none !important;
+  padding: 0.16rem 0.52rem;
+  margin: 0.1rem 0;
+  border-radius: 6px;
+  background-color: var(--doc-surface-2);
+  border: 1px solid var(--doc-border);
+  color: #2563eb !important;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td a:hover {
+  background-color: var(--doc-accent-soft);
+  border-color: rgba(37, 99, 235, 0.36);
+}
+
+html.dark .content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td a {
+  background-color: #171b23;
+  border-color: #283040;
+  color: #7dd3fc !important;
+}
+
+html.dark .content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) td a:hover {
+  background-color: rgba(125, 211, 252, 0.1);
+  border-color: rgba(125, 211, 252, 0.35);
+}
+
+.content :where(table):not(:where(.hextra-code-block table, [class~="not-prose"], [class~="not-prose"] *)) tbody tr:last-child td {
+  border-bottom: none !important;
+}
+
+/* Yes / No Status Icon Badges inside tables */
+.doc-status-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 999px;
+  vertical-align: middle;
+}
+
+.doc-status-badge.is-yes {
+  background-color: rgba(16, 185, 129, 0.13);
+  color: #059669;
+  border: 1px solid rgba(16, 185, 129, 0.28);
+}
+
+html.dark .doc-status-badge.is-yes {
+  background-color: rgba(52, 211, 153, 0.14);
+  color: #34d399;
+  border-color: rgba(52, 211, 153, 0.28);
+}
+
+.doc-status-badge.is-no {
+  background-color: rgba(239, 68, 68, 0.1);
+  color: #dc2626;
+  border: 1px solid rgba(239, 68, 68, 0.22);
+}
+
+html.dark .doc-status-badge.is-no {
+  background-color: rgba(248, 113, 113, 0.12);
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.24);
+}
+
+/* =========================================================
+   5. Modern Navigation Cards (.hextra-card)
+   ========================================================= */
+.hextra-card {
+  border-radius: 12px !important;
+  background-color: var(--doc-surface) !important;
+  border: 1px solid var(--doc-border) !important;
+  box-shadow: var(--doc-shadow-sm) !important;
+  padding: 0.25rem !important;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease !important;
+}
+
+.hextra-card:hover {
+  transform: translateY(-1px);
+  border-color: var(--doc-border-strong) !important;
+  box-shadow: var(--doc-shadow-md) !important;
+  background-color: var(--doc-surface) !important;
+}
+
+.hextra-card-icon {
+  font-family: "Plus Jakarta Sans", "Inter", sans-serif !important;
+  font-size: 0.96rem !important;
+  font-weight: 650 !important;
+  color: var(--doc-text-strong) !important;
+  align-items: center !important;
+}
+
+.hextra-card-icon svg {
+  width: 30px !important;
+  height: 30px !important;
+  padding: 6px !important;
+  border-radius: 8px !important;
+  background-color: var(--doc-accent-soft) !important;
+  color: var(--doc-accent) !important;
+  flex-shrink: 0 !important;
+}
+
+.hextra-card-subtitle {
+  font-size: 0.855rem !important;
+  line-height: 1.5 !important;
+  color: var(--doc-text-muted) !important;
+}
+
+/* =========================================================
+   6. Modern Segmented Pill Tabs
+   ========================================================= */
+div[role="tablist"] {
+  display: inline-flex !important;
+  flex-wrap: wrap;
+  gap: 4px !important;
+  padding: 4px !important;
+  border-radius: 10px !important;
+  background-color: var(--doc-surface-2) !important;
+  border: 1px solid var(--doc-border) !important;
+  margin-bottom: 0.75rem !important;
+}
+
+.hextra-tabs-toggle {
+  margin: 0 !important;
+  padding: 0.42rem 0.85rem !important;
+  border-radius: 7px !important;
+  border: none !important;
+  font-size: 0.85rem !important;
+  font-weight: 600 !important;
+  color: var(--doc-text-muted) !important;
+  background: transparent !important;
+  transition: background-color 0.14s ease, color 0.14s ease, box-shadow 0.14s ease !important;
+}
+
+.hextra-tabs-toggle:hover {
+  color: var(--doc-text-strong) !important;
+}
+
+.hextra-tabs-toggle[data-state="selected"] {
+  background-color: var(--doc-surface) !important;
+  color: var(--doc-text-strong) !important;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08) !important;
+}
+
+html.dark .hextra-tabs-toggle[data-state="selected"] {
+  background-color: #222731 !important;
+  color: #f8fafc !important;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* =========================================================
+   7. Info / Callout Blocks (.hextra-alert)
+   ========================================================= */
+.hextra-alert {
+  --alert-accent: #2563eb;
+  margin: 1.5rem 0 !important;
+  padding: 0.95rem 1.2rem !important;
+  border-radius: 12px !important;
+  border: 1px solid var(--doc-border) !important;
+  border-left: 3.5px solid var(--alert-accent) !important;
+  background-color: var(--doc-surface) !important;
+  color: var(--doc-text) !important;
+  box-shadow: var(--doc-shadow-sm);
+}
+
+html.dark .hextra-alert {
+  background-color: #12151b !important;
+}
+
+.hextra-alert[data-alert="note"] { --alert-accent: #2563eb; }
+html.dark .hextra-alert[data-alert="note"] { --alert-accent: #38bdf8; }
+
+.hextra-alert[data-alert="tip"] { --alert-accent: #059669; }
+html.dark .hextra-alert[data-alert="tip"] { --alert-accent: #34d399; }
+
+.hextra-alert[data-alert="important"] { --alert-accent: #2563eb; }
+html.dark .hextra-alert[data-alert="important"] { --alert-accent: #d4ff3a; }
+
+.hextra-alert[data-alert="warning"] { --alert-accent: #d97706; }
+html.dark .hextra-alert[data-alert="warning"] { --alert-accent: #fbbf24; }
+
+.hextra-alert[data-alert="caution"] { --alert-accent: #dc2626; }
+html.dark .hextra-alert[data-alert="caution"] { --alert-accent: #f87171; }
+
+.hextra-alert .hextra-alert-title {
+  display: flex !important;
+  align-items: center !important;
+  gap: 0.45rem !important;
+  margin: 0 0 0.35rem 0 !important;
+  font-family: "Plus Jakarta Sans", "Inter", sans-serif !important;
+  font-size: 0.82rem !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.01em !important;
+  color: var(--alert-accent) !important;
+}
+
+.hextra-alert .hextra-alert-icon {
+  width: 16px !important;
+  height: 16px !important;
+  flex-shrink: 0 !important;
+  color: var(--alert-accent) !important;
+}
+
+.hextra-alert .hextra-alert-content,
+.hextra-alert .hextra-alert-content p,
+.hextra-alert .hextra-alert-content li {
+  font-size: 0.94rem !important;
+  line-height: 1.65 !important;
+  color: var(--doc-text) !important;
+}
+
+.hextra-alert .hextra-alert-content p:last-child {
+  margin-bottom: 0 !important;
+}
+
+/* =========================================================
+   8. Minimalistic Previous / Next Footer Links (.doc-pager)
+   ========================================================= */
+article main > div.hx\:mt-16 {
+  margin-top: 0 !important;
+}
+
+.doc-pager {
+  margin-top: 2.5rem;
+  margin-bottom: 1.5rem;
+  padding-top: 1.15rem;
+  border-top: 1px solid var(--doc-border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.doc-pager-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.42rem 0.65rem;
+  margin: 0 -0.65rem;
+  border-radius: 8px;
+  text-decoration: none !important;
+  color: var(--doc-text) !important;
+  transition: background-color 0.14s ease, color 0.14s ease;
+}
+
+.doc-pager-link:hover {
+  background-color: var(--doc-surface-2);
+}
+
+.doc-pager-link.is-next {
+  margin-left: auto;
+  text-align: right;
+}
+
+.doc-pager-text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.08rem;
+}
+
+.doc-pager-label {
+  font-family: "Inter", sans-serif;
+  font-size: 0.68rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  color: var(--doc-text-muted);
+}
+
+.doc-pager-title {
+  font-family: "Inter", sans-serif;
+  font-size: 0.86rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: var(--doc-text-strong);
+  transition: color 0.14s ease;
+}
+
+.doc-pager-link:hover .doc-pager-title {
+  color: var(--doc-accent);
+}
+
+.doc-pager-arrow {
+  color: var(--doc-text-muted);
+  flex-shrink: 0;
+  transition: transform 0.15s ease, color 0.15s ease;
+}
+
+.doc-pager-link.is-prev:hover .doc-pager-arrow {
+  transform: translateX(-2px);
+  color: var(--doc-accent);
+}
+
+.doc-pager-link.is-next:hover .doc-pager-arrow {
+  transform: translateX(2px);
+  color: var(--doc-accent);
+}
+
+
+/* =========================================================
+   9. Status LED Live Simulator & Static Timing Strips
+   ========================================================= */
+:root {
+  --led-housing-bg: #f1f5f9;
+  --led-housing-border: #dce3ec;
+  --led-pkg-bg: #ffffff;
+  --led-pkg-border: #cbd5e1;
+  --led-pad-color: #94a3b8;
+  --led-caption-color: #64748b;
+  --led-off-bg: #d5deeb;
+  --led-off-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.12);
+  --led-on-bg: #facc15;
+  --led-on-glow: 0 0 0 1px #eab308, 0 0 8px 2px rgba(245, 158, 11, 0.65), 0 0 16px 4px rgba(250, 204, 21, 0.38);
+  --strip-accent: #2563eb;
+  --strip-fill: rgba(37, 99, 235, 0.15);
+}
+
+html.dark {
+  --led-housing-bg: #1c212c;
+  --led-housing-border: #2f3747;
+  --led-pkg-bg: #283040;
+  --led-pkg-border: #414d63;
+  --led-pad-color: #94a3b8;
+  --led-caption-color: #94a3b8;
+  --led-off-bg: #3d485d;
+  --led-off-shadow: inset 0 1px 1px rgba(15, 23, 42, 0.35);
+  --led-on-bg: #facc15;
+  --led-on-glow: 0 0 8px 2px rgba(250, 204, 21, 0.88), 0 0 20px 5px rgba(245, 158, 11, 0.45);
+  --strip-accent: #facc15;
+  --strip-fill: rgba(250, 204, 21, 0.2);
+}
+
+.led-pattern-card {
+  margin: 1.25rem 0;
+  border-radius: 12px;
+  border: 1px solid var(--doc-border);
+  background-color: var(--doc-surface);
+  box-shadow: var(--doc-shadow-sm);
+  overflow: hidden;
+}
+
+.led-pattern-top {
+  display: flex;
+  align-items: flex-start;
+  gap: 1.1rem;
+  padding: 1.1rem 1.25rem;
+}
+
+.led-pcb-housing {
+  flex-shrink: 0;
+  width: 64px;
+  height: 68px;
+  border-radius: 10px;
+  background-color: var(--led-housing-bg);
+  border: 1px solid var(--led-housing-border);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  transition: background-color 0.15s ease, border-color 0.15s ease;
+}
+
+.led-smd-package {
+  width: 28px;
+  height: 18px;
+  border-radius: 4px;
+  background-color: var(--led-pkg-bg);
+  border: 1px solid var(--led-pkg-border);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+/* Tiny metallic solder pads on left and right of SMD 0603 LED */
+.led-smd-package::before,
+.led-smd-package::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  width: 3px;
+  background-color: var(--led-pad-color);
+  border-radius: 1px;
+  opacity: 0.6;
+}
+.led-smd-package::before { left: -2px; }
+.led-smd-package::after { right: -2px; }
+
+.led-lamp {
+  width: 14px;
+  height: 10px;
+  border-radius: 2.5px;
+  background-color: var(--led-off-bg);
+  box-shadow: var(--led-off-shadow);
+}
+
+.led-live-caption {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  color: var(--led-caption-color);
+}
+
+.led-pattern-meta {
+  flex: 1;
+  min-width: 0;
+}
+
+.led-pattern-header-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.led-pattern-title {
+  margin: 0 !important;
+  font-family: "Plus Jakarta Sans", "Inter", sans-serif;
+  font-size: 1.04rem !important;
+  font-weight: 700 !important;
+  line-height: 1.3 !important;
+  color: var(--doc-text-strong) !important;
+}
+
+.led-role-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.18rem 0.58rem;
+  border-radius: 999px;
+  font-size: 0.73rem;
+  font-weight: 600;
+  background-color: var(--doc-surface-2);
+  border: 1px solid var(--doc-border);
+  color: var(--doc-text-muted);
+}
+
+.led-pattern-summary {
+  margin-top: 0.2rem;
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.79rem;
+  font-weight: 600;
+  color: var(--strip-accent);
+}
+
+.led-pattern-desc {
+  margin-top: 0.45rem;
+  font-size: 0.92rem;
+  line-height: 1.6;
+  color: var(--doc-text);
+}
+
+.led-pattern-desc p {
+  margin: 0;
+  font-size: 0.92rem;
+  line-height: 1.6;
+}
+
+.led-pattern-desc code {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.84em;
+  padding: 0.12em 0.38em;
+  border-radius: 5px;
+  background-color: var(--doc-surface-2);
+  border: 1px solid var(--doc-border);
+}
+
+/* Static Logic-Analyzer Timing Strip */
+.led-strip-box {
+  border-top: 1px solid var(--doc-border-subtle);
+  background-color: var(--doc-surface-2);
+  padding: 0.65rem 1.25rem 0.75rem;
+}
+
+html.dark .led-strip-box {
+  background-color: #151922;
+}
+
+.led-strip-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.35rem;
+}
+
+.led-strip-label {
+  font-family: "Plus Jakarta Sans", "Inter", sans-serif;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--doc-text-muted);
+}
+
+.led-strip-spec {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 0.73rem;
+  color: var(--doc-text-muted);
+}
+
+.led-strip-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.led-strip-grid-minor {
+  stroke: var(--doc-border);
+  stroke-width: 1;
+  stroke-dasharray: 2 2;
+  opacity: 0.6;
+}
+
+.led-strip-grid-major {
+  stroke: var(--doc-border-strong);
+  stroke-width: 1;
+  opacity: 0.75;
+}
+
+.led-strip-rail {
+  stroke: var(--doc-border);
+  stroke-width: 1;
+}
+
+.led-strip-fill {
+  fill: var(--strip-fill);
+}
+
+.led-strip-trace {
+  stroke: var(--strip-accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.led-strip-tick {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 9.5px;
+  fill: var(--doc-text-muted);
+}
+
+.led-strip-state {
+  font-family: "JetBrains Mono", ui-monospace, monospace;
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.led-strip-state.is-on {
+  fill: var(--strip-accent);
+}
+.led-strip-state.is-off {
+  fill: var(--doc-text-muted);
+}
+
+/* Exact Firmware LED Keyframes (Theme-Adaptive) */
+@keyframes slaprf-led-hub-active {
+  0% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  3.5%, 100% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+}
+
+@keyframes slaprf-led-spoke-joined {
+  0% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  3.5% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+  11.0% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  14.5%, 100% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+}
+
+@keyframes slaprf-led-ble-pairing {
+  0% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  8.0% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+  18.0% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  26.0%, 100% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+}
+
+@keyframes slaprf-led-waiting-1hz {
+  0% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  50.0%, 100% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+}
+
+@keyframes slaprf-led-identify {
+  0% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  8.33% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+  16.67% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  25.0% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+  33.33% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  41.67%, 100% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+}
+
+@keyframes slaprf-led-50pct {
+  0% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  50.0%, 100% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+}
+
+@keyframes slaprf-led-boot-reset {
+  0% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+  6.25% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  62.5% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+  63.75% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  65.0% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+  66.25% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  67.5% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+  68.75% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  70.0% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+  71.25% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  72.5% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+  73.75% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  75.0% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+  76.25% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  77.5% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+  79.17% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  80.83% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+  82.92% { background-color: var(--led-on-bg); box-shadow: var(--led-on-glow); }
+  84.58%, 100% { background-color: var(--led-off-bg); box-shadow: var(--led-off-shadow); }
+}
+
+.led-lamp.is-hub-active { animation: slaprf-led-hub-active 2000ms infinite step-end; }
+.led-lamp.is-spoke-joined { animation: slaprf-led-spoke-joined 2000ms infinite step-end; }
+.led-lamp.is-ble-pairing { animation: slaprf-led-ble-pairing 1000ms infinite step-end; }
+.led-lamp.is-waiting-1hz { animation: slaprf-led-waiting-1hz 1000ms infinite step-end; }
+.led-lamp.is-identify { animation: slaprf-led-identify 600ms infinite step-end; }
+.led-lamp.is-diag-5hz { animation: slaprf-led-50pct 200ms infinite step-end; }
+.led-lamp.is-fault-10hz { animation: slaprf-led-50pct 100ms infinite step-end; }
+.led-lamp.is-boot-reset { animation: slaprf-led-boot-reset 4800ms infinite step-end; }
+
+
+/* =========================================================
+   10. Modern Mermaid Architecture Diagrams & Expand Modal
+   ========================================================= */
+.doc-mermaid-frame {
+  position: relative;
+  margin: 1.4rem 0;
+}
+
+.content .doc-mermaid-frame pre.mermaid,
+.content pre.mermaid {
+  margin: 0 !important;
+  padding: 2.2rem 1.25rem 1.5rem !important;
+  border-radius: 14px !important;
+  border: 1px solid var(--doc-border) !important;
+  background-color: var(--doc-surface) !important;
+  background-image: radial-gradient(rgba(100, 116, 139, 0.16) 1px, transparent 1px) !important;
+  background-size: 16px 16px !important;
+  box-shadow: var(--doc-shadow-sm) !important;
+  display: flex !important;
+  justify-content: center !important;
+  align-items: center !important;
+  overflow-x: auto !important;
+  cursor: zoom-in;
+  transition: border-color 0.15s ease;
+}
+
+.doc-mermaid-frame:hover pre.mermaid {
+  border-color: var(--doc-border-strong) !important;
+}
+
+html.dark .content .doc-mermaid-frame pre.mermaid,
+html.dark .content pre.mermaid {
+  background-color: #111317 !important;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px) !important;
+}
+
+.doc-mermaid-expand-btn {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 7px;
+  font-family: "Inter", sans-serif;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: var(--doc-text-muted);
+  background-color: var(--doc-surface);
+  border: 1px solid var(--doc-border);
+  box-shadow: var(--doc-shadow-sm);
+  cursor: pointer;
+  transition: color 0.14s ease, border-color 0.14s ease, background-color 0.14s ease;
+}
+
+.doc-mermaid-expand-btn:hover {
+  color: var(--doc-text-strong);
+  border-color: var(--doc-border-strong);
+  background-color: var(--doc-surface-2);
+}
+
+.content pre.mermaid svg {
+  max-width: 100% !important;
+  height: auto !important;
+}
+
+.content pre.mermaid .cluster rect,
+.doc-mermaid-modal .cluster rect {
+  filter: none !important;
+}
+
+.content pre.mermaid .nodeLabel,
+.content pre.mermaid .cluster-label span,
+.doc-mermaid-modal .nodeLabel,
+.doc-mermaid-modal .cluster-label span {
+  font-family: "Inter", sans-serif !important;
+  font-weight: 500 !important;
+}
+
+.content pre.mermaid .nodeLabel b,
+.content pre.mermaid .nodeLabel strong,
+.doc-mermaid-modal .nodeLabel b,
+.doc-mermaid-modal .nodeLabel strong {
+  font-weight: 600 !important;
+}
+
+.content pre.mermaid .cluster-label span,
+.doc-mermaid-modal .cluster-label span {
+  font-size: 0.74rem !important;
+  font-weight: 600 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.05em !important;
+}
+
+.content pre.mermaid p,
+.doc-mermaid-modal p {
+  margin: 0 !important;
+}
+
+.content pre.mermaid .labelBkg,
+.doc-mermaid-modal .labelBkg {
+  background: transparent !important;
+  background-color: transparent !important;
+  border: none !important;
+}
+
+.content pre.mermaid[data-polished="1"] .labelBkg {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.content pre.mermaid .edgeLabel,
+.doc-mermaid-modal .edgeLabel,
+.content pre.mermaid .edgeLabel p,
+.doc-mermaid-modal .edgeLabel p {
+  font-family: "JetBrains Mono", ui-monospace, monospace !important;
+  font-size: 11.5px !important;
+  font-weight: 600 !important;
+  line-height: 2.5 !important;
+  padding: 0 !important;
+  border: none !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  color: var(--doc-text-strong) !important;
+  display: inline-block !important;
+  text-shadow:
+    -1.5px -1.5px 0 #ffffff,
+     1.5px -1.5px 0 #ffffff,
+    -1.5px  1.5px 0 #ffffff,
+     1.5px  1.5px 0 #ffffff,
+     0 0 7px #ffffff;
+}
+
+html.dark .content pre.mermaid .edgeLabel,
+html.dark .doc-mermaid-modal .edgeLabel,
+html.dark .content pre.mermaid .edgeLabel p,
+html.dark .doc-mermaid-modal .edgeLabel p {
+  text-shadow:
+    -1.5px -1.5px 0 #11151d,
+     1.5px -1.5px 0 #11151d,
+    -1.5px  1.5px 0 #11151d,
+     1.5px  1.5px 0 #11151d,
+     0 0 7px #11151d;
+}
+
+.content pre.mermaid .edgeLabel.is-single-line,
+.doc-mermaid-modal .edgeLabel.is-single-line,
+.content pre.mermaid .edgeLabel.is-single-line p,
+.doc-mermaid-modal .edgeLabel.is-single-line p {
+  line-height: 1.2 !important;
+}
+
+/* Expanded Vector Lightbox Modal */
+.doc-mermaid-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.45);
+  backdrop-filter: blur(8px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.16s ease, visibility 0.16s ease;
+}
+
+html.dark .doc-mermaid-modal {
+  background: rgba(7, 9, 14, 0.75);
+}
+
+.doc-mermaid-modal[data-open="true"] {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.doc-mermaid-modal-dialog {
+  width: min(1220px, 94vw);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+  background-color: var(--doc-surface);
+  border: 1px solid var(--doc-border-strong);
+  box-shadow: 0 24px 64px rgba(15, 23, 42, 0.22);
+  overflow: hidden;
+}
+
+html.dark .doc-mermaid-modal-dialog {
+  background-color: #111317;
+  box-shadow: 0 28px 72px rgba(0, 0, 0, 0.65);
+}
+
+.doc-mermaid-modal-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.75rem 1.15rem;
+  border-bottom: 1px solid var(--doc-border);
+  background-color: var(--doc-surface-2);
+}
+
+.doc-mermaid-modal-title {
+  font-family: "Plus Jakarta Sans", "Inter", sans-serif;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--doc-text-strong);
+}
+
+.doc-mermaid-modal-close {
+  width: 30px;
+  height: 30px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--doc-text-muted);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+}
+
+.doc-mermaid-modal-close:hover {
+  color: var(--doc-text-strong);
+  background-color: var(--doc-surface);
+  border-color: var(--doc-border);
+}
+
+.doc-mermaid-modal-body {
+  padding: 2rem 2.25rem;
+  overflow: auto;
+  display: block;
+  background-image: radial-gradient(rgba(100, 116, 139, 0.16) 1px, transparent 1px);
+  background-size: 18px 18px;
+}
+
+html.dark .doc-mermaid-modal-body {
+  background-image: radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+}
+
+.doc-mermaid-modal-body svg {
+  display: block;
+  width: 100% !important;
+  max-width: 1120px !important;
+  height: auto !important;
+  max-height: calc(86vh - 96px);
+  margin: 0 auto;
+}
+
+
+
+/* =========================================================
+   11. Firmware Flasher Inline Trigger Button & Host
+   ========================================================= */
+#slaprf-docs-flasher-modal-host {
+  position: fixed;
+  inset: 0;
+  width: 0;
+  height: 0;
+  overflow: visible;
+  z-index: 9999;
+  pointer-events: none;
+}
+
+.doc-flasher-inline-action {
+  margin: 0.9rem 0 1.35rem;
+}
+
+.doc-flasher-launch-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.45rem;
+  height: 38px;
+  padding: 0 1.1rem;
+  border-radius: 9px;
+  font-family: "Inter", sans-serif;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  background-color: #2563eb;
+  border: 1px solid #2563eb;
+  color: #ffffff;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.2);
+  transition: background-color 0.14s ease, transform 0.14s ease;
+}
+
+.doc-flasher-launch-btn:hover {
+  background-color: #1d4ed8;
+  transform: translateY(-1px);
+}
+
+html.dark .doc-flasher-launch-btn {
+  background-color: #d4ff3a;
+  border-color: #d4ff3a;
+  color: #0b0c0f;
+  box-shadow: 0 2px 10px rgba(212, 255, 58, 0.16);
+}
+
+html.dark .doc-flasher-launch-btn:hover {
+  background-color: #e0ff6e;
+}
+
+/* =========================================================
+   12. Side-Swipe Light / Dark Theme Switcher
+   ========================================================= */
+.doc-theme-switch {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.doc-theme-switch-track {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 52px;
+  height: 28px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background-color: var(--doc-surface-2);
+  border: 1px solid var(--doc-border);
+  transition: background-color 0.2s ease, border-color 0.2s ease;
+}
+
+.doc-theme-switch:hover .doc-theme-switch-track {
+  border-color: var(--doc-border-strong);
+}
+
+html.dark .doc-theme-switch-track {
+  background-color: #161a22;
+  border-color: #29303d;
+}
+
+.doc-theme-switch-icon {
+  position: relative;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  transition: color 0.2s ease, opacity 0.2s ease;
+}
+
+.doc-theme-switch-icon.is-sun {
+  color: #2563eb;
+  opacity: 1;
+}
+
+.doc-theme-switch-icon.is-moon {
+  color: var(--doc-text-muted);
+  opacity: 0.65;
+}
+
+html.dark .doc-theme-switch-icon.is-sun {
+  color: var(--doc-text-muted);
+  opacity: 0.55;
+}
+
+html.dark .doc-theme-switch-icon.is-moon {
+  color: #d4ff3a;
+  opacity: 1;
+}
+
+.doc-theme-switch-thumb {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  z-index: 1;
+  width: 22px;
+  height: 22px;
+  border-radius: 999px;
+  background-color: #ffffff;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.14);
+  transform: translateX(0);
+  transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1), background-color 0.2s ease, border-color 0.2s ease;
+}
+
+html.dark .doc-theme-switch-thumb {
+  background-color: #252b37;
+  border-color: rgba(255, 255, 255, 0.1);
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.5);
+  transform: translateX(24px);
+}

@@ -111,9 +111,17 @@ export function firmwareImageNameFor(role: "hub" | "spoke", hubLink: HubLink = "
   return role === "hub" && hubLink === "ble" ? FIRMWARE_BLE_IMAGE_NAME : FIRMWARE_IMAGE_NAME;
 }
 
+let firmwareBaseDir = "./firmware";
+
+/** Overrides the base directory where `.bin` firmware images are fetched (for example, `/docs/firmware`). */
+export function setFirmwareBaseDir(dir: string): void {
+  firmwareBaseDir = dir.replace(/\/+$/, "") || "./firmware";
+  bleImageProbe = null;
+}
+
 /** Firmware image URL for a role and Hub link. */
 export function firmwareImageUrlFor(role: "hub" | "spoke", hubLink: HubLink = "usb"): string {
-  return firmwareImageNameFor(role, hubLink) === FIRMWARE_BLE_IMAGE_NAME ? FIRMWARE_BLE_IMAGE_URL : FIRMWARE_IMAGE_URL;
+  return `${firmwareBaseDir}/${firmwareImageNameFor(role, hubLink)}`;
 }
 
 /** Error shown when the Bluetooth Hub image is requested but has not been built. */
@@ -132,7 +140,7 @@ export function probeBleFirmwareImage(refresh = false): Promise<boolean> {
   bleImageProbe = (async () => {
     try {
       if (typeof fetch !== "function") return false;
-      const res = await fetch(FIRMWARE_BLE_IMAGE_URL, { method: "HEAD", cache: "no-cache" });
+      const res = await fetch(firmwareImageUrlFor("hub", "ble"), { method: "HEAD", cache: "no-cache" });
       if (!res.ok) return false;
       const type = (res.headers.get("content-type") || "").toLowerCase();
       return !type.includes("text/html");

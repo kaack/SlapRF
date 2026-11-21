@@ -1,0 +1,65 @@
+---
+title: Troubleshooting
+weight: 2
+---
+
+Quick diagnostics and fixes for USB flashing, wireless connectivity, power supplies, and gate detection.
+
+## USB & Flashing
+
+### USB Port Missing
+
+If the XIAO ESP32-C5 does not appear in the browser serial port chooser:
+
+1. Swap to a known USB-C data cable (many bundled cables are charge-only with no data wires).
+2. Plug directly into a computer USB port rather than an unpowered hub or dock, using desktop Chrome, Edge, or Opera.
+3. On Linux, confirm your user is in the `dialout` or `uucp` group so `/dev/ttyACM0` can be opened.
+4. If a board is unresponsive, hold the tiny `BOOT` button (`B`, bottom-right of the XIAO) while plugging in USB-C, release `BOOT`, and click **Flash to USB**:
+
+![Seeed Studio XIAO ESP32-C5 BOOT Button Location](/images/xiao-c5-boot.jpg)
+
+### Interrupted Flash
+
+If flashing halts partway through or boards reset randomly on USB, unplug any extra XIAO boards so only one board is connected at a time. Multiple ESP32-C5 radios calibrating on 2.4 GHz simultaneously can droop a shared laptop `5 V` rail.
+
+## Bluetooth & Spokes
+
+### Hub Not Found
+
+If your phone or laptop does not discover the Bluetooth Hub in **Network**:
+
+1. Verify the board was flashed with the Bluetooth Hub image (`slaprf-xiao-c5-ble.bin`) and shows either the fast double-blink (Pairing Mode) or `1 Hz` slow blink.
+2. Confirm **Settings -> Hardware** is set to **SlapRF (Bluetooth)**.
+3. Disconnect any other phone or browser tab already linked to the Hub (BLE advertising pauses while an active host is connected). To pair with a new host, hold `BOOT` on the Hub for `3.0 s` until the rapid LED burst clears the previous bond.
+
+### Spoke Stays Offline
+
+If a Spoke (`T1`-`T6`) blinks slowly at `1 Hz` and stays offline in **Network**:
+
+1. Power on the Hub (`H1`) first and verify it is online.
+2. Re-flash the Hub and all Spokes from the same SlapRF release so their ESP-NOW packet versions match.
+3. Check that the snap-on U.FL antenna is firmly seated on both boards and that no two Spokes share the same slot ID (`T1`-`T6`):
+
+![Seeed Studio XIAO ESP32-C5 U.FL Antenna Socket](/images/xiao-c5-antenna.jpg)
+
+### Power Bank Shutoff
+
+Because a XIAO ESP32-C5 draws under `100 mA`, some phone power banks assume nothing is connected and shut off after 30 to 60 seconds. Power gate timers from a 3S-6S LiPo pack with an XT60-to-USB-C `5 V` BEC (which never auto-sleeps), or enable trickle-charge mode on your power bank.
+
+## Gate Detection
+
+### False Adjacent Laps
+
+If flying on a nearby lane triggers laps on an adjacent gate:
+
+1. Fly 2 to 3 clean passes through the gate and click **Calibrate**, or open **Fine-tune** and raise the Enter threshold closer to `0 dBm` (for example, `-58 dBm` to `-50 dBm`).
+2. Set **Min Lap Time** just below your fastest realistic lap on the course.
+3. On tight tracks, set the XIAO inside a shallow open-top metal cup or foil-lined tray under the gate to block side-lobe RF from neighboring lanes.
+
+### Missed Fast Passes
+
+If high-speed passes through a gate do not register:
+
+1. Confirm the pilot's channel in **Pilots** matches the exact VTX band and frequency (and that Pit Mode is off).
+2. Remove inactive pilot slots from the session so timers sweep fewer frequencies and sample each active pilot faster.
+3. Open **Fine-tune** on that gate timer and lower the Enter threshold slightly (for example, `-48 dBm` to `-55 dBm`).

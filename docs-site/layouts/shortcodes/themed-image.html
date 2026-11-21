@@ -1,0 +1,7 @@
+{{- $light := strings.TrimPrefix "/" (.Get "light") | relURL -}}
+{{- $dark := strings.TrimPrefix "/" (.Get "dark") | relURL -}}
+{{- $alt := .Get "alt" | default "" -}}
+<p class="doc-theme-img-wrap">
+  <img class="doc-theme-img-light" src="{{ $light }}" alt="{{ $alt }}" decoding="async" />
+  <img class="doc-theme-img-dark" src="{{ $dark }}" alt="{{ $alt }}" decoding="async" />
+</p>

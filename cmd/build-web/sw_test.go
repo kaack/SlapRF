@@ -32,6 +32,8 @@ func TestBuildPrecacheExcludesAndVersionsByContent(t *testing.T) {
 		"dist/app.js":          "js",
 		"firmware/README.md":   "doc",
 		"firmware/x.bin":       "bin",
+		"docs/index.html":      "<html>docs</html>",
+		"docs/js/flasher.js":   "console.log(1)",
 		"manifest.webmanifest": "{}",
 	})
 	entries, v1, err := buildPrecache(dir)

@@ -15,8 +15,10 @@ import (
 
 func main() {
 	webDir := flag.String("web", "./web", "Source web directory")
+	docsDir := flag.String("docs", "./docs-site", "Hugo documentation source directory")
 	outDir := flag.String("out", "./_site", "Output static site directory for GitHub Pages")
 	skipWasm := flag.Bool("skip-wasm", false, "Skip compiling and copying wasm/slaprf.wasm (for native Go server builds)")
+	skipDocs := flag.Bool("skip-docs", false, "Skip building Hugo documentation into <out>/docs")
 	flag.Parse()
 
 	log.SetFlags(log.LstdFlags)
@@ -123,7 +125,34 @@ func main() {
 		}
 	}
 
-	// 6. Write .nojekyll so GitHub Pages serves all files unaltered
+	// 6. Build static Hugo documentation into <outDir>/docs when docs-site exists.
+	if !*skipDocs {
+		if st, err := os.Stat(*docsDir); err == nil && st.IsDir() {
+			if _, lookErr := exec.LookPath("hugo"); lookErr != nil {
+				if os.Getenv("CI") != "" {
+					log.Fatalf("[build-web] hugo is required in CI to build documentation: %v", lookErr)
+				}
+				log.Printf("[build-web] Warning: hugo not found on PATH; skipping %s build", *docsDir)
+			} else {
+				docsOut := filepath.Join(*outDir, "docs")
+				docsCmd := exec.Command(
+					"go", "run", "./cmd/build-docs",
+					"-web", *webDir,
+					"-docs", *docsDir,
+					"-out", docsOut,
+					"-base-url", "/docs/",
+					"-skip-firmware",
+				)
+				docsCmd.Stdout = os.Stdout
+				docsCmd.Stderr = os.Stderr
+				if err := docsCmd.Run(); err != nil {
+					log.Fatalf("[build-web] build-docs failed: %v", err)
+				}
+			}
+		}
+	}
+
+	// 7. Write .nojekyll so GitHub Pages serves all files unaltered
 	_ = os.WriteFile(filepath.Join(*outDir, ".nojekyll"), []byte{}, 0o644)
 	_ = os.WriteFile(filepath.Join(*outDir, "CNAME"), []byte("slaprf.app\n"), 0o644)
 	// 7. PWA: web app manifest + icons + sounds, then the service worker (last, so its content-hashed

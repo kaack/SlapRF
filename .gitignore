@@ -43,3 +43,11 @@ slaprf.db*
 
 # SlapRF E2E verification test artifacts (videos, traces, screenshots, HTML report)
 /test-results/
+
+# Hugo documentation build outputs & staged bundles
+/docs-site/public/
+/docs-site/resources/
+/docs-site/.hugo_build.lock
+/docs-site/static/js/docs-flasher.js
+/docs-site/static/js/docs-flasher.css
+/docs-site/static/firmware/

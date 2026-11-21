@@ -1,0 +1,103 @@
+baseURL: "/docs/"
+title: "SlapRF Docs"
+
+module:
+  hugoVersion:
+    extended: true
+    min: "0.146.0"
+  imports:
+    - path: github.com/imfing/hextra
+
+markup:
+  highlight:
+    noClasses: false
+  goldmark:
+    renderer:
+      unsafe: true
+
+enableInlineShortcodes: true
+
+menu:
+  main:
+    - name: Search
+      weight: 1
+      params:
+        type: search
+    - name: Discord
+      weight: 2
+      url: "https://discord.gg/zNrV3auRss"
+      params:
+        icon: discord
+    - name: GitHub
+      weight: 3
+      url: "https://github.com/kaack/SlapRF"
+      params:
+        icon: github
+    - name: Theme Toggle
+      weight: 4
+      params:
+        type: theme-toggle
+
+  sidebar:
+    - identifier: community
+      name: Community & Downloads
+      params:
+        type: separator
+      weight: 100
+    - identifier: releases
+      name: "Download Releases"
+      url: "https://github.com/kaack/SlapRF/releases/latest"
+      weight: 101
+    - identifier: discord
+      name: "Join Discord"
+      url: "https://discord.gg/zNrV3auRss"
+      weight: 102
+    - identifier: demo
+      name: "Browser Demo"
+      url: "https://slaprf.app"
+      weight: 103
+
+params:
+  description: "Documentation for the SlapRF FPV timing application and DIY XIAO ESP32-C5 5.8 GHz gate hardware."
+  externalLinkDecoration: true
+
+  navbar:
+    displayTitle: true
+    displayLogo: true
+    logo:
+      path: images/logo-light.svg
+      dark: images/logo-dark.svg
+      width: 32
+      height: 32
+      link: /docs/
+    width: wide
+
+  theme:
+    default: dark
+    displayToggle: false
+
+  footer:
+    enable: true
+    displayCopyright: false
+    displayPoweredBy: false
+    width: wide
+
+  search:
+    enable: true
+    type: flexsearch
+    flexsearch:
+      index: content
+      tokenize: forward
+
+  imageZoom:
+    enable: true
+
+  highlight:
+    copy:
+      enable: true
+      display: hover
+
+  page:
+    width: wide
+    contextMenu:
+      enable: false

@@ -23,7 +23,12 @@ import {
   registerFlashCanceler,
   withFingerprint,
 } from "./esp_flasher";
-import { createBackendPortHandle, isBackendSerialPort, isSimulatedUsbMode } from "./sim_serial_port";
+import {
+  createBackendPortHandle,
+  isBackendSerialPort,
+  isSimulatedUsbMode,
+  isStandaloneWebSerialMode,
+} from "./sim_serial_port";
 import { usbPool } from "./timer_console";
 
 const ESPRESSIF_USB_VID = 0x303a;
@@ -470,11 +475,13 @@ export async function acquireEspSerialPort(): Promise<WebSerialPort> {
       "No XIAO ESP32-C5 detected on USB. Plug the timer into your USB-C port (use a USB-C data/OTG cable if needed) and try again."
     );
   }
-  const granted = (await api.getPorts().catch(() => [] as WebSerialPort[])).filter(
-    (p) => p.getInfo().usbVendorId === ESPRESSIF_USB_VID
-  );
-  if (granted.length === 1) {
-    return granted[0];
+  if (!isStandaloneWebSerialMode()) {
+    const granted = (await api.getPorts().catch(() => [] as WebSerialPort[])).filter(
+      (p) => p.getInfo().usbVendorId === ESPRESSIF_USB_VID
+    );
+    if (granted.length === 1) {
+      return granted[0];
+    }
   }
   const t0 = performance.now();
   try {

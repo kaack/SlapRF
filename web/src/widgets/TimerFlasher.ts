@@ -66,6 +66,7 @@ export class TimerFlasher extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
   private readonly onReadout?: (readout: TimerReadout) => void;
+  private readonly hideTips: boolean;
 
   private step: WizardStepId = "network";
   private slideDir: "next" | "prev" | "none" = "none";
@@ -89,12 +90,14 @@ export class TimerFlasher extends Component {
     el: HTMLElement,
     store: AppStore,
     api: ApiClient,
-    onReadout?: (readout: TimerReadout) => void
+    onReadout?: (readout: TimerReadout) => void,
+    options?: { hideTips?: boolean }
   ) {
     super(el);
     this.store = store;
     this.api = api;
     this.onReadout = onReadout;
+    this.hideTips = !!options?.hideTips;
 
     this.listen(el, "click", (e) => {
       const t = e.target as HTMLElement;
@@ -351,6 +354,9 @@ export class TimerFlasher extends Component {
     const bleHub = this.role === "hub" && this.effectiveHubLink === "ble";
     const label = `${this.role === "hub" ? (bleHub ? "Bluetooth Hub" : "Hub") : "Spoke"} "${cleanLabel}"`;
     const useEsptool = flasherUsesWebSerial();
+    // Acquire the WebSerial port synchronously inside the click handler before re-rendering DOM.
+    const pendingPortPromise = useEsptool ? acquireEspSerialPort() : null;
+
     this.busy = true;
     this.errorMsg = null;
     this.lastSuccessMsg = null;
@@ -375,9 +381,8 @@ export class TimerFlasher extends Component {
     try {
       let written: TimerReadout | null;
       let flashedPort: WebSerialPort | null = null;
-      if (useEsptool) {
-        // Select the USB port first, while the click still counts as a user gesture.
-        flashedPort = await acquireEspSerialPort();
+      if (useEsptool && pendingPortPromise) {
+        flashedPort = await pendingPortPromise;
         onProgress({ stage: "connecting", percent: 1, detail: `Building ${label} firmware image…` });
         const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel, undefined, this.effectiveHubLink);
         written = await flashXiaoC5WithEsptool(
@@ -593,7 +598,10 @@ export class TimerFlasher extends Component {
           </button>
         </div>
 
-        <div class="flasher-tips" role="note" aria-label="Tips for a reliable flash">
+        ${
+          this.hideTips
+            ? ""
+            : `<div class="flasher-tips" role="note" aria-label="Tips for a reliable flash">
           <div class="flasher-tips-head">${icons.info(14)}<span>Tips for a reliable flash</span></div>
           <ul class="flasher-tips-list">
             <li><strong>Use a good USB-C data cable.</strong> A known, good-quality USB-C data cable works much better than a cheap or charge-only cable.</li>
@@ -601,7 +609,8 @@ export class TimerFlasher extends Component {
             <li><strong>Flash one board at a time</strong>${hasBrowserWebSerial() ? " in Chrome, Edge, or Opera" : ""}. If a board stops responding, unplug it (and its battery) for a few seconds, then try again.</li>
             <li><strong>Keep the Hub and all Spokes on the same firmware version.</strong> When updating firmware, reflash both the Hub and every Spoke on the course.</li>
           </ul>
-        </div>
+        </div>`
+        }
 
         <div class="flasher-wizard-nav is-end">
           <button type="button" class="btn" data-wizard-next="1" ${this.busy ? "disabled" : ""}>

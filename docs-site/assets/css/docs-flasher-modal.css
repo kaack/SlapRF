@@ -1,0 +1,561 @@
+.docs-flasher-theme-root {
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  display: block;
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  font-feature-settings: "cv11", "ss01";
+}
+
+.df-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(7, 9, 14, 0.72);
+  backdrop-filter: blur(8px);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.18s ease, visibility 0.18s ease;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-backdrop {
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.df-modal-backdrop[data-open="true"] {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.df-modal-dialog {
+  width: min(920px, 100%);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  border-radius: 18px;
+  background: #0d1016;
+  border: 1px solid #2b313e;
+  box-shadow: 0 32px 80px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.04);
+  overflow: hidden;
+  transform: translateY(8px) scale(0.985);
+  transition: transform 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-dialog {
+  background: #edf1f7;
+  border-color: #cbd5e1;
+  box-shadow: 0 28px 68px rgba(15, 23, 42, 0.22), 0 2px 8px rgba(15, 23, 42, 0.06);
+}
+
+.df-modal-backdrop[data-open="true"] .df-modal-dialog {
+  transform: translateY(0) scale(1);
+}
+
+.df-modal-accent-bar {
+  height: 3px;
+  width: 100%;
+  flex-shrink: 0;
+  background: linear-gradient(90deg, #d4ff3a 0%, #34d399 52%, #38bdf8 100%);
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-accent-bar {
+  background: linear-gradient(90deg, #2563eb 0%, #38bdf8 52%, #6366f1 100%);
+}
+
+.df-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 16px 24px;
+  background: #131720;
+  border-bottom: 1px solid #232a36;
+  flex-shrink: 0;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-header {
+  background: #ffffff;
+  border-bottom-color: #dde3ee;
+}
+
+.df-modal-brand {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  min-width: 0;
+}
+
+.df-modal-icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 11px;
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
+  background: rgba(212, 255, 58, 0.12);
+  border: 1px solid rgba(212, 255, 58, 0.32);
+  color: #d4ff3a;
+  box-shadow: 0 0 18px rgba(212, 255, 58, 0.12);
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-icon {
+  background: linear-gradient(135deg, #eff6ff 0%, #dbeafe 100%);
+  border-color: rgba(37, 99, 235, 0.28);
+  color: #2563eb;
+  box-shadow: 0 2px 8px rgba(37, 99, 235, 0.12);
+}
+
+.df-modal-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.df-modal-title-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.df-modal-title {
+  font-size: 16px;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  color: var(--text);
+}
+
+.df-modal-subtitle {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.df-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 21px;
+  padding: 0 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  color: var(--text-2);
+}
+
+.df-pill-accent {
+  background: rgba(212, 255, 58, 0.14);
+  border-color: rgba(212, 255, 58, 0.35);
+  color: #d4ff3a;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-pill-accent {
+  background: rgba(37, 99, 235, 0.1);
+  border-color: rgba(37, 99, 235, 0.28);
+  color: #2563eb;
+}
+
+.df-modal-close {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+}
+
+.df-modal-body {
+  padding: 24px;
+  overflow-y: auto;
+  background-color: #0d1016;
+  background-image: radial-gradient(rgba(255, 255, 255, 0.05) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body {
+  background-color: #edf1f7;
+  background-image: radial-gradient(rgba(100, 116, 139, 0.14) 1px, transparent 1px);
+  background-size: 16px 16px;
+}
+
+.df-modal-body .flasher.flasher-wizard {
+  margin: 0;
+  gap: 18px;
+}
+
+/* Stepper: plain text labels with no pill background; only the number circle is styled */
+.df-modal-body .flasher-wizard-stepper {
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: #141922;
+  border: 1px solid #242c3a;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-wizard-stepper {
+  background: #ffffff;
+  border-color: #d5dde8;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.05);
+}
+
+.df-modal-body .flasher-step-pill,
+.df-modal-body .flasher-step-pill:hover:not(:disabled),
+.df-modal-body .flasher-step-pill.is-current,
+.df-modal-body .flasher-step-pill.is-done {
+  padding: 4px 6px;
+  border-radius: 6px;
+  font-size: 12.5px;
+  font-weight: 500;
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.df-modal-body .flasher-step-pill {
+  color: var(--text-3);
+}
+
+.df-modal-body .flasher-step-pill.is-done {
+  color: var(--text-2);
+}
+
+.df-modal-body .flasher-step-pill:hover:not(:disabled),
+.df-modal-body .flasher-step-pill.is-current {
+  color: var(--text) !important;
+  font-weight: 600;
+}
+
+.df-modal-body .flasher-step-divider {
+  background: #262e3d;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-step-divider {
+  background: #d5dde8;
+}
+
+.df-modal-body .flasher-step-pill .flasher-step-circle {
+  width: 22px;
+  height: 22px;
+  background: #1c222e;
+  border: 1px solid #30394b;
+  color: #8b95a5;
+  font-weight: 700;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-step-pill .flasher-step-circle {
+  background: #edf2f7;
+  border: 1px solid #cbd5e1;
+  color: #64748b;
+}
+
+.df-modal-body .flasher-step-pill.is-current .flasher-step-circle {
+  background: rgba(59, 130, 246, 0.22);
+  border-color: rgba(96, 165, 250, 0.55);
+  color: #60a5fa;
+  font-weight: 700;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-step-pill.is-current .flasher-step-circle {
+  background: rgba(37, 99, 235, 0.14);
+  border-color: rgba(37, 99, 235, 0.42);
+  color: #2563eb;
+}
+
+.df-modal-body .flasher-step-pill.is-done .flasher-step-circle {
+  background: rgba(52, 211, 153, 0.18);
+  border-color: rgba(52, 211, 153, 0.45);
+  color: #34d399;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-step-pill.is-done .flasher-step-circle {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(16, 185, 129, 0.38);
+  color: #059669;
+}
+
+.df-modal-body .flasher-pane-title {
+  font-size: 17px !important;
+  font-weight: 700 !important;
+  letter-spacing: -0.02em;
+  color: var(--text) !important;
+}
+
+.df-modal-body .flasher-step-count {
+  padding: 2px 9px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--text-2);
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-step-count {
+  background: #ffffff;
+  border-color: #d5dde8;
+}
+
+.df-modal-body .flasher-wizard-intro p {
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text-2);
+  margin-top: 4px;
+}
+
+.df-modal-body .flasher-pictorial-grid {
+  gap: 16px;
+}
+
+.df-modal-body .flasher-pictorial-card {
+  padding: 16px 18px;
+  border-radius: 14px;
+  gap: 12px;
+  background: #141922;
+  border: 1.5px solid #262e3d;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.df-modal-body .flasher-pictorial-card:hover:not(:disabled) {
+  border-color: #3b465c;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06), 0 6px 18px rgba(0, 0, 0, 0.28);
+}
+
+.df-modal-body .flasher-pictorial-card.is-active {
+  background: linear-gradient(180deg, #18202c 0%, #131922 100%);
+  border-color: #d4ff3a;
+  box-shadow: 0 10px 26px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(212, 255, 58, 0.25);
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-pictorial-card {
+  background: #ffffff;
+  border-color: #d5dde8;
+  box-shadow: 0 2px 6px rgba(15, 23, 42, 0.04);
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-pictorial-card:hover:not(:disabled) {
+  border-color: #94a3b8;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.07);
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-pictorial-card.is-active {
+  background: linear-gradient(180deg, #ffffff 0%, #f4f8ff 100%);
+  border-color: #2563eb;
+  box-shadow: 0 8px 22px rgba(37, 99, 235, 0.12), 0 0 0 1px rgba(37, 99, 235, 0.2);
+}
+
+.df-modal-body .flasher-pictorial-title {
+  font-size: 15.5px;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--text);
+}
+
+.df-modal-body .flasher-pictorial-art {
+  padding: 16px 14px;
+  border-radius: 10px;
+  background-color: #0e1219;
+  background-image:
+    radial-gradient(circle at 50% 50%, rgba(212, 255, 58, 0.07), transparent 70%),
+    radial-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 100% 100%, 12px 12px;
+  border: 1px solid #222938;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-pictorial-art {
+  background-color: #f3f7fc;
+  background-image:
+    radial-gradient(circle at 50% 50%, rgba(37, 99, 235, 0.07), transparent 70%),
+    radial-gradient(rgba(100, 116, 139, 0.14) 1px, transparent 1px);
+  background-size: 100% 100%, 12px 12px;
+  border-color: #dce5f2;
+}
+
+.df-modal-body .flasher-pictorial-card.is-active .flasher-pic-node.is-host-node {
+  stroke: var(--accent);
+  stroke-width: 2;
+  fill: var(--accent-soft);
+}
+
+.df-modal-body .flasher-pictorial-desc {
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--text-2);
+}
+
+/* Step 2 & Step 3 surface cards */
+.df-modal-body .flasher-hub-link,
+.df-modal-body .flasher-summary-grid,
+.df-modal-body .flasher-erase-toggle-row,
+.df-modal-body .flasher-progress {
+  border-radius: 12px;
+  background: #141922;
+  border: 1px solid #262e3d;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-hub-link,
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-summary-grid,
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-erase-toggle-row,
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-progress {
+  background: #ffffff;
+  border-color: #d5dde8;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.05);
+}
+
+.df-modal-body .flasher-field .input {
+  height: 38px;
+  border-radius: 9px;
+  font-size: 13px;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-field .input:not(.input-readonly) {
+  background: #ffffff;
+  border-color: #cbd5e1;
+}
+
+/* Neutral gray-on-gray USB / Bluetooth segmented switcher */
+.df-modal-body .flasher-hub-link .segmented {
+  background: #0f131a;
+  border: 1px solid #262e3d;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-hub-link .segmented {
+  background: #eef2f7;
+  border-color: #d5dde8;
+}
+
+.df-modal-body .flasher-hub-link .segmented button {
+  color: #94a3b8;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-hub-link .segmented button {
+  color: #64748b;
+}
+
+.df-modal-body .flasher-hub-link .segmented button.is-active {
+  background: #273040;
+  color: #f3f5f8;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-hub-link .segmented button.is-active {
+  background: #dbe2ec;
+  color: #0f172a;
+  font-weight: 600;
+  box-shadow: none;
+}
+
+.df-modal-body .flasher-hub-link .segmented .seg-tag {
+  color: inherit;
+  opacity: 0.78;
+}
+
+/* Fixed wizard height across all 3 steps + neutral Back / Next / Flash buttons */
+@media (min-width: 641px) {
+  .df-modal-body .flasher-wizard-body {
+    min-height: 432px;
+  }
+}
+
+.df-modal-body .flasher-wizard-nav {
+  margin-top: auto;
+}
+
+.df-modal-dialog .btn svg,
+.df-modal-dialog .flasher-zap-icon,
+.df-modal-dialog .flasher-zap-icon svg {
+  color: currentColor !important;
+  stroke: currentColor !important;
+}
+
+.df-modal-close svg {
+  color: #ecedef !important;
+  stroke: #ecedef !important;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-close svg {
+  color: #181d27 !important;
+  stroke: #181d27 !important;
+}
+
+.df-modal-body .flasher-wizard-nav [data-wizard-prev="1"] {
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 9px;
+  font-weight: 600;
+  background: #181d27 !important;
+  border: 1px solid #2a3344 !important;
+  color: #cfd6e2 !important;
+  box-shadow: none !important;
+}
+
+.df-modal-body .flasher-wizard-nav [data-wizard-prev="1"]:hover:not(:disabled) {
+  background: #1f2633 !important;
+  border-color: #39455b !important;
+  color: #f3f5f8 !important;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-wizard-nav [data-wizard-prev="1"] {
+  background: #f8fafc !important;
+  border-color: #cbd5e1 !important;
+  color: #334155 !important;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-wizard-nav [data-wizard-prev="1"]:hover:not(:disabled) {
+  background: #f1f5f9 !important;
+  border-color: #94a3b8 !important;
+  color: #0f172a !important;
+}
+
+.df-modal-body .flasher-wizard-nav [data-wizard-next="1"],
+.df-modal-body .flasher-btn-flash {
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 9px;
+  font-size: 13.5px;
+  font-weight: 600;
+  background: #242c3b !important;
+  border: 1px solid #384358 !important;
+  color: #f3f5f8 !important;
+  box-shadow: none !important;
+  transition: background-color 0.14s ease, border-color 0.14s ease, color 0.14s ease;
+}
+
+.df-modal-body .flasher-wizard-nav [data-wizard-next="1"]:hover:not(:disabled),
+.df-modal-body .flasher-btn-flash:hover:not(:disabled) {
+  background: #2d3749 !important;
+  border-color: #495772 !important;
+  transform: none;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-wizard-nav [data-wizard-next="1"],
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-btn-flash {
+  background: #e2e8f0 !important;
+  border-color: #cbd5e1 !important;
+  color: #0f172a !important;
+  box-shadow: none !important;
+}
+
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-wizard-nav [data-wizard-next="1"]:hover:not(:disabled),
+.docs-flasher-theme-root[data-theme="light"] .df-modal-body .flasher-btn-flash:hover:not(:disabled) {
+  background: #d5dde8 !important;
+  border-color: #94a3b8 !important;
+}
+
+@media (max-width: 640px) {
+  .df-modal-backdrop {
+    padding: 12px;
+  }
+
+  .df-modal-body {
+    padding: 14px;
+  }
+}

@@ -1,0 +1,55 @@
+{{- $reversePagination := .Store.Get "reversePagination" | default false -}}
+
+{{- $prev := cond $reversePagination .PrevInSection .NextInSection -}}
+{{- $next := cond $reversePagination .NextInSection .PrevInSection -}}
+
+{{- if eq .Params.prev false }}
+  {{- if $reversePagination }}{{ $next = false }}{{ else }}{{ $prev = false }}{{ end -}}
+{{ else }}
+  {{- with .Params.prev -}}
+    {{- with $.Site.GetPage . -}}
+      {{- if $reversePagination }}{{ $next = . }}{{ else }}{{ $prev = . }}{{ end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if eq .Params.next false }}
+  {{- if $reversePagination }}{{ $prev = false }}{{ else }}{{ $next = false }}{{ end -}}
+{{ else }}
+  {{- with .Params.next -}}
+    {{- with $.Site.GetPage . -}}
+      {{- if $reversePagination }}{{ $prev = . }}{{ else }}{{ $next = . }}{{ end -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+
+{{- if or $prev $next -}}
+  <nav class="doc-pager hx:print:hidden" aria-label="Page navigation">
+    {{- if $prev -}}
+      {{- $linkTitle := partial "utils/title" $prev -}}
+      <a href="{{ $prev.RelPermalink }}" class="doc-pager-link is-prev">
+        <svg class="doc-pager-arrow" viewBox="0 0 20 20" width="15" height="15" fill="none" aria-hidden="true">
+          <path d="M12.5 15L7.5 10L12.5 5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        <span class="doc-pager-text">
+          <span class="doc-pager-label">Previous</span>
+          <span class="doc-pager-title">{{- $linkTitle -}}</span>
+        </span>
+      </a>
+    {{- else -}}
+      <span></span>
+    {{- end -}}
+    {{- if $next -}}
+      {{- $linkTitle := partial "utils/title" $next -}}
+      <a href="{{ $next.RelPermalink }}" class="doc-pager-link is-next">
+        <span class="doc-pager-text">
+          <span class="doc-pager-label">Next</span>
+          <span class="doc-pager-title">{{- $linkTitle -}}</span>
+        </span>
+        <svg class="doc-pager-arrow" viewBox="0 0 20 20" width="15" height="15" fill="none" aria-hidden="true">
+          <path d="M7.5 5L12.5 10L7.5 15" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+      </a>
+    {{- end -}}
+  </nav>
+{{- end -}}

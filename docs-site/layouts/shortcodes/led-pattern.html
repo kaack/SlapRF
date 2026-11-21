@@ -1,0 +1,93 @@
+{{- $id := .Get "id" -}}
+{{- $title := .Get "title" -}}
+{{- $roles := .Get "roles" -}}
+{{- $summary := .Get "summary" -}}
+{{- $timing := .Get "timing" -}}
+{{- $win := float (.Get "window" | default "2000") -}}
+{{- $pulsesRaw := .Get "pulses" | default "" -}}
+{{- $winSec := div $win 1000.0 -}}
+
+{{- $pathParts := slice "M 32.0 34.0" -}}
+{{- $rects := slice -}}
+{{- if ne $pulsesRaw "" -}}
+  {{- range (split $pulsesRaw ",") -}}
+    {{- $pair := split (strings.TrimSpace .) "-" -}}
+    {{- if eq (len $pair) 2 -}}
+      {{- $s := float (index $pair 0) -}}
+      {{- $e := float (index $pair 1) -}}
+      {{- $x1 := add 32.0 (mul (div $s $win) 748.0) -}}
+      {{- $x2 := add 32.0 (mul (div $e $win) 748.0) -}}
+      {{- $w := sub $x2 $x1 -}}
+      {{- $rects = $rects | append (dict "x" $x1 "w" $w) -}}
+      {{- $pathParts = $pathParts | append (printf "L %.1f 34.0 L %.1f 10.0 L %.1f 10.0 L %.1f 34.0" $x1 $x1 $x2 $x2) -}}
+    {{- end -}}
+  {{- end -}}
+{{- end -}}
+{{- $pathParts = $pathParts | append "L 780.0 34.0" -}}
+{{- $d := delimit $pathParts " " -}}
+
+<div class="led-pattern-card not-prose">
+  <div class="led-pattern-top">
+    <div class="led-pcb-housing" aria-hidden="true" title="Live simulated XIAO ESP32-C5 yellow user LED (GPIO27)">
+      <span class="led-smd-package">
+        <span class="led-lamp is-{{ $id }}"></span>
+      </span>
+      <span class="led-live-caption">LIVE</span>
+    </div>
+
+    <div class="led-pattern-meta">
+      <div class="led-pattern-header-row">
+        <h3 class="led-pattern-title">{{ $title }}</h3>
+        {{- if $roles -}}
+          <span class="led-role-pill">{{ $roles }}</span>
+        {{- end -}}
+      </div>
+      {{- if $summary -}}
+        <div class="led-pattern-summary">{{ $summary }}</div>
+      {{- end -}}
+      <div class="led-pattern-desc">{{ .Inner | markdownify }}</div>
+    </div>
+  </div>
+
+  <div class="led-strip-box">
+    <div class="led-strip-header">
+      <span class="led-strip-label">TIMING STRIP ({{ printf "%.1f s" $winSec }} WINDOW)</span>
+      <span class="led-strip-spec">{{ $timing }}</span>
+    </div>
+    <svg class="led-strip-svg" viewBox="0 0 800 56" role="img" aria-label="{{ $title }} LED timing diagram: {{ $timing }}">
+      <!-- Minor 100 ms / 250 ms gridlines -->
+      {{- $minorStep := cond (le $win 2000.0) 100.0 200.0 -}}
+      {{- $steps := int (div $win $minorStep) -}}
+      {{- range $i := seq 0 $steps -}}
+        {{- $t := mul (float $i) $minorStep -}}
+        {{- $gx := add 32.0 (mul (div $t $win) 748.0) -}}
+        <line x1="{{ printf "%.1f" $gx }}" y1="6" x2="{{ printf "%.1f" $gx }}" y2="38" class="led-strip-grid-minor" />
+      {{- end -}}
+
+      <!-- Major quarter-window gridlines and millisecond labels -->
+      {{- range $q := slice 0 1 2 3 4 -}}
+        {{- $t := mul (div $win 4.0) (float $q) -}}
+        {{- $gx := add 32.0 (mul (div $t $win) 748.0) -}}
+        {{- $anchor := cond (eq $q 0) "start" (cond (eq $q 4) "end" "middle") -}}
+        <line x1="{{ printf "%.1f" $gx }}" y1="4" x2="{{ printf "%.1f" $gx }}" y2="40" class="led-strip-grid-major" />
+        <text x="{{ printf "%.1f" $gx }}" y="52" text-anchor="{{ $anchor }}" class="led-strip-tick">{{ printf "%.0f ms" $t }}</text>
+      {{- end -}}
+
+      <!-- Rail labels -->
+      <text x="2" y="14" class="led-strip-state is-on">ON</text>
+      <text x="2" y="36" class="led-strip-state is-off">OFF</text>
+
+      <!-- Baseline guides -->
+      <line x1="32" y1="10" x2="780" y2="10" class="led-strip-rail" />
+      <line x1="32" y1="34" x2="780" y2="34" class="led-strip-rail" />
+
+      <!-- Active ON shaded intervals -->
+      {{- range $rects -}}
+        <rect x="{{ printf "%.1f" .x }}" y="10" width="{{ printf "%.1f" .w }}" height="24" class="led-strip-fill" />
+      {{- end -}}
+
+      <!-- Continuous square-wave trace -->
+      <path d="{{ $d }}" fill="none" class="led-strip-trace" />
+    </svg>
+  </div>
+</div>

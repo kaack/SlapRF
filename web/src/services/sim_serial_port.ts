@@ -107,7 +107,18 @@ export function bindSimTimerActionHandler(
   }
 }
 
+let forceRealWebSerial = false;
+
+export function enableStandaloneWebSerialMode(): void {
+  forceRealWebSerial = true;
+}
+
+export function isStandaloneWebSerialMode(): boolean {
+  return forceRealWebSerial;
+}
+
 export function isSimulatedUsbMode(): boolean {
+  if (forceRealWebSerial) return false;
   const store = getBoundStore();
   if (store && (store.simulatorRunning || store.nodes.length > 0 || store.detectedTimers.length > 0)) {
     return Boolean(store.simulatorRunning);

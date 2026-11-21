@@ -158,6 +158,7 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET") return;
   const url = new URL(request.url);
   if (url.origin !== self.location.origin) return;
+  if (url.pathname === "/docs" || url.pathname.startsWith("/docs/")) return;
 
   if (request.mode === "navigate") {
     event.respondWith(handleNavigation(request));

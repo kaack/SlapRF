@@ -48,6 +48,12 @@ jobs:
         with:
           go-version-file: "go.mod"
 
+      - name: Set up Hugo Extended
+        uses: peaceiris/actions-hugo@v3
+        with:
+          hugo-version: "0.170.1"
+          extended: true
+
       - name: Build static web + WASM site
         run: |
           go run ./cmd/build-web -web ./web -out ./_site
@@ -142,7 +148,7 @@ jobs:
 
       - name: Build signed SlapRF Android APK
         run: |
-          rm -rf cmd/slaprf-android/site/wasm
+          rm -rf cmd/slaprf-android/site/wasm cmd/slaprf-android/site/docs
           mkdir -p dist
           VER_CODE="$(echo "${GITHUB_REF_NAME}" | awk -F'[v.]' '{if (NF>=4) print ($2*10000 + $3*100 + $4); else print 6}')"
           go run ./cmd/build-android -skip-web -version "${GITHUB_REF_NAME}" -version-code "${VER_CODE}" -out dist/slaprf-android-arm64.apk
