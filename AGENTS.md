@@ -33,11 +33,16 @@ SlapRF shares a single Go timing engine and TypeScript web UI across desktop, mo
 
 ## On-Demand AI SDLC Skills (`.agents/skills/`)
 
-Activate the relevant skill below whenever a task involves environment setup, building/testing, browser debugging, screenshots, Android deployment, firmware, hardware bench debugging, Git hygiene, or CI/releases:
+Activate the relevant skill below whenever a task involves environment setup, building/testing, API/protocol changes, UI performance, browser debugging, documentation/STE writing, screenshots, Android deployment, firmware, hardware bench debugging, Git hygiene, or CI/releases:
 
 - `dev-setup` (`.agents/skills/dev-setup/SKILL.md`): Install and verify Go, Hugo Extended, Playwright Chromium, `gh`, Python `pyserial`/`esptool`, Android SDK/NDK/JDK 17, and ESP-IDF `v5.5.1`.
 - `build-and-test` (`.agents/skills/build-and-test/SKILL.md`): Run `devserver`, build web/docs/portable/Android targets, and execute Go, frontend, and Playwright E2E test suites.
+- `api-and-specs-sync` (`.agents/skills/api-and-specs-sync/SKILL.md`): Keep `/v1` Go REST/WS handlers, WASM bridge, IndexedDB persistence, TypeScript models, and OpenAPI 3.1 / AsyncAPI 3.0 specs in lockstep.
+- `wire-protocols-and-sim-parity` (`.agents/skills/wire-protocols-and-sim-parity/SKILL.md`): Maintain byte-level parity across ESP32-C5 `0xC5` / `SLAPRF02` C structs, Go decoders, Android USB/BLE shims, RotorHazard/LapRF links, and simulators.
+- `realtime-ui-and-mobile-perf` (`.agents/skills/realtime-ui-and-mobile-perf/SKILL.md`): 60 FPS canvas telemetry rules, cached view `onActivate`/`onDeactivate` lifecycle, gesture-safe audio/TTS unlock, and mobile touch UX.
 - `live-chrome-cdp` (`.agents/skills/live-chrome-cdp/SKILL.md`): Attach to the user's visible Chrome session over CDP to inspect DOM, canvas, store, and WASM state in real time.
+- `technical-writing-ste` (`.agents/skills/technical-writing-ste/SKILL.md`): ASD-STE100 Simplified Technical English rules and anti-AI-slop guardrails for `README.md`, `docs-site/`, API specs, and UI copy.
+- `docs-site-authoring` (`.agents/skills/docs-site-authoring/SKILL.md`): Hugo + Hextra shortcodes (`themed-image`, `web-flasher`, `api-spec-viewer`), 3-way `Light`/`Auto`/`Dark` theme switcher, dark-slate diagrams, and `cmd/build-docs`.
 - `doc-screenshots` (`.agents/skills/doc-screenshots/SKILL.md`): Generate crisp `2x` Retina matched Dark and Light screenshots for `README.md` and `docs-site/` via `capture_retina.go`.
 - `android-wifi-deploy` (`.agents/skills/android-wifi-deploy/SKILL.md`): Build the signed Android APK, pair/connect wireless `adb` over Wi-Fi, install/launch `app.slaprf`, stream `logcat`, and attach CDP to the Android WebView.
 - `esp32c5-firmware-build` (`.agents/skills/esp32c5-firmware-build/SKILL.md`): Compile `slaprf-xiao-c5.bin` (USB/Spoke) and `slaprf-xiao-c5-ble.bin` (Bluetooth Hub) locally with ESP-IDF `v5.5.1` or fetch CI build artifacts.
