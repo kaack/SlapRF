@@ -36,7 +36,7 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
 	<meta itemprop="name" content="Installation">
 	<meta itemprop="description" content="Download the latest native SlapRF release from GitHub Releases . Each build is self-contained and requires no external runtime or database server.
 Note The online preview at https://slaprf.app runs a simulated track for exploring the interface. Because web browsers throttle background tabs and audio, install the native Android app or desktop binary below to time real flights.">
-	<meta itemprop="wordCount" content="529">
+	<meta itemprop="wordCount" content="601">
 	<meta name="twitter:card" content="summary">
 	<meta name="twitter:title" content="Installation">
 	<meta name="twitter:description" content="Download the latest native SlapRF release from GitHub Releases . Each build is self-contained and requires no external runtime or database server.
@@ -782,7 +782,7 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
 </div>
 </div>
 </li>
-<li>For USB Hub serial access on Linux, ensure your user belongs to the serial group (<code>dialout</code> on Debian / Ubuntu / Raspberry Pi OS, or <code>uucp</code> on Arch), then log out and back in once:
+<li>For USB Hub serial access on Linux, add your user to the serial group (<code>dialout</code> on Debian / Ubuntu / Raspberry Pi OS, or <code>uucp</code> on Arch), then log out and back in once:
 <div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code">
 
 <div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">sudo usermod -aG dialout <span class="nv">$USER</span></span></span></code></pre></div></div><div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0">
@@ -798,6 +798,24 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
 </div>
 </div>
 </li>
+<li>Optional: add a <code>udev</code> rule for immediate <code>/dev/ttyACM*</code> access on XIAO ESP32-C5 (<code>303a:1001</code>) without logging out:
+<div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code">
+
+<div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl"><span class="nb">echo</span> <span class="s1">&#39;SUBSYSTEM==&#34;tty&#34;, ATTRS{idVendor}==&#34;303a&#34;, ATTRS{idProduct}==&#34;1001&#34;, MODE=&#34;0660&#34;, GROUP=&#34;dialout&#34;, TAG+=&#34;uaccess&#34;&#39;</span> <span class="p">|</span> sudo tee /etc/udev/rules.d/99-slaprf-esp32c5.rules
+</span></span><span class="line"><span class="cl">sudo udevadm control --reload-rules <span class="o">&amp;&amp;</span> sudo udevadm trigger</span></span></code></pre></div></div><div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0">
+  <button
+    class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+    title="Copy code"
+    aria-label="Copy code"
+    data-copied-label="Copied!"
+  >
+    <div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"></div>
+<div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"></div>
+  </button>
+</div>
+</div>
+</li>
+<li>For Bluetooth Hub access on Linux, confirm BlueZ is powered on (<code>bluetoothctl show</code> reports <code>Powered: yes</code>). If your computer has multiple Bluetooth adapters, SlapRF selects the first powered adapter automatically, or you can set <code>SLAPRF_BLE_ADAPTER=hci1</code> to pick one.</li>
 </ol>
 </div></div>
 
@@ -939,7 +957,7 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
     </div>
   </dialog>
     <script defer src="/docs/js/main.min.302eb8f391260394614f8841a9a007a2bfe3535e53755065fa3fb3c43fa94027.js" integrity="sha256-MC6485EmA5RhT4hBqaAHor/jU15TdVBl&#43;j&#43;zxD&#43;pQCc="></script>
-<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.864a8410ec08f67d5a5634c5cd24823cba5156037c7a5297affaebb68c08f5d7.js" integrity="sha256-hkqEEOwI9n1aVjTFzSSCPLpRVgN8elKXr/rrtowI9dc="></script>
+<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.2c1537981e0ab2fc444b86c98faa61eadbfe396f138812fa2d9bddf319dab8c3.js" integrity="sha256-LBU3mB4KsvxES4bJj6ph6tv&#43;OW8TiBL6LZvd8xnauMM="></script>
     <script defer src="/docs/en.search-dialog.min.fda123910557b5b3a328696105af51f85abc3cfc6784387c49b11b5b857b256f.js" integrity="sha256-/aEjkQVXtbOjKGlhBa9R&#43;Fq8PPxnhDh8SbEbW4V7JW8="></script>
   </body>
 </html>

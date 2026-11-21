@@ -43,7 +43,7 @@ If a board is unresponsive, hold the tiny BOOT button (B, bottom-right of the XI
 	<meta itemprop="description" content="Quick diagnostics and fixes for USB flashing, wireless connectivity, power supplies, and gate detection.
 USB &amp; Flashing USB Port Missing If the XIAO ESP32-C5 does not appear in the browser serial port chooser:
 Swap to a known USB-C data cable (many bundled cables are charge-only with no data wires). Plug directly into your Android phone (using the SlapRF app) or a computer USB port rather than an unpowered hub or dock (use desktop Chrome, Edge, or Opera if flashing from a web browser). On Linux, confirm your user is in the dialout or uucp group so /dev/ttyACM0 can be opened. If a board is unresponsive, hold the tiny BOOT button (B, bottom-right of the XIAO) while plugging in USB-C, release BOOT, and click Flash to USB:">
-	<meta itemprop="wordCount" content="539">
+	<meta itemprop="wordCount" content="570">
 	<meta name="twitter:card" content="summary">
 	<meta name="twitter:title" content="Troubleshooting">
 	<meta name="twitter:description" content="Quick diagnostics and fixes for USB flashing, wireless connectivity, power supplies, and gate detection.
@@ -731,6 +731,7 @@ Swap to a known USB-C data cable (many bundled cables are charge-only with no da
 <li>Verify the board was flashed with the Bluetooth Hub image (<code>slaprf-xiao-c5-ble.bin</code>) and shows either the fast double-blink (Pairing Mode) or <code>1 Hz</code> slow blink.</li>
 <li>Confirm <strong>Settings -&gt; Hardware</strong> is set to <strong>SlapRF (Bluetooth)</strong>.</li>
 <li>Disconnect any other phone or browser tab already linked to the Hub (BLE advertising pauses while an active host is connected). To pair with a new host, hold <code>BOOT</code> on the Hub for <code>3.0 s</code> until the rapid LED burst clears the previous bond.</li>
+<li>On Linux, run <code>bluetoothctl show</code> and confirm <code>Powered: yes</code>. If your host has more than one Bluetooth controller, run <code>bluetoothctl list</code> and set <code>SLAPRF_BLE_ADAPTER=hci1</code> (or your active adapter name) if needed.</li>
 </ol>
 <h3 data-hextra-search-id="spoke-stays-offline">Spoke Stays Offline<span class="hx:absolute hx:-mt-20" id="spoke-stays-offline"></span>
     <a href="#spoke-stays-offline" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>If a Spoke (<code>T1</code>-<code>T6</code>) blinks slowly at <code>1 Hz</code> and stays offline in <strong>Network</strong>:</p>
@@ -818,7 +819,7 @@ Swap to a known USB-C data cable (many bundled cables are charge-only with no da
     </div>
   </dialog>
     <script defer src="/docs/js/main.min.302eb8f391260394614f8841a9a007a2bfe3535e53755065fa3fb3c43fa94027.js" integrity="sha256-MC6485EmA5RhT4hBqaAHor/jU15TdVBl&#43;j&#43;zxD&#43;pQCc="></script>
-<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.864a8410ec08f67d5a5634c5cd24823cba5156037c7a5297affaebb68c08f5d7.js" integrity="sha256-hkqEEOwI9n1aVjTFzSSCPLpRVgN8elKXr/rrtowI9dc="></script>
+<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.2c1537981e0ab2fc444b86c98faa61eadbfe396f138812fa2d9bddf319dab8c3.js" integrity="sha256-LBU3mB4KsvxES4bJj6ph6tv&#43;OW8TiBL6LZvd8xnauMM="></script>
     <script defer src="/docs/en.search-dialog.min.fda123910557b5b3a328696105af51f85abc3cfc6784387c49b11b5b857b256f.js" integrity="sha256-/aEjkQVXtbOjKGlhBa9R&#43;Fq8PPxnhDh8SbEbW4V7JW8="></script>
   </body>
 </html>
