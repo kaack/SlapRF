@@ -5,6 +5,7 @@ package usb
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -71,5 +72,12 @@ func TestListBlueZAdaptersSysfs(t *testing.T) {
 	got := pickBlueZAdapterName(listBlueZAdaptersSysfs(dir))
 	if got != "hci1" {
 		t.Fatalf("sysfs pick = %q, want %q", got, "hci1")
+	}
+}
+
+func TestFormatLinuxSerialOpenError(t *testing.T) {
+	err := formatLinuxSerialOpenError("/dev/ttyACM0", os.ErrPermission)
+	if err == nil || !strings.Contains(err.Error(), "dialout") {
+		t.Fatalf("expected dialout hint in error, got %v", err)
 	}
 }

@@ -98,7 +98,7 @@ func (m *Manager) Connect(slotIndex int, portName string) (SlotSnapshot, error) 
 
 	probeTimeout := 1200 * time.Millisecond
 	if IsBLEPortName(portName) {
-		probeTimeout = 1800 * time.Millisecond
+		probeTimeout = 2400 * time.Millisecond
 	}
 	// Probe initial status/config without blocking forever if it's an unprogrammed board.
 	_, _ = m.probeInitialStatus(slot, probeTimeout)
@@ -363,7 +363,14 @@ func (m *Manager) probeInitialStatus(slot *usbSlot, timeout time.Duration) (map[
 			}
 			first = false
 		}
-		res, err := m.RequestReply(slot.index, cmd, "status", 450*time.Millisecond)
+		replyTimeout := 450 * time.Millisecond
+		if isBLE {
+			// Give BLE time to commit Claim-on-Pair NVS keys, negotiate ATT MTU 247 / 20 ms
+			// connection interval, and deliver the ~1 KB STATUS? JSON without queuing duplicate
+			// STATUS? bursts into the Hub's 2 KB TX stream buffer.
+			replyTimeout = 1200 * time.Millisecond
+		}
+		res, err := m.RequestReply(slot.index, cmd, "status", replyTimeout)
 		if err == nil {
 			if stMap, ok := res.(map[string]any); ok {
 				return stMap, nil
@@ -1415,12 +1422,32 @@ func (m *Manager) emitTextLine(slot *usbSlot, raw []byte) {
 			switch tStr {
 			case "status":
 				nowMs := time.Now().UnixMilli()
+				fpStr, _ := msg["fp"].(string)
+				canonBLEPort := ""
+				if parsedFP, ok := ParseBLEPortName(BLEPortPrefix + fpStr); ok {
+					fpStr = parsedFP
+					canonBLEPort = BLEPortPrefix + parsedFP
+				}
 				slot.mu.Lock()
 				slot.probing = false
 				slot.lastStatus = msg
 				slot.lastStatusAtMs = nowMs
 				slot.lastRealJsonStatusMs = nowMs
+				curPort := slot.port
+				prevPortName := slot.portName
+				retargetBLE := canonBLEPort != "" && IsBLEPortName(prevPortName) && !strings.EqualFold(prevPortName, canonBLEPort)
+				if retargetBLE {
+					slot.portName = canonBLEPort
+				}
 				slot.mu.Unlock()
+				if canonBLEPort != "" {
+					if bp, ok := curPort.(*BLEStreamPort); ok {
+						bp.NoteConnectedFingerprint(fpStr)
+					}
+				}
+				if retargetBLE {
+					m.saveSlotTarget(slot.index, canonBLEPort)
+				}
 				m.recordKnownStatusMap(msg)
 				m.emit(USBEvent{Type: "status", SlotIndex: slot.index, Status: msg})
 				m.broadcastPoolState()

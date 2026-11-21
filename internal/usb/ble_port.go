@@ -383,6 +383,19 @@ func (p *BLEStreamPort) ResetInputBuffer() error {
 // ResetOutputBuffer is a no-op: writes are sent synchronously.
 func (p *BLEStreamPort) ResetOutputBuffer() error { return nil }
 
+type bleFingerprintObserver interface {
+	NoteConnectedFingerprint(fpHex string)
+}
+
+// NoteConnectedFingerprint informs the underlying BLE transport of the hub's authoritative 8-hex
+// fingerprint once `STATUS?` arrives (allowing platforms whose passive scan omitted SCAN_RSP
+// manufacturer data to map the peripheral MAC address to its canonical `ble:<FP>` port name).
+func (p *BLEStreamPort) NoteConnectedFingerprint(fpHex string) {
+	if obs, ok := p.t.(bleFingerprintObserver); ok {
+		obs.NoteConnectedFingerprint(fpHex)
+	}
+}
+
 // Close disconnects the GATT link and unblocks pending reads with io.EOF. Safe to call twice.
 func (p *BLEStreamPort) Close() error {
 	p.closeOnce.Do(func() {

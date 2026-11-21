@@ -63,31 +63,44 @@ func main() {
 	}
 
 	addrExplicit := false
+	lanExplicit := false
 	noBrowserExplicit := false
 	flag.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "addr":
 			addrExplicit = true
+		case "lan":
+			lanExplicit = true
 		case "no-browser":
 			noBrowserExplicit = true
 		}
 	})
 
+	autoHeadlessLAN := !addrExplicit && !lanExplicit && isHeadlessLinux()
+	useLAN := *lanFlag || autoHeadlessLAN
+
 	listenAddr := *addrFlag
-	if *lanFlag && !addrExplicit {
+	if useLAN && !addrExplicit {
 		listenAddr = "0.0.0.0:8090"
 	}
 	openBrowser := !*noBrowser
-	if *lanFlag && !noBrowserExplicit {
+	if useLAN && !noBrowserExplicit {
 		openBrowser = false
 	}
 
 	ln, err := net.Listen("tcp", listenAddr)
-	if err != nil && !addrExplicit && !*lanFlag && listenAddr == defaultAddr {
-		// Fall back to 8091 (convenient when running Native Server + Pure Browser side-by-side), then any free port.
-		ln, err = net.Listen("tcp", "127.0.0.1:8091")
-		if err != nil {
-			ln, err = net.Listen("tcp", "127.0.0.1:0")
+	if err != nil && !addrExplicit && !*lanFlag {
+		if listenAddr == defaultAddr {
+			// Fall back to 8091 (convenient when running Native Server + Pure Browser side-by-side), then any free port.
+			ln, err = net.Listen("tcp", "127.0.0.1:8091")
+			if err != nil {
+				ln, err = net.Listen("tcp", "127.0.0.1:0")
+			}
+		} else if autoHeadlessLAN && listenAddr == "0.0.0.0:8090" {
+			ln, err = net.Listen("tcp", "0.0.0.0:8091")
+			if err != nil {
+				ln, err = net.Listen("tcp", "0.0.0.0:0")
+			}
 		}
 	}
 	if err != nil {
@@ -126,7 +139,7 @@ func main() {
 			}
 		}
 
-		allowLAN := *lanFlag || strings.HasPrefix(boundAddr, "0.0.0.0:") || strings.HasPrefix(boundAddr, "[::]:")
+		allowLAN := useLAN || strings.HasPrefix(boundAddr, "0.0.0.0:") || strings.HasPrefix(boundAddr, "[::]:")
 
 		pSrv = portable.NewServer(portable.Config{
 			Version:         version,
@@ -142,14 +155,13 @@ func main() {
 
 		fmt.Printf("SlapRF Server (%s) — Native Go Engine\n", version)
 		fmt.Printf("  Web UI:      %s\n", appURL)
-		if ips := portable.LanIPs(); len(ips) > 0 {
+		if ips := portable.LanIPs(); len(ips) > 0 || allowLAN {
 			if allowLAN {
 				_, portStr, _ := net.SplitHostPort(boundAddr)
-				var lanURLs []string
-				for _, ip := range ips {
-					lanURLs = append(lanURLs, "http://"+net.JoinHostPort(ip, portStr))
+				lanURLs := formatLANURLs(localMDNSHostname(), ips, portStr)
+				if len(lanURLs) > 0 {
+					fmt.Printf("  LAN URLs:    %s\n", strings.Join(lanURLs, ", "))
 				}
-				fmt.Printf("  LAN URLs:    %s\n", strings.Join(lanURLs, ", "))
 			} else {
 				fmt.Printf("  LAN IPs:     %s (pass -lan to accept LAN browsers)\n", strings.Join(ips, ", "))
 			}
@@ -209,6 +221,40 @@ func browserURLForAddr(bound string) string {
 		host = "127.0.0.1"
 	}
 	return "http://" + net.JoinHostPort(host, port)
+}
+
+func isHeadlessLinux() bool {
+	return isHeadlessLinuxEnv(runtime.GOOS, os.Getenv("DISPLAY"), os.Getenv("WAYLAND_DISPLAY"))
+}
+
+func isHeadlessLinuxEnv(goos, display, waylandDisplay string) bool {
+	if goos != "linux" {
+		return false
+	}
+	return strings.TrimSpace(display) == "" && strings.TrimSpace(waylandDisplay) == ""
+}
+
+func localMDNSHostname() string {
+	h, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	h = strings.TrimSpace(strings.TrimSuffix(h, ".local"))
+	if h == "" || strings.EqualFold(h, "localhost") || strings.ContainsAny(h, ". \t") {
+		return ""
+	}
+	return h + ".local"
+}
+
+func formatLANURLs(mdnsHost string, ips []string, portStr string) []string {
+	var urls []string
+	if mdnsHost != "" && portStr != "" {
+		urls = append(urls, "http://"+net.JoinHostPort(mdnsHost, portStr))
+	}
+	for _, ip := range ips {
+		urls = append(urls, "http://"+net.JoinHostPort(ip, portStr))
+	}
+	return urls
 }
 
 func launchBrowser(targetURL string) {

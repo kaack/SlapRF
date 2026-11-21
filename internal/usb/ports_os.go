@@ -3,7 +3,10 @@
 package usb
 
 import (
+	"errors"
 	"fmt"
+	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -45,7 +48,17 @@ func openUSBSerialPort(portName string, baud int) (firmware.SerialPort, error) {
 	}
 	p, err := serial.Open(portName, mode)
 	if err != nil {
-		return nil, err
+		return nil, formatLinuxSerialOpenError(portName, err)
 	}
 	return &osSerialPort{port: p}, nil
+}
+
+func formatLinuxSerialOpenError(portName string, err error) error {
+	if err == nil || runtime.GOOS != "linux" {
+		return err
+	}
+	if errors.Is(err, os.ErrPermission) || strings.Contains(strings.ToLower(err.Error()), "permission denied") {
+		return fmt.Errorf("permission denied opening %s (run: sudo usermod -aG dialout $USER, then log out and back in)", portName)
+	}
+	return err
 }
