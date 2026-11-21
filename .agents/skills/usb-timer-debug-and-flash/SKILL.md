@@ -30,6 +30,12 @@ Only **one** process can hold a serial port open at a time. Before running `espt
 ### Critical ESP32-C5 DTR/RTS Pitfall (Do Not Reset into Download Mode Accidentally!)
 Opening an ESP32-C5 USB-Serial-JTAG port with default `pyserial` settings glitches `DTR`/`RTS` and can latch the chip into ROM bootloader (`waiting for download`).
 - Always set `s.dtr = False` and `s.rts = False` **before** calling `s.open()`.
+- On Linux `/dev/ttyACM*` (`cdc_acm`), `pyserial` leaves `termios.HUPCL` set by default, causing `s.close()` to drop DTR/RTS and reset the ESP32-C5. Clear `HUPCL` right after `s.open()` in ad-hoc Python scripts (`go.bug.st/serial` in Go already handles this cleanly):
+  ```python
+  import termios
+  attrs = termios.tcgetattr(s.fd); attrs[2] &= ~termios.HUPCL
+  termios.tcsetattr(s.fd, termios.TCSANOW, attrs)
+  ```
 - On Windows `usbser.sys`, if a board was left in `(1,1)` download-mode latch, disarm it after opening:
   ```python
   s.rts = False; s.dtr = True; s.rts = False; time.sleep(0.05)

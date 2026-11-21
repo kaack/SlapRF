@@ -31,7 +31,22 @@ If your phone or laptop does not discover the Bluetooth Hub in **Network**:
 1. Verify the board was flashed with the Bluetooth Hub image (`slaprf-xiao-c5-ble.bin`) and shows either the fast double-blink (Pairing Mode) or `1 Hz` slow blink.
 2. Confirm **Settings -> Hardware** is set to **SlapRF (Bluetooth)**.
 3. Disconnect any other phone or browser tab already linked to the Hub (BLE advertising pauses while an active host is connected). To pair with a new host, hold `BOOT` on the Hub for `3.0 s` until the rapid LED burst clears the previous bond.
-4. On Linux, run `bluetoothctl show` and confirm `Powered: yes`. If your host has more than one Bluetooth controller, run `bluetoothctl list` and set `SLAPRF_BLE_ADAPTER=hci1` (or your active adapter name) if needed.
+4. On Linux, SlapRF powers on the default BlueZ adapter automatically. If your host has more than one Bluetooth controller, run `bluetoothctl list` and set `SLAPRF_BLE_ADAPTER=hci1` (or your active adapter name) if needed.
+
+### Raspberry Pi Bluetooth Fails to Connect or Drops
+
+On Raspberry Pi 4 (`CYW43455`, and other Raspberry Pi models with a shared wireless chip), `2.4 GHz` Wi-Fi and Bluetooth LE share a single onboard `2.4 GHz` radio and unshielded PCB antenna. Both `2.4 GHz` Wi-Fi traffic and close-range RF overload block Bluetooth Hub (`slaprf_ble`) connections (`le-connection-abort-by-local`):
+
+1. **Do not use `2.4 GHz` Wi-Fi on the Raspberry Pi.** Connect the Pi to **`5 GHz` Wi-Fi or wired Ethernet** and disable `2.4 GHz` Wi-Fi autoconnect so live browser traffic does not preempt Bluetooth LE packets:
+   ```bash
+   # Check active Wi-Fi frequency (~5xxx MHz = 5 GHz, ~24xx MHz = 2.4 GHz)
+   nmcli -f IN-USE,SSID,CHAN,FREQ dev wifi
+   # Disable autoconnect on a 2.4 GHz network profile
+   sudo nmcli connection modify "<2.4GHz-SSID>" connection.autoconnect no
+   ```
+   If only `2.4 GHz` Wi-Fi is available at your track, flash the USB Hub image (`slaprf-xiao-c5.bin`) and connect the Hub (`H1`) to the Raspberry Pi with a USB-C data cable instead of Bluetooth.
+2. **Move the Hub `30 cm` to `1 m` (`1` to `3 ft`) away from the Raspberry Pi.** Setting the XIAO ESP32-C5 whip antenna within a few inches of the Raspberry Pi drives `2.4 GHz` RSSI above `-30 dBm`, saturating the Pi's receiver and dropping GATT handshakes.
+3. **Use a dedicated `5 V / 3 A` USB-C power supply.** Do not power both a Raspberry Pi and XIAO ESP32-C5 timers from the same computer USB hub, as `2.4 GHz` radio calibration bursts can droop a shared `5 V` rail.
 
 ### Spoke Stays Offline
 

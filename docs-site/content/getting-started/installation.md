@@ -8,6 +8,18 @@ Download the latest native SlapRF release from [GitHub Releases](https://github.
 > [!NOTE]
 > The online preview at `https://slaprf.app` runs a simulated track for exploring the interface. Because web browsers throttle background tabs and audio, install the native Android app or desktop binary below to time real flights.
 
+## Verified Platforms
+
+| Platform / Device | Bluetooth Hub | USB-C Hub | USB Flasher | LAN Timers | Verified Environment & Notes |
+| :--- | :---: | :---: | :---: | :---: | :--- |
+| Android (`ARM64` Phone / Tablet) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Android (`arm64-v8a` APK); use a USB-C OTG data cable for USB Hub and in-app Flasher. |
+| Windows 11 (`x86_64`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Windows 11 (`slaprf-windows-amd64.exe`, `WinRT` Bluetooth LE and `COM` serial). |
+| macOS (`Apple Silicon`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Apple Silicon (`slaprf-macos-arm64`, `CoreBluetooth` and `/dev/cu.usbmodem*`); Intel (`amd64`) binary also built in CI. |
+| Linux Desktop (`x86_64`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Ubuntu `x86_64` (`slaprf-linux-amd64`, `BlueZ` and `/dev/ttyACM*`). |
+| Raspberry Pi 4 (`ARM64`) | {{< yes >}} | {{< yes >}} | {{< yes >}} | {{< yes >}} | Verified on Raspberry Pi 4 Model B (`Raspberry Pi OS 64-bit`); requires `5 GHz` Wi-Fi or Ethernet for Bluetooth Hub. |
+| Raspberry Pi (`32-bit OS` / Zero W) | {{< no >}} | {{< no >}} | {{< no >}} | {{< no >}} | `32-bit` (`armhf` / `armv6`) OS installs are not supported as a timing server. |
+| iOS / iPadOS | {{< no >}} | {{< no >}} | {{< no >}} | {{< no >}} | No native iOS host app; connect iPhones and iPads over Wi-Fi Safari to a laptop or Raspberry Pi (`-lan`). |
+
 ## Platform Setup
 
 {{< tabs >}}
@@ -49,25 +61,50 @@ Download the latest native SlapRF release from [GitHub Releases](https://github.
      ```
   3. SlapRF starts on `http://127.0.0.1:8090` and opens your browser. When connecting to a SlapRF Bluetooth Hub for the first time, allow Bluetooth access for your terminal application if macOS prompts you. Use Chrome, Edge, or Opera when flashing firmware over USB in **Flasher**.
   {{< /tab >}}
-  {{< tab name="Linux / Pi" >}}
-  ### Linux & Raspberry Pi
+  {{< tab name="Linux" >}}
+  ### Linux (`x86_64` Desktop)
 
-  1. Download `slaprf-linux-amd64` (x86_64 PC) or `slaprf-linux-arm64` (Raspberry Pi 4 / 5, 64-bit OS) from [GitHub Releases](https://github.com/kaack/SlapRF/releases/latest).
-  2. Mark the binary executable and launch it:
+  1. Download `slaprf-linux-amd64` from [GitHub Releases](https://github.com/kaack/SlapRF/releases/latest).
+  2. Move the binary into a dedicated folder, mark it executable, and run it:
      ```bash
-     chmod +x ./slaprf-linux-*
-     ./slaprf-linux-amd64
+     mkdir -p ~/SlapRF && mv ~/Downloads/slaprf-linux-amd64 ~/SlapRF/slaprf
+     cd ~/SlapRF
+     chmod +x ./slaprf
+     ./slaprf
      ```
-  3. For USB Hub serial access on Linux, add your user to the serial group (`dialout` on Debian / Ubuntu / Raspberry Pi OS, or `uucp` on Arch), then log out and back in once:
+     SlapRF starts on `http://127.0.0.1:8090` and opens your default browser.
+  3. For USB Serial timers (`/dev/ttyACM*`), add your user to `dialout` (Ubuntu/Debian) or `uucp` (Arch) and log out and back in once:
      ```bash
      sudo usermod -aG dialout $USER
      ```
-  4. Optional: add a `udev` rule for immediate `/dev/ttyACM*` access on XIAO ESP32-C5 (`303a:1001`) without logging out:
+     To grant immediate access on XIAO ESP32-C5 (`303a:1001`) without logging out, add a `udev` rule:
      ```bash
-     echo 'SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", MODE="0660", GROUP="dialout", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/99-slaprf-esp32c5.rules
-     sudo udevadm control --reload-rules && sudo udevadm trigger
+     echo 'SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="303a", ENV{ID_MODEL_ID}=="1001", MODE="0660", GROUP="dialout", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/99-slaprf-esp32c5.rules
+     sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=tty
      ```
-  5. For Bluetooth Hub access on Linux, confirm BlueZ is powered on (`bluetoothctl show` reports `Powered: yes`). If your computer has multiple Bluetooth adapters, SlapRF selects the first powered adapter automatically, or you can set `SLAPRF_BLE_ADAPTER=hci1` to pick one.
+  4. For Bluetooth Hub (`slaprf_ble`) mode, SlapRF powers on BlueZ automatically and selects the first active adapter. If your PC has multiple Bluetooth controllers (such as motherboard Bluetooth plus a USB dongle), set `SLAPRF_BLE_ADAPTER=hci1` to pick a specific adapter.
+  {{< /tab >}}
+  {{< tab name="Raspberry Pi" >}}
+  ### Raspberry Pi (`ARM64`)
+
+  > [!NOTE]
+  > Hardware testing is verified on **Raspberry Pi 4 Model B** running **Raspberry Pi OS (64-bit)**. Use a 64-bit (`aarch64`) OS image; 32-bit (`armhf`) Raspberry Pi OS is not supported.
+
+  1. Connect the Raspberry Pi to **`5 GHz` Wi-Fi or wired Ethernet**, then download `slaprf-linux-arm64` from [GitHub Releases](https://github.com/kaack/SlapRF/releases/latest) onto the Pi:
+     ```bash
+     mkdir -p ~/SlapRF && cd ~/SlapRF
+     curl -fLO https://github.com/kaack/SlapRF/releases/latest/download/slaprf-linux-arm64
+     chmod +x ./slaprf-linux-arm64
+     ./slaprf-linux-arm64
+     ```
+  2. On a headless SSH or `systemd` session (no desktop display), SlapRF automatically enables LAN mode (`0.0.0.0:8090`) and prints its browser URL (such as `http://raspberrypi.local:8090`).
+  3. For USB Hub (`slaprf`) mode, Raspberry Pi OS includes your user in the `dialout` group by default, so `/dev/ttyACM0` works immediately with no extra rules.
+
+  > [!IMPORTANT]
+  > **Raspberry Pi 4 + Bluetooth Hub (`slaprf_ble`) Requirements:**
+  > - **Do not enable `2.4 GHz` Wi-Fi on the Pi.** The Raspberry Pi 4 shares one `CYW43455` radio and PCB antenna between `2.4 GHz` Wi-Fi and Bluetooth LE. Connect the Pi via **`5 GHz` Wi-Fi or Ethernet** (or connect the Hub over USB-C with `slaprf-xiao-c5.bin` if only `2.4 GHz` Wi-Fi is available).
+  > - **Keep `30 cm` to `1 m` (`1` to `3 ft`) between the Pi and the Hub.** Placing the Hub antenna right beside the unshielded Raspberry Pi board saturates its `2.4 GHz` receiver and prevents Bluetooth connections.
+  > - **Power the Pi from a dedicated `5 V / 3 A` USB-C supply.** Do not power the Pi and XIAO timers from the same USB hub.
   {{< /tab >}}
 {{< /tabs >}}
 
