@@ -49,10 +49,13 @@ jobs:
           go-version-file: "go.mod"
 
       - name: Set up Hugo Extended
-        uses: peaceiris/actions-hugo@v3
-        with:
-          hugo-version: "0.170.1"
-          extended: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          mkdir -p "$HOME/.local/bin"
+          gh release download v0.170.1 --repo gohugoio/hugo -p "hugo_extended_0.170.1_linux-amd64.tar.gz" -O - | tar -xz -C "$HOME/.local/bin" hugo
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/hugo" version
 
       - name: Build static web + WASM site
         run: |
