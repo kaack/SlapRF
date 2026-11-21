@@ -23,6 +23,13 @@
     syncSwitchAria();
   });
 
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker
+      .getRegistrations()
+      .then((regs) => regs.forEach((r) => r.update().catch(() => {})))
+      .catch(() => {});
+  }
+
   if (document.readyState === "loading") {
     document.addEventListener("DOMContentLoaded", syncSwitchAria);
   } else {

@@ -2,12 +2,7 @@
 <html lang="en" dir="ltr"><head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="robots" content="index, follow" />
-  <link rel="icon shortcut" href="/docs/favicon.ico" sizes="32x32" />
-<link rel="icon" href="/docs/favicon.svg" type="image/svg+xml" id="favicon-svg" />
-<link rel="icon" href="/docs/favicon-16x16.png" type="image/png" sizes="16x16" />
-<link rel="icon" href="/docs/favicon-32x32.png" type="image/png" sizes="32x32" />
-<link rel="apple-touch-icon" href="/docs/apple-touch-icon.png" sizes="180x180" />
-<link fetchpriority="low" href="/docs/site.webmanifest" rel="manifest" />
+  <link rel="icon" type="image/svg+xml" href="/docs/favicon.svg" id="favicon-svg" />
 <title>Parts &amp; Assembly – SlapRF Docs</title>
   <meta name="description" content="Each battery-powered SlapRF Gate Timer snaps together from off-the-shelf parts with no soldering or custom PCBs required, and fits inside a compact 3D-printed case for field durability.
 Bill of Materials One Seeed Studio XIAO ESP32-C5 draws under 100 mA at 5 V (0.5 W), so a compact 650 mAh 3S LiPo pack runs a gate timer for roughly 8 hours.
@@ -112,7 +107,7 @@ Board Layout
 	<meta itemprop="description" content="Each battery-powered SlapRF Gate Timer snaps together from off-the-shelf parts with no soldering or custom PCBs required, and fits inside a compact 3D-printed case for field durability.
 Bill of Materials One Seeed Studio XIAO ESP32-C5 draws under 100 mA at 5 V (0.5 W), so a compact 650 mAh 3S LiPo pack runs a gate timer for roughly 8 hours.
 Part Purpose Example Source Est. Cost XIAO ESP32-C5 Measures 5.8 GHz VTX RSSI and communicates over ESP-NOW, Bluetooth LE, or USB-C (includes snap-on U.FL antenna). Seeed Studio $6.90 5 V USB-C BEC Steps down 3S-6S LiPo voltage to regulated 5 V USB-C power. SpeedyBee BEC AOKoda XT60 USB $8.00 - $20.00 Short USB-C Cable Short USB-C PD cable connecting the 5 V BEC output to the XIAO ESP32-C5. Short USB-C PD Cable $5.00 - $9.00 3S-6S LiPo Pack Powers the gate timer in the field (any spare XT60 flight pack or low-current USB power bank works). Tattu 850mAh 3S $15.00 Example Track Costs Setup Boards Needed Typical Total 1-Gate Bluetooth 1 Bluetooth Hub (H1) &#43; spare LiPo $23 - $35 3-Gate Bluetooth 1 Bluetooth Hub &#43; 2 Spokes (T1, T2) $69 - $105 3-Gate Wired USB 1 USB Hub (laptop-powered) &#43; 3 Spokes (T1-T3) $76 - $112 Board Layout Use this callout diagram to locate the USB-C port, yellow status LED (L), U.FL antenna connector, BOOT button (B), and RESET button (R) on the XIAO ESP32-C5:">
-	<meta itemprop="wordCount" content="696">
+	<meta itemprop="wordCount" content="706">
 	<meta name="twitter:card" content="summary">
 	<meta name="twitter:title" content="Parts &amp; Assembly">
 	<meta name="twitter:description" content="Each battery-powered SlapRF Gate Timer snaps together from off-the-shelf parts with no soldering or custom PCBs required, and fits inside a compact 3D-printed case for field durability.
@@ -138,39 +133,7 @@ Part Purpose Example Source Est. Cost XIAO ESP32-C5 Measures 5.8 GHz VTX RSSI an
 <link
   href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&family=Plus+Jakarta+Sans:wght@600;700&display=swap"
   rel="stylesheet"
-/>
-<link rel="icon" type="image/svg+xml" href="/docs/favicon.svg" />
-<meta
-  data-slaprf-flasher-config="1"
-  data-firmware-base="/firmware"
-  data-css-url="/docs/js/docs-flasher.css?v=1795223295"
-/>
-<template id="slaprf-docs-flasher-template">
-  <div class="df-modal-backdrop" data-open="false" role="dialog" aria-modal="true" aria-label="SlapRF Firmware Flasher">
-    <div class="df-modal-dialog">
-      <div class="df-modal-accent-bar" aria-hidden="true"></div>
-      <div class="df-modal-header">
-        <div class="df-modal-brand">
-          <div class="df-modal-icon" data-df-icon="1" aria-hidden="true"></div>
-          <div class="df-modal-heading">
-            <div class="df-modal-title-row">
-              <span class="df-modal-title">SlapRF Firmware Flasher</span>
-              <span class="df-pill df-pill-accent mono" data-df-version="1"></span>
-              <span class="df-pill mono">WebSerial · USB-C</span>
-            </div>
-            <div class="df-modal-subtitle">Seeed Studio XIAO ESP32-C5 · 2.4 GHz ESP-NOW &amp; 5.8 GHz RSSI</div>
-          </div>
-        </div>
-        <button type="button" class="btn btn-sm btn-ghost df-modal-close" data-df-close="1" aria-label="Close flasher"></button>
-      </div>
-      <div class="df-modal-body">
-        <div data-slot="flasher"></div>
-      </div>
-    </div>
-  </div>
-</template>
-<script defer src="/docs/js/theme-switch.ce34db5b214d26fc700fe103f3adb30f4bc639a90f1d7aaf78cf266806901ada.js" integrity="sha256-zjTbWyFNJvxwD&#43;ED862zD0vGOakPHXqveM8maAaQGto="></script><script src="/docs/js/docs-flasher.js?v=1795223295" defer></script>
-</head>
+/><script defer src="/docs/js/theme-switch.ba91b4496e6b8682f4fd05fbcdb38471aacc1838c89294437b04ea690ab2f581.js" integrity="sha256-upG0SW5rhoL0/QX7zbOEcarMGDjIkpRDewTqaQqy9YE="></script></head>
 <body>
     <a href="#content" class="hx:sr-only hx:focus-visible:not-sr-only hx:focus-visible:fixed hx:focus-visible:z-50 hx:focus-visible:top-2 hx:focus-visible:left-2 hx:focus-visible:bg-primary-500 hx:focus-visible:text-white hx:focus-visible:px-4 hx:focus-visible:py-2 hx:focus-visible:rounded-md hx:focus-visible:text-sm hx:focus-visible:font-medium">Skip to content</a><div class="hextra-nav-container hx:sticky hx:top-0 hx:z-20 hx:w-full hx:bg-transparent hx:print:hidden">
   <div
@@ -791,7 +754,11 @@ Part Purpose Example Source Est. Cost XIAO ESP32-C5 Measures 5.8 GHz VTX RSSI an
 </table>
 <h2 data-hextra-search-id="board-layout">Board Layout<span class="hx:absolute hx:-mt-20" id="board-layout"></span>
     <a href="#board-layout" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>Use this callout diagram to locate the USB-C port, yellow status LED (<code>L</code>), U.FL antenna connector, <code>BOOT</code> button (<code>B</code>), and <code>RESET</code> button (<code>R</code>) on the XIAO ESP32-C5:</p>
-<p><img src="/docs/images/xiao-c5-board-guide.jpg" alt="Seeed Studio XIAO ESP32-C5 Board Layout"  data-zoomable loading="lazy" /></p>
+<p class="doc-theme-img-wrap">
+  <img class="doc-theme-img-light" src="/docs/images/xiao-c5-board-guide.jpg" alt="Seeed Studio XIAO ESP32-C5 Board Layout" decoding="async" />
+  <img class="doc-theme-img-dark" src="/docs/images/xiao-c5-board-guide-dark.jpg" alt="Seeed Studio XIAO ESP32-C5 Board Layout" decoding="async" />
+</p>
+
 <h2 data-hextra-search-id="hardware-assembly">Hardware Assembly<span class="hx:absolute hx:-mt-20" id="hardware-assembly"></span>
     <a href="#hardware-assembly" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>The setup below shows the barebones way to put a gate timer together using a USB-C adapter and a spare LiPo pack. While barebones wiring works right away for testing, we recommend buying or 3D printing an enclosure (see <a href="#recommended-cases">Recommended Cases</a> below) to protect the XIAO board and U.FL antenna from prop strikes, dust, and wet grass on the course.</p>
 <div role="img" aria-label="Diagram">
@@ -814,7 +781,10 @@ Part Purpose Example Source Est. Cost XIAO ESP32-C5 Measures 5.8 GHz VTX RSSI an
 </div><div class="hextra-steps hx:ml-4 hx:mb-12 hx:ltr:border-l hx:rtl:border-r hx:border-gray-200 hx:ltr:pl-6 hx:rtl:pr-6 hx:dark:border-neutral-800 [counter-reset:step]">
 <h3 data-hextra-search-id="attach-antenna">Attach Antenna<span class="hx:absolute hx:-mt-20" id="attach-antenna"></span>
     <a href="#attach-antenna" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Align the included dual-band (<code>2.4 / 5 GHz</code>) U.FL antenna plug flat over the gold receptacle on the XIAO ESP32-C5 and press straight down until it clicks into place.</p>
-<p><img src="/docs/images/xiao-c5-antenna.jpg" alt="XIAO ESP32-C5 U.FL Antenna Socket"  data-zoomable loading="lazy" /></p>
+<p class="doc-theme-img-wrap">
+  <img class="doc-theme-img-light" src="/docs/images/xiao-c5-antenna.jpg" alt="XIAO ESP32-C5 U.FL Antenna Socket" decoding="async" />
+  <img class="doc-theme-img-dark" src="/docs/images/xiao-c5-antenna-dark.jpg" alt="XIAO ESP32-C5 U.FL Antenna Socket" decoding="async" />
+</p>
 <div
   data-alert="warning" class="hextra-alert"
 >
@@ -824,7 +794,7 @@ Part Purpose Example Source Est. Cost XIAO ESP32-C5 Measures 5.8 GHz VTX RSSI an
   <div class="hextra-alert-content"><p>Always snap on the U.FL antenna before applying power. Operating without the antenna severely reduces both 5.8 GHz VTX sensitivity and 2.4 GHz wireless range.</p></div>
 </div>
 <h3 data-hextra-search-id="flash-firmware">Flash Firmware<span class="hx:absolute hx:-mt-20" id="flash-firmware"></span>
-    <a href="#flash-firmware" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Connect one XIAO ESP32-C5 at a time to a desktop computer over USB-C and flash its role using the <a href="flashing">Flashing Firmware</a> page. Mark each board (<code>H1</code>, <code>T1</code>, <code>T2</code>, <code>T3</code>) with tape or a paint pen so placement at the field takes seconds.</p>
+    <a href="#flash-firmware" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Connect one XIAO ESP32-C5 at a time over USB-C to your phone (in the SlapRF Android app) or computer and flash its role using the in-app <strong>Flasher</strong> or the <a href="flashing">Flashing Firmware</a> page. Mark each board (<code>H1</code>, <code>T1</code>, <code>T2</code>, <code>T3</code>) with tape or a paint pen so placement at the field takes seconds.</p>
 <h3 data-hextra-search-id="connect-power">Connect Power<span class="hx:absolute hx:-mt-20" id="connect-power"></span>
     <a href="#connect-power" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Plug a 3S-6S LiPo battery into the XT60-to-USB-C adapter, then connect the short USB-C cable to the XIAO ESP32-C5. Set the timer flat on the ground centered inside the gate opening.</p>
 </div>
@@ -882,8 +852,6 @@ Part Purpose Example Source Est. Cost XIAO ESP32-C5 Measures 5.8 GHz VTX RSSI an
     </article>
   </div>
 
-      <footer class="hextra-footer hx:bg-gray-100 hx:pb-[env(safe-area-inset-bottom)] hx:dark:bg-neutral-900 hx:print:bg-transparent"><div class="hextra-custom-footer hextra-max-footer-width hx:mx-auto hx:pl-[max(env(safe-area-inset-left),1.5rem)] hx:pr-[max(env(safe-area-inset-right),1.5rem)] hx:text-gray-600 hx:dark:text-gray-400"></div></footer>
-    
     <dialog
     id="hextra-search-dialog"
     class="hextra-search-dialog"
@@ -924,8 +892,10 @@ Part Purpose Example Source Est. Cost XIAO ESP32-C5 Measures 5.8 GHz VTX RSSI an
     </div>
   </dialog>
     <script defer src="/docs/js/main.min.2a05b095db7e6c079ac6da0ccfc8161ff2d57bf98c32a18ec173f3f2928fd676.js" integrity="sha256-KgWwldt&#43;bAeaxtoMz8gWH/LVe/mMMqGOwXPz8pKP1nY="></script>
-<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.9b4722272c822654b89395ec92c1cae2a702f2366346e8955785332e0ecb60b6.js" integrity="sha256-m0ciJyyCJlS4k5XsksHK4qcC8jZjRuiVV4UzLg7LYLY="></script>
-    <script defer src="/docs/en.search-dialog.min.fda123910557b5b3a328696105af51f85abc3cfc6784387c49b11b5b857b256f.js" integrity="sha256-/aEjkQVXtbOjKGlhBa9R&#43;Fq8PPxnhDh8SbEbW4V7JW8="></script><script defer src="/docs/js/mermaid.min.336df803d87a38b70a01e736e666c8f7601d2ce42f5e47c8fafe5d721074b9a3.js" integrity="sha256-M234A9h6OLcKAec25mbI92AdLOQvXkfI&#43;v5dchB0uaM=" crossorigin="anonymous"></script><template id="doc-mermaid-expand-btn-template">
+<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.fdf96a08d966a8f6b8a05a7a0a28fda3e95baf3ed414bb7dc25db3073e4d5c53.js" integrity="sha256-/flqCNlmqPa4oFp6Cij9o&#43;lbrz7UFLt9wl2zBz5NXFM="></script>
+    <script defer src="/docs/en.search-dialog.min.fda123910557b5b3a328696105af51f85abc3cfc6784387c49b11b5b857b256f.js" integrity="sha256-/aEjkQVXtbOjKGlhBa9R&#43;Fq8PPxnhDh8SbEbW4V7JW8="></script><script defer src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js" crossorigin="anonymous"></script>
+
+<template id="doc-mermaid-expand-btn-template">
   <button type="button" class="doc-mermaid-expand-btn" aria-label="Expand diagram" title="Expand diagram">
     <svg viewBox="0 0 20 20" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
       <path d="M12.5 3.5h4v4M16.5 3.5l-5 5M7.5 16.5h-4v-4M3.5 16.5l5-5" />
@@ -948,41 +918,6 @@ Part Purpose Example Source Est. Cost XIAO ESP32-C5 Measures 5.8 GHz VTX RSSI an
       <div class="doc-mermaid-modal-body"></div>
     </div>
   </div>
-</template><script defer src="/docs/js/mermaid-init.e56308496c6ae3fee989fc75a3cf834388ceea3d520944d565b786138e0b4716.js" integrity="sha256-5WMISWxq4/7pifx1o8&#43;DQ4jO6j1SCUTVZbeGE44LRxY="></script><script defer src="/docs/js/medium-zoom.min.a2cfa9f69c8c6cb06282d85af54ef7ecb29e2fd9738c732d3e24381cf9a6a1a2.js" integrity="sha256-os&#43;p9pyMbLBigtha9U737LKeL9lzjHMtPiQ4HPmmoaI=" crossorigin="anonymous"></script><script>
-  document.addEventListener("DOMContentLoaded", () => {
-    if (!window.mediumZoom) {
-      return;
-    }
-
-    const getOverlay = () => {
-      return document.documentElement.classList.contains("dark")
-        ? "rgba(17, 17, 17, 0.98)"
-        : "rgba(255, 255, 255, 0.98)";
-    };
-
-    const zoom = window.mediumZoom("[data-zoomable]", {
-      background: getOverlay(),
-    });
-
-    const style = document.createElement("style");
-    style.textContent = `
-      .medium-zoom-overlay {
-        z-index: 1000;
-      }
-      .medium-zoom-image--opened {
-        z-index: 1001;
-      }
-    `;
-    document.head.appendChild(style);
-
-    new MutationObserver(() => {
-      zoom.update({ background: getOverlay() });
-    }).observe(document.documentElement, {
-      attributes: true,
-      attributeFilter: ["class"],
-    });
-  });
-</script>
-
+</template><script defer src="/docs/js/mermaid-init.e56308496c6ae3fee989fc75a3cf834388ceea3d520944d565b786138e0b4716.js" integrity="sha256-5WMISWxq4/7pifx1o8&#43;DQ4jO6j1SCUTVZbeGE44LRxY="></script>
   </body>
 </html>

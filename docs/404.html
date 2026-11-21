@@ -8,6 +8,10 @@
   <meta name="theme-color" content="#0b0c0f" />
   <script>
     (function () {
+      if (location.pathname === "/docs") {
+        location.replace("/docs/" + location.search + location.hash);
+        return;
+      }
       try {
         var t = localStorage.getItem("slaprf.ui.theme.v1");
         var mode = t === "light" ? "light" : "dark";
