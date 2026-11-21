@@ -62,10 +62,17 @@ Builds the web assets into `cmd/slaprf/site/` (preserving `.keep`) and compiles 
 # Host OS/arch binary
 go run ./cmd/build-portable -out ./dist/slaprf -version dev
 
-# Cross-compile (for example Linux arm64 Raspberry Pi / SBC)
-go run ./cmd/build-portable -goos linux -goarch arm64 -out ./dist/slaprf-linux-arm64 -version v0.0.9
+# Cross-compile Linux / Windows from any OS (CGO_ENABLED=0; WinRT & BlueZ D-Bus BLE are pure Go)
+go run ./cmd/build-portable -goos linux -goarch arm64 -out ./dist/slaprf-linux-arm64 -version v0.0.11
+
+# Build macOS arm64 & amd64 ON a macOS host (enables CGO_ENABLED=1 + CoreBluetooth BLE)
+go run ./cmd/build-portable -skip-web -goos darwin -goarch arm64 -out ./dist/slaprf-macos-arm64 -version v0.0.11
+go run ./cmd/build-portable -skip-web -goos darwin -goarch amd64 -out ./dist/slaprf-macos-amd64 -version v0.0.11
 ```
-Flags: `-skip-web` (reuse existing `cmd/slaprf/site`), `-skip-wasm` (omit pure-browser fallback WASM).
+- **Platform BLE / Cgo Rule**:
+  - **Windows & Linux**: Compiled with `CGO_ENABLED=0` (`tinygo.org/x/bluetooth` uses WinRT and BlueZ over D-Bus in pure Go).
+  - **macOS (`darwin/arm64` & `darwin/amd64`)**: Must be built on a **macOS host** (`runtime.GOOS == "darwin"`). `cmd/build-portable` automatically sets `CGO_ENABLED=1`, `MACOSX_DEPLOYMENT_TARGET=13.0`, embeds `cmd/slaprf/macos-info.plist` (`-Wl,-sectcreate,__TEXT,__info_plist,...` with `NSBluetoothAlwaysUsageDescription`), passes `CC="clang -arch x86_64"` when cross-building `amd64` on Apple Silicon, and runs `codesign -s - --force`. Cross-compiling `darwin` from Windows or Linux falls back to `ports_ble_stub.go` (no Bluetooth LE support).
+- Flags: `-skip-web` (reuse existing `cmd/slaprf/site`), `-skip-wasm` (omit pure-browser fallback WASM).
 
 ---
 

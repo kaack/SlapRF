@@ -79,8 +79,14 @@ Structured replies begin with `@{...}` JSON on a single line (so firmware log li
 | `CHANNELS MASK <0..255>` | Bitmask of active channels (`0xFF` = all 8 channels). |
 | `NETCHANNELS <f1..f8>` | Persists & broadcasts the active pilot channel table from Hub to Spokes. |
 | `IDENTIFY [FP] 1\|0` | Blinks the status LED rapidly on the local timer or a target Spoke fingerprint. |
+| `BLEPAIR CLEAR` | (BLE Hub firmware only) Clears saved Claim-on-Pair `AUTH` key and returns the BLE Hub to `pairingMode: true` (equivalent to holding physical **BOOT** for 3 seconds). |
+| `BLESYNC 0\|1` | (BLE Hub firmware only) Toggles BLE connection-event sweep phase lock (`1` = enabled). |
 | `LOG 0\|1` | Mirrors ESP-IDF firmware log lines over USB. |
 | `REBOOT` | Cleanly reboots the timer (`ESP_RST_SW`). |
+
+### Bluetooth LE Bench Testing Notes (macOS & Linux)
+- **Claim-on-Pair `AUTH` Lock**: On BLE Hub firmware (`slaprf-xiao-c5-ble.bin`), the first command over GATT RX must be `AUTH <32-hex-key>\n` (handled automatically by `usb.Manager`). Unauthenticated GATT peers are disconnected. Send `BLEPAIR CLEAR` over USB (or hold **BOOT** for 3 seconds) before pairing with a different host DB.
+- **macOS SSH TCC Caveat**: Running a BLE scan directly inside a headless `sshd` session checks TCC permissions against `sshd-keygen-wrapper` (`bluetooth is not authorized for this app`). On macOS, launch `slaprf` from a GUI user context (`Terminal.app` or via `open -n` on a signed `.app` bundle with `NSBluetoothAlwaysUsageDescription`) so macOS displays the Bluetooth permission prompt.
 
 ---
 

@@ -17,7 +17,7 @@ SlapRF uses six workflows in `.github/workflows/`:
 | `firmware.yml` | Push/PR touching `firmware/**`, `workflow_dispatch`, called by `pages` & `release` | Compiles `slaprf-xiao-c5.bin` (artifact `firmware`) and `slaprf-xiao-c5-ble.bin` (artifact `firmware-ble`) with ESP-IDF `v5.5.1`. |
 | `docs.yml` | Push to `main` touching `docs-site/**`, `workflow_dispatch` | Fast (~35s) docs-only build (`cmd/build-docs`) updating only `/docs/docs/` on the `github-page` branch (`https://slaprf.app/docs/`). |
 | `pages.yml` | Push to `main`, `v*` tags, `workflow_dispatch` | Full gated deployment (`verify` + `firmware` -> `cmd/build-web`) to the `github-page` branch (`https://slaprf.app` + `/docs/`). |
-| `release.yml` | Push `v*` tag, `workflow_dispatch` | Runs `verify` + `firmware` + `web_bundle`, builds 5 SlapRF Portable binaries + signed `slaprf-android-arm64.apk`, and publishes the GitHub Release using `docs/releases/<tag>.md`. |
+| `release.yml` | Push `v*` tag, `workflow_dispatch` | Runs `verify` + `firmware` + `web_bundle`, builds 5 SlapRF Portable binaries (`ubuntu-latest` `CGO_ENABLED=0` for Windows/Linux; `macos-latest` `CGO_ENABLED=1` with `CoreBluetooth` + `otool` verification for `darwin/arm64` & `darwin/amd64`) + signed `slaprf-android-arm64.apk`, and publishes the GitHub Release using `docs/releases/<tag>.md`. |
 | `pr-report.yml` | Completion of `Verify` on PRs | Posts/updates the Playwright E2E summary comment on pull requests. |
 
 ---
