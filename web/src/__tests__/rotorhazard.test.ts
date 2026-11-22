@@ -390,13 +390,15 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(disabledValEl.textContent).toBe("");
       // No global Admin User / Admin Password fields in the top bar before opening a prompt
       expect(root.querySelector("[data-rh-creds-prompt='1']")).toBeNull();
-      // While R1 is connected, IP/Port fields are disabled and the single button shows Disconnect
-      expect(root.querySelector<HTMLInputElement>("[data-field='rh-host']")?.disabled).toBe(true);
-      expect(root.querySelector<HTMLInputElement>("[data-field='rh-port']")?.disabled).toBe(true);
-      expect(root.querySelector("[data-action='rh-open-manual-creds']")).toBeNull();
-      expect(root.querySelector("[data-action='network-disconnect-active']")).not.toBeNull();
+      // While R1 is connected in RotorHazard (Network), IP/Port fields stay editable and Connect + Discover remain so additional network devices can be connected; Disconnect sits on the connected R1 card
+      expect(root.querySelector<HTMLInputElement>("[data-field='rh-host']")?.disabled).toBe(false);
+      expect(root.querySelector<HTMLInputElement>("[data-field='rh-port']")?.disabled).toBe(false);
+      expect(root.querySelector("[data-action='rh-open-manual-creds']")).not.toBeNull();
+      expect(root.querySelector("[data-action='rh-scan-lan']")).not.toBeNull();
+      expect(root.querySelector("[data-action='network-disconnect-active']")).toBeNull();
+      expect(root.querySelector("[data-rh-card='1'] [data-action='rh-disconnect']")).not.toBeNull();
 
-      // Once disconnected, IP/Port fields become editable and Connect + Discover buttons appear
+      // Once disconnected, an empty timer shell with dashes (—) is rendered and clicking Connect opens the RotorHazard Authentication modal
       store.simState!.rotorhazardUnits![0].connected = false;
       store.hydrate(
         makeFullState({
@@ -405,6 +407,8 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
         })
       );
       await flushMicrotasks();
+      expect(root.querySelector("[data-rh-card='0'][data-empty-shell='1']")).not.toBeNull();
+      expect(root.querySelector("[data-action='rh-disconnect']")).toBeNull();
       expect(root.querySelector<HTMLInputElement>("[data-field='rh-host']")?.disabled).toBe(false);
       expect(root.querySelector("[data-action='rh-scan-lan']")).not.toBeNull();
       const openPromptBtn = root.querySelector<HTMLButtonElement>("[data-action='rh-open-manual-creds']")!;
@@ -412,9 +416,11 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect((openPromptBtn.textContent || "").trim()).toBe("Connect");
       openPromptBtn.click();
       await flushMicrotasks();
-      // Because R1 is password-protected, clicking Connect reveals the inline Username / Password / Authenticate row
+      // Because R1 is password-protected, clicking Connect opens the RotorHazard Authentication modal
       const promptEl = root.querySelector("[data-rh-creds-prompt='1']")!;
       expect(promptEl).not.toBeNull();
+      expect(promptEl.querySelector(".slaprf-modal")).not.toBeNull();
+      expect(promptEl.textContent || "").toContain("RotorHazard Authentication");
       expect(promptEl.querySelector("[data-field='rh-cred-user']")).not.toBeNull();
       expect(promptEl.querySelector("[data-field='rh-cred-pass']")).not.toBeNull();
       const submitBtn = promptEl.querySelector<HTMLButtonElement>("[data-action='rh-cred-submit']")!;

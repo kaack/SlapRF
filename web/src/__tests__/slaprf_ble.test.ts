@@ -1012,14 +1012,16 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       expect(getSelect().value).toBe("rotorhazard");
       expect(getSelect().disabled).toBe(true);
       expect(netRoot.querySelector('[data-slot="external-conn-actions"] .badge')).toBeNull();
-      const extDisconnectBtn = netRoot.querySelector<HTMLButtonElement>('[data-action="network-disconnect-active"]')!;
-      expect(extDisconnectBtn).not.toBeNull();
-      expect(extDisconnectBtn.classList.contains("btn-ghost")).toBe(false);
-      expect((extDisconnectBtn.textContent || "").trim()).toBe("Disconnect");
-      extDisconnectBtn.click();
+      expect(netRoot.querySelector('[data-action="network-disconnect-active"]')).toBeNull();
+      const cardDisconnectBtn = netRoot.querySelector<HTMLButtonElement>('[data-rh-card="1"] [data-action="rh-disconnect"]')!;
+      expect(cardDisconnectBtn).not.toBeNull();
+      expect(cardDisconnectBtn.classList.contains("btn-ghost")).toBe(false);
+      expect((cardDisconnectBtn.textContent || "").trim()).toBe("Disconnect");
+      cardDisconnectBtn.click();
       await new Promise((r) => window.setTimeout(r, 15));
       await flushMicrotasks();
       expect(getSelect().disabled).toBe(false);
+      expect(netRoot.querySelector('[data-rh-card="0"][data-empty-shell="1"]')).not.toBeNull();
     } finally {
       netView.destroy();
       usbPool.applyBackendPoolSnapshot({ debugSlotIndex: 0, slots: [], knownTimers: [] });

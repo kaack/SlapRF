@@ -155,15 +155,15 @@ func TestSettingsSectionsHardwareSwitchAndMultiGPKeyMasking(t *testing.T) {
 	h.MustBeHidden(flasherNav, "Flasher sidebar link while LapRF 8-Way is selected")
 	h.MilestoneScreenshot("settings-laprf-selected")
 
-	// Connect simulated L1 on #/network (which locks the dropdown), then disconnect so the inline dropdown unlocks, and switch back to SlapRF (USB).
+	// Connect simulated L1 on #/network (which locks the dropdown), then disconnect L1 on its device card so the inline dropdown unlocks, and switch back to SlapRF (USB).
 	connEthBtn := h.Page.Locator(`button[data-action="laprf-connect-eth"]`).First()
 	if err := connEthBtn.Click(); err != nil {
 		t.Fatalf("click Connect Ethernet on #/network: %v", err)
 	}
-	discBtn := h.Page.Locator(`button[data-action="network-disconnect-active"]`).First()
-	h.MustBeVisible(discBtn, "Disconnect button after connecting LapRF Ethernet")
+	discBtn := h.Page.Locator(`button[data-action="laprf-disconnect"]`).First()
+	h.MustBeVisible(discBtn, "Disconnect button on connected LapRF device card")
 	if err := discBtn.Click(); err != nil {
-		t.Fatalf("click inline Disconnect on #/network: %v", err)
+		t.Fatalf("click device card Disconnect on #/network: %v", err)
 	}
 	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "SlapRF (USB)")
 	h.MustBeVisible(

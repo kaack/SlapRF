@@ -189,6 +189,7 @@ export class NetworkView extends Component {
   private lastSlaprfConnSig = "";
   private lastExternalInlineSig = "";
   private lastNetSubbarSig = "";
+  private lastRhAuthModalSig = "";
   private lastRenderedHardwareMode: TimingHardwareMode | "" = "";
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
@@ -224,6 +225,7 @@ export class NetworkView extends Component {
                 </div>
               </div>
               <div class="net-conn-subbar" data-slot="net-conn-subbar" style="display:none"></div>
+              <div data-slot="rh-auth-modal" style="display:none"></div>
             </div>
           </div>
         </section>
@@ -513,14 +515,10 @@ export class NetworkView extends Component {
       ) {
         ke.preventDefault();
         void this.submitRhCredPrompt();
-      } else if (
-        ke.key === "Escape" &&
-        this.rhCredPrompt &&
-        t &&
-        (t.dataset.field === "rh-cred-user" || t.dataset.field === "rh-cred-pass")
-      ) {
+      } else if (ke.key === "Escape" && this.rhCredPrompt) {
         ke.preventDefault();
         this.rhCredPrompt = null;
+        this.rhError = null;
         this.lastRhConnSig = "";
         this.lastRhTimersStructSig = "";
         this.renderAll();
@@ -564,6 +562,7 @@ export class NetworkView extends Component {
       this.lastSlaprfConnSig = "";
       this.lastExternalInlineSig = "";
       this.lastNetSubbarSig = "";
+      this.lastRhAuthModalSig = "";
       this.renderAll();
     });
 
@@ -1283,6 +1282,15 @@ export class NetworkView extends Component {
         });
         break;
       }
+      case "rh-cred-backdrop": {
+        if (e.target !== t) break;
+        this.rhCredPrompt = null;
+        this.rhError = null;
+        this.lastRhConnSig = "";
+        this.lastRhTimersStructSig = "";
+        this.renderAll();
+        break;
+      }
       case "rh-cred-cancel": {
         this.rhCredPrompt = null;
         this.rhError = null;
@@ -1838,6 +1846,7 @@ export class NetworkView extends Component {
       this.lastSlaprfConnSig = "";
       this.lastExternalInlineSig = "";
       this.lastNetSubbarSig = "";
+      this.lastRhAuthModalSig = "";
       this.renderAll();
     }
   }
@@ -2137,84 +2146,79 @@ export class NetworkView extends Component {
       if (extSig !== this.lastExternalInlineSig) {
         this.lastExternalInlineSig = extSig;
         const isConnected = lock.connectedCount > 0;
-        const primaryActionHtml = isConnected
-          ? `<button
-               type="button"
-               class="btn net-conn-btn"
-               data-action="network-disconnect-active"
-               ${lock.busy ? "disabled" : ""}
-               title="Disconnect active connection to switch timing system"
-             >
-               ${icons.plugOff(14)}
-               <span>${
-                 isLapRFUSB || isRHUSB
-                   ? "Disconnect USB"
-                   : lock.connectedCount > 1
-                     ? "Disconnect all"
-                     : "Disconnect"
-               }</span>
-             </button>`
-          : isLapRFUSB
-            ? `<button
-                 type="button"
-                 class="btn net-conn-btn"
-                 data-action="laprf-connect-usb"
-                 ${lock.busy ? "disabled" : ""}
-                 title="Connect a LapRF 8-Way timer over USB"
-               >
-                 ${icons.plug(14)}
-                 <span>${lock.busy ? "Connecting…" : "Connect USB"}</span>
-               </button>`
-            : isRHUSB
+        const primaryActionHtml =
+          isLapRFUSB || isRHUSB
+            ? isConnected
               ? `<button
                    type="button"
                    class="btn net-conn-btn"
-                   data-action="rh-usb-connect"
+                   data-action="network-disconnect-active"
                    ${lock.busy ? "disabled" : ""}
-                   title="Connect a RotorHazard timer over USB"
+                   title="Disconnect active USB connection"
                  >
-                   ${icons.plug(14)}
-                   <span>${lock.busy ? "Connecting…" : "Connect USB"}</span>
+                   ${icons.plugOff(14)}
+                   <span>Disconnect USB</span>
                  </button>`
-              : isLapRFNet
+              : isLapRFUSB
                 ? `<button
                      type="button"
                      class="btn net-conn-btn"
-                     data-action="laprf-connect-eth"
+                     data-action="laprf-connect-usb"
                      ${lock.busy ? "disabled" : ""}
+                     title="Connect a LapRF 8-Way timer over USB"
                    >
-                     ${icons.wifi(14)}
-                     <span>${lock.busy ? "Connecting…" : "Connect"}</span>
-                   </button>
-                   <button
-                     type="button"
-                     class="btn net-conn-btn"
-                     data-action="laprf-scan-lan"
-                     ${lock.busy || !canUseExternal ? "disabled" : ""}
-                     title="Discover LapRF 8-Way timers on the local network"
-                   >
-                     ${icons.target(14)}
-                     <span>Discover</span>
+                     ${icons.plug(14)}
+                     <span>${lock.busy ? "Connecting…" : "Connect USB"}</span>
                    </button>`
                 : `<button
                      type="button"
                      class="btn net-conn-btn"
-                     data-action="rh-open-manual-creds"
+                     data-action="rh-usb-connect"
                      ${lock.busy ? "disabled" : ""}
+                     title="Connect a RotorHazard timer over USB"
                    >
-                     ${icons.wifi(14)}
-                     <span>${lock.busy ? "Connecting…" : "Connect"}</span>
-                   </button>
-                   <button
-                     type="button"
-                     class="btn net-conn-btn"
-                     data-action="rh-scan-lan"
-                     ${lock.busy || !canUseExternal ? "disabled" : ""}
-                     title="Discover RotorHazard servers on the local network"
-                   >
-                     ${icons.target(14)}
-                     <span>Discover</span>
-                   </button>`;
+                     ${icons.plug(14)}
+                     <span>${lock.busy ? "Connecting…" : "Connect USB"}</span>
+                   </button>`
+            : isLapRFNet
+              ? `<button
+                   type="button"
+                   class="btn net-conn-btn"
+                   data-action="laprf-connect-eth"
+                   ${lock.busy ? "disabled" : ""}
+                 >
+                   ${icons.wifi(14)}
+                   <span>${lock.busy ? "Connecting…" : "Connect"}</span>
+                 </button>
+                 <button
+                   type="button"
+                   class="btn net-conn-btn"
+                   data-action="laprf-scan-lan"
+                   ${lock.busy || !canUseExternal ? "disabled" : ""}
+                   title="Discover LapRF 8-Way timers on the local network"
+                 >
+                   ${icons.target(14)}
+                   <span>Discover</span>
+                 </button>`
+              : `<button
+                   type="button"
+                   class="btn net-conn-btn"
+                   data-action="rh-open-manual-creds"
+                   ${lock.busy ? "disabled" : ""}
+                 >
+                   ${icons.wifi(14)}
+                   <span>${lock.busy ? "Connecting…" : "Connect"}</span>
+                 </button>
+                 <button
+                   type="button"
+                   class="btn net-conn-btn"
+                   data-action="rh-scan-lan"
+                   ${lock.busy || !canUseExternal ? "disabled" : ""}
+                   title="Discover RotorHazard servers on the local network"
+                 >
+                   ${icons.target(14)}
+                   <span>Discover</span>
+                 </button>`;
         extActionsHost.innerHTML = primaryActionHtml;
       }
     }
@@ -2229,6 +2233,9 @@ export class NetworkView extends Component {
     const isRHUSB = mode === "rotorhazard_usb";
 
     this.renderTopConnectionControls(mode);
+    if (!isRHNet) {
+      this.patchRhAuthModal();
+    }
 
     const slaprfWrap = this.el.querySelector<HTMLElement>('[data-slot="slaprf-sections"]');
     const laprfWrap = this.el.querySelector<HTMLElement>('[data-slot="laprf-sections"]');
@@ -2301,11 +2308,7 @@ export class NetworkView extends Component {
 
       if (!focusedInsideConn && connSig !== this.lastLaprfConnSig) {
         this.lastLaprfConnSig = connSig;
-        const connectedEndpoints = new Set(snaps.filter((s) => s.connected).map((s) => s.endpoint));
-        const laprfLocked = connectedEndpoints.size > 0 || this.laprfBusy;
-        const laprfLockAttr = laprfLocked
-          ? 'disabled title="Disconnect active connection to edit IP or port"'
-          : "";
+        const laprfLockAttr = this.laprfBusy ? "disabled" : "";
         connHost.innerHTML = `
           <div class="net-conn-field is-ip">
             <input
@@ -2333,6 +2336,8 @@ export class NetworkView extends Component {
       }
     }
 
+    const connectedSnaps = snaps.filter((s) => s.connected);
+
     const gateByTimer = new Map<number, string>();
     for (const g of this.store.nodes) {
       if (g.assignedTimerId > 0) {
@@ -2345,7 +2350,7 @@ export class NetworkView extends Component {
 
     const structSig = JSON.stringify({
       usb: isUSBMode ? 1 : 0,
-      snaps: snaps.map((s) => ({
+      snaps: connectedSnaps.map((s) => ({
         id: s.timerId,
         label: s.label,
         ep: s.endpoint,
@@ -2360,8 +2365,8 @@ export class NetworkView extends Component {
     const pctRssi = (val: number) =>
       Math.max(0, Math.min(100, ((val - 300) / (3400 - 300)) * 100));
 
-    if (structSig === this.lastLaprfTimersStructSig && snaps.length > 0) {
-      for (const snap of snaps) {
+    if (structSig === this.lastLaprfTimersStructSig && connectedSnaps.length > 0) {
+      for (const snap of connectedSnaps) {
         const card = timersHost.querySelector<HTMLElement>(`[data-laprf-card="${snap.timerId}"]`);
         if (!card) continue;
         const voltEl = card.querySelector<HTMLElement>('[data-laprf-kpi="voltage"]');
@@ -2401,20 +2406,72 @@ export class NetworkView extends Component {
 
     this.lastLaprfTimersStructSig = structSig;
 
-    if (snaps.length === 0) {
-      timersHost.innerHTML = isUSBMode
-        ? `<div class="card empty-note" style="padding:18px">
-            No LapRF 8-Way USB timers connected yet. Click <strong>Connect USB</strong> above to select a USB serial port.
-          </div>`
-        : `<div class="card empty-note" style="padding:18px">
-            No LapRF 8-Way timers connected yet. Enter the timer's IP above or click <strong>Scan LAN</strong>.
-          </div>`;
+    if (connectedSnaps.length === 0) {
+      const emptyBarsHtml = Array.from({ length: 8 }, (_, idx) => `
+        <div class="debug-net-inspector-bar-row net-node-bar-row is-muted">
+          <span class="net-node-bar-label">
+            <span class="debug-ch-inline" style="background:transparent;box-shadow:inset 0 0 0 1.5px #64748b"></span>
+            <strong>Slot ${idx + 1}</strong> <span class="muted mono">—</span>
+          </span>
+          <div class="debug-bar-track" style="position:relative">
+            <span class="debug-bar-fill" data-laprf-bar-fill="${idx}" style="width:0%"></span>
+          </div>
+          <span class="net-node-bar-val" data-laprf-bar-val="${idx}">—</span>
+        </div>`).join("");
+
+      timersHost.innerHTML = `
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div class="card card-flush" data-laprf-card="0" data-empty-shell="1">
+            <div class="net-device-card-head">
+              <span class="debug-led-status">
+                <span class="timer-color-dot is-off" title="Disconnected"></span>
+                <span class="debug-head-note">
+                  <strong>—</strong> · <span class="mono">—</span>
+                </span>
+              </span>
+              <div class="debug-connect-actions">
+                <span class="badge">—</span>
+              </div>
+            </div>
+
+            <div class="debug-net-inspector-kpis net-device-card-kpis">
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Supply voltage</span>
+                <strong class="debug-net-inspector-kpi-val mono" data-laprf-kpi="voltage">—</strong>
+              </div>
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Gate state</span>
+                <strong class="debug-net-inspector-kpi-val" data-laprf-kpi="gate-state">—</strong>
+              </div>
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Clock sync</span>
+                <strong class="debug-net-inspector-kpi-val mono" data-laprf-kpi="rtc">—</strong>
+              </div>
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Track position</span>
+                <strong class="debug-net-inspector-kpi-val">—</strong>
+              </div>
+            </div>
+
+            <div class="net-device-card-body">
+              <div class="debug-subbox">
+                <div class="debug-net-inspector-bars-wrap">
+                  <div class="debug-subbar">
+                    <span class="debug-chart-title">8-slot receiver RSSI (300–3500 scale)</span>
+                    <span class="note">Tick mark = slot crossing threshold</span>
+                  </div>
+                  <div class="debug-net-inspector-bars">${emptyBarsHtml}</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>`;
       return;
     }
 
     timersHost.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:14px">
-        ${snaps
+        ${connectedSnaps
           .map((snap) => {
             const color = timerColor(this.store, snap.timerId);
             const assignedGate = gateByTimer.get(snap.timerId);
@@ -2464,9 +2521,13 @@ export class NetworkView extends Component {
                   </span>
                   <div class="debug-connect-actions">
                     <span class="badge">${assignedGate ? esc(assignedGate) : "Unassigned"}</span>
-                    <button class="btn btn-sm btn-ghost" type="button" data-action="laprf-disconnect" data-timer-id="${snap.timerId}">
-                      Disconnect
-                    </button>
+                    ${
+                      !isUSBMode
+                        ? `<button class="btn net-conn-btn" type="button" data-action="laprf-disconnect" data-timer-id="${snap.timerId}">
+                             ${icons.plugOff(14)}<span>Disconnect</span>
+                           </button>`
+                        : ""
+                    }
                   </div>
                 </div>
 
@@ -2636,48 +2697,95 @@ export class NetworkView extends Component {
     }
   }
 
-  private renderRhInlineCredsBar(_titleText: string): string {
+  private patchRhAuthModal(): void {
+    const modalHost = this.el.querySelector<HTMLElement>('[data-slot="rh-auth-modal"]');
+    if (!modalHost) return;
+    const prompt = this.store.timingHardwareMode === "rotorhazard" ? this.rhCredPrompt : null;
+    if (!prompt) {
+      modalHost.style.display = "none";
+      if (this.lastRhAuthModalSig !== "") {
+        this.lastRhAuthModalSig = "";
+        modalHost.innerHTML = "";
+      }
+      return;
+    }
+
+    modalHost.style.display = "";
+    const sig = `${prompt.key}|${this.rhBusy ? 1 : 0}|${this.rhError || ""}`;
+    if (sig === this.lastRhAuthModalSig) {
+      return;
+    }
+    this.lastRhAuthModalSig = sig;
+
     const eyeLabel = this.rhRevealPass ? "Hide admin password" : "Reveal admin password";
-    return `
-      <div data-rh-creds-prompt="1" style="padding:12px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center">
-        <input
-          class="input mono net-conn-input"
-          type="text"
-          value="${esc(this.rhUser)}"
-          data-field="rh-cred-user"
-          placeholder="Username"
-          aria-label="Admin Username"
-          title="Admin Username"
-          autocomplete="off"
-          spellcheck="false"
-          style="width:144px"
-        />
-        <div class="flasher-pass-wrap" style="width:184px">
-          <input
-            class="input flasher-pass-input mono net-conn-input"
-            type="${this.rhRevealPass ? "text" : "password"}"
-            value="${esc(this.rhPass)}"
-            data-field="rh-cred-pass"
-            placeholder="Password"
-            aria-label="Admin Password"
-            title="Admin Password"
-            autocomplete="off"
-            spellcheck="false"
-            style="padding-right:30px"
-          />
-          <button
-            type="button"
-            class="flasher-pass-toggle"
-            data-action="rh-toggle-pass"
-            aria-label="${eyeLabel}"
-            title="${eyeLabel}"
-          >
-            ${this.rhRevealPass ? icons.eyeOff(15) : icons.eye(15)}
-          </button>
+    const ep = `${prompt.host}:${prompt.port || DEFAULT_RH_PORT}`;
+    const targetIdentity =
+      prompt.label && prompt.label !== ep ? `${prompt.label} · ${ep}` : ep;
+
+    modalHost.innerHTML = `
+      <div class="slaprf-modal-backdrop confirm-modal-backdrop" data-rh-creds-prompt="1" data-action="rh-cred-backdrop">
+        <div class="slaprf-modal card" role="dialog" aria-modal="true" aria-labelledby="rh-auth-modal-title" style="width:min(380px,calc(100vw - 32px))">
+          <div class="slaprf-modal-head">
+            <div class="slaprf-modal-title-row">
+              <h3 id="rh-auth-modal-title">RotorHazard Authentication</h3>
+            </div>
+            <button type="button" class="btn btn-ghost btn-xs" data-action="rh-cred-cancel" aria-label="Close">
+              ${icons.close(15)}
+            </button>
+          </div>
+          <div class="slaprf-modal-body" style="display:flex;flex-direction:column;gap:12px">
+            <div class="mono" style="font-size:12.5px;color:var(--text-2)">${esc(targetIdentity)}</div>
+            ${this.rhError ? `<div class="sim-error-note" style="margin:0">${esc(this.rhError)}</div>` : ""}
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <label class="muted" for="rh-auth-user-input" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Username</label>
+              <input
+                id="rh-auth-user-input"
+                class="input mono net-conn-input"
+                type="text"
+                value="${esc(this.rhUser)}"
+                data-field="rh-cred-user"
+                placeholder="Username"
+                aria-label="Admin Username"
+                title="Admin Username"
+                autocomplete="off"
+                spellcheck="false"
+                style="width:100%"
+              />
+            </div>
+            <div style="display:flex;flex-direction:column;gap:5px">
+              <label class="muted" for="rh-auth-pass-input" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Password</label>
+              <div class="flasher-pass-wrap" style="width:100%">
+                <input
+                  id="rh-auth-pass-input"
+                  class="input flasher-pass-input mono net-conn-input"
+                  type="${this.rhRevealPass ? "text" : "password"}"
+                  value="${esc(this.rhPass)}"
+                  data-field="rh-cred-pass"
+                  placeholder="Password"
+                  aria-label="Admin Password"
+                  title="Admin Password"
+                  autocomplete="off"
+                  spellcheck="false"
+                  style="width:100%;padding-right:32px"
+                />
+                <button
+                  type="button"
+                  class="flasher-pass-toggle"
+                  data-action="rh-toggle-pass"
+                  aria-label="${eyeLabel}"
+                  title="${eyeLabel}"
+                >
+                  ${this.rhRevealPass ? icons.eyeOff(15) : icons.eye(15)}
+                </button>
+              </div>
+            </div>
+          </div>
+          <div class="slaprf-modal-foot" style="justify-content:flex-end">
+            <button class="btn btn-armed net-conn-btn" type="button" data-action="rh-cred-submit" ${this.rhBusy ? "disabled" : ""}>
+              ${icons.wifi(14)}<span>${this.rhBusy ? "Authenticating…" : "Authenticate"}</span>
+            </button>
+          </div>
         </div>
-        <button class="btn btn-armed net-conn-btn" type="button" data-action="rh-cred-submit" ${this.rhBusy ? "disabled" : ""}>
-          ${icons.wifi(14)}<span>${this.rhBusy ? "Authenticating…" : "Authenticate"}</span>
-        </button>
       </div>`;
   }
 
@@ -2695,37 +2803,25 @@ export class NetworkView extends Component {
       activeEl && timersHost.contains(activeEl) && activeEl.tagName === "INPUT"
     );
 
-    const connPrompt =
-      this.rhCredPrompt && this.rhCredPrompt.scope !== "card" ? this.rhCredPrompt : null;
+    this.patchRhAuthModal();
 
     const connSig = JSON.stringify({
       busy: this.rhBusy,
       host: this.rhHost,
       port: this.rhPort,
-      prompt: connPrompt ? `${connPrompt.key}:${this.rhRevealPass ? 1 : 0}` : "",
       err: errText,
       connectedEndpoints: snaps.filter((s) => s.connected).map((s) => s.endpoint),
     });
 
-    const manualPromptHtml = connPrompt
-      ? this.renderRhInlineCredsBar(`Credentials for ${connPrompt.host}:${connPrompt.port}`)
-      : "";
     const rhSubbarParts: string[] = [];
-    if (errText) {
+    if (errText && !this.rhCredPrompt) {
       rhSubbarParts.push(`<div class="sim-error-note">${esc(errText)}</div>`);
-    }
-    if (manualPromptHtml) {
-      rhSubbarParts.push(manualPromptHtml);
     }
     this.patchNetConnSubbar(rhSubbarParts.join(""));
 
     if (!focusedInsideConn && connSig !== this.lastRhConnSig) {
       this.lastRhConnSig = connSig;
-      const connectedEndpoints = new Set(snaps.filter((s) => s.connected).map((s) => s.endpoint));
-      const rhLocked = connectedEndpoints.size > 0 || this.rhBusy;
-      const rhLockAttr = rhLocked
-        ? 'disabled title="Disconnect active connection to edit Host IP or port"'
-        : "";
+      const rhLockAttr = this.rhBusy ? "disabled" : "";
       connHost.innerHTML = `
         <div class="net-conn-field is-ip">
           <input
@@ -2752,6 +2848,8 @@ export class NetworkView extends Component {
         </div>`;
     }
 
+    const connectedSnaps = snaps.filter((s) => s.connected);
+
     const gateByTimer = new Map<number, { gateId: number; label: string }>();
     for (const g of this.store.nodes) {
       if (g.assignedTimerId > 0) {
@@ -2763,12 +2861,9 @@ export class NetworkView extends Component {
     }
 
     const pctRssi = (val: number) => Math.max(0, Math.min(100, (val / 255) * 100));
-    const cardPrompt =
-      this.rhCredPrompt && this.rhCredPrompt.scope === "card" ? this.rhCredPrompt : null;
 
     const structSig = JSON.stringify({
-      cardPrompt: cardPrompt ? `${cardPrompt.key}:${this.rhRevealPass ? 1 : 0}:${this.rhBusy ? 1 : 0}` : "",
-      snaps: snaps.map((s) => {
+      snaps: connectedSnaps.map((s) => {
         const gMeta = gateByTimer.get(s.timerId);
         return {
           id: s.timerId,
@@ -2787,8 +2882,8 @@ export class NetworkView extends Component {
       }),
     });
 
-    if (!focusedInsideTimers && structSig === this.lastRhTimersStructSig && snaps.length > 0) {
-      for (const snap of snaps) {
+    if (!focusedInsideTimers && structSig === this.lastRhTimersStructSig && connectedSnaps.length > 0) {
+      for (const snap of connectedSnaps) {
         const card = timersHost.querySelector<HTMLElement>(`[data-rh-card="${snap.timerId}"]`);
         if (!card) continue;
         const gateEl = card.querySelector<HTMLElement>('[data-rh-kpi="gate-state"]');
@@ -2841,17 +2936,72 @@ export class NetworkView extends Component {
     }
     this.lastRhTimersStructSig = structSig;
 
-    if (snaps.length === 0) {
+    if (connectedSnaps.length === 0) {
+      const emptyBarsHtml = Array.from({ length: 8 }, (_, idx) => `
+        <div class="debug-net-inspector-bar-row net-node-bar-row is-muted">
+          <span class="net-node-bar-label">
+            <span class="debug-ch-inline" style="background:transparent;box-shadow:inset 0 0 0 1.5px #64748b"></span>
+            <strong>Node ${idx + 1}</strong> <span class="muted mono">—</span>
+          </span>
+          <div class="debug-bar-track" style="position:relative">
+            <span class="debug-bar-fill" data-rh-bar-fill="${idx}" style="width:0%"></span>
+          </div>
+          <span class="net-node-bar-val" data-rh-bar-val="${idx}">—</span>
+        </div>`).join("");
+
       timersHost.innerHTML = `
-        <div class="card empty-note" style="padding:18px">
-          No RotorHazard devices connected yet. Enter a RotorHazard server IP above and click <strong>Connect</strong>, or click <strong>Discover</strong>.
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div class="card card-flush" data-rh-card="0" data-empty-shell="1">
+            <div class="net-device-card-head">
+              <span class="debug-led-status">
+                <span class="timer-color-dot is-off" title="Disconnected"></span>
+                <span class="debug-head-note">
+                  <strong>—</strong> · <span class="mono">—</span>
+                </span>
+              </span>
+              <div class="debug-connect-actions">
+                <span class="badge">—</span>
+              </div>
+            </div>
+
+            <div class="debug-net-inspector-kpis net-device-card-kpis">
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Server &amp; Auth</span>
+                <strong class="debug-net-inspector-kpi-val">—</strong>
+              </div>
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Gate state</span>
+                <strong class="debug-net-inspector-kpi-val" data-rh-kpi="gate-state">—</strong>
+              </div>
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Clock sync</span>
+                <strong class="debug-net-inspector-kpi-val mono" data-rh-kpi="clock">—</strong>
+              </div>
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Track position</span>
+                <strong class="debug-net-inspector-kpi-val">—</strong>
+              </div>
+            </div>
+
+            <div class="net-device-card-body">
+              <div class="debug-subbox">
+                <div class="debug-net-inspector-bars-wrap">
+                  <div class="debug-subbar">
+                    <span class="debug-chart-title">8-node receiver RSSI (0–255 scale)</span>
+                    <span class="note">Yellow tick = Exit · Green tick = Enter</span>
+                  </div>
+                  <div class="debug-net-inspector-bars">${emptyBarsHtml}</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>`;
       return;
     }
 
     timersHost.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:14px">
-        ${snaps
+        ${connectedSnaps
           .map((snap) => {
             const color = timerColor(this.store, snap.timerId);
             const gMeta = gateByTimer.get(snap.timerId);
@@ -2863,8 +3013,6 @@ export class NetworkView extends Component {
                 ? `R${rawSnapLbl.slice(2)}`
                 : rawSnapLbl
               : `R${Math.max(1, snap.timerId - 1)}`;
-            const snapHost = snap.endpoint.split(":")[0] || "192.168.1.101";
-            const snapPort = Number(snap.endpoint.split(":")[1]) || DEFAULT_RH_PORT;
             const authBadge = !snap.connected
               ? `<span class="badge">Offline</span>`
               : !snap.authKnown
@@ -2881,15 +3029,6 @@ export class NetworkView extends Component {
               : snap.clockSynced
                 ? `Synced (${Math.abs(snap.clockOffsetMs) < 0.5 ? "<1" : snap.clockOffsetMs.toFixed(1)} ms RTT)`
                 : "Syncing…";
-
-            const isPromptOpenOnCard = Boolean(
-              cardPrompt &&
-                (cardPrompt.timerId === snap.timerId ||
-                  (cardPrompt.host === snapHost && cardPrompt.port === snapPort))
-            );
-            const cardCredsBar = isPromptOpenOnCard
-              ? this.renderRhInlineCredsBar(`Credentials for ${snapLabel} (${snap.endpoint})`)
-              : "";
 
             const barsHtml = Array.from({ length: nodeCount }, (_, idx) => {
               const freq = snap.nodeFreqsMhz?.[idx] ?? 0;
@@ -2943,19 +3082,11 @@ export class NetworkView extends Component {
                     ${authBadge}
                     <span class="badge">${nodeCount} nodes</span>
                     <span class="badge">${assignedGate ? esc(assignedGate) : "Unassigned"}</span>
-                    <button class="btn btn-sm btn-ghost" type="button" data-action="rh-open-device-creds" data-cred-scope="card" data-host="${esc(snapHost)}" data-port="${snapPort}" data-label="${esc(snapLabel)}" data-timer-id="${snap.timerId}" ${this.rhBusy ? "disabled" : ""}>
-                      ${!snap.connected ? "Reconnect…" : !snap.authOk ? "Sign in…" : "Credentials"}
+                    <button class="btn net-conn-btn" type="button" data-action="rh-disconnect" data-timer-id="${snap.timerId}">
+                      ${icons.plugOff(14)}<span>Disconnect</span>
                     </button>
-                    ${
-                      snap.connected
-                        ? `<button class="btn btn-sm btn-ghost" type="button" data-action="rh-disconnect" data-timer-id="${snap.timerId}">
-                            Disconnect
-                          </button>`
-                        : ""
-                    }
                   </div>
                 </div>
-                ${cardCredsBar}
 
                 <div class="debug-net-inspector-kpis net-device-card-kpis">
                   <div class="debug-net-inspector-kpi">
@@ -3012,7 +3143,7 @@ export class NetworkView extends Component {
 
   private renderRotorHazardUSBView(): void {
     const timersHost = this.slot("rh-usb-timers");
-    const snaps = sharedRHLink.snapshots(this.store);
+    const snaps = sharedRHLink.snapshots(this.store).filter((s) => s.connected);
     const errText = this.rhError || sharedRHLink.errorMessage || "";
     this.patchNetConnSubbar(errText ? `<div class="sim-error-note">${esc(errText)}</div>` : "");
 
@@ -3095,9 +3226,64 @@ export class NetworkView extends Component {
     this.lastRhUsbTimersStructSig = structSig;
 
     if (snaps.length === 0) {
+      const emptyBarsHtml = Array.from({ length: 8 }, (_, idx) => `
+        <div class="debug-net-inspector-bar-row net-node-bar-row is-muted">
+          <span class="net-node-bar-label">
+            <span class="debug-ch-inline" style="background:transparent;box-shadow:inset 0 0 0 1.5px #64748b"></span>
+            <strong>Node ${idx + 1}</strong> <span class="muted mono">—</span>
+          </span>
+          <div class="debug-bar-track" style="position:relative">
+            <span class="debug-bar-fill" data-rh-bar-fill="${idx}" style="width:0%"></span>
+          </div>
+          <span class="net-node-bar-val" data-rh-bar-val="${idx}">—</span>
+        </div>`).join("");
+
       timersHost.innerHTML = `
-        <div class="card empty-note" style="padding:18px">
-          No RotorHazard USB devices connected yet. Select a USB serial port above and click <strong>Connect USB</strong>.
+        <div style="display:flex;flex-direction:column;gap:14px">
+          <div class="card card-flush" data-rh-usb-card="0" data-empty-shell="1">
+            <div class="net-device-card-head">
+              <span class="debug-led-status">
+                <span class="timer-color-dot is-off" title="Disconnected"></span>
+                <span class="debug-head-note">
+                  <strong>—</strong> · <span class="mono">—</span>
+                </span>
+              </span>
+              <div class="debug-connect-actions">
+                <span class="badge">—</span>
+              </div>
+            </div>
+
+            <div class="debug-net-inspector-kpis net-device-card-kpis">
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Serial protocol</span>
+                <strong class="debug-net-inspector-kpi-val mono">—</strong>
+              </div>
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Gate state</span>
+                <strong class="debug-net-inspector-kpi-val" data-rh-kpi="gate-state">—</strong>
+              </div>
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Serial RTT</span>
+                <strong class="debug-net-inspector-kpi-val mono" data-rh-kpi="clock">—</strong>
+              </div>
+              <div class="debug-net-inspector-kpi">
+                <span class="debug-net-inspector-kpi-label">Track position</span>
+                <strong class="debug-net-inspector-kpi-val">—</strong>
+              </div>
+            </div>
+
+            <div class="net-device-card-body">
+              <div class="debug-subbox">
+                <div class="debug-net-inspector-bars-wrap">
+                  <div class="debug-subbar">
+                    <span class="debug-chart-title">8-node receiver RSSI (0-255 scale)</span>
+                    <span class="note">Yellow tick = Exit · Green tick = Enter</span>
+                  </div>
+                  <div class="debug-net-inspector-bars">${emptyBarsHtml}</div>
+                </div>
+              </div>
+            </div>
+          </div>
         </div>`;
       return;
     }
