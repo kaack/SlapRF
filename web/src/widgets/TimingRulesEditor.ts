@@ -68,16 +68,22 @@ const RULES_SCOPE_STORAGE_KEY = "slaprf.ui.rules_scope.v1";
  * Settings section for the detection guardrails. "All timers" edits the global rules; picking a
  * timer lets you override individual rules for just that timer. Every change auto-saves immediately.
  */
+export interface TimingRulesEditorOptions {
+  readOnly?: () => boolean;
+}
+
 export class TimingRulesEditor extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
-  /** null = global rules; otherwise the gate being edited. */
+  private readonly isReadOnlyFn: () => boolean;
+  /** null = track-wide rules; otherwise the gate being edited. */
   private scope: number | null = null;
 
-  constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
+  constructor(el: HTMLElement, store: AppStore, api: ApiClient, opts: TimingRulesEditorOptions = {}) {
     super(el);
     this.store = store;
     this.api = api;
+    this.isReadOnlyFn = opts.readOnly ?? (() => false);
     try {
       const savedScope = window.localStorage.getItem(RULES_SCOPE_STORAGE_KEY);
       if (savedScope && savedScope !== "all") {
@@ -88,6 +94,7 @@ export class TimingRulesEditor extends Component {
       // Ignore storage access errors
     }
     this.listen(el, "change", () => {
+      if (this.isReadOnlyFn()) return;
       const form = this.el.querySelector<HTMLFormElement>("form.rules");
       if (form) void this.save(form);
     });
@@ -104,10 +111,23 @@ export class TimingRulesEditor extends Component {
     });
     this.listen(el, "submit", (e) => {
       e.preventDefault();
+      if (this.isReadOnlyFn()) return;
       void this.save(e.target as HTMLFormElement);
     });
     this.listen(el, "click", (e) => {
       const target = e.target as HTMLElement;
+      const scope = target.closest<HTMLElement>("[data-scope]");
+      if (scope) {
+        this.scope = scope.dataset.scope === "all" ? null : Number(scope.dataset.scope);
+        try {
+          window.localStorage.setItem(RULES_SCOPE_STORAGE_KEY, this.scope === null ? "all" : String(this.scope));
+        } catch {
+          // Ignore storage access errors
+        }
+        this.render();
+        return;
+      }
+      if (this.isReadOnlyFn()) return;
       const resetGlobalBtn = target.closest<HTMLButtonElement>("[data-reset-global]");
       if (resetGlobalBtn) {
         const key = resetGlobalBtn.dataset.resetGlobal as keyof TimingRules;
@@ -170,17 +190,6 @@ export class TimingRulesEditor extends Component {
         }
         return;
       }
-      const scope = target.closest<HTMLElement>("[data-scope]");
-      if (scope) {
-        this.scope = scope.dataset.scope === "all" ? null : Number(scope.dataset.scope);
-        try {
-          window.localStorage.setItem(RULES_SCOPE_STORAGE_KEY, this.scope === null ? "all" : String(this.scope));
-        } catch {
-          // Ignore storage access errors
-        }
-        this.render();
-        return;
-      }
       const action = target.closest<HTMLElement>("[data-action]")?.dataset.action;
       if (action === "defaults") void this.api.updateRules(DEFAULT_RULES);
       if (action === "clear" && this.scope !== null) {
@@ -195,9 +204,9 @@ export class TimingRulesEditor extends Component {
         this.render();
       }
     });
-    // Re-render on rule / gate changes, unless the user is actively typing in an input.
+    // Re-render on rule / gate / session / race changes, unless the user is actively typing in an input.
     this.onDispose(
-      store.subscribe(["rules", "config"], () => {
+      store.subscribe(["rules", "config", "practice", "race"], () => {
         if (this.scope !== null && !store.node(this.scope)) this.scope = null;
         const active = document.activeElement;
         const editing = active instanceof HTMLInputElement && this.el.contains(active);
@@ -269,21 +278,26 @@ export class TimingRulesEditor extends Component {
       ? this.renderGateBeepRow(r, overrides)
       : this.renderGlobalBeepRow(r);
 
-    const foot = gate
-      ? `<p class="note">Edited rules apply only to ${esc(gateLabel(this.store, gate.gateId))}.</p>
-         <button class="btn btn-ghost btn-sm" type="button" data-action="clear">Restore defaults</button>`
-      : `<p class="note">Applies to new detections.</p>
-         <button class="btn btn-ghost btn-sm" type="button" data-action="defaults">Restore defaults</button>`;
+    const readOnly = this.isReadOnlyFn();
+    const foot = readOnly
+      ? `<p class="note">Recorded timing rules for this closed race · reopen the race to modify rules.</p>`
+      : gate
+        ? `<p class="note">Edited rules apply only to ${esc(gateLabel(this.store, gate.gateId))}.</p>
+           <button class="btn btn-ghost btn-sm" type="button" data-action="clear">Restore defaults</button>`
+        : `<p class="note">Applies to new detections on this track.</p>
+           <button class="btn btn-ghost btn-sm" type="button" data-action="defaults">Restore defaults</button>`;
 
     this.el.innerHTML = `
       <div class="rules-scope">
         <span class="rules-scope-label">Applies to</span>
         <div class="channel-legend rules-scope-grid" role="tablist" aria-label="Rules for">${scopes}</div>
       </div>
-      <form class="rules">
-        ${rows}
-        ${beepRow}
-        <div class="rules-foot">${foot}</div>
+      <form class="rules ${readOnly ? "is-readonly-rules" : ""}">
+        <fieldset ${readOnly ? "disabled" : ""} style="border:0;margin:0;padding:0;min-width:0;display:contents">
+          ${rows}
+          ${beepRow}
+          <div class="rules-foot">${foot}</div>
+        </fieldset>
       </form>`;
     this.renderCounts();
   }

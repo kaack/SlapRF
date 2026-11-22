@@ -413,6 +413,9 @@ func (e *Engine) applyAddGateToSliceLocked(
 	} else {
 		cur = append(cur, newGate)
 	}
+	for i := range cur {
+		cur[i].TrackOrder = i
+	}
 	cur = e.enrichTrackGatesLocked(cur)
 	createdIdx := indexOfGate(cur, nextID)
 	var created domain.TrackGate

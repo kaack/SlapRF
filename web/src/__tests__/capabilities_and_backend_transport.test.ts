@@ -251,10 +251,11 @@ describe("services/backend_transport & BackendConnectModal — Wire Telemetry & 
       expect(root.querySelector("a[data-route='races']")?.getAttribute("aria-disabled")).toBe("true");
       expect(root.querySelector("a[data-route='setup']")?.classList.contains("is-disabled")).toBe(false);
 
-      // Every settings section except Datasource is locked out (and timing-devices was moved to Network)
+      // Every settings section except Datasource is locked out (timing-devices moved to Network; timing-rules moved into Practice/Race Track tabs)
       expect(root.querySelector("[data-section-anchor='timing-devices']")).toBeNull();
+      expect(root.querySelector("[data-section-anchor='timing-rules']")).toBeNull();
       expect(
-        root.querySelector("[data-section-anchor='timing-rules']")?.classList.contains("is-server-locked")
+        root.querySelector("[data-section-anchor='announcer']")?.classList.contains("is-server-locked")
       ).toBe(true);
       expect(
         root.querySelector("[data-section-anchor='datasource']")?.classList.contains("is-server-locked")
@@ -268,7 +269,7 @@ describe("services/backend_transport & BackendConnectModal — Wire Telemetry & 
       expect(isServerDisconnectedLockout()).toBe(false);
       expect(root.querySelector("a[data-route='races']")?.classList.contains("is-disabled")).toBe(false);
       expect(
-        root.querySelector("[data-section-anchor='timing-rules']")?.classList.contains("is-server-locked")
+        root.querySelector("[data-section-anchor='announcer']")?.classList.contains("is-server-locked")
       ).toBe(false);
 
       // Connection-loss transition ("Go to Settings") enters disconnected Server lockout cleanly

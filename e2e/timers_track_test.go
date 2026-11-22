@@ -12,7 +12,7 @@ import (
 
 func TestSlapRFHubConnectAndTrackGateTelemetry(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/track")
+	h.BootClean("#/practice/open-practice/track")
 
 	// 1. Connect simulated USB Hub H1 and verify all 4 gates come online with live telemetry.
 	h.ConnectSimHubH1()

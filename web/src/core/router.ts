@@ -6,7 +6,6 @@ export type RouteId =
   | "races"
   | "pilot"
   | "pilots"
-  | "track"
   | "laprf-emulator"
   | "sim"
   | "network"
@@ -17,6 +16,7 @@ export type RouteId =
 
 export type RacesViewTab =
   | "pilots"
+  | "track"
   | "format"
   | "edit"
   | "control"
@@ -66,6 +66,7 @@ export interface RacesRouteTarget {
 export interface PracticeRouteTarget {
   tab: PracticeViewTab;
   sessionId?: string;
+  pane?: string;
 }
 
 export interface ParsedHashState {
@@ -377,13 +378,6 @@ export const ROUTES: RouteMeta[] = [
     icon: () => icons.pilot(20),
   },
   {
-    id: "track",
-    label: "Track",
-    title: "Track",
-    subtitle: "Timer order, sections, and start timer",
-    icon: () => icons.gate(20),
-  },
-  {
     id: "pilot",
     label: "Analytics",
     title: "Analytics",
@@ -459,6 +453,8 @@ function safeDecode(seg: string | undefined): string {
 
 const RESERVED_NAV_SLUGS = new Set([
   "directory",
+  "pilots",
+  "track",
   "format",
   "control",
   "review",
@@ -551,6 +547,9 @@ export function parseHashState(hash: string): ParsedHashState | null {
     if (p1 === "pilots") {
       return { route: "races", races: { tab: "pilots" } };
     }
+    if (p1 === "track") {
+      return { route: "races", races: { tab: "track" } };
+    }
     if (p1 === "control") {
       return { route: "races", races: { tab: "control" } };
     }
@@ -586,6 +585,9 @@ export function parseHashState(hash: string): ParsedHashState | null {
     if (p2 === "pilots") {
       return { route: "races", races: { tab: "pilots", raceKey } };
     }
+    if (p2 === "track") {
+      return { route: "races", races: { tab: "track", raceKey } };
+    }
     if (p2 === "control") {
       return { route: "races", races: { tab: "control", raceKey } };
     }
@@ -608,22 +610,35 @@ export function parseHashState(hash: string): ParsedHashState | null {
     return { route: "races", races: { tab: "format", raceKey } };
   }
 
+  if (id === "track") {
+    const target: PracticeRouteTarget = { tab: "directory" };
+    return { route: "practice", practice: target, live: target };
+  }
+
   if (id === "practice" || id === "practices" || id === "live") {
     const p1 = safeDecode(parts[1]);
+    const p2 = safeDecode(parts[2]);
+    const p3 = safeDecode(parts[3]);
     if (!p1 || p1 === "directory") {
       const target: PracticeRouteTarget = { tab: "directory" };
       return { route: "practice", practice: target, live: target };
     }
     if (p1 === "session") {
-      const sid = safeDecode(parts[2]);
-      const target: PracticeRouteTarget = sid ? { tab: "session", sessionId: sid } : { tab: "session" };
+      const sid = p2;
+      const target: PracticeRouteTarget = sid
+        ? { tab: "session", sessionId: sid, ...(p3 ? { pane: p3 } : {}) }
+        : { tab: "session" };
       return {
         route: "practice",
         practice: target,
         live: target,
       };
     }
-    const target: PracticeRouteTarget = { tab: "session", sessionId: p1 };
+    const target: PracticeRouteTarget = {
+      tab: "session",
+      sessionId: p1,
+      ...(p2 ? { pane: p2 } : {}),
+    };
     return { route: "practice", practice: target, live: target };
   }
 
@@ -661,6 +676,7 @@ export function buildRacesHash(tab: RacesViewTab, raceId?: string, stage?: numbe
   if (tab === "directory" || !raceId) {
     if (tab === "directory") return "#/races";
     if (tab === "pilots") return "#/races/pilots";
+    if (tab === "track") return "#/races/track";
     if (tab === "control") return "#/races/control";
     if (tab === "review") return "#/races/review";
     if (tab === "analytics") return "#/races/analytics";
@@ -671,6 +687,9 @@ export function buildRacesHash(tab: RacesViewTab, raceId?: string, stage?: numbe
   const encRace = encodeURIComponent(raceId);
   if (tab === "pilots") {
     return `#/races/${encRace}/pilots`;
+  }
+  if (tab === "track") {
+    return `#/races/${encRace}/track`;
   }
   if (tab === "control") {
     return `#/races/${encRace}/control`;

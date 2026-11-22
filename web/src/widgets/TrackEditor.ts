@@ -17,18 +17,25 @@ import { renderSectionCapsuleIcon } from "./markup";
  *   - Below each timer on the track line sits a checkered flag icon button (active on the
  *     start timer, muted on intermediate timers); clicking it sets that timer as the start timer.
  */
+export interface TrackEditorOptions {
+  readOnly?: () => boolean;
+}
+
 export class TrackEditor extends Component {
   private readonly store: AppStore;
   private readonly api: ApiClient;
+  private readonly isReadOnlyFn: () => boolean;
   private isDragging = false;
   private lastRenderedHtml = "";
 
-  constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
+  constructor(el: HTMLElement, store: AppStore, api: ApiClient, opts: TrackEditorOptions = {}) {
     super(el);
     this.store = store;
     this.api = api;
+    this.isReadOnlyFn = opts.readOnly ?? (() => false);
 
     this.listen(el, "click", (e) => {
+      if (this.isReadOnlyFn()) return;
       const target = e.target as HTMLElement;
       const makeStartBtn = target.closest<HTMLElement>("[data-make-start]");
       if (makeStartBtn) {
@@ -48,7 +55,7 @@ export class TrackEditor extends Component {
     });
 
     this.listen(el, "pointerdown", (e) => {
-      if (e.button !== 0) return;
+      if (e.button !== 0 || this.isReadOnlyFn()) return;
       const target = e.target as HTMLElement;
 
       // Clicking inline controls beneath a node should not start a node drag.
@@ -79,7 +86,7 @@ export class TrackEditor extends Component {
       if (!editing && !this.isDragging) this.render();
     };
 
-    const unsubStore = store.subscribe(["config", "status"], refreshIfIdle);
+    const unsubStore = store.subscribe(["config", "status", "practice", "race", "rules"], refreshIfIdle);
     const unsubPool = usbPool.onChange(refreshIfIdle);
     const unsubSlots = usbPool.slots.map((c) =>
       c.subscribe({
@@ -177,6 +184,7 @@ export class TrackEditor extends Component {
   }
 
   private render(force = false): void {
+    const readOnly = this.isReadOnlyFn();
     const nodes = this.orderedNodes;
     const detected = this.detectedTimers;
     const assignedTimerIds = new Set(
@@ -185,10 +193,14 @@ export class TrackEditor extends Component {
     const unassignedTimers = detected.filter((d) => !assignedTimerIds.has(d.timerId));
 
     const html = `
-      <div class="gate-track-stage">
+      <div class="gate-track-stage ${readOnly ? "is-readonly-track" : ""}">
         <div class="gate-track-header">
           <span class="gate-track-caption">
-            Drag timers onto the line to add them to the track · drag along the line to reorder · drag into Unassigned timers to remove
+            ${
+              readOnly
+                ? "Recorded track order for this closed race · reopen the race to modify timers or gate order"
+                : "Drag timers onto the line to add them to the track · drag along the line to reorder · drag into Unassigned timers to remove"
+            }
           </span>
         </div>
 
@@ -211,7 +223,7 @@ export class TrackEditor extends Component {
           </div>
         </div>
 
-        ${this.renderUnassignedTray(unassignedTimers)}
+        ${readOnly ? "" : this.renderUnassignedTray(unassignedTimers)}
       </div>
     `;
     if (!force && html === this.lastRenderedHtml) return;

@@ -117,6 +117,7 @@ import {
   openMultiGPSyncModal,
 } from "../widgets/MultiGPRaceModals";
 import { PilotRssiChart } from "../widgets/PilotRssiChart";
+import { ScopedTrackWorkspace } from "../widgets/ScopedTrackWorkspace";
 import { mountTagPillEditor, renderTagPillBoxHtml } from "../widgets/TagPillEditor";
 import { cleanConnectionInvalidReason, showToast } from "../widgets/Toast";
 import {
@@ -147,7 +148,7 @@ import {
 } from "../widgets/MobileRaceEditor";
 import { PilotView } from "./PilotView";
 
-type WorkspaceTab = "pilots" | "format" | "edit" | "control" | "review" | "analytics" | "multigp";
+type WorkspaceTab = "pilots" | "track" | "format" | "edit" | "control" | "review" | "analytics" | "multigp";
 type DesktopSetupViewMode = "graph" | "table";
 type ControlPanelId =
   | "cockpit"
@@ -651,7 +652,9 @@ function formatRaceSubtitle(r: RaceTournamentState): string {
 
 export class RacesView extends Component {
   private readonly store: AppStore;
+  private readonly raceWorkspaceStore: AppStore;
   private readonly api: ApiClient;
+  private readonly raceScopedApi: ApiClient;
   private readonly announcer?: Announcer;
 
   private showDirectory = false;
@@ -728,6 +731,9 @@ export class RacesView extends Component {
   private raceSignalsChart: PilotRssiChart | null = null;
   private raceSignalsChartEl: HTMLElement | null = null;
   private raceSignalsSlot: number | null = null;
+  private raceTrackView: ScopedTrackWorkspace | null = null;
+  private raceTrackEl: HTMLElement | null = null;
+  private raceTrackKey = "";
   private raceAnalyticsView: PilotView | null = null;
   private raceAnalyticsEl: HTMLElement | null = null;
   private dirOpenMenuRaceId = "";
@@ -760,6 +766,54 @@ export class RacesView extends Component {
     if (this.raceSignalsChartEl) {
       this.raceSignalsChartEl.remove();
       this.raceSignalsChartEl = null;
+    }
+  }
+
+  private disposeRaceTrackView(): void {
+    if (this.raceTrackView) {
+      this.raceTrackView.destroy();
+      this.raceTrackView = null;
+    }
+    if (this.raceTrackEl) {
+      this.raceTrackEl.remove();
+      this.raceTrackEl = null;
+    }
+    this.raceTrackKey = "";
+  }
+
+  private syncRaceTrackViewDom(): void {
+    if (this.showDirectory || this.activeTab !== "track") return;
+    const host = this.el.querySelector<HTMLElement>("[data-race-track-host]");
+    if (!host) return;
+    const cur = this.currentRace;
+    const isRo = Boolean(
+      cur.lifecycle === "completed" || cur.lifecycle === "scrapped" || cur.isComplete
+    );
+    const nextKey = `${cur.raceId ?? ""}:${isRo ? "ro" : "rw"}`;
+    if (this.raceTrackView && this.raceTrackKey !== nextKey) {
+      this.disposeRaceTrackView();
+    }
+    if (!this.raceTrackView || !this.raceTrackEl) {
+      this.raceTrackKey = nextKey;
+      this.raceTrackEl = document.createElement("div");
+      this.raceTrackEl.className = "view rc-track-embedded";
+      this.raceTrackView = new ScopedTrackWorkspace(
+        this.raceTrackEl,
+        this.raceWorkspaceStore,
+        this.raceScopedApi,
+        {
+          contextLabel: "race",
+          readOnly: () => {
+            const r = this.currentRace;
+            return Boolean(
+              r.lifecycle === "completed" || r.lifecycle === "scrapped" || r.isComplete
+            );
+          },
+        }
+      );
+    }
+    if (this.raceTrackEl.parentElement !== host) {
+      host.appendChild(this.raceTrackEl);
     }
   }
 
@@ -804,6 +858,7 @@ export class RacesView extends Component {
     closeActiveMultiGPModal();
     dismissWireDropMenu();
     this.disposeRaceSignalsChart();
+    this.disposeRaceTrackView();
     this.disposeRaceAnalyticsView();
     this.dirOpenMenuRaceId = "";
     this.fabOpen = false;
@@ -863,7 +918,15 @@ export class RacesView extends Component {
   constructor(el: HTMLElement, store: AppStore, api: ApiClient, announcer?: Announcer) {
     super(el);
     this.store = store;
+    this.raceWorkspaceStore = store.forRaceWorkspace(() => this.currentRace);
     this.api = api;
+    this.raceScopedApi =
+      typeof api.forScope === "function"
+        ? api.forScope(() => {
+            const id = this.currentRace.raceId;
+            return id ? { kind: "race", id } : null;
+          })
+        : api;
     this.announcer = announcer;
 
     const storedLayout = loadStoredCanvasLayout();
@@ -1021,6 +1084,7 @@ export class RacesView extends Component {
       closeActiveMultiGPModal();
       dismissWireDropMenu();
       this.disposeRaceSignalsChart();
+    this.disposeRaceTrackView();
     this.disposeRaceAnalyticsView();
     this.dirOpenMenuRaceId = "";
       this.setViewingRace("");
@@ -2174,6 +2238,7 @@ export class RacesView extends Component {
       !isSignalsPaneVisible
     ) {
       this.disposeRaceSignalsChart();
+    this.disposeRaceTrackView();
     this.disposeRaceAnalyticsView();
     this.dirOpenMenuRaceId = "";
       return;
@@ -2183,6 +2248,7 @@ export class RacesView extends Component {
     const host = this.el.querySelector<HTMLElement>("[data-race-signals-chart]");
     if (!host || slot === null) {
       this.disposeRaceSignalsChart();
+    this.disposeRaceTrackView();
     this.disposeRaceAnalyticsView();
     this.dirOpenMenuRaceId = "";
       return;
@@ -2192,9 +2258,14 @@ export class RacesView extends Component {
       this.raceSignalsChartEl.className = "rc-signals-chart-inner";
       host.innerHTML = "";
       host.appendChild(this.raceSignalsChartEl);
-      this.raceSignalsChart = new PilotRssiChart(this.raceSignalsChartEl, this.store, this.api, {
-        contextMode: "race",
-      });
+      this.raceSignalsChart = new PilotRssiChart(
+        this.raceSignalsChartEl,
+        this.raceWorkspaceStore,
+        this.raceScopedApi,
+        {
+          contextMode: "race",
+        }
+      );
     } else if (this.raceSignalsChartEl.parentElement !== host) {
       host.innerHTML = "";
       host.appendChild(this.raceSignalsChartEl);
@@ -2747,7 +2818,7 @@ export class RacesView extends Component {
   }
 
   private fitAndStoreCurrentCamera(tab: WorkspaceTab, stage: number): void {
-    if (tab === "control" || tab === "review" || tab === "analytics") return;
+    if (tab === "pilots" || tab === "track" || tab === "control" || tab === "review" || tab === "analytics") return;
     const key = this.cameraSlotKey(tab, stage);
     const applyFit = (): void => {
       const race = this.currentRace;
@@ -5482,7 +5553,13 @@ export class RacesView extends Component {
         this.refreshSinglePanelDom(this.activeTab === "review" ? "review_heat" : "heatline");
       }
       if (heatId && slot > 0) {
-        openHeatLapEditorModal(this.store, this.api, heatId, slot, this.currentRace.raceId);
+        openHeatLapEditorModal(
+          this.raceWorkspaceStore,
+          this.raceScopedApi,
+          heatId,
+          slot,
+          this.currentRace.raceId
+        );
       }
       return;
     }
@@ -7133,6 +7210,16 @@ export class RacesView extends Component {
               title="Check in pilots, add walk-ups, and set attendance"
             >
               ${icons.pilot(13)}<span>Pilots</span>
+            </button>
+
+            <button
+              type="button"
+              class="rc-topleft-btn rc-mode-btn ${mode === "track" ? "is-active" : ""}"
+              data-race-tab="track"
+              aria-selected="${mode === "track" ? "true" : "false"}"
+              title="Configure timers, gate order, and timing rules for this race"
+            >
+              ${icons.gate(13)}<span>Track</span>
             </button>
 
             <button
@@ -11175,6 +11262,7 @@ export class RacesView extends Component {
 
   private render(): void {
     this.raceSignalsChartEl?.remove();
+    this.raceTrackEl?.remove();
     this.raceAnalyticsEl?.remove();
     const race = this.currentRace;
     const allRaces = this.getEffectiveRaces();
@@ -11187,6 +11275,7 @@ export class RacesView extends Component {
       closeActiveLapEditorModal();
       closeActivePilotLapsModal();
       this.disposeRaceSignalsChart();
+      this.disposeRaceTrackView();
       this.disposeRaceAnalyticsView();
       this.prevRenderedModeGroup = "";
       this.prevRenderedModeRaceId = "";
@@ -11210,6 +11299,9 @@ export class RacesView extends Component {
 
     if (this.activeTab !== "control") {
       this.disposeRaceSignalsChart();
+    }
+    if (this.activeTab !== "track") {
+      this.disposeRaceTrackView();
     }
     if (this.activeTab !== "analytics") {
       this.disposeRaceAnalyticsView();
@@ -11270,6 +11362,18 @@ export class RacesView extends Component {
     }
     if (this.activeTab === "pilots") {
       this.el.innerHTML = this.renderMobilePilotsView(race);
+      this.restoreScrollPositions(this.el, savedScroll);
+      publishWorkspaceTopBar();
+      return;
+    }
+
+    if (this.activeTab === "track") {
+      this.el.innerHTML = `
+        <div class="races-page is-track-page" data-rc-page="track">
+          ${this.renderRaceWorkspaceTopBar(race, "track")}
+          <div class="races-page-stack" data-race-track-host></div>
+        </div>`;
+      this.syncRaceTrackViewDom();
       this.restoreScrollPositions(this.el, savedScroll);
       publishWorkspaceTopBar();
       return;

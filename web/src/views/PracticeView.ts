@@ -32,6 +32,7 @@ import { openConfirmPreemptModal } from "../widgets/ConfirmPreemptModal";
 import { renderEmpty, renderSectionCapsuleIcon, SPLIT_CLASS } from "../widgets/markup";
 import { PilotPicker } from "../widgets/PilotPicker";
 import { PilotRssiChart } from "../widgets/PilotRssiChart";
+import { ScopedTrackWorkspace } from "../widgets/ScopedTrackWorkspace";
 import { mountTagPillEditor, renderTagPillBoxHtml } from "../widgets/TagPillEditor";
 import { cleanConnectionInvalidReason, showToast } from "../widgets/Toast";
 import { AllPilotsPanel } from "./live/AllPilotsPanel";
@@ -39,7 +40,7 @@ import { PilotPanel } from "./live/PilotPanel";
 import { PilotView } from "./PilotView";
 
 type SessionDirStatusFilter = "all" | "live" | "stopped" | "laps";
-type MobilePracticeTab = "pilots" | "overview" | "laps" | "trends" | "signals" | "analytics";
+type MobilePracticeTab = "pilots" | "track" | "overview" | "laps" | "trends" | "signals" | "analytics";
 
 function formatShortSessionDate(iso?: string): string {
   if (!iso) return "";
@@ -78,7 +79,9 @@ function fastestSessionLap(session: PracticeSession): { sec: number; callsign: s
 export class PracticeView extends Component {
   private readonly store: AppStore;
   private readonly workspaceStore: AppStore;
+  private readonly trackEditorStore: AppStore;
   private readonly api: ApiClient;
+  private readonly scopedApi: ApiClient;
   private activeTab: PracticeViewTab = "directory";
   private panel: Component | null = null;
   private shownFocus: number | null | undefined = undefined;
@@ -139,6 +142,9 @@ export class PracticeView extends Component {
   private trendsExplicitAll = false;
   private practiceSignalsChart: PilotRssiChart | null = null;
   private practiceSignalsChartEl: HTMLElement | null = null;
+  private practiceTrackView: ScopedTrackWorkspace | null = null;
+  private practiceTrackEl: HTMLElement | null = null;
+  private practiceTrackSessionId = "";
   private practiceAnalyticsView: PilotView | null = null;
   private practiceAnalyticsEl: HTMLElement | null = null;
   private dirOpenMenuSessionId = "";
@@ -149,7 +155,15 @@ export class PracticeView extends Component {
     super(el);
     this.store = store;
     this.workspaceStore = store.forPracticeWorkspace();
+    this.trackEditorStore = store.forPracticeTrackEditor(() => this.store.selectedPracticeSession);
     this.api = api;
+    this.scopedApi =
+      typeof api.forScope === "function"
+        ? api.forScope(() => {
+            const id = this.store.selectedPracticeSession?.sessionId;
+            return id ? { kind: "practice", id } : null;
+          })
+        : api;
 
     const curHash = getCurrentParsedHash();
     this.pendingRouteTarget = curHash.practice ?? curHash.live ?? { tab: "directory" };
@@ -172,6 +186,9 @@ export class PracticeView extends Component {
               <div class="rc-topleft-seg sched-lineup" role="tablist" aria-label="Practice workspace mode" data-fit-lineup>
                 <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="pilots">
                   ${icons.pilot(15)}<span>Pilots</span>
+                </button>
+                <button type="button" role="tab" aria-selected="false" class="rc-topleft-btn rc-mode-btn" data-practice-mobile-tab="track">
+                  ${icons.gate(15)}<span>Track</span>
                 </button>
                 <button type="button" role="tab" aria-selected="true" class="rc-topleft-btn rc-mode-btn is-active" data-practice-mobile-tab="overview">
                   ${icons.flag(15)}<span>Overview</span>
@@ -206,6 +223,7 @@ export class PracticeView extends Component {
           <div class="practice-action-strip" data-slot="session-controls" data-practice-mobile-pane="overview" role="region" aria-label="Practice session status and controls"></div>
           <div class="view-stack practice-panel-stack" data-slot="panel"></div>
           <section class="card card-flush practice-mobile-pilots-card" data-slot="mobile-pilots" data-practice-mobile-pane="pilots"></section>
+          <div class="practice-mobile-track-wrap" data-slot="mobile-track" data-practice-mobile-pane="track"></div>
           <div class="practice-mobile-sectors-wrap" data-slot="mobile-sectors" data-practice-mobile-pane="laps"></div>
           <section class="rc-canvas-panel rc-page-card is-signals-panel practice-mobile-signals-panel" data-slot="mobile-signals" data-practice-mobile-pane="signals"></section>
           <div class="practice-mobile-analytics-wrap" data-slot="mobile-analytics" data-practice-mobile-pane="analytics"></div>
@@ -295,6 +313,7 @@ export class PracticeView extends Component {
         this.pilotDrawerCloseTimer = null;
       }
       this.disposePracticeSignalsChart();
+      this.disposePracticeTrackView();
       this.disposePracticeAnalyticsView();
       this.panel?.destroy();
       setPracticeTopBarContext({
@@ -407,9 +426,21 @@ export class PracticeView extends Component {
       return;
     }
 
+    const requestedPane = (target.pane || "").trim().toLowerCase() as MobilePracticeTab;
     this.pendingRouteTarget = null;
     this.resolvingSessionId = "";
     this.setTab("session", false);
+    if (
+      requestedPane === "pilots" ||
+      requestedPane === "track" ||
+      requestedPane === "overview" ||
+      requestedPane === "laps" ||
+      requestedPane === "trends" ||
+      requestedPane === "signals" ||
+      requestedPane === "analytics"
+    ) {
+      this.setMobilePracticeTab(requestedPane, null, false);
+    }
   }
 
   private setTab(next: PracticeViewTab, pushHistory = false): void {
@@ -487,6 +518,7 @@ export class PracticeView extends Component {
       dirEl.style.display = "";
       wsEl.style.display = "none";
       this.disposePracticeSignalsChart();
+      this.disposePracticeTrackView();
       this.disposePracticeAnalyticsView();
       this.renderDirectory();
     } else {
@@ -497,6 +529,7 @@ export class PracticeView extends Component {
       this.renderWorkspaceChrome();
       this.showPanel();
       this.renderMobilePilotsPanel();
+      this.renderMobileTrackPanel();
       this.renderMobileSectorsPanel();
       this.renderMobileSignalsPanel();
       this.renderMobileAnalyticsPanel();
@@ -602,6 +635,9 @@ export class PracticeView extends Component {
     }
     if (nextTab === "pilots") {
       this.renderMobilePilotsPanel();
+    }
+    if (nextTab === "track") {
+      this.renderMobileTrackPanel();
     }
     if (nextTab === "laps") {
       this.renderMobileSectorsPanel();
@@ -2882,6 +2918,45 @@ export class PracticeView extends Component {
     this.lastMobileSignalsSig = "";
   }
 
+  private disposePracticeTrackView(): void {
+    if (this.practiceTrackView) {
+      this.practiceTrackView.destroy();
+      this.practiceTrackView = null;
+    }
+    if (this.practiceTrackEl) {
+      this.practiceTrackEl.remove();
+      this.practiceTrackEl = null;
+    }
+    this.practiceTrackSessionId = "";
+  }
+
+  private renderMobileTrackPanel(): void {
+    const host = this.slot("mobile-track");
+    const curSessionId = this.store.selectedPracticeSession?.sessionId ?? "";
+    if (this.activeTab !== "session") {
+      this.disposePracticeTrackView();
+      host.innerHTML = "";
+      return;
+    }
+    if (this.practiceTrackView && this.practiceTrackSessionId !== curSessionId) {
+      this.disposePracticeTrackView();
+    }
+    if (!this.practiceTrackView || !this.practiceTrackEl) {
+      this.practiceTrackSessionId = curSessionId;
+      this.practiceTrackEl = document.createElement("div");
+      this.practiceTrackEl.className = "view rc-track-embedded";
+      this.practiceTrackView = new ScopedTrackWorkspace(
+        this.practiceTrackEl,
+        this.trackEditorStore,
+        this.scopedApi,
+        { contextLabel: "practice" }
+      );
+    }
+    if (this.practiceTrackEl.parentElement !== host) {
+      host.appendChild(this.practiceTrackEl);
+    }
+  }
+
   private disposePracticeAnalyticsView(): void {
     if (this.practiceAnalyticsView) {
       this.practiceAnalyticsView.destroy();
@@ -3154,7 +3229,7 @@ export class PracticeView extends Component {
         this.practiceSignalsChart = new PilotRssiChart(
           this.practiceSignalsChartEl,
           this.workspaceStore,
-          this.api
+          this.scopedApi
         );
       } else {
         chartHost.appendChild(this.practiceSignalsChartEl);

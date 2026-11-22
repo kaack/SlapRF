@@ -35,6 +35,7 @@ import {
   TimingHardwareMode,
   TimingRules,
   TrackNode,
+  TrackScope,
 } from "../types/models";
 import { BackendHttpTransport } from "./backend_transport";
 import { BrowserHubBridge } from "./browser_hub_bridge";
@@ -515,8 +516,10 @@ export class ApiClient {
     this.transport.pushHubChannels();
   }
 
-  public async resetTrackToDefault(): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("POST", "/v1/track:reset", {}));
+  public async resetTrackToDefault(scope?: TrackScope | null): Promise<void> {
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>("POST", `${this.resolveTrackBaseUrl(scope)}:reset`, {})
+    );
   }
 
   public async resetStoredData(): Promise<void> {
@@ -1158,36 +1161,87 @@ export class ApiClient {
     this.store.ingestRace(snap, null, null);
   }
 
-  public async updateTrackNode(update: GateUpdate): Promise<void> {
+  private _scopeResolver?: () => TrackScope | null;
+
+  /** Returns a lightweight view of `ApiClient` whose track and timing-rule calls target `resolver()`. */
+  public forScope(resolver: () => TrackScope | null): ApiClient {
+    const scoped = Object.create(this) as ApiClient;
+    Object.defineProperty(scoped, "_scopeResolver", {
+      value: resolver,
+      enumerable: false,
+    });
+    return scoped;
+  }
+
+  private resolveTrackBaseUrl(explicitScope?: TrackScope | null): string {
+    const scope = explicitScope ?? this._scopeResolver?.() ?? null;
+    if (scope && scope.id) {
+      return `/v1/${scope.kind}/sessions/${encodeURIComponent(scope.id)}/track`;
+    }
+    const selSess = this.store.selectedPracticeSession;
+    if (selSess?.sessionId) {
+      return `/v1/practice/sessions/${encodeURIComponent(selSess.sessionId)}/track`;
+    }
+    const rid = this.viewingRaceId || this.store.raceState.raceId || this.store.eventState.activeRaceId;
+    if (rid) {
+      return `/v1/race/sessions/${encodeURIComponent(rid)}/track`;
+    }
+    return `/v1/practice/sessions/current/track`;
+  }
+
+  public async updateTrackNode(update: GateUpdate, scope?: TrackScope | null): Promise<void> {
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("PUT", `/v1/track/gates/${update.gateId}`, update)
+      await this.transport.request<FullStateResponse>(
+        "PUT",
+        `${this.resolveTrackBaseUrl(scope)}/gates/${update.gateId}`,
+        update
+      )
     );
   }
 
-  public async updateGate(update: GateUpdate): Promise<void> {
-    await this.updateTrackNode(update);
+  public async updateGate(update: GateUpdate, scope?: TrackScope | null): Promise<void> {
+    await this.updateTrackNode(update, scope);
   }
 
-  public async addTrackNode(name = "", assignedTimerId = 0, trackOrder?: number): Promise<void> {
+  public async addTrackNode(
+    name = "",
+    assignedTimerId = 0,
+    trackOrder?: number,
+    scope?: TrackScope | null
+  ): Promise<void> {
     this.store.hydrate(
-      await this.transport.request<FullStateResponse>("POST", "/v1/track/gates", {
-        name,
-        assignedTimerId,
-        ...(trackOrder !== undefined ? { trackOrder } : {}),
-      })
+      await this.transport.request<FullStateResponse>(
+        "POST",
+        `${this.resolveTrackBaseUrl(scope)}/gates`,
+        {
+          name,
+          assignedTimerId,
+          ...(trackOrder !== undefined ? { trackOrder } : {}),
+        }
+      )
     );
   }
 
-  public async addGate(name = "", assignedTimerId = 0, trackOrder?: number): Promise<void> {
-    await this.addTrackNode(name, assignedTimerId, trackOrder);
+  public async addGate(
+    name = "",
+    assignedTimerId = 0,
+    trackOrder?: number,
+    scope?: TrackScope | null
+  ): Promise<void> {
+    await this.addTrackNode(name, assignedTimerId, trackOrder, scope);
   }
 
-  public async removeTrackNode(nodeId: number): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("DELETE", `/v1/track/gates/${nodeId}`));
+  public async removeTrackNode(nodeId: number, scope?: TrackScope | null): Promise<void> {
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>(
+        "DELETE",
+        `${this.resolveTrackBaseUrl(scope)}/gates/${nodeId}`
+      )
+    );
   }
 
-  public async removeGate(nodeId: number): Promise<void> {
-    await this.removeTrackNode(nodeId);
+  public async removeGate(nodeId: number, scope?: TrackScope | null): Promise<void> {
+    await this.removeTrackNode(nodeId, scope);
   }
 
   public async updateTimerColor(timerId: number, color: string): Promise<void> {
@@ -1265,16 +1319,27 @@ export class ApiClient {
   }
 
   /** Per-gate, per-pilot enter thresholds (all applied, or none if any is invalid). */
-  public async setGateThresholds(updates: GateThresholdUpdate[]): Promise<void> {
-    this.store.hydrate(await this.transport.request<FullStateResponse>("PUT", "/v1/track/thresholds", updates));
+  public async setGateThresholds(updates: GateThresholdUpdate[], scope?: TrackScope | null): Promise<void> {
+    this.store.hydrate(
+      await this.transport.request<FullStateResponse>(
+        "PUT",
+        `${this.resolveTrackBaseUrl(scope)}/thresholds`,
+        updates
+      )
+    );
   }
 
   /** One gate's timing-rule overrides across all pilots; an empty object clears them. */
-  public async setGateRules(nodeId: number, overrides: GateRuleOverrides): Promise<void> {
+  public async setGateRules(
+    nodeId: number,
+    overrides: GateRuleOverrides,
+    scope?: TrackScope | null
+  ): Promise<void> {
+    const base = this.resolveTrackBaseUrl(scope);
     const state =
       Object.keys(overrides).length === 0
-        ? await this.transport.request<FullStateResponse>("POST", `/v1/track/gates/${nodeId}/rules:reset`, {})
-        : await this.transport.request<FullStateResponse>("PUT", `/v1/track/gates/${nodeId}/rules`, overrides);
+        ? await this.transport.request<FullStateResponse>("POST", `${base}/gates/${nodeId}/rules:reset`, {})
+        : await this.transport.request<FullStateResponse>("PUT", `${base}/gates/${nodeId}/rules`, overrides);
     this.store.hydrate(state);
   }
 
@@ -1282,26 +1347,37 @@ export class ApiClient {
   public async setPilotGateRules(
     nodeId: number,
     slotIndex: number,
-    overrides: GateRuleOverrides
+    overrides: GateRuleOverrides,
+    scope?: TrackScope | null
   ): Promise<void> {
+    const base = this.resolveTrackBaseUrl(scope);
     const state =
       Object.keys(overrides).length === 0
         ? await this.transport.request<FullStateResponse>(
             "POST",
-            `/v1/track/gates/${nodeId}/pilots/${slotIndex}/rules:reset`,
+            `${base}/gates/${nodeId}/pilots/${slotIndex}/rules:reset`,
             {}
           )
         : await this.transport.request<FullStateResponse>(
             "PUT",
-            `/v1/track/gates/${nodeId}/pilots/${slotIndex}/rules`,
+            `${base}/gates/${nodeId}/pilots/${slotIndex}/rules`,
             overrides
           );
     this.store.hydrate(state);
   }
 
-  /** Saves timing guardrails; the server clamps values and returns what it applied. */
-  public async updateRules(rules: TimingRules): Promise<void> {
-    this.store.applyRules(await this.transport.request<TimingRules>("PUT", "/v1/timing/rules", rules));
+  /** Saves timing guardrails for the scoped track; the server clamps values and returns updated state. */
+  public async updateRules(rules: TimingRules, scope?: TrackScope | null): Promise<void> {
+    const res = await this.transport.request<FullStateResponse | TimingRules>(
+      "PUT",
+      `${this.resolveTrackBaseUrl(scope)}/rules`,
+      rules
+    );
+    if (res && typeof res === "object" && "pilots" in res) {
+      this.store.hydrate(res);
+    } else if (res) {
+      this.store.applyRules(res as TimingRules);
+    }
   }
 
   /** Retrieves the WASM engine's build version info (release tag, commit_hash, branch_name). */

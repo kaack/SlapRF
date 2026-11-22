@@ -25,7 +25,7 @@ import { sharedLapRFEmulatorRelay } from "../services/laprf_emulator_relay";
 import { sharedMultiGPService } from "../services/multigp_service";
 import { AppStore } from "../state/store";
 
-const PRIMARY_MOBILE_ROUTES = new Set<RouteId>(["races", "practice", "pilots", "track"]);
+const PRIMARY_MOBILE_ROUTES = new Set<RouteId>(["races", "practice", "pilots", "network"]);
 
 export class Sidebar extends Component {
   private readonly store: AppStore;

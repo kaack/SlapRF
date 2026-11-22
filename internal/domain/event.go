@@ -118,7 +118,7 @@ func slugifyNavCore(raw string) string {
 
 func isReservedNavSlug(slug string) bool {
 	switch slug {
-	case "directory", "format", "control", "review", "edit", "stage", "session":
+	case "directory", "pilots", "track", "format", "control", "review", "analytics", "edit", "stage", "session":
 		return true
 	}
 	if strings.HasPrefix(slug, "stage-") && len(slug) > len("stage-") {

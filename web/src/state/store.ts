@@ -151,13 +151,19 @@ function normalizeRosterList(roster?: RaceTournamentState["roster"]): NonNullabl
   }));
 }
 
-function normalizeTrackSnapshot(nodes?: TrackNode[] | null): TrackNode[] | undefined {
-  if (!Array.isArray(nodes) || nodes.length === 0) return undefined;
+function normalizeTrackSnapshot(
+  nodes?: TrackNode[] | null,
+  trackInitialized?: boolean
+): TrackNode[] | undefined {
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    return trackInitialized ? [] : undefined;
+  }
   return [...nodes].sort((a, b) => a.trackOrder - b.trackOrder);
 }
 
 export interface ScopedStoreOverrides {
   nodes: () => { nodes: TrackNode[]; historical: boolean };
+  rules?: () => TimingRules;
   isScopeLive?: () => boolean;
   laps?: () => LapRecord[];
   crossings?: () => GateCrossingEvent[];
@@ -231,7 +237,9 @@ function normalizeRaceState(raw?: RaceTournamentState | null): RaceTournamentSta
     ...raw,
     tags: Array.isArray(raw.tags) ? raw.tags.filter((t) => typeof t === "string" && t.trim() !== "") : [],
     templateId: raw.templateId ?? "",
-    trackSnapshot: normalizeTrackSnapshot(raw.trackSnapshot),
+    trackInitialized: raw.trackInitialized,
+    trackSnapshot: normalizeTrackSnapshot(raw.trackSnapshot, raw.trackInitialized),
+    rules: raw.rules ? { ...DEFAULT_RULES, ...raw.rules } : undefined,
     roster: normalizeRosterList(raw.roster),
     stages: Array.isArray(raw.stages)
       ? raw.stages.map((st) => ({
@@ -294,7 +302,9 @@ function normalizePracticeSession(raw: PracticeSession): PracticeSession {
     ...raw,
     tags: Array.isArray(raw.tags) ? raw.tags.filter((t) => typeof t === "string" && t.trim() !== "") : [],
     pilots: Array.isArray(raw.pilots) ? raw.pilots : [],
-    trackSnapshot: normalizeTrackSnapshot(raw.trackSnapshot),
+    trackInitialized: raw.trackInitialized,
+    trackSnapshot: normalizeTrackSnapshot(raw.trackSnapshot, raw.trackInitialized),
+    rules: raw.rules ? { ...DEFAULT_RULES, ...raw.rules } : undefined,
     laps: Array.isArray(raw.laps)
       ? raw.laps.map((l) => (Array.isArray(l.sectors) ? l : { ...l, sectors: [] }))
       : [],
@@ -579,23 +589,81 @@ export class AppStore {
     return !sess || sess.active;
   }
 
-  /** Resolves the ordered track gates for `sess`: frozen `trackSnapshot` when stopped, or live `this.nodes` when active. */
+  private enrichTrackNodesWithLiveTimers(nodes: TrackNode[]): TrackNode[] {
+    const detected = this.detectedTimers;
+    if (detected.length === 0) {
+      return [...nodes].sort((a, b) => a.trackOrder - b.trackOrder);
+    }
+    const usb = !this._simulatorRunning && this._usbTimer?.fingerprint ? this._usbTimer : null;
+    return [...nodes]
+      .sort((a, b) => a.trackOrder - b.trackOrder)
+      .map((n) => {
+        const tid = n.assignedTimerId ?? 0;
+        if (tid <= 0) {
+          return { ...n, online: false };
+        }
+        const d = detected.find((t) => t.timerId === tid);
+        if (!d) {
+          return { ...n, online: false };
+        }
+        let noiseFloor = d.noiseFloorDbm;
+        if (
+          usb &&
+          d.fingerprint &&
+          d.fingerprint.toUpperCase() === usb.fingerprint!.toUpperCase() &&
+          d.online
+        ) {
+          noiseFloor = usb.noiseFloorDbm;
+        }
+        return {
+          ...n,
+          timerLabel: d.timerLabel?.trim() || n.timerLabel,
+          firmwareVersion: d.firmwareVersion || n.firmwareVersion,
+          color: d.color?.trim() || n.color,
+          batteryMv: d.batteryMv,
+          batteryPct: d.batteryPct,
+          noiseFloorDbm: noiseFloor,
+          lastRssi: d.lastRssi ?? n.lastRssi,
+          online: d.online,
+        };
+      });
+  }
+
+  /** Resolves the ordered track gates for `sess`: always `sess`'s own track when initialized/present. */
   public practiceSessionNodes(sess?: PracticeSession | null): { nodes: TrackNode[]; historical: boolean } {
-    if (sess && !sess.active && Array.isArray(sess.trackSnapshot) && sess.trackSnapshot.length > 0) {
-      return { nodes: sess.trackSnapshot, historical: true };
+    if (sess && (sess.trackInitialized || (Array.isArray(sess.trackSnapshot) && sess.trackSnapshot.length > 0))) {
+      const base = sess.trackSnapshot ?? [];
+      if (sess.active) {
+        return { nodes: this.enrichTrackNodesWithLiveTimers(base), historical: false };
+      }
+      return { nodes: base, historical: true };
     }
     return { nodes: this.nodes, historical: false };
   }
 
-  /** Resolves the ordered track gates for `race`: frozen `trackSnapshot` when completed/scrapped, or live `this.nodes` while open. */
+  /** Resolves the timing rules for `sess`. */
+  public practiceSessionRules(sess?: PracticeSession | null): TimingRules {
+    return sess?.rules ?? this._rules;
+  }
+
+  /** Resolves the ordered track gates for `race`: always `race`'s own track when initialized/present. */
   public raceNodes(race?: RaceTournamentState | null): { nodes: TrackNode[]; historical: boolean } {
     const isClosed = Boolean(
       race && (race.lifecycle === "completed" || race.lifecycle === "scrapped" || race.isComplete)
     );
-    if (race && isClosed && Array.isArray(race.trackSnapshot) && race.trackSnapshot.length > 0) {
-      return { nodes: race.trackSnapshot, historical: true };
+    if (race && (race.trackInitialized || (Array.isArray(race.trackSnapshot) && race.trackSnapshot.length > 0))) {
+      const base = race.trackSnapshot ?? [];
+      if (isClosed) {
+        return { nodes: base, historical: true };
+      }
+      return { nodes: this.enrichTrackNodesWithLiveTimers(base), historical: false };
     }
-    return { nodes: this.nodes, historical: false };
+    return { nodes: this.nodes, historical: isClosed };
+  }
+
+  /** Resolves the timing rules for `race`. */
+  public raceRules(race?: RaceTournamentState | null): TimingRules {
+    return race?.rules ?? this._rules;
   }
 
   /** Resolves the active Analytics scope (`PracticeSession` or `RaceTournamentState`) within the requested kind. */
@@ -1051,6 +1119,9 @@ export class AppStore {
         value: base.togglePracticeLap.bind(base),
       },
     };
+    if (overrides.rules) {
+      props.rules = { get: overrides.rules, enumerable: true };
+    }
     if (overrides.isScopeLive) {
       props.isScopeLive = { get: overrides.isScopeLive, enumerable: true };
     }
@@ -1087,10 +1158,36 @@ export class AppStore {
     this.emit("selection");
   }
 
-  /** Scoped store view for `#/live/session` that resolves stopped sessions against their frozen `trackSnapshot`. */
+  /** Scoped store view for Practice workspace views (`Overview`, `Laps`, `Trends`, `Signals`). */
   public forPracticeWorkspace(): AppStore {
     return this.createScopedView({
       nodes: () => this.practiceSessionNodes(this.selectedPracticeSession),
+      rules: () => this.practiceSessionRules(this.selectedPracticeSession),
+    });
+  }
+
+  /** Scoped store view for editing a Practice session's `Track` & `TimingRules` (live timer badges even while paused/stopped). */
+  public forPracticeTrackEditor(getSession: () => PracticeSession | null | undefined): AppStore {
+    return this.createScopedView({
+      nodes: () => {
+        const sess = getSession();
+        if (sess && (sess.trackInitialized || (Array.isArray(sess.trackSnapshot) && sess.trackSnapshot.length > 0))) {
+          return {
+            nodes: this.enrichTrackNodesWithLiveTimers(sess.trackSnapshot ?? []),
+            historical: false,
+          };
+        }
+        return { nodes: this.nodes, historical: false };
+      },
+      rules: () => this.practiceSessionRules(getSession()),
+    });
+  }
+
+  /** Scoped store view for a Race workspace (`Track`, `Signals`, `HeatLapEditorModal`). */
+  public forRaceWorkspace(getRace: () => RaceTournamentState | null | undefined): AppStore {
+    return this.createScopedView({
+      nodes: () => this.raceNodes(getRace()),
+      rules: () => this.raceRules(getRace()),
     });
   }
 

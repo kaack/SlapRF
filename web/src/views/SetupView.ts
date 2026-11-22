@@ -16,7 +16,6 @@ import {
   PersistenceSettings,
 } from "../widgets/DataSourceCard";
 import { LapRFEmulatorCard } from "../widgets/LapRFEmulatorCard";
-import { TimingRulesEditor } from "../widgets/TimingRulesEditor";
 
 /** Settings page: label/description on the left, controls on the right. */
 export class SetupView extends Component {
@@ -42,14 +41,6 @@ export class SetupView extends Component {
             <p>Import chapter races, pull ZippyQ rounds, and push official heat times &amp; podium results directly to MultiGP.</p>
           </div>
           <div class="settings-cards" data-slot="multigp"></div>
-        </section>
-
-        <section class="settings-section" data-section-anchor="timing-rules">
-          <div class="settings-intro">
-            <h2>Timing rules</h2>
-            <p>Filters out false passes and stray signals. Set rules for all timers, or customize a single timer.</p>
-          </div>
-          <div class="card card-flush" data-slot="rules"></div>
         </section>
 
         <section class="settings-section" data-section-anchor="announcer">
@@ -87,7 +78,6 @@ export class SetupView extends Component {
 
     this.adopt(new DataSourceCard(this.slot("source"), store, api));
     this.adopt(new MultiGPSettingsCard(this.slot("multigp"), store, api));
-    this.adopt(new TimingRulesEditor(this.slot("rules"), store, api));
     this.adopt(new AnnouncerSettings(this.slot("announcer"), announcer));
     this.adopt(new LapRFEmulatorCard(this.slot("laprf-emulator"), store));
     this.adopt(new AuthenticationSettingsCard(this.slot("authentication")));

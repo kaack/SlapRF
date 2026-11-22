@@ -139,7 +139,7 @@ func TestAPI_PracticeLiveSimulatorLapsCrossingsSummariesAndReset(t *testing.T) {
 
 func TestAPI_WasmRealtimeStreamEnvelopesAndTrackWalker(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/track")
+	h.BootClean("#/practice/open-practice/track")
 	h.ConnectSimHubH1()
 
 	// Exercise Track Walker mode via PATCH /v1/sim {"trackWalker": true}.

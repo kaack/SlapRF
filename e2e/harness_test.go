@@ -1173,11 +1173,11 @@ func (h *Harness) APIStatus() api.StatusResponse {
 	return st
 }
 
-// APIRules fetches `TimingRules` (`GET /v1/timing/rules`) directly from the live timing engine.
+// APIRules fetches `TimingRules` (`GET /v1/practice/sessions/current/track/rules`) from the active practice session.
 func (h *Harness) APIRules() domain.TimingRules {
 	h.T.Helper()
 	var rules domain.TimingRules
-	h.APIGet("/v1/timing/rules", &rules)
+	h.APIGet("/v1/practice/sessions/current/track/rules", &rules)
 	return rules
 }
 

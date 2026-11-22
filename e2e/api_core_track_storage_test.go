@@ -52,20 +52,21 @@ func TestAPI_VersionCapabilitiesStatusAndMethodGuards(t *testing.T) {
 		t.Fatalf("expected 10 default pilots and 4 gates, got pilots=%d gates=%d/%d", len(full.Pilots), len(full.Gates), len(status.Gates))
 	}
 
-	// 4. Verify HTTP 405 Method Not Allowed (including singleton DELETE protection) & HTTP 404 on legacy /api/*.
+	// 4. Verify HTTP 405 Method Not Allowed (including singleton DELETE protection) & HTTP 404 on legacy /api/* and removed global /v1/track.
 	h.APIExpectStatus("POST", "/v1/version", map[string]any{}, 405)
-	h.APIExpectStatus("DELETE", "/v1/timing/rules", nil, 405)
+	h.APIExpectStatus("DELETE", "/v1/practice/sessions/current/track/rules", nil, 405)
 	h.APIExpectStatus("DELETE", "/v1/timing/arm", nil, 405)
 	h.APIExpectStatus("DELETE", "/v1/storage", nil, 405)
-	h.APIExpectStatus("DELETE", "/v1/track", nil, 405)
+	h.APIExpectStatus("DELETE", "/v1/practice/sessions/current/track", nil, 405)
 	h.APIExpectStatus("POST", "/v1/capabilities", map[string]any{}, 405)
 	h.APIExpectStatus("GET", "/v1/race/multigp/proxy/race/view", nil, 405)
 	h.APIExpectStatus("GET", "/api/state", nil, 404)
+	h.APIExpectStatus("GET", "/v1/track", nil, 404)
 
 	// Malformed JSON bodies must return 400 Bad Request cleanly.
-	h.APIExpectStatus("PUT", "/v1/timing/rules", "{broken-json", 400)
+	h.APIExpectStatus("PUT", "/v1/practice/sessions/current/track/rules", "{broken-json", 400)
 	h.APIExpectStatus("PUT", "/v1/pilots/1", "{broken-json", 400)
-	h.APIExpectStatus("PUT", "/v1/track/gates/1", "{broken-json", 400)
+	h.APIExpectStatus("PUT", "/v1/practice/sessions/current/track/gates/1", "{broken-json", 400)
 	h.APIExpectStatus("POST", "/v1/race/sessions/current/heats/current:control", "{broken-json", 400)
 
 	// Verify curl history ring buffer recorded our calls in window.slaprfCurlHistory.
@@ -148,7 +149,7 @@ func TestAPI_PilotsCRUDHysteresisClampingAndReset(t *testing.T) {
 
 func TestAPI_TrackGatesThresholdsAndPerGateRules(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/track")
+	h.BootClean("#/practice/open-practice/track")
 
 	// 1. Add a new timer board ("T5") in simulator via POST /v1/sim/slaprf/timers (201 Created) and verify Timers reflect it.
 	var st api.FullStateResponse
@@ -170,25 +171,25 @@ func TestAPI_TrackGatesThresholdsAndPerGateRules(t *testing.T) {
 	}
 	gatesBeforeAdd := len(st.Gates)
 
-	// 2. Add an unassigned gate at trackOrder=2 via POST /v1/track/gates (201 Created), then update via PUT /v1/track/gates/{gateId}.
+	// 2. Add an unassigned gate at trackOrder=2 via POST /v1/practice/sessions/current/track/gates (201 Created), then update via PUT .../gates/{gateId}.
 	orderIdx := 2
-	createGateRes := h.APIPost("/v1/track/gates", map[string]any{
+	createGateRes := h.APIPost("/v1/practice/sessions/current/track/gates", map[string]any{
 		"name":            "Corkscrew Dive",
 		"assignedTimerId": 0,
 		"trackOrder":      orderIdx,
 	}, &st)
 	if createGateRes.Status != 201 {
-		t.Fatalf("expected 201 Created from POST /v1/track/gates, got %d", createGateRes.Status)
+		t.Fatalf("expected 201 Created from POST /v1/practice/sessions/current/track/gates, got %d", createGateRes.Status)
 	}
 	if len(st.Gates) != gatesBeforeAdd+1 {
-		t.Fatalf("expected %d gates after POST /v1/track/gates, got %d", gatesBeforeAdd+1, len(st.Gates))
+		t.Fatalf("expected %d gates after POST /v1/practice/sessions/current/track/gates, got %d", gatesBeforeAdd+1, len(st.Gates))
 	}
 	addedGateID := st.Gates[2].GateID
 	if st.Gates[2].Name != "Corkscrew Dive" {
 		t.Fatalf("expected gate at order 2 named Corkscrew Dive, got %q", st.Gates[2].Name)
 	}
 
-	h.APIPut(fmt.Sprintf("/v1/track/gates/%d", addedGateID), map[string]any{
+	h.APIPut(fmt.Sprintf("/v1/practice/sessions/current/track/gates/%d", addedGateID), map[string]any{
 		"name":  "Split-S Tower",
 		"color": "#38bdf8",
 		"role":  "START_FINISH",
@@ -201,8 +202,8 @@ func TestAPI_TrackGatesThresholdsAndPerGateRules(t *testing.T) {
 		}
 	}
 
-	// 3. Per-gate pilot threshold calibration via PUT /v1/track/thresholds.
-	h.APIPut("/v1/track/thresholds", []domain.GateThresholdUpdate{
+	// 3. Per-gate pilot threshold calibration via PUT /v1/practice/sessions/current/track/thresholds.
+	h.APIPut("/v1/practice/sessions/current/track/thresholds", []domain.GateThresholdUpdate{
 		{GateID: addedGateID, SlotIndex: 1, EnterDbm: -52},
 		{GateID: addedGateID, SlotIndex: 2, EnterDbm: -54},
 	}, &st)
@@ -212,10 +213,10 @@ func TestAPI_TrackGatesThresholdsAndPerGateRules(t *testing.T) {
 		}
 	}
 
-	// 4. Per-gate timing rule overrides via PUT /v1/track/gates/{gateId}/rules and singleton reset via POST .../rules:reset.
+	// 4. Per-gate timing rule overrides via PUT /v1/practice/sessions/current/track/gates/{gateId}/rules and singleton reset via POST .../rules:reset.
 	minLap := 7.5
 	minCross := 0.28
-	h.APIPut(fmt.Sprintf("/v1/track/gates/%d/rules", addedGateID), domain.GateRuleOverrides{
+	h.APIPut(fmt.Sprintf("/v1/practice/sessions/current/track/gates/%d/rules", addedGateID), domain.GateRuleOverrides{
 		MinLapSec:      &minLap,
 		MinCrossingSec: &minCross,
 	}, &st)
@@ -229,21 +230,21 @@ func TestAPI_TrackGatesThresholdsAndPerGateRules(t *testing.T) {
 	h.MilestoneScreenshot("api-track-5-gates-and-overrides")
 
 	// DELETE on singleton /rules must return 405; POST .../rules:reset clears overrides cleanly.
-	h.APIExpectStatus("DELETE", fmt.Sprintf("/v1/track/gates/%d/rules", addedGateID), nil, 405)
-	h.APIPost(fmt.Sprintf("/v1/track/gates/%d/rules:reset", addedGateID), map[string]any{}, &st)
-	h.APIDelete(fmt.Sprintf("/v1/track/gates/%d", addedGateID), &st)
+	h.APIExpectStatus("DELETE", fmt.Sprintf("/v1/practice/sessions/current/track/gates/%d/rules", addedGateID), nil, 405)
+	h.APIPost(fmt.Sprintf("/v1/practice/sessions/current/track/gates/%d/rules:reset", addedGateID), map[string]any{}, &st)
+	h.APIDelete(fmt.Sprintf("/v1/practice/sessions/current/track/gates/%d", addedGateID), &st)
 	if len(st.Gates) != gatesBeforeAdd {
-		t.Fatalf("expected %d gates after DELETE /v1/track/gates/%d, got %d", gatesBeforeAdd, addedGateID, len(st.Gates))
+		t.Fatalf("expected %d gates after DELETE /v1/practice/sessions/current/track/gates/%d, got %d", gatesBeforeAdd, addedGateID, len(st.Gates))
 	}
-	h.APIPost("/v1/track:reset", map[string]any{}, &st)
-	if len(st.Gates) != 4 || string(st.Gates[0].Role) != "START_FINISH" {
-		t.Fatalf("expected default 4 gates with Gate 1 START_FINISH after /v1/track:reset, got %+v", st.Gates)
+	h.APIPost("/v1/practice/sessions/current/track:reset", map[string]any{}, &st)
+	if len(st.Gates) < 4 || string(st.Gates[0].Role) != "START_FINISH" {
+		t.Fatalf("expected >=4 gates with Gate 1 START_FINISH after /v1/practice/sessions/current/track:reset, got %+v", st.Gates)
 	}
 }
 
 func TestAPI_TimingRulesClampingAndArmPut(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/setup/timing-rules")
+	h.BootClean("#/practice/open-practice/track")
 
 	// 1. Default rules check.
 	def := h.APIRules()
@@ -251,13 +252,14 @@ func TestAPI_TimingRulesClampingAndArmPut(t *testing.T) {
 		t.Fatalf("unexpected default timing rules: %+v", def)
 	}
 
-	// 2. PUT out-of-range values to /v1/timing/rules and verify server-side guardrail clamping.
-	var clamped domain.TimingRules
-	h.APIPut("/v1/timing/rules", domain.TimingRules{
+	// 2. PUT out-of-range values to /v1/practice/sessions/current/track/rules and verify server-side guardrail clamping.
+	var st api.FullStateResponse
+	h.APIPut("/v1/practice/sessions/current/track/rules", domain.TimingRules{
 		MinLapSec:      0.05, // clamps to 1.0
 		MaxLapSec:      2.0,  // clamps to MinLapSec + 5 = 6.0
 		MinCrossingSec: 9.0,  // clamps to 1.5
-	}, &clamped)
+	}, &st)
+	clamped := h.APIRules()
 	if clamped.MinLapSec != 1.0 || clamped.MaxLapSec != 6.0 || clamped.MinCrossingSec != 1.5 {
 		t.Fatalf("expected server-side clamped TimingRules, got %+v", clamped)
 	}

@@ -1,4 +1,6 @@
-import { pushAppHash, Router } from "../core/router";
+import { parseHashState, pushAppHash, Router } from "../core/router";
+import { PracticeView } from "../views/PracticeView";
+import { RacesView } from "../views/RacesView";
 import { AppShell } from "../layout/AppShell";
 import { Sidebar } from "../layout/Sidebar";
 import { Announcer } from "../services/announcer";
@@ -631,38 +633,28 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LapRFEmulatorView,
         );
         expect(router.route).toBe("races");
 
-        // 1-finger horizontal swipe left on a primary tab (#/pilots -> #/track) previews the incoming neighbor
+        // 1-finger horizontal swipe left on a primary tab (#/pilots -> #/network) previews the incoming neighbor
         // during pointermove and commits navigation on pointerup
         pushAppHash("#/pilots");
         expect(router.route).toBe("pilots");
+        store.hydrate(makeFullState({ simulatorRunning: false, timingHardwareMode: "rotorhazard_usb" }));
         outletEl.dispatchEvent(
           new PointerEvent("pointerdown", { bubbles: true, pointerId: 41, pointerType: "touch", clientX: 300, clientY: 200 })
         );
         window.dispatchEvent(
           new PointerEvent("pointermove", { bubbles: true, pointerId: 41, pointerType: "touch", clientX: 190, clientY: 202 })
         );
-        const trackViewDuringDrag = outletEl.querySelector<HTMLElement>(".view-track");
-        expect(trackViewDuringDrag).not.toBeNull();
-        expect(trackViewDuringDrag!.classList.contains("is-swipe-peek")).toBe(true);
-        expect(trackViewDuringDrag!.style.transform).toContain("translate3d(");
+        const netViewDuringDrag = outletEl.querySelector<HTMLElement>(".view-network");
+        expect(netViewDuringDrag).not.toBeNull();
+        expect(netViewDuringDrag!.classList.contains("is-swipe-peek")).toBe(true);
+        expect(netViewDuringDrag!.style.transform).toContain("translate3d(");
 
         window.dispatchEvent(
           new PointerEvent("pointerup", { bubbles: true, pointerId: 41, pointerType: "touch", clientX: 180, clientY: 202 })
         );
-        expect(router.route).toBe("track");
-
-        // Swiping left from Track (#/track) continues into More items in menu order (Network -> Debug -> Settings -> About when Flasher is hidden and Simulator is off)
-        store.hydrate(makeFullState({ simulatorRunning: false, timingHardwareMode: "rotorhazard_usb" }));
-        outletEl.dispatchEvent(
-          new PointerEvent("pointerdown", { bubbles: true, pointerId: 43, pointerType: "touch", clientX: 300, clientY: 200 })
-        );
-        window.dispatchEvent(
-          new PointerEvent("pointermove", { bubbles: true, pointerId: 43, pointerType: "touch", clientX: 180, clientY: 202 })
-        );
-        window.dispatchEvent(
-          new PointerEvent("pointerup", { bubbles: true, pointerId: 43, pointerType: "touch", clientX: 170, clientY: 202 })
-        );
         expect(router.route).toBe("network");
+
+        // Swiping left from Network (#/network) continues into More items in menu order (Debug -> Settings -> About when Flasher is hidden and Simulator is off)
 
         outletEl.dispatchEvent(
           new PointerEvent("pointerdown", { bubbles: true, pointerId: 44, pointerType: "touch", clientX: 300, clientY: 200 })
@@ -744,6 +736,144 @@ describe("views/SimView, NetworkView, SetupView, FlasherView, LapRFEmulatorView,
       shell.destroy();
       router.clearListeners();
       announcer.update({ enabled: false });
+    }
+  });
+
+  it("embeds independent Track & Timing Rules tabs inside PracticeView and RacesView (read-only when race is completed)", async () => {
+    expect(parseHashState("#/track")?.route).toBe("practice");
+    expect(parseHashState("#/races/finals-shootout/track")).toEqual({
+      route: "races",
+      races: { tab: "track", raceKey: "finals-shootout" },
+    });
+    expect(parseHashState("#/practice/morning-warmup/track")?.practice).toEqual({
+      tab: "session",
+      sessionId: "morning-warmup",
+      pane: "track",
+    });
+
+    const openRace = makeRaceState({
+      raceId: "race-open",
+      lifecycle: "draft",
+      isComplete: false,
+      config: { ...makeRaceState().config, eventName: "Sunday Spec" },
+      trackInitialized: true,
+      trackSnapshot: [makeGate(1, { assignedTimerId: 2, timerLabel: "T1", role: "START_FINISH", trackOrder: 0 })],
+      rules: { minLapSec: 6.5, maxLapSec: 110, minCrossingSec: 0.12, beepOnCross: false },
+    });
+    const closedRace = makeRaceState({
+      raceId: "race-done",
+      lifecycle: "completed",
+      isComplete: true,
+      config: { ...makeRaceState().config, eventName: "Completed Mains" },
+      trackInitialized: true,
+      trackSnapshot: [
+        makeGate(1, { assignedTimerId: 2, timerLabel: "T1", role: "START_FINISH", trackOrder: 0 }),
+        makeGate(2, { assignedTimerId: 3, timerLabel: "T2", role: "SECTOR_GATE", trackOrder: 1 }),
+      ],
+      rules: { minLapSec: 8.0, maxLapSec: 120, minCrossingSec: 0.12, beepOnCross: true },
+    });
+
+    const store = makeStore({
+      timers: [
+        makeDetectedTimer(2, { timerLabel: "T1", online: true }),
+        makeDetectedTimer(3, { timerLabel: "T2", online: true }),
+        makeDetectedTimer(4, { timerLabel: "T3", online: true }),
+      ],
+      raceState: openRace,
+      eventState: {
+        initialized: true,
+        activeRaceId: "race-open",
+        races: [openRace, closedRace],
+      },
+      practiceState: {
+        initialized: true,
+        activeSessionId: "sess-1",
+        selectedSessionId: "sess-1",
+        sessions: [
+          {
+            sessionId: "sess-1",
+            name: "Warmup Practice",
+            active: true,
+            createdAt: "2026-11-21T00:00:00Z",
+            pilots: [],
+            trackInitialized: true,
+            trackSnapshot: [
+              makeGate(1, { assignedTimerId: 2, timerLabel: "T1", role: "START_FINISH", trackOrder: 0 }),
+              makeGate(2, { assignedTimerId: 3, timerLabel: "T2", role: "SECTOR_GATE", trackOrder: 1 }),
+              makeGate(3, { assignedTimerId: 4, timerLabel: "T3", role: "SECTOR_GATE", trackOrder: 2 }),
+            ],
+            rules: { minLapSec: 4.5, maxLapSec: 90, minCrossingSec: 0.12, beepOnCross: false },
+            laps: [],
+            crossings: [],
+            filtered: [],
+            summaries: [],
+          },
+        ],
+      },
+    });
+
+    const { api } = makeMockApiClient(store);
+    const router = new Router();
+    const pracHost = mountHtml("<div></div>");
+    const raceHost = mountHtml("<div></div>");
+    let pracView: PracticeView | null = null;
+    let raceView: RacesView | null = null;
+    try {
+      pushAppHash("#/practice/warmup-practice/track");
+      pracView = new PracticeView(pracHost, store, api);
+      await flushMicrotasks();
+
+      const pracTrackBtn = pracHost.querySelector<HTMLButtonElement>('[data-practice-mobile-tab="track"]');
+      expect(pracTrackBtn).not.toBeNull();
+      expect(pracTrackBtn!.classList.contains("is-active")).toBe(true);
+      expect(pracHost.querySelectorAll('[data-slot="mobile-track"] .gate-line-item[data-gate]').length).toBe(3);
+      const pracMinLapInput = pracHost.querySelector<HTMLInputElement>(
+        '[data-slot="mobile-track"] input[name="minLapSec"]'
+      );
+      expect(pracMinLapInput?.value).toBe("4.5");
+
+      pushAppHash("#/races/sunday-spec/track");
+      raceView = new RacesView(raceHost, store, api);
+      await flushMicrotasks();
+
+      expect(raceHost.querySelector('[data-race-tab="track"]')?.classList.contains("is-active")).toBe(true);
+      expect(raceHost.querySelectorAll("[data-race-track-host] .gate-line-item[data-gate]").length).toBe(1);
+      expect(
+        raceHost.querySelector<HTMLInputElement>('[data-race-track-host] input[name="minLapSec"]')?.value
+      ).toBe("6.5");
+      expect(
+        raceHost.querySelector("[data-race-track-host] .gate-track-stage")?.classList.contains("is-readonly-track")
+      ).toBe(false);
+
+      // Switch to completed race -> 2 gates & read-only track/rules
+      store.hydrate(
+        makeFullState({
+          timers: store.detectedTimers,
+          raceState: closedRace,
+          eventState: {
+            initialized: true,
+            activeRaceId: "race-done",
+            races: [openRace, closedRace],
+          },
+          practiceState: store.practiceState,
+        })
+      );
+      pushAppHash("#/races/completed-mains/track");
+      await flushMicrotasks();
+      expect(raceHost.querySelectorAll("[data-race-track-host] .gate-line-item[data-gate]").length).toBe(2);
+      expect(
+        raceHost.querySelector("[data-race-track-host] .gate-track-stage")?.classList.contains("is-readonly-track")
+      ).toBe(true);
+      expect(
+        raceHost.querySelector<HTMLFieldSetElement>("[data-race-track-host] form.rules fieldset")?.disabled
+      ).toBe(true);
+    } finally {
+      pracView?.destroy();
+      raceView?.destroy();
+      router.clearListeners();
+      pracHost.remove();
+      raceHost.remove();
+      pushAppHash("#/practice");
     }
   });
 });

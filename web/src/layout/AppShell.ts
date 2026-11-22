@@ -39,7 +39,6 @@ import { FlasherView } from "../views/FlasherView";
 import { NetworkView } from "../views/NetworkView";
 import { SetupView } from "../views/SetupView";
 import { SimView } from "../views/SimView";
-import { TrackView } from "../views/TrackView";
 import { AboutView, preloadAboutVersion } from "../views/AboutView";
 import { preloadSettingsStatuses } from "../widgets/DataSourceCard";
 import { Sidebar } from "./Sidebar";
@@ -911,8 +910,6 @@ export class AppShell extends Component {
         return new PilotView(host, this.store);
       case "pilots":
         return new PilotsView(host, this.store, this.api);
-      case "track":
-        return new TrackView(host, this.store, this.api);
       case "laprf-emulator":
         return new LapRFEmulatorView(host, this.store);
       case "sim":

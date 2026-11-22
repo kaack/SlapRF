@@ -21085,6 +21085,7 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     gap: 12px;
   }
 
+  .races-page.is-track-page > .races-page-stack,
   .races-page.is-review-page > .races-page-stack,
   .races-page.is-analytics-page > .races-page-stack {
     overflow-y: auto;
@@ -21908,6 +21909,8 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
 
   .practice-workspace-page[data-mobile-practice-view="pilots"] [data-practice-mobile-pane]:not([data-practice-mobile-pane="pilots"]),
   .practice-workspace-page[data-mobile-practice-view="pilots"] .practice-panel-stack,
+  .practice-workspace-page[data-mobile-practice-view="track"] [data-practice-mobile-pane]:not([data-practice-mobile-pane="track"]),
+  .practice-workspace-page[data-mobile-practice-view="track"] .practice-panel-stack,
   .practice-workspace-page[data-mobile-practice-view="overview"] [data-practice-mobile-pane]:not([data-practice-mobile-pane="overview"]),
   .practice-workspace-page[data-mobile-practice-view="laps"] [data-practice-mobile-pane]:not([data-practice-mobile-pane="laps"]),
   .practice-workspace-page[data-mobile-practice-view="laps"] .practice-panel-stack,
@@ -22005,6 +22008,7 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     padding: 0 !important;
   }
 
+  .practice-workspace-page[data-mobile-practice-view="track"] .practice-mobile-track-wrap,
   .practice-workspace-page[data-mobile-practice-view="analytics"] .practice-mobile-analytics-wrap {
     flex: 1 1 0;
     min-height: 0;
@@ -22017,6 +22021,8 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     padding-bottom: 16px;
   }
 
+  .practice-mobile-track-wrap > .rc-track-embedded,
+  .races-page.is-track-page > .races-page-stack > .rc-track-embedded,
   .practice-mobile-analytics-wrap > .rc-analytics-embedded,
   .races-page.is-analytics-page > .races-page-stack > .rc-analytics-embedded {
     flex: 0 0 auto;
@@ -24605,6 +24611,21 @@ html[data-theme="light"] .mre-sheet-check-toggle input[type="checkbox"]:checked:
     display: none !important;
   }
 
+  /* Tab: Track */
+  .practice-workspace-page[data-mobile-practice-view="track"] [data-practice-mobile-pane]:not([data-practice-mobile-pane="track"]),
+  .practice-workspace-page[data-mobile-practice-view="track"] .practice-panel-stack {
+    display: none !important;
+  }
+
+  .practice-workspace-page[data-mobile-practice-view="track"] .practice-workspace-stack,
+  .races-page.is-track-page > .races-page-stack {
+    width: min(calc(100% - 36px), 1120px);
+    max-width: 1120px;
+    margin-left: auto;
+    margin-right: auto;
+    box-sizing: border-box;
+  }
+
   .practice-workspace-page[data-mobile-practice-view="pilots"] .practice-mobile-pilots-card {
     display: flex !important;
     flex-direction: column;
@@ -24650,6 +24671,7 @@ html[data-theme="light"] .mre-sheet-check-toggle input[type="checkbox"]:checked:
   /* Tab: Laps (single-pilot KPIs + Laps table) */
   .practice-workspace-page[data-mobile-practice-view="laps"] [data-slot="session-controls"],
   .practice-workspace-page[data-mobile-practice-view="laps"] [data-slot="mobile-pilots"],
+  .practice-workspace-page[data-mobile-practice-view="laps"] [data-slot="mobile-track"],
   .practice-workspace-page[data-mobile-practice-view="laps"] [data-slot="mobile-signals"],
   .practice-workspace-page[data-mobile-practice-view="laps"] [data-slot="mobile-analytics"],
   .practice-workspace-page[data-mobile-practice-view="laps"] .practice-standings-card,

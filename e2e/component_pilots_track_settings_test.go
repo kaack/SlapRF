@@ -107,7 +107,7 @@ func TestComponent_PilotSlotsEditorHardwareModeColumns(t *testing.T) {
 
 func TestComponent_TrackEditorMakeStartFlagCycle(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/track")
+	h.BootClean("#/practice/open-practice/track")
 
 	// Initially 4 gates on the course line; click [data-make-start] on the 2nd gate node.
 	items := h.Page.Locator(`.gate-line-item[data-gate]`)
@@ -143,7 +143,7 @@ func TestComponent_TrackEditorMakeStartFlagCycle(t *testing.T) {
 
 func TestComponent_TrackEditorDragGateOffToUnassignedAndBack(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/track")
+	h.BootClean("#/practice/open-practice/track")
 
 	items := h.Page.Locator(`.gate-line-item[data-gate]`)
 	h.WaitUntil("4 gate nodes on course line", 5*time.Second, func() (bool, error) {
@@ -224,7 +224,7 @@ func TestComponent_TrackEditorDragGateOffToUnassignedAndBack(t *testing.T) {
 func TestComponent_TimingRulesEditorGlobalEditInlineResetAndPerGateOverride(t *testing.T) {
 	h := NewHarness(t)
 	// SnapshotPracticePopulated includes FilteredDetection records so filter counters render nonzero!
-	h.BootWithSnapshot(SnapshotPracticePopulated, "#/setup/timing-rules", nil)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice/evening-lap-lab/track", nil)
 
 	minLapCount := h.Page.Locator(`[data-count="MIN_LAP"]`).First()
 	h.MustContainText(minLapCount, "2")
@@ -284,7 +284,7 @@ func TestComponent_TimingRulesEditorGlobalEditInlineResetAndPerGateOverride(t *t
 		return false, nil
 	})
 	if r := h.APIRules(); r.MinLapSec != 5.0 {
-		t.Fatalf("expected global /v1/timing/rules MinLapSec=5.0 after reset, got %v", r.MinLapSec)
+		t.Fatalf("expected scoped practice /track/rules MinLapSec=5.0 after reset, got %v", r.MinLapSec)
 	}
 	h.MilestoneScreenshot("timing-rules-gate2-override")
 }

@@ -730,6 +730,11 @@ export interface MultiGPRaceLink {
   lastSyncedAt?: string;
 }
 
+export interface TrackScope {
+  kind: "practice" | "race";
+  id: string;
+}
+
 export interface RaceTournamentState {
   raceId?: string;
   mgpLink?: MultiGPRaceLink;
@@ -742,7 +747,9 @@ export interface RaceTournamentState {
   updatedAt?: string;
   mode: OperatingMode;
   config: RaceSetupConfig;
+  trackInitialized?: boolean;
   trackSnapshot?: TrackNode[];
+  rules?: TimingRules;
   roster?: EventPilot[];
   stages?: RaceStage[];
   stageConnections?: StageConnection[];
@@ -796,7 +803,9 @@ export interface PracticeSession {
   createdAt: string;
   updatedAt?: string;
   pilots: PracticeSessionPilot[];
+  trackInitialized?: boolean;
   trackSnapshot?: TrackNode[];
+  rules?: TimingRules;
   laps: LapRecord[];
   crossings: GateCrossingEvent[];
   filtered: FilteredDetection[];
