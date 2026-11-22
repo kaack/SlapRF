@@ -133,6 +133,65 @@ export class TimingRulesEditor extends Component {
       const form = this.el.querySelector<HTMLFormElement>("form.rules");
       if (form) void this.save(form);
     });
+    this.listen(el, "focusin", (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      if (!target.dataset.tuneInput && !target.classList.contains("scope-tune-input")) return;
+      if (this.mobileDrawerEl.contains(target)) {
+        this.mobileDrawerEl.classList.add("is-keyboard-open");
+      }
+      target.dataset.replaceOnNextInput = "1";
+      target.dataset.originalValue = target.value;
+      try {
+        target.select();
+      } catch {
+        // Ignore selection errors on number inputs
+      }
+    });
+    this.listen(el, "pointerup", (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      if (!target.dataset.tuneInput && !target.classList.contains("scope-tune-input")) return;
+      if (document.activeElement === target && target.dataset.replaceOnNextInput === "1") {
+        try {
+          target.select();
+        } catch {
+          // Ignore selection errors on number inputs
+        }
+      }
+    });
+    this.listen(el, "beforeinput", (e: InputEvent) => {
+      const target = e.target;
+      if (!(target instanceof HTMLInputElement)) return;
+      if (!target.dataset.tuneInput && !target.classList.contains("scope-tune-input")) return;
+      if (target.dataset.replaceOnNextInput === "1") {
+        delete target.dataset.replaceOnNextInput;
+        if (e.inputType === "insertText" && e.data) {
+          target.value = "";
+        } else if (e.inputType && e.inputType.startsWith("deleteContent")) {
+          e.preventDefault();
+          target.value = "";
+        }
+      }
+    });
+    this.listen(el, "focusout", (e) => {
+      const target = e.target;
+      if (
+        target instanceof HTMLInputElement &&
+        (target.dataset.tuneInput || target.classList.contains("scope-tune-input"))
+      ) {
+        delete target.dataset.replaceOnNextInput;
+        if (target.value.trim() === "" && target.dataset.originalValue !== undefined) {
+          target.value = target.dataset.originalValue;
+        }
+      }
+      window.setTimeout(() => {
+        const active = document.activeElement;
+        if (!(active instanceof HTMLInputElement) || !this.mobileDrawerEl.contains(active)) {
+          this.mobileDrawerEl.classList.remove("is-keyboard-open");
+        }
+      }, 60);
+    });
     this.listen(el, "keydown", (e) => {
       const target = e.target;
       if (target instanceof HTMLElement) {
@@ -151,6 +210,15 @@ export class TimingRulesEditor extends Component {
       } else if (e.key === "Escape") {
         target.value = target.defaultValue;
         target.blur();
+      } else if (
+        target.dataset.replaceOnNextInput === "1" &&
+        /^[0-9.]$/.test(e.key) &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
+        delete target.dataset.replaceOnNextInput;
+        target.value = "";
       }
     });
     this.listen(el, "submit", (e) => {

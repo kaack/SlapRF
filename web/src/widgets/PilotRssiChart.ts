@@ -521,6 +521,61 @@ export class PilotRssiChart extends Component {
     this.listen(window as unknown as HTMLElement, "pointerup", endDrawerSwipe);
     this.listen(window as unknown as HTMLElement, "pointercancel", endDrawerSwipe);
 
+    this.listen(this.tuneDrawerEl, "focusin", (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLInputElement) || !target.dataset.tuneInput) return;
+      this.tuneDrawerEl.classList.add("is-keyboard-open");
+      target.dataset.replaceOnNextInput = "1";
+      target.dataset.originalValue = target.value;
+      try {
+        target.select();
+      } catch {
+        // Ignore selection errors on number inputs
+      }
+    });
+
+    this.listen(this.tuneDrawerEl, "pointerup", (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLInputElement) || !target.dataset.tuneInput) return;
+      if (document.activeElement === target && target.dataset.replaceOnNextInput === "1") {
+        try {
+          target.select();
+        } catch {
+          // Ignore selection errors on number inputs
+        }
+      }
+    });
+
+    this.listen(this.tuneDrawerEl, "beforeinput", (e: InputEvent) => {
+      const target = e.target;
+      if (!(target instanceof HTMLInputElement) || !target.dataset.tuneInput) return;
+      if (target.dataset.replaceOnNextInput === "1") {
+        delete target.dataset.replaceOnNextInput;
+        if (e.inputType === "insertText" && e.data) {
+          target.value = "";
+        } else if (e.inputType && e.inputType.startsWith("deleteContent")) {
+          e.preventDefault();
+          target.value = "";
+        }
+      }
+    });
+
+    this.listen(this.tuneDrawerEl, "focusout", (e) => {
+      const target = e.target;
+      if (target instanceof HTMLInputElement && target.dataset.tuneInput) {
+        delete target.dataset.replaceOnNextInput;
+        if (target.value.trim() === "" && target.dataset.originalValue !== undefined) {
+          target.value = target.dataset.originalValue;
+        }
+      }
+      window.setTimeout(() => {
+        const active = document.activeElement;
+        if (!(active instanceof HTMLInputElement) || !this.tuneDrawerEl.contains(active)) {
+          this.tuneDrawerEl.classList.remove("is-keyboard-open");
+        }
+      }, 60);
+    });
+
     this.listen(this.tuneDrawerEl, "change", (e) => {
       const target = e.target;
       if (!(target instanceof HTMLInputElement)) return;
@@ -540,6 +595,15 @@ export class PilotRssiChart extends Component {
       } else if (e.key === "Escape") {
         target.value = target.defaultValue;
         target.blur();
+      } else if (
+        target.dataset.replaceOnNextInput === "1" &&
+        /^[0-9.]$/.test(e.key) &&
+        !e.ctrlKey &&
+        !e.metaKey &&
+        !e.altKey
+      ) {
+        delete target.dataset.replaceOnNextInput;
+        target.value = "";
       }
     });
 
@@ -602,7 +666,10 @@ export class PilotRssiChart extends Component {
       }
       if (btn.dataset.focus) {
         this.focus = btn.dataset.focus === "all" ? null : Number(btn.dataset.focus);
-        if (this.tuneDrawerOpen) {
+        if (this.focus === null) {
+          this.tuneDrawerOpen = false;
+          this.tuningGateId = null;
+        } else if (this.tuneDrawerOpen) {
           this.tuningGateId = this.focus;
         } else {
           this.tuningGateId = null;
@@ -2550,13 +2617,6 @@ export class PilotRssiChart extends Component {
     let textHtml: string;
     let actions: string;
     if (this.focus === null) {
-      const anyCalibrated = this.store.nodes.some((p) =>
-        isLapRF
-          ? enterThresholdAt(this.store, p.gateId, pilot.slotIndex).calibrated
-          : enterThresholdAt(this.store, p.gateId, pilot.slotIndex).calibrated ||
-            exitThresholdAt(this.store, p.gateId, pilot.slotIndex).calibrated
-      );
-      const isTuneOpen = this.tuneDrawerOpen && this.tuningGateId === null;
       if (this.calibMessage) {
         const shortMsg = this.calibMessageShort || this.calibMessage;
         textHtml = `<span class="scope-calib-text-full">${esc(this.calibMessage)}</span><span class="scope-calib-text-short">${esc(shortMsg)}</span>`;
@@ -2569,16 +2629,7 @@ export class PilotRssiChart extends Component {
         const shortText = "Select a timer above to inspect or adjust thresholds.";
         textHtml = `<span class="scope-calib-text-full">${esc(fullText)}</span><span class="scope-calib-text-short">${esc(shortText)}</span>`;
       }
-      const calibButton = anyCalibrated
-        ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Clear calibrated thresholds at every timer and restore ${esc(pilot.callsign)}'s default thresholds">${icons.reset(16)}<span>Clear calibration</span></button>`
-        : canAutoCalib
-          ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Calibrate each timer's thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Calibrate all</span></button>`
-          : "";
-      const actionButtons = [
-        calibButton,
-        canTune ? `<button class="btn btn-sm btn-ghost scope-calib-tune-btn ${isTuneOpen ? "is-active" : ""}" type="button" data-tune-gate="all" aria-expanded="${isTuneOpen}" title="Fine-tune global detection rules for all timers">${icons.sliders(17)}<span>Fine-tune</span></button>` : "",
-      ].filter(Boolean).join("");
-      actions = actionButtons ? `<div class="scope-calib-actions">${actionButtons}</div>` : "";
+      actions = "";
     } else {
       const name = gateLabel(this.store, this.focus);
       const t = enterThresholdAt(this.store, this.focus, pilot.slotIndex);
@@ -2596,7 +2647,7 @@ export class PilotRssiChart extends Component {
         textHtml = `${esc(baseText)}<span class="scope-calib-drag-hint">${esc(dragHint)}</span>`;
       }
       const calibButton = isCal
-        ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Clear calibrated thresholds at ${esc(name)} and restore ${esc(pilot.callsign)}'s default thresholds">${icons.reset(16)}<span>Clear calibration</span></button>`
+        ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Clear calibrated thresholds at ${esc(name)} and restore ${esc(pilot.callsign)}'s default thresholds">${icons.targetOff(16)}<span>Clear calibration</span></button>`
         : canAutoCalib
           ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Calibrate ${esc(name)}'s thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Calibrate</span></button>`
           : "";
@@ -2671,27 +2722,13 @@ export class PilotRssiChart extends Component {
     const legendEl = this.slot("legend");
     if (structSig !== this.lastLegendStructSig || legendEl.childElementCount === 0) {
       this.lastLegendStructSig = structSig;
-      const isAllTuneOpen = this.tuneDrawerOpen && this.tuningGateId === null;
-      const allCalibColHtml = canTune
-        ? anyCalibrated
-          ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib is-calibrated" data-calib-gate="all" data-calib-mode="reset" title="Clear calibrated thresholds for all timers" aria-label="Clear calibrated thresholds for all timers">${icons.reset(18)}</span>`
-          : canAutoCalib
-            ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib" data-calib-gate="all" data-calib-mode="auto" title="Calibrate all timers" aria-label="Calibrate all timers">${icons.target(18)}</span>`
-            : `<span class="channel-mobile-action-spacer" aria-hidden="true"></span>`
-        : "";
-      const allTuneColHtml = canTune
-        ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-tune ${isAllTuneOpen ? "is-active" : ""}" data-tune-gate="all" title="Fine-tune all timers" aria-label="Fine-tune all timers">${icons.sliders(18)}</span>`
-        : "";
       const allChip = `
         <button type="button" class="channel channel-all ${this.focus === null ? "is-focus" : "is-dim"}"
                 data-focus="all" title="Show all timers (${this.store.nodes.length})">
           <span class="dot channel-all-dot"></span>
           <span class="channel-name">All timers</span>
-          ${globalOvrCount > 0 ? `<span class="channel-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>` : ""}
           <span class="channel-right-cols">
             <span class="channel-dbm mono">${this.store.nodes.length} timers</span>
-            ${allCalibColHtml}
-            ${allTuneColHtml}
           </span>
         </button>`;
       const gateChips = this.store.nodes
@@ -2715,7 +2752,7 @@ export class PilotRssiChart extends Component {
           const isGateTuneOpen = this.tuneDrawerOpen && this.tuningGateId === p.gateId;
           const calibColHtml = canTune
             ? isCal
-              ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib is-calibrated" data-calib-gate="${p.gateId}" data-calib-mode="reset" title="Clear calibrated thresholds for ${esc(label)}" aria-label="Clear calibrated thresholds for ${esc(label)}">${icons.reset(18)}</span>`
+              ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib is-calibrated" data-calib-gate="${p.gateId}" data-calib-mode="reset" title="Clear calibrated thresholds for ${esc(label)}" aria-label="Clear calibrated thresholds for ${esc(label)}">${icons.targetOff(18)}</span>`
               : canAutoCalib
                 ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib" data-calib-gate="${p.gateId}" data-calib-mode="auto" title="Calibrate ${esc(label)}" aria-label="Calibrate ${esc(label)}">${icons.target(18)}</span>`
                 : `<span class="channel-mobile-action-spacer" aria-hidden="true"></span>`
@@ -2969,7 +3006,7 @@ export class PilotRssiChart extends Component {
     const pilot = this.store.pilot(this.activePilotSlot);
     const targetGateId = this.activeTuneGateId;
     const gate = targetGateId !== null ? this.store.node(targetGateId) : undefined;
-    if (!pilot || (targetGateId !== null && !gate)) {
+    if (!pilot || !gate) {
       drawerEl.hidden = true;
       drawerEl.classList.add("is-mobile-closed");
       return;

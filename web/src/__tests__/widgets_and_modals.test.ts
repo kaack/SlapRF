@@ -520,14 +520,16 @@ describe("widgets/Toast & TimingRulesEditor", () => {
 
     try {
       const drawerEl = root.querySelector<HTMLElement>('[data-slot="tune-drawer"]')!;
-      // On desktop, the Fine-tune box is always visible (starting on All timers until a timer is selected),
-      // while carrying .is-mobile-closed until the mobile Fine-tune button is clicked.
-      expect(drawerEl.hidden).toBe(false);
+      // On All timers, Signals does not show Calibrate or Fine-tune buttons or the Fine-tune drawer
+      // (global Fine-tune lives on Track).
+      expect(drawerEl.hidden).toBe(true);
       expect(drawerEl.classList.contains("is-mobile-closed")).toBe(true);
-      expect(drawerEl.textContent).toContain("All timers · Fine-tune");
+      expect(root.querySelector('[data-calib-gate="all"]')).toBeNull();
+      expect(root.querySelector('[data-tune-gate="all"]')).toBeNull();
 
-      // Select timer 1 ("H1") -> Fine-tune box immediately updates to H1; clicking inline row Fine-tune button opens it for mobile too
+      // Select timer 1 ("H1") -> Fine-tune box immediately opens for H1 on desktop; clicking inline row Fine-tune button opens it for mobile too
       root.querySelector<HTMLButtonElement>('[data-gate-chip="1"]')!.click();
+      expect(drawerEl.hidden).toBe(false);
       expect(drawerEl.textContent).toContain("H1 · Fine-tune");
       const inlineCalib1 = root.querySelector<HTMLElement>(
         '[data-gate-chip="1"] .channel-right-cols [data-calib-gate="1"]'
@@ -558,6 +560,18 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(maxLapInput.value).toBe("120");
       const minCrossingInput = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="minCrossingSec"]')!;
       expect(minCrossingInput.value).toBe("0.12");
+
+      // Focusing a numeric input lifts the mobile drawer (.is-keyboard-open) and marks it for replace-on-next-input
+      minLapInput.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
+      expect(drawerEl.classList.contains("is-keyboard-open")).toBe(true);
+      expect(minLapInput.dataset.replaceOnNextInput).toBe("1");
+      minLapInput.dispatchEvent(
+        new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: "9" })
+      );
+      expect(minLapInput.value).toBe("");
+      expect(minLapInput.dataset.replaceOnNextInput).toBeUndefined();
+      minLapInput.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
+      expect(minLapInput.value).toBe("8");
 
       // On desktop (>860px), the Signals Fine-tune box uses the Track-style .rules rows with inline pencil/reset buttons
       const minLapOverrideToggle = drawerEl.querySelector<HTMLButtonElement>('[data-tune-override-toggle="minLapSec"]');

@@ -51,6 +51,11 @@ export const icons = {
     svg(`<path d="M6 11L12 5L18 11"/><path d="M6 18L12 12L18 18"/>`, s),
   pin: (s?: number) => svg(`<path d="M8 3h8"/><path d="M9 3v5l-3 3v2h12v-2l-3-3V3"/><path d="M12 13v8"/>`, s),
   target: (s?: number) => svg(`<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1"/>`, s),
+  targetOff: (s?: number) =>
+    svg(
+      `<path d="M8.56 3.69a9 9 0 0 1 11.75 11.75"/><path d="M19.07 19.07A9 9 0 0 1 4.93 4.93"/><path d="M10.59 6.51a5 5 0 0 1 6.9 6.9"/><path d="M15.54 15.54a5 5 0 0 1-7.08-7.08"/><path d="m2 2 20 20"/>`,
+      s
+    ),
   speaker: (s?: number) => svg(`<path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7M18.5 5.5a9 9 0 0 1 0 13"/>`, s),
   speakerOff: (s?: number) => svg(`<path d="M11 5 6 9H3v6h3l5 4z"/><path d="m16 9 6 6M22 9l-6 6"/>`, s),
   stop: (s?: number) => svg(`<rect x="6" y="6" width="12" height="12" rx="1.5"/>`, s),

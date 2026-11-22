@@ -3494,6 +3494,13 @@ html[data-theme="light"] .scope-tune-custom-icon {
     pointer-events: none;
     animation: pilot-drawer-slide-down 0.2s cubic-bezier(0.32, 0, 0.67, 0) forwards !important;
   }
+  .scope-tune-drawer.is-keyboard-open {
+    top: 54px !important;
+    bottom: auto !important;
+    max-height: calc(100dvh - 64px) !important;
+    border-radius: 18px;
+    border: 1.5px solid var(--border-strong);
+  }
   .scope-tune-mobile-handle-bar,
   .scope-tune-head {
     touch-action: none;
@@ -3575,11 +3582,14 @@ html[data-theme="light"] .scope-tune-custom-icon {
   }
   .scope-root > .channel-legend > .channel > .channel-right-cols {
     margin-left: auto;
-    display: grid;
-    grid-template-columns: minmax(68px, auto) 34px 34px;
+    display: flex;
     align-items: center;
     gap: 4px;
     flex-shrink: 0;
+  }
+  .scope-root > .channel-legend > .channel:not(.channel-all) > .channel-right-cols {
+    display: grid;
+    grid-template-columns: minmax(68px, auto) 34px 34px;
   }
   .scope-root > .channel-legend > .channel > .channel-right-cols > .channel-dbm {
     text-align: right;
@@ -3611,16 +3621,13 @@ html[data-theme="light"] .scope-tune-custom-icon {
     color: var(--text);
     border-color: var(--border-strong);
   }
-  .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-calib.is-calibrated {
-    color: var(--accent);
-    background: var(--accent-soft);
-    border-color: var(--accent-line);
-  }
+  .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-calib.is-calibrated,
   .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-tune.is-active {
     color: #7dd3fc;
     border-color: rgba(56, 189, 248, 0.42);
     background: rgba(56, 189, 248, 0.14);
   }
+  html[data-theme="light"] .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-calib.is-calibrated,
   html[data-theme="light"] .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-tune.is-active {
     color: #0369a1;
     border-color: rgba(2, 132, 199, 0.42);
