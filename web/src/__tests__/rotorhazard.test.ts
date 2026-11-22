@@ -408,6 +408,7 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
         })
       );
       await flushMicrotasks();
+      await new Promise<void>((r) => window.requestAnimationFrame(() => r()));
       expect(root.querySelector("[data-rh-card='0'][data-empty-shell='1']")).not.toBeNull();
       expect(root.querySelector("[data-action='rh-disconnect']")).toBeNull();
       expect(root.querySelector<HTMLInputElement>("[data-field='rh-host']")?.disabled).toBe(false);

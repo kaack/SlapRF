@@ -180,7 +180,8 @@ func TestTypeScriptUnitSuite(t *testing.T) {
 		"--disable-background-networking",
 		"--mute-audio",
 		"--window-size=1440,900",
-		"--screen-info={1440x900}",
+		"--screen-info={0,0 1440x900}",
+		"--ozone-override-screen-size=1440,900",
 		"--user-data-dir=" + userDataDir,
 		targetURL,
 	}

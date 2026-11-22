@@ -37,17 +37,6 @@ jobs:
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
           "$HOME/.local/bin/hugo" version
 
-      - name: Run Go & TypeScript unit tests
-        run: bash ./scripts/test.sh
-
-      - name: Build static web + WASM site & verify Portable binary compiles
-        run: |
-          go run ./cmd/build-web -web ./web -out ./_site
-          cp -r ./_site/. ./cmd/slaprf/site/
-          mkdir -p ./dist
-          go run ./cmd/build-portable -skip-web -version ci-verify -out ./dist/slaprf-ci
-          test -s ./dist/slaprf-ci
-
       - name: Cache Playwright runtime & Chromium
         uses: actions/cache@v4
         with:
@@ -65,6 +54,17 @@ jobs:
           fi
           ln -sf "$(command -v node)" "$PW_DIR/node"
           go run github.com/playwright-community/playwright-go/cmd/playwright install --with-deps chromium
+
+      - name: Run Go & TypeScript unit tests
+        run: bash ./scripts/test.sh
+
+      - name: Build static web + WASM site & verify Portable binary compiles
+        run: |
+          go run ./cmd/build-web -web ./web -out ./_site
+          cp -r ./_site/. ./cmd/slaprf/site/
+          mkdir -p ./dist
+          go run ./cmd/build-portable -skip-web -version ci-verify -out ./dist/slaprf-ci
+          test -s ./dist/slaprf-ci
 
       - name: Run SlapRF E2E Verification Suite
         run: bash ./scripts/test-e2e.sh --skip-build
