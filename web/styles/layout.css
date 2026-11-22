@@ -1467,50 +1467,25 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     overflow: hidden;
   }
 
-  .app > .sidebar:has(.mobile-more-tab-btn.has-secondary-route),
-  .app.is-sidebar-collapsed > .sidebar:has(.mobile-more-tab-btn.has-secondary-route) {
-    padding-right: 0;
-  }
-  .app > .sidebar:has(.mobile-more-tab-btn.has-secondary-route) .sidebar-nav-shell,
-  .app > .sidebar:has(.mobile-more-tab-btn.has-secondary-route) .nav {
-    overflow: visible;
-  }
-  .sidebar .nav:has(> .mobile-more-tab-btn.has-secondary-route) {
-    grid-template-columns: repeat(4, minmax(0, 1fr)) minmax(0, 1.28fr);
-  }
   .sidebar .nav > .mobile-more-tab-btn .mobile-more-edge-cue {
     position: absolute;
-    top: -4px;
-    bottom: -4px;
-    right: 0;
-    width: 20px;
+    top: 6px;
+    right: 4px;
+    width: 12px;
+    height: 12px;
     display: flex;
     align-items: center;
     justify-content: center;
-    border-left: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 0 17px 15.5px 0;
-    background: linear-gradient(
-      90deg,
-      rgba(255, 255, 255, 0.035) 0%,
-      rgba(255, 255, 255, 0.085) 100%
-    );
-    color: var(--text-2);
+    color: var(--text-3);
+    opacity: 0.85;
     pointer-events: none;
-  }
-  html[data-theme="light"] .sidebar .nav > .mobile-more-tab-btn .mobile-more-edge-cue {
-    border-left-color: rgba(15, 23, 42, 0.12);
-    background: linear-gradient(
-      90deg,
-      rgba(15, 23, 42, 0.03) 0%,
-      rgba(15, 23, 42, 0.075) 100%
-    );
   }
   .sidebar .nav > .mobile-more-tab-btn .mobile-more-edge-cue svg,
   .sidebar .nav > .mobile-more-tab-btn.is-active .mobile-more-edge-cue svg {
-    width: 15px;
-    height: 15px;
-    flex: 0 0 15px;
-    color: var(--text-2);
+    width: 12px;
+    height: 12px;
+    flex: 0 0 12px;
+    color: var(--text-3);
   }
   .sidebar .nav > .mobile-more-tab-btn[aria-expanded="true"] .mobile-more-edge-cue svg {
     color: var(--accent);
@@ -1683,10 +1658,6 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .sidebar .nav > .mobile-more-tab-btn.has-secondary-route {
-    overflow: visible;
-    padding-right: 22px;
-  }
   .sidebar .nav > .nav-item.is-active {
     font-weight: 600;
   }
@@ -1722,9 +1693,6 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     padding: 2px 4px;
     align-items: center;
   }
-  .sidebar .nav:has(> .mobile-more-tab-btn.has-secondary-route) {
-    padding-right: 0;
-  }
   .sidebar .nav > .nav-item {
     display: inline-flex;
     flex-direction: row;
@@ -1743,12 +1711,9 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     font-weight: 550;
     white-space: nowrap;
   }
-  .sidebar .nav > .mobile-more-tab-btn.has-secondary-route {
-    padding-right: 25px;
-  }
   .sidebar .nav > .mobile-more-tab-btn .mobile-more-edge-cue {
-    top: -6px;
-    bottom: -6px;
+    top: 3px;
+    right: 2px;
   }
   .sidebar .nav > .nav-item > svg {
     display: block;
