@@ -13,10 +13,10 @@ Reference guide to the screens, live signal scope controls, and crossing detecti
 | Races | Event creation, MultiGP import, visual Format Canvas brackets, live Race Control horns, and Marshal Review waveforms. |
 | Pilots | Pilot directory with callsigns, phonetic TTS spellings, and default 5.8 GHz channels (`Raceband`, `Fatshark`, `Boscam`, `IMD6`). |
 | Track | Visual course loop editor for ordering active gate timers (`H1`, `T1`-`T6`) and marking the Start / Finish gate. |
-| Network | Connection manager and live packet-rate monitor for SlapRF Bluetooth Hub, SlapRF USB Hub, RotorHazard, and LapRF 8-Way. |
+| Network | Timing system selector (`SlapRF (USB)`, `SlapRF (Bluetooth)`, `LapRF 8-Way (Network)`, `LapRF 8-Way (USB)`, `RotorHazard (Network)`, `RotorHazard (USB)`), connection manager, topology graph, and live RSSI monitor. |
 | Flasher | Built-in wizard (on Android and desktop) for flashing Hub and Spoke firmware, inspecting board configuration, or factory-erasing boards over USB-C. |
 | Simulator | Multi-pilot 5.8 GHz physics track simulator for testing track layouts, threshold behavior, and race brackets without hardware. |
-| Settings | Hardware backend selector, Announcer voice & horn levels, MultiGP API key, HTTP Basic Auth, theme toggle, and `.json` database backup/restore. |
+| Settings | Datasource (Demo vs. SlapRF Server and Simulator toggle), MultiGP API key, Timing rules, Announcer voice & horn levels, LapRF 8-Way emulator, Authentication, and `.json` database backup/restore. |
 
 ## Signals Controls
 

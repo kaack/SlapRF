@@ -73,21 +73,18 @@ func TestSettingsSectionsHardwareSwitchAndMultiGPKeyMasking(t *testing.T) {
 	h := NewHarness(t)
 	h.BootClean("#/setup")
 
-	// 1. Verify separated Settings sections: "Datasource", "Timing devices", and "MultiGP".
+	// 1. Verify Settings sections ("Datasource" and "MultiGP") and confirm "Timing devices" moved to #/network.
 	dsSec := h.Page.Locator(`[data-section-anchor="datasource"]`).First()
-	tdSec := h.Page.Locator(`[data-section-anchor="timing-devices"]`).First()
 	mgpSec := h.Page.Locator(`[data-section-anchor="multigp"]`).First()
 	h.MustBeVisible(dsSec, "Datasource section")
-	h.MustBeVisible(tdSec, "Timing devices section")
 	h.MustBeVisible(mgpSec, "MultiGP section")
+	if n, _ := h.Page.Locator(`[data-section-anchor="timing-devices"]`).Count(); n != 0 {
+		t.Fatalf("expected timing-devices section removed from #/setup, got count %d", n)
+	}
 
 	dsHeading, _ := dsSec.Locator("h2").First().InnerText()
 	if strings.TrimSpace(dsHeading) != "Datasource" {
 		t.Fatalf("Datasource heading = %q, want %q", dsHeading, "Datasource")
-	}
-	tdHeading, _ := tdSec.Locator("h2").First().InnerText()
-	if strings.TrimSpace(tdHeading) != "Timing devices" {
-		t.Fatalf("Timing devices heading = %q, want %q", tdHeading, "Timing devices")
 	}
 
 	// 2. Verify MultiGP API key is masked as a password field by default, pre-filled with sim key,
@@ -139,26 +136,32 @@ func TestSettingsSectionsHardwareSwitchAndMultiGPKeyMasking(t *testing.T) {
 	}
 	h.MilestoneScreenshot("settings-multigp-masked-verified")
 
-	// 3. Verify Timing system custom dropdown labels ("SlapRF (USB)", never "SlapRF ESP32-C5") and
-	//    smooth custom-select switching to "LapRF 8-Way" and back.
-	hwSelect := tdSec.Locator(`select[name="timing-hardware-mode"]`).First()
+	// 3. Open #/network and verify inline Timing system custom dropdown labels ("SlapRF (USB)"),
+	//    switching to "LapRF 8-Way (Network)" (locked while simulated L1 is connected), disconnecting, and switching back.
+	h.NavigateSidebar("network")
+	modeSlot := h.Page.Locator(`[data-slot="network-mode-selector"]`).First()
+	hwSelect := modeSlot.Locator(`select[data-field="network-hardware-mode"]`).First()
 	slapOptText, _ := hwSelect.Locator(`option[value="slaprf"]`).InnerText()
 	if strings.TrimSpace(slapOptText) != "SlapRF (USB)" {
 		t.Fatalf("SlapRF option label = %q, want exact %q", slapOptText, "SlapRF (USB)")
 	}
 
-	h.SelectCustomOption(`select[name="timing-hardware-mode"]`, "LapRF 8-Way")
-	h.MustBeVisible(tdSec.Locator(`text=Simulating LapRF 8-Way timers`).First(), "LapRF active description")
+	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "LapRF 8-Way (Network)")
+	h.MustBeVisible(h.Page.Locator(`[data-slot="laprf-connection"]`).First(), "LapRF Ethernet connection card")
 
 	// In LapRF mode, Flasher sidebar link is hidden.
 	flasherNav := h.Page.Locator(`aside a[data-route="flasher"]`).First()
 	h.MustBeHidden(flasherNav, "Flasher sidebar link while LapRF 8-Way is selected")
 	h.MilestoneScreenshot("settings-laprf-selected")
 
-	// Switch back to SlapRF and confirm Flasher link returns.
-	h.SelectCustomOption(`select[name="timing-hardware-mode"]`, "SlapRF")
+	// Disconnect simulated L1 on #/network so the inline dropdown unlocks, then switch back to SlapRF (USB).
+	discBtn := h.Page.Locator(`button[data-action="network-disconnect-active"]`).First()
+	if err := discBtn.Click(); err != nil {
+		t.Fatalf("click inline Disconnect on #/network: %v", err)
+	}
+	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "SlapRF (USB)")
 	h.MustBeVisible(
-		tdSec.Locator(`.custom-select-trigger-label`, playwright.LocatorLocatorOptions{HasText: "SlapRF"}).First(),
+		modeSlot.Locator(`.custom-select-trigger-label`, playwright.LocatorLocatorOptions{HasText: "SlapRF (USB)"}).First(),
 		"SlapRF trigger label",
 	)
 	h.MustBeVisible(flasherNav, "Flasher sidebar link restored in SlapRF mode")

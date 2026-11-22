@@ -13,13 +13,13 @@ Install the [SlapRF Timing Application](../getting-started/installation) on your
 
 {{% steps %}}
 
-### Hardware Mode
+### Select & Connect Hub
 
-Open **Settings -> Hardware** and choose **SlapRF (Bluetooth)** if your Hub runs `slaprf-xiao-c5-ble.bin` on battery power at the gate, or **SlapRF (USB)** if your Hub plugs into your device over USB-C.
+Open **Network** and choose your mode in the **Timing system** dropdown:
+- **SlapRF (Bluetooth)**: Power `H1` (`slaprf-xiao-c5-ble.bin`) at the Start / Finish gate, click **Pair Device** (or **Connect** for a previously paired Hub), and select your Hub.
+- **SlapRF (USB)**: Plug `H1` (`slaprf-xiao-c5.bin`) into your phone or computer over USB-C (with `T1` powered at Start / Finish, or `H1` placed directly at the gate) and click **Connect USB**.
 
-### Connect Hub
-
-Open **Network**. In Bluetooth mode, power `H1` at the Start / Finish gate, tap **Scan / Connect**, and select your SlapRF Hub. In USB mode, connect `H1` over USB-C (and power `T1` at Start / Finish, or place `H1` at the gate) and click **Connect**. Confirm the timer status badge shows `Online`.
+Confirm the connected timer chip shows a green live indicator.
 
 ### Add Pilots
 

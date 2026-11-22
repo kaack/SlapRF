@@ -9,7 +9,6 @@ import { enterThresholdAt, exitThresholdAt, rhThresholdAt } from "../state/selec
 import { DebugView } from "../views/DebugView";
 import { NetworkView } from "../views/NetworkView";
 import { SimView } from "../views/SimView";
-import { TimingDevicesCard } from "../widgets/DataSourceCard";
 import { closeActiveLapEditorModal, openHeatLapEditorModal } from "../widgets/HeatLapEditorModal";
 import { PilotSlotsEditor } from "../widgets/PilotSlotsEditor";
 import { TrackEditor } from "../widgets/TrackEditor";
@@ -94,17 +93,17 @@ describe("state/selectors — RotorHazard 0..255 Dual Threshold Resolution", () 
 });
 
 describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
-  it("lists all 6 Timing Systems in exact order: SlapRF (USB), SlapRF (Bluetooth), LapRF 8-Way (Network), LapRF 8-Way (USB), RotorHazard (Network), RotorHazard (USB)", () => {
+  it("lists all 6 Timing Systems on NetworkView in exact order: SlapRF (USB), SlapRF (Bluetooth), LapRF 8-Way (Network), LapRF 8-Way (USB), RotorHazard (Network), RotorHazard (USB)", () => {
     const simStore = makeStore({
       simulatorRunning: true,
       timingHardwareMode: "slaprf",
     });
     const { api } = makeMockApiClient(simStore);
     const root = mountHtml(`<div id="td-host"></div>`);
-    const card = new TimingDevicesCard(root.querySelector("#td-host")!, simStore, api);
+    const netView = new NetworkView(root.querySelector("#td-host")!, simStore, api);
 
     try {
-      let sel = root.querySelector<HTMLSelectElement>("select[name='timing-hardware-mode']")!;
+      let sel = root.querySelector<HTMLSelectElement>("select[data-field='network-hardware-mode']")!;
       expect(sel).not.toBeNull();
       const opts = Array.from(sel.querySelectorAll<HTMLOptionElement>("option"));
       expect(opts.map((o) => o.value)).toEqual([
@@ -135,9 +134,9 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
         timingHardwareMode: "slaprf",
       });
       const root2 = mountHtml(`<div id="td-host-real"></div>`);
-      const card2 = new TimingDevicesCard(root2.querySelector("#td-host-real")!, realStore, api);
+      const netView2 = new NetworkView(root2.querySelector("#td-host-real")!, realStore, api);
       try {
-        sel = root2.querySelector<HTMLSelectElement>("select[name='timing-hardware-mode']")!;
+        sel = root2.querySelector<HTMLSelectElement>("select[data-field='network-hardware-mode']")!;
         const bleOpt = sel.querySelector<HTMLOptionElement>("option[value='slaprf_ble']")!;
         const laprfOpt = sel.querySelector<HTMLOptionElement>("option[value='laprf']")!;
         const laprfUsbOpt = sel.querySelector<HTMLOptionElement>("option[value='laprf_usb']")!;
@@ -149,10 +148,10 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
         expect(rhOpt.disabled).toBe(true);
         expect(rhUsbOpt.disabled).toBe(true);
       } finally {
-        card2.destroy();
+        netView2.destroy();
       }
     } finally {
-      card.destroy();
+      netView.destroy();
     }
   });
 

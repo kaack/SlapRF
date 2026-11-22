@@ -301,7 +301,7 @@ components:
     UsbRawOpenMessage:
       name: open
       title: Exclusive USB Port Open Handshake (Server -> Client JSON Frame)
-      summary: Sent immediately after opening `?port=<name>&baud=115200` with USB VID/PID metadata (or `ok: false` + `error` if opening failed).
+      summary: "Sent immediately after opening `?port=<name>&baud=115200` with USB VID/PID metadata (or `ok: false` + `error` if opening failed)."
       contentType: application/json
       payload:
         $ref: "#/components/schemas/UsbRawOpenEnvelope"
@@ -309,7 +309,7 @@ components:
     UsbRawAckMessage:
       name: ack
       title: Signal / Close Control Acknowledgment (Server -> Client JSON Frame)
-      summary: Acknowledges a client `signals` or `close` control frame (`type: ack`), or reports `closed` / `error`.
+      summary: "Acknowledges a client `signals` or `close` control frame (`type: ack`), or reports `closed` / `error`."
       contentType: application/json
       payload:
         $ref: "#/components/schemas/UsbRawAckEnvelope"
@@ -317,7 +317,7 @@ components:
     UsbRawControlMessage:
       name: control
       title: Bootloader DTR/RTS Signals or Close Command (Client -> Server JSON Frame)
-      summary: Sent by the client (`esptool-js` or serial flasher) to toggle atomic `dtr` / `rts` lines (`type: signals`) or release the port (`type: close`).
+      summary: "Sent by the client (`esptool-js` or serial flasher) to toggle atomic `dtr` / `rts` lines (`type: signals`) or release the port (`type: close`)."
       contentType: application/json
       payload:
         $ref: "#/components/schemas/UsbRawControlEnvelope"

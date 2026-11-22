@@ -14,7 +14,6 @@ import {
   DataSourceCard,
   MultiGPSettingsCard,
   PersistenceSettings,
-  TimingDevicesCard,
 } from "../widgets/DataSourceCard";
 import { LapRFEmulatorCard } from "../widgets/LapRFEmulatorCard";
 import { TimingRulesEditor } from "../widgets/TimingRulesEditor";
@@ -35,14 +34,6 @@ export class SetupView extends Component {
             <p>Choose between standalone Demo mode and a SlapRF Server backend, or toggle track simulation.</p>
           </div>
           <div class="settings-cards" data-slot="source"></div>
-        </section>
-
-        <section class="settings-section" data-section-anchor="timing-devices">
-          <div class="settings-intro">
-            <h2>Timing devices</h2>
-            <p>Select the timing system used to detect passes on the course.</p>
-          </div>
-          <div class="settings-cards" data-slot="timing-devices"></div>
         </section>
 
         <section class="settings-section" data-section-anchor="multigp" data-slot="multigp-section">
@@ -95,7 +86,6 @@ export class SetupView extends Component {
       </div>`;
 
     this.adopt(new DataSourceCard(this.slot("source"), store, api));
-    this.adopt(new TimingDevicesCard(this.slot("timing-devices"), store, api));
     this.adopt(new MultiGPSettingsCard(this.slot("multigp"), store, api));
     this.adopt(new TimingRulesEditor(this.slot("rules"), store, api));
     this.adopt(new AnnouncerSettings(this.slot("announcer"), announcer));

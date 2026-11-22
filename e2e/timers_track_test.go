@@ -57,10 +57,10 @@ func TestSlapRFHubConnectAndTrackGateTelemetry(t *testing.T) {
 
 func TestLapRFSimulatedTimersLabelsAndControls(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/setup")
+	h.BootClean("#/network")
 
-	// 1. Switch timing system to LapRF 8-Way.
-	h.SelectCustomOption(`select[name="timing-hardware-mode"]`, "LapRF 8-Way")
+	// 1. Switch timing system inline on #/network to LapRF 8-Way (Network).
+	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "LapRF 8-Way (Network)")
 
 	// 2. Open Simulation page and verify compact L1, L2 labels (never "LapRF #1") and neutral voltage display.
 	h.NavigateSidebar("sim")

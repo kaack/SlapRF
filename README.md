@@ -55,7 +55,7 @@ SlapRF has two parts. You can use them together or separately:
 | :--- | :--- |
 | **Try the browser demo** | Open **[slaprf.app](https://slaprf.app)** to test the track simulator, practice splits, and race brackets (demo only; install the app to time live flights). |
 | **Build a ~$25 field timer** | Attach the included antenna to a Seeed XIAO ESP32-C5. Connect the board over USB-C and flash Hub or Spoke firmware from the **[Web Firmware Flasher](https://slaprf.app/docs/hardware/flashing/)**. |
-| **Connect RotorHazard or LapRF** | Download the app from **[GitHub Releases](https://github.com/kaack/SlapRF/releases/latest)**. Open Settings, select the Hardware Mode, and connect over USB or LAN. |
+| **Connect RotorHazard or LapRF** | Download the app from **[GitHub Releases](https://github.com/kaack/SlapRF/releases/latest)**. Open **Network**, select RotorHazard or LapRF 8-Way (`Network` or `USB`), and connect. |
 
 ---
 

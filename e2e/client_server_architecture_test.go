@@ -310,12 +310,23 @@ func TestClientServer_StandaloneDemoModeAndCrossOriginBackendConnect(t *testing.
 	}
 	h.MustBeVisible(dsSec, "Settings Datasource section re-opened")
 
-	// 2b. Verify all 3 timing systems (SlapRF, LapRF 8-Way, RotorHazard) work in Simulator Demo Mode!
-	h.SelectCustomOption(`select[name="timing-hardware-mode"]`, "LapRF 8-Way")
-	h.MustContainText(h.Page.Locator(`[data-section-anchor="timing-devices"]`).First(), "Simulating LapRF 8-Way timers")
-	h.SelectCustomOption(`select[name="timing-hardware-mode"]`, "RotorHazard (Network)")
-	h.MustContainText(h.Page.Locator(`[data-section-anchor="timing-devices"]`).First(), "Simulating RotorHazard network timing devices")
-	h.SelectCustomOption(`select[name="timing-hardware-mode"]`, "SlapRF")
+	// 2b. Verify timing systems (SlapRF, LapRF 8-Way, RotorHazard) switch inline on #/network in Simulator Demo Mode!
+	h.NavigateSidebar("network")
+	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "LapRF 8-Way (Network)")
+	h.MustBeVisible(h.Page.Locator(`[data-slot="laprf-connection"]`).First(), "LapRF Ethernet connection card")
+	if err := h.Page.Locator(`button[data-action="network-disconnect-active"]`).First().Click(); err != nil {
+		t.Fatalf("disconnect simulated LapRF on #/network: %v", err)
+	}
+	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "RotorHazard (Network)")
+	h.MustBeVisible(h.Page.Locator(`[data-slot="rh-connection"]`).First(), "RotorHazard connection card")
+	if err := h.Page.Locator(`button[data-action="network-disconnect-active"]`).First().Click(); err != nil {
+		t.Fatalf("disconnect simulated RotorHazard on #/network: %v", err)
+	}
+	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "SlapRF (USB)")
+
+	// Return to Settings -> Datasource for server checks
+	h.NavigateSidebar("setup")
+	h.MustBeVisible(dsSec, "Settings Datasource section")
 
 	// 3. Clicking "Server" in the Datasource Backend toggle opens the inline server connection panel (no modal!).
 	serverModeBtn := dsSec.Locator(`button[data-backend-mode="server"]`).First()

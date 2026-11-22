@@ -43,7 +43,6 @@ import { enginePersistence, formatBytes, getLastBackupAt, recordBackupNow } from
 import { sharedMultiGPService } from "../services/multigp_service";
 import { getStorageStatus, StorageStatus } from "../services/offline";
 import { AppStore } from "../state/store";
-import { TimingHardwareMode, normalizeTimingHardwareMode } from "../types/models";
 import { openConfirmModal } from "./ConfirmModal";
 
 interface BackendStorageStatus {
@@ -663,95 +662,6 @@ export class DataSourceCard extends Component {
       ${androidLanCardHtml}
       ${simActiveCardHtml}
       ${simSpeedCardHtml}`;
-  }
-}
-
-/** Select the active timing hardware system ("SlapRF", "LapRF 8-Way", or "RotorHazard"). */
-export class TimingDevicesCard extends Component {
-  private readonly store: AppStore;
-  private readonly api: ApiClient;
-  private lastSig = "";
-
-  constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
-    super(el);
-    this.store = store;
-    this.api = api;
-    el.addEventListener("change", this.handleChange);
-    this.onDispose(() => {
-      el.removeEventListener("change", this.handleChange);
-    });
-    this.onDispose(store.subscribe(["status", "config"], () => this.render()));
-    this.onDispose(subscribeCapabilities(() => this.render()));
-    this.render();
-  }
-
-  private handleChange = (e: Event): void => {
-    const target = e.target as HTMLSelectElement;
-    if (target.name === "timing-hardware-mode") {
-      const next: TimingHardwareMode = normalizeTimingHardwareMode(target.value);
-      void this.api.setTimingHardwareMode(next);
-    }
-  };
-
-  private render(): void {
-    // Never replace DOM while the custom dropdown menu is open
-    if (this.el.querySelector(".is-custom-open")) return;
-
-    const sim = this.store.simulatorRunning;
-    const caps = capabilitiesSnapshot();
-    const hwMode = this.store.timingHardwareMode;
-    const canUseExternal = sim || caps.portable;
-    const effectiveMode: TimingHardwareMode =
-      !canUseExternal && hwMode !== "slaprf" ? "slaprf" : hwMode;
-
-    const sig = `${sim ? 1 : 0}|${caps.portable ? 1 : 0}|${hwMode}`;
-    if (sig === this.lastSig) return;
-    this.lastSig = sig;
-
-    const desc =
-      effectiveMode === "rotorhazard_usb"
-        ? sim
-          ? `Simulating RotorHazard USB timing nodes on the track. Configure simulated RotorHazard USB nodes on <a href="#/sim" class="link-inline">Simulation</a> or inspect live 0–255 node RSSI on <a href="#/network" class="link-inline">Network</a>.`
-          : `Timing laps with RotorHazard USB serial nodes (including FPVGateC5 &amp; multi-seat RX5808 boards). Select and connect USB ports on the <a href="#/network" class="link-inline">Network</a> page.`
-        : effectiveMode === "rotorhazard"
-          ? sim
-            ? `Simulating RotorHazard network timing devices on the track. Configure simulated RotorHazard devices on <a href="#/sim" class="link-inline">Simulation</a> or inspect live node RSSI &amp; clock sync on <a href="#/network" class="link-inline">Network</a>.`
-            : `Timing laps with RotorHazard servers over LAN HTTP/WebSocket (:5000). Connect one or more RotorHazard devices on the <a href="#/network" class="link-inline">Network</a> page.`
-          : effectiveMode === "laprf_usb"
-            ? sim
-              ? `Simulating LapRF 8-Way USB timers on the track. Configure virtual LapRF USB timers on <a href="#/sim" class="link-inline">Simulation</a> or inspect live 8-slot RSSI &amp; voltage on <a href="#/network" class="link-inline">Network</a>.`
-              : `Timing laps with LapRF 8-Way hardware over USB CDC serial (115200 baud). Connect your LapRF USB timer on the <a href="#/network" class="link-inline">Network</a> page.`
-            : effectiveMode === "laprf"
-              ? sim
-                ? `Simulating LapRF 8-Way network timers on the track. Configure virtual LapRF timers on <a href="#/sim" class="link-inline">Simulation</a> or inspect live 8-slot RSSI &amp; voltage on <a href="#/network" class="link-inline">Network</a>.`
-                : `Timing laps with LapRF 8-Way hardware over Ethernet TCP :5403. Connect your LapRF timer on the <a href="#/network" class="link-inline">Network</a> page.`
-              : effectiveMode === "slaprf_ble"
-                ? sim
-                  ? `Simulating a wireless SlapRF Bluetooth Hub (solo 1-gate or with up to 6 ESP-NOW Spokes, up to 8 simultaneous pilots). Manage simulated boards on <a href="#/sim" class="link-inline">Simulation</a> or inspect live 5.8 GHz RSSI on <a href="#/network" class="link-inline">Network</a>.`
-                  : `Timing laps wirelessly with a SlapRF Bluetooth Hub (solo 1-gate or with up to 6 ESP-NOW Spokes, up to 8 simultaneous pilots). First pair claims the Hub; click <strong>Forget Device</strong> on <a href="#/network" class="link-inline">Network</a> (or hold <code>BOOT</code> for 3 s on the Hub) to pair a different phone or computer.`
-                : sim
-                  ? `Simulating SlapRF Hub &amp; Spoke gate timers. Manage simulated boards on <a href="#/sim" class="link-inline">Simulation</a>.`
-                  : `Timing laps with SlapRF Hub &amp; Spoke gate timers over native USB-C serial.`;
-
-    this.el.innerHTML = `
-      <div class="card">
-        <div class="option-row">
-          <div>
-            <div class="option-title">Timing system</div>
-            <div class="option-sub">${desc}</div>
-          </div>
-          <div class="option-actions">
-            <select name="timing-hardware-mode" class="input" style="min-width:220px" aria-label="Timing system">
-              <option value="slaprf" ${effectiveMode === "slaprf" ? "selected" : ""}>SlapRF (USB)</option>
-              <option value="slaprf_ble" ${effectiveMode === "slaprf_ble" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select SlapRF (Bluetooth)"'}>SlapRF (Bluetooth)</option>
-              <option value="laprf" ${effectiveMode === "laprf" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select LapRF 8-Way (Network)"'}>LapRF 8-Way (Network)</option>
-              <option value="laprf_usb" ${effectiveMode === "laprf_usb" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select LapRF 8-Way (USB)"'}>LapRF 8-Way (USB)</option>
-              <option value="rotorhazard" ${effectiveMode === "rotorhazard" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select RotorHazard (Network)"'}>RotorHazard (Network)</option>
-              <option value="rotorhazard_usb" ${effectiveMode === "rotorhazard_usb" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select RotorHazard (USB)"'}>RotorHazard (USB)</option>
-            </select>
-          </div>
-        </div>
-      </div>`;
   }
 }
 

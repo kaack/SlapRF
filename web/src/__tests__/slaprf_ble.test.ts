@@ -8,7 +8,6 @@ import { isSlapRFMode, normalizeTimingHardwareMode } from "../types/models";
 import { DebugView } from "../views/DebugView";
 import { PracticeView } from "../views/PracticeView";
 import { NetworkView } from "../views/NetworkView";
-import { TimingDevicesCard } from "../widgets/DataSourceCard";
 import { renderUsbConnectionBarHtml } from "../widgets/UsbConnectionBar";
 import {
   describe,
@@ -37,20 +36,20 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
     expect(normalizeTimingHardwareMode("unknown")).toBe("slaprf");
   });
 
-  it("renders SlapRF (Bluetooth) description and BOOT 3 s pairing guidance in TimingDevicesCard", () => {
+  it("renders SlapRF (Bluetooth) Connection intro and selector on NetworkView", () => {
     const store = makeStore({
       simulatorRunning: true,
       timingHardwareMode: "slaprf_ble",
     });
     const { api } = makeMockApiClient(store);
     const root = mountHtml(`<div id="ble-td-host"></div>`);
-    const card = new TimingDevicesCard(root.querySelector("#ble-td-host")!, store, api);
+    const netView = new NetworkView(root.querySelector("#ble-td-host")!, store, api);
     try {
-      const sel = root.querySelector<HTMLSelectElement>("select[name='timing-hardware-mode']")!;
+      const sel = root.querySelector<HTMLSelectElement>("select[data-field='network-hardware-mode']")!;
       expect(sel.value).toBe("slaprf_ble");
-      expect(root.textContent || "").toContain("SlapRF Bluetooth Hub");
+      expect(root.querySelector('[data-slot="connection-intro"]')?.textContent || "").toContain("Bluetooth");
     } finally {
-      card.destroy();
+      netView.destroy();
     }
   });
 

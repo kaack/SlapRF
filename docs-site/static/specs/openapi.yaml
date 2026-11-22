@@ -39,9 +39,9 @@ tags:
 
   - name: Timing Singletons
     description: |
-      Singleton resources controlling the active timing engine's detection filters and mode.
+      Singleton resources controlling the active timing engine's detection filters, operating mode, and hardware backend.
       - **Hysteresis & Lap Filters (`/v1/timing/rules`)**: Configure `minCrossingMs`, `minLapSeconds`, `maxLapSeconds`, `confirmationWindowMs`, and holeshot rules.
-      - **Arming & Mode (`/v1/timing/arm`, `/v1/timing/mode`)**: Arm or disarm global lap recording and switch between `practice` and `race` operating modes.
+      - **Arming, Operating Mode & Hardware Mode (`/v1/timing/arm`, `/v1/timing/mode`, `/v1/hardware/mode`)**: Arm or disarm global lap recording, switch between `practice` and `race` modes, and select the active timing hardware pipeline (`slaprf`, `slaprf_ble`, `laprf`, `laprf_usb`, `rotorhazard`, or `rotorhazard_usb`).
 
   - name: Pilots
     description: |
@@ -67,12 +67,34 @@ tags:
       - **Lifecycle & Heat Control**: Drive session state (`:start`, `:pause`, `:resume`, `:stop`, `:complete`, `:scrap`, `:reopen`), stage progression (`stages/{stageRef}:control`, `:advance`), and live heat horns/clocks (`heats/{heatId}:control`).
       - **Marshal & MultiGP Sync**: Apply lap toggles, time penalties, or seat reorders via `pilots/{slotIndex}:marshal`, import MultiGP chapters via `sessions:importMultiGP`, and push results through `/v1/race/multigp/proxy/{subPath}`.
 
-  - name: Hardware & LapRF Emulator
+  - name: SlapRF Hardware (USB)
     description: |
-      Physical timing hardware transports and the built-in ImmersionRC LapRF 8-Way TCP `:5403` protocol emulator.
-      - **SlapRF USB (`/v1/slaprf/usb/*`)**: Enumerate USB-C serial ports, connect Hub `H1` or standalone timers, run `5.8 GHz` Raceband spectrum surveys (`/v1/slaprf/usb/survey`), and send console commands (`/v1/slaprf/usb:command`).
-      - **SlapRF Bluetooth (`/v1/slaprf/bluetooth/*`)**: Discover wireless SlapRF Bluetooth Hubs (`ble:<FP>`), pair/connect/cancel or forget wireless Hubs (`/v1/slaprf/bluetooth/connections*`), run Raceband surveys (`/v1/slaprf/bluetooth/survey`), and send console commands (`/v1/slaprf/bluetooth:command`).
-      - **External Hardware & Relay (`/v1/laprf/*`, `/v1/rotorhazard/*`, `/v1/laprf-emulator`)**: Discover and connect to LapRF 8-Way pucks or RotorHazard servers/USB nodes on the LAN (`network/devices`) or over USB (`usb/ports`), manage active connections (`connections`), or expose SlapRF crossings to third-party race software on TCP `:5403`.
+      Native USB-C serial transport for Seeed Studio XIAO ESP32-C5 Hub (`H1`) and Spoke (`T1`-`T6`) timers (`/v1/slaprf/usb/*`).
+      - **Port Discovery & Console Pool (`ports`, `connections`, `debug-slot`)**: Enumerate local USB-C serial ports, connect or disconnect Hub `H1` and standalone Spoke slots, and select the active diagnostic slot.
+      - **Commands, Spectrum Survey & Timer Registry (`:command`, `survey`, `known-timers/{fp}`)**: Send serial console commands, run full `5.8 GHz` Raceband spectrum surveys, and forget saved timer fingerprints.
+
+  - name: SlapRF Hardware (Bluetooth)
+    description: |
+      Wireless Bluetooth LE transport for Seeed Studio XIAO ESP32-C5 Bluetooth Hubs (`/v1/slaprf/bluetooth/*`).
+      - **Discovery, Pairing & Remembered Connect (`ports`, `connections`)**: Scan nearby `ble:<FP>` Hubs, pair unclaimed Hubs, reconnect remembered Hubs, cancel in-flight connection attempts, or wirelessly unpair and forget a Hub (`DELETE ...?forget=1`).
+      - **Commands & Spectrum Survey (`:command`, `survey`)**: Send console commands and run `5.8 GHz` Raceband surveys over GATT NUS without USB cables.
+
+  - name: LapRF 8-Way Hardware
+    description: |
+      External ImmersionRC LapRF 8-Way hardware connections over Ethernet LAN or USB CDC serial (`/v1/laprf/*`).
+      - **Network & USB Discovery (`network/devices`, `usb/ports`)**: Probe the local subnet on TCP `:5403` for `LapRF 8-Way (Network)` units or list `115200` baud USB CDC ports for `LapRF 8-Way (USB)` units.
+      - **Connections & Slot Sync (`connections`, `:sync`)**: Open or close Ethernet/USB LapRF sessions and push active pilot `5.8 GHz` frequencies and slot thresholds.
+
+  - name: RotorHazard Hardware
+    description: |
+      External RotorHazard server (`HTTP` / `Socket.IO` `:5000`) and direct RotorHazard USB serial node connections (`/v1/rotorhazard/*`).
+      - **Network & USB Discovery (`network/devices`, `usb/ports`)**: Scan the local subnet for `RotorHazard (Network)` servers or enumerate `RotorHazard (USB)` binary serial ports (`115200` / `921600` baud).
+      - **Connections, Scans & Node Sync (`connections`, `:scan`, `debug-stream`, `:sync`)**: Connect authenticated RotorHazard servers or USB nodes, run `5180`-`5945 MHz` spectrum sweeps on USB nodes, stream `0`-`255` debug RSSI, and sync node frequencies and Enter/Exit levels.
+
+  - name: LapRF 8-Way Emulator
+    description: |
+      Built-in ImmersionRC LapRF 8-Way TCP `:5403` server singleton (`/v1/laprf-emulator`).
+      - **External Client Relay**: Streams SlapRF gate crossings over the binary LapRF TCP `:5403` protocol so third-party race control software (such as LiveTime) or broadcast overlays can ingest live passes in real time.
 
   - name: Simulator
     description: |
@@ -3036,7 +3058,7 @@ paths:
 
   /v1/hardware/mode:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [Timing Singletons]
       summary: Read active timing hardware backend singleton
       operationId: getHardwareMode
       responses:
@@ -3052,7 +3074,7 @@ paths:
                     $ref: "#/components/schemas/TimingHardwareMode"
 
     put:
-      tags: [Hardware & LapRF Emulator]
+      tags: [Timing Singletons]
       summary: Switch active timing hardware backend (`slaprf`, `slaprf_ble`, `laprf`, `laprf_usb`, `rotorhazard`, `rotorhazard_usb`)
       operationId: putHardwareMode
       requestBody:
@@ -3079,11 +3101,11 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
-                error: "timingHardwareMode must be 'slaprf', 'laprf_8way', or 'rotorhazard'"
+                error: "mode must be 'slaprf', 'slaprf_ble', 'laprf', 'laprf_usb', 'rotorhazard', or 'rotorhazard_usb'"
 
   /v1/slaprf/usb/ports:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (USB)]
       summary: List available local USB serial ports for SlapRF timers
       operationId: listSlapRFUsbPorts
       parameters:
@@ -3109,7 +3131,7 @@ paths:
 
   /v1/slaprf/usb/connections:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (USB)]
       summary: Get SlapRF USB connection pool snapshot (Hub status and peer Spoke telemetry)
       operationId: getSlapRFUsbConnections
       responses:
@@ -3122,7 +3144,7 @@ paths:
                 additionalProperties: true
 
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (USB)]
       summary: Connect a physical USB serial port to a SlapRF console slot
       operationId: connectSlapRFUsbSlot
       requestBody:
@@ -3166,7 +3188,7 @@ paths:
           minimum: 0
           maximum: 1
     put:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (USB)]
       summary: Connect or replace SlapRF USB console slot
       operationId: putSlapRFUsbConnectionSlot
       requestBody:
@@ -3205,7 +3227,7 @@ paths:
                 error: "usb connection slot not found"
 
     delete:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (USB)]
       summary: Disconnect a SlapRF USB console slot (or cancel an in-flight USB connection)
       operationId: deleteSlapRFUsbConnectionSlot
       parameters:
@@ -3241,7 +3263,7 @@ paths:
 
   "/v1/slaprf/usb/connections:disconnectAll":
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (USB)]
       summary: Disconnect all active SlapRF USB console slots
       operationId: disconnectAllSlapRFUsbConnections
       responses:
@@ -3255,7 +3277,7 @@ paths:
 
   /v1/slaprf/usb/debug-slot:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (USB)]
       summary: Read active SlapRF USB console diagnostic slot index singleton
       operationId: getSlapRFUsbDebugSlot
       responses:
@@ -3273,7 +3295,7 @@ paths:
                     type: object
                     additionalProperties: true
     put:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (USB)]
       summary: Select which SlapRF USB console slot streams live diagnostic serial lines
       operationId: putSlapRFUsbDebugSlot
       requestBody:
@@ -3306,7 +3328,7 @@ paths:
 
   "/v1/slaprf/usb:command":
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (USB)]
       summary: Send a command to a connected SlapRF USB timer
       operationId: sendSlapRFUsbCommand
       requestBody:
@@ -3344,7 +3366,7 @@ paths:
 
   /v1/slaprf/usb/survey:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (USB)]
       summary: Read full-Raceband 5.8 GHz spectrum survey singleton for SlapRF USB
       operationId: getSlapRFUsbSurvey
       responses:
@@ -3357,7 +3379,7 @@ paths:
                 additionalProperties: true
 
     put:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (USB)]
       summary: Set full-Raceband 5.8 GHz spectrum survey mode on the USB Hub
       operationId: putSlapRFUsbSurvey
       requestBody:
@@ -3397,7 +3419,7 @@ paths:
 
   /v1/slaprf/bluetooth/ports:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (Bluetooth)]
       summary: Scan and list nearby SlapRF Bluetooth LE Hubs (ble:<FP>)
       operationId: listSlapRFBluetoothPorts
       responses:
@@ -3419,7 +3441,7 @@ paths:
 
   /v1/slaprf/bluetooth/connections:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (Bluetooth)]
       summary: Get SlapRF Bluetooth Hub connection snapshot, live connection status, and paired inventory
       operationId: getSlapRFBluetoothConnections
       responses:
@@ -3431,7 +3453,7 @@ paths:
                 type: object
                 additionalProperties: true
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (Bluetooth)]
       summary: Pair or connect to a SlapRF Bluetooth Hub (ble:<FP>)
       operationId: connectSlapRFBluetoothSlot
       requestBody:
@@ -3473,7 +3495,7 @@ paths:
           minimum: 0
           maximum: 2
     put:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (Bluetooth)]
       summary: Pair or connect a SlapRF Bluetooth Hub slot
       operationId: putSlapRFBluetoothConnectionSlot
       requestBody:
@@ -3489,7 +3511,7 @@ paths:
                   example: "ble:EFE44224"
       responses:
         "200":
-          description: Connected Bluetooth slot (or `{cancelled: true}` when cancelled mid-connect)
+          description: "Connected Bluetooth slot (or `{cancelled: true}` when cancelled mid-connect)"
           content:
             application/json:
               schema:
@@ -3502,7 +3524,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
     delete:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (Bluetooth)]
       summary: Disconnect a SlapRF Bluetooth Hub, cancel an in-flight connection, or unpair & forget (`?forget=1`)
       operationId: deleteSlapRFBluetoothConnectionSlot
       parameters:
@@ -3530,7 +3552,7 @@ paths:
 
   "/v1/slaprf/bluetooth/connections:disconnectAll":
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (Bluetooth)]
       summary: Disconnect all active SlapRF Bluetooth Hub slots
       operationId: disconnectAllSlapRFBluetoothConnections
       responses:
@@ -3544,7 +3566,7 @@ paths:
 
   "/v1/slaprf/bluetooth:command":
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (Bluetooth)]
       summary: Send a console command to a connected SlapRF Bluetooth Hub
       operationId: sendSlapRFBluetoothCommand
       requestBody:
@@ -3574,7 +3596,7 @@ paths:
 
   /v1/slaprf/bluetooth/survey:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (Bluetooth)]
       summary: Read full-Raceband 5.8 GHz spectrum survey state for SlapRF Bluetooth Hub
       operationId: getSlapRFBluetoothSurvey
       responses:
@@ -3586,7 +3608,7 @@ paths:
                 type: object
                 additionalProperties: true
     put:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (Bluetooth)]
       summary: Set full-Raceband 5.8 GHz spectrum survey mode on the SlapRF Bluetooth Hub
       operationId: putSlapRFBluetoothSurvey
       requestBody:
@@ -3623,7 +3645,7 @@ paths:
         schema:
           type: string
     delete:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (USB)]
       summary: Forget a saved SlapRF Hub or Spoke fingerprint from the shared timer registry
       operationId: deleteKnownSlapRFTimer
       responses:
@@ -3637,7 +3659,7 @@ paths:
 
   /v1/laprf/network/devices:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [LapRF 8-Way Hardware]
       summary: Scan the local LAN for ImmersionRC LapRF 8-Way timers on TCP :5403
       operationId: discoverLapRFNetworkDevices
       responses:
@@ -3651,7 +3673,7 @@ paths:
 
   /v1/laprf/usb/ports:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [LapRF 8-Way Hardware]
       summary: List local USB CDC serial ports matching ImmersionRC LapRF 8-Way timers
       operationId: listLapRFUsbPorts
       parameters:
@@ -3677,7 +3699,7 @@ paths:
 
   /v1/laprf/connections:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [LapRF 8-Way Hardware]
       summary: List connected external ImmersionRC LapRF 8-Way connections
       operationId: listLapRFConnections
       responses:
@@ -3690,7 +3712,7 @@ paths:
                 additionalProperties: true
 
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [LapRF 8-Way Hardware]
       summary: Connect to an external ImmersionRC LapRF 8-Way timer (Ethernet TCP or USB)
       operationId: createLapRFConnection
       requestBody:
@@ -3725,7 +3747,7 @@ paths:
         schema:
           type: integer
     delete:
-      tags: [Hardware & LapRF Emulator]
+      tags: [LapRF 8-Way Hardware]
       summary: Disconnect an external LapRF 8-Way connection
       operationId: deleteLapRFConnection
       responses:
@@ -3746,7 +3768,7 @@ paths:
 
   "/v1/laprf:sync":
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [LapRF 8-Way Hardware]
       summary: Push active pilot frequencies and settings to all connected LapRF 8-Way devices
       operationId: syncLapRFConnections
       responses:
@@ -3759,7 +3781,7 @@ paths:
 
   /v1/rotorhazard/network/devices:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [RotorHazard Hardware]
       summary: Scan the local LAN for RotorHazard servers on port 5000
       operationId: discoverRotorHazardNetworkDevices
       responses:
@@ -3773,7 +3795,7 @@ paths:
 
   /v1/rotorhazard/usb/ports:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [RotorHazard Hardware]
       summary: List local USB serial ports matching RotorHazard / Arduino timing nodes
       operationId: listRotorHazardUsbPorts
       parameters:
@@ -3799,7 +3821,7 @@ paths:
 
   /v1/rotorhazard/connections:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [RotorHazard Hardware]
       summary: List connected external RotorHazard connections
       operationId: listRotorHazardConnections
       responses:
@@ -3812,7 +3834,7 @@ paths:
                 additionalProperties: true
 
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [RotorHazard Hardware]
       summary: Connect to an external RotorHazard device (Socket.IO or USB serial)
       operationId: createRotorHazardConnection
       requestBody:
@@ -3847,7 +3869,7 @@ paths:
         schema:
           type: integer
     delete:
-      tags: [Hardware & LapRF Emulator]
+      tags: [RotorHazard Hardware]
       summary: Disconnect a RotorHazard connection
       operationId: deleteRotorHazardConnection
       responses:
@@ -3874,7 +3896,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [RotorHazard Hardware]
       summary: Trigger a spectrum scan (`once`, `live`, or `stop`) on a RotorHazard USB node
       operationId: scanRotorHazardConnection
       requestBody:
@@ -3927,7 +3949,7 @@ paths:
         schema:
           type: integer
     put:
-      tags: [Hardware & LapRF Emulator]
+      tags: [RotorHazard Hardware]
       summary: Enable or disable high-rate RSSI debug streaming on a RotorHazard connection
       operationId: putRotorHazardDebugStream
       requestBody:
@@ -3959,7 +3981,7 @@ paths:
 
   "/v1/rotorhazard:sync":
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [RotorHazard Hardware]
       summary: Push active pilot node frequencies and arm state to all connected RotorHazard devices
       operationId: syncRotorHazardConnections
       responses:
@@ -3972,7 +3994,7 @@ paths:
 
   /v1/laprf-emulator:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [LapRF 8-Way Emulator]
       summary: Read built-in LapRF 8-Way TCP :5403 emulator singleton status
       operationId: getLapRFEmulator
       responses:
@@ -4007,7 +4029,7 @@ paths:
                     type: string
 
     put:
-      tags: [Hardware & LapRF Emulator]
+      tags: [LapRF 8-Way Emulator]
       summary: Configure the built-in LapRF 8-Way TCP :5403 emulator singleton
       operationId: putLapRFEmulator
       requestBody:
@@ -4043,7 +4065,7 @@ paths:
                 error: "invalid emulator port or gate assignment"
 
     patch:
-      tags: [Hardware & LapRF Emulator]
+      tags: [LapRF 8-Way Emulator]
       summary: Partially update the built-in LapRF 8-Way TCP :5403 emulator singleton
       operationId: patchLapRFEmulator
       requestBody:

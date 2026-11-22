@@ -18,12 +18,11 @@ import (
 
 func TestRotorHazardSimulatedMultiDeviceAndBrowserRealWebSocketHandshake(t *testing.T) {
 	h := NewHarness(t)
-	h.BootClean("#/setup")
+	h.BootClean("#/network")
 
-	// 1. Switch Timing system to RotorHazard on #/setup and verify Flasher nav is hidden.
-	h.SelectCustomOption(`select[name="timing-hardware-mode"]`, "RotorHazard (Network)")
-	tdSec := h.Page.Locator(`[data-section-anchor="timing-devices"]`).First()
-	h.MustBeVisible(tdSec.Locator(`text=Simulating RotorHazard network timing devices`).First(), "RotorHazard sim description")
+	// 1. Switch Timing system to RotorHazard (Network) inline on #/network and verify Flasher nav is hidden.
+	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "RotorHazard (Network)")
+	h.MustBeVisible(h.Page.Locator(`[data-slot="rh-connection"]`).First(), "RotorHazard connection card")
 
 	flasherNav := h.Page.Locator(`aside a[data-route="flasher"]`).First()
 	h.MustBeHidden(flasherNav, "Flasher sidebar link while RotorHazard is selected")
@@ -84,7 +83,7 @@ func TestRotorHazardSimulatedMultiDeviceAndBrowserRealWebSocketHandshake(t *test
 		t.Fatalf("split host:port: %v", err)
 	}
 
-	// Toggle Simulation OFF via TopBar button, select RotorHazard in the real dataset on #/setup, then open #/network!
+	// Toggle Simulation OFF via TopBar button and select RotorHazard (Network) inline on #/network!
 	simTopBtn := h.Page.Locator(`button[data-action="sim"]`).First()
 	if err := simTopBtn.Click(); err != nil {
 		t.Fatalf("toggle Simulation OFF: %v", err)
@@ -93,29 +92,29 @@ func TestRotorHazardSimulatedMultiDeviceAndBrowserRealWebSocketHandshake(t *test
 		txt, err := simTopBtn.InnerText()
 		return err == nil && strings.Contains(txt, "Simulation off"), nil
 	})
-	h.NavigateSidebar("setup")
-	h.SelectCustomOption(`select[name="timing-hardware-mode"]`, "RotorHazard (Network)")
-	h.NavigateSidebar("network")
+	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "RotorHazard (Network)")
+	rhConn := h.Page.Locator(`[data-slot="rh-connection"]`).First()
+	h.MustBeVisible(rhConn, "RotorHazard connection card in real hardware mode")
 	h.MustBeVisible(rhSec, "RotorHazard Network section in real hardware mode")
 
 	// Fill real RotorHazard server host and port in NetworkView, open per-device credentials prompt, and sign in!
-	if err := rhSec.Locator(`input[data-field="rh-host"]`).Fill(host); err != nil {
+	if err := rhConn.Locator(`input[data-field="rh-host"]`).Fill(host); err != nil {
 		t.Fatalf("fill rh-host: %v", err)
 	}
-	if err := rhSec.Locator(`input[data-field="rh-port"]`).Fill(port); err != nil {
+	if err := rhConn.Locator(`input[data-field="rh-port"]`).Fill(port); err != nil {
 		t.Fatalf("fill rh-port: %v", err)
 	}
-	if err := rhSec.Locator(`button[data-action="rh-open-manual-creds"]`).Click(); err != nil {
+	if err := rhConn.Locator(`button[data-action="rh-open-manual-creds"]`).Click(); err != nil {
 		t.Fatalf("click Connect… to open per-device credentials prompt: %v", err)
 	}
-	h.MustBeVisible(rhSec.Locator(`[data-rh-creds-prompt="1"]`).First(), "Per-device RotorHazard credentials prompt")
-	if err := rhSec.Locator(`input[data-field="rh-cred-user"]`).Fill("admin"); err != nil {
+	h.MustBeVisible(rhConn.Locator(`[data-rh-creds-prompt="1"]`).First(), "Per-device RotorHazard credentials prompt")
+	if err := rhConn.Locator(`input[data-field="rh-cred-user"]`).Fill("admin"); err != nil {
 		t.Fatalf("fill rh-cred-user: %v", err)
 	}
-	if err := rhSec.Locator(`input[data-field="rh-cred-pass"]`).Fill("secret-rh-pass"); err != nil {
+	if err := rhConn.Locator(`input[data-field="rh-cred-pass"]`).Fill("secret-rh-pass"); err != nil {
 		t.Fatalf("fill rh-cred-pass: %v", err)
 	}
-	if err := rhSec.Locator(`button[data-action="rh-cred-submit"]`).Click(); err != nil {
+	if err := rhConn.Locator(`button[data-action="rh-cred-submit"]`).Click(); err != nil {
 		t.Fatalf("click Sign in & Connect to real RotorHazard server: %v", err)
 	}
 

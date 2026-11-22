@@ -29,7 +29,7 @@ By default, SlapRF Portable binds to `http://127.0.0.1:8090`. To allow external 
 ./slaprf -lan -addr 0.0.0.0:8090
 ```
 
-If Basic Auth is enabled under **Settings -> Security**, pass a standard `Authorization: Basic <base64(user:pass)>` header on REST requests (or create an authenticated session check via `POST /v1/auth/sessions`).
+If Basic Auth is enabled under **Settings -> Authentication**, pass a standard `Authorization: Basic <base64(user:pass)>` header on REST requests (or create an authenticated session check via `POST /v1/auth/sessions`).
 
 ## Quick-Start REST Examples
 

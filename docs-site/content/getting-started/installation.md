@@ -125,7 +125,7 @@ By default, the desktop binary binds to `127.0.0.1:8090` for local use on that m
   {{< /tab >}}
 {{< /tabs >}}
 
-SlapRF listens on `0.0.0.0:8090` and prints its local network URL (such as `http://192.168.1.42:8090`). Open **Settings -> Security** in the UI to set an HTTP Basic Auth username and password so spectators cannot modify race settings. If you get locked out, start the binary once with `-no-auth` to clear saved credentials.
+SlapRF listens on `0.0.0.0:8090` and prints its local network URL (such as `http://192.168.1.42:8090`). Open **Settings -> Authentication** in the UI to set an HTTP Basic Auth username and password so spectators cannot modify race settings. If you get locked out, start the binary once with `-no-auth` to clear saved credentials.
 
 ## CLI Flags
 

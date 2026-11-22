@@ -8,7 +8,7 @@ cascade:
 
 SlapRF is an open-source 5.8 GHz FPV drone timing and race management system built for solo practice, club sessions, and organized race events.
 
-The SlapRF ecosystem consists of two parts that can be used together or independently:
+SlapRF consists of two parts that you can use together or separately:
 
 | Component | Summary |
 | :--- | :--- |
@@ -37,5 +37,5 @@ The SlapRF ecosystem consists of two parts that can be used together or independ
 | Timing System | Bluetooth | USB | LAN | Notes |
 | :--- | :---: | :---: | :---: | :--- |
 | SlapRF Hardware | {{< yes >}} | {{< yes >}} | {{< no >}} | Recommended. Seeed Studio XIAO ESP32-C5 Bluetooth or USB-C Hub with up to 6 wireless gates, section splits, and browser flasher. |
-| RotorHazard | {{< no >}} | {{< yes >}} | {{< yes >}} | Connects to existing RotorHazard servers over Wi-Fi / Ethernet (`HTTP` / `Socket.IO`) or USB serial nodes. |
-| LapRF 8-Way | {{< no >}} | {{< no >}} | {{< yes >}} | Connects to existing ImmersionRC LapRF 8-Way pucks over Ethernet LAN (`TCP :5403`). |
+| RotorHazard | {{< no >}} | {{< yes >}} | {{< yes >}} | Connects to RotorHazard servers over Wi-Fi / Ethernet (`HTTP` / `Socket.IO` `:5000`) or standalone RotorHazard USB serial nodes (`115200` / `921600` baud). |
+| LapRF 8-Way | {{< no >}} | {{< yes >}} | {{< yes >}} | Connects to ImmersionRC LapRF 8-Way pucks over Ethernet LAN (`TCP :5403`) or USB CDC serial (`115200` baud). |
