@@ -123,9 +123,11 @@ export class TimingRulesEditor extends Component {
       if (this.isReadOnlyFn()) return;
       const target = e.target;
       if (target instanceof HTMLInputElement && target.dataset.tuneInput) {
+        if (target.value.trim() === "") return;
         const key = target.dataset.tuneInput as NumericGateRuleKey;
         const raw = Number(target.value);
         if (Number.isFinite(raw)) {
+          target.dataset.originalValue = target.value.trim();
           void this.applyTuneRuleValue(key, raw);
         }
         return;
@@ -135,35 +137,15 @@ export class TimingRulesEditor extends Component {
     });
     this.listen(el, "focusin", (e) => {
       const target = e.target;
-      if (!(target instanceof HTMLInputElement)) return;
-      if (!target.dataset.tuneInput && !target.classList.contains("scope-tune-input")) return;
-      if (this.mobileDrawerEl.contains(target)) {
-        this.mobileDrawerEl.classList.add("is-keyboard-open");
-      }
-      target.dataset.replaceOnNextInput = "1";
+      if (!(target instanceof HTMLInputElement) || !target.classList.contains("scope-tune-input")) return;
       target.dataset.originalValue = target.value;
-      try {
-        target.select();
-      } catch {
-        // Ignore selection errors on number inputs
-      }
-    });
-    this.listen(el, "pointerup", (e) => {
-      const target = e.target;
-      if (!(target instanceof HTMLInputElement)) return;
-      if (!target.dataset.tuneInput && !target.classList.contains("scope-tune-input")) return;
-      if (document.activeElement === target && target.dataset.replaceOnNextInput === "1") {
-        try {
-          target.select();
-        } catch {
-          // Ignore selection errors on number inputs
-        }
-      }
+      target.placeholder = target.value;
+      target.value = "";
+      target.dataset.replaceOnNextInput = "1";
     });
     this.listen(el, "beforeinput", (e: InputEvent) => {
       const target = e.target;
-      if (!(target instanceof HTMLInputElement)) return;
-      if (!target.dataset.tuneInput && !target.classList.contains("scope-tune-input")) return;
+      if (!(target instanceof HTMLInputElement) || !target.classList.contains("scope-tune-input")) return;
       if (target.dataset.replaceOnNextInput === "1") {
         delete target.dataset.replaceOnNextInput;
         if (e.inputType === "insertText" && e.data) {
@@ -174,23 +156,28 @@ export class TimingRulesEditor extends Component {
         }
       }
     });
+    this.listen(el, "input", () => {
+      const target = document.activeElement;
+      if (target instanceof HTMLInputElement && target.classList.contains("scope-tune-input")) {
+        delete target.dataset.replaceOnNextInput;
+      }
+    });
     this.listen(el, "focusout", (e) => {
       const target = e.target;
-      if (
-        target instanceof HTMLInputElement &&
-        (target.dataset.tuneInput || target.classList.contains("scope-tune-input"))
-      ) {
-        delete target.dataset.replaceOnNextInput;
-        if (target.value.trim() === "" && target.dataset.originalValue !== undefined) {
-          target.value = target.dataset.originalValue;
+      if (!(target instanceof HTMLInputElement) || !target.classList.contains("scope-tune-input")) return;
+      delete target.dataset.replaceOnNextInput;
+      const trimmed = target.value.trim();
+      if (trimmed === "" && target.dataset.originalValue !== undefined) {
+        target.value = target.dataset.originalValue;
+        return;
+      }
+      const key = target.dataset.tuneInput as NumericGateRuleKey | undefined;
+      if (!this.isReadOnlyFn() && key && trimmed !== "" && trimmed !== target.dataset.originalValue) {
+        const raw = Number(trimmed);
+        if (Number.isFinite(raw)) {
+          void this.applyTuneRuleValue(key, raw);
         }
       }
-      window.setTimeout(() => {
-        const active = document.activeElement;
-        if (!(active instanceof HTMLInputElement) || !this.mobileDrawerEl.contains(active)) {
-          this.mobileDrawerEl.classList.remove("is-keyboard-open");
-        }
-      }, 60);
     });
     this.listen(el, "keydown", (e) => {
       const target = e.target;
@@ -208,7 +195,7 @@ export class TimingRulesEditor extends Component {
         e.preventDefault();
         target.blur();
       } else if (e.key === "Escape") {
-        target.value = target.defaultValue;
+        target.value = target.dataset.originalValue ?? target.defaultValue;
         target.blur();
       } else if (
         target.dataset.replaceOnNextInput === "1" &&

@@ -3494,13 +3494,6 @@ html[data-theme="light"] .scope-tune-custom-icon {
     pointer-events: none;
     animation: pilot-drawer-slide-down 0.2s cubic-bezier(0.32, 0, 0.67, 0) forwards !important;
   }
-  .scope-tune-drawer.is-keyboard-open {
-    top: 54px !important;
-    bottom: auto !important;
-    max-height: calc(100dvh - 64px) !important;
-    border-radius: 18px;
-    border: 1.5px solid var(--border-strong);
-  }
   .scope-tune-mobile-handle-bar,
   .scope-tune-head {
     touch-action: none;

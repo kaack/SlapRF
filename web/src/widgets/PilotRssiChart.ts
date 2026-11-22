@@ -524,20 +524,12 @@ export class PilotRssiChart extends Component {
     this.listen(this.tuneDrawerEl, "focusin", (e) => {
       const target = e.target;
       if (!(target instanceof HTMLInputElement) || !target.dataset.tuneInput) return;
-      this.tuneDrawerEl.classList.add("is-keyboard-open");
-      target.dataset.replaceOnNextInput = "1";
       target.dataset.originalValue = target.value;
-      try {
-        target.select();
-      } catch {
-        // Ignore selection errors on number inputs
-      }
-    });
-
-    this.listen(this.tuneDrawerEl, "pointerup", (e) => {
-      const target = e.target;
-      if (!(target instanceof HTMLInputElement) || !target.dataset.tuneInput) return;
-      if (document.activeElement === target && target.dataset.replaceOnNextInput === "1") {
+      target.dataset.replaceOnNextInput = "1";
+      if (target.classList.contains("scope-tune-input")) {
+        target.placeholder = target.value;
+        target.value = "";
+      } else {
         try {
           target.select();
         } catch {
@@ -560,20 +552,29 @@ export class PilotRssiChart extends Component {
       }
     });
 
-    this.listen(this.tuneDrawerEl, "focusout", (e) => {
-      const target = e.target;
+    this.listen(this.tuneDrawerEl, "input", () => {
+      const target = document.activeElement;
       if (target instanceof HTMLInputElement && target.dataset.tuneInput) {
         delete target.dataset.replaceOnNextInput;
-        if (target.value.trim() === "" && target.dataset.originalValue !== undefined) {
-          target.value = target.dataset.originalValue;
+      }
+    });
+
+    this.listen(this.tuneDrawerEl, "focusout", (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLInputElement) || !target.dataset.tuneInput) return;
+      delete target.dataset.replaceOnNextInput;
+      const trimmed = target.value.trim();
+      if (trimmed === "" && target.dataset.originalValue !== undefined) {
+        target.value = target.dataset.originalValue;
+        return;
+      }
+      const key = target.dataset.tuneInput as GateRuleKey | undefined;
+      if (key && trimmed !== "" && trimmed !== target.dataset.originalValue) {
+        const raw = Number(trimmed);
+        if (Number.isFinite(raw)) {
+          void this.applyTuneRuleValue(key, raw);
         }
       }
-      window.setTimeout(() => {
-        const active = document.activeElement;
-        if (!(active instanceof HTMLInputElement) || !this.tuneDrawerEl.contains(active)) {
-          this.tuneDrawerEl.classList.remove("is-keyboard-open");
-        }
-      }, 60);
     });
 
     this.listen(this.tuneDrawerEl, "change", (e) => {
@@ -581,8 +582,10 @@ export class PilotRssiChart extends Component {
       if (!(target instanceof HTMLInputElement)) return;
       const key = target.dataset.tuneInput as GateRuleKey | undefined;
       if (!key) return;
+      if (target.value.trim() === "") return;
       const raw = Number(target.value);
       if (!Number.isFinite(raw)) return;
+      target.dataset.originalValue = target.value.trim();
       void this.applyTuneRuleValue(key, raw);
     });
 
@@ -593,7 +596,7 @@ export class PilotRssiChart extends Component {
         e.preventDefault();
         target.blur();
       } else if (e.key === "Escape") {
-        target.value = target.defaultValue;
+        target.value = target.dataset.originalValue ?? target.defaultValue;
         target.blur();
       } else if (
         target.dataset.replaceOnNextInput === "1" &&
