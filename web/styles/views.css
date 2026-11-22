@@ -6710,10 +6710,60 @@ html[data-theme="light"] .flasher-hub-link .segmented button.is-active {
   align-items: center;
   justify-content: space-between;
   flex-wrap: wrap;
-  gap: 12px;
+  gap: 10px;
   padding: 13px 18px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-2);
+}
+.net-device-card-head.is-rh-card-head > .net-device-head-title {
+  margin-right: auto;
+  min-width: 0;
+}
+.net-device-head-badges {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.net-device-head-btn {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+@media (max-width: 720px) {
+  .net-device-card-head {
+    padding: 11px 14px;
+    gap: 8px;
+  }
+  .net-device-card-head.is-laprf-card-head {
+    flex-wrap: nowrap;
+  }
+  .net-device-card-head.is-laprf-card-head > .net-device-head-title {
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+  .net-device-card-head.is-laprf-card-head .net-device-laprf-track-badge {
+    display: none;
+  }
+  .net-device-card-head.is-rh-card-head > .net-device-head-title {
+    order: 1;
+    flex: 1 1 auto;
+    min-width: 0;
+    margin-right: 0;
+  }
+  .net-device-card-head.is-rh-card-head > .net-device-head-btn {
+    order: 2;
+    flex: 0 0 auto;
+    margin-left: auto;
+  }
+  .net-device-card-head.is-rh-card-head > .net-device-head-badges {
+    order: 3;
+    flex: 1 0 100%;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+  }
 }
 .net-device-card-kpis {
   padding: 14px 18px;

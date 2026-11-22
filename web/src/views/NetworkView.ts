@@ -2512,15 +2512,15 @@ export class NetworkView extends Component {
 
             return `
               <div class="card card-flush" data-laprf-card="${snap.timerId}">
-                <div class="net-device-card-head">
-                  <span class="debug-led-status">
+                <div class="net-device-card-head is-laprf-card-head">
+                  <span class="debug-led-status net-device-head-title">
                     <span class="timer-color-dot ${snap.connected ? "is-live" : "is-off"}" style="--c:${esc(color)}" title="${snap.connected ? "Connected" : "Disconnected"}"></span>
                     <span class="debug-head-note">
                       <strong>${esc(snap.label)}</strong> · <span class="mono">${esc(snap.endpoint)}</span>
                     </span>
                   </span>
                   <div class="debug-connect-actions">
-                    <span class="badge">${assignedGate ? esc(assignedGate) : "Unassigned"}</span>
+                    <span class="badge net-device-laprf-track-badge">${assignedGate ? esc(assignedGate) : "Unassigned"}</span>
                     ${
                       !isUSBMode
                         ? `<button class="btn net-conn-btn" type="button" data-action="laprf-disconnect" data-timer-id="${snap.timerId}">
@@ -3071,17 +3071,19 @@ export class NetworkView extends Component {
 
             return `
               <div class="card card-flush" data-rh-card="${snap.timerId}">
-                <div class="net-device-card-head">
-                  <span class="debug-led-status">
+                <div class="net-device-card-head is-rh-card-head">
+                  <span class="debug-led-status net-device-head-title">
                     <span class="timer-color-dot ${snap.connected ? "is-live" : "is-off"}" style="--c:${esc(color)}" title="${snap.connected ? "Connected" : "Disconnected"}"></span>
                     <span class="debug-head-note">
                       <strong>${esc(snapLabel)}</strong> · <span class="mono">${esc(snap.endpoint)}</span>
                     </span>
                   </span>
-                  <div class="debug-connect-actions">
+                  <div class="net-device-head-badges">
                     ${authBadge}
                     <span class="badge">${nodeCount} nodes</span>
                     <span class="badge">${assignedGate ? esc(assignedGate) : "Unassigned"}</span>
+                  </div>
+                  <div class="net-device-head-btn">
                     <button class="btn net-conn-btn" type="button" data-action="rh-disconnect" data-timer-id="${snap.timerId}">
                       ${icons.plugOff(14)}<span>Disconnect</span>
                     </button>
@@ -3350,14 +3352,14 @@ export class NetworkView extends Component {
 
             return `
               <div class="card card-flush" data-rh-usb-card="${snap.timerId}">
-                <div class="net-device-card-head">
-                  <span class="debug-led-status">
+                <div class="net-device-card-head is-rh-card-head">
+                  <span class="debug-led-status net-device-head-title">
                     <span class="timer-color-dot ${snap.connected ? "is-live" : "is-off"}" style="--c:${esc(color)}" title="${snap.connected ? "Connected" : "Disconnected"}"></span>
                     <span class="debug-head-note">
                       <strong>${esc(snapLabel)}</strong> · <span class="mono">${esc(portStr)}</span>
                     </span>
                   </span>
-                  <div class="debug-connect-actions">
+                  <div class="net-device-head-badges">
                     ${snap.connected ? `<span class="badge badge-good mono">API ${apiLvl}</span>` : `<span class="badge">Offline</span>`}
                     <span class="badge">${nodeCount} nodes</span>
                     <span class="badge">${assignedGate ? esc(assignedGate) : "Unassigned"}</span>
