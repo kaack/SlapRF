@@ -383,7 +383,8 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(txt).toContain("Node 1");
       expect(txt).toContain("5658 MHz");
       expect(txt).toContain("Disabled");
-      expect(txt).toContain("Xing");
+      expect(txt).toContain("CROSSING");
+      expect(txt).toContain("XING");
       // Disabled Node 8 must NOT repeat "Disabled" in the right-hand value column
       const disabledValEl = root.querySelector<HTMLElement>("[data-rh-bar-val='7']")!;
       expect(disabledValEl).not.toBeNull();
@@ -668,7 +669,8 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(usbVisTxt).toContain("8 nodes");
       expect(usbVisTxt).toContain("8-node receiver RSSI (0-255 scale)");
       expect(usbVisTxt).not.toContain("Seat 1");
-      expect(usbVisTxt).toContain("Xing");
+      expect(usbVisTxt).toContain("CROSSING");
+      expect(usbVisTxt).toContain("XING");
       expect(usbVisTxt).not.toContain("Scan LAN");
       expect(usbVisTxt).not.toContain("Admin Password");
 

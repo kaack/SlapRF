@@ -2916,8 +2916,10 @@ export class NetworkView extends Component {
           if (fillEl && fillEl.style.width !== widthStr) fillEl.style.width = widthStr;
           const crossEl = card.querySelector<HTMLElement>(`[data-rh-bar-cross="${idx}"]`);
           if (crossEl) {
-            const wantCross = isCross ? "Xing" : "";
-            if (crossEl.textContent !== wantCross) crossEl.textContent = wantCross;
+            const wantCrossHtml = isCross
+              ? `<span class="net-unit-desktop">CROSSING</span><span class="net-unit-mobile">XING</span>`
+              : "";
+            if (crossEl.innerHTML !== wantCrossHtml) crossEl.innerHTML = wantCrossHtml;
             crossEl.hidden = !isCross;
           }
           const valEl = card.querySelector<HTMLElement>(`[data-rh-bar-val="${idx}"]`);
@@ -3061,7 +3063,7 @@ export class NetworkView extends Component {
                       active
                         ? `<span title="Exit threshold ${Math.round(exitLvl)}" style="position:absolute;top:-2px;bottom:-2px;left:${exitPct.toFixed(1)}%;width:2px;background:rgba(250,204,21,0.65);pointer-events:none"></span>
                            <span title="Enter threshold ${Math.round(enterLvl)}" style="position:absolute;top:-2px;bottom:-2px;left:${enterPct.toFixed(1)}%;width:2px;background:rgba(163,230,53,0.9);pointer-events:none"></span>
-                           <span class="net-node-crossing-tag mono" data-rh-bar-cross="${idx}" ${isCross ? "" : "hidden"}>${isCross ? "Xing" : ""}</span>`
+                           <span class="net-node-crossing-tag mono" data-rh-bar-cross="${idx}" ${isCross ? "" : "hidden"}>${isCross ? `<span class="net-unit-desktop">CROSSING</span><span class="net-unit-mobile">XING</span>` : ""}</span>`
                         : ""
                     }
                   </div>
@@ -3210,8 +3212,10 @@ export class NetworkView extends Component {
           if (fillEl && fillEl.style.width !== widthStr) fillEl.style.width = widthStr;
           const crossEl = card.querySelector<HTMLElement>(`[data-rh-bar-cross="${idx}"]`);
           if (crossEl) {
-            const wantCross = isCross ? "Xing" : "";
-            if (crossEl.textContent !== wantCross) crossEl.textContent = wantCross;
+            const wantCrossHtml = isCross
+              ? `<span class="net-unit-desktop">CROSSING</span><span class="net-unit-mobile">XING</span>`
+              : "";
+            if (crossEl.innerHTML !== wantCrossHtml) crossEl.innerHTML = wantCrossHtml;
             crossEl.hidden = !isCross;
           }
           const valEl = card.querySelector<HTMLElement>(`[data-rh-bar-val="${idx}"]`);
@@ -3342,7 +3346,7 @@ export class NetworkView extends Component {
                       active
                         ? `<span title="Exit threshold ${Math.round(exitLvl)}" style="position:absolute;top:-2px;bottom:-2px;left:${exitPct.toFixed(1)}%;width:2px;background:rgba(250,204,21,0.65);pointer-events:none"></span>
                            <span title="Enter threshold ${Math.round(enterLvl)}" style="position:absolute;top:-2px;bottom:-2px;left:${enterPct.toFixed(1)}%;width:2px;background:rgba(163,230,53,0.9);pointer-events:none"></span>
-                           <span class="net-node-crossing-tag mono" data-rh-bar-cross="${idx}" ${isCross ? "" : "hidden"}>${isCross ? "Xing" : ""}</span>`
+                           <span class="net-node-crossing-tag mono" data-rh-bar-cross="${idx}" ${isCross ? "" : "hidden"}>${isCross ? `<span class="net-unit-desktop">CROSSING</span><span class="net-unit-mobile">XING</span>` : ""}</span>`
                         : ""
                     }
                   </div>
