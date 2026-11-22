@@ -34,6 +34,7 @@ import { AppStore } from "../state/store";
 import {
   EventPilot,
   HeatSeat,
+  isLapRFMode,
   isRotorHazardMode,
   isSlapRFMode,
   PilotAttendance,
@@ -3271,7 +3272,7 @@ export class RacesView extends Component {
     const sfNode =
       this.store.nodes.find((n) => n.role === "START_FINISH") ?? this.store.nodes[0];
     if (!sfNode || !Array.isArray(sfNode.lastRssi)) return;
-    const isLapRF = this.store.timingHardwareMode === "laprf";
+    const isLapRF = isLapRFMode(this.store.timingHardwareMode);
     const isRH = isRotorHazardMode(this.store.timingHardwareMode);
     this.el.querySelectorAll<HTMLElement>("[data-pilot-rssi]").forEach((row) => {
       const slot = Number(row.dataset.pilotRssi);

@@ -498,6 +498,7 @@ export class TopBar extends Component {
 
     const isExternalTimer =
       this.store.timingHardwareMode === "laprf" ||
+      this.store.timingHardwareMode === "laprf_usb" ||
       this.store.timingHardwareMode === "rotorhazard" ||
       this.store.timingHardwareMode === "rotorhazard_usb";
     const hideFlasher = isExternalTimer;
@@ -633,17 +634,21 @@ export class TopBar extends Component {
         ? "RotorHazard USB diagnostics: binary serial self-test, RX5808 node health, live 0-255 RSSI monitor, spectrum scan & waterfall"
         : meta.id === "debug" && hwMode === "rotorhazard"
           ? "RotorHazard diagnostics: Socket.IO self-test, RX5808 node health, live 0-255 RSSI monitor, and threshold noise"
-          : meta.id === "debug" && hwMode === "laprf"
-            ? "LapRF 8-Way diagnostics: TCP/USB link status, 8-slot RSSI telemetry, clock sync, and supply voltage"
-            : meta.id === "debug" && hwMode === "slaprf_ble"
-              ? "SlapRF Bluetooth Hub diagnostics: BLE link sync, pairing state, 5.8 GHz receiver health, live RSSI monitor & spectrum scan"
-              : meta.id === "network" && hwMode === "rotorhazard_usb"
-                ? "RotorHazard USB serial nodes, multi-node RX5808 tuning, and live 0-255 node RSSI"
-                : meta.id === "network" && hwMode === "rotorhazard"
-                  ? "RotorHazard timing devices, per-device admin credentials, clock sync, and live 0–255 RX5808 node RSSI"
-                  : meta.id === "network" && hwMode === "laprf"
-                    ? "LapRF 8-Way pucks over Ethernet (:5403) or USB CDC, clock sync, and live 8-slot RSSI"
-                    : meta.id === "network" && hwMode === "slaprf_ble"
+          : meta.id === "debug" && hwMode === "laprf_usb"
+            ? "LapRF 8-Way USB diagnostics: USB CDC link status, 8-slot RSSI telemetry, clock sync, and supply voltage"
+            : meta.id === "debug" && hwMode === "laprf"
+              ? "LapRF 8-Way diagnostics: Ethernet TCP :5403 link status, 8-slot RSSI telemetry, clock sync, and supply voltage"
+              : meta.id === "debug" && hwMode === "slaprf_ble"
+                ? "SlapRF Bluetooth Hub diagnostics: BLE link sync, pairing state, 5.8 GHz receiver health, live RSSI monitor & spectrum scan"
+                : meta.id === "network" && hwMode === "rotorhazard_usb"
+                  ? "RotorHazard USB serial nodes, multi-node RX5808 tuning, and live 0-255 node RSSI"
+                  : meta.id === "network" && hwMode === "rotorhazard"
+                    ? "RotorHazard timing devices, per-device admin credentials, clock sync, and live 0–255 RX5808 node RSSI"
+                    : meta.id === "network" && hwMode === "laprf_usb"
+                      ? "LapRF 8-Way pucks over USB CDC serial (115200 baud), clock sync, and live 8-slot RSSI"
+                      : meta.id === "network" && hwMode === "laprf"
+                        ? "LapRF 8-Way pucks over Ethernet (:5403), LAN discovery, clock sync, and live 8-slot RSSI"
+                        : meta.id === "network" && hwMode === "slaprf_ble"
                       ? "SlapRF Bluetooth Hub wireless connection, pairing status, and live 8-channel 5.8 GHz RSSI"
                       : meta.subtitle;
 
@@ -884,6 +889,7 @@ export class TopBar extends Component {
     const appTheme = getAppTheme();
     const isExternalTimer =
       this.store.timingHardwareMode === "laprf" ||
+      this.store.timingHardwareMode === "laprf_usb" ||
       this.store.timingHardwareMode === "rotorhazard" ||
       this.store.timingHardwareMode === "rotorhazard_usb";
     const hideFlasher = isExternalTimer;

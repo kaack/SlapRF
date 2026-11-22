@@ -181,6 +181,9 @@ func (e *Engine) SetTimingHardwareMode(mode domain.TimingHardwareMode, isSim boo
 		e.savedLapRFGates = nil
 		e.savedLapRFTimers = nil
 		e.hasSavedLapRFState = false
+		e.savedLapRFUSBGates = nil
+		e.savedLapRFUSBTimers = nil
+		e.hasSavedLapRFUSBState = false
 		e.savedRHGates = nil
 		e.savedRHTimers = nil
 		e.hasSavedRHState = false
@@ -198,6 +201,10 @@ func (e *Engine) SetTimingHardwareMode(mode domain.TimingHardwareMode, isSim boo
 			e.savedLapRFGates = append([]domain.TrackGate(nil), e.gates...)
 			e.savedLapRFTimers = cloneTimersMapToSlice(e.detected)
 			e.hasSavedLapRFState = true
+		case domain.HardwareModeLapRFUSB:
+			e.savedLapRFUSBGates = append([]domain.TrackGate(nil), e.gates...)
+			e.savedLapRFUSBTimers = cloneTimersMapToSlice(e.detected)
+			e.hasSavedLapRFUSBState = true
 		case domain.HardwareModeRotorHazard:
 			e.savedRHGates = append([]domain.TrackGate(nil), e.gates...)
 			e.savedRHTimers = cloneTimersMapToSlice(e.detected)
@@ -218,7 +225,7 @@ func (e *Engine) SetTimingHardwareMode(mode domain.TimingHardwareMode, isSim boo
 		switch next {
 		case domain.HardwareModeSlapRFBLE:
 			e.gates, e.detected = defaultSimSlapRFBLELayoutLocked(now)
-		case domain.HardwareModeLapRF:
+		case domain.HardwareModeLapRF, domain.HardwareModeLapRFUSB:
 			e.gates, e.detected = defaultSimLapRFLayoutLocked(now)
 		case domain.HardwareModeRotorHazard, domain.HardwareModeRotorHazardUSB:
 			e.gates, e.detected = defaultSimRHLayoutLocked(now)
@@ -240,6 +247,14 @@ func (e *Engine) SetTimingHardwareMode(mode domain.TimingHardwareMode, isSim boo
 			if e.hasSavedLapRFState {
 				e.gates = append([]domain.TrackGate(nil), e.savedLapRFGates...)
 				e.detected = restoreTimersSliceToMap(e.savedLapRFTimers)
+			} else {
+				e.gates = []domain.TrackGate{}
+				e.detected = make(map[uint8]*domain.DetectedTimer)
+			}
+		case domain.HardwareModeLapRFUSB:
+			if e.hasSavedLapRFUSBState {
+				e.gates = append([]domain.TrackGate(nil), e.savedLapRFUSBGates...)
+				e.detected = restoreTimersSliceToMap(e.savedLapRFUSBTimers)
 			} else {
 				e.gates = []domain.TrackGate{}
 				e.detected = make(map[uint8]*domain.DetectedTimer)
@@ -340,7 +355,7 @@ func (e *Engine) ActiveLapRFSlotSpecs(timerID uint8) [domain.MaxPilotSlots]LapRF
 // and optionally binds it to Gate 1 (START_FINISH) if the course currently has no gates.
 func (e *Engine) EnsureLapRFTimerRegistered(timerID uint8, label string, voltageMv uint16, autoBindFirstGate bool) uint8 {
 	e.mu.Lock()
-	if domain.NormalizeTimingHardwareMode(e.timingHardwareMode) != domain.HardwareModeLapRF {
+	if !domain.IsLapRFMode(e.timingHardwareMode) {
 		e.mu.Unlock()
 		return timerID
 	}
@@ -462,7 +477,7 @@ func (e *Engine) IngestExternalLapRFStatus(
 	var raceSnap domain.RaceTournamentState
 
 	e.mu.Lock()
-	if domain.NormalizeTimingHardwareMode(e.timingHardwareMode) != domain.HardwareModeLapRF {
+	if !domain.IsLapRFMode(e.timingHardwareMode) {
 		e.mu.Unlock()
 		return
 	}
@@ -615,7 +630,7 @@ func (e *Engine) InjectExternalLapRFCrossing(
 	var practiceSnap domain.PracticeManagerState
 
 	e.mu.Lock()
-	if domain.NormalizeTimingHardwareMode(e.timingHardwareMode) != domain.HardwareModeLapRF {
+	if !domain.IsLapRFMode(e.timingHardwareMode) {
 		e.mu.Unlock()
 		return
 	}

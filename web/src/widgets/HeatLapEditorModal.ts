@@ -4,7 +4,7 @@ import { icons } from "../core/icons";
 import { ApiClient } from "../services/api_client";
 import { enterThresholdAt, exitThresholdAt, gateLabel, laprfThresholdAt, rhThresholdAt } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { HeatCrossing, HeatRssiSample, HeatSeat, isRotorHazardMode, isSlapRFMode, RaceHeat, RaceTournamentState, TimingHardwareMode } from "../types/models";
+import { HeatCrossing, HeatRssiSample, HeatSeat, isLapRFMode, isRotorHazardMode, isSlapRFMode, RaceHeat, RaceTournamentState, TimingHardwareMode } from "../types/models";
 import { showToast } from "./Toast";
 
 const BAND_LETTER: Record<number, string> = { 0: "R", 1: "R", 2: "A", 3: "B", 4: "E", 5: "F", 6: "D" };
@@ -455,18 +455,18 @@ export function openHeatLapEditorModal(
   const getSeatHardwareMode = (heat: RaceHeat, seat: HeatSeat): TimingHardwareMode => {
     if (
       isRotorHazardMode(heat.hardwareMode) ||
-      heat.hardwareMode === "laprf" ||
+      isLapRFMode(heat.hardwareMode) ||
       (heat.hardwareMode && isSlapRFMode(heat.hardwareMode))
     ) {
       return heat.hardwareMode;
     }
     const en = seat.enterRssiDbm ?? 0;
     if (en < 0) return "slaprf";
-    if (en > 260) return "laprf";
+    if (en > 260) return isLapRFMode(store.timingHardwareMode) ? store.timingHardwareMode : "laprf";
     if (en > 0 && en <= 255) return isRotorHazardMode(store.timingHardwareMode) ? store.timingHardwareMode : "rotorhazard";
     if (seat.rssiTrace && seat.rssiTrace.length > 0) {
       if (seat.rssiTrace.some((pt) => pt.r < 0)) return "slaprf";
-      if (seat.rssiTrace.some((pt) => pt.r > 260)) return "laprf";
+      if (seat.rssiTrace.some((pt) => pt.r > 260)) return isLapRFMode(store.timingHardwareMode) ? store.timingHardwareMode : "laprf";
       if (seat.rssiTrace.some((pt) => pt.r > 0 && pt.r <= 255)) {
         return isRotorHazardMode(store.timingHardwareMode) ? store.timingHardwareMode : "rotorhazard";
       }
@@ -482,10 +482,10 @@ export function openHeatLapEditorModal(
     const drafted = draftThresholdsByGate.get(selectedGateId);
     const hasNode = Boolean(store.node(selectedGateId));
     const sfId = store.nodes.find((n) => n.role === "START_FINISH")?.gateId ?? store.nodes[0]?.gateId ?? 1;
-    if (hwMode === "laprf") {
+    if (isLapRFMode(hwMode)) {
       let thr = drafted
         ? drafted.enterDb
-        : hasNode && store.timingHardwareMode === "laprf"
+        : hasNode && isLapRFMode(store.timingHardwareMode)
           ? laprfThresholdAt(store, selectedGateId, seat.pilotSlotIndex).dbm
           : seat.enterRssiDbm && seat.enterRssiDbm > 260
             ? seat.enterRssiDbm
@@ -496,7 +496,7 @@ export function openHeatLapEditorModal(
       if (threshDrag) {
         thr = threshDrag.currentDbm;
       }
-      return { enterDb: Math.round(thr), exitDb: Math.round(thr), hwMode: "laprf" };
+      return { enterDb: Math.round(thr), exitDb: Math.round(thr), hwMode };
     }
     if (isRotorHazardMode(hwMode)) {
       let enterVal: number;
@@ -671,7 +671,7 @@ export function openHeatLapEditorModal(
 
   const activeYDomain = (hwMode: TimingHardwareMode): { minDbm: number; maxDbm: number } =>
     customY ??
-    (hwMode === "laprf"
+    (isLapRFMode(hwMode)
       ? { minDbm: LAPRF_Y_MIN, maxDbm: LAPRF_Y_MAX }
       : isRotorHazardMode(hwMode)
         ? { minDbm: RH_Y_MIN, maxDbm: RH_Y_MAX }
@@ -715,7 +715,7 @@ export function openHeatLapEditorModal(
   };
 
   const ySpanBounds = (hwMode: TimingHardwareMode): { minSpan: number; maxSpan: number; absLo: number; absHi: number } => {
-    if (hwMode === "laprf") {
+    if (isLapRFMode(hwMode)) {
       return { minSpan: LAPRF_MIN_Y_SPAN, maxSpan: LAPRF_MAX_Y_SPAN, absLo: LAPRF_ABS_MIN, absHi: LAPRF_ABS_MAX };
     }
     if (isRotorHazardMode(hwMode)) {
@@ -785,7 +785,7 @@ export function openHeatLapEditorModal(
 
     // Dynamic Y gridlines
     const yStep =
-      hwMode === "laprf"
+      isLapRFMode(hwMode)
         ? ySpan <= 600
           ? 100
           : ySpan <= 1500
@@ -845,7 +845,7 @@ export function openHeatLapEditorModal(
     const enterY = dbmToY(enterDb);
     const exitY = dbmToY(exitDb);
     const enterVisible = enterY >= PAD_T - 2 && enterY <= SVG_H - PAD_B + 2;
-    const exitVisible = hwMode !== "laprf" && exitY >= PAD_T - 2 && exitY <= SVG_H - PAD_B + 2;
+    const exitVisible = !isLapRFMode(hwMode) && exitY >= PAD_T - 2 && exitY <= SVG_H - PAD_B + 2;
     const enterYf = enterY.toFixed(1);
     const exitYf = exitY.toFixed(1);
     const canDragThresh =
@@ -853,9 +853,10 @@ export function openHeatLapEditorModal(
       Boolean(store.node(selectedGateId)) &&
       (store.timingHardwareMode === hwMode ||
         (isSlapRFMode(store.timingHardwareMode) && isSlapRFMode(hwMode)) ||
+        (isLapRFMode(store.timingHardwareMode) && isLapRFMode(hwMode)) ||
         (isRotorHazardMode(store.timingHardwareMode) && isRotorHazardMode(hwMode)));
     const enterLbl =
-      hwMode === "laprf"
+      isLapRFMode(hwMode)
         ? `Thresh ${enterDb}`
         : isRotorHazardMode(hwMode)
           ? `Enter ${enterDb}`
@@ -914,8 +915,8 @@ export function openHeatLapEditorModal(
     } else if (rows.length > 0) {
       const synPts: string[] = [];
       const steps = 180;
-      const baseFloor = hwMode === "laprf" ? 360 : isRotorHazardMode(hwMode) ? 22 : -90;
-      const defaultPeak = hwMode === "laprf" ? 2100 : isRotorHazardMode(hwMode) ? 185 : -44;
+      const baseFloor = isLapRFMode(hwMode) ? 360 : isRotorHazardMode(hwMode) ? 22 : -90;
+      const defaultPeak = isLapRFMode(hwMode) ? 2100 : isRotorHazardMode(hwMode) ? 185 : -44;
       for (let i = 0; i <= steps; i++) {
         const ms = lastDomain.minMs + (i / steps) * spanMs;
         let db = baseFloor;
@@ -1226,7 +1227,7 @@ export function openHeatLapEditorModal(
             <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">Best Lap</span><span class="lap-ed-metric-val mono">${bestStr}</span></div>
             <div class="lap-ed-metric"><span class="lap-ed-metric-lbl">Holeshot</span><span class="lap-ed-metric-val mono">${hsStr}</span></div>
             <div class="lap-ed-metric"><span class="lap-ed-metric-lbl"><span class="lap-ed-lbl-full">Total Time</span><span class="lap-ed-lbl-short">Total</span></span><span class="lap-ed-metric-val mono">${totalStr}</span></div>
-            <div class="lap-ed-metric is-thresh-metric"><span class="lap-ed-metric-lbl">${hwMode === "laprf" ? "Threshold" : "Enter / Exit"}</span><span class="lap-ed-metric-val mono">${hwMode === "laprf" ? `${enterDb}` : isRotorHazardMode(hwMode) ? `${enterDb} / ${exitDb}` : `${enterDb} / ${exitDb} dBm`}</span></div>
+            <div class="lap-ed-metric is-thresh-metric"><span class="lap-ed-metric-lbl">${isLapRFMode(hwMode) ? "Threshold" : "Enter / Exit"}</span><span class="lap-ed-metric-val mono">${isLapRFMode(hwMode) ? `${enterDb}` : isRotorHazardMode(hwMode) ? `${enterDb} / ${exitDb}` : `${enterDb} / ${exitDb} dBm`}</span></div>
           </div>
 
           ${
@@ -1519,7 +1520,7 @@ export function openHeatLapEditorModal(
       // 4. Commit any staged threshold changes
       for (const [gateId, thr] of currentThresh) {
         if (!store.node(gateId)) continue;
-        if (thr.hwMode === "laprf") {
+        if (isLapRFMode(thr.hwMode)) {
           await api.setGateThresholds([
             {
               gateId,
@@ -1902,7 +1903,7 @@ export function openHeatLapEditorModal(
       const rawDbm = clientYToDbm(svg, e.clientY);
       const hwMode = getSeatHardwareMode(heat, seat);
       const drafted = draftThresholdsByGate.get(selectedGateId);
-      if (hwMode === "laprf") {
+      if (isLapRFMode(hwMode)) {
         threshDrag.currentDbm = clamp(rawDbm, 300, 3500);
       } else if (isRotorHazardMode(hwMode)) {
         const savedEnter = drafted
@@ -2010,12 +2011,12 @@ export function openHeatLapEditorModal(
       const { heat, seat } = getHeatAndSeat();
       if (!heat || !seat || !store.node(selectedGateId)) return;
       const cur = getGateThresholds(heat, seat);
-      if (cur.hwMode === "laprf") {
+      if (isLapRFMode(cur.hwMode)) {
         const thr = clamp(Math.round(finishedThresh.currentDbm), 300, 3500);
         draftThresholdsByGate.set(selectedGateId, {
           enterDb: thr,
           exitDb: thr,
-          hwMode: "laprf",
+          hwMode: cur.hwMode,
         });
       } else if (isRotorHazardMode(cur.hwMode)) {
         const rhEnterThreshold =

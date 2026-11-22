@@ -30,7 +30,7 @@ func (e *Engine) SetGateThresholds(updates []domain.GateThresholdUpdate) error {
 	}
 	targets := make([]target, 0, len(updates))
 	hwMode := domain.NormalizeTimingHardwareMode(e.timingHardwareMode)
-	isLapRFMode := hwMode == domain.HardwareModeLapRF
+	isLapRFMode := domain.IsLapRFMode(hwMode)
 	isRHMode := domain.IsRotorHazardMode(hwMode)
 
 	for _, u := range updates {
@@ -207,7 +207,7 @@ func (e *Engine) syncStartFinishThresholdsToRaceLocked(hwMode domain.TimingHardw
 			}
 			var en, ex float32
 			switch hwMode {
-			case domain.HardwareModeLapRF:
+			case domain.HardwareModeLapRF, domain.HardwareModeLapRFUSB:
 				en = laprfThresholdFor(sfGate, pPos, e.pilots[pPos])
 				ex = en
 			case domain.HardwareModeRotorHazard, domain.HardwareModeRotorHazardUSB:

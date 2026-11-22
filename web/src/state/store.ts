@@ -1323,7 +1323,9 @@ export class AppStore {
         ? this._streamAnchorBaseUs + Math.max(0, (nowMs - this._streamAnchorPerfMs) * 1000) * speedMult
         : latest;
     const baseLookbackUs =
-      this._timingHardwareMode === "laprf" || isRotorHazardMode(this._timingHardwareMode)
+      this._timingHardwareMode === "laprf" ||
+      this._timingHardwareMode === "laprf_usb" ||
+      isRotorHazardMode(this._timingHardwareMode)
         ? 230_000
         : 195_000;
     const targetUs = Math.max(0, streamClockUs - baseLookbackUs * speedMult);
@@ -1450,7 +1452,9 @@ export class AppStore {
     this._summaries = state.summaries ?? [];
     this._rules = normalizeTimingRules(state.rules);
     this._timingHardwareMode = normalizeTimingHardwareMode(state.timingHardwareMode);
-    sharedLapRFEmulatorRelay.setSuppressed(this._timingHardwareMode === "laprf");
+    sharedLapRFEmulatorRelay.setSuppressed(
+      this._timingHardwareMode === "laprf" || this._timingHardwareMode === "laprf_usb"
+    );
     this._simulatorRunning = state.simulatorRunning;
     this._simState = state.simState ?? null;
     this._simMultiGP = state.simMultiGP ?? null;
@@ -1510,7 +1514,7 @@ export class AppStore {
       const nextHw: TimingHardwareMode = normalizeTimingHardwareMode(status.timingHardwareMode);
       if (nextHw !== this._timingHardwareMode) {
         this._timingHardwareMode = nextHw;
-        sharedLapRFEmulatorRelay.setSuppressed(nextHw === "laprf");
+        sharedLapRFEmulatorRelay.setSuppressed(nextHw === "laprf" || nextHw === "laprf_usb");
       }
     }
     this._simulatorRunning = status.simulatorRunning;

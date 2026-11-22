@@ -91,10 +91,13 @@ type Engine struct {
 	savedSlapRFBLEGates    []domain.TrackGate
 	savedSlapRFBLETimers   []domain.DetectedTimer
 	hasSavedSlapRFBLEState bool
-	savedLapRFGates        []domain.TrackGate
-	savedLapRFTimers   []domain.DetectedTimer
-	hasSavedLapRFState bool
-	savedRHGates        []domain.TrackGate
+	savedLapRFGates       []domain.TrackGate
+	savedLapRFTimers      []domain.DetectedTimer
+	hasSavedLapRFState    bool
+	savedLapRFUSBGates    []domain.TrackGate
+	savedLapRFUSBTimers   []domain.DetectedTimer
+	hasSavedLapRFUSBState bool
+	savedRHGates          []domain.TrackGate
 	savedRHTimers       []domain.DetectedTimer
 	hasSavedRHState     bool
 	savedRHUSBGates     []domain.TrackGate

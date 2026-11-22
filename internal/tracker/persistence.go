@@ -28,9 +28,12 @@ type PersistedEngineState struct {
 	SavedSlapRFBLEGates    []domain.TrackGate          `json:"savedSlapRFBLEGates,omitempty"`
 	SavedSlapRFBLETimers   []domain.DetectedTimer      `json:"savedSlapRFBLETimers,omitempty"`
 	HasSavedSlapRFBLEState bool                        `json:"hasSavedSlapRFBLEState,omitempty"`
-	SavedLapRFGates        []domain.TrackGate          `json:"savedLapRFGates,omitempty"`
-	SavedLapRFTimers   []domain.DetectedTimer      `json:"savedLapRFTimers,omitempty"`
-	HasSavedLapRFState bool                        `json:"hasSavedLapRFState,omitempty"`
+	SavedLapRFGates       []domain.TrackGate          `json:"savedLapRFGates,omitempty"`
+	SavedLapRFTimers      []domain.DetectedTimer      `json:"savedLapRFTimers,omitempty"`
+	HasSavedLapRFState    bool                        `json:"hasSavedLapRFState,omitempty"`
+	SavedLapRFUSBGates    []domain.TrackGate          `json:"savedLapRFUSBGates,omitempty"`
+	SavedLapRFUSBTimers   []domain.DetectedTimer      `json:"savedLapRFUSBTimers,omitempty"`
+	HasSavedLapRFUSBState bool                        `json:"hasSavedLapRFUSBState,omitempty"`
 	SavedRHGates       []domain.TrackGate          `json:"savedRHGates,omitempty"`
 	SavedRHTimers      []domain.DetectedTimer      `json:"savedRHTimers,omitempty"`
 	HasSavedRHState    bool                        `json:"hasSavedRHState,omitempty"`
@@ -156,8 +159,11 @@ func (e *Engine) ExportState() PersistedEngineState {
 		SavedSlapRFBLETimers:   append([]domain.DetectedTimer(nil), e.savedSlapRFBLETimers...),
 		HasSavedSlapRFBLEState: e.hasSavedSlapRFBLEState,
 		SavedLapRFGates:        append([]domain.TrackGate(nil), e.savedLapRFGates...),
-		SavedLapRFTimers:   append([]domain.DetectedTimer(nil), e.savedLapRFTimers...),
-		HasSavedLapRFState: e.hasSavedLapRFState,
+		SavedLapRFTimers:       append([]domain.DetectedTimer(nil), e.savedLapRFTimers...),
+		HasSavedLapRFState:     e.hasSavedLapRFState,
+		SavedLapRFUSBGates:     append([]domain.TrackGate(nil), e.savedLapRFUSBGates...),
+		SavedLapRFUSBTimers:    append([]domain.DetectedTimer(nil), e.savedLapRFUSBTimers...),
+		HasSavedLapRFUSBState:  e.hasSavedLapRFUSBState,
 		SavedRHGates:       append([]domain.TrackGate(nil), e.savedRHGates...),
 		SavedRHTimers:      append([]domain.DetectedTimer(nil), e.savedRHTimers...),
 		HasSavedRHState:    e.hasSavedRHState,
@@ -216,6 +222,9 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 	e.savedLapRFGates = append([]domain.TrackGate(nil), s.SavedLapRFGates...)
 	e.savedLapRFTimers = append([]domain.DetectedTimer(nil), s.SavedLapRFTimers...)
 	e.hasSavedLapRFState = s.HasSavedLapRFState
+	e.savedLapRFUSBGates = append([]domain.TrackGate(nil), s.SavedLapRFUSBGates...)
+	e.savedLapRFUSBTimers = append([]domain.DetectedTimer(nil), s.SavedLapRFUSBTimers...)
+	e.hasSavedLapRFUSBState = s.HasSavedLapRFUSBState
 	e.savedRHGates = append([]domain.TrackGate(nil), s.SavedRHGates...)
 	e.savedRHTimers = append([]domain.DetectedTimer(nil), s.SavedRHTimers...)
 	e.hasSavedRHState = s.HasSavedRHState
@@ -244,7 +253,7 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 		}
 		fpUpper := strings.ToUpper(strings.TrimSpace(d.Fingerprint))
 		switch e.timingHardwareMode {
-		case domain.HardwareModeLapRF:
+		case domain.HardwareModeLapRF, domain.HardwareModeLapRFUSB:
 			if d.FirmwareVersion != "LapRF" && !strings.HasPrefix(fpUpper, "LAPRF") {
 				continue
 			}
@@ -265,7 +274,7 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 		if cp.FirmwareVersion == "" {
 			cp.FirmwareVersion = domain.LatestFirmwareVersion
 		}
-		if cp.FirmwareVersion == "LapRF" || e.timingHardwareMode == domain.HardwareModeLapRF {
+		if cp.FirmwareVersion == "LapRF" || domain.IsLapRFMode(e.timingHardwareMode) {
 			cp.TimerLabel = normalizeLapRFTimerLabel(cp.TimerLabel, cp.TimerID)
 		} else if cp.FirmwareVersion == "RotorHazard" || domain.IsRotorHazardMode(e.timingHardwareMode) {
 			cp.TimerLabel = normalizeRHTimerLabel(cp.TimerLabel, cp.TimerID)
@@ -285,7 +294,7 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 		case domain.HardwareModeSlapRFBLE:
 			e.gates, e.detected = defaultSimSlapRFBLELayoutLocked(now)
 			s.Gates = nil
-		case domain.HardwareModeLapRF:
+		case domain.HardwareModeLapRF, domain.HardwareModeLapRFUSB:
 			e.gates, e.detected = defaultSimLapRFLayoutLocked(now)
 			s.Gates = nil
 		case domain.HardwareModeRotorHazard, domain.HardwareModeRotorHazardUSB:
@@ -342,7 +351,7 @@ func (e *Engine) RestoreState(s PersistedEngineState, markTimersOnline bool) {
 			if cp.AssignedTimerID > 0 {
 				if d, ok := e.detected[cp.AssignedTimerID]; ok && d.TimerLabel != "" &&
 					(cp.FirmwareVersion == "LapRF" || cp.FirmwareVersion == "RotorHazard" ||
-						e.timingHardwareMode == domain.HardwareModeLapRF || domain.IsRotorHazardMode(e.timingHardwareMode)) {
+						domain.IsLapRFMode(e.timingHardwareMode) || domain.IsRotorHazardMode(e.timingHardwareMode)) {
 					cp.TimerLabel = d.TimerLabel
 				}
 			}
@@ -722,7 +731,7 @@ func (e *Engine) ResetTrackToDefault(isSim bool) {
 		switch domain.NormalizeTimingHardwareMode(e.timingHardwareMode) {
 		case domain.HardwareModeSlapRFBLE:
 			e.gates, e.detected = defaultSimSlapRFBLELayoutLocked(time.Now())
-		case domain.HardwareModeLapRF:
+		case domain.HardwareModeLapRF, domain.HardwareModeLapRFUSB:
 			e.gates, e.detected = defaultSimLapRFLayoutLocked(time.Now())
 		case domain.HardwareModeRotorHazard, domain.HardwareModeRotorHazardUSB:
 			e.gates, e.detected = defaultSimRHLayoutLocked(time.Now())

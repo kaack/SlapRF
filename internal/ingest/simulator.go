@@ -1330,7 +1330,7 @@ func (s *TrackSimulator) stepCollectUsb(dtSec float64) ([]byte, func([]byte)) {
 	gates := inp.Gates
 	detected := inp.Detected
 	hwMode := inp.HWMode
-	isLapRFMode := hwMode == domain.HardwareModeLapRF
+	isLapRFMode := domain.IsLapRFMode(hwMode)
 	isRHMode := domain.IsRotorHazardMode(hwMode)
 	isArmed := inp.IsArmed
 	rhSpecsByTimer := inp.RHSpecsByTimer

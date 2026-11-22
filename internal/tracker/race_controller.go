@@ -2405,7 +2405,7 @@ func (e *Engine) syncHeatRFSlotsLocked(target *domain.RaceHeat) {
 				hwMode := domain.NormalizeTimingHardwareMode(e.timingHardwareMode)
 				target.HardwareMode = hwMode
 				switch hwMode {
-				case domain.HardwareModeLapRF:
+				case domain.HardwareModeLapRF, domain.HardwareModeLapRFUSB:
 					enter = laprfThresholdFor(sfGate, i, e.pilots[i])
 					exit = enter
 				case domain.HardwareModeRotorHazard, domain.HardwareModeRotorHazardUSB:

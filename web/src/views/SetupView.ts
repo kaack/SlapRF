@@ -7,6 +7,7 @@ import {
   subscribeCapabilities,
 } from "../services/capabilities";
 import { AppStore } from "../state/store";
+import { isLapRFMode } from "../types/models";
 import { AnnouncerSettings } from "../widgets/AnnouncerSettings";
 import {
   AuthenticationSettingsCard,
@@ -111,7 +112,7 @@ export class SetupView extends Component {
     const caps = capabilitiesSnapshot();
     const lockedOut = isServerDisconnectedLockout();
     const sim = lockedOut ? false : this.store.simulatorRunning;
-    const isLapRF = this.store.timingHardwareMode === "laprf";
+    const isLapRF = isLapRFMode(this.store.timingHardwareMode);
 
     const mgpSec = this.el.querySelector<HTMLElement>('[data-slot="multigp-section"]');
     if (mgpSec) {

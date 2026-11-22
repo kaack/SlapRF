@@ -256,7 +256,7 @@ export function rhThresholdAt(
  * otherwise the pilot's own (mirrors thresholdsFor in internal/tracker/thresholds.go).
  */
 export function enterThresholdAt(store: AppStore, gateId: number, slotIndex: number): { dbm: number; calibrated: boolean } {
-  if (store.timingHardwareMode === "laprf") {
+  if (store.timingHardwareMode === "laprf" || store.timingHardwareMode === "laprf_usb") {
     return laprfThresholdAt(store, gateId, slotIndex);
   }
   if (store.timingHardwareMode === "rotorhazard" || store.timingHardwareMode === "rotorhazard_usb") {

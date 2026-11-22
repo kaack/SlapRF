@@ -507,7 +507,7 @@ export class Announcer {
         ? "connected"
         : "disconnected";
     }
-    if (hwMode === "laprf") {
+    if (hwMode === "laprf" || hwMode === "laprf_usb") {
       return sharedLapRFLink.snapshots(this.store).some((s) => s.connected)
         ? "connected"
         : "disconnected";

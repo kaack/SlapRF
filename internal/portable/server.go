@@ -292,7 +292,7 @@ func NewServer(cfg Config) *Server {
 	s.laprfMgr = newLapRFManager(realEngine, store, cfg.USBOpenPort, s.logf, markDirty)
 	s.rhMgr = newRHManager(realEngine, store, cfg.USBOpenPort, s.logf, markDirty)
 	s.laprfEmulatorMgr = newLapRFEmulatorManager(cfg.Version, laprfSrv, store, func() bool {
-		return !sim.IsRunning() && realEngine.TimingHardwareMode() == domain.HardwareModeLapRF
+		return !sim.IsRunning() && domain.IsLapRFMode(realEngine.TimingHardwareMode())
 	}, s.logf)
 
 	var reconcileMu sync.Mutex
@@ -329,7 +329,7 @@ func NewServer(cfg Config) *Server {
 	reconcileRealHardwareLinks := func(simRunning bool) {
 		realMode := realEngine.TimingHardwareMode()
 		reconcileSlapRFLinks(simRunning, realMode)
-		s.laprfMgr.SetSimMode(simRunning || realMode != domain.HardwareModeLapRF)
+		s.laprfMgr.Reconcile(simRunning)
 		s.rhMgr.Reconcile(simRunning)
 		s.laprfEmulatorMgr.Reconcile()
 	}
@@ -377,7 +377,7 @@ func NewServer(cfg Config) *Server {
 
 	// Restore persisted hardware links & LapRF emulator listener
 	reconcileSlapRFLinks(initialSimMode, realEngine.TimingHardwareMode())
-	s.laprfMgr.RestorePersistedTargets(initialSimMode || realEngine.TimingHardwareMode() != domain.HardwareModeLapRF)
+	s.laprfMgr.RestorePersistedTargets(initialSimMode)
 	s.rhMgr.RestorePersistedTargets(initialSimMode)
 	s.laprfEmulatorMgr.Reconcile()
 

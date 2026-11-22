@@ -81,6 +81,8 @@ type SimTimerState struct {
 type SimLapRFUnit struct {
 	TimerID          uint8                  `json:"timerId"`
 	Label            string                 `json:"label"`
+	Transport        string                 `json:"transport,omitempty"` // "ethernet" | "usb"
+	PortName         string                 `json:"portName,omitempty"`  // e.g. "SIM-LAPRF-USB1"
 	Host             string                 `json:"host"`
 	Port             int                    `json:"port"`
 	Color            string                 `json:"color"`

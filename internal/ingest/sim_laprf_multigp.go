@@ -47,12 +47,51 @@ func normalizeSimLapRFLabel(label string, timerID uint8) string {
 }
 
 func defaultSimLapRFUnits() []simLapRFUnitState {
+	return defaultSimLapRFUnitsForMode(domain.HardwareModeLapRF)
+}
+
+func defaultSimLapRFUnitsForMode(mode domain.TimingHardwareMode) []simLapRFUnitState {
 	baseRSSI := [domain.MaxPilotSlots]float32{315, 318, 312, 320, 314, 316, 311, 319}
+	if mode == domain.HardwareModeLapRFUSB {
+		return []simLapRFUnitState{
+			{
+				SimLapRFUnit: domain.SimLapRFUnit{
+					TimerID:    2,
+					Label:      "L1",
+					Transport:  "usb",
+					PortName:   "SIM-LAPRF-USB1",
+					VoltageMv:  12200,
+					PoweredOn:  true,
+					Connected:  true,
+					Online:     true,
+					GateArmed:  true,
+					RTCDeltaMs: 0,
+					SlotRSSI:   baseRSSI,
+				},
+			},
+			{
+				SimLapRFUnit: domain.SimLapRFUnit{
+					TimerID:    3,
+					Label:      "L2",
+					Transport:  "usb",
+					PortName:   "SIM-LAPRF-USB2",
+					VoltageMv:  12100,
+					PoweredOn:  true,
+					Connected:  false,
+					Online:     false,
+					GateArmed:  true,
+					RTCDeltaMs: 0,
+					SlotRSSI:   baseRSSI,
+				},
+			},
+		}
+	}
 	return []simLapRFUnitState{
 		{
 			SimLapRFUnit: domain.SimLapRFUnit{
 				TimerID:    2,
 				Label:      "L1",
+				Transport:  "ethernet",
 				Host:       "192.168.1.2",
 				Port:       5403,
 				VoltageMv:  12200,
@@ -68,6 +107,7 @@ func defaultSimLapRFUnits() []simLapRFUnitState {
 			SimLapRFUnit: domain.SimLapRFUnit{
 				TimerID:    3,
 				Label:      "L2",
+				Transport:  "ethernet",
 				Host:       "192.168.1.3",
 				Port:       5403,
 				VoltageMv:  12100,
@@ -84,7 +124,7 @@ func defaultSimLapRFUnits() []simLapRFUnitState {
 
 func (s *TrackSimulator) ensureLapRFAndMultiGPLocked() {
 	if len(s.laprfUnits) == 0 {
-		s.laprfUnits = defaultSimLapRFUnits()
+		s.laprfUnits = defaultSimLapRFUnitsForMode(s.engine.TimingHardwareMode())
 	}
 	if len(s.rhUnits) == 0 {
 		s.rhUnits = defaultSimRHUnits()
@@ -125,12 +165,12 @@ func (s *TrackSimulator) SyncHardwareMode() {
 	s.poweredOffTimers = make(map[uint8]bool)
 	s.unflashedBoards = make(map[uint8]SimBoardBlankState)
 	s.timerRuntimes = make(map[uint8]*simTimerRuntime)
-	s.laprfUnits = defaultSimLapRFUnits()
+	s.laprfUnits = defaultSimLapRFUnitsForMode(mode)
 	s.rhUnits = defaultSimRHUnitsForMode(mode)
 	s.hellosSent = false
 	hook := s.onSlapRFModeSync
 	var laprfCopy []domain.SimLapRFUnit
-	if mode == domain.HardwareModeLapRF {
+	if domain.IsLapRFMode(mode) {
 		laprfCopy = make([]domain.SimLapRFUnit, len(s.laprfUnits))
 		for i := range s.laprfUnits {
 			laprfCopy[i] = s.laprfUnits[i].SimLapRFUnit
@@ -151,7 +191,7 @@ func (s *TrackSimulator) SyncHardwareMode() {
 		}
 		return
 	}
-	if mode == domain.HardwareModeLapRF {
+	if domain.IsLapRFMode(mode) {
 		for idx, u := range laprfCopy {
 			s.engine.EnsureLapRFTimerRegistered(u.TimerID, u.Label, u.VoltageMv, idx == 0 && u.Connected && u.PoweredOn)
 			s.engine.SetDetectedTimerOnline(u.TimerID, u.PoweredOn && u.Connected)
@@ -258,20 +298,21 @@ func (s *TrackSimulator) ApplyLapRFAction(req SimLapRFActionRequest) ([]domain.S
 
 	switch act {
 	case "reset":
-		s.laprfUnits = defaultSimLapRFUnits()
+		curMode := s.engine.TimingHardwareMode()
+		s.laprfUnits = defaultSimLapRFUnitsForMode(curMode)
 		unitsCopy := make([]domain.SimLapRFUnit, len(s.laprfUnits))
 		for i := range s.laprfUnits {
 			unitsCopy[i] = s.laprfUnits[i].SimLapRFUnit
 		}
 		s.mu.Unlock()
-		if s.engine.TimingHardwareMode() == domain.HardwareModeLapRF {
+		if domain.IsLapRFMode(curMode) {
 			s.engine.ResetTrackToDefault(true)
 			for idx, u := range unitsCopy {
 				s.engine.EnsureLapRFTimerRegistered(u.TimerID, u.Label, u.VoltageMv, idx == 0)
 				s.engine.SetDetectedTimerOnline(u.TimerID, u.PoweredOn && u.Connected)
 			}
 		}
-		return s. Snapshot().LapRFUnits, nil
+		return s.Snapshot().LapRFUnits, nil
 
 	case "toggle-power":
 		idx := findIdx(req.TimerID)
@@ -282,7 +323,7 @@ func (s *TrackSimulator) ApplyLapRFAction(req SimLapRFActionRequest) ([]domain.S
 		s.laprfUnits[idx].PoweredOn = !s.laprfUnits[idx].PoweredOn
 		u := s.laprfUnits[idx].SimLapRFUnit
 		s.mu.Unlock()
-		if s.engine.TimingHardwareMode() == domain.HardwareModeLapRF {
+		if domain.IsLapRFMode(s.engine.TimingHardwareMode()) {
 			s.engine.SetDetectedTimerOnline(u.TimerID, u.PoweredOn && u.Connected)
 		}
 		return s.Snapshot().LapRFUnits, nil
@@ -298,7 +339,7 @@ func (s *TrackSimulator) ApplyLapRFAction(req SimLapRFActionRequest) ([]domain.S
 		s.laprfUnits[idx].Online = s.laprfUnits[idx].PoweredOn
 		u := s.laprfUnits[idx].SimLapRFUnit
 		s.mu.Unlock()
-		if s.engine.TimingHardwareMode() == domain.HardwareModeLapRF {
+		if domain.IsLapRFMode(s.engine.TimingHardwareMode()) {
 			s.engine.EnsureLapRFTimerRegistered(u.TimerID, u.Label, u.VoltageMv, true)
 			s.engine.SetDetectedTimerOnline(u.TimerID, u.PoweredOn && u.Connected)
 		}
@@ -317,7 +358,7 @@ func (s *TrackSimulator) ApplyLapRFAction(req SimLapRFActionRequest) ([]domain.S
 		}
 		u := s.laprfUnits[idx].SimLapRFUnit
 		s.mu.Unlock()
-		if s.engine.TimingHardwareMode() == domain.HardwareModeLapRF {
+		if domain.IsLapRFMode(s.engine.TimingHardwareMode()) {
 			if u.Connected {
 				s.engine.EnsureLapRFTimerRegistered(u.TimerID, u.Label, u.VoltageMv, true)
 			}
@@ -334,7 +375,7 @@ func (s *TrackSimulator) ApplyLapRFAction(req SimLapRFActionRequest) ([]domain.S
 		s.laprfUnits[idx].Connected = false
 		u := s.laprfUnits[idx].SimLapRFUnit
 		s.mu.Unlock()
-		if s.engine.TimingHardwareMode() == domain.HardwareModeLapRF {
+		if domain.IsLapRFMode(s.engine.TimingHardwareMode()) {
 			s.engine.SetDetectedTimerOnline(u.TimerID, false)
 		}
 		return s.Snapshot().LapRFUnits, nil
@@ -368,7 +409,7 @@ func (s *TrackSimulator) ApplyLapRFAction(req SimLapRFActionRequest) ([]domain.S
 		s.laprfUnits[targetIdx].GateArmed = true
 		u := s.laprfUnits[targetIdx].SimLapRFUnit
 		s.mu.Unlock()
-		if s.engine.TimingHardwareMode() == domain.HardwareModeLapRF {
+		if domain.IsLapRFMode(s.engine.TimingHardwareMode()) {
 			s.engine.EnsureLapRFTimerRegistered(u.TimerID, u.Label, u.VoltageMv, true)
 			s.engine.SetDetectedTimerOnline(u.TimerID, true)
 		}
@@ -394,7 +435,7 @@ func (s *TrackSimulator) ApplyLapRFAction(req SimLapRFActionRequest) ([]domain.S
 		}
 		u := s.laprfUnits[idx].SimLapRFUnit
 		s.mu.Unlock()
-		if s.engine.TimingHardwareMode() == domain.HardwareModeLapRF {
+		if domain.IsLapRFMode(s.engine.TimingHardwareMode()) {
 			s.engine.EnsureLapRFTimerRegistered(u.TimerID, u.Label, u.VoltageMv, false)
 			s.engine.SetDetectedTimerOnline(u.TimerID, u.PoweredOn && u.Connected)
 		}
@@ -416,14 +457,23 @@ func (s *TrackSimulator) ApplyLapRFAction(req SimLapRFActionRequest) ([]domain.S
 			s.mu.Unlock()
 			return nil, errors.New("maximum of 6 simulated LapRF timers reached")
 		}
+		curMode := s.engine.TimingHardwareMode()
+		isUSB := curMode == domain.HardwareModeLapRFUSB
 		lbl := normalizeSimLapRFLabel(req.Label, nextID)
 		host := strings.TrimSpace(req.Host)
-		if host == "" {
-			host = fmt.Sprintf("192.168.1.%d", nextID)
-		}
 		port := req.Port
-		if port <= 0 {
-			port = 5403
+		portName := ""
+		transport := "ethernet"
+		if isUSB {
+			transport = "usb"
+			portName = fmt.Sprintf("SIM-LAPRF-USB%d", nextID-1)
+		} else {
+			if host == "" {
+				host = fmt.Sprintf("192.168.1.%d", nextID)
+			}
+			if port <= 0 {
+				port = 5403
+			}
 		}
 		volt := req.VoltageMv
 		if volt == 0 {
@@ -431,11 +481,13 @@ func (s *TrackSimulator) ApplyLapRFAction(req SimLapRFActionRequest) ([]domain.S
 		}
 		nu := simLapRFUnitState{
 			SimLapRFUnit: domain.SimLapRFUnit{
-				TimerID:   nextID,
-				Label:     lbl,
-				Host:      host,
-				Port:      port,
-				VoltageMv: volt,
+				TimerID:    nextID,
+				Label:      lbl,
+				Transport:  transport,
+				PortName:   portName,
+				Host:       host,
+				Port:       port,
+				VoltageMv:  volt,
 				PoweredOn:  true,
 				Connected:  true,
 				Online:     true,
@@ -446,7 +498,7 @@ func (s *TrackSimulator) ApplyLapRFAction(req SimLapRFActionRequest) ([]domain.S
 		}
 		s.laprfUnits = append(s.laprfUnits, nu)
 		s.mu.Unlock()
-		if s.engine.TimingHardwareMode() == domain.HardwareModeLapRF {
+		if domain.IsLapRFMode(curMode) {
 			s.engine.EnsureLapRFTimerRegistered(nextID, lbl, volt, true)
 			s.engine.SetDetectedTimerOnline(nextID, true)
 		}
@@ -461,7 +513,7 @@ func (s *TrackSimulator) ApplyLapRFAction(req SimLapRFActionRequest) ([]domain.S
 		delID := s.laprfUnits[idx].TimerID
 		s.laprfUnits = append(s.laprfUnits[:idx], s.laprfUnits[idx+1:]...)
 		s.mu.Unlock()
-		if s.engine.TimingHardwareMode() == domain.HardwareModeLapRF {
+		if domain.IsLapRFMode(s.engine.TimingHardwareMode()) {
 			_ = s.engine.DeleteDetectedTimer(delID)
 		}
 		return s.Snapshot().LapRFUnits, nil

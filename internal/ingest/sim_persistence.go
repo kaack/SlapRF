@@ -227,7 +227,7 @@ func (s *TrackSimulator) RestoreOptions(opts SimPersistedOptions) {
 	s.mu.Unlock()
 
 	hwMode := s.engine.TimingHardwareMode()
-	if hwMode == domain.HardwareModeLapRF || domain.IsRotorHazardMode(hwMode) {
+	if domain.IsLapRFMode(hwMode) || domain.IsRotorHazardMode(hwMode) {
 		s.SyncHardwareMode()
 	} else if hasUsbSink {
 		s.engine.SetAllTimersOffline()
@@ -250,7 +250,7 @@ func (s *TrackSimulator) ResetToFactoryDefaults() {
 	s.poweredOffTimers = make(map[uint8]bool)
 	s.unflashedBoards = make(map[uint8]SimBoardBlankState)
 	s.timerRuntimes = make(map[uint8]*simTimerRuntime)
-	s.laprfUnits = defaultSimLapRFUnits()
+	s.laprfUnits = defaultSimLapRFUnitsForMode(hwMode)
 	s.rhUnits = defaultSimRHUnitsForMode(hwMode)
 	s.mgpBackend = multigp.NewSimBackend()
 	s.hellosSent = false
@@ -271,7 +271,7 @@ func (s *TrackSimulator) RestoreDemoData() {
 	s.poweredOffTimers = make(map[uint8]bool)
 	s.unflashedBoards = make(map[uint8]SimBoardBlankState)
 	s.timerRuntimes = make(map[uint8]*simTimerRuntime)
-	s.laprfUnits = defaultSimLapRFUnits()
+	s.laprfUnits = defaultSimLapRFUnitsForMode(hwMode)
 	s.rhUnits = defaultSimRHUnitsForMode(hwMode)
 	s.mgpBackend = multigp.NewSimBackend()
 	s.hellosSent = false
@@ -294,13 +294,13 @@ func (s *TrackSimulator) ResetTimersAndTrackToDefault() {
 	s.poweredOffTimers = make(map[uint8]bool)
 	s.unflashedBoards = make(map[uint8]SimBoardBlankState)
 	s.timerRuntimes = make(map[uint8]*simTimerRuntime)
-	s.laprfUnits = defaultSimLapRFUnits()
+	s.laprfUnits = defaultSimLapRFUnitsForMode(hwMode)
 	s.rhUnits = defaultSimRHUnitsForMode(hwMode)
 	s.hellosSent = false
 	hasUsbSink := s.hubFrameSink != nil
 	s.mu.Unlock()
 	s.engine.ResetTrackToDefault(true)
-	if hwMode == domain.HardwareModeLapRF || domain.IsRotorHazardMode(hwMode) {
+	if domain.IsLapRFMode(hwMode) || domain.IsRotorHazardMode(hwMode) {
 		s.SyncHardwareMode()
 	} else if hasUsbSink {
 		s.engine.SetAllTimersOffline()

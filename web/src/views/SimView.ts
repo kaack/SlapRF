@@ -16,6 +16,7 @@ import { usbPool } from "../services/timer_console";
 import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
 import {
+  isLapRFMode,
   isRotorHazardMode,
   MultiGPRaceViewData,
   SimBatteryPack,
@@ -1035,7 +1036,7 @@ export class SimView extends Component {
         const timerId = Number(btn.dataset.timerId);
         if (Number.isFinite(timerId)) {
           this.errorMsg = "";
-          if (this.store.timingHardwareMode === "laprf") {
+          if (isLapRFMode(this.store.timingHardwareMode)) {
             void this.api.simLapRFAction({ action: "toggle-power", timerId });
           } else if (isRotorHazardMode(this.store.timingHardwareMode)) {
             void this.api.simRotorHazardAction({ action: "toggle-power", timerId });
@@ -1076,7 +1077,7 @@ export class SimView extends Component {
         if (Number.isFinite(timerId)) {
           this.errorMsg = "";
           const p =
-            this.store.timingHardwareMode === "laprf"
+            isLapRFMode(this.store.timingHardwareMode)
               ? this.api.simLapRFAction({ action: "delete", timerId })
               : isRotorHazardMode(this.store.timingHardwareMode)
                 ? this.api.simRotorHazardAction({ action: "delete", timerId })
@@ -1092,7 +1093,7 @@ export class SimView extends Component {
       case "timer-add": {
         this.errorMsg = "";
         const p =
-          this.store.timingHardwareMode === "laprf"
+          isLapRFMode(this.store.timingHardwareMode)
             ? this.api.simLapRFAction({ action: "add" })
             : isRotorHazardMode(this.store.timingHardwareMode)
               ? this.api.simRotorHazardAction({ action: "add" })
@@ -1112,7 +1113,7 @@ export class SimView extends Component {
       case "timer-reset-defaults": {
         this.errorMsg = "";
         const p =
-          this.store.timingHardwareMode === "laprf"
+          isLapRFMode(this.store.timingHardwareMode)
             ? this.api.simLapRFAction({ action: "reset" })
             : isRotorHazardMode(this.store.timingHardwareMode)
               ? this.api.simRotorHazardAction({ action: "reset" })
@@ -1460,7 +1461,7 @@ export class SimView extends Component {
     const walkerSec = simState?.trackWalkerSecLeft ?? 0;
     const pilots = (simState?.pilots ?? []).filter((p) => p.enabled && p.channel > 0);
     const nodes = this.orderedNodes;
-    const isLapRF = this.store.timingHardwareMode === "laprf";
+    const isLapRF = isLapRFMode(this.store.timingHardwareMode);
     const isRH = isRotorHazardMode(this.store.timingHardwareMode);
     const timersById = new Map<number, SimTimerState>(
       (simState?.timers ?? []).map((t) => [t.timerId, t])
@@ -1953,7 +1954,8 @@ export class SimView extends Component {
   }
 
   private renderTimers(simState: SimState | null): void {
-    const isLapRF = this.store.timingHardwareMode === "laprf";
+    const isLapRF = isLapRFMode(this.store.timingHardwareMode);
+    const isLapRFUSB = this.store.timingHardwareMode === "laprf_usb";
     const isRHUSB = this.store.timingHardwareMode === "rotorhazard_usb";
     const isRH = isRotorHazardMode(this.store.timingHardwareMode);
 
@@ -2244,20 +2246,25 @@ export class SimView extends Component {
     }
 
     if (isLapRF) {
-      if (titleEl && titleEl.textContent !== "Simulated LapRF timers") {
-        titleEl.textContent = "Simulated LapRF timers";
+      const wantTitle = isLapRFUSB ? "Simulated LapRF USB timers" : "Simulated LapRF timers";
+      if (titleEl && titleEl.textContent !== wantTitle) {
+        titleEl.textContent = wantTitle;
       }
       if (descEl) {
-        const want =
-          "Virtual LapRF 8-Way timers on the simulated LAN. Power units on or off, plug in or unplug their LAN cable, edit host IP or supply voltage, add extra timers, or restore defaults.";
+        const want = isLapRFUSB
+          ? "Virtual LapRF 8-Way USB timers (115200 baud CDC serial). Power units on or off, plug in or unplug their USB cable, edit supply voltage, add extra timers, or restore defaults."
+          : "Virtual LapRF 8-Way timers on the simulated LAN. Power units on or off, plug in or unplug their LAN cable, edit host IP or supply voltage, add extra timers, or restore defaults.";
         if (descEl.textContent !== want) descEl.textContent = want;
       }
       if (footNoteEl) {
-        const want = "Discover and inspect live 8-slot RSSI bars for connected LapRF timers on the Network tab.";
+        const want = isLapRFUSB
+          ? "Connect virtual LapRF USB ports and inspect live 8-slot RSSI bars on the Network tab."
+          : "Discover and inspect live 8-slot RSSI bars for connected LapRF timers on the Network tab.";
         if (footNoteEl.textContent !== want) footNoteEl.textContent = want;
       }
-      if (addBtn && addBtn.textContent?.trim() !== "+ Add LapRF timer") {
-        addBtn.textContent = "+ Add LapRF timer";
+      const wantAddLbl = isLapRFUSB ? "+ Add LapRF USB timer" : "+ Add LapRF timer";
+      if (addBtn && addBtn.textContent?.trim() !== wantAddLbl) {
+        addBtn.textContent = wantAddLbl;
       }
 
       const units = simState?.laprfUnits ?? [];
@@ -2265,11 +2272,11 @@ export class SimView extends Component {
       if (addBtn) addBtn.disabled = !canAdd;
 
       const sig =
-        `laprf:${getAppTheme()}|` +
+        `laprf:${isLapRFUSB ? "usb" : "net"}:${getAppTheme()}|` +
         units
           .map(
             (u) =>
-              `${u.timerId}:${u.label}:${u.host}:${u.port}:${u.color}:${u.poweredOn ? 1 : 0}:${u.connected ? 1 : 0}:${u.voltageMv}:${u.assignedGateName}`
+              `${u.timerId}:${u.label}:${u.host}:${u.port}:${u.portName ?? ""}:${u.color}:${u.poweredOn ? 1 : 0}:${u.connected ? 1 : 0}:${u.voltageMv}:${u.assignedGateName}`
           )
           .join("|") +
         `|err:${this.errorMsg}`;
@@ -2277,7 +2284,7 @@ export class SimView extends Component {
       this.lastTimersSig = sig;
 
       const rows = units
-        .map((u: SimLapRFUnit) => {
+        .map((u: SimLapRFUnit, idx: number) => {
           const displayLabel =
             !u.label || /^laprf\s*#/i.test(u.label.trim())
               ? `L${Math.max(1, u.timerId - 1)}`
@@ -2287,8 +2294,35 @@ export class SimView extends Component {
             ? "Offline"
             : u.connected
               ? "Plugged in"
-              : "Unplugged on LAN";
+              : isLapRFUSB
+                ? "USB unplugged"
+                : "Unplugged on LAN";
           const swatchColor = u.color ? adaptColorForTheme(u.color) : timerColor(this.store, u.timerId);
+          const usbPortName = u.portName?.trim() || `SIM-LAPRF-USB${idx + 1}`;
+          const endpointColHtml = isLapRFUSB
+            ? `<div style="display:flex;align-items:center;gap:6px">
+                <span class="mono" style="font-size:12px">${esc(usbPortName)}</span>
+                <span class="muted mono" style="font-size:11px">115200</span>
+              </div>`
+            : `<div style="display:flex;align-items:center;gap:6px">
+                <input
+                  class="input mono"
+                  type="text"
+                  value="${esc(u.host)}"
+                  data-field="laprf-host"
+                  data-timer-id="${u.timerId}"
+                  style="width:118px;padding:4px 8px;font-size:12px"
+                  aria-label="Simulated LapRF IP address"
+                />
+                <span class="muted mono" style="font-size:11px">:${u.port || 5403}</span>
+              </div>`;
+          const cableTitle = isLapRFUSB
+            ? u.connected
+              ? "Unplug simulated USB cable"
+              : "Plug in simulated USB cable"
+            : u.connected
+              ? "Unplug simulated Ethernet cable"
+              : "Plug in simulated Ethernet cable";
           return `
             <div class="timer-table-row sim-timer-table-row ${u.poweredOn ? "" : "is-offline"}" style="grid-template-columns:minmax(140px,1.2fr) minmax(110px,0.9fr) minmax(145px,1.1fr) minmax(105px,0.8fr) minmax(95px,0.8fr) minmax(195px,1.4fr)">
               <div class="detected-timer-id">
@@ -2304,18 +2338,7 @@ export class SimView extends Component {
                 </span>
               </div>
 
-              <div style="display:flex;align-items:center;gap:6px">
-                <input
-                  class="input mono"
-                  type="text"
-                  value="${esc(u.host)}"
-                  data-field="laprf-host"
-                  data-timer-id="${u.timerId}"
-                  style="width:118px;padding:4px 8px;font-size:12px"
-                  aria-label="Simulated LapRF IP address"
-                />
-                <span class="muted mono" style="font-size:11px">:${u.port || 5403}</span>
-              </div>
+              ${endpointColHtml}
 
               <div style="display:flex;align-items:center;gap:5px" title="Measured LapRF supply voltage (${esc(linkText)})">
                 <input
@@ -2342,7 +2365,7 @@ export class SimView extends Component {
               </div>
 
               <div class="sim-timer-row-actions">
-                <button class="btn btn-sm btn-ghost" type="button" data-action="laprf-connect" data-timer-id="${u.timerId}" ${u.poweredOn ? "" : "disabled"} title="${u.connected ? "Unplug simulated Ethernet cable" : "Plug in simulated Ethernet cable"}">
+                <button class="btn btn-sm btn-ghost" type="button" data-action="laprf-connect" data-timer-id="${u.timerId}" ${u.poweredOn ? "" : "disabled"} title="${cableTitle}">
                   ${u.connected ? "Unplug" : "Plug in"}
                 </button>
                 <button class="btn btn-sm btn-ghost" type="button" data-action="timer-power" data-timer-id="${u.timerId}">
@@ -2360,12 +2383,12 @@ export class SimView extends Component {
             <div class="timer-table-row sim-timer-table-row timer-table-head" style="grid-template-columns:minmax(140px,1.2fr) minmax(110px,0.9fr) minmax(145px,1.1fr) minmax(105px,0.8fr) minmax(95px,0.8fr) minmax(195px,1.4fr)">
               <span>Timer</span>
               <span>Power</span>
-              <span>Host : Port</span>
+              <span>${isLapRFUSB ? "USB Port" : "Host : Port"}</span>
               <span>Voltage</span>
               <span>Track</span>
               <span class="num">Actions</span>
             </div>
-            ${rows || `<div class="empty-note" style="padding:14px">No simulated LapRF timers. Click "+ Add LapRF timer" or "Restore defaults".</div>`}`;
+            ${rows || `<div class="empty-note" style="padding:14px">No simulated LapRF timers. Click "${esc(wantAddLbl)}" or "Restore defaults".</div>`}`;
 
       const slotEl = this.slot("timers-table");
       slotEl.innerHTML = `

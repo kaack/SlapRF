@@ -249,3 +249,51 @@ func TestRotorHazardUSBModeScoringAndStateIsolation(t *testing.T) {
 		t.Fatalf("expected USB R1 timer 3 restored, got %+v", usbTimers)
 	}
 }
+
+func TestLapRFUSBModeSimAndStateIsolation(t *testing.T) {
+	eng := NewEngine()
+	eng.SetTimingHardwareMode(domain.HardwareModeLapRFUSB, true)
+	if eng.TimingHardwareMode() != domain.HardwareModeLapRFUSB {
+		t.Fatalf("expected laprf_usb mode, got %q", eng.TimingHardwareMode())
+	}
+	_, gates, _, _, _ := eng.StateSnapshot()
+	if len(gates) != 1 || gates[0].TimerLabel != "L1" {
+		t.Fatalf("expected default L1 gate in laprf_usb sim mode, got %+v", gates)
+	}
+
+	// Verify crossings score in laprf_usb mode
+	baseUs := eng.NowUs()
+	eng.IngestExternalLapRFStatus(2, "L1", 12100, [domain.MaxPilotSlots]float32{340, 340, 340, 340, 340, 340, 340, 340})
+	eng.InjectExternalLapRFCrossing(2, 1, baseUs+1_000_000, 1950, 1)
+	eng.InjectExternalLapRFCrossing(2, 1, baseUs+9_000_000, 2100, 2)
+	_, _, laps, _, _ := eng.StateSnapshot()
+	if len(laps) != 1 {
+		t.Fatalf("expected 1 lap in laprf_usb mode, got %d", len(laps))
+	}
+
+	// Verify real-mode saved state + persistence isolation between laprf (network) and laprf_usb
+	realEng := NewRealEngine()
+	realEng.SetTimingHardwareMode(domain.HardwareModeLapRF, false)
+	realEng.EnsureLapRFTimerRegistered(2, "L1-NET", 12200, true)
+	realEng.SetTimingHardwareMode(domain.HardwareModeLapRFUSB, false)
+	if len(realEng.DetectedTimersSnapshot()) != 0 {
+		t.Fatalf("expected clean timer list on first switch to real laprf_usb, got %+v", realEng.DetectedTimersSnapshot())
+	}
+	realEng.EnsureLapRFTimerRegistered(3, "L1-USB", 12100, true)
+
+	snap := realEng.ExportState()
+	restored := NewRealEngine()
+	restored.RestoreState(snap, false)
+	if restored.TimingHardwareMode() != domain.HardwareModeLapRFUSB {
+		t.Fatalf("expected restored mode laprf_usb, got %q", restored.TimingHardwareMode())
+	}
+	usbTimers := restored.DetectedTimersSnapshot()
+	if len(usbTimers) != 1 || usbTimers[0].TimerID != 3 {
+		t.Fatalf("expected USB L1 timer 3 restored, got %+v", usbTimers)
+	}
+	restored.SetTimingHardwareMode(domain.HardwareModeLapRF, false)
+	netTimers := restored.DetectedTimersSnapshot()
+	if len(netTimers) != 1 || netTimers[0].TimerID != 2 {
+		t.Fatalf("expected network L1 timer 2 restored, got %+v", netTimers)
+	}
+}

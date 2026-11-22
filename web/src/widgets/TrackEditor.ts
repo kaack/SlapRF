@@ -5,7 +5,7 @@ import { ApiClient } from "../services/api_client";
 import { usbPool } from "../services/timer_console";
 import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
-import { DetectedTimer, isRotorHazardMode, TrackNode } from "../types/models";
+import { DetectedTimer, isLapRFMode, isRotorHazardMode, TrackNode } from "../types/models";
 import { renderSectionCapsuleIcon } from "./markup";
 
 /**
@@ -98,7 +98,7 @@ export class TrackEditor extends Component {
 
   private isTimerActive(d?: DetectedTimer, node?: TrackNode): boolean {
     if (
-      this.store.timingHardwareMode === "laprf" ||
+      isLapRFMode(this.store.timingHardwareMode) ||
       isRotorHazardMode(this.store.timingHardwareMode) ||
       d?.firmwareVersion === "LapRF" ||
       node?.firmwareVersion === "LapRF" ||
@@ -249,7 +249,7 @@ export class TrackEditor extends Component {
     const shortCode = this.formatTimerShortCode(assignedId, detected, node.timerLabel);
     const isHubGate = hasTimer && tiedTimer?.isHub === true;
     const isLapRF =
-      this.store.timingHardwareMode === "laprf" ||
+      isLapRFMode(this.store.timingHardwareMode) ||
       tiedTimer?.firmwareVersion === "LapRF" ||
       node.firmwareVersion === "LapRF";
     const isRH =
@@ -368,7 +368,7 @@ export class TrackEditor extends Component {
 
   private renderTrayTimer(d: DetectedTimer): string {
     const color = timerColor(this.store, d.timerId);
-    const isLapRF = this.store.timingHardwareMode === "laprf" || d.firmwareVersion === "LapRF";
+    const isLapRF = isLapRFMode(this.store.timingHardwareMode) || d.firmwareVersion === "LapRF";
     const isRH =
       isRotorHazardMode(this.store.timingHardwareMode) || d.firmwareVersion === "RotorHazard";
     const roleLabel = isLapRF

@@ -366,28 +366,35 @@ export class LapRFHardwareLink {
   }
 
   public snapshots(store: AppStore): LapRFClientDiagSnapshot[] {
+    const wantUSB = store.timingHardwareMode === "laprf_usb";
     if (store.simulatorRunning) {
       const units = store.simState?.laprfUnits ?? [];
       return units
         .filter((u) => u.connected)
-        .map((u) => ({
-          timerId: u.timerId,
-          label: u.label,
-          transport: "sim" as const,
-          endpoint: `${u.host}:${u.port}`,
-          connected: u.poweredOn && u.connected,
-          voltageMv: !u.poweredOn ? 0 : u.voltageMv,
-          gateArmed: u.poweredOn && u.gateArmed,
-          rtcSynced: u.poweredOn && u.connected,
-          rtcOffsetMs: u.rtcDeltaMs ?? 0,
-          framesRx: 0,
-          passingsRx: 0,
-          slotRssi: Array.isArray(u.slotRssi) ? u.slotRssi : [0, 0, 0, 0, 0, 0, 0, 0],
-          slotFreqsMhz: Array.isArray(u.slotFreqsMhz) ? u.slotFreqsMhz : [],
-          slotThresholds: Array.isArray(u.slotThresholds) ? u.slotThresholds : [],
-        })) as LapRFClientDiagSnapshot[];
+        .map((u) => {
+          const isUSB = wantUSB || u.transport === "usb";
+          const usbPort = u.portName?.trim() || `SIM-LAPRF-USB${Math.max(1, u.timerId - 1)}`;
+          return {
+            timerId: u.timerId,
+            label: u.label,
+            transport: isUSB ? ("usb" as const) : ("sim" as const),
+            endpoint: isUSB ? usbPort : `${u.host}:${u.port || 5403}`,
+            connected: u.poweredOn && u.connected,
+            voltageMv: !u.poweredOn ? 0 : u.voltageMv,
+            gateArmed: u.poweredOn && u.gateArmed,
+            rtcSynced: u.poweredOn && u.connected,
+            rtcOffsetMs: u.rtcDeltaMs ?? 0,
+            framesRx: 0,
+            passingsRx: 0,
+            slotRssi: Array.isArray(u.slotRssi) ? u.slotRssi : [0, 0, 0, 0, 0, 0, 0, 0],
+            slotFreqsMhz: Array.isArray(u.slotFreqsMhz) ? u.slotFreqsMhz : [],
+            slotThresholds: Array.isArray(u.slotThresholds) ? u.slotThresholds : [],
+          };
+        }) as LapRFClientDiagSnapshot[];
     }
-    return this.backendSnapshots;
+    return this.backendSnapshots.filter((s) =>
+      wantUSB ? s.transport === "usb" : s.transport !== "usb"
+    );
   }
 }
 

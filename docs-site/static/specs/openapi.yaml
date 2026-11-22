@@ -3053,7 +3053,7 @@ paths:
 
     put:
       tags: [Hardware & LapRF Emulator]
-      summary: Switch active timing hardware backend (`slaprf`, `slaprf_ble`, `rotorhazard`, `rotorhazard_usb`, `laprf`)
+      summary: Switch active timing hardware backend (`slaprf`, `slaprf_ble`, `laprf`, `laprf_usb`, `rotorhazard`, `rotorhazard_usb`)
       operationId: putHardwareMode
       requestBody:
         required: true
@@ -5462,7 +5462,7 @@ components:
 
     TimingHardwareMode:
       type: string
-      enum: [slaprf, slaprf_ble, rotorhazard, rotorhazard_usb, laprf]
+      enum: [slaprf, slaprf_ble, laprf, laprf_usb, rotorhazard, rotorhazard_usb]
       example: slaprf
 
     TimerRole:

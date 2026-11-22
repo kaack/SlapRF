@@ -30,6 +30,7 @@ import { timerColor } from "../state/selectors";
 import { AppStore } from "../state/store";
 import {
   DetectedTimer,
+  isLapRFMode,
   isRotorHazardMode,
   isSlapRFMode,
   normalizeTimingHardwareMode,
@@ -211,6 +212,7 @@ export class NetworkView extends Component {
               <div class="net-slaprf-inline-slot" data-slot="connection"></div>
               <div class="net-external-inline-slot" data-slot="external-conn-actions" style="display:none"></div>
             </div>
+            <div data-slot="laprf-usb-error" style="display:none"></div>
             <div data-slot="laprf-connection" style="display:none"></div>
             <div data-slot="rh-connection" style="display:none"></div>
             <div data-slot="rh-usb-connection" style="display:none"></div>
@@ -395,7 +397,7 @@ export class NetworkView extends Component {
         }
         return;
       }
-      if (hwMode === "laprf" || isRotorHazardMode(hwMode)) {
+      if (isLapRFMode(hwMode) || isRotorHazardMode(hwMode)) {
         if (this.store.simulatorRunning) {
           if (!this.livePollInFlight) {
             this.livePollInFlight = true;
@@ -409,7 +411,7 @@ export class NetworkView extends Component {
           }
         } else {
           if (this.livePollTick % 2 === 0) {
-            if (hwMode === "laprf") {
+            if (isLapRFMode(hwMode)) {
               void sharedLapRFLink.refreshStatus();
             } else {
               void sharedRHLink.refreshStatus();
@@ -1780,7 +1782,7 @@ export class NetworkView extends Component {
     if (this.modeSwitchBusy) {
       return { locked: true, connectedCount: 0, busy: true };
     }
-    if (mode === "laprf") {
+    if (isLapRFMode(mode)) {
       const connectedCount = sharedLapRFLink.snapshots(this.store).filter((s) => s.connected).length;
       const busy = this.laprfBusy;
       return { locked: connectedCount > 0 || busy, connectedCount, busy };
@@ -1833,7 +1835,7 @@ export class NetworkView extends Component {
       this.renderAll();
       return;
     }
-    if (mode === "laprf") {
+    if (isLapRFMode(mode)) {
       if (this.laprfBusy) return;
       this.laprfBusy = true;
       this.laprfError = null;
@@ -1844,7 +1846,7 @@ export class NetworkView extends Component {
         for (const s of snaps) {
           await sharedLapRFLink.disconnect(this.store, this.api, s.timerId).catch(() => undefined);
         }
-        if (this.laprfDiscovered.length > 0) {
+        if (mode === "laprf" && this.laprfDiscovered.length > 0) {
           const res = await sharedLapRFLink.discover(this.store, this.api).catch(() => null);
           if (res) {
             this.laprfScannedSubnet = res.subnet;
@@ -1893,7 +1895,9 @@ export class NetworkView extends Component {
 
   private renderTopConnectionControls(mode: TimingHardwareMode): void {
     const isBleMode = mode === "slaprf_ble";
-    const isLapRF = mode === "laprf";
+    const isLapRFNet = mode === "laprf";
+    const isLapRFUSB = mode === "laprf_usb";
+    const isLapRF = isLapRFNet || isLapRFUSB;
     const isRHNet = mode === "rotorhazard";
     const isRHUSB = mode === "rotorhazard_usb";
     const isSlapRF = !isLapRF && !isRHNet && !isRHUSB;
@@ -1906,11 +1910,13 @@ export class NetworkView extends Component {
         ? "Select your timing device and connect RotorHazard USB serial nodes over USB-C / CDC (ESP32-C5, STM32, Arduino, or RP2040)."
         : isRHNet
           ? "Select your timing device and enter a RotorHazard server IP address and port to sign in with admin credentials."
-          : isLapRF
-            ? "Select your timing device and connect to a LapRF 8-Way timer over Ethernet IP (TCP :5403) or USB CDC serial (115200 baud)."
-            : isBleMode
-              ? "Select your timing device and connect to the Hub over <strong>Bluetooth</strong> to inspect pairing status, 2.4 GHz ESP-NOW Spokes, and live 5.8 GHz readings."
-              : "Select your timing device and connect the Hub (or a Spoke) over <strong>USB-C</strong> to inspect the 2.4 GHz network and 5.8 GHz readings.";
+          : isLapRFUSB
+            ? "Select your timing device and connect a LapRF 8-Way timer over USB CDC serial (115200 baud)."
+            : isLapRFNet
+              ? "Select your timing device and connect to a LapRF 8-Way timer over Ethernet IP (TCP :5403)."
+              : isBleMode
+                ? "Select your timing device and connect to the Hub over <strong>Bluetooth</strong> to inspect pairing status, 2.4 GHz ESP-NOW Spokes, and live 5.8 GHz readings."
+                : "Select your timing device and connect the Hub (or a Spoke) over <strong>USB-C</strong> to inspect the 2.4 GHz network and 5.8 GHz readings.";
       connIntro.innerHTML = `<h2>Connection</h2><p>${introText}</p>`;
       scanSettingsIntroCollapse(connIntro);
     }
@@ -1941,6 +1947,7 @@ export class NetworkView extends Component {
             <option value="slaprf" ${effectiveMode === "slaprf" ? "selected" : ""}>SlapRF (USB)</option>
             <option value="slaprf_ble" ${effectiveMode === "slaprf_ble" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select SlapRF (Bluetooth)"'}>SlapRF (Bluetooth)</option>
             <option value="laprf" ${effectiveMode === "laprf" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select LapRF 8-Way (Network)"'}>LapRF 8-Way (Network)</option>
+            <option value="laprf_usb" ${effectiveMode === "laprf_usb" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select LapRF 8-Way (USB)"'}>LapRF 8-Way (USB)</option>
             <option value="rotorhazard" ${effectiveMode === "rotorhazard" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select RotorHazard (Network)"'}>RotorHazard (Network)</option>
             <option value="rotorhazard_usb" ${effectiveMode === "rotorhazard_usb" ? "selected" : ""} ${canUseExternal ? "" : 'disabled title="Connect a SlapRF Server or enable Simulation active to select RotorHazard (USB)"'}>RotorHazard (USB)</option>
           </select>`;
@@ -1950,23 +1957,70 @@ export class NetworkView extends Component {
 
     const slaprfConnHost = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
     const extActionsHost = this.el.querySelector<HTMLElement>('[data-slot="external-conn-actions"]');
+    const laprfUsbErrHost = this.el.querySelector<HTMLElement>('[data-slot="laprf-usb-error"]');
     const laprfConnHost = this.el.querySelector<HTMLElement>('[data-slot="laprf-connection"]');
     const rhConnHost = this.el.querySelector<HTMLElement>('[data-slot="rh-connection"]');
     const rhUsbConnHost = this.el.querySelector<HTMLElement>('[data-slot="rh-usb-connection"]');
 
     if (slaprfConnHost) slaprfConnHost.style.display = isSlapRF ? "contents" : "none";
-    if (laprfConnHost) laprfConnHost.style.display = isLapRF ? "" : "none";
+    if (laprfConnHost) laprfConnHost.style.display = isLapRFNet ? "" : "none";
     if (rhConnHost) rhConnHost.style.display = isRHNet ? "" : "none";
     if (rhUsbConnHost) rhUsbConnHost.style.display = isRHUSB ? "" : "none";
 
+    if (laprfUsbErrHost) {
+      const usbErrText = isLapRFUSB ? this.laprfError || sharedLapRFLink.errorMessage || "" : "";
+      laprfUsbErrHost.style.display = usbErrText ? "" : "none";
+      const wantErrHtml = usbErrText ? `<div class="sim-error-note">${esc(usbErrText)}</div>` : "";
+      if (laprfUsbErrHost.innerHTML !== wantErrHtml) {
+        laprfUsbErrHost.innerHTML = wantErrHtml;
+      }
+    }
+
     if (extActionsHost) {
-      const showExt = !isSlapRF && lock.connectedCount > 0;
+      const showExt = isLapRFUSB || (!isSlapRF && lock.connectedCount > 0);
       extActionsHost.style.display = showExt ? "inline-flex" : "none";
-      const extSig = showExt ? `${lock.connectedCount}|${lock.busy ? 1 : 0}` : "0";
+      const extSig = showExt ? `${effectiveMode}|${lock.connectedCount}|${lock.busy ? 1 : 0}` : "0";
       if (extSig !== this.lastExternalInlineSig) {
         this.lastExternalInlineSig = extSig;
-        extActionsHost.innerHTML = showExt
-          ? `<span class="badge"><span class="status-dot is-up" style="display:inline-block;margin-right:6px"></span>${lock.connectedCount} connected</span>
+        if (!showExt) {
+          extActionsHost.innerHTML = "";
+        } else if (isLapRFUSB) {
+          const badgeHtml =
+            lock.connectedCount > 0
+              ? `<span class="badge"><span class="status-dot is-up" style="display:inline-block;margin-right:6px"></span>${lock.connectedCount} connected</span>`
+              : "";
+          const connectBtnText = lock.busy
+            ? "Connecting…"
+            : lock.connectedCount > 0
+              ? "Add USB"
+              : "Connect USB";
+          const disconnectHtml =
+            lock.connectedCount > 0
+              ? `<button
+                   type="button"
+                   class="pilot-chip debug-usb-add-chip net-mode-disconnect-chip"
+                   data-action="network-disconnect-active"
+                   ${lock.busy ? "disabled" : ""}
+                   title="Disconnect active connection to switch timing system"
+                 >
+                   ${icons.close(14)}
+                   <span class="pilot-chip-name">${lock.connectedCount > 1 ? "Disconnect all" : "Disconnect"}</span>
+                 </button>`
+              : "";
+          extActionsHost.innerHTML = `${badgeHtml}
+             <button
+               type="button"
+               class="pilot-chip debug-usb-add-chip"
+               data-action="laprf-connect-usb"
+               ${lock.busy ? "disabled" : ""}
+               title="Connect a LapRF 8-Way timer over USB"
+             >
+               ${icons.plug(20)}
+               <span class="pilot-chip-name">${connectBtnText}</span>
+             </button>
+             ${disconnectHtml}`;
+        } else {
+          extActionsHost.innerHTML = `<span class="badge"><span class="status-dot is-up" style="display:inline-block;margin-right:6px"></span>${lock.connectedCount} connected</span>
              <button
                type="button"
                class="pilot-chip debug-usb-add-chip net-mode-disconnect-chip"
@@ -1976,8 +2030,8 @@ export class NetworkView extends Component {
              >
                ${icons.close(14)}
                <span class="pilot-chip-name">${lock.connectedCount > 1 ? "Disconnect all" : "Disconnect"}</span>
-             </button>`
-          : "";
+             </button>`;
+        }
       }
     }
   }
@@ -1986,7 +2040,7 @@ export class NetworkView extends Component {
     const mode = this.store.timingHardwareMode;
     this.lastRenderedHardwareMode = mode;
     const isBleMode = mode === "slaprf_ble";
-    const isLapRF = mode === "laprf";
+    const isLapRF = isLapRFMode(mode);
     const isRHNet = mode === "rotorhazard";
     const isRHUSB = mode === "rotorhazard_usb";
 
@@ -2002,6 +2056,14 @@ export class NetworkView extends Component {
     if (rhUsbWrap) rhUsbWrap.style.display = isRHUSB ? "contents" : "none";
 
     if (isLapRF) {
+      if (laprfWrap) {
+        const discoverSec = laprfWrap.querySelector<HTMLElement>('[data-section-anchor="discover"]');
+        if (discoverSec) {
+          const hideDiscover = mode === "laprf_usb";
+          discoverSec.hidden = hideDiscover;
+          discoverSec.style.display = hideDiscover ? "none" : "";
+        }
+      }
       this.renderLapRFView();
       return;
     }
@@ -2046,110 +2108,108 @@ export class NetworkView extends Component {
   }
 
   private renderLapRFView(): void {
+    const isUSBMode = this.store.timingHardwareMode === "laprf_usb";
     const connHost = this.slot("laprf-connection");
     const timersHost = this.slot("laprf-timers");
     const snaps = sharedLapRFLink.snapshots(this.store);
     const errText = this.laprfError || sharedLapRFLink.errorMessage || "";
 
-    const activeEl = document.activeElement as HTMLElement | null;
-    const focusedInsideConn = Boolean(
-      activeEl && connHost.contains(activeEl) && activeEl.tagName === "INPUT"
-    );
+    if (!isUSBMode) {
+      const activeEl = document.activeElement as HTMLElement | null;
+      const focusedInsideConn = Boolean(
+        activeEl && connHost.contains(activeEl) && activeEl.tagName === "INPUT"
+      );
 
-    const connSig = JSON.stringify({
-      busy: this.laprfBusy,
-      scanning: this.laprfScanning,
-      subnet: this.laprfScannedSubnet,
-      err: errText,
-      discovered: this.laprfDiscovered,
-      connectedEndpoints: snaps.filter((s) => s.connected).map((s) => s.endpoint),
-    });
+      const connSig = JSON.stringify({
+        busy: this.laprfBusy,
+        scanning: this.laprfScanning,
+        subnet: this.laprfScannedSubnet,
+        err: errText,
+        discovered: this.laprfDiscovered,
+        connectedEndpoints: snaps.filter((s) => s.connected).map((s) => s.endpoint),
+      });
 
-    if (!focusedInsideConn && connSig !== this.lastLaprfConnSig) {
-      this.lastLaprfConnSig = connSig;
-      const connectedEndpoints = new Set(snaps.filter((s) => s.connected).map((s) => s.endpoint));
-      const discoveredHtml =
-        this.laprfDiscovered.length > 0
-          ? `<div style="padding:10px 14px;border-top:1px solid var(--border,rgba(255,255,255,0.08));display:flex;flex-direction:column;gap:8px">
-              <div style="display:flex;justify-content:space-between;align-items:center">
-                <span class="muted" style="font-size:12px">Discovered on ${esc(this.laprfScannedSubnet || "LAN")} (${this.laprfDiscovered.length})</span>
-              </div>
-              <div style="display:flex;flex-wrap:wrap;gap:8px">
-                ${this.laprfDiscovered
-                  .map((d) => {
-                    const ep = `${d.host}:${d.port || 5403}`;
-                    const isConn = Boolean(d.connected || connectedEndpoints.has(ep));
-                    const vStr = d.voltageMv && d.voltageMv > 0 ? ` · ${(d.voltageMv / 1000).toFixed(1)} V` : "";
-                    return `
-                      <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--border,rgba(255,255,255,0.1));border-radius:6px;background:rgba(255,255,255,0.02)">
-                        <span class="status-dot ${isConn ? "is-up" : ""}"></span>
-                        <span class="mono" style="font-size:12px"><strong>${esc(d.label || "LapRF")}</strong> · ${esc(ep)}${esc(vStr)}</span>
-                        ${
-                          isConn
-                            ? `<span class="badge mono">Connected</span>`
-                            : `<button class="btn btn-sm btn-ghost" type="button" data-action="laprf-connect-discovered" data-host="${esc(d.host)}" data-port="${d.port || 5403}" data-label="${esc(d.label || "")}" ${this.laprfBusy ? "disabled" : ""}>Connect</button>`
-                        }
-                      </div>`;
-                  })
-                  .join("")}
-              </div>
-            </div>`
-          : this.laprfScannedSubnet
-            ? `<div style="padding:10px 14px;border-top:1px solid var(--border,rgba(255,255,255,0.08))"><span class="note">No powered-on LapRF timers responded on ${esc(this.laprfScannedSubnet)} TCP :5403.</span></div>`
-            : "";
+      if (!focusedInsideConn && connSig !== this.lastLaprfConnSig) {
+        this.lastLaprfConnSig = connSig;
+        const connectedEndpoints = new Set(snaps.filter((s) => s.connected).map((s) => s.endpoint));
+        const discoveredHtml =
+          this.laprfDiscovered.length > 0
+            ? `<div style="padding:10px 14px;border-top:1px solid var(--border,rgba(255,255,255,0.08));display:flex;flex-direction:column;gap:8px">
+                <div style="display:flex;justify-content:space-between;align-items:center">
+                  <span class="muted" style="font-size:12px">Discovered on ${esc(this.laprfScannedSubnet || "LAN")} (${this.laprfDiscovered.length})</span>
+                </div>
+                <div style="display:flex;flex-wrap:wrap;gap:8px">
+                  ${this.laprfDiscovered
+                    .map((d) => {
+                      const ep = `${d.host}:${d.port || 5403}`;
+                      const isConn = Boolean(d.connected || connectedEndpoints.has(ep));
+                      const vStr = d.voltageMv && d.voltageMv > 0 ? ` · ${(d.voltageMv / 1000).toFixed(1)} V` : "";
+                      return `
+                        <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border:1px solid var(--border,rgba(255,255,255,0.1));border-radius:6px;background:rgba(255,255,255,0.02)">
+                          <span class="status-dot ${isConn ? "is-up" : ""}"></span>
+                          <span class="mono" style="font-size:12px"><strong>${esc(d.label || "LapRF")}</strong> · ${esc(ep)}${esc(vStr)}</span>
+                          ${
+                            isConn
+                              ? `<span class="badge mono">Connected</span>`
+                              : `<button class="btn btn-sm btn-ghost" type="button" data-action="laprf-connect-discovered" data-host="${esc(d.host)}" data-port="${d.port || 5403}" data-label="${esc(d.label || "")}" ${this.laprfBusy ? "disabled" : ""}>Connect</button>`
+                          }
+                        </div>`;
+                    })
+                    .join("")}
+                </div>
+              </div>`
+            : this.laprfScannedSubnet
+              ? `<div style="padding:10px 14px;border-top:1px solid var(--border,rgba(255,255,255,0.08))"><span class="note">No powered-on LapRF timers responded on ${esc(this.laprfScannedSubnet)} TCP :5403.</span></div>`
+              : "";
 
-      connHost.innerHTML = `
-        <div class="card card-flush">
-          <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between">
-            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
-              <label style="display:flex;flex-direction:column;gap:4px">
-                <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Ethernet IP</span>
-                <input
-                  class="input mono"
-                  type="text"
-                  value="${esc(this.laprfHost)}"
-                  data-field="laprf-host"
-                  placeholder="192.168.1.2"
-                  style="width:142px;padding:5px 9px;font-size:13px"
-                />
-              </label>
-              <label style="display:flex;flex-direction:column;gap:4px">
-                <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Port</span>
-                <input
-                  class="input mono"
-                  type="number"
-                  value="${this.laprfPort}"
-                  data-field="laprf-port"
-                  style="width:82px;padding:5px 8px;font-size:13px"
-                />
-              </label>
-              <button class="btn btn-ghost" type="button" data-action="laprf-connect-eth" ${this.laprfBusy ? "disabled" : ""}>
-                ${icons.wifi(14)}<span>${this.laprfBusy ? "Connecting…" : "Connect Ethernet"}</span>
-              </button>
-            </div>
-            <div style="display:flex;align-items:center;gap:8px">
-              <button class="btn btn-ghost" type="button" data-action="laprf-connect-usb" ${this.laprfBusy ? "disabled" : ""}>
-                ${icons.plug(14)}<span>Connect USB</span>
-              </button>
-            </div>
-          </div>
-          ${errText ? `<div class="sim-error-note" style="margin:0 16px 12px">${esc(errText)}</div>` : ""}
-        </div>`;
-
-      const discoverHost = this.slot("laprf-discover");
-      if (discoverHost) {
-        discoverHost.innerHTML = `
+        connHost.innerHTML = `
           <div class="card card-flush">
-            <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between">
-              <div style="display:flex;align-items:center;gap:10px">
-                <button class="btn btn-ghost" type="button" data-action="laprf-scan-lan" ${this.laprfScanning ? "disabled" : ""}>
-                  ${icons.target(14)}<span>${this.laprfScanning ? "Scanning…" : "Scan LAN"}</span>
+            <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between">
+              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
+                <label style="display:flex;flex-direction:column;gap:4px">
+                  <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Ethernet IP</span>
+                  <input
+                    class="input mono"
+                    type="text"
+                    value="${esc(this.laprfHost)}"
+                    data-field="laprf-host"
+                    placeholder="192.168.1.2"
+                    style="width:142px;padding:5px 9px;font-size:13px"
+                  />
+                </label>
+                <label style="display:flex;flex-direction:column;gap:4px">
+                  <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Port</span>
+                  <input
+                    class="input mono"
+                    type="number"
+                    value="${this.laprfPort}"
+                    data-field="laprf-port"
+                    style="width:82px;padding:5px 8px;font-size:13px"
+                  />
+                </label>
+                <button class="btn btn-ghost" type="button" data-action="laprf-connect-eth" ${this.laprfBusy ? "disabled" : ""}>
+                  ${icons.wifi(14)}<span>${this.laprfBusy ? "Connecting…" : "Connect Ethernet"}</span>
                 </button>
-                <span class="note">Probes local subnet for LapRF 8-Way units on TCP :${this.laprfPort || 5403}</span>
               </div>
             </div>
-            ${discoveredHtml}
+            ${errText ? `<div class="sim-error-note" style="margin:0 16px 12px">${esc(errText)}</div>` : ""}
           </div>`;
+
+        const discoverHost = this.slot("laprf-discover");
+        if (discoverHost) {
+          discoverHost.innerHTML = `
+            <div class="card card-flush">
+              <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between">
+                <div style="display:flex;align-items:center;gap:10px">
+                  <button class="btn btn-ghost" type="button" data-action="laprf-scan-lan" ${this.laprfScanning ? "disabled" : ""}>
+                    ${icons.target(14)}<span>${this.laprfScanning ? "Scanning…" : "Scan LAN"}</span>
+                  </button>
+                  <span class="note">Probes local subnet for LapRF 8-Way units on TCP :${this.laprfPort || 5403}</span>
+                </div>
+              </div>
+              ${discoveredHtml}
+            </div>`;
+        }
       }
     }
 
@@ -2164,6 +2224,7 @@ export class NetworkView extends Component {
     }
 
     const structSig = JSON.stringify({
+      usb: isUSBMode ? 1 : 0,
       snaps: snaps.map((s) => ({
         id: s.timerId,
         label: s.label,
@@ -2221,10 +2282,13 @@ export class NetworkView extends Component {
     this.lastLaprfTimersStructSig = structSig;
 
     if (snaps.length === 0) {
-      timersHost.innerHTML = `
-        <div class="card empty-note" style="padding:18px">
-          No LapRF 8-Way timers connected yet. Enter the timer's IP above, click <strong>Scan LAN</strong>, or connect over USB.
-        </div>`;
+      timersHost.innerHTML = isUSBMode
+        ? `<div class="card empty-note" style="padding:18px">
+            No LapRF 8-Way USB timers connected yet. Click <strong>Connect USB</strong> above to select a USB serial port.
+          </div>`
+        : `<div class="card empty-note" style="padding:18px">
+            No LapRF 8-Way timers connected yet. Enter the timer's IP above or click <strong>Scan LAN</strong>.
+          </div>`;
       return;
     }
 

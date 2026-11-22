@@ -180,6 +180,7 @@ export class AppShell extends Component {
     const simOn = this.store.simulatorRunning;
     const isExternalTimer =
       this.store.timingHardwareMode === "laprf" ||
+      this.store.timingHardwareMode === "laprf_usb" ||
       this.store.timingHardwareMode === "rotorhazard" ||
       this.store.timingHardwareMode === "rotorhazard_usb";
     const caps = capabilitiesSnapshot();

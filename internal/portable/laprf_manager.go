@@ -22,7 +22,10 @@ import (
 	"slaprf/internal/tracker"
 )
 
-const kvLapRFTargetsKey = "hw.laprf_targets"
+const (
+	kvLapRFTargetsKey    = "hw.laprf_targets"
+	kvLapRFUSBTargetsKey = "hw.laprf_usb_targets"
+)
 
 // SavedLapRFTarget persists a configured physical LapRF 8-Way link in `BoltStore`.
 type SavedLapRFTarget struct {
@@ -63,6 +66,10 @@ type laprfManagedSession struct {
 	lastErr   string
 }
 
+func (s *laprfManagedSession) isUSB() bool {
+	return strings.EqualFold(strings.TrimSpace(s.target.Transport), "usb")
+}
+
 type laprfEngineSub struct {
 	onSync func()
 }
@@ -87,11 +94,12 @@ type laprfManager struct {
 	logf     func(string, ...any)
 	onDirty  func()
 
-	mu       sync.RWMutex
-	sessions map[uint8]*laprfManagedSession
-	simMode  bool
-	stopCh   chan struct{}
-	stopOnce sync.Once
+	mu         sync.RWMutex
+	sessions   map[uint8]*laprfManagedSession
+	simMode    bool
+	activeMode domain.TimingHardwareMode
+	stopCh     chan struct{}
+	stopOnce   sync.Once
 }
 
 func newLapRFManager(engine *tracker.Engine, store *storage.BoltStore, openPort firmware.SerialOpener, logf func(string, ...any), onDirty func()) *laprfManager {
@@ -166,39 +174,60 @@ func (m *laprfManager) close() {
 }
 
 func (m *laprfManager) RestorePersistedTargets(simMode bool) {
+	m.Reconcile(simMode)
+}
+
+func (m *laprfManager) SetSimMode(simRunning bool) {
+	m.Reconcile(simRunning)
+}
+
+// Reconcile suspends or restores LapRF Network (`hw.laprf_targets`) or LapRF USB
+// (`hw.laprf_usb_targets`) sessions whenever `simRunning` or `engine.TimingHardwareMode()` changes.
+func (m *laprfManager) Reconcile(simRunning bool) {
+	hwMode := domain.NormalizeTimingHardwareMode(m.engine.TimingHardwareMode())
+	wantActive := !simRunning && domain.IsLapRFMode(hwMode)
+
 	m.mu.Lock()
-	m.simMode = simMode
-	m.mu.Unlock()
-	if m.store == nil || simMode {
+	prevSim := m.simMode
+	prevMode := m.activeMode
+	m.simMode = simRunning
+	if !wantActive {
+		m.activeMode = ""
+		m.mu.Unlock()
+		if prevMode != "" || (!prevSim && simRunning) {
+			m.stopActiveSessionsWithoutForgetting()
+		}
 		return
 	}
-	if m.engine.TimingHardwareMode() != domain.HardwareModeLapRF {
+	if prevMode == hwMode && !prevSim {
+		m.mu.Unlock()
 		return
+	}
+	m.activeMode = hwMode
+	m.mu.Unlock()
+
+	m.stopActiveSessionsWithoutForgetting()
+	if m.store == nil {
+		return
+	}
+	kvKey := kvLapRFTargetsKey
+	if hwMode == domain.HardwareModeLapRFUSB {
+		kvKey = kvLapRFUSBTargetsKey
 	}
 	var saved []SavedLapRFTarget
-	if ok, err := m.store.GetJSON(kvLapRFTargetsKey, &saved); err == nil && ok {
+	if ok, err := m.store.GetJSON(kvKey, &saved); err == nil && ok {
 		for _, tgt := range saved {
 			t := tgt
+			if hwMode == domain.HardwareModeLapRFUSB {
+				t.Transport = "usb"
+			} else {
+				t.Transport = "ethernet"
+			}
 			go func() {
 				_, _ = m.Connect(t)
 			}()
 		}
 	}
-}
-
-func (m *laprfManager) SetSimMode(simRunning bool) {
-	m.mu.Lock()
-	prev := m.simMode
-	m.simMode = simRunning
-	m.mu.Unlock()
-	if prev == simRunning {
-		return
-	}
-	if simRunning {
-		m.stopActiveSessionsWithoutForgetting()
-		return
-	}
-	m.RestorePersistedTargets(false)
 }
 
 func (m *laprfManager) stopActiveSessionsWithoutForgetting() {
@@ -215,18 +244,24 @@ func (m *laprfManager) stopActiveSessionsWithoutForgetting() {
 	}
 }
 
-func (m *laprfManager) persistTargets() {
+func (m *laprfManager) persistTargetsForMode(isUSB bool) {
 	if m.store == nil {
 		return
 	}
 	m.mu.RLock()
 	out := make([]SavedLapRFTarget, 0, len(m.sessions))
 	for _, s := range m.sessions {
-		out = append(out, s.target)
+		if s.isUSB() == isUSB {
+			out = append(out, s.target)
+		}
 	}
 	m.mu.RUnlock()
 	sort.Slice(out, func(i, j int) bool { return out[i].TimerID < out[j].TimerID })
-	_ = m.store.PutJSON(kvLapRFTargetsKey, out)
+	if isUSB {
+		_ = m.store.PutJSON(kvLapRFUSBTargetsKey, out)
+	} else {
+		_ = m.store.PutJSON(kvLapRFTargetsKey, out)
+	}
 }
 
 func (m *laprfManager) syncOne(sess *laprfManagedSession) {
@@ -271,9 +306,10 @@ func (m *laprfManager) SyncAll() {
 }
 
 func (m *laprfManager) Connect(req SavedLapRFTarget) (LapRFDiagSnapshot, error) {
+	hwMode := domain.NormalizeTimingHardwareMode(m.engine.TimingHardwareMode())
 	transport := strings.ToLower(strings.TrimSpace(req.Transport))
 	if transport == "" {
-		if req.PortName != "" {
+		if req.PortName != "" || hwMode == domain.HardwareModeLapRFUSB {
 			transport = "usb"
 		} else {
 			transport = "ethernet"
@@ -343,7 +379,7 @@ func (m *laprfManager) Connect(req SavedLapRFTarget) (LapRFDiagSnapshot, error) 
 	m.sessions[assignedID] = sess
 	m.mu.Unlock()
 
-	m.persistTargets()
+	m.persistTargetsForMode(transport == "usb")
 	if m.onDirty != nil {
 		m.onDirty()
 	}
@@ -506,11 +542,13 @@ func (m *laprfManager) Disconnect(timerID uint8) {
 	sess := m.sessions[timerID]
 	delete(m.sessions, timerID)
 	m.mu.Unlock()
+	isUSB := m.engine.TimingHardwareMode() == domain.HardwareModeLapRFUSB
 	if sess != nil {
+		isUSB = sess.isUSB()
 		sess.cancel()
 	}
 	m.engine.SetDetectedTimerOnline(timerID, false)
-	m.persistTargets()
+	m.persistTargetsForMode(isUSB)
 	if m.onDirty != nil {
 		m.onDirty()
 	}
@@ -551,9 +589,13 @@ func (m *laprfManager) snapshotOne(sess *laprfManagedSession) LapRFDiagSnapshot 
 }
 
 func (m *laprfManager) Snapshots() []LapRFDiagSnapshot {
+	wantUSB := m.engine.TimingHardwareMode() == domain.HardwareModeLapRFUSB
 	m.mu.RLock()
 	out := make([]LapRFDiagSnapshot, 0, len(m.sessions))
 	for _, s := range m.sessions {
+		if domain.IsLapRFMode(m.engine.TimingHardwareMode()) && s.isUSB() != wantUSB {
+			continue
+		}
 		out = append(out, m.snapshotOne(s))
 	}
 	m.mu.RUnlock()
@@ -572,9 +614,13 @@ func (s *Server) handleLapRFStatus(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
+	kvKey := kvLapRFTargetsKey
+	if s.realEngine.TimingHardwareMode() == domain.HardwareModeLapRFUSB {
+		kvKey = kvLapRFUSBTargetsKey
+	}
 	var saved []SavedLapRFTarget
 	if s.store != nil {
-		_, _ = s.store.GetJSON(kvLapRFTargetsKey, &saved)
+		_, _ = s.store.GetJSON(kvKey, &saved)
 	}
 	if saved == nil {
 		saved = []SavedLapRFTarget{}

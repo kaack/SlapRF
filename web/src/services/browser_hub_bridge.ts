@@ -123,7 +123,7 @@ export class BrowserHubBridge {
       };
     }
 
-    if (store && hwMode === "laprf") {
+    if (store && (hwMode === "laprf" || hwMode === "laprf_usb")) {
       const snaps = sharedLapRFLink.snapshots(store);
       const connectedSnaps = snaps.filter((s) => s.connected);
       if (connectedSnaps.length > 0) {

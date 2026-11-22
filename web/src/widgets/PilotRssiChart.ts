@@ -22,6 +22,7 @@ import {
   GateRuleKey,
   GateRuleOverrides,
   GateThresholdUpdate,
+  isLapRFMode,
   isRotorHazardMode,
   TimerTelemetryFrame,
   TimingHardwareMode,
@@ -259,7 +260,7 @@ export class PilotRssiChart extends Component {
     return this.store.timingHardwareMode;
   }
   private get isLapRF(): boolean {
-    return this.hwMode === "laprf";
+    return isLapRFMode(this.hwMode);
   }
   private get isRH(): boolean {
     return isRotorHazardMode(this.hwMode);

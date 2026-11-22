@@ -22,7 +22,7 @@ import {
   usbPool,
 } from "../services/timer_console";
 import { AppStore } from "../state/store";
-import { DetectedTimer, isRotorHazardMode, isSlapRFMode, TimingHardwareMode } from "../types/models";
+import { DetectedTimer, isLapRFMode, isRotorHazardMode, isSlapRFMode, TimingHardwareMode } from "../types/models";
 import { openDeviceConnectionSheet } from "../widgets/DeviceConnectionSheet";
 import { patchUsbConnectionBar } from "../widgets/UsbConnectionBar";
 import {
@@ -698,7 +698,7 @@ export class DebugView extends Component {
   }
 
   private isLapRFMode(): boolean {
-    return this.hwMode() === "laprf";
+    return isLapRFMode(this.hwMode());
   }
 
   private activeSweepHz(): number {
@@ -934,7 +934,7 @@ export class DebugView extends Component {
     const isSlapBLE = mode === "slaprf_ble";
     const isRHNet = mode === "rotorhazard";
     const isRHUSB = mode === "rotorhazard_usb";
-    const isLapRF = mode === "laprf";
+    const isLapRF = isLapRFMode(mode);
 
     const setHidden = (anchor: string, hide: boolean) => {
       const sec = this.el.querySelector<HTMLElement>(`[data-section-anchor="${anchor}"]`);
@@ -1023,7 +1023,9 @@ export class DebugView extends Component {
       setIntro(
         "connection",
         "Connection",
-        `<p>Select or connect a LapRF 8-Way timer over Ethernet TCP (<span class="mono">:5403</span>) or USB CDC. Manage hardware endpoints on the Network page.</p>`
+        mode === "laprf_usb"
+          ? `<p>Select or connect a LapRF 8-Way timer over USB CDC serial (115200 baud). Manage hardware endpoints on the Network page.</p>`
+          : `<p>Select or connect a LapRF 8-Way timer over Ethernet TCP (<span class="mono">:5403</span>). Manage hardware endpoints on the Network page.</p>`
       );
     } else if (isSlapBLE) {
       setIntro(

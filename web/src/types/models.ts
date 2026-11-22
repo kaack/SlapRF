@@ -1,8 +1,18 @@
 export type TimerRole = "START_FINISH" | "SECTOR_GATE";
-export type TimingHardwareMode = "slaprf" | "slaprf_ble" | "laprf" | "rotorhazard" | "rotorhazard_usb";
+export type TimingHardwareMode =
+  | "slaprf"
+  | "slaprf_ble"
+  | "laprf"
+  | "laprf_usb"
+  | "rotorhazard"
+  | "rotorhazard_usb";
 
 export function isSlapRFMode(mode?: TimingHardwareMode | string | null): boolean {
   return !mode || mode === "slaprf" || mode === "slaprf_ble";
+}
+
+export function isLapRFMode(mode?: TimingHardwareMode | string | null): boolean {
+  return mode === "laprf" || mode === "laprf_usb";
 }
 
 export function isRotorHazardMode(mode?: TimingHardwareMode | string | null): boolean {
@@ -12,6 +22,7 @@ export function isRotorHazardMode(mode?: TimingHardwareMode | string | null): bo
 export function normalizeTimingHardwareMode(mode?: string | null): TimingHardwareMode {
   if (mode === "slaprf_ble") return "slaprf_ble";
   if (mode === "laprf") return "laprf";
+  if (mode === "laprf_usb") return "laprf_usb";
   if (mode === "rotorhazard") return "rotorhazard";
   if (mode === "rotorhazard_usb") return "rotorhazard_usb";
   return "slaprf";
@@ -278,6 +289,8 @@ export interface SimTimerState {
 export interface SimLapRFUnit {
   timerId: number;
   label: string;
+  transport?: "ethernet" | "usb";
+  portName?: string;
   host: string;
   port: number;
   color: string;

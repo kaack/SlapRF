@@ -890,7 +890,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       const getSelect = () =>
         netRoot.querySelector<HTMLSelectElement>('select[data-field="network-hardware-mode"]')!;
 
-      // 1. Disconnected SlapRF (USB): dropdown is enabled with all 5 options and "Connect USB" button is visible
+      // 1. Disconnected SlapRF (USB): dropdown is enabled with all 6 options and "Connect USB" button is visible
       let sel = getSelect();
       expect(sel).not.toBeNull();
       expect(sel.disabled).toBe(false);
@@ -898,12 +898,39 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
         "slaprf",
         "slaprf_ble",
         "laprf",
+        "laprf_usb",
         "rotorhazard",
         "rotorhazard_usb",
       ]);
       expect(netRoot.querySelector('[data-slot="connection"]')?.textContent || "").toContain("Connect USB");
 
+      // 1b. Switch inline to LapRF 8-Way (Network) vs LapRF 8-Way (USB): cleanly separated UI pipelines
+      sel = getSelect();
+      sel.value = "laprf";
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      await flushMicrotasks();
+      expect(store.timingHardwareMode).toBe("laprf");
+      const laprfConnSlot = netRoot.querySelector<HTMLElement>('[data-slot="laprf-connection"]')!;
+      expect(laprfConnSlot.style.display).not.toBe("none");
+      expect(laprfConnSlot.textContent || "").toContain("Connect Ethernet");
+      expect(laprfConnSlot.querySelector('[data-action="laprf-connect-usb"]')).toBeNull();
+      const laprfDiscoverSec = netRoot.querySelector<HTMLElement>('[data-slot="laprf-sections"] [data-section-anchor="discover"]')!;
+      expect(laprfDiscoverSec.hidden).toBe(false);
+
+      sel = getSelect();
+      sel.value = "laprf_usb";
+      sel.dispatchEvent(new Event("change", { bubbles: true }));
+      await flushMicrotasks();
+      expect(store.timingHardwareMode).toBe("laprf_usb");
+      expect(laprfConnSlot.style.display).toBe("none");
+      expect(laprfDiscoverSec.hidden).toBe(true);
+      const extSlot = netRoot.querySelector<HTMLElement>('[data-slot="external-conn-actions"]')!;
+      expect(extSlot.style.display).toBe("inline-flex");
+      expect(extSlot.querySelector('[data-action="laprf-connect-usb"]')).not.toBeNull();
+      expect(extSlot.textContent || "").toContain("Connect USB");
+
       // 2. Switch inline to SlapRF (Bluetooth) -> button changes to "Pair Device" without leaving NetworkView
+      sel = getSelect();
       sel.value = "slaprf_ble";
       sel.dispatchEvent(new Event("change", { bubbles: true }));
       await flushMicrotasks();

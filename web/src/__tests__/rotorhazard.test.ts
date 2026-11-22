@@ -94,7 +94,7 @@ describe("state/selectors — RotorHazard 0..255 Dual Threshold Resolution", () 
 });
 
 describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
-  it("lists all 5 Timing Systems in exact order: SlapRF (USB), SlapRF (Bluetooth), LapRF 8-Way (Network), RotorHazard (Network), RotorHazard (USB)", () => {
+  it("lists all 6 Timing Systems in exact order: SlapRF (USB), SlapRF (Bluetooth), LapRF 8-Way (Network), LapRF 8-Way (USB), RotorHazard (Network), RotorHazard (USB)", () => {
     const simStore = makeStore({
       simulatorRunning: true,
       timingHardwareMode: "slaprf",
@@ -111,6 +111,7 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
         "slaprf",
         "slaprf_ble",
         "laprf",
+        "laprf_usb",
         "rotorhazard",
         "rotorhazard_usb",
       ]);
@@ -118,6 +119,7 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
         "SlapRF (USB)",
         "SlapRF (Bluetooth)",
         "LapRF 8-Way (Network)",
+        "LapRF 8-Way (USB)",
         "RotorHazard (Network)",
         "RotorHazard (USB)",
       ]);
@@ -125,6 +127,7 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(opts[2].disabled).toBe(false);
       expect(opts[3].disabled).toBe(false);
       expect(opts[4].disabled).toBe(false);
+      expect(opts[5].disabled).toBe(false);
 
       // When Simulation is OFF without a Go backend connected, external systems are gated cleanly
       const realStore = makeStore({
@@ -137,10 +140,12 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
         sel = root2.querySelector<HTMLSelectElement>("select[name='timing-hardware-mode']")!;
         const bleOpt = sel.querySelector<HTMLOptionElement>("option[value='slaprf_ble']")!;
         const laprfOpt = sel.querySelector<HTMLOptionElement>("option[value='laprf']")!;
+        const laprfUsbOpt = sel.querySelector<HTMLOptionElement>("option[value='laprf_usb']")!;
         const rhOpt = sel.querySelector<HTMLOptionElement>("option[value='rotorhazard']")!;
         const rhUsbOpt = sel.querySelector<HTMLOptionElement>("option[value='rotorhazard_usb']")!;
         expect(bleOpt.disabled).toBe(true);
         expect(laprfOpt.disabled).toBe(true);
+        expect(laprfUsbOpt.disabled).toBe(true);
         expect(rhOpt.disabled).toBe(true);
         expect(rhUsbOpt.disabled).toBe(true);
       } finally {
