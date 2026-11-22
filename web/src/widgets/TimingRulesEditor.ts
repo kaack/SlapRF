@@ -139,16 +139,37 @@ export class TimingRulesEditor extends Component {
       const target = e.target;
       if (!(target instanceof HTMLInputElement) || !target.classList.contains("scope-tune-input")) return;
       target.dataset.originalValue = target.value;
-      target.placeholder = target.value;
-      target.value = "";
       target.dataset.replaceOnNextInput = "1";
+      try {
+        target.select();
+        target.setSelectionRange(0, target.value.length);
+      } catch {
+        // Ignore selection errors on number inputs
+      }
+    });
+    this.listen(el, "pointerup", (e) => {
+      const target = e.target;
+      if (!(target instanceof HTMLInputElement) || !target.classList.contains("scope-tune-input")) return;
+      if (document.activeElement === target && target.dataset.replaceOnNextInput === "1") {
+        try {
+          target.select();
+          target.setSelectionRange(0, target.value.length);
+        } catch {
+          // Ignore selection errors on number inputs
+        }
+      }
     });
     this.listen(el, "beforeinput", (e: InputEvent) => {
       const target = e.target;
       if (!(target instanceof HTMLInputElement) || !target.classList.contains("scope-tune-input")) return;
+      if (e.inputType === "insertLineBreak" || e.inputType === "insertParagraph") {
+        e.preventDefault();
+        target.blur();
+        return;
+      }
       if (target.dataset.replaceOnNextInput === "1") {
         delete target.dataset.replaceOnNextInput;
-        if (e.inputType === "insertText" && e.data) {
+        if ((e.inputType === "insertText" || e.inputType === "insertCompositionText") && e.data) {
           target.value = "";
         } else if (e.inputType && e.inputType.startsWith("deleteContent")) {
           e.preventDefault();
@@ -175,6 +196,7 @@ export class TimingRulesEditor extends Component {
       if (!this.isReadOnlyFn() && key && trimmed !== "" && trimmed !== target.dataset.originalValue) {
         const raw = Number(trimmed);
         if (Number.isFinite(raw)) {
+          target.dataset.originalValue = trimmed;
           void this.applyTuneRuleValue(key, raw);
         }
       }
@@ -191,12 +213,14 @@ export class TimingRulesEditor extends Component {
         }
       }
       if (!(target instanceof HTMLInputElement)) return;
-      if (e.key === "Enter") {
+      if (e.key === "Enter" || e.keyCode === 13) {
         e.preventDefault();
         target.blur();
       } else if (e.key === "Escape") {
         target.value = target.dataset.originalValue ?? target.defaultValue;
         target.blur();
+      } else if (e.key === "ArrowLeft" || e.key === "ArrowRight" || e.key === "Home" || e.key === "End") {
+        delete target.dataset.replaceOnNextInput;
       } else if (
         target.dataset.replaceOnNextInput === "1" &&
         /^[0-9.]$/.test(e.key) &&
@@ -744,7 +768,9 @@ export class TimingRulesEditor extends Component {
               <div class="scope-tune-input-wrap">
                 <input
                   class="input mono scope-tune-input"
-                  type="number"
+                  type="text"
+                  inputmode="decimal"
+                  enterkeyhint="done"
                   data-tune-input="${spec.key}"
                   value="${valStr}"
                   step="${spec.step}"

@@ -3519,9 +3519,10 @@ html[data-theme="light"] .scope-tune-custom-icon {
     position: fixed;
     left: 0;
     right: 0;
-    bottom: 0;
-    top: var(--scope-graph-bottom, auto);
-    max-height: calc(100dvh - var(--scope-graph-bottom, 320px));
+    bottom: var(--slaprf-kb-offset, 0px);
+    top: auto;
+    min-height: min(calc(100dvh - var(--scope-graph-bottom, 320px)), calc(100dvh - var(--slaprf-kb-offset, 0px) - 52px));
+    max-height: calc(100dvh - var(--slaprf-kb-offset, 0px) - 52px);
     z-index: 950;
     margin-top: 0;
     display: flex;
@@ -3694,22 +3695,13 @@ html[data-theme="light"] .scope-tune-custom-icon {
   .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-calib.is-calibrating {
     pointer-events: none;
     cursor: default;
-    color: #7dd3fc;
-    border-color: rgba(56, 189, 248, 0.35);
-    background: rgba(56, 189, 248, 0.1);
+    opacity: 0.72;
   }
-  html[data-theme="light"] .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-calib.is-calibrating {
-    color: #0369a1;
-    border-color: rgba(2, 132, 199, 0.35);
-    background: rgba(2, 132, 199, 0.09);
-  }
-  .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-calib.is-calibrated,
   .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-tune.is-active {
     color: #7dd3fc;
     border-color: rgba(56, 189, 248, 0.42);
     background: rgba(56, 189, 248, 0.14);
   }
-  html[data-theme="light"] .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-calib.is-calibrated,
   html[data-theme="light"] .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-tune.is-active {
     color: #0369a1;
     border-color: rgba(2, 132, 199, 0.42);
@@ -16410,6 +16402,8 @@ html[data-theme="light"] .practice-pilot-switch.is-on .practice-pilot-switch-thu
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
+    padding-bottom: var(--slaprf-kb-offset, 0px);
+    box-sizing: border-box;
   }
   .practice-pilot-drawer-backdrop {
     display: block;
@@ -16954,6 +16948,8 @@ button.rc-cselect-trigger.is-open .rc-cselect-caret {
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
+    padding-bottom: var(--slaprf-kb-offset, 0px);
+    box-sizing: border-box;
   }
   .pilot-dir-mobile-drawer-backdrop {
     position: absolute;
@@ -16980,7 +16976,7 @@ button.rc-cselect-trigger.is-open .rc-cselect-caret {
     z-index: 1;
     width: 100%;
     height: auto;
-    max-height: 82dvh;
+    max-height: min(82dvh, calc(100dvh - var(--slaprf-kb-offset, 0px) - 52px));
     margin: 0;
     padding: 0 16px calc(24px + env(safe-area-inset-bottom, 0px));
     border-radius: 18px 18px 0 0;

@@ -31,6 +31,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsets;
+import android.view.WindowInsetsAnimation;
 import android.view.WindowInsetsController;
 import android.view.WindowManager;
 import android.webkit.JavascriptInterface;
@@ -48,6 +49,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.OutputStream;
+import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -93,6 +95,25 @@ public final class SlapRFHost extends Activity {
     private byte[] pendingSaveBytes;
     private OnBackInvokedCallback backCallback;
     private volatile long lastMultiTouchMs = 0L;
+    private int lastPushedKbCssPx = -1;
+
+    private void pushKeyboardOffsetPx(int kbPhysicalPx) {
+        if (webView == null) {
+            return;
+        }
+        float density = getResources().getDisplayMetrics().density;
+        int cssPx = density > 0f ? Math.round(kbPhysicalPx / density) : kbPhysicalPx;
+        if (cssPx < 0) {
+            cssPx = 0;
+        }
+        if (cssPx == lastPushedKbCssPx) {
+            return;
+        }
+        lastPushedKbCssPx = cssPx;
+        webView.evaluateJavascript(
+                "document.documentElement.style.setProperty('--slaprf-kb-offset','" + cssPx + "px');",
+                null);
+    }
 
     private static synchronized void ensureTtsInitialized(Context context) {
         if (sharedTts != null) {
@@ -318,13 +339,43 @@ public final class SlapRFHost extends Activity {
             }
             if (rootLayout != null) {
                 rootLayout.setOnApplyWindowInsetsListener((v, insets) -> {
-                    Insets bars = insets.getInsets(
+                    Insets sysBars = insets.getInsets(
                             WindowInsets.Type.systemBars()
-                                    | WindowInsets.Type.displayCutout()
-                                    | WindowInsets.Type.ime());
-                    v.setPadding(bars.left, bars.top, bars.right, bars.bottom);
+                                    | WindowInsets.Type.displayCutout());
+                    v.setPadding(sysBars.left, sysBars.top, sysBars.right, sysBars.bottom);
+                    Insets ime = insets.getInsets(WindowInsets.Type.ime());
+                    int kbPx = Math.max(0, ime.bottom - sysBars.bottom);
+                    pushKeyboardOffsetPx(kbPx);
                     return WindowInsets.CONSUMED;
                 });
+                rootLayout.setWindowInsetsAnimationCallback(
+                        new WindowInsetsAnimation.Callback(WindowInsetsAnimation.Callback.DISPATCH_MODE_STOP) {
+                            @Override
+                            public WindowInsets onProgress(
+                                    WindowInsets insets,
+                                    List<WindowInsetsAnimation> runningAnimations) {
+                                Insets sysBars = insets.getInsets(
+                                        WindowInsets.Type.systemBars()
+                                                | WindowInsets.Type.displayCutout());
+                                Insets ime = insets.getInsets(WindowInsets.Type.ime());
+                                int kbPx = Math.max(0, ime.bottom - sysBars.bottom);
+                                pushKeyboardOffsetPx(kbPx);
+                                return insets;
+                            }
+
+                            @Override
+                            public void onEnd(WindowInsetsAnimation animation) {
+                                WindowInsets rw = rootLayout.getRootWindowInsets();
+                                if (rw != null) {
+                                    Insets sysBars = rw.getInsets(
+                                            WindowInsets.Type.systemBars()
+                                                    | WindowInsets.Type.displayCutout());
+                                    Insets ime = rw.getInsets(WindowInsets.Type.ime());
+                                    int kbPx = Math.max(0, ime.bottom - sysBars.bottom);
+                                    pushKeyboardOffsetPx(kbPx);
+                                }
+                            }
+                        });
                 rootLayout.requestApplyInsets();
             }
         } else {
