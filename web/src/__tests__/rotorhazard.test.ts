@@ -402,6 +402,7 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       store.simState!.rotorhazardUnits![0].connected = false;
       store.hydrate(
         makeFullState({
+          simulatorRunning: true,
           timingHardwareMode: "rotorhazard",
           simState: store.simState!,
         })
