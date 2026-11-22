@@ -6895,7 +6895,7 @@ html[data-theme="light"] .flasher-hub-link .segmented button.is-active {
   color: var(--good);
   font-size: 9px;
   font-weight: 700;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.03em;
   line-height: 1;
   pointer-events: none;
   z-index: 2;

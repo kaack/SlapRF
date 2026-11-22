@@ -144,10 +144,10 @@ func TestRotorHazardSimulatedMultiDeviceAndBrowserRealWebSocketHandshake(t *test
 	rhSrv.StepRSSI(nowMs, rssiLow, true)
 	rhSrv.StepRSSI(nowMs+60, rssiPeak, true)
 
-	h.WaitUntil("NetworkView displays live 178 · CROSSING on Node 1 over WebSocket", 5*time.Second, func() (bool, error) {
+	h.WaitUntil("NetworkView displays live 178 · Xing on Node 1 over WebSocket", 5*time.Second, func() (bool, error) {
 		valTxt, err1 := rhSec.Locator(`[data-rh-bar-val="0"]`).First().InnerText()
 		crossTxt, err2 := rhSec.Locator(`[data-rh-bar-cross="0"]`).First().InnerText()
-		return err1 == nil && err2 == nil && strings.Contains(valTxt, "178") && strings.Contains(crossTxt, "CROSSING"), nil
+		return err1 == nil && err2 == nil && strings.Contains(valTxt, "178") && strings.Contains(crossTxt, "Xing"), nil
 	})
 
 	rhSrv.StepRSSI(nowMs+150, rssiLow, true)
