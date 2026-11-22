@@ -24,13 +24,13 @@
 
 	<meta itemprop="name" content="SlapRF Documentation">
 	<meta itemprop="description" content="SlapRF is an open-source 5.8 GHz FPV drone timing and race management system built for solo practice, club sessions, and organized race events.
-The SlapRF ecosystem consists of two parts that can be used together or independently:
+SlapRF consists of two parts that you can use together or separately:
 Component Summary SlapRF App Native timing and race control app for Android, Windows, macOS, and Linux. SlapRF Hardware DIY 5.8 GHz gate timers built from Seeed Studio XIAO ESP32-C5 boards with zero soldering or custom PCBs. Important The SlapRF Timing Application and SlapRF Gate Hardware are tuned to work together, especially for wireless multi-gate section split timing. Support for RotorHazard and ImmersionRC LapRF 8-Way is included for pilots and clubs who already own those systems.">
-	<meta itemprop="wordCount" content="300">
+	<meta itemprop="wordCount" content="309">
 	<meta name="twitter:card" content="summary">
 	<meta name="twitter:title" content="SlapRF Documentation">
 	<meta name="twitter:description" content="SlapRF is an open-source 5.8 GHz FPV drone timing and race management system built for solo practice, club sessions, and organized race events.
-The SlapRF ecosystem consists of two parts that can be used together or independently:
+SlapRF consists of two parts that you can use together or separately:
 Component Summary SlapRF App Native timing and race control app for Android, Windows, macOS, and Linux. SlapRF Hardware DIY 5.8 GHz gate timers built from Seeed Studio XIAO ESP32-C5 boards with zero soldering or custom PCBs. Important The SlapRF Timing Application and SlapRF Gate Hardware are tuned to work together, especially for wireless multi-gate section split timing. Support for RotorHazard and ImmersionRC LapRF 8-Way is included for pilots and clubs who already own those systems.">
 
     <link rel="preload" href="/docs/css/compiled/main.min.16c3012035c5f2ba195559bbf162a0209250d94a66761e5d575d845d882eb111.css" as="style" integrity="sha256-FsMBIDXF8roZVVm78WKgIJJQ2Upmdh5dV12EXYgusRE=" />
@@ -631,7 +631,7 @@ Component Summary SlapRF App Native timing and race control app for Android, Win
           
           
           <p>SlapRF is an open-source 5.8 GHz FPV drone timing and race management system built for solo practice, club sessions, and organized race events.</p>
-<p>The SlapRF ecosystem consists of two parts that can be used together or independently:</p>
+<p>SlapRF consists of two parts that you can use together or separately:</p>
 <table>
 	<thead>
 			<tr>
@@ -734,16 +734,10 @@ Component Summary SlapRF App Native timing and race control app for Android, Win
   </svg>
 </span>
 </td>
-					<td style="text-align: left">Connects to existing RotorHazard servers over Wi-Fi / Ethernet (<code>HTTP</code> / <code>Socket.IO</code>) or USB serial nodes.</td>
+					<td style="text-align: left">Connects to RotorHazard servers over Wi-Fi / Ethernet (<code>HTTP</code> / <code>Socket.IO</code> <code>:5000</code>) or standalone RotorHazard USB serial nodes (<code>115200</code> / <code>921600</code> baud).</td>
 			</tr>
 			<tr>
 					<td style="text-align: left">LapRF 8-Way</td>
-					<td style="text-align: center"><span class="doc-status-badge is-no" title="Not supported" aria-label="No">
-  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
-    <path d="M6.4 6.4L13.6 13.6M13.6 6.4L6.4 13.6" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
-  </svg>
-</span>
-</td>
 					<td style="text-align: center"><span class="doc-status-badge is-no" title="Not supported" aria-label="No">
   <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
     <path d="M6.4 6.4L13.6 13.6M13.6 6.4L6.4 13.6" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
@@ -756,7 +750,13 @@ Component Summary SlapRF App Native timing and race control app for Android, Win
   </svg>
 </span>
 </td>
-					<td style="text-align: left">Connects to existing ImmersionRC LapRF 8-Way pucks over Ethernet LAN (<code>TCP :5403</code>).</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: left">Connects to ImmersionRC LapRF 8-Way pucks over Ethernet LAN (<code>TCP :5403</code>) or USB CDC serial (<code>115200</code> baud).</td>
 			</tr>
 	</tbody>
 </table>
@@ -809,7 +809,7 @@ Component Summary SlapRF App Native timing and race control app for Android, Win
     </div>
   </dialog>
     <script defer src="/docs/js/main.min.302eb8f391260394614f8841a9a007a2bfe3535e53755065fa3fb3c43fa94027.js" integrity="sha256-MC6485EmA5RhT4hBqaAHor/jU15TdVBl&#43;j&#43;zxD&#43;pQCc="></script>
-<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.2c1537981e0ab2fc444b86c98faa61eadbfe396f138812fa2d9bddf319dab8c3.js" integrity="sha256-LBU3mB4KsvxES4bJj6ph6tv&#43;OW8TiBL6LZvd8xnauMM="></script>
+<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.44f476df67fb7e651904125c80551a5cbb6aeb03485f1f8145c55571e0f80f78.js" integrity="sha256-RPR232f7fmUZBBJcgFUaXLtq6wNIXx&#43;BRcVVceD4D3g="></script>
     <script defer src="/docs/en.search-dialog.min.fda123910557b5b3a328696105af51f85abc3cfc6784387c49b11b5b857b256f.js" integrity="sha256-/aEjkQVXtbOjKGlhBa9R&#43;Fq8PPxnhDh8SbEbW4V7JW8="></script>
   </body>
 </html>

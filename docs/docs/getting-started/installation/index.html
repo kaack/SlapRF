@@ -36,7 +36,7 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
 	<meta itemprop="name" content="Installation">
 	<meta itemprop="description" content="Download the latest native SlapRF release from GitHub Releases . Each build is self-contained and requires no external runtime or database server.
 Note The online preview at https://slaprf.app runs a simulated track for exploring the interface. Because web browsers throttle background tabs and audio, install the native Android app or desktop binary below to time real flights.">
-	<meta itemprop="wordCount" content="601">
+	<meta itemprop="wordCount" content="987">
 	<meta name="twitter:card" content="summary">
 	<meta name="twitter:title" content="Installation">
 	<meta name="twitter:description" content="Download the latest native SlapRF release from GitHub Releases . Each build is self-contained and requires no external runtime or database server.
@@ -195,6 +195,12 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
     <ul
       class='hx:flex hx:flex-col hx:gap-1 hx:relative hx:before:absolute hx:before:inset-y-1 hx:before:w-px hx:before:bg-gray-200 hx:before:content-[""] hx:dark:before:bg-neutral-800 hx:ltr:pl-3 hx:ltr:before:left-0 hx:rtl:pr-3 hx:rtl:before:right-0 hx:ltr:ml-3 hx:rtl:mr-3'
     ><li>
+              <a
+                href="#verified-platforms"
+                class="hx:flex hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [word-break:break-word] hx:cursor-pointer [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:contrast-more:border hx:gap-2 hx:before:opacity-25 hx:before:content-['#'] hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:text-gray-900 hx:contrast-more:dark:text-gray-50 hx:contrast-more:border-transparent hx:contrast-more:hover:border-gray-900 hx:contrast-more:dark:hover:border-gray-50"
+              >Verified Platforms</a>
+            </li>
+          <li>
               <a
                 href="#platform-setup"
                 class="hx:flex hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [word-break:break-word] hx:cursor-pointer [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:contrast-more:border hx:gap-2 hx:before:opacity-25 hx:before:content-['#'] hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:text-gray-900 hx:contrast-more:dark:text-gray-50 hx:contrast-more:border-transparent hx:contrast-more:hover:border-gray-900 hx:contrast-more:dark:hover:border-gray-50"
@@ -642,6 +648,10 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
     <div class="hextra-scrollbar hx:sticky hx:top-[var(--hextra-navbar-height)] hx:overflow-y-auto hx:pr-4 hx:pt-6 hx:pb-8 hx:text-sm [hyphens:auto] hx:max-h-[calc(100vh-var(--hextra-navbar-height)-env(safe-area-inset-bottom))] hx:ltr:-mr-4 hx:rtl:-ml-4">
       <p class="hx:mb-4 hx:font-semibold hx:tracking-tight">On this page</p><ul>
       <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
+        <a class="hx:font-medium hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#verified-platforms">Verified Platforms
+        </a>
+      </li>
+      <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
         <a class="hx:font-medium hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#platform-setup">Platform Setup
         </a>
       </li>
@@ -682,16 +692,228 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
 
   <div class="hextra-alert-content"><p>The online preview at <code>https://slaprf.app</code> runs a simulated track for exploring the interface. Because web browsers throttle background tabs and audio, install the native Android app or desktop binary below to time real flights.</p></div>
 </div>
+<h2 data-hextra-search-id="verified-platforms">Verified Platforms<span class="hx:absolute hx:-mt-20" id="verified-platforms"></span>
+    <a href="#verified-platforms" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><table>
+	<thead>
+			<tr>
+					<th style="text-align: left">Platform / Device</th>
+					<th style="text-align: center">Bluetooth Hub</th>
+					<th style="text-align: center">USB-C Hub</th>
+					<th style="text-align: center">USB Flasher</th>
+					<th style="text-align: center">LAN Timers</th>
+					<th style="text-align: left">Verified Environment &amp; Notes</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td style="text-align: left">Android (<code>ARM64</code> Phone / Tablet)</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: left">Verified on Android (<code>arm64-v8a</code> APK); use a USB-C OTG data cable for USB Hub and in-app Flasher.</td>
+			</tr>
+			<tr>
+					<td style="text-align: left">Windows 11 (<code>x86_64</code>)</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: left">Verified on Windows 11 (<code>slaprf-windows-amd64.exe</code>, <code>WinRT</code> Bluetooth LE and <code>COM</code> serial).</td>
+			</tr>
+			<tr>
+					<td style="text-align: left">macOS (<code>Apple Silicon</code>)</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: left">Verified on Apple Silicon (<code>slaprf-macos-arm64</code>, <code>CoreBluetooth</code> and <code>/dev/cu.usbmodem*</code>); Intel (<code>amd64</code>) binary also built in CI.</td>
+			</tr>
+			<tr>
+					<td style="text-align: left">Linux Desktop (<code>x86_64</code>)</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: left">Verified on Ubuntu <code>x86_64</code> (<code>slaprf-linux-amd64</code>, <code>BlueZ</code> and <code>/dev/ttyACM*</code>).</td>
+			</tr>
+			<tr>
+					<td style="text-align: left">Raspberry Pi 4 (<code>ARM64</code>)</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-yes" title="Supported" aria-label="Yes">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M15.2 6.5L8.4 13.3L4.8 9.7" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: left">Verified on Raspberry Pi 4 Model B (<code>Raspberry Pi OS 64-bit</code>); requires <code>5 GHz</code> Wi-Fi or Ethernet for Bluetooth Hub.</td>
+			</tr>
+			<tr>
+					<td style="text-align: left">Raspberry Pi (<code>32-bit OS</code> / Zero W)</td>
+					<td style="text-align: center"><span class="doc-status-badge is-no" title="Not supported" aria-label="No">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M6.4 6.4L13.6 13.6M13.6 6.4L6.4 13.6" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-no" title="Not supported" aria-label="No">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M6.4 6.4L13.6 13.6M13.6 6.4L6.4 13.6" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-no" title="Not supported" aria-label="No">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M6.4 6.4L13.6 13.6M13.6 6.4L6.4 13.6" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-no" title="Not supported" aria-label="No">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M6.4 6.4L13.6 13.6M13.6 6.4L6.4 13.6" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: left"><code>32-bit</code> (<code>armhf</code> / <code>armv6</code>) OS installs are not supported as a timing server.</td>
+			</tr>
+			<tr>
+					<td style="text-align: left">iOS / iPadOS</td>
+					<td style="text-align: center"><span class="doc-status-badge is-no" title="Not supported" aria-label="No">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M6.4 6.4L13.6 13.6M13.6 6.4L6.4 13.6" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-no" title="Not supported" aria-label="No">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M6.4 6.4L13.6 13.6M13.6 6.4L6.4 13.6" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-no" title="Not supported" aria-label="No">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M6.4 6.4L13.6 13.6M13.6 6.4L6.4 13.6" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: center"><span class="doc-status-badge is-no" title="Not supported" aria-label="No">
+  <svg viewBox="0 0 20 20" width="16" height="16" fill="none" aria-hidden="true">
+    <path d="M6.4 6.4L13.6 13.6M13.6 6.4L6.4 13.6" stroke="currentColor" stroke-width="2.15" stroke-linecap="round" stroke-linejoin="round"/>
+  </svg>
+</span>
+</td>
+					<td style="text-align: left">No native iOS host app; connect iPhones and iPads over Wi-Fi Safari to a laptop or Raspberry Pi (<code>-lan</code>).</td>
+			</tr>
+	</tbody>
+</table>
 <h2 data-hextra-search-id="platform-setup">Platform Setup<span class="hx:absolute hx:-mt-20" id="platform-setup"></span>
     <a href="#platform-setup" class="subheading-anchor" aria-label="Permalink for this section"></a></h2>
   
   
   
   
+  
 <div class="hextra-scrollbar hx:overflow-x-auto hx:overflow-y-hidden hx:overscroll-x-contain">
-  <div class="hx:mt-4 hx:flex hx:w-max hx:min-w-full hx:border-b hx:border-gray-200 hx:pb-px hx:dark:border-neutral-800" role="tablist"><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-00-0" role="tab" type="button" aria-controls="tabs-panel-tabs-00-0" aria-selected="true" tabindex="0" data-state="selected"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>Android</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-00-1" role="tab" type="button" aria-controls="tabs-panel-tabs-00-1" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>Windows</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-00-2" role="tab" type="button" aria-controls="tabs-panel-tabs-00-2" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>macOS</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-00-3" role="tab" type="button" aria-controls="tabs-panel-tabs-00-3" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>Linux / Pi</span></span></button></div>
+  <div class="hx:mt-4 hx:flex hx:w-max hx:min-w-full hx:border-b hx:border-gray-200 hx:pb-px hx:dark:border-neutral-800" role="tablist"><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-28-0" role="tab" type="button" aria-controls="tabs-panel-tabs-28-0" aria-selected="true" tabindex="0" data-state="selected"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>Android</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-28-1" role="tab" type="button" aria-controls="tabs-panel-tabs-28-1" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>Windows</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-28-2" role="tab" type="button" aria-controls="tabs-panel-tabs-28-2" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>macOS</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-28-3" role="tab" type="button" aria-controls="tabs-panel-tabs-28-3" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>Linux</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-28-4" role="tab" type="button" aria-controls="tabs-panel-tabs-28-4" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>Raspberry Pi</span></span></button></div>
 </div>
-<div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-00-0" role="tabpanel" aria-labelledby="tabs-tab-tabs-00-0" aria-hidden="false" tabindex="0" data-state="selected"><h3 data-hextra-search-id="android">Android<span class="hx:absolute hx:-mt-20" id="android"></span>
+<div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-28-0" role="tabpanel" aria-labelledby="tabs-tab-tabs-28-0" aria-hidden="false" tabindex="0" data-state="selected"><h3 data-hextra-search-id="android">Android<span class="hx:absolute hx:-mt-20" id="android"></span>
     <a href="#android" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><ol>
 <li>Open <a href="https://github.com/kaack/SlapRF/releases/latest" target="_blank" rel="noopener">GitHub Releases<svg class="hx:inline hx:rtl:rotate-270 hx:align-baseline" height="1em" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
  <path d="m9.1716 7.7574h7.0711m0 0v7.0711m0-7.0711-8.4853 8.4853" stroke-linecap="round" stroke-linejoin="round"/>
@@ -706,7 +928,7 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
   </p>
 
   <div class="hextra-alert-content"><p>You can flash XIAO ESP32-C5 boards directly from your Android phone or tablet using the built-in <strong>Flasher</strong> screen in the SlapRF app over a USB-C data cable.</p></div>
-</div></div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-00-1" role="tabpanel" aria-labelledby="tabs-tab-tabs-00-1" aria-hidden="true"><h3 data-hextra-search-id="windows">Windows<span class="hx:absolute hx:-mt-20" id="windows"></span>
+</div></div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-28-1" role="tabpanel" aria-labelledby="tabs-tab-tabs-28-1" aria-hidden="true"><h3 data-hextra-search-id="windows">Windows<span class="hx:absolute hx:-mt-20" id="windows"></span>
     <a href="#windows" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><ol>
 <li>Download <code>slaprf-windows-amd64.exe</code> from <a href="https://github.com/kaack/SlapRF/releases/latest" target="_blank" rel="noopener">GitHub Releases<svg class="hx:inline hx:rtl:rotate-270 hx:align-baseline" height="1em" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
  <path d="m9.1716 7.7574h7.0711m0 0v7.0711m0-7.0711-8.4853 8.4853" stroke-linecap="round" stroke-linejoin="round"/>
@@ -733,7 +955,7 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
 </li>
 <li>SlapRF creates <code>slaprf.db</code> in that folder, starts on <code>http://127.0.0.1:8090</code>, and opens your default browser automatically.</li>
 </ol>
-</div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-00-2" role="tabpanel" aria-labelledby="tabs-tab-tabs-00-2" aria-hidden="true"><h3 data-hextra-search-id="macos">macOS<span class="hx:absolute hx:-mt-20" id="macos"></span>
+</div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-28-2" role="tabpanel" aria-labelledby="tabs-tab-tabs-28-2" aria-hidden="true"><h3 data-hextra-search-id="macos">macOS<span class="hx:absolute hx:-mt-20" id="macos"></span>
     <a href="#macos" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><ol>
 <li>Download <code>slaprf-macos-arm64</code> (Apple Silicon) or <code>slaprf-macos-amd64</code> (Intel) from <a href="https://github.com/kaack/SlapRF/releases/latest" target="_blank" rel="noopener">GitHub Releases<svg class="hx:inline hx:rtl:rotate-270 hx:align-baseline" height="1em" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
  <path d="m9.1716 7.7574h7.0711m0 0v7.0711m0-7.0711-8.4853 8.4853" stroke-linecap="round" stroke-linejoin="round"/>
@@ -760,16 +982,18 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
 </li>
 <li>SlapRF starts on <code>http://127.0.0.1:8090</code> and opens your browser. When connecting to a SlapRF Bluetooth Hub for the first time, allow Bluetooth access for your terminal application if macOS prompts you. Use Chrome, Edge, or Opera when flashing firmware over USB in <strong>Flasher</strong>.</li>
 </ol>
-</div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-00-3" role="tabpanel" aria-labelledby="tabs-tab-tabs-00-3" aria-hidden="true"><h3 data-hextra-search-id="linux--raspberry-pi">Linux &amp; Raspberry Pi<span class="hx:absolute hx:-mt-20" id="linux--raspberry-pi"></span>
-    <a href="#linux--raspberry-pi" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><ol>
-<li>Download <code>slaprf-linux-amd64</code> (x86_64 PC) or <code>slaprf-linux-arm64</code> (Raspberry Pi 4 / 5, 64-bit OS) from <a href="https://github.com/kaack/SlapRF/releases/latest" target="_blank" rel="noopener">GitHub Releases<svg class="hx:inline hx:rtl:rotate-270 hx:align-baseline" height="1em" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+</div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-28-3" role="tabpanel" aria-labelledby="tabs-tab-tabs-28-3" aria-hidden="true"><h3 data-hextra-search-id="linux-x86_64-desktop">Linux (<code>x86_64</code> Desktop)<span class="hx:absolute hx:-mt-20" id="linux-x86_64-desktop"></span>
+    <a href="#linux-x86_64-desktop" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><ol>
+<li>Download <code>slaprf-linux-amd64</code> from <a href="https://github.com/kaack/SlapRF/releases/latest" target="_blank" rel="noopener">GitHub Releases<svg class="hx:inline hx:rtl:rotate-270 hx:align-baseline" height="1em" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
  <path d="m9.1716 7.7574h7.0711m0 0v7.0711m0-7.0711-8.4853 8.4853" stroke-linecap="round" stroke-linejoin="round"/>
 </svg></a>.</li>
-<li>Mark the binary executable and launch it:
+<li>Move the binary into a dedicated folder, mark it executable, and run it:
 <div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code">
 
-<div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">chmod +x ./slaprf-linux-*
-</span></span><span class="line"><span class="cl">./slaprf-linux-amd64</span></span></code></pre></div></div><div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0">
+<div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">mkdir -p ~/SlapRF <span class="o">&amp;&amp;</span> mv ~/Downloads/slaprf-linux-amd64 ~/SlapRF/slaprf
+</span></span><span class="line"><span class="cl"><span class="nb">cd</span> ~/SlapRF
+</span></span><span class="line"><span class="cl">chmod +x ./slaprf
+</span></span><span class="line"><span class="cl">./slaprf</span></span></code></pre></div></div><div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0">
   <button
     class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
     title="Copy code"
@@ -781,8 +1005,8 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
   </button>
 </div>
 </div>
-</li>
-<li>For USB Hub serial access on Linux, add your user to the serial group (<code>dialout</code> on Debian / Ubuntu / Raspberry Pi OS, or <code>uucp</code> on Arch), then log out and back in once:
+SlapRF starts on <code>http://127.0.0.1:8090</code> and opens your default browser.</li>
+<li>For USB Serial timers (<code>/dev/ttyACM*</code>), add your user to <code>dialout</code> (Ubuntu/Debian) or <code>uucp</code> (Arch) and log out and back in once:
 <div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code">
 
 <div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">sudo usermod -aG dialout <span class="nv">$USER</span></span></span></code></pre></div></div><div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0">
@@ -797,12 +1021,11 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
   </button>
 </div>
 </div>
-</li>
-<li>Optional: add a <code>udev</code> rule for immediate <code>/dev/ttyACM*</code> access on XIAO ESP32-C5 (<code>303a:1001</code>) without logging out:
+To grant immediate access on XIAO ESP32-C5 (<code>303a:1001</code>) without logging out, add a <code>udev</code> rule ordered before <code>73-seat-late.rules</code>:
 <div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code">
 
-<div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl"><span class="nb">echo</span> <span class="s1">&#39;SUBSYSTEM==&#34;tty&#34;, ATTRS{idVendor}==&#34;303a&#34;, ATTRS{idProduct}==&#34;1001&#34;, MODE=&#34;0660&#34;, GROUP=&#34;dialout&#34;, TAG+=&#34;uaccess&#34;&#39;</span> <span class="p">|</span> sudo tee /etc/udev/rules.d/99-slaprf-esp32c5.rules
-</span></span><span class="line"><span class="cl">sudo udevadm control --reload-rules <span class="o">&amp;&amp;</span> sudo udevadm trigger</span></span></code></pre></div></div><div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0">
+<div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl"><span class="nb">echo</span> <span class="s1">&#39;SUBSYSTEM==&#34;tty&#34;, ENV{ID_VENDOR_ID}==&#34;303a&#34;, ENV{ID_MODEL_ID}==&#34;1001&#34;, MODE=&#34;0660&#34;, GROUP=&#34;dialout&#34;, TAG+=&#34;uaccess&#34;&#39;</span> <span class="p">|</span> sudo tee /etc/udev/rules.d/70-slaprf-esp32c5.rules
+</span></span><span class="line"><span class="cl">sudo udevadm control --reload-rules <span class="o">&amp;&amp;</span> sudo udevadm trigger --subsystem-match<span class="o">=</span>tty</span></span></code></pre></div></div><div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0">
   <button
     class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
     title="Copy code"
@@ -815,8 +1038,55 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
 </div>
 </div>
 </li>
-<li>For Bluetooth Hub access on Linux, confirm BlueZ is powered on (<code>bluetoothctl show</code> reports <code>Powered: yes</code>). If your computer has multiple Bluetooth adapters, SlapRF selects the first powered adapter automatically, or you can set <code>SLAPRF_BLE_ADAPTER=hci1</code> to pick one.</li>
+<li>For Bluetooth Hub (<code>slaprf_ble</code>) mode, SlapRF powers on BlueZ automatically and selects the first active adapter. If your PC has multiple Bluetooth controllers (such as motherboard Bluetooth plus a USB dongle), set <code>SLAPRF_BLE_ADAPTER=hci1</code> to pick a specific adapter.</li>
 </ol>
+</div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-28-4" role="tabpanel" aria-labelledby="tabs-tab-tabs-28-4" aria-hidden="true"><h3 data-hextra-search-id="raspberry-pi-arm64">Raspberry Pi (<code>ARM64</code>)<span class="hx:absolute hx:-mt-20" id="raspberry-pi-arm64"></span>
+    <a href="#raspberry-pi-arm64" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><div
+  data-alert="note" class="hextra-alert"
+>
+  <p class="hextra-alert-title"><svg height=16px class="hextra-alert-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="hextra-alert-title-text">Note</span>
+  </p>
+
+  <div class="hextra-alert-content"><p>Hardware testing is verified on <strong>Raspberry Pi 4 Model B</strong> running <strong>Raspberry Pi OS (64-bit)</strong>. Use a 64-bit (<code>aarch64</code>) OS image; 32-bit (<code>armhf</code>) Raspberry Pi OS is not supported.</p></div>
+</div>
+<ol>
+<li>Connect the Raspberry Pi to <strong><code>5 GHz</code> Wi-Fi or wired Ethernet</strong>, then download <code>slaprf-linux-arm64</code> from <a href="https://github.com/kaack/SlapRF/releases/latest" target="_blank" rel="noopener">GitHub Releases<svg class="hx:inline hx:rtl:rotate-270 hx:align-baseline" height="1em" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+ <path d="m9.1716 7.7574h7.0711m0 0v7.0711m0-7.0711-8.4853 8.4853" stroke-linecap="round" stroke-linejoin="round"/>
+</svg></a> onto the Pi:
+<div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code">
+
+<div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">mkdir -p ~/SlapRF <span class="o">&amp;&amp;</span> <span class="nb">cd</span> ~/SlapRF
+</span></span><span class="line"><span class="cl">curl -fLO https://github.com/kaack/SlapRF/releases/latest/download/slaprf-linux-arm64
+</span></span><span class="line"><span class="cl">chmod +x ./slaprf-linux-arm64
+</span></span><span class="line"><span class="cl">./slaprf-linux-arm64</span></span></code></pre></div></div><div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0">
+  <button
+    class="hextra-code-copy-btn hx:group/copybtn hx:cursor-pointer hx:transition-all hx:active:opacity-50 hx:bg-primary-700/5 hx:border hx:border-black/5 hx:text-gray-600 hx:hover:text-gray-900 hx:rounded-md hx:p-1.5 hx:dark:bg-primary-300/10 hx:dark:border-white/10 hx:dark:text-gray-400 hx:dark:hover:text-gray-50"
+    title="Copy code"
+    aria-label="Copy code"
+    data-copied-label="Copied!"
+  >
+    <div class="hextra-copy-icon hx:group-[.copied]/copybtn:hidden hx:pointer-events-none hx:h-4 hx:w-4"></div>
+<div class="hextra-success-icon hx:hidden hx:group-[.copied]/copybtn:block hx:pointer-events-none hx:h-4 hx:w-4"></div>
+  </button>
+</div>
+</div>
+</li>
+<li>On a headless SSH or <code>systemd</code> session (no desktop display), SlapRF automatically enables LAN mode (<code>0.0.0.0:8090</code>) and prints its browser URL (such as <code>http://raspberrypi.local:8090</code>).</li>
+<li>For USB Hub (<code>slaprf</code>) mode, Raspberry Pi OS includes your user in the <code>dialout</code> group by default, so <code>/dev/ttyACM0</code> works immediately with no extra rules.</li>
+</ol>
+<div
+  data-alert="important" class="hextra-alert"
+>
+  <p class="hextra-alert-title"><svg height=16px class="hextra-alert-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="hextra-alert-title-text">Important</span>
+  </p>
+
+  <div class="hextra-alert-content"><p><strong>Raspberry Pi 4 + Bluetooth Hub (<code>slaprf_ble</code>) Requirements:</strong></p>
+<ul>
+<li><strong>Do not enable <code>2.4 GHz</code> Wi-Fi on the Pi.</strong> The Raspberry Pi 4 shares one <code>CYW43455</code> radio and PCB antenna between <code>2.4 GHz</code> Wi-Fi and Bluetooth LE. Connect the Pi via <strong><code>5 GHz</code> Wi-Fi or Ethernet</strong> (or connect the Hub over USB-C with <code>slaprf-xiao-c5.bin</code> if only <code>2.4 GHz</code> Wi-Fi is available).</li>
+<li><strong>Keep <code>30 cm</code> to <code>1 m</code> (<code>1</code> to <code>3 ft</code>) between the Pi and the Hub.</strong> Placing the Hub antenna right beside the unshielded Raspberry Pi board saturates its <code>2.4 GHz</code> receiver and prevents Bluetooth connections.</li>
+<li><strong>Power the Pi from a dedicated <code>5 V / 3 A</code> USB-C supply.</strong> Do not power the Pi and XIAO timers from the same USB hub.</li>
+</ul></div>
+</div>
 </div></div>
 
 <h2 data-hextra-search-id="wi-fi-lan-sharing">Wi-Fi LAN Sharing<span class="hx:absolute hx:-mt-20" id="wi-fi-lan-sharing"></span>
@@ -825,9 +1095,9 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
   
   
 <div class="hextra-scrollbar hx:overflow-x-auto hx:overflow-y-hidden hx:overscroll-x-contain">
-  <div class="hx:mt-4 hx:flex hx:w-max hx:min-w-full hx:border-b hx:border-gray-200 hx:pb-px hx:dark:border-neutral-800" role="tablist"><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-01-0" role="tab" type="button" aria-controls="tabs-panel-tabs-01-0" aria-selected="true" tabindex="0" data-state="selected"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>Windows</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-01-1" role="tab" type="button" aria-controls="tabs-panel-tabs-01-1" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>macOS / Linux</span></span></button></div>
+  <div class="hx:mt-4 hx:flex hx:w-max hx:min-w-full hx:border-b hx:border-gray-200 hx:pb-px hx:dark:border-neutral-800" role="tablist"><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-29-0" role="tab" type="button" aria-controls="tabs-panel-tabs-29-0" aria-selected="true" tabindex="0" data-state="selected"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>Windows</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-29-1" role="tab" type="button" aria-controls="tabs-panel-tabs-29-1" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>macOS / Linux</span></span></button></div>
 </div>
-<div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-01-0" role="tabpanel" aria-labelledby="tabs-tab-tabs-01-0" aria-hidden="false" tabindex="0" data-state="selected"><div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code">
+<div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-29-0" role="tabpanel" aria-labelledby="tabs-tab-tabs-29-0" aria-hidden="false" tabindex="0" data-state="selected"><div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code">
 
 <div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-powershell" data-lang="powershell"><span class="line"><span class="cl"><span class="p">.\</span><span class="n">slaprf</span><span class="p">.</span><span class="py">exe</span> <span class="n">-lan</span></span></span></code></pre></div></div><div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0">
   <button
@@ -841,7 +1111,7 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
   </button>
 </div>
 </div>
-</div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-01-1" role="tabpanel" aria-labelledby="tabs-tab-tabs-01-1" aria-hidden="true"><div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code">
+</div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-29-1" role="tabpanel" aria-labelledby="tabs-tab-tabs-29-1" aria-hidden="true"><div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code">
 
 <div><div class="highlight"><pre tabindex="0" class="chroma"><code class="language-bash" data-lang="bash"><span class="line"><span class="cl">./slaprf -lan</span></span></code></pre></div></div><div class="hextra-code-copy-btn-container hx:opacity-0 hx:transition hx:group-hover/code:opacity-100 hx:flex hx:gap-1 hx:absolute hx:m-[11px] hx:right-0 hx:top-0">
   <button
@@ -857,7 +1127,7 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
 </div>
 </div></div>
 
-<p>SlapRF listens on <code>0.0.0.0:8090</code> and prints its local network URL (such as <code>http://192.168.1.42:8090</code>). Open <strong>Settings -&gt; Security</strong> in the UI to set an HTTP Basic Auth username and password so spectators cannot modify race settings. If you get locked out, start the binary once with <code>-no-auth</code> to clear saved credentials.</p>
+<p>SlapRF listens on <code>0.0.0.0:8090</code> and prints its local network URL (such as <code>http://192.168.1.42:8090</code>). Open <strong>Settings -&gt; Authentication</strong> in the UI to set an HTTP Basic Auth username and password so spectators cannot modify race settings. If you get locked out, start the binary once with <code>-no-auth</code> to clear saved credentials.</p>
 <h2 data-hextra-search-id="cli-flags">CLI Flags<span class="hx:absolute hx:-mt-20" id="cli-flags"></span>
     <a href="#cli-flags" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><table>
 	<thead>
@@ -957,7 +1227,7 @@ Note The online preview at https://slaprf.app runs a simulated track for explori
     </div>
   </dialog>
     <script defer src="/docs/js/main.min.302eb8f391260394614f8841a9a007a2bfe3535e53755065fa3fb3c43fa94027.js" integrity="sha256-MC6485EmA5RhT4hBqaAHor/jU15TdVBl&#43;j&#43;zxD&#43;pQCc="></script>
-<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.2c1537981e0ab2fc444b86c98faa61eadbfe396f138812fa2d9bddf319dab8c3.js" integrity="sha256-LBU3mB4KsvxES4bJj6ph6tv&#43;OW8TiBL6LZvd8xnauMM="></script>
+<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.44f476df67fb7e651904125c80551a5cbb6aeb03485f1f8145c55571e0f80f78.js" integrity="sha256-RPR232f7fmUZBBJcgFUaXLtq6wNIXx&#43;BRcVVceD4D3g="></script>
     <script defer src="/docs/en.search-dialog.min.fda123910557b5b3a328696105af51f85abc3cfc6784387c49b11b5b857b256f.js" integrity="sha256-/aEjkQVXtbOjKGlhBa9R&#43;Fq8PPxnhDh8SbEbW4V7JW8="></script>
   </body>
 </html>

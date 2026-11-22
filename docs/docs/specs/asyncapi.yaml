@@ -49,11 +49,11 @@ channels:
         $ref: "#/components/messages/TelemetryBinaryBatchMessage"
 
   usbConsoleStream:
-    address: /v1/ws/usb
-    title: Native USB Serial Diagnostic & Simulated Hub Stream
+    address: /v1/ws/slaprf/usb
+    title: SlapRF USB Serial Diagnostic & Simulated Hub Stream
     description: |
-      Streams live USB Hub connection state, peer Spoke (`T1`-`T6`) link health, and serial diagnostic lines.
-      - **Default (`?sim=0` or omitted)**: Emits JSON text frames (`USBEvent`) for `pool_state`, `status`, `config`, `live`, `hub_live`, `scan`, `bootlog`, `log`, `raw_reply`, and `error`.
+      Streams live SlapRF USB connection progress, Hub/Spoke status, and serial diagnostic lines.
+      - **Default (`?sim=0` or omitted)**: Emits JSON text frames (`Event`) for `pool_state`, `status`, `config`, `live`, `hub_live`, `scan`, `bootlog`, `log`, `raw_reply`, and `error`.
       - **Simulator Hub Mode (`?sim=1`)**: Emits raw `0x1E`-framed binary `HELLO` and telemetry packets produced by simulated Hub `H1`.
     messages:
       usbStatusEvent:
@@ -61,8 +61,20 @@ channels:
       simHubBinaryFrame:
         $ref: "#/components/messages/SimHubBinaryMessage"
 
+  bluetoothConsoleStream:
+    address: /v1/ws/slaprf/bluetooth
+    title: SlapRF Bluetooth LE Hub Diagnostic & Telemetry Stream
+    description: |
+      Streams live SlapRF Bluetooth LE Hub connection stages (`connecting`, `connectStatus`), paired Hub/Spoke status, synthesized zero-overhead `live` telemetry, and console lines.
+      - **Default (`?sim=0` or omitted)**: Emits JSON text frames (`Event`) isolated to the Bluetooth LE transport.
+    messages:
+      usbStatusEvent:
+        $ref: "#/components/messages/UsbStatusEventMessage"
+      simHubBinaryFrame:
+        $ref: "#/components/messages/SimHubBinaryMessage"
+
   usbRawStream:
-    address: /v1/ws/usb-raw
+    address: /v1/ws/slaprf/usb-raw
     title: Exclusive Bidirectional Raw USB Bootloader & Serial Pipe
     description: |
       Bridges an exclusive physical USB serial port (`?port=<name>&baud=115200`) over bidirectional binary + JSON control frames so `esptool-js` and browser tools can flash or erase XIAO ESP32-C5 timers without WebSerial.
@@ -97,10 +109,19 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/usbConsoleStream"
-    summary: Receive live USB Hub and wireless Spoke diagnostic updates (or `?sim=1` simulated Hub `0x1E` binary frames).
+    summary: Receive live SlapRF USB Hub/Timer updates (or `?sim=1` simulated Hub `0x1E` binary frames).
     messages:
       - $ref: "#/channels/usbConsoleStream/messages/usbStatusEvent"
       - $ref: "#/channels/usbConsoleStream/messages/simHubBinaryFrame"
+
+  subscribeBluetoothConsole:
+    action: receive
+    channel:
+      $ref: "#/channels/bluetoothConsoleStream"
+    summary: Receive live SlapRF Bluetooth Hub connection stages, status, and Spoke telemetry updates.
+    messages:
+      - $ref: "#/channels/bluetoothConsoleStream/messages/usbStatusEvent"
+      - $ref: "#/channels/bluetoothConsoleStream/messages/simHubBinaryFrame"
 
   receiveUsbRaw:
     action: receive
@@ -212,8 +233,8 @@ components:
 
     RaceUpdatedEventMessage:
       name: race
-      title: Race Bracket, Active Heat, or Horn Announcement Updated (JSON Text Frame)
-      summary: Emitted on heat countdown ticks, horn triggers, heat start/finish/confirmation, and bracket progression.
+      title: Race Bracket, Scoped Track, Active Heat, or Horn Announcement Updated (JSON Text Frame)
+      summary: Emitted on heat countdown ticks, horn triggers, heat start/finish/confirmation, bracket progression, and race-scoped track or timing-rule updates (`trackInitialized`, `trackSnapshot`, `rules`).
       contentType: application/json
       payload:
         $ref: "#/components/schemas/RaceEnvelope"
@@ -221,7 +242,7 @@ components:
     PracticeUpdatedEventMessage:
       name: practice
       title: Practice Session State Updated (JSON Text Frame)
-      summary: Emitted when a practice session starts, pauses, stops, or updates its pilot roster.
+      summary: Emitted when a practice session starts, pauses, stops, updates its pilot roster, or modifies its session-scoped track or timing rules (`trackInitialized`, `trackSnapshot`, `rules`).
       contentType: application/json
       payload:
         $ref: "#/components/schemas/PracticeEnvelope"
@@ -271,7 +292,7 @@ components:
     SimHubBinaryMessage:
       name: simHubPacket
       title: Simulated Hub 0x1E Binary Frame (?sim=1)
-      summary: Raw `0x1E`-framed binary `HELLO` and telemetry bytes emitted by simulated Hub `H1` when connected to `/v1/ws/usb?sim=1`.
+      summary: Raw `0x1E`-framed binary `HELLO` and telemetry bytes emitted by simulated Hub `H1` when connected to `/v1/ws/slaprf/usb?sim=1`.
       contentType: application/octet-stream
       payload:
         type: string
@@ -280,7 +301,7 @@ components:
     UsbRawOpenMessage:
       name: open
       title: Exclusive USB Port Open Handshake (Server -> Client JSON Frame)
-      summary: Sent immediately after opening `?port=<name>&baud=115200` with USB VID/PID metadata (or `ok: false` + `error` if opening failed).
+      summary: "Sent immediately after opening `?port=<name>&baud=115200` with USB VID/PID metadata (or `ok: false` + `error` if opening failed)."
       contentType: application/json
       payload:
         $ref: "#/components/schemas/UsbRawOpenEnvelope"
@@ -288,7 +309,7 @@ components:
     UsbRawAckMessage:
       name: ack
       title: Signal / Close Control Acknowledgment (Server -> Client JSON Frame)
-      summary: Acknowledges a client `signals` or `close` control frame (`type: ack`), or reports `closed` / `error`.
+      summary: "Acknowledges a client `signals` or `close` control frame (`type: ack`), or reports `closed` / `error`."
       contentType: application/json
       payload:
         $ref: "#/components/schemas/UsbRawAckEnvelope"
@@ -296,7 +317,7 @@ components:
     UsbRawControlMessage:
       name: control
       title: Bootloader DTR/RTS Signals or Close Command (Client -> Server JSON Frame)
-      summary: Sent by the client (`esptool-js` or serial flasher) to toggle atomic `dtr` / `rts` lines (`type: signals`) or release the port (`type: close`).
+      summary: "Sent by the client (`esptool-js` or serial flasher) to toggle atomic `dtr` / `rts` lines (`type: signals`) or release the port (`type: close`)."
       contentType: application/json
       payload:
         $ref: "#/components/schemas/UsbRawControlEnvelope"

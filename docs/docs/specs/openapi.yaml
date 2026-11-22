@@ -15,8 +15,8 @@ info:
       - `DELETE`: Remove an item from a collection (`200 OK`, `404 Not Found`, `409 Conflict`).
       - Unsupported HTTP methods return `405 Method Not Allowed` with an `Allow` header.
     - **Singletons & `:action` Custom Methods (AIP-136 / AIP-156)**:
-      - Singletons (`/v1/storage`, `/v1/track`, `/v1/timing/rules`, `/v1/timing/arm`, `/v1/timing/mode`, `/v1/hardware/mode`, `/v1/sim`, `/v1/laprf-emulator`, `/v1/auth/config`) always exist and never accept `DELETE`.
-      - Imperative operations use `POST ...:<action>` (for example, `/v1/storage:reset`, `/v1/track:reset`, `/v1/practice/sessions/{sessionId}:start`, and `/v1/race/sessions/{sessionId}:pause`).
+      - Singletons (`/v1/storage`, `/v1/timing/arm`, `/v1/timing/mode`, `/v1/hardware/mode`, `/v1/sim`, `/v1/laprf-emulator`, `/v1/auth/config`, and scoped `.../track` / `.../track/rules`) always exist and never accept `DELETE`.
+      - Imperative operations use `POST ...:<action>` (for example, `/v1/storage:reset`, `/v1/practice/sessions/{sessionId}/track:reset`, `/v1/practice/sessions/{sessionId}:start`, and `/v1/race/sessions/{sessionId}:pause`).
   license:
     name: MIT
     url: https://github.com/kaack/SlapRF
@@ -39,9 +39,8 @@ tags:
 
   - name: Timing Singletons
     description: |
-      Singleton resources controlling the active timing engine's detection filters and mode.
-      - **Hysteresis & Lap Filters (`/v1/timing/rules`)**: Configure `minCrossingMs`, `minLapSeconds`, `maxLapSeconds`, `confirmationWindowMs`, and holeshot rules.
-      - **Arming & Mode (`/v1/timing/arm`, `/v1/timing/mode`)**: Arm or disarm global lap recording and switch between `practice` and `race` operating modes.
+      Singleton resources controlling the active timing engine's arming state, operating mode, and hardware backend.
+      - **Arming, Operating Mode & Hardware Mode (`/v1/timing/arm`, `/v1/timing/mode`, `/v1/hardware/mode`)**: Arm or disarm lap recording, switch between `practice` and `race` modes, and select the active timing hardware pipeline (`slaprf`, `slaprf_ble`, `laprf`, `laprf_usb`, `rotorhazard`, or `rotorhazard_usb`).
 
   - name: Pilots
     description: |
@@ -49,35 +48,83 @@ tags:
       - **CRUD & Unique Constraints**: Create pilots with `POST /v1/pilots` (`201 Created` + `Location` header) and update callsign, phonetic TTS name, VTX band/channel, or per-pilot thresholds via `PUT /v1/pilots/{slotIndex}`.
       - **Bulk Import & Export**: Merge pilots from CSV or MultiGP entries via `POST /v1/pilots:import` and export the roster via `GET /v1/pilots/export.csv`.
 
-  - name: Track & Timers
+  - name: Timers
     description: |
-      Course layout (`START_FINISH` and `SECTOR_GATE` checkpoints), detected receiver hardware bindings, and per-gate / per-pilot rule overrides.
-      - **Gates (`/v1/track/gates`)**: Add, reorder, or delete course gates and bind each gate to a `timerId`, `enterThreshold`, and `exitThreshold`.
-      - **Granular Rule Overrides**: Override global timing filters for an entire gate (`/v1/track/gates/{gateId}/rules`) or for a specific pilot at a specific gate (`/v1/track/gates/{gateId}/pilots/{slotIndex}/rules`).
+      Physical and simulated receiver hardware inventory (`/v1/timers`) shared across practice sessions and race events.
+      - **Discovery & Provisioning (`/v1/timers`)**: Inspect online status, battery voltage, and firmware versions for Hub `H1`, Spokes `T1`-`T6`, LapRF 8-Way pucks, and RotorHazard units, update display colors, or delete offline entries.
 
   - name: Practice Sessions
     description: |
-      Multi-session open practice management with independent pilot channel assignments and lap history.
+      Multi-session practice management where each session owns its own pilot channels, course track, timing rules, and lap history.
       - **Session Addressing**: Pass an explicit `sessionId` or the literal alias `current` to target the currently selected practice session.
+      - **Scoped Track & Timing Rules (`.../track/*`)**: Configure gates (`.../track/gates`), per-pilot thresholds (`.../track/thresholds`), track-wide timing rules (`.../track/rules`), and per-gate or per-pilot-at-gate rule overrides independently for each practice session.
       - **Lifecycle Actions**: Transition sessions with `:start`, `:pause`, `:resume`, `:stop`, and `:clearLaps`, and validate or invalidate individual laps via `PATCH .../laps/{lapId}` or `POST .../laps/{lapId}:toggle`.
 
   - name: Race Sessions
     description: |
-      Full tournament race control covering qualifying rounds, double-elimination / multi-stage DAG brackets, Open Qualifier (ZippyQ), marshal overrides, and MultiGP RaceSync integration.
+      Full tournament race control covering qualifying rounds, double-elimination / multi-stage DAG brackets, Open Qualifier (ZippyQ), independent per-race tracks and timing rules, marshal overrides, and MultiGP RaceSync integration.
+      - **Scoped Track & Timing Rules (`.../track/*`)**: Configure gates (`.../track/gates`), per-pilot thresholds (`.../track/thresholds`), track-wide timing rules (`.../track/rules`), and per-gate or per-pilot-at-gate rule overrides independently for each race (`409 Conflict` once a race is `completed` or `scrapped`).
       - **Lifecycle & Heat Control**: Drive session state (`:start`, `:pause`, `:resume`, `:stop`, `:complete`, `:scrap`, `:reopen`), stage progression (`stages/{stageRef}:control`, `:advance`), and live heat horns/clocks (`heats/{heatId}:control`).
       - **Marshal & MultiGP Sync**: Apply lap toggles, time penalties, or seat reorders via `pilots/{slotIndex}:marshal`, import MultiGP chapters via `sessions:importMultiGP`, and push results through `/v1/race/multigp/proxy/{subPath}`.
 
-  - name: Hardware & LapRF Emulator
+  - name: SlapRF Hardware (USB)
     description: |
-      Physical timing hardware transports and the built-in ImmersionRC LapRF 8-Way TCP `:5403` protocol emulator.
-      - **SlapRF USB & BLE (`/v1/usb/*`)**: Enumerate serial/BLE ports, connect Hub `H1` or standalone timers, run `5.8 GHz` Raceband spectrum surveys (`/v1/usb/survey`), and send raw console commands (`/v1/usb:command`).
-      - **External Hardware & Relay (`/v1/laprf/*`, `/v1/rh/*`, `/v1/laprf-emulator`)**: Discover and connect to LapRF 8-Way pucks or RotorHazard servers/USB nodes on the LAN, or expose SlapRF crossings to third-party race software on TCP `:5403`.
+      Native USB-C serial transport for Seeed Studio XIAO ESP32-C5 Hub (`H1`) and Spoke (`T1`-`T6`) timers (`/v1/slaprf/usb/*`).
+      - **Port Discovery & Console Pool (`ports`, `connections`, `debug-slot`)**: Enumerate local USB-C serial ports, connect or disconnect Hub `H1` and standalone Spoke slots, and select the active diagnostic slot.
+      - **Commands, Spectrum Survey & Timer Registry (`:command`, `survey`, `known-timers/{fp}`)**: Send serial console commands, run full `5.8 GHz` Raceband spectrum surveys, and forget saved timer fingerprints.
 
-  - name: Simulator
+  - name: SlapRF Hardware (Bluetooth)
     description: |
-      Full-fidelity physics, RF RSSI, hardware, and MultiGP RaceSync simulation engine for offline testing, demos, and marshal training.
-      - **Flight & Pit Simulation (`/v1/sim`, `/v1/sim/pilots/{slotIndex}:action`)**: Control simulator speed, track-walker marshals, synchronized 6S pack bursts (`:packBurst`), and individual pilot events (`crash`, `recover`, `pit`, `break`, `refill-launch`).
-      - **Virtual Hardware & MultiGP (`/v1/sim/timers`, `/v1/sim/laprf/*`, `/v1/sim/rh/*`, `/v1/sim/mgp*`)**: Hot-plug virtual Hub USB cables, flash/erase simulated ESP32-C5 boards, scan simulated spectrum sweeps, and test full MultiGP WebService `v1.0.4` workflows offline.
+      Wireless Bluetooth LE transport for Seeed Studio XIAO ESP32-C5 Bluetooth Hubs (`/v1/slaprf/bluetooth/*`).
+      - **Discovery, Pairing & Remembered Connect (`ports`, `connections`)**: Scan nearby `ble:<FP>` Hubs, pair unclaimed Hubs, reconnect remembered Hubs, cancel in-flight connection attempts, or wirelessly unpair and forget a Hub (`DELETE ...?forget=1`).
+      - **Commands & Spectrum Survey (`:command`, `survey`)**: Send console commands and run `5.8 GHz` Raceband surveys over GATT NUS without USB cables.
+
+  - name: LapRF 8-Way Hardware
+    description: |
+      External ImmersionRC LapRF 8-Way hardware connections over Ethernet LAN or USB CDC serial (`/v1/laprf/*`).
+      - **Network & USB Discovery (`network/devices`, `usb/ports`)**: Probe the local subnet on TCP `:5403` for `LapRF 8-Way (Network)` units or list `115200` baud USB CDC ports for `LapRF 8-Way (USB)` units.
+      - **Connections & Slot Sync (`connections`, `:sync`)**: Open or close Ethernet/USB LapRF sessions and push active pilot `5.8 GHz` frequencies and slot thresholds.
+
+  - name: RotorHazard Hardware
+    description: |
+      External RotorHazard server (`HTTP` / `Socket.IO` `:5000`) and direct RotorHazard USB serial node connections (`/v1/rotorhazard/*`).
+      - **Network & USB Discovery (`network/devices`, `usb/ports`)**: Scan the local subnet for `RotorHazard (Network)` servers or enumerate `RotorHazard (USB)` binary serial ports (`115200` / `921600` baud).
+      - **Connections, Scans & Node Sync (`connections`, `:scan`, `debug-stream`, `:sync`)**: Connect authenticated RotorHazard servers or USB nodes, run `5180`-`5945 MHz` spectrum sweeps on USB nodes, stream `0`-`255` debug RSSI, and sync node frequencies and Enter/Exit levels.
+
+  - name: LapRF 8-Way Emulator
+    description: |
+      Built-in ImmersionRC LapRF 8-Way TCP `:5403` server singleton (`/v1/laprf-emulator`).
+      - **External Client Relay**: Streams SlapRF gate crossings over the binary LapRF TCP `:5403` protocol so third-party race control software (such as LiveTime) or broadcast overlays can ingest live passes in real time.
+
+  - name: Simulator (Flight & Pilots)
+    description: |
+      Flight physics, RF signal propagation, speed multiplier, and pilot event controls for offline testing and marshal training (`/v1/sim`, `/v1/sim:packBurst`, `/v1/sim/pilots/{slotIndex}:action`).
+      - **Engine & Speed Controls (`/v1/sim`)**: Read or update simulator execution (`running`), playback speed (`speedMultiplier`), and automatic track-walker recovery (`trackWalker`).
+      - **Pack Bursts & Pilot Events (`:packBurst`, `pilots/{slotIndex}:action`)**: Trigger synchronized 6S launch bursts or individual pilot flight events (`crash`, `recover`, `walk-recover`, `pit`, `pause`, `break`, `launch`, `resume`, `refill-launch`).
+
+  - name: Simulator (SlapRF)
+    description: |
+      Virtual Seeed Studio XIAO ESP32-C5 Hub and Spoke nodes for offline SlapRF hardware simulation (`/v1/sim/slaprf/*`).
+      - **Virtual USB Link & Handshake (`hub-usb`, `usb-hellos`)**: Plug or unplug the simulated Hub `H1` virtual USB cable and read raw `0x1E`-framed `HELLO` packets for Hub `H1` and active Spokes.
+      - **Simulated Timers & Firmware Actions (`timers`, `:action`, `:flash`, `:erase`, `:togglePower`, `rssi`)**: Add, configure, flash, erase, power-cycle, or delete simulated ESP32-C5 boards and inspect per-slot simulated RSSI.
+
+  - name: Simulator (LapRF 8-Way)
+    description: |
+      Virtual ImmersionRC LapRF 8-Way pucks for offline Ethernet and USB timing simulation (`/v1/sim/laprf/*`).
+      - **Virtual LAN Discovery (`devices`)**: Scan the simulated `192.168.1.0/24` subnet for powered-on virtual LapRF pucks on TCP `:5403`.
+      - **Simulated Timers & Actions (`timers`, `:reset`, `:action`)**: Add, connect, disconnect, power-cycle, or update host, port, and supply voltage on virtual LapRF 8-Way timers.
+
+  - name: Simulator (RotorHazard)
+    description: |
+      Virtual RotorHazard network servers (`:5000`) and USB serial nodes (`115200` / `921600` baud) for offline timing and spectrum simulation (`/v1/sim/rotorhazard/*`).
+      - **Virtual Device Discovery (`devices`)**: Discover simulated RotorHazard network servers and USB serial nodes.
+      - **Simulated Timers & Spectrum Scans (`timers`, `:reset`, `:action`, `:scan`)**: Add, configure, or power-cycle virtual RotorHazard timers and run simulated `5.8 GHz` spectrum sweeps (`once`, `live`, `stop`).
+
+  - name: Simulator (MultiGP)
+    description: |
+      In-memory MultiGP RaceSync `v1.0.4` chapter server and admin controls for offline schedule import, ZippyQ walk-up rounds, and result upload testing (`/v1/sim/multigp/*`).
+      - **Chapter & Schedule Admin (`/v1/sim/multigp/admin`, `admin:action`)**: Inspect or mutate the simulated chapter name, API key, pilot pool, controlled-schedule rounds, and dynamic ZippyQ queues.
+      - **WebService `v1.0.4` Endpoints (`/v1/sim/multigp/{subPath}`)**: Execute `chapter/findChapterFromApiKey`, `race/listForChapter`, `race/view`, `race/getAdditionalRounds`, `race/assignSlot`, and `race/captureOverallRaceResult` against the in-memory chapter store.
 
   - name: Storage
     description: |
@@ -230,45 +277,6 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: "password must be at least 4 characters when enabled"
-
-  /v1/timing/rules:
-    get:
-      tags: [Timing Singletons]
-      summary: Read global timing detection rules singleton
-      operationId: getTimingRules
-      responses:
-        "200":
-          description: Current global timing rules
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TimingRules"
-
-    put:
-      tags: [Timing Singletons]
-      summary: Replace global timing detection rules singleton
-      operationId: putTimingRules
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/TimingRules"
-      responses:
-        "200":
-          description: Clamped and applied global timing rules
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TimingRules"
-        "400":
-          description: Invalid timing rules payload
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "minLapTimeMs must be non-negative"
 
   /v1/timing/arm:
     get:
@@ -578,440 +586,9 @@ paths:
               schema:
                 type: string
 
-  /v1/track:
-    get:
-      tags: [Track & Timers]
-      summary: Read course track singleton (gates and timers)
-      operationId: getTrack
-      responses:
-        "200":
-          description: Track gates and detected timers
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  gates:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/TrackGate"
-                  timers:
-                    type: array
-                    items:
-                      $ref: "#/components/schemas/DetectedTimer"
-
-  "/v1/track:reset":
-    post:
-      tags: [Track & Timers]
-      summary: Reset course track topology to preset or default layout
-      operationId: resetTrack
-      requestBody:
-        required: false
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                preset:
-                  type: string
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-
-  /v1/track/thresholds:
-    put:
-      tags: [Track & Timers]
-      summary: Apply batch per-gate, per-pilot enter/exit RSSI thresholds
-      operationId: putTrackThresholds
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: array
-              items:
-                $ref: "#/components/schemas/GateThresholdUpdate"
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "400":
-          description: Invalid track threshold parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "enterThreshold must be greater than exitThreshold"
-
-  /v1/track/gates:
-    get:
-      tags: [Track & Timers]
-      summary: List all course gates
-      operationId: listTrackGates
-      responses:
-        "200":
-          description: Gate list
-          content:
-            application/json:
-              schema:
-                type: array
-                items:
-                  $ref: "#/components/schemas/TrackGate"
-
-    post:
-      tags: [Track & Timers]
-      summary: Create a gate node on the course track
-      operationId: createTrackGate
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              properties:
-                name:
-                  type: string
-                  example: "Split 1"
-                assignedTimerId:
-                  type: integer
-                  example: 2
-                trackOrder:
-                  type: integer
-                  example: 1
-      responses:
-        "201":
-          description: Created gate and updated full state
-          headers:
-            Location:
-              schema:
-                type: string
-                example: /v1/track/gates/5
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "400":
-          description: Invalid gate configuration or threshold parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "invalid gate type or threshold range"
-
-  /v1/track/gates/{gateId}:
-    parameters:
-      - name: gateId
-        in: path
-        required: true
-        schema:
-          type: integer
-          minimum: 1
-    get:
-      tags: [Track & Timers]
-      summary: Get a single track gate
-      operationId: getTrackGate
-      responses:
-        "200":
-          description: Track gate
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/TrackGate"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-    put:
-      tags: [Track & Timers]
-      summary: Replace a track gate (name, role, order, or assigned timer)
-      operationId: putTrackGate
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/GateUpdate"
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "400":
-          description: Invalid gate configuration or threshold parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "invalid gate type or threshold range"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-    patch:
-      tags: [Track & Timers]
-      summary: Partially update a track gate
-      operationId: patchTrackGate
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/GateUpdate"
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "400":
-          description: Invalid gate configuration or threshold parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "invalid gate type or threshold range"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-    delete:
-      tags: [Track & Timers]
-      summary: Remove a gate from the track
-      operationId: deleteTrackGate
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-  /v1/track/gates/{gateId}/rules:
-    parameters:
-      - name: gateId
-        in: path
-        required: true
-        schema:
-          type: integer
-    get:
-      tags: [Track & Timers]
-      summary: Read per-gate timing rule overrides singleton
-      operationId: getGateRules
-      responses:
-        "200":
-          description: Per-gate rule overrides
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GateRuleOverrides"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-    put:
-      tags: [Track & Timers]
-      summary: Replace per-gate timing rule overrides singleton
-      operationId: putGateRules
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/GateRuleOverrides"
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "400":
-          description: Invalid gate rule override parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "confirmationWindowMs must be positive"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-  "/v1/track/gates/{gateId}/rules:reset":
-    parameters:
-      - name: gateId
-        in: path
-        required: true
-        schema:
-          type: integer
-    post:
-      tags: [Track & Timers]
-      summary: Reset per-gate timing rule overrides back to global rules
-      operationId: resetGateRules
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "404":
-          description: Gate not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate not found"
-
-  /v1/track/gates/{gateId}/pilots/{slotIndex}/rules:
-    parameters:
-      - name: gateId
-        in: path
-        required: true
-        schema:
-          type: integer
-      - name: slotIndex
-        in: path
-        required: true
-        schema:
-          type: integer
-    get:
-      tags: [Track & Timers]
-      summary: Read Tier-3 per-pilot-at-gate rule overrides singleton
-      operationId: getPilotGateRules
-      responses:
-        "200":
-          description: Pilot-at-gate rule overrides
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/GateRuleOverrides"
-        "404":
-          description: Gate or pilot slot not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate or pilot slot not found"
-
-    put:
-      tags: [Track & Timers]
-      summary: Replace Tier-3 per-pilot-at-gate rule overrides singleton
-      operationId: putPilotGateRules
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              $ref: "#/components/schemas/GateRuleOverrides"
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "400":
-          description: Invalid gate rule override parameters
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "confirmationWindowMs must be positive"
-        "404":
-          description: Gate or pilot slot not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate or pilot slot not found"
-
-  "/v1/track/gates/{gateId}/pilots/{slotIndex}/rules:reset":
-    parameters:
-      - name: gateId
-        in: path
-        required: true
-        schema:
-          type: integer
-      - name: slotIndex
-        in: path
-        required: true
-        schema:
-          type: integer
-    post:
-      tags: [Track & Timers]
-      summary: Reset Tier-3 per-pilot-at-gate timing rule overrides
-      operationId: resetPilotGateRules
-      responses:
-        "200":
-          description: Updated full state
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/FullStateResponse"
-        "404":
-          description: Gate or pilot slot not found
-          content:
-            application/json:
-              schema:
-                $ref: "#/components/schemas/ErrorResponse"
-              example:
-                error: "gate or pilot slot not found"
-
   /v1/timers:
     get:
-      tags: [Track & Timers]
+      tags: [Timers]
       summary: List detected hardware timers
       operationId: listTimers
       responses:
@@ -1025,7 +602,7 @@ paths:
                   $ref: "#/components/schemas/DetectedTimer"
 
     post:
-      tags: [Track & Timers]
+      tags: [Timers]
       summary: Provision a newly flashed hardware timer
       operationId: createTimer
       requestBody:
@@ -1077,7 +654,7 @@ paths:
         schema:
           type: integer
     get:
-      tags: [Track & Timers]
+      tags: [Timers]
       summary: Get a detected timer by timerId
       operationId: getTimer
       responses:
@@ -1097,7 +674,7 @@ paths:
                 error: "timer not found"
 
     patch:
-      tags: [Track & Timers]
+      tags: [Timers]
       summary: Update display color for a detected timer
       operationId: patchTimer
       requestBody:
@@ -1136,7 +713,7 @@ paths:
                 error: "timer not found"
 
     delete:
-      tags: [Track & Timers]
+      tags: [Timers]
       summary: Delete an offline detected timer entry
       operationId: deleteTimer
       responses:
@@ -1154,6 +731,14 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: "timer not found"
+        "409":
+          description: Timer is currently active and connected
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "timer is active; disconnect it before removing"
 
   "/v1/practice:reset":
     post:
@@ -1806,6 +1391,518 @@ paths:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
                 error: "practice session or lap not found"
+
+  /v1/practice/sessions/{sessionId}/track:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Practice Sessions]
+      summary: Read practice session track gates, detected timers, and timing rules
+      operationId: getPracticeSessionTrack
+      responses:
+        "200":
+          description: Scoped track gates, detected timers, and timing rules
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [gates, timers, rules]
+                properties:
+                  gates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TrackGate"
+                  timers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DetectedTimer"
+                  rules:
+                    $ref: "#/components/schemas/TimingRules"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  "/v1/practice/sessions/{sessionId}/track:reset":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Practice Sessions]
+      summary: Reset practice session track layout to default gates
+      operationId: resetPracticeSessionTrack
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /v1/practice/sessions/{sessionId}/track/thresholds:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags: [Practice Sessions]
+      summary: Apply batch per-gate, per-pilot RSSI thresholds on this practice session track
+      operationId: putPracticeSessionTrackThresholds
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/GateThresholdUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid threshold update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /v1/practice/sessions/{sessionId}/track/rules:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Practice Sessions]
+      summary: Read track-wide timing rules for this practice session
+      operationId: getPracticeSessionTrackRules
+      responses:
+        "200":
+          description: Scoped timing rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimingRules"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Practice Sessions]
+      summary: Replace track-wide timing rules for this practice session
+      operationId: putPracticeSessionTrackRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TimingRules"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid timing rules payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /v1/practice/sessions/{sessionId}/track/gates:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Practice Sessions]
+      summary: List ordered gates on this practice session track
+      operationId: listPracticeSessionTrackGates
+      responses:
+        "200":
+          description: Ordered track gates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrackGate"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags: [Practice Sessions]
+      summary: Add a gate node to this practice session track
+      operationId: createPracticeSessionTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: "Split 1"
+                assignedTimerId:
+                  type: integer
+                  example: 2
+                trackOrder:
+                  type: integer
+                  example: 1
+      responses:
+        "201":
+          description: Created gate and updated full state
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /v1/practice/sessions/session-1/track/gates/2
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /v1/practice/sessions/{sessionId}/track/gates/{gateId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    get:
+      tags: [Practice Sessions]
+      summary: Get a single gate on this practice session track
+      operationId: getPracticeSessionTrackGate
+      responses:
+        "200":
+          description: Track gate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrackGate"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Practice Sessions]
+      summary: Replace a gate on this practice session track (name, role, order, or assigned timer)
+      operationId: putPracticeSessionTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    patch:
+      tags: [Practice Sessions]
+      summary: Partially update a gate on this practice session track
+      operationId: patchPracticeSessionTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: [Practice Sessions]
+      summary: Remove a gate from this practice session track
+      operationId: deletePracticeSessionTrackGate
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /v1/practice/sessions/{sessionId}/track/gates/{gateId}/rules:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Practice Sessions]
+      summary: Read per-gate timing rule overrides on this practice session track
+      operationId: getPracticeSessionGateRules
+      responses:
+        "200":
+          description: Per-gate rule overrides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GateRuleOverrides"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Practice Sessions]
+      summary: Replace per-gate timing rule overrides on this practice session track
+      operationId: putPracticeSessionGateRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateRuleOverrides"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate rule override payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/v1/practice/sessions/{sessionId}/track/gates/{gateId}/rules:reset":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Practice Sessions]
+      summary: Reset per-gate timing rule overrides back to track rules
+      operationId: resetPracticeSessionGateRules
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  /v1/practice/sessions/{sessionId}/track/gates/{gateId}/pilots/{slotIndex}/rules:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Practice Sessions]
+      summary: Read per-pilot-at-gate rule overrides on this practice session track
+      operationId: getPracticeSessionPilotGateRules
+      responses:
+        "200":
+          description: Pilot-at-gate rule overrides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GateRuleOverrides"
+        "404":
+          description: Practice session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Practice Sessions]
+      summary: Replace per-pilot-at-gate rule overrides on this practice session track
+      operationId: putPracticeSessionPilotGateRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateRuleOverrides"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate rule override payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Practice session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+  "/v1/practice/sessions/{sessionId}/track/gates/{gateId}/pilots/{slotIndex}/rules:reset":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Practice Sessions]
+      summary: Reset per-pilot-at-gate rule overrides on this practice session track
+      operationId: resetPracticeSessionPilotGateRules
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Practice session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /v1/race/sessions:
     get:
@@ -2769,6 +2866,606 @@ paths:
               example:
                 error: "race session, heat, or pilot slot not found"
 
+  /v1/race/sessions/{sessionId}/track:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Race Sessions]
+      summary: Read race session track gates, detected timers, and timing rules
+      operationId: getRaceSessionTrack
+      responses:
+        "200":
+          description: Scoped track gates, detected timers, and timing rules
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [gates, timers, rules]
+                properties:
+                  gates:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/TrackGate"
+                  timers:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/DetectedTimer"
+                  rules:
+                    $ref: "#/components/schemas/TimingRules"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  "/v1/race/sessions/{sessionId}/track:reset":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    post:
+      tags: [Race Sessions]
+      summary: Reset race session track layout to default gates
+      operationId: resetRaceSessionTrack
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  /v1/race/sessions/{sessionId}/track/thresholds:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    put:
+      tags: [Race Sessions]
+      summary: Apply batch per-gate, per-pilot RSSI thresholds on this race session track
+      operationId: putRaceSessionTrackThresholds
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: "#/components/schemas/GateThresholdUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid threshold update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  /v1/race/sessions/{sessionId}/track/rules:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Race Sessions]
+      summary: Read track-wide timing rules for this race session
+      operationId: getRaceSessionTrackRules
+      responses:
+        "200":
+          description: Scoped timing rules
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TimingRules"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Race Sessions]
+      summary: Replace track-wide timing rules for this race session
+      operationId: putRaceSessionTrackRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TimingRules"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid timing rules payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  /v1/race/sessions/{sessionId}/track/gates:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      tags: [Race Sessions]
+      summary: List ordered gates on this race session track
+      operationId: listRaceSessionTrackGates
+      responses:
+        "200":
+          description: Ordered track gates
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/TrackGate"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    post:
+      tags: [Race Sessions]
+      summary: Add a gate node to this race session track
+      operationId: createRaceSessionTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                name:
+                  type: string
+                  example: "Split 1"
+                assignedTimerId:
+                  type: integer
+                  example: 2
+                trackOrder:
+                  type: integer
+                  example: 1
+      responses:
+        "201":
+          description: Created gate and updated full state
+          headers:
+            Location:
+              schema:
+                type: string
+                example: /v1/race/sessions/session-1/track/gates/2
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  /v1/race/sessions/{sessionId}/track/gates/{gateId}:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 1
+    get:
+      tags: [Race Sessions]
+      summary: Get a single gate on this race session track
+      operationId: getRaceSessionTrackGate
+      responses:
+        "200":
+          description: Track gate
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TrackGate"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Race Sessions]
+      summary: Replace a gate on this race session track (name, role, order, or assigned timer)
+      operationId: putRaceSessionTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+    patch:
+      tags: [Race Sessions]
+      summary: Partially update a gate on this race session track
+      operationId: patchRaceSessionTrackGate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateUpdate"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate update payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+    delete:
+      tags: [Race Sessions]
+      summary: Remove a gate from this race session track
+      operationId: deleteRaceSessionTrackGate
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  /v1/race/sessions/{sessionId}/track/gates/{gateId}/rules:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Race Sessions]
+      summary: Read per-gate timing rule overrides on this race session track
+      operationId: getRaceSessionGateRules
+      responses:
+        "200":
+          description: Per-gate rule overrides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GateRuleOverrides"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Race Sessions]
+      summary: Replace per-gate timing rule overrides on this race session track
+      operationId: putRaceSessionGateRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateRuleOverrides"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate rule override payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  "/v1/race/sessions/{sessionId}/track/gates/{gateId}/rules:reset":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Race Sessions]
+      summary: Reset per-gate timing rule overrides back to track rules
+      operationId: resetRaceSessionGateRules
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session or gate not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  /v1/race/sessions/{sessionId}/track/gates/{gateId}/pilots/{slotIndex}/rules:
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    get:
+      tags: [Race Sessions]
+      summary: Read per-pilot-at-gate rule overrides on this race session track
+      operationId: getRaceSessionPilotGateRules
+      responses:
+        "200":
+          description: Pilot-at-gate rule overrides
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/GateRuleOverrides"
+        "404":
+          description: Race session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    put:
+      tags: [Race Sessions]
+      summary: Replace per-pilot-at-gate rule overrides on this race session track
+      operationId: putRaceSessionPilotGateRules
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/GateRuleOverrides"
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "400":
+          description: Invalid gate rule override payload
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "404":
+          description: Race session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+  "/v1/race/sessions/{sessionId}/track/gates/{gateId}/pilots/{slotIndex}/rules:reset":
+    parameters:
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+      - name: gateId
+        in: path
+        required: true
+        schema:
+          type: integer
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+    post:
+      tags: [Race Sessions]
+      summary: Reset per-pilot-at-gate rule overrides on this race session track
+      operationId: resetRaceSessionPilotGateRules
+      responses:
+        "200":
+          description: Updated full state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/FullStateResponse"
+        "404":
+          description: Race session, gate, or pilot slot not found
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        "409":
+          description: Completed or scrapped race track is read-only
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+              example:
+                error: "completed or scrapped race track is read-only"
+
   /v1/race/sessions/{sessionId}/standings.csv:
     parameters:
       - name: sessionId
@@ -3035,7 +3732,7 @@ paths:
 
   /v1/hardware/mode:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [Timing Singletons]
       summary: Read active timing hardware backend singleton
       operationId: getHardwareMode
       responses:
@@ -3051,8 +3748,8 @@ paths:
                     $ref: "#/components/schemas/TimingHardwareMode"
 
     put:
-      tags: [Hardware & LapRF Emulator]
-      summary: Switch active timing hardware backend (`slaprf`, `slaprf_ble`, `rotorhazard`, `rotorhazard_usb`, `laprf`)
+      tags: [Timing Singletons]
+      summary: Switch active timing hardware backend (`slaprf`, `slaprf_ble`, `laprf`, `laprf_usb`, `rotorhazard`, `rotorhazard_usb`)
       operationId: putHardwareMode
       requestBody:
         required: true
@@ -3078,20 +3775,14 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
-                error: "timingHardwareMode must be 'slaprf', 'laprf_8way', or 'rotorhazard'"
+                error: "mode must be 'slaprf', 'slaprf_ble', 'laprf', 'laprf_usb', 'rotorhazard', or 'rotorhazard_usb'"
 
-  /v1/usb/ports:
+  /v1/slaprf/usb/ports:
     get:
-      tags: [Hardware & LapRF Emulator]
-      summary: List available local USB serial and Bluetooth ports
-      operationId: listUsbPorts
+      tags: [SlapRF Hardware (USB)]
+      summary: List available local USB serial ports for SlapRF timers
+      operationId: listSlapRFUsbPorts
       parameters:
-        - name: transport
-          in: query
-          required: false
-          schema:
-            type: string
-            enum: [usb, ble]
         - name: all
           in: query
           required: false
@@ -3112,11 +3803,11 @@ paths:
                       type: object
                       additionalProperties: true
 
-  /v1/usb/connections:
+  /v1/slaprf/usb/connections:
     get:
-      tags: [Hardware & LapRF Emulator]
-      summary: Get USB connection pool snapshot (Hub status and peer Spoke telemetry)
-      operationId: getUsbConnections
+      tags: [SlapRF Hardware (USB)]
+      summary: Get SlapRF USB connection pool snapshot (Hub status and peer Spoke telemetry)
+      operationId: getSlapRFUsbConnections
       responses:
         "200":
           description: USB connection pool
@@ -3127,9 +3818,9 @@ paths:
                 additionalProperties: true
 
     post:
-      tags: [Hardware & LapRF Emulator]
-      summary: Connect a physical USB serial or Bluetooth port to a console slot
-      operationId: connectUsbSlot
+      tags: [SlapRF Hardware (USB)]
+      summary: Connect a physical USB serial port to a SlapRF console slot
+      operationId: connectSlapRFUsbSlot
       requestBody:
         required: true
         content:
@@ -3153,7 +3844,7 @@ paths:
                 type: object
                 additionalProperties: true
         "400":
-          description: Invalid USB serial or BLE port parameters
+          description: Invalid USB serial port parameters
           content:
             application/json:
               schema:
@@ -3161,7 +3852,7 @@ paths:
               example:
                 error: "port name is required"
 
-  /v1/usb/connections/{slotIndex}:
+  /v1/slaprf/usb/connections/{slotIndex}:
     parameters:
       - name: slotIndex
         in: path
@@ -3171,9 +3862,9 @@ paths:
           minimum: 0
           maximum: 1
     put:
-      tags: [Hardware & LapRF Emulator]
-      summary: Connect or replace USB console slot
-      operationId: putUsbConnectionSlot
+      tags: [SlapRF Hardware (USB)]
+      summary: Connect or replace SlapRF USB console slot
+      operationId: putSlapRFUsbConnectionSlot
       requestBody:
         required: true
         content:
@@ -3193,7 +3884,7 @@ paths:
                 type: object
                 additionalProperties: true
         "400":
-          description: Invalid USB serial or BLE port parameters
+          description: Invalid USB serial port parameters
           content:
             application/json:
               schema:
@@ -3210,9 +3901,23 @@ paths:
                 error: "usb connection slot not found"
 
     delete:
-      tags: [Hardware & LapRF Emulator]
-      summary: Disconnect a USB console slot
-      operationId: deleteUsbConnectionSlot
+      tags: [SlapRF Hardware (USB)]
+      summary: Disconnect a SlapRF USB console slot (or cancel an in-flight USB connection)
+      operationId: deleteSlapRFUsbConnectionSlot
+      parameters:
+        - name: forget
+          in: query
+          required: false
+          description: Pass `"1"` to disconnect and forget the saved USB timer fingerprint.
+          schema:
+            type: string
+            enum: ["0", "1"]
+        - name: fp
+          in: query
+          required: false
+          description: Optional timer fingerprint hint when forgetting a disconnected timer.
+          schema:
+            type: string
       responses:
         "200":
           description: Updated USB pool snapshot
@@ -3230,11 +3935,11 @@ paths:
               example:
                 error: "usb connection slot not found"
 
-  "/v1/usb/connections:disconnectAll":
+  "/v1/slaprf/usb/connections:disconnectAll":
     post:
-      tags: [Hardware & LapRF Emulator]
-      summary: Disconnect all active USB console slots
-      operationId: disconnectAllUsbConnections
+      tags: [SlapRF Hardware (USB)]
+      summary: Disconnect all active SlapRF USB console slots
+      operationId: disconnectAllSlapRFUsbConnections
       responses:
         "200":
           description: Updated USB pool snapshot
@@ -3244,11 +3949,11 @@ paths:
                 type: object
                 additionalProperties: true
 
-  /v1/usb/debug-slot:
+  /v1/slaprf/usb/debug-slot:
     get:
-      tags: [Hardware & LapRF Emulator]
-      summary: Read active USB console diagnostic slot index singleton
-      operationId: getUsbDebugSlot
+      tags: [SlapRF Hardware (USB)]
+      summary: Read active SlapRF USB console diagnostic slot index singleton
+      operationId: getSlapRFUsbDebugSlot
       responses:
         "200":
           description: Active debug slot index and USB pool snapshot
@@ -3264,9 +3969,9 @@ paths:
                     type: object
                     additionalProperties: true
     put:
-      tags: [Hardware & LapRF Emulator]
-      summary: Select which USB console slot streams live diagnostic serial lines
-      operationId: putUsbDebugSlot
+      tags: [SlapRF Hardware (USB)]
+      summary: Select which SlapRF USB console slot streams live diagnostic serial lines
+      operationId: putSlapRFUsbDebugSlot
       requestBody:
         required: true
         content:
@@ -3295,32 +4000,11 @@ paths:
               example:
                 error: "invalid JSON body"
 
-  /v1/usb/known-timers/{fp}:
-    parameters:
-      - name: fp
-        in: path
-        required: true
-        description: Hardware timer MAC/EFUSE fingerprint (e.g. `A4CF128890B1`).
-        schema:
-          type: string
-    delete:
-      tags: [Hardware & LapRF Emulator]
-      summary: Forget a saved hardware timer fingerprint from the USB auto-reconnect table
-      operationId: deleteKnownUsbTimer
-      responses:
-        "200":
-          description: Updated USB connection pool snapshot
-          content:
-            application/json:
-              schema:
-                type: object
-                additionalProperties: true
-
-  "/v1/usb:command":
+  "/v1/slaprf/usb:command":
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [SlapRF Hardware (USB)]
       summary: Send a command to a connected SlapRF USB timer
-      operationId: sendUsbCommand
+      operationId: sendSlapRFUsbCommand
       requestBody:
         required: true
         content:
@@ -3354,11 +4038,11 @@ paths:
               example:
                 error: "command cannot be empty"
 
-  /v1/usb/survey:
+  /v1/slaprf/usb/survey:
     get:
-      tags: [Hardware & LapRF Emulator]
-      summary: Read full-Raceband 5.8 GHz spectrum survey singleton
-      operationId: getUsbSurvey
+      tags: [SlapRF Hardware (USB)]
+      summary: Read full-Raceband 5.8 GHz spectrum survey singleton for SlapRF USB
+      operationId: getSlapRFUsbSurvey
       responses:
         "200":
           description: Survey state
@@ -3369,9 +4053,9 @@ paths:
                 additionalProperties: true
 
     put:
-      tags: [Hardware & LapRF Emulator]
-      summary: Set full-Raceband 5.8 GHz spectrum survey mode on the Hub
-      operationId: putUsbSurvey
+      tags: [SlapRF Hardware (USB)]
+      summary: Set full-Raceband 5.8 GHz spectrum survey mode on the USB Hub
+      operationId: putSlapRFUsbSurvey
       requestBody:
         required: true
         content:
@@ -3399,36 +4083,302 @@ paths:
               example:
                 error: "invalid survey band or interval"
         "409":
-          description: No connected USB receiver nodes available to run survey
+          description: Survey requires SlapRF (USB) mode outside an active heat
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
-                error: "no connected usb nodes available for survey"
+                error: "the USB band survey requires SlapRF (USB) mode (not Simulator or Bluetooth)"
 
-  /v1/laprf/devices:
+  /v1/slaprf/bluetooth/ports:
     get:
-      tags: [Hardware & LapRF Emulator]
-      summary: Scan the local LAN for ImmersionRC LapRF 8-Way timers on TCP :5403
-      operationId: discoverLapRFDevices
+      tags: [SlapRF Hardware (Bluetooth)]
+      summary: Scan and list nearby SlapRF Bluetooth LE Hubs (ble:<FP>)
+      operationId: listSlapRFBluetoothPorts
       responses:
         "200":
-          description: Discovered LapRF 8-Way devices
+          description: Discovered SlapRF Bluetooth Hubs and connection pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ports:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  pool:
+                    type: object
+                    additionalProperties: true
+
+  /v1/slaprf/bluetooth/connections:
+    get:
+      tags: [SlapRF Hardware (Bluetooth)]
+      summary: Get SlapRF Bluetooth Hub connection snapshot, live connection status, and paired inventory
+      operationId: getSlapRFBluetoothConnections
+      responses:
+        "200":
+          description: Bluetooth connection pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [SlapRF Hardware (Bluetooth)]
+      summary: Pair or connect to a SlapRF Bluetooth Hub (ble:<FP>)
+      operationId: connectSlapRFBluetoothSlot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [portName]
+              properties:
+                slotIndex:
+                  type: integer
+                  example: 0
+                portName:
+                  type: string
+                  example: "ble:EFE44224"
+      responses:
+        "201":
+          description: Connected Bluetooth Hub slot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid Bluetooth target identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/slaprf/bluetooth/connections/{slotIndex}:
+    parameters:
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 2
+    put:
+      tags: [SlapRF Hardware (Bluetooth)]
+      summary: Pair or connect a SlapRF Bluetooth Hub slot
+      operationId: putSlapRFBluetoothConnectionSlot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [portName]
+              properties:
+                portName:
+                  type: string
+                  example: "ble:EFE44224"
+      responses:
+        "200":
+          description: "Connected Bluetooth slot (or `{cancelled: true}` when cancelled mid-connect)"
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid Bluetooth target identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: [SlapRF Hardware (Bluetooth)]
+      summary: Disconnect a SlapRF Bluetooth Hub, cancel an in-flight connection, or unpair & forget (`?forget=1`)
+      operationId: deleteSlapRFBluetoothConnectionSlot
+      parameters:
+        - name: forget
+          in: query
+          required: false
+          description: Pass `"1"` to atomically send `BLEPAIR CLEAR`, disconnect, and forget the Bluetooth Hub.
+          schema:
+            type: string
+            enum: ["0", "1"]
+        - name: fp
+          in: query
+          required: false
+          description: Optional 8-hex Hub fingerprint when forgetting a disconnected Bluetooth Hub.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated Bluetooth pool snapshot
           content:
             application/json:
               schema:
                 type: object
                 additionalProperties: true
 
-  /v1/laprf/sessions:
-    get:
-      tags: [Hardware & LapRF Emulator]
-      summary: List connected external ImmersionRC LapRF 8-Way client sessions
-      operationId: listLapRFSessions
+  "/v1/slaprf/bluetooth/connections:disconnectAll":
+    post:
+      tags: [SlapRF Hardware (Bluetooth)]
+      summary: Disconnect all active SlapRF Bluetooth Hub slots
+      operationId: disconnectAllSlapRFBluetoothConnections
       responses:
         "200":
-          description: External LapRF 8-Way client sessions
+          description: Updated Bluetooth pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  "/v1/slaprf/bluetooth:command":
+    post:
+      tags: [SlapRF Hardware (Bluetooth)]
+      summary: Send a console command to a connected SlapRF Bluetooth Hub
+      operationId: sendSlapRFBluetoothCommand
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [command]
+              properties:
+                slotIndex:
+                  type: integer
+                command:
+                  type: string
+                expectType:
+                  type: string
+                timeoutMs:
+                  type: integer
+      responses:
+        "200":
+          description: Command acknowledged or reply received
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/slaprf/bluetooth/survey:
+    get:
+      tags: [SlapRF Hardware (Bluetooth)]
+      summary: Read full-Raceband 5.8 GHz spectrum survey state for SlapRF Bluetooth Hub
+      operationId: getSlapRFBluetoothSurvey
+      responses:
+        "200":
+          description: Survey state
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    put:
+      tags: [SlapRF Hardware (Bluetooth)]
+      summary: Set full-Raceband 5.8 GHz spectrum survey mode on the SlapRF Bluetooth Hub
+      operationId: putSlapRFBluetoothSurvey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [on]
+              properties:
+                on:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated survey state
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "409":
+          description: Survey requires SlapRF (Bluetooth) mode outside an active heat
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/slaprf/known-timers/{fp}:
+    parameters:
+      - name: fp
+        in: path
+        required: true
+        description: Hardware timer MAC/EFUSE fingerprint (e.g. `EFE44224`).
+        schema:
+          type: string
+    delete:
+      tags: [SlapRF Hardware (USB)]
+      summary: Forget a saved SlapRF Hub or Spoke fingerprint from the shared timer registry
+      operationId: deleteKnownSlapRFTimer
+      responses:
+        "200":
+          description: Updated active SlapRF pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/laprf/network/devices:
+    get:
+      tags: [LapRF 8-Way Hardware]
+      summary: Scan the local LAN for ImmersionRC LapRF 8-Way timers on TCP :5403
+      operationId: discoverLapRFNetworkDevices
+      responses:
+        "200":
+          description: Discovered LapRF 8-Way network devices
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/laprf/usb/ports:
+    get:
+      tags: [LapRF 8-Way Hardware]
+      summary: List local USB CDC serial ports matching ImmersionRC LapRF 8-Way timers
+      operationId: listLapRFUsbPorts
+      parameters:
+        - name: all
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["0", "1"]
+      responses:
+        "200":
+          description: Discovered LapRF USB serial ports
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ports:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+
+  /v1/laprf/connections:
+    get:
+      tags: [LapRF 8-Way Hardware]
+      summary: List connected external ImmersionRC LapRF 8-Way connections
+      operationId: listLapRFConnections
+      responses:
+        "200":
+          description: External LapRF 8-Way connections
           content:
             application/json:
               schema:
@@ -3436,9 +4386,9 @@ paths:
                 additionalProperties: true
 
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [LapRF 8-Way Hardware]
       summary: Connect to an external ImmersionRC LapRF 8-Way timer (Ethernet TCP or USB)
-      operationId: createLapRFSession
+      operationId: createLapRFConnection
       requestBody:
         required: true
         content:
@@ -3448,14 +4398,14 @@ paths:
               additionalProperties: true
       responses:
         "201":
-          description: Connected LapRF session
+          description: Connected LapRF device
           content:
             application/json:
               schema:
                 type: object
                 additionalProperties: true
         "400":
-          description: Invalid LapRF host or TCP port
+          description: Invalid LapRF host or port parameters
           content:
             application/json:
               schema:
@@ -3463,7 +4413,7 @@ paths:
               example:
                 error: "invalid host:port address"
 
-  /v1/laprf/sessions/{timerId}:
+  /v1/laprf/connections/{timerId}:
     parameters:
       - name: timerId
         in: path
@@ -3471,9 +4421,9 @@ paths:
         schema:
           type: integer
     delete:
-      tags: [Hardware & LapRF Emulator]
-      summary: Disconnect an external LapRF 8-Way session
-      operationId: deleteLapRFSession
+      tags: [LapRF 8-Way Hardware]
+      summary: Disconnect an external LapRF 8-Way connection
+      operationId: deleteLapRFConnection
       responses:
         "200":
           description: Disconnected
@@ -3482,19 +4432,19 @@ paths:
               schema:
                 $ref: "#/components/schemas/OkResponse"
         "404":
-          description: LapRF session not found
+          description: LapRF connection not found
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
-                error: "laprf session not found"
+                error: "laprf connection not found"
 
   "/v1/laprf:sync":
     post:
-      tags: [Hardware & LapRF Emulator]
-      summary: Push active pilot frequencies and settings to all connected LapRF 8-Way sessions
-      operationId: syncLapRFSessions
+      tags: [LapRF 8-Way Hardware]
+      summary: Push active pilot frequencies and settings to all connected LapRF 8-Way devices
+      operationId: syncLapRFConnections
       responses:
         "200":
           description: Synced
@@ -3503,28 +4453,54 @@ paths:
               schema:
                 $ref: "#/components/schemas/OkResponse"
 
-  /v1/rh/devices:
+  /v1/rotorhazard/network/devices:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [RotorHazard Hardware]
       summary: Scan the local LAN for RotorHazard servers on port 5000
-      operationId: discoverRotorHazardDevices
+      operationId: discoverRotorHazardNetworkDevices
       responses:
         "200":
-          description: Discovered RotorHazard devices
+          description: Discovered RotorHazard network devices
           content:
             application/json:
               schema:
                 type: object
                 additionalProperties: true
 
-  /v1/rh/sessions:
+  /v1/rotorhazard/usb/ports:
     get:
-      tags: [Hardware & LapRF Emulator]
-      summary: List connected external RotorHazard client sessions
-      operationId: listRotorHazardSessions
+      tags: [RotorHazard Hardware]
+      summary: List local USB serial ports matching RotorHazard / Arduino timing nodes
+      operationId: listRotorHazardUsbPorts
+      parameters:
+        - name: all
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: ["0", "1"]
       responses:
         "200":
-          description: External RotorHazard client sessions
+          description: Discovered RotorHazard USB serial ports
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ports:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+
+  /v1/rotorhazard/connections:
+    get:
+      tags: [RotorHazard Hardware]
+      summary: List connected external RotorHazard connections
+      operationId: listRotorHazardConnections
+      responses:
+        "200":
+          description: External RotorHazard connections
           content:
             application/json:
               schema:
@@ -3532,9 +4508,9 @@ paths:
                 additionalProperties: true
 
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [RotorHazard Hardware]
       summary: Connect to an external RotorHazard device (Socket.IO or USB serial)
-      operationId: createRotorHazardSession
+      operationId: createRotorHazardConnection
       requestBody:
         required: true
         content:
@@ -3544,14 +4520,14 @@ paths:
               additionalProperties: true
       responses:
         "201":
-          description: Connected RotorHazard session
+          description: Connected RotorHazard device
           content:
             application/json:
               schema:
                 type: object
                 additionalProperties: true
         "400":
-          description: Invalid RotorHazard connection or scan parameters
+          description: Invalid RotorHazard connection parameters
           content:
             application/json:
               schema:
@@ -3559,7 +4535,7 @@ paths:
               example:
                 error: "invalid RotorHazard host or port"
 
-  /v1/rh/sessions/{timerId}:
+  /v1/rotorhazard/connections/{timerId}:
     parameters:
       - name: timerId
         in: path
@@ -3567,9 +4543,9 @@ paths:
         schema:
           type: integer
     delete:
-      tags: [Hardware & LapRF Emulator]
-      summary: Disconnect a RotorHazard session
-      operationId: deleteRotorHazardSession
+      tags: [RotorHazard Hardware]
+      summary: Disconnect a RotorHazard connection
+      operationId: deleteRotorHazardConnection
       responses:
         "200":
           description: Disconnected
@@ -3578,15 +4554,15 @@ paths:
               schema:
                 $ref: "#/components/schemas/OkResponse"
         "404":
-          description: RotorHazard session not found
+          description: RotorHazard connection not found
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
-                error: "rotorhazard session not found"
+                error: "rotorhazard connection not found"
 
-  "/v1/rh/sessions/{timerId}:scan":
+  "/v1/rotorhazard/connections/{timerId}:scan":
     parameters:
       - name: timerId
         in: path
@@ -3594,9 +4570,9 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Hardware & LapRF Emulator]
+      tags: [RotorHazard Hardware]
       summary: Trigger a spectrum scan (`once`, `live`, or `stop`) on a RotorHazard USB node
-      operationId: scanRotorHazardSession
+      operationId: scanRotorHazardConnection
       requestBody:
         required: true
         content:
@@ -3631,15 +4607,15 @@ paths:
               example:
                 error: "invalid RotorHazard host or port"
         "404":
-          description: RotorHazard session not found
+          description: RotorHazard connection not found
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
-                error: "rotorhazard session not found"
+                error: "rotorhazard connection not found"
 
-  /v1/rh/sessions/{timerId}/debug-stream:
+  /v1/rotorhazard/connections/{timerId}/debug-stream:
     parameters:
       - name: timerId
         in: path
@@ -3647,8 +4623,8 @@ paths:
         schema:
           type: integer
     put:
-      tags: [Hardware & LapRF Emulator]
-      summary: Enable or disable high-rate RSSI debug streaming on a RotorHazard session
+      tags: [RotorHazard Hardware]
+      summary: Enable or disable high-rate RSSI debug streaming on a RotorHazard connection
       operationId: putRotorHazardDebugStream
       requestBody:
         required: true
@@ -3677,11 +4653,11 @@ paths:
               example:
                 error: "invalid timerId"
 
-  "/v1/rh:sync":
+  "/v1/rotorhazard:sync":
     post:
-      tags: [Hardware & LapRF Emulator]
-      summary: Push active pilot node frequencies and arm state to all connected RotorHazard sessions
-      operationId: syncRotorHazardSessions
+      tags: [RotorHazard Hardware]
+      summary: Push active pilot node frequencies and arm state to all connected RotorHazard devices
+      operationId: syncRotorHazardConnections
       responses:
         "200":
           description: Synced
@@ -3692,7 +4668,7 @@ paths:
 
   /v1/laprf-emulator:
     get:
-      tags: [Hardware & LapRF Emulator]
+      tags: [LapRF 8-Way Emulator]
       summary: Read built-in LapRF 8-Way TCP :5403 emulator singleton status
       operationId: getLapRFEmulator
       responses:
@@ -3727,7 +4703,7 @@ paths:
                     type: string
 
     put:
-      tags: [Hardware & LapRF Emulator]
+      tags: [LapRF 8-Way Emulator]
       summary: Configure the built-in LapRF 8-Way TCP :5403 emulator singleton
       operationId: putLapRFEmulator
       requestBody:
@@ -3763,7 +4739,7 @@ paths:
                 error: "invalid emulator port or gate assignment"
 
     patch:
-      tags: [Hardware & LapRF Emulator]
+      tags: [LapRF 8-Way Emulator]
       summary: Partially update the built-in LapRF 8-Way TCP :5403 emulator singleton
       operationId: patchLapRFEmulator
       requestBody:
@@ -3798,7 +4774,7 @@ paths:
 
   /v1/sim:
     get:
-      tags: [Simulator]
+      tags: ["Simulator (Flight & Pilots)"]
       summary: Read simulator singleton state (running flag, simulated pilots, timers, LapRF, and RotorHazard units)
       operationId: getSim
       responses:
@@ -3817,7 +4793,7 @@ paths:
                     $ref: "#/components/schemas/SimState"
 
     patch:
-      tags: [Simulator]
+      tags: ["Simulator (Flight & Pilots)"]
       summary: Update simulator singleton settings (`running`, `speedMultiplier`, `trackWalker`)
       operationId: patchSim
       requestBody:
@@ -3854,7 +4830,7 @@ paths:
 
   "/v1/sim:packBurst":
     post:
-      tags: [Simulator]
+      tags: ["Simulator (Flight & Pilots)"]
       summary: Trigger a synchronized 6S pack launch burst across simulated pilots
       operationId: triggerSimPackBurst
       responses:
@@ -3875,7 +4851,7 @@ paths:
           minimum: 1
           maximum: 16
     post:
-      tags: [Simulator]
+      tags: ["Simulator (Flight & Pilots)"]
       summary: Trigger a flight or pit action on a simulated pilot (`crash`, `recover`, `walk-recover`, `pit`, `pause`, `break`, `launch`, `resume`, `refill-launch`)
       operationId: triggerSimPilotAction
       requestBody:
@@ -3915,9 +4891,9 @@ paths:
               example:
                 error: "invalid slotIndex"
 
-  /v1/sim/hub-usb:
+  /v1/sim/slaprf/hub-usb:
     get:
-      tags: [Simulator]
+      tags: ["Simulator (SlapRF)"]
       summary: Read simulated Hub H1 virtual USB cable connection state
       operationId: getSimHubUsb
       responses:
@@ -3933,7 +4909,7 @@ paths:
                     type: boolean
                     example: true
     put:
-      tags: [Simulator]
+      tags: ["Simulator (SlapRF)"]
       summary: Plug or unplug the simulated Hub H1 virtual USB cable
       operationId: putSimHubUsb
       requestBody:
@@ -3968,9 +4944,9 @@ paths:
               example:
                 error: "invalid JSON body"
 
-  /v1/sim/usb-hellos:
+  /v1/sim/slaprf/usb-hellos:
     get:
-      tags: [Simulator]
+      tags: ["Simulator (SlapRF)"]
       summary: Read raw binary `0x1E`-framed `HELLO` stream for simulated Hub `H1` and active Spokes
       operationId: getSimUsbHellos
       responses:
@@ -3982,9 +4958,9 @@ paths:
                 type: string
                 format: binary
 
-  /v1/sim/timers:
+  /v1/sim/slaprf/timers:
     post:
-      tags: [Simulator]
+      tags: ["Simulator (SlapRF)"]
       summary: Add a simulated XIAO ESP32-C5 SlapRF timer node (Hub or Spoke)
       operationId: createSimTimer
       requestBody:
@@ -4009,7 +4985,7 @@ paths:
               description: URI of the created simulated timer
               schema:
                 type: string
-                example: "/v1/sim/timers/4"
+                example: "/v1/sim/slaprf/timers/4"
           content:
             application/json:
               schema:
@@ -4023,9 +4999,9 @@ paths:
               example:
                 error: "maximum simulated timer count reached"
 
-  "/v1/sim/timers:reset":
+  "/v1/sim/slaprf/timers:reset":
     post:
-      tags: [Simulator]
+      tags: ["Simulator (SlapRF)"]
       summary: Reset simulated SlapRF Hub/Spoke timers and course gates to defaults
       operationId: resetSimTimers
       responses:
@@ -4036,7 +5012,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
 
-  /v1/sim/timers/{timerId}:
+  /v1/sim/slaprf/timers/{timerId}:
     parameters:
       - name: timerId
         in: path
@@ -4046,7 +5022,7 @@ paths:
           minimum: 1
           maximum: 255
     patch:
-      tags: [Simulator]
+      tags: ["Simulator (SlapRF)"]
       summary: Update RF diagnostic flags (`rfEnabled`, `emergencyMode`, `scanLive`, `chanMask`) on a simulated timer
       operationId: patchSimTimer
       requestBody:
@@ -4082,9 +5058,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
-                error: "PATCH /v1/sim/timers/{timerId} expects diagnostic fields; use POST /v1/sim/timers/{timerId}:action for imperative board actions"
+                error: "PATCH /v1/sim/slaprf/timers/{timerId} expects diagnostic fields; use POST /v1/sim/slaprf/timers/{timerId}:action for imperative board actions"
     delete:
-      tags: [Simulator]
+      tags: ["Simulator (SlapRF)"]
       summary: Delete a simulated XIAO ESP32-C5 timer node
       operationId: deleteSimTimer
       responses:
@@ -4103,7 +5079,7 @@ paths:
               example:
                 error: "simulated timer not found"
 
-  "/v1/sim/timers/{timerId}:action":
+  "/v1/sim/slaprf/timers/{timerId}:action":
     parameters:
       - name: timerId
         in: path
@@ -4111,7 +5087,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
+      tags: ["Simulator (SlapRF)"]
       summary: Execute a board lifecycle action (`toggle-power`, `erase`, `flash`) on a simulated SlapRF timer
       operationId: runSimTimerAction
       requestBody:
@@ -4162,7 +5138,7 @@ paths:
               example:
                 error: "simulated timer not found"
 
-  "/v1/sim/timers/{timerId}:togglePower":
+  "/v1/sim/slaprf/timers/{timerId}:togglePower":
     parameters:
       - name: timerId
         in: path
@@ -4170,7 +5146,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
+      tags: ["Simulator (SlapRF)"]
       summary: Toggle simulated power on or off for a simulated SlapRF timer
       operationId: toggleSimTimerPower
       responses:
@@ -4181,7 +5157,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
 
-  "/v1/sim/timers/{timerId}:erase":
+  "/v1/sim/slaprf/timers/{timerId}:erase":
     parameters:
       - name: timerId
         in: path
@@ -4189,7 +5165,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
+      tags: ["Simulator (SlapRF)"]
       summary: Erase simulated flash on a simulated XIAO ESP32-C5 board back to unflashed ROM state
       operationId: eraseSimTimer
       responses:
@@ -4208,7 +5184,7 @@ paths:
               example:
                 error: "simulated timer not found"
 
-  "/v1/sim/timers/{timerId}:flash":
+  "/v1/sim/slaprf/timers/{timerId}:flash":
     parameters:
       - name: timerId
         in: path
@@ -4216,7 +5192,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
+      tags: ["Simulator (SlapRF)"]
       summary: Flash simulated SlapRF firmware onto a simulated XIAO ESP32-C5 board
       operationId: flashSimTimer
       requestBody:
@@ -4254,7 +5230,7 @@ paths:
               example:
                 error: "simulated timer not found"
 
-  /v1/sim/timers/{timerId}/rssi:
+  /v1/sim/slaprf/timers/{timerId}/rssi:
     parameters:
       - name: timerId
         in: path
@@ -4262,7 +5238,7 @@ paths:
         schema:
           type: integer
     get:
-      tags: [Simulator]
+      tags: ["Simulator (SlapRF)"]
       summary: Read live per-slot simulated RSSI values (dBm) for a simulated SlapRF timer
       operationId: getSimTimerRssi
       responses:
@@ -4281,7 +5257,7 @@ paths:
 
   /v1/sim/laprf/devices:
     get:
-      tags: [Simulator]
+      tags: ["Simulator (LapRF 8-Way)"]
       summary: Discover simulated ImmersionRC LapRF 8-Way pucks on the virtual LAN (`192.168.1.0/24`)
       operationId: discoverSimLapRFDevices
       responses:
@@ -4319,10 +5295,10 @@ paths:
                           type: integer
                           example: 12200
 
-  /v1/sim/laprf/units:
+  /v1/sim/laprf/timers:
     post:
-      tags: [Simulator]
-      summary: Add or connect a simulated ImmersionRC LapRF 8-Way unit
+      tags: ["Simulator (LapRF 8-Way)"]
+      summary: Add or connect a simulated ImmersionRC LapRF 8-Way timer
       operationId: createSimLapRFUnit
       requestBody:
         required: false
@@ -4332,19 +5308,19 @@ paths:
               $ref: "#/components/schemas/SimLapRFActionRequest"
       responses:
         "201":
-          description: Added or connected simulated LapRF unit and updated full state
+          description: Added or connected simulated LapRF timer and updated full state
           headers:
             Location:
-              description: Simulated LapRF units collection URI
+              description: Simulated LapRF timers collection URI
               schema:
                 type: string
-                example: "/v1/sim/laprf/units"
+                example: "/v1/sim/laprf/timers"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
         "400":
-          description: Invalid simulated LapRF unit parameters
+          description: Invalid simulated LapRF timer parameters
           content:
             application/json:
               schema:
@@ -4352,10 +5328,10 @@ paths:
               example:
                 error: "invalid host address"
 
-  "/v1/sim/laprf/units:reset":
+  "/v1/sim/laprf/timers:reset":
     post:
-      tags: [Simulator]
-      summary: Reset simulated ImmersionRC LapRF 8-Way units back to defaults
+      tags: ["Simulator (LapRF 8-Way)"]
+      summary: Reset simulated ImmersionRC LapRF 8-Way timers back to defaults
       operationId: resetSimLapRFUnits
       responses:
         "200":
@@ -4365,7 +5341,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
 
-  /v1/sim/laprf/units/{timerId}:
+  /v1/sim/laprf/timers/{timerId}:
     parameters:
       - name: timerId
         in: path
@@ -4373,8 +5349,8 @@ paths:
         schema:
           type: integer
     patch:
-      tags: [Simulator]
-      summary: Update label, host, TCP port, or supply voltage on a simulated LapRF 8-Way unit
+      tags: ["Simulator (LapRF 8-Way)"]
+      summary: Update label, host, TCP port, or supply voltage on a simulated LapRF 8-Way timer
       operationId: patchSimLapRFUnit
       requestBody:
         required: true
@@ -4390,7 +5366,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
         "400":
-          description: Invalid LapRF unit update parameters
+          description: Invalid LapRF timer update parameters
           content:
             application/json:
               schema:
@@ -4398,7 +5374,7 @@ paths:
               example:
                 error: "invalid port number"
         "404":
-          description: Simulated LapRF unit not found
+          description: Simulated LapRF timer not found
           content:
             application/json:
               schema:
@@ -4406,8 +5382,8 @@ paths:
               example:
                 error: "simulated LapRF unit not found"
     delete:
-      tags: [Simulator]
-      summary: Remove a simulated LapRF 8-Way unit
+      tags: ["Simulator (LapRF 8-Way)"]
+      summary: Remove a simulated LapRF 8-Way timer
       operationId: deleteSimLapRFUnit
       responses:
         "200":
@@ -4417,7 +5393,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
         "404":
-          description: Simulated LapRF unit not found
+          description: Simulated LapRF timer not found
           content:
             application/json:
               schema:
@@ -4425,7 +5401,7 @@ paths:
               example:
                 error: "simulated LapRF unit not found"
 
-  "/v1/sim/laprf/units/{timerId}:action":
+  "/v1/sim/laprf/timers/{timerId}:action":
     parameters:
       - name: timerId
         in: path
@@ -4433,8 +5409,8 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
-      summary: Execute a control action (`toggle-power`, `toggle-connect`, `connect-host`, `disconnect`, `update`, `delete`) on a simulated LapRF unit
+      tags: ["Simulator (LapRF 8-Way)"]
+      summary: Execute a control action (`toggle-power`, `toggle-connect`, `connect-host`, `disconnect`, `update`, `delete`) on a simulated LapRF timer
       operationId: runSimLapRFUnitAction
       requestBody:
         required: true
@@ -4458,7 +5434,7 @@ paths:
               example:
                 error: "unknown simulated LapRF action"
         "404":
-          description: Simulated LapRF unit not found
+          description: Simulated LapRF timer not found
           content:
             application/json:
               schema:
@@ -4466,9 +5442,9 @@ paths:
               example:
                 error: "simulated LapRF unit not found"
 
-  /v1/sim/rh/devices:
+  /v1/sim/rotorhazard/devices:
     get:
-      tags: [Simulator]
+      tags: ["Simulator (RotorHazard)"]
       summary: Discover simulated RotorHazard network servers and USB serial nodes
       operationId: discoverSimRotorHazardDevices
       responses:
@@ -4515,9 +5491,9 @@ paths:
                           type: boolean
                           example: true
 
-  /v1/sim/rh/units:
+  /v1/sim/rotorhazard/timers:
     post:
-      tags: [Simulator]
+      tags: ["Simulator (RotorHazard)"]
       summary: Add or connect a simulated RotorHazard network server or USB serial node
       operationId: createSimRotorHazardUnit
       requestBody:
@@ -4528,19 +5504,19 @@ paths:
               $ref: "#/components/schemas/SimRotorHazardActionRequest"
       responses:
         "201":
-          description: Added or connected simulated RotorHazard unit and updated full state
+          description: Added or connected simulated RotorHazard timer and updated full state
           headers:
             Location:
-              description: Simulated RotorHazard units collection URI
+              description: Simulated RotorHazard timers collection URI
               schema:
                 type: string
-                example: "/v1/sim/rh/units"
+                example: "/v1/sim/rotorhazard/timers"
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
         "400":
-          description: Invalid simulated RotorHazard unit parameters
+          description: Invalid simulated RotorHazard timer parameters
           content:
             application/json:
               schema:
@@ -4548,10 +5524,10 @@ paths:
               example:
                 error: "invalid RotorHazard host or port"
 
-  "/v1/sim/rh/units:reset":
+  "/v1/sim/rotorhazard/timers:reset":
     post:
-      tags: [Simulator]
-      summary: Reset simulated RotorHazard units back to defaults
+      tags: ["Simulator (RotorHazard)"]
+      summary: Reset simulated RotorHazard timers back to defaults
       operationId: resetSimRotorHazardUnits
       responses:
         "200":
@@ -4561,7 +5537,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
 
-  /v1/sim/rh/units/{timerId}:
+  /v1/sim/rotorhazard/timers/{timerId}:
     parameters:
       - name: timerId
         in: path
@@ -4569,8 +5545,8 @@ paths:
         schema:
           type: integer
     patch:
-      tags: [Simulator]
-      summary: Update configuration on a simulated RotorHazard unit
+      tags: ["Simulator (RotorHazard)"]
+      summary: Update configuration on a simulated RotorHazard timer
       operationId: patchSimRotorHazardUnit
       requestBody:
         required: true
@@ -4586,7 +5562,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
         "400":
-          description: Invalid RotorHazard unit parameters
+          description: Invalid RotorHazard timer parameters
           content:
             application/json:
               schema:
@@ -4594,7 +5570,7 @@ paths:
               example:
                 error: "invalid nodeCount"
         "404":
-          description: Simulated RotorHazard unit not found
+          description: Simulated RotorHazard timer not found
           content:
             application/json:
               schema:
@@ -4602,8 +5578,8 @@ paths:
               example:
                 error: "simulated RotorHazard unit not found"
     delete:
-      tags: [Simulator]
-      summary: Remove a simulated RotorHazard unit
+      tags: ["Simulator (RotorHazard)"]
+      summary: Remove a simulated RotorHazard timer
       operationId: deleteSimRotorHazardUnit
       responses:
         "200":
@@ -4613,7 +5589,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/FullStateResponse"
         "404":
-          description: Simulated RotorHazard unit not found
+          description: Simulated RotorHazard timer not found
           content:
             application/json:
               schema:
@@ -4621,7 +5597,7 @@ paths:
               example:
                 error: "simulated RotorHazard unit not found"
 
-  "/v1/sim/rh/units/{timerId}:action":
+  "/v1/sim/rotorhazard/timers/{timerId}:action":
     parameters:
       - name: timerId
         in: path
@@ -4629,8 +5605,8 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
-      summary: Execute a control action (`toggle-power`, `toggle-connect`, `connect-host`, `connect-port`, `disconnect`, `update`, `delete`) on a simulated RotorHazard unit
+      tags: ["Simulator (RotorHazard)"]
+      summary: Execute a control action (`toggle-power`, `toggle-connect`, `connect-host`, `connect-port`, `disconnect`, `update`, `delete`) on a simulated RotorHazard timer
       operationId: runSimRotorHazardUnitAction
       requestBody:
         required: true
@@ -4654,7 +5630,7 @@ paths:
               example:
                 error: "unknown simulated RotorHazard action"
         "404":
-          description: Simulated RotorHazard unit not found
+          description: Simulated RotorHazard timer not found
           content:
             application/json:
               schema:
@@ -4662,7 +5638,7 @@ paths:
               example:
                 error: "simulated RotorHazard unit not found"
 
-  "/v1/sim/rh/units/{timerId}:scan":
+  "/v1/sim/rotorhazard/timers/{timerId}:scan":
     parameters:
       - name: timerId
         in: path
@@ -4670,7 +5646,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: [Simulator]
+      tags: ["Simulator (RotorHazard)"]
       summary: Run or toggle a simulated 5.8 GHz spectrum sweep (`once`, `live`, `stop`) on a simulated RotorHazard USB node
       operationId: scanSimRotorHazardUnit
       requestBody:
@@ -4719,7 +5695,7 @@ paths:
               example:
                 error: "invalid scan mode (expected once, live, or stop)"
         "404":
-          description: Simulated RotorHazard unit not found
+          description: Simulated RotorHazard timer not found
           content:
             application/json:
               schema:
@@ -4735,9 +5711,9 @@ paths:
               example:
                 error: "simulator is not running"
 
-  /v1/sim/mgp-admin:
+  /v1/sim/multigp/admin:
     get:
-      tags: [Simulator]
+      tags: ["Simulator (MultiGP)"]
       summary: Export in-memory simulated MultiGP chapter, API key, pilot pool, and scheduled races
       operationId: getSimMultiGPAdmin
       responses:
@@ -4748,9 +5724,9 @@ paths:
               schema:
                 $ref: "#/components/schemas/SimMultiGPState"
 
-  "/v1/sim/mgp-admin:action":
+  "/v1/sim/multigp/admin:action":
     post:
-      tags: [Simulator]
+      tags: ["Simulator (MultiGP)"]
       summary: Mutate the simulated MultiGP chapter, API key, pilot pool, races, ZippyQ rounds, heats, or seats
       operationId: runSimMultiGPAdminAction
       requestBody:
@@ -4775,7 +5751,7 @@ paths:
               example:
                 error: "pilot callsign is required"
 
-  /v1/sim/mgp/{subPath}:
+  /v1/sim/multigp/{subPath}:
     parameters:
       - name: subPath
         in: path
@@ -4784,7 +5760,7 @@ paths:
         schema:
           type: string
     post:
-      tags: [Simulator]
+      tags: ["Simulator (MultiGP)"]
       summary: Invoke an in-memory simulated MultiGP WebService v1.0.4 POST endpoint
       operationId: postSimMultiGPWebService
       requestBody:
@@ -4845,7 +5821,7 @@ paths:
                     type: string
                     example: "Invalid MultiGP Chapter API key"
     put:
-      tags: [Simulator]
+      tags: ["Simulator (MultiGP)"]
       summary: Invoke an in-memory simulated MultiGP WebService v1.0.4 PUT endpoint
       operationId: putSimMultiGPWebService
       requestBody:
@@ -5182,7 +6158,7 @@ components:
 
     TimingHardwareMode:
       type: string
-      enum: [slaprf, slaprf_ble, rotorhazard, rotorhazard_usb, laprf]
+      enum: [slaprf, slaprf_ble, laprf, laprf_usb, rotorhazard, rotorhazard_usb]
       example: slaprf
 
     TimerRole:

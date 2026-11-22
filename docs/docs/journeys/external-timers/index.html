@@ -4,20 +4,54 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" /><meta name="robots" content="index, follow" />
   <link rel="icon" type="image/svg+xml" href="/docs/favicon.svg" id="favicon-svg" />
 <title>RotorHazard &amp; LapRF 8-Way – SlapRF Docs</title>
-  <meta name="description" content="Pilots and clubs who already own a RotorHazard timer or an ImmersionRC LapRF 8-Way puck can run the SlapRF Timing Application as a modern practice and race control interface without building new hardware.
-Note RotorHazard and LapRF 8-Way operate as single Start / Finish multi-pilot receivers for up to 8 simultaneous channels. Multi-gate section split timing (S1, S2, S3) requires DIY SlapRF Gate Hardware." /><link rel="canonical" href="/docs/journeys/external-timers/" itemprop="url" />
+  <meta name="description" content="Connect the SlapRF App to existing RotorHazard or ImmersionRC LapRF 8-Way hardware over LAN or USB without building new timers.
+Choose Your Mode Open Network in the native SlapRF desktop or Android app and select your hardware from the Timing system dropdown:
+Dropdown Option Connection Hardware &amp; When to Choose It LapRF 8-Way (Network) Ethernet LAN (TCP :5403) ImmersionRC LapRF 8-Way puck plugged into a field router or network switch. LapRF 8-Way (USB) USB CDC serial (115200 baud) ImmersionRC LapRF 8-Way puck plugged directly into your phone or computer over USB (no router or IP setup). RotorHazard (Network) Wi-Fi or Ethernet (HTTP / Socket.IO :5000) Complete RotorHazard server (Raspberry Pi &#43; RX5808 shield) on the local network. RotorHazard (USB) USB serial (115200 or 921600 baud, API 36) Standalone RotorHazard RX5808 node board (ESP32-C5, STM32, Arduino, or RP2040) plugged directly into USB with no Raspberry Pi. Note While a timer is connected (or connecting), the Timing system dropdown on Network locks to prevent accidental mode switches mid-session. Click Disconnect next to the dropdown to unlock it and switch to a different timing system." /><link rel="canonical" href="/docs/journeys/external-timers/" itemprop="url" />
 
 <meta property="og:title" content="RotorHazard &amp; LapRF 8-Way">
 <meta
   property="og:description"
   content="
     
-      Pilots and clubs who already own a RotorHazard timer or an ImmersionRC LapRF 8-Way puck can run the SlapRF Timing Application as a modern practice and race control interface without building new hardware.
+      Connect the SlapRF App to existing RotorHazard or ImmersionRC LapRF 8-Way hardware over LAN or USB without building new timers.
+Choose Your Mode
+    Open Network in the native SlapRF desktop or Android app and select your hardware from the Timing system dropdown:
+
+	
+			
+					Dropdown Option
+					Connection
+					Hardware &amp; When to Choose It
+			
+	
+	
+			
+					LapRF 8-Way (Network)
+					Ethernet LAN (TCP :5403)
+					ImmersionRC LapRF 8-Way puck plugged into a field router or network switch.
+			
+			
+					LapRF 8-Way (USB)
+					USB CDC serial (115200 baud)
+					ImmersionRC LapRF 8-Way puck plugged directly into your phone or computer over USB (no router or IP setup).
+			
+			
+					RotorHazard (Network)
+					Wi-Fi or Ethernet (HTTP / Socket.IO :5000)
+					Complete RotorHazard server (Raspberry Pi &#43; RX5808 shield) on the local network.
+			
+			
+					RotorHazard (USB)
+					USB serial (115200 or 921600 baud, API 36)
+					Standalone RotorHazard RX5808 node board (ESP32-C5, STM32, Arduino, or RP2040) plugged directly into USB with no Raspberry Pi.
+			
+	
+
 
   Note
   
 
-  RotorHazard and LapRF 8-Way operate as single Start / Finish multi-pilot receivers for up to 8 simultaneous channels. Multi-gate section split timing (S1, S2, S3) requires DIY SlapRF Gate Hardware.
+  While a timer is connected (or connecting), the Timing system dropdown on Network locks to prevent accidental mode switches mid-session. Click Disconnect next to the dropdown to unlock it and switch to a different timing system.
 
     
   ">
@@ -32,13 +66,15 @@ Note RotorHazard and LapRF 8-Way operate as single Start / Finish multi-pilot re
 
 
 	<meta itemprop="name" content="RotorHazard &amp; LapRF 8-Way">
-	<meta itemprop="description" content="Pilots and clubs who already own a RotorHazard timer or an ImmersionRC LapRF 8-Way puck can run the SlapRF Timing Application as a modern practice and race control interface without building new hardware.
-Note RotorHazard and LapRF 8-Way operate as single Start / Finish multi-pilot receivers for up to 8 simultaneous channels. Multi-gate section split timing (S1, S2, S3) requires DIY SlapRF Gate Hardware.">
-	<meta itemprop="wordCount" content="311">
+	<meta itemprop="description" content="Connect the SlapRF App to existing RotorHazard or ImmersionRC LapRF 8-Way hardware over LAN or USB without building new timers.
+Choose Your Mode Open Network in the native SlapRF desktop or Android app and select your hardware from the Timing system dropdown:
+Dropdown Option Connection Hardware &amp; When to Choose It LapRF 8-Way (Network) Ethernet LAN (TCP :5403) ImmersionRC LapRF 8-Way puck plugged into a field router or network switch. LapRF 8-Way (USB) USB CDC serial (115200 baud) ImmersionRC LapRF 8-Way puck plugged directly into your phone or computer over USB (no router or IP setup). RotorHazard (Network) Wi-Fi or Ethernet (HTTP / Socket.IO :5000) Complete RotorHazard server (Raspberry Pi &#43; RX5808 shield) on the local network. RotorHazard (USB) USB serial (115200 or 921600 baud, API 36) Standalone RotorHazard RX5808 node board (ESP32-C5, STM32, Arduino, or RP2040) plugged directly into USB with no Raspberry Pi. Note While a timer is connected (or connecting), the Timing system dropdown on Network locks to prevent accidental mode switches mid-session. Click Disconnect next to the dropdown to unlock it and switch to a different timing system.">
+	<meta itemprop="wordCount" content="779">
 	<meta name="twitter:card" content="summary">
 	<meta name="twitter:title" content="RotorHazard &amp; LapRF 8-Way">
-	<meta name="twitter:description" content="Pilots and clubs who already own a RotorHazard timer or an ImmersionRC LapRF 8-Way puck can run the SlapRF Timing Application as a modern practice and race control interface without building new hardware.
-Note RotorHazard and LapRF 8-Way operate as single Start / Finish multi-pilot receivers for up to 8 simultaneous channels. Multi-gate section split timing (S1, S2, S3) requires DIY SlapRF Gate Hardware.">
+	<meta name="twitter:description" content="Connect the SlapRF App to existing RotorHazard or ImmersionRC LapRF 8-Way hardware over LAN or USB without building new timers.
+Choose Your Mode Open Network in the native SlapRF desktop or Android app and select your hardware from the Timing system dropdown:
+Dropdown Option Connection Hardware &amp; When to Choose It LapRF 8-Way (Network) Ethernet LAN (TCP :5403) ImmersionRC LapRF 8-Way puck plugged into a field router or network switch. LapRF 8-Way (USB) USB CDC serial (115200 baud) ImmersionRC LapRF 8-Way puck plugged directly into your phone or computer over USB (no router or IP setup). RotorHazard (Network) Wi-Fi or Ethernet (HTTP / Socket.IO :5000) Complete RotorHazard server (Raspberry Pi &#43; RX5808 shield) on the local network. RotorHazard (USB) USB serial (115200 or 921600 baud, API 36) Standalone RotorHazard RX5808 node board (ESP32-C5, STM32, Arduino, or RP2040) plugged directly into USB with no Raspberry Pi. Note While a timer is connected (or connecting), the Timing system dropdown on Network locks to prevent accidental mode switches mid-session. Click Disconnect next to the dropdown to unlock it and switch to a different timing system.">
 
     <link rel="preload" href="/docs/css/compiled/main.min.16c3012035c5f2ba195559bbf162a0209250d94a66761e5d575d845d882eb111.css" as="style" integrity="sha256-FsMBIDXF8roZVVm78WKgIJJQ2Upmdh5dV12EXYgusRE=" />
     <link href="/docs/css/compiled/main.min.16c3012035c5f2ba195559bbf162a0209250d94a66761e5d575d845d882eb111.css" rel="stylesheet" integrity="sha256-FsMBIDXF8roZVVm78WKgIJJQ2Upmdh5dV12EXYgusRE=" />
@@ -288,6 +324,12 @@ Note RotorHazard and LapRF 8-Way operate as single Start / Finish multi-pilot re
       class='hx:flex hx:flex-col hx:gap-1 hx:relative hx:before:absolute hx:before:inset-y-1 hx:before:w-px hx:before:bg-gray-200 hx:before:content-[""] hx:dark:before:bg-neutral-800 hx:ltr:pl-3 hx:ltr:before:left-0 hx:rtl:pr-3 hx:rtl:before:right-0 hx:ltr:ml-3 hx:rtl:mr-3'
     ><li>
               <a
+                href="#choose-your-mode"
+                class="hx:flex hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [word-break:break-word] hx:cursor-pointer [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:contrast-more:border hx:gap-2 hx:before:opacity-25 hx:before:content-['#'] hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:text-gray-900 hx:contrast-more:dark:text-gray-50 hx:contrast-more:border-transparent hx:contrast-more:hover:border-gray-900 hx:contrast-more:dark:hover:border-gray-50"
+              >Choose Your Mode</a>
+            </li>
+          <li>
+              <a
                 href="#rotorhazard-setup"
                 class="hx:flex hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [word-break:break-word] hx:cursor-pointer [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:contrast-more:border hx:gap-2 hx:before:opacity-25 hx:before:content-['#'] hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:text-gray-900 hx:contrast-more:dark:text-gray-50 hx:contrast-more:border-transparent hx:contrast-more:hover:border-gray-900 hx:contrast-more:dark:hover:border-gray-50"
               >RotorHazard Setup</a>
@@ -297,6 +339,12 @@ Note RotorHazard and LapRF 8-Way operate as single Start / Finish multi-pilot re
                 href="#laprf-8-way-setup"
                 class="hx:flex hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [word-break:break-word] hx:cursor-pointer [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:contrast-more:border hx:gap-2 hx:before:opacity-25 hx:before:content-['#'] hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:text-gray-900 hx:contrast-more:dark:text-gray-50 hx:contrast-more:border-transparent hx:contrast-more:hover:border-gray-900 hx:contrast-more:dark:hover:border-gray-50"
               >LapRF 8-Way Setup</a>
+            </li>
+          <li>
+              <a
+                href="#multi-unit-courses--section-splits"
+                class="hx:flex hx:rounded-sm hx:px-2 hx:py-1.5 hx:text-sm hx:transition-colors [word-break:break-word] hx:cursor-pointer [-webkit-tap-highlight-color:transparent] [-webkit-touch-callout:none] hx:contrast-more:border hx:gap-2 hx:before:opacity-25 hx:before:content-['#'] hx:text-gray-500 hx:hover:bg-gray-100 hx:hover:text-gray-900 hx:dark:text-neutral-400 hx:dark:hover:bg-primary-100/5 hx:dark:hover:text-gray-50 hx:contrast-more:text-gray-900 hx:contrast-more:dark:text-gray-50 hx:contrast-more:border-transparent hx:contrast-more:hover:border-gray-900 hx:contrast-more:dark:hover:border-gray-50"
+              >Multi-Unit Courses &amp; Section Splits</a>
             </li>
           <li>
               <a
@@ -640,19 +688,11 @@ Note RotorHazard and LapRF 8-Way operate as single Start / Finish multi-pilot re
     <div class="hextra-scrollbar hx:sticky hx:top-[var(--hextra-navbar-height)] hx:overflow-y-auto hx:pr-4 hx:pt-6 hx:pb-8 hx:text-sm [hyphens:auto] hx:max-h-[calc(100vh-var(--hextra-navbar-height)-env(safe-area-inset-bottom))] hx:ltr:-mr-4 hx:rtl:-ml-4">
       <p class="hx:mb-4 hx:font-semibold hx:tracking-tight">On this page</p><ul>
       <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
+        <a class="hx:font-medium hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#choose-your-mode">Choose Your Mode
+        </a>
+      </li>
+      <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
         <a class="hx:font-medium hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#rotorhazard-setup">RotorHazard Setup
-        </a>
-      </li>
-      <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
-        <a class="hx:ltr:pl-4 hx:rtl:pr-4 hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#select-rotorhazard">Select RotorHazard
-        </a>
-      </li>
-      <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
-        <a class="hx:ltr:pl-4 hx:rtl:pr-4 hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#connect-server">Connect Server
-        </a>
-      </li>
-      <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
-        <a class="hx:ltr:pl-4 hx:rtl:pr-4 hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#sync--fly">Sync &amp; Fly
         </a>
       </li>
       <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
@@ -660,15 +700,7 @@ Note RotorHazard and LapRF 8-Way operate as single Start / Finish multi-pilot re
         </a>
       </li>
       <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
-        <a class="hx:ltr:pl-4 hx:rtl:pr-4 hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#select-laprf">Select LapRF
-        </a>
-      </li>
-      <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
-        <a class="hx:ltr:pl-4 hx:rtl:pr-4 hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#connect-via-lan">Connect via LAN
-        </a>
-      </li>
-      <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
-        <a class="hx:ltr:pl-4 hx:rtl:pr-4 hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#sync-slots">Sync Slots
+        <a class="hx:font-medium hx:inline-block hx:rounded-sm hx:text-gray-500 hx:hover:text-gray-900 hx:dark:text-gray-400 hx:dark:hover:text-gray-300 hx:contrast-more:text-gray-900 hx:contrast-more:underline hx:contrast-more:dark:text-gray-50 hx:w-full hx:wrap-break-word hx:hextra-focus-visible-inset" href="#multi-unit-courses--section-splits">Multi-Unit Courses &amp; Section Splits
         </a>
       </li>
       <li class="hx:my-2 hx:scroll-my-6 hx:scroll-py-6">
@@ -693,37 +725,97 @@ Note RotorHazard and LapRF 8-Way operate as single Start / Finish multi-pilot re
             </div>
           
           
-          <p>Pilots and clubs who already own a RotorHazard timer or an ImmersionRC LapRF 8-Way puck can run the SlapRF Timing Application as a modern practice and race control interface without building new hardware.</p>
+          <p>Connect the SlapRF App to existing RotorHazard or ImmersionRC LapRF 8-Way hardware over LAN or USB without building new timers.</p>
+<h2 data-hextra-search-id="choose-your-mode">Choose Your Mode<span class="hx:absolute hx:-mt-20" id="choose-your-mode"></span>
+    <a href="#choose-your-mode" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>Open <strong>Network</strong> in the native SlapRF desktop or Android app and select your hardware from the <strong>Timing system</strong> dropdown:</p>
+<table>
+	<thead>
+			<tr>
+					<th style="text-align: left">Dropdown Option</th>
+					<th style="text-align: left">Connection</th>
+					<th style="text-align: left">Hardware &amp; When to Choose It</th>
+			</tr>
+	</thead>
+	<tbody>
+			<tr>
+					<td style="text-align: left"><strong>LapRF 8-Way (Network)</strong></td>
+					<td style="text-align: left">Ethernet LAN (<code>TCP :5403</code>)</td>
+					<td style="text-align: left">ImmersionRC LapRF 8-Way puck plugged into a field router or network switch.</td>
+			</tr>
+			<tr>
+					<td style="text-align: left"><strong>LapRF 8-Way (USB)</strong></td>
+					<td style="text-align: left">USB CDC serial (<code>115200</code> baud)</td>
+					<td style="text-align: left">ImmersionRC LapRF 8-Way puck plugged directly into your phone or computer over USB (no router or IP setup).</td>
+			</tr>
+			<tr>
+					<td style="text-align: left"><strong>RotorHazard (Network)</strong></td>
+					<td style="text-align: left">Wi-Fi or Ethernet (<code>HTTP</code> / <code>Socket.IO</code> <code>:5000</code>)</td>
+					<td style="text-align: left">Complete RotorHazard server (Raspberry Pi + RX5808 shield) on the local network.</td>
+			</tr>
+			<tr>
+					<td style="text-align: left"><strong>RotorHazard (USB)</strong></td>
+					<td style="text-align: left">USB serial (<code>115200</code> or <code>921600</code> baud, <code>API 36</code>)</td>
+					<td style="text-align: left">Standalone RotorHazard RX5808 node board (ESP32-C5, STM32, Arduino, or RP2040) plugged directly into USB with no Raspberry Pi.</td>
+			</tr>
+	</tbody>
+</table>
 <div
   data-alert="note" class="hextra-alert"
 >
   <p class="hextra-alert-title"><svg height=16px class="hextra-alert-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg><span class="hextra-alert-title-text">Note</span>
   </p>
 
-  <div class="hextra-alert-content"><p>RotorHazard and LapRF 8-Way operate as single Start / Finish multi-pilot receivers for up to 8 simultaneous channels. Multi-gate section split timing (<code>S1</code>, <code>S2</code>, <code>S3</code>) requires DIY SlapRF Gate Hardware.</p></div>
+  <div class="hextra-alert-content"><p>While a timer is connected (or connecting), the <strong>Timing system</strong> dropdown on <strong>Network</strong> locks to prevent accidental mode switches mid-session. Click <strong>Disconnect</strong> next to the dropdown to unlock it and switch to a different timing system.</p></div>
 </div>
 <h2 data-hextra-search-id="rotorhazard-setup">RotorHazard Setup<span class="hx:absolute hx:-mt-20" id="rotorhazard-setup"></span>
-    <a href="#rotorhazard-setup" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>SlapRF connects to an existing RotorHazard server over Wi-Fi or Ethernet (<code>HTTP</code> / <code>Socket.IO</code>) or directly to RotorHazard serial nodes over USB.</p>
-<div class="hextra-steps hx:ml-4 hx:mb-12 hx:ltr:border-l hx:rtl:border-r hx:border-gray-200 hx:ltr:pl-6 hx:rtl:pr-6 hx:dark:border-neutral-800 [counter-reset:step]">
-<h3 data-hextra-search-id="select-rotorhazard">Select RotorHazard<span class="hx:absolute hx:-mt-20" id="select-rotorhazard"></span>
-    <a href="#select-rotorhazard" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Launch the native SlapRF desktop binary or Android app, open <strong>Settings -&gt; Hardware</strong>, and select <strong>RotorHazard</strong>.</p>
-<h3 data-hextra-search-id="connect-server">Connect Server<span class="hx:absolute hx:-mt-20" id="connect-server"></span>
-    <a href="#connect-server" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Open <strong>Network</strong> and click <strong>Scan LAN</strong> to discover RotorHazard servers on port <code>5000</code>, or enter the server address manually (such as <code>192.168.1.50:5000</code>) and click <strong>Connect</strong>.</p>
-<h3 data-hextra-search-id="sync--fly">Sync &amp; Fly<span class="hx:absolute hx:-mt-20" id="sync--fly"></span>
-    <a href="#sync--fly" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Assign pilot VTX channels in <strong>Pilots</strong> (or inside a <strong>Race</strong> heat), click <strong>Sync</strong> on the RotorHazard card if needed, and run <strong>Practice</strong> or <strong>Race Control</strong> as usual.</p>
+    <a href="#rotorhazard-setup" class="subheading-anchor" aria-label="Permalink for this section"></a></h2>
+  
+  
+<div class="hextra-scrollbar hx:overflow-x-auto hx:overflow-y-hidden hx:overscroll-x-contain">
+  <div class="hx:mt-4 hx:flex hx:w-max hx:min-w-full hx:border-b hx:border-gray-200 hx:pb-px hx:dark:border-neutral-800" role="tablist"><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-00-0" role="tab" type="button" aria-controls="tabs-panel-tabs-00-0" aria-selected="true" tabindex="0" data-state="selected"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>RotorHazard (Network)</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-00-1" role="tab" type="button" aria-controls="tabs-panel-tabs-00-1" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>RotorHazard (USB)</span></span></button></div>
 </div>
+<div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-00-0" role="tabpanel" aria-labelledby="tabs-tab-tabs-00-0" aria-hidden="false" tabindex="0" data-state="selected"><h3 data-hextra-search-id="rotorhazard-network">RotorHazard (Network)<span class="hx:absolute hx:-mt-20" id="rotorhazard-network"></span>
+    <a href="#rotorhazard-network" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Use <strong>RotorHazard (Network)</strong> when your RotorHazard timer runs a Raspberry Pi host on Wi-Fi or Ethernet.</p>
+<ol>
+<li>Open <strong>Network</strong> and select <strong>RotorHazard (Network)</strong> in <strong>Timing system</strong>.</li>
+<li>Click <strong>Connect</strong> next to the dropdown to scan the LAN for RotorHazard servers on port <code>5000</code>, or enter the server IP and port manually (for example, <code>192.168.1.101</code> and <code>5000</code>).</li>
+<li>When prompted by the sign-in dialog, enter the RotorHazard admin username and password (default <code>admin</code> / <code>rotorhazard</code>) and click <strong>Sign in &amp; Connect</strong>.</li>
+<li>Verify the device card reports <code>Admin</code>, live <code>0</code>-<code>255</code> node RSSI bars, and clock sync. Assign pilot VTX channels in <strong>Pilots</strong> (or in a <strong>Race</strong> heat) and fly <strong>Practice</strong> or <strong>Races</strong>.</li>
+</ol></div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-00-1" role="tabpanel" aria-labelledby="tabs-tab-tabs-00-1" aria-hidden="true"><h3 data-hextra-search-id="rotorhazard-usb">RotorHazard (USB)<span class="hx:absolute hx:-mt-20" id="rotorhazard-usb"></span>
+    <a href="#rotorhazard-usb" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Use <strong>RotorHazard (USB)</strong> when plugging a standalone RotorHazard serial node board (binary serial <code>API 36</code>, 1 to 8 RX5808 seats) directly into your computer or Android phone over USB-C.</p>
+<ol>
+<li>Plug the RotorHazard node board into your host with a USB data cable.</li>
+<li>Open <strong>Network</strong> and select <strong>RotorHazard (USB)</strong> in <strong>Timing system</strong>.</li>
+<li>Click <strong>Connect USB</strong> next to the dropdown, leave <strong>Baud Rate</strong> on <code>Auto (115200 / 921600)</code> (or select <code>115200</code> / <code>921600</code>), and select the serial port.</li>
+<li>Confirm the device card reports <code>Connected</code>, node count, serial RTT, and live <code>0</code>-<code>255</code> RSSI bars. You can also run <code>5180</code>-<code>5945 MHz</code> spectrum sweeps and waterfall plots on <strong>Debug</strong>.</li>
+</ol></div></div>
+
 <h2 data-hextra-search-id="laprf-8-way-setup">LapRF 8-Way Setup<span class="hx:absolute hx:-mt-20" id="laprf-8-way-setup"></span>
-    <a href="#laprf-8-way-setup" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>SlapRF communicates natively with the ImmersionRC LapRF 8-Way puck over Ethernet or Wi-Fi LAN using the binary LapRF TCP protocol (<code>port 5403</code>).</p>
-<div class="hextra-steps hx:ml-4 hx:mb-12 hx:ltr:border-l hx:rtl:border-r hx:border-gray-200 hx:ltr:pl-6 hx:rtl:pr-6 hx:dark:border-neutral-800 [counter-reset:step]">
-<h3 data-hextra-search-id="select-laprf">Select LapRF<span class="hx:absolute hx:-mt-20" id="select-laprf"></span>
-    <a href="#select-laprf" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Open <strong>Settings -&gt; Hardware</strong> in the native SlapRF app and choose <strong>ImmersionRC LapRF 8-Way</strong>.</p>
-<h3 data-hextra-search-id="connect-via-lan">Connect via LAN<span class="hx:absolute hx:-mt-20" id="connect-via-lan"></span>
-    <a href="#connect-via-lan" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Connect your LapRF 8-Way to the same router or switch as your host device. Open <strong>Network</strong>, click <strong>Scan LAN</strong> to find pucks on TCP port <code>5403</code> (or enter <code>192.168.1.20:5403</code> manually), and click <strong>Connect</strong>.</p>
-<h3 data-hextra-search-id="sync-slots">Sync Slots<span class="hx:absolute hx:-mt-20" id="sync-slots"></span>
-    <a href="#sync-slots" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Confirm all 8 receiver slots report online status and pack voltage. SlapRF pushes active pilot frequencies and gain/threshold settings automatically whenever a Practice session or Race heat starts.</p>
+    <a href="#laprf-8-way-setup" class="subheading-anchor" aria-label="Permalink for this section"></a></h2>
+  
+  
+<div class="hextra-scrollbar hx:overflow-x-auto hx:overflow-y-hidden hx:overscroll-x-contain">
+  <div class="hx:mt-4 hx:flex hx:w-max hx:min-w-full hx:border-b hx:border-gray-200 hx:pb-px hx:dark:border-neutral-800" role="tablist"><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-01-0" role="tab" type="button" aria-controls="tabs-panel-tabs-01-0" aria-selected="true" tabindex="0" data-state="selected"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>LapRF 8-Way (Network)</span></span></button><button class="hextra-tabs-toggle hx:cursor-pointer hx:data-[state=selected]:border-primary-500 hx:data-[state=selected]:text-primary-600 hx:data-[state=selected]:dark:border-primary-500 hx:data-[state=selected]:dark:text-primary-600 hx:mr-2 hx:rounded-t hx:p-2 hx:font-medium hx:leading-5 hx:transition-colors hx:-mb-0.5 hx:select-none hx:border-b-2 hx:border-transparent hx:text-gray-600 hx:hover:border-gray-200 hx:hover:text-black hx:dark:text-gray-200 hx:dark:hover:border-neutral-800 hx:dark:hover:text-white hx:hextra-focus-visible-inset" id="tabs-tab-tabs-01-1" role="tab" type="button" aria-controls="tabs-panel-tabs-01-1" aria-selected="false" tabindex="-1"><span class="hx:inline-flex hx:items-center hx:gap-1.5"><span>LapRF 8-Way (USB)</span></span></button></div>
 </div>
+<div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-01-0" role="tabpanel" aria-labelledby="tabs-tab-tabs-01-0" aria-hidden="false" tabindex="0" data-state="selected"><h3 data-hextra-search-id="laprf-8-way-network">LapRF 8-Way (Network)<span class="hx:absolute hx:-mt-20" id="laprf-8-way-network"></span>
+    <a href="#laprf-8-way-network" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Use <strong>LapRF 8-Way (Network)</strong> when your LapRF 8-Way puck connects to the same Wi-Fi router or Ethernet switch as your laptop, Raspberry Pi, or phone.</p>
+<ol>
+<li>Open <strong>Network</strong> and select <strong>LapRF 8-Way (Network)</strong> in <strong>Timing system</strong>.</li>
+<li>Click <strong>Connect</strong> next to the dropdown to discover powered-on pucks on <code>TCP :5403</code>, or enter the IP address (default <code>192.168.1.2</code>) and port (<code>5403</code>) manually.</li>
+<li>Confirm the timer card shows supply voltage, <code>Synced</code> clock offset, and live <code>300</code>-<code>3500</code> RSSI bars across the 8 receiver slots. SlapRF pushes pilot frequencies and thresholds automatically when a session or heat starts.</li>
+</ol></div><div class="hextra-tabs-panel hx:rounded-sm hx:pt-6 hx:hidden hx:data-[state=selected]:block" id="tabs-panel-tabs-01-1" role="tabpanel" aria-labelledby="tabs-tab-tabs-01-1" aria-hidden="true"><h3 data-hextra-search-id="laprf-8-way-usb">LapRF 8-Way (USB)<span class="hx:absolute hx:-mt-20" id="laprf-8-way-usb"></span>
+    <a href="#laprf-8-way-usb" class="subheading-anchor" aria-label="Permalink for this section"></a></h3><p>Use <strong>LapRF 8-Way (USB)</strong> when plugging a LapRF 8-Way puck directly into your laptop, Raspberry Pi, or Android phone over USB (<code>115200</code> baud CDC serial). Note that the LapRF 8-Way still requires external <code>10 V</code>-<code>25 V</code> DC pack power on its XT60 input to power its <code>5.8 GHz</code> RF receivers.</p>
+<ol>
+<li>Power the LapRF 8-Way from a LiPo battery via XT60 and connect its USB port to your host device.</li>
+<li>Open <strong>Network</strong> and select <strong>LapRF 8-Way (USB)</strong> in <strong>Timing system</strong>.</li>
+<li>Click <strong>Connect USB</strong> next to the dropdown and select the LapRF serial port.</li>
+<li>Confirm the timer card reports supply voltage, <code>Synced</code> clock offset, and live 8-slot RSSI readings.</li>
+</ol></div></div>
+
+<h2 data-hextra-search-id="multi-unit-courses--section-splits">Multi-Unit Courses &amp; Section Splits<span class="hx:absolute hx:-mt-20" id="multi-unit-courses--section-splits"></span>
+    <a href="#multi-unit-courses--section-splits" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>Most clubs place one 8-channel RotorHazard or LapRF 8-Way timer at the Start / Finish gate. If you connect two or more RotorHazard or LapRF timers at once, open your <strong>Practice</strong> session or <strong>Race</strong> workspace, select the <strong>Track</strong> tab, and drag each unit onto the track line in flight order to record <code>S1</code>, <code>S2</code>, and <code>S3</code> section splits. For cable-free split gates across a field without running LAN cables or Raspberry Pis to each gate, use battery-powered <a href="../hardware/parts-and-assembly">SlapRF DIY Timers</a>.</p>
 <h2 data-hextra-search-id="laprf-8-way-emulator">LapRF 8-Way Emulator<span class="hx:absolute hx:-mt-20" id="laprf-8-way-emulator"></span>
-    <a href="#laprf-8-way-emulator" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>When running on Windows, macOS, or Linux, SlapRF can also expose a local ImmersionRC LapRF 8-Way <code>:5403</code> TCP emulator so any external LapRF-compatible timing client or broadcast overlay can ingest live gate crossings from SlapRF in real time.</p>
+    <a href="#laprf-8-way-emulator" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>When timing with SlapRF DIY hardware or RotorHazard on Windows, macOS, Linux, or Android, open <strong>Settings -&gt; LapRF 8-Way emulator</strong> to host a local ImmersionRC LapRF 8-Way <code>TCP :5403</code> server. External LapRF-compatible race software (such as LiveTime) and broadcast overlays can connect to port <code>5403</code> to receive live crossings from SlapRF in real time. (The emulator hides automatically while <strong>LapRF 8-Way (Network)</strong> or <strong>LapRF 8-Way (USB)</strong> is active so port <code>5403</code> never loops back into itself.)</p>
 
           
         </div>
@@ -781,7 +873,7 @@ Note RotorHazard and LapRF 8-Way operate as single Start / Finish multi-pilot re
     </div>
   </dialog>
     <script defer src="/docs/js/main.min.302eb8f391260394614f8841a9a007a2bfe3535e53755065fa3fb3c43fa94027.js" integrity="sha256-MC6485EmA5RhT4hBqaAHor/jU15TdVBl&#43;j&#43;zxD&#43;pQCc="></script>
-<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.2c1537981e0ab2fc444b86c98faa61eadbfe396f138812fa2d9bddf319dab8c3.js" integrity="sha256-LBU3mB4KsvxES4bJj6ph6tv&#43;OW8TiBL6LZvd8xnauMM="></script>
+<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.44f476df67fb7e651904125c80551a5cbb6aeb03485f1f8145c55571e0f80f78.js" integrity="sha256-RPR232f7fmUZBBJcgFUaXLtq6wNIXx&#43;BRcVVceD4D3g="></script>
     <script defer src="/docs/en.search-dialog.min.fda123910557b5b3a328696105af51f85abc3cfc6784387c49b11b5b857b256f.js" integrity="sha256-/aEjkQVXtbOjKGlhBa9R&#43;Fq8PPxnhDh8SbEbW4V7JW8="></script>
   </body>
 </html>

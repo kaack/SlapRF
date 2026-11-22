@@ -5,8 +5,7 @@
   <link rel="icon" type="image/svg+xml" href="/docs/favicon.svg" id="favicon-svg" />
 <title>API Reference – SlapRF Docs</title>
   <meta name="description" content="SlapRF Portable and the SlapRF Android LAN host expose a versioned HTTP REST API (/v1/...) and real-time WebSocket streams (/v1/ws/...) on port 8090 for building custom OBS stream overlays, LED gate controllers, race scoreboards, and automation scripts.
-REST API (OpenAPI 3.1.0) Resource-oriented /v1/* endpoints across system state, pilots, track gates, practice sessions, race sessions, hardware links, simulator controls, and storage.
-Interactive Reference: Browse REST API Docs OpenAPI Specification: Download openapi.yaml Stream API (AsyncAPI 3.0.0) Real-time WebSocket streams (/v1/ws/*) delivering JSON event envelopes (crossing, lap, filtered, race, practice, config) and 50 Hz binary RSSI telemetry batches." /><link rel="canonical" href="/docs/reference/api-reference/" itemprop="url" />
+REST API (OpenAPI 3.1.0) Resource-oriented /v1/* endpoints across system state, pilots, hardware timers, practice sessions (including per-session tracks and timing rules), race sessions (including per-race tracks and timing rules), hardware links, simulator controls, and storage." /><link rel="canonical" href="/docs/reference/api-reference/" itemprop="url" />
 
 <meta property="og:title" content="API Reference">
 <meta
@@ -26,14 +25,12 @@ Interactive Reference: Browse REST API Docs OpenAPI Specification: Download open
 
 	<meta itemprop="name" content="API Reference">
 	<meta itemprop="description" content="SlapRF Portable and the SlapRF Android LAN host expose a versioned HTTP REST API (/v1/...) and real-time WebSocket streams (/v1/ws/...) on port 8090 for building custom OBS stream overlays, LED gate controllers, race scoreboards, and automation scripts.
-REST API (OpenAPI 3.1.0) Resource-oriented /v1/* endpoints across system state, pilots, track gates, practice sessions, race sessions, hardware links, simulator controls, and storage.
-Interactive Reference: Browse REST API Docs OpenAPI Specification: Download openapi.yaml Stream API (AsyncAPI 3.0.0) Real-time WebSocket streams (/v1/ws/*) delivering JSON event envelopes (crossing, lap, filtered, race, practice, config) and 50 Hz binary RSSI telemetry batches.">
-	<meta itemprop="wordCount" content="658">
+REST API (OpenAPI 3.1.0) Resource-oriented /v1/* endpoints across system state, pilots, hardware timers, practice sessions (including per-session tracks and timing rules), race sessions (including per-race tracks and timing rules), hardware links, simulator controls, and storage.">
+	<meta itemprop="wordCount" content="670">
 	<meta name="twitter:card" content="summary">
 	<meta name="twitter:title" content="API Reference">
 	<meta name="twitter:description" content="SlapRF Portable and the SlapRF Android LAN host expose a versioned HTTP REST API (/v1/...) and real-time WebSocket streams (/v1/ws/...) on port 8090 for building custom OBS stream overlays, LED gate controllers, race scoreboards, and automation scripts.
-REST API (OpenAPI 3.1.0) Resource-oriented /v1/* endpoints across system state, pilots, track gates, practice sessions, race sessions, hardware links, simulator controls, and storage.
-Interactive Reference: Browse REST API Docs OpenAPI Specification: Download openapi.yaml Stream API (AsyncAPI 3.0.0) Real-time WebSocket streams (/v1/ws/*) delivering JSON event envelopes (crossing, lap, filtered, race, practice, config) and 50 Hz binary RSSI telemetry batches.">
+REST API (OpenAPI 3.1.0) Resource-oriented /v1/* endpoints across system state, pilots, hardware timers, practice sessions (including per-session tracks and timing rules), race sessions (including per-race tracks and timing rules), hardware links, simulator controls, and storage.">
 
     <link rel="preload" href="/docs/css/compiled/main.min.16c3012035c5f2ba195559bbf162a0209250d94a66761e5d575d845d882eb111.css" as="style" integrity="sha256-FsMBIDXF8roZVVm78WKgIJJQ2Upmdh5dV12EXYgusRE=" />
     <link href="/docs/css/compiled/main.min.16c3012035c5f2ba195559bbf162a0209250d94a66761e5d575d845d882eb111.css" rel="stylesheet" integrity="sha256-FsMBIDXF8roZVVm78WKgIJJQ2Upmdh5dV12EXYgusRE=" />
@@ -694,7 +691,7 @@ Interactive Reference: Browse REST API Docs OpenAPI Specification: Download open
           
           <p>SlapRF Portable and the SlapRF Android LAN host expose a versioned HTTP REST API (<code>/v1/...</code>) and real-time WebSocket streams (<code>/v1/ws/...</code>) on port <code>8090</code> for building custom OBS stream overlays, LED gate controllers, race scoreboards, and automation scripts.</p>
 <h2 data-hextra-search-id="rest-api-openapi-310">REST API (OpenAPI 3.1.0)<span class="hx:absolute hx:-mt-20" id="rest-api-openapi-310"></span>
-    <a href="#rest-api-openapi-310" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>Resource-oriented <code>/v1/*</code> endpoints across system state, pilots, track gates, practice sessions, race sessions, hardware links, simulator controls, and storage.</p>
+    <a href="#rest-api-openapi-310" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>Resource-oriented <code>/v1/*</code> endpoints across system state, pilots, hardware timers, practice sessions (including per-session tracks and timing rules), race sessions (including per-race tracks and timing rules), hardware links, simulator controls, and storage.</p>
 <ul>
 <li><strong>Interactive Reference</strong>: <a href="/docs/reference/api-reference/rest/">Browse REST API Docs</a></li>
 <li><strong>OpenAPI Specification</strong>: <a href="/docs/specs/openapi.yaml">Download openapi.yaml</a></li>
@@ -721,7 +718,7 @@ Interactive Reference: Browse REST API Docs OpenAPI Specification: Download open
   </button>
 </div>
 </div>
-<p>If Basic Auth is enabled under <strong>Settings -&gt; Security</strong>, pass a standard <code>Authorization: Basic &lt;base64(user:pass)&gt;</code> header on REST requests (or create an authenticated session check via <code>POST /v1/auth/sessions</code>).</p>
+<p>If Basic Auth is enabled under <strong>Settings -&gt; Authentication</strong>, pass a standard <code>Authorization: Basic &lt;base64(user:pass)&gt;</code> header on REST requests (or create an authenticated session check via <code>POST /v1/auth/sessions</code>).</p>
 <h2 data-hextra-search-id="quick-start-rest-examples">Quick-Start REST Examples<span class="hx:absolute hx:-mt-20" id="quick-start-rest-examples"></span>
     <a href="#quick-start-rest-examples" class="subheading-anchor" aria-label="Permalink for this section"></a></h2><p>Fetch active state and print pilot callsigns and best laps:</p>
 <div class="hextra-code-block hx:relative hx:mt-6 hx:first:mt-0 hx:group/code">
@@ -948,7 +945,7 @@ Interactive Reference: Browse REST API Docs OpenAPI Specification: Download open
     </div>
   </dialog>
     <script defer src="/docs/js/main.min.302eb8f391260394614f8841a9a007a2bfe3535e53755065fa3fb3c43fa94027.js" integrity="sha256-MC6485EmA5RhT4hBqaAHor/jU15TdVBl&#43;j&#43;zxD&#43;pQCc="></script>
-<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.2c1537981e0ab2fc444b86c98faa61eadbfe396f138812fa2d9bddf319dab8c3.js" integrity="sha256-LBU3mB4KsvxES4bJj6ph6tv&#43;OW8TiBL6LZvd8xnauMM="></script>
+<script defer src="/docs/js/flexsearch.433e941a8a573ebb9931fc16fc75266ab6b93f569ac2fb4f3dc66882e0416f4c.js" integrity="sha256-Qz6UGopXPruZMfwW/HUmara5P1aawvtPPcZoguBBb0w=" crossorigin="anonymous"></script><script defer src="/docs/en.search.min.44f476df67fb7e651904125c80551a5cbb6aeb03485f1f8145c55571e0f80f78.js" integrity="sha256-RPR232f7fmUZBBJcgFUaXLtq6wNIXx&#43;BRcVVceD4D3g="></script>
     <script defer src="/docs/en.search-dialog.min.fda123910557b5b3a328696105af51f85abc3cfc6784387c49b11b5b857b256f.js" integrity="sha256-/aEjkQVXtbOjKGlhBa9R&#43;Fq8PPxnhDh8SbEbW4V7JW8="></script>
   </body>
 </html>
