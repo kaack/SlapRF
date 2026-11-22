@@ -5047,6 +5047,7 @@ html[data-theme="light"] .flasher-hub-link .segmented button.is-active {
   margin: 14px 12px 5px;
 }
 
+.gate-unassigned-tray.sim-pit-tray,
 .sim-pit-tray {
   margin: 0 12px;
   height: 44px;
@@ -5055,23 +5056,28 @@ html[data-theme="light"] .flasher-hub-link .segmented button.is-active {
   padding: 0 14px;
   box-sizing: border-box;
   display: flex;
+  flex-direction: row;
   align-items: center;
+  justify-content: flex-start;
   flex-wrap: nowrap;
   overflow: hidden;
   cursor: default;
 }
 
+.gate-unassigned-list.sim-pit-list,
 .sim-pit-list {
   display: flex;
   align-items: center;
   flex-wrap: nowrap;
   gap: 8px;
   width: 100%;
-  height: 32px;
+  height: 100%;
+  min-height: 0;
+  padding: 0;
   overflow-x: auto;
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
-  scrollbar-width: thin;
+  scrollbar-width: none;
 }
 
 .sim-pit-tray .gate-unassigned-empty-chip {

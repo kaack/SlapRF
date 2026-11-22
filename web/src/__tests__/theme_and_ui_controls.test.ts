@@ -727,5 +727,22 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
     const sigChanRect = pillProbe.querySelector<HTMLElement>("#test-sig-chan")!.getBoundingClientRect();
     expect(Math.abs(sigNameRect.top - sigChanRect.top) < 0.5).toBe(true);
     expect(Math.abs(sigNameRect.bottom - sigChanRect.bottom) < 0.5).toBe(true);
+
+    // Verify Simulator Pit Bench & Battery Swap Lane pill is vertically centered inside .sim-pit-tray
+    const pitProbe = mountHtml(`
+      <div class="gate-unassigned-tray sim-pit-tray" id="test-pit-tray">
+        <div class="gate-unassigned-list sim-pit-list">
+          <div class="sim-pit-pill" id="test-pit-pill" style="--c:#38bdf8">
+            <span class="sim-drone-dot"></span>
+            <span class="sim-drone-callsign">FAERRY</span>
+          </div>
+        </div>
+      </div>
+    `);
+    const trayRect = pitProbe.querySelector<HTMLElement>("#test-pit-tray")!.getBoundingClientRect();
+    const pitPillRect = pitProbe.querySelector<HTMLElement>("#test-pit-pill")!.getBoundingClientRect();
+    const trayCenterY = (trayRect.top + trayRect.bottom) * 0.5;
+    const pillCenterY = (pitPillRect.top + pitPillRect.bottom) * 0.5;
+    expect(Math.abs(trayCenterY - pillCenterY) < 0.5).toBe(true);
   });
 });
