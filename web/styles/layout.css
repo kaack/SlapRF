@@ -1467,25 +1467,30 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     overflow: hidden;
   }
 
+  .app > .sidebar:has(.mobile-more-tab-btn.has-secondary-route) .sidebar-nav-shell,
+  .app > .sidebar:has(.mobile-more-tab-btn.has-secondary-route) .nav {
+    overflow: visible;
+  }
+
   .sidebar .nav > .mobile-more-tab-btn .mobile-more-edge-cue {
     position: absolute;
-    top: 6px;
-    right: 4px;
-    width: 12px;
-    height: 12px;
+    top: 50%;
+    right: -4px;
+    transform: translateY(-50%);
+    width: 16px;
+    height: 20px;
     display: flex;
     align-items: center;
     justify-content: center;
-    color: var(--text-3);
-    opacity: 0.85;
+    color: var(--text-2);
     pointer-events: none;
   }
   .sidebar .nav > .mobile-more-tab-btn .mobile-more-edge-cue svg,
   .sidebar .nav > .mobile-more-tab-btn.is-active .mobile-more-edge-cue svg {
-    width: 12px;
-    height: 12px;
-    flex: 0 0 12px;
-    color: var(--text-3);
+    width: 20px;
+    height: 20px;
+    flex: 0 0 20px;
+    color: var(--text-2);
   }
   .sidebar .nav > .mobile-more-tab-btn[aria-expanded="true"] .mobile-more-edge-cue svg {
     color: var(--accent);
@@ -1658,6 +1663,9 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .sidebar .nav > .mobile-more-tab-btn.has-secondary-route {
+    overflow: visible;
+  }
   .sidebar .nav > .nav-item.is-active {
     font-weight: 600;
   }
@@ -1712,8 +1720,7 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     white-space: nowrap;
   }
   .sidebar .nav > .mobile-more-tab-btn .mobile-more-edge-cue {
-    top: 3px;
-    right: 2px;
+    right: -6px;
   }
   .sidebar .nav > .nav-item > svg {
     display: block;

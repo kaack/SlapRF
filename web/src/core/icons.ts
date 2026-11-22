@@ -149,7 +149,7 @@ export const icons = {
     ),
   moreVertical: (s?: number) =>
     svg(
-      `<circle cx="12" cy="5" r="1.75" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.75" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.75" fill="currentColor" stroke="none"/>`,
+      `<circle cx="12" cy="5" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.7" fill="currentColor" stroke="none"/><circle cx="12" cy="19" r="1.7" fill="currentColor" stroke="none"/>`,
       s
     ),
   menu: (s?: number) => svg(`<path d="M4 6h16M4 12h16M4 18h16"/>`, s),
