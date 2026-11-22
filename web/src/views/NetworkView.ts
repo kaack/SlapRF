@@ -2502,7 +2502,7 @@ export class NetworkView extends Component {
                     <span class="debug-bar-fill" data-laprf-bar-fill="${idx}" style="width:${widthPct.toFixed(1)}%"></span>
                     ${
                       active
-                        ? `<span title="Threshold ${Math.round(thresh)}" style="position:absolute;top:-2px;bottom:-2px;left:${threshPct.toFixed(1)}%;width:2px;background:rgba(255,255,255,0.45);pointer-events:none"></span>`
+                        ? `<span class="net-bar-thresh-tick is-laprf" title="Threshold ${Math.round(thresh)}" style="left:${threshPct.toFixed(1)}%"></span>`
                         : ""
                     }
                   </div>
@@ -3061,8 +3061,8 @@ export class NetworkView extends Component {
                     <span class="debug-bar-fill" data-rh-bar-fill="${idx}" style="width:${widthPct.toFixed(1)}%"></span>
                     ${
                       active
-                        ? `<span title="Exit threshold ${Math.round(exitLvl)}" style="position:absolute;top:-2px;bottom:-2px;left:${exitPct.toFixed(1)}%;width:2px;background:rgba(250,204,21,0.65);pointer-events:none"></span>
-                           <span title="Enter threshold ${Math.round(enterLvl)}" style="position:absolute;top:-2px;bottom:-2px;left:${enterPct.toFixed(1)}%;width:2px;background:rgba(163,230,53,0.9);pointer-events:none"></span>
+                        ? `<span class="net-bar-thresh-tick is-rh-exit" title="Exit threshold ${Math.round(exitLvl)}" style="left:${exitPct.toFixed(1)}%"></span>
+                           <span class="net-bar-thresh-tick is-rh-enter" title="Enter threshold ${Math.round(enterLvl)}" style="left:${enterPct.toFixed(1)}%"></span>
                            <span class="net-node-crossing-tag mono" data-rh-bar-cross="${idx}" ${isCross ? "" : "hidden"}>${isCross ? `<span class="net-unit-desktop">CROSSING</span><span class="net-unit-mobile">XING</span>` : ""}</span>`
                         : ""
                     }
@@ -3344,8 +3344,8 @@ export class NetworkView extends Component {
                     <span class="debug-bar-fill" data-rh-bar-fill="${idx}" style="width:${widthPct.toFixed(1)}%"></span>
                     ${
                       active
-                        ? `<span title="Exit threshold ${Math.round(exitLvl)}" style="position:absolute;top:-2px;bottom:-2px;left:${exitPct.toFixed(1)}%;width:2px;background:rgba(250,204,21,0.65);pointer-events:none"></span>
-                           <span title="Enter threshold ${Math.round(enterLvl)}" style="position:absolute;top:-2px;bottom:-2px;left:${enterPct.toFixed(1)}%;width:2px;background:rgba(163,230,53,0.9);pointer-events:none"></span>
+                        ? `<span class="net-bar-thresh-tick is-rh-exit" title="Exit threshold ${Math.round(exitLvl)}" style="left:${exitPct.toFixed(1)}%"></span>
+                           <span class="net-bar-thresh-tick is-rh-enter" title="Enter threshold ${Math.round(enterLvl)}" style="left:${enterPct.toFixed(1)}%"></span>
                            <span class="net-node-crossing-tag mono" data-rh-bar-cross="${idx}" ${isCross ? "" : "hidden"}>${isCross ? `<span class="net-unit-desktop">CROSSING</span><span class="net-unit-mobile">XING</span>` : ""}</span>`
                         : ""
                     }
