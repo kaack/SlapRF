@@ -4906,10 +4906,12 @@ html[data-theme="light"] .flasher-hub-link .segmented button.is-active {
   color: #fbbf24;
 }
 
+.gate-track-scroll.sim-track-scroll,
 .sim-track-scroll {
   position: relative;
   padding: 8px 0 4px;
   overflow-y: hidden;
+  touch-action: pan-y;
 }
 
 /* 60 fps Flight Corridor strip right above the horizontal gate timeline */

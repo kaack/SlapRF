@@ -423,12 +423,11 @@ export class AppShell extends Component {
           cur.classList.contains("lap-ed-svg-wrap") ||
           cur.classList.contains("bkt-viewport") ||
           cur.classList.contains("fmt-viewport") ||
-          cur.classList.contains("net-mobile-graph") ||
           cur.classList.contains("track-canvas-viewport") ||
           cur.classList.contains("track-editor-canvas") ||
           cur.classList.contains("gate-track-scroll-shell") ||
-          cur.classList.contains("gate-track-scroll") ||
-          cur.classList.contains("gate-unassigned-list")
+          (cur.classList.contains("gate-track-scroll") && !cur.classList.contains("sim-track-scroll")) ||
+          (cur.classList.contains("gate-unassigned-list") && !cur.classList.contains("sim-pit-list"))
         ) {
           return true;
         }
