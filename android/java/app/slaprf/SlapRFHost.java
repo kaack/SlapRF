@@ -218,6 +218,8 @@ public final class SlapRFHost extends Activity {
         ws.setBuiltInZoomControls(false);
         ws.setDisplayZoomControls(false);
         ws.setTextZoom(100);
+        ws.setCacheMode(WebSettings.LOAD_NO_CACHE);
+        webView.clearCache(true);
 
         webView.addJavascriptInterface(new JsBridge(), "SlapRFAndroid");
 
