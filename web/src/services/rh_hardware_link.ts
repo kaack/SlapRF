@@ -443,7 +443,7 @@ export class RotorHazardHardwareLink {
     }
 
     const resp = await fetch(
-      resolveBackendUrl(`/v1/usb/ports?transport=usb${showAll ? "&all=1" : ""}`),
+      resolveBackendUrl(`/v1/rh/usb-ports${showAll ? "?all=1" : ""}`),
       {
       method: "GET",
       headers: { Accept: "application/json" },

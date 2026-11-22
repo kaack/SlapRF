@@ -261,12 +261,28 @@ export function getPairedBluetoothHub(): PairedBluetoothHubInfo | null {
   };
 }
 
+function backendTransportPrefix(forPortName?: string | null): "/v1/bluetooth" | "/v1/usb" {
+  if (forPortName) {
+    return forPortName.trim().toLowerCase().startsWith("ble:") ? "/v1/bluetooth" : "/v1/usb";
+  }
+  return isBleHardwareMode() ? "/v1/bluetooth" : "/v1/usb";
+}
+
+function backendCommandPath(forPortName?: string | null): "/v1/bluetooth:command" | "/v1/usb:command" {
+  return backendTransportPrefix(forPortName) === "/v1/bluetooth" ? "/v1/bluetooth:command" : "/v1/usb:command";
+}
+
+function backendWsPath(): "/v1/ws/bluetooth" | "/v1/ws/usb" {
+  return isBleHardwareMode() ? "/v1/ws/bluetooth" : "/v1/ws/usb";
+}
+
 export function forgetKnownHardwareTimer(fp?: string, _label?: string): void {
   const cleanFp = (fp || "").trim().toUpperCase();
   if (!cleanFp) return;
   backendKnownTimersCache = backendKnownTimersCache.filter((t) => t.fp.toUpperCase() !== cleanFp);
   if (capabilitiesSnapshot().portable) {
-    void fetch(resolveBackendUrl(`/v1/usb/known-timers/${encodeURIComponent(cleanFp)}`), {
+    const prefix = backendTransportPrefix();
+    void fetch(resolveBackendUrl(`${prefix}/known-timers/${encodeURIComponent(cleanFp)}`), {
       method: "DELETE",
     }).catch(() => undefined);
   }
@@ -465,6 +481,8 @@ interface Waiter {
 export interface BackendSlotSnapshot {
   slotIndex: number;
   connected: boolean;
+  connecting?: boolean;
+  connectStatus?: string;
   portName?: string;
   probing: boolean;
   reconnecting: boolean;
@@ -601,7 +619,10 @@ export class TimerConsole {
     { fp: string; label: string; role: number; sweepHz: number }
   >();
   private lastRealJsonStatusAtMs = 0;
+  private connectAbort: AbortController | null = null;
   public busyLabel: string | null = null;
+  public connecting = false;
+  public connectStatus: string | null = null;
   public showAllPorts = false;
   public reconnecting = false;
   public reconnectAttempt = 0;
@@ -687,6 +708,8 @@ export class TimerConsole {
     } else {
       this.port = null;
     }
+    this.connecting = Boolean(snap.connecting);
+    this.connectStatus = snap.connectStatus || null;
     this.probing = Boolean(snap.probing);
     this.reconnecting = Boolean(snap.reconnecting);
     this.reconnectAttempt = snap.reconnectAttempt || 0;
@@ -888,22 +911,35 @@ export class TimerConsole {
     this.reconnectFailed = false;
     this.lastError = null;
     this.probing = true;
+    this.connecting = true;
+    this.connectStatus =
+      isBackendSerialPort(port) && port.portName.trim().toLowerCase().startsWith("ble:")
+        ? "Waiting for Bluetooth LE connection…"
+        : "Waiting for connection…";
     this.busyLabel = "Connecting";
     this.notifyStateChange();
+    const abortCtrl = typeof AbortController !== "undefined" ? new AbortController() : null;
+    this.connectAbort = abortCtrl;
     try {
       if (isBackendSerialPort(port)) {
-        const res = await fetch(resolveBackendUrl(`/v1/usb/connections/${this.slotIndex}`), {
+        const prefix = backendTransportPrefix(port.portName);
+        const res = await fetch(resolveBackendUrl(`${prefix}/connections/${this.slotIndex}`), {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ slotIndex: this.slotIndex, portName: port.portName }),
+          signal: abortCtrl?.signal,
         });
         const data = (await res.json().catch(() => ({}))) as {
           error?: string;
+          cancelled?: boolean;
           slot?: BackendSlotSnapshot;
           pool?: BackendPoolSnapshot;
         };
         if (data.pool) {
           usbPool.applyBackendPoolSnapshot(data.pool);
+        }
+        if (data.cancelled) {
+          return null;
         }
         if (!res.ok) {
           throw new Error(data.error || `Failed to open ${port.portName}`);
@@ -927,6 +963,11 @@ export class TimerConsole {
       }
       return s;
     } finally {
+      if (this.connectAbort === abortCtrl) {
+        this.connectAbort = null;
+      }
+      this.connecting = false;
+      this.connectStatus = null;
       this.probing = false;
       this.busyLabel = null;
       this.notifyStateChange();
@@ -1037,6 +1078,43 @@ export class TimerConsole {
    * Unpairs and forgets a Bluetooth Hub (`BLEPAIR CLEAR` + disconnect + remove persisted pairing)
    * so another phone, computer, or Raspberry Pi can pair without holding the physical BOOT button.
    */
+  /** Aborts an in-flight connection or auto-reconnect attempt cleanly without raising an error banner. */
+  public async cancelConnect(): Promise<void> {
+    this.userDisconnecting = true;
+    if (this.connectAbort) {
+      try {
+        this.connectAbort.abort();
+      } catch {
+        // ignore
+      }
+      this.connectAbort = null;
+    }
+    this.connecting = false;
+    this.connectStatus = null;
+    this.busyLabel = null;
+    this.probing = false;
+    this.reconnecting = false;
+    this.reconnectAttempt = 0;
+    this.reconnectFailed = false;
+    this.lastError = null;
+    this.notifyStateChange();
+    if (capabilitiesSnapshot().portable && !isSimulatedUsbMode()) {
+      const portHint = isBackendSerialPort(this.port) ? this.port.portName : null;
+      const prefix = backendTransportPrefix(portHint);
+      await fetch(resolveBackendUrl(`${prefix}/connections/${this.slotIndex}`), {
+        method: "DELETE",
+      })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((pool) => {
+          if (pool) usbPool.applyBackendPoolSnapshot(pool as BackendPoolSnapshot);
+        })
+        .catch(() => undefined);
+    } else if (this.port) {
+      await this.closePort();
+    }
+    this.notifyStateChange();
+  }
+
   public async forgetBluetoothDevice(): Promise<void> {
     const remembered = getPairedBluetoothHub();
     const fp = (this.lastStatus?.fp || this.lastConfig?.fingerprint || remembered?.fp || "").trim().toUpperCase();
@@ -1046,6 +1124,8 @@ export class TimerConsole {
       window.clearInterval(this.statusPollTimer);
       this.statusPollTimer = 0;
       this.writing = false;
+      this.connecting = false;
+      this.connectStatus = null;
       this.busyLabel = null;
       this.reconnecting = false;
       this.reconnectAttempt = 0;
@@ -1053,7 +1133,7 @@ export class TimerConsole {
       this.lastError = null;
       this.port = null;
       const qs = fp ? `?forget=1&fp=${encodeURIComponent(fp)}` : "?forget=1";
-      await fetch(resolveBackendUrl(`/v1/usb/connections/${this.slotIndex}${qs}`), {
+      await fetch(resolveBackendUrl(`/v1/bluetooth/connections/${this.slotIndex}${qs}`), {
         method: "DELETE",
       })
         .then((r) => (r.ok ? r.json() : null))
@@ -1193,10 +1273,22 @@ export class TimerConsole {
     window.clearInterval(this.statusPollTimer);
     this.statusPollTimer = 0;
     this.writing = false;
+    this.connecting = false;
+    this.connectStatus = null;
     this.busyLabel = null;
+    if (this.connectAbort) {
+      try {
+        this.connectAbort.abort();
+      } catch {
+        // ignore
+      }
+      this.connectAbort = null;
+    }
     if (isBackendSerialPort(this.port) || (capabilitiesSnapshot().portable && !isSimulatedUsbMode())) {
+      const portHint = isBackendSerialPort(this.port) ? this.port.portName : null;
+      const prefix = backendTransportPrefix(portHint);
       this.port = null;
-      await fetch(resolveBackendUrl(`/v1/usb/connections/${this.slotIndex}`), {
+      await fetch(resolveBackendUrl(`${prefix}/connections/${this.slotIndex}`), {
         method: "DELETE",
       })
         .then((r) => (r.ok ? r.json() : null))
@@ -1325,7 +1417,7 @@ export class TimerConsole {
 
   public async send(command: string): Promise<void> {
     if (isBackendSerialPort(this.port)) {
-      const res = await fetch(resolveBackendUrl("/v1/usb:command"), {
+      const res = await fetch(resolveBackendUrl(backendCommandPath(this.port.portName)), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slotIndex: this.slotIndex, command }),
@@ -1374,7 +1466,7 @@ export class TimerConsole {
   /** Send `command` (optional) and resolve with the next message of `type` (`status`, `scan`, ...). */
   public request<T>(command: string | null, type: string, timeoutMs = 3000): Promise<T> {
     if (isBackendSerialPort(this.port) && command) {
-      return fetch(resolveBackendUrl("/v1/usb:command"), {
+      return fetch(resolveBackendUrl(backendCommandPath(this.port.portName)), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2004,6 +2096,7 @@ export class UsbConnectionPool {
   private savedSimDebugSlot = 0;
   private restoringSimPorts = false;
   private backendUsbWs: WebSocket | null = null;
+  private backendUsbWsPath = "";
   private backendUsbReconnectTimer: number | null = null;
   private backendRealActive = false;
 
@@ -2034,7 +2127,8 @@ export class UsbConnectionPool {
   public async syncFromBackend(): Promise<void> {
     if (!capabilitiesSnapshot().portable || isSimulatedUsbMode()) return;
     try {
-      const res = await fetch(resolveBackendUrl("/v1/usb/connections"), { cache: "no-store" });
+      const prefix = backendTransportPrefix();
+      const res = await fetch(resolveBackendUrl(`${prefix}/connections`), { cache: "no-store" });
       if (res.ok) {
         const pool = (await res.json()) as BackendPoolSnapshot;
         this.applyBackendPoolSnapshot(pool);
@@ -2048,15 +2142,21 @@ export class UsbConnectionPool {
     if (!this.backendRealActive || !capabilitiesSnapshot().portable || typeof WebSocket === "undefined") {
       return;
     }
+    const wantPath = backendWsPath();
     if (
       this.backendUsbWs &&
+      this.backendUsbWsPath === wantPath &&
       (this.backendUsbWs.readyState === WebSocket.OPEN || this.backendUsbWs.readyState === WebSocket.CONNECTING)
     ) {
       return;
     }
+    if (this.backendUsbWs) {
+      this.stopBackendUsbWs();
+    }
     try {
-      const ws = new WebSocket(resolveBackendWsUrl("/v1/ws/usb"));
+      const ws = new WebSocket(resolveBackendWsUrl(wantPath));
       this.backendUsbWs = ws;
+      this.backendUsbWsPath = wantPath;
       ws.onmessage = (ev: MessageEvent) => {
         if (ws !== this.backendUsbWs || typeof ev.data !== "string") return;
         try {
@@ -2099,6 +2199,7 @@ export class UsbConnectionPool {
     if (this.backendUsbWs) {
       const s = this.backendUsbWs;
       this.backendUsbWs = null;
+      this.backendUsbWsPath = "";
       try {
         s.close();
       } catch {

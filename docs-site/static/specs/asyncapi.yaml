@@ -50,11 +50,23 @@ channels:
 
   usbConsoleStream:
     address: /v1/ws/usb
-    title: Native USB Serial Diagnostic & Simulated Hub Stream
+    title: SlapRF USB Serial Diagnostic & Simulated Hub Stream
     description: |
-      Streams live USB Hub connection state, peer Spoke (`T1`-`T6`) link health, and serial diagnostic lines.
-      - **Default (`?sim=0` or omitted)**: Emits JSON text frames (`USBEvent`) for `pool_state`, `status`, `config`, `live`, `hub_live`, `scan`, `bootlog`, `log`, `raw_reply`, and `error`.
+      Streams live SlapRF USB connection progress, Hub/Spoke status, and serial diagnostic lines.
+      - **Default (`?sim=0` or omitted)**: Emits JSON text frames (`Event`) for `pool_state`, `status`, `config`, `live`, `hub_live`, `scan`, `bootlog`, `log`, `raw_reply`, and `error`.
       - **Simulator Hub Mode (`?sim=1`)**: Emits raw `0x1E`-framed binary `HELLO` and telemetry packets produced by simulated Hub `H1`.
+    messages:
+      usbStatusEvent:
+        $ref: "#/components/messages/UsbStatusEventMessage"
+      simHubBinaryFrame:
+        $ref: "#/components/messages/SimHubBinaryMessage"
+
+  bluetoothConsoleStream:
+    address: /v1/ws/bluetooth
+    title: SlapRF Bluetooth LE Hub Diagnostic & Telemetry Stream
+    description: |
+      Streams live SlapRF Bluetooth LE Hub connection stages (`connecting`, `connectStatus`), paired Hub/Spoke status, synthesized zero-overhead `live` telemetry, and console lines.
+      - **Default (`?sim=0` or omitted)**: Emits JSON text frames (`Event`) isolated to the Bluetooth LE transport.
     messages:
       usbStatusEvent:
         $ref: "#/components/messages/UsbStatusEventMessage"
@@ -97,10 +109,19 @@ operations:
     action: receive
     channel:
       $ref: "#/channels/usbConsoleStream"
-    summary: Receive live USB Hub and wireless Spoke diagnostic updates (or `?sim=1` simulated Hub `0x1E` binary frames).
+    summary: Receive live SlapRF USB Hub/Timer updates (or `?sim=1` simulated Hub `0x1E` binary frames).
     messages:
       - $ref: "#/channels/usbConsoleStream/messages/usbStatusEvent"
       - $ref: "#/channels/usbConsoleStream/messages/simHubBinaryFrame"
+
+  subscribeBluetoothConsole:
+    action: receive
+    channel:
+      $ref: "#/channels/bluetoothConsoleStream"
+    summary: Receive live SlapRF Bluetooth Hub connection stages, status, and Spoke telemetry updates.
+    messages:
+      - $ref: "#/channels/bluetoothConsoleStream/messages/usbStatusEvent"
+      - $ref: "#/channels/bluetoothConsoleStream/messages/simHubBinaryFrame"
 
   receiveUsbRaw:
     action: receive

@@ -1,8 +1,9 @@
 //go:build !android && !nobluetooth && (windows || linux || (darwin && cgo))
 
-package usb
+package bluetooth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"hash/fnv"
@@ -16,13 +17,9 @@ import (
 	"tinygo.org/x/bluetooth"
 
 	"slaprf/internal/firmware"
+	"slaprf/internal/serialport"
+	"slaprf/internal/slaprf"
 )
-
-// Desktop Bluetooth LE backend for SlapRF hubs (tinygo.org/x/bluetooth):
-//   - Windows: WinRT (no cgo).
-//   - Linux: BlueZ over D-Bus (no cgo).
-//   - macOS: CoreBluetooth (requires cgo; CGO_ENABLED=0 builds use the stub).
-// Set SLAPRF_NO_BLE=1 to disable Bluetooth discovery entirely.
 
 const (
 	bleScanWindow       = 4 * time.Second
@@ -63,10 +60,8 @@ func (c *bleDesktopConn) WriteWithoutResponse(p []byte) error {
 func (c *bleDesktopConn) MaxWriteLen() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// The ATT MTU exchange can finish after the link is up, so refresh it on every write.
 	if mtu, err := c.rx.GetMTU(); err == nil && mtu > 0 {
 		if runtime.GOOS == "darwin" {
-			// CoreBluetooth reports the maximum write length (already ATT_MTU - 3).
 			c.payload = BLEWritePayloadForMTU(int(mtu) + 3)
 		} else {
 			c.payload = BLEWritePayloadForMTU(int(mtu))
@@ -105,7 +100,6 @@ func (c *bleDesktopConn) Close() error {
 	}
 	bleHost.unregister(c)
 	if runtime.GOOS == "linux" {
-		// Release the BlueZ D-Bus PropertiesChanged signal channel and goroutine started by EnableNotifications.
 		_ = c.tx.EnableNotifications(nil)
 	}
 	return c.dev.Disconnect()
@@ -119,14 +113,15 @@ type bleDesktopHost struct {
 	enabled       bool
 	enableErr     error
 	enableAt      time.Time
-	seen          map[string]bleSeenHub // key: fingerprint hex
-	addrFP        map[string]string     // key: upper-case address -> resolved 8-hex fingerprint
+	seen          map[string]bleSeenHub
+	addrFP        map[string]string
 	scanning      bool
 	scanDone      chan struct{}
 	stopScanFn    func()
 	lastScanStart time.Time
+	lastScanStop  time.Time
 	opening       int
-	conns         map[string]*bleDesktopConn // key: address string
+	conns         map[string]*bleDesktopConn
 
 	svcUUID, rxUUID, txUUID bluetooth.UUID
 }
@@ -283,8 +278,6 @@ func (h *bleDesktopHost) onScanResult(_ *bluetooth.Adapter, r bluetooth.ScanResu
 		if !ok {
 			continue
 		}
-		// Manufacturer data with the SR signature is SlapRF specific; the service UUID check is a
-		// second filter when the platform delivered the advertising packet too.
 		if svc := r.ServiceUUIDs(); len(svc) > 0 && !r.HasServiceUUID(h.svcUUID) {
 			return
 		}
@@ -304,10 +297,6 @@ func (h *bleDesktopHost) onScanResult(_ *bluetooth.Adapter, r bluetooth.ScanResu
 		return
 	}
 
-	// BlueZ 5.82+ / Linux 6.x skips active SCAN_REQ once a peripheral's Name is cached in
-	// /var/lib/bluetooth/<adapter>/cache/<mac>, delivering ADV_IND (with SlapRF's 128-bit service
-	// UUID and cached LocalName) without SCAN_RSP ManufacturerData. Record the hub by its known
-	// or deterministic address-derived ID; STATUS? resolves the authoritative fingerprint on connect.
 	if !r.HasServiceUUID(h.svcUUID) || addrKey == "" {
 		return
 	}
@@ -342,7 +331,6 @@ func (h *bleDesktopHost) onScanResult(_ *bluetooth.Adapter, r bluetooth.ScanResu
 	h.seen[fp] = bleSeenHub{addr: r.Address, name: name, info: info, hasMfgData: hasMfg, at: time.Now()}
 }
 
-// startScanLocked begins a scan of `window` if none is running and returns its done channel.
 func (h *bleDesktopHost) startScanLocked(window time.Duration) chan struct{} {
 	if h.scanning {
 		return h.scanDone
@@ -364,13 +352,8 @@ func (h *bleDesktopHost) startScanLocked(window time.Duration) chan struct{} {
 	go func() {
 		_ = h.adapter.Scan(h.onScanResult)
 		stopTimer.Stop()
-		// tinygo.org/x/bluetooth on Linux leaves scanCancelChan non-nil if SetDiscoveryFilter or
-		// GetManagedObjects returns an early error, permanently failing future Scan calls with
-		// errScanning unless StopScan clears it.
 		stopFn()
 		if runtime.GOOS == "linux" {
-			// If StopScan fired while tinygo's async StartDiscovery D-Bus call was still in flight,
-			// give StartDiscovery a brief beat to settle and ensure StopDiscovery clears it.
 			if time.Since(scanStarted) < 250*time.Millisecond {
 				time.Sleep(80 * time.Millisecond)
 			}
@@ -379,14 +362,13 @@ func (h *bleDesktopHost) startScanLocked(window time.Duration) chan struct{} {
 		h.mu.Lock()
 		h.scanning = false
 		h.stopScanFn = nil
+		h.lastScanStop = time.Now()
 		h.mu.Unlock()
 		close(done)
 	}()
 	return done
 }
 
-// stopScan stops a running scan and waits briefly for it to finish (connecting while scanning
-// is unreliable on several stacks). Returns true when an active scan was stopped.
 func (h *bleDesktopHost) stopScan() bool {
 	h.mu.Lock()
 	scanning, done, stopFn := h.scanning, h.scanDone, h.stopScanFn
@@ -430,16 +412,22 @@ func (h *bleDesktopHost) hasFreshResolvedOrConnectedLocked() bool {
 
 func (h *bleDesktopHost) lookup(fp string) (bleSeenHub, bool) {
 	h.mu.Lock()
-	defer h.mu.Unlock()
 	s, ok := h.seen[fp]
+	adapterID := h.adapterID
 	if !ok || time.Since(s.at) > bleSeenTTL {
+		h.mu.Unlock()
+		return bleSeenHub{}, false
+	}
+	h.mu.Unlock()
+	if runtime.GOOS == "linux" && !isBLEDeviceKnown(adapterID, s.addr.String()) {
+		h.mu.Lock()
+		delete(h.seen, fp)
+		h.mu.Unlock()
 		return bleSeenHub{}, false
 	}
 	return s, true
 }
 
-// lookupUnresolvedSingle returns the sole fresh unconnected SlapRF hub whose advertisement lacked
-// SCAN_RSP manufacturer data (so its authoritative fingerprint will be confirmed via STATUS? + AUTH).
 func (h *bleDesktopHost) lookupUnresolvedSingle() (bleSeenHub, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
@@ -461,7 +449,7 @@ func (h *bleDesktopHost) lookupUnresolvedSingle() (bleSeenHub, bool) {
 	return bleSeenHub{}, false
 }
 
-func bleListPorts() ([]PortInfo, error) {
+func bleListPorts() ([]slaprf.PortInfo, error) {
 	if bleDisabledByEnv() {
 		return nil, nil
 	}
@@ -473,8 +461,6 @@ func bleListPorts() ([]PortInfo, error) {
 	first := h.lastScanStart.IsZero()
 	cold := !h.hasFreshOrConnectedLocked()
 	var waitCh chan struct{}
-	// Avoid scanning while a hub link is up or opening: scanning steals radio time from the
-	// 10 ms connection events that carry the RSSI stream.
 	if len(h.conns) == 0 && h.opening == 0 {
 		if first || cold || time.Since(h.lastScanStart) > bleScanRefreshEvery {
 			waitCh = h.startScanLocked(bleScanWindow)
@@ -486,14 +472,18 @@ func bleListPorts() ([]PortInfo, error) {
 	if cold && waitCh != nil {
 		waitStart := time.Now()
 		deadline := waitStart.Add(bleFirstListWait)
+		foundResolved := false
 		for time.Now().Before(deadline) {
 			h.mu.Lock()
 			resolved := h.hasFreshResolvedOrConnectedLocked()
 			anyFresh := h.hasFreshOrConnectedLocked()
 			h.mu.Unlock()
-			// Wait up to 600 ms after ADV_IND for BlueZ/WinRT to deliver the follow-up SCAN_RSP
-			// ManufacturerData before falling back to an address-derived provisional ID.
-			if resolved || (anyFresh && time.Since(waitStart) >= 600*time.Millisecond) {
+			if resolved && time.Since(waitStart) >= 350*time.Millisecond {
+				foundResolved = true
+				break
+			}
+			if anyFresh && time.Since(waitStart) >= 650*time.Millisecond {
+				foundResolved = true
 				break
 			}
 			select {
@@ -501,6 +491,11 @@ func bleListPorts() ([]PortInfo, error) {
 				deadline = time.Time{}
 			case <-time.After(100 * time.Millisecond):
 			}
+		}
+		if foundResolved {
+			// Stop discovery as soon as the Hub is found so the radio and BlueZ hci_sync queue
+			// have already settled before the user clicks Connect in the picker modal.
+			go h.stopScan()
 		}
 	}
 
@@ -510,9 +505,8 @@ func bleListPorts() ([]PortInfo, error) {
 	for _, c := range h.conns {
 		connectedFP[c.fp] = true
 	}
-	out := make([]PortInfo, 0, len(h.seen))
+	out := make([]slaprf.PortInfo, 0, len(h.seen))
 	for fp, s := range h.seen {
-		// A connected hub stops advertising, so keep listing it while its link is up.
 		if !connectedFP[fp] && time.Since(s.at) > bleSeenTTL {
 			continue
 		}
@@ -522,10 +516,37 @@ func bleListPorts() ([]PortInfo, error) {
 		}
 		out = append(out, BLEPortInfoFor(info, s.name))
 	}
+	serialport.SortPorts(out)
 	return out, nil
 }
 
-func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
+func bleOpenPort(portName string, baud int) (firmware.SerialPort, error) {
+	return bleOpenPortContext(context.Background(), portName, baud, nil)
+}
+
+func sleepWithContext(ctx context.Context, d time.Duration) bool {
+	if d <= 0 {
+		return ctx.Err() == nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-t.C:
+		return true
+	}
+}
+
+func bleOpenPortContext(
+	ctx context.Context,
+	portName string,
+	_ int,
+	onProgress func(string),
+) (firmware.SerialPort, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, slaprf.ErrConnectCancelled
+	}
 	if bleDisabledByEnv() {
 		return nil, errors.New("Bluetooth disabled by SLAPRF_NO_BLE")
 	}
@@ -533,9 +554,17 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 	if !ok {
 		return nil, fmt.Errorf("invalid Bluetooth hub port %q (expected ble:<8 hex fingerprint>)", portName)
 	}
+	report := func(msg string) {
+		if onProgress != nil && ctx.Err() == nil {
+			onProgress(msg)
+		}
+	}
 	h := bleHost
 	h.openMu.Lock()
 	defer h.openMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return nil, slaprf.ErrConnectCancelled
+	}
 	if err := h.ensureEnabled(); err != nil {
 		return nil, err
 	}
@@ -550,6 +579,7 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 
 	seen, found := h.lookup(fp)
 	if !found {
+		report(fmt.Sprintf("Scanning for Bluetooth Hub %s…", fp))
 		scanStart := time.Now()
 		deadline := scanStart.Add(bleOpenScanTimeout)
 		h.mu.Lock()
@@ -557,10 +587,14 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 		h.mu.Unlock()
 		for !found && time.Now().Before(deadline) {
 			select {
+			case <-ctx.Done():
+				h.stopScan()
+				return nil, slaprf.ErrConnectCancelled
 			case <-done:
-				// The scan window ended (or failed to start); pause briefly before retrying so
-				// a radio that is off does not cause a busy loop.
-				time.Sleep(250 * time.Millisecond)
+				if !sleepWithContext(ctx, 250*time.Millisecond) {
+					h.stopScan()
+					return nil, slaprf.ErrConnectCancelled
+				}
 				h.mu.Lock()
 				if rem := time.Until(deadline); rem > 0 {
 					done = h.startScanLocked(rem)
@@ -577,22 +611,35 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 			seen, found = h.lookupUnresolvedSingle()
 		}
 	}
-	if h.stopScan() {
-		// WinRT and BlueZ transition out of active discovery asynchronously; opening a GATT
-		// session immediately can return Unreachable (WinRT) or le-connection-abort-by-local (BlueZ).
-		if runtime.GOOS == "linux" {
-			time.Sleep(350 * time.Millisecond)
-		} else {
-			time.Sleep(150 * time.Millisecond)
+	stoppedActiveScan := h.stopScan()
+	if runtime.GOOS == "linux" {
+		// BlueZ 5.82+ runs `SetDiscoveryFilter({})` + `hci_update_passive_scan_sync` asynchronously
+		// right after `StopDiscovery`; ensure at least 750 ms have elapsed since any scan ended.
+		h.mu.Lock()
+		sinceStop := time.Since(h.lastScanStop)
+		hasStopped := !h.lastScanStop.IsZero()
+		h.mu.Unlock()
+		var waitRem time.Duration
+		if stoppedActiveScan {
+			waitRem = 750 * time.Millisecond
+		} else if hasStopped && sinceStop < 750*time.Millisecond {
+			waitRem = 750*time.Millisecond - sinceStop
 		}
+		if waitRem > 0 && !sleepWithContext(ctx, waitRem) {
+			return nil, slaprf.ErrConnectCancelled
+		}
+	} else if stoppedActiveScan {
+		if !sleepWithContext(ctx, 150*time.Millisecond) {
+			return nil, slaprf.ErrConnectCancelled
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, slaprf.ErrConnectCancelled
 	}
 	if !found {
 		return nil, fmt.Errorf("Bluetooth hub %s not found (is it powered and advertising?)", fp)
 	}
 
-	// Do not force a connection interval or priority: the hub requests 10 ms (falling back to
-	// 20 or 30 ms) right after connect so its connection events line up with the 100 Hz sweep
-	// schedule; the host just accepts that update.
 	maxAttempts := 3
 	if runtime.GOOS == "linux" {
 		maxAttempts = 5
@@ -601,16 +648,21 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 	adapterID := h.adapterID
 	h.mu.Unlock()
 	if runtime.GOOS == "linux" && ensureBLEDiscoveryStopped(adapterID) {
-		time.Sleep(350 * time.Millisecond)
+		if !sleepWithContext(ctx, 750*time.Millisecond) {
+			return nil, slaprf.ErrConnectCancelled
+		}
 	}
 
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		if attempt > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, slaprf.ErrConnectCancelled
+		}
+		if attempt == 0 {
+			report("Waiting for Bluetooth LE connection…")
+		} else {
 			if runtime.GOOS == "linux" && attempt%2 == 1 {
-				// After a failed LE Create Connection (`le-connection-abort-by-local`), BlueZ can
-				// evict the peer from the controller whitelist if h.seen came from an older cache
-				// entry (e.g. while another host was still disconnecting). Refresh with a brief scan.
+				report(fmt.Sprintf("Retrying Bluetooth connection (attempt %d of %d) · scanning…", attempt+1, maxAttempts))
 				refreshSince := time.Now()
 				h.mu.Lock()
 				scanDone := h.startScanLocked(900 * time.Millisecond)
@@ -622,6 +674,9 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 						break
 					}
 					select {
+					case <-ctx.Done():
+						h.stopScan()
+						return nil, slaprf.ErrConnectCancelled
 					case <-scanDone:
 						waitEnd = time.Time{}
 					case <-time.After(80 * time.Millisecond):
@@ -629,14 +684,40 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 				}
 				h.stopScan()
 				ensureBLEDiscoveryStopped(adapterID)
-				time.Sleep(350 * time.Millisecond)
+				if !sleepWithContext(ctx, 750*time.Millisecond) {
+					return nil, slaprf.ErrConnectCancelled
+				}
 			} else {
-				time.Sleep(time.Duration(250+attempt*110) * time.Millisecond)
+				if !sleepWithContext(ctx, time.Duration(250+attempt*110)*time.Millisecond) {
+					return nil, slaprf.ErrConnectCancelled
+				}
 			}
+			report(fmt.Sprintf("Retrying Bluetooth connection (attempt %d of %d)…", attempt+1, maxAttempts))
+		}
+
+		attemptDone := make(chan struct{})
+		if runtime.GOOS == "linux" {
+			addrStr := seen.addr.String()
+			go func() {
+				select {
+				case <-ctx.Done():
+					cancelBLEPendingConnect(adapterID, addrStr)
+				case <-attemptDone:
+				}
+			}()
 		}
 		dev, err := h.adapter.Connect(seen.addr, bluetooth.ConnectionParams{
 			ConnectionTimeout: bluetooth.NewDuration(bleConnectTimeout),
 		})
+		close(attemptDone)
+		if ctx.Err() != nil {
+			if err == nil {
+				_ = dev.Disconnect()
+			} else if runtime.GOOS == "linux" {
+				cancelBLEPendingConnect(adapterID, seen.addr.String())
+			}
+			return nil, slaprf.ErrConnectCancelled
+		}
 		if err != nil {
 			if runtime.GOOS == "linux" {
 				cancelBLEPendingConnect(adapterID, seen.addr.String())
@@ -644,6 +725,7 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 			lastErr = fmt.Errorf("Bluetooth hub %s connect failed: %w", fp, err)
 			continue
 		}
+		report("Subscribing to Hub telemetry…")
 		svcs, err := dev.DiscoverServices([]bluetooth.UUID{h.svcUUID})
 		if err != nil {
 			_ = dev.Disconnect()
@@ -675,6 +757,10 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 			lastErr = fmt.Errorf("Bluetooth hub %s characteristic discovery failed: RX/TX characteristics missing", fp)
 			continue
 		}
+		if ctx.Err() != nil {
+			_ = dev.Disconnect()
+			return nil, slaprf.ErrConnectCancelled
+		}
 
 		stopCh := make(chan struct{})
 		conn := &bleDesktopConn{fp: fp, dev: dev, rx: *rx, tx: *tx, stopCh: stopCh}
@@ -684,13 +770,16 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 		h.conns[dev.Address.String()] = conn
 		h.mu.Unlock()
 
-		// Notifications must be live before the first command (STATUS?) is written.
-		// On shared 2.4 GHz Wi-Fi + BLE radios (e.g. Raspberry Pi CYW43455), the initial CCCD
-		// write can collide with post-connect interval/MTU negotiation (ATT 0x0e); retry cleanly.
 		notifErr := conn.tx.EnableNotifications(func(buf []byte) { port.Deliver(buf) })
 		if notifErr != nil && runtime.GOOS == "linux" {
 			_ = conn.tx.EnableNotifications(nil)
-			time.Sleep(150 * time.Millisecond)
+			if !sleepWithContext(ctx, 150*time.Millisecond) {
+				close(stopCh)
+				conn.stopCh = nil
+				h.unregister(conn)
+				_ = dev.Disconnect()
+				return nil, slaprf.ErrConnectCancelled
+			}
 			notifErr = conn.tx.EnableNotifications(func(buf []byte) { port.Deliver(buf) })
 		}
 		if notifErr != nil {
@@ -705,9 +794,14 @@ func bleOpenPort(portName string, _ int) (firmware.SerialPort, error) {
 			continue
 		}
 		if runtime.GOOS == "linux" {
-			// Verify the ACL link survived the initial 6-event establishment window (`0x3e`) when
-			// BlueZ resolved GATT attributes instantaneously from its local cache.
-			time.Sleep(300 * time.Millisecond)
+			if !sleepWithContext(ctx, 300*time.Millisecond) {
+				close(stopCh)
+				conn.stopCh = nil
+				_ = conn.tx.EnableNotifications(nil)
+				h.unregister(conn)
+				_ = dev.Disconnect()
+				return nil, slaprf.ErrConnectCancelled
+			}
 			if !isBLEDeviceStillConnected(adapterID, dev.Address.String()) {
 				close(stopCh)
 				conn.stopCh = nil

@@ -1,6 +1,6 @@
 //go:build !android && !nobluetooth && (windows || (darwin && cgo))
 
-package usb
+package bluetooth
 
 import "tinygo.org/x/bluetooth"
 
@@ -14,6 +14,10 @@ func ensureBLEAdapterPowered(_ string) error {
 
 func ensureBLEDiscoveryStopped(_ string) bool {
 	return false
+}
+
+func isBLEDeviceKnown(_, _ string) bool {
+	return true
 }
 
 func isBLEDeviceStillConnected(_, _ string) bool {

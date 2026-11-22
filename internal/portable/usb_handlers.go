@@ -12,135 +12,33 @@ import (
 	"github.com/coder/websocket"
 
 	"slaprf/internal/firmware"
-	"slaprf/internal/usb"
 )
 
 func (s *Server) handleUSBPorts(w http.ResponseWriter, r *http.Request) {
-	if !s.isAllowedOrigin(r) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+	if tr := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("transport"))); tr != "" && tr != "usb" {
+		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{
+			"error": "Bluetooth discovery uses GET /v1/bluetooth/ports",
+		})
 		return
 	}
 	showAll := r.URL.Query().Get("all") == "1" || strings.EqualFold(r.URL.Query().Get("all"), "true")
-	transport := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("transport")))
-	var (
-		ports []usb.PortInfo
-		err   error
-	)
-	switch transport {
-	case "usb":
-		ports, err = s.usbMgr.ListUSBPorts(showAll)
-	case "ble":
-		ports, err = s.usbMgr.ListBLEPorts()
-	default:
-		ports, err = s.usbMgr.ListPorts(showAll)
-	}
-	if err != nil {
-		writeJSONNoStore(w, http.StatusOK, map[string]any{
-			"ports": []usb.PortInfo{},
-			"error": err.Error(),
-		})
-		return
-	}
-	if ports == nil {
-		ports = []usb.PortInfo{}
-	}
-	writeJSONNoStore(w, http.StatusOK, map[string]any{
-		"ports": ports,
-		"pool":  s.usbMgr.Snapshot(),
-	})
+	s.serveSlapRFPorts(w, r, s.usbMgr, showAll)
 }
 
 func (s *Server) handleUSBStatus(w http.ResponseWriter, r *http.Request) {
-	if !s.isAllowedOrigin(r) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	if r.Method != http.MethodGet {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	writeJSONNoStore(w, http.StatusOK, s.usbMgr.Snapshot())
+	s.serveSlapRFStatus(w, r, s.usbMgr)
 }
 
 func (s *Server) handleUSBConnect(w http.ResponseWriter, r *http.Request) {
-	if !s.isAllowedOrigin(r) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	var req struct {
-		SlotIndex int    `json:"slotIndex"`
-		PortName  string `json:"portName"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
-		return
-	}
-	if rawSlot := strings.TrimSpace(r.PathValue("slotIndex")); rawSlot != "" {
-		parsed, err := strconv.Atoi(rawSlot)
-		if err != nil || parsed < 0 || parsed >= usb.MaxUSBConnections {
-			writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid USB slotIndex"})
-			return
-		}
-		req.SlotIndex = parsed
-	}
-	snap, err := s.usbMgr.Connect(req.SlotIndex, req.PortName)
-	if err != nil {
-		writeJSONNoStore(w, http.StatusBadGateway, map[string]any{
-			"error": err.Error(),
-			"pool":  s.usbMgr.Snapshot(),
-		})
-		return
-	}
-	if s.persistWorker != nil {
-		s.persistWorker.MarkDirty()
-	}
-	status := http.StatusOK
-	if r.Method == http.MethodPost {
-		w.Header().Set("Location", "/v1/usb/connections/"+strconv.Itoa(req.SlotIndex))
-		status = http.StatusCreated
-	}
-	writeJSONNoStore(w, status, map[string]any{
-		"slot": snap,
-		"pool": s.usbMgr.Snapshot(),
-	})
+	s.serveSlapRFConnect(w, r, s.usbMgr, "/v1/usb")
 }
 
 func (s *Server) handleUSBDisconnectSlot(w http.ResponseWriter, r *http.Request) {
-	if !s.isAllowedOrigin(r) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	rawSlot := strings.TrimSpace(r.PathValue("slotIndex"))
-	slotIndex, err := strconv.Atoi(rawSlot)
-	if err != nil || slotIndex < 0 || slotIndex >= usb.MaxUSBConnections {
-		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid USB slotIndex"})
-		return
-	}
-	if r.URL.Query().Get("forget") == "1" {
-		_ = s.usbMgr.ForgetSlot(slotIndex, r.URL.Query().Get("fp"))
-	} else {
-		_ = s.usbMgr.Disconnect(slotIndex)
-	}
-	writeJSONNoStore(w, http.StatusOK, s.usbMgr.Snapshot())
+	s.serveSlapRFDisconnectSlot(w, r, s.usbMgr)
 }
 
 func (s *Server) handleUSBDisconnectAll(w http.ResponseWriter, r *http.Request) {
-	if !s.isAllowedOrigin(r) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	for i := 0; i < usb.MaxUSBConnections; i++ {
-		_ = s.usbMgr.Disconnect(i)
-	}
-	writeJSONNoStore(w, http.StatusOK, s.usbMgr.Snapshot())
+	s.serveSlapRFDisconnectAll(w, r, s.usbMgr)
 }
 
 func (s *Server) handleUSBDebugSlot(w http.ResponseWriter, r *http.Request) {
@@ -172,63 +70,14 @@ func (s *Server) handleUSBDebugSlot(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUSBCommand(w http.ResponseWriter, r *http.Request) {
-	if !s.isAllowedOrigin(r) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	if r.Method != http.MethodPost {
-		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-	var req struct {
-		SlotIndex  int    `json:"slotIndex"`
-		Command    string `json:"command"`
-		ExpectType string `json:"expectType,omitempty"`
-		TimeoutMs  int    `json:"timeoutMs,omitempty"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
-		return
-	}
-	if req.ExpectType != "" {
-		timeout := 3 * time.Second
-		if req.TimeoutMs > 0 && req.TimeoutMs <= 20000 {
-			timeout = time.Duration(req.TimeoutMs) * time.Millisecond
-		}
-		reply, err := s.usbMgr.RequestReply(req.SlotIndex, req.Command, req.ExpectType, timeout)
-		if err != nil {
-			writeJSONNoStore(w, http.StatusGatewayTimeout, map[string]any{"error": err.Error()})
-			return
-		}
-		writeJSONNoStore(w, http.StatusOK, map[string]any{
-			"ok":    true,
-			"reply": reply,
-			"pool":  s.usbMgr.Snapshot(),
-		})
-		return
-	}
-	if err := s.usbMgr.SendCommand(req.SlotIndex, req.Command); err != nil {
-		writeJSONNoStore(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
-		return
-	}
-	writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true})
+	s.serveSlapRFCommand(w, r, s.usbMgr)
 }
 
 func (s *Server) handleUSBKnownForget(w http.ResponseWriter, r *http.Request) {
-	if !s.isAllowedOrigin(r) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	fp := strings.TrimSpace(r.PathValue("fp"))
-	if fp == "" {
-		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "missing timer fingerprint"})
-		return
-	}
-	s.usbMgr.ForgetKnownTimer(fp)
-	writeJSONNoStore(w, http.StatusOK, s.usbMgr.Snapshot())
+	s.serveSlapRFKnownForget(w, r, s.usbMgr)
 }
 
-// handleSimHubUSB controls whether the Go server's simulated Hub `H1` virtual USB cable is plugged into `simHubRx`.
+// handleSimHubUSB controls whether the Go server's simulated Hub `H1` virtual cable is plugged into `simHubRx`.
 func (s *Server) handleSimHubUSB(w http.ResponseWriter, r *http.Request) {
 	if !s.isAllowedOrigin(r) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
@@ -258,137 +107,7 @@ func (s *Server) handleSimHubUSB(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUSBWS(w http.ResponseWriter, r *http.Request) {
-	if !s.isAllowedOrigin(r) {
-		http.Error(w, "forbidden origin", http.StatusForbidden)
-		return
-	}
-	ws, err := websocket.Accept(w, r, &websocket.AcceptOptions{InsecureSkipVerify: true})
-	if err != nil {
-		return
-	}
-	ws.SetReadLimit(64 << 10)
-	defer func() { _ = ws.CloseNow() }()
-
-	ctx, cancel := context.WithCancel(r.Context())
-	defer cancel()
-
-	go func() {
-		defer cancel()
-		for {
-			if _, _, rErr := ws.Read(ctx); rErr != nil {
-				return
-			}
-		}
-	}()
-
-	isSimWS := r.URL.Query().Get("sim") == "1"
-	if isSimWS {
-		ch := make(chan []byte, 128)
-		unsub := s.subscribeSimHubBytes(func(raw []byte) {
-			cp := append([]byte(nil), raw...)
-			select {
-			case ch <- cp:
-			default:
-			}
-		})
-		defer unsub()
-
-		// Immediately send cached HELLO stream so the simulated USB console has H1 + Spokes right away
-		if hellos := s.sim.BuildHubHelloStream(); len(hellos) > 0 {
-			wCtx, wCancel := context.WithTimeout(ctx, wsWriteTimeout)
-			_ = ws.Write(wCtx, websocket.MessageBinary, hellos)
-			wCancel()
-		}
-
-		pingTicker := time.NewTicker(wsPingInterval)
-		defer pingTicker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case pkt := <-ch:
-				wCtx, wCancel := context.WithTimeout(ctx, wsWriteTimeout)
-				wErr := ws.Write(wCtx, websocket.MessageBinary, pkt)
-				wCancel()
-				if wErr != nil {
-					return
-				}
-			case <-pingTicker.C:
-				pCtx, pCancel := context.WithTimeout(ctx, wsWriteTimeout)
-				pErr := ws.Ping(pCtx)
-				pCancel()
-				if pErr != nil {
-					return
-				}
-			}
-		}
-	}
-
-	evCh := make(chan usb.USBEvent, 256)
-	unsub := s.usbMgr.Subscribe(func(ev usb.USBEvent) {
-		select {
-		case evCh <- ev:
-		default:
-			if ev.Type == "pool_state" || ev.Type == "status" {
-				select {
-				case <-evCh:
-				default:
-				}
-				select {
-				case evCh <- ev:
-				default:
-				}
-			}
-		}
-	})
-	defer unsub()
-
-	// Send initial pool snapshot on connect
-	initSnap := s.usbMgr.Snapshot()
-	if b, mErr := json.Marshal(usb.USBEvent{
-		Type:      "pool_state",
-		SlotIndex: initSnap.DebugSlotIndex,
-		Pool:      &initSnap,
-	}); mErr == nil {
-		wCtx, wCancel := context.WithTimeout(ctx, wsWriteTimeout)
-		_ = ws.Write(wCtx, websocket.MessageText, b)
-		wCancel()
-	}
-
-	pingTicker := time.NewTicker(wsPingInterval)
-	defer pingTicker.Stop()
-
-	for {
-		select {
-		case <-ctx.Done():
-			return
-		case ev := <-evCh:
-			b, mErr := json.Marshal(ev)
-			if mErr != nil {
-				continue
-			}
-			wCtx, wCancel := context.WithTimeout(ctx, wsWriteTimeout)
-			wErr := ws.Write(wCtx, websocket.MessageText, b)
-			wCancel()
-			if wErr != nil {
-				return
-			}
-		case <-pingTicker.C:
-			pCtx, pCancel := context.WithTimeout(ctx, wsWriteTimeout)
-			pErr := ws.Ping(pCtx)
-			pCancel()
-			if pErr != nil {
-				return
-			}
-		}
-	}
-}
-
-func writeJSONNoStore(w http.ResponseWriter, status int, v any) {
-	w.Header().Set("Content-Type", "application/json; charset=utf-8")
-	w.Header().Set("Cache-Control", "no-store")
-	w.WriteHeader(status)
-	_ = json.NewEncoder(w).Encode(v)
+	s.serveSlapRFWS(w, r, s.usbMgr)
 }
 
 // handleUSBRawWS bridges an exclusive physical USB serial port (OS serial or Android USB Host)
@@ -437,7 +156,7 @@ func (s *Server) handleUSBRawWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	port, info, openErr := s.usbMgr.OpenRawPort(portName, baud)
+	port, info, openErr := s.usbTransport.OpenRawPort(s.usbMgr, portName, baud)
 	if openErr != nil {
 		_ = sendText(map[string]any{
 			"type":  "open",

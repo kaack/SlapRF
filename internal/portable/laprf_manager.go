@@ -17,9 +17,9 @@ import (
 	"slaprf/internal/domain"
 	"slaprf/internal/firmware"
 	"slaprf/internal/laprf"
+	laprfusb "slaprf/internal/laprf/usb"
 	"slaprf/internal/storage"
 	"slaprf/internal/tracker"
-	"slaprf/internal/usb"
 )
 
 const kvLapRFTargetsKey = "hw.laprf_targets"
@@ -96,7 +96,7 @@ type laprfManager struct {
 
 func newLapRFManager(engine *tracker.Engine, store *storage.BoltStore, openPort firmware.SerialOpener, logf func(string, ...any), onDirty func()) *laprfManager {
 	if openPort == nil {
-		openPort = usb.DefaultSerialOpener
+		openPort = laprfusb.DefaultOpener()
 	}
 	m := &laprfManager{
 		engine:   engine,
@@ -637,4 +637,25 @@ func (s *Server) handleLapRFSync(w http.ResponseWriter, r *http.Request) {
 	}
 	s.laprfMgr.SyncAll()
 	writeJSONNoStore(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) handleLapRFUSBPorts(w http.ResponseWriter, r *http.Request) {
+	if !s.isAllowedOrigin(r) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	showAll := r.URL.Query().Get("all") == "1" || strings.EqualFold(r.URL.Query().Get("all"), "true")
+	ports, err := laprfusb.ListPorts(s.cfg.USBListPorts, showAll)
+	if err != nil {
+		writeJSONNoStore(w, http.StatusOK, map[string]any{"ports": []laprfusb.PortInfo{}, "error": err.Error()})
+		return
+	}
+	if ports == nil {
+		ports = []laprfusb.PortInfo{}
+	}
+	writeJSONNoStore(w, http.StatusOK, map[string]any{"ports": ports})
 }

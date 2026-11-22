@@ -13,6 +13,7 @@ import (
 	"slaprf/internal/domain"
 	"slaprf/internal/firmware"
 	"slaprf/internal/ingest"
+	"slaprf/internal/slaprf"
 	"slaprf/internal/storage"
 	"slaprf/internal/tracker"
 )
@@ -146,7 +147,6 @@ func TestUSBManagerDemuxesHubFramesStatusAndPushesNetChannels(t *testing.T) {
 	hubRx := ingest.NewHubFrameDecoder(eng)
 
 	fp := &fakeUSBPort{}
-	// Pre-populate binary Hub HELLO (slot 1) + Spoke HELLO (slot 2) + Spoke telemetry sample + SLAPRF02 config block + @status JSON
 	fp.pushRx(buildRecordPacket(buildHelloFrame(1, firmware.RoleHubTimer, 0xCAFE1234, "H1-USB")))
 	fp.pushRx(buildRecordPacket(buildHelloFrame(2, firmware.RoleSpokeTimer, 0xBEEF5678, "S1-GATE")))
 	fp.pushRx(buildRecordPacket(buildSingleTelemetryFrame(2, 7, -58)))
@@ -163,18 +163,26 @@ func TestUSBManagerDemuxesHubFramesStatusAndPushesNetChannels(t *testing.T) {
 	fp.pushRx(built.Bytes[idx : idx+160])
 	fp.pushRx([]byte("@{\"t\":\"status\",\"fw\":\"0.4.0\",\"role\":1,\"fp\":\"CAFE1234\",\"label\":\"H1-USB\",\"slot\":1,\"channel\":1}\n"))
 
-	mgr := NewManager(ManagerConfig{
-		Engine: eng,
-		HubRx:  hubRx,
-		Store:  store,
+	tr := NewTransport(Config{
 		OpenPort: func(portName string, baud int) (firmware.SerialPort, error) {
 			return fp, nil
 		},
-		ListPorts: func() ([]PortInfo, error) {
-			return []PortInfo{{Name: "COM9", IsUSB: true, VID: "303A", IsEspressif: true}}, nil
+		ListPorts: func() ([]slaprf.PortInfo, error) {
+			return []slaprf.PortInfo{{Name: "COM9", IsUSB: true, VID: "303A", IsEspressif: true}}, nil
 		},
 	})
+	mgr := slaprf.NewManager(slaprf.Config{
+		Transport: tr,
+		Engine:    eng,
+		HubRx:     hubRx,
+		Store:     store,
+	})
 	defer mgr.Close()
+
+	// Reject ble:* targets on the USB transport!
+	if _, rejErr := mgr.Connect(0, "ble:CAFE1234"); rejErr == nil {
+		t.Fatalf("expected USB transport to reject ble: target")
+	}
 
 	var telemetryFrames int
 	var telMu sync.Mutex
@@ -227,7 +235,6 @@ func TestUSBManagerDemuxesHubFramesStatusAndPushesNetChannels(t *testing.T) {
 		t.Fatalf("expected Spoke BEEF5678 in DetectedTimers, got %+v", detected)
 	}
 
-	// Assign Spoke to Start/Finish gate and push another telemetry packet -> OnTelemetryFrame fires.
 	if _, err := eng.AddGate("Start / Finish", spokeID); err != nil {
 		t.Fatalf("AddGate: %v", err)
 	}
@@ -260,6 +267,50 @@ func TestUSBManagerDemuxesHubFramesStatusAndPushesNetChannels(t *testing.T) {
 	}
 	if pool.Slots[0].LastConfig == nil || pool.Slots[0].LastConfig.TimerLabel != "H1-USB" {
 		t.Fatalf("expected SLAPRF02 config parsed on slot 0, got %+v", pool.Slots[0].LastConfig)
+	}
+}
+
+func TestConnectCancellationClearsConnectingWithoutError(t *testing.T) {
+	openStarted := make(chan struct{})
+	blockCh := make(chan struct{})
+	tr := NewTransport(Config{
+		OpenPort: func(string, int) (firmware.SerialPort, error) {
+			close(openStarted)
+			<-blockCh
+			return nil, errors.New("late open error")
+		},
+	})
+	mgr := slaprf.NewManager(slaprf.Config{Transport: tr})
+	defer mgr.Close()
+	defer close(blockCh)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := mgr.Connect(0, "/dev/ttyACM0")
+		errCh <- err
+	}()
+
+	<-openStarted
+	mid := mgr.Snapshot().Slots[0]
+	if !mid.Connecting || mid.ConnectStatus == "" {
+		t.Fatalf("expected live connecting snapshot, got %+v", mid)
+	}
+
+	if err := mgr.Disconnect(0); err != nil {
+		t.Fatalf("Disconnect (cancel): %v", err)
+	}
+	select {
+	case err := <-errCh:
+		if !errors.Is(err, slaprf.ErrConnectCancelled) {
+			t.Fatalf("expected ErrConnectCancelled, got %v", err)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatalf("Connect did not abort promptly on Disconnect")
+	}
+
+	after := mgr.Snapshot().Slots[0]
+	if after.Connecting || after.Connected || after.LastError != "" || after.PortName != "" {
+		t.Fatalf("expected clean idle slot after cancel, got %+v", after)
 	}
 }
 

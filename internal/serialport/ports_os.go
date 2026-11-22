@@ -1,6 +1,6 @@
-//go:build !android
+//go:build !android && !js
 
-package usb
+package serialport
 
 import (
 	"errors"
@@ -30,7 +30,6 @@ func (p *osSerialPort) SetReadTimeout(t time.Duration) error {
 func (p *osSerialPort) ResetInputBuffer() error  { return p.port.ResetInputBuffer() }
 func (p *osSerialPort) ResetOutputBuffer() error { return p.port.ResetOutputBuffer() }
 
-// openUSBSerialPort opens an OS serial port via the cross-platform go.bug.st/serial library.
 func openUSBSerialPort(portName string, baud int) (firmware.SerialPort, error) {
 	portName = strings.TrimSpace(portName)
 	if portName == "" {

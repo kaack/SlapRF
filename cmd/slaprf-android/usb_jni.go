@@ -20,25 +20,14 @@ import (
 	"unsafe"
 
 	"slaprf/internal/firmware"
-	"slaprf/internal/usb"
+	"slaprf/internal/serialport"
 )
 
 const jniBufSize = 4096
 
 // jniListPorts lists Android USB serial ports (unchanged) followed by any SlapRF Bluetooth hubs
 // discovered by SlapRFBleShim (le:<FP>). Bluetooth errors never hide USB ports.
-func jniListPorts() ([]usb.PortInfo, error) {
-	ports, err := jniListUSBPorts()
-	if usb.BLEScanEnabled() {
-		if ble, bleErr := jniListBLEPorts(); bleErr == nil && len(ble) > 0 {
-			ports = append(ports, ble...)
-			err = nil
-		}
-	}
-	return ports, err
-}
-
-func jniListBLEPorts() ([]usb.PortInfo, error) {
+func jniListBLEPorts() ([]serialport.PortInfo, error) {
 	if C.slaprf_ble_available() == 0 {
 		return nil, nil
 	}
@@ -51,14 +40,14 @@ func jniListBLEPorts() ([]usb.PortInfo, error) {
 	if raw == "" {
 		return nil, nil
 	}
-	var ports []usb.PortInfo
+	var ports []serialport.PortInfo
 	if err := json.Unmarshal([]byte(raw), &ports); err != nil {
 		return nil, fmt.Errorf("parse Android Bluetooth port list: %w", err)
 	}
 	return ports, nil
 }
 
-func jniListUSBPorts() ([]usb.PortInfo, error) {
+func jniListUSBPorts() ([]serialport.PortInfo, error) {
 	cjson := C.slaprf_usb_list_ports_json()
 	if cjson == nil {
 		return nil, nil
@@ -68,22 +57,29 @@ func jniListUSBPorts() ([]usb.PortInfo, error) {
 	if strings.TrimSpace(raw) == "" {
 		return nil, nil
 	}
-	var ports []usb.PortInfo
+	var ports []serialport.PortInfo
 	if err := json.Unmarshal([]byte(raw), &ports); err != nil {
 		return nil, fmt.Errorf("parse Android USB port list: %w", err)
 	}
 	return ports, nil
 }
 
-func jniOpenPort(portName string, baud int) (firmware.SerialPort, error) {
+func jniOpenUSBPort(portName string, baud int) (firmware.SerialPort, error) {
+	return jniOpenTransportPort(portName, baud, false)
+}
+
+func jniOpenBLEPort(portName string, baud int) (firmware.SerialPort, error) {
+	return jniOpenTransportPort(portName, baud, true)
+}
+
+func jniOpenTransportPort(portName string, baud int, isBLE bool) (firmware.SerialPort, error) {
 	portName = strings.TrimSpace(portName)
 	if portName == "" {
-		return nil, errors.New("missing USB serial port name")
+		return nil, errors.New("missing port name")
 	}
 	if baud <= 0 {
 		baud = 115200
 	}
-	isBLE := usb.IsBLEPortName(portName)
 
 	rxBufRef := C.slaprf_jni_alloc_buf(jniBufSize)
 	if rxBufRef == 0 {

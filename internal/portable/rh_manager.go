@@ -23,9 +23,9 @@ import (
 	"slaprf/internal/domain"
 	"slaprf/internal/firmware"
 	"slaprf/internal/rotorhazard"
+	rhusb "slaprf/internal/rotorhazard/usb"
 	"slaprf/internal/storage"
 	"slaprf/internal/tracker"
-	"slaprf/internal/usb"
 )
 
 const (
@@ -137,7 +137,7 @@ func newRHManager(
 	onDirty func(),
 ) *rhManager {
 	if openPort == nil {
-		openPort = usb.DefaultSerialOpener
+		openPort = rhusb.DefaultOpener()
 	}
 	m := &rhManager{
 		engine:   engine,
@@ -1080,3 +1080,24 @@ func (s *Server) handleRHSessionAction(w http.ResponseWriter, r *http.Request) {
 
 // Ensure net package referenced cleanly
 var _ = net.JoinHostPort
+
+func (s *Server) handleRHUSBPorts(w http.ResponseWriter, r *http.Request) {
+	if !s.isAllowedOrigin(r) {
+		http.Error(w, "forbidden origin", http.StatusForbidden)
+		return
+	}
+	if r.Method != http.MethodGet {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	showAll := r.URL.Query().Get("all") == "1" || strings.EqualFold(r.URL.Query().Get("all"), "true")
+	ports, err := rhusb.ListPorts(s.cfg.USBListPorts, showAll)
+	if err != nil {
+		writeJSONNoStore(w, http.StatusOK, map[string]any{"ports": []rhusb.PortInfo{}, "error": err.Error()})
+		return
+	}
+	if ports == nil {
+		ports = []rhusb.PortInfo{}
+	}
+	writeJSONNoStore(w, http.StatusOK, map[string]any{"ports": ports})
+}

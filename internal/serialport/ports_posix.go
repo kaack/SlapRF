@@ -1,6 +1,6 @@
-//go:build !windows && !linux && !android
+//go:build !windows && !linux && !android && !js
 
-package usb
+package serialport
 
 import (
 	"strings"
@@ -8,7 +8,6 @@ import (
 	"go.bug.st/serial"
 )
 
-// listUSBPorts enumerates serial ports in pure Go (CGO_ENABLED=0) on macOS and other POSIX systems.
 func listUSBPorts() ([]PortInfo, error) {
 	names, err := serial.GetPortsList()
 	if err != nil {
@@ -17,7 +16,6 @@ func listUSBPorts() ([]PortInfo, error) {
 	seen := make(map[string]bool, len(names))
 	out := make([]PortInfo, 0, len(names))
 	for _, name := range names {
-		// On macOS, prefer /dev/cu.* callout devices over blocking /dev/tty.* dial-in twins.
 		if strings.HasPrefix(name, "/dev/tty.") {
 			cu := "/dev/cu." + strings.TrimPrefix(name, "/dev/tty.")
 			hasCU := false
@@ -36,7 +34,6 @@ func listUSBPorts() ([]PortInfo, error) {
 		}
 		seen[name] = true
 		lower := strings.ToLower(name)
-		// Skip macOS built-in Bluetooth / debug virtual ports unless explicitly requested
 		if strings.Contains(lower, "bluetooth-incoming-port") || strings.Contains(lower, "debug-console") {
 			continue
 		}
@@ -56,6 +53,6 @@ func listUSBPorts() ([]PortInfo, error) {
 			IsEspressif: isModem,
 		})
 	}
-	sortPorts(out)
+	SortPorts(out)
 	return out, nil
 }

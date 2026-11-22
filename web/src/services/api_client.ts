@@ -1318,6 +1318,9 @@ export class ApiClient {
     this.store.hydrate(
       await this.transport.request<FullStateResponse>("PUT", "/v1/hardware/mode", { mode })
     );
+    if (this.backendMode) {
+      await usbPool.attachBackendMode(this.simMode);
+    }
     if (isSlapRFMode(mode)) {
       await usbPool.reconcileSimulatedPorts();
     }
@@ -1579,6 +1582,7 @@ export class ApiClient {
       // (~1 KB instead of re-serializing and re-normalizing hundreds of KB of lap history every 2 s).
       const statusUrl = this.transport.isStreamConnected?.() ? "/v1/status?lite=1" : "/v1/status";
       const status = await this.transport.request<StatusResponse>("GET", statusUrl);
+      const prevHwMode = this.store.timingHardwareMode;
       this.store.applyStatus(status);
       if (this.backendMode && status.simulatorRunning !== this.simMode) {
         this.simMode = status.simulatorRunning;
@@ -1589,6 +1593,8 @@ export class ApiClient {
         }
         void usbPool.attachBackendMode(this.simMode);
         void this.refresh().catch(() => undefined);
+      } else if (this.backendMode && this.store.timingHardwareMode !== prevHwMode) {
+        void usbPool.attachBackendMode(this.simMode);
       }
     } catch {
       // Ignore transient poll errors

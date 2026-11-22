@@ -1,6 +1,6 @@
 //go:build linux && !android && !nobluetooth
 
-package usb
+package bluetooth
 
 import (
 	"fmt"
@@ -19,15 +19,6 @@ type bluezAdapterCandidate struct {
 	powered bool
 }
 
-// selectBLEAdapter resolves the BlueZ adapter to use on Linux along with its adapter ID (e.g. "hci0").
-// tinygo.org/x/bluetooth's DefaultAdapter hardcodes "hci0", which fails on hosts whose
-// active controller enumerated as hci1+ (for example after USB BT re-enumeration or when
-// an external dongle is active). Selection order:
-//  1. SLAPRF_BLE_ADAPTER env var (e.g. "hci1") when explicitly set.
-//  2. First powered org.bluez.Adapter1 reported by BlueZ over D-Bus (sorted hci0, hci1, ...).
-//  3. First existing org.bluez.Adapter1 reported by BlueZ over D-Bus.
-//  4. First hci* entry under /sys/class/bluetooth.
-//  5. bluetooth.DefaultAdapter ("hci0").
 func selectBLEAdapter() (*bluetooth.Adapter, string) {
 	if env := strings.TrimSpace(os.Getenv("SLAPRF_BLE_ADAPTER")); env != "" {
 		id := strings.TrimPrefix(env, "/org/bluez/")
@@ -42,9 +33,6 @@ func selectBLEAdapter() (*bluetooth.Adapter, string) {
 	return bluetooth.DefaultAdapter, "hci0"
 }
 
-// ensureBLEAdapterPowered powers on the selected BlueZ adapter over D-Bus when it starts in
-// `Powered: false` (the default on fresh Raspberry Pi OS Lite installations). Standard BlueZ
-// D-Bus policies allow unprivileged local users to set `org.bluez.Adapter1.Powered` without sudo.
 func ensureBLEAdapterPowered(adapterID string) error {
 	adapterID = strings.TrimSpace(strings.TrimPrefix(adapterID, "/org/bluez/"))
 	if adapterID == "" {
@@ -57,7 +45,6 @@ func ensureBLEAdapterPowered(adapterID string) error {
 	obj := bus.Object("org.bluez", dbus.ObjectPath("/org/bluez/"+adapterID))
 	prop, err := obj.GetProperty("org.bluez.Adapter1.Powered")
 	if err != nil {
-		// Let adapter.Enable() report missing-adapter errors with its standard formatting.
 		return nil
 	}
 	if powered, ok := prop.Value().(bool); ok && powered {
@@ -74,8 +61,6 @@ func ensureBLEAdapterPowered(adapterID string) error {
 	for time.Now().Before(deadline) {
 		if p, pErr := obj.GetProperty("org.bluez.Adapter1.Powered"); pErr == nil {
 			if on, ok := p.Value().(bool); ok && on {
-				// BlueZ 5.68+ exposes PowerState ("off-enabling" -> "on"); wait until fully "on"
-				// so immediate SetDiscoveryFilter / StartDiscovery calls do not get NotReady.
 				if ps, psErr := obj.GetProperty("org.bluez.Adapter1.PowerState"); psErr == nil {
 					if stateStr, ok := ps.Value().(string); ok && stateStr != "" && stateStr != "on" {
 						time.Sleep(25 * time.Millisecond)
@@ -91,11 +76,6 @@ func ensureBLEAdapterPowered(adapterID string) error {
 	return nil
 }
 
-// ensureBLEDiscoveryStopped clears any lingering org.bluez.Adapter1 discovery session owned by
-// this process's D-Bus connection. tinygo.org/x/bluetooth calls StartDiscovery asynchronously
-// (`adapter.Go`), so stopping a scan shortly after it starts can race: Scan's StopDiscovery runs
-// before StartDiscovery completes on bluetoothd, leaving Discovering=true permanently and causing
-// subsequent Connect calls to fail with `le-connection-abort-by-local`.
 func ensureBLEDiscoveryStopped(adapterID string) bool {
 	adapterID = strings.TrimSpace(strings.TrimPrefix(adapterID, "/org/bluez/"))
 	if adapterID == "" {
@@ -139,6 +119,23 @@ func bluezDeviceObjectPath(adapterID, addrStr string) dbus.ObjectPath {
 	return dbus.ObjectPath("/org/bluez/" + adapterID + "/dev_" + devPart)
 }
 
+func isBLEDeviceKnown(adapterID, addrStr string) bool {
+	if strings.TrimSpace(addrStr) == "" {
+		return false
+	}
+	bus, err := dbus.SystemBus()
+	if err != nil {
+		return true
+	}
+	prop, err := bus.Object("org.bluez", bluezDeviceObjectPath(adapterID, addrStr)).
+		GetProperty("org.bluez.Device1.Address")
+	if err != nil {
+		return false
+	}
+	s, ok := prop.Value().(string)
+	return ok && s != ""
+}
+
 func isBLEDeviceStillConnected(adapterID, addrStr string) bool {
 	if strings.TrimSpace(addrStr) == "" {
 		return true
@@ -168,8 +165,6 @@ func cancelBLEPendingConnect(adapterID, addrStr string) {
 		Call("org.bluez.Device1.Disconnect", 0).Err
 }
 
-// watchBLEDeviceDisconnect monitors org.bluez.Device1.Connected on Linux because
-// tinygo.org/x/bluetooth only hooks D-Bus connection state signals in peripheral mode.
 func watchBLEDeviceDisconnect(adapterID, addrStr string, stop <-chan struct{}, onLost func(error)) {
 	if strings.TrimSpace(addrStr) == "" || onLost == nil {
 		return

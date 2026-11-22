@@ -27,9 +27,12 @@ import (
 	"slaprf/internal/ingest"
 	"slaprf/internal/laprf"
 	"slaprf/internal/rotorhazard"
+	"slaprf/internal/serialport"
+	"slaprf/internal/slaprf"
+	slaprfble "slaprf/internal/slaprf/bluetooth"
+	slaprfusb "slaprf/internal/slaprf/usb"
 	"slaprf/internal/storage"
 	"slaprf/internal/tracker"
-	"slaprf/internal/usb"
 )
 
 const (
@@ -85,12 +88,14 @@ type Config struct {
 	HTTPClient      *http.Client
 	Log             *log.Logger
 	USBOpenPort     firmware.SerialOpener
-	USBListPorts    usb.PortLister
+	USBListPorts    serialport.Lister
+	BLEOpenPort     firmware.SerialOpener
+	BLEListPorts    serialport.Lister
 	DisableAuth     bool // When true (-no-auth), clears persisted Basic Auth on startup
 }
 
 // Server owns the complete native Go timing engines (`realEngine` + `simEngine`), `TrackSimulator`,
-// single-file `bbolt` storage (`slaprf.db`), native USB serial for SlapRF timers, native LapRF 8-Way
+// single-file `bbolt` storage (`slaprf.db`), isolated SlapRF USB & Bluetooth managers, native LapRF 8-Way
 // & RotorHazard hardware links, LapRF 8-Way :5403 TCP emulator, MultiGP proxy, and WebSocket event stream.
 type Server struct {
 	cfg           Config
@@ -109,7 +114,10 @@ type Server struct {
 	apiSrv     *api.Server
 	stream     *streamHub
 
-	usbMgr           *usb.Manager
+	usbTransport     *slaprfusb.Transport
+	usbMgr           *slaprf.Manager
+	bleTransport     *slaprfble.Transport
+	bleMgr           *slaprf.Manager
 	laprfMgr         *laprfManager
 	rhMgr            *rhManager
 	laprfEmulatorMgr *laprfEmulatorManager
@@ -245,14 +253,37 @@ func NewServer(cfg Config) *Server {
 
 	s.stream = newStreamHub(simEngine, realEngine, sim.IsRunning)
 
-	s.usbMgr = usb.NewManager(usb.ManagerConfig{
-		Engine:    realEngine,
-		HubRx:     realHubRx,
-		Store:     store,
+	sharedTimers := slaprf.NewKnownTimerRegistry(store)
+	s.usbTransport = slaprfusb.NewTransport(slaprfusb.Config{
 		OpenPort:  cfg.USBOpenPort,
 		ListPorts: cfg.USBListPorts,
-		Logf:      s.logf,
 	})
+	s.usbMgr = slaprf.NewManager(slaprf.Config{
+		Transport:       s.usbTransport,
+		Timers:          sharedTimers,
+		Engine:          realEngine,
+		HubRx:           realHubRx,
+		SkipHubOutbound: true,
+		Store:           store,
+		Logf:            s.logf,
+	})
+	s.bleTransport = slaprfble.NewTransport(slaprfble.Config{
+		OpenPort:  cfg.BLEOpenPort,
+		ListPorts: cfg.BLEListPorts,
+	})
+	s.bleMgr = slaprf.NewManager(slaprf.Config{
+		Transport:       s.bleTransport,
+		Timers:          sharedTimers,
+		Engine:          realEngine,
+		HubRx:           realHubRx,
+		SkipHubOutbound: true,
+		Store:           store,
+		Logf:            s.logf,
+	})
+	realHubRx.SetOutboundSender(func(pkt []byte) {
+		s.activeSlapRFManager().SendNetChannelsFrame(pkt)
+	})
+
 	markDirty := func() {
 		if s.persistWorker != nil {
 			s.persistWorker.MarkDirty()
@@ -264,9 +295,40 @@ func NewServer(cfg Config) *Server {
 		return !sim.IsRunning() && realEngine.TimingHardwareMode() == domain.HardwareModeLapRF
 	}, s.logf)
 
+	var reconcileMu sync.Mutex
+	var lastActiveSlapRF domain.TimingHardwareMode
+	reconcileSlapRFLinks := func(simRunning bool, realMode domain.TimingHardwareMode) {
+		reconcileMu.Lock()
+		wantMode := domain.TimingHardwareMode("")
+		if !simRunning && domain.IsSlapRFMode(realMode) {
+			wantMode = domain.NormalizeTimingHardwareMode(realMode)
+		}
+		modeChanged := wantMode != lastActiveSlapRF
+		lastActiveSlapRF = wantMode
+		reconcileMu.Unlock()
+
+		wantUSB := wantMode == domain.HardwareModeSlapRF
+		wantBLE := wantMode == domain.HardwareModeSlapRFBLE
+		if !wantUSB {
+			s.usbMgr.SetActive(false, simRunning)
+		}
+		if !wantBLE {
+			s.bleMgr.SetActive(false, simRunning)
+		}
+		if modeChanged && wantMode != "" {
+			realHubRx.Reset()
+		}
+		if wantUSB {
+			s.usbMgr.SetActive(true, simRunning)
+		}
+		if wantBLE {
+			s.bleMgr.SetActive(true, simRunning)
+		}
+	}
+
 	reconcileRealHardwareLinks := func(simRunning bool) {
 		realMode := realEngine.TimingHardwareMode()
-		s.usbMgr.Reconcile(simRunning, realMode)
+		reconcileSlapRFLinks(simRunning, realMode)
 		s.laprfMgr.SetSimMode(simRunning || realMode != domain.HardwareModeLapRF)
 		s.rhMgr.Reconcile(simRunning)
 		s.laprfEmulatorMgr.Reconcile()
@@ -292,7 +354,7 @@ func NewServer(cfg Config) *Server {
 			if !sim.IsRunning() && domain.IsSlapRFMode(realEngine.TimingHardwareMode()) {
 				wasSurvey := s.realHubRx.SurveyActive()
 				_ = s.realHubRx.SetSurvey(false)
-				s.usbMgr.SendToHub("SCAN STOP\nCHANNELS RESET\nRF 1")
+				s.activeSlapRFManager().SendToHub("SCAN STOP\nCHANNELS RESET\nRF 1")
 				if !wasSurvey {
 					s.realHubRx.PushActiveChannels()
 				}
@@ -314,7 +376,7 @@ func NewServer(cfg Config) *Server {
 	})
 
 	// Restore persisted hardware links & LapRF emulator listener
-	s.usbMgr.Reconcile(initialSimMode, realEngine.TimingHardwareMode())
+	reconcileSlapRFLinks(initialSimMode, realEngine.TimingHardwareMode())
 	s.laprfMgr.RestorePersistedTargets(initialSimMode || realEngine.TimingHardwareMode() != domain.HardwareModeLapRF)
 	s.rhMgr.RestorePersistedTargets(initialSimMode)
 	s.laprfEmulatorMgr.Reconcile()
@@ -402,6 +464,13 @@ func (s *Server) DBPath() string {
 	return s.cfg.DBPath
 }
 
+func (s *Server) activeSlapRFManager() *slaprf.Manager {
+	if s.realEngine != nil && s.realEngine.TimingHardwareMode() == domain.HardwareModeSlapRFBLE {
+		return s.bleMgr
+	}
+	return s.usbMgr
+}
+
 // Close flushes pending `bbolt` writes and shuts down all background goroutines and hardware links.
 func (s *Server) Close() {
 	s.stopOnce.Do(func() {
@@ -422,6 +491,9 @@ func (s *Server) Close() {
 	}
 	if s.rhMgr != nil {
 		s.rhMgr.close()
+	}
+	if s.bleMgr != nil {
+		s.bleMgr.Close()
 	}
 	if s.usbMgr != nil {
 		s.usbMgr.Close()
@@ -453,7 +525,7 @@ func (s *Server) RegisterAPIRoutes(mux *http.ServeMux) {
 	// Real-time event + binary telemetry WebSocket stream
 	mux.HandleFunc("GET /v1/ws/stream", s.handleStreamWS)
 
-	// Native Go USB serial & ESP32-C5 ROM bootloader flasher
+	// SlapRF USB-C serial & ESP32-C5 ROM bootloader flasher
 	mux.HandleFunc("GET /v1/usb/ports", s.handleUSBPorts)
 	mux.HandleFunc("GET /v1/usb/connections", s.handleUSBStatus)
 	mux.HandleFunc("POST /v1/usb/connections", s.handleUSBConnect)
@@ -464,22 +536,38 @@ func (s *Server) RegisterAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /v1/usb/debug-slot", s.handleUSBDebugSlot)
 	mux.HandleFunc("POST /v1/usb:command", s.handleUSBCommand)
 	mux.HandleFunc("DELETE /v1/usb/known-timers/{fp}", s.handleUSBKnownForget)
-	mux.HandleFunc("GET /v1/usb/survey", s.handleHubSurvey)
-	mux.HandleFunc("PUT /v1/usb/survey", s.handleHubSurvey)
+	mux.HandleFunc("GET /v1/usb/survey", s.handleUSBSurvey)
+	mux.HandleFunc("PUT /v1/usb/survey", s.handleUSBSurvey)
 	mux.HandleFunc("GET /v1/sim/hub-usb", s.handleSimHubUSB)
 	mux.HandleFunc("PUT /v1/sim/hub-usb", s.handleSimHubUSB)
 	mux.HandleFunc("GET /v1/ws/usb", s.handleUSBWS)
 	mux.HandleFunc("GET /v1/ws/usb-raw", s.handleUSBRawWS)
 
-	// Native Go LapRF 8-Way hardware client & LAN discovery
+	// SlapRF Bluetooth LE Hub
+	mux.HandleFunc("GET /v1/bluetooth/ports", s.handleBluetoothPorts)
+	mux.HandleFunc("GET /v1/bluetooth/devices", s.handleBluetoothPorts)
+	mux.HandleFunc("GET /v1/bluetooth/connections", s.handleBluetoothStatus)
+	mux.HandleFunc("POST /v1/bluetooth/connections", s.handleBluetoothConnect)
+	mux.HandleFunc("POST /v1/bluetooth/connections:disconnectAll", s.handleBluetoothDisconnectAll)
+	mux.HandleFunc("PUT /v1/bluetooth/connections/{slotIndex}", s.handleBluetoothConnect)
+	mux.HandleFunc("DELETE /v1/bluetooth/connections/{slotIndex}", s.handleBluetoothDisconnectSlot)
+	mux.HandleFunc("POST /v1/bluetooth:command", s.handleBluetoothCommand)
+	mux.HandleFunc("DELETE /v1/bluetooth/known-timers/{fp}", s.handleBluetoothKnownForget)
+	mux.HandleFunc("GET /v1/bluetooth/survey", s.handleBluetoothSurvey)
+	mux.HandleFunc("PUT /v1/bluetooth/survey", s.handleBluetoothSurvey)
+	mux.HandleFunc("GET /v1/ws/bluetooth", s.handleBluetoothWS)
+
+	// Native Go LapRF 8-Way hardware client & LAN/USB discovery
 	mux.HandleFunc("GET /v1/laprf/devices", s.handleLapRFDiscover)
+	mux.HandleFunc("GET /v1/laprf/usb-ports", s.handleLapRFUSBPorts)
 	mux.HandleFunc("GET /v1/laprf/sessions", s.handleLapRFStatus)
 	mux.HandleFunc("POST /v1/laprf/sessions", s.handleLapRFConnect)
 	mux.HandleFunc("DELETE /v1/laprf/sessions/{timerId}", s.handleLapRFDisconnect)
 	mux.HandleFunc("POST /v1/laprf:sync", s.handleLapRFSync)
 
-	// Native Go RotorHazard hardware client & LAN discovery
+	// Native Go RotorHazard hardware client & LAN/USB discovery
 	mux.HandleFunc("GET /v1/rh/devices", s.handleRotorHazardDiscover)
+	mux.HandleFunc("GET /v1/rh/usb-ports", s.handleRHUSBPorts)
 	mux.HandleFunc("GET /v1/rh/sessions", s.handleRHStatus)
 	mux.HandleFunc("POST /v1/rh/sessions", s.handleRHConnect)
 	mux.HandleFunc("POST /v1/rh/sessions/{timerId}", s.handleRHSessionAction)

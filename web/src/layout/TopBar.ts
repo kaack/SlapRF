@@ -362,14 +362,15 @@ export class TopBar extends Component {
       case "usb-toggle": {
         if (isServerDisconnectedLockout()) return;
         const main = usbPool.mainConsole;
-        if (main.busyLabel) return;
+        if (main.connecting || main.reconnecting || main.busyLabel) {
+          void main.cancelConnect();
+          return;
+        }
         if (main.connected) {
           openDeviceConnectionSheet({
             console: main,
             bluetoothMode: this.store.timingHardwareMode === "slaprf_ble",
           });
-        } else if (main.reconnecting) {
-          void main.disconnectCleanly();
         } else {
           void usbPool.connectMain().catch(() => undefined);
         }

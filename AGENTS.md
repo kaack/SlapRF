@@ -6,7 +6,7 @@ Technical architecture, build entrypoints, and repository guardrails for AI codi
 
 SlapRF shares a single Go timing engine and TypeScript web UI across desktop, mobile, browser-only demo, and ESP32-C5 hardware targets:
 
-- `internal/`: Core Go packages (`domain`, `dsp`, `tracker`, `race`, `ingest`, `firmware`, `usb`, `laprf`, `rotorhazard`, `multigp`, `api`, `storage`, `portable`, `devbundle`).
+- `internal/`: Core Go packages (`domain`, `dsp`, `tracker`, `race`, `ingest`, `firmware`, `serialport`, `slaprf` + `slaprf/{usb,bluetooth}`, `laprf` + `laprf/usb`, `rotorhazard` + `rotorhazard/usb`, `multigp`, `api`, `storage`, `portable`, `devbundle`).
 - `web/`: Zero-framework TypeScript SPA (`web/src/`), styles (`web/styles/`), firmware asset staging (`web/firmware/`), and Chromium unit tests (`web/src/__tests__/`). Bundled directly by Go via `github.com/evanw/esbuild` (no `npm install` or `node_modules` required for web builds).
 - `docs-site/`: Hugo Extended (`0.170.1`, Hextra) documentation site served under `/docs/`, including an embedded WebSerial flasher (`cmd/build-docs`).
 - `cmd/devserver/`: Local development server (`127.0.0.1:8090`) that compiles TypeScript and WASM on the fly with `Cache-Control: no-store`.

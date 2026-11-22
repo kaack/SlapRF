@@ -56,6 +56,8 @@ function isPortableHostRoute(url: string): boolean {
     pathOnly === "/v1/rh:sync" ||
     pathOnly.startsWith("/v1/usb/") ||
     pathOnly === "/v1/usb:command" ||
+    pathOnly.startsWith("/v1/bluetooth/") ||
+    pathOnly === "/v1/bluetooth:command" ||
     pathOnly.startsWith("/v1/race/multigp/proxy/")
   );
 }

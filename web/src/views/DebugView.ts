@@ -3239,6 +3239,11 @@ export class DebugView extends Component {
           await usbPool.connectOrSwapDebug(isBle ? false : this.showAllPorts);
           break;
         }
+        case "cancel-connect": {
+          await usbPool.mainConsole.cancelConnect();
+          this.renderConnection();
+          break;
+        }
         case "revert-usb-main":
           await usbPool.revertDebugToMain();
           break;

@@ -7,16 +7,18 @@ import (
 
 	"slaprf/internal/domain"
 	"slaprf/internal/ingest"
+	"slaprf/internal/slaprf"
 )
 
-// handleHubSurvey reports or changes the band survey (Network page "Measure all Raceband").
-//
-//	GET /v1/usb/survey              -> current state and the channel table timers sweep
-//	PUT /v1/usb/survey {"on": bool} -> start (or renew the 15 s lease) / stop
-//
-// While a survey runs, every SlapRF timer sweeps Raceband R1..R8 and lap detection gets no signal.
-// It is refused during a live race heat and ends on its own when a heat starts or the lease runs out.
-func (s *Server) handleHubSurvey(w http.ResponseWriter, r *http.Request) {
+func (s *Server) handleUSBSurvey(w http.ResponseWriter, r *http.Request) {
+	s.serveHubSurvey(w, r, domain.HardwareModeSlapRF, s.usbMgr)
+}
+
+func (s *Server) handleBluetoothSurvey(w http.ResponseWriter, r *http.Request) {
+	s.serveHubSurvey(w, r, domain.HardwareModeSlapRFBLE, s.bleMgr)
+}
+
+func (s *Server) serveHubSurvey(w http.ResponseWriter, r *http.Request, wantMode domain.TimingHardwareMode, mgr *slaprf.Manager) {
 	if !s.isAllowedOrigin(r) {
 		http.Error(w, "forbidden origin", http.StatusForbidden)
 		return
@@ -31,8 +33,12 @@ func (s *Server) handleHubSurvey(w http.ResponseWriter, r *http.Request) {
 			writeJSONNoStore(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON body"})
 			return
 		}
-		if req.On && (s.sim.IsRunning() || !domain.IsSlapRFMode(s.realEngine.TimingHardwareMode())) {
-			writeJSONNoStore(w, http.StatusConflict, map[string]any{"error": "the band survey needs SlapRF hardware (not the simulator)"})
+		if req.On && (s.sim.IsRunning() || s.realEngine.TimingHardwareMode() != wantMode) {
+			msg := "the USB band survey requires SlapRF (USB) mode (not Simulator or Bluetooth)"
+			if wantMode == domain.HardwareModeSlapRFBLE {
+				msg = "the Bluetooth band survey requires SlapRF (Bluetooth) mode (not Simulator or USB)"
+			}
+			writeJSONNoStore(w, http.StatusConflict, map[string]any{"error": msg})
 			return
 		}
 		wasActive := s.realHubRx.SurveyActive()
@@ -45,8 +51,7 @@ func (s *Server) handleHubSurvey(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if wasActive != req.On {
-			// Drop any temporary Debug-page channel override on the Hub so it sweeps the new table too.
-			s.usbMgr.SendToHub("CHANNELS RESET")
+			mgr.SendToHub("CHANNELS RESET")
 		}
 	default:
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)

@@ -1509,10 +1509,8 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
 
     try {
       const endpoint = isBleMode
-        ? "/v1/usb/ports?transport=ble"
-        : opts.transport === "usb"
-          ? `/v1/usb/ports?transport=usb&all=${showAllRealPorts ? "1" : "0"}`
-          : `/v1/usb/ports?all=${showAllRealPorts ? "1" : "0"}`;
+        ? "/v1/bluetooth/ports"
+        : `/v1/usb/ports?all=${showAllRealPorts ? "1" : "0"}`;
       const res = await fetch(resolveBackendUrl(endpoint), { cache: "no-store" });
       if (!res.ok) return [];
       const data = (await res.json()) as BackendPortsResponse;

@@ -1,6 +1,6 @@
-//go:build windows || (linux && !android)
+//go:build (windows || (linux && !android)) && !js
 
-package usb
+package serialport
 
 import (
 	"strings"
@@ -9,7 +9,6 @@ import (
 	"go.bug.st/serial/enumerator"
 )
 
-// listUSBPorts enumerates host serial ports with USB VID/PID metadata on Windows and desktop Linux.
 func listUSBPorts() ([]PortInfo, error) {
 	details, err := enumerator.GetDetailedPortsList()
 	if err != nil {
@@ -21,7 +20,7 @@ func listUSBPorts() ([]PortInfo, error) {
 		for _, n := range names {
 			out = append(out, PortInfo{Name: n})
 		}
-		sortPorts(out)
+		SortPorts(out)
 		return out, nil
 	}
 	out := make([]PortInfo, 0, len(details))
@@ -43,6 +42,6 @@ func listUSBPorts() ([]PortInfo, error) {
 			IsEspressif:  isEsp,
 		})
 	}
-	sortPorts(out)
+	SortPorts(out)
 	return out, nil
 }

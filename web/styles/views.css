@@ -5138,8 +5138,32 @@ html[data-theme="light"] .flasher-hub-link .segmented button.is-active {
   justify-content: center;
 }
 .debug-usb-busy-wrap {
-  margin-top: 8px;
-  max-width: 172px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 10px;
+  max-width: 320px;
+}
+.debug-usb-busy-wrap .slaprf-indeterminate-track {
+  max-width: 210px;
+}
+.debug-usb-busy-status {
+  font-size: 12px;
+  line-height: 1.35;
+  color: var(--text-3);
+}
+.debug-usb-cancel-chip {
+  background: var(--surface-2);
+  color: var(--text-2);
+  border-color: var(--border);
+  cursor: pointer;
+}
+.debug-usb-cancel-chip:hover {
+  background: var(--surface-3);
+  color: var(--text);
+}
+.debug-usb-cancel-chip > * {
+  pointer-events: none;
 }
 .sim-usb-port-scanning {
   display: flex;

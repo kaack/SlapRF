@@ -105,12 +105,26 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
   const main = usbPool.mainConsole;
   const swapSlot = usbPool.slots[1];
   const poolBusy = usbPool.slots.find((c) => c.busyLabel)?.busyLabel ?? null;
-  const reconnectingText = !main.connected && main.reconnecting ? "Reconnecting" : "";
-  const busyText = opts.busyText || opts.activeConsole.busyLabel || poolBusy || reconnectingText;
+  const connectingState = !main.connected && (main.connecting || opts.activeConsole.connecting);
+  const reconnectingState = !main.connected && main.reconnecting;
+  const fallbackBusy = reconnectingState ? "Reconnecting" : connectingState ? "Connecting" : "";
+  const busyText = opts.busyText || opts.activeConsole.busyLabel || poolBusy || fallbackBusy;
   const busy = busyText.length > 0;
+  const isConnectingFlow = !main.connected && (busy || connectingState || reconnectingState);
+  const liveConnectStatus =
+    opts.activeConsole.connectStatus ||
+    main.connectStatus ||
+    (reconnectingState
+      ? main.reconnectAttempt > 0
+        ? `Reconnecting (attempt ${main.reconnectAttempt} of ${main.maxReconnectAttempts})…`
+        : "Reconnecting…"
+      : bleMode
+        ? "Waiting for Bluetooth LE connection…"
+        : "Waiting for connection…");
 
   let chipsHtml = "";
   let actionBtnHtml = "";
+  let cancelBtnHtml = "";
 
   if (opts.allowSwap && !bleMode) {
     // Debug page (USB mode):
@@ -146,6 +160,17 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
           ${icons.plug(20)}
           <span class="pilot-chip-name">${btnLabel}</span>
         </button>`;
+      if (isConnectingFlow) {
+        cancelBtnHtml = `
+          <button
+            type="button"
+            class="pilot-chip debug-usb-cancel-chip"
+            data-action="cancel-connect"
+            title="Cancel connection attempt"
+          >
+            <span class="pilot-chip-name">Cancel</span>
+          </button>`;
+      }
     }
   } else {
     // Network page (and Bluetooth Hub mode on both Network & Debug): single primary connection (Slot 0).
@@ -171,16 +196,28 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
           ${bleMode ? icons.wifi(20) : icons.plug(20)}
           <span class="pilot-chip-name">${busy ? `${esc(busyText)}…` : connectText}</span>
         </button>`;
+      if (isConnectingFlow) {
+        cancelBtnHtml = `
+          <button
+            type="button"
+            class="pilot-chip debug-usb-cancel-chip"
+            data-action="cancel-connect"
+            title="Cancel connection attempt"
+          >
+            <span class="pilot-chip-name">Cancel</span>
+          </button>`;
+      }
     }
   }
 
   const bannerParts: string[] = [];
-  if (busy && !main.connected) {
+  if (isConnectingFlow) {
     bannerParts.push(
       `<div class="debug-usb-busy-wrap">
         <div class="slaprf-indeterminate-track" role="progressbar" aria-label="${esc(busyText)}">
           <div class="slaprf-indeterminate-bar"></div>
         </div>
+        <div class="debug-usb-busy-status" role="status" aria-live="polite">${esc(liveConnectStatus)}</div>
       </div>`
     );
   }
@@ -191,7 +228,7 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
         : `<div class="sim-error-note">Connect a SlapRF Server to open physical USB serial ports.</div>`
     );
   }
-  if (opts.error) {
+  if (opts.error && !isConnectingFlow) {
     bannerParts.push(`<div class="sim-error-note">${esc(opts.error)}</div>`);
   }
 
@@ -200,6 +237,7 @@ export function renderUsbConnectionBarHtml(opts: UsbConnectionBarOptions): strin
       <div class="pilot-picker debug-usb-picker" role="tablist" aria-label="${bleMode ? "Active Bluetooth connection" : "Active USB connection"}">
         ${chipsHtml}
         ${actionBtnHtml}
+        ${cancelBtnHtml}
       </div>
     </div>
     ${bannerParts.join("")}`;

@@ -1,4 +1,4 @@
-package usb
+package bluetooth
 
 import (
 	"encoding/binary"
@@ -7,55 +7,31 @@ import (
 	"io"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"slaprf/internal/firmware"
+	"slaprf/internal/slaprf"
 )
 
 // SlapRF Bluetooth Hub GATT contract (see docs/ble-hub-protocol.md).
 const (
-	// BLEPortPrefix marks a port path as a Bluetooth LE hub link (`ble:<FP8HEX>`).
 	BLEPortPrefix = "ble:"
 
 	BLEServiceUUID = "5d1a0001-5a7e-4c0b-9e5f-534c41505246"
 	BLERxCharUUID  = "5d1a0002-5a7e-4c0b-9e5f-534c41505246"
 	BLETxCharUUID  = "5d1a0003-5a7e-4c0b-9e5f-534c41505246"
 
-	// BLEManufacturerCompanyID is the company ID carried in the hub scan response.
 	BLEManufacturerCompanyID uint16 = 0xFFFF
+	BLETransportName                = "ble"
 
-	// BLETransportName is the PortInfo.Transport value for Bluetooth hub ports.
-	BLETransportName = "ble"
-
-	// BLEMinWritePayload is the write payload for the default ATT MTU (23 - 3).
 	BLEMinWritePayload = 20
-	// BLEMaxWritePayload is the write payload for the requested ATT MTU (247 - 3).
 	BLEMaxWritePayload = 244
 
-	// bleMaxBufferedRx caps unread notification bytes so a stalled reader cannot grow memory forever.
 	bleMaxBufferedRx = 1 << 20
 )
 
 // ErrBLEUnsupported is returned when the current build has no Bluetooth LE backend.
 var ErrBLEUnsupported = errors.New("Bluetooth hubs are not supported in this build")
-
-var (
-	bleScanEnabled   atomic.Bool
-	bleSuppressDepth atomic.Int32
-)
-
-// SetBLEScanEnabled controls whether host/Android port enumeration scans for SlapRF Bluetooth Hubs.
-// When false (e.g. in SlapRF USB, LapRF, or RotorHazard modes), DefaultListPorts and Android JNI
-// skip BLE scanning entirely so no background Bluetooth scan or permission prompt is triggered.
-func SetBLEScanEnabled(enabled bool) {
-	bleScanEnabled.Store(enabled)
-}
-
-// BLEScanEnabled reports whether BLE hub scanning is currently active for port enumeration.
-func BLEScanEnabled() bool {
-	return bleScanEnabled.Load() && bleSuppressDepth.Load() == 0
-}
 
 // IsBLEPortName reports whether `name` is a Bluetooth hub port path (`ble:...`).
 func IsBLEPortName(name string) bool {
@@ -125,7 +101,7 @@ func ParseBLEManufacturerData(companyID uint16, data []byte) (BLEAdvertInfo, boo
 }
 
 // BLEPortInfoFor builds the PortInfo entry listed for a discovered Bluetooth hub.
-func BLEPortInfoFor(info BLEAdvertInfo, localName string) PortInfo {
+func BLEPortInfoFor(info BLEAdvertInfo, localName string) slaprf.PortInfo {
 	label := strings.TrimSpace(localName)
 	if label == "" {
 		label = "SlapRF Hub"
@@ -134,7 +110,7 @@ func BLEPortInfoFor(info BLEAdvertInfo, localName string) PortInfo {
 	if info.HasFlags && !info.Paired {
 		product = label + " (Bluetooth · Pairing mode)"
 	}
-	return PortInfo{
+	return slaprf.PortInfo{
 		Name:         BLEPortName(info.Fingerprint),
 		IsUSB:        false,
 		SerialNumber: info.FingerprintHex(),
@@ -156,61 +132,17 @@ func BLEWritePayloadForMTU(attMTU int) int {
 	return n
 }
 
-// MergeBLEPorts returns a PortLister that appends Bluetooth hub ports from `bleList` to the
-// USB ports from `usbList`. Bluetooth is optional: its errors never hide USB ports.
-func MergeBLEPorts(usbList, bleList PortLister) PortLister {
-	return func() ([]PortInfo, error) {
-		var out []PortInfo
-		var usbErr error
-		if usbList != nil {
-			out, usbErr = usbList()
-		}
-		var ble []PortInfo
-		if bleList != nil {
-			ble, _ = bleList()
-		}
-		if usbErr != nil && len(ble) == 0 {
-			return nil, usbErr
-		}
-		out = append(out, ble...)
-		sortPorts(out)
-		return out, nil
-	}
-}
-
-// DispatchBLEOpener returns a SerialOpener that routes `ble:` paths to `bleOpen` and every
-// other path to `usbOpen` unchanged.
-func DispatchBLEOpener(usbOpen, bleOpen firmware.SerialOpener) firmware.SerialOpener {
-	return func(portName string, baud int) (firmware.SerialPort, error) {
-		if IsBLEPortName(portName) {
-			if bleOpen == nil {
-				return nil, ErrBLEUnsupported
-			}
-			return bleOpen(strings.TrimSpace(portName), baud)
-		}
-		if usbOpen == nil {
-			return nil, errors.New("USB serial opener not available")
-		}
-		return usbOpen(portName, baud)
-	}
-}
-
-// BLETransport is the minimal GATT client link a BLEStreamPort needs: writes to the hub RX
-// characteristic (write without response) and teardown. Notification bytes from the TX
-// characteristic are pushed into the port with Deliver, link loss with Disconnected.
-type BLETransport interface {
-	// WriteWithoutResponse writes one ATT payload (at most MaxWriteLen bytes) to RX.
+// GATTConn is the minimal GATT client link a BLEStreamPort needs.
+type GATTConn interface {
 	WriteWithoutResponse(p []byte) error
-	// MaxWriteLen is the current write payload size (ATT_MTU - 3).
 	MaxWriteLen() int
-	// Close tears down the GATT connection.
 	Close() error
 }
 
-// BLEStreamPort adapts a Bluetooth hub GATT link to firmware.SerialPort so the USB manager,
-// hub frame decoder and STATUS? probing run unchanged over Bluetooth.
+// BLEStreamPort adapts a Bluetooth hub GATT link to firmware.SerialPort so `slaprf.Manager`,
+// hub frame decoding, and `STATUS?` probing run identically over Bluetooth.
 type BLEStreamPort struct {
-	t BLETransport
+	t GATTConn
 
 	mu           sync.Mutex
 	buf          []byte
@@ -226,10 +158,13 @@ type BLEStreamPort struct {
 	closeErr  error
 }
 
-var _ firmware.SerialPort = (*BLEStreamPort)(nil)
+var (
+	_ firmware.SerialPort        = (*BLEStreamPort)(nil)
+	_ slaprf.FingerprintObserver = (*BLEStreamPort)(nil)
+)
 
-// NewBLEStreamPort wraps an already connected transport whose TX notifications are enabled.
-func NewBLEStreamPort(t BLETransport) *BLEStreamPort {
+// NewBLEStreamPort wraps an already connected GATT client link whose TX notifications are enabled.
+func NewBLEStreamPort(t GATTConn) *BLEStreamPort {
 	return &BLEStreamPort{
 		t:       t,
 		timeout: 120 * time.Millisecond,
@@ -244,7 +179,7 @@ func (p *BLEStreamPort) wake() {
 	}
 }
 
-// Deliver appends one notification payload to the ordered receive stream. It copies `b`.
+// Deliver appends one notification payload to the ordered receive stream.
 func (p *BLEStreamPort) Deliver(b []byte) {
 	if len(b) == 0 {
 		return
@@ -281,8 +216,7 @@ func (p *BLEStreamPort) DroppedBytes() uint64 {
 	return p.dropped
 }
 
-// Read returns buffered stream bytes, waits up to the read timeout for more (returning 0, nil
-// on timeout like a serial port), and returns io.EOF once the link is closed or lost.
+// Read returns buffered stream bytes, waits up to the read timeout for more, and returns io.EOF once closed or lost.
 func (p *BLEStreamPort) Read(b []byte) (int, error) {
 	if len(b) == 0 {
 		return 0, nil
@@ -323,8 +257,7 @@ func (p *BLEStreamPort) Read(b []byte) (int, error) {
 	}
 }
 
-// Write sends `b` to the hub RX characteristic, split into MTU sized write-without-response
-// chunks. Concurrent Write calls are serialized so chunks never interleave.
+// Write sends `b` to the hub RX characteristic, split into MTU-sized write-without-response chunks.
 func (p *BLEStreamPort) Write(b []byte) (int, error) {
 	if len(b) == 0 {
 		return 0, nil
@@ -355,13 +288,9 @@ func (p *BLEStreamPort) Write(b []byte) (int, error) {
 	return total, nil
 }
 
-// SetDTR is a no-op: a Bluetooth link has no modem control lines.
 func (p *BLEStreamPort) SetDTR(bool) error { return nil }
-
-// SetRTS is a no-op: a Bluetooth link has no modem control lines.
 func (p *BLEStreamPort) SetRTS(bool) error { return nil }
 
-// SetReadTimeout sets how long Read waits for new bytes before returning 0, nil.
 func (p *BLEStreamPort) SetReadTimeout(t time.Duration) error {
 	if t <= 0 {
 		t = 50 * time.Millisecond
@@ -372,7 +301,6 @@ func (p *BLEStreamPort) SetReadTimeout(t time.Duration) error {
 	return nil
 }
 
-// ResetInputBuffer discards unread received bytes.
 func (p *BLEStreamPort) ResetInputBuffer() error {
 	p.mu.Lock()
 	p.buf = nil
@@ -380,23 +308,16 @@ func (p *BLEStreamPort) ResetInputBuffer() error {
 	return nil
 }
 
-// ResetOutputBuffer is a no-op: writes are sent synchronously.
 func (p *BLEStreamPort) ResetOutputBuffer() error { return nil }
 
-type bleFingerprintObserver interface {
-	NoteConnectedFingerprint(fpHex string)
-}
-
-// NoteConnectedFingerprint informs the underlying BLE transport of the hub's authoritative 8-hex
-// fingerprint once `STATUS?` arrives (allowing platforms whose passive scan omitted SCAN_RSP
-// manufacturer data to map the peripheral MAC address to its canonical `ble:<FP>` port name).
+// NoteConnectedFingerprint informs the underlying BLE connection of the Hub's canonical 8-hex fingerprint.
 func (p *BLEStreamPort) NoteConnectedFingerprint(fpHex string) {
-	if obs, ok := p.t.(bleFingerprintObserver); ok {
+	if obs, ok := p.t.(slaprf.FingerprintObserver); ok {
 		obs.NoteConnectedFingerprint(fpHex)
 	}
 }
 
-// Close disconnects the GATT link and unblocks pending reads with io.EOF. Safe to call twice.
+// Close disconnects the GATT link and unblocks pending reads with io.EOF.
 func (p *BLEStreamPort) Close() error {
 	p.closeOnce.Do(func() {
 		p.mu.Lock()
@@ -404,7 +325,6 @@ func (p *BLEStreamPort) Close() error {
 		p.buf = nil
 		p.mu.Unlock()
 		p.wake()
-		// Wait for an in-flight Write to finish so the transport is not torn down mid-call.
 		p.writeMu.Lock()
 		p.closeErr = p.t.Close()
 		p.writeMu.Unlock()

@@ -20,8 +20,8 @@ import (
 	"slaprf/internal/laprf"
 	"slaprf/internal/portable"
 	"slaprf/internal/rotorhazard"
+	"slaprf/internal/serialport"
 	"slaprf/internal/tracker"
-	"slaprf/internal/usb"
 )
 
 func doJSONReq(t *testing.T, method string, fullURL string, origin string, body any) *http.Response {
@@ -435,8 +435,8 @@ func TestRotorHazardUSBManagerEndToEnd(t *testing.T) {
 		StaticFS: fstest.MapFS{
 			"index.html": &fstest.MapFile{Data: []byte("<html>slaprf</html>")},
 		},
-		USBListPorts: func() ([]usb.PortInfo, error) {
-			return []usb.PortInfo{{
+		USBListPorts: func() ([]serialport.PortInfo, error) {
+			return []serialport.PortInfo{{
 				Name:        "COM42",
 				IsUSB:       true,
 				VID:         "303A",
@@ -673,8 +673,8 @@ func TestUSBRawWebSocketBridgeForMobileFlasher(t *testing.T) {
 	srv := portable.NewServer(portable.Config{
 		Version: "v0.0.6-android",
 		DBPath:  filepath.Join(t.TempDir(), "slaprf.db"),
-		USBListPorts: func() ([]usb.PortInfo, error) {
-			return []usb.PortInfo{{
+		USBListPorts: func() ([]serialport.PortInfo, error) {
+			return []serialport.PortInfo{{
 				Name:        "/dev/bus/usb/001/003",
 				IsUSB:       true,
 				VID:         "303A",
@@ -758,5 +758,119 @@ func TestUSBRawWebSocketBridgeForMobileFlasher(t *testing.T) {
 	mt, closeAck, err := ws.Read(ctx)
 	if err != nil || mt != websocket.MessageText || !strings.Contains(string(closeAck), `"id":8`) {
 		t.Fatalf("expected close ack id=8, got mt=%v body=%s err=%v", mt, string(closeAck), err)
+	}
+}
+
+func TestPortableSeparatesUSBAndBluetoothAPIsAndCancelConnect(t *testing.T) {
+	var usbListCalls, bleListCalls int
+	openStarted := make(chan struct{})
+	openBlock := make(chan struct{})
+	defer close(openBlock)
+
+	srv := portable.NewServer(portable.Config{
+		Version: "v0.0.13-test",
+		DBPath:  filepath.Join(t.TempDir(), "slaprf.db"),
+		USBListPorts: func() ([]serialport.PortInfo, error) {
+			usbListCalls++
+			return []serialport.PortInfo{{
+				Name:        "/dev/ttyACM0",
+				IsUSB:       true,
+				VID:         "303A",
+				IsEspressif: true,
+				Product:     "ESP32-C5",
+			}}, nil
+		},
+		BLEListPorts: func() ([]serialport.PortInfo, error) {
+			bleListCalls++
+			return []serialport.PortInfo{{
+				Name:        "ble:EFE44224",
+				IsEspressif: true,
+				Product:     "SlapRF H1 (Bluetooth)",
+				Transport:   "ble",
+			}}, nil
+		},
+		BLEOpenPort: func(portName string, _ int) (firmware.SerialPort, error) {
+			close(openStarted)
+			<-openBlock
+			return nil, nil
+		},
+	})
+	defer srv.Close()
+
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// 1. /v1/usb/ports only invokes USBListPorts.
+	r1 := doJSONReq(t, http.MethodGet, ts.URL+"/v1/usb/ports", "", nil)
+	defer r1.Body.Close()
+	if r1.StatusCode != http.StatusOK || usbListCalls != 1 || bleListCalls != 0 {
+		t.Fatalf("/v1/usb/ports status=%d usbCalls=%d bleCalls=%d", r1.StatusCode, usbListCalls, bleListCalls)
+	}
+
+	// 2. /v1/bluetooth/ports only invokes BLEListPorts.
+	r2 := doJSONReq(t, http.MethodGet, ts.URL+"/v1/bluetooth/ports", "", nil)
+	defer r2.Body.Close()
+	if r2.StatusCode != http.StatusOK || usbListCalls != 1 || bleListCalls != 1 {
+		t.Fatalf("/v1/bluetooth/ports status=%d usbCalls=%d bleCalls=%d", r2.StatusCode, usbListCalls, bleListCalls)
+	}
+
+	// 3. /v1/rh/usb-ports serves RotorHazard USB discovery without touching BLE.
+	rRH := doJSONReq(t, http.MethodGet, ts.URL+"/v1/rh/usb-ports", "", nil)
+	defer rRH.Body.Close()
+	if rRH.StatusCode != http.StatusOK || bleListCalls != 1 {
+		t.Fatalf("/v1/rh/usb-ports status=%d bleCalls=%d", rRH.StatusCode, bleListCalls)
+	}
+
+	// 4. Cross-transport connect requests are rejected with 400 Bad Request.
+	badUSB := doJSONReq(t, http.MethodPut, ts.URL+"/v1/usb/connections/0", "", map[string]any{"portName": "ble:EFE44224"})
+	defer badUSB.Body.Close()
+	if badUSB.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 when passing ble:* to /v1/usb/connections, got %d", badUSB.StatusCode)
+	}
+	badBLE := doJSONReq(t, http.MethodPut, ts.URL+"/v1/bluetooth/connections/0", "", map[string]any{"portName": "/dev/ttyACM0"})
+	defer badBLE.Body.Close()
+	if badBLE.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 when passing USB port to /v1/bluetooth/connections, got %d", badBLE.StatusCode)
+	}
+
+	// 5. In-flight /v1/bluetooth/connections/0 exposes live Connecting + ConnectStatus and cancels cleanly on DELETE.
+	connRespCh := make(chan *http.Response, 1)
+	go func() {
+		connRespCh <- doJSONReq(t, http.MethodPut, ts.URL+"/v1/bluetooth/connections/0", "", map[string]any{"portName": "ble:EFE44224"})
+	}()
+	<-openStarted
+
+	stResp := doJSONReq(t, http.MethodGet, ts.URL+"/v1/bluetooth/connections", "", nil)
+	defer stResp.Body.Close()
+	var pool struct {
+		Slots []struct {
+			Connecting    bool   `json:"connecting"`
+			ConnectStatus string `json:"connectStatus"`
+		} `json:"slots"`
+	}
+	_ = json.NewDecoder(stResp.Body).Decode(&pool)
+	if len(pool.Slots) == 0 || !pool.Slots[0].Connecting || pool.Slots[0].ConnectStatus == "" {
+		t.Fatalf("expected Connecting=true + ConnectStatus on /v1/bluetooth/connections, got %+v", pool.Slots)
+	}
+
+	delResp := doJSONReq(t, http.MethodDelete, ts.URL+"/v1/bluetooth/connections/0", "", nil)
+	defer delResp.Body.Close()
+	if delResp.StatusCode != http.StatusOK {
+		t.Fatalf("DELETE /v1/bluetooth/connections/0 status=%d", delResp.StatusCode)
+	}
+
+	select {
+	case cResp := <-connRespCh:
+		defer cResp.Body.Close()
+		if cResp.StatusCode != http.StatusOK {
+			t.Fatalf("expected 200 OK {cancelled:true} on cancelled connect, got %d", cResp.StatusCode)
+		}
+		var cBody map[string]any
+		_ = json.NewDecoder(cResp.Body).Decode(&cBody)
+		if cBody["cancelled"] != true {
+			t.Fatalf("expected cancelled=true, got %+v", cBody)
+		}
+	case <-time.After(1 * time.Second):
+		t.Fatalf("PUT /v1/bluetooth/connections/0 did not unblock after DELETE cancel")
 	}
 }

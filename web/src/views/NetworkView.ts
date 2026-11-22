@@ -758,6 +758,12 @@ export class NetworkView extends Component {
     }
   }
 
+  private activeSurveyUrl(): string {
+    return resolveBackendUrl(
+      this.store.timingHardwareMode === "slaprf_ble" ? "/v1/bluetooth/survey" : "/v1/usb/survey"
+    );
+  }
+
   private startSurveyLeaseTimer(): void {
     this.stopSurveyLeaseTimer();
     this.surveyLeaseTimer = window.setInterval(() => {
@@ -771,7 +777,7 @@ export class NetworkView extends Component {
         return;
       }
       if (capabilitiesSnapshot().portable && !this.store.simulatorRunning) {
-        void fetch(resolveBackendUrl("/v1/usb/survey"), {
+        void fetch(this.activeSurveyUrl(), {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ on: true }),
@@ -793,7 +799,7 @@ export class NetworkView extends Component {
       return;
     }
     try {
-      const resp = await fetch(resolveBackendUrl("/v1/usb/survey"));
+      const resp = await fetch(this.activeSurveyUrl());
       if (!resp.ok) return;
       const data = (await resp.json()) as { active?: boolean };
       this.surveyAllRaceband = Boolean(data.active);
@@ -824,7 +830,7 @@ export class NetworkView extends Component {
     }
     if (capabilitiesSnapshot().portable && !this.store.simulatorRunning) {
       try {
-        const resp = await fetch(resolveBackendUrl("/v1/usb/survey"), {
+        const resp = await fetch(this.activeSurveyUrl(), {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ on: want }),
@@ -855,7 +861,7 @@ export class NetworkView extends Component {
     if (!this.surveyAllRaceband) return;
     this.surveyAllRaceband = false;
     if (capabilitiesSnapshot().portable && !this.store.simulatorRunning) {
-      void fetch(resolveBackendUrl("/v1/usb/survey"), {
+      void fetch(this.activeSurveyUrl(), {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ on: false }),
@@ -1079,6 +1085,12 @@ export class NetworkView extends Component {
           bluetoothMode: this.store.timingHardwareMode === "slaprf_ble",
           onAfterAction: () => this.renderAll(),
         });
+        break;
+      }
+      case "cancel-connect": {
+        this.connError = null;
+        await usbPool.mainConsole.cancelConnect();
+        this.renderAll();
         break;
       }
       case "disconnect-usb-slot": {
@@ -1508,6 +1520,9 @@ export class NetworkView extends Component {
         statusNote: linked ? `Sync beacon locked` : hasSlot ? "Beacon lost" : "Not connected",
       };
     } else {
+      const isConnecting =
+        !activeHubConsole.connected &&
+        (activeHubConsole.connecting || activeHubConsole.reconnecting || activeHubConsole.busyLabel === "Connecting");
       hub = {
         populated: false,
         online: false,
@@ -1518,7 +1533,7 @@ export class NetworkView extends Component {
         ch: 1,
         viaUsb: false,
         emergencyMode: false,
-        statusNote: "Not connected",
+        statusNote: isConnecting ? activeHubConsole.connectStatus || "Waiting for connection…" : "Not connected",
       };
     }
 

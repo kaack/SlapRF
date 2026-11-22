@@ -70,8 +70,9 @@ tags:
   - name: Hardware & LapRF Emulator
     description: |
       Physical timing hardware transports and the built-in ImmersionRC LapRF 8-Way TCP `:5403` protocol emulator.
-      - **SlapRF USB & BLE (`/v1/usb/*`)**: Enumerate serial/BLE ports, connect Hub `H1` or standalone timers, run `5.8 GHz` Raceband spectrum surveys (`/v1/usb/survey`), and send raw console commands (`/v1/usb:command`).
-      - **External Hardware & Relay (`/v1/laprf/*`, `/v1/rh/*`, `/v1/laprf-emulator`)**: Discover and connect to LapRF 8-Way pucks or RotorHazard servers/USB nodes on the LAN, or expose SlapRF crossings to third-party race software on TCP `:5403`.
+      - **SlapRF USB (`/v1/usb/*`)**: Enumerate USB-C serial ports, connect Hub `H1` or standalone timers, run `5.8 GHz` Raceband spectrum surveys (`/v1/usb/survey`), and send console commands (`/v1/usb:command`).
+      - **SlapRF Bluetooth (`/v1/bluetooth/*`)**: Discover wireless SlapRF Bluetooth Hubs (`ble:<FP>`), pair/connect/cancel or forget wireless Hubs (`/v1/bluetooth/connections*`), run Raceband surveys (`/v1/bluetooth/survey`), and send console commands (`/v1/bluetooth:command`).
+      - **External Hardware & Relay (`/v1/laprf/*`, `/v1/rh/*`, `/v1/laprf-emulator`)**: Discover and connect to LapRF 8-Way pucks or RotorHazard servers/USB nodes on the LAN or over USB (`/v1/laprf/usb-ports`, `/v1/rh/usb-ports`), or expose SlapRF crossings to third-party race software on TCP `:5403`.
 
   - name: Simulator
     description: |
@@ -3083,15 +3084,9 @@ paths:
   /v1/usb/ports:
     get:
       tags: [Hardware & LapRF Emulator]
-      summary: List available local USB serial and Bluetooth ports
+      summary: List available local USB serial ports for SlapRF timers
       operationId: listUsbPorts
       parameters:
-        - name: transport
-          in: query
-          required: false
-          schema:
-            type: string
-            enum: [usb, ble]
         - name: all
           in: query
           required: false
@@ -3128,7 +3123,7 @@ paths:
 
     post:
       tags: [Hardware & LapRF Emulator]
-      summary: Connect a physical USB serial or Bluetooth port to a console slot
+      summary: Connect a physical USB serial port to a SlapRF console slot
       operationId: connectUsbSlot
       requestBody:
         required: true
@@ -3211,7 +3206,7 @@ paths:
 
     delete:
       tags: [Hardware & LapRF Emulator]
-      summary: Disconnect a USB or Bluetooth console slot (optionally unpairing and forgetting the device)
+      summary: Disconnect a USB console slot (or cancel an in-flight USB connection)
       operationId: deleteUsbConnectionSlot
       parameters:
         - name: forget
@@ -3413,13 +3408,252 @@ paths:
               example:
                 error: "invalid survey band or interval"
         "409":
-          description: No connected USB receiver nodes available to run survey
+          description: Survey requires SlapRF (USB) mode outside an active heat
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/ErrorResponse"
               example:
-                error: "no connected usb nodes available for survey"
+                error: "the USB band survey requires SlapRF (USB) mode (not Simulator or Bluetooth)"
+
+  /v1/bluetooth/ports:
+    get:
+      tags: [Hardware & LapRF Emulator]
+      summary: Scan and list nearby SlapRF Bluetooth LE Hubs (ble:<FP>)
+      operationId: listBluetoothPorts
+      responses:
+        "200":
+          description: Discovered SlapRF Bluetooth Hubs and connection pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ports:
+                    type: array
+                    items:
+                      type: object
+                      additionalProperties: true
+                  pool:
+                    type: object
+                    additionalProperties: true
+
+  /v1/bluetooth/connections:
+    get:
+      tags: [Hardware & LapRF Emulator]
+      summary: Get SlapRF Bluetooth Hub connection snapshot, live connection status, and paired inventory
+      operationId: getBluetoothConnections
+      responses:
+        "200":
+          description: Bluetooth connection pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    post:
+      tags: [Hardware & LapRF Emulator]
+      summary: Pair or connect to a SlapRF Bluetooth Hub (ble:<FP>)
+      operationId: connectBluetoothSlot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [portName]
+              properties:
+                slotIndex:
+                  type: integer
+                  example: 0
+                portName:
+                  type: string
+                  example: "ble:EFE44224"
+      responses:
+        "201":
+          description: Connected Bluetooth Hub slot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid Bluetooth target identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /v1/bluetooth/connections/{slotIndex}:
+    parameters:
+      - name: slotIndex
+        in: path
+        required: true
+        schema:
+          type: integer
+          minimum: 0
+          maximum: 2
+    put:
+      tags: [Hardware & LapRF Emulator]
+      summary: Pair or connect a SlapRF Bluetooth Hub slot
+      operationId: putBluetoothConnectionSlot
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [portName]
+              properties:
+                portName:
+                  type: string
+                  example: "ble:EFE44224"
+      responses:
+        "200":
+          description: Connected Bluetooth slot (or `{cancelled: true}` when cancelled mid-connect)
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "400":
+          description: Invalid Bluetooth target identifier
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+    delete:
+      tags: [Hardware & LapRF Emulator]
+      summary: Disconnect a SlapRF Bluetooth Hub, cancel an in-flight connection, or unpair & forget (`?forget=1`)
+      operationId: deleteBluetoothConnectionSlot
+      parameters:
+        - name: forget
+          in: query
+          required: false
+          description: Pass `"1"` to atomically send `BLEPAIR CLEAR`, disconnect, and forget the Bluetooth Hub.
+          schema:
+            type: string
+            enum: ["0", "1"]
+        - name: fp
+          in: query
+          required: false
+          description: Optional 8-hex Hub fingerprint when forgetting a disconnected Bluetooth Hub.
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Updated Bluetooth pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  "/v1/bluetooth/connections:disconnectAll":
+    post:
+      tags: [Hardware & LapRF Emulator]
+      summary: Disconnect all active SlapRF Bluetooth Hub slots
+      operationId: disconnectAllBluetoothConnections
+      responses:
+        "200":
+          description: Updated Bluetooth pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/bluetooth/known-timers/{fp}:
+    parameters:
+      - name: fp
+        in: path
+        required: true
+        schema:
+          type: string
+    delete:
+      tags: [Hardware & LapRF Emulator]
+      summary: Forget a paired SlapRF Bluetooth Hub or Spoke fingerprint
+      operationId: deleteKnownBluetoothTimer
+      responses:
+        "200":
+          description: Updated Bluetooth pool snapshot
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  "/v1/bluetooth:command":
+    post:
+      tags: [Hardware & LapRF Emulator]
+      summary: Send a console command to a connected SlapRF Bluetooth Hub
+      operationId: sendBluetoothCommand
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [command]
+              properties:
+                slotIndex:
+                  type: integer
+                command:
+                  type: string
+                expectType:
+                  type: string
+                timeoutMs:
+                  type: integer
+      responses:
+        "200":
+          description: Command acknowledged or reply received
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+
+  /v1/bluetooth/survey:
+    get:
+      tags: [Hardware & LapRF Emulator]
+      summary: Read full-Raceband 5.8 GHz spectrum survey state for Bluetooth Hub
+      operationId: getBluetoothSurvey
+      responses:
+        "200":
+          description: Survey state
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+    put:
+      tags: [Hardware & LapRF Emulator]
+      summary: Set full-Raceband 5.8 GHz spectrum survey mode on the Bluetooth Hub
+      operationId: putBluetoothSurvey
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [on]
+              properties:
+                on:
+                  type: boolean
+      responses:
+        "200":
+          description: Updated survey state
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        "409":
+          description: Survey requires SlapRF (Bluetooth) mode outside an active heat
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
 
   /v1/laprf/devices:
     get:

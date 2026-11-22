@@ -181,8 +181,10 @@ func Java_app_slaprf_SlapRFHost_nativeStartServer(env *C.JNIEnv, clazz C.jclass,
 		DBPath:          dbPath,
 		AllowLANOrigins: true,
 		Log:             logger,
-		USBListPorts:    jniListPorts,
-		USBOpenPort:     jniOpenPort,
+		USBListPorts:    jniListUSBPorts,
+		USBOpenPort:     jniOpenUSBPort,
+		BLEListPorts:    jniListBLEPorts,
+		BLEOpenPort:     jniOpenBLEPort,
 	})
 	handler := pSrv.Handler()
 
