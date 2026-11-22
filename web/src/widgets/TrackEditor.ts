@@ -66,6 +66,10 @@ export class TrackEditor extends Component {
   private readonly isReadOnlyFn: () => boolean;
   private isDragging = false;
   private lastRenderedHtml = "";
+  private trackResizeObserver: ResizeObserver | null = null;
+  private trackScrollCueRaf = 0;
+  private trackMomentumRaf = 0;
+  private suppressNextTrackClick = false;
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient, opts: TrackEditorOptions = {}) {
     super(el);
@@ -74,8 +78,31 @@ export class TrackEditor extends Component {
     this.isReadOnlyFn = opts.readOnly ?? (() => false);
 
     this.listen(el, "click", (e) => {
-      if (this.isReadOnlyFn()) return;
       const target = e.target as HTMLElement;
+      const scrollBtn = target.closest<HTMLButtonElement>("[data-track-scroll]");
+      if (scrollBtn) {
+        e.preventDefault();
+        e.stopPropagation();
+        this.cancelTrackMomentum();
+        const scrollEl = this.el.querySelector<HTMLElement>(".gate-track-scroll");
+        if (scrollEl) {
+          const dir = Number(scrollBtn.dataset.trackScroll) || 1;
+          const step = Math.max(120, Math.round(scrollEl.clientWidth * 0.68));
+          try {
+            scrollEl.scrollBy({ left: dir * step, behavior: "smooth" });
+          } catch {
+            scrollEl.scrollLeft += dir * step;
+          }
+        }
+        return;
+      }
+      if (this.suppressNextTrackClick) {
+        this.suppressNextTrackClick = false;
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (this.isReadOnlyFn()) return;
       const makeStartBtn = target.closest<HTMLElement>("[data-make-start]");
       if (makeStartBtn) {
         e.stopPropagation();
@@ -95,28 +122,40 @@ export class TrackEditor extends Component {
     });
 
     this.listen(el, "pointerdown", (e) => {
-      if (e.button !== 0 || this.isReadOnlyFn()) return;
+      if (e.button !== 0 && e.pointerType === "mouse") return;
       const target = e.target as HTMLElement;
-
-      // Clicking inline controls beneath a node should not start a node drag.
-      if (target.closest("[data-make-start], [data-delete-timer]")) {
+      if (target.closest("[data-track-scroll], [data-make-start], [data-delete-timer]")) {
         return;
       }
 
-      const trayTimerEl = target.closest<HTMLElement>(".unassigned-timer-token[data-timer-id]");
-      if (trayTimerEl) {
-        this.beginTrayTimerDrag(e, trayTimerEl);
-        return;
+      if (!this.isReadOnlyFn()) {
+        const trayTimerEl = target.closest<HTMLElement>(".unassigned-timer-token[data-timer-id]");
+        if (trayTimerEl) {
+          this.beginTrayTimerDrag(e, trayTimerEl);
+          return;
+        }
+
+        const interactiveNodePart = target.closest<HTMLElement>(
+          ".gate-node-circle, .gate-node-top"
+        );
+        const nodeEl = interactiveNodePart?.closest<HTMLElement>(".gate-line-item[data-gate]");
+        if (nodeEl) {
+          this.beginTrackNodeInteraction(e, nodeEl);
+          return;
+        }
       }
 
-      const interactiveNodePart = target.closest<HTMLElement>(
-        ".gate-node-circle, .gate-node-top"
-      );
-      const nodeEl = interactiveNodePart?.closest<HTMLElement>(".gate-line-item[data-gate]");
-      if (nodeEl) {
-        this.beginTrackNodeInteraction(e, nodeEl);
+      const scrollEl = target.closest<HTMLElement>(".gate-track-scroll");
+      if (scrollEl && e.pointerType === "mouse" && scrollEl.scrollWidth > scrollEl.clientWidth + 4) {
+        this.beginTrackPan(e, scrollEl);
       }
     });
+
+    this.listen(window, "resize", () => this.scheduleSyncTrackScrollCues());
+    if (typeof ResizeObserver !== "undefined") {
+      this.trackResizeObserver = new ResizeObserver(() => this.scheduleSyncTrackScrollCues());
+      this.trackResizeObserver.observe(this.el);
+    }
 
     const refreshIfIdle = () => {
       const active = document.activeElement;
@@ -136,6 +175,15 @@ export class TrackEditor extends Component {
       })
     );
     this.onDispose(() => {
+      this.cancelTrackMomentum();
+      if (this.trackScrollCueRaf) {
+        window.cancelAnimationFrame(this.trackScrollCueRaf);
+        this.trackScrollCueRaf = 0;
+      }
+      if (this.trackResizeObserver) {
+        this.trackResizeObserver.disconnect();
+        this.trackResizeObserver = null;
+      }
       unsubStore();
       unsubPool();
       unsubSlots.forEach((fn) => fn());
@@ -209,31 +257,179 @@ export class TrackEditor extends Component {
           </span>
         </div>
 
-        <div class="gate-track-scroll" data-track-dropzone>
-          <div class="gate-track-line ${nodes.length === 0 ? "is-empty-line" : ""}" data-track-line role="list" aria-label="Course timer order">
-            ${
-              nodes.length === 0
-                ? this.renderEmptyTimelinePlaceholder()
-                : nodes
-                    .map((n, idx) =>
-                      this.renderTrackNode(
-                        n,
-                        idx,
-                        nodes,
-                        detected
+        <div class="gate-track-scroll-shell" data-track-scroll-shell>
+          <button
+            type="button"
+            class="pilot-picker-cue gate-track-cue is-left"
+            data-track-scroll="-1"
+            aria-label="Scroll track timers left"
+            title="More timers left"
+            hidden
+          >${icons.chevronLeft(16)}</button>
+          <div class="gate-track-scroll" data-track-dropzone>
+            <div class="gate-track-line ${nodes.length === 0 ? "is-empty-line" : ""}" data-track-line role="list" aria-label="Course timer order">
+              ${
+                nodes.length === 0
+                  ? this.renderEmptyTimelinePlaceholder()
+                  : nodes
+                      .map((n, idx) =>
+                        this.renderTrackNode(
+                          n,
+                          idx,
+                          nodes,
+                          detected
+                        )
                       )
-                    )
-                    .join("")
-            }
+                      .join("")
+              }
+            </div>
           </div>
+          <button
+            type="button"
+            class="pilot-picker-cue gate-track-cue is-right"
+            data-track-scroll="1"
+            aria-label="Scroll track timers right"
+            title="More timers right"
+            hidden
+          >${icons.chevronRight(16)}</button>
         </div>
 
         ${readOnly ? "" : this.renderUnassignedTray(unassignedTimers)}
       </div>
     `;
-    if (!force && html === this.lastRenderedHtml) return;
+    if (!force && html === this.lastRenderedHtml) {
+      this.scheduleSyncTrackScrollCues();
+      return;
+    }
+    const prevScrollLeft = this.el.querySelector<HTMLElement>(".gate-track-scroll")?.scrollLeft ?? 0;
+    const prevTrayScrollLeft =
+      this.el.querySelector<HTMLElement>(".gate-unassigned-list")?.scrollLeft ?? 0;
     this.lastRenderedHtml = html;
     this.el.innerHTML = html;
+
+    const nextScrollEl = this.el.querySelector<HTMLElement>(".gate-track-scroll");
+    if (nextScrollEl) {
+      if (prevScrollLeft > 0) {
+        nextScrollEl.scrollLeft = prevScrollLeft;
+      }
+      nextScrollEl.addEventListener(
+        "scroll",
+        () => this.scheduleSyncTrackScrollCues(),
+        { passive: true }
+      );
+    }
+    const nextTrayListEl = this.el.querySelector<HTMLElement>(".gate-unassigned-list");
+    if (nextTrayListEl && prevTrayScrollLeft > 0) {
+      nextTrayListEl.scrollLeft = prevTrayScrollLeft;
+    }
+    this.syncTrackScrollCues();
+    this.scheduleSyncTrackScrollCues();
+  }
+
+  private cancelTrackMomentum(): void {
+    if (this.trackMomentumRaf) {
+      window.cancelAnimationFrame(this.trackMomentumRaf);
+      this.trackMomentumRaf = 0;
+    }
+    this.el.querySelector<HTMLElement>(".gate-track-scroll")?.classList.remove("is-dragging");
+  }
+
+  private startTrackMomentum(scrollEl: HTMLElement, initialVelocityX: number): void {
+    let velocityX = initialVelocityX;
+    if (Math.abs(velocityX) < 0.12) return;
+    this.cancelTrackMomentum();
+    let lastFrameTime = performance.now();
+    const step = (now: number) => {
+      const dt = Math.min(32, Math.max(1, now - lastFrameTime));
+      lastFrameTime = now;
+      const prev = scrollEl.scrollLeft;
+      scrollEl.scrollLeft -= velocityX * dt;
+      velocityX *= Math.pow(0.95, dt / 16);
+      if (Math.abs(velocityX) >= 0.05 && Math.abs(scrollEl.scrollLeft - prev) > 0.08) {
+        this.trackMomentumRaf = window.requestAnimationFrame(step);
+      } else {
+        this.trackMomentumRaf = 0;
+      }
+    };
+    this.trackMomentumRaf = window.requestAnimationFrame(step);
+  }
+
+  private scheduleSyncTrackScrollCues(): void {
+    if (this.trackScrollCueRaf) return;
+    this.trackScrollCueRaf = window.requestAnimationFrame(() => {
+      this.trackScrollCueRaf = 0;
+      this.syncTrackScrollCues();
+    });
+  }
+
+  private syncTrackScrollCues(): void {
+    const shell = this.el.querySelector<HTMLElement>("[data-track-scroll-shell]");
+    const scrollEl = this.el.querySelector<HTMLElement>(".gate-track-scroll");
+    const leftCue = this.el.querySelector<HTMLButtonElement>('[data-track-scroll="-1"]');
+    const rightCue = this.el.querySelector<HTMLButtonElement>('[data-track-scroll="1"]');
+    if (!shell || !scrollEl || !leftCue || !rightCue) return;
+    const maxScroll = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
+    const canLeft = maxScroll > 4 && scrollEl.scrollLeft > 4;
+    const canRight = maxScroll > 4 && scrollEl.scrollLeft < maxScroll - 4;
+    leftCue.hidden = !canLeft;
+    rightCue.hidden = !canRight;
+    shell.classList.toggle("can-scroll-left", canLeft);
+    shell.classList.toggle("can-scroll-right", canRight);
+  }
+
+  private beginTrackPan(downEvent: PointerEvent, scrollEl: HTMLElement): void {
+    this.cancelTrackMomentum();
+    const pointerId = downEvent.pointerId;
+    const downX = downEvent.clientX;
+    const downY = downEvent.clientY;
+    const downScrollLeft = scrollEl.scrollLeft;
+    let lastX = downX;
+    let lastMoveTime = performance.now();
+    let velocityX = 0;
+    let dragged = false;
+
+    const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      const dx = ev.clientX - downX;
+      const dy = ev.clientY - downY;
+      if (!dragged) {
+        if (Math.abs(dx) > 6 && Math.abs(dx) >= Math.abs(dy)) {
+          dragged = true;
+          this.suppressNextTrackClick = true;
+          scrollEl.classList.add("is-dragging");
+        }
+      }
+      if (dragged) {
+        const now = performance.now();
+        const dt = Math.max(1, now - lastMoveTime);
+        const instVel = (ev.clientX - lastX) / dt;
+        velocityX = velocityX * 0.35 + instVel * 0.65;
+        lastX = ev.clientX;
+        lastMoveTime = now;
+        scrollEl.scrollLeft = downScrollLeft - dx;
+      }
+    };
+
+    const onUp = (ev: PointerEvent) => {
+      if (ev.pointerId !== pointerId) return;
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      window.removeEventListener("pointercancel", onUp);
+      scrollEl.classList.remove("is-dragging");
+      if (dragged) {
+        if (performance.now() - lastMoveTime > 75) velocityX = 0;
+        this.startTrackMomentum(scrollEl, velocityX);
+        window.setTimeout(() => {
+          this.suppressNextTrackClick = false;
+        }, 50);
+      } else {
+        this.suppressNextTrackClick = false;
+      }
+    };
+
+    window.addEventListener("pointermove", onMove, { passive: true });
+    window.addEventListener("pointerup", onUp, { passive: true });
+    window.addEventListener("pointercancel", onUp, { passive: true });
   }
 
   private renderEmptyTimelinePlaceholder(): string {
@@ -338,7 +534,7 @@ export class TrackEditor extends Component {
           ${
             hasTimer
               ? `<span class="gate-node-timer-code mono">${esc(shortCode)}</span>`
-              : `<span class="gate-node-empty-label">Empty</span>`
+              : `<span class="gate-node-empty-label"></span>`
           }
         </button>
 
@@ -462,14 +658,52 @@ export class TrackEditor extends Component {
     y: number,
     currentlyOver: boolean
   ): boolean {
-    const lineRect = lineEl.getBoundingClientRect();
-    if (x < lineRect.left - 12 || x > lineRect.right + 12) return false;
+    const boundsEl = lineEl.closest<HTMLElement>(".gate-track-scroll") ?? lineEl;
+    const boundsRect = boundsEl.getBoundingClientRect();
+    if (x < boundsRect.left - 12 || x > boundsRect.right + 12) return false;
     const firstCircle = lineEl.querySelector<HTMLElement>(".gate-node-circle");
     const lineCenterY = firstCircle
       ? firstCircle.getBoundingClientRect().top + firstCircle.getBoundingClientRect().height / 2
-      : lineRect.top + 54;
+      : boundsRect.top + 54;
     const threshold = currentlyOver ? 64 : 48;
     return Math.abs(y - lineCenterY) <= threshold;
+  }
+
+  private autoScrollTrackAtEdge(scrollEl: HTMLElement | null, clientX: number): void {
+    if (!scrollEl || scrollEl.scrollWidth <= scrollEl.clientWidth + 4) return;
+    const sr = scrollEl.getBoundingClientRect();
+    const edgeZone = 38;
+    if (clientX < sr.left + edgeZone) {
+      const intensity = Math.min(1, (sr.left + edgeZone - clientX) / edgeZone);
+      scrollEl.scrollLeft -= Math.max(2, Math.round(intensity * 10));
+    } else if (clientX > sr.right - edgeZone) {
+      const intensity = Math.min(1, (clientX - (sr.right - edgeZone)) / edgeZone);
+      scrollEl.scrollLeft += Math.max(2, Math.round(intensity * 10));
+    }
+  }
+
+  private revealTrackNodeInScroll(assignedTimerId: number): void {
+    const scrollEl = this.el.querySelector<HTMLElement>(".gate-track-scroll");
+    const nodeEl = this.el.querySelector<HTMLElement>(
+      `.gate-line-item[data-assigned-timer="${assignedTimerId}"]`
+    );
+    if (!scrollEl || !nodeEl) return;
+    const maxScroll = Math.max(0, scrollEl.scrollWidth - scrollEl.clientWidth);
+    if (maxScroll <= 4) return;
+    const sr = scrollEl.getBoundingClientRect();
+    const nr = nodeEl.getBoundingClientRect();
+    const pad = 28;
+    let targetLeft = scrollEl.scrollLeft;
+    if (nr.left < sr.left + pad) {
+      targetLeft += nr.left - (sr.left + pad);
+    } else if (nr.right > sr.right - pad) {
+      targetLeft += nr.right - (sr.right - pad);
+    }
+    targetLeft = Math.max(0, Math.min(maxScroll, targetLeft));
+    if (Math.abs(targetLeft - scrollEl.scrollLeft) > 1) {
+      scrollEl.scrollLeft = targetLeft;
+      this.syncTrackScrollCues();
+    }
   }
 
   /**
@@ -607,6 +841,9 @@ export class TrackEditor extends Component {
         previewSlot = this.createInsertionPreviewSlot(timerId, color);
       }
 
+      const trackScrollEl = lineEl.closest<HTMLElement>(".gate-track-scroll");
+      this.autoScrollTrackAtEdge(trackScrollEl, ev.clientX);
+
       const realNodes = [
         ...lineEl.querySelectorAll<HTMLElement>(".gate-line-item[data-gate]"),
       ];
@@ -624,6 +861,7 @@ export class TrackEditor extends Component {
       if (previewSlot.parentElement !== lineEl || previewSlot.nextElementSibling !== refNode) {
         lineEl.insertBefore(previewSlot, refNode);
         this.syncLinePositionsInPlace();
+        this.scheduleSyncTrackScrollCues();
       }
     };
 
@@ -663,6 +901,7 @@ export class TrackEditor extends Component {
         } finally {
           this.isDragging = false;
           this.render(true);
+          this.revealTrackNodeInScroll(timerId);
         }
       } else {
         tokenEl.classList.remove("is-dragging-source");
@@ -690,6 +929,7 @@ export class TrackEditor extends Component {
    *     track line until the mouse is actually released, then removes the timer from the track.
    */
   private beginTrackNodeInteraction(downEvent: PointerEvent, item: HTMLElement): void {
+    this.cancelTrackMomentum();
     try {
       item.setPointerCapture(downEvent.pointerId);
     } catch {
@@ -699,12 +939,28 @@ export class TrackEditor extends Component {
     const nodeId = Number(item.dataset.gate);
     const circle = item.querySelector<HTMLElement>(".gate-node-circle") ?? item;
     const trayEl = this.el.querySelector<HTMLElement>("[data-unassigned-tray]");
+    const scrollEl = item.closest<HTMLElement>(".gate-track-scroll");
+    const canSideScroll = Boolean(scrollEl && scrollEl.scrollWidth > scrollEl.clientWidth + 4);
+    const initialScrollLeft = scrollEl?.scrollLeft ?? 0;
     const startX = downEvent.clientX;
     const startY = downEvent.clientY;
     const initialCircleRect = circle.getBoundingClientRect();
+    let lastX = startX;
+    let lastY = startY;
+    let lastMoveTime = performance.now();
+    let velocityX = 0;
     let started = false;
+    let scrollingTrack = false;
     let floatingEl: HTMLElement | null = null;
     let overUnassignTray = false;
+    let holdTimer = 0;
+
+    const clearHoldTimer = () => {
+      if (holdTimer) {
+        window.clearTimeout(holdTimer);
+        holdTimer = 0;
+      }
+    };
 
     const blockTouchScroll = (te: TouchEvent) => {
       if (te.cancelable) te.preventDefault();
@@ -715,6 +971,7 @@ export class TrackEditor extends Component {
     const halfH = initialCircleRect.height / 2;
 
     const startDrag = (clientX: number, clientY: number) => {
+      clearHoldTimer();
       started = true;
       this.isDragging = true;
       document.body.classList.add("is-gate-dragging");
@@ -731,11 +988,49 @@ export class TrackEditor extends Component {
       item.classList.add("is-drop-slot");
     };
 
+    if (downEvent.pointerType === "touch" && canSideScroll) {
+      holdTimer = window.setTimeout(() => {
+        holdTimer = 0;
+        if (!started && !scrollingTrack) {
+          startDrag(lastX, lastY);
+        }
+      }, 180);
+    }
+
     const onMove = (ev: PointerEvent) => {
+      if (ev.pointerId !== downEvent.pointerId) return;
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
+      lastX = ev.clientX;
+      lastY = ev.clientY;
+
+      if (scrollingTrack && scrollEl) {
+        const now = performance.now();
+        const dt = Math.max(1, now - lastMoveTime);
+        const instVel = (ev.clientX - (scrollEl.dataset.lastPanX ? Number(scrollEl.dataset.lastPanX) : startX)) / dt;
+        velocityX = velocityX * 0.35 + instVel * 0.65;
+        scrollEl.dataset.lastPanX = String(ev.clientX);
+        lastMoveTime = now;
+        scrollEl.scrollLeft = initialScrollLeft - dx;
+        return;
+      }
+
       if (!started) {
         if (Math.hypot(dx, dy) < 5) return;
+        clearHoldTimer();
+        if (
+          ev.pointerType === "touch" &&
+          canSideScroll &&
+          scrollEl &&
+          Math.abs(dx) > Math.abs(dy) * 1.2
+        ) {
+          scrollingTrack = true;
+          this.suppressNextTrackClick = true;
+          scrollEl.dataset.lastPanX = String(ev.clientX);
+          lastMoveTime = performance.now();
+          scrollEl.scrollLeft = initialScrollLeft - dx;
+          return;
+        }
         startDrag(ev.clientX, ev.clientY);
       }
       if (!floatingEl) return;
@@ -765,6 +1060,8 @@ export class TrackEditor extends Component {
       const lineCenterY = initialCircleRect.top + halfH;
       if (Math.abs(ev.clientY - lineCenterY) > 64) return;
 
+      this.autoScrollTrackAtEdge(scrollEl, ev.clientX);
+
       const centerX = ev.clientX;
       const items = [...parent.querySelectorAll<HTMLElement>(".gate-line-item[data-gate]")];
       const currentIdx = items.indexOf(item);
@@ -788,6 +1085,7 @@ export class TrackEditor extends Component {
     };
 
     const onEnd = () => {
+      clearHoldTimer();
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onEnd);
       window.removeEventListener("pointercancel", onEnd);
@@ -804,6 +1102,17 @@ export class TrackEditor extends Component {
       if (floatingEl) {
         floatingEl.remove();
         floatingEl = null;
+      }
+
+      if (scrollingTrack && scrollEl) {
+        delete scrollEl.dataset.lastPanX;
+        if (performance.now() - lastMoveTime > 75) velocityX = 0;
+        this.startTrackMomentum(scrollEl, velocityX);
+        window.setTimeout(() => {
+          this.suppressNextTrackClick = false;
+        }, 50);
+        this.isDragging = false;
+        return;
       }
 
       if (started) {

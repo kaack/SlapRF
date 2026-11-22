@@ -330,7 +330,10 @@ export class AppShell extends Component {
           cur.classList.contains("fmt-viewport") ||
           cur.classList.contains("net-mobile-graph") ||
           cur.classList.contains("track-canvas-viewport") ||
-          cur.classList.contains("track-editor-canvas")
+          cur.classList.contains("track-editor-canvas") ||
+          cur.classList.contains("gate-track-scroll-shell") ||
+          cur.classList.contains("gate-track-scroll") ||
+          cur.classList.contains("gate-unassigned-list")
         ) {
           return true;
         }

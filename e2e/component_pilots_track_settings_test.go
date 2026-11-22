@@ -234,6 +234,66 @@ func TestComponent_TrackEditorDragGateOffToUnassignedAndBack(t *testing.T) {
 	h.MilestoneScreenshot("track-editor-reassigned-gate")
 }
 
+func TestComponent_TrackEditorMobileOverflowSideScrollAndCues(t *testing.T) {
+	h := NewHarness(t)
+	h.BootClean("#/practice/open-practice/track")
+	if err := h.Page.SetViewportSize(390, 844); err != nil {
+		t.Fatalf("resize to 390x844: %v", err)
+	}
+
+	// Add the 3 remaining timers (H1=1, T5=6, T6=7 -> total 7 timers on the track) so the track overflows horizontally on a 390px phone.
+	sessionID := h.APIState().PracticeState.ActiveSessionID
+	for _, tid := range []int{1, 6, 7} {
+		h.APIPost("/v1/practice/sessions/"+sessionID+"/track/gates", map[string]any{
+			"assignedTimerId": tid,
+		}, nil)
+	}
+
+	items := h.Page.Locator(`.practice-mobile-track-wrap [data-track-line] > .gate-line-item[data-gate]`)
+	h.WaitUntil("7 gate nodes rendered on mobile track line", 5*time.Second, func() (bool, error) {
+		cnt, err := items.Count()
+		return err == nil && cnt == 7, nil
+	})
+
+	h.WaitUntil("mobile Track card stays strictly within 390px viewport while track scroll overflows with right chevron cue and hidden scrollbar", 4*time.Second, func() (bool, error) {
+		ok, evalErr := h.Page.Evaluate(`() => {
+			const card = document.querySelector(".practice-mobile-track-wrap [data-slot='track']");
+			const scrollEl = document.querySelector(".practice-mobile-track-wrap .gate-track-scroll");
+			const leftCue = document.querySelector(".practice-mobile-track-wrap button[data-track-scroll='-1']");
+			const rightCue = document.querySelector(".practice-mobile-track-wrap button[data-track-scroll='1']");
+			if (!card || !scrollEl || !leftCue || !rightCue) return false;
+			const cr = card.getBoundingClientRect();
+			const cs = getComputedStyle(scrollEl);
+			return (
+				cr.left >= 10 &&
+				cr.right <= 390.5 &&
+				cr.width <= 366 &&
+				scrollEl.scrollWidth > scrollEl.clientWidth + 40 &&
+				cs.scrollbarWidth === "none" &&
+				leftCue.hidden === true &&
+				rightCue.hidden === false
+			);
+		}`)
+		return evalErr == nil && ok == true, evalErr
+	})
+
+	rightCue := h.Page.Locator(`.practice-mobile-track-wrap button[data-track-scroll="1"]`).First()
+	h.MustBeVisible(rightCue, "Right chevron scroll cue on overflowing mobile track")
+	if err := rightCue.Click(); err != nil {
+		t.Fatalf("click right track scroll cue: %v", err)
+	}
+
+	h.WaitUntil("scrolling right reveals left chevron cue and advances scrollLeft", 4*time.Second, func() (bool, error) {
+		ok, evalErr := h.Page.Evaluate(`() => {
+			const scrollEl = document.querySelector(".practice-mobile-track-wrap .gate-track-scroll");
+			const leftCue = document.querySelector(".practice-mobile-track-wrap button[data-track-scroll='-1']");
+			return Boolean(scrollEl && leftCue && scrollEl.scrollLeft > 40 && leftCue.hidden === false);
+		}`)
+		return evalErr == nil && ok == true, evalErr
+	})
+	h.MilestoneScreenshot("track-editor-mobile-side-scroll")
+}
+
 func TestComponent_TimingRulesEditorGlobalEditInlineResetAndPerGateOverride(t *testing.T) {
 	h := NewHarness(t)
 	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice/evening-lap-lab/track", nil)
