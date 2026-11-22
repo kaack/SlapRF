@@ -20,6 +20,7 @@ import {
 } from "../services/rh_hardware_link";
 import {
   getKnownHardwareTimers,
+  getPairedBluetoothHub,
   LiveSample,
   sharedTimerConsole,
   TimerConsole,
@@ -37,7 +38,6 @@ import {
   TimingHardwareMode,
 } from "../types/models";
 import { openDeviceConnectionSheet } from "../widgets/DeviceConnectionSheet";
-import { patchUsbConnectionBar } from "../widgets/UsbConnectionBar";
 import { channelColor, DBM_MAX, DBM_MIN, formatHardwareFreq, RACEBAND, racebandName } from "./debug/charts";
 
 const NETWORK_PREFS_KEY = "slaprf.ui.network_prefs.v1";
@@ -186,7 +186,9 @@ export class NetworkView extends Component {
   private lastRhUsbTimersStructSig = "";
   private modeSwitchBusy = false;
   private lastModeSelectorSig = "";
+  private lastSlaprfConnSig = "";
   private lastExternalInlineSig = "";
+  private lastNetSubbarSig = "";
   private lastRenderedHardwareMode: TimingHardwareMode | "" = "";
 
   constructor(el: HTMLElement, store: AppStore, api: ApiClient) {
@@ -206,16 +208,25 @@ export class NetworkView extends Component {
             <h2>Connection</h2>
             <p>Connect the Hub (or a Spoke) over USB-C to inspect the 2.4 GHz network and 5.8 GHz channel readings.</p>
           </div>
-          <div class="debug-status-layout net-connection-stack">
-            <div class="net-timing-mode-bar">
-              <div class="net-timing-mode-select-slot" data-slot="network-mode-selector"></div>
-              <div class="net-slaprf-inline-slot" data-slot="connection"></div>
-              <div class="net-external-inline-slot" data-slot="external-conn-actions" style="display:none"></div>
+          <div class="debug-status-layout">
+            <div class="card card-flush net-conn-card" data-slot="net-conn-card">
+              <div class="net-conn-main">
+                <div class="net-conn-fields">
+                  <label class="net-conn-field is-mode">
+                    <span class="muted net-conn-label">Timing System</span>
+                    <div class="net-conn-mode-select-host" data-slot="network-mode-selector"></div>
+                  </label>
+                  <div class="net-conn-mode-fields" data-slot="laprf-connection" style="display:none"></div>
+                  <div class="net-conn-mode-fields" data-slot="rh-connection" style="display:none"></div>
+                  <div class="net-conn-mode-fields" data-slot="rh-usb-connection" style="display:none"></div>
+                </div>
+                <div class="net-conn-actions">
+                  <div class="net-conn-action-group" data-slot="connection"></div>
+                  <div class="net-conn-action-group" data-slot="external-conn-actions" style="display:none"></div>
+                </div>
+              </div>
+              <div class="net-conn-subbar" data-slot="net-conn-subbar" style="display:none"></div>
             </div>
-            <div data-slot="laprf-usb-error" style="display:none"></div>
-            <div data-slot="laprf-connection" style="display:none"></div>
-            <div data-slot="rh-connection" style="display:none"></div>
-            <div data-slot="rh-usb-connection" style="display:none"></div>
           </div>
         </section>
 
@@ -568,7 +579,9 @@ export class NetworkView extends Component {
       this.lastRhUsbConnSig = "";
       this.lastRhUsbTimersStructSig = "";
       this.lastModeSelectorSig = "";
+      this.lastSlaprfConnSig = "";
       this.lastExternalInlineSig = "";
+      this.lastNetSubbarSig = "";
       this.renderAll();
     });
 
@@ -1823,6 +1836,9 @@ export class NetworkView extends Component {
       this.lastRhTimersStructSig = "";
       this.lastRhUsbConnSig = "";
       this.lastRhUsbTimersStructSig = "";
+      this.lastSlaprfConnSig = "";
+      this.lastExternalInlineSig = "";
+      this.lastNetSubbarSig = "";
       this.renderAll();
     }
   }
@@ -1893,6 +1909,155 @@ export class NetworkView extends Component {
     }
   }
 
+  private renderSlapRFNetworkActions(bleMode: boolean): { actionsHtml: string; subbarHtml: string } {
+    const supported = TimerConsole.supported();
+    const main = usbPool.mainConsole;
+    const poolBusy = usbPool.slots.find((c) => c.busyLabel)?.busyLabel ?? null;
+    const connectingState = !main.connected && main.connecting;
+    const reconnectingState = !main.connected && main.reconnecting;
+    const fallbackBusy = reconnectingState ? "Reconnecting" : connectingState ? "Connecting" : "";
+    const busyText = main.busyLabel || poolBusy || fallbackBusy;
+    const busy = busyText.length > 0;
+    const isConnectingFlow = !main.connected && (busy || connectingState || reconnectingState);
+    const liveConnectStatus =
+      main.connectStatus ||
+      (reconnectingState
+        ? main.reconnectAttempt > 0
+          ? `Reconnecting (attempt ${main.reconnectAttempt} of ${main.maxReconnectAttempts})…`
+          : "Reconnecting…"
+        : bleMode
+          ? "Waiting for Bluetooth LE connection…"
+          : "Waiting for connection…");
+
+    let actionsHtml = "";
+    if (main.connected) {
+      const s = main.lastStatus;
+      const cfg = main.lastConfig;
+      const isOther = main.isOtherDevice;
+      const isWriting = main.writing;
+      const isSpoke = s ? s.role === 2 : cfg?.role === "spoke";
+      const label = isOther
+        ? "Other"
+        : s?.label || cfg?.timerLabel || (s?.role === 1 || cfg?.role === "hub" ? "H1" : "USB");
+      const roleMeta = isWriting
+        ? "Writing…"
+        : s
+          ? s.emergencyMode
+            ? "Emergency"
+            : s.role === 1
+              ? "Hub"
+              : `Spoke${s.slot ? ` · slot ${s.slot}` : ""}`
+          : cfg
+            ? cfg.role === "hub"
+              ? "Hub"
+              : "Spoke"
+            : isOther
+              ? "Unflashed"
+              : "Reading…";
+      const chipColor = isOther
+        ? "#f87171"
+        : s?.emergencyMode || (!s && !cfg)
+          ? "#facc15"
+          : isSpoke
+            ? "#38bdf8"
+            : getAppTheme() === "light"
+              ? "#3b82f6"
+              : "#d4ff3a";
+      const fp = s?.fp || cfg?.fingerprint || "";
+      const fpNote = fp ? ` · ${fp}` : "";
+      const viaBluetooth = main.transportLabel === "Bluetooth";
+      const roleMetaShown = viaBluetooth && !isWriting ? `${roleMeta} · Bluetooth` : roleMeta;
+      const openMenu = !isWriting;
+      const actionAttr = openMenu ? "open-usb-slot-actions" : "select-usb-slot";
+      const titleText = openMenu
+        ? `${label} (${roleMetaShown}${fpNote}) · click for connection options`
+        : `${label} (${roleMetaShown}${fpNote})`;
+      actionsHtml = `
+        <button
+          type="button"
+          class="btn net-conn-btn net-conn-device-btn ${isWriting ? "is-writing" : ""}"
+          data-action="${actionAttr}"
+          data-usb-slot="${main.slotIndex}"
+          ${openMenu ? 'aria-haspopup="dialog"' : ""}
+          title="${esc(titleText)}"
+        >
+          <span class="dot is-live" style="--c:${chipColor}"></span>
+          <strong>${esc(label)}</strong>
+          <span class="muted">${esc(roleMetaShown)}</span>
+          ${openMenu ? `<span class="debug-usb-chip-caret" aria-hidden="true">${icons.chevronDown(13)}</span>` : ""}
+        </button>`;
+    } else {
+      const pairedBleHub = bleMode ? getPairedBluetoothHub() : null;
+      const connectText = bleMode ? (pairedBleHub ? "Connect" : "Pair Device") : "Connect USB";
+      const connectTitle = bleMode
+        ? pairedBleHub
+          ? `Connect to paired Bluetooth Hub ${pairedBleHub.label} (${pairedBleHub.fp})`
+          : "Pair a SlapRF Bluetooth Hub"
+        : "Connect a USB device";
+      actionsHtml = `
+        <button
+          type="button"
+          class="btn net-conn-btn"
+          data-action="connect-add"
+          ${supported && !busy ? "" : "disabled"}
+          title="${esc(connectTitle)}"
+        >
+          ${bleMode ? icons.wifi(14) : icons.plug(14)}
+          <span>${busy ? `${esc(busyText)}…` : connectText}</span>
+        </button>
+        ${
+          isConnectingFlow
+            ? `<button
+                 type="button"
+                 class="btn btn-ghost net-conn-btn"
+                 data-action="cancel-connect"
+                 title="Cancel connection attempt"
+               >
+                 <span>Cancel</span>
+               </button>`
+            : ""
+        }`;
+    }
+
+    const subbarParts: string[] = [];
+    if (isConnectingFlow) {
+      subbarParts.push(
+        `<div class="debug-usb-busy-wrap">
+          <div class="slaprf-indeterminate-track" role="progressbar" aria-label="${esc(busyText)}">
+            <div class="slaprf-indeterminate-bar"></div>
+          </div>
+          <div class="debug-usb-busy-status" role="status" aria-live="polite">${esc(liveConnectStatus)}</div>
+        </div>`
+      );
+    }
+    if (!supported) {
+      subbarParts.push(
+        bleMode
+          ? `<div class="sim-error-note">Connect a SlapRF Server or open the mobile app to connect a Bluetooth Hub.</div>`
+          : `<div class="sim-error-note">Connect a SlapRF Server to open physical USB serial ports.</div>`
+      );
+    }
+    if (this.connError && !isConnectingFlow) {
+      subbarParts.push(`<div class="sim-error-note">${esc(this.connError)}</div>`);
+    }
+    return { actionsHtml, subbarHtml: subbarParts.join("") };
+  }
+
+  private patchNetConnSubbar(html: string): void {
+    const subbarHost = this.el.querySelector<HTMLElement>('[data-slot="net-conn-subbar"]');
+    if (!subbarHost) return;
+    const activeEl = document.activeElement as HTMLElement | null;
+    if (activeEl && subbarHost.contains(activeEl) && activeEl.tagName === "INPUT") {
+      return;
+    }
+    const trimmed = html.trim();
+    subbarHost.style.display = trimmed ? "" : "none";
+    if (trimmed !== this.lastNetSubbarSig) {
+      this.lastNetSubbarSig = trimmed;
+      subbarHost.innerHTML = trimmed;
+    }
+  }
+
   private renderTopConnectionControls(mode: TimingHardwareMode): void {
     const isBleMode = mode === "slaprf_ble";
     const isLapRFNet = mode === "laprf";
@@ -1940,7 +2105,7 @@ export class NetworkView extends Component {
           <select
             name="network-timing-hardware-mode"
             data-field="network-hardware-mode"
-            class="input net-timing-mode-select"
+            class="input net-conn-input net-timing-mode-select"
             aria-label="Timing system"
             ${lock.locked ? `disabled ${lockTitle}` : ""}
           >
@@ -1957,81 +2122,78 @@ export class NetworkView extends Component {
 
     const slaprfConnHost = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
     const extActionsHost = this.el.querySelector<HTMLElement>('[data-slot="external-conn-actions"]');
-    const laprfUsbErrHost = this.el.querySelector<HTMLElement>('[data-slot="laprf-usb-error"]');
     const laprfConnHost = this.el.querySelector<HTMLElement>('[data-slot="laprf-connection"]');
     const rhConnHost = this.el.querySelector<HTMLElement>('[data-slot="rh-connection"]');
     const rhUsbConnHost = this.el.querySelector<HTMLElement>('[data-slot="rh-usb-connection"]');
 
-    if (slaprfConnHost) slaprfConnHost.style.display = isSlapRF ? "contents" : "none";
-    if (laprfConnHost) laprfConnHost.style.display = isLapRFNet ? "" : "none";
-    if (rhConnHost) rhConnHost.style.display = isRHNet ? "" : "none";
-    if (rhUsbConnHost) rhUsbConnHost.style.display = isRHUSB ? "" : "none";
+    if (slaprfConnHost) slaprfConnHost.style.display = isSlapRF ? "flex" : "none";
+    if (extActionsHost) extActionsHost.style.display = !isSlapRF ? "flex" : "none";
+    if (laprfConnHost) laprfConnHost.style.display = isLapRFNet ? "flex" : "none";
+    if (rhConnHost) rhConnHost.style.display = isRHNet ? "flex" : "none";
+    if (rhUsbConnHost) rhUsbConnHost.style.display = isRHUSB ? "flex" : "none";
 
-    if (laprfUsbErrHost) {
-      const usbErrText = isLapRFUSB ? this.laprfError || sharedLapRFLink.errorMessage || "" : "";
-      laprfUsbErrHost.style.display = usbErrText ? "" : "none";
-      const wantErrHtml = usbErrText ? `<div class="sim-error-note">${esc(usbErrText)}</div>` : "";
-      if (laprfUsbErrHost.innerHTML !== wantErrHtml) {
-        laprfUsbErrHost.innerHTML = wantErrHtml;
+    if (isSlapRF && slaprfConnHost) {
+      const { actionsHtml, subbarHtml } = this.renderSlapRFNetworkActions(isBleMode);
+      if (actionsHtml !== this.lastSlaprfConnSig) {
+        this.lastSlaprfConnSig = actionsHtml;
+        slaprfConnHost.innerHTML = actionsHtml;
       }
+      this.patchNetConnSubbar(subbarHtml);
+      return;
     }
 
-    if (extActionsHost) {
-      const showExt = isLapRFUSB || (!isSlapRF && lock.connectedCount > 0);
-      extActionsHost.style.display = showExt ? "inline-flex" : "none";
-      const extSig = showExt ? `${effectiveMode}|${lock.connectedCount}|${lock.busy ? 1 : 0}` : "0";
+    if (extActionsHost && !isRHUSB) {
+      const extSig = `${effectiveMode}|${lock.connectedCount}|${lock.busy ? 1 : 0}`;
       if (extSig !== this.lastExternalInlineSig) {
         this.lastExternalInlineSig = extSig;
-        if (!showExt) {
-          extActionsHost.innerHTML = "";
-        } else if (isLapRFUSB) {
-          const badgeHtml =
-            lock.connectedCount > 0
-              ? `<span class="badge"><span class="status-dot is-up" style="display:inline-block;margin-right:6px"></span>${lock.connectedCount} connected</span>`
-              : "";
-          const connectBtnText = lock.busy
-            ? "Connecting…"
-            : lock.connectedCount > 0
-              ? "Add USB"
-              : "Connect USB";
-          const disconnectHtml =
-            lock.connectedCount > 0
-              ? `<button
-                   type="button"
-                   class="pilot-chip debug-usb-add-chip net-mode-disconnect-chip"
-                   data-action="network-disconnect-active"
-                   ${lock.busy ? "disabled" : ""}
-                   title="Disconnect active connection to switch timing system"
-                 >
-                   ${icons.close(14)}
-                   <span class="pilot-chip-name">${lock.connectedCount > 1 ? "Disconnect all" : "Disconnect"}</span>
-                 </button>`
-              : "";
-          extActionsHost.innerHTML = `${badgeHtml}
-             <button
+        const badgeHtml =
+          lock.connectedCount > 0
+            ? `<span class="badge"><span class="status-dot is-up" style="display:inline-block;margin-right:6px"></span>${lock.connectedCount} connected</span>`
+            : "";
+        const disconnectHtml =
+          lock.connectedCount > 0
+            ? `<button
+                 type="button"
+                 class="btn btn-ghost net-conn-btn"
+                 data-action="network-disconnect-active"
+                 ${lock.busy ? "disabled" : ""}
+                 title="Disconnect active connection to switch timing system"
+               >
+                 ${icons.close(14)}
+                 <span>${lock.connectedCount > 1 ? "Disconnect all" : "Disconnect"}</span>
+               </button>`
+            : "";
+        const primaryActionHtml = isLapRFUSB
+          ? `<button
                type="button"
-               class="pilot-chip debug-usb-add-chip"
+               class="btn net-conn-btn"
                data-action="laprf-connect-usb"
                ${lock.busy ? "disabled" : ""}
                title="Connect a LapRF 8-Way timer over USB"
              >
-               ${icons.plug(20)}
-               <span class="pilot-chip-name">${connectBtnText}</span>
-             </button>
-             ${disconnectHtml}`;
-        } else {
-          extActionsHost.innerHTML = `<span class="badge"><span class="status-dot is-up" style="display:inline-block;margin-right:6px"></span>${lock.connectedCount} connected</span>
-             <button
-               type="button"
-               class="pilot-chip debug-usb-add-chip net-mode-disconnect-chip"
-               data-action="network-disconnect-active"
-               ${lock.busy ? "disabled" : ""}
-               title="Disconnect active connection to switch timing system"
-             >
-               ${icons.close(14)}
-               <span class="pilot-chip-name">${lock.connectedCount > 1 ? "Disconnect all" : "Disconnect"}</span>
-             </button>`;
-        }
+               ${icons.plug(14)}
+               <span>${lock.busy ? "Connecting…" : lock.connectedCount > 0 ? "Add USB" : "Connect USB"}</span>
+             </button>`
+          : isLapRFNet
+            ? `<button
+                 type="button"
+                 class="btn net-conn-btn"
+                 data-action="laprf-connect-eth"
+                 ${lock.busy ? "disabled" : ""}
+               >
+                 ${icons.wifi(14)}
+                 <span>${lock.busy ? "Connecting…" : "Connect Ethernet"}</span>
+               </button>`
+            : `<button
+                 type="button"
+                 class="btn net-conn-btn"
+                 data-action="rh-open-manual-creds"
+                 ${lock.busy ? "disabled" : ""}
+               >
+                 ${icons.wifi(14)}
+                 <span>Connect…</span>
+               </button>`;
+        extActionsHost.innerHTML = `${badgeHtml}${primaryActionHtml}${disconnectHtml}`;
       }
     }
   }
@@ -2094,13 +2256,6 @@ export class NetworkView extends Component {
       }
     }
 
-    const connHost = this.el.querySelector<HTMLElement>('[data-slot="connection"]');
-    patchUsbConnectionBar(connHost, {
-      activeConsole: usbPool.mainConsole,
-      showAllPorts: isBleMode ? false : this.showAllPorts,
-      bluetoothMode: isBleMode,
-      error: this.connError,
-    });
     const { hub, spokes } = this.buildTopologyState();
     const sel = this.ensureSelectedSlot(hub, spokes);
     this.renderTopologySection(hub, spokes, sel);
@@ -2114,6 +2269,8 @@ export class NetworkView extends Component {
     const snaps = sharedLapRFLink.snapshots(this.store);
     const errText = this.laprfError || sharedLapRFLink.errorMessage || "";
 
+    this.patchNetConnSubbar(errText ? `<div class="sim-error-note">${esc(errText)}</div>` : "");
+
     if (!isUSBMode) {
       const activeEl = document.activeElement as HTMLElement | null;
       const focusedInsideConn = Boolean(
@@ -2124,7 +2281,6 @@ export class NetworkView extends Component {
         busy: this.laprfBusy,
         scanning: this.laprfScanning,
         subnet: this.laprfScannedSubnet,
-        err: errText,
         discovered: this.laprfDiscovered,
         connectedEndpoints: snaps.filter((s) => s.connected).map((s) => s.endpoint),
       });
@@ -2163,45 +2319,33 @@ export class NetworkView extends Component {
               : "";
 
         connHost.innerHTML = `
-          <div class="card card-flush">
-            <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between">
-              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
-                <label style="display:flex;flex-direction:column;gap:4px">
-                  <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Ethernet IP</span>
-                  <input
-                    class="input mono"
-                    type="text"
-                    value="${esc(this.laprfHost)}"
-                    data-field="laprf-host"
-                    placeholder="192.168.1.2"
-                    style="width:142px;padding:5px 9px;font-size:13px"
-                  />
-                </label>
-                <label style="display:flex;flex-direction:column;gap:4px">
-                  <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Port</span>
-                  <input
-                    class="input mono"
-                    type="number"
-                    value="${this.laprfPort}"
-                    data-field="laprf-port"
-                    style="width:82px;padding:5px 8px;font-size:13px"
-                  />
-                </label>
-                <button class="btn btn-ghost" type="button" data-action="laprf-connect-eth" ${this.laprfBusy ? "disabled" : ""}>
-                  ${icons.wifi(14)}<span>${this.laprfBusy ? "Connecting…" : "Connect Ethernet"}</span>
-                </button>
-              </div>
-            </div>
-            ${errText ? `<div class="sim-error-note" style="margin:0 16px 12px">${esc(errText)}</div>` : ""}
-          </div>`;
+          <label class="net-conn-field is-ip">
+            <span class="muted net-conn-label">Ethernet IP</span>
+            <input
+              class="input mono net-conn-input"
+              type="text"
+              value="${esc(this.laprfHost)}"
+              data-field="laprf-host"
+              placeholder="192.168.1.2"
+            />
+          </label>
+          <label class="net-conn-field is-port-num">
+            <span class="muted net-conn-label">Port</span>
+            <input
+              class="input mono net-conn-input"
+              type="number"
+              value="${this.laprfPort}"
+              data-field="laprf-port"
+            />
+          </label>`;
 
         const discoverHost = this.slot("laprf-discover");
         if (discoverHost) {
           discoverHost.innerHTML = `
             <div class="card card-flush">
               <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between">
-                <div style="display:flex;align-items:center;gap:10px">
-                  <button class="btn btn-ghost" type="button" data-action="laprf-scan-lan" ${this.laprfScanning ? "disabled" : ""}>
+                <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+                  <button class="btn net-conn-btn" type="button" data-action="laprf-scan-lan" ${this.laprfScanning ? "disabled" : ""}>
                     ${icons.target(14)}<span>${this.laprfScanning ? "Scanning…" : "Scan LAN"}</span>
                   </button>
                   <span class="note">Probes local subnet for LapRF 8-Way units on TCP :${this.laprfPort || 5403}</span>
@@ -2634,47 +2778,42 @@ export class NetworkView extends Component {
 
       const errInDiscover = Boolean(connPrompt && connPrompt.scope === "discovered");
 
+      const rhSubbarParts: string[] = [];
+      if (errText && !errInDiscover) {
+        rhSubbarParts.push(`<div class="sim-error-note">${esc(errText)}</div>`);
+      }
+      if (manualPromptHtml) {
+        rhSubbarParts.push(manualPromptHtml);
+      }
+      this.patchNetConnSubbar(rhSubbarParts.join(""));
+
       connHost.innerHTML = `
-        <div class="card card-flush">
-          <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:flex-end;justify-content:space-between">
-            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:flex-end">
-              <label style="display:flex;flex-direction:column;gap:4px">
-                <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Host IP</span>
-                <input
-                  class="input mono"
-                  type="text"
-                  value="${esc(this.rhHost)}"
-                  data-field="rh-host"
-                  placeholder="192.168.1.101"
-                  style="width:142px;padding:5px 9px;font-size:13px"
-                />
-              </label>
-              <label style="display:flex;flex-direction:column;gap:4px">
-                <span class="muted" style="font-size:11px;text-transform:uppercase;letter-spacing:0.04em">Port</span>
-                <input
-                  class="input mono"
-                  type="number"
-                  value="${this.rhPort}"
-                  data-field="rh-port"
-                  style="width:82px;padding:5px 8px;font-size:13px"
-                />
-              </label>
-              <button class="btn btn-ghost" type="button" data-action="rh-open-manual-creds" ${this.rhBusy ? "disabled" : ""}>
-                ${icons.wifi(14)}<span>Connect…</span>
-              </button>
-            </div>
-            <span class="note">Enter a RotorHazard server IP and port to sign in with its admin credentials</span>
-          </div>
-          ${errText && !errInDiscover ? `<div class="sim-error-note" style="margin:0 16px 12px">${esc(errText)}</div>` : ""}
-          ${manualPromptHtml}
-        </div>`;
+        <label class="net-conn-field is-ip">
+          <span class="muted net-conn-label">Host IP</span>
+          <input
+            class="input mono net-conn-input"
+            type="text"
+            value="${esc(this.rhHost)}"
+            data-field="rh-host"
+            placeholder="192.168.1.101"
+          />
+        </label>
+        <label class="net-conn-field is-port-num">
+          <span class="muted net-conn-label">Port</span>
+          <input
+            class="input mono net-conn-input"
+            type="number"
+            value="${this.rhPort}"
+            data-field="rh-port"
+          />
+        </label>`;
 
       if (discoverHost) {
         discoverHost.innerHTML = `
           <div class="card card-flush">
             <div style="padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px;align-items:center;justify-content:space-between">
               <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-                <button class="btn btn-ghost" type="button" data-action="rh-scan-lan" ${this.rhScanning || !canScanLan ? "disabled" : ""} title="${esc(scanTitle)}">
+                <button class="btn net-conn-btn" type="button" data-action="rh-scan-lan" ${this.rhScanning || !canScanLan ? "disabled" : ""} title="${esc(scanTitle)}">
                   ${icons.target(14)}<span>${this.rhScanning ? "Scanning…" : "Scan LAN"}</span>
                 </button>
                 <span class="note">${
@@ -2689,6 +2828,20 @@ export class NetworkView extends Component {
             ${discoverPromptHtml}
           </div>`;
       }
+    } else {
+      const errInDiscover = Boolean(connPrompt && connPrompt.scope === "discovered");
+      const manualPromptHtml =
+        connPrompt && connPrompt.scope === "manual"
+          ? this.renderRhInlineCredsBar(`Credentials for ${connPrompt.host}:${connPrompt.port}`)
+          : "";
+      const rhSubbarParts: string[] = [];
+      if (errText && !errInDiscover) {
+        rhSubbarParts.push(`<div class="sim-error-note">${esc(errText)}</div>`);
+      }
+      if (manualPromptHtml) {
+        rhSubbarParts.push(manualPromptHtml);
+      }
+      this.patchNetConnSubbar(rhSubbarParts.join(""));
     }
 
     const gateByTimer = new Map<number, { gateId: number; label: string }>();
@@ -3000,9 +3153,11 @@ export class NetworkView extends Component {
     }
 
     const activeEl = document.activeElement as HTMLElement | null;
-    const focusedInsideConn = Boolean(
-      activeEl && connHost.contains(activeEl) && (activeEl.tagName === "SELECT" || activeEl.tagName === "INPUT")
-    );
+    const focusedInsideConn =
+      isCustomSelectOpenWithin(connHost) ||
+      Boolean(
+        activeEl && connHost.contains(activeEl) && (activeEl.tagName === "SELECT" || activeEl.tagName === "INPUT")
+      );
 
     const connSig = JSON.stringify({
       sim: isSim,
@@ -3021,12 +3176,84 @@ export class NetworkView extends Component {
       })),
     });
 
+    const selectedConnSnap = this.rhUsbSelectedPort
+      ? connectedByPortName.get(this.rhUsbSelectedPort.toUpperCase())
+      : undefined;
+    const selectedAlreadyConnected = Boolean(selectedConnSnap);
+    const totalConnCount = connectedPortNames.size;
+    const extActionsHost = this.el.querySelector<HTMLElement>('[data-slot="external-conn-actions"]');
+    if (extActionsHost) {
+      const actSig = `rh_usb|${totalConnCount}|${selectedConnSnap?.timerId ?? 0}|${this.rhUsbSelectedPort}|${this.rhBusy ? 1 : 0}|${this.rhUsbRefreshing ? 1 : 0}`;
+      if (actSig !== this.lastExternalInlineSig) {
+        this.lastExternalInlineSig = actSig;
+        const badgeHtml =
+          totalConnCount > 0
+            ? `<span class="badge"><span class="status-dot is-up" style="display:inline-block;margin-right:6px"></span>${totalConnCount} connected</span>`
+            : "";
+        const mainBtnHtml =
+          selectedAlreadyConnected && selectedConnSnap
+            ? `<button
+                class="btn btn-ghost net-conn-btn"
+                type="button"
+                data-action="rh-disconnect"
+                data-timer-id="${selectedConnSnap.timerId}"
+                ${this.rhBusy ? "disabled" : ""}
+              >
+                ${icons.close(14)}<span>Disconnect</span>
+              </button>`
+            : `<button
+                class="btn net-conn-btn"
+                type="button"
+                data-action="rh-usb-connect"
+                ${this.rhBusy || !this.rhUsbSelectedPort ? "disabled" : ""}
+              >
+                ${icons.plug(14)}<span>${this.rhBusy ? "Connecting…" : "Connect USB"}</span>
+              </button>`;
+        const disconnectAllHtml =
+          !selectedAlreadyConnected && totalConnCount > 0
+            ? `<button
+                class="btn btn-ghost net-conn-btn"
+                type="button"
+                data-action="network-disconnect-active"
+                ${this.rhBusy ? "disabled" : ""}
+                title="Disconnect active connection to switch timing system"
+              >
+                ${icons.close(14)}<span>${totalConnCount > 1 ? "Disconnect all" : "Disconnect"}</span>
+              </button>`
+            : "";
+        const refreshHtml = `
+          <button
+            class="btn btn-ghost btn-icon net-conn-btn"
+            type="button"
+            data-action="rh-usb-refresh"
+            ${this.rhUsbRefreshing || this.rhBusy ? "disabled" : ""}
+            title="${this.rhUsbRefreshing ? "Refreshing USB serial ports…" : "Refresh available USB serial ports"}"
+            aria-label="Refresh available USB serial ports"
+          >
+            ${icons.reset(14)}
+          </button>`;
+        extActionsHost.innerHTML = `${badgeHtml}${mainBtnHtml}${disconnectAllHtml}${refreshHtml}`;
+      }
+    }
+
+    const rhUsbSubbarParts: string[] = [];
+    if (!isSim) {
+      rhUsbSubbarParts.push(
+        `<div class="net-conn-foot-row">
+          <label class="rh-usb-conn-toggle">
+            <input type="checkbox" data-field="rh-usb-all-ports" ${this.rhUsbShowAllPorts ? "checked" : ""} />
+            <span class="note">Show all serial ports</span>
+          </label>
+        </div>`
+      );
+    }
+    if (errText) {
+      rhUsbSubbarParts.push(`<div class="sim-error-note">${esc(errText)}</div>`);
+    }
+    this.patchNetConnSubbar(rhUsbSubbarParts.join(""));
+
     if (!focusedInsideConn && connSig !== this.lastRhUsbConnSig) {
       this.lastRhUsbConnSig = connSig;
-      const selectedConnSnap = this.rhUsbSelectedPort
-        ? connectedByPortName.get(this.rhUsbSelectedPort.toUpperCase())
-        : undefined;
-      const selectedAlreadyConnected = Boolean(selectedConnSnap);
       const formatCompactPortName = (name: string): string => {
         const trimmed = name.trim();
         const androidUsb = /^\/dev\/bus\/usb\/(\d+)\/(\d+)(#\d+)?$/i.exec(trimmed);
@@ -3061,80 +3288,31 @@ export class NetworkView extends Component {
           : `<option value="">${isSim ? "No powered-on simulated USB devices" : "No USB serial ports detected"}</option>`;
 
       connHost.innerHTML = `
-        <div class="card card-flush">
-          <div class="rh-usb-conn-body">
-            <div class="rh-usb-conn-main">
-              <div class="rh-usb-conn-fields">
-                <label class="rh-usb-conn-field is-port">
-                  <span class="muted rh-usb-conn-label">USB Serial Port</span>
-                  <select
-                    class="input mono rh-usb-conn-select"
-                    data-field="rh-usb-port"
-                    aria-label="RotorHazard USB serial port"
-                    ${ports.length === 0 || this.rhBusy ? "disabled" : ""}
-                  >
-                    ${portOptionsHtml}
-                  </select>
-                </label>
-                <label class="rh-usb-conn-field is-baud">
-                  <span class="muted rh-usb-conn-label">Baud Rate</span>
-                  <select
-                    class="input mono rh-usb-conn-select"
-                    data-field="rh-usb-baud"
-                    aria-label="RotorHazard USB baud rate"
-                    ${this.rhBusy ? "disabled" : ""}
-                  >
-                    <option value="0" ${this.rhUsbBaudRate === 0 ? "selected" : ""}>Auto (115200 / 921600)</option>
-                    <option value="115200" ${this.rhUsbBaudRate === 115200 ? "selected" : ""}>115200 baud</option>
-                    <option value="921600" ${this.rhUsbBaudRate === 921600 ? "selected" : ""}>921600 baud (STM32)</option>
-                  </select>
-                </label>
-              </div>
-              <div class="rh-usb-conn-actions">
-                ${
-                  selectedAlreadyConnected && selectedConnSnap
-                    ? `<button
-                        class="btn btn-ghost"
-                        type="button"
-                        data-action="rh-disconnect"
-                        data-timer-id="${selectedConnSnap.timerId}"
-                        ${this.rhBusy ? "disabled" : ""}
-                      >
-                        ${icons.close(14)}<span>Disconnect</span>
-                      </button>`
-                    : `<button
-                        class="btn btn-armed"
-                        type="button"
-                        data-action="rh-usb-connect"
-                        ${this.rhBusy || !this.rhUsbSelectedPort ? "disabled" : ""}
-                      >
-                        ${icons.plug(14)}<span>${this.rhBusy ? "Connecting…" : "Connect USB"}</span>
-                      </button>`
-                }
-                <button
-                  class="btn btn-ghost"
-                  type="button"
-                  data-action="rh-usb-refresh"
-                  ${this.rhUsbRefreshing || this.rhBusy ? "disabled" : ""}
-                  title="Refresh available USB serial ports"
-                >
-                  ${icons.reset(14)}<span>${this.rhUsbRefreshing ? "Refreshing…" : "Refresh Ports"}</span>
-                </button>
-              </div>
-            </div>
-            <div class="rh-usb-conn-foot">
-              ${
-                !isSim
-                  ? `<label class="rh-usb-conn-toggle">
-                      <input type="checkbox" data-field="rh-usb-all-ports" ${this.rhUsbShowAllPorts ? "checked" : ""} />
-                      <span class="note">Show all serial ports</span>
-                    </label>`
-                  : `<span class="note">Direct binary serial link · no LAN IP or admin login required</span>`
-              }
-            </div>
-          </div>
-          ${errText ? `<div class="sim-error-note" style="margin:0 16px 12px">${esc(errText)}</div>` : ""}
-        </div>`;
+        <label class="net-conn-field is-usb-port">
+          <span class="muted net-conn-label">USB Serial Port</span>
+          <select
+            class="input mono net-conn-input"
+            data-field="rh-usb-port"
+            aria-label="RotorHazard USB serial port"
+            ${ports.length === 0 || this.rhBusy ? "disabled" : ""}
+          >
+            ${portOptionsHtml}
+          </select>
+        </label>
+        <label class="net-conn-field is-baud">
+          <span class="muted net-conn-label">Baud Rate</span>
+          <select
+            class="input mono net-conn-input"
+            data-field="rh-usb-baud"
+            aria-label="RotorHazard USB baud rate"
+            ${this.rhBusy ? "disabled" : ""}
+          >
+            <option value="0" ${this.rhUsbBaudRate === 0 ? "selected" : ""}>Auto (115200 / 921600)</option>
+            <option value="115200" ${this.rhUsbBaudRate === 115200 ? "selected" : ""}>115200 baud</option>
+            <option value="921600" ${this.rhUsbBaudRate === 921600 ? "selected" : ""}>921600 baud (STM32)</option>
+          </select>
+        </label>`;
+      scanCustomSelects(connHost);
     }
 
     const gateByTimer = new Map<number, { gateId: number; label: string }>();

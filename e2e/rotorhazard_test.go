@@ -93,8 +93,8 @@ func TestRotorHazardSimulatedMultiDeviceAndBrowserRealWebSocketHandshake(t *test
 		return err == nil && strings.Contains(txt, "Simulation off"), nil
 	})
 	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "RotorHazard (Network)")
-	rhConn := h.Page.Locator(`[data-slot="rh-connection"]`).First()
-	h.MustBeVisible(rhConn, "RotorHazard connection card in real hardware mode")
+	rhConn := h.Page.Locator(`[data-slot="net-conn-card"]`).First()
+	h.MustBeVisible(rhConn, "RotorHazard unified connection card in real hardware mode")
 	h.MustBeVisible(rhSec, "RotorHazard Network section in real hardware mode")
 
 	// Fill real RotorHazard server host and port in NetworkView, open per-device credentials prompt, and sign in!

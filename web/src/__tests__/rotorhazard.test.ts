@@ -650,9 +650,9 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(portSel).not.toBeNull();
       expect(portSel.value).toBe("SIM-RH-USB1");
 
-      // When the selected USB port is already connected, the USB serial connection box renders an active Disconnect button
-      // and the device card below does not duplicate the Disconnect button.
-      const connHostEl = netEl.querySelector<HTMLElement>("[data-slot='rh-usb-connection']")!;
+      // When the selected USB port is already connected, the unified Connection card renders an active Disconnect button
+      // on the right and the device card below does not duplicate the Disconnect button.
+      const connHostEl = netEl.querySelector<HTMLElement>("[data-slot='net-conn-card']")!;
       const disconnectUsbBtn = connHostEl.querySelector<HTMLButtonElement>("[data-action='rh-disconnect']")!;
       expect(disconnectUsbBtn).not.toBeNull();
       expect(disconnectUsbBtn.disabled).toBe(false);

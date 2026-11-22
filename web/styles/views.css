@@ -26194,81 +26194,178 @@ html[data-theme="light"] .ws-standby-bar.is-emergency .ws-standby-text {
   }
 }
 
-/* Network page inline Timing System selector + connection controls */
-.net-connection-stack {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+/* Network page unified Connection panel (consistent across all 6 timing modes) */
+.net-conn-card {
   min-width: 0;
 }
 
-.net-timing-mode-bar {
+.net-conn-main {
+  padding: 14px 16px;
   display: flex;
   flex-wrap: wrap;
-  align-items: center;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 12px 16px;
+  min-width: 0;
+}
+
+.net-conn-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.net-conn-mode-fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
   gap: 10px;
   min-width: 0;
 }
 
-.net-timing-mode-select-slot {
-  flex: 0 0 232px;
-  min-width: 210px;
-  max-width: 100%;
+.net-conn-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
 }
 
-.net-timing-mode-select,
-.custom-select-wrap:has(> .net-timing-mode-select) {
-  height: 38px;
+.net-conn-field.is-mode {
+  width: 212px;
+  flex: 0 0 auto;
 }
 
-.custom-select-wrap:has(> .net-timing-mode-select) .custom-select-trigger {
-  height: 38px;
-  min-height: 38px;
-  padding: 0 13px;
-  border-radius: 999px;
-  border: 1.5px solid var(--border);
-  background: var(--surface);
+.net-conn-field.is-ip {
+  width: 138px;
+  flex: 0 0 auto;
+}
+
+.net-conn-field.is-port-num {
+  width: 78px;
+  flex: 0 0 auto;
+}
+
+.net-conn-field.is-usb-port {
+  width: 204px;
+  flex: 0 1 204px;
+}
+
+.net-conn-field.is-baud {
+  width: 172px;
+  flex: 0 1 172px;
+}
+
+.net-conn-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  line-height: 1.2;
+}
+
+.net-conn-mode-select-host {
+  width: 100%;
+  min-width: 0;
+}
+
+.net-conn-card .net-conn-input,
+.net-conn-card .custom-select-wrap,
+.net-conn-card .custom-select-trigger {
+  height: 34px;
+  min-height: 34px;
   font-size: 13px;
-  font-weight: 500;
 }
 
-.custom-select-wrap:has(> .net-timing-mode-select) .custom-select-trigger:hover:not(:disabled),
-.custom-select-wrap:has(> .net-timing-mode-select) .custom-select-trigger.is-custom-select-open {
-  background: var(--surface-2);
-  border-color: var(--border-strong);
-}
-
-.custom-select-wrap:has(> .net-timing-mode-select) .custom-select-trigger:disabled {
+.net-conn-card .custom-select-trigger:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
 
-.net-slaprf-inline-slot {
-  display: contents;
-}
-
-.net-timing-mode-bar > .net-slaprf-inline-slot > .debug-usb-busy-wrap,
-.net-timing-mode-bar > .net-slaprf-inline-slot > .sim-error-note {
-  flex: 1 0 100%;
-  margin-top: 2px;
-}
-
-.net-external-inline-slot {
-  display: inline-flex;
+.net-conn-actions {
+  display: flex;
   align-items: center;
+  justify-content: flex-end;
+  margin-left: auto;
+  min-width: 0;
+  flex: 0 0 auto;
+}
+
+.net-conn-action-group {
+  display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 8px;
 }
 
-.net-mode-disconnect-chip {
-  height: 38px;
-  padding: 0 14px;
-  border-radius: 999px;
-  cursor: pointer;
+.net-conn-btn {
+  height: 34px;
 }
 
-@media (max-width: 640px) {
-  .net-timing-mode-select-slot {
-    flex: 1 1 100%;
+.net-conn-device-btn {
+  gap: 8px;
+  padding: 0 11px;
+}
+
+.net-conn-device-btn.is-writing {
+  border-style: dashed;
+}
+
+.net-conn-subbar {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.net-conn-foot-row {
+  padding: 0 16px 12px;
+  display: flex;
+  align-items: center;
+}
+
+.net-conn-subbar > .debug-usb-busy-wrap,
+.net-conn-subbar > .sim-error-note {
+  margin: 0 16px 12px;
+}
+
+@media (max-width: 860px) {
+  .net-conn-main {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .net-conn-fields,
+  .net-conn-mode-fields {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .net-conn-field.is-mode,
+  .net-conn-field.is-ip,
+  .net-conn-field.is-port-num,
+  .net-conn-field.is-usb-port,
+  .net-conn-field.is-baud {
+    width: 100%;
+    flex: 1 1 auto;
+  }
+
+  .net-conn-actions {
+    margin-left: 0;
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .net-conn-foot-row {
+    padding: 0 14px 12px;
+  }
+
+  .net-conn-subbar > .debug-usb-busy-wrap,
+  .net-conn-subbar > .sim-error-note {
+    margin: 0 14px 12px;
   }
 }
