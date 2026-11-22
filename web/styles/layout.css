@@ -1313,7 +1313,7 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     touch-action: pan-y;
   }
   .outlet.is-swipe-stage {
-    overflow: clip;
+    overflow-x: clip;
   }
   .outlet.is-swipe-stage > .view {
     pointer-events: none;
@@ -1322,7 +1322,6 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     will-change: transform;
     -webkit-backface-visibility: hidden;
     backface-visibility: hidden;
-    contain: layout style;
   }
   .view.is-swipe-peek,
   .view.is-swipe-exiting {
@@ -1330,8 +1329,7 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     top: 8px;
     left: 14px;
     right: 14px;
-    overflow: hidden;
-    contain: layout paint style;
+    width: auto;
     will-change: transform;
     -webkit-backface-visibility: hidden;
     backface-visibility: hidden;

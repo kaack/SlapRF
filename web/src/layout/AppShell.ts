@@ -62,6 +62,7 @@ export class AppShell extends Component {
   private neighborWarmupTimer: ReturnType<typeof setTimeout> | null = null;
   private swipePointerActive = false;
   private dragPausedRoute: RouteId | null = null;
+  private dragActivatedNeighbor: RouteId | null = null;
   private resetSwipeGestureState: (() => void) | null = null;
   private pendingSwipeTransition: {
     fromRoute: RouteId;
@@ -259,7 +260,7 @@ export class AppShell extends Component {
     if (!this.store.hasHydrated || this.swipePointerActive || this.swipeSettleTimer !== null) return;
     this.neighborWarmupTimer = setTimeout(() => {
       this.neighborWarmupTimer = null;
-      if (window.innerWidth > 900 || !this.store.hasHydrated) return;
+      if (!this.el.isConnected || window.innerWidth > 900 || !this.store.hasHydrated) return;
       if (this.swipePointerActive || this.swipeSettleTimer !== null || this.isInSubPage()) return;
       const curRoute = this.activeRouteId ?? this.router.route;
       const available = this.getSwipeableMobileRoutes();
@@ -282,23 +283,28 @@ export class AppShell extends Component {
     if (entry) return entry;
     const outlet = this.slot("outlet");
     const host = document.createElement("div");
-    host.className = `view view-${route}`;
-    host.hidden = true;
-    host.style.display = "none";
+    host.className = `view view-${route} is-swipe-peek`;
+    host.style.visibility = "hidden";
+    host.style.transform = "translate3d(120%, 0, 0)";
     outlet.appendChild(host);
     try {
       const view = this.createView(route, host);
-      if (this.activeRouteId && this.activeRouteId !== route) {
-        view.onDeactivate?.();
-      }
       entry = { host, view, scrollY: 0 };
       this.mountedViews.set(route, entry);
       scanCustomSelects(host);
       scanTableScrollIndicators(host);
       scanSettingsIntroCollapse(host);
+      if (this.activeRouteId && this.activeRouteId !== route) {
+        view.onDeactivate?.();
+      }
     } catch (err) {
       console.error(`[AppShell] Failed to pre-mount view "${route}":`, err);
     }
+    host.classList.remove("is-swipe-peek");
+    host.style.visibility = "";
+    host.style.transform = "";
+    host.hidden = true;
+    host.style.display = "none";
     return entry;
   }
 
@@ -315,7 +321,6 @@ export class AppShell extends Component {
     let dragNeighborRoute: RouteId | null = null;
     let dragWidth = 390;
     let dragScrollY = 0;
-    let dragViewportH = 840;
     let dragAvailableRoutes: RouteId[] = [];
     let dragCurIdx = -1;
     let dragStagePrepared = false;
@@ -339,6 +344,15 @@ export class AppShell extends Component {
       this.dragPausedRoute = null;
       if (paused === (this.activeRouteId ?? this.router.route)) {
         this.mountedViews.get(paused)?.view.onActivate?.();
+      }
+    };
+
+    const deactivateDragNeighborIfUnused = () => {
+      const activated = this.dragActivatedNeighbor;
+      if (!activated) return;
+      this.dragActivatedNeighbor = null;
+      if (activated !== (this.activeRouteId ?? this.router.route)) {
+        this.mountedViews.get(activated)?.view.onDeactivate?.();
       }
     };
 
@@ -371,7 +385,6 @@ export class AppShell extends Component {
           neighborEntry.host.style.transition = "";
           neighborEntry.host.style.transform = "";
           neighborEntry.host.style.top = "";
-          neighborEntry.host.style.maxHeight = "";
           if (hideNeighbor) {
             neighborEntry.host.hidden = true;
             neighborEntry.host.style.display = "none";
@@ -386,6 +399,7 @@ export class AppShell extends Component {
       dragStagePrepared = false;
       lastDx = 0;
       if (hideNeighbor) {
+        deactivateDragNeighborIfUnused();
         resumeDragPausedRoute();
       }
     };
@@ -534,7 +548,6 @@ export class AppShell extends Component {
           }
           dragWidth = Math.max(280, outlet.clientWidth || window.innerWidth || 390);
           dragScrollY = Math.max(0, window.scrollY);
-          dragViewportH = Math.max(480, window.innerHeight || 840);
           dragLock = "x";
         } else {
           return;
@@ -568,11 +581,14 @@ export class AppShell extends Component {
       if (dragNeighborRoute && dragNeighborRoute !== targetNeighbor) {
         const oldNeighbor = this.mountedViews.get(dragNeighborRoute);
         if (oldNeighbor && dragNeighborRoute !== curRoute) {
+          if (this.dragActivatedNeighbor === dragNeighborRoute) {
+            this.dragActivatedNeighbor = null;
+            oldNeighbor.view.onDeactivate?.();
+          }
           oldNeighbor.host.classList.remove("is-swipe-peek");
           oldNeighbor.host.style.transition = "";
           oldNeighbor.host.style.transform = "";
           oldNeighbor.host.style.top = "";
-          oldNeighbor.host.style.maxHeight = "";
           oldNeighbor.host.hidden = true;
           oldNeighbor.host.style.display = "none";
         }
@@ -586,12 +602,22 @@ export class AppShell extends Component {
           if (neighborEntry) {
             dragNeighborRoute = targetNeighbor;
             const neighborScrollY = Math.max(0, neighborEntry.scrollY || 0);
-            neighborEntry.host.hidden = false;
-            neighborEntry.host.style.display = "";
+            const clampedInitDx = Math.max(-width, Math.min(width, dx));
+            const initOffset = clampedInitDx < 0 ? width + clampedInitDx : -width + clampedInitDx;
             neighborEntry.host.classList.add("is-swipe-peek");
             neighborEntry.host.style.top = `${8 + dragScrollY - neighborScrollY}px`;
-            neighborEntry.host.style.maxHeight = `${neighborScrollY + dragViewportH}px`;
             neighborEntry.host.style.transition = "none";
+            neighborEntry.host.style.transform = `translate3d(${initOffset}px, 0, 0)`;
+            neighborEntry.host.hidden = false;
+            neighborEntry.host.style.display = "";
+            if (this.dragActivatedNeighbor !== targetNeighbor) {
+              deactivateDragNeighborIfUnused();
+              this.dragActivatedNeighbor = targetNeighbor;
+              neighborEntry.view.onActivate?.();
+              scanCustomSelects(neighborEntry.host);
+              scanTableScrollIndicators(neighborEntry.host);
+              scanSettingsIntroCollapse(neighborEntry.host);
+            }
           }
         }
         if (neighborEntry) {
@@ -700,11 +726,11 @@ export class AppShell extends Component {
             neighborEntry.host.style.transition = "";
             neighborEntry.host.style.transform = "";
             neighborEntry.host.style.top = "";
-            neighborEntry.host.style.maxHeight = "";
             neighborEntry.host.hidden = true;
             neighborEntry.host.style.display = "none";
           }
           outlet.classList.remove("is-swipe-stage");
+          deactivateDragNeighborIfUnused();
           resumeDragPausedRoute();
           this.scheduleIdleNeighborWarmup();
         };
@@ -964,6 +990,11 @@ export class AppShell extends Component {
     const prevEntry = prevRoute && prevRoute !== route ? this.mountedViews.get(prevRoute) : undefined;
     const alreadyDeactivated = prevRoute !== null && this.dragPausedRoute === prevRoute;
     this.dragPausedRoute = null;
+    const alreadyActivatedDuringPeek = this.dragActivatedNeighbor === route;
+    if (this.dragActivatedNeighbor && this.dragActivatedNeighbor !== route) {
+      this.mountedViews.get(this.dragActivatedNeighbor)?.view.onDeactivate?.();
+    }
+    this.dragActivatedNeighbor = null;
     if (prevEntry) {
       prevEntry.scrollY = swipeTrans ? swipeTrans.scrollY : window.scrollY;
       if (!alreadyDeactivated) {
@@ -979,13 +1010,12 @@ export class AppShell extends Component {
     const outlet = this.slot("outlet");
     let entry = this.mountedViews.get(route);
     let wasCached = false;
-    const deferActivationForSwipe = Boolean(swipeTrans && prevEntry && entry);
 
     if (entry) {
       wasCached = true;
       entry.host.hidden = false;
       entry.host.style.display = "";
-      if (!deferActivationForSwipe) {
+      if (!alreadyActivatedDuringPeek) {
         entry.view.onActivate?.();
         scanCustomSelects(entry.host);
         scanTableScrollIndicators(entry.host);
@@ -1015,7 +1045,6 @@ export class AppShell extends Component {
       const incomingStart = dx < 0 ? width + dx : -width + dx;
       const outgoingEnd = dx < 0 ? -width : width;
       const targetScrollY = Math.max(0, entry.scrollY || 0);
-      const viewportH = Math.max(480, window.innerHeight || 840);
 
       outlet.classList.add("is-swipe-stage");
       prevEntry.host.classList.remove("is-swipe-peek", "is-swipe-exiting");
@@ -1025,7 +1054,6 @@ export class AppShell extends Component {
       entry.host.classList.remove("is-swipe-active", "is-swipe-exiting", "is-view-enter-left", "is-view-enter-right");
       entry.host.classList.add("is-swipe-peek");
       entry.host.style.top = `${8 + scrollY - targetScrollY}px`;
-      entry.host.style.maxHeight = `${targetScrollY + viewportH}px`;
 
       if (!wasPeeking) {
         prevEntry.host.style.transition = "none";
@@ -1052,26 +1080,15 @@ export class AppShell extends Component {
         prevEntry.host.style.transition = "";
         prevEntry.host.style.transform = "";
         prevEntry.host.style.top = "";
-        prevEntry.host.style.maxHeight = "";
 
         entry!.host.classList.remove("is-swipe-active", "is-swipe-peek", "is-swipe-exiting");
         entry!.host.style.transition = "";
         entry!.host.style.transform = "";
         entry!.host.style.top = "";
-        entry!.host.style.maxHeight = "";
         outlet.classList.remove("is-swipe-stage");
 
         if (this.activeRouteId === route) {
           this.sectionTracker.onRouteMounted(route, targetScrollY, wasCached);
-          if (deferActivationForSwipe) {
-            entry!.view.onActivate?.();
-            scanCustomSelects(entry!.host);
-            scanTableScrollIndicators(entry!.host);
-            scanSettingsIntroCollapse(entry!.host);
-            window.requestAnimationFrame(() => {
-              window.dispatchEvent(new Event("resize"));
-            });
-          }
           this.scheduleIdleNeighborWarmup();
         }
       };

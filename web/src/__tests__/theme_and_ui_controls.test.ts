@@ -772,5 +772,20 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
     expect(swipeRoutes.includes("sim")).toBe(true);
     expect(swipeRoutes.indexOf("sim") > swipeRoutes.indexOf("network")).toBe(true);
     expect(icons.power(14).startsWith("<svg")).toBe(true);
+
+    // Verify .view.is-swipe-peek has exact same content width and left/right alignment as normal .view inside .outlet (no 28px width jump)
+    if (window.innerWidth <= 900) {
+      const swipeWidthProbe = mountHtml(`
+        <main class="outlet is-swipe-stage" style="width: 390px;">
+          <div class="view is-swipe-active" id="test-swipe-normal"><div style="display:flex;justify-content:space-between"><span>L</span><span id="test-norm-r">R</span></div></div>
+          <div class="view is-swipe-peek" id="test-swipe-peek"><div style="display:flex;justify-content:space-between"><span>L</span><span id="test-peek-r">R</span></div></div>
+        </main>
+      `);
+      const normRect = swipeWidthProbe.querySelector<HTMLElement>("#test-swipe-normal")!.getBoundingClientRect();
+      const peekRect = swipeWidthProbe.querySelector<HTMLElement>("#test-swipe-peek")!.getBoundingClientRect();
+      expect(Math.abs(normRect.width - peekRect.width) < 0.1).toBe(true);
+      expect(Math.abs(normRect.left - peekRect.left) < 0.1).toBe(true);
+      expect(Math.abs(normRect.right - peekRect.right) < 0.1).toBe(true);
+    }
   });
 });

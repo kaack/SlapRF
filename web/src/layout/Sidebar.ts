@@ -323,7 +323,7 @@ export class Sidebar extends Component {
     if (this.moreDrawerOpen || this.moreDrawerClosing) return;
     this.moreDrawerWarmupTimer = setTimeout(() => {
       this.moreDrawerWarmupTimer = null;
-      if (window.innerWidth > 900 || this.moreDrawerOpen || this.moreDrawerClosing) return;
+      if (!this.el.isConnected || window.innerWidth > 900 || this.moreDrawerOpen || this.moreDrawerClosing) return;
       const overlay = this.el.querySelector<HTMLElement>("[data-mobile-more-overlay]");
       if (!overlay || !overlay.hidden) return;
       overlay.classList.add("is-gpu-prewarm");
