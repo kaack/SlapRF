@@ -102,11 +102,23 @@ tags:
       - **Engine & Speed Controls (`/v1/sim`)**: Read or update simulator execution (`running`), playback speed (`speedMultiplier`), and automatic track-walker recovery (`trackWalker`).
       - **Pack Bursts & Pilot Events (`:packBurst`, `pilots/{slotIndex}:action`)**: Trigger synchronized 6S launch bursts or individual pilot flight events (`crash`, `recover`, `walk-recover`, `pit`, `pause`, `break`, `launch`, `resume`, `refill-launch`).
 
-  - name: Simulator (Virtual Hardware)
+  - name: Simulator (SlapRF)
     description: |
-      Simulated SlapRF, ImmersionRC LapRF 8-Way, and RotorHazard hardware nodes (`/v1/sim/slaprf/*`, `/v1/sim/laprf/*`, `/v1/sim/rotorhazard/*`).
-      - **Simulated SlapRF Nodes (`/v1/sim/slaprf/*`)**: Plug or unplug the virtual Hub `H1` USB cable (`hub-usb`), read raw `0x1E`-framed `HELLO` streams (`usb-hellos`), add or reset simulated ESP32-C5 timers (`timers`), flash or erase virtual boards, and inspect per-slot RSSI.
-      - **Simulated LapRF & RotorHazard Timers (`/v1/sim/laprf/*`, `/v1/sim/rotorhazard/*`)**: Discover virtual LAN/USB devices (`devices`), add or configure simulated timing units (`timers`), and run simulated `5.8 GHz` spectrum sweeps (`:scan`).
+      Virtual Seeed Studio XIAO ESP32-C5 Hub and Spoke nodes for offline SlapRF hardware simulation (`/v1/sim/slaprf/*`).
+      - **Virtual USB Link & Handshake (`hub-usb`, `usb-hellos`)**: Plug or unplug the simulated Hub `H1` virtual USB cable and read raw `0x1E`-framed `HELLO` packets for Hub `H1` and active Spokes.
+      - **Simulated Timers & Firmware Actions (`timers`, `:action`, `:flash`, `:erase`, `:togglePower`, `rssi`)**: Add, configure, flash, erase, power-cycle, or delete simulated ESP32-C5 boards and inspect per-slot simulated RSSI.
+
+  - name: Simulator (LapRF 8-Way)
+    description: |
+      Virtual ImmersionRC LapRF 8-Way pucks for offline Ethernet and USB timing simulation (`/v1/sim/laprf/*`).
+      - **Virtual LAN Discovery (`devices`)**: Scan the simulated `192.168.1.0/24` subnet for powered-on virtual LapRF pucks on TCP `:5403`.
+      - **Simulated Timers & Actions (`timers`, `:reset`, `:action`)**: Add, connect, disconnect, power-cycle, or update host, port, and supply voltage on virtual LapRF 8-Way timers.
+
+  - name: Simulator (RotorHazard)
+    description: |
+      Virtual RotorHazard network servers (`:5000`) and USB serial nodes (`115200` / `921600` baud) for offline timing and spectrum simulation (`/v1/sim/rotorhazard/*`).
+      - **Virtual Device Discovery (`devices`)**: Discover simulated RotorHazard network servers and USB serial nodes.
+      - **Simulated Timers & Spectrum Scans (`timers`, `:reset`, `:action`, `:scan`)**: Add, configure, or power-cycle virtual RotorHazard timers and run simulated `5.8 GHz` spectrum sweeps (`once`, `live`, `stop`).
 
   - name: Simulator (MultiGP)
     description: |
@@ -4231,7 +4243,7 @@ paths:
 
   /v1/sim/slaprf/hub-usb:
     get:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (SlapRF)"]
       summary: Read simulated Hub H1 virtual USB cable connection state
       operationId: getSimHubUsb
       responses:
@@ -4247,7 +4259,7 @@ paths:
                     type: boolean
                     example: true
     put:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (SlapRF)"]
       summary: Plug or unplug the simulated Hub H1 virtual USB cable
       operationId: putSimHubUsb
       requestBody:
@@ -4284,7 +4296,7 @@ paths:
 
   /v1/sim/slaprf/usb-hellos:
     get:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (SlapRF)"]
       summary: Read raw binary `0x1E`-framed `HELLO` stream for simulated Hub `H1` and active Spokes
       operationId: getSimUsbHellos
       responses:
@@ -4298,7 +4310,7 @@ paths:
 
   /v1/sim/slaprf/timers:
     post:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (SlapRF)"]
       summary: Add a simulated XIAO ESP32-C5 SlapRF timer node (Hub or Spoke)
       operationId: createSimTimer
       requestBody:
@@ -4339,7 +4351,7 @@ paths:
 
   "/v1/sim/slaprf/timers:reset":
     post:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (SlapRF)"]
       summary: Reset simulated SlapRF Hub/Spoke timers and course gates to defaults
       operationId: resetSimTimers
       responses:
@@ -4360,7 +4372,7 @@ paths:
           minimum: 1
           maximum: 255
     patch:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (SlapRF)"]
       summary: Update RF diagnostic flags (`rfEnabled`, `emergencyMode`, `scanLive`, `chanMask`) on a simulated timer
       operationId: patchSimTimer
       requestBody:
@@ -4398,7 +4410,7 @@ paths:
               example:
                 error: "PATCH /v1/sim/slaprf/timers/{timerId} expects diagnostic fields; use POST /v1/sim/slaprf/timers/{timerId}:action for imperative board actions"
     delete:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (SlapRF)"]
       summary: Delete a simulated XIAO ESP32-C5 timer node
       operationId: deleteSimTimer
       responses:
@@ -4425,7 +4437,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (SlapRF)"]
       summary: Execute a board lifecycle action (`toggle-power`, `erase`, `flash`) on a simulated SlapRF timer
       operationId: runSimTimerAction
       requestBody:
@@ -4484,7 +4496,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (SlapRF)"]
       summary: Toggle simulated power on or off for a simulated SlapRF timer
       operationId: toggleSimTimerPower
       responses:
@@ -4503,7 +4515,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (SlapRF)"]
       summary: Erase simulated flash on a simulated XIAO ESP32-C5 board back to unflashed ROM state
       operationId: eraseSimTimer
       responses:
@@ -4530,7 +4542,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (SlapRF)"]
       summary: Flash simulated SlapRF firmware onto a simulated XIAO ESP32-C5 board
       operationId: flashSimTimer
       requestBody:
@@ -4576,7 +4588,7 @@ paths:
         schema:
           type: integer
     get:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (SlapRF)"]
       summary: Read live per-slot simulated RSSI values (dBm) for a simulated SlapRF timer
       operationId: getSimTimerRssi
       responses:
@@ -4595,7 +4607,7 @@ paths:
 
   /v1/sim/laprf/devices:
     get:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (LapRF 8-Way)"]
       summary: Discover simulated ImmersionRC LapRF 8-Way pucks on the virtual LAN (`192.168.1.0/24`)
       operationId: discoverSimLapRFDevices
       responses:
@@ -4635,7 +4647,7 @@ paths:
 
   /v1/sim/laprf/timers:
     post:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (LapRF 8-Way)"]
       summary: Add or connect a simulated ImmersionRC LapRF 8-Way timer
       operationId: createSimLapRFUnit
       requestBody:
@@ -4668,7 +4680,7 @@ paths:
 
   "/v1/sim/laprf/timers:reset":
     post:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (LapRF 8-Way)"]
       summary: Reset simulated ImmersionRC LapRF 8-Way timers back to defaults
       operationId: resetSimLapRFUnits
       responses:
@@ -4687,7 +4699,7 @@ paths:
         schema:
           type: integer
     patch:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (LapRF 8-Way)"]
       summary: Update label, host, TCP port, or supply voltage on a simulated LapRF 8-Way timer
       operationId: patchSimLapRFUnit
       requestBody:
@@ -4720,7 +4732,7 @@ paths:
               example:
                 error: "simulated LapRF unit not found"
     delete:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (LapRF 8-Way)"]
       summary: Remove a simulated LapRF 8-Way timer
       operationId: deleteSimLapRFUnit
       responses:
@@ -4747,7 +4759,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (LapRF 8-Way)"]
       summary: Execute a control action (`toggle-power`, `toggle-connect`, `connect-host`, `disconnect`, `update`, `delete`) on a simulated LapRF timer
       operationId: runSimLapRFUnitAction
       requestBody:
@@ -4782,7 +4794,7 @@ paths:
 
   /v1/sim/rotorhazard/devices:
     get:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (RotorHazard)"]
       summary: Discover simulated RotorHazard network servers and USB serial nodes
       operationId: discoverSimRotorHazardDevices
       responses:
@@ -4831,7 +4843,7 @@ paths:
 
   /v1/sim/rotorhazard/timers:
     post:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (RotorHazard)"]
       summary: Add or connect a simulated RotorHazard network server or USB serial node
       operationId: createSimRotorHazardUnit
       requestBody:
@@ -4864,7 +4876,7 @@ paths:
 
   "/v1/sim/rotorhazard/timers:reset":
     post:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (RotorHazard)"]
       summary: Reset simulated RotorHazard timers back to defaults
       operationId: resetSimRotorHazardUnits
       responses:
@@ -4883,7 +4895,7 @@ paths:
         schema:
           type: integer
     patch:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (RotorHazard)"]
       summary: Update configuration on a simulated RotorHazard timer
       operationId: patchSimRotorHazardUnit
       requestBody:
@@ -4916,7 +4928,7 @@ paths:
               example:
                 error: "simulated RotorHazard unit not found"
     delete:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (RotorHazard)"]
       summary: Remove a simulated RotorHazard timer
       operationId: deleteSimRotorHazardUnit
       responses:
@@ -4943,7 +4955,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (RotorHazard)"]
       summary: Execute a control action (`toggle-power`, `toggle-connect`, `connect-host`, `connect-port`, `disconnect`, `update`, `delete`) on a simulated RotorHazard timer
       operationId: runSimRotorHazardUnitAction
       requestBody:
@@ -4984,7 +4996,7 @@ paths:
         schema:
           type: integer
     post:
-      tags: ["Simulator (Virtual Hardware)"]
+      tags: ["Simulator (RotorHazard)"]
       summary: Run or toggle a simulated 5.8 GHz spectrum sweep (`once`, `live`, `stop`) on a simulated RotorHazard USB node
       operationId: scanSimRotorHazardUnit
       requestBody:
