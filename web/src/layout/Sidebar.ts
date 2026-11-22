@@ -33,8 +33,11 @@ export class Sidebar extends Component {
   private moreDrawerOpen = false;
   private moreDrawerClosing = false;
   private moreDrawerCloseTimer: ReturnType<typeof setTimeout> | null = null;
+  private moreDrawerWarmupTimer: ReturnType<typeof setTimeout> | null = null;
+  private moreDrawerWarmupRaf = 0;
   private moreDrawerPendingAction: (() => void) | null = null;
   private moreDrawerDragStartY: number | null = null;
+  private lastMoreBtnKey = "";
 
   constructor(el: HTMLElement, store: AppStore, router: Router) {
     super(el);
@@ -215,6 +218,13 @@ export class Sidebar extends Component {
       }
     };
     el.addEventListener("click", onNavClick);
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        this.scheduleMoreDrawerGpuPrewarm(260);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibilityChange);
+
     this.onDispose(() => {
       collapseBtn?.removeEventListener("click", onCollapseClick);
       el.removeEventListener("pointerdown", onDrawerPointerDown);
@@ -222,6 +232,8 @@ export class Sidebar extends Component {
       el.removeEventListener("pointerup", onDrawerPointerUp);
       el.removeEventListener("pointercancel", onDrawerPointerUp);
       el.removeEventListener("click", onNavClick);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      this.cancelMoreDrawerGpuPrewarm();
       if (this.moreDrawerCloseTimer !== null) {
         clearTimeout(this.moreDrawerCloseTimer);
         this.moreDrawerCloseTimer = null;
@@ -284,9 +296,48 @@ export class Sidebar extends Component {
     );
     this.syncConditionalNav();
     this.syncMobileSubPageState();
+    this.scheduleMoreDrawerGpuPrewarm(200);
+  }
+
+  private cancelMoreDrawerGpuPrewarm(): boolean {
+    let wasWarming = false;
+    if (this.moreDrawerWarmupTimer !== null) {
+      clearTimeout(this.moreDrawerWarmupTimer);
+      this.moreDrawerWarmupTimer = null;
+    }
+    if (this.moreDrawerWarmupRaf !== 0) {
+      window.cancelAnimationFrame(this.moreDrawerWarmupRaf);
+      this.moreDrawerWarmupRaf = 0;
+    }
+    const overlay = this.el.querySelector<HTMLElement>("[data-mobile-more-overlay]");
+    if (overlay?.classList.contains("is-gpu-prewarm")) {
+      overlay.classList.remove("is-gpu-prewarm");
+      wasWarming = true;
+    }
+    return wasWarming;
+  }
+
+  private scheduleMoreDrawerGpuPrewarm(delayMs: number): void {
+    this.cancelMoreDrawerGpuPrewarm();
+    if (typeof window === "undefined" || window.innerWidth > 900) return;
+    if (this.moreDrawerOpen || this.moreDrawerClosing) return;
+    this.moreDrawerWarmupTimer = setTimeout(() => {
+      this.moreDrawerWarmupTimer = null;
+      if (window.innerWidth > 900 || this.moreDrawerOpen || this.moreDrawerClosing) return;
+      const overlay = this.el.querySelector<HTMLElement>("[data-mobile-more-overlay]");
+      if (!overlay || !overlay.hidden) return;
+      overlay.classList.add("is-gpu-prewarm");
+      this.moreDrawerWarmupRaf = window.requestAnimationFrame(() => {
+        this.moreDrawerWarmupRaf = window.requestAnimationFrame(() => {
+          this.moreDrawerWarmupRaf = 0;
+          overlay.classList.remove("is-gpu-prewarm");
+        });
+      });
+    }, delayMs);
   }
 
   private openMoreDrawer(): void {
+    const wasWarming = this.cancelMoreDrawerGpuPrewarm();
     if (this.moreDrawerCloseTimer !== null) {
       clearTimeout(this.moreDrawerCloseTimer);
       this.moreDrawerCloseTimer = null;
@@ -295,28 +346,22 @@ export class Sidebar extends Component {
     this.moreDrawerClosing = false;
     this.moreDrawerOpen = true;
     const overlay = this.el.querySelector<HTMLElement>("[data-mobile-more-overlay]");
-    const backdrop = overlay?.querySelector<HTMLElement>(".pilot-dir-mobile-drawer-backdrop");
     const sheet = overlay?.querySelector<HTMLElement>(".mobile-more-drawer-sheet");
     if (overlay) {
-      overlay.hidden = false;
+      if (wasWarming && sheet) {
+        void sheet.offsetWidth;
+      }
       overlay.classList.remove("is-closing");
+      overlay.hidden = false;
     }
-    if (backdrop) {
-      backdrop.style.animation = "none";
-      void backdrop.offsetWidth;
-      backdrop.style.animation = "";
-    }
-    if (sheet) {
-      sheet.classList.remove("is-entering");
-      void sheet.offsetWidth;
-      sheet.classList.add("is-entering");
-    }
+    sheet?.classList.add("is-entering");
     const moreBtn = this.el.querySelector<HTMLButtonElement>('[data-action="toggle-mobile-more"]');
     moreBtn?.setAttribute("aria-expanded", "true");
     this.highlight(this.router.route);
   }
 
   private closeMoreDrawer(immediate = false, onClosed?: () => void): void {
+    this.cancelMoreDrawerGpuPrewarm();
     if (onClosed) {
       this.moreDrawerPendingAction = onClosed;
     }
@@ -327,6 +372,7 @@ export class Sidebar extends Component {
       return;
     }
     const overlay = this.el.querySelector<HTMLElement>("[data-mobile-more-overlay]");
+    const sheet = overlay?.querySelector<HTMLElement>(".mobile-more-drawer-sheet");
     const moreBtn = this.el.querySelector<HTMLButtonElement>('[data-action="toggle-mobile-more"]');
     moreBtn?.setAttribute("aria-expanded", "false");
     if (!overlay || immediate) {
@@ -340,6 +386,7 @@ export class Sidebar extends Component {
         overlay.hidden = true;
         overlay.classList.remove("is-closing");
       }
+      sheet?.classList.remove("is-entering");
       this.highlight(this.router.route);
       const pending = this.moreDrawerPendingAction;
       this.moreDrawerPendingAction = null;
@@ -359,10 +406,11 @@ export class Sidebar extends Component {
       this.moreDrawerClosing = false;
       overlay.hidden = true;
       overlay.classList.remove("is-closing");
+      sheet?.classList.remove("is-entering");
       const pending = this.moreDrawerPendingAction;
       this.moreDrawerPendingAction = null;
       pending?.();
-    }, 305);
+    }, 195);
   }
 
   private syncMobileSubPageState(): void {
@@ -453,12 +501,16 @@ export class Sidebar extends Component {
     if (moreBtn) {
       const isSecondaryRoute = !PRIMARY_MOBILE_ROUTES.has(route);
       const secMeta = isSecondaryRoute ? ROUTES.find((r) => r.id === route) : undefined;
-      if (secMeta) {
-        moreBtn.innerHTML = `${secMeta.icon()}<span>${secMeta.label}</span><span class="mobile-more-edge-cue" aria-hidden="true">${icons.moreVertical(20)}</span>`;
-        moreBtn.setAttribute("aria-label", `${secMeta.label} — More navigation`);
-      } else {
-        moreBtn.innerHTML = `${icons.moreHorizontal(20)}<span>More</span>`;
-        moreBtn.setAttribute("aria-label", "More navigation");
+      const nextKey = secMeta ? `sec:${secMeta.id}` : "more";
+      if (this.lastMoreBtnKey !== nextKey) {
+        this.lastMoreBtnKey = nextKey;
+        if (secMeta) {
+          moreBtn.innerHTML = `${secMeta.icon()}<span>${secMeta.label}</span><span class="mobile-more-edge-cue" aria-hidden="true">${icons.moreVertical(20)}</span>`;
+          moreBtn.setAttribute("aria-label", `${secMeta.label} — More navigation`);
+        } else {
+          moreBtn.innerHTML = `${icons.moreHorizontal(20)}<span>More</span>`;
+          moreBtn.setAttribute("aria-label", "More navigation");
+        }
       }
       moreBtn.classList.toggle("has-secondary-route", Boolean(secMeta));
       moreBtn.classList.toggle("is-active", this.moreDrawerOpen || isSecondaryRoute);

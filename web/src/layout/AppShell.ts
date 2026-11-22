@@ -59,12 +59,16 @@ export class AppShell extends Component {
   private viewAnimTimer: ReturnType<typeof setTimeout> | null = null;
   private swipeSettleTimer: ReturnType<typeof setTimeout> | null = null;
   private swipeSettleCleanup: (() => void) | null = null;
+  private neighborWarmupTimer: ReturnType<typeof setTimeout> | null = null;
+  private swipePointerActive = false;
+  private dragPausedRoute: RouteId | null = null;
   private resetSwipeGestureState: (() => void) | null = null;
   private pendingSwipeTransition: {
     fromRoute: RouteId;
     toRoute: RouteId;
     dx: number;
     width: number;
+    scrollY: number;
   } | null = null;
   private lastRacesTab = getRacesTopBarContext().tab;
   private lastPracticeTab = getPracticeTopBarContext().tab;
@@ -146,6 +150,10 @@ export class AppShell extends Component {
       store.subscribe(["status", "race"], () => {
         if (this.store.hasHydrated && !this.store.simulatorRunning && this.router.route === "sim") {
           this.router.navigateSection("races");
+          return;
+        }
+        if (this.store.hasHydrated) {
+          this.scheduleIdleNeighborWarmup();
         }
       })
     );
@@ -157,6 +165,7 @@ export class AppShell extends Component {
       })
     );
     this.onDispose(() => {
+      this.cancelIdleNeighborWarmup();
       this.finishSwipeSettleImmediately();
       if (this.viewAnimTimer !== null) {
         clearTimeout(this.viewAnimTimer);
@@ -237,6 +246,37 @@ export class AppShell extends Component {
     this.pendingSwipeTransition = null;
   }
 
+  private cancelIdleNeighborWarmup(): void {
+    if (this.neighborWarmupTimer !== null) {
+      clearTimeout(this.neighborWarmupTimer);
+      this.neighborWarmupTimer = null;
+    }
+  }
+
+  private scheduleIdleNeighborWarmup(delayMs = 240): void {
+    this.cancelIdleNeighborWarmup();
+    if (typeof window === "undefined" || window.innerWidth > 900) return;
+    if (!this.store.hasHydrated || this.swipePointerActive || this.swipeSettleTimer !== null) return;
+    this.neighborWarmupTimer = setTimeout(() => {
+      this.neighborWarmupTimer = null;
+      if (window.innerWidth > 900 || !this.store.hasHydrated) return;
+      if (this.swipePointerActive || this.swipeSettleTimer !== null || this.isInSubPage()) return;
+      const curRoute = this.activeRouteId ?? this.router.route;
+      const available = this.getSwipeableMobileRoutes();
+      const curIdx = available.indexOf(curRoute);
+      if (curIdx < 0) return;
+      const candidates: RouteId[] = [];
+      if (curIdx + 1 < available.length) candidates.push(available[curIdx + 1]);
+      if (curIdx - 1 >= 0) candidates.push(available[curIdx - 1]);
+      const unmounted = candidates.filter((id) => !this.mountedViews.has(id));
+      if (unmounted.length === 0) return;
+      this.ensureViewMounted(unmounted[0]);
+      if (unmounted.length > 1) {
+        this.scheduleIdleNeighborWarmup(180);
+      }
+    }, delayMs);
+  }
+
   private ensureViewMounted(route: RouteId): { host: HTMLElement; view: Component; scrollY: number } | undefined {
     let entry = this.mountedViews.get(route);
     if (entry) return entry;
@@ -273,6 +313,12 @@ export class AppShell extends Component {
     let multiTouchTainted = false;
     let dragLock: "none" | "x" | "y" = "none";
     let dragNeighborRoute: RouteId | null = null;
+    let dragWidth = 390;
+    let dragScrollY = 0;
+    let dragViewportH = 840;
+    let dragAvailableRoutes: RouteId[] = [];
+    let dragCurIdx = -1;
+    let dragStagePrepared = false;
     const activePointers = new Map<number, { ts: number; target: EventTarget | null }>();
 
     const pruneStalePointers = (now: number) => {
@@ -287,13 +333,26 @@ export class AppShell extends Component {
       }
     };
 
+    const resumeDragPausedRoute = () => {
+      const paused = this.dragPausedRoute;
+      if (!paused) return;
+      this.dragPausedRoute = null;
+      if (paused === (this.activeRouteId ?? this.router.route)) {
+        this.mountedViews.get(paused)?.view.onActivate?.();
+      }
+    };
+
     this.resetSwipeGestureState = () => {
       activePointers.clear();
+      this.swipePointerActive = false;
       multiTouchTainted = false;
       ignoredSwipe = false;
       activePointerId = null;
       dragLock = "none";
       dragNeighborRoute = null;
+      dragAvailableRoutes = [];
+      dragCurIdx = -1;
+      dragStagePrepared = false;
       lastDx = 0;
     };
 
@@ -312,6 +371,7 @@ export class AppShell extends Component {
           neighborEntry.host.style.transition = "";
           neighborEntry.host.style.transform = "";
           neighborEntry.host.style.top = "";
+          neighborEntry.host.style.maxHeight = "";
           if (hideNeighbor) {
             neighborEntry.host.hidden = true;
             neighborEntry.host.style.display = "none";
@@ -321,7 +381,13 @@ export class AppShell extends Component {
       outlet.classList.remove("is-swipe-stage");
       dragNeighborRoute = null;
       dragLock = "none";
+      dragAvailableRoutes = [];
+      dragCurIdx = -1;
+      dragStagePrepared = false;
       lastDx = 0;
+      if (hideNeighbor) {
+        resumeDragPausedRoute();
+      }
     };
 
     const isInteractiveOrHorizontalSurface = (el: EventTarget | null): boolean => {
@@ -413,6 +479,8 @@ export class AppShell extends Component {
         activePointerId = null;
         return;
       }
+      this.cancelIdleNeighborWarmup();
+      this.swipePointerActive = true;
       ignoredSwipe = false;
       activePointerId = e.pointerId;
       startX = e.clientX;
@@ -421,6 +489,7 @@ export class AppShell extends Component {
       lastDx = 0;
       dragLock = "none";
       dragNeighborRoute = null;
+      dragStagePrepared = false;
     };
 
     const onOutletTouchMove = (e: TouchEvent) => {
@@ -455,6 +524,17 @@ export class AppShell extends Component {
           return;
         }
         if (Math.abs(dx) > Math.abs(dy) * 1.2) {
+          const curRoute = this.activeRouteId ?? this.router.route;
+          dragAvailableRoutes = this.getSwipeableMobileRoutes();
+          dragCurIdx = dragAvailableRoutes.indexOf(curRoute);
+          if (dragCurIdx < 0) {
+            ignoredSwipe = true;
+            activePointerId = null;
+            return;
+          }
+          dragWidth = Math.max(280, outlet.clientWidth || window.innerWidth || 390);
+          dragScrollY = Math.max(0, window.scrollY);
+          dragViewportH = Math.max(480, window.innerHeight || 840);
           dragLock = "x";
         } else {
           return;
@@ -464,20 +544,26 @@ export class AppShell extends Component {
       if (dragLock !== "x") return;
 
       const curRoute = this.activeRouteId ?? this.router.route;
-      const available = this.getSwipeableMobileRoutes();
-      const curIdx = available.indexOf(curRoute);
-      if (curIdx < 0) {
-        cleanupInteractiveDrag(true);
-        ignoredSwipe = true;
-        activePointerId = null;
-        return;
+      const curEntry = this.mountedViews.get(curRoute);
+      if (!curEntry) return;
+
+      if (!dragStagePrepared) {
+        dragStagePrepared = true;
+        if (this.dragPausedRoute !== curRoute) {
+          this.dragPausedRoute = curRoute;
+          curEntry.view.onDeactivate?.();
+        }
+        outlet.classList.add("is-swipe-stage");
+        curEntry.host.classList.remove("is-view-enter-left", "is-view-enter-right");
+        curEntry.host.classList.add("is-swipe-active");
+        curEntry.host.style.transition = "none";
       }
 
       lastDx = dx;
-      const width = Math.max(280, outlet.clientWidth || window.innerWidth || 390);
-      const nextIdx = dx < 0 ? curIdx + 1 : dx > 0 ? curIdx - 1 : -1;
+      const width = dragWidth;
+      const nextIdx = dx < 0 ? dragCurIdx + 1 : dx > 0 ? dragCurIdx - 1 : -1;
       const targetNeighbor: RouteId | null =
-        nextIdx >= 0 && nextIdx < available.length ? available[nextIdx] : null;
+        nextIdx >= 0 && nextIdx < dragAvailableRoutes.length ? dragAvailableRoutes[nextIdx] : null;
 
       if (dragNeighborRoute && dragNeighborRoute !== targetNeighbor) {
         const oldNeighbor = this.mountedViews.get(dragNeighborRoute);
@@ -486,29 +572,29 @@ export class AppShell extends Component {
           oldNeighbor.host.style.transition = "";
           oldNeighbor.host.style.transform = "";
           oldNeighbor.host.style.top = "";
+          oldNeighbor.host.style.maxHeight = "";
           oldNeighbor.host.hidden = true;
           oldNeighbor.host.style.display = "none";
         }
         dragNeighborRoute = null;
       }
 
-      const curEntry = this.mountedViews.get(curRoute);
-      if (!curEntry) return;
-
-      outlet.classList.add("is-swipe-stage");
-      curEntry.host.classList.remove("is-view-enter-left", "is-view-enter-right");
-      curEntry.host.classList.add("is-swipe-active");
-      curEntry.host.style.transition = "none";
-
       if (targetNeighbor) {
-        const neighborEntry = this.ensureViewMounted(targetNeighbor);
+        let neighborEntry = this.mountedViews.get(targetNeighbor);
+        if (dragNeighborRoute !== targetNeighbor) {
+          neighborEntry = this.ensureViewMounted(targetNeighbor);
+          if (neighborEntry) {
+            dragNeighborRoute = targetNeighbor;
+            const neighborScrollY = Math.max(0, neighborEntry.scrollY || 0);
+            neighborEntry.host.hidden = false;
+            neighborEntry.host.style.display = "";
+            neighborEntry.host.classList.add("is-swipe-peek");
+            neighborEntry.host.style.top = `${8 + dragScrollY - neighborScrollY}px`;
+            neighborEntry.host.style.maxHeight = `${neighborScrollY + dragViewportH}px`;
+            neighborEntry.host.style.transition = "none";
+          }
+        }
         if (neighborEntry) {
-          dragNeighborRoute = targetNeighbor;
-          neighborEntry.host.hidden = false;
-          neighborEntry.host.style.display = "";
-          neighborEntry.host.classList.add("is-swipe-peek");
-          neighborEntry.host.style.top = `${8 + Math.max(0, window.scrollY)}px`;
-          neighborEntry.host.style.transition = "none";
           const clampedDx = Math.max(-width, Math.min(width, dx));
           const neighborOffset = clampedDx < 0 ? width + clampedDx : -width + clampedDx;
           curEntry.host.style.transform = `translate3d(${clampedDx}px, 0, 0)`;
@@ -526,11 +612,13 @@ export class AppShell extends Component {
       const wasDraggingX = dragLock === "x";
       activePointers.delete(e.pointerId);
       if (activePointers.size === 0) {
+        this.swipePointerActive = false;
         multiTouchTainted = false;
       }
       if (!wasTracked) {
         if (wasDraggingX) cleanupInteractiveDrag(true);
         if (e.pointerId === activePointerId) activePointerId = null;
+        this.scheduleIdleNeighborWarmup();
         return;
       }
       activePointerId = null;
@@ -539,8 +627,8 @@ export class AppShell extends Component {
         return;
       }
       const curRoute = this.activeRouteId ?? this.router.route;
-      const available = this.getSwipeableMobileRoutes();
-      const curIdx = available.indexOf(curRoute);
+      const available = wasDraggingX && dragAvailableRoutes.length > 0 ? dragAvailableRoutes : this.getSwipeableMobileRoutes();
+      const curIdx = wasDraggingX && dragCurIdx >= 0 ? dragCurIdx : available.indexOf(curRoute);
       if (curIdx < 0) {
         if (wasDraggingX) cleanupInteractiveDrag(true);
         return;
@@ -549,7 +637,7 @@ export class AppShell extends Component {
       const dx = e.clientX - startX;
       const dy = e.clientY - startY;
       const dt = performance.now() - startTime;
-      const width = Math.max(280, outlet.clientWidth || window.innerWidth || 390);
+      const width = wasDraggingX ? dragWidth : Math.max(280, outlet.clientWidth || window.innerWidth || 390);
 
       const nextIdx = dx < 0 ? curIdx + 1 : curIdx - 1;
       const canAdvance = nextIdx >= 0 && nextIdx < available.length;
@@ -566,12 +654,16 @@ export class AppShell extends Component {
             toRoute: targetRoute,
             dx: Math.max(-width, Math.min(width, dx)),
             width,
+            scrollY: dragScrollY,
           };
         } else if (wasDraggingX) {
           cleanupInteractiveDrag(true);
         }
         dragNeighborRoute = null;
         dragLock = "none";
+        dragAvailableRoutes = [];
+        dragCurIdx = -1;
+        dragStagePrepared = false;
         lastDx = 0;
         pushAppHash(`#/${targetRoute}`);
         return;
@@ -584,6 +676,9 @@ export class AppShell extends Component {
         const neighborEntry = neighborRoute ? this.mountedViews.get(neighborRoute) : undefined;
         dragNeighborRoute = null;
         dragLock = "none";
+        dragAvailableRoutes = [];
+        dragCurIdx = -1;
+        dragStagePrepared = false;
         lastDx = 0;
 
         if (curEntry) {
@@ -605,10 +700,13 @@ export class AppShell extends Component {
             neighborEntry.host.style.transition = "";
             neighborEntry.host.style.transform = "";
             neighborEntry.host.style.top = "";
+            neighborEntry.host.style.maxHeight = "";
             neighborEntry.host.hidden = true;
             neighborEntry.host.style.display = "none";
           }
           outlet.classList.remove("is-swipe-stage");
+          resumeDragPausedRoute();
+          this.scheduleIdleNeighborWarmup();
         };
         this.swipeSettleCleanup = finalizeCancel;
         this.swipeSettleTimer = setTimeout(() => {
@@ -616,12 +714,15 @@ export class AppShell extends Component {
           this.swipeSettleCleanup = null;
           finalizeCancel();
         }, 190);
+      } else {
+        this.scheduleIdleNeighborWarmup();
       }
     };
 
     const onWindowPointerCancel = (e: PointerEvent) => {
       activePointers.delete(e.pointerId);
       if (activePointers.size === 0) {
+        this.swipePointerActive = false;
         multiTouchTainted = false;
       }
       if (dragLock === "x") {
@@ -629,6 +730,7 @@ export class AppShell extends Component {
       }
       activePointerId = null;
       ignoredSwipe = true;
+      this.scheduleIdleNeighborWarmup();
     };
 
     window.addEventListener("pointerdown", onWindowPointerDown, { capture: true, passive: true });
@@ -804,9 +906,6 @@ export class AppShell extends Component {
       clearTimeout(this.viewAnimTimer);
       this.viewAnimTimer = null;
     }
-    scanCustomSelects(host);
-    scanTableScrollIndicators(host);
-    scanSettingsIntroCollapse(host);
     host.classList.remove(
       "is-view-enter-right",
       "is-view-enter-left",
@@ -863,9 +962,13 @@ export class AppShell extends Component {
 
     const prevRoute = this.activeRouteId;
     const prevEntry = prevRoute && prevRoute !== route ? this.mountedViews.get(prevRoute) : undefined;
+    const alreadyDeactivated = prevRoute !== null && this.dragPausedRoute === prevRoute;
+    this.dragPausedRoute = null;
     if (prevEntry) {
-      prevEntry.scrollY = window.scrollY;
-      prevEntry.view.onDeactivate?.();
+      prevEntry.scrollY = swipeTrans ? swipeTrans.scrollY : window.scrollY;
+      if (!alreadyDeactivated) {
+        prevEntry.view.onDeactivate?.();
+      }
       if (!swipeTrans) {
         prevEntry.host.hidden = true;
         prevEntry.host.style.display = "none";
@@ -876,18 +979,21 @@ export class AppShell extends Component {
     const outlet = this.slot("outlet");
     let entry = this.mountedViews.get(route);
     let wasCached = false;
+    const deferActivationForSwipe = Boolean(swipeTrans && prevEntry && entry);
 
     if (entry) {
       wasCached = true;
       entry.host.hidden = false;
       entry.host.style.display = "";
-      entry.view.onActivate?.();
-      scanCustomSelects(entry.host);
-      scanTableScrollIndicators(entry.host);
-      scanSettingsIntroCollapse(entry.host);
-      window.requestAnimationFrame(() => {
-        window.dispatchEvent(new Event("resize"));
-      });
+      if (!deferActivationForSwipe) {
+        entry.view.onActivate?.();
+        scanCustomSelects(entry.host);
+        scanTableScrollIndicators(entry.host);
+        scanSettingsIntroCollapse(entry.host);
+        window.requestAnimationFrame(() => {
+          window.dispatchEvent(new Event("resize"));
+        });
+      }
     } else {
       const host = document.createElement("div");
       host.className = `view view-${route}`;
@@ -905,31 +1011,39 @@ export class AppShell extends Component {
     }
 
     if (swipeTrans && prevEntry && entry) {
-      const { dx, width } = swipeTrans;
+      const { dx, width, scrollY } = swipeTrans;
       const incomingStart = dx < 0 ? width + dx : -width + dx;
       const outgoingEnd = dx < 0 ? -width : width;
+      const targetScrollY = Math.max(0, entry.scrollY || 0);
+      const viewportH = Math.max(480, window.innerHeight || 840);
 
       outlet.classList.add("is-swipe-stage");
-      prevEntry.host.classList.remove("is-swipe-active", "is-swipe-peek");
-      prevEntry.host.classList.add("is-swipe-exiting");
-      prevEntry.host.style.top = "8px";
-      prevEntry.host.style.transition = "none";
-      prevEntry.host.style.transform = `translate3d(${dx}px, 0, 0)`;
+      prevEntry.host.classList.remove("is-swipe-peek", "is-swipe-exiting");
+      prevEntry.host.classList.add("is-swipe-active");
 
-      entry.host.classList.remove("is-swipe-peek", "is-swipe-exiting", "is-view-enter-left", "is-view-enter-right");
-      entry.host.classList.add("is-swipe-active");
-      entry.host.style.top = "";
-      entry.host.style.transition = "none";
-      entry.host.style.transform = `translate3d(${incomingStart}px, 0, 0)`;
+      const wasPeeking = entry.host.classList.contains("is-swipe-peek");
+      entry.host.classList.remove("is-swipe-active", "is-swipe-exiting", "is-view-enter-left", "is-view-enter-right");
+      entry.host.classList.add("is-swipe-peek");
+      entry.host.style.top = `${8 + scrollY - targetScrollY}px`;
+      entry.host.style.maxHeight = `${targetScrollY + viewportH}px`;
 
-      void entry.host.offsetWidth;
+      if (!wasPeeking) {
+        prevEntry.host.style.transition = "none";
+        prevEntry.host.style.transform = `translate3d(${dx}px, 0, 0)`;
+        entry.host.style.transition = "none";
+        entry.host.style.transform = `translate3d(${incomingStart}px, 0, 0)`;
+        void entry.host.offsetWidth;
+      }
 
-      prevEntry.host.style.transition = "transform 200ms cubic-bezier(0.22, 1, 0.36, 1)";
+      prevEntry.host.style.transition = "transform 190ms cubic-bezier(0.22, 1, 0.36, 1)";
       prevEntry.host.style.transform = `translate3d(${outgoingEnd}px, 0, 0)`;
-      entry.host.style.transition = "transform 200ms cubic-bezier(0.22, 1, 0.36, 1)";
+      entry.host.style.transition = "transform 190ms cubic-bezier(0.22, 1, 0.36, 1)";
       entry.host.style.transform = "translate3d(0px, 0, 0)";
 
+      let finalized = false;
       const finalizeCommit = () => {
+        if (finalized) return;
+        finalized = true;
         if (this.activeRouteId !== prevRoute) {
           prevEntry.host.hidden = true;
           prevEntry.host.style.display = "none";
@@ -938,12 +1052,28 @@ export class AppShell extends Component {
         prevEntry.host.style.transition = "";
         prevEntry.host.style.transform = "";
         prevEntry.host.style.top = "";
+        prevEntry.host.style.maxHeight = "";
 
         entry!.host.classList.remove("is-swipe-active", "is-swipe-peek", "is-swipe-exiting");
         entry!.host.style.transition = "";
         entry!.host.style.transform = "";
         entry!.host.style.top = "";
+        entry!.host.style.maxHeight = "";
         outlet.classList.remove("is-swipe-stage");
+
+        if (this.activeRouteId === route) {
+          this.sectionTracker.onRouteMounted(route, targetScrollY, wasCached);
+          if (deferActivationForSwipe) {
+            entry!.view.onActivate?.();
+            scanCustomSelects(entry!.host);
+            scanTableScrollIndicators(entry!.host);
+            scanSettingsIntroCollapse(entry!.host);
+            window.requestAnimationFrame(() => {
+              window.dispatchEvent(new Event("resize"));
+            });
+          }
+          this.scheduleIdleNeighborWarmup();
+        }
       };
 
       this.swipeSettleCleanup = finalizeCommit;
@@ -951,7 +1081,8 @@ export class AppShell extends Component {
         this.swipeSettleTimer = null;
         this.swipeSettleCleanup = null;
         finalizeCommit();
-      }, 210);
+      }, 198);
+      return;
     } else if (prevRoute && prevRoute !== route && entry) {
       const mobileRoutes = window.innerWidth <= 900 ? this.getSwipeableMobileRoutes() : null;
       const prevIdx = mobileRoutes ? mobileRoutes.indexOf(prevRoute) : ROUTES.findIndex((r) => r.id === prevRoute);
@@ -960,6 +1091,7 @@ export class AppShell extends Component {
     }
 
     this.sectionTracker.onRouteMounted(route, entry?.scrollY ?? 0, wasCached);
+    this.scheduleIdleNeighborWarmup();
   }
 
   private createView(route: RouteId, host: HTMLElement): Component {

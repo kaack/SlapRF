@@ -101,6 +101,15 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
       expect(moreBtn.textContent).toContain("Flasher");
       router.navigateSection("races");
 
+      const moreOverlay = sbEl.querySelector<HTMLElement>("[data-mobile-more-overlay]")!;
+      expect(moreOverlay.hidden).toBe(true);
+      moreBtn.click();
+      expect(moreOverlay.hidden).toBe(false);
+      expect(moreBtn.getAttribute("aria-expanded")).toBe("true");
+      moreBtn.click();
+      expect(moreBtn.getAttribute("aria-expanded")).toBe("false");
+      expect(moreOverlay.classList.contains("is-closing")).toBe(true);
+
       const darkBtn = themeRow!.querySelector<HTMLButtonElement>('button[data-set-theme="dark"]')!;
       const lightBtn = themeRow!.querySelector<HTMLButtonElement>('button[data-set-theme="light"]')!;
       expect(darkBtn).not.toBeNull();

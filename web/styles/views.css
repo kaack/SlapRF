@@ -17063,8 +17063,7 @@ button.rc-cselect-trigger.is-open .rc-cselect-caret {
     pointer-events: none;
   }
   .pilot-dir-mobile-drawer-overlay.is-closing .pilot-dir-mobile-drawer-backdrop,
-  .practice-pilot-drawer-overlay.is-closing .pilot-dir-mobile-drawer-backdrop,
-  .mobile-more-drawer-overlay.is-closing .pilot-dir-mobile-drawer-backdrop {
+  .practice-pilot-drawer-overlay.is-closing .pilot-dir-mobile-drawer-backdrop {
     animation: pilot-drawer-backdrop-out 0.13s ease-out 0.17s both !important;
   }
   .pilot-dir-mobile-editor {

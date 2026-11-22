@@ -1313,10 +1313,16 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     touch-action: pan-y;
   }
   .outlet.is-swipe-stage {
-    overflow-x: clip;
+    overflow: clip;
+  }
+  .outlet.is-swipe-stage > .view {
+    pointer-events: none;
   }
   .view.is-swipe-active {
     will-change: transform;
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    contain: layout style;
   }
   .view.is-swipe-peek,
   .view.is-swipe-exiting {
@@ -1324,7 +1330,11 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     top: 8px;
     left: 14px;
     right: 14px;
+    overflow: hidden;
+    contain: layout paint style;
     will-change: transform;
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
     pointer-events: none;
     z-index: 2;
   }
@@ -1496,13 +1506,27 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     color: var(--accent);
   }
 
-  .mobile-more-drawer-overlay:not([hidden]) {
+  .mobile-more-drawer-overlay,
+  .mobile-more-drawer-overlay[hidden] {
     position: fixed;
     inset: 0;
     z-index: 780;
-    display: flex;
+    display: flex !important;
     flex-direction: column;
     justify-content: flex-end;
+    visibility: hidden;
+    pointer-events: none;
+    contain: layout paint style;
+  }
+  .mobile-more-drawer-overlay:not([hidden]) {
+    visibility: visible;
+    pointer-events: auto;
+  }
+  .mobile-more-drawer-overlay.is-gpu-prewarm,
+  .mobile-more-drawer-overlay[hidden].is-gpu-prewarm {
+    visibility: visible;
+    opacity: 0.004;
+    pointer-events: none !important;
   }
   .mobile-more-drawer-overlay > .pilot-dir-mobile-drawer-backdrop {
     position: absolute;
@@ -1514,13 +1538,25 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     -webkit-backface-visibility: hidden;
     backface-visibility: hidden;
     will-change: opacity;
-    animation: pilot-drawer-backdrop-in 0.13s ease-out both;
+    opacity: 0;
+    touch-action: none;
+    animation: none !important;
+    transition: opacity 0.18s ease-out;
+  }
+  .mobile-more-drawer-overlay:not([hidden]):not(.is-closing) > .pilot-dir-mobile-drawer-backdrop {
+    opacity: 1;
+  }
+  .mobile-more-drawer-overlay.is-gpu-prewarm > .pilot-dir-mobile-drawer-backdrop {
+    opacity: 0.01;
+    transition: none !important;
   }
   .mobile-more-drawer-overlay.is-closing {
     pointer-events: none;
   }
-  .mobile-more-drawer-overlay.is-closing .pilot-dir-mobile-drawer-backdrop {
-    animation: pilot-drawer-backdrop-out 0.13s ease-out 0.17s both !important;
+  .mobile-more-drawer-overlay.is-closing > .pilot-dir-mobile-drawer-backdrop {
+    opacity: 0;
+    animation: none !important;
+    transition: opacity 0.16s ease-in;
   }
   .mobile-more-drawer-sheet {
     position: relative;
@@ -1538,12 +1574,30 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     flex-direction: column;
     gap: 14px;
     overflow-y: auto;
+    overscroll-behavior: contain;
+    contain: layout paint style;
+    transform: translate3d(0, 104%, 0);
+    will-change: transform;
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    animation: none !important;
+    transition: transform 0.22s cubic-bezier(0.22, 1, 0.36, 1);
   }
-  .mobile-more-drawer-sheet.is-entering {
-    animation: pilot-drawer-slide-up 0.26s cubic-bezier(0.22, 1, 0.36, 1) 0.09s both;
+  .mobile-more-drawer-overlay:not([hidden]):not(.is-closing) > .mobile-more-drawer-sheet,
+  .mobile-more-drawer-sheet.is-entering:not(.is-closing) {
+    animation: none !important;
   }
-  .mobile-more-drawer-overlay.is-closing .mobile-more-drawer-sheet {
-    animation: pilot-drawer-slide-down 0.19s cubic-bezier(0.32, 0, 0.67, 0) 0s both !important;
+  .mobile-more-drawer-overlay:not([hidden]):not(.is-closing) > .mobile-more-drawer-sheet {
+    transform: translate3d(0, 0, 0);
+  }
+  .mobile-more-drawer-overlay.is-gpu-prewarm > .mobile-more-drawer-sheet {
+    transform: translate3d(0, 99%, 0);
+    transition: none !important;
+  }
+  .mobile-more-drawer-overlay.is-closing > .mobile-more-drawer-sheet {
+    transform: translate3d(0, 104%, 0);
+    animation: none !important;
+    transition: transform 0.17s cubic-bezier(0.32, 0, 0.67, 0);
   }
   html[data-theme="light"] .mobile-more-drawer-sheet {
     background: #ffffff;
