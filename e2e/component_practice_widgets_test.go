@@ -445,11 +445,11 @@ func TestComponent_PilotRssiChartMobileInlineTimerRowColumns(t *testing.T) {
 			const gateRow = panel.querySelector(".channel-legend > button.channel[data-gate-chip='1']");
 			if (!gateRow) return false;
 			const dbmEl = gateRow.querySelector(".channel-right-cols > .channel-dbm");
-			const calibBtn = gateRow.querySelector(".channel-right-cols > [data-calib-gate='1']");
+			const calibCol = gateRow.querySelector(".channel-right-cols > [data-calib-gate='1'], .channel-right-cols > .channel-mobile-action-spacer");
 			const tuneBtn = gateRow.querySelector(".channel-right-cols > [data-tune-gate='1']");
-			if (!dbmEl || !calibBtn || !tuneBtn) return false;
+			if (!dbmEl || !calibCol || !tuneBtn) return false;
 			const bDbm = dbmEl.getBoundingClientRect();
-			const bCal = calibBtn.getBoundingClientRect();
+			const bCal = calibCol.getBoundingClientRect();
 			const bTune = tuneBtn.getBoundingClientRect();
 			return bCal.left >= bDbm.right - 2 && bTune.left >= bCal.right - 2 && bCal.width >= 32 && bTune.width >= 32;
 		}`)

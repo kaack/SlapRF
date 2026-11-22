@@ -3047,12 +3047,40 @@ html[data-theme="light"] .channel-custom-icon {
 }
 
 /* Signals fine-tuning button & drawer */
+@keyframes slaprf-calib-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.scope-calib .btn.is-calibrating svg,
+.channel-mobile-action-btn.is-calib.is-calibrating svg {
+  animation: slaprf-calib-spin 0.65s linear infinite;
+  will-change: transform;
+}
+.scope-calib .btn.is-calibrating {
+  pointer-events: none;
+  opacity: 0.85;
+}
 .scope-calib-tune-btn.is-active {
   color: #7dd3fc;
   border-color: rgba(56, 189, 248, 0.42);
   background: rgba(56, 189, 248, 0.14);
 }
-html[data-theme="light"] .scope-calib-tune-btn.is-active {
+html[data-theme="light"] @keyframes slaprf-calib-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.scope-calib .btn.is-calibrating svg,
+.channel-mobile-action-btn.is-calib.is-calibrating svg {
+  animation: slaprf-calib-spin 0.65s linear infinite;
+  will-change: transform;
+}
+.scope-calib .btn.is-calibrating {
+  pointer-events: none;
+  opacity: 0.85;
+}
+.scope-calib-tune-btn.is-active {
   color: #0369a1;
   border-color: rgba(2, 132, 199, 0.42);
   background: rgba(2, 132, 199, 0.12);
@@ -3643,6 +3671,18 @@ html[data-theme="light"] .scope-tune-custom-icon {
     background: var(--surface-3);
     color: var(--text);
     border-color: var(--border-strong);
+  }
+  .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-calib.is-calibrating {
+    pointer-events: none;
+    cursor: default;
+    color: #7dd3fc;
+    border-color: rgba(56, 189, 248, 0.35);
+    background: rgba(56, 189, 248, 0.1);
+  }
+  html[data-theme="light"] .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-calib.is-calibrating {
+    color: #0369a1;
+    border-color: rgba(2, 132, 199, 0.35);
+    background: rgba(2, 132, 199, 0.09);
   }
   .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-calib.is-calibrated,
   .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-tune.is-active {

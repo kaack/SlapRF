@@ -136,6 +136,7 @@ const DEFAULT_WINDOW_US = 15_000_000;
 const MIN_WINDOW_US = 400_000;
 const MAX_WINDOW_US = HISTORY_SECONDS * 1_000_000;
 const LEGEND_REFRESH_MS = 150;
+const MIN_CALIB_SPIN_MS = 480;
 /** How close (px) the cursor must be to a pass marker to show its details. */
 const MARKER_HIT_PX = 7;
 /** Threshold tags: height, and how close (px) to a threshold line counts as grabbing it. */
@@ -233,6 +234,12 @@ export class PilotRssiChart extends Component {
   private tagDrag: { gateId: number; kind: "enter" | "exit"; dbm: number } | null = null;
   /** Values shown while a save is in flight, so the line doesn't jump back. */
   private readonly pending = new Map<number, { enter: number; exit: number }>();
+  private readonly calibratingGates = new Set<number>();
+  private readonly calibSpinTimers = new Set<number>();
+  private readonly calibReadyCache = new Map<
+    string,
+    { ok: boolean; checkedAtMs: number; frameCount: number; passCount: number }
+  >();
   private tags: TagBox[] = [];
   private calibMessage = "";
   private calibMessageShort = "";
@@ -433,6 +440,11 @@ export class PilotRssiChart extends Component {
         window.clearTimeout(this.tuneDrawerCloseTimer);
         this.tuneDrawerCloseTimer = null;
       }
+      for (const tid of this.calibSpinTimers) {
+        window.clearTimeout(tid);
+      }
+      this.calibSpinTimers.clear();
+      this.calibratingGates.clear();
       if (this.tuneDrawerEl.parentElement && this.tuneDrawerEl.parentElement !== this.el) {
         this.tuneDrawerEl.remove();
       }
@@ -632,8 +644,14 @@ export class PilotRssiChart extends Component {
       if (!btn) return;
       if (btn.dataset.calibGate) {
         e.stopPropagation();
+        if (btn.dataset.calibBusy === "1" || btn.getAttribute("aria-disabled") === "true") {
+          return;
+        }
         const rawGate = btn.dataset.calibGate;
         const gId = rawGate === "all" ? null : Number(rawGate);
+        if (gId !== null && this.calibratingGates.has(gId)) {
+          return;
+        }
         const mode = btn.dataset.calibMode === "reset" ? "reset" : "auto";
         if (gId !== null && this.focus !== gId) {
           this.focus = gId;
@@ -1247,6 +1265,8 @@ export class PilotRssiChart extends Component {
     );
     this.onDispose(
       store.subscribe(["laps", "crossings", "practice"], () => {
+        this.renderCalib();
+        this.renderLegend();
         if (this.tuningGateId !== null) {
           this.renderTuningDrawer();
         }
@@ -1756,6 +1776,51 @@ export class PilotRssiChart extends Component {
     );
   }
 
+  private canGateCalibrateNow(gateId: number, slotPos: number): boolean {
+    if (slotPos < 0) return false;
+    const frames = this.store.historyFor(gateId);
+    if (frames.length < 100) return false;
+    const passCount = this.store.crossings.length + this.store.filtered.length;
+    const key = `${gateId}:${slotPos}`;
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const cached = this.calibReadyCache.get(key);
+    if (cached) {
+      if (cached.ok && nowMs - cached.checkedAtMs < 10_000) {
+        return true;
+      }
+      if (
+        !cached.ok &&
+        cached.passCount === passCount &&
+        frames.length - cached.frameCount < 100 &&
+        nowMs - cached.checkedAtMs < 2_000
+      ) {
+        return false;
+      }
+    }
+    const tail = frames.length > 6_500 ? frames.slice(frames.length - 6_500) : frames;
+    const ok = suggestThreshold(tail, slotPos).ok;
+    this.calibReadyCache.set(key, {
+      ok,
+      checkedAtMs: nowMs,
+      frameCount: frames.length,
+      passCount,
+    });
+    return ok;
+  }
+
+  private waitMinCalibSpin(startedAtMs: number): Promise<void> {
+    const nowMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    const remMs = Math.max(0, MIN_CALIB_SPIN_MS - (nowMs - startedAtMs));
+    if (remMs <= 0) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      const tid = window.setTimeout(() => {
+        this.calibSpinTimers.delete(tid);
+        resolve();
+      }, remMs);
+      this.calibSpinTimers.add(tid);
+    });
+  }
+
   /**
    * Works out each gate's threshold from the recent signal (see suggestThreshold): noise
    * floor between passes vs. the peaks of the passes themselves.
@@ -1763,59 +1828,83 @@ export class PilotRssiChart extends Component {
   private async autoCalibrate(targetGateId?: number | null): Promise<void> {
     const pilot = this.store.pilot(this.activePilotSlot);
     if (!pilot) return;
-    const pos = this.store.pilots.indexOf(pilot);
-    const updates: GateThresholdUpdate[] = [];
-    const done: string[] = [];
-    const skipped: string[] = [];
-    const isRH = isRotorHazardMode(this.store.timingHardwareMode);
     const targetGates =
       targetGateId === undefined
         ? this.shownGates
         : targetGateId === null
           ? this.store.nodes
           : this.store.nodes.filter((p) => p.gateId === targetGateId);
-    for (const gate of targetGates) {
-      const result = suggestThreshold(this.store.historyFor(gate.gateId), pos);
-      const name = gateLabel(this.store, gate.gateId);
-      if (result.ok) {
-        if (isRH) {
-          const rhEnterThreshold = Math.max(10, Math.min(250, Math.round(result.enterDbm)));
-          const rhExitThreshold = Math.max(6, Math.min(rhEnterThreshold - 4, Math.round(result.exitDbm)));
-          updates.push({
-            gateId: gate.gateId,
-            slotIndex: pilot.slotIndex,
-            enterDbm: 0,
-            rhEnterThreshold,
-            rhExitThreshold,
-          });
-          done.push(`${name} ${rhEnterThreshold}/${rhExitThreshold}`);
+    const gateIds = targetGates.map((g) => g.gateId).filter((id) => !this.calibratingGates.has(id));
+    if (gateIds.length === 0) return;
+
+    const startedAtMs = typeof performance !== "undefined" ? performance.now() : Date.now();
+    for (const id of gateIds) {
+      this.calibratingGates.add(id);
+    }
+    this.renderCalib();
+    this.renderLegend();
+
+    try {
+      const pos = this.store.pilots.indexOf(pilot);
+      const updates: GateThresholdUpdate[] = [];
+      const done: string[] = [];
+      const skipped: string[] = [];
+      const isRH = isRotorHazardMode(this.store.timingHardwareMode);
+      for (const gate of targetGates) {
+        const result = suggestThreshold(this.store.historyFor(gate.gateId), pos);
+        const name = gateLabel(this.store, gate.gateId);
+        if (result.ok) {
+          if (isRH) {
+            const rhEnterThreshold = Math.max(10, Math.min(250, Math.round(result.enterDbm)));
+            const rhExitThreshold = Math.max(6, Math.min(rhEnterThreshold - 4, Math.round(result.exitDbm)));
+            updates.push({
+              gateId: gate.gateId,
+              slotIndex: pilot.slotIndex,
+              enterDbm: 0,
+              rhEnterThreshold,
+              rhExitThreshold,
+            });
+            done.push(`${name} ${rhEnterThreshold}/${rhExitThreshold}`);
+          } else {
+            updates.push({
+              gateId: gate.gateId,
+              slotIndex: pilot.slotIndex,
+              enterDbm: result.enterDbm,
+              exitDbm: result.exitDbm,
+              auto: true,
+            });
+            done.push(`${name} ${result.enterDbm}/${result.exitDbm}`);
+          }
         } else {
-          updates.push({
-            gateId: gate.gateId,
-            slotIndex: pilot.slotIndex,
-            enterDbm: result.enterDbm,
-            exitDbm: result.exitDbm,
-            auto: true,
-          });
-          done.push(`${name} ${result.enterDbm}/${result.exitDbm}`);
+          skipped.push(`${name}: ${result.reason}`);
         }
-      } else {
-        skipped.push(`${name}: ${result.reason}`);
+      }
+      if (updates.length === 0) {
+        await this.waitMinCalibSpin(startedAtMs);
+        if (this.disposed) return;
+        this.calibMessage = `Cannot calibrate yet (${skipped[0] ?? "no signal"}). Let ${pilot.callsign} fly a few laps with this page open, then try again.`;
+        this.calibMessageShort = "Cannot calibrate yet · fly a few passes first";
+        return;
+      }
+      const minutes = Math.round(HISTORY_SECONDS / 60);
+      const unit = isRH ? "RSSI" : "dBm";
+      await Promise.all([
+        this.apply(
+          updates,
+          `Calibrated from the last ${minutes} min: ${done.join(" · ")} ${unit}.${skipped.length ? ` Skipped ${skipped.join(", ")}.` : ""}`,
+          `Calibrated: ${done.join(" · ")} ${unit}`
+        ),
+        this.waitMinCalibSpin(startedAtMs),
+      ]);
+    } finally {
+      for (const id of gateIds) {
+        this.calibratingGates.delete(id);
+      }
+      if (!this.disposed) {
+        this.renderCalib();
+        this.renderLegend();
       }
     }
-    if (updates.length === 0) {
-      this.calibMessage = `Cannot calibrate yet (${skipped[0] ?? "no signal"}). Let ${pilot.callsign} fly a few laps with this page open, then try again.`;
-      this.calibMessageShort = "Cannot calibrate yet · fly a few passes first";
-      this.renderCalib();
-      return;
-    }
-    const minutes = Math.round(HISTORY_SECONDS / 60);
-    const unit = isRH ? "RSSI" : "dBm";
-    await this.apply(
-      updates,
-      `Calibrated from the last ${minutes} min: ${done.join(" · ")} ${unit}.${skipped.length ? ` Skipped ${skipped.join(", ")}.` : ""}`,
-      `Calibrated: ${done.join(" · ")} ${unit}`
-    );
   }
 
   private resetToDefault(targetGateId?: number | null): Promise<void> {
@@ -2680,9 +2769,12 @@ export class PilotRssiChart extends Component {
       actions = "";
     } else {
       const name = gateLabel(this.store, this.focus);
+      const pilotPos = this.store.pilots.indexOf(pilot);
       const t = enterThresholdAt(this.store, this.focus, pilot.slotIndex);
       const ex = exitThresholdAt(this.store, this.focus, pilot.slotIndex);
       const isCal = isLapRF ? t.calibrated : t.calibrated || ex.calibrated;
+      const isCalibrating = this.calibratingGates.has(this.focus);
+      const canCalibThisGate = canAutoCalib && (isCal || isCalibrating || this.canGateCalibrateNow(this.focus, pilotPos));
       const isTuneOpen = this.tuneDrawerOpen && this.tuningGateId === this.focus;
       if (this.calibMessage) {
         const shortMsg = this.calibMessageShort || this.calibMessage;
@@ -2694,11 +2786,13 @@ export class PilotRssiChart extends Component {
         const dragHint = isLapRF ? " · drag line to adjust" : " · drag lines to adjust";
         textHtml = `${esc(baseText)}<span class="scope-calib-drag-hint">${esc(dragHint)}</span>`;
       }
-      const calibButton = isCal
-        ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Clear calibrated thresholds at ${esc(name)} and restore ${esc(pilot.callsign)}'s default thresholds">${icons.targetOff(16)}<span>Clear calibration</span></button>`
-        : canAutoCalib
-          ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Calibrate ${esc(name)}'s thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Calibrate</span></button>`
-          : "";
+      const calibButton = isCalibrating
+        ? `<button class="btn btn-sm btn-ghost is-calibrating" type="button" data-calib="busy" disabled aria-disabled="true" title="Calibrating ${esc(name)}…">${icons.spinner(16)}<span>Calibrating…</span></button>`
+        : isCal
+          ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="reset" title="Clear calibrated thresholds at ${esc(name)} and restore ${esc(pilot.callsign)}'s default thresholds">${icons.targetOff(16)}<span>Clear calibration</span></button>`
+          : canCalibThisGate
+            ? `<button class="btn btn-sm btn-ghost" type="button" data-calib="auto" title="Calibrate ${esc(name)}'s thresholds from the last ${minutes} minutes of signal">${icons.target(17)}<span>Calibrate</span></button>`
+            : "";
       const actionButtons = [
         calibButton,
         canTune ? `<button class="btn btn-sm btn-ghost scope-calib-tune-btn ${isTuneOpen ? "is-active" : ""}" type="button" data-tune-gate="${this.focus}" aria-expanded="${isTuneOpen}" title="Fine-tune detection rules for ${esc(name)}">${icons.sliders(17)}<span>Fine-tune</span></button>` : "",
@@ -2736,13 +2830,24 @@ export class PilotRssiChart extends Component {
 
     const legendEl = this.slot("legend");
     const activeSlot = this.activePilotSlot;
-    const fastKey = `${this.store.stateRev ?? 0}|${this.focus ?? "all"}|${this.tuningGateId ?? "closed"}|${this.tuneDrawerOpen ? 1 : 0}|${activeSlot}|${this.isMultiPilotMode ? (this.multiPilotSlots ?? []).join(",") : "single"}|${unitSuffix}|${this.pending.size}`;
+    const canTune = !this.isMultiPilotMode && !this.store.isHistoricalTrack;
+    const isLapRF = this.isLapRF;
+    const isRH = this.isRH;
+    const canAutoCalib = !isLapRF && !isRH;
+    const activePilotIdx = slots[0] ?? -1;
+    let readyMask = 0;
+    if (canTune && canAutoCalib) {
+      const nodes = this.store.nodes;
+      for (let i = 0; i < nodes.length; i++) {
+        if (this.canGateCalibrateNow(nodes[i].gateId, activePilotIdx)) {
+          readyMask |= 1 << (i & 30);
+        }
+      }
+    }
+    const calibBusyKey = this.calibratingGates.size > 0 ? Array.from(this.calibratingGates).sort((a, b) => a - b).join(",") : "";
+    const fastKey = `${this.store.stateRev ?? 0}|${this.focus ?? "all"}|${this.tuningGateId ?? "closed"}|${this.tuneDrawerOpen ? 1 : 0}|${activeSlot}|${this.isMultiPilotMode ? (this.multiPilotSlots ?? []).join(",") : "single"}|${unitSuffix}|${this.pending.size}|${calibBusyKey}|${readyMask}`;
     if (fastKey !== this.lastFastLegendKey || legendEl.childElementCount === 0) {
       this.lastFastLegendKey = fastKey;
-      const canTune = !this.isMultiPilotMode && !this.store.isHistoricalTrack;
-      const isLapRF = this.isLapRF;
-      const isRH = this.isRH;
-      const canAutoCalib = !isLapRF && !isRH;
       const globalOvrCount = canTune ? countGlobalOverrides(this.store.rules) : 0;
       const isGateCalibrated = (gateId: number): boolean => {
         if (!canTune) return false;
@@ -2761,12 +2866,16 @@ export class PilotRssiChart extends Component {
         anyCalibrated ? "anycal" : "nocal",
         unitSuffix,
         `global:${globalOvrCount}`,
+        `busy:${calibBusyKey}`,
+        `ready:${readyMask}`,
         this.store.nodes
           .map((p) => {
             const gOvr = countOverrides(p.ruleOverrides);
             const pOvr = countOverrides(pilotGateOverridesAt(p, activeSlot));
             const cal = isGateCalibrated(p.gateId) ? 1 : 0;
-            return `${p.gateId}:${this.labelOfGate(p.gateId)}:${this.colorOf(p.gateId)}:${gOvr}:${pOvr}:${cal}`;
+            const busy = this.calibratingGates.has(p.gateId) ? 1 : 0;
+            const rdy = canAutoCalib && this.canGateCalibrateNow(p.gateId, activePilotIdx) ? 1 : 0;
+            return `${p.gateId}:${this.labelOfGate(p.gateId)}:${this.colorOf(p.gateId)}:${gOvr}:${pOvr}:${cal}:${busy}:${rdy}`;
           })
           .join(","),
       ].join("|");
@@ -2800,13 +2909,17 @@ export class PilotRssiChart extends Component {
             const pOvrCount = canTune ? countOverrides(pilotGateOverridesAt(p, activeSlot)) : 0;
             const hasOvr = gOvrCount + pOvrCount > 0;
             const isCal = isGateCalibrated(p.gateId);
+            const isCalibrating = this.calibratingGates.has(p.gateId);
+            const canCalibGate = canAutoCalib && this.canGateCalibrateNow(p.gateId, activePilotIdx);
             const isGateTuneOpen = this.tuneDrawerOpen && this.tuningGateId === p.gateId;
             const calibColHtml = canTune
-              ? isCal
-                ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib is-calibrated" data-calib-gate="${p.gateId}" data-calib-mode="reset" title="Clear calibrated thresholds for ${esc(label)}" aria-label="Clear calibrated thresholds for ${esc(label)}">${icons.targetOff(18)}</span>`
-                : canAutoCalib
-                  ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib" data-calib-gate="${p.gateId}" data-calib-mode="auto" title="Calibrate ${esc(label)}" aria-label="Calibrate ${esc(label)}">${icons.target(18)}</span>`
-                  : `<span class="channel-mobile-action-spacer" aria-hidden="true"></span>`
+              ? isCalibrating
+                ? `<span role="button" aria-disabled="true" class="channel-mobile-action-btn is-calib is-calibrating" data-calib-gate="${p.gateId}" data-calib-busy="1" title="Calibrating ${esc(label)}…" aria-label="Calibrating ${esc(label)}…">${icons.spinner(18)}</span>`
+                : isCal
+                  ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib is-calibrated" data-calib-gate="${p.gateId}" data-calib-mode="reset" title="Clear calibrated thresholds for ${esc(label)}" aria-label="Clear calibrated thresholds for ${esc(label)}">${icons.targetOff(18)}</span>`
+                  : canCalibGate
+                    ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib" data-calib-gate="${p.gateId}" data-calib-mode="auto" title="Calibrate ${esc(label)}" aria-label="Calibrate ${esc(label)}">${icons.target(18)}</span>`
+                    : `<span class="channel-mobile-action-spacer" aria-hidden="true"></span>`
               : "";
             const tuneColHtml = canTune
               ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-tune ${isGateTuneOpen ? "is-active" : ""}" data-tune-gate="${p.gateId}" title="Fine-tune ${esc(label)}" aria-label="Fine-tune ${esc(label)}">${icons.sliders(18)}</span>`

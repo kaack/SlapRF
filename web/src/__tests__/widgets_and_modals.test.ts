@@ -531,11 +531,49 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       root.querySelector<HTMLButtonElement>('[data-gate-chip="1"]')!.click();
       expect(drawerEl.hidden).toBe(false);
       expect(drawerEl.textContent).toContain("H1 · Fine-tune");
+      // Before enough pass data is recorded, the Calibrate button is hidden (spacer preserves column alignment)
+      expect(
+        root.querySelector('[data-gate-chip="1"] .channel-right-cols [data-calib-gate="1"]')
+      ).toBeNull();
+      expect(
+        root.querySelector('[data-gate-chip="1"] .channel-right-cols .channel-mobile-action-spacer')
+      ).not.toBeNull();
+
+      // Ingest 2 clear passes (>= 100 samples) at H1 -> Calibrate button appears, and spins + disables when clicked
+      for (let i = 0; i < 140; i++) {
+        const tsUs = (i + 1) * 50_000;
+        const isPass = (i >= 30 && i <= 34) || (i >= 95 && i <= 99);
+        const rssiVal = isPass ? -42 : -88;
+        store.ingestTelemetry({
+          timerId: 1,
+          seqNum: i & 0xff,
+          timestampUs: tsUs,
+          rssi: [rssiVal],
+        });
+      }
+      store.ingestCrossing({
+        eventId: 1,
+        timestampUs: 1_750_000,
+        slotIndex: 1,
+        callsign: "Alpha",
+        gateId: 1,
+        peakRssiDbm: -42,
+        estimatedSpeedMph: 45,
+        startedLap: true,
+      });
       const inlineCalib1 = root.querySelector<HTMLElement>(
         '[data-gate-chip="1"] .channel-right-cols [data-calib-gate="1"]'
       )!;
       expect(inlineCalib1).not.toBeNull();
       expect(inlineCalib1.getAttribute("data-calib-mode")).toBe("auto");
+      inlineCalib1.click();
+      const spinningCalib1 = root.querySelector<HTMLElement>(
+        '[data-gate-chip="1"] .channel-right-cols [data-calib-gate="1"]'
+      )!;
+      expect(spinningCalib1.classList.contains("is-calibrating")).toBe(true);
+      expect(spinningCalib1.getAttribute("aria-disabled")).toBe("true");
+      expect(spinningCalib1.getAttribute("data-calib-busy")).toBe("1");
+
       const inlineTune1 = root.querySelector<HTMLElement>(
         '[data-gate-chip="1"] .channel-right-cols .channel-mobile-action-btn.is-tune[data-tune-gate="1"]'
       )!;
