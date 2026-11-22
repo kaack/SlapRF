@@ -600,16 +600,15 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       const minCrossingInput = drawerEl.querySelector<HTMLInputElement>('[data-tune-input="minCrossingSec"]')!;
       expect(minCrossingInput.value).toBe("0.12");
 
-      // Focusing a numeric input keeps the drawer stationary and replaces the old value on the first typed digit
+      // Focusing a numeric input preserves the existing text at normal caret placement without auto-clearing
       minLapInput.dispatchEvent(new FocusEvent("focusin", { bubbles: true }));
       expect(drawerEl.classList.contains("is-keyboard-open")).toBe(false);
       expect(minLapInput.dataset.originalValue).toBe("8");
-      expect(minLapInput.dataset.replaceOnNextInput).toBe("1");
       minLapInput.dispatchEvent(
         new InputEvent("beforeinput", { bubbles: true, cancelable: true, inputType: "insertText", data: "9" })
       );
-      expect(minLapInput.value).toBe("");
-      expect(minLapInput.dataset.replaceOnNextInput).toBeUndefined();
+      expect(minLapInput.value).toBe("8");
+      minLapInput.value = "";
       minLapInput.dispatchEvent(new FocusEvent("focusout", { bubbles: true }));
       expect(minLapInput.value).toBe("8");
 
