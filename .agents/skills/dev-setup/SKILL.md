@@ -118,11 +118,11 @@ python -m pip install pyserial esptool
 ```
 
 ### Linux USB Serial & Bluetooth LE Prerequisites
-- **USB Serial (`/dev/ttyACM*`)**: On Raspberry Pi OS, the default user is already in `dialout`. On Ubuntu/Debian/Arch desktops, add your user to `dialout` (or `uucp` on Arch) and install a `uaccess` udev rule using `ENV{ID_VENDOR_ID}` / `ENV{ID_MODEL_ID}` (which reliably matches `SUBSYSTEM=="tty"` events on Linux) for immediate access to XIAO ESP32-C5 (`303a:1001`) without logging out:
+- **USB Serial (`/dev/ttyACM*`)**: On Raspberry Pi OS, the default user is already in `dialout`. On Ubuntu/Debian/Arch desktops, add your user to `dialout` (or `uucp` on Arch) and install a udev rule numbered `<73` (`/etc/udev/rules.d/70-slaprf-esp32c5.rules`, which runs before systemd's `73-seat-late.rules` processes `TAG+="uaccess"`) with `ATTRS{idVendor}=="303a"` and `MODE:="0666"` for immediate hot-plug access to XIAO ESP32-C5 (`303a:1001`) without logging out:
   ```bash
   sudo usermod -aG dialout "$USER"
-  echo 'SUBSYSTEM=="tty", ENV{ID_VENDOR_ID}=="303a", ENV{ID_MODEL_ID}=="1001", MODE="0660", GROUP="dialout", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/99-slaprf-esp32c5.rules
-  sudo udevadm control --reload-rules && sudo udevadm trigger --subsystem-match=tty
+  echo 'SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", ATTRS{idProduct}=="1001", MODE:="0666", GROUP="dialout", TAG+="uaccess"' | sudo tee /etc/udev/rules.d/70-slaprf-esp32c5.rules
+  sudo udevadm control --reload-rules && sudo udevadm trigger --action=add --subsystem-match=tty
   ```
 - **Bluetooth LE (BlueZ over D-Bus)**: SlapRF automatically powers on BlueZ (`org.bluez.Adapter1.Powered = true`) over D-Bus when needed (such as fresh Raspberry Pi OS Lite boots) and discovers non-`hci0` adapters; set `SLAPRF_BLE_ADAPTER=hci1` to pin a specific controller on multi-adapter hosts.
 - **Raspberry Pi + Bluetooth Hub (`slaprf_ble`) Coexistence**: Raspberry Pi `CYW43455` radios share one `2.4 GHz` transceiver and PCB antenna between `2.4 GHz` Wi-Fi and BLE. Do **not** run `2.4 GHz` Wi-Fi on the Pi while using `slaprf_ble` (connect the Pi via `5 GHz` Wi-Fi or Ethernet), and keep at least `30 cm` (`1 ft`) between the Pi and the XIAO ESP32-C5 Hub so near-field RF (`> -30 dBm`) does not saturate the Pi receiver.
