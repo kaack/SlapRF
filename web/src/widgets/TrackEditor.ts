@@ -245,7 +245,7 @@ export class TrackEditor extends Component {
           <span class="gate-node-order mono">#1</span>
         </div>
         <div class="gate-node-circle is-unassigned is-empty-slot-circle">
-          <span class="gate-node-empty-label" data-empty-circle-label>Drop<br/>timer</span>
+          <span class="gate-node-empty-label" data-empty-circle-label></span>
         </div>
         <span class="gate-node-start-btn is-placeholder-flag" aria-hidden="true">${icons.checkered(13)}</span>
       </div>`;
@@ -533,7 +533,7 @@ export class TrackEditor extends Component {
           circle.classList.remove("is-landing-preview");
           circle.style.removeProperty("--c");
         }
-        if (label) label.innerHTML = "Drop<br/>timer";
+        if (label) label.textContent = "";
       }
     };
 

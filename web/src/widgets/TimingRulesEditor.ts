@@ -771,7 +771,7 @@ export class TimingRulesEditor extends Component {
     if (!grid) return;
     const isMobile = this.isMobileLayout;
     if (!isMobile) {
-      grid.classList.remove("is-mobile-stacked", "is-mobile-flex-row");
+      grid.classList.remove("is-mobile-stacked");
       if (this.mobileDrawerOpen || this.mobileDrawerClosing) {
         this.mobileDrawerOpen = false;
         this.mobileDrawerClosing = false;
@@ -785,38 +785,7 @@ export class TimingRulesEditor extends Component {
       this.syncMobileDrawerTop(this.mobileDrawerEl);
     }
     this.syncScopeFocusClasses();
-    const scopeHost = grid.parentElement;
-    if (!scopeHost) return;
-    const cs = window.getComputedStyle(scopeHost);
-    const availWidth =
-      scopeHost.clientWidth -
-      (parseFloat(cs.paddingLeft) || 0) -
-      (parseFloat(cs.paddingRight) || 0);
-    if (availWidth <= 0) return;
-
-    const buttons = Array.from(grid.querySelectorAll<HTMLElement>(":scope > .channel"));
-    if (buttons.length <= 1) {
-      grid.classList.remove("is-mobile-stacked", "is-mobile-flex-row");
-      return;
-    }
-
-    grid.classList.add("is-measuring-fit");
-    const gapPx = 6;
-    let neededWidth = 0;
-    let maxBtnWidth = 0;
-    for (let i = 0; i < buttons.length; i++) {
-      const w = Math.ceil(buttons[i].getBoundingClientRect().width);
-      neededWidth += w;
-      if (w > maxBtnWidth) maxBtnWidth = w;
-      if (i > 0) neededWidth += gapPx;
-    }
-    grid.classList.remove("is-measuring-fit");
-
-    const equalColsWidth = maxBtnWidth * buttons.length + gapPx * (buttons.length - 1);
-    const shouldStack = neededWidth > availWidth;
-    const useFlexRow = !shouldStack && equalColsWidth > availWidth;
-    grid.classList.toggle("is-mobile-stacked", shouldStack);
-    grid.classList.toggle("is-mobile-flex-row", useFlexRow);
+    grid.classList.add("is-mobile-stacked");
   }
 
   private renderGlobalBeepRow(r: TimingRules): string {

@@ -2865,43 +2865,15 @@ html[data-theme="light"] .bar-time {
     overscroll-behavior-y: contain;
   }
   .rules-scope-grid {
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
-    gap: 6px;
-    margin-top: 0;
-  }
-  .rules-scope-grid.is-mobile-flex-row {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    gap: 6px;
-  }
-  .rules-scope-grid.is-mobile-flex-row > .channel {
-    flex: 1 1 auto;
-  }
-  .rules-scope-grid.is-mobile-stacked {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    margin-top: 0;
   }
-  .rules-scope-grid.is-mobile-stacked > .channel {
+  .rules-scope-grid > .channel {
     flex: 0 0 auto;
     width: 100%;
     box-sizing: border-box;
-  }
-  .rules-scope-grid.is-measuring-fit {
-    display: flex !important;
-    flex-direction: row !important;
-    flex-wrap: nowrap !important;
-  }
-  .rules-scope-grid.is-measuring-fit > .channel {
-    flex: 0 0 auto !important;
-    width: max-content !important;
-    max-width: none !important;
-  }
-  .rules-scope-grid.is-measuring-fit > .channel > .channel-name {
-    overflow: visible !important;
-    text-overflow: clip !important;
   }
   .scope-tune-drawer.is-track-rules-drawer {
     overflow: hidden;
