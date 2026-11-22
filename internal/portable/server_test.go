@@ -314,10 +314,10 @@ func TestNativeLapRFEmulatorListenerAndLapRFClientConnect(t *testing.T) {
 		t.Fatalf("expected LapRF frame from native LapRF emulator server, err=%v", err)
 	}
 
-	// 3. Discover mock LapRF 8-Way puck via GET /v1/laprf/devices
-	discResp, err := http.Get(ts.URL + "/v1/laprf/devices?hosts=127.0.0.1&port=" + strconv.Itoa(puckPort))
+	// 3. Discover mock LapRF 8-Way puck via GET /v1/laprf/network/devices
+	discResp, err := http.Get(ts.URL + "/v1/laprf/network/devices?hosts=127.0.0.1&port=" + strconv.Itoa(puckPort))
 	if err != nil {
-		t.Fatalf("GET /v1/laprf/devices: %v", err)
+		t.Fatalf("GET /v1/laprf/network/devices: %v", err)
 	}
 	var discPayload struct {
 		Devices []portable.DiscoveredLapRFDevice `json:"devices"`
@@ -328,36 +328,36 @@ func TestNativeLapRFEmulatorListenerAndLapRFClientConnect(t *testing.T) {
 		t.Fatalf("expected 1 verified LapRF device, got %+v", discPayload.Devices)
 	}
 
-	// 4. Switch realEngine to LapRF 8-Way mode and connect natively via POST /v1/laprf/sessions (201 Created)
+	// 4. Switch realEngine to LapRF 8-Way mode and connect natively via POST /v1/laprf/connections (201 Created)
 	modeResp := doJSONReq(t, http.MethodPut, ts.URL+"/v1/hardware/mode", "", map[string]any{"mode": "laprf"})
 	modeResp.Body.Close()
 
-	cResp := doJSONReq(t, http.MethodPost, ts.URL+"/v1/laprf/sessions", "", map[string]any{
+	cResp := doJSONReq(t, http.MethodPost, ts.URL+"/v1/laprf/connections", "", map[string]any{
 		"host":  "127.0.0.1",
 		"port":  puckPort,
 		"label": "Start Puck",
 	})
 	if cResp.StatusCode != http.StatusCreated {
-		t.Fatalf("POST /v1/laprf/sessions expected 201 Created, got %d", cResp.StatusCode)
+		t.Fatalf("POST /v1/laprf/connections expected 201 Created, got %d", cResp.StatusCode)
 	}
 	cResp.Body.Close()
 
 	time.Sleep(250 * time.Millisecond)
-	stResp, err := http.Get(ts.URL + "/v1/laprf/sessions")
+	stResp, err := http.Get(ts.URL + "/v1/laprf/connections")
 	if err != nil {
-		t.Fatalf("GET /v1/laprf/sessions: %v", err)
+		t.Fatalf("GET /v1/laprf/connections: %v", err)
 	}
 	var stPayload struct {
-		Sessions []portable.LapRFDiagSnapshot `json:"sessions"`
+		Connections []portable.LapRFDiagSnapshot `json:"connections"`
 	}
 	_ = json.NewDecoder(stResp.Body).Decode(&stPayload)
 	stResp.Body.Close()
-	if len(stPayload.Sessions) != 1 || !stPayload.Sessions[0].Connected {
-		t.Fatalf("expected 1 connected native LapRF session, got %+v", stPayload.Sessions)
+	if len(stPayload.Connections) != 1 || !stPayload.Connections[0].Connected {
+		t.Fatalf("expected 1 connected native LapRF connection, got %+v", stPayload.Connections)
 	}
 
 	// 5. Public internet IP blocked by SSRF guard
-	badResp := doJSONReq(t, http.MethodPost, ts.URL+"/v1/laprf/sessions", "", map[string]any{"host": "8.8.8.8", "port": 5403})
+	badResp := doJSONReq(t, http.MethodPost, ts.URL+"/v1/laprf/connections", "", map[string]any{"host": "8.8.8.8", "port": 5403})
 	badResp.Body.Close()
 	if badResp.StatusCode == http.StatusCreated || badResp.StatusCode == http.StatusOK {
 		t.Fatalf("expected SSRF block for 8.8.8.8")
@@ -462,24 +462,24 @@ func TestRotorHazardUSBManagerEndToEnd(t *testing.T) {
 	r2 := doJSONReq(t, http.MethodPut, ts.URL+"/v1/hardware/mode", ts.URL, map[string]any{"mode": "rotorhazard_usb"})
 	r2.Body.Close()
 
-	// Connect COM42 as RotorHazard USB device via POST /v1/rh/sessions (201 Created)
-	connResp := doJSONReq(t, http.MethodPost, ts.URL+"/v1/rh/sessions", ts.URL, map[string]any{
+	// Connect COM42 as RotorHazard USB device via POST /v1/rotorhazard/connections (201 Created)
+	connResp := doJSONReq(t, http.MethodPost, ts.URL+"/v1/rotorhazard/connections", ts.URL, map[string]any{
 		"transport": "usb",
 		"portName":  "COM42",
 		"label":     "R1",
 	})
 	defer connResp.Body.Close()
 	if connResp.StatusCode != http.StatusCreated {
-		t.Fatalf("expected 201 Created on POST /v1/rh/sessions USB, got %d", connResp.StatusCode)
+		t.Fatalf("expected 201 Created on POST /v1/rotorhazard/connections USB, got %d", connResp.StatusCode)
 	}
 	var connPayload struct {
-		Session portable.RHDiagSnapshot `json:"session"`
+		Connection portable.RHDiagSnapshot `json:"connection"`
 	}
 	if err := json.NewDecoder(connResp.Body).Decode(&connPayload); err != nil {
-		t.Fatalf("decode /v1/rh/sessions: %v", err)
+		t.Fatalf("decode /v1/rotorhazard/connections: %v", err)
 	}
-	if connPayload.Session.Transport != "usb" || !connPayload.Session.Connected || connPayload.Session.APILevel != 36 || connPayload.Session.NodeCount != 8 {
-		t.Fatalf("unexpected RH USB session snapshot: %+v", connPayload.Session)
+	if connPayload.Connection.Transport != "usb" || !connPayload.Connection.Connected || connPayload.Connection.APILevel != 36 || connPayload.Connection.NodeCount != 8 {
+		t.Fatalf("unexpected RH USB connection snapshot: %+v", connPayload.Connection)
 	}
 
 	// Activate practice session via POST /v1/practice/sessions/current:start so pilot channels tune onto the USB node
@@ -698,12 +698,12 @@ func TestUSBRawWebSocketBridgeForMobileFlasher(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/v1/ws/usb-raw?port=%2Fdev%2Fbus%2Fusb%2F001%2F002&baud=115200"
+	wsURL := "ws" + strings.TrimPrefix(ts.URL, "http") + "/v1/ws/slaprf/usb-raw?port=%2Fdev%2Fbus%2Fusb%2F001%2F002&baud=115200"
 	ws, _, err := websocket.Dial(ctx, wsURL, &websocket.DialOptions{
 		HTTPHeader: http.Header{"Origin": []string{ts.URL}},
 	})
 	if err != nil {
-		t.Fatalf("websocket dial /v1/ws/usb-raw: %v", err)
+		t.Fatalf("websocket dial /v1/ws/slaprf/usb-raw: %v", err)
 	}
 	defer func() { _ = ws.CloseNow() }()
 
@@ -800,47 +800,47 @@ func TestPortableSeparatesUSBAndBluetoothAPIsAndCancelConnect(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
-	// 1. /v1/usb/ports only invokes USBListPorts.
-	r1 := doJSONReq(t, http.MethodGet, ts.URL+"/v1/usb/ports", "", nil)
+	// 1. /v1/slaprf/usb/ports only invokes USBListPorts.
+	r1 := doJSONReq(t, http.MethodGet, ts.URL+"/v1/slaprf/usb/ports", "", nil)
 	defer r1.Body.Close()
 	if r1.StatusCode != http.StatusOK || usbListCalls != 1 || bleListCalls != 0 {
-		t.Fatalf("/v1/usb/ports status=%d usbCalls=%d bleCalls=%d", r1.StatusCode, usbListCalls, bleListCalls)
+		t.Fatalf("/v1/slaprf/usb/ports status=%d usbCalls=%d bleCalls=%d", r1.StatusCode, usbListCalls, bleListCalls)
 	}
 
-	// 2. /v1/bluetooth/ports only invokes BLEListPorts.
-	r2 := doJSONReq(t, http.MethodGet, ts.URL+"/v1/bluetooth/ports", "", nil)
+	// 2. /v1/slaprf/bluetooth/ports only invokes BLEListPorts.
+	r2 := doJSONReq(t, http.MethodGet, ts.URL+"/v1/slaprf/bluetooth/ports", "", nil)
 	defer r2.Body.Close()
 	if r2.StatusCode != http.StatusOK || usbListCalls != 1 || bleListCalls != 1 {
-		t.Fatalf("/v1/bluetooth/ports status=%d usbCalls=%d bleCalls=%d", r2.StatusCode, usbListCalls, bleListCalls)
+		t.Fatalf("/v1/slaprf/bluetooth/ports status=%d usbCalls=%d bleCalls=%d", r2.StatusCode, usbListCalls, bleListCalls)
 	}
 
-	// 3. /v1/rh/usb-ports serves RotorHazard USB discovery without touching BLE.
-	rRH := doJSONReq(t, http.MethodGet, ts.URL+"/v1/rh/usb-ports", "", nil)
+	// 3. /v1/rotorhazard/usb/ports serves RotorHazard USB discovery without touching BLE.
+	rRH := doJSONReq(t, http.MethodGet, ts.URL+"/v1/rotorhazard/usb/ports", "", nil)
 	defer rRH.Body.Close()
 	if rRH.StatusCode != http.StatusOK || bleListCalls != 1 {
-		t.Fatalf("/v1/rh/usb-ports status=%d bleCalls=%d", rRH.StatusCode, bleListCalls)
+		t.Fatalf("/v1/rotorhazard/usb/ports status=%d bleCalls=%d", rRH.StatusCode, bleListCalls)
 	}
 
 	// 4. Cross-transport connect requests are rejected with 400 Bad Request.
-	badUSB := doJSONReq(t, http.MethodPut, ts.URL+"/v1/usb/connections/0", "", map[string]any{"portName": "ble:EFE44224"})
+	badUSB := doJSONReq(t, http.MethodPut, ts.URL+"/v1/slaprf/usb/connections/0", "", map[string]any{"portName": "ble:EFE44224"})
 	defer badUSB.Body.Close()
 	if badUSB.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 when passing ble:* to /v1/usb/connections, got %d", badUSB.StatusCode)
+		t.Fatalf("expected 400 when passing ble:* to /v1/slaprf/usb/connections, got %d", badUSB.StatusCode)
 	}
-	badBLE := doJSONReq(t, http.MethodPut, ts.URL+"/v1/bluetooth/connections/0", "", map[string]any{"portName": "/dev/ttyACM0"})
+	badBLE := doJSONReq(t, http.MethodPut, ts.URL+"/v1/slaprf/bluetooth/connections/0", "", map[string]any{"portName": "/dev/ttyACM0"})
 	defer badBLE.Body.Close()
 	if badBLE.StatusCode != http.StatusBadRequest {
-		t.Fatalf("expected 400 when passing USB port to /v1/bluetooth/connections, got %d", badBLE.StatusCode)
+		t.Fatalf("expected 400 when passing USB port to /v1/slaprf/bluetooth/connections, got %d", badBLE.StatusCode)
 	}
 
-	// 5. In-flight /v1/bluetooth/connections/0 exposes live Connecting + ConnectStatus and cancels cleanly on DELETE.
+	// 5. In-flight /v1/slaprf/bluetooth/connections/0 exposes live Connecting + ConnectStatus and cancels cleanly on DELETE.
 	connRespCh := make(chan *http.Response, 1)
 	go func() {
-		connRespCh <- doJSONReq(t, http.MethodPut, ts.URL+"/v1/bluetooth/connections/0", "", map[string]any{"portName": "ble:EFE44224"})
+		connRespCh <- doJSONReq(t, http.MethodPut, ts.URL+"/v1/slaprf/bluetooth/connections/0", "", map[string]any{"portName": "ble:EFE44224"})
 	}()
 	<-openStarted
 
-	stResp := doJSONReq(t, http.MethodGet, ts.URL+"/v1/bluetooth/connections", "", nil)
+	stResp := doJSONReq(t, http.MethodGet, ts.URL+"/v1/slaprf/bluetooth/connections", "", nil)
 	defer stResp.Body.Close()
 	var pool struct {
 		Slots []struct {
@@ -850,13 +850,13 @@ func TestPortableSeparatesUSBAndBluetoothAPIsAndCancelConnect(t *testing.T) {
 	}
 	_ = json.NewDecoder(stResp.Body).Decode(&pool)
 	if len(pool.Slots) == 0 || !pool.Slots[0].Connecting || pool.Slots[0].ConnectStatus == "" {
-		t.Fatalf("expected Connecting=true + ConnectStatus on /v1/bluetooth/connections, got %+v", pool.Slots)
+		t.Fatalf("expected Connecting=true + ConnectStatus on /v1/slaprf/bluetooth/connections, got %+v", pool.Slots)
 	}
 
-	delResp := doJSONReq(t, http.MethodDelete, ts.URL+"/v1/bluetooth/connections/0", "", nil)
+	delResp := doJSONReq(t, http.MethodDelete, ts.URL+"/v1/slaprf/bluetooth/connections/0", "", nil)
 	defer delResp.Body.Close()
 	if delResp.StatusCode != http.StatusOK {
-		t.Fatalf("DELETE /v1/bluetooth/connections/0 status=%d", delResp.StatusCode)
+		t.Fatalf("DELETE /v1/slaprf/bluetooth/connections/0 status=%d", delResp.StatusCode)
 	}
 
 	select {
@@ -871,6 +871,6 @@ func TestPortableSeparatesUSBAndBluetoothAPIsAndCancelConnect(t *testing.T) {
 			t.Fatalf("expected cancelled=true, got %+v", cBody)
 		}
 	case <-time.After(1 * time.Second):
-		t.Fatalf("PUT /v1/bluetooth/connections/0 did not unblock after DELETE cancel")
+		t.Fatalf("PUT /v1/slaprf/bluetooth/connections/0 did not unblock after DELETE cancel")
 	}
 }

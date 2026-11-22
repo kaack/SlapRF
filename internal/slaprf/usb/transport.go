@@ -66,7 +66,7 @@ func (t *Transport) ValidateTarget(raw string) (string, error) {
 		return "", errors.New("missing USB serial port name")
 	}
 	if strings.HasPrefix(strings.ToLower(p), "ble:") {
-		return "", errors.New("Bluetooth devices must use /v1/bluetooth/connections")
+		return "", errors.New("Bluetooth devices must use /v1/slaprf/bluetooth/connections")
 	}
 	return p, nil
 }
@@ -99,14 +99,14 @@ func (t *Transport) Open(ctx context.Context, target string, onProgress func(str
 }
 
 // OpenRawPort opens an exclusive raw byte-stream handle to `portName` for the ROM Bootloader
-// Flasher (`/v1/ws/usb-raw`), releasing any live `slaprf.Manager` slot holding that port first.
+// Flasher (`/v1/ws/slaprf/usb-raw`), releasing any live `slaprf.Manager` slot holding that port first.
 func (t *Transport) OpenRawPort(mgr *slaprf.Manager, portName string, baud int) (firmware.SerialPort, slaprf.PortInfo, error) {
 	portName = strings.TrimSpace(portName)
 	if portName == "" {
 		return nil, slaprf.PortInfo{}, fmt.Errorf("missing USB port name")
 	}
 	if strings.HasPrefix(strings.ToLower(portName), "ble:") {
-		return nil, slaprf.PortInfo{}, fmt.Errorf("Bluetooth devices cannot be flashed over /v1/ws/usb-raw")
+		return nil, slaprf.PortInfo{}, fmt.Errorf("Bluetooth devices cannot be flashed over /v1/ws/slaprf/usb-raw")
 	}
 	if baud <= 0 {
 		baud = 115200

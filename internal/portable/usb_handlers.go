@@ -17,7 +17,7 @@ import (
 func (s *Server) handleUSBPorts(w http.ResponseWriter, r *http.Request) {
 	if tr := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("transport"))); tr != "" && tr != "usb" {
 		writeJSONNoStore(w, http.StatusBadRequest, map[string]any{
-			"error": "Bluetooth discovery uses GET /v1/bluetooth/ports",
+			"error": "Bluetooth discovery uses GET /v1/slaprf/bluetooth/ports",
 		})
 		return
 	}
@@ -30,7 +30,7 @@ func (s *Server) handleUSBStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleUSBConnect(w http.ResponseWriter, r *http.Request) {
-	s.serveSlapRFConnect(w, r, s.usbMgr, "/v1/usb")
+	s.serveSlapRFConnect(w, r, s.usbMgr, "/v1/slaprf/usb")
 }
 
 func (s *Server) handleUSBDisconnectSlot(w http.ResponseWriter, r *http.Request) {
@@ -73,8 +73,8 @@ func (s *Server) handleUSBCommand(w http.ResponseWriter, r *http.Request) {
 	s.serveSlapRFCommand(w, r, s.usbMgr)
 }
 
-func (s *Server) handleUSBKnownForget(w http.ResponseWriter, r *http.Request) {
-	s.serveSlapRFKnownForget(w, r, s.usbMgr)
+func (s *Server) handleSlapRFKnownForget(w http.ResponseWriter, r *http.Request) {
+	s.serveSlapRFKnownForget(w, r, s.activeSlapRFManager())
 }
 
 // handleSimHubUSB controls whether the Go server's simulated Hub `H1` virtual cable is plugged into `simHubRx`.

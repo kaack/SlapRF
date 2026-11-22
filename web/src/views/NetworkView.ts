@@ -760,7 +760,7 @@ export class NetworkView extends Component {
 
   private activeSurveyUrl(): string {
     return resolveBackendUrl(
-      this.store.timingHardwareMode === "slaprf_ble" ? "/v1/bluetooth/survey" : "/v1/usb/survey"
+      this.store.timingHardwareMode === "slaprf_ble" ? "/v1/slaprf/bluetooth/survey" : "/v1/slaprf/usb/survey"
     );
   }
 

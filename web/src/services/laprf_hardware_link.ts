@@ -90,14 +90,14 @@ export class LapRFHardwareLink {
     if (!capabilitiesSnapshot().portable || this.pollInFlight) return;
     this.pollInFlight = true;
     try {
-      const resp = await fetch(resolveBackendUrl("/v1/laprf/sessions"), {
+      const resp = await fetch(resolveBackendUrl("/v1/laprf/connections"), {
         method: "GET",
         headers: { Accept: "application/json" },
         cache: "no-store",
       });
       if (!resp.ok) return;
       const data = (await resp.json()) as {
-        sessions?: LapRFClientDiagSnapshot[];
+        connections?: LapRFClientDiagSnapshot[];
         savedTargets?: Array<{
           timerId: number;
           label: string;
@@ -106,7 +106,7 @@ export class LapRFHardwareLink {
           port?: number;
         }>;
       };
-      const next = Array.isArray(data.sessions) ? data.sessions : [];
+      const next = Array.isArray(data.connections) ? data.connections : [];
       const changed = JSON.stringify(next) !== JSON.stringify(this.backendSnapshots);
       this.backendSnapshots = next;
 
@@ -201,7 +201,7 @@ export class LapRFHardwareLink {
       throw new Error("Connect to a SlapRF Server to scan LAN for LapRF 8-Way hardware.");
     }
     await this.refreshStatus();
-    const resp = await fetch(resolveBackendUrl("/v1/laprf/devices"), {
+    const resp = await fetch(resolveBackendUrl("/v1/laprf/network/devices"), {
       method: "GET",
       headers: { Accept: "application/json" },
     });
@@ -262,7 +262,7 @@ export class LapRFHardwareLink {
     }
 
     const assignedLabel = label.trim() || `LapRF (${cleanHost})`;
-    const resp = await fetch(resolveBackendUrl("/v1/laprf/sessions"), {
+    const resp = await fetch(resolveBackendUrl("/v1/laprf/connections"), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
@@ -274,7 +274,7 @@ export class LapRFHardwareLink {
     });
     const payload = (await resp.json().catch(() => ({}))) as {
       error?: string;
-      session?: LapRFClientDiagSnapshot;
+      connection?: LapRFClientDiagSnapshot;
     };
     await this.refreshStatus();
     await api.refresh().catch(() => undefined);
@@ -286,10 +286,10 @@ export class LapRFHardwareLink {
       throw new Error(errMsg);
     }
 
-    if (payload.session) {
+    if (payload.connection) {
       this.saveTarget({
-        timerId: payload.session.timerId,
-        label: payload.session.label || assignedLabel,
+        timerId: payload.connection.timerId,
+        label: payload.connection.label || assignedLabel,
         host: cleanHost,
         port: cleanPort,
       });
@@ -318,12 +318,12 @@ export class LapRFHardwareLink {
       throw new Error(this.lastError);
     }
 
-    const selected = await pickUsbPort({ showAllPorts: true, transport: "usb" });
+    const selected = await pickUsbPort({ showAllPorts: true, transport: "usb", vendor: "laprf" });
     if (!isBackendSerialPort(selected)) {
       throw new Error("Expected a native OS USB port from SlapRF Server.");
     }
 
-    const resp = await fetch(resolveBackendUrl("/v1/laprf/sessions"), {
+    const resp = await fetch(resolveBackendUrl("/v1/laprf/connections"), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
@@ -334,7 +334,7 @@ export class LapRFHardwareLink {
     });
     const payload = (await resp.json().catch(() => ({}))) as {
       error?: string;
-      session?: LapRFClientDiagSnapshot;
+      connection?: LapRFClientDiagSnapshot;
     };
     await this.refreshStatus();
     await api.refresh().catch(() => undefined);
@@ -356,7 +356,7 @@ export class LapRFHardwareLink {
     }
     this.removeSavedTarget(timerId);
     if (capabilitiesSnapshot().portable) {
-      await fetch(resolveBackendUrl(`/v1/laprf/sessions/${encodeURIComponent(String(timerId))}`), {
+      await fetch(resolveBackendUrl(`/v1/laprf/connections/${encodeURIComponent(String(timerId))}`), {
         method: "DELETE",
       }).catch(() => undefined);
       await this.refreshStatus();

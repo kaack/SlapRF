@@ -526,53 +526,53 @@ func (s *Server) RegisterAPIRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/ws/stream", s.handleStreamWS)
 
 	// SlapRF USB-C serial & ESP32-C5 ROM bootloader flasher
-	mux.HandleFunc("GET /v1/usb/ports", s.handleUSBPorts)
-	mux.HandleFunc("GET /v1/usb/connections", s.handleUSBStatus)
-	mux.HandleFunc("POST /v1/usb/connections", s.handleUSBConnect)
-	mux.HandleFunc("POST /v1/usb/connections:disconnectAll", s.handleUSBDisconnectAll)
-	mux.HandleFunc("PUT /v1/usb/connections/{slotIndex}", s.handleUSBConnect)
-	mux.HandleFunc("DELETE /v1/usb/connections/{slotIndex}", s.handleUSBDisconnectSlot)
-	mux.HandleFunc("GET /v1/usb/debug-slot", s.handleUSBDebugSlot)
-	mux.HandleFunc("PUT /v1/usb/debug-slot", s.handleUSBDebugSlot)
-	mux.HandleFunc("POST /v1/usb:command", s.handleUSBCommand)
-	mux.HandleFunc("DELETE /v1/usb/known-timers/{fp}", s.handleUSBKnownForget)
-	mux.HandleFunc("GET /v1/usb/survey", s.handleUSBSurvey)
-	mux.HandleFunc("PUT /v1/usb/survey", s.handleUSBSurvey)
+	mux.HandleFunc("GET /v1/slaprf/usb/ports", s.handleUSBPorts)
+	mux.HandleFunc("GET /v1/slaprf/usb/connections", s.handleUSBStatus)
+	mux.HandleFunc("POST /v1/slaprf/usb/connections", s.handleUSBConnect)
+	mux.HandleFunc("POST /v1/slaprf/usb/connections:disconnectAll", s.handleUSBDisconnectAll)
+	mux.HandleFunc("PUT /v1/slaprf/usb/connections/{slotIndex}", s.handleUSBConnect)
+	mux.HandleFunc("DELETE /v1/slaprf/usb/connections/{slotIndex}", s.handleUSBDisconnectSlot)
+	mux.HandleFunc("GET /v1/slaprf/usb/debug-slot", s.handleUSBDebugSlot)
+	mux.HandleFunc("PUT /v1/slaprf/usb/debug-slot", s.handleUSBDebugSlot)
+	mux.HandleFunc("POST /v1/slaprf/usb:command", s.handleUSBCommand)
+	mux.HandleFunc("GET /v1/slaprf/usb/survey", s.handleUSBSurvey)
+	mux.HandleFunc("PUT /v1/slaprf/usb/survey", s.handleUSBSurvey)
 	mux.HandleFunc("GET /v1/sim/hub-usb", s.handleSimHubUSB)
 	mux.HandleFunc("PUT /v1/sim/hub-usb", s.handleSimHubUSB)
-	mux.HandleFunc("GET /v1/ws/usb", s.handleUSBWS)
-	mux.HandleFunc("GET /v1/ws/usb-raw", s.handleUSBRawWS)
+	mux.HandleFunc("GET /v1/ws/slaprf/usb", s.handleUSBWS)
+	mux.HandleFunc("GET /v1/ws/slaprf/usb-raw", s.handleUSBRawWS)
 
 	// SlapRF Bluetooth LE Hub
-	mux.HandleFunc("GET /v1/bluetooth/ports", s.handleBluetoothPorts)
-	mux.HandleFunc("GET /v1/bluetooth/devices", s.handleBluetoothPorts)
-	mux.HandleFunc("GET /v1/bluetooth/connections", s.handleBluetoothStatus)
-	mux.HandleFunc("POST /v1/bluetooth/connections", s.handleBluetoothConnect)
-	mux.HandleFunc("POST /v1/bluetooth/connections:disconnectAll", s.handleBluetoothDisconnectAll)
-	mux.HandleFunc("PUT /v1/bluetooth/connections/{slotIndex}", s.handleBluetoothConnect)
-	mux.HandleFunc("DELETE /v1/bluetooth/connections/{slotIndex}", s.handleBluetoothDisconnectSlot)
-	mux.HandleFunc("POST /v1/bluetooth:command", s.handleBluetoothCommand)
-	mux.HandleFunc("DELETE /v1/bluetooth/known-timers/{fp}", s.handleBluetoothKnownForget)
-	mux.HandleFunc("GET /v1/bluetooth/survey", s.handleBluetoothSurvey)
-	mux.HandleFunc("PUT /v1/bluetooth/survey", s.handleBluetoothSurvey)
-	mux.HandleFunc("GET /v1/ws/bluetooth", s.handleBluetoothWS)
+	mux.HandleFunc("GET /v1/slaprf/bluetooth/ports", s.handleBluetoothPorts)
+	mux.HandleFunc("GET /v1/slaprf/bluetooth/connections", s.handleBluetoothStatus)
+	mux.HandleFunc("POST /v1/slaprf/bluetooth/connections", s.handleBluetoothConnect)
+	mux.HandleFunc("POST /v1/slaprf/bluetooth/connections:disconnectAll", s.handleBluetoothDisconnectAll)
+	mux.HandleFunc("PUT /v1/slaprf/bluetooth/connections/{slotIndex}", s.handleBluetoothConnect)
+	mux.HandleFunc("DELETE /v1/slaprf/bluetooth/connections/{slotIndex}", s.handleBluetoothDisconnectSlot)
+	mux.HandleFunc("POST /v1/slaprf/bluetooth:command", s.handleBluetoothCommand)
+	mux.HandleFunc("GET /v1/slaprf/bluetooth/survey", s.handleBluetoothSurvey)
+	mux.HandleFunc("PUT /v1/slaprf/bluetooth/survey", s.handleBluetoothSurvey)
+	mux.HandleFunc("GET /v1/ws/slaprf/bluetooth", s.handleBluetoothWS)
 
-	// Native Go LapRF 8-Way hardware client & LAN/USB discovery
-	mux.HandleFunc("GET /v1/laprf/devices", s.handleLapRFDiscover)
-	mux.HandleFunc("GET /v1/laprf/usb-ports", s.handleLapRFUSBPorts)
-	mux.HandleFunc("GET /v1/laprf/sessions", s.handleLapRFStatus)
-	mux.HandleFunc("POST /v1/laprf/sessions", s.handleLapRFConnect)
-	mux.HandleFunc("DELETE /v1/laprf/sessions/{timerId}", s.handleLapRFDisconnect)
+	// Shared SlapRF timer inventory
+	mux.HandleFunc("DELETE /v1/slaprf/known-timers/{fp}", s.handleSlapRFKnownForget)
+
+	// ImmersionRC LapRF 8-Way hardware links
+	mux.HandleFunc("GET /v1/laprf/network/devices", s.handleLapRFDiscover)
+	mux.HandleFunc("GET /v1/laprf/usb/ports", s.handleLapRFUSBPorts)
+	mux.HandleFunc("GET /v1/laprf/connections", s.handleLapRFStatus)
+	mux.HandleFunc("POST /v1/laprf/connections", s.handleLapRFConnect)
+	mux.HandleFunc("DELETE /v1/laprf/connections/{timerId}", s.handleLapRFDisconnect)
 	mux.HandleFunc("POST /v1/laprf:sync", s.handleLapRFSync)
 
-	// Native Go RotorHazard hardware client & LAN/USB discovery
-	mux.HandleFunc("GET /v1/rh/devices", s.handleRotorHazardDiscover)
-	mux.HandleFunc("GET /v1/rh/usb-ports", s.handleRHUSBPorts)
-	mux.HandleFunc("GET /v1/rh/sessions", s.handleRHStatus)
-	mux.HandleFunc("POST /v1/rh/sessions", s.handleRHConnect)
-	mux.HandleFunc("POST /v1/rh/sessions/{timerId}", s.handleRHSessionAction)
-	mux.HandleFunc("DELETE /v1/rh/sessions/{timerId}", s.handleRHDisconnect)
-	mux.HandleFunc("POST /v1/rh:sync", s.handleRHSync)
+	// RotorHazard hardware links
+	mux.HandleFunc("GET /v1/rotorhazard/network/devices", s.handleRotorHazardDiscover)
+	mux.HandleFunc("GET /v1/rotorhazard/usb/ports", s.handleRHUSBPorts)
+	mux.HandleFunc("GET /v1/rotorhazard/connections", s.handleRHStatus)
+	mux.HandleFunc("POST /v1/rotorhazard/connections", s.handleRHConnect)
+	mux.HandleFunc("POST /v1/rotorhazard/connections/{timerId}", s.handleRHSessionAction)
+	mux.HandleFunc("DELETE /v1/rotorhazard/connections/{timerId}", s.handleRHDisconnect)
+	mux.HandleFunc("POST /v1/rotorhazard:sync", s.handleRHSync)
 
 	// Native Go LapRF :5403 TCP emulator
 	mux.HandleFunc("GET /v1/laprf-emulator", s.handleLapRFEmulatorStatus)
@@ -819,7 +819,7 @@ func (s *Server) handleMultiGPProxy(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(respBytes)
 }
 
-// --- LAN Target Validation & Discovery (/v1/laprf/devices & /v1/rh/devices) ---
+// --- LAN Target Validation & Discovery (/v1/laprf/network/devices & /v1/rotorhazard/network/devices) ---
 
 func isAllowedLapRFTargetIP(ip net.IP, allowLoopback bool) bool {
 	if ip == nil || ip.IsUnspecified() || ip.IsMulticast() {

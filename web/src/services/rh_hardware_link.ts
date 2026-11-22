@@ -3,7 +3,7 @@
  *
  * - Real Mode (SlapRF Server):
  *   Delegates HTTP Basic Auth + Engine.IO v4 / Socket.IO v4 sessions (`:5000`) and `/24` LAN
- *   discovery directly to the native Go `rhManager` (`/v1/rh/*`), with
+ *   discovery directly to the native Go `rhManager` (`/v1/rotorhazard/*`), with
  *   zero browser mixed-content barriers and zero browser frame relay.
  *
  * - Simulation Mode (both Standalone Browser Demo & SlapRF Server):
@@ -196,17 +196,17 @@ export class RotorHazardHardwareLink {
     if (!capabilitiesSnapshot().portable || this.pollInFlight) return;
     this.pollInFlight = true;
     try {
-      const resp = await fetch(resolveBackendUrl("/v1/rh/sessions"), {
+      const resp = await fetch(resolveBackendUrl("/v1/rotorhazard/connections"), {
         method: "GET",
         headers: { Accept: "application/json" },
         cache: "no-store",
       });
       if (!resp.ok) return;
       const data = (await resp.json()) as {
-        sessions?: RHClientDiagSnapshot[];
+        connections?: RHClientDiagSnapshot[];
         savedTargets?: SavedRHTarget[];
       };
-      const next = Array.isArray(data.sessions) ? data.sessions : [];
+      const next = Array.isArray(data.connections) ? data.connections : [];
       const changed = JSON.stringify(next) !== JSON.stringify(this.backendSnapshots);
       this.backendSnapshots = next;
 
@@ -300,7 +300,7 @@ export class RotorHazardHardwareLink {
 
     await this.refreshStatus();
     const resp = await fetch(
-      resolveBackendUrl(`/v1/rh/devices?port=${encodeURIComponent(String(port || DEFAULT_RH_PORT))}`),
+      resolveBackendUrl(`/v1/rotorhazard/network/devices?port=${encodeURIComponent(String(port || DEFAULT_RH_PORT))}`),
       {
         method: "GET",
         headers: { Accept: "application/json" },
@@ -373,7 +373,7 @@ export class RotorHazardHardwareLink {
       throw new Error(this.lastError);
     }
 
-    const resp = await fetch(resolveBackendUrl("/v1/rh/sessions"), {
+    const resp = await fetch(resolveBackendUrl("/v1/rotorhazard/connections"), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
@@ -387,7 +387,7 @@ export class RotorHazardHardwareLink {
     });
     const payload = (await resp.json().catch(() => ({}))) as {
       error?: string;
-      session?: RHClientDiagSnapshot;
+      connection?: RHClientDiagSnapshot;
     };
     await this.refreshStatus();
     await api.refresh().catch(() => undefined);
@@ -399,10 +399,10 @@ export class RotorHazardHardwareLink {
       throw new Error(msg);
     }
 
-    if (payload.session) {
+    if (payload.connection) {
       this.saveTarget({
-        timerId: payload.session.timerId,
-        label: payload.session.label,
+        timerId: payload.connection.timerId,
+        label: payload.connection.label,
         host: cleanHost,
         port: cleanPort,
         adminUser,
@@ -443,7 +443,7 @@ export class RotorHazardHardwareLink {
     }
 
     const resp = await fetch(
-      resolveBackendUrl(`/v1/rh/usb-ports${showAll ? "?all=1" : ""}`),
+      resolveBackendUrl(`/v1/rotorhazard/usb/ports${showAll ? "?all=1" : ""}`),
       {
       method: "GET",
       headers: { Accept: "application/json" },
@@ -512,7 +512,7 @@ export class RotorHazardHardwareLink {
       throw new Error(this.lastError);
     }
 
-    const resp = await fetch(resolveBackendUrl("/v1/rh/sessions"), {
+    const resp = await fetch(resolveBackendUrl("/v1/rotorhazard/connections"), {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
       body: JSON.stringify({
@@ -525,7 +525,7 @@ export class RotorHazardHardwareLink {
     });
     const payload = (await resp.json().catch(() => ({}))) as {
       error?: string;
-      session?: RHClientDiagSnapshot;
+      connection?: RHClientDiagSnapshot;
     };
     await this.refreshStatus();
     await api.refresh().catch(() => undefined);
@@ -537,16 +537,16 @@ export class RotorHazardHardwareLink {
       throw new Error(msg);
     }
 
-    if (payload.session) {
+    if (payload.connection) {
       this.saveTarget({
-        timerId: payload.session.timerId,
-        label: payload.session.label,
+        timerId: payload.connection.timerId,
+        label: payload.connection.label,
         transport: "usb",
         host: "",
         port: 0,
         adminUser: "",
         portName: cleanPort,
-        baudRate: payload.session.baudRate || baudRate || 115200,
+        baudRate: payload.connection.baudRate || baudRate || 115200,
       });
     }
     this.notify();
@@ -566,7 +566,7 @@ export class RotorHazardHardwareLink {
 
     this.removeSavedTarget(timerId);
     if (capabilitiesSnapshot().portable) {
-      await fetch(resolveBackendUrl(`/v1/rh/sessions/${encodeURIComponent(String(timerId))}`), {
+      await fetch(resolveBackendUrl(`/v1/rotorhazard/connections/${encodeURIComponent(String(timerId))}`), {
         method: "DELETE",
       }).catch(() => undefined);
       await this.refreshStatus();
@@ -615,7 +615,7 @@ export class RotorHazardHardwareLink {
     }
 
     const resp = await fetch(
-      resolveBackendUrl(`/v1/rh/sessions/${encodeURIComponent(String(opts.timerId))}:scan`),
+      resolveBackendUrl(`/v1/rotorhazard/connections/${encodeURIComponent(String(opts.timerId))}:scan`),
       {
         method: "POST",
         headers: { "Content-Type": "application/json", Accept: "application/json" },

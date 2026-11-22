@@ -1421,6 +1421,7 @@ export interface PickUsbPortOptions {
   excludePorts?: SerialPortLike[];
   excludeTimerIds?: number[];
   transport?: "usb" | "ble";
+  vendor?: "slaprf" | "laprf";
   alreadyPaired?: boolean;
   preferredPortName?: string;
 }
@@ -1452,7 +1453,7 @@ interface BackendPortsResponse {
 
 /**
  * Opens the unified in-app serial port picker modal for both Simulation mode and Real hardware mode
- * (powered natively by Go `/v1/usb/ports` in Real mode, with zero browser WebSerial).
+ * (powered natively by Go `/v1/slaprf/usb/ports` in Real mode, with zero browser WebSerial).
  */
 export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<SerialPortLike> {
   if (activePickerCancel) {
@@ -1508,9 +1509,12 @@ export async function pickUsbPort(opts: PickUsbPortOptions = {}): Promise<Serial
     }
 
     try {
-      const endpoint = isBleMode
-        ? "/v1/bluetooth/ports"
-        : `/v1/usb/ports?all=${showAllRealPorts ? "1" : "0"}`;
+      const endpoint =
+        opts.vendor === "laprf"
+          ? `/v1/laprf/usb/ports?all=${showAllRealPorts ? "1" : "0"}`
+          : isBleMode
+            ? "/v1/slaprf/bluetooth/ports"
+            : `/v1/slaprf/usb/ports?all=${showAllRealPorts ? "1" : "0"}`;
       const res = await fetch(resolveBackendUrl(endpoint), { cache: "no-store" });
       if (!res.ok) return [];
       const data = (await res.json()) as BackendPortsResponse;

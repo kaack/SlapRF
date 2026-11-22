@@ -935,7 +935,7 @@ func (s *Server) handleRHStatus(w http.ResponseWriter, r *http.Request) {
 		activeSaved = savedUSB
 	}
 	writeJSONNoStore(w, http.StatusOK, map[string]any{
-		"sessions":        s.rhMgr.Snapshots(),
+		"connections":     s.rhMgr.Snapshots(),
 		"savedTargets":    activeSaved,
 		"savedUSBTargets": savedUSB,
 		"savedNetTargets": sanitizedNet,
@@ -975,13 +975,13 @@ func (s *Server) handleRHConnect(w http.ResponseWriter, r *http.Request) {
 	snap, err := s.rhMgr.Connect(req)
 	if err != nil {
 		writeJSONNoStore(w, http.StatusBadGateway, map[string]any{
-			"error":   err.Error(),
-			"session": snap,
+			"error":      err.Error(),
+			"connection": snap,
 		})
 		return
 	}
-	w.Header().Set("Location", fmt.Sprintf("/v1/rh/sessions/%d", snap.TimerID))
-	writeJSONNoStore(w, http.StatusCreated, map[string]any{"session": snap})
+	w.Header().Set("Location", fmt.Sprintf("/v1/rotorhazard/connections/%d", snap.TimerID))
+	writeJSONNoStore(w, http.StatusCreated, map[string]any{"connection": snap})
 }
 
 func (s *Server) handleRHDisconnect(w http.ResponseWriter, r *http.Request) {

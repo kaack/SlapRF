@@ -287,7 +287,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	// Hardware Mode Singleton & RotorHazard Debug Stream Singleton
 	mux.HandleFunc("GET /v1/hardware/mode", s.handleGetHardwareMode)
 	mux.HandleFunc("PUT /v1/hardware/mode", wrap(s.handlePutHardwareMode))
-	mux.HandleFunc("PUT /v1/rh/sessions/{timerId}/debug-stream", s.handlePutRHDebugStream)
+	mux.HandleFunc("PUT /v1/rotorhazard/connections/{timerId}/debug-stream", s.handlePutRHDebugStream)
 
 	// Simulator Singleton & Sub-resources (`/v1/sim`)
 	mux.HandleFunc("GET /v1/sim", s.handleGetSim)

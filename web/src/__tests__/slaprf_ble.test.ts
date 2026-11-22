@@ -310,7 +310,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
-      if (url.includes("/v1/bluetooth/ports")) {
+      if (url.includes("/v1/slaprf/bluetooth/ports")) {
         return new Response(JSON.stringify({ ports: [] }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
@@ -336,8 +336,8 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       expect(modal.textContent || "").toContain("Pair Bluetooth Device");
       expect(modal.textContent || "").toContain("No SlapRF Bluetooth Hub found nearby");
       expect(modal.textContent || "").toContain("Scan again");
-      expect(seenUrls.some((u) => u.includes("/v1/bluetooth/ports"))).toBe(true);
-      expect(seenUrls.some((u) => u.includes("/v1/usb/ports"))).toBe(false);
+      expect(seenUrls.some((u) => u.includes("/v1/slaprf/bluetooth/ports"))).toBe(true);
+      expect(seenUrls.some((u) => u.includes("/v1/slaprf/usb/ports"))).toBe(false);
 
       modal.querySelector<HTMLButtonElement>('[data-modal="cancel"]')!.click();
       await pickPromise.catch(() => undefined);
@@ -358,7 +358,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
-      if (url.includes("/v1/bluetooth/survey")) {
+      if (url.includes("/v1/slaprf/bluetooth/survey")) {
         if ((init?.method === "PUT" || init?.method === "POST") && typeof init.body === "string") {
           surveyPosts.push(JSON.parse(init.body) as { on?: boolean });
           return new Response(JSON.stringify({ active: surveyPosts[surveyPosts.length - 1]?.on ?? false }), {
@@ -505,7 +505,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
-      if (url.includes("/v1/bluetooth/ports")) {
+      if (url.includes("/v1/slaprf/bluetooth/ports")) {
         return new Response(
           JSON.stringify({
             ports: [
@@ -522,7 +522,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
-      if (url.includes("/v1/bluetooth/connections/0") && method === "PUT") {
+      if (url.includes("/v1/slaprf/bluetooth/connections/0") && method === "PUT") {
         await new Promise((r) => window.setTimeout(r, 40));
         return new Response(
           JSON.stringify({
@@ -564,13 +564,13 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
-      if (url.includes("/v1/bluetooth:command")) {
+      if (url.includes("/v1/slaprf/bluetooth:command")) {
         return new Response(
           JSON.stringify({ ok: true, reply: { t: "ok", cmd: "blepair", pairingMode: true } }),
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
-      if (url.includes("/v1/bluetooth/connections/0") && method === "DELETE") {
+      if (url.includes("/v1/slaprf/bluetooth/connections/0") && method === "DELETE") {
         const isForget = url.includes("forget=1");
         return new Response(
           JSON.stringify({
@@ -600,7 +600,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
           { status: 200, headers: { "Content-Type": "application/json" } }
         );
       }
-      if (url.includes("/v1/bluetooth/known-timers/BE7C0001") && method === "DELETE") {
+      if (url.includes("/v1/slaprf/known-timers/BE7C0001") && method === "DELETE") {
         return new Response(
           JSON.stringify({ debugSlotIndex: 0, slots: [], knownTimers: [] }),
           { status: 200, headers: { "Content-Type": "application/json" } }
@@ -833,14 +833,14 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
           calls.some(
             (c) =>
               c.method === "DELETE" &&
-              c.url.includes("/v1/bluetooth/connections/0") &&
+              c.url.includes("/v1/slaprf/bluetooth/connections/0") &&
               c.url.includes("forget=1")
           )
         ).toBe(true);
-        expect(calls.some((c) => c.method === "DELETE" && c.url.includes("/v1/bluetooth/known-timers/BE7C0001"))).toBe(
+        expect(calls.some((c) => c.method === "DELETE" && c.url.includes("/v1/slaprf/known-timers/BE7C0001"))).toBe(
           true
         );
-        expect(calls.some((c) => c.url.includes("/v1/usb/"))).toBe(false);
+        expect(calls.some((c) => c.url.includes("/v1/slaprf/usb/"))).toBe(false);
 
         const finalConnectBtn = connSlot.querySelector<HTMLButtonElement>('[data-action="connect-add"]')!;
         expect((finalConnectBtn.textContent || "").trim()).toBe("Pair Device");

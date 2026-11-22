@@ -1027,7 +1027,7 @@
           </div>
           <div class="sw-controls-bar">
             <label class="sw-filter-label">
-              <input type="search" class="sw-filter-input" data-sw-filter placeholder="Filter by channel, message name, or summary (e.g. /v1/ws/usb or crossing)..." />
+              <input type="search" class="sw-filter-input" data-sw-filter placeholder="Filter by channel, message name, or summary (e.g. /v1/ws/slaprf/usb or crossing)..." />
             </label>
           </div>
         </div>

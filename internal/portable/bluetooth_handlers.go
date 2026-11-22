@@ -11,7 +11,7 @@ func (s *Server) handleBluetoothStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleBluetoothConnect(w http.ResponseWriter, r *http.Request) {
-	s.serveSlapRFConnect(w, r, s.bleMgr, "/v1/bluetooth")
+	s.serveSlapRFConnect(w, r, s.bleMgr, "/v1/slaprf/bluetooth")
 }
 
 func (s *Server) handleBluetoothDisconnectSlot(w http.ResponseWriter, r *http.Request) {
@@ -24,10 +24,6 @@ func (s *Server) handleBluetoothDisconnectAll(w http.ResponseWriter, r *http.Req
 
 func (s *Server) handleBluetoothCommand(w http.ResponseWriter, r *http.Request) {
 	s.serveSlapRFCommand(w, r, s.bleMgr)
-}
-
-func (s *Server) handleBluetoothKnownForget(w http.ResponseWriter, r *http.Request) {
-	s.serveSlapRFKnownForget(w, r, s.bleMgr)
 }
 
 func (s *Server) handleBluetoothWS(w http.ResponseWriter, r *http.Request) {

@@ -49,7 +49,7 @@ channels:
         $ref: "#/components/messages/TelemetryBinaryBatchMessage"
 
   usbConsoleStream:
-    address: /v1/ws/usb
+    address: /v1/ws/slaprf/usb
     title: SlapRF USB Serial Diagnostic & Simulated Hub Stream
     description: |
       Streams live SlapRF USB connection progress, Hub/Spoke status, and serial diagnostic lines.
@@ -62,7 +62,7 @@ channels:
         $ref: "#/components/messages/SimHubBinaryMessage"
 
   bluetoothConsoleStream:
-    address: /v1/ws/bluetooth
+    address: /v1/ws/slaprf/bluetooth
     title: SlapRF Bluetooth LE Hub Diagnostic & Telemetry Stream
     description: |
       Streams live SlapRF Bluetooth LE Hub connection stages (`connecting`, `connectStatus`), paired Hub/Spoke status, synthesized zero-overhead `live` telemetry, and console lines.
@@ -74,7 +74,7 @@ channels:
         $ref: "#/components/messages/SimHubBinaryMessage"
 
   usbRawStream:
-    address: /v1/ws/usb-raw
+    address: /v1/ws/slaprf/usb-raw
     title: Exclusive Bidirectional Raw USB Bootloader & Serial Pipe
     description: |
       Bridges an exclusive physical USB serial port (`?port=<name>&baud=115200`) over bidirectional binary + JSON control frames so `esptool-js` and browser tools can flash or erase XIAO ESP32-C5 timers without WebSerial.
@@ -292,7 +292,7 @@ components:
     SimHubBinaryMessage:
       name: simHubPacket
       title: Simulated Hub 0x1E Binary Frame (?sim=1)
-      summary: Raw `0x1E`-framed binary `HELLO` and telemetry bytes emitted by simulated Hub `H1` when connected to `/v1/ws/usb?sim=1`.
+      summary: Raw `0x1E`-framed binary `HELLO` and telemetry bytes emitted by simulated Hub `H1` when connected to `/v1/ws/slaprf/usb?sim=1`.
       contentType: application/octet-stream
       payload:
         type: string

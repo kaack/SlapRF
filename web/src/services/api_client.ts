@@ -1427,7 +1427,7 @@ export class ApiClient {
 
   /** Enables or disables idle RF node streaming on a RotorHazard timer from `#/debug`. */
   public async setRHDebugStream(timerId: number, active: boolean): Promise<void> {
-    await this.transport.request<{ ok: boolean }>("PUT", `/v1/rh/sessions/${timerId}/debug-stream`, {
+    await this.transport.request<{ ok: boolean }>("PUT", `/v1/rotorhazard/connections/${timerId}/debug-stream`, {
       active,
     });
   }

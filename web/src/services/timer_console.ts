@@ -1,7 +1,7 @@
 /**
  * Client for a SlapRF timer's USB debug & telemetry console:
- * - Real hardware mode (`caps.portable && !isSimulatedUsbMode()`): talks to the native Go USB
- *   manager (`/v1/usb/*` + `/v1/ws/usb` over `go.bug.st/serial`, zero browser WebSerial).
+ * - Real hardware mode (`caps.portable && !isSimulatedUsbMode()`): talks to the native Go SlapRF
+ *   manager (`/v1/slaprf/{usb,bluetooth}/*` + `/v1/ws/slaprf/{usb,bluetooth}` over `go.bug.st/serial` / BLE).
  * - Simulation mode (`isSimulatedUsbMode()`): talks to `SimulatedSerialPort` in-process.
  */
 import { capabilitiesSnapshot, resolveBackendUrl, resolveBackendWsUrl } from "./capabilities";
@@ -261,19 +261,21 @@ export function getPairedBluetoothHub(): PairedBluetoothHubInfo | null {
   };
 }
 
-function backendTransportPrefix(forPortName?: string | null): "/v1/bluetooth" | "/v1/usb" {
+function backendTransportPrefix(forPortName?: string | null): "/v1/slaprf/bluetooth" | "/v1/slaprf/usb" {
   if (forPortName) {
-    return forPortName.trim().toLowerCase().startsWith("ble:") ? "/v1/bluetooth" : "/v1/usb";
+    return forPortName.trim().toLowerCase().startsWith("ble:") ? "/v1/slaprf/bluetooth" : "/v1/slaprf/usb";
   }
-  return isBleHardwareMode() ? "/v1/bluetooth" : "/v1/usb";
+  return isBleHardwareMode() ? "/v1/slaprf/bluetooth" : "/v1/slaprf/usb";
 }
 
-function backendCommandPath(forPortName?: string | null): "/v1/bluetooth:command" | "/v1/usb:command" {
-  return backendTransportPrefix(forPortName) === "/v1/bluetooth" ? "/v1/bluetooth:command" : "/v1/usb:command";
+function backendCommandPath(forPortName?: string | null): "/v1/slaprf/bluetooth:command" | "/v1/slaprf/usb:command" {
+  return backendTransportPrefix(forPortName) === "/v1/slaprf/bluetooth"
+    ? "/v1/slaprf/bluetooth:command"
+    : "/v1/slaprf/usb:command";
 }
 
-function backendWsPath(): "/v1/ws/bluetooth" | "/v1/ws/usb" {
-  return isBleHardwareMode() ? "/v1/ws/bluetooth" : "/v1/ws/usb";
+function backendWsPath(): "/v1/ws/slaprf/bluetooth" | "/v1/ws/slaprf/usb" {
+  return isBleHardwareMode() ? "/v1/ws/slaprf/bluetooth" : "/v1/ws/slaprf/usb";
 }
 
 export function forgetKnownHardwareTimer(fp?: string, _label?: string): void {
@@ -281,8 +283,7 @@ export function forgetKnownHardwareTimer(fp?: string, _label?: string): void {
   if (!cleanFp) return;
   backendKnownTimersCache = backendKnownTimersCache.filter((t) => t.fp.toUpperCase() !== cleanFp);
   if (capabilitiesSnapshot().portable) {
-    const prefix = backendTransportPrefix();
-    void fetch(resolveBackendUrl(`${prefix}/known-timers/${encodeURIComponent(cleanFp)}`), {
+    void fetch(resolveBackendUrl(`/v1/slaprf/known-timers/${encodeURIComponent(cleanFp)}`), {
       method: "DELETE",
     }).catch(() => undefined);
   }
@@ -1133,7 +1134,7 @@ export class TimerConsole {
       this.lastError = null;
       this.port = null;
       const qs = fp ? `?forget=1&fp=${encodeURIComponent(fp)}` : "?forget=1";
-      await fetch(resolveBackendUrl(`/v1/bluetooth/connections/${this.slotIndex}${qs}`), {
+      await fetch(resolveBackendUrl(`/v1/slaprf/bluetooth/connections/${this.slotIndex}${qs}`), {
         method: "DELETE",
       })
         .then((r) => (r.ok ? r.json() : null))
@@ -2353,7 +2354,7 @@ export class UsbConnectionPool {
     if (next !== this._debugSlotIndex) {
       this._debugSlotIndex = next;
       if (capabilitiesSnapshot().portable && !isSimulatedUsbMode()) {
-        void fetch(resolveBackendUrl("/v1/usb/debug-slot"), {
+        void fetch(resolveBackendUrl("/v1/slaprf/usb/debug-slot"), {
           method: "PUT",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ slotIndex: next }),

@@ -114,7 +114,7 @@ func (t *Transport) ValidateTarget(raw string) (string, error) {
 	if fp, ok := ParseBLEPortName(BLEPortPrefix + s); ok {
 		return BLEPortPrefix + fp, nil
 	}
-	return "", errors.New("Bluetooth connections require a ble:<FP> device identifier; use /v1/usb/connections for USB serial ports")
+	return "", errors.New("Bluetooth connections require a ble:<FP> device identifier; use /v1/slaprf/usb/connections for USB serial ports")
 }
 
 func (t *Transport) TargetFingerprint(target string) (string, bool) {

@@ -871,9 +871,9 @@ func TestPausedRaceStartHeatAutoActivatesAndRHDebugStream(t *testing.T) {
 	if st.SimState == nil || len(st.SimState.RotorHazardUnits) == 0 {
 		t.Fatalf("expected simulated RotorHazard units in sim mode")
 	}
-	recOff := reqJSON(t, h, http.MethodPut, "/v1/rh/sessions/2/debug-stream", map[string]any{"active": false})
+	recOff := reqJSON(t, h, http.MethodPut, "/v1/rotorhazard/connections/2/debug-stream", map[string]any{"active": false})
 	if recOff.Code != http.StatusOK {
-		t.Fatalf("expected 200 from PUT /v1/rh/sessions/2/debug-stream=false, got %d", recOff.Code)
+		t.Fatalf("expected 200 from PUT /v1/rotorhazard/connections/2/debug-stream=false, got %d", recOff.Code)
 	}
 	st = getState()
 	for ch, freq := range st.SimState.RotorHazardUnits[0].NodeFreqsMHz {
@@ -882,9 +882,9 @@ func TestPausedRaceStartHeatAutoActivatesAndRHDebugStream(t *testing.T) {
 		}
 	}
 
-	recOn := reqJSON(t, h, http.MethodPut, "/v1/rh/sessions/2/debug-stream", map[string]any{"active": true})
+	recOn := reqJSON(t, h, http.MethodPut, "/v1/rotorhazard/connections/2/debug-stream", map[string]any{"active": true})
 	if recOn.Code != http.StatusOK {
-		t.Fatalf("expected 200 from PUT /v1/rh/sessions/2/debug-stream=true, got %d", recOn.Code)
+		t.Fatalf("expected 200 from PUT /v1/rotorhazard/connections/2/debug-stream=true, got %d", recOn.Code)
 	}
 	st = getState()
 	for ch, freq := range st.SimState.RotorHazardUnits[0].NodeFreqsMHz {

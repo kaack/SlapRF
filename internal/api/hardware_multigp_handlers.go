@@ -633,7 +633,7 @@ func (s *Server) handleSimRHUnitCustomAction(w http.ResponseWriter, r *http.Requ
 			return
 		}
 		if !s.simulator.IsRunning() {
-			writeErrorJSON(w, http.StatusConflict, "simulator is not running (use POST /v1/rh/sessions/{timerId}:scan for physical RotorHazard USB devices)")
+			writeErrorJSON(w, http.StatusConflict, "simulator is not running (use POST /v1/rotorhazard/connections/{timerId}:scan for physical RotorHazard USB devices)")
 			return
 		}
 		mode := strings.ToLower(strings.TrimSpace(body.Mode))

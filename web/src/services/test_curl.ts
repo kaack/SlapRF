@@ -52,12 +52,9 @@ function isPortableHostRoute(url: string): boolean {
     pathOnly === "/v1/laprf-emulator" ||
     pathOnly.startsWith("/v1/laprf/") ||
     pathOnly === "/v1/laprf:sync" ||
-    (pathOnly.startsWith("/v1/rh/") && !pathOnly.endsWith("/debug-stream")) ||
-    pathOnly === "/v1/rh:sync" ||
-    pathOnly.startsWith("/v1/usb/") ||
-    pathOnly === "/v1/usb:command" ||
-    pathOnly.startsWith("/v1/bluetooth/") ||
-    pathOnly === "/v1/bluetooth:command" ||
+    (pathOnly.startsWith("/v1/rotorhazard/") && !pathOnly.endsWith("/debug-stream")) ||
+    pathOnly === "/v1/rotorhazard:sync" ||
+    pathOnly.startsWith("/v1/slaprf/") ||
     pathOnly.startsWith("/v1/race/multigp/proxy/")
   );
 }
@@ -138,7 +135,7 @@ function tryParseJson(raw: string): unknown | null {
 /**
  * Installs `window.slaprfCurl` so Playwright / CDP tests (and interactive DevTools debugging) can
  * issue direct HTTP/curl calls against the live in-browser Go WASM engine (`window.slaprfWasm`)
- * as well as Portable host routes (`/v1/capabilities`, `/v1/race/multigp/proxy/*`, `/v1/laprf/devices`).
+ * as well as Portable host routes (`/v1/capabilities`, `/v1/race/multigp/proxy/*`, `/v1/laprf/network/devices`).
  */
 export function installSlaprfCurlBridge(api: ApiClient): void {
   if (!window.slaprfCurlHistory) {

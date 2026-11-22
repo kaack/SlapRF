@@ -580,7 +580,7 @@ func (s *Server) handleLapRFStatus(w http.ResponseWriter, r *http.Request) {
 		saved = []SavedLapRFTarget{}
 	}
 	writeJSONNoStore(w, http.StatusOK, map[string]any{
-		"sessions":     s.laprfMgr.Snapshots(),
+		"connections":  s.laprfMgr.Snapshots(),
 		"savedTargets": saved,
 	})
 }
@@ -602,13 +602,13 @@ func (s *Server) handleLapRFConnect(w http.ResponseWriter, r *http.Request) {
 	snap, err := s.laprfMgr.Connect(req)
 	if err != nil {
 		writeJSONNoStore(w, http.StatusBadGateway, map[string]any{
-			"error":   err.Error(),
-			"session": snap,
+			"error":      err.Error(),
+			"connection": snap,
 		})
 		return
 	}
-	w.Header().Set("Location", fmt.Sprintf("/v1/laprf/sessions/%d", snap.TimerID))
-	writeJSONNoStore(w, http.StatusCreated, map[string]any{"session": snap})
+	w.Header().Set("Location", fmt.Sprintf("/v1/laprf/connections/%d", snap.TimerID))
+	writeJSONNoStore(w, http.StatusCreated, map[string]any{"connection": snap})
 }
 
 func (s *Server) handleLapRFDisconnect(w http.ResponseWriter, r *http.Request) {
