@@ -214,6 +214,12 @@ export class TimingRulesEditor extends Component {
       })
     );
     this.onDispose(store.subscribe(["crossings"], () => this.renderCounts()));
+    this.listen(window, "resize", () => this.syncScopeLayout());
+    if (typeof ResizeObserver !== "undefined") {
+      const ro = new ResizeObserver(() => this.syncScopeLayout());
+      ro.observe(this.el);
+      this.onDispose(() => ro.disconnect());
+    }
     this.render();
   }
 
@@ -226,10 +232,16 @@ export class TimingRulesEditor extends Component {
     const gate = this.scope === null ? undefined : this.store.node(this.scope);
     const overrides = this.overridesOf(gate);
 
+    let globalOvrCount = r.beepOnCross ? 1 : 0;
+    for (const s of RULES) {
+      if (Math.abs(r[s.key] - DEFAULT_RULES[s.key]) > 1e-6) globalOvrCount++;
+    }
+
     const scopes = [
       `<button type="button" class="channel channel-all ${this.scope === null ? "is-focus" : "is-dim"}" data-scope="all" title="Global rules for all timers">
         <span class="dot channel-all-dot"></span>
         <span class="channel-name">All timers</span>
+        ${globalOvrCount > 0 ? `<span class="channel-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>` : ""}
       </button>`,
       ...this.store.nodes.map((p) => {
         const ovr = this.overridesOf(p);
@@ -243,7 +255,7 @@ export class TimingRulesEditor extends Component {
                   title="${n ? `${n} rule${n > 1 ? "s" : ""} overridden at this timer` : "Uses the global rules"}">
                   <span class="dot" style="--c:${gateColor(this.store, p.gateId)}"></span>
                   <span class="channel-name">${esc(gateLabel(this.store, p.gateId))}</span>
-                  ${n ? `<span class="channel-custom-icon" aria-hidden="true">${icons.pencil(12)}</span>` : ""}
+                  ${n ? `<span class="channel-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>` : ""}
                 </button>`;
       }),
     ].join("");
@@ -289,7 +301,6 @@ export class TimingRulesEditor extends Component {
 
     this.el.innerHTML = `
       <div class="rules-scope">
-        <span class="rules-scope-label">Applies to</span>
         <div class="channel-legend rules-scope-grid" role="tablist" aria-label="Rules for">${scopes}</div>
       </div>
       <form class="rules ${readOnly ? "is-readonly-rules" : ""}">
@@ -299,7 +310,54 @@ export class TimingRulesEditor extends Component {
           <div class="rules-foot">${foot}</div>
         </fieldset>
       </form>`;
+    this.syncScopeLayout();
     this.renderCounts();
+  }
+
+  /**
+   * On mobile (<= 860px), keep all timer selector boxes in one horizontal row when they fit,
+   * and stack them vertically at full width when they would overflow or wrap onto multiple rows.
+   */
+  private syncScopeLayout(): void {
+    const grid = this.el.querySelector<HTMLElement>(".rules-scope-grid");
+    if (!grid) return;
+    const isMobile = typeof window !== "undefined" && window.matchMedia("(max-width: 860px)").matches;
+    if (!isMobile) {
+      grid.classList.remove("is-mobile-stacked", "is-mobile-flex-row");
+      return;
+    }
+    const scopeHost = grid.parentElement;
+    if (!scopeHost) return;
+    const cs = window.getComputedStyle(scopeHost);
+    const availWidth =
+      scopeHost.clientWidth -
+      (parseFloat(cs.paddingLeft) || 0) -
+      (parseFloat(cs.paddingRight) || 0);
+    if (availWidth <= 0) return;
+
+    const buttons = Array.from(grid.querySelectorAll<HTMLElement>(":scope > .channel"));
+    if (buttons.length <= 1) {
+      grid.classList.remove("is-mobile-stacked", "is-mobile-flex-row");
+      return;
+    }
+
+    grid.classList.add("is-measuring-fit");
+    const gapPx = 6;
+    let neededWidth = 0;
+    let maxBtnWidth = 0;
+    for (let i = 0; i < buttons.length; i++) {
+      const w = Math.ceil(buttons[i].getBoundingClientRect().width);
+      neededWidth += w;
+      if (w > maxBtnWidth) maxBtnWidth = w;
+      if (i > 0) neededWidth += gapPx;
+    }
+    grid.classList.remove("is-measuring-fit");
+
+    const equalColsWidth = maxBtnWidth * buttons.length + gapPx * (buttons.length - 1);
+    const shouldStack = neededWidth > availWidth;
+    const useFlexRow = !shouldStack && equalColsWidth > availWidth;
+    grid.classList.toggle("is-mobile-stacked", shouldStack);
+    grid.classList.toggle("is-mobile-flex-row", useFlexRow);
   }
 
   private renderGlobalBeepRow(r: TimingRules): string {

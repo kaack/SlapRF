@@ -410,6 +410,10 @@ describe("widgets/Toast & TimingRulesEditor", () => {
     const editor = new TimingRulesEditor(root.querySelector("#rules-host")!, store, api);
 
     try {
+      expect(root.querySelector(".rules-scope-label")).toBeNull();
+      expect(root.querySelector(".rules-scope")?.textContent ?? "").not.toContain("Applies to");
+      expect(root.querySelector("[data-scope='all'] .channel-custom-icon")).toBeNull();
+
       const minLapCountEl = root.querySelector<HTMLElement>("[data-count='MIN_LAP']")!;
       expect(minLapCountEl.querySelector("svg")).not.toBeNull();
       expect(minLapCountEl.textContent).toContain("2 min lap this session");
@@ -426,6 +430,8 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       const updateCall = calls.find((c) => c.method === "updateRules");
       expect(updateCall).toBeDefined();
       expect((updateCall!.args[0] as { minLapSec: number }).minLapSec).toBe(6.5);
+      store.applyRules({ ...store.rules, minLapSec: 6.5 });
+      expect(root.querySelector("[data-scope='all'] .channel-custom-icon")).not.toBeNull();
 
       // Switch scope to Gate 2 ("Split Tunnel") -> shows only Gate 2 SPIKE count ("1 noise spike here this session")
       root.querySelector<HTMLButtonElement>("[data-scope='2']")!.click();

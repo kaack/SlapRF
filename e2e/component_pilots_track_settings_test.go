@@ -286,6 +286,52 @@ func TestComponent_TimingRulesEditorGlobalEditInlineResetAndPerGateOverride(t *t
 	if r := h.APIRules(); r.MinLapSec != 5.0 {
 		t.Fatalf("expected scoped practice /track/rules MinLapSec=5.0 after reset, got %v", r.MinLapSec)
 	}
+
+	// 3. Verify "Applies to" is omitted and timer boxes match Signals desktop style + mobile horizontal/vertical fit.
+	desktopScopeOK, err := h.Page.Evaluate(`() => {
+		const scope = document.querySelector(".rules-scope");
+		const allBtn = document.querySelector(".rules-scope-grid button[data-scope='all']");
+		const g2Btn = document.querySelector(".rules-scope-grid button[data-scope='2']");
+		if (!scope || !allBtn || !g2Btn) return false;
+		if ((scope.textContent || "").includes("Applies to")) return false;
+		const cs = getComputedStyle(allBtn);
+		const rAll = allBtn.getBoundingClientRect();
+		const rG2 = g2Btn.getBoundingClientRect();
+		return cs.fontSize === "13px" && Math.round(rAll.height) === 36 && rAll.width >= 198 && Math.abs(rAll.width - rG2.width) <= 2;
+	}`)
+	if err != nil || desktopScopeOK != true {
+		t.Fatalf("expected desktop TimingRulesEditor scope boxes to match Signals style without 'Applies to': err=%v ok=%v", err, desktopScopeOK)
+	}
+
+	if err := h.Page.SetViewportSize(390, 844); err != nil {
+		t.Fatalf("resize to 390x844: %v", err)
+	}
+	h.WaitUntil("narrow mobile stacks overflowing timer boxes vertically", 3*time.Second, func() (bool, error) {
+		ok, evalErr := h.Page.Evaluate(`() => {
+			const grid = document.querySelector(".rules-scope-grid");
+			const btns = Array.from(document.querySelectorAll(".rules-scope-grid > button.channel"));
+			if (!grid || btns.length < 3) return false;
+			const r0 = btns[0].getBoundingClientRect();
+			const r1 = btns[1].getBoundingClientRect();
+			return grid.classList.contains("is-mobile-stacked") && r1.top >= r0.bottom - 1 && Math.abs(r0.width - r1.width) <= 2;
+		}`)
+		return evalErr == nil && ok == true, evalErr
+	})
+
+	if err := h.Page.SetViewportSize(820, 844); err != nil {
+		t.Fatalf("resize to 820x844: %v", err)
+	}
+	h.WaitUntil("wider mobile keeps fitting timer boxes on one horizontal row", 3*time.Second, func() (bool, error) {
+		ok, evalErr := h.Page.Evaluate(`() => {
+			const grid = document.querySelector(".rules-scope-grid");
+			const btns = Array.from(document.querySelectorAll(".rules-scope-grid > button.channel"));
+			if (!grid || btns.length < 3) return false;
+			const r0 = btns[0].getBoundingClientRect();
+			const rLast = btns[btns.length - 1].getBoundingClientRect();
+			return !grid.classList.contains("is-mobile-stacked") && Math.abs(r0.top - rLast.top) <= 2;
+		}`)
+		return evalErr == nil && ok == true, evalErr
+	})
 	h.MilestoneScreenshot("timing-rules-gate2-override")
 }
 
