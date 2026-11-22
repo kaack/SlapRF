@@ -1442,7 +1442,7 @@ function openMobileBottomSheet(
     backdrop.classList.add("is-closing");
     window.setTimeout(() => {
       backdrop.remove();
-    }, 210);
+    }, 305);
   };
   activeMobileSheetClose = close;
 

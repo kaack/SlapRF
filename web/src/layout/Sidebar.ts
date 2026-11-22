@@ -269,10 +269,16 @@ export class Sidebar extends Component {
     this.moreDrawerClosing = false;
     this.moreDrawerOpen = true;
     const overlay = this.el.querySelector<HTMLElement>("[data-mobile-more-overlay]");
+    const backdrop = overlay?.querySelector<HTMLElement>(".pilot-dir-mobile-drawer-backdrop");
     const sheet = overlay?.querySelector<HTMLElement>(".mobile-more-drawer-sheet");
     if (overlay) {
       overlay.hidden = false;
       overlay.classList.remove("is-closing");
+    }
+    if (backdrop) {
+      backdrop.style.animation = "none";
+      void backdrop.offsetWidth;
+      backdrop.style.animation = "";
     }
     if (sheet) {
       sheet.classList.remove("is-entering");
@@ -316,7 +322,7 @@ export class Sidebar extends Component {
       this.moreDrawerClosing = false;
       overlay.hidden = true;
       overlay.classList.remove("is-closing");
-    }, 200);
+    }, 305);
   }
 
   private syncMobileSubPageState(): void {

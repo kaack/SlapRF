@@ -897,7 +897,7 @@ export class PilotSlotsEditor extends Component {
       this.mobileSelectedSlot = null;
       this.lastOpenedDrawerSlot = null;
       this.render();
-    }, 200);
+    }, 305);
   }
 
   private handlePrePointerDown = (e: PointerEvent): void => {

@@ -138,7 +138,7 @@ export function openDeviceConnectionSheet(opts: DeviceConnectionSheetOptions): v
     root.classList.add("is-closing");
     window.setTimeout(() => {
       root.remove();
-    }, 200);
+    }, 305);
   };
 
   const cleanupImmediate = (): void => close(true);

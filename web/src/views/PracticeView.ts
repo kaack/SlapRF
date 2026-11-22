@@ -1305,7 +1305,7 @@ export class PracticeView extends Component {
       this.lastOpenedMobileSessionId = "";
       this.lastDirSig = "";
       this.renderDirectory(true);
-    }, 200);
+    }, 305);
   }
 
   private dismissPilotPopoverOrDrawer(): void {
@@ -1335,7 +1335,7 @@ export class PracticeView extends Component {
       this.pilotDrawerAnimatedOpen = false;
       this.lastPopoverSig = "";
       this.renderPilotAddSlot();
-    }, 200);
+    }, 305);
   }
 
   private syncWsFabDom(): void {

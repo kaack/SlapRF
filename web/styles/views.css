@@ -16019,7 +16019,7 @@ html[data-theme="light"] .practice-pilot-switch.is-on .practice-pilot-switch-thu
     pointer-events: none;
   }
   .practice-pilot-drawer-overlay.is-closing .practice-pilot-drawer-backdrop {
-    opacity: 0;
+    animation: pilot-drawer-backdrop-out 0.13s ease-out 0.17s both !important;
   }
   .practice-pilot-popover {
     position: relative;
@@ -16043,10 +16043,10 @@ html[data-theme="light"] .practice-pilot-switch.is-on .practice-pilot-switch-thu
     isolation: isolate;
   }
   .practice-pilot-popover.is-entering {
-    animation: pilot-drawer-slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    animation: pilot-drawer-slide-up 0.26s cubic-bezier(0.22, 1, 0.36, 1) 0.09s both;
   }
   .practice-pilot-drawer-overlay.is-closing .practice-pilot-popover {
-    animation: pilot-drawer-slide-down 0.2s cubic-bezier(0.32, 0, 0.67, 0) forwards;
+    animation: pilot-drawer-slide-down 0.19s cubic-bezier(0.32, 0, 0.67, 0) 0s both;
   }
   html[data-theme="light"] .practice-pilot-popover {
     background: #ffffff;
@@ -16556,7 +16556,7 @@ button.rc-cselect-trigger.is-open .rc-cselect-caret {
     -webkit-backface-visibility: hidden;
     backface-visibility: hidden;
     will-change: opacity;
-    transition: opacity 0.2s ease;
+    animation: pilot-drawer-backdrop-in 0.13s ease-out both;
   }
   .pilot-dir-mobile-drawer-overlay.is-closing {
     pointer-events: none;
@@ -16564,8 +16564,7 @@ button.rc-cselect-trigger.is-open .rc-cselect-caret {
   .pilot-dir-mobile-drawer-overlay.is-closing .pilot-dir-mobile-drawer-backdrop,
   .practice-pilot-drawer-overlay.is-closing .pilot-dir-mobile-drawer-backdrop,
   .mobile-more-drawer-overlay.is-closing .pilot-dir-mobile-drawer-backdrop {
-    animation: none;
-    opacity: 0;
+    animation: pilot-drawer-backdrop-out 0.13s ease-out 0.17s both !important;
   }
   .pilot-dir-mobile-editor {
     position: relative;
@@ -16589,10 +16588,10 @@ button.rc-cselect-trigger.is-open .rc-cselect-caret {
     isolation: isolate;
   }
   .pilot-dir-mobile-editor.is-entering {
-    animation: pilot-drawer-slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+    animation: pilot-drawer-slide-up 0.26s cubic-bezier(0.22, 1, 0.36, 1) 0.09s both;
   }
   .pilot-dir-mobile-drawer-overlay.is-closing .pilot-dir-mobile-editor {
-    animation: pilot-drawer-slide-down 0.2s cubic-bezier(0.32, 0, 0.67, 0) forwards;
+    animation: pilot-drawer-slide-down 0.19s cubic-bezier(0.32, 0, 0.67, 0) 0s both;
   }
   html[data-theme="light"] .pilot-dir-mobile-editor {
     background: #ffffff;
@@ -16675,6 +16674,14 @@ button.rc-cselect-trigger.is-open .rc-cselect-caret {
   }
   to {
     opacity: 1;
+  }
+}
+@keyframes pilot-drawer-backdrop-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
   }
 }
 @keyframes pilot-drawer-slide-up {
@@ -23929,7 +23936,7 @@ html[data-theme="light"] .custom-select-popover.is-pilot-select-popover .custom-
   -webkit-backface-visibility: hidden;
   backface-visibility: hidden;
   will-change: opacity;
-  transition: opacity 0.2s ease;
+  animation: pilot-drawer-backdrop-in 0.13s ease-out both;
 }
 
 .mre-sheet-overlay.is-closing {
@@ -23937,8 +23944,7 @@ html[data-theme="light"] .custom-select-popover.is-pilot-select-popover .custom-
 }
 
 .mre-sheet-overlay.is-closing .pilot-dir-mobile-drawer-backdrop {
-  animation: none !important;
-  opacity: 0 !important;
+  animation: pilot-drawer-backdrop-out 0.13s ease-out 0.17s both !important;
 }
 
 .mre-bottom-sheet {
@@ -23966,11 +23972,11 @@ html[data-theme="light"] .mre-bottom-sheet {
 }
 
 .mre-bottom-sheet.is-entering {
-  animation: pilot-drawer-slide-up 0.22s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  animation: pilot-drawer-slide-up 0.26s cubic-bezier(0.22, 1, 0.36, 1) 0.09s both;
 }
 
 .mre-sheet-overlay.is-closing .mre-bottom-sheet {
-  animation: pilot-drawer-slide-down 0.2s cubic-bezier(0.32, 0, 0.67, 0) forwards !important;
+  animation: pilot-drawer-slide-down 0.19s cubic-bezier(0.32, 0, 0.67, 0) 0s both !important;
 }
 
 .mre-sheet-head {

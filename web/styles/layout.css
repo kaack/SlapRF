@@ -1467,11 +1467,23 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     flex-direction: column;
     justify-content: flex-end;
   }
+  .mobile-more-drawer-overlay > .pilot-dir-mobile-drawer-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.48);
+    -webkit-backdrop-filter: blur(2.5px);
+    backdrop-filter: blur(2.5px);
+    transform: translate3d(0, 0, 0);
+    -webkit-backface-visibility: hidden;
+    backface-visibility: hidden;
+    will-change: opacity;
+    animation: pilot-drawer-backdrop-in 0.13s ease-out both;
+  }
   .mobile-more-drawer-overlay.is-closing {
     pointer-events: none;
   }
   .mobile-more-drawer-overlay.is-closing .pilot-dir-mobile-drawer-backdrop {
-    opacity: 0;
+    animation: pilot-drawer-backdrop-out 0.13s ease-out 0.17s both !important;
   }
   .mobile-more-drawer-sheet {
     position: relative;
@@ -1491,10 +1503,10 @@ html[data-theme="light"] .topbar-conn-led.is-gray .topbar-conn-led-bulb {
     overflow-y: auto;
   }
   .mobile-more-drawer-sheet.is-entering {
-    animation: pilot-drawer-slide-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) both;
+    animation: pilot-drawer-slide-up 0.26s cubic-bezier(0.22, 1, 0.36, 1) 0.09s both;
   }
   .mobile-more-drawer-overlay.is-closing .mobile-more-drawer-sheet {
-    animation: pilot-drawer-slide-down 0.22s cubic-bezier(0.32, 0, 0.67, 0) both;
+    animation: pilot-drawer-slide-down 0.19s cubic-bezier(0.32, 0, 0.67, 0) 0s both !important;
   }
   html[data-theme="light"] .mobile-more-drawer-sheet {
     background: #ffffff;

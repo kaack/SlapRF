@@ -3713,7 +3713,7 @@ export class RacesView extends Component {
       this.lastOpenedMobileRaceId = "";
       this.lastSig = "";
       this.render();
-    }, 200);
+    }, 305);
   }
 
   private handleMobileRaceDrawerPointerMove = (e: PointerEvent): void => {
