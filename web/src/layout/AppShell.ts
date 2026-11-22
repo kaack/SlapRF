@@ -196,7 +196,6 @@ export class AppShell extends Component {
       this.store.timingHardwareMode === "rotorhazard_usb";
     const caps = capabilitiesSnapshot();
     const emulOn = caps.portable && !isExternalTimer && sharedLapRFEmulatorRelay.snapshot.enabled;
-    const hideFlasher = isExternalTimer;
 
     const primaryOrder: RouteId[] = ["races", "practice", "pilots", "network"];
     const primarySet = new Set<RouteId>(primaryOrder);
@@ -207,7 +206,6 @@ export class AppShell extends Component {
       if (r.hiddenFromNav) continue;
       if (r.simOnly && !simOn) continue;
       if (r.laprfEmulatorOnly && !emulOn) continue;
-      if (r.id === "flasher" && hideFlasher) continue;
       visibleSet.add(r.id);
       if (!primarySet.has(r.id)) {
         secondary.push(r.id);

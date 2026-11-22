@@ -645,8 +645,8 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
       expect(enterThresholdAt(store, 1, 1)).toEqual({ dbm: 98, calibrated: false });
       expect(exitThresholdAt(store, 1, 1)).toEqual({ dbm: 72, calibrated: false });
 
-      // Sidebar hides #/flasher in RotorHazard (USB) mode
-      expect(root.querySelector<HTMLElement>("#sb-usb [data-route='flasher']")?.style.display).toBe(
+      // Sidebar keeps #/flasher visible even in RotorHazard (USB) mode
+      expect(root.querySelector<HTMLElement>("#sb-usb [data-route='flasher']")?.style.display).not.toBe(
         "none"
       );
 
@@ -696,6 +696,7 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
         })
       );
       await flushMicrotasks();
+      await new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 
       const connectUsbBtn = connHostEl.querySelector<HTMLButtonElement>("[data-action='rh-usb-connect']")!;
       expect(connectUsbBtn).not.toBeNull();

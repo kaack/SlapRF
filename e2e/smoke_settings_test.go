@@ -149,9 +149,9 @@ func TestSettingsSectionsHardwareSwitchAndMultiGPKeyMasking(t *testing.T) {
 	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "LapRF 8-Way (Network)")
 	h.MustBeVisible(h.Page.Locator(`[data-slot="laprf-connection"]`).First(), "LapRF Ethernet connection card")
 
-	// In LapRF mode, Flasher sidebar link is hidden.
+	// In LapRF mode, Flasher sidebar link remains visible so users never lose access to #/flasher.
 	flasherNav := h.Page.Locator(`aside a[data-route="flasher"]`).First()
-	h.MustBeHidden(flasherNav, "Flasher sidebar link while LapRF 8-Way is selected")
+	h.MustBeVisible(flasherNav, "Flasher sidebar link while LapRF 8-Way is selected")
 	h.MilestoneScreenshot("settings-laprf-selected")
 
 	// Connect simulated L1 on #/network (which locks the dropdown), then disconnect L1 on its device card so the inline dropdown unlocks, and switch back to SlapRF (USB).

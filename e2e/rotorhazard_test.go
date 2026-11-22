@@ -20,12 +20,12 @@ func TestRotorHazardSimulatedMultiDeviceAndBrowserRealWebSocketHandshake(t *test
 	h := NewHarness(t)
 	h.BootClean("#/network")
 
-	// 1. Switch Timing system to RotorHazard (Network) inline on #/network and verify Flasher nav is hidden.
+	// 1. Switch Timing system to RotorHazard (Network) inline on #/network and verify Flasher nav stays visible.
 	h.SelectCustomOption(`select[data-field="network-hardware-mode"]`, "RotorHazard (Network)")
 	h.MustBeVisible(h.Page.Locator(`[data-slot="rh-connection"]`).First(), "RotorHazard connection card")
 
 	flasherNav := h.Page.Locator(`aside a[data-route="flasher"]`).First()
-	h.MustBeHidden(flasherNav, "Flasher sidebar link while RotorHazard is selected")
+	h.MustBeVisible(flasherNav, "Flasher sidebar link while RotorHazard is selected")
 
 	// 2. Open Simulation page (#/sim) and verify RH1 (Linked) + RH2 (LAN) in Simulated RotorHazard devices.
 	h.NavigateSidebar("sim")

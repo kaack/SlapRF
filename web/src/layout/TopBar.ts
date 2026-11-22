@@ -501,14 +501,12 @@ export class TopBar extends Component {
       this.store.timingHardwareMode === "laprf_usb" ||
       this.store.timingHardwareMode === "rotorhazard" ||
       this.store.timingHardwareMode === "rotorhazard_usb";
-    const hideFlasher = isExternalTimer;
     const effectiveSimForNav = lockedOut ? false : sim;
     const navItems = ROUTES.filter(
       (r) =>
         !r.hiddenFromNav &&
         (!r.simOnly || effectiveSimForNav) &&
-        (!r.laprfEmulatorOnly || (emulEnabled && !isExternalTimer && !lockedOut)) &&
-        (r.id !== "flasher" || !hideFlasher)
+        (!r.laprfEmulatorOnly || (emulEnabled && !isExternalTimer && !lockedOut))
     )
       .map((r) => {
         const active = r.id === meta.id;
@@ -892,14 +890,12 @@ export class TopBar extends Component {
       this.store.timingHardwareMode === "laprf_usb" ||
       this.store.timingHardwareMode === "rotorhazard" ||
       this.store.timingHardwareMode === "rotorhazard_usb";
-    const hideFlasher = isExternalTimer;
     const effectiveSimForNav = lockedOut ? false : sim;
     const navItems = ROUTES.filter(
       (r) =>
         !r.hiddenFromNav &&
         (!r.simOnly || effectiveSimForNav) &&
-        (!r.laprfEmulatorOnly || (emulEnabled && !isExternalTimer && !lockedOut)) &&
-        (r.id !== "flasher" || !hideFlasher)
+        (!r.laprfEmulatorOnly || (emulEnabled && !isExternalTimer && !lockedOut))
     )
       .map((r) => {
         const active = r.id === meta.id;

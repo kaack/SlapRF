@@ -455,9 +455,8 @@ export class Sidebar extends Component {
     this.el.querySelectorAll<HTMLElement>("[data-laprf-emulator-only]").forEach((a) => {
       a.style.display = emulOn ? "" : "none";
     });
-    const hideFlasher = isExternalTimer;
     this.el.querySelectorAll<HTMLElement>('[data-route="flasher"]').forEach((a) => {
-      a.style.display = hideFlasher ? "none" : "";
+      a.style.display = "";
     });
 
     this.el.querySelectorAll<HTMLAnchorElement>("a[data-route]").forEach((a) => {
