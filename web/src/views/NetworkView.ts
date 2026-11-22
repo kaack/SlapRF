@@ -2623,6 +2623,7 @@ export class NetworkView extends Component {
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       if (/authentication|unauthorized|401|403|password|credentials/i.test(msg)) {
+        this.rhCredsByEndpoint.delete(ep);
         this.rhBusy = false;
         this.openRhCredPrompt({
           scope: "manual",
@@ -2669,7 +2670,6 @@ export class NetworkView extends Component {
     if (this.rhBusy || !this.rhCredPrompt) return;
     const target = this.rhCredPrompt;
     const ep = `${target.host}:${target.port || DEFAULT_RH_PORT}`;
-    this.rhCredsByEndpoint.set(ep, { user: this.rhUser, pass: this.rhPass });
     this.rhBusy = true;
     this.rhError = null;
     this.lastRhConnSig = "";
@@ -2684,6 +2684,7 @@ export class NetworkView extends Component {
         preferredLabel: target.label !== ep ? target.label : undefined,
         preferredTimerId: target.timerId,
       });
+      this.rhCredsByEndpoint.set(ep, { user: this.rhUser, pass: this.rhPass });
       this.rhCredPrompt = null;
     } catch (err) {
       this.rhError = err instanceof Error ? err.message : String(err);
