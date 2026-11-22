@@ -27,3 +27,7 @@ func isBLEDeviceStillConnected(_, _ string) bool {
 func cancelBLEPendingConnect(_, _ string) {}
 
 func watchBLEDeviceDisconnect(_, _ string, _ <-chan struct{}, _ func(error)) {}
+
+func acquireBLENotifySocket(_, _, _ string, _ <-chan struct{}, _ func([]byte)) (func(), bool) {
+	return nil, false
+}

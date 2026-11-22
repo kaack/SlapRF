@@ -3,14 +3,17 @@
 package bluetooth
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/godbus/dbus/v5"
+	"golang.org/x/sys/unix"
 	"tinygo.org/x/bluetooth"
 )
 
@@ -184,6 +187,134 @@ func watchBLEDeviceDisconnect(adapterID, addrStr string, stop <-chan struct{}, o
 			}
 		}
 	}()
+}
+
+// acquireBLENotifySocket uses BlueZ's org.bluez.GattCharacteristic1.AcquireNotify to obtain a
+// direct kernel SOCK_SEQPACKET file descriptor for GATT notifications, bypassing D-Bus
+// PropertiesChanged("Value") coalescing and godbus unbuffered-channel goroutine reordering.
+func acquireBLENotifySocket(adapterID, addrStr, charUUID string, stop <-chan struct{}, onData func([]byte)) (func(), bool) {
+	if strings.TrimSpace(addrStr) == "" || strings.TrimSpace(charUUID) == "" || onData == nil {
+		return nil, false
+	}
+	bus, err := dbus.SystemBus()
+	if err != nil {
+		return nil, false
+	}
+	devPrefix := string(bluezDeviceObjectPath(adapterID, addrStr)) + "/service"
+	var objects map[dbus.ObjectPath]map[string]map[string]dbus.Variant
+	if err := bus.Object("org.bluez", dbus.ObjectPath("/")).
+		Call("org.freedesktop.DBus.ObjectManager.GetManagedObjects", 0).
+		Store(&objects); err != nil {
+		return nil, false
+	}
+	var charPath dbus.ObjectPath
+	for path, ifaces := range objects {
+		if !strings.HasPrefix(string(path), devPrefix) {
+			continue
+		}
+		props, ok := ifaces["org.bluez.GattCharacteristic1"]
+		if !ok {
+			continue
+		}
+		u, _ := props["UUID"].Value().(string)
+		if strings.EqualFold(strings.TrimSpace(u), strings.TrimSpace(charUUID)) {
+			charPath = path
+			break
+		}
+	}
+	if charPath == "" {
+		return nil, false
+	}
+
+	var unixFD dbus.UnixFD
+	var mtu uint16
+	opts := map[string]dbus.Variant{}
+	charObj := bus.Object("org.bluez", charPath)
+	_ = charObj.Call("org.bluez.GattCharacteristic1.StopNotify", 0).Err
+	if err := charObj.
+		Call("org.bluez.GattCharacteristic1.AcquireNotify", 0, opts).
+		Store(&unixFD, &mtu); err != nil {
+		return nil, false
+	}
+	fd := int(unixFD)
+	if fd < 0 {
+		return nil, false
+	}
+	_ = unix.SetNonblock(fd, true)
+
+	var pipeFds [2]int
+	if err := unix.Pipe2(pipeFds[:], unix.O_NONBLOCK|unix.O_CLOEXEC); err != nil {
+		_ = unix.Close(fd)
+		return nil, false
+	}
+	wakeR, wakeW := pipeFds[0], pipeFds[1]
+
+	var closeOnce sync.Once
+	closedCh := make(chan struct{})
+	closeFn := func() {
+		closeOnce.Do(func() {
+			close(closedCh)
+			_, _ = unix.Write(wakeW, []byte{1})
+			_ = unix.Close(fd)
+			_ = unix.Close(wakeR)
+			_ = unix.Close(wakeW)
+		})
+	}
+
+	go func() {
+		select {
+		case <-stop:
+			closeFn()
+		case <-closedCh:
+		}
+	}()
+
+	go func() {
+		defer closeFn()
+		buf := make([]byte, 2048)
+		pollFds := []unix.PollFd{
+			{Fd: int32(fd), Events: unix.POLLIN},
+			{Fd: int32(wakeR), Events: unix.POLLIN},
+		}
+		for {
+			select {
+			case <-closedCh:
+				return
+			default:
+			}
+			pollFds[0].Revents = 0
+			pollFds[1].Revents = 0
+			nReady, pErr := unix.Poll(pollFds, -1)
+			if errors.Is(pErr, unix.EINTR) {
+				continue
+			}
+			if pErr != nil || pollFds[1].Revents != 0 {
+				return
+			}
+			if nReady == 0 {
+				continue
+			}
+			for {
+				n, rErr := unix.Read(fd, buf)
+				if n > 0 {
+					chunk := make([]byte, n)
+					copy(chunk, buf[:n])
+					onData(chunk)
+				}
+				if errors.Is(rErr, unix.EINTR) {
+					continue
+				}
+				if errors.Is(rErr, unix.EAGAIN) || errors.Is(rErr, unix.EWOULDBLOCK) {
+					break
+				}
+				if rErr != nil || n == 0 {
+					return
+				}
+			}
+		}
+	}()
+
+	return closeFn, true
 }
 
 func listBlueZAdaptersDBus() []bluezAdapterCandidate {

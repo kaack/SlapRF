@@ -40,12 +40,13 @@ type bleSeenHub struct {
 }
 
 type bleDesktopConn struct {
-	fp     string
-	dev    bluetooth.Device
-	rx     bluetooth.DeviceCharacteristic
-	tx     bluetooth.DeviceCharacteristic
-	port   *BLEStreamPort
-	stopCh chan struct{}
+	fp          string
+	dev         bluetooth.Device
+	rx          bluetooth.DeviceCharacteristic
+	tx          bluetooth.DeviceCharacteristic
+	port        *BLEStreamPort
+	stopCh      chan struct{}
+	closeNotify func()
 
 	mu      sync.Mutex
 	payload int
@@ -100,12 +101,16 @@ func (c *bleDesktopConn) Close() error {
 	c.closed = true
 	stopCh := c.stopCh
 	c.stopCh = nil
+	closeNotify := c.closeNotify
+	c.closeNotify = nil
 	c.mu.Unlock()
 	if stopCh != nil {
 		close(stopCh)
 	}
 	bleHost.unregister(c)
-	if runtime.GOOS == "linux" {
+	if closeNotify != nil {
+		closeNotify()
+	} else if runtime.GOOS == "linux" {
 		_ = c.tx.EnableNotifications(nil)
 	}
 	err := c.dev.Disconnect()
@@ -805,22 +810,30 @@ func bleOpenPortContext(
 		h.conns[dev.Address.String()] = conn
 		h.mu.Unlock()
 
-		notifErr := conn.tx.EnableNotifications(func(buf []byte) { port.Deliver(buf) })
-		if notifErr != nil && runtime.GOOS == "linux" {
-			_ = conn.tx.EnableNotifications(nil)
-			if !sleepWithContext(ctx, 150*time.Millisecond) {
-				close(stopCh)
-				conn.stopCh = nil
-				h.unregister(conn)
-				_ = dev.Disconnect()
-				return nil, slaprf.ErrConnectCancelled
-			}
+		var notifErr error
+		if closeNotify, acquired := acquireBLENotifySocket(adapterID, dev.Address.String(), BLETxCharUUID, stopCh, func(buf []byte) { port.Deliver(buf) }); acquired {
+			conn.closeNotify = closeNotify
+		} else {
 			notifErr = conn.tx.EnableNotifications(func(buf []byte) { port.Deliver(buf) })
+			if notifErr != nil && runtime.GOOS == "linux" {
+				_ = conn.tx.EnableNotifications(nil)
+				if !sleepWithContext(ctx, 150*time.Millisecond) {
+					close(stopCh)
+					conn.stopCh = nil
+					h.unregister(conn)
+					_ = dev.Disconnect()
+					return nil, slaprf.ErrConnectCancelled
+				}
+				notifErr = conn.tx.EnableNotifications(func(buf []byte) { port.Deliver(buf) })
+			}
 		}
 		if notifErr != nil {
 			close(stopCh)
 			conn.stopCh = nil
-			if runtime.GOOS == "linux" {
+			if conn.closeNotify != nil {
+				conn.closeNotify()
+				conn.closeNotify = nil
+			} else if runtime.GOOS == "linux" {
 				_ = conn.tx.EnableNotifications(nil)
 			}
 			h.unregister(conn)
@@ -832,7 +845,12 @@ func bleOpenPortContext(
 			if !sleepWithContext(ctx, 300*time.Millisecond) {
 				close(stopCh)
 				conn.stopCh = nil
-				_ = conn.tx.EnableNotifications(nil)
+				if conn.closeNotify != nil {
+					conn.closeNotify()
+					conn.closeNotify = nil
+				} else {
+					_ = conn.tx.EnableNotifications(nil)
+				}
 				h.unregister(conn)
 				_ = dev.Disconnect()
 				return nil, slaprf.ErrConnectCancelled
@@ -840,7 +858,12 @@ func bleOpenPortContext(
 			if !isBLEDeviceStillConnected(adapterID, dev.Address.String()) {
 				close(stopCh)
 				conn.stopCh = nil
-				_ = conn.tx.EnableNotifications(nil)
+				if conn.closeNotify != nil {
+					conn.closeNotify()
+					conn.closeNotify = nil
+				} else {
+					_ = conn.tx.EnableNotifications(nil)
+				}
 				h.unregister(conn)
 				_ = dev.Disconnect()
 				lastErr = fmt.Errorf("Bluetooth hub %s link dropped during establishment (2.4 GHz interference or range)", fp)

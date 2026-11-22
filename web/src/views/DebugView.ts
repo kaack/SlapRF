@@ -796,6 +796,18 @@ export class DebugView extends Component {
   }
 
   private ingestScanPassResult(s: ScanResult, partial = false): void {
+    if (s.live && !partial && this.scanLive && s.start === this.scanStartMHz && s.step === this.scanStepMHz) {
+      const sb = this.scanYBounds();
+      const stop = Math.min(sb.maxFreqMHz, this.scanStopMHz);
+      const expectedBins = Math.floor((stop - s.start) / Math.max(1, s.step)) + 1;
+      const expectedLegacy5917Bins =
+        stop > 5917 ? Math.floor((5917 - s.start) / Math.max(1, s.step)) + 1 : expectedBins;
+      if (expectedBins > 1 && s.dbm.length !== expectedBins && s.dbm.length !== expectedLegacy5917Bins) {
+        // Drop truncated live scan frame (e.g. a dropped 244-byte BLE chunk) so we never wipe
+        // maxHold, average, or waterfall history or stretch the frequency axis mid-stream.
+        return;
+      }
+    }
     const gridChanged =
       this.spectrumAcc.latest !== null &&
       (this.spectrumAcc.latest.start !== s.start ||
