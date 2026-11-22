@@ -21,25 +21,11 @@ export class ScopedTrackWorkspace extends Component {
     opts: ScopedTrackWorkspaceOptions = {}
   ) {
     super(el);
-    const kindLabel = opts.contextLabel === "race" ? "race" : "practice session";
 
     el.innerHTML = `
-      <div class="settings scoped-track-workspace">
-        <section class="settings-section" data-section-anchor="track">
-          <div class="settings-intro">
-            <h2>Track</h2>
-            <p>Drag timers onto the line in flying order for this ${kindLabel}. Each span between timers is a section (S1, S2, S3…). Click the checkered flag under a timer to set the start timer where laps are counted.</p>
-          </div>
-          <div class="card card-flush" data-slot="track"></div>
-        </section>
-
-        <section class="settings-section" data-section-anchor="timing-rules">
-          <div class="settings-intro">
-            <h2>Timing rules</h2>
-            <p>Filters out false passes and stray signals for this ${kindLabel}. Set rules for all timers on this track, or customize a single timer.</p>
-          </div>
-          <div class="card card-flush" data-slot="rules"></div>
-        </section>
+      <div class="scoped-track-workspace">
+        <div class="card card-flush" data-slot="track" data-section-anchor="track"></div>
+        <div class="card card-flush" data-slot="rules" data-section-anchor="timing-rules"></div>
       </div>`;
 
     this.adopt(new TrackEditor(this.slot("track"), scopedStore, scopedApi, { readOnly: opts.readOnly }));

@@ -455,8 +455,9 @@ body.is-gate-dragging * {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 12px;
+  flex-wrap: nowrap;
+  gap: 16px;
+  min-width: 0;
   transition: border-color 0.14s, background 0.14s, box-shadow 0.14s;
 }
 .gate-unassigned-tray.is-drop-active {
@@ -468,6 +469,8 @@ body.is-gate-dragging * {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
+  flex: 0 1 auto;
 }
 .gate-unassigned-title {
   font-size: 11.5px;
@@ -481,8 +484,21 @@ body.is-gate-dragging * {
 .gate-unassigned-list {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
+  flex-wrap: nowrap;
+  gap: 10px;
+  min-width: 0;
+  max-width: 100%;
+  flex: 0 1 auto;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior-x: contain;
+  padding: 4px;
+}
+.gate-unassigned-list::-webkit-scrollbar {
+  display: none;
 }
 .gate-unassigned-empty-chip {
   font-size: 11px;
@@ -490,82 +506,63 @@ body.is-gate-dragging * {
   padding: 5px 10px;
   border-radius: 999px;
   border: 1px dashed var(--border);
+  white-space: nowrap;
 }
 .unassigned-timer-token {
+  --circle-size: 48px;
+  position: relative;
+  width: var(--circle-size);
+  height: var(--circle-size);
+  min-width: var(--circle-size);
+  min-height: var(--circle-size);
+  flex: 0 0 var(--circle-size);
+  padding: 0;
+  border-radius: 50%;
+  border: 2.5px solid var(--c, var(--accent));
+  background:
+    radial-gradient(circle at 50% 32%, color-mix(in srgb, var(--c, var(--accent)) 22%, var(--surface-2)), var(--surface-2) 75%);
+  color: var(--text);
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  padding: 5px 11px 5px 6px;
-  border-radius: 999px;
-  border: 1px solid color-mix(in srgb, var(--c, var(--accent)) 55%, var(--border-strong));
-  background: color-mix(in srgb, var(--c, var(--accent)) 10%, var(--surface-2));
+  justify-content: center;
   cursor: grab;
   user-select: none;
-  touch-action: none;
-  transition: box-shadow 0.12s, opacity 0.12s;
+  touch-action: pan-x;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+  transition: transform 0.14s ease, box-shadow 0.14s ease, opacity 0.12s ease;
 }
 .unassigned-timer-token:hover {
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  box-shadow:
+    0 6px 18px rgba(0, 0, 0, 0.45),
+    0 0 0 4px color-mix(in srgb, var(--c, var(--accent)) 22%, transparent);
 }
 .unassigned-timer-token.is-dragging-source {
   opacity: 0.35;
 }
 .unassigned-timer-token.is-offline {
   filter: grayscale(1);
-  opacity: 0.84;
+  opacity: 0.86;
 }
 .unassigned-timer-token.is-offline:hover {
   filter: grayscale(1);
   opacity: 0.94;
 }
-.unassigned-timer-dot {
-  width: 28px;
-  height: 28px;
-  border-radius: 50%;
-  border: 2px solid var(--c, var(--accent));
-  background:
-    radial-gradient(circle at 50% 32%, color-mix(in srgb, var(--c, var(--accent)) 28%, var(--surface-2)), var(--surface-2) 78%);
-  display: inline-grid;
-  place-items: center;
-  font-size: 11px;
-  font-weight: 700;
-  color: var(--text);
-}
-.unassigned-timer-info {
-  display: flex;
-  flex-direction: column;
-  line-height: 1.15;
-}
-.unassigned-timer-name {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--text);
-}
-.unassigned-timer-sub {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  font-size: 10px;
-  color: var(--text-3);
-}
-.unassigned-timer-delete {
-  display: inline-grid;
-  place-items: center;
-  width: 28px;
-  height: 28px;
-  margin-left: 0;
-  margin-right: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: transparent;
-  color: var(--text-3);
-  cursor: pointer;
-  transition: background 0.12s, color 0.12s;
-}
-.unassigned-timer-delete:hover {
-  background: var(--surface-3);
-  color: var(--text);
+@media (max-width: 860px) {
+  .gate-unassigned-tray {
+    margin-top: 10px;
+    padding: 9px 12px;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  .gate-unassigned-list {
+    width: 100%;
+    padding: 3px 2px;
+    gap: 8px;
+  }
+  .unassigned-timer-token {
+    --circle-size: clamp(32px, 10vw, 40px);
+  }
 }
 
 /* Selected Gate Inspector panel below the track line */
@@ -2731,6 +2728,15 @@ html[data-theme="light"] .bar-time {
   }
 }
 
+/* Scoped Track + Timing Rules workspace (single-column on desktop and mobile) */
+.scoped-track-workspace {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+}
+
 /* Timing rules: global vs per-gate scope */
 .rules-scope {
   display: flex;
@@ -2750,9 +2756,51 @@ html[data-theme="light"] .bar-time {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+@media (min-width: 861px) {
+  .scope-tune-drawer.is-track-rules-drawer {
+    display: none !important;
+  }
+}
 @media (max-width: 860px) {
+  .scoped-track-workspace {
+    flex: 1 1 0;
+    min-height: 0;
+    gap: 10px;
+    overflow: hidden;
+  }
+  .scoped-track-workspace > [data-slot="track"] {
+    flex: 0 0 auto;
+  }
+  .scoped-track-workspace > [data-slot="rules"] {
+    flex: 0 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .scoped-track-workspace .gate-track-stage {
+    padding: 12px 12px 12px;
+  }
+  .scoped-track-workspace .gate-track-header {
+    margin-bottom: 8px;
+  }
+  .rules-editor-body {
+    flex: 0 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .rules-editor-body > form.rules {
+    display: none !important;
+  }
   .rules-scope {
     padding: 12px 14px;
+    border-bottom: 0;
+    flex: 0 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
   }
   .rules-scope-grid {
     display: grid;
@@ -2792,6 +2840,21 @@ html[data-theme="light"] .bar-time {
   .rules-scope-grid.is-measuring-fit > .channel > .channel-name {
     overflow: visible !important;
     text-overflow: clip !important;
+  }
+  .scope-tune-drawer.is-track-rules-drawer {
+    overflow: hidden;
+  }
+  .scope-tune-drawer.is-track-rules-drawer .scope-tune-grid {
+    flex: 0 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .scope-tune-drawer.is-track-rules-drawer .scope-tune-card {
+    flex: 0 1 48px;
+    height: auto;
+    min-height: 36px;
+    max-height: 48px;
   }
 }
 .channel-custom-icon {
@@ -21128,7 +21191,11 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     gap: 12px;
   }
 
-  .races-page.is-track-page > .races-page-stack,
+  .races-page.is-track-page > .races-page-stack {
+    overflow: hidden;
+    padding-bottom: 0;
+  }
+
   .races-page.is-review-page > .races-page-stack,
   .races-page.is-analytics-page > .races-page-stack {
     overflow-y: auto;
@@ -22051,7 +22118,15 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
     padding: 0 !important;
   }
 
-  .practice-workspace-page[data-mobile-practice-view="track"] .practice-mobile-track-wrap,
+  .practice-workspace-page[data-mobile-practice-view="track"] .practice-mobile-track-wrap {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex !important;
+    flex-direction: column;
+    overflow: hidden;
+    padding-bottom: 0;
+  }
+
   .practice-workspace-page[data-mobile-practice-view="analytics"] .practice-mobile-analytics-wrap {
     flex: 1 1 0;
     min-height: 0;
@@ -22065,7 +22140,14 @@ html[data-theme="light"] .races-page .rc-canvas-panel.rc-page-card.is-standings-
   }
 
   .practice-mobile-track-wrap > .rc-track-embedded,
-  .races-page.is-track-page > .races-page-stack > .rc-track-embedded,
+  .races-page.is-track-page > .races-page-stack > .rc-track-embedded {
+    flex: 1 1 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
   .practice-mobile-analytics-wrap > .rc-analytics-embedded,
   .races-page.is-analytics-page > .races-page-stack > .rc-analytics-embedded {
     flex: 0 0 auto;
@@ -24658,15 +24740,6 @@ html[data-theme="light"] .mre-sheet-check-toggle input[type="checkbox"]:checked:
   .practice-workspace-page[data-mobile-practice-view="track"] [data-practice-mobile-pane]:not([data-practice-mobile-pane="track"]),
   .practice-workspace-page[data-mobile-practice-view="track"] .practice-panel-stack {
     display: none !important;
-  }
-
-  .practice-workspace-page[data-mobile-practice-view="track"] .practice-workspace-stack,
-  .races-page.is-track-page > .races-page-stack {
-    width: min(calc(100% - 36px), 1120px);
-    max-width: 1120px;
-    margin-left: auto;
-    margin-right: auto;
-    box-sizing: border-box;
   }
 
   .practice-workspace-page[data-mobile-practice-view="pilots"] .practice-mobile-pilots-card {

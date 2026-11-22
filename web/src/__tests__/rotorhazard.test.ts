@@ -242,9 +242,8 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
         "192.168.1.101"
       );
 
-      // TrackEditor renders 2-char R1 badge + RH sub-label
-      expect(root.querySelector("#track-host")!.textContent).toContain("R1");
-      expect(root.querySelector("#track-host")!.textContent).toContain("RH");
+      // TrackEditor renders clean 2-char R1 puck without role sub-label or LED
+      expect(root.querySelector("#track-host .gate-node-circle")?.textContent?.trim()).toBe("R1");
 
       // PilotSlotsEditor renders Pilot, Phonetic name, and Default channel columns (thresholds hidden)
       expect(root.querySelector("#pilots-host")!.textContent).toContain("Default channel");

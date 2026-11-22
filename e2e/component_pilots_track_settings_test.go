@@ -287,35 +287,59 @@ func TestComponent_TimingRulesEditorGlobalEditInlineResetAndPerGateOverride(t *t
 		t.Fatalf("expected scoped practice /track/rules MinLapSec=5.0 after reset, got %v", r.MinLapSec)
 	}
 
-	// 3. Verify "Applies to" is omitted and timer boxes match Signals desktop style + mobile horizontal/vertical fit.
+	// 3. Verify single-column wide panels, "Applies to" omitted, and timer boxes match Signals desktop style + mobile drawer.
 	desktopScopeOK, err := h.Page.Evaluate(`() => {
+		const intro = document.querySelector(".scoped-track-workspace .settings-intro");
+		const trackCard = document.querySelector(".scoped-track-workspace [data-slot='track']");
 		const scope = document.querySelector(".rules-scope");
 		const allBtn = document.querySelector(".rules-scope-grid button[data-scope='all']");
 		const g2Btn = document.querySelector(".rules-scope-grid button[data-scope='2']");
-		if (!scope || !allBtn || !g2Btn) return false;
+		if (intro || !trackCard || !scope || !allBtn || !g2Btn) return false;
 		if ((scope.textContent || "").includes("Applies to")) return false;
 		const cs = getComputedStyle(allBtn);
+		const rTrack = trackCard.getBoundingClientRect();
 		const rAll = allBtn.getBoundingClientRect();
 		const rG2 = g2Btn.getBoundingClientRect();
-		return cs.fontSize === "13px" && Math.round(rAll.height) === 36 && rAll.width >= 198 && Math.abs(rAll.width - rG2.width) <= 2;
+		return rTrack.width >= 850 && cs.fontSize === "13px" && Math.round(rAll.height) === 36 && rAll.width >= 198 && Math.abs(rAll.width - rG2.width) <= 2;
 	}`)
 	if err != nil || desktopScopeOK != true {
-		t.Fatalf("expected desktop TimingRulesEditor scope boxes to match Signals style without 'Applies to': err=%v ok=%v", err, desktopScopeOK)
+		t.Fatalf("expected single-column desktop TimingRulesEditor scope boxes to match Signals style without 'Applies to': err=%v ok=%v", err, desktopScopeOK)
 	}
 
 	if err := h.Page.SetViewportSize(390, 844); err != nil {
 		t.Fatalf("resize to 390x844: %v", err)
 	}
-	h.WaitUntil("narrow mobile stacks overflowing timer boxes vertically", 3*time.Second, func() (bool, error) {
+	h.WaitUntil("narrow mobile stacks overflowing timer boxes vertically on non-scrollable Track tab", 3*time.Second, func() (bool, error) {
 		ok, evalErr := h.Page.Evaluate(`() => {
+			const wrap = document.querySelector(".practice-mobile-track-wrap");
 			const grid = document.querySelector(".rules-scope-grid");
 			const btns = Array.from(document.querySelectorAll(".rules-scope-grid > button.channel"));
-			if (!grid || btns.length < 3) return false;
+			if (!wrap || !grid || btns.length < 3) return false;
+			if (getComputedStyle(wrap).overflowY !== "hidden") return false;
 			const r0 = btns[0].getBoundingClientRect();
 			const r1 = btns[1].getBoundingClientRect();
 			return grid.classList.contains("is-mobile-stacked") && r1.top >= r0.bottom - 1 && Math.abs(r0.width - r1.width) <= 2;
 		}`)
 		return evalErr == nil && ok == true, evalErr
+	})
+
+	// Tapping a timer box on mobile slides up the Fine-tune drawer; tapping close handle dismisses it.
+	if err := gate2ScopeBtn.Click(); err != nil {
+		t.Fatalf("click Gate 2 scope on mobile: %v", err)
+	}
+	mobileDrawer := h.Page.Locator(`.scope-tune-drawer.is-track-rules-drawer`).First()
+	h.MustBeVisible(mobileDrawer, "Mobile Track Fine-tune drawer")
+	h.MustContainText(mobileDrawer, "Fine-tune")
+	closeHandle := mobileDrawer.Locator(`button[data-tune-act="close"]`).First()
+	if err := closeHandle.Click(); err != nil {
+		t.Fatalf("click close handle on mobile Track Fine-tune drawer: %v", err)
+	}
+	h.WaitUntil("mobile Track Fine-tune drawer closes", 3*time.Second, func() (bool, error) {
+		closed, evalErr := h.Page.Evaluate(`() => {
+			const d = document.querySelector(".scope-tune-drawer.is-track-rules-drawer");
+			return Boolean(d && d.classList.contains("is-mobile-closed"));
+		}`)
+		return evalErr == nil && closed == true, evalErr
 	})
 
 	if err := h.Page.SetViewportSize(820, 844); err != nil {

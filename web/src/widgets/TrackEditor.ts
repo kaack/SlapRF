@@ -333,14 +333,8 @@ export class TrackEditor extends Component {
         >
           ${
             hasTimer
-              ? `
-                <span class="gate-node-timer-code mono">${esc(shortCode)}</span>
-                <span class="gate-node-timer-meta">
-                  <span class="gate-node-status-dot ${isOnline ? "is-online" : ""}"></span>
-                  <span>${roleSub}</span>
-                </span>`
-              : `
-                <span class="gate-node-empty-label">Empty</span>`
+              ? `<span class="gate-node-timer-code mono">${esc(shortCode)}</span>`
+              : `<span class="gate-node-empty-label">Empty</span>`
           }
         </button>
 
@@ -380,62 +374,19 @@ export class TrackEditor extends Component {
 
   private renderTrayTimer(d: DetectedTimer): string {
     const color = timerColor(this.store, d.timerId);
-    const isLapRF = isLapRFMode(this.store.timingHardwareMode) || d.firmwareVersion === "LapRF";
-    const isRH =
-      isRotorHazardMode(this.store.timingHardwareMode) || d.firmwareVersion === "RotorHazard";
-    const roleLabel = isLapRF
-      ? "LapRF 8-Way"
-      : isRH
-        ? "RotorHazard"
-        : d.isHub
-          ? "Hub"
-          : "Spoke";
     const timerName = this.formatTimerShortCode(d.timerId, [d], d.timerLabel);
     const isOnline = this.isTimerActive(d);
-    const powerReadout =
-      isOnline
-        ? isLapRF
-          ? d.batteryMv > 0
-            ? ` · ${(d.batteryMv / 1000).toFixed(1)} V`
-            : ""
-          : isRH
-            ? ""
-            : d.batteryPct > 0
-              ? ` · ${d.batteryPct}%`
-              : ""
-        : "";
     return `
-      <div
-        class="unassigned-timer-token ${isOnline ? "" : "is-offline"}"
+      <button
+        type="button"
+        class="unassigned-timer-token gate-node-circle is-filled ${isOnline ? "" : "is-offline"}"
         data-timer-id="${d.timerId}"
         style="--c:${color}"
-        title="${esc(timerName)} (${roleLabel}) · Drag onto the track line above to place on the track"
+        aria-label="Unassigned timer ${esc(timerName)}${isOnline ? "" : " (Offline)"}"
+        title="${esc(timerName)} · Drag onto the track line above to place on the track"
       >
-        <span class="unassigned-timer-dot" style="--c:${color}">
-          <span class="mono">${esc(timerName)}</span>
-        </span>
-        <div class="unassigned-timer-info">
-          <span class="unassigned-timer-name mono">${esc(timerName)}</span>
-          <span class="unassigned-timer-sub">
-            <span class="gate-node-status-dot ${isOnline ? "is-online" : ""}"></span>
-            ${roleLabel}${powerReadout}
-          </span>
-        </div>
-        ${
-          !isOnline
-            ? `
-          <button
-            type="button"
-            class="unassigned-timer-delete"
-            data-delete-timer="${d.timerId}"
-            data-delete-fp="${esc(d.fingerprint || "")}"
-            data-delete-label="${esc(timerName)}"
-            title="Delete ${esc(timerName)}"
-            aria-label="Delete ${esc(timerName)}"
-          >${icons.trash(16)}</button>`
-            : ""
-        }
-      </div>`;
+        <span class="gate-node-timer-code mono">${esc(timerName)}</span>
+      </button>`;
   }
 
   private async removeTrackNode(nodeId: number): Promise<void> {
@@ -525,9 +476,15 @@ export class TrackEditor extends Component {
     const color = timerColor(this.store, timerId);
     const startX = downEvent.clientX;
     const startY = downEvent.clientY;
+    const tokenRect = tokenEl.getBoundingClientRect();
+    const puckSize = tokenRect.width >= 24 ? Math.round(tokenRect.width) : 52;
+    const halfPuck = puckSize / 2;
+    const listEl = tokenEl.closest<HTMLElement>(".gate-unassigned-list");
+    const initialScrollLeft = listEl?.scrollLeft ?? 0;
     const lineEl = this.el.querySelector<HTMLElement>("[data-track-line]");
     const emptyPlaceholder = this.el.querySelector<HTMLElement>("[data-empty-placeholder]");
     let started = false;
+    let scrollingTray = false;
     let floatingEl: HTMLElement | null = null;
     let previewSlot: HTMLElement | null = null;
     let insertIndex: number | null = null;
@@ -573,9 +530,9 @@ export class TrackEditor extends Component {
       const ghost = document.createElement("div");
       ghost.className = "gate-node-circle is-filled gate-node-floating";
       ghost.style.setProperty("--c", color);
-      ghost.style.width = "58px";
-      ghost.style.height = "58px";
-      ghost.style.transform = `translate3d(${clientX - 29}px, ${clientY - 29}px, 0) scale(1.06)`;
+      ghost.style.width = `${puckSize}px`;
+      ghost.style.height = `${puckSize}px`;
+      ghost.style.transform = `translate3d(${clientX - halfPuck}px, ${clientY - halfPuck}px, 0) scale(1.06)`;
       ghost.innerHTML = `<span class="gate-node-timer-code mono">${esc(this.formatTimerShortCode(timerId))}</span>`;
       document.body.appendChild(ghost);
       floatingEl = ghost;
@@ -584,13 +541,27 @@ export class TrackEditor extends Component {
     const onMove = (ev: PointerEvent) => {
       const dx = ev.clientX - startX;
       const dy = ev.clientY - startY;
+      if (scrollingTray && listEl) {
+        listEl.scrollLeft = initialScrollLeft - dx;
+        return;
+      }
       if (!started) {
         if (Math.hypot(dx, dy) < 4) return;
+        if (
+          ev.pointerType === "touch" &&
+          listEl &&
+          listEl.scrollWidth > listEl.clientWidth + 2 &&
+          Math.abs(dx) > Math.abs(dy) * 1.35
+        ) {
+          scrollingTray = true;
+          listEl.scrollLeft = initialScrollLeft - dx;
+          return;
+        }
         startDrag(ev.clientX, ev.clientY);
       }
       if (!floatingEl || !lineEl) return;
       if (ev.cancelable) ev.preventDefault();
-      floatingEl.style.transform = `translate3d(${ev.clientX - 29}px, ${ev.clientY - 29}px, 0) scale(1.06)`;
+      floatingEl.style.transform = `translate3d(${ev.clientX - halfPuck}px, ${ev.clientY - halfPuck}px, 0) scale(1.06)`;
 
       const overTimeline = this.isPointerDirectlyOnTrackLine(
         lineEl,

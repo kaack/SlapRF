@@ -1593,10 +1593,6 @@ export class SimView extends Component {
 
               <div class="gate-node-circle ${hasTimer ? (powered ? "is-filled" : "is-filled is-offline") : "is-unassigned"}">
                 <span class="gate-node-timer-code mono">${esc(shortCode)}</span>
-                <span class="gate-node-timer-meta">
-                  <span class="gate-node-status-dot ${powered ? "is-online" : ""}"></span>
-                  <span>${powered ? roleSub : "OFF"}</span>
-                </span>
               </div>
 
               <span
