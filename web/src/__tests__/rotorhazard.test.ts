@@ -634,7 +634,7 @@ describe("widgets & views — RotorHazard UI & LapRF 8-Way Rename", () => {
 
       // NetworkView renders USB serial port picker (defaulting to SIM-RH-USB1) and live 0..255 Node bars matching RotorHazard Network
       const netEl = root.querySelector("#net-usb")!;
-      expect(netEl.textContent ?? "").toContain("USB Serial Port");
+      expect(netEl.querySelector("[data-field='rh-usb-port']")).not.toBeNull();
       const usbVisTxt = netEl.querySelector("[data-slot='rh-usb-sections']")!.textContent ?? "";
       expect(usbVisTxt).toContain("RotorHazard USB devices");
       expect(usbVisTxt).toContain("SIM-RH-USB1");

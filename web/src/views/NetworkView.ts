@@ -212,10 +212,9 @@ export class NetworkView extends Component {
             <div class="card card-flush net-conn-card" data-slot="net-conn-card">
               <div class="net-conn-main">
                 <div class="net-conn-fields">
-                  <label class="net-conn-field is-mode">
-                    <span class="muted net-conn-label">Timing System</span>
+                  <div class="net-conn-field is-mode">
                     <div class="net-conn-mode-select-host" data-slot="network-mode-selector"></div>
-                  </label>
+                  </div>
                   <div class="net-conn-mode-fields" data-slot="laprf-connection" style="display:none"></div>
                   <div class="net-conn-mode-fields" data-slot="rh-connection" style="display:none"></div>
                   <div class="net-conn-mode-fields" data-slot="rh-usb-connection" style="display:none"></div>
@@ -2319,25 +2318,27 @@ export class NetworkView extends Component {
               : "";
 
         connHost.innerHTML = `
-          <label class="net-conn-field is-ip">
-            <span class="muted net-conn-label">Ethernet IP</span>
+          <div class="net-conn-field is-ip">
             <input
               class="input mono net-conn-input"
               type="text"
               value="${esc(this.laprfHost)}"
               data-field="laprf-host"
               placeholder="192.168.1.2"
+              aria-label="LapRF Ethernet IP"
+              title="LapRF Ethernet IP"
             />
-          </label>
-          <label class="net-conn-field is-port-num">
-            <span class="muted net-conn-label">Port</span>
+          </div>
+          <div class="net-conn-field is-port-num">
             <input
               class="input mono net-conn-input"
               type="number"
               value="${this.laprfPort}"
               data-field="laprf-port"
+              aria-label="LapRF TCP port"
+              title="LapRF TCP port"
             />
-          </label>`;
+          </div>`;
 
         const discoverHost = this.slot("laprf-discover");
         if (discoverHost) {
@@ -2788,25 +2789,27 @@ export class NetworkView extends Component {
       this.patchNetConnSubbar(rhSubbarParts.join(""));
 
       connHost.innerHTML = `
-        <label class="net-conn-field is-ip">
-          <span class="muted net-conn-label">Host IP</span>
+        <div class="net-conn-field is-ip">
           <input
             class="input mono net-conn-input"
             type="text"
             value="${esc(this.rhHost)}"
             data-field="rh-host"
             placeholder="192.168.1.101"
+            aria-label="RotorHazard Host IP"
+            title="RotorHazard Host IP"
           />
-        </label>
-        <label class="net-conn-field is-port-num">
-          <span class="muted net-conn-label">Port</span>
+        </div>
+        <div class="net-conn-field is-port-num">
           <input
             class="input mono net-conn-input"
             type="number"
             value="${this.rhPort}"
             data-field="rh-port"
+            aria-label="RotorHazard HTTP port"
+            title="RotorHazard HTTP port"
           />
-        </label>`;
+        </div>`;
 
       if (discoverHost) {
         discoverHost.innerHTML = `
@@ -3288,30 +3291,30 @@ export class NetworkView extends Component {
           : `<option value="">${isSim ? "No powered-on simulated USB devices" : "No USB serial ports detected"}</option>`;
 
       connHost.innerHTML = `
-        <label class="net-conn-field is-usb-port">
-          <span class="muted net-conn-label">USB Serial Port</span>
+        <div class="net-conn-field is-usb-port">
           <select
             class="input mono net-conn-input"
             data-field="rh-usb-port"
             aria-label="RotorHazard USB serial port"
+            title="RotorHazard USB serial port"
             ${ports.length === 0 || this.rhBusy ? "disabled" : ""}
           >
             ${portOptionsHtml}
           </select>
-        </label>
-        <label class="net-conn-field is-baud">
-          <span class="muted net-conn-label">Baud Rate</span>
+        </div>
+        <div class="net-conn-field is-baud">
           <select
             class="input mono net-conn-input"
             data-field="rh-usb-baud"
             aria-label="RotorHazard USB baud rate"
+            title="RotorHazard USB baud rate"
             ${this.rhBusy ? "disabled" : ""}
           >
             <option value="0" ${this.rhUsbBaudRate === 0 ? "selected" : ""}>Auto (115200 / 921600)</option>
             <option value="115200" ${this.rhUsbBaudRate === 115200 ? "selected" : ""}>115200 baud</option>
             <option value="921600" ${this.rhUsbBaudRate === 921600 ? "selected" : ""}>921600 baud (STM32)</option>
           </select>
-        </label>`;
+        </div>`;
       scanCustomSelects(connHost);
     }
 

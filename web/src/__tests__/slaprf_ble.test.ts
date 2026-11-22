@@ -888,7 +888,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       await flushMicrotasks();
       const getSelect = () =>
         netRoot.querySelector<HTMLSelectElement>('select[data-field="network-hardware-mode"]')!;
-      const assertSameRowRightAligned = (btnSelector: string) => {
+      const assertSameRowRightAligned = (btnSelector: string, directlyAdjacent = true) => {
         const trigger = netRoot.querySelector<HTMLElement>(
           '[data-slot="network-mode-selector"] .custom-select-trigger'
         )!;
@@ -899,6 +899,9 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
         const bRect = btn.getBoundingClientRect();
         expect(bRect.left > tRect.right).toBe(true);
         expect(Math.abs(bRect.bottom - tRect.bottom) <= 2).toBe(true);
+        if (directlyAdjacent) {
+          expect(bRect.left - tRect.right <= 24).toBe(true);
+        }
       };
 
       // 1. Disconnected SlapRF (USB): dropdown is enabled with all 6 options and "Connect USB" button sits to the right on the same row
@@ -932,7 +935,7 @@ describe("SlapRF (Bluetooth) mode & BLE Hub diagnostics", () => {
       expect(laprfConnSlot.querySelector('[data-field="laprf-host"]')).not.toBeNull();
       expect(extSlot.textContent || "").toContain("Connect Ethernet");
       expect(connCard.querySelector('[data-action="laprf-connect-usb"]')).toBeNull();
-      assertSameRowRightAligned('[data-action="laprf-connect-eth"]');
+      assertSameRowRightAligned('[data-action="laprf-connect-eth"]', false);
       const laprfDiscoverSec = netRoot.querySelector<HTMLElement>('[data-slot="laprf-sections"] [data-section-anchor="discover"]')!;
       expect(laprfDiscoverSec.hidden).toBe(false);
 
