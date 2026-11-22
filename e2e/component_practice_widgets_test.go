@@ -423,3 +423,50 @@ func TestComponent_LapTimesCardSectionTabsLegendFilterAndRestore(t *testing.T) {
 		return ok, nil
 	})
 }
+
+func TestComponent_PilotRssiChartMobileInlineTimerRowColumns(t *testing.T) {
+	h := NewHarness(t)
+	h.BootWithSnapshot(SnapshotPracticePopulated, "#/practice/evening-lap-lab/signals", nil)
+	if err := h.Page.SetViewportSize(390, 844); err != nil {
+		t.Fatalf("resize to 390x844: %v", err)
+	}
+
+	h.WaitUntil("mobile Signals renders stacked timer rows with 3 right-hand columns (dBm | Calibrate | Fine-tune) and hides bottom .scope-calib", 4*time.Second, func() (bool, error) {
+		ok, evalErr := h.Page.Evaluate(`() => {
+			const panel = document.querySelector(".practice-mobile-signals-panel");
+			if (!panel) return false;
+			const calibBar = panel.querySelector(".scope-calib");
+			if (calibBar && getComputedStyle(calibBar).display !== "none") return false;
+			const rows = Array.from(panel.querySelectorAll(".channel-legend > button.channel"));
+			if (rows.length < 3) return false;
+			const r0 = rows[0].getBoundingClientRect();
+			const r1 = rows[1].getBoundingClientRect();
+			if (r1.top < r0.bottom - 1 || Math.abs(r0.width - r1.width) > 2) return false;
+			const gateRow = panel.querySelector(".channel-legend > button.channel[data-gate-chip='1']");
+			if (!gateRow) return false;
+			const dbmEl = gateRow.querySelector(".channel-right-cols > .channel-dbm");
+			const calibBtn = gateRow.querySelector(".channel-right-cols > [data-calib-gate='1']");
+			const tuneBtn = gateRow.querySelector(".channel-right-cols > [data-tune-gate='1']");
+			if (!dbmEl || !calibBtn || !tuneBtn) return false;
+			const bDbm = dbmEl.getBoundingClientRect();
+			const bCal = calibBtn.getBoundingClientRect();
+			const bTune = tuneBtn.getBoundingClientRect();
+			return bCal.left >= bDbm.right - 2 && bTune.left >= bCal.right - 2 && bCal.width >= 32 && bTune.width >= 32;
+		}`)
+		return evalErr == nil && ok == true, evalErr
+	})
+	h.MilestoneScreenshot("signals-mobile-inline-timer-row-actions")
+
+	tuneIconBtn := h.Page.Locator(`.practice-mobile-signals-panel .channel-legend button.channel[data-gate-chip="1"] [data-tune-gate="1"]`).First()
+	h.MustBeVisible(tuneIconBtn, "Inline Fine-tune sliders icon on H1 timer row")
+	if err := tuneIconBtn.Click(); err != nil {
+		t.Fatalf("click inline Fine-tune icon on H1 row: %v", err)
+	}
+	h.WaitUntil("clicking inline Fine-tune icon opens mobile Signals Fine-tune drawer for H1", 3*time.Second, func() (bool, error) {
+		ok, evalErr := h.Page.Evaluate(`() => {
+			const d = document.querySelector(".practice-mobile-signals-panel [data-slot='tune-drawer'], .scope-tune-drawer:not(.is-track-rules-drawer)");
+			return Boolean(d && !d.classList.contains("is-mobile-closed") && (d.textContent || "").includes("Fine-tune"));
+		}`)
+		return evalErr == nil && ok == true, evalErr
+	})
+}

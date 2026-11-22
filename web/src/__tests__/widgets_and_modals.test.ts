@@ -526,12 +526,19 @@ describe("widgets/Toast & TimingRulesEditor", () => {
       expect(drawerEl.classList.contains("is-mobile-closed")).toBe(true);
       expect(drawerEl.textContent).toContain("All timers · Fine-tune");
 
-      // Select timer 1 ("H1") -> Fine-tune box immediately updates to H1; clicking Fine-tune opens it for mobile too
+      // Select timer 1 ("H1") -> Fine-tune box immediately updates to H1; clicking inline row Fine-tune button opens it for mobile too
       root.querySelector<HTMLButtonElement>('[data-gate-chip="1"]')!.click();
       expect(drawerEl.textContent).toContain("H1 · Fine-tune");
-      const tuneBtn1 = root.querySelector<HTMLButtonElement>('.scope-calib-tune-btn[data-tune-gate="1"]')!;
-      expect(tuneBtn1).not.toBeNull();
-      tuneBtn1.click();
+      const inlineCalib1 = root.querySelector<HTMLElement>(
+        '[data-gate-chip="1"] .channel-right-cols [data-calib-gate="1"]'
+      )!;
+      expect(inlineCalib1).not.toBeNull();
+      expect(inlineCalib1.getAttribute("data-calib-mode")).toBe("auto");
+      const inlineTune1 = root.querySelector<HTMLElement>(
+        '[data-gate-chip="1"] .channel-right-cols .channel-mobile-action-btn.is-tune[data-tune-gate="1"]'
+      )!;
+      expect(inlineTune1).not.toBeNull();
+      inlineTune1.click();
       expect(drawerEl.classList.contains("is-mobile-closed")).toBe(false);
       expect(drawerEl.textContent).toContain("H1 · Fine-tune");
 

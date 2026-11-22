@@ -2339,6 +2339,12 @@ html[data-theme="light"] .bar-time {
   color: var(--text-3);
   font-size: 11.5px;
 }
+.channel-right-cols {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+}
 .channel-dbm {
   margin-left: auto;
   color: var(--text-2);
@@ -2349,6 +2355,10 @@ html[data-theme="light"] .bar-time {
 }
 .channel.is-hot .channel-dbm {
   color: var(--accent);
+}
+.channel-mobile-action-btn,
+.channel-mobile-action-spacer {
+  display: none;
 }
 /* =========================================================================
    Setup
@@ -3545,6 +3555,81 @@ html[data-theme="light"] .scope-tune-custom-icon {
   }
   .scope-root > .scope-canvas {
     flex: 0 0 auto;
+  }
+  .scope-root > .scope-calib {
+    display: none !important;
+  }
+  .scope-root > .channel-legend {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .scope-root > .channel-legend > .channel {
+    width: 100%;
+    height: 40px;
+    min-height: 40px;
+    max-height: 40px;
+    padding: 0 6px 0 12px;
+    box-sizing: border-box;
+  }
+  .scope-root > .channel-legend > .channel > .channel-right-cols {
+    margin-left: auto;
+    display: grid;
+    grid-template-columns: minmax(68px, auto) 34px 34px;
+    align-items: center;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .scope-root > .channel-legend > .channel > .channel-right-cols > .channel-dbm {
+    text-align: right;
+    justify-self: end;
+    padding-right: 4px;
+    font-size: 12.5px;
+  }
+  .scope-root > .channel-legend > .channel .channel-mobile-action-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 34px;
+    height: 32px;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--text-2);
+    cursor: pointer;
+    transition: background-color 0.14s ease, color 0.14s ease, border-color 0.14s ease;
+  }
+  .scope-root > .channel-legend > .channel .channel-mobile-action-btn svg {
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+  }
+  .scope-root > .channel-legend > .channel .channel-mobile-action-btn:hover,
+  .scope-root > .channel-legend > .channel .channel-mobile-action-btn:active {
+    background: var(--surface-3);
+    color: var(--text);
+    border-color: var(--border-strong);
+  }
+  .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-calib.is-calibrated {
+    color: var(--accent);
+    background: var(--accent-soft);
+    border-color: var(--accent-line);
+  }
+  .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-tune.is-active {
+    color: #7dd3fc;
+    border-color: rgba(56, 189, 248, 0.42);
+    background: rgba(56, 189, 248, 0.14);
+  }
+  html[data-theme="light"] .scope-root > .channel-legend > .channel .channel-mobile-action-btn.is-tune.is-active {
+    color: #0369a1;
+    border-color: rgba(2, 132, 199, 0.42);
+    background: rgba(2, 132, 199, 0.12);
+  }
+  .scope-root > .channel-legend > .channel .channel-mobile-action-spacer {
+    display: inline-block;
+    width: 34px;
+    height: 32px;
   }
 }
 

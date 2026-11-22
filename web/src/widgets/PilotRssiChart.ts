@@ -546,10 +546,34 @@ export class PilotRssiChart extends Component {
     this.listen(el, "click", (e) => {
       if (this.tuneDrawerEl.contains(e.target as Node)) return;
       const btn = (e.target as HTMLElement).closest<HTMLElement>(
-        "[data-act], [data-window], [data-axis-act], [data-calib], [data-focus], [data-tune-gate]"
+        "[data-act], [data-window], [data-axis-act], [data-calib], [data-calib-gate], [data-tune-gate], [data-focus]"
       );
       if (!btn) return;
+      if (btn.dataset.calibGate) {
+        e.stopPropagation();
+        const rawGate = btn.dataset.calibGate;
+        const gId = rawGate === "all" ? null : Number(rawGate);
+        const mode = btn.dataset.calibMode === "reset" ? "reset" : "auto";
+        if (gId !== null && this.focus !== gId) {
+          this.focus = gId;
+          if (this.tuneDrawerOpen) {
+            this.tuningGateId = gId;
+          }
+          this.saveChartPrefs();
+        }
+        if (mode === "reset") {
+          void this.resetToDefault(gId);
+        } else {
+          void this.autoCalibrate(gId);
+        }
+        this.renderControls();
+        this.renderCalib();
+        this.renderLegend();
+        this.renderTuningDrawer();
+        return;
+      }
       if (btn.dataset.tuneGate) {
+        e.stopPropagation();
         const rawGate = btn.dataset.tuneGate;
         const gId = rawGate === "all" ? null : Number(rawGate);
         if (this.tuneDrawerOpen && this.tuningGateId === gId && !this.tuneDrawerClosing) {
@@ -632,6 +656,17 @@ export class PilotRssiChart extends Component {
       else if (btn.dataset.calib === "reset") void this.resetToDefault();
       else if (btn.dataset.act === "live") this.toggleLive();
       else if (btn.dataset.act) this.jump(btn.dataset.act === "prev" ? -1 : 1);
+    });
+
+    this.listen(el, "keydown", (e: KeyboardEvent) => {
+      if (e.key !== "Enter" && e.key !== " ") return;
+      const target = e.target as HTMLElement | null;
+      if (!target) return;
+      if (target.hasAttribute("data-calib-gate") || target.hasAttribute("data-tune-gate")) {
+        e.preventDefault();
+        e.stopPropagation();
+        target.click();
+      }
     });
 
     this.listen(host, "keydown", (e) => {
@@ -1558,6 +1593,7 @@ export class PilotRssiChart extends Component {
     } finally {
       updates.forEach((u) => this.pending.delete(u.gateId));
       this.renderCalib();
+      this.renderLegend();
     }
   }
 
@@ -1631,7 +1667,7 @@ export class PilotRssiChart extends Component {
    * Works out each gate's threshold from the recent signal (see suggestThreshold): noise
    * floor between passes vs. the peaks of the passes themselves.
    */
-  private async autoCalibrate(): Promise<void> {
+  private async autoCalibrate(targetGateId?: number | null): Promise<void> {
     const pilot = this.store.pilot(this.activePilotSlot);
     if (!pilot) return;
     const pos = this.store.pilots.indexOf(pilot);
@@ -1639,7 +1675,13 @@ export class PilotRssiChart extends Component {
     const done: string[] = [];
     const skipped: string[] = [];
     const isRH = isRotorHazardMode(this.store.timingHardwareMode);
-    for (const gate of this.shownGates) {
+    const targetGates =
+      targetGateId === undefined
+        ? this.shownGates
+        : targetGateId === null
+          ? this.store.nodes
+          : this.store.nodes.filter((p) => p.gateId === targetGateId);
+    for (const gate of targetGates) {
       const result = suggestThreshold(this.store.historyFor(gate.gateId), pos);
       const name = gateLabel(this.store, gate.gateId);
       if (result.ok) {
@@ -1683,35 +1725,40 @@ export class PilotRssiChart extends Component {
     );
   }
 
-  private resetToDefault(): Promise<void> {
+  private resetToDefault(targetGateId?: number | null): Promise<void> {
     const slotIndex = this.activePilotSlot;
     const who = this.store.pilot(slotIndex)?.callsign ?? "the pilot";
+    const effFocus = targetGateId === undefined ? this.focus : targetGateId;
+    const targetGates =
+      effFocus === null
+        ? this.store.nodes
+        : this.store.nodes.filter((p) => p.gateId === effFocus);
     if (this.isLapRF) {
       const message =
-        this.focus === null
+        effFocus === null
           ? `Every timer is back on ${who}'s own threshold (${this.pilotDefault()}).`
-          : `${gateLabel(this.store, this.focus)} is back on ${who}'s own threshold (${this.pilotDefault()}).`;
+          : `${gateLabel(this.store, effFocus)} is back on ${who}'s own threshold (${this.pilotDefault()}).`;
       const shortMsg =
-        this.focus === null
+        effFocus === null
           ? `Calibration cleared (${this.pilotDefault()})`
-          : `${gateLabel(this.store, this.focus)}: calibration cleared (${this.pilotDefault()})`;
+          : `${gateLabel(this.store, effFocus)}: calibration cleared (${this.pilotDefault()})`;
       return this.apply(
-        this.shownGates.map((p) => ({ gateId: p.gateId, slotIndex, enterDbm: 0, laprfThreshold: -1 })),
+        targetGates.map((p) => ({ gateId: p.gateId, slotIndex, enterDbm: 0, laprfThreshold: -1 })),
         message,
         shortMsg
       );
     }
     if (this.isRH) {
       const message =
-        this.focus === null
+        effFocus === null
           ? `Every timer is back on ${who}'s own thresholds (${this.pilotDefault()}/${this.pilotExitDefault()}).`
-          : `${gateLabel(this.store, this.focus)} is back on ${who}'s own thresholds (${this.pilotDefault()}/${this.pilotExitDefault()}).`;
+          : `${gateLabel(this.store, effFocus)} is back on ${who}'s own thresholds (${this.pilotDefault()}/${this.pilotExitDefault()}).`;
       const shortMsg =
-        this.focus === null
+        effFocus === null
           ? `Calibration cleared (${this.pilotDefault()}/${this.pilotExitDefault()})`
-          : `${gateLabel(this.store, this.focus)}: calibration cleared (${this.pilotDefault()}/${this.pilotExitDefault()})`;
+          : `${gateLabel(this.store, effFocus)}: calibration cleared (${this.pilotDefault()}/${this.pilotExitDefault()})`;
       return this.apply(
-        this.shownGates.map((p) => ({
+        targetGates.map((p) => ({
           gateId: p.gateId,
           slotIndex,
           enterDbm: 0,
@@ -1723,15 +1770,15 @@ export class PilotRssiChart extends Component {
       );
     }
     const message =
-      this.focus === null
+      effFocus === null
         ? `Every timer is back on ${who}'s own thresholds (${this.pilotDefault()}/${this.pilotExitDefault()} dBm).`
-        : `${gateLabel(this.store, this.focus)} is back on ${who}'s own thresholds (${this.pilotDefault()}/${this.pilotExitDefault()} dBm).`;
+        : `${gateLabel(this.store, effFocus)} is back on ${who}'s own thresholds (${this.pilotDefault()}/${this.pilotExitDefault()} dBm).`;
     const shortMsg =
-      this.focus === null
+      effFocus === null
         ? `Calibration cleared (${this.pilotDefault()}/${this.pilotExitDefault()} dBm)`
-        : `${gateLabel(this.store, this.focus)}: calibration cleared (${this.pilotDefault()}/${this.pilotExitDefault()} dBm)`;
+        : `${gateLabel(this.store, effFocus)}: calibration cleared (${this.pilotDefault()}/${this.pilotExitDefault()} dBm)`;
     return this.apply(
-      this.shownGates.map((p) => ({ gateId: p.gateId, slotIndex, enterDbm: 0, exitDbm: 0 })),
+      targetGates.map((p) => ({ gateId: p.gateId, slotIndex, enterDbm: 0, exitDbm: 0 })),
       message,
       shortMsg
     );
@@ -2589,20 +2636,34 @@ export class PilotRssiChart extends Component {
     if (slots.length === 0) return;
 
     const canTune = !this.isMultiPilotMode && !this.store.isHistoricalTrack;
+    const isLapRF = this.isLapRF;
+    const isRH = this.isRH;
+    const canAutoCalib = !isLapRF && !isRH;
     const activeSlot = this.activePilotSlot;
     const globalOvrCount = canTune ? countGlobalOverrides(this.store.rules) : 0;
+    const isGateCalibrated = (gateId: number): boolean => {
+      if (!canTune) return false;
+      const t = enterThresholdAt(this.store, gateId, activeSlot);
+      if (isLapRF) return t.calibrated;
+      return t.calibrated || exitThresholdAt(this.store, gateId, activeSlot).calibrated;
+    };
+    const anyCalibrated = canTune && this.store.nodes.some((p) => isGateCalibrated(p.gateId));
     const structSig = [
       this.focus ?? "all",
       this.tuningGateId ?? "closed",
+      this.tuneDrawerOpen ? "open" : "closed",
       this.isMultiPilotMode ? "multi" : "single",
       canTune ? "tunable" : "readonly",
+      canAutoCalib ? "autocalib" : "manualcalib",
+      anyCalibrated ? "anycal" : "nocal",
       unitSuffix,
       `global:${globalOvrCount}`,
       this.store.nodes
         .map((p) => {
           const gOvr = countOverrides(p.ruleOverrides);
           const pOvr = countOverrides(pilotGateOverridesAt(p, activeSlot));
-          return `${p.gateId}:${gateLabel(this.store, p.gateId)}:${this.colorOf(p.gateId)}:${gOvr}:${pOvr}`;
+          const cal = isGateCalibrated(p.gateId) ? 1 : 0;
+          return `${p.gateId}:${gateLabel(this.store, p.gateId)}:${this.colorOf(p.gateId)}:${gOvr}:${pOvr}:${cal}`;
         })
         .join(","),
     ].join("|");
@@ -2610,13 +2671,28 @@ export class PilotRssiChart extends Component {
     const legendEl = this.slot("legend");
     if (structSig !== this.lastLegendStructSig || legendEl.childElementCount === 0) {
       this.lastLegendStructSig = structSig;
+      const isAllTuneOpen = this.tuneDrawerOpen && this.tuningGateId === null;
+      const allCalibColHtml = canTune
+        ? anyCalibrated
+          ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib is-calibrated" data-calib-gate="all" data-calib-mode="reset" title="Clear calibrated thresholds for all timers" aria-label="Clear calibrated thresholds for all timers">${icons.reset(18)}</span>`
+          : canAutoCalib
+            ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib" data-calib-gate="all" data-calib-mode="auto" title="Calibrate all timers" aria-label="Calibrate all timers">${icons.target(18)}</span>`
+            : `<span class="channel-mobile-action-spacer" aria-hidden="true"></span>`
+        : "";
+      const allTuneColHtml = canTune
+        ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-tune ${isAllTuneOpen ? "is-active" : ""}" data-tune-gate="all" title="Fine-tune all timers" aria-label="Fine-tune all timers">${icons.sliders(18)}</span>`
+        : "";
       const allChip = `
         <button type="button" class="channel channel-all ${this.focus === null ? "is-focus" : "is-dim"}"
                 data-focus="all" title="Show all timers (${this.store.nodes.length})">
           <span class="dot channel-all-dot"></span>
           <span class="channel-name">All timers</span>
           ${globalOvrCount > 0 ? `<span class="channel-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>` : ""}
-          <span class="channel-dbm mono">${this.store.nodes.length} timers</span>
+          <span class="channel-right-cols">
+            <span class="channel-dbm mono">${this.store.nodes.length} timers</span>
+            ${allCalibColHtml}
+            ${allTuneColHtml}
+          </span>
         </button>`;
       const gateChips = this.store.nodes
         .map((p) => {
@@ -2635,6 +2711,18 @@ export class PilotRssiChart extends Component {
           const gOvrCount = canTune ? countOverrides(p.ruleOverrides) : 0;
           const pOvrCount = canTune ? countOverrides(pilotGateOverridesAt(p, activeSlot)) : 0;
           const hasOvr = gOvrCount + pOvrCount > 0;
+          const isCal = isGateCalibrated(p.gateId);
+          const isGateTuneOpen = this.tuneDrawerOpen && this.tuningGateId === p.gateId;
+          const calibColHtml = canTune
+            ? isCal
+              ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib is-calibrated" data-calib-gate="${p.gateId}" data-calib-mode="reset" title="Clear calibrated thresholds for ${esc(label)}" aria-label="Clear calibrated thresholds for ${esc(label)}">${icons.reset(18)}</span>`
+              : canAutoCalib
+                ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-calib" data-calib-gate="${p.gateId}" data-calib-mode="auto" title="Calibrate ${esc(label)}" aria-label="Calibrate ${esc(label)}">${icons.target(18)}</span>`
+                : `<span class="channel-mobile-action-spacer" aria-hidden="true"></span>`
+            : "";
+          const tuneColHtml = canTune
+            ? `<span role="button" tabindex="0" class="channel-mobile-action-btn is-tune ${isGateTuneOpen ? "is-active" : ""}" data-tune-gate="${p.gateId}" title="Fine-tune ${esc(label)}" aria-label="Fine-tune ${esc(label)}">${icons.sliders(18)}</span>`
+            : "";
           return `
             <button type="button" class="channel ${hot ? "is-hot" : ""} ${dim ? "is-dim" : ""} ${this.focus === p.gateId ? "is-focus" : ""}"
                     data-gate-chip="${p.gateId}"
@@ -2642,7 +2730,11 @@ export class PilotRssiChart extends Component {
               <span class="dot" style="--c:${this.colorOf(p.gateId)}"></span>
               <span class="channel-name">${esc(label)}</span>
               ${hasOvr ? `<span class="channel-custom-icon" title="Customized" aria-label="Customized">${icons.pencil(12)}</span>` : ""}
-              <span class="channel-dbm mono" data-gate-dbm="${p.gateId}">${this.isMultiPilotMode ? "peak " : ""}${dbm.toFixed(0)}${unitSuffix}</span>
+              <span class="channel-right-cols">
+                <span class="channel-dbm mono" data-gate-dbm="${p.gateId}">${this.isMultiPilotMode ? "peak " : ""}${dbm.toFixed(0)}${unitSuffix}</span>
+                ${calibColHtml}
+                ${tuneColHtml}
+              </span>
             </button>`;
         })
         .join("");
