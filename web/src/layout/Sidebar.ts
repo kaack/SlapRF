@@ -454,12 +454,13 @@ export class Sidebar extends Component {
       const isSecondaryRoute = !PRIMARY_MOBILE_ROUTES.has(route);
       const secMeta = isSecondaryRoute ? ROUTES.find((r) => r.id === route) : undefined;
       if (secMeta) {
-        moreBtn.innerHTML = `${secMeta.icon()}<span>${secMeta.label}</span>`;
+        moreBtn.innerHTML = `${secMeta.icon()}<span>${secMeta.label}</span><span class="mobile-more-edge-cue" aria-hidden="true">${icons.moreVertical(16)}</span>`;
         moreBtn.setAttribute("aria-label", `${secMeta.label} — More navigation`);
       } else {
         moreBtn.innerHTML = `${icons.moreHorizontal(20)}<span>More</span>`;
         moreBtn.setAttribute("aria-label", "More navigation");
       }
+      moreBtn.classList.toggle("has-secondary-route", Boolean(secMeta));
       moreBtn.classList.toggle("is-active", this.moreDrawerOpen || isSecondaryRoute);
     }
   }

@@ -147,6 +147,11 @@ export const icons = {
       `<circle cx="5" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.4" fill="currentColor" stroke="none"/><circle cx="19" cy="12" r="1.4" fill="currentColor" stroke="none"/>`,
       s
     ),
+  moreVertical: (s?: number) =>
+    svg(
+      `<circle cx="12" cy="5.5" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/><circle cx="12" cy="18.5" r="1.5" fill="currentColor" stroke="none"/>`,
+      s
+    ),
   menu: (s?: number) => svg(`<path d="M4 6h16M4 12h16M4 18h16"/>`, s),
   cpu: (s?: number) =>
     svg(

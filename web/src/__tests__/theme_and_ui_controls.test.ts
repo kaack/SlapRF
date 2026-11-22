@@ -88,6 +88,17 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
       expect(themeRow).not.toBeNull();
       expect(themeRow?.classList.contains("sidebar-theme-row")).toBe(true);
 
+      // Mobile More tab shows a right-edge cue (vertical 3-dots strip) when a secondary route is active
+      const moreBtn = sbEl.querySelector<HTMLButtonElement>('[data-action="toggle-mobile-more"]')!;
+      router.navigateSection("races");
+      expect(moreBtn.classList.contains("has-secondary-route")).toBe(false);
+      expect(moreBtn.querySelector(".mobile-more-edge-cue")).toBeNull();
+      router.navigateSection("flasher");
+      expect(moreBtn.classList.contains("has-secondary-route")).toBe(true);
+      expect(moreBtn.querySelector(".mobile-more-edge-cue")).not.toBeNull();
+      expect(moreBtn.textContent).toContain("Flasher");
+      router.navigateSection("races");
+
       const darkBtn = themeRow!.querySelector<HTMLButtonElement>('button[data-set-theme="dark"]')!;
       const lightBtn = themeRow!.querySelector<HTMLButtonElement>('button[data-set-theme="light"]')!;
       expect(darkBtn).not.toBeNull();
