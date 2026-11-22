@@ -28,6 +28,7 @@ import {
   isBackendSerialPort,
   isSimulatedUsbMode,
   isStandaloneWebSerialMode,
+  pickUsbPort,
 } from "./sim_serial_port";
 import { usbPool } from "./timer_console";
 
@@ -444,42 +445,27 @@ function chooseBackendUsbPortModal(ports: BackendUsbPortDescriptor[]): Promise<B
 /* ---- Port selection ------------------------------------------------------------------------- */
 
 /**
- * Returns the XIAO ESP32-C5 serial port:
- * - In Chromium desktop browsers with WebSerial, uses `navigator.serial` directly.
- * - In the Android app (or non-WebSerial browsers connected to a SlapRF Server), uses `/v1/ws/slaprf/usb-raw`:
- *   auto-selects when a single XIAO ESP32-C5 is plugged in over USB-C, or opens a port picker if multiple
- *   boards are attached.
+ * Returns the XIAO ESP32-C5 serial port by always opening the device picker:
+ * - On SlapRF Portable (Desktop) and the Android App (`capabilitiesSnapshot().portable`), opens the
+ *   unified in-app `Select a serial port` modal (`/v1/slaprf/usb/ports` + `/v1/ws/slaprf/usb-raw`).
+ * - In standalone WebSerial mode (e.g. docs flasher without a local Go server), opens the browser's
+ *   WebSerial chooser (`navigator.serial.requestPort`).
  */
 export async function acquireEspSerialPort(): Promise<WebSerialPort> {
+  if (capabilitiesSnapshot().portable && !isStandaloneWebSerialMode()) {
+    const picked = await pickUsbPort({ showAllPorts: false, transport: "usb" });
+    if (isBackendSerialPort(picked)) {
+      return new BackendRawWebSerialPort({
+        name: picked.portName,
+        product: picked.description,
+        isEspressif: true,
+      });
+    }
+    return picked as unknown as WebSerialPort;
+  }
   const api = webSerial();
   if (!api) {
-    if (!capabilitiesSnapshot().portable) {
-      throw new Error(FLASHER_NEEDS_WEBSERIAL);
-    }
-    const espPorts = await fetchBackendUsbPorts(false);
-    if (espPorts.length === 1) {
-      return new BackendRawWebSerialPort(espPorts[0]);
-    }
-    if (espPorts.length > 1) {
-      const chosen = await chooseBackendUsbPortModal(espPorts);
-      return new BackendRawWebSerialPort(chosen);
-    }
-    const allUsbPorts = await fetchBackendUsbPorts(true);
-    if (allUsbPorts.length > 0) {
-      const chosen = allUsbPorts.length === 1 ? allUsbPorts[0] : await chooseBackendUsbPortModal(allUsbPorts);
-      return new BackendRawWebSerialPort(chosen);
-    }
-    throw new Error(
-      "No XIAO ESP32-C5 detected on USB. Plug the timer into your USB-C port (use a USB-C data/OTG cable if needed) and try again."
-    );
-  }
-  if (!isStandaloneWebSerialMode()) {
-    const granted = (await api.getPorts().catch(() => [] as WebSerialPort[])).filter(
-      (p) => p.getInfo().usbVendorId === ESPRESSIF_USB_VID
-    );
-    if (granted.length === 1) {
-      return granted[0];
-    }
+    throw new Error(FLASHER_NEEDS_WEBSERIAL);
   }
   const t0 = performance.now();
   try {

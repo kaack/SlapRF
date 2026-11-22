@@ -24,8 +24,9 @@ import {
   flasherUsesWebSerial,
   hasBrowserWebSerial,
   isBackendRawWebSerialPort,
+  readIdentityOverWebSerial,
 } from "../services/esptool_flasher";
-import { createBackendPortHandle, isSimulatedUsbMode } from "../services/sim_serial_port";
+import { createBackendPortHandle, isSimulatedUsbMode, pickUsbPort } from "../services/sim_serial_port";
 import { recordKnownTimerReadout, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 
@@ -364,9 +365,7 @@ export class TimerFlasher extends Component {
     this.progress = {
       stage: "connecting",
       percent: 1,
-      detail: useEsptool || !usbPool.mainConsole.connected
-        ? "Select the XIAO ESP32-C5 USB port to flash…"
-        : `Building ${label} firmware image…`,
+      detail: "Select the XIAO ESP32-C5 USB port to flash…",
     };
     this.render();
 
@@ -394,29 +393,63 @@ export class TimerFlasher extends Component {
         );
       } else {
         if (!isSimulatedUsbMode()) throw new Error(FLASHER_NEEDS_WEBSERIAL);
-        // Simulation / Demo mode: flash the simulated board.
-        if (!usbPool.mainConsole.connected) {
-          await usbPool.connectMain(this.showAllPorts);
-          onProgress({ stage: "connecting", percent: 1, detail: `Building ${label} firmware image…` });
-        }
+        // Simulation / Demo mode: always open the USB device picker so the user chooses which simulated
+        // board (such as a newly added Unflashed board or an existing timer) to flash.
+        const simPort = await pickUsbPort({
+          showAllPorts: this.showAllPorts,
+          transport: "usb",
+        });
+        onProgress({ stage: "connecting", percent: 1, detail: `Building ${label} firmware image…` });
         const { bytes } = await this.api.fetchFirmwareImage(this.role, cleanLabel, undefined, this.effectiveHubLink);
+        const existingSlot = usbPool.findOwnerOfPort(simPort);
+        const portOwner =
+          existingSlot && existingSlot.connected
+            ? {
+                takeActivePort: async () => {
+                  const p = await existingSlot.releasePortForWrite();
+                  if (!p) return null;
+                  return {
+                    port: p,
+                    reopen: (opts?: { expectApp?: boolean }) =>
+                      existingSlot.reopenPortAfterFlash(p, opts?.expectApp ?? true),
+                  };
+                },
+              }
+            : {
+                takeActivePort: async () => ({
+                  port: simPort,
+                  reopen: async () => undefined,
+                }),
+              };
         written = await flashXiaoC5OverWebSerial(
           bytes,
           label,
           onProgress,
           this.showAllPorts,
           this.keepFingerprint,
-          usbPool
+          portOwner
         );
+        if (this.store.simulatorRunning) {
+          await this.api.refresh();
+        }
+        const verifiedSim =
+          existingSlot && existingSlot.connected
+            ? await existingSlot.readSnapshot().catch(() => null)
+            : await readIdentityOverWebSerial(simPort as unknown as WebSerialPort, 450).catch(() => null);
+        if (verifiedSim && written) {
+          written = {
+            ...written,
+            ...verifiedSim,
+            fingerprintKept: written.fingerprintKept,
+          };
+        }
       }
 
       if (written) {
         recordKnownTimerReadout(written);
         this.onReadout?.(written);
       }
-      if (this.store.simulatorRunning) {
-        await this.api.refresh();
-      } else {
+      if (!this.store.simulatorRunning) {
         await this.api.provisionTimer(this.role, cleanLabel, written?.fingerprint ?? "");
       }
       this.flashedNodes.add(this.role === "hub" ? "hub" : `spoke:${cleanLabel.toUpperCase()}`);
@@ -805,25 +838,13 @@ export class TimerFlasher extends Component {
         : isAndroid ? "USB-C → Phone" : "USB-C → Computer"
       : "2.4 GHz ESP-NOW → Hub";
     const eraseBeforeFlash = !this.keepFingerprint;
-    const activeConsole = usbPool.mainConsole;
-    const browser = flasherUsesWebSerial();
-    const isConnected = !browser && activeConsole.connected;
-    const targetName = isConnected
-      ? browser
-        ? ""
-        : activeConsole.isOtherDevice
-          ? "Other"
-          : activeConsole.lastStatus?.label || activeConsole.lastConfig?.timerLabel || "USB"
-      : "";
 
     const pct = this.progress ? this.progress.percent : this.lastSuccessMsg ? 100 : 0;
     const statusText = this.progress
       ? this.progress.detail
       : this.lastSuccessMsg
-      ? `✓ ${this.lastSuccessMsg}`
-      : isConnected
-        ? `Ready to flash ${cleanLabel} to connected USB device (${targetName})`
-        : `Ready to flash ${cleanLabel}. Plug in the board and tap Flash ${cleanLabel} to USB.`;
+        ? `✓ ${this.lastSuccessMsg}`
+        : `Ready to flash ${cleanLabel}. Choose the USB board when prompted after clicking Flash ${cleanLabel} to USB.`;
 
     return `
       <div class="flasher-wizard-body">
@@ -833,11 +854,9 @@ export class TimerFlasher extends Component {
             <span class="note flasher-step-count">Step 3 of 3</span>
           </div>
           <p>${
-            isConnected
-              ? `Connected to <strong>${esc(targetName)}</strong> over USB-C. Click <strong>Flash ${esc(cleanLabel)} to USB</strong> to write the firmware.`
-              : hasBrowserWebSerial()
-                ? `Plug in your <strong>Seeed Studio XIAO ESP32-C5</strong> and click <strong>Flash ${esc(cleanLabel)} to USB</strong>. Your browser asks which USB port to use the first time. After flashing, the board is read back once to confirm it works.`
-                : `Plug in your <strong>Seeed Studio XIAO ESP32-C5</strong> over USB-C and tap <strong>Flash ${esc(cleanLabel)} to USB</strong>. Approve the USB access prompt if asked. After flashing, the board is read back once to confirm it works.`
+            hasBrowserWebSerial() || isSimulatedUsbMode()
+              ? `Plug in your <strong>Seeed Studio XIAO ESP32-C5</strong> and click <strong>Flash ${esc(cleanLabel)} to USB</strong> to select the target USB board. After flashing, the board is read back once to confirm it works.`
+              : `Plug in your <strong>Seeed Studio XIAO ESP32-C5</strong> over USB-C and tap <strong>Flash ${esc(cleanLabel)} to USB</strong> to select the target USB board. After flashing, the board is read back once to confirm it works.`
           }</p>
         </div>
 
@@ -885,9 +904,7 @@ export class TimerFlasher extends Component {
             <span class="meter-fill ${this.lastSuccessMsg && !this.busy ? "tone-good" : ""}" style="width:${pct}%"></span>
           </div>
           <div class="flasher-progress-foot">
-            <span class="note">${
-              isConnected ? `Target USB connection: ${esc(targetName)}` : "Flashing runs in your browser over USB, or download the .bin image"
-            }</span>
+            <span class="note">Flashing runs over USB, or download the pre-configured .bin image</span>
             <div class="flasher-progress-foot-actions">
               <button
                 type="button"

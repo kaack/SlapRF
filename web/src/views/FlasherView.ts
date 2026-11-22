@@ -13,14 +13,16 @@ import {
 } from "../services/esp_flasher";
 import {
   FLASHER_NEEDS_WEBSERIAL,
+  WebSerialPort,
   acquireEspSerialPort,
   eraseXiaoC5WithEsptool,
   flasherUsesWebSerial,
   hasBrowserWebSerial,
+  readIdentityOverWebSerial,
   readXiaoC5WithWebSerial,
 } from "../services/esptool_flasher";
-import { isSimulatedUsbMode } from "../services/sim_serial_port";
-import { sharedTimerConsole, TimerStatus, usbPool } from "../services/timer_console";
+import { isSimulatedUsbMode, pickUsbPort } from "../services/sim_serial_port";
+import { sharedTimerConsole, usbPool } from "../services/timer_console";
 import { AppStore } from "../state/store";
 import { TimerFlasher } from "../widgets/TimerFlasher";
 
@@ -115,12 +117,9 @@ class TimerReaderPanel extends Component {
   private async readFromUsb(): Promise<void> {
     if (this.busy) return;
     const browser = flasherUsesWebSerial();
-    const activeConsole = usbPool.mainConsole;
     this.busy = true;
     this.errorMsg = null;
-    this.progressText = !browser && activeConsole.connected
-      ? "Reading timer configuration over USB…"
-      : "Select the XIAO ESP32-C5 USB port to read…";
+    this.progressText = "Select the XIAO ESP32-C5 USB port to read…";
     this.render();
 
     try {
@@ -135,13 +134,26 @@ class TimerReaderPanel extends Component {
         return;
       }
       if (!isSimulatedUsbMode()) throw new Error(FLASHER_NEEDS_WEBSERIAL);
-      // Simulation / Demo mode: read the simulated board.
-      if (!activeConsole.connected) {
-        await usbPool.connectMain(this.showAllPorts);
-        this.progressText = "Reading timer configuration over USB…";
-        this.render();
+      // Simulation / Demo mode: always open the USB device picker so any simulated board
+      // (including newly added Unflashed boards or Spokes) can be selected and read.
+      const port = await pickUsbPort({
+        showAllPorts: this.showAllPorts,
+        transport: "usb",
+      });
+      this.progressText = "Reading timer configuration over USB…";
+      this.render();
+      const existingSlot = usbPool.findOwnerOfPort(port);
+      let info: TimerReadout | null = null;
+      if (existingSlot && existingSlot.connected) {
+        if (!existingSlot.isOtherDevice) {
+          info = await existingSlot.readSnapshot();
+        }
+      } else {
+        info = await readIdentityOverWebSerial(port as unknown as WebSerialPort, 500);
       }
-      const info = await activeConsole.readSnapshot();
+      if (!info) {
+        throw new Error("No SlapRF firmware answered on this board. Use Writer below to flash it.");
+      }
       this.readout = info;
       this.onRead?.(info);
     } catch (err) {
@@ -159,9 +171,6 @@ class TimerReaderPanel extends Component {
   private render(): void {
     const browser = flasherUsesWebSerial();
     const webSerialOk = browser || isSimulatedUsbMode();
-    const activeConsole = usbPool.mainConsole;
-    const isConnected = !browser && activeConsole.connected;
-    const isOther = !browser && activeConsole.isOtherDevice;
     const r = this.readout;
     const s = r?.status;
     const active = Boolean(r);
@@ -169,7 +178,7 @@ class TimerReaderPanel extends Component {
 
     const ledClass = this.busy
       ? "is-warn"
-      : this.errorMsg || isOther
+      : this.errorMsg
         ? "is-emergency"
         : active
           ? s?.emergencyMode
@@ -177,9 +186,7 @@ class TimerReaderPanel extends Component {
             : s?.role === 2 || r?.role === "spoke"
               ? "is-spoke"
               : "is-up"
-          : isConnected
-            ? "is-warn"
-            : "";
+          : "";
 
     const headText = this.busy
       ? esc(this.progressText || "Reading timer over USB…")
@@ -187,15 +194,11 @@ class TimerReaderPanel extends Component {
         ? esc(this.errorMsg)
         : r
           ? `Read ${esc(r.timerLabel || "(unnamed)")} · ${r.role === "hub" ? "Hub" : "Spoke"} · firmware ${esc(r.firmwareVersion)}`
-          : isOther
-            ? "Connected XIAO ESP32-C5 (Other) has no SlapRF firmware · use Writer below to flash it"
-            : isConnected
-              ? "Connected over USB · click Read timer to inspect"
-              : webSerialOk
-                ? hasBrowserWebSerial()
-                  ? "Click Read timer to choose a USB board and read its identity"
-                  : "Plug in a XIAO ESP32-C5 over USB-C and tap Read timer to inspect its identity"
-                : FLASHER_NEEDS_WEBSERIAL;
+          : webSerialOk
+            ? hasBrowserWebSerial() || isSimulatedUsbMode()
+              ? "Click Read timer to choose a USB board and read its identity"
+              : "Plug in a XIAO ESP32-C5 over USB-C and tap Read timer to inspect its identity"
+            : FLASHER_NEEDS_WEBSERIAL;
 
     const rfBadge = !r
       ? `<span class="badge">—</span>`
@@ -420,9 +423,7 @@ class TimerEraserPanel extends Component {
     this.progress = {
       stage: "connecting",
       percent: 1,
-      detail: !useEsptool && usbPool.mainConsole.connected
-        ? "Opening connected USB port to wipe…"
-        : "Select the XIAO ESP32-C5 USB port to wipe…",
+      detail: "Select the XIAO ESP32-C5 USB port to wipe…",
     };
     this.render();
 
@@ -439,11 +440,32 @@ class TimerEraserPanel extends Component {
         await eraseXiaoC5WithEsptool(port, onProgress);
       } else {
         if (!isSimulatedUsbMode()) throw new Error(FLASHER_NEEDS_WEBSERIAL);
-        // Simulation / Demo mode: wipe the simulated board.
-        if (!usbPool.mainConsole.connected) {
-          await usbPool.connectMain(this.showAllPorts);
-        }
-        await eraseXiaoC5OverWebSerial(onProgress, this.showAllPorts, usbPool);
+        // Simulation / Demo mode: always open the USB device picker so the user selects which board to wipe.
+        const port = await pickUsbPort({
+          showAllPorts: this.showAllPorts,
+          transport: "usb",
+        });
+        const existingSlot = usbPool.findOwnerOfPort(port);
+        const portOwner =
+          existingSlot && existingSlot.connected
+            ? {
+                takeActivePort: async () => {
+                  const p = await existingSlot.releasePortForWrite();
+                  if (!p) return null;
+                  return {
+                    port: p,
+                    reopen: (opts?: { expectApp?: boolean }) =>
+                      existingSlot.reopenPortAfterFlash(p, opts?.expectApp ?? false),
+                  };
+                },
+              }
+            : {
+                takeActivePort: async () => ({
+                  port,
+                  reopen: async () => undefined,
+                }),
+              };
+        await eraseXiaoC5OverWebSerial(onProgress, this.showAllPorts, portOwner);
       }
 
       this.lastSuccessMsg = "Timer wiped: bootloader, partition table, NVS, and firmware erased to factory blank.";
@@ -481,16 +503,6 @@ class TimerEraserPanel extends Component {
   private render(): void {
     const browser = flasherUsesWebSerial();
     const webSerialOk = browser || isSimulatedUsbMode();
-    const activeConsole = usbPool.mainConsole;
-    const isConnected = !browser && activeConsole.connected;
-    const isOther = !browser && activeConsole.isOtherDevice;
-    const targetName = isConnected
-      ? browser
-        ? ""
-        : isOther
-          ? "Other"
-          : activeConsole.lastStatus?.label || activeConsole.lastConfig?.timerLabel || "USB"
-      : "";
     const pct = this.progress
       ? Math.max(0, Math.min(100, Math.round(this.progress.percent)))
       : this.lastSuccessMsg
@@ -499,13 +511,11 @@ class TimerEraserPanel extends Component {
 
     const ledClass = this.busy
       ? "is-warn"
-      : this.errorMsg || isOther
+      : this.errorMsg
         ? "is-emergency"
         : this.lastSuccessMsg
           ? "is-up"
-          : isConnected
-            ? "is-warn"
-            : "";
+          : "";
 
     const headText = this.busy
       ? esc(`${this.progress?.detail || "Erasing timer over USB…"} (${pct}%)`)
@@ -513,13 +523,11 @@ class TimerEraserPanel extends Component {
         ? esc(this.errorMsg)
         : this.lastSuccessMsg
           ? `✓ ${esc(this.lastSuccessMsg)}`
-          : isConnected
-            ? `Connected to ${esc(targetName)}<span class="flasher-eraser-hint-desktop"> · click Erase timer to wipe back to factory blank</span>`
-            : webSerialOk
-              ? hasBrowserWebSerial()
-                ? "Click Erase timer to choose a USB board and wipe it back to factory blank"
-                : "Plug in a XIAO ESP32-C5 over USB-C and tap Erase timer to wipe it back to factory blank"
-              : FLASHER_NEEDS_WEBSERIAL;
+          : webSerialOk
+            ? hasBrowserWebSerial() || isSimulatedUsbMode()
+              ? "Click Erase timer to choose a USB board and wipe it back to factory blank"
+              : "Plug in a XIAO ESP32-C5 over USB-C and tap Erase timer to wipe it back to factory blank"
+            : FLASHER_NEEDS_WEBSERIAL;
 
     const eraseDisabled = !webSerialOk;
     const eraseBtnLabel = this.busy ? `Cancel (${pct}%)` : "Erase timer";

@@ -65,12 +65,24 @@ func TestComponent_FlasherViewFirmwarePatchOptionsAndReaderPanel(t *testing.T) {
 	}
 	h.MilestoneScreenshot("flasher-disconnected-state")
 
-	// Connect simulated USB H1 -> click Read Timer to inspect board metadata!
+	// Connect simulated USB H1 and add a brand-new unflashed board in the Simulator,
+	// then verify clicking Read Timer in Flasher still opens the USB device selector modal listing both!
 	h.ConnectSimHubH1()
+	h.APIPost("/v1/sim/slaprf/timers", map[string]any{}, nil)
 	if err := readBtn.Click(); err != nil {
 		t.Fatalf("click read-timer: %v", err)
 	}
-	h.WaitUntil("Reader displays connected H1 firmware info", 5*time.Second, func() (bool, error) {
+	pickerDialog := h.Page.Locator(`.sim-usb-dialog`).First()
+	h.MustBeVisible(pickerDialog, "USB device picker modal in Flasher")
+	h.MustContainText(pickerDialog, "Unflashed", "Newly added unflashed simulated board in Flasher USB picker")
+	h1Row := h.Page.Locator(`.sim-usb-dialog [data-pick-port-id="sim-1"]`).First()
+	if err := h1Row.Click(); err != nil {
+		t.Fatalf("select H1 in Flasher USB picker: %v", err)
+	}
+	if err := h.Page.Locator(`.sim-usb-dialog button[data-modal="connect"]`).First().Click(); err != nil {
+		t.Fatalf("confirm Connect in Flasher USB picker: %v", err)
+	}
+	h.WaitUntil("Reader displays selected H1 firmware info", 5*time.Second, func() (bool, error) {
 		txt, gErr := readerSlot.InnerText()
 		return gErr == nil && containsStr(txt, "H1"), nil
 	})
