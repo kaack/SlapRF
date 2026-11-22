@@ -186,14 +186,29 @@ export class AppShell extends Component {
     const emulOn = caps.portable && !isExternalTimer && sharedLapRFEmulatorRelay.snapshot.enabled;
     const hideFlasher = isExternalTimer;
 
-    const out: RouteId[] = [];
+    const primaryOrder: RouteId[] = ["races", "practice", "pilots", "network"];
+    const primarySet = new Set<RouteId>(primaryOrder);
+    const visibleSet = new Set<RouteId>();
+    const secondary: RouteId[] = [];
+
     for (const r of ROUTES) {
       if (r.hiddenFromNav) continue;
       if (r.simOnly && !simOn) continue;
       if (r.laprfEmulatorOnly && !emulOn) continue;
       if (r.id === "flasher" && hideFlasher) continue;
-      out.push(r.id);
+      visibleSet.add(r.id);
+      if (!primarySet.has(r.id)) {
+        secondary.push(r.id);
+      }
     }
+
+    const out: RouteId[] = [];
+    for (const id of primaryOrder) {
+      if (visibleSet.has(id)) {
+        out.push(id);
+      }
+    }
+    out.push(...secondary);
     return out;
   }
 
@@ -938,8 +953,9 @@ export class AppShell extends Component {
         finalizeCommit();
       }, 210);
     } else if (prevRoute && prevRoute !== route && entry) {
-      const prevIdx = ROUTES.findIndex((r) => r.id === prevRoute);
-      const nextIdx = ROUTES.findIndex((r) => r.id === route);
+      const mobileRoutes = window.innerWidth <= 900 ? this.getSwipeableMobileRoutes() : null;
+      const prevIdx = mobileRoutes ? mobileRoutes.indexOf(prevRoute) : ROUTES.findIndex((r) => r.id === prevRoute);
+      const nextIdx = mobileRoutes ? mobileRoutes.indexOf(route) : ROUTES.findIndex((r) => r.id === route);
       this.animateActiveView(nextIdx >= 0 && prevIdx >= 0 && nextIdx < prevIdx ? "left" : "right");
     }
 

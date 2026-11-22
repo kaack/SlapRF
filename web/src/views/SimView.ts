@@ -9,7 +9,6 @@ import {
   renderMultiBandSelectOptionsHtml,
 } from "../core/vtx_channels";
 import { ApiClient } from "../services/api_client";
-import { LATEST_FIRMWARE_VERSION } from "../services/esp_flasher";
 import { formatMultiGPScoring, sharedMultiGPService } from "../services/multigp_service";
 import { isSimulatedSerialPort } from "../services/sim_serial_port";
 import { usbPool } from "../services/timer_console";
@@ -2445,7 +2444,6 @@ export class SimView extends Component {
               ? "H1"
               : `T${Math.max(1, t.timerId - 1)}`;
         const color = unflashed ? "#64748b" : timerColor(this.store, t.timerId);
-        const isLatestFw = !unflashed && t.firmwareVersion === LATEST_FIRMWARE_VERSION;
         const isUsbConnected = usbConnectedIds.has(t.timerId);
 
         return `
@@ -2453,14 +2451,14 @@ export class SimView extends Component {
             <div class="detected-timer-id">
               <span class="gate-color-swatch" style="--c:${esc(color)};cursor:default"></span>
               <strong class="mono">${esc(title)}</strong>
-              ${unflashed ? "" : `<span class="muted mono" style="font-size:11px">#${t.timerId}</span>`}
-              ${isUsbConnected ? `<span class="badge tone-good" title="Connected over simulated USB">USB</span>` : ""}
+              ${unflashed ? "" : `<span class="muted mono sim-board-sub-id" style="font-size:11px">#${t.timerId}</span>`}
+              ${isUsbConnected ? `<span class="badge tone-good sim-board-usb-badge" title="Connected over simulated USB">USB</span>` : ""}
             </div>
 
             <div>
-              <span class="timer-status-pill ${t.poweredOn ? "is-online" : "is-offline"}">
+              <span class="timer-status-pill ${t.poweredOn ? "is-online" : "is-offline"}" title="${t.poweredOn ? "Powered on" : "Powered off"}">
                 <span class="status-dot ${t.poweredOn ? "is-up" : ""}"></span>
-                <span>${t.poweredOn ? "Powered on" : "Powered off"}</span>
+                <span class="sim-power-text">${t.poweredOn ? "Powered on" : "Powered off"}</span>
               </span>
             </div>
 
@@ -2472,11 +2470,11 @@ export class SimView extends Component {
               ${
                 unflashed
                   ? `<span class="muted">Factory blank</span>`
-                  : `<span class="mono">${esc(t.firmwareVersion)}</span>${isLatestFw ? "" : `<span class="badge tone-warn">Update → ${LATEST_FIRMWARE_VERSION}</span>`}`
+                  : `<span class="mono">${esc(t.firmwareVersion)}</span>`
               }
             </div>
 
-            <div>
+            <div class="sim-col-track">
               ${
                 unflashed
                   ? `<span class="muted">—</span>`
@@ -2487,11 +2485,11 @@ export class SimView extends Component {
             </div>
 
             <div class="sim-timer-row-actions">
-              <button class="btn btn-sm btn-ghost" data-action="timer-power" data-timer-id="${t.timerId}">
-                ${t.poweredOn ? "Turn off" : "Turn on"}
+              <button class="btn btn-sm btn-ghost sim-btn-power ${t.poweredOn ? "is-powered" : "is-unpowered"}" data-action="timer-power" data-timer-id="${t.timerId}" title="${t.poweredOn ? "Turn off" : "Turn on"}" aria-label="${t.poweredOn ? "Turn off" : "Turn on"}">
+                ${icons.power(14)}<span class="sim-action-label">${t.poweredOn ? "Turn off" : "Turn on"}</span>
               </button>
-              <button class="btn btn-sm btn-ghost sim-btn-delete" data-action="timer-delete" data-timer-id="${t.timerId}" title="Delete simulated board #${t.timerId}">
-                Delete
+              <button class="btn btn-sm btn-ghost sim-btn-delete" data-action="timer-delete" data-timer-id="${t.timerId}" title="Delete simulated board #${t.timerId}" aria-label="Delete simulated board #${t.timerId}">
+                ${icons.trash(14)}<span class="sim-action-label">Delete</span>
               </button>
             </div>
           </div>`;
@@ -2504,7 +2502,7 @@ export class SimView extends Component {
             <span>Power</span>
             <span>Role</span>
             <span>Firmware</span>
-            <span>Track</span>
+            <span class="sim-col-track">Track</span>
             <span class="num">Actions</span>
           </div>
           ${rows}`;

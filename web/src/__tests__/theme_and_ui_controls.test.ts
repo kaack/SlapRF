@@ -15,6 +15,8 @@ import {
 } from "../core/theme";
 import { Sidebar } from "../layout/Sidebar";
 import { TopBar } from "../layout/TopBar";
+import { AppShell } from "../layout/AppShell";
+import { setDatasourceUiMode } from "../services/capabilities";
 import { Announcer } from "../services/announcer";
 import { ApiClient } from "../services/api_client";
 import * as offlineModule from "../services/offline";
@@ -744,5 +746,22 @@ describe("core/theme, Sidebar & TopBar theme toggler, icons, and neutral control
     const trayCenterY = (trayRect.top + trayRect.bottom) * 0.5;
     const pillCenterY = (pitPillRect.top + pitPillRect.bottom) * 0.5;
     expect(Math.abs(trayCenterY - pillCenterY) < 0.5).toBe(true);
+
+    // Verify mobile navigation swipe route order puts primary bottom-nav routes (races, practice, pilots, network) first
+    setDatasourceUiMode("demo");
+    const swipeRoutes = (
+      AppShell.prototype as unknown as {
+        getSwipeableMobileRoutes: (this: {
+          store: { simulatorRunning: boolean; timingHardwareMode: string };
+        }) => string[];
+      }
+    ).getSwipeableMobileRoutes.call({
+      store: { simulatorRunning: true, timingHardwareMode: "slaprf" },
+    });
+    expect(swipeRoutes.slice(0, 4)).toEqual(["races", "practice", "pilots", "network"]);
+    expect(swipeRoutes[swipeRoutes.indexOf("pilots") + 1]).toBe("network");
+    expect(swipeRoutes.includes("sim")).toBe(true);
+    expect(swipeRoutes.indexOf("sim") > swipeRoutes.indexOf("network")).toBe(true);
+    expect(icons.power(14).startsWith("<svg")).toBe(true);
   });
 });

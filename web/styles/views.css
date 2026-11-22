@@ -5352,10 +5352,80 @@ html[data-theme="light"] .flasher-hub-link .segmented button.is-active {
   gap: 6px;
 }
 
+.sim-timer-row-actions .btn svg {
+  display: none;
+}
+
 .sim-btn-delete:hover:not(:disabled) {
   border-color: var(--border-strong);
   background: var(--surface-3);
   color: var(--text);
+}
+
+@media (max-width: 860px) {
+  .sim-boards-table > .timer-table-row.sim-timer-table-row {
+    min-width: 0;
+    grid-template-columns: minmax(58px, 0.9fr) 40px minmax(64px, 0.95fr) minmax(64px, 0.95fr) 64px;
+    gap: 6px;
+    padding: 6px 12px;
+  }
+
+  .sim-boards-table > .timer-table-row.sim-timer-table-row.timer-table-head {
+    padding-top: 8px;
+    padding-bottom: 6px;
+  }
+
+  .sim-boards-table .sim-col-track,
+  .sim-boards-table .sim-board-usb-badge,
+  .sim-boards-table .sim-board-sub-id,
+  .sim-boards-table .sim-power-text,
+  .sim-boards-table .sim-action-label {
+    display: none !important;
+  }
+
+  .sim-boards-table .detected-timer-id {
+    gap: 6px;
+  }
+
+  .sim-boards-table .timer-status-pill {
+    gap: 0;
+    justify-content: center;
+  }
+
+  .sim-boards-table .detected-role-pill {
+    padding: 2px 7px;
+    font-size: 11px;
+  }
+
+  .sim-boards-table .timer-fw-cell {
+    font-size: 12px;
+  }
+
+  .sim-boards-table .sim-timer-row-actions {
+    gap: 4px;
+  }
+
+  .sim-boards-table .sim-timer-row-actions .btn {
+    padding: 0;
+    width: 28px;
+    height: 28px;
+    min-height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .sim-boards-table .sim-timer-row-actions .btn svg {
+    display: block;
+  }
+
+  .sim-boards-table .sim-btn-power.is-powered {
+    color: var(--good);
+  }
+
+  .sim-boards-table .sim-btn-power.is-unpowered {
+    color: var(--text-3);
+  }
 }
 
 .sim-timer-add-bar {
