@@ -289,7 +289,56 @@ func (e *Engine) SetTimingHardwareMode(mode domain.TimingHardwareMode, isSim boo
 	e.progress = make(map[int]*pilotProgress)
 	e.lastAcceptedUs = make(map[string]uint64)
 	e.initDetectorsLocked()
-	pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
+	var pSnap *domain.PracticeManagerState
+	var rSnap *domain.RaceTournamentState
+	if isSim {
+		snap := e.snapshotOrderedGatesLocked()
+		pTouched := false
+		for i := range e.practiceState.Sessions {
+			s := &e.practiceState.Sessions[i]
+			s.TrackInitialized = true
+			s.TrackSnapshot = cloneTrackGates(snap)
+			s.Summaries = e.computePracticeSessionSummariesLocked(s)
+			pTouched = true
+		}
+		if pTouched {
+			cp := clonePracticeManagerState(e.practiceState)
+			pSnap = &cp
+		}
+		rTouched := false
+		if isRaceTrackEditable(&e.raceState) {
+			e.raceState.TrackInitialized = true
+			e.raceState.TrackSnapshot = cloneTrackGates(snap)
+			rTouched = true
+		}
+		for i := range e.eventState.Races {
+			r := &e.eventState.Races[i]
+			if isRaceTrackEditable(r) {
+				r.TrackInitialized = true
+				r.TrackSnapshot = cloneTrackGates(snap)
+				rTouched = true
+			}
+		}
+		if rTouched {
+			cp := cloneRaceState(e.raceState)
+			rSnap = &cp
+		}
+	} else {
+		// Real hardware mode switch: reload active Practice or ongoing Race track enriched with the new mode's timers.
+		if !e.isLiveRaceHeatActiveLocked() && e.practiceState.ActiveSessionID != "" {
+			if sess := e.findPracticeSessionLocked(e.practiceState.ActiveSessionID); sess != nil {
+				e.ensurePracticeTrackInitializedLocked(sess)
+				e.loadTrackAndRulesIntoLiveEngineLocked(sess.TrackSnapshot, sess.Rules)
+				cp := clonePracticeManagerState(e.practiceState)
+				pSnap = &cp
+			}
+		} else if isRaceOngoing(&e.raceState) {
+			e.ensureRaceTrackInitializedLocked(&e.raceState)
+			e.loadTrackAndRulesIntoLiveEngineLocked(e.raceState.TrackSnapshot, e.raceState.Rules)
+			cp := cloneRaceState(e.raceState)
+			rSnap = &cp
+		}
+	}
 	pilotsCopy := append([]domain.PilotSlot(nil), e.pilots...)
 	gatesCopy := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)

@@ -935,7 +935,9 @@ func (e *Engine) regenerateTournamentLocked() {
 	prevTags := append([]string(nil), e.raceState.Tags...)
 	prevTemplateID := e.raceState.TemplateID
 	prevCreated := e.raceState.CreatedAt
-	prevTrack := append([]domain.TrackGate(nil), e.raceState.TrackSnapshot...)
+	prevTrackInit := e.raceState.TrackInitialized
+	prevTrack := cloneTrackGates(e.raceState.TrackSnapshot)
+	prevRules := cloneTimingRulesPtr(e.raceState.Rules, domain.DefaultTimingRules())
 	prevRoster := append([]domain.EventPilot(nil), e.raceState.Roster...)
 	cfg := e.raceState.Config.Normalized()
 	genPilots := e.activeEventPilotsForGenerationLocked()
@@ -949,7 +951,9 @@ func (e *Engine) regenerateTournamentLocked() {
 	st.Tags = prevTags
 	st.TemplateID = tplID
 	st.CreatedAt = prevCreated
+	st.TrackInitialized = prevTrackInit
 	st.TrackSnapshot = prevTrack
+	st.Rules = prevRules
 	st.Roster = prevRoster
 	normalizeRaceRosterLocked(&st, e.pilots)
 	race.SyncRoundsMetadata(&st)
@@ -1566,9 +1570,7 @@ func (e *Engine) raceControlActionActiveWithOptions(action string, heatID string
 			e.mu.Unlock()
 			return cloneRaceState(e.raceState), fmt.Errorf("heat must be finished before confirming")
 		}
-		if isRaceTrackEditable(&e.raceState) {
-			e.raceState.TrackSnapshot = e.snapshotOrderedGatesLocked()
-		}
+		e.ensureRaceTrackInitializedLocked(&e.raceState)
 		race.RecomputeHeat(h, e.raceState.Config.QualifyingMetric)
 		e.markHeatUnsyncedMGPLocked(h.ID)
 		h.State = domain.HeatConfirmed
@@ -2339,6 +2341,12 @@ func (e *Engine) exitLiveRaceHeatLocked() bool {
 		return false
 	}
 	e.restorePracticeSnapshotLocked()
+	if e.practiceState.ActiveSessionID != "" {
+		if activeSess := e.findPracticeSessionLocked(e.practiceState.ActiveSessionID); activeSess != nil {
+			e.ensurePracticeTrackInitializedLocked(activeSess)
+			e.loadTrackAndRulesIntoLiveEngineLocked(activeSess.TrackSnapshot, activeSess.Rules)
+		}
+	}
 	e.practiceSnap.Saved = false
 	return true
 }
@@ -2372,6 +2380,8 @@ func (e *Engine) syncHeatRFSlotsLocked(target *domain.RaceHeat) {
 		e.disarmAllPilotSlotsForRaceLocked()
 		return
 	}
+	e.ensureRaceTrackInitializedLocked(&e.raceState)
+	e.loadTrackAndRulesIntoLiveEngineLocked(e.raceState.TrackSnapshot, e.raceState.Rules)
 	seatByPilot := make(map[int]domain.HeatSeat, len(target.Seats))
 	for _, s := range target.Seats {
 		if s.PilotSlotIndex > 0 && s.Channel >= 1 && s.Channel <= 8 &&
@@ -2537,7 +2547,11 @@ func cloneRaceState(st domain.RaceTournamentState) domain.RaceTournamentState {
 	}
 	out.Tags = append([]string(nil), st.Tags...)
 	out.Config.SeatChannels = append([]uint8(nil), st.Config.SeatChannels...)
-	out.TrackSnapshot = append([]domain.TrackGate(nil), st.TrackSnapshot...)
+	out.TrackSnapshot = cloneTrackGates(st.TrackSnapshot)
+	if st.Rules != nil {
+		cp := st.Rules.Normalized()
+		out.Rules = &cp
+	}
 	out.Roster = append([]domain.EventPilot(nil), st.Roster...)
 	if len(st.Stages) > 0 {
 		out.Stages = make([]domain.RaceStage, len(st.Stages))

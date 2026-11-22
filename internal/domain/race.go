@@ -865,7 +865,9 @@ type RaceTournamentState struct {
 	UpdatedAt           string               `json:"updatedAt,omitempty"`
 	Mode                OperatingMode        `json:"mode"`
 	Config              RaceSetupConfig      `json:"config"`
+	TrackInitialized    bool                 `json:"trackInitialized,omitempty"`
 	TrackSnapshot       []TrackGate          `json:"trackSnapshot,omitempty"`
+	Rules               *TimingRules         `json:"rules,omitempty"`
 	Roster              []EventPilot         `json:"roster,omitempty"` // Per-race pilot check-in & Active/Away/Forfeit attendance
 	Stages              []RaceStage          `json:"stages,omitempty"`
 	StageConnections    []StageConnection    `json:"stageConnections,omitempty"`

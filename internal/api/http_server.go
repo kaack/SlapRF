@@ -171,12 +171,12 @@ func (w *statusCaptureWriter) Write(b []byte) (int, error) {
 // so registered `ServerHooks` are notified after successful mutations.
 //
 // Design conventions:
-//   - Singleton resources (`/v1/storage`, `/v1/track`, `/v1/sim`, `/v1/timing/rules`, `/v1/timing/arm`,
-//     `/v1/timing/mode`, `/v1/hardware/mode`) always exist and are never `DELETE`d; state replacement
-//     uses `PUT` / `PATCH`, while imperative operations use AIP-136 `:action` custom methods (`POST /v1/storage:reset`).
-//   - Collection resources (`/v1/pilots`, `/v1/track/gates`, `/v1/timers`, `/v1/practice/sessions`,
-//     `/v1/race/sessions`) use `GET` (list), `POST` (`201 Created` + `Location`), `GET /{id}`,
-//     `PUT`/`PATCH /{id}`, `DELETE /{id}`, and `:action` for imperative state transitions.
+//   - Singleton resources (`/v1/storage`, `/v1/sim`, `/v1/timing/arm`, `/v1/timing/mode`,
+//     `/v1/hardware/mode`) always exist and are never `DELETE`d; state replacement uses `PUT` / `PATCH`,
+//     while imperative operations use AIP-136 `:action` custom methods (`POST /v1/storage:reset`).
+//   - Collection resources (`/v1/pilots`, `/v1/timers`, `/v1/practice/sessions`, `/v1/race/sessions`)
+//     and scoped track sub-resources (`/v1/{practice|race}/sessions/{sessionId}/track/*`) use `GET` (list),
+//     `POST` (`201 Created` + `Location`), `GET /{id}`, `PUT`/`PATCH /{id}`, `DELETE /{id}`, and `:action`.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	wrap := func(h http.HandlerFunc) http.HandlerFunc {
 		return func(w http.ResponseWriter, r *http.Request) {
@@ -199,9 +199,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/state", s.handleGetState)
 	mux.HandleFunc("GET /v1/status", s.handleGetStatus)
 
-	// Timing Singletons (`rules`, `arm`, `mode`)
-	mux.HandleFunc("GET /v1/timing/rules", s.handleGetRules)
-	mux.HandleFunc("PUT /v1/timing/rules", wrap(s.handlePutRules))
+	// Timing Singletons (`arm`, `mode`)
 	mux.HandleFunc("GET /v1/timing/arm", s.handleGetArm)
 	mux.HandleFunc("PUT /v1/timing/arm", wrap(s.handlePutArm))
 	mux.HandleFunc("GET /v1/timing/mode", s.handleGetOperatingMode)
@@ -217,23 +215,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("PUT /v1/pilots/{slotIndex}", wrap(s.handleUpdatePilot))
 	mux.HandleFunc("DELETE /v1/pilots/{slotIndex}", wrap(s.handleDeletePilot))
 
-	// Track Singleton, Gates Collection & Timers Collection
-	mux.HandleFunc("GET /v1/track", s.handleGetTrack)
-	mux.HandleFunc("POST /v1/track:reset", wrap(s.handleResetTrack))
-	mux.HandleFunc("PUT /v1/track/thresholds", wrap(s.handlePutThresholds))
-	mux.HandleFunc("GET /v1/track/gates", s.handleGetGates)
-	mux.HandleFunc("POST /v1/track/gates", wrap(s.handleCreateGate))
-	mux.HandleFunc("GET /v1/track/gates/{gateId}", s.handleGetGate)
-	mux.HandleFunc("PUT /v1/track/gates/{gateId}", wrap(s.handleUpdateGate))
-	mux.HandleFunc("PATCH /v1/track/gates/{gateId}", wrap(s.handleUpdateGate))
-	mux.HandleFunc("DELETE /v1/track/gates/{gateId}", wrap(s.handleDeleteGate))
-	mux.HandleFunc("GET /v1/track/gates/{gateId}/rules", s.handleGetGateRules)
-	mux.HandleFunc("PUT /v1/track/gates/{gateId}/rules", wrap(s.handlePutGateRules))
-	mux.HandleFunc("POST /v1/track/gates/{gateId}/rules:reset", wrap(s.handleResetGateRules))
-	mux.HandleFunc("GET /v1/track/gates/{gateId}/pilots/{slotIndex}/rules", s.handleGetPilotGateRules)
-	mux.HandleFunc("PUT /v1/track/gates/{gateId}/pilots/{slotIndex}/rules", wrap(s.handlePutPilotGateRules))
-	mux.HandleFunc("POST /v1/track/gates/{gateId}/pilots/{slotIndex}/rules:reset", wrap(s.handleResetPilotGateRules))
-
+	// Physical / Simulated Timers Hardware Inventory (`/v1/timers`)
 	mux.HandleFunc("GET /v1/timers", s.handleGetTimers)
 	mux.HandleFunc("POST /v1/timers", wrap(s.handleCreateTimer))
 	mux.HandleFunc("GET /v1/timers/{timerId}", s.handleGetTimer)
@@ -256,6 +238,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /v1/practice/sessions/{sessionId}/laps", s.handleGetPracticeSessionLaps)
 	mux.HandleFunc("PATCH /v1/practice/sessions/{sessionId}/laps/{lapId}", wrap(s.handlePatchPracticeSessionLap))
 	mux.HandleFunc("POST /v1/practice/sessions/{sessionId}/laps/{lapId}", wrap(s.handlePracticeSessionLapCustomAction))
+	s.registerScopedTrackRoutes(mux, wrap, trackScopePractice)
 
 	// Race Sessions Resource Hierarchy (`/v1/race/sessions` - symmetric with `/v1/practice/sessions`)
 	mux.HandleFunc("GET /v1/race/sessions", s.handleGetRaceSessions)
@@ -276,6 +259,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("POST /v1/race/sessions/{sessionId}/heats/{heatId}", wrap(s.handleRaceSessionHeatCustomAction))
 	mux.HandleFunc("POST /v1/race/sessions/{sessionId}/heats/{heatId}/pilots/{slotIndex}", wrap(s.handleRaceSessionHeatPilotCustomAction))
 	mux.HandleFunc("GET /v1/race/sessions/{sessionId}/standings.csv", s.handleExportRaceSessionStandingsCSV)
+	s.registerScopedTrackRoutes(mux, wrap, trackScopeRace)
 	mux.HandleFunc("GET /v1/race/standings.csv", s.handleExportRaceResultsCSV)
 	mux.HandleFunc("GET /v1/race/clock", s.handleGetRaceClock)
 
@@ -419,21 +403,7 @@ func (s *Server) handleGetStatus(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, s.buildStatusResponse(lite))
 }
 
-// --- Timing Singletons (`/v1/timing/rules`, `/v1/timing/arm`, `/v1/timing/mode`) ---
-
-func (s *Server) handleGetRules(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, http.StatusOK, s.activeEngine().Rules())
-}
-
-func (s *Server) handlePutRules(w http.ResponseWriter, r *http.Request) {
-	var rules domain.TimingRules
-	if err := decodeJSONBody(r, &rules); err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	applied := s.activeEngine().SetRules(rules)
-	writeJSON(w, http.StatusOK, applied)
-}
+// --- Timing Singletons (`/v1/timing/arm`, `/v1/timing/mode`) ---
 
 func (s *Server) handleGetArm(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"armed": s.activeEngine().IsRaceArmed()})
@@ -476,126 +446,7 @@ func (s *Server) handlePutOperatingMode(w http.ResponseWriter, r *http.Request) 
 	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
-// --- Track Singleton, Gates Collection & Timers Collection ---
-
-func (s *Server) handleGetTrack(w http.ResponseWriter, _ *http.Request) {
-	eng := s.activeEngine()
-	_, gates, _, _, _ := eng.StateSnapshot()
-	if gates == nil {
-		gates = []domain.TrackGate{}
-	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"gates":  gates,
-		"timers": eng.DetectedTimersSnapshot(),
-	})
-}
-
-func (s *Server) handleResetTrack(w http.ResponseWriter, r *http.Request) {
-	if err := decodeOptionalJSONBody(r, &struct{}{}); err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if s.simulator.IsRunning() {
-		s.simulator.ResetTimersAndTrackToDefault()
-	} else {
-		s.realEngine.ResetTrackToDefault(false)
-	}
-	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
-}
-
-func (s *Server) handlePutThresholds(w http.ResponseWriter, r *http.Request) {
-	var updates []domain.GateThresholdUpdate
-	if err := decodeJSONBody(r, &updates); err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if err := s.activeEngine().SetGateThresholds(updates); err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
-}
-
-func (s *Server) handleGetGates(w http.ResponseWriter, _ *http.Request) {
-	_, gates, _, _, _ := s.activeEngine().StateSnapshot()
-	if gates == nil {
-		gates = []domain.TrackGate{}
-	}
-	writeJSON(w, http.StatusOK, gates)
-}
-
-func (s *Server) handleGetGate(w http.ResponseWriter, r *http.Request) {
-	gateID, ok := parseUint8PathValue(w, r, "gateId")
-	if !ok {
-		return
-	}
-	_, gates, _, _, _ := s.activeEngine().StateSnapshot()
-	for _, g := range gates {
-		if g.GateID == gateID {
-			writeJSON(w, http.StatusOK, g)
-			return
-		}
-	}
-	writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("gate %d not found", gateID))
-}
-
-func (s *Server) handleCreateGate(w http.ResponseWriter, r *http.Request) {
-	var body struct {
-		Name            string `json:"name"`
-		AssignedTimerID uint8  `json:"assignedTimerId"`
-		TrackOrder      *int   `json:"trackOrder,omitempty"`
-	}
-	if err := decodeOptionalJSONBody(r, &body); err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	eng := s.activeEngine()
-	var (
-		created domain.TrackGate
-		err     error
-	)
-	if body.TrackOrder != nil {
-		created, err = eng.AddGate(body.Name, body.AssignedTimerID, *body.TrackOrder)
-	} else {
-		created, err = eng.AddGate(body.Name, body.AssignedTimerID)
-	}
-	if err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	w.Header().Set("Location", fmt.Sprintf("/v1/track/gates/%d", created.GateID))
-	writeJSON(w, http.StatusCreated, s.buildFullStateResponse())
-}
-
-func (s *Server) handleUpdateGate(w http.ResponseWriter, r *http.Request) {
-	gateID, ok := parseUint8PathValue(w, r, "gateId")
-	if !ok {
-		return
-	}
-	var upd domain.GateUpdate
-	if err := decodeJSONBody(r, &upd); err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	upd.GateID = gateID
-	if err := s.activeEngine().UpdateGate(upd); err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
-}
-
-func (s *Server) handleDeleteGate(w http.ResponseWriter, r *http.Request) {
-	gateID, ok := parseUint8PathValue(w, r, "gateId")
-	if !ok {
-		return
-	}
-	if err := s.activeEngine().RemoveGate(gateID); err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
-}
+// --- Gate Rule Overrides Decoder & Timers Hardware Inventory (`/v1/timers`) ---
 
 func decodeGateRuleOverrides(r *http.Request) (domain.GateRuleOverrides, error) {
 	rawBytes, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
@@ -618,125 +469,6 @@ func decodeGateRuleOverrides(r *http.Request) (domain.GateRuleOverrides, error) 
 		return domain.GateRuleOverrides{}, err
 	}
 	return ov, nil
-}
-
-func (s *Server) handleGetGateRules(w http.ResponseWriter, r *http.Request) {
-	gateID, ok := parseUint8PathValue(w, r, "gateId")
-	if !ok {
-		return
-	}
-	_, gates, _, _, _ := s.activeEngine().StateSnapshot()
-	for _, g := range gates {
-		if g.GateID == gateID {
-			writeJSON(w, http.StatusOK, g.RuleOverrides)
-			return
-		}
-	}
-	writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("gate %d not found", gateID))
-}
-
-func (s *Server) handlePutGateRules(w http.ResponseWriter, r *http.Request) {
-	gateID, ok := parseUint8PathValue(w, r, "gateId")
-	if !ok {
-		return
-	}
-	overrides, err := decodeGateRuleOverrides(r)
-	if err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if _, err := s.activeEngine().SetGateRules(gateID, overrides); err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
-}
-
-func (s *Server) handleResetGateRules(w http.ResponseWriter, r *http.Request) {
-	gateID, ok := parseUint8PathValue(w, r, "gateId")
-	if !ok {
-		return
-	}
-	if err := decodeOptionalJSONBody(r, &struct{}{}); err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if _, err := s.activeEngine().SetGateRules(gateID, domain.GateRuleOverrides{}); err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
-}
-
-func (s *Server) handleGetPilotGateRules(w http.ResponseWriter, r *http.Request) {
-	gateID, ok := parseUint8PathValue(w, r, "gateId")
-	if !ok {
-		return
-	}
-	slotIndex, ok := parsePositiveIntPathValue(w, r, "slotIndex")
-	if !ok {
-		return
-	}
-	pilots, gates, _, _, _ := s.activeEngine().StateSnapshot()
-	pilotPos := -1
-	for i, p := range pilots {
-		if p.SlotIndex == slotIndex {
-			pilotPos = i
-			break
-		}
-	}
-	if pilotPos < 0 || pilotPos >= domain.MaxPilotPoolSize {
-		writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("pilot slot %d not found", slotIndex))
-		return
-	}
-	for _, g := range gates {
-		if g.GateID == gateID {
-			writeJSON(w, http.StatusOK, g.PilotRuleOverrides[pilotPos])
-			return
-		}
-	}
-	writeErrorJSON(w, http.StatusNotFound, fmt.Sprintf("gate %d not found", gateID))
-}
-
-func (s *Server) handlePutPilotGateRules(w http.ResponseWriter, r *http.Request) {
-	gateID, ok := parseUint8PathValue(w, r, "gateId")
-	if !ok {
-		return
-	}
-	slotIndex, ok := parsePositiveIntPathValue(w, r, "slotIndex")
-	if !ok {
-		return
-	}
-	overrides, err := decodeGateRuleOverrides(r)
-	if err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if _, err := s.activeEngine().SetPilotGateRules(gateID, slotIndex, overrides); err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
-}
-
-func (s *Server) handleResetPilotGateRules(w http.ResponseWriter, r *http.Request) {
-	gateID, ok := parseUint8PathValue(w, r, "gateId")
-	if !ok {
-		return
-	}
-	slotIndex, ok := parsePositiveIntPathValue(w, r, "slotIndex")
-	if !ok {
-		return
-	}
-	if err := decodeOptionalJSONBody(r, &struct{}{}); err != nil {
-		writeErrorJSON(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if _, err := s.activeEngine().SetPilotGateRules(gateID, slotIndex, domain.GateRuleOverrides{}); err != nil {
-		writeEngineError(w, err)
-		return
-	}
-	writeJSON(w, http.StatusOK, s.buildFullStateResponse())
 }
 
 func (s *Server) handleGetTimers(w http.ResponseWriter, _ *http.Request) {
@@ -1037,10 +769,12 @@ func statusForEngineError(err error) int {
 	if err == nil {
 		return http.StatusOK
 	}
-	if errors.Is(err, tracker.ErrUnknownGate) {
+	if errors.Is(err, tracker.ErrUnknownGate) || errors.Is(err, tracker.ErrUnknownPilot) ||
+		errors.Is(err, tracker.ErrPracticeNotFound) || errors.Is(err, tracker.ErrRaceNotFound) {
 		return http.StatusNotFound
 	}
-	if errors.Is(err, tracker.ErrMinOneGate) || errors.Is(err, tracker.ErrHubExists) {
+	if errors.Is(err, tracker.ErrMinOneGate) || errors.Is(err, tracker.ErrHubExists) ||
+		errors.Is(err, tracker.ErrRaceTrackReadOnly) {
 		return http.StatusConflict
 	}
 	lower := strings.ToLower(err.Error())

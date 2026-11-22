@@ -37,7 +37,11 @@ func clonePracticeSession(s domain.PracticeSession) domain.PracticeSession {
 	out := s
 	out.Tags = append([]string(nil), s.Tags...)
 	out.Pilots = append([]domain.PracticeSessionPilot(nil), s.Pilots...)
-	out.TrackSnapshot = append([]domain.TrackGate(nil), s.TrackSnapshot...)
+	out.TrackSnapshot = cloneTrackGates(s.TrackSnapshot)
+	if s.Rules != nil {
+		cp := s.Rules.Normalized()
+		out.Rules = &cp
+	}
 	out.Laps = cloneLaps(s.Laps)
 	out.Crossings = append([]domain.GateCrossingEvent(nil), s.Crossings...)
 	out.Filtered = append([]domain.FilteredDetection(nil), s.Filtered...)
@@ -128,17 +132,19 @@ func (e *Engine) ensurePracticeStateInitializedLocked() {
 		isActive := e.findAnyOngoingRaceLocked() == nil && !e.isLiveRaceHeatActiveLocked() && e.raceArmed
 		sessID := e.nextUniqueIDLocked("session")
 		sess := domain.PracticeSession{
-			SessionID:     sessID,
-			Name:          "Open Practice",
-			Tags:          []string{},
-			Active:        isActive,
-			CreatedAt:     now,
-			UpdatedAt:     now,
-			Pilots:        initPilots,
-			TrackSnapshot: e.snapshotOrderedGatesLocked(),
-			Laps:          cloneLaps(e.laps),
-			Crossings:     append([]domain.GateCrossingEvent(nil), e.crossings...),
-			Filtered:      append([]domain.FilteredDetection(nil), e.filtered...),
+			SessionID:        sessID,
+			Name:             "Open Practice",
+			Tags:             []string{},
+			Active:           isActive,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+			Pilots:           initPilots,
+			TrackInitialized: true,
+			TrackSnapshot:    e.snapshotOrderedGatesLocked(),
+			Rules:            cloneTimingRulesPtr(nil, e.rules),
+			Laps:             cloneLaps(e.laps),
+			Crossings:        append([]domain.GateCrossingEvent(nil), e.crossings...),
+			Filtered:         append([]domain.FilteredDetection(nil), e.filtered...),
 		}
 		sess.Summaries = e.computePracticeSessionSummariesLocked(&sess)
 
@@ -226,10 +232,9 @@ func (e *Engine) ensurePracticeStateInitializedLocked() {
 		if s.SessionID == e.practiceState.SelectedSessionID {
 			foundSelected = true
 		}
+		e.ensurePracticeTrackInitializedLocked(s)
 		if s.Active {
-			s.TrackSnapshot = e.snapshotOrderedGatesLocked()
-		} else if len(s.TrackSnapshot) == 0 {
-			s.TrackSnapshot = e.snapshotOrderedGatesLocked()
+			e.loadTrackAndRulesIntoLiveEngineLocked(s.TrackSnapshot, s.Rules)
 		}
 		e.recomputePracticeSessionLapsLocked(s)
 		s.Summaries = e.computePracticeSessionSummariesLocked(s)
@@ -417,10 +422,13 @@ func (e *Engine) computePracticeSessionSummariesLocked(sess *domain.PracticeSess
 	isActive := sess.Active && sess.SessionID == e.practiceState.ActiveSessionID && !e.isLiveRaceHeatActiveLocked()
 	var ordered []domain.TrackGate
 	var detected map[uint8]*domain.DetectedTimer
-	if !sess.Active && len(sess.TrackSnapshot) > 0 {
-		ordered = append([]domain.TrackGate(nil), sess.TrackSnapshot...)
-		sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].TrackOrder < ordered[j].TrackOrder })
-		detected = nil
+	if sess.TrackInitialized {
+		ordered = orderAndNormalizeGatesSlice(sess.TrackSnapshot)
+		if isActive {
+			detected = e.detected
+		}
+	} else if !sess.Active && len(sess.TrackSnapshot) > 0 {
+		ordered = orderAndNormalizeGatesSlice(sess.TrackSnapshot)
 	} else {
 		ordered = e.orderedGatesLocked()
 		detected = e.detected
@@ -562,6 +570,7 @@ func (e *Engine) syncActivePracticeRecordsLocked() {
 	if sess == nil {
 		return
 	}
+	sess.TrackInitialized = true
 	sess.TrackSnapshot = e.snapshotOrderedGatesLocked()
 	sess.Laps = cloneLaps(e.laps)
 	sess.Crossings = append([]domain.GateCrossingEvent(nil), e.crossings...)
@@ -690,6 +699,10 @@ func (e *Engine) syncPracticeSessionRFSlotsLocked(sess *domain.PracticeSession) 
 // applyPracticeSessionToEngineLocked loads `sess`'s pilots and recorded laps/crossings into the
 // live engine buffers and arms practice timing.
 func (e *Engine) applyPracticeSessionToEngineLocked(sess *domain.PracticeSession) {
+	if sess != nil {
+		e.ensurePracticeTrackInitializedLocked(sess)
+		e.loadTrackAndRulesIntoLiveEngineLocked(sess.TrackSnapshot, sess.Rules)
+	}
 	e.syncPracticeSessionRFSlotsLocked(sess)
 	e.resetSessionLocked()
 	if sess == nil {
@@ -749,11 +762,10 @@ func (e *Engine) deactivateActivePracticeSessionLocked(markPaused bool) bool {
 		return false
 	}
 	e.syncActivePracticeRecordsLocked()
-	frozenTrack := e.snapshotOrderedGatesLocked()
 	now := nowISO()
 	for i := range e.practiceState.Sessions {
 		if e.practiceState.Sessions[i].Active || e.practiceState.Sessions[i].SessionID == e.practiceState.ActiveSessionID {
-			e.practiceState.Sessions[i].TrackSnapshot = append([]domain.TrackGate(nil), frozenTrack...)
+			e.ensurePracticeTrackInitializedLocked(&e.practiceState.Sessions[i])
 			e.practiceState.Sessions[i].Paused = markPaused
 			e.practiceState.Sessions[i].UpdatedAt = now
 		}
@@ -833,18 +845,20 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 			return snap, fmt.Errorf("a practice session named %q already exists (names must have unique URL slugs)", dup.Name)
 		}
 		newSess := domain.PracticeSession{
-			SessionID:     sessionID,
-			Name:          name,
-			Tags:          domain.NormalizeRaceTags(req.Tags),
-			Active:        false,
-			CreatedAt:     now,
-			UpdatedAt:     now,
-			Pilots:        []domain.PracticeSessionPilot{},
-			TrackSnapshot: e.snapshotOrderedGatesLocked(),
-			Laps:          []domain.LapRecord{},
-			Crossings:     []domain.GateCrossingEvent{},
-			Filtered:      []domain.FilteredDetection{},
-			Summaries:     []domain.PilotTrackSummary{},
+			SessionID:        sessionID,
+			Name:             name,
+			Tags:             domain.NormalizeRaceTags(req.Tags),
+			Active:           false,
+			CreatedAt:        now,
+			UpdatedAt:        now,
+			Pilots:           []domain.PracticeSessionPilot{},
+			TrackInitialized: true,
+			TrackSnapshot:    e.defaultNewTrackGatesLocked(),
+			Rules:            cloneTimingRulesPtr(nil, domain.DefaultTimingRules()),
+			Laps:             []domain.LapRecord{},
+			Crossings:        []domain.GateCrossingEvent{},
+			Filtered:         []domain.FilteredDetection{},
+			Summaries:        []domain.PilotTrackSummary{},
 		}
 		e.practiceState.Sessions = append(e.practiceState.Sessions, newSess)
 		if !req.DontSelect || e.practiceState.SelectedSessionID == "" {
@@ -964,12 +978,10 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 			}
 		}
 		// Refresh pointer in case slice mutated
-		frozenTrack := e.snapshotOrderedGatesLocked()
 		for i := range e.practiceState.Sessions {
 			wasActive := e.practiceState.Sessions[i].Active
 			nowActive := (e.practiceState.Sessions[i].SessionID == targetID)
 			if wasActive && !nowActive {
-				e.practiceState.Sessions[i].TrackSnapshot = append([]domain.TrackGate(nil), frozenTrack...)
 				e.practiceState.Sessions[i].Paused = true
 			}
 			e.practiceState.Sessions[i].Active = nowActive
@@ -984,7 +996,6 @@ func (e *Engine) PracticeAction(req PracticeActionPayload) (domain.PracticeManag
 		e.practiceState.ActiveSessionID = targetID
 		e.practiceState.SelectedSessionID = targetID
 		target.Paused = false
-		target.TrackSnapshot = append([]domain.TrackGate(nil), frozenTrack...)
 		target.UpdatedAt = now
 		e.applyPracticeSessionToEngineLocked(target)
 		target.Summaries = e.computePracticeSessionSummariesLocked(target)

@@ -367,8 +367,13 @@ func buildShowcaseEngineStateJSON() []byte {
 	tmp.gates = domain.DemoTrackGates()
 	tmp.detected = make(map[uint8]*domain.DetectedTimer)
 	tmp.seedSimTimersLocked()
+	tmp.practiceState = domain.PracticeManagerState{}
+	tmp.eventState = domain.EventManagerState{}
+	tmp.raceState = newDefaultRaceState()
 	tmp.resetSessionLocked()
 	tmp.initDetectorsLocked()
+	tmp.ensureEventStateInitializedLocked()
+	tmp.ensurePracticeStateInitializedLocked()
 	tmp.mu.Unlock()
 
 	checkInFirstN := func(raceID string, n int) {
@@ -400,6 +405,11 @@ func buildShowcaseEngineStateJSON() []byte {
 			PilotsPerHeat: 4,
 			TargetLaps:    3,
 		})
+		// Showcase an independent 2-gate Spec Course + 6.0s Min Lap rule on the draft race.
+		_ = tmp.RemoveRaceGate(rDraft.RaceID, 3)
+		specRules := domain.DefaultTimingRules()
+		specRules.MinLapSec = 6.0
+		_, _ = tmp.SetRaceRules(rDraft.RaceID, specRules)
 	}
 
 	// 2. Paused Open Qualifier: "Wednesday Open Qualifier" (Best 3 Consecutive Laps, 2 confirmed packs + 2 queued)
@@ -687,6 +697,60 @@ func buildShowcaseEngineStateJSON() []byte {
 	if st.RaceState != nil {
 		st.RaceState.Mode = domain.ModePractice
 	}
+	openRules := domain.DefaultTimingRules().Normalized()
+	specPaceRules := domain.DefaultTimingRules()
+	specPaceRules.MinLapSec = 5.5
+	specPaceRules.MaxLapSec = 90.0
+	specPaceRules = specPaceRules.Normalized()
+	tuneRules := domain.DefaultTimingRules()
+	tuneRules.MinLapSec = 4.5
+	tuneRules = tuneRules.Normalized()
+
+	// Convert tuneLaps/tuneCrossings/tuneFiltered to a 1-gate Start/Finish warmup track for Session 3
+	var tuneOneGate []domain.TrackGate
+	if len(st.Gates) > 0 {
+		g0 := cloneTrackGate(st.Gates[0])
+		g0.Role = domain.GateRoleStartFinish
+		g0.TrackOrder = 0
+		tuneOneGate = []domain.TrackGate{g0}
+	}
+	for i := range tuneLaps {
+		tuneLaps[i].Sectors = []domain.SectorSplit{
+			{
+				SectorIndex:    1,
+				FromGateID:     1,
+				ToGateID:       1,
+				Label:          "S1 (Start / Finish → Start / Finish)",
+				SplitSeconds:   tuneLaps[i].LapTimeSec,
+				ExitSpeedMph:   49.4,
+				DeltaToBestSec: tuneLaps[i].DeltaToBest,
+				Badge:          domain.BadgeNormal,
+			},
+		}
+		if tuneLaps[i].IsBestLap {
+			tuneLaps[i].Sectors[0].Badge = domain.BadgePersonalBest
+		}
+	}
+	keptTuneCrossings := make([]domain.GateCrossingEvent, 0, len(tuneCrossings))
+	var sfPass uint32
+	for _, c := range tuneCrossings {
+		if c.GateID != 1 {
+			continue
+		}
+		sfPass++
+		c.PassingNumber = sfPass
+		keptTuneCrossings = append(keptTuneCrossings, c)
+	}
+	tuneCrossings = keptTuneCrossings
+	for i := range tuneFiltered {
+		tuneFiltered[i].GateID = 1
+		if tuneFiltered[i].Reason == domain.FilterMinLap {
+			tuneFiltered[i].Detail = "Start / Finish again after 1.18s - quicker than min lap (4.5s)"
+		} else {
+			tuneFiltered[i].Detail = "Sharp 45 ms spike at Start / Finish (min crossing 120 ms)"
+		}
+	}
+
 	st.SavedAtUnixUs = 0
 	st.ElapsedUs = maxCompletedUs + 15_000_000
 	st.RaceArmed = true
@@ -712,10 +776,12 @@ func buildShowcaseEngineStateJSON() []byte {
 					makeSessionPilot(3, 5),
 					makeSessionPilot(4, 8),
 				},
-				TrackSnapshot: append([]domain.TrackGate(nil), st.Gates...),
-				Laps:          liveLaps,
-				Crossings:     liveCrossings,
-				Filtered:      liveFiltered,
+				TrackInitialized: true,
+				TrackSnapshot:    cloneTrackGates(st.Gates),
+				Rules:            &openRules,
+				Laps:             liveLaps,
+				Crossings:        liveCrossings,
+				Filtered:         liveFiltered,
 			},
 			{
 				SessionID: "session-2",
@@ -731,10 +797,12 @@ func buildShowcaseEngineStateJSON() []byte {
 					makeSessionPilot(7, 5),
 					makeSessionPilot(8, 8),
 				},
-				TrackSnapshot: append([]domain.TrackGate(nil), st.Gates...),
-				Laps:          specLaps,
-				Crossings:     specCrossings,
-				Filtered:      specFiltered,
+				TrackInitialized: true,
+				TrackSnapshot:    cloneTrackGates(st.Gates),
+				Rules:            &specPaceRules,
+				Laps:             specLaps,
+				Crossings:        specCrossings,
+				Filtered:         specFiltered,
 			},
 			{
 				SessionID: "session-3",
@@ -749,10 +817,12 @@ func buildShowcaseEngineStateJSON() []byte {
 					makeSessionPilot(9, 3),
 					makeSessionPilot(10, 5),
 				},
-				TrackSnapshot: append([]domain.TrackGate(nil), st.Gates...),
-				Laps:          tuneLaps,
-				Crossings:     tuneCrossings,
-				Filtered:      tuneFiltered,
+				TrackInitialized: true,
+				TrackSnapshot:    tuneOneGate,
+				Rules:            &tuneRules,
+				Laps:             tuneLaps,
+				Crossings:        tuneCrossings,
+				Filtered:         tuneFiltered,
 			},
 		},
 	}

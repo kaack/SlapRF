@@ -564,7 +564,7 @@ func (e *Engine) SetTimerColor(timerID uint8, color string) error {
 			e.gates[i].Color = color
 		}
 	}
-	pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
+	pSnap, rSnap := e.propagateTimerColorToTracksLocked(timerID, color)
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
 	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
@@ -864,18 +864,21 @@ func isRaceTrackEditable(r *domain.RaceTournamentState) bool {
 		!r.IsComplete
 }
 
-// syncTrackToOpenSessionsAndRacesLocked propagates live track/timer edits to any currently active
-// PracticeSession (`s.Active == true`) and any open/uncompleted Race (`draft`, `active`, `paused`),
-// while leaving stopped PracticeSessions and completed/scrapped Races completely untouched.
+// syncTrackToOpenSessionsAndRacesLocked syncs `e.gates` strictly to the currently active Practice
+// session (`s.Active == true`) or currently loaded editable Race (`e.raceState.RaceID`), never
+// touching stopped Practice sessions or any other Race in `e.eventState.Races`.
 func (e *Engine) syncTrackToOpenSessionsAndRacesLocked() (*domain.PracticeManagerState, *domain.RaceTournamentState) {
 	snap := e.snapshotOrderedGatesLocked()
 
 	practiceTouched := false
-	if e.practiceState.Initialized || len(e.practiceState.Sessions) > 0 {
+	hasActivePractice := false
+	if (e.practiceState.Initialized || len(e.practiceState.Sessions) > 0) && !e.isLiveRaceHeatActiveLocked() {
 		for i := range e.practiceState.Sessions {
 			s := &e.practiceState.Sessions[i]
 			if s.Active {
-				s.TrackSnapshot = append([]domain.TrackGate(nil), snap...)
+				hasActivePractice = true
+				s.TrackInitialized = true
+				s.TrackSnapshot = cloneTrackGates(snap)
 				s.Summaries = e.computePracticeSessionSummariesLocked(s)
 				practiceTouched = true
 			}
@@ -883,16 +886,14 @@ func (e *Engine) syncTrackToOpenSessionsAndRacesLocked() (*domain.PracticeManage
 	}
 
 	raceTouched := false
-	if isRaceTrackEditable(&e.raceState) {
-		e.raceState.TrackSnapshot = append([]domain.TrackGate(nil), snap...)
+	if isRaceOngoing(&e.raceState) || (!hasActivePractice && isRaceTrackEditable(&e.raceState)) {
+		e.raceState.TrackInitialized = true
+		e.raceState.TrackSnapshot = cloneTrackGates(snap)
 		raceTouched = true
-	}
-	if e.eventState.Initialized || len(e.eventState.Races) > 0 {
 		for i := range e.eventState.Races {
-			r := &e.eventState.Races[i]
-			if isRaceTrackEditable(r) {
-				r.TrackSnapshot = append([]domain.TrackGate(nil), snap...)
-				raceTouched = true
+			if e.eventState.Races[i].RaceID == e.raceState.RaceID && isRaceTrackEditable(&e.eventState.Races[i]) {
+				e.eventState.Races[i].TrackInitialized = true
+				e.eventState.Races[i].TrackSnapshot = cloneTrackGates(snap)
 			}
 		}
 	}
@@ -1047,7 +1048,7 @@ func (e *Engine) DeleteDetectedTimer(timerID uint8) error {
 	e.ensureStartGateLocked()
 	e.initDetectorsLocked()
 	e.progress = make(map[int]*pilotProgress)
-	pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
+	pSnap, rSnap := e.propagateTimerRemovalToTracksLocked(timerID, true)
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
 	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)
@@ -1079,7 +1080,7 @@ func (e *Engine) UnprovisionTimer(timerID uint8) error {
 	}
 	e.initDetectorsLocked()
 	e.progress = make(map[int]*pilotProgress)
-	pSnap, rSnap := e.syncTrackToOpenSessionsAndRacesLocked()
+	pSnap, rSnap := e.propagateTimerRemovalToTracksLocked(timerID, false)
 	pilots := append([]domain.PilotSlot(nil), e.pilots...)
 	gates := append([]domain.TrackGate(nil), e.gates...)
 	subs := append([]EventSubscriber(nil), e.subscribers...)

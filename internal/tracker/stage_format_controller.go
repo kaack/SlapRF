@@ -256,9 +256,7 @@ func (e *Engine) handleStageControlLocked(req EventActionPayload) (cfgChanged bo
 		prevStageIdx := stg.Index
 		e.resolveActiveTournamentLocked()
 		if e.raceState.IsComplete {
-			if len(e.raceState.TrackSnapshot) == 0 || isRaceTrackEditable(&e.raceState) {
-				e.raceState.TrackSnapshot = e.snapshotOrderedGatesLocked()
-			}
+			e.ensureRaceTrackInitializedLocked(&e.raceState)
 			e.raceState.Lifecycle = domain.LifecycleCompleted
 		} else if e.raceState.ActiveStageIndex != prevStageIdx && e.raceState.NextReadyHeatID != "" {
 			e.raceState.ActiveHeatID = e.raceState.NextReadyHeatID

@@ -28,10 +28,8 @@ func TestRESTv1CRUDSemanticsSingletonsCustomActionsAndSymmetry(t *testing.T) {
 		"/v1/version",
 		"/v1/state",
 		"/v1/status",
-		"/v1/timing/rules",
 		"/v1/timing/arm",
 		"/v1/timing/mode",
-		"/v1/track",
 		"/v1/hardware/mode",
 		"/v1/sim",
 		"/v1/storage",
@@ -52,17 +50,22 @@ func TestRESTv1CRUDSemanticsSingletonsCustomActionsAndSymmetry(t *testing.T) {
 		t.Fatalf("expected 405 on POST /v1/pilots/1 without :action, got %d", rec.Code)
 	}
 
-	// 2. Singleton custom actions use POST ...:<action> (e.g. /v1/storage:reset, /v1/track:reset, /v1/pilots:reset)
+	// 2. Singleton custom actions use POST ...:<action> (e.g. /v1/storage:reset, /v1/pilots:reset)
 	if resetStore := reqJSON(t, h, http.MethodPost, "/v1/storage:reset", map[string]any{}); resetStore.Code != http.StatusOK {
 		t.Fatalf("expected 200 on POST /v1/storage:reset, got %d", resetStore.Code)
 	}
 	decodeState(t, reqJSON(t, h, http.MethodPatch, "/v1/sim", map[string]any{"running": true}))
-	decodeState(t, reqJSON(t, h, http.MethodPost, "/v1/track:reset", map[string]any{"preset": " figure8 "}))
 	decodeState(t, reqJSON(t, h, http.MethodPost, "/v1/pilots:reset", map[string]any{}))
 
-	// 3. Legacy /api/* paths are gone -> 404 Not Found
+	// 3. Legacy /api/* and removed global /v1/track paths are gone -> 404 Not Found
 	if rec := reqJSON(t, h, http.MethodGet, "/api/state", nil); rec.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 on legacy /api/state, got %d", rec.Code)
+	}
+	if rec := reqJSON(t, h, http.MethodGet, "/v1/track", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 on removed global /v1/track, got %d", rec.Code)
+	}
+	if rec := reqJSON(t, h, http.MethodGet, "/v1/timing/rules", nil); rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 on removed global /v1/timing/rules, got %d", rec.Code)
 	}
 
 	// 4. Pilots CRUD: POST (201 + Location), GET item (200 / 404), PUT (200 / 409), DELETE (200 / 404)
@@ -95,28 +98,7 @@ func TestRESTv1CRUDSemanticsSingletonsCustomActionsAndSymmetry(t *testing.T) {
 		t.Fatalf("expected 404 on second DELETE /v1/pilots/%d, got %d", createdSlot, delAgain.Code)
 	}
 
-	// 5. Track Gates CRUD + singleton sub-resource rules:reset
-	createGateRec := reqJSON(t, h, http.MethodPost, "/v1/track/gates", map[string]any{
-		"name":       "Corkscrew",
-		"trackOrder": 2,
-	})
-	decodeCreatedState(t, createGateRec)
-	gateLoc := createGateRec.Header().Get("Location")
-	if !strings.HasPrefix(gateLoc, "/v1/track/gates/") {
-		t.Fatalf("expected Location /v1/track/gates/{gateId}, got %q", gateLoc)
-	}
-	if delRules := reqJSON(t, h, http.MethodDelete, gateLoc+"/rules", nil); delRules.Code != http.StatusMethodNotAllowed {
-		t.Fatalf("expected 405 on DELETE %s/rules (rules sub-resource is a singleton), got %d", gateLoc, delRules.Code)
-	}
-	minCross := 0.22
-	decodeState(t, reqJSON(t, h, http.MethodPut, gateLoc+"/rules", domain.GateRuleOverrides{MinCrossingSec: &minCross}))
-	decodeState(t, reqJSON(t, h, http.MethodPost, gateLoc+"/rules:reset", map[string]any{}))
-	decodeState(t, reqJSON(t, h, http.MethodDelete, gateLoc, nil))
-	if delGateAgain := reqJSON(t, h, http.MethodDelete, gateLoc, nil); delGateAgain.Code != http.StatusNotFound {
-		t.Fatalf("expected 404 on second DELETE %s, got %d", gateLoc, delGateAgain.Code)
-	}
-
-	// 6. Symmetric Practice Sessions (/v1/practice/sessions) & Race Sessions (/v1/race/sessions) CRUD + :lifecycle custom methods
+	// 5. Symmetric Practice Sessions (/v1/practice/sessions) & Race Sessions (/v1/race/sessions) CRUD + scoped /track/* + :lifecycle custom methods
 	pCreateRec := reqJSON(t, h, http.MethodPost, "/v1/practice/sessions", map[string]any{
 		"name": "Morning Warmup",
 		"tags": []string{"Warmup"},
@@ -127,6 +109,36 @@ func TestRESTv1CRUDSemanticsSingletonsCustomActionsAndSymmetry(t *testing.T) {
 		t.Fatalf("expected practice session Location header, got %q", pLoc)
 	}
 	pID := pState.PracticeState.SelectedSessionID
+
+	// Scoped Practice Session Track Gates CRUD + track/rules + gate/pilot rule overrides
+	createGateRec := reqJSON(t, h, http.MethodPost, pLoc+"/track/gates", map[string]any{
+		"name":       "Corkscrew",
+		"trackOrder": 2,
+	})
+	decodeCreatedState(t, createGateRec)
+	gateLoc := createGateRec.Header().Get("Location")
+	if !strings.HasPrefix(gateLoc, pLoc+"/track/gates/") {
+		t.Fatalf("expected Location %s/track/gates/{gateId}, got %q", pLoc, gateLoc)
+	}
+	if delTrack := reqJSON(t, h, http.MethodDelete, pLoc+"/track", nil); delTrack.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 on DELETE scoped /track singleton, got %d", delTrack.Code)
+	}
+	if delRules := reqJSON(t, h, http.MethodDelete, gateLoc+"/rules", nil); delRules.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("expected 405 on DELETE %s/rules (rules sub-resource is a singleton), got %d", gateLoc, delRules.Code)
+	}
+	minCross := 0.22
+	decodeState(t, reqJSON(t, h, http.MethodPut, gateLoc+"/rules", domain.GateRuleOverrides{MinCrossingSec: &minCross}))
+	decodeState(t, reqJSON(t, h, http.MethodPost, gateLoc+"/rules:reset", map[string]any{}))
+	decodeState(t, reqJSON(t, h, http.MethodPut, gateLoc+"/pilots/1/rules", domain.GateRuleOverrides{MinCrossingSec: &minCross}))
+	decodeState(t, reqJSON(t, h, http.MethodPost, gateLoc+"/pilots/1/rules:reset", map[string]any{}))
+	pRules := domain.DefaultTimingRules()
+	pRules.MinLapSec = 6.2
+	decodeState(t, reqJSON(t, h, http.MethodPut, pLoc+"/track/rules", pRules))
+	decodeState(t, reqJSON(t, h, http.MethodDelete, gateLoc, nil))
+	if delGateAgain := reqJSON(t, h, http.MethodDelete, gateLoc, nil); delGateAgain.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 on second DELETE %s, got %d", gateLoc, delGateAgain.Code)
+	}
+	decodeState(t, reqJSON(t, h, http.MethodPost, pLoc+"/track:reset", map[string]any{}))
 
 	if dupPrac := reqJSON(t, h, http.MethodPost, "/v1/practice/sessions", map[string]any{"name": "Morning Warmup"}); dupPrac.Code != http.StatusConflict {
 		t.Fatalf("expected 409 Conflict on duplicate practice session name, got %d", dupPrac.Code)
@@ -174,6 +186,12 @@ func TestRESTv1CRUDSemanticsSingletonsCustomActionsAndSymmetry(t *testing.T) {
 		t.Fatalf("expected 200 on GET %s, got %d", rLoc, getRace.Code)
 	}
 	decodeState(t, reqJSON(t, h, http.MethodPatch, rLoc, map[string]any{"name": "Finals Shootout Renamed"}))
+	// Scoped race track CRUD while open -> 201 / 200; once completed -> 409 Conflict
+	rGateRec := reqJSON(t, h, http.MethodPost, rLoc+"/track/gates", map[string]any{"name": "Dive Gate"})
+	decodeCreatedState(t, rGateRec)
+	rRules := domain.DefaultTimingRules()
+	rRules.MinLapSec = 7.4
+	decodeState(t, reqJSON(t, h, http.MethodPut, rLoc+"/track/rules", rRules))
 	if unconfiguredStart := reqJSON(t, h, http.MethodPost, rLoc+":start", map[string]any{}); unconfiguredStart.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 starting unconfigured race session, got %d", unconfiguredStart.Code)
 	}
@@ -184,7 +202,10 @@ func TestRESTv1CRUDSemanticsSingletonsCustomActionsAndSymmetry(t *testing.T) {
 	if delActiveRace := reqJSON(t, h, http.MethodDelete, rLoc, nil); delActiveRace.Code != http.StatusConflict {
 		t.Fatalf("expected 409 Conflict deleting active race session, got %d", delActiveRace.Code)
 	}
-	decodeState(t, reqJSON(t, h, http.MethodPost, rLoc+":pause", map[string]any{"reason": "Break"}))
+	decodeState(t, reqJSON(t, h, http.MethodPost, rLoc+":complete", map[string]any{"reason": "Finished"}))
+	if editCompletedTrack := reqJSON(t, h, http.MethodPost, rLoc+"/track/gates", map[string]any{"name": "Late Gate"}); editCompletedTrack.Code != http.StatusConflict {
+		t.Fatalf("expected 409 Conflict editing completed race track, got %d", editCompletedTrack.Code)
+	}
 	decodeState(t, reqJSON(t, h, http.MethodDelete, rLoc, nil))
 	if getDeletedRace := reqJSON(t, h, http.MethodGet, rLoc, nil); getDeletedRace.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 after DELETE %s, got %d", rLoc, getDeletedRace.Code)

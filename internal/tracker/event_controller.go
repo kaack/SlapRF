@@ -232,9 +232,7 @@ func (e *Engine) ensureEventStateInitializedLocked() {
 	for ri := range e.eventState.Races {
 		r := &e.eventState.Races[ri]
 		r.Tags = domain.NormalizeRaceTags(r.Tags)
-		if isRaceTrackEditable(r) || len(r.TrackSnapshot) == 0 {
-			r.TrackSnapshot = e.snapshotOrderedGatesLocked()
-		}
+		e.ensureRaceTrackInitializedLocked(r)
 		normalizeRaceRosterLocked(r, e.pilots)
 		race.SyncRoundsMetadata(r)
 	}
@@ -410,9 +408,7 @@ func (e *Engine) syncActiveRaceToEventLocked() {
 		e.raceState.CreatedAt = now
 	}
 	e.raceState.UpdatedAt = now
-	if isRaceTrackEditable(&e.raceState) || len(e.raceState.TrackSnapshot) == 0 {
-		e.raceState.TrackSnapshot = e.snapshotOrderedGatesLocked()
-	}
+	e.ensureRaceTrackInitializedLocked(&e.raceState)
 	normalizeRaceRosterLocked(&e.raceState, e.pilots)
 	race.SyncRoundsMetadata(&e.raceState)
 	cp := cloneRaceState(e.raceState)
@@ -551,9 +547,7 @@ func (e *Engine) exitTargetRaceLocked(swap *targetRaceSwap, commit bool) domain.
 			e.raceState.CreatedAt = now
 		}
 		e.raceState.UpdatedAt = now
-		if isRaceTrackEditable(&e.raceState) || len(e.raceState.TrackSnapshot) == 0 {
-			e.raceState.TrackSnapshot = e.snapshotOrderedGatesLocked()
-		}
+		e.ensureRaceTrackInitializedLocked(&e.raceState)
 		normalizeRaceRosterLocked(&e.raceState, e.pilots)
 		race.SyncRoundsMetadata(&e.raceState)
 		targetSnap = cloneRaceState(e.raceState)
@@ -1189,7 +1183,9 @@ func (e *Engine) eventActionBodyLocked(
 			UpdatedAt:        now,
 			Mode:             curMode,
 			Config:           cfg,
-			TrackSnapshot:    e.snapshotOrderedGatesLocked(),
+			TrackInitialized: true,
+			TrackSnapshot:    e.defaultNewTrackGatesLocked(),
+			Rules:            cloneTimingRulesPtr(nil, domain.DefaultTimingRules()),
 			Roster:           buildEventRosterFromPilots(e.pilots),
 			Rounds:           []domain.RaceRound{},
 			Generated:        false,
@@ -1655,6 +1651,9 @@ func (e *Engine) eventActionBodyLocked(
 			e.raceState.Lifecycle = domain.LifecycleActive
 			e.raceState.StatusReason = ""
 			e.raceState.IsComplete = false
+			e.ensureRaceTrackInitializedLocked(&e.raceState)
+			e.loadTrackAndRulesIntoLiveEngineLocked(e.raceState.TrackSnapshot, e.raceState.Rules)
+			cfgChanged = true
 			if e.raceState.Generated {
 				e.resolveActiveTournamentLocked()
 			}
@@ -1665,9 +1664,7 @@ func (e *Engine) eventActionBodyLocked(
 
 		case "complete_race":
 			e.pauseLiveHeatIfRunningLocked()
-			if len(e.raceState.TrackSnapshot) == 0 || isRaceTrackEditable(&e.raceState) {
-				e.raceState.TrackSnapshot = e.snapshotOrderedGatesLocked()
-			}
+			e.ensureRaceTrackInitializedLocked(&e.raceState)
 			e.raceState.Lifecycle = domain.LifecycleCompleted
 			e.raceState.IsComplete = true
 			if strings.TrimSpace(req.Reason) != "" {
@@ -1685,9 +1682,7 @@ func (e *Engine) eventActionBodyLocked(
 			}
 
 		case "scrap_race":
-			if len(e.raceState.TrackSnapshot) == 0 || isRaceTrackEditable(&e.raceState) {
-				e.raceState.TrackSnapshot = e.snapshotOrderedGatesLocked()
-			}
+			e.ensureRaceTrackInitializedLocked(&e.raceState)
 			if ah := e.findHeatLocked(e.raceState.ActiveHeatID); ah != nil {
 				if ah.State == domain.HeatCountdown || ah.State == domain.HeatRunning || ah.State == domain.HeatPaused {
 					ah.State = domain.HeatAborted
@@ -1748,7 +1743,11 @@ func (e *Engine) eventActionBodyLocked(
 			e.raceState.IsComplete = false
 			e.raceState.ChampionSlotIndex = 0
 			e.raceState.ChampionCallsign = ""
-			e.raceState.TrackSnapshot = e.snapshotOrderedGatesLocked()
+			e.ensureRaceTrackInitializedLocked(&e.raceState)
+			if willBeActive {
+				e.loadTrackAndRulesIntoLiveEngineLocked(e.raceState.TrackSnapshot, e.raceState.Rules)
+				cfgChanged = true
+			}
 			if e.raceState.Generated {
 				e.resolveActiveTournamentLocked()
 				// When a tournament finished normally because all deciding heats in its terminal stage(s)

@@ -56,6 +56,7 @@ type pilotProgress struct {
 // Engine is the central multi-gate timing and sector analytics coordinator.
 type Engine struct {
 	mu              sync.RWMutex
+	isSimEngine     bool
 	bootTime        time.Time
 	virtualOffsetUs atomic.Uint64
 	raceArmed       bool
@@ -112,6 +113,7 @@ type Engine struct {
 // as a timer with no gate, and simulated Spokes time every gate (the first one is start/finish).
 func NewEngine() *Engine {
 	e := &Engine{
+		isSimEngine:    true,
 		bootTime:       time.Now(),
 		raceArmed:      true,
 		rules:          domain.DefaultTimingRules(),
@@ -337,6 +339,24 @@ func (e *Engine) SetRules(r domain.TimingRules) domain.TimingRules {
 	r = r.Normalized()
 	e.mu.Lock()
 	e.rules = r
+	hasActivePractice := false
+	if !e.isLiveRaceHeatActiveLocked() && e.practiceState.ActiveSessionID != "" {
+		if sess := e.findPracticeSessionLocked(e.practiceState.ActiveSessionID); sess != nil {
+			cp := r
+			sess.Rules = &cp
+			hasActivePractice = true
+		}
+	}
+	if isRaceOngoing(&e.raceState) || (!hasActivePractice && isRaceTrackEditable(&e.raceState)) {
+		cp := r
+		e.raceState.Rules = &cp
+		for i := range e.eventState.Races {
+			if e.eventState.Races[i].RaceID == e.raceState.RaceID && isRaceTrackEditable(&e.eventState.Races[i]) {
+				cp2 := r
+				e.eventState.Races[i].Rules = &cp2
+			}
+		}
+	}
 	e.mu.Unlock()
 	return r
 }
@@ -858,6 +878,20 @@ func (e *Engine) IngestTelemetryFrame(frame domain.TimerTelemetryFrame) {
 		if len(completedLaps) > 0 {
 			practiceChanged = true
 			practiceSnap = clonePracticeManagerState(e.practiceState)
+		}
+	}
+	if autoCalibChanged {
+		if !e.isLiveRaceHeatActiveLocked() && e.practiceState.ActiveSessionID != "" {
+			if sess := e.findPracticeSessionLocked(e.practiceState.ActiveSessionID); sess != nil {
+				sess.TrackInitialized = true
+				sess.TrackSnapshot = e.snapshotOrderedGatesLocked()
+				practiceChanged = true
+				practiceSnap = clonePracticeManagerState(e.practiceState)
+			}
+		} else if isRaceOngoing(&e.raceState) && isRaceTrackEditable(&e.raceState) {
+			e.raceState.TrackInitialized = true
+			e.raceState.TrackSnapshot = e.snapshotOrderedGatesLocked()
+			raceChanged = true
 		}
 	}
 	if autoCalibSFChanged {

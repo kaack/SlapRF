@@ -34,9 +34,11 @@ type PracticeSession struct {
 	Paused    bool                   `json:"paused,omitempty"`
 	CreatedAt string                 `json:"createdAt"`
 	UpdatedAt string                 `json:"updatedAt,omitempty"`
-	Pilots        []PracticeSessionPilot `json:"pilots"`
-	TrackSnapshot []TrackGate            `json:"trackSnapshot,omitempty"`
-	Laps          []LapRecord            `json:"laps"`
+	Pilots           []PracticeSessionPilot `json:"pilots"`
+	TrackInitialized bool                   `json:"trackInitialized,omitempty"`
+	TrackSnapshot    []TrackGate            `json:"trackSnapshot,omitempty"`
+	Rules            *TimingRules           `json:"rules,omitempty"`
+	Laps             []LapRecord            `json:"laps"`
 	Crossings     []GateCrossingEvent    `json:"crossings"`
 	Filtered      []FilteredDetection    `json:"filtered"`
 	Summaries     []PilotTrackSummary    `json:"summaries"`
