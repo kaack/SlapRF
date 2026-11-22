@@ -628,15 +628,20 @@ export async function readIdentityOverWebSerial(port: WebSerialPort, waitMs = 12
     await send();
     const deadline = Date.now() + waitMs;
     let resent = false;
+    let pendingRead: Promise<ReadableStreamReadResult<Uint8Array>> | null = null;
     while (Date.now() < deadline) {
+      if (!pendingRead) {
+        pendingRead = reader.read();
+      }
       const res = await Promise.race([
-        reader.read(),
-        sleep(Math.max(1, Math.min(150, deadline - Date.now()))).then(() => null),
+        pendingRead.then((r) => ({ kind: "read" as const, r })),
+        sleep(Math.max(1, Math.min(150, deadline - Date.now()))).then(() => ({ kind: "timeout" as const })),
       ]);
-      if (res && (res.done || !res.value)) break;
-      if (res?.value) {
-        chunks.push(res.value);
-        total += res.value.length;
+      if (res.kind === "read") {
+        pendingRead = null;
+        if (res.r.done || !res.r.value) break;
+        chunks.push(res.r.value);
+        total += res.r.value.length;
         const parsed = readoutFrom(concat(chunks, total));
         if (parsed.complete) return parsed.readout;
       } else if (!resent && Date.now() > deadline - waitMs / 2) {

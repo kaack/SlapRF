@@ -98,7 +98,7 @@ Structured replies begin with `@{...}` JSON on a single line (so firmware log li
 
 ---
 
-## 4. Ready-Made Bench Python Scripts (`firmware/tools/`)
+## 4. Ready-Made Bench Tools (`firmware/tools/`)
 
 ```bash
 # 1. Full console protocol & RF sweep smoke check (STATUS?, LIVE 1, SCAN, LOG 1, SLAPRF?, BOOTLOG?, CHANNELS)
@@ -110,4 +110,8 @@ python firmware/tools/serial_capture.py COM3 4 --no-reset --send "STATUS?\n"
 
 # 3. 50 Hz per-channel RF noise floor, standard deviation, and false-trigger statistics over 15 seconds
 python firmware/tools/noise_stats.py COM3 15
+
+# 4. On-demand live Chrome CDP Flasher stress test (drives repeated physical USB flashes + 97% readback verification through #/flasher)
+go run ./firmware/tools/flash_stress -runs 10
+go run ./firmware/tools/flash_stress -runs 5 -port ttyACM0 -role hub -link usb
 ```
